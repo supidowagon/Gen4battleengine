@@ -1,0 +1,96 @@
+"""Load the packed Gen 4 Platinum tables (built by ``tools/build_tables.py``).
+
+Every array is indexed by the decomp's own ids; encodings are documented in
+``tools/build_tables.py``. ``Names`` resolves English names to those ids.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import NamedTuple
+
+import jax.numpy as jnp
+import numpy as np
+
+DEFAULT = Path(__file__).resolve().parents[3] / "data" / "gen4_platinum"
+
+
+class Tables(NamedTuple):
+    species_base_stats: jnp.ndarray  # int16[S,6], index = ids.Stat
+    species_types: jnp.ndarray  # int8[S,2]
+    species_abilities: jnp.ndarray  # int16[S,2], ids.AbilityId
+    species_weight: jnp.ndarray  # int32[S], hectograms
+    species_gender: jnp.ndarray  # int16[S], decomp gender ratio
+    species_friendship: jnp.ndarray  # int16[S] (140 does not fit int8)
+    move_power: jnp.ndarray  # int16[M]
+    move_type: jnp.ndarray  # int8[M]
+    move_category: jnp.ndarray  # int8[M], 0 physical, 1 special, 2 status
+    move_accuracy: jnp.ndarray  # int8[M], 0 = never misses
+    move_pp: jnp.ndarray  # int8[M]
+    move_priority: jnp.ndarray  # int8[M]
+    move_target: jnp.ndarray  # int8[M], index into manifest target_names
+    move_effect: jnp.ndarray  # int16[M], ids.EffectId
+    move_effect_chance: jnp.ndarray  # int8[M]
+    move_param: jnp.ndarray  # int16[M,3]
+    move_flags: jnp.ndarray  # int16[M], ids.MoveFlag bits
+    type_chart: jnp.ndarray  # int8[T,T], tenths
+    nature_mods: jnp.ndarray  # int8[25,6], -1/0/+1
+    item_effect: jnp.ndarray  # int16[I], ids.ItemId
+    item_param: jnp.ndarray  # int16[I,2]
+
+
+def load_tables(dir: Path = DEFAULT) -> Tables:
+    with np.load(Path(dir) / "tables.npz") as z:
+        return Tables(**{f: jnp.asarray(z[f]) for f in Tables._fields})
+
+
+def _index(names: list[str], what: str) -> dict[str, int]:
+    out: dict[str, int] = {}
+    for i, name in enumerate(names):
+        key = name.lower()
+        if key in out:
+            raise ValueError(f"duplicate {what} name {name!r}")
+        out[key] = i
+    return out
+
+
+class Names:
+    """Case-insensitive English name -> decomp id lookups."""
+
+    def __init__(self, manifest: dict):
+        self.species_names: tuple[str, ...] = tuple(manifest["species_names"])
+        self.move_names: tuple[str, ...] = tuple(manifest["move_names"])
+        self.item_names: tuple[str, ...] = tuple(manifest["item_names"])
+        self.ability_names: tuple[str, ...] = tuple(manifest["ability_names"])
+        self.type_names: tuple[str, ...] = tuple(manifest["type_names"])
+        self.nature_names: tuple[str, ...] = tuple(manifest["nature_names"])
+        self._species = _index(manifest["species_names"], "species")
+        self._moves = _index(manifest["move_names"], "move")
+        self._items = _index(manifest["item_names"], "item")
+        self._abilities = _index(manifest["ability_names"], "ability")
+
+    @staticmethod
+    def _get(index: dict[str, int], name: str, what: str) -> int:
+        try:
+            return index[name.lower()]
+        except KeyError:
+            raise KeyError(f"unknown {what} {name!r}") from None
+
+    def species(self, name: str) -> int:
+        return self._get(self._species, name, "species")
+
+    def move(self, name: str) -> int:
+        """Move id; ``""`` is 0 (no move)."""
+        return 0 if name == "" else self._get(self._moves, name, "move")
+
+    def item(self, name: str) -> int:
+        """Item id; ``""`` is 0 (no item)."""
+        return 0 if name == "" else self._get(self._items, name, "item")
+
+    def ability(self, name: str) -> int:
+        return self._get(self._abilities, name, "ability")
+
+
+def load_names(dir: Path = DEFAULT) -> Names:
+    return Names(json.loads((Path(dir) / "manifest.json").read_text(encoding="utf-8")))
