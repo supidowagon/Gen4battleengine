@@ -20,6 +20,9 @@ Encodings:
 * ``trainer_item_effect[item]``: ``ids.TrainerItemId`` of the item used from a trainer's
   bag (``DECOMP_TRAINER_ITEM_TO_ID``).
 * ``species_friendship`` is int16, not int8: base friendship reaches 140.
+* ``species_abilities_decomp[species, slot]``: the decomp's own ability ids (0 =
+  ``ABILITY_NONE``), next to ``species_abilities``' engine ids, so the trainer AI can
+  name abilities the engine does not implement.
 
 CLI: ``uv run python -m tools.build_tables --inter data/intermediate --out data/gen4_platinum``
 """
@@ -46,7 +49,7 @@ from tools.effect_map import (
     UNSUPPORTED_MOVES,
 )
 
-MANIFEST_VERSION = 4
+MANIFEST_VERSION = 5
 CLONE_SCRIPT = Path(__file__).with_name("clone_decomp.sh")
 
 # generated/move_classes.txt order.
@@ -164,6 +167,9 @@ def build_arrays(inter: Path) -> tuple[dict[str, np.ndarray], dict]:
         "species_types": _arr([s["types"] for s in species], np.int8, "types"),
         "species_abilities": _arr(
             [[ability_ids[a] for a in s["abilities"]] for s in species], np.int16, "abilities"
+        ),
+        "species_abilities_decomp": _arr(
+            [s["abilities"] for s in species], np.int16, "decomp abilities"
         ),
         "species_weight": _arr([s["weight_hg"] for s in species], np.int32, "weight"),
         "species_gender": _arr([s["gender_ratio"] for s in species], np.int16, "gender"),

@@ -83,10 +83,30 @@ three structs has a row.
 - **recycleItem -> `item_consumed`**: the last item consumed, per party slot.
 - **aiContext**: `battlerMoves` (moves the AI has seen) -> `ai_seen_moves`,
   `battlerAbilities` (revealed abilities) -> `ai_ability_known`, `trainerItems`
-  -> `trainer_items`. Its scoring scratch is rebuilt every decision; the rest of
-  the AI state is later (M1b). `trainerItemCounts` (the bag's size at battle start)
-  is not mapped yet: see docs/discrepancies.md, "A trainer item use that empties two
-  bag slots".
+  -> `trainer_items`, `trainerItemCounts` (the bag's size at battle start, never
+  decremented, read by `TrainerAI_ShouldUseItem`'s gate, trainer_ai.c:4092) ->
+  `trainer_item_count`. Its scoring scratch is rebuilt every decision.
+- **Engine inputs of the AI** (docs/ai/roark.md sections 5.3, 8.2, 11.1, 12):
+  - `fakeOutTurnNumber` -> `fake_out_turn`: 0 for the leads (the battle-start
+    send-out does not call `BattleSystem_UpdateAfterSwitch`), `totalTurns + 1` after
+    every switch-in (battle_lib.c:2117: switch action, Pursuit-interrupted switch,
+    faint replacement) and faint (`BattleSystem_CleanupFaintedMon`, :2195).
+    `LoadIsFirstTurnInBattle` (trainer_ai.c:2487) is `fake_out_turn >= turn`. `turn`
+    is `totalTurns` during a turn, so `step` writes `turn + 1`; `step.replace` runs
+    after `step` counted the turn but before the decomp's `totalTurns++`
+    (battle_controller_player.c:1844-1852), so it writes `turn`.
+  - `moveHit` -> `move_hit`: `UpdateFlagsWhenHit` (battle_controller_player.c:4499-4507)
+    writes the move to its defender when the attack message was shown, `MOVE_NONE`
+    when the move was disrupted before it (sleep, freeze, flinch, Taunt, full
+    paralysis; a confusion self-hit makes the user the defender, :2629). It runs after
+    a KO'd defender's faint (:3820-3837), so a fainted defender keeps it. The battler's
+    own move end clears it (`ClearFlags`, :4389, via :3986; not when the battle just
+    ended, nor for a pursuer, whose action `TryPursuit` ends, battle_script.c:6931),
+    and so do a switch-in (battle_lib.c:2121) and a faint (:2199).
+  - `ability_slot`: the species ability slot (from the personality, resolved into
+    `PokemonSpec.ability_slot`); `tables.species_abilities_decomp[species,
+    ability_slot]` is the decomp ability id, also for abilities the engine does not
+    implement (`ability` is then `UNSUPPORTED`).
 - **Not from a struct field.** `pursuit_target` and `wish_hp` are
   `BattleState`'s own bookkeeping: the decomp derives Pursuit's pre-switch hit
   from per-turn scratch (the opposing battler's selected move when a switch is
@@ -118,7 +138,7 @@ three structs has a row.
 | `BattleMon.formNum` | `form` | mapped |
 | `BattleMon.isShiny` | — | not needed because it is cosmetic (names, messages, sprites, animation) |
 | `BattleMon.padding0026_06` | — | not needed because it is padding |
-| `BattleMon.ability` | `ability` | mapped |
+| `BattleMon.ability` | `ability`, `ability_slot` | mapped |
 | `BattleMon.weatherAbilityAnnounced` | — | later (M6) |
 | `BattleMon.intimidateAnnounced` | — | later (M6) |
 | `BattleMon.traceAnnounced` | — | later (M6) |
@@ -188,7 +208,7 @@ three structs has a row.
 | `MoveEffectsData.meFirst` | — | later (M6) |
 | `MoveEffectsData.padding0004_1F` | — | not needed because it is padding |
 | `MoveEffectsData.rechargeTurnNumber` | `recharge` | mapped |
-| `MoveEffectsData.fakeOutTurnNumber` | — | later (M6) |
+| `MoveEffectsData.fakeOutTurnNumber` | `fake_out_turn` | mapped |
 | `MoveEffectsData.slowStartTurnNumber` | — | later (M6) |
 | `MoveEffectsData.meFirstTurnNumber` | — | later (M6) |
 | `MoveEffectsData.substituteHP` | `substitute_hp` | mapped |
@@ -314,7 +334,7 @@ three structs has a row.
 | `BattleContext.turnFlags` | — | not needed because it is reset every turn and `step` resolves a whole turn |
 | `BattleContext.selfTurnFlags` | — | not needed because it is reset every turn and `step` resolves a whole turn |
 | `BattleContext.moveFailFlags` | — | not needed because it is reset every turn and `step` resolves a whole turn |
-| `BattleContext.aiContext` | `ai_seen_moves`, `ai_ability_known`, `trainer_items` | mapped |
+| `BattleContext.aiContext` | `ai_seen_moves`, `ai_ability_known`, `trainer_items`, `trainer_item_count` | mapped |
 | `BattleContext.aiScriptTemp` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |
 | `BattleContext.aiScriptCursor` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |
 | `BattleContext.battleStatusMask` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
@@ -357,8 +377,8 @@ three structs has a row.
 | `BattleContext.movePrev` | — | later (M6) |
 | `BattleContext.moveLockedInto` | — | later (M6) |
 | `BattleContext.moveProtect` | — | later (M6) |
-| `BattleContext.moveHit` | — | later (M6) |
-| `BattleContext.moveHitBattler` | — | later (M6) |
+| `BattleContext.moveHit` | `move_hit` | mapped |
+| `BattleContext.moveHitBattler` | — | not needed because in singles it is the opposing battler whenever `move_hit` is set: both are written together (battle_controller_player.c:4500-4507), and `ClearFlags` (:4389) clears only `moveHit` |
 | `BattleContext.moveHitType` | — | later (M6) |
 | `BattleContext.movePrevByBattler` | `last_move` | mapped |
 | `BattleContext.moveCopied` | — | later (M6) |

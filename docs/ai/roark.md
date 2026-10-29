@@ -233,6 +233,8 @@ The opening steps are the same for every move:
        call `UpdateAfterSwitch`.
      - The result is TRUE on exactly the first decision after `A` entered: turn 1
        for a lead, and the next turn for a mon that entered mid-battle.
+     - The engine state carries it as `BattleState.fake_out_turn` (Task 3a), so the
+       check is `fake_out_turn[1] >= turn`.
 
 ### 5.4 Ordered list of script commands each flag uses (for Roark's moves)
 
@@ -415,7 +417,7 @@ QUADRUPLE.
 - An index drawn uniformly over 0..n-1 would be off by about 1.5e-5 for n = 3, so it
   is not exact.
 
-### 8.5 Switching draws (not in Task 2's `AiOutcome` yet)
+### 8.5 Switching draws (`AiOutcome.switch_stop`)
 
 The draws made by `TrainerAI_ShouldSwitch` are listed in section 11.1. For Roark,
 only two kinds change the result:
@@ -423,8 +425,12 @@ only two kinds change the result:
 - the 90 % "keep" draw for each super-effective damaging move of `A`;
 - the first-success draws in the two party-member passes.
 
-Their exact probabilities are in section 11.1. Task 2's `AiOutcome` has no field for
-them yet (see section 14).
+Their exact probabilities are in section 11.1. Task 3a encodes them as one field,
+`AiOutcome.switch_stop` (the first stopping site, 9 = none; section 11.1,
+"Encoding"). `sample_ai_outcome` and `enumerate_ai_outcomes` take the site layout as
+`switch_sites`, one `SwitchSite` kind (`KEEP`, `PASS_INEFFECTIVE`,
+`PASS_NOT_VERY_EFFECTIVE`, or `NONE` for unused entries) per draw, because working out
+which sites exist is the switching rule itself (`maybe_switch`, Task 3).
 
 ### 8.6 Item use and post-KO replacement
 
@@ -482,6 +488,10 @@ its defender with `attacker ^ 1`, so it makes no draw either.
   4. two nonzero species abilities -> the guess (section 8.2);
   5. otherwise -> `ABILITY_1`, or `ABILITY_2` if `ABILITY_1` is 0.
 - `LoadBattlerAbility ATTACKER` always gives Roark's own true ability.
+- In decomp ids (Task 3a): the true ability is
+  `tables.species_abilities_decomp[species, BattleState.ability_slot]` and the two
+  species abilities are `tables.species_abilities_decomp[species]`, also for
+  abilities the engine maps to `UNSUPPORTED`.
 
 ### 9.3 Items
 
@@ -577,7 +587,9 @@ first stopping site, at most 9 sites for Roark (1 keep + 4 + 4), is exact.
 Before Roark's party-pass sites can exist, `moveHit[A]` must be set. That happens when
 the player's damaging move hit `A` after `A` had already acted that turn, or when `A`
 did not act. `moveHit[A]` is written at `battle_controller_player.c:4500-4507` and
-cleared for the attacker at its move end (`:4389`, via `:3986`).
+cleared for the attacker at its move end (`:4389`, via `:3986`). The engine state
+carries it as `BattleState.move_hit[1]` (Task 3a; `src/nuzline/engine/STATE.md` lists
+every write and reset).
 
 Example: Starly's Wing Attack or Tackle hits Cranidos. Geodude and Onix resist both
 types, and their Rock moves are super effective against Starly, so pass 2 fires.
@@ -646,7 +658,10 @@ The rule is reached only when `ShouldSwitch` returned FALSE. It has no randomnes
    confirms the amount and the turn order.
 
 In plan 1a + 2b encoding, the action is `10 + k`, where k is the first slot used.
-The engine must also zero every other slot the decomp zeroes.
+Since Task 3a both engines also zero every later slot the decomp zeroes, from
+`BattleState.trainer_item_count` (`trainerItemCounts`) and the living party count at
+command selection. They apply slot k's item: see `docs/discrepancies.md` for a bag
+that mixes items.
 
 ## 13. Hand-traced decisions (Task 3 fixtures)
 
@@ -814,6 +829,14 @@ With no switch, there is no item (3 HP missing, 40 >= 10), and the moves score:
 That gives **[104, 99, 100, 0]** and action 0.
 
 ## 14. Inputs the later tasks need that M1a does not have
+
+**Status (Task 3a).** The "State fields", "Decomp ability ids", "`AiOutcome` width"
+and "Item consumption" items below are done, in both engines where they touch the
+state: `BattleState.move_hit`, `BattleState.fake_out_turn`,
+`Tables.species_abilities_decomp` with `BattleState.ability_slot`,
+`AiOutcome.switch_stop` (enumeration width 3840), and `BattleState.trainer_item_count`
+with the double consumption (section 12). The post-KO replacement and the emulator
+checks remain open.
 
 - **State fields.** `BattleState` lacks the fields for:
   - `moveHit` / `moveHitBattler` (section 11.1): the last damaging move that hit the

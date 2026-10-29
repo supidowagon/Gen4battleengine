@@ -7,14 +7,27 @@ list is ticked off against the decomp's battle structs in ``STATE.md``.
 Encodings:
 
 * ``species``/``moves``/``item``/``item_consumed``/``trainer_items``/``trap_move``/
-  ``choice_lock``/``last_move`` hold decomp ids (0 = none); ``ability`` holds an
-  ``ids.AbilityId`` (from ``tables.species_abilities``); ``status`` an ``ids.Status``.
+  ``choice_lock``/``last_move``/``move_hit`` hold decomp ids (0 = none); ``ability``
+  holds an ``ids.AbilityId`` (from ``tables.species_abilities``) and ``ability_slot``
+  the species slot (0/1) it came from, so ``tables.species_abilities_decomp[species,
+  ability_slot]`` is the decomp ability id; ``status`` an ``ids.Status``.
 * ``stats[..., 0..4]`` are Atk, Def, SpA, SpD, Spe (``ids.Stat`` minus one); HP is
   ``max_hp``. ``ivs`` are in ``ids.Stat`` order.
 * ``stages[side, ids.Stat]`` are the active Pokemon's stat stages, 0 = neutral
   (the decomp stores 6 = neutral); index 0 (HP) is unused.
 * ``weather`` is an ``ids.Weather``; ``weather_timer == 0`` means permanent.
 * ``winner``: 0 none, 1 player lost (or any player Pokemon fainted), 2 player won.
+* ``turn`` is the decomp's ``totalTurns`` while a turn is played and at each decision;
+  ``step`` adds 1 at the end, so a faint replacement (``step.replace``, run after
+  ``step``) sees ``turn`` one ahead of the decomp's, which increments after it
+  (battle_controller_player.c:1844-1852).
+* ``fake_out_turn`` is ``fakeOutTurnNumber``: 0 for the leads, ``totalTurns + 1`` after
+  every switch-in and faint; the AI's ``LoadIsFirstTurnInBattle`` (trainer_ai.c:2487)
+  is ``fake_out_turn >= turn``.
+* ``move_hit`` is ``moveHit``: the last move aimed at the side's active battler since its
+  own last action ended (see ``step``).
+* ``trainer_item_count`` is ``aiContext.trainerItemCounts``: the bag's size at battle
+  start, never decremented.
 """
 
 from __future__ import annotations
@@ -54,6 +67,7 @@ class BattleState(NamedTuple):
     stats: jnp.ndarray  # int16[2,6,5]: Atk, Def, SpA, SpD, Spe
     types: jnp.ndarray  # int8[2,6,2]
     ability: jnp.ndarray  # int16, ids.AbilityId
+    ability_slot: jnp.ndarray  # int8, species ability slot 0/1
     item: jnp.ndarray  # int16
     item_consumed: jnp.ndarray  # int16, id of the last item consumed
     moves: jnp.ndarray  # int16[2,6,4]
@@ -81,6 +95,8 @@ class BattleState(NamedTuple):
     recharge: jnp.ndarray  # int8
     pursuit_target: jnp.ndarray  # int8, reserved: no mechanic sets or reads it yet (only cleared)
     water_sport: jnp.ndarray  # int8
+    fake_out_turn: jnp.ndarray  # int16, fakeOutTurnNumber
+    move_hit: jnp.ndarray  # int16, moveHit: decomp move id, 0 = none
     # per side [2]
     spikes: jnp.ndarray  # int8, layers
     toxic_spikes: jnp.ndarray  # int8, layers
@@ -96,6 +112,7 @@ class BattleState(NamedTuple):
     future_timer: jnp.ndarray  # int8
     future_damage: jnp.ndarray  # int16
     trainer_items: jnp.ndarray  # int16[2,4], bag item ids (aiContext.trainerItems)
+    trainer_item_count: jnp.ndarray  # int8, bag size at battle start (trainerItemCounts)
     # field (scalars)
     weather: jnp.ndarray  # int8, ids.Weather
     weather_timer: jnp.ndarray  # int8, 0 = permanent
@@ -146,6 +163,7 @@ LAYOUT: dict[str, tuple[tuple[int, ...], type]] = {
     "stats": ((*_SLOT, 5), np.int16),
     "types": ((*_SLOT, 2), np.int8),
     "ability": (_SLOT, np.int16),
+    "ability_slot": (_SLOT, np.int8),
     "item": (_SLOT, np.int16),
     "item_consumed": (_SLOT, np.int16),
     "moves": ((*_SLOT, MOVES), np.int16),
@@ -172,6 +190,8 @@ LAYOUT: dict[str, tuple[tuple[int, ...], type]] = {
     "recharge": (_SIDE, np.int8),
     "pursuit_target": (_SIDE, np.int8),
     "water_sport": (_SIDE, np.int8),
+    "fake_out_turn": (_SIDE, np.int16),
+    "move_hit": (_SIDE, np.int16),
     "spikes": (_SIDE, np.int8),
     "toxic_spikes": (_SIDE, np.int8),
     "stealth_rock": (_SIDE, np.int8),
@@ -186,6 +206,7 @@ LAYOUT: dict[str, tuple[tuple[int, ...], type]] = {
     "future_timer": (_SIDE, np.int8),
     "future_damage": (_SIDE, np.int16),
     "trainer_items": ((SIDES, BAG_SLOTS), np.int16),
+    "trainer_item_count": (_SIDE, np.int8),
     "weather": (_FIELD, np.int8),
     "weather_timer": (_FIELD, np.int8),
     "trick_room": (_FIELD, np.int8),
@@ -224,6 +245,7 @@ def _fill_slot(a: dict[str, np.ndarray], tables: Tables, side: int, slot: int, m
     a["stats"][side, slot] = stats[Stat.ATK : Stat.SPE + 1]
     a["types"][side, slot] = np.asarray(tables.species_types[species])
     a["ability"][side, slot] = int(tables.species_abilities[species, mon.ability_slot])
+    a["ability_slot"][side, slot] = mon.ability_slot
     a["item"][side, slot] = mon.item
     a["moves"][side, slot] = mon.moves
     a["pp"][side, slot] = [move_pp[m] if m else 0 for m in mon.moves]
@@ -248,8 +270,11 @@ def make_state(
 
     ``opp_items`` is the trainer's bag (``Trainer.items``, decomp item ids). As
     ``BattleControllerPlayer_InitAI`` (battle_controller_player.c:4796) does, its
-    non-empty items fill ``trainer_items[1]`` from slot 0 in order; the player's bag
-    stays empty."""
+    non-empty items fill ``trainer_items[1]`` from slot 0 in order and their number is
+    ``trainer_item_count[1]``; the player's bag stays empty. The leads'
+    ``fake_out_turn`` is 0: the battle-start send-out does not run
+    ``BattleSystem_UpdateAfterSwitch``, and ``BattleContext`` starts zeroed
+    (battle_controller_player.c:180-184)."""
     from nuzline.engine.hooks import on_switch_in  # hooks imports this module
 
     a = {name: np.zeros(shape, dtype) for name, (shape, dtype) in LAYOUT.items()}
@@ -262,6 +287,7 @@ def make_state(
     if len(bag) > BAG_SLOTS:
         raise ValueError(f"a trainer's bag holds at most {BAG_SLOTS} items, got {len(bag)}")
     a["trainer_items"][1, : len(bag)] = bag
+    a["trainer_item_count"][1] = len(bag)
     a["weather"][...] = Weather(start_condition)
     state = BattleState(**{name: jnp.asarray(a[name]) for name in BattleState._fields})
     for side in (0, 1):

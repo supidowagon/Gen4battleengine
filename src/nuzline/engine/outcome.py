@@ -28,7 +28,7 @@ import numpy as np
 
 from nuzline.data.tables import Tables
 from nuzline.engine.ids import AbilityId, EffectId, Stat, Weather
-from nuzline.engine.order import MOVE_ACTIONS, is_switch, selected_move
+from nuzline.engine.order import MOVE_ACTIONS, is_item, is_switch, selected_move
 from nuzline.engine.state import BattleState
 
 MAX_HITS = 5
@@ -116,8 +116,10 @@ def _hit_threshold(tables: Tables, state: BattleState, actions, side) -> jnp.nda
     rate = accuracy * _ACC_NUM[total] // _ACC_DEN[total]
     rate = jnp.where(state.weather == Weather.FOG, rate * 6 // 10, rate)  # deep fog
     rate = jnp.where(state.gravity != 0, rate * 10 // 6, rate)
-    # Accuracy 0 never misses (the check returns before rolling); a switch has no roll.
-    return jnp.where(is_switch(actions[side]) | (accuracy == 0), 100, rate)
+    # Accuracy 0 never misses (the check returns before rolling); a switch or an item
+    # use runs no move, so it has no roll.
+    no_move = is_switch(actions[side]) | is_item(actions[side])
+    return jnp.where(no_move | (accuracy == 0), 100, rate)
 
 
 def hit_threshold(tables: Tables, state: BattleState, actions) -> jnp.ndarray:

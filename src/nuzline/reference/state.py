@@ -29,6 +29,7 @@ class RefPokemon:
     stats: list[int]  # Atk, Def, SpA, SpD, Spe
     types: list[int]
     ability: int
+    ability_slot: int
     item: int
     item_consumed: int
     moves: list[int]
@@ -60,6 +61,8 @@ class RefSide:
     recharge: int
     pursuit_target: int
     water_sport: int
+    fake_out_turn: int
+    move_hit: int
     spikes: int
     toxic_spikes: int
     stealth_rock: int
@@ -74,6 +77,7 @@ class RefSide:
     future_timer: int
     future_damage: int
     trainer_items: list[int]
+    trainer_item_count: int
 
 
 @dataclass

@@ -192,14 +192,17 @@ def _party(draw, tables: Tables, names: Names) -> tuple[list[PokemonSpec], int]:
 def supported_state(draw, tables: Tables, names: Names) -> BattleState:
     """A mid-battle state: 1-6 Pokemon per side (``supported_pokemon``), any active
     slot, random PP, status counters, stat stages, confusion, Taunt, Bind, Leech Seed,
-    Water Sport, Stealth Rock, screens, Tailwind, Trick Room, Mud Sport, weather and the
-    opponent's bag (``M1_BAG_ITEMS`` per slot, gaps allowed as after a use), each within
-    its legal range; the battle is not over."""
+    Water Sport, Stealth Rock, screens, Tailwind, Trick Room, Mud Sport, weather, the
+    turn, each active's ``fake_out_turn`` (0 to ``turn + 1``) and ``move_hit`` (none or
+    one of the foe's active's moves), and the opponent's bag (a size of 0-4 in
+    ``trainer_item_count``, ``M1_BAG_ITEMS`` in each slot below it, gaps allowed as
+    after a use), each within its legal range; the battle is not over."""
     parties = [draw(_party(tables, names)) for _ in (0, 1)]
     s = make_state(tables, parties[0][0], parties[1][0])
     a = {name: np.asarray(getattr(s, name)).copy() for name in BattleState._fields}
     trap_moves = np.flatnonzero(np.asarray(tables.move_effect) == EffectId.TRAP)
     move_pp = np.asarray(tables.move_pp)
+    turn = draw(st.integers(0, 50))
     for side, (party, active) in enumerate(parties):
         a["active"][side] = active
         for slot in range(len(party)):
@@ -221,12 +224,17 @@ def supported_state(draw, tables: Tables, names: Names) -> BattleState:
         a["reflect"][side] = draw(st.integers(0, _TIMER_MAX))
         a["light_screen"][side] = draw(st.integers(0, _TIMER_MAX))
         a["tailwind"][side] = draw(st.integers(0, _TIMER_MAX))
-    bag = draw(st.lists(st.sampled_from(M1_BAG_ITEMS), min_size=BAG_SLOTS, max_size=BAG_SLOTS))
-    a["trainer_items"][1] = [names.item(i) for i in bag]
+        a["fake_out_turn"][side] = draw(st.integers(0, turn + 1))
+        foe_moves = [int(m) for m in a["moves"][1 - side, parties[1 - side][1]] if m]
+        a["move_hit"][side] = draw(st.sampled_from([0, *foe_moves]))
+    count = draw(st.integers(0, BAG_SLOTS))
+    bag = draw(st.lists(st.sampled_from(M1_BAG_ITEMS), min_size=count, max_size=count))
+    a["trainer_items"][1] = [names.item(i) for i in bag] + [0] * (BAG_SLOTS - count)
+    a["trainer_item_count"][1] = count
     a["weather"][...] = draw(st.sampled_from(list(Weather)))  # permanent: timer 0
     a["trick_room"][...] = draw(st.integers(0, _TIMER_MAX))
     a["mud_sport"][...] = draw(st.integers(0, 1))
-    a["turn"][...] = draw(st.integers(0, 50))
+    a["turn"][...] = turn
     a["player_faints"][...] = int(np.sum((a["species"][0] > 0) & (a["hp"][0] == 0)))
     return BattleState(**{name: jnp.asarray(a[name]) for name in BattleState._fields})
 

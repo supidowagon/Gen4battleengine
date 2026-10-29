@@ -20,6 +20,7 @@ class Tables(NamedTuple):
     species_base_stats: jnp.ndarray  # int16[S,6], index = ids.Stat
     species_types: jnp.ndarray  # int8[S,2]
     species_abilities: jnp.ndarray  # int16[S,2], ids.AbilityId
+    species_abilities_decomp: jnp.ndarray  # int16[S,2], decomp ability ids
     species_weight: jnp.ndarray  # int32[S], hectograms
     species_gender: jnp.ndarray  # int16[S], decomp gender ratio
     species_friendship: jnp.ndarray  # int16[S] (140 does not fit int8)

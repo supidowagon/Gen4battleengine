@@ -17,7 +17,9 @@ Pure, jit- and vmap-able, fixed shapes; every random event comes from
 6. The battle ends at the first faint check that finds a player faint or no
    opponent left (``_faint_check``); later checks of the turn do nothing.
 
-Implemented so far: the opponent's bag items (Potion, ``_use_trainer_item``),
+Implemented so far: the opponent's bag items (Potion, ``_use_trainer_item``, with the
+decomp's multi-slot consumption, ``_consume_trainer_items``), the AI inputs
+``fake_out_turn`` (``_entered``) and ``move_hit`` (``_use_move``, ``_move_end``),
 switching (with Natural Cure) and the switch-in hooks
 (``hooks.on_switch_in``: Stealth Rock, Intimidate, berries), damaging moves, the
 accuracy check, PP, Struggle, the move effects of ``effects.py``, the berry check
@@ -45,7 +47,15 @@ from nuzline.engine.actions import FIRST_ITEM_ACTION
 from nuzline.engine.damage import confusion_damage
 from nuzline.engine.effects import apply_move_effect, change_stage, defender_always
 from nuzline.engine.hooks import after_damage_items, on_switch_in
-from nuzline.engine.ids import POTION_HP_RESTORED, AbilityId, EffectId, Stat, Status, TrainerItemId
+from nuzline.engine.ids import (
+    POTION_HP_RESTORED,
+    AbilityId,
+    EffectId,
+    MoveTarget,
+    Stat,
+    Status,
+    TrainerItemId,
+)
 from nuzline.engine.order import (
     MOVE_ACTIONS,
     action_order,
@@ -66,7 +76,9 @@ TOXIC_COUNTER_MAX = 15
 # Per-side fields of the active Pokemon that leave with it: the incoming battler is
 # rebuilt from its party mon by ``BattleSystem_InitBattleMon`` (battle_lib.c:70), stat
 # stages reset to neutral (:97, no Baton Pass in M1). Hazards and screens are per side
-# and stay.
+# and stay. ``move_hit`` is cleared by ``BattleSystem_UpdateAfterSwitch`` (battle_lib.c:
+# 2121) and ``BattleSystem_CleanupFaintedMon`` (:2199); ``fake_out_turn`` is set there
+# instead (``_entered``).
 _VOLATILE = (
     "confusion",
     "leech_seed",
@@ -83,6 +95,17 @@ _VOLATILE = (
     "recharge",
     "pursuit_target",
     "water_sport",
+    "move_hit",
+)
+# Ranges whose decomp defender is the user itself in singles (``BattleSystem_Defender``,
+# battle_lib.c:1665-1683): such a move records nothing on the foe's ``move_hit``.
+_SELF_DEFENDER = (
+    MoveTarget.RANGE_SINGLE_TARGET_SPECIAL,
+    MoveTarget.RANGE_USER,
+    MoveTarget.RANGE_USER_SIDE,
+    MoveTarget.RANGE_FIELD,
+    MoveTarget.RANGE_ALLY,
+    MoveTarget.RANGE_USER_OR_ALLY,
 )
 
 
@@ -139,11 +162,23 @@ def _reset_battler(state: BattleState, side, cond) -> BattleState:
     return state._replace(**fields)
 
 
-def _switch_in(state: BattleState, side, slot) -> BattleState:
-    """``side`` sends out party ``slot``: stages and volatiles reset, and the Bind the
-    outgoing Pokemon put on the other side ends (``BattleSystem_UpdateAfterSwitch``,
-    battle_lib.c:2094)."""
+def _entered(state: BattleState, side, entry_turn, cond) -> BattleState:
+    """``fakeOutTurnNumber = totalTurns + 1`` for ``side``'s battler where ``cond``:
+    ``BattleSystem_UpdateAfterSwitch`` (battle_lib.c:2117) and
+    ``BattleSystem_CleanupFaintedMon`` (:2195). ``entry_turn`` is that
+    ``totalTurns + 1``: ``turn + 1`` inside ``step``, ``turn`` in ``replace`` (which runs
+    after ``step`` has counted the turn; ``state`` module docstring)."""
+    value = jnp.where(cond, entry_turn, state.fake_out_turn[side])
+    fake_out_turn = state.fake_out_turn.at[side].set(value.astype(state.fake_out_turn.dtype))
+    return state._replace(fake_out_turn=fake_out_turn)
+
+
+def _switch_in(state: BattleState, side, slot, entry_turn) -> BattleState:
+    """``side`` sends out party ``slot``: stages and volatiles reset, the Bind the
+    outgoing Pokemon put on the other side ends and ``fake_out_turn`` becomes
+    ``entry_turn`` (``BattleSystem_UpdateAfterSwitch``, battle_lib.c:2094)."""
     state = _reset_battler(state, side, True)
+    state = _entered(state, side, entry_turn, True)
     state = state._replace(active=state.active.at[side].set(jnp.asarray(slot).astype(jnp.int8)))
     return _release_bind(state, 1 - side, True)
 
@@ -151,7 +186,8 @@ def _switch_in(state: BattleState, side, slot) -> BattleState:
 def _send_out(tables: Tables, state: BattleState, side, slot) -> BattleState:
     """A switch action: ``_switch_out``, ``_switch_in``, then ``hooks.on_switch_in``
     (entry hazards, Intimidate, berries)."""
-    return on_switch_in(tables, _switch_in(_switch_out(state, side), side, slot), side)
+    entered = _switch_in(_switch_out(state, side), side, slot, state.turn + 1)
+    return on_switch_in(tables, entered, side)
 
 
 def _use_move(
@@ -168,6 +204,13 @@ def _use_move(
     target_side = 1 - side
     target = state.active[target_side]
     ready = (state.over == 0) & (state.hp[side, user] > 0)
+    # BattleControllerPlayer_FightCommand (battle_controller_player.c:1900) fixes the
+    # defender before the status checks: the foe when it is alive (any HP for
+    # RANGE_OPPONENT_SIDE: BattleSystem_RandomOpponent), the user for _SELF_DEFENDER.
+    move_range = tables.move_target[move]
+    foe_defender = ~jnp.isin(move_range, jnp.asarray(_SELF_DEFENDER, move_range.dtype)) & (
+        (state.hp[target_side, target] > 0) | (move_range == MoveTarget.RANGE_OPPONENT_SIDE)
+    )
 
     # BattleControllerPlayer_CheckStatusDisruption (battle_controller_player.c:2417) runs
     # before the PP decrement; the first check that disrupts the move stops the rest.
@@ -253,7 +296,19 @@ def _use_move(
         # changes no HP, so its check finds what the previous one found.
         state = after_damage_items(tables, state, side, connected)
         state = after_damage_items(tables, state, 1 - side, connected)
-    return state
+    # BattleControllerPlayer_UpdateFlagsWhenHit (battle_controller_player.c:4499-4507),
+    # reached on every path once the move was chosen (UPDATE_MOVE_BUFFERS, :3956, or
+    # LOOP_SPREAD_MOVES, :3837): moveHit[defender] = the move when the attack message
+    # was shown (the move got past the status checks, hit or not; the message sets
+    # SYSCTL_ATTACK_MESSAGE_SHOWN, battle_script.c:1432), else MOVE_NONE. A confusion
+    # self-hit makes the user the defender (battle_controller_player.c:2629), so the
+    # foe's record is untouched. ``_move_end`` keeps this write past the faint check, as
+    # the decomp writes it after LOOP_FAINTED.
+    record = ready & ~self_hit & foe_defender
+    move_hit = jnp.where(record, jnp.where(can_act, move, 0), state.move_hit[target_side])
+    return state._replace(
+        move_hit=state.move_hit.at[target_side].set(move_hit.astype(state.move_hit.dtype))
+    )
 
 
 def _bag_slot(action) -> jnp.ndarray:
@@ -262,16 +317,23 @@ def _bag_slot(action) -> jnp.ndarray:
 
 def _consume_trainer_items(state: BattleState, actions) -> BattleState:
     """Each side choosing an item action loses that bag slot when it chooses:
-    ``TrainerAI_ShouldUseItem`` (trainer_ai.c:4193) zeroes ``trainerItems[i]`` at command
-    selection, so the item is spent even if its action never runs."""
+    ``TrainerAI_ShouldUseItem`` (trainer_ai.c:4056) zeroes ``trainerItems[i]`` at command
+    selection (:4193), so the item is spent even if its action never runs. Its bag loop
+    has no ``break`` (:4091-4194): after the use, every later slot ``i`` it considers,
+    ``aliveMons <= trainerItemCounts - i + 1`` (:4092), is zeroed too (an empty one stays
+    empty). ``aliveMons`` counts the side's party members with HP left, the active one
+    included (:4081-4089), at command selection. The item used stays slot ``k``'s: a
+    later zeroed slot holding a different item would become ``usedItem`` in the decomp
+    (docs/discrepancies.md)."""
+    slots = jnp.arange(BAG_SLOTS)
     for side in (0, 1):
-        slot = _bag_slot(actions[side])
-        kept = jnp.where(is_item(actions[side]), 0, state.trainer_items[side, slot])
-        state = state._replace(
-            trainer_items=state.trainer_items.at[side, slot].set(
-                kept.astype(state.trainer_items.dtype)
-            )
-        )
+        k = _bag_slot(actions[side])
+        alive = jnp.sum(((state.species[side] != 0) & (state.hp[side] > 0)).astype(_I32))
+        count = state.trainer_item_count[side].astype(_I32)
+        considered = (slots > k) & (alive <= count - slots + 1)
+        spent = is_item(actions[side]) & ((slots == k) | considered)
+        bag = jnp.where(spent, 0, state.trainer_items[side]).astype(state.trainer_items.dtype)
+        state = state._replace(trainer_items=state.trainer_items.at[side].set(bag))
     return state
 
 
@@ -353,16 +415,18 @@ def _pursuit_hit(
     )
 
 
-def _faint_check(before: BattleState, after: BattleState) -> BattleState:
+def _faint_check(before: BattleState, after: BattleState, entry_turn=None) -> BattleState:
     """Count new player faints and end the battle: any player Pokemon fainting is a loss (the
     terminal rule, which wins over a simultaneous last opponent faint); no opponent
     Pokemon left standing is a win. A fainted active battler is cleaned up as
     ``BattleSystem_CleanupFaintedMon`` (battle_lib.c:2156, from ``PlayFaintAnimation``,
     battle_script.c:1803) does: its stat stages, ``statusVolatile``, ``moveEffectsMask``
-    and ``moveEffectsData`` are cleared (``_reset_battler``), and the Bind it put on the
-    other side ends (:2179). Every newly fainted Pokemon also loses its status condition
-    and counter: the decomp writes ``status = 0`` for a Pokemon with no HP
-    (battle_controller.c:1482-1486)."""
+    and ``moveEffectsData`` are cleared (``_reset_battler``, which also clears
+    ``move_hit``, :2199), ``fake_out_turn`` becomes ``entry_turn`` (:2195; by default
+    ``turn + 1``, the value inside ``step``), and the Bind it put on the other side ends
+    (:2179). Every newly fainted Pokemon also loses its status condition and counter: the
+    decomp writes ``status = 0`` for a Pokemon with no HP (battle_controller.c:1482-1486)."""
+    entry_turn = after.turn + 1 if entry_turn is None else entry_turn
     fainted = (before.hp > 0) & (after.hp == 0)
     after = after._replace(
         status=jnp.where(fainted, 0, after.status).astype(after.status.dtype),
@@ -382,8 +446,25 @@ def _faint_check(before: BattleState, after: BattleState) -> BattleState:
     for side in (0, 1):
         active_fainted = fainted[side, after.active[side]]
         after = _reset_battler(after, side, active_fainted)
+        after = _entered(after, side, entry_turn, active_fainted)
         after = _release_bind(after, 1 - side, active_fainted)
     return after
+
+
+def _move_end(state: BattleState, acted: BattleState, side, ran) -> BattleState:
+    """After ``side``'s action and its faint check. The foe keeps the ``move_hit`` that
+    ``_use_move`` wrote: ``UpdateFlagsWhenHit`` runs after a KO'd defender's faint
+    (LOOP_FAINTED before LOOP_SPREAD_MOVES, battle_controller_player.c:3820-3837), so a
+    fainted defender holds the record until its replacement clears it. Then
+    ``BattleControllerPlayer_MoveEnd`` clears the actor's own (``ClearFlags``, :4389, via
+    :3986) where ``ran``: the action ran (a move, switch or item; neither a fainted
+    battler's action nor a pursuer's, which ``TryPursuit`` ends, battle_script.c:6931,
+    reaches it) and the battle goes on (``CheckBattleOver`` returns first, :3969)."""
+    foe = 1 - side
+    move_hit = state.move_hit.at[foe].set(acted.move_hit[foe])
+    clear = ran & (state.over == 0)
+    move_hit = move_hit.at[side].set(jnp.where(clear, 0, move_hit[side]))
+    return state._replace(move_hit=move_hit.astype(state.move_hit.dtype))
 
 
 def execute_actions(
@@ -412,9 +493,11 @@ def execute_actions(
         side = order[position].astype(_I32)
         target_moved = position == 1  # the first actor's target has not moved yet
         acted = _act(tables, state, side, actions, choices, items, outcome, target_moved)
+        ran = (state.over == 0) & (state.hp[side, state.active[side]] > 0)
         if position == 1:
             acted = _where(pursued, state, acted)
-        state = _faint_check(before, acted)
+            ran = ran & ~pursued
+        state = _move_end(_faint_check(before, acted), acted, side, ran)
     return state
 
 
@@ -578,6 +661,10 @@ def replace(tables: Tables, state: BattleState, side, slot) -> BattleState:
     ``BattleSystem_TriggerEffectOnSwitch``: Intimidate of a battler that has not announced
     it yet (battle_lib.c:3795, so an Intimidate already on the field does not fire again)
     and the held-item check of every battler (:4151). Both need HP left, so a replacement
-    that Stealth Rock faints triggers neither."""
-    entered = _switch_in(state, side, slot)
-    return _faint_check(entered, on_switch_in(tables, entered, side))
+    that Stealth Rock faints triggers neither.
+
+    ``ReplaceFainted`` runs before ``totalTurns++`` (:1852), while ``step`` has already
+    added 1 to ``turn``: the decomp's ``totalTurns + 1`` is ``turn`` here, for the
+    newcomer's ``fake_out_turn`` and for a faint on entry."""
+    entered = _switch_in(state, side, slot, state.turn)
+    return _faint_check(entered, on_switch_in(tables, entered, side), entry_turn=state.turn)

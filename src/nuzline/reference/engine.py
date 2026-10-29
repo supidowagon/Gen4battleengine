@@ -74,6 +74,15 @@ DEFENDER_ALWAYS = {
 }
 # ... of which these hit the user, not the foe (no damage to the foe's active).
 TARGETS_USER = {MoveTarget.RANGE_USER, MoveTarget.RANGE_USER_SIDE, MoveTarget.RANGE_FIELD}
+# BattleSystem_Defender (lib.c:1665-1683): in singles these ranges make the user the
+# defender, so the move leaves no moveHit on the foe.
+SELF_DEFENDER = TARGETS_USER | {
+    MoveTarget.RANGE_SINGLE_TARGET_SPECIAL,
+    MoveTarget.RANGE_ALLY,
+    MoveTarget.RANGE_USER_OR_ALLY,
+}
+# _status_disrupted's results.
+GOES_AHEAD, DISRUPTED, HURT_ITSELF = 0, 1, 2
 
 
 # --------------------------------------------------------------------------- helpers
@@ -85,6 +94,9 @@ class _Turn:
 
     tables: object
     outcome: object
+    # totalTurns + 1, the fakeOutTurnNumber a switch-in or faint writes (lib.c:2117,
+    # :2195): turn + 1 during ref_step, turn in ref_replace (after the turn was counted).
+    entry_turn: int
     fainted: list[tuple[int, int]] = field(default_factory=list)  # SYSCTL_MON_FAINTED
     done: list[bool] = field(default_factory=lambda: [False, False])  # action is MOVE_END
 
@@ -363,12 +375,14 @@ def ref_damage_table(tables, state: RefState, atk_side: int, move: int, crit: bo
 # --------------------------------------------------------------------------- faints
 
 
-def _cleanup_fainted(s: RefState, side: int) -> None:
+def _cleanup_fainted(turn: _Turn, s: RefState, side: int) -> None:
     """``BattleSystem_CleanupFaintedMon`` (lib.c:2156): the fainted battler's stat
     stages, ``statusVolatile``, ``moveEffectsMask`` and ``moveEffectsData`` are
-    cleared and ``movePrevByBattler`` reset; the Bind it put on a foe ends
+    cleared, ``fakeOutTurnNumber = totalTurns + 1`` (lib.c:2195), ``moveHit`` and
+    ``movePrevByBattler`` reset (lib.c:2199); the Bind it put on a foe ends
     (lib.c:2179)."""
     _reset_battler(s.sides[side])
+    s.sides[side].fake_out_turn = turn.entry_turn
     _release_bind(s.sides[1 - side])
 
 
@@ -391,6 +405,7 @@ def _reset_battler(sd: RefSide) -> None:
         "recharge",
         "pursuit_target",
         "water_sport",
+        "move_hit",
     ):
         setattr(sd, name, 0)
 
@@ -418,7 +433,7 @@ def _faint_check(turn: _Turn, s: RefState) -> None:
     for side, slot in turn.fainted:
         turn.done[side] = True  # script.c:1801, battlerActions = MOVE_END
         if s.sides[side].active == slot:
-            _cleanup_fainted(s, side)
+            _cleanup_fainted(turn, s, side)
         if side == 0:
             player_fainted += 1
     turn.fainted.clear()
@@ -487,11 +502,13 @@ def _switch_in_effects(turn: _Turn, s: RefState, side: int) -> None:
 def _enter(turn: _Turn, s: RefState, side: int, slot: int) -> None:
     """``SwitchAndUpdateMon`` -> ``BattleSystem_InitBattleMon`` (lib.c:70): a fresh
     battler (stages neutral, no volatiles; no Baton Pass in M1), and
-    ``BattleSystem_UpdateAfterSwitch`` (lib.c:2094) ends the Bind the outgoing
-    battler put on the foe. Then the entry hazards."""
+    ``BattleSystem_UpdateAfterSwitch`` (lib.c:2094) sets ``fakeOutTurnNumber =
+    totalTurns + 1`` (lib.c:2117), clears ``moveHit`` (lib.c:2121) and ends the Bind
+    the outgoing battler put on the foe. Then the entry hazards."""
     sd = s.sides[side]
     sd.active = slot
     _reset_battler(sd)
+    sd.fake_out_turn = turn.entry_turn
     _release_bind(s.sides[1 - side])
     _stealth_rock_damage(turn, s, side)
 
@@ -677,9 +694,10 @@ def _hit(turn: _Turn, s: RefState, side: int, move: int, hit: int, struggling: b
     _thaw_target(turn, s, side, move, dealt)
 
 
-def _status_disrupted(turn: _Turn, s: RefState, side: int, move: int) -> bool:
-    """``BattleControllerPlayer_CheckStatusDisruption`` (bcp.c:2417): True when the move
-    does not go ahead. A confusion self-hit happens here."""
+def _status_disrupted(turn: _Turn, s: RefState, side: int, move: int) -> int:
+    """``BattleControllerPlayer_CheckStatusDisruption`` (bcp.c:2417): ``GOES_AHEAD``,
+    ``DISRUPTED`` when the move does not go ahead, or ``HURT_ITSELF`` for a confusion
+    self-hit, which happens here."""
     tables, o = turn.tables, turn.outcome
     sd, mon = s.sides[side], _active(s, side)
     effect = _t(tables, "move_effect", move)
@@ -693,7 +711,7 @@ def _status_disrupted(turn: _Turn, s: RefState, side: int, move: int) -> bool:
         else:
             mon.status_counter -= 1
             if mon.status_counter > 0:
-                return True
+                return DISRUPTED
             mon.status = Status.NONE
     # CHECK_STATUS_STATE_FREEZE (bcp.c:2478): RandNext() % 5 == 0 thaws; otherwise the
     # move stops unless it is a thawing move (it thaws at SELF_THAW below).
@@ -702,7 +720,7 @@ def _status_disrupted(turn: _Turn, s: RefState, side: int, move: int) -> bool:
         if o.thaw[side]:
             mon.status = Status.NONE
         elif not thaw_move:
-            return True
+            return DISRUPTED
         else:
             still_frozen = True
     # CHECK_STATUS_STATE_FLINCH (bcp.c:2529): subscript_flinched.s raises Steadfast's Speed.
@@ -710,10 +728,10 @@ def _status_disrupted(turn: _Turn, s: RefState, side: int, move: int) -> bool:
         sd.flinched = 0
         if mon.ability == AbilityId.STEADFAST:
             _change_stage(s, side, Stat.SPE, 1)
-        return True
+        return DISRUPTED
     # CHECK_STATUS_STATE_TAUNT (bcp.c:2557): a taunted battler's power-0 move fails.
     if sd.taunt and _t(tables, "move_power", move) == 0:
-        return True
+        return DISRUPTED
     # CHECK_STATUS_STATE_CONFUSION (bcp.c:2614): the counter drops; while it stays
     # above 0, RandNext() & 1 makes the battler hurt itself (CALC_SELF_HIT, a Normal
     # physical hit on itself with no side or field conditions, then the variance).
@@ -732,40 +750,54 @@ def _status_disrupted(turn: _Turn, s: RefState, side: int, move: int) -> bool:
                 field_conditions=False,
             )
             _lose_hp(turn, s, side, _variance(damage, o.roll[side][0]))
-            return True
+            return HURT_ITSELF
     # CHECK_STATUS_STATE_PARALYSIS (bcp.c:2652): RandNext() % 4 == 0 (Magic Guard is
     # unsupported).
     if mon.status == Status.PARALYSIS and o.full_para[side]:
-        return True
+        return DISRUPTED
     # CHECK_STATUS_STATE_SELF_THAW (bcp.c:2728).
     if still_frozen:
         mon.status = Status.NONE
-    return False
+    return GOES_AHEAD
 
 
 def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggling: bool,
-           target_moved: bool) -> None:  # fmt: skip
+           target_moved: bool) -> int | None:  # fmt: skip
     """``BattleControllerPlayer_FightCommand`` through ``TryMove`` and the move script
-    for ``side``'s active Pokemon."""
+    for ``side``'s active Pokemon. Returns what ``UpdateFlagsWhenHit`` (bcp.c:4499-4507)
+    writes to the foe's ``moveHit`` (``ref_step`` applies it after the faint check), or
+    None when the foe is not the defender."""
     tables, o = turn.tables, turn.outcome
     mon = _active(s, side)
-    if _status_disrupted(turn, s, side, move):
-        return
+    # FightCommand (bcp.c:1900) picks the defender first: the foe while it is alive (any
+    # HP for RANGE_OPPONENT_SIDE), the user for SELF_DEFENDER ranges.
+    target_range = _move_target(tables, move)
+    foe_defender = target_range not in SELF_DEFENDER and (
+        _active(s, 1 - side).hp > 0 or target_range == MoveTarget.RANGE_OPPONENT_SIDE
+    )
+    disruption = _status_disrupted(turn, s, side, move)
+    if disruption == HURT_ITSELF:  # the user became the defender (bcp.c:2629)
+        return None
+    if disruption == DISRUPTED:  # no attack message: moveHit = MOVE_NONE
+        return 0 if foe_defender else None
+    # From here every path prints the attack message (subscript_no_pp.s,
+    # subscript_no_target.s, subscript_missed.s, the move script): moveHit = the move.
+    record = move if foe_defender else None
     # BattleControllerPlayer_DecrementPP (bcp.c:2235): one PP from the move's slot;
     # none left fails the move (MOVE_STATUS_NO_PP). Struggle spends none.
     if not struggling:
         slot = action
         if mon.pp[slot] == 0:
-            return
+            return record
         mon.pp[slot] -= 1
     # BattleControllerPlayer_HasNoTarget (bcp.c:2306): BattleSystem_Defender found no
     # living foe for a move aimed at it.
     if _move_target(tables, move) not in DEFENDER_ALWAYS and _active(s, 1 - side).hp == 0:
-        return
+        return record
     # CheckMoveHitAccuracy (bcp.c:2865): accuracy 0 never misses; a multi-hit move
     # checks only its first hit (SYSCTL_MULTI_HIT_MOVE).
     if _t(tables, "move_accuracy", move) != 0 and not o.hit[side][0]:
-        return
+        return record
     hits = o.n_hits[side] if _t(tables, "move_effect", move) == EffectId.MULTI_HIT else 1
     for hit in range(hits):
         # BattleControllerPlayer_LoopMultiHit (bcp.c:3777) stops once the target fainted.
@@ -776,6 +808,7 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
         # AFTER_MOVE_EFFECT_ATTACKER_ITEM (bcp.c:3684), then _DEFENDER_ITEM (:3691).
         _held_item_hp(turn, s, side)
         _held_item_hp(turn, s, 1 - side)
+    return record
 
 
 def _pursuit(turn: _Turn, s: RefState, side: int, actions, choices) -> None:
@@ -956,18 +989,25 @@ def ref_step(tables, state: RefState, actions: tuple[int, int], outcome) -> RefS
     s = copy.deepcopy(state)
     if s.over:
         return s
-    turn = _Turn(tables, outcome)
+    turn = _Turn(tables, outcome, entry_turn=s.turn + 1)
     actions = (int(actions[0]), int(actions[1]))
     choices = [_choose(tables, s, side, actions[side]) for side in (0, 1)]
     commands = [_command(a) for a in actions]
-    # TrainerAI_ShouldUseItem (trainer_ai.c:4193) empties the bag slot when it picks the
-    # item, before any action runs.
+    # TrainerAI_ShouldUseItem (trainer_ai.c:4056) empties the bag slot when it picks the
+    # item (:4193), before any action runs. Its loop (:4091) does not break: every later
+    # slot i with aliveMons <= trainerItemCounts - i + 1 (:4092) is zeroed too, aliveMons
+    # counting the party members with HP left (:4081-4089).
     items = [0, 0]
     for side in (0, 1):
         if commands[side] == ITEM:
-            bag = s.sides[side].trainer_items
-            items[side] = bag[actions[side] - FIRST_ITEM_ACTION]
-            bag[actions[side] - FIRST_ITEM_ACTION] = 0
+            sd = s.sides[side]
+            alive = sum(1 for m in sd.party if m.species and m.hp)
+            used = actions[side] - FIRST_ITEM_ACTION
+            items[side] = sd.trainer_items[used]
+            sd.trainer_items[used] = 0
+            for i in range(used + 1, len(sd.trainer_items)):
+                if alive <= sd.trainer_item_count - i + 1:
+                    sd.trainer_items[i] = 0
 
     # BattleControllerPlayer_CalcTurnOrder (bcp.c:707): items and switches first, in
     # battler order, then moves; two actions of one command are ordered by
@@ -988,15 +1028,26 @@ def ref_step(tables, state: RefState, actions: tuple[int, int], outcome) -> RefS
             break
         if turn.done[side] or _active(s, side).hp == 0:
             continue
+        record = None
         if commands[side] == ITEM:
             _use_item(tables, s, side, items[side])
         elif commands[side] == SWITCH:
             _switch(turn, s, side, actions[side] - MOVE_ACTIONS, actions, choices)
         else:
             move, struggling = choices[side]
-            _fight(turn, s, side, actions[side], move, struggling, target_moved=position == 1)
+            record = _fight(
+                turn, s, side, actions[side], move, struggling, target_moved=position == 1
+            )
         turn.done[side] = True
         _faint_check(turn, s)  # BATTLE_CONTROL_CHECK_ANY_FAINTED after each action
+        # UpdateFlagsWhenHit runs after LOOP_FAINTED (bcp.c:3820-3837): a KO'd defender
+        # keeps the record until its replacement clears it.
+        if record is not None:
+            s.sides[1 - side].move_hit = record
+        # BattleControllerPlayer_MoveEnd -> ClearFlags (bcp.c:3986, :4389) clears the
+        # actor's own moveHit, unless CheckBattleOver ended the battle first (:3969).
+        if not s.over:
+            s.sides[side].move_hit = 0
 
     _end_of_turn(turn, s)
     # BattleSystem_SetupNextTurn (lib.c:2234) clears every flinch.
@@ -1012,7 +1063,9 @@ def ref_replace(tables, state: RefState, side: int, slot: int) -> RefState:
     Pokemon in and runs the hazards and a faint check (:22-24); the battle-over check
     (bcp.c:1847), then ``ShowBattleMon`` (bcp.c:256) runs the switch-in effects."""
     s = copy.deepcopy(state)
-    turn = _Turn(tables, None)
+    # ReplaceFainted runs before totalTurns++ (bcp.c:1852), after ref_step counted the
+    # turn: the decomp's totalTurns + 1 is s.turn here.
+    turn = _Turn(tables, None, entry_turn=s.turn)
     _enter(turn, s, side, slot)
     _faint_check(turn, s)
     if not s.over:

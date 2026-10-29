@@ -5,15 +5,31 @@ import jax.numpy as jnp
 import numpy as np
 
 from nuzline.ai.outcome import (
+    MAX_ENUMERATED,
     MAX_SCRIPT_ROLLS,
+    SWITCH_NONE,
+    SWITCH_SITES,
     AiOutcome,
+    SwitchSite,
     enumerate_ai_outcomes,
     sample_ai_outcome,
     script_roll_thresholds,
+    switch_stop_probs,
 )
 from tests.engine.helpers import roark_state
 
 N = 20_000
+NO_SITES = jnp.zeros(SWITCH_SITES, jnp.int8)
+# A layout with every kind (roark.md 11.1): one keep draw, then two party-pass-1 and
+# two party-pass-2 draws.
+LAYOUT = jnp.asarray(
+    [SwitchSite.KEEP, SwitchSite.PASS_INEFFECTIVE, SwitchSite.PASS_INEFFECTIVE]
+    + [SwitchSite.PASS_NOT_VERY_EFFECTIVE] * 2
+    + [SwitchSite.NONE] * 4,
+    jnp.int8,
+)
+# The decomp's stop probability per kind over a uniform u16 (trainer_ai.c:3588, :3779).
+P_KEEP, P_PASS_1, P_PASS_2 = 58982 / 65536, 32768 / 65536, 21846 / 65536
 
 
 def _with_opp_moves(state, names, moves):
@@ -23,7 +39,7 @@ def _with_opp_moves(state, names, moves):
 
 def test_sample_within_ranges(tables, names):
     s = roark_state(tables, names)
-    o = sample_ai_outcome(jax.random.PRNGKey(0), s)
+    o = sample_ai_outcome(jax.random.PRNGKey(0), s, LAYOUT)
     assert o.sim_roll.shape == (4,) and o.script_rolls.shape == (MAX_SCRIPT_ROLLS,)
     assert int(o.ability_guess) in (0, 1)
     assert o.sim_roll.tolist() == [15] * 4  # roll index 15 = 100 %, roark.md 8.1
@@ -33,7 +49,7 @@ def test_sample_within_ranges(tables, names):
 
 def test_enumeration_probabilities_sum_to_one(tables, names):
     s = roark_state(tables, names)
-    outs, probs = enumerate_ai_outcomes(s)
+    outs, probs = enumerate_ai_outcomes(s, LAYOUT)
     assert abs(float(probs.sum()) - 1.0) < 1e-5 and outs.sim_roll.shape[0] == probs.shape[0]
 
 
@@ -57,7 +73,7 @@ def test_script_roll_thresholds_match_the_site_table(tables, names):
 
 def test_enumeration_probabilities_are_exact(tables, names):
     s = roark_state(tables, names)
-    outs, probs = enumerate_ai_outcomes(s)
+    outs, probs = enumerate_ai_outcomes(s, LAYOUT)
     probs = np.asarray(probs, np.float64)
     tb = np.asarray(outs.tiebreak)
     # RandNext() % 12 over a u16: residues 0-3 have 5462/65536, 4-11 have 5461/65536.
@@ -71,17 +87,19 @@ def test_enumeration_probabilities_are_exact(tables, names):
 
 def test_unused_site_never_rolls(tables, names):
     s = _with_opp_moves(roark_state(tables, names), names, ["Stealth Rock", "Rock Throw"])
-    outs, probs = enumerate_ai_outcomes(s)
+    outs, probs = enumerate_ai_outcomes(s, LAYOUT)
     assert float(probs[np.asarray(outs.script_rolls)[:, 3] == 1].sum()) == 0.0
-    o = jax.vmap(lambda k: sample_ai_outcome(k, s))(jax.random.split(jax.random.PRNGKey(1), 500))
+    o = jax.vmap(lambda k: sample_ai_outcome(k, s, LAYOUT))(
+        jax.random.split(jax.random.PRNGKey(1), 500)
+    )
     assert int(o.script_rolls[:, 3].max()) == 0
 
 
 def test_sampled_frequencies_match_enumeration(tables, names):
     s = roark_state(tables, names)
     keys = jax.random.split(jax.random.PRNGKey(42), N)
-    samples = jax.jit(jax.vmap(sample_ai_outcome, in_axes=(0, None)))(keys, s)
-    outs, probs = enumerate_ai_outcomes(s)
+    samples = jax.jit(jax.vmap(sample_ai_outcome, in_axes=(0, None, None)))(keys, s, LAYOUT)
+    outs, probs = enumerate_ai_outcomes(s, LAYOUT)
     probs = np.asarray(probs, np.float64)
     for field in AiOutcome._fields:
         sampled = np.asarray(getattr(samples, field)).reshape(N, -1)
@@ -96,10 +114,48 @@ def test_sampled_frequencies_match_enumeration(tables, names):
 def test_sampler_and_enumerator_jit_without_64bit(tables, names):
     s = roark_state(tables, names)
     for fn, args in (
-        (sample_ai_outcome, (jax.random.PRNGKey(0), s)),
-        (enumerate_ai_outcomes, (s,)),
+        (sample_ai_outcome, (jax.random.PRNGKey(0), s, LAYOUT)),
+        (enumerate_ai_outcomes, (s, LAYOUT)),
     ):
         jaxpr = str(jax.make_jaxpr(fn)(*args))
         assert "int64" not in jaxpr and "float64" not in jaxpr
-    outs, probs = jax.jit(enumerate_ai_outcomes)(s)
+    outs, probs = jax.jit(enumerate_ai_outcomes)(s, LAYOUT)
     assert outs.tiebreak.shape == probs.shape
+
+
+def test_switch_stop_range(tables, names):
+    s = roark_state(tables, names)
+    keys = jax.random.split(jax.random.PRNGKey(3), 500)
+    sample = jax.jit(jax.vmap(sample_ai_outcome, in_axes=(0, None, None)))
+    stops = np.asarray(sample(keys, s, LAYOUT).switch_stop)
+    assert stops.dtype == np.int8 and stops.min() >= 0 and stops.max() <= SWITCH_NONE == 9
+    # Only sites that exist can stop: here 0-4, or none (9).
+    assert set(stops.tolist()) <= {0, 1, 2, 3, 4, SWITCH_NONE}
+    # No sites: no draw can stop.
+    assert set(np.asarray(sample(keys, s, NO_SITES).switch_stop).tolist()) == {SWITCH_NONE}
+    outs, probs = enumerate_ai_outcomes(s, NO_SITES)
+    stops = np.asarray(outs.switch_stop)
+    assert abs(float(np.asarray(probs)[stops == SWITCH_NONE].sum()) - 1.0) < 1e-6
+
+
+def test_switch_stop_probabilities_are_exact(tables, names):
+    # The first site to stop: prod_{h<i} (1 - p_h) * p_i (roark.md 11.1, "Encoding").
+    p = [P_KEEP, P_PASS_1, P_PASS_1, P_PASS_2, P_PASS_2]
+    expected, keep_going = [], 1.0
+    for p_i in p:
+        expected.append(keep_going * p_i)
+        keep_going *= 1 - p_i
+    expected += [0.0] * (SWITCH_SITES - len(p)) + [keep_going]
+    np.testing.assert_allclose(np.asarray(switch_stop_probs(LAYOUT)), expected, atol=1e-7)
+    s = roark_state(tables, names)
+    outs, probs = enumerate_ai_outcomes(s, LAYOUT)
+    probs, stops = np.asarray(probs, np.float64), np.asarray(outs.switch_stop)
+    for v in range(SWITCH_NONE + 1):
+        assert abs(probs[stops == v].sum() - expected[v]) < 1e-6, v
+
+
+def test_enumeration_width_stays_within_the_limit(tables, names):
+    outs, probs = enumerate_ai_outcomes(roark_state(tables, names), LAYOUT)
+    # 2 ability guesses x 2^4 script rolls x 12 tie-breaks x 10 switch stops.
+    assert probs.shape == (3840,) and 3840 <= MAX_ENUMERATED
+    assert outs.switch_stop.shape == (3840,)

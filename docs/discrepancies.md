@@ -120,15 +120,16 @@ does not generate those matchups (`_smogon_departs`).
 
 ## Not implemented in either engine (M6; M1b's coverage registry must refuse them)
 
-- **A trainer item use that empties two bag slots.** `TrainerAI_ShouldUseItem`
-  (`src/battle/trainer_ai/trainer_ai.c:4056`) never breaks out of its bag loop: once one
-  slot is used, every later slot it considers (`aliveMons <= trainerItemCounts - i + 1`,
-  `:4092`) and finds non-empty is zeroed too (`docs/ai/roark.md` section 12, quirk 5).
-  With two or fewer of Roark's Pokemon alive, one Potion use empties both slots. Both
-  engines' item action `10 + k` empties slot `k` only, and `BattleState` has no
-  `trainerItemCounts` (the bag's size at battle start, never decremented) to decide the
-  extra slots. Until the state carries it, the AI policy or the coverage registry must
-  account for this.
+- **The item a multi-slot bag use applies.** `TrainerAI_ShouldUseItem`
+  (`src/battle/trainer_ai/trainer_ai.c:4056`) never breaks out of its bag loop: after a
+  use, every later slot it considers (`aliveMons <= trainerItemCounts - i + 1`,
+  `:4092`) and finds non-empty is zeroed too, and also becomes `usedItem` (`:4191-4194`),
+  so the item applied is the last one zeroed. Both engines zero the same slots (item
+  action `10 + k`, `trainer_item_count`) but apply slot `k`'s item. The two agree when
+  the zeroed slots hold the same item, as every M1 bag does (Roark: two Potions); a bag
+  mixing items (for example a Potion before a Super Potion) would heal by the wrong
+  item. M1b's coverage registry must refuse a trainer bag that mixes item ids, or that
+  holds an item without a supported `TrainerItemId`.
 
 - **Field-condition end-of-turn pass.** Neither engine runs the decomp's
   `BattleControllerPlayer_CheckFieldConditions`
