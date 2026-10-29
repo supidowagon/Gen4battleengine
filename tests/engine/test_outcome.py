@@ -57,7 +57,7 @@ def test_hit_threshold_fog_gravity_and_never_miss(tables, names):
 def test_crit_odds(tables, names):
     s = roark_state(tables, names)
     assert crit_odds(tables, s, acts(SCRATCH, TACKLE)).tolist() == [16, 16]
-    grotle = replace(s, 0, 2)  # Razor Leaf (HIGH_CRIT) is Grotle's slot 3
+    grotle = replace(tables, s, 0, 2)  # Razor Leaf (HIGH_CRIT) is Grotle's slot 3
     assert crit_odds(tables, grotle, acts(3, TACKLE)).tolist() == [8, 16]
 
 

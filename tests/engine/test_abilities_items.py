@@ -4,7 +4,7 @@
 from nuzline.engine.hooks import after_damage_items
 from nuzline.engine.ids import AbilityId, ItemId, Status
 from nuzline.engine.outcome import empty_outcome
-from nuzline.engine.step import step
+from nuzline.engine.step import replace, step
 from tests.engine.helpers import A, roark_state
 
 
@@ -125,3 +125,58 @@ def test_after_damage_items_cond_gates_the_check(tables, names):
     eaten = after_damage_items(tables, s, 0)
     assert int(eaten.hp[0, 0]) == int(s.hp[0, 0]) + 10
     assert int(eaten.item_consumed[0, 0]) == names.item("Oran Berry")
+
+
+# A faint replacement runs the switch-in path of a voluntary switch: TurnEnd calls
+# BattleControllerPlayer_ReplaceFainted (battle_controller_player.c:1848), whose
+# subscript_show_party_list.s:22-24 runs the hazards check and the faint check; the
+# turn ends through CheckBattleOver (:1847) and ShowBattleMon (:256) then runs
+# BattleSystem_TriggerEffectOnSwitch (Intimidate, held-item check).
+
+
+def _opp_lead_fainted(tables, names, **kwargs):
+    s = roark_state(tables, names, **kwargs)
+    return s.replace_hp(1, 0, 0)
+
+
+def test_replacement_takes_stealth_rock_damage(tables, names):
+    s = _opp_lead_fainted(tables, names)
+    s = s._replace(stealth_rock=s.stealth_rock.at[1].set(1))
+    out = replace(tables, s, 1, 2)  # Cranidos (Rock): Rock is neutral, 1/8 max HP
+    max_hp = int(s.max_hp[1, 2])
+    assert int(out.hp[1, 2]) == max_hp - max(max_hp // 8, 1)
+
+
+def test_replacement_fainting_to_stealth_rock_ends_the_battle(tables, names):
+    s = _opp_lead_fainted(tables, names, opp_count=2).replace_hp(1, 1, 1)
+    s = s._replace(stealth_rock=s.stealth_rock.at[1].set(1))
+    out = replace(tables, s, 1, 1)
+    assert int(out.hp[1, 1]) == 0 and int(out.over) == 1 and int(out.winner) == 2
+
+
+def test_player_intimidate_does_not_fire_on_opponent_replacement(tables, names):
+    s = roark_state(tables, names, player_species="Shinx", player_ability="Intimidate")
+    assert int(s.stages[1, 1]) == -1
+    out = replace(tables, s.replace_hp(1, 0, 0), 1, 1)
+    assert int(out.stages[1, 1]) == 0  # the newcomer's stages are fresh; no new Intimidate
+
+
+def test_opponent_intimidate_replacement_lowers_player_attack(tables, names):
+    s = _opp_lead_fainted(tables, names)
+    s = s._replace(ability=s.ability.at[1, 1].set(AbilityId.INTIMIDATE))
+    out = replace(tables, s, 1, 1)
+    assert int(out.stages[0, 1]) == -1
+
+
+def test_replacement_eats_berry_after_stealth_rock(tables, names):
+    s = _opp_lead_fainted(tables, names)
+    sitrus = names.item("Sitrus Berry")
+    max_hp = int(s.max_hp[1, 2])
+    start = max_hp // 2 + 1
+    s = s._replace(
+        stealth_rock=s.stealth_rock.at[1].set(1), item=s.item.at[1, 2].set(sitrus)
+    ).replace_hp(1, 2, start)
+    out = replace(tables, s, 1, 2)
+    after_rock = start - max(max_hp // 8, 1)
+    assert int(out.hp[1, 2]) == min(after_rock + max(max_hp * 25 // 100, 1), max_hp)
+    assert int(out.item[1, 2]) == 0 and int(out.item_consumed[1, 2]) == sitrus

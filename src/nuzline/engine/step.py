@@ -490,9 +490,19 @@ def needs_replacement(state: BattleState) -> jnp.ndarray:
     return (active_down & jnp.any(bench, axis=1) & (state.over == 0)).astype(jnp.int8)
 
 
-def replace(state: BattleState, side, slot) -> BattleState:
-    """Send in party ``slot`` for ``side``'s fainted active Pokemon.
+def replace(tables: Tables, state: BattleState, side, slot) -> BattleState:
+    """Send in party ``slot`` for ``side``'s fainted active Pokemon, through the same
+    switch-in path as a switch action (``_switch_in``, then ``hooks.on_switch_in``) and a
+    faint check.
 
-    Not yet run here: ``hooks.on_switch_in`` (Stealth Rock, Intimidate, berries), which
-    needs ``tables``; the plan fixes this signature without it."""
-    return _switch_in(state, side, slot)
+    The decomp: ``BattleControllerPlayer_TurnEnd`` calls ``ReplaceFainted``
+    (battle_controller_player.c:1848), which loads ``subscript_show_party_list.s``
+    (``subscript_replace_fainted.s`` in shift style): the entry hazards and a faint check
+    (``subscript_show_party_list.s:22-24``). ``TurnEnd`` then checks for the end of the
+    battle (``CheckBattleOver``, :1847), and the next turn's ``ShowBattleMon`` (:256) runs
+    ``BattleSystem_TriggerEffectOnSwitch``: Intimidate of a battler that has not announced
+    it yet (battle_lib.c:3795, so an Intimidate already on the field does not fire again)
+    and the held-item check of every battler (:4151). Both need HP left, so a replacement
+    that Stealth Rock faints triggers neither."""
+    entered = _switch_in(state, side, slot)
+    return _faint_check(entered, on_switch_in(tables, entered, side))

@@ -45,7 +45,7 @@ def test_opponent_faint_needs_replacement_then_replace(tables, names):
     out = step(tables, s, jnp.array([0, 0]), empty_outcome())
     assert int(out.hp[1, 0]) == 0 and int(out.over) == 0
     assert needs_replacement(out).tolist() == [0, 1]
-    out2 = replace(out, 1, 1)
+    out2 = replace(tables, out, 1, 1)
     assert int(out2.active[1]) == 1 and needs_replacement(out2).tolist() == [0, 0]
 
 

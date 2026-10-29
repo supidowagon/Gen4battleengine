@@ -589,7 +589,7 @@ git commit -m "feat(engine): Gen 4 damage calculation with 16-roll table"
 - `outcome.py` produces `class Outcome(NamedTuple)`: `speed_tie int8[]` (0 = player first), `hit int8[2,5]`, `crit int8[2,5]`, `roll int8[2,5]` (0–15), `secondary int8[2,5]` (the attacker's own secondary effect, indexed by attacking side), `contact_proc int8[2,5]` (the defender's contact ability, indexed by defending side), `n_hits int8[2]` (2–5), `full_para int8[2]`, `confusion_hit int8[2]`, `duration int8[2]` (sleep/confusion turns rolled at infliction), `thaw int8[2]`, `flinch_item int8[2]`, `quick_claw int8[2]`. `empty_outcome() -> Outcome` = all hits land, no crits, roll 15, no procs. `sample_outcome(key, tables, state, actions: int32[2]) -> Outcome` draws every field from its Gen 4 probability given the state (accuracy × stages, crit stage table `1/16, 1/8, 1/4, 1/3, 1/2`, 25 % full paralysis, 50 % confusion self-hit, 20 % thaw, sleep 2–5 turns, confusion 2–5 turns, multi-hit `2,2,3,3,4,5` weighting `3/8,3/8,1/8,1/8`).
 - `order.py` produces `action_order(tables, state, actions, outcome) -> int8[2]` (side indices in execution order): switches before moves; higher priority first; then effective speed (stages, paralysis ×¼, Trick Room reversal); ties by `outcome.speed_tie`.
 - `step.py` produces `step(tables: Tables, state: BattleState, actions: int32[2], outcome: Outcome) -> BattleState`, structured as the six phases in spec §4.2, each a function in `step.py` taking and returning `BattleState`. This task implements: switching (reset stages/volatiles, keep hazards; Stealth Rock damage comes in 8c), `PLAIN` moves with accuracy check against `outcome.hit[side,0]`, PP decrement, damage via `damage_for_roll`, faint check, `over`/`winner` with the terminal rule, and `turn + 1`. Struggle when the chosen slot has 0 PP (50 BP typeless recoil ¼ max HP, Gen 4).
-- `needs_replacement(state) -> int8[2]` and `replace(state, side, slot) -> BattleState` for the faint-replacement decision point (opponent only, by the terminal rule).
+- `needs_replacement(state) -> int8[2]` and `replace(tables, state, side, slot) -> BattleState` for the faint-replacement decision point (opponent only, by the terminal rule); it runs the switch-in hooks and a faint check like a switch action (Task 10 ruling).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -631,7 +631,7 @@ def test_opponent_faint_needs_replacement_then_replace(tables, names):
     out = step(tables, s, jnp.array([0, 0]), empty_outcome())
     assert int(out.hp[1, 0]) == 0 and int(out.over) == 0
     assert needs_replacement(out).tolist() == [0, 1]
-    out2 = replace(out, 1, 1)
+    out2 = replace(tables, out, 1, 1)
     assert int(out2.active[1]) == 1 and needs_replacement(out2).tolist() == [0, 0]
 
 def test_all_opponents_fainted_is_win(tables, names):
