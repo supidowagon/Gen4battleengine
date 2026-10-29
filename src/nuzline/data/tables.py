@@ -71,6 +71,7 @@ class Names:
         self._moves = _index(manifest["move_names"], "move")
         self._items = _index(manifest["item_names"], "item")
         self._abilities = _index(manifest["ability_names"], "ability")
+        self._types = _index(manifest["type_names"], "type")
 
     @staticmethod
     def _get(index: dict[str, int], name: str, what: str) -> int:
@@ -99,6 +100,10 @@ class Names:
 
     def ability(self, name: str) -> int:
         return self._get(self._abilities, name, "ability")
+
+    def type(self, name: str) -> int:
+        """Decomp type id, e.g. ``type("Fire")``; the Mystery type is ``"???"``."""
+        return self._get(self._types, name, "type")
 
 
 def load_names(dir: Path = DEFAULT) -> Names:
