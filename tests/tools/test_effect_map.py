@@ -13,6 +13,7 @@ from tools.effect_map import (
     DECOMP_EFFECT_TO_ID,
     PUNCH_MOVES,
     SOUND_MOVES,
+    UNSUPPORTED_MOVES,
 )
 
 DECOMP = Path("external/pokeplatinum")
@@ -75,17 +76,50 @@ def test_certain_secondaries_are_on_hit():
             assert on_hit == (effect in CERTAIN_SECONDARY_EFFECTS), DECOMP_EFFECT_NAMES[effect]
 
 
-def _c_move_names(array: str) -> set[str]:
-    """English names of the MOVE_* constants listed in a battle_lib.c array."""
-    src = (DECOMP / "src/battle/battle_lib.c").read_text(encoding="utf-8")
-    body = re.search(array + r"\[\]\s*=\s*\{(.*?)\};", src, re.DOTALL).group(1)
+def _move_names(text: str) -> set[str]:
+    """English names of the MOVE_* constants in a piece of decomp C source."""
     names = set()
-    for const in re.findall(r"MOVE_([A-Z0-9_]+)", body):
+    for const in re.findall(r"\bMOVE_([A-Z0-9_]+)", text):
         data = DECOMP / "res/moves" / const.lower() / "data.json"
         names.add(json.loads(data.read_text(encoding="utf-8"))["name"])
     return names
 
 
+def _c_move_names(array: str) -> set[str]:
+    """English names of the MOVE_* constants listed in a battle_lib.c array."""
+    src = (DECOMP / "src/battle/battle_lib.c").read_text(encoding="utf-8")
+    body = re.search(array + r"\[\]\s*=\s*\{(.*?)\};", src, re.DOTALL).group(1)
+    return _move_names(body)
+
+
 def test_sound_and_punch_lists_match_decomp():
     assert SOUND_MOVES == _c_move_names("sSoundMoves")
     assert PUNCH_MOVES == _c_move_names("sPunchingMoves")
+
+
+def test_type_checked_status_moves_are_unsupported():
+    """Status moves skip the type chart (power 0) except the moves the decomp names
+    in BattleControllerPlayer_CheckTypeChart; their immunities are not in M1, so
+    each must be in UNSUPPORTED_MOVES."""
+    src = (DECOMP / "src/battle/battle_controller_player.c").read_text(encoding="utf-8")
+    body = re.search(
+        r"static int BattleControllerPlayer_CheckTypeChart\([^;{]*\)\s*\{(.*?)\n\}", src, re.DOTALL
+    ).group(1)
+    special = _move_names(body.split("BattleSystem_ApplyTypeChart")[0])
+    assert special == {"Thunder Wave"}
+    assert special <= UNSUPPORTED_MOVES
+
+
+def test_status_subscript_type_immunities():
+    """The only target-type checks in the status subscripts are the ones the
+    effect_map docstring hands to Task 8b; sleep and paralysis have none."""
+    expected = {
+        "subscript_fall_asleep": set(),
+        "subscript_paralyze": set(),
+        "subscript_poison": {"POISON", "STEEL"},
+        "subscript_burn": {"FIRE"},
+        "subscript_freeze": {"ICE"},
+    }
+    for name, types in expected.items():
+        text = (DECOMP / "res/battle/scripts/subscripts" / f"{name}.s").read_text(encoding="utf-8")
+        assert set(re.findall(r"BATTLEMON_TYPE_[12], TYPE_([A-Z]+)", text)) == types, name

@@ -50,6 +50,17 @@ def test_effect_mapping():
     assert int(t.move_effect[n.move("Metronome")]) == EffectId.UNSUPPORTED
 
 
+def test_status_moves_needing_unmodelled_immunity_are_unsupported():
+    """Thunder Wave is the one status move the decomp runs through the type chart
+    (Ground immunity, battle_controller_player.c CheckTypeChart); that immunity is
+    not in M1, so the move must not be simulated as a plain paralysis move. Glare
+    and Stun Spore skip the type chart in Gen 4 and stay supported."""
+    t, n = load_tables(TABLES), load_names(TABLES)
+    assert _effect(t, n, "Thunder Wave")[0] == EffectId.UNSUPPORTED
+    for move in ("Glare", "Stun Spore"):
+        assert _effect(t, n, move) == (EffectId.STATUS_FOE, (Status.PARALYSIS, 0, 0))
+
+
 def test_every_m1a_move_is_supported():
     t, n = load_tables(TABLES), load_names(TABLES)
     unsupported = [m for m in M1A_MOVES if _effect(t, n, m)[0] == EffectId.UNSUPPORTED]

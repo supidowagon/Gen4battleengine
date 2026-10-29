@@ -27,6 +27,17 @@ Deliberately unsupported although close to a supported family:
   ``LOWER_EVASION_HIT`` (12, 14, 15, 21, 22, 55, 56, 61, 63, 64, 74): no move uses
   them and their scripts are a bare ``CalcCrit``/``CalcDamage`` hit, not the stat
   change their names suggest.
+* ``UNSUPPORTED_MOVES``: single moves of a supported family whose decomp
+  behaviour the family's engine code does not model; see the comment there.
+
+Status families reviewed against their decomp subscripts
+(``res/battle/scripts/subscripts/subscript_{fall_asleep,poison,burn,paralyze,freeze}.s``):
+the only type checks there are the target-type immunities poison vs
+Poison/Steel, burn vs Fire and freeze vs Ice, which Task 8b's status code must
+apply. Paralysis and sleep have none in Gen 4. Their ability immunities
+(Insomnia, Vital Spirit, Limber, Immunity, Water Veil, Magma Armor, Leaf Guard,
+Shield Dust) map to ``AbilityId.UNSUPPORTED``, and Safeguard, Substitute and
+Uproar are unsupported moves, so none of those branches can be reached silently.
 """
 
 from __future__ import annotations
@@ -109,6 +120,14 @@ DECOMP_EFFECT_TO_ID: dict[int, tuple[EffectId, tuple[int, int, int]]] = {
 # SECONDARY_* effects the decomp applies on every hit (MOVE_SIDE_EFFECT_ON_HIT)
 # rather than with the move's effect chance; such moves carry chance 0.
 CERTAIN_SECONDARY_EFFECTS: frozenset[int] = frozenset({218})
+
+# Moves forced to UNSUPPORTED although their effect family is supported.
+# Thunder Wave: status moves skip the type chart (power 0) except Thunder Wave,
+# which src/battle/battle_controller_player.c BattleControllerPlayer_CheckTypeChart
+# (`|| battleCtx->moveCur == MOVE_THUNDER_WAVE`) runs through it, so Ground types
+# are immune. M1 applies no type chart to status moves. Glare (same effect 67) is
+# not special-cased there, so it hits Ghost types in Platinum and stays supported.
+UNSUPPORTED_MOVES: frozenset[str] = frozenset({"Thunder Wave"})
 
 DECOMP_ABILITY_TO_ID: dict[str, AbilityId] = {
     "-": AbilityId.NONE,  # ABILITY_NONE (id 0): a species' empty second ability slot

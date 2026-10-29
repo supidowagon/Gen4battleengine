@@ -36,6 +36,7 @@ from tools.effect_map import (
     DECOMP_ITEM_TO_ID,
     PUNCH_MOVES,
     SOUND_MOVES,
+    UNSUPPORTED_MOVES,
 )
 
 MANIFEST_VERSION = 1
@@ -100,6 +101,8 @@ def _move_flags(move: dict) -> int:
 
 
 def _move_effect(move: dict) -> tuple[int, tuple[int, int, int]]:
+    if move["name"] in UNSUPPORTED_MOVES:
+        return int(EffectId.UNSUPPORTED), (0, 0, 0)
     eid, params = DECOMP_EFFECT_TO_ID.get(move["effect"], (EffectId.UNSUPPORTED, (0, 0, 0)))
     if eid in SECONDARY:
         certain = move["effect"] in CERTAIN_SECONDARY_EFFECTS
@@ -120,9 +123,9 @@ def build_arrays(inter: Path) -> tuple[dict[str, np.ndarray], dict]:
     natures = _load(inter, "natures")
 
     move_names = {m["name"] for m in moves}
-    missing = sorted((SOUND_MOVES | PUNCH_MOVES) - move_names)
+    missing = sorted((SOUND_MOVES | PUNCH_MOVES | UNSUPPORTED_MOVES) - move_names)
     if missing:
-        raise BuildError(f"sound/punch moves not in moves.json: {missing}")
+        raise BuildError(f"effect_map moves not in moves.json: {missing}")
     ability_names = [a["name"] for a in abilities]
     ability_ids = [int(DECOMP_ABILITY_TO_ID.get(n, AbilityId.UNSUPPORTED)) for n in ability_names]
     unknown = sorted(set(DECOMP_ABILITY_TO_ID) - set(ability_names))
