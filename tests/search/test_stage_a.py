@@ -48,8 +48,17 @@ def test_sort_key_is_strict_and_ties_with_the_leader_are_flagged():
     ]
     r = Ranking.of(rows)
     assert [a.action for a in r] == [2, 1, 4, 3, 0]
-    assert [a.tied_with_best for a in r] == [True, True, True, True, False]
+    # The leader is not tied with itself; only the other rows overlapping it are ties.
+    assert [a.tied_with_best for a in r] == [False, True, True, True, False]
     assert r.all_zero is False
+
+
+def test_a_clear_leader_has_no_ties():
+    rows = [
+        ActionResult(0, "a", 0.90, 0.85, 0.94, 0.9, 0.1, 100),
+        ActionResult(1, "b", 0.20, 0.13, 0.29, 0.3, 0.8, 100),
+    ]
+    assert [a.tied_with_best for a in Ranking.of(rows)] == [False, False]
 
 
 def test_labels_name_the_move_or_the_switch_target(tables, names):

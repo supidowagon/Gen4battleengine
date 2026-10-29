@@ -158,7 +158,8 @@ def _rank(args) -> int:
         print(
             f"  {mark} {i:2d}  {r.label:<{width}}  {odds:<27}  {_pct(r.p_win):>7}  {r.e_faints:9.2f}"
         )
-    print("* the interval overlaps the leader's: a statistical tie, not reordered")
+    if any(r.tied_with_best for r in ranking):
+        print("* the interval overlaps the leader's: a statistical tie, not reordered")
     if ranking.all_zero:
         print(ALL_ZERO_FOOTER)
     return EXIT_OK

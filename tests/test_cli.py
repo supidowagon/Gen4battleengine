@@ -77,6 +77,32 @@ def test_rank_lead_and_opponent_active(capsys):
     assert "razor leaf" in out and "switch -> monferno" in out and "grotle vs onix" in out
 
 
+def _ranked_rows(capsys, monkeypatch, rows) -> list[str]:
+    from nuzline.search import stage_a
+
+    monkeypatch.setattr(stage_a, "rank_actions", lambda *a, **k: stage_a.Ranking.of(rows))
+    assert main(["rank", "--party", PARTY, "--trainer", "roark", "--n", "100"]) == 0
+    return capsys.readouterr().out.splitlines()
+
+
+def test_rank_marks_only_the_rows_tied_with_the_leader(capsys, monkeypatch):
+    from nuzline.search.stage_a import ActionResult
+
+    legend = "* the interval overlaps the leader's: a statistical tie, not reordered"
+    tied = [
+        ActionResult(0, "Scratch", 0.50, 0.40, 0.60, 0.7, 0.3, 100),
+        ActionResult(1, "Leer", 0.45, 0.35, 0.55, 0.6, 0.4, 100),
+        ActionResult(2, "Ember", 0.10, 0.05, 0.18, 0.1, 0.9, 100),
+    ]
+    out = _ranked_rows(capsys, monkeypatch, tied)
+    rows = [line for line in out if line[4:6].strip().isdigit()]
+    assert [line[2] for line in rows] == [" ", "*", " "]  # the leader is not marked
+    assert legend in out
+    clear = [tied[0], tied[2]]
+    out = _ranked_rows(capsys, monkeypatch, clear)
+    assert legend not in out
+
+
 def test_rank_rejects_a_fainted_or_missing_lead(capsys):
     fainted = str(ROOT / "tests" / "fixtures" / "sample_party_fainted.toml")
     assert main(["rank", "--party", fainted, "--trainer", "roark", "--lead", "5"]) == 1

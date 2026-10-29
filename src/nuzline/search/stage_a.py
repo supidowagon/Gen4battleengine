@@ -9,7 +9,7 @@ optimal play (the playout policy is a heuristic).
 
 The ranking is sorted strictly by ``(-p_win0, -p_win, action)`` (plan ruling);
 statistical ties are reported, not reordered: ``ActionResult.tied_with_best`` marks the
-actions whose interval overlaps the leader's. A playout that meets a refused mechanic
+other actions whose interval overlaps the leader's (never the leader itself). A playout that meets a refused mechanic
 (``PlayoutResult.refused``) has no result; any such playout makes ``rank_actions``
 raise ``UnsupportedAi`` rather than count it, naming the refused mechanic of the first
 refused playout (``refusal_reason``).
@@ -45,7 +45,7 @@ class ActionResult:
     p_win: float
     e_faints: float  # expected player faints
     n: int  # playouts
-    tied_with_best: bool = False  # the interval overlaps the leader's
+    tied_with_best: bool = False  # not the leader, and the interval overlaps the leader's
 
 
 class Ranking(list):
@@ -58,10 +58,10 @@ class Ranking(list):
         """``results`` sorted by ``(-p_win0, -p_win, action)``, ``tied_with_best`` set."""
         rows = sorted(results, key=lambda r: (-r.p_win0, -r.p_win, r.action))
         if rows:
-            best = rows[0]
-            rows = [
+            best, *others = rows
+            rows = [replace(best, tied_with_best=False)] + [
                 replace(r, tied_with_best=r.ci_high >= best.ci_low and r.ci_low <= best.ci_high)
-                for r in rows
+                for r in others
             ]
         ranking = cls(rows)
         ranking.all_zero = all(r.p_win0 == 0 for r in rows)
