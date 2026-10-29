@@ -141,3 +141,8 @@ class Type(IntEnum):
     ICE = 15
     DRAGON = 16
     DARK = 17
+
+
+# Decomp move id the engine names directly (``generated/moves.txt`` line 166, 0-based
+# from MOVE_NONE): Struggle replaces the chosen move when it has no PP left.
+MOVE_STRUGGLE = 165

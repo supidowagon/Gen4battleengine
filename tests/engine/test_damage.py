@@ -10,7 +10,7 @@ import jax.numpy as jnp
 import pytest
 
 from nuzline.engine.damage import damage_for_roll, damage_table, effectiveness
-from nuzline.engine.ids import AbilityId, Status, Type, Weather
+from nuzline.engine.ids import MOVE_STRUGGLE, AbilityId, Status, Type, Weather
 from tests.engine.helpers import synthetic_state
 
 NEUTRAL_128 = [108, 110, 111, 112, 113, 115, 116, 117, 119, 120, 121, 122, 124, 125, 126, 128]
@@ -281,3 +281,14 @@ def test_vmap_over_states(tables, crit):
     batch = jax.tree.map(lambda x: jnp.stack([x, x]), s)
     out = jax.vmap(lambda st: damage_table(tables, st, 0, move, crit))(batch)
     assert out.tolist() == [table(tables, s, move, crit)] * 2
+
+
+def test_struggle_is_typeless(tables, names):
+    # BattleSystem_ApplyTypeChart (battle_lib.c:2573) and BattleSystem_CalcEffectiveness
+    # (:2686) return early for MOVE_STRUGGLE: no STAB and no type chart, so a Normal-type
+    # user Struggling against a Ghost still does the bare 50 BP physical damage.
+    assert names.move("Struggle") == MOVE_STRUGGLE
+    s, cut = physical(tables, move_power=50, move_type="Normal", def_types=("Ghost", "Ghost"))
+    assert damage_table(tables, s, 0, cut, False).tolist() == [0] * 16  # a Normal move: immune
+    # 300 * 50 * 42 // 200 // 50 + 2 = 65 before the roll.
+    assert damage_table(tables, s, 0, MOVE_STRUGGLE, False).tolist() == rolls(65)

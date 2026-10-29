@@ -3,16 +3,27 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import replace as _replace_spec
 from functools import lru_cache
+from pathlib import Path
 
 import numpy as np
+import pytest
 
+from nuzline.data.party import load_party
 from nuzline.data.spec import PokemonSpec
 from nuzline.data.tables import Names, Tables, load_names
-from nuzline.engine.ids import AbilityId, EffectId
+from nuzline.data.trainer import IntermediateData, build_trainer_party, load_trainers
+from nuzline.engine.ids import AbilityId, EffectId, Stat
 from nuzline.engine.state import BattleState, make_state
 
 PHYSICAL, SPECIAL, STATUS = 0, 1, 2  # tables.move_category
+
+ROOT = Path(__file__).resolve().parents[2]
+INTERMEDIATE = ROOT / "data" / "intermediate"
+SAMPLE_PARTY = ROOT / "tests" / "fixtures" / "sample_party.toml"
+# The fixture moveset every opponent gets (plan ruling): raw opponent action 0 is Tackle.
+OPP_FIXTURE_MOVES = ("Tackle", "Rock Throw", "Stealth Rock", "Leer")
 
 
 @lru_cache(maxsize=1)
@@ -99,3 +110,29 @@ def synthetic_state(
         gender=s.gender.at[...].set(gender),
     )
     return s, move
+
+
+@lru_cache(maxsize=1)
+def _roark_party() -> tuple[PokemonSpec, ...]:
+    if not (INTERMEDIATE / "trainers.json").exists():
+        pytest.skip("intermediate data not extracted (run tools/extract_decomp.py)")
+    roark = next(t for t in load_trainers(INTERMEDIATE) if t.name.lower() == "roark")
+    return tuple(build_trainer_party(roark, IntermediateData(INTERMEDIATE)))
+
+
+def roark_state(
+    tables: Tables, names: Names, *, equal_speed: bool = False, opp_count: int = 3
+) -> BattleState:
+    """The sample party (``tests/fixtures/sample_party.toml``) against the first
+    ``opp_count`` members of Roark's built party (Geodude L12, Onix L12, Cranidos
+    L14), both leads in slot 0. A test fixture, not Roark's real fight: every
+    opponent knows Tackle, Rock Throw, Stealth Rock, Leer in that order (plan
+    ruling). ``equal_speed`` sets the opponent lead's Spe stat to the player lead's.
+    """
+    fixture_moves = tuple(names.move(m) for m in OPP_FIXTURE_MOVES)
+    opp = [_replace_spec(mon, moves=fixture_moves) for mon in _roark_party()[:opp_count]]
+    s = make_state(tables, load_party(SAMPLE_PARTY, names), opp)
+    if equal_speed:
+        spe = Stat.SPE - 1  # stats[..., 0..4] are Atk..Spe
+        s = s._replace(stats=s.stats.at[1, 0, spe].set(s.stats[0, 0, spe]))
+    return s

@@ -28,7 +28,7 @@ from __future__ import annotations
 import jax.numpy as jnp
 
 from nuzline.data.tables import Tables
-from nuzline.engine.ids import AbilityId, Stat, Status, Type, Weather
+from nuzline.engine.ids import MOVE_STRUGGLE, AbilityId, Stat, Status, Type, Weather
 from nuzline.engine.state import BattleState
 
 PHYSICAL, SPECIAL, STATUS = 0, 1, 2  # tables.move_category
@@ -52,13 +52,14 @@ def _divide(x: jnp.ndarray, d: int) -> jnp.ndarray:
     return jnp.where(x == 0, 0, jnp.maximum(x // d, 1))
 
 
-def _staged(stat: jnp.ndarray, stage: jnp.ndarray) -> jnp.ndarray:
-    """``stat * sStatStageBoosts[stage].numerator / .denominator`` (battle_lib.c:6956-6957)."""
+def apply_stage(stat: jnp.ndarray, stage: jnp.ndarray) -> jnp.ndarray:
+    """``stat * sStatStageBoosts[stage].numerator / .denominator`` (battle_lib.c:6956-6957;
+    the same table scales Speed in ``BattleSystem_CompareBattlerSpeed``, :1225)."""
     return stat * _STAGE_NUM[stage + 6] // _STAGE_DEN[stage + 6]
 
 
-def _simple(stage: jnp.ndarray) -> jnp.ndarray:
-    """Simple: stage doubled, clamped to [-6, 6] (battle_lib.c:6850-6884)."""
+def simple_stage(stage: jnp.ndarray) -> jnp.ndarray:
+    """Simple: stage doubled, clamped to [-6, 6] (battle_lib.c:6850-6884, :1171)."""
     return jnp.clip(stage * 2, -6, 6)
 
 
@@ -119,12 +120,12 @@ def _pre_random(tables: Tables, s: BattleState, atk_side, move, crit):
 
     # :6850 attacker Simple doubles its offensive stages.
     a_simple = a_ability == AbilityId.SIMPLE
-    attack_stage = jnp.where(a_simple, _simple(attack_stage), attack_stage)
-    sp_attack_stage = jnp.where(a_simple, _simple(sp_attack_stage), sp_attack_stage)
+    attack_stage = jnp.where(a_simple, simple_stage(attack_stage), attack_stage)
+    sp_attack_stage = jnp.where(a_simple, simple_stage(sp_attack_stage), sp_attack_stage)
     # :6868 defender Simple (ignorable) doubles its defensive stages.
     d_simple = d_ability_eff == AbilityId.SIMPLE
-    defense_stage = jnp.where(d_simple, _simple(defense_stage), defense_stage)
-    sp_defense_stage = jnp.where(d_simple, _simple(sp_defense_stage), sp_defense_stage)
+    defense_stage = jnp.where(d_simple, simple_stage(defense_stage), defense_stage)
+    sp_defense_stage = jnp.where(d_simple, simple_stage(sp_defense_stage), sp_defense_stage)
     # :6886 defender Unaware (ignorable) ignores the attacker's stages.
     d_unaware = d_ability_eff == AbilityId.UNAWARE
     attack_stage = jnp.where(d_unaware, 0, attack_stage)
@@ -155,10 +156,10 @@ def _pre_random(tables: Tables, s: BattleState, atk_side, move, crit):
     a_stage = jnp.where(crit & (a_stage <= 0), 0, a_stage)
     d_stage = jnp.where(crit & (d_stage >= 0), 0, d_stage)
 
-    damage = _staged(a_stat, a_stage)  # :6956-6957
+    damage = apply_stage(a_stat, a_stage)  # :6956-6957
     damage = damage * power  # :6960
     damage = damage * (level * 2 // 5 + 2)  # :6961
-    damage = damage // _staged(d_stat, d_stage)  # :6975
+    damage = damage // apply_stage(d_stat, d_stage)  # :6975
     damage = damage // 50  # :6976
 
     # :6978 burn halves physical damage unless Guts.
@@ -181,8 +182,11 @@ def _pre_random(tables: Tables, s: BattleState, atk_side, move, crit):
     return damage, move_type, category, base_power
 
 
-def _finish(tables: Tables, s: BattleState, atk_side, damage, move_type, category, power, roll):
-    """Random roll, STAB and type chart; 0 for status moves and immunities."""
+def _finish(
+    tables: Tables, s: BattleState, atk_side, move, damage, move_type, category, power, roll
+):
+    """Random roll, STAB and type chart; 0 for status moves and immunities. Struggle
+    skips STAB and the chart (``ApplyTypeChart`` returns early for it, :2573)."""
     atk_side = _i32(atk_side)
     def_side = 1 - atk_side
     a_types = _i32(s.types[atk_side, s.active[atk_side]])
@@ -190,6 +194,8 @@ def _finish(tables: Tables, s: BattleState, atk_side, damage, move_type, categor
 
     # battle_lib.c:7084-7089 variance, at least 1.
     damage = jnp.maximum(damage * (85 + roll) // 100, 1)
+    typeless = _i32(move) == MOVE_STRUGGLE
+    variance_only = damage
     # :2592-2596 STAB x1.5 (Adaptability is not implemented).
     damage = jnp.where(jnp.any(a_types == move_type), damage * 15 // 10, damage)
     # :2611-2646 each defender type through ApplyTypeMultiplier (:7547), in chart
@@ -201,6 +207,7 @@ def _finish(tables: Tables, s: BattleState, atk_side, damage, move_type, categor
     t2_first = tables.type_chart_order[move_type, t2] < tables.type_chart_order[move_type, t1]
     first, second = jnp.where(t2_first, e2, e1), jnp.where(t2_first, e1, e2)
     damage = _divide(_divide(damage * first, 10) * second, 10)
+    damage = jnp.where(typeless, variance_only, damage)
     # Status moves never calculate damage; CheckTypeChart needs base power
     # (battle_controller_player.c:2354).
     return jnp.where((category == STATUS) | (power == 0), 0, damage)
@@ -211,10 +218,10 @@ def damage_table(tables: Tables, state: BattleState, atk_side, move, crit) -> jn
     other side's active Pokemon for rolls 0..15 (``85 + roll`` percent)."""
     damage, move_type, category, power = _pre_random(tables, state, atk_side, move, crit)
     rolls = jnp.arange(ROLLS, dtype=_I32)
-    return _finish(tables, state, atk_side, damage, move_type, category, power, rolls)
+    return _finish(tables, state, atk_side, move, damage, move_type, category, power, rolls)
 
 
 def damage_for_roll(tables: Tables, state: BattleState, atk_side, move, crit, roll) -> jnp.ndarray:
     """``int32``: ``damage_table(...)[roll]``, the single value the engine uses."""
     damage, move_type, category, power = _pre_random(tables, state, atk_side, move, crit)
-    return _finish(tables, state, atk_side, damage, move_type, category, power, _i32(roll))
+    return _finish(tables, state, atk_side, move, damage, move_type, category, power, _i32(roll))

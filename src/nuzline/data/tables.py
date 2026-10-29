@@ -95,6 +95,15 @@ class Names:
         """Move id; ``""`` is 0 (no move)."""
         return 0 if name == "" else self._get(self._moves, name, "move")
 
+    def move_slot(self, state, side: int, name: str) -> int:
+        """Move slot (0-3) of ``name`` on ``side``'s active Pokemon in a ``BattleState``;
+        raises ``ValueError`` when it does not know the move."""
+        move = self.move(name)
+        known = np.asarray(state.moves[side, int(state.active[side])]).tolist()
+        if move == 0 or move not in known:
+            raise ValueError(f"side {side}'s active Pokemon does not know {name!r}")
+        return known.index(move)
+
     def item(self, name: str) -> int:
         """Item id; ``""`` is 0 (no item)."""
         return 0 if name == "" else self._get(self._items, name, "item")
