@@ -134,11 +134,14 @@ def _send_out(tables: Tables, state: BattleState, side, slot) -> BattleState:
 
 
 def _use_move(
-    tables: Tables, state: BattleState, side, action, outcome: Outcome, target_moved
+    tables: Tables, state: BattleState, side, action, choice, outcome: Outcome, target_moved
 ) -> BattleState:
     """``side``'s active Pokemon uses the move in slot ``action`` (or Struggle).
+    ``choice``: its ``(move, struggling)`` from ``selected_move`` at the start of the
+    turn, when the decomp fixes Struggle (battle_controller_player.c:433), so a Taunt
+    landing earlier this turn makes a chosen power-0 move fail instead of Struggling.
     ``target_moved``: the other side has already acted this turn."""
-    move, struggling = selected_move(state, side, action)
+    move, struggling = choice
     slot = jnp.clip(action, 0, MOVE_ACTIONS - 1)
     user = state.active[side]
     target_side = 1 - side
@@ -242,21 +245,22 @@ def _use_move(
 
 
 def _act(
-    tables: Tables, state: BattleState, side, actions, outcome: Outcome, target_moved
+    tables: Tables, state: BattleState, side, actions, choices, outcome: Outcome, target_moved
 ) -> BattleState:
     action = actions[side]
     switched = _send_out(tables, state, side, jnp.clip(action - MOVE_ACTIONS, 0, 5))
-    moved = _use_move(tables, state, side, action, outcome, target_moved)
+    choice = (choices[0][side], choices[1][side])
+    moved = _use_move(tables, state, side, action, choice, outcome, target_moved)
     return _where(is_switch(action) & (state.over == 0), switched, moved)
 
 
-def _pursuit_fires(tables: Tables, state: BattleState, side, actions) -> jnp.ndarray:
+def _pursuit_fires(tables: Tables, state: BattleState, side, actions, choices) -> jnp.ndarray:
     """``side`` switches and the other side, which has not acted yet, chose Pursuit:
     ``BtlCmd_TryPursuit`` (battle_script.c:6884, called from
     ``subscript_switch_pokemon.s:11`` before the switch) needs the pursuer alive, not
     asleep or frozen, and PP left in the move (Truant is not implemented)."""
     pursuer = 1 - side
-    move, struggling = selected_move(state, pursuer, actions[pursuer])
+    move, struggling = choices[0][pursuer], choices[1][pursuer]
     mon = state.active[pursuer]
     status = state.status[pursuer, mon]
     return (
@@ -272,7 +276,7 @@ def _pursuit_fires(tables: Tables, state: BattleState, side, actions) -> jnp.nda
 
 
 def _pursuit_hit(
-    tables: Tables, state: BattleState, pursuer, actions, outcome: Outcome
+    tables: Tables, state: BattleState, pursuer, actions, choices, outcome: Outcome
 ) -> BattleState:
     """The pursuer hits the outgoing Pokemon: ``BtlCmd_TryPursuit`` spends the PP and
     sets ``powerMul = 20``; ``subscript_pursuit.s`` then runs crit, damage and the type
@@ -281,7 +285,7 @@ def _pursuit_hit(
     slot = jnp.clip(action, 0, MOVE_ACTIONS - 1)
     mon = state.active[pursuer]
     state = state._replace(pp=state.pp.at[pursuer, mon, slot].add(jnp.int8(-1)))
-    move, _ = selected_move(state, pursuer, action)
+    move = choices[0][pursuer]
     return apply_move_effect(
         tables,
         state,
@@ -321,15 +325,18 @@ def execute_actions(
     """Phase 3: both actors in order, each followed by a faint check. A switch facing
     Pursuit is hit first (with its own faint check), and the pursuer does not act again."""
     first = order[0].astype(_I32)
-    pursued = _pursuit_fires(tables, state, first, actions)
+    # Each side's move is fixed when chosen, from the turn's starting state.
+    picks = [selected_move(tables, state, side, actions[side]) for side in (0, 1)]
+    choices = (jnp.stack([p[0] for p in picks]), jnp.stack([p[1] for p in picks]))
+    pursued = _pursuit_fires(tables, state, first, actions, choices)
     before = state
-    hit = _pursuit_hit(tables, state, 1 - first, actions, outcome)
+    hit = _pursuit_hit(tables, state, 1 - first, actions, choices, outcome)
     state = _faint_check(before, _where(pursued, hit, state))
     for position in (0, 1):
         before = state
         side = order[position].astype(_I32)
         target_moved = position == 1  # the first actor's target has not moved yet
-        acted = _act(tables, state, side, actions, outcome, target_moved)
+        acted = _act(tables, state, side, actions, choices, outcome, target_moved)
         if position == 1:
             acted = _where(pursued, state, acted)
         state = _faint_check(before, acted)

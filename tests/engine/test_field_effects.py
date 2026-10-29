@@ -91,6 +91,18 @@ def test_pursuit_on_a_switch_ignores_accuracy_spends_pp_once_and_ends_the_turn(t
     assert int(go.pp[1, 0, 0]) == int(s.pp[1, 0, 0]) - 1
 
 
+def test_pursuit_with_its_last_pp_still_pursues(tables, names):
+    # The move is fixed when chosen: spending Pursuit's last PP in BtlCmd_TryPursuit
+    # does not turn the hit into Struggle (no recoil, same damage).
+    s = roark_state(tables, names, opp_species="Cranidos", opp_moves=["Pursuit"])
+    last = s.with_pp(1, 0, [1, 10, 10, 10])
+    go = step(tables, s, A(4 + 1, "Pursuit", s, names), empty_outcome())
+    go_last = step(tables, last, A(4 + 1, "Pursuit", last, names), empty_outcome())
+    assert int(go_last.hp[0, 0]) == int(go.hp[0, 0])
+    assert int(go_last.hp[1, 0]) == int(s.hp[1, 0])
+    assert int(go_last.pp[1, 0, 0]) == 0
+
+
 def test_taunt_sets_counter(tables, names):
     s = roark_state(tables, names, player_moves=["Taunt"])
     o = empty_outcome()._replace(duration=jnp.array([3, 0], jnp.int8))

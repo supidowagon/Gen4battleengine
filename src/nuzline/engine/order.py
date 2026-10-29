@@ -19,11 +19,10 @@ from __future__ import annotations
 import jax.numpy as jnp
 
 from nuzline.data.tables import Tables
+from nuzline.engine.actions import MOVE_ACTIONS, usable_moves
 from nuzline.engine.damage import apply_stage, simple_stage
 from nuzline.engine.ids import MOVE_STRUGGLE, AbilityId, Stat, Status
 from nuzline.engine.state import BattleState
-
-MOVE_ACTIONS = 4  # actions 0-3 use a move slot; 4-9 switch
 
 _I32 = jnp.int32
 
@@ -32,15 +31,17 @@ def is_switch(action) -> jnp.ndarray:
     return jnp.asarray(action) >= MOVE_ACTIONS
 
 
-def selected_move(state: BattleState, side, action) -> tuple[jnp.ndarray, jnp.ndarray]:
-    """``(move id, struggling)`` for a move action by ``side``'s active Pokemon: the
-    slot's move, or Struggle when the slot has no PP left. With Task 9's legality
-    mask a 0-PP slot is only selectable when every slot is out of PP, which is the
-    decomp's ``STRUGGLING_ALL`` (battle_controller_player.c:433). Meaningless for a
-    switch action (callers mask it)."""
+def selected_move(
+    tables: Tables, state: BattleState, side, action
+) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """``(move id, struggling)`` for a move action by ``side``'s active Pokemon in the
+    state it was chosen in: the slot's move, or Struggle when no slot is usable
+    (``actions.usable_moves``: no move, no PP, or power 0 while taunted), the decomp's
+    ``STRUGGLING_ALL`` (battle_controller_player.c:433). The legality mask then only
+    allows action 0. Meaningless for a switch action (callers mask it)."""
     slot = jnp.clip(jnp.asarray(action, _I32), 0, MOVE_ACTIONS - 1)
     mon = state.active[side]
-    struggling = state.pp[side, mon, slot] <= 0
+    struggling = ~jnp.any(usable_moves(tables, state, side))
     move = jnp.where(struggling, MOVE_STRUGGLE, state.moves[side, mon, slot].astype(_I32))
     return move, struggling
 
@@ -60,7 +61,7 @@ def action_order(tables: Tables, state: BattleState, actions, outcome) -> jnp.nd
     equal speeds (0 = player first): the decomp swaps on ``RandNext() & 1``."""
     actions = jnp.asarray(actions, _I32)
     switch = is_switch(actions)
-    moves = jnp.stack([selected_move(state, side, actions[side])[0] for side in (0, 1)])
+    moves = jnp.stack([selected_move(tables, state, side, actions[side])[0] for side in (0, 1)])
     both_moves = ~switch[0] & ~switch[1]
     priority = jnp.where(both_moves, tables.move_priority[moves].astype(_I32), 0)
     speed0, speed1 = effective_speed(state, 0), effective_speed(state, 1)

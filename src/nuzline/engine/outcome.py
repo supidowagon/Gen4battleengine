@@ -91,7 +91,7 @@ def _target_mon(state: BattleState, actions, side):
 
 
 def _hit_threshold(tables: Tables, state: BattleState, actions, side) -> jnp.ndarray:
-    move, _ = selected_move(state, side, actions[side])
+    move, _ = selected_move(tables, state, side, actions[side])
     accuracy = tables.move_accuracy[move].astype(_I32)
     target, target_switches, target_mon = _target_mon(state, actions, side)
     a_ability = state.ability[side, state.active[side]]
@@ -126,7 +126,7 @@ def crit_odds(tables: Tables, state: BattleState, actions) -> jnp.ndarray:
     Luck, Scope Lens and the species items are not implemented. Lucky Chant on the
     defending side is applied by ``sample_outcome``."""
     actions = jnp.asarray(actions, _I32)
-    moves = jnp.stack([selected_move(state, side, actions[side])[0] for side in (0, 1)])
+    moves = jnp.stack([selected_move(tables, state, side, actions[side])[0] for side in (0, 1)])
     stage = (tables.move_effect[moves] == EffectId.HIGH_CRIT).astype(_I32)
     return _CRIT_ODDS[jnp.minimum(stage, 4)]
 
@@ -141,7 +141,7 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions) -> Outcome:
         """``RandNext() % n`` for each element."""
         return jax.random.randint(k[i], shape, 0, n, dtype=_I32)
 
-    moves = jnp.stack([selected_move(state, side, actions[side])[0] for side in (0, 1)])
+    moves = jnp.stack([selected_move(tables, state, side, actions[side])[0] for side in (0, 1)])
     threshold = hit_threshold(tables, state, actions)[:, None]
     hit = draw(0, per_hit, 100) + 1 <= threshold
     # Lucky Chant on the defending side blocks crits (battle_lib.c:7137).
