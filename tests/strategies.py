@@ -26,7 +26,7 @@ from nuzline.data.spec import PokemonSpec
 from nuzline.data.tables import Names, Tables
 from nuzline.data.trainer import IntermediateData
 from nuzline.engine.actions import legal_actions, legal_opponent_actions
-from nuzline.engine.ids import EffectId, Stat, Status, Weather
+from nuzline.engine.ids import MOVE_STRUGGLE, EffectId, Stat, Status, Weather
 from nuzline.engine.outcome import MAX_HITS, Outcome
 from nuzline.engine.state import (
     BAG_SLOTS,
@@ -193,8 +193,9 @@ def supported_state(draw, tables: Tables, names: Names) -> BattleState:
     """A mid-battle state: 1-6 Pokemon per side (``supported_pokemon``), any active
     slot, random PP, status counters, stat stages, confusion, Taunt, Bind, Leech Seed,
     Water Sport, Stealth Rock, screens, Tailwind, Trick Room, Mud Sport, weather, the
-    turn, each active's ``fake_out_turn`` (0 to ``turn + 1``) and ``move_hit`` (none or
-    one of the foe's active's moves), and the opponent's bag (a size of 0-4 in
+    turn, each active's ``fake_out_turn`` (0 to ``turn + 1``), ``move_hit`` (none or
+    one of the foe's active's moves) and ``last_move`` (none, one of its own moves or
+    Struggle), and the opponent's bag (a size of 0-4 in
     ``trainer_item_count``, ``M1_BAG_ITEMS`` in each slot below it, gaps allowed as
     after a use) and the AI's knowledge of the player (any ``ai_seen_moves`` and
     ``ai_ability_known`` flags), each within its legal range; the battle is not over."""
@@ -228,6 +229,8 @@ def supported_state(draw, tables: Tables, names: Names) -> BattleState:
         a["fake_out_turn"][side] = draw(st.integers(0, turn + 1))
         foe_moves = [int(m) for m in a["moves"][1 - side, parties[1 - side][1]] if m]
         a["move_hit"][side] = draw(st.sampled_from([0, *foe_moves]))
+        own_moves = [int(m) for m in a["moves"][side, active] if m]
+        a["last_move"][side] = draw(st.sampled_from([0, *own_moves, MOVE_STRUGGLE]))
     count = draw(st.integers(0, BAG_SLOTS))
     bag = draw(st.lists(st.sampled_from(M1_BAG_ITEMS), min_size=count, max_size=count))
     a["trainer_items"][1] = [names.item(i) for i in bag] + [0] * (BAG_SLOTS - count)

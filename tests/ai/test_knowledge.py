@@ -4,9 +4,12 @@
 * Seen moves: ``movePrevByBattler`` (written in ``UpdateMoveBuffers``,
   battle_controller_player.c:3945-3949) holds the player's move once it got past the
   status checks, the PP decrement and the no-target check (``SYSCTL_MOVE_SUCCEEDED``,
-  :3212; a miss still counts); ``BtlCmd_TryPursuit`` (battle_script.c:6930) also writes
-  it for a pre-switch Pursuit. ``TrainerAI_RecordLastMove`` (trainer_ai.c:2705) copies it
-  into the AI's list.
+  :3212; a miss still counts), else ``MOVE_NONE``; ``BtlCmd_TryPursuit``
+  (battle_script.c:6930) also writes it for a pre-switch Pursuit. It is
+  ``BattleState.last_move``. ``TrainerAI_RecordLastMove`` (trainer_ai.c:2705) copies it
+  into the AI's list at the start of the AI's FIGHT decision only (trainer_ai.c:295), so
+  ``step`` commits it to ``ai_seen_moves`` at the start of a turn on which the
+  opponent's action is a move, and the scores of that decision include it.
 * Ability: ``BattleAI_SetAbility`` (battle_script.c:12106), from a script message that
   tags the battler's ability (``BattleMessage_AbilityTag``, :11798). Messages the C code
   builds in ``msgBuffer`` (Intimidate's "cuts", Keen Eye's "prevents") reveal nothing.
@@ -21,7 +24,7 @@ import numpy as np
 from nuzline.ai.outcome import enumerate_ai_outcomes, sample_ai_outcome
 from nuzline.ai.policy import ai_scores, resolve_player_ability
 from nuzline.data.tables import to_numpy
-from nuzline.engine.ids import Status
+from nuzline.engine.ids import MOVE_STRUGGLE, Status
 from nuzline.engine.outcome import empty_outcome, outcome_to_py
 from nuzline.engine.step import step
 from nuzline.reference.convert import from_ref, to_ref
@@ -47,17 +50,70 @@ def _both(tables, s, acts, o=None):
 # --- Seen moves -------------------------------------------------------------------
 
 
-def test_seen_move_recorded_only_when_executed(tables, names):
+def _seen(s) -> list[int]:
+    """The ``ai_seen_moves`` row of the player's active Pokemon."""
+    return np.asarray(s.ai_seen_moves[int(s.active[0])]).tolist()
+
+
+def test_used_move_waits_in_last_move_until_the_ai_fights(tables, names):
+    s = roark_state(tables, names)
+    used = _both(tables, s, A("Scratch", "Leer", s, names))
+    assert int(used.last_move[0]) == names.move("Scratch")
+    assert _seen(used) == [0, 0, 0, 0]  # TrainerAI_RecordLastMove has not run yet
+    fought = _both(tables, used, A("Leer", "Tackle", used, names))
+    assert _seen(fought) == [1, 0, 0, 0]  # Scratch, committed at the AI's FIGHT decision
+    assert int(fought.last_move[0]) == names.move("Leer")  # pending again
+
+
+def test_move_replaced_while_the_ai_heals_is_never_recorded(tables, names):
+    s = roark_state(tables, names)
+    potion, second_potion = 10, 11
+    s = s._replace(hp=s.hp.at[1, 0].set(5))
+    t1 = _both(tables, s, A("Scratch", potion, s, names))
+    assert int(t1.last_move[0]) == names.move("Scratch")
+    t2 = _both(tables, t1, A("Leer", second_potion, t1, names))
+    assert _seen(t2) == [0, 0, 0, 0]  # no FIGHT decision, nothing recorded
+    assert int(t2.last_move[0]) == names.move("Leer")
+    t3 = _both(tables, t2, A("Leer", "Tackle", t2, names))
+    assert _seen(t3) == [0, 1, 0, 0]  # Leer only: Scratch was lost
+
+
+def test_ai_switch_records_nothing(tables, names):
+    s = roark_state(tables, names)
+    s = s._replace(last_move=s.last_move.at[0].set(names.move("Scratch")))
+    out = _both(tables, s, A("Leer", SWITCH_TO_1, s, names))
+    assert np.asarray(out.ai_seen_moves).sum() == 0
+
+
+def test_flinched_or_fully_paralysed_turn_records_nothing(tables, names):
     s = roark_state(tables, names, opp_species="Cranidos", opp_moves=["Headbutt"], opp_faster=True)
     flinch = empty_outcome()._replace(secondary=jnp.ones((2, 5), jnp.int8))
     flinched = _both(tables, s, A("Scratch", "Headbutt", s, names), flinch)
-    assert int(flinched.ai_seen_moves[0, 0]) == 0
-    executed = _both(tables, s, A("Scratch", "Tackle", s, names))
-    assert int(executed.ai_seen_moves[0, 0]) == 1
-    assert np.asarray(executed.ai_seen_moves).sum() == 1  # only Scratch's slot
+    assert int(flinched.last_move[0]) == 0
+    assert _seen(_both(tables, flinched, A("Scratch", "Tackle", flinched, names))) == [0] * 4
+    para = s._replace(status=s.status.at[0, 0].set(Status.PARALYSIS))
+    full_para = empty_outcome()._replace(full_para=jnp.asarray([1, 0], jnp.int8))
+    stopped = _both(tables, para, A("Scratch", "Tackle", s, names), full_para)
+    assert int(stopped.last_move[0]) == 0
+    assert _seen(_both(tables, stopped, A("Scratch", "Tackle", stopped, names))) == [0] * 4
 
 
-def test_a_miss_is_seen_a_full_paralysis_is_not(tables, names):
+def test_disrupted_turn_overwrites_an_earlier_move(tables, names):
+    """UpdateMoveBuffers writes MOVE_NONE for a disrupted move, so last turn's move is
+    gone too (battle_controller_player.c:3948)."""
+    s = roark_state(tables, names)
+    para = s._replace(
+        status=s.status.at[0, 0].set(Status.PARALYSIS),
+        last_move=s.last_move.at[0].set(names.move("Leer")),
+    )
+    full_para = empty_outcome()._replace(full_para=jnp.asarray([1, 0], jnp.int8))
+    # The AI fights this turn, so the pending Leer is committed first.
+    out = _both(tables, para, A("Scratch", "Leer", s, names), full_para)
+    assert _seen(out) == [0, 1, 0, 0]
+    assert int(out.last_move[0]) == 0
+
+
+def test_a_miss_is_seen(tables, names):
     s = roark_state(tables, names)
     missed = _both(
         tables,
@@ -65,24 +121,63 @@ def test_a_miss_is_seen_a_full_paralysis_is_not(tables, names):
         A("Scratch", "Leer", s, names),
         empty_outcome()._replace(hit=jnp.zeros((2, 5), jnp.int8)),
     )
-    assert int(missed.ai_seen_moves[0, 0]) == 1
-    para = s._replace(status=s.status.at[0, 0].set(Status.PARALYSIS))
-    full_para = empty_outcome()._replace(full_para=jnp.asarray([1, 0], jnp.int8))
-    stopped = _both(tables, para, A("Scratch", "Leer", s, names), full_para)
-    assert int(stopped.ai_seen_moves[0, 0]) == 0
+    assert int(missed.last_move[0]) == names.move("Scratch")
 
 
 def test_opponent_moves_are_not_recorded(tables, names):
     s = roark_state(tables, names)
-    out = _both(tables, s, A("Leer", "Leer", s, names))
+    t1 = _both(tables, s, A("Leer", "Leer", s, names))
+    assert int(t1.last_move[1]) == names.move("Leer")  # the opponent's movePrevByBattler
+    out = _both(tables, t1, A("Scratch", "Leer", t1, names))
     assert np.asarray(out.ai_seen_moves).sum() == 1  # the player's Leer only
     assert int(out.ai_seen_moves[0, names.move_slot(s, 0, "Leer")]) == 1
 
 
-def test_pursuit_before_a_switch_is_seen(tables, names):
+def test_forced_struggle_skips_the_record(tables, names):
+    """A struggling opponent never reaches the move menu, so ``TrainerAI_Main`` and its
+    ``RecordLastMove`` do not run (battle_controller_player.c:433)."""
+    s = roark_state(tables, names)
+    s = s._replace(pp=s.pp.at[1, 0].set(0), last_move=s.last_move.at[0].set(names.move("Scratch")))
+    out = _both(tables, s, A("Leer", 0, s, names))
+    assert _seen(out) == [0, 0, 0, 0]
+
+
+def test_player_struggle_is_written_but_not_recorded(tables, names):
+    s = roark_state(tables, names)
+    s = s._replace(pp=s.pp.at[0, 0].set(0))
+    struggled = _both(tables, s, A(0, "Leer", s, names))
+    assert int(struggled.last_move[0]) == MOVE_STRUGGLE
+    assert _seen(_both(tables, struggled, A(0, "Leer", struggled, names))) == [0] * 4
+
+
+def test_pursuit_before_a_switch_is_written(tables, names):
     s = roark_state(tables, names, player_moves=["Pursuit"])
     out = _both(tables, s, A("Pursuit", SWITCH_TO_1, s, names))
-    assert int(out.ai_seen_moves[0, 0]) == 1
+    assert int(out.last_move[0]) == names.move("Pursuit")
+
+
+def test_player_switch_in_resets_last_move(tables, names):
+    s = roark_state(tables, names)
+    s = s._replace(last_move=s.last_move.at[0].set(names.move("Scratch")))
+    out = _both(tables, s, A(SWITCH_TO_1, "Leer", s, names))
+    # Committed for the Pokemon that was active when the AI decided, then reset.
+    assert np.asarray(out.ai_seen_moves[0]).tolist() == [1, 0, 0, 0]
+    assert int(out.last_move[0]) == 0
+
+
+def test_scores_include_the_pending_move(tables, names):
+    """``TrainerAI_MainSingles`` runs ``RecordLastMove`` before scoring (trainer_ai.c:295),
+    so the scores on the AI's FIGHT turn already know the player's last move."""
+    base = trace_c(tables, names)  # Cranidos vs Starly
+    u_turn = names.move("U-turn")
+    knows = base._replace(moves=base.moves.at[0, 0, 3].set(u_turn))
+    seen = knows._replace(ai_seen_moves=knows.ai_seen_moves.at[0, 3].set(1))
+    pending = knows._replace(last_move=knows.last_move.at[0].set(u_turn))
+    outs, _ = enumerate_ai_outcomes(tables, base)
+    for i in range(int(outs.tiebreak.shape[0])):
+        o = jax.tree.map(lambda x, i=i: x[i], outs)
+        expected = np.asarray(ai_scores(tables, seen, o)).tolist()
+        assert np.asarray(ai_scores(tables, pending, o)).tolist() == expected
 
 
 def test_switch_in_clears_the_newcomers_knowledge(tables, names):

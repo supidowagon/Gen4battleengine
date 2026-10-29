@@ -789,6 +789,9 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
     foe_defender = target_range not in SELF_DEFENDER and (
         _active(s, 1 - side).hp > 0 or target_range == MoveTarget.RANGE_OPPONENT_SIDE
     )
+    # UpdateMoveBuffers (bcp.c:3945-3949), reached on every path of a battler that acts:
+    # movePrevByBattler is MOVE_NONE unless the move succeeded (below).
+    s.sides[side].last_move = 0
     disruption = _status_disrupted(turn, s, side, move)
     if disruption == HURT_ITSELF:  # the user became the defender (bcp.c:2629)
         return None
@@ -808,11 +811,9 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
     # living foe for a move aimed at it.
     if _move_target(tables, move) not in DEFENDER_ALWAYS and _active(s, 1 - side).hp == 0:
         return record
-    # SYSCTL_MOVE_SUCCEEDED (bcp.c:3212): UpdateMoveBuffers (bcp.c:3945) keeps the move in
-    # movePrevByBattler, which TrainerAI_RecordLastMove (trainer_ai.c:2705) adds to the
-    # AI's list of the player's moves. Struggle is in no move slot.
-    if side == 0 and not struggling:
-        s.ai_seen_moves[s.sides[0].active][action] = 1
+    # SYSCTL_MOVE_SUCCEEDED (bcp.c:3212): UpdateMoveBuffers (bcp.c:3945) keeps the move
+    # (Struggle's own id when struggling) in movePrevByBattler.
+    s.sides[side].last_move = move
     # CheckMoveHitAccuracy (bcp.c:2865): accuracy 0 never misses; a multi-hit move
     # checks only its first hit (SYSCTL_MULTI_HIT_MOVE).
     if _t(tables, "move_accuracy", move) != 0 and not o.hit[side][0]:
@@ -853,8 +854,7 @@ def _pursuit(turn: _Turn, s: RefState, side: int, actions, choices) -> None:
     mon.pp[slot] -= 1
     turn.done[pursuer] = True
     # script.c:6930: movePrevByBattler[pursuer] = Pursuit.
-    if pursuer == 0:
-        s.ai_seen_moves[s.sides[0].active][slot] = 1
+    s.sides[pursuer].last_move = move
     o = turn.outcome
     damage = _move_damage(tables, s, pursuer, move, o.crit[pursuer][0] != 0, o.roll[pursuer][0],
                           PURSUIT_POWER_MUL)  # fmt: skip
@@ -1015,6 +1015,16 @@ def ref_step(tables, state: RefState, actions: tuple[int, int], outcome) -> RefS
     actions = (int(actions[0]), int(actions[1]))
     choices = [_choose(tables, s, side, actions[side]) for side in (0, 1)]
     commands = [_command(a) for a in actions]
+    # TrainerAI_RecordLastMove (trainer_ai.c:2705-2717) runs on the AI's FIGHT path
+    # (TrainerAI_MainSingles, :295), which a forced Struggle skips (bcp.c:433): the
+    # player's movePrevByBattler joins the AI's list, as the matching move slot of the
+    # player's active Pokemon (Struggle matches none and is not recorded).
+    if commands[1] == FIGHT and not choices[1][1]:
+        player = s.sides[0]
+        pending = player.last_move
+        for k, m in enumerate(_active(s, 0).moves):
+            if pending and m == pending:
+                s.ai_seen_moves[player.active][k] = 1
     # TrainerAI_ShouldUseItem (trainer_ai.c:4056) empties the bag slot when it picks the
     # item (:4193), before any action runs. Its loop (:4091) does not break: every later
     # slot i with aliveMons <= trainerItemCounts - i + 1 (:4092) is zeroed too, aliveMons

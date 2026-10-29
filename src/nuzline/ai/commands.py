@@ -290,9 +290,17 @@ def defender_ability(tables: Tables, state: BattleState, ability_guess) -> jnp.n
 def new_context(tables: Tables, state: BattleState, outcome: AiOutcome) -> AiContext:
     """``TrainerAI_Init`` (trainer_ai.c:211) with ``AI_INIT_SCORE_ALL_MOVES``: every score
     100, then 0 for the slots ``BattleSystem_CheckInvalidMoves`` flags (the engine's
-    ``usable_moves``: empty, no PP, Taunt on a power-0 move)."""
+    ``usable_moves``: empty, no PP, Taunt on a power-0 move).
+
+    The seen moves are the stored ``ai_seen_moves`` plus the player's pending
+    ``last_move``: ``TrainerAI_MainSingles`` runs ``TrainerAI_RecordLastMove`` (:295)
+    before scoring, so the scores already know the move the player used last turn;
+    ``step`` commits it to ``ai_seen_moves`` when the AI fights."""
     d = state.active[0]
-    seen = jnp.where(state.ai_seen_moves[d] > 0, state.moves[0, d], 0).astype(_I32)
+    moves = state.moves[0, d].astype(_I32)
+    pending = state.last_move[0].astype(_I32)
+    known = (state.ai_seen_moves[d] > 0) | ((moves == pending) & (pending != 0))
+    seen = jnp.where(known, moves, 0).astype(_I32)
     scores = jnp.where(usable_moves(tables, state, 1), 100, 0).astype(_I32)
     false = jnp.asarray(False)
     return AiContext(

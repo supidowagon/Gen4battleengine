@@ -118,19 +118,20 @@ does not generate those matchups (`_smogon_departs`).
   and Bind require the battler to be alive; its Taunt counter and Leech Seed were
   already cleared when it fainted), so running it first or second changes nothing.
 
-- **Seen moves are recorded when the move runs.** The decomp keeps the player's last
-  move that got past the status, PP and no-target checks in `movePrevByBattler`
-  (`UpdateMoveBuffers`, `src/battle/battle_controller_player.c:3945-3949`; a pre-switch
-  Pursuit writes it too, `src/battle/battle_script.c:6930`), and
-  `TrainerAI_RecordLastMove` (`src/battle/trainer_ai/trainer_ai.c:2705`) copies it into
-  the AI's list only at the start of a FIGHT decision (`TrainerAI_MainSingles`, `:295`).
-  Both engines set `ai_seen_moves` in `step` when the move runs instead (Task 4). They
-  differ only when the AI's next decision is a switch or an item (no `TrainerAI_Main`,
-  so no record) and the player uses a different move before the AI's next FIGHT
-  decision: the decomp never records the earlier move, the engines do
-  (docs/ai/roark.md 9.1, quirk; emulator check (2) in roark.md 14). Roark's scripts read
-  the list in one place, `IfMoveNotKnown DEFENDER, MOVE_U_TURN` in `Expert_Pursuit`, so
-  the difference matters only for a player whose Pokemon knows U-turn.
+- **A player's Struggle is not recorded as a seen move.** Both engines follow the
+  decomp's timing: `last_move` is `movePrevByBattler`, written at `UpdateMoveBuffers`
+  (`src/battle/battle_controller_player.c:3945-3949`; a pre-switch Pursuit at
+  `src/battle/battle_script.c:6930`), and `step` commits it to `ai_seen_moves` at the
+  start of a turn on which the AI fights, as `TrainerAI_RecordLastMove`
+  (`src/battle/trainer_ai/trainer_ai.c:2705-2717`, called at `:295`) does; the AI's
+  scores read the pending move too (`ai.commands.new_context`). `ai_seen_moves` holds
+  the AI's list as slots of the player's active Pokemon, and Struggle (`MOVE_STRUGGLE`,
+  165) is in no slot, so it is never recorded. The decomp adds it to `battlerMoves` like
+  any move. Roark's scripts never ask for Struggle (`IfMoveNotKnown DEFENDER,
+  MOVE_U_TURN` is the only read), so the one observable difference is a full list: with
+  Struggle taking one of its four entries, the decomp cannot record the player's fourth
+  distinct move, while the engines can. That needs a player Pokemon that Struggles (no
+  PP left, or Taunted with only status moves) and later uses all four of its moves.
 - **A fainted player Pokemon's AI knowledge.** `BattleSystem_CleanupFaintedMon`
   (`src/battle/battle_lib.c:2223-2225`) clears the AI's knowledge of a fainted battler;
   the engines clear a player Pokemon's `ai_seen_moves` / `ai_ability_known` row only

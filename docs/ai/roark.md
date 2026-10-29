@@ -482,6 +482,14 @@ its defender with `attacker ^ 1`, so it makes no draw either.
   entering Pokemon's row of `ai_seen_moves` and `ai_ability_known`.
 - Roark's scripts read the seen moves in exactly one place: `IfMoveNotKnown
   DEFENDER, MOVE_U_TURN` in `Expert_Pursuit`.
+- **Engine.** `BattleState.last_move` is `movePrevByBattler` (both engines write it
+  where `UpdateMoveBuffers` and `BtlCmd_TryPursuit` do). `step` commits the player's
+  `last_move` to `ai_seen_moves` at the start of a turn on which the opponent's action
+  is a move it chose (not a switch, not an item, not a forced Struggle, which skips the
+  move menu and `TrainerAI_Main`, `battle_controller_player.c:433`). The AI's scores on
+  that turn include the pending move (`commands.new_context`), as `RecordLastMove`
+  runs before scoring; the switch and item rules read the stored list only. Struggle is
+  not recorded (docs/discrepancies.md).
 
 ### 9.2 Ability (`aiContext.battlerAbilities` -> `BattleState.ai_ability_known`)
 
@@ -915,4 +923,4 @@ routines map as follows:
 | `TrainerAI_CalcDamage` (variance 100) | `ai_damage` (`commands.py`) | `ai_damage_for_roll(..., roll=15)`, section 7.1 |
 | `IfMoveEffectivenessEquals` class | `effectiveness_class` (`commands.py`) | section 7.2 |
 | `LoadBattlerAbility DEFENDER` resolution | `resolve_player_ability` (Task 4) | section 9.2 |
-| `TrainerAI_RecordLastMove` | knowledge update in `step` (Task 4) | section 9.1 |
+| `TrainerAI_RecordLastMove` | `step._record_last_move`, `commands.new_context` | section 9.1 |

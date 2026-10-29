@@ -20,8 +20,9 @@ Pure, jit- and vmap-able, fixed shapes; every random event comes from
 Implemented so far: the opponent's bag items (Potion, ``_use_trainer_item``, with the
 decomp's multi-slot consumption, ``_consume_trainer_items``), the AI inputs
 ``fake_out_turn`` (``_entered``) and ``move_hit`` (``_use_move``, ``_move_end``), the
-AI's knowledge of the player (``ai_seen_moves``: ``_see_move``, ``_forget``;
-``ai_ability_known``: ``hooks.reveal_ability``, ``_forget``),
+AI's knowledge of the player (``last_move``: ``_use_move``, ``_pursuit_hit``;
+``ai_seen_moves``: ``_record_last_move``, ``_forget``; ``ai_ability_known``:
+``hooks.reveal_ability``, ``_forget``),
 switching (with Natural Cure) and the switch-in hooks
 (``hooks.on_switch_in``: Stealth Rock, Intimidate, berries), damaging moves, the
 accuracy check, PP, Struggle, the move effects of ``effects.py``, the berry check
@@ -175,18 +176,29 @@ def _entered(state: BattleState, side, entry_turn, cond) -> BattleState:
     return state._replace(fake_out_turn=fake_out_turn)
 
 
-def _see_move(state: BattleState, side, slot, cond) -> BattleState:
-    """The AI learns the player's move: ``ai_seen_moves[active, slot] = 1`` where
-    ``cond`` and ``side`` is the player. The decomp keeps the move in
-    ``movePrevByBattler`` and ``TrainerAI_RecordLastMove`` (trainer_ai.c:2705) adds it
-    to the AI's list at its next FIGHT decision (roark.md 9.1; recording it here instead
-    is docs/discrepancies.md, "Seen moves are recorded when the move runs")."""
+def _set_last_move(state: BattleState, side, move, cond) -> BattleState:
+    """``movePrevByBattler[side] = move`` where ``cond`` (``BattleState.last_move``)."""
+    value = jnp.where(cond, move, state.last_move[side]).astype(state.last_move.dtype)
+    return state._replace(last_move=state.last_move.at[side].set(value))
+
+
+def _record_last_move(tables: Tables, state: BattleState, actions) -> BattleState:
+    """``TrainerAI_RecordLastMove`` (trainer_ai.c:2705-2717), at the start of the turn:
+    the AI adds the player's ``movePrevByBattler`` to its list of the player's moves.
+    It runs only on the AI's FIGHT path (``TrainerAI_MainSingles``, :295, after
+    ``TrainerAI_PickCommand`` chose neither a switch nor an item, :3989), and not when
+    the opponent must Struggle: the move menu, and with it ``TrainerAI_Main``, is
+    skipped for ``STRUGGLING_ALL`` (battle_controller_player.c:433). The list holds
+    the moves as slots of the player's active Pokemon (``ai_seen_moves``); Struggle is
+    in no slot and is not recorded (docs/discrepancies.md)."""
     mon = state.active[0]
+    pending = state.last_move[0]
+    _, struggling = selected_move(tables, state, 1, actions[1])
+    fight = (actions[1] < MOVE_ACTIONS) & ~struggling
+    match = (state.moves[0, mon] == pending) & (pending != 0) & fight
     seen = state.ai_seen_moves
-    on = cond & (jnp.asarray(side, _I32) == 0)
-    return state._replace(
-        ai_seen_moves=seen.at[mon, slot].set(jnp.where(on, 1, seen[mon, slot]).astype(seen.dtype))
-    )
+    row = jnp.where(match, 1, seen[mon]).astype(seen.dtype)
+    return state._replace(ai_seen_moves=seen.at[mon].set(row))
 
 
 def _forget(state: BattleState, side, slot) -> BattleState:
@@ -309,9 +321,11 @@ def _use_move(
     has_target = (state.hp[target_side, target] > 0) | defender_always(tables, move)
     # SYSCTL_MOVE_SUCCEEDED (battle_controller_player.c:3212) once the move got past the
     # status checks, the PP decrement and the no-target check, before the accuracy check
-    # (a miss counts): UpdateMoveBuffers (:3945) keeps it in movePrevByBattler. Struggle
-    # is in no move slot and is never U-turn, the one move Roark's scripts look for.
-    state = _see_move(state, side, slot, can_act & has_target & ~struggling)
+    # (a miss counts): UpdateMoveBuffers (:3945-3949) writes the move (Struggle's own id
+    # when struggling) to movePrevByBattler, else MOVE_NONE. Every path of a battler
+    # that acts reaches it, the confusion self-hit too (LOOP_FAINTED, :2639).
+    succeeded = can_act & has_target
+    state = _set_last_move(state, side, jnp.where(succeeded, move, 0), ready)
     connected = can_act & has_target & ((outcome.hit[side, 0] != 0) | never_misses)
     for hit_index in range(MAX_HITS):
         state = apply_move_effect(
@@ -435,14 +449,13 @@ def _pursuit_hit(
     """The pursuer hits the outgoing Pokemon: ``BtlCmd_TryPursuit`` spends the PP and
     sets ``powerMul = 20``; ``subscript_pursuit.s`` then runs crit, damage and the type
     chart with no accuracy check. The pursuer's own action is over; it wrote
-    ``movePrevByBattler[pursuer] = move`` (battle_script.c:6930), so the AI sees a
-    player's Pursuit (``_see_move``)."""
+    ``movePrevByBattler[pursuer] = move`` (battle_script.c:6930, ``last_move``)."""
     action = actions[pursuer]
     slot = jnp.clip(action, 0, MOVE_ACTIONS - 1)
     mon = state.active[pursuer]
     state = state._replace(pp=state.pp.at[pursuer, mon, slot].add(jnp.int8(-1)))
-    state = _see_move(state, pursuer, slot, True)
     move = choices[0][pursuer]
+    state = _set_last_move(state, pursuer, move, True)
     return apply_move_effect(
         tables,
         state,
@@ -672,8 +685,9 @@ def end_of_turn(
 def step(tables: Tables, state: BattleState, actions, outcome: Outcome) -> BattleState:
     """Play one turn: ``actions`` is ``int32[2]`` (player, opponent; see ``order``)."""
     actions = jnp.asarray(actions, _I32)
-    order = action_order(tables, state, actions, outcome)
-    s = execute_actions(tables, state, actions, outcome, order)
+    s = _record_last_move(tables, state, actions)
+    order = action_order(tables, s, actions, outcome)
+    s = execute_actions(tables, s, actions, outcome, order)
     s = end_of_turn(tables, s, actions, outcome, order)
     s = s._replace(turn=(s.turn + 1).astype(s.turn.dtype))
     return _where(state.over != 0, state, s)
