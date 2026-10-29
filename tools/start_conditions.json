@@ -1,53 +1,179 @@
 {
  "comment": [
   "Battle start conditions the extractor cannot derive unambiguously (tools/extract_decomp.py extract_trainers).",
-  "Keys are TRAINER_* constants (generated/trainers.txt); values are none | rain | hail | sandstorm | sun | fog.",
+  "Keys are numeric trainer ids (line index in generated/trainers.txt, the id in trainers.json); each value is {\"trainer\": TRAINER_* constant, \"condition\": none | rain | hail | sandstorm | sun | fog}. The extractor checks that the constant matches the id, so an id drift fails loudly.",
   "Only trainers whose maps give more than one condition belong here; an entry may not contradict an unambiguous derivation.",
   "Every entry below stands on a map with date-dependent weather: include/data/map_headers.h gives the map a yearly weather (OVERWORLD_WEATHER_YEARLY_START + n, include/constants/overworld_weather.h), which FieldSystem_GetWeather looks up by date in sYearlyWeather (src/field_overworld_weather.c). Each entry takes the condition that holds on most days; the exceptions are listed here.",
   "Route 212 South (MAP_HEADER_ROUTE_212_SOUTH, column OVERWORLD_WEATHER_ROUTE_212_SOUTH): RAINING/HEAVY_RAIN/THUNDERSTORM -> rain on 365 of 366 days; Apr 30 is CLOUDY -> none. Entries: rain.",
   "Route 213 (MAP_HEADER_ROUTE_213, column OVERWORLD_WEATHER_ROUTE_213): CLEAR/CLOUDY -> none on 356 of 366 days; RAINING -> rain on Jan 24, Mar 13, May 11, Jul 11, Aug 9, Aug 20, Oct 18, Nov 10, Dec 2 and Dec 31. Entries: none.",
   "Rematches (_REMATCH_n) are fought on the base trainer's map (gVsSeekerRematchData, src/overlay005/vs_seeker.c)."
  ],
- "TRAINER_COLLECTOR_DEAN": "rain",
- "TRAINER_FISHERMAN_JOSH": "rain",
- "TRAINER_FISHERMAN_JUAN": "rain",
- "TRAINER_FISHERMAN_TRAVIS": "rain",
- "TRAINER_PARASOL_LADY_ALEXA": "rain",
- "TRAINER_PARASOL_LADY_ALEXA_REMATCH_1": "rain",
- "TRAINER_PARASOL_LADY_ALEXA_REMATCH_2": "rain",
- "TRAINER_PARASOL_LADY_ALEXA_REMATCH_3": "rain",
- "TRAINER_PARASOL_LADY_SABRINA": "rain",
- "TRAINER_POLICEMAN_DANNY": "rain",
- "TRAINER_POLICEMAN_DANNY_REMATCH_1": "rain",
- "TRAINER_POLICEMAN_DANNY_REMATCH_2": "rain",
- "TRAINER_POLICEMAN_DANNY_REMATCH_3": "rain",
- "TRAINER_RANGER_ALLISON": "rain",
- "TRAINER_RANGER_ALLISON_REMATCH_1": "rain",
- "TRAINER_RANGER_ALLISON_REMATCH_2": "rain",
- "TRAINER_RANGER_ALLISON_REMATCH_3": "rain",
- "TRAINER_RANGER_JEFFREY": "rain",
- "TRAINER_RANGER_TAYLOR": "rain",
- "TRAINER_RANGER_TAYLOR_REMATCH_1": "rain",
- "TRAINER_RANGER_TAYLOR_REMATCH_2": "rain",
- "TRAINER_RANGER_TAYLOR_REMATCH_3": "rain",
- "TRAINER_SCIENTIST_SHAUN": "rain",
- "TRAINER_SCIENTIST_SHAUN_REMATCH_1": "rain",
- "TRAINER_SCIENTIST_SHAUN_REMATCH_2": "rain",
- "TRAINER_SCIENTIST_SHAUN_REMATCH_3": "rain",
- "TRAINER_SCIENTIST_STEFANO": "rain",
- "TRAINER_BEAUTY_CYNDY": "none",
- "TRAINER_BEAUTY_CYNDY_REMATCH_1": "none",
- "TRAINER_BEAUTY_CYNDY_REMATCH_2": "none",
- "TRAINER_FISHERMAN_KENNETH": "none",
- "TRAINER_SAILOR_PAUL": "none",
- "TRAINER_SWIMMER_EVAN": "none",
- "TRAINER_SWIMMER_HALEY": "none",
- "TRAINER_SWIMMER_MARY": "none",
- "TRAINER_SWIMMER_SHELTIN": "none",
- "TRAINER_TUBER_CHELSEA": "none",
- "TRAINER_TUBER_CHELSEA_REMATCH_1": "none",
- "TRAINER_TUBER_CHELSEA_REMATCH_2": "none",
- "TRAINER_TUBER_JARED": "none",
- "TRAINER_TUBER_JARED_REMATCH_1": "none",
- "TRAINER_TUBER_JARED_REMATCH_2": "none"
+ "91": {
+  "trainer": "TRAINER_FISHERMAN_JUAN",
+  "condition": "rain"
+ },
+ "92": {
+  "trainer": "TRAINER_FISHERMAN_JOSH",
+  "condition": "rain"
+ },
+ "93": {
+  "trainer": "TRAINER_FISHERMAN_TRAVIS",
+  "condition": "rain"
+ },
+ "94": {
+  "trainer": "TRAINER_RANGER_TAYLOR",
+  "condition": "rain"
+ },
+ "95": {
+  "trainer": "TRAINER_RANGER_JEFFREY",
+  "condition": "rain"
+ },
+ "96": {
+  "trainer": "TRAINER_RANGER_ALLISON",
+  "condition": "rain"
+ },
+ "99": {
+  "trainer": "TRAINER_SCIENTIST_STEFANO",
+  "condition": "rain"
+ },
+ "103": {
+  "trainer": "TRAINER_SWIMMER_SHELTIN",
+  "condition": "none"
+ },
+ "104": {
+  "trainer": "TRAINER_SWIMMER_EVAN",
+  "condition": "none"
+ },
+ "105": {
+  "trainer": "TRAINER_SWIMMER_HALEY",
+  "condition": "none"
+ },
+ "106": {
+  "trainer": "TRAINER_SWIMMER_MARY",
+  "condition": "none"
+ },
+ "107": {
+  "trainer": "TRAINER_TUBER_JARED",
+  "condition": "none"
+ },
+ "108": {
+  "trainer": "TRAINER_TUBER_CHELSEA",
+  "condition": "none"
+ },
+ "110": {
+  "trainer": "TRAINER_SAILOR_PAUL",
+  "condition": "none"
+ },
+ "111": {
+  "trainer": "TRAINER_FISHERMAN_KENNETH",
+  "condition": "none"
+ },
+ "327": {
+  "trainer": "TRAINER_PARASOL_LADY_ALEXA",
+  "condition": "rain"
+ },
+ "328": {
+  "trainer": "TRAINER_PARASOL_LADY_SABRINA",
+  "condition": "rain"
+ },
+ "332": {
+  "trainer": "TRAINER_POLICEMAN_DANNY",
+  "condition": "rain"
+ },
+ "346": {
+  "trainer": "TRAINER_BEAUTY_CYNDY",
+  "condition": "none"
+ },
+ "381": {
+  "trainer": "TRAINER_COLLECTOR_DEAN",
+  "condition": "rain"
+ },
+ "486": {
+  "trainer": "TRAINER_SCIENTIST_SHAUN",
+  "condition": "rain"
+ },
+ "715": {
+  "trainer": "TRAINER_PARASOL_LADY_ALEXA_REMATCH_1",
+  "condition": "rain"
+ },
+ "716": {
+  "trainer": "TRAINER_PARASOL_LADY_ALEXA_REMATCH_2",
+  "condition": "rain"
+ },
+ "717": {
+  "trainer": "TRAINER_PARASOL_LADY_ALEXA_REMATCH_3",
+  "condition": "rain"
+ },
+ "724": {
+  "trainer": "TRAINER_POLICEMAN_DANNY_REMATCH_1",
+  "condition": "rain"
+ },
+ "725": {
+  "trainer": "TRAINER_POLICEMAN_DANNY_REMATCH_2",
+  "condition": "rain"
+ },
+ "726": {
+  "trainer": "TRAINER_POLICEMAN_DANNY_REMATCH_3",
+  "condition": "rain"
+ },
+ "732": {
+  "trainer": "TRAINER_RANGER_TAYLOR_REMATCH_1",
+  "condition": "rain"
+ },
+ "733": {
+  "trainer": "TRAINER_RANGER_TAYLOR_REMATCH_2",
+  "condition": "rain"
+ },
+ "734": {
+  "trainer": "TRAINER_RANGER_TAYLOR_REMATCH_3",
+  "condition": "rain"
+ },
+ "736": {
+  "trainer": "TRAINER_RANGER_ALLISON_REMATCH_1",
+  "condition": "rain"
+ },
+ "737": {
+  "trainer": "TRAINER_RANGER_ALLISON_REMATCH_2",
+  "condition": "rain"
+ },
+ "738": {
+  "trainer": "TRAINER_RANGER_ALLISON_REMATCH_3",
+  "condition": "rain"
+ },
+ "743": {
+  "trainer": "TRAINER_SCIENTIST_SHAUN_REMATCH_1",
+  "condition": "rain"
+ },
+ "744": {
+  "trainer": "TRAINER_SCIENTIST_SHAUN_REMATCH_2",
+  "condition": "rain"
+ },
+ "745": {
+  "trainer": "TRAINER_SCIENTIST_SHAUN_REMATCH_3",
+  "condition": "rain"
+ },
+ "749": {
+  "trainer": "TRAINER_BEAUTY_CYNDY_REMATCH_1",
+  "condition": "none"
+ },
+ "750": {
+  "trainer": "TRAINER_BEAUTY_CYNDY_REMATCH_2",
+  "condition": "none"
+ },
+ "771": {
+  "trainer": "TRAINER_TUBER_JARED_REMATCH_1",
+  "condition": "none"
+ },
+ "772": {
+  "trainer": "TRAINER_TUBER_JARED_REMATCH_2",
+  "condition": "none"
+ },
+ "773": {
+  "trainer": "TRAINER_TUBER_CHELSEA_REMATCH_1",
+  "condition": "none"
+ },
+ "775": {
+  "trainer": "TRAINER_TUBER_CHELSEA_REMATCH_2",
+  "condition": "none"
+ }
 }

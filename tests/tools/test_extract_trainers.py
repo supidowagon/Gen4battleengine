@@ -56,3 +56,18 @@ def test_every_spec_weather_appears(trainers):
     # Spec 4.1: hail (Routes 216/217), rain (212/215), sandstorm (228), fog (210, Coronet).
     conditions = {t["start_condition"] for t in trainers}
     assert {"none", "hail", "rain", "sandstorm", "fog"} <= conditions
+
+
+def test_start_condition_overrides_are_keyed_by_trainer_id(trainers):
+    # The brief's interface: tools/start_conditions.json is {trainer_id: condition}.
+    # Each entry also names its TRAINER_* constant, which the extractor checks
+    # against generated/trainers.txt so an id drift cannot go unnoticed.
+    raw = json.loads(Path("tools/start_conditions.json").read_text(encoding="utf-8"))
+    entries = {k: v for k, v in raw.items() if k != "comment"}
+    assert entries
+    consts = (DECOMP / "generated" / "trainers.txt").read_text(encoding="utf-8").split()
+    for key, entry in entries.items():
+        assert key.isdecimal(), key
+        tid = int(key)
+        assert consts[tid] == entry["trainer"]
+        assert trainers[tid]["start_condition"] == entry["condition"]

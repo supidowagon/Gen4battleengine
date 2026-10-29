@@ -479,11 +479,24 @@ def _trainer_maps(decomp: Path, headers: dict[str, dict[str, str]]) -> dict[str,
     return where
 
 
-def _start_condition_overrides(path: Path) -> dict[str, str]:
-    out = {k: v for k, v in _load_json(path).items() if k != "comment"}
-    for trainer, cond in out.items():
+def _start_condition_overrides(path: Path, trainers: list[str]) -> dict[str, str]:
+    """Read ``{trainer_id: {"trainer": TRAINER_*, "condition": ...}}`` and return
+    TRAINER_* -> condition. Each entry's constant must be the one at its id in
+    ``generated/trainers.txt``, so an id drift fails instead of moving an override."""
+    out = {}
+    for key, entry in _load_json(path).items():
+        if key == "comment":
+            continue
+        if not key.isdecimal() or int(key) >= len(trainers):
+            raise ExtractError(f"{path}: {key!r} is not a trainer id")
+        if not isinstance(entry, dict) or set(entry) != {"trainer", "condition"}:
+            raise ExtractError(f"{path}: entry {key} must be {{trainer, condition}}")
+        const, cond = entry["trainer"], entry["condition"]
+        if trainers[int(key)] != const:
+            raise ExtractError(f"{path}: id {key} is {trainers[int(key)]}, not {const}")
         if cond not in START_CONDITIONS:
-            raise ExtractError(f"{path}: {trainer} has unknown start condition {cond!r}")
+            raise ExtractError(f"{path}: {key} ({const}) has unknown start condition {cond!r}")
+        out[const] = cond
     return out
 
 
@@ -522,7 +535,8 @@ def extract_trainers(decomp_root: Path, out_dir: Path) -> None:
       places on no map (unused and dummy entries, or trainers set up by a shared
       script) gets "none". A trainer whose maps or dates give more than one
       condition must be listed in ``tools/start_conditions.json``
-      (TRAINER_* -> condition), which may not contradict an unambiguous derivation.
+      ({trainer_id: {"trainer": TRAINER_*, "condition": ...}}), which may not
+      contradict an unambiguous derivation.
     """
     decomp, out_dir = Path(decomp_root), Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -543,11 +557,10 @@ def extract_trainers(decomp_root: Path, out_dir: Path) -> None:
     for header, h in headers.items():
         if h["weather"] not in weather:
             raise ExtractError(f"{header}: unknown weather {h['weather']!r}")
-    overrides = _start_condition_overrides(START_CONDITIONS_FILE)
-    for what, names in (("maps", where), (str(START_CONDITIONS_FILE), overrides)):
-        unknown = sorted(set(names) - set(trainers))
-        if unknown:
-            raise ExtractError(f"{what} name unknown trainers {unknown}")
+    overrides = _start_condition_overrides(START_CONDITIONS_FILE, trainers)
+    unknown = sorted(set(where) - set(trainers))
+    if unknown:
+        raise ExtractError(f"maps name unknown trainers {unknown}")
 
     out = []
     for tid, const in enumerate(trainers):
