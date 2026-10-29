@@ -55,6 +55,31 @@ def test_stat_raise_clamps_at_six(tables, names):
     assert int(out.stages[1, 5]) == 6
 
 
+def test_self_targeting_move_works_with_the_foe_active_fainted(tables, names):
+    # RANGE_USER: the decomp's defender is the user itself, so the no-target check
+    # (battle_controller_player.c:3190) cannot fail it.
+    s = roark_state(tables, names, opp_moves=["Rock Polish"]).replace_hp(0, 0, 0)
+    out = step(tables, s, A("Scratch", "Rock Polish", s, names), empty_outcome())
+    assert int(out.stages[1, 5]) == 2
+
+
+def test_self_boost_after_foe_faints_from_its_own_recoil(tables, names):
+    # Cranidos (1 HP, no Rock Head) moves first and Take Down's recoil faints it;
+    # Grotle's Withdraw still raises its Defense.
+    s = roark_state(
+        tables,
+        names,
+        player_species="Grotle",
+        opp_species="Cranidos",
+        opp_moves=["Take Down"],
+        opp_faster=True,
+    ).replace_hp(1, 0, 1)
+    out = step(tables, s, A("Withdraw", "Take Down", s, names), empty_outcome())
+    assert int(out.hp[1, 0]) == 0
+    assert int(out.over) == 0
+    assert int(out.stages[0, 2]) == 1
+
+
 def test_simple_doubles_stage_change(tables, names):
     # Gen 4 Simple doubles the stage when a stat is used, not the stored change.
     s = roark_state(

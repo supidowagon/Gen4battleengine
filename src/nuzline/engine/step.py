@@ -25,7 +25,7 @@ import jax
 import jax.numpy as jnp
 
 from nuzline.data.tables import Tables
-from nuzline.engine.effects import apply_move_effect, change_stage
+from nuzline.engine.effects import apply_move_effect, change_stage, targets_user
 from nuzline.engine.ids import AbilityId, Stat
 from nuzline.engine.order import MOVE_ACTIONS, action_order, is_switch, selected_move
 from nuzline.engine.outcome import MAX_HITS, Outcome
@@ -99,10 +99,11 @@ def _use_move(
 
     # Accuracy 0 never misses (CheckMoveHitAccuracy returns before rolling, :2901). A
     # multi-hit move checks accuracy on its first hit only (effects.py).
+    # The no-target check (:3190) fails a move whose defender has fainted; a
+    # RANGE_USER move's defender is the user itself, so it never fails there.
     never_misses = tables.move_accuracy[move] == 0
-    connected = (
-        can_act & (state.hp[target_side, target] > 0) & ((outcome.hit[side, 0] != 0) | never_misses)
-    )
+    has_target = (state.hp[target_side, target] > 0) | targets_user(tables, move)
+    connected = can_act & has_target & ((outcome.hit[side, 0] != 0) | never_misses)
     for hit_index in range(MAX_HITS):
         state = apply_move_effect(
             tables,

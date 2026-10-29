@@ -31,7 +31,7 @@ from pathlib import Path
 
 import numpy as np
 
-from nuzline.engine.ids import AbilityId, EffectId, ItemId, MoveFlag
+from nuzline.engine.ids import AbilityId, EffectId, ItemId, MoveFlag, MoveTarget
 from tools.effect_map import (
     CERTAIN_SECONDARY_EFFECTS,
     DECOMP_ABILITY_TO_ID,
@@ -48,21 +48,8 @@ CLONE_SCRIPT = Path(__file__).with_name("clone_decomp.sh")
 
 # generated/move_classes.txt order.
 MOVE_CATEGORIES = ("PHYSICAL", "SPECIAL", "STATUS")
-# generated/move_ranges.txt order, without RANGE_UNUSED_* and RANGE_ALL (no move uses them).
-MOVE_TARGETS = (
-    "RANGE_SINGLE_TARGET",
-    "RANGE_SINGLE_TARGET_SPECIAL",
-    "RANGE_RANDOM_OPPONENT",
-    "RANGE_ADJACENT_OPPONENTS",
-    "RANGE_ALL_ADJACENT",
-    "RANGE_USER",
-    "RANGE_USER_SIDE",
-    "RANGE_FIELD",
-    "RANGE_OPPONENT_SIDE",
-    "RANGE_ALLY",
-    "RANGE_USER_OR_ALLY",
-    "RANGE_SINGLE_TARGET_ME_FIRST",
-)
+# ``MoveTarget`` order (generated/move_ranges.txt without unused ranges).
+MOVE_TARGETS = tuple(t.name for t in MoveTarget)
 DECOMP_FLAG_BITS = {
     "MOVE_FLAG_MAKES_CONTACT": MoveFlag.CONTACT,
     "MOVE_FLAG_CAN_PROTECT": MoveFlag.PROTECT,

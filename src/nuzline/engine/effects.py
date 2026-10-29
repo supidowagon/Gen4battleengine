@@ -8,7 +8,8 @@ many are real). Decomp sources:
 * Which side effects run: ``BattleSystem_TriggerPrimaryEffect`` (status and stat
   moves, "direct") and ``BattleSystem_TriggerSecondaryEffect`` (effects of a
   damaging move, "indirect"), ``src/battle/battle_lib.c:1481`` and ``:1519``. A
-  direct effect needs a living target and a move that connected; a probabilistic
+  direct effect needs a living target and a move that connected (a ``RANGE_USER``
+  move's target is its user, so a fainted foe does not stop it); a probabilistic
   indirect one needs its roll, a living recipient and a move that hit and was not
   ineffective; an ``ON_HIT`` one (chance 0 in the tables, e.g. Hammer Arm, drain,
   recoil) only the latter. ``step`` therefore applies chance-0 secondaries without
@@ -53,7 +54,7 @@ import jax.numpy as jnp
 
 from nuzline.data.tables import Tables
 from nuzline.engine.damage import STATUS, damage_for_roll, effectiveness
-from nuzline.engine.ids import AbilityId, EffectId, Stat, Status, Type, Weather
+from nuzline.engine.ids import AbilityId, EffectId, MoveTarget, Stat, Status, Type, Weather
 from nuzline.engine.outcome import Outcome
 from nuzline.engine.state import STAGE_MAX, STAGE_MIN, BattleState
 
@@ -201,6 +202,11 @@ def _recoil(tables, state, h: _Hit) -> BattleState:
     return state._replace(hp=state.hp.at[h.side, h.user].set(hp.astype(state.hp.dtype)))
 
 
+def targets_user(tables: Tables, move) -> jnp.ndarray:
+    """The move's target is ``RANGE_USER``: its decomp defender is the user itself."""
+    return tables.move_target[move] == MoveTarget.RANGE_USER
+
+
 def apply_move_effect(
     tables: Tables,
     state: BattleState,
@@ -216,24 +222,26 @@ def apply_move_effect(
     this hit's crit and roll, then the move's effect.
 
     ``connected``: the move is being used and passed its one accuracy check
-    against a living target. ``target_moved``: the target acted earlier this turn
-    (no flinch). A hit beyond ``hit_count`` or after the target fainted does nothing.
+    against a living target (any target for a ``RANGE_USER`` move). ``target_moved``:
+    the target acted earlier this turn (no flinch). A hit beyond ``hit_count`` or after the target fainted does nothing.
     """
     side = jnp.asarray(side, _I32)
     target_side = 1 - side
     user, target = state.active[side], state.active[target_side]
     move = jnp.asarray(move, _I32)
+    # A RANGE_USER move (Growth, Withdraw, Rock Polish) lands on its user, so the
+    # foe's active having fainted earlier this turn does not stop it.
     landed = (
         connected
         & (hit_index < hit_count(tables, move, outcome, side))
-        & _alive(state, target_side, target)
+        & (_alive(state, target_side, target) | targets_user(tables, move))
     )
 
     damage = damage_for_roll(
         tables, state, side, move, outcome.crit[side, hit_index] != 0, outcome.roll[side, hit_index]
     )
     target_hp = state.hp[target_side, target].astype(_I32)
-    dealt = jnp.where(landed, jnp.minimum(damage, target_hp), 0)
+    dealt = jnp.where(landed & ~targets_user(tables, move), jnp.minimum(damage, target_hp), 0)
     state = state._replace(
         hp=state.hp.at[target_side, target].set((target_hp - dealt).astype(state.hp.dtype))
     )

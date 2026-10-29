@@ -110,6 +110,24 @@ class MoveFlag(IntFlag):
     PUNCH = 8
 
 
+class MoveTarget(IntEnum):
+    """``tables.move_target``: the decomp's ``RANGE_*`` (``generated/move_ranges.txt``
+    order, without ``RANGE_UNUSED_*`` and ``RANGE_ALL``, which no move uses)."""
+
+    RANGE_SINGLE_TARGET = 0
+    RANGE_SINGLE_TARGET_SPECIAL = 1
+    RANGE_RANDOM_OPPONENT = 2
+    RANGE_ADJACENT_OPPONENTS = 3
+    RANGE_ALL_ADJACENT = 4
+    RANGE_USER = 5
+    RANGE_USER_SIDE = 6
+    RANGE_FIELD = 7
+    RANGE_OPPONENT_SIDE = 8
+    RANGE_ALLY = 9
+    RANGE_USER_OR_ALLY = 10
+    RANGE_SINGLE_TARGET_ME_FIRST = 11
+
+
 class Weather(IntEnum):
     """``BattleState.weather``; also a battle's start condition (``make_state``)."""
 

@@ -1,10 +1,11 @@
+import json
 from pathlib import Path
 
 import jax.numpy as jnp
 import pytest
 
 from nuzline.data.tables import load_names, load_tables
-from nuzline.engine.ids import AbilityId, EffectId, ItemId, MoveFlag, Stat, Status
+from nuzline.engine.ids import AbilityId, EffectId, ItemId, MoveFlag, MoveTarget, Stat, Status
 
 TABLES = Path("data/gen4_platinum")
 pytestmark = pytest.mark.skipif(not (TABLES / "tables.npz").exists(), reason="tables not built")
@@ -63,6 +64,17 @@ def test_only_thunder_wave_is_a_type_checked_status_move():
     assert _effect(t, n, "Thunder Wave") == (EffectId.STATUS_FOE, (Status.PARALYSIS, 1, 0))
     for move in ("Glare", "Stun Spore"):
         assert _effect(t, n, move) == (EffectId.STATUS_FOE, (Status.PARALYSIS, 0, 0))
+
+
+def test_move_target_ids_match_the_manifest():
+    """``MoveTarget`` (used by the engine for RANGE_USER moves) is the order the
+    tables were built with; the self-targeting status moves are RANGE_USER."""
+    manifest = json.loads((TABLES / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["target_names"] == [t.name for t in MoveTarget]
+    t, n = load_tables(TABLES), load_names(TABLES)
+    for move in ("Growth", "Withdraw", "Rock Polish", "Defense Curl"):
+        assert int(t.move_target[n.move(move)]) == MoveTarget.RANGE_USER, move
+    assert int(t.move_target[n.move("Leer")]) != MoveTarget.RANGE_USER
 
 
 def test_every_m1a_move_is_supported():
