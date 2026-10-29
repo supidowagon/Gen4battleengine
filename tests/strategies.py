@@ -64,14 +64,37 @@ def _learnsets() -> dict[int, list[tuple[int, int]]]:
     return IntermediateData(INTERMEDIATE).learnsets
 
 
+# The fixture and effect-test moves, given to every species so the infliction,
+# trapping, flinch, multi-hit and stat-stage branches run in the differential test.
+SHARED_MOVES = (
+    "Stealth Rock",
+    "Taunt",
+    "Leech Seed",
+    "Bind",
+    "Pursuit",
+    "Supersonic",
+    "Headbutt",
+    "Rock Polish",
+    "Fury Swipes",
+    "Thunder Wave",
+    "Stun Spore",
+)
+
+
 def m1_move_pools(tables: Tables, names: Names) -> dict[int, tuple[int, ...]]:
-    """Species id -> its level-up learnset moves with a supported effect, in id order."""
+    """Species id -> its level-up learnset moves with a supported effect plus
+    ``SHARED_MOVES``, in id order."""
     effect = np.asarray(tables.move_effect)
     learnsets = _learnsets()
+    shared = {names.move(m) for m in SHARED_MOVES}
+    unsupported = sorted(m for m in shared if effect[m] == EffectId.UNSUPPORTED)
+    if unsupported:
+        raise ValueError(f"SHARED_MOVES has unsupported moves: {unsupported}")
     pools = {}
     for name in M1_SPECIES:
         species = names.species(name)
         moves = {m for _, m in learnsets[species] if effect[m] != EffectId.UNSUPPORTED}
+        moves |= shared
         pools[species] = tuple(sorted(moves))
     return pools
 
