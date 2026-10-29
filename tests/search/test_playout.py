@@ -5,8 +5,10 @@ import jax
 import jax.numpy as jnp
 
 from nuzline.ai.replacement import post_ko_switch_in
-from nuzline.engine.actions import legal_actions
+from nuzline.engine.actions import MOVE_ACTIONS, legal_actions
+from nuzline.engine.ids import Status
 from nuzline.search.playout import (
+    REFUSED_WON,
     batched_playout,
     playout,
     playout_from_action,
@@ -65,10 +67,38 @@ def test_illegal_actions_are_never_chosen(tables, names):
 
 
 def test_playout_from_action_plays_that_action_first(tables, names):
-    s = roark_state(tables, names)
+    # The lead at 1 HP is slower than Geodude, whose only move with PP is Tackle (95 %
+    # accurate; +6 accuracy makes it sure) and which has no party to switch to: Leer
+    # loses on turn 1, a switch to slot 1 survives it.
+    s = (
+        roark_state(tables, names, opp_count=1, opp_faster=True)
+        .replace_hp(0, 0, 1)
+        .with_pp(1, 0, [35, 0, 0, 0])
+        .with_stages(1, acc=6)
+    )
     leer = names.move_slot(s, 0, "Leer")
-    r = playout_from_action(tables, s, jnp.int32(leer), jax.random.PRNGKey(6), 100)
-    assert 0 < int(r.turns) <= 100 and int(r.refused) == 0
+    switch = MOVE_ACTIONS + 1
+    for seed in range(3):
+        key = jax.random.PRNGKey(seed)
+        lost = playout_from_action(tables, s, jnp.int32(leer), key, 100)
+        assert (int(lost.won), int(lost.player_faints), int(lost.turns)) == (0, 1, 1)
+        kept = playout_from_action(tables, s, jnp.int32(switch), key, 100)
+        assert int(kept.turns) > 1 and int(kept.refused) == 0
+
+
+def test_first_actions_share_the_draws_after_turn_1(tables, names):
+    # Common random numbers: asleep (5 turns), Scratch and Leer both leave the same
+    # state after turn 1 (neither runs), so one key gives both the same playout.
+    s = roark_state(tables, names, opp_count=1).with_status(0, 0, Status.SLEEP, 5)
+    scratch, leer = names.move_slot(s, 0, "Scratch"), names.move_slot(s, 0, "Leer")
+    results = []
+    for seed in range(4):
+        key = jax.random.PRNGKey(seed)
+        a = playout_from_action(tables, s, jnp.int32(scratch), key, 100)
+        b = playout_from_action(tables, s, jnp.int32(leer), key, 100)
+        assert [int(x) for x in a] == [int(x) for x in b]
+        results.append(tuple(int(x) for x in a))
+    assert len(set(results)) > 1  # the draws do change with the key
 
 
 def test_playout_is_deterministic_in_its_key(tables, names):
@@ -105,3 +135,11 @@ def test_no_replacement_needed_changes_nothing(tables, names):
     s = roark_state(tables, names)
     out, refused = send_replacements(tables, s, jnp.bool_(True), 10)
     assert int(refused) == 0 and int(out.active[1]) == 0
+
+
+def test_refused_playout_cannot_be_counted_as_a_loss(tables, names):
+    # Levitate on the player's lead is refused by ai_refusals: traced, the first turn
+    # stops the playout, and won = -1 so it cannot be summed as a loss.
+    s = roark_state(tables, names, player_species="Gastly", player_ability="Levitate")
+    r = playout(tables, s, jax.random.PRNGKey(10))
+    assert (int(r.won), int(r.refused), int(r.turns)) == (REFUSED_WON, 1, 0)

@@ -18,6 +18,7 @@ from nuzline.ai.switching import (
     SWITCH_SITES,
     SwitchSite,
     UnsupportedSwitching,
+    apply_type_chart,
     calc_effectiveness_flags,
     switch_action,
     switch_sites,
@@ -150,6 +151,24 @@ def test_effectiveness_flags_follow_the_chart_order(tables, names):
     assert flags("Struggle", "Ghost", "Ghost") == 0  # returns before the chart (:2687)
     # CalcEffectiveness ignores power: Stealth Rock counts.
     assert flags("Stealth Rock", "Normal", "Flying") == SUPER_EFFECTIVE
+
+
+def test_apply_type_chart_stab_then_each_entry(tables, names):
+    """BattleSystem_ApplyTypeChart (battle_lib.c:2560): STAB x15/10 (:2592), then each
+    chart entry through BattleSystem_Divide (:7547), Struggle unchanged (:2573)."""
+    s = roark_state(tables, names)  # Monferno (Fire/Fighting) vs Geodude (Rock/Ground)
+
+    def chart(side, move, value):
+        return int(apply_type_chart(tables, s, side, names.move(move), value))
+
+    assert chart(0, "Mach Punch", 7) == 20  # STAB 10, Rock x2, Ground x1
+    assert chart(0, "Ember", 40) == 30  # STAB 60, Rock x0.5, Ground x1
+    assert chart(0, "Ember", 1) == 1  # Divide keeps a non-zero value at least 1
+    assert chart(0, "Scratch", 40) == 20  # no STAB, Rock x0.5
+    assert chart(0, "Struggle", 40) == 40
+    assert chart(1, "Rock Throw", 40) == 60  # STAB 60, Fire x2, Fighting x0.5
+    assert chart(1, "Tackle", 40) == 40
+    assert chart(1, "Tackle", 0) == 0
 
 
 def test_too_many_sites_are_refused(tables, names):

@@ -50,7 +50,7 @@ def _i32(x) -> jnp.ndarray:
     return jnp.asarray(x).astype(_I32)
 
 
-def _divide(x: jnp.ndarray, d: int) -> jnp.ndarray:
+def divide(x: jnp.ndarray, d: int) -> jnp.ndarray:
     """``BattleSystem_Divide`` (battle_lib.c:3599) for non-negative ``x``."""
     return jnp.where(x == 0, 0, jnp.maximum(x // d, 1))
 
@@ -244,11 +244,11 @@ def _finish(
     e2 = jnp.where(t2 != t1, _i32(tables.type_chart[move_type, t2]), 10)
     t2_first = tables.type_chart_order[move_type, t2] < tables.type_chart_order[move_type, t1]
     first, second = jnp.where(t2_first, e2, e1), jnp.where(t2_first, e1, e2)
-    damage = _divide(_divide(damage * first, 10) * second, 10)
+    damage = divide(divide(damage * first, 10) * second, 10)
     damage = jnp.where(typeless, unchanged, damage)
     if variance_last:
         # trainer_ai.c:3109; an immunity is already 0 (:3106).
-        damage = _divide(damage * variance, 100)
+        damage = divide(damage * variance, 100)
     # Status moves never calculate damage; CheckTypeChart needs base power
     # (battle_controller_player.c:2354).
     return jnp.where((category == STATUS) | (power == 0), 0, damage)

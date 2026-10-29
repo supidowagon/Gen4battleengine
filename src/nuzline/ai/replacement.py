@@ -39,7 +39,7 @@ import jax
 import jax.numpy as jnp
 
 from nuzline.ai.policy import UnsupportedAi
-from nuzline.ai.switching import SUPER_EFFECTIVE, calc_effectiveness_flags, chart_multipliers
+from nuzline.ai.switching import SUPER_EFFECTIVE, apply_type_chart, calc_effectiveness_flags
 from nuzline.data.tables import Tables
 from nuzline.engine.damage import calc_move_damage
 from nuzline.engine.state import MOVES, SLOTS, BattleState
@@ -63,11 +63,6 @@ def _matchup(tables: Tables, atk_type, def_types) -> jnp.ndarray:
     return jnp.where(t2 != t1, mul * e2 // 10, mul)
 
 
-def _divide(x, d):
-    """``BattleSystem_Divide`` (battle_lib.c:3599) for non-negative ``x``."""
-    return jnp.where(x == 0, 0, jnp.maximum(x // d, 1))
-
-
 def _stage_2_score(tables: Tables, state: BattleState, move, power_mul) -> jnp.ndarray:
     """battle_lib.c:8055-8074: ``CalcMoveDamage`` by the fainted battler (side 1's
     active) against ``D``, then ``ApplyTypeChart`` with the fainted battler as attacker,
@@ -75,12 +70,7 @@ def _stage_2_score(tables: Tables, state: BattleState, move, power_mul) -> jnp.n
     ``ApplyTypeMultiplier`` (:7547); the ``MOVE_STATUS_IMMUNE`` check (:8070) only adds the
     refused Levitate and Magnet Rise."""
     score = calc_move_damage(tables, state, 1, move, power_mul) & _U8
-    a_types = state.types[1, state.active[1]].astype(_I32)
-    d_types = state.types[0, state.active[0]]
-    move_type = tables.move_type[move].astype(_I32)
-    score = jnp.where(jnp.any(a_types == move_type), score * 15 // 10, score)  # :2592
-    first, second = chart_multipliers(tables, move, d_types, state.gravity)  # :2611-2646
-    return _divide(_divide(score * first, 10) * second, 10) & _U8
+    return apply_type_chart(tables, state, 1, move, score) & _U8
 
 
 def _post_ko(tables: Tables, state: BattleState, power_mul) -> tuple[jnp.ndarray, jnp.ndarray]:

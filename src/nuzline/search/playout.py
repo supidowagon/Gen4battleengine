@@ -23,8 +23,9 @@ player's switch. A replacement in a turn the AI switched is refused (roark.md 14
 (3): ``Task_TrainerShowPartyMenu`` reads the stale ``aiSwitchedPartySlot``).
 
 Refusals cannot raise under ``jit``: a playout that meets one stops with
-``PlayoutResult.refused = 1`` (the turn is not played). Callers must not count a refused
-playout as a loss.
+``PlayoutResult.refused = 1`` and ``won = REFUSED_WON`` (-1; the turn is not played), so
+summing ``won`` over refused playouts cannot pass for losses. Callers must exclude
+refused playouts or refuse loudly.
 """
 
 from __future__ import annotations
@@ -59,6 +60,7 @@ from nuzline.engine.step import (
 )
 
 __all__ = [
+    "REFUSED_WON",
     "PlayoutResult",
     "batched_playout",
     "playout",
@@ -69,10 +71,11 @@ __all__ = [
 
 _I32, _F32 = jnp.int32, jnp.float32
 _NORMAL_POWER_MUL = 10
+REFUSED_WON = -1  # PlayoutResult.won of a refused playout
 
 
 class PlayoutResult(NamedTuple):
-    won: jnp.ndarray  # int8[], 1 = the player won the battle
+    won: jnp.ndarray  # int8[], 1 = the player won the battle, REFUSED_WON = refused
     player_faints: jnp.ndarray  # int8[]
     turns: jnp.ndarray  # int16[], turns played
     refused: jnp.ndarray  # int8[], 1 = stopped at a refused mechanic (no result)
@@ -192,8 +195,9 @@ def _run(tables: Tables, state: BattleState, key, max_turns: int, first_action):
 
     init = (state, key, jnp.int32(0), jnp.bool_(False))
     s, _, turns, refused = jax.lax.while_loop(cond, body, init)
+    won = (s.over != 0) & (s.winner == WINNER_PLAYER)
     return PlayoutResult(
-        won=((s.over != 0) & (s.winner == WINNER_PLAYER)).astype(jnp.int8),
+        won=jnp.where(refused, REFUSED_WON, won).astype(jnp.int8),
         player_faints=s.player_faints.astype(jnp.int8),
         turns=turns.astype(jnp.int16),
         refused=refused.astype(jnp.int8),

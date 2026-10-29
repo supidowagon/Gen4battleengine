@@ -56,6 +56,7 @@ import numpy as np
 
 from nuzline.data.tables import Tables
 from nuzline.engine.actions import MOVE_ACTIONS
+from nuzline.engine.damage import divide
 from nuzline.engine.state import MOVES, SLOTS, BattleState
 
 SWITCH_SITES = 9  # roark.md 11.1: 1 keep draw + 4 + 4 party-pass draws for Roark
@@ -194,6 +195,26 @@ def chart_multipliers(tables: Tables, move, def_types, gravity) -> tuple[jnp.nda
     m2 = jnp.where(t2 != t1, entry(t2), 10)
     t2_first = tables.type_chart_order[move_type, t2] < tables.type_chart_order[move_type, t1]
     return jnp.where(t2_first, m2, m1), jnp.where(t2_first, m1, m2)
+
+
+def apply_type_chart(tables: Tables, state: BattleState, atk_side, move, value) -> jnp.ndarray:
+    """``int32``: ``BattleSystem_ApplyTypeChart`` (battle_lib.c:2560) on ``value`` for
+    ``move`` by ``atk_side``'s active Pokemon against the other side's: STAB x15/10
+    (:2592), then each ``chart_multipliers`` factor through ``ApplyTypeMultiplier``'s
+    ``BattleSystem_Divide(value * mul, 10)`` (:7547); Struggle returns ``value``
+    unchanged (:2573). The type-chart modifiers (Adaptability, Normalize, Scrappy,
+    Levitate, Wonder Guard, Iron Ball, the Foresight-style volatiles) are not
+    implemented: ``policy.ai_refusals`` refuses them."""
+    move = jnp.asarray(move, _I32)
+    atk_side = jnp.asarray(atk_side, _I32)
+    a_types = state.types[atk_side, state.active[atk_side]].astype(_I32)
+    d_types = state.types[1 - atk_side, state.active[1 - atk_side]]
+    move_type = tables.move_type[move].astype(_I32)
+    value = jnp.asarray(value, _I32)
+    out = jnp.where(jnp.any(a_types == move_type), value * 15 // 10, value)
+    for mul in chart_multipliers(tables, move, d_types, state.gravity):
+        out = divide(out * mul, 10)
+    return jnp.where(move == MOVE_STRUGGLE, value, out)
 
 
 def _chart_flags(tables: Tables, move, def_types, gravity, update) -> jnp.ndarray:

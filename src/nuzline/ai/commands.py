@@ -28,7 +28,7 @@ import jax
 import jax.numpy as jnp
 
 from nuzline.ai.outcome import AiOutcome, script_roll_sites
-from nuzline.ai.switching import INEFFECTIVE, MOVE_STRUGGLE, chart_multipliers, type_chart_flags
+from nuzline.ai.switching import INEFFECTIVE, apply_type_chart, type_chart_flags
 from nuzline.data.tables import Tables
 from nuzline.engine.actions import usable_moves
 from nuzline.engine.damage import ai_damage_for_roll
@@ -234,16 +234,8 @@ def effectiveness_class(tables: Tables, state: BattleState, move) -> jnp.ndarray
     Miracle Eye, Roost, Magnet Rise and Ingrain change this value and are refused
     (``policy.ai_refusals``)."""
     move = jnp.asarray(move, _I32)
-    a, d = state.active[1], state.active[0]
-    d_types = state.types[0, d]
-    move_type = tables.move_type[move].astype(_I32)
-    value = jnp.asarray(TypeMulti.BASE, _I32)
-    stab = jnp.any(state.types[1, a].astype(_I32) == move_type)
-    value = jnp.where(stab, value * 15 // 10, value)
-    for mul in chart_multipliers(tables, move, d_types, state.gravity):
-        # ApplyTypeMultiplier (battle_lib.c:7542): BattleSystem_Divide(damage * mul, 10).
-        product = value * mul
-        value = jnp.where(product == 0, 0, jnp.maximum(product // 10, 1))
+    d_types = state.types[0, state.active[0]]
+    value = apply_type_chart(tables, state, 1, move, TypeMulti.BASE)
     stab_value = int(TypeMulti.STAB)
     mapped = jnp.select(
         [
@@ -256,9 +248,8 @@ def effectiveness_class(tables: Tables, state: BattleState, move) -> jnp.ndarray
         value,
     )
     immune = (type_chart_flags(tables, move, d_types, state.gravity) & INEFFECTIVE) != 0
-    mapped = jnp.where(immune, TypeMulti.IMMUNE, mapped)
-    # ApplyTypeChart returns Struggle's damage unchanged (battle_lib.c:2573).
-    return jnp.where(move == MOVE_STRUGGLE, TypeMulti.BASE, mapped).astype(_I32)
+    # Struggle: ApplyTypeChart returns 40 unchanged and sets no bit (battle_lib.c:2573).
+    return jnp.where(immune, TypeMulti.IMMUNE, mapped).astype(_I32)
 
 
 def attacker_ability(tables: Tables, state: BattleState) -> jnp.ndarray:
