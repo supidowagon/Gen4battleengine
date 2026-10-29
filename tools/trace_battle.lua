@@ -4,7 +4,8 @@
 -- Script Window > Browse > this file > Run, then start the battle. The output is JSON
 -- lines (docs/tracing.md, "Raw trace format"):
 --   {"kind":"turn",...}      at every command selection, and once more at the result
---   {"kind":"hit",...}       when a move's damage is about to be applied
+--   {"kind":"hit",...}       when a move's damage is about to be applied, and when a
+--                            confused battler hurts itself (attacker == defender)
 --   {"kind":"move_end",...}  at the end of every move
 -- Convert the trace with tools/trace_to_state.py. Every address below comes from the
 -- decomp's struct definitions (docs/tracing.md, "RAM layout"); the VERIFY ones are not
@@ -35,12 +36,14 @@ local SYS = {
 -- struct BattleContext (include/battle/battle_context.h)
 local CTX = {
   command = 0x08,
+  commandNext = 0x0C,
   attacker = 0x64,
   defender = 0x6C,
   totalTurns = 0x150, -- VERIFY: forward chain from padding0060 (enum NarcID = 4 bytes)
   fieldConditionsMask = 0x180, -- VERIFY: same chain
   damage = 0x2144, -- int, negative at BATTLE_CONTROL_UPDATE_HP
   criticalMul = 0x2150,
+  hpCalcTemp = 0x215C, -- int, minus the confusion self-hit damage
   moveStatusFlags = 0x216C,
   selectedPartySlot = 0x219C, -- u8[4]; VERIFY that it indexes the battle's Party
   battleMons = 0x2D40, -- BattleMon[4]
@@ -69,7 +72,9 @@ local PKM = { personality = 0x00, flags = 0x04, checksum = 0x06, blocks = 0x08, 
 local CMD = {
   INIT_COMMAND_SELECTION = 4,
   COMMAND_SELECTION_INPUT = 5,
+  EXEC_SCRIPT = 21,
   UPDATE_HP = 27,
+  LOOP_FAINTED = 33,
   MOVE_END = 39,
   RESULT = 41,
 }
@@ -217,11 +222,11 @@ local function turn_record(sys, ctx, command)
   }
 end
 
-local function hit_record(ctx, damage)
+local function hit_record(ctx, damage, defender)
   local m0, m1 = battle_mon(ctx, 0), battle_mon(ctx, 1)
   return {
     kind = "hit", turn = s32(ctx + CTX.totalTurns),
-    attacker = s32(ctx + CTX.attacker), defender = s32(ctx + CTX.defender),
+    attacker = s32(ctx + CTX.attacker), defender = defender or s32(ctx + CTX.defender),
     move = u32(ctx + CTX.moveCur), damage = damage,
     crit = s32(ctx + CTX.criticalMul) > 1 and 1 or 0,
     active = { u8(ctx + CTX.selectedPartySlot), u8(ctx + CTX.selectedPartySlot + 1) },
@@ -293,6 +298,17 @@ while true do
         elseif cmd == CMD.UPDATE_HP then
           local damage = -s32(ctx + CTX.damage)
           if damage ~= 0 then emit(hit_record(ctx, damage)) end
+        elseif cmd == CMD.EXEC_SCRIPT then
+          -- A confusion self-hit never reaches UPDATE_HP: the status check sets
+          -- defender = attacker, hpCalcTemp = minus the damage, and runs
+          -- subscript_hurt_self_in_confusion before LOOP_FAINTED
+          -- (battle_controller_player.c:2628-2638).
+          local attacker = s32(ctx + CTX.attacker)
+          if u32(ctx + CTX.commandNext) == CMD.LOOP_FAINTED
+              and s32(ctx + CTX.defender) == attacker then
+            local damage = -s32(ctx + CTX.hpCalcTemp)
+            if damage > 0 then emit(hit_record(ctx, damage, attacker)) end
+          end
         elseif cmd == CMD.MOVE_END then
           emit(move_end_record(ctx))
         elseif cmd == CMD.RESULT then

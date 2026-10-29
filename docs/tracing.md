@@ -130,19 +130,22 @@ says what it depends on, and "Verifying the addresses" below says how to check i
 | Field | Offset | Derivation |
 |---|---|---|
 | `command` | `0x08` | after `curCommandState[4]`, `nextCommandState[4]` |
+| `commandNext` | `0x0C` | the int after `command` |
 | `attacker`, `defender` | `0x64`, `0x6C` | `padding0060` at `0x60` |
 | `totalTurns` | `0x150` | **VERIFY**: forward from `0x60`. This assumes `enum NarcID` is 4 bytes (mwcc's default `-enum int`) and `BattleMessage` is `0x24` bytes |
 | `fieldConditionsMask` | `0x180` | **VERIFY**: same chain as `totalTurns` |
 | `damage` | `0x2144` | backward from `battleMons` (`0x2D40`); see below |
 | `criticalMul` | `0x2150` | same chain |
+| `hpCalcTemp` | `0x215C` | same chain: `criticalMul` `0x2150`, `movePower` `0x2154`, `powerMul` `0x2158`, `hpCalcTemp` `0x215C`; then `moveType` `0x2160`, `moveEffectChance` `0x2164`, `prizeMoneyMul` `0x2168`, which meets `moveStatusFlags` at `0x216C` |
 | `moveStatusFlags` | `0x216C` | same chain |
 | `selectedPartySlot[4]` (u8) | `0x219C` | same chain |
 | `moveCur` | `0x3044` | `moveTemp` `0x3040`, see `battleMons` |
 | `battleMons[4]` | `0x2D40`, stride `0xC0` | `moveTemp` sits at `0x3040`, counted back from `padding310A`. `battleMons` is `4 * 0xC0` before it. Then `battleScript[400]` int (`0x2700`), `ioBuffer[4][256]` (`0x2300`), `ioQueue[4][4][16]` (`0x2200`), `monSpeedValues` `0x21F0`, `monSpeedOrder` `0x21EC`, `battlerActionOrder` `0x21E8`, `battlerActions[4][4]` u32 `0x21A8`, `aiSwitchedPartySlot` `0x21A4`, `switchedPartySlot` `0x21A0`, `selectedPartySlot` `0x219C`, `clearVolatileStatus[4]` `0x218C`, three u32 `0x2180`-`0x2188`, four u8 `0x217C`, `sideEffect*Flags` `0x2170`-`0x2178`, `moveStatusFlags` `0x216C`, ... `criticalMul` `0x2150`, `criticalBoosts` `0x214C`, `hitDamage` `0x2148`, `damage` `0x2144` |
 
 `command` values come from `enum BattleControlSequence`
-(`include/battle/battle_controller_player.h`). The script uses three of them, and each
-is checked against the enum's `UNUSED_nn` markers:
+(`include/battle/battle_controller_player.h`). The script uses these, and each is
+checked against the enum's `UNUSED_nn` markers (`tests/test_trace_to_state.py` also
+checks the script's `CMD` table against the enum):
 
 - `INIT_COMMAND_SELECTION = 4`: the turn boundary. `COMMAND_SELECTION_INPUT = 5` also
   counts when no record has been written for the current `totalTurns` yet, for a run
@@ -150,6 +153,14 @@ is checked against the enum's `UNUSED_nn` markers:
 - `UPDATE_HP = 27`: a move's damage is about to be applied. `damage` holds minus the
   uncapped damage (`BattleControllerPlayer_UpdateHP`,
   `battle_controller_player.c:3341`).
+- `EXEC_SCRIPT = 21` with `commandNext == LOOP_FAINTED = 33` and
+  `attacker == defender`: a confusion self-hit. It never enters `UPDATE_HP`: the status
+  check (`battle_controller_player.c:2628-2638`) sets `defender = attacker`, stores
+  minus the damage in `hpCalcTemp`, and runs `subscript_hurt_self_in_confusion.s`,
+  whose HP update is a script subroutine, before `LOOP_FAINTED`. The script writes a
+  `hit` record with `damage = -hpCalcTemp` and `defender = attacker`. (A disobedient
+  mon hurting itself, `:3168`, would match too; the player's own Pokemon always obey
+  in Roark's fight.)
 - `MOVE_END = 39` and `RESULT = 41`: the end of a move, and the battle result.
 
 `BattleContext_Main` (`battle_controller_player.c:194`) runs one command per call. The
@@ -248,7 +259,9 @@ battlers: 0 is the player and 1 is the opponent.
   see above), and once more at `RESULT` (the last record; `"command": 41`). `stages` is the active battler's `statBoosts` in decomp
   order. `field` is `fieldConditionsMask`. `rng` is `seedRandNext`, which the converter
   does not use yet and keeps for a later RNG cross-check.
-- `hit` is written at each `UPDATE_HP` with a non-zero `damage`. `damage` is the positive
+- `hit` is written at each `UPDATE_HP` with a non-zero `damage`, and at each confusion
+  self-hit (`attacker == defender`, `damage` from `hpCalcTemp`; its `move` and `crit`
+  are stale and the converter ignores them). `damage` is the positive
   uncapped damage, `crit` is `criticalMul > 1`, and `active`, `hp`, `status` and
   `stages` are both battlers' values at that moment (before the HP drop). `crit` may be
   `null` when `criticalMul` cannot be trusted; the converter then tries both.

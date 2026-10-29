@@ -12,6 +12,7 @@ from __future__ import annotations
 import copy
 import itertools
 import json
+import re
 from pathlib import Path
 
 import jax
@@ -21,8 +22,8 @@ import pytest
 
 from nuzline.data.party import load_party
 from nuzline.data.trainer import IntermediateData, build_trainer_party, load_trainers
-from nuzline.engine.damage import damage_for_roll
-from nuzline.engine.ids import Stat, Status, Weather
+from nuzline.engine.damage import confusion_damage, damage_for_roll
+from nuzline.engine.ids import EffectId, Stat, Status, Weather
 from nuzline.engine.order import (
     MOVE_ACTIONS,
     action_order,
@@ -54,6 +55,8 @@ from tools.trace_to_state import (
 
 ROOT = Path(__file__).resolve().parents[1]
 PARTY = ROOT / "tests" / "fixtures" / "golden_party_roark_01.toml"
+LUA = ROOT / "tools" / "trace_battle.lua"
+DECOMP = ROOT / "external" / "pokeplatinum"
 ROARK_ID = 246
 EMBER, MACH_PUNCH, BUBBLE, POUND = 2, 3, 2, 0  # move slots of Monferno / Prinplup
 TO_PRINPLUP = MOVE_ACTIONS + 1
@@ -153,13 +156,25 @@ def _move_events(tables, state, actions, outcome, turn) -> list[dict]:
             active[side] = int(actions[side]) - MOVE_ACTIONS
             stages[side] = [6] * 8
     hp = {(side, active[side]): int(state.hp[side, active[side]]) for side in (0, 1)}
+    confusion = [int(state.confusion[0]), int(state.confusion[1])]
     events = []
     for side in np.asarray(action_order(tables, state, jnp.asarray(actions), outcome)).tolist():
         if actions[side] >= MOVE_ACTIONS:
             continue
         user, target = (side, active[side]), (1 - side, active[1 - side])
-        if hp[user] == 0 or int(outcome.full_para[side]):
-            continue  # fainted, or fully paralyzed, before moving
+        if hp[user] == 0:
+            continue  # fainted before moving
+        hit_state = state._replace(active=jnp.asarray(active, jnp.int8))
+        confusion[side] = max(confusion[side] - 1, 0)
+        if confusion[side] > 0 and int(outcome.confusion_hit[side]):
+            # The tracer's self-hit record (BATTLE_CONTROL_EXEC_SCRIPT with commandNext
+            # LOOP_FAINTED): attacker == defender, damage = -hpCalcTemp, uncapped.
+            damage = int(confusion_damage(tables, hit_state, side, outcome.roll[side, 0]))
+            events.append(_hit_event(state, turn, side, side, 0, damage, 0, active, hp, stages))
+            hp[user] = max(hp[user] - damage, 0)
+            continue
+        if int(outcome.full_para[side]):
+            continue  # fully paralyzed before moving
         move = int(selected_move(tables, state, side, actions[side])[0])
         missed = int(outcome.hit[side, 0]) == 0
         events.append(
@@ -171,42 +186,45 @@ def _move_events(tables, state, actions, outcome, turn) -> list[dict]:
                 "flags": MOVE_STATUS_MISSED if missed else 0,
             }
         )
+        if not missed and int(tables.move_effect[move]) == EffectId.CONFUSE_FOE:
+            confusion[1 - side] = confusion[1 - side] or int(outcome.duration[side])
         if missed or int(tables.move_power[move]) == 0:
             continue
-        hit_state = state._replace(active=jnp.asarray(active, jnp.int8))
         crit = int(outcome.crit[side, 0])
         damage = int(
             damage_for_roll(tables, hit_state, side, move, crit != 0, outcome.roll[side, 0])
         )
         events.insert(
             len(events) - 1,
-            {
-                "kind": "hit",
-                "turn": turn,
-                "attacker": side,
-                "defender": 1 - side,
-                "move": move,
-                "damage": damage,
-                "crit": crit,
-                "active": list(active),
-                "hp": [hp[(0, active[0])], hp[(1, active[1])]],
-                "status": [
-                    _raw_status(
-                        int(state.status[b, active[b]]), int(state.status_counter[b, active[b]])
-                    )
-                    for b in (0, 1)
-                ],
-                "stages": [list(stages[0]), list(stages[1])],
-            },
+            _hit_event(state, turn, side, 1 - side, move, damage, crit, active, hp, stages),
         )
         hp[target] = max(hp[target] - damage, 0)
     return events
 
 
-def _engine_trace(tables, names, script=SCRIPT, leads=(0, 0)):
+def _hit_event(state, turn, attacker, defender, move, damage, crit, active, hp, stages) -> dict:
+    return {
+        "kind": "hit",
+        "turn": turn,
+        "attacker": attacker,
+        "defender": defender,
+        "move": move,
+        "damage": damage,
+        "crit": crit,
+        "active": list(active),
+        "hp": [hp[(0, active[0])], hp[(1, active[1])]],
+        "status": [
+            _raw_status(int(state.status[b, active[b]]), int(state.status_counter[b, active[b]]))
+            for b in (0, 1)
+        ],
+        "stages": [list(stages[0]), list(stages[1])],
+    }
+
+
+def _engine_trace(tables, names, script=SCRIPT, leads=(0, 0), party=PARTY):
     """(raw records, engine states before each turn and after the last)."""
     trainer = next(t for t in load_trainers(INTERMEDIATE) if t.id == ROARK_ID)
-    player = load_party(PARTY, names)
+    player = load_party(party, names)
     state = initial_state(tables, player, trainer, leads)
     records, states = [_turn_record(state, 0)], [state]
     for turn, (actions, outcome) in enumerate(script):
@@ -226,10 +244,10 @@ def _write_raw(path: Path, records: list[dict]) -> Path:
     return path
 
 
-def _bundle(tmp_path: Path, names, records) -> Path:
+def _bundle(tmp_path: Path, names, records, party=PARTY) -> Path:
     raw = _write_raw(tmp_path / "raw.jsonl", records)
     out = tmp_path / "bundle.json"
-    out.write_text(json.dumps(bundle_trace(raw, PARTY, names, ROARK_ID)), encoding="utf-8")
+    out.write_text(json.dumps(bundle_trace(raw, party, names, ROARK_ID)), encoding="utf-8")
     return out
 
 
@@ -253,6 +271,83 @@ def test_paralysis_inflicted_earlier_in_the_turn_can_fully_paralyze(tables, name
     assert int(turns[0].outcome.full_para[1]) == 1
     assert turns[1].actions == PARA_SCRIPT[1][0]
     assert int(turns[1].outcome.full_para[1]) == 0
+
+
+SUPERSONIC = 1  # Monferno's slot 1 in the confusion party (Leer replaced)
+
+
+def _confusion_party(tmp_path: Path) -> Path:
+    text = PARTY.read_text(encoding="utf-8")
+    text = text.replace('"Scratch", "Leer",', '"Scratch", "Supersonic",', 1)
+    path = tmp_path / "confusion_party.toml"
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+# Supersonic confuses the slower Geodude for 2 turns (the converter's first duration
+# candidate); its counter drops to 1 when it moves the same turn and it hurts itself
+# (roll 6). On the next turn the counter reaches 0, it snaps out and attacks.
+CONFUSION_SCRIPT = [
+    (
+        (SUPERSONIC, ROCK_THROW),
+        _outcome(o_roll=6)._replace(confusion_hit=jnp.asarray([0, 1], jnp.int8)),
+    ),
+    ((EMBER, ROCK_THROW), _outcome(p_roll=4, o_roll=3)),
+]
+
+
+def test_a_confusion_self_hit_is_inferred(tables, names, tmp_path):
+    party = _confusion_party(tmp_path)
+    records, states = _engine_trace(tables, names, CONFUSION_SCRIPT, party=party)
+    assert int(states[1].confusion[1]) == 1
+    self_hits = [r for r in records if r["kind"] == "hit" and r["attacker"] == r["defender"]]
+    assert len(self_hits) == 1 and self_hits[0]["attacker"] == 1 and self_hits[0]["turn"] == 0
+    assert int(states[1].hp[1, 0]) == int(states[0].hp[1, 0]) - self_hits[0]["damage"] > 0
+    assert int(states[1].pp[1, 0, ROCK_THROW]) == int(states[0].pp[1, 0, ROCK_THROW])
+    turns = convert(_bundle(tmp_path, names, records, party), tables, names)
+    assert len(turns) == len(states)
+    for i, (turn, expected) in enumerate(zip(turns, states)):
+        for name in BattleState._fields:
+            assert np.array_equal(getattr(turn.state, name), getattr(expected, name)), (
+                f"turn {i} field {name}"
+            )
+        assert turn.mismatched == ()
+    assert [int(c) for c in turns[0].outcome.confusion_hit] == [0, 1]
+    assert [int(c) for c in turns[1].outcome.confusion_hit] == [0, 0]
+    rolls = [r for _, r in turns[0].roll_candidates[(1, 0)]]
+    assert 6 in rolls and int(turns[0].outcome.roll[1, 0]) == min(rolls)
+
+
+def _lua_table(name: str) -> dict[str, int]:
+    """The integer fields of the ``local NAME = { ... }`` table in trace_battle.lua."""
+    lua = LUA.read_text(encoding="utf-8")
+    body = re.search(rf"local {name} = \{{(.*?)\n\}}", lua, re.DOTALL)
+    assert body, name
+    fields = re.findall(r"(\w+) = (0x[0-9A-Fa-f]+|\d+)", body.group(1))
+    return {k: int(v, 0) for k, v in fields}
+
+
+def _decomp_enum() -> dict[str, int]:
+    header = DECOMP / "include" / "battle" / "battle_controller_player.h"
+    if not header.exists():
+        pytest.skip("external/pokeplatinum not cloned")
+    body = re.search(r"enum BattleControlSequence \{(.*?)\};", header.read_text(), re.DOTALL)
+    return {n: i for i, n in enumerate(re.findall(r"BATTLE_CONTROL_(\w+)", body.group(1)))}
+
+
+def test_the_tracer_records_confusion_self_hits():
+    ctx, cmd = _lua_table("CTX"), _lua_table("CMD")
+    # BattleContext: commandNext follows command; hpCalcTemp is the 7th int from damage
+    # and the 4th before moveStatusFlags.
+    assert ctx["command"] == 0x08 and ctx["commandNext"] == 0x0C
+    assert ctx["hpCalcTemp"] == ctx["damage"] + 6 * 4 == ctx["moveStatusFlags"] - 4 * 4
+    enum = _decomp_enum()
+    for name, value in cmd.items():
+        assert enum[name] == value, name
+    assert {"EXEC_SCRIPT", "LOOP_FAINTED"} <= cmd.keys()
+    lua = LUA.read_text(encoding="utf-8")
+    assert "cmd == CMD.EXEC_SCRIPT" in lua
+    assert "CTX.commandNext" in lua and "CTX.hpCalcTemp" in lua
 
 
 def _variant_values(tables, state, after, actions, field, index=()):
