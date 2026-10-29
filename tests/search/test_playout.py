@@ -13,6 +13,8 @@ from nuzline.search.playout import (
     playout,
     playout_from_action,
     playout_policy,
+    refusal_reason,
+    replacement_refusal,
     send_replacements,
 )
 from tests.engine.helpers import roark_state
@@ -143,3 +145,23 @@ def test_refused_playout_cannot_be_counted_as_a_loss(tables, names):
     s = roark_state(tables, names, player_species="Gastly", player_ability="Levitate")
     r = playout(tables, s, jax.random.PRNGKey(10))
     assert (int(r.won), int(r.refused), int(r.turns)) == (REFUSED_WON, 1, 0)
+
+
+def test_refusal_reason_names_the_refused_mechanic(tables, names):
+    # The traced playout only says "refused"; the eager replay of the same key names
+    # the mechanic (here the AI's Levitate refusal).
+    s = roark_state(tables, names, player_species="Gastly", player_ability="Levitate")
+    reason = refusal_reason(tables, s, 0, jax.random.PRNGKey(10))
+    assert reason is not None and "Levitate" in reason
+
+
+def test_refusal_reason_is_none_for_a_playout_that_is_not_refused(tables, names):
+    s = roark_state(tables, names)
+    assert int(playout_from_action(tables, s, 0, jax.random.PRNGKey(11)).refused) == 0
+    assert refusal_reason(tables, s, 0, jax.random.PRNGKey(11)) is None
+
+
+def test_replacement_refusal_names_the_stale_switch_slot(tables, names):
+    s = roark_state(tables, names).replace_hp(1, 0, 0)
+    assert "aiSwitchedPartySlot" in replacement_refusal(tables, s, True, 10)
+    assert replacement_refusal(tables, s, False, 10) is None

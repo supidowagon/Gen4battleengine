@@ -80,5 +80,5 @@ def test_refused_playouts_are_refused_loudly(tables, names):
     # Levitate on the player's lead is refused by the AI: the ranking must not count
     # those playouts as losses.
     s = roark_state(tables, names, player_species="Gastly", player_ability="Levitate")
-    with pytest.raises(UnsupportedAi, match="refused"):
+    with pytest.raises(UnsupportedAi, match=r"(?s)refused.*Levitate"):
         rank_actions(tables, names, s, n=8, key=jax.random.PRNGKey(5))

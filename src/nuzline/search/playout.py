@@ -25,7 +25,8 @@ player's switch. A replacement in a turn the AI switched is refused (roark.md 14
 Refusals cannot raise under ``jit``: a playout that meets one stops with
 ``PlayoutResult.refused = 1`` and ``won = REFUSED_WON`` (-1; the turn is not played), so
 summing ``won`` over refused playouts cannot pass for losses. Callers must exclude
-refused playouts or refuse loudly.
+refused playouts or refuse loudly; ``refusal_reason`` replays one playout outside
+``jit`` and names the refused mechanic for the message.
 """
 
 from __future__ import annotations
@@ -37,7 +38,7 @@ import jax
 import jax.numpy as jnp
 
 from nuzline.ai.outcome import sample_ai_outcome
-from nuzline.ai.policy import ai_action_distribution, ai_policy
+from nuzline.ai.policy import UnsupportedAi, ai_action_distribution, ai_policy, ai_refusals
 from nuzline.ai.replacement import post_ko_switch_in
 from nuzline.data.tables import Tables
 from nuzline.engine.actions import (
@@ -66,6 +67,8 @@ __all__ = [
     "playout",
     "playout_from_action",
     "playout_policy",
+    "refusal_reason",
+    "replacement_refusal",
     "send_replacements",
 ]
 
@@ -164,20 +167,31 @@ def send_replacements(
     return state, refused
 
 
-def _turn(tables: Tables, state: BattleState, player_action, key):
-    """One turn after the player's choice: ``(state, refused)``."""
+def _play(tables: Tables, state: BattleState, player_action, key):
+    """One turn after the player's choice, before the opponent's replacement:
+    ``(state after step, ai_refused, ai_switched, power_mul)``."""
     k_ai, k_turn = jax.random.split(key)
     opp_action = ai_policy(tables, state, sample_ai_outcome(k_ai, tables, state))
-    refused = opp_action < 0  # switching.REFUSED_ACTION
+    ai_refused = opp_action < 0  # switching.REFUSED_ACTION
     actions = jnp.stack([player_action, jnp.maximum(opp_action, 0)]).astype(_I32)
     picks = [selected_move(tables, state, side, actions[side]) for side in (0, 1)]
     choices = (jnp.stack([p[0] for p in picks]), jnp.stack([p[1] for p in picks]))
     pursued = pursuit_fires(tables, state, 0, actions, choices)
     played = step(tables, state, actions, sample_outcome(k_turn, tables, state, actions))
     power_mul = jnp.where(pursued, PURSUIT_POWER_MUL, _NORMAL_POWER_MUL)
-    played, replace_refused = send_replacements(tables, played, is_switch(actions[1]), power_mul)
+    return played, ai_refused, is_switch(actions[1]), power_mul
+
+
+def _turn(tables: Tables, state: BattleState, player_action, key):
+    """One turn after the player's choice: ``(state, refused)``."""
+    played, refused, ai_switched, power_mul = _play(tables, state, player_action, key)
+    played, replace_refused = send_replacements(tables, played, ai_switched, power_mul)
     refused = refused | replace_refused
     return _select(refused, state, played), refused
+
+
+def _first_action(turns, first_action, chosen):
+    return jnp.where((turns == 0) & (first_action >= 0), first_action, chosen)
 
 
 def _run(tables: Tables, state: BattleState, key, max_turns: int, first_action):
@@ -189,7 +203,7 @@ def _run(tables: Tables, state: BattleState, key, max_turns: int, first_action):
         s, key, turns, _ = carry
         key, k_policy, k_turn = jax.random.split(key, 3)
         chosen = playout_policy(tables, s, k_policy)
-        action = jnp.where((turns == 0) & (first_action >= 0), first_action, chosen)
+        action = _first_action(turns, first_action, chosen)
         s, refused = _turn(tables, s, action.astype(_I32), k_turn)
         return s, key, turns + jnp.where(refused, 0, 1), refused
 
@@ -224,3 +238,53 @@ def batched_playout(tables: Tables, states: BattleState, keys, max_turns: int = 
     """``playout`` over a leading batch axis of ``states`` and ``keys`` (``jax.vmap``,
     ``tables`` shared); ``max_turns`` is static."""
     return jax.vmap(lambda s, k: playout(tables, s, k, max_turns))(states, keys)
+
+
+def replacement_refusal(tables: Tables, state: BattleState, ai_switched, power_mul) -> str | None:
+    """Why ``send_replacements`` refuses the concrete ``state`` (a state after ``step``),
+    or ``None`` when it does not; mirrors its loop outside ``jit``."""
+    for _ in range(SLOTS - 1):
+        if int(needs_replacement(state)[1]) != 1:
+            return None
+        if bool(ai_switched):
+            return (
+                "replacement: the opponent's Pokemon fainted in a turn its AI switched; "
+                "Task_TrainerShowPartyMenu reads the stale aiSwitchedPartySlot "
+                "(docs/ai/roark.md 14, item 3); not implemented"
+            )
+        try:
+            slot = post_ko_switch_in(tables, state, power_mul)
+        except UnsupportedAi as e:
+            return str(e)
+        state = replace(tables, state, 1, slot)
+    return None
+
+
+_play_jit = jax.jit(_play)
+_turn_jit = jax.jit(_turn)
+_policy_jit = jax.jit(playout_policy)
+
+
+def refusal_reason(
+    tables: Tables, state: BattleState, action, key, max_turns: int = 100
+) -> str | None:
+    """Why ``playout_from_action(tables, state, action, key, max_turns)`` is refused, or
+    ``None`` when it is not: the playout is replayed turn by turn outside the loop (the
+    same key splits) and the refused turn's AI (``ai_refusals``) or replacement
+    (``replacement_refusal``) is asked on its concrete state."""
+    first = jnp.asarray(action, _I32)
+    for turns in range(max_turns):
+        if int(state.over) != 0:
+            return None
+        key, k_policy, k_turn = jax.random.split(key, 3)
+        chosen = _policy_jit(tables, state, k_policy)
+        player_action = _first_action(turns, first, chosen).astype(_I32)
+        played, refused = _turn_jit(tables, state, player_action, k_turn)
+        if bool(refused):
+            reasons = ai_refusals(tables, state)
+            if reasons:
+                return "; ".join(reasons)
+            played, _, ai_switched, power_mul = _play_jit(tables, state, player_action, k_turn)
+            return replacement_refusal(tables, played, ai_switched, power_mul)
+        state = played
+    return None

@@ -11,7 +11,8 @@ The ranking is sorted strictly by ``(-p_win0, -p_win, action)`` (plan ruling);
 statistical ties are reported, not reordered: ``ActionResult.tied_with_best`` marks the
 actions whose interval overlaps the leader's. A playout that meets a refused mechanic
 (``PlayoutResult.refused``) has no result; any such playout makes ``rank_actions``
-raise ``UnsupportedAi`` rather than count it.
+raise ``UnsupportedAi`` rather than count it, naming the refused mechanic of the first
+refused playout (``refusal_reason``).
 """
 
 from __future__ import annotations
@@ -29,7 +30,7 @@ from nuzline.ai.policy import UnsupportedAi
 from nuzline.data.tables import Names, Tables
 from nuzline.engine.actions import MOVE_ACTIONS, NUM_ACTIONS, legal_actions, usable_moves
 from nuzline.engine.state import BattleState
-from nuzline.search.playout import PlayoutResult, playout_from_action
+from nuzline.search.playout import PlayoutResult, playout_from_action, refusal_reason
 
 __all__ = ["ActionResult", "Ranking", "rank_actions", "wilson"]
 
@@ -117,9 +118,11 @@ def rank_actions(
     for i, action in enumerate(legal.tolist()):
         label = _label(names, state, action, struggle)
         if refused[i].any():
+            first = int(np.flatnonzero(refused[i])[0])
+            reason = refusal_reason(tables, state, action, keys[first], max_turns)
             raise UnsupportedAi(
-                f"{int(refused[i].sum())} of {n} playouts from {label!r} refused "
-                "(a mechanic the AI or the opponent's replacement does not support)"
+                f"{int(refused[i].sum())} of {n} playouts from {label!r} refused; "
+                f"playout {first}: {reason or 'reason not reproduced outside jit'}"
             )
         won = np.asarray(out.won[i]) == 1
         faints = np.asarray(out.player_faints[i]).astype(np.int32)
