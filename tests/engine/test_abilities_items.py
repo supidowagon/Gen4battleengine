@@ -1,6 +1,7 @@
 """Intimidate, pinch abilities, Rivalry, Oran and Sitrus Berries (decomp citations in
 ``hooks.py``)."""
 
+from nuzline.engine.hooks import after_damage_items
 from nuzline.engine.ids import AbilityId, ItemId, Status
 from nuzline.engine.outcome import empty_outcome
 from nuzline.engine.step import step
@@ -110,3 +111,17 @@ def test_rivalry_same_gender_boost(tables, names):
     a = step(tables, male, A("Tackle", "Leer", male, names), empty_outcome())
     b = step(tables, female, A("Tackle", "Leer", female, names), empty_outcome())
     assert (int(male.hp[1, 0]) - int(a.hp[1, 0])) > (int(female.hp[1, 0]) - int(b.hp[1, 0]))
+
+
+def test_after_damage_items_cond_gates_the_check(tables, names):
+    # ``cond`` is step's ``connected`` gate on the after-move item check
+    # (AFTER_MOVE_EFFECT_ATTACKER_ITEM / _DEFENDER_ITEM, battle_controller_player.c:3684,
+    # :3691): with cond=False nothing changes; the default (True) eats the berry.
+    s = roark_state(tables, names, player_species="Starly")  # holds Oran Berry
+    s = s.replace_hp(0, 0, int(s.max_hp[0, 0]) // 2)
+    gated = after_damage_items(tables, s, 0, cond=False)
+    assert int(gated.hp[0, 0]) == int(s.hp[0, 0])
+    assert int(gated.item[0, 0]) == names.item("Oran Berry")
+    eaten = after_damage_items(tables, s, 0)
+    assert int(eaten.hp[0, 0]) == int(s.hp[0, 0]) + 10
+    assert int(eaten.item_consumed[0, 0]) == names.item("Oran Berry")
