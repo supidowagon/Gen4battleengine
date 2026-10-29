@@ -370,16 +370,17 @@ class _Turn:
         in this state with these actions (docs/tracing.md)."""
         tables, state = self.tables, self.state
         options: list[tuple[str, tuple, list]] = []  # (field, index, values)
-        if int(effective_speed(state, 0)) == int(effective_speed(state, 1)):
-            options += [("speed_tie", (), [0, 1]), ("end_speed_tie", (), [0, 1])]
+        if _tied(state):
+            options.append(("speed_tie", (), [0, 1]))
+        if any(_tied(s) for s in self._end_of_turn_states(actions)):
+            options.append(("end_speed_tie", (), [0, 1]))
         connected = [bool(base["hit"][s, 0]) and self._acted(s) for s in (0, 1)]
         fixed: list[tuple[str, tuple, int]] = []
         for side in (0, 1):
-            mon = int(state.active[side])
-            status = int(state.status[side, mon])
-            if status == Status.PARALYSIS:
+            statuses = self._statuses(side)
+            if Status.PARALYSIS in statuses:
                 options.append(("full_para", (side,), [0, 1]))
-            if status == Status.FREEZE:
+            if Status.FREEZE in statuses:
                 options.append(("thaw", (side,), [0, 1]))
             if actions[side] >= MOVE_ACTIONS or not connected[side]:
                 continue
@@ -414,6 +415,29 @@ class _Turn:
                 o[name][index] = value
             out.append(o)
         return out
+
+    def _statuses(self, side: int) -> set[int]:
+        """The statuses the side's start-of-turn active mon has at any point the trace
+        shows: at the start, in a ``hit`` record and in the next record. A status
+        inflicted before the mon moves (Stun Spore, Static) needs its ``full_para`` or
+        ``thaw`` draw on the same turn."""
+        mon = int(self.state.active[side])
+        statuses = {int(self.state.status[side, mon]), int(self.after["status"][side, mon])}
+        for e in self.events:
+            if e["kind"] == "hit" and e["active"][side] == mon:
+                statuses.add(int(decode_status(e["status"][side])[0]))
+        return statuses
+
+    def _end_of_turn_states(self, actions: tuple[int, int]) -> list[BattleState]:
+        """States whose speeds the end-of-turn order may compare: the start state, with
+        the switches made, and with the next record's status and stages over that."""
+        active = np.asarray(self.state.active).copy()
+        for side in (0, 1):
+            if MOVE_ACTIONS <= actions[side] < FIRST_ITEM_ACTION:
+                active[side] = actions[side] - MOVE_ACTIONS
+        switched = self.state._replace(active=jnp.asarray(active))
+        shown = {name: self.after[name] for name in ("status", "stages")}
+        return [self.state, switched, _overlay(switched, shown)]
 
     def _acted(self, side: int) -> bool:
         return any(e["kind"] == "move_end" and e["attacker"] == side for e in self.events) or any(
@@ -456,6 +480,10 @@ class _Turn:
                 break
         _, (pair, outcome), state, mismatched = best
         return (int(pair[0]), int(pair[1])), outcome, state, mismatched
+
+
+def _tied(state: BattleState) -> bool:
+    return int(effective_speed(state, 0)) == int(effective_speed(state, 1))
 
 
 def _records(bundle: dict) -> tuple[list[dict], list[list[dict]]]:

@@ -22,8 +22,14 @@ import pytest
 from nuzline.data.party import load_party
 from nuzline.data.trainer import IntermediateData, build_trainer_party, load_trainers
 from nuzline.engine.damage import damage_for_roll
-from nuzline.engine.ids import Status, Weather
-from nuzline.engine.order import MOVE_ACTIONS, action_order, is_switch, selected_move
+from nuzline.engine.ids import Stat, Status, Weather
+from nuzline.engine.order import (
+    MOVE_ACTIONS,
+    action_order,
+    effective_speed,
+    is_switch,
+    selected_move,
+)
 from nuzline.engine.outcome import Outcome, empty_outcome
 from nuzline.engine.state import BattleState
 from nuzline.engine.step import needs_replacement, replace, step
@@ -34,6 +40,8 @@ from tools.trace_to_state import (
     STAGE_ORDER,
     AmbiguousTrace,
     TraceMismatch,
+    _fields,
+    _Turn,
     bundle_trace,
     convert,
     decode_status,
@@ -51,6 +59,7 @@ EMBER, MACH_PUNCH, BUBBLE, POUND = 2, 3, 2, 0  # move slots of Monferno / Prinpl
 TO_PRINPLUP = MOVE_ACTIONS + 1
 STEALTH_ROCK, ROCK_THROW, SCREECH = 0, 1, 2  # Geodude / Onix move slots
 POTION = 10  # the opponent's bag slot 0
+BUDEW, ABSORB, STUN_SPORE = 5, 0, 3  # party slot and move slots
 
 _step = jax.jit(step)
 
@@ -75,6 +84,17 @@ SCRIPT = [
     ((BUBBLE, SCREECH), _outcome(p_hit=0)),
     ((POUND, ROCK_THROW), _outcome(p_roll=8, o_roll=15)),
     ((BUBBLE, POTION), _outcome(p_roll=2)),
+]
+
+# Budew leads: Stun Spore paralyzes the slower Geodude, which is then fully paralyzed on
+# the same turn; on the next turn it is paralyzed from the start and gets to attack.
+# (Spark cannot paralyze Geodude, a Ground type, so Stun Spore stands in for it.)
+PARA_SCRIPT = [
+    (
+        (STUN_SPORE, ROCK_THROW),
+        _outcome(p_secondary=1)._replace(full_para=jnp.asarray([0, 1], jnp.int8)),
+    ),
+    ((ABSORB, ROCK_THROW), _outcome(p_roll=0, o_roll=5)),
 ]
 
 
@@ -124,7 +144,8 @@ def _turn_record(state: BattleState, turn: int, command: int = 4) -> dict:
 
 def _move_events(tables, state, actions, outcome, turn) -> list[dict]:
     """The ``hit``/``move_end`` records of one turn, in execution order. Every scripted
-    move either hits once or misses, and no hit changes a stage the later hit uses."""
+    move either hits once or misses, no hit changes a stage the later hit uses, and a
+    script sets ``full_para`` only for a side that is paralyzed when it would move."""
     active = [int(state.active[0]), int(state.active[1])]
     stages = [_stages(state, 0), _stages(state, 1)]
     for side in (0, 1):
@@ -137,8 +158,8 @@ def _move_events(tables, state, actions, outcome, turn) -> list[dict]:
         if actions[side] >= MOVE_ACTIONS:
             continue
         user, target = (side, active[side]), (1 - side, active[1 - side])
-        if hp[user] == 0:
-            continue  # fainted before moving
+        if hp[user] == 0 or int(outcome.full_para[side]):
+            continue  # fainted, or fully paralyzed, before moving
         move = int(selected_move(tables, state, side, actions[side])[0])
         missed = int(outcome.hit[side, 0]) == 0
         events.append(
@@ -182,13 +203,13 @@ def _move_events(tables, state, actions, outcome, turn) -> list[dict]:
     return events
 
 
-def _engine_trace(tables, names):
+def _engine_trace(tables, names, script=SCRIPT, leads=(0, 0)):
     """(raw records, engine states before each turn and after the last)."""
     trainer = next(t for t in load_trainers(INTERMEDIATE) if t.id == ROARK_ID)
     player = load_party(PARTY, names)
-    state = initial_state(tables, player, trainer, (0, 0))
+    state = initial_state(tables, player, trainer, leads)
     records, states = [_turn_record(state, 0)], [state]
-    for turn, (actions, outcome) in enumerate(SCRIPT):
+    for turn, (actions, outcome) in enumerate(script):
         records += _move_events(tables, state, actions, outcome, turn)
         state = _step(tables, state, jnp.asarray(actions, jnp.int32), outcome)
         if needs_replacement(state)[1]:
@@ -215,6 +236,56 @@ def _bundle(tmp_path: Path, names, records) -> Path:
 @pytest.fixture(scope="module")
 def engine_trace(tables, names):
     return _engine_trace(tables, names)
+
+
+def test_paralysis_inflicted_earlier_in_the_turn_can_fully_paralyze(tables, names, tmp_path):
+    records, states = _engine_trace(tables, names, PARA_SCRIPT, (BUDEW, 0))
+    assert int(states[1].status[1, 0]) == Status.PARALYSIS
+    assert int(states[1].pp[1, 0, ROCK_THROW]) == int(states[0].pp[1, 0, ROCK_THROW])
+    turns = convert(_bundle(tmp_path, names, records), tables, names)
+    assert len(turns) == len(states)
+    for i, (turn, expected) in enumerate(zip(turns, states)):
+        for name in BattleState._fields:
+            assert np.array_equal(getattr(turn.state, name), getattr(expected, name)), (
+                f"turn {i} field {name}"
+            )
+        assert turn.mismatched == ()
+    assert int(turns[0].outcome.full_para[1]) == 1
+    assert turns[1].actions == PARA_SCRIPT[1][0]
+    assert int(turns[1].outcome.full_para[1]) == 0
+
+
+def _variant_values(tables, state, after, actions, field, index=()):
+    """Every value ``field[index]`` takes across the converter's replay candidates."""
+    inference = _Turn(tables, state, after, [], 0)
+    base = {name: np.asarray(v).copy() for name, v in empty_outcome()._asdict().items()}
+    return {int(o[field][index]) for o in inference.variants(actions, base)}
+
+
+@pytest.mark.parametrize(
+    ("status", "field"), [(Status.PARALYSIS, "full_para"), (Status.FREEZE, "thaw")]
+)
+def test_a_status_shown_after_the_turn_is_enumerated(tables, names, status, field):
+    state = _engine_trace(tables, names, [])[1][0]
+    after = _fields(_turn_record(state, 1))
+    assert _variant_values(tables, state, after, (EMBER, ROCK_THROW), field, (1,)) == {0}
+    after["status"][1, 0] = status
+    assert _variant_values(tables, state, after, (EMBER, ROCK_THROW), field, (1,)) == {0, 1}
+
+
+def test_an_end_of_turn_speed_tie_after_a_switch_is_enumerated(tables, names):
+    state = _engine_trace(tables, names, [])[1][0]
+    after = _fields(_turn_record(state, 1))
+    tie = int(effective_speed(state, 1))
+    stats = np.asarray(state.stats).copy()
+    stats[0, 1, Stat.SPE - 1] = tie  # Prinplup, switched in, ties Geodude
+    state = state._replace(stats=jnp.asarray(stats))
+    assert int(effective_speed(state, 0)) != tie
+    assert _variant_values(tables, state, after, (TO_PRINPLUP, ROCK_THROW), "end_speed_tie") == {
+        0,
+        1,
+    }
+    assert _variant_values(tables, state, after, (TO_PRINPLUP, ROCK_THROW), "speed_tie") == {0}
 
 
 def _hits(records, side):

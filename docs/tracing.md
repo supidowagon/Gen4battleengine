@@ -96,8 +96,10 @@ recording session should start with the checks in "Verifying the addresses".
 
    The converter prints one line per turn: the inferred actions, the rolls that fit
    each hit, and any fields on which the engine's best replay disagrees with the trace.
-   A golden failure is a real engine discrepancy. Fix it as the decomp says, and log it
-   in `docs/discrepancies.md`.
+   A golden failure means that no replayed candidate matches the trace. Usually that is
+   an engine discrepancy: fix it as the decomp says, and log it in
+   `docs/discrepancies.md`. It can also be a chance field that the converter did not
+   enumerate on that turn (see the inference rules below), so check that first.
 
 ## RAM layout
 
@@ -273,10 +275,17 @@ For each turn, `tools/trace_to_state.py` works out the following:
   raises `AmbiguousTrace`, carrying every candidate, when both a crit and a non-crit
   roll fit: whether a crit happened is an observable game event that the outcome must
   get right.
-- **The other chance fields** are `speed_tie` and `end_speed_tie` (only when the speeds
-  are equal), `full_para`, `thaw`, `secondary`, `contact_proc` (only when Static or
-  Poison Point is in play) and `duration`. These are enumerated only where they can
-  matter in this state. A confusion self-hit is taken from a `hit` record whose
+- **The other chance fields** are `speed_tie`, `end_speed_tie`, `full_para`, `thaw`,
+  `secondary`, `contact_proc` (only when Static or Poison Point is in play) and
+  `duration`. These are enumerated only where they can matter:
+  - `speed_tie` when the start state's speeds are equal.
+  - `end_speed_tie` when the speeds are equal in the start state, after the turn's
+    switches, or after the switches with the next record's status and stages (a
+    switch-in, a paralysis or a Speed change can create the tie).
+  - `full_para` and `thaw` when the side's start-of-turn active mon is paralyzed or
+    frozen at the start, in any `hit` record of the turn, or in the next record. A
+    status inflicted earlier in the turn (Stun Spore, Spark, Static) can stop the
+    slower mon on the same turn. A confusion self-hit is taken from a `hit` record whose
   attacker is also its defender, and its roll is matched against `confusion_damage`.
   Every candidate (actions times outcome fields) is replayed through `step`, followed
   by the opponent's replacement into the next record's active slot, and the candidate
@@ -310,6 +319,10 @@ to add next. They are in `sideConditionsMask`, `BattleMon.statusVolatile` and
 ## Known limits
 
 - A trace ends at the first player faint, which the engine treats as terminal.
+- A side that used no PP and changed no compared field (fully paralyzed, or a
+  Potion at full HP) is told apart only by `trainer_items`, which is not dumped. The
+  converter tries move candidates before bag slots, so it reads such a turn as a move
+  that did not happen.
 - The player's bag items are not modelled. A trace that uses one fails to convert,
   because no action candidate fits.
 - Multi-hit moves are read as one `hit` record per hit. They have not been exercised on
