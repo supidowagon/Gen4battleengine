@@ -5,7 +5,8 @@
 lists. Per-hit fields are ``[side, hit_index]`` with up to 5 hits; per-action
 fields are ``[side]``. ``secondary`` is indexed by the attacking side (its own
 move's secondary effect); ``contact_proc`` by the defending side (its contact
-ability); ``duration`` by the acting (inflicting) side.
+ability); ``duration`` by the acting (inflicting) side, and it is the counter value
+the decomp's ``Random`` command stores for that side's move (``sample_outcome``).
 
 ``sample_outcome`` reproduces each decomp roll (citations per field below). The
 hit and crit odds are read from the state at the start of the turn, with one
@@ -49,10 +50,11 @@ class Outcome(NamedTuple):
     n_hits: jnp.ndarray  # int8[2], 2-5
     full_para: jnp.ndarray  # int8[2]
     confusion_hit: jnp.ndarray  # int8[2]
-    duration: jnp.ndarray  # int8[2], sleep/confusion turns rolled at infliction
+    duration: jnp.ndarray  # int8[2], sleep/confusion/Bind/Taunt counter rolled at infliction
     thaw: jnp.ndarray  # int8[2]
     flinch_item: jnp.ndarray  # int8[2]
     quick_claw: jnp.ndarray  # int8[2]
+    end_speed_tie: jnp.ndarray  # int8[], 0 = player first in the end-of-turn order on equal speed
 
 
 def empty_outcome() -> Outcome:
@@ -72,6 +74,7 @@ def empty_outcome() -> Outcome:
         thaw=sides,
         flinch_item=sides,
         quick_claw=sides,
+        end_speed_tie=jnp.zeros((), _I8),
     )
 
 
@@ -131,7 +134,7 @@ def crit_odds(tables: Tables, state: BattleState, actions) -> jnp.ndarray:
 def sample_outcome(key, tables: Tables, state: BattleState, actions) -> Outcome:
     """Draw every field from its Gen 4 probability for this state and these actions."""
     actions = jnp.asarray(actions, _I32)
-    k = jax.random.split(key, 12)
+    k = jax.random.split(key, 14)
     per_hit, per_side = (2, MAX_HITS), (2,)
 
     def draw(i, shape, n):
@@ -151,6 +154,15 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions) -> Outcome:
     # BtlCmd_SetMultiHit (battle_script.c:2645): & 3 below 2 gives 2-3, else (& 3) + 2.
     first, second = draw(3, per_side, 4), draw(4, per_side, 4)
     n_hits = jnp.where(first < 2, first + 2, second + 2)
+    # BtlCmd_Random (battle_script.c:3207) ``Random r, o`` is rand % (r + 1) + o, by the
+    # acting side's move: Random 3, 2 (subscript_fall_asleep.s, subscript_confuse.s),
+    # Random 3, 3 (subscript_bind_start.s), Random 2, 3 (subscript_taunt_start.s).
+    effect = tables.move_effect[moves]
+    duration = jnp.where(
+        effect == EffectId.TAUNT,
+        draw(13, per_side, 3) + 3,
+        draw(10, per_side, 4) + jnp.where(effect == EffectId.TRAP, 3, 2),
+    )
     outcome = Outcome(
         speed_tie=draw(5, (), 2),  # battle_lib.c:1445, RandNext() & 1
         hit=hit,
@@ -161,11 +173,12 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions) -> Outcome:
         n_hits=n_hits,
         full_para=draw(8, per_side, 4) == 0,  # battle_controller_player.c:2655
         confusion_hit=draw(9, per_side, 2) == 1,  # battle_controller_player.c:2621
-        # Random 3, 2 (subscript_fall_asleep.s, subscript_confuse.s): rand % 4 + 2.
-        duration=draw(10, per_side, 4) + 2,
+        duration=duration,
         thaw=draw(11, per_side, 5) == 0,  # battle_controller_player.c:2478, % 5 != 0 stays
         # King's Rock / Razor Fang and Quick Claw are not implemented items (ItemId).
         flinch_item=jnp.zeros(per_side, _I32),
         quick_claw=jnp.zeros(per_side, _I32),
+        # BattleSystem_SortMonSpeedOrder (battle_lib.c:3364) on equal speed: RandNext() & 1.
+        end_speed_tie=draw(12, (), 2),
     )
     return Outcome(*(jnp.asarray(f).astype(_I8) for f in outcome))

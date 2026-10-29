@@ -37,13 +37,29 @@ many are real). Decomp sources:
   are per hit; the loop stops once the target faints.
 * ``HIGH_CRIT`` only raises the crit stage ``sample_outcome`` uses; here the
   engine reads ``outcome.crit``.
+* Stealth Rock: ``effect_script_0266.s`` sets the flag on the defender's side
+  (fails if already set); the switch-in damage is ``stealth_rock_damage``.
+* Bind (``TRAP``): ``effect_script_0042.s`` -> ``subscript_bind_start.s``, an
+  on-hit indirect effect needing a living target that is not bound yet: the
+  counter is ``Random 3, 3`` (``outcome.duration``, 3-6) and ``trap_move`` the
+  move. The end-of-turn tick is in ``step``.
+* Taunt: ``subscript_taunt_start.s``: fails on a taunted target, else the counter
+  is ``Random 2, 3`` (``outcome.duration``, 3-5). The move failure and the
+  countdown are in ``step``.
+* Confusion (``CONFUSE_FOE``): ``subscript_confuse.s``: fails on a confused
+  target, else ``Random 3, 2`` turns (``outcome.duration``, 2-5). The move-time
+  check and self-hit are in ``step``.
+* Leech Seed: ``subscript_leech_seed_start.s``: Grass types and already seeded
+  targets are immune. The end-of-turn drain is in ``step``.
+* Water Sport: ``effect_script_0210.s`` sets the user's flag (fails if set);
+  ``damage.py`` halves Fire power while any active battler has it.
+* Pursuit is a plain hit here; its pre-switch hit at double power is in ``step``.
 
 Unreachable branches are not modelled: Substitute, Mist, Safeguard and Uproar
 come from unsupported moves; Shield Dust, Clear Body, Hyper Cutter, Immunity,
 Limber, Insomnia, Leaf Guard, Liquid Ooze, Magic Guard, Reckless, Serene Grace
-and Skill Link are unsupported abilities; Big Root is an unsupported item. The
-effects of Task 8c (Stealth Rock, Bind, Pursuit, Taunt, confusion, Leech Seed,
-Water Sport) are plain hits here.
+and Skill Link are unsupported abilities; Big Root is an unsupported item; Own Tempo, Magic Guard and Levitate are unsupported
+abilities and Grip Claw an unsupported item.
 """
 
 from __future__ import annotations
@@ -77,6 +93,7 @@ class _Hit(NamedTuple):
     proc: jnp.ndarray  # the secondary applies on this hit (its roll, or certain)
     dealt: jnp.ndarray  # HP the target lost on this hit
     target_moved: jnp.ndarray  # the target has already acted this turn
+    move: jnp.ndarray  # the move's id
     target_ignorable: jnp.ndarray  # target's ability as the attacker sees it (Mold Breaker)
 
 
@@ -203,8 +220,93 @@ def _recoil(tables, state, h: _Hit) -> BattleState:
 
 
 def targets_user(tables: Tables, move) -> jnp.ndarray:
-    """The move's target is ``RANGE_USER``: its decomp defender is the user itself."""
-    return tables.move_target[move] == MoveTarget.RANGE_USER
+    """The move's decomp defender is the user itself: ``RANGE_USER``,
+    ``RANGE_USER_SIDE`` and ``RANGE_FIELD`` (battle_lib.c:1665-1669), e.g. Growth,
+    Reflect, Water Sport."""
+    target = tables.move_target[move]
+    return (
+        (target == MoveTarget.RANGE_USER)
+        | (target == MoveTarget.RANGE_USER_SIDE)
+        | (target == MoveTarget.RANGE_FIELD)
+    )
+
+
+def _set(state: BattleState, field: str, index, value, cond) -> BattleState:
+    """``state.<field>[index] = value`` where ``cond``."""
+    arr = getattr(state, field)
+    new = jnp.where(cond, value, arr[index]).astype(arr.dtype)
+    return state._replace(**{field: arr.at[index].set(new)})
+
+
+def _stealth_rock(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    cond = (h.effect == _E.STEALTH_ROCK) & h.landed & (state.stealth_rock[h.target_side] == 0)
+    return _set(state, "stealth_rock", h.target_side, 1, cond)
+
+
+def _trap(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    # MOVE_SIDE_EFFECT_CHECK_HP_AND_SUBSTITUTE: the target survived the hit.
+    cond = (
+        (h.effect == _E.TRAP)
+        & h.effective
+        & h.proc
+        & _alive(state, h.target_side, h.target)
+        & (state.trapped[h.target_side] == 0)
+    )
+    state = _set(state, "trapped", h.target_side, outcome.duration[h.side], cond)
+    return _set(state, "trap_move", h.target_side, h.move, cond)
+
+
+def _taunt(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    cond = (
+        (h.effect == _E.TAUNT)
+        & h.effective
+        & _alive(state, h.target_side, h.target)
+        & (state.taunt[h.target_side] == 0)
+    )
+    return _set(state, "taunt", h.target_side, outcome.duration[h.side], cond)
+
+
+def _confuse_foe(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    cond = (
+        (h.effect == _E.CONFUSE_FOE)
+        & h.effective
+        & _alive(state, h.target_side, h.target)
+        & (state.confusion[h.target_side] == 0)
+    )
+    return _set(state, "confusion", h.target_side, outcome.duration[h.side], cond)
+
+
+def _leech_seed(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    grass = jnp.any(state.types[h.target_side, h.target] == Type.GRASS)
+    cond = (
+        (h.effect == _E.LEECH_SEED)
+        & h.effective
+        & _alive(state, h.target_side, h.target)
+        & ~grass
+        & (state.leech_seed[h.target_side] == 0)
+    )
+    return _set(state, "leech_seed", h.target_side, 1, cond)
+
+
+def _water_sport(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    cond = (h.effect == _E.WATER_SPORT) & h.landed & (state.water_sport[h.side] == 0)
+    return _set(state, "water_sport", h.side, 1, cond)
+
+
+def stealth_rock_damage(tables: Tables, state: BattleState, side) -> BattleState:
+    """Stealth Rock on ``side``'s active Pokemon as it switches in
+    (``subscript_hazards_check.s`` -> ``BtlCmd_CheckStealthRock``, battle_script.c:8302):
+    with the flag set and HP left, ``BattleSystem_Divide(maxHP, 32/16/8/4/2)`` by the
+    Rock matchup (``BattleSystem_TypeMatchupMultiplier``), i.e. ``maxHP * eff // 800``
+    in ``effectiveness``'s x100 encoding, at least 1; nothing when immune."""
+    side = jnp.asarray(side, _I32)
+    mon = state.active[side]
+    eff = effectiveness(tables, Type.ROCK, state.types[side, mon])
+    max_hp = state.max_hp[side, mon].astype(_I32)
+    hp = state.hp[side, mon].astype(_I32)
+    damage = jnp.where(eff > 0, jnp.maximum(max_hp * eff // 800, 1), 0)
+    damage = jnp.where((state.stealth_rock[side] != 0) & (hp > 0), jnp.minimum(damage, hp), 0)
+    return state._replace(hp=state.hp.at[side, mon].set((hp - damage).astype(state.hp.dtype)))
 
 
 def apply_move_effect(
@@ -217,13 +319,16 @@ def apply_move_effect(
     *,
     connected,
     target_moved,
+    power_mul=10,
 ) -> BattleState:
     """Hit ``hit_index`` (0-4) of ``move`` by ``side``'s active Pokemon: damage with
     this hit's crit and roll, then the move's effect.
 
     ``connected``: the move is being used and passed its one accuracy check
     against a living target (any target for a ``RANGE_USER`` move). ``target_moved``:
-    the target acted earlier this turn (no flinch). A hit beyond ``hit_count`` or after the target fainted does nothing.
+    the target acted earlier this turn (no flinch). ``power_mul``: power scale in
+    tenths (Pursuit on a switch: 20). A hit beyond ``hit_count`` or after the target
+    fainted does nothing.
     """
     side = jnp.asarray(side, _I32)
     target_side = 1 - side
@@ -238,7 +343,13 @@ def apply_move_effect(
     )
 
     damage = damage_for_roll(
-        tables, state, side, move, outcome.crit[side, hit_index] != 0, outcome.roll[side, hit_index]
+        tables,
+        state,
+        side,
+        move,
+        outcome.crit[side, hit_index] != 0,
+        outcome.roll[side, hit_index],
+        power_mul,
     )
     target_hp = state.hp[target_side, target].astype(_I32)
     dealt = jnp.where(landed & ~targets_user(tables, move), jnp.minimum(damage, target_hp), 0)
@@ -271,6 +382,7 @@ def apply_move_effect(
         proc=(chance == 0) | (outcome.secondary[side, hit_index] != 0),
         dealt=dealt,
         target_moved=jnp.asarray(target_moved, jnp.bool_),
+        move=move,
         target_ignorable=jnp.where(a_ability == AbilityId.MOLD_BREAKER, AbilityId.NONE, d_ability),
     )
     for fn in (
@@ -283,6 +395,15 @@ def apply_move_effect(
         _recoil,
     ):
         state = fn(tables, state, h)
-    for fn in (_status_foe, _secondary_status):
+    for fn in (
+        _status_foe,
+        _secondary_status,
+        _stealth_rock,
+        _trap,
+        _taunt,
+        _confuse_foe,
+        _leech_seed,
+        _water_sport,
+    ):
         state = fn(tables, state, h, outcome)
     return state

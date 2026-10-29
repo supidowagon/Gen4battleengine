@@ -35,6 +35,7 @@ PHYSICAL, SPECIAL, STATUS = 0, 1, 2  # tables.move_category
 CRIT_MUL = 2  # BattleSystem_CalcCriticalMulti (battle_lib.c:7105); x3 Sniper is not implemented
 NEUTRAL_EFFECTIVENESS = 100  # effectiveness() of two neutral chart entries (10 * 10)
 ROLLS = 16
+CONFUSION_POWER = 40  # CALC_SELF_HIT(MOVE_STRUGGLE, 40), battle_controller_player.c:2633
 
 # sStatStageBoosts (battle_lib.c:6550), indexed by stage + 6.
 _STAGE_NUM = jnp.array([10, 10, 10, 10, 10, 10, 10, 15, 20, 25, 30, 35, 40], jnp.int32)
@@ -72,16 +73,32 @@ def effectiveness(tables: Tables, move_type, def_types) -> jnp.ndarray:
     return e1 * e2
 
 
-def _pre_random(tables: Tables, s: BattleState, atk_side, move, crit):
-    """Damage after ``+ 2`` and the crit multiplier, before the random roll."""
+def _pre_random(
+    tables: Tables,
+    s: BattleState,
+    atk_side,
+    move,
+    crit,
+    *,
+    power_mul=10,
+    self_hit: bool = False,
+):
+    """Damage after ``+ 2`` and the crit multiplier, before the random roll.
+
+    ``power_mul`` is ``battleCtx->powerMul`` in tenths (Pursuit on a switch: 20).
+    ``self_hit`` is the confusion self-hit, ``CALC_SELF_HIT(MOVE_STRUGGLE, 40)``
+    (``include/battle/common.h:35``): the attacker is its own defender, power 40, and
+    no side or field conditions are passed (no screens, no weather)."""
     atk_side = _i32(atk_side)
-    def_side = 1 - atk_side
+    def_side = atk_side if self_hit else 1 - atk_side
     move = _i32(move)
     crit = jnp.asarray(crit, jnp.bool_)
     a_slot, d_slot = _i32(s.active[atk_side]), _i32(s.active[def_side])
 
     base_power = _i32(tables.move_power[move])
-    power = base_power  # :6674 movePower = MOVE_DATA(move).power
+    # :6674 movePower = inPower when given (the self-hit's 40), else MOVE_DATA(move).power
+    power = jnp.asarray(CONFUSION_POWER, _I32) if self_hit else base_power
+    power = power * _i32(power_mul) // 10  # :6688 movePower * powerMul / 10
     move_type = _i32(tables.move_type[move])  # :6682 moveType = MOVE_DATA(move).type
     category = _i32(tables.move_category[move])  # :6704 moveClass
     level = _i32(s.level[atk_side, a_slot])
@@ -142,7 +159,7 @@ def _pre_random(tables: Tables, s: BattleState, atk_side, move, crit):
 
     # :6926 sandstorm: a Rock-type defender's SpD x1.5.
     rock = jnp.any(d_types == Type.ROCK)
-    sand = (s.weather == Weather.SANDSTORM) & rock
+    sand = (s.weather == Weather.SANDSTORM) & rock & (not self_hit)
     sp_defense = jnp.where(sand, sp_defense * 15 // 10, sp_defense)
 
     # :6947 / :6992 physical uses Atk/Def, special SpA/SpD.
@@ -167,10 +184,12 @@ def _pre_random(tables: Tables, s: BattleState, atk_side, move, crit):
     damage = jnp.where(burned, damage // 2, damage)
     # :6982 Reflect / :7023 Light Screen on the defender's side halve it, not on a crit.
     screen = jnp.where(is_physical, s.reflect[def_side], s.light_screen[def_side]) != 0
+    screen = screen & (not self_hit)
     damage = jnp.where(screen & ~crit, damage // 2, damage)
 
     # :7047 rain: Fire x0.5, Water x1.5; :7062 sun: Fire x1.5, Water x0.5. Fog: nothing.
-    rain, sun = s.weather == Weather.RAIN, s.weather == Weather.SUN
+    rain = (s.weather == Weather.RAIN) & (not self_hit)
+    sun = (s.weather == Weather.SUN) & (not self_hit)
     fire, water = move_type == Type.FIRE, move_type == Type.WATER
     damage = jnp.where(rain & fire, damage // 2, damage)
     damage = jnp.where(rain & water, damage * 15 // 10, damage)
@@ -221,7 +240,22 @@ def damage_table(tables: Tables, state: BattleState, atk_side, move, crit) -> jn
     return _finish(tables, state, atk_side, move, damage, move_type, category, power, rolls)
 
 
-def damage_for_roll(tables: Tables, state: BattleState, atk_side, move, crit, roll) -> jnp.ndarray:
-    """``int32``: ``damage_table(...)[roll]``, the single value the engine uses."""
-    damage, move_type, category, power = _pre_random(tables, state, atk_side, move, crit)
+def damage_for_roll(
+    tables: Tables, state: BattleState, atk_side, move, crit, roll, power_mul=10
+) -> jnp.ndarray:
+    """``int32``: ``damage_table(...)[roll]``, the single value the engine uses.
+    ``power_mul`` (tenths) scales the move's power first (Pursuit on a switch: 20)."""
+    damage, move_type, category, power = _pre_random(
+        tables, state, atk_side, move, crit, power_mul=power_mul
+    )
     return _finish(tables, state, atk_side, move, damage, move_type, category, power, _i32(roll))
+
+
+def confusion_damage(tables: Tables, state: BattleState, side, roll) -> jnp.ndarray:
+    """``int32``: the confusion self-hit of ``side``'s active Pokemon
+    (battle_controller_player.c:2633-2634): ``CALC_SELF_HIT(MOVE_STRUGGLE, 40)``, a
+    Normal physical hit on itself with its own stats and stages and no crit, then
+    ``BattleSystem_CalcDamageVariance`` with ``roll``. No STAB or type chart
+    (``ApplyTypeChart`` is not called)."""
+    damage, _, _, _ = _pre_random(tables, state, side, MOVE_STRUGGLE, False, self_hit=True)
+    return jnp.maximum(damage * (85 + _i32(roll)) // 100, 1)
