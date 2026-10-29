@@ -151,6 +151,30 @@ Controller-added: Roark's decomp entry carries two Potions (`items [17, 17]`), a
 
 ---
 
+### Task 3a: Engine inputs the AI reads
+
+Controller-added after the Task 3 implementer showed that `docs/ai/roark.md` needs four inputs the M1a state lacks (Task 3 report, NEEDS_CONTEXT). Every change is mirrored in the reference engine, `convert.py`, `tests/strategies.py` and STATE.md, and the differential test keeps passing.
+
+**Files:**
+- Modify: `src/nuzline/engine/state.py`, `src/nuzline/engine/step.py`, `src/nuzline/engine/order.py` (if needed), `src/nuzline/reference/state.py`, `src/nuzline/reference/engine.py`, `src/nuzline/reference/convert.py`, `src/nuzline/engine/STATE.md`, `tools/build_tables.py`, `src/nuzline/data/tables.py`, `src/nuzline/ai/outcome.py`, `tests/strategies.py`, `docs/ai/roark.md` (cross-references only)
+- Test: `tests/engine/test_ai_inputs.py`, plus additions to `tests/ai/test_ai_outcome.py`
+
+**Interfaces:**
+- Produces:
+  - `BattleState.trainer_item_count int8[2]`: bag size at battle start, set in `make_state`. An opponent item action consumes slot k and also zeroes every later slot that the decomp loop (`TrainerAI_ShouldUseItem`, trainer_ai.c:4056, gate at :4092 `i == 0 || aliveMons <= trainerItemCounts - i + 1`, no break) would zero for that state, with `aliveMons` counted at command selection.
+  - `BattleState.fake_out_turn int16[2]`: per side; leads start at 0; every switch-in (voluntary, replacement, Pursuit-interrupted) sets it to `turn + 1` as the decomp sets `fakeOutTurnNumber`; the AI's first-turn check is `fake_out_turn >= turn` (confirm the exact comparison in the decomp).
+  - `BattleState.move_hit int16[2]`: per side, the decomp's `moveHit` (the last move that hit this battler, as `TrainerAI_ShouldSwitch` reads it), updated and reset exactly where the decomp does.
+  - `AiOutcome.switch_stop int8[]`: the first stopping site 0..8 of the voluntary-switch draws in `docs/ai/roark.md` section 11.1, or 9 for none; `sample_ai_outcome` and `enumerate_ai_outcomes` include it (width stays at or under 4096; update the frequency test).
+  - `Tables.species_abilities_decomp int16[S,2]` (raw decomp ability ids) and `BattleState.ability_slot int8[2,6]` (which of the species' two abilities each Pokemon has), so the AI's ability guess can name abilities the engine does not implement.
+  - Fix the Task 2b minor regression: `hit_threshold` must not give item actions a move accuracy.
+- [ ] **Step 1: Write failing tests** in `tests/engine/test_ai_inputs.py`: `test_two_potions_both_spent_with_two_alive` and `test_second_slot_untouched_with_three_alive` (the gate), `test_fake_out_turn_set_on_every_switch_in`, `test_move_hit_tracks_last_hit_move` (and its resets), `test_ability_slot_and_decomp_ability_ids` (Shinx slot 1 is decomp Intimidate; a species with an unsupported ability still reports its decomp id), `test_item_action_has_no_accuracy`; and in `tests/ai/test_ai_outcome.py` the `switch_stop` range and frequency checks.
+- [ ] **Step 2: Run them to see them fail.**
+- [ ] **Step 3: Implement** in both engines, tables, outcome, strategies and STATE.md; cite the decomp line for every update and reset site.
+- [ ] **Step 4: Run** the new tests, `tests/test_differential.py` and the full suite; ruff clean.
+- [ ] **Step 5: Commit** `feat(engine): AI inputs — trainer item count, fake-out turn, move hit, switch draw, decomp ability ids`.
+
+---
+
 ### Task 3: AI script commands and policy
 
 **Files:**
