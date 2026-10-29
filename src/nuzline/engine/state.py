@@ -78,7 +78,7 @@ class BattleState(NamedTuple):
     rollout_count: jnp.ndarray  # int8
     charge_turn: jnp.ndarray  # int8
     recharge: jnp.ndarray  # int8
-    pursuit_target: jnp.ndarray  # int8
+    pursuit_target: jnp.ndarray  # int8, reserved: no mechanic sets or reads it yet (only cleared)
     water_sport: jnp.ndarray  # int8
     # per side [2]
     spikes: jnp.ndarray  # int8, layers
@@ -136,7 +136,7 @@ class BattleState(NamedTuple):
 
 # Shape and storage dtype of every field, in BattleState order.
 _SLOT, _SIDE, _FIELD = (SIDES, SLOTS), (SIDES,), ()
-_LAYOUT: dict[str, tuple[tuple[int, ...], type]] = {
+LAYOUT: dict[str, tuple[tuple[int, ...], type]] = {
     "species": (_SLOT, np.int16),
     "form": (_SLOT, np.int8),
     "level": (_SLOT, np.int8),
@@ -197,8 +197,8 @@ _LAYOUT: dict[str, tuple[tuple[int, ...], type]] = {
     "ai_seen_moves": ((SLOTS, MOVES), np.int8),
     "ai_ability_known": ((SLOTS,), np.int8),
 }
-if tuple(_LAYOUT) != BattleState._fields:
-    raise RuntimeError("_LAYOUT must list every BattleState field, in order")
+if tuple(LAYOUT) != BattleState._fields:
+    raise RuntimeError("LAYOUT must list every BattleState field, in order")
 
 
 def _fill_slot(a: dict[str, np.ndarray], tables: Tables, side: int, slot: int, mon: PokemonSpec):
@@ -245,7 +245,7 @@ def make_state(
     ``monSpeedOrder`` gives the same result in singles, see ``hooks``)."""
     from nuzline.engine.hooks import on_switch_in  # hooks imports this module
 
-    a = {name: np.zeros(shape, dtype) for name, (shape, dtype) in _LAYOUT.items()}
+    a = {name: np.zeros(shape, dtype) for name, (shape, dtype) in LAYOUT.items()}
     for side, party in enumerate((player, opp)):
         if not 1 <= len(party) <= SLOTS:
             raise ValueError(f"side {side}: a party has 1-{SLOTS} Pokemon, got {len(party)}")

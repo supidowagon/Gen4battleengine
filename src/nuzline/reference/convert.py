@@ -5,7 +5,7 @@ from __future__ import annotations
 import jax.numpy as jnp
 import numpy as np
 
-from nuzline.engine.state import _LAYOUT, BattleState
+from nuzline.engine.state import LAYOUT, BattleState
 from nuzline.reference.state import (
     FIELD_FIELDS,
     MON_FIELDS,
@@ -46,7 +46,7 @@ def from_ref(ref: RefState) -> BattleState:
         values[f] = getattr(ref, f)
     out = {}
     for name in BattleState._fields:
-        shape, dtype = _LAYOUT[name]
+        shape, dtype = LAYOUT[name]
         arr = np.asarray(values[name], dtype=dtype)
         if arr.shape != shape:
             raise ValueError(f"{name}: shape {arr.shape}, expected {shape}")

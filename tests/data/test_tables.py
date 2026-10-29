@@ -4,11 +4,9 @@ from pathlib import Path
 import jax.numpy as jnp
 import pytest
 
-from nuzline.data.tables import load_names, load_tables
 from nuzline.engine.ids import AbilityId, EffectId, ItemId, MoveFlag, MoveTarget, Stat, Status
 
-TABLES = Path("data/gen4_platinum")
-pytestmark = pytest.mark.skipif(not (TABLES / "tables.npz").exists(), reason="tables not built")
+TABLES = Path(__file__).resolve().parents[2] / "data" / "gen4_platinum"
 
 # Every move the M1a sample team, Roark's real party, the roark_state fixture
 # moveset and the Task 7-9 tests use. None may be UNSUPPORTED.
@@ -30,8 +28,8 @@ def _effect(t, n, move):
     return int(t.move_effect[m]), tuple(int(x) for x in t.move_param[m])
 
 
-def test_dtypes_and_shapes():
-    t, n = load_tables(TABLES), load_names(TABLES)
+def test_dtypes_and_shapes(tables, names):
+    t, n = tables, names
     assert t.species_base_stats.dtype == jnp.int16 and t.species_base_stats.shape[1] == 6
     assert t.move_param.shape[1] == 3 and t.move_param.dtype == jnp.int16
     # Ruling: decomp type ids are kept, including the ??? (Mystery) type, so the
@@ -47,8 +45,8 @@ def test_dtypes_and_shapes():
     assert all(x.dtype.itemsize <= 4 for x in t)
 
 
-def test_effect_mapping():
-    t, n = load_tables(TABLES), load_names(TABLES)
+def test_effect_mapping(tables, names):
+    t, n = tables, names
     assert int(t.move_effect[n.move("Tackle")]) == EffectId.PLAIN
     assert int(t.move_effect[n.move("Stealth Rock")]) == EffectId.STEALTH_ROCK
     assert int(t.move_effect[n.move("Leer")]) == EffectId.STAT_FOE
@@ -56,45 +54,45 @@ def test_effect_mapping():
     assert int(t.move_effect[n.move("Metronome")]) == EffectId.UNSUPPORTED
 
 
-def test_only_thunder_wave_is_a_type_checked_status_move():
+def test_only_thunder_wave_is_a_type_checked_status_move(tables, names):
     """Thunder Wave is the one status move the decomp runs through the type chart
     (Ground immunity, battle_controller_player.c CheckTypeChart): move_param[1] = 1
     marks it. Glare and Stun Spore skip the type chart in Gen 4."""
-    t, n = load_tables(TABLES), load_names(TABLES)
+    t, n = tables, names
     assert _effect(t, n, "Thunder Wave") == (EffectId.STATUS_FOE, (Status.PARALYSIS, 1, 0))
     for move in ("Glare", "Stun Spore"):
         assert _effect(t, n, move) == (EffectId.STATUS_FOE, (Status.PARALYSIS, 0, 0))
 
 
-def test_thawing_moves_carry_the_thaw_flag():
+def test_thawing_moves_carry_the_thaw_flag(tables, names):
     """BATTLE_EFFECT_THAW_AND_BURN_HIT is a burn hit whose frozen user moves and thaws
     (move_param[2] = 1); a plain burn hit has no flag."""
-    t, n = load_tables(TABLES), load_names(TABLES)
+    t, n = tables, names
     for move in ("Flame Wheel", "Sacred Fire"):
         assert _effect(t, n, move) == (EffectId.SECONDARY_STATUS, (Status.BURN, 0, 1))
     assert _effect(t, n, "Ember") == (EffectId.SECONDARY_STATUS, (Status.BURN, 0, 0))
     assert _effect(t, n, "Flare Blitz")[0] == EffectId.UNSUPPORTED
 
 
-def test_move_target_ids_match_the_manifest():
+def test_move_target_ids_match_the_manifest(tables, names):
     """``MoveTarget`` (used by the engine for RANGE_USER moves) is the order the
     tables were built with; the self-targeting status moves are RANGE_USER."""
     manifest = json.loads((TABLES / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["target_names"] == [t.name for t in MoveTarget]
-    t, n = load_tables(TABLES), load_names(TABLES)
+    t, n = tables, names
     for move in ("Growth", "Withdraw", "Rock Polish", "Defense Curl"):
         assert int(t.move_target[n.move(move)]) == MoveTarget.RANGE_USER, move
     assert int(t.move_target[n.move("Leer")]) != MoveTarget.RANGE_USER
 
 
-def test_every_m1a_move_is_supported():
-    t, n = load_tables(TABLES), load_names(TABLES)
+def test_every_m1a_move_is_supported(tables, names):
+    t, n = tables, names
     unsupported = [m for m in M1A_MOVES if _effect(t, n, m)[0] == EffectId.UNSUPPORTED]
     assert unsupported == []
 
 
-def test_m1a_effect_params():
-    t, n = load_tables(TABLES), load_names(TABLES)
+def test_m1a_effect_params(tables, names):
+    t, n = tables, names
     E = EffectId
     assert _effect(t, n, "Growth") == (E.STAT_SELF, (Stat.SPA, 1, 0))
     assert _effect(t, n, "Defense Curl") == (E.STAT_SELF, (Stat.DEF, 1, 0))
@@ -128,8 +126,8 @@ def test_m1a_effect_params():
     assert int(t.move_effect_chance[n.move("Hammer Arm")]) == 0
 
 
-def test_move_flags():
-    t, n = load_tables(TABLES), load_names(TABLES)
+def test_move_flags(tables, names):
+    t, n = tables, names
 
     def flags(m):
         return int(t.move_flags[n.move(m)])
@@ -141,8 +139,8 @@ def test_move_flags():
     assert not flags("Stealth Rock") & MoveFlag.PROTECT
 
 
-def test_ability_and_item_mapping():
-    t, n = load_tables(TABLES), load_names(TABLES)
+def test_ability_and_item_mapping(tables, names):
+    t, n = tables, names
     assert int(t.species_abilities[n.species("Geodude"), 0]) == AbilityId.ROCK_HEAD
     assert int(t.species_abilities[n.species("Geodude"), 1]) == AbilityId.STURDY
     assert int(t.species_abilities[n.species("Cranidos"), 1]) == AbilityId.NONE
@@ -154,8 +152,8 @@ def test_ability_and_item_mapping():
     assert tuple(int(x) for x in t.item_param[n.item("Sitrus Berry")]) == (25, 0)
 
 
-def test_species_and_nature_values():
-    t, n = load_tables(TABLES), load_names(TABLES)
+def test_species_and_nature_values(tables, names):
+    t, n = tables, names
     g = n.species("geodude")
     assert [int(x) for x in t.species_base_stats[g]] == [40, 80, 100, 30, 30, 20]
     rock, ground = n.type_names.index("ROCK"), n.type_names.index("GROUND")
@@ -169,8 +167,8 @@ def test_species_and_nature_values():
     assert [int(x) for x in t.nature_mods[n.nature_names.index("Hardy")]] == [0] * 6
 
 
-def test_names_lookup():
-    n = load_names(TABLES)
+def test_names_lookup(names):
+    n = names
     assert n.move("") == 0 and n.item("") == 0
     assert n.move("tackle") == n.move("TACKLE") == 33
     assert n.ability("rock head") == n.ability_names.index("Rock Head")
@@ -178,8 +176,8 @@ def test_names_lookup():
         n.move("Not A Move")
 
 
-def test_names_species_abilities_and_friendship():
-    n = load_names(TABLES)
+def test_names_species_abilities_and_friendship(names):
+    n = names
     # Decomp ability ids per species slot; slot 1 is ABILITY_NONE (0) when absent.
     assert n.species_abilities(n.species("Shinx")) == (
         n.ability("Rivalry"),

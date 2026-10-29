@@ -53,8 +53,8 @@ class Outcome(NamedTuple):
     confusion_hit: jnp.ndarray  # int8[2]
     duration: jnp.ndarray  # int8[2], sleep/confusion/Bind/Taunt counter rolled at infliction
     thaw: jnp.ndarray  # int8[2]
-    flinch_item: jnp.ndarray  # int8[2]
-    quick_claw: jnp.ndarray  # int8[2]
+    flinch_item: jnp.ndarray  # int8[2], reserved: King's Rock / Razor Fang (unsupported items)
+    quick_claw: jnp.ndarray  # int8[2], reserved: Quick Claw (unsupported item)
     end_speed_tie: jnp.ndarray  # int8[], 0 = player first in the end-of-turn order on equal speed
 
 

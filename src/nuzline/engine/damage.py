@@ -33,7 +33,6 @@ from nuzline.engine.state import BattleState
 
 PHYSICAL, SPECIAL, STATUS = 0, 1, 2  # tables.move_category
 CRIT_MUL = 2  # BattleSystem_CalcCriticalMulti (battle_lib.c:7105); x3 Sniper is not implemented
-NEUTRAL_EFFECTIVENESS = 100  # effectiveness() of two neutral chart entries (10 * 10)
 ROLLS = 16
 CONFUSION_POWER = 40  # CALC_SELF_HIT(MOVE_STRUGGLE, 40), battle_controller_player.c:2633
 

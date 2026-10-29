@@ -13,7 +13,7 @@ from nuzline.data.trainer import (
     trainer_pid,
 )
 
-INTER = Path("data/intermediate")
+INTER = Path(__file__).resolve().parents[2] / "data" / "intermediate"
 needs_inter = pytest.mark.skipif(not INTER.exists(), reason="intermediate data not extracted")
 
 

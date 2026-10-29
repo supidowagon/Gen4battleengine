@@ -108,6 +108,15 @@ does not generate those matchups (`_smogon_departs`).
   the decomp fails the move (`MOVE_STATUS_NO_PP`, `BattleControllerPlayer_DecrementPP`,
   `src/battle/battle_controller_player.c:2235`) and so does the reference, while the JAX
   engine does not check.
+- **End-of-turn order with a fainted battler.** The reference sorts the end-of-turn
+  order with `_player_second` (`BattleSystem_CompareBattlerSpeed`, which puts a fainted
+  battler after a living one, `src/battle/battle_lib.c:1205-1211`), while the JAX
+  engine's `step.end_of_turn_order` compares speed only (`ignoreQuickClaw = TRUE`,
+  `battle_lib.c:3364`) and ignores HP. When one active battler has fainted the two
+  orders can differ, but the results are identical: every implemented end-of-turn check
+  on a fainted active battler is a no-op (held item, Leech Seed, poison, toxic, burn
+  and Bind require the battler to be alive; its Taunt counter and Leech Seed were
+  already cleared when it fainted), so running it first or second changes nothing.
 
 ## Not implemented in either engine (M6; M1b's coverage registry must refuse them)
 
