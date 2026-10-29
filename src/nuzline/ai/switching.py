@@ -1,0 +1,375 @@
+"""The voluntary-switch draw layout of ``TrainerAI_ShouldSwitch`` (trainer_ai.c:3894).
+
+``docs/ai/roark.md`` 11.1 lists the checks. Only two kinds of draw change the result
+for the trainers M1 covers: the keep draw of each super-effective damaging move of the
+AI's active Pokemon ``A`` against the player's active ``D`` (step 8), and the
+first-success draws of the two party passes (steps 10 and 11). ``switch_sites`` lists
+them in the decomp's order as ``SwitchSite`` kinds, one per site, so that
+``AiOutcome.switch_stop`` (the first site that stops the check) is one exact
+categorical (``nuzline.ai.outcome``). ``switch_action`` maps a stop to the action it
+means. Both come from the same layout, so the sampler, the enumerator and Task 3's
+``maybe_switch`` cannot disagree on it.
+
+The gates in steps 1, 2 and 9 are implemented from the state: trapped (``trapped >
+0``), Shadow Tag or Arena Trap on ``D``, Magnet Pull on ``D`` with ``A`` Steel type, no
+other living party member, and positive stages summing to 4 or more (which ends the
+check after the keep draws).
+
+Effectiveness is the decomp's status mask, built in chart-row order
+(``tables.type_chart_order``): ``BattleSystem_ApplyTypeChart`` (battle_lib.c:2560) for
+the keep draws, where only moves with power update the super/not-very-effective bits
+(``ApplyTypeMultiplier``, :7542), and ``BattleSystem_CalcEffectiveness`` (:2681) for
+the party passes, which updates them for every move (``UpateMoveStatusForTypeMul``,
+:2781). Struggle sets no bit (:2573, :2687). Gravity lifts the Ground-on-Flying
+immunity in both (``BasicTypeMulApplies`` :2529, ``NoImmunityOverrides`` :2759). Mold
+Breaker only matters against Levitate or Wonder Guard, which are refused, so it needs
+nothing here.
+
+Refused, never approximated (``switching_refusals`` names each one):
+
+* abilities on either side that change these masks: Levitate, Wonder Guard, Scrappy,
+  Normalize; and on the AI's side the steps 6-7 abilities (Flash Fire, Water Absorb,
+  Volt Absorb: ``AI_HasAbsorbAbilityInParty``; Natural Cure:
+  ``AI_IsAsleepWithNaturalCure``), whose draws are not modelled;
+* Iron Ball (``HOLD_EFFECT_SPEED_DOWN_GROUNDED``) on either side;
+* moves whose state M1 does not carry: Foresight, Odor Sleuth, Magnet Rise, Roost,
+  Miracle Eye, Ingrain, Perish Song (step 3), and the variable-type moves Hidden
+  Power, Weather Ball, Natural Gift and Judgment (``TrainerAI_MoveType``, :3127);
+* a state where ``AI_OnlyIneffectiveMoves`` (step 5, :3361) applies;
+* a layout with more than ``SWITCH_SITES`` sites.
+
+Called on concrete arrays, ``switch_sites`` and ``switch_action`` raise
+``UnsupportedSwitching`` for these. Traced (jit, vmap) they cannot raise, so every
+entry becomes ``SwitchSite.REFUSED``: its stop probability is NaN, the sampler gives
+``switch_stop = SWITCH_REFUSED`` and ``switch_action`` gives ``REFUSED_ACTION``. The
+coverage registry (Task 5) runs ``switching_refusals`` on the fight first.
+"""
+
+from __future__ import annotations
+
+from enum import IntEnum
+from typing import NamedTuple
+
+import jax
+import jax.numpy as jnp
+import numpy as np
+
+from nuzline.data.tables import Tables
+from nuzline.engine.actions import MOVE_ACTIONS
+from nuzline.engine.state import MOVES, SLOTS, BattleState
+
+SWITCH_SITES = 9  # roark.md 11.1: 1 keep draw + 4 + 4 party-pass draws for Roark
+SWITCH_NONE = SWITCH_SITES  # switch_stop when no draw stops the check
+SWITCH_REFUSED = -1  # switch_stop of a refused layout (traced only)
+NO_SWITCH = -1  # switch_action: the AI does not switch
+REFUSED_ACTION = -2  # switch_action of a refused layout (traced only)
+_I8, _I32 = jnp.int8, jnp.int32
+
+
+class SwitchSite(IntEnum):
+    """Kind of one voluntary-switch draw (``AiOutcome.switch_stop``; roark.md 11.1)."""
+
+    NONE = 0  # unused entry: never stops
+    # AI_HasSuperEffectiveMove(..., FALSE) (trainer_ai.c:3560): RandNext() % 10 != 0
+    # keeps the battler in (:3588), 58982 of 65536 u16 values.
+    KEEP = 1
+    # AI_HasPartyMemberWithSuperEffectiveMove(..., 0x8 = INEFFECTIVE, 2) (:3973):
+    # RandNext() % 2 == 0 switches (:3779), 32768 of 65536.
+    PASS_INEFFECTIVE = 2
+    # The same with 0x4 = NOT_VERY_EFFECTIVE, 3 (:3979): RandNext() % 3 == 0, 21846 of 65536.
+    PASS_NOT_VERY_EFFECTIVE = 3
+    # The layout is refused (module docstring); only produced under tracing.
+    REFUSED = 4
+
+
+# MOVE_STATUS_* bits (include/constants/battle/moves.h:58-60).
+SUPER_EFFECTIVE, NOT_VERY_EFFECTIVE, INEFFECTIVE = 1 << 1, 1 << 2, 1 << 3
+
+# Decomp ids, checked against the manifest by tests/ai/test_switching.py.
+MOVE_STRUGGLE = 165
+ITEM_IRON_BALL = 278
+_TYPE_FLYING, _TYPE_STEEL = 2, 8
+ABILITY_IDS = {
+    "Levitate": 26,
+    "Wonder Guard": 25,
+    "Scrappy": 113,
+    "Normalize": 96,
+    "Shadow Tag": 23,
+    "Arena Trap": 71,
+    "Magnet Pull": 42,
+    "Flash Fire": 18,
+    "Water Absorb": 11,
+    "Volt Absorb": 10,
+    "Natural Cure": 30,
+}
+MOVE_IDS = {
+    "Foresight": 193,
+    "Odor Sleuth": 316,
+    "Magnet Rise": 393,
+    "Roost": 355,
+    "Miracle Eye": 357,
+    "Ingrain": 275,
+    "Perish Song": 195,
+    "Hidden Power": 237,
+    "Weather Ball": 311,
+    "Natural Gift": 363,
+    "Judgment": 449,
+}
+# Refused abilities: name -> what the decomp does with it that is not implemented.
+_ANY_SIDE_ABILITIES = {
+    "Levitate": "LEVITATED / INEFFECTIVE in ApplyTypeChart and CalcEffectiveness",
+    "Wonder Guard": "WONDER_GUARD / INEFFECTIVE, and AI_CannotDamageWonderGuard",
+    "Scrappy": "skips the Ghost immunities",
+    "Normalize": "makes every move Normal",
+}
+_AI_SIDE_ABILITIES = {
+    "Flash Fire": "AI_HasAbsorbAbilityInParty",
+    "Water Absorb": "AI_HasAbsorbAbilityInParty",
+    "Volt Absorb": "AI_HasAbsorbAbilityInParty",
+    "Natural Cure": "AI_IsAsleepWithNaturalCure",
+}
+_MOVES = {
+    "Foresight": "Foresight volatile skips the Ghost immunities",
+    "Odor Sleuth": "Foresight volatile skips the Ghost immunities",
+    "Magnet Rise": "MAGNET_RISE in ApplyTypeChart",
+    "Roost": "roosting drops the Flying type",
+    "Miracle Eye": "lifts the Dark immunity",
+    "Ingrain": "grounds the defender and blocks the switch",
+    "Perish Song": "AI_PerishSongKO",
+    "Hidden Power": "variable type (TrainerAI_MoveType)",
+    "Weather Ball": "variable type (TrainerAI_MoveType)",
+    "Natural Gift": "variable type (TrainerAI_MoveType)",
+    "Judgment": "variable type (TrainerAI_MoveType)",
+}
+_ANY_SIDE_IDS = jnp.array([ABILITY_IDS[n] for n in _ANY_SIDE_ABILITIES], _I32)
+_AI_SIDE_IDS = jnp.array([ABILITY_IDS[n] for n in _AI_SIDE_ABILITIES], _I32)
+_MOVE_REFUSED_IDS = jnp.array([MOVE_IDS[n] for n in _MOVES], _I32)
+_ABILITY_NAMES = {i: n for n, i in ABILITY_IDS.items()}
+_MOVE_NAMES = {i: n for n, i in MOVE_IDS.items()}
+
+_CANDIDATES = MOVES + 2 * SLOTS * MOVES  # keep draws, then pass 1, then pass 2
+_CANDIDATE_KINDS = jnp.array(
+    [SwitchSite.KEEP] * MOVES
+    + [SwitchSite.PASS_INEFFECTIVE] * (SLOTS * MOVES)
+    + [SwitchSite.PASS_NOT_VERY_EFFECTIVE] * (SLOTS * MOVES),
+    _I8,
+)
+_CANDIDATE_TARGETS = jnp.array(
+    [-1] * MOVES + [j for j in range(SLOTS) for _ in range(MOVES)] * 2, _I8
+)
+
+
+class UnsupportedSwitching(ValueError):
+    """The voluntary-switch rule meets a mechanic this module does not implement."""
+
+
+def _apply_mul(mask, mul, update):
+    """One chart entry's ``ApplyTypeMultiplier`` / ``UpateMoveStatusForTypeMul``
+    update of the status mask (``mul`` in tenths; 10 leaves it unchanged)."""
+    has_se = (mask & SUPER_EFFECTIVE) != 0
+    has_nve = (mask & NOT_VERY_EFFECTIVE) != 0
+    immune = (mask | INEFFECTIVE) & ~(SUPER_EFFECTIVE | NOT_VERY_EFFECTIVE)
+    nve = jnp.where(has_se, mask & ~SUPER_EFFECTIVE, mask | NOT_VERY_EFFECTIVE)
+    se = jnp.where(has_nve, mask & ~NOT_VERY_EFFECTIVE, mask | SUPER_EFFECTIVE)
+    out = jnp.where(mul == 0, immune, mask)
+    out = jnp.where((mul == 5) & update, nve, out)
+    return jnp.where((mul == 20) & update, se, out)
+
+
+def _chart_flags(tables: Tables, move, def_types, gravity, update) -> jnp.ndarray:
+    move = jnp.asarray(move, _I32)
+    move_type = tables.move_type[move].astype(_I32)
+    t1, t2 = jnp.asarray(def_types, _I32)[0], jnp.asarray(def_types, _I32)[1]
+
+    def entry(t):
+        mul = tables.type_chart[move_type, t].astype(_I32)
+        lifted = (jnp.asarray(gravity) > 0) & (t == _TYPE_FLYING) & (mul == 0)
+        return jnp.where(lifted, 10, mul)
+
+    m1 = entry(t1)
+    m2 = jnp.where(t2 != t1, entry(t2), 10)  # type 2 is skipped when equal (:2635)
+    t2_first = tables.type_chart_order[move_type, t2] < tables.type_chart_order[move_type, t1]
+    first, second = jnp.where(t2_first, m2, m1), jnp.where(t2_first, m1, m2)
+    mask = _apply_mul(_apply_mul(jnp.zeros((), _I32), first, update), second, update)
+    return jnp.where(move == MOVE_STRUGGLE, 0, mask)
+
+
+def type_chart_flags(tables: Tables, move, def_types, gravity) -> jnp.ndarray:
+    """``int32``: the ``MOVE_STATUS_*`` bits ``BattleSystem_ApplyTypeChart`` leaves for
+    ``move`` against a defender of ``def_types`` (int8[2]); only a move with power
+    updates the super/not-very-effective bits."""
+    power = tables.move_power[jnp.asarray(move, _I32)]
+    return _chart_flags(tables, move, def_types, gravity, power > 0)
+
+
+def calc_effectiveness_flags(tables: Tables, move, def_types, gravity) -> jnp.ndarray:
+    """``int32``: the ``MOVE_STATUS_*`` bits ``BattleSystem_CalcEffectiveness`` leaves
+    for ``move`` against ``def_types`` (int8[2]), for any move, power or not."""
+    return _chart_flags(tables, move, def_types, gravity, True)
+
+
+class _Layout(NamedTuple):
+    kinds: jnp.ndarray  # int8[SWITCH_SITES]
+    targets: jnp.ndarray  # int8[SWITCH_SITES], party slot of a pass site, else -1
+    count: jnp.ndarray  # int32, sites found
+    only_ineffective: jnp.ndarray  # bool, AI_OnlyIneffectiveMoves applies
+    ability_refused: jnp.ndarray  # bool[2, SLOTS]
+    item_refused: jnp.ndarray  # bool[2, SLOTS]
+    move_refused: jnp.ndarray  # bool[2, SLOTS, MOVES]
+    refused: jnp.ndarray  # bool
+
+
+def _layout(tables: Tables, state: BattleState) -> _Layout:
+    a = state.active[1].astype(_I32)
+    d = state.active[0].astype(_I32)
+    gravity = state.gravity
+    d_types = state.types[0, d]
+    species = state.species.astype(_I32)
+    ability = tables.species_abilities_decomp[species, state.ability_slot.astype(_I32)]
+    ability = ability.astype(_I32)
+    d_ability = ability[0, d]
+    present = species > 0
+
+    # Step 1 (:3906-3913) and step 2 (:3915-3940).
+    steel = jnp.any(state.types[1, a] == _TYPE_STEEL)
+    gate = (
+        (state.trapped[1] > 0)
+        | (d_ability == ABILITY_IDS["Shadow Tag"])
+        | (d_ability == ABILITY_IDS["Arena Trap"])
+        | ((d_ability == ABILITY_IDS["Magnet Pull"]) & steel)
+    )
+    bench = (jnp.arange(SLOTS) != a) & present[1] & (state.hp[1] > 0)
+    gate = gate | ~jnp.any(bench)
+
+    # Step 5 precondition and step 8: A's moves against D through ApplyTypeChart.
+    a_moves = state.moves[1, a].astype(_I32)
+    a_flags = jax.vmap(lambda m: type_chart_flags(tables, m, d_types, gravity))(a_moves)
+    keep = (a_moves != 0) & ((a_flags & SUPER_EFFECTIVE) != 0)
+    damaging = (a_moves != 0) & (tables.move_power[a_moves] > 0)
+    only_ineffective = (
+        ~gate
+        & (jnp.sum(damaging.astype(_I32)) >= 2)
+        & jnp.all(~damaging | ((a_flags & INEFFECTIVE) != 0))
+    )
+
+    # Step 9 (:3872): positive stages summing to 4 or more end the check.
+    boosted = jnp.sum(jnp.maximum(state.stages[1].astype(_I32), 0)) >= 4
+
+    # Steps 10-11 (:3727): moveHit against each bench member, then its moves against D.
+    hit = state.move_hit[1].astype(_I32)
+    hit_ok = (hit != 0) & (tables.move_power[hit] > 0)
+    hit_flags = jax.vmap(lambda t: calc_effectiveness_flags(tables, hit, t, gravity))(
+        state.types[1]
+    )
+    bench_moves = state.moves[1].astype(_I32).reshape(-1)  # [SLOTS * MOVES], slot-major
+    bench_flags = jax.vmap(lambda m: calc_effectiveness_flags(tables, m, d_types, gravity))(
+        bench_moves
+    ).reshape(SLOTS, MOVES)
+    bench_moves = bench_moves.reshape(SLOTS, MOVES)
+    bench_se = (bench_moves != 0) & ((bench_flags & SUPER_EFFECTIVE) != 0)
+    passes = [
+        ((bench & hit_ok & ~boosted & ((hit_flags & mask) != 0))[:, None] & bench_se).reshape(-1)
+        for mask in (INEFFECTIVE, NOT_VERY_EFFECTIVE)
+    ]
+    exists = jnp.concatenate([keep, *passes]) & ~gate  # [_CANDIDATES]
+
+    position = jnp.cumsum(exists.astype(_I32)) - 1
+    target = jnp.where(exists, position, SWITCH_SITES)  # out of range: dropped
+    kinds = jnp.zeros(SWITCH_SITES, _I8).at[target].set(_CANDIDATE_KINDS, mode="drop")
+    targets = jnp.full(SWITCH_SITES, -1, _I8).at[target].set(_CANDIDATE_TARGETS, mode="drop")
+    count = jnp.sum(exists.astype(_I32))
+
+    side = jnp.arange(2)[:, None]
+    ability_refused = present & (
+        jnp.isin(ability, _ANY_SIDE_IDS) | ((side == 1) & jnp.isin(ability, _AI_SIDE_IDS))
+    )
+    item_refused = present & (state.item.astype(_I32) == ITEM_IRON_BALL)
+    move_refused = present[..., None] & jnp.isin(state.moves.astype(_I32), _MOVE_REFUSED_IDS)
+    refused = (
+        (count > SWITCH_SITES)
+        | only_ineffective
+        | jnp.any(ability_refused)
+        | jnp.any(item_refused)
+        | jnp.any(move_refused)
+    )
+    kinds = jnp.where(refused, jnp.asarray(SwitchSite.REFUSED, _I8), kinds)
+    return _Layout(
+        kinds,
+        targets,
+        count,
+        only_ineffective,
+        ability_refused,
+        item_refused,
+        move_refused,
+        refused,
+    )
+
+
+def _refusals(lay: _Layout, state: BattleState, tables: Tables) -> list[str]:
+    out: list[str] = []
+    species = np.asarray(state.species).astype(np.int64)
+    slot = np.asarray(state.ability_slot).astype(np.int64)
+    ability = np.asarray(tables.species_abilities_decomp)[species, slot]
+    for side, s in zip(*np.nonzero(np.asarray(lay.ability_refused)), strict=True):
+        name = _ABILITY_NAMES[int(ability[side, s])]
+        why = (_ANY_SIDE_ABILITIES | _AI_SIDE_ABILITIES)[name]
+        out.append(f"switching: side {side} slot {s}: ability {name} ({why}) is not implemented")
+    for side, s in zip(*np.nonzero(np.asarray(lay.item_refused)), strict=True):
+        out.append(
+            f"switching: side {side} slot {s}: item Iron Ball (grounds the holder) "
+            "is not implemented"
+        )
+    moves = np.asarray(state.moves)
+    for side, s, k in zip(*np.nonzero(np.asarray(lay.move_refused)), strict=True):
+        name = _MOVE_NAMES[int(moves[side, s, k])]
+        out.append(
+            f"switching: side {side} slot {s}: move {name} ({_MOVES[name]}) is not implemented"
+        )
+    if bool(lay.only_ineffective):
+        out.append(
+            "switching: AI_OnlyIneffectiveMoves (trainer_ai.c:3361) applies to the AI's "
+            "active Pokemon and is not implemented"
+        )
+    if int(lay.count) > SWITCH_SITES:
+        out.append(
+            f"switching: {int(lay.count)} voluntary-switch draws exceed the "
+            f"{SWITCH_SITES} sites AiOutcome.switch_stop encodes"
+        )
+    return out
+
+
+def switching_refusals(tables: Tables, state: BattleState) -> list[str]:
+    """Every reason the voluntary-switch layout of this (concrete) state is refused,
+    one human-readable line each; empty when it is supported."""
+    return _refusals(_layout(tables, state), state, tables)
+
+
+def _checked_layout(tables: Tables, state: BattleState) -> _Layout:
+    lay = _layout(tables, state)
+    if not isinstance(lay.refused, jax.core.Tracer) and bool(lay.refused):
+        raise UnsupportedSwitching("; ".join(_refusals(lay, state, tables)))
+    return lay
+
+
+def switch_sites(tables: Tables, state: BattleState) -> jnp.ndarray:
+    """``int8[SWITCH_SITES]``: the ``SwitchSite`` kind of each result-changing draw of
+    ``TrainerAI_ShouldSwitch`` for the opponent's active Pokemon, in the decomp's order
+    (``SwitchSite.NONE`` for unused entries). Raises ``UnsupportedSwitching`` on a
+    refused layout when not traced (module docstring)."""
+    return _checked_layout(tables, state).kinds
+
+
+def switch_action(tables: Tables, state: BattleState, stop) -> jnp.ndarray:
+    """``int32``: what ``AiOutcome.switch_stop = stop`` means for this state: the switch
+    action ``4 + j`` when a party-pass site for slot j stops, ``NO_SWITCH`` for a keep
+    draw or no stop, ``REFUSED_ACTION`` for a refused layout."""
+    lay = _checked_layout(tables, state)
+    stop = jnp.asarray(stop, _I32)
+    in_range = (stop >= 0) & (stop < SWITCH_SITES)
+    index = jnp.clip(stop, 0, SWITCH_SITES - 1)
+    kind = lay.kinds[index]
+    is_pass = in_range & (
+        (kind == SwitchSite.PASS_INEFFECTIVE) | (kind == SwitchSite.PASS_NOT_VERY_EFFECTIVE)
+    )
+    action = jnp.where(is_pass, MOVE_ACTIONS + lay.targets[index].astype(_I32), NO_SWITCH)
+    return jnp.where(lay.refused | (stop == SWITCH_REFUSED), REFUSED_ACTION, action).astype(_I32)

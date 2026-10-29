@@ -427,10 +427,15 @@ only two kinds change the result:
 
 Their exact probabilities are in section 11.1. Task 3a encodes them as one field,
 `AiOutcome.switch_stop` (the first stopping site, 9 = none; section 11.1,
-"Encoding"). `sample_ai_outcome` and `enumerate_ai_outcomes` take the site layout as
-`switch_sites`, one `SwitchSite` kind (`KEEP`, `PASS_INEFFECTIVE`,
-`PASS_NOT_VERY_EFFECTIVE`, or `NONE` for unused entries) per draw, because working out
-which sites exist is the switching rule itself (`maybe_switch`, Task 3).
+"Encoding"). The site layout is `nuzline.ai.switching.switch_sites(tables, state)`,
+one `SwitchSite` kind (`KEEP`, `PASS_INEFFECTIVE`, `PASS_NOT_VERY_EFFECTIVE`, or `NONE`
+for unused entries) per draw, and `switch_action(tables, state, stop)` maps a stop to
+its action. `sample_ai_outcome(key, tables, state)` and
+`enumerate_ai_outcomes(tables, state)` call `switch_sites` themselves, and Task 3's
+`maybe_switch` reuses both functions. `switch_sites` refuses (raises
+`UnsupportedSwitching`, or marks every entry `REFUSED` when traced) a layout over 9
+sites and every effectiveness modifier it does not implement; `switching_refusals`
+names them.
 
 ### 8.6 Item use and post-KO replacement
 

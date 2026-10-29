@@ -25,54 +25,61 @@ probability. Ranges and encodings are those of ``docs/ai/roark.md`` section 8:
   depends on the site's ``SwitchSite`` kind, so one categorical is exact.
 
 The site layout depends on the state (which of the AI's moves are super effective,
-which bench Pokemon resist ``move_hit``), and working it out is the AI's switching
-rule itself, so it is an input here: ``switch_sites int8[SWITCH_SITES]``, the kind of
-each result-changing draw in the decomp's order (``SwitchSite.NONE`` for unused
-entries), from the caller (Task 3's ``maybe_switch`` layout). Draws that cannot change
-the result (``AI_HasAbsorbAbilityInParty``'s ``% 3`` for Roark) are not sites. Item use
+which bench Pokemon resist ``move_hit``): both functions take ``tables`` and derive it
+with ``nuzline.ai.switching.switch_sites``, the one layout function Task 3's
+``maybe_switch`` also uses (``switch_action`` maps a stop to its action). Draws that
+cannot change the result (``AI_HasAbsorbAbilityInParty``'s ``% 3`` for Roark) are not
+sites. A refused layout raises ``UnsupportedSwitching`` on concrete inputs; traced, it
+gives ``switch_stop = SWITCH_REFUSED`` and NaN probabilities (``switching``). Item use
 draws nothing (8.6).
 """
 
 from __future__ import annotations
 
 import math
-from enum import IntEnum
 from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
 import numpy as np
 
+from nuzline.ai.switching import (
+    SWITCH_NONE,
+    SWITCH_REFUSED,
+    SWITCH_SITES,
+    SwitchSite,
+    switch_sites,
+)
+from nuzline.data.tables import Tables
 from nuzline.engine.state import MOVES, BattleState
+
+__all__ = [
+    "MAX_ENUMERATED",
+    "MAX_SCRIPT_ROLLS",
+    "SWITCH_NONE",
+    "SWITCH_REFUSED",
+    "SWITCH_SITES",
+    "AiOutcome",
+    "AiOutcomeTooWide",
+    "SwitchSite",
+    "enumerate_ai_outcomes",
+    "sample_ai_outcome",
+    "script_roll_thresholds",
+    "switch_stop_probs",
+]
 
 MAX_SCRIPT_ROLLS = 4  # roark.md 8.3: at most four sites per Roark Pokemon
 MAX_ENUMERATED = 4096  # spec §10 "AI outcome width"
 SIM_ROLL_MAX = 15  # roll index of 100 %
 TIEBREAK_MOD = 12
-SWITCH_SITES = 9  # roark.md 11.1: 1 keep draw + 4 + 4 party-pass draws for Roark
-SWITCH_NONE = SWITCH_SITES  # switch_stop when no draw stops the check
 _I8, _I32, _F32 = jnp.int8, jnp.int32, jnp.float32
 
-
-class SwitchSite(IntEnum):
-    """Kind of one voluntary-switch draw (``AiOutcome.switch_stop``; roark.md 11.1)."""
-
-    NONE = 0  # unused entry: never stops
-    # AI_HasSuperEffectiveMove(..., FALSE) (trainer_ai.c:3560): RandNext() % 10 != 0
-    # keeps the battler in (:3588), 58982 of 65536 u16 values.
-    KEEP = 1
-    # AI_HasPartyMemberWithSuperEffectiveMove(..., 0x8 = INEFFECTIVE, 2) (:3973):
-    # RandNext() % 2 == 0 switches (:3779), 32768 of 65536.
-    PASS_INEFFECTIVE = 2
-    # The same with 0x4 = NOT_VERY_EFFECTIVE, 3 (:3979): RandNext() % 3 == 0, 21846 of 65536.
-    PASS_NOT_VERY_EFFECTIVE = 3
-
-
-# RandNext() % m over a uniform u16 per SwitchSite: (modulus, stops when the residue
-# is 0) -> stop probability. 65536 = 10 * 6553 + 6 = 3 * 21845 + 1.
-_SWITCH_MOD = jnp.array([1, 10, 2, 3], _I32)
-_SWITCH_STOPS_ON_ZERO = jnp.array([False, False, True, True])
-_SWITCH_P = jnp.array([0, 58982, 32768, 21846], _F32) / 65536
+# RandNext() % m over a uniform u16 per SwitchSite (NONE, KEEP, PASS_INEFFECTIVE,
+# PASS_NOT_VERY_EFFECTIVE, REFUSED): (modulus, stops when the residue is 0) -> stop
+# probability, NaN for REFUSED. 65536 = 10 * 6553 + 6 = 3 * 21845 + 1.
+_SWITCH_MOD = jnp.array([1, 10, 2, 3, 1], _I32)
+_SWITCH_STOPS_ON_ZERO = jnp.array([False, False, True, True, False])
+_SWITCH_P = jnp.array([0, 58982, 32768, 21846, jnp.nan], _F32) / 65536
 
 # IfRandomLessThan sites per move (decomp move id), transcribed from roark.md 5.2-5.3
 # and 8.3: the N of the move's EVAL_ATTACK site (EvalAttack_TryScorePlus2,
@@ -114,7 +121,7 @@ class AiOutcome(NamedTuple):
     ability_guess: jnp.ndarray  # int8[], player ability slot 0/1
     script_rolls: jnp.ndarray  # int8[MAX_SCRIPT_ROLLS], 1 = the site's jump is taken
     tiebreak: jnp.ndarray  # int8[], RandNext % 12
-    switch_stop: jnp.ndarray  # int8[], first stopping switch draw 0-8, 9 = none
+    switch_stop: jnp.ndarray  # int8[], first stopping switch draw 0-8, 9 = none, -1 refused
 
 
 def script_roll_thresholds(state: BattleState) -> jnp.ndarray:
@@ -134,23 +141,29 @@ def script_roll_thresholds(state: BattleState) -> jnp.ndarray:
 
 def switch_stop_probs(switch_sites) -> jnp.ndarray:
     """``float32[SWITCH_SITES + 1]``: the probability that site i is the first to stop,
-    ``prod_{h<i} (1 - p_h) * p_i``, then (last entry) that none stops."""
-    p = _SWITCH_P[jnp.asarray(switch_sites, _I32)]
+    ``prod_{h<i} (1 - p_h) * p_i``, then (last entry) that none stops; all NaN for a
+    refused layout."""
+    kind = jnp.asarray(switch_sites, _I32)
+    p = _SWITCH_P[kind]
     reach = jnp.cumprod(jnp.concatenate([jnp.ones(1, _F32), 1 - p]))  # [SWITCH_SITES + 1]
-    return jnp.concatenate([reach[:-1] * p, reach[-1:]])
+    probs = jnp.concatenate([reach[:-1] * p, reach[-1:]])
+    return jnp.where(jnp.any(kind == SwitchSite.REFUSED), jnp.nan, probs)
 
 
 def _first_stop(draws, switch_sites) -> jnp.ndarray:
-    """The first site whose u16 ``draws[i]`` stops the check, else ``SWITCH_NONE``."""
+    """The first site whose u16 ``draws[i]`` stops the check, else ``SWITCH_NONE``;
+    ``SWITCH_REFUSED`` for a refused layout."""
     kind = jnp.asarray(switch_sites, _I32)
     zero = draws % _SWITCH_MOD[kind] == 0
     stops = (kind != SwitchSite.NONE) & (zero == _SWITCH_STOPS_ON_ZERO[kind])
-    return jnp.where(jnp.any(stops), jnp.argmax(stops), SWITCH_NONE)
+    first = jnp.where(jnp.any(stops), jnp.argmax(stops), SWITCH_NONE)
+    return jnp.where(jnp.any(kind == SwitchSite.REFUSED), SWITCH_REFUSED, first)
 
 
-def sample_ai_outcome(key, state: BattleState, switch_sites) -> AiOutcome:
-    """Draw every field from its decomp probability for this state; ``switch_sites``
-    is the voluntary-switch draw layout (module docstring)."""
+def sample_ai_outcome(key, tables: Tables, state: BattleState) -> AiOutcome:
+    """Draw every field from its decomp probability for this state (the switch draws
+    over ``switch_sites(tables, state)``)."""
+    layout = switch_sites(tables, state)
     k = jax.random.split(key, 4)
     rolls = jax.random.randint(k[1], (MAX_SCRIPT_ROLLS,), 0, 256, dtype=_I32)
     draws = jax.random.randint(k[3], (SWITCH_SITES,), 0, 65536, dtype=_I32)
@@ -159,7 +172,7 @@ def sample_ai_outcome(key, state: BattleState, switch_sites) -> AiOutcome:
         ability_guess=jax.random.randint(k[0], (), 0, 2, dtype=_I32).astype(_I8),
         script_rolls=(rolls < script_roll_thresholds(state)).astype(_I8),
         tiebreak=(jax.random.randint(k[2], (), 0, 65536, dtype=_I32) % TIEBREAK_MOD).astype(_I8),
-        switch_stop=_first_stop(draws, switch_sites).astype(_I8),
+        switch_stop=_first_stop(draws, layout).astype(_I8),
     )
 
 
@@ -177,19 +190,19 @@ def _grid() -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     return ability.reshape(-1), rolls, switch.reshape(-1), tiebreak.reshape(-1)
 
 
-def enumerate_ai_outcomes(state: BattleState, switch_sites) -> tuple[AiOutcome, jnp.ndarray]:
+def enumerate_ai_outcomes(tables: Tables, state: BattleState) -> tuple[AiOutcome, jnp.ndarray]:
     """Every outcome combination (a batched ``AiOutcome`` with leading axis K) and its
     exact probability ``float32[K]``. K is fixed (3840); combinations with an unused
     script-roll site set to 1, or a ``switch_stop`` at a ``SwitchSite.NONE`` entry, have
     probability 0. Raises ``AiOutcomeTooWide`` when the product of the ranges exceeds
-    ``MAX_ENUMERATED``."""
+    ``MAX_ENUMERATED``. The switch draws are over ``switch_sites(tables, state)``."""
     if _WIDTH > MAX_ENUMERATED:
         raise AiOutcomeTooWide(f"{_WIDTH} AI outcome combinations > {MAX_ENUMERATED}")
     ability, rolls, switch, tiebreak = _grid()
     p_jump = script_roll_thresholds(state).astype(_F32) / 256  # [MAX_SCRIPT_ROLLS]
     rolls_j = jnp.asarray(rolls, _I32)
     p_rolls = jnp.prod(jnp.where(rolls_j == 1, p_jump, 1 - p_jump), axis=1)
-    p_switch = switch_stop_probs(switch_sites)[jnp.asarray(switch, _I32)]
+    p_switch = switch_stop_probs(switch_sites(tables, state))[jnp.asarray(switch, _I32)]
     p_rest = jnp.asarray(_TIEBREAK_P[tiebreak] / _ABILITY_VALUES, _F32)
     outs = AiOutcome(
         sim_roll=jnp.full((_WIDTH, MOVES), SIM_ROLL_MAX, _I8),

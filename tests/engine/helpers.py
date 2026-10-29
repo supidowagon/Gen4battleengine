@@ -227,6 +227,19 @@ def roark_state(
     return s
 
 
+def roark_real_state(
+    tables: Tables, names: Names, *, player_species: str | None = None
+) -> BattleState:
+    """The sample party (``player_species`` swapped into slot 0, as in
+    ``roark_state``) against Roark's real built party (Geodude, Onix, Cranidos with
+    their own moves; docs/ai/roark.md section 4) and bag: the common setup of the
+    roark.md section 13 traces."""
+    player = load_party(SAMPLE_PARTY, names)
+    if player_species is not None:
+        player = _lead(player, names.species(player_species), _inter())
+    return make_state(tables, player, list(_roark_party()), opp_items=_roark().items)
+
+
 def A(player, opp, state: BattleState, names: Names) -> jnp.ndarray:
     """``int32[2]`` actions: a move name becomes that move's slot on the side's
     active Pokemon (``Names.move_slot``); an int is used as the raw action."""
