@@ -273,6 +273,15 @@ def damage_for_roll(
     return _finish(tables, state, atk_side, move, damage, move_type, category, power, _i32(roll))
 
 
+def calc_move_damage(
+    tables: Tables, state: BattleState, atk_side, move, power_mul=10
+) -> jnp.ndarray:
+    """``int32``: ``BattleSystem_CalcMoveDamage`` (battle_lib.c:6601) alone, with
+    ``criticalMul`` 1: step 1 above, ending with the ``+ 2`` (so a power-0 move gives 2).
+    No variance, STAB or type chart. ``power_mul`` is ``battleCtx->powerMul`` in tenths."""
+    return _pre_random(tables, state, atk_side, move, False, power_mul=power_mul)[0]
+
+
 def ai_damage_for_roll(tables: Tables, state: BattleState, atk_side, move, roll) -> jnp.ndarray:
     """``int32``: ``TrainerAI_CalcDamage`` (trainer_ai.c:2868-3109) for a move with no
     special calculation: ``BattleSystem_CalcMoveDamage`` with ``criticalMul`` 1 (screens,

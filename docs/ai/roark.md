@@ -654,7 +654,17 @@ It is called from `Task_TrainerShowPartyMenu` (`battle_display.c:4543-4559`) whe
 3. If both stages return 6: pick the first living non-active slot
    (`battle_display.c:4548-4556`).
 
-This differs from Task 6's "first legal replacement slot" (see section 14).
+This differs from Task 6's "first legal replacement slot" (see section 14). Task 6
+implements this section (`nuzline.ai.replacement.post_ko_switch_in`), not the first
+legal slot. Two details found while implementing it:
+
+- `battleCtx->powerMul` is reset only by `BattleContext_Init` (`battle_lib.c:1980`),
+  which `TurnEnd` runs after `ReplaceFainted`. After a Pursuit hit on a switch
+  (`powerMul = 20`, `battle_script.c:6928`), stage 2 runs with doubled power.
+- In stage 2 the comparison `maxScore < score` (`:8076`) also runs for a skipped slot
+  (no move, or power 1), on the `score` left from the previous move or from stage 1.
+  This only matters before the first scored move, when the first candidate's slot 0 is
+  skipped. The engine refuses that case.
 
 ## 12. Item use: `TrainerAI_ShouldUseItem` (`trainer_ai.c:4056`)
 
@@ -894,6 +904,8 @@ checks remain open.
   Onix nor Cranidos has a super-effective move, so stage 2 decides. Rock Throw is
   resisted and Headbutt is not, so the AI sends Cranidos (slot 2), while "first legal
   slot" would send Onix (slot 1).
+  **Status (Task 6):** done, following section 11.2 (controller ruling). A
+  replacement in a turn the AI switched (item (3) below) is refused by the playout.
 - **Item consumption** (section 12, quirk 5) can zero two bag slots in one action.
   Task 2b's "sets the slot to 0" needs to cover this.
 
