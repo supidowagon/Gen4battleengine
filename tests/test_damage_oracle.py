@@ -29,7 +29,7 @@ from nuzline.data.tables import Names, Tables
 from nuzline.engine.damage import STATUS, damage_table
 from nuzline.engine.ids import AbilityId, Stat, Status, Type, Weather
 from nuzline.engine.state import make_state
-from tests.strategies import m1_move_pools
+from tests.strategies import m1_move_pools, possible_genders
 
 ROOT = Path(__file__).resolve().parents[1]
 SMOGON_DIR = ROOT / "tools" / "smogon_calc"
@@ -47,7 +47,6 @@ _WEATHER = {
 }
 _GENDER = {0: "M", 1: "F", 2: "N"}
 _CATEGORY = {"Physical": 0, "Special": 1}
-_GENDERLESS, _MALE_ONLY, _FEMALE_ONLY = 255, 0, 254
 
 jit_damage_table = jax.jit(damage_table)
 
@@ -62,16 +61,6 @@ def node() -> str:
     return exe
 
 
-def _gender(rng: np.random.Generator, ratio: int) -> int:
-    if ratio == _GENDERLESS:
-        return 2
-    if ratio == _MALE_ONLY:
-        return 0
-    if ratio == _FEMALE_ONLY:
-        return 1
-    return int(rng.integers(0, 2))
-
-
 def _mon(rng: np.random.Generator, tables: Tables, names: Names, species: int) -> PokemonSpec:
     abilities = names.species_abilities(species)
     return PokemonSpec(
@@ -83,7 +72,7 @@ def _mon(rng: np.random.Generator, tables: Tables, names: Names, species: int) -
         moves=(0, 0, 0, 0),
         item=0,
         ability_slot=int(rng.choice([i for i, a in enumerate(abilities) if a])),
-        gender=_gender(rng, int(tables.species_gender[species])),
+        gender=int(rng.choice(possible_genders(int(tables.species_gender[species])))),
         friendship=70,
     )
 

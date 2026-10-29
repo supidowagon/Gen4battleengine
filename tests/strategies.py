@@ -49,7 +49,7 @@ M1_SPECIES = (
 M1_ITEMS = ("", "Oran Berry", "Sitrus Berry")
 
 # decomp gender ratios (``tables.species_gender``) with a single possible gender
-_GENDERLESS, _MALE_ONLY, _FEMALE_ONLY = 255, 0, 254
+GENDERLESS, MALE_ONLY, FEMALE_ONLY = 255, 0, 254
 _SLEEP_TURNS = (1, 5)  # BtlCmd_Random 3, 2 stores 2-5; a counter of 1 wakes next turn
 _TOXIC_MAX = 15  # step.TOXIC_COUNTER_MAX
 _CONFUSION_MAX, _TAUNT_MAX, _BIND_MAX = 5, 5, 6  # outcome.sample_outcome's duration ranges
@@ -87,14 +87,15 @@ def _max_hp(tables: Tables, species, ivs, evs, level, nature) -> int:
     return int(stats[Stat.HP])
 
 
-def _gender(ratio: int) -> st.SearchStrategy[int]:
-    if ratio == _GENDERLESS:
-        return st.just(2)
-    if ratio == _MALE_ONLY:
-        return st.just(0)
-    if ratio == _FEMALE_ONLY:
-        return st.just(1)
-    return st.sampled_from((0, 1))
+def possible_genders(ratio: int) -> tuple[int, ...]:
+    """Genders (0 male, 1 female, 2 genderless) a species with this decomp ratio can have."""
+    if ratio == GENDERLESS:
+        return (2,)
+    if ratio == MALE_ONLY:
+        return (0,)
+    if ratio == FEMALE_ONLY:
+        return (1,)
+    return (0, 1)
 
 
 @st.composite
@@ -112,7 +113,7 @@ def supported_pokemon(draw, tables: Tables, names: Names) -> PokemonSpec:
     abilities = names.species_abilities(species)
     ability_slot = draw(st.sampled_from([i for i, a in enumerate(abilities) if a]))
     item = names.item(draw(st.sampled_from(M1_ITEMS)))
-    gender = draw(_gender(int(tables.species_gender[species])))
+    gender = draw(st.sampled_from(possible_genders(int(tables.species_gender[species]))))
     max_hp = _max_hp(tables, species, ivs, evs, level, nature)
     hp = draw(st.integers(0, max_hp))
     status = draw(st.sampled_from(list(Status))) if hp > 0 else Status.NONE

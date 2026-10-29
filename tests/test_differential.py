@@ -12,7 +12,15 @@ from nuzline.engine.outcome import outcome_to_py
 from nuzline.engine.step import step
 from nuzline.reference.convert import from_ref, to_ref
 from nuzline.reference.engine import ref_step
-from tests.strategies import any_outcome, legal_action_pair, supported_state
+from tests.strategies import (
+    FEMALE_ONLY,
+    GENDERLESS,
+    MALE_ONLY,
+    any_outcome,
+    legal_action_pair,
+    possible_genders,
+    supported_state,
+)
 
 # Compiled once: every generated state has the same shapes and dtypes (plan ruling).
 jit_step = jax.jit(step)
@@ -34,3 +42,10 @@ def test_jax_matches_reference(tables, names, data):
     )
     for name, a, b in zip(jax_out._fields, jax_out, ref_out):
         np.testing.assert_array_equal(np.asarray(a), np.asarray(b), err_msg=name)
+
+
+def test_possible_genders_follows_the_decomp_gender_ratio():
+    assert possible_genders(GENDERLESS) == (2,)
+    assert possible_genders(MALE_ONLY) == (0,)
+    assert possible_genders(FEMALE_ONLY) == (1,)
+    assert possible_genders(127) == (0, 1)  # a mixed (50:50) ratio
