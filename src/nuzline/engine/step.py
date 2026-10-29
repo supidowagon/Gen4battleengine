@@ -17,12 +17,12 @@ Pure, jit- and vmap-able, fixed shapes; every random event comes from
 6. The battle ends at the first faint check that finds a player faint or no
    opponent left (``_faint_check``); later checks of the turn do nothing.
 
-Implemented so far: switching, Stealth Rock on a switch-in, damaging moves, the
-accuracy check, PP, Struggle, the move effects of ``effects.py``, Pursuit's
-pre-switch hit, the Taunt and confusion checks before a move, the Leech Seed, Bind
-and Taunt end-of-turn checks, faints and the end of the battle. A player faint is
-terminal (spec §3): it sets ``over = 1, winner = 1``. A state that is already over
-is returned unchanged.
+Implemented so far: switching (with Natural Cure), Stealth Rock on a switch-in,
+damaging moves, the accuracy check, PP, Struggle, the move effects of ``effects.py``,
+Pursuit's pre-switch hit, the sleep, freeze, flinch, Taunt, confusion and paralysis
+checks before a move, the Leech Seed, poison, toxic, burn, Bind and Taunt end-of-turn
+checks, faints and the end of the battle. A player faint is terminal (spec §3): it
+sets ``over = 1, winner = 1``. A state that is already over is returned unchanged.
 """
 
 from __future__ import annotations
@@ -52,6 +52,8 @@ from nuzline.engine.state import BattleState
 _I32 = jnp.int32
 WINNER_OPPONENT, WINNER_PLAYER = 1, 2
 PURSUIT_POWER_MUL = 20  # BtlCmd_TryPursuit (battle_script.c:6884): powerMul = 20
+# MON_CONDITION_TOXIC_COUNTER is 4 bits (include/constants/battle/condition.h:23).
+TOXIC_COUNTER_MAX = 15
 
 # Per-side fields of the active Pokemon that leave with it: the incoming battler is
 # rebuilt from its party mon by ``BattleSystem_InitBattleMon`` (battle_lib.c:70), stat
@@ -89,6 +91,31 @@ def _release_bind(state: BattleState, side, cond) -> BattleState:
     )
 
 
+def _set_mon(state: BattleState, field: str, side, slot, value, cond) -> BattleState:
+    """``state.<field>[side, slot] = value`` where ``cond``."""
+    arr = getattr(state, field)
+    new = jnp.where(cond, value, arr[side, slot]).astype(arr.dtype)
+    return state._replace(**{field: arr.at[side, slot].set(new)})
+
+
+def _switch_out(state: BattleState, side) -> BattleState:
+    """``side``'s active Pokemon leaves by a switch action (``subscript_switch_pokemon.s``).
+
+    * Natural Cure: ``BtlCmd_TryRestoreStatusOnSwitch`` (battle_script.c:9139) clears
+      the status of a switching Pokemon with HP left and Natural Cure. The decomp does
+      this before Pursuit hits (``subscript_switch_pokemon.s:5-6``), when the switcher
+      always has HP left, so it is cleared here whatever Pursuit did.
+    * The toxic counter restarts: battle_controller.c:1482 writes the status back to the
+      party without ``MON_CONDITION_TOXIC_COUNTER``, and a returning battler reads it
+      from there. A sleep counter is part of the status and stays.
+    """
+    mon = state.active[side]
+    cure = state.ability[side, mon] == AbilityId.NATURAL_CURE
+    toxic = state.status[side, mon] == Status.TOXIC
+    state = _set_mon(state, "status", side, mon, Status.NONE, cure)
+    return _set_mon(state, "status_counter", side, mon, 0, cure | toxic)
+
+
 def _switch_in(state: BattleState, side, slot) -> BattleState:
     """``side`` sends out party ``slot``: stages and volatiles reset, and the Bind the
     outgoing Pokemon put on the other side ends (``BattleSystem_UpdateAfterSwitch``,
@@ -103,9 +130,9 @@ def _switch_in(state: BattleState, side, slot) -> BattleState:
 
 
 def _send_out(tables: Tables, state: BattleState, side, slot) -> BattleState:
-    """A switch action: ``_switch_in``, then the entry hazards
+    """A switch action: ``_switch_out``, ``_switch_in``, then the entry hazards
     (``subscript_hazards_check.s``; Stealth Rock is the only one in M1)."""
-    return stealth_rock_damage(tables, _switch_in(state, side, slot), side)
+    return stealth_rock_damage(tables, _switch_in(_switch_out(state, side), side, slot), side)
 
 
 def _use_move(
@@ -119,19 +146,40 @@ def _use_move(
     target_side = 1 - side
     target = state.active[target_side]
     ready = (state.over == 0) & (state.hp[side, user] > 0)
-    flinched = state.flinched[side] != 0
 
-    # BattleControllerPlayer_CheckStatusDisruption (battle_controller_player.c:2414) runs
+    # BattleControllerPlayer_CheckStatusDisruption (battle_controller_player.c:2417) runs
     # before the PP decrement; the first check that disrupts the move stops the rest.
+    # CHECK_STATUS_STATE_SLEEP (:2430): the counter drops by 1 (Early Bird is not
+    # implemented); still asleep disrupts the move, while waking up (subscript_wake_up)
+    # clears the status and the checks go on.
+    status = state.status[side, user]
+    asleep = ready & (status == Status.SLEEP)
+    sleep_left = jnp.maximum(state.status_counter[side, user].astype(_I32) - 1, 0)
+    sleeping = asleep & (sleep_left > 0)
+    state = _set_mon(state, "status_counter", side, user, sleep_left, asleep)
+    state = _set_mon(state, "status", side, user, Status.NONE, asleep & ~sleeping)
+    # CHECK_STATUS_STATE_FREEZE (:2478): RandNext() % 5 == 0 (outcome.thaw) thaws and the
+    # move goes on; otherwise the move is disrupted unless it is a thawing move (Flame
+    # Wheel, :2481), whose user thaws at CHECK_STATUS_STATE_SELF_THAW (:2728) below.
+    thaw_move = (tables.move_effect[move] == EffectId.SECONDARY_STATUS) & (
+        tables.move_param[move, 2] == 1
+    )
+    frozen = ready & (status == Status.FREEZE)
+    thawed = frozen & (outcome.thaw[side] != 0)
+    still_frozen = frozen & ~thawed
+    state = _set_mon(state, "status", side, user, Status.NONE, thawed)
+    go = ready & ~sleeping & ~(still_frozen & ~thaw_move)
     # CHECK_STATUS_STATE_FLINCH (:2529); subscript_flinched.s:10-14 gives Steadfast +1 Speed.
-    steadfast = ready & flinched & (state.ability[side, user] == AbilityId.STEADFAST)
+    flinched = go & (state.flinched[side] != 0)
+    steadfast = flinched & (state.ability[side, user] == AbilityId.STEADFAST)
     state = change_stage(state, side, Stat.SPE, 1, steadfast)
+    go = go & ~flinched
     # CHECK_STATUS_STATE_TAUNT (:2557): a taunted battler's power-0 move fails.
-    taunted = ready & ~flinched & (state.taunt[side] > 0) & (tables.move_power[move] == 0)
+    go = go & ~((state.taunt[side] > 0) & (tables.move_power[move] == 0))
     # CHECK_STATUS_STATE_CONFUSION (:2614): the counter drops first; at 0 the battler snaps
     # out and moves, otherwise RandNext() & 1 (outcome.confusion_hit) makes it hit itself
     # (:2633, damage.confusion_damage) instead of moving.
-    confused = ready & ~flinched & ~taunted & (state.confusion[side] > 0)
+    confused = go & (state.confusion[side] > 0)
     confusion = state.confusion[side] - confused.astype(state.confusion.dtype)
     self_hit = confused & (confusion > 0) & (outcome.confusion_hit[side] != 0)
     user_hp = state.hp[side, user].astype(_I32)
@@ -141,7 +189,13 @@ def _use_move(
         confusion=state.confusion.at[side].set(confusion),
         hp=state.hp.at[side, user].set(user_hp.astype(state.hp.dtype)),
     )
-    can_act = ready & ~flinched & ~taunted & ~self_hit
+    go = go & ~self_hit
+    # CHECK_STATUS_STATE_PARALYSIS (:2652): RandNext() % 4 == 0 (outcome.full_para) fully
+    # paralyzes (Magic Guard is not implemented).
+    full_para = (state.status[side, user] == Status.PARALYSIS) & (outcome.full_para[side] != 0)
+    can_act = go & ~full_para
+    # CHECK_STATUS_STATE_SELF_THAW (:2728): a still-frozen user of a thawing move thaws.
+    state = _set_mon(state, "status", side, user, Status.NONE, can_act & still_frozen)
 
     # BattleControllerPlayer_DecrementPP (battle_controller_player.c:3182) runs before the
     # no-target check (:3190); Struggle has no PP to spend.
@@ -289,6 +343,43 @@ def _leech_seed_check(tables: Tables, state: BattleState, side) -> BattleState:
     return _hp_change(_hp_change(state, side, mon, -drained), other, recipient, drained)
 
 
+def _status_damage(state: BattleState, side, status, damage) -> BattleState:
+    """``side``'s active Pokemon with ``status`` and HP left loses ``damage`` (capped at its
+    HP, ``BATTLE_SUBSCRIPT_UPDATE_HP``)."""
+    mon = state.active[side]
+    on = (state.status[side, mon] == status) & (state.hp[side, mon] > 0)
+    return _hp_change(state, side, mon, -jnp.where(on, damage, 0))
+
+
+def _eighth(state: BattleState, side) -> jnp.ndarray:
+    """``BattleSystem_Divide(maxHP, 8)`` of ``side``'s active Pokemon: at least 1."""
+    return jnp.maximum(state.max_hp[side, state.active[side]].astype(_I32) // 8, 1)
+
+
+def _poison_check(tables: Tables, state: BattleState, side) -> BattleState:
+    """``BattleSystem_Divide(maxHP * -1, 8)``, ``subscript_poison_damage.s`` (Magic Guard
+    and Poison Heal are not implemented)."""
+    return _status_damage(state, side, Status.POISON, _eighth(state, side))
+
+
+def _toxic_check(tables: Tables, state: BattleState, side) -> BattleState:
+    """The counter rises first (up to ``TOXIC_COUNTER_MAX``), then the Pokemon loses
+    ``BattleSystem_Divide(maxHP, 16) * counter``."""
+    mon = state.active[side]
+    on = (state.status[side, mon] == Status.TOXIC) & (state.hp[side, mon] > 0)
+    counter = jnp.minimum(state.status_counter[side, mon].astype(_I32) + 1, TOXIC_COUNTER_MAX)
+    state = _set_mon(state, "status_counter", side, mon, counter, on)
+    sixteenth = jnp.maximum(state.max_hp[side, mon].astype(_I32) // 16, 1)
+    return _status_damage(state, side, Status.TOXIC, sixteenth * counter)
+
+
+def _burn_check(tables: Tables, state: BattleState, side) -> BattleState:
+    """``subscript_burn_damage.s``: ``DivideVarByValue`` maxHP by 8, which is
+    ``BattleSystem_Divide`` (battle_script.c:4413; Magic Guard and Heatproof are not
+    implemented)."""
+    return _status_damage(state, side, Status.BURN, _eighth(state, side))
+
+
 def _bind_check(tables: Tables, state: BattleState, side) -> BattleState:
     """A bound active Pokemon with HP left: the counter drops, and while it stays above
     0 the Pokemon loses ``BattleSystem_Divide(maxHP, 16)``; at 0 Bind ends without damage."""
@@ -310,10 +401,16 @@ def _taunt_check(tables: Tables, state: BattleState, side) -> BattleState:
 
 
 # The implemented checks of ``enum MonCondCheckState`` (battle_controller_player.c:1256),
-# in its order; Task 8d inserts poison, toxic and burn between Leech Seed and Bind.
+# in its order.
 END_OF_TURN_ORDER = (
     # MON_COND_CHECK_STATE_LEECH_SEED, battle_controller_player.c:1378
     ("leech_seed", _leech_seed_check),
+    # MON_COND_CHECK_STATE_POISON, battle_controller_player.c:1393
+    ("poison", _poison_check),
+    # MON_COND_CHECK_STATE_TOXIC, battle_controller_player.c:1405
+    ("toxic", _toxic_check),
+    # MON_COND_CHECK_STATE_BURN, battle_controller_player.c:1425
+    ("burn", _burn_check),
     # MON_COND_CHECK_STATE_BIND, battle_controller_player.c:1462
     ("bind", _bind_check),
     # MON_COND_CHECK_STATE_TAUNT, battle_controller_player.c:1635

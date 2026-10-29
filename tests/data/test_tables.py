@@ -66,6 +66,16 @@ def test_only_thunder_wave_is_a_type_checked_status_move():
         assert _effect(t, n, move) == (EffectId.STATUS_FOE, (Status.PARALYSIS, 0, 0))
 
 
+def test_thawing_moves_carry_the_thaw_flag():
+    """BATTLE_EFFECT_THAW_AND_BURN_HIT is a burn hit whose frozen user moves and thaws
+    (move_param[2] = 1); a plain burn hit has no flag."""
+    t, n = load_tables(TABLES), load_names(TABLES)
+    for move in ("Flame Wheel", "Sacred Fire"):
+        assert _effect(t, n, move) == (EffectId.SECONDARY_STATUS, (Status.BURN, 0, 1))
+    assert _effect(t, n, "Ember") == (EffectId.SECONDARY_STATUS, (Status.BURN, 0, 0))
+    assert _effect(t, n, "Flare Blitz")[0] == EffectId.UNSUPPORTED
+
+
 def test_move_target_ids_match_the_manifest():
     """``MoveTarget`` (used by the engine for RANGE_USER moves) is the order the
     tables were built with; the self-targeting status moves are RANGE_USER."""

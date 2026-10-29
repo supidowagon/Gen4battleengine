@@ -95,6 +95,11 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     84: ("BATTLE_EFFECT_STATUS_LEECH_SEED", _E.LEECH_SEED, (0, 0, 0)),
     # Quick Attack, Mach Punch: the priority lives in the move's priority column.
     103: ("BATTLE_EFFECT_PRIORITY_1", _E.PLAIN, (0, 0, 0)),
+    # Flame Wheel, Sacred Fire: effect_script_0125.s is BURN_HIT's script; the effect id
+    # itself lets a frozen user move and thaw (battle_controller_player.c:2481, :2728),
+    # flagged by move_param[m, 2] = 1. RECOIL_BURN_HIT (Flare Blitz, 254) also has a
+    # third recoil and stays unsupported.
+    125: ("BATTLE_EFFECT_THAW_AND_BURN_HIT", _E.SECONDARY_STATUS, (Status.BURN, 0, 1)),
     128: ("BATTLE_EFFECT_HIT_BEFORE_SWITCH", _E.PURSUIT, (0, 0, 0)),
     138: ("BATTLE_EFFECT_RAISE_DEF_HIT", _E.SECONDARY_STAT_SELF, (_DEF, 1, 0)),
     139: ("BATTLE_EFFECT_RAISE_ATTACK_HIT", _E.SECONDARY_STAT_SELF, (_ATK, 1, 0)),

@@ -54,12 +54,24 @@ many are real). Decomp sources:
 * Water Sport: ``effect_script_0210.s`` sets the user's flag (fails if set);
   ``damage.py`` halves Fire power while any active battler has it.
 * Pursuit is a plain hit here; its pre-switch hit at double power is in ``step``.
+* Static / Poison Point: ``BattleSystem_TriggerAbilityOnHit`` (battle_lib.c:4200),
+  run per hit after the secondary effect (``ONE_HIT_TRIGGER_ABILITY`` /
+  ``MULTI_HIT_TRIGGER_ABILITY``, battle_controller_player.c:3513, :3573): the
+  defender's own ability (Mold Breaker does not matter), a contact move that hit,
+  was not ineffective and dealt damage, a living attacker with no status, and the
+  roll ``RandNext() % 10 < 3`` (``outcome.contact_proc[defending side, hit]``). The
+  defender need not be alive. The status goes through ``subscript_paralyze.s`` /
+  ``subscript_poison.s`` as an ability side effect: Safeguard and Substitute do not
+  apply, the type immunities do (``can_have_status``).
+* Thaw on a Fire hit: ``AFTER_MOVE_EFFECT_THAW_DEFENDER`` (battle_controller_player.c:
+  3710), after the contact ability: a frozen defender that is alive and took damage
+  from a Fire-type move thaws. The user's own thaw (Flame Wheel) is in ``step``.
 
 Unreachable branches are not modelled: Substitute, Mist, Safeguard and Uproar
 come from unsupported moves; Shield Dust, Clear Body, Hyper Cutter, Immunity,
-Limber, Insomnia, Leaf Guard, Liquid Ooze, Magic Guard, Reckless, Serene Grace
-and Skill Link are unsupported abilities; Big Root is an unsupported item; Own Tempo, Magic Guard and Levitate are unsupported
-abilities and Grip Claw an unsupported item.
+Limber, Insomnia, Leaf Guard, Liquid Ooze, Magic Guard, Reckless, Serene Grace,
+Skill Link, Own Tempo, Levitate, Normalize and Color Change are unsupported
+abilities; Big Root and Grip Claw are unsupported items.
 """
 
 from __future__ import annotations
@@ -70,7 +82,16 @@ import jax.numpy as jnp
 
 from nuzline.data.tables import Tables
 from nuzline.engine.damage import STATUS, damage_for_roll, effectiveness
-from nuzline.engine.ids import AbilityId, EffectId, MoveTarget, Stat, Status, Type, Weather
+from nuzline.engine.ids import (
+    AbilityId,
+    EffectId,
+    MoveFlag,
+    MoveTarget,
+    Stat,
+    Status,
+    Type,
+    Weather,
+)
 from nuzline.engine.outcome import Outcome
 from nuzline.engine.state import STAGE_MAX, STAGE_MIN, BattleState
 
@@ -95,6 +116,7 @@ class _Hit(NamedTuple):
     target_moved: jnp.ndarray  # the target has already acted this turn
     move: jnp.ndarray  # the move's id
     target_ignorable: jnp.ndarray  # target's ability as the attacker sees it (Mold Breaker)
+    contact_proc: jnp.ndarray  # the target's contact-ability roll for this hit
 
 
 def hit_count(tables: Tables, move, outcome: Outcome, side) -> jnp.ndarray:
@@ -293,6 +315,42 @@ def _water_sport(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     return _set(state, "water_sport", h.side, 1, cond)
 
 
+def _set_status(state: BattleState, side, slot, status, cond) -> BattleState:
+    """``side``'s party ``slot`` gets ``status`` (counter 0) where ``cond``."""
+    state = _set(state, "status", (side, slot), status, cond)
+    return _set(state, "status_counter", (side, slot), 0, cond)
+
+
+def _contact_ability(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    ability = state.ability[h.target_side, h.target]
+    status = jnp.where(
+        ability == AbilityId.STATIC,
+        Status.PARALYSIS,
+        jnp.where(ability == AbilityId.POISON_POINT, Status.POISON, Status.NONE),
+    )
+    contact = (tables.move_flags[h.move] & MoveFlag.CONTACT) != 0
+    cond = (
+        (status != Status.NONE)
+        & contact
+        & h.effective
+        & (h.dealt > 0)
+        & h.contact_proc
+        & _alive(state, h.side, h.user)
+        & can_have_status(state, h.side, h.user, status)
+    )
+    return _set_status(state, h.side, h.user, status, cond)
+
+
+def _thaw_target(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    cond = (
+        (state.status[h.target_side, h.target] == Status.FREEZE)
+        & (tables.move_type[h.move] == Type.FIRE)
+        & (h.dealt > 0)
+        & _alive(state, h.target_side, h.target)
+    )
+    return _set_status(state, h.target_side, h.target, Status.NONE, cond)
+
+
 def stealth_rock_damage(tables: Tables, state: BattleState, side) -> BattleState:
     """Stealth Rock on ``side``'s active Pokemon as it switches in
     (``subscript_hazards_check.s`` -> ``BtlCmd_CheckStealthRock``, battle_script.c:8302):
@@ -384,6 +442,7 @@ def apply_move_effect(
         target_moved=jnp.asarray(target_moved, jnp.bool_),
         move=move,
         target_ignorable=jnp.where(a_ability == AbilityId.MOLD_BREAKER, AbilityId.NONE, d_ability),
+        contact_proc=outcome.contact_proc[target_side, hit_index] != 0,
     )
     for fn in (
         _stat_self,
@@ -404,6 +463,8 @@ def apply_move_effect(
         _confuse_foe,
         _leech_seed,
         _water_sport,
+        _contact_ability,
+        _thaw_target,
     ):
         state = fn(tables, state, h, outcome)
     return state

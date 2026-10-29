@@ -219,15 +219,17 @@ def test_status_move_misses_with_the_accuracy_roll(tables, names):
 
 
 def test_sleep_counter_comes_from_duration(tables, names):
-    # subscript_fall_asleep.s:59-60: Random 3, 2 turns stored with the status.
+    # subscript_fall_asleep.s:59-60: Random 3, 2 turns stored with the status. The
+    # opponent switches (Onix comes in and is put to sleep), so no move attempt of the
+    # sleeper lowers the counter this turn (step's sleep check, Task 8d).
     s = roark_state(tables, names, player_species="Budew", player_moves=["Sleep Powder"])
     out = step(
         tables,
         s,
-        A("Sleep Powder", "Leer", s, names),
+        A("Sleep Powder", 4 + 1, s, names),
         empty_outcome()._replace(duration=jnp.array([3, 0], jnp.int8)),
     )
-    assert int(out.status[1, 0]) == Status.SLEEP and int(out.status_counter[1, 0]) == 3
+    assert int(out.status[1, 1]) == Status.SLEEP and int(out.status_counter[1, 1]) == 3
 
 
 def test_thunder_wave_respects_the_type_chart(tables, names):

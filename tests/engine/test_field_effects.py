@@ -193,7 +193,14 @@ def test_confusion_self_hit_is_40_power_typeless_physical_with_the_roll(tables, 
 
 
 def test_end_of_turn_order_lists_the_implemented_checks_in_decomp_order():
-    assert [name for name, _ in END_OF_TURN_ORDER] == ["leech_seed", "bind", "taunt"]
+    assert [name for name, _ in END_OF_TURN_ORDER] == [
+        "leech_seed",
+        "poison",
+        "toxic",
+        "burn",
+        "bind",
+        "taunt",
+    ]
 
 
 def test_end_of_turn_runs_the_faster_battler_first(tables, names):
