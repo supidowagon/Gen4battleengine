@@ -315,8 +315,16 @@ def _faint_check(before: BattleState, after: BattleState) -> BattleState:
     ``BattleSystem_CleanupFaintedMon`` (battle_lib.c:2156, from ``PlayFaintAnimation``,
     battle_script.c:1803) does: its stat stages, ``statusVolatile``, ``moveEffectsMask``
     and ``moveEffectsData`` are cleared (``_reset_battler``), and the Bind it put on the
-    other side ends (:2179)."""
+    other side ends (:2179). Every newly fainted Pokemon also loses its status condition
+    and counter: the decomp writes ``status = 0`` for a Pokemon with no HP
+    (battle_controller.c:1482-1486)."""
     fainted = (before.hp > 0) & (after.hp == 0)
+    after = after._replace(
+        status=jnp.where(fainted, 0, after.status).astype(after.status.dtype),
+        status_counter=jnp.where(fainted, 0, after.status_counter).astype(
+            after.status_counter.dtype
+        ),
+    )
     player_fainted = jnp.sum(fainted[0].astype(_I32))
     opp_out = jnp.all((after.species[1] == 0) | (after.hp[1] == 0))
     ended = (after.over == 0) & ((player_fainted > 0) | opp_out)

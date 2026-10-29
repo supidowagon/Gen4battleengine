@@ -401,7 +401,12 @@ def _faint_check(turn: _Turn, s: RefState) -> None:
     each flagged Pokemon faints (``subscript_faint_mon.s`` -> ``PlayFaintAnimation``,
     script.c:1795, which ends its action and cleans the battler up), then the battle
     ends on a player faint (the terminal rule of the primary objective, spec §3) or
-    when the opponent has no Pokemon with HP left."""
+    when the opponent has no Pokemon with HP left. A fainted Pokemon keeps no status
+    condition (battle_controller.c:1482-1486)."""
+    for side, slot in turn.fainted:
+        mon = s.sides[side].party[slot]
+        mon.status = Status.NONE
+        mon.status_counter = 0
     if s.over:
         turn.fainted.clear()
         return

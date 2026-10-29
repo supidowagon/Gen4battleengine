@@ -60,6 +60,18 @@ def test_replace_matches_jax(tables, names):
     _same(replace(tables, s, 1, 2), from_ref(ref_replace(to_numpy(tables), to_ref(s), 1, 2)))
 
 
+def test_reference_fainted_pokemon_has_no_status(tables, names):
+    # battle_controller.c:1482-1486: a Pokemon with 0 HP keeps no status condition.
+    s = roark_state(tables, names).replace_hp(1, 0, 1).with_status(1, 0, Status.BURN)
+    acts = A("Scratch", "Tackle", s, names)
+    out = ref_step(
+        to_numpy(tables), to_ref(s), tuple(int(x) for x in acts), outcome_to_py(empty_outcome())
+    )
+    geodude = out.sides[1].party[0]
+    assert geodude.hp == 0
+    assert geodude.status == 0 and geodude.status_counter == 0
+
+
 def _scenarios(tables, names):
     """The decomp rulings recorded in docs/discrepancies.md, as (state, actions, outcome)."""
     o = empty_outcome()

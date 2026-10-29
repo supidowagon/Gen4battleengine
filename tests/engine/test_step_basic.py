@@ -1,6 +1,7 @@
 import jax
 import jax.numpy as jnp
 
+from nuzline.engine.ids import Status
 from nuzline.engine.order import action_order
 from nuzline.engine.outcome import empty_outcome
 from nuzline.engine.step import needs_replacement, replace, step
@@ -112,3 +113,11 @@ def test_a_fainted_battler_loses_its_stages_and_volatiles(tables, names):
     assert out.stages[1].tolist() == [0] * 8
     assert [int(out.confusion[1]), int(out.taunt[1]), int(out.leech_seed[1])] == [0, 0, 0]
     assert int(out.water_sport[1]) == 0
+
+
+def test_fainted_pokemon_has_no_status(tables, names):
+    # battle_controller.c:1482-1486: a Pokemon with 0 HP keeps no status condition.
+    s = roark_state(tables, names).replace_hp(1, 0, 1).with_status(1, 0, Status.BURN)
+    out = step(tables, s, jnp.array([0, 0]), empty_outcome())  # Scratch faints Geodude
+    assert int(out.hp[1, 0]) == 0
+    assert int(out.status[1, 0]) == 0 and int(out.status_counter[1, 0]) == 0
