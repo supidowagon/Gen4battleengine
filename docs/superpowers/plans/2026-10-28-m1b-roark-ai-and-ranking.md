@@ -30,6 +30,25 @@
 
 ---
 
+### Task 0: Milestone 1a carry-over cleanup
+
+Controller-added (rulings in the M1a ledger). Every item is small; do them in this order, one commit each where natural.
+
+**Files:**
+- Modify: `tests/engine/test_effects.py`, `src/nuzline/engine/step.py`, `src/nuzline/reference/engine.py`, `tests/strategies.py`, `tests/data/test_tables.py`, `tests/data/test_party.py`, `tests/data/test_trainer.py`, `src/nuzline/engine/state.py`, `src/nuzline/reference/convert.py`, `src/nuzline/engine/damage.py`, `docs/discrepancies.md`
+- Create: `.gitattributes`
+
+**Interfaces:**
+- Produces: `nuzline.engine.state.LAYOUT` (public name for the field layout the reference converter needs); both engines clear `status` and `status_counter` of a Pokémon whose HP reaches 0.
+
+- [ ] **Step 1: `test_toxic_immunities`** in `tests/engine/test_effects.py`: `effects.can_have_status` with `Status.TOXIC` is False for a Poison type (Zubat) and a Steel type (any M1-available Steel species, e.g. Bronzor via `opp_species`), True for an unstatused Geodude, False for a Geodude already burned (`with_status(1, 0, Status.BURN)`). Cite `subscript_badly_poison.s:20-26/47-53`. Run it; it passes (the logic exists); commit.
+- [ ] **Step 2: `.gitattributes`** with `*.sh text eol=lf`; commit.
+- [ ] **Step 3: clear status on faint.** Failing test first (`test_fainted_pokemon_has_no_status` in `tests/engine/test_step_basic.py`, and the same assertion in `tests/reference/test_reference_smoke.py`): a burned Pokémon that faints has `status == 0` and `status_counter == 0`. Implement in `step._faint_check` and `reference.engine._faint_check`, citing `src/battle/battle_controller.c:1482-1486`. Run the differential test; commit.
+- [ ] **Step 4: stronger differential move pools.** `tests/strategies.py` `m1_move_pools` adds the fixture and effect-test moves (Stealth Rock, Taunt, Leech Seed, Bind, Pursuit, Supersonic, Headbutt, Rock Polish, Fury Swipes, Thunder Wave, Stun Spore) to every species' pool, so infliction branches run in the differential test. Run `tests/test_differential.py` (500 examples); fix any engine/reference disagreement against the decomp and log it in `docs/discrepancies.md`; commit.
+- [ ] **Step 5: test hygiene.** Data tests use the conftest `tables`/`names` fixtures or paths anchored on `__file__`; `state.LAYOUT` is public and `reference/convert.py` imports it; delete `damage.NEUTRAL_EFFECTIVENESS`; add a "reserved" comment on `BattleState.pursuit_target` and `Outcome.flinch_item`/`quick_claw`; add the `docs/discrepancies.md` "Deliberate differences" entry for end-of-turn ordering of a fainted battler (reference `_player_second` vs `step.end_of_turn_order`, identical results because every end-of-turn check on a fainted active is a no-op). Run the full suite and ruff; commit.
+
+---
+
 ### Task 1: Transcribe Roark's AI from the decomp
 
 **Files:**
@@ -106,6 +125,29 @@ Expected: 2 PASS.
 git add src/nuzline/ai/__init__.py src/nuzline/ai/outcome.py tests/ai/test_ai_outcome.py
 git commit -m "feat(ai): AiOutcome struct with sampler and enumerator"
 ```
+
+---
+
+### Task 2b: Trainer item use
+
+Controller-added: Roark's decomp entry carries two Potions (`items [17, 17]`), and spec §4.2 lists trainer item use as an opponent action, but the M1a action encoding has none.
+
+**Files:**
+- Modify: `src/nuzline/engine/ids.py`, `src/nuzline/engine/actions.py`, `src/nuzline/engine/order.py`, `src/nuzline/engine/step.py`, `src/nuzline/reference/engine.py`, `tools/effect_map.py`, `tools/build_tables.py`, `src/nuzline/data/tables.py`, `tests/strategies.py`, `docs/design.md` (§4.2 actions sentence)
+- Test: `tests/engine/test_trainer_items.py`
+
+**Interfaces:**
+- Produces:
+  - `ids.TrainerItemId(IntEnum)`: `UNSUPPORTED=0, NONE=1, POTION=2`; `Tables.trainer_item_effect int8[I]` maps decomp item ids to it (only Potion supported in M1).
+  - Opponent-only actions `10..13` = use `trainer_items[1, k]` on the opponent's active Pokémon. `NUM_OPP_ACTIONS = 14`; `legal_opponent_actions(tables, state) -> bool[14]` (moves and switches as `legal_actions(tables, state, 1)`, plus item slot `k` legal when the slot holds a supported item and the active is alive). The player's `legal_actions` stays 10 wide.
+  - Item actions execute before switches and moves (confirm the decomp's order; decomp wins). Potion heals 20 HP capped at max HP (confirm in the decomp) and sets the slot to 0.
+  - The reference engine mirrors item actions; `tests/strategies.py` draws opponent item actions when legal.
+
+- [ ] **Step 1: Write failing tests** in `tests/engine/test_trainer_items.py`: `test_potion_heals_20_and_is_consumed` (Geodude at 5 HP uses slot 0 → 25 HP capped at max, slot becomes 0); `test_item_goes_before_a_faster_move` (the player's faster attack hits after the heal); `test_item_slot_illegal_when_empty_or_unsupported`; `test_player_mask_is_still_10_wide`; `test_reference_matches_on_item_use`.
+- [ ] **Step 2: Run to see them fail.**
+- [ ] **Step 3: Implement** ids, tables, actions, order, step, reference, strategies; update spec §4.2 to describe the 14-wide opponent encoding.
+- [ ] **Step 4: Run** the new tests, `tests/test_differential.py` and the full suite; ruff clean.
+- [ ] **Step 5: Commit** `feat(engine): trainer item use (Potion) as opponent actions 10-13`.
 
 ---
 
