@@ -4,9 +4,13 @@ the opponent's faint replacement (docs/design.md §4.3)."""
 import jax
 import jax.numpy as jnp
 
+from nuzline.ai.outcome import sample_ai_outcome
+from nuzline.ai.policy import ai_policy
 from nuzline.ai.replacement import post_ko_switch_in
+from nuzline.data.party import load_party
 from nuzline.engine.actions import MOVE_ACTIONS, NUM_OPP_ACTIONS, legal_actions
 from nuzline.engine.ids import Status
+from nuzline.engine.state import SLOTS, make_state
 from nuzline.search import playout as playout_module
 from nuzline.search.playout import (
     REFUSED_WON,
@@ -18,7 +22,7 @@ from nuzline.search.playout import (
     replacement_refusal,
     send_replacements,
 )
-from tests.engine.helpers import roark_state
+from tests.engine.helpers import SAMPLE_PARTY, _inter, _lead, _roark, _roark_party, roark_state
 
 
 def test_policy_returns_legal_action(tables, names):
@@ -41,10 +45,78 @@ def test_batched_playout_shapes(tables, names):
     assert r.won.shape == (B,) and r.turns.dtype == jnp.int16
 
 
+def _replay(tables, state, key, max_turns=100):
+    """The states of ``playout(tables, state, key)`` turn by turn (its key splits) and
+    the opponent's action each turn: ``[(state before, opponent action, state after)]``."""
+    out = []
+    for _ in range(max_turns):
+        if int(state.over) != 0:
+            break
+        key, k_policy, k_turn = jax.random.split(key, 3)
+        action = playout_module._policy_jit(tables, state, k_policy)[0]
+        played, refused = playout_module._turn_jit(tables, state, action, k_turn)
+        assert not bool(refused)
+        opp = int(
+            ai_policy(tables, state, sample_ai_outcome(jax.random.split(k_turn)[0], tables, state))
+        )
+        out.append((state, opp, played))
+        state = played
+    return out
+
+
+def _short_party_trace_f(tables, names):
+    """roark.md 13, trace F (Cranidos 40/43 in party slot 2, moveHit = Wing Attack, turn
+    2; its AI switches with p = 1 - (43690/65536)^4) against a two-Pokemon player party
+    led by Starly: both parties are short (slots 2-5 and 3-5 empty)."""
+    player = _lead(load_party(SAMPLE_PARTY, names), names.species("Starly"), _inter())[:2]
+    s = make_state(tables, player, list(_roark_party()), opp_items=_roark().items)
+    return s._replace(
+        active=s.active.at[1].set(2),
+        hp=s.hp.at[1, 2].set(40),
+        turn=jnp.asarray(1, s.turn.dtype),
+        move_hit=s.move_hit.at[1].set(names.move("Wing Attack")),
+    )
+
+
+def _replay(tables, state, key, max_turns=100):
+    """``playout(tables, state, key)`` turn by turn (the same key splits):
+    ``[(state before, the opponent's action, state after)]``."""
+    out = []
+    for _ in range(max_turns):
+        if int(state.over) != 0:
+            break
+        key, k_policy, k_turn = jax.random.split(key, 3)
+        action = playout_module._policy_jit(tables, state, k_policy)[0]
+        played, refused = playout_module._turn_jit(tables, state, action, k_turn)
+        assert not bool(refused)
+        k_ai = jax.random.split(k_turn)[0]  # as _play splits it
+        opp = int(ai_policy(tables, state, sample_ai_outcome(k_ai, tables, state)))
+        out.append((state, opp, played))
+        state = played
+    return out
+
+
 def test_short_party_and_opponent_switch_do_not_index_empty_slot(tables, names):
-    s = roark_state(tables, names, player_count=2, opp_count=3)
-    r = playout(tables, s, jax.random.PRNGKey(3))
-    assert int(r.turns) > 0
+    # JAX clamps an out-of-range index silently, so a switch or replacement into an
+    # empty slot (species 0) or a fainted one would not raise: check every turn.
+    s = _short_party_trace_f(tables, names)
+    counts = (2, 3)
+    switches = replacements = 0
+    for seed in range(4):
+        for before, opp_action, after in _replay(tables, s, jax.random.PRNGKey(seed)):
+            if MOVE_ACTIONS <= opp_action < MOVE_ACTIONS + SLOTS:
+                switches += 1
+                target = opp_action - MOVE_ACTIONS
+                assert target < counts[1] and int(before.species[1, target]) > 0
+                assert int(before.hp[1, target]) > 0
+            elif int(after.active[1]) != int(before.active[1]):
+                replacements += 1
+            for side in (0, 1):
+                slot = int(after.active[side])
+                assert 0 <= slot < counts[side] and int(after.species[side, slot]) > 0
+                if not int(after.over):
+                    assert int(after.hp[side, slot]) > 0
+    assert switches > 0 and replacements > 0
 
 
 def test_player_faint_ends_playout_as_loss(tables, names):
