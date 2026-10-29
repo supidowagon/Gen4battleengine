@@ -167,6 +167,33 @@ def _lead(party: list[PokemonSpec], species: int, inter: IntermediateData) -> li
     return party
 
 
+def roark_trainer() -> Trainer:
+    """Roark's ``trainers.json`` entry (the first trainer named Roark)."""
+    return _roark()
+
+
+def roark_party(names: Names) -> list[PokemonSpec]:
+    """Roark's real built party (Geodude, Onix, Cranidos with their own moves)."""
+    del names  # the party comes from the intermediate data; kept for a uniform signature
+    return list(_roark_party())
+
+
+def sample_party(
+    names: Names,
+    override_moves: dict[int, Sequence[str]] | None = None,
+    override_item: dict[int, str] | None = None,
+) -> list[PokemonSpec]:
+    """``tests/fixtures/sample_party.toml``, with slot ``i``'s moves replaced by
+    ``override_moves[i]`` (up to four names) and its held item by ``override_item[i]``."""
+    party = load_party(SAMPLE_PARTY, names)
+    for i, moves in (override_moves or {}).items():
+        ids = [names.move(m) for m in moves][:4]
+        party[i] = _replace_spec(party[i], moves=tuple(ids + [0] * (4 - len(ids))))
+    for i, item in (override_item or {}).items():
+        party[i] = _replace_spec(party[i], item=names.item(item))
+    return party
+
+
 def roark_state(
     tables: Tables,
     names: Names,
