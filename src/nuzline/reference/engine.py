@@ -492,9 +492,14 @@ def _switch_in_effects(turn: _Turn, s: RefState, side: int) -> None:
     touches that battler, so the order does not matter."""
     mon, foe = _active(s, side), _active(s, 1 - side)
     # subscript_intimidate.s: ATTACK_DOWN_1_STAGE on a living foe (Clear Body, Hyper
-    # Cutter, White Smoke, Mist and Substitute are unsupported).
+    # Cutter, White Smoke, Mist and Substitute are unsupported). Its "cuts" message is
+    # built in C (BtlCmd_ChangeStatStage, script.c:2956): the AI learns nothing.
     if mon.hp and mon.ability == AbilityId.INTIMIDATE and foe.hp:
         _change_stage(s, 1 - side, Stat.ATK, -1)
+    # SWITCH_IN_CHECK_STATE_MOLD_BREAKER (lib.c:4075): subscript_mold_breaker.s tags the
+    # living newcomer's ability, BattleAI_SetAbility (script.c:11806).
+    if side == 0 and mon.hp and mon.ability == AbilityId.MOLD_BREAKER:
+        s.ai_ability_known[s.sides[0].active] = 1
     for battler in (0, 1):
         _held_item_hp(turn, s, battler)
 
@@ -509,6 +514,11 @@ def _enter(turn: _Turn, s: RefState, side: int, slot: int) -> None:
     sd.active = slot
     _reset_battler(sd)
     sd.fake_out_turn = turn.entry_turn
+    # lib.c:2151-2152: the AI forgets the battler's moves and ability (it only tracks
+    # the player's).
+    if side == 0:
+        s.ai_seen_moves[slot] = [0] * len(s.ai_seen_moves[slot])
+        s.ai_ability_known[slot] = 0
     _release_bind(s.sides[1 - side])
     _stealth_rock_damage(turn, s, side)
 
@@ -643,6 +653,10 @@ def _contact_ability(turn: _Turn, s: RefState, side: int, move: int, hit: int, e
     ):
         attacker.status = status
         attacker.status_counter = 0
+        # subscript_paralyze.s:44 / subscript_poison.s:57 tag the holder's ability
+        # (BattleAI_SetAbility, script.c:11806).
+        if target == 0:
+            s.ai_ability_known[s.sides[0].active] = 1
 
 
 def _thaw_target(turn: _Turn, s: RefState, side: int, move: int, dealt: int) -> None:
@@ -794,6 +808,11 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
     # living foe for a move aimed at it.
     if _move_target(tables, move) not in DEFENDER_ALWAYS and _active(s, 1 - side).hp == 0:
         return record
+    # SYSCTL_MOVE_SUCCEEDED (bcp.c:3212): UpdateMoveBuffers (bcp.c:3945) keeps the move in
+    # movePrevByBattler, which TrainerAI_RecordLastMove (trainer_ai.c:2705) adds to the
+    # AI's list of the player's moves. Struggle is in no move slot.
+    if side == 0 and not struggling:
+        s.ai_seen_moves[s.sides[0].active][action] = 1
     # CheckMoveHitAccuracy (bcp.c:2865): accuracy 0 never misses; a multi-hit move
     # checks only its first hit (SYSCTL_MULTI_HIT_MOVE).
     if _t(tables, "move_accuracy", move) != 0 and not o.hit[side][0]:
@@ -833,6 +852,9 @@ def _pursuit(turn: _Turn, s: RefState, side: int, actions, choices) -> None:
         return
     mon.pp[slot] -= 1
     turn.done[pursuer] = True
+    # script.c:6930: movePrevByBattler[pursuer] = Pursuit.
+    if pursuer == 0:
+        s.ai_seen_moves[s.sides[0].active][slot] = 1
     o = turn.outcome
     damage = _move_damage(tables, s, pursuer, move, o.crit[pursuer][0] != 0, o.roll[pursuer][0],
                           PURSUIT_POWER_MUL)  # fmt: skip

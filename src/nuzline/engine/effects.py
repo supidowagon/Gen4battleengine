@@ -62,7 +62,8 @@ many are real). Decomp sources:
   roll ``RandNext() % 10 < 3`` (``outcome.contact_proc[defending side, hit]``). The
   defender need not be alive. The status goes through ``subscript_paralyze.s`` /
   ``subscript_poison.s`` as an ability side effect: Safeguard and Substitute do not
-  apply, the type immunities do (``can_have_status``).
+  apply, the type immunities do (``can_have_status``). Its message reveals the
+  holder's ability to the AI (``hooks.reveal_ability``).
 * Thaw on a Fire hit: ``AFTER_MOVE_EFFECT_THAW_DEFENDER`` (battle_controller_player.c:
   3710), after the contact ability: a frozen defender that is alive and took damage
   from a Fire-type move thaws. The user's own thaw (Flame Wheel) is in ``step``.
@@ -356,6 +357,11 @@ def _contact_ability(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
         & _alive(state, h.side, h.user)
         & can_have_status(state, h.side, h.user, status)
     )
+    # The status message tags the holder's ability (``hooks.REVEALS_ON``). hooks imports
+    # this module, so the import is local.
+    from nuzline.engine.hooks import CONTACT_STATUS, reveal_ability
+
+    state = reveal_ability(state, h.target_side, h.target, CONTACT_STATUS, cond)
     return _set_status(state, h.side, h.user, status, cond)
 
 

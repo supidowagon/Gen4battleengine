@@ -196,7 +196,8 @@ def supported_state(draw, tables: Tables, names: Names) -> BattleState:
     turn, each active's ``fake_out_turn`` (0 to ``turn + 1``) and ``move_hit`` (none or
     one of the foe's active's moves), and the opponent's bag (a size of 0-4 in
     ``trainer_item_count``, ``M1_BAG_ITEMS`` in each slot below it, gaps allowed as
-    after a use), each within its legal range; the battle is not over."""
+    after a use) and the AI's knowledge of the player (any ``ai_seen_moves`` and
+    ``ai_ability_known`` flags), each within its legal range; the battle is not over."""
     parties = [draw(_party(tables, names)) for _ in (0, 1)]
     s = make_state(tables, parties[0][0], parties[1][0])
     a = {name: np.asarray(getattr(s, name)).copy() for name in BattleState._fields}
@@ -235,6 +236,9 @@ def supported_state(draw, tables: Tables, names: Names) -> BattleState:
     a["trick_room"][...] = draw(st.integers(0, _TIMER_MAX))
     a["mud_sport"][...] = draw(st.integers(0, 1))
     a["turn"][...] = turn
+    for name in ("ai_seen_moves", "ai_ability_known"):
+        flags = draw(st.lists(st.integers(0, 1), min_size=a[name].size, max_size=a[name].size))
+        a[name][...] = np.reshape(flags, a[name].shape)
     a["player_faints"][...] = int(np.sum((a["species"][0] > 0) & (a["hp"][0] == 0)))
     return BattleState(**{name: jnp.asarray(a[name]) for name in BattleState._fields})
 

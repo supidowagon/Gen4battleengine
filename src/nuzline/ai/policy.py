@@ -23,6 +23,11 @@ public functions raise ``UnsupportedAi``; traced (jit, vmap) they cannot raise, 
 ``ai_scores`` gives -1 for every slot and ``ai_policy`` gives
 ``switching.REFUSED_ACTION``. Callers that trace (Stage A) run ``ai_refusals`` on the
 fight first.
+
+Knowledge (roark.md 9): the scripts read the player's moves only through the AI's seen
+list (``BattleState.ai_seen_moves``, ``AiContext.seen_moves``: a move the player has not
+used is not known) and the player's ability only through ``resolve_player_ability``
+(``AiContext.player_ability``). ``step`` keeps both up to date.
 """
 
 from __future__ import annotations
@@ -444,6 +449,18 @@ def _check(tables: Tables, state: BattleState, reasons) -> None:
 
 
 # --- Scores, switch, item, pick -------------------------------------------------------
+
+
+def resolve_player_ability(
+    tables: Tables, state: BattleState, ai_outcome: AiOutcome
+) -> jnp.ndarray:
+    """``int32``: the player's ability as ``LoadBattlerAbility DEFENDER`` sees it
+    (trainer_ai.c:1170; roark.md 9.2), a decomp ability id: the true ability when
+    ``ai_ability_known`` is set for the player's active Pokemon (or it is Shadow Tag,
+    Magnet Pull or Arena Trap), else the species' ability in slot
+    ``ai_outcome.ability_guess``, or its single ability when it has one
+    (``commands.defender_ability``, which ``ai_scores`` uses for every such read)."""
+    return c.defender_ability(tables, state, ai_outcome.ability_guess)
 
 
 def _scores(tables: Tables, state: BattleState, ai_outcome: AiOutcome) -> jnp.ndarray:

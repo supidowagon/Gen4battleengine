@@ -493,6 +493,16 @@ its defender with `attacker ^ 1`, so it makes no draw either.
   4. two nonzero species abilities -> the guess (section 8.2);
   5. otherwise -> `ABILITY_1`, or `ABILITY_2` if `ABILITY_1` is 0.
 - `LoadBattlerAbility ATTACKER` always gives Roark's own true ability.
+- Which implemented abilities reveal themselves (Task 4, `hooks.REVEALS_ON`): only a
+  message printed by a script with an ability tag on a battler calls
+  `BattleMessage_AbilityTag`. A message the C code builds in `msgBuffer` carries the
+  ability id and reveals nothing. So Mold Breaker reveals on switch-in
+  (`subscript_mold_breaker.s`), and Static and Poison Point reveal when they inflict
+  their status (`subscript_paralyze.s:44`, `subscript_poison.s:57`). Intimidate does
+  **not** reveal: its "cuts" message is built by `BtlCmd_ChangeStatStage`
+  (`battle_script.c:2956`). Keen Eye's "prevents" message (`:2900`) does not reveal
+  either. Inner Focus reveals only against Fake Out or a direct flinch effect
+  (`subscript_flinch_mon.s:26-36`), and no M1 move is either.
 - In decomp ids (Task 3a): the true ability is
   `tables.species_abilities_decomp[species, BattleState.ability_slot]` and the two
   species abilities are `tables.species_abilities_decomp[species]`, also for

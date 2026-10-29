@@ -34,6 +34,14 @@ Oran Berry (``HOLD_EFFECT_HP_RESTORE``) heals ``itemPower`` (10) and Sitrus Berr
 (``BtlCmd_RemoveItem``, battle_script.c:8972, which keeps it in ``recycleItem``:
 ``item_consumed`` here). Klutz, Embargo and Gluttony are unsupported.
 
+What the AI learns (``REVEALS_ON``, ``reveal_ability``): the AI knows the player's
+ability (``BattleState.ai_ability_known``) once ``BattleAI_SetAbility``
+(battle_script.c:12106) has run for it. That happens when a script message tags the
+battler's ability (``BattleMessage_AbilityTag``, :11798, from ``PrintMessage`` /
+``BufferMessage``) or a script writes ``BATTLEMON_ABILITY`` (:3074, :3403; no M1 move
+does). A message the C code builds in ``msgBuffer`` itself carries the ability id and
+reveals nothing.
+
 Abilities handled elsewhere: Blaze, Torrent, Overgrow, Rivalry, Guts, Unaware,
 Simple and Mold Breaker in ``damage.py``; Keen Eye, Inner Focus, Rock Head,
 Static and Poison Point in ``effects.py``; Steadfast and Natural Cure in
@@ -51,6 +59,40 @@ from nuzline.engine.ids import AbilityId, ItemId, Stat
 from nuzline.engine.state import BattleState
 
 _I32 = jnp.int32
+
+# The phases at which a Pokemon's ability can reveal itself to the AI.
+SWITCH_IN, CONTACT_STATUS = "switch_in", "contact_status"
+# Ability -> the phase at which it shows a message tagging it, for the implemented
+# abilities that ever do:
+# * Mold Breaker: SWITCH_IN_CHECK_STATE_MOLD_BREAKER (battle_lib.c:4075), a living
+#   battler that has not announced it: subscript_mold_breaker.s prints
+#   ``TAG_NICKNAME_ABILITY, BTLSCR_MSG_TEMP, BTLSCR_MSG_BATTLER_TEMP``.
+# * Static / Poison Point: when the contact ability inflicts its status
+#   (``effects._contact_ability``): subscript_paralyze.s:44 / subscript_poison.s:57 tag
+#   ``BTLSCR_MSG_BATTLER_TEMP``, the holder. A target that cannot take the status gets
+#   no message.
+# The others never reveal: Intimidate's "cuts" message and Keen Eye's "prevents"
+# message are built in C (``BtlCmd_ChangeStatStage``, battle_script.c:2956, :2900);
+# Inner Focus prints only against Fake Out or a direct flinch effect
+# (subscript_flinch_mon.s:26-36), and every implemented flinch is a secondary effect;
+# Blaze, Torrent, Overgrow, Rivalry, Guts, Simple, Unaware, Rock Head, Natural Cure,
+# Steadfast and Sturdy show no ability message in M1.
+REVEALS_ON = {
+    AbilityId.MOLD_BREAKER: SWITCH_IN,
+    AbilityId.STATIC: CONTACT_STATUS,
+    AbilityId.POISON_POINT: CONTACT_STATUS,
+}
+
+
+def reveal_ability(state: BattleState, side, slot, phase: str, cond=True) -> BattleState:
+    """``ai_ability_known[slot] = 1`` where ``cond``, ``side`` is the player (the AI only
+    tracks the player's Pokemon) and party ``slot``'s ability reveals itself at
+    ``phase`` (``REVEALS_ON``)."""
+    abilities = jnp.asarray([a for a, p in REVEALS_ON.items() if p == phase], state.ability.dtype)
+    side = jnp.asarray(side, _I32)
+    on = cond & (side == 0) & jnp.isin(state.ability[side, slot], abilities)
+    known = jnp.where(on, 1, state.ai_ability_known[slot]).astype(state.ai_ability_known.dtype)
+    return state._replace(ai_ability_known=state.ai_ability_known.at[slot].set(known))
 
 
 def after_damage_items(tables: Tables, state: BattleState, side, cond=True) -> BattleState:
@@ -95,11 +137,14 @@ def _intimidate(state: BattleState, side) -> BattleState:
 
 
 def on_switch_in(tables: Tables, state: BattleState, side) -> BattleState:
-    """``side``'s active Pokemon has just entered: Stealth Rock, Intimidate, then the
+    """``side``'s active Pokemon has just entered: Stealth Rock, Intimidate, a living
+    newcomer's switch-in announcement (``reveal_ability``, ``SWITCH_IN``), then the
     held-item check of both active Pokemon (``SWITCH_IN_CHECK_STATE_HELD_ITEM_STATUS``
     loops over every battler)."""
     side = jnp.asarray(side, _I32)
     state = stealth_rock_damage(tables, state, side)
     state = _intimidate(state, side)
+    mon = state.active[side]
+    state = reveal_ability(state, side, mon, SWITCH_IN, state.hp[side, mon] > 0)
     state = after_damage_items(tables, state, side)
     return after_damage_items(tables, state, 1 - side)
