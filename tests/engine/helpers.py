@@ -199,6 +199,7 @@ def roark_state(
     names: Names,
     *,
     equal_speed: bool = False,
+    player_count: int = 6,
     opp_count: int = 3,
     player_species: str | None = None,
     player_moves: Sequence[str] | None = None,
@@ -209,10 +210,11 @@ def roark_state(
     opp_gender: str | None = None,
     opp_faster: bool = False,
 ) -> BattleState:
-    """The sample party (``tests/fixtures/sample_party.toml``) against the first
-    ``opp_count`` members of Roark's built party (Geodude L12, Onix L12, Cranidos
-    L14), both leads in slot 0, Roark's bag (two Potions) in ``trainer_items[1]``.
-    A test fixture, not Roark's real fight: every
+    """The first ``player_count`` members of the sample party
+    (``tests/fixtures/sample_party.toml``) against the first ``opp_count`` members of
+    Roark's built party (Geodude L12, Onix L12, Cranidos L14), both leads in slot 0,
+    Roark's bag (two Potions) in ``trainer_items[1]``. A test fixture, not Roark's real
+    fight: every
     opponent knows Tackle, Rock Throw, Stealth Rock, Leer in that order (plan
     ruling).
 
@@ -237,6 +239,7 @@ def roark_state(
         player[0] = _with_moves(player[0], [names.move(m) for m in player_moves])
     if opp_moves is not None:
         opp[0] = _with_moves(opp[0], [names.move(m) for m in opp_moves])
+    player = player[:player_count]
     if player_ability is not None:
         ability = names.ability(player_ability)
         slots = names.species_abilities(player[0].species)

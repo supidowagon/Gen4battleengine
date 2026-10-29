@@ -421,7 +421,7 @@ def _act(
     return _where(is_switch(action) & live, switched, acted)
 
 
-def _pursuit_fires(tables: Tables, state: BattleState, side, actions, choices) -> jnp.ndarray:
+def pursuit_fires(tables: Tables, state: BattleState, side, actions, choices) -> jnp.ndarray:
     """``side`` switches and the other side, which has not acted yet, chose Pursuit:
     ``BtlCmd_TryPursuit`` (battle_script.c:6884, called from
     ``subscript_switch_pokemon.s:11`` before the switch) needs the pursuer alive, not
@@ -535,7 +535,7 @@ def execute_actions(
         [state.trainer_items[side, _bag_slot(actions[side])] for side in (0, 1)]
     ).astype(_I32)
     state = _consume_trainer_items(state, actions)
-    pursued = _pursuit_fires(tables, state, first, actions, choices)
+    pursued = pursuit_fires(tables, state, first, actions, choices)
     state = _where(
         is_switch(actions[first]) & (state.over == 0), _natural_cure(state, first), state
     )
