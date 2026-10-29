@@ -38,6 +38,10 @@ def test_unknown_effect_id_is_noop_except_end_of_turn():
 
 def test_each_effect_changes_something():
     s = make_state(3, 1)
+    # Unknown id: only end-of-turn and turn counter change.
+    base = batched_step(s, jnp.full((1, 2), N_EFFECTS + 5, jnp.int8))
     for k in range(N_EFFECTS):
         out = batched_step(s, jnp.array([[k, k]], jnp.int8))
-        assert any(not np.array_equal(np.asarray(a), np.asarray(b)) for a, b in zip(s, out))
+        assert any(not np.array_equal(np.asarray(a), np.asarray(b)) for a, b in zip(base, out)), (
+            f"effect {k} is a no-op"
+        )

@@ -17,6 +17,8 @@ At batch 10 000 on CPU: compile time <= 120 s and >= 50 000 state-steps/s.
 
 ## Measured (CPU, 30 steps, effect ids all 0)
 
+Environment: jax 0.12.0.1, cpu backend, 13th Gen Intel(R) Core(TM) i5-13600K, Windows 11.
+
 | batch   | compile_s | state-steps/s |
 |---------|-----------|---------------|
 | 1 000   | 1.32      | 1 381 425     |
@@ -24,6 +26,7 @@ At batch 10 000 on CPU: compile time <= 120 s and >= 50 000 state-steps/s.
 | 100 000 | 1.40      | 1 952 616     |
 
 Batch 10 000: compile 1.34 s (limit 120 s), 2.02 M state-steps/s (minimum 0.05 M).
+A controller re-measure with random effect ids in [0, 100) gave compile 1.39 s and 2.02 M state-steps/s, so the all-zero ids do not flatter the result.
 
 ## Decision
 
