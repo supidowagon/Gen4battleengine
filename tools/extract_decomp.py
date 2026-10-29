@@ -517,10 +517,33 @@ def _start_condition(const: str, derived: set[str], overrides: dict[str, str]) -
     return next(iter(derived)) if derived else "none"
 
 
+def _trainer_class_genders(decomp: Path, classes: list[str]) -> list[int]:
+    """Gender id (``generated/genders.txt`` line) of each trainer class, from
+    ``sTrainerClassGender`` in ``include/data/trainer_class_genders.h``."""
+    path = decomp / "include" / "data" / "trainer_class_genders.h"
+    gender_id = _index(_constants(decomp, "genders", "GENDER_"), "gender")
+    found: dict[str, int] = {}
+    for lineno, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        m = re.fullmatch(r"\s*\[(TRAINER_CLASS_[A-Z0-9_]+)\]\s*=\s*(GENDER_[A-Z]+),\s*", raw)
+        if m:
+            if m.group(1) in found:
+                raise ExtractError(f"{path}:{lineno}: duplicate class {m.group(1)}")
+            found[m.group(1)] = gender_id(m.group(2))
+    missing = sorted(set(classes) - set(found))
+    unknown = sorted(set(found) - set(classes))
+    if missing or unknown:
+        raise ExtractError(f"{path}: classes without a gender {missing}, unknown {unknown}")
+    return [found[c] for c in classes]
+
+
 def extract_trainers(decomp_root: Path, out_dir: Path) -> None:
     """Write ``trainers.json``: one entry per ``generated/trainers.txt`` id.
 
-    * ``class`` is the class's display name (``res/text/trainer_class_names.json``).
+    * ``class`` is the class's display name (``res/text/trainer_class_names.json``),
+      ``class_id`` its ``generated/trainer_classes.txt`` id (``header.trainerType``) and
+      ``class_gender`` its ``generated/genders.txt`` id (0 male, 1 female, 2 none) from
+      ``include/data/trainer_class_genders.h``. TrainerData_BuildParty
+      (``src/trainer_data.c``) derives each party member's PID from both.
     * ``ai_flags`` is the bit mask trainerproc builds (bit n = ai_flags.txt line n+2).
     * ``items`` are the bag items the AI may use, as item ids.
     * Each party member's ``difficulty`` is the decomp's ``iv_scale``. As in
@@ -546,6 +569,7 @@ def extract_trainers(decomp_root: Path, out_dir: Path) -> None:
     class_names = _text_bank(decomp, "trainer_class_names")
     if len(class_names) != len(classes):
         raise ExtractError(f"{len(class_names)} class names for {len(classes)} trainer classes")
+    class_genders = _trainer_class_genders(decomp, classes)
     species_id = _index(_constants(decomp, "species", "SPECIES_"), "species")
     move_id = _index(_constants(decomp, "moves", "MOVE_"), "move")
     item_id = _index(_constants(decomp, "items", "ITEM_"), "item")
@@ -606,6 +630,8 @@ def extract_trainers(decomp_root: Path, out_dir: Path) -> None:
                 "id": tid,
                 "name": d["name"],
                 "class": class_names[class_id(d["class"])],
+                "class_id": class_id(d["class"]),
+                "class_gender": class_genders[class_id(d["class"])],
                 "ai_flags": ai_flags,
                 "items": [item_id(i) for i in d["items"]],
                 "party": members,

@@ -1,0 +1,68 @@
+# The sample team (sample_party.toml) with Budew fainted: hp = 0 on the last member.
+
+[[pokemon]]
+species = "Monferno"
+level = 14
+nature = "Hardy"
+ivs = [20, 20, 20, 20, 20, 20]
+evs = [0, 0, 0, 0, 0, 0]
+moves = ["Scratch", "Leer", "Ember", "Mach Punch"]
+item = ""
+ability = "Blaze"
+gender = "male"
+
+[[pokemon]]
+species = "Prinplup"
+level = 14
+nature = "Hardy"
+ivs = [20, 20, 20, 20, 20, 20]
+evs = [0, 0, 0, 0, 0, 0]
+moves = ["Pound", "Growl", "Bubble", "Water Sport"]
+item = ""
+ability = "Torrent"
+gender = "male"
+
+[[pokemon]]
+species = "Grotle"
+level = 14
+nature = "Hardy"
+ivs = [20, 20, 20, 20, 20, 20]
+evs = [0, 0, 0, 0, 0, 0]
+moves = ["Tackle", "Withdraw", "Absorb", "Razor Leaf"]
+item = "Sitrus Berry"
+ability = "Overgrow"
+gender = "male"
+
+[[pokemon]]
+species = "Starly"
+level = 10
+nature = "Hardy"
+ivs = [20, 20, 20, 20, 20, 20]
+evs = [0, 0, 0, 0, 0, 0]
+moves = ["Tackle", "Growl", "Quick Attack", "Wing Attack"]
+item = "Oran Berry"
+ability = "Keen Eye"
+gender = "male"
+
+[[pokemon]]
+species = "Shinx"
+level = 13
+nature = "Hardy"
+ivs = [20, 20, 20, 20, 20, 20]
+evs = [0, 0, 0, 0, 0, 0]
+moves = ["Tackle", "Leer", "Spark"]
+item = ""
+ability = "Rivalry"
+gender = "male"
+
+[[pokemon]]
+species = "Budew"
+level = 10
+nature = "Hardy"
+ivs = [20, 20, 20, 20, 20, 20]
+evs = [0, 0, 0, 0, 0, 0]
+moves = ["Absorb", "Growth", "Water Sport", "Stun Spore"]
+item = ""
+ability = "Natural Cure"
+gender = "male"
+hp = 0

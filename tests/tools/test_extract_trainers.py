@@ -71,3 +71,15 @@ def test_start_condition_overrides_are_keyed_by_trainer_id(trainers):
         tid = int(key)
         assert consts[tid] == entry["trainer"]
         assert trainers[tid]["start_condition"] == entry["condition"]
+
+
+def test_trainer_class_id_and_gender(trainers):
+    # TrainerData_BuildParty seeds the PID from header.trainerType (the class id) and
+    # picks genderMod from TrainerClass_Gender (include/data/trainer_class_genders.h).
+    r = roark(trainers)
+    assert (r["class_id"], r["class_gender"]) == (62, 0)  # TRAINER_CLASS_LEADER_ROARK, male
+    classes = (DECOMP / "generated" / "trainer_classes.txt").read_text(encoding="utf-8").split()
+    assert classes[r["class_id"]] == "TRAINER_CLASS_LEADER_ROARK"
+    assert {t["class_gender"] for t in trainers} == {0, 1, 2}
+    gardenia = next(t for t in trainers if t["name"] == "Gardenia")
+    assert gardenia["class_gender"] == 1

@@ -39,7 +39,7 @@ from tools.effect_map import (
     UNSUPPORTED_MOVES,
 )
 
-MANIFEST_VERSION = 1
+MANIFEST_VERSION = 2
 CLONE_SCRIPT = Path(__file__).with_name("clone_decomp.sh")
 
 # generated/move_classes.txt order.
@@ -189,6 +189,10 @@ def build_arrays(inter: Path) -> tuple[dict[str, np.ndarray], dict]:
         "version": MANIFEST_VERSION,
         "decomp_commit": _decomp_commit(),
         "species_names": [s["name"] for s in species],
+        # Decomp ability ids (not engine ids) per species slot, so a party file's
+        # ability name resolves to its slot; and base friendship for its default.
+        "species_abilities": [list(s["abilities"]) for s in species],
+        "species_base_friendship": [s["base_friendship"] for s in species],
         "move_names": [m["name"] for m in moves],
         "item_names": [i["name"] for i in items],
         "ability_names": ability_names,

@@ -65,6 +65,8 @@ class Names:
         self.ability_names: tuple[str, ...] = tuple(manifest["ability_names"])
         self.type_names: tuple[str, ...] = tuple(manifest["type_names"])
         self.nature_names: tuple[str, ...] = tuple(manifest["nature_names"])
+        self._species_abilities = tuple(tuple(a) for a in manifest["species_abilities"])
+        self._species_friendship = tuple(manifest["species_base_friendship"])
         self._species = _index(manifest["species_names"], "species")
         self._moves = _index(manifest["move_names"], "move")
         self._items = _index(manifest["item_names"], "item")
@@ -79,6 +81,13 @@ class Names:
 
     def species(self, name: str) -> int:
         return self._get(self._species, name, "species")
+
+    def species_abilities(self, species: int) -> tuple[int, int]:
+        """The species' two decomp ability ids; slot 1 is 0 (ABILITY_NONE) when absent."""
+        return self._species_abilities[species]
+
+    def species_base_friendship(self, species: int) -> int:
+        return self._species_friendship[species]
 
     def move(self, name: str) -> int:
         """Move id; ``""`` is 0 (no move)."""

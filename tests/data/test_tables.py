@@ -153,3 +153,14 @@ def test_names_lookup():
     assert n.ability("rock head") == n.ability_names.index("Rock Head")
     with pytest.raises(KeyError):
         n.move("Not A Move")
+
+
+def test_names_species_abilities_and_friendship():
+    n = load_names(TABLES)
+    # Decomp ability ids per species slot; slot 1 is ABILITY_NONE (0) when absent.
+    assert n.species_abilities(n.species("Shinx")) == (
+        n.ability("Rivalry"),
+        n.ability("Intimidate"),
+    )
+    assert n.species_abilities(n.species("Monferno")) == (n.ability("Blaze"), 0)
+    assert n.species_base_friendship(n.species("Monferno")) == 70

@@ -1,0 +1,122 @@
+import json
+from pathlib import Path
+
+import pytest
+
+from nuzline.data.trainer import (
+    IntermediateData,
+    build_trainer_party,
+    default_moves,
+    difficulty_to_ivs,
+    lcrng_next,
+    load_trainers,
+    trainer_pid,
+)
+
+INTER = Path("data/intermediate")
+needs_inter = pytest.mark.skipif(not INTER.exists(), reason="intermediate data not extracted")
+
+
+def test_difficulty_to_ivs_exact_integer():
+    assert (difficulty_to_ivs(255), difficulty_to_ivs(0), difficulty_to_ivs(128)) == (31, 0, 15)
+
+
+def test_lcrng_matches_decomp():
+    # LCRNG_Next (src/math_util.c): state = state * 1103515245 + 24691 (u32); returns state >> 16.
+    assert lcrng_next(0) == (24691, 0)
+    assert lcrng_next(1) == (1103539936, 16838)
+    state, _ = lcrng_next(0xFFFFFFFF)
+    assert 0 <= state < 2**32
+
+
+def test_trainer_pid_follows_party_build():
+    # TrainerData_BuildParty (src/trainer_data.c): seed = iv_scale + level + species +
+    # trainer id; LCRNG_Next once per unit of the class id; PID = (rnd << 8) + 120 for a
+    # female class, else 136.
+    state = rnd = 50 + 12 + 74 + 246
+    for _ in range(62):
+        state, rnd = lcrng_next(state)
+    assert trainer_pid(50, 12, 74, 246, 62, female_class=False) == (rnd << 8) + 136
+    # Class id 0 draws nothing, so the seed itself is shifted.
+    assert trainer_pid(1, 2, 3, 4, 0, female_class=True) == (10 << 8) + 120
+
+
+def _move_ids():
+    moves = json.loads((INTER / "moves.json").read_text(encoding="utf-8"))
+    return {m["name"]: i for i, m in enumerate(moves)}
+
+
+def _species_id(inter, name):
+    return next(i for i, s in enumerate(inter.species) if s["name"] == name)
+
+
+@needs_inter
+def test_default_moves_skip_known_and_push_out_oldest():
+    # BoxPokemon_SetDefaultMoves (src/pokemon.c:3819): a move already known is skipped;
+    # with four slots full the oldest is pushed out. Monferno's L1 and L7 Ember count
+    # once, so at L14 Mach Punch pushes out Scratch.
+    inter, m = IntermediateData(INTER), _move_ids()
+    monferno = inter.learnsets[_species_id(inter, "MONFERNO")]
+    assert default_moves(monferno, 14) == tuple(
+        m[x] for x in ("Leer", "Ember", "Taunt", "Mach Punch")
+    )
+    starly = inter.learnsets[_species_id(inter, "STARLY")]
+    assert default_moves(starly, 5) == (m["Tackle"], m["Growl"], m["Quick Attack"], 0)
+
+
+def _roark():
+    return next(t for t in load_trainers(INTER) if t.name.lower() == "roark")
+
+
+@needs_inter
+def test_party_ivs_follow_difficulty():
+    inter = IntermediateData(INTER)
+    roark = _roark()
+    party = build_trainer_party(roark, inter)
+    for mon, raw in zip(party, roark.party, strict=True):
+        assert mon.ivs == (raw.difficulty * 31 // 255,) * 6
+        assert mon.evs == (0,) * 6
+
+
+@needs_inter
+def test_roark_listed_moves_fill_all_four_slots():
+    # The plan asserted four non-empty moves per mon. The decomp disagrees:
+    # TrainerData_BuildParty (src/trainer_data.c, TRDATATYPE_WITH_MOVES) writes all four
+    # listed slots over the default moves, so Geodude keeps MOVE_NONE in slots 3 and 4.
+    inter = IntermediateData(INTER)
+    roark = _roark()
+    party = build_trainer_party(roark, inter)
+    assert [mon.moves for mon in party] == [raw.moves for raw in roark.party]
+    assert party[0].moves[2:] == (0, 0)
+
+
+@needs_inter
+def test_unlisted_moves_use_the_default_moveset():
+    inter = IntermediateData(INTER)
+    tristan = load_trainers(INTER)[1]
+    raw = tristan.party[0]
+    assert raw.moves is None
+    (mon,) = build_trainer_party(tristan, inter)
+    assert mon.moves == default_moves(inter.learnsets[raw.species], raw.level)
+    assert all(mv != 0 for mv in mon.moves[:2])
+
+
+@needs_inter
+def test_roark_party_identity():
+    # TRAINER_CLASS_LEADER_ROARK (id 62) is a male class, so every PID's low byte is 136:
+    # all three mons are male (gender ratios 127, 127, 31 are all <= 136) and PID bit 0 is
+    # 0, so each takes ability slot 0. The nature is pid % 25 (Pokemon_GetNatureOf).
+    inter = IntermediateData(INTER)
+    roark = _roark()
+    assert (roark.trainer_class, roark.class_id, roark.class_gender) == ("Leader", 62, 0)
+    party = build_trainer_party(roark, inter)
+    assert [mon.gender for mon in party] == [0, 0, 0]
+    assert [mon.ability_slot for mon in party] == [0, 0, 0]
+    # Pinned: Geodude Lax (9), Onix Bold (5), Cranidos Jolly (13).
+    assert [mon.nature for mon in party] == [9, 5, 13]
+    for mon in party:
+        pid = trainer_pid(50, mon.level, mon.species, 246, 62, female_class=False)
+        assert pid & 0xFF == 136
+        assert mon.nature == pid % 25
+        assert mon.friendship == inter.species[mon.species]["base_friendship"]
+        assert (mon.item, mon.form, mon.current_hp, mon.status) == (0, 0, None, 0)
