@@ -5,6 +5,13 @@ Actions are ``int32`` scalars ``0..NUM_ACTIONS-1``: ``0-3`` use the active
 Pokemon's move slot, ``4-9`` switch to party slot ``action - 4`` (spec §4.2). The
 active slot's own switch is always illegal, so at most 9 actions are legal.
 
+The opponent has four more, ``10-13`` (``0..NUM_OPP_ACTIONS-1``): use the item in bag
+slot ``trainer_items[1, action - 10]`` on its active Pokemon (the decomp's
+``PLAYER_INPUT_ITEM`` from ``TrainerAI_PickCommand``, trainer_ai.c:4034). A slot is
+legal when it holds an item with a supported ``ids.TrainerItemId`` and the active
+Pokemon has HP left. The player's mask stays ``NUM_ACTIONS`` wide: the player's bag
+is not modelled.
+
 Move legality follows ``BattleSystem_CheckInvalidMoves`` (battle_lib.c:2255) for the
 checks M1 has state for: an empty slot (``CHECK_INVALID_NO_MOVE``), no PP
 (``CHECK_INVALID_NO_PP``) and Taunt (``CHECK_INVALID_TAUNTED``: a taunted battler
@@ -23,10 +30,13 @@ from __future__ import annotations
 import jax.numpy as jnp
 
 from nuzline.data.tables import Tables
-from nuzline.engine.state import SLOTS, BattleState
+from nuzline.engine.ids import TrainerItemId
+from nuzline.engine.state import BAG_SLOTS, SLOTS, BattleState
 
 MOVE_ACTIONS = 4  # actions 0-3 use a move slot; 4-9 switch
 NUM_ACTIONS = MOVE_ACTIONS + SLOTS
+FIRST_ITEM_ACTION = NUM_ACTIONS  # opponent actions 10-13 use bag slot action - 10
+NUM_OPP_ACTIONS = FIRST_ITEM_ACTION + BAG_SLOTS
 
 
 def usable_moves(tables: Tables, state: BattleState, side) -> jnp.ndarray:
@@ -53,3 +63,19 @@ def legal_actions(tables: Tables, state: BattleState, side) -> jnp.ndarray:
     usable = usable.at[0].set(usable[0] | struggle)
     switches = legal_replacements(state, side) & (state.trapped[side] == 0)
     return jnp.concatenate([usable, switches])
+
+
+def usable_trainer_items(tables: Tables, state: BattleState, side) -> jnp.ndarray:
+    """``bool[BAG_SLOTS]``: ``side``'s bag slots holding a supported item, while its
+    active Pokemon has HP left."""
+    effect = tables.trainer_item_effect[state.trainer_items[side]]
+    supported = (effect != TrainerItemId.UNSUPPORTED) & (effect != TrainerItemId.NONE)
+    return supported & (state.hp[side, state.active[side]] > 0)
+
+
+def legal_opponent_actions(tables: Tables, state: BattleState) -> jnp.ndarray:
+    """``bool[NUM_OPP_ACTIONS]``: the opponent's moves and switches as
+    ``legal_actions(tables, state, 1)``, then its bag slots (``usable_trainer_items``)."""
+    return jnp.concatenate(
+        [legal_actions(tables, state, 1), usable_trainer_items(tables, state, 1)]
+    )

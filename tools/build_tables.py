@@ -17,6 +17,8 @@ Encodings:
   multipliers apply in row order (``BattleSystem_ApplyTypeChart``).
 * ``nature_mods[nature, stat]``: +1 raised, -1 lowered, 0 otherwise (HP always 0).
 * ``item_param[item]``: ``(decomp hold param, 0)`` for supported items, else zeros.
+* ``trainer_item_effect[item]``: ``ids.TrainerItemId`` of the item used from a trainer's
+  bag (``DECOMP_TRAINER_ITEM_TO_ID``).
 * ``species_friendship`` is int16, not int8: base friendship reaches 140.
 
 CLI: ``uv run python -m tools.build_tables --inter data/intermediate --out data/gen4_platinum``
@@ -31,19 +33,20 @@ from pathlib import Path
 
 import numpy as np
 
-from nuzline.engine.ids import AbilityId, EffectId, ItemId, MoveFlag, MoveTarget
+from nuzline.engine.ids import AbilityId, EffectId, ItemId, MoveFlag, MoveTarget, TrainerItemId
 from tools.effect_map import (
     CERTAIN_SECONDARY_EFFECTS,
     DECOMP_ABILITY_TO_ID,
     DECOMP_EFFECT_TO_ID,
     DECOMP_ITEM_TO_ID,
+    DECOMP_TRAINER_ITEM_TO_ID,
     PUNCH_MOVES,
     SOUND_MOVES,
     TYPE_CHART_STATUS_MOVES,
     UNSUPPORTED_MOVES,
 )
 
-MANIFEST_VERSION = 3
+MANIFEST_VERSION = 4
 CLONE_SCRIPT = Path(__file__).with_name("clone_decomp.sh")
 
 # generated/move_classes.txt order.
@@ -126,7 +129,9 @@ def build_arrays(inter: Path) -> tuple[dict[str, np.ndarray], dict]:
     ability_names = [a["name"] for a in abilities]
     ability_ids = [int(DECOMP_ABILITY_TO_ID.get(n, AbilityId.UNSUPPORTED)) for n in ability_names]
     unknown = sorted(set(DECOMP_ABILITY_TO_ID) - set(ability_names))
-    unknown += sorted(set(DECOMP_ITEM_TO_ID) - {i["name"] for i in items})
+    unknown += sorted(
+        (set(DECOMP_ITEM_TO_ID) | set(DECOMP_TRAINER_ITEM_TO_ID)) - {i["name"] for i in items}
+    )
     if unknown:
         raise BuildError(f"effect_map names absent from the data: {unknown}")
     for m in moves:
@@ -149,6 +154,9 @@ def build_arrays(inter: Path) -> tuple[dict[str, np.ndarray], dict]:
 
     effects = [_move_effect(m) for m in moves]
     item_ids = [int(DECOMP_ITEM_TO_ID.get(i["name"], ItemId.UNSUPPORTED)) for i in items]
+    trainer_item_ids = [
+        int(DECOMP_TRAINER_ITEM_TO_ID.get(i["name"], TrainerItemId.UNSUPPORTED)) for i in items
+    ]
     supported_item = [e not in (ItemId.UNSUPPORTED, ItemId.NONE) for e in item_ids]
 
     arrays = {
@@ -183,6 +191,7 @@ def build_arrays(inter: Path) -> tuple[dict[str, np.ndarray], dict]:
             np.int16,
             "item param",
         ),
+        "trainer_item_effect": _arr(trainer_item_ids, np.int8, "trainer item effect"),
     }
     manifest = {
         "version": MANIFEST_VERSION,

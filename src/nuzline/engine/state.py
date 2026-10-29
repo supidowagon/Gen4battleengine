@@ -31,6 +31,7 @@ from nuzline.engine.ids import Stat, Weather
 from nuzline.engine.stats import calc_stats
 
 SIDES, SLOTS, MOVES = 2, 6, 4
+BAG_SLOTS = 4  # MAX_TRAINER_ITEMS: trainer_items[side] holds the AI's bag
 STAGE_MIN, STAGE_MAX = -6, 6
 _STAGE_KEYWORDS = {
     "atk": Stat.ATK,
@@ -94,7 +95,7 @@ class BattleState(NamedTuple):
     wish_hp: jnp.ndarray  # int16
     future_timer: jnp.ndarray  # int8
     future_damage: jnp.ndarray  # int16
-    trainer_items: jnp.ndarray  # int16[2,4], bag item ids
+    trainer_items: jnp.ndarray  # int16[2,4], bag item ids (aiContext.trainerItems)
     # field (scalars)
     weather: jnp.ndarray  # int8, ids.Weather
     weather_timer: jnp.ndarray  # int8, 0 = permanent
@@ -184,7 +185,7 @@ LAYOUT: dict[str, tuple[tuple[int, ...], type]] = {
     "wish_hp": (_SIDE, np.int16),
     "future_timer": (_SIDE, np.int8),
     "future_damage": (_SIDE, np.int16),
-    "trainer_items": ((SIDES, 4), np.int16),
+    "trainer_items": ((SIDES, BAG_SLOTS), np.int16),
     "weather": (_FIELD, np.int8),
     "weather_timer": (_FIELD, np.int8),
     "trick_room": (_FIELD, np.int8),
@@ -237,12 +238,18 @@ def make_state(
     player: list[PokemonSpec],
     opp: list[PokemonSpec],
     start_condition: int = Weather.NONE,
+    opp_items: Sequence[int] = (),
 ) -> BattleState:
     """Build the turn-0 state: stats via ``calc_stats``, empty slots all zero
     (``species = 0, hp = 0``), both leads in slot 0, no volatiles, hazards or
     screens, and ``weather = start_condition`` with a permanent timer (0). The leads'
     switch-in effects then run (``hooks.on_switch_in``, player first; the decomp's
-    ``monSpeedOrder`` gives the same result in singles, see ``hooks``)."""
+    ``monSpeedOrder`` gives the same result in singles, see ``hooks``).
+
+    ``opp_items`` is the trainer's bag (``Trainer.items``, decomp item ids). As
+    ``BattleControllerPlayer_InitAI`` (battle_controller_player.c:4796) does, its
+    non-empty items fill ``trainer_items[1]`` from slot 0 in order; the player's bag
+    stays empty."""
     from nuzline.engine.hooks import on_switch_in  # hooks imports this module
 
     a = {name: np.zeros(shape, dtype) for name, (shape, dtype) in LAYOUT.items()}
@@ -251,6 +258,10 @@ def make_state(
             raise ValueError(f"side {side}: a party has 1-{SLOTS} Pokemon, got {len(party)}")
         for slot, mon in enumerate(party):
             _fill_slot(a, tables, side, slot, mon)
+    bag = [item for item in opp_items if item]
+    if len(bag) > BAG_SLOTS:
+        raise ValueError(f"a trainer's bag holds at most {BAG_SLOTS} items, got {len(bag)}")
+    a["trainer_items"][1, : len(bag)] = bag
     a["weather"][...] = Weather(start_condition)
     state = BattleState(**{name: jnp.asarray(a[name]) for name in BattleState._fields})
     for side in (0, 1):

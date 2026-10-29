@@ -16,6 +16,7 @@ from nuzline.data.spec import PokemonSpec
 from nuzline.data.tables import Names, Tables, load_names
 from nuzline.data.trainer import (
     IntermediateData,
+    Trainer,
     build_trainer_party,
     default_moves,
     load_trainers,
@@ -120,11 +121,15 @@ def synthetic_state(
 
 
 @lru_cache(maxsize=1)
-def _roark_party() -> tuple[PokemonSpec, ...]:
+def _roark() -> Trainer:
     if not (INTERMEDIATE / "trainers.json").exists():
         pytest.skip("intermediate data not extracted (run tools/extract_decomp.py)")
-    roark = next(t for t in load_trainers(INTERMEDIATE) if t.name.lower() == "roark")
-    return tuple(build_trainer_party(roark, IntermediateData(INTERMEDIATE)))
+    return next(t for t in load_trainers(INTERMEDIATE) if t.name.lower() == "roark")
+
+
+@lru_cache(maxsize=1)
+def _roark_party() -> tuple[PokemonSpec, ...]:
+    return tuple(build_trainer_party(_roark(), IntermediateData(INTERMEDIATE)))
 
 
 @lru_cache(maxsize=1)
@@ -179,7 +184,8 @@ def roark_state(
 ) -> BattleState:
     """The sample party (``tests/fixtures/sample_party.toml``) against the first
     ``opp_count`` members of Roark's built party (Geodude L12, Onix L12, Cranidos
-    L14), both leads in slot 0. A test fixture, not Roark's real fight: every
+    L14), both leads in slot 0, Roark's bag (two Potions) in ``trainer_items[1]``.
+    A test fixture, not Roark's real fight: every
     opponent knows Tackle, Rock Throw, Stealth Rock, Leer in that order (plan
     ruling).
 
@@ -214,7 +220,7 @@ def roark_state(
         player[0] = _replace_spec(player[0], gender=_GENDERS[player_gender])
     if opp_gender is not None:
         opp[0] = _replace_spec(opp[0], gender=_GENDERS[opp_gender])
-    s = make_state(tables, player, opp)
+    s = make_state(tables, player, opp, opp_items=_roark().items)
     spe = Stat.SPE - 1  # stats[..., 0..4] are Atk..Spe
     if equal_speed or opp_faster:
         s = s._replace(stats=s.stats.at[1, 0, spe].set(s.stats[0, 0, spe] + int(opp_faster)))

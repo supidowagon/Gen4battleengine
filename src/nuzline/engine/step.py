@@ -17,7 +17,8 @@ Pure, jit- and vmap-able, fixed shapes; every random event comes from
 6. The battle ends at the first faint check that finds a player faint or no
    opponent left (``_faint_check``); later checks of the turn do nothing.
 
-Implemented so far: switching (with Natural Cure) and the switch-in hooks
+Implemented so far: the opponent's bag items (Potion, ``_use_trainer_item``),
+switching (with Natural Cure) and the switch-in hooks
 (``hooks.on_switch_in``: Stealth Rock, Intimidate, berries), damaging moves, the
 accuracy check, PP, Struggle, the move effects of ``effects.py``, the berry check
 after every hit (``hooks.after_damage_items``), Pursuit's pre-switch hit, the sleep,
@@ -40,19 +41,21 @@ import jax
 import jax.numpy as jnp
 
 from nuzline.data.tables import Tables
+from nuzline.engine.actions import FIRST_ITEM_ACTION
 from nuzline.engine.damage import confusion_damage
 from nuzline.engine.effects import apply_move_effect, change_stage, defender_always
 from nuzline.engine.hooks import after_damage_items, on_switch_in
-from nuzline.engine.ids import AbilityId, EffectId, Stat, Status
+from nuzline.engine.ids import POTION_HP_RESTORED, AbilityId, EffectId, Stat, Status, TrainerItemId
 from nuzline.engine.order import (
     MOVE_ACTIONS,
     action_order,
     effective_speed,
+    is_item,
     is_switch,
     selected_move,
 )
 from nuzline.engine.outcome import MAX_HITS, Outcome
-from nuzline.engine.state import BattleState
+from nuzline.engine.state import BAG_SLOTS, BattleState
 
 _I32 = jnp.int32
 WINNER_OPPONENT, WINNER_PLAYER = 1, 2
@@ -253,14 +256,55 @@ def _use_move(
     return state
 
 
+def _bag_slot(action) -> jnp.ndarray:
+    return jnp.clip(action - FIRST_ITEM_ACTION, 0, BAG_SLOTS - 1)
+
+
+def _consume_trainer_items(state: BattleState, actions) -> BattleState:
+    """Each side choosing an item action loses that bag slot when it chooses:
+    ``TrainerAI_ShouldUseItem`` (trainer_ai.c:4193) zeroes ``trainerItems[i]`` at command
+    selection, so the item is spent even if its action never runs."""
+    for side in (0, 1):
+        slot = _bag_slot(actions[side])
+        kept = jnp.where(is_item(actions[side]), 0, state.trainer_items[side, slot])
+        state = state._replace(
+            trainer_items=state.trainer_items.at[side, slot].set(
+                kept.astype(state.trainer_items.dtype)
+            )
+        )
+    return state
+
+
+def _use_trainer_item(tables: Tables, state: BattleState, side, item) -> BattleState:
+    """``BattleControllerPlayer_ItemCommand`` (battle_controller_player.c:1905): a
+    Potion runs ``subscript_use_potion.s``. ``BattleSystem_UseBagItem``
+    (battle_system.c:435) restores ``POTION_HP_RESTORED`` to the active Pokemon when it
+    has HP left and is not at full HP; ``BATTLE_SUBSCRIPT_UPDATE_HP`` caps it at max HP."""
+    mon = state.active[side]
+    hp = state.hp[side, mon].astype(_I32)
+    potion = (tables.trainer_item_effect[item] == TrainerItemId.POTION) & (hp > 0)
+    healed = jnp.minimum(hp + POTION_HP_RESTORED, state.max_hp[side, mon].astype(_I32))
+    return _set_mon(state, "hp", side, mon, healed, potion)
+
+
 def _act(
-    tables: Tables, state: BattleState, side, actions, choices, outcome: Outcome, target_moved
+    tables: Tables,
+    state: BattleState,
+    side,
+    actions,
+    choices,
+    items,
+    outcome: Outcome,
+    target_moved,
 ) -> BattleState:
     action = actions[side]
     switched = _send_out(tables, state, side, jnp.clip(action - MOVE_ACTIONS, 0, 5))
+    used = _use_trainer_item(tables, state, side, items[side])
     choice = (choices[0][side], choices[1][side])
     moved = _use_move(tables, state, side, action, choice, outcome, target_moved)
-    return _where(is_switch(action) & (state.over == 0), switched, moved)
+    live = state.over == 0
+    acted = _where(is_item(action) & live, used, moved)
+    return _where(is_switch(action) & live, switched, acted)
 
 
 def _pursuit_fires(tables: Tables, state: BattleState, side, actions, choices) -> jnp.ndarray:
@@ -276,6 +320,7 @@ def _pursuit_fires(tables: Tables, state: BattleState, side, actions, choices) -
         (state.over == 0)
         & is_switch(actions[side])
         & ~is_switch(actions[pursuer])
+        & ~is_item(actions[pursuer])
         & ~struggling
         & (tables.move_effect[move] == EffectId.PURSUIT)
         & (state.hp[pursuer, mon] > 0)
@@ -345,11 +390,16 @@ def execute_actions(
     tables: Tables, state: BattleState, actions, outcome: Outcome, order
 ) -> BattleState:
     """Phase 3: both actors in order, each followed by a faint check. A switch facing
-    Pursuit is hit first (with its own faint check), and the pursuer does not act again."""
+    Pursuit is hit first (with its own faint check), and the pursuer does not act again.
+    An item action's bag slot is spent first (``_consume_trainer_items``)."""
     first = order[0].astype(_I32)
-    # Each side's move is fixed when chosen, from the turn's starting state.
+    # Each side's move and bag item are fixed when chosen, from the turn's starting state.
     picks = [selected_move(tables, state, side, actions[side]) for side in (0, 1)]
     choices = (jnp.stack([p[0] for p in picks]), jnp.stack([p[1] for p in picks]))
+    items = jnp.stack(
+        [state.trainer_items[side, _bag_slot(actions[side])] for side in (0, 1)]
+    ).astype(_I32)
+    state = _consume_trainer_items(state, actions)
     pursued = _pursuit_fires(tables, state, first, actions, choices)
     state = _where(
         is_switch(actions[first]) & (state.over == 0), _natural_cure(state, first), state
@@ -361,7 +411,7 @@ def execute_actions(
         before = state
         side = order[position].astype(_I32)
         target_moved = position == 1  # the first actor's target has not moved yet
-        acted = _act(tables, state, side, actions, choices, outcome, target_moved)
+        acted = _act(tables, state, side, actions, choices, items, outcome, target_moved)
         if position == 1:
             acted = _where(pursued, state, acted)
         state = _faint_check(before, acted)

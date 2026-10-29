@@ -120,6 +120,16 @@ does not generate those matchups (`_smogon_departs`).
 
 ## Not implemented in either engine (M6; M1b's coverage registry must refuse them)
 
+- **A trainer item use that empties two bag slots.** `TrainerAI_ShouldUseItem`
+  (`src/battle/trainer_ai/trainer_ai.c:4056`) never breaks out of its bag loop: once one
+  slot is used, every later slot it considers (`aliveMons <= trainerItemCounts - i + 1`,
+  `:4092`) and finds non-empty is zeroed too (`docs/ai/roark.md` section 12, quirk 5).
+  With two or fewer of Roark's Pokemon alive, one Potion use empties both slots. Both
+  engines' item action `10 + k` empties slot `k` only, and `BattleState` has no
+  `trainerItemCounts` (the bag's size at battle start, never decremented) to decide the
+  extra slots. Until the state carries it, the AI policy or the coverage registry must
+  account for this.
+
 - **Field-condition end-of-turn pass.** Neither engine runs the decomp's
   `BattleControllerPlayer_CheckFieldConditions`
   (`src/battle/battle_controller_player.c:932`): hail and sandstorm chip damage

@@ -10,7 +10,7 @@ Sources (decomp at the pin in ``tools/clone_decomp.sh``):
   constant name is in ``DECOMP_EFFECT_NAMES`` and every stat entry was read off
   ``res/battle/scripts/effects/effect_script_NNNN.s``.
   ``tests/tools/test_effect_map.py`` re-checks both against the decomp.
-* Ability and item keys are the decomp's English names as they appear in
+* Ability, item and trainer-item keys are the decomp's English names as they appear in
   ``data/intermediate/{abilities,items}.json``.
 * ``SOUND_MOVES`` / ``PUNCH_MOVES`` mirror ``sSoundMoves`` and ``sPunchingMoves``
   in ``src/battle/battle_lib.c``; the decomp has no move-data flag for either.
@@ -42,7 +42,7 @@ Uproar are unsupported moves, so none of those branches can be reached silently.
 
 from __future__ import annotations
 
-from nuzline.engine.ids import AbilityId, EffectId, ItemId, Stat, Status
+from nuzline.engine.ids import AbilityId, EffectId, ItemId, Stat, Status, TrainerItemId
 
 _E = EffectId
 _ATK, _DEF, _SPA, _SPD, _SPE, _ACC, _EVA = (
@@ -162,6 +162,12 @@ DECOMP_ITEM_TO_ID: dict[str, ItemId] = {
     "None": ItemId.NONE,  # ITEM_NONE (id 0)
     "Oran Berry": ItemId.ORAN_BERRY,  # HOLD_EFFECT_HP_RESTORE, param 10 HP
     "Sitrus Berry": ItemId.SITRUS_BERRY,  # HOLD_EFFECT_HP_PCT_RESTORE, param 25 %
+}
+
+# Bag items a trainer's AI may use (TrainerAI_ShouldUseItem, trainer_ai.c:4056).
+DECOMP_TRAINER_ITEM_TO_ID: dict[str, TrainerItemId] = {
+    "None": TrainerItemId.NONE,  # ITEM_NONE (id 0): an empty bag slot
+    "Potion": TrainerItemId.POTION,  # itemUseParams.hpRestored 20
 }
 
 # src/battle/battle_lib.c sSoundMoves (Soundproof).

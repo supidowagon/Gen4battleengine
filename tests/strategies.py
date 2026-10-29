@@ -3,7 +3,8 @@ actions and chance outcomes.
 
 Everything stays inside the M1 implemented set: species from ``M1_SPECIES``, moves
 from their level-up learnsets with a supported effect (``move_effect !=
-UNSUPPORTED``), their own abilities (all implemented), Oran/Sitrus Berry or no item.
+UNSUPPORTED``), their own abilities (all implemented), Oran/Sitrus Berry or no item;
+the opponent's bag holds Potions or nothing in each slot.
 State fields that no M1 mechanic can set are left at 0, except those the engines
 read (screens, Tailwind, Trick Room, Mud Sport, weather), which are drawn so the
 code reading them is exercised. Active Pokemon have HP >= 1; benched ones may have
@@ -24,10 +25,17 @@ from hypothesis import strategies as st
 from nuzline.data.spec import PokemonSpec
 from nuzline.data.tables import Names, Tables
 from nuzline.data.trainer import IntermediateData
-from nuzline.engine.actions import legal_actions
+from nuzline.engine.actions import legal_actions, legal_opponent_actions
 from nuzline.engine.ids import EffectId, Stat, Status, Weather
 from nuzline.engine.outcome import MAX_HITS, Outcome
-from nuzline.engine.state import SLOTS, STAGE_MAX, STAGE_MIN, BattleState, make_state
+from nuzline.engine.state import (
+    BAG_SLOTS,
+    SLOTS,
+    STAGE_MAX,
+    STAGE_MIN,
+    BattleState,
+    make_state,
+)
 from nuzline.engine.stats import calc_stats
 
 INTERMEDIATE = Path(__file__).resolve().parents[1] / "data" / "intermediate"
@@ -47,6 +55,7 @@ M1_SPECIES = (
     "Bidoof",
 )
 M1_ITEMS = ("", "Oran Berry", "Sitrus Berry")
+M1_BAG_ITEMS = ("", "Potion")  # the opponent's bag (ids.TrainerItemId)
 
 # decomp gender ratios (``tables.species_gender``) with a single possible gender
 GENDERLESS, MALE_ONLY, FEMALE_ONLY = 255, 0, 254
@@ -183,8 +192,9 @@ def _party(draw, tables: Tables, names: Names) -> tuple[list[PokemonSpec], int]:
 def supported_state(draw, tables: Tables, names: Names) -> BattleState:
     """A mid-battle state: 1-6 Pokemon per side (``supported_pokemon``), any active
     slot, random PP, status counters, stat stages, confusion, Taunt, Bind, Leech Seed,
-    Water Sport, Stealth Rock, screens, Tailwind, Trick Room, Mud Sport and weather,
-    each within its legal range; the battle is not over."""
+    Water Sport, Stealth Rock, screens, Tailwind, Trick Room, Mud Sport, weather and the
+    opponent's bag (``M1_BAG_ITEMS`` per slot, gaps allowed as after a use), each within
+    its legal range; the battle is not over."""
     parties = [draw(_party(tables, names)) for _ in (0, 1)]
     s = make_state(tables, parties[0][0], parties[1][0])
     a = {name: np.asarray(getattr(s, name)).copy() for name in BattleState._fields}
@@ -211,6 +221,8 @@ def supported_state(draw, tables: Tables, names: Names) -> BattleState:
         a["reflect"][side] = draw(st.integers(0, _TIMER_MAX))
         a["light_screen"][side] = draw(st.integers(0, _TIMER_MAX))
         a["tailwind"][side] = draw(st.integers(0, _TIMER_MAX))
+    bag = draw(st.lists(st.sampled_from(M1_BAG_ITEMS), min_size=BAG_SLOTS, max_size=BAG_SLOTS))
+    a["trainer_items"][1] = [names.item(i) for i in bag]
     a["weather"][...] = draw(st.sampled_from(list(Weather)))  # permanent: timer 0
     a["trick_room"][...] = draw(st.integers(0, _TIMER_MAX))
     a["mud_sport"][...] = draw(st.integers(0, 1))
@@ -221,10 +233,12 @@ def supported_state(draw, tables: Tables, names: Names) -> BattleState:
 
 @st.composite
 def legal_action_pair(draw, tables: Tables, state: BattleState) -> jnp.ndarray:
-    """``int32[2]``: a legal action for each side (``engine.actions.legal_actions``)."""
+    """``int32[2]``: a legal action for each side: the player's from
+    ``engine.actions.legal_actions``, the opponent's (moves, switches and bag items) from
+    ``legal_opponent_actions``."""
     acts = []
-    for side in (0, 1):
-        legal = np.flatnonzero(np.asarray(legal_actions(tables, state, side)))
+    for mask in (legal_actions(tables, state, 0), legal_opponent_actions(tables, state)):
+        legal = np.flatnonzero(np.asarray(mask))
         acts.append(draw(st.sampled_from(legal.tolist())))
     return jnp.asarray(acts, jnp.int32)
 

@@ -84,7 +84,9 @@ three structs has a row.
 - **aiContext**: `battlerMoves` (moves the AI has seen) -> `ai_seen_moves`,
   `battlerAbilities` (revealed abilities) -> `ai_ability_known`, `trainerItems`
   -> `trainer_items`. Its scoring scratch is rebuilt every decision; the rest of
-  the AI state is later (M1b).
+  the AI state is later (M1b). `trainerItemCounts` (the bag's size at battle start)
+  is not mapped yet: see docs/discrepancies.md, "A trainer item use that empties two
+  bag slots".
 - **Not from a struct field.** `pursuit_target` and `wish_hp` are
   `BattleState`'s own bookkeeping: the decomp derives Pursuit's pre-switch hit
   from per-turn scratch (the opposing battler's selected move when a switch is

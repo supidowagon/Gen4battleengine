@@ -1,7 +1,7 @@
 """The engine's vocabulary: effect, ability, item, status, stat, move-flag and type ids.
 
 Tables store these ids (``tables.move_effect``, ``species_abilities``,
-``item_effect``, ``move_flags``); the decomp's own ids are mapped onto them by
+``item_effect``, ``trainer_item_effect``, ``move_flags``); the decomp's own ids are mapped onto them by
 ``tools/effect_map.py`` at table-build time. Anything outside the implemented set
 is the ``UNSUPPORTED`` member, never an approximation.
 """
@@ -78,6 +78,21 @@ class ItemId(IntEnum):
     NONE = 1
     ORAN_BERRY = 2
     SITRUS_BERRY = 3
+
+
+class TrainerItemId(IntEnum):
+    """Effect of a trainer's bag item (``tables.trainer_item_effect``), used by the
+    opponent's item actions (``actions.FIRST_ITEM_ACTION``). ``POTION`` restores
+    ``POTION_HP_RESTORED`` HP to the active Pokemon, capped at its max HP."""
+
+    UNSUPPORTED = 0
+    NONE = 1
+    POTION = 2
+
+
+# Potion's ``itemUseParams.hpRestored`` (res/items/data/potion.json), the amount
+# ``BattleSystem_UseBagItem`` (src/battle/battle_system.c:435) restores.
+POTION_HP_RESTORED = 20
 
 
 class Status(IntEnum):

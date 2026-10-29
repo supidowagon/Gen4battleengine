@@ -32,6 +32,7 @@ from dataclasses import dataclass, field
 
 from nuzline.engine.ids import (
     MOVE_STRUGGLE,
+    POTION_HP_RESTORED,
     AbilityId,
     EffectId,
     ItemId,
@@ -39,12 +40,15 @@ from nuzline.engine.ids import (
     MoveTarget,
     Stat,
     Status,
+    TrainerItemId,
     Type,
     Weather,
 )
 from nuzline.reference.state import RefPokemon, RefSide, RefState
 
 MOVE_ACTIONS = 4  # actions 0-3 use a move slot, 4-9 switch to party slot action - 4
+FIRST_ITEM_ACTION = 10  # opponent actions 10-13 use bag slot action - 10
+FIGHT, SWITCH, ITEM = "fight", "switch", "item"  # the decomp's PLAYER_INPUT_* commands
 PHYSICAL, SPECIAL, STATUS_CLASS = 0, 1, 2  # tables.move_category (the decomp's CLASS_*)
 WINNER_OPPONENT, WINNER_PLAYER = 1, 2
 STAGE_MIN, STAGE_MAX = -6, 6
@@ -824,6 +828,19 @@ def _switch(turn: _Turn, s: RefState, side: int, slot: int, actions, choices) ->
     _switch_in_effects(turn, s, side)
 
 
+def _use_item(tables, s: RefState, side: int, item: int) -> None:
+    """``BattleControllerPlayer_ItemCommand`` (bcp.c:1905) -> ``subscript_use_potion.s``:
+    ``BattleSystem_UseBagItem`` (battle_system.c:435) restores the Potion's 20 HP to a
+    living active Pokemon that is not at full HP; ``BATTLE_SUBSCRIPT_UPDATE_HP`` caps
+    it at max HP."""
+    mon = _active(s, side)
+    if _t(tables, "trainer_item_effect", item) != TrainerItemId.POTION:
+        return
+    if mon.hp == 0 or mon.hp == mon.max_hp:
+        return
+    _gain_hp(s, side, POTION_HP_RESTORED)
+
+
 # --------------------------------------------------------------------------- end of turn
 
 
@@ -920,6 +937,12 @@ def _usable(tables, s: RefState, side: int) -> list[bool]:
     ]
 
 
+def _command(action: int) -> str:
+    if action >= FIRST_ITEM_ACTION:
+        return ITEM
+    return SWITCH if action >= MOVE_ACTIONS else FIGHT
+
+
 def _choose(tables, s: RefState, side: int, action: int) -> tuple[int, bool]:
     """The move a move action selects, fixed at command selection: Struggle when no
     move is usable (``STRUGGLING_ALL``, bcp.c:433), else the slot's move."""
@@ -936,16 +959,27 @@ def ref_step(tables, state: RefState, actions: tuple[int, int], outcome) -> RefS
     turn = _Turn(tables, outcome)
     actions = (int(actions[0]), int(actions[1]))
     choices = [_choose(tables, s, side, actions[side]) for side in (0, 1)]
+    commands = [_command(a) for a in actions]
+    # TrainerAI_ShouldUseItem (trainer_ai.c:4193) empties the bag slot when it picks the
+    # item, before any action runs.
+    items = [0, 0]
+    for side in (0, 1):
+        if commands[side] == ITEM:
+            bag = s.sides[side].trainer_items
+            items[side] = bag[actions[side] - FIRST_ITEM_ACTION]
+            bag[actions[side] - FIRST_ITEM_ACTION] = 0
 
-    # BattleControllerPlayer_CalcTurnOrder (bcp.c:707): switches first, then moves; two
-    # actions of one kind are ordered by CompareBattlerSpeed, with priority only
-    # between two moves.
-    switching = [a >= MOVE_ACTIONS for a in actions]
-    if switching[0] != switching[1]:
-        order = [0, 1] if switching[0] else [1, 0]
+    # BattleControllerPlayer_CalcTurnOrder (bcp.c:707): items and switches first, in
+    # battler order, then moves; two actions of one command are ordered by
+    # CompareBattlerSpeed, with priority only between two moves.
+    early = [c != FIGHT for c in commands]
+    if early[0] != early[1]:
+        order = [0, 1] if early[0] else [1, 0]
+    elif commands[0] != commands[1]:  # an item and a switch: battler order
+        order = [0, 1]
     else:
         priority = (0, 0)
-        if not switching[0]:
+        if not early[0]:
             priority = tuple(_t(tables, "move_priority", choices[side][0]) for side in (0, 1))
         order = [1, 0] if _player_second(s, priority, outcome.speed_tie) else [0, 1]
 
@@ -954,7 +988,9 @@ def ref_step(tables, state: RefState, actions: tuple[int, int], outcome) -> RefS
             break
         if turn.done[side] or _active(s, side).hp == 0:
             continue
-        if switching[side]:
+        if commands[side] == ITEM:
+            _use_item(tables, s, side, items[side])
+        elif commands[side] == SWITCH:
             _switch(turn, s, side, actions[side] - MOVE_ACTIONS, actions, choices)
         else:
             move, struggling = choices[side]

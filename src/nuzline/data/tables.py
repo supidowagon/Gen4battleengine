@@ -39,6 +39,7 @@ class Tables(NamedTuple):
     nature_mods: jnp.ndarray  # int8[25,6], -1/0/+1
     item_effect: jnp.ndarray  # int16[I], ids.ItemId
     item_param: jnp.ndarray  # int16[I,2]
+    trainer_item_effect: jnp.ndarray  # int8[I], ids.TrainerItemId
 
 
 def load_tables(dir: Path = DEFAULT) -> Tables:
