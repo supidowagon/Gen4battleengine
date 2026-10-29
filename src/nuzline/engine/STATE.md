@@ -56,9 +56,28 @@ three structs has a row.
   `tailwind`, Lucky Chant turns -> `lucky_chant`. Its Reflect, Light Screen,
   Spikes, Safeguard, Mist, Toxic Spikes, Future Sight and Wish bits are implied by
   the nonzero turn/layer counts in the mapped fields.
-- **moveLockedInto -> `charge_turn`**: the move a battler is locked into for its
-  next turn (charge-up and multi-turn moves). Two-turn moves are not in M1, so
-  the field is reserved.
+- **moveLockedInto is later (M6)**, not `charge_turn`: it holds the move id a
+  battler is locked into for its next turn (charge-up and multi-turn moves), and
+  `charge_turn` is an `int8` flag that cannot hold a move id. M6 adds an `int16`
+  field when two-turn moves are implemented; `charge_turn` stays reserved.
+- **Audit-relabelled rows (Task 6 ledger).** Eight "not needed" judgements were
+  refuted against the decomp and are `later (M6)`: the switch-in ability checks
+  are re-run after every move, gated by `intimidateAnnounced`,
+  `weatherAbilityAnnounced`, `traceAnnounced` and `downloadAnnounced`
+  (`BattleSystem_TriggerEffectOnSwitch`, `src/battle/battle_lib.c:3649-4168`,
+  called from `src/battle/battle_controller_player.c:3673` and `:3973`), so a
+  mid-battle ability gain (Trace, Skill Swap, Role Play) announces again;
+  `MoveEffectsData.quickClaw` is read by `BtlCmd_TryStealItem`
+  (`src/battle/battle_script.c:5114`: Thief and Covet fail against a battler
+  whose Quick Claw activated this turn); `BattleContext.moveProtect`, the
+  attacker's last executed move, is read by `BtlCmd_TryProtection`
+  (`:5154-5156`: consecutive Protect, Detect and Endure); `monSpeedValues`, the
+  speeds computed when the turn was ordered, by `BtlCmd_CalcGyroBallPower`
+  (`:7127`); and `moveSketched` by `BtlCmd_TrySketch` (`:4848`). M1 is
+  unaffected: no M1 mechanic gains an ability mid-battle, Quick Claw is
+  outcome-driven, and none of Thief, Covet, Protect, Detect, Endure, Gyro Ball or
+  Sketch is in M1. M6's coverage work must add these fields before the mechanics
+  that read them.
 - **battleEndFlag -> `over`, `winner`**: `winner` is 0 none, 1 player lost (any
   player faint is terminal for the primary objective), 2 player won.
 - **recycleItem -> `item_consumed`**: the last item consumed, per party slot.
@@ -98,10 +117,10 @@ three structs has a row.
 | `BattleMon.isShiny` | — | not needed because it is cosmetic (names, messages, sprites, animation) |
 | `BattleMon.padding0026_06` | — | not needed because it is padding |
 | `BattleMon.ability` | `ability` | mapped |
-| `BattleMon.weatherAbilityAnnounced` | — | not needed because it only stops a switch-in message repeating; switch-in hooks run once per switch-in |
-| `BattleMon.intimidateAnnounced` | — | not needed because it only stops a switch-in message repeating; switch-in hooks run once per switch-in |
-| `BattleMon.traceAnnounced` | — | not needed because it only stops a switch-in message repeating; switch-in hooks run once per switch-in |
-| `BattleMon.downloadAnnounced` | — | not needed because it only stops a switch-in message repeating; switch-in hooks run once per switch-in |
+| `BattleMon.weatherAbilityAnnounced` | — | later (M6) |
+| `BattleMon.intimidateAnnounced` | — | later (M6) |
+| `BattleMon.traceAnnounced` | — | later (M6) |
+| `BattleMon.downloadAnnounced` | — | later (M6) |
 | `BattleMon.anticipationAnnounced` | — | not needed because it only stops a switch-in message repeating; switch-in hooks run once per switch-in |
 | `BattleMon.forewarnAnnounced` | — | not needed because it only stops a switch-in message repeating; switch-in hooks run once per switch-in |
 | `BattleMon.slowStartAnnounced` | — | not needed because it only stops a switch-in message repeating; switch-in hooks run once per switch-in |
@@ -163,7 +182,7 @@ three structs has a row.
 | `MoveEffectsData.metronomeTurns` | — | later (M6) |
 | `MoveEffectsData.micleBerry` | — | later (M6) |
 | `MoveEffectsData.custapBerry` | — | later (M6) |
-| `MoveEffectsData.quickClaw` | — | not needed because a Quick Claw activation is an outcome input; the flag only drives its message |
+| `MoveEffectsData.quickClaw` | — | later (M6) |
 | `MoveEffectsData.meFirst` | — | later (M6) |
 | `MoveEffectsData.padding0004_1F` | — | not needed because it is padding |
 | `MoveEffectsData.rechargeTurnNumber` | `recharge` | mapped |
@@ -326,7 +345,7 @@ three structs has a row.
 | `BattleContext.battlerActions` | — | not needed because it is reset every turn and `step` resolves a whole turn |
 | `BattleContext.battlerActionOrder` | — | not needed because it is reset every turn and `step` resolves a whole turn |
 | `BattleContext.monSpeedOrder` | — | not needed because it is reset every turn and `step` resolves a whole turn |
-| `BattleContext.monSpeedValues` | — | not needed because it is reset every turn and `step` resolves a whole turn |
+| `BattleContext.monSpeedValues` | — | later (M6) |
 | `BattleContext.ioQueue` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |
 | `BattleContext.ioBuffer` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |
 | `BattleContext.battleScript` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |
@@ -334,15 +353,15 @@ three structs has a row.
 | `BattleContext.moveTemp` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
 | `BattleContext.moveCur` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
 | `BattleContext.movePrev` | — | later (M6) |
-| `BattleContext.moveLockedInto` | `charge_turn` | mapped |
-| `BattleContext.moveProtect` | — | not needed because it is reset every turn and `step` resolves a whole turn |
+| `BattleContext.moveLockedInto` | — | later (M6) |
+| `BattleContext.moveProtect` | — | later (M6) |
 | `BattleContext.moveHit` | — | later (M6) |
 | `BattleContext.moveHitBattler` | — | later (M6) |
 | `BattleContext.moveHitType` | — | later (M6) |
 | `BattleContext.movePrevByBattler` | `last_move` | mapped |
 | `BattleContext.moveCopied` | — | later (M6) |
 | `BattleContext.moveCopiedHit` | — | later (M6) |
-| `BattleContext.moveSketched` | — | not needed because Sketch only matters outside trainer fights |
+| `BattleContext.moveSketched` | — | later (M6) |
 | `BattleContext.moveSelected` | — | not needed because it is reset every turn and `step` resolves a whole turn |
 | `BattleContext.moveSlot` | — | not needed because it is reset every turn and `step` resolves a whole turn |
 | `BattleContext.conversion2Move` | — | later (M6) |

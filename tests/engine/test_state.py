@@ -170,3 +170,27 @@ def test_state_md_accounts_for_every_struct_field():
         assert len(fields) > 10
         missing = [f for f in fields if f"{name}.{f}" not in listed]
         assert not missing, f"STATE.md lacks {name} fields: {missing}"
+
+
+# The Task 6 adversarial audit (ledger) found these "not needed" judgements wrong: the
+# switch-in ability checks re-run after every move gated by the announced flags
+# (battle_lib.c:3649-4168, battle_controller_player.c:3673/3973), Quick Claw, Protect,
+# the speed values and Sketch are read later in the turn, and ``moveLockedInto`` is a
+# move id that no int8 field can hold. They are needed for M6, not M1.
+AUDIT_LATER_ROWS = (
+    "BattleMon.intimidateAnnounced",
+    "BattleMon.weatherAbilityAnnounced",
+    "BattleMon.traceAnnounced",
+    "BattleMon.downloadAnnounced",
+    "MoveEffectsData.quickClaw",
+    "BattleContext.moveProtect",
+    "BattleContext.monSpeedValues",
+    "BattleContext.moveSketched",
+    "BattleContext.moveLockedInto",
+)
+
+
+def test_state_md_audit_rows_are_later_m6():
+    status = {field: status for field, _, status in _state_md_rows()}
+    for field in AUDIT_LATER_ROWS:
+        assert status[field] == "later (M6)", f"{field}: {status[field]!r}"

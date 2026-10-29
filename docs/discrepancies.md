@@ -108,3 +108,19 @@ does not generate those matchups (`_smogon_departs`).
   the decomp fails the move (`MOVE_STATUS_NO_PP`, `BattleControllerPlayer_DecrementPP`,
   `src/battle/battle_controller_player.c:2235`) and so does the reference, while the JAX
   engine does not check.
+
+## Not implemented in either engine (M6; M1b's coverage registry must refuse them)
+
+- **Field-condition end-of-turn pass.** Neither engine runs the decomp's
+  `BattleControllerPlayer_CheckFieldConditions`
+  (`src/battle/battle_controller_player.c:932`): hail and sandstorm chip damage
+  (`FIELD_COND_CHECK_STATE_HAILING` / `_SANDSTORM`, `:1188` / `:1138`) and the Reflect,
+  Light Screen, Tailwind and Trick Room countdowns (`:947-1062`, `:1227`). No M1 move or
+  ability sets any of them and Roark's fight starts with no weather, but
+  `make_state(start_condition=Weather.HAIL)` is accepted and `tests/strategies.py` draws
+  `Weather.HAIL` / `Weather.SANDSTORM` and nonzero `reflect`, `light_screen`, `tailwind`
+  and `trick_room` timers, which both engines then simulate with no chip damage and no
+  countdown (the differential test agrees because both omit them). Against spec §3
+  "never approximate silently", M1b's coverage registry (next plan, Task 1) must mark
+  `Weather.HAIL`, `Weather.SANDSTORM` and the per-side/field timers as unsupported so
+  `check_coverage` refuses a fight that starts with them, until M6 implements the pass.

@@ -25,6 +25,13 @@ freeze, flinch, Taunt, confusion and paralysis checks before a move, the held-it
 Leech Seed, poison, toxic, burn, Bind and Taunt end-of-turn checks, faints and the
 end of the battle. A player faint is terminal (spec §3): it
 sets ``over = 1, winner = 1``. A state that is already over is returned unchanged.
+
+Not implemented (M6): the decomp's ``BattleControllerPlayer_CheckFieldConditions``
+pass (battle_controller_player.c:932): hail and sandstorm chip damage and the
+Reflect, Light Screen, Tailwind and Trick Room countdowns. A state with
+``Weather.HAIL`` / ``Weather.SANDSTORM`` or a nonzero screen/Tailwind/Trick Room timer
+is stepped with none of them, so M1b's coverage registry must mark those as unsupported
+(docs/discrepancies.md, "Not implemented in either engine").
 """
 
 from __future__ import annotations
