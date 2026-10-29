@@ -38,6 +38,9 @@ def test_dtypes_and_shapes():
     assert "???" in n.type_names
     assert t.type_chart.shape == (len(n.type_names), len(n.type_names))
     assert t.nature_mods.shape == (25, 6)
+    # Deviation from the brief's int8: decomp base friendship reaches 140
+    # (Clefairy), which int8 cannot hold. int16 keeps to the storage rule.
+    assert t.species_friendship.dtype == jnp.int16
     assert all(x.dtype.itemsize <= 4 for x in t)
 
 
