@@ -31,7 +31,7 @@ from nuzline.ai.outcome import AiOutcome, script_roll_sites
 from nuzline.ai.switching import INEFFECTIVE, MOVE_STRUGGLE, chart_multipliers, type_chart_flags
 from nuzline.data.tables import Tables
 from nuzline.engine.actions import usable_moves
-from nuzline.engine.damage import damage_for_roll
+from nuzline.engine.damage import ai_damage_for_roll
 from nuzline.engine.ids import Stat
 from nuzline.engine.state import MOVES, BattleState
 
@@ -195,11 +195,12 @@ class AiContext(NamedTuple):
 
 def ai_damage(tables: Tables, state: BattleState, move, roll) -> jnp.ndarray:
     """``int32``: ``TrainerAI_CalcDamage`` (trainer_ai.c:2868) of ``move`` by the AI's
-    active Pokemon against the player's, with variance ``85 + roll`` percent: the
-    engine's ``damage_for_roll(..., crit=False, roll)`` (roark.md 7.1), 0 for a move
-    that is not damaging (power <= 1) and for an immunity."""
+    active Pokemon against the player's, with variance ``85 + roll`` percent applied
+    after STAB and the type chart (:3109; the battle applies it before them): the
+    engine's ``ai_damage_for_roll`` (roark.md 7.1), 0 for a move that is not damaging
+    (power <= 1) and for an immunity."""
     move = jnp.asarray(move, _I32)
-    damage = damage_for_roll(tables, state, 1, move, False, roll)
+    damage = ai_damage_for_roll(tables, state, 1, move, roll)
     return jnp.where(is_damaging(tables, move), damage, 0)
 
 

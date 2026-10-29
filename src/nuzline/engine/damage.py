@@ -16,6 +16,9 @@ Mirrors the decomp's pipeline for one hit of a damaging move:
    ``sTypeMatchupMultipliers`` (``:2399``, walked at ``:2611-2646``), which is
    not always type 1 then type 2 (``tables.type_chart_order``).
 
+The trainer AI's estimate (``TrainerAI_CalcDamage``, ``trainer_ai.c:2868``) runs
+steps 1, 4 and then 3: ``ai_damage_for_roll`` (crit multiplier 1, variance last).
+
 Only mechanics of the implemented set are modelled. Abilities, items and moves
 outside it are ``UNSUPPORTED`` ids and never reach the branches here; the decomp
 modifiers they would trigger (Technician, type-boosting items, Thick Fat, Flash
@@ -201,19 +204,36 @@ def _pre_random(
 
 
 def _finish(
-    tables: Tables, s: BattleState, atk_side, move, damage, move_type, category, power, roll
+    tables: Tables,
+    s: BattleState,
+    atk_side,
+    move,
+    damage,
+    move_type,
+    category,
+    power,
+    roll,
+    *,
+    variance_last: bool = False,
 ):
     """Random roll, STAB and type chart; 0 for status moves and immunities. Struggle
-    skips STAB and the chart (``ApplyTypeChart`` returns early for it, :2573)."""
+    skips STAB and the chart (``ApplyTypeChart`` returns early for it, :2573).
+
+    The battle applies the variance first (``BattleSystem_CalcDamageVariance``, :7081,
+    at least 1), then the chart. ``variance_last`` is the trainer AI's order instead
+    (``TrainerAI_CalcDamage``, trainer_ai.c:3096-3109): STAB and the chart first, then
+    ``BattleSystem_Divide(damage * variance, 100)``."""
     atk_side = _i32(atk_side)
     def_side = 1 - atk_side
     a_types = _i32(s.types[atk_side, s.active[atk_side]])
     d_types = _i32(s.types[def_side, s.active[def_side]])
+    variance = 85 + _i32(roll)
 
-    # battle_lib.c:7084-7089 variance, at least 1.
-    damage = jnp.maximum(damage * (85 + roll) // 100, 1)
+    if not variance_last:
+        # battle_lib.c:7084-7089 variance, at least 1.
+        damage = jnp.maximum(damage * variance // 100, 1)
     typeless = _i32(move) == MOVE_STRUGGLE
-    variance_only = damage
+    unchanged = damage
     # :2592-2596 STAB x1.5 (Adaptability is not implemented).
     damage = jnp.where(jnp.any(a_types == move_type), damage * 15 // 10, damage)
     # :2611-2646 each defender type through ApplyTypeMultiplier (:7547), in chart
@@ -225,7 +245,10 @@ def _finish(
     t2_first = tables.type_chart_order[move_type, t2] < tables.type_chart_order[move_type, t1]
     first, second = jnp.where(t2_first, e2, e1), jnp.where(t2_first, e1, e2)
     damage = _divide(_divide(damage * first, 10) * second, 10)
-    damage = jnp.where(typeless, variance_only, damage)
+    damage = jnp.where(typeless, unchanged, damage)
+    if variance_last:
+        # trainer_ai.c:3109; an immunity is already 0 (:3106).
+        damage = _divide(damage * variance, 100)
     # Status moves never calculate damage; CheckTypeChart needs base power
     # (battle_controller_player.c:2354).
     return jnp.where((category == STATUS) | (power == 0), 0, damage)
@@ -248,6 +271,26 @@ def damage_for_roll(
         tables, state, atk_side, move, crit, power_mul=power_mul
     )
     return _finish(tables, state, atk_side, move, damage, move_type, category, power, _i32(roll))
+
+
+def ai_damage_for_roll(tables: Tables, state: BattleState, atk_side, move, roll) -> jnp.ndarray:
+    """``int32``: ``TrainerAI_CalcDamage`` (trainer_ai.c:2868-3109) for a move with no
+    special calculation: ``BattleSystem_CalcMoveDamage`` with ``criticalMul`` 1 (screens,
+    weather, abilities, items and stages as in battle), then STAB and the type chart,
+    then the variance ``85 + roll`` percent last, at least 1 when non-zero."""
+    damage, move_type, category, power = _pre_random(tables, state, atk_side, move, False)
+    return _finish(
+        tables,
+        state,
+        atk_side,
+        move,
+        damage,
+        move_type,
+        category,
+        power,
+        _i32(roll),
+        variance_last=True,
+    )
 
 
 def confusion_damage(tables: Tables, state: BattleState, side, roll) -> jnp.ndarray:

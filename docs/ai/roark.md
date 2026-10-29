@@ -294,9 +294,13 @@ so the move's own data is used. The function then calls:
 Every one of Roark's script calls passes `USE_MAX_DAMAGE` (0), so the variance is
 always 100 (`:1050` with `:2830-2833`, and `:1531-1537`).
 
-This equals plan 1a's `damage_for_roll(tables, state, 1, move, crit=False, roll=15)`
-(roll 15 = 85 + 15 = 100 %). The engine applies the variance before STAB and the
-chart, but at 100 % that step leaves the damage unchanged.
+The engine implements this as `ai_damage_for_roll(tables, state, 1, move, roll)`
+(`damage.py`), which applies the variance last (`:3109`), after STAB and the chart.
+The battle applies it before them (`BattleSystem_CalcDamageVariance`,
+`battle_lib.c:7081`), so the two differ at other variances (base 100, roll 0, STAB
+and super effective: 255 for the AI, 254 in battle). At roll 15 (100 %) the step
+leaves the damage unchanged and both equal
+`damage_for_roll(tables, state, 1, move, crit=False, roll=15)`.
 
 The real move pipeline also applies Life Orb and Metronome
 (`BattleScript_CalcMoveDamage`). The AI estimate skips them. Roark's Pokemon hold no
@@ -908,7 +912,7 @@ routines map as follows:
 | `TrainerAI_ShouldSwitch` | `maybe_switch` (`policy.py`) | section 11.1 |
 | `TrainerAI_ShouldUseItem` | `maybe_use_item` (`policy.py`) | section 12 |
 | `BattleAI_PostKOSwitchIn` | `post_ko_switch_in` (`policy.py`) | section 11.2 |
-| `TrainerAI_CalcDamage` (variance 100) | `ai_damage` (`commands.py`) | `damage_for_roll(..., crit=False, roll=15)`, section 7.1 |
+| `TrainerAI_CalcDamage` (variance 100) | `ai_damage` (`commands.py`) | `ai_damage_for_roll(..., roll=15)`, section 7.1 |
 | `IfMoveEffectivenessEquals` class | `effectiveness_class` (`commands.py`) | section 7.2 |
 | `LoadBattlerAbility DEFENDER` resolution | `resolve_player_ability` (Task 4) | section 9.2 |
 | `TrainerAI_RecordLastMove` | knowledge update in `step` (Task 4) | section 9.1 |
