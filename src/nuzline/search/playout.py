@@ -137,13 +137,21 @@ def _choose(tables: Tables, state: BattleState, q, key) -> jnp.ndarray:
     return jax.random.choice(key, NUM_ACTIONS, p=tied / jnp.sum(tied)).astype(_I32)
 
 
+def _policy(tables: Tables, state: BattleState, key) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """``(action, refused)``: ``playout_policy``'s action, and whether the opponent's
+    distribution it was chosen against is refused (traced, a refused distribution is
+    NaN; the action is then meaningless and the caller must refuse the playout)."""
+    q = ai_action_distribution(tables, state)
+    refused = jnp.any(jnp.isnan(q))
+    return _choose(tables, state, jnp.where(refused, 0.0, q), key), refused
+
+
 def playout_policy(tables: Tables, state: BattleState, key) -> jnp.ndarray:
     """``int32``: the player's action with the highest expected value (module docstring),
     a uniformly random one among exact ties; illegal actions score -inf. Raises
-    ``UnsupportedAi`` on a concrete state whose AI is refused."""
-    # Traced, a refused distribution is NaN; ai_policy then refuses the turn.
-    q = jnp.nan_to_num(ai_action_distribution(tables, state))
-    return _choose(tables, state, q, key)
+    ``UnsupportedAi`` on a concrete state whose AI is refused; traced, the action on a
+    refused distribution is meaningless (``_run`` refuses the playout instead)."""
+    return _policy(tables, state, key)[0]
 
 
 @jax.jit
@@ -190,8 +198,12 @@ def _turn(tables: Tables, state: BattleState, player_action, key):
     return _select(refused, state, played), refused
 
 
+def _fixed(turns, first_action):
+    return (turns == 0) & (first_action >= 0)
+
+
 def _first_action(turns, first_action, chosen):
-    return jnp.where((turns == 0) & (first_action >= 0), first_action, chosen)
+    return jnp.where(_fixed(turns, first_action), first_action, chosen)
 
 
 def _run(tables: Tables, state: BattleState, key, max_turns: int, first_action):
@@ -202,9 +214,13 @@ def _run(tables: Tables, state: BattleState, key, max_turns: int, first_action):
     def body(carry):
         s, key, turns, _ = carry
         key, k_policy, k_turn = jax.random.split(key, 3)
-        chosen = playout_policy(tables, s, k_policy)
+        chosen, q_refused = _policy(tables, s, k_policy)
+        # A refused distribution refuses the turn whenever the player's choice uses it.
+        q_refused = q_refused & ~_fixed(turns, first_action)
         action = _first_action(turns, first_action, chosen)
-        s, refused = _turn(tables, s, action.astype(_I32), k_turn)
+        played, refused = _turn(tables, s, action.astype(_I32), k_turn)
+        refused = refused | q_refused
+        s = _select(q_refused, s, played)
         return s, key, turns + jnp.where(refused, 0, 1), refused
 
     init = (state, key, jnp.int32(0), jnp.bool_(False))
@@ -262,7 +278,7 @@ def replacement_refusal(tables: Tables, state: BattleState, ai_switched, power_m
 
 _play_jit = jax.jit(_play)
 _turn_jit = jax.jit(_turn)
-_policy_jit = jax.jit(playout_policy)
+_policy_jit = jax.jit(_policy)
 
 
 def refusal_reason(
@@ -270,20 +286,24 @@ def refusal_reason(
 ) -> str | None:
     """Why ``playout_from_action(tables, state, action, key, max_turns)`` is refused, or
     ``None`` when it is not: the playout is replayed turn by turn outside the loop (the
-    same key splits) and the refused turn's AI (``ai_refusals``) or replacement
-    (``replacement_refusal``) is asked on its concrete state."""
+    same key splits) and the refused turn's AI (``ai_refusals``, also when the player's
+    choice met a refused distribution) or replacement (``replacement_refusal``) is asked
+    on its concrete state."""
     first = jnp.asarray(action, _I32)
     for turns in range(max_turns):
         if int(state.over) != 0:
             return None
         key, k_policy, k_turn = jax.random.split(key, 3)
-        chosen = _policy_jit(tables, state, k_policy)
+        chosen, q_refused = _policy_jit(tables, state, k_policy)
+        q_refused = bool(q_refused) and not bool(_fixed(turns, first))
         player_action = _first_action(turns, first, chosen).astype(_I32)
         played, refused = _turn_jit(tables, state, player_action, k_turn)
-        if bool(refused):
+        if q_refused or bool(refused):
             reasons = ai_refusals(tables, state)
             if reasons:
                 return "; ".join(reasons)
+            if q_refused:
+                return "the opponent's action distribution is refused"
             played, _, ai_switched, power_mul = _play_jit(tables, state, player_action, k_turn)
             return replacement_refusal(tables, played, ai_switched, power_mul)
         state = played

@@ -5,8 +5,9 @@ import jax
 import jax.numpy as jnp
 
 from nuzline.ai.replacement import post_ko_switch_in
-from nuzline.engine.actions import MOVE_ACTIONS, legal_actions
+from nuzline.engine.actions import MOVE_ACTIONS, NUM_OPP_ACTIONS, legal_actions
 from nuzline.engine.ids import Status
+from nuzline.search import playout as playout_module
 from nuzline.search.playout import (
     REFUSED_WON,
     batched_playout,
@@ -165,3 +166,21 @@ def test_replacement_refusal_names_the_stale_switch_slot(tables, names):
     s = roark_state(tables, names).replace_hp(1, 0, 0)
     assert "aiSwitchedPartySlot" in replacement_refusal(tables, s, True, 10)
     assert replacement_refusal(tables, s, False, 10) is None
+
+
+def test_a_refused_distribution_refuses_the_playout_before_the_player_chooses(
+    tables, names, monkeypatch
+):
+    # Traced, a refused AI distribution is NaN. The player's choice depends on it, so the
+    # playout must stop refused there rather than choose against an all-zero
+    # distribution (a uniformly random pick). ``_run`` is called unjitted so that the
+    # patched distribution is traced in.
+    s = roark_state(tables, names)
+    nan = jnp.full(NUM_OPP_ACTIONS, jnp.nan, jnp.float32)
+    monkeypatch.setattr(playout_module, "ai_action_distribution", lambda tables, state: nan)
+    key = jax.random.PRNGKey(12)
+    r = playout_module._run(tables, s, key, 100, jnp.int32(-1))
+    assert (int(r.won), int(r.refused), int(r.turns)) == (REFUSED_WON, 1, 0)
+    # A fixed first action does not depend on it: turn 1 is played, turn 2 is refused.
+    r = playout_module._run(tables, s, key, 100, jnp.int32(0))
+    assert (int(r.won), int(r.refused), int(r.turns)) == (REFUSED_WON, 1, 1)
