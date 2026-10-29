@@ -7,6 +7,11 @@ import pytest
 
 from nuzline.data.trainer import build_trainer_party, load_trainers
 from nuzline.engine.coverage import (
+    IMPLEMENTED_ABILITIES,
+    IMPLEMENTED_AI_FLAGS,
+    IMPLEMENTED_EFFECTS,
+    IMPLEMENTED_ITEMS,
+    IMPLEMENTED_TRAINER_ITEMS,
     IMPLEMENTED_WEATHER,
     Support,
     UnsupportedMechanics,
@@ -82,3 +87,18 @@ def test_ai_refusals_are_included(tables, names):
     opp[0] = replace(opp[0], moves=(names.move("Ember"), 0, 0, 0))
     r = check_coverage(tables, names, sample_party(names), roark_trainer(), opp, 0)
     assert any("Ember" in m and "trainer AI" in m for m in r.missing)
+
+
+def test_sampling_only_is_unimplemented():
+    # The spec's sampling-only grade (section 4.2) has no registry entry and no engine
+    # path yet (coverage.py docstring): a registry that assigns it must come with that
+    # path, so this guard fails first.
+    registries = (
+        IMPLEMENTED_EFFECTS,
+        IMPLEMENTED_ABILITIES,
+        IMPLEMENTED_ITEMS,
+        IMPLEMENTED_TRAINER_ITEMS,
+        IMPLEMENTED_AI_FLAGS,
+        IMPLEMENTED_WEATHER,
+    )
+    assert {support for r in registries for support in r.values()} <= {Support.EXACT, Support.NONE}

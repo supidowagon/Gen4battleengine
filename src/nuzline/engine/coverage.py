@@ -3,8 +3,22 @@ check that refuses a fight using anything else (spec §3: refuse loudly and name
 is missing; never approximate silently).
 
 ``Support`` grades a mechanic: ``EXACT`` is modelled as the decomp does it,
-``SAMPLING_ONLY`` would be right in distribution only (nothing is, yet), ``NONE`` is not
-implemented. A mechanic absent from a registry dict is ``NONE``.
+``SAMPLING_ONLY`` would be right in distribution only, ``NONE`` is not implemented. A
+mechanic absent from a registry dict is ``NONE``.
+
+**The sampling-only path is unimplemented.** Spec sections 4.2 and 10 reserve
+``SAMPLING_ONLY`` for a trainer whose AI draws are too many to enumerate exactly: the
+registry would mark that trainer's AI sampling-only, Stage A would keep ranking it by
+``sample_ai_outcome`` alone, and Stage B would say so in its report. Nothing assigns the
+grade today: no registry entry is ``SAMPLING_ONLY`` (``tests/engine/test_coverage.py``
+guards this), ``ai.outcome`` has one fixed field layout whose width (3840) is a constant
+checked once at import against ``MAX_ENUMERATED`` (4096), and ``CoverageReport
+.sampling_only`` is therefore always empty. Roark's AI is exact, so the grade is not
+needed for this milestone. The first trainer whose draws do not fit that layout needs,
+in its plan: a per-trainer width (a layout chosen from the trainer's AI flags and
+moveset rather than a module constant), a registry entry that grades the trainer's AI
+``SAMPLING_ONLY`` when its width exceeds the budget, and the Stage A and B handling of
+a sampling-only opponent, before anything can be marked as such.
 
 The registries list exactly what plan 1a (Tasks 8a-8e: move effects, abilities, held
 items) and plan 1b (Task 2b: trainer items; Task 3: Roark's AI flags) implement:

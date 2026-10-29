@@ -32,6 +32,14 @@ cannot change the result (``AI_HasAbsorbAbilityInParty``'s ``% 3`` for Roark) ar
 sites. A refused layout raises ``UnsupportedSwitching`` on concrete inputs; traced, it
 gives ``switch_stop = SWITCH_REFUSED`` and NaN probabilities (``switching``). Item use
 draws nothing (8.6).
+
+The enumeration width is a constant of this field layout, not of the state: every
+field's range is fixed, so ``ENUMERATION_WIDTH`` (3840, roark.md 14) is the same for
+every fight and is checked once, at import, against the spec's ``MAX_ENUMERATED``
+budget. Roark never needs the spec's sampling-only fallback (spec section 4.2, "an AI
+whose enumeration is too wide"): a trainer whose draws do not fit this layout needs a
+new layout, and the sampling-only grade is unimplemented end to end (see the
+``nuzline.engine.coverage`` docstring).
 """
 
 from __future__ import annotations
@@ -55,6 +63,7 @@ from nuzline.engine.state import MOVES, BattleState
 
 __all__ = [
     "AI_SITE_MOVES",
+    "ENUMERATION_WIDTH",
     "MAX_ENUMERATED",
     "MAX_EXPERT_SITES",
     "MAX_SCRIPT_ROLLS",
@@ -62,7 +71,6 @@ __all__ = [
     "SWITCH_REFUSED",
     "SWITCH_SITES",
     "AiOutcome",
-    "AiOutcomeTooWide",
     "SwitchSite",
     "enumerate_ai_outcomes",
     "sample_ai_outcome",
@@ -108,16 +116,15 @@ _EXPERT_N = jnp.array([list(e) + [0] * (_MAX_EXPERT - len(e)) for _, e in _SITES
 # Values each field takes, in enumeration order (roark.md 14 "AiOutcome width").
 _SIM_ROLL_VALUES, _ABILITY_VALUES, _TIEBREAK_VALUES = 1, 2, TIEBREAK_MOD
 _SWITCH_VALUES = SWITCH_SITES + 1
-_WIDTH = math.prod(
+ENUMERATION_WIDTH = math.prod(
     (_SIM_ROLL_VALUES, _ABILITY_VALUES, 2**MAX_SCRIPT_ROLLS, _SWITCH_VALUES, _TIEBREAK_VALUES)
 )
+# The layout is fixed, so this is a design-time invariant: widening a field range past
+# the budget is a change to this module, not a property of some fight.
+if ENUMERATION_WIDTH > MAX_ENUMERATED:
+    raise RuntimeError(f"{ENUMERATION_WIDTH} AI outcome combinations > {MAX_ENUMERATED}")
 # RandNext % 12 over a uniform u16: 65536 = 12 * 5461 + 4.
 _TIEBREAK_P = np.array([5462] * 4 + [5461] * 8, np.float64) / 65536
-
-
-class AiOutcomeTooWide(ValueError):
-    """The product of the AI outcome ranges exceeds ``MAX_ENUMERATED``; the fight is
-    sampling-only (spec §10)."""
 
 
 class AiOutcome(NamedTuple):
@@ -222,12 +229,10 @@ def _grid() -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
 
 def enumerate_ai_outcomes(tables: Tables, state: BattleState) -> tuple[AiOutcome, jnp.ndarray]:
     """Every outcome combination (a batched ``AiOutcome`` with leading axis K) and its
-    exact probability ``float32[K]``. K is fixed (3840); combinations with an unused
-    script-roll site set to 1, or a ``switch_stop`` at a ``SwitchSite.NONE`` entry, have
-    probability 0. Raises ``AiOutcomeTooWide`` when the product of the ranges exceeds
-    ``MAX_ENUMERATED``. The switch draws are over ``switch_sites(tables, state)``."""
-    if _WIDTH > MAX_ENUMERATED:
-        raise AiOutcomeTooWide(f"{_WIDTH} AI outcome combinations > {MAX_ENUMERATED}")
+    exact probability ``float32[K]``. K is ``ENUMERATION_WIDTH`` (3840) for every state;
+    combinations with an unused script-roll site set to 1, or a ``switch_stop`` at a
+    ``SwitchSite.NONE`` entry, have probability 0. The switch draws are over
+    ``switch_sites(tables, state)``."""
     ability, rolls, switch, tiebreak = _grid()
     p_jump = script_roll_thresholds(state).astype(_F32) / 256  # [MAX_SCRIPT_ROLLS]
     rolls_j = jnp.asarray(rolls, _I32)
@@ -235,7 +240,7 @@ def enumerate_ai_outcomes(tables: Tables, state: BattleState) -> tuple[AiOutcome
     p_switch = switch_stop_probs(switch_sites(tables, state))[jnp.asarray(switch, _I32)]
     p_rest = jnp.asarray(_TIEBREAK_P[tiebreak] / _ABILITY_VALUES, _F32)
     outs = AiOutcome(
-        sim_roll=jnp.full((_WIDTH, MOVES), SIM_ROLL_MAX, _I8),
+        sim_roll=jnp.full((ENUMERATION_WIDTH, MOVES), SIM_ROLL_MAX, _I8),
         ability_guess=jnp.asarray(ability, _I8),
         script_rolls=jnp.asarray(rolls, _I8),
         tiebreak=jnp.asarray(tiebreak, _I8),

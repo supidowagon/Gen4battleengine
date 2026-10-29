@@ -4,7 +4,9 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+import nuzline.ai.outcome as outcome_module
 from nuzline.ai.outcome import (
+    ENUMERATION_WIDTH,
     MAX_ENUMERATED,
     MAX_SCRIPT_ROLLS,
     SWITCH_NONE,
@@ -170,8 +172,12 @@ def test_switch_stop_probabilities_are_exact(tables, names):
         assert abs(probs[stops == v].sum() - expected[v]) < 1e-6, v
 
 
-def test_enumeration_width_stays_within_the_limit(tables, names):
+def test_enumeration_width_is_fixed_and_within_the_limit(tables, names):
+    # 2 ability guesses x 2^4 script rolls x 12 tie-breaks x 10 switch stops: the
+    # field ranges do not depend on the state, so the width is a module constant and
+    # the spec's sampling-only fallback (section 4.2) is never needed for Roark.
+    assert ENUMERATION_WIDTH == 2 * 2**4 * 12 * 10 == 3840 <= MAX_ENUMERATED
     outs, probs = enumerate_ai_outcomes(tables, _every_kind(tables, names))
-    # 2 ability guesses x 2^4 script rolls x 12 tie-breaks x 10 switch stops.
-    assert probs.shape == (3840,) and 3840 <= MAX_ENUMERATED
-    assert outs.switch_stop.shape == (3840,)
+    assert probs.shape == (ENUMERATION_WIDTH,)
+    assert outs.switch_stop.shape == (ENUMERATION_WIDTH,)
+    assert not hasattr(outcome_module, "AiOutcomeTooWide")  # the runtime check could never fire
