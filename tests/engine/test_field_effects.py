@@ -6,6 +6,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from nuzline.engine.damage import damage_table
+from nuzline.engine.ids import Status
 from nuzline.engine.outcome import empty_outcome, sample_outcome
 from nuzline.engine.step import END_OF_TURN_ORDER, step
 from tests.engine.helpers import A, roark_state
@@ -254,3 +255,33 @@ def test_sampled_durations_follow_each_effects_random_command(tables, names):
     assert sorted(np.unique(np.asarray(o.duration[:, 0])).tolist()) == [3, 4, 5]
     assert sorted(np.unique(np.asarray(o.duration[:, 1])).tolist()) == [3, 4, 5, 6]
     assert abs(float(np.mean(np.asarray(o.end_speed_tie))) - 0.5) < 0.05
+
+
+def test_stealth_rock_lands_after_the_foe_fainted_from_its_own_recoil(tables, names):
+    # RANGE_OPPONENT_SIDE: BattleSystem_Defender (battle_lib.c:1663) takes the foe's
+    # battler slot whatever its HP (BattleSystem_RandomOpponent, :4194), so the
+    # no-target check (BattleControllerPlayer_HasNoTarget, battle_controller_player.c:
+    # 2306) passes and Stealth Rock is laid although Cranidos fainted to its own recoil.
+    s = roark_state(
+        tables,
+        names,
+        player_moves=["Stealth Rock"],
+        opp_species="Cranidos",
+        opp_moves=["Take Down"],
+        opp_faster=True,
+    ).replace_hp(1, 0, 1)
+    out = step(tables, s, A("Stealth Rock", "Take Down", s, names), empty_outcome())
+    assert int(out.hp[1, 0]) == 0 and int(out.over) == 0
+    assert int(out.stealth_rock[1]) == 1
+
+
+def test_natural_cure_comes_before_a_pursuit_that_faints_the_switcher(tables, names):
+    # subscript_switch_pokemon.s:5-6 restores the status (BtlCmd_TryRestoreStatusOnSwitch,
+    # battle_script.c:9139) before the Pursuit hit at :11, so Budew faints unparalyzed.
+    s = roark_state(
+        tables, names, player_species="Budew", opp_species="Cranidos", opp_moves=["Pursuit"]
+    )
+    s = s.replace_hp(0, 0, 1).with_status(0, 0, Status.PARALYSIS)
+    out = step(tables, s, A(4 + 1, "Pursuit", s, names), empty_outcome())
+    assert int(out.hp[0, 0]) == 0 and int(out.over) == 1
+    assert int(out.status[0, 0]) == Status.NONE

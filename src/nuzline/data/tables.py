@@ -46,6 +46,12 @@ def load_tables(dir: Path = DEFAULT) -> Tables:
         return Tables(**{f: jnp.asarray(z[f]) for f in Tables._fields})
 
 
+def to_numpy(tables: Tables) -> Tables:
+    """The same ``Tables`` with every field a numpy array (for the plain-Python
+    reference engine, ``nuzline.reference``)."""
+    return Tables(*(np.asarray(field) for field in tables))
+
+
 def _index(names: list[str], what: str) -> dict[str, int]:
     out: dict[str, int] = {}
     for i, name in enumerate(names):

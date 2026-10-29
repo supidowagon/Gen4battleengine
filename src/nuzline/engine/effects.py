@@ -253,6 +253,14 @@ def targets_user(tables: Tables, move) -> jnp.ndarray:
     )
 
 
+def defender_always(tables: Tables, move) -> jnp.ndarray:
+    """``BattleSystem_Defender`` (battle_lib.c:1599) finds a defender for the move
+    whatever the foe's HP: the user (``targets_user``) or, for ``RANGE_OPPONENT_SIDE``
+    (Stealth Rock), the foe's battler slot (``BattleSystem_RandomOpponent``, :4194). The
+    no-target check (battle_controller_player.c:2306) never fails such a move."""
+    return targets_user(tables, move) | (tables.move_target[move] == MoveTarget.RANGE_OPPONENT_SIDE)
+
+
 def _set(state: BattleState, field: str, index, value, cond) -> BattleState:
     """``state.<field>[index] = value`` where ``cond``."""
     arr = getattr(state, field)
@@ -321,6 +329,16 @@ def _set_status(state: BattleState, side, slot, status, cond) -> BattleState:
     return _set(state, "status_counter", (side, slot), 0, cond)
 
 
+def _struggle_recoil(state: BattleState, h: _Hit, struggling) -> BattleState:
+    """Struggle (``effect_script_0254.s``): an ``ON_HIT`` secondary effect,
+    ``subscript_struggle.s``: ``BattleSystem_Divide(-maxHP, 4)``, at least 1, on a
+    hit."""
+    max_hp = state.max_hp[h.side, h.user].astype(_I32)
+    cost = jnp.where(struggling & h.landed, jnp.maximum(max_hp // 4, 1), 0)
+    hp = jnp.maximum(state.hp[h.side, h.user].astype(_I32) - cost, 0)
+    return state._replace(hp=state.hp.at[h.side, h.user].set(hp.astype(state.hp.dtype)))
+
+
 def _contact_ability(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     ability = state.ability[h.target_side, h.target]
     status = jnp.where(
@@ -378,6 +396,7 @@ def apply_move_effect(
     connected,
     target_moved,
     power_mul=10,
+    struggling=False,
 ) -> BattleState:
     """Hit ``hit_index`` (0-4) of ``move`` by ``side``'s active Pokemon: damage with
     this hit's crit and roll, then the move's effect.
@@ -385,8 +404,11 @@ def apply_move_effect(
     ``connected``: the move is being used and passed its one accuracy check
     against a living target (any target for a ``RANGE_USER`` move). ``target_moved``:
     the target acted earlier this turn (no flinch). ``power_mul``: power scale in
-    tenths (Pursuit on a switch: 20). A hit beyond ``hit_count`` or after the target
-    fainted does nothing.
+    tenths (Pursuit on a switch: 20). ``struggling``: the move is Struggle, whose
+    recoil is its secondary effect. A hit beyond ``hit_count`` or after the target
+    fainted does nothing. The order is ``BattleControllerPlayer_AfterMoveMessage``'s
+    (battle_controller_player.c:3467): the move's own effect (``*_TRIGGER_SECONDARY``)
+    before the contact ability (``*_TRIGGER_ABILITY``), then the defender's thaw.
     """
     side = jnp.asarray(side, _I32)
     target_side = 1 - side
@@ -397,7 +419,7 @@ def apply_move_effect(
     landed = (
         connected
         & (hit_index < hit_count(tables, move, outcome, side))
-        & (_alive(state, target_side, target) | targets_user(tables, move))
+        & (_alive(state, target_side, target) | defender_always(tables, move))
     )
 
     damage = damage_for_roll(
@@ -463,8 +485,9 @@ def apply_move_effect(
         _confuse_foe,
         _leech_seed,
         _water_sport,
-        _contact_ability,
-        _thaw_target,
     ):
+        state = fn(tables, state, h, outcome)
+    state = _struggle_recoil(state, h, jnp.asarray(struggling, jnp.bool_))
+    for fn in (_contact_ability, _thaw_target):
         state = fn(tables, state, h, outcome)
     return state

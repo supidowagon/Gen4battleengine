@@ -1,6 +1,8 @@
 """Intimidate, pinch abilities, Rivalry, Oran and Sitrus Berries (decomp citations in
 ``hooks.py``)."""
 
+import jax.numpy as jnp
+
 from nuzline.engine.hooks import after_damage_items
 from nuzline.engine.ids import AbilityId, ItemId, Status
 from nuzline.engine.outcome import empty_outcome
@@ -180,3 +182,17 @@ def test_replacement_eats_berry_after_stealth_rock(tables, names):
     after_rock = start - max(max_hp // 8, 1)
     assert int(out.hp[1, 2]) == min(after_rock + max(max_hp * 25 // 100, 1), max_hp)
     assert int(out.item[1, 2]) == 0 and int(out.item_consumed[1, 2]) == sitrus
+
+
+def test_struggle_recoil_comes_before_static(tables, names):
+    # Struggle's recoil is its ON_HIT secondary effect (effect_script_0254.s), run at
+    # ONE_HIT_TRIGGER_SECONDARY, before ONE_HIT_TRIGGER_ABILITY
+    # (BattleControllerPlayer_AfterMoveMessage, battle_controller_player.c:3467); Static
+    # needs a living attacker (BattleSystem_TriggerAbilityOnHit, battle_lib.c:4215), so
+    # a recoil faint leaves Monferno unparalyzed.
+    s = roark_state(tables, names).with_pp(0, 0, [0, 0, 0, 0]).replace_hp(0, 0, 1)
+    s = s._replace(ability=s.ability.at[1, 0].set(AbilityId.STATIC))
+    o = empty_outcome()._replace(contact_proc=jnp.ones((2, 5), jnp.int8))
+    out = step(tables, s, jnp.array([0, 0]), o)
+    assert int(out.hp[0, 0]) == 0 and int(out.over) == 1
+    assert int(out.status[0, 0]) == Status.NONE

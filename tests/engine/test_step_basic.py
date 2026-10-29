@@ -94,3 +94,21 @@ def test_step_jits_and_vmaps_like_eager(tables, names):
     batch = jax.tree.map(lambda x: jnp.stack([x, x]), s)
     batched = jax.vmap(step, in_axes=(None, 0, None, None))(tables, batch, acts, o)
     assert batched.hp.shape == (2, 2, 6) and bool(jnp.array_equal(batched.hp[1], eager.hp))
+
+
+def test_a_fainted_battler_loses_its_stages_and_volatiles(tables, names):
+    # BattleSystem_CleanupFaintedMon (battle_lib.c:2156, from PlayFaintAnimation,
+    # battle_script.c:1803) clears the fainted battler's stat stages, statusVolatile,
+    # moveEffectsMask and moveEffectsData when it faints, not when it is replaced.
+    s = roark_state(tables, names).replace_hp(1, 0, 1).with_stages(1, atk=-2, spe=1)
+    s = s._replace(
+        confusion=s.confusion.at[1].set(3),
+        taunt=s.taunt.at[1].set(3),
+        leech_seed=s.leech_seed.at[1].set(1),
+        water_sport=s.water_sport.at[1].set(1),
+    )
+    out = step(tables, s, jnp.array([0, 0]), empty_outcome())  # Scratch faints Geodude
+    assert int(out.hp[1, 0]) == 0 and int(out.over) == 0
+    assert out.stages[1].tolist() == [0] * 8
+    assert [int(out.confusion[1]), int(out.taunt[1]), int(out.leech_seed[1])] == [0, 0, 0]
+    assert int(out.water_sport[1]) == 0

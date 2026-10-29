@@ -34,7 +34,7 @@ import jax.numpy as jnp
 
 from nuzline.data.tables import Tables
 from nuzline.engine.damage import confusion_damage
-from nuzline.engine.effects import apply_move_effect, change_stage, targets_user
+from nuzline.engine.effects import apply_move_effect, change_stage, defender_always
 from nuzline.engine.hooks import after_damage_items, on_switch_in
 from nuzline.engine.ids import AbilityId, EffectId, Stat, Status
 from nuzline.engine.order import (
@@ -96,34 +96,45 @@ def _set_mon(state: BattleState, field: str, side, slot, value, cond) -> BattleS
     return state._replace(**{field: arr.at[side, slot].set(new)})
 
 
-def _switch_out(state: BattleState, side) -> BattleState:
-    """``side``'s active Pokemon leaves by a switch action (``subscript_switch_pokemon.s``).
-
-    * Natural Cure: ``BtlCmd_TryRestoreStatusOnSwitch`` (battle_script.c:9139) clears
-      the status of a switching Pokemon with HP left and Natural Cure. The decomp does
-      this before Pursuit hits (``subscript_switch_pokemon.s:5-6``), when the switcher
-      always has HP left, so it is cleared here whatever Pursuit did.
-    * The toxic counter restarts: battle_controller.c:1482 writes the status back to the
-      party without ``MON_CONDITION_TOXIC_COUNTER``, and a returning battler reads it
-      from there. A sleep counter is part of the status and stays.
-    """
+def _natural_cure(state: BattleState, side) -> BattleState:
+    """``BtlCmd_TryRestoreStatusOnSwitch`` (battle_script.c:9139) clears the status of a
+    switching battler with HP left and Natural Cure. ``subscript_switch_pokemon.s:5-6``
+    runs it before Pursuit hits (:11), so ``execute_actions`` applies it before the
+    Pursuit hit; repeating it in ``_send_out`` changes nothing."""
     mon = state.active[side]
-    cure = state.ability[side, mon] == AbilityId.NATURAL_CURE
-    toxic = state.status[side, mon] == Status.TOXIC
+    cure = (state.ability[side, mon] == AbilityId.NATURAL_CURE) & (state.hp[side, mon] > 0)
     state = _set_mon(state, "status", side, mon, Status.NONE, cure)
-    return _set_mon(state, "status_counter", side, mon, 0, cure | toxic)
+    return _set_mon(state, "status_counter", side, mon, 0, cure)
+
+
+def _switch_out(state: BattleState, side) -> BattleState:
+    """``side``'s active Pokemon leaves by a switch action (``subscript_switch_pokemon.s``):
+    Natural Cure (``_natural_cure``), and the toxic counter restarts: battle_controller.c:
+    1482 writes the status back to the party without ``MON_CONDITION_TOXIC_COUNTER``, and
+    a returning battler reads it from there. A sleep counter is part of the status and
+    stays."""
+    state = _natural_cure(state, side)
+    mon = state.active[side]
+    toxic = state.status[side, mon] == Status.TOXIC
+    return _set_mon(state, "status_counter", side, mon, 0, toxic)
+
+
+def _reset_battler(state: BattleState, side, cond) -> BattleState:
+    """Stages and ``_VOLATILE`` fields of ``side``'s active battler back to neutral
+    where ``cond``."""
+    fields = {
+        name: getattr(state, name).at[side].set(jnp.where(cond, 0, getattr(state, name)[side]))
+        for name in (*_VOLATILE, "stages")
+    }
+    return state._replace(**fields)
 
 
 def _switch_in(state: BattleState, side, slot) -> BattleState:
     """``side`` sends out party ``slot``: stages and volatiles reset, and the Bind the
     outgoing Pokemon put on the other side ends (``BattleSystem_UpdateAfterSwitch``,
     battle_lib.c:2094)."""
-    fields = {name: getattr(state, name).at[side].set(0) for name in _VOLATILE}
-    state = state._replace(
-        active=state.active.at[side].set(jnp.asarray(slot).astype(jnp.int8)),
-        stages=state.stages.at[side].set(0),
-        **fields,
-    )
+    state = _reset_battler(state, side, True)
+    state = state._replace(active=state.active.at[side].set(jnp.asarray(slot).astype(jnp.int8)))
     return _release_bind(state, 1 - side, True)
 
 
@@ -207,9 +218,9 @@ def _use_move(
     # Accuracy 0 never misses (CheckMoveHitAccuracy returns before rolling, :2901). A
     # multi-hit move checks accuracy on its first hit only (effects.py).
     # The no-target check (:3190) fails a move whose defender has fainted; a move whose
-    # defender is its user (effects.targets_user) never fails there.
+    # defender exists whatever the foe's HP (effects.defender_always) never fails there.
     never_misses = tables.move_accuracy[move] == 0
-    has_target = (state.hp[target_side, target] > 0) | targets_user(tables, move)
+    has_target = (state.hp[target_side, target] > 0) | defender_always(tables, move)
     connected = can_act & has_target & ((outcome.hit[side, 0] != 0) | never_misses)
     for hit_index in range(MAX_HITS):
         state = apply_move_effect(
@@ -221,17 +232,8 @@ def _use_move(
             hit_index,
             connected=connected,
             target_moved=target_moved,
+            struggling=struggling,
         )
-        if hit_index == 0:
-            # subscript_struggle.s: recoil BattleSystem_Divide(-maxHP, 4), at least 1, on
-            # a hit; part of the move script, so before the after-move item checks.
-            recoil = jnp.where(
-                connected & struggling,
-                jnp.maximum(state.max_hp[side, user].astype(_I32) // 4, 1),
-                0,
-            )
-            user_hp = jnp.maximum(state.hp[side, user].astype(_I32) - recoil, 0)
-            state = state._replace(hp=state.hp.at[side, user].set(user_hp.astype(state.hp.dtype)))
         # BattleControllerPlayer_AfterMoveEffects (battle_controller_player.c:3638) runs
         # after every hit of a move that connected: AFTER_MOVE_EFFECT_ATTACKER_ITEM
         # (:3684), then _DEFENDER_ITEM (:3691). A disrupted move, a confusion self-hit,
@@ -302,8 +304,11 @@ def _pursuit_hit(
 def _faint_check(before: BattleState, after: BattleState) -> BattleState:
     """Count new player faints and end the battle: any player Pokemon fainting is a loss (the
     terminal rule, which wins over a simultaneous last opponent faint); no opponent
-    Pokemon left standing is a win. A fainted active Pokemon's Bind on the other side
-    ends (``BattleSystem_CleanupFaintedMon``, battle_lib.c:2179)."""
+    Pokemon left standing is a win. A fainted active battler is cleaned up as
+    ``BattleSystem_CleanupFaintedMon`` (battle_lib.c:2156, from ``PlayFaintAnimation``,
+    battle_script.c:1803) does: its stat stages, ``statusVolatile``, ``moveEffectsMask``
+    and ``moveEffectsData`` are cleared (``_reset_battler``), and the Bind it put on the
+    other side ends (:2179)."""
     fainted = (before.hp > 0) & (after.hp == 0)
     player_fainted = jnp.sum(fainted[0].astype(_I32))
     opp_out = jnp.all((after.species[1] == 0) | (after.hp[1] == 0))
@@ -315,7 +320,9 @@ def _faint_check(before: BattleState, after: BattleState) -> BattleState:
         winner=jnp.where(ended, winner, after.winner).astype(after.winner.dtype),
     )
     for side in (0, 1):
-        after = _release_bind(after, 1 - side, fainted[side, after.active[side]])
+        active_fainted = fainted[side, after.active[side]]
+        after = _reset_battler(after, side, active_fainted)
+        after = _release_bind(after, 1 - side, active_fainted)
     return after
 
 
@@ -329,6 +336,9 @@ def execute_actions(
     picks = [selected_move(tables, state, side, actions[side]) for side in (0, 1)]
     choices = (jnp.stack([p[0] for p in picks]), jnp.stack([p[1] for p in picks]))
     pursued = _pursuit_fires(tables, state, first, actions, choices)
+    state = _where(
+        is_switch(actions[first]) & (state.over == 0), _natural_cure(state, first), state
+    )
     before = state
     hit = _pursuit_hit(tables, state, 1 - first, actions, choices, outcome)
     state = _faint_check(before, _where(pursued, hit, state))

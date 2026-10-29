@@ -24,6 +24,7 @@ from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 
 from nuzline.data.tables import Tables
 from nuzline.engine.ids import AbilityId, EffectId, Stat, Weather
@@ -76,6 +77,12 @@ def empty_outcome() -> Outcome:
         quick_claw=sides,
         end_speed_tie=jnp.zeros((), _I8),
     )
+
+
+def outcome_to_py(outcome: Outcome) -> Outcome:
+    """The same ``Outcome`` with every field Python ints / nested lists (for the
+    plain-Python reference engine, ``nuzline.reference``)."""
+    return Outcome(*(np.asarray(field).tolist() for field in outcome))
 
 
 def _target_mon(state: BattleState, actions, side):
