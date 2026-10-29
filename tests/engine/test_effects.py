@@ -17,6 +17,7 @@ Deviations from the plan's test text (plan rulings and the decomp win):
 import jax.numpy as jnp
 
 from nuzline.engine.damage import damage_table
+from nuzline.engine.effects import can_have_status
 from nuzline.engine.ids import AbilityId, Stat, Status, Weather
 from nuzline.engine.outcome import empty_outcome
 from nuzline.engine.step import step
@@ -193,6 +194,19 @@ def test_poison_and_steel_types_cannot_be_poisoned(tables, names):
         )
         out = step(tables, s, A("PoisonPowder", "Leer", s, names), empty_outcome())
         assert int(out.status[1, 0]) == expected, opp
+
+
+def test_toxic_immunities(tables, names):
+    # subscript_badly_poison.s:20-26 (indirect) and 47-53 (direct): an existing
+    # status, a Poison type or a Steel type fails Toxic.
+    def ok(s):
+        return bool(can_have_status(s, 1, 0, Status.TOXIC))
+
+    assert not ok(roark_state(tables, names, opp_species="Zubat"))
+    assert not ok(roark_state(tables, names, opp_species="Bronzor"))
+    geodude = roark_state(tables, names)
+    assert ok(geodude)
+    assert not ok(geodude.with_status(1, 0, Status.BURN))
 
 
 def test_stun_spore_paralyzes_and_never_overwrites(tables, names):
