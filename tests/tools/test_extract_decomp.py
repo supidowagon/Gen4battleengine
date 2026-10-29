@@ -40,6 +40,20 @@ def test_type_chart_fire_grass_and_ghost_normal(out):
     assert t["chart"][n.index("ghost")][n.index("normal")] == 0
 
 
+def test_type_chart_order_is_decomp_row_index(out):
+    # ApplyTypeChart applies the defender types in sTypeMatchupMultipliers row order
+    # (battle_lib.c:2611-2646): Fire->Bug (:2406) comes before Fire->Rock (:2407).
+    t = json.loads((out / "types.json").read_text())
+    n = [x.lower() for x in t["names"]]
+    order = t["chart_order"]
+    fire = n.index("fire")
+    assert order[n.index("normal")][n.index("rock")] == 0  # the first row (:2400)
+    assert 0 <= order[fire][n.index("bug")] < order[fire][n.index("rock")]
+    assert order[fire][n.index("normal")] == -1  # unlisted: neutral, order irrelevant
+    listed = [o for row in order for o in row if o >= 0]
+    assert sorted(listed) == list(range(len(listed)))  # each row index used once
+
+
 def test_natures_count_and_adamant(out):
     nat = json.loads((out / "natures.json").read_text())
     assert len(nat) == 25

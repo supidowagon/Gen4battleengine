@@ -231,6 +231,12 @@ def extract_types(decomp: Path) -> dict:
         raise ExtractError(f"{len(names)} type names for {len(types)} type ids")
     n = len(types)
     chart = [[TYPE_MULTI_NEUTRAL] * n for _ in range(n)]
+    # Row index of each listed pair in sTypeMatchupMultipliers (-1: unlisted).
+    # BattleSystem_ApplyTypeChart (battle_lib.c:2611-2646) walks the rows in
+    # order, so a dual type's two multipliers apply in this order, not type 1
+    # then type 2; with integer division the order can change the result.
+    order = [[-1] * n for _ in range(n)]
+    rows = 0
     foresight = []
     path = decomp / "src" / "battle" / "battle_lib.c"
     row = re.compile(r"\s*\{\s*(\w+)\s*,\s*(\w+)\s*,\s*(\w+)\s*\},\s*")
@@ -252,7 +258,11 @@ def extract_types(decomp: Path) -> dict:
         if mul not in TYPE_MULTI:
             raise ExtractError(f"{path}:{lineno}: unknown multiplier {mul!r}")
         a, d = type_id(atk), type_id(dfn)
+        if order[a][d] >= 0:
+            raise ExtractError(f"{path}:{lineno}: duplicate type chart pair {atk}, {dfn}")
         chart[a][d] = TYPE_MULTI[mul]
+        order[a][d] = rows
+        rows += 1
         if after_separator:
             foresight.append([a, d])
     if not ended:
@@ -260,6 +270,7 @@ def extract_types(decomp: Path) -> dict:
     return {
         "names": names,
         "chart": chart,
+        "chart_order": order,
         "encoding": {
             "unit": "tenths: damage multiplier = value / 10",
             "immune": TYPE_MULTI["TYPE_MULTI_IMMUNE"],

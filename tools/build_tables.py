@@ -12,6 +12,9 @@ Encodings:
 * ``move_target``: index into ``MOVE_TARGETS`` / ``manifest["target_names"]``
   (the decomp stores ``RANGE_*`` as a bit mask, kept as names in the JSON).
 * ``type_chart[attacker, defender]``: multiplier in tenths (0, 5, 10, 20).
+* ``type_chart_order[attacker, defender]``: row index of the pair in the decomp's
+  ``sTypeMatchupMultipliers``, -1 when unlisted (neutral); a dual type's two
+  multipliers apply in row order (``BattleSystem_ApplyTypeChart``).
 * ``nature_mods[nature, stat]``: +1 raised, -1 lowered, 0 otherwise (HP always 0).
 * ``item_param[item]``: ``(decomp hold param, 0)`` for supported items, else zeros.
 * ``species_friendship`` is int16, not int8: base friendship reaches 140.
@@ -39,7 +42,7 @@ from tools.effect_map import (
     UNSUPPORTED_MOVES,
 )
 
-MANIFEST_VERSION = 2
+MANIFEST_VERSION = 3
 CLONE_SCRIPT = Path(__file__).with_name("clone_decomp.sh")
 
 # generated/move_classes.txt order.
@@ -139,9 +142,10 @@ def build_arrays(inter: Path) -> tuple[dict[str, np.ndarray], dict]:
             raise BuildError(f"move {m['name']!r}: unknown category {m['category']}")
 
     n_types = len(types["names"])
-    chart = types["chart"]
-    if len(chart) != n_types or any(len(row) != n_types for row in chart):
-        raise BuildError(f"type chart is not {n_types}x{n_types}")
+    chart, chart_order = types["chart"], types["chart_order"]
+    for what, grid in (("type chart", chart), ("type chart order", chart_order)):
+        if len(grid) != n_types or any(len(row) != n_types for row in grid):
+            raise BuildError(f"{what} is not {n_types}x{n_types}")
 
     nature_mods = np.zeros((len(natures), 6), dtype=np.int64)
     for i, n in enumerate(natures):
@@ -174,6 +178,7 @@ def build_arrays(inter: Path) -> tuple[dict[str, np.ndarray], dict]:
         "move_param": _arr([p for _, p in effects], np.int16, "move param"),
         "move_flags": _arr([_move_flags(m) for m in moves], np.int16, "move flags"),
         "type_chart": _arr(chart, np.int8, "type chart"),
+        "type_chart_order": _arr(chart_order, np.int16, "type chart order"),
         "nature_mods": _arr(nature_mods, np.int8, "nature mods"),
         "item_effect": _arr(item_ids, np.int16, "item effect"),
         "item_param": _arr(

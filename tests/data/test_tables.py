@@ -37,6 +37,8 @@ def test_dtypes_and_shapes():
     # chart is 18x18 rather than the plan's 17x17.
     assert "???" in n.type_names
     assert t.type_chart.shape == (len(n.type_names), len(n.type_names))
+    assert t.type_chart_order.shape == t.type_chart.shape
+    assert t.type_chart_order.dtype == jnp.int16
     assert t.nature_mods.shape == (25, 6)
     # Deviation from the brief's int8: decomp base friendship reaches 140
     # (Clefairy), which int8 cannot hold. int16 keeps to the storage rule.

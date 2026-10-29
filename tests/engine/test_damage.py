@@ -125,6 +125,19 @@ def test_same_type_twice_counts_once(tables, names):
     assert table(tables, s, move) == [2 * v for v in NEUTRAL_128]
 
 
+def test_type_multipliers_apply_in_chart_row_order(tables):
+    # ApplyTypeChart walks sTypeMatchupMultipliers row by row (battle_lib.c:2611-2646)
+    # and applies whichever defender type's row comes first. Fire's Bug row (x2,
+    # battle_lib.c:2406) precedes its Rock row (x0.5, :2407), so against Rock/Bug the
+    # roll is doubled, then halved: back to the neutral value exactly. Type 1 first
+    # would halve first and lose 1 HP on every odd roll.
+    neutral = rolls(121)  # special(): 119 + 2 = 121 before the roll
+    assert any(v % 2 for v in neutral)
+    for def_types in [("Rock", "Bug"), ("Bug", "Rock")]:
+        s, move = special(tables, def_types=def_types)
+        assert table(tables, s, move) == neutral, def_types
+
+
 def test_immune_type_deals_zero(tables):
     s, move = physical(tables, def_types=("Ghost", "Ghost"))
     assert table(tables, s, move) == [0] * 16

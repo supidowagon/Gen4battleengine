@@ -12,19 +12,15 @@ Mirrors the decomp's pipeline for one hit of a damaging move:
 4. ``BattleSystem_ApplyTypeChart`` (``battle_lib.c:2560``, run later by
    ``BattleControllerPlayer_CheckTypeChart``): STAB ``* 15 / 10``, then each
    defender type's multiplier through ``BattleSystem_Divide`` (``:3599``, a
-   non-zero result never truncates to 0).
+   non-zero result never truncates to 0), in the order their rows appear in
+   ``sTypeMatchupMultipliers`` (``:2399``, walked at ``:2611-2646``), which is
+   not always type 1 then type 2 (``tables.type_chart_order``).
 
 Only mechanics of the implemented set are modelled. Abilities, items and moves
 outside it are ``UNSUPPORTED`` ids and never reach the branches here; the decomp
 modifiers they would trigger (Technician, type-boosting items, Thick Fat, Flash
 Fire, Cloud Nine, ...) are therefore omitted, not approximated. Doubles-only
 spread and screen rules do not apply (singles).
-
-Known gap: the decomp applies the two defender-type multipliers in the order
-their rows appear in ``sTypeMatchupMultipliers`` (``battle_lib.c:2399``), not
-type 1 then type 2. The packed type chart does not record that order, so type 1
-is applied first. The two orders differ only for one super-effective and one
-not-very-effective type when the damage before them is odd (by 1 HP).
 """
 
 from __future__ import annotations
@@ -196,11 +192,15 @@ def _finish(tables: Tables, s: BattleState, atk_side, damage, move_type, categor
     damage = jnp.maximum(damage * (85 + roll) // 100, 1)
     # :2592-2596 STAB x1.5 (Adaptability is not implemented).
     damage = jnp.where(jnp.any(a_types == move_type), damage * 15 // 10, damage)
-    # :2622-2637 each defender type through ApplyTypeMultiplier (:7547); see the module's known gap.
-    e1 = _i32(tables.type_chart[move_type, d_types[0]])
-    e2 = _i32(tables.type_chart[move_type, d_types[1]])
-    damage = _divide(damage * e1, 10)
-    damage = jnp.where(d_types[1] != d_types[0], _divide(damage * e2, 10), damage)
+    # :2611-2646 each defender type through ApplyTypeMultiplier (:7547), in chart
+    # row order; type 2 is skipped when it equals type 1 (:2635). Unlisted pairs
+    # are neutral (x10/10 leaves damage unchanged), so their order is irrelevant.
+    t1, t2 = d_types[0], d_types[1]
+    e1 = _i32(tables.type_chart[move_type, t1])
+    e2 = jnp.where(t2 != t1, _i32(tables.type_chart[move_type, t2]), 10)
+    t2_first = tables.type_chart_order[move_type, t2] < tables.type_chart_order[move_type, t1]
+    first, second = jnp.where(t2_first, e2, e1), jnp.where(t2_first, e1, e2)
+    damage = _divide(_divide(damage * first, 10) * second, 10)
     # Status moves never calculate damage; CheckTypeChart needs base power
     # (battle_controller_player.c:2354).
     return jnp.where((category == STATUS) | (power == 0), 0, damage)
