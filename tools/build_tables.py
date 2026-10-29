@@ -39,6 +39,7 @@ from tools.effect_map import (
     DECOMP_ITEM_TO_ID,
     PUNCH_MOVES,
     SOUND_MOVES,
+    TYPE_CHART_STATUS_MOVES,
     UNSUPPORTED_MOVES,
 )
 
@@ -114,6 +115,10 @@ def _move_effect(move: dict) -> tuple[int, tuple[int, int, int]]:
                 f"move {move['name']!r}: effect {move['effect']} certain={certain} "
                 f"but effect_chance={move['effect_chance']}"
             )
+    if move["name"] in TYPE_CHART_STATUS_MOVES:
+        if eid != EffectId.STATUS_FOE:
+            raise BuildError(f"move {move['name']!r}: type-checked but not STATUS_FOE")
+        params = (params[0], 1, params[2])
     return int(eid), params
 
 
@@ -126,7 +131,9 @@ def build_arrays(inter: Path) -> tuple[dict[str, np.ndarray], dict]:
     natures = _load(inter, "natures")
 
     move_names = {m["name"] for m in moves}
-    missing = sorted((SOUND_MOVES | PUNCH_MOVES | UNSUPPORTED_MOVES) - move_names)
+    missing = sorted(
+        (SOUND_MOVES | PUNCH_MOVES | UNSUPPORTED_MOVES | TYPE_CHART_STATUS_MOVES) - move_names
+    )
     if missing:
         raise BuildError(f"effect_map moves not in moves.json: {missing}")
     ability_names = [a["name"] for a in abilities]

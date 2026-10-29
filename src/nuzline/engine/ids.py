@@ -13,7 +13,9 @@ class EffectId(IntEnum):
     """Move effect. Params live in ``tables.move_param[m, 0..2]``:
 
     * stat effects (``STAT_SELF``, ``STAT_FOE``, ``SECONDARY_STAT_*``): ``(Stat, stages, 0)``
-    * status effects (``STATUS_FOE``, ``SECONDARY_STATUS``): ``(Status, 0, 0)``
+    * status effects (``STATUS_FOE``, ``SECONDARY_STATUS``): ``(Status, type_checked, 0)``;
+      ``type_checked`` is 1 for a status move the decomp runs through the type
+      chart (Thunder Wave: Ground is immune), else 0
     * ``DRAIN``, ``RECOIL``: ``(percent of damage dealt, 0, 0)``
     * everything else: zeros.
 

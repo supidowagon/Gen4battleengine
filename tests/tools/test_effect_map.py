@@ -13,7 +13,7 @@ from tools.effect_map import (
     DECOMP_EFFECT_TO_ID,
     PUNCH_MOVES,
     SOUND_MOVES,
-    UNSUPPORTED_MOVES,
+    TYPE_CHART_STATUS_MOVES,
 )
 
 DECOMP = Path("external/pokeplatinum")
@@ -97,22 +97,20 @@ def test_sound_and_punch_lists_match_decomp():
     assert PUNCH_MOVES == _c_move_names("sPunchingMoves")
 
 
-def test_type_checked_status_moves_are_unsupported():
+def test_type_checked_status_moves_are_flagged():
     """Status moves skip the type chart (power 0) except the moves the decomp names
-    in BattleControllerPlayer_CheckTypeChart; their immunities are not in M1, so
-    each must be in UNSUPPORTED_MOVES."""
+    in BattleControllerPlayer_CheckTypeChart; exactly those are type-checked."""
     src = (DECOMP / "src/battle/battle_controller_player.c").read_text(encoding="utf-8")
     body = re.search(
         r"static int BattleControllerPlayer_CheckTypeChart\([^;{]*\)\s*\{(.*?)\n\}", src, re.DOTALL
     ).group(1)
     special = _move_names(body.split("BattleSystem_ApplyTypeChart")[0])
-    assert special == {"Thunder Wave"}
-    assert special <= UNSUPPORTED_MOVES
+    assert special == TYPE_CHART_STATUS_MOVES == {"Thunder Wave"}
 
 
 def test_status_subscript_type_immunities():
-    """The only target-type checks in the status subscripts are the ones the
-    effect_map docstring hands to Task 8b; sleep and paralysis have none."""
+    """The only target-type checks in the status subscripts are the ones
+    engine/effects.py applies; sleep and paralysis have none."""
     expected = {
         "subscript_fall_asleep": set(),
         "subscript_paralyze": set(),

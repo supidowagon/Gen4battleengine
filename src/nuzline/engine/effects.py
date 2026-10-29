@@ -1,0 +1,280 @@
+"""Move effects, one hit at a time (pure ``jnp``, jit/vmap-able, every update masked).
+
+``apply_move_effect`` plays hit ``hit_index`` of a move: its damage, then the
+move's effect, dispatched on ``tables.move_effect[move]`` with one function per
+``EffectId`` family. ``step`` calls it for every hit index (``hit_count`` says how
+many are real). Decomp sources:
+
+* Which side effects run: ``BattleSystem_TriggerPrimaryEffect`` (status and stat
+  moves, "direct") and ``BattleSystem_TriggerSecondaryEffect`` (effects of a
+  damaging move, "indirect"), ``src/battle/battle_lib.c:1481`` and ``:1519``. A
+  direct effect needs a living target and a move that connected; a probabilistic
+  indirect one needs its roll, a living recipient and a move that hit and was not
+  ineffective; an ``ON_HIT`` one (chance 0 in the tables, e.g. Hammer Arm, drain,
+  recoil) only the latter. ``step`` therefore applies chance-0 secondaries without
+  reading ``outcome.secondary``.
+* Stat stages: ``BtlCmd_ChangeStatStage`` (``src/battle/battle_script.c:2804``):
+  clamped to +-6; a drop on the foe is blocked by Keen Eye for accuracy (an
+  ignorable ability, so Mold Breaker pierces it). Simple is not applied here: it
+  doubles the stage where the stat is used (``damage.simple_stage``).
+* Status: ``res/battle/scripts/subscripts/subscript_{fall_asleep,poison,burn,
+  freeze,paralyze}.s``: an existing status is never overwritten; Fire types
+  cannot be burned, Ice types cannot be frozen, Poison and Steel types cannot be
+  poisoned, and nothing is frozen in sun. Sleep lasts ``outcome.duration`` turns
+  (``Random 3, 2``). Status moves skip the type chart except those marked in
+  ``move_param[m, 1]`` (Thunder Wave, ``BattleControllerPlayer_CheckTypeChart``).
+* Flinch: ``subscript_flinch_mon.s``: only a target that has not moved yet this
+  turn, not Inner Focus (ignorable). Steadfast's Speed boost is in ``step``.
+* Drain / recoil: ``subscript_drain_half_damage_dealt.s``,
+  ``subscript_recoil_1_{2,4}.s``: a fraction of ``hitDamage``, the damage dealt
+  capped at the target's HP (``BtlCmd_UpdateHealthBarValue``, battle_script.c:1701),
+  through ``BattleSystem_Divide`` (at least 1). Rock Head prevents recoil.
+* Multi-hit: ``BtlCmd_SetMultiHit`` (battle_script.c:2634) and
+  ``BattleControllerPlayer_LoopMultiHit`` (battle_controller_player.c:3777): the
+  move script reruns per hit with ``SYSCTL_MULTI_HIT_MOVE``, which skips the
+  accuracy check, so only ``outcome.hit[side, 0]`` matters while crit and roll
+  are per hit; the loop stops once the target faints.
+* ``HIGH_CRIT`` only raises the crit stage ``sample_outcome`` uses; here the
+  engine reads ``outcome.crit``.
+
+Unreachable branches are not modelled: Substitute, Mist, Safeguard and Uproar
+come from unsupported moves; Shield Dust, Clear Body, Hyper Cutter, Immunity,
+Limber, Insomnia, Leaf Guard, Liquid Ooze, Magic Guard, Reckless, Serene Grace
+and Skill Link are unsupported abilities; Big Root is an unsupported item. The
+effects of Task 8c (Stealth Rock, Bind, Pursuit, Taunt, confusion, Leech Seed,
+Water Sport) are plain hits here.
+"""
+
+from __future__ import annotations
+
+from typing import NamedTuple
+
+import jax.numpy as jnp
+
+from nuzline.data.tables import Tables
+from nuzline.engine.damage import STATUS, damage_for_roll, effectiveness
+from nuzline.engine.ids import AbilityId, EffectId, Stat, Status, Type, Weather
+from nuzline.engine.outcome import Outcome
+from nuzline.engine.state import STAGE_MAX, STAGE_MIN, BattleState
+
+_I32 = jnp.int32
+_E = EffectId
+
+
+class _Hit(NamedTuple):
+    """What one hit's effect functions need to know."""
+
+    side: jnp.ndarray  # attacking side
+    target_side: jnp.ndarray
+    user: jnp.ndarray  # party slots
+    target: jnp.ndarray
+    effect: jnp.ndarray  # EffectId
+    param: jnp.ndarray  # int32[3], tables.move_param[move]
+    certain: jnp.ndarray  # chance 0: an ON_HIT secondary
+    landed: jnp.ndarray  # the move connected on this hit
+    effective: jnp.ndarray  # ... and was not ineffective (damage > 0, or a passed type gate)
+    proc: jnp.ndarray  # the secondary applies on this hit (its roll, or certain)
+    dealt: jnp.ndarray  # HP the target lost on this hit
+    target_moved: jnp.ndarray  # the target has already acted this turn
+    target_ignorable: jnp.ndarray  # target's ability as the attacker sees it (Mold Breaker)
+
+
+def hit_count(tables: Tables, move, outcome: Outcome, side) -> jnp.ndarray:
+    """``int32``: hits the move makes if nothing faints: ``outcome.n_hits[side]`` for
+    ``MULTI_HIT``, else 1."""
+    multi = tables.move_effect[move] == _E.MULTI_HIT
+    return jnp.where(multi, outcome.n_hits[side].astype(_I32), 1)
+
+
+def _alive(state: BattleState, side, slot) -> jnp.ndarray:
+    return state.hp[side, slot] > 0
+
+
+def change_stage(state: BattleState, side, stat, delta, cond) -> BattleState:
+    """Add ``delta`` to ``side``'s stage ``stat`` where ``cond``, clamped to +-6."""
+    current = state.stages[side, stat].astype(_I32)
+    new = jnp.clip(current + delta, STAGE_MIN, STAGE_MAX)
+    new = jnp.where(cond, new, current).astype(state.stages.dtype)
+    return state._replace(stages=state.stages.at[side, stat].set(new))
+
+
+def _foe_stage(state: BattleState, h: _Hit, cond) -> BattleState:
+    stat, delta = h.param[0], h.param[1]
+    keen_eye = (h.target_ignorable == AbilityId.KEEN_EYE) & (stat == Stat.ACC) & (delta < 0)
+    return change_stage(state, h.target_side, stat, delta, cond & ~keen_eye)
+
+
+def _stat_self(tables, state, h: _Hit) -> BattleState:
+    return change_stage(
+        state, h.side, h.param[0], h.param[1], (h.effect == _E.STAT_SELF) & h.landed
+    )
+
+
+def _stat_foe(tables, state, h: _Hit) -> BattleState:
+    cond = (h.effect == _E.STAT_FOE) & h.landed & _alive(state, h.target_side, h.target)
+    return _foe_stage(state, h, cond)
+
+
+def _secondary_stat_self(tables, state, h: _Hit) -> BattleState:
+    recipient_ok = h.certain | _alive(state, h.side, h.user)
+    cond = (h.effect == _E.SECONDARY_STAT_SELF) & h.effective & h.proc & recipient_ok
+    return change_stage(state, h.side, h.param[0], h.param[1], cond)
+
+
+def _secondary_stat_foe(tables, state, h: _Hit) -> BattleState:
+    recipient_ok = h.certain | _alive(state, h.target_side, h.target)
+    cond = (h.effect == _E.SECONDARY_STAT_FOE) & h.effective & h.proc & recipient_ok
+    return _foe_stage(state, h, cond)
+
+
+def can_have_status(state: BattleState, side, slot, status) -> jnp.ndarray:
+    """No status yet and no type (or weather) immunity to ``status``."""
+    types = state.types[side, slot]
+    has = lambda t: jnp.any(types == t)
+    immune = (
+        ((status == Status.BURN) & has(Type.FIRE))
+        | (
+            ((status == Status.POISON) | (status == Status.TOXIC))
+            & (has(Type.POISON) | has(Type.STEEL))
+        )
+        | ((status == Status.FREEZE) & (has(Type.ICE) | (state.weather == Weather.SUN)))
+    )
+    return (state.status[side, slot] == Status.NONE) & ~immune
+
+
+def _inflict(state: BattleState, h: _Hit, outcome: Outcome, cond) -> BattleState:
+    status = h.param[0]
+    cond = cond & _alive(state, h.target_side, h.target)
+    cond = cond & can_have_status(state, h.target_side, h.target, status)
+    counter = jnp.where(status == Status.SLEEP, outcome.duration[h.side], 0)
+    old_status = state.status[h.target_side, h.target]
+    old_counter = state.status_counter[h.target_side, h.target]
+    return state._replace(
+        status=state.status.at[h.target_side, h.target].set(
+            jnp.where(cond, status, old_status).astype(state.status.dtype)
+        ),
+        status_counter=state.status_counter.at[h.target_side, h.target].set(
+            jnp.where(cond, counter, old_counter).astype(state.status_counter.dtype)
+        ),
+    )
+
+
+def _status_foe(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    return _inflict(state, h, outcome, (h.effect == _E.STATUS_FOE) & h.effective)
+
+
+def _secondary_status(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    return _inflict(state, h, outcome, (h.effect == _E.SECONDARY_STATUS) & h.effective & h.proc)
+
+
+def _flinch(tables, state, h: _Hit) -> BattleState:
+    cond = (
+        (h.effect == _E.FLINCH)
+        & h.effective
+        & h.proc
+        & _alive(state, h.target_side, h.target)
+        & ~h.target_moved
+        & (h.target_ignorable != AbilityId.INNER_FOCUS)
+    )
+    old = state.flinched[h.target_side]
+    return state._replace(
+        flinched=state.flinched.at[h.target_side].set(jnp.where(cond, 1, old).astype(old.dtype))
+    )
+
+
+def _percent_of_dealt(h: _Hit) -> jnp.ndarray:
+    """``BattleSystem_Divide(hitDamage, 100 / percent)``: at least 1 of a non-zero hit."""
+    return jnp.where(h.dealt > 0, jnp.maximum(h.dealt * h.param[0] // 100, 1), 0)
+
+
+def _drain(tables, state, h: _Hit) -> BattleState:
+    heal = jnp.where((h.effect == _E.DRAIN) & h.effective, _percent_of_dealt(h), 0)
+    hp = state.hp[h.side, h.user].astype(_I32)
+    new = jnp.minimum(hp + heal, state.max_hp[h.side, h.user].astype(_I32))
+    return state._replace(hp=state.hp.at[h.side, h.user].set(new.astype(state.hp.dtype)))
+
+
+def _recoil(tables, state, h: _Hit) -> BattleState:
+    rock_head = state.ability[h.side, h.user] == AbilityId.ROCK_HEAD
+    cost = jnp.where((h.effect == _E.RECOIL) & h.effective & ~rock_head, _percent_of_dealt(h), 0)
+    hp = jnp.maximum(state.hp[h.side, h.user].astype(_I32) - cost, 0)
+    return state._replace(hp=state.hp.at[h.side, h.user].set(hp.astype(state.hp.dtype)))
+
+
+def apply_move_effect(
+    tables: Tables,
+    state: BattleState,
+    side,
+    move,
+    outcome: Outcome,
+    hit_index: int,
+    *,
+    connected,
+    target_moved,
+) -> BattleState:
+    """Hit ``hit_index`` (0-4) of ``move`` by ``side``'s active Pokemon: damage with
+    this hit's crit and roll, then the move's effect.
+
+    ``connected``: the move is being used and passed its one accuracy check
+    against a living target. ``target_moved``: the target acted earlier this turn
+    (no flinch). A hit beyond ``hit_count`` or after the target fainted does nothing.
+    """
+    side = jnp.asarray(side, _I32)
+    target_side = 1 - side
+    user, target = state.active[side], state.active[target_side]
+    move = jnp.asarray(move, _I32)
+    landed = (
+        connected
+        & (hit_index < hit_count(tables, move, outcome, side))
+        & _alive(state, target_side, target)
+    )
+
+    damage = damage_for_roll(
+        tables, state, side, move, outcome.crit[side, hit_index] != 0, outcome.roll[side, hit_index]
+    )
+    target_hp = state.hp[target_side, target].astype(_I32)
+    dealt = jnp.where(landed, jnp.minimum(damage, target_hp), 0)
+    state = state._replace(
+        hp=state.hp.at[target_side, target].set((target_hp - dealt).astype(state.hp.dtype))
+    )
+
+    effect = tables.move_effect[move].astype(_I32)
+    param = tables.move_param[move].astype(_I32)
+    is_status = tables.move_category[move] == STATUS
+    # A type-checked status move (Thunder Wave) fails on a 0x matchup.
+    type_ok = (param[1] == 0) | (
+        effectiveness(tables, tables.move_type[move].astype(_I32), state.types[target_side, target])
+        > 0
+    )
+    passes = jnp.where(is_status, (effect != _E.STATUS_FOE) | type_ok, damage > 0)
+    a_ability = state.ability[side, user]
+    d_ability = state.ability[target_side, target]
+    chance = tables.move_effect_chance[move]
+    h = _Hit(
+        side=side,
+        target_side=target_side,
+        user=user,
+        target=target,
+        effect=effect,
+        param=param,
+        certain=chance == 0,
+        landed=landed,
+        effective=landed & passes,
+        proc=(chance == 0) | (outcome.secondary[side, hit_index] != 0),
+        dealt=dealt,
+        target_moved=jnp.asarray(target_moved, jnp.bool_),
+        target_ignorable=jnp.where(a_ability == AbilityId.MOLD_BREAKER, AbilityId.NONE, d_ability),
+    )
+    for fn in (
+        _stat_self,
+        _stat_foe,
+        _secondary_stat_self,
+        _secondary_stat_foe,
+        _flinch,
+        _drain,
+        _recoil,
+    ):
+        state = fn(tables, state, h)
+    for fn in (_status_foe, _secondary_status):
+        state = fn(tables, state, h, outcome)
+    return state

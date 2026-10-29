@@ -12,10 +12,11 @@ Pure, jit- and vmap-able, fixed shapes; every random event comes from
    ``needs_replacement`` and ``replace``.
 6. ``check_battle_over``.
 
-Implemented so far: switching, damaging moves (every effect id behaves as a plain
-hit until Tasks 8b-8e), the accuracy check, PP, Struggle, faints and the end of
-the battle. A player faint is terminal (spec §3): it sets ``over = 1, winner = 1``.
-A state that is already over is returned unchanged.
+Implemented so far: switching, damaging moves, the accuracy check, PP, Struggle,
+the move effects of ``effects.py`` (stat stages, status moves and secondaries,
+flinch and Steadfast, drain, recoil, multi-hit; Task 8c's effects are still plain
+hits), faints and the end of the battle. A player faint is terminal (spec §3): it
+sets ``over = 1, winner = 1``. A state that is already over is returned unchanged.
 """
 
 from __future__ import annotations
@@ -24,9 +25,10 @@ import jax
 import jax.numpy as jnp
 
 from nuzline.data.tables import Tables
-from nuzline.engine.damage import damage_for_roll
+from nuzline.engine.effects import apply_move_effect, change_stage
+from nuzline.engine.ids import AbilityId, Stat
 from nuzline.engine.order import MOVE_ACTIONS, action_order, is_switch, selected_move
-from nuzline.engine.outcome import Outcome
+from nuzline.engine.outcome import MAX_HITS, Outcome
 from nuzline.engine.state import BattleState
 
 _I32 = jnp.int32
@@ -70,45 +72,63 @@ def _switch_in(state: BattleState, side, slot) -> BattleState:
     )
 
 
-def _use_move(tables: Tables, state: BattleState, side, action, outcome: Outcome) -> BattleState:
-    """``side``'s active Pokemon uses the move in slot ``action`` (or Struggle)."""
+def _use_move(
+    tables: Tables, state: BattleState, side, action, outcome: Outcome, target_moved
+) -> BattleState:
+    """``side``'s active Pokemon uses the move in slot ``action`` (or Struggle).
+    ``target_moved``: the other side has already acted this turn."""
     move, struggling = selected_move(state, side, action)
     slot = jnp.clip(action, 0, MOVE_ACTIONS - 1)
     user = state.active[side]
     target_side = 1 - side
     target = state.active[target_side]
-    can_act = (state.over == 0) & (state.hp[side, user] > 0) & (state.flinched[side] == 0)
+    ready = (state.over == 0) & (state.hp[side, user] > 0)
+    flinched = state.flinched[side] != 0
+
+    # CHECK_STATUS_STATE_FLINCH (battle_controller_player.c:2529) runs before the PP
+    # decrement; subscript_flinched.s:10-14 gives Steadfast +1 Speed.
+    steadfast = ready & flinched & (state.ability[side, user] == AbilityId.STEADFAST)
+    state = change_stage(state, side, Stat.SPE, 1, steadfast)
+    can_act = ready & ~flinched
 
     # BattleControllerPlayer_DecrementPP (battle_controller_player.c:3182) runs before the
     # no-target check (:3190); Struggle has no PP to spend.
     spend = can_act & ~struggling
     pp = state.pp.at[side, user, slot].add(jnp.where(spend, -1, 0).astype(state.pp.dtype))
+    state = state._replace(pp=pp)
 
-    # Accuracy 0 never misses (CheckMoveHitAccuracy returns before rolling, :2901).
+    # Accuracy 0 never misses (CheckMoveHitAccuracy returns before rolling, :2901). A
+    # multi-hit move checks accuracy on its first hit only (effects.py).
     never_misses = tables.move_accuracy[move] == 0
-    lands = (
+    connected = (
         can_act & (state.hp[target_side, target] > 0) & ((outcome.hit[side, 0] != 0) | never_misses)
     )
-    damage = damage_for_roll(
-        tables, state, side, move, outcome.crit[side, 0] != 0, outcome.roll[side, 0]
-    )
-    damage = jnp.where(lands, damage, 0)
-    target_hp = jnp.maximum(state.hp[target_side, target].astype(_I32) - damage, 0)
-    hp = state.hp.at[target_side, target].set(target_hp.astype(state.hp.dtype))
+    for hit_index in range(MAX_HITS):
+        state = apply_move_effect(
+            tables,
+            state,
+            side,
+            move,
+            outcome,
+            hit_index,
+            connected=connected,
+            target_moved=target_moved,
+        )
 
     # subscript_struggle.s: recoil BattleSystem_Divide(-maxHP, 4), at least 1, on a hit.
     recoil = jnp.where(
-        lands & struggling, jnp.maximum(state.max_hp[side, user].astype(_I32) // 4, 1), 0
+        connected & struggling, jnp.maximum(state.max_hp[side, user].astype(_I32) // 4, 1), 0
     )
-    user_hp = jnp.maximum(hp[side, user].astype(_I32) - recoil, 0)
-    hp = hp.at[side, user].set(user_hp.astype(state.hp.dtype))
-    return state._replace(pp=pp, hp=hp)
+    user_hp = jnp.maximum(state.hp[side, user].astype(_I32) - recoil, 0)
+    return state._replace(hp=state.hp.at[side, user].set(user_hp.astype(state.hp.dtype)))
 
 
-def _act(tables: Tables, state: BattleState, side, actions, outcome: Outcome) -> BattleState:
+def _act(
+    tables: Tables, state: BattleState, side, actions, outcome: Outcome, target_moved
+) -> BattleState:
     action = actions[side]
     switched = _switch_in(state, side, jnp.clip(action - MOVE_ACTIONS, 0, 5))
-    moved = _use_move(tables, state, side, action, outcome)
+    moved = _use_move(tables, state, side, action, outcome, target_moved)
     return _where(is_switch(action) & (state.over == 0), switched, moved)
 
 
@@ -134,7 +154,8 @@ def execute_actions(
     """Phase 3: both actors in order, each followed by a faint check."""
     for position in (0, 1):
         before = state
-        state = _act(tables, state, order[position].astype(_I32), actions, outcome)
+        target_moved = position == 1  # the first actor's target has not moved yet
+        state = _act(tables, state, order[position].astype(_I32), actions, outcome, target_moved)
         state = _faint_check(before, state)
     return state
 
