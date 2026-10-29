@@ -17,9 +17,12 @@ benchmarks/results/
 # External sources (cloned separately)
 external/
 
-# Saves
+# ROMs, saves, save states and raw emulator traces (docs/tracing.md)
+*.nds
 *.sav
 *.dsv
+*.ds[0-9]
+traces/
 
 # Editors / OS
 .vscode/

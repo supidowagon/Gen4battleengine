@@ -1,0 +1,70 @@
+# The player's party in the recorded Roark battle (tests/golden/roark_01.json,
+# docs/tracing.md). It starts as a copy of tests/fixtures/sample_party.toml. Before
+# recording, edit it to match the save exactly: species, level, nature, IVs, EVs,
+# moves in slot order, held item, ability and gender, in party order.
+
+[[pokemon]]
+species = "Monferno"
+level = 14
+nature = "Hardy"
+ivs = [20, 20, 20, 20, 20, 20]
+evs = [0, 0, 0, 0, 0, 0]
+moves = ["Scratch", "Leer", "Ember", "Mach Punch"]
+item = ""
+ability = "Blaze"
+gender = "male"
+
+[[pokemon]]
+species = "Prinplup"
+level = 14
+nature = "Hardy"
+ivs = [20, 20, 20, 20, 20, 20]
+evs = [0, 0, 0, 0, 0, 0]
+moves = ["Pound", "Growl", "Bubble", "Water Sport"]
+item = ""
+ability = "Torrent"
+gender = "male"
+
+[[pokemon]]
+species = "Grotle"
+level = 14
+nature = "Hardy"
+ivs = [20, 20, 20, 20, 20, 20]
+evs = [0, 0, 0, 0, 0, 0]
+moves = ["Tackle", "Withdraw", "Absorb", "Razor Leaf"]
+item = "Sitrus Berry"
+ability = "Overgrow"
+gender = "male"
+
+[[pokemon]]
+species = "Starly"
+level = 10
+nature = "Hardy"
+ivs = [20, 20, 20, 20, 20, 20]
+evs = [0, 0, 0, 0, 0, 0]
+moves = ["Tackle", "Growl", "Quick Attack", "Wing Attack"]
+item = "Oran Berry"
+ability = "Keen Eye"
+gender = "male"
+
+[[pokemon]]
+species = "Shinx"
+level = 13
+nature = "Hardy"
+ivs = [20, 20, 20, 20, 20, 20]
+evs = [0, 0, 0, 0, 0, 0]
+moves = ["Tackle", "Leer", "Spark"]
+item = ""
+ability = "Rivalry"
+gender = "male"
+
+[[pokemon]]
+species = "Budew"
+level = 10
+nature = "Hardy"
+ivs = [20, 20, 20, 20, 20, 20]
+evs = [0, 0, 0, 0, 0, 0]
+moves = ["Absorb", "Growth", "Water Sport", "Stun Spore"]
+item = ""
+ability = "Natural Cure"
+gender = "male"
