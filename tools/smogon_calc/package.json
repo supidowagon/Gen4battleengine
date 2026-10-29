@@ -1,0 +1,8 @@
+{
+  "name": "nuzline-smogon-calc",
+  "private": true,
+  "description": "Damage oracle for tests/test_damage_oracle.py",
+  "dependencies": {
+    "@smogon/calc": "0.12.0"
+  }
+}

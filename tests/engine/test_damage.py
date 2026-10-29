@@ -292,3 +292,20 @@ def test_struggle_is_typeless(tables, names):
     assert damage_table(tables, s, 0, cut, False).tolist() == [0] * 16  # a Normal move: immune
     # 300 * 50 * 42 // 200 // 50 + 2 = 65 before the roll.
     assert damage_table(tables, s, 0, MOVE_STRUGGLE, False).tolist() == rolls(65)
+
+
+def test_crit_stage_rule_applies_after_simple_doubles(tables):
+    # docs/discrepancies.md #6: Simple doubles first (battle_lib.c:6850, :6868), then a
+    # crit ignores Atk <= 0 and Def >= 0 (:6947-6973), so both crits are neutral 256.
+    s, move = physical(tables, atk_ability=AbilityId.SIMPLE)
+    assert table(tables, s.with_stages(0, atk=-1), move, crit=True) == rolls(256)
+    s, move = physical(tables, def_ability=AbilityId.SIMPLE)
+    assert table(tables, s.with_stages(1, def_=1), move, crit=True) == rolls(256)
+
+
+def test_sandstorm_spd_boost_comes_before_the_stage(tables):
+    # docs/discrepancies.md #5: SpD 200 x1.5 = 300 (battle_lib.c:6925), then -1 stage
+    # (:7008) gives 200 again; the other order (200 -> 133 -> 199) gives 120 + 2.
+    s, move = special(tables, move_type="Electric", def_types=("Rock", "Rock"))
+    sand = s._replace(weather=jnp.int8(Weather.SANDSTORM)).with_stages(1, spd=-1)
+    assert table(tables, sand, move) == table(tables, s, move) == rolls(121)

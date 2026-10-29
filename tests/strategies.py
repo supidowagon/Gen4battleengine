@@ -1,0 +1,238 @@
+"""Hypothesis strategies for engine tests: random M1 Pokemon, battle states, legal
+actions and chance outcomes.
+
+Everything stays inside the M1 implemented set: species from ``M1_SPECIES``, moves
+from their level-up learnsets with a supported effect (``move_effect !=
+UNSUPPORTED``), their own abilities (all implemented), Oran/Sitrus Berry or no item.
+State fields that no M1 mechanic can set are left at 0, except those the engines
+read (screens, Tailwind, Trick Room, Mud Sport, weather), which are drawn so the
+code reading them is exercised. Active Pokemon have HP >= 1; benched ones may have
+fainted (plan ruling).
+"""
+
+from __future__ import annotations
+
+from dataclasses import replace
+from functools import lru_cache
+from pathlib import Path
+
+import jax.numpy as jnp
+import numpy as np
+import pytest
+from hypothesis import strategies as st
+
+from nuzline.data.spec import PokemonSpec
+from nuzline.data.tables import Names, Tables
+from nuzline.data.trainer import IntermediateData
+from nuzline.engine.actions import legal_actions
+from nuzline.engine.ids import EffectId, Stat, Status, Weather
+from nuzline.engine.outcome import MAX_HITS, Outcome
+from nuzline.engine.state import SLOTS, STAGE_MAX, STAGE_MIN, BattleState, make_state
+from nuzline.engine.stats import calc_stats
+
+INTERMEDIATE = Path(__file__).resolve().parents[1] / "data" / "intermediate"
+
+# The M1 species set: the sample team plus Roark's and the route-encounter species.
+M1_SPECIES = (
+    "Monferno",
+    "Prinplup",
+    "Grotle",
+    "Starly",
+    "Shinx",
+    "Budew",
+    "Geodude",
+    "Onix",
+    "Cranidos",
+    "Zubat",
+    "Bidoof",
+)
+M1_ITEMS = ("", "Oran Berry", "Sitrus Berry")
+
+# decomp gender ratios (``tables.species_gender``) with a single possible gender
+_GENDERLESS, _MALE_ONLY, _FEMALE_ONLY = 255, 0, 254
+_SLEEP_TURNS = (1, 5)  # BtlCmd_Random 3, 2 stores 2-5; a counter of 1 wakes next turn
+_TOXIC_MAX = 15  # step.TOXIC_COUNTER_MAX
+_CONFUSION_MAX, _TAUNT_MAX, _BIND_MAX = 5, 5, 6  # outcome.sample_outcome's duration ranges
+_DURATION = (2, 6)  # outcome.duration over every move: 2-5 sleep/confusion, 3-6 Bind, 3-5 Taunt
+_TIMER_MAX = 5  # screens, Tailwind, Trick Room: turns left
+
+
+@lru_cache(maxsize=1)
+def _learnsets() -> dict[int, list[tuple[int, int]]]:
+    if not (INTERMEDIATE / "learnsets.json").exists():
+        pytest.skip("intermediate data not extracted (run tools/extract_decomp.py)")
+    return IntermediateData(INTERMEDIATE).learnsets
+
+
+def m1_move_pools(tables: Tables, names: Names) -> dict[int, tuple[int, ...]]:
+    """Species id -> its level-up learnset moves with a supported effect, in id order."""
+    effect = np.asarray(tables.move_effect)
+    learnsets = _learnsets()
+    pools = {}
+    for name in M1_SPECIES:
+        species = names.species(name)
+        moves = {m for _, m in learnsets[species] if effect[m] != EffectId.UNSUPPORTED}
+        pools[species] = tuple(sorted(moves))
+    return pools
+
+
+def _max_hp(tables: Tables, species, ivs, evs, level, nature) -> int:
+    stats = calc_stats(
+        np.asarray(tables.species_base_stats[species]),
+        np.asarray(ivs),
+        np.asarray(evs),
+        level,
+        np.asarray(tables.nature_mods[nature]),
+    )
+    return int(stats[Stat.HP])
+
+
+def _gender(ratio: int) -> st.SearchStrategy[int]:
+    if ratio == _GENDERLESS:
+        return st.just(2)
+    if ratio == _MALE_ONLY:
+        return st.just(0)
+    if ratio == _FEMALE_ONLY:
+        return st.just(1)
+    return st.sampled_from((0, 1))
+
+
+@st.composite
+def supported_pokemon(draw, tables: Tables, names: Names) -> PokemonSpec:
+    """A random M1 Pokemon: level 5-20, random nature, IVs, EVs (at most 510 in all),
+    1-4 supported learnset moves, its own ability, an M1 item or none, any current HP
+    including 0, and a random status (none when fainted)."""
+    pools = m1_move_pools(tables, names)
+    species = draw(st.sampled_from(sorted(pools)))
+    level = draw(st.integers(5, 20))
+    nature = draw(st.integers(0, len(names.nature_names) - 1))
+    ivs = tuple(draw(st.lists(st.integers(0, 31), min_size=6, max_size=6)))
+    evs = tuple(draw(st.lists(st.integers(0, 85), min_size=6, max_size=6)))
+    moves = draw(st.lists(st.sampled_from(pools[species]), min_size=1, max_size=4, unique=True))
+    abilities = names.species_abilities(species)
+    ability_slot = draw(st.sampled_from([i for i, a in enumerate(abilities) if a]))
+    item = names.item(draw(st.sampled_from(M1_ITEMS)))
+    gender = draw(_gender(int(tables.species_gender[species])))
+    max_hp = _max_hp(tables, species, ivs, evs, level, nature)
+    hp = draw(st.integers(0, max_hp))
+    status = draw(st.sampled_from(list(Status))) if hp > 0 else Status.NONE
+    return PokemonSpec(
+        species=species,
+        level=level,
+        nature=nature,
+        ivs=ivs,
+        evs=evs,
+        moves=tuple(moves + [0] * (4 - len(moves))),
+        item=item,
+        ability_slot=ability_slot,
+        gender=gender,
+        friendship=draw(st.integers(0, 255)),
+        current_hp=hp,
+        status=int(status),
+    )
+
+
+def _status_counter(draw, status: int) -> int:
+    if status == Status.SLEEP:
+        return draw(st.integers(*_SLEEP_TURNS))
+    if status == Status.TOXIC:
+        return draw(st.integers(0, _TOXIC_MAX))
+    return 0
+
+
+@st.composite
+def _party(draw, tables: Tables, names: Names) -> tuple[list[PokemonSpec], int]:
+    """1-6 Pokemon and the active slot, whose Pokemon has HP >= 1."""
+    party = draw(st.lists(supported_pokemon(tables, names), min_size=1, max_size=SLOTS))
+    active = draw(st.integers(0, len(party) - 1))
+    lead = party[active]
+    if lead.current_hp == 0:
+        max_hp = _max_hp(tables, lead.species, lead.ivs, lead.evs, lead.level, lead.nature)
+        hp = draw(st.integers(1, max_hp))
+        party[active] = replace(
+            lead, current_hp=hp, status=int(draw(st.sampled_from(list(Status))))
+        )
+    return party, active
+
+
+@st.composite
+def supported_state(draw, tables: Tables, names: Names) -> BattleState:
+    """A mid-battle state: 1-6 Pokemon per side (``supported_pokemon``), any active
+    slot, random PP, status counters, stat stages, confusion, Taunt, Bind, Leech Seed,
+    Water Sport, Stealth Rock, screens, Tailwind, Trick Room, Mud Sport and weather,
+    each within its legal range; the battle is not over."""
+    parties = [draw(_party(tables, names)) for _ in (0, 1)]
+    s = make_state(tables, parties[0][0], parties[1][0])
+    a = {name: np.asarray(getattr(s, name)).copy() for name in BattleState._fields}
+    trap_moves = np.flatnonzero(np.asarray(tables.move_effect) == EffectId.TRAP)
+    move_pp = np.asarray(tables.move_pp)
+    for side, (party, active) in enumerate(parties):
+        a["active"][side] = active
+        for slot in range(len(party)):
+            for k, move in enumerate(a["moves"][side, slot]):
+                if move:
+                    a["pp"][side, slot, k] = draw(st.integers(0, int(move_pp[move])))
+            a["status_counter"][side, slot] = _status_counter(draw, int(a["status"][side, slot]))
+        a["stages"][side, Stat.ATK :] = draw(
+            st.lists(st.integers(STAGE_MIN, STAGE_MAX), min_size=7, max_size=7)
+        )
+        a["confusion"][side] = draw(st.integers(0, _CONFUSION_MAX))
+        a["taunt"][side] = draw(st.integers(0, _TAUNT_MAX))
+        trapped = draw(st.integers(0, _BIND_MAX))
+        a["trapped"][side] = trapped
+        a["trap_move"][side] = draw(st.sampled_from(trap_moves.tolist())) if trapped else 0
+        a["leech_seed"][side] = draw(st.integers(0, 1))
+        a["water_sport"][side] = draw(st.integers(0, 1))
+        a["stealth_rock"][side] = draw(st.integers(0, 1))
+        a["reflect"][side] = draw(st.integers(0, _TIMER_MAX))
+        a["light_screen"][side] = draw(st.integers(0, _TIMER_MAX))
+        a["tailwind"][side] = draw(st.integers(0, _TIMER_MAX))
+    a["weather"][...] = draw(st.sampled_from(list(Weather)))  # permanent: timer 0
+    a["trick_room"][...] = draw(st.integers(0, _TIMER_MAX))
+    a["mud_sport"][...] = draw(st.integers(0, 1))
+    a["turn"][...] = draw(st.integers(0, 50))
+    a["player_faints"][...] = int(np.sum((a["species"][0] > 0) & (a["hp"][0] == 0)))
+    return BattleState(**{name: jnp.asarray(a[name]) for name in BattleState._fields})
+
+
+@st.composite
+def legal_action_pair(draw, tables: Tables, state: BattleState) -> jnp.ndarray:
+    """``int32[2]``: a legal action for each side (``engine.actions.legal_actions``)."""
+    acts = []
+    for side in (0, 1):
+        legal = np.flatnonzero(np.asarray(legal_actions(tables, state, side)))
+        acts.append(draw(st.sampled_from(legal.tolist())))
+    return jnp.asarray(acts, jnp.int32)
+
+
+def _ints(lo: int, hi: int, shape: tuple[int, ...]) -> st.SearchStrategy[jnp.ndarray]:
+    size = int(np.prod(shape, dtype=int))
+    return st.lists(st.integers(lo, hi), min_size=size, max_size=size).map(
+        lambda v: jnp.asarray(np.asarray(v, np.int8).reshape(shape))
+    )
+
+
+def _flag(shape: tuple[int, ...]) -> st.SearchStrategy[jnp.ndarray]:
+    return _ints(0, 1, shape)
+
+
+def any_outcome() -> st.SearchStrategy[Outcome]:
+    """Every ``Outcome`` field uniform over its range."""
+    hits, sides = (2, MAX_HITS), (2,)
+    return st.builds(
+        Outcome,
+        speed_tie=_flag(()),
+        hit=_flag(hits),
+        crit=_flag(hits),
+        roll=_ints(0, 15, hits),
+        secondary=_flag(hits),
+        contact_proc=_flag(hits),
+        n_hits=_ints(2, 5, sides),
+        full_para=_flag(sides),
+        confusion_hit=_flag(sides),
+        duration=_ints(*_DURATION, sides),
+        thaw=_flag(sides),
+        flinch_item=_flag(sides),
+        quick_claw=_flag(sides),
+        end_speed_tie=_flag(()),
+    )

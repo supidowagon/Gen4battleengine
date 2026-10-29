@@ -59,6 +59,44 @@ relative to `external/pokeplatinum`.
   before the Pursuit hit. Test:
   `test_natural_cure_comes_before_a_pursuit_that_faints_the_switcher`.
 
+## Reference engine vs JAX engine: Hypothesis differential test (Task 11)
+
+`tests/test_differential.py` runs 500 generated states (`tests/strategies.py`: 1-6 M1
+Pokemon per side, random HP, status, PP, stages, volatiles, hazards, screens and
+weather), legal action pairs and uniformly drawn outcomes through both engines. It
+found no disagreement beyond the four above; there was nothing new to settle.
+
+## Damage oracle: @smogon/calc vs JAX engine (Task 11)
+
+`tests/test_damage_oracle.py` compares `damage_table` with @smogon/calc 0.12.0's Gen 4
+calculator (`tools/smogon_calc/damage.js`) on 300 generated matchups, all 16 rolls
+exact. The stats and move data agreed everywhere. The damage differed in two cases, and
+in both the decomp sides with the JAX engine, so the engine is unchanged and the test
+does not generate those matchups (`_smogon_departs`).
+
+### 5. Sandstorm's SpD boost comes before the stat stage
+
+- **@smogon/calc:** `calculateDefenseDPP` applies the SpD stage, then multiplies by 1.5
+  for a Rock-type defender in a sandstorm. With a non-zero SpD stage the rounding
+  differs (Zubat's Air Cutter on Onix at SpD -3 in sand: 5-6 against 6-7).
+- **Decomp:** `BattleSystem_CalcMoveDamage` multiplies `spDefenseStat` by 15 / 10 at
+  `src/battle/battle_lib.c:6925-6928`, before the stage scales it into `stageDivisor`
+  (`:7008-7018`).
+- **Ruling:** the engine (`damage._pre_random` boosts `sp_defense` before `apply_stage`) is
+  right. Test: `test_sandstorm_spd_boost_comes_before_the_stage`.
+
+### 6. A crit applies its stage rule after Simple doubles the stage
+
+- **@smogon/calc:** with Simple, `calculateAttackDPP` / `calculateDefenseDPP` apply the
+  doubled stage whatever the crit, so a critical hit from a Simple attacker at -3
+  Attack is still cut to -6, and one on a Simple defender at +2 Defense still meets +4.
+- **Decomp:** `BattleSystem_CalcMoveDamage` doubles the stages for Simple first
+  (`src/battle/battle_lib.c:6850-6884`), then a crit ignores an attack stage at or
+  below neutral and a defense stage at or above neutral (`:6947-6973` physical,
+  `:6992-7018` special).
+- **Ruling:** the engine (`damage._pre_random`: Simple, then the crit rule) is right.
+  Test: `test_crit_stage_rule_applies_after_simple_doubles`.
+
 ## Deliberate differences from the decomp (both engines agree)
 
 - **`turn` on the last turn.** `BattleControllerPlayer_TurnEnd`
