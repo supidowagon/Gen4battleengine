@@ -26,3 +26,7 @@ external/
 .idea/
 Thumbs.db
 .DS_Store
+
+# Worktrees and SDD scratch
+.worktrees/
+.superpowers/
