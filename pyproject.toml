@@ -9,6 +9,9 @@ dependencies = [
     "numpy>=2.0",
 ]
 
+[project.scripts]
+nuzline = "nuzline.cli:main"
+
 [dependency-groups]
 dev = [
     "pytest>=8",

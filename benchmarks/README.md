@@ -35,3 +35,22 @@ A controller re-measure with random effect ids in [0, 100) gave compile 1.39 s a
 real engine's, so real numbers will be lower; re-measure in milestone 1.
 (Had it been NO-GO, the first mitigation would be spec 4.2 "Per-fight specialization":
 reduce `N_EFFECTS` to 30 and re-measure.)
+
+# Milestone 1b: `nuzline rank` wall time
+
+    uv run nuzline rank --party tests/fixtures/sample_party.toml --trainer roark --n 2000
+
+Sample party (Monferno lead) against Roark (trainer 246, real party and bag), nine legal
+actions x 2000 playouts, 100-turn cap. Environment: jax 0.12.0.1, cpu backend,
+13th Gen Intel(R) Core(TM) i5-13600K (20 logical CPUs), Windows 11, 2026-10-29.
+
+| n    | wall time (whole command, incl. compile) |
+|------|------------------------------------------|
+| 20   | 1 min 6 s (`--lead 2 --opp-active 1`)    |
+| 2000 | 11 min 37 s                              |
+
+**Over the 60 s target.** The `n = 20` run is almost all trace and compile of the
+batched playout (`stage_a._playouts`: `step` plus `ai_policy` inside a 100-turn loop),
+so both compile time and per-playout throughput need work. This is the first target
+for the per-fight specialization of spec §4.2 (compile only the move effects, abilities
+and items present in the fight, and Roark's AI script paths).

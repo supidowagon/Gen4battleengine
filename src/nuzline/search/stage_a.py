@@ -38,7 +38,7 @@ __all__ = ["ActionResult", "Ranking", "rank_actions", "wilson"]
 @dataclass(frozen=True)
 class ActionResult:
     action: int
-    label: str  # "Ember" / "Switch → Starly"
+    label: str  # "Ember" / "Switch -> Starly"
     p_win0: float  # P(win with zero player faints)
     ci_low: float  # 95 % Wilson interval of p_win0
     ci_high: float
@@ -94,7 +94,7 @@ def _playouts(tables: Tables, state: BattleState, actions, keys, max_turns: int)
 def _label(names: Names, state: BattleState, action: int, struggle: bool) -> str:
     mon = int(state.active[0])
     if action >= MOVE_ACTIONS:
-        return f"Switch → {names.species_names[int(state.species[0, action - MOVE_ACTIONS])]}"
+        return f"Switch -> {names.species_names[int(state.species[0, action - MOVE_ACTIONS])]}"
     if struggle:
         return "Struggle"
     return names.move_names[int(state.moves[0, mon, action])]

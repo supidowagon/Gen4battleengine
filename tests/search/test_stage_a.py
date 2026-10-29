@@ -58,7 +58,7 @@ def test_labels_name_the_move_or_the_switch_target(tables, names):
     labels = {a.action: a.label for a in r}
     moves = [names.move_names[int(m)] for m in s.moves[0, 0]]
     target = names.species_names[int(s.species[0, 1])]
-    assert labels == {0: moves[0], 1: moves[1], 2: moves[2], 3: moves[3], 5: f"Switch → {target}"}
+    assert labels == {0: moves[0], 1: moves[1], 2: moves[2], 3: moves[3], 5: f"Switch -> {target}"}
 
 
 def test_struggle_is_labelled(tables, names):

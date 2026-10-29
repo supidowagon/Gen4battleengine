@@ -203,10 +203,12 @@ def check_coverage(
     trainer: Trainer,
     opp: list[PokemonSpec],
     start_condition: int,
+    leads: tuple[int, int] = (0, 0),
 ) -> CoverageReport:
     """The support level of one fight: the player's party against ``trainer`` with
     party ``opp``, starting in weather ``start_condition`` (a ``Weather``; the
-    trainer's own ``start_condition`` is checked too)."""
+    trainer's own ``start_condition`` is checked too) with the active party slots
+    ``leads`` (``make_state``), whose turn-0 state the AI's refusals are run on."""
     c = _Collector()
     _check_party(c, tables, names, "Player", player)
     _check_party(c, tables, names, trainer.name, opp)
@@ -214,7 +216,7 @@ def check_coverage(
     _check_weather(c, [start_condition, start_weather(trainer)])
     from nuzline.ai.policy import ai_refusals  # nuzline.ai imports the engine
 
-    state = make_state(tables, player, opp, start_condition, opp_items=trainer.items)
+    state = make_state(tables, player, opp, start_condition, opp_items=trainer.items, leads=leads)
     for reason in ai_refusals(tables, state):
         c.add(Support.NONE, f"{trainer.name}: {reason}", "trainer AI")
     return c.report
@@ -227,10 +229,11 @@ def require_coverage(
     trainer: Trainer,
     opp: list[PokemonSpec],
     start_condition: int,
+    leads: tuple[int, int] = (0, 0),
 ) -> CoverageReport:
     """``check_coverage``, raising ``UnsupportedMechanics`` (every missing item in its
     message) when anything is missing."""
-    report = check_coverage(tables, names, player, trainer, opp, start_condition)
+    report = check_coverage(tables, names, player, trainer, opp, start_condition, leads)
     if report.missing:
         raise UnsupportedMechanics(report)
     return report

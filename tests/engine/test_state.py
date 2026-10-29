@@ -194,3 +194,20 @@ def test_state_md_audit_rows_are_later_m6():
     status = {field: status for field, _, status in _state_md_rows()}
     for field in AUDIT_LATER_ROWS:
         assert status[field] == "later (M6)", f"{field}: {status[field]!r}"
+
+
+def test_leads_choose_the_active_slots_before_the_switch_in_effects(tables, names):
+    # The leads are the active slots and the switch-in hooks run for them: an
+    # Intimidate Shinx leading from opponent slot 1 lowers the player lead's Attack.
+    p = load_party(FIXTURES / "sample_party.toml", names)
+    shinx = dataclasses.replace(p[4], ability_slot=1)  # Rivalry / Intimidate
+    assert names.ability_names[names.species_abilities(shinx.species)[1]] == "Intimidate"
+    opp = [p[0], shinx]
+    assert int(make_state(tables, p, opp).stages[0, Stat.ATK]) == 0
+    s = make_state(tables, p, opp, leads=(2, 1))
+    assert [int(x) for x in s.active] == [2, 1]
+    assert int(s.stages[0, Stat.ATK]) == -1
+    with pytest.raises(ValueError, match="side 0: lead slot 6"):
+        make_state(tables, p, opp, leads=(6, 0))
+    with pytest.raises(ValueError, match="side 1: lead slot 2"):
+        make_state(tables, p, opp, leads=(0, 2))

@@ -261,10 +261,12 @@ def make_state(
     opp: list[PokemonSpec],
     start_condition: int = Weather.NONE,
     opp_items: Sequence[int] = (),
+    leads: tuple[int, int] = (0, 0),
 ) -> BattleState:
     """Build the turn-0 state: stats via ``calc_stats``, empty slots all zero
-    (``species = 0, hp = 0``), both leads in slot 0, no volatiles, hazards or
-    screens, and ``weather = start_condition`` with a permanent timer (0). The leads'
+    (``species = 0, hp = 0``), the leads in party slots ``leads`` (player, opponent),
+    no volatiles, hazards or screens, and
+    ``weather = start_condition`` with a permanent timer (0). The leads'
     switch-in effects then run (``hooks.on_switch_in``, player first; the decomp's
     ``monSpeedOrder`` gives the same result in singles, see ``hooks``).
 
@@ -283,6 +285,10 @@ def make_state(
             raise ValueError(f"side {side}: a party has 1-{SLOTS} Pokemon, got {len(party)}")
         for slot, mon in enumerate(party):
             _fill_slot(a, tables, side, slot, mon)
+        lead = leads[side]
+        if not 0 <= lead < len(party):
+            raise ValueError(f"side {side}: lead slot {lead} is not in a party of {len(party)}")
+        a["active"][side] = lead
     bag = [item for item in opp_items if item]
     if len(bag) > BAG_SLOTS:
         raise ValueError(f"a trainer's bag holds at most {BAG_SLOTS} items, got {len(bag)}")
