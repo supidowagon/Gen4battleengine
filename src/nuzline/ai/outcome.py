@@ -54,7 +54,9 @@ from nuzline.data.tables import Tables
 from nuzline.engine.state import MOVES, BattleState
 
 __all__ = [
+    "AI_SITE_MOVES",
     "MAX_ENUMERATED",
+    "MAX_EXPERT_SITES",
     "MAX_SCRIPT_ROLLS",
     "SWITCH_NONE",
     "SWITCH_REFUSED",
@@ -64,6 +66,8 @@ __all__ = [
     "SwitchSite",
     "enumerate_ai_outcomes",
     "sample_ai_outcome",
+    "script_roll_count",
+    "script_roll_sites",
     "script_roll_thresholds",
     "switch_stop_probs",
 ]
@@ -96,7 +100,7 @@ _SITES: dict[int, tuple[int, tuple[int, ...]]] = {
     33: (0, ()),  # Tackle (the test fixture's slot 0)
 }
 AI_SITE_MOVES = frozenset(_SITES)
-_MAX_EXPERT = max(len(e) for _, e in _SITES.values())
+_MAX_EXPERT = MAX_EXPERT_SITES = max(len(e) for _, e in _SITES.values())
 _SITE_MOVE_IDS = jnp.array(list(_SITES), _I32)
 _EVAL_N = jnp.array([n for n, _ in _SITES.values()], _I32)
 _EXPERT_N = jnp.array([list(e) + [0] * (_MAX_EXPERT - len(e)) for _, e in _SITES.values()], _I32)
@@ -124,18 +128,44 @@ class AiOutcome(NamedTuple):
     switch_stop: jnp.ndarray  # int8[], first stopping switch draw 0-8, 9 = none, -1 refused
 
 
-def script_roll_thresholds(state: BattleState) -> jnp.ndarray:
-    """``int32[MAX_SCRIPT_ROLLS]``: the N of each ``IfRandomLessThan`` site of the
-    opponent's active Pokemon, in script order (EVAL_ATTACK slots 0-3, then EXPERT
-    slots 0-3; roark.md 8.3). 0 marks an unused entry, which never rolls 1."""
-    moves = state.moves[1, state.active[1]].astype(_I32)
+def _site_table(moves) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """For the move slots ``moves`` (int[4], decomp ids): the N of every candidate site,
+    EVAL_ATTACK slots 0-3 then EXPERT slots 0-3 (slot-major), and its index k in
+    ``script_rolls`` (``MAX_SCRIPT_ROLLS`` or more when absent or beyond the last
+    entry)."""
+    moves = jnp.asarray(moves).astype(_I32)
     match = (moves[:, None] == _SITE_MOVE_IDS[None, :]).astype(_I32)  # [4, n_moves]
     eval_n = match @ _EVAL_N  # [4]
     expert_n = (match @ _EXPERT_N).reshape(MOVES * _MAX_EXPERT)  # slot-major
     n = jnp.concatenate([eval_n, expert_n])
     used = n > 0
     position = jnp.cumsum(used.astype(_I32)) - 1
-    target = jnp.where(used, position, MAX_SCRIPT_ROLLS)  # out of range: dropped
+    return n, jnp.where(used, position, MAX_SCRIPT_ROLLS)
+
+
+def script_roll_count(moves) -> jnp.ndarray:
+    """``int32``: the number of ``IfRandomLessThan`` sites of a moveset (int[4]); more
+    than ``MAX_SCRIPT_ROLLS`` cannot be encoded (the AI refuses it)."""
+    n, _ = _site_table(moves)
+    return jnp.sum((n > 0).astype(_I32))
+
+
+def script_roll_sites(state: BattleState) -> jnp.ndarray:
+    """``int32[MOVES, 1 + MAX_EXPERT_SITES]``: for each move slot of the opponent's
+    active Pokemon, the ``script_rolls`` index k of its EVAL_ATTACK site (column 0) and
+    of its EXPERT sites in script order (columns 1..), ``MAX_SCRIPT_ROLLS`` or more where
+    the move has no such site (roark.md 8.3)."""
+    _, k = _site_table(state.moves[1, state.active[1]])
+    eval_k = k[:MOVES].reshape(MOVES, 1)
+    expert_k = k[MOVES:].reshape(MOVES, _MAX_EXPERT)
+    return jnp.concatenate([eval_k, expert_k], axis=1)
+
+
+def script_roll_thresholds(state: BattleState) -> jnp.ndarray:
+    """``int32[MAX_SCRIPT_ROLLS]``: the N of each ``IfRandomLessThan`` site of the
+    opponent's active Pokemon, in script order (EVAL_ATTACK slots 0-3, then EXPERT
+    slots 0-3; roark.md 8.3). 0 marks an unused entry, which never rolls 1."""
+    n, target = _site_table(state.moves[1, state.active[1]])
     return jnp.zeros(MAX_SCRIPT_ROLLS, _I32).at[target].set(n, mode="drop")
 
 

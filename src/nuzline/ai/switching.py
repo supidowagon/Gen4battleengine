@@ -176,9 +176,13 @@ def _apply_mul(mask, mul, update):
     return jnp.where((mul == 20) & update, se, out)
 
 
-def _chart_flags(tables: Tables, move, def_types, gravity, update) -> jnp.ndarray:
-    move = jnp.asarray(move, _I32)
-    move_type = tables.move_type[move].astype(_I32)
+def chart_multipliers(tables: Tables, move, def_types, gravity) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """The two ``ApplyTypeMultiplier`` factors (``int32`` tenths, 10 = no entry) of
+    ``move``'s type against a defender of ``def_types`` (int8[2]), in the order
+    ``BattleSystem_ApplyTypeChart`` meets them (chart-row order, battle_lib.c:2611-2646).
+    Type 2 is skipped when it equals type 1 (:2635); Gravity lifts the Ground-on-Flying
+    immunity (``BasicTypeMulApplies``, :2529)."""
+    move_type = tables.move_type[jnp.asarray(move, _I32)].astype(_I32)
     t1, t2 = jnp.asarray(def_types, _I32)[0], jnp.asarray(def_types, _I32)[1]
 
     def entry(t):
@@ -187,9 +191,14 @@ def _chart_flags(tables: Tables, move, def_types, gravity, update) -> jnp.ndarra
         return jnp.where(lifted, 10, mul)
 
     m1 = entry(t1)
-    m2 = jnp.where(t2 != t1, entry(t2), 10)  # type 2 is skipped when equal (:2635)
+    m2 = jnp.where(t2 != t1, entry(t2), 10)
     t2_first = tables.type_chart_order[move_type, t2] < tables.type_chart_order[move_type, t1]
-    first, second = jnp.where(t2_first, m2, m1), jnp.where(t2_first, m1, m2)
+    return jnp.where(t2_first, m2, m1), jnp.where(t2_first, m1, m2)
+
+
+def _chart_flags(tables: Tables, move, def_types, gravity, update) -> jnp.ndarray:
+    move = jnp.asarray(move, _I32)
+    first, second = chart_multipliers(tables, move, def_types, gravity)
     mask = _apply_mul(_apply_mul(jnp.zeros((), _I32), first, update), second, update)
     return jnp.where(move == MOVE_STRUGGLE, 0, mask)
 
