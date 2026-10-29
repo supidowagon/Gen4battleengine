@@ -1,7 +1,8 @@
 """The ``nuzline`` command line (docs/design.md §4.3, plan M1b Task 8).
 
-* ``nuzline coverage --party P (--trainer NAME | --trainer-id N)``: the fight's
-  ``CoverageReport``; exit code 2 when anything is missing.
+* ``nuzline coverage --party P (--trainer NAME | --trainer-id N) [--lead 0]
+  [--opp-active 0]``: the fight's ``CoverageReport`` for the same turn-0 state ``rank``
+  would use; exit code 2 when anything is missing.
 * ``nuzline rank --party P (--trainer NAME | --trainer-id N) [--n 2000] [--seed 0]
   [--lead 0] [--opp-active 0]``: ``require_coverage``, then the Stage A ranking of the
   player's actions at the fight's turn-0 state (the trainer's real built party, bag and
@@ -59,14 +60,14 @@ def _parser() -> argparse.ArgumentParser:
         who = cmd.add_mutually_exclusive_group(required=True)
         who.add_argument("--trainer", help="trainer name (a Leader is preferred)")
         who.add_argument("--trainer-id", type=int, help="exact trainer id")
+        cmd.add_argument("--lead", type=int, default=0, help="the player's active party slot")
+        cmd.add_argument("--opp-active", type=int, default=0, help="the opponent's active slot")
 
     fight(sub.add_parser("coverage", help="check that the engine supports a fight"))
     rank = sub.add_parser("rank", help="rank the player's actions at the fight's start")
     fight(rank)
     rank.add_argument("--n", type=int, default=2000, help="playouts per action")
     rank.add_argument("--seed", type=int, default=0, help="PRNG seed of the playouts")
-    rank.add_argument("--lead", type=int, default=0, help="the player's active party slot")
-    rank.add_argument("--opp-active", type=int, default=0, help="the opponent's active slot")
     sub.add_parser("trainers", help="list trainer ids, names and classes")
     return parser
 
@@ -87,7 +88,8 @@ def _print_report(report) -> None:
 
 
 def _fight(args):
-    """(tables, names, trainer, player party, opponent party, start weather)."""
+    """(tables, names, trainer, player party, opponent party, start weather); raises
+    ``ValueError`` when ``--lead`` names a fainted Pokemon."""
     from nuzline.data.party import load_party
     from nuzline.data.tables import load_names, load_tables
     from nuzline.data.trainer import IntermediateData, build_trainer_party, load_trainers
@@ -99,6 +101,8 @@ def _fight(args):
     tables, names = load_tables(), load_names()
     player = load_party(args.party, names)
     opp = build_trainer_party(trainer, IntermediateData(INTERMEDIATE))
+    if 0 <= args.lead < len(player) and player[args.lead].current_hp == 0:
+        raise ValueError(f"--lead {args.lead}: that Pokemon has fainted")
     return tables, names, trainer, player, opp, start_weather(trainer)
 
 
@@ -107,7 +111,8 @@ def _coverage(args) -> int:
 
     tables, names, trainer, player, opp, weather = _fight(args)
     print(_trainer_line(trainer))
-    report = check_coverage(tables, names, player, trainer, opp, weather)
+    leads = (args.lead, args.opp_active)
+    report = check_coverage(tables, names, player, trainer, opp, weather, leads)
     _print_report(report)
     return EXIT_REFUSED if report.missing else EXIT_OK
 
@@ -128,8 +133,6 @@ def _rank(args) -> int:
         raise ValueError("--n must be at least 1")
     tables, names, trainer, player, opp, weather = _fight(args)
     leads = (args.lead, args.opp_active)
-    if 0 <= args.lead < len(player) and player[args.lead].current_hp == 0:
-        raise ValueError(f"--lead {args.lead}: that Pokemon has fainted")
     print(_trainer_line(trainer))
     try:
         require_coverage(tables, names, player, trainer, opp, weather, leads)

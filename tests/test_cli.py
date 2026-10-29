@@ -30,6 +30,30 @@ def test_coverage_failure_exit_code(capsys):
     assert "Metronome" in capsys.readouterr().out
 
 
+def test_coverage_checks_the_state_rank_would(capsys, monkeypatch):
+    from nuzline.engine import coverage
+
+    seen = []
+    check = coverage.check_coverage
+
+    def spy(*args, **kwargs):
+        seen.append(kwargs.get("leads", args[6] if len(args) > 6 else None))
+        return check(*args, **kwargs)
+
+    monkeypatch.setattr(coverage, "check_coverage", spy)
+    args = ["coverage", "--party", PARTY, "--trainer", "roark"]
+    assert main(args) == 0
+    assert main([*args, "--lead", "2", "--opp-active", "1"]) == 0
+    assert seen == [(0, 0), (2, 1)]
+    capsys.readouterr()
+    # The same validation as rank: a missing opponent slot and a fainted lead.
+    assert main([*args, "--opp-active", "3"]) == 1
+    assert "side 1: lead slot 3" in capsys.readouterr().err
+    fainted = str(ROOT / "tests" / "fixtures" / "sample_party_fainted.toml")
+    assert main(["coverage", "--party", fainted, "--trainer", "roark", "--lead", "5"]) == 1
+    assert "has fainted" in capsys.readouterr().err
+
+
 def test_rank_prints_nine_rows(capsys):
     assert main(["rank", "--party", PARTY, "--trainer", "roark", "--n", "50"]) == 0
     out = capsys.readouterr().out
