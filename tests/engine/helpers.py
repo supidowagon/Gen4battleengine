@@ -28,6 +28,7 @@ PHYSICAL, SPECIAL, STATUS = 0, 1, 2  # tables.move_category
 ROOT = Path(__file__).resolve().parents[2]
 INTERMEDIATE = ROOT / "data" / "intermediate"
 SAMPLE_PARTY = ROOT / "tests" / "fixtures" / "sample_party.toml"
+_GENDERS = {"male": 0, "female": 1, "none": 2}  # BattleState.gender
 # The fixture moveset every opponent gets (plan ruling): raw opponent action 0 is Tackle.
 OPP_FIXTURE_MOVES = ("Tackle", "Rock Throw", "Stealth Rock", "Leer")
 
@@ -170,8 +171,10 @@ def roark_state(
     player_species: str | None = None,
     player_moves: Sequence[str] | None = None,
     player_ability: str | None = None,
+    player_gender: str | None = None,
     opp_species: str | None = None,
     opp_moves: Sequence[str] | None = None,
+    opp_gender: str | None = None,
     opp_faster: bool = False,
 ) -> BattleState:
     """The sample party (``tests/fixtures/sample_party.toml``) against the first
@@ -184,7 +187,8 @@ def roark_state(
     in slot 0 (``_lead``); ``player_moves``/``opp_moves`` go first in slot 0's
     moveset, the rest filled from its current moves (the fixture list for the
     opponent) skipping duplicates; ``player_ability`` must be one of the lead's
-    species abilities. ``equal_speed`` sets the opponent lead's Spe stat to the
+    species abilities; ``player_gender``/``opp_gender`` ("male", "female" or "none")
+    set slot 0's gender. ``equal_speed`` sets the opponent lead's Spe stat to the
     player lead's, ``opp_faster`` to one more.
     """
     fixture_moves = tuple(names.move(m) for m in OPP_FIXTURE_MOVES)
@@ -206,6 +210,10 @@ def roark_state(
         if ability == 0 or ability not in slots:
             raise ValueError(f"species {player[0].species} cannot have {player_ability!r}")
         player[0] = _replace_spec(player[0], ability_slot=slots.index(ability))
+    if player_gender is not None:
+        player[0] = _replace_spec(player[0], gender=_GENDERS[player_gender])
+    if opp_gender is not None:
+        opp[0] = _replace_spec(opp[0], gender=_GENDERS[opp_gender])
     s = make_state(tables, player, opp)
     spe = Stat.SPE - 1  # stats[..., 0..4] are Atk..Spe
     if equal_speed or opp_faster:

@@ -15,6 +15,8 @@ def test_stealth_rock_sets_and_damages_on_switch(tables, names):
     s = roark_state(tables, names)  # Geodude leads with Stealth Rock
     out = step(tables, s, A("Scratch", "Stealth Rock", s, names), empty_outcome())
     assert int(out.stealth_rock[0]) == 1
+    # Without its Oran Berry, which Geodude's Tackle would otherwise trigger (hooks.py).
+    out = out._replace(item=out.item.at[0, 3].set(0))
     out2 = step(tables, out, A(4 + 3, "Tackle", out, names), empty_outcome())  # Starly (Flying: 2x)
     assert int(out2.hp[0, 3]) <= int(out.max_hp[0, 3]) - int(out.max_hp[0, 3]) // 4
 
@@ -193,13 +195,17 @@ def test_confusion_self_hit_is_40_power_typeless_physical_with_the_roll(tables, 
 
 
 def test_end_of_turn_order_lists_the_implemented_checks_in_decomp_order():
+    # enum MonCondCheckState (battle_controller_player.c:1259-1284): USE_ITEM before
+    # LEECH_SEED, ITEM_CONDITION after TAUNT.
     assert [name for name, _ in END_OF_TURN_ORDER] == [
+        "use_item",
         "leech_seed",
         "poison",
         "toxic",
         "burn",
         "bind",
         "taunt",
+        "item_condition",
     ]
 
 

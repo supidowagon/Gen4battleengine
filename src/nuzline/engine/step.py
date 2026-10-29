@@ -17,11 +17,13 @@ Pure, jit- and vmap-able, fixed shapes; every random event comes from
 6. The battle ends at the first faint check that finds a player faint or no
    opponent left (``_faint_check``); later checks of the turn do nothing.
 
-Implemented so far: switching (with Natural Cure), Stealth Rock on a switch-in,
-damaging moves, the accuracy check, PP, Struggle, the move effects of ``effects.py``,
-Pursuit's pre-switch hit, the sleep, freeze, flinch, Taunt, confusion and paralysis
-checks before a move, the Leech Seed, poison, toxic, burn, Bind and Taunt end-of-turn
-checks, faints and the end of the battle. A player faint is terminal (spec §3): it
+Implemented so far: switching (with Natural Cure) and the switch-in hooks
+(``hooks.on_switch_in``: Stealth Rock, Intimidate, berries), damaging moves, the
+accuracy check, PP, Struggle, the move effects of ``effects.py``, the berry check
+after every hit (``hooks.after_damage_items``), Pursuit's pre-switch hit, the sleep,
+freeze, flinch, Taunt, confusion and paralysis checks before a move, the held-item,
+Leech Seed, poison, toxic, burn, Bind and Taunt end-of-turn checks, faints and the
+end of the battle. A player faint is terminal (spec §3): it
 sets ``over = 1, winner = 1``. A state that is already over is returned unchanged.
 """
 
@@ -32,12 +34,8 @@ import jax.numpy as jnp
 
 from nuzline.data.tables import Tables
 from nuzline.engine.damage import confusion_damage
-from nuzline.engine.effects import (
-    apply_move_effect,
-    change_stage,
-    stealth_rock_damage,
-    targets_user,
-)
+from nuzline.engine.effects import apply_move_effect, change_stage, targets_user
+from nuzline.engine.hooks import after_damage_items, on_switch_in
 from nuzline.engine.ids import AbilityId, EffectId, Stat, Status
 from nuzline.engine.order import (
     MOVE_ACTIONS,
@@ -130,9 +128,9 @@ def _switch_in(state: BattleState, side, slot) -> BattleState:
 
 
 def _send_out(tables: Tables, state: BattleState, side, slot) -> BattleState:
-    """A switch action: ``_switch_out``, ``_switch_in``, then the entry hazards
-    (``subscript_hazards_check.s``; Stealth Rock is the only one in M1)."""
-    return stealth_rock_damage(tables, _switch_in(_switch_out(state, side), side, slot), side)
+    """A switch action: ``_switch_out``, ``_switch_in``, then ``hooks.on_switch_in``
+    (entry hazards, Intimidate, berries)."""
+    return on_switch_in(tables, _switch_in(_switch_out(state, side), side, slot), side)
 
 
 def _use_move(
@@ -221,13 +219,26 @@ def _use_move(
             connected=connected,
             target_moved=target_moved,
         )
-
-    # subscript_struggle.s: recoil BattleSystem_Divide(-maxHP, 4), at least 1, on a hit.
-    recoil = jnp.where(
-        connected & struggling, jnp.maximum(state.max_hp[side, user].astype(_I32) // 4, 1), 0
-    )
-    user_hp = jnp.maximum(state.hp[side, user].astype(_I32) - recoil, 0)
-    return state._replace(hp=state.hp.at[side, user].set(user_hp.astype(state.hp.dtype)))
+        if hit_index == 0:
+            # subscript_struggle.s: recoil BattleSystem_Divide(-maxHP, 4), at least 1, on
+            # a hit; part of the move script, so before the after-move item checks.
+            recoil = jnp.where(
+                connected & struggling,
+                jnp.maximum(state.max_hp[side, user].astype(_I32) // 4, 1),
+                0,
+            )
+            user_hp = jnp.maximum(state.hp[side, user].astype(_I32) - recoil, 0)
+            state = state._replace(hp=state.hp.at[side, user].set(user_hp.astype(state.hp.dtype)))
+        # BattleControllerPlayer_AfterMoveEffects (battle_controller_player.c:3638) runs
+        # after every hit of a move that connected: AFTER_MOVE_EFFECT_ATTACKER_ITEM
+        # (:3684), then _DEFENDER_ITEM (:3691). A disrupted move, a confusion self-hit,
+        # a miss (MOVE_STATUS_DID_NOT_HIT, :3325) or a move with no target skips it. Its
+        # AFTER_MOVE_EFFECT_HELD_ITEM_STATUS (:3730) re-checks the same two Pokemon in
+        # singles and cannot trigger anything new. A later hit that did not happen
+        # changes no HP, so its check finds what the previous one found.
+        state = after_damage_items(tables, state, side, connected)
+        state = after_damage_items(tables, state, 1 - side, connected)
+    return state
 
 
 def _act(
@@ -403,6 +414,8 @@ def _taunt_check(tables: Tables, state: BattleState, side) -> BattleState:
 # The implemented checks of ``enum MonCondCheckState`` (battle_controller_player.c:1256),
 # in its order.
 END_OF_TURN_ORDER = (
+    # MON_COND_CHECK_STATE_USE_ITEM, battle_controller_player.c:1362
+    ("use_item", after_damage_items),
     # MON_COND_CHECK_STATE_LEECH_SEED, battle_controller_player.c:1378
     ("leech_seed", _leech_seed_check),
     # MON_COND_CHECK_STATE_POISON, battle_controller_player.c:1393
@@ -415,6 +428,9 @@ END_OF_TURN_ORDER = (
     ("bind", _bind_check),
     # MON_COND_CHECK_STATE_TAUNT, battle_controller_player.c:1635
     ("taunt", _taunt_check),
+    # MON_COND_CHECK_STATE_ITEM_CONDITION, battle_controller_player.c:1699: the same berry
+    # check, after the residual damage above.
+    ("item_condition", after_damage_items),
 )
 
 
@@ -468,6 +484,8 @@ def needs_replacement(state: BattleState) -> jnp.ndarray:
 
 
 def replace(state: BattleState, side, slot) -> BattleState:
-    """Send in party ``slot`` for ``side``'s fainted active Pokemon. Entry hazards on a
-    replacement belong to Task 8e's ``hooks.on_switch_in`` (it needs ``tables``)."""
+    """Send in party ``slot`` for ``side``'s fainted active Pokemon.
+
+    Not yet run here: ``hooks.on_switch_in`` (Stealth Rock, Intimidate, berries), which
+    needs ``tables``; the plan fixes this signature without it."""
     return _switch_in(state, side, slot)

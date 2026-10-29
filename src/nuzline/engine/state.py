@@ -240,7 +240,11 @@ def make_state(
 ) -> BattleState:
     """Build the turn-0 state: stats via ``calc_stats``, empty slots all zero
     (``species = 0, hp = 0``), both leads in slot 0, no volatiles, hazards or
-    screens, and ``weather = start_condition`` with a permanent timer (0)."""
+    screens, and ``weather = start_condition`` with a permanent timer (0). The leads'
+    switch-in effects then run (``hooks.on_switch_in``, player first; the decomp's
+    ``monSpeedOrder`` gives the same result in singles, see ``hooks``)."""
+    from nuzline.engine.hooks import on_switch_in  # hooks imports this module
+
     a = {name: np.zeros(shape, dtype) for name, (shape, dtype) in _LAYOUT.items()}
     for side, party in enumerate((player, opp)):
         if not 1 <= len(party) <= SLOTS:
@@ -248,4 +252,7 @@ def make_state(
         for slot, mon in enumerate(party):
             _fill_slot(a, tables, side, slot, mon)
     a["weather"][...] = Weather(start_condition)
-    return BattleState(**{name: jnp.asarray(a[name]) for name in BattleState._fields})
+    state = BattleState(**{name: jnp.asarray(a[name]) for name in BattleState._fields})
+    for side in (0, 1):
+        state = on_switch_in(tables, state, side)
+    return state
