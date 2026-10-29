@@ -106,3 +106,14 @@ class MoveFlag(IntFlag):
     PROTECT = 2
     SOUND = 4
     PUNCH = 8
+
+
+class Weather(IntEnum):
+    """``BattleState.weather``; also a battle's start condition (``make_state``)."""
+
+    NONE = 0
+    SUN = 1
+    RAIN = 2
+    SANDSTORM = 3
+    HAIL = 4
+    FOG = 5
