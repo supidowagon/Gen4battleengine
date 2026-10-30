@@ -91,3 +91,50 @@ def test_refused_playouts_are_refused_loudly(tables, names):
     s = roark_state(tables, names, player_species="Gastly", player_ability="Levitate")
     with pytest.raises(UnsupportedAi, match=r"(?s)refused.*Levitate"):
         rank_actions(tables, names, s, n=8, key=jax.random.PRNGKey(5))
+
+
+_MULTI_DEVICE_SCRIPT = """
+import json, jax
+from dataclasses import astuple
+from nuzline.data.tables import load_names, load_tables
+from nuzline.search.stage_a import rank_actions
+from tests.engine.helpers import roark_state
+
+assert jax.device_count() == 4, jax.device_count()
+tables, names = load_tables(), load_names()
+state = roark_state(tables, names)
+ranking = rank_actions(tables, names, state, n=6, key=jax.random.PRNGKey(0), max_turns=3)
+print(json.dumps([astuple(r) for r in ranking]))
+"""
+
+
+def test_rank_actions_same_on_multiple_devices(tables, names):
+    import json
+    import os
+    import subprocess
+    import sys
+    from dataclasses import astuple
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2]
+    env = {
+        **os.environ,
+        "XLA_FLAGS": "--xla_force_host_platform_device_count=4",
+        "PYTHONPATH": os.pathsep.join([str(root / "src"), str(root)]),
+    }
+    done = subprocess.run(
+        [sys.executable, "-c", _MULTI_DEVICE_SCRIPT],
+        check=False,
+        cwd=root,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert done.returncode == 0, done.stderr
+    assert jax.device_count() == 1
+    here = rank_actions(
+        tables, names, roark_state(tables, names), n=6, key=jax.random.PRNGKey(0), max_turns=3
+    )
+    assert json.loads(done.stdout.strip().splitlines()[-1]) == json.loads(
+        json.dumps([astuple(r) for r in here])
+    )

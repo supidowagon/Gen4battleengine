@@ -4,7 +4,7 @@
   [--opp-active 0]``: the fight's ``CoverageReport`` for the same turn-0 state ``rank``
   would use; exit code 2 when anything is missing.
 * ``nuzline rank --party P (--trainer NAME | --trainer-id N) [--n 2000] [--seed 0]
-  [--lead 0] [--opp-active 0]``: ``require_coverage``, then the Stage A ranking of the
+  [--lead 0] [--opp-active 0] [--devices N]``: ``require_coverage``, then the Stage A ranking of the
   player's actions at the fight's turn-0 state (the trainer's real built party, bag and
   start condition; party slots ``--lead`` and ``--opp-active`` active). Exit code 2 when
   the fight is refused, by the coverage check or by a refused playout.
@@ -19,6 +19,7 @@ is cp1252).
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -49,6 +50,20 @@ def resolve_trainer(
     return (leaders or matches)[0]
 
 
+_DEVICE_FLAG = "--xla_force_host_platform_device_count"
+
+
+def configure_cpu_devices(count: int | None, environ=os.environ) -> None:
+    """Make XLA expose ``count`` (default ``os.cpu_count()``) host CPU devices by
+    appending the device-count flag to ``environ["XLA_FLAGS"]``, keeping any existing
+    flags. A user-set device-count flag wins. Must run before ``jax`` is imported."""
+    flags = environ.get("XLA_FLAGS", "")
+    if _DEVICE_FLAG in flags:
+        return
+    flag = f"{_DEVICE_FLAG}={count or os.cpu_count() or 1}"
+    environ["XLA_FLAGS"] = f"{flags} {flag}".strip()
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="nuzline", description="Nuzlocke line finder for Pokemon Platinum battles."
@@ -68,6 +83,13 @@ def _parser() -> argparse.ArgumentParser:
     fight(rank)
     rank.add_argument("--n", type=int, default=2000, help="playouts per action")
     rank.add_argument("--seed", type=int, default=0, help="PRNG seed of the playouts")
+    rank.add_argument(
+        "--devices",
+        type=int,
+        default=os.cpu_count(),
+        help="host CPU devices the playouts are sharded over (default: all cores; "
+        "1 keeps the single-device path)",
+    )
     sub.add_parser("trainers", help="list trainer ids, names and classes")
     return parser
 
@@ -175,6 +197,11 @@ def _trainers(args) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    if args.command == "rank":
+        if args.devices is not None and args.devices < 1:
+            print("nuzline: error: --devices must be at least 1", file=sys.stderr)
+            return EXIT_ERROR
+        configure_cpu_devices(args.devices)
     command = {"coverage": _coverage, "rank": _rank, "trainers": _trainers}[args.command]
     try:
         return command(args)

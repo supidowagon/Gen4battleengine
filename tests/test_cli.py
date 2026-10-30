@@ -20,6 +20,20 @@ def _data(tables):
         pytest.skip("intermediate data not extracted (run tools/extract_decomp.py)")
 
 
+@pytest.fixture(autouse=True)
+def _restore_xla_flags(monkeypatch):
+    """``main(["rank", ...])`` appends to ``XLA_FLAGS``; undo that after each test."""
+    monkeypatch.delenv("XLA_FLAGS", raising=False)
+
+
+def test_rank_devices_option_sets_the_flag(monkeypatch):
+    import os
+
+    monkeypatch.setattr("nuzline.cli._rank", lambda args: 0)
+    assert main(["rank", "--party", PARTY, "--trainer", "roark", "--devices", "3"]) == 0
+    assert os.environ["XLA_FLAGS"] == "--xla_force_host_platform_device_count=3"
+
+
 def test_coverage_ok(capsys):
     assert main(["coverage", "--party", PARTY, "--trainer", "roark"]) == 0
     assert "missing: none" in capsys.readouterr().out.lower()
@@ -155,3 +169,39 @@ def test_real_roark_is_trainer_246(capsys):
 def test_trainer_and_trainer_id_are_exclusive():
     with pytest.raises(SystemExit):
         main(["coverage", "--party", PARTY, "--trainer", "roark", "--trainer-id", "246"])
+
+
+def test_configure_cpu_devices_appends_flag():
+    from nuzline.cli import configure_cpu_devices
+
+    env = {"XLA_FLAGS": "--xla_cpu_enable_fast_math=false"}
+    configure_cpu_devices(4, env)
+    assert env["XLA_FLAGS"] == (
+        "--xla_cpu_enable_fast_math=false --xla_force_host_platform_device_count=4"
+    )
+    empty: dict[str, str] = {}
+    configure_cpu_devices(None, empty)
+    assert empty["XLA_FLAGS"] == (
+        f"--xla_force_host_platform_device_count={__import__('os').cpu_count()}"
+    )
+
+
+def test_configure_cpu_devices_keeps_user_flag():
+    from nuzline.cli import configure_cpu_devices
+
+    env = {"XLA_FLAGS": "--xla_force_host_platform_device_count=3"}
+    configure_cpu_devices(8, env)
+    assert env["XLA_FLAGS"] == "--xla_force_host_platform_device_count=3"
+
+
+def test_cli_module_does_not_import_jax():
+    import os
+    import subprocess
+    import sys
+
+    env = {**os.environ, "PYTHONPATH": str(ROOT / "src")}
+    code = "import nuzline.cli, sys; assert 'jax' not in sys.modules"
+    done = subprocess.run(
+        [sys.executable, "-c", code], check=False, cwd=ROOT, env=env, capture_output=True, text=True
+    )
+    assert done.returncode == 0, done.stderr

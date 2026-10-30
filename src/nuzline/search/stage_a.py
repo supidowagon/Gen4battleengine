@@ -25,6 +25,7 @@ from functools import partial
 import jax
 import jax.numpy as jnp
 import numpy as np
+from jax.sharding import Mesh, NamedSharding, PartitionSpec
 
 from nuzline.ai.policy import UnsupportedAi
 from nuzline.data.tables import Names, Tables
@@ -108,11 +109,23 @@ def rank_actions(
     legal = np.flatnonzero(np.asarray(legal_actions(tables, state, 0)))
     struggle = not bool(np.any(np.asarray(usable_moves(tables, state, 0))))
     keys = jax.random.split(key, n)
+    devices = jax.device_count()
+    # With several host devices the key axis is padded to a multiple of the device count
+    # (copies of keys[0]) and sharded; the padded columns are dropped below, so the
+    # statistics, and the result, do not depend on the device count.
+    padded_n = -(-n // devices) * devices
+    if devices > 1:
+        pad = jnp.broadcast_to(keys[:1], (padded_n - n, *keys.shape[1:]))
+        sharding = NamedSharding(Mesh(jax.devices(), ("d",)), PartitionSpec("d"))
+        sharded_keys = jax.device_put(jnp.concatenate([keys, pad]), sharding)
+    else:
+        sharded_keys = keys
     # Padded to NUM_ACTIONS rows (repeating a legal action) so the batch shape, and the
     # compile, does not depend on how many actions are legal; the padding is dropped.
     padded = np.full(NUM_ACTIONS, legal[0], np.int32)
     padded[: legal.size] = legal
-    out = jax.device_get(_playouts(tables, state, jnp.asarray(padded), keys, max_turns))
+    out = jax.device_get(_playouts(tables, state, jnp.asarray(padded), sharded_keys, max_turns))
+    out = jax.tree.map(lambda x: x[:, :n], out)
     refused = np.asarray(out.refused).astype(bool)
     results = []
     for i, action in enumerate(legal.tolist()):
