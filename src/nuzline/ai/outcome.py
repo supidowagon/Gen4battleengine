@@ -179,15 +179,22 @@ def script_roll_thresholds(state: BattleState) -> jnp.ndarray:
     return jnp.zeros(MAX_SCRIPT_ROLLS, _I32).at[target].set(n, mode="drop")
 
 
+def _roll_weights(state: BattleState, rolls) -> jnp.ndarray:
+    """``float32[R]``: the exact probability of each ``script_rolls`` row of ``rolls``
+    (int[R, MAX_SCRIPT_ROLLS], 1 = jump) for this state, ``prod_k`` of N_k/256 where
+    bit k is 1, else 1 - N_k/256 (``script_roll_thresholds``; roark.md 8.3). The one
+    copy of this rule, shared by ``script_roll_probs`` and ``enumerate_ai_outcomes``."""
+    p_jump = script_roll_thresholds(state).astype(_F32) / 256  # [MAX_SCRIPT_ROLLS]
+    return jnp.prod(jnp.where(jnp.asarray(rolls, _I32) == 1, p_jump, 1 - p_jump), axis=1)
+
+
 def script_roll_probs(state: BattleState) -> tuple[np.ndarray, jnp.ndarray]:
     """Every ``script_rolls`` bit pattern, ``int8[2**MAX_SCRIPT_ROLLS, MAX_SCRIPT_ROLLS]``
     (pattern b has bit k = ``(b >> k) & 1``), and its exact probability ``float32[...]``
     for this state: ``prod_k`` of N_k/256 where bit k is 1, else 1 - N_k/256
     (``script_roll_thresholds``), the weights ``enumerate_ai_outcomes`` gives them."""
     rolls = (np.arange(2**MAX_SCRIPT_ROLLS)[:, None] >> np.arange(MAX_SCRIPT_ROLLS)) & 1
-    p_jump = script_roll_thresholds(state).astype(_F32) / 256  # [MAX_SCRIPT_ROLLS]
-    p = jnp.prod(jnp.where(jnp.asarray(rolls, _I32) == 1, p_jump, 1 - p_jump), axis=1)
-    return rolls.astype(np.int8), p
+    return rolls.astype(np.int8), _roll_weights(state, rolls)
 
 
 def switch_stop_probs(switch_sites) -> jnp.ndarray:
@@ -248,9 +255,7 @@ def enumerate_ai_outcomes(tables: Tables, state: BattleState) -> tuple[AiOutcome
     ``SwitchSite.NONE`` entry, have probability 0. The switch draws are over
     ``switch_sites(tables, state)``."""
     ability, rolls, switch, tiebreak = _grid()
-    p_jump = script_roll_thresholds(state).astype(_F32) / 256  # [MAX_SCRIPT_ROLLS]
-    rolls_j = jnp.asarray(rolls, _I32)
-    p_rolls = jnp.prod(jnp.where(rolls_j == 1, p_jump, 1 - p_jump), axis=1)
+    p_rolls = _roll_weights(state, rolls)
     p_switch = switch_stop_probs(switch_sites(tables, state))[jnp.asarray(switch, _I32)]
     p_rest = jnp.asarray(TIEBREAK_P[tiebreak] / _ABILITY_VALUES, _F32)
     outs = AiOutcome(
