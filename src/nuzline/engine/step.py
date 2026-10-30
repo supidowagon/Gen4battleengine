@@ -327,7 +327,10 @@ def _use_move(
     succeeded = can_act & has_target
     state = _set_last_move(state, side, jnp.where(succeeded, move, 0), ready)
     connected = can_act & has_target & ((outcome.hit[side, 0] != 0) | never_misses)
-    for hit_index in range(MAX_HITS):
+
+    # A loop, not unrolled: one copy of the effect code in the program, not MAX_HITS
+    # (unrolled, it dominated trace and compile time).
+    def one_hit(hit_index, state):
         state = apply_move_effect(
             tables,
             state,
@@ -347,7 +350,9 @@ def _use_move(
         # singles and cannot trigger anything new. A later hit that did not happen
         # changes no HP, so its check finds what the previous one found.
         state = after_damage_items(tables, state, side, connected)
-        state = after_damage_items(tables, state, 1 - side, connected)
+        return after_damage_items(tables, state, 1 - side, connected)
+
+    state = jax.lax.fori_loop(0, MAX_HITS, one_hit, state)
     # BattleControllerPlayer_UpdateFlagsWhenHit (battle_controller_player.c:4499-4507),
     # reached on every path once the move was chosen (UPDATE_MOVE_BUFFERS, :3956, or
     # LOOP_SPREAD_MOVES, :3837): moveHit[defender] = the move when the attack message
@@ -542,17 +547,19 @@ def execute_actions(
     before = state
     hit = _pursuit_hit(tables, state, 1 - first, actions, choices, outcome)
     state = _faint_check(before, _where(pursued, hit, state))
-    for position in (0, 1):
+
+    # Both actors through one loop body (a loop, not unrolled: one copy of ``_act``).
+    def act(position, state):
         before = state
         side = order[position].astype(_I32)
-        target_moved = position == 1  # the first actor's target has not moved yet
-        acted = _act(tables, state, side, actions, choices, items, outcome, target_moved)
+        second = position == 1  # the first actor's target has not moved yet
+        acted = _act(tables, state, side, actions, choices, items, outcome, second)
         ran = (state.over == 0) & (state.hp[side, state.active[side]] > 0)
-        if position == 1:
-            acted = _where(pursued, state, acted)
-            ran = ran & ~pursued
-        state = _move_end(_faint_check(before, acted), acted, side, ran)
-    return state
+        acted = _where(second & pursued, state, acted)
+        ran = ran & ~(second & pursued)
+        return _move_end(_faint_check(before, acted), acted, side, ran)
+
+    return jax.lax.fori_loop(0, 2, act, state)
 
 
 def _hp_change(state: BattleState, side, mon, delta) -> BattleState:

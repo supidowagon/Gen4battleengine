@@ -77,10 +77,28 @@ target; the cold run (first run on a machine, or after a code or table change) i
 69.9 s, about 10 s over. The milestone's headline goal is therefore met only once the
 compile and trace caches are populated, not on a fresh machine.
 
-Next levers for the cold run (spec 4.3, 6): chunked playouts with compaction, so finished
-playouts stop costing lanes, and racing, so clearly losing actions stop early. Measured
-playout lengths for this fight (2000 playouts x 9 actions, 100-turn cap): mean 8.9 turns,
-max 21, none reach the cap, so the 100-turn loop runs far longer than most playouts need.
+## After the cold-start work (branch perf-ranking, 2026-10-30)
 
-Known follow-up: `require_coverage` compiles eager ops inside `ai_refusals` (about 4 s of
-startup, warm included); computing its flags in one jitted call would remove that.
+Same command, fight, `n` and machine. A cold-run profile showed the playouts themselves
+take only 6.5 s; tracing (27.5 s) and XLA compilation (26.6 s) of the batched playout
+were the rest, both proportional to program size (12.7 MB of StableHLO). Python-unrolled
+loops put many copies of the same code in the program: the 5 hits of a move (11 copies
+of the move-effect code per turn), the two actors of a turn, the AI's 4 move slots per
+flag script, and the 5 replacement rounds. Each is now a `jax.lax.fori_loop` (one copy;
+results bit-identical, 5.4 MB of StableHLO). The AI's refusal flags (`policy._refused`,
+`switching._layout`) are jitted, so the coverage check no longer runs hundreds of eager
+ops (4.5 s to 1.7 s).
+
+| run                                  | wall time | vs 60 s target |
+|--------------------------------------|-----------|----------------|
+| cold (empty caches)                  | 36.8 s    | met            |
+| warm (caches populated)              | 14.8 s    | met            |
+
+Cold-run phases at n = 2000 before / after: trace 27.5 / 12.7 s, compile 26.6 / 11.5 s,
+run 6.5 / 6.5 s. XLA compiler options were tried and rejected: optimisation level 0
+saves 5 s of compile but doubles the run; level 1 saves 3.5 s; neither beats shrinking
+the program.
+
+Remaining levers, if ever needed: chunked playouts with compaction and racing (spec 4.3)
+now only touch the 6.5 s run phase (playouts: mean 8.6 turns, max 21, 100-turn cap);
+`make_state`'s eager switch-in hooks cost about 1 s.

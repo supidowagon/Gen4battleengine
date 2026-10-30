@@ -317,7 +317,9 @@ def at_slot(ctx: AiContext, slot: int) -> AiContext:
     state = ctx.state
     a = state.active[1]
     move = jnp.where(state.pp[1, a, slot] > 0, state.moves[1, a, slot], 0).astype(_I32)
-    return ctx._replace(slot=slot, move=move, live=move != 0, jump=jnp.asarray(False))
+    return ctx._replace(
+        slot=jnp.asarray(slot, _I32), move=move, live=move != 0, jump=jnp.asarray(False)
+    )
 
 
 def _side(battler: Battler) -> int:

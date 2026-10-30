@@ -339,6 +339,7 @@ class _Refused(NamedTuple):
     any: jnp.ndarray  # bool: ai_policy is refused (switching aside)
 
 
+@jax.jit
 def _refused(tables: Tables, state: BattleState) -> _Refused:
     present = state.species > 0
     moves = state.moves.astype(_I32)
@@ -480,13 +481,18 @@ def resolve_player_ability(
 
 def _scores(tables: Tables, state: BattleState, ai_outcome: AiOutcome) -> jnp.ndarray:
     ctx = c.new_context(tables, state, ai_outcome)
+    ctx = ctx._replace(slot=jnp.asarray(0, _I32))
     for flag in _FLAGS:  # TrainerAI_MainSingles (trainer_ai.c:297-310)
-        for slot in range(MOVES):  # TrainerAI_EvalMoves (:483-525)
+        # The slots in a loop, not unrolled: one copy of each flag script in the program.
+
+        def eval_slot(slot, ctx, flag=flag):  # TrainerAI_EvalMoves (:483-525)
             ctx = flag(c.at_slot(ctx, slot))
             # A MOVE_NONE slot runs no command and scores 0 (:499-501).
-            ctx = ctx._replace(
+            return ctx._replace(
                 scores=ctx.scores.at[slot].set(jnp.where(ctx.move == 0, 0, ctx.scores[slot]))
             )
+
+        ctx = jax.lax.fori_loop(0, MOVES, eval_slot, ctx)
     return jnp.where(_refused(tables, state).scoring, -1, ctx.scores).astype(_I32)
 
 

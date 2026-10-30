@@ -249,6 +249,7 @@ class _Layout(NamedTuple):
     refused: jnp.ndarray  # bool
 
 
+@jax.jit
 def _layout(tables: Tables, state: BattleState) -> _Layout:
     a = state.active[1].astype(_I32)
     d = state.active[0].astype(_I32)

@@ -164,15 +164,16 @@ def send_replacements(
     ``ReplaceFainted``. ``refused`` (``bool``) when a replacement is needed after the AI
     switched this turn (``ai_switched``) or ``post_ko_switch_in`` refuses; the state is
     then left as it was at that point."""
-    refused = jnp.bool_(False)
-    for _ in range(SLOTS - 1):
+
+    def once(_, carry):  # a loop, not unrolled: one copy of the replacement rule
+        state, refused = carry
         need = needs_replacement(state)[1] == 1
         slot = post_ko_switch_in(tables, state, power_mul)
         bad = need & (jnp.asarray(ai_switched) | (slot < 0))
         replaced = replace(tables, state, 1, jnp.maximum(slot, 0))
-        state = _select(need & ~bad, replaced, state)
-        refused = refused | bad
-    return state, refused
+        return _select(need & ~bad, replaced, state), refused | bad
+
+    return jax.lax.fori_loop(0, SLOTS - 1, once, (state, jnp.bool_(False)))
 
 
 def _play(tables: Tables, state: BattleState, player_action, key):

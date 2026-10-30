@@ -397,14 +397,14 @@ def apply_move_effect(
     side,
     move,
     outcome: Outcome,
-    hit_index: int,
+    hit_index,
     *,
     connected,
     target_moved,
     power_mul=10,
     struggling=False,
 ) -> BattleState:
-    """Hit ``hit_index`` (0-4) of ``move`` by ``side``'s active Pokemon: damage with
+    """Hit ``hit_index`` (0-4, an int or a traced int32) of ``move`` by ``side``'s active Pokemon: damage with
     this hit's crit and roll, then the move's effect.
 
     ``connected``: the move is being used and passed its one accuracy check
