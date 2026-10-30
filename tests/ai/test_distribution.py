@@ -6,7 +6,7 @@ random M1 states of ``tests.strategies``), NaN on exactly the same refused state
 import jax
 import jax.numpy as jnp
 import numpy as np
-from hypothesis import HealthCheck, given, settings
+from hypothesis import HealthCheck, assume, given, settings
 from hypothesis import strategies as st
 
 from nuzline.ai.outcome import TIEBREAK_MOD, TIEBREAK_P
@@ -96,8 +96,7 @@ def test_factored_distribution_matches_enumeration_on_random_m1_states(tables, n
 @given(data=st.data())
 def test_distribution_sums_to_one(tables, names, data):
     s = data.draw(roark_states(tables, names))
-    if ai_refusals(tables, s):
-        return
+    assume(not ai_refusals(tables, s))
     d = np.asarray(ai_action_distribution(tables, s), np.float64)
     assert np.all(d >= 0)
     assert abs(d.sum() - 1.0) <= 1e-6

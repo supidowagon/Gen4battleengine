@@ -43,6 +43,7 @@ from nuzline.ai import commands as c
 from nuzline.ai import switching
 from nuzline.ai.commands import AiContext, BattleEffect, Battler, LoadType, TypeMulti
 from nuzline.ai.outcome import (
+    ABILITY_GUESSES,
     MAX_SCRIPT_ROLLS,
     SIM_ROLL_MAX,
     SWITCH_NONE,
@@ -593,19 +594,16 @@ def _pairwise_sum(x: jnp.ndarray) -> jnp.ndarray:
     return x[0]
 
 
-_GUESSES = 2  # AiOutcome.ability_guess: 0 or 1, 1/2 each
-
-
 def _move_distribution(tables: Tables, state: BattleState) -> jnp.ndarray:
     """``float32[MOVES]``: the distribution of ``TrainerAI_Main``'s move pick, over the
     only draws ``_scores`` and ``_pick`` read: ``ability_guess`` x ``script_rolls``
     (32 scorings) and, for each scoring, ``tiebreak`` through ``_pick`` itself."""
     rolls, p_rolls = script_roll_probs(state)  # [16, 4], [16]
-    n = _GUESSES * len(rolls)
+    n = ABILITY_GUESSES * len(rolls)
     outcomes = AiOutcome(
         sim_roll=jnp.full((n, MOVES), SIM_ROLL_MAX, jnp.int8),
-        ability_guess=jnp.repeat(jnp.arange(_GUESSES, dtype=jnp.int8), len(rolls)),
-        script_rolls=jnp.tile(jnp.asarray(rolls), (_GUESSES, 1)),
+        ability_guess=jnp.repeat(jnp.arange(ABILITY_GUESSES, dtype=jnp.int8), len(rolls)),
+        script_rolls=jnp.tile(jnp.asarray(rolls), (ABILITY_GUESSES, 1)),
         tiebreak=jnp.zeros(n, jnp.int8),  # _scores does not read it
         switch_stop=jnp.full(n, SWITCH_NONE, jnp.int8),  # nor this
     )
@@ -616,19 +614,21 @@ def _move_distribution(tables: Tables, state: BattleState) -> jnp.ndarray:
     )(scores)
     p_tiebreak = jnp.asarray(TIEBREAK_P, jnp.float32)
     shares = jnp.einsum("t,stm->sm", p_tiebreak, jax.nn.one_hot(picks, MOVES))  # [32, MOVES]
-    weight = jnp.tile(p_rolls, _GUESSES) / _GUESSES  # [32]
+    weight = jnp.tile(p_rolls, ABILITY_GUESSES) / ABILITY_GUESSES  # [32]
     return weight @ shares
 
 
 @jax.jit
 def _distribution(tables: Tables, state: BattleState) -> jnp.ndarray:
     """The exact distribution, factored as ``_policy`` decides (roark.md 2): the switch
-    when ``switch_stop`` means one, else the item when ``_use_item`` gives one, else the
-    move pick. The switch reads only ``switch_stop``, the item no draw, the move pick
-    only ``ability_guess``, ``script_rolls`` and ``tiebreak``, so the 3840 outcomes of
-    ``ai_action_distribution_enumerated`` reduce to 10 switch stops and 32 scorings.
-    NaN exactly where the enumeration gives NaN: a refused state, or a refused switch
-    layout (``switch_action`` gives ``REFUSED_ACTION`` for every stop)."""
+    when ``switch_stop`` means one (``maybe_switch``, ``TrainerAI_ShouldSwitch``,
+    trainer_ai.c:3894), else the item when ``_use_item`` gives one
+    (``TrainerAI_ShouldUseItem``, trainer_ai.c:4056), else the move pick (``_pick``,
+    trainer_ai.c:315-338). The switch reads only ``switch_stop``, the item no draw, the
+    move pick only ``ability_guess``, ``script_rolls`` and ``tiebreak``, so the 3840
+    outcomes of ``ai_action_distribution_enumerated`` reduce to 10 switch stops and 32
+    scorings. NaN exactly where the enumeration gives NaN: a refused state, or a refused
+    switch layout (``switch_action`` gives ``REFUSED_ACTION`` for any stop)."""
     stops = jnp.arange(SWITCH_SITES + 1, dtype=jnp.int8)
     p_stop = switch_stop_probs(switch_sites(tables, state))  # [SWITCH_SITES + 1]
     switch = jax.vmap(lambda stop: switch_action(tables, state, stop))(stops)

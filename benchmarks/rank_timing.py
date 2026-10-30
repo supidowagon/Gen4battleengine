@@ -77,8 +77,11 @@ def run_rank(n: int, devices: int | None, cache_dir: str) -> float:
         [str(ROOT / "src")] + ([env["PYTHONPATH"]] if env.get("PYTHONPATH") else [])
     )
     start = time.perf_counter()
-    subprocess.run(cmd, cwd=ROOT, env=env, check=True, stdout=subprocess.DEVNULL)
-    return time.perf_counter() - start
+    done = subprocess.run(cmd, cwd=ROOT, env=env, check=True, stdout=subprocess.PIPE, text=True)
+    elapsed = time.perf_counter() - start
+    if "playouts per action" not in done.stdout:
+        raise RuntimeError(f"nuzline rank printed no ranking:\n{done.stdout}")
+    return elapsed
 
 
 def main(argv: list[str] | None = None) -> None:

@@ -69,11 +69,13 @@ all used as host devices), jax 0.12.0.1, Windows 11.
 |--------------------------------------|-----------|----------------|
 | before (M1b Task 8)                  | 11 min 37 s (697 s) | over |
 | after, cold (empty caches)           | 69.9 s    | over by 9.9 s  |
-| after, warm (caches populated)       | 21.5 s    | met            |
+| after, warm (caches populated)       | 21.5 s    | met (warm only) |
 | target                               | 60 s      |                |
 
-The warm run meets the target; the cold run (first run on a machine, or after a code or
-table change) misses it by about 10 s.
+**Target met warm, missed cold by 10 s.** The warm run (21.5 s) is under the 60 s
+target; the cold run (first run on a machine, or after a code or table change) is
+69.9 s, about 10 s over. The milestone's headline goal is therefore met only once the
+compile and trace caches are populated, not on a fresh machine.
 
 Next levers for the cold run (spec 4.3, 6): chunked playouts with compaction, so finished
 playouts stop costing lanes, and racing, so clearly losing actions stop early. Measured

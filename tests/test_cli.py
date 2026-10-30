@@ -22,8 +22,12 @@ def _data(tables):
 
 @pytest.fixture(autouse=True)
 def _restore_xla_flags(monkeypatch):
-    """``main(["rank", ...])`` appends to ``XLA_FLAGS``; undo that after each test."""
-    monkeypatch.delenv("XLA_FLAGS", raising=False)
+    """``main(["rank", ...])`` appends to ``XLA_FLAGS``; undo that after each test.
+
+    ``setenv`` first so monkeypatch records the original state (set or absent) and
+    restores it at teardown; ``delenv`` on an absent variable alone records nothing."""
+    monkeypatch.setenv("XLA_FLAGS", "")
+    monkeypatch.delenv("XLA_FLAGS")
 
 
 def test_rank_devices_option_sets_the_flag(monkeypatch):

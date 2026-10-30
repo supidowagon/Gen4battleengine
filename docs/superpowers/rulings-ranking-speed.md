@@ -1,0 +1,7 @@
+# Controller rulings: ranking speed plan
+
+Copied from the SDD ledger for docs/superpowers/plans/2026-10-29-ranking-speed.md. Format: what was decided, why, and the cost if wrong.
+
+- Ruling: Task 1's oracle ai_action_distribution_enumerated keeps the 3840-outcome enumeration, weights and NaN rule verbatim but accumulates with the pairwise one-hot sum (_pairwise_sum) instead of .at[].add — same terms into the same actions, less float32 rounding (scatter-add order drifts ~1.9e-6, above the binding atol=1e-6) — if wrong, the oracle differs from the M1 code only in summation order, caught by the sums-to-one test.
+- Ruling: Task 3 adds `flatbuffers` as a runtime dependency (pyproject + uv.lock) and uses the documented jax.export Exported.serialize()/jax.export.deserialize() — it is the package jax.export's serialization requires, small and pure Python; pickling the private Exported dataclass (option b) depends on JAX internals and loads code from disk — overrides the plan's "no new runtime dependencies" for this one package — if wrong, one dependency to remove and the trace cache to rework.
+- Ruling: Task 3's warm-start gate is relaxed from <10 s to <15 s (measured 13.1 s: 2.4 s imports, 4.1 s require_coverage eager ops, ~6.1 s lower + XLA cache load) — the 10 s was a controller sub-target; the binding goal is the 60 s total at n=2000, which Task 4 measures — parked follow-up: compute ai_refusals' flags in one jitted call (option a, ~4 s saved), outside this plan's files — if wrong, ~4 s of startup left on the table.

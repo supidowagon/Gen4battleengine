@@ -62,6 +62,7 @@ from nuzline.data.tables import Tables
 from nuzline.engine.state import MOVES, BattleState
 
 __all__ = [
+    "ABILITY_GUESSES",
     "AI_SITE_MOVES",
     "ENUMERATION_WIDTH",
     "MAX_ENUMERATED",
@@ -117,10 +118,11 @@ _EVAL_N = jnp.array([n for n, _ in _SITES.values()], _I32)
 _EXPERT_N = jnp.array([list(e) + [0] * (_MAX_EXPERT - len(e)) for _, e in _SITES.values()], _I32)
 
 # Values each field takes, in enumeration order (roark.md 14 "AiOutcome width").
-_SIM_ROLL_VALUES, _ABILITY_VALUES, _TIEBREAK_VALUES = 1, 2, TIEBREAK_MOD
+# ABILITY_GUESSES: AiOutcome.ability_guess is 0 or 1, 1/2 each.
+_SIM_ROLL_VALUES, ABILITY_GUESSES, _TIEBREAK_VALUES = 1, 2, TIEBREAK_MOD
 _SWITCH_VALUES = SWITCH_SITES + 1
 ENUMERATION_WIDTH = math.prod(
-    (_SIM_ROLL_VALUES, _ABILITY_VALUES, 2**MAX_SCRIPT_ROLLS, _SWITCH_VALUES, _TIEBREAK_VALUES)
+    (_SIM_ROLL_VALUES, ABILITY_GUESSES, 2**MAX_SCRIPT_ROLLS, _SWITCH_VALUES, _TIEBREAK_VALUES)
 )
 # The layout is fixed, so this is a design-time invariant: widening a field range past
 # the budget is a change to this module, not a property of some fight.
@@ -238,7 +240,7 @@ def _grid() -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Every (ability_guess, script_rolls, switch_stop, tiebreak) combination,
     tiebreak fastest."""
     ability, bits, switch, tiebreak = np.meshgrid(
-        np.arange(_ABILITY_VALUES),
+        np.arange(ABILITY_GUESSES),
         np.arange(2**MAX_SCRIPT_ROLLS),
         np.arange(_SWITCH_VALUES),
         np.arange(_TIEBREAK_VALUES),
@@ -257,7 +259,7 @@ def enumerate_ai_outcomes(tables: Tables, state: BattleState) -> tuple[AiOutcome
     ability, rolls, switch, tiebreak = _grid()
     p_rolls = _roll_weights(state, rolls)
     p_switch = switch_stop_probs(switch_sites(tables, state))[jnp.asarray(switch, _I32)]
-    p_rest = jnp.asarray(TIEBREAK_P[tiebreak] / _ABILITY_VALUES, _F32)
+    p_rest = jnp.asarray(TIEBREAK_P[tiebreak] / ABILITY_GUESSES, _F32)
     outs = AiOutcome(
         sim_roll=jnp.full((ENUMERATION_WIDTH, MOVES), SIM_ROLL_MAX, _I8),
         ability_guess=jnp.asarray(ability, _I8),

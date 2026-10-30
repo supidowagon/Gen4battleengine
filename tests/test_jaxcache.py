@@ -10,7 +10,13 @@ import numpy as np
 import pytest
 
 from nuzline import jaxcache
-from nuzline.jaxcache import cache_root, cached_export, code_version, table_version
+from nuzline.jaxcache import (
+    cache_root,
+    cached_export,
+    code_version,
+    prune_other_versions,
+    table_version,
+)
 
 TABLES_DIR = Path(__file__).resolve().parents[1] / "data" / "gen4_platinum"
 
@@ -44,7 +50,16 @@ def test_table_version_changes_with_tables(tmp_path):
     assert table_version(b) != v
 
 
-def test_code_version_changes_with_source(tmp_path, monkeypatch):
+@pytest.fixture
+def fresh_code_version():
+    """``code_version`` is memoized: recompute it in the test and again after it, so a
+    monkeypatched package directory never leaks into later tests."""
+    code_version.cache_clear()
+    yield
+    code_version.cache_clear()
+
+
+def test_code_version_changes_with_source(tmp_path, monkeypatch, fresh_code_version):
     pkg = tmp_path / "nuzline"
     (pkg / "sub").mkdir(parents=True)
     (pkg / "__init__.py").write_text("")
@@ -54,9 +69,52 @@ def test_code_version_changes_with_source(tmp_path, monkeypatch):
     v = code_version()
     assert len(v) == 16
     (pkg / "notes.txt").write_text("still not source")
+    code_version.cache_clear()
     assert code_version() == v
     (pkg / "sub" / "mod.py").write_text("X = 2\n")
+    assert code_version() == v  # memoized: one hash per process
+    code_version.cache_clear()
     assert code_version() != v
+
+
+def _version_dirs(parent, *names):
+    for n in names:
+        (parent / n).mkdir(parents=True)
+        (parent / n / "entry.bin").write_bytes(b"x")
+
+
+def test_prune_other_versions_keeps_current_and_non_version_entries(tmp_path):
+    old16, old32, current = "0123456789abcdef", "fedcba9876543210" * 2, "aaaaaaaaaaaaaaaa"
+    parent = tmp_path / "jax"
+    _version_dirs(parent, old16, old32, current, "notes", "0123456789abcdeg", "0123")
+    (parent / "fedcba9876543210").write_bytes(b"a file, not a directory")
+    prune_other_versions(parent / current, root=tmp_path)
+    assert sorted(p.name for p in parent.iterdir()) == sorted(
+        [current, "notes", "0123456789abcdeg", "0123", "fedcba9876543210"]
+    )
+    assert (parent / current / "entry.bin").is_file()
+
+
+def test_prune_other_versions_never_leaves_the_cache_root(tmp_path):
+    outside = tmp_path / "elsewhere"
+    _version_dirs(outside, "0123456789abcdef", "aaaaaaaaaaaaaaaa")
+    prune_other_versions(outside / "aaaaaaaaaaaaaaaa", root=tmp_path / "cache")
+    assert (outside / "0123456789abcdef" / "entry.bin").is_file()
+    # The cache root's own siblings are outside it too.
+    root = tmp_path / "bbbbbbbbbbbbbbbb"
+    _version_dirs(tmp_path, "cccccccccccccccc")
+    prune_other_versions(root, root=root)
+    assert (tmp_path / "cccccccccccccccc" / "entry.bin").is_file()
+
+
+def test_prune_other_versions_defaults_to_the_cache_root(tmp_path, monkeypatch):
+    monkeypatch.setenv("NUZLINE_CACHE_DIR", str(tmp_path / "cache"))
+    _version_dirs(tmp_path / "cache" / "jax", "0123456789abcdef", "aaaaaaaaaaaaaaaa")
+    _version_dirs(tmp_path / "other", "0123456789abcdef", "aaaaaaaaaaaaaaaa")
+    prune_other_versions(tmp_path / "cache" / "jax" / "aaaaaaaaaaaaaaaa")
+    prune_other_versions(tmp_path / "other" / "aaaaaaaaaaaaaaaa")
+    assert not (tmp_path / "cache" / "jax" / "0123456789abcdef").exists()
+    assert (tmp_path / "other" / "0123456789abcdef").is_dir()
 
 
 @pytest.fixture
@@ -144,3 +202,62 @@ def test_cached_export_corrupt_file_recovers(export_dir):
     jaxcache._LOADED.clear()
     cached_export(f(), _args(), name="f", static={"scale": 3.0}, version="v1")
     assert fn.calls == 2  # the rewritten file loads
+
+
+def test_cached_export_program_failing_its_first_call_recovers(export_dir):
+    from functools import partial
+
+    fn = _Counted()
+
+    def f():
+        return partial(fn, scale=3.0)
+
+    cached_export(f(), _args(), name="f", static={"scale": 3.0}, version="v1")
+    (written,) = export_dir.glob("f-*.bin")
+    # A program that deserializes fine but fails when called: one for other shapes.
+    other = jax.export.export(jax.jit(f()))(*_args(8))
+    written.write_bytes(other.serialize())
+    jaxcache._LOADED.clear()
+    out = cached_export(f(), _args(), name="f", static={"scale": 3.0}, version="v1")(*_args())
+    assert fn.calls == 3  # the first export, the stand-in, and the re-export
+    np.testing.assert_array_equal(np.asarray(out["out"]), np.arange(4) * 3.0 + 1)
+    jaxcache._LOADED.clear()
+    again = cached_export(f(), _args(), name="f", static={"scale": 3.0}, version="v1")
+    np.testing.assert_array_equal(np.asarray(again(*_args())["out"]), np.arange(4) * 3.0 + 1)
+    assert fn.calls == 3  # the rewritten file loads and runs
+
+
+def test_cached_export_write_failure_still_returns_the_program(export_dir, monkeypatch):
+    from functools import partial
+
+    def fail(*_):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(jaxcache.os, "replace", fail)
+    fn = _Counted()
+    program = cached_export(
+        partial(fn, scale=2.0), _args(), name="f", static={"scale": 2.0}, version="v1"
+    )
+    np.testing.assert_array_equal(np.asarray(program(*_args())["out"]), np.arange(4) * 2.0 + 1)
+    assert list(export_dir.iterdir()) == []  # no file, and no temporary left behind
+
+
+def test_cached_export_prunes_other_versions(export_dir):
+    from functools import partial
+
+    old = export_dir.parent / "0123456789abcdef"
+    old.mkdir(parents=True)
+    (old / "f-0000000000000000.bin").write_bytes(b"stale")
+    fn = _Counted()
+    cached_export(partial(fn, scale=1.0), _args(), name="f", static={"scale": 1.0}, version="v1")
+    assert not old.exists()
+    assert len(list(export_dir.glob("f-*.bin"))) == 1
+
+
+def test_export_key_includes_the_backend(monkeypatch):
+    leaves, treedef = jax.tree.flatten(_args())
+    specs = [jaxcache._spec(leaf) for leaf in leaves]
+    key = jaxcache._export_key({"scale": 1.0}, treedef, specs)
+    assert jaxcache._export_key({"scale": 1.0}, treedef, specs) == key
+    monkeypatch.setattr(jaxcache.jax, "default_backend", lambda: "gpu")
+    assert jaxcache._export_key({"scale": 1.0}, treedef, specs) != key

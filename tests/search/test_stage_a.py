@@ -100,7 +100,7 @@ from nuzline.data.tables import load_names, load_tables
 from nuzline.search.stage_a import rank_actions
 from tests.engine.helpers import roark_state
 
-assert jax.device_count() == 4, jax.device_count()
+assert jax.device_count() == DEVICES, jax.device_count()
 tables, names = load_tables(), load_names()
 state = roark_state(tables, names)
 ranking = rank_actions(tables, names, state, n=6, key=jax.random.PRNGKey(0), max_turns=3)
@@ -108,22 +108,23 @@ print(json.dumps([astuple(r) for r in ranking]))
 """
 
 
-def test_rank_actions_same_on_multiple_devices(tables, names):
+def _rank_on_devices(devices: int) -> list:
+    """The ranking printed by ``_MULTI_DEVICE_SCRIPT`` in a subprocess with ``devices``
+    host devices (whatever ``XLA_FLAGS`` this process has)."""
     import json
     import os
     import subprocess
     import sys
-    from dataclasses import astuple
     from pathlib import Path
 
     root = Path(__file__).resolve().parents[2]
     env = {
         **os.environ,
-        "XLA_FLAGS": "--xla_force_host_platform_device_count=4",
+        "XLA_FLAGS": f"--xla_force_host_platform_device_count={devices}",
         "PYTHONPATH": os.pathsep.join([str(root / "src"), str(root)]),
     }
     done = subprocess.run(
-        [sys.executable, "-c", _MULTI_DEVICE_SCRIPT],
+        [sys.executable, "-c", f"DEVICES = {devices}\n" + _MULTI_DEVICE_SCRIPT],
         check=False,
         cwd=root,
         env=env,
@@ -131,10 +132,10 @@ def test_rank_actions_same_on_multiple_devices(tables, names):
         text=True,
     )
     assert done.returncode == 0, done.stderr
-    assert jax.device_count() == 1
-    here = rank_actions(
-        tables, names, roark_state(tables, names), n=6, key=jax.random.PRNGKey(0), max_turns=3
-    )
-    assert json.loads(done.stdout.strip().splitlines()[-1]) == json.loads(
-        json.dumps([astuple(r) for r in here])
-    )
+    return json.loads(done.stdout.strip().splitlines()[-1])
+
+
+def test_rank_actions_same_on_multiple_devices(tables):
+    # Both runs in subprocesses, so the baseline has one device whatever XLA_FLAGS the
+    # developer exported for this process.
+    assert _rank_on_devices(4) == _rank_on_devices(1)
