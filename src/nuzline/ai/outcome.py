@@ -70,11 +70,14 @@ __all__ = [
     "SWITCH_NONE",
     "SWITCH_REFUSED",
     "SWITCH_SITES",
+    "TIEBREAK_MOD",
+    "TIEBREAK_P",
     "AiOutcome",
     "SwitchSite",
     "enumerate_ai_outcomes",
     "sample_ai_outcome",
     "script_roll_count",
+    "script_roll_probs",
     "script_roll_sites",
     "script_roll_thresholds",
     "switch_stop_probs",
@@ -123,8 +126,8 @@ ENUMERATION_WIDTH = math.prod(
 # the budget is a change to this module, not a property of some fight.
 if ENUMERATION_WIDTH > MAX_ENUMERATED:
     raise RuntimeError(f"{ENUMERATION_WIDTH} AI outcome combinations > {MAX_ENUMERATED}")
-# RandNext % 12 over a uniform u16: 65536 = 12 * 5461 + 4.
-_TIEBREAK_P = np.array([5462] * 4 + [5461] * 8, np.float64) / 65536
+# P(tiebreak = t), t = 0..11: RandNext % 12 over a uniform u16, 65536 = 12 * 5461 + 4.
+TIEBREAK_P = np.array([5462] * 4 + [5461] * 8, np.float64) / 65536
 
 
 class AiOutcome(NamedTuple):
@@ -174,6 +177,17 @@ def script_roll_thresholds(state: BattleState) -> jnp.ndarray:
     slots 0-3; roark.md 8.3). 0 marks an unused entry, which never rolls 1."""
     n, target = _site_table(state.moves[1, state.active[1]])
     return jnp.zeros(MAX_SCRIPT_ROLLS, _I32).at[target].set(n, mode="drop")
+
+
+def script_roll_probs(state: BattleState) -> tuple[np.ndarray, jnp.ndarray]:
+    """Every ``script_rolls`` bit pattern, ``int8[2**MAX_SCRIPT_ROLLS, MAX_SCRIPT_ROLLS]``
+    (pattern b has bit k = ``(b >> k) & 1``), and its exact probability ``float32[...]``
+    for this state: ``prod_k`` of N_k/256 where bit k is 1, else 1 - N_k/256
+    (``script_roll_thresholds``), the weights ``enumerate_ai_outcomes`` gives them."""
+    rolls = (np.arange(2**MAX_SCRIPT_ROLLS)[:, None] >> np.arange(MAX_SCRIPT_ROLLS)) & 1
+    p_jump = script_roll_thresholds(state).astype(_F32) / 256  # [MAX_SCRIPT_ROLLS]
+    p = jnp.prod(jnp.where(jnp.asarray(rolls, _I32) == 1, p_jump, 1 - p_jump), axis=1)
+    return rolls.astype(np.int8), p
 
 
 def switch_stop_probs(switch_sites) -> jnp.ndarray:
@@ -238,7 +252,7 @@ def enumerate_ai_outcomes(tables: Tables, state: BattleState) -> tuple[AiOutcome
     rolls_j = jnp.asarray(rolls, _I32)
     p_rolls = jnp.prod(jnp.where(rolls_j == 1, p_jump, 1 - p_jump), axis=1)
     p_switch = switch_stop_probs(switch_sites(tables, state))[jnp.asarray(switch, _I32)]
-    p_rest = jnp.asarray(_TIEBREAK_P[tiebreak] / _ABILITY_VALUES, _F32)
+    p_rest = jnp.asarray(TIEBREAK_P[tiebreak] / _ABILITY_VALUES, _F32)
     outs = AiOutcome(
         sim_roll=jnp.full((ENUMERATION_WIDTH, MOVES), SIM_ROLL_MAX, _I8),
         ability_guess=jnp.asarray(ability, _I8),

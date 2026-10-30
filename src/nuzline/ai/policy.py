@@ -44,11 +44,24 @@ from nuzline.ai import switching
 from nuzline.ai.commands import AiContext, BattleEffect, Battler, LoadType, TypeMulti
 from nuzline.ai.outcome import (
     MAX_SCRIPT_ROLLS,
+    SIM_ROLL_MAX,
+    SWITCH_NONE,
+    SWITCH_SITES,
+    TIEBREAK_MOD,
+    TIEBREAK_P,
     AiOutcome,
     enumerate_ai_outcomes,
     script_roll_count,
+    script_roll_probs,
+    switch_stop_probs,
 )
-from nuzline.ai.switching import NO_SWITCH, REFUSED_ACTION, switch_action, switching_refusals
+from nuzline.ai.switching import (
+    NO_SWITCH,
+    REFUSED_ACTION,
+    switch_action,
+    switch_sites,
+    switching_refusals,
+)
 from nuzline.data.tables import Tables
 from nuzline.engine.actions import FIRST_ITEM_ACTION, NUM_OPP_ACTIONS, usable_moves
 from nuzline.engine.ids import POTION_HP_RESTORED, Stat, TrainerItemId
@@ -58,6 +71,7 @@ __all__ = [
     "NO_ITEM",
     "UnsupportedAi",
     "ai_action_distribution",
+    "ai_action_distribution_enumerated",
     "ai_policy",
     "ai_refusals",
     "ai_scores",
@@ -554,16 +568,87 @@ def ai_policy(tables: Tables, state: BattleState, ai_outcome: AiOutcome) -> jnp.
 
 
 @jax.jit
-def _distribution(tables: Tables, state: BattleState) -> jnp.ndarray:
+def ai_action_distribution_enumerated(tables: Tables, state: BattleState) -> jnp.ndarray:
+    """``float32[NUM_OPP_ACTIONS]``: the opponent's action distribution by brute force,
+    ``ai_policy`` under ``vmap`` over every ``AiOutcome`` of ``enumerate_ai_outcomes``
+    (3840) weighted by its probability; NaN when any outcome's action is refused. It is
+    the test oracle of the factored ``ai_action_distribution`` (``tests/ai``), kept
+    because it shares no reasoning with the factoring. Always traced (``jax.jit``), so
+    it never raises: a refused state gives NaN. The 3840 terms are summed pairwise
+    (``_pairwise_sum``): a sequential float32 sum drifts by about 2e-6."""
     outcomes, probs = enumerate_ai_outcomes(tables, state)
     actions = jax.vmap(lambda o: _policy(tables, state, o))(outcomes)
-    dist = jnp.zeros(NUM_OPP_ACTIONS, jnp.float32).at[jnp.maximum(actions, 0)].add(probs)
+    terms = jnp.where(actions[:, None] == jnp.arange(NUM_OPP_ACTIONS), probs[:, None], 0)
+    dist = _pairwise_sum(terms.astype(jnp.float32))
     return jnp.where(jnp.any(actions < 0), jnp.nan, dist)  # refused (traced only)
 
 
+def _pairwise_sum(x: jnp.ndarray) -> jnp.ndarray:
+    """The sum over axis 0 as a balanced binary tree (zero-padded to a power of two):
+    float32 rounding error O(log n) instead of O(n)."""
+    pad = (1 << (len(x) - 1).bit_length()) - len(x)
+    x = jnp.concatenate([x, jnp.zeros((pad, *x.shape[1:]), x.dtype)])
+    while len(x) > 1:
+        x = x[0::2] + x[1::2]
+    return x[0]
+
+
+_GUESSES = 2  # AiOutcome.ability_guess: 0 or 1, 1/2 each
+
+
+def _move_distribution(tables: Tables, state: BattleState) -> jnp.ndarray:
+    """``float32[MOVES]``: the distribution of ``TrainerAI_Main``'s move pick, over the
+    only draws ``_scores`` and ``_pick`` read: ``ability_guess`` x ``script_rolls``
+    (32 scorings) and, for each scoring, ``tiebreak`` through ``_pick`` itself."""
+    rolls, p_rolls = script_roll_probs(state)  # [16, 4], [16]
+    n = _GUESSES * len(rolls)
+    outcomes = AiOutcome(
+        sim_roll=jnp.full((n, MOVES), SIM_ROLL_MAX, jnp.int8),
+        ability_guess=jnp.repeat(jnp.arange(_GUESSES, dtype=jnp.int8), len(rolls)),
+        script_rolls=jnp.tile(jnp.asarray(rolls), (_GUESSES, 1)),
+        tiebreak=jnp.zeros(n, jnp.int8),  # _scores does not read it
+        switch_stop=jnp.full(n, SWITCH_NONE, jnp.int8),  # nor this
+    )
+    scores = jax.vmap(lambda o: _scores(tables, state, o))(outcomes)  # [32, MOVES]
+    tiebreaks = jnp.arange(TIEBREAK_MOD, dtype=jnp.int8)
+    picks = jax.vmap(  # [32, TIEBREAK_MOD]
+        lambda sc: jax.vmap(lambda t: _pick(tables, state, sc, t))(tiebreaks)
+    )(scores)
+    p_tiebreak = jnp.asarray(TIEBREAK_P, jnp.float32)
+    shares = jnp.einsum("t,stm->sm", p_tiebreak, jax.nn.one_hot(picks, MOVES))  # [32, MOVES]
+    weight = jnp.tile(p_rolls, _GUESSES) / _GUESSES  # [32]
+    return weight @ shares
+
+
+@jax.jit
+def _distribution(tables: Tables, state: BattleState) -> jnp.ndarray:
+    """The exact distribution, factored as ``_policy`` decides (roark.md 2): the switch
+    when ``switch_stop`` means one, else the item when ``_use_item`` gives one, else the
+    move pick. The switch reads only ``switch_stop``, the item no draw, the move pick
+    only ``ability_guess``, ``script_rolls`` and ``tiebreak``, so the 3840 outcomes of
+    ``ai_action_distribution_enumerated`` reduce to 10 switch stops and 32 scorings.
+    NaN exactly where the enumeration gives NaN: a refused state, or a refused switch
+    layout (``switch_action`` gives ``REFUSED_ACTION`` for every stop)."""
+    stops = jnp.arange(SWITCH_SITES + 1, dtype=jnp.int8)
+    p_stop = switch_stop_probs(switch_sites(tables, state))  # [SWITCH_SITES + 1]
+    switch = jax.vmap(lambda stop: switch_action(tables, state, stop))(stops)
+    switches = switch >= 0
+    dist = jnp.zeros(NUM_OPP_ACTIONS, jnp.float32)
+    dist = dist.at[jnp.where(switches, switch, 0)].add(jnp.where(switches, p_stop, 0))
+    p_stay = jnp.sum(jnp.where(switch == NO_SWITCH, p_stop, 0))
+    item = _use_item(tables, state)
+    moves = (
+        jnp.zeros(NUM_OPP_ACTIONS, jnp.float32).at[:MOVES].set(_move_distribution(tables, state))
+    )
+    stay = jnp.where(item != NO_ITEM, jax.nn.one_hot(item, NUM_OPP_ACTIONS), moves)
+    refused = _refused(tables, state).any | jnp.any(switch == REFUSED_ACTION)
+    return jnp.where(refused, jnp.nan, dist + p_stay * stay)
+
+
 def ai_action_distribution(tables: Tables, state: BattleState) -> jnp.ndarray:
-    """``float32[NUM_OPP_ACTIONS]``: the exact probability of each opponent action, over
-    every ``AiOutcome`` (``enumerate_ai_outcomes``) under ``vmap``. Raises
-    ``UnsupportedAi`` on a refused state."""
+    """``float32[NUM_OPP_ACTIONS]``: the exact probability of each opponent action over
+    every ``AiOutcome``, computed factored (``_distribution``: 32 scorings instead of
+    the 3840 outcomes of ``ai_action_distribution_enumerated``, which it equals).
+    Raises ``UnsupportedAi`` on a refused concrete state; NaN when traced."""
     _check(tables, state, ai_refusals)
     return _distribution(tables, state)
