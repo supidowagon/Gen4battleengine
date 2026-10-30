@@ -54,3 +54,31 @@ batched playout (`stage_a._playouts`: `step` plus `ai_policy` inside a 100-turn 
 so both compile time and per-playout throughput need work. This is the first target
 for the per-fight specialization of spec §4.2 (compile only the move effects, abilities
 and items present in the fight, and Roark's AI script paths).
+
+## After the ranking speed work (branch perf-ranking)
+
+    uv run python -m benchmarks.rank_timing --n 2000
+
+Runs the command above twice in subprocesses sharing a fresh temporary `NUZLINE_CACHE_DIR`
+(cold: empty compile and trace caches; warm: the second run reuses them) and writes
+`benchmarks/results/rank_<timestamp>.json` (gitignored). Same fight and `n` as the table
+above, measured 2026-10-29 on a 13th Gen Intel(R) Core(TM) i5-13600K (20 logical CPUs,
+all used as host devices), jax 0.12.0.1, Windows 11.
+
+| run                                  | wall time | vs 60 s target |
+|--------------------------------------|-----------|----------------|
+| before (M1b Task 8)                  | 11 min 37 s (697 s) | over |
+| after, cold (empty caches)           | 69.9 s    | over by 9.9 s  |
+| after, warm (caches populated)       | 21.5 s    | met            |
+| target                               | 60 s      |                |
+
+The warm run meets the target; the cold run (first run on a machine, or after a code or
+table change) misses it by about 10 s.
+
+Next levers for the cold run (spec 4.3, 6): chunked playouts with compaction, so finished
+playouts stop costing lanes, and racing, so clearly losing actions stop early. Measured
+playout lengths for this fight (2000 playouts x 9 actions, 100-turn cap): mean 8.9 turns,
+max 21, none reach the cap, so the 100-turn loop runs far longer than most playouts need.
+
+Known follow-up: `require_coverage` compiles eager ops inside `ai_refusals` (about 4 s of
+startup, warm included); computing its flags in one jitted call would remove that.
