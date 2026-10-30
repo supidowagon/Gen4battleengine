@@ -12,6 +12,7 @@ dist/
 data/intermediate/
 data/gen4_platinum/*.npz
 runs/
+.cache/
 benchmarks/results/
 
 # External sources (cloned separately)

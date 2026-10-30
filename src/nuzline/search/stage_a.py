@@ -31,6 +31,7 @@ from nuzline.ai.policy import UnsupportedAi
 from nuzline.data.tables import Names, Tables
 from nuzline.engine.actions import MOVE_ACTIONS, NUM_ACTIONS, legal_actions, usable_moves
 from nuzline.engine.state import BattleState
+from nuzline.jaxcache import cached_export, code_version
 from nuzline.search.playout import PlayoutResult, playout_from_action, refusal_reason
 
 __all__ = ["ActionResult", "Ranking", "rank_actions", "wilson"]
@@ -82,9 +83,14 @@ def wilson(k: int, n: int, z: float = 1.96) -> tuple[float, float]:
     return lo, hi
 
 
-@partial(jax.jit, static_argnames=("max_turns",))
+# The pytrees of ``_playouts``' arguments and result, for ``jax.export`` serialization.
+for _cls in (Tables, BattleState, PlayoutResult):
+    jax.export.register_namedtuple_serialization(_cls, serialized_name=f"nuzline.{_cls.__name__}")
+
+
 def _playouts(tables: Tables, state: BattleState, actions, keys, max_turns: int) -> PlayoutResult:
-    """``PlayoutResult`` of shape ``[A, n]``: every action against every key."""
+    """``PlayoutResult`` of shape ``[A, n]``: every action against every key. Run
+    through ``cached_export`` (traced once per shape, sharding and source version)."""
 
     def per_action(action):
         return jax.vmap(lambda k: playout_from_action(tables, state, action, k, max_turns))(keys)
@@ -124,7 +130,15 @@ def rank_actions(
     # compile, does not depend on how many actions are legal; the padding is dropped.
     padded = np.full(NUM_ACTIONS, legal[0], np.int32)
     padded[: legal.size] = legal
-    out = jax.device_get(_playouts(tables, state, jnp.asarray(padded), sharded_keys, max_turns))
+    args = (tables, state, jnp.asarray(padded), sharded_keys)
+    playouts = cached_export(
+        partial(_playouts, max_turns=max_turns),
+        args,
+        name="playouts",
+        static={"max_turns": max_turns},
+        version=code_version(),
+    )
+    out = jax.device_get(playouts(*args))
     out = jax.tree.map(lambda x: x[:, :n], out)
     refused = np.asarray(out.refused).astype(bool)
     results = []

@@ -147,12 +147,16 @@ def _rank(args) -> int:
     import jax
 
     from nuzline.ai.policy import UnsupportedAi
+    from nuzline.data import tables as tables_module
     from nuzline.engine.coverage import UnsupportedMechanics, require_coverage
     from nuzline.engine.state import make_state
+    from nuzline.jaxcache import code_version, enable_compile_cache, table_version
     from nuzline.search.stage_a import rank_actions
 
     if args.n < 1:
         raise ValueError("--n must be at least 1")
+    # Before anything compiles: JAX opens the persistent cache at the first compile.
+    enable_compile_cache(table_version(tables_module.DEFAULT) + code_version())
     tables, names, trainer, player, opp, weather = _fight(args)
     leads = (args.lead, args.opp_active)
     print(_trainer_line(trainer))
