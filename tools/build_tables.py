@@ -19,6 +19,10 @@ Encodings:
 * ``item_param[item]``: ``(decomp hold param, 0)`` for supported items, else zeros.
 * ``trainer_item_effect[item]``: ``ids.TrainerItemId`` of the item used from a trainer's
   bag (``DECOMP_TRAINER_ITEM_TO_ID``).
+* ``species_exp_rate[species]``: growth rate id (``generated/exp_rates.txt`` order: 0 medium
+  fast, 1 erratic, 2 fluctuating, 3 medium slow, 4 fast, 5 slow); ``exp_table[rate, level]``
+  is the experience for ``level`` 0..100 (``exp_tables.csv``, same rate order).
+* ``manifest["charmap"]``: text code (hex string) -> character, for decoding nicknames.
 * ``species_friendship`` is int16, not int8: base friendship reaches 140.
 * ``species_abilities_decomp[species, slot]``: the decomp's own ability ids (0 =
   ``ABILITY_NONE``), next to ``species_abilities``' engine ids, so the trainer AI can
@@ -49,7 +53,7 @@ from tools.effect_map import (
     UNSUPPORTED_MOVES,
 )
 
-MANIFEST_VERSION = 5
+MANIFEST_VERSION = 6
 CLONE_SCRIPT = Path(__file__).with_name("clone_decomp.sh")
 
 # generated/move_classes.txt order.
@@ -122,6 +126,8 @@ def build_arrays(inter: Path) -> tuple[dict[str, np.ndarray], dict]:
     abilities = _load(inter, "abilities")
     types = _load(inter, "types")
     natures = _load(inter, "natures")
+    exp_tables = _load(inter, "exp_tables")
+    charmap = _load(inter, "charmap")
 
     move_names = {m["name"] for m in moves}
     missing = sorted(
@@ -174,6 +180,8 @@ def build_arrays(inter: Path) -> tuple[dict[str, np.ndarray], dict]:
         "species_weight": _arr([s["weight_hg"] for s in species], np.int32, "weight"),
         "species_gender": _arr([s["gender_ratio"] for s in species], np.int16, "gender"),
         "species_friendship": _arr([s["base_friendship"] for s in species], np.int16, "friendship"),
+        "species_exp_rate": _arr([s["exp_rate"] for s in species], np.int8, "exp rate"),
+        "exp_table": _arr(exp_tables, np.int32, "exp table"),
         "move_power": _arr([m["power"] for m in moves], np.int16, "power"),
         "move_type": _arr([m["type"] for m in moves], np.int8, "move type"),
         "move_category": _arr([m["category"] for m in moves], np.int8, "category"),
@@ -214,6 +222,7 @@ def build_arrays(inter: Path) -> tuple[dict[str, np.ndarray], dict]:
         "nature_names": [n["name"] for n in natures],
         "category_names": list(MOVE_CATEGORIES),
         "target_names": list(MOVE_TARGETS),
+        "charmap": charmap,
     }
     return arrays, manifest
 
