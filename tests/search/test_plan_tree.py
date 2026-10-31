@@ -4,6 +4,7 @@ the rendered layout and a root with a single action."""
 
 from __future__ import annotations
 
+import dataclasses
 import json
 
 import jax
@@ -12,7 +13,7 @@ import pytest
 
 from nuzline.search.leaves import LeafValue
 from nuzline.search.plan_tree import label, render, to_json
-from nuzline.search.stage_b import SolveSettings, solve
+from nuzline.search.stage_b import PlanNode, SolveSettings, solve
 from tests.engine.helpers import roark_state
 
 KEY = jax.random.PRNGKey(0)
@@ -69,9 +70,12 @@ def test_label_reads_the_observation(roark, names):
 
 def test_json_roundtrip(roark, names):
     state, result = roark
-    tree = to_json(result, names, root=state)
+    tree = to_json(result, names, root=state, table_version="0123456789abcdef")
     again = json.loads(json.dumps(tree))
     assert again == tree
+    assert again["table_version"] == "0123456789abcdef"  # the solve's tables, as given
+    assert to_json(result, names, root=state)["table_version"] is None
+    assert again["leaf_budget"] == result.leaf_budget == 100
 
     def count(node):
         return 1 + sum(count(k) for kids in node["children"].values() for k in kids)
@@ -81,10 +85,12 @@ def test_json_roundtrip(roark, names):
     assert len(again["ranking"]) == len(result.ranking) and again["dropped"] == []
     assert again["table_version"] and again["code_version"]
     assert again["settings"]["max_depth"] == 1
+    assert again["plan"]["depth"] == 0
     stack = [again["plan"]]
     while stack:
         node = stack.pop()
         for kids in node["children"].values():
+            assert all(k["depth"] == node["depth"] + 1 for k in kids)
             assert sum(k["prob"] for k in kids) == pytest.approx(
                 node["prob"], abs=1e-6
             )  # AI rows are float32
@@ -140,3 +146,45 @@ def test_siblings_differing_only_in_hidden_label_fields_are_named(roark, names):
     assert any("foe Spe -1" in lab for lab in labels)
     assert any("foe confused" in lab for lab in labels)
     assert decode(kids[0].obs)["stages"].sum() == decode(base)["stages"].sum()
+
+
+def test_unexpanded_siblings_name_the_opponent_action(roark, names):
+    """Nodes with no observation (pruned opponent actions, a sampled pair, an AI refused
+    below the root) are labelled by the opponent action they stand for, with the kind
+    printed once per line, and stay distinct."""
+    state, result = roark
+    best = result.ranking[0].action
+
+    def forced(o: int, text: str, kind: str) -> PlanNode:
+        return PlanNode(None, 0.01, None, {}, {}, kind, opp_action=o, opp_label=text)
+
+    kids = [
+        forced(0, "Geodude uses Tackle", "pruned"),
+        forced(1, "Geodude uses Rock Throw", "pruned"),
+        forced(2, "Geodude uses Rock Throw", "sampled"),
+        PlanNode(None, 0.01, None, {}, {}, "refused"),
+    ]
+    plan = dataclasses.replace(result.plan, children={best: kids})
+    fake = dataclasses.replace(result, plan=plan)
+    lines = [line.strip() for line in render(fake, names, 1, root=state) if "  if " in line]
+    assert len(lines) == len(kids) and len(set(lines)) == len(lines), lines
+    assert lines[0].startswith("if Geodude uses Tackle  [")
+    assert lines[1].startswith("if Geodude uses Rock Throw  [")
+    assert lines[3].startswith("if the foe's AI is not modelled here  [")
+    for line, text in zip(lines, ("unexplored", "unexplored", "sampled", "refused"), strict=True):
+        assert line.count(text) == 1, line
+        assert "#" not in line, line
+    tree = to_json(fake, names, root=state)
+    (json_kids,) = tree["plan"]["children"].values()
+    labels = [k["label"] for k in json_kids]
+    assert len(set(labels)) == len(labels), labels
+    assert labels[0] == "Geodude uses Tackle" and "[" not in "".join(labels), labels
+    assert [k["opp_action"] for k in json_kids] == [0, 1, 2, None]
+
+
+def test_render_shows_the_sampled_node_count(roark, names):
+    state, result = roark
+    rows = [dataclasses.replace(r, sampled=0.0123, sampled_nodes=3) for r in result.ranking]
+    lines = render(dataclasses.replace(result, ranking=rows), names, 0, root=state)
+    assert "sampled (nodes)" in lines[1]
+    assert "1.2 % (3)" in lines[2]

@@ -60,7 +60,7 @@ from __future__ import annotations
 import math
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import jax
 import numpy as np
@@ -72,11 +72,12 @@ from nuzline.engine.actions import FIRST_ITEM_ACTION, MOVE_ACTIONS, legal_action
 from nuzline.engine.enumerate import SamplingOnly
 from nuzline.engine.state import BattleState
 from nuzline.engine.step import WINNER_PLAYER
-from nuzline.search.expand import _concat, _row_bytes, _take, ai_rows, expand
+from nuzline.search.expand import ai_rows, expand
 from nuzline.search.leaves import LeafValue, allocate, evaluate_forced, evaluate_leaves
-from nuzline.search.stage_a import _label, rank_actions
+from nuzline.search.rows import concat, row_bytes, take
+from nuzline.search.stage_a import action_label, rank_actions, tied_with
 
-__all__ = ["ActionValue", "PlanNode", "SolveResult", "SolveSettings", "solve"]
+__all__ = ["ActionValue", "HiddenLegality", "PlanNode", "SolveResult", "SolveSettings", "solve"]
 
 Z = 1.96  # 95 % normal interval (ruling 6)
 
@@ -105,7 +106,8 @@ class ActionValue:
     """One ranked root action. ``estimate``: P(win with zero player faints) under the
     plan, half-B values; ``ci_low``/``ci_high`` its 95 % interval (ruling 6);
     ``lower_bound``: the estimate with pruned and sampled nodes counted 0; ``unexplored``,
-    ``sampled``, ``refused``: the summed reach of those nodes in the action's plan."""
+    ``sampled``, ``refused``: the summed reach of those nodes in the action's plan;
+    ``sampled_nodes``: how many sampled nodes that is (spec section 1)."""
 
     action: int
     label: str
@@ -117,6 +119,7 @@ class ActionValue:
     sampled: float
     refused: float
     tied_with_best: bool
+    sampled_nodes: int = 0
 
 
 @dataclass
@@ -128,7 +131,10 @@ class PlanNode:
     half-B value given the node is reached. ``children``: per player action, the child
     nodes (at the root every ranked action; at an inner decision node only the chosen
     one; other kinds none). ``kind``: ``decision``, ``leaf``, ``terminal``, ``pruned``,
-    ``refused`` or ``sampled`` (module docstring)."""
+    ``refused`` or ``sampled`` (module docstring). ``opp_action``/``opp_label``: for a
+    node of one opponent action not expanded into observations (a pruned opponent
+    action, a sampled pair, or either refused by its evaluation), that action and its
+    text, e.g. ``Geodude uses Rock Throw``; ``None`` otherwise."""
 
     obs: bytes | None
     prob: float
@@ -136,13 +142,17 @@ class PlanNode:
     values: dict[int, float]
     children: dict[int, list[PlanNode]]
     kind: str
+    opp_action: int | None = None
+    opp_label: str | None = None
 
 
 @dataclass
 class SolveResult:
     """``ranking``: the root actions, best first; ``dropped``: root actions left out, with
     the reason; ``depth``: the deepest completed pass; ``playouts``: every playout run,
-    over all passes; ``seconds``: wall time (not compared: equal solves differ in it)."""
+    over all passes; ``seconds``: wall time (not compared: equal solves differ in it);
+    ``leaf_budget``: the leaf budget ``B_d`` every pass used (``None`` at depth 0, where
+    Stage A runs ``n_depth0`` playouts per action instead; ruling 7)."""
 
     ranking: list[ActionValue]
     dropped: dict[int, str]
@@ -151,6 +161,15 @@ class SolveResult:
     playouts: int
     seconds: float = field(compare=False)
     settings: SolveSettings
+    leaf_budget: int | None = None
+
+
+class HiddenLegality(Exception):
+    """The states of one belief node differ in the player's legal actions: the player
+    could tell them apart by the move menu, so the observation misses something visible
+    (spec section 3 assumes legality is observable; a hidden lock such as Encore,
+    Disable or a choice item would do this). The plan cannot be one action per
+    observation, so the solve stops."""
 
 
 @dataclass
@@ -180,7 +199,7 @@ class _Store:
 
     def add(self, batch: BattleState) -> list[int]:
         n = len(batch.hp)
-        keys = _row_bytes(batch, n)
+        keys = row_bytes(batch, n)
         out, new = [], []
         for i in range(n):
             k = keys[i].tobytes()
@@ -190,7 +209,7 @@ class _Store:
                 new.append(i)
             out.append(sid)
         if new:
-            part = _take(batch, np.asarray(new))
+            part = take(batch, np.asarray(new))
             over = np.asarray(part.over) != 0
             self.parts.append(part)
             self.over.extend(over.tolist())
@@ -200,9 +219,9 @@ class _Store:
 
     def take(self, ids) -> BattleState:
         if self._all is None:
-            self._all = _concat(self.parts)
+            self._all = concat(self.parts)
             self.parts = [self._all]
-        return _take(self._all, np.asarray(ids, np.int64))
+        return take(self._all, np.asarray(ids, np.int64))
 
 
 _legal_jit = jax.jit(lambda tables, state: legal_actions(tables, state, 0))
@@ -217,6 +236,17 @@ def _opp_label(names: Names, state: BattleState, o: int) -> str:
     return names.item_names[int(state.trainer_items[1, o - FIRST_ITEM_ACTION])]
 
 
+def _opp_phrase(names: Names, state: BattleState, o: int) -> str:
+    """Opponent action ``o`` at ``state`` as a plan label: ``Geodude uses Rock Throw``,
+    ``the foe switches to Onix``, ``the foe uses Potion``."""
+    if o < MOVE_ACTIONS:
+        mon = names.species_names[int(state.species[1, int(state.active[1])])]
+        return f"{mon} uses {_opp_label(names, state, o)}"
+    if o < FIRST_ITEM_ACTION:
+        return f"the foe {_opp_label(names, state, o).replace('switch', 'switches', 1)}"
+    return f"the foe uses {_opp_label(names, state, o)}"
+
+
 def _mass(nodes: list[PlanNode], kind: str) -> float:
     """Summed ``prob`` of the ``kind`` nodes under ``nodes``, following the children the
     plan keeps (the chosen action at inner decision nodes)."""
@@ -227,6 +257,14 @@ def _mass(nodes: list[PlanNode], kind: str) -> float:
         for kids in node.children.values():
             total += _mass(kids, kind)
     return total
+
+
+def _count(nodes: list[PlanNode], kind: str) -> int:
+    """How many ``kind`` nodes ``_mass`` sums over."""
+    return sum(
+        (node.kind == kind) + sum(_count(kids, kind) for kids in node.children.values())
+        for node in nodes
+    )
 
 
 class _Solver:
@@ -242,7 +280,14 @@ class _Solver:
         self.playouts = 0
 
     def _label(self, a: int) -> str:
-        return _label(self.names, self.root, a, self.struggle)
+        return action_label(self.names, self.root, a, self.struggle)
+
+    def _forced_plan(self, forced: tuple[int, int, int], prob: float, kind: str) -> PlanNode:
+        """The plan node of a forced (state, player, opponent) evaluation, naming the
+        opponent action."""
+        s, _, o = forced
+        text = _opp_phrase(self.names, _first(self.store.take([s])), o)
+        return PlanNode(None, prob, None, {}, {}, kind, opp_action=o, opp_label=text)
 
     # -- expansion ------------------------------------------------------------------------
 
@@ -252,6 +297,20 @@ class _Solver:
             mask = np.asarray(_legal_jit(self.tables, state))
             self.legal[sid] = np.flatnonzero(mask).tolist()
         return self.legal[sid]
+
+    def _node_legal(self, node: _Node) -> list[int]:
+        """The player's legal actions at belief node ``node``: equal over its states
+        (spec section 3), else ``HiddenLegality``."""
+        sids = iter(node.states)
+        first = next(sids)
+        legal = self._legal(first)
+        for sid in sids:
+            if self._legal(sid) != legal:
+                raise HiddenLegality(
+                    f"states {first} and {sid} of one belief node have the legal actions "
+                    f"{legal} and {self._legal(sid)}: the observation hides the move menu"
+                )
+        return legal
 
     def _ai_rows(self, sids: list[int]) -> None:
         need = [s for s in dict.fromkeys(sids) if s not in self.ai]
@@ -283,7 +342,7 @@ class _Solver:
             raise UnsupportedAi("; ".join(reasons) or "the AI's action distribution is refused")
         requests = {}
         for node in frontier:
-            node.legal = self._legal(next(iter(node.states)))
+            node.legal = self._node_legal(node)
             for a in node.legal:
                 for s, w in node.states.items():
                     q = self.ai[s]
@@ -380,8 +439,8 @@ class _Solver:
         if node.forced is not None:
             i, value = forced[node.forced]
             if value.refused:
-                return 0.0, 0.0, 0.0, {}, [PlanNode(None, prob, None, {}, {}, "refused")]
-            plan = [PlanNode(None, prob, None, {}, {}, kind)]
+                return 0.0, 0.0, 0.0, {}, [self._forced_plan(node.forced, prob, "refused")]
+            plan = [self._forced_plan(node.forced, prob, kind)]
             return prob * value.p_a, prob * value.p_b, 0.0, {("F", i): prob}, plan
         if kind in ("leaf", "pruned"):
             a_sum, b_sum, weights, kept, lost = 0.0, 0.0, {}, [], []
@@ -482,6 +541,7 @@ class _Solver:
                     sampled=_mass(plan, "sampled"),
                     refused=_mass(plan, "refused"),
                     tied_with_best=False,
+                    sampled_nodes=_count(plan, "sampled"),
                 )
             )
         ranking = _rank(rows)
@@ -502,16 +562,12 @@ def _first(batch: BattleState) -> BattleState:
 
 def _rank(rows: list[ActionValue]) -> list[ActionValue]:
     """Sorted by ``(-estimate, action)``; ``tied_with_best`` as ``stage_a.Ranking.of``:
-    not the leader, interval overlapping the leader's."""
+    not the leader, interval overlapping the leader's (``stage_a.tied_with``)."""
     rows = sorted(rows, key=lambda r: (-r.estimate, r.action))
     if not rows:
         return rows
     best = rows[0]
-    out = [best]
-    for r in rows[1:]:
-        tied = r.ci_high >= best.ci_low and r.ci_low <= best.ci_high
-        out.append(ActionValue(**{**r.__dict__, "tied_with_best": tied}))
-    return out
+    return [best] + [replace(r, tied_with_best=tied_with(r, best)) for r in rows[1:]]
 
 
 def _stage_a(tables, names, state, key, settings: SolveSettings, start: float) -> SolveResult:
@@ -558,9 +614,16 @@ def solve(
     evaluated states (numpy, one row each), ``weights`` their ruling-8 chance weights (0
     for pruned and sampled evaluations), ``pairs`` ``None`` for post-turn leaves and
     ``int32[N, 2]`` for forced (player, opponent) evaluations. Raises ``UnsupportedAi``
-    when the AI is refused at the root."""
+    when the AI is refused at the root and ``HiddenLegality`` when the states of a belief
+    node differ in the player's legal actions."""
     start = time.perf_counter()
-    if settings.max_depth < 0 or settings.leaf_floor < 1 or settings.epsilon < 0:
+    if (
+        settings.max_depth < 0
+        or settings.leaf_floor < 1
+        or settings.epsilon < 0
+        or (settings.budget_playouts is not None and settings.budget_playouts < 1)
+        or (settings.budget_seconds is not None and settings.budget_seconds < 0)
+    ):
         raise ValueError(f"invalid settings {settings}")
     if settings.max_depth == 0:
         return _stage_a(tables, names, state, key, settings, start)
@@ -579,6 +642,5 @@ def solve(
             break
         result = (depth, *solver.run(depth, jax.random.fold_in(key, depth), budget))
     depth, ranking, dropped, plan = result
-    return SolveResult(
-        ranking, dropped, depth, plan, solver.playouts, time.perf_counter() - start, settings
-    )
+    seconds = time.perf_counter() - start
+    return SolveResult(ranking, dropped, depth, plan, solver.playouts, seconds, settings, budget)

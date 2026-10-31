@@ -15,8 +15,9 @@ from nuzline.engine.step import WINNER_PLAYER
 from nuzline.search import stage_b
 from nuzline.search.expand import ai_rows, expand
 from nuzline.search.leaves import LeafValue
+from nuzline.search.plan_tree import render
 from nuzline.search.stage_a import ActionResult, Ranking
-from nuzline.search.stage_b import PlanNode, SolveSettings, solve
+from nuzline.search.stage_b import HiddenLegality, PlanNode, SolveSettings, solve
 from tests.engine.helpers import roark_real_state, roark_state
 from tests.search.exhaustive import children, exhaustive
 from tests.search.fixtures import (
@@ -117,6 +118,10 @@ def test_depth0_is_stage_a(tables, names, monkeypatch):
         assert r.unexplored == r.sampled == r.refused == 0
     assert set(result.plan.children) == {0, 2, 5}
     assert result.playouts == 200 * len(canned)
+    # No leaf budget at depth 0: the footer names Stage A's playouts per action.
+    assert result.leaf_budget is None
+    footer = render(result, names, 1)[-1]
+    assert "Stage A (depth 0): 200 playouts per action" in footer and "leaf budget" not in footer
 
 
 def test_matches_exhaustive_on_endgames(tables, endgame_solves):
@@ -282,3 +287,64 @@ def test_reproducible(tables, names, monkeypatch):
     assert a == b
     assert a.playouts >= 2000
     assert a.ranking and all(r.ci_low <= r.estimate <= r.ci_high for r in a.ranking)
+
+
+def test_hidden_legality_raises(tables, names):
+    # Spec section 3 assumes the player's legality is observable; a constructed belief
+    # node whose two states differ in it (the per-sid cache seeded) must stop the solve.
+    state = roark_state(tables, names)
+    solver = stage_b._Solver(tables, names, batch(state), SMALL, None)
+    solver.legal.update({1: [0, 1, 2], 2: [0, 1, 2], 3: [0, 1]})
+    same = stage_b._Node("decision", b"", 1.0, states={1: 0.5, 2: 0.5})
+    assert solver._node_legal(same) == [0, 1, 2]
+    mixed = stage_b._Node("decision", b"", 1.0, states={1: 0.5, 3: 0.5})
+    with pytest.raises(HiddenLegality, match="legal actions"):
+        solver._node_legal(mixed)
+
+
+def test_default_forced_evaluations_get_the_floor(tables, names, monkeypatch):
+    """The default evaluator's forced path inside ``solve``: every pruned opponent action
+    is evaluated with exactly ``2 * leaf_floor`` playouts (ruling 8), and the default leaf
+    budget is ``n_depth0`` per legal root action."""
+    calls = []
+    real = stage_b.evaluate_forced
+
+    def spy(tables, states, pairs, counts, key, max_turns):
+        values = real(tables, states, pairs, counts, key, max_turns)
+        calls.append((np.asarray(pairs), np.asarray(counts), values))
+        return values
+
+    monkeypatch.setattr(stage_b, "evaluate_forced", spy)
+    state = roark_real_state(tables, names)
+    # Roark's AI row here is 3/4, 1/4: epsilon 0.3 prunes one opponent action per action.
+    settings = SolveSettings(max_depth=1, epsilon=0.3, n_depth0=20, max_turns=TURNS)
+    result = solve(tables, names, state, KEY, settings)
+    ((pairs, counts, values),) = calls
+    assert len(pairs) == len(counts) == len(values) > 0
+    assert np.all(counts == 2 * settings.leaf_floor)
+    assert all(v.n_a == v.n_b == settings.leaf_floor for v in values)
+    n_legal = len(result.ranking) + len(result.dropped)
+    assert result.leaf_budget == settings.n_depth0 * n_legal
+    pruned = [n for n in plan_nodes([result.plan]) if n.kind == "pruned" and n.obs is None]
+    assert pruned and all(n.opp_action is not None and n.opp_label for n in pruned)
+
+
+def test_sampled_nodes_below_the_root(tables, names):
+    # The player alone knows Spike Cannon (as in test_dropped_root_action): dropped at the
+    # root, sampling-only at every depth-1 node, where every value 1 makes it the chosen
+    # action (the lowest of tied actions), so the plan keeps sampled nodes.
+    state = roark_state(tables, names, player_moves=["Spike Cannon"])
+    cannon = names.move_slot(state, 0, "Spike Cannon")
+    settings = SolveSettings(max_depth=2, epsilon=0.05, budget_playouts=2000, n_depth0=200)
+    result = solve(tables, names, state, KEY, settings, leaf_fn=constant_leaf(1, 1))
+    assert set(result.dropped) == {cannon}
+    counted = 0
+    for r in result.ranking:
+        nodes = [n for n in plan_nodes(result.plan.children[r.action]) if n.kind == "sampled"]
+        assert r.sampled_nodes == len(nodes)
+        assert r.sampled == pytest.approx(sum(n.prob for n in nodes), abs=1e-12)
+        assert all(n.obs is None and " uses " in n.opp_label for n in nodes)
+        counted += len(nodes)
+    assert counted > 0
+    best = result.ranking[0]
+    assert f"({best.sampled_nodes})" in render(result, names, 0, root=state)[2]

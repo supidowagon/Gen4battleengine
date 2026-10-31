@@ -14,6 +14,11 @@ player's maximum HP per slot (``max_hp``; without it HP prints as ``12 HP``), th
 active slot before the turn (``prev_opp``; without it a replacement after a faint is not
 named), the trainer's name and, for action names below the root, the root state
 (``root``; without it a move prints as ``move 2``). The plan never depends on any of them.
+
+A node not expanded into observations (``obs`` is ``None``: a pruned opponent action, a
+sampled pair, an AI refused below the root) is labelled by the opponent action it stands
+for (``PlanNode.opp_label``, e.g. ``Geodude uses Rock Throw``); its kind shows once, as
+the line's outcome in ``render`` and as ``kind`` in ``to_json``.
 """
 
 from __future__ import annotations
@@ -22,7 +27,6 @@ import dataclasses
 
 import numpy as np
 
-from nuzline.data import tables as tables_module
 from nuzline.data.tables import Names
 from nuzline.engine.actions import MOVE_ACTIONS
 from nuzline.engine.ids import Status
@@ -37,7 +41,7 @@ from nuzline.engine.observe import (
 )
 from nuzline.engine.state import SLOTS
 from nuzline.engine.step import WINNER_PLAYER
-from nuzline.jaxcache import code_version, table_version
+from nuzline.jaxcache import code_version
 from nuzline.search.stage_b import PlanNode, SolveResult
 
 __all__ = ["label", "render", "to_json"]
@@ -183,7 +187,7 @@ _COND_TEXT = {
 }
 
 
-def _differences(f: dict, others: list[dict], names: Names, trainer: str) -> list[str]:
+def _differences(f: dict, others: list[dict], names: Names) -> list[str]:
     """Readable text for every observation field of ``f`` that some sibling in ``others``
     shows differently (the stat stages, conditions, items, other slots' HP, ...)."""
     who = ("you", "foe")
@@ -249,18 +253,24 @@ def _action_label(f: dict | None, names: Names, a: int, root, labels: dict[int, 
     return f"move {a + 1}"
 
 
-def _unique(labels: list[str], kinds: list[str]) -> list[str]:
-    """Sibling labels made distinct: a kind marker on the unexplored/sampled/refused
-    ones, then ``#n`` on any that still collide."""
+def _unique(labels: list[str], kinds: list[str], observed: list[bool], marks: bool) -> list[str]:
+    """Sibling labels made distinct. With ``marks`` (JSON, where a label stands alone) a
+    kind marker goes on the unexplored/sampled/refused observations (a refused group can
+    share its observation with a kept one), then ``#n`` on any label that still
+    collides. Without (``render``, whose line prints the kind as its outcome) ``#n`` goes
+    only on a (label, kind) that collides."""
     out = [
-        lab if kind in ("decision", "leaf", "terminal") else f"{lab} [{_KIND_TEXT[kind]}]"
-        for lab, kind in zip(labels, kinds, strict=True)
+        f"{lab} [{_KIND_TEXT[kind]}]"
+        if marks and seen and kind not in ("decision", "leaf", "terminal")
+        else lab
+        for lab, kind, seen in zip(labels, kinds, observed, strict=True)
     ]
-    seen: dict[str, int] = {}
-    for i, lab in enumerate(out):
-        seen[lab] = seen.get(lab, 0) + 1
-        if seen[lab] > 1:
-            out[i] = f"{lab} #{seen[lab]}"
+    keys = out if marks else list(zip(out, kinds, strict=True))
+    count: dict = {}
+    for i, key in enumerate(keys):
+        count[key] = count.get(key, 0) + 1
+        if count[key] > 1:
+            out[i] = f"{out[i]} #{count[key]}"
     return out
 
 
@@ -275,14 +285,14 @@ class _Walk:
 
     def node_label(self, node: PlanNode, prev_opp: int | None) -> str:
         if node.obs is None:
-            return _KIND_TEXT[node.kind]
+            return node.opp_label or "the foe's AI is not modelled here"
         return label(
             node.obs, self.names, prev_opp=prev_opp, trainer=self.trainer, max_hp=self.max_hp
         )
 
-    def kids(self, node: PlanNode, prev_opp: int | None, a: int):
+    def kids(self, node: PlanNode, prev_opp: int | None, a: int, marks: bool = True):
         """``[(child, label, opp slot after)]`` of ``node``'s children under ``a``, with
-        distinct labels."""
+        distinct labels (``_unique``)."""
         kids = node.children[a]
         base = [self.node_label(k, prev_opp) for k in kids]
         fields = [None if k.obs is None else decode(k.obs) for k in kids]
@@ -291,12 +301,10 @@ class _Walk:
             if len(group) < 2 or any(fields[i] is None for i in group):
                 continue
             for i in group:
-                more = _differences(
-                    fields[i], [fields[j] for j in group if j != i], self.names, self.trainer
-                )
+                more = _differences(fields[i], [fields[j] for j in group if j != i], self.names)
                 if more:
                     base[i] = ", ".join([base[i], *more])
-        labs = _unique(base, [k.kind for k in kids])
+        labs = _unique(base, [k.kind for k in kids], [k.obs is not None for k in kids], marks)
         return [
             (k, lab, None if k.obs is None else int(decode(k.obs)["active"][1]))
             for k, lab in zip(kids, labs, strict=True)
@@ -312,9 +320,11 @@ def _plain(row: dict) -> dict:
     return {k: v.item() if isinstance(v, np.generic) else v for k, v in row.items()}
 
 
-def _node_json(walk: _Walk, node: PlanNode, lab: str, prev_opp: int | None) -> dict:
+def _node_json(walk: _Walk, node: PlanNode, lab: str, prev_opp: int | None, depth: int) -> dict:
+    """``node`` as JSON; ``depth``: the turns played to reach it (the root is 0)."""
     out = {
         "kind": node.kind,
+        "depth": depth,
         "prob": float(node.prob),
         "label": lab,
         "observation": None
@@ -322,6 +332,7 @@ def _node_json(walk: _Walk, node: PlanNode, lab: str, prev_opp: int | None) -> d
         else {
             name: (int(v[0]) if v.size == 1 else v.tolist()) for name, v in decode(node.obs).items()
         },
+        "opp_action": node.opp_action,
         "action": None if node.action is None else int(node.action),
         "action_label": None if node.action is None else walk.action_label(node, node.action),
         "values": {walk.action_label(node, a): float(v) for a, v in node.values.items()},
@@ -329,20 +340,30 @@ def _node_json(walk: _Walk, node: PlanNode, lab: str, prev_opp: int | None) -> d
     }
     for a in node.children:
         out["children"][walk.action_label(node, a)] = [
-            _node_json(walk, k, klab, opp) for k, klab, opp in walk.kids(node, prev_opp, a)
+            _node_json(walk, k, klab, opp, depth + 1)
+            for k, klab, opp in walk.kids(node, prev_opp, a)
         ]
     return out
 
 
-def to_json(result: SolveResult, names: Names, *, root=None, trainer: str = "Opponent") -> dict:
-    """JSON-ready dict of the solve: settings, depth, ranking, dropped actions, playouts,
-    seconds, table and code versions and the plan tree (module docstring; ``root`` is the
-    solved state, optional)."""
+def to_json(
+    result: SolveResult,
+    names: Names,
+    *,
+    root=None,
+    trainer: str = "Opponent",
+    table_version: str | None = None,
+) -> dict:
+    """JSON-ready dict of the solve: settings, depth, leaf budget, ranking, dropped
+    actions, playouts, seconds, table and code versions and the plan tree (module
+    docstring; ``root`` is the solved state, optional). ``table_version``: the
+    ``jaxcache.table_version`` of the tables the solve used (``None``: not known)."""
     walk = _Walk(result, names, root, trainer)
-    plan = _node_json(walk, result.plan, "root", walk.root_opp)
+    plan = _node_json(walk, result.plan, "root", walk.root_opp, 0)
     return {
         "settings": dataclasses.asdict(result.settings),
         "depth": result.depth,
+        "leaf_budget": result.leaf_budget,
         "ranking": [_plain(dataclasses.asdict(r)) for r in result.ranking],
         "dropped": [
             {"action": int(a), "label": walk.labels.get(a, f"action {a}"), "reason": why}
@@ -350,7 +371,7 @@ def to_json(result: SolveResult, names: Names, *, root=None, trainer: str = "Opp
         ],
         "playouts": int(result.playouts),
         "seconds": float(result.seconds),
-        "table_version": table_version(tables_module.DEFAULT),
+        "table_version": table_version,
         "code_version": code_version(),
         "plan": plan,
     }
@@ -368,7 +389,7 @@ def _outcome_text(node: PlanNode, walk: _Walk) -> str:
 
 def _lines(walk: _Walk, node: PlanNode, a: int, prev_opp: int | None, depth: int, indent: int):
     pad = " " * indent
-    for kid, lab, opp in walk.kids(node, prev_opp, a):
+    for kid, lab, opp in walk.kids(node, prev_opp, a, marks=False):
         yield f"{pad}if {lab}  [{_pct(kid.prob).strip()}] -> {_outcome_text(kid, walk)}"
         if depth > 1 and kid.kind == "decision" and kid.action in kid.children:
             yield from _lines(walk, kid, kid.action, opp, depth - 1, indent + 3)
@@ -388,15 +409,16 @@ def render(
         ),
         (
             f"     #  {'action':<24}  {'P(win, 0 faints) [95% CI]':<27}  {'lower':>7}  "
-            f"{'unexplored':>10}  {'sampled':>8}  {'refused':>8}"
+            f"{'unexplored':>10}  {'sampled (nodes)':>15}  {'refused':>8}"
         ),
     ]
     for i, r in enumerate(result.ranking, 1):
         mark = "*" if r.tied_with_best else " "
         odds = f"{_pct(r.estimate)} [{100 * r.ci_low:4.1f}, {100 * r.ci_high:5.1f}]"
+        sampled = f"{_pct(r.sampled)} ({r.sampled_nodes})"
         out.append(
             f"  {mark} {i:2d}  {r.label:<24}  {odds:<27}  {_pct(r.lower_bound):>7}  "
-            f"{_pct(r.unexplored):>10}  {_pct(r.sampled):>8}  {_pct(r.refused):>8}"
+            f"{_pct(r.unexplored):>10}  {sampled:>15}  {_pct(r.refused):>8}"
         )
         if i == 1 and show_depth > 0 and r.action in result.plan.children:
             out.extend(_lines(walk, result.plan, r.action, walk.root_opp, show_depth, 6))
@@ -404,12 +426,15 @@ def render(
         out.append("* the interval overlaps the leader's: a statistical tie, not reordered")
     for why in result.dropped.values():
         out.append(f"dropped: {why}")
-    budget = s.budget_playouts
-    if budget is None:
-        budget = s.n_depth0 * (len(result.ranking) + len(result.dropped))
+    if result.leaf_budget is None:
+        out.append(
+            f"Stage A (depth 0): {s.n_depth0} playouts per action, no plan tree; the "
+            "estimates come from playouts that see the full state"
+        )
+        return out
     out.append("the plan is shown under the best action only")
     out.append(
-        f"leaf budget {budget} playouts per pass (floor {s.leaf_floor} per half); leaf "
-        "estimates come from playouts that see the full state (the plan never does)"
+        f"leaf budget {result.leaf_budget} playouts per pass (floor {s.leaf_floor} per half); "
+        "leaf estimates come from playouts that see the full state (the plan never does)"
     )
     return out

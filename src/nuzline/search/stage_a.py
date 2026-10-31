@@ -34,7 +34,7 @@ from nuzline.engine.state import BattleState
 from nuzline.jaxcache import cached_export, code_version
 from nuzline.search.playout import PlayoutResult, playout_from_action, refusal_reason
 
-__all__ = ["ActionResult", "Ranking", "rank_actions", "wilson"]
+__all__ = ["ActionResult", "Ranking", "action_label", "rank_actions", "tied_with", "wilson"]
 
 
 @dataclass(frozen=True)
@@ -50,6 +50,12 @@ class ActionResult:
     tied_with_best: bool = False  # not the leader, and the interval overlaps the leader's
 
 
+def tied_with(row, best) -> bool:
+    """Whether ``row``'s 95 % interval (``ci_low``, ``ci_high``) overlaps ``best``'s: the
+    statistical tie a ranking marks (``tied_with_best``), never reorders."""
+    return row.ci_high >= best.ci_low and row.ci_low <= best.ci_high
+
+
 class Ranking(list):
     """``ActionResult``s, best first; ``all_zero`` when every ``p_win0`` is 0."""
 
@@ -62,8 +68,7 @@ class Ranking(list):
         if rows:
             best, *others = rows
             rows = [replace(best, tied_with_best=False)] + [
-                replace(r, tied_with_best=r.ci_high >= best.ci_low and r.ci_low <= best.ci_high)
-                for r in others
+                replace(r, tied_with_best=tied_with(r, best)) for r in others
             ]
         ranking = cls(rows)
         ranking.all_zero = all(r.p_win0 == 0 for r in rows)
@@ -98,7 +103,8 @@ def _playouts(tables: Tables, state: BattleState, actions, keys, max_turns: int)
     return jax.vmap(per_action)(actions)
 
 
-def _label(names: Names, state: BattleState, action: int, struggle: bool) -> str:
+def action_label(names: Names, state: BattleState, action: int, struggle: bool) -> str:
+    """The player action's name at ``state``: the move, ``Struggle`` or ``Switch -> X``."""
     mon = int(state.active[0])
     if action >= MOVE_ACTIONS:
         return f"Switch -> {names.species_names[int(state.species[0, action - MOVE_ACTIONS])]}"
@@ -143,7 +149,7 @@ def rank_actions(
     refused = np.asarray(out.refused).astype(bool)
     results = []
     for i, action in enumerate(legal.tolist()):
-        label = _label(names, state, action, struggle)
+        label = action_label(names, state, action, struggle)
         if refused[i].any():
             first = int(np.flatnonzero(refused[i])[0])
             reason = refusal_reason(tables, state, action, keys[first], max_turns)

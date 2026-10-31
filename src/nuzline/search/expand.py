@@ -48,6 +48,7 @@ from nuzline.engine.state import BattleState
 from nuzline.engine.step import replacement_power_mul, step_events
 from nuzline.jaxcache import cached_export, code_version
 from nuzline.search.playout import send_replacements
+from nuzline.search.rows import concat, row_bytes, take
 
 __all__ = ["CHUNK", "Child", "ai_rows", "expand", "laws_rows", "step_rows"]
 
@@ -71,22 +72,6 @@ class Child:
     refused: bool
 
 
-def _take(tree, idx):
-    return jax.tree.map(lambda f: np.asarray(f)[idx], tree)
-
-
-def _concat(parts):
-    return jax.tree.map(lambda *fs: np.concatenate(fs), *parts)
-
-
-def _row_bytes(tree, n: int) -> np.ndarray:
-    """``uint8[n, bytes]``: each row of a stacked numpy pytree, flattened."""
-    leaves = jax.tree.leaves(tree)
-    return np.concatenate(
-        [np.ascontiguousarray(f).reshape(n, -1).view(np.uint8) for f in leaves], axis=1
-    )
-
-
 def _run(fn: Callable, name: str, tables: Tables, rows: tuple, n: int):
     """``fn(tables, *rows)`` (a ``vmap`` over the rows' leading axis) over ``n`` rows,
     in ``CHUNK``-row calls padded and sharded as the module docstring says; numpy out."""
@@ -101,12 +86,12 @@ def _run(fn: Callable, name: str, tables: Tables, rows: tuple, n: int):
     for start in range(0, n, CHUNK):
         idx = np.arange(start, min(start + CHUNK, n))
         pad = np.concatenate([idx, np.full(size - len(idx), idx[0])])
-        chunk = _take(rows, pad)
+        chunk = take(rows, pad)
         chunk = jax.device_put(chunk, sharding) if devices > 1 else jax.device_put(chunk)
         args = (tables, *chunk)
         program = cached_export(fn, args, name=name, static={}, version=code_version())
-        outs.append(_take(jax.device_get(program(*args)), slice(0, len(idx))))
-    return _concat(outs)
+        outs.append(take(jax.device_get(program(*args)), slice(0, len(idx))))
+    return concat(outs)
 
 
 def _ai(tables: Tables, states: BattleState) -> jnp.ndarray:
@@ -169,7 +154,7 @@ class _Merger:
     def add(self, request, states, actions, outcomes, probs) -> None:
         after, refused, obs = step_rows(self.tables, states, actions, outcomes)
         n = len(request)
-        state_bytes, obs_bytes = _row_bytes(after, n), _row_bytes(obs, n)
+        state_bytes, obs_bytes = row_bytes(after, n), row_bytes(obs, n)
         new = []
         for i in range(n):
             sk, ok = state_bytes[i].tobytes(), obs_bytes[i].tobytes()
@@ -184,7 +169,7 @@ class _Merger:
             else:
                 entry[2] += float(probs[i])
         if new:
-            self.parts.append(_take(after, np.asarray(new)))
+            self.parts.append(take(after, np.asarray(new)))
 
 
 def expand(
@@ -202,7 +187,7 @@ def expand(
     states = jax.tree.map(np.asarray, states)
     index = np.asarray([p[0] for p in pairs], np.int64).reshape(-1)
     actions = np.asarray([p[1:] for p in pairs], np.int32).reshape(-1, 2)
-    laws = laws_rows(tables, _take(states, index), actions)
+    laws = laws_rows(tables, take(states, index), actions)
     merger = _Merger(tables, len(pairs))
     out: dict[int, list[Child] | SamplingOnly] = {}
     buffer: list[tuple] = []  # (request ids, outcomes, probs) segments of the next chunk
@@ -211,14 +196,14 @@ def expand(
     def flush():
         nonlocal buffer, filled
         request = np.concatenate([b[0] for b in buffer])
-        outcomes = _concat([b[1] for b in buffer])
+        outcomes = concat([b[1] for b in buffer])
         probs = np.concatenate([b[2] for b in buffer])
-        merger.add(request, _take(states, index[request]), actions[request], outcomes, probs)
+        merger.add(request, take(states, index[request]), actions[request], outcomes, probs)
         buffer, filled = [], 0
 
     for r in range(len(pairs)):
         try:
-            outcomes, probs = enumerate_outcomes(_take(laws, r))
+            outcomes, probs = enumerate_outcomes(take(laws, r))
         except SamplingOnly as e:
             out[r] = e
             continue
@@ -226,7 +211,7 @@ def expand(
         while start < k:
             stop = min(k, start + CHUNK - filled)
             seg = slice(start, stop)
-            buffer.append((np.full(stop - start, r), _take(outcomes, seg), probs[seg]))
+            buffer.append((np.full(stop - start, r), take(outcomes, seg), probs[seg]))
             filled += stop - start
             start = stop
             if filled == CHUNK:
@@ -236,5 +221,5 @@ def expand(
     for r in range(len(pairs)):
         if r not in out:
             out[r] = [Child(*entry) for entry in merger.children[r].values()]
-    store = _concat(merger.parts) if merger.parts else _take(states, slice(0, 0))
+    store = concat(merger.parts) if merger.parts else take(states, slice(0, 0))
     return store, dict(sorted(out.items()))
