@@ -4,7 +4,11 @@ chance nodes, observations and endgames the solver tests need. Each builds on
 
 from __future__ import annotations
 
+import numpy as np
+
+from nuzline.ai.policy import ai_action_distribution
 from nuzline.data.tables import Names, Tables
+from nuzline.engine.actions import MOVE_ACTIONS, legal_actions
 from nuzline.engine.ids import Stat
 from nuzline.engine.state import BattleState
 from tests.ai.fixtures import trace_f
@@ -62,3 +66,99 @@ def switch_refusal_root(tables: Tables, names: Names) -> BattleState:
     > 0 and Starly's Tackle KOs it on entry, so the replacement in a turn the AI
     switched is refused (``playout.send_replacements``; roark.md 14 item 3)."""
     return trace_f(tables, names).replace_hp(1, 0, 1)
+
+
+def empty_bag(state: BattleState) -> BattleState:
+    """Roark's bag emptied: the AI has no item to use."""
+    return state._replace(
+        trainer_items=state.trainer_items.at[1].set(0),
+        trainer_item_count=state.trainer_item_count.at[1].set(0),
+    )
+
+
+def endgame(
+    tables: Tables,
+    names: Names,
+    player_moves: list[str],
+    opp_moves: list[str],
+    player_hp: int | None = None,
+    opp_hp: int | None = None,
+) -> BattleState:
+    """Monferno against Geodude, one Pokemon a side, Roark's bag emptied, each side
+    knowing only ``player_moves``/``opp_moves`` (the other slots' PP zeroed), at the
+    given HP."""
+    s = roark_state(
+        tables, names, player_count=1, opp_count=1, player_moves=player_moves, opp_moves=opp_moves
+    )
+    s = empty_bag(s)
+    s = s.with_pp(0, 0, [int(p) if i < len(player_moves) else 0 for i, p in enumerate(s.pp[0, 0])])
+    s = s.with_pp(1, 0, [int(p) if i < len(opp_moves) else 0 for i, p in enumerate(s.pp[1, 0])])
+    if player_hp is not None:
+        s = s.replace_hp(0, 0, player_hp)
+    if opp_hp is not None:
+        s = s.replace_hp(1, 0, opp_hp)
+    return s
+
+
+def all_terminal_root(tables: Tables, names: Names) -> BattleState:
+    """Monferno (Scratch, Ember, Mach Punch, Quick Attack, all accuracy 100) against
+    Geodude at 1 HP, one Pokemon a side, Roark's bag emptied: every player move lands
+    first and KOs, so every child of the root is a win."""
+    s = roark_state(
+        tables,
+        names,
+        player_count=1,
+        opp_count=1,
+        player_moves=["Scratch", "Ember", "Mach Punch", "Quick Attack"],
+    )
+    s = empty_bag(s).replace_hp(1, 0, 1)
+    q = np.asarray(ai_action_distribution(tables, s))
+    assert q[MOVE_ACTIONS:].sum() == 0, "the AI row has item or switch mass"
+    legal = np.flatnonzero(np.asarray(legal_actions(tables, s, 0)))
+    assert legal.tolist() == list(range(MOVE_ACTIONS)), legal
+    return s
+
+
+def pixel_endgame(tables: Tables, names: Names) -> BattleState:
+    """Monferno (Water Gun: sure, 60-72 damage without a crit; Hydro Pump: 80 %
+    accuracy, 168-196) against a Leer-only Geodude whose ``max_hp`` is 999 (an HP-bar
+    pixel is ~20.8 HP; observe.hp_pixels), at 242 HP. A Hydro Pump hit on turn 1 leaves
+    46-74 HP; 46-62 share pixel 2, so one observation holds states where Water Gun KOs
+    surely (HP <= 60, Water Gun best on turn 2) and the 62 HP state where Hydro Pump's
+    80 % beats Water Gun's ~77 %: peeking at the exact HP would choose per state. The
+    fight ends within 2 turns or counts 0 at a 2-turn cap (Geodude cannot hurt
+    Monferno)."""
+    from tests.search.exhaustive import children  # the fixture's own check
+
+    s = endgame(tables, names, ["Water Gun", "Hydro Pump"], ["Leer"])
+    s = s._replace(max_hp=s.max_hp.at[1, 0].set(999)).replace_hp(1, 0, 242)
+    assert int(s.max_hp[1, 0]) > 48
+    hydro = names.move_slot(s, 0, "Hydro Pump")
+    seen: dict[bytes, set[int]] = {}
+    for after, refused, obs, _ in children(tables, s, hydro, 0):
+        if not refused and int(after.over) == 0:
+            seen.setdefault(obs, set()).add(int(after.hp[1, 0]))
+    assert any(len(hps) >= 2 for hps in seen.values()), (
+        "no two turn-1 children share an observation"
+    )
+    return s
+
+
+def spore_endgame(tables: Tables, names: Names) -> BattleState:
+    """Monferno at 1 HP (Spore; Hydro Pump, 80 %) against a Tackle-only Geodude at 20
+    HP: Spore's sleep (2-5 turns, the counter hidden) puts four states in one
+    observation; a Hydro Pump hit KOs, a Tackle hit KOs Monferno."""
+    return endgame(tables, names, ["Spore", "Hydro Pump"], ["Tackle"], player_hp=1, opp_hp=20)
+
+
+def low_hp_endgame(tables: Tables, names: Names) -> BattleState:
+    """Monferno at 10 HP (Scratch; Mega Kick, 75 %) against Geodude at 6 HP (Tackle,
+    Rock Throw): a plain low-HP 1v1 decided by rolls, crits and accuracy."""
+    return endgame(
+        tables,
+        names,
+        ["Scratch", "Mega Kick"],
+        ["Tackle", "Rock Throw"],
+        player_hp=10,
+        opp_hp=6,
+    )

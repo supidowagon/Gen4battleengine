@@ -1,0 +1,584 @@
+"""Stage B: depth-limited expectimax over information sets with Stage A leaves (Stage B
+spec §3-4; plan rulings 4-10).
+
+The tree alternates **belief nodes** (a weighted set of states at a player decision
+point; the root holds the one given state) and chance layers: for a player action ``a``,
+each state ``s`` of the node (absolute reach ``w``) meets every opponent action ``o``
+with the AI's exact probability ``q_s(o)`` (``expand.ai_rows``), and every merged battle
+outcome of ``(a, o)`` (``expand.expand``: stepped, replaced and observed, merged on
+state and observation bytes). The children of ``a`` over all the node's states are
+grouped by observation (and the replacement-refused flag) into child belief nodes: the
+player picks one action per observation, never per hidden state (spec *Anti-goals*).
+A node's value for ``a`` is therefore ``sum_s w_s sum_o q_s(o) sum_children p * value
+(group)``; every value is carried as an absolute (reach-weighted) sum and divided by the
+node's reach only for display (``PlanNode.values``).
+
+Absolute reach (``PlanNode.prob``, the leaf weights, the epsilon test; ruling 10) is the
+product of chance probabilities on the path: belief weight x opponent-action probability
+x outcome probability; player choices are excluded. Child kinds:
+
+* ``terminal``: the battle is over (the observation carries ``over`` and ``winner``, so a
+  group is all over or none); value 1 iff the player won (state.py ``winner``), never
+  pruned, no playouts.
+* ``refused`` (ruling 4): the AI's row is refused (NaN) for a state below the root, the
+  opponent's replacement was refused (``send_replacements``), or a playout of the node's
+  evaluation met a refused mechanic. Valued 0 in the estimate and the bound; its reach is
+  reported. A refused AI at the root refuses the solve (``UnsupportedAi``).
+* ``pruned``: an opponent action of one state, or a child group, whose reach is below
+  ``epsilon``: not expanded, valued by ``2 * leaf_floor`` playouts (``evaluate_forced``
+  for the opponent action, ``evaluate_leaves`` for each state of the group), 0 in the
+  lower bound.
+* ``sampled``: a pair below the root that ``enumerate_outcomes`` cannot enumerate
+  (``SamplingOnly``, the width cap), valued like a pruned opponent action. At the root
+  such a pair drops the player action from the ranking, named with the reason.
+* ``leaf``: a group at the pass depth, each state valued by Stage A playouts
+  (``evaluate_leaves``; the playout policy reads the full state, which the plan never
+  does; spec §3).
+* ``decision``: a group above the pass depth, expanded on the next level.
+
+Each level is expanded in one batch (``ai_rows`` and ``expand`` over every frontier
+state and pair, through an expansion cache keyed by state and pair that later passes
+reuse); the evaluations of a pass run as one ``evaluate_leaves`` and one
+``evaluate_forced`` call. Leaf budgets follow ruling 8 (``leaves.allocate``: playouts in
+proportion to a state's summed leaf reach, a floor of ``leaf_floor`` per half; pruned and
+sampled evaluations get exactly the floor); states shared by several leaves
+(transpositions) are evaluated once.
+
+Max bias (ruling 5): each evaluation has two halves with independent keys. Half A picks
+the action at every inner belief node; half B gives every reported value, bound and
+interval, under half A's choices. Interval (ruling 6): for a root action, ``W_j`` is the
+total reach of the tree leaves (and pruned or sampled nodes) evaluated by evaluation
+``j`` under half A's policy, transpositions summed before squaring; ``var = sum_j W_j^2
+var_j`` (``LeafValue.var_b``), the interval ``estimate +- 1.96 sqrt(var)`` clipped to
+[0, 1]; terminal and refused children add no variance. Iterative deepening (ruling 9)
+runs passes ``d = 1 .. max_depth`` from the root, each complete; ``budget_seconds``
+only decides whether the next pass starts. Depth 0 is Stage A (ruling 7).
+"""
+
+from __future__ import annotations
+
+import math
+import time
+from collections.abc import Callable
+from dataclasses import dataclass, field
+
+import jax
+import numpy as np
+
+import nuzline.search.stage_a  # noqa: F401 - registers Tables/BattleState for jax.export
+from nuzline.ai.policy import UnsupportedAi, ai_refusals
+from nuzline.data.tables import Names, Tables
+from nuzline.engine.actions import FIRST_ITEM_ACTION, MOVE_ACTIONS, legal_actions, usable_moves
+from nuzline.engine.enumerate import SamplingOnly
+from nuzline.engine.state import BattleState
+from nuzline.engine.step import WINNER_PLAYER
+from nuzline.search.expand import _concat, _row_bytes, _take, ai_rows, expand
+from nuzline.search.leaves import LeafValue, allocate, evaluate_forced, evaluate_leaves
+from nuzline.search.stage_a import _label, rank_actions
+
+__all__ = ["ActionValue", "PlanNode", "SolveResult", "SolveSettings", "solve"]
+
+Z = 1.96  # 95 % normal interval (ruling 6)
+
+LeafFn = Callable[..., list[LeafValue]]
+
+
+@dataclass(frozen=True)
+class SolveSettings:
+    """``max_depth``: deepest pass (0 = Stage A). ``budget_playouts``: the leaf budget
+    ``B_d`` of every pass (``None``: ``n_depth0`` per legal root action). ``budget_seconds``:
+    no pass starts after this much time (depth 1 always runs). ``epsilon``: the pruning
+    threshold on absolute reach. ``leaf_floor``: playouts per half at least. ``max_turns``:
+    playout length from a leaf. ``n_depth0``: Stage A's playouts per action."""
+
+    max_depth: int = 2
+    budget_playouts: int | None = None
+    budget_seconds: float | None = None
+    epsilon: float = 1e-4
+    leaf_floor: int = 2
+    max_turns: int = 100
+    n_depth0: int = 2000
+
+
+@dataclass(frozen=True)
+class ActionValue:
+    """One ranked root action. ``estimate``: P(win with zero player faints) under the
+    plan, half-B values; ``ci_low``/``ci_high`` its 95 % interval (ruling 6);
+    ``lower_bound``: the estimate with pruned and sampled nodes counted 0; ``unexplored``,
+    ``sampled``, ``refused``: the summed reach of those nodes in the action's plan."""
+
+    action: int
+    label: str
+    estimate: float
+    ci_low: float
+    ci_high: float
+    lower_bound: float
+    unexplored: float
+    sampled: float
+    refused: float
+    tied_with_best: bool
+
+
+@dataclass
+class PlanNode:
+    """A node of the plan. ``obs``: the observation bytes that lead to it (``None`` at
+    the root and for nodes not expanded into observations: a pruned opponent action, a
+    sampled pair, a state whose AI is refused). ``prob``: absolute reach (ruling 10).
+    ``action``: the recommended action (decision nodes); ``values``: every legal action's
+    half-B value given the node is reached. ``children``: per player action, the child
+    nodes (at the root every ranked action; at an inner decision node only the chosen
+    one; other kinds none). ``kind``: ``decision``, ``leaf``, ``terminal``, ``pruned``,
+    ``refused`` or ``sampled`` (module docstring)."""
+
+    obs: bytes | None
+    prob: float
+    action: int | None
+    values: dict[int, float]
+    children: dict[int, list[PlanNode]]
+    kind: str
+
+
+@dataclass
+class SolveResult:
+    """``ranking``: the root actions, best first; ``dropped``: root actions left out, with
+    the reason; ``depth``: the deepest completed pass; ``playouts``: every playout run,
+    over all passes; ``seconds``: wall time (not compared: equal solves differ in it)."""
+
+    ranking: list[ActionValue]
+    dropped: dict[int, str]
+    depth: int
+    plan: PlanNode
+    playouts: int
+    seconds: float = field(compare=False)
+    settings: SolveSettings
+
+
+@dataclass
+class _Node:
+    """A node under construction. Belief-like nodes hold ``states`` (state id ->
+    absolute reach); a pruned opponent action or sampled pair holds ``forced`` (state
+    id, player action, opponent action)."""
+
+    kind: str
+    obs: bytes | None
+    prob: float
+    states: dict[int, float] = field(default_factory=dict)
+    forced: tuple[int, int, int] | None = None
+    legal: list[int] = field(default_factory=list)
+    branches: dict[int, list[_Node]] = field(default_factory=dict)
+
+
+class _Store:
+    """The distinct states of a solve, one id per state bytes."""
+
+    def __init__(self):
+        self.ids: dict[bytes, int] = {}
+        self.parts: list[BattleState] = []
+        self.over: list[bool] = []
+        self.won: list[bool] = []
+        self._all: BattleState | None = None
+
+    def add(self, batch: BattleState) -> list[int]:
+        n = len(batch.hp)
+        keys = _row_bytes(batch, n)
+        out, new = [], []
+        for i in range(n):
+            k = keys[i].tobytes()
+            sid = self.ids.get(k)
+            if sid is None:
+                sid = self.ids[k] = len(self.ids)
+                new.append(i)
+            out.append(sid)
+        if new:
+            part = _take(batch, np.asarray(new))
+            over = np.asarray(part.over) != 0
+            self.parts.append(part)
+            self.over.extend(over.tolist())
+            self.won.extend((over & (np.asarray(part.winner) == WINNER_PLAYER)).tolist())
+            self._all = None
+        return out
+
+    def take(self, ids) -> BattleState:
+        if self._all is None:
+            self._all = _concat(self.parts)
+            self.parts = [self._all]
+        return _take(self._all, np.asarray(ids, np.int64))
+
+
+_legal_jit = jax.jit(lambda tables, state: legal_actions(tables, state, 0))
+
+
+def _opp_label(names: Names, state: BattleState, o: int) -> str:
+    if o < MOVE_ACTIONS:
+        mon = int(state.active[1])
+        return names.move_names[int(state.moves[1, mon, o])]
+    if o < FIRST_ITEM_ACTION:
+        return f"switch to {names.species_names[int(state.species[1, o - MOVE_ACTIONS])]}"
+    return names.item_names[int(state.trainer_items[1, o - FIRST_ITEM_ACTION])]
+
+
+def _mass(nodes: list[PlanNode], kind: str) -> float:
+    """Summed ``prob`` of the ``kind`` nodes under ``nodes``, following the children the
+    plan keeps (the chosen action at inner decision nodes)."""
+    total = 0.0
+    for node in nodes:
+        if node.kind == kind:
+            total += node.prob
+        for kids in node.children.values():
+            total += _mass(kids, kind)
+    return total
+
+
+class _Solver:
+    def __init__(self, tables: Tables, names: Names, root, settings: SolveSettings, leaf_fn):
+        self.tables, self.names, self.settings, self.leaf_fn = tables, names, settings, leaf_fn
+        self.store = _Store()
+        self.store.add(root)  # id 0
+        self.root = _first(root)
+        self.struggle = not bool(np.any(np.asarray(usable_moves(tables, self.root, 0))))
+        self.ai: dict[int, np.ndarray | None] = {}  # float64 row, None when refused
+        self.legal: dict[int, list[int]] = {}
+        self.expansions: dict[tuple[int, int, int], list | SamplingOnly] = {}
+        self.playouts = 0
+
+    def _label(self, a: int) -> str:
+        return _label(self.names, self.root, a, self.struggle)
+
+    # -- expansion ------------------------------------------------------------------------
+
+    def _legal(self, sid: int) -> list[int]:
+        if sid not in self.legal:
+            state = jax.tree.map(lambda f: f[0], self.store.take([sid]))
+            mask = np.asarray(_legal_jit(self.tables, state))
+            self.legal[sid] = np.flatnonzero(mask).tolist()
+        return self.legal[sid]
+
+    def _ai_rows(self, sids: list[int]) -> None:
+        need = [s for s in dict.fromkeys(sids) if s not in self.ai]
+        if not need:
+            return
+        rows = ai_rows(self.tables, self.store.take(need)).astype(np.float64)
+        for s, row in zip(need, rows, strict=True):
+            self.ai[s] = None if np.isnan(row).any() else row
+
+    def _expand(self, requests: list[tuple[int, int, int]]) -> None:
+        sids = list(dict.fromkeys(r[0] for r in requests))
+        index = {s: i for i, s in enumerate(sids)}
+        pairs = [(index[s], a, o) for s, a, o in requests]
+        local, out = expand(self.tables, self.store.take(sids), pairs)
+        ids = self.store.add(local) if len(local.hp) else []
+        for r, request in enumerate(requests):
+            kids = out[r]
+            if not isinstance(kids, SamplingOnly):
+                kids = [(ids[c.state_row], c.obs, c.prob, c.refused) for c in kids]
+            self.expansions[request] = kids
+
+    def _level(self, frontier: list[_Node], k: int, depth: int, dropped: dict[int, str]) -> None:
+        """Expand every node of ``frontier`` (``k`` turns played) one turn: children per
+        legal action, grouped and classified (module docstring)."""
+        eps = self.settings.epsilon
+        self._ai_rows([s for node in frontier for s in node.states])
+        if k == 0 and self.ai[0] is None:
+            reasons = ai_refusals(self.tables, self.root)
+            raise UnsupportedAi("; ".join(reasons) or "the AI's action distribution is refused")
+        requests = {}
+        for node in frontier:
+            node.legal = self._legal(next(iter(node.states)))
+            for a in node.legal:
+                for s, w in node.states.items():
+                    q = self.ai[s]
+                    for o in [] if q is None else np.flatnonzero(q > 0).tolist():
+                        # At the root every pair with mass is expanded: a sampling-only one
+                        # drops the player action even when its reach is below epsilon.
+                        if (k == 0 or w * q[o] >= eps) and (s, a, o) not in self.expansions:
+                            requests[(s, a, o)] = None
+        if requests:
+            self._expand(list(requests))
+        for node in frontier:
+            if k == 0:
+                for a in node.legal:
+                    for o in np.flatnonzero(self.ai[0] > 0).tolist():
+                        kids = self.expansions[(0, a, o)]
+                        if isinstance(kids, SamplingOnly) and a not in dropped:
+                            dropped[a] = (
+                                f"{self._label(a)} is sampling-only against "
+                                f"{_opp_label(self.names, self.root, o)}: {kids.reason}"
+                            )
+            for a in node.legal:
+                if k == 0 and a in dropped:
+                    continue
+                node.branches[a] = self._children(node, a, k, depth)
+
+    def _children(self, node: _Node, a: int, k: int, depth: int) -> list[_Node]:
+        eps = self.settings.epsilon
+        kids: list[_Node] = []
+        groups: dict[tuple[bytes, bool], dict[int, float]] = {}
+        for s, w in node.states.items():
+            q = self.ai[s]
+            if q is None:
+                kids.append(_Node("refused", None, w))
+                continue
+            for o in np.flatnonzero(q > 0).tolist():
+                reach = w * q[o]
+                if reach < eps:
+                    kids.append(_Node("pruned", None, reach, forced=(s, a, o)))
+                    continue
+                expansion = self.expansions[(s, a, o)]
+                if isinstance(expansion, SamplingOnly):
+                    kids.append(_Node("sampled", None, reach, forced=(s, a, o)))
+                    continue
+                for child, obs, p, refused in expansion:
+                    members = groups.setdefault((obs, refused), {})
+                    members[child] = members.get(child, 0.0) + reach * p
+        for (obs, refused), members in groups.items():
+            prob = math.fsum(members.values())
+            if refused:
+                kind = "refused"
+            elif self.store.over[next(iter(members))]:
+                kind = "terminal"
+            elif prob < eps:
+                kind = "pruned"
+            elif k + 1 == depth:
+                kind = "leaf"
+            else:
+                kind = "decision"
+            kids.append(_Node(kind, obs, prob, states=members))
+        return kids
+
+    # -- evaluation -----------------------------------------------------------------------
+
+    def _evaluate(self, sids, weights, pairs, budget: int, key) -> list[LeafValue]:
+        if not sids:
+            return []
+        states = self.store.take(sids)
+        weights = np.asarray(weights, np.float64)
+        if self.leaf_fn is not None:
+            values = list(self.leaf_fn(states, weights, pairs))
+        else:
+            counts = allocate(weights, budget, self.settings.leaf_floor)
+            turns = self.settings.max_turns
+            if pairs is None:
+                values = evaluate_leaves(self.tables, states, counts, key, turns)
+            else:
+                values = evaluate_forced(self.tables, states, pairs, counts, key, turns)
+        if len(values) != len(sids):
+            raise ValueError(f"leaf evaluator returned {len(values)} values for {len(sids)}")
+        self.playouts += sum(v.n_a + v.n_b for v in values)
+        return values
+
+    # -- backup ---------------------------------------------------------------------------
+
+    def _backup(self, node: _Node, leaf, forced):
+        """``(A, B, bound, W, plan nodes)`` of ``node``: absolute half-A and half-B values,
+        the half-B lower bound, ``{evaluation: reach}`` (ruling 6) and its plan nodes."""
+        kind, prob = node.kind, node.prob
+        if kind == "refused":
+            return 0.0, 0.0, 0.0, {}, [PlanNode(node.obs, prob, None, {}, {}, "refused")]
+        if kind == "terminal":
+            won = math.fsum(w for s, w in node.states.items() if self.store.won[s])
+            return won, won, won, {}, [PlanNode(node.obs, prob, None, {}, {}, "terminal")]
+        if node.forced is not None:
+            i, value = forced[node.forced]
+            if value.refused:
+                return 0.0, 0.0, 0.0, {}, [PlanNode(None, prob, None, {}, {}, "refused")]
+            plan = [PlanNode(None, prob, None, {}, {}, kind)]
+            return prob * value.p_a, prob * value.p_b, 0.0, {("F", i): prob}, plan
+        if kind in ("leaf", "pruned"):
+            a_sum, b_sum, weights, kept, lost = 0.0, 0.0, {}, [], []
+            for s, w in node.states.items():
+                i, value = leaf[s]
+                if value.refused:
+                    lost.append(w)
+                    continue
+                kept.append(w)
+                a_sum += w * value.p_a
+                b_sum += w * value.p_b
+                weights[("L", i)] = weights.get(("L", i), 0.0) + w
+            plan = []
+            if kept:
+                plan.append(PlanNode(node.obs, math.fsum(kept), None, {}, {}, kind))
+            if lost:
+                plan.append(PlanNode(node.obs, math.fsum(lost), None, {}, {}, "refused"))
+            return a_sum, b_sum, b_sum if kind == "leaf" else 0.0, weights, plan
+        per_action = {a: self._branch(kids, leaf, forced) for a, kids in node.branches.items()}
+        chosen = max(per_action, key=lambda a: (per_action[a][0], -a))
+        a_val, b_val, bound, weights, plan = per_action[chosen]
+        values = {a: v[1] / prob for a, v in per_action.items()}
+        node_plan = PlanNode(node.obs, prob, chosen, values, {chosen: plan}, "decision")
+        return a_val, b_val, bound, weights, [node_plan]
+
+    def _branch(self, kids: list[_Node], leaf, forced):
+        a_sum, b_sum, bound, weights, plan = 0.0, 0.0, 0.0, {}, []
+        for kid in kids:
+            a, b, lb, w, nodes = self._backup(kid, leaf, forced)
+            a_sum += a
+            b_sum += b
+            bound += lb
+            for j, x in w.items():
+                weights[j] = weights.get(j, 0.0) + x
+            plan.extend(nodes)
+        return a_sum, b_sum, bound, weights, plan
+
+    # -- one pass -------------------------------------------------------------------------
+
+    def run(self, depth: int, key, budget: int):
+        """One pass of depth ``depth``: ``(ranking, dropped, plan)``."""
+        dropped: dict[int, str] = {}
+        root = _Node("decision", None, 1.0, states={0: 1.0})
+        frontier = [root]
+        for k in range(depth):
+            self._level(frontier, k, depth, dropped)
+            frontier = [
+                kid
+                for node in frontier
+                for kids in node.branches.values()
+                for kid in kids
+                if kid.kind == "decision"
+            ]
+        leaf_ids: dict[int, int] = {}
+        leaf_w: list[float] = []
+        forced_ids: dict[tuple[int, int, int], int] = {}
+        stack = [kid for a in root.branches for kid in root.branches[a]][::-1]
+        while stack:
+            node = stack.pop()
+            if node.forced is not None:
+                forced_ids.setdefault(node.forced, len(forced_ids))
+            elif node.kind in ("leaf", "pruned"):
+                for s, w in node.states.items():
+                    i = leaf_ids.setdefault(s, len(leaf_ids))
+                    if i == len(leaf_w):
+                        leaf_w.append(0.0)
+                    if node.kind == "leaf":
+                        leaf_w[i] += w
+            elif node.kind == "decision":
+                stack.extend(kid for a in node.branches for kid in node.branches[a][::-1])
+        k_leaf, k_forced = jax.random.fold_in(key, 0), jax.random.fold_in(key, 1)
+        leaf_values = self._evaluate(list(leaf_ids), leaf_w, None, budget, k_leaf)
+        pairs = np.asarray([f[1:] for f in forced_ids], np.int32).reshape(-1, 2)
+        forced_values = self._evaluate(
+            [f[0] for f in forced_ids], np.zeros(len(forced_ids)), pairs, budget, k_forced
+        )
+        leaf = {s: (i, leaf_values[i]) for s, i in leaf_ids.items()}
+        forced = {f: (i, forced_values[i]) for f, i in forced_ids.items()}
+        variance = {("L", i): v.var_b for i, v in enumerate(leaf_values)}
+        variance.update({("F", i): v.var_b for i, v in enumerate(forced_values)})
+        rows = []
+        plans = {}
+        for a, kids in root.branches.items():
+            _, b_val, bound, weights, plan = self._branch(kids, leaf, forced)
+            var = math.fsum(w * w * variance[j] for j, w in weights.items())
+            half = Z * math.sqrt(var)
+            estimate = min(1.0, max(0.0, b_val))
+            plans[a] = plan
+            rows.append(
+                ActionValue(
+                    action=a,
+                    label=self._label(a),
+                    estimate=estimate,
+                    ci_low=max(0.0, estimate - half),
+                    ci_high=min(1.0, estimate + half),
+                    lower_bound=min(1.0, max(0.0, bound)),
+                    unexplored=_mass(plan, "pruned"),
+                    sampled=_mass(plan, "sampled"),
+                    refused=_mass(plan, "refused"),
+                    tied_with_best=False,
+                )
+            )
+        ranking = _rank(rows)
+        plan = PlanNode(
+            None,
+            1.0,
+            ranking[0].action if ranking else None,
+            {r.action: r.estimate for r in ranking},
+            {r.action: plans[r.action] for r in ranking},
+            "decision",
+        )
+        return ranking, dropped, plan
+
+
+def _first(batch: BattleState) -> BattleState:
+    return jax.tree.map(lambda f: f[0], batch)
+
+
+def _rank(rows: list[ActionValue]) -> list[ActionValue]:
+    """Sorted by ``(-estimate, action)``; ``tied_with_best`` as ``stage_a.Ranking.of``:
+    not the leader, interval overlapping the leader's."""
+    rows = sorted(rows, key=lambda r: (-r.estimate, r.action))
+    if not rows:
+        return rows
+    best = rows[0]
+    out = [best]
+    for r in rows[1:]:
+        tied = r.ci_high >= best.ci_low and r.ci_low <= best.ci_high
+        out.append(ActionValue(**{**r.__dict__, "tied_with_best": tied}))
+    return out
+
+
+def _stage_a(tables, names, state, key, settings: SolveSettings, start: float) -> SolveResult:
+    """Depth 0 (ruling 7): ``rank_actions``' numbers unchanged."""
+    ranking = rank_actions(tables, names, state, settings.n_depth0, key, settings.max_turns)
+    rows = [
+        ActionValue(
+            action=r.action,
+            label=r.label,
+            estimate=r.p_win0,
+            ci_low=r.ci_low,
+            ci_high=r.ci_high,
+            lower_bound=r.p_win0,
+            unexplored=0.0,
+            sampled=0.0,
+            refused=0.0,
+            tied_with_best=r.tied_with_best,
+        )
+        for r in ranking
+    ]
+    leaf = [PlanNode(None, 1.0, None, {}, {}, "leaf")]
+    plan = PlanNode(
+        None,
+        1.0,
+        rows[0].action if rows else None,
+        {r.action: r.estimate for r in rows},
+        {r.action: list(leaf) for r in rows},
+        "decision",
+    )
+    playouts = settings.n_depth0 * len(rows)
+    return SolveResult(rows, {}, 0, plan, playouts, time.perf_counter() - start, settings)
+
+
+def solve(
+    tables: Tables,
+    names: Names,
+    state: BattleState,
+    key,
+    settings: SolveSettings,
+    leaf_fn: LeafFn | None = None,
+) -> SolveResult:
+    """Solve the player's decision at ``state`` (module docstring). ``leaf_fn(states,
+    weights, pairs=None) -> list[LeafValue]`` replaces both evaluators: ``states`` are the
+    evaluated states (numpy, one row each), ``weights`` their ruling-8 chance weights (0
+    for pruned and sampled evaluations), ``pairs`` ``None`` for post-turn leaves and
+    ``int32[N, 2]`` for forced (player, opponent) evaluations. Raises ``UnsupportedAi``
+    when the AI is refused at the root."""
+    start = time.perf_counter()
+    if settings.max_depth < 0 or settings.leaf_floor < 1 or settings.epsilon < 0:
+        raise ValueError(f"invalid settings {settings}")
+    if settings.max_depth == 0:
+        return _stage_a(tables, names, state, key, settings, start)
+    root = jax.tree.map(lambda f: np.asarray(f)[None], state)
+    if int(root.over[0]) != 0:
+        raise ValueError("solve: the battle is already over")
+    solver = _Solver(tables, names, root, settings, leaf_fn)
+    n_root = len(solver._legal(0))
+    budget = settings.budget_playouts
+    if budget is None:
+        budget = settings.n_depth0 * n_root
+    result = None
+    for depth in range(1, settings.max_depth + 1):
+        elapsed = time.perf_counter() - start
+        if depth > 1 and settings.budget_seconds is not None and elapsed > settings.budget_seconds:
+            break
+        result = (depth, *solver.run(depth, jax.random.fold_in(key, depth), budget))
+    depth, ranking, dropped, plan = result
+    return SolveResult(
+        ranking, dropped, depth, plan, solver.playouts, time.perf_counter() - start, settings
+    )
