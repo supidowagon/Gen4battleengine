@@ -44,7 +44,12 @@ Events, per side (``[side]``; 0 = player):
 
 The end-of-turn order (``end_speed_tie``) is not in the vector: it shows only in the
 order of residual messages, so states it separates stay in one set (coarser than the
-game, never finer).
+game, never finer). Likewise a crit into a substitute: the game prints "A critical hit!"
+whenever a landed hit's ``criticalMul != 1`` (bcp.c:4547-4554, whatever took the
+damage), but ``crit`` is gated on the target's HP dropping (``step._hit_events``), so
+such a crit is not recorded. No implemented move sets ``substitute_hp`` (it is only
+reset, ``_VOLATILE`` step.py:94; notes/stage-b/observe.md section 1), so the case cannot
+arise yet; were it to, its states would stay in one set (coarser, never finer).
 
 The visible projection of ``after``: both actives, every slot's species, status and
 held/consumed item; the non-zero-ness of ``confusion``, ``taunt``, ``trapped``,

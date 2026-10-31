@@ -30,7 +30,10 @@ def shinx_vs_cranidos(tables: Tables, names: Names, slower_opp: bool = False) ->
 
 def spike_cannon_root(tables: Tables, names: Names) -> BattleState:
     """Spike Cannon (multi-hit, 2-5 hits) on both leads: one action pair's outcome
-    product exceeds ``enumerate.WIDTH_CAP``."""
+    product exceeds ``enumerate.WIDTH_CAP``. For enumerate/expand tests only: the
+    opponent's Spike Cannon has no transcribed AI script, so the AI refuses this root
+    and ruling 4 refuses a solve of it (``UnsupportedAi``);
+    test_stage_b.test_dropped_root_action gives Spike Cannon to the player only."""
     return roark_state(tables, names, player_moves=["Spike Cannon"], opp_moves=["Spike Cannon"])
 
 

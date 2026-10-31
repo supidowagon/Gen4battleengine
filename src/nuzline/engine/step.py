@@ -284,7 +284,8 @@ def _put(events: dict, side, values: dict, cond) -> dict:
 def _hit_events(before: BattleState, after: BattleState, side, landed, crit) -> dict:
     """What one hit of ``side``'s move showed, from the states around it: a crit on a
     landed hit that dealt damage (the target's HP drop: only the hit itself lowers it,
-    effects.py:441-444), the defender's contact ability (the only change of the
+    effects.py:441-444; a crit into a substitute is not seen, a documented coarsening in
+    ``observe``'s docstring), the defender's contact ability (the only change of the
     attacker's own status inside a hit, effects.py:343-365) and a Fire hit's thaw (the
     only FREEZE -> NONE change of the target, effects.py:368-375)."""
     foe = 1 - side
