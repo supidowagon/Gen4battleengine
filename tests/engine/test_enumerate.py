@@ -312,19 +312,30 @@ def test_mask_sound(tables, names, data):
     laws = laws_of(tables, s, acts)
     try:
         outcomes, _ = enumerate_outcomes(laws)
-        picked = rows(outcomes, np.random.default_rng(seed).integers(0, len(outcomes.hit), 16))
+        k = len(outcomes.hit)
+        # Every row when the enumeration fits one padded chunk (no new compile); above
+        # that, CHUNK // 2 distinct random rows, so a relevance hole confined to a few
+        # rows of a small enumeration cannot be missed.
+        idx = (
+            np.arange(k)
+            if k <= CHUNK
+            else np.random.default_rng(seed).choice(k, CHUNK // 2, replace=False)
+        )
+        picked = rows(outcomes, idx)
     except SamplingOnly:
-        # Above the cap: law draws with the irrelevant elements at their empty value,
-        # which is what an enumerated row holds.
-        keys = jax.random.split(jax.random.key(seed), 16)
-        drawn = jax.tree.map(np.asarray, _sample(keys, tables, s, acts))
+        # Above the cap: CHUNK // 2 law draws with the irrelevant elements at their empty
+        # value, which is what an enumerated row holds. 5000 keys reuse the compiled
+        # sampler shape of test_matches_sampled_frequencies_random.
+        keys = jax.random.split(jax.random.key(seed), 5000)
+        drawn = jax.tree.map(lambda f: np.asarray(f)[: CHUNK // 2], _sample(keys, tables, s, acts))
         picked = Outcome(*(np.where(m, f, e) for f, m, e in zip(drawn, laws.relevant, EMPTY)))
     changed = Outcome(
         *(np.where(m, f, np.asarray(a)) for f, m, a in zip(picked, laws.relevant, arbitrary))
     )
+    n = len(picked.hit)
     both = Outcome(*(np.concatenate([a, b]) for a, b in zip(picked, changed)))
     stepped = step_bytes(tables, s, acts, both)
-    assert stepped[:16] == stepped[16:]
+    assert stepped[:n] == stepped[n:]
 
 
 @settings(max_examples=15, derandomize=True, **HYPOTHESIS)
