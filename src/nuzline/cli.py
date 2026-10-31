@@ -13,7 +13,8 @@
   [--devices N] [--tree FILE.json] [--show-depth 1]``: the Stage B plan (``search.stage_b``):
   the ranking with intervals and bounds, the plan tree under the best action, optionally the
   whole tree as JSON, and a run record under ``runs/`` (party hash, trainer, settings, seed,
-  result). Exit code 2 when the fight or the opponent AI is refused.
+  result). Exit code 2 when the fight or the opponent AI is refused, or a belief node's
+  states differ in the player's legal actions (``stage_b.HiddenLegality``).
 * ``nuzline trainers``: every trainer's id, name and class.
 
 ``--trainer NAME`` is the first trainer whose name matches case-insensitively and whose
@@ -26,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import itertools
 import json
 import os
 import sys
@@ -227,7 +229,7 @@ def _solve(args) -> int:
     from nuzline.engine.state import make_state
     from nuzline.jaxcache import code_version, enable_compile_cache, table_version
     from nuzline.search.plan_tree import render, to_json
-    from nuzline.search.stage_b import SolveSettings, solve
+    from nuzline.search.stage_b import HiddenLegality, SolveSettings, solve
 
     if args.max_depth < 0 or args.show_depth < 0:
         raise ValueError("--max-depth and --show-depth must not be negative")
@@ -235,13 +237,17 @@ def _solve(args) -> int:
         raise ValueError("--playouts must be at least 1")
     if args.epsilon < 0:
         raise ValueError("--epsilon must not be negative")
+    if args.budget is not None and args.budget < 0:
+        raise ValueError("--budget must not be negative")
     settings = SolveSettings(
         max_depth=args.max_depth,
         budget_playouts=args.playouts,
         budget_seconds=args.budget,
         epsilon=args.epsilon,
     )
-    enable_compile_cache(table_version(tables_module.DEFAULT) + code_version())
+    # _fight loads the tables from tables_module.DEFAULT: the version the run records.
+    tables_version = table_version(tables_module.DEFAULT)
+    enable_compile_cache(tables_version + code_version())
     tables, names, trainer, player, opp, weather = _fight(args)
     leads = (args.lead, args.opp_active)
     print(_trainer_line(trainer))
@@ -254,7 +260,7 @@ def _solve(args) -> int:
     state = make_state(tables, player, opp, weather, opp_items=trainer.items, leads=leads)
     try:
         result = solve(tables, names, state, jax.random.PRNGKey(args.seed), settings)
-    except UnsupportedAi as e:
+    except (UnsupportedAi, HiddenLegality) as e:
         print(f"refused: {e}")
         return EXIT_REFUSED
     if not result.ranking:
@@ -266,7 +272,7 @@ def _solve(args) -> int:
     print(f"{mine} vs {theirs}: seed {args.seed}")
     for line in render(result, names, args.show_depth, root=state, trainer=trainer.name):
         print(line)
-    tree = to_json(result, names, root=state, trainer=trainer.name)
+    tree = to_json(result, names, root=state, trainer=trainer.name, table_version=tables_version)
     if args.tree is not None:
         args.tree.write_text(json.dumps(tree, indent=1))
         print(f"plan tree: {args.tree}")
@@ -281,11 +287,24 @@ def _solve(args) -> int:
         "devices": jax.device_count(),
         "result": tree,
     }
-    RUNS.mkdir(parents=True, exist_ok=True)
-    path = RUNS / f"solve_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-    path.write_text(json.dumps(record, indent=1))
-    print(f"run record: {path}")
+    print(f"run record: {_write_run_record(record)}")
     return EXIT_OK
+
+
+def _write_run_record(record: dict) -> Path:
+    """Write ``record`` to a new ``runs/solve_<time to the microsecond>[_n].json`` and
+    return its path; an existing record is never overwritten (open mode ``x``)."""
+    RUNS.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    text = json.dumps(record, indent=1)
+    for n in itertools.count():
+        path = RUNS / f"solve_{stamp}{f'_{n}' if n else ''}.json"
+        try:
+            with path.open("x", encoding="utf-8") as f:
+                f.write(text)
+        except FileExistsError:
+            continue
+        return path
 
 
 def _trainers(args) -> int:

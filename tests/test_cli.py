@@ -234,6 +234,11 @@ def test_cli_solve_small(tmp_path, monkeypatch, capsys):
     assert run["party_sha256"] == hashlib.sha256(Path(PARTY).read_bytes()).hexdigest()
     assert run["trainer_id"] == 246 and run["seed"] == 0
     assert run["settings"]["budget_playouts"] == 2000 and run["result"]["depth"] == 1
+    from nuzline.data.tables import DEFAULT
+    from nuzline.jaxcache import table_version
+
+    assert run["result"]["table_version"] == saved["table_version"] == table_version(DEFAULT)
+    assert run["result"]["leaf_budget"] == 2000
 
 
 def test_cli_solve_refused(capsys, tmp_path, monkeypatch):
@@ -263,3 +268,50 @@ def test_cli_solve_all_dropped_is_a_refusal(capsys, tmp_path, monkeypatch):
     out = capsys.readouterr().out
     assert "refused:" in out and "Spike Cannon" in out
     assert not (tmp_path / "runs").exists()
+
+
+def test_cli_solve_unsupported_ai_is_a_refusal(capsys, tmp_path, monkeypatch):
+    """``solve`` raising ``UnsupportedAi`` (the AI refused at the root): ``refused:`` with
+    the reason, exit 2 and no run record."""
+    from nuzline import cli
+    from nuzline.ai.policy import UnsupportedAi
+    from nuzline.search import stage_b
+
+    def refuse(*args, **kwargs):
+        raise UnsupportedAi("Spike Cannon: AI script not transcribed")
+
+    monkeypatch.setattr(cli, "RUNS", tmp_path / "runs")
+    monkeypatch.setattr(stage_b, "solve", refuse)
+    args = ["solve", "--party", PARTY, "--trainer", "roark", "--devices", "1"]
+    assert main(args) == 2
+    out = capsys.readouterr().out
+    assert "refused: Spike Cannon: AI script not transcribed" in out
+    assert not (tmp_path / "runs").exists()
+
+
+def test_cli_solve_rejects_a_negative_budget(capsys):
+    args = ["solve", "--party", PARTY, "--trainer", "roark", "--budget", "-1", "--devices", "1"]
+    assert main(args) == 1
+    assert "--budget must not be negative" in capsys.readouterr().err
+
+
+def test_run_records_never_overwrite(tmp_path, monkeypatch):
+    """Two records in the same microsecond get two files (open mode ``x``)."""
+    import json
+    from datetime import datetime
+
+    from nuzline import cli
+
+    class Frozen(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 10, 31, 12, 0, 0, 123456)
+
+    monkeypatch.setattr(cli, "RUNS", tmp_path / "runs")
+    monkeypatch.setattr(cli, "datetime", Frozen)
+    first = cli._write_run_record({"n": 1})
+    second = cli._write_run_record({"n": 2})
+    assert first.name == "solve_20261031_120000_123456.json"
+    assert second.name == "solve_20261031_120000_123456_1.json"
+    assert json.loads(first.read_text()) == {"n": 1}
+    assert json.loads(second.read_text()) == {"n": 2}
