@@ -156,6 +156,39 @@ tree's weights. Max-over-noisy-children bias is real; the root ranking uses
 `tied_with_best` exactly as Stage A does (overlapping intervals are reported, not
 reordered), and the report states the leaf budget.
 
+#### Amendment 2026-10-31: precision target
+
+Amends the implementation plan's rulings 8 and 9
+(`docs/superpowers/plans/2026-10-30-stage-b-solver.md`). A fixed leaf budget per pass is
+either too small (wide intervals) or wasteful: a depth-2 solve measured needed about 135 000
+leaf playouts for the leader's half-width to reach 1.5 percentage points, while the
+benchmark's starting budget (`2 * K_2 * 4300` = 696 600) overshot about 7 times. Passes now
+stop at a precision target (`SolveSettings.precision`, a fraction; `nuzline solve
+--precision PP`, default 1.5 pp; `--playouts N` keeps the fixed budget and turns the target
+off).
+
+- **Ruling 8 (allocation), amended.** The floor is `leaf_floor = 1` per half (was 2;
+  measured: the same inner-decision quality, 13 % cheaper), and it applies to **round 0
+  only**: round 0 is the old allocation (`n_j = 2 * max(f, round(B_d * c_j / sum c / 2))`,
+  pruned and sampled evaluations exactly `2f`). A **top-up round** `r >= 1` adds a batch
+  as large as everything the pass has run so far (the cumulative total doubles), split in
+  proportion to each evaluation's summed reach, **forced evaluations (pruned opponent
+  actions, sampled pairs) and pruned groups included**, with **no floor**: an evaluation
+  whose rounded share is 0 gets nothing, and a refused one gets none. Each round draws
+  fresh key streams (`fold_in(fold_in(fold_in(pass key, 2), r), 0 | 1)` for leaves and
+  forced pairs; round 0 keeps `fold_in(pass key, 0 | 1)`); wins and playouts add into each
+  evaluation's halves and `refused` is or-ed.
+- **Ruling 9 (budgets), amended.** `B_d` (`budget_playouts`, else `n_depth0` per legal root
+  action) is the **round-0** budget. After each round the pass picks the leader by half-A
+  root values (the inner nodes' argmax, ties to the lowest action) and computes its half-A
+  half-width `1.96 * sqrt(sum_j W_j^2 * var_a_j)`, `var_a = p~(1-p~)/n_a`, `p~ = (k_a+1) /
+  (n_a+2)`. It tops up while that exceeds `precision`, for at most 8 top-up rounds and not
+  after `budget_seconds` (when set) has elapsed since the solve started. The pass always
+  completes; the backup, ranking and plan run once on the merged values. Half B never
+  decides a stop or a share (ruling 5); it still gives every reported value and interval.
+  Without a target a pass is round 0 alone, exactly as before. The result records, for the
+  final pass, the top-up rounds, the half-A half-width and whether the target was met.
+
 ### 4. Objective
 
 Stage B optimizes the primary objective, P(win with zero player faints). The engine

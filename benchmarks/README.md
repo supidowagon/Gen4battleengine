@@ -105,47 +105,39 @@ now only touch the 6.5 s run phase (playouts: mean 8.6 turns, max 21, 100-turn c
 
 # Milestone 2: `nuzline solve` wall time (Stage B)
 
-    uv run python -m benchmarks.solve_timing --calibrate
+    uv run python -m benchmarks.solve_timing [--precision 1.5] [--playouts D=B ...]
 
 Runs `nuzline solve --party tests/fixtures/sample_party.toml --trainer roark --max-depth D
---playouts B` for D = 1 and 2 in subprocesses sharing a fresh temporary `NUZLINE_CACHE_DIR`
-(cold, then warm) and writes `benchmarks/results/solve_<timestamp>.json` (gitignored): wall
-time, the leaf-playout phase (`evaluate_leaves` and `evaluate_forced`) and the rest
-(expansion: exact chance and AI enumeration, merging, backup), peak resident set, completed
-depth, the leader's interval half-width and the playouts run. It exits non-zero if the output
-has no ranking header. `--playouts D=B` fixes a budget instead of calibrating.
+--precision 1.5` for D = 1 and 2 in subprocesses sharing a fresh temporary
+`NUZLINE_CACHE_DIR` (cold, then warm) and writes `benchmarks/results/solve_<timestamp>.json`
+(gitignored): wall time, the leaf-playout phase (`evaluate_leaves` and `evaluate_forced`,
+every round) and the rest (expansion: exact chance and AI enumeration, merging, backup),
+peak resident set, completed depth, the playouts run, the top-up rounds of the final pass,
+the leader's half-A half-width and whether the target was met, and the leader's printed
+interval. It exits non-zero if the output has no ranking header. `--playouts D=B` runs depth
+`D` with the fixed leaf budget `B` instead (no top-ups).
+
+Budgets come from the solver's own precision target (spec section 3, "Amendment
+2026-10-31: precision target"): each pass runs round 0 at `B_d = n_depth0 *` legal root
+actions (18 000 here) with a floor of 1 playout per half, then doubles its playouts in
+top-up rounds, shared by reach, until the half-A leader's half-A half-width is at most 1.5
+percentage points (at most 8 top-ups). This replaces the earlier calibration, which doubled
+a fixed `B_d` from `2 * K_d * 4300` and overshot the needed precision about 7 times at
+depth 2.
 
 Targets (spec section 7, cold, at a leading-action half-width of at most 1.5 percentage
-points): depth 1 within 2 minutes, depth 2 within 10 minutes. Budgets: `B_d` starts at
-`2 * K_d * 4300` (K_1 = 9, K_2 = 81 player-action combinations; 4300 effective playouts per
-1.5 pp half-width, notes/critic.md C7; the factor 2 is the ruling-5 half split) and doubles
-until the leader's half-width is at most 1.5 pp. Environment as above (13th Gen Intel(R)
-Core(TM) i5-13600K, 20 host devices, Windows 11), 2026-10-31. Sample party (Monferno lead)
+points): depth 1 within 2 minutes, depth 2 within 10 minutes. Environment as above (13th Gen
+Intel(R) Core(TM) i5-13600K, 20 host devices, Windows 11). Sample party (Monferno lead)
 against Roark, leader = the top-ranked action.
 
-| depth | B_d     | run  | wall   | leaf playouts | expansion | peak RSS | playouts run | leader half-width | target |
-|-------|---------|------|--------|---------------|-----------|----------|--------------|-------------------|--------|
-| 1     | 77 400  | cold | 85.2 s | 65.4 s        | 15.4 s    | 2.1 GB   | 77 794       | 0.75 pp           | 120 s: met |
-| 1     | 77 400  | warm | 57.8 s | 49.2 s        | 4.4 s     | 1.9 GB   | 77 794       | 0.75 pp           | |
-| 2     | 696 600 | cold | 909 s  | 880 s         | 23.8 s    | 3.2 GB   | 1 420 086    | 0.60 pp           | 600 s: **missed by 309 s** |
-| 2     | 696 600 | warm | 859 s  | 842 s         | 12.5 s    | 3.2 GB   | 1 420 086    | 0.60 pp           | |
-| 2     | 174 150 | cold | 314 s  | 286 s         | 23.6 s    | 3.1 GB   | 380 514      | 1.15 pp           | 600 s: met |
-| 2     | 174 150 | warm | 268 s  | 250 s         | 12.8 s    | 3.1 GB   | 380 514      | 1.15 pp           | |
+| depth | run  | wall | leaf playouts | expansion | peak RSS | playouts run | top-up rounds | leader half-width (half A) | target met | time target |
+|-------|------|------|---------------|-----------|----------|--------------|---------------|----------------------------|------------|-------------|
+| 1     | cold | TBD  | TBD           | TBD       | TBD      | TBD          | TBD           | TBD                        | TBD        | 120 s: TBD  |
+| 1     | warm | TBD  | TBD           | TBD       | TBD      | TBD          | TBD           | TBD                        | TBD        |             |
+| 2     | cold | TBD  | TBD           | TBD       | TBD      | TBD          | TBD           | TBD                        | TBD        | 600 s: TBD  |
+| 2     | warm | TBD  | TBD           | TBD       | TBD      | TBD          | TBD           | TBD                        | TBD        |             |
 
-The calibration rule's starting budgets already give the leader a half-width under 1.5 pp
-(the leader sits near 93 to 96 percent, where a binomial interval is narrow), so no doubling
-happened and the rows for `B_d = 2 * K_d * 4300` are the rule's answer. At depth 1 the target
-is met cold (85 s of 120 s). At depth 2 the target is **missed** at that budget: 909 s cold
-against 600 s. Nearly all of it (880 s, 97 percent) is leaf playouts; expansion is 24 s
-cold. The fixed leaf floor (2 per half per evaluated state, ruling 8) pushes the playouts
-actually run to 1.42 M, twice `B_2`, and they run at about 1 600 per second, below the
-2 800 per second of the Stage A spike, because forced-pair leaves and deeper positions are
-costlier per playout. The extra row, a quarter of that budget, is not a calibration result:
-it shows that the same fight reaches a 1.15 pp half-width in 314 s cold, so the miss comes
-from the starting budget rule overshooting the precision needed, not from a failure to reach
-the precision in time. The targets are unchanged.
-
-Levers for the depth-2 miss, in the order of spec section 7 (none applied here):
-1. a faster playout policy per turn (it dominates turn cost);
-2. chunked playouts with compaction (spec section 6);
-3. smaller leaf floors (`leaf_floor`, which doubled the playouts run at depth 2).
+Earlier fixed-budget measurements (2026-10-31, before the precision target): depth 1 at
+`B_1` = 77 400 took 85 s cold (0.75 pp); depth 2 at `B_2` = 696 600 took 909 s cold (0.60
+pp, the 600 s target missed), and a quarter of that budget reached 1.15 pp in 314 s cold.
+Leaf playouts were 97 percent of the depth-2 time.

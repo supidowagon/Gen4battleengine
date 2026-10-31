@@ -38,6 +38,8 @@
 9. **Budgets**: `budget_playouts` is `B_d` for every pass `d >= 1`; with `None`, `B_d = n_depth0 * n_root_actions`. Iterative deepening runs passes `d = 1..max_depth`; a pass is never cut short; `budget_seconds`, when set, only decides whether the next pass starts (it does not start once elapsed time exceeds the budget). The deepest completed pass is the result; depth 1 always runs.
 10. **Absolute reach** (`prob` on plan nodes, `c_j`, the epsilon test) is the product of chance probabilities along the path: belief weight x opponent-action probability x outcome probability; player choices excluded.
 
+*Amended 2026-10-31 (precision target):* rulings 8 and 9 now give round 0 of a pass (floor `f = 1`); a pass then tops up by reach, with no floor and forced evaluations included, until the half-A leader's half-A half-width is at most `SolveSettings.precision` (at most 8 top-ups, `budget_seconds`). See the spec's "Amendment 2026-10-31: precision target".
+
 ## Review Focus
 
 1. **A root action whose turn is sampling-only** while others are fine: the others are ranked; the dropped action is named with its reason. Test in Task 5.
