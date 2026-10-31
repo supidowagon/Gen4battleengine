@@ -1,6 +1,6 @@
 # Stage B Solver — Design
 
-Date: 2026-10-30 · Status: draft for review · Parent spec: `docs/design.md` (§4.2, §4.3)
+Date: 2026-10-30 · Status: approved by the user 2026-10-30 · Parent spec: `docs/design.md` (§4.2, §4.3)
 
 ## Why
 
