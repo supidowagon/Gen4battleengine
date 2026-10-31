@@ -226,3 +226,27 @@ def test_unlabelled_unobserved_node_is_an_error(roark, names):
     )
     with pytest.raises(ValueError, match="no opponent action"):
         render(dataclasses.replace(result, plan=plan), names, 1, root=state)
+
+
+def test_precision_footer_and_json(roark, names):
+    state, result = roark
+    # Fixed budget: no precision line, the JSON says no target.
+    assert not any("precision target" in line for line in render(result, names, 0, root=state))
+    plain = to_json(result, names, root=state)
+    assert plain["rounds"] == 0 and plain["half_width_a"] is None
+    assert plain["precision_met"] is None
+    settings = dataclasses.replace(SETTINGS, precision=0.015)
+    met = dataclasses.replace(
+        result, settings=settings, rounds=3, half_width_a=0.0123, precision_met=True
+    )
+    lines = render(met, names, 0, root=state)
+    assert "see the full state" in lines[-1] and "leaf budget 100" in lines[-1]
+    (line,) = [x for x in lines if "precision target" in x]
+    assert "1.5 pp" in line and "met" in line and "not met" not in line
+    assert "1.23 pp" in line and "3 top-up rounds" in line
+    tree = json.loads(json.dumps(to_json(met, names, root=state)))
+    assert tree["rounds"] == 3 and tree["half_width_a"] == 0.0123
+    assert tree["precision_met"] is True and tree["settings"]["precision"] == 0.015
+    missed = dataclasses.replace(met, rounds=8, half_width_a=0.02, precision_met=False)
+    (line,) = [x for x in render(missed, names, 0, root=state) if "precision target" in x]
+    assert "not met" in line and "2.00 pp" in line and "8 top-up rounds" in line

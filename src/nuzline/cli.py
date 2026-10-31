@@ -9,11 +9,13 @@
   start condition; party slots ``--lead`` and ``--opp-active`` active). Exit code 2 when
   the fight is refused, by the coverage check or by a refused playout.
 * ``nuzline solve --party P (--trainer NAME | --trainer-id N) [--lead 0] [--opp-active 0]
-  [--max-depth 2] [--budget SECONDS] [--playouts N] [--epsilon 1e-4] [--seed 0]
-  [--devices N] [--tree FILE.json] [--show-depth 1]``: the Stage B plan (``search.stage_b``):
-  the ranking with intervals and bounds, the plan tree under the best action, optionally the
-  whole tree as JSON, and a run record under ``runs/`` (party hash, trainer, settings, seed,
-  result). Exit code 2 when the fight or the opponent AI is refused, or a belief node's
+  [--max-depth 2] [--budget SECONDS] [--precision PP | --playouts N] [--epsilon 1e-4]
+  [--seed 0] [--devices N] [--tree FILE.json] [--show-depth 1]``: the Stage B plan
+  (``search.stage_b``): the ranking with intervals and bounds, the plan tree under the best
+  action, whether the precision target was met, optionally the whole tree as JSON, and a run
+  record under ``runs/`` (party hash, trainer, settings, seed, result). Each pass tops up its
+  leaf playouts until the leader's half-width is at most ``--precision`` percentage points
+  (default 1.5); ``--playouts N`` instead fixes every pass's leaf budget (no top-ups). Exit code 2 when the fight or the opponent AI is refused, or a belief node's
   states differ in the player's legal actions (``stage_b.HiddenLegality``).
 * ``nuzline trainers``: every trainer's id, name and class.
 
@@ -39,6 +41,8 @@ from nuzline.data.trainer import Trainer
 
 INTERMEDIATE = Path(__file__).resolve().parents[2] / "data" / "intermediate"
 RUNS = Path(__file__).resolve().parents[2] / "runs"
+
+DEFAULT_PRECISION_PP = 1.5  # nuzline solve's precision target, percentage points
 
 ALL_ZERO_FOOTER = "all lines 0 %: no zero-faint line found at this depth"
 
@@ -112,7 +116,15 @@ def _parser() -> argparse.ArgumentParser:
         "--playouts",
         type=int,
         default=None,
-        help="leaf playouts per pass (default: 2000 per action)",
+        help="fixed leaf playouts per pass, no precision target (default: 2000 per action "
+        "in round 0, then top-ups to --precision)",
+    )
+    solve.add_argument(
+        "--precision",
+        type=float,
+        default=None,
+        help=f"target half-width of the leader's interval, percentage points (default "
+        f"{DEFAULT_PRECISION_PP}; not with --playouts)",
     )
     solve.add_argument("--epsilon", type=float, default=1e-4, help="prune reach below this")
     solve.add_argument("--seed", type=int, default=0, help="PRNG seed of the playouts")
@@ -235,6 +247,10 @@ def _solve(args) -> int:
         raise ValueError("--max-depth and --show-depth must not be negative")
     if args.playouts is not None and args.playouts < 1:
         raise ValueError("--playouts must be at least 1")
+    if args.precision is not None and args.playouts is not None:
+        raise ValueError("--precision and --playouts are alternatives: give one")
+    if args.precision is not None and not args.precision > 0:
+        raise ValueError("--precision must be positive")
     if args.epsilon < 0:
         raise ValueError("--epsilon must not be negative")
     if args.budget is not None and args.budget < 0:
@@ -244,6 +260,9 @@ def _solve(args) -> int:
         budget_playouts=args.playouts,
         budget_seconds=args.budget,
         epsilon=args.epsilon,
+        precision=None
+        if args.playouts is not None
+        else (args.precision or DEFAULT_PRECISION_PP) / 100,
     )
     # _fight loads the tables from tables_module.DEFAULT: the version the run records.
     tables_version = table_version(tables_module.DEFAULT)

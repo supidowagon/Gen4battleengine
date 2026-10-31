@@ -315,3 +315,46 @@ def test_run_records_never_overwrite(tmp_path, monkeypatch):
     assert second.name == "solve_20261031_120000_123456_1.json"
     assert json.loads(first.read_text()) == {"n": 1}
     assert json.loads(second.read_text()) == {"n": 2}
+
+
+def _solve_settings(monkeypatch, tmp_path, extra: list[str]):
+    """The ``SolveSettings`` ``nuzline solve`` passes for ``extra`` flags (``solve`` is a
+    stub returning no ranking, so the command stops with exit 2 after it)."""
+    from types import SimpleNamespace
+
+    from nuzline import cli
+    from nuzline.search import stage_b
+
+    seen = []
+
+    def fake(tables, names, state, key, settings, *a, **k):
+        seen.append(settings)
+        return SimpleNamespace(ranking=[], dropped={0: "stub"})
+
+    monkeypatch.setattr(cli, "RUNS", tmp_path / "runs")
+    monkeypatch.setattr(stage_b, "solve", fake)
+    args = ["solve", "--party", PARTY, "--trainer", "roark", "--devices", "1", *extra]
+    assert main(args) == 2
+    (settings,) = seen
+    return settings
+
+
+def test_cli_solve_precision_is_the_default(monkeypatch, tmp_path):
+    settings = _solve_settings(monkeypatch, tmp_path, [])
+    assert settings.precision == pytest.approx(0.015) and settings.budget_playouts is None
+    settings = _solve_settings(monkeypatch, tmp_path, ["--precision", "0.5"])
+    assert settings.precision == pytest.approx(0.005) and settings.budget_playouts is None
+
+
+def test_cli_solve_playouts_turn_precision_off(monkeypatch, tmp_path):
+    settings = _solve_settings(monkeypatch, tmp_path, ["--playouts", "5000"])
+    assert settings.precision is None and settings.budget_playouts == 5000
+
+
+def test_cli_solve_rejects_bad_precision(capsys):
+    base = ["solve", "--party", PARTY, "--trainer", "roark", "--devices", "1"]
+    for bad in ("0", "-1"):
+        assert main([*base, "--precision", bad]) == 1
+        assert "--precision must be positive" in capsys.readouterr().err
+    assert main([*base, "--precision", "1", "--playouts", "100"]) == 1
+    assert "--precision and --playouts" in capsys.readouterr().err

@@ -373,6 +373,9 @@ def to_json(
         "settings": dataclasses.asdict(result.settings),
         "depth": result.depth,
         "leaf_budget": result.leaf_budget,
+        "rounds": int(result.rounds),
+        "half_width_a": None if result.half_width_a is None else float(result.half_width_a),
+        "precision_met": result.precision_met,
         "ranking": [_plain(dataclasses.asdict(r)) for r in result.ranking],
         "dropped": [
             {"action": int(a), "label": walk.labels.get(a, f"action {a}"), "reason": why}
@@ -388,6 +391,18 @@ def to_json(
 
 def _pct(p: float) -> str:
     return f"{100 * p:5.1f} %"
+
+
+def _precision_line(result: SolveResult) -> str:
+    """The precision target of the final pass: met or not, the half-A leader's half-width
+    and the top-up rounds run."""
+    head = f"precision target {100 * result.settings.precision:.1f} pp"
+    rounds = f"after {result.rounds} top-up round{'' if result.rounds == 1 else 's'}"
+    if result.half_width_a is None:
+        return f"{head}: no ranked action to measure, {rounds}"
+    verdict = "met" if result.precision_met else "not met"
+    width = f"{100 * result.half_width_a:.2f} pp"
+    return f"{head}: {verdict} (leader's half-A half-width {width}) {rounds}"
 
 
 def _outcome_text(node: PlanNode, walk: _Walk) -> str:
@@ -443,6 +458,8 @@ def render(
         )
         return out
     out.append("the plan is shown under the best action only")
+    if s.precision is not None:
+        out.append(_precision_line(result))
     out.append(
         f"leaf budget {result.leaf_budget} playouts per pass (floor {s.leaf_floor} per half); "
         "leaf estimates come from playouts that see the full state (the plan never does)"
