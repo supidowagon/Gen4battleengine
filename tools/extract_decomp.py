@@ -25,6 +25,7 @@ CLI: ``uv run python -m tools.extract_decomp --decomp external/pokeplatinum --ou
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import math
 import re
@@ -154,6 +155,7 @@ def extract_species(decomp: Path) -> list[dict]:
     species = _constants(decomp, "species", "SPECIES_")
     type_id = _index(_constants(decomp, "pokemon_types", "TYPE_"), "type")
     ability_id = _index(_constants(decomp, "abilities", "ABILITY_"), "ability")
+    exp_rate_id = _index(_constants(decomp, "exp_rates", "EXP_RATE_"), "exp rate")
     ratios = _gender_ratios(decomp)
     out = []
     for const in species:
@@ -170,8 +172,41 @@ def extract_species(decomp: Path) -> list[dict]:
                 "gender_ratio": ratios[d["gender_ratio"]],
                 "weight_hg": _weight_hg(dex, const, path),
                 "base_friendship": int(d["base_friendship"]),
+                "exp_rate": exp_rate_id(d["exp_rate"]),
             }
         )
+    return out
+
+
+def extract_exp_tables(decomp: Path) -> list[list[int]]:
+    """Experience needed per level: ``[rate][level]`` for levels 0..100, rate order =
+    ``generated/exp_rates.txt`` (``res/pokemon/.shared/exp_tables.csv`` columns)."""
+    path = decomp / "res" / "pokemon" / ".shared" / "exp_tables.csv"
+    with path.open(encoding="utf-8", newline="") as f:
+        rows = list(csv.reader(f))
+    header, body = rows[0], rows[1:]
+    if header[0] != "level" or len(header) != 9:
+        raise ExtractError(f"{path}: unexpected header {header!r}")
+    if [int(r[0]) for r in body] != list(range(101)):
+        raise ExtractError(f"{path}: levels are not 0..100")
+    return [[int(r[1 + rate]) for r in body] for rate in range(8)]
+
+
+def extract_charmap(decomp: Path) -> dict[int, str]:
+    """Text code -> character from ``tools/msgenc/charmap.txt``; ``{command}`` entries and
+    comments are skipped. Trailing whitespace is part of the value (code 0x01DE is a space)."""
+    path = decomp / "tools" / "msgenc" / "charmap.txt"
+    out: dict[int, str] = {}
+    for lineno, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        line = raw.lstrip(" 	")
+        if not line or line.startswith("//"):
+            continue
+        code, sep, value = line.partition("=")
+        if not sep or not re.fullmatch(r"[0-9A-F]{4}", code):
+            raise ExtractError(f"{path}:{lineno}: unparsed charmap line {raw!r}")
+        if len(value) > 2 and value.startswith("{") and value.endswith("}"):
+            continue
+        out[int(code, 16)] = value
     return out
 
 
@@ -666,6 +701,11 @@ def extract_static(decomp_root: Path, out_dir: Path) -> None:
     _write(out_dir / "items.json", extract_items(decomp_root))
     _write(out_dir / "abilities.json", extract_abilities(decomp_root))
     _write(out_dir / "learnsets.json", extract_learnsets(decomp_root))
+    _write(out_dir / "exp_tables.json", extract_exp_tables(decomp_root))
+    _write(
+        out_dir / "charmap.json",
+        {f"{k:04X}": v for k, v in extract_charmap(decomp_root).items()},
+    )
 
 
 def main(argv: list[str] | None = None) -> None:

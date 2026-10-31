@@ -225,13 +225,18 @@ if tuple(LAYOUT) != BattleState._fields:
 
 def _fill_slot(a: dict[str, np.ndarray], tables: Tables, side: int, slot: int, mon: PokemonSpec):
     species = mon.species
-    stats = calc_stats(
-        np.asarray(tables.species_base_stats[species]),
-        np.asarray(mon.ivs),
-        np.asarray(mon.evs),
-        mon.level,
-        np.asarray(tables.nature_mods[mon.nature]),
-    )
+    if mon.stats is not None:
+        if len(mon.stats) != 6:
+            raise ValueError(f"species {species}: stats needs 6 values, got {len(mon.stats)}")
+        stats = np.asarray(mon.stats)
+    else:
+        stats = calc_stats(
+            np.asarray(tables.species_base_stats[species]),
+            np.asarray(mon.ivs),
+            np.asarray(mon.evs),
+            mon.level,
+            np.asarray(tables.nature_mods[mon.nature]),
+        )
     max_hp = int(stats[Stat.HP])
     hp = max_hp if mon.current_hp is None else mon.current_hp
     if not 0 <= hp <= max_hp:
@@ -248,8 +253,9 @@ def _fill_slot(a: dict[str, np.ndarray], tables: Tables, side: int, slot: int, m
     a["ability_slot"][side, slot] = mon.ability_slot
     a["item"][side, slot] = mon.item
     a["moves"][side, slot] = mon.moves
-    a["pp"][side, slot] = [move_pp[m] if m else 0 for m in mon.moves]
+    a["pp"][side, slot] = [move_pp[m] if m else 0 for m in mon.moves] if mon.pp is None else mon.pp
     a["status"][side, slot] = mon.status
+    a["status_counter"][side, slot] = mon.status_counter
     a["gender"][side, slot] = mon.gender
     a["friendship"][side, slot] = mon.friendship
     a["ivs"][side, slot] = mon.ivs

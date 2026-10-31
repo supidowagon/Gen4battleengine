@@ -12,7 +12,10 @@ class PokemonSpec:
     ``ivs``/``evs`` are in ``ids.Stat`` order; ``moves`` holds four move ids with
     0 for an empty slot; ``ability_slot`` (0 or 1) indexes the species' two
     abilities; ``gender`` is 0 male, 1 female, 2 none. ``current_hp=None`` means
-    full HP; ``status`` is an ``ids.Status``.
+    full HP; ``status`` is an ``ids.Status`` and ``status_counter`` its turn counter
+    (sleep turns left). ``pp`` (current PP per move slot) and ``stats`` (the stored
+    in-game stats, ``ids.Stat`` order with max HP first) override the table PP and
+    the ``calc_stats`` result when not ``None``.
     """
 
     species: int
@@ -28,3 +31,6 @@ class PokemonSpec:
     form: int = 0
     current_hp: int | None = None
     status: int = 0
+    status_counter: int = 0
+    pp: tuple[int, int, int, int] | None = None
+    stats: tuple[int, ...] | None = None

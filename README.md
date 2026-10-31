@@ -16,3 +16,10 @@ Rank the opening actions, or solve the fight start with the Stage B plan search 
 uv run nuzline rank --party tests/fixtures/sample_party.toml --trainer roark
 uv run nuzline solve --party tests/fixtures/sample_party.toml --trainer roark --max-depth 2 --tree plan.json
 ```
+
+Read a Platinum save (see `docs/saves.md`), or use it in place of `--party` with `--save`:
+
+```
+uv run nuzline save show path/to/platinum.sav
+uv run nuzline rank --save path/to/platinum.sav --trainer roark
+```

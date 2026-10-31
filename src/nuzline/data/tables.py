@@ -24,6 +24,8 @@ class Tables(NamedTuple):
     species_weight: jnp.ndarray  # int32[S], hectograms
     species_gender: jnp.ndarray  # int16[S], decomp gender ratio
     species_friendship: jnp.ndarray  # int16[S] (140 does not fit int8)
+    species_exp_rate: jnp.ndarray  # int8[S], 0 medium fast .. 5 slow (exp_rates.txt order)
+    exp_table: jnp.ndarray  # int32[8,101], [rate, level] -> experience
     move_power: jnp.ndarray  # int16[M]
     move_type: jnp.ndarray  # int8[M]
     move_category: jnp.ndarray  # int8[M], 0 physical, 1 special, 2 status
@@ -74,6 +76,8 @@ class Names:
         self.ability_names: tuple[str, ...] = tuple(manifest["ability_names"])
         self.type_names: tuple[str, ...] = tuple(manifest["type_names"])
         self.nature_names: tuple[str, ...] = tuple(manifest["nature_names"])
+        # Text code -> character (JSON keys are hex strings).
+        self.charmap: dict[int, str] = {int(k, 16): v for k, v in manifest["charmap"].items()}
         self._species_abilities = tuple(tuple(a) for a in manifest["species_abilities"])
         self._species_friendship = tuple(manifest["species_base_friendship"])
         self._species = _index(manifest["species_names"], "species")

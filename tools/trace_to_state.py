@@ -44,6 +44,7 @@ from nuzline.engine.order import MOVE_ACTIONS, effective_speed, selected_move
 from nuzline.engine.outcome import MAX_HITS, Outcome, empty_outcome
 from nuzline.engine.state import LAYOUT, SLOTS, BattleState, make_state
 from nuzline.engine.step import needs_replacement, replace, step
+from nuzline.saves.status import decode_status
 
 INTERMEDIATE = Path(__file__).resolve().parents[1] / "data" / "intermediate"
 BUNDLE_FORMAT = "nuzline-golden-trace/1"
@@ -73,15 +74,6 @@ MOVE_STATUS_MISSED = 1 << 0  # include/constants/battle/moves.h
 COMMAND_RESULT = 41  # BATTLE_CONTROL_RESULT
 NO_ACTIONS = (-1, -1)  # the last turn: the trace ends before any choice
 
-# MON_CONDITION_* (include/constants/battle/condition.h)
-_SLEEP_MASK, _TOXIC_COUNTER_SHIFT = 0x7, 8
-_STATUS_BITS = (
-    (1 << 3, Status.POISON),
-    (1 << 4, Status.BURN),
-    (1 << 5, Status.FREEZE),
-    (1 << 6, Status.PARALYSIS),
-    (1 << 7, Status.TOXIC),
-)
 # FIELD_CONDITION_* (TEMP | PERM pairs) and FIELD_CONDITION_DEEP_FOG
 _WEATHER_BITS = (
     (0x3, Weather.RAIN),
@@ -123,18 +115,6 @@ class Turn:
     outcome: Outcome
     roll_candidates: dict[tuple[int, int], list[tuple[int, int]]]
     mismatched: tuple[str, ...]
-
-
-def decode_status(raw: int) -> tuple[Status, int]:
-    """``(ids.Status, status_counter)`` from a ``MON_CONDITION_*`` word: sleep turns in
-    bits 0-2, the toxic counter in bits 8-11."""
-    if raw & _SLEEP_MASK:
-        return Status.SLEEP, raw & _SLEEP_MASK
-    for bit, status in reversed(_STATUS_BITS):
-        if raw & bit:
-            counter = (raw >> _TOXIC_COUNTER_SHIFT) & 0xF if status == Status.TOXIC else 0
-            return status, counter
-    return Status.NONE, 0
 
 
 def decode_weather(mask: int) -> Weather:

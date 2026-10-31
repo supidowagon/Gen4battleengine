@@ -185,3 +185,12 @@ def test_names_species_abilities_and_friendship(names):
     )
     assert n.species_abilities(n.species("Monferno")) == (n.ability("Blaze"), 0)
     assert n.species_base_friendship(n.species("Monferno")) == 70
+
+
+def test_growth_tables(tables, names):
+    assert int(tables.species_exp_rate[names.species("Abra")]) == 3
+    assert int(tables.exp_table[0, 100]) == 1_000_000
+
+
+def test_charmap_loaded(names):
+    assert names.charmap[0x0145] == "a"

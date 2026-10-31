@@ -3,7 +3,12 @@ from pathlib import Path
 
 import pytest
 
-from tools.extract_decomp import extract_static
+from tools.extract_decomp import (
+    extract_charmap,
+    extract_exp_tables,
+    extract_species,
+    extract_static,
+)
 
 DECOMP = Path("external/pokeplatinum")
 pytestmark = pytest.mark.skipif(not DECOMP.exists(), reason="decomp not cloned")
@@ -68,3 +73,26 @@ def test_learnset_chimchar_has_ember_at_7(out):
     chimchar = next(i for i, s in enumerate(sp) if s["name"].lower() == "chimchar")
     ember = next(i for i, m in enumerate(mv) if m["name"].lower() == "ember")
     assert [7, ember] in ls[str(chimchar)]
+
+
+def test_species_exp_rate():
+    species = {s["name"].lower(): s for s in extract_species(DECOMP)}
+    assert species["abra"]["exp_rate"] == 3  # EXP_RATE_MEDIUM_SLOW
+
+
+def test_exp_tables():
+    t = extract_exp_tables(DECOMP)
+    assert len(t) == 8 and all(len(r) == 101 for r in t)
+    assert t[0][100] == 1_000_000 and t[3][100] == 1_059_860 and t[5][100] == 1_250_000
+
+
+def test_charmap():
+    cm = extract_charmap(DECOMP)
+    assert cm[0x0121] == "0" and cm[0x0145] == "a" and cm[0x01AB] == "!"
+    assert cm[0x01C1] == "=" and cm[0x01DE] == " "  # trailing space is the value
+    assert all(isinstance(k, int) for k in cm)
+
+
+def test_static_writes_growth_files(out):
+    assert len(json.loads((out / "exp_tables.json").read_text(encoding="utf-8"))) == 8
+    assert json.loads((out / "charmap.json").read_text(encoding="utf-8"))["0145"] == "a"

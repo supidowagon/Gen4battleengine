@@ -211,3 +211,36 @@ def test_leads_choose_the_active_slots_before_the_switch_in_effects(tables, name
         make_state(tables, p, opp, leads=(6, 0))
     with pytest.raises(ValueError, match="side 1: lead slot 2"):
         make_state(tables, p, opp, leads=(0, 2))
+
+
+@pytest.fixture
+def sample_spec(names):
+    return load_party(FIXTURES / "sample_party.toml", names)[0]
+
+
+def test_make_state_uses_spec_pp_counter_and_stats(tables, sample_spec):
+    spec = dataclasses.replace(
+        sample_spec,
+        pp=(3, 0, 1, 2),
+        status=Status.SLEEP,
+        status_counter=2,
+        stats=(50, 30, 31, 32, 33, 34),
+        current_hp=20,
+    )
+    s = make_state(tables, [spec], [sample_spec])
+    assert s.pp[0, 0].tolist() == [3, 0, 1, 2] and int(s.status_counter[0, 0]) == 2
+    assert int(s.max_hp[0, 0]) == 50 and s.stats[0, 0].tolist() == [30, 31, 32, 33, 34]
+    assert int(s.hp[0, 0]) == 20
+
+
+def test_make_state_defaults_unchanged(tables, sample_spec):
+    s = make_state(tables, [sample_spec], [sample_spec])
+    move_pp = [int(tables.move_pp[m]) if m else 0 for m in sample_spec.moves]
+    assert s.pp[0, 0].tolist() == move_pp and int(s.status_counter[0, 0]) == 0
+    assert int(s.max_hp[0, 0]) > 0 and all(v > 0 for v in s.stats[0, 0].tolist())
+
+
+def test_current_hp_checked_against_override(tables, sample_spec):
+    spec = dataclasses.replace(sample_spec, stats=(50, 30, 31, 32, 33, 34), current_hp=51)
+    with pytest.raises(ValueError, match="current_hp"):
+        make_state(tables, [spec], [sample_spec])

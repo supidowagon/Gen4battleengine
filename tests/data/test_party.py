@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from nuzline.data.party import load_party
+from nuzline.engine.ids import Status
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
 
@@ -51,3 +52,39 @@ def test_ability_the_species_cannot_have_is_rejected(names, tmp_path):
 def test_fainted_party_member_keeps_hp_zero(names):
     p = load_party(FIXTURES / "sample_party_fainted.toml", names)
     assert p[5].current_hp == 0
+
+
+def test_party_toml_new_keys(tmp_path, names):
+    f = tmp_path / "p.toml"
+    f.write_text(
+        _SHINX.format(nature="Hardy", ability="Rivalry")
+        + 'status = "sleep"\nsleep_turns = 2\npp = [10]\nstats = [30, 11, 12, 13, 14, 15]\n',
+        encoding="utf-8",
+    )
+    (mon,) = load_party(f, names)
+    assert mon.status == Status.SLEEP and mon.status_counter == 2
+    assert mon.pp == (10, 0, 0, 0) and mon.stats == (30, 11, 12, 13, 14, 15)
+
+
+def test_party_toml_new_keys_default_to_none(names):
+    (mon, *_) = load_party(FIXTURES / "sample_party.toml", names)
+    assert mon.pp is None and mon.stats is None
+    assert mon.status == Status.NONE and mon.status_counter == 0
+
+
+@pytest.mark.parametrize(
+    "extra, match",
+    [
+        ("sleep_turns = 2\n", "sleep_turns"),
+        ('status = "poison"\nsleep_turns = 2\n', "sleep_turns"),
+        ('status = "drowsy"\n', "status"),
+        ("pp = [1, 2]\nmoves_extra = 1\n" if False else "pp = [1, 2]\n", "pp"),
+        ("pp = [1, 2, 3, 4, 5]\n", "pp"),
+        ("stats = [1, 2, 3]\n", "stats"),
+    ],
+)
+def test_party_toml_new_key_errors(tmp_path, names, extra, match):
+    f = tmp_path / "p.toml"
+    f.write_text(_SHINX.format(nature="Hardy", ability="Rivalry") + extra, encoding="utf-8")
+    with pytest.raises(ValueError, match=match):
+        load_party(f, names)
