@@ -132,3 +132,21 @@ def test_species_zero_with_bad_checksum_raises(tables, names):
     assert any(raw)
     with pytest.raises(RecordError, match="box 1 slot 4"):
         decode_mon(raw, ("box", 1, 4), tables, names.charmap)
+
+
+def test_unknown_move_id_names_the_slot(tables, names):
+    raw = mon_record(species=63, moves=(33, 0, 9999, 0))
+    with pytest.raises(RecordError, match=r"box 0 slot 3: move slot 2 has unknown move id 9999"):
+        decode_mon(raw, ("box", 0, 3), tables, names.charmap)
+
+
+def test_unknown_item_id_names_the_slot(tables, names):
+    raw = mon_record(species=63, item=9999)
+    with pytest.raises(RecordError, match=r"party slot 4: unknown item id 9999"):
+        decode_mon(raw, ("party", 0, 4), tables, names.charmap)
+
+
+def test_out_of_range_species_names_the_slot(tables, names):
+    raw = mon_record(species=9999, exp=0)
+    with pytest.raises(RecordError, match=r"box 2 slot 5: species 9999 out of range"):
+        decode_mon(raw, ("box", 2, 5), tables, names.charmap)

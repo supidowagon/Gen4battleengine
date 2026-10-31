@@ -107,8 +107,11 @@ def _mon_line(mon: SaveMon, names) -> str:
     else:
         hp = "HP -"
     status = _status_name(mon)
+    species = names.species_names[mon.species]
     parts = [
-        f"{names.species_names[mon.species]} Lv{mon.level}",
+        f"{species} Lv{mon.level}",
+        *([f"form {mon.form}"] if mon.form else []),
+        *([f'"{mon.nickname}"'] if mon.nickname and mon.nickname != species else []),
         names.nature_names[mon.nature],
         names.ability_names[mon.ability],
         f"item {_item_name(names, mon.item) or '-'}",

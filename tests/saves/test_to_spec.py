@@ -131,3 +131,13 @@ def test_foreign_ability_raises(tables, names):
     mon = dataclasses.replace(_box(tables, names), ability=123)
     with pytest.raises(RecordError, match="box 1 slot 4"):
         mon.to_spec(tables)
+
+
+def test_shedinja_hp_must_be_one(tables, names):
+    mon = _party(tables, names, species="Shedinja", level=30, hp=1)
+    assert mon.stored_stats[0] > 1  # the generic formula would give more
+    ok = dataclasses.replace(mon, stored_stats=(1, *mon.stored_stats[1:]), current_hp=1)
+    assert ok.to_spec(tables).stats[0] == 1
+    bad = dataclasses.replace(mon, stored_stats=(2, *mon.stored_stats[1:]), current_hp=1)
+    with pytest.raises(RecordError, match="party slot 1: Shedinja HP 2 must be 1"):
+        bad.to_spec(tables)

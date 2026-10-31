@@ -62,7 +62,7 @@ def read_image(data: bytes) -> bytes:
     cut = data.find(DSV_MARKER)
     image = data if cut < 0 else data[:cut]
     if len(image) != L.SAVE_SIZE:
-        raise SaveError(f"not a Platinum save: {len(data)} bytes")
+        raise SaveError(f"not a Platinum save: {len(image)} bytes")
     return image
 
 

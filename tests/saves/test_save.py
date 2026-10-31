@@ -179,6 +179,12 @@ def test_partial_normal_matches_neither_box_copy_is_error():
     assert select_copies(image)[0] == "error"
 
 
+def test_both_partial_on_the_same_copy_is_ok():
+    # Saved once since the new game: the other copy is still erased (0xFF).
+    image = build_image(counters=((1, 1, 1), None))
+    assert select_copies(image) == ("ok", 0, 0)
+
+
 def test_both_partial_on_different_copies_is_corrupt():
     image = build_image(counters=((5, 5, 5), (5, 5, 5)))
     image = corrupt(corrupt(image, 0, "boxes"), 1, "normal")

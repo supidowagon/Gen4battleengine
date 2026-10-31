@@ -50,5 +50,7 @@ the `.pk4` with the same personality over their common length; each CSV row (spe
 level, nature, ability, held item, four moves, IVs, EVs) equals the parser's Pokemon at
 that box and slot (1-based in PKHeX). CSV columns are found by header name,
 case-insensitively; if a required column has no match the test fails and lists the headers
-it saw, so the alias table in the test can be extended. Names are compared ignoring case,
+it saw, so the alias table in the test can be extended. The box column must be numeric: if
+your boxes have custom names, the report needs another numeric box column (e.g. `Box Number`).
+The `.pk4` files must have distinct personalities. Accents are ignored when comparing names. Names are compared ignoring case,
 spaces and punctuation.

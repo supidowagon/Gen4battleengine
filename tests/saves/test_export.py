@@ -5,6 +5,7 @@ from nuzline.data.party import load_party
 from nuzline.saves import load_save
 from nuzline.saves.export import party_toml, save_json, show_lines
 from tests.saves.synthetic import SAMPLE, party_record, save_image
+from tests.saves.writer import build_image
 
 
 def _save(tmp_path, tables, names, **kw):
@@ -26,8 +27,6 @@ def test_party_toml_status_pp_and_eggs(tmp_path, tables, names):
         party_record(tables, names, "Monferno", 14, SAMPLE[0][2], status=1 << 4, hp=7),
         party_record(tables, names, "Grotle", 14, ("Tackle", "Absorb"), status=3),
     ]
-    from tests.saves.writer import build_image
-
     p = tmp_path / "g.sav"
     p.write_bytes(build_image(party=party))
     save = load_save(p, tables=tables, names=names)
@@ -56,7 +55,7 @@ def test_show_lines_ascii_and_json(tmp_path, tables, names):
 def test_non_ascii_nickname_is_escaped_in_json_and_lines(tmp_path, tables, names):
     code = next(c for c, ch in names.charmap.items() if len(ch) == 1 and not ch.isascii())
     sp = names.species("Monferno")
-    from tests.saves.writer import build_image, mon_record
+    from tests.saves.writer import mon_record
 
     box = mon_record(species=sp, level=20, nickname_codes=(code,))
     p = tmp_path / "n.sav"
@@ -71,3 +70,18 @@ def test_non_ascii_nickname_is_escaped_in_json_and_lines(tmp_path, tables, names
 def test_empty_boxes_are_not_listed(tmp_path, tables, names):
     lines = show_lines(_save(tmp_path, tables, names), names)
     assert not any(line.startswith("Box") for line in lines)
+
+
+def test_show_lines_form_and_nickname(tmp_path, tables, names):
+    inv = {v: k for k, v in names.charmap.items() if len(v) == 1}
+    party = [
+        party_record(
+            tables, names, *SAMPLE[0], form=1, nickname_codes=tuple(inv[c] for c in "Blaze")
+        ),
+        party_record(tables, names, *SAMPLE[1], nickname_codes=tuple(inv[c] for c in "PRINPLUP")),
+    ]
+    p = tmp_path / "f.sav"
+    p.write_bytes(build_image(party=party))
+    lines = show_lines(load_save(p, tables=tables, names=names), names)
+    assert 'MONFERNO Lv14 | form 1 | "Blaze" |' in lines[3]
+    assert "form" not in lines[4] and '"' not in lines[4]  # same name as the species

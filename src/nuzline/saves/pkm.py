@@ -121,6 +121,10 @@ class SaveMon:
         high = calc_stats(base, self.ivs, self.evs, self.level, mods)
         for stat in (Stat.HP, Stat.ATK, Stat.DEF, Stat.SPA, Stat.SPD, Stat.SPE):
             stored = self.stored_stats[stat]
+            if self.species == _SHEDINJA and stat == Stat.HP:
+                if stored != 1:  # Pokemon_CalcStats (src/pokemon.c:598) pins max HP at 1
+                    raise RecordError(f"{label}: Shedinja HP {stored} must be 1")
+                continue
             if not low[stat] <= stored <= high[stat]:
                 raise RecordError(
                     f"{label}: {stat.name.capitalize()} {stored} is outside "
@@ -155,6 +159,7 @@ def level_from_exp(tables, species: int, exp: int) -> int:
 # ids (line N of generated/species.txt is id N-1): Deoxys 386, Wormadam 413, Rotom 479,
 # Giratina 487, Shaymin 492, Arceus 493. Burmy, Shellos, Gastrodon, Unown and Cherrim
 # forms are cosmetic and pass.
+_SHEDINJA = 292
 _REFUSED_FORM_SPECIES = frozenset({386, 413, 479, 487, 492, 493})
 
 
@@ -216,6 +221,14 @@ def decode_mon(
     except RecordError as e:
         raise RecordError(f"{label}: {e}") from None
 
+    moves = tuple(_u16(rec, _B + 2 * i) for i in range(4))
+    item = _u16(rec, _A + 0x02)
+    for i, move in enumerate(moves):
+        if move >= len(tables.move_pp):
+            raise RecordError(f"{label}: move slot {i} has unknown move id {move}")
+    if item >= len(tables.item_effect):
+        raise RecordError(f"{label}: unknown item id {item}")
+
     current_hp = None
     status_raw = 0
     stored_stats = None
@@ -245,10 +258,10 @@ def decode_mon(
         ability=rec[_A + 0x0D],
         gender=(form_byte >> 1) & 3,
         friendship=rec[_A + 0x0C],
-        item=_u16(rec, _A + 0x02),
+        item=item,
         ivs=tuple(ivs_stored[i] for i in _STORED_TO_STAT),
         evs=tuple(evs_stored[i] for i in _STORED_TO_STAT),
-        moves=tuple(_u16(rec, _B + 2 * i) for i in range(4)),
+        moves=moves,
         pp=tuple(rec[_B + 0x08 + i] for i in range(4)),
         pp_ups=tuple(rec[_B + 0x0C + i] for i in range(4)),
         current_hp=current_hp,

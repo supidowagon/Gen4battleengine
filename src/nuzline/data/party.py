@@ -28,6 +28,8 @@ def _six(entry: dict, key: str) -> tuple[int, int, int, int, int, int]:
     values = tuple(int(v) for v in entry[key])
     if len(values) != 6:
         raise ValueError(f"{entry['species']}: {key} needs 6 values, got {len(values)}")
+    if key == "stats" and any(not 1 <= v <= 999 for v in values):
+        raise ValueError(f"{entry['species']}: stats must be 1-999, got {list(values)}")
     return values  # type: ignore[return-value]
 
 
@@ -38,7 +40,10 @@ def _status(entry: dict) -> tuple[int, int]:
     status = Status[name.upper()]
     if "sleep_turns" in entry and status != Status.SLEEP:
         raise ValueError(f'{entry["species"]}: sleep_turns needs status = "sleep"')
-    return int(status), int(entry.get("sleep_turns", 0))
+    turns = int(entry.get("sleep_turns", 0))
+    if "sleep_turns" in entry and not 1 <= turns <= 7:
+        raise ValueError(f"{entry['species']}: sleep_turns must be 1-7, got {turns}")
+    return int(status), turns
 
 
 def _spec(entry: dict, names: Names) -> PokemonSpec:
@@ -64,6 +69,8 @@ def _spec(entry: dict, names: Names) -> PokemonSpec:
                 f"{entry['species']}: pp needs {len(moves)} values (one per move), "
                 f"got {len(values)}"
             )
+        if any(not 0 <= v <= 64 for v in values):
+            raise ValueError(f"{entry['species']}: pp values must be 0-64, got {values}")
         pp = tuple(values + [0] * (4 - len(values)))
     return PokemonSpec(
         species=species,

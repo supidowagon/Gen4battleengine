@@ -12,6 +12,7 @@ from __future__ import annotations
 import csv
 import os
 import re
+import unicodedata
 from pathlib import Path
 
 import pytest
@@ -19,7 +20,7 @@ import pytest
 from nuzline.saves import layout as L
 from nuzline.saves import load_save
 from nuzline.saves.crypto import decrypt_record
-from nuzline.saves.save import _block, read_image, select_copies
+from nuzline.saves.save import _block, default_tables_and_names, read_image, select_copies
 
 _DIR = os.environ.get("NUZLINE_ORACLE_DIR")
 
@@ -37,7 +38,7 @@ _STAT_TOKENS = (
 )
 
 _FIELD_ALIASES = {
-    "box": ("box", "boxnumber", "boxno"),
+    "box": ("box", "boxnumber", "boxno", "boxindex", "boxid"),
     "slot": ("slot", "boxslot", "position"),
     "species": ("species",),
     "level": ("level", "lvl"),
@@ -53,6 +54,8 @@ def _key(text: str) -> str:
     gender signs kept as f/m so "Nidoran♀" and "Nidoran♂" stay distinct. Drops spaces,
     hyphens, dots and apostrophes ("Mr. Mime", "Farfetch'd", "Double-Edge")."""
     text = text.replace("\u2640", "f").replace("\u2642", "m")
+    # Fold accents ("Pokemon" with an e-acute -> "pokemon").
+    text = "".join(c for c in unicodedata.normalize("NFKD", text) if not unicodedata.combining(c))
     return re.sub(r"[^a-z0-9]", "", text.casefold())
 
 
@@ -62,10 +65,26 @@ def _name_key(name: str) -> str:
     return "" if key in ("none", "") else key
 
 
-def _find_columns(headers: list[str]) -> dict[str, int]:
+def _find_columns(headers: list[str], rows: list[list[str]]) -> dict[str, int]:
     by_key = {}
     for i, h in enumerate(headers):
         by_key.setdefault(_key(h), i)
+    # A custom box name ("Graveyard") makes the "Box" column non-numeric: use another
+    # numeric alias column instead.
+    box_aliases = _FIELD_ALIASES["box"]
+    box_cols = [by_key[a] for a in box_aliases if a in by_key]
+    numeric = [
+        c
+        for c in box_cols
+        if all(re.search(r"\d", r[c]) for r in rows if c < len(r) and r[c].strip())
+    ]
+    if box_cols and not numeric:
+        pytest.fail(
+            f"no numeric box column (custom box names?); box-like columns {box_cols}, "
+            f"headers found: {headers}"
+        )
+    if numeric:
+        by_key["box"] = numeric[0]
     cols, missing = {}, []
     for field, aliases in _FIELD_ALIASES.items():
         hit = next((by_key[a] for a in aliases if a in by_key), None)
@@ -107,6 +126,7 @@ def _check_party(save_path: Path, pk4s: list[Path], party_len: int) -> None:
     for p in pk4s:
         data = p.read_bytes()
         assert len(data) in (136, 236), f"{p.name}: {len(data)} bytes is not a .pk4"
+        assert data[:4] not in by_pid, f"{p.name}: same personality as {by_pid[data[:4]][0]}"
         by_pid[data[:4]] = (p.name, data)
     assert pk4s, "no .pk4 files in the oracle folder"
     for i in range(party_len):
@@ -122,7 +142,7 @@ def _check_boxes(save, names, csv_path: Path) -> int:
     with csv_path.open(newline="", encoding="utf-8-sig") as f:
         rows = list(csv.reader(f))
     assert rows, f"{csv_path.name} is empty"
-    cols = _find_columns(rows[0])
+    cols = _find_columns(rows[0], rows[1:])
     problems, checked = [], 0
     for line, row in enumerate(rows[1:], start=2):
         if not any(c.strip() for c in row):
@@ -133,6 +153,9 @@ def _check_boxes(save, names, csv_path: Path) -> int:
             continue
         box, slot = _int(get("box")), _int(get("slot"))  # 1-based in PKHeX
         where = f"csv line {line} (box {box} slot {slot})"
+        if not (1 <= box <= len(save.boxes) and 1 <= slot <= len(save.boxes[0])):
+            problems.append(f"{where}: box/slot out of range")
+            continue
         mon = save.boxes[box - 1][slot - 1]
         if mon is None:
             problems.append(f"{where}: PKHeX has {get('species')}, we have an empty slot")
@@ -167,8 +190,6 @@ def test_matches_pkhex():
     save = load_save(save_path)
     assert save.load_result == "ok"
     _check_party(save_path, pk4s, len(save.party))
-
-    from nuzline.saves.save import default_tables_and_names
 
     _, names = default_tables_and_names(None, None)
     assert _check_boxes(save, names, csv_path) > 0, "the CSV listed no Pokemon"
