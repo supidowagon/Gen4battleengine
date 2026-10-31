@@ -158,6 +158,8 @@ Input: a battle state (or HP-tracked set of states). Output: a ranking of player
 
 **Opponent-action pruning with an error bound.** The AI distribution multiplies branching by every scored action. Opponent actions below a small probability epsilon are dropped from the tree, and the dropped mass is carried as an explicit error term on the reported probability (reported as "P ≥ x, at most y unexplored"), so pruning never makes a line look safer than it is.
 
+**Stage B as built.** Exact chance nodes, observations and information sets, the belief-tree expectimax, the plan tree and the `nuzline solve` command are specified in `docs/superpowers/specs/2026-10-30-stage-b-solver-design.md`; its rulings (merge keys, the width cap, refusals valued 0, the two-half max-bias correction, the interval rule, leaf budgets and iterative deepening) override the summary above where they differ. Timings are in `benchmarks/README.md`.
+
 Ties are ranked by the tie rule and tie-breaker in §3.
 
 ### 4.4 Prep search layer

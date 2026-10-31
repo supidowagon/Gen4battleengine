@@ -9,3 +9,10 @@ uv sync
 uv run pytest
 uv run ruff check .
 ```
+
+Rank the opening actions, or solve the fight start with the Stage B plan search (exact chance nodes, observations, plan tree):
+
+```
+uv run nuzline rank --party tests/fixtures/sample_party.toml --trainer roark
+uv run nuzline solve --party tests/fixtures/sample_party.toml --trainer roark --max-depth 2 --tree plan.json
+```
