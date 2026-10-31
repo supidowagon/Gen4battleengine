@@ -52,11 +52,10 @@ from nuzline.engine.order import action_order, is_switch, selected_move
 from nuzline.engine.outcome import empty_outcome, hit_threshold, sample_outcome
 from nuzline.engine.state import SLOTS, BattleState
 from nuzline.engine.step import (
-    PURSUIT_POWER_MUL,
     WINNER_PLAYER,
     needs_replacement,
-    pursuit_fires,
     replace,
+    replacement_power_mul,
     step,
 )
 
@@ -73,7 +72,6 @@ __all__ = [
 ]
 
 _I32, _F32 = jnp.int32, jnp.float32
-_NORMAL_POWER_MUL = 10
 REFUSED_WON = -1  # PlayoutResult.won of a refused playout
 
 
@@ -183,11 +181,8 @@ def _play(tables: Tables, state: BattleState, player_action, key):
     opp_action = ai_policy(tables, state, sample_ai_outcome(k_ai, tables, state))
     ai_refused = opp_action < 0  # switching.REFUSED_ACTION
     actions = jnp.stack([player_action, jnp.maximum(opp_action, 0)]).astype(_I32)
-    picks = [selected_move(tables, state, side, actions[side]) for side in (0, 1)]
-    choices = (jnp.stack([p[0] for p in picks]), jnp.stack([p[1] for p in picks]))
-    pursued = pursuit_fires(tables, state, 0, actions, choices)
+    power_mul = replacement_power_mul(tables, state, actions)
     played = step(tables, state, actions, sample_outcome(k_turn, tables, state, actions))
-    power_mul = jnp.where(pursued, PURSUIT_POWER_MUL, _NORMAL_POWER_MUL)
     return played, ai_refused, is_switch(actions[1]), power_mul
 
 

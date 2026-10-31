@@ -50,7 +50,7 @@ FIELDS = dict(OBS_FIELDS)
 
 
 def _turn_row(tables, before, actions, outcome):
-    """One expanded turn as Stage B plays it (playout.py:179-199): ``step``, then the
+    """One expanded turn as Stage B plays it (playout.py:177-194): ``step``, then the
     opponent's forced replacement; its observation, the player's legal actions in the
     child, and the stepped state and observation through ``step_events`` (the path that
     projects ``step``'s own events, ``observation``), to check against ``step`` and

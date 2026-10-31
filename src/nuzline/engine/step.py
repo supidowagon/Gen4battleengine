@@ -78,6 +78,7 @@ from nuzline.engine.state import BAG_SLOTS, BattleState
 _I32 = jnp.int32
 WINNER_OPPONENT, WINNER_PLAYER = 1, 2
 PURSUIT_POWER_MUL = 20  # BtlCmd_TryPursuit (battle_script.c:6884): powerMul = 20
+NORMAL_POWER_MUL = 10  # BattleContext_Init (battle_lib.c:1980): powerMul = 10
 # MON_CONDITION_TOXIC_COUNTER is 4 bits (include/constants/battle/condition.h:23).
 TOXIC_COUNTER_MAX = 15
 
@@ -562,6 +563,18 @@ def pursuit_fires(tables: Tables, state: BattleState, side, actions, choices) ->
         & (status != Status.SLEEP)
         & (status != Status.FREEZE)
     )
+
+
+def replacement_power_mul(tables: Tables, state: BattleState, actions) -> jnp.ndarray:
+    """``int32`` ``battleCtx->powerMul`` the opponent's forced replacement after the turn
+    sees (``post_ko_switch_in``'s ``power_mul``): ``PURSUIT_POWER_MUL`` when the player's
+    switch met Pursuit (``pursuit_fires`` on the turn-start ``state``, with each side's
+    move fixed when chosen), else ``NORMAL_POWER_MUL``. The one source for playouts
+    (``playout._play``) and exact expansion (``expand._turn``), which must agree."""
+    picks = [selected_move(tables, state, side, actions[side]) for side in (0, 1)]
+    choices = (jnp.stack([p[0] for p in picks]), jnp.stack([p[1] for p in picks]))
+    pursued = pursuit_fires(tables, state, 0, actions, choices)
+    return jnp.where(pursued, PURSUIT_POWER_MUL, NORMAL_POWER_MUL).astype(_I32)
 
 
 def _pursuit_hit(

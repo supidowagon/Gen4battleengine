@@ -3,10 +3,10 @@ one (state, player action, opponent action) request, stepped, replaced and obser
 the device, merged on the host.
 
 A turn is played exactly as a playout plays it (``playout._play`` and ``_turn``,
-playout.py:179-199): ``step``, then the opponent's forced replacement
+playout.py:177-194): ``step``, then the opponent's forced replacement
 ``send_replacements`` with ``ai_switched = is_switch(opponent action)`` and
-``power_mul`` = ``PURSUIT_POWER_MUL`` when the player's switch met Pursuit
-(``pursuit_fires`` on the turn-start state), else 10. A refused replacement keeps the
+``power_mul`` = ``step.replacement_power_mul`` (Pursuit's 20 when the player's switch
+met Pursuit, else 10; the helper both paths share). A refused replacement keeps the
 state ``send_replacements`` left and marks the child ``refused`` (ruling 4 values it 0).
 The observation is ``engine.observe``'s, projected from ``step``'s own events
 (``step.step_events``, ``observe.observation``) of the state after the replacement.
@@ -42,17 +42,16 @@ from nuzline.ai.policy import _distribution
 from nuzline.data.tables import Tables
 from nuzline.engine.enumerate import OutcomeLaws, SamplingOnly, enumerate_outcomes, outcome_laws
 from nuzline.engine.observe import observation
-from nuzline.engine.order import is_switch, selected_move
+from nuzline.engine.order import is_switch
 from nuzline.engine.outcome import Outcome
 from nuzline.engine.state import BattleState
-from nuzline.engine.step import PURSUIT_POWER_MUL, pursuit_fires, step_events
+from nuzline.engine.step import replacement_power_mul, step_events
 from nuzline.jaxcache import cached_export, code_version
 from nuzline.search.playout import send_replacements
 
 __all__ = ["CHUNK", "Child", "ai_rows", "expand", "laws_rows", "step_rows"]
 
 CHUNK = 16384  # rows per program call, before padding to the device count
-_NORMAL_POWER_MUL = 10
 
 # The pytrees of the programs' arguments and results, for ``jax.export`` serialization
 # (``Tables`` and ``BattleState`` are registered by ``stage_a``).
@@ -134,10 +133,7 @@ def laws_rows(tables: Tables, states: BattleState, actions) -> OutcomeLaws:
 def _turn(tables: Tables, before: BattleState, actions, outcome: Outcome):
     """One outcome of a turn, as the playout plays it (module docstring): ``(after,
     refused, observation)``."""
-    picks = [selected_move(tables, before, side, actions[side]) for side in (0, 1)]
-    choices = (jnp.stack([p[0] for p in picks]), jnp.stack([p[1] for p in picks]))
-    pursued = pursuit_fires(tables, before, 0, actions, choices)
-    power_mul = jnp.where(pursued, PURSUIT_POWER_MUL, _NORMAL_POWER_MUL)
+    power_mul = replacement_power_mul(tables, before, actions)
     stepped, events = step_events(tables, before, actions, outcome)
     after, refused = send_replacements(tables, stepped, is_switch(actions[1]), power_mul)
     return after, refused, observation(events, after)

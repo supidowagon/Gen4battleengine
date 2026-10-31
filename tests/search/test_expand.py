@@ -93,7 +93,7 @@ def test_expand_streams(roark_expansion):
 
 def _turn_row(tables, before, actions, outcome):
     """One member outcome re-stepped on its own path: ``step``, the opponent's forced
-    replacement (playout.py:179-199) and ``observe``."""
+    replacement (playout.py:177-194) and ``observe``."""
     picks = [selected_move(tables, before, side, actions[side]) for side in (0, 1)]
     choices = (jnp.stack([p[0] for p in picks]), jnp.stack([p[1] for p in picks]))
     pursued = pursuit_fires(tables, before, 0, actions, choices)
@@ -140,7 +140,7 @@ def test_merged_child_equals_each_member(tables, names):
 
 
 def _playout_turn(tables, state, a, key):
-    """The playout's own turn (playout.py:179-199) and its observation."""
+    """The playout's own turn (playout.py:177-194) and its observation."""
     k_ai, k_turn = jax.random.split(key)
     opp = ai_policy(tables, state, sample_ai_outcome(k_ai, tables, state))
     played, _, ai_switched, power_mul = playout._play(tables, state, a, key)

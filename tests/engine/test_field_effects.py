@@ -8,7 +8,12 @@ import numpy as np
 from nuzline.engine.damage import damage_table
 from nuzline.engine.ids import Status
 from nuzline.engine.outcome import empty_outcome, sample_outcome
-from nuzline.engine.step import END_OF_TURN_ORDER, step
+from nuzline.engine.step import (
+    END_OF_TURN_ORDER,
+    PURSUIT_POWER_MUL,
+    replacement_power_mul,
+    step,
+)
 from tests.engine.helpers import A, roark_state
 
 
@@ -79,6 +84,16 @@ def test_pursuit_hits_switching_target_double(tables, names):
     go = step(tables, s, A(4 + 1, "Pursuit", s, names), empty_outcome())
     assert (int(s.hp[0, 0]) - int(go.hp[0, 0])) > (int(s.hp[0, 0]) - int(stay.hp[0, 0]))
     assert int(go.active[0]) == 1
+
+
+def test_replacement_power_mul_is_pursuits_only_after_a_pursued_switch(tables, names):
+    # The opponent's forced replacement after the turn sees powerMul = 20 only when the
+    # player's switch met Pursuit (BtlCmd_TryPursuit, battle_script.c:6884), else 10.
+    s = roark_state(tables, names, opp_species="Cranidos", opp_moves=["Pursuit", "Leer"])
+    go = A(4 + 1, "Pursuit", s, names)
+    assert int(replacement_power_mul(tables, s, go)) == PURSUIT_POWER_MUL
+    assert int(replacement_power_mul(tables, s, A("Leer", "Pursuit", s, names))) == 10
+    assert int(replacement_power_mul(tables, s, A(4 + 1, "Leer", s, names))) == 10
 
 
 def test_pursuit_on_a_switch_ignores_accuracy_spends_pp_once_and_ends_the_turn(tables, names):
