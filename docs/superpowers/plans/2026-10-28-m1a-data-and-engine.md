@@ -97,21 +97,30 @@ from tools.extract_decomp import extract_static
 DECOMP = Path("external/pokeplatinum")
 pytestmark = pytest.mark.skipif(not DECOMP.exists(), reason="decomp not cloned")
 
+
 @pytest.fixture(scope="module")
 def out(tmp_path_factory):
     d = tmp_path_factory.mktemp("inter")
     extract_static(DECOMP, d)
     return d
 
+
 def test_bulbasaur(out):
     sp = json.loads((out / "species.json").read_text())
     assert sp[1]["name"].lower() == "bulbasaur"
     assert sp[1]["base_stats"] == [45, 49, 49, 65, 65, 45]
 
+
 def test_tackle_is_gen4_tackle(out):
     mv = json.loads((out / "moves.json").read_text())
     tackle = next(m for m in mv if m["name"].lower() == "tackle")
-    assert (tackle["power"], tackle["accuracy"], tackle["pp"], tackle["category"]) == (35, 95, 35, 0)
+    assert (tackle["power"], tackle["accuracy"], tackle["pp"], tackle["category"]) == (
+        35,
+        95,
+        35,
+        0,
+    )
+
 
 def test_type_chart_fire_grass_and_ghost_normal(out):
     t = json.loads((out / "types.json").read_text())
@@ -119,11 +128,13 @@ def test_type_chart_fire_grass_and_ghost_normal(out):
     assert t["chart"][n.index("fire")][n.index("grass")] == 20
     assert t["chart"][n.index("ghost")][n.index("normal")] == 0
 
+
 def test_natures_count_and_adamant(out):
     nat = json.loads((out / "natures.json").read_text())
     assert len(nat) == 25
     adamant = next(x for x in nat if x["name"].lower() == "adamant")
     assert (adamant["up"], adamant["down"]) == (1, 3)
+
 
 def test_learnset_chimchar_has_ember_at_7(out):
     ls = json.loads((out / "learnsets.json").read_text())
@@ -179,22 +190,31 @@ from tools.extract_decomp import extract_trainers
 DECOMP = Path("external/pokeplatinum")
 pytestmark = pytest.mark.skipif(not DECOMP.exists(), reason="decomp not cloned")
 
+
 @pytest.fixture(scope="module")
 def trainers(tmp_path_factory):
     d = tmp_path_factory.mktemp("inter")
     extract_trainers(DECOMP, d)
     return json.loads((d / "trainers.json").read_text())
 
+
 def roark(trainers):
-    return [t for t in trainers if t["name"].lower() == "roark" and t["class"].lower().startswith("leader")][0]
+    return [
+        t
+        for t in trainers
+        if t["name"].lower() == "roark" and t["class"].lower().startswith("leader")
+    ][0]
+
 
 def test_roark_party_shape(trainers):
     r = roark(trainers)
     assert [p["level"] for p in r["party"]] == [12, 12, 14]
     assert r["ai_flags"] != 0
 
+
 def test_roark_start_condition_is_none(trainers):
     assert roark(trainers)["start_condition"] == "none"
+
 
 def test_some_trainer_has_hail(trainers):
     assert any(t["start_condition"] == "hail" for t in trainers)
@@ -258,12 +278,14 @@ from nuzline.engine.ids import EffectId, AbilityId, ItemId
 TABLES = Path("data/gen4_platinum")
 pytestmark = pytest.mark.skipif(not (TABLES / "tables.npz").exists(), reason="tables not built")
 
+
 def test_dtypes_and_shapes():
     t = load_tables(TABLES)
     assert t.species_base_stats.dtype == jnp.int16 and t.species_base_stats.shape[1] == 6
     assert t.move_param.shape[1] == 3 and t.move_param.dtype == jnp.int16
     assert t.type_chart.shape[0] == t.type_chart.shape[1] == 17
     assert all(x.dtype.itemsize <= 4 for x in t)
+
 
 def test_effect_mapping():
     t, n = load_tables(TABLES), load_names(TABLES)
@@ -272,6 +294,7 @@ def test_effect_mapping():
     assert int(t.move_effect[n.move("Leer")]) == EffectId.STAT_FOE
     assert tuple(int(x) for x in t.move_param[n.move("Leer")]) == (2, -1, 0)
     assert int(t.move_effect[n.move("Metronome")]) == EffectId.UNSUPPORTED
+
 
 def test_ability_and_item_mapping():
     t, n = load_tables(TABLES), load_names(TABLES)
@@ -329,16 +352,23 @@ git commit -m "feat(data): effect/ability/item id maps, table build and loading"
 import numpy as np
 from nuzline.engine.stats import calc_stats
 
+
 def test_level_100_neutral():
     s = calc_stats(np.full(6, 100), np.full(6, 31), np.full(6, 252), 100, np.zeros(6, int))
     assert s.tolist() == [404, 299, 299, 299, 299, 299]
 
+
 def test_adamant_level_100():
-    s = calc_stats(np.full(6, 100), np.full(6, 31), np.full(6, 252), 100, np.array([0, 1, 0, -1, 0, 0]))
+    s = calc_stats(
+        np.full(6, 100), np.full(6, 31), np.full(6, 252), 100, np.array([0, 1, 0, -1, 0, 0])
+    )
     assert s[1] == 328 and s[3] == 269
 
+
 def test_low_level_truncation():
-    s = calc_stats(np.array([44, 58, 44, 58, 44, 61]), np.full(6, 20), np.zeros(6, int), 14, np.zeros(6, int))
+    s = calc_stats(
+        np.array([44, 58, 44, 58, 44, 61]), np.full(6, 20), np.zeros(6, int), 14, np.zeros(6, int)
+    )
     assert s[0] == (2 * 44 + 20) * 14 // 100 + 14 + 10
 ```
 
@@ -351,9 +381,12 @@ from nuzline.data.trainer import load_trainers, build_trainer_party, Intermediat
 INTER = Path("data/intermediate")
 pytestmark = pytest.mark.skipif(not INTER.exists(), reason="intermediate data not extracted")
 
+
 def test_difficulty_to_ivs_exact_integer():
     from nuzline.data.trainer import difficulty_to_ivs
+
     assert (difficulty_to_ivs(255), difficulty_to_ivs(0), difficulty_to_ivs(128)) == (31, 0, 15)
+
 
 def test_party_ivs_follow_difficulty():
     inter = IntermediateData(INTER)
@@ -362,6 +395,7 @@ def test_party_ivs_follow_difficulty():
     for mon, raw in zip(party, roark.party):
         assert mon.ivs == (raw.difficulty * 31 // 255,) * 6
         assert mon.evs == (0,) * 6
+
 
 def test_roark_party_has_four_moves_each():
     inter = IntermediateData(INTER)
@@ -376,11 +410,13 @@ from pathlib import Path
 from nuzline.data.tables import load_names
 from nuzline.data.party import load_party
 
+
 def test_sample_party_loads():
     n = load_names(Path("data/gen4_platinum"))
     p = load_party(Path("tests/fixtures/sample_party.toml"), n)
     assert len(p) == 6 and p[0].species == n.species("Monferno") and p[0].level == 14
     assert p[3].item == n.item("Oran Berry") and p[2].item == n.item("Sitrus Berry")
+
 
 def test_fainted_party_member_keeps_hp_zero():
     n = load_names(Path("data/gen4_platinum"))
@@ -442,11 +478,14 @@ from nuzline.data.party import load_party
 from nuzline.engine.state import make_state, BattleState
 from nuzline.engine.ids import Weather
 
-T = load_tables(Path("data/gen4_platinum")); N = load_names(Path("data/gen4_platinum"))
+T = load_tables(Path("data/gen4_platinum"))
+N = load_names(Path("data/gen4_platinum"))
+
 
 def _teams():
     p = load_party(Path("tests/fixtures/sample_party.toml"), N)
     return p, p[:3]
+
 
 def test_shapes_dtypes_and_no_64bit():
     s = make_state(T, *_teams())
@@ -454,17 +493,20 @@ def test_shapes_dtypes_and_no_64bit():
     assert s.stats.shape == (2, 6, 5) and s.moves.shape == (2, 6, 4)
     assert all(x.dtype.itemsize <= 4 for x in s)
 
+
 def test_empty_slots_are_zero_and_full_hp_default():
     p, o = _teams()
     s = make_state(T, p, o)
     assert int(s.species[1, 5]) == 0 and int(s.hp[1, 5]) == 0
     assert int(s.hp[0, 0]) == int(s.max_hp[0, 0]) > 0
 
+
 def test_fainted_member_and_start_weather():
     p = load_party(Path("tests/fixtures/sample_party_fainted.toml"), N)
     s = make_state(T, p, p[:2], start_condition=Weather.HAIL)
     assert int(s.hp[0, 5]) == 0 and int(s.max_hp[0, 5]) > 0
     assert int(s.weather) == Weather.HAIL and int(s.weather_timer) == 0
+
 
 def test_state_is_a_valid_pytree_for_vmap():
     s = make_state(T, *_teams())
@@ -522,33 +564,94 @@ git commit -m "feat(engine): BattleState pytree, decomp struct checklist, make_s
 # tests/engine/test_damage.py
 import numpy as np, jax.numpy as jnp
 from nuzline.engine.damage import damage_table, effectiveness
-from tests.engine.helpers import synthetic_state  # built in this task: one active mon per side with given level/stats/types/moves
+from tests.engine.helpers import (
+    synthetic_state,
+)  # built in this task: one active mon per side with given level/stats/types/moves
 
-NEUTRAL_128 = [108,110,111,112,113,115,116,117,119,120,121,122,124,125,126,128]
+NEUTRAL_128 = [108, 110, 111, 112, 113, 115, 116, 117, 119, 120, 121, 122, 124, 125, 126, 128]
+
 
 def test_neutral_table_matches_hand_computation(tables):
     # L100 attacker, Atk 300 vs Def 200, 100 BP physical, no STAB, neutral type
-    s, move = synthetic_state(tables, atk_level=100, atk_stats=[300,100,100,100,100], def_stats=[100,200,100,100,100],
-                              move_power=100, move_physical=True, atk_types=("Normal","Normal"), def_types=("Normal","Normal"), move_type="Fighting")
+    s, move = synthetic_state(
+        tables,
+        atk_level=100,
+        atk_stats=[300, 100, 100, 100, 100],
+        def_stats=[100, 200, 100, 100, 100],
+        move_power=100,
+        move_physical=True,
+        atk_types=("Normal", "Normal"),
+        def_types=("Normal", "Normal"),
+        move_type="Fighting",
+    )
     assert damage_table(tables, s, 0, move, crit=False).tolist() == NEUTRAL_128
 
+
 def test_stab_applies_after_random(tables):
-    s, move = synthetic_state(tables, atk_level=100, atk_stats=[300,100,100,100,100], def_stats=[100,200,100,100,100],
-                              move_power=100, move_physical=True, atk_types=("Fighting","Normal"), def_types=("Normal","Normal"), move_type="Fighting")
-    assert damage_table(tables, s, 0, move, crit=False).tolist() == [v * 3 // 2 for v in NEUTRAL_128]
+    s, move = synthetic_state(
+        tables,
+        atk_level=100,
+        atk_stats=[300, 100, 100, 100, 100],
+        def_stats=[100, 200, 100, 100, 100],
+        move_power=100,
+        move_physical=True,
+        atk_types=("Fighting", "Normal"),
+        def_types=("Normal", "Normal"),
+        move_type="Fighting",
+    )
+    assert damage_table(tables, s, 0, move, crit=False).tolist() == [
+        v * 3 // 2 for v in NEUTRAL_128
+    ]
+
 
 def test_crit_doubles_before_random(tables):
-    s, move = synthetic_state(tables, atk_level=100, atk_stats=[300,100,100,100,100], def_stats=[100,200,100,100,100],
-                              move_power=100, move_physical=True, atk_types=("Normal","Normal"), def_types=("Normal","Normal"), move_type="Fighting")
-    assert damage_table(tables, s, 0, move, crit=True).tolist() == [256 * (85 + r) // 100 for r in range(16)]
+    s, move = synthetic_state(
+        tables,
+        atk_level=100,
+        atk_stats=[300, 100, 100, 100, 100],
+        def_stats=[100, 200, 100, 100, 100],
+        move_power=100,
+        move_physical=True,
+        atk_types=("Normal", "Normal"),
+        def_types=("Normal", "Normal"),
+        move_type="Fighting",
+    )
+    assert damage_table(tables, s, 0, move, crit=True).tolist() == [
+        256 * (85 + r) // 100 for r in range(16)
+    ]
+
 
 def test_immunity_and_effectiveness(tables, names):
-    assert int(effectiveness(tables, names.type("Ghost"), jnp.array([names.type("Normal"), names.type("Normal")]))) == 0
-    assert int(effectiveness(tables, names.type("Fire"), jnp.array([names.type("Grass"), names.type("Ice")]))) == 400
+    assert (
+        int(
+            effectiveness(
+                tables, names.type("Ghost"), jnp.array([names.type("Normal"), names.type("Normal")])
+            )
+        )
+        == 0
+    )
+    assert (
+        int(
+            effectiveness(
+                tables, names.type("Fire"), jnp.array([names.type("Grass"), names.type("Ice")])
+            )
+        )
+        == 400
+    )
+
 
 def test_status_move_deals_zero(tables, names):
-    s, _ = synthetic_state(tables, atk_level=14, atk_stats=[40]*5, def_stats=[40]*5, move_power=0, move_physical=True,
-                           atk_types=("Normal","Normal"), def_types=("Normal","Normal"), move_type="Normal")
+    s, _ = synthetic_state(
+        tables,
+        atk_level=14,
+        atk_stats=[40] * 5,
+        def_stats=[40] * 5,
+        move_power=0,
+        move_physical=True,
+        atk_types=("Normal", "Normal"),
+        def_types=("Normal", "Normal"),
+        move_type="Normal",
+    )
     assert damage_table(tables, s, 0, names.move("Leer"), crit=False).tolist() == [0] * 16
 ```
 
@@ -599,14 +702,24 @@ import jax, jax.numpy as jnp, numpy as np
 from nuzline.engine.step import step, needs_replacement, replace
 from nuzline.engine.outcome import empty_outcome
 from nuzline.engine.order import action_order
-from tests.engine.helpers import roark_state  # sample party vs built Roark party, both active slot 0
+from tests.engine.helpers import (
+    roark_state,
+)  # sample party vs built Roark party, both active slot 0
+
 
 def test_faster_side_moves_first_and_deals_damage(tables, names):
-    s = roark_state(tables, names)       # Monferno (spe 14-level) vs Geodude
+    s = roark_state(tables, names)  # Monferno (spe 14-level) vs Geodude
     o = empty_outcome()
-    out = step(tables, s, jnp.array([names.move_slot(s, 0, "Scratch"), names.move_slot(s, 1, "Tackle")]), o)
+    out = step(
+        tables, s, jnp.array([names.move_slot(s, 0, "Scratch"), names.move_slot(s, 1, "Tackle")]), o
+    )
     assert int(out.hp[1, 0]) < int(s.hp[1, 0]) and int(out.hp[0, 0]) < int(s.hp[0, 0])
-    assert int(out.turn) == 1 and int(out.pp[0, 0, names.move_slot(s, 0, "Scratch")]) == int(s.pp[0, 0, names.move_slot(s, 0, "Scratch")]) - 1
+    assert (
+        int(out.turn) == 1
+        and int(out.pp[0, 0, names.move_slot(s, 0, "Scratch")])
+        == int(s.pp[0, 0, names.move_slot(s, 0, "Scratch")]) - 1
+    )
+
 
 def test_speed_tie_uses_outcome(tables, names):
     s = roark_state(tables, names, equal_speed=True)
@@ -615,16 +728,24 @@ def test_speed_tie_uses_outcome(tables, names):
     second = action_order(tables, s, jnp.array([0, 0]), o._replace(speed_tie=jnp.int8(1)))
     assert int(first[0]) == 0 and int(second[0]) == 1
 
+
 def test_miss_deals_no_damage(tables, names):
     s = roark_state(tables, names)
     o = empty_outcome()._replace(hit=jnp.zeros((2, 5), jnp.int8))
     out = step(tables, s, jnp.array([0, 0]), o)
     assert int(out.hp[1, 0]) == int(s.hp[1, 0])
 
+
 def test_player_faint_is_terminal(tables, names):
-    s = roark_state(tables, names).replace_hp(0, 0, 1)   # helper: set player's active HP to 1
+    s = roark_state(tables, names).replace_hp(0, 0, 1)  # helper: set player's active HP to 1
     out = step(tables, s, jnp.array([0, 0]), empty_outcome())
-    assert int(out.hp[0, 0]) == 0 and int(out.over) == 1 and int(out.winner) == 1 and int(out.player_faints) == 1
+    assert (
+        int(out.hp[0, 0]) == 0
+        and int(out.over) == 1
+        and int(out.winner) == 1
+        and int(out.player_faints) == 1
+    )
+
 
 def test_opponent_faint_needs_replacement_then_replace(tables, names):
     s = roark_state(tables, names).replace_hp(1, 0, 1)
@@ -634,15 +755,22 @@ def test_opponent_faint_needs_replacement_then_replace(tables, names):
     out2 = replace(tables, out, 1, 1)
     assert int(out2.active[1]) == 1 and needs_replacement(out2).tolist() == [0, 0]
 
+
 def test_all_opponents_fainted_is_win(tables, names):
     s = roark_state(tables, names, opp_count=1).replace_hp(1, 0, 1)
     out = step(tables, s, jnp.array([0, 0]), empty_outcome())
     assert int(out.over) == 1 and int(out.winner) == 2
 
+
 def test_switch_goes_before_moves_and_resets_stages(tables, names):
     s = roark_state(tables, names).with_stages(0, atk=2)
     out = step(tables, s, jnp.array([4 + 1, 0]), empty_outcome())
-    assert int(out.active[0]) == 1 and int(out.stages[0, 1]) == 0 and int(out.hp[0, 1]) < int(s.hp[0, 1])
+    assert (
+        int(out.active[0]) == 1
+        and int(out.stages[0, 1]) == 0
+        and int(out.hp[0, 1]) < int(s.hp[0, 1])
+    )
+
 
 def test_struggle_when_no_pp(tables, names):
     s = roark_state(tables, names).with_pp(0, 0, [0, 0, 0, 0])
@@ -694,40 +822,68 @@ import jax.numpy as jnp
 from nuzline.engine.step import step
 from nuzline.engine.outcome import empty_outcome
 from nuzline.engine.ids import Status
-from tests.engine.helpers import roark_state, A  # A(player_move_name, opp_move_name, state, names) -> int32[2]
+from tests.engine.helpers import (
+    roark_state,
+    A,
+)  # A(player_move_name, opp_move_name, state, names) -> int32[2]
+
 
 def test_leer_lowers_defense_and_clamps(tables, names):
     s = roark_state(tables, names).with_stages(1, def_=-6)
     out = step(tables, s, A("Leer", "Tackle", s, names), empty_outcome())
     assert int(out.stages[1, 2]) == -6
 
+
 def test_rock_polish_raises_speed_two(tables, names):
     s = roark_state(tables, names, opp_moves=["Rock Polish"])
     out = step(tables, s, A("Scratch", "Rock Polish", s, names), empty_outcome())
     assert int(out.stages[1, 5]) == 2
 
+
 def test_ember_burn_only_on_secondary_proc(tables, names):
     s = roark_state(tables, names, opp_species="Cranidos")
     no = step(tables, s, A("Ember", "Leer", s, names), empty_outcome())
-    yes = step(tables, s, A("Ember", "Leer", s, names), empty_outcome()._replace(secondary=jnp.ones((2, 5), jnp.int8)))
+    yes = step(
+        tables,
+        s,
+        A("Ember", "Leer", s, names),
+        empty_outcome()._replace(secondary=jnp.ones((2, 5), jnp.int8)),
+    )
     assert int(no.status[1, 0]) == Status.NONE and int(yes.status[1, 0]) == Status.BURN
+
 
 def test_burn_halves_physical_damage(tables, names):
     s = roark_state(tables, names, opp_species="Cranidos")
     burned = s.with_status(1, 0, Status.BURN)
-    a, b = step(tables, s, A("Scratch", "Headbutt", s, names), empty_outcome()), step(tables, burned, A("Scratch", "Headbutt", s, names), empty_outcome())
+    a, b = (
+        step(tables, s, A("Scratch", "Headbutt", s, names), empty_outcome()),
+        step(tables, burned, A("Scratch", "Headbutt", s, names), empty_outcome()),
+    )
     assert (int(s.hp[0, 0]) - int(b.hp[0, 0])) < (int(s.hp[0, 0]) - int(a.hp[0, 0]))
+
 
 def test_headbutt_flinch_blocks_slower_target(tables, names):
     s = roark_state(tables, names, opp_species="Cranidos", opp_faster=True)
-    out = step(tables, s, A("Scratch", "Headbutt", s, names), empty_outcome()._replace(secondary=jnp.ones((2, 5), jnp.int8)))
-    assert int(out.hp[1, 0]) == int(s.hp[1, 0])          # Monferno flinched
-    assert int(out.pp[0, 0, 0]) == int(s.pp[0, 0, 0])     # and spent no PP
+    out = step(
+        tables,
+        s,
+        A("Scratch", "Headbutt", s, names),
+        empty_outcome()._replace(secondary=jnp.ones((2, 5), jnp.int8)),
+    )
+    assert int(out.hp[1, 0]) == int(s.hp[1, 0])  # Monferno flinched
+    assert int(out.pp[0, 0, 0]) == int(s.pp[0, 0, 0])  # and spent no PP
+
 
 def test_inner_focus_ignores_flinch(tables, names):
     s = roark_state(tables, names, player_species="Zubat", opp_species="Cranidos", opp_faster=True)
-    out = step(tables, s, A("Bite", "Headbutt", s, names), empty_outcome()._replace(secondary=jnp.ones((2, 5), jnp.int8)))
+    out = step(
+        tables,
+        s,
+        A("Bite", "Headbutt", s, names),
+        empty_outcome()._replace(secondary=jnp.ones((2, 5), jnp.int8)),
+    )
     assert int(out.hp[1, 0]) < int(s.hp[1, 0])
+
 
 def test_absorb_heals_half_damage_dealt(tables, names):
     s = roark_state(tables, names, player_species="Budew").replace_hp(0, 0, 5)
@@ -735,16 +891,34 @@ def test_absorb_heals_half_damage_dealt(tables, names):
     dealt = int(s.hp[1, 0]) - int(out.hp[1, 0])
     assert int(out.hp[0, 0]) == min(int(s.max_hp[0, 0]), 5 + max(1, dealt // 2))
 
+
 def test_fury_swipes_hits_n_times(tables, names):
     s = roark_state(tables, names, player_moves=["Fury Swipes"])
-    two = step(tables, s, A("Fury Swipes", "Leer", s, names), empty_outcome()._replace(n_hits=jnp.array([2, 2], jnp.int8)))
-    five = step(tables, s, A("Fury Swipes", "Leer", s, names), empty_outcome()._replace(n_hits=jnp.array([5, 5], jnp.int8)))
+    two = step(
+        tables,
+        s,
+        A("Fury Swipes", "Leer", s, names),
+        empty_outcome()._replace(n_hits=jnp.array([2, 2], jnp.int8)),
+    )
+    five = step(
+        tables,
+        s,
+        A("Fury Swipes", "Leer", s, names),
+        empty_outcome()._replace(n_hits=jnp.array([5, 5], jnp.int8)),
+    )
     assert (int(s.hp[1, 0]) - int(five.hp[1, 0])) > (int(s.hp[1, 0]) - int(two.hp[1, 0]))
 
+
 def test_simple_doubles_stage_change(tables, names):
-    s = roark_state(tables, names, player_species="Bidoof", player_ability="Simple", player_moves=["Defense Curl"])
+    s = roark_state(
+        tables,
+        names,
+        player_species="Bidoof",
+        player_ability="Simple",
+        player_moves=["Defense Curl"],
+    )
     out = step(tables, s, A("Defense Curl", "Leer", s, names), empty_outcome())
-    assert int(out.stages[0, 2]) == 2 - 1   # +2 from Simple Defense Curl, -1 from Leer
+    assert int(out.stages[0, 2]) == 2 - 1  # +2 from Simple Defense Curl, -1 from Leer
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -795,12 +969,16 @@ from nuzline.engine.step import step
 from nuzline.engine.outcome import empty_outcome
 from tests.engine.helpers import roark_state, A
 
+
 def test_stealth_rock_sets_and_damages_on_switch(tables, names):
-    s = roark_state(tables, names)                               # Geodude leads with Stealth Rock
+    s = roark_state(tables, names)  # Geodude leads with Stealth Rock
     out = step(tables, s, A("Scratch", "Stealth Rock", s, names), empty_outcome())
     assert int(out.stealth_rock[0]) == 1
-    out2 = step(tables, out, A(4 + 3, "Tackle", out, names), empty_outcome())   # switch to Starly (Flying: 2x)
+    out2 = step(
+        tables, out, A(4 + 3, "Tackle", out, names), empty_outcome()
+    )  # switch to Starly (Flying: 2x)
     assert int(out2.hp[0, 3]) <= int(out.max_hp[0, 3]) - int(out.max_hp[0, 3]) // 4
+
 
 def test_stealth_rock_can_faint_incoming_and_end_battle(tables, names):
     s = roark_state(tables, names).replace_hp(0, 3, 1)
@@ -808,13 +986,22 @@ def test_stealth_rock_can_faint_incoming_and_end_battle(tables, names):
     out = step(tables, s, A(4 + 3, "Tackle", s, names), empty_outcome())
     assert int(out.hp[0, 3]) == 0 and int(out.over) == 1 and int(out.winner) == 1
 
+
 def test_bind_traps_and_ticks(tables, names):
     s = roark_state(tables, names, opp_species="Onix", opp_moves=["Bind"])
-    out = step(tables, s, A("Scratch", "Bind", s, names), empty_outcome()._replace(duration=jnp.array([0, 4], jnp.int8)))
+    out = step(
+        tables,
+        s,
+        A("Scratch", "Bind", s, names),
+        empty_outcome()._replace(duration=jnp.array([0, 4], jnp.int8)),
+    )
     assert int(out.trapped[0]) > 0
-    tick = step(tables, out, A("Leer", "Leer", out, names), empty_outcome())   # no damage this turn except the Bind tick
+    tick = step(
+        tables, out, A("Leer", "Leer", out, names), empty_outcome()
+    )  # no damage this turn except the Bind tick
     assert int(out.hp[0, 0]) - int(tick.hp[0, 0]) == int(s.max_hp[0, 0]) // 16
     assert int(tick.trapped[0]) == int(out.trapped[0]) - 1
+
 
 def test_pursuit_hits_switching_target_double(tables, names):
     s = roark_state(tables, names, opp_species="Cranidos", opp_moves=["Pursuit"])
@@ -823,23 +1010,48 @@ def test_pursuit_hits_switching_target_double(tables, names):
     assert (int(s.hp[0, 0]) - int(go.hp[0, 0])) > (int(s.hp[0, 0]) - int(stay.hp[0, 0]))
     assert int(go.active[0]) == 1
 
+
 def test_taunt_sets_counter(tables, names):
     s = roark_state(tables, names, player_moves=["Taunt"])
-    out = step(tables, s, A("Taunt", "Tackle", s, names), empty_outcome()._replace(duration=jnp.array([3, 0], jnp.int8)))
+    out = step(
+        tables,
+        s,
+        A("Taunt", "Tackle", s, names),
+        empty_outcome()._replace(duration=jnp.array([3, 0], jnp.int8)),
+    )
     assert int(out.taunt[1]) > 0
 
+
 def test_leech_seed_drains_and_grass_immune(tables, names):
-    s = roark_state(tables, names, player_species="Budew", player_moves=["Leech Seed"]).replace_hp(0, 0, 5)
+    s = roark_state(tables, names, player_species="Budew", player_moves=["Leech Seed"]).replace_hp(
+        0, 0, 5
+    )
     out = step(tables, s, A("Leech Seed", "Leer", s, names), empty_outcome())
     assert int(out.leech_seed[1]) == 1 and int(out.hp[0, 0]) > 5
-    g = roark_state(tables, names, player_species="Budew", player_moves=["Leech Seed"], opp_species="Budew")
-    assert int(step(tables, g, A("Leech Seed", "Absorb", g, names), empty_outcome()).leech_seed[1]) == 0
+    g = roark_state(
+        tables, names, player_species="Budew", player_moves=["Leech Seed"], opp_species="Budew"
+    )
+    assert (
+        int(step(tables, g, A("Leech Seed", "Absorb", g, names), empty_outcome()).leech_seed[1])
+        == 0
+    )
+
 
 def test_confusion_self_hit_replaces_move(tables, names):
     s = roark_state(tables, names, player_species="Zubat", player_moves=["Supersonic"])
-    out = step(tables, s, A("Supersonic", "Leer", s, names), empty_outcome()._replace(duration=jnp.array([0, 3], jnp.int8)))
+    out = step(
+        tables,
+        s,
+        A("Supersonic", "Leer", s, names),
+        empty_outcome()._replace(duration=jnp.array([0, 3], jnp.int8)),
+    )
     assert int(out.confusion[1]) > 0
-    out2 = step(tables, out, A("Supersonic", "Tackle", out, names), empty_outcome()._replace(confusion_hit=jnp.array([0, 1], jnp.int8)))
+    out2 = step(
+        tables,
+        out,
+        A("Supersonic", "Tackle", out, names),
+        empty_outcome()._replace(confusion_hit=jnp.array([0, 1], jnp.int8)),
+    )
     assert int(out2.hp[1, 0]) < int(out.hp[1, 0]) and int(out2.hp[0, 0]) == int(out.hp[0, 0])
 ```
 
@@ -891,17 +1103,32 @@ from nuzline.engine.outcome import empty_outcome
 from nuzline.engine.ids import Status
 from tests.engine.helpers import roark_state, A
 
+
 def test_paralysis_quarters_speed_and_full_para_skips(tables, names):
-    s = roark_state(tables, names, player_species="Shinx", player_moves=["Spark"], opp_species="Cranidos")
-    hit = step(tables, s, A("Spark", "Leer", s, names), empty_outcome()._replace(secondary=jnp.ones((2, 5), jnp.int8)))
+    s = roark_state(
+        tables, names, player_species="Shinx", player_moves=["Spark"], opp_species="Cranidos"
+    )
+    hit = step(
+        tables,
+        s,
+        A("Spark", "Leer", s, names),
+        empty_outcome()._replace(secondary=jnp.ones((2, 5), jnp.int8)),
+    )
     assert int(hit.status[1, 0]) == Status.PARALYSIS
-    skipped = step(tables, hit, A("Spark", "Headbutt", hit, names), empty_outcome()._replace(full_para=jnp.array([0, 1], jnp.int8)))
+    skipped = step(
+        tables,
+        hit,
+        A("Spark", "Headbutt", hit, names),
+        empty_outcome()._replace(full_para=jnp.array([0, 1], jnp.int8)),
+    )
     assert int(skipped.hp[0, 0]) == int(hit.hp[0, 0])
+
 
 def test_burn_ticks_one_eighth(tables, names):
     s = roark_state(tables, names, opp_species="Cranidos").with_status(1, 0, Status.BURN)
     out = step(tables, s, A("Leer", "Leer", s, names), empty_outcome())
     assert int(s.hp[1, 0]) - int(out.hp[1, 0]) == int(s.max_hp[1, 0]) // 8
+
 
 def test_sleep_counts_down_and_wakes(tables, names):
     s = roark_state(tables, names).with_status(1, 0, Status.SLEEP, counter=2)
@@ -910,22 +1137,41 @@ def test_sleep_counts_down_and_wakes(tables, names):
     t2 = step(tables, t1, A("Leer", "Tackle", t1, names), empty_outcome())
     assert int(t2.status[1, 0]) == Status.NONE
 
+
 def test_freeze_thaw_outcome(tables, names):
     s = roark_state(tables, names).with_status(1, 0, Status.FREEZE)
     frozen = step(tables, s, A("Leer", "Tackle", s, names), empty_outcome())
-    thawed = step(tables, s, A("Leer", "Tackle", s, names), empty_outcome()._replace(thaw=jnp.array([0, 1], jnp.int8)))
+    thawed = step(
+        tables,
+        s,
+        A("Leer", "Tackle", s, names),
+        empty_outcome()._replace(thaw=jnp.array([0, 1], jnp.int8)),
+    )
     assert int(frozen.hp[0, 0]) == int(s.hp[0, 0]) and int(thawed.hp[0, 0]) < int(s.hp[0, 0])
 
+
 def test_poison_point_procs_on_contact(tables, names):
-    s = roark_state(tables, names, player_species="Budew", player_ability="Poison Point", opp_species="Cranidos", opp_moves=["Headbutt"])
-    o = empty_outcome()._replace(contact_proc=jnp.array([[1, 0, 0, 0, 0], [0, 0, 0, 0, 0]], jnp.int8))
+    s = roark_state(
+        tables,
+        names,
+        player_species="Budew",
+        player_ability="Poison Point",
+        opp_species="Cranidos",
+        opp_moves=["Headbutt"],
+    )
+    o = empty_outcome()._replace(
+        contact_proc=jnp.array([[1, 0, 0, 0, 0], [0, 0, 0, 0, 0]], jnp.int8)
+    )
     out = step(tables, s, A("Absorb", "Headbutt", s, names), o)
     assert int(out.status[1, 0]) == Status.POISON
     no = step(tables, s, A("Absorb", "Headbutt", s, names), empty_outcome())
     assert int(no.status[1, 0]) == Status.NONE
 
+
 def test_natural_cure_on_switch(tables, names):
-    s = roark_state(tables, names, player_species="Budew", player_ability="Natural Cure").with_status(0, 0, Status.BURN)
+    s = roark_state(
+        tables, names, player_species="Budew", player_ability="Natural Cure"
+    ).with_status(0, 0, Status.BURN)
     out = step(tables, s, A(4 + 1, "Leer", s, names), empty_outcome())
     assert int(out.status[0, 0]) == Status.NONE
 ```
@@ -974,11 +1220,13 @@ from nuzline.engine.outcome import empty_outcome
 from nuzline.engine.ids import ItemId
 from tests.engine.helpers import roark_state, A
 
+
 def test_intimidate_on_lead_and_on_switch_in(tables, names):
     s = roark_state(tables, names, player_species="Shinx", player_ability="Intimidate")
-    assert int(s.stages[1, 1]) == -1                                  # make_state runs on_switch_in for leads
+    assert int(s.stages[1, 1]) == -1  # make_state runs on_switch_in for leads
     out = step(tables, s, A(4 + 1, "Tackle", s, names), empty_outcome())
-    assert int(out.stages[1, 1]) == -1                                # Prinplup (slot 1) has no Intimidate: unchanged
+    assert int(out.stages[1, 1]) == -1  # Prinplup (slot 1) has no Intimidate: unchanged
+
 
 def test_blaze_boosts_fire_at_third_hp(tables, names):
     s = roark_state(tables, names, opp_species="Cranidos")
@@ -987,23 +1235,48 @@ def test_blaze_boosts_fire_at_third_hp(tables, names):
     boosted = step(tables, low, A("Ember", "Leer", low, names), empty_outcome())
     assert (int(s.hp[1, 0]) - int(boosted.hp[1, 0])) > (int(s.hp[1, 0]) - int(normal.hp[1, 0]))
 
+
 def test_oran_berry_triggers_and_is_consumed(tables, names):
-    s = roark_state(tables, names, player_species="Starly")                  # holds Oran Berry
+    s = roark_state(tables, names, player_species="Starly")  # holds Oran Berry
     half = int(s.max_hp[0, 0]) // 2 + 1
     s = s.replace_hp(0, 0, half)
     out = step(tables, s, A("Growl", "Tackle", s, names), empty_outcome())
     dealt = half - (int(out.hp[0, 0]) - 10)
-    assert dealt > 0 and int(out.item[0, 0]) == names.item("") and int(out.item_consumed[0, 0]) == names.item("Oran Berry")
+    assert (
+        dealt > 0
+        and int(out.item[0, 0]) == names.item("")
+        and int(out.item_consumed[0, 0]) == names.item("Oran Berry")
+    )
+
 
 def test_sitrus_heals_quarter(tables, names):
-    s = roark_state(tables, names, player_species="Grotle")                  # holds Sitrus Berry
+    s = roark_state(tables, names, player_species="Grotle")  # holds Sitrus Berry
     s = s.replace_hp(0, 0, int(s.max_hp[0, 0]) // 2 + 1)
     out = step(tables, s, A("Withdraw", "Tackle", s, names), empty_outcome())
-    assert int(out.item[0, 0]) == names.item("") and int(out.hp[0, 0]) > int(s.hp[0, 0]) - (int(s.max_hp[0, 0]) // 4)
+    assert int(out.item[0, 0]) == names.item("") and int(out.hp[0, 0]) > int(s.hp[0, 0]) - (
+        int(s.max_hp[0, 0]) // 4
+    )
+
 
 def test_rivalry_same_gender_boost(tables, names):
-    male = roark_state(tables, names, player_species="Shinx", player_ability="Rivalry", player_gender="male", opp_species="Cranidos", opp_gender="male")
-    female = roark_state(tables, names, player_species="Shinx", player_ability="Rivalry", player_gender="male", opp_species="Cranidos", opp_gender="female")
+    male = roark_state(
+        tables,
+        names,
+        player_species="Shinx",
+        player_ability="Rivalry",
+        player_gender="male",
+        opp_species="Cranidos",
+        opp_gender="male",
+    )
+    female = roark_state(
+        tables,
+        names,
+        player_species="Shinx",
+        player_ability="Rivalry",
+        player_gender="male",
+        opp_species="Cranidos",
+        opp_gender="female",
+    )
     a = step(tables, male, A("Tackle", "Leer", male, names), empty_outcome())
     b = step(tables, female, A("Tackle", "Leer", female, names), empty_outcome())
     assert (int(male.hp[1, 0]) - int(a.hp[1, 0])) > (int(female.hp[1, 0]) - int(b.hp[1, 0]))
@@ -1052,10 +1325,12 @@ from nuzline.engine.actions import legal_actions, legal_replacements, NUM_ACTION
 from nuzline.engine.ids import Status
 from tests.engine.helpers import roark_state
 
+
 def test_full_party_lead(tables, names):
     s = roark_state(tables, names)
     m = legal_actions(tables, s, 0).tolist()
     assert len(m) == NUM_ACTIONS and m[:4] == [True] * 4 and m[4] is False and all(m[5:10])
+
 
 def test_fainted_and_empty_slots_illegal(tables, names):
     s = roark_state(tables, names, opp_count=2).replace_hp(1, 1, 0)
@@ -1063,10 +1338,12 @@ def test_fainted_and_empty_slots_illegal(tables, names):
     assert m[4:10] == [False] * 6
     assert legal_replacements(s, 1).tolist() == [False] * 6
 
+
 def test_zero_pp_and_struggle(tables, names):
     s = roark_state(tables, names).with_pp(0, 0, [0, 0, 0, 0])
     m = legal_actions(tables, s, 0).tolist()
     assert m[0] is True and m[1:4] == [False] * 3
+
 
 def test_trapped_cannot_switch_and_taunt_blocks_status(tables, names):
     s = roark_state(tables, names)
@@ -1125,24 +1402,31 @@ from nuzline.engine.outcome import empty_outcome, outcome_to_py
 from nuzline.data.tables import to_numpy
 from tests.engine.helpers import roark_state, A
 
+
 def test_round_trip_exact(tables, names):
     s = roark_state(tables, names)
     back = from_ref(to_ref(s))
     for a, b in zip(s, back):
         assert (a == b).all()
 
+
 def test_one_turn_matches_jax(tables, names):
     s = roark_state(tables, names)
     acts = A("Scratch", "Tackle", s, names)
     jax_out = step(tables, s, acts, empty_outcome())
-    ref_out = ref_step(to_numpy(tables), to_ref(s), tuple(int(x) for x in acts), outcome_to_py(empty_outcome()))
+    ref_out = ref_step(
+        to_numpy(tables), to_ref(s), tuple(int(x) for x in acts), outcome_to_py(empty_outcome())
+    )
     for a, b in zip(jax_out, from_ref(ref_out)):
         assert (a == b).all()
+
 
 def test_damage_tables_match(tables, names):
     s = roark_state(tables, names)
     mv = int(s.moves[0, 0, 0])
-    assert damage_table(tables, s, 0, mv, False).tolist() == ref_damage_table(to_numpy(tables), to_ref(s), 0, mv, False)
+    assert damage_table(tables, s, 0, mv, False).tolist() == ref_damage_table(
+        to_numpy(tables), to_ref(s), 0, mv, False
+    )
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -1191,14 +1475,21 @@ from nuzline.reference.convert import to_ref, from_ref
 from nuzline.data.tables import to_numpy
 from nuzline.engine.outcome import outcome_to_py
 
-@settings(max_examples=500, deadline=None, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture])
+
+@settings(
+    max_examples=500,
+    deadline=None,
+    suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture],
+)
 @given(data=st.data())
 def test_jax_matches_reference(tables, names, data):
     s = data.draw(supported_state(tables, names))
     acts = data.draw(legal_action_pair(tables, s))
     o = data.draw(any_outcome())
     jax_out = step(tables, s, acts, o)
-    ref_out = from_ref(ref_step(to_numpy(tables), to_ref(s), tuple(int(x) for x in acts), outcome_to_py(o)))
+    ref_out = from_ref(
+        ref_step(to_numpy(tables), to_ref(s), tuple(int(x) for x in acts), outcome_to_py(o))
+    )
     for name, a, b in zip(jax_out._fields, jax_out, ref_out):
         np.testing.assert_array_equal(np.asarray(a), np.asarray(b), err_msg=name)
 ```
@@ -1210,6 +1501,7 @@ from nuzline.engine.step import step
 from nuzline.engine.outcome import empty_outcome, sample_outcome
 from tests.engine.helpers import roark_state
 
+
 def test_step_jits_and_vmaps_with_stable_shapes(tables, names):
     s = roark_state(tables, names)
     B = 16
@@ -1220,14 +1512,18 @@ def test_step_jits_and_vmaps_with_stable_shapes(tables, names):
     for a, b in zip(bs, out):
         assert a.shape == b.shape and a.dtype == b.dtype
 
+
 def test_no_64bit_in_jaxpr(tables, names):
     s = roark_state(tables, names)
     jaxpr = jax.make_jaxpr(step)(tables, s, jnp.zeros(2, jnp.int32), empty_outcome())
     assert "int64" not in str(jaxpr) and "float64" not in str(jaxpr)
 
+
 def test_sample_outcome_is_jittable(tables, names):
     s = roark_state(tables, names)
-    o = jax.jit(sample_outcome, static_argnums=())(jax.random.PRNGKey(0), tables, s, jnp.zeros(2, jnp.int32))
+    o = jax.jit(sample_outcome, static_argnums=())(
+        jax.random.PRNGKey(0), tables, s, jnp.zeros(2, jnp.int32)
+    )
     assert o.roll.shape == (2, 5) and int(o.roll.max()) <= 15
 ```
 

@@ -46,10 +46,13 @@
 # tests/test_scaffold.py
 def test_package_imports():
     import nuzline
+
     assert nuzline.__version__ == "0.0.1"
+
 
 def test_jax_is_cpu_and_32bit():
     import jax, jax.numpy as jnp
+
     assert jax.default_backend() == "cpu"
     assert jnp.arange(3).dtype == jnp.int32
 ```
@@ -99,16 +102,19 @@ git commit -m "chore: scaffold nuzline package with uv, pytest, ruff, jax[cpu]"
 import jax, jax.numpy as jnp, numpy as np
 from benchmarks.spike_step import SpikeState, make_state, step, batched_step, N_EFFECTS
 
+
 def test_step_keeps_shapes_and_dtypes():
     s = make_state(0, 4)
     out = batched_step(s, jnp.zeros((4, 2), jnp.int8))
     for a, b in zip(s, out):
         assert a.shape == b.shape and a.dtype == b.dtype
 
+
 def test_no_64bit_anywhere():
     s = make_state(0, 4)
     out = batched_step(s, jnp.zeros((4, 2), jnp.int8))
     assert all(x.dtype.itemsize <= 4 for x in out)
+
 
 def test_batch_of_one_matches_element_of_batch():
     big = make_state(1, 8)
@@ -119,12 +125,14 @@ def test_batch_of_one_matches_element_of_batch():
     for a, b in zip(out_big, out_one):
         np.testing.assert_array_equal(np.asarray(a[3]), np.asarray(b[0]))
 
+
 def test_unknown_effect_id_is_noop_except_end_of_turn():
     s = make_state(2, 1)
     s = s._replace(status=jnp.zeros_like(s.status))
     out = batched_step(s, jnp.full((1, 2), N_EFFECTS + 5, jnp.int8))
     np.testing.assert_array_equal(np.asarray(out.hp), np.asarray(s.hp))
     assert int(out.turn[0]) == int(s.turn[0]) + 1
+
 
 def test_each_effect_changes_something():
     s = make_state(3, 1)
@@ -176,10 +184,12 @@ git commit -m "feat(spike): synthetic masked step with 100 generated effects"
 import json
 from benchmarks.run_spike import measure, run
 
+
 def test_measure_separates_compile_from_steady_state():
     r = measure(batch=64, n_steps=5)
     assert r["compile_s"] > 0 and r["steps_per_s"] > 0
     assert r["batch"] == 64 and r["n_steps"] == 5
+
 
 def test_run_writes_unique_file_each_call(tmp_path):
     p1 = run([16], 2, tmp_path)

@@ -1,5 +1,6 @@
 """The ``nuzline`` command line: coverage, rank and trainers (plan Task 8)."""
 
+import json
 from pathlib import Path
 
 import pytest
@@ -315,3 +316,101 @@ def test_run_records_never_overwrite(tmp_path, monkeypatch):
     assert second.name == "solve_20261031_120000_123456_1.json"
     assert json.loads(first.read_text()) == {"n": 1}
     assert json.loads(second.read_text()) == {"n": 2}
+
+
+# --- saves ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def save_path(tmp_path, tables, names):
+    from tests.saves.synthetic import write_save
+
+    return write_save(tmp_path, tables, names)
+
+
+def test_save_show(save_path, capsys):
+    assert main(["save", "show", str(save_path)]) == 0
+    out = capsys.readouterr().out
+    assert out.isascii() and "copy: primary" in out and "Trainer:" in out
+    assert "MONFERNO Lv14" in out and "Ember" in out and "Party (3)" in out
+
+
+def test_save_show_json(save_path, capsys):
+    assert main(["save", "show", str(save_path), "--json"]) == 0
+    data = json.loads(capsys.readouterr().out)
+    assert data["party"][0]["species_name"] == "MONFERNO"
+    assert data["load_result"] == "ok"
+
+
+def test_save_export_round_trips(save_path, tmp_path, tables, names, capsys):
+    from nuzline.data.party import load_party
+    from nuzline.saves import load_save
+
+    out = tmp_path / "party.toml"
+    assert main(["save", "export", str(save_path), "-o", str(out)]) == 0
+    save = load_save(save_path, tables=tables, names=names)
+    assert load_party(out, names) == [m.to_spec(tables) for m in save.party]
+    with pytest.raises(SystemExit) as e:  # -o is required
+        main(["save", "export", str(save_path)])
+    assert e.value.code == 2
+
+
+def test_rank_with_save(save_path, capsys):
+    args = ["rank", "--save", str(save_path), "--trainer", "roark", "--n", "20", "--devices", "1"]
+    assert main(args) == 0
+    assert "Switch" in capsys.readouterr().out
+
+
+def test_save_egg_first_is_dropped(tmp_path, tables, names, capsys):
+    from tests.saves.synthetic import write_save
+
+    path = write_save(tmp_path, tables, names, egg_first=True)
+    args = ["coverage", "--save", str(path), "--trainer", "roark"]
+    assert main(args) == 0
+    captured = capsys.readouterr()
+    assert "party slot 0: egg left out" in captured.err
+    # --lead indexes the egg-free party: 2 is Grotle, 3 does not exist.
+    assert main([*args, "--lead", "2"]) == 0
+    assert main([*args, "--lead", "3"]) == 1
+
+
+def test_party_and_save_exclusive(save_path):
+    with pytest.raises(SystemExit) as e:
+        main(["coverage", "--party", PARTY, "--save", str(save_path), "--trainer", "roark"])
+    assert e.value.code == 2
+    with pytest.raises(SystemExit) as e:
+        main(["coverage", "--trainer", "roark"])
+    assert e.value.code == 2
+
+
+def test_corrupt_save_exit_1(tmp_path, tables, names, capsys):
+    from tests.saves.synthetic import save_image
+    from tests.saves.writer import set_save_counter
+
+    image = save_image(tables, names, counters=((5, 5, 5), (6, 6, 4)))
+    image = set_save_counter(image, 1, "boxes", 5)
+    path = tmp_path / "bad.sav"
+    path.write_bytes(image)
+    assert main(["save", "show", str(path)]) == 1
+    err = capsys.readouterr().err
+    assert err.startswith("nuzline: error:") and len(err.strip().splitlines()) == 1
+    assert main(["coverage", "--save", str(path), "--trainer", "roark"]) == 1
+    capsys.readouterr()
+    assert main(["save", "show", str(path), "--allow-corrupt"]) == 0
+    assert "load result corrupt" in capsys.readouterr().out
+    short = tmp_path / "short.sav"
+    short.write_bytes(b"\0" * 10)
+    assert main(["save", "show", str(short)]) == 1
+    assert "not a Platinum save" in capsys.readouterr().err
+
+
+def test_run_record_hashes_the_save(save_path):
+    import argparse
+    import hashlib
+
+    from nuzline import cli
+
+    got = cli._source_hash(argparse.Namespace(save=save_path, party=None))
+    assert got == {"save_sha256": hashlib.sha256(save_path.read_bytes()).hexdigest()}
+    got = cli._source_hash(argparse.Namespace(save=None, party=Path(PARTY)))
+    assert list(got) == ["party_sha256"]

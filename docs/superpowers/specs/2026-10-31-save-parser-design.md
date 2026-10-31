@@ -169,28 +169,28 @@ These offsets are derived, not taken from PKHeX; the oracle test is what proves 
 ```python
 @dataclass(frozen=True)
 class SaveMon:
-    location: tuple[str, int, int]   # ("party", 0, slot) or ("box", box, slot)
+    location: tuple[str, int, int]  # ("party", 0, slot) or ("box", box, slot)
     personality: int
     ot_id: int
-    species: int                     # decomp ids throughout
+    species: int  # decomp ids throughout
     form: int
     nickname: str
     is_egg: bool
     experience: int
-    level: int                       # stored (party) or computed from experience (box)
+    level: int  # stored (party) or computed from experience (box)
     nature: int
-    ability: int                     # decomp ability id as stored
-    gender: int                      # 0 male, 1 female, 2 none (PokemonSpec convention)
+    ability: int  # decomp ability id as stored
+    gender: int  # 0 male, 1 female, 2 none (PokemonSpec convention)
     friendship: int
     item: int
-    ivs: tuple[int, ...]             # ids.Stat order
-    evs: tuple[int, ...]             # ids.Stat order
+    ivs: tuple[int, ...]  # ids.Stat order
+    evs: tuple[int, ...]  # ids.Stat order
     moves: tuple[int, int, int, int]
     pp: tuple[int, int, int, int]
     pp_ups: tuple[int, int, int, int]
-    current_hp: int | None           # party only; None in a box
-    status_raw: int                  # MON_CONDITION_* word; 0 in a box
-    stored_stats: tuple[int, ...] | None   # party only, ids.Stat order, max HP first
+    current_hp: int | None  # party only; None in a box
+    status_raw: int  # MON_CONDITION_* word; 0 in a box
+    stored_stats: tuple[int, ...] | None  # party only, ids.Stat order, max HP first
 ```
 
 - **Level of boxed Pokemon** is computed from experience as

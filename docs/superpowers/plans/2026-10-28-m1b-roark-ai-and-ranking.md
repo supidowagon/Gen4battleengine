@@ -95,11 +95,13 @@ import jax, jax.numpy as jnp
 from nuzline.ai.outcome import AiOutcome, sample_ai_outcome, enumerate_ai_outcomes, MAX_SCRIPT_ROLLS
 from tests.engine.helpers import roark_state
 
+
 def test_sample_within_ranges(tables, names):
     s = roark_state(tables, names)
     o = sample_ai_outcome(jax.random.PRNGKey(0), s)
     assert o.sim_roll.shape == (4,) and o.script_rolls.shape == (MAX_SCRIPT_ROLLS,)
     assert int(o.ability_guess) in (0, 1)
+
 
 def test_enumeration_probabilities_sum_to_one(tables, names):
     s = roark_state(tables, names)
@@ -199,7 +201,10 @@ Hand-trace at least three states through the decomp scripts while writing `docs/
 import jax.numpy as jnp
 from nuzline.ai.policy import ai_scores, ai_policy, ai_action_distribution
 from nuzline.ai.outcome import AiOutcome
-from tests.ai.fixtures import TRACED   # list of (description, state_builder, AiOutcome, expected_scores:int32[4], expected_action)
+from tests.ai.fixtures import (
+    TRACED,
+)  # list of (description, state_builder, AiOutcome, expected_scores:int32[4], expected_action)
+
 
 def test_hand_traced_scores(tables, names):
     for desc, build, ai_o, exp_scores, exp_action in TRACED:
@@ -207,16 +212,20 @@ def test_hand_traced_scores(tables, names):
         assert ai_scores(tables, s, ai_o).tolist() == exp_scores, desc
         assert int(ai_policy(tables, s, ai_o)) == exp_action, desc
 
+
 def test_distribution_sums_to_one_and_is_legal(tables, names):
     s = TRACED[0][1](tables, names)
     d = ai_action_distribution(tables, s)
     assert abs(float(d.sum()) - 1.0) < 1e-5
-    assert float(d[4]) == 0.0            # cannot switch to its own slot
+    assert float(d[4]) == 0.0  # cannot switch to its own slot
+
 
 def test_ko_move_preferred_when_available(tables, names):
     s = TRACED[0][1](tables, names).replace_hp(0, 0, 1)
     d = ai_action_distribution(tables, s)
-    assert float(d[:4].max()) > 0.9      # a damaging move that KOs dominates under the "try to faint" flag
+    assert (
+        float(d[:4].max()) > 0.9
+    )  # a damaging move that KOs dominates under the "try to faint" flag
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -267,23 +276,39 @@ from nuzline.ai.outcome import sample_ai_outcome
 import jax
 from tests.engine.helpers import roark_state, A
 
+
 def test_seen_move_recorded_only_when_executed(tables, names):
     s = roark_state(tables, names, opp_species="Cranidos", opp_faster=True)
-    flinched = step(tables, s, A("Scratch", "Headbutt", s, names), empty_outcome()._replace(secondary=jnp.ones((2, 5), jnp.int8)))
+    flinched = step(
+        tables,
+        s,
+        A("Scratch", "Headbutt", s, names),
+        empty_outcome()._replace(secondary=jnp.ones((2, 5), jnp.int8)),
+    )
     assert int(flinched.ai_seen_moves[0, 0]) == 0
     executed = step(tables, s, A("Scratch", "Leer", s, names), empty_outcome())
     assert int(executed.ai_seen_moves[0, 0]) == 1
 
+
 def test_ability_guess_is_chance_until_revealed(tables, names):
     from nuzline.ai.policy import resolve_player_ability
-    s = roark_state(tables, names, player_species="Shinx", player_ability="Rivalry")   # Shinx: Rivalry / Intimidate
+
+    s = roark_state(
+        tables, names, player_species="Shinx", player_ability="Rivalry"
+    )  # Shinx: Rivalry / Intimidate
     o0 = sample_ai_outcome(jax.random.PRNGKey(0), s)
     assert int(s.ai_ability_known[0]) == 0
-    guessed = {int(resolve_player_ability(tables, s, o0._replace(ability_guess=jnp.int8(g)))) for g in (0, 1)}
+    guessed = {
+        int(resolve_player_ability(tables, s, o0._replace(ability_guess=jnp.int8(g))))
+        for g in (0, 1)
+    }
     assert guessed == {names.ability("Rivalry"), names.ability("Intimidate")}
     revealed = s._replace(ai_ability_known=s.ai_ability_known.at[0].set(1))
     for g in (0, 1):
-        assert int(resolve_player_ability(tables, revealed, o0._replace(ability_guess=jnp.int8(g)))) == names.ability("Rivalry")
+        assert int(
+            resolve_player_ability(tables, revealed, o0._replace(ability_guess=jnp.int8(g)))
+        ) == names.ability("Rivalry")
+
 
 def test_intimidate_reveals_ability(tables, names):
     s = roark_state(tables, names, player_species="Shinx", player_ability="Intimidate")
@@ -329,12 +354,18 @@ import pytest
 from nuzline.engine.coverage import check_coverage, require_coverage, UnsupportedMechanics, Support
 from tests.engine.helpers import sample_party, roark_trainer, roark_party
 
+
 def test_roark_vs_sample_party_is_fully_covered(tables, names):
     r = check_coverage(tables, names, sample_party(names), roark_trainer(), roark_party(names), 0)
     assert r.missing == [] and r.level == Support.EXACT
 
+
 def test_all_missing_reported_at_once(tables, names):
-    party = sample_party(names, override_moves={0: ["Metronome", "Scratch", "Leer", "Ember"]}, override_item={1: "Leftovers"})
+    party = sample_party(
+        names,
+        override_moves={0: ["Metronome", "Scratch", "Leer", "Ember"]},
+        override_item={1: "Leftovers"},
+    )
     with pytest.raises(UnsupportedMechanics) as e:
         require_coverage(tables, names, party, roark_trainer(), roark_party(names), 0)
     msg = str(e.value)
@@ -387,15 +418,18 @@ from nuzline.search.playout import playout, playout_from_action, playout_policy,
 from nuzline.engine.actions import legal_actions
 from tests.engine.helpers import roark_state
 
+
 def test_policy_returns_legal_action(tables, names):
     s = roark_state(tables, names)
     a = int(playout_policy(tables, s, jax.random.PRNGKey(0)))
     assert bool(legal_actions(tables, s, 0)[a])
 
+
 def test_playout_terminates_with_result(tables, names):
     s = roark_state(tables, names)
     r = playout(tables, s, jax.random.PRNGKey(1))
     assert int(r.won) in (0, 1) and 0 < int(r.turns) <= 100
+
 
 def test_batched_playout_shapes(tables, names):
     s = roark_state(tables, names)
@@ -404,13 +438,17 @@ def test_batched_playout_shapes(tables, names):
     r = batched_playout(tables, bs, jax.random.split(jax.random.PRNGKey(2), B))
     assert r.won.shape == (B,) and r.turns.dtype == jnp.int16
 
+
 def test_short_party_and_opponent_switch_do_not_index_empty_slot(tables, names):
     s = roark_state(tables, names, player_count=2, opp_count=3)
     r = playout(tables, s, jax.random.PRNGKey(3))
     assert int(r.turns) > 0
 
+
 def test_player_faint_ends_playout_as_loss(tables, names):
-    s = roark_state(tables, names, player_count=1).replace_hp(0, 0, 1).with_pp(0, 0, [0, 0, 0, 0])   # no switch; must Struggle at 1 HP: recoil faints
+    s = (
+        roark_state(tables, names, player_count=1).replace_hp(0, 0, 1).with_pp(0, 0, [0, 0, 0, 0])
+    )  # no switch; must Struggle at 1 HP: recoil faints
     r = playout(tables, s, jax.random.PRNGKey(4))
     assert int(r.won) == 0 and int(r.player_faints) == 1 and int(r.turns) == 1
 ```
@@ -457,10 +495,12 @@ import jax
 from nuzline.search.stage_a import rank_actions, wilson
 from tests.engine.helpers import roark_state
 
+
 def test_wilson_bounds():
     lo, hi = wilson(50, 100)
     assert 0.40 < lo < 0.5 < hi < 0.60
     assert wilson(0, 10)[0] == 0.0 and wilson(10, 10)[1] == 1.0
+
 
 def test_ranking_covers_legal_actions_and_is_sorted(tables, names):
     s = roark_state(tables, names)
@@ -468,11 +508,13 @@ def test_ranking_covers_legal_actions_and_is_sorted(tables, names):
     assert len(r) == 9 and all(a.ci_low <= a.p_win0 <= a.ci_high for a in r)
     assert [a.p_win0 for a in r] == sorted([a.p_win0 for a in r], reverse=True)
 
+
 def test_common_random_numbers_are_deterministic(tables, names):
     s = roark_state(tables, names)
     a = rank_actions(tables, names, s, n=100, key=jax.random.PRNGKey(7))
     b = rank_actions(tables, names, s, n=100, key=jax.random.PRNGKey(7))
     assert [(x.action, x.p_win0) for x in a] == [(x.action, x.p_win0) for x in b]
+
 
 def test_all_zero_flag(tables, names):
     s = roark_state(tables, names).replace_hp(0, 0, 1).with_pp(0, 0, [0, 0, 0, 0])
@@ -523,17 +565,46 @@ git commit -m "feat(search): Stage A Monte Carlo ranking with Wilson intervals a
 # tests/test_cli.py
 from nuzline.cli import main
 
+
 def test_coverage_ok(capsys):
-    assert main(["coverage", "--party", "tests/fixtures/sample_party.toml", "--trainer", "roark"]) == 0
+    assert (
+        main(["coverage", "--party", "tests/fixtures/sample_party.toml", "--trainer", "roark"]) == 0
+    )
     assert "missing: none" in capsys.readouterr().out.lower()
 
+
 def test_rank_prints_nine_rows(capsys):
-    assert main(["rank", "--party", "tests/fixtures/sample_party.toml", "--trainer", "roark", "--n", "50"]) == 0
+    assert (
+        main(
+            [
+                "rank",
+                "--party",
+                "tests/fixtures/sample_party.toml",
+                "--trainer",
+                "roark",
+                "--n",
+                "50",
+            ]
+        )
+        == 0
+    )
     out = capsys.readouterr().out
     assert out.count("%") >= 9 and "Switch" in out
 
+
 def test_coverage_failure_exit_code():
-    assert main(["coverage", "--party", "tests/fixtures/sample_party_unsupported.toml", "--trainer", "roark"]) == 2
+    assert (
+        main(
+            [
+                "coverage",
+                "--party",
+                "tests/fixtures/sample_party_unsupported.toml",
+                "--trainer",
+                "roark",
+            ]
+        )
+        == 2
+    )
 ```
 
 `tests/fixtures/sample_party_unsupported.toml` gives Monferno Metronome.
@@ -591,13 +662,16 @@ from tools.trace_to_state import trace_to_states, COMPARED_FIELDS
 TRACE = Path("tests/golden/roark_01.json")
 pytestmark = pytest.mark.skipif(not TRACE.exists(), reason="no golden trace")
 
+
 def test_roark_trace_replays(tables, names):
     turns = trace_to_states(TRACE, tables, names)
     assert len(turns) >= 3
     for (before, actions, outcome), (after, _, _) in zip(turns, turns[1:]):
         out = step(tables, before, actions, outcome)
         for name in COMPARED_FIELDS:
-            assert getattr(out, name).tolist() == getattr(after, name).tolist(), f"turn {int(before.turn)} field {name}"
+            assert getattr(out, name).tolist() == getattr(after, name).tolist(), (
+                f"turn {int(before.turn)} field {name}"
+            )
 ```
 
 - [ ] **Step 3: Write the Lua script and `trace_to_state.py`; record one Roark battle; convert it**

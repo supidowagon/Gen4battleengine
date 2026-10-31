@@ -16,6 +16,15 @@
   result). Exit code 2 when the fight or the opponent AI is refused, or a belief node's
   states differ in the player's legal actions (``stage_b.HiddenLegality``).
 * ``nuzline trainers``: every trainer's id, name and class.
+* ``nuzline save show SAVE [--json] [--allow-corrupt]``: the save's trainer, loaded copy,
+  party and boxes (one line per Pokemon), or the whole save as JSON.
+* ``nuzline save export SAVE -o PARTY.toml [--allow-corrupt]``: the save's party (eggs
+  dropped) as a ``--party`` TOML file.
+
+``coverage``, ``rank`` and ``solve`` take ``--save SAVE [--allow-corrupt]`` instead of
+``--party``: the party is the save's, eggs left out (each reported on stderr; ``--lead``
+indexes the egg-free party), and the solve run record holds ``save_sha256``. A bad save
+or record is one line on stderr and exit code 1.
 
 ``--trainer NAME`` is the first trainer whose name matches case-insensitively and whose
 class starts with "leader", else the first match; ``--trainer-id`` selects exactly
@@ -83,7 +92,12 @@ def _parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     def fight(cmd: argparse.ArgumentParser) -> None:
-        cmd.add_argument("--party", required=True, type=Path, help="the player's party TOML")
+        source = cmd.add_mutually_exclusive_group(required=True)
+        source.add_argument("--party", type=Path, help="the player's party TOML")
+        source.add_argument("--save", type=Path, help="a Platinum .sav/.dsv: its party is used")
+        cmd.add_argument(
+            "--allow-corrupt", action="store_true", help="with --save: load a corrupt save anyway"
+        )
         who = cmd.add_mutually_exclusive_group(required=True)
         who.add_argument("--trainer", help="trainer name (a Leader is preferred)")
         who.add_argument("--trainer-id", type=int, help="exact trainer id")
@@ -120,6 +134,15 @@ def _parser() -> argparse.ArgumentParser:
     solve.add_argument("--tree", type=Path, default=None, help="write the plan tree as JSON")
     solve.add_argument("--show-depth", type=int, default=1, help="plan levels printed")
     sub.add_parser("trainers", help="list trainer ids, names and classes")
+    save = sub.add_parser("save", help="inspect or export a Platinum save")
+    save_sub = save.add_subparsers(dest="save_command", required=True)
+    show = save_sub.add_parser("show", help="print the save's trainer, party and boxes")
+    export = save_sub.add_parser("export", help="write the save's party as a party TOML")
+    for cmd in (show, export):
+        cmd.add_argument("save_path", type=Path, metavar="SAVE", help="a .sav or .dsv file")
+        cmd.add_argument("--allow-corrupt", action="store_true", help="load a corrupt save anyway")
+    show.add_argument("--json", action="store_true", help="print the whole save as JSON")
+    export.add_argument("-o", "--output", required=True, type=Path, help="party TOML to write")
     return parser
 
 
@@ -150,7 +173,20 @@ def _fight(args):
         load_trainers(INTERMEDIATE), name=args.trainer, trainer_id=args.trainer_id
     )
     tables, names = load_tables(), load_names()
-    player = load_party(args.party, names)
+    if args.save is not None:
+        from nuzline.saves import load_save
+
+        save = load_save(args.save, allow_corrupt=args.allow_corrupt, tables=tables, names=names)
+        player = []
+        for slot, mon in enumerate(save.party):
+            if mon.is_egg:
+                print(f"party slot {slot}: egg left out", file=sys.stderr)
+            else:
+                player.append(mon.to_spec(tables))
+        if not player:
+            raise ValueError("the save's party has no Pokemon besides eggs")
+    else:
+        player = load_party(args.party, names)
     opp = build_trainer_party(trainer, IntermediateData(INTERMEDIATE))
     if 0 <= args.lead < len(player) and player[args.lead].current_hp == 0:
         raise ValueError(f"--lead {args.lead}: that Pokemon has fainted")
@@ -277,7 +313,7 @@ def _solve(args) -> int:
         args.tree.write_text(json.dumps(tree, indent=1))
         print(f"plan tree: {args.tree}")
     record = {
-        "party_sha256": hashlib.sha256(args.party.read_bytes()).hexdigest(),
+        **_source_hash(args),
         "trainer_id": trainer.id,
         "trainer": trainer.name,
         "lead": args.lead,
@@ -289,6 +325,14 @@ def _solve(args) -> int:
     }
     print(f"run record: {_write_run_record(record)}")
     return EXIT_OK
+
+
+def _source_hash(args) -> dict:
+    """The run record's hash of the player's party source: ``party_sha256`` of the TOML,
+    or ``save_sha256`` of the save file."""
+    if args.save is not None:
+        return {"save_sha256": hashlib.sha256(args.save.read_bytes()).hexdigest()}
+    return {"party_sha256": hashlib.sha256(args.party.read_bytes()).hexdigest()}
 
 
 def _write_run_record(record: dict) -> Path:
@@ -315,6 +359,34 @@ def _trainers(args) -> int:
     return EXIT_OK
 
 
+def _save_show(args) -> int:
+    from nuzline.data.tables import load_names
+    from nuzline.saves import load_save
+    from nuzline.saves.export import save_json, show_lines
+
+    names = load_names()
+    save = load_save(args.save_path, allow_corrupt=args.allow_corrupt, names=names)
+    if args.json:
+        print(json.dumps(save_json(save, names), indent=1))  # ensure_ascii: ASCII only
+    else:
+        for line in show_lines(save, names):
+            print(line)
+    return EXIT_OK
+
+
+def _save_export(args) -> int:
+    from nuzline.data.tables import load_names
+    from nuzline.saves import load_save
+    from nuzline.saves.export import party_toml
+
+    names = load_names()
+    save = load_save(args.save_path, allow_corrupt=args.allow_corrupt, names=names)
+    text = party_toml(save, names)  # may raise RecordError before anything is written
+    args.output.write_text(text, encoding="utf-8")
+    print(f"wrote {args.output}")
+    return EXIT_OK
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if args.command in ("rank", "solve"):
@@ -322,9 +394,13 @@ def main(argv: list[str] | None = None) -> int:
             print("nuzline: error: --devices must be at least 1", file=sys.stderr)
             return EXIT_ERROR
         configure_cpu_devices(args.devices)
-    command = {"coverage": _coverage, "rank": _rank, "solve": _solve, "trainers": _trainers}[
-        args.command
-    ]
+    command = {
+        "coverage": _coverage,
+        "rank": _rank,
+        "solve": _solve,
+        "trainers": _trainers,
+        "save": lambda a: {"show": _save_show, "export": _save_export}[a.save_command](a),
+    }[args.command]
     try:
         return command(args)
     except (ValueError, FileNotFoundError) as e:
