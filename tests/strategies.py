@@ -26,7 +26,7 @@ from nuzline.data.spec import PokemonSpec
 from nuzline.data.tables import Names, Tables
 from nuzline.data.trainer import IntermediateData
 from nuzline.engine.actions import legal_actions, legal_opponent_actions
-from nuzline.engine.ids import MOVE_STRUGGLE, EffectId, Stat, Status, Weather
+from nuzline.engine.ids import MOVE_STRUGGLE, AbilityId, EffectId, Stat, Status, Weather
 from nuzline.engine.outcome import MAX_HITS, Outcome
 from nuzline.engine.state import (
     BAG_SLOTS,
@@ -289,3 +289,51 @@ def any_outcome() -> st.SearchStrategy[Outcome]:
         quick_claw=_flag(sides),
         end_speed_tie=_flag(()),
     )
+
+
+# Moves whose outcome laws the enumeration tests need (tests/engine/test_enumerate.py):
+# sleep (Spore, Hypnosis), Taunt, Bind (TRAP), multi-hit (Fury Swipes), confusion
+# (Supersonic, Confuse Ray), secondary paralysis / freeze / burn with a thawing move
+# (Spark, Ice Beam, Flame Wheel), flinch (Headbutt), a Speed drop (Bubble), a Speed
+# boost (Rock Polish), a high-crit move (Razor Leaf) and a 95 % plain move (Tackle).
+LAW_MOVES = (
+    "Spore",
+    "Hypnosis",
+    "Taunt",
+    "Bind",
+    "Fury Swipes",
+    "Supersonic",
+    "Confuse Ray",
+    "Spark",
+    "Ice Beam",
+    "Flame Wheel",
+    "Headbutt",
+    "Thunder Wave",
+    "Bubble",
+    "Rock Polish",
+    "Razor Leaf",
+    "Tackle",
+)
+# Abilities the outcome relevance reads (contact procs, Steadfast, Simple's Speed).
+LAW_ABILITIES = (AbilityId.STATIC, AbilityId.POISON_POINT, AbilityId.STEADFAST, AbilityId.SIMPLE)
+
+
+@st.composite
+def outcome_law_state(draw, tables: Tables, names: Names) -> BattleState:
+    """``supported_state`` widened for the outcome-law tests: Lucky Chant on either
+    side (0-5 turns), and on each side, independently, maybe one of ``LAW_MOVES`` in
+    the active Pokemon's slot 0 (full PP) and maybe one of ``LAW_ABILITIES`` on the
+    active Pokemon. Only ``sample_outcome`` reads Lucky Chant."""
+    s = draw(supported_state(tables, names))
+    a = {name: np.asarray(getattr(s, name)).copy() for name in BattleState._fields}
+    move_pp = np.asarray(tables.move_pp)
+    for side in (0, 1):
+        mon = int(a["active"][side])
+        a["lucky_chant"][side] = draw(st.sampled_from([0, 0, 1, 5]))
+        if draw(st.booleans()):
+            move = names.move(draw(st.sampled_from(LAW_MOVES)))
+            a["moves"][side, mon, 0] = move
+            a["pp"][side, mon, 0] = move_pp[move]
+        if draw(st.integers(0, 3)) == 0:
+            a["ability"][side, mon] = draw(st.sampled_from(LAW_ABILITIES))
+    return BattleState(**{name: jnp.asarray(a[name]) for name in BattleState._fields})
