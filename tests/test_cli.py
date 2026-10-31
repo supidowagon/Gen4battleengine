@@ -209,3 +209,39 @@ def test_cli_module_does_not_import_jax():
         [sys.executable, "-c", code], check=False, cwd=ROOT, env=env, capture_output=True, text=True
     )
     assert done.returncode == 0, done.stderr
+
+
+def test_cli_solve_small(tmp_path, monkeypatch, capsys):
+    import json
+
+    from nuzline import cli
+
+    monkeypatch.setattr(cli, "RUNS", tmp_path / "runs")
+    tree = tmp_path / "t.json"
+    args = ["solve", "--party", PARTY, "--trainer", "roark", "--max-depth", "1"]
+    args += ["--playouts", "2000", "--tree", str(tree), "--devices", "1"]
+    assert main(args) == 0
+    out = capsys.readouterr().out
+    out.encode("cp1252")
+    assert out.isascii() and "P(win, 0 faints)" in out
+    assert any(line.lstrip().startswith("if ") for line in out.splitlines())
+    saved = json.loads(tree.read_text())
+    assert saved["depth"] == 1 and saved["plan"]["children"]
+    (record,) = (tmp_path / "runs").glob("solve_*.json")
+    run = json.loads(record.read_text())
+    import hashlib
+
+    assert run["party_sha256"] == hashlib.sha256(Path(PARTY).read_bytes()).hexdigest()
+    assert run["trainer_id"] == 246 and run["seed"] == 0
+    assert run["settings"]["budget_playouts"] == 2000 and run["result"]["depth"] == 1
+
+
+def test_cli_solve_refused(capsys, tmp_path, monkeypatch):
+    from nuzline import cli
+
+    monkeypatch.setattr(cli, "RUNS", tmp_path / "runs")
+    args = ["solve", "--party", UNSUPPORTED, "--trainer", "roark", "--devices", "1"]
+    assert main(args) == 2
+    out = capsys.readouterr().out
+    assert "refused:" in out and "Metronome" in out
+    assert not (tmp_path / "runs").exists()

@@ -8,6 +8,12 @@
   player's actions at the fight's turn-0 state (the trainer's real built party, bag and
   start condition; party slots ``--lead`` and ``--opp-active`` active). Exit code 2 when
   the fight is refused, by the coverage check or by a refused playout.
+* ``nuzline solve --party P (--trainer NAME | --trainer-id N) [--lead 0] [--opp-active 0]
+  [--max-depth 2] [--budget SECONDS] [--playouts N] [--epsilon 1e-4] [--seed 0]
+  [--devices N] [--tree FILE.json] [--show-depth 1]``: the Stage B plan (``search.stage_b``):
+  the ranking with intervals and bounds, the plan tree under the best action, optionally the
+  whole tree as JSON, and a run record under ``runs/`` (party hash, trainer, settings, seed,
+  result). Exit code 2 when the fight or the opponent AI is refused.
 * ``nuzline trainers``: every trainer's id, name and class.
 
 ``--trainer NAME`` is the first trainer whose name matches case-insensitively and whose
@@ -19,14 +25,18 @@ is cp1252).
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import os
 import sys
 from collections.abc import Sequence
+from datetime import datetime
 from pathlib import Path
 
 from nuzline.data.trainer import Trainer
 
 INTERMEDIATE = Path(__file__).resolve().parents[2] / "data" / "intermediate"
+RUNS = Path(__file__).resolve().parents[2] / "runs"
 
 ALL_ZERO_FOOTER = "all lines 0 %: no zero-faint line found at this depth"
 
@@ -90,6 +100,23 @@ def _parser() -> argparse.ArgumentParser:
         help="host CPU devices the playouts are sharded over (default: all cores; "
         "1 keeps the single-device path)",
     )
+    solve = sub.add_parser("solve", help="solve the fight's start with the Stage B plan search")
+    fight(solve)
+    solve.add_argument("--max-depth", type=int, default=2, help="deepest pass (0 = Stage A)")
+    solve.add_argument(
+        "--budget", type=float, default=None, help="seconds after which no deeper pass starts"
+    )
+    solve.add_argument(
+        "--playouts",
+        type=int,
+        default=None,
+        help="leaf playouts per pass (default: 2000 per action)",
+    )
+    solve.add_argument("--epsilon", type=float, default=1e-4, help="prune reach below this")
+    solve.add_argument("--seed", type=int, default=0, help="PRNG seed of the playouts")
+    solve.add_argument("--devices", type=int, default=os.cpu_count(), help="host CPU devices")
+    solve.add_argument("--tree", type=Path, default=None, help="write the plan tree as JSON")
+    solve.add_argument("--show-depth", type=int, default=1, help="plan levels printed")
     sub.add_parser("trainers", help="list trainer ids, names and classes")
     return parser
 
@@ -191,6 +218,72 @@ def _rank(args) -> int:
     return EXIT_OK
 
 
+def _solve(args) -> int:
+    import jax
+
+    from nuzline.ai.policy import UnsupportedAi
+    from nuzline.data import tables as tables_module
+    from nuzline.engine.coverage import UnsupportedMechanics, require_coverage
+    from nuzline.engine.state import make_state
+    from nuzline.jaxcache import code_version, enable_compile_cache, table_version
+    from nuzline.search.plan_tree import render, to_json
+    from nuzline.search.stage_b import SolveSettings, solve
+
+    if args.max_depth < 0 or args.show_depth < 0:
+        raise ValueError("--max-depth and --show-depth must not be negative")
+    if args.playouts is not None and args.playouts < 1:
+        raise ValueError("--playouts must be at least 1")
+    if args.epsilon < 0:
+        raise ValueError("--epsilon must not be negative")
+    settings = SolveSettings(
+        max_depth=args.max_depth,
+        budget_playouts=args.playouts,
+        budget_seconds=args.budget,
+        epsilon=args.epsilon,
+    )
+    enable_compile_cache(table_version(tables_module.DEFAULT) + code_version())
+    tables, names, trainer, player, opp, weather = _fight(args)
+    leads = (args.lead, args.opp_active)
+    print(_trainer_line(trainer))
+    try:
+        require_coverage(tables, names, player, trainer, opp, weather, leads)
+    except UnsupportedMechanics as e:
+        print(f"refused: {e}")
+        _print_report(e.report)
+        return EXIT_REFUSED
+    state = make_state(tables, player, opp, weather, opp_items=trainer.items, leads=leads)
+    try:
+        result = solve(tables, names, state, jax.random.PRNGKey(args.seed), settings)
+    except UnsupportedAi as e:
+        print(f"refused: {e}")
+        return EXIT_REFUSED
+    mine = names.species_names[player[args.lead].species]
+    theirs = names.species_names[opp[args.opp_active].species]
+    print(f"{mine} vs {theirs}: seed {args.seed}")
+    for line in render(result, names, args.show_depth, root=state, trainer=trainer.name):
+        print(line)
+    tree = to_json(result, names, root=state, trainer=trainer.name)
+    if args.tree is not None:
+        args.tree.write_text(json.dumps(tree, indent=1))
+        print(f"plan tree: {args.tree}")
+    record = {
+        "party_sha256": hashlib.sha256(args.party.read_bytes()).hexdigest(),
+        "trainer_id": trainer.id,
+        "trainer": trainer.name,
+        "lead": args.lead,
+        "opp_active": args.opp_active,
+        "settings": tree["settings"],
+        "seed": args.seed,
+        "devices": jax.device_count(),
+        "result": tree,
+    }
+    RUNS.mkdir(parents=True, exist_ok=True)
+    path = RUNS / f"solve_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+    path.write_text(json.dumps(record, indent=1))
+    print(f"run record: {path}")
+    return EXIT_OK
+
+
 def _trainers(args) -> int:
     from nuzline.data.trainer import load_trainers
 
@@ -201,12 +294,14 @@ def _trainers(args) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
-    if args.command == "rank":
+    if args.command in ("rank", "solve"):
         if args.devices is not None and args.devices < 1:
             print("nuzline: error: --devices must be at least 1", file=sys.stderr)
             return EXIT_ERROR
         configure_cpu_devices(args.devices)
-    command = {"coverage": _coverage, "rank": _rank, "trainers": _trainers}[args.command]
+    command = {"coverage": _coverage, "rank": _rank, "solve": _solve, "trainers": _trainers}[
+        args.command
+    ]
     try:
         return command(args)
     except (ValueError, FileNotFoundError) as e:
