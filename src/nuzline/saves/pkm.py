@@ -19,7 +19,7 @@ from nuzline.engine.stats import calc_stats
 from nuzline.saves.crypto import decrypt_record, record_checksum
 from nuzline.saves.status import decode_status
 
-__all__ = ["RecordError", "SaveMon", "decode_mon", "level_from_exp"]
+__all__ = ["RecordError", "SaveMon", "decode_mon", "decode_text", "level_from_exp"]
 
 # Offsets in the decrypted, A-B-C-D ordered record (header 8 bytes, blocks 32 each).
 _A, _B, _C = 8, 40, 72
@@ -171,10 +171,12 @@ def _u32(b: bytes, o: int) -> int:
     return int.from_bytes(b[o : o + 4], "little")
 
 
-def _nickname(rec: bytes, charmap: dict[int, str]) -> str:
+def decode_text(buf: bytes, offset: int, max_chars: int, charmap: dict[int, str]) -> str:
+    """Up to ``max_chars`` u16 text codes at ``offset``, stopping at ``0xFFFF``
+    (``CHAR_EOS``). Unmapped codes become ``?``; control codes are dropped."""
     out = []
-    for i in range(11):
-        code = _u16(rec, _C + 2 * i)
+    for i in range(max_chars):
+        code = _u16(buf, offset + 2 * i)
         if code == 0xFFFF:
             break
         ch = charmap.get(code, "?")
@@ -235,7 +237,7 @@ def decode_mon(
         ot_id=_u32(rec, _A + 0x04),
         species=species,
         form=form_byte >> 3,
-        nickname=_nickname(rec, charmap),
+        nickname=decode_text(rec, _C, 11, charmap),
         is_egg=bool((iv_word >> 30) & 1),
         experience=exp,
         level=level,

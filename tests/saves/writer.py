@@ -1,4 +1,5 @@
-"""Test-only writer for synthetic Pokemon records (the inverse of ``decode_mon``)."""
+"""Test-only writer for synthetic Pokemon records and whole save images (the inverse of
+``decode_mon`` and ``load_save``)."""
 
 from __future__ import annotations
 
@@ -6,7 +7,8 @@ from functools import lru_cache
 from pathlib import Path
 
 from nuzline.data.tables import load_tables
-from nuzline.saves.crypto import encrypt_record, record_checksum
+from nuzline.saves import layout as L
+from nuzline.saves.crypto import crc16_ccitt, encrypt_record, record_checksum
 
 _TABLES_DIR = Path(__file__).resolve().parents[2] / "data" / "gen4_platinum"
 # ids.Stat order -> stored order (HP, Atk, Def, Spe, SpA, SpD)
@@ -88,3 +90,102 @@ def mon_record(
             rec[144 + 2 * i : 146 + 2 * i] = party["stats"][j].to_bytes(2, "little")
     rec[6:8] = record_checksum(bytes(rec[8:136])).to_bytes(2, "little")
     return encrypt_record(bytes(rec))
+
+
+_BLOCKS = {"normal": (0, L.NORMAL_SIZE), "boxes": (L.BOXES_OFFSET, L.BOXES_SIZE)}
+
+
+def block_offset(copy: int, block: str) -> int:
+    """Image offset of ``block`` ("normal"/"boxes") in copy 0 (primary) or 1 (backup)."""
+    return L.COPY_OFFSETS[copy] + _BLOCKS[block][0]
+
+
+def footer_offset(copy: int, block: str) -> int:
+    return block_offset(copy, block) + _BLOCKS[block][1] - L.FOOTER_SIZE
+
+
+def _footer(body: bytes, block: str, save_counter: int, block_counter: int) -> bytes:
+    f = bytearray(L.FOOTER_SIZE)
+    f[0:4] = save_counter.to_bytes(4, "little")
+    f[4:8] = block_counter.to_bytes(4, "little")
+    f[8:12] = _BLOCKS[block][1].to_bytes(4, "little")
+    f[12:16] = L.SIGNATURE.to_bytes(4, "little")
+    f[16] = L.BLOCK_IDS[block]
+    f[18:20] = crc16_ccitt(body).to_bytes(2, "little")
+    return bytes(f)
+
+
+def build_image(
+    *,
+    party=(),
+    boxes=None,
+    bag=None,
+    trainer_name_codes=(),
+    tid=0,
+    sid=0,
+    badges=0,
+    counters=((1, 1, 1), None),
+    party_count=None,
+) -> bytes:
+    """A 0x80000 Platinum image with valid footers.
+
+    ``party``: encrypted 236-byte records; ``boxes``: ``{(box, slot): 136-byte record}``;
+    ``bag``: ``{pocket name: [(item, quantity), ...]}``. ``counters[i]`` is
+    ``(save counter, normal block counter, boxes block counter)`` for copy ``i``, or
+    ``None`` for an erased (0xFF) copy. ``party_count`` overrides ``currentCount``.
+    """
+    normal = bytearray(L.NORMAL_SIZE - L.FOOTER_SIZE)
+    codes = list(trainer_name_codes) + [0xFFFF] * (L.TRAINER_NAME_LEN - len(trainer_name_codes))
+    for i, code in enumerate(codes[: L.TRAINER_NAME_LEN]):
+        normal[L.TRAINER_NAME + 2 * i : L.TRAINER_NAME + 2 * i + 2] = code.to_bytes(2, "little")
+    normal[L.TRAINER_ID : L.TRAINER_ID + 4] = (tid | (sid << 16)).to_bytes(4, "little")
+    normal[L.BADGES] = badges
+    normal[L.PARTY_COUNT - 4 : L.PARTY_COUNT] = L.PARTY_MAX.to_bytes(4, "little")
+    count = len(party) if party_count is None else party_count
+    normal[L.PARTY_COUNT : L.PARTY_COUNT + 4] = count.to_bytes(4, "little")
+    for i, rec in enumerate(party):
+        o = L.PARTY_MONS + i * L.PARTY_MON_SIZE
+        normal[o : o + L.PARTY_MON_SIZE] = rec
+    o = L.BAG
+    for name, size in L.POCKETS:
+        for j, (item, qty) in enumerate((bag or {}).get(name, ())):
+            assert j < size
+            normal[o + 4 * j : o + 4 * j + 2] = item.to_bytes(2, "little")
+            normal[o + 4 * j + 2 : o + 4 * j + 4] = qty.to_bytes(2, "little")
+        o += 4 * size
+
+    box_body = bytearray(L.BOXES_SIZE - L.FOOTER_SIZE)
+    for (b, s), rec in (boxes or {}).items():
+        o = L.BOX_MONS + (b * L.BOX_SLOTS + s) * L.BOX_MON_SIZE
+        box_body[o : o + L.BOX_MON_SIZE] = rec
+
+    image = bytearray([0xFF]) * L.SAVE_SIZE
+    for copy, ctr in enumerate(counters):
+        if ctr is None:
+            continue
+        save_counter, normal_counter, boxes_counter = ctr
+        for block, body, bc in (
+            ("normal", normal, normal_counter),
+            ("boxes", box_body, boxes_counter),
+        ):
+            o = block_offset(copy, block)
+            image[o : o + len(body)] = body
+            image[o + len(body) : o + len(body) + L.FOOTER_SIZE] = _footer(
+                bytes(body), block, save_counter, bc
+            )
+    return bytes(image)
+
+
+def corrupt(image: bytes, copy: int, block: str) -> bytes:
+    """``image`` with one body byte of ``block`` in ``copy`` flipped (checksum now wrong)."""
+    out = bytearray(image)
+    out[block_offset(copy, block)] ^= 0x01
+    return bytes(out)
+
+
+def set_save_counter(image: bytes, copy: int, block: str, counter: int) -> bytes:
+    """Rewrite one footer's save counter (outside the checksummed body: stays valid)."""
+    out = bytearray(image)
+    o = footer_offset(copy, block)
+    out[o : o + 4] = counter.to_bytes(4, "little")
+    return bytes(out)
