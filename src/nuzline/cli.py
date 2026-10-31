@@ -15,8 +15,9 @@
   action, whether the precision target was met, optionally the whole tree as JSON, and a run
   record under ``runs/`` (party hash, trainer, settings, seed, result). Each pass tops up its
   leaf playouts until the leader's half-width is at most ``--precision`` percentage points
-  (default 1.5); ``--playouts N`` instead fixes every pass's leaf budget (no top-ups). Exit code 2 when the fight or the opponent AI is refused, or a belief node's
-  states differ in the player's legal actions (``stage_b.HiddenLegality``).
+  (default 1.5); ``--playouts N`` instead fixes every pass's leaf budget (no top-ups). Exit
+  code 2 when the fight or the opponent AI is refused, or a belief node's states differ in
+  the player's legal actions (``stage_b.HiddenLegality``).
 * ``nuzline trainers``: every trainer's id, name and class.
 
 ``--trainer NAME`` is the first trainer whose name matches case-insensitively and whose

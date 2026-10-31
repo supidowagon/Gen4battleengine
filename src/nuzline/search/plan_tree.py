@@ -396,7 +396,7 @@ def _pct(p: float) -> str:
 def _precision_line(result: SolveResult) -> str:
     """The precision target of the final pass: met or not, the half-A leader's half-width
     and the top-up rounds run."""
-    head = f"precision target {100 * result.settings.precision:.1f} pp"
+    head = f"precision target {100 * result.settings.precision:g} pp"
     rounds = f"after {result.rounds} top-up round{'' if result.rounds == 1 else 's'}"
     if result.half_width_a is None:
         return f"{head}: no ranked action to measure, {rounds}"

@@ -15,7 +15,7 @@ import pytest
 from nuzline.engine.step import WINNER_PLAYER
 from nuzline.search import stage_b
 from nuzline.search.expand import ai_rows, expand
-from nuzline.search.leaves import LeafValue
+from nuzline.search.leaves import LeafValue, allocate
 from nuzline.search.plan_tree import render
 from nuzline.search.stage_a import ActionResult, Ranking
 from nuzline.search.stage_b import HiddenLegality, PlanNode, SolveSettings, solve
@@ -406,10 +406,28 @@ def round_keys(r: int):
 
 
 def test_precision_none_is_one_fixed_round(tables, names, monkeypatch):
+    shares = []
+
+    def spy(weights, budget, floor):
+        shares.append((np.asarray(weights, np.float64).copy(), budget, floor))
+        return allocate(weights, budget, floor)
+
+    monkeypatch.setattr(stage_b, "allocate", spy)
     calls = stub_evaluators(monkeypatch)
     state = roark_real_state(tables, names)
     result = solve(tables, names, state, KEY, PRECISE)
     assert [c[0] for c in calls] == ["L", "F"]
+    # Round 0 is ruling 8: B0 = n_depth0 per legal root action, split by leaf-node reach
+    # only (pruned nodes add nothing; a state reached only through them gets the floor).
+    (leaf_w, b0, floor), _ = shares
+    assert b0 == PRECISE.n_depth0 * len(result.ranking) == result.leaf_budget
+    assert floor == PRECISE.leaf_floor
+    assert np.array_equal(calls[0][1], allocate(leaf_w, b0, floor))
+    kids = [kid for a in result.plan.children for kid in result.plan.children[a]]
+    leaf_mass = sum(kid.prob for kid in kids if kid.kind == "leaf")
+    pruned_mass = sum(kid.prob for kid in kids if kid.kind == "pruned")
+    assert pruned_mass > 0 and leaf_w.sum() == pytest.approx(leaf_mass)
+    assert np.any(leaf_w == 0) and np.all(calls[0][1][leaf_w == 0] == 2 * floor)
     k_leaf, k_forced = round_keys(0)
     assert np.array_equal(calls[0][2], k_leaf) and np.array_equal(calls[1][2], k_forced)
     assert np.all(calls[1][1] == 2 * PRECISE.leaf_floor)

@@ -250,3 +250,8 @@ def test_precision_footer_and_json(roark, names):
     missed = dataclasses.replace(met, rounds=8, half_width_a=0.02, precision_met=False)
     (line,) = [x for x in render(missed, names, 0, root=state) if "precision target" in x]
     assert "not met" in line and "2.00 pp" in line and "8 top-up rounds" in line
+    # The target prints as given, never rounded to one decimal (0.25 pp, not 0.2 pp).
+    for target, shown in ((0.0025, "0.25 pp"), (0.0125, "1.25 pp"), (0.0004, "0.04 pp")):
+        fine = dataclasses.replace(met, settings=dataclasses.replace(settings, precision=target))
+        (line,) = [x for x in render(fine, names, 0, root=state) if "precision target" in x]
+        assert f"precision target {shown}:" in line, line
