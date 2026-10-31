@@ -18,7 +18,10 @@ named), the trainer's name and, for action names below the root, the root state
 A node not expanded into observations (``obs`` is ``None``: a pruned opponent action, a
 sampled pair, an AI refused below the root) is labelled by the opponent action it stands
 for (``PlanNode.opp_label``, e.g. ``Geodude uses Rock Throw``); its kind shows once, as
-the line's outcome in ``render`` and as ``kind`` in ``to_json``.
+the line's outcome in ``render`` and as ``kind`` in ``to_json``. Without an opponent action:
+a depth-0 (Stage A) leaf stands for every foe reply, valued by Stage A's playouts (whose
+foe is the AI), and a refused node for a state whose AI is not modelled. ``render`` shows
+no plan at depth 0 (its footer says so); ``to_json`` keeps the leaves.
 """
 
 from __future__ import annotations
@@ -285,7 +288,13 @@ class _Walk:
 
     def node_label(self, node: PlanNode, prev_opp: int | None) -> str:
         if node.obs is None:
-            return node.opp_label or "the foe's AI is not modelled here"
+            if node.opp_label:
+                return node.opp_label
+            if node.kind == "leaf":
+                return "any foe reply (Stage A playouts)"
+            if node.kind == "refused":
+                return "the foe's AI is not modelled here"
+            raise ValueError(f"a {node.kind} node with no observation and no opponent action")
         return label(
             node.obs, self.names, prev_opp=prev_opp, trainer=self.trainer, max_hp=self.max_hp
         )
@@ -420,7 +429,8 @@ def render(
             f"  {mark} {i:2d}  {r.label:<24}  {odds:<27}  {_pct(r.lower_bound):>7}  "
             f"{_pct(r.unexplored):>10}  {sampled:>15}  {_pct(r.refused):>8}"
         )
-        if i == 1 and show_depth > 0 and r.action in result.plan.children:
+        staged = result.leaf_budget is not None  # depth 0 (Stage A) has no plan to show
+        if i == 1 and staged and show_depth > 0 and r.action in result.plan.children:
             out.extend(_lines(walk, result.plan, r.action, walk.root_opp, show_depth, 6))
     if any(r.tied_with_best for r in result.ranking):
         out.append("* the interval overlaps the leader's: a statistical tie, not reordered")

@@ -302,7 +302,9 @@ def test_field_marginals_match_decomp_laws(tables, names, data):
                 assert abs(math.fsum(probs[column == value]) - float(p)) <= 1e-15, (name, index)
 
 
-@settings(max_examples=200, **HYPOTHESIS)
+# 100 examples, not the plan's "about 200": the final review's test-runtime finding (F7)
+# asked for the cut; each example steps up to two full chunks (~70 ms warm).
+@settings(max_examples=100, **HYPOTHESIS)
 @given(data=st.data())
 def test_mask_sound(tables, names, data):
     s = data.draw(outcome_law_state(tables, names))

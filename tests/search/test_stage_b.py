@@ -305,7 +305,10 @@ def test_hidden_legality_raises(tables, names):
 def test_default_forced_evaluations_get_the_floor(tables, names, monkeypatch):
     """The default evaluator's forced path inside ``solve``: every pruned opponent action
     is evaluated with exactly ``2 * leaf_floor`` playouts (ruling 8), and the default leaf
-    budget is ``n_depth0`` per legal root action."""
+    budget is ``n_depth0`` per legal root action. The real ``evaluate_forced`` runs with a
+    one-turn cap, the program test_leaves.py's chunk test compiles (test-runtime rule);
+    ``evaluate_leaves``, which test_reproducible runs inside ``solve``, is a stub that
+    honours ``counts``."""
     calls = []
     real = stage_b.evaluate_forced
 
@@ -314,10 +317,14 @@ def test_default_forced_evaluations_get_the_floor(tables, names, monkeypatch):
         calls.append((np.asarray(pairs), np.asarray(counts), values))
         return values
 
+    def leaves(tables, states, counts, key, max_turns):
+        return [LeafValue(0, int(c) // 2, 0, int(c) // 2, False) for c in counts]
+
     monkeypatch.setattr(stage_b, "evaluate_forced", spy)
+    monkeypatch.setattr(stage_b, "evaluate_leaves", leaves)
     state = roark_real_state(tables, names)
     # Roark's AI row here is 3/4, 1/4: epsilon 0.3 prunes one opponent action per action.
-    settings = SolveSettings(max_depth=1, epsilon=0.3, n_depth0=20, max_turns=TURNS)
+    settings = SolveSettings(max_depth=1, epsilon=0.3, n_depth0=20, max_turns=1)
     result = solve(tables, names, state, KEY, settings)
     ((pairs, counts, values),) = calls
     assert len(pairs) == len(counts) == len(values) > 0

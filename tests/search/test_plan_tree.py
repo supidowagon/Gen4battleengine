@@ -11,8 +11,10 @@ import jax
 import numpy as np
 import pytest
 
+from nuzline.search import stage_b
 from nuzline.search.leaves import LeafValue
 from nuzline.search.plan_tree import label, render, to_json
+from nuzline.search.stage_a import ActionResult, Ranking
 from nuzline.search.stage_b import PlanNode, SolveSettings, solve
 from tests.engine.helpers import roark_state
 
@@ -188,3 +190,39 @@ def test_render_shows_the_sampled_node_count(roark, names):
     lines = render(dataclasses.replace(result, ranking=rows), names, 0, root=state)
     assert "sampled (nodes)" in lines[1]
     assert "1.2 % (3)" in lines[2]
+
+
+def test_depth0_prints_no_plan_and_labels_its_leaves(names, monkeypatch):
+    """At depth 0 (Stage A) ``render`` shows no plan under the best action, and the JSON
+    leaves say what they are: every foe reply, valued by Stage A's AI-driven playouts."""
+    canned = Ranking.of(
+        [
+            ActionResult(0, "Ember", 0.625, 0.55, 0.69, 0.75, 0.4, 200),
+            ActionResult(2, "Scratch", 0.5, 0.43, 0.57, 0.6, 0.9, 200),
+        ]
+    )
+    monkeypatch.setattr(stage_b, "rank_actions", lambda *args: canned)
+    settings = SolveSettings(max_depth=0, n_depth0=200)
+    result = solve(None, names, None, KEY, settings)
+    lines = render(result, names, 1)
+    assert not any(line.lstrip().startswith("if ") for line in lines), lines
+    assert "Stage A (depth 0)" in lines[-1]
+    tree = to_json(result, names)
+    for kids in tree["plan"]["children"].values():
+        assert [(k["kind"], k["label"]) for k in kids] == [
+            ("leaf", "any foe reply (Stage A playouts)")
+        ]
+    text = json.dumps(tree)
+    assert "not modelled" not in text
+
+
+def test_unlabelled_unobserved_node_is_an_error(roark, names):
+    """An obs-None node with no opponent action that is neither a Stage A leaf nor a
+    refusal has no truthful label: rendering it raises rather than guess."""
+    state, result = roark
+    best = result.ranking[0].action
+    plan = dataclasses.replace(
+        result.plan, children={best: [PlanNode(None, 1.0, None, {}, {}, "pruned")]}
+    )
+    with pytest.raises(ValueError, match="no opponent action"):
+        render(dataclasses.replace(result, plan=plan), names, 1, root=state)
