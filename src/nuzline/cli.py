@@ -403,7 +403,7 @@ def main(argv: list[str] | None = None) -> int:
     }[args.command]
     try:
         return command(args)
-    except (ValueError, FileNotFoundError) as e:
+    except (ValueError, OSError) as e:
         print(f"nuzline: error: {e}", file=sys.stderr)
         return EXIT_ERROR
 

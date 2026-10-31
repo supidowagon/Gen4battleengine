@@ -57,15 +57,11 @@
 # tests/tools/test_extract_decomp.py
 def test_species_exp_rate(decomp):
     species = {s["name"]: s for s in extract_species(decomp)}
-    assert species["Abra"]["exp_rate"] == 3  # EXP_RATE_MEDIUM_SLOW
-
-
+    assert species["Abra"]["exp_rate"] == 3        # EXP_RATE_MEDIUM_SLOW
 def test_exp_tables(decomp):
     t = extract_exp_tables(decomp)
     assert len(t) == 8 and all(len(r) == 101 for r in t)
     assert t[0][100] == 1_000_000 and t[3][100] == 1_059_860 and t[5][100] == 1_250_000
-
-
 def test_charmap(decomp):
     cm = extract_charmap(decomp)
     assert cm[0x0121] == "0" and cm[0x0145] == "a" and cm[0x01AB] == "!"
@@ -77,8 +73,6 @@ def test_charmap(decomp):
 def test_growth_tables(tables, names):
     assert int(tables.species_exp_rate[names.species("Abra")]) == 3
     assert int(tables.exp_table[0, 100]) == 1_000_000
-
-
 def test_charmap_loaded(names):
     assert names.charmap[0x0145] == "a"
 ```
@@ -117,21 +111,13 @@ def test_charmap_loaded(names):
 ```python
 def test_crc_check_value():
     assert crc16_ccitt(b"123456789") == 0x29B1
-
-
 def test_lcrng_first_words():
     out = lcrng_xor(b"\0" * 4, 0)
-    assert out == (24691 >> 16).to_bytes(2, "little") + (
-        ((24691 * 1103515245 + 24691) & 0xFFFFFFFF) >> 16
-    ).to_bytes(2, "little")
-
-
+    assert out == (24691 >> 16).to_bytes(2, "little") + (((24691 * 1103515245 + 24691) & 0xFFFFFFFF) >> 16).to_bytes(2, "little")
 def test_block_orders_are_permutations_and_repeat():
     assert all(sorted(o) == [0, 1, 2, 3] for o in BLOCK_ORDERS)
     assert len(set(BLOCK_ORDERS[:24])) == 24 and BLOCK_ORDERS[24:] == BLOCK_ORDERS[:8]
     assert BLOCK_ORDERS[0] == (0, 1, 2, 3) and BLOCK_ORDERS[6] == (1, 0, 2, 3)
-
-
 @given(st.binary(min_size=236, max_size=236), st.booleans())
 def test_encrypt_decrypt_round_trip(plain, party):
     plain = plain if party else plain[:136]

@@ -16,7 +16,15 @@ from nuzline.saves import layout as L
 from nuzline.saves.crypto import crc16_ccitt
 from nuzline.saves.pkm import SaveMon, decode_mon, decode_text
 
-__all__ = ["DSV_MARKER", "SaveError", "SaveFile", "load_save", "read_image", "select_copies"]
+__all__ = [
+    "DSV_MARKER",
+    "SaveError",
+    "SaveFile",
+    "default_tables_and_names",
+    "load_save",
+    "read_image",
+    "select_copies",
+]
 
 DSV_MARKER = b"|<--Snip above here to create a raw sav by excluding this DeSmuME savedata footer:"
 
@@ -191,7 +199,7 @@ def select_copies(image: bytes) -> tuple[str, int, int]:
         return "corrupt", curr_normal, curr_box
 
 
-def _default_tables_and_names(tables, names):
+def default_tables_and_names(tables, names):
     """numpy tables from ``tables.npz`` and the manifest names. Imported here, not at
     module top, so ``import nuzline.saves`` stays free of jax (``nuzline.data.tables``
     imports it)."""
@@ -266,7 +274,7 @@ def load_save(path: Path, *, allow_corrupt: bool = False, tables=None, names=Non
             "save is corrupt: the game would fall back to an older block "
             "(use allow_corrupt to load it)"
         )
-    tables, names = _default_tables_and_names(tables, names)
+    tables, names = default_tables_and_names(tables, names)
     charmap = names.charmap
 
     normal = _block(image, normal_copy, "normal")

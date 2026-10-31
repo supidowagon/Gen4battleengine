@@ -414,3 +414,10 @@ def test_run_record_hashes_the_save(save_path):
     assert got == {"save_sha256": hashlib.sha256(save_path.read_bytes()).hexdigest()}
     got = cli._source_hash(argparse.Namespace(save=None, party=Path(PARTY)))
     assert list(got) == ["party_sha256"]
+
+
+def test_save_export_unwritable_output_exit_1(save_path, tmp_path, capsys):
+    out = tmp_path / "no_such_dir" / "party.toml"
+    assert main(["save", "export", str(save_path), "-o", str(out)]) == 1
+    err = capsys.readouterr().err
+    assert err.startswith("nuzline: error:") and len(err.strip().splitlines()) == 1
