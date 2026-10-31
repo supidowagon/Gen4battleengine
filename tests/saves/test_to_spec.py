@@ -101,12 +101,25 @@ def test_toxic_counter_dropped(tables, names):
     assert (spec.status, spec.status_counter) == (Status.TOXIC, 0)
 
 
-def test_rotom_form_raises_unown_form_passes(tables, names):
+@pytest.mark.parametrize(
+    "species", ["Rotom", "Wormadam", "Giratina", "Shaymin", "Deoxys", "Arceus"]
+)
+def test_alternate_form_raises(tables, names, species):
     with pytest.raises(RecordError, match="box 1 slot 4"):
-        _box(tables, names, species="Rotom", form=1).to_spec(tables)
-    assert _box(tables, names, species="Rotom", form=0).to_spec(tables).form == 0
-    assert _box(tables, names, species="Unown", form=5).to_spec(tables).form == 5
-    assert _box(tables, names, species="Burmy", form=2).to_spec(tables).form == 2
+        _box(tables, names, species=species, form=1).to_spec(tables)
+    assert _box(tables, names, species=species, form=0).to_spec(tables).form == 0
+
+
+@pytest.mark.parametrize("species", ["Unown", "Burmy", "Shellos", "Gastrodon"])
+def test_cosmetic_form_passes(tables, names, species):
+    assert _box(tables, names, species=species, form=1).to_spec(tables).form == 1
+
+
+def test_current_hp_above_max_raises(tables, names):
+    mon = _party(tables, names)
+    bad = dataclasses.replace(mon, current_hp=mon.stored_stats[0] + 1)
+    with pytest.raises(RecordError, match="party slot 1"):
+        bad.to_spec(tables)
 
 
 def test_egg_raises(tables, names):

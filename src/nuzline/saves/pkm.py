@@ -10,12 +10,10 @@ boxed Pokemon is the highest level whose experience entry is <= its experience
 from __future__ import annotations
 
 from dataclasses import dataclass
-from functools import cache
 
 import numpy as np
 
 from nuzline.data.spec import PokemonSpec
-from nuzline.data.tables import load_names
 from nuzline.engine.ids import Stat, Status
 from nuzline.engine.stats import calc_stats
 from nuzline.saves.crypto import decrypt_record, record_checksum
@@ -70,7 +68,7 @@ class SaveMon:
         label = _label(self.location)
         if self.is_egg:
             raise RecordError(f"{label}: is an egg")
-        if self.form != 0 and self.species in _refused_form_species():
+        if self.form != 0 and self.species in _REFUSED_FORM_SPECIES:
             raise RecordError(f"{label}: species {self.species} form {self.form} is unsupported")
         abilities = [int(a) for a in _as_np(tables.species_abilities_decomp)[self.species]]
         if self.ability == 0 or self.ability not in abilities:
@@ -88,6 +86,11 @@ class SaveMon:
                 )
         if self.stored_stats is not None:
             self._check_stats(tables, label)
+            if self.current_hp is not None and self.current_hp > self.stored_stats[Stat.HP]:
+                raise RecordError(
+                    f"{label}: current HP {self.current_hp} exceeds max HP "
+                    f"{self.stored_stats[Stat.HP]}"
+                )
         status, counter = decode_status(self.status_raw)
         return PokemonSpec(
             species=self.species,
@@ -148,15 +151,11 @@ def level_from_exp(tables, species: int, exp: int) -> int:
     return max(1, int(np.searchsorted(row[1:], exp, side="right")))
 
 
-# Species whose non-zero forms change stats, types or abilities (plan Ruling 2);
-# Burmy, Shellos, Gastrodon, Unown and Cherrim forms are cosmetic and pass.
-_REFUSED_FORM_SPECIES = ("Rotom", "Wormadam", "Giratina", "Shaymin", "Deoxys", "Arceus")
-
-
-@cache
-def _refused_form_species() -> frozenset[int]:
-    names = load_names()
-    return frozenset(names.species(n) for n in _REFUSED_FORM_SPECIES)
+# Species whose non-zero forms change stats, types or abilities (plan Ruling 2), as decomp
+# ids (line N of generated/species.txt is id N-1): Deoxys 386, Wormadam 413, Rotom 479,
+# Giratina 487, Shaymin 492, Arceus 493. Burmy, Shellos, Gastrodon, Unown and Cherrim
+# forms are cosmetic and pass.
+_REFUSED_FORM_SPECIES = frozenset({386, 413, 479, 487, 492, 493})
 
 
 def _label(location: tuple[str, int, int]) -> str:
