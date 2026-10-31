@@ -12,9 +12,10 @@ import numpy as np
 import pytest
 
 from nuzline.engine.step import WINNER_PLAYER
+from nuzline.search import stage_b
 from nuzline.search.expand import ai_rows, expand
 from nuzline.search.leaves import LeafValue
-from nuzline.search.stage_a import rank_actions
+from nuzline.search.stage_a import ActionResult, Ranking
 from nuzline.search.stage_b import PlanNode, SolveSettings, solve
 from tests.engine.helpers import roark_real_state, roark_state
 from tests.search.exhaustive import children, exhaustive
@@ -78,20 +79,44 @@ def endgame_solves(tables, names):
     return out
 
 
-def test_depth0_is_stage_a(tables, names):
+def test_depth0_is_stage_a(tables, names, monkeypatch):
+    # Ruling 7: depth 0 returns ``rank_actions(n=n_depth0)``'s numbers unchanged. A spy
+    # stands in for ``rank_actions`` (whose numbers tests/search/test_stage_a.py checks),
+    # so this file compiles no Stage A playout program (test-runtime rule, notes/critic.md
+    # B.3).
     state = roark_state(tables, names)
-    # Short playouts (the same ``max_turns`` on both sides) keep the test fast.
+    canned = Ranking.of(
+        [
+            ActionResult(0, "Ember", 0.625, 0.55, 0.69, 0.75, 0.4, 200),
+            ActionResult(2, "Scratch", 0.5, 0.43, 0.57, 0.6, 0.9, 200),
+            ActionResult(5, "Switch -> Starly", 0.125, 0.08, 0.18, 0.3, 1.2, 200),
+        ]
+    )
+    calls = []
+
+    def spy(*args):
+        calls.append(args)
+        return canned
+
+    monkeypatch.setattr(stage_b, "rank_actions", spy)
     settings = SolveSettings(max_depth=0, n_depth0=200, max_turns=TURNS)
     result = solve(tables, names, state, KEY, settings)
-    ref = rank_actions(tables, names, state, n=200, key=KEY, max_turns=TURNS)
+    ((t, n, s, n_depth0, key, max_turns),) = calls
+    assert t is tables and n is names and s is state
+    assert (n_depth0, max_turns) == (200, TURNS)
+    assert np.array_equal(np.asarray(key), np.asarray(KEY))
     assert result.depth == 0 and result.dropped == {}
     got = [
         (r.action, r.label, r.estimate, r.ci_low, r.ci_high, r.tied_with_best)
         for r in result.ranking
     ]
-    want = [(r.action, r.label, r.p_win0, r.ci_low, r.ci_high, r.tied_with_best) for r in ref]
+    want = [(r.action, r.label, r.p_win0, r.ci_low, r.ci_high, r.tied_with_best) for r in canned]
     assert got == want
-    assert result.playouts == 200 * len(ref)
+    for r in result.ranking:
+        assert r.lower_bound == r.estimate
+        assert r.unexplored == r.sampled == r.refused == 0
+    assert set(result.plan.children) == {0, 2, 5}
+    assert result.playouts == 200 * len(canned)
 
 
 def test_matches_exhaustive_on_endgames(tables, endgame_solves):
@@ -245,7 +270,11 @@ def test_all_terminal_root(tables, names):
         assert r.unexplored == r.sampled == r.refused == 0
 
 
-def test_reproducible(tables, names):
+def test_reproducible(tables, names, monkeypatch):
+    def no_stage_a(*args):
+        raise AssertionError("Stage A runs only at depth 0 (ruling 7)")
+
+    monkeypatch.setattr(stage_b, "rank_actions", no_stage_a)
     state = roark_real_state(tables, names)
     settings = SolveSettings(max_depth=1, budget_playouts=2000, n_depth0=200, max_turns=TURNS)
     a = solve(tables, names, state, KEY, settings)

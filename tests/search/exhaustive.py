@@ -73,15 +73,20 @@ def children(
     pad = np.concatenate([np.arange(k), np.zeros(P - k, np.int64)])
     padded = jax.tree.map(lambda f: np.asarray(f)[pad], outcomes)
     after, refused, obs = jax.device_get(_turns(tables, state, actions, padded))
+    # Each row's state bytes at once: the fields' bytes side by side, in ``state_bytes``'
+    # order, so row i of ``rows`` is ``state_bytes(_row(after, i))``.
+    rows = np.concatenate(
+        [np.ascontiguousarray(np.asarray(f)[:k]).reshape(k, -1).view(np.uint8) for f in after],
+        axis=1,
+    )
     merged: dict[bytes, list] = {}
     for i in range(k):
-        row = _row(after, i)
         ob = np.asarray(obs[i], np.int32).tobytes()
-        mkey = state_bytes(row) + ob + bytes([bool(refused[i])])
+        mkey = rows[i].tobytes() + ob + bytes([bool(refused[i])])
         if mkey in merged:
             merged[mkey][3] += float(probs[i])
         else:
-            merged[mkey] = [row, bool(refused[i]), ob, float(probs[i])]
+            merged[mkey] = [_row(after, i), bool(refused[i]), ob, float(probs[i])]
     out = [tuple(m) for m in merged.values()]
     _CHILDREN[key] = out
     return out
@@ -103,12 +108,12 @@ def exhaustive(
 
     def value(belief: list[tuple[BattleState, float]], left: int, path) -> dict[int, float]:
         legal = np.flatnonzero(np.asarray(_legal(tables, belief[0][0])))
+        qs = [_ai(tables, s) for s, _ in belief]
         values = {}
         for a in legal.tolist():
             total = 0.0
             groups: dict[bytes, dict[bytes, list]] = {}
-            for s, w in belief:
-                q = _ai(tables, s)
+            for (s, w), q in zip(belief, qs, strict=True):
                 for o in np.flatnonzero(q > 0).tolist():
                     for after, refused, ob, p in children(tables, s, a, o):
                         reach = w * q[o] * p
