@@ -10,6 +10,7 @@ import pytest
 
 from nuzline.ai.policy import ai_action_distribution
 from nuzline.engine.actions import legal_actions
+from nuzline.engine.step import WINNER_PLAYER
 from nuzline.search.expand import expand
 from nuzline.search.leaves import (
     LEAF_CHUNK,
@@ -25,6 +26,21 @@ from tests.engine.helpers import roark_state
 from tests.search.test_expand import batch, row_keys
 
 KEY = jax.random.PRNGKey(11)
+N_SPLIT = LEAF_CHUNK + 10  # playouts of one leaf that span two chunks
+
+# The forced first turn over a batch of keys (one compile, shared by the tests below).
+_turns = jax.jit(jax.vmap(_forced_turn, in_axes=(None, None, None, 0)))
+
+
+def _spark_into_cranidos(tables, names, hp: int = 1):
+    """Shinx's Spark against Cranidos at ``hp`` HP (one Pokemon a side), Tackle back. At
+    26 HP the first turn wins about 41 % of the time (the damage roll and the crit
+    decide), so one-turn playouts mix wins and non-wins."""
+    state = roark_state(
+        tables, names, player_count=1, opp_count=1, player_species="Shinx", opp_species="Cranidos"
+    ).replace_hp(1, 0, hp)
+    pair = (names.move_slot(state, 0, "Spark"), names.move_slot(state, 1, "Tackle"))
+    return state, jnp.asarray(pair, jnp.int32)
 
 
 def test_halves_disjoint_and_reproducible(tables, names):
@@ -76,10 +92,8 @@ def test_forced_matches_playout_from_action(tables, names):
 def test_forced_first_turn_matches_expand(tables, names):
     """The forced first turn's child distribution (keys as evaluate_forced uses them)
     matches the exact children of ``expand``, bucketed by state."""
-    state = roark_state(
-        tables, names, player_count=1, opp_count=1, player_species="Shinx", opp_species="Cranidos"
-    ).replace_hp(1, 0, 1)
-    spark, tackle = names.move_slot(state, 0, "Spark"), names.move_slot(state, 1, "Tackle")
+    state, pair = _spark_into_cranidos(tables, names)
+    spark, tackle = (int(a) for a in pair)
     store, children = expand(tables, batch(state), [(0, spark, tackle)])
     assert sum(c.prob for c in children[0]) == pytest.approx(1.0, abs=1e-12)
     keys_of = row_keys(store)
@@ -90,11 +104,9 @@ def test_forced_first_turn_matches_expand(tables, names):
         c.prob for c in children[0] if int(store.over[c.state_row]) == 1 and not c.refused
     )
     assert 0.0 < won_mass < 1.0
-    n = 4000
-    pair = jnp.asarray([spark, tackle], jnp.int32)
-    keys = jnp.asarray(np.concatenate([np.asarray(k) for k in leaf_keys(KEY, 0, n)]))
-    turn = jax.jit(jax.vmap(lambda k: _forced_turn(tables, state, pair, k)[:2]))
-    after, refused = jax.device_get(turn(keys))
+    n = N_SPLIT  # the shape test_chunk_boundary_invariant compiles
+    keys = jnp.concatenate(leaf_keys(KEY, 0, n))
+    after, refused, _ = jax.device_get(_turns(tables, state, pair, keys))
     assert not np.any(refused)
     got = row_keys(after)
     assert set(got) <= set(want)
@@ -133,14 +145,42 @@ def test_terminal_state_rejected(tables, names):
     done = state._replace(over=jnp.int8(1))
     with pytest.raises(ValueError, match="terminal"):
         evaluate_leaves(tables, batch(done), np.array([4]), KEY)
+    with pytest.raises(ValueError, match="evaluate_forced: a terminal"):
+        evaluate_forced(tables, batch(done), np.array([[0, 0]]), np.array([4]), KEY)
+
+
+def test_shapes_checked(tables, names):
+    """Counts and pairs must match the states one for one (checked before any program
+    runs)."""
+    state = roark_state(tables, names)
+    two = batch(state, state)
+    with pytest.raises(ValueError, match=r"evaluate_leaves: counts has shape \(1,\)"):
+        evaluate_leaves(tables, two, np.array([4]), KEY)
+    with pytest.raises(ValueError, match=r"evaluate_forced: counts has shape \(3,\)"):
+        evaluate_forced(tables, two, np.zeros((2, 2)), np.array([4, 4, 4]), KEY)
+    with pytest.raises(ValueError, match=r"evaluate_forced: pairs has shape \(1, 2\)"):
+        evaluate_forced(tables, two, np.array([[0, 0]]), np.array([4, 4]), KEY)
+    with pytest.raises(ValueError, match=r"evaluate_forced: pairs has shape \(2,\)"):
+        evaluate_forced(tables, two, np.array([0, 0]), np.array([4, 4]), KEY)
 
 
 def test_chunk_boundary_invariant(tables, names):
-    """More rows than one chunk give the same totals as the per-leaf key rule says."""
+    """A leaf whose playouts span two chunks (half B crosses the boundary; the second
+    chunk is padded) gets the totals its keys give played one by one: one-turn forced
+    playouts, whose result is the first turn's (won iff that turn ends the battle in the
+    player's favour)."""
     assert LEAF_CHUNK == 4096
-    state = roark_state(tables, names)
-    (value,) = evaluate_leaves(tables, batch(state), np.array([LEAF_CHUNK + 10]), KEY)
-    assert value.n_a + value.n_b == LEAF_CHUNK + 10
+    state, pair = _spark_into_cranidos(tables, names, hp=26)
+    (value,) = evaluate_forced(tables, batch(state), pair[None], np.array([N_SPLIT]), KEY, 1)
+    keys = jnp.concatenate(leaf_keys(KEY, 0, N_SPLIT))
+    after, refused, _ = jax.device_get(_turns(tables, state, pair, keys))
+    assert not np.any(refused)
+    won = (np.asarray(after.over) != 0) & (np.asarray(after.winner) == WINNER_PLAYER)
+    h = N_SPLIT // 2
+    assert (value.n_a, value.n_b) == (h, h)
+    assert (value.wins_a, value.wins_b) == (int(won[:h].sum()), int(won[h:].sum()))
+    assert 0 < value.wins_a < h and 0 < value.wins_b < h  # a mix of wins and non-wins
+    assert not value.refused
     assert REFUSED_WON == -1
 
 

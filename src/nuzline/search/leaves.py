@@ -163,6 +163,19 @@ def _run(fn, name: str, max_turns: int, tables: Tables, rows: tuple, row_of, key
     return values
 
 
+def _check(name: str, states: BattleState, counts) -> np.ndarray:
+    """``counts`` as ``int64[N]`` for the ``N`` numpy ``states``; ``ValueError`` naming
+    ``name`` on a length mismatch or a finished battle (it has no playout: value it
+    exactly)."""
+    counts = np.asarray(counts, np.int64)
+    n = len(states.hp)
+    if counts.shape != (n,):
+        raise ValueError(f"{name}: counts has shape {counts.shape}, want ({n},)")
+    if np.any(states.over != 0):
+        raise ValueError(f"{name}: a terminal state has no playout (value it exactly)")
+    return counts
+
+
 def _prepare(counts, key):
     counts = np.asarray(counts, np.int64)
     if np.any(counts < 2) or np.any(counts % 2):
@@ -178,11 +191,10 @@ def evaluate_leaves(
     tables: Tables, states: BattleState, counts, key, max_turns: int = 100
 ) -> list[LeafValue]:
     """``counts[i]`` playouts (even) from each of the numpy ``states`` (``N`` rows), leaf
-    ``i`` on ``leaf_keys(key, i, counts[i])``. ``ValueError`` on a finished battle."""
+    ``i`` on ``leaf_keys(key, i, counts[i])``. ``ValueError`` on a finished battle or
+    ``counts`` not of length ``N``."""
     states = jax.tree.map(np.asarray, states)
-    if np.any(states.over != 0):
-        raise ValueError("evaluate_leaves: a terminal state has no playout (value it exactly)")
-    counts, keys, row_of = _prepare(counts, key)
+    counts, keys, row_of = _prepare(_check("evaluate_leaves", states, counts), key)
     return _run(_leaf_program, "leaf_playouts", max_turns, tables, (states,), row_of, keys, counts)
 
 
@@ -190,10 +202,14 @@ def evaluate_forced(
     tables: Tables, states: BattleState, pairs, counts, key, max_turns: int = 100
 ) -> list[LeafValue]:
     """``evaluate_leaves`` with the first turn forced to the (player, opponent) action
-    pair ``pairs[i]`` (``int32[N, 2]``; module docstring)."""
+    pair ``pairs[i]`` (``int32[N, 2]``; module docstring). ``ValueError`` as
+    ``evaluate_leaves`` and on ``pairs`` not of shape ``(N, 2)``."""
     states = jax.tree.map(np.asarray, states)
+    counts = _check("evaluate_forced", states, counts)
+    pairs = np.asarray(pairs, np.int32)
+    if pairs.shape != (len(counts), 2):
+        raise ValueError(f"evaluate_forced: pairs has shape {pairs.shape}, want ({len(counts)}, 2)")
     counts, keys, row_of = _prepare(counts, key)
-    pairs = np.asarray(pairs, np.int32).reshape(-1, 2)
     return _run(
         _forced_program, "leaf_forced", max_turns, tables, (states, pairs), row_of, keys, counts
     )
