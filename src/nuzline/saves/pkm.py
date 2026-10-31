@@ -110,14 +110,19 @@ def decode_mon(
     tables,
     charmap: dict[int, str],
 ) -> SaveMon | None:
-    """Decode a 136/236-byte record; ``None`` for an empty slot (species 0)."""
+    """Decode a 136/236-byte record; ``None`` for an empty slot.
+
+    Empty means an all-zero box part, or a checksum-valid record with species 0.
+    """
     label = _label(location)
+    if not any(raw[:_PARTY]):
+        return None  # all-zero box part: an empty slot, never decrypted
     rec = decrypt_record(raw)
+    if record_checksum(rec[8:_PARTY]) != _u16(rec, 6):
+        raise RecordError(f"{label}: checksum mismatch")
     species = _u16(rec, _A)
     if species == 0:
         return None
-    if record_checksum(rec[8:_PARTY]) != _u16(rec, 6):
-        raise RecordError(f"{label}: checksum mismatch")
 
     personality = _u32(rec, 0)
     exp = _u32(rec, _A + 0x08)

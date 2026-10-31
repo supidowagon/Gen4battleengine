@@ -58,7 +58,7 @@ def mon_record(
     if exp is None:
         t = _tables()
         exp = int(t.exp_table[int(t.species_exp_rate[species]), level])
-    rec = bytearray(236 if party else 136)
+    rec = bytearray(236 if party is not None else 136)
     rec[0:4] = personality.to_bytes(4, "little")
     a, b, c = 8, 40, 72
     rec[a : a + 2] = species.to_bytes(2, "little")
@@ -80,7 +80,7 @@ def mon_record(
     codes = list(nickname_codes) + [0xFFFF] * (11 - len(nickname_codes))
     for i, code in enumerate(codes[:11]):
         rec[c + 2 * i : c + 2 * i + 2] = code.to_bytes(2, "little")
-    if party:
+    if party is not None:
         rec[136:140] = party["status"].to_bytes(4, "little")
         rec[140] = party["level"]
         rec[142:144] = party["hp"].to_bytes(2, "little")

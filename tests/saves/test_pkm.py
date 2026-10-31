@@ -2,6 +2,7 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
+from nuzline.saves.crypto import decrypt_record, encrypt_record
 from nuzline.saves.pkm import RecordError, decode_mon, level_from_exp
 from tests.saves.writer import mon_record, personality_for
 
@@ -119,3 +120,15 @@ def test_nickname_decoded(tables, names):
     # control code dropped, unknown code becomes "?"
     raw = mon_record(species=63, nickname_codes=(*codes, 0xE000, 0x7777))
     assert decode_mon(raw, ("box", 0, 0), tables, names.charmap).nickname == "Abra?"
+    for control in (0x25BC, 0x25BD):
+        raw = mon_record(species=63, nickname_codes=(*codes, control))
+        assert decode_mon(raw, ("box", 0, 0), tables, names.charmap).nickname == "Abra"
+
+
+def test_species_zero_with_bad_checksum_raises(tables, names):
+    plain = bytearray(decrypt_record(mon_record(species=0, exp=0, ot_id=5)))
+    plain[6:8] = ((int.from_bytes(plain[6:8], "little") + 1) & 0xFFFF).to_bytes(2, "little")
+    raw = encrypt_record(bytes(plain))
+    assert any(raw)
+    with pytest.raises(RecordError, match="box 1 slot 4"):
+        decode_mon(raw, ("box", 1, 4), tables, names.charmap)
