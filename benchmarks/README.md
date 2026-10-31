@@ -132,10 +132,14 @@ against Roark, leader = the top-ranked action.
 
 | depth | run  | wall | leaf playouts | expansion | peak RSS | playouts run | top-up rounds | leader half-width (half A) | target met | time target |
 |-------|------|------|---------------|-----------|----------|--------------|---------------|----------------------------|------------|-------------|
-| 1     | cold | TBD  | TBD           | TBD       | TBD      | TBD          | TBD           | TBD                        | TBD        | 120 s: TBD  |
-| 1     | warm | TBD  | TBD           | TBD       | TBD      | TBD          | TBD           | TBD                        | TBD        |             |
-| 2     | cold | TBD  | TBD           | TBD       | TBD      | TBD          | TBD           | TBD                        | TBD        | 600 s: TBD  |
-| 2     | warm | TBD  | TBD           | TBD       | TBD      | TBD          | TBD           | TBD                        | TBD        |             |
+| 1     | cold | 66 s | 46 s          | 16 s      | 2128 MB  | 36 488       | 1             | 1.06 pp (printed: 1.1 pp)  | yes        | 120 s: met  |
+| 1     | warm | 39 s | 30 s          | 5 s       | 1934 MB  | 36 488       | 1             | 1.06 pp (printed: 1.1 pp)  | yes        |             |
+| 2     | cold | 207 s | 178 s        | 24 s      | 3019 MB  | 179 910      | 2             | 1.44 pp (printed: 1.6 pp)  | yes        | 600 s: met  |
+| 2     | warm | 161 s | 143 s        | 13 s      | 3016 MB  | 179 910      | 2             | 1.44 pp (printed: 1.6 pp)  | yes        |             |
+
+Measured 2026-10-31. The stopping rule reads half A only (ruling 5), so the printed half-B
+interval can come out slightly wider than the target, as at depth 2 (1.6 pp printed for
+1.44 pp on half A); the two halves are independent samples of the same size.
 
 Earlier fixed-budget measurements (2026-10-31, before the precision target): depth 1 at
 `B_1` = 77 400 took 85 s cold (0.75 pp); depth 2 at `B_2` = 696 600 took 909 s cold (0.60
