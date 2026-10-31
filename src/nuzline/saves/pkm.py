@@ -10,10 +10,16 @@ boxed Pokemon is the highest level whose experience entry is <= its experience
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import cache
 
 import numpy as np
 
+from nuzline.data.spec import PokemonSpec
+from nuzline.data.tables import load_names
+from nuzline.engine.ids import Stat, Status
+from nuzline.engine.stats import calc_stats
 from nuzline.saves.crypto import decrypt_record, record_checksum
+from nuzline.saves.status import decode_status
 
 __all__ = ["RecordError", "SaveMon", "decode_mon", "level_from_exp"]
 
@@ -56,6 +62,68 @@ class SaveMon:
     status_raw: int  # MON_CONDITION_* word; 0 in a box
     stored_stats: tuple[int, ...] | None  # party only, ids.Stat order, max HP first
 
+    def to_spec(self, tables) -> PokemonSpec:
+        """The engine's :class:`PokemonSpec`. Raises :class:`RecordError` for an egg, an
+        alternate form that changes stats/types/abilities, an ability the species
+        cannot have, PP above the move's maximum, or (party) a stored stat outside the
+        band the current EVs allow."""
+        label = _label(self.location)
+        if self.is_egg:
+            raise RecordError(f"{label}: is an egg")
+        if self.form != 0 and self.species in _refused_form_species():
+            raise RecordError(f"{label}: species {self.species} form {self.form} is unsupported")
+        abilities = [int(a) for a in _as_np(tables.species_abilities_decomp)[self.species]]
+        if self.ability == 0 or self.ability not in abilities:
+            raise RecordError(
+                f"{label}: ability {self.ability} is not one of the species' {abilities}"
+            )
+        move_pp = _as_np(tables.move_pp)
+        for i, move in enumerate(self.moves):
+            if move == 0:
+                continue
+            limit = int(move_pp[move]) * (5 + self.pp_ups[i]) // 5
+            if self.pp[i] > limit:
+                raise RecordError(
+                    f"{label}: move slot {i} has PP {self.pp[i]} above the maximum {limit}"
+                )
+        if self.stored_stats is not None:
+            self._check_stats(tables, label)
+        status, counter = decode_status(self.status_raw)
+        return PokemonSpec(
+            species=self.species,
+            level=self.level,
+            nature=self.nature,
+            ivs=self.ivs,
+            evs=self.evs,
+            moves=self.moves,
+            item=self.item,
+            ability_slot=abilities.index(self.ability),
+            gender=self.gender,
+            friendship=self.friendship,
+            form=self.form,
+            current_hp=self.current_hp,
+            status=int(status),
+            status_counter=0 if status == Status.TOXIC else counter,
+            pp=self.pp,
+            stats=self.stored_stats,
+        )
+
+    def _check_stats(self, tables, label: str) -> None:
+        """Each stored stat lies between the stats with 0 EVs and with the current EVs
+        (same IVs, nature and level): the game recomputes stats at level-up from an
+        EV vector no larger than today's."""
+        base = _as_np(tables.species_base_stats)[self.species]
+        mods = _as_np(tables.nature_mods)[self.nature]
+        low = calc_stats(base, self.ivs, (0,) * 6, self.level, mods)
+        high = calc_stats(base, self.ivs, self.evs, self.level, mods)
+        for stat in (Stat.HP, Stat.ATK, Stat.DEF, Stat.SPA, Stat.SPD, Stat.SPE):
+            stored = self.stored_stats[stat]
+            if not low[stat] <= stored <= high[stat]:
+                raise RecordError(
+                    f"{label}: {stat.name.capitalize()} {stored} is outside "
+                    f"[{int(low[stat])}, {int(high[stat])}] for level {self.level}"
+                )
+
 
 _np_cache: dict[int, tuple[object, np.ndarray]] = {}
 
@@ -78,6 +146,17 @@ def level_from_exp(tables, species: int, exp: int) -> int:
         raise RecordError(f"species {species} out of range")
     row = _as_np(tables.exp_table)[int(rates[species])]
     return max(1, int(np.searchsorted(row[1:], exp, side="right")))
+
+
+# Species whose non-zero forms change stats, types or abilities (plan Ruling 2);
+# Burmy, Shellos, Gastrodon, Unown and Cherrim forms are cosmetic and pass.
+_REFUSED_FORM_SPECIES = ("Rotom", "Wormadam", "Giratina", "Shaymin", "Deoxys", "Arceus")
+
+
+@cache
+def _refused_form_species() -> frozenset[int]:
+    names = load_names()
+    return frozenset(names.species(n) for n in _REFUSED_FORM_SPECIES)
 
 
 def _label(location: tuple[str, int, int]) -> str:
