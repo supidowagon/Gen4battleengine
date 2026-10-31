@@ -7,6 +7,7 @@ from __future__ import annotations
 from nuzline.data.tables import Names, Tables
 from nuzline.engine.ids import Stat
 from nuzline.engine.state import BattleState
+from tests.ai.fixtures import trace_f
 from tests.engine.helpers import roark_state
 
 _SPE = Stat.SPE - 1  # stats[..., 0..4] are Atk..Spe
@@ -53,3 +54,11 @@ def taunt_1v1(tables: Tables, names: Names) -> BattleState:
 def bind_1v1(tables: Tables, names: Names) -> BattleState:
     """``one_v_one`` with Bind (``TRAP``, 75 % accuracy, 3-6 turns)."""
     return one_v_one(tables, names, "Bind")
+
+
+def switch_refusal_root(tables: Tables, names: Names) -> BattleState:
+    """``tests.ai.fixtures.trace_f`` (Cranidos 40/43, ``move_hit`` = Wing Attack, vs
+    Starly) with Geodude (party slot 0) at 1 HP: the AI switches to Geodude with mass
+    > 0 and Starly's Tackle KOs it on entry, so the replacement in a turn the AI
+    switched is refused (``playout.send_replacements``; roark.md 14 item 3)."""
+    return trace_f(tables, names).replace_hp(1, 0, 1)
