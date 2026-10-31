@@ -6,6 +6,7 @@ time budget, refused mass, an all-terminal root and reproducibility."""
 from __future__ import annotations
 
 from collections import defaultdict
+from dataclasses import replace
 
 import jax
 import numpy as np
@@ -360,3 +361,190 @@ def test_sampled_nodes_below_the_root(tables, names):
 def test_default_leaf_floor_is_one():
     # 2026-10-31 amendment: floor 1 per half (same inner-decision quality, cheaper).
     assert SolveSettings().leaf_floor == 1
+
+
+# -- precision target (2026-10-31 amendment) ----------------------------------------------
+
+# Roark's AI row at roark_real_state is 3/4, 1/4: epsilon 0.3 prunes one opponent action
+# per root action, so every pass has forced evaluations as well as leaves.
+PRECISE = SolveSettings(max_depth=1, epsilon=0.3, n_depth0=20, max_turns=1)
+
+
+def stub_evaluators(monkeypatch, wins_a=lambda h: h // 2, wins_b=lambda h: h // 2):
+    """Replace both evaluators with stubs honouring ``counts`` (``h = counts // 2`` per
+    half, ``wins_a(h)``/``wins_b(h)`` wins); returns the call log ``(kind, counts,
+    key)`` in call order."""
+    calls = []
+
+    def values(counts):
+        out = []
+        for c in np.asarray(counts):
+            h = int(c) // 2
+            out.append(LeafValue(wins_a(h), h, wins_b(h), h, False))
+        return out
+
+    def leaves(tables, states, counts, key, max_turns):
+        assert len(counts) == len(states.hp) and np.all(np.asarray(counts) >= 2)
+        calls.append(("L", np.asarray(counts).copy(), np.asarray(key).copy()))
+        return values(counts)
+
+    def forced(tables, states, pairs, counts, key, max_turns):
+        assert len(counts) == len(states.hp) == len(pairs) and np.all(np.asarray(counts) >= 2)
+        calls.append(("F", np.asarray(counts).copy(), np.asarray(key).copy()))
+        return values(counts)
+
+    monkeypatch.setattr(stage_b, "evaluate_leaves", leaves)
+    monkeypatch.setattr(stage_b, "evaluate_forced", forced)
+    return calls
+
+
+def round_keys(r: int):
+    """The (leaf, forced) keys of round ``r`` of the depth-1 pass under ``KEY``."""
+    k_pass = jax.random.fold_in(KEY, 1)
+    base = k_pass if r == 0 else jax.random.fold_in(jax.random.fold_in(k_pass, 2), r)
+    return tuple(np.asarray(jax.random.fold_in(base, h)) for h in (0, 1))
+
+
+def test_precision_none_is_one_fixed_round(tables, names, monkeypatch):
+    calls = stub_evaluators(monkeypatch)
+    state = roark_real_state(tables, names)
+    result = solve(tables, names, state, KEY, PRECISE)
+    assert [c[0] for c in calls] == ["L", "F"]
+    k_leaf, k_forced = round_keys(0)
+    assert np.array_equal(calls[0][2], k_leaf) and np.array_equal(calls[1][2], k_forced)
+    assert np.all(calls[1][1] == 2 * PRECISE.leaf_floor)
+    assert result.rounds == 0 and result.half_width_a is None and result.precision_met is None
+    # A target met at once runs exactly the same round 0.
+    again = stub_evaluators(monkeypatch)
+    loose = solve(tables, names, state, KEY, replace(PRECISE, precision=1.0))
+    assert [(k, c.tolist(), key.tolist()) for k, c, key in again] == [
+        (k, c.tolist(), key.tolist()) for k, c, key in calls
+    ]
+    assert loose.rounds == 0 and loose.precision_met is True
+    assert 0 < loose.half_width_a <= 1.0
+    assert loose.ranking == result.ranking and loose.playouts == result.playouts
+
+
+def test_precision_caps_rounds_and_doubles_playouts(tables, names, monkeypatch):
+    calls = stub_evaluators(monkeypatch)
+    state = roark_real_state(tables, names)
+    result = solve(tables, names, state, KEY, replace(PRECISE, precision=1e-9))
+    assert result.rounds == stage_b.MAX_ROUNDS and result.precision_met is False
+    assert result.half_width_a > 1e-9
+    assert len(calls) == 2 * (stage_b.MAX_ROUNDS + 1)
+    per_round = []
+    for r in range(stage_b.MAX_ROUNDS + 1):
+        got = calls[2 * r : 2 * r + 2]
+        assert [c[0] for c in got] == ["L", "F"], r
+        assert [c[2].tolist() for c in got] == [k.tolist() for k in round_keys(r)], r
+        per_round.append(sum(int(c[1].sum()) for c in got))
+    assert result.playouts == sum(per_round)
+    n_evals = len(calls[0][1]) + len(calls[1][1])
+    spent = per_round[0]
+    for r, added in enumerate(per_round[1:], 1):
+        # Each top-up matches everything spent so far, up to the rounding of the shares.
+        assert abs(added - spent) <= n_evals, r
+        spent += added
+
+
+def test_precision_stops_at_the_first_round_that_meets_it(tables, names, monkeypatch):
+    state = roark_real_state(tables, names)
+    widths = {}
+    for k in (1, 2):
+        stub_evaluators(monkeypatch)
+        monkeypatch.setattr(stage_b, "MAX_ROUNDS", k)
+        widths[k] = solve(tables, names, state, KEY, replace(PRECISE, precision=1e-9)).half_width_a
+    monkeypatch.setattr(stage_b, "MAX_ROUNDS", 8)
+    assert widths[2] < widths[1]
+    stub_evaluators(monkeypatch)
+    target = (widths[1] + widths[2]) / 2
+    result = solve(tables, names, state, KEY, replace(PRECISE, precision=target))
+    assert result.rounds == 2 and result.precision_met is True
+    assert result.half_width_a == pytest.approx(widths[2])
+
+
+def test_precision_reads_half_a_only(tables, names, monkeypatch):
+    state = roark_real_state(tables, names)
+    sure, coin = (lambda h: 0), (lambda h: h // 2)
+
+    def run(wins_a, wins_b, precision):
+        calls = stub_evaluators(monkeypatch, wins_a=wins_a, wins_b=wins_b)
+        result = solve(tables, names, state, KEY, replace(PRECISE, precision=precision))
+        return result, [(k, c.tolist()) for k, c, _ in calls]
+
+    # Round-0 half-A widths (a target of 1 is met at once): half A sure is narrower.
+    narrow = run(sure, coin, 1.0)[0].half_width_a
+    wide = run(coin, sure, 1.0)[0].half_width_a
+    assert narrow < wide
+    # Target = the sure half A's width: met at round 0 however noisy half B is ...
+    calm, calm_calls = run(sure, coin, narrow)
+    assert calm.rounds == 0 and calm.precision_met is True
+    same, same_calls = run(sure, sure, narrow)
+    assert same_calls == calm_calls and same.rounds == 0
+    # ... and missed by the coin-flip half A although every half-B value is exact.
+    noisy, _ = run(coin, sure, narrow)
+    assert noisy.rounds >= 1 and noisy.half_width_a < wide
+
+
+def test_top_up_keys_are_fresh(tables, names, monkeypatch):
+    calls = stub_evaluators(monkeypatch)
+    monkeypatch.setattr(stage_b, "MAX_ROUNDS", 2)
+    state = roark_real_state(tables, names)
+    solve(tables, names, state, KEY, replace(PRECISE, precision=1e-9))
+    keys = [c[2].tobytes() for c in calls]
+    assert len(keys) == 6 and len(set(keys)) == 6
+
+
+def test_forced_evaluations_get_top_ups_by_reach(tables, names, monkeypatch):
+    calls = stub_evaluators(monkeypatch)
+    monkeypatch.setattr(stage_b, "MAX_ROUNDS", 1)
+    state = roark_real_state(tables, names)
+    result = solve(tables, names, state, KEY, replace(PRECISE, precision=1e-9))
+    assert result.rounds == 1
+    q = ai_rows(tables, batch(state))[0].astype(np.float64)
+    pruned = q[(q > 0) & (q < PRECISE.epsilon)]
+    assert len(pruned) == 1
+    # Depth 1 keeps every child in the plan: the evaluated reach is everything but the
+    # terminal and refused mass of each root action.
+    reach = 0.0
+    for r in result.ranking:
+        nodes = list(plan_nodes(result.plan.children[r.action]))
+        reach += 1 - sum(n.prob for n in nodes if n.kind in ("terminal", "refused"))
+    round0_l, round0_f, _, top_f = calls
+    batch_size = int(round0_l[1].sum() + round0_f[1].sum())
+    want = 2 * np.rint(batch_size * pruned[0] / reach / 2)
+    assert want >= 2
+    assert len(top_f[1]) == len(round0_f[1])  # every forced evaluation gets a share
+    assert np.all(top_f[1] == want)
+
+
+def test_precision_stops_topping_up_at_the_time_budget(tables, names, monkeypatch):
+    calls = stub_evaluators(monkeypatch)
+    state = roark_real_state(tables, names)
+    settings = replace(PRECISE, precision=1e-9, budget_seconds=1e-9)
+    result = solve(tables, names, state, KEY, settings)
+    assert result.depth == 1 and result.rounds == 0 and result.precision_met is False
+    assert len(calls) == 2
+
+
+def test_precision_with_a_leaf_fn_tops_up_subsets(tables, names):
+    state = roark_real_state(tables, names)
+    seen = []
+
+    def leaf_fn(states, weights, pairs=None):
+        seen.append((len(states.hp), np.asarray(weights).copy(), pairs is None))
+        return [LeafValue(1, 2, 1, 2, False) for _ in range(len(states.hp))]
+
+    result = solve(tables, names, state, KEY, replace(PRECISE, precision=1e-9), leaf_fn=leaf_fn)
+    assert result.rounds == stage_b.MAX_ROUNDS
+    assert len(seen) == 2 * (stage_b.MAX_ROUNDS + 1)
+    # Round 0 as before (forced weights 0); top-ups pass each evaluation's summed reach.
+    assert np.all(seen[1][1] == 0)
+    assert all(np.all(w > 0) for _, w, _ in seen[2:])
+
+
+def test_precision_must_be_positive(tables, names):
+    state = roark_real_state(tables, names)
+    for bad in (0.0, -0.01):
+        with pytest.raises(ValueError, match="invalid settings"):
+            solve(tables, names, state, KEY, replace(PRECISE, precision=bad), leaf_fn=ZERO)

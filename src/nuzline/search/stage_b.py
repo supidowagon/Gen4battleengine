@@ -25,7 +25,7 @@ x outcome probability; player choices are excluded. Child kinds:
   evaluation met a refused mechanic. Valued 0 in the estimate and the bound; its reach is
   reported. A refused AI at the root refuses the solve (``UnsupportedAi``).
 * ``pruned``: an opponent action of one state, or a child group, whose reach is below
-  ``epsilon``: not expanded, valued by ``2 * leaf_floor`` playouts (``evaluate_forced``
+  ``epsilon``: not expanded, valued by ``2 * leaf_floor`` playouts in round 0 (``evaluate_forced``
   for the opponent action, ``evaluate_leaves`` for each state of the group), 0 in the
   lower bound.
 * ``sampled``: a pair below the root that ``enumerate_outcomes`` cannot enumerate
@@ -38,11 +38,26 @@ x outcome probability; player choices are excluded. Child kinds:
 
 Each level is expanded in one batch (``ai_rows`` and ``expand`` over every frontier
 state and pair, through an expansion cache keyed by state and pair that later passes
-reuse); the evaluations of a pass run as one ``evaluate_leaves`` and one
-``evaluate_forced`` call. Leaf budgets follow ruling 8 (``leaves.allocate``: playouts in
-proportion to a state's summed leaf reach, a floor of ``leaf_floor`` per half; pruned and
-sampled evaluations get exactly the floor); states shared by several leaves
-(transpositions) are evaluated once.
+reuse); each round of a pass's evaluations runs as one ``evaluate_leaves`` and one
+``evaluate_forced`` call. States shared by several leaves (transpositions) are evaluated
+once.
+
+Leaf budgets (rulings 8 and 9 as amended 2026-10-31, the precision target). **Round 0**
+follows ruling 8: ``B_d`` (``budget_playouts``, else ``n_depth0`` per legal root action)
+split by ``leaves.allocate`` in proportion to a state's summed leaf reach, a floor of
+``leaf_floor`` (default 1) per half; pruned and sampled evaluations get exactly the floor.
+With ``precision`` set, the pass then checks the half-A leader (the root action half A
+ranks first, ties to the lowest action): its half-A half-width ``Z sqrt(sum_j W_j^2
+var_a_j)`` (``LeafValue.var_a``). Above ``precision``, a **top-up round** ``r >= 1`` adds
+as many playouts as the pass has run so far (the total doubles), split over every
+evaluation -- leaves, pruned states and forced pairs -- in proportion to its summed
+reach with no floor (a share rounding to 0 gets nothing; a refused evaluation gets
+none), on the fresh keys ``fold_in(fold_in(fold_in(key, 2), r), 0 | 1)`` (round 0 uses
+``fold_in(key, 0 | 1)``); wins and playouts add into each evaluation's halves, ``refused``
+is or-ed. It stops when the target is met, after ``MAX_ROUNDS`` top-ups, or once
+``budget_seconds`` has passed since the solve started; the pass always completes, and
+the backup below runs once on the merged values. Half B never decides a stop or a
+share. Without ``precision`` a pass is round 0 alone.
 
 Max bias (ruling 5): each evaluation has two halves with independent keys. Half A picks
 the action at every inner belief node; half B gives every reported value, bound and
@@ -52,7 +67,8 @@ total reach of the tree leaves (and pruned or sampled nodes) evaluated by evalua
 var_j`` (``LeafValue.var_b``), the interval ``estimate +- 1.96 sqrt(var)`` clipped to
 [0, 1]; terminal and refused children add no variance. Iterative deepening (ruling 9)
 runs passes ``d = 1 .. max_depth`` from the root, each complete; ``budget_seconds``
-only decides whether the next pass starts. Depth 0 is Stage A (ruling 7).
+decides whether the next pass, or the next top-up round, starts. Depth 0 is Stage A
+(ruling 7).
 """
 
 from __future__ import annotations
@@ -80,17 +96,22 @@ from nuzline.search.stage_a import action_label, rank_actions, tied_with
 __all__ = ["ActionValue", "HiddenLegality", "PlanNode", "SolveResult", "SolveSettings", "solve"]
 
 Z = 1.96  # 95 % normal interval (ruling 6)
+MAX_ROUNDS = 8  # top-up rounds per pass at most (precision target)
 
 LeafFn = Callable[..., list[LeafValue]]
 
 
 @dataclass(frozen=True)
 class SolveSettings:
-    """``max_depth``: deepest pass (0 = Stage A). ``budget_playouts``: the leaf budget
-    ``B_d`` of every pass (``None``: ``n_depth0`` per legal root action). ``budget_seconds``:
-    no pass starts after this much time (depth 1 always runs). ``epsilon``: the pruning
-    threshold on absolute reach. ``leaf_floor``: playouts per half at least. ``max_turns``:
-    playout length from a leaf. ``n_depth0``: Stage A's playouts per action."""
+    """``max_depth``: deepest pass (0 = Stage A). ``budget_playouts``: the round-0 leaf
+    budget ``B_d`` of every pass (``None``: ``n_depth0`` per legal root action).
+    ``budget_seconds``: no pass starts, and no top-up round, after this much time (depth
+    1 always runs, its round 0 included). ``epsilon``: the pruning threshold on absolute
+    reach. ``leaf_floor``: playouts per half at least in round 0. ``max_turns``: playout
+    length from a leaf. ``n_depth0``: Stage A's playouts per action. ``precision``: the
+    target half-width (a fraction: 0.015 is 1.5 percentage points) of the half-A leader's
+    95 % interval; a pass tops up its evaluations until it is met (module docstring;
+    ``None``: one round of ``B_d``)."""
 
     max_depth: int = 2
     budget_playouts: int | None = None
@@ -99,6 +120,7 @@ class SolveSettings:
     leaf_floor: int = 1
     max_turns: int = 100
     n_depth0: int = 2000
+    precision: float | None = None
 
 
 @dataclass(frozen=True)
@@ -151,8 +173,11 @@ class SolveResult:
     """``ranking``: the root actions, best first; ``dropped``: root actions left out, with
     the reason; ``depth``: the deepest completed pass; ``playouts``: every playout run,
     over all passes; ``seconds``: wall time (not compared: equal solves differ in it);
-    ``leaf_budget``: the leaf budget ``B_d`` every pass used (``None`` at depth 0, where
-    Stage A runs ``n_depth0`` playouts per action instead; ruling 7)."""
+    ``leaf_budget``: the round-0 leaf budget ``B_d`` every pass used (``None`` at depth 0,
+    where Stage A runs ``n_depth0`` playouts per action instead; ruling 7). Of the final
+    pass: ``rounds``, its top-up rounds; ``half_width_a``, the half-A leader's final half-A
+    half-width (``None`` without a precision target, or with no root action);
+    ``precision_met``, whether that is at most the target (``None`` likewise)."""
 
     ranking: list[ActionValue]
     dropped: dict[int, str]
@@ -162,6 +187,9 @@ class SolveResult:
     seconds: float = field(compare=False)
     settings: SolveSettings
     leaf_budget: int | None = None
+    rounds: int = 0
+    half_width_a: float | None = None
+    precision_met: bool | None = None
 
 
 class HiddenLegality(Exception):
@@ -268,8 +296,11 @@ def _count(nodes: list[PlanNode], kind: str) -> int:
 
 
 class _Solver:
-    def __init__(self, tables: Tables, names: Names, root, settings: SolveSettings, leaf_fn):
+    def __init__(
+        self, tables: Tables, names: Names, root, settings: SolveSettings, leaf_fn, start=None
+    ):
         self.tables, self.names, self.settings, self.leaf_fn = tables, names, settings, leaf_fn
+        self.start = time.perf_counter() if start is None else start
         self.store = _Store()
         self.store.add(root)  # id 0
         self.root = _first(root)
@@ -406,7 +437,9 @@ class _Solver:
 
     # -- evaluation -----------------------------------------------------------------------
 
-    def _evaluate(self, sids, weights, pairs, budget: int, key) -> list[LeafValue]:
+    def _evaluate(self, sids, weights, pairs, counts, key) -> list[LeafValue]:
+        """``counts[i]`` playouts of ``sids[i]`` (the default evaluators; a ``leaf_fn``
+        gets ``weights`` instead and picks its own counts)."""
         if not sids:
             return []
         states = self.store.take(sids)
@@ -414,7 +447,6 @@ class _Solver:
         if self.leaf_fn is not None:
             values = list(self.leaf_fn(states, weights, pairs))
         else:
-            counts = allocate(weights, budget, self.settings.leaf_floor)
             turns = self.settings.max_turns
             if pairs is None:
                 values = evaluate_leaves(self.tables, states, counts, key, turns)
@@ -427,9 +459,10 @@ class _Solver:
 
     # -- backup ---------------------------------------------------------------------------
 
-    def _backup(self, node: _Node, leaf, forced):
+    def _backup(self, node: _Node, leaf, forced, with_plan: bool = True):
         """``(A, B, bound, W, plan nodes)`` of ``node``: absolute half-A and half-B values,
-        the half-B lower bound, ``{evaluation: reach}`` (ruling 6) and its plan nodes."""
+        the half-B lower bound, ``{evaluation: reach}`` (ruling 6) and its plan nodes (none
+        unless ``with_plan``: the precision check needs only the values)."""
         kind, prob = node.kind, node.prob
         if kind == "refused":
             return 0.0, 0.0, 0.0, {}, [PlanNode(node.obs, prob, None, {}, {}, "refused")]
@@ -439,8 +472,9 @@ class _Solver:
         if node.forced is not None:
             i, value = forced[node.forced]
             if value.refused:
-                return 0.0, 0.0, 0.0, {}, [self._forced_plan(node.forced, prob, "refused")]
-            plan = [self._forced_plan(node.forced, prob, kind)]
+                plan = [self._forced_plan(node.forced, prob, "refused")] if with_plan else []
+                return 0.0, 0.0, 0.0, {}, plan
+            plan = [self._forced_plan(node.forced, prob, kind)] if with_plan else []
             return prob * value.p_a, prob * value.p_b, 0.0, {("F", i): prob}, plan
         if kind in ("leaf", "pruned"):
             a_sum, b_sum, weights, kept, lost = 0.0, 0.0, {}, [], []
@@ -459,17 +493,19 @@ class _Solver:
             if lost:
                 plan.append(PlanNode(node.obs, math.fsum(lost), None, {}, {}, "refused"))
             return a_sum, b_sum, b_sum if kind == "leaf" else 0.0, weights, plan
-        per_action = {a: self._branch(kids, leaf, forced) for a, kids in node.branches.items()}
-        chosen = max(per_action, key=lambda a: (per_action[a][0], -a))
+        per_action = {
+            a: self._branch(kids, leaf, forced, with_plan) for a, kids in node.branches.items()
+        }
+        chosen = _leader(per_action)
         a_val, b_val, bound, weights, plan = per_action[chosen]
         values = {a: v[1] / prob for a, v in per_action.items()}
         node_plan = PlanNode(node.obs, prob, chosen, values, {chosen: plan}, "decision")
         return a_val, b_val, bound, weights, [node_plan]
 
-    def _branch(self, kids: list[_Node], leaf, forced):
+    def _branch(self, kids: list[_Node], leaf, forced, with_plan: bool = True):
         a_sum, b_sum, bound, weights, plan = 0.0, 0.0, 0.0, {}, []
         for kid in kids:
-            a, b, lb, w, nodes = self._backup(kid, leaf, forced)
+            a, b, lb, w, nodes = self._backup(kid, leaf, forced, with_plan)
             a_sum += a
             b_sum += b
             bound += lb
@@ -480,8 +516,46 @@ class _Solver:
 
     # -- one pass -------------------------------------------------------------------------
 
+    def _leader_half_width(self, root: _Node, leaf, forced, values) -> float | None:
+        """The half-A half-width ``Z sqrt(sum_j W_j^2 var_a_j)`` of the root action half A
+        picks (``_leader``); ``None`` when no root action is ranked. Half B is never read
+        (ruling 5: it gives the reported values only). ``values``: ``{"L": leaf values,
+        "F": forced values}``, indexed as the backup's evaluation ids."""
+        if not root.branches:
+            return None
+        per_action = {
+            a: self._branch(kids, leaf, forced, with_plan=False)
+            for a, kids in root.branches.items()
+        }
+        _, _, _, weights, _ = per_action[_leader(per_action)]
+        var = math.fsum(w * w * values[kind][i].var_a for (kind, i), w in weights.items())
+        return Z * math.sqrt(var)
+
+    def _top_up(self, key, sids, pairs, reach, counts, values) -> int:
+        """One evaluator's part of a top-up round: ``counts[i]`` more playouts of each
+        state given any (``reach``: the weights a ``leaf_fn`` sees), merged into
+        ``values`` in place. Returns the playouts added."""
+        pick = np.flatnonzero(counts >= 2)
+        if not len(pick):
+            return 0
+        sub_pairs = None if pairs is None else pairs[pick]
+        new = self._evaluate([sids[i] for i in pick], reach[pick], sub_pairs, counts[pick], key)
+        added = 0
+        for i, v in zip(pick, new, strict=True):
+            old = values[i]
+            values[i] = LeafValue(
+                old.wins_a + v.wins_a,
+                old.n_a + v.n_a,
+                old.wins_b + v.wins_b,
+                old.n_b + v.n_b,
+                old.refused or v.refused,
+            )
+            added += v.n_a + v.n_b
+        return added
+
     def run(self, depth: int, key, budget: int):
-        """One pass of depth ``depth``: ``(ranking, dropped, plan)``."""
+        """One pass of depth ``depth``: ``(ranking, dropped, plan, rounds, half-width,
+        precision met)`` (module docstring; the last two ``None`` without a target)."""
         dropped: dict[int, str] = {}
         root = _Node("decision", None, 1.0, states={0: 1.0})
         frontier = [root]
@@ -495,30 +569,89 @@ class _Solver:
                 if kid.kind == "decision"
             ]
         leaf_ids: dict[int, int] = {}
-        leaf_w: list[float] = []
+        leaf_w: list[float] = []  # ruling 8 weights: leaf nodes only
+        leaf_reach: list[float] = []  # top-up weights: leaf and pruned nodes
         forced_ids: dict[tuple[int, int, int], int] = {}
+        forced_reach: list[float] = []
         stack = [kid for a in root.branches for kid in root.branches[a]][::-1]
         while stack:
             node = stack.pop()
             if node.forced is not None:
-                forced_ids.setdefault(node.forced, len(forced_ids))
+                i = forced_ids.setdefault(node.forced, len(forced_ids))
+                if i == len(forced_reach):
+                    forced_reach.append(0.0)
+                forced_reach[i] += node.prob
             elif node.kind in ("leaf", "pruned"):
                 for s, w in node.states.items():
                     i = leaf_ids.setdefault(s, len(leaf_ids))
                     if i == len(leaf_w):
                         leaf_w.append(0.0)
+                        leaf_reach.append(0.0)
                     if node.kind == "leaf":
                         leaf_w[i] += w
+                    leaf_reach[i] += w
             elif node.kind == "decision":
                 stack.extend(kid for a in node.branches for kid in node.branches[a][::-1])
+        floor = self.settings.leaf_floor
+        leaf_sids, forced_sids = list(leaf_ids), [f[0] for f in forced_ids]
         k_leaf, k_forced = jax.random.fold_in(key, 0), jax.random.fold_in(key, 1)
-        leaf_values = self._evaluate(list(leaf_ids), leaf_w, None, budget, k_leaf)
-        pairs = np.asarray([f[1:] for f in forced_ids], np.int32).reshape(-1, 2)
-        forced_values = self._evaluate(
-            [f[0] for f in forced_ids], np.zeros(len(forced_ids)), pairs, budget, k_forced
+        leaf_values = self._evaluate(
+            leaf_sids, leaf_w, None, allocate(np.asarray(leaf_w), budget, floor), k_leaf
         )
-        leaf = {s: (i, leaf_values[i]) for s, i in leaf_ids.items()}
-        forced = {f: (i, forced_values[i]) for f, i in forced_ids.items()}
+        pairs = np.asarray([f[1:] for f in forced_ids], np.int32).reshape(-1, 2)
+        zeros = np.zeros(len(forced_ids))
+        forced_values = self._evaluate(
+            forced_sids, zeros, pairs, allocate(zeros, budget, floor), k_forced
+        )
+
+        def lookup():
+            return (
+                {s: (i, leaf_values[i]) for s, i in leaf_ids.items()},
+                {f: (i, forced_values[i]) for f, i in forced_ids.items()},
+            )
+
+        leaf, forced = lookup()
+        rounds, half_a, met = 0, None, None
+        precision = self.settings.precision
+        if precision is not None:
+            spent = sum(v.n_a + v.n_b for v in leaf_values + forced_values)
+            seconds = self.settings.budget_seconds
+            k_top = jax.random.fold_in(key, 2)  # round 0 uses 0 and 1: no stream reused
+            while True:
+                both = {"L": leaf_values, "F": forced_values}
+                half_a = self._leader_half_width(root, leaf, forced, both)
+                met = None if half_a is None else half_a <= precision
+                late = seconds is not None and time.perf_counter() - self.start > seconds
+                if met is not False or rounds == MAX_ROUNDS or late:
+                    break
+                # ``spent`` more playouts over every evaluation by its summed reach, no
+                # floor (a share rounding to 0 gets nothing); refused ones get none.
+                reach = np.asarray(leaf_reach + forced_reach, np.float64)
+                reach[[v.refused for v in leaf_values + forced_values]] = 0.0
+                counts = allocate(reach, spent, 0) if len(reach) else np.zeros(0, np.int64)
+                n_leaf = len(leaf_values)
+                k_round = jax.random.fold_in(k_top, rounds + 1)
+                added = self._top_up(
+                    jax.random.fold_in(k_round, 0),
+                    leaf_sids,
+                    None,
+                    reach[:n_leaf],
+                    counts[:n_leaf],
+                    leaf_values,
+                )
+                added += self._top_up(
+                    jax.random.fold_in(k_round, 1),
+                    forced_sids,
+                    pairs,
+                    reach[n_leaf:],
+                    counts[n_leaf:],
+                    forced_values,
+                )
+                if not added:
+                    break
+                rounds += 1
+                spent += added
+                leaf, forced = lookup()
         variance = {("L", i): v.var_b for i, v in enumerate(leaf_values)}
         variance.update({("F", i): v.var_b for i, v in enumerate(forced_values)})
         rows = []
@@ -553,11 +686,17 @@ class _Solver:
             {r.action: plans[r.action] for r in ranking},
             "decision",
         )
-        return ranking, dropped, plan
+        return ranking, dropped, plan, rounds, half_a, met
 
 
 def _first(batch: BattleState) -> BattleState:
     return jax.tree.map(lambda f: f[0], batch)
+
+
+def _leader(per_action: dict) -> int:
+    """The action with the highest half-A value (``per_action[a][0]``), the lowest action
+    among ties: the choice at every inner belief node and the precision check's leader."""
+    return max(per_action, key=lambda a: (per_action[a][0], -a))
 
 
 def _rank(rows: list[ActionValue]) -> list[ActionValue]:
@@ -613,13 +752,17 @@ def solve(
     weights, pairs=None) -> list[LeafValue]`` replaces both evaluators: ``states`` are the
     evaluated states (numpy, one row each), ``weights`` their ruling-8 chance weights (0
     for pruned and sampled evaluations), ``pairs`` ``None`` for post-turn leaves and
-    ``int32[N, 2]`` for forced (player, opponent) evaluations. Raises ``UnsupportedAi``
+    ``int32[N, 2]`` for forced (player, opponent) evaluations. With ``precision`` set it is
+    called again for every top-up round, with only the states that round tops up and
+    ``weights`` their summed reach (forced evaluations included); the values it returns
+    are added to the earlier ones. Raises ``UnsupportedAi``
     when the AI is refused at the root and ``HiddenLegality`` when the states of a belief
     node differ in the player's legal actions."""
     start = time.perf_counter()
     if (
         settings.max_depth < 0
         or settings.leaf_floor < 1
+        or (settings.precision is not None and not settings.precision > 0)
         or settings.epsilon < 0
         or (settings.budget_playouts is not None and settings.budget_playouts < 1)
         or (settings.budget_seconds is not None and settings.budget_seconds < 0)
@@ -630,7 +773,7 @@ def solve(
     root = jax.tree.map(lambda f: np.asarray(f)[None], state)
     if int(root.over[0]) != 0:
         raise ValueError("solve: the battle is already over")
-    solver = _Solver(tables, names, root, settings, leaf_fn)
+    solver = _Solver(tables, names, root, settings, leaf_fn, start)
     n_root = len(solver._legal(0))
     budget = settings.budget_playouts
     if budget is None:
@@ -641,6 +784,8 @@ def solve(
         if depth > 1 and settings.budget_seconds is not None and elapsed > settings.budget_seconds:
             break
         result = (depth, *solver.run(depth, jax.random.fold_in(key, depth), budget))
-    depth, ranking, dropped, plan = result
+    depth, ranking, dropped, plan, rounds, half, met = result
     seconds = time.perf_counter() - start
-    return SolveResult(ranking, dropped, depth, plan, solver.playouts, seconds, settings, budget)
+    return SolveResult(
+        ranking, dropped, depth, plan, solver.playouts, seconds, settings, budget, rounds, half, met
+    )
