@@ -161,6 +161,76 @@ def label(
     return ", ".join(parts)
 
 
+_STAGE_NAMES = ("HP", "Atk", "Def", "SpA", "SpD", "Spe", "Acc", "Eva")
+_WEATHER_TEXT = {1: "sun", 2: "rain", 3: "sandstorm", 4: "hail", 5: "fog"}
+# Per-side conditions that show as present or absent (``engine.observe._NONZERO_SIDE``).
+_COND_TEXT = {
+    "confusion": "confused",
+    "taunt": "taunted",
+    "trapped": "trapped",
+    "leech_seed": "seeded",
+    "substitute_hp": "behind a substitute",
+    "water_sport": "Water Sport",
+    "stealth_rock": "Stealth Rock",
+    "reflect": "Reflect",
+    "light_screen": "Light Screen",
+    "safeguard": "Safeguard",
+    "mist": "Mist",
+    "lucky_chant": "Lucky Chant",
+    "tailwind": "Tailwind",
+    "spikes": "Spikes",
+    "toxic_spikes": "Toxic Spikes",
+}
+
+
+def _differences(f: dict, others: list[dict], names: Names, trainer: str) -> list[str]:
+    """Readable text for every observation field of ``f`` that some sibling in ``others``
+    shows differently (the stat stages, conditions, items, other slots' HP, ...)."""
+    who = ("you", "foe")
+    out = []
+
+    def differs(name: str, i: int) -> bool:
+        return any(int(o[name].reshape(-1)[i]) != int(f[name].reshape(-1)[i]) for o in others)
+
+    for side in (0, 1):
+        for st in range(8):
+            if differs("stages", side * 8 + st):
+                out.append(f"{who[side]} {_STAGE_NAMES[st]} {int(f['stages'][side * 8 + st]):+d}")
+        for name, text in _COND_TEXT.items():
+            if differs(name, side):
+                on = int(f[name][side]) != 0
+                out.append(f"{who[side]} {text}" if on else f"{who[side]} no {text}")
+    for slot in range(SLOTS):
+        for side in (0, 1):
+            i = side * SLOTS + slot
+            mon = f"{who[side]} {_species(names, f, side, slot)}"
+            if differs("item_consumed", i) and int(f["item_consumed"][i]):
+                out.append(f"{mon} item used")
+            if differs("item", i):
+                out.append(f"{mon} item {names.item_names[int(f['item'][i])]}")
+            if differs("status", i) and slot != int(f["active"][side]):
+                out.append(f"{mon} {_STATUS_TEXT.get(int(f['status'][i]), 'healthy')}")
+        if slot != int(f["active"][0]) and differs("player_hp", slot):
+            out.append(f"{_species(names, f, 0, slot)} {int(f['player_hp'][slot])} HP")
+        if slot != int(f["active"][1]) and differs("opp_pixels", slot):
+            pct = int(f["opp_pixels"][slot]) * 100 // HP_BAR_PIXELS
+            out.append(f"{_species(names, f, 1, slot)} {pct} %")
+    for name, text in (
+        ("trick_room", "Trick Room"),
+        ("gravity", "Gravity"),
+        ("mud_sport", "Mud Sport"),
+    ):
+        if differs(name, 0):
+            out.append(text if int(f[name][0]) else f"no {text}")
+    if differs("weather", 0):
+        out.append(_WEATHER_TEXT.get(int(f["weather"][0]), "clear weather"))
+    if differs("pursuit", 0):
+        out.append("Pursuit hit first" if int(f["pursuit"][0]) else "no Pursuit")
+    if differs("player_pp", 0) or any(differs("player_pp", i) for i in range(1, SLOTS * 4)):
+        out.append("PP " + "/".join(str(int(v)) for v in f["player_pp"]))
+    return out
+
+
 def _action_label(f: dict | None, names: Names, a: int, root, labels: dict[int, str]) -> str:
     """The label of player action ``a`` at a node: from the ranking at the root
     (``labels``), else from the node's observation (switch targets, Struggle from the PP
@@ -214,7 +284,19 @@ class _Walk:
         """``[(child, label, opp slot after)]`` of ``node``'s children under ``a``, with
         distinct labels."""
         kids = node.children[a]
-        labs = _unique([self.node_label(k, prev_opp) for k in kids], [k.kind for k in kids])
+        base = [self.node_label(k, prev_opp) for k in kids]
+        fields = [None if k.obs is None else decode(k.obs) for k in kids]
+        for lab in set(base):
+            group = [i for i, b in enumerate(base) if b == lab]
+            if len(group) < 2 or any(fields[i] is None for i in group):
+                continue
+            for i in group:
+                more = _differences(
+                    fields[i], [fields[j] for j in group if j != i], self.names, self.trainer
+                )
+                if more:
+                    base[i] = ", ".join([base[i], *more])
+        labs = _unique(base, [k.kind for k in kids])
         return [
             (k, lab, None if k.obs is None else int(decode(k.obs)["active"][1]))
             for k, lab in zip(kids, labs, strict=True)

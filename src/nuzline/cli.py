@@ -257,6 +257,10 @@ def _solve(args) -> int:
     except UnsupportedAi as e:
         print(f"refused: {e}")
         return EXIT_REFUSED
+    if not result.ranking:
+        # Every root action's own turn is sampling-only: nothing to recommend (spec section 5).
+        print("refused: " + "; ".join(result.dropped.values()))
+        return EXIT_REFUSED
     mine = names.species_names[player[args.lead].species]
     theirs = names.species_names[opp[args.opp_active].species]
     print(f"{mine} vs {theirs}: seed {args.seed}")

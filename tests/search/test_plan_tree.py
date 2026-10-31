@@ -48,6 +48,8 @@ def test_labels_ascii_and_distinct(roark, names):
             labels = [k["label"] for k in kids]
             assert all(lab.isascii() for lab in labels)
             assert len(set(labels)) == len(labels)
+            # No sibling is told apart by a bare "#n": the differing field is spelled out.
+            assert not any(" #" in lab for lab in labels), labels
             stack.extend(kids)
     text = render(result, names, 2, root=state)
     assert all(line.isascii() for line in text)
@@ -113,3 +115,28 @@ def test_single_action(tables, names):
     assert len(rows) == 1 and "Scratch" in rows[0]
     tree = to_json(result, names, root=state)
     assert list(tree["plan"]["children"]) == ["Scratch"]
+
+
+def test_siblings_differing_only_in_hidden_label_fields_are_named(roark, names):
+    from types import SimpleNamespace
+
+    from nuzline.engine.observe import OBS_FIELDS
+    from nuzline.search.plan_tree import _Walk, decode
+
+    state, result = roark
+    base = next(n for n in walk(result.plan) if n.obs is not None).obs
+    sl = dict(OBS_FIELDS)
+
+    def variant(edits=None):
+        vec = np.frombuffer(base, np.int32).copy()
+        for (name, i), v in (edits or {}).items():
+            vec[sl[name].start + i] = v
+        return SimpleNamespace(obs=vec.tobytes(), kind="leaf", children={})
+
+    kids = [variant(), variant({("stages", 8 + 5): -1}), variant({("confusion", 1): 1})]
+    node = SimpleNamespace(children={0: kids})
+    labels = [lab for _, lab, _ in _Walk(result, names, state, "Roark").kids(node, None, 0)]
+    assert len(set(labels)) == 3 and not any(" #" in lab for lab in labels), labels
+    assert any("foe Spe -1" in lab for lab in labels)
+    assert any("foe confused" in lab for lab in labels)
+    assert decode(kids[0].obs)["stages"].sum() == decode(base)["stages"].sum()

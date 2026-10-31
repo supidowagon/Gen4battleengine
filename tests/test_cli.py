@@ -245,3 +245,21 @@ def test_cli_solve_refused(capsys, tmp_path, monkeypatch):
     out = capsys.readouterr().out
     assert "refused:" in out and "Metronome" in out
     assert not (tmp_path / "runs").exists()
+
+
+def test_cli_solve_all_dropped_is_a_refusal(capsys, tmp_path, monkeypatch):
+    """Every root action sampling-only: no ranking, so ``refused:`` + dropped reasons, exit 2
+    and no run record."""
+    from types import SimpleNamespace
+
+    from nuzline import cli
+    from nuzline.search import stage_b
+
+    monkeypatch.setattr(cli, "RUNS", tmp_path / "runs")
+    fake = SimpleNamespace(ranking=[], dropped={0: "Spike Cannon is multi-hit (sampling only)"})
+    monkeypatch.setattr(stage_b, "solve", lambda *a, **k: fake)
+    args = ["solve", "--party", PARTY, "--trainer", "roark", "--devices", "1"]
+    assert main(args) == 2
+    out = capsys.readouterr().out
+    assert "refused:" in out and "Spike Cannon" in out
+    assert not (tmp_path / "runs").exists()
