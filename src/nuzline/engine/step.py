@@ -32,6 +32,11 @@ Leech Seed, poison, toxic, burn, Bind and Taunt end-of-turn checks, faints and t
 end of the battle. A player faint is terminal (spec §3): it
 sets ``over = 1, winner = 1``. A state that is already over is returned unchanged.
 
+``step_events`` plays the same turn and also returns what each action showed (the move
+used and the result of each status check, hits and crits: ``ACT_*``, ``EVENT_FLAGS``),
+recorded where ``_use_move`` and ``execute_actions`` run it; ``engine.observe`` builds
+the player's observation from them, ``step`` drops them.
+
 Not implemented (M6): the decomp's ``BattleControllerPlayer_CheckFieldConditions``
 pass (battle_controller_player.c:932): hail and sandstorm chip damage and the
 Reflect, Light Screen, Tailwind and Trick Room countdowns. A state with
@@ -48,7 +53,7 @@ import jax.numpy as jnp
 from nuzline.data.tables import Tables
 from nuzline.engine.actions import FIRST_ITEM_ACTION
 from nuzline.engine.damage import confusion_damage
-from nuzline.engine.effects import apply_move_effect, change_stage, defender_always
+from nuzline.engine.effects import apply_move_effect, change_stage, defender_always, hit_count
 from nuzline.engine.hooks import after_damage_items, on_switch_in
 from nuzline.engine.ids import (
     POTION_HP_RESTORED,
@@ -109,6 +114,28 @@ _SELF_DEFENDER = (
     MoveTarget.RANGE_FIELD,
     MoveTarget.RANGE_ALLY,
     MoveTarget.RANGE_USER_OR_ALLY,
+)
+
+# The turn's events (``step_events``, ``turn_events``): what each side's action showed,
+# recorded where ``execute_actions`` runs it. ``engine.observe`` reads them; ``step``
+# drops them. ``act_kind`` values:
+ACT_NONE, ACT_MOVE, ACT_SWITCH, ACT_ITEM, ACT_TAUNTED = 0, 1, 2, 3, 4
+# Per-side event flags, in the observation's order (engine/observe.py documents each).
+EVENT_FLAGS = (
+    "missed",
+    "no_target",
+    "hits",
+    "full_para",
+    "flinched",
+    "asleep",
+    "woke",
+    "frozen",
+    "thawed",
+    "thawed_by_hit",
+    "confused",
+    "snapped_out",
+    "self_hit",
+    "contact_ability",
 )
 
 
@@ -235,14 +262,52 @@ def _send_out(tables: Tables, state: BattleState, side, slot) -> BattleState:
     return on_switch_in(tables, entered, side)
 
 
+def _empty_events() -> dict:
+    """The turn's events before any action ran: every per-side field 0."""
+    side = jnp.zeros((2,), _I32)
+    events = {name: side for name in ("act_kind", "act_id", "shown", *EVENT_FLAGS)}
+    events["crit"] = jnp.zeros((2, MAX_HITS), _I32)
+    return events
+
+
+def _put(events: dict, side, values: dict, cond) -> dict:
+    """``events[name][side] = values[name]`` where ``cond``."""
+    out = dict(events)
+    for name, value in values.items():
+        arr = events[name]
+        new = jnp.where(cond, jnp.asarray(value).astype(arr.dtype), arr[side])
+        out[name] = arr.at[side].set(new)
+    return out
+
+
+def _hit_events(before: BattleState, after: BattleState, side, landed, crit) -> dict:
+    """What one hit of ``side``'s move showed, from the states around it: a crit on a
+    landed hit that dealt damage (the target's HP drop: only the hit itself lowers it,
+    effects.py:441-444), the defender's contact ability (the only change of the
+    attacker's own status inside a hit, effects.py:343-365) and a Fire hit's thaw (the
+    only FREEZE -> NONE change of the target, effects.py:368-375)."""
+    foe = 1 - side
+    user, target = before.active[side], before.active[foe]
+    dealt = before.hp[foe, target] > after.hp[foe, target]
+    contact = (before.status[side, user] == Status.NONE) & (after.status[side, user] != Status.NONE)
+    thaw = (before.status[foe, target] == Status.FREEZE) & (
+        after.status[foe, target] == Status.NONE
+    )
+    return {"crit": landed & dealt & crit, "contact": contact, "thaw": thaw}
+
+
 def _use_move(
     tables: Tables, state: BattleState, side, action, choice, outcome: Outcome, target_moved
-) -> BattleState:
+) -> tuple[BattleState, dict, dict]:
     """``side``'s active Pokemon uses the move in slot ``action`` (or Struggle).
     ``choice``: its ``(move, struggling)`` from ``selected_move`` at the start of the
     turn, when the decomp fixes Struggle (battle_controller_player.c:433), so a Taunt
     landing earlier this turn makes a chosen power-0 move fail instead of Struggling.
-    ``target_moved``: the other side has already acted this turn."""
+    ``target_moved``: the other side has already acted this turn.
+
+    Returns ``(state, own, foe)``: the state after the move, the user's events (each
+    status check's result, effect-gated: set only when the check was reached and had an
+    effect) and the foe's (``contact_ability``, ``thawed_by_hit``)."""
     move, struggling = choice
     slot = jnp.clip(action, 0, MOVE_ACTIONS - 1)
     user = state.active[side]
@@ -285,13 +350,15 @@ def _use_move(
     state = change_stage(state, side, Stat.SPE, 1, steadfast)
     go = go & ~flinched
     # CHECK_STATUS_STATE_TAUNT (:2557): a taunted battler's power-0 move fails.
-    go = go & ~((state.taunt[side] > 0) & (tables.move_power[move] == 0))
+    taunted = go & (state.taunt[side] > 0) & (tables.move_power[move] == 0)
+    go = go & ~taunted
     # CHECK_STATUS_STATE_CONFUSION (:2614): the counter drops first; at 0 the battler snaps
     # out and moves, otherwise RandNext() & 1 (outcome.confusion_hit) makes it hit itself
     # (:2633, damage.confusion_damage) instead of moving.
     confused = go & (state.confusion[side] > 0)
     confusion = state.confusion[side] - confused.astype(state.confusion.dtype)
-    self_hit = confused & (confusion > 0) & (outcome.confusion_hit[side] != 0)
+    still_confused = confused & (confusion > 0)
+    self_hit = still_confused & (outcome.confusion_hit[side] != 0)
     user_hp = state.hp[side, user].astype(_I32)
     hurt = jnp.minimum(confusion_damage(tables, state, side, outcome.roll[side, 0]), user_hp)
     user_hp = user_hp - jnp.where(self_hit, hurt, 0)
@@ -302,10 +369,12 @@ def _use_move(
     go = go & ~self_hit
     # CHECK_STATUS_STATE_PARALYSIS (:2652): RandNext() % 4 == 0 (outcome.full_para) fully
     # paralyzes (Magic Guard is not implemented).
-    full_para = (state.status[side, user] == Status.PARALYSIS) & (outcome.full_para[side] != 0)
+    # Gated on reaching the check, so the event is set only when it had an effect.
+    full_para = go & (state.status[side, user] == Status.PARALYSIS) & (outcome.full_para[side] != 0)
     can_act = go & ~full_para
     # CHECK_STATUS_STATE_SELF_THAW (:2728): a still-frozen user of a thawing move thaws.
-    state = _set_mon(state, "status", side, user, Status.NONE, can_act & still_frozen)
+    self_thaw = can_act & still_frozen
+    state = _set_mon(state, "status", side, user, Status.NONE, self_thaw)
 
     # BattleControllerPlayer_DecrementPP (battle_controller_player.c:3182) runs before the
     # no-target check (:3190); Struggle has no PP to spend.
@@ -326,12 +395,21 @@ def _use_move(
     # that acts reaches it, the confusion self-hit too (LOOP_FAINTED, :2639).
     succeeded = can_act & has_target
     state = _set_last_move(state, side, jnp.where(succeeded, move, 0), ready)
-    connected = can_act & has_target & ((outcome.hit[side, 0] != 0) | never_misses)
+    hit = (outcome.hit[side, 0] != 0) | never_misses
+    connected = can_act & has_target & hit
+    n_hits = hit_count(tables, move, outcome, side)
 
     # A loop, not unrolled: one copy of the effect code in the program, not MAX_HITS
-    # (unrolled, it dominated trace and compile time).
-    def one_hit(hit_index, state):
-        state = apply_move_effect(
+    # (unrolled, it dominated trace and compile time). It also counts the hits that
+    # landed ("Hit N times", battle_controller_player.c:3777-3812) and their crits.
+    def one_hit(hit_index, carry):
+        state, hits, crits, contact, thaw = carry
+        landed = (
+            connected
+            & (hit_index < n_hits)
+            & ((state.hp[target_side, target] > 0) | defender_always(tables, move))
+        )
+        hit_state = apply_move_effect(
             tables,
             state,
             side,
@@ -342,6 +420,8 @@ def _use_move(
             target_moved=target_moved,
             struggling=struggling,
         )
+        crit = outcome.crit[side, hit_index] != 0
+        seen = _hit_events(state, hit_state, side, landed, crit)
         # BattleControllerPlayer_AfterMoveEffects (battle_controller_player.c:3638) runs
         # after every hit of a move that connected: AFTER_MOVE_EFFECT_ATTACKER_ITEM
         # (:3684), then _DEFENDER_ITEM (:3691). A disrupted move, a confusion self-hit,
@@ -349,10 +429,18 @@ def _use_move(
         # AFTER_MOVE_EFFECT_HELD_ITEM_STATUS (:3730) re-checks the same two Pokemon in
         # singles and cannot trigger anything new. A later hit that did not happen
         # changes no HP, so its check finds what the previous one found.
-        state = after_damage_items(tables, state, side, connected)
-        return after_damage_items(tables, state, 1 - side, connected)
+        state = after_damage_items(tables, hit_state, side, connected)
+        state = after_damage_items(tables, state, 1 - side, connected)
+        return (
+            state,
+            hits + landed.astype(_I32),
+            crits.at[hit_index].set(seen["crit"]),
+            contact | seen["contact"],
+            thaw | seen["thaw"],
+        )
 
-    state = jax.lax.fori_loop(0, MAX_HITS, one_hit, state)
+    init = (state, _I32(0), jnp.zeros((MAX_HITS,), bool), jnp.bool_(False), jnp.bool_(False))
+    state, hits, crits, contact, thaw = jax.lax.fori_loop(0, MAX_HITS, one_hit, init)
     # BattleControllerPlayer_UpdateFlagsWhenHit (battle_controller_player.c:4499-4507),
     # reached on every path once the move was chosen (UPDATE_MOVE_BUFFERS, :3956, or
     # LOOP_SPREAD_MOVES, :3837): moveHit[defender] = the move when the attack message
@@ -363,9 +451,28 @@ def _use_move(
     # the decomp writes it after LOOP_FAINTED.
     record = ready & ~self_hit & foe_defender
     move_hit = jnp.where(record, jnp.where(can_act, move, 0), state.move_hit[target_side])
-    return state._replace(
+    state = state._replace(
         move_hit=state.move_hit.at[target_side].set(move_hit.astype(state.move_hit.dtype))
     )
+    own = {
+        "act_kind": jnp.where(can_act, ACT_MOVE, jnp.where(taunted, ACT_TAUNTED, ACT_NONE)),
+        "act_id": jnp.where(can_act | taunted, move, 0),
+        "shown": ready,
+        "missed": can_act & has_target & ~hit,
+        "no_target": can_act & ~has_target,
+        "hits": hits,
+        "crit": crits,
+        "full_para": full_para,
+        "flinched": flinched,
+        "asleep": sleeping,
+        "woke": asleep & ~sleeping,
+        "frozen": still_frozen & ~thaw_move,
+        "thawed": thawed | self_thaw,
+        "confused": still_confused,
+        "snapped_out": confused & ~still_confused,
+        "self_hit": self_hit,
+    }
+    return state, own, {"contact_ability": contact, "thawed_by_hit": thaw}
 
 
 def _bag_slot(action) -> jnp.ndarray:
@@ -415,15 +522,24 @@ def _act(
     items,
     outcome: Outcome,
     target_moved,
-) -> BattleState:
+) -> tuple[BattleState, dict, dict]:
+    """``side``'s action: ``(state, own, foe)`` with the events of ``_use_move``. A
+    switch shows the party slot (``ACT_SWITCH``), an item its item id (``ACT_ITEM``)."""
     action = actions[side]
     switched = _send_out(tables, state, side, jnp.clip(action - MOVE_ACTIONS, 0, 5))
     used = _use_trainer_item(tables, state, side, items[side])
     choice = (choices[0][side], choices[1][side])
-    moved = _use_move(tables, state, side, action, choice, outcome, target_moved)
+    moved, own, foe = _use_move(tables, state, side, action, choice, outcome, target_moved)
     live = state.over == 0
-    acted = _where(is_item(action) & live, used, moved)
-    return _where(is_switch(action) & live, switched, acted)
+    switch, item = is_switch(action) & live, is_item(action) & live
+    acted = _where(item, used, moved)
+    acted = _where(switch, switched, acted)
+    is_move = ~is_switch(action) & ~is_item(action)
+    kind = jnp.where(switch, ACT_SWITCH, jnp.where(item, ACT_ITEM, own["act_kind"]))
+    act_id = jnp.where(switch, action - MOVE_ACTIONS, jnp.where(item, items[side], own["act_id"]))
+    own = {name: jnp.where(is_move, value, 0) for name, value in own.items()}
+    own.update(act_kind=kind, act_id=act_id, shown=switch | item | (own["shown"] != 0))
+    return acted, own, {name: value & is_move for name, value in foe.items()}
 
 
 def pursuit_fires(tables: Tables, state: BattleState, side, actions, choices) -> jnp.ndarray:
@@ -532,6 +648,14 @@ def execute_actions(
     """Phase 3: both actors in order, each followed by a faint check. A switch facing
     Pursuit is hit first (with its own faint check), and the pursuer does not act again.
     An item action's bag slot is spent first (``_consume_trainer_items``)."""
+    return _execute_actions(tables, state, actions, outcome, order)[0]
+
+
+def _execute_actions(
+    tables: Tables, state: BattleState, actions, outcome: Outcome, order
+) -> tuple[BattleState, dict]:
+    """``execute_actions`` with the turn's events (``_act``; ``pursuit``: the Pursuit hit
+    on the switching Pokemon ran, which shows the pursuer's move)."""
     first = order[0].astype(_I32)
     # Each side's move and bag item are fixed when chosen, from the turn's starting state.
     picks = [selected_move(tables, state, side, actions[side]) for side in (0, 1)]
@@ -545,21 +669,40 @@ def execute_actions(
         is_switch(actions[first]) & (state.over == 0), _natural_cure(state, first), state
     )
     before = state
-    hit = _pursuit_hit(tables, state, 1 - first, actions, choices, outcome)
+    pursuer = 1 - first
+    hit = _pursuit_hit(tables, state, pursuer, actions, choices, outcome)
+    seen = _hit_events(before, hit, pursuer, True, outcome.crit[pursuer, 0] != 0)
+    events = _empty_events()
+    pursuer_events = {
+        "act_kind": ACT_MOVE,
+        "act_id": choices[0][pursuer],
+        "hits": 1,
+        "crit": jnp.zeros((MAX_HITS,), _I32).at[0].set(seen["crit"]),
+    }
+    events = _put(events, pursuer, pursuer_events, pursued)
+    target_events = {"contact_ability": seen["contact"], "thawed_by_hit": seen["thaw"]}
+    events = _put(events, first, target_events, pursued)
     state = _faint_check(before, _where(pursued, hit, state))
 
     # Both actors through one loop body (a loop, not unrolled: one copy of ``_act``).
-    def act(position, state):
+    def act(position, carry):
+        state, events = carry
         before = state
         side = order[position].astype(_I32)
         second = position == 1  # the first actor's target has not moved yet
-        acted = _act(tables, state, side, actions, choices, items, outcome, second)
+        acted, own, foe_events = _act(tables, state, side, actions, choices, items, outcome, second)
         ran = (state.over == 0) & (state.hp[side, state.active[side]] > 0)
-        acted = _where(second & pursued, state, acted)
-        ran = ran & ~(second & pursued)
-        return _move_end(_faint_check(before, acted), acted, side, ran)
+        skip = second & pursued  # the pursuer does not act again
+        acted = _where(skip, state, acted)
+        ran = ran & ~skip
+        events = _put(events, side, own, ~skip)
+        foe = 1 - side
+        foe_events = {name: v | (events[name][foe] != 0) for name, v in foe_events.items()}
+        events = _put(events, foe, foe_events, ~skip)
+        return _move_end(_faint_check(before, acted), acted, side, ran), events
 
-    return jax.lax.fori_loop(0, 2, act, state)
+    state, events = jax.lax.fori_loop(0, 2, act, (state, events))
+    return state, {**events, "pursuit": pursued.astype(_I32)}
 
 
 def _hp_change(state: BattleState, side, mon, delta) -> BattleState:
@@ -689,15 +832,40 @@ def end_of_turn(
     return state._replace(flinched=jnp.zeros_like(state.flinched))
 
 
-def step(tables: Tables, state: BattleState, actions, outcome: Outcome) -> BattleState:
-    """Play one turn: ``actions`` is ``int32[2]`` (player, opponent; see ``order``)."""
-    actions = jnp.asarray(actions, _I32)
+def _action_phase(
+    tables: Tables, state: BattleState, actions, outcome: Outcome
+) -> tuple[BattleState, dict, jnp.ndarray]:
+    """Phases 2-3 with the turn's events: ``(state, events, order)``."""
     s = _record_last_move(tables, state, actions)
     order = action_order(tables, s, actions, outcome)
-    s = execute_actions(tables, s, actions, outcome, order)
+    s, events = _execute_actions(tables, s, actions, outcome, order)
+    return s, {**events, "order": order.astype(_I32)}, order
+
+
+def turn_events(tables: Tables, state: BattleState, actions, outcome: Outcome) -> dict:
+    """The events of ``step(tables, state, actions, outcome)``'s action phase, without
+    playing the end of the turn (``step_events``)."""
+    return _action_phase(tables, state, jnp.asarray(actions, _I32), outcome)[1]
+
+
+def step_events(
+    tables: Tables, state: BattleState, actions, outcome: Outcome
+) -> tuple[BattleState, dict]:
+    """``(step(...), its events)``: one implementation of the turn serves both ``step``
+    (which drops the events) and ``engine.observe`` (which reads them). The events, a
+    dict of ``int32`` arrays: per side (``[2]``) ``act_kind`` (``ACT_*``), ``act_id``,
+    ``shown`` (the side's turn showed a message), ``crit`` (``[2, MAX_HITS]``) and
+    ``EVENT_FLAGS``; ``order`` (``action_order``) and ``pursuit``."""
+    actions = jnp.asarray(actions, _I32)
+    s, events, order = _action_phase(tables, state, actions, outcome)
     s = end_of_turn(tables, s, actions, outcome, order)
     s = s._replace(turn=(s.turn + 1).astype(s.turn.dtype))
-    return _where(state.over != 0, state, s)
+    return _where(state.over != 0, state, s), events
+
+
+def step(tables: Tables, state: BattleState, actions, outcome: Outcome) -> BattleState:
+    """Play one turn: ``actions`` is ``int32[2]`` (player, opponent; see ``order``)."""
+    return step_events(tables, state, actions, outcome)[0]
 
 
 def needs_replacement(state: BattleState) -> jnp.ndarray:

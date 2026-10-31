@@ -16,23 +16,16 @@ from nuzline.engine.actions import legal_actions, legal_opponent_actions
 from nuzline.engine.damage import STATUS
 from nuzline.engine.enumerate import SamplingOnly, enumerate_outcomes, outcome_laws
 from nuzline.engine.ids import AbilityId, Status, Weather
-from nuzline.engine.observe import OBS_FIELDS, OBS_SIZE, _replay, hp_pixels, observe
+from nuzline.engine.observe import OBS_FIELDS, OBS_SIZE, hp_pixels, observation, observe
 from nuzline.engine.order import (
     MOVE_ACTIONS,
-    action_order,
     effective_speed,
     is_switch,
     selected_move,
 )
 from nuzline.engine.outcome import MAX_HITS, Outcome, empty_outcome
 from nuzline.engine.state import BattleState
-from nuzline.engine.step import (
-    PURSUIT_POWER_MUL,
-    _record_last_move,
-    execute_actions,
-    pursuit_fires,
-    step,
-)
+from nuzline.engine.step import PURSUIT_POWER_MUL, pursuit_fires, step, step_events
 from nuzline.search.playout import send_replacements
 from tests.engine.helpers import A, roark_real_state, roark_state
 from tests.search.fixtures import (
@@ -54,14 +47,14 @@ HYPOTHESIS = {
     ],
 }
 FIELDS = dict(OBS_FIELDS)
-# Fields whose ``execute_actions`` value the replay does not track (``_replay``).
-_UNTRACKED = ("last_move", "move_hit")
 
 
 def _turn_row(tables, before, actions, outcome):
     """One expanded turn as Stage B plays it (playout.py:179-199): ``step``, then the
     opponent's forced replacement; its observation, the player's legal actions in the
-    child, and the replay against ``execute_actions`` (internal check)."""
+    child, and the stepped state and observation through ``step_events`` (the path that
+    projects ``step``'s own events, ``observation``), to check against ``step`` and
+    ``observe``."""
     picks = [selected_move(tables, before, side, actions[side]) for side in (0, 1)]
     choices = (jnp.stack([p[0] for p in picks]), jnp.stack([p[1] for p in picks]))
     pursued = pursuit_fires(tables, before, 0, actions, choices)
@@ -69,11 +62,9 @@ def _turn_row(tables, before, actions, outcome):
     stepped = step(tables, before, actions, outcome)
     after, refused = send_replacements(tables, stepped, is_switch(actions[1]), power_mul)
     obs = observe(tables, before, actions, outcome, after)
-    recorded = _record_last_move(tables, before, actions)
-    order = action_order(tables, recorded, actions, outcome)
-    executed = execute_actions(tables, recorded, actions, outcome, order)
-    replayed = _replay(tables, before, actions, outcome)[0]
-    return after, refused, obs, legal_actions(tables, after, 0), executed, replayed
+    with_events, events = step_events(tables, before, actions, outcome)
+    via_events = (with_events, observation(events, after))
+    return after, refused, obs, legal_actions(tables, after, 0), (stepped, obs), via_events
 
 
 _turn = jax.jit(jax.vmap(_turn_row, in_axes=(None, 0, 0, 0)))
@@ -548,20 +539,22 @@ def grouped_children(tables, parents, pairs, max_k=None):
             if max_k is not None and k > max_k:
                 continue
             befores = jax.tree.map(lambda f, k=k: np.broadcast_to(f, (k, *np.shape(f))), _np(s))
-            after, refused, obs, legal, executed, replayed = turns(
+            after, refused, obs, legal, direct, via_events = turns(
                 tables, befores, np.tile(acts, (k, 1)), outcomes
             )
-            check_replay(executed, replayed)
+            check_events_path(direct, via_events)
             for o, child, lg, bad in zip(row_keys(obs), row_keys(after), row_keys(legal), refused):
                 if not bad:
                     groups.setdefault(o, {})[child] = lg
     return groups
 
 
-def check_replay(executed: BattleState, replayed: BattleState):
-    for name, a, b in zip(BattleState._fields, executed, replayed):
-        if name not in _UNTRACKED:
-            assert (np.asarray(a) == np.asarray(b)).all(), name
+def check_events_path(direct, via_events):
+    """``step_events`` gives ``step``'s state, and ``observation`` of its events gives
+    ``observe``'s vector."""
+    for name, a, b in zip(BattleState._fields, direct[0], via_events[0]):
+        assert (np.asarray(a) == np.asarray(b)).all(), name
+    assert (np.asarray(direct[1]) == np.asarray(via_events[1])).all()
 
 
 def assert_constant(groups):
@@ -625,10 +618,11 @@ def test_legality_constant_on_equal_obs_random(tables, names, data):
 
 @settings(max_examples=40, **HYPOTHESIS)
 @given(data=st.data())
-def test_replay_matches_execute(tables, names, data):
-    """Internal: ``_replay`` plays the actions exactly as ``execute_actions``."""
+def test_step_events_match_step_and_observe(tables, names, data):
+    """``step_events`` is ``step`` plus its events, and ``observation`` of those events
+    is ``observe`` (the path Stage B's expansion uses to step once)."""
     s = data.draw(supported_state(tables, names))
     acts = np.asarray(data.draw(legal_action_pair(tables, s)))
     outcome = _np(data.draw(any_outcome()))
     out = turns(tables, _stack([s]), acts[None], _stack([outcome]))
-    check_replay(_take(out[4], slice(None)), _take(out[5], slice(None)))
+    check_events_path(out[4], out[5])
