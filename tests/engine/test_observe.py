@@ -1,0 +1,634 @@
+"""Player observations (``engine.observe``): the decomp's HP bar, what an observation
+shows and hides, effect-gated chance flags (plan ruling 1) and the information sets
+they form, on which the player's legal actions must be constant (notes/stage-b
+observe.md, critic.md B.1, C1, C5)."""
+
+from __future__ import annotations
+
+import jax
+import jax.numpy as jnp
+import numpy as np
+import pytest
+from hypothesis import HealthCheck, given, settings
+from hypothesis import strategies as st
+
+from nuzline.engine.actions import legal_actions, legal_opponent_actions
+from nuzline.engine.damage import STATUS
+from nuzline.engine.enumerate import SamplingOnly, enumerate_outcomes, outcome_laws
+from nuzline.engine.ids import AbilityId, Status, Weather
+from nuzline.engine.observe import OBS_FIELDS, OBS_SIZE, _replay, hp_pixels, observe
+from nuzline.engine.order import (
+    MOVE_ACTIONS,
+    action_order,
+    effective_speed,
+    is_switch,
+    selected_move,
+)
+from nuzline.engine.outcome import MAX_HITS, Outcome, empty_outcome
+from nuzline.engine.state import BattleState
+from nuzline.engine.step import (
+    PURSUIT_POWER_MUL,
+    _record_last_move,
+    execute_actions,
+    pursuit_fires,
+    step,
+)
+from nuzline.search.playout import send_replacements
+from tests.engine.helpers import A, roark_real_state, roark_state
+from tests.search.fixtures import (
+    bind_1v1,
+    confuse_ray_1v1,
+    shinx_vs_cranidos,
+    spore_1v1,
+    taunt_1v1,
+)
+from tests.strategies import any_outcome, legal_action_pair, supported_state
+
+CHUNK = 1024  # one compiled shape per program in this file
+HYPOTHESIS = {
+    "deadline": None,
+    "suppress_health_check": [
+        HealthCheck.too_slow,
+        HealthCheck.function_scoped_fixture,
+        HealthCheck.filter_too_much,
+    ],
+}
+FIELDS = dict(OBS_FIELDS)
+# Fields whose ``execute_actions`` value the replay does not track (``_replay``).
+_UNTRACKED = ("last_move", "move_hit")
+
+
+def _turn_row(tables, before, actions, outcome):
+    """One expanded turn as Stage B plays it (playout.py:179-199): ``step``, then the
+    opponent's forced replacement; its observation, the player's legal actions in the
+    child, and the replay against ``execute_actions`` (internal check)."""
+    picks = [selected_move(tables, before, side, actions[side]) for side in (0, 1)]
+    choices = (jnp.stack([p[0] for p in picks]), jnp.stack([p[1] for p in picks]))
+    pursued = pursuit_fires(tables, before, 0, actions, choices)
+    power_mul = jnp.where(pursued, PURSUIT_POWER_MUL, 10)
+    stepped = step(tables, before, actions, outcome)
+    after, refused = send_replacements(tables, stepped, is_switch(actions[1]), power_mul)
+    obs = observe(tables, before, actions, outcome, after)
+    recorded = _record_last_move(tables, before, actions)
+    order = action_order(tables, recorded, actions, outcome)
+    executed = execute_actions(tables, recorded, actions, outcome, order)
+    replayed = _replay(tables, before, actions, outcome)[0]
+    return after, refused, obs, legal_actions(tables, after, 0), executed, replayed
+
+
+_turn = jax.jit(jax.vmap(_turn_row, in_axes=(None, 0, 0, 0)))
+_observe = jax.jit(jax.vmap(observe, in_axes=(None, 0, 0, 0, 0)))
+
+
+def _np(tree):
+    return jax.tree.map(np.asarray, tree)
+
+
+def _stack(items):
+    return jax.tree.map(lambda *xs: np.stack([np.asarray(x) for x in xs]), *items)
+
+
+def _take(tree, idx):
+    return jax.tree.map(lambda f: np.asarray(f)[idx], tree)
+
+
+def _chunked(fn, tables, args, n):
+    """``fn`` over ``n`` stacked rows in ``CHUNK`` batches (padding = copies of row 0)."""
+    outs = []
+    for start in range(0, n, CHUNK):
+        idx = np.arange(start, min(start + CHUNK, n))
+        pad = np.concatenate([idx, np.full(CHUNK - len(idx), idx[0])])
+        out = _np(fn(tables, *(_take(a, pad) for a in args)))
+        outs.append(_take(out, slice(0, len(idx))))
+    return jax.tree.map(lambda *xs: np.concatenate(xs), *outs)
+
+
+def turns(tables, befores: BattleState, actions, outcomes: Outcome):
+    """``_turn_row`` over stacked rows."""
+    return _chunked(_turn, tables, (befores, actions, outcomes), len(actions))
+
+
+def obs_rows(tables, rows):
+    """``observe`` of each ``(before, actions, outcome, after)``."""
+    stacked = [_stack([r[i] for r in rows]) for i in range(4)]
+    return _chunked(_observe, tables, stacked, len(rows))
+
+
+def one_turn(tables, before, actions, outcome):
+    """``(after, obs)`` of a single turn."""
+    out = turns(tables, _stack([before]), np.asarray([actions], np.int32), _stack([outcome]))
+    return _take(out[0], 0), out[2][0]
+
+
+def with_outcome(**fields) -> Outcome:
+    """``empty_outcome`` with the given ``(side, value)`` / ``(side, hit, value)`` /
+    scalar overrides."""
+    out = {name: np.asarray(f).copy() for name, f in zip(Outcome._fields, empty_outcome())}
+    for name, changes in fields.items():
+        if np.ndim(changes) == 0:
+            out[name][...] = changes
+            continue
+        for change in changes:
+            *index, value = change
+            out[name][tuple(index)] = value
+    return Outcome(**out)
+
+
+def field(obs, name):
+    return np.asarray(obs)[..., FIELDS[name]]
+
+
+def state_key(state) -> bytes:
+    return b"".join(np.ascontiguousarray(np.asarray(f)).tobytes() for f in state)
+
+
+def row_keys(arrays) -> list[bytes]:
+    """Per-row bytes of stacked numpy arrays (a state or an observation batch)."""
+    leaves = jax.tree.leaves(arrays)
+    n = len(leaves[0])
+    flat = np.concatenate(
+        [np.ascontiguousarray(f).reshape(n, -1).view(np.uint8) for f in leaves], axis=1
+    )
+    return [flat[i].tobytes() for i in range(n)]
+
+
+def set_field(state: BattleState, name: str, index, value) -> BattleState:
+    arr = np.asarray(getattr(state, name)).copy()
+    arr[index] = value
+    return state._replace(**{name: jnp.asarray(arr)})
+
+
+# --- the HP bar -------------------------------------------------------------------
+
+
+def decomp_pixels(hp: np.ndarray, max_hp: np.ndarray) -> np.ndarray:
+    """``FillCells`` (healthbox.c:1559-1590) at rest (``*temp`` = the HP, in 1/256 HP
+    when ``max < 48``), with the one-pixel floor for a living Pokemon (:1585-1587)."""
+    offset = 48  # 8 * HEALTHBOX_HP_CELL_COUNT (healthbox.c:61, :1571)
+    small = max_hp < offset
+    pixels = np.where(small, ((hp << 8) * offset // max_hp) >> 8, hp * offset // max_hp)
+    return np.where((pixels == 0) & (hp > 0), 1, pixels)
+
+
+def test_hp_pixels_matches_decomp():
+    for hp, max_hp, want in ((0, 10, 0), (1, 999, 1), (999, 999, 48), (24, 48, 24), (47, 48, 47)):
+        assert int(hp_pixels(hp, max_hp)) == want
+    max_hp = np.repeat(np.arange(1, 1000), np.arange(2, 1001))
+    hp = np.concatenate([np.arange(m + 1) for m in range(1, 1000)])
+    got = np.asarray(hp_pixels(jnp.asarray(hp, jnp.int32), jnp.asarray(max_hp, jnp.int32)))
+    assert (got == decomp_pixels(hp.astype(np.int64), max_hp.astype(np.int64))).all()
+
+
+# --- what is visible ---------------------------------------------------------------
+
+
+def big_opponent(tables, names, hp=999):
+    """1v1 Roark fixture with the opponent's max HP 999 (pixels ~20.8 HP wide)."""
+    s = roark_state(tables, names, player_count=1, opp_count=1)
+    s = set_field(s, "max_hp", (1, 0), 999)
+    return set_field(s, "hp", (1, 0), hp)
+
+
+def test_opponent_hp_within_pixel_equal(tables, names):
+    s = big_opponent(tables, names)
+    acts = np.asarray(A("Scratch", "Tackle", s, names))
+    out = empty_outcome()
+
+    def after(hp):
+        return set_field(s, "hp", (1, 0), hp)
+
+    obs = obs_rows(tables, [(s, acts, out, after(h)) for h in (500, 510, 530)])
+    assert [int(hp_pixels(h, 999)) for h in (500, 510, 530)] == [24, 24, 25]
+    assert (obs[0] == obs[1]).all()
+    assert (obs[0] != obs[2]).any()
+    assert len(obs[0]) == OBS_SIZE
+
+
+def test_player_exact_hp_splits(tables, names):
+    s = roark_state(tables, names)
+    acts = np.asarray(A("Scratch", "Tackle", s, names))
+    hp = int(s.hp[0, 0])
+    rows = [(s, acts, empty_outcome(), set_field(s, "hp", (0, 0), h)) for h in (hp, hp - 1)]
+    obs = obs_rows(tables, rows)
+    assert (field(obs[0], "player_hp") != field(obs[1], "player_hp")).any()
+
+
+@pytest.mark.parametrize(
+    ("build", "move", "counter"),
+    [
+        (spore_1v1, "Spore", "status_counter"),
+        (confuse_ray_1v1, "Confuse Ray", "confusion"),
+        (taunt_1v1, "Taunt", "taunt"),
+        (bind_1v1, "Bind", "trapped"),
+    ],
+)
+def test_hidden_counters_grouped(tables, names, build, move, counter):
+    s = build(tables, names)
+    acts = np.asarray(A(move, "Tackle", s, names))
+    afters, obs = [], []
+    for duration in (2, 3, 4, 5) if move != "Taunt" else (3, 4, 5):
+        if move == "Bind":
+            duration += 1  # Random 3, 3: 3-6
+        after, o = one_turn(tables, s, acts, with_outcome(duration=[(0, duration)]))
+        afters.append(after)
+        obs.append(o)
+    index = (1, 0) if counter == "status_counter" else 1  # Geodude's
+    values = {int(np.asarray(getattr(a, counter))[index]) for a in afters}
+    assert len(values) == len(afters) and 0 not in values  # the counters really differ
+    assert all((o == obs[0]).all() for o in obs)
+    # Counter 0 versus non-zero in ``after`` is visible.
+    a = afters[0]
+    if counter == "status_counter":
+        cleared = a._replace(
+            status=jnp.asarray(np.asarray(a.status) * 0),
+            status_counter=jnp.asarray(np.asarray(a.status_counter) * 0),
+        )
+    else:
+        cleared = set_field(a, counter, 1, 0)
+    o = obs_rows(tables, [(s, acts, with_outcome(duration=[(0, 2)]), x) for x in (a, cleared)])
+    assert (o[0] != o[1]).any()
+
+
+VISIBLE_CLASSES = (
+    "stat stage",
+    "weather",
+    "stealth rock",
+    "screen",
+    "item consumed",
+    "ability reveal",
+    "thaw",
+    "full paralysis",
+    "flinch",
+    "confusion self-hit",
+    "switch target",
+    "replacement",
+    "turn order",
+)
+
+
+def visible_cases(tables, names):
+    """Message class -> a pair from one parent that differs only in that class: either
+    ``(field, state, actions, outcomes)`` (the two turns are played; ``actions`` one
+    pair or a list of two) or ``(field, rows)`` (two ``(before, actions, outcome,
+    after)`` rows whose ``after`` differs in one visible field: no M1 move sets weather
+    or screens). ``field`` is the ``OBS_FIELDS`` entry that must tell them apart."""
+    base = roark_state(tables, names)
+    sc_tk = np.asarray(A("Scratch", "Tackle", base, names))
+    plain = with_outcome()
+    played, _ = one_turn(tables, base, sc_tk, plain)
+
+    def projected(fld, change):
+        return fld, [(base, sc_tk, plain, played), (base, sc_tk, plain, change(played))]
+
+    leer = base.with_stages(0, eva=1)  # Leer can miss
+    static = set_field(base, "ability", (0, 0), AbilityId.STATIC)  # Tackle makes contact
+    headbutt = roark_state(tables, names, player_moves=["Headbutt"])
+    tie = roark_state(tables, names, equal_speed=True)
+    berry = int(played.item[0, 2])  # Grotle's Sitrus Berry
+    switches = [np.asarray([4 + 1, 0], np.int32), np.asarray([4 + 2, 0], np.int32)]
+    return {
+        "stat stage": (
+            "stages",
+            leer,
+            np.asarray(A("Scratch", "Leer", leer, names)),
+            [plain, with_outcome(hit=[(1, 0, 0)])],
+        ),
+        "weather": projected("weather", lambda a: a._replace(weather=jnp.int8(Weather.RAIN))),
+        "stealth rock": projected("stealth_rock", lambda a: set_field(a, "stealth_rock", 0, 1)),
+        "screen": projected("reflect", lambda a: set_field(a, "reflect", 1, 5)),
+        "item consumed": projected(
+            "item",
+            lambda a: set_field(set_field(a, "item", (0, 2), 0), "item_consumed", (0, 2), berry),
+        ),
+        "ability reveal": (
+            "contact_ability",
+            static,
+            sc_tk,
+            [plain, with_outcome(contact_proc=[(0, 0, 1)])],
+        ),
+        "thaw": (
+            "thawed",
+            base.with_status(1, 0, Status.FREEZE),
+            sc_tk,
+            [plain, with_outcome(thaw=[(1, 1)])],
+        ),
+        "full paralysis": (
+            "full_para",
+            base.with_status(1, 0, Status.PARALYSIS),
+            sc_tk,
+            [plain, with_outcome(full_para=[(1, 1)])],
+        ),
+        "flinch": (
+            "flinched",
+            headbutt,
+            np.asarray(A("Headbutt", "Tackle", headbutt, names)),
+            [plain, with_outcome(secondary=[(0, 0, 1)])],
+        ),
+        "confusion self-hit": (
+            "self_hit",
+            set_field(base, "confusion", 1, 3),
+            sc_tk,
+            [plain, with_outcome(confusion_hit=[(1, 1)])],
+        ),
+        "switch target": ("act_id", base, switches, [plain, plain]),
+        "replacement": (
+            "active",
+            set_field(base, "hp", (1, 0), 1),
+            sc_tk,
+            [plain, with_outcome(hit=[(0, 0, 0)])],
+        ),
+        "turn order": (
+            "order",
+            tie,
+            np.asarray(A("Scratch", "Tackle", tie, names)),
+            [plain, with_outcome(speed_tie=1)],
+        ),
+    }
+
+
+@pytest.mark.parametrize("name", VISIBLE_CLASSES)
+def test_visible_message_classes(tables, names, name):
+    cases = visible_cases(tables, names)
+    assert set(cases) == set(VISIBLE_CLASSES)
+    fld, *rest = cases[name]
+    if len(rest) == 1:
+        obs = obs_rows(tables, rest[0])
+    else:
+        s, acts, outcomes = rest
+        acts = acts if isinstance(acts, list) else [acts, acts]
+        obs = turns(tables, _stack([s, s]), np.stack(acts), _stack(outcomes))[2]
+    assert (field(obs[0], fld) != field(obs[1], fld)).any(), name
+
+
+def _equal_obs(tables, s, acts, a: Outcome, b: Outcome):
+    out = turns(tables, _stack([s, s]), np.stack([acts, acts]), _stack([a, b]))
+    return (out[2][0] == out[2][1]).all(), out
+
+
+def test_ineffective_draws_invisible(tables, names):
+    base = roark_state(tables, names)
+    sc_tk = np.asarray(A("Scratch", "Tackle", base, names))
+    cases = [
+        ("full_para, not paralyzed", base, sc_tk, with_outcome(full_para=[(1, 1)])),
+        ("thaw, not frozen", base, sc_tk, with_outcome(thaw=[(0, 1), (1, 1)])),
+        ("confusion_hit, not confused", base, sc_tk, with_outcome(confusion_hit=[(0, 1), (1, 1)])),
+        ("crit on a missed hit", base, sc_tk, None),
+        (
+            "crit on a status move",
+            base,
+            np.asarray(A("Leer", "Leer", base, names)),
+            with_outcome(crit=[(0, 0, 1), (1, 0, 1)]),
+        ),
+        ("speed_tie, speeds differ", base, sc_tk, with_outcome(speed_tie=1)),
+    ]
+    for name, s, acts, changed in cases:
+        if changed is None:  # both moves miss; the crit flags vary
+            plain = with_outcome(hit=[(0, 0, 0), (1, 0, 0)])
+            changed = with_outcome(hit=[(0, 0, 0), (1, 0, 0)], crit=[(0, 0, 1), (1, 0, 1)])
+        else:
+            plain = empty_outcome()
+        equal, out = _equal_obs(tables, s, acts, plain, changed)
+        assert equal, name
+
+    # Spark paralyzes Cranidos (faster) after it has acted: its full_para has no effect.
+    s = shinx_vs_cranidos(tables, names)
+    assert int(s.stats[1, 0, 4]) > int(s.stats[0, 0, 4])
+    acts = np.asarray(A("Spark", "Tackle", s, names))
+    para = with_outcome(secondary=[(0, 0, 1)])
+    equal, out = _equal_obs(
+        tables, s, acts, para, with_outcome(secondary=[(0, 0, 1)], full_para=[(1, 1)])
+    )
+    assert int(out[0].status[0, 1, 0]) == Status.PARALYSIS
+    assert equal, "full_para after the paralyzed side acted"
+
+    # Crit on hit indices after the KO (multi-hit) and beyond the hit count.
+    s = set_field(roark_state(tables, names, player_moves=["Spike Cannon"]), "hp", (1, 0), 1)
+    acts = np.asarray(A("Spike Cannon", "Tackle", s, names))
+    plain = with_outcome(n_hits=[(0, 5)])
+    late = with_outcome(n_hits=[(0, 5)], crit=[(0, i, 1) for i in range(1, MAX_HITS)])
+    equal, _ = _equal_obs(tables, s, acts, plain, late)
+    assert equal, "crit after the KO"
+    s = roark_state(tables, names, player_moves=["Spike Cannon"])
+    plain = with_outcome(n_hits=[(0, 2)])
+    late = with_outcome(n_hits=[(0, 2)], crit=[(0, i, 1) for i in range(2, MAX_HITS)])
+    equal, _ = _equal_obs(tables, s, np.asarray(A("Spike Cannon", "Tackle", s, names)), plain, late)
+    assert equal, "crit beyond the hit count"
+
+    # speed_tie with equal speeds when only one side runs a move (a switch goes first).
+    s = roark_state(tables, names, equal_speed=True)
+    acts = np.asarray([4 + 1, 0], np.int32)
+    equal, _ = _equal_obs(tables, s, acts, empty_outcome(), with_outcome(speed_tie=1))
+    assert equal, "speed_tie with a switch"
+
+
+def _gate_free(tables, s, acts, outcome: Outcome, name, index) -> bool:
+    """Element ``name[index]`` of ``outcome`` has no possible effect, judged from the
+    rules alone (not from ``observe``): the fields whose every visible effect changes
+    the state, and ``crit``/``hit``/``speed_tie`` where the rules make them inert."""
+    if name in (
+        "roll",
+        "secondary",
+        "contact_proc",
+        "n_hits",
+        "full_para",
+        "confusion_hit",
+        "duration",
+        "thaw",
+        "end_speed_tie",
+        "flinch_item",
+        "quick_claw",
+    ):
+        return True
+    if name == "speed_tie":
+        return int(effective_speed(s, 0)) != int(effective_speed(s, 1))
+    side = index[0]
+    if acts[side] >= MOVE_ACTIONS:
+        return name in ("hit", "crit")
+    move = int(selected_move(tables, s, side, acts[side])[0])
+    if name == "hit":
+        return int(tables.move_accuracy[move]) == 0
+    status_move = int(tables.move_category[move]) == STATUS
+    missed = int(outcome.hit[side, 0]) == 0 and int(tables.move_accuracy[move]) != 0
+    return status_move or missed
+
+
+_ranges = {
+    "roll": 16,
+    "n_hits": 6,
+    "duration": 7,
+}
+
+
+@settings(max_examples=25, **HYPOTHESIS)
+@given(data=st.data())
+def test_ineffective_draws_invisible_enumerated(tables, names, data):
+    which = data.draw(st.sampled_from(["roark", "spore", "shinx"]))
+    if which == "roark":
+        s = roark_real_state(tables, names)
+    elif which == "spore":
+        s = spore_1v1(tables, names)
+    else:
+        s = shinx_vs_cranidos(tables, names, slower_opp=data.draw(st.booleans()))
+    acts = np.asarray(data.draw(legal_action_pair(tables, s)))
+    try:
+        outcomes, _ = enumerate_outcomes(_np(jax.jit(outcome_laws)(tables, s, acts)))
+    except SamplingOnly:
+        return
+    k = len(outcomes.hit)
+    rng = np.random.default_rng(data.draw(st.integers(0, 2**31 - 1)))
+    picked = rng.choice(k, min(k, CHUNK // 2), replace=False)
+    base = _take(outcomes, picked)
+    changed = {name: np.asarray(f).copy() for name, f in zip(Outcome._fields, base)}
+    gated = np.zeros(len(picked), bool)
+    for row in range(len(picked)):
+        name = Outcome._fields[rng.integers(len(Outcome._fields))]
+        arr = changed[name]
+        index = tuple(int(rng.integers(n)) for n in arr.shape[1:])
+        old = _take(base, row)
+        gated[row] = _gate_free(tables, s, acts, old, name, index)
+        lo = 2 if name in ("n_hits", "duration") else 0
+        arr[(row, *index)] = rng.integers(lo, _ranges.get(name, 2))
+    both = jax.tree.map(lambda a, b: np.concatenate([np.asarray(a), b]), base, Outcome(**changed))
+    n = len(picked)
+    out = turns(tables, _stack([s] * (2 * n)), np.tile(acts, (2 * n, 1)), both)
+    keys = row_keys(_take(out[0], slice(None)))
+    for row in range(n):
+        if gated[row] and keys[row] == keys[n + row]:
+            assert (out[2][row] == out[2][n + row]).all()
+
+
+def test_crit_and_miss_visible(tables, names):
+    s = set_field(roark_state(tables, names), "hp", (1, 0), 1)  # any hit KOs
+    acts = np.asarray(A("Scratch", "Tackle", s, names))
+    equal, out = _equal_obs(tables, s, acts, empty_outcome(), with_outcome(crit=[(0, 0, 1)]))
+    assert state_key(_take(out[0], 0)) == state_key(_take(out[0], 1))  # the same after
+    assert not equal and (field(out[2][0], "crit") != field(out[2][1], "crit")).any()
+
+    s = roark_state(tables, names)
+    acts = np.asarray(A("Scratch", "Rock Throw", s, names))
+    equal, out = _equal_obs(tables, s, acts, empty_outcome(), with_outcome(hit=[(1, 0, 0)]))
+    assert not equal and (field(out[2][0], "missed") != field(out[2][1], "missed")).any()
+
+
+def test_unrun_choice_invisible(tables, names):
+    s = set_field(roark_state(tables, names), "hp", (1, 0), 1)  # Monferno is faster
+    rows = [np.asarray(A("Scratch", m, s, names)) for m in ("Tackle", "Rock Throw", "Leer")]
+    out = turns(tables, _stack([s] * 3), np.stack(rows), _stack([empty_outcome()] * 3))
+    keys = row_keys(out[0])
+    assert int(out[0].active[0, 1]) != 0  # Geodude fainted before acting, replaced
+    assert keys[0] == keys[1] == keys[2]
+    assert (out[2][0] == out[2][1]).all() and (out[2][0] == out[2][2]).all()
+
+
+# --- information sets --------------------------------------------------------------
+
+
+def legal_pairs(tables, state):
+    player = np.flatnonzero(np.asarray(legal_actions(tables, state, 0)))
+    opp = np.flatnonzero(np.asarray(legal_opponent_actions(tables, state)))
+    return [(int(a), int(b)) for a in player for b in opp]
+
+
+_laws = jax.jit(outcome_laws)
+
+
+def grouped_children(tables, parents, pairs, max_k=None):
+    """``obs bytes -> {child state bytes: legal-action bytes}`` over every enumerated
+    outcome of each parent's pairs (refused replacements left out). ``max_k`` skips
+    pairs with more outcome rows."""
+    groups: dict[bytes, dict[bytes, bytes]] = {}
+    for s in parents:
+        for pair in pairs(s):
+            acts = np.asarray(pair, np.int32)
+            try:
+                outcomes, _ = enumerate_outcomes(_np(_laws(tables, s, acts)))
+            except SamplingOnly:
+                continue
+            k = len(outcomes.hit)
+            if max_k is not None and k > max_k:
+                continue
+            befores = jax.tree.map(lambda f, k=k: np.broadcast_to(f, (k, *np.shape(f))), _np(s))
+            after, refused, obs, legal, executed, replayed = turns(
+                tables, befores, np.tile(acts, (k, 1)), outcomes
+            )
+            check_replay(executed, replayed)
+            for o, child, lg, bad in zip(row_keys(obs), row_keys(after), row_keys(legal), refused):
+                if not bad:
+                    groups.setdefault(o, {})[child] = lg
+    return groups
+
+
+def check_replay(executed: BattleState, replayed: BattleState):
+    for name, a, b in zip(BattleState._fields, executed, replayed):
+        if name not in _UNTRACKED:
+            assert (np.asarray(a) == np.asarray(b)).all(), name
+
+
+def assert_constant(groups):
+    for children in groups.values():
+        assert len(set(children.values())) == 1
+
+
+def test_legality_constant_on_equal_obs(tables, names):
+    s = roark_real_state(tables, names)
+    groups = grouped_children(tables, [s], lambda p: legal_pairs(tables, p))
+    assert groups
+    assert_constant(groups)
+
+    # Spore across durations: one information set, several states.
+    s = spore_1v1(tables, names)
+    pair = [tuple(int(x) for x in A("Spore", "Tackle", s, names))]
+    groups = grouped_children(tables, [s], lambda p: pair)
+    assert_constant(groups)
+    assert max(len(c) for c in groups.values()) >= 2
+
+    # A rolled hit on a 999-max-HP opponent: HP values inside one pixel.
+    s = big_opponent(tables, names)
+    pair = [tuple(int(x) for x in A("Scratch", "Tackle", s, names))]
+    groups = grouped_children(tables, [s], lambda p: pair)
+    assert_constant(groups)
+    assert max(len(c) for c in groups.values()) >= 2
+
+
+def test_legality_splits_on_taunt(tables, names):
+    """Two states of one information set differing only in the player's hidden Taunt
+    counter (1 or 2): after the end-of-turn tick, Leer is legal in one child only, and
+    only ``taunt`` in the observation tells them apart."""
+    base = roark_state(tables, names, player_count=1, opp_count=1)
+    parents = [set_field(base, "taunt", 0, t) for t in (1, 2)]
+    acts = np.asarray(A("Scratch", "Tackle", base, names), np.int32)
+    out = turns(tables, _stack(parents), np.stack([acts, acts]), _stack([empty_outcome()] * 2))
+    _, _, obs, legal = out[:4]
+    assert (legal[0] != legal[1]).any()
+    assert (obs[0] != obs[1]).any()
+    diff = np.flatnonzero(obs[0] != obs[1])
+    assert set(diff) <= set(range(OBS_SIZE)[FIELDS["taunt"]])
+    # The same for Bind: freed at 0 (switches legal) or still trapped. Bind's damage
+    # makes the player's HP differ as well, so ``trapped`` is not the only witness.
+    base = roark_state(tables, names, opp_count=1)
+    bind = names.move("Bind")
+    parents = [set_field(set_field(base, "trapped", 0, t), "trap_move", 0, bind) for t in (1, 2)]
+    out = turns(tables, _stack(parents), np.stack([acts, acts]), _stack([empty_outcome()] * 2))
+    _, _, obs, legal = out[:4]
+    assert (legal[0] != legal[1]).any()
+    assert (field(obs[0], "trapped") != field(obs[1], "trapped")).any()
+
+
+@settings(max_examples=5, **HYPOTHESIS)
+@given(data=st.data())
+def test_legality_constant_on_equal_obs_random(tables, names, data):
+    # Pairs above 4 chunks of outcome rows are left out for runtime.
+    s = data.draw(supported_state(tables, names))
+    groups = grouped_children(tables, [s], lambda p: legal_pairs(tables, p), max_k=4 * CHUNK)
+    assert_constant(groups)
+
+
+@settings(max_examples=40, **HYPOTHESIS)
+@given(data=st.data())
+def test_replay_matches_execute(tables, names, data):
+    """Internal: ``_replay`` plays the actions exactly as ``execute_actions``."""
+    s = data.draw(supported_state(tables, names))
+    acts = np.asarray(data.draw(legal_action_pair(tables, s)))
+    outcome = _np(data.draw(any_outcome()))
+    out = turns(tables, _stack([s]), acts[None], _stack([outcome]))
+    check_replay(_take(out[4], slice(None)), _take(out[5], slice(None)))
