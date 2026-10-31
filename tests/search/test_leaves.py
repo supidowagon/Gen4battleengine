@@ -125,12 +125,14 @@ def test_forced_first_turn_matches_expand(tables, names):
 def test_allocate():
     w = np.array([1.0, 3.0, 0.0, 6.0])
     n = allocate(w, 1000)
-    assert np.all(n % 2 == 0) and np.all(n >= 4)
-    assert n[2] == 4
-    assert abs(int(n.sum()) - 1000) <= 4 + len(w)
+    # The default floor is 1 per half (2026-10-31 amendment): 2 playouts at least.
+    assert np.all(n % 2 == 0) and np.all(n >= 2)
+    assert n[2] == 2
+    assert abs(int(n.sum()) - 1000) <= 2 + len(w)
     assert n[3] / n[1] == pytest.approx(2.0, rel=0.05)
     assert list(allocate(np.array([1.0, 1.0]), 10, floor=3)) == [6, 6]
-    assert list(allocate(np.zeros(3), 100)) == [4, 4, 4]
+    assert list(allocate(np.zeros(3), 100)) == [2, 2, 2]
+    assert list(allocate(np.zeros(3), 100, floor=2)) == [4, 4, 4]
 
 
 def test_leaf_value_properties():
@@ -138,6 +140,9 @@ def test_leaf_value_properties():
     assert v.p_a == 0.75 and v.p_b == 0.5
     p = 2 / 4
     assert v.var_b == pytest.approx(p * (1 - p) / 2)
+    # var_a mirrors var_b on half A: p~ = (k_a + 1) / (n_a + 2), p~ (1 - p~) / n_a.
+    q = 4 / 6
+    assert v.var_a == pytest.approx(q * (1 - q) / 4)
 
 
 def test_terminal_state_rejected(tables, names):

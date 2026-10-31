@@ -75,6 +75,14 @@ class LeafValue:
         return self.wins_b / self.n_b
 
     @property
+    def var_a(self) -> float:
+        """``var_b`` on half A: ``p~ (1 - p~) / n_a`` with ``p~ = (k_a + 1) / (n_a + 2)``.
+        Only the solver's stopping rule reads it (precision target; ruling 5 keeps half B
+        out of every decision)."""
+        p = (self.wins_a + 1) / (self.n_a + 2)
+        return p * (1 - p) / self.n_a
+
+    @property
     def var_b(self) -> float:
         """``p~ (1 - p~) / n_b`` with ``p~ = (k_b + 1) / (n_b + 2)`` (ruling 6)."""
         p = (self.wins_b + 1) / (self.n_b + 2)
@@ -88,10 +96,11 @@ def leaf_keys(key, i: int, n: int):
     return tuple(jax.random.split(jax.random.fold_in(base, h), n // 2) for h in (0, 1))
 
 
-def allocate(weights: np.ndarray, budget: int, floor: int = 2) -> np.ndarray:
+def allocate(weights: np.ndarray, budget: int, floor: int = 1) -> np.ndarray:
     """Playouts per evaluated state (ruling 8): ``2 * max(floor, round(budget * w / sum(w)
     / 2))`` for chance weights ``w`` (all ``floor`` when they sum to 0). Even, ``>= 2 *
-    floor``; the floor may push the total above ``budget``."""
+    floor``; the floor may push the total above ``budget``. ``floor=0`` gives a state
+    whose rounded share is 0 no playouts (the solver's top-up rounds)."""
     w = np.asarray(weights, np.float64)
     total = w.sum()
     share = budget * w / total / 2 if total > 0 else np.zeros_like(w)

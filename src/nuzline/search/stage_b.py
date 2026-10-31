@@ -96,7 +96,7 @@ class SolveSettings:
     budget_playouts: int | None = None
     budget_seconds: float | None = None
     epsilon: float = 1e-4
-    leaf_floor: int = 2
+    leaf_floor: int = 1
     max_turns: int = 100
     n_depth0: int = 2000
 

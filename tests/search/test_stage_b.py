@@ -355,3 +355,8 @@ def test_sampled_nodes_below_the_root(tables, names):
     assert counted > 0
     best = result.ranking[0]
     assert f"({best.sampled_nodes})" in render(result, names, 0, root=state)[2]
+
+
+def test_default_leaf_floor_is_one():
+    # 2026-10-31 amendment: floor 1 per half (same inner-decision quality, cheaper).
+    assert SolveSettings().leaf_floor == 1
