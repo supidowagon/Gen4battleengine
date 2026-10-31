@@ -102,15 +102,21 @@ def _leaf_program(tables: Tables, states: BattleState, keys, max_turns: int) -> 
     return jax.vmap(lambda s, k: playout(tables, s, k, max_turns))(states, keys)
 
 
-def _forced_one(tables: Tables, state: BattleState, pair, key, max_turns: int) -> PlayoutResult:
-    """``playout_from_action``'s key rule (playout._run): the first turn's draws come from
-    the second split of ``k_turn``, the rest of the playout from ``key``."""
+def _forced_turn(tables: Tables, state: BattleState, pair, key):
+    """The forced first turn: ``playout_from_action``'s key rule (playout._run) -- the
+    turn's draws come from the second split of ``k_turn``. Returns the state after
+    ``send_replacements``, whether that was refused, and the key for the rest."""
     key, _, k_turn = jax.random.split(key, 3)
     actions = pair.astype(_I32)
     power_mul = replacement_power_mul(tables, state, actions)
     outcome = sample_outcome(jax.random.split(k_turn)[1], tables, state, actions)
     stepped = step(tables, state, actions, outcome)
     after, refused = send_replacements(tables, stepped, is_switch(actions[1]), power_mul)
+    return after, refused, key
+
+
+def _forced_one(tables: Tables, state: BattleState, pair, key, max_turns: int) -> PlayoutResult:
+    after, refused, key = _forced_turn(tables, state, pair, key)
     rest = playout(tables, after, key, max_turns - 1)
     return PlayoutResult(
         won=jnp.where(refused, REFUSED_WON, rest.won).astype(jnp.int8),

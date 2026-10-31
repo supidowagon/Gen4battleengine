@@ -14,6 +14,7 @@ from nuzline.search.expand import expand
 from nuzline.search.leaves import (
     LEAF_CHUNK,
     LeafValue,
+    _forced_turn,
     allocate,
     evaluate_forced,
     evaluate_leaves,
@@ -21,8 +22,7 @@ from nuzline.search.leaves import (
 )
 from nuzline.search.playout import REFUSED_WON, batched_playout, playout_from_action
 from tests.engine.helpers import roark_state
-from tests.search.fixtures import shinx_vs_cranidos
-from tests.search.test_expand import batch
+from tests.search.test_expand import batch, row_keys
 
 KEY = jax.random.PRNGKey(11)
 
@@ -74,27 +74,40 @@ def test_forced_matches_playout_from_action(tables, names):
 
 
 def test_forced_first_turn_matches_expand(tables, names):
-    """A one-turn cap makes the value the exact P(child over and won) of the expansion."""
-    state = shinx_vs_cranidos(tables, names).replace_hp(1, 0, 1)
+    """The forced first turn's child distribution (keys as evaluate_forced uses them)
+    matches the exact children of ``expand``, bucketed by state."""
+    state = roark_state(
+        tables, names, player_count=1, opp_count=1, player_species="Shinx", opp_species="Cranidos"
+    ).replace_hp(1, 0, 1)
     spark, tackle = names.move_slot(state, 0, "Spark"), names.move_slot(state, 1, "Tackle")
-    _, children = expand(tables, batch(state), [(0, spark, tackle)])
+    store, children = expand(tables, batch(state), [(0, spark, tackle)])
     assert sum(c.prob for c in children[0]) == pytest.approx(1.0, abs=1e-12)
-    n = 2000
-    (value,) = evaluate_forced(
-        tables,
-        batch(state),
-        np.array([[spark, tackle]], np.int32),
-        np.array([n]),
-        KEY,
-        max_turns=1,
+    keys_of = row_keys(store)
+    want: dict[bytes, float] = {}
+    for c in children[0]:
+        want[keys_of[c.state_row]] = want.get(keys_of[c.state_row], 0.0) + c.prob
+    won_mass = sum(
+        c.prob for c in children[0] if int(store.over[c.state_row]) == 1 and not c.refused
     )
-    # Cranidos at 1 HP faints to Spark when it connects; it may also miss or be
-    # outsped, so the won fraction is the Spark-connects mass, not 1.
-    store, kids = expand(tables, batch(state), [(0, spark, tackle)])
-    won_mass = sum(c.prob for c in kids[0] if int(store.over[c.state_row]) != 0)
+    assert 0.0 < won_mass < 1.0
+    n = 4000
+    pair = jnp.asarray([spark, tackle], jnp.int32)
+    keys = jnp.asarray(np.concatenate([np.asarray(k) for k in leaf_keys(KEY, 0, n)]))
+    turn = jax.jit(jax.vmap(lambda k: _forced_turn(tables, state, pair, k)[:2]))
+    after, refused = jax.device_get(turn(keys))
+    assert not np.any(refused)
+    got = row_keys(after)
+    assert set(got) <= set(want)
+    for k, p in want.items():
+        freq = got.count(k) / n
+        assert abs(freq - p) < 5 * np.sqrt(p * (1 - p) / n) + 1e-9, (p, freq)
+    # evaluate_forced's own win rate, with a one-turn cap, is the won mass.
+    (value,) = evaluate_forced(
+        tables, batch(state), np.array([pair]), np.array([n]), KEY, max_turns=1
+    )
     sd = np.sqrt(won_mass * (1 - won_mass) / (n / 2))
-    assert abs(value.p_a - won_mass) < 5 * sd + 1e-9
-    assert abs(value.p_b - won_mass) < 5 * sd + 1e-9
+    assert abs(value.p_a - won_mass) < 5 * sd
+    assert abs(value.p_b - won_mass) < 5 * sd
 
 
 def test_allocate():
