@@ -76,7 +76,7 @@ from __future__ import annotations
 import math
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 
 import jax
 import numpy as np
@@ -92,7 +92,7 @@ from nuzline.search import deaths
 from nuzline.search.expand import ai_rows, expand
 from nuzline.search.leaves import LeafValue, allocate, evaluate_forced, evaluate_leaves
 from nuzline.search.rows import concat, row_bytes, take
-from nuzline.search.stage_a import action_label, rank_actions, tied_with
+from nuzline.search.stage_a import action_label, rank_actions, tie_ordered
 
 __all__ = ["ActionValue", "HiddenLegality", "PlanNode", "SolveResult", "SolveSettings", "solve"]
 
@@ -699,26 +699,22 @@ def _leader(per_action: dict) -> int:
 
 
 def _rank(rows: list[ActionValue]) -> list[ActionValue]:
-    """Sorted by ``(-estimate, action)``; ``tied_with_best`` as ``stage_a.Ranking.of``:
-    not the leader, interval overlapping the leader's (``stage_a.tied_with``)."""
-    rows = sorted(rows, key=lambda r: (-r.estimate, r.action))
-    if not rows:
-        return rows
-    best = rows[0]
-    return [best] + [replace(r, tied_with_best=tied_with(r, best)) for r in rows[1:]]
+    """``stage_a.tie_ordered`` by ``estimate``; the expected deaths are not valued here
+    (Task 9), so every row has the same and the tie rule leaves the best estimate first."""
+    return tie_ordered(rows, lambda r: r.estimate, lambda r: 0.0)
 
 
 def _stage_a(tables, names, state, key, settings: SolveSettings, start: float) -> SolveResult:
-    """Depth 0 (ruling 7): ``rank_actions``' numbers unchanged."""
+    """Depth 0 (ruling 7): ``rank_actions``' rows, valued by their ``score``."""
     ranking = rank_actions(tables, names, state, settings.n_depth0, key, settings.max_turns)
     rows = [
         ActionValue(
             action=r.action,
             label=r.label,
-            estimate=r.p_win0,
+            estimate=r.score,
             ci_low=r.ci_low,
             ci_high=r.ci_high,
-            lower_bound=r.p_win0,
+            lower_bound=r.score,
             unexplored=0.0,
             sampled=0.0,
             refused=0.0,

@@ -2,11 +2,14 @@
 (docs/design.md §4.3)."""
 
 import jax
+import numpy as np
 import pytest
 
 from nuzline.ai.policy import UnsupportedAi
+from nuzline.engine.actions import MOVE_ACTIONS
 from nuzline.search.stage_a import ActionResult, Ranking, rank_actions, wilson
-from tests.engine.helpers import roark_state
+from tests.engine.helpers import roark_real_state, roark_state
+from tests.search.fixtures import at_replacement, dead_monferno
 
 
 def test_wilson_bounds():
@@ -36,9 +39,10 @@ def test_all_zero_flag(tables, names):
     assert r.all_zero is True
 
 
-def test_sort_key_is_strict_and_ties_with_the_leader_are_flagged():
-    # Plan ruling: sorted strictly by (-p_win0, -p_win, action); an action whose CI
-    # overlaps the leader's is flagged, not reordered.
+def test_tie_rule_prefers_fewer_expected_deaths():
+    # Plan ruling 5: among rows overlapping the top score's interval the leader has the
+    # fewest expected deaths (then the higher score, then the lower action); the others
+    # follow by (-score, deaths, action); tied_with_best is relative to the leader.
     rows = [
         ActionResult(3, "c", 0.50, 0.40, 0.60, 0.7, 0.3, 100),
         ActionResult(1, "a", 0.50, 0.40, 0.60, 0.8, 0.2, 100),
@@ -47,10 +51,63 @@ def test_sort_key_is_strict_and_ties_with_the_leader_are_flagged():
         ActionResult(4, "d", 0.50, 0.40, 0.60, 0.8, 0.2, 100),
     ]
     r = Ranking.of(rows)
-    assert [a.action for a in r] == [2, 1, 4, 3, 0]
-    # The leader is not tied with itself; only the other rows overlapping it are ties.
+    assert [a.action for a in r] == [1, 2, 4, 3, 0]
     assert [a.tied_with_best for a in r] == [False, True, True, True, False]
     assert r.all_zero is False
+
+
+def test_rank_reports_ladder_and_distribution(tables, names):
+    s = roark_real_state(tables, names).with_budget(k=2)
+    r = rank_actions(tables, names, s, n=200, key=jax.random.PRNGKey(0))
+    assert r
+    for row in r:
+        assert list(row.ladder) == sorted(row.ladder) and len(row.ladder) == 4
+        assert row.ladder[0] == row.p_win0
+        assert row.p_success == row.ladder[2] == row.score
+        assert abs(sum(row.distribution.probs) - 1) < 1e-12
+        assert row.distribution.n == 200
+
+
+def test_protected_death_fails_every_rung(tables, names):
+    s = dead_monferno(tables, names).with_budget(3)
+    monferno = int(np.flatnonzero(np.asarray(s.deaths))[0])
+    s = s._replace(protected=s.protected.at[monferno].set(1))
+    r = rank_actions(tables, names, s, n=64, key=jax.random.PRNGKey(0))
+    assert r.all_zero
+    for row in r:
+        assert row.ladder == (0.0,) * 4 and row.p_success == 0.0
+        assert row.distribution.probs[5] == row.p_win
+    assert any(row.p_win > 0 for row in r)
+
+
+def test_rank_at_a_pending_root(tables, names):
+    s = at_replacement(roark_state(tables, names))
+    r = rank_actions(tables, names, s, n=8, key=jax.random.PRNGKey(0))
+    living = [i for i in range(1, 6) if int(s.hp[0, i]) > 0]
+    assert sorted(a.action for a in r) == [MOVE_ACTIONS + i for i in living]
+    for a in r:
+        assert (
+            a.label
+            == f"Switch -> {names.species_names[int(s.species[0, a.action - MOVE_ACTIONS])]}"
+        )
+
+
+def test_budget_is_traced(tables, names, monkeypatch):
+    from nuzline.search import stage_a
+
+    seen = []
+    real = stage_a.cached_export
+
+    def spy(fn, args, *, name, static, version):
+        leaves = jax.tree.leaves(args)
+        seen.append((name, static, [(x.shape, str(x.dtype)) for x in leaves]))
+        return real(fn, args, name=name, static=static, version=version)
+
+    monkeypatch.setattr(stage_a, "cached_export", spy)
+    s = roark_state(tables, names, player_count=2)
+    for k in (0, 2):
+        rank_actions(tables, names, s.with_budget(k), n=4, key=jax.random.PRNGKey(0), max_turns=2)
+    assert len(seen) == 2 and seen[0] == seen[1]
 
 
 def test_a_clear_leader_has_no_ties():
@@ -98,7 +155,8 @@ import json, jax
 from dataclasses import astuple
 from nuzline.data.tables import load_names, load_tables
 from nuzline.search.stage_a import rank_actions
-from tests.engine.helpers import roark_state
+from tests.engine.helpers import roark_real_state, roark_state
+from tests.search.fixtures import at_replacement, dead_monferno
 
 assert jax.device_count() == DEVICES, jax.device_count()
 tables, names = load_tables(), load_names()

@@ -3,13 +3,18 @@ scored by ``n`` Monte Carlo playouts (``playout_from_action``) that all actions 
 the same ``n`` keys for each (common random numbers), batched as one ``[NUM_ACTIONS, n]``
 ``vmap`` (padded) so the playout compiles once per ``n``.
 
-Each action reports P(win with zero player faints) with a 95 % Wilson interval,
-P(win) and the expected number of player faints. Playout odds are a lower bound on
-optimal play (the playout policy is a heuristic).
+Each action reports the whole faint-budget ladder from one batch of playouts: P(win
+with at most ``r`` deaths and no protected Pokemon lost) for rungs ``r`` = 0..3
+(``ladder``; ``p_win0`` is rung 0), ``p_success`` (the state's own rung ``k =
+faint_budget``) with its 95 % Wilson interval, P(win), the expected number of player
+faints and the death distribution (``deaths.BUCKETS``). Playout odds are a lower bound
+on optimal play (the playout policy is a heuristic). At a pending player replacement the
+ranked actions are the replacements (``decision_actions``).
 
-The ranking is sorted strictly by ``(-p_win0, -p_win, action)`` (plan ruling);
-statistical ties are reported, not reordered: ``ActionResult.tied_with_best`` marks the
-other actions whose interval overlaps the leader's (never the leader itself). A playout that meets a refused mechanic
+The ranking follows ``tie_ordered`` (plan ruling 5): among the actions whose interval
+overlaps the best score's, the leader has the fewest expected deaths; the other actions
+follow by ``(-score, e_faints, action)``. ``ActionResult.tied_with_best`` marks the
+actions whose interval overlaps the leader's (never the leader itself). A playout that meets a refused mechanic
 (``PlayoutResult.refused``) has no result; any such playout makes ``rank_actions``
 raise ``UnsupportedAi`` rather than count it, naming the refused mechanic of the first
 refused playout (``refusal_reason``).
@@ -18,7 +23,7 @@ refused playout (``refusal_reason``).
 from __future__ import annotations
 
 import math
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, replace
 from functools import partial
 
@@ -29,25 +34,42 @@ from jax.sharding import Mesh, NamedSharding, PartitionSpec
 
 from nuzline.ai.policy import UnsupportedAi
 from nuzline.data.tables import Names, Tables
-from nuzline.engine.actions import MOVE_ACTIONS, NUM_ACTIONS, legal_actions, usable_moves
-from nuzline.engine.state import BattleState
+from nuzline.engine.actions import MOVE_ACTIONS, NUM_ACTIONS, decision_actions, usable_moves
+from nuzline.engine.state import MAX_DEATH_BUDGET, BattleState
 from nuzline.jaxcache import cached_export, code_version
+from nuzline.search import deaths
 from nuzline.search.playout import PlayoutResult, playout_from_action, refusal_reason
 
-__all__ = ["ActionResult", "Ranking", "action_label", "rank_actions", "tied_with", "wilson"]
+__all__ = [
+    "ActionResult",
+    "Ranking",
+    "action_label",
+    "rank_actions",
+    "tie_ordered",
+    "tied_with",
+    "wilson",
+]
 
 
 @dataclass(frozen=True)
 class ActionResult:
     action: int
     label: str  # "Ember" / "Switch -> Starly"
-    p_win0: float  # P(win with zero player faints)
-    ci_low: float  # 95 % Wilson interval of p_win0
+    p_win0: float  # P(win with zero player faints, no protected loss) = ladder[0]
+    ci_low: float  # 95 % Wilson interval of ``score`` (p_win0 when p_success is None)
     ci_high: float
     p_win: float
     e_faints: float  # expected player faints
     n: int  # playouts
     tied_with_best: bool = False  # not the leader, and the interval overlaps the leader's
+    p_success: float | None = None  # P(win, deaths <= k, no protected death) for the state's k
+    ladder: tuple[float, ...] = ()  # rungs 0..MAX_DEATH_BUDGET with the protected set
+    distribution: deaths.DeathDistribution | None = None
+
+    @property
+    def score(self) -> float:
+        """The objective: ``p_success``, or ``p_win0`` when the row has none."""
+        return self.p_win0 if self.p_success is None else self.p_success
 
 
 def tied_with(row, best) -> bool:
@@ -56,22 +78,37 @@ def tied_with(row, best) -> bool:
     return row.ci_high >= best.ci_low and row.ci_low <= best.ci_high
 
 
+def tie_ordered[R](
+    rows: Sequence[R], score: Callable[[R], float], deaths: Callable[[R], float]
+) -> list[R]:
+    """``rows`` (``action``, ``ci_low``, ``ci_high``, ``tied_with_best``) in the tie rule's
+    order (plan ruling 5): among the rows whose interval overlaps the top-scoring row's,
+    the leader has the fewest ``deaths``, then the higher ``score``, then the lower action;
+    the other rows follow by ``(-score, deaths, action)``. ``tied_with_best`` is set for
+    the rows whose interval overlaps the leader's, never for the leader."""
+    rows = sorted(rows, key=lambda r: (-score(r), deaths(r), r.action))
+    if not rows:
+        return []
+    top = rows[0]
+    contenders = [r for r in rows if tied_with(r, top)]
+    leader = min(contenders, key=lambda r: (deaths(r), -score(r), r.action))
+    rest = [r for r in rows if r is not leader]
+    return [replace(leader, tied_with_best=False)] + [
+        replace(r, tied_with_best=tied_with(r, leader)) for r in rest
+    ]
+
+
 class Ranking(list):
-    """``ActionResult``s, best first; ``all_zero`` when every ``p_win0`` is 0."""
+    """``ActionResult``s, best first; ``all_zero`` when every ``score`` is 0."""
 
     all_zero: bool
 
     @classmethod
     def of(cls, results: Iterable[ActionResult]) -> Ranking:
-        """``results`` sorted by ``(-p_win0, -p_win, action)``, ``tied_with_best`` set."""
-        rows = sorted(results, key=lambda r: (-r.p_win0, -r.p_win, r.action))
-        if rows:
-            best, *others = rows
-            rows = [replace(best, tied_with_best=False)] + [
-                replace(r, tied_with_best=tied_with(r, best)) for r in others
-            ]
+        """``results`` in ``tie_ordered`` order (``score``, ``e_faints``)."""
+        rows = tie_ordered(list(results), lambda r: r.score, lambda r: r.e_faints)
         ranking = cls(rows)
-        ranking.all_zero = all(r.p_win0 == 0 for r in rows)
+        ranking.all_zero = all(r.score == 0 for r in rows)
         return ranking
 
 
@@ -118,7 +155,9 @@ def rank_actions(
 ) -> Ranking:
     """Rank the player's legal actions at ``state`` by ``n`` shared playouts each
     (module docstring). Raises ``UnsupportedAi`` when any playout is refused."""
-    legal = np.flatnonzero(np.asarray(legal_actions(tables, state, 0)))
+    legal = np.flatnonzero(np.asarray(decision_actions(tables, state)))
+    k = int(state.faint_budget)
+    protected = np.asarray(state.protected)
     struggle = not bool(np.any(np.asarray(usable_moves(tables, state, 0))))
     keys = jax.random.split(key, n)
     devices = jax.device_count()
@@ -159,18 +198,27 @@ def rank_actions(
             )
         won = np.asarray(out.won[i]) == 1
         faints = np.asarray(out.player_faints[i]).astype(np.int32)
-        wins0 = int(np.sum(won & (faints == 0)))
-        lo, hi = wilson(wins0, n)
+        dead = np.asarray(out.deaths[i])
+        wins = [
+            int(np.sum(deaths.success(won, faints, dead, rung, protected)))
+            for rung in range(MAX_DEATH_BUDGET + 1)
+        ]
+        lo, hi = wilson(wins[k], n)
+        buckets = deaths.bucket(won, np.asarray(out.ended[i]), faints, dead, protected)
+        counts = np.bincount(buckets, minlength=len(deaths.BUCKETS))
         results.append(
             ActionResult(
                 action=action,
                 label=label,
-                p_win0=wins0 / n,
+                p_win0=wins[0] / n,
                 ci_low=lo,
                 ci_high=hi,
                 p_win=float(np.mean(won)),
                 e_faints=float(np.mean(faints)),
                 n=n,
+                p_success=wins[k] / n,
+                ladder=tuple(w / n for w in wins),
+                distribution=deaths.DeathDistribution.from_counts(counts),
             )
         )
     return Ranking.of(results)
