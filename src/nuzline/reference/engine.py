@@ -526,6 +526,7 @@ def _faint_check(turn: _Turn, s: RefState) -> None:
             _cleanup_fainted(turn, s, side)
         if side == 0:
             player_fainted += 1
+            s.deaths[slot] = 1
     turn.fainted.clear()
     s.player_faints += player_fainted
     if player_fainted:

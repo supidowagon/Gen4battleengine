@@ -49,6 +49,7 @@ from nuzline.engine.ids import Stat, Weather
 from nuzline.engine.stats import calc_stats
 
 SIDES, SLOTS, MOVES = 2, 6, 4
+MAX_DEATH_BUDGET = 3  # the ladder's range: k = 0..3 deaths allowed (spec §4)
 BAG_SLOTS = 4  # MAX_TRAINER_ITEMS: trainer_items[side] holds the AI's bag
 STAGE_MIN, STAGE_MAX = -6, 6
 _STAGE_KEYWORDS = {
@@ -138,6 +139,11 @@ class BattleState(NamedTuple):
     # AI knowledge of the player
     ai_seen_moves: jnp.ndarray  # int8[6,4], player slot x move slot
     ai_ability_known: jnp.ndarray  # int8[6]
+    # faint budget (search data; the engine only records deaths and never reads k)
+    deaths: jnp.ndarray  # int8[6], 1 where the player's party slot fainted this battle
+    faint_budget: jnp.ndarray  # int8, k: the deaths the search allows
+    protected: jnp.ndarray  # int8[6], 1 where the player's slot must not faint
+    replace_mul: jnp.ndarray  # int8, the turn's powerMul while a player replacement is pending
 
     def replace_hp(self, side: int, slot: int, hp: int) -> BattleState:
         return self._replace(hp=self.hp.at[side, slot].set(hp))
@@ -161,6 +167,24 @@ class BattleState(NamedTuple):
         return self._replace(
             status=self.status.at[side, slot].set(status),
             status_counter=self.status_counter.at[side, slot].set(counter),
+        )
+
+    def with_budget(self, k: int = 0, protected: Sequence[int] = ()) -> BattleState:
+        """Set the faint budget ``k`` (0..``MAX_DEATH_BUDGET``) and the protected player
+        slots: each must hold a living Pokemon (not empty, not fainted)."""
+        if not 0 <= k <= MAX_DEATH_BUDGET:
+            raise ValueError(f"faint budget {k} outside [0, {MAX_DEATH_BUDGET}]")
+        mask = np.zeros(SLOTS, np.int8)
+        for slot in protected:
+            if not 0 <= slot < SLOTS:
+                raise ValueError(f"protected slot {slot} outside [0, {SLOTS - 1}]")
+            if int(self.species[0, slot]) == 0:
+                raise ValueError(f"protected slot {slot} is empty")
+            if int(self.hp[0, slot]) == 0:
+                raise ValueError(f"protected slot {slot} has already fainted")
+            mask[slot] = 1
+        return self._replace(
+            faint_budget=jnp.asarray(k, jnp.int8), protected=jnp.asarray(mask, jnp.int8)
         )
 
 
@@ -237,6 +261,10 @@ LAYOUT: dict[str, tuple[tuple[int, ...], type]] = {
     "player_faints": (_FIELD, np.int8),
     "ai_seen_moves": ((SLOTS, MOVES), np.int8),
     "ai_ability_known": ((SLOTS,), np.int8),
+    "deaths": ((SLOTS,), np.int8),
+    "faint_budget": (_FIELD, np.int8),
+    "protected": ((SLOTS,), np.int8),
+    "replace_mul": (_FIELD, np.int8),
 }
 if tuple(LAYOUT) != BattleState._fields:
     raise RuntimeError("LAYOUT must list every BattleState field, in order")

@@ -99,3 +99,17 @@ def legal_opponent_actions(tables: Tables, state: BattleState) -> jnp.ndarray:
     return jnp.concatenate(
         [legal_actions(tables, state, 1), usable_trainer_items(tables, state, 1)]
     )
+
+
+def decision_actions(tables: Tables, state: BattleState) -> jnp.ndarray:
+    """``bool[NUM_ACTIONS]``: the player's legal actions at a decision point. At a player
+    replacement (the active Pokemon has 0 HP, a living bench Pokemon exists and the battle
+    goes on: ``step.needs_replacement(state)[0]``) only the switches to
+    ``legal_replacements`` (trapping is ignored: the Pokemon is gone); otherwise
+    ``legal_actions``."""
+    slots = jnp.arange(SLOTS)
+    active_down = state.hp[0, state.active[0]] == 0
+    bench = (state.species[0] != 0) & (state.hp[0] > 0) & (slots != state.active[0])
+    replacing = active_down & jnp.any(bench) & (state.over == 0)
+    forced = jnp.concatenate([jnp.zeros(MOVE_ACTIONS, bool), legal_replacements(state, 0)])
+    return jnp.where(replacing, forced, legal_actions(tables, state, 0))

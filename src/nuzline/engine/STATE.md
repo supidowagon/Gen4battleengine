@@ -23,6 +23,12 @@ three structs has a row.
 
 ## Mapping notes
 
+- **Search fields.** `deaths` (per player party slot), `faint_budget` (`k`) and
+  `protected` (per player slot) are not decomp state: the death record comes from
+  the faint check (`step._faint_check`) and the other two are the search's inputs,
+  traced data the engine never reads. `replace_mul` is the decomp's `powerMul` kept
+  for a pending player replacement (it persists until `BattleContext_Init`,
+  battle_controller_player.c:1855), 0 otherwise.
 - **Battlers vs. party slots.** The decomp keeps a `BattleMon` per battler
   (`BattleContext.battleMons[4]`, built from the party mon by
   `BattleSystem_InitBattleMon`, `src/battle/battle_lib.c:70`) and writes HP, PP,
@@ -351,7 +357,7 @@ three structs has a row.
 | `BattleContext.criticalBoosts` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
 | `BattleContext.criticalMul` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
 | `BattleContext.movePower` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
-| `BattleContext.powerMul` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
+| `BattleContext.powerMul` | `replace_mul` | mapped |
 | `BattleContext.hpCalcTemp` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
 | `BattleContext.moveType` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
 | `BattleContext.moveEffectChance` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |

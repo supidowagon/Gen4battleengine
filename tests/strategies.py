@@ -30,6 +30,7 @@ from nuzline.engine.ids import MOVE_STRUGGLE, AbilityId, EffectId, Stat, Status,
 from nuzline.engine.outcome import MAX_HITS, Outcome
 from nuzline.engine.state import (
     BAG_SLOTS,
+    MAX_DEATH_BUDGET,
     SLOTS,
     STAGE_MAX,
     STAGE_MIN,
@@ -240,7 +241,9 @@ def supported_state(draw, tables: Tables, names: Names) -> BattleState:
     Struggle), and the opponent's bag (a size of 0-4 in
     ``trainer_item_count``, ``M1_BAG_ITEMS`` in each slot below it, gaps allowed as
     after a use) and the AI's knowledge of the player (any ``ai_seen_moves`` and
-    ``ai_ability_known`` flags), each within its legal range; the battle is not over."""
+    ``ai_ability_known`` flags), the death record (``deaths`` = the fainted player slots), a
+    faint budget 0-3 and a random set of living player slots as ``protected``, each within
+    its legal range; the battle is not over."""
     parties = [draw(_party(tables, names)) for _ in (0, 1)]
     s = make_state(tables, parties[0][0], parties[1][0])
     a = {name: np.asarray(getattr(s, name)).copy() for name in BattleState._fields}
@@ -291,7 +294,13 @@ def supported_state(draw, tables: Tables, names: Names) -> BattleState:
     for name in ("ai_seen_moves", "ai_ability_known"):
         flags = draw(st.lists(st.integers(0, 1), min_size=a[name].size, max_size=a[name].size))
         a[name][...] = np.reshape(flags, a[name].shape)
-    a["player_faints"][...] = int(np.sum((a["species"][0] > 0) & (a["hp"][0] == 0)))
+    fainted = (a["species"][0] > 0) & (a["hp"][0] == 0)
+    a["player_faints"][...] = int(np.sum(fainted))
+    a["deaths"][...] = fainted
+    a["faint_budget"][...] = draw(st.integers(0, MAX_DEATH_BUDGET))
+    living = (a["species"][0] > 0) & (a["hp"][0] > 0)
+    a["protected"][...] = [int(draw(st.booleans())) if alive else 0 for alive in living]
+    a["replace_mul"][...] = 0
     return BattleState(**{name: jnp.asarray(a[name]) for name in BattleState._fields})
 
 

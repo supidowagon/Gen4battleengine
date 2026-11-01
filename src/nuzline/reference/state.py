@@ -101,6 +101,10 @@ class RefState:
     player_faints: int
     ai_seen_moves: list[list[int]]
     ai_ability_known: list[int]
+    deaths: list[int]
+    faint_budget: int
+    protected: list[int]
+    replace_mul: int
 
 
 # BattleState field names by level.

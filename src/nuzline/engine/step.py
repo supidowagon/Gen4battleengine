@@ -692,7 +692,8 @@ def _pursuit_hit(
 
 
 def _faint_check(before: BattleState, after: BattleState, entry_turn=None) -> BattleState:
-    """Count new player faints and end the battle: any player Pokemon fainting is a loss (the
+    """Count new player faints (``player_faints``) and record their party slots
+    (``deaths``), then end the battle: any player Pokemon fainting is a loss (the
     terminal rule, which wins over a simultaneous last opponent faint); no opponent
     Pokemon left standing is a win. A fainted active battler is cleaned up as
     ``BattleSystem_CleanupFaintedMon`` (battle_lib.c:2156, from ``PlayFaintAnimation``,
@@ -716,6 +717,7 @@ def _faint_check(before: BattleState, after: BattleState, entry_turn=None) -> Ba
     winner = jnp.where(player_fainted > 0, WINNER_OPPONENT, WINNER_PLAYER)
     after = after._replace(
         player_faints=(after.player_faints + player_fainted).astype(after.player_faints.dtype),
+        deaths=(after.deaths | fainted[0]).astype(after.deaths.dtype),
         over=jnp.where(ended, 1, after.over).astype(after.over.dtype),
         winner=jnp.where(ended, winner, after.winner).astype(after.winner.dtype),
     )
