@@ -4,26 +4,45 @@ the opponent's faint replacement (docs/design.md §4.3)."""
 import jax
 import jax.numpy as jnp
 import numpy as np
+from hypothesis import HealthCheck, given, settings
+from hypothesis import strategies as st
 
 from nuzline.ai.outcome import sample_ai_outcome
 from nuzline.ai.policy import ai_policy
 from nuzline.ai.replacement import post_ko_switch_in
 from nuzline.data.party import load_party
-from nuzline.engine.actions import MOVE_ACTIONS, NUM_OPP_ACTIONS, legal_actions
+from nuzline.engine.actions import MOVE_ACTIONS, NUM_ACTIONS, NUM_OPP_ACTIONS, legal_actions
+from nuzline.engine.damage import damage_table
 from nuzline.engine.ids import Status
+from nuzline.engine.order import action_order
+from nuzline.engine.outcome import empty_outcome, hit_threshold
 from nuzline.engine.state import SLOTS, make_state
 from nuzline.search import playout as playout_module
 from nuzline.search.playout import (
     REFUSED_WON,
     batched_playout,
+    death_cost,
     playout,
     playout_from_action,
     playout_policy,
     refusal_reason,
+    replacement_policy,
     replacement_refusal,
     send_replacements,
 )
-from tests.engine.helpers import SAMPLE_PARTY, _inter, _lead, _roark, _roark_party, roark_state
+from tests.engine.helpers import (
+    SAMPLE_PARTY,
+    _inter,
+    _lead,
+    _roark,
+    _roark_party,
+    roark_real_state,
+    roark_state,
+)
+from tests.search.fixtures import at_replacement
+from tests.strategies import supported_state
+
+HP_AT_RISK = 10  # Monferno's HP in the budget test: Rock Throw KOs it, Mach Punch cannot KO
 
 
 def test_policy_returns_legal_action(tables, names):
@@ -257,3 +276,130 @@ def test_a_refused_distribution_refuses_the_playout_before_the_player_chooses(
     # A fixed first action does not depend on it: turn 1 is played, turn 2 is refused.
     r = playout_module._run(tables, s, key, 100, jnp.int32(0))
     assert (int(r.won), int(r.refused), int(r.turns)) == (REFUSED_WON, 1, 1)
+
+
+# --- Budget-aware death cost (plan 4b Task 4) --------------------------------------------
+
+
+def _faint(s, *slots, faints=None):
+    """``s`` with the player's ``slots`` fainted and recorded as deaths."""
+    for slot in slots:
+        s = s.replace_hp(0, slot, 0)
+    deaths = np.zeros(SLOTS, np.int8)
+    deaths[list(slots)] = 1
+    return s._replace(
+        deaths=jnp.asarray(deaths),
+        player_faints=jnp.int8(len(slots) if faints is None else faints),
+    )
+
+
+def _cost_cases():
+    base = {"opp_count": 1}
+    return [
+        ("k0", {}, lambda s: s.with_budget(0), 0, 1.0),
+        ("k1", {}, lambda s: s.with_budget(1), 0, 0.5),
+        ("k2", {}, lambda s: s.with_budget(2), 0, 1 / 3),
+        ("k1_spent", {}, lambda s: _faint(s.with_budget(1), 2), 0, 1.0),
+        ("k1_protected", {}, lambda s: s.with_budget(1, protected=[0]), 0, 1.0),
+        ("last", {"player_count": 1}, lambda s: s.with_budget(3), 0, 1.0),
+        ("failed", {}, lambda s: _faint(s.with_budget(0), 2), 0, 0.5),
+        ("failed_last", {"player_count": 2}, lambda s: _faint(s.with_budget(0), 1), 0, 1.0),
+    ], base
+
+
+def test_death_cost(tables, names):
+    cases, base = _cost_cases()
+    for label, kw, build, slot, want in cases:
+        s = build(roark_state(tables, names, **base, **kw))
+        got = death_cost(s, slot)
+        assert got.dtype == jnp.float32, label
+        assert abs(float(got) - want) < 1e-6, (label, float(got), want)
+
+
+def test_death_cost_of_a_protected_slot_is_per_slot(tables, names):
+    s = roark_state(tables, names, opp_count=1).with_budget(2, protected=[1])
+    assert abs(float(death_cost(s, 1)) - 1.0) < 1e-6
+    assert abs(float(death_cost(s, 0)) - 1 / 3) < 1e-6
+
+
+def _old_pair_value(tables, state, a, b):
+    """The pre-budget formula: ``(1 - ko_opp * (1 - first * ko_player)) * (1 + removed)``."""
+    actions = jnp.stack([a, b]).astype(jnp.int32)
+    hit = jnp.clip(hit_threshold(tables, state, actions), 0, 100).astype(jnp.float32) / 100
+    ko_player, removed = playout_module._move_odds(tables, state, 0, actions, hit[0])
+    ko_opp, _ = playout_module._move_odds(tables, state, 1, actions, hit[1])
+    ties = [empty_outcome()._replace(speed_tie=jnp.int8(t)) for t in (0, 1)]
+    firsts = [action_order(tables, state, actions, o)[0] == 0 for o in ties]
+    first = (firsts[0].astype(jnp.float32) + firsts[1].astype(jnp.float32)) / 2
+    return (1 - ko_opp * (1 - first * ko_player)) * (1 + removed)
+
+
+@jax.jit
+def _value_grids(tables, state):
+    mine, theirs = jnp.arange(NUM_ACTIONS), jnp.arange(NUM_OPP_ACTIONS)
+
+    def grid(fn):
+        row = jax.vmap(lambda a, b: fn(tables, state, a, b), in_axes=(None, 0))
+        return jax.vmap(lambda a: row(a, theirs))(mine)
+
+    return grid(playout_module._pair_value), grid(_old_pair_value)
+
+
+def _assert_k0_unchanged(tables, state):
+    new, old = _value_grids(tables, state)
+    assert np.max(np.abs(np.asarray(new) - np.asarray(old))) < 1e-6
+
+
+def test_k0_pair_values_unchanged(tables, names):
+    _assert_k0_unchanged(tables, roark_real_state(tables, names).with_budget(0))
+
+
+@settings(
+    max_examples=20,
+    deadline=None,
+    suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture],
+)
+@given(data=st.data())
+def test_k0_pair_values_unchanged_on_drawn_states(tables, names, data):
+    s = data.draw(supported_state(tables, names))
+    s = s._replace(
+        faint_budget=jnp.int8(0),
+        protected=jnp.zeros_like(s.protected),
+        deaths=jnp.zeros_like(s.deaths),
+        player_faints=jnp.int8(0),
+    )
+    _assert_k0_unchanged(tables, s)
+
+
+def test_budget_makes_the_policy_accept_ko_risk(tables, names):
+    s = roark_state(tables, names, opp_count=1, opp_faster=True).replace_hp(0, 0, HP_AT_RISK)
+    hp = int(s.hp[0, 0])
+    rolls = np.asarray(damage_table(tables, s, 1, names.move("Rock Throw"), False))
+    assert np.mean(rolls >= hp) >= 0.8
+    punch = names.move_slot(s, 0, "Mach Punch")
+    mine = np.asarray(damage_table(tables, s, 0, names.move("Mach Punch"), False))
+    assert not np.any(mine >= int(s.hp[1, 0]))
+    key = jax.random.PRNGKey(0)
+    assert int(playout_policy(tables, s.with_budget(0), key)) >= MOVE_ACTIONS
+    assert int(playout_policy(tables, s.with_budget(2), key)) == punch
+
+
+def test_budget_change_does_not_recompile(tables, names):
+    s = roark_state(tables, names, opp_count=1)
+    key = jax.random.PRNGKey(0)
+    playout(tables, s.with_budget(0), key)
+    before = playout._cache_size()
+    playout(tables, s.with_budget(2), key)
+    assert playout._cache_size() - before <= 1
+
+
+def test_replacement_policy_spares_a_protected_pokemon(tables, names):
+    # The counter state of test_replacements: Prinplup (slot 1) is the right answer to
+    # Geodude, but at 1 HP against a faster Geodude whose every move (Tackle, Rock Throw:
+    # Stealth Rock and Leer have no PP) threatens the KO. With Prinplup protected, Starly
+    # (slot 3) goes in.
+    s = roark_state(tables, names, player_count=4, opp_count=1, opp_faster=True)
+    s = s._replace(species=s.species.at[0, 2].set(0)).replace_hp(0, 2, 0)
+    s = s.replace_hp(0, 1, 1).with_pp(1, 0, [35, 15, 0, 0])
+    s = at_replacement(s).with_budget(1, protected=[1])
+    assert int(replacement_policy(tables, s)) == 3

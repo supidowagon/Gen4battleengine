@@ -11,9 +11,11 @@ or when the AI meets a refused mechanic.
 ``playout_policy`` is the player's default policy, a search heuristic (it is not the
 trainer AI, which follows the decomp): a one-ply expectimax over the player's legal
 actions against the opponent's exact action distribution (``ai_action_distribution``).
-Each pair of actions is valued ``P(no player faint this turn) * (1 + fraction of the
-target's current HP removed)`` from the exact non-critical damage tables (16 rolls) and
-the accuracy of both moves: the player is safe unless the opponent's move KOs, and the
+Each pair of actions is valued ``(1 - death_cost * risk) * (1 + fraction of the
+target's current HP removed)``, ``risk`` the chance the player's Pokemon faints this turn
+and ``death_cost`` what that faint costs against the faint budget (plan ruling 6: 1 with no
+budget left, for a protected Pokemon or the last one, else ``1 / (deaths left + 1)``), from the exact non-critical damage tables (16 rolls) and
+the accuracy of both moves: the player is at risk only if the opponent's move KOs, and the
 opponent's move does not run when the player acts first (``action_order``, a speed tie
 counted as 1/2) and KOs. A switch is valued against the incoming Pokemon (stages reset);
 crits, multi-hit counts, secondary effects, switch-in effects and end-of-turn damage are
@@ -71,11 +73,13 @@ from nuzline.engine.step import (
     replacement_power_mul,
     step,
 )
+from nuzline.search.deaths import over_budget
 
 __all__ = [
     "REFUSED_WON",
     "PlayoutResult",
     "batched_playout",
+    "death_cost",
     "finish_turn",
     "playout",
     "playout_from_action",
@@ -130,6 +134,21 @@ def _move_odds(tables: Tables, state: BattleState, side, actions, hit):
     return ko, removed
 
 
+def death_cost(state: BattleState, slot) -> jnp.ndarray:
+    """``float32``: what the faint of the player's ``slot`` costs the objective (plan
+    ruling 6). 1 when it is the player's only living Pokemon (its faint is the whiteout);
+    1/2 in a failed state (``deaths.over_budget``: the line already counts for nothing,
+    so a faint is a mild loss, not a total one); 1 when ``slot`` is protected or no
+    budget is left; else ``1 / (r + 1)`` with ``r`` the deaths left. With ``faint_budget``
+    0 and nothing failed it is 1, today's value."""
+    living = (state.species[0] > 0) & (state.hp[0] > 0)
+    left = state.faint_budget.astype(_I32) - state.player_faints.astype(_I32)
+    spare = 1.0 / (jnp.maximum(left, 0).astype(_F32) + 1.0)
+    cost = jnp.where((state.protected[slot] != 0) | (left <= 0), 1.0, spare)
+    cost = jnp.where(over_budget(state), 0.5, cost)
+    return jnp.where(jnp.sum(living) <= 1, 1.0, cost).astype(_F32)
+
+
 def _pair_value(tables: Tables, state: BattleState, a, b) -> jnp.ndarray:
     actions = jnp.stack([a, b]).astype(_I32)
     hit = jnp.clip(hit_threshold(tables, state, actions), 0, 100).astype(_F32) / 100
@@ -138,8 +157,10 @@ def _pair_value(tables: Tables, state: BattleState, a, b) -> jnp.ndarray:
     ties = [empty_outcome()._replace(speed_tie=jnp.int8(tie)) for tie in (0, 1)]
     player_first = [action_order(tables, state, actions, o)[0] == 0 for o in ties]
     first = jnp.mean(jnp.stack(player_first).astype(_F32))
-    safe = 1.0 - ko_opp * (1.0 - first * ko_player)
-    return safe * (1.0 + removed)
+    risk = ko_opp * (1.0 - first * ko_player)
+    # The slot that takes the opponent's move: the incoming one for a switch.
+    slot = jnp.where(is_switch(a), a - MOVE_ACTIONS, state.active[0]).astype(_I32)
+    return (1.0 - death_cost(state, slot) * risk) * (1.0 + removed)
 
 
 @jax.jit
