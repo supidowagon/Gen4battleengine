@@ -323,8 +323,7 @@ _FLAGS = (_basic, _eval_attack, _expert)  # Roark's ai_flags = 7, in bit order (
 _ATTACKER_ABILITIES = ("Normalize", "Adaptability", "Scrappy", "Tinted Lens")
 _DEFENDER_ABILITIES = ("Levitate", "Wonder Guard", "Filter", "Solid Rock")
 _STATE_MOVE_IDS = {
-    n: switching.MOVE_IDS[n]
-    for n in ("Foresight", "Odor Sleuth", "Miracle Eye", "Roost", "Magnet Rise", "Ingrain")
+    n: switching.MOVE_IDS[n] for n in ("Miracle Eye", "Roost", "Magnet Rise", "Ingrain")
 }
 
 

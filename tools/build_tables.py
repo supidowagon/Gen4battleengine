@@ -15,6 +15,9 @@ Encodings:
 * ``type_chart_order[attacker, defender]``: row index of the pair in the decomp's
   ``sTypeMatchupMultipliers``, -1 when unlisted (neutral); a dual type's two
   multipliers apply in row order (``BattleSystem_ApplyTypeChart``).
+* ``type_chart_foresight[attacker, defender]``: 1 for the pairs listed after the 0xFE
+  separator (the Ghost immunities), which a Foresight-identified defender ignores
+  (``BattleSystem_ApplyTypeChart``, battle_lib.c:2611).
 * ``nature_mods[nature, stat]``: +1 raised, -1 lowered, 0 otherwise (HP always 0).
 * ``item_param[item]``: ``(decomp hold param, 0)`` for supported items, else zeros.
 * ``trainer_item_effect[item]``: ``ids.TrainerItemId`` of the item used from a trainer's
@@ -168,6 +171,10 @@ def build_arrays(inter: Path) -> tuple[dict[str, np.ndarray], dict]:
         if len(grid) != n_types or any(len(row) != n_types for row in grid):
             raise BuildError(f"{what} is not {n_types}x{n_types}")
 
+    chart_foresight = np.zeros((n_types, n_types), dtype=np.int64)
+    for a, d in types["foresight_immunities"]:
+        chart_foresight[a, d] = 1
+
     nature_mods = np.zeros((len(natures), 6), dtype=np.int64)
     for i, n in enumerate(natures):
         if n["up"] is not None:
@@ -208,6 +215,7 @@ def build_arrays(inter: Path) -> tuple[dict[str, np.ndarray], dict]:
         "move_flags": _arr([_move_flags(m) for m in moves], np.int16, "move flags"),
         "type_chart": _arr(chart, np.int8, "type chart"),
         "type_chart_order": _arr(chart_order, np.int16, "type chart order"),
+        "type_chart_foresight": _arr(chart_foresight, np.int8, "type chart foresight"),
         "nature_mods": _arr(nature_mods, np.int8, "nature mods"),
         "item_effect": _arr(item_ids, np.int16, "item effect"),
         "item_param": _arr(

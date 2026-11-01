@@ -158,18 +158,24 @@ def _ignorable(s: RefState, attacker: int, defender: int) -> int:
     return _active(s, defender).ability
 
 
-def _chart_rows(tables, move_type: int) -> list[tuple[int, int]]:
+def _chart_rows(tables, move_type: int, identified: bool = False) -> list[tuple[int, int]]:
     """The rows of ``sTypeMatchupMultipliers`` (lib.c:2399) for ``move_type``, in
-    table order, as (defending type, multiplier in tenths)."""
+    table order, as (defending type, multiplier in tenths). ``identified`` (Foresight)
+    drops the rows after the 0xFE separator (lib.c:2615)."""
     order = tables.type_chart_order[move_type]
-    listed = [(int(order[d]), d) for d in range(len(order)) if int(order[d]) >= 0]
+    listed = [
+        (int(order[d]), d)
+        for d in range(len(order))
+        if int(order[d]) >= 0 and not (identified and tables.type_chart_foresight[move_type, d])
+    ]
     return [(d, _t(tables, "type_chart", move_type, d)) for _, d in sorted(listed)]
 
 
-def _matchup_x40(tables, attacking_type: int, types: list[int]) -> int:
-    """``BattleSystem_TypeMatchupMultiplier`` (lib.c:3009): 40 = neutral."""
+def _matchup_x40(tables, attacking_type: int, types: list[int], identified: bool = False) -> int:
+    """``BattleSystem_TypeMatchupMultiplier`` (lib.c:3009): 40 = neutral. ``identified``
+    is for the callers that go through ``ApplyTypeChart`` (which reads Foresight)."""
     mul = 40
-    for defending, m in _chart_rows(tables, attacking_type):
+    for defending, m in _chart_rows(tables, attacking_type, identified):
         if defending == types[0]:
             mul = mul * m // 10
         if defending == types[1] and types[0] != types[1]:
@@ -344,7 +350,8 @@ def _apply_type_chart(tables, s: RefState, attacker: int, defender: int, move: i
     def_types = _active(s, defender).types
     if move_type in atk_types:  # lib.c:2592 (Adaptability is unsupported)
         damage = damage * 15 // 10
-    for defending, mul in _chart_rows(tables, move_type):  # lib.c:2611-2646
+    identified = bool(s.sides[defender].foresight)  # lib.c:2615
+    for defending, mul in _chart_rows(tables, move_type, identified):  # lib.c:2611-2646
         if defending == def_types[0] and damage:
             damage = _divide(damage * mul, 10)
         if defending == def_types[1] and def_types[0] != def_types[1] and damage:
@@ -629,6 +636,10 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
         grass = Type.GRASS in _active(s, target).types
         if target_alive and not grass and not s.sides[target].leech_seed:
             s.sides[target].leech_seed = 1
+    elif effect == EffectId.FORESIGHT and landed:
+        # effect_script_0113.s / subscript_foresight.s: an ON_HIT indirect effect on a
+        # living target, no failure check.
+        s.sides[target].foresight = 1
     elif effect == EffectId.WATER_SPORT and landed and not s.sides[side].water_sport:
         # effect_script_0210.s: fails when the user already has it.
         s.sides[side].water_sport = 1
@@ -702,7 +713,16 @@ def _hit(turn: _Turn, s: RefState, side: int, move: int, hit: int, struggling: b
         type_checked = _t(tables, "move_param", move, 1) == 1
         passes = True
         if effect == EffectId.STATUS_FOE and type_checked:
-            passes = _matchup_x40(tables, _t(tables, "move_type", move), target_mon.types) > 0
+            # Thunder Wave goes through ApplyTypeChart (bcp.c:2350), which reads Foresight.
+            passes = (
+                _matchup_x40(
+                    tables,
+                    _t(tables, "move_type", move),
+                    target_mon.types,
+                    bool(s.sides[target].foresight),
+                )
+                > 0
+            )
     else:
         passes = damage > 0
     effective = landed and passes

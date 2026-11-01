@@ -39,6 +39,7 @@ class Tables(NamedTuple):
     move_flags: jnp.ndarray  # int16[M], ids.MoveFlag bits
     type_chart: jnp.ndarray  # int8[T,T], tenths
     type_chart_order: jnp.ndarray  # int16[T,T], decomp chart row index, -1 unlisted
+    type_chart_foresight: jnp.ndarray  # int8[T,T], 1 = row after the 0xFE separator
     nature_mods: jnp.ndarray  # int8[25,6], -1/0/+1
     item_effect: jnp.ndarray  # int16[I], ids.ItemId
     item_param: jnp.ndarray  # int16[I,2]

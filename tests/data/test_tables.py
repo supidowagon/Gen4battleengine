@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 import jax.numpy as jnp
+import numpy as np
 import pytest
 
 from nuzline.engine.ids import AbilityId, EffectId, ItemId, MoveFlag, MoveTarget, Stat, Status
@@ -117,6 +118,12 @@ def test_m1a_effect_params(tables, names):
     assert _effect(t, n, "Leech Seed")[0] == E.LEECH_SEED
     assert _effect(t, n, "Fury Swipes")[0] == E.MULTI_HIT
     assert _effect(t, n, "Water Sport")[0] == E.WATER_SPORT
+    for move in ("Foresight", "Odor Sleuth"):
+        assert _effect(t, n, move)[0] == E.FORESIGHT
+    # The rows after the 0xFE separator: exactly Normal and Fighting on Ghost.
+    foresight = np.argwhere(np.asarray(t.type_chart_foresight))
+    pairs = {(n.type_names[a], n.type_names[d]) for a, d in foresight}
+    assert pairs == {("NORMAL", "GHOST"), ("FIGHTING", "GHOST")}
     for move in ("Quick Attack", "Mach Punch"):
         assert _effect(t, n, move)[0] == E.PLAIN
         assert int(t.move_priority[n.move(move)]) == 1

@@ -116,6 +116,11 @@ def _hit_threshold(tables: Tables, state: BattleState, actions, side) -> jnp.nda
     eva = jnp.where(d_ability == AbilityId.SIMPLE, eva * 2, eva)
     acc = jnp.where(d_ability == AbilityId.UNAWARE, 0, acc)
     eva = jnp.where(a_ability == AbilityId.UNAWARE, 0, eva)
+    # MON_IS_IDENTIFIED(defender) && evaStages < 0 (:2888): a Foresight-identified
+    # defender's positive evasion is ignored (evaStages = 6 - boost, so eva = -boost).
+    # A defender that switches in this turn is the fresh Pokemon, not identified.
+    identified = ~target_switches & (state.foresight[target] != 0)
+    eva = jnp.where(identified & (eva < 0), 0, eva)
     total = jnp.clip(6 + eva + acc, 0, 12)
     rate = accuracy * _ACC_NUM[total] // _ACC_DEN[total]
     rate = jnp.where(state.weather == Weather.FOG, rate * 6 // 10, rate)  # deep fog

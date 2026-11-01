@@ -46,6 +46,7 @@ class EffectId(IntEnum):
     MULTI_HIT = 17
     WATER_SPORT = 18
     RECOIL = 19
+    FORESIGHT = 20
 
 
 class AbilityId(IntEnum):

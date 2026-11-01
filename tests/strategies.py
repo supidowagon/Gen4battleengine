@@ -87,6 +87,7 @@ SHARED_MOVES = (
     "Fury Swipes",
     "Thunder Wave",
     "Stun Spore",
+    "Foresight",
 )
 
 
@@ -192,8 +193,8 @@ def _party(draw, tables: Tables, names: Names) -> tuple[list[PokemonSpec], int]:
 def supported_state(draw, tables: Tables, names: Names) -> BattleState:
     """A mid-battle state: 1-6 Pokemon per side (``supported_pokemon``), any active
     slot, random PP, status counters, stat stages, confusion, Taunt, Bind, Leech Seed,
-    Water Sport, Stealth Rock, screens, Tailwind, Trick Room, Mud Sport, weather, the
-    turn, each active's ``fake_out_turn`` (0 to ``turn + 1``), ``move_hit`` (none or
+    Water Sport, Foresight, Stealth Rock, screens, Tailwind, Trick Room, Mud Sport, weather,
+    the turn, each active's ``fake_out_turn`` (0 to ``turn + 1``), ``move_hit`` (none or
     one of the foe's active's moves) and ``last_move`` (none, one of its own moves or
     Struggle), and the opponent's bag (a size of 0-4 in
     ``trainer_item_count``, ``M1_BAG_ITEMS`` in each slot below it, gaps allowed as
@@ -223,6 +224,7 @@ def supported_state(draw, tables: Tables, names: Names) -> BattleState:
         a["leech_seed"][side] = draw(st.integers(0, 1))
         a["water_sport"][side] = draw(st.integers(0, 1))
         a["mud_sport"][side] = draw(st.integers(0, 1))
+        a["foresight"][side] = draw(st.integers(0, 1))
         a["stealth_rock"][side] = draw(st.integers(0, 1))
         a["reflect"][side] = draw(st.integers(0, _TIMER_MAX))
         a["light_screen"][side] = draw(st.integers(0, _TIMER_MAX))

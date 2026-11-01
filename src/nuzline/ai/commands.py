@@ -230,7 +230,7 @@ def effectiveness_class(tables: Tables, state: BattleState, move) -> jnp.ndarray
     through ``BattleSystem_ApplyTypeChart`` (STAB x15/10, then each chart entry with
     ``BattleSystem_Divide``), mapped 120 -> 80, 240 -> 160, 30 -> 20, 15 -> 10, and 0 when
     the status mask has an immunity bit. Normalize, Adaptability, Scrappy, Tinted Lens,
-    Expert Belt, Levitate, Wonder Guard, Filter, Solid Rock, Iron Ball, Foresight,
+    Expert Belt, Levitate, Wonder Guard, Filter, Solid Rock, Iron Ball,
     Miracle Eye, Roost, Magnet Rise and Ingrain change this value and are refused
     (``policy.ai_refusals``)."""
     move = jnp.asarray(move, _I32)
@@ -247,7 +247,8 @@ def effectiveness_class(tables: Tables, state: BattleState, move) -> jnp.ndarray
         [TypeMulti.DOUBLE, TypeMulti.QUADRUPLE, TypeMulti.HALF, TypeMulti.QUARTER],
         value,
     )
-    immune = (type_chart_flags(tables, move, d_types, state.gravity) & INEFFECTIVE) != 0
+    flags = type_chart_flags(tables, move, d_types, state.gravity, state.foresight[0] != 0)
+    immune = (flags & INEFFECTIVE) != 0
     # Struggle: ApplyTypeChart returns 40 unchanged and sets no bit (battle_lib.c:2573).
     return jnp.where(immune, TypeMulti.IMMUNE, mapped).astype(_I32)
 

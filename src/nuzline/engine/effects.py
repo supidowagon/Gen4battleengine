@@ -53,6 +53,10 @@ many are real). Decomp sources:
   targets are immune. The end-of-turn drain is in ``step``.
 * Water Sport: ``effect_script_0210.s`` sets the user's flag (fails if set);
   ``damage.py`` halves Fire power while any active battler has it.
+* Foresight, Odor Sleuth: ``effect_script_0113.s`` / ``subscript_foresight.s`` set
+  ``foresight`` on the defender whenever the move lands on a living target (no
+  failure check). ``damage.py`` skips the Ghost immunities for it and ``outcome.py``
+  ignores the defender's positive evasion.
 * Pursuit is a plain hit here; its pre-switch hit at double power is in ``step``.
 * Static / Poison Point: ``BattleSystem_TriggerAbilityOnHit`` (battle_lib.c:4200),
   run per hit after the secondary effect (``ONE_HIT_TRIGGER_ABILITY`` /
@@ -324,6 +328,14 @@ def _water_sport(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     return _set(state, "water_sport", h.side, 1, cond)
 
 
+def _foresight(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    """Foresight, Odor Sleuth (``effect_script_0113.s``: an ``ON_HIT`` indirect effect,
+    ``subscript_foresight.s``): the defender is identified whenever the move lands on a
+    living target; there is no failure check."""
+    cond = (h.effect == _E.FORESIGHT) & h.landed
+    return _set(state, "foresight", h.target_side, 1, cond)
+
+
 def _set_status(state: BattleState, side, slot, status, cond) -> BattleState:
     """``side``'s party ``slot`` gets ``status`` (counter 0) where ``cond``."""
     state = _set(state, "status", (side, slot), status, cond)
@@ -448,7 +460,12 @@ def apply_move_effect(
     is_status = tables.move_category[move] == STATUS
     # A type-checked status move (Thunder Wave) fails on a 0x matchup.
     type_ok = (param[1] == 0) | (
-        effectiveness(tables, tables.move_type[move].astype(_I32), state.types[target_side, target])
+        effectiveness(
+            tables,
+            tables.move_type[move].astype(_I32),
+            state.types[target_side, target],
+            state.foresight[target_side] != 0,
+        )
         > 0
     )
     passes = jnp.where(is_status, (effect != _E.STATUS_FOE) | type_ok, damage > 0)
@@ -491,6 +508,7 @@ def apply_move_effect(
         _confuse_foe,
         _leech_seed,
         _water_sport,
+        _foresight,
     ):
         state = fn(tables, state, h, outcome)
     state = _struggle_recoil(state, h, jnp.asarray(struggling, jnp.bool_))

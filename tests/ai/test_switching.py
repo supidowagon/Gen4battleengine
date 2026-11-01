@@ -196,7 +196,7 @@ def test_too_many_sites_are_refused(tables, names):
 @pytest.mark.parametrize(
     ("change", "missing"),
     [
-        ("player_move", "Foresight"),
+        ("player_move", "Miracle Eye"),
         ("opp_move", "Hidden Power"),
         ("item", "Iron Ball"),
         ("ability", "Levitate"),
@@ -206,7 +206,7 @@ def test_too_many_sites_are_refused(tables, names):
 def test_unimplemented_modifiers_are_refused(tables, names, change, missing):
     s = roark_state(tables, names)
     if change == "player_move":
-        s = s._replace(moves=s.moves.at[0, 3, 1].set(names.move("Foresight")))
+        s = s._replace(moves=s.moves.at[0, 3, 1].set(names.move(missing)))
     elif change == "opp_move":
         s = s._replace(moves=s.moves.at[1, 2, 3].set(names.move("Hidden Power")))
     elif change == "item":

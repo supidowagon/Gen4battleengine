@@ -99,6 +99,9 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     # itself lets a frozen user move and thaw (battle_controller_player.c:2481, :2728),
     # flagged by move_param[m, 2] = 1. RECOIL_BURN_HIT (Flare Blitz, 254) also has a
     # third recoil and stays unsupported.
+    # Foresight, Odor Sleuth: effect_script_0113.s, an on-hit indirect effect
+    # (subscript_foresight.s sets VOLATILE_CONDITION_FORESIGHT on the defender).
+    113: ("BATTLE_EFFECT_FORESIGHT", _E.FORESIGHT, (0, 0, 0)),
     125: ("BATTLE_EFFECT_THAW_AND_BURN_HIT", _E.SECONDARY_STATUS, (Status.BURN, 0, 1)),
     128: ("BATTLE_EFFECT_HIT_BEFORE_SWITCH", _E.PURSUIT, (0, 0, 0)),
     138: ("BATTLE_EFFECT_RAISE_DEF_HIT", _E.SECONDARY_STAT_SELF, (_DEF, 1, 0)),

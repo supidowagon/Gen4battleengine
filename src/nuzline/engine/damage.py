@@ -66,12 +66,24 @@ def simple_stage(stage: jnp.ndarray) -> jnp.ndarray:
     return jnp.clip(stage * 2, -6, 6)
 
 
-def effectiveness(tables: Tables, move_type, def_types) -> jnp.ndarray:
+def chart_entry(tables: Tables, move_type, def_type, identified=False) -> jnp.ndarray:
+    """``int32`` chart entry in tenths. The rows after the 0xFE separator (the Ghost
+    immunities) are skipped for an ``identified`` defender (Foresight, battle_lib.c:2611),
+    i.e. count as neutral."""
+    mul = _i32(tables.type_chart[move_type, def_type])
+    skipped = jnp.asarray(identified, jnp.bool_) & (
+        tables.type_chart_foresight[move_type, def_type] != 0
+    )
+    return jnp.where(skipped, 10, mul)
+
+
+def effectiveness(tables: Tables, move_type, def_types, identified=False) -> jnp.ndarray:
     """Product of the two chart entries in tenths (neutral ``100``, immune ``0``).
-    Type 2 counts only when it differs from type 1 (battle_lib.c:2635)."""
+    Type 2 counts only when it differs from type 1 (battle_lib.c:2635). ``identified``
+    is the defender's Foresight flag."""
     t1, t2 = _i32(def_types[0]), _i32(def_types[1])
-    e1 = _i32(tables.type_chart[move_type, t1])
-    e2 = jnp.where(t2 != t1, _i32(tables.type_chart[move_type, t2]), 10)
+    e1 = chart_entry(tables, move_type, t1, identified)
+    e2 = jnp.where(t2 != t1, chart_entry(tables, move_type, t2, identified), 10)
     return e1 * e2
 
 
@@ -240,8 +252,9 @@ def _finish(
     # row order; type 2 is skipped when it equals type 1 (:2635). Unlisted pairs
     # are neutral (x10/10 leaves damage unchanged), so their order is irrelevant.
     t1, t2 = d_types[0], d_types[1]
-    e1 = _i32(tables.type_chart[move_type, t1])
-    e2 = jnp.where(t2 != t1, _i32(tables.type_chart[move_type, t2]), 10)
+    identified = s.foresight[def_side] != 0  # :2615 the Foresight batch break
+    e1 = chart_entry(tables, move_type, t1, identified)
+    e2 = jnp.where(t2 != t1, chart_entry(tables, move_type, t2, identified), 10)
     t2_first = tables.type_chart_order[move_type, t2] < tables.type_chart_order[move_type, t1]
     first, second = jnp.where(t2_first, e2, e1), jnp.where(t2_first, e1, e2)
     damage = divide(divide(damage * first, 10) * second, 10)
