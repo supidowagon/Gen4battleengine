@@ -102,6 +102,12 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     # Foresight, Odor Sleuth: effect_script_0113.s, an on-hit indirect effect
     # (subscript_foresight.s sets VOLATILE_CONDITION_FORESIGHT on the defender).
     113: ("BATTLE_EFFECT_FORESIGHT", _E.FORESIGHT, (0, 0, 0)),
+    # Night Shade, Seismic Toss: effect_script_0087.s, damage = the attacker's level.
+    87: ("BATTLE_EFFECT_LEVEL_DAMAGE_FLAT", _E.LEVEL_DAMAGE, (0, 0, 0)),
+    # Hidden Power: effect_script_0135.s CalcHiddenPowerParams (type and power from IVs).
+    135: ("BATTLE_EFFECT_RANDOM_POWER_BASED_ON_IVS", _E.HIDDEN_POWER, (0, 0, 0)),
+    # Magnitude: the decomp's name is PSYWAVE but effect_script_0126.s is Magnitude's.
+    126: ("BATTLE_EFFECT_PSYWAVE", _E.MAGNITUDE, (0, 0, 0)),
     125: ("BATTLE_EFFECT_THAW_AND_BURN_HIT", _E.SECONDARY_STATUS, (Status.BURN, 0, 1)),
     128: ("BATTLE_EFFECT_HIT_BEFORE_SWITCH", _E.PURSUIT, (0, 0, 0)),
     138: ("BATTLE_EFFECT_RAISE_DEF_HIT", _E.SECONDARY_STAT_SELF, (_DEF, 1, 0)),

@@ -41,8 +41,11 @@ of the turn:
   (step.py:663-673): each side's possible end speeds cover every Speed stage when a
   stage change is possible this turn, paralysis when it can be inflicted, and the
   neutral speed of a fainted battler (``_faint_check`` resets stages and status).
-* ``flinch_item``, ``quick_claw``: never read. ``magnitude``, ``shed_skin``: not read
-  yet (no mover or ability uses them), so never relevant.
+* ``magnitude[s]``: ``s`` uses a ``MAGNITUDE`` move (``BtlCmd_CalcMagnitudePower``).
+  ``crit``/``roll`` are not relevant for ``LEVEL_DAMAGE`` (Night Shade deals its user's
+  level with no crit or roll, ``damage.fixed_damage``).
+* ``flinch_item``, ``quick_claw``: never read. ``shed_skin``: not read yet (no
+  ability uses it), so never relevant.
 * Nothing is relevant once the battle is over (``step`` returns the state, step.py:700).
 """
 
@@ -184,6 +187,7 @@ def outcome_laws(tables: Tables, state: BattleState, actions) -> OutcomeLaws:
     foe_move = moves[::-1]
     chance = tables.move_effect_chance[moves].astype(_I32)
     damaging = (tables.move_category[moves] != STATUS) & (tables.move_power[moves] != 0)
+    rolled = damaging & (effect != _E.LEVEL_DAMAGE)  # LEVEL_DAMAGE: no crit, no roll
     contact = (tables.move_flags[moves] & MoveFlag.CONTACT) != 0
     multi = effect == _E.MULTI_HIT
     status = state.status[sides, state.active]
@@ -191,7 +195,7 @@ def outcome_laws(tables: Tables, state: BattleState, actions) -> OutcomeLaws:
     hit_index = jnp.arange(MAX_HITS)[None, :]
     lands = uses_move[:, None] & ((hit_index == 0) | multi[:, None])  # [2,5]
     hit = uses_move[:, None] & (tables.move_accuracy[moves] != 0)[:, None] & (hit_index == 0)
-    crit = lands & damaging[:, None]
+    crit = lands & rolled[:, None]
     confusable = uses_move & (
         (state.confusion >= 2) | (foe_moves & (tables.move_effect[foe_move] == _E.CONFUSE_FOE))
     )
@@ -256,7 +260,7 @@ def outcome_laws(tables: Tables, state: BattleState, actions) -> OutcomeLaws:
         flinch_item=never,
         quick_claw=never,
         end_speed_tie=end_speed_tie,
-        magnitude=never,  # read by Magnitude (a later task)
+        magnitude=uses_move & (effect == _E.MAGNITUDE),
         shed_skin=never,  # read by Shed Skin (a later task)
     )
     kind = jnp.where(

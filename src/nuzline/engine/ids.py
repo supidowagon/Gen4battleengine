@@ -19,7 +19,9 @@ class EffectId(IntEnum):
       ``BATTLE_EFFECT_THAW_AND_BURN_HIT`` (Flame Wheel, Sacred Fire), which a frozen
       user can use and which thaws it, else 0
     * ``DRAIN``, ``RECOIL``: ``(percent of damage dealt, 0, 0)``
-    * everything else: zeros.
+    * everything else: zeros. ``LEVEL_DAMAGE`` (Night Shade, Seismic Toss) deals the user's
+      level; ``HIDDEN_POWER`` and ``MAGNITUDE`` take their type and power from the
+      battler and ``Outcome.magnitude`` (``engine/damage.py``).
 
     The proc chance of a ``SECONDARY_*`` or ``FLINCH`` effect is the move's own
     ``move_effect_chance``; a ``SECONDARY_*`` move with chance 0 applies its
@@ -47,6 +49,9 @@ class EffectId(IntEnum):
     WATER_SPORT = 18
     RECOIL = 19
     FORESIGHT = 20
+    LEVEL_DAMAGE = 21
+    HIDDEN_POWER = 22
+    MAGNITUDE = 23
 
 
 class AbilityId(IntEnum):

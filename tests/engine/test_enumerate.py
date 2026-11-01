@@ -234,6 +234,41 @@ def test_matches_sampled_frequencies(tables, names, case, player, opp):
     check_frequencies(expected, sampled(tables, s, acts, n), n)
 
 
+def test_magnitude_law_exact(tables, names):
+    s = roark_state(
+        tables, names, player_species="Geodude", player_moves=("Magnitude",), opp_moves=("Leer",)
+    )
+    acts = A("Magnitude", "Leer", s, names)
+    laws = laws_of(tables, s, acts)
+    assert laws.relevant.magnitude.tolist() == [True, False]
+    outcomes, probs = enumerate_outcomes(laws)
+    column = np.asarray(outcomes.magnitude)[:, 0]
+    expected = dict(zip(range(4, 11), (Fraction(n, 100) for n in (5, 10, 20, 30, 20, 10, 5)),
+                        strict=True))  # fmt: skip
+    assert set(column.tolist()) == set(expected)
+    for level, p in expected.items():
+        assert math.fsum(probs[column == level]) == float(p), level
+    # The foe's (irrelevant) element keeps its empty value.
+    assert (np.asarray(outcomes.magnitude)[:, 1] == 4).all()
+    # Magnitude is an ordinary damaging move: crit and roll are read.
+    assert bool(laws.relevant.crit[0, 0]) and bool(laws.relevant.roll[0, 0])
+
+
+def test_night_shade_has_no_crit_or_roll(tables, names):
+    s = roark_state(
+        tables, names, player_species="Spinarak", player_moves=("Night Shade",), opp_moves=("Leer",)
+    )
+    acts = A("Night Shade", "Leer", s, names)
+    laws = laws_of(tables, s, acts)
+    assert not laws.relevant.crit[0].any() and not laws.relevant.roll[0].any()
+    assert not laws.relevant.magnitude.any()
+    assert bool(laws.relevant.hit[0, 0])
+    outcomes, probs = enumerate_outcomes(laws)
+    assert (np.asarray(outcomes.crit)[:, 0] == 0).all()
+    assert (np.asarray(outcomes.roll)[:, 0] == 15).all()
+    assert abs(math.fsum(probs) - 1) < 1e-12
+
+
 # --- generated cases ---------------------------------------------------------------
 
 
@@ -275,6 +310,9 @@ def decomp_law(tables, state, actions, name: str, index: tuple) -> dict[int, Fra
         return coin(Fraction(1, 4))
     if name == "thaw":
         return coin(Fraction(1, 5))
+    if name == "magnitude":  # BtlCmd_CalcMagnitude (battle_script.c:5820-5852)
+        return dict(zip(range(4, 11), (Fraction(n, 100) for n in (5, 10, 20, 30, 20, 10, 5)),
+                        strict=True))  # fmt: skip
     return {0: Fraction(1)}  # flinch_item, quick_claw
 
 

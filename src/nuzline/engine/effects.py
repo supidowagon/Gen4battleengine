@@ -53,6 +53,9 @@ many are real). Decomp sources:
   targets are immune. The end-of-turn drain is in ``step``.
 * Water Sport: ``effect_script_0210.s`` sets the user's flag (fails if set);
   ``damage.py`` halves Fire power while any active battler has it.
+* Night Shade, Seismic Toss (``LEVEL_DAMAGE``), Hidden Power, Magnitude: damage and type
+  come from ``damage.py`` (``fixed_damage``, ``hidden_power``, ``MAGNITUDE_POWER``); no
+  effect function runs for them.
 * Foresight, Odor Sleuth: ``effect_script_0113.s`` / ``subscript_foresight.s`` set
   ``foresight`` on the defender whenever the move lands on a living target (no
   failure check). ``damage.py`` skips the Ghost immunities for it and ``outcome.py``
@@ -86,7 +89,7 @@ from typing import NamedTuple
 import jax.numpy as jnp
 
 from nuzline.data.tables import Tables
-from nuzline.engine.damage import STATUS, damage_for_roll, effectiveness
+from nuzline.engine.damage import STATUS, damage_for_roll, effectiveness, move_type_of
 from nuzline.engine.ids import (
     AbilityId,
     EffectId,
@@ -380,7 +383,7 @@ def _contact_ability(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
 def _thaw_target(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     cond = (
         (state.status[h.target_side, h.target] == Status.FREEZE)
-        & (tables.move_type[h.move] == Type.FIRE)
+        & (move_type_of(tables, state, h.side, h.move) == Type.FIRE)
         & (h.dealt > 0)
         & _alive(state, h.target_side, h.target)
     )
@@ -448,6 +451,7 @@ def apply_move_effect(
         outcome.crit[side, hit_index] != 0,
         outcome.roll[side, hit_index],
         power_mul,
+        outcome.magnitude[side].astype(_I32),
     )
     target_hp = state.hp[target_side, target].astype(_I32)
     dealt = jnp.where(landed & ~targets_user(tables, move), jnp.minimum(damage, target_hp), 0)
@@ -462,7 +466,7 @@ def apply_move_effect(
     type_ok = (param[1] == 0) | (
         effectiveness(
             tables,
-            tables.move_type[move].astype(_I32),
+            move_type_of(tables, state, side, move),
             state.types[target_side, target],
             state.foresight[target_side] != 0,
         )

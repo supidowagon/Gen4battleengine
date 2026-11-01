@@ -274,7 +274,7 @@ def _send_out(tables: Tables, state: BattleState, side, slot) -> BattleState:
 def _empty_events() -> dict:
     """The turn's events before any action ran: every per-side field 0."""
     side = jnp.zeros((2,), _I32)
-    events = {name: side for name in ("act_kind", "act_id", "shown", *EVENT_FLAGS)}
+    events = {name: side for name in ("act_kind", "act_id", "shown", "magnitude", *EVENT_FLAGS)}
     events["crit"] = jnp.zeros((2, MAX_HITS), _I32)
     return events
 
@@ -303,7 +303,12 @@ def _hit_events(before: BattleState, after: BattleState, side, landed, crit) -> 
     thaw = (before.status[foe, target] == Status.FREEZE) & (
         after.status[foe, target] == Status.NONE
     )
-    return {"crit": landed & dealt & crit, "contact": contact, "thaw": thaw}
+    return {
+        "crit": landed & dealt & crit,
+        "contact": contact,
+        "thaw": thaw,
+        "dealt": landed & dealt,
+    }
 
 
 def _use_move(
@@ -413,7 +418,7 @@ def _use_move(
     # (unrolled, it dominated trace and compile time). It also counts the hits that
     # landed ("Hit N times", battle_controller_player.c:3777-3812) and their crits.
     def one_hit(hit_index, carry):
-        state, hits, crits, contact, thaw = carry
+        state, hits, crits, contact, thaw, dealt = carry
         landed = (
             connected
             & (hit_index < n_hits)
@@ -430,7 +435,10 @@ def _use_move(
             target_moved=target_moved,
             struggling=struggling,
         )
-        crit = outcome.crit[side, hit_index] != 0
+        # A LEVEL_DAMAGE move never runs CalcCrit (effect_script_0087.s): no crit message.
+        crit = (outcome.crit[side, hit_index] != 0) & (
+            tables.move_effect[move] != EffectId.LEVEL_DAMAGE
+        )
         seen = _hit_events(state, hit_state, side, landed, crit)
         # BattleControllerPlayer_AfterMoveEffects (battle_controller_player.c:3638) runs
         # after every hit of a move that connected: AFTER_MOVE_EFFECT_ATTACKER_ITEM
@@ -447,10 +455,18 @@ def _use_move(
             crits.at[hit_index].set(seen["crit"]),
             contact | seen["contact"],
             thaw | seen["thaw"],
+            dealt | seen["dealt"],
         )
 
-    init = (state, _I32(0), jnp.zeros((MAX_HITS,), bool), jnp.bool_(False), jnp.bool_(False))
-    state, hits, crits, contact, thaw = jax.lax.fori_loop(0, MAX_HITS, one_hit, init)
+    init = (
+        state,
+        _I32(0),
+        jnp.zeros((MAX_HITS,), bool),
+        jnp.bool_(False),
+        jnp.bool_(False),
+        jnp.bool_(False),
+    )
+    state, hits, crits, contact, thaw, dealt = jax.lax.fori_loop(0, MAX_HITS, one_hit, init)
     # BattleControllerPlayer_UpdateFlagsWhenHit (battle_controller_player.c:4499-4507),
     # reached on every path once the move was chosen (UPDATE_MOVE_BUFFERS, :3956, or
     # LOOP_SPREAD_MOVES, :3837): moveHit[defender] = the move when the attack message
@@ -471,6 +487,12 @@ def _use_move(
         "missed": can_act & has_target & ~hit,
         "no_target": can_act & ~has_target,
         "hits": hits,
+        # subscript_magnitude.s prints "Magnitude N!" through the ON_HIT primary effect
+        # (BattleSystem_TriggerPrimaryEffect, battle_lib.c:1481), not run for a move with
+        # MOVE_STATUS_DID_NOT_HIT (an immune target): shown when the hit dealt damage.
+        "magnitude": jnp.where(
+            dealt & (tables.move_effect[move] == EffectId.MAGNITUDE), outcome.magnitude[side], 0
+        ),
         "crit": crits,
         "full_para": full_para,
         "flinched": flinched,

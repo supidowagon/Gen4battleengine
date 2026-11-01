@@ -662,3 +662,34 @@ def test_step_events_match_step_and_observe(tables, names, data):
     outcome = _np(data.draw(any_outcome()))
     out = turns(tables, _stack([s]), acts[None], _stack([outcome]))
     check_events_path(out[4], out[5])
+
+
+def test_magnitude_level_is_observed_only_when_shown(tables, names):
+    """ "Magnitude N!" (subscript_magnitude.s) tells the player the level: two draws that
+    differ only in it are different observations when the hit lands, and the same one when
+    the target is immune (no message, no damage)."""
+
+    def observe_levels(opp):
+        s = roark_state(
+            tables,
+            names,
+            player_species="Geodude",
+            player_moves=("Magnitude",),
+            opp_species=opp,
+            opp_moves=("Leer",),
+        )
+        acts = A("Magnitude", "Leer", s, names)
+        out = []
+        for level in (4, 10):
+            o = empty_outcome()._replace(magnitude=jnp.full((2,), level, jnp.int8))
+            after = step(tables, s, acts, o)
+            out.append(np.asarray(observe(tables, s, acts, o, after)))
+        return out
+
+    low, high = observe_levels("Bidoof")
+    assert field(low, "magnitude").tolist() == [4, 0] and field(high, "magnitude").tolist() == [
+        10,
+        0,
+    ]
+    low, high = observe_levels("Staravia")
+    assert (low == high).all()

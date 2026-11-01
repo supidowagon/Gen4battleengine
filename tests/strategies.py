@@ -88,6 +88,10 @@ SHARED_MOVES = (
     "Thunder Wave",
     "Stun Spore",
     "Foresight",
+    "Night Shade",
+    "Seismic Toss",
+    "Hidden Power",
+    "Magnitude",
 )
 
 
@@ -317,6 +321,7 @@ LAW_MOVES = (
     "Rock Polish",
     "Razor Leaf",
     "Tackle",
+    "Magnitude",
 )
 # Abilities the outcome relevance reads (contact procs, Steadfast, Simple's Speed).
 LAW_ABILITIES = (AbilityId.STATIC, AbilityId.POISON_POINT, AbilityId.STEADFAST, AbilityId.SIMPLE)

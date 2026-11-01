@@ -109,6 +109,45 @@ def _t(tables, name: str, *index) -> int:
     return int(getattr(tables, name)[index])
 
 
+def _hidden_power(ivs: list[int]) -> tuple[int, int]:
+    """``(type, power)`` of Hidden Power (``BtlCmd_CalcHiddenPowerParams``,
+    script.c:6007-6033; ``ivs`` in ``ids.Stat`` order, the decomp's bit order is HP,
+    Atk, Def, Spe, SpA, SpD)."""
+    hp, atk, dfn = ivs[Stat.HP], ivs[Stat.ATK], ivs[Stat.DEF]
+    spe, spa, spd = ivs[Stat.SPE], ivs[Stat.SPA], ivs[Stat.SPD]
+    power = ((hp & 2) >> 1) | (atk & 2) | ((dfn & 2) << 1)
+    power |= ((spe & 2) << 2) | ((spa & 2) << 3) | ((spd & 2) << 4)
+    kind = (hp & 1) | ((atk & 1) << 1) | ((dfn & 1) << 2)
+    kind |= ((spe & 1) << 3) | ((spa & 1) << 4) | ((spd & 1) << 5)
+    power = power * 40 // 63 + 30
+    kind = kind * 15 // 63 + 1
+    if kind >= Type.MYSTERY:
+        kind += 1
+    return kind, power
+
+
+def _move_type(tables, s: RefState, side: int, move: int) -> int:
+    """The type of ``move`` as ``side``'s active Pokemon uses it (lib.c:6682; Hidden
+    Power's from its IVs, script.c:6028)."""
+    if _t(tables, "move_effect", move) == EffectId.HIDDEN_POWER:
+        return _hidden_power(_active(s, side).ivs)[0]
+    return _t(tables, "move_type", move)
+
+
+# BtlCmd_CalcMagnitudePower (script.c:5820-5852), indexed by level - 4.
+MAGNITUDE_POWER = [10, 30, 50, 70, 90, 110, 150]
+
+
+def _fixed_damage(tables, s: RefState, attacker: int, move: int) -> int:
+    """``effect_script_0087.s``: the attacker's level, with ``SYSCTL_IGNORE_TYPE_CHECKS``
+    (lib.c:7544): no multiplier, but the chart's immunity still fails the move."""
+    foe = _active(s, 1 - attacker)
+    kind = _move_type(tables, s, attacker, move)
+    if _matchup_x40(tables, kind, foe.types, bool(s.sides[1 - attacker].foresight)) == 0:
+        return 0
+    return _active(s, attacker).level
+
+
 def _divide(dividend: int, divisor: int) -> int:
     """``BattleSystem_Divide`` (lib.c:3599) for a non-negative dividend: 0 stays 0,
     otherwise at least 1."""
@@ -229,6 +268,7 @@ def _calc_move_damage(
     *,
     power_mul: int = 10,
     in_power: int = 0,
+    magnitude: int = 4,
     side_conditions: bool = True,
     field_conditions: bool = True,
 ) -> int:
@@ -248,7 +288,12 @@ def _calc_move_damage(
 
     # lib.c:6674: the input power if given, else the move's.
     power = in_power if in_power else _t(tables, "move_power", move)
-    move_type = _t(tables, "move_type", move)  # lib.c:6680 (Normalize is unsupported)
+    effect = _t(tables, "move_effect", move)
+    if not in_power and effect == EffectId.HIDDEN_POWER:  # script.c:6007
+        power = _hidden_power(atk.ivs)[1]
+    elif not in_power and effect == EffectId.MAGNITUDE:  # script.c:5820
+        power = MAGNITUDE_POWER[magnitude - 4]
+    move_type = _move_type(tables, s, attacker, move)  # lib.c:6680 (Normalize is unsupported)
     power = power * power_mul // 10  # lib.c:6688
     move_class = _t(tables, "move_category", move)
 
@@ -345,7 +390,7 @@ def _apply_type_chart(tables, s: RefState, attacker: int, defender: int, move: i
     ``ApplyTypeMultiplier`` (lib.c:7542). Struggle returns early (lib.c:2573)."""
     if move == MOVE_STRUGGLE:
         return damage
-    move_type = _t(tables, "move_type", move)
+    move_type = _move_type(tables, s, attacker, move)
     atk_types = _active(s, attacker).types
     def_types = _active(s, defender).types
     if move_type in atk_types:  # lib.c:2592 (Adaptability is unsupported)
@@ -360,8 +405,9 @@ def _apply_type_chart(tables, s: RefState, attacker: int, defender: int, move: i
 
 
 def _move_damage(
-    tables, s: RefState, attacker: int, move: int, crit: bool, roll: int, power_mul=10
-):
+    tables, s: RefState, attacker: int, move: int, crit: bool, roll: int, power_mul=10,
+    magnitude: int = 4,
+):  # fmt: skip
     """One hit's damage: the move script's ``CalcDamage`` and variance, then the
     controller's type chart (``TRY_MOVE_STATE_CHECK_TYPE_CHART``, bcp.c:3272). A
     status move never calculates damage; ``CheckTypeChart`` needs base power
@@ -369,7 +415,11 @@ def _move_damage(
     if _t(tables, "move_category", move) == STATUS_CLASS or _t(tables, "move_power", move) == 0:
         return 0
     defender = 1 - attacker
-    damage = _calc_move_damage(tables, s, attacker, defender, move, crit, power_mul=power_mul)
+    if _t(tables, "move_effect", move) == EffectId.LEVEL_DAMAGE:
+        return _fixed_damage(tables, s, attacker, move)
+    damage = _calc_move_damage(
+        tables, s, attacker, defender, move, crit, power_mul=power_mul, magnitude=magnitude
+    )
     damage = _variance(damage, roll)
     return _apply_type_chart(tables, s, attacker, defender, move, damage)
 
@@ -682,7 +732,7 @@ def _thaw_target(turn: _Turn, s: RefState, side: int, move: int, dealt: int) -> 
     """``AFTER_MOVE_EFFECT_THAW_DEFENDER`` (bcp.c:3710): a living frozen defender hit
     for damage by a Fire-type move thaws."""
     mon = _active(s, 1 - side)
-    fire = _t(turn.tables, "move_type", move) == Type.FIRE
+    fire = _move_type(turn.tables, s, side, move) == Type.FIRE
     if mon.status == Status.FREEZE and mon.hp and dealt > 0 and fire:
         mon.status = Status.NONE
         mon.status_counter = 0
@@ -702,7 +752,15 @@ def _hit(turn: _Turn, s: RefState, side: int, move: int, hit: int, struggling: b
     landed = target_mon.hp > 0 or _move_target(tables, move) in DEFENDER_ALWAYS
     hits_foe = _move_target(tables, move) not in TARGETS_USER
 
-    damage = _move_damage(tables, s, side, move, o.crit[side][hit] != 0, o.roll[side][hit])
+    damage = _move_damage(
+        tables,
+        s,
+        side,
+        move,
+        o.crit[side][hit] != 0,
+        o.roll[side][hit],
+        magnitude=o.magnitude[side],
+    )
     dealt = _lose_hp(turn, s, target, damage) if (landed and hits_foe) else 0
 
     # Whether the move "worked" on the target: a damaging move dealt damage (not
@@ -717,7 +775,7 @@ def _hit(turn: _Turn, s: RefState, side: int, move: int, hit: int, struggling: b
             passes = (
                 _matchup_x40(
                     tables,
-                    _t(tables, "move_type", move),
+                    _move_type(tables, s, side, move),
                     target_mon.types,
                     bool(s.sides[target].foresight),
                 )

@@ -31,7 +31,7 @@ from __future__ import annotations
 import jax.numpy as jnp
 
 from nuzline.data.tables import Tables
-from nuzline.engine.ids import MOVE_STRUGGLE, AbilityId, Stat, Status, Type, Weather
+from nuzline.engine.ids import MOVE_STRUGGLE, AbilityId, EffectId, Stat, Status, Type, Weather
 from nuzline.engine.state import BattleState
 
 PHYSICAL, SPECIAL, STATUS = 0, 1, 2  # tables.move_category
@@ -45,9 +45,60 @@ _STAGE_DEN = jnp.array([40, 35, 30, 25, 20, 15, 10, 10, 10, 10, 10, 10, 10], jnp
 
 _I32 = jnp.int32
 
+# BtlCmd_CalcMagnitudePower (battle_script.c:5820-5852): the power of Magnitude levels 4-10.
+MAGNITUDE_POWER = jnp.array([10, 30, 50, 70, 90, 110, 150], jnp.int32)
+MAGNITUDE_MIN = 4
+
 
 def _i32(x) -> jnp.ndarray:
     return jnp.asarray(x).astype(_I32)
+
+
+def hidden_power(ivs) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """``(type, power)`` of Hidden Power for a battler with ``ivs`` (``int[6]`` in
+    ``ids.Stat`` order): ``BtlCmd_CalcHiddenPowerParams`` (battle_script.c:6007-6033).
+    The decomp's bit order is HP, Atk, Def, Spe, SpA, SpD: power from bit 1 of each IV,
+    ``* 40 / 63 + 30``; type from bit 0, ``* 15 / 63 + 1``, one more from ``TYPE_MYSTERY``
+    up. ``TrainerAI_MoveType`` (trainer_ai.c:3208-3220) computes the same type."""
+    iv = _i32(ivs)
+    hp, atk, dfn = iv[Stat.HP], iv[Stat.ATK], iv[Stat.DEF]
+    spe, spa, spd = iv[Stat.SPE], iv[Stat.SPA], iv[Stat.SPD]
+    power = ((hp & 2) >> 1) | (atk & 2) | ((dfn & 2) << 1) | ((spe & 2) << 2)
+    power = power | ((spa & 2) << 3) | ((spd & 2) << 4)
+    kind = (hp & 1) | ((atk & 1) << 1) | ((dfn & 1) << 2) | ((spe & 1) << 3)
+    kind = kind | ((spa & 1) << 4) | ((spd & 1) << 5)
+    kind = kind * 15 // 63 + 1
+    kind = jnp.where(kind >= Type.MYSTERY, kind + 1, kind)
+    return kind, power * 40 // 63 + 30
+
+
+def move_type_of(tables: Tables, state: BattleState, side, move) -> jnp.ndarray:
+    """``int32``: the type of ``move`` used by ``side``'s active Pokemon: Hidden Power's
+    IV type, else ``tables.move_type`` (battle_lib.c:6682 ``moveType``)."""
+    move = _i32(move)
+    side = _i32(side)
+    base = _i32(tables.move_type[move])
+    iv_type = hidden_power(state.ivs[side, state.active[side]])[0]
+    return jnp.where(tables.move_effect[move] == EffectId.HIDDEN_POWER, iv_type, base)
+
+
+def fixed_damage(
+    tables: Tables, state: BattleState, atk_side, move
+) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """``(is_fixed, damage)``: a ``LEVEL_DAMAGE`` move (Night Shade, Seismic Toss;
+    ``effect_script_0087.s``) deals the attacker's level with ``SYSCTL_IGNORE_TYPE_CHECKS``:
+    no crit, roll, STAB or multiplier (``ApplyTypeMultiplier``, battle_lib.c:7544), but the
+    chart's immunity bit is still set (:7551), so a type immunity (Foresight-aware) deals
+    0."""
+    atk_side = _i32(atk_side)
+    def_side = 1 - atk_side
+    is_fixed = tables.move_effect[_i32(move)] == EffectId.LEVEL_DAMAGE
+    level = _i32(state.level[atk_side, state.active[atk_side]])
+    kind = move_type_of(tables, state, atk_side, move)
+    d_types = state.types[def_side, state.active[def_side]]
+    identified = state.foresight[def_side] != 0
+    immune = effectiveness(tables, kind, d_types, identified) == 0
+    return is_fixed, jnp.where(immune, 0, level)
 
 
 def divide(x: jnp.ndarray, d: int) -> jnp.ndarray:
@@ -96,13 +147,15 @@ def _pre_random(
     *,
     power_mul=10,
     self_hit: bool = False,
+    magnitude=MAGNITUDE_MIN,
 ):
     """Damage after ``+ 2`` and the crit multiplier, before the random roll.
 
     ``power_mul`` is ``battleCtx->powerMul`` in tenths (Pursuit on a switch: 20).
     ``self_hit`` is the confusion self-hit, ``CALC_SELF_HIT(MOVE_STRUGGLE, 40)``
     (``include/battle/common.h:35``): the attacker is its own defender, power 40, and
-    no side or field conditions are passed (no screens, no weather)."""
+    no side or field conditions are passed (no screens, no weather). ``magnitude`` is
+    Magnitude's level (``Outcome.magnitude``)."""
     atk_side = _i32(atk_side)
     def_side = atk_side if self_hit else 1 - atk_side
     move = _i32(move)
@@ -111,9 +164,19 @@ def _pre_random(
 
     base_power = _i32(tables.move_power[move])
     # :6674 movePower = inPower when given (the self-hit's 40), else MOVE_DATA(move).power
-    power = jnp.asarray(CONFUSION_POWER, _I32) if self_hit else base_power
+    effect = _i32(tables.move_effect[move])
+    # CalcHiddenPowerParams (battle_script.c:6007) / CalcMagnitudePower (:5820) set movePower.
+    variable = jnp.where(
+        effect == EffectId.HIDDEN_POWER,
+        hidden_power(s.ivs[atk_side, a_slot])[1],
+        MAGNITUDE_POWER[jnp.clip(_i32(magnitude) - MAGNITUDE_MIN, 0, 6)],
+    )
+    has_variable = (effect == EffectId.HIDDEN_POWER) | (effect == EffectId.MAGNITUDE)
+    power = jnp.where(has_variable, variable, base_power)
+    power = jnp.asarray(CONFUSION_POWER, _I32) if self_hit else power
     power = power * _i32(power_mul) // 10  # :6688 movePower * powerMul / 10
-    move_type = _i32(tables.move_type[move])  # :6682 moveType = MOVE_DATA(move).type
+    # :6682 moveType = MOVE_DATA(move).type, or Hidden Power's IV type (battle_script.c:6028)
+    move_type = move_type_of(tables, s, atk_side, move)
     category = _i32(tables.move_category[move])  # :6704 moveClass
     level = _i32(s.level[atk_side, a_slot])
     a_ability = _i32(s.ability[atk_side, a_slot])
@@ -269,21 +332,35 @@ def _finish(
 
 def damage_table(tables: Tables, state: BattleState, atk_side, move, crit) -> jnp.ndarray:
     """``int32[16]``: damage of ``move`` by ``atk_side``'s active Pokemon against the
-    other side's active Pokemon for rolls 0..15 (``85 + roll`` percent)."""
+    other side's active Pokemon for rolls 0..15 (``85 + roll`` percent). A ``LEVEL_DAMAGE``
+    move has no roll: all 16 entries are ``fixed_damage``. Magnitude is taken at level 4
+    (its weakest hit; the playout heuristic's documented under-estimate)."""
     damage, move_type, category, power = _pre_random(tables, state, atk_side, move, crit)
     rolls = jnp.arange(ROLLS, dtype=_I32)
-    return _finish(tables, state, atk_side, move, damage, move_type, category, power, rolls)
+    table = _finish(tables, state, atk_side, move, damage, move_type, category, power, rolls)
+    fixed, amount = fixed_damage(tables, state, atk_side, move)
+    return jnp.where(fixed, amount, table)
 
 
 def damage_for_roll(
-    tables: Tables, state: BattleState, atk_side, move, crit, roll, power_mul=10
+    tables: Tables,
+    state: BattleState,
+    atk_side,
+    move,
+    crit,
+    roll,
+    power_mul=10,
+    magnitude=MAGNITUDE_MIN,
 ) -> jnp.ndarray:
     """``int32``: ``damage_table(...)[roll]``, the single value the engine uses.
-    ``power_mul`` (tenths) scales the move's power first (Pursuit on a switch: 20)."""
+    ``power_mul`` (tenths) scales the move's power first (Pursuit on a switch: 20);
+    ``magnitude`` is Magnitude's level."""
     damage, move_type, category, power = _pre_random(
-        tables, state, atk_side, move, crit, power_mul=power_mul
+        tables, state, atk_side, move, crit, power_mul=power_mul, magnitude=magnitude
     )
-    return _finish(tables, state, atk_side, move, damage, move_type, category, power, _i32(roll))
+    rolled = _finish(tables, state, atk_side, move, damage, move_type, category, power, _i32(roll))
+    fixed, amount = fixed_damage(tables, state, atk_side, move)
+    return jnp.where(fixed, amount, rolled)
 
 
 def calc_move_damage(

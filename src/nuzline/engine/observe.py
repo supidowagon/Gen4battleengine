@@ -34,6 +34,9 @@ Events, per side (``[side]``; 0 = player):
   earlier this turn, step.py:390), ``hits`` (hits that landed: "Hit N times",
   battle_controller_player.c:3777-3812), ``crit[side, i]`` (hit ``i`` landed, dealt
   damage and was a crit: ``subscript_critical_hit.s``, bcp.c:4547-4554).
+* ``magnitude``: the level "Magnitude N!" showed (4-10) when the side's Magnitude hit
+  and dealt damage, else 0 (``subscript_magnitude.s``: the message is a primary effect
+  that an ineffective hit does not run).
 * The status checks before a move (step.py:327-377, bcp.c:2417-2728): ``asleep``
   (stays asleep), ``woke``, ``frozen`` (stays frozen), ``thawed`` (its own thaw roll or a
   thawing move), ``flinched``, ``confused`` ("is confused"), ``snapped_out``,
@@ -129,6 +132,7 @@ _LAYOUT: tuple[tuple[str, tuple[int, ...]], ...] = (
     ("act_kind", _SIDE),
     ("act_id", _SIDE),
     ("crit", (SIDES, MAX_HITS)),
+    ("magnitude", _SIDE),
     *((name, _SIDE) for name in EVENT_FLAGS),
     ("active", _SIDE),
     ("species", _SLOT),
