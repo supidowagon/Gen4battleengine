@@ -46,8 +46,9 @@ of the turn:
   level with no crit or roll, ``damage.fixed_damage``) nor for ``BIDE`` (the unleash is
   ``2 * storedDamage``, also fixed). A locked side's move is its locked move
   (``order.selected_move``), so the masks above read it.
-* ``flinch_item``, ``quick_claw``: never read. ``shed_skin``: not read yet (no
-  ability uses it), so never relevant.
+* ``shed_skin[d]``: side ``d``'s active or incoming Pokemon has Shed Skin
+  (``step._turn_end_ability``; over-approximate: it only rolls with a status and HP).
+* ``flinch_item``, ``quick_claw``: never read.
 * Nothing is relevant once the battle is over (``step`` returns the state, step.py:700).
 """
 
@@ -269,7 +270,7 @@ def outcome_laws(tables: Tables, state: BattleState, actions) -> OutcomeLaws:
         quick_claw=never,
         end_speed_tie=end_speed_tie,
         magnitude=uses_move & (effect == _E.MAGNITUDE),
-        shed_skin=never,  # read by Shed Skin (a later task)
+        shed_skin=live & _holds(state, actions, (AbilityId.SHED_SKIN,)),
     )
     kind = jnp.where(
         effect == _E.TAUNT,

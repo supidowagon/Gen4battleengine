@@ -94,6 +94,10 @@ many are real). Decomp sources:
   ``subscript_poison.s`` as an ability side effect: Safeguard and Substitute do not
   apply, the type immunities do (``can_have_status``). Its message reveals the
   holder's ability to the AI (``hooks.reveal_ability``).
+* Insomnia (``_inflict``): a sleep move (or sleep secondary effect) on a living target
+  with Insomnia as the attacker sees it (``target_ignorable``: Mold Breaker pierces it)
+  inflicts nothing (subscript_fall_asleep.s:_055, :_202), whatever the target's other
+  status; the "stayed awake" message (:_221) reveals the ability to the AI.
 * Thaw on a Fire hit: ``AFTER_MOVE_EFFECT_THAW_DEFENDER`` (battle_controller_player.c:
   3710), after the contact ability: a frozen defender that is alive and took damage
   from a Fire-type move thaws. The user's own thaw (Flame Wheel) is in ``step``.
@@ -219,7 +223,13 @@ def can_have_status(state: BattleState, side, slot, status) -> jnp.ndarray:
 def _inflict(state: BattleState, h: _Hit, outcome: Outcome, cond) -> BattleState:
     status = h.param[0]
     cond = cond & _alive(state, h.target_side, h.target)
-    cond = cond & can_have_status(state, h.target_side, h.target, status)
+    # subscript_fall_asleep.s:_055/_202/_221: an ignorable Insomnia stops the sleep before
+    # any other check, and its "stayed awake" message tags the ability.
+    blocked = cond & (status == Status.SLEEP) & (h.target_ignorable == AbilityId.INSOMNIA)
+    from nuzline.engine.hooks import SLEEP_BLOCKED, reveal_ability  # hooks imports this module
+
+    state = reveal_ability(state, h.target_side, h.target, SLEEP_BLOCKED, blocked)
+    cond = cond & ~blocked & can_have_status(state, h.target_side, h.target, status)
     counter = jnp.where(status == Status.SLEEP, outcome.duration[h.side], 0)
     old_status = state.status[h.target_side, h.target]
     old_counter = state.status_counter[h.target_side, h.target]

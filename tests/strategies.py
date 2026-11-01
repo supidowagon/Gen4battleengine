@@ -53,6 +53,12 @@ M1_SPECIES = (
     "Cranidos",
     "Zubat",
     "Bidoof",
+    "Furret",
+    "Staravia",
+    "Spinarak",
+    "Psyduck",
+    "Venonat",
+    "Kricketot",
 )
 M1_ITEMS = ("", "Oran Berry", "Sitrus Berry")
 M1_BAG_ITEMS = ("", "Potion")  # the opponent's bag (ids.TrainerItemId)
@@ -157,7 +163,9 @@ def supported_pokemon(draw, tables: Tables, names: Names) -> PokemonSpec:
     evs = tuple(draw(st.lists(st.integers(0, 85), min_size=6, max_size=6)))
     moves = draw(st.lists(st.sampled_from(pools[species]), min_size=1, max_size=4, unique=True))
     abilities = names.species_abilities(species)
-    ability_slot = draw(st.sampled_from([i for i, a in enumerate(abilities) if a]))
+    # a slot whose ability is not implemented (Run Away, Damp, ...) is never drawn
+    supported = np.asarray(tables.species_abilities[species]) != AbilityId.UNSUPPORTED
+    ability_slot = draw(st.sampled_from([i for i, a in enumerate(abilities) if a and supported[i]]))
     item = names.item(draw(st.sampled_from(M1_ITEMS)))
     gender = draw(st.sampled_from(possible_genders(int(tables.species_gender[species]))))
     max_hp = _max_hp(tables, species, ivs, evs, level, nature)
@@ -361,7 +369,14 @@ LAW_MOVES = (
     "Disable",
 )
 # Abilities the outcome relevance reads (contact procs, Steadfast, Simple's Speed).
-LAW_ABILITIES = (AbilityId.STATIC, AbilityId.POISON_POINT, AbilityId.STEADFAST, AbilityId.SIMPLE)
+LAW_ABILITIES = (
+    AbilityId.STATIC,
+    AbilityId.POISON_POINT,
+    AbilityId.STEADFAST,
+    AbilityId.SIMPLE,
+    AbilityId.SHED_SKIN,
+    AbilityId.COMPOUNDEYES,
+)
 
 
 @st.composite

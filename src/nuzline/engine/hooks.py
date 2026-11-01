@@ -44,9 +44,11 @@ reveals nothing.
 
 Abilities handled elsewhere: Blaze, Torrent, Overgrow, Rivalry, Guts, Unaware,
 Simple and Mold Breaker in ``damage.py``; Keen Eye, Inner Focus, Rock Head,
-Static and Poison Point in ``effects.py``; Steadfast and Natural Cure in
-``step.py``. Sturdy only blocks OHKO moves in Gen 4, and none is in M1, so it has
-no hook.
+Static and Poison Point in ``effects.py``; Steadfast, Natural Cure and Shed Skin in
+``step.py``, Compoundeyes in ``outcome.py``. Cloud Nine has no behaviour: every decomp
+branch on it is a weather branch (``NO_CLOUD_NINE``, include/battle/common.h:63) and
+coverage refuses every weather but none. Sturdy only blocks OHKO moves in Gen 4, and
+none is in M1, so it has no hook.
 """
 
 from __future__ import annotations
@@ -55,14 +57,15 @@ import jax.numpy as jnp
 
 from nuzline.data.tables import Tables
 from nuzline.engine.effects import change_stage, stealth_rock_damage
-from nuzline.engine.ids import AbilityId, ItemId, Stat
+from nuzline.engine.ids import AbilityId, ItemId, Stat, Status
 from nuzline.engine.state import BattleState
 
 _I32 = jnp.int32
 
 # The phases at which a Pokemon's ability can reveal itself to the AI.
 SWITCH_IN, CONTACT_STATUS = "switch_in", "contact_status"
-# Ability -> the phase at which it shows a message tagging it, for the implemented
+SLEEP_BLOCKED, STATUS_CURE = "sleep_blocked", "status_cure"
+# Ability -> the phases at which it shows a message tagging it, for the implemented
 # abilities that ever do:
 # * Mold Breaker: SWITCH_IN_CHECK_STATE_MOLD_BREAKER (battle_lib.c:4075), a living
 #   battler that has not announced it: subscript_mold_breaker.s prints
@@ -71,16 +74,24 @@ SWITCH_IN, CONTACT_STATUS = "switch_in", "contact_status"
 #   (``effects._contact_ability``): subscript_paralyze.s:44 / subscript_poison.s:57 tag
 #   ``BTLSCR_MSG_BATTLER_TEMP``, the holder. A target that cannot take the status gets
 #   no message.
+# * Insomnia: a sleep move it blocks (subscript_fall_asleep.s:_221 prints "stayed awake
+#   because of its {1}" with ``TAG_NICKNAME_ABILITY``), and the cure of a sleep status
+#   (``RecoverStatusByAbility``, subscript_ability_forbids_status.s:6 tags
+#   ``BTLSCR_MSG_TEMP``).
+# * Shed Skin: subscript_ability_restore_status.s:8 tags the holder
+#   (``TAG_NICKNAME_ABILITY_STATUS``).
 # The others never reveal: Intimidate's "cuts" message and Keen Eye's "prevents"
 # message are built in C (``BtlCmd_ChangeStatStage``, battle_script.c:2956, :2900);
 # Inner Focus prints only against Fake Out or a direct flinch effect
 # (subscript_flinch_mon.s:26-36), and every implemented flinch is a secondary effect;
 # Blaze, Torrent, Overgrow, Rivalry, Guts, Simple, Unaware, Rock Head, Natural Cure,
-# Steadfast and Sturdy show no ability message in M1.
-REVEALS_ON = {
-    AbilityId.MOLD_BREAKER: SWITCH_IN,
-    AbilityId.STATIC: CONTACT_STATUS,
-    AbilityId.POISON_POINT: CONTACT_STATUS,
+# Steadfast, Sturdy, Cloud Nine and Compoundeyes show no ability message in M1.
+REVEALS_ON: dict[int, frozenset[str]] = {
+    AbilityId.MOLD_BREAKER: frozenset({SWITCH_IN}),
+    AbilityId.STATIC: frozenset({CONTACT_STATUS}),
+    AbilityId.POISON_POINT: frozenset({CONTACT_STATUS}),
+    AbilityId.INSOMNIA: frozenset({SLEEP_BLOCKED, STATUS_CURE}),
+    AbilityId.SHED_SKIN: frozenset({STATUS_CURE}),
 }
 
 
@@ -88,11 +99,39 @@ def reveal_ability(state: BattleState, side, slot, phase: str, cond=True) -> Bat
     """``ai_ability_known[slot] = 1`` where ``cond``, ``side`` is the player (the AI only
     tracks the player's Pokemon) and party ``slot``'s ability reveals itself at
     ``phase`` (``REVEALS_ON``)."""
-    abilities = jnp.asarray([a for a, p in REVEALS_ON.items() if p == phase], state.ability.dtype)
+    abilities = jnp.asarray([a for a, p in REVEALS_ON.items() if phase in p], state.ability.dtype)
     side = jnp.asarray(side, _I32)
     on = cond & (side == 0) & jnp.isin(state.ability[side, slot], abilities)
     known = jnp.where(on, 1, state.ai_ability_known[slot]).astype(state.ai_ability_known.dtype)
     return state._replace(ai_ability_known=state.ai_ability_known.at[slot].set(known))
+
+
+def recover_status_by_ability(state: BattleState, side, cond=True) -> BattleState:
+    """``BattleSystem_RecoverStatusByAbility`` (battle_lib.c:4378) for ``side``'s active
+    Pokemon, where ``cond``: an Insomnia holder (the only ability of the family in M1)
+    that is asleep and has HP left wakes (counter 0) and shows
+    ``subscript_ability_forbids_status.s``, whose message tags its ability. The decomp
+    runs it for the attacker then the defender at each move end
+    (``BattleControllerPlayer_MoveEnd``, battle_controller_player.c:3965-3967) and for
+    every battler on a switch-in (``SWITCH_IN_CHECK_STATE_FORBIDDEN_STATUS``,
+    battle_lib.c:4135-4145)."""
+    side = jnp.asarray(side, _I32)
+    mon = state.active[side]
+    woke = (
+        cond
+        & (state.ability[side, mon] == AbilityId.INSOMNIA)
+        & (state.status[side, mon] == Status.SLEEP)
+        & (state.hp[side, mon] > 0)
+    )
+    state = state._replace(
+        status=state.status.at[side, mon].set(
+            jnp.where(woke, Status.NONE, state.status[side, mon]).astype(state.status.dtype)
+        ),
+        status_counter=state.status_counter.at[side, mon].set(
+            jnp.where(woke, 0, state.status_counter[side, mon]).astype(state.status_counter.dtype)
+        ),
+    )
+    return reveal_ability(state, side, mon, STATUS_CURE, woke)
 
 
 def after_damage_items(tables: Tables, state: BattleState, side, cond=True) -> BattleState:
@@ -171,7 +210,8 @@ def _intimidate(state: BattleState, side) -> BattleState:
 
 def on_switch_in(tables: Tables, state: BattleState, side) -> BattleState:
     """``side``'s active Pokemon has just entered: Stealth Rock, Intimidate, a living
-    newcomer's switch-in announcement (``reveal_ability``, ``SWITCH_IN``), then the
+    newcomer's switch-in announcement (``reveal_ability``, ``SWITCH_IN``), the
+    forbidden-status check (``recover_status_by_ability``, battle_lib.c:4135), then the
     held-item check of both active Pokemon (``SWITCH_IN_CHECK_STATE_HELD_ITEM_STATUS``
     loops over every battler)."""
     side = jnp.asarray(side, _I32)
@@ -179,5 +219,6 @@ def on_switch_in(tables: Tables, state: BattleState, side) -> BattleState:
     state = _intimidate(state, side)
     mon = state.active[side]
     state = reveal_ability(state, side, mon, SWITCH_IN, state.hp[side, mon] > 0)
+    state = recover_status_by_ability(state, side)
     state = after_damage_items(tables, state, side)
     return after_damage_items(tables, state, 1 - side)

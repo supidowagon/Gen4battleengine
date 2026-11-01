@@ -179,6 +179,10 @@ DECOMP_ABILITY_TO_ID: dict[str, AbilityId] = {
     "Static": AbilityId.STATIC,
     "Guts": AbilityId.GUTS,
     "Steadfast": AbilityId.STEADFAST,
+    "Insomnia": AbilityId.INSOMNIA,
+    "Cloud Nine": AbilityId.CLOUD_NINE,
+    "Compoundeyes": AbilityId.COMPOUNDEYES,
+    "Shed Skin": AbilityId.SHED_SKIN,
 }
 
 DECOMP_ITEM_TO_ID: dict[str, ItemId] = {

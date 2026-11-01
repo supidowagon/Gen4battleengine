@@ -87,6 +87,10 @@ class AbilityId(IntEnum):
     STATIC = 16
     GUTS = 17
     STEADFAST = 18
+    INSOMNIA = 19
+    CLOUD_NINE = 20
+    COMPOUNDEYES = 21
+    SHED_SKIN = 22
 
 
 class ItemId(IntEnum):

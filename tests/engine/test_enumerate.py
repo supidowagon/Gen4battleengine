@@ -24,7 +24,7 @@ from nuzline.engine.enumerate import (
     enumerate_outcomes,
     outcome_laws,
 )
-from nuzline.engine.ids import EffectId, Status
+from nuzline.engine.ids import AbilityId, EffectId, Status
 from nuzline.engine.order import selected_move
 from nuzline.engine.outcome import (
     Outcome,
@@ -312,6 +312,29 @@ def test_disable_duration_law(tables, names):
         assert math.fsum(probs[duration == d]) == pytest.approx(0.25)
 
 
+def test_shed_skin_marginal_is_three_tenths(tables, names):
+    s = roark_state(
+        tables,
+        names,
+        player_species="Kricketot",
+        player_ability="Shed Skin",
+        player_moves=("Growl",),
+    )
+    laws = laws_of(tables, s, A("Growl", "Tackle", s, names))
+    assert laws.relevant.shed_skin.tolist() == [True, False]
+    outcomes, probs = enumerate_outcomes(laws)
+    shed = np.asarray(outcomes.shed_skin)[:, 0]
+    assert set(shed.tolist()) == {0, 1}
+    assert math.fsum(probs[shed == 1]) == pytest.approx(0.3, abs=1e-15)
+    assert math.fsum(probs[shed == 0]) == pytest.approx(0.7, abs=1e-15)
+    # an incoming holder counts as well; a holder-free state never rolls it
+    plain = roark_state(tables, names)
+    assert not laws_of(tables, plain, A(0, "Tackle", plain, names)).relevant.shed_skin.any()
+    bench = plain._replace(ability=plain.ability.at[0, 1].set(AbilityId.SHED_SKIN))
+    incoming = laws_of(tables, bench, A(4 + 1, "Tackle", bench, names))
+    assert incoming.relevant.shed_skin.tolist() == [True, False]
+
+
 # --- generated cases ---------------------------------------------------------------
 
 
@@ -353,6 +376,8 @@ def decomp_law(tables, state, actions, name: str, index: tuple) -> dict[int, Fra
         return coin(Fraction(1, 4))
     if name == "thaw":
         return coin(Fraction(1, 5))
+    if name == "shed_skin":  # ShedSkin (battle_lib.c:3567): RandNext() % 10 < 3
+        return coin(Fraction(3, 10))
     if name == "magnitude":  # BtlCmd_CalcMagnitude (battle_script.c:5820-5852)
         return dict(zip(range(4, 11), (Fraction(n, 100) for n in (5, 10, 20, 30, 20, 10, 5)),
                         strict=True))  # fmt: skip

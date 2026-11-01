@@ -65,7 +65,13 @@ from nuzline.engine.effects import (
     hit_count,
     unlock_move,
 )
-from nuzline.engine.hooks import after_damage_items, on_switch_in
+from nuzline.engine.hooks import (
+    STATUS_CURE,
+    after_damage_items,
+    on_switch_in,
+    recover_status_by_ability,
+    reveal_ability,
+)
 from nuzline.engine.ids import (
     POTION_HP_RESTORED,
     AbilityId,
@@ -734,7 +740,11 @@ def _move_end(state: BattleState, acted: BattleState, side, ran) -> BattleState:
     move_hit = state.move_hit.at[foe].set(acted.move_hit[foe])
     clear = ran & (state.over == 0)
     move_hit = move_hit.at[side].set(jnp.where(clear, 0, move_hit[side]))
-    return state._replace(move_hit=move_hit.astype(state.move_hit.dtype))
+    state = state._replace(move_hit=move_hit.astype(state.move_hit.dtype))
+    # RecoverStatusByAbility for the attacker, then the defender (bcp.c:3965-3967); a
+    # battle that CheckBattleOver ended returns first.
+    state = recover_status_by_ability(state, side, clear)
+    return recover_status_by_ability(state, foe, clear)
 
 
 def execute_actions(
@@ -896,9 +906,36 @@ def _taunt_check(tables: Tables, state: BattleState, side) -> BattleState:
     return state._replace(taunt=state.taunt.at[side].set(taunt))
 
 
+def _turn_end_ability(tables: Tables, state: BattleState, side, outcome: Outcome) -> BattleState:
+    """``MON_COND_CHECK_STATE_ABILITY`` (battle_controller_player.c:1355), the first
+    end-of-turn check: Shed Skin (``BattleSystem_TriggerAbilityOnTurnEnd``, battle_lib.c:
+    3567-3590) cures any status of a holder with HP left on ``RandNext() % 10 < 3``
+    (``outcome.shed_skin[side]``); the sleep counter and the poison counter reset, and
+    ``subscript_ability_restore_status.s:8`` tags the ability."""
+    mon = state.active[side]
+    cured = (
+        (state.ability[side, mon] == AbilityId.SHED_SKIN)
+        & (state.status[side, mon] != Status.NONE)
+        & (state.hp[side, mon] > 0)
+        & (outcome.shed_skin[side] != 0)
+    )
+    state = state._replace(
+        status=state.status.at[side, mon].set(
+            jnp.where(cured, Status.NONE, state.status[side, mon]).astype(state.status.dtype)
+        ),
+        status_counter=state.status_counter.at[side, mon].set(
+            jnp.where(cured, 0, state.status_counter[side, mon]).astype(state.status_counter.dtype)
+        ),
+    )
+    return reveal_ability(state, side, mon, STATUS_CURE, cured)
+
+
 # The implemented checks of ``enum MonCondCheckState`` (battle_controller_player.c:1256),
 # in its order.
 END_OF_TURN_ORDER = (
+    # MON_COND_CHECK_STATE_ABILITY, battle_controller_player.c:1355 (the only check that
+    # reads the turn's ``Outcome``, see ``end_of_turn``)
+    ("ability", _turn_end_ability),
     # MON_COND_CHECK_STATE_USE_ITEM, battle_controller_player.c:1362
     ("use_item", after_damage_items),
     # MON_COND_CHECK_STATE_LEECH_SEED, battle_controller_player.c:1378
@@ -944,9 +981,11 @@ def end_of_turn(
     sides = end_of_turn_order(state, outcome)
     for position in (0, 1):
         side = sides[position]
-        for _, check in END_OF_TURN_ORDER:
+        for name, check in END_OF_TURN_ORDER:
             before = state
-            state = _faint_check(before, _where(state.over == 0, check(tables, state, side), state))
+            args = (outcome,) if name == "ability" else ()
+            after = check(tables, state, side, *args)
+            state = _faint_check(before, _where(state.over == 0, after, state))
     return state._replace(flinched=jnp.zeros_like(state.flinched))
 
 

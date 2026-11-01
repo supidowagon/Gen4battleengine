@@ -574,6 +574,36 @@ def _stealth_rock_damage(turn: _Turn, s: RefState, side: int) -> None:
     _lose_hp(turn, s, side, _divide(mon.max_hp, STEALTH_ROCK_DIVISOR[mul]))
 
 
+def _recover_status_by_ability(s: RefState, side: int) -> None:
+    """``BattleSystem_RecoverStatusByAbility`` (lib.c:4378) for ``side``'s battler: an
+    asleep Insomnia holder with HP left wakes, and subscript_ability_forbids_status.s
+    tags its ability (BattleAI_SetAbility, script.c:11806). Run at each move end for the
+    attacker then the defender (bcp.c:3965-3967) and on a switch-in (lib.c:4135-4145)."""
+    mon = _active(s, side)
+    if mon.ability == AbilityId.INSOMNIA and mon.status == Status.SLEEP and mon.hp:
+        mon.status = Status.NONE
+        mon.status_counter = 0
+        if side == 0:
+            s.ai_ability_known[s.sides[0].active] = 1
+
+
+def _turn_end_ability(turn: _Turn, s: RefState, side: int) -> None:
+    """``MON_COND_CHECK_STATE_ABILITY`` (bcp.c:1355): Shed Skin (lib.c:3567-3590) cures a
+    status on ``RandNext() % 10 < 3`` (``outcome.shed_skin``) while the holder has HP."""
+    mon = _active(s, side)
+    if (
+        mon.ability == AbilityId.SHED_SKIN
+        and mon.status != Status.NONE
+        and mon.hp
+        and turn.outcome.shed_skin[side]
+    ):
+        mon.status = Status.NONE
+        mon.status_counter = 0
+        # subscript_ability_restore_status.s:8 tags the holder (script.c:11806).
+        if side == 0:
+            s.ai_ability_known[s.sides[0].active] = 1
+
+
 def _switch_in_effects(turn: _Turn, s: RefState, side: int) -> None:
     """``BattleSystem_TriggerEffectOnSwitch`` (lib.c:3649) after ``side``'s battler
     entered: ``SWITCH_IN_CHECK_STATE_INTIMIDATE`` (lib.c:3795; only the newcomer has
@@ -590,6 +620,7 @@ def _switch_in_effects(turn: _Turn, s: RefState, side: int) -> None:
     # living newcomer's ability, BattleAI_SetAbility (script.c:11806).
     if side == 0 and mon.hp and mon.ability == AbilityId.MOLD_BREAKER:
         s.ai_ability_known[s.sides[0].active] = 1
+    _recover_status_by_ability(s, side)
     for battler in (0, 1):
         _held_item_hp(turn, s, battler)
 
@@ -641,6 +672,12 @@ def _inflict(turn: _Turn, s: RefState, side: int, target: int, status: int) -> N
     on a living target; sleep lasts ``Random 3, 2`` turns (``outcome.duration`` of the
     inflicting side)."""
     mon = _active(s, target)
+    # subscript_fall_asleep.s:_055/_202/_221: an ignorable Insomnia stops the sleep before
+    # the other checks and its "stayed awake" message tags the ability.
+    if mon.hp and status == Status.SLEEP and _ignorable(s, side, target) == AbilityId.INSOMNIA:
+        if target == 0:
+            s.ai_ability_known[s.sides[0].active] = 1
+        return
     if mon.hp and _can_have_status(s, target, status):
         mon.status = status
         mon.status_counter = turn.outcome.duration[side] if status == Status.SLEEP else 0
@@ -1116,6 +1153,7 @@ def _end_of_turn(turn: _Turn, s: RefState) -> None:
     nothing runs once the battle is over."""
     for battler in _speed_order(s, turn.outcome):
         for check in (
+            _turn_end_ability,  # MON_COND_CHECK_STATE_ABILITY, bcp.c:1355
             _held_item_hp,  # MON_COND_CHECK_STATE_USE_ITEM, bcp.c:1362
             _leech_seed_check,  # MON_COND_CHECK_STATE_LEECH_SEED, bcp.c:1378
             _poison_check,  # MON_COND_CHECK_STATE_POISON, bcp.c:1393
@@ -1313,6 +1351,10 @@ def ref_step(tables, state: RefState, actions: tuple[int, int], outcome) -> RefS
         # actor's own moveHit, unless CheckBattleOver ended the battle first (:3969).
         if not s.over:
             s.sides[side].move_hit = 0
+            # BattleControllerPlayer_MoveEnd: RecoverStatusByAbility, attacker then
+            # defender (bcp.c:3965-3967).
+            _recover_status_by_ability(s, side)
+            _recover_status_by_ability(s, 1 - side)
 
     _end_of_turn(turn, s)
     # BattleSystem_SetupNextTurn (lib.c:2234) clears every flinch and unlocks a sleeping

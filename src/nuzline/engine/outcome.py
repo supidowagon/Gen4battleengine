@@ -125,6 +125,8 @@ def _hit_threshold(tables: Tables, state: BattleState, actions, side) -> jnp.nda
     eva = jnp.where(identified & (eva < 0), 0, eva)
     total = jnp.clip(6 + eva + acc, 0, 12)
     rate = accuracy * _ACC_NUM[total] // _ACC_DEN[total]
+    # Compoundeyes (battle_controller_player.c:2922-2924), right after the stage scaling.
+    rate = jnp.where(a_ability == AbilityId.COMPOUNDEYES, rate * 130 // 100, rate)
     rate = jnp.where(state.weather == Weather.FOG, rate * 6 // 10, rate)  # deep fog
     rate = jnp.where(state.gravity != 0, rate * 10 // 6, rate)
     # Accuracy 0 never misses (the check returns before rolling); a switch or an item
