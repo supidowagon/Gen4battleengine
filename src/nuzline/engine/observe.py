@@ -116,8 +116,12 @@ _NONZERO_SIDE = (
     "mist",
     "lucky_chant",
     "tailwind",
+    "foresight",
+    "curled",
+    "bide_turns",
+    "mud_sport",
 )
-_NONZERO_FIELD = ("trick_room", "gravity", "mud_sport")
+_NONZERO_FIELD = ("trick_room", "gravity")
 
 _LAYOUT: tuple[tuple[str, tuple[int, ...]], ...] = (
     ("order", ()),
@@ -135,6 +139,8 @@ _LAYOUT: tuple[tuple[str, tuple[int, ...]], ...] = (
     ("opp_pixels", (SLOTS,)),
     ("player_pp", (SLOTS, MOVES)),
     ("stages", (SIDES, 8)),
+    ("disabled_move", _SIDE),
+    ("locked_move", _SIDE),
     *((name, _SIDE) for name in _NONZERO_SIDE),
     ("spikes", _SIDE),
     ("toxic_spikes", _SIDE),
@@ -206,6 +212,8 @@ def observation(events: dict, after: BattleState) -> jnp.ndarray:
         "opp_pixels": hp_pixels(after.hp[1], after.max_hp[1]),
         "player_pp": after.pp[0],
         "stages": after.stages,
+        "disabled_move": after.disabled_move,
+        "locked_move": after.locked_move,
         **{name: _nonzero(getattr(after, name)) for name in _NONZERO_SIDE},
         "spikes": after.spikes,
         "toxic_spikes": after.toxic_spikes,

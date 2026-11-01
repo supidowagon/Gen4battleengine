@@ -222,6 +222,7 @@ def supported_state(draw, tables: Tables, names: Names) -> BattleState:
         a["trap_move"][side] = draw(st.sampled_from(trap_moves.tolist())) if trapped else 0
         a["leech_seed"][side] = draw(st.integers(0, 1))
         a["water_sport"][side] = draw(st.integers(0, 1))
+        a["mud_sport"][side] = draw(st.integers(0, 1))
         a["stealth_rock"][side] = draw(st.integers(0, 1))
         a["reflect"][side] = draw(st.integers(0, _TIMER_MAX))
         a["light_screen"][side] = draw(st.integers(0, _TIMER_MAX))
@@ -237,7 +238,6 @@ def supported_state(draw, tables: Tables, names: Names) -> BattleState:
     a["trainer_item_count"][1] = count
     a["weather"][...] = draw(st.sampled_from(list(Weather)))  # permanent: timer 0
     a["trick_room"][...] = draw(st.integers(0, _TIMER_MAX))
-    a["mud_sport"][...] = draw(st.integers(0, 1))
     a["turn"][...] = turn
     for name in ("ai_seen_moves", "ai_ability_known"):
         flags = draw(st.lists(st.integers(0, 1), min_size=a[name].size, max_size=a[name].size))
@@ -288,6 +288,8 @@ def any_outcome() -> st.SearchStrategy[Outcome]:
         flinch_item=_flag(sides),
         quick_claw=_flag(sides),
         end_speed_tie=_flag(()),
+        magnitude=_ints(4, 10, sides),
+        shed_skin=_flag(sides),
     )
 
 

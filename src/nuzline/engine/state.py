@@ -26,6 +26,11 @@ Encodings:
   is ``fake_out_turn >= turn``.
 * ``move_hit`` is ``moveHit``: the last move aimed at the side's active battler since its
   own last action ended (see ``step``).
+* ``foresight``, ``disabled_move``/``disable_turns``, ``locked_move`` (0 = not locked),
+  ``bide_turns``/``bide_damage`` (``bide_damage`` is ``storedDamage`` only while
+  ``bide_turns > 0``, else 0), ``curled`` and ``mud_sport`` are the active battler's
+  matching volatile / move-effect state; all are reset like the other volatiles
+  (``step._VOLATILE``).
 * ``trainer_item_count`` is ``aiContext.trainerItemCounts``: the bag's size at battle
   start, never decremented.
 """
@@ -97,6 +102,14 @@ class BattleState(NamedTuple):
     water_sport: jnp.ndarray  # int8
     fake_out_turn: jnp.ndarray  # int16, fakeOutTurnNumber
     move_hit: jnp.ndarray  # int16, moveHit: decomp move id, 0 = none
+    foresight: jnp.ndarray  # int8, VOLATILE_CONDITION_FORESIGHT
+    disabled_move: jnp.ndarray  # int16, MoveEffectsData.disabledMove: move id, 0 = none
+    disable_turns: jnp.ndarray  # int8, MoveEffectsData.disabledTurns (hidden)
+    locked_move: jnp.ndarray  # int16, moveLockedInto while VOLATILE_CONDITION_MOVE_LOCKED
+    bide_turns: jnp.ndarray  # int8, VOLATILE_CONDITION_BIDE turns, 0-2
+    bide_damage: jnp.ndarray  # int16, storedDamage while Biding (hidden), else 0
+    curled: jnp.ndarray  # int8, VOLATILE_CONDITION_DEFENSE_CURL
+    mud_sport: jnp.ndarray  # int8, MOVE_EFFECT_MUD_SPORT in moveEffectsMask
     # per side [2]
     spikes: jnp.ndarray  # int8, layers
     toxic_spikes: jnp.ndarray  # int8, layers
@@ -118,7 +131,6 @@ class BattleState(NamedTuple):
     weather_timer: jnp.ndarray  # int8, 0 = permanent
     trick_room: jnp.ndarray  # int8
     gravity: jnp.ndarray  # int8
-    mud_sport: jnp.ndarray  # int8
     turn: jnp.ndarray  # int16
     over: jnp.ndarray  # int8
     winner: jnp.ndarray  # int8
@@ -192,6 +204,14 @@ LAYOUT: dict[str, tuple[tuple[int, ...], type]] = {
     "water_sport": (_SIDE, np.int8),
     "fake_out_turn": (_SIDE, np.int16),
     "move_hit": (_SIDE, np.int16),
+    "foresight": (_SIDE, np.int8),
+    "disabled_move": (_SIDE, np.int16),
+    "disable_turns": (_SIDE, np.int8),
+    "locked_move": (_SIDE, np.int16),
+    "bide_turns": (_SIDE, np.int8),
+    "bide_damage": (_SIDE, np.int16),
+    "curled": (_SIDE, np.int8),
+    "mud_sport": (_SIDE, np.int8),
     "spikes": (_SIDE, np.int8),
     "toxic_spikes": (_SIDE, np.int8),
     "stealth_rock": (_SIDE, np.int8),
@@ -211,7 +231,6 @@ LAYOUT: dict[str, tuple[tuple[int, ...], type]] = {
     "weather_timer": (_FIELD, np.int8),
     "trick_room": (_FIELD, np.int8),
     "gravity": (_FIELD, np.int8),
-    "mud_sport": (_FIELD, np.int8),
     "turn": (_FIELD, np.int16),
     "over": (_FIELD, np.int8),
     "winner": (_FIELD, np.int8),

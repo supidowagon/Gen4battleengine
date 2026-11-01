@@ -56,6 +56,8 @@ class Outcome(NamedTuple):
     flinch_item: jnp.ndarray  # int8[2], reserved: King's Rock / Razor Fang (unsupported items)
     quick_claw: jnp.ndarray  # int8[2], reserved: Quick Claw (unsupported item)
     end_speed_tie: jnp.ndarray  # int8[], 0 = player first in the end-of-turn order on equal speed
+    magnitude: jnp.ndarray  # int8[2], Magnitude's level 4-10 of each side's move
+    shed_skin: jnp.ndarray  # int8[2], Shed Skin's RandNext() % 10 < 3
 
 
 def empty_outcome() -> Outcome:
@@ -76,6 +78,8 @@ def empty_outcome() -> Outcome:
         flinch_item=sides,
         quick_claw=sides,
         end_speed_tie=jnp.zeros((), _I8),
+        magnitude=sides + 4,
+        shed_skin=sides,
     )
 
 
@@ -140,6 +144,12 @@ def crit_odds(tables: Tables, state: BattleState, actions) -> jnp.ndarray:
     return _CRIT_ODDS[jnp.minimum(stage, 4)]
 
 
+def _magnitude_level(rand) -> jnp.ndarray:
+    """Magnitude's level 4-10 from ``rand % 100``: <5 -> 4, <15 -> 5, <35 -> 6, <65 -> 7,
+    <85 -> 8, <95 -> 9, else 10 (battle_script.c:5820-5852)."""
+    return 4 + jnp.searchsorted(jnp.array([5, 15, 35, 65, 85, 95], _I32), rand, side="right")
+
+
 def sample_outcome(key, tables: Tables, state: BattleState, actions) -> Outcome:
     """Draw every field from its Gen 4 probability for this state and these actions."""
     actions = jnp.asarray(actions, _I32)
@@ -189,5 +199,12 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions) -> Outcome:
         quick_claw=jnp.zeros(per_side, _I32),
         # BattleSystem_SortMonSpeedOrder (battle_lib.c:3364) on equal speed: RandNext() & 1.
         end_speed_tie=draw(12, (), 2),
+        # BtlCmd_CalcMagnitude (battle_script.c:5820-5852): rand % 100 mapped to the
+        # level; ShedSkin (battle_lib.c:3567-3575): RandNext() % 10 < 3. Drawn from
+        # fold_in keys so every field above keeps its samples.
+        magnitude=_magnitude_level(
+            jax.random.randint(jax.random.fold_in(key, 14), per_side, 0, 100, dtype=_I32)
+        ),
+        shed_skin=jax.random.randint(jax.random.fold_in(key, 15), per_side, 0, 10, dtype=_I32) < 3,
     )
     return Outcome(*(jnp.asarray(f).astype(_I8) for f in outcome))

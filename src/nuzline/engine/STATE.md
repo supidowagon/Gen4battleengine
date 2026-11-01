@@ -39,15 +39,18 @@ three structs has a row.
   bits (`include/constants/battle/condition.h`); `BattleState` splits them into
   `status` (`ids.Status`) and `status_counter`.
 - **statusVolatile** bits mapped: confusion turns -> `confusion`, flinch ->
-  `flinched`, bind turns -> `trapped`, recharging -> `recharge`. The other bits
-  (Uproar, Bide, Thrash, Attract, Focus Energy, Transform, Rage, Substitute flag,
-  Destiny Bond, Mean Look, Nightmare, Curse, Foresight, Defense Curl, Torment) are
-  later (M6); the Substitute flag is implied by `substitute_hp > 0`.
+  `flinched`, bind turns -> `trapped`, recharging -> `recharge`, Foresight ->
+  `foresight`, Bide turns -> `bide_turns`, Defense Curl -> `curled`,
+  `VOLATILE_CONDITION_MOVE_LOCKED` -> `locked_move` (with `moveLockedInto`). The
+  other bits (Uproar, Thrash, Attract, Focus Energy, Transform, Rage, Substitute
+  flag, Destiny Bond, Mean Look, Nightmare, Curse, Torment) are later (M6); the Substitute flag is implied by `substitute_hp > 0`.
 - **moveEffectsMask** bits mapped: Leech Seed -> `leech_seed`, Water Sport ->
-  `water_sport`. The rest (Perish Song, semi-invulnerable turns, Minimize,
-  Charge, Ingrain, Imprison, Grudge, Mud Sport per battler, Gastro Acid, Miracle
+  `water_sport`, Mud Sport -> `mud_sport` (per battler, cleared on switch-out; the
+  Electric power halving reads every active battler, `battle_lib.c:6812`). The rest
+  (Perish Song, semi-invulnerable turns, Minimize,
+  Charge, Ingrain, Imprison, Grudge, Gastro Acid, Miracle
   Eye, Power Trick, Aqua Ring, Heal Block, Embargo, Magnet Rise, Lock-On) are
-  later (M6). Mud Sport is kept field-wide in `mud_sport`.
+  later (M6).
 - **fieldConditionsMask**: the weather bits (temporary vs. permanent rain, sand,
   sun, hail, plus deep fog) -> `weather` with `weather_timer == 0` meaning
   permanent; Trick Room turns -> `trick_room`; Gravity turns -> `gravity`. The
@@ -56,10 +59,14 @@ three structs has a row.
   `tailwind`, Lucky Chant turns -> `lucky_chant`. Its Reflect, Light Screen,
   Spikes, Safeguard, Mist, Toxic Spikes, Future Sight and Wish bits are implied by
   the nonzero turn/layer counts in the mapped fields.
-- **moveLockedInto is later (M6)**, not `charge_turn`: it holds the move id a
-  battler is locked into for its next turn (charge-up and multi-turn moves), and
-  `charge_turn` is an `int8` flag that cannot hold a move id. M6 adds an `int16`
-  field when two-turn moves are implemented; `charge_turn` stays reserved.
+- **moveLockedInto -> `locked_move`**, not `charge_turn`: it holds the move id a
+  battler is locked into for its next turn (Bide, Rollout; charge-up moves are
+  later, M6), and `charge_turn` is an `int8` flag that cannot hold a move id.
+  `locked_move` is an `int16`, 0 = not locked (set only while
+  `VOLATILE_CONDITION_MOVE_LOCKED`); `charge_turn` stays reserved.
+- **storedDamage -> `bide_damage`** only while Biding (`bide_turns > 0`), else 0:
+  the decomp's value outside a Bide is never read (`subscript_bide_start.s`
+  zeroes it), and 0 lets equal states merge.
 - **Audit-relabelled rows (Task 6 ledger).** Eight "not needed" judgements were
   refuted against the decomp and are `later (M6)`: the switch-in ability checks
   are re-run after every move, gated by `intimidateAnnounced`,
@@ -162,7 +169,7 @@ three structs has a row.
 | `BattleMon.exp` | — | not needed because experience and level-ups do not change the fight being searched |
 | `BattleMon.personality` | — | not needed because its battle uses (nature, ability slot, gender) are resolved into `PokemonSpec` before `make_state` |
 | `BattleMon.status` | `status`, `status_counter` | mapped |
-| `BattleMon.statusVolatile` | `confusion`, `flinched`, `trapped`, `recharge` | mapped |
+| `BattleMon.statusVolatile` | `confusion`, `flinched`, `trapped`, `recharge`, `foresight`, `bide_turns`, `curled`, `locked_move` | mapped |
 | `BattleMon.OTId` | — | not needed because only obedience and the traded-Pokemon exp bonus read it; the tool assumes an obedient party |
 | `BattleMon.heldItem` | `item` | mapped |
 | `BattleMon.padding007A` | — | not needed because it is padding |
@@ -171,7 +178,7 @@ three structs has a row.
 | `BattleMon.gender` | `gender` | mapped |
 | `BattleMon.OTGender` | — | not needed because it is cosmetic (names, messages, sprites, animation) |
 | `BattleMon.capturedBall` | — | not needed because it is cosmetic (names, messages, sprites, animation) |
-| `BattleMon.moveEffectsMask` | `leech_seed`, `water_sport` | mapped |
+| `BattleMon.moveEffectsMask` | `leech_seed`, `water_sport`, `mud_sport` | mapped |
 | `BattleMon.moveEffectsTemp` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
 | `BattleMon.moveEffectsData` | `taunt`, `protect_count`, `rollout_count`, `recharge`, `substitute_hp`, `trap_move`, `choice_lock` | mapped |
 
@@ -179,7 +186,7 @@ three structs has a row.
 
 | Struct.field | pytree field | status |
 |---|---|---|
-| `MoveEffectsData.disabledTurns` | — | later (M6) |
+| `MoveEffectsData.disabledTurns` | `disable_turns` | mapped |
 | `MoveEffectsData.encoredTurns` | — | later (M6) |
 | `MoveEffectsData.chargedTurns` | — | later (M6) |
 | `MoveEffectsData.tauntedTurns` | `taunt` | mapped |
@@ -213,7 +220,7 @@ three structs has a row.
 | `MoveEffectsData.meFirstTurnNumber` | — | later (M6) |
 | `MoveEffectsData.substituteHP` | `substitute_hp` | mapped |
 | `MoveEffectsData.transformedPID` | — | later (M6) |
-| `MoveEffectsData.disabledMove` | — | later (M6) |
+| `MoveEffectsData.disabledMove` | `disabled_move` | mapped |
 | `MoveEffectsData.bindingMove` | `trap_move` | mapped |
 | `MoveEffectsData.encoredMove` | — | later (M6) |
 | `MoveEffectsData.encoredMoveSlot` | — | later (M6) |
@@ -375,7 +382,7 @@ three structs has a row.
 | `BattleContext.moveTemp` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
 | `BattleContext.moveCur` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
 | `BattleContext.movePrev` | — | later (M6) |
-| `BattleContext.moveLockedInto` | — | later (M6) |
+| `BattleContext.moveLockedInto` | `locked_move` | mapped |
 | `BattleContext.moveProtect` | — | later (M6) |
 | `BattleContext.moveHit` | `move_hit` | mapped |
 | `BattleContext.moveHitBattler` | — | not needed because in singles it is the opposing battler whenever `move_hit` is set: both are written together (battle_controller_player.c:4500-4507), and `ClearFlags` (:4389) clears only `moveHit` |
@@ -390,7 +397,7 @@ three structs has a row.
 | `BattleContext.conversion2Battler` | — | later (M6) |
 | `BattleContext.conversion2Type` | — | later (M6) |
 | `BattleContext.metronomeMove` | — | later (M6) |
-| `BattleContext.storedDamage` | — | later (M6) |
+| `BattleContext.storedDamage` | `bide_damage` | mapped |
 | `BattleContext.lastHitByBattler` | — | later (M6) |
 | `BattleContext.battlerSpeedTemp` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
 | `BattleContext.battlersSwitchingMask` | — | not needed because it is reset every turn and `step` resolves a whole turn |

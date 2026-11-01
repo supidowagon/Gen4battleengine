@@ -185,6 +185,10 @@ _COND_TEXT = {
     "mist": "Mist",
     "lucky_chant": "Lucky Chant",
     "tailwind": "Tailwind",
+    "foresight": "identified",
+    "curled": "curled up",
+    "bide_turns": "storing energy",
+    "mud_sport": "Mud Sport",
     "spikes": "Spikes",
     "toxic_spikes": "Toxic Spikes",
 }
@@ -207,6 +211,13 @@ def _differences(f: dict, others: list[dict], names: Names) -> list[str]:
             if differs(name, side):
                 on = int(f[name][side]) != 0
                 out.append(f"{who[side]} {text}" if on else f"{who[side]} no {text}")
+        for name, text in (("disabled_move", "{} disabled"), ("locked_move", "locked into {}")):
+            if differs(name, side):
+                move = int(f[name][side])
+                if move:
+                    out.append(f"{who[side]} {text.format(names.move_names[move])}")
+                else:
+                    out.append(f"{who[side]} no {name.replace('_', ' ')}")
     for slot in range(SLOTS):
         for side in (0, 1):
             i = side * SLOTS + slot
@@ -225,7 +236,6 @@ def _differences(f: dict, others: list[dict], names: Names) -> list[str]:
     for name, text in (
         ("trick_room", "Trick Room"),
         ("gravity", "Gravity"),
-        ("mud_sport", "Mud Sport"),
     ):
         if differs(name, 0):
             out.append(text if int(f[name][0]) else f"no {text}")

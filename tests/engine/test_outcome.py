@@ -9,7 +9,7 @@ import pytest
 from nuzline.engine.ids import AbilityId, Weather
 from nuzline.engine.outcome import Outcome, crit_odds, empty_outcome, hit_threshold, sample_outcome
 from nuzline.engine.step import replace
-from tests.engine.helpers import roark_state
+from tests.engine.helpers import roark_real_state, roark_state
 
 SCRATCH, EMBER, TACKLE = 0, 2, 0  # Monferno's slots 0 and 2; every fixture opponent's slot 0
 N = 20_000
@@ -117,3 +117,49 @@ def test_lucky_chant_prevents_crits(tables, names):
     keys = jax.random.split(jax.random.key(1), 2000)
     o = jax.vmap(sample_outcome, in_axes=(0, None, None, None))(keys, tables, s, acts(SCRATCH, 0))
     assert int(o.crit[:, 0].sum()) == 0 and int(o.crit[:, 1].sum()) > 0
+
+
+# Recorded from ``sample_outcome(jax.random.key(0), ...)`` on ``roark_real_state`` with
+# Ember (player) vs Rock Throw (Roark's Geodude), before Magnitude and Shed Skin existed.
+EXISTING_DRAWS = {
+    "speed_tie": 0,
+    "hit": [[1, 1, 1, 1, 1], [1, 1, 0, 1, 1]],
+    "crit": [[0, 0, 0, 0, 0], [0, 1, 0, 0, 1]],
+    "roll": [[4, 1, 3, 15, 10], [3, 14, 14, 8, 8]],
+    "secondary": [[0, 0, 0, 0, 0], [1, 1, 1, 1, 1]],
+    "contact_proc": [[1, 0, 0, 0, 1], [0, 0, 0, 0, 1]],
+    "n_hits": [2, 2],
+    "full_para": [0, 1],
+    "confusion_hit": [0, 1],
+    "duration": [5, 4],
+    "thaw": [0, 0],
+    "flinch_item": [0, 0],
+    "quick_claw": [0, 0],
+    "end_speed_tie": 0,
+}
+
+
+def test_existing_draws_unchanged(tables, names):
+    s = roark_real_state(tables, names)
+    assert names.move_names[int(s.moves[0, int(s.active[0]), EMBER])] == "Ember"
+    o = sample_outcome(jax.random.key(0), tables, s, acts(EMBER, 1))
+    for name, want in EXISTING_DRAWS.items():
+        assert getattr(o, name).tolist() == want, name
+
+
+def test_magnitude_and_shed_skin_draws(tables, names):
+    e = empty_outcome()
+    assert e.magnitude.tolist() == [4, 4] and e.shed_skin.tolist() == [0, 0]
+    assert Outcome._fields[-2:] == ("magnitude", "shed_skin")
+    s = roark_state(tables, names)
+    keys = jax.random.split(jax.random.key(0), N)
+    sample = jax.jit(jax.vmap(sample_outcome, in_axes=(0, None, None, None)))
+    o = sample(keys, tables, s, acts(SCRATCH, TACKLE))
+    assert o.magnitude.dtype == jnp.int8 and o.shed_skin.dtype == jnp.int8
+    magnitude = np.asarray(o.magnitude)
+    assert magnitude.shape == (N, 2) and set(np.unique(magnitude)) == set(range(4, 11))
+    for side in (0, 1):
+        for level, p in zip(range(4, 11), (0.05, 0.10, 0.20, 0.30, 0.20, 0.10, 0.05)):
+            assert abs(freq(magnitude[:, side], level) - p) < 5 * np.sqrt(p * (1 - p) / N), level
+        shed = np.asarray(o.shed_skin)[:, side]
+        assert abs(freq(shed) - 0.3) < 5 * np.sqrt(0.3 * 0.7 / N)

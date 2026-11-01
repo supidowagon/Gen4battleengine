@@ -41,7 +41,8 @@ of the turn:
   (step.py:663-673): each side's possible end speeds cover every Speed stage when a
   stage change is possible this turn, paralysis when it can be inflicted, and the
   neutral speed of a fainted battler (``_faint_check`` resets stages and status).
-* ``flinch_item``, ``quick_claw``: never read.
+* ``flinch_item``, ``quick_claw``: never read. ``magnitude``, ``shed_skin``: not read
+  yet (no mover or ability uses them), so never relevant.
 * Nothing is relevant once the battle is over (``step`` returns the state, step.py:700).
 """
 
@@ -255,6 +256,8 @@ def outcome_laws(tables: Tables, state: BattleState, actions) -> OutcomeLaws:
         flinch_item=never,
         quick_claw=never,
         end_speed_tie=end_speed_tie,
+        magnitude=never,  # read by Magnitude (a later task)
+        shed_skin=never,  # read by Shed Skin (a later task)
     )
     kind = jnp.where(
         effect == _E.TAUNT,
@@ -328,6 +331,15 @@ def _thaw(laws: OutcomeLaws, side: int) -> _Law:
     return [0, 1], [4, 1], 5  # rand % 5 == 0
 
 
+def _magnitude(laws: OutcomeLaws, side: int) -> _Law:
+    # BtlCmd_CalcMagnitude (battle_script.c:5820-5852): rand % 100 -> level 4-10.
+    return list(range(4, 11)), [5, 10, 20, 30, 20, 10, 5], 100
+
+
+def _shed_skin(laws: OutcomeLaws, side: int) -> _Law:
+    return [0, 1], [7, 3], 10  # RandNext() % 10 < 3, battle_lib.c:3567
+
+
 def _zero(laws: OutcomeLaws, side: int) -> _Law:
     return [0], [1], 1
 
@@ -347,6 +359,8 @@ _LAWS = {
     "flinch_item": _zero,
     "quick_claw": _zero,
     "end_speed_tie": _coin,
+    "magnitude": _magnitude,
+    "shed_skin": _shed_skin,
 }
 
 

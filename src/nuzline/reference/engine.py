@@ -250,7 +250,7 @@ def _calc_move_damage(
     if a_ability == AbilityId.GUTS and atk.status != Status.NONE:
         attack = attack * 150 // 100
     # lib.c:6811 Mud Sport, :6815 Water Sport (any battler on the field).
-    if move_type == Type.ELECTRIC and s.mud_sport:
+    if move_type == Type.ELECTRIC and (s.sides[0].mud_sport or s.sides[1].mud_sport):
         power //= 2
     if move_type == Type.FIRE and (s.sides[0].water_sport or s.sides[1].water_sport):
         power //= 2
@@ -406,6 +406,14 @@ def _reset_battler(sd: RefSide) -> None:
         "pursuit_target",
         "water_sport",
         "move_hit",
+        "foresight",
+        "disabled_move",
+        "disable_turns",
+        "locked_move",
+        "bide_turns",
+        "bide_damage",
+        "curled",
+        "mud_sport",
     ):
         setattr(sd, name, 0)
 

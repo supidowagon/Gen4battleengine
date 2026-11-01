@@ -241,6 +241,12 @@ def test_hidden_counters_grouped(tables, names, build, move, counter):
 
 
 VISIBLE_CLASSES = (
+    "disabled move",
+    "locked move",
+    "foresight",
+    "curled",
+    "bide",
+    "mud sport",
     "stat stage",
     "weather",
     "stealth rock",
@@ -278,6 +284,13 @@ def visible_cases(tables, names):
     berry = int(played.item[0, 2])  # Grotle's Sitrus Berry
     switches = [np.asarray([4 + 1, 0], np.int32), np.asarray([4 + 2, 0], np.int32)]
     return {
+        "disabled move": projected("disabled_move", lambda a: set_field(a, "disabled_move", 1, 33)),
+        "locked move": projected("locked_move", lambda a: set_field(a, "locked_move", 0, 33)),
+        "foresight": projected("foresight", lambda a: set_field(a, "foresight", 1, 1)),
+        "curled": projected("curled", lambda a: set_field(a, "curled", 0, 1)),
+        "bide": projected("bide_turns", lambda a: set_field(a, "bide_turns", 1, 2)),
+        # Mud Sport is per battler: one side's sport differs from the other's.
+        "mud sport": projected("mud_sport", lambda a: set_field(a, "mud_sport", 1, 1)),
         "stat stage": (
             "stages",
             leer,
@@ -349,6 +362,29 @@ def test_visible_message_classes(tables, names, name):
         acts = acts if isinstance(acts, list) else [acts, acts]
         obs = turns(tables, _stack([s, s]), np.stack(acts), _stack(outcomes))[2]
     assert (field(obs[0], fld) != field(obs[1], fld)).any(), name
+
+
+def test_hidden_new_counters_grouped(tables, names):
+    # Disable's turn count and Bide's stored damage are not on screen (spec §4.2 "hidden
+    # counters"): the observation shows only the Disabled move and that the foe is Biding.
+    s = roark_state(tables, names)
+    acts = np.asarray(A("Scratch", "Tackle", s, names))
+    played, _ = one_turn(tables, s, acts, with_outcome())
+    played = set_field(set_field(played, "disabled_move", 1, 33), "bide_turns", 1, 2)
+    rows = [
+        (
+            s,
+            acts,
+            with_outcome(),
+            set_field(set_field(played, "disable_turns", 1, n), "bide_damage", 1, d),
+        )
+        for n, d in ((1, 10), (4, 250))
+    ]
+    obs = obs_rows(tables, rows)
+    assert (obs[0] == obs[1]).all()
+    cleared = set_field(set_field(played, "disable_turns", 1, 0), "disabled_move", 1, 0)
+    obs = obs_rows(tables, [rows[0], (s, acts, with_outcome(), cleared)])
+    assert (obs[0] != obs[1]).any()
 
 
 def _equal_obs(tables, s, acts, a: Outcome, b: Outcome):

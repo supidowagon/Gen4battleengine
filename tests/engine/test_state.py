@@ -8,7 +8,11 @@ import pytest
 
 from nuzline.data.party import load_party
 from nuzline.engine.ids import Stat, Status, Weather
+from nuzline.engine.outcome import empty_outcome
 from nuzline.engine.state import BattleState, make_state
+from nuzline.engine.step import step
+from nuzline.reference.convert import from_ref, to_ref
+from tests.engine.helpers import A, roark_state
 
 ROOT = Path(__file__).resolve().parents[2]
 FIXTURES = ROOT / "tests" / "fixtures"
@@ -175,8 +179,8 @@ def test_state_md_accounts_for_every_struct_field():
 # The Task 6 adversarial audit (ledger) found these "not needed" judgements wrong: the
 # switch-in ability checks re-run after every move gated by the announced flags
 # (battle_lib.c:3649-4168, battle_controller_player.c:3673/3973), Quick Claw, Protect,
-# the speed values and Sketch are read later in the turn, and ``moveLockedInto`` is a
-# move id that no int8 field can hold. They are needed for M6, not M1.
+# the speed values and Sketch are read later in the turn. They are needed for M6, not M1
+# (``moveLockedInto`` moved to ``locked_move`` in milestone 4a).
 AUDIT_LATER_ROWS = (
     "BattleMon.intimidateAnnounced",
     "BattleMon.weatherAbilityAnnounced",
@@ -186,7 +190,6 @@ AUDIT_LATER_ROWS = (
     "BattleContext.moveProtect",
     "BattleContext.monSpeedValues",
     "BattleContext.moveSketched",
-    "BattleContext.moveLockedInto",
 )
 
 
@@ -244,3 +247,57 @@ def test_current_hp_checked_against_override(tables, sample_spec):
     spec = dataclasses.replace(sample_spec, stats=(50, 30, 31, 32, 33, 34), current_hp=51)
     with pytest.raises(ValueError, match="current_hp"):
         make_state(tables, [spec], [sample_spec])
+
+
+# The per-battler fields of the active battler Task 3 adds (all reset like ``_VOLATILE``).
+NEW_VOLATILES = (
+    "foresight",
+    "disabled_move",
+    "disable_turns",
+    "locked_move",
+    "bide_turns",
+    "bide_damage",
+    "curled",
+    "mud_sport",
+)
+
+
+def _with_new_volatiles(s, side):
+    return s._replace(
+        **{
+            name: getattr(s, name).at[side].set(3 if name != "foresight" else 1)
+            for name in NEW_VOLATILES
+        }
+    )
+
+
+def _new_volatiles(s, side):
+    return [int(getattr(s, name)[side]) for name in NEW_VOLATILES]
+
+
+def test_new_volatiles_reset_on_switch_and_faint(tables, names):
+    s = roark_state(tables, names)
+    # A switch-out clears side 0's battler (BattleSystem_UpdateAfterSwitch zeroes
+    # statusVolatile, moveEffectsMask and moveEffectsData); side 1 is untouched.
+    both = _with_new_volatiles(_with_new_volatiles(s, 0), 1)
+    out = step(tables, both, A(4 + 1, "Tackle", both, names), empty_outcome())
+    assert _new_volatiles(out, 0) == [0] * len(NEW_VOLATILES)
+    assert _new_volatiles(out, 1) == _new_volatiles(both, 1) != [0] * len(NEW_VOLATILES)
+    # A KO'd active (CleanupFaintedMon) clears its own fields, not the attacker's.
+    ko = _with_new_volatiles(_with_new_volatiles(s.replace_hp(1, 0, 1), 0), 1)
+    out = step(tables, ko, A("Scratch", "Leer", ko, names), empty_outcome())
+    assert int(out.hp[1, 0]) == 0
+    assert _new_volatiles(out, 1) == [0] * len(NEW_VOLATILES)
+    assert _new_volatiles(out, 0) == _new_volatiles(ko, 0)
+
+
+def test_ref_roundtrip_new_fields(tables, names):
+    s = _with_new_volatiles(_with_new_volatiles(roark_state(tables, names), 0), 1)
+    s = s._replace(
+        disabled_move=s.disabled_move.at[:].set(jnp.asarray([33, 1000], jnp.int16)),
+        bide_damage=s.bide_damage.at[:].set(jnp.asarray([321, 7], jnp.int16)),
+    )
+    back = from_ref(to_ref(s))
+    for name, x, y in zip(s._fields, s, back, strict=True):
+        assert x.dtype == y.dtype and bool((x == y).all()), name
+    assert [side.disabled_move for side in to_ref(s).sides] == [33, 1000]

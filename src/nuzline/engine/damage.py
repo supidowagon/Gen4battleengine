@@ -126,7 +126,7 @@ def _pre_random(
     )
 
     # :6811 Mud Sport / :6815 Water Sport: any active battler's sport halves the power.
-    power = jnp.where((move_type == Type.ELECTRIC) & (s.mud_sport != 0), power // 2, power)
+    power = jnp.where((move_type == Type.ELECTRIC) & jnp.any(s.mud_sport != 0), power // 2, power)
     power = jnp.where((move_type == Type.FIRE) & jnp.any(s.water_sport != 0), power // 2, power)
 
     # :6819-6837 Overgrow / Blaze / Torrent: power x1.5 at curHP <= maxHP / 3.

@@ -105,6 +105,14 @@ _VOLATILE = (
     "pursuit_target",
     "water_sport",
     "move_hit",
+    "foresight",
+    "disabled_move",
+    "disable_turns",
+    "locked_move",
+    "bide_turns",
+    "bide_damage",
+    "curled",
+    "mud_sport",
 )
 # Ranges whose decomp defender is the user itself in singles (``BattleSystem_Defender``,
 # battle_lib.c:1665-1683): such a move records nothing on the foe's ``move_hit``.

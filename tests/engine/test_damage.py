@@ -246,7 +246,9 @@ def test_sports_halve_power(tables):
         61
     )  # power 47
     s, move = special(tables, move_type="Electric")
-    assert table(tables, s._replace(mud_sport=jnp.int8(1)), move) == rolls(61)
+    for side in (0, 1):  # any active battler's Mud Sport halves it (battle_lib.c:6812)
+        sport = s._replace(mud_sport=s.mud_sport.at[side].set(1))
+        assert table(tables, sport, move) == rolls(61)
     assert table(tables, s._replace(water_sport=s.water_sport.at[0].set(1)), move) == rolls(121)
 
 
