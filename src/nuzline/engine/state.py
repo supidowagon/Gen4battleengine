@@ -236,6 +236,7 @@ def _fill_slot(a: dict[str, np.ndarray], tables: Tables, side: int, slot: int, m
             np.asarray(mon.evs),
             mon.level,
             np.asarray(tables.nature_mods[mon.nature]),
+            species=species,
         )
     max_hp = int(stats[Stat.HP])
     hp = max_hp if mon.current_hp is None else mon.current_hp
