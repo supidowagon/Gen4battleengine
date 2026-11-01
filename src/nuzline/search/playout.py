@@ -260,14 +260,25 @@ def finish_turn(
     replacement (``SLOTS - 1`` passes at most) ``replacement_pass`` with
     ``replacement_policy``'s slot."""
     state, refused = send_replacements(tables, state, ai_switched, power_mul)
+    return _replace_while_needed(tables, state, refused, SLOTS - 1)
 
-    def once(_, carry):
-        state, refused = carry
-        need = needs_replacement(state)[0] == 1
+
+def _replace_while_needed(tables: Tables, state: BattleState, refused, passes):
+    """``(state, refused)``: while the player needs a replacement (``passes`` at most)
+    ``replacement_pass`` with ``replacement_policy``'s slot. A ``while_loop``, so a batch
+    in which nobody needs one runs no pass at all."""
+
+    def cond(carry):
+        state, _, n = carry
+        return (needs_replacement(state)[0] == 1) & (n < passes)
+
+    def body(carry):
+        state, refused, n = carry
         passed, bad = replacement_pass(tables, state, replacement_policy(tables, state))
-        return _select(need, passed, state), refused | (need & bad)
+        return passed, refused | bad, n + 1
 
-    return jax.lax.fori_loop(0, SLOTS - 1, once, (state, refused))
+    state, refused, _ = jax.lax.while_loop(cond, body, (state, refused, jnp.int32(0)))
+    return state, refused
 
 
 def _play(tables: Tables, state: BattleState, player_action, key):
@@ -309,11 +320,12 @@ def _resolve_pending(tables: Tables, state: BattleState, first_action):
         replacement_policy(tables, state),
     )
     passed, refused = replacement_pass(tables, state, chosen.astype(_I32))
-    return (
-        _select(pending, passed, state),
-        jnp.where(pending, -1, first_action).astype(_I32),
-        pending & refused,
-    )
+    state = _select(pending, passed, state)
+    refused = pending & refused
+    # A newcomer that faints on entry (Stealth Rock) leaves it pending again: finish_turn's
+    # loop, with this pass counted in its SLOTS - 1.
+    state, refused = _replace_while_needed(tables, state, refused, SLOTS - 2)
+    return state, jnp.where(pending, -1, first_action).astype(_I32), refused
 
 
 def _run(tables: Tables, state: BattleState, key, max_turns: int, first_action):
@@ -453,6 +465,10 @@ def refusal_reason(
         if slot is None:
             slot = int(replacement_policy(tables, state))
         reason, state = _pass_reason(tables, state, slot)
+        for _ in range(SLOTS - 2):
+            if reason or int(needs_replacement(state)[0]) != 1:
+                break
+            reason, state = _pass_reason(tables, state, int(replacement_policy(tables, state)))
         if reason:
             return reason
         first = jnp.int32(-1)
