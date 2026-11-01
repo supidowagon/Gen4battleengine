@@ -97,6 +97,10 @@ SHARED_MOVES = (
     "Mud Sport",
     "Bug Bite",
     "Disable",
+    "Bide",
+    "Rollout",
+    "Ice Ball",
+    "Defense Curl",
 )
 
 
@@ -198,10 +202,30 @@ def _party(draw, tables: Tables, names: Names) -> tuple[list[PokemonSpec], int]:
     return party, active
 
 
+def _draw_lock(draw, a: dict, side: int, active: int, names: Names) -> None:
+    """Maybe lock the active Pokemon into a Bide or Rollout / Ice Ball it knows (not while
+    it sleeps: ``step`` unlocks a sleeper), with the matching hidden counters: Bide's
+    turns left (1 or 2: the counter starts at 2 and the unleash turn finds 1; a locked Bide
+    never rests at 0) and stored damage, Rollout's count (1-4)."""
+    if a["status"][side, active] == Status.SLEEP or not draw(st.booleans()):
+        return
+    bide, rollout, ice_ball = (names.move(m) for m in ("Bide", "Rollout", "Ice Ball"))
+    known = [int(m) for m in a["moves"][side, active] if int(m) in (bide, rollout, ice_ball)]
+    if not known:
+        return
+    move = draw(st.sampled_from(known))
+    a["locked_move"][side] = move
+    if move == bide:
+        a["bide_turns"][side] = draw(st.integers(1, 2))
+        a["bide_damage"][side] = draw(st.integers(0, 2 * int(a["max_hp"][side, active])))
+    else:
+        a["rollout_count"][side] = draw(st.integers(1, 4))
+
+
 @st.composite
 def supported_state(draw, tables: Tables, names: Names) -> BattleState:
     """A mid-battle state: 1-6 Pokemon per side (``supported_pokemon``), any active
-    slot, random PP, status counters, stat stages, confusion, Taunt, Bind, Leech Seed, Disable (a move of the active and its turns),
+    slot, random PP, status counters, stat stages, confusion, Taunt, Bind, Leech Seed, Disable (a move of the active and its turns), Defense Curl, a Bide / Rollout lock (``_draw_lock``),
     Water Sport, Foresight, Stealth Rock, screens, Tailwind, Trick Room, Mud Sport, weather,
     the turn, each active's ``fake_out_turn`` (0 to ``turn + 1``), ``move_hit`` (none or
     one of the foe's active's moves) and ``last_move`` (none, one of its own moves or
@@ -233,6 +257,7 @@ def supported_state(draw, tables: Tables, names: Names) -> BattleState:
         a["leech_seed"][side] = draw(st.integers(0, 1))
         a["water_sport"][side] = draw(st.integers(0, 1))
         a["mud_sport"][side] = draw(st.integers(0, 1))
+        a["curled"][side] = draw(st.integers(0, 1))
         a["foresight"][side] = draw(st.integers(0, 1))
         a["stealth_rock"][side] = draw(st.integers(0, 1))
         a["reflect"][side] = draw(st.integers(0, _TIMER_MAX))
@@ -247,6 +272,7 @@ def supported_state(draw, tables: Tables, names: Names) -> BattleState:
         a["disabled_move"][side] = disabled
         turns = draw(st.integers(0, _DISABLE_MAX))
         a["disable_turns"][side] = turns if disabled else 0
+        _draw_lock(draw, a, side, active, names)
     count = draw(st.integers(0, BAG_SLOTS))
     bag = draw(st.lists(st.sampled_from(M1_BAG_ITEMS), min_size=count, max_size=count))
     a["trainer_items"][1] = [names.item(i) for i in bag] + [0] * (BAG_SLOTS - count)

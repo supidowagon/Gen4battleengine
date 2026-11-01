@@ -598,6 +598,25 @@ def assert_constant(groups):
         assert len(set(children.values())) == 1
 
 
+def locked_bide(tables, names, turns=2):
+    """Kricketot (``turns`` Bide turns left, 30 damage stored) against Geodude and Onix."""
+    s = roark_state(
+        tables,
+        names,
+        player_species="Kricketot",
+        player_moves=("Bide", "Growl"),
+        opp_species="Geodude",
+        opp_moves=("Tackle", "Leer"),
+        player_count=2,
+        opp_count=2,
+    )
+    return s._replace(
+        locked_move=s.locked_move.at[0].set(names.move("Bide")),
+        bide_turns=s.bide_turns.at[0].set(turns),
+        bide_damage=s.bide_damage.at[0].set(30),
+    )
+
+
 def test_legality_constant_on_equal_obs(tables, names):
     s = roark_real_state(tables, names)
     groups = grouped_children(tables, [s], lambda p: legal_pairs(tables, p))
@@ -617,6 +636,16 @@ def test_legality_constant_on_equal_obs(tables, names):
     groups = grouped_children(tables, [s], lambda p: pair)
     assert_constant(groups)
     assert max(len(c) for c in groups.values()) >= 2
+
+    # A player locked into Bide (Review Focus 2): the lock is on screen, so the legal
+    # actions (the locked slot alone) are constant over every enumerated outcome.
+    parents = [locked_bide(tables, names, turns) for turns in (2, 1)]
+    for s in parents:
+        legal = np.asarray(legal_actions(tables, s, 0))
+        assert np.flatnonzero(legal).tolist() == [names.move_slot(s, 0, "Bide")]
+    groups = grouped_children(tables, parents, lambda p: legal_pairs(tables, p))
+    assert groups
+    assert_constant(groups)
 
 
 def test_legality_disable_splits_on_move_groups_on_turns(tables, names):

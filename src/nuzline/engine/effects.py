@@ -73,6 +73,16 @@ many are real). Decomp sources:
   move it knows with PP left; else that move is disabled for ``outcome.duration`` (3-6,
   ``RandNext() % 4 + 3``). ``actions.usable_moves`` and ``step`` honour it; the
   end-of-turn countdown is in ``step``.
+* Bide: ``effect_script_0026.s`` / ``subscript_bide_start.s``: a first use (not locked) locks
+  the user into the move with two turns to go and ``storedDamage = 0``; ``apply_move_effect``
+  adds every hit the Biding battler takes (``BattleControllerPlayer_UpdateHP``,
+  battle_controller_player.c:3407). The turn count, the unleash (``2 * storedDamage`` at the
+  foe, ``damage.fixed_damage``) and the no-target case are in ``step`` (``_use_move``).
+* Rollout, Ice Ball: ``effect_script_0117.s`` / ``BtlCmd_CalcRolloutPower``
+  (battle_script.c:5661): a first use locks the user with ``rolloutCount = 5``; each use
+  decrements it and the lock ends at 0 (the fifth use) or when the move does not connect
+  (a miss runs ``subscript_missed.s``, which unlocks). Power is ``damage.rollout_multiplier``.
+* Defense Curl: ``effect_script_0156.s`` sets ``curled`` before the Defense stage.
 * Pursuit is a plain hit here; its pre-switch hit at double power is in ``step``.
 * Static / Poison Point: ``BattleSystem_TriggerAbilityOnHit`` (battle_lib.c:4200),
   run per hit after the secondary effect (``ONE_HIT_TRIGGER_ABILITY`` /
@@ -118,6 +128,8 @@ from nuzline.engine.state import STAGE_MAX, STAGE_MIN, BattleState
 
 _I32 = jnp.int32
 _E = EffectId
+BIDE_TURNS = 2  # VOLATILE_CONDITION_BIDE_1 (condition.h:41): the 2-bit counter's value 2
+ROLLOUT_USES = 5  # BtlCmd_CalcRolloutPower starts rolloutCount at 5
 
 
 class _Hit(NamedTuple):
@@ -166,9 +178,10 @@ def _foe_stage(state: BattleState, h: _Hit, cond) -> BattleState:
 
 
 def _stat_self(tables, state, h: _Hit) -> BattleState:
-    return change_stage(
-        state, h.side, h.param[0], h.param[1], (h.effect == _E.STAT_SELF) & h.landed
-    )
+    cond = (h.effect == _E.STAT_SELF) & h.landed
+    state = change_stage(state, h.side, h.param[0], h.param[1], cond)
+    # Defense Curl (move_param[m, 2] = 1) sets the flag whatever the stage change does.
+    return _set(state, "curled", h.side, 1, cond & (h.param[2] == 1))
 
 
 def _stat_foe(tables, state, h: _Hit) -> BattleState:
@@ -210,7 +223,7 @@ def _inflict(state: BattleState, h: _Hit, outcome: Outcome, cond) -> BattleState
     counter = jnp.where(status == Status.SLEEP, outcome.duration[h.side], 0)
     old_status = state.status[h.target_side, h.target]
     old_counter = state.status_counter[h.target_side, h.target]
-    return state._replace(
+    state = state._replace(
         status=state.status.at[h.target_side, h.target].set(
             jnp.where(cond, status, old_status).astype(state.status.dtype)
         ),
@@ -218,6 +231,9 @@ def _inflict(state: BattleState, h: _Hit, outcome: Outcome, cond) -> BattleState
             jnp.where(cond, counter, old_counter).astype(state.status_counter.dtype)
         ),
     )
+    # subscript_fall_asleep.s:_176 and subscript_freeze.s:_073 unlock the new sleeper / ice cube.
+    sleeps = (status == Status.SLEEP) | (status == Status.FREEZE)
+    return unlock_move(state, h.target_side, cond & sleeps)
 
 
 def _status_foe(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
@@ -287,6 +303,38 @@ def _set(state: BattleState, field: str, index, value, cond) -> BattleState:
     arr = getattr(state, field)
     new = jnp.where(cond, value, arr[index]).astype(arr.dtype)
     return state._replace(**{field: arr.at[index].set(new)})
+
+
+def unlock_move(state: BattleState, side, cond) -> BattleState:
+    """``Battler_UnlockMoveChoice`` (battle_lib.c:1834) on ``side`` where ``cond``: the move
+    lock, Bide's turns and stored damage (hidden state, 0 outside a Bide) and the Rollout
+    count go to 0."""
+    for field in ("locked_move", "bide_turns", "bide_damage", "rollout_count"):
+        state = _set(state, field, side, 0, cond)
+    return state
+
+
+def _bide(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    """``subscript_bide_start.s``: only a first use (``effect_script_0026.s`` skips the
+    start while ``VOLATILE_CONDITION_MOVE_LOCKED`` is set or on the unleash turn,
+    ``SYSCTL_LAST_OF_MULTI_TURN``) locks the user in with ``BIDE_1`` (two turns) and
+    ``storedDamage = 0``."""
+    cond = (h.effect == _E.BIDE) & h.landed & (state.locked_move[h.side] == 0)
+    state = _set(state, "locked_move", h.side, h.move, cond)
+    state = _set(state, "bide_turns", h.side, BIDE_TURNS, cond)
+    return _set(state, "bide_damage", h.side, 0, cond)
+
+
+def _rollout(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    """``BtlCmd_CalcRolloutPower`` (battle_script.c:5661): a first use sets
+    ``rolloutCount = 5``, every use decrements it, and the lock is released at 0. A hit
+    that dealt no damage (an immunity) runs ``subscript_missed.s``, which unlocks."""
+    first = state.locked_move[h.side] == 0
+    left = jnp.where(first, ROLLOUT_USES - 1, jnp.maximum(state.rollout_count[h.side] - 1, 0))
+    keep = h.effective & (left > 0)
+    cond = (h.effect == _E.ROLLOUT) & h.landed
+    state = _set(state, "locked_move", h.side, jnp.where(keep, h.move, 0), cond)
+    return _set(state, "rollout_count", h.side, jnp.where(keep, left, 0), cond)
 
 
 def _stealth_rock(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
@@ -506,10 +554,15 @@ def apply_move_effect(
         outcome.magnitude[side].astype(_I32),
     )
     target_hp = state.hp[target_side, target].astype(_I32)
-    dealt = jnp.where(landed & ~targets_user(tables, move), jnp.minimum(damage, target_hp), 0)
+    # Bide is a RANGE_USER move whose unleash hits the foe (bcp.c:2702-2713).
+    hits_foe = ~targets_user(tables, move) | (tables.move_effect[move] == _E.BIDE)
+    dealt = jnp.where(landed & hits_foe, jnp.minimum(damage, target_hp), 0)
     state = state._replace(
         hp=state.hp.at[target_side, target].set((target_hp - dealt).astype(state.hp.dtype))
     )
+    # BattleControllerPlayer_UpdateHP (bcp.c:3407): a Biding target stores what it lost.
+    biding = state.bide_turns[target_side] > 0
+    state = _set(state, "bide_damage", target_side, state.bide_damage[target_side] + dealt, biding)
 
     effect = tables.move_effect[move].astype(_I32)
     param = tables.move_param[move].astype(_I32)
@@ -569,6 +622,8 @@ def apply_move_effect(
         _mud_sport,
         _eat_berry,
         _foresight,
+        _bide,
+        _rollout,
     ):
         state = fn(tables, state, h, outcome)
     state = _struggle_recoil(state, h, jnp.asarray(struggling, jnp.bool_))

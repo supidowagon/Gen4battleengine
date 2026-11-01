@@ -273,9 +273,11 @@ def _with_new_volatiles(s, side):
 
 
 def _ticked(values):
-    """``_new_volatiles`` after one end of turn: the Disable counter drops by one."""
+    """``_new_volatiles`` of a side that acted in a turn: the Bide counter drops when the
+    battler moves (``CHECK_STATUS_STATE_BIDE``) and the Disable counter at the end of it."""
     ticked = list(values)
     ticked[NEW_VOLATILES.index("disable_turns")] -= 1
+    ticked[NEW_VOLATILES.index("bide_turns")] -= 1
     return ticked
 
 

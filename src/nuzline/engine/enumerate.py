@@ -43,7 +43,9 @@ of the turn:
   neutral speed of a fainted battler (``_faint_check`` resets stages and status).
 * ``magnitude[s]``: ``s`` uses a ``MAGNITUDE`` move (``BtlCmd_CalcMagnitudePower``).
   ``crit``/``roll`` are not relevant for ``LEVEL_DAMAGE`` (Night Shade deals its user's
-  level with no crit or roll, ``damage.fixed_damage``).
+  level with no crit or roll, ``damage.fixed_damage``) nor for ``BIDE`` (the unleash is
+  ``2 * storedDamage``, also fixed). A locked side's move is its locked move
+  (``order.selected_move``), so the masks above read it.
 * ``flinch_item``, ``quick_claw``: never read. ``shed_skin``: not read yet (no
   ability uses it), so never relevant.
 * Nothing is relevant once the battle is over (``step`` returns the state, step.py:700).
@@ -188,7 +190,8 @@ def outcome_laws(tables: Tables, state: BattleState, actions) -> OutcomeLaws:
     foe_move = moves[::-1]
     chance = tables.move_effect_chance[moves].astype(_I32)
     damaging = (tables.move_category[moves] != STATUS) & (tables.move_power[moves] != 0)
-    rolled = damaging & (effect != _E.LEVEL_DAMAGE)  # LEVEL_DAMAGE: no crit, no roll
+    # LEVEL_DAMAGE and Bide's unleash: no crit, no roll (damage.fixed_damage)
+    rolled = damaging & (effect != _E.LEVEL_DAMAGE) & (effect != _E.BIDE)
     contact = (tables.move_flags[moves] & MoveFlag.CONTACT) != 0
     multi = effect == _E.MULTI_HIT
     status = state.status[sides, state.active]

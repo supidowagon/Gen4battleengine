@@ -24,6 +24,11 @@ Block come with their mechanics. When every slot is invalid the decomp sets
 
 Switches are legal to a non-active, non-empty, non-fainted slot, and never while the
 active Pokemon is trapped (``trapped > 0``, Bind and friends).
+
+A battler locked into a move (``locked_move``: Bide, Rollout, Ice Ball) picks no command
+(``Battler_CanPickCommand`` is FALSE, battle_controller_player.c:335): its only action is
+the slot holding the locked move, whatever its PP, and it has no switch or bag item
+(``locked_slot``).
 """
 
 from __future__ import annotations
@@ -40,15 +45,26 @@ FIRST_ITEM_ACTION = NUM_ACTIONS  # opponent actions 10-13 use bag slot action - 
 NUM_OPP_ACTIONS = FIRST_ITEM_ACTION + BAG_SLOTS
 
 
+def locked_slot(state: BattleState, side) -> jnp.ndarray:
+    """``int32``: the move slot of ``side``'s active Pokemon holding ``locked_move``
+    (``moveLockedInto``), -1 when it is not locked."""
+    moves = state.moves[side, state.active[side]]
+    held = (moves == state.locked_move[side]) & (state.locked_move[side] != 0)
+    return jnp.where(jnp.any(held), jnp.argmax(held), -1).astype(jnp.int32)
+
+
 def usable_moves(tables: Tables, state: BattleState, side) -> jnp.ndarray:
     """``bool[4]``: the active Pokemon's move slots that pass the checks above (a
     move, PP left, not the disabled move, not power 0 while taunted). None usable means
-    Struggle."""
+    Struggle. A locked battler's only usable slot is the locked one (``locked_slot``):
+    it never Struggles, even with no PP left."""
     mon = state.active[side]
     moves = state.moves[side, mon]
     usable = (moves > 0) & (state.pp[side, mon] > 0) & (moves != state.disabled_move[side])
     taunted = state.taunt[side] > 0
-    return usable & ~(taunted & (tables.move_power[moves] == 0))
+    usable = usable & ~(taunted & (tables.move_power[moves] == 0))
+    lock = locked_slot(state, side)
+    return jnp.where(lock >= 0, jnp.arange(MOVE_ACTIONS) == lock, usable)
 
 
 def legal_replacements(state: BattleState, side) -> jnp.ndarray:
@@ -64,15 +80,17 @@ def legal_actions(tables: Tables, state: BattleState, side) -> jnp.ndarray:
     struggle = ~jnp.any(usable)
     usable = usable.at[0].set(usable[0] | struggle)
     switches = legal_replacements(state, side) & (state.trapped[side] == 0)
+    switches = switches & (locked_slot(state, side) < 0)
     return jnp.concatenate([usable, switches])
 
 
 def usable_trainer_items(tables: Tables, state: BattleState, side) -> jnp.ndarray:
     """``bool[BAG_SLOTS]``: ``side``'s bag slots holding a supported item, while its
-    active Pokemon has HP left."""
+    active Pokemon has HP left and is not locked into a move."""
     effect = tables.trainer_item_effect[state.trainer_items[side]]
     supported = (effect != TrainerItemId.UNSUPPORTED) & (effect != TrainerItemId.NONE)
-    return supported & (state.hp[side, state.active[side]] > 0)
+    free = (state.hp[side, state.active[side]] > 0) & (locked_slot(state, side) < 0)
+    return supported & free
 
 
 def legal_opponent_actions(tables: Tables, state: BattleState) -> jnp.ndarray:

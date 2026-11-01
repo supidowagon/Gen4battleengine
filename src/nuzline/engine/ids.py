@@ -12,7 +12,8 @@ from enum import IntEnum, IntFlag
 class EffectId(IntEnum):
     """Move effect. Params live in ``tables.move_param[m, 0..2]``:
 
-    * stat effects (``STAT_SELF``, ``STAT_FOE``, ``SECONDARY_STAT_*``): ``(Stat, stages, 0)``
+    * stat effects (``STAT_SELF``, ``STAT_FOE``, ``SECONDARY_STAT_*``): ``(Stat, stages, 0)``;
+      ``STAT_SELF`` with ``move_param[m, 2] == 1`` (Defense Curl) also sets ``curled``
     * status effects (``STATUS_FOE``, ``SECONDARY_STATUS``): ``(Status, type_checked,
       thaws_user)``; ``type_checked`` is 1 for a status move the decomp runs through
       the type chart (Thunder Wave: Ground is immune), else 0; ``thaws_user`` is 1 for
@@ -26,6 +27,8 @@ class EffectId(IntEnum):
       move's effect chance. ``MUD_SPORT``: zeros. ``EAT_BERRY`` (Bug Bite, Pluck): zeros;
       the user eats the target's Oran or Sitrus Berry (``hooks.pluck_berry``).
     ``DISABLE``: zeros; disables the target's last move for 3-6 turns (``effects._disable``).
+    ``BIDE``, ``ROLLOUT`` (Rollout, Ice Ball): zeros; they lock the user into the move
+    (``BattleState.locked_move``, ``engine/step.py``, ``engine/damage.py``).
 
     The proc chance of a ``SECONDARY_*`` or ``FLINCH`` effect is the move's own
     ``move_effect_chance``; a ``SECONDARY_*`` move with chance 0 applies its
@@ -60,6 +63,8 @@ class EffectId(IntEnum):
     MUD_SPORT = 25
     EAT_BERRY = 26
     DISABLE = 27
+    BIDE = 28
+    ROLLOUT = 29
 
 
 class AbilityId(IntEnum):

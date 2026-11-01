@@ -89,16 +89,38 @@ def fixed_damage(
     ``effect_script_0087.s``) deals the attacker's level with ``SYSCTL_IGNORE_TYPE_CHECKS``:
     no crit, roll, STAB or multiplier (``ApplyTypeMultiplier``, battle_lib.c:7544), but the
     chart's immunity bit is still set (:7551), so a type immunity (Foresight-aware) deals
-    0."""
+    0.
+
+    Bide is fixed too: on its unleash turn (locked with no turns left) it deals
+    ``2 * storedDamage`` (``CHECK_STATUS_STATE_BIDE``, battle_controller_player.c:2702); a
+    ``RANGE_USER`` move skips the type chart (:2350-2358), so no immunity applies. Any
+    other Bide turn deals 0."""
     atk_side = _i32(atk_side)
     def_side = 1 - atk_side
-    is_fixed = tables.move_effect[_i32(move)] == EffectId.LEVEL_DAMAGE
+    effect = tables.move_effect[_i32(move)]
+    is_level = effect == EffectId.LEVEL_DAMAGE
+    is_bide = effect == EffectId.BIDE
     level = _i32(state.level[atk_side, state.active[atk_side]])
     kind = move_type_of(tables, state, atk_side, move)
     d_types = state.types[def_side, state.active[def_side]]
     identified = state.foresight[def_side] != 0
     immune = effectiveness(tables, kind, d_types, identified) == 0
-    return is_fixed, jnp.where(immune, 0, level)
+    unleash = (state.bide_turns[atk_side] == 0) & (state.locked_move[atk_side] != 0)
+    stored = jnp.where(unleash, 2 * _i32(state.bide_damage[atk_side]), 0)
+    return is_level | is_bide, jnp.where(is_bide, stored, jnp.where(immune, 0, level))
+
+
+def rollout_multiplier(state: BattleState, atk_side) -> jnp.ndarray:
+    """``int32``: the power multiplier of this use of Rollout / Ice Ball
+    (``BtlCmd_CalcRolloutPower``, battle_script.c:5661). A first use starts the lock at
+    ``rolloutCount = 5``, and each use decrements it before the power is read:
+    ``2 ** (4 - rolloutCount)``, so 1, 2, 4, 8, 16 on the five uses; a curled user
+    (``VOLATILE_CONDITION_DEFENSE_CURL``) doubles it again."""
+    atk_side = _i32(atk_side)
+    locked = state.locked_move[atk_side] != 0
+    left = jnp.where(locked, jnp.maximum(_i32(state.rollout_count[atk_side]) - 1, 0), 4)
+    curled = jnp.where(state.curled[atk_side] != 0, 2, 1)
+    return jnp.left_shift(1, jnp.clip(4 - left, 0, 4)) * curled
 
 
 def divide(x: jnp.ndarray, d: int) -> jnp.ndarray:
@@ -166,12 +188,21 @@ def _pre_random(
     # :6674 movePower = inPower when given (the self-hit's 40), else MOVE_DATA(move).power
     effect = _i32(tables.move_effect[move])
     # CalcHiddenPowerParams (battle_script.c:6007) / CalcMagnitudePower (:5820) set movePower.
+    # CalcRolloutPower (:5661) doubles movePower per use, and again when curled.
     variable = jnp.where(
         effect == EffectId.HIDDEN_POWER,
         hidden_power(s.ivs[atk_side, a_slot])[1],
-        MAGNITUDE_POWER[jnp.clip(_i32(magnitude) - MAGNITUDE_MIN, 0, 6)],
+        jnp.where(
+            effect == EffectId.ROLLOUT,
+            base_power * rollout_multiplier(s, atk_side),
+            MAGNITUDE_POWER[jnp.clip(_i32(magnitude) - MAGNITUDE_MIN, 0, 6)],
+        ),
     )
-    has_variable = (effect == EffectId.HIDDEN_POWER) | (effect == EffectId.MAGNITUDE)
+    has_variable = (
+        (effect == EffectId.HIDDEN_POWER)
+        | (effect == EffectId.MAGNITUDE)
+        | (effect == EffectId.ROLLOUT)
+    )
     power = jnp.where(has_variable, variable, base_power)
     power = jnp.asarray(CONFUSION_POWER, _I32) if self_hit else power
     power = power * _i32(power_mul) // 10  # :6688 movePower * powerMul / 10
@@ -334,11 +365,13 @@ def damage_table(tables: Tables, state: BattleState, atk_side, move, crit) -> jn
     """``int32[16]``: damage of ``move`` by ``atk_side``'s active Pokemon against the
     other side's active Pokemon for rolls 0..15 (``85 + roll`` percent). A ``LEVEL_DAMAGE``
     move has no roll: all 16 entries are ``fixed_damage``. Magnitude is taken at level 4
-    (its weakest hit; the playout heuristic's documented under-estimate)."""
+    (its weakest hit; the playout heuristic's documented under-estimate); Bide's unleash
+    stays 0 (it is a forced locked action, never a chosen attack)."""
     damage, move_type, category, power = _pre_random(tables, state, atk_side, move, crit)
     rolls = jnp.arange(ROLLS, dtype=_I32)
     table = _finish(tables, state, atk_side, move, damage, move_type, category, power, rolls)
     fixed, amount = fixed_damage(tables, state, atk_side, move)
+    amount = jnp.where(tables.move_effect[_i32(move)] == EffectId.BIDE, 0, amount)
     return jnp.where(fixed, amount, table)
 
 

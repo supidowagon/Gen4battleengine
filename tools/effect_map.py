@@ -121,8 +121,13 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     128: ("BATTLE_EFFECT_HIT_BEFORE_SWITCH", _E.PURSUIT, (0, 0, 0)),
     138: ("BATTLE_EFFECT_RAISE_DEF_HIT", _E.SECONDARY_STAT_SELF, (_DEF, 1, 0)),
     139: ("BATTLE_EFFECT_RAISE_ATTACK_HIT", _E.SECONDARY_STAT_SELF, (_ATK, 1, 0)),
-    # Defense Curl: Rollout doubling is a later milestone (plan ruling, Task 8b).
-    156: ("BATTLE_EFFECT_DEF_UP_DOUBLE_ROLLOUT_POWER", _E.STAT_SELF, (_DEF, 1, 0)),
+    # Defense Curl: effect_script_0156.s sets VOLATILE_CONDITION_DEFENSE_CURL, then Def +1;
+    # move_param[m, 2] = 1 sets `curled` (Rollout and Ice Ball double their power).
+    156: ("BATTLE_EFFECT_DEF_UP_DOUBLE_ROLLOUT_POWER", _E.STAT_SELF, (_DEF, 1, 1)),
+    # Bide: effect_script_0026.s -> subscript_bide_start.s (lock, BIDE_1, storedDamage = 0).
+    26: ("BATTLE_EFFECT_BIDE", _E.BIDE, (0, 0, 0)),
+    # Rollout, Ice Ball: effect_script_0117.s, CalcRolloutPower (battle_script.c:5661).
+    117: ("BATTLE_EFFECT_DOUBLE_POWER_EACH_TURN_LOCK_INTO", _E.ROLLOUT, (0, 0, 0)),
     167: ("BATTLE_EFFECT_STATUS_BURN", _E.STATUS_FOE, (Status.BURN, 0, 0)),
     175: ("BATTLE_EFFECT_TAUNT", _E.TAUNT, (0, 0, 0)),
     210: ("BATTLE_EFFECT_HALVE_FIRE_DAMAGE", _E.WATER_SPORT, (0, 0, 0)),

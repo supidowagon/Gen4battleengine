@@ -290,6 +290,30 @@ def test_reproducible(tables, names, monkeypatch):
     assert a.ranking and all(r.ci_low <= r.estimate <= r.ci_high for r in a.ranking)
 
 
+def test_locked_player_solves(tables, names):
+    """Review Focus 2: a 1v1 depth-1 solve from a state where the player is locked into
+    Bide ranks the one legal action and finds no hidden legality (the lock is on screen)."""
+    s = roark_state(
+        tables,
+        names,
+        player_species="Kricketot",
+        player_moves=("Bide", "Growl"),
+        opp_species="Geodude",
+        opp_moves=("Tackle",),
+        player_count=1,
+        opp_count=1,
+    )
+    s = s._replace(
+        locked_move=s.locked_move.at[0].set(names.move("Bide")),
+        bide_turns=s.bide_turns.at[0].set(2),
+        bide_damage=s.bide_damage.at[0].set(10),
+    )
+    settings = SolveSettings(max_depth=1, budget_playouts=200, n_depth0=8, max_turns=TURNS)
+    result = solve(tables, names, s, KEY, settings, leaf_fn=ZERO)
+    assert [r.action for r in result.ranking] == [names.move_slot(s, 0, "Bide")]
+    assert result.ranking[0].label == "Bide"
+
+
 def test_hidden_legality_raises(tables, names):
     # Spec section 3 assumes the player's legality is observable; a constructed belief
     # node whose two states differ in it (the per-sid cache seeded) must stop the solve.

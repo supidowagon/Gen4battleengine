@@ -64,7 +64,7 @@ from nuzline.ai.switching import (
     switching_refusals,
 )
 from nuzline.data.tables import Tables
-from nuzline.engine.actions import FIRST_ITEM_ACTION, NUM_OPP_ACTIONS, usable_moves
+from nuzline.engine.actions import FIRST_ITEM_ACTION, NUM_OPP_ACTIONS, locked_slot, usable_moves
 from nuzline.engine.ids import POTION_HP_RESTORED, Stat, TrainerItemId
 from nuzline.engine.state import BAG_SLOTS, MOVES, BattleState
 
@@ -558,6 +558,10 @@ def _policy(tables: Tables, state: BattleState, ai_outcome: AiOutcome) -> jnp.nd
     item = _use_item(tables, state)
     move = _pick(tables, state, _scores(tables, state, ai_outcome), ai_outcome.tiebreak)
     action = jnp.where(switch != NO_SWITCH, switch, jnp.where(item != NO_ITEM, item, move))
+    # A battler locked into a move picks no command, so the AI never runs for it
+    # (battle_controller_player.c:335): its action is the locked slot.
+    lock = locked_slot(state, 1)
+    action = jnp.where(lock >= 0, lock, action)
     return jnp.where(_refused(tables, state).any, REFUSED_ACTION, action).astype(_I32)
 
 
@@ -646,8 +650,10 @@ def _distribution(tables: Tables, state: BattleState) -> jnp.ndarray:
         jnp.zeros(NUM_OPP_ACTIONS, jnp.float32).at[:MOVES].set(_move_distribution(tables, state))
     )
     stay = jnp.where(item != NO_ITEM, jax.nn.one_hot(item, NUM_OPP_ACTIONS), moves)
+    lock = locked_slot(state, 1)
+    dist = jnp.where(lock >= 0, jax.nn.one_hot(lock, NUM_OPP_ACTIONS), dist + p_stay * stay)
     refused = _refused(tables, state).any | jnp.any(switch == REFUSED_ACTION)
-    return jnp.where(refused, jnp.nan, dist + p_stay * stay)
+    return jnp.where(refused, jnp.nan, dist)
 
 
 def ai_action_distribution(tables: Tables, state: BattleState) -> jnp.ndarray:

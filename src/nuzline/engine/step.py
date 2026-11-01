@@ -17,6 +17,11 @@ Pure, jit- and vmap-able, fixed shapes; every random event comes from
 6. The battle ends at the first faint check that finds a player faint or no
    opponent left (``_faint_check``); later checks of the turn do nothing.
 
+Move locks (Bide, Rollout, Ice Ball; ``actions.locked_slot``): a locked battler's action is
+its locked move and spends no PP (battle_controller_player.c:335); every script that
+disrupts a move unlocks it (``_unlock``), and a sleeping battler is unlocked when the
+next turn is set up (``_unlock_sleepers``, battle_lib.c:2240).
+
 Implemented so far: the opponent's bag items (Potion, ``_use_trainer_item``, with the
 decomp's multi-slot consumption, ``_consume_trainer_items``), the AI inputs
 ``fake_out_turn`` (``_entered``) and ``move_hit`` (``_use_move``, ``_move_end``), the
@@ -51,9 +56,15 @@ import jax
 import jax.numpy as jnp
 
 from nuzline.data.tables import Tables
-from nuzline.engine.actions import FIRST_ITEM_ACTION
+from nuzline.engine.actions import FIRST_ITEM_ACTION, locked_slot
 from nuzline.engine.damage import confusion_damage
-from nuzline.engine.effects import apply_move_effect, change_stage, defender_always, hit_count
+from nuzline.engine.effects import (
+    apply_move_effect,
+    change_stage,
+    defender_always,
+    hit_count,
+    unlock_move,
+)
 from nuzline.engine.hooks import after_damage_items, on_switch_in
 from nuzline.engine.ids import (
     POTION_HP_RESTORED,
@@ -76,6 +87,7 @@ from nuzline.engine.outcome import MAX_HITS, Outcome
 from nuzline.engine.state import BAG_SLOTS, BattleState
 
 _I32 = jnp.int32
+_unlock = unlock_move  # Battler_UnlockMoveChoice (battle_lib.c:1834): (state, side, cond)
 WINNER_OPPONENT, WINNER_PLAYER = 1, 2
 PURSUIT_POWER_MUL = 20  # BtlCmd_TryPursuit (battle_script.c:6884): powerMul = 20
 NORMAL_POWER_MUL = 10  # BattleContext_Init (battle_lib.c:1980): powerMul = 10
@@ -224,13 +236,15 @@ def _record_last_move(tables: Tables, state: BattleState, actions) -> BattleStat
     It runs only on the AI's FIGHT path (``TrainerAI_MainSingles``, :295, after
     ``TrainerAI_PickCommand`` chose neither a switch nor an item, :3989), and not when
     the opponent must Struggle: the move menu, and with it ``TrainerAI_Main``, is
-    skipped for ``STRUGGLING_ALL`` (battle_controller_player.c:433). The list holds
+    skipped for ``STRUGGLING_ALL`` (battle_controller_player.c:433) and for a locked
+    opponent (:335). The list holds
     the moves as slots of the player's active Pokemon (``ai_seen_moves``); Struggle is
     in no slot and is not recorded (docs/discrepancies.md)."""
     mon = state.active[0]
     pending = state.last_move[0]
     _, struggling = selected_move(tables, state, 1, actions[1])
-    fight = (actions[1] < MOVE_ACTIONS) & ~struggling
+    locked = locked_slot(state, 1) >= 0  # a locked battler picks no command (:335)
+    fight = (actions[1] < MOVE_ACTIONS) & ~struggling & ~locked
     match = (state.moves[0, mon] == pending) & (pending != 0) & fight
     seen = state.ai_seen_moves
     row = jnp.where(match, 1, seen[mon]).astype(seen.dtype)
@@ -315,15 +329,17 @@ def _use_move(
     tables: Tables, state: BattleState, side, action, choice, outcome: Outcome, target_moved
 ) -> tuple[BattleState, dict, dict]:
     """``side``'s active Pokemon uses the move in slot ``action`` (or Struggle).
-    ``choice``: its ``(move, struggling)`` from ``selected_move`` at the start of the
-    turn, when the decomp fixes Struggle (battle_controller_player.c:433), so a Taunt
-    landing earlier this turn makes a chosen power-0 move fail instead of Struggling.
+    ``choice``: its ``(move, struggling, locked)`` from ``selected_move`` and
+    ``locked_slot`` at the start of the turn, when the decomp fixes Struggle
+    (battle_controller_player.c:433), so a Taunt landing earlier this turn makes a chosen
+    power-0 move fail instead of Struggling, and a battler locked then spends no PP
+    (``ppDecremented`` is set at command selection, :335).
     ``target_moved``: the other side has already acted this turn.
 
     Returns ``(state, own, foe)``: the state after the move, the user's events (each
     status check's result, effect-gated: set only when the check was reached and had an
     effect) and the foe's (``contact_ability``, ``thawed_by_hit``)."""
-    move, struggling = choice
+    move, struggling, locked = choice
     slot = jnp.clip(action, 0, MOVE_ACTIONS - 1)
     user = state.active[side]
     target_side = 1 - side
@@ -363,12 +379,15 @@ def _use_move(
     flinched = go & (state.flinched[side] != 0)
     steadfast = flinched & (state.ability[side, user] == AbilityId.STEADFAST)
     state = change_stage(state, side, Stat.SPE, 1, steadfast)
+    state = _unlock(state, side, flinched)  # subscript_flinched.s:9
     go = go & ~flinched
     # CHECK_STATUS_STATE_DISABLE (:2543): the move chosen is the disabled one (no PP spent).
     disabled = go & (state.disabled_move[side] != 0) & (state.disabled_move[side] == move)
+    state = _unlock(state, side, disabled)  # subscript_move_is_disabled.s
     go = go & ~disabled
     # CHECK_STATUS_STATE_TAUNT (:2557): a taunted battler's power-0 move fails.
     taunted = go & (state.taunt[side] > 0) & (tables.move_power[move] == 0)
+    state = _unlock(state, side, taunted)  # subscript_move_fail_taunted.s
     go = go & ~taunted
     # CHECK_STATUS_STATE_CONFUSION (:2614): the counter drops first; at 0 the battler snaps
     # out and moves, otherwise RandNext() & 1 (outcome.confusion_hit) makes it hit itself
@@ -384,19 +403,36 @@ def _use_move(
         confusion=state.confusion.at[side].set(confusion),
         hp=state.hp.at[side, user].set(user_hp.astype(state.hp.dtype)),
     )
+    state = _unlock(state, side, self_hit)  # subscript_hurt_self_in_confusion.s
     go = go & ~self_hit
     # CHECK_STATUS_STATE_PARALYSIS (:2652): RandNext() % 4 == 0 (outcome.full_para) fully
     # paralyzes (Magic Guard is not implemented).
     # Gated on reaching the check, so the event is set only when it had an effect.
     full_para = go & (state.status[side, user] == Status.PARALYSIS) & (outcome.full_para[side] != 0)
+    state = _unlock(state, side, full_para)  # subscript_fully_paralyzed.s
     can_act = go & ~full_para
+    # CHECK_STATUS_STATE_BIDE (:2694): the Bide counter drops. On reaching 0 the unleash
+    # deals 2 * storedDamage (damage.fixed_damage) at the last hitter, i.e. the foe's
+    # active Pokemon, a replacement included. Nothing stored (subscript_bide_end.s:
+    # "But it failed!") or the foe fainted (subscript_bide_no_target.s) ends the move
+    # here; either way the lock is released after the move (below).
+    biding = can_act & (state.bide_turns[side] > 0)
+    bide_left = jnp.maximum(state.bide_turns[side].astype(_I32) - 1, 0)
+    state = state._replace(
+        bide_turns=state.bide_turns.at[side].set(
+            jnp.where(biding, bide_left, state.bide_turns[side]).astype(state.bide_turns.dtype)
+        )
+    )
+    bide_ends = biding & (bide_left == 0)
+    bide_stop = bide_ends & ((state.bide_damage[side] <= 0) | (state.hp[target_side, target] <= 0))
+    can_act = can_act & ~bide_stop
     # CHECK_STATUS_STATE_SELF_THAW (:2728): a still-frozen user of a thawing move thaws.
     self_thaw = can_act & still_frozen
     state = _set_mon(state, "status", side, user, Status.NONE, self_thaw)
 
     # BattleControllerPlayer_DecrementPP (battle_controller_player.c:3182) runs before the
     # no-target check (:3190); Struggle has no PP to spend.
-    spend = can_act & ~struggling
+    spend = can_act & ~struggling & ~locked
     pp = state.pp.at[side, user, slot].add(jnp.where(spend, -1, 0).astype(state.pp.dtype))
     state = state._replace(pp=pp)
 
@@ -415,6 +451,9 @@ def _use_move(
     state = _set_last_move(state, side, jnp.where(succeeded, move, 0), ready)
     hit = (outcome.hit[side, 0] != 0) | never_misses
     connected = can_act & has_target & hit
+    # subscript_no_target.s and subscript_missed.s unlock the attacker (a Rollout that
+    # missed; a first use never locked, so this is then a no-op).
+    state = _unlock(state, side, can_act & ~(has_target & hit))
     n_hits = hit_count(tables, move, outcome, side)
 
     # A loop, not unrolled: one copy of the effect code in the program, not MAX_HITS
@@ -439,8 +478,10 @@ def _use_move(
             struggling=struggling,
         )
         # A LEVEL_DAMAGE move never runs CalcCrit (effect_script_0087.s): no crit message.
+        # (nor does Bide's unleash: its script has no CalcCrit).
         crit = (outcome.crit[side, hit_index] != 0) & (
-            tables.move_effect[move] != EffectId.LEVEL_DAMAGE
+            (tables.move_effect[move] != EffectId.LEVEL_DAMAGE)
+            & (tables.move_effect[move] != EffectId.BIDE)
         )
         seen = _hit_events(state, hit_state, side, landed, crit)
         # BattleControllerPlayer_AfterMoveEffects (battle_controller_player.c:3638) runs
@@ -470,6 +511,9 @@ def _use_move(
         jnp.bool_(False),
     )
     state, hits, crits, contact, thaw, dealt = jax.lax.fori_loop(0, MAX_HITS, one_hit, init)
+    # The unleash script clears the lock (the Bide counter is spent); the move above still
+    # saw it locked, so effect_script_0026.s did not restart Bide.
+    state = _unlock(state, side, bide_ends)
     # BattleControllerPlayer_UpdateFlagsWhenHit (battle_controller_player.c:4499-4507),
     # reached on every path once the move was chosen (UPDATE_MOVE_BUFFERS, :3956, or
     # LOOP_SPREAD_MOVES, :3837): moveHit[defender] = the move when the attack message
@@ -478,7 +522,7 @@ def _use_move(
     # self-hit makes the user the defender (battle_controller_player.c:2629), so the
     # foe's record is untouched. ``_move_end`` keeps this write past the faint check, as
     # the decomp writes it after LOOP_FAINTED.
-    record = ready & ~self_hit & foe_defender
+    record = ready & ~self_hit & (foe_defender | (bide_ends & can_act))
     move_hit = jnp.where(record, jnp.where(can_act, move, 0), state.move_hit[target_side])
     state = state._replace(
         move_hit=state.move_hit.at[target_side].set(move_hit.astype(state.move_hit.dtype))
@@ -567,7 +611,7 @@ def _act(
     action = actions[side]
     switched = _send_out(tables, state, side, jnp.clip(action - MOVE_ACTIONS, 0, 5))
     used = _use_trainer_item(tables, state, side, items[side])
-    choice = (choices[0][side], choices[1][side])
+    choice = (choices[0][side], choices[1][side], choices[2][side])
     moved, own, foe = _use_move(tables, state, side, action, choice, outcome, target_moved)
     live = state.over == 0
     switch, item = is_switch(action) & live, is_item(action) & live
@@ -710,7 +754,8 @@ def _execute_actions(
     first = order[0].astype(_I32)
     # Each side's move and bag item are fixed when chosen, from the turn's starting state.
     picks = [selected_move(tables, state, side, actions[side]) for side in (0, 1)]
-    choices = (jnp.stack([p[0] for p in picks]), jnp.stack([p[1] for p in picks]))
+    locked = jnp.stack([locked_slot(state, side) >= 0 for side in (0, 1)])
+    choices = (jnp.stack([p[0] for p in picks]), jnp.stack([p[1] for p in picks]), locked)
     items = jnp.stack(
         [state.trainer_items[side, _bag_slot(actions[side])] for side in (0, 1)]
     ).astype(_I32)
@@ -905,6 +950,15 @@ def end_of_turn(
     return state._replace(flinched=jnp.zeros_like(state.flinched))
 
 
+def _unlock_sleepers(state: BattleState) -> BattleState:
+    """``BattleSystem_SetupNextTurn`` (battle_lib.c:2240-2243): a locked battler that is
+    asleep when the next turn is set up is unlocked."""
+    for side in (0, 1):
+        asleep = state.status[side, state.active[side]] == Status.SLEEP
+        state = _unlock(state, side, asleep)
+    return state
+
+
 def _action_phase(
     tables: Tables, state: BattleState, actions, outcome: Outcome
 ) -> tuple[BattleState, dict, jnp.ndarray]:
@@ -932,6 +986,7 @@ def step_events(
     actions = jnp.asarray(actions, _I32)
     s, events, order = _action_phase(tables, state, actions, outcome)
     s = end_of_turn(tables, s, actions, outcome, order)
+    s = _unlock_sleepers(s)
     s = s._replace(turn=(s.turn + 1).astype(s.turn.dtype))
     return _where(state.over != 0, state, s), events
 
