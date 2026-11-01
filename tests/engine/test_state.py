@@ -263,12 +263,20 @@ NEW_VOLATILES = (
 
 
 def _with_new_volatiles(s, side):
+    # The disabled move is one the active knows (so the end-of-turn check keeps it), not its
+    # first, which the tests below use.
+    known = int([m for m in s.moves[side, int(s.active[side])].tolist() if m][-1])
+    values = {"foresight": 1, "disabled_move": known}
     return s._replace(
-        **{
-            name: getattr(s, name).at[side].set(3 if name != "foresight" else 1)
-            for name in NEW_VOLATILES
-        }
+        **{name: getattr(s, name).at[side].set(values.get(name, 3)) for name in NEW_VOLATILES}
     )
+
+
+def _ticked(values):
+    """``_new_volatiles`` after one end of turn: the Disable counter drops by one."""
+    ticked = list(values)
+    ticked[NEW_VOLATILES.index("disable_turns")] -= 1
+    return ticked
 
 
 def _new_volatiles(s, side):
@@ -282,13 +290,13 @@ def test_new_volatiles_reset_on_switch_and_faint(tables, names):
     both = _with_new_volatiles(_with_new_volatiles(s, 0), 1)
     out = step(tables, both, A(4 + 1, "Tackle", both, names), empty_outcome())
     assert _new_volatiles(out, 0) == [0] * len(NEW_VOLATILES)
-    assert _new_volatiles(out, 1) == _new_volatiles(both, 1) != [0] * len(NEW_VOLATILES)
+    assert _new_volatiles(out, 1) == _ticked(_new_volatiles(both, 1)) != [0] * len(NEW_VOLATILES)
     # A KO'd active (CleanupFaintedMon) clears its own fields, not the attacker's.
     ko = _with_new_volatiles(_with_new_volatiles(s.replace_hp(1, 0, 1), 0), 1)
     out = step(tables, ko, A("Scratch", "Leer", ko, names), empty_outcome())
     assert int(out.hp[1, 0]) == 0
     assert _new_volatiles(out, 1) == [0] * len(NEW_VOLATILES)
-    assert _new_volatiles(out, 0) == _new_volatiles(ko, 0)
+    assert _new_volatiles(out, 0) == _ticked(_new_volatiles(ko, 0))
 
 
 def test_ref_roundtrip_new_fields(tables, names):

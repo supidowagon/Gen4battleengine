@@ -108,6 +108,8 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     201: ("BATTLE_EFFECT_HALVE_ELECTRIC_DAMAGE", _E.MUD_SPORT, (0, 0, 0)),
     # Bug Bite, Pluck: effect_script_0224.s, an ON_HIT indirect effect (subscript_pluck.s).
     224: ("BATTLE_EFFECT_EAT_BERRY", _E.EAT_BERRY, (0, 0, 0)),
+    # Disable: effect_script_0086.s, an on-hit indirect effect (subscript_disable_start.s).
+    86: ("BATTLE_EFFECT_DISABLE", _E.DISABLE, (0, 0, 0)),
     113: ("BATTLE_EFFECT_FORESIGHT", _E.FORESIGHT, (0, 0, 0)),
     # Night Shade, Seismic Toss: effect_script_0087.s, damage = the attacker's level.
     87: ("BATTLE_EFFECT_LEVEL_DAMAGE_FLAT", _E.LEVEL_DAMAGE, (0, 0, 0)),

@@ -118,6 +118,7 @@ def test_m1a_effect_params(tables, names):
     assert _effect(t, n, "Leech Seed")[0] == E.LEECH_SEED
     assert _effect(t, n, "Fury Swipes")[0] == E.MULTI_HIT
     assert _effect(t, n, "Water Sport")[0] == E.WATER_SPORT
+    assert _effect(t, n, "Disable")[0] == E.DISABLE
     for move in ("Foresight", "Odor Sleuth"):
         assert _effect(t, n, move)[0] == E.FORESIGHT
     # The rows after the 0xFE separator: exactly Normal and Fighting on Ghost.

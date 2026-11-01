@@ -128,7 +128,7 @@ _SELF_DEFENDER = (
 # The turn's events (``step_events``, ``turn_events``): what each side's action showed,
 # recorded where ``execute_actions`` runs it. ``engine.observe`` reads them; ``step``
 # drops them. ``act_kind`` values:
-ACT_NONE, ACT_MOVE, ACT_SWITCH, ACT_ITEM, ACT_TAUNTED = 0, 1, 2, 3, 4
+ACT_NONE, ACT_MOVE, ACT_SWITCH, ACT_ITEM, ACT_TAUNTED, ACT_DISABLED = 0, 1, 2, 3, 4, 5
 # Per-side event flags, in the observation's order (engine/observe.py documents each).
 EVENT_FLAGS = (
     "missed",
@@ -364,6 +364,9 @@ def _use_move(
     steadfast = flinched & (state.ability[side, user] == AbilityId.STEADFAST)
     state = change_stage(state, side, Stat.SPE, 1, steadfast)
     go = go & ~flinched
+    # CHECK_STATUS_STATE_DISABLE (:2543): the move chosen is the disabled one (no PP spent).
+    disabled = go & (state.disabled_move[side] != 0) & (state.disabled_move[side] == move)
+    go = go & ~disabled
     # CHECK_STATUS_STATE_TAUNT (:2557): a taunted battler's power-0 move fails.
     taunted = go & (state.taunt[side] > 0) & (tables.move_power[move] == 0)
     go = go & ~taunted
@@ -481,8 +484,12 @@ def _use_move(
         move_hit=state.move_hit.at[target_side].set(move_hit.astype(state.move_hit.dtype))
     )
     own = {
-        "act_kind": jnp.where(can_act, ACT_MOVE, jnp.where(taunted, ACT_TAUNTED, ACT_NONE)),
-        "act_id": jnp.where(can_act | taunted, move, 0),
+        "act_kind": jnp.where(
+            can_act,
+            ACT_MOVE,
+            jnp.where(taunted, ACT_TAUNTED, jnp.where(disabled, ACT_DISABLED, ACT_NONE)),
+        ),
+        "act_id": jnp.where(can_act | taunted | disabled, move, 0),
         "shown": ready,
         "missed": can_act & has_target & ~hit,
         "no_target": can_act & ~has_target,
@@ -818,6 +825,26 @@ def _bind_check(tables: Tables, state: BattleState, side) -> BattleState:
     )
 
 
+def _disable_check(tables: Tables, state: BattleState, side) -> BattleState:
+    """``MON_COND_CHECK_STATE_DISABLE`` (battle_controller_player.c:1565): with a move
+    disabled, a counter reset to 0 when the Pokemon no longer knows the move, then the
+    counter drops while non-zero and, at 0, the move is cleared (``subscript_disable_end.s``).
+    No HP condition in the decomp."""
+    mon = state.active[side]
+    disabled = state.disabled_move[side]
+    on = disabled != 0
+    known = jnp.any(state.moves[side, mon] == disabled)
+    turns = jnp.where(on & ~known, 0, state.disable_turns[side]).astype(_I32)
+    expire = on & (turns == 0)
+    turns = jnp.where(on & (turns > 0), turns - 1, turns)
+    return state._replace(
+        disabled_move=state.disabled_move.at[side].set(
+            jnp.where(expire, 0, disabled).astype(state.disabled_move.dtype)
+        ),
+        disable_turns=state.disable_turns.at[side].set(turns.astype(state.disable_turns.dtype)),
+    )
+
+
 def _taunt_check(tables: Tables, state: BattleState, side) -> BattleState:
     """The Taunt counter drops by 1 (no HP condition in the decomp)."""
     taunt = state.taunt[side] - (state.taunt[side] > 0).astype(state.taunt.dtype)
@@ -839,6 +866,8 @@ END_OF_TURN_ORDER = (
     ("burn", _burn_check),
     # MON_COND_CHECK_STATE_BIND, battle_controller_player.c:1462
     ("bind", _bind_check),
+    # MON_COND_CHECK_STATE_DISABLE, battle_controller_player.c:1565
+    ("disable", _disable_check),
     # MON_COND_CHECK_STATE_TAUNT, battle_controller_player.c:1635
     ("taunt", _taunt_check),
     # MON_COND_CHECK_STATE_ITEM_CONDITION, battle_controller_player.c:1699: the same berry

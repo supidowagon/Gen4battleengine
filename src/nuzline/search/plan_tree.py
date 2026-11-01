@@ -34,6 +34,7 @@ from nuzline.data.tables import Names
 from nuzline.engine.actions import MOVE_ACTIONS
 from nuzline.engine.ids import Status
 from nuzline.engine.observe import (
+    ACT_DISABLED,
     ACT_ITEM,
     ACT_MOVE,
     ACT_SWITCH,
@@ -118,6 +119,8 @@ def _side_text(f: dict, names: Names, side: int, who: str, trainer: str) -> str:
         head = f"{who} used {names.move_names[act]}"
     elif kind == ACT_TAUNTED:
         head = f"{who} can't use {names.move_names[act]} after the taunt"
+    elif kind == ACT_DISABLED:
+        head = f"{who}'s {names.move_names[act]} is disabled"
     elif kind == ACT_SWITCH:
         slot_name = _species(names, f, side, act)
         head = f"{trainer} sent out {slot_name}" if side else f"you switched to {slot_name}"

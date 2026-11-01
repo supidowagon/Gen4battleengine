@@ -81,7 +81,7 @@ WIDTH_CAP = 131072
 
 # ``OutcomeLaws.duration_kind``: the acting side's ``Random`` command (outcome.py:166-174).
 DURATION_DEFAULT = 0  # Random 3, 2: 2-5 (sleep, confusion and every other move)
-DURATION_TRAP = 1  # Random 3, 3: 3-6 (Bind)
+DURATION_TRAP = 1  # Random 3, 3: 3-6 (Bind; Disable: RandNext() % 4 + 3, the same law)
 DURATION_TAUNT = 2  # Random 2, 3: 3-5
 
 # Effects whose hits read ``outcome.secondary`` through ``proc`` (effects.py:468).
@@ -215,7 +215,7 @@ def outcome_laws(tables: Tables, state: BattleState, actions) -> OutcomeLaws:
         (status == Status.FREEZE) | (foe_moves & _inflicts(tables, foe_move, Status.FREEZE))
     )
     duration = uses_move & (
-        _any_of(effect, (_E.TAUNT, _E.TRAP, _E.CONFUSE_FOE, _E.SECONDARY_CONFUSE))
+        _any_of(effect, (_E.TAUNT, _E.TRAP, _E.DISABLE, _E.CONFUSE_FOE, _E.SECONDARY_CONFUSE))
         | _inflicts(tables, moves, Status.SLEEP)
     )
 
@@ -271,7 +271,7 @@ def outcome_laws(tables: Tables, state: BattleState, actions) -> OutcomeLaws:
     kind = jnp.where(
         effect == _E.TAUNT,
         DURATION_TAUNT,
-        jnp.where(effect == _E.TRAP, DURATION_TRAP, DURATION_DEFAULT),
+        jnp.where(_any_of(effect, (_E.TRAP, _E.DISABLE)), DURATION_TRAP, DURATION_DEFAULT),
     )
     return OutcomeLaws(
         hit_threshold=hit_threshold(tables, state, actions),

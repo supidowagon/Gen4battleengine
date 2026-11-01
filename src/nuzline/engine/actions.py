@@ -14,8 +14,9 @@ is not modelled.
 
 Move legality follows ``BattleSystem_CheckInvalidMoves`` (battle_lib.c:2255) for the
 checks M1 has state for: an empty slot (``CHECK_INVALID_NO_MOVE``), no PP
-(``CHECK_INVALID_NO_PP``) and Taunt (``CHECK_INVALID_TAUNTED``: a taunted battler
-cannot pick a move whose power is 0). Disable, Torment, Imprison, Gravity and Heal
+(``CHECK_INVALID_NO_PP``), Disable (``CHECK_INVALID_DISABLED``: the slot holding
+``disabled_move``) and Taunt (``CHECK_INVALID_TAUNTED``: a taunted battler
+cannot pick a move whose power is 0). Torment, Imprison, Gravity and Heal
 Block come with their mechanics. When every slot is invalid the decomp sets
 ``struggling`` instead of letting the player pick a move
 (battle_controller_player.c:433); here action 0 stays legal and means Struggle
@@ -41,10 +42,11 @@ NUM_OPP_ACTIONS = FIRST_ITEM_ACTION + BAG_SLOTS
 
 def usable_moves(tables: Tables, state: BattleState, side) -> jnp.ndarray:
     """``bool[4]``: the active Pokemon's move slots that pass the checks above (a
-    move, PP left, not power 0 while taunted). None usable means Struggle."""
+    move, PP left, not the disabled move, not power 0 while taunted). None usable means
+    Struggle."""
     mon = state.active[side]
     moves = state.moves[side, mon]
-    usable = (moves > 0) & (state.pp[side, mon] > 0)
+    usable = (moves > 0) & (state.pp[side, mon] > 0) & (moves != state.disabled_move[side])
     taunted = state.taunt[side] > 0
     return usable & ~(taunted & (tables.move_power[moves] == 0))
 

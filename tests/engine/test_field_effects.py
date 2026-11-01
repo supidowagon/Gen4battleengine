@@ -224,7 +224,7 @@ def test_confusion_self_hit_is_40_power_typeless_physical_with_the_roll(tables, 
 
 def test_end_of_turn_order_lists_the_implemented_checks_in_decomp_order():
     # enum MonCondCheckState (battle_controller_player.c:1259-1284): USE_ITEM before
-    # LEECH_SEED, ITEM_CONDITION after TAUNT.
+    # LEECH_SEED, DISABLE between BIND and TAUNT, ITEM_CONDITION after TAUNT.
     assert [name for name, _ in END_OF_TURN_ORDER] == [
         "use_item",
         "leech_seed",
@@ -232,6 +232,7 @@ def test_end_of_turn_order_lists_the_implemented_checks_in_decomp_order():
         "toxic",
         "burn",
         "bind",
+        "disable",
         "taunt",
         "item_condition",
     ]

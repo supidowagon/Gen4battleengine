@@ -63,6 +63,7 @@ _SLEEP_TURNS = (1, 5)  # BtlCmd_Random 3, 2 stores 2-5; a counter of 1 wakes nex
 _TOXIC_MAX = 15  # step.TOXIC_COUNTER_MAX
 _CONFUSION_MAX, _TAUNT_MAX, _BIND_MAX = 5, 5, 6  # outcome.sample_outcome's duration ranges
 _DURATION = (2, 6)  # outcome.duration over every move: 2-5 sleep/confusion, 3-6 Bind, 3-5 Taunt
+_DISABLE_MAX = 6  # Disable stores RandNext() % 4 + 3
 _TIMER_MAX = 5  # screens, Tailwind, Trick Room: turns left
 
 
@@ -95,6 +96,7 @@ SHARED_MOVES = (
     "Confusion",
     "Mud Sport",
     "Bug Bite",
+    "Disable",
 )
 
 
@@ -199,7 +201,7 @@ def _party(draw, tables: Tables, names: Names) -> tuple[list[PokemonSpec], int]:
 @st.composite
 def supported_state(draw, tables: Tables, names: Names) -> BattleState:
     """A mid-battle state: 1-6 Pokemon per side (``supported_pokemon``), any active
-    slot, random PP, status counters, stat stages, confusion, Taunt, Bind, Leech Seed,
+    slot, random PP, status counters, stat stages, confusion, Taunt, Bind, Leech Seed, Disable (a move of the active and its turns),
     Water Sport, Foresight, Stealth Rock, screens, Tailwind, Trick Room, Mud Sport, weather,
     the turn, each active's ``fake_out_turn`` (0 to ``turn + 1``), ``move_hit`` (none or
     one of the foe's active's moves) and ``last_move`` (none, one of its own moves or
@@ -241,6 +243,10 @@ def supported_state(draw, tables: Tables, names: Names) -> BattleState:
         a["move_hit"][side] = draw(st.sampled_from([0, *foe_moves]))
         own_moves = [int(m) for m in a["moves"][side, active] if m]
         a["last_move"][side] = draw(st.sampled_from([0, *own_moves, MOVE_STRUGGLE]))
+        disabled = draw(st.sampled_from([0, *own_moves]))
+        a["disabled_move"][side] = disabled
+        turns = draw(st.integers(0, _DISABLE_MAX))
+        a["disable_turns"][side] = turns if disabled else 0
     count = draw(st.integers(0, BAG_SLOTS))
     bag = draw(st.lists(st.sampled_from(M1_BAG_ITEMS), min_size=count, max_size=count))
     a["trainer_items"][1] = [names.item(i) for i in bag] + [0] * (BAG_SLOTS - count)
@@ -326,6 +332,7 @@ LAW_MOVES = (
     "Tackle",
     "Magnitude",
     "Confusion",
+    "Disable",
 )
 # Abilities the outcome relevance reads (contact procs, Steadfast, Simple's Speed).
 LAW_ABILITIES = (AbilityId.STATIC, AbilityId.POISON_POINT, AbilityId.STEADFAST, AbilityId.SIMPLE)

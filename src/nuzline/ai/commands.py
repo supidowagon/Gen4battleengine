@@ -282,7 +282,7 @@ def defender_ability(tables: Tables, state: BattleState, ability_guess) -> jnp.n
 def new_context(tables: Tables, state: BattleState, outcome: AiOutcome) -> AiContext:
     """``TrainerAI_Init`` (trainer_ai.c:211) with ``AI_INIT_SCORE_ALL_MOVES``: every score
     100, then 0 for the slots ``BattleSystem_CheckInvalidMoves`` flags (the engine's
-    ``usable_moves``: empty, no PP, Taunt on a power-0 move).
+    ``usable_moves``: empty, no PP, Disabled, Taunt on a power-0 move).
 
     The seen moves are the stored ``ai_seen_moves`` plus the player's pending
     ``last_move``: ``TrainerAI_MainSingles`` runs ``TrainerAI_RecordLastMove`` (:295)

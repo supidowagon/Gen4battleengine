@@ -25,7 +25,8 @@ Events, per side (``[side]``; 0 = player):
   id, Struggle's when struggling; the PP delta of critic.md B.2 names the same slot), a
   switch (``ACT_SWITCH``, the party slot), a bag item (``ACT_ITEM``, its item id), a
   move refused by Taunt (``ACT_TAUNTED``, the move: "can't use MOVE after the taunt",
-  step.py:352-353). A move that never ran (the battler fainted first, slept, froze,
+  step.py:352-353), or by Disable (``ACT_DISABLED``, the move: "MOVE is disabled!",
+  ``subscript_move_is_disabled.s``; no PP spent). A move that never ran (the battler fainted first, slept, froze,
   flinched, was fully paralyzed or hurt itself) is not shown (``ACT_NONE``, id 0).
 * ``order``: the side that acted first when both showed a message at their turn
   (``action_order``, order.py:67-85), else -1; ``pursuit``: Pursuit hit the switching
@@ -77,6 +78,7 @@ from nuzline.data.tables import Tables
 from nuzline.engine.outcome import MAX_HITS, Outcome
 from nuzline.engine.state import MOVES, SIDES, SLOTS, BattleState
 from nuzline.engine.step import (
+    ACT_DISABLED,
     ACT_ITEM,
     ACT_MOVE,
     ACT_NONE,
@@ -87,6 +89,7 @@ from nuzline.engine.step import (
 )
 
 __all__ = [
+    "ACT_DISABLED",
     "ACT_ITEM",
     "ACT_MOVE",
     "ACT_NONE",

@@ -68,6 +68,11 @@ many are real). Decomp sources:
   ``foresight`` on the defender whenever the move lands on a living target (no
   failure check). ``damage.py`` skips the Ghost immunities for it and ``outcome.py``
   ignores the defender's positive evasion.
+* Disable: ``effect_script_0086.s`` / ``BtlCmd_TryDisable`` (battle_script.c:4581): on a
+  hit, fails unless the target has no disabled move and its ``movePrevByBattler`` is a
+  move it knows with PP left; else that move is disabled for ``outcome.duration`` (3-6,
+  ``RandNext() % 4 + 3``). ``actions.usable_moves`` and ``step`` honour it; the
+  end-of-turn countdown is in ``step``.
 * Pursuit is a plain hit here; its pre-switch hit at double power is in ``step``.
 * Static / Poison Point: ``BattleSystem_TriggerAbilityOnHit`` (battle_lib.c:4200),
   run per hit after the secondary effect (``ONE_HIT_TRIGGER_ABILITY`` /
@@ -312,6 +317,22 @@ def _taunt(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     return _set(state, "taunt", h.target_side, outcome.duration[h.side], cond)
 
 
+def _disable(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    """Disable (``BtlCmd_TryDisable``, battle_script.c:4581; the script skips it when the
+    move missed): the target's last move must sit in one of its slots with PP left, and
+    nothing may be disabled already. The target's ``last_move`` is ``movePrevByBattler``:
+    0 after a move that failed, Struggle's id for Struggle (in no slot)."""
+    target_moves = state.moves[h.target_side, h.target]
+    last = state.last_move[h.target_side]
+    in_slot = (target_moves == last) & (last != 0)
+    has_pp = jnp.any(in_slot & (state.pp[h.target_side, h.target] > 0))
+    cond = (
+        (h.effect == _E.DISABLE) & h.effective & (state.disabled_move[h.target_side] == 0) & has_pp
+    )
+    state = _set(state, "disabled_move", h.target_side, last, cond)
+    return _set(state, "disable_turns", h.target_side, outcome.duration[h.side], cond)
+
+
 def _confuse_foe(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     cond = (
         (h.effect == _E.CONFUSE_FOE)
@@ -540,6 +561,7 @@ def apply_move_effect(
         _stealth_rock,
         _trap,
         _taunt,
+        _disable,
         _confuse_foe,
         _secondary_confuse,
         _leech_seed,

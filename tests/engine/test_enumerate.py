@@ -293,6 +293,25 @@ def test_confusion_secondary_and_duration_laws(tables, names):
         assert math.fsum(probs[duration == d]) == pytest.approx(0.25)
 
 
+def test_disable_duration_law(tables, names):
+    # BtlCmd_TryDisable (battle_script.c:4590): RandNext() % 4 + 3, uniform on 3-6.
+    s = roark_state(
+        tables,
+        names,
+        player_species="Psyduck",
+        player_moves=("Disable",),
+        opp_species="Geodude",
+        opp_moves=("Rock Throw",),
+    )
+    laws = laws_of(tables, s, A("Disable", "Rock Throw", s, names))
+    assert bool(laws.relevant.duration[0]) and not bool(laws.relevant.duration[1])
+    outcomes, probs = enumerate_outcomes(laws)
+    duration = np.asarray(outcomes.duration)[:, 0]
+    assert set(duration.tolist()) == {3, 4, 5, 6}
+    for d in (3, 4, 5, 6):
+        assert math.fsum(probs[duration == d]) == pytest.approx(0.25)
+
+
 # --- generated cases ---------------------------------------------------------------
 
 
@@ -328,7 +347,7 @@ def decomp_law(tables, state, actions, name: str, index: tuple) -> dict[int, Fra
         effect = int(tables.move_effect[move])
         if effect == EffectId.TAUNT:
             return {d: Fraction(1, 3) for d in (3, 4, 5)}
-        low = 3 if effect == EffectId.TRAP else 2
+        low = 3 if effect in (EffectId.TRAP, EffectId.DISABLE) else 2
         return {d: Fraction(1, 4) for d in range(low, low + 4)}
     if name == "full_para":
         return coin(Fraction(1, 4))

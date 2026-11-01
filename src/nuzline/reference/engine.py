@@ -697,6 +697,15 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
         # subscript_taunt_start.s: fails on a taunted target; Random 2, 3 turns.
         if target_alive and not s.sides[target].taunt:
             s.sides[target].taunt = o.duration[side]
+    elif effect == EffectId.DISABLE and effective:
+        # effect_script_0086.s / BtlCmd_TryDisable (script.c:4581): nothing disabled yet and
+        # the target's movePrevByBattler is one of its moves with PP left; RandNext() % 4 + 3.
+        victim, last = s.sides[target], s.sides[target].last_move
+        mon_t = _active(s, target)
+        has_pp = last in mon_t.moves and mon_t.pp[mon_t.moves.index(last)] > 0
+        if not victim.disabled_move and last and has_pp:
+            victim.disabled_move = last
+            victim.disable_turns = o.duration[side]
     elif effect == EffectId.CONFUSE_FOE and effective:
         # subscript_confuse.s: fails on a confused target; Random 3, 2 turns.
         if target_alive and not s.sides[target].confusion:
@@ -859,6 +868,9 @@ def _status_disrupted(turn: _Turn, s: RefState, side: int, move: int) -> int:
         sd.flinched = 0
         if mon.ability == AbilityId.STEADFAST:
             _change_stage(s, side, Stat.SPE, 1)
+        return DISRUPTED
+    # CHECK_STATUS_STATE_DISABLE (bcp.c:2543): the chosen move is the disabled one.
+    if sd.disabled_move and sd.disabled_move == move:
         return DISRUPTED
     # CHECK_STATUS_STATE_TAUNT (bcp.c:2557): a taunted battler's power-0 move fails.
     if sd.taunt and _t(tables, "move_power", move) == 0:
@@ -1035,6 +1047,7 @@ def _end_of_turn(turn: _Turn, s: RefState) -> None:
             _toxic_check,  # MON_COND_CHECK_STATE_TOXIC, bcp.c:1405
             _burn_check,  # MON_COND_CHECK_STATE_BURN, bcp.c:1425
             _bind_check,  # MON_COND_CHECK_STATE_BIND, bcp.c:1462
+            _disable_check,  # MON_COND_CHECK_STATE_DISABLE, bcp.c:1565
             _taunt_check,  # MON_COND_CHECK_STATE_TAUNT, bcp.c:1635
             _held_item_hp,  # MON_COND_CHECK_STATE_ITEM_CONDITION, bcp.c:1699
         ):
@@ -1090,6 +1103,20 @@ def _bind_check(turn: _Turn, s: RefState, side: int) -> None:
             sd.trap_move = 0
 
 
+def _disable_check(turn: _Turn, s: RefState, side: int) -> None:
+    """bcp.c:1565: a disabled move the Pokemon no longer knows zeroes the counter; the
+    counter drops while non-zero, else the move is cleared."""
+    sd = s.sides[side]
+    if not sd.disabled_move:
+        return
+    if sd.disabled_move not in _active(s, side).moves:
+        sd.disable_turns = 0
+    if sd.disable_turns:
+        sd.disable_turns -= 1
+    else:
+        sd.disabled_move = 0
+
+
 def _taunt_check(turn: _Turn, s: RefState, side: int) -> None:
     sd = s.sides[side]
     if sd.taunt:
@@ -1101,10 +1128,11 @@ def _taunt_check(turn: _Turn, s: RefState, side: int) -> None:
 
 def _usable(tables, s: RefState, side: int) -> list[bool]:
     """``BattleSystem_CheckInvalidMoves`` (lib.c:2255), implemented checks: a move, PP
-    left, not power 0 while taunted."""
+    left, not the disabled move, not power 0 while taunted."""
     mon, taunted = _active(s, side), s.sides[side].taunt > 0
+    disabled = s.sides[side].disabled_move
     return [
-        m > 0 and pp > 0 and not (taunted and _t(tables, "move_power", m) == 0)
+        m > 0 and pp > 0 and m != disabled and not (taunted and _t(tables, "move_power", m) == 0)
         for m, pp in zip(mon.moves, mon.pp)
     ]
 

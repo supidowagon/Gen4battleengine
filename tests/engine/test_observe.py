@@ -619,6 +619,34 @@ def test_legality_constant_on_equal_obs(tables, names):
     assert max(len(c) for c in groups.values()) >= 2
 
 
+def test_legality_disable_splits_on_move_groups_on_turns(tables, names):
+    """A Disabled move splits information sets (``disabled_move`` is on screen); its
+    turn count does not, and the legal actions after the tick agree within a set."""
+    base = roark_state(
+        tables, names, player_count=1, opp_count=1, player_moves=("Tackle", "Scratch", "Leer")
+    )
+    scratch, other = names.move("Scratch"), names.move("Leer")
+    parents = [
+        set_field(set_field(base, "disabled_move", 0, move), "disable_turns", 0, turns)
+        for move, turns in ((scratch, 2), (scratch, 3), (other, 2))
+    ]
+    acts = np.asarray(A("Tackle", "Tackle", base, names), np.int32)
+    groups = grouped_children(tables, parents, lambda p: [tuple(int(x) for x in acts)])
+    assert_constant(groups)
+    # The two Scratch parents differ only in the hidden counter: one observation, two states.
+    assert max(len(c) for c in groups.values()) >= 2
+    obs = {k for k in groups}
+    assert len(obs) >= 2  # the other disabled move is a different observation
+    # A counter at 0 clears the move at the end of the turn: visible.
+    ends = set_field(set_field(base, "disabled_move", 0, scratch), "disable_turns", 0, 0)
+    still = set_field(set_field(base, "disabled_move", 0, scratch), "disable_turns", 0, 1)
+    out = turns(
+        tables, _stack([ends, still]), np.stack([acts, acts]), _stack([empty_outcome()] * 2)
+    )
+    assert field(out[2][0], "disabled_move").tolist() == [0, 0]
+    assert field(out[2][1], "disabled_move").tolist() == [scratch, 0]
+
+
 def test_legality_splits_on_taunt(tables, names):
     """Two states of one information set differing only in the player's hidden Taunt
     counter (1 or 2): after the end-of-turn tick, Leer is legal in one child only, and

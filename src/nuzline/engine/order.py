@@ -44,7 +44,7 @@ def selected_move(
 ) -> tuple[jnp.ndarray, jnp.ndarray]:
     """``(move id, struggling)`` for a move action by ``side``'s active Pokemon in the
     state it was chosen in: the slot's move, or Struggle when no slot is usable
-    (``actions.usable_moves``: no move, no PP, or power 0 while taunted), the decomp's
+    (``actions.usable_moves``: no move, no PP, disabled, or power 0 while taunted), the decomp's
     ``STRUGGLING_ALL`` (battle_controller_player.c:433). The legality mask then only
     allows action 0. Meaningless for a switch or item action (callers mask it)."""
     slot = jnp.clip(jnp.asarray(action, _I32), 0, MOVE_ACTIONS - 1)
