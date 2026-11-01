@@ -269,6 +269,30 @@ def test_night_shade_has_no_crit_or_roll(tables, names):
     assert abs(math.fsum(probs) - 1) < 1e-12
 
 
+def test_confusion_secondary_and_duration_laws(tables, names):
+    s = roark_state(
+        tables,
+        names,
+        player_species="Venonat",
+        player_moves=("Confusion",),
+        opp_species="Geodude",
+        opp_moves=("Leer",),
+    )
+    acts = A("Confusion", "Leer", s, names)
+    laws = laws_of(tables, s, acts)
+    assert int(laws.secondary_chance[0]) == 10
+    assert bool(laws.relevant.secondary[0, 0]) and bool(laws.relevant.duration[0])
+    # The foe (not the Confusion user) may hit itself the turn it is confused.
+    assert laws.relevant.confusion_hit.tolist() == [False, True]
+    outcomes, probs = enumerate_outcomes(laws)
+    secondary = np.asarray(outcomes.secondary)[:, 0, 0]
+    assert math.fsum(probs[secondary == 1]) == pytest.approx(0.10)
+    duration = np.asarray(outcomes.duration)[:, 0]
+    assert set(duration.tolist()) == {2, 3, 4, 5}
+    for d in (2, 3, 4, 5):
+        assert math.fsum(probs[duration == d]) == pytest.approx(0.25)
+
+
 # --- generated cases ---------------------------------------------------------------
 
 

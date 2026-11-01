@@ -621,6 +621,26 @@ def _inflict(turn: _Turn, s: RefState, side: int, target: int, status: int) -> N
         mon.status_counter = turn.outcome.duration[side] if status == Status.SLEEP else 0
 
 
+def _pluck_berry(turn: _Turn, s: RefState, side: int) -> None:
+    """``BtlCmd_TryPluck`` (script.c:8116) -> ``BattleSystem_PluckBerry`` (lib.c:5539): the
+    user eats the foe's Oran / Sitrus Berry, healing (capped) unless at full HP; the berry
+    is removed (``BtlCmd_RemoveItem``, script.c:8972) even when the foe fainted."""
+    tables = turn.tables
+    user, foe = _active(s, side), _active(s, 1 - side)
+    effect = _t(tables, "item_effect", foe.item)
+    power = _t(tables, "item_param", foe.item, 0)
+    if effect == ItemId.ORAN_BERRY:
+        heal = power
+    elif effect == ItemId.SITRUS_BERRY:
+        heal = _divide(user.max_hp * power, 100)
+    else:
+        return
+    if user.hp != user.max_hp:
+        _gain_hp(s, side, heal)
+    foe.item_consumed = foe.item
+    foe.item = 0
+
+
 def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, landed: bool,
                  effective: bool, dealt: int, target_moved: bool) -> None:  # fmt: skip
     """The move's own effect for one hit. Status and stat moves are primary effects
@@ -681,6 +701,17 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
         # subscript_confuse.s: fails on a confused target; Random 3, 2 turns.
         if target_alive and not s.sides[target].confusion:
             s.sides[target].confusion = o.duration[side]
+    elif effect == EffectId.SECONDARY_CONFUSE and effective and proc:
+        # effect_script_0076.s: a probabilistic effect, cleared for a fainted target
+        # (lib.c:1556); subscript_confuse.s fails on a confused target; Random 3, 2 turns.
+        if target_alive and not s.sides[target].confusion:
+            s.sides[target].confusion = o.duration[side]
+    elif effect == EffectId.MUD_SPORT and landed and not s.sides[side].mud_sport:
+        # effect_script_0201.s: fails when the user already has it.
+        s.sides[side].mud_sport = 1
+    elif effect == EffectId.EAT_BERRY and effective:
+        # effect_script_0224.s / subscript_pluck.s: an ON_HIT effect, no HP check.
+        _pluck_berry(turn, s, side)
     elif effect == EffectId.LEECH_SEED and effective:
         # subscript_leech_seed_start.s: Grass types and seeded targets are immune.
         grass = Type.GRASS in _active(s, target).types

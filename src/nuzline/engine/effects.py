@@ -49,6 +49,14 @@ many are real). Decomp sources:
 * Confusion (``CONFUSE_FOE``): ``subscript_confuse.s``: fails on a confused
   target, else ``Random 3, 2`` turns (``outcome.duration``, 2-5). The move-time
   check and self-hit are in ``step``.
+* Confusion, Psybeam, ... (``SECONDARY_CONFUSE``): ``effect_script_0076.s`` is a
+  probabilistic indirect effect: the roll (``outcome.secondary``) is cleared when the
+  target fainted (battle_lib.c:1556-1560), then ``subscript_confuse.s`` fails on a
+  confused target, else the counter is ``Random 3, 2`` (``outcome.duration``, 2-5).
+* Mud Sport: ``effect_script_0201.s`` sets the user's flag (fails if set);
+  ``damage.py`` halves Electric power while any active battler has it.
+* Bug Bite, Pluck (``EAT_BERRY``): ``effect_script_0224.s``, an ``ON_HIT`` indirect effect
+  (no HP check, battle_lib.c:1519-1524) running ``subscript_pluck.s``: ``hooks.pluck_berry``.
 * Leech Seed: ``subscript_leech_seed_start.s``: Grass types and already seeded
   targets are immune. The end-of-turn drain is in ``step``.
 * Water Sport: ``effect_script_0210.s`` sets the user's flag (fails if set);
@@ -314,6 +322,29 @@ def _confuse_foe(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     return _set(state, "confusion", h.target_side, outcome.duration[h.side], cond)
 
 
+def _secondary_confuse(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    cond = (
+        (h.effect == _E.SECONDARY_CONFUSE)
+        & h.effective
+        & h.proc
+        & _alive(state, h.target_side, h.target)
+        & (state.confusion[h.target_side] == 0)
+    )
+    return _set(state, "confusion", h.target_side, outcome.duration[h.side], cond)
+
+
+def _mud_sport(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    cond = (h.effect == _E.MUD_SPORT) & h.landed & (state.mud_sport[h.side] == 0)
+    return _set(state, "mud_sport", h.side, 1, cond)
+
+
+def _eat_berry(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    # Local import: hooks imports this module.
+    from nuzline.engine.hooks import pluck_berry
+
+    return pluck_berry(tables, state, h.side, (h.effect == _E.EAT_BERRY) & h.effective)
+
+
 def _leech_seed(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     grass = jnp.any(state.types[h.target_side, h.target] == Type.GRASS)
     cond = (
@@ -510,8 +541,11 @@ def apply_move_effect(
         _trap,
         _taunt,
         _confuse_foe,
+        _secondary_confuse,
         _leech_seed,
         _water_sport,
+        _mud_sport,
+        _eat_berry,
         _foresight,
     ):
         state = fn(tables, state, h, outcome)

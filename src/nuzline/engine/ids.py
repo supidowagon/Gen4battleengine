@@ -22,6 +22,9 @@ class EffectId(IntEnum):
     * everything else: zeros. ``LEVEL_DAMAGE`` (Night Shade, Seismic Toss) deals the user's
       level; ``HIDDEN_POWER`` and ``MAGNITUDE`` take their type and power from the
       battler and ``Outcome.magnitude`` (``engine/damage.py``).
+    * ``SECONDARY_CONFUSE`` (Confusion, Psybeam, ...): zeros; confuses the target at the
+      move's effect chance. ``MUD_SPORT``: zeros. ``EAT_BERRY`` (Bug Bite, Pluck): zeros;
+      the user eats the target's Oran or Sitrus Berry (``hooks.pluck_berry``).
 
     The proc chance of a ``SECONDARY_*`` or ``FLINCH`` effect is the move's own
     ``move_effect_chance``; a ``SECONDARY_*`` move with chance 0 applies its
@@ -52,6 +55,9 @@ class EffectId(IntEnum):
     LEVEL_DAMAGE = 21
     HIDDEN_POWER = 22
     MAGNITUDE = 23
+    SECONDARY_CONFUSE = 24
+    MUD_SPORT = 25
+    EAT_BERRY = 26
 
 
 class AbilityId(IntEnum):

@@ -32,8 +32,8 @@ of the turn:
 * ``full_para[s]`` / ``thaw[s]``: ``s`` moves and is paralyzed / frozen at the start,
   or the foe uses a move that inflicts it (step.py:277-278, :305).
 * ``confusion_hit[s]``: ``s`` moves and its confusion counter is >= 2, or the foe uses
-  a ``CONFUSE_FOE`` move (counter 2-5; step.py:292-294).
-* ``duration[s]``: ``s``'s move is Taunt, Bind, ``CONFUSE_FOE`` or inflicts sleep
+  a ``CONFUSE_FOE`` or ``SECONDARY_CONFUSE`` move (counter 2-5; step.py:292-294).
+* ``duration[s]``: ``s``'s move is Taunt, Bind, ``CONFUSE_FOE``, ``SECONDARY_CONFUSE`` or inflicts sleep
   (effects.py:189, :286, :297, :307).
 * ``speed_tie``: two actions of one kind, equal priority and equal effective speeds
   at the start (order.py:67-85), exactly as ``action_order`` decides.
@@ -91,6 +91,7 @@ _PROC_EFFECTS = (
     _E.SECONDARY_STATUS,
     _E.FLINCH,
     _E.TRAP,
+    _E.SECONDARY_CONFUSE,
 )
 
 
@@ -197,7 +198,11 @@ def outcome_laws(tables: Tables, state: BattleState, actions) -> OutcomeLaws:
     hit = uses_move[:, None] & (tables.move_accuracy[moves] != 0)[:, None] & (hit_index == 0)
     crit = lands & rolled[:, None]
     confusable = uses_move & (
-        (state.confusion >= 2) | (foe_moves & (tables.move_effect[foe_move] == _E.CONFUSE_FOE))
+        (state.confusion >= 2)
+        | (
+            foe_moves
+            & _any_of(tables.move_effect[foe_move], (_E.CONFUSE_FOE, _E.SECONDARY_CONFUSE))
+        )
     )
     roll = crit | (confusable[:, None] & (hit_index == 0))
     secondary = lands & ((chance != 0) & _any_of(effect, _PROC_EFFECTS))[:, None]
@@ -210,7 +215,7 @@ def outcome_laws(tables: Tables, state: BattleState, actions) -> OutcomeLaws:
         (status == Status.FREEZE) | (foe_moves & _inflicts(tables, foe_move, Status.FREEZE))
     )
     duration = uses_move & (
-        _any_of(effect, (_E.TAUNT, _E.TRAP, _E.CONFUSE_FOE))
+        _any_of(effect, (_E.TAUNT, _E.TRAP, _E.CONFUSE_FOE, _E.SECONDARY_CONFUSE))
         | _inflicts(tables, moves, Status.SLEEP)
     )
 

@@ -123,6 +123,39 @@ def after_damage_items(tables: Tables, state: BattleState, side, cond=True) -> B
     )
 
 
+def pluck_berry(tables: Tables, state: BattleState, side, cond=True) -> BattleState:
+    """``side``'s active Pokemon eats the foe's Oran or Sitrus Berry where ``cond``
+    (``subscript_pluck.s``): ``BtlCmd_TryPluck`` (battle_script.c:8116) ->
+    ``BattleSystem_PluckBerry`` (battle_lib.c:5539), which heals only when the eater is
+    not at full HP (Oran ``PLUCK_EFFECT_HP_RESTORE`` the item's param, Sitrus
+    ``PLUCK_EFFECT_HP_PCT_RESTORE`` ``maxHP * param / 100``; capped at max HP). The berry
+    is removed either way (``BtlCmd_RemoveItem``, battle_script.c:8972, keeps it in
+    ``item_consumed``), even if the foe fainted. Items without a pluck effect stay;
+    Sticky Hold and Custap Berry are unsupported."""
+    side = jnp.asarray(side, _I32)
+    foe = 1 - side
+    user, target = state.active[side], state.active[foe]
+    item = state.item[foe, target]
+    effect = tables.item_effect[item]
+    power = tables.item_param[item, 0].astype(_I32)
+    hp = state.hp[side, user].astype(_I32)
+    max_hp = state.max_hp[side, user].astype(_I32)
+    heal = jnp.where(
+        effect == ItemId.ORAN_BERRY,
+        power,
+        jnp.where(effect == ItemId.SITRUS_BERRY, jnp.maximum(max_hp * power // 100, 1), 0),
+    )
+    on = cond & (heal > 0)
+    new_hp = jnp.where(on & (hp != max_hp), jnp.minimum(hp + heal, max_hp), hp)
+    return state._replace(
+        hp=state.hp.at[side, user].set(new_hp.astype(state.hp.dtype)),
+        item=state.item.at[foe, target].set(jnp.where(on, 0, item).astype(state.item.dtype)),
+        item_consumed=state.item_consumed.at[foe, target].set(
+            jnp.where(on, item, state.item_consumed[foe, target]).astype(state.item_consumed.dtype)
+        ),
+    )
+
+
 def _intimidate(state: BattleState, side) -> BattleState:
     """``side``'s active Pokemon, alive with Intimidate, lowers the living foe's Attack
     by 1 (clamped at -6)."""

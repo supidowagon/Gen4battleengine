@@ -101,6 +101,13 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     # third recoil and stays unsupported.
     # Foresight, Odor Sleuth: effect_script_0113.s, an on-hit indirect effect
     # (subscript_foresight.s sets VOLATILE_CONDITION_FORESIGHT on the defender).
+    # Confusion, Psybeam, Dizzy Punch, ...: effect_script_0076.s, a probabilistic indirect
+    # effect (no ON_HIT flag) running subscript_confuse.s.
+    76: ("BATTLE_EFFECT_CONFUSE_HIT", _E.SECONDARY_CONFUSE, (0, 0, 0)),
+    # Mud Sport: effect_script_0201.s sets MOVE_EFFECT_MUD_SPORT on the user.
+    201: ("BATTLE_EFFECT_HALVE_ELECTRIC_DAMAGE", _E.MUD_SPORT, (0, 0, 0)),
+    # Bug Bite, Pluck: effect_script_0224.s, an ON_HIT indirect effect (subscript_pluck.s).
+    224: ("BATTLE_EFFECT_EAT_BERRY", _E.EAT_BERRY, (0, 0, 0)),
     113: ("BATTLE_EFFECT_FORESIGHT", _E.FORESIGHT, (0, 0, 0)),
     # Night Shade, Seismic Toss: effect_script_0087.s, damage = the attacker's level.
     87: ("BATTLE_EFFECT_LEVEL_DAMAGE_FLAT", _E.LEVEL_DAMAGE, (0, 0, 0)),

@@ -92,6 +92,9 @@ SHARED_MOVES = (
     "Seismic Toss",
     "Hidden Power",
     "Magnitude",
+    "Confusion",
+    "Mud Sport",
+    "Bug Bite",
 )
 
 
@@ -322,6 +325,7 @@ LAW_MOVES = (
     "Razor Leaf",
     "Tackle",
     "Magnitude",
+    "Confusion",
 )
 # Abilities the outcome relevance reads (contact procs, Steadfast, Simple's Speed).
 LAW_ABILITIES = (AbilityId.STATIC, AbilityId.POISON_POINT, AbilityId.STEADFAST, AbilityId.SIMPLE)
