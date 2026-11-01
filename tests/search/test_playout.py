@@ -396,10 +396,12 @@ def test_budget_change_does_not_recompile(tables, names):
 def test_replacement_policy_spares_a_protected_pokemon(tables, names):
     # The counter state of test_replacements: Prinplup (slot 1) is the right answer to
     # Geodude, but at 1 HP against a faster Geodude whose every move (Tackle, Rock Throw:
-    # Stealth Rock and Leer have no PP) threatens the KO. With Prinplup protected, Starly
-    # (slot 3) goes in.
+    # Stealth Rock and Leer have no PP) threatens the KO. at_replacement already spends
+    # one death (Monferno), so the budget is 2: unprotected, Prinplup still goes in;
+    # protected, its death costs a full unit and Starly (slot 3) goes in instead.
     s = roark_state(tables, names, player_count=4, opp_count=1, opp_faster=True)
     s = s._replace(species=s.species.at[0, 2].set(0)).replace_hp(0, 2, 0)
     s = s.replace_hp(0, 1, 1).with_pp(1, 0, [35, 15, 0, 0])
-    s = at_replacement(s).with_budget(1, protected=[1])
-    assert int(replacement_policy(tables, s)) == 3
+    r = at_replacement(s)
+    assert int(replacement_policy(tables, r.with_budget(2))) == 1
+    assert int(replacement_policy(tables, r.with_budget(2, protected=[1]))) == 3
