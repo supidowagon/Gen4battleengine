@@ -4,6 +4,7 @@ chance nodes, observations and endgames the solver tests need. Each builds on
 
 from __future__ import annotations
 
+import jax.numpy as jnp
 import numpy as np
 
 from nuzline.ai.policy import ai_action_distribution
@@ -165,3 +166,20 @@ def low_hp_endgame(tables: Tables, names: Names) -> BattleState:
         player_hp=10,
         opp_hp=6,
     )
+
+
+def at_replacement(state: BattleState, opp_down: bool = False) -> BattleState:
+    """``state`` at a Set-mode player replacement: the player's active Pokemon at 0 HP
+    (``deaths`` and ``player_faints`` updated), the battle not over; with ``opp_down`` the
+    opponent's active at 0 HP too. Built by hand: until the terminal rule goes a step
+    never leaves the player's side here."""
+    active = int(state.active[0])
+    s = state.replace_hp(0, active, 0)
+    s = s._replace(
+        deaths=s.deaths.at[active].set(1),
+        player_faints=(s.player_faints + 1).astype(s.player_faints.dtype),
+        over=jnp.zeros_like(s.over),
+    )
+    if opp_down:
+        s = s.replace_hp(1, int(s.active[1]), 0)
+    return s

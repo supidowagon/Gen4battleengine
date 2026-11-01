@@ -1039,8 +1039,9 @@ def step(tables: Tables, state: BattleState, actions, outcome: Outcome) -> Battl
 
 def needs_replacement(state: BattleState) -> jnp.ndarray:
     """``int8[2]``: 1 where a side's active Pokemon has fainted and a healthy one is
-    left to send in, while the battle goes on. By the terminal rule only the
-    opponent ever reaches this point."""
+    left to send in, while the battle goes on. A faint check still ends the battle at a
+    player faint (``_faint_check``), so only hand-built states have the player's side
+    pending until that rule goes."""
     slots = jnp.arange(state.hp.shape[1])
     active_down = state.hp[jnp.arange(2), state.active] == 0
     bench = (state.species != 0) & (state.hp > 0) & (slots[None, :] != state.active[:, None])

@@ -3,6 +3,7 @@ the opponent's faint replacement (docs/design.md §4.3)."""
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 
 from nuzline.ai.outcome import sample_ai_outcome
 from nuzline.ai.policy import ai_policy
@@ -171,8 +172,8 @@ def test_first_actions_share_the_draws_after_turn_1(tables, names):
         key = jax.random.PRNGKey(seed)
         a = playout_from_action(tables, s, jnp.int32(scratch), key, 100)
         b = playout_from_action(tables, s, jnp.int32(leer), key, 100)
-        assert [int(x) for x in a] == [int(x) for x in b]
-        results.append(tuple(int(x) for x in a))
+        assert [np.asarray(x).tolist() for x in a] == [np.asarray(x).tolist() for x in b]
+        results.append(str([np.asarray(x).tolist() for x in a]))
     assert len(set(results)) > 1  # the draws do change with the key
 
 
@@ -180,7 +181,7 @@ def test_playout_is_deterministic_in_its_key(tables, names):
     s = roark_state(tables, names)
     a = playout(tables, s, jax.random.PRNGKey(8))
     b = playout(tables, s, jax.random.PRNGKey(8))
-    assert [int(x) for x in a] == [int(x) for x in b]
+    assert [np.asarray(x).tolist() for x in a] == [np.asarray(x).tolist() for x in b]
 
 
 def test_turn_cap_stops_the_playout(tables, names):

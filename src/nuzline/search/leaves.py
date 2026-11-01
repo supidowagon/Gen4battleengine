@@ -132,6 +132,8 @@ def _forced_one(tables: Tables, state: BattleState, pair, key, max_turns: int) -
         player_faints=rest.player_faints,
         turns=rest.turns + 1,
         refused=(refused | (rest.refused == 1)).astype(jnp.int8),
+        deaths=rest.deaths,
+        ended=rest.ended,
     )
 
 

@@ -2,9 +2,11 @@
 
 Each turn the player picks ``playout_policy``'s action, the opponent ``ai_policy``'s
 under a sampled ``AiOutcome``, the turn's chance events come from ``sample_outcome``
-and ``step`` plays it; a fainted opponent is then replaced (``send_replacements``). A
-playout ends at the first player faint or the end of the battle (``BattleState.over``),
-after ``max_turns`` turns, or when the AI meets a refused mechanic.
+and ``step`` plays it; a fainted opponent is then replaced (``send_replacements``) and
+a fainted player Pokemon (Set mode: no switch is offered before the faint, so the player
+chooses after it) by ``replacement_policy`` (``finish_turn``, ``replacement_pass``). A
+playout ends at the end of the battle (``BattleState.over``), after ``max_turns`` turns,
+or when the AI meets a refused mechanic.
 
 ``playout_policy`` is the player's default policy, a search heuristic (it is not the
 trainer AI, which follows the decomp): a one-ply expectimax over the player's legal
@@ -16,6 +18,15 @@ opponent's move does not run when the player acts first (``action_order``, a spe
 counted as 1/2) and KOs. A switch is valued against the incoming Pokemon (stages reset);
 crits, multi-hit counts, secondary effects, switch-in effects and end-of-turn damage are
 left out. ``key`` breaks exact ties only.
+
+Set-mode replacements (ruling 2, ``BattleControllerPlayer_ReplaceFainted``,
+battle_controller_player.c:4070-4155): when both actives are down the AI picks against the
+player's *fainted* battler (``BtlCmd_ShowParty`` opens both menus first,
+``Task_TrainerShowPartyMenu``, battle_display.c:4543-4556), the player enters first
+(``GoToIfAnySwitches``, battle_script.c:2537) and then the opponent; the turn's ``powerMul``
+waits in ``BattleState.replace_mul``. ``replacement_policy`` is a search heuristic like
+``playout_policy`` (ruling 7). A playout started at a pending player replacement resolves
+it first, drawing no key and counting no turn.
 
 The opponent's replacement follows ``BattleAI_PostKOSwitchIn`` (``nuzline.ai.replacement``,
 docs/ai/roark.md 11.2), with ``powerMul`` 20 on a turn where its Pursuit hit the
@@ -46,12 +57,14 @@ from nuzline.engine.actions import (
     NUM_ACTIONS,
     NUM_OPP_ACTIONS,
     legal_actions,
+    legal_replacements,
 )
 from nuzline.engine.damage import damage_table
 from nuzline.engine.order import action_order, is_switch, selected_move
 from nuzline.engine.outcome import empty_outcome, hit_threshold, sample_outcome
 from nuzline.engine.state import SLOTS, BattleState
 from nuzline.engine.step import (
+    NORMAL_POWER_MUL,
     WINNER_PLAYER,
     needs_replacement,
     replace,
@@ -63,10 +76,13 @@ __all__ = [
     "REFUSED_WON",
     "PlayoutResult",
     "batched_playout",
+    "finish_turn",
     "playout",
     "playout_from_action",
     "playout_policy",
     "refusal_reason",
+    "replacement_pass",
+    "replacement_policy",
     "replacement_refusal",
     "send_replacements",
 ]
@@ -80,6 +96,8 @@ class PlayoutResult(NamedTuple):
     player_faints: jnp.ndarray  # int8[]
     turns: jnp.ndarray  # int16[], turns played
     refused: jnp.ndarray  # int8[], 1 = stopped at a refused mechanic (no result)
+    deaths: jnp.ndarray  # int8[6], the final state's per-slot death record
+    ended: jnp.ndarray  # int8[], 1 = the battle is over (not cut off by max_turns)
 
 
 def _select(cond, a, b):
@@ -159,19 +177,97 @@ def send_replacements(
     """``(state, refused)``: the opponent's fainted active Pokemon replaced by
     ``post_ko_switch_in`` (``power_mul`` is the turn's ``battleCtx->powerMul``), again
     while each newcomer faints on entry (Stealth Rock), as ``TurnEnd`` re-enters
-    ``ReplaceFainted``. ``refused`` (``bool``) when a replacement is needed after the AI
-    switched this turn (``ai_switched``) or ``post_ko_switch_in`` refuses; the state is
+    ``ReplaceFainted``. At a pass where the player's active is down too, it stops before
+    anyone enters (the player enters first, ``replacement_pass``), keeping ``power_mul``
+    in ``replace_mul`` when the opponent's active is down as well (else 0). ``refused``
+    (``bool``) when an opponent replacement is needed after the AI switched this turn
+    (``ai_switched``) or ``post_ko_switch_in`` refuses, also when it stops; the state is
     then left as it was at that point."""
 
     def once(_, carry):  # a loop, not unrolled: one copy of the replacement rule
         state, refused = carry
-        need = needs_replacement(state)[1] == 1
+        need = needs_replacement(state)
+        stop = need[0] == 1
         slot = post_ko_switch_in(tables, state, power_mul)
-        bad = need & (jnp.asarray(ai_switched) | (slot < 0))
+        bad = (need[1] == 1) & (jnp.asarray(ai_switched) | (slot < 0))
         replaced = replace(tables, state, 1, jnp.maximum(slot, 0))
-        return _select(need & ~bad, replaced, state), refused | bad
+        opp_down = state.hp[1, state.active[1]] == 0
+        held = state._replace(
+            replace_mul=jnp.where(opp_down, power_mul, 0).astype(state.replace_mul.dtype)
+        )
+        nxt = _select(stop, held, _select((need[1] == 1) & ~bad, replaced, state))
+        return nxt, refused | bad
 
     return jax.lax.fori_loop(0, SLOTS - 1, once, (state, jnp.bool_(False)))
+
+
+def _carried_mul(state: BattleState) -> jnp.ndarray:
+    """The turn's ``powerMul`` at a player replacement: ``replace_mul``, else normal."""
+    return jnp.where(state.replace_mul > 0, state.replace_mul, NORMAL_POWER_MUL).astype(_I32)
+
+
+@jax.jit
+def replacement_pass(tables: Tables, state: BattleState, slot) -> tuple[BattleState, jnp.ndarray]:
+    """``(state, refused)``: one pass of ``ReplaceFainted`` at a player replacement
+    (module docstring): the opponent's slot is picked on this state (against the fainted
+    battler) when its active is down, the player's ``slot`` (a ``legal_replacements(state,
+    0)`` slot) enters, then the opponent's, ``replace_mul`` is cleared and
+    ``send_replacements`` settles what the entries leave (an opponent newcomer fainting on
+    Stealth Rock). ``refused`` (``bool``) when the opponent's pick is refused."""
+    mul = _carried_mul(state)
+    opp_needs = needs_replacement(state)[1] == 1
+    opp_slot = post_ko_switch_in(tables, state, mul)
+    bad = opp_needs & (opp_slot < 0)
+    entered = replace(tables, state, 0, slot)
+    both = replace(tables, entered, 1, jnp.maximum(opp_slot, 0))
+    entered = _select((needs_replacement(entered)[1] == 1) & ~bad, both, entered)
+    entered = entered._replace(replace_mul=jnp.zeros_like(entered.replace_mul))
+    settled, refused = send_replacements(tables, entered, False, mul)
+    return settled, refused | bad
+
+
+@jax.jit
+def replacement_policy(tables: Tables, state: BattleState) -> jnp.ndarray:
+    """``int32``: the party slot the player sends in at a replacement (ruling 7). Each
+    legal slot scores the best, over its usable moves, of the mean over the opponent
+    active's legal moves of ``_pair_value`` with that Pokemon active (stages reset)
+    against the opponent's active, or against the slot the AI sends in when its active is
+    down too; ties go to the lowest slot. No key, no AI distribution."""
+    opp_down = state.hp[1, state.active[1]] == 0
+    o = jnp.maximum(post_ko_switch_in(tables, state, _carried_mul(state)), 0)
+    versus = _facing(state, 1, jnp.where(opp_down, MOVE_ACTIONS + o, 0))
+    moves = jnp.arange(MOVE_ACTIONS)
+
+    def score(c):
+        mine = _facing(versus, 0, MOVE_ACTIONS + c)
+        mine_ok = legal_actions(tables, mine, 0)[:MOVE_ACTIONS]
+        theirs_ok = legal_actions(tables, mine, 1)[:MOVE_ACTIONS]
+        row = jax.vmap(lambda a, b: _pair_value(tables, mine, a, b), in_axes=(None, 0))
+        values = jax.vmap(lambda a: row(a, moves))(moves)  # [MOVE_ACTIONS, MOVE_ACTIONS]
+        mean = (values * theirs_ok).sum(axis=1) / jnp.maximum(theirs_ok.sum(), 1)
+        return jnp.max(jnp.where(mine_ok, mean, -jnp.inf))
+
+    scores = jax.vmap(score)(jnp.arange(SLOTS))
+    scores = jnp.where(legal_replacements(state, 0), scores, -jnp.inf)
+    return jnp.argmax(scores).astype(_I32)  # first maximum: the lower slot
+
+
+@jax.jit
+def finish_turn(
+    tables: Tables, state: BattleState, ai_switched, power_mul
+) -> tuple[BattleState, jnp.ndarray]:
+    """``(state, refused)``: ``send_replacements``, then while the player needs a
+    replacement (``SLOTS - 1`` passes at most) ``replacement_pass`` with
+    ``replacement_policy``'s slot."""
+    state, refused = send_replacements(tables, state, ai_switched, power_mul)
+
+    def once(_, carry):
+        state, refused = carry
+        need = needs_replacement(state)[0] == 1
+        passed, bad = replacement_pass(tables, state, replacement_policy(tables, state))
+        return _select(need, passed, state), refused | (need & bad)
+
+    return jax.lax.fori_loop(0, SLOTS - 1, once, (state, refused))
 
 
 def _play(tables: Tables, state: BattleState, player_action, key):
@@ -189,7 +285,7 @@ def _play(tables: Tables, state: BattleState, player_action, key):
 def _turn(tables: Tables, state: BattleState, player_action, key):
     """One turn after the player's choice: ``(state, refused)``."""
     played, refused, ai_switched, power_mul = _play(tables, state, player_action, key)
-    played, replace_refused = send_replacements(tables, played, ai_switched, power_mul)
+    played, replace_refused = finish_turn(tables, played, ai_switched, power_mul)
     refused = refused | replace_refused
     return _select(refused, state, played), refused
 
@@ -202,7 +298,27 @@ def _first_action(turns, first_action, chosen):
     return jnp.where(_fixed(turns, first_action), first_action, chosen)
 
 
+def _resolve_pending(tables: Tables, state: BattleState, first_action):
+    """``(state, first_action, refused)``: a pending player replacement resolved first
+    (a switch ``first_action`` chooses the slot, else ``replacement_policy``); the policy
+    then chooses from the first turn on (``first_action`` -1)."""
+    pending = needs_replacement(state)[0] == 1
+    chosen = jnp.where(
+        first_action >= MOVE_ACTIONS,
+        first_action - MOVE_ACTIONS,
+        replacement_policy(tables, state),
+    )
+    passed, refused = replacement_pass(tables, state, chosen.astype(_I32))
+    return (
+        _select(pending, passed, state),
+        jnp.where(pending, -1, first_action).astype(_I32),
+        pending & refused,
+    )
+
+
 def _run(tables: Tables, state: BattleState, key, max_turns: int, first_action):
+    state, first_action, refused0 = _resolve_pending(tables, state, first_action)
+
     def cond(carry):
         s, _, turns, refused = carry
         return (s.over == 0) & (turns < max_turns) & ~refused
@@ -219,7 +335,7 @@ def _run(tables: Tables, state: BattleState, key, max_turns: int, first_action):
         s = _select(q_refused, s, played)
         return s, key, turns + jnp.where(refused, 0, 1), refused
 
-    init = (state, key, jnp.int32(0), jnp.bool_(False))
+    init = (state, key, jnp.int32(0), refused0)
     s, _, turns, refused = jax.lax.while_loop(cond, body, init)
     won = (s.over != 0) & (s.winner == WINNER_PLAYER)
     return PlayoutResult(
@@ -227,12 +343,15 @@ def _run(tables: Tables, state: BattleState, key, max_turns: int, first_action):
         player_faints=s.player_faints.astype(jnp.int8),
         turns=turns.astype(jnp.int16),
         refused=refused.astype(jnp.int8),
+        deaths=s.deaths.astype(jnp.int8),
+        ended=(s.over != 0).astype(jnp.int8),
     )
 
 
 @partial(jax.jit, static_argnames=("max_turns",))
 def playout(tables: Tables, state: BattleState, key, max_turns: int = 100) -> PlayoutResult:
-    """Play from ``state`` with ``playout_policy`` for the player (module docstring)."""
+    """Play from ``state`` with ``playout_policy`` for the player (module docstring); a
+    pending player replacement is resolved first by ``replacement_policy``."""
     return _run(tables, state, key, max_turns, jnp.int32(-1))
 
 
@@ -240,7 +359,9 @@ def playout(tables: Tables, state: BattleState, key, max_turns: int = 100) -> Pl
 def playout_from_action(
     tables: Tables, state: BattleState, action, key, max_turns: int = 100
 ) -> PlayoutResult:
-    """``playout`` with the player's first action fixed to ``action`` (a legal action);
+    """``playout`` with the player's first action fixed to ``action`` (a legal action; at
+    a pending player replacement ``MOVE_ACTIONS + slot`` is that replacement and the policy
+    chooses from the first turn on);
     the same ``key`` gives every first action the same draws (common random numbers)."""
     return _run(tables, state, key, max_turns, jnp.asarray(action, _I32))
 
@@ -252,24 +373,65 @@ def batched_playout(tables: Tables, states: BattleState, keys, max_turns: int = 
     return jax.vmap(lambda s, k: playout(tables, s, k, max_turns))(states, keys)
 
 
-def replacement_refusal(tables: Tables, state: BattleState, ai_switched, power_mul) -> str | None:
-    """Why ``send_replacements`` refuses the concrete ``state`` (a state after ``step``),
-    or ``None`` when it does not; mirrors its loop outside ``jit``."""
-    for _ in range(SLOTS - 1):
-        if int(needs_replacement(state)[1]) != 1:
-            return None
-        if bool(ai_switched):
-            return (
-                "replacement: the opponent's Pokemon fainted in a turn its AI switched; "
-                "Task_TrainerShowPartyMenu reads the stale aiSwitchedPartySlot "
-                "(docs/ai/roark.md 14, item 3); not implemented"
-            )
-        try:
-            slot = post_ko_switch_in(tables, state, power_mul)
-        except UnsupportedAi as e:
-            return str(e)
-        state = replace(tables, state, 1, slot)
+def _opponent_reason(tables: Tables, state: BattleState, ai_switched, power_mul) -> str | None:
+    """Why the opponent's replacement on the concrete ``state`` is refused, if it is needed."""
+    if int(needs_replacement(state)[1]) != 1:
+        return None
+    if bool(ai_switched):
+        return (
+            "replacement: the opponent's Pokemon fainted in a turn its AI switched; "
+            "Task_TrainerShowPartyMenu reads the stale aiSwitchedPartySlot "
+            "(docs/ai/roark.md 14, item 3); not implemented"
+        )
+    try:
+        post_ko_switch_in(tables, state, power_mul)
+    except UnsupportedAi as e:
+        return str(e)
     return None
+
+
+def _send_reason(tables: Tables, state: BattleState, ai_switched, power_mul):
+    """``(reason, state)``: ``send_replacements`` on the concrete ``state``, outside
+    ``jit``; ``reason`` is why it refuses, or ``None``."""
+    for _ in range(SLOTS - 1):
+        reason = _opponent_reason(tables, state, ai_switched, power_mul)
+        if reason:
+            return reason, state
+        need = needs_replacement(state)
+        if int(need[0]) == 1:
+            held = power_mul if int(state.hp[1, state.active[1]]) == 0 else 0
+            return None, state._replace(replace_mul=jnp.asarray(held, state.replace_mul.dtype))
+        if int(need[1]) != 1:
+            break
+        state = replace(tables, state, 1, post_ko_switch_in(tables, state, power_mul))
+    return None, state
+
+
+def _pass_reason(tables: Tables, state: BattleState, slot: int):
+    """``(reason, state)``: ``replacement_pass`` on the concrete ``state``, outside ``jit``."""
+    mul = int(_carried_mul(state))
+    reason = _opponent_reason(tables, state, False, mul)
+    if reason:
+        return reason, state
+    opp_slot = (
+        post_ko_switch_in(tables, state, mul) if int(needs_replacement(state)[1]) == 1 else None
+    )
+    state = replace(tables, state, 0, slot)
+    if opp_slot is not None and int(needs_replacement(state)[1]) == 1:
+        state = replace(tables, state, 1, opp_slot)
+    state = state._replace(replace_mul=jnp.zeros_like(state.replace_mul))
+    return _send_reason(tables, state, False, mul)
+
+
+def replacement_refusal(tables: Tables, state: BattleState, ai_switched, power_mul) -> str | None:
+    """Why ``finish_turn`` refuses the concrete ``state`` (a state after ``step``), or
+    ``None`` when it does not; mirrors it outside ``jit``."""
+    reason, state = _send_reason(tables, state, ai_switched, power_mul)
+    for _ in range(SLOTS - 1):
+        if reason or int(needs_replacement(state)[0]) != 1:
+            return reason
+        reason, state = _pass_reason(tables, state, int(replacement_policy(tables, state)))
+    return reason
 
 
 _play_jit = jax.jit(_play)
@@ -284,8 +446,16 @@ def refusal_reason(
     ``None`` when it is not: the playout is replayed turn by turn outside the loop (the
     same key splits) and the refused turn's AI (``ai_refusals``, also when the player's
     choice met a refused distribution) or replacement (``replacement_refusal``) is asked
-    on its concrete state."""
+    on its concrete state; a pending player replacement is replayed first."""
     first = jnp.asarray(action, _I32)
+    if int(needs_replacement(state)[0]) == 1:
+        slot = int(first) - MOVE_ACTIONS if int(first) >= MOVE_ACTIONS else None
+        if slot is None:
+            slot = int(replacement_policy(tables, state))
+        reason, state = _pass_reason(tables, state, slot)
+        if reason:
+            return reason
+        first = jnp.int32(-1)
     for turns in range(max_turns):
         if int(state.over) != 0:
             return None
