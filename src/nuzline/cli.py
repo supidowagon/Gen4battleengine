@@ -2,7 +2,11 @@
 
 * ``nuzline coverage --party P (--trainer NAME | --trainer-id N) [--lead 0]
   [--opp-active 0]``: the fight's ``CoverageReport`` for the same turn-0 state ``rank``
-  would use; exit code 2 when anything is missing.
+  would use; exit code 2 when anything is missing. With ``--save`` it adds ``[--cap N]`` and
+  a second report for the candidate pool (``prep.pool``: every party and box Pokemon at
+  level ``N``, default the highest party level, with its current, Move Relearner and TM
+  moves); the exit code follows the party fight alone (plan 4a ruling 7), and ``--cap``
+  without ``--save`` is an error.
 * ``nuzline rank --party P (--trainer NAME | --trainer-id N) [--n 2000] [--seed 0]
   [--lead 0] [--opp-active 0] [--devices N]``: ``require_coverage``, then the Stage A ranking of the
   player's actions at the fight's turn-0 state (the trainer's real built party, bag and
@@ -109,7 +113,9 @@ def _parser() -> argparse.ArgumentParser:
         cmd.add_argument("--lead", type=int, default=0, help="the player's active party slot")
         cmd.add_argument("--opp-active", type=int, default=0, help="the opponent's active slot")
 
-    fight(sub.add_parser("coverage", help="check that the engine supports a fight"))
+    coverage = sub.add_parser("coverage", help="check that the engine supports a fight")
+    fight(coverage)
+    coverage.add_argument("--cap", type=int, default=None, help="with --save: the pool's level cap")
     rank = sub.add_parser("rank", help="rank the player's actions at the fight's start")
     fight(rank)
     rank.add_argument("--n", type=int, default=2000, help="playouts per action")
@@ -209,12 +215,31 @@ def _fight(args):
 def _coverage(args) -> int:
     from nuzline.engine.coverage import check_coverage
 
+    if args.cap is not None and args.save is None:
+        raise ValueError("--cap needs --save")
     tables, names, trainer, player, opp, weather = _fight(args)
     print(_trainer_line(trainer))
     leads = (args.lead, args.opp_active)
     report = check_coverage(tables, names, player, trainer, opp, weather, leads)
     _print_report(report)
+    if args.save is not None:
+        _print_pool(args, tables, names, player)
     return EXIT_REFUSED if report.missing else EXIT_OK
+
+
+def _print_pool(args, tables, names, player) -> None:
+    """The pool section of ``coverage --save``; it never changes the exit code."""
+    from nuzline.data.learnsets import load_learnsets
+    from nuzline.prep.pool import check_pool, pool_candidates
+    from nuzline.saves import load_save
+
+    save = load_save(args.save, allow_corrupt=args.allow_corrupt, tables=tables, names=names)
+    cap = args.cap if args.cap is not None else max(spec.level for spec in player)
+    candidates, left_out = pool_candidates(save, tables, names, load_learnsets(), cap)
+    print(f"Pool at level cap {cap} ({len(candidates)} Pokemon):")
+    _print_report(check_pool(tables, names, candidates))
+    for line in left_out:
+        print(line)
 
 
 def _pct(p: float) -> str:

@@ -464,3 +464,45 @@ def test_save_export_unwritable_output_exit_1(save_path, tmp_path, capsys):
     assert main(["save", "export", str(save_path), "-o", str(out)]) == 1
     err = capsys.readouterr().err
     assert err.startswith("nuzline: error:") and len(err.strip().splitlines()) == 1
+
+
+def _pool_save(tmp_path, tables, names, box_moves=("Growl", "Bide")):
+    from tests.saves.synthetic import box_record, party_record
+    from tests.saves.writer import build_image
+
+    path = tmp_path / "pool.sav"
+    path.write_bytes(
+        build_image(
+            party=[
+                party_record(tables, names, "Furret", 16, ("Scratch",), ability_slot=1),
+                party_record(tables, names, "Geodude", 16, ("Tackle",)),
+            ],
+            boxes={
+                (0, 0): box_record(tables, names, "Kricketot", 5, box_moves),
+                (0, 1): box_record(tables, names, "Bidoof", 4, ("Tackle",)),
+            },
+            bag={"tms_hms": [(names.item("TM10"), 1)]},
+        )
+    )
+    return path
+
+
+def test_coverage_save_reports_pool(tmp_path, tables, names, capsys):
+    path = _pool_save(tmp_path, tables, names)
+    assert main(["coverage", "--save", str(path), "--trainer", "roark"]) == 0
+    out = capsys.readouterr().out
+    assert "Pool at level cap 16 (4 Pokemon):" in out
+    assert out.count("Support: EXACT") == 2
+
+
+def test_coverage_pool_does_not_change_exit_code(tmp_path, tables, names, capsys):
+    path = _pool_save(tmp_path, tables, names, box_moves=("Metronome",))
+    assert main(["coverage", "--save", str(path), "--trainer", "roark"]) == 0
+    out = capsys.readouterr().out
+    assert "box 1 slot 0 KRICKETOT: Metronome (current, move effect UNSUPPORTED)" in out
+    assert "Support: NONE" in out
+
+
+def test_cap_needs_save(capsys):
+    assert main(["coverage", "--party", PARTY, "--trainer", "roark", "--cap", "16"]) == 1
+    assert "--cap needs --save" in capsys.readouterr().err

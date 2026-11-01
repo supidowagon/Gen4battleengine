@@ -138,6 +138,17 @@ _MOVES = {
     "Natural Gift": "variable type (TrainerAI_MoveType)",
     "Judgment": "variable type (TrainerAI_MoveType)",
 }
+# What the AI refuses on the player's side (side 0): the any-side abilities, and every refused
+# move but Hidden Power (its IV type is modelled for the player, see ``_layout``). Decomp ids.
+PLAYER_ABILITY_REFUSALS = {
+    ABILITY_IDS[n]: f"ability {n} ({why}) is not implemented"
+    for n, why in _ANY_SIDE_ABILITIES.items()
+}
+PLAYER_MOVE_REFUSALS = {
+    MOVE_IDS[n]: f"move {n} ({why}) is not implemented"
+    for n, why in _MOVES.items()
+    if n != "Hidden Power"
+}
 _ANY_SIDE_IDS = jnp.array([ABILITY_IDS[n] for n in _ANY_SIDE_ABILITIES], _I32)
 _AI_SIDE_IDS = jnp.array([ABILITY_IDS[n] for n in _AI_SIDE_ABILITIES], _I32)
 _MOVE_REFUSED_IDS = jnp.array([MOVE_IDS[n] for n in _MOVES], _I32)

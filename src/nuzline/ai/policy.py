@@ -327,6 +327,29 @@ _STATE_MOVE_IDS = {
 }
 
 
+def player_move_refusal(move: int) -> str | None:
+    """Why the AI refuses a fight whose player Pokemon knows ``move`` (decomp id), or None."""
+    if move in switching.PLAYER_MOVE_REFUSALS:
+        return f"AI switching: {switching.PLAYER_MOVE_REFUSALS[move]}"
+    for name, move_id in _STATE_MOVE_IDS.items():
+        if move == move_id:
+            return f"AI scoring: move {name} leaves a type-chart state the engine does not carry"
+    return None
+
+
+def player_ability_refusal(ability: int) -> str | None:
+    """Why the AI refuses a fight whose player Pokemon has ``ability`` (decomp id), or None."""
+    if ability in switching.PLAYER_ABILITY_REFUSALS:
+        return f"AI switching: {switching.PLAYER_ABILITY_REFUSALS[ability]}"
+    for name in _DEFENDER_ABILITIES:
+        if ability == _ABILITY[name]:
+            return (
+                f"AI scoring: ability {name} changes IfMoveEffectivenessEquals "
+                "and is not implemented"
+            )
+    return None
+
+
 class _Refused(NamedTuple):
     move: jnp.ndarray  # bool[SLOTS, MOVES]: opponent move without transcribed script paths
     sites: jnp.ndarray  # bool[SLOTS]: opponent moveset with too many script-roll sites

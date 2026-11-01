@@ -16,7 +16,9 @@ SAMPLE = (  # species, level, moves
 IVS = (20,) * 6
 
 
-def party_record(tables, names, species, level, moves, *, hp=None, status=0, egg=False, **kw):
+def party_record(
+    tables, names, species, level, moves, *, hp=None, status=0, egg=False, ability_slot=0, **kw
+):
     sp = names.species(species)
     personality = personality_for(3, 5)
     stats = tuple(
@@ -39,7 +41,7 @@ def party_record(tables, names, species, level, moves, *, hp=None, status=0, egg
         ivs=IVS,
         moves=tuple(ids),
         pp=tuple(pp),
-        ability=int(tables.species_abilities_decomp[sp][0]),
+        ability=int(tables.species_abilities_decomp[sp][ability_slot]),
         is_egg=egg,
         party={
             "status": status,
@@ -47,6 +49,24 @@ def party_record(tables, names, species, level, moves, *, hp=None, status=0, egg
             "hp": stats[0] if hp is None else hp,
             "stats": stats,
         },
+        **kw,
+    )
+
+
+def box_record(tables, names, species, level, moves, *, ability_slot=0, **kw):
+    """The same record as :func:`party_record` without the party block (a box slot)."""
+    sp = names.species(species)
+    ids = [names.move(m) for m in moves]
+    ids += [0] * (4 - len(ids))
+    pp = [int(np.asarray(tables.move_pp)[m]) if m else 0 for m in ids]
+    return mon_record(
+        species=sp,
+        personality=personality_for(3, 5),
+        level=level,
+        ivs=IVS,
+        moves=tuple(ids),
+        pp=tuple(pp),
+        ability=int(tables.species_abilities_decomp[sp][ability_slot]),
         **kw,
     )
 
