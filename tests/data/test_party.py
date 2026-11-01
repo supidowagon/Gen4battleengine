@@ -81,6 +81,12 @@ def test_party_toml_new_keys_default_to_none(names):
         ("pp = [1, 2]\nmoves_extra = 1\n" if False else "pp = [1, 2]\n", "pp"),
         ("pp = [1, 2, 3, 4, 5]\n", "pp"),
         ("stats = [1, 2, 3]\n", "stats"),
+        ("stats = [0, 11, 12, 13, 14, 15]\n", "stats must be 1-999"),
+        ("stats = [30, 11, 12, 13, 14, 1000]\n", "stats must be 1-999"),
+        ('status = "sleep"\nsleep_turns = 0\n', "sleep_turns must be 1-7"),
+        ('status = "sleep"\nsleep_turns = 8\n', "sleep_turns must be 1-7"),
+        ("pp = [65]\n", "pp values must be 0-64"),
+        ("pp = [-1]\n", "pp values must be 0-64"),
     ],
 )
 def test_party_toml_new_key_errors(tmp_path, names, extra, match):

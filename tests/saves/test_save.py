@@ -60,6 +60,9 @@ def test_wrong_size_raises(tmp_path, tables, names):
         load_save(_write(tmp_path, b"\0" * 0x40000), tables=tables, names=names)
     with pytest.raises(SaveError, match="not a Platinum save"):
         read_image(b"\0" * 0x40000 + DSV_MARKER + b"x" * 10)
+    # A .dsv reports the size of its image, not of the whole file with the footer.
+    with pytest.raises(SaveError, match="not a Platinum save: 4096 bytes"):
+        read_image(b"\0" * 4096 + DSV_MARKER + b"x" * 122)
 
 
 def test_party_boxes_bag_trainer(tmp_path, tables, names):
