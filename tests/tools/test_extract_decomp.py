@@ -96,3 +96,34 @@ def test_charmap():
 def test_static_writes_growth_files(out):
     assert len(json.loads((out / "exp_tables.json").read_text(encoding="utf-8"))) == 8
     assert json.loads((out / "charmap.json").read_text(encoding="utf-8"))["0145"] == "a"
+
+
+def _by_tm_indices(species_dir: str) -> list[int]:
+    d = json.loads((DECOMP / "res/pokemon" / species_dir / "data.json").read_text("utf-8"))
+    out = []
+    for marker in d["learnset"].get("by_tm", []):
+        n = int(marker[2:]) - 1
+        out.append(n + 92 if marker.startswith("HM") else n)
+    return sorted(out)
+
+
+def test_tm_learnsets_match_by_tm(out):
+    tm = json.loads((out / "tm_learnsets.json").read_text())
+    sp = json.loads((out / "species.json").read_text())
+    ids = {s["name"].lower(): i for i, s in enumerate(sp)}
+    for name in ("furret", "kricketot", "shedinja"):
+        assert tm[str(ids[name])] == _by_tm_indices(name)
+    assert tm[str(ids["kricketot"])] == []
+    assert 9 in tm[str(ids["furret"])]  # TM10
+
+    items = json.loads((out / "items.json").read_text())
+    mv = json.loads((out / "moves.json").read_text())
+
+    def teaches(item: str):
+        i = next(i for i in items if i["name"] == item)["teaches_move"]
+        return None if i is None else mv[i]["name"]
+
+    assert teaches("TM01") == "Focus Punch"
+    assert teaches("TM10") == "Hidden Power"
+    assert teaches("HM08") == "Rock Climb"
+    assert teaches("Potion") is None

@@ -53,7 +53,9 @@ from tools.effect_map import (
     UNSUPPORTED_MOVES,
 )
 
-MANIFEST_VERSION = 6
+MANIFEST_VERSION = 7
+NUM_TMS = 92
+NUM_HMS = 8
 CLONE_SCRIPT = Path(__file__).with_name("clone_decomp.sh")
 
 # generated/move_classes.txt order.
@@ -128,6 +130,17 @@ def build_arrays(inter: Path) -> tuple[dict[str, np.ndarray], dict]:
     natures = _load(inter, "natures")
     exp_tables = _load(inter, "exp_tables")
     charmap = _load(inter, "charmap")
+    level_learnsets = _load(inter, "learnsets")
+    tm_learnsets = _load(inter, "tm_learnsets")
+    item_ids_by_name = {i["name"]: n for n, i in enumerate(items)}
+    first_tm_item = item_ids_by_name["TM01"]
+    tm_moves = []
+    for n in range(NUM_TMS + NUM_HMS):
+        item = items[first_tm_item + n]
+        want = f"TM{n + 1:02d}" if n < NUM_TMS else f"HM{n - NUM_TMS + 1:02d}"
+        if item["name"] != want or item["teaches_move"] is None:
+            raise BuildError(f"item {first_tm_item + n} is {item['name']!r}, expected {want}")
+        tm_moves.append(item["teaches_move"])
 
     move_names = {m["name"] for m in moves}
     missing = sorted(
@@ -223,6 +236,14 @@ def build_arrays(inter: Path) -> tuple[dict[str, np.ndarray], dict]:
         "category_names": list(MOVE_CATEGORIES),
         "target_names": list(MOVE_TARGETS),
         "charmap": charmap,
+        # Host-only lookups (nuzline.data.learnsets): per species id, the level-up
+        # (level, move) pairs in learn order and the TM/HM indices it can learn;
+        # tm_moves[index] is the move that TM/HM teaches; first_tm_item is ITEM_TM01
+        # (TM01-TM92 then HM01-HM08 are consecutive ids).
+        "level_learnsets": level_learnsets,
+        "tm_learnsets": tm_learnsets,
+        "tm_moves": tm_moves,
+        "first_tm_item": first_tm_item,
     }
     return arrays, manifest
 
