@@ -183,3 +183,14 @@ def at_replacement(state: BattleState, opp_down: bool = False) -> BattleState:
     if opp_down:
         s = s.replace_hp(1, int(s.active[1]), 0)
     return s
+
+
+def dead_monferno(tables: Tables, names: Names, **kw) -> BattleState:
+    """Prinplup active (slot 0) against Geodude, Monferno already dead: ``hp`` 0,
+    ``deaths`` and ``player_faints`` recorded, the battle not over. ``kw`` go to
+    ``roark_state``."""
+    s = roark_state(tables, names, player_count=2, opp_count=1, player_species="Prinplup", **kw)
+    monferno = next(i for i in range(2) if int(s.species[0, i]) == names.species("Monferno"))
+    return s.replace_hp(0, monferno, 0)._replace(
+        deaths=s.deaths.at[monferno].set(1), player_faints=s.player_faints + 1
+    )

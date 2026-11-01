@@ -88,6 +88,7 @@ from nuzline.engine.actions import FIRST_ITEM_ACTION, MOVE_ACTIONS, legal_action
 from nuzline.engine.enumerate import SamplingOnly
 from nuzline.engine.state import BattleState
 from nuzline.engine.step import WINNER_PLAYER
+from nuzline.search import deaths
 from nuzline.search.expand import ai_rows, expand
 from nuzline.search.leaves import LeafValue, allocate, evaluate_forced, evaluate_leaves
 from nuzline.search.rows import concat, row_bytes, take
@@ -241,7 +242,11 @@ class _Store:
             over = np.asarray(part.over) != 0
             self.parts.append(part)
             self.over.extend(over.tolist())
-            self.won.extend((over & (np.asarray(part.winner) == WINNER_PLAYER)).tolist())
+            won = over & (np.asarray(part.winner) == WINNER_PLAYER)
+            ok = deaths.success(
+                won, part.player_faints, part.deaths, part.faint_budget, part.protected
+            )
+            self.won.extend(ok.tolist())
             self._all = None
         return out
 
@@ -543,13 +548,7 @@ class _Solver:
         added = 0
         for i, v in zip(pick, new, strict=True):
             old = values[i]
-            values[i] = LeafValue(
-                old.wins_a + v.wins_a,
-                old.n_a + v.n_a,
-                old.wins_b + v.wins_b,
-                old.n_b + v.n_b,
-                old.refused or v.refused,
-            )
+            values[i] = old.merge(v)
             added += v.n_a + v.n_b
         return added
 

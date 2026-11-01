@@ -12,6 +12,7 @@ import jax
 import numpy as np
 import pytest
 
+from nuzline.engine.damage import damage_table
 from nuzline.engine.step import WINNER_PLAYER
 from nuzline.search import stage_b
 from nuzline.search.expand import ai_rows, expand
@@ -23,6 +24,7 @@ from tests.engine.helpers import roark_real_state, roark_state
 from tests.search.exhaustive import children, exhaustive
 from tests.search.fixtures import (
     all_terminal_root,
+    dead_monferno,
     empty_bag,
     low_hp_endgame,
     pixel_endgame,
@@ -590,3 +592,30 @@ def test_precision_must_be_positive(tables, names):
     for bad in (0.0, -0.01):
         with pytest.raises(ValueError, match="invalid settings"):
             solve(tables, names, state, KEY, replace(PRECISE, precision=bad), leaf_fn=ZERO)
+
+
+def test_store_terminal_is_success(tables, names):
+    base = dead_monferno(tables, names)._replace(over=np.int8(1), winner=np.int8(WINNER_PLAYER))
+    protected = base.with_budget(3)._replace(
+        protected=base.protected.at[int(np.flatnonzero(np.asarray(base.deaths))[0])].set(1)
+    )
+    lost = base.with_budget(3)._replace(winner=np.int8(1 - WINNER_PLAYER))
+    store = stage_b._Store()
+    store.add(batch(base.with_budget(0), base.with_budget(1), protected, lost))
+    assert store.won == [False, True, False, False]
+    assert store.over == [True] * 4
+
+
+def test_terminal_win_after_a_death_scores_zero_at_k0(tables, names):
+    state = empty_bag(dead_monferno(tables, names, player_moves=["Bubble"], opp_moves=["Tackle"]))
+    state = state.with_pp(0, 0, [int(p) if i == 0 else 0 for i, p in enumerate(state.pp[0, 0])])
+    bubble = names.move_slot(state, 0, "Bubble")
+    table = np.asarray(damage_table(tables, state, 0, names.move("Bubble"), 0))
+    assert table.min() >= int(state.hp[1, 0])  # one Bubble always KOs
+    settings = SolveSettings(max_depth=1, epsilon=0.0, n_depth0=8, max_turns=TURNS)
+    for k, want in ((0, 0.0), (1, 1.0)):
+        s = state.with_budget(k)
+        result = solve(tables, names, s, KEY, settings, leaf_fn=ZERO)
+        exact, _ = exhaustive(tables, s, 1)
+        assert exact[bubble] == pytest.approx(want, abs=1e-9)
+        assert all(r.estimate == pytest.approx(want, abs=1e-9) for r in result.ranking)

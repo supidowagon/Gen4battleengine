@@ -28,6 +28,7 @@ from nuzline.engine.observe import OBS_SIZE, observe
 from nuzline.engine.order import is_switch
 from nuzline.engine.state import BattleState
 from nuzline.engine.step import WINNER_PLAYER, replacement_power_mul, step
+from nuzline.search import deaths
 from nuzline.search.playout import send_replacements
 
 P = 8192  # outcome rows per program call (padded)
@@ -120,7 +121,15 @@ def exhaustive(
                         if refused:
                             continue
                         if int(after.over) != 0:
-                            total += reach * (int(after.winner) == WINNER_PLAYER)
+                            total += reach * bool(
+                                deaths.success(
+                                    int(after.winner) == WINNER_PLAYER,
+                                    int(after.player_faints),
+                                    np.asarray(after.deaths),
+                                    int(after.faint_budget),
+                                    np.asarray(after.protected),
+                                )
+                            )
                             continue
                         if left == 1:
                             continue
