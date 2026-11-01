@@ -18,6 +18,7 @@ from nuzline.engine.coverage import (
     IMPLEMENTED_ITEMS,
     CoverageReport,
     Support,
+    _Collector,
 )
 from nuzline.engine.ids import AbilityId, EffectId, ItemId
 from nuzline.prep.leveling import candies_to_cap, level_to_cap
@@ -81,11 +82,11 @@ def check_pool(tables: Tables, names: Names, candidates: Sequence[Candidate]) ->
     refusals (``ai.policy.player_move_refusal``/``player_ability_refusal``)."""
     from nuzline.ai.policy import player_ability_refusal, player_move_refusal
 
-    report = CoverageReport()
+    c = _Collector()
 
-    def missing(line: str) -> None:
-        report.level = Support.NONE
-        report.missing.append(line)
+    def refuse(line: str) -> None:
+        c.report.level = Support.NONE
+        c.report.missing.append(line)
 
     effect = np.asarray(tables.move_effect)
     abilities = np.asarray(tables.species_abilities)
@@ -94,23 +95,28 @@ def check_pool(tables: Tables, names: Names, candidates: Sequence[Candidate]) ->
 
     def check_move(label: str, move: int, kind: str) -> None:
         name = names.move_names[move]
-        if IMPLEMENTED_EFFECTS.get(EffectId(int(effect[move])), Support.NONE) == Support.NONE:
-            missing(f"{label}: {name} ({kind}, move effect UNSUPPORTED)")
-        elif (reason := player_move_refusal(move)) is not None:
-            missing(f"{label}: {name} ({kind}, {reason})")
+        support = IMPLEMENTED_EFFECTS.get(EffectId(int(effect[move])), Support.NONE)
+        c.add(support, f"{label}: {name}", f"{kind}, move effect")
+        if support != Support.NONE and (reason := player_move_refusal(move)) is not None:
+            refuse(f"{label}: {name} ({kind}, {reason})")
 
     for cand in candidates:
         spec = cand.spec
         slot = spec.ability_slot
         ability = AbilityId(int(abilities[spec.species, slot]))
         ability_name = names.ability_names[names.species_abilities(spec.species)[slot]]
-        if IMPLEMENTED_ABILITIES.get(ability, Support.NONE) == Support.NONE:
-            missing(f"{cand.label}: {ability_name} (ability UNSUPPORTED)")
-        elif reason := player_ability_refusal(int(decomp_abilities[spec.species][slot])):
-            missing(f"{cand.label}: {ability_name} (ability, {reason})")
+        support = IMPLEMENTED_ABILITIES.get(ability, Support.NONE)
+        c.add(support, f"{cand.label}: {ability_name}", "ability")
+        if support != Support.NONE and (
+            reason := player_ability_refusal(int(decomp_abilities[spec.species][slot]))
+        ):
+            refuse(f"{cand.label}: {ability_name} (ability, {reason})")
         item = ItemId(int(item_effect[spec.item]))
-        if IMPLEMENTED_ITEMS.get(item, Support.NONE) == Support.NONE:
-            missing(f"{cand.label}: {names.item_names[spec.item]} (held item UNSUPPORTED)")
+        c.add(
+            IMPLEMENTED_ITEMS.get(item, Support.NONE),
+            f"{cand.label}: {names.item_names[spec.item]}",
+            "held item",
+        )
         for move in spec.moves:
             if move:
                 check_move(cand.label, move, "current")
@@ -118,4 +124,4 @@ def check_pool(tables: Tables, names: Names, candidates: Sequence[Candidate]) ->
             check_move(cand.label, move, "relearner")
         for item_id, move in cand.tms:
             check_move(cand.label, move, names.item_names[item_id])
-    return report
+    return c.report
