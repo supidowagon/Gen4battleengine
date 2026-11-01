@@ -23,3 +23,15 @@ Read a Platinum save (see `docs/saves.md`), or use it in place of `--party` with
 uv run nuzline save show path/to/platinum.sav
 uv run nuzline rank --save path/to/platinum.sav --trainer roark
 ```
+
+## Tests against your own save
+
+Two tests need your own Platinum save and are skipped unless the variable is set. Never commit a
+save; keep it outside the repository.
+
+* `NUZLINE_ORACLE_DIR`: a folder for the PKHeX cross-check (`tests/saves/test_pkhex_oracle.py`, see `docs/saves.md`).
+* `NUZLINE_USER_SAVE`: the path of the save file. `tests/test_user_save.py` checks that the candidate pool built from it is fully covered against Roark.
+
+```
+NUZLINE_USER_SAVE=path/to/platinum.dsv uv run pytest tests/test_user_save.py -v
+```
