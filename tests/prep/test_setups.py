@@ -17,7 +17,14 @@ from nuzline.prep.setups import (
     setup_states,
     team_setups,
 )
-from nuzline.prep.variants import RELEARNER, Member, base_member, max_hp_of, member_spec
+from nuzline.prep.variants import (
+    RELEARNER,
+    Member,
+    base_member,
+    designated_change,
+    max_hp_of,
+    member_spec,
+)
 from nuzline.search.rows import row_bytes
 from tests.engine.helpers import roark_party, roark_trainer, sample_party
 from tests.prep.fixtures import candidate, problem
@@ -93,6 +100,37 @@ def test_neighbours_one_change(tables, names):
     kept = neighbours(tables, prob, start, pruned=pruned)
     assert len(kept) < len(near)
     assert all(m not in pruned for s in kept for m in s.members)
+
+
+def test_neighbours_designated_relearner(tables, names):
+    party = sample_party(names)
+    moves = tuple(names.move(m) for m in ("Bite", "Ember", "Leer", "Surf", "Thunderbolt"))
+    cands = [candidate(names, party[i], i, relearner=moves) for i in range(2)]
+    res = Resources(1, (), (), ())
+    prob = problem(tables, names, cands, resources=res, levelled=[()] * 2)
+    start = next(s for s in team_setups(prob) if len(s.members) == 2)
+    kw = {"tms": False, "items": False, "entry_hp": False}
+
+    def relearns(relearner):
+        out = []
+        for s in neighbours(tables, prob, start, relearner=relearner, **kw):
+            for m in s.members:
+                out += [(m.candidate, c) for c in m.moves if c.source == RELEARNER]
+        return out
+
+    designated = relearns("designated")
+    for cand_i, change in designated:
+        assert change == designated_change(tables, prob, cand_i)
+    assert len(designated) <= len(start.members)
+    assert len(relearns("all")) > len(designated)
+    assert relearns("none") == []
+    chained = next(
+        s
+        for s in neighbours(tables, prob, start, relearner="designated", **kw)
+        if any(m.moves for m in s.members)
+    )
+    for s in neighbours(tables, prob, chained, relearner="designated", **kw):
+        assert sum(c.source == RELEARNER for m in s.members for c in m.moves) <= 1
 
 
 def test_setup_states_and_protected(tables, names):

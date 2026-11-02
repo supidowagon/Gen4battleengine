@@ -24,6 +24,7 @@ from nuzline.prep.variants import (
     _relearner_options,
     ai_kill_damage,
     base_member,
+    designated_change,
     hp_regions,
     max_hp_of,
     member_cost,
@@ -114,7 +115,15 @@ def _member_changes(
 
     for _, move in problem.levelled[member.candidate]:
         add_moves(move, LEVEL_UP)
-    if relearner != "none":
+    if relearner == "designated":
+        change = designated_change(tables, problem, member.candidate)
+        if (
+            change is not None
+            and change.slot not in {c.slot for c in member.moves}
+            and not any(c.source == RELEARNER for c in member.moves)
+        ):
+            out.append(dataclasses.replace(member, moves=(*member.moves, change)))
+    elif relearner == "all":
         for move in _relearner_options(problem, member.candidate):
             add_moves(move, RELEARNER)
     if tms:
