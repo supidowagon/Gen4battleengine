@@ -31,6 +31,10 @@ uv run nuzline save show path/to/platinum.sav
 uv run nuzline rank --save path/to/platinum.sav --trainer roark
 ```
 
+## Files
+
+* `config/level_caps.toml`: the level cap per trainer id (Roark, 246: 16) that `prep` uses; a trainer without an entry needs `--cap`.
+
 ## Tests against your own save
 
 Two tests need your own Platinum save and are skipped unless the variable is set. Never commit a

@@ -210,6 +210,23 @@ def _check_weather(c: _Collector, weathers: Sequence[int]) -> None:
         c.add(support, f"Battle start: {weather.name.title()}", "weather")
 
 
+def check_opponent(
+    tables: Tables,
+    names: Names,
+    trainer: Trainer,
+    opp: Sequence[PokemonSpec],
+    start_condition: int,
+) -> CoverageReport:
+    """The trainer's side of ``check_coverage``: its party, bag, AI flags and the weather
+    lines. It runs no ``ai_refusals``: those depend on the player's party, so a caller
+    that needs them runs them per setup."""
+    c = _Collector()
+    _check_party(c, tables, names, trainer.name, opp)
+    _check_trainer(c, tables, names, trainer)
+    _check_weather(c, [start_condition, start_weather(trainer)])
+    return c.report
+
+
 def check_coverage(
     tables: Tables,
     names: Names,
@@ -225,9 +242,10 @@ def check_coverage(
     ``leads`` (``make_state``), whose turn-0 state the AI's refusals are run on."""
     c = _Collector()
     _check_party(c, tables, names, "Player", player)
-    _check_party(c, tables, names, trainer.name, opp)
-    _check_trainer(c, tables, names, trainer)
-    _check_weather(c, [start_condition, start_weather(trainer)])
+    theirs = check_opponent(tables, names, trainer, opp, start_condition)
+    c.report.missing.extend(theirs.missing)
+    c.report.sampling_only.extend(theirs.sampling_only)
+    c.report.level = min(c.report.level, theirs.level)
     from nuzline.ai.policy import ai_refusals  # nuzline.ai imports the engine
 
     state = make_state(tables, player, opp, start_condition, opp_items=trainer.items, leads=leads)

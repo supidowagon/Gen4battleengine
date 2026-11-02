@@ -13,6 +13,8 @@ from pathlib import Path
 
 from nuzline.data import tables
 
+HM_FIRST_INDEX = 92  # TM01-TM92 = 0-91, HM01-HM08 = 92-99
+
 
 class Learnsets:
     def __init__(self, manifest: dict):
@@ -44,6 +46,11 @@ class Learnsets:
         """The move a TM/HM item teaches; 0 for any other item."""
         i = self._tm_index(item)
         return 0 if i is None else self._tm_moves[i]
+
+    def is_hm(self, item: int) -> bool:
+        """Whether ``item`` is an HM (TM index >= 92); False for any other item."""
+        i = self._tm_index(item)
+        return i is not None and i >= HM_FIRST_INDEX
 
     def can_learn_tm(self, species: int, item: int) -> bool:
         """Whether ``species`` (form 0's data) can learn the TM/HM ``item``; False for

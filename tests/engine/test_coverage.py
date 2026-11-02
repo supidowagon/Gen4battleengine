@@ -16,6 +16,7 @@ from nuzline.engine.coverage import (
     Support,
     UnsupportedMechanics,
     check_coverage,
+    check_opponent,
     require_coverage,
     start_weather,
 )
@@ -102,3 +103,22 @@ def test_sampling_only_is_unimplemented():
         IMPLEMENTED_WEATHER,
     )
     assert {support for r in registries for support in r.values()} <= {Support.EXACT, Support.NONE}
+
+
+@pytest.mark.parametrize("trainer_id", [246, 858])
+def test_check_opponent_matches_check_coverage(tables, names, monkeypatch, trainer_id):
+    trainer = next(t for t in load_trainers(INTERMEDIATE) if t.id == trainer_id)
+    opp = build_trainer_party(trainer, _inter())
+    full = check_coverage(tables, names, sample_party(names), trainer, opp, 0)
+    expected = [
+        m
+        for m in full.missing
+        if not m.startswith("Player ") and not m.endswith(" (trainer AI UNSUPPORTED)")
+    ]
+
+    def no_state(*a, **kw):
+        raise AssertionError("check_opponent must not build a state")
+
+    monkeypatch.setattr("nuzline.engine.coverage.make_state", no_state)
+    theirs = check_opponent(tables, names, trainer, opp, 0)
+    assert theirs.missing == expected

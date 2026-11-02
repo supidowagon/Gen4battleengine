@@ -1,0 +1,3 @@
+# Level cap per trainer id: the highest level the user lets a team member reach before that fight.
+[caps]
+246 = { name = "Roark", cap = 16 }
