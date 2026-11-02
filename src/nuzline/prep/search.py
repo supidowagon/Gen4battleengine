@@ -9,9 +9,14 @@ Halving (ruling 2): round ``r`` tops every setup of the round up to ``T_r = scre
 (2**(r + 1) - 1)`` playouts (grouped by how many each still needs, one ``screen`` call per
 group). A phase keeps one survivor set ``S_j`` per rung ``j`` in ``0..3``; the round's set is
 their union; afterwards ``S_k`` (``k`` = the requested rung, ``problem.deaths``) keeps its top
-``max(keep, ceil(|S_k| / 2))`` by rung-``k`` point estimate and every other ``S_j`` its top
-``max(ladder_keep, ceil(|S_j| / 2))`` by rung ``j``, ties to the lower setup index (the order
-the setups were first screened in). The phase ends once ``|S_k| <= keep``.
+``max(keep, ceil(|S_k| / 2))`` by rung ``k`` and every other ``S_j`` its top
+``max(ladder_keep, ceil(|S_j| / 2))`` by rung ``j`` (``halving_key``): the lower Wilson bound
+first, so a parent's tight estimate over hundreds of playouts is not ranked below a
+neighbour's ``n/n`` over a handful (at equal counts the bound orders as the point estimate
+does), then, among setups the playouts cannot tell apart (an easy fight saturates at ``n/n``
+for the first rounds), the quality the playouts still measure: ``deaths.tie_deaths``, mean
+HP left, mean PP left, then the lower cost, the lower setup index last. The phase ends once
+``|S_k| <= keep``.
 
 The answer at any moment is the best so far: the ``prep_order`` leader of ``S_k`` as the last
 completed round screened it (before that round's halving), or the best finalist. A unit of work
@@ -81,12 +86,21 @@ __all__ = [
     "Progress",
     "Rung",
     "SearchStats",
+    "halving_key",
     "phase_id",
     "run_prep",
     "setup_label",
 ]
 
 RUNGS = deaths.MAX_DEATH_BUDGET + 1  # the ladder: 0..3 deaths
+
+
+def halving_key(stats: ScreenStats, j: int, cost: float, index: int) -> tuple:
+    """A halving round's sort key on rung ``j``, best first (module docstring): the lower
+    Wilson bound, the point estimate, ``deaths.tie_deaths``, mean HP and PP left, the
+    cost, the setup ``index``."""
+    row = scored(stats, j, cost)
+    return (-row.ci_low, -row.score, row.tie_deaths, -row.hp_left, -row.pp_left, cost, index)
 
 
 @dataclass(frozen=True)
@@ -320,8 +334,8 @@ class _Funnel:
         return [indices[o] for o in order]
 
     def top(self, indices: Sequence[int], j: int, count: int) -> list[int]:
-        """The ``count`` best by rung-``j`` point estimate (ties: the lower index), ascending."""
-        best = sorted(indices, key=lambda i: (-self.stats[i].rung(j), i))
+        """The ``count`` best on rung ``j`` by ``halving_key``, ascending."""
+        best = sorted(indices, key=lambda i: halving_key(self.stats[i], j, self.cost[i], i))
         return sorted(best[:count])
 
     # ------------------------------------------------------------------ units

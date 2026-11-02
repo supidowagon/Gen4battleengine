@@ -55,7 +55,10 @@ def test_short_stall_ranked_first(stall):
     assert rung0.source == "plan" and rung0.setup == chosen
     assert result.plan is not None and result.plan.ranking[0].estimate >= 0.9
     first = result.plan.ranking[0].label
-    assert first == ("Defense Curl" if chosen.members[0].candidate == TANK else "Switch -> Geodude")
+    # Lead with the tank and stall, or lead with another and switch to the tank (Geodude) first;
+    # switch labels carry the species name as the tables spell it (upper case).
+    want = "Defense Curl" if chosen.members[0].candidate == TANK else "Switch -> GEODUDE"
+    assert first == want
     without = [s for s in total if not has(s, TANK)]
     assert without
     for setup in without:

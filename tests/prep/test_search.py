@@ -411,3 +411,37 @@ def test_reproducible(tables, names):
     assert a.plan is not None and a.finalists
     assert a.stats.phase == "finalists" and a.stats.stopped is None
     assert abs(sum(a.distribution.probs) - 1) < 1e-9
+
+
+def _saturated(wins0: int, n: int, hp: float) -> ScreenStats:
+    """``wins0`` deathless wins of ``n``, the rest one-death wins; mean HP left ``hp``."""
+    return ScreenStats((wins0, n - wins0, 0, 0, 0, 0, 0, 0), n - wins0, hp * n, 0.5 * n, False)
+
+
+def test_halving_does_not_cut_by_registration_order():
+    """A saturated variant round (finding prep-1): parents tight at about 762 playouts with
+    one failure, every neighbour at 6/6. The cut keeps the parents (their lower bound beats
+    a 6/6 bound) and, among the 6/6 neighbours, the ones with the most HP left, wherever
+    their parent was registered; index order no longer decides."""
+    parents = 4
+    per_parent = 10
+    stats, cost = [], []
+    for _ in range(parents):
+        stats.append(_saturated(761, 762, 0.6))
+        cost.append(0.0)
+    for p in range(parents):
+        for m in range(per_parent):
+            best = p == parents - 1 and m == per_parent - 1
+            stats.append(_saturated(6, 6, 0.9 if best else 0.3))
+            cost.append(0.0)
+    indices = list(range(len(stats)))
+    order = sorted(indices, key=lambda i: search.halving_key(stats[i], 0, cost[i], i))
+    kept = order[: parents + 1]
+    assert set(kept) == set(range(parents)) | {len(stats) - 1}
+    # Equal counts order by the point estimate as before; ties at equal everything go by index.
+    assert search.halving_key(_saturated(5, 6, 0.3), 0, 0.0, 0) > search.halving_key(
+        _saturated(6, 6, 0.3), 0, 0.0, 1
+    )
+    assert search.halving_key(_saturated(6, 6, 0.3), 0, 0.0, 0) < search.halving_key(
+        _saturated(6, 6, 0.3), 0, 0.0, 1
+    )
