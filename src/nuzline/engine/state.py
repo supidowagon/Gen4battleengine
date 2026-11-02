@@ -16,7 +16,8 @@ Encodings:
 * ``stages[side, ids.Stat]`` are the active Pokemon's stat stages, 0 = neutral
   (the decomp stores 6 = neutral); index 0 (HP) is unused.
 * ``weather`` is an ``ids.Weather``; ``weather_timer == 0`` means permanent.
-* ``winner``: 0 none, 1 player lost (or any player Pokemon fainted), 2 player won.
+* ``winner``: 0 none, 1 player lost (no player Pokemon with HP left, a
+  double KO included), 2 player won.
 * ``turn`` is the decomp's ``totalTurns`` while a turn is played and at each decision;
   ``step`` adds 1 at the end, so a faint replacement (``step.replace``, run after
   ``step``) sees ``turn`` one ahead of the decomp's, which increments after it

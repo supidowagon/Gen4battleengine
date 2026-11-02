@@ -619,3 +619,21 @@ def test_terminal_win_after_a_death_scores_zero_at_k0(tables, names):
         exact, _ = exhaustive(tables, s, 1)
         assert exact[bubble] == pytest.approx(want, abs=1e-9)
         assert all(r.estimate == pytest.approx(want, abs=1e-9) for r in result.ranking)
+
+
+def test_win_after_a_new_death_scores_zero_at_k0(tables, names):
+    # The lead's Struggle KOs the last Geodude and its recoil KOs the lead; a living bench
+    # Pokemon makes it a win reached through a death made inside the search.
+    state = empty_bag(
+        roark_state(tables, names, player_count=2, opp_count=1)
+        .replace_hp(0, 0, 1)
+        .replace_hp(1, 0, 1)
+        .with_pp(0, 0, [0, 0, 0, 0])
+    )
+    settings = SolveSettings(max_depth=1, epsilon=0.0, n_depth0=8, max_turns=TURNS)
+    for k, want in ((0, 0.0), (1, 1.0)):
+        s = state.with_budget(k)
+        result = solve(tables, names, s, KEY, settings, leaf_fn=ZERO)
+        exact, _ = exhaustive(tables, s, 1)
+        assert exact[0] == pytest.approx(want, abs=1e-9)
+        assert row(result, 0).estimate == pytest.approx(want, abs=1e-9)

@@ -175,10 +175,16 @@ def test_playout_from_action_plays_that_action_first(tables, names):
     switch = MOVE_ACTIONS + 1
     for seed in range(3):
         key = jax.random.PRNGKey(seed)
+        # The playout goes on past the faint with the bench: only what the first action
+        # fixes is asserted, not the result.
+        lost = playout_from_action(tables, s, jnp.int32(leer), key, 1)
+        assert (int(lost.deaths[0]), int(lost.player_faints)) == (1, 1)
+        kept = playout_from_action(tables, s, jnp.int32(switch), key, 1)
+        assert (int(kept.deaths[0]), int(kept.player_faints), int(kept.refused)) == (0, 0, 0)
         lost = playout_from_action(tables, s, jnp.int32(leer), key, 100)
-        assert (int(lost.won), int(lost.player_faints), int(lost.turns)) == (0, 1, 1)
+        assert int(lost.deaths[0]) == 1  # a death is permanent
         kept = playout_from_action(tables, s, jnp.int32(switch), key, 100)
-        assert int(kept.turns) > 1 and int(kept.refused) == 0
+        assert int(kept.refused) == 0
 
 
 def test_first_actions_share_the_draws_after_turn_1(tables, names):

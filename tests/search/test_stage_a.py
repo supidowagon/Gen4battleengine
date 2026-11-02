@@ -197,3 +197,12 @@ def test_rank_actions_same_on_multiple_devices(tables):
     # Both runs in subprocesses, so the baseline has one device whatever XLA_FLAGS the
     # developer exported for this process.
     assert _rank_on_devices(4) == _rank_on_devices(1)
+
+
+def test_single_pokemon_ladder_is_flat(tables, names):
+    # No replacement exists: whatever k allows, the ladder cannot rise past rung 0.
+    s = roark_state(tables, names, player_count=1).with_budget(k=2)
+    rows = rank_actions(tables, names, s, n=200, key=jax.random.PRNGKey(0))
+    assert rows
+    for r in rows:
+        assert len(set(r.ladder)) == 1

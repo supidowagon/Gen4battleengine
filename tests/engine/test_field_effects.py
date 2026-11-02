@@ -37,11 +37,12 @@ def test_stealth_rock_damage_is_max_hp_over_8_scaled_by_rock_effectiveness(table
     assert int(prinplup.max_hp[0, 1]) - int(prinplup.hp[0, 1]) == int(s.max_hp[0, 1]) // 8
 
 
-def test_stealth_rock_can_faint_incoming_and_end_battle(tables, names):
+def test_stealth_rock_can_faint_incoming_and_needs_a_replacement(tables, names):
     s = roark_state(tables, names).replace_hp(0, 3, 1)
     s = s._replace(stealth_rock=s.stealth_rock.at[0].set(1))
     out = step(tables, s, A(4 + 3, "Tackle", s, names), empty_outcome())
-    assert int(out.hp[0, 3]) == 0 and int(out.over) == 1 and int(out.winner) == 1
+    assert int(out.hp[0, 3]) == 0 and int(out.over) == 0
+    assert int(out.deaths[3]) == 1 and int(out.player_faints) == 1
 
 
 def test_bind_traps_and_ticks(tables, names):
@@ -242,7 +243,7 @@ def test_end_of_turn_order_lists_the_implemented_checks_in_decomp_order():
 def test_end_of_turn_runs_the_faster_battler_first(tables, names):
     # Both seeded at 1 HP: the faster battler's seed drains it first and the battle ends
     # there; the slower one's check never runs (battle_controller_player.c:1289).
-    s = roark_state(tables, names)  # Monferno outspeeds Geodude
+    s = roark_state(tables, names, player_count=1)  # Monferno outspeeds Geodude
     s = s._replace(leech_seed=jnp.ones_like(s.leech_seed)).replace_hp(0, 0, 1).replace_hp(1, 0, 1)
     s = s._replace(species=s.species.at[1, 1:].set(0), hp=s.hp.at[1, 1:].set(0))
     out = step(tables, s, A("Leer", "Leer", s, names), empty_outcome())
@@ -253,7 +254,7 @@ def test_end_of_turn_runs_the_faster_battler_first(tables, names):
 
 
 def test_end_of_turn_speed_tie_uses_its_own_outcome(tables, names):
-    s = roark_state(tables, names, equal_speed=True)
+    s = roark_state(tables, names, equal_speed=True, player_count=1)
     s = s._replace(leech_seed=jnp.ones_like(s.leech_seed)).replace_hp(0, 0, 1).replace_hp(1, 0, 1)
     s = s._replace(species=s.species.at[1, 1:].set(0), hp=s.hp.at[1, 1:].set(0))
     first = step(tables, s, A("Leer", "Leer", s, names), empty_outcome())
@@ -300,5 +301,5 @@ def test_natural_cure_comes_before_a_pursuit_that_faints_the_switcher(tables, na
     )
     s = s.replace_hp(0, 0, 1).with_status(0, 0, Status.PARALYSIS)
     out = step(tables, s, A(4 + 1, "Pursuit", s, names), empty_outcome())
-    assert int(out.hp[0, 0]) == 0 and int(out.over) == 1
+    assert int(out.hp[0, 0]) == 0
     assert int(out.status[0, 0]) == Status.NONE

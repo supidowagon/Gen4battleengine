@@ -91,8 +91,9 @@ three structs has a row.
   outcome-driven, and none of Thief, Covet, Protect, Detect, Endure, Gyro Ball or
   Sketch is in M1. M6's coverage work must add these fields before the mechanics
   that read them.
-- **battleEndFlag -> `over`, `winner`**: `winner` is 0 none, 1 player lost (any
-  player faint is terminal for the primary objective), 2 player won.
+- **battleEndFlag -> `over`, `winner`**: `winner` is 0 none, 1 player lost (no
+  player Pokemon has HP left; a double KO of both last Pokemon is a draw, played as a
+  loss), 2 player won. A player faint alone only records a death.
 - **recycleItem -> `item_consumed`**: the last item consumed, per party slot.
 - **aiContext**: `battlerMoves` (moves the AI has seen) -> `ai_seen_moves`,
   `battlerAbilities` (revealed abilities) -> `ai_ability_known`, `trainerItems`

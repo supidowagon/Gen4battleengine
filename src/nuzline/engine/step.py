@@ -14,8 +14,10 @@ Pure, jit- and vmap-able, fixed shapes; every random event comes from
    through ``AnyFainted`` / ``CheckBattleOver`` after every check that ran a script).
 5. Faint replacement is a separate decision point outside ``step``:
    ``needs_replacement`` and ``replace``.
-6. The battle ends at the first faint check that finds a player faint or no
-   opponent left (``_faint_check``); later checks of the turn do nothing.
+6. The battle ends at the first faint check that finds no player Pokemon with HP
+   (a loss, a simultaneous last opponent faint included) or no opponent left (a win)
+   (``_faint_check``); later checks of the turn do nothing. A player faint otherwise
+   only records a death.
 
 Move locks (Bide, Rollout, Ice Ball; ``actions.locked_slot``): a locked battler's action is
 its locked move and spends no PP (battle_controller_player.c:335); every script that
@@ -34,8 +36,8 @@ accuracy check, PP, Struggle, the move effects of ``effects.py``, the berry chec
 after every hit (``hooks.after_damage_items``), Pursuit's pre-switch hit, the sleep,
 freeze, flinch, Taunt, confusion and paralysis checks before a move, the held-item,
 Leech Seed, poison, toxic, burn, Bind and Taunt end-of-turn checks, faints and the
-end of the battle. A player faint is terminal (spec §3): it
-sets ``over = 1, winner = 1``. A state that is already over is returned unchanged.
+end of the battle. A player faint is a death, not the end (spec §4): the battle ends
+when a side has no Pokemon with HP left. A state that is already over is returned unchanged.
 
 ``step_events`` plays the same turn and also returns what each action showed (the move
 used and the result of each status check, hits and crits: ``ACT_*``, ``EVENT_FLAGS``),
@@ -693,9 +695,13 @@ def _pursuit_hit(
 
 def _faint_check(before: BattleState, after: BattleState, entry_turn=None) -> BattleState:
     """Count new player faints (``player_faints``) and record their party slots
-    (``deaths``), then end the battle: any player Pokemon fainting is a loss (the
-    terminal rule, which wins over a simultaneous last opponent faint); no opponent
-    Pokemon left standing is a win. A fainted active battler is cleaned up as
+    (``deaths``); a player faint ends the battle only when no player Pokemon has HP left.
+    The battle is over when either side is out: both out at once is
+    ``BATTLE_RESULT_WIN | BATTLE_RESULT_LOSE`` = a draw (``include/constants/battle.h:78``,
+    ``BattleControllerPlayer_CheckBattleOver``, battle_controller_player.c:4181-4262),
+    which ``HandleResult`` plays as a loss (:4015-4016): ``winner = 1`` (ruling 2). A faint
+    check runs wherever the decomp's does, so within a turn the side whose check runs
+    first loses first. A fainted active battler is cleaned up as
     ``BattleSystem_CleanupFaintedMon`` (battle_lib.c:2156, from ``PlayFaintAnimation``,
     battle_script.c:1803) does: its stat stages, ``statusVolatile``, ``moveEffectsMask``
     and ``moveEffectsData`` are cleared (``_reset_battler``, which also clears
@@ -712,9 +718,10 @@ def _faint_check(before: BattleState, after: BattleState, entry_turn=None) -> Ba
         ),
     )
     player_fainted = jnp.sum(fainted[0].astype(_I32))
+    player_out = jnp.all((after.species[0] == 0) | (after.hp[0] == 0))
     opp_out = jnp.all((after.species[1] == 0) | (after.hp[1] == 0))
-    ended = (after.over == 0) & ((player_fainted > 0) | opp_out)
-    winner = jnp.where(player_fainted > 0, WINNER_OPPONENT, WINNER_PLAYER)
+    ended = (after.over == 0) & (player_out | opp_out)
+    winner = jnp.where(player_out, WINNER_OPPONENT, WINNER_PLAYER)
     after = after._replace(
         player_faints=(after.player_faints + player_fainted).astype(after.player_faints.dtype),
         deaths=(after.deaths | fainted[0]).astype(after.deaths.dtype),
@@ -1039,9 +1046,8 @@ def step(tables: Tables, state: BattleState, actions, outcome: Outcome) -> Battl
 
 def needs_replacement(state: BattleState) -> jnp.ndarray:
     """``int8[2]``: 1 where a side's active Pokemon has fainted and a healthy one is
-    left to send in, while the battle goes on. A faint check still ends the battle at a
-    player faint (``_faint_check``), so only hand-built states have the player's side
-    pending until that rule goes."""
+    left to send in, while the battle goes on. A player faint is not terminal (the battle
+    ends at a whiteout, ``_faint_check``), so both sides are served."""
     slots = jnp.arange(state.hp.shape[1])
     active_down = state.hp[jnp.arange(2), state.active] == 0
     bench = (state.species != 0) & (state.hp > 0) & (slots[None, :] != state.active[:, None])
