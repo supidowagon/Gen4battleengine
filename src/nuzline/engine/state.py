@@ -173,20 +173,27 @@ class BattleState(NamedTuple):
     def with_budget(self, k: int = 0, protected: Sequence[int] = ()) -> BattleState:
         """Set the faint budget ``k`` (0..``MAX_DEATH_BUDGET``) and the protected player
         slots: each must hold a living Pokemon (not empty, not fainted)."""
-        if not 0 <= k <= MAX_DEATH_BUDGET:
-            raise ValueError(f"faint budget {k} outside [0, {MAX_DEATH_BUDGET}]")
-        mask = np.zeros(SLOTS, np.int8)
-        for slot in protected:
-            if not 0 <= slot < SLOTS:
-                raise ValueError(f"protected slot {slot} outside [0, {SLOTS - 1}]")
-            if int(self.species[0, slot]) == 0:
-                raise ValueError(f"protected slot {slot} is empty")
-            if int(self.hp[0, slot]) == 0:
-                raise ValueError(f"protected slot {slot} has already fainted")
-            mask[slot] = 1
+        mask = protected_mask(self.species[0], self.hp[0], k, protected)
         return self._replace(
             faint_budget=jnp.asarray(k, jnp.int8), protected=jnp.asarray(mask, jnp.int8)
         )
+
+
+def protected_mask(species, hp, k: int, protected: Sequence[int]) -> np.ndarray:
+    """``int8[SLOTS]`` mask of the protected player slots, after ``with_budget``'s checks
+    on the budget ``k`` and on ``species`` / ``hp`` (the player's per-slot arrays)."""
+    if not 0 <= k <= MAX_DEATH_BUDGET:
+        raise ValueError(f"faint budget {k} outside [0, {MAX_DEATH_BUDGET}]")
+    mask = np.zeros(SLOTS, np.int8)
+    for slot in protected:
+        if not 0 <= slot < SLOTS:
+            raise ValueError(f"protected slot {slot} outside [0, {SLOTS - 1}]")
+        if int(species[slot]) == 0:
+            raise ValueError(f"protected slot {slot} is empty")
+        if int(hp[slot]) == 0:
+            raise ValueError(f"protected slot {slot} has already fainted")
+        mask[slot] = 1
+    return mask
 
 
 # Shape and storage dtype of every field, in BattleState order.
@@ -310,15 +317,16 @@ def _fill_slot(a: dict[str, np.ndarray], tables: Tables, side: int, slot: int, m
     a["ivs"][side, slot] = mon.ivs
 
 
-def make_state(
+def initial_arrays(
     tables: Tables,
     player: list[PokemonSpec],
     opp: list[PokemonSpec],
     start_condition: int = Weather.NONE,
     opp_items: Sequence[int] = (),
     leads: tuple[int, int] = (0, 0),
-) -> BattleState:
-    """Build the turn-0 state: stats via ``calc_stats``, empty slots all zero
+) -> dict[str, np.ndarray]:
+    """Every ``LAYOUT`` field of the turn-0 state, before the switch-in hooks, as numpy
+    (``make_state`` is this plus the two ``on_switch_in`` calls): stats via ``calc_stats``, empty slots all zero
     (``species = 0, hp = 0``), the leads in party slots ``leads`` (player, opponent),
     no volatiles, hazards or screens, and
     ``weather = start_condition`` with a permanent timer (0). The leads'
@@ -332,8 +340,6 @@ def make_state(
     ``fake_out_turn`` is 0: the battle-start send-out does not run
     ``BattleSystem_UpdateAfterSwitch``, and ``BattleContext`` starts zeroed
     (battle_controller_player.c:180-184)."""
-    from nuzline.engine.hooks import on_switch_in  # hooks imports this module
-
     a = {name: np.zeros(shape, dtype) for name, (shape, dtype) in LAYOUT.items()}
     for side, party in enumerate((player, opp)):
         if not 1 <= len(party) <= SLOTS:
@@ -350,6 +356,23 @@ def make_state(
     a["trainer_items"][1, : len(bag)] = bag
     a["trainer_item_count"][1] = len(bag)
     a["weather"][...] = Weather(start_condition)
+    return a
+
+
+def make_state(
+    tables: Tables,
+    player: list[PokemonSpec],
+    opp: list[PokemonSpec],
+    start_condition: int = Weather.NONE,
+    opp_items: Sequence[int] = (),
+    leads: tuple[int, int] = (0, 0),
+) -> BattleState:
+    """Build the turn-0 state (``initial_arrays``), then run the leads' switch-in
+    effects (``hooks.on_switch_in``, player first; the decomp's ``monSpeedOrder`` gives
+    the same result in singles, see ``hooks``)."""
+    from nuzline.engine.hooks import on_switch_in  # hooks imports this module
+
+    a = initial_arrays(tables, player, opp, start_condition, opp_items, leads)
     state = BattleState(**{name: jnp.asarray(a[name]) for name in BattleState._fields})
     for side in (0, 1):
         state = on_switch_in(tables, state, side)
