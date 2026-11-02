@@ -12,11 +12,13 @@ import numpy as np
 import pytest
 
 from nuzline.search import stage_b
+from nuzline.search.deaths import BUCKETS
 from nuzline.search.leaves import LeafValue
 from nuzline.search.plan_tree import label, render, to_json
 from nuzline.search.stage_a import ActionResult, Ranking
 from nuzline.search.stage_b import PlanNode, SolveSettings, solve
 from tests.engine.helpers import roark_state
+from tests.search.fixtures import certain_zero_leaf, sacrifice_endgame
 
 KEY = jax.random.PRNGKey(0)
 SETTINGS = SolveSettings(max_depth=1, budget_playouts=100, n_depth0=10)
@@ -255,3 +257,90 @@ def test_precision_footer_and_json(roark, names):
         fine = dataclasses.replace(met, settings=dataclasses.replace(settings, precision=target))
         (line,) = [x for x in render(fine, names, 0, root=state) if "precision target" in x]
         assert f"precision target {shown}:" in line, line
+
+
+# ---- the faint budget: death labels, replacement and failed lines, distribution (plan 4b) ----
+
+
+DEPTH2 = SolveSettings(max_depth=2, epsilon=0.0, n_depth0=8)
+
+
+@pytest.fixture(scope="module")
+def sacrifice(tables, names):
+    """The Task 9 ``sacrifice_endgame`` solved at ``k = 0`` and ``k = 1`` (zero leaves)."""
+    base = sacrifice_endgame(tables, names)
+    out = {}
+    for k in (0, 1):
+        state = base.with_budget(k)
+        out[k] = (state, solve(tables, names, state, KEY, DEPTH2, leaf_fn=certain_zero_leaf))
+    return out
+
+
+def test_label_names_the_faint_and_the_budget(sacrifice, names):
+    state, result = sacrifice[1]
+    leer = names.move_slot(state, 0, "Leer")
+    fainted = [
+        n
+        for kid in result.plan.children[leer]
+        for n in walk(kid)
+        if n.obs is not None and "monferno fainted" in label(n.obs, names, budget=(1, 0)).lower()
+    ]
+    assert fainted
+    obs = fainted[0].obs
+    # The names table is upper case (MONFERNO); compare case-insensitively.
+
+    def low(**kw):
+        return label(obs, names, **kw).lower()
+
+    assert "monferno fainted (death 1 of 1 allowed)" in low(budget=(1, 0))
+    assert "monferno fainted (death 1, over the 0 allowed)" in low(budget=(0, 0))
+    assert "fainted (death" not in low()  # no budget: the faint only
+    assert "monferno fainted" in low()
+
+
+def test_render_replacement_and_failed_lines(sacrifice, names):
+    state, result = sacrifice[1]
+    text = render(result, names, 2, root=state)
+    assert all(line.isascii() for line in text)
+    assert result.ranking[0].label == "Leer"
+    assert any(
+        "monferno fainted" in ln.lower() and ln.lower().endswith("-> send in prinplup")
+        for ln in text
+    )
+    assert any("P(win, <=1 deaths) [95% CI]" in ln and "over budget" in ln for ln in text)
+    assert any(ln.startswith("deaths under the leader: 0: ") for ln in text)
+    state0, result0 = sacrifice[0]
+    text0 = render(result0, names, 2, root=state0)
+    assert result0.ranking[0].label.lower() == "switch -> prinplup"
+    assert any(
+        ln.endswith("(over the death budget: play on for the win, not planned)") for ln in text0
+    )
+    assert any("P(win, 0 faints) [95% CI]" in ln for ln in text0)
+    assert not any(ln.startswith("protected:") for ln in text0)
+
+
+def test_render_names_the_protected_slots(tables, names, sacrifice):
+    state, _ = sacrifice[1]
+    state = state.with_budget(1, [1])
+    result = solve(tables, names, state, KEY, DEPTH2, leaf_fn=certain_zero_leaf)
+    text = render(result, names, 1, root=state)
+    assert "protected: prinplup (a line where one faints fails)" in [ln.lower() for ln in text]
+    assert to_json(result, names, root=state)["protected"] == [1]
+
+
+def test_json_has_replacement_and_distribution(sacrifice, names):
+    state, result = sacrifice[1]
+    tree = json.loads(json.dumps(to_json(result, names, root=state)))
+    assert tree["deaths_allowed"] == 1 and tree["protected"] == []
+    for row in tree["ranking"]:
+        assert row["distribution"] is not None
+        assert tuple(row["distribution"]) == (*BUCKETS, "n")
+        assert "e_deaths" in row and "failed" in row
+    stack, replacements = [tree["plan"]], []
+    while stack:
+        node = stack.pop()
+        assert isinstance(node["replacement"], bool)
+        replacements.append(node["replacement"])
+        for kids in node["children"].values():
+            stack.extend(kids)
+    assert any(replacements)

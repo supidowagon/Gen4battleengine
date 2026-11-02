@@ -17,6 +17,13 @@ uv run nuzline rank --party tests/fixtures/sample_party.toml --trainer roark
 uv run nuzline solve --party tests/fixtures/sample_party.toml --trainer roark --max-depth 2 --tree plan.json
 ```
 
+Both take `--deaths K` (0 to 3, default 0: maximise the chance of winning with at most K player faints, with the death distribution and every rung `<=0 .. <=3` shown) and `--protect NAME` (repeatable; a species or a 0-based party index like `--lead`: a line where that Pokemon faints counts as a failure):
+
+```
+uv run nuzline rank --party tests/fixtures/sample_party.toml --trainer roark --deaths 1 --protect Prinplup
+uv run nuzline solve --party tests/fixtures/sample_party.toml --trainer roark --max-depth 1 --deaths 1
+```
+
 Read a Platinum save (see `docs/saves.md`), or use it in place of `--party` with `--save`:
 
 ```

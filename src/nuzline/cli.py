@@ -8,13 +8,18 @@
   moves); the exit code follows the party fight alone (plan 4a ruling 7), and ``--cap``
   without ``--save`` is an error.
 * ``nuzline rank --party P (--trainer NAME | --trainer-id N) [--n 2000] [--seed 0]
-  [--lead 0] [--opp-active 0] [--devices N]``: ``require_coverage``, then the Stage A ranking of the
-  player's actions at the fight's turn-0 state (the trainer's real built party, bag and
-  start condition; party slots ``--lead`` and ``--opp-active`` active). Exit code 2 when
-  the fight is refused, by the coverage check or by a refused playout.
+  [--lead 0] [--opp-active 0] [--devices N] [--deaths K] [--protect NAME ...]``:
+  ``require_coverage``, then the Stage A ranking of the player's actions at the fight's
+  turn-0 state (the trainer's real built party, bag and start condition; party slots
+  ``--lead`` and ``--opp-active`` active). ``--deaths K`` (0..3, default 0) ranks by
+  P(win with at most K player faints) and lists every rung of the ladder; ``--protect``
+  (repeatable) names a Pokemon by species or 0-based party index (like ``--lead``): a line
+  where it faints fails on every rung. Exit code 2 when the fight is refused, by the
+  coverage check or by a refused playout.
 * ``nuzline solve --party P (--trainer NAME | --trainer-id N) [--lead 0] [--opp-active 0]
   [--max-depth 2] [--budget SECONDS] [--precision PP | --playouts N] [--epsilon 1e-4]
-  [--seed 0] [--devices N] [--tree FILE.json] [--show-depth 1]``: the Stage B plan
+  [--seed 0] [--devices N] [--tree FILE.json] [--show-depth 1] [--deaths K]
+  [--protect NAME ...]``: the Stage B plan
   (``search.stage_b``): the ranking with intervals and bounds, the plan tree under the best
   action, whether the precision target was met, optionally the whole tree as JSON, and a run
   record under ``runs/`` (party hash, trainer, settings, seed, result). Each pass tops up its
@@ -59,6 +64,53 @@ RUNS = Path(__file__).resolve().parents[2] / "runs"
 DEFAULT_PRECISION_PP = 1.5  # nuzline solve's precision target, percentage points
 
 ALL_ZERO_FOOTER = "all lines 0 %: no zero-faint line found at this depth"
+MAX_DEATHS = 3  # nuzline.engine.state.MAX_DEATH_BUDGET; this module imports no jax
+
+
+def all_zero_footer(k: int) -> str:
+    """The footer when every line scores 0 at budget ``k``."""
+    if k == 0:
+        return ALL_ZERO_FOOTER
+    return f"all lines 0 %: no line within {k} deaths found at this depth"
+
+
+def protected_slots(player: Sequence, names, values: Sequence[str]) -> tuple[int, ...]:
+    """The 0-based party indices ``--protect`` names (sorted, deduplicated): a species name
+    (case-insensitive; two party members of it are ambiguous) or digits, a 0-based index
+    into ``player`` like ``--lead``. Raises ``ValueError`` naming the flag and the value
+    for an unknown or ambiguous name, an index outside the party or a fainted Pokemon."""
+    out: set[int] = set()
+    for value in values:
+        text = value.strip()
+        if text.isdigit():
+            slot = int(text)
+            if slot >= len(player):
+                raise ValueError(
+                    f"--protect {value}: no party index {slot} (the party has {len(player)})"
+                )
+        else:
+            matches = [
+                i
+                for i, spec in enumerate(player)
+                if names.species_names[spec.species].lower() == text.lower()
+            ]
+            if not matches:
+                raise ValueError(f"--protect {value}: no such Pokemon in the party")
+            if len(matches) > 1:
+                raise ValueError(
+                    f"--protect {value}: ambiguous, party indices {matches} are all {value}"
+                )
+            slot = matches[0]
+        if player[slot].current_hp == 0:
+            raise ValueError(f"--protect {value}: that Pokemon has fainted")
+        out.add(slot)
+    return tuple(sorted(out))
+
+
+def _check_deaths(args) -> None:
+    if not 0 <= args.deaths <= MAX_DEATHS:
+        raise ValueError(f"--deaths {args.deaths}: must be between 0 and {MAX_DEATHS}")
+
 
 EXIT_OK, EXIT_ERROR, EXIT_REFUSED = 0, 1, 2
 
@@ -116,8 +168,26 @@ def _parser() -> argparse.ArgumentParser:
     coverage = sub.add_parser("coverage", help="check that the engine supports a fight")
     fight(coverage)
     coverage.add_argument("--cap", type=int, default=None, help="with --save: the pool's level cap")
+
+    def budget(cmd: argparse.ArgumentParser) -> None:
+        cmd.add_argument(
+            "--deaths",
+            type=int,
+            default=0,
+            help="player faints allowed, 0..3 (default 0): maximise P(win with at most K deaths)",
+        )
+        cmd.add_argument(
+            "--protect",
+            action="append",
+            default=[],
+            metavar="NAME",
+            help="a Pokemon that must not faint: species name or 0-based party index "
+            "(like --lead); repeatable",
+        )
+
     rank = sub.add_parser("rank", help="rank the player's actions at the fight's start")
     fight(rank)
+    budget(rank)
     rank.add_argument("--n", type=int, default=2000, help="playouts per action")
     rank.add_argument("--seed", type=int, default=0, help="PRNG seed of the playouts")
     rank.add_argument(
@@ -129,6 +199,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     solve = sub.add_parser("solve", help="solve the fight's start with the Stage B plan search")
     fight(solve)
+    budget(solve)
     solve.add_argument("--max-depth", type=int, default=2, help="deepest pass (0 = Stage A)")
     solve.add_argument(
         "--budget", type=float, default=None, help="seconds after which no deeper pass starts"
@@ -254,13 +325,16 @@ def _rank(args) -> int:
     from nuzline.engine.coverage import UnsupportedMechanics, require_coverage
     from nuzline.engine.state import make_state
     from nuzline.jaxcache import code_version, enable_compile_cache, table_version
+    from nuzline.search.plan_tree import distribution_line
     from nuzline.search.stage_a import rank_actions
 
     if args.n < 1:
         raise ValueError("--n must be at least 1")
+    _check_deaths(args)
     # Before anything compiles: JAX opens the persistent cache at the first compile.
     enable_compile_cache(table_version(tables_module.DEFAULT) + code_version())
     tables, names, trainer, player, opp, weather = _fight(args)
+    slots = protected_slots(player, names, args.protect)
     leads = (args.lead, args.opp_active)
     print(_trainer_line(trainer))
     try:
@@ -269,6 +343,7 @@ def _rank(args) -> int:
         _print_report(e.report)
         return EXIT_REFUSED
     state = make_state(tables, player, opp, weather, opp_items=trainer.items, leads=leads)
+    state = state.with_budget(args.deaths, slots)
     try:
         ranking = rank_actions(tables, names, state, args.n, jax.random.PRNGKey(args.seed))
     except UnsupportedAi as e:
@@ -278,19 +353,30 @@ def _rank(args) -> int:
     theirs = names.species_names[opp[args.opp_active].species]
     print(f"{mine} vs {theirs}: {args.n} playouts per action, seed {args.seed}")
     width = max(len("action"), *(len(r.label) for r in ranking))
+    win = "P(win, 0 faints)" if args.deaths == 0 else f"P(win, <={args.deaths} deaths)"
+    rungs = " ".join(f"{f'<={k}':>7}" for k in range(MAX_DEATHS + 1))
     print(
-        f"     #  {'action':<{width}}  {'P(win, 0 faints) [95% CI]':<27}  {'P(win)':>7}  E[faints]"
+        f"     #  {'action':<{width}}  {win + ' [95% CI]':<27}  {'P(win)':>7}  E[deaths]  "
+        f"{rungs} (screen)"
     )
     for i, r in enumerate(ranking, 1):
         mark = "*" if r.tied_with_best else " "
-        odds = f"{_pct(r.p_win0)} [{100 * r.ci_low:4.1f}, {100 * r.ci_high:5.1f}]"
+        odds = f"{_pct(r.score)} [{100 * r.ci_low:4.1f}, {100 * r.ci_high:5.1f}]"
+        ladder = [_pct(v) for v in r.ladder] or ["-"] * (MAX_DEATHS + 1)
+        cells = " ".join(f"{c:>7}" for c in ladder)
         print(
-            f"  {mark} {i:2d}  {r.label:<{width}}  {odds:<27}  {_pct(r.p_win):>7}  {r.e_faints:9.2f}"
+            f"  {mark} {i:2d}  {r.label:<{width}}  {odds:<27}  {_pct(r.p_win):>7}  "
+            f"{r.e_faints:9.2f}  {cells}"
         )
     if any(r.tied_with_best for r in ranking):
         print("* the interval overlaps the leader's: a statistical tie, not reordered")
+    if ranking and ranking[0].distribution is not None:
+        print(distribution_line(ranking[0].distribution))
+    if slots:
+        who = ", ".join(names.species_names[player[i].species] for i in slots)
+        print(f"protected: {who} (a line where one faints fails)")
     if ranking.all_zero:
-        print(ALL_ZERO_FOOTER)
+        print(all_zero_footer(args.deaths))
     return EXIT_OK
 
 
@@ -317,6 +403,7 @@ def _solve(args) -> int:
         raise ValueError("--epsilon must not be negative")
     if args.budget is not None and args.budget < 0:
         raise ValueError("--budget must not be negative")
+    _check_deaths(args)
     settings = SolveSettings(
         max_depth=args.max_depth,
         budget_playouts=args.playouts,
@@ -330,6 +417,7 @@ def _solve(args) -> int:
     tables_version = table_version(tables_module.DEFAULT)
     enable_compile_cache(tables_version + code_version())
     tables, names, trainer, player, opp, weather = _fight(args)
+    slots = protected_slots(player, names, args.protect)
     leads = (args.lead, args.opp_active)
     print(_trainer_line(trainer))
     try:
@@ -339,6 +427,7 @@ def _solve(args) -> int:
         _print_report(e.report)
         return EXIT_REFUSED
     state = make_state(tables, player, opp, weather, opp_items=trainer.items, leads=leads)
+    state = state.with_budget(args.deaths, slots)
     try:
         result = solve(tables, names, state, jax.random.PRNGKey(args.seed), settings)
     except (UnsupportedAi, HiddenLegality) as e:
@@ -363,6 +452,8 @@ def _solve(args) -> int:
         "trainer": trainer.name,
         "lead": args.lead,
         "opp_active": args.opp_active,
+        "deaths": args.deaths,
+        "protected": list(slots),
         "settings": tree["settings"],
         "seed": args.seed,
         "devices": jax.device_count(),

@@ -1,6 +1,7 @@
 """The ``nuzline`` command line: coverage, rank and trainers (plan Task 8)."""
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -506,3 +507,106 @@ def test_coverage_pool_does_not_change_exit_code(tmp_path, tables, names, capsys
 def test_cap_needs_save(capsys):
     assert main(["coverage", "--party", PARTY, "--trainer", "roark", "--cap", "16"]) == 1
     assert "--cap needs --save" in capsys.readouterr().err
+
+
+# ---- --deaths and --protect (plan 4b Task 10) ----
+
+SAMPLE = PARTY
+FAINTED = str(ROOT / "tests" / "fixtures" / "sample_party_fainted.toml")
+
+
+def test_protected_slots(tables, names):
+    from nuzline.cli import protected_slots
+    from nuzline.data.party import load_party
+
+    party = load_party(Path(PARTY), names)  # Monferno Prinplup Grotle Starly Shinx Budew
+    # Digits are 0-based party indices, like --lead (plan 4b ruling).
+    assert protected_slots(party, names, ["1"]) == (1,)
+    assert protected_slots(party, names, ["prinplup", "1"]) == (1,)
+    assert protected_slots(party, names, ["0", "Starly"]) == (0, 3)
+    assert protected_slots(party, names, ["STARLY", "starly"]) == (3,)
+    assert protected_slots(party, names, []) == ()
+    for bad in ("6", "9", "-1", "Pikachu"):
+        with pytest.raises(ValueError, match=f"--protect {bad}"):
+            protected_slots(party, names, [bad])
+
+
+def test_all_zero_footer_names_the_budget():
+    from nuzline.cli import ALL_ZERO_FOOTER, all_zero_footer
+
+    assert all_zero_footer(0) == ALL_ZERO_FOOTER
+    assert all_zero_footer(2) == "all lines 0 %: no line within 2 deaths found at this depth"
+
+
+def test_cli_rank_deaths_and_protect(capsys):
+    args = ["rank", "--party", SAMPLE, "--trainer", "roark", "--deaths", "1"]
+    assert main([*args, "--protect", "Prinplup", "--n", "50", "--devices", "1"]) == 0
+    out = capsys.readouterr().out
+    out.encode("cp1252")
+    assert out.isascii()
+    assert "P(win, <=1 deaths)" in out and "E[deaths]" in out
+    assert "<=0" in out and "<=3" in out and "(screen)" in out
+    assert "protected: prinplup" in out.lower()
+    assert "deaths under the leader:" in out
+
+
+def test_cli_rank_default_budget_keeps_the_header(capsys):
+    assert (
+        main(["rank", "--party", SAMPLE, "--trainer", "roark", "--n", "20", "--devices", "1"]) == 0
+    )
+    out = capsys.readouterr().out
+    assert "P(win, 0 faints) [95% CI]" in out and "protected:" not in out
+
+
+def test_cli_solve_deaths(tmp_path, monkeypatch, capsys):
+    from nuzline import cli
+
+    monkeypatch.setattr(cli, "RUNS", tmp_path / "runs")
+    args = ["solve", "--party", SAMPLE, "--trainer", "roark", "--max-depth", "1"]
+    assert main([*args, "--playouts", "2000", "--deaths", "1", "--devices", "1"]) == 0
+    out = capsys.readouterr().out
+    assert "P(win, <=1 deaths)" in out and "deaths under the leader:" in out
+    (record,) = (tmp_path / "runs").glob("solve_*.json")
+    run = json.loads(record.read_text())
+    assert run["deaths"] == 1 and run["protected"] == []
+    assert run["result"]["deaths_allowed"] == 1
+
+
+def _two_starly(tmp_path) -> str:
+    text = Path(PARTY).read_text()
+    start = text.index('[[pokemon]]\nspecies = "Starly"')
+    block = text[start : text.index("[[pokemon]]", start + 1)]
+    path = tmp_path / "two_starly.toml"
+    last = text.rindex("[[pokemon]]")  # six is the party limit: Budew makes room
+    path.write_text(text[:last] + block)
+    return str(path)
+
+
+@pytest.mark.parametrize(
+    ("flags", "party", "named"),
+    [
+        (["--deaths", "4"], PARTY, ("--deaths", "4")),
+        (["--deaths", "-1"], PARTY, ("--deaths", "-1")),
+        (["--protect", "Pikachu"], PARTY, ("--protect", "Pikachu")),
+        (["--protect", "9"], PARTY, ("--protect", "9")),
+        (["--protect", "6"], PARTY, ("--protect", "6")),
+        (["--protect", "Budew"], FAINTED, ("--protect", "Budew")),
+        (["--protect", "Starly"], None, ("--protect", "Starly")),
+    ],
+)
+@pytest.mark.parametrize("command", ["rank", "solve"])
+def test_cli_bad_budget_flags(capsys, tmp_path, command, flags, party, named):
+    party = party or _two_starly(tmp_path)
+    assert main([command, "--party", party, "--trainer", "roark", *flags, "--devices", "1"]) == 1
+    err = capsys.readouterr().err
+    assert len(err.strip().splitlines()) == 1
+    assert named[0] in err and named[1] in err
+
+
+def test_cli_user_save_rank(capsys):
+    save = os.environ.get("NUZLINE_USER_SAVE")
+    if not save:
+        pytest.skip("NUZLINE_USER_SAVE not set")
+    args = ["rank", "--save", save, "--trainer", "roark", "--deaths", "1", "--protect", "Furret"]
+    assert main([*args, "--n", "50", "--devices", "1"]) == 0
+    assert "<=0" in capsys.readouterr().out
