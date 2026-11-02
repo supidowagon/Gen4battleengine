@@ -646,23 +646,45 @@ def prep_runs(tmp_path, monkeypatch):
 SMALL = ["--max-depth", "1", "--finalists", "1", "--screen-n", "4", "--devices", "1"]
 
 
-def test_cli_prep_small(prep_runs, tmp_path, tables, names, capsys):
-    save = _prep_save(tmp_path, tables, names)
-    assert main(["prep", "--save", save, "--trainer", "roark", "--cap", "14", *SMALL]) == 0
-    cap = capsys.readouterr()
-    cap.out.encode("ascii")
+@pytest.fixture(scope="module")
+def prep_run(tables, names, tmp_path_factory):
+    """ONE small ``nuzline prep`` run (the slow part) shared by the tests below:
+    (exit code, stdout, stderr, runs dir, save path), default checkpoint path."""
+    import contextlib
+    import io
+
+    from nuzline import cli
+
+    root = tmp_path_factory.mktemp("prep_run")
+    save = _prep_save(root, tables, names)
+    out, err = io.StringIO(), io.StringIO()
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(cli, "RUNS", root / "runs")
+        mp.setenv("XLA_FLAGS", "")
+        mp.delenv("XLA_FLAGS")
+        argv = ["prep", "--save", save, "--trainer", "roark", "--cap", "14", *SMALL]
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = main(argv)
+        os.environ.pop("XLA_FLAGS", None)
+    return code, out.getvalue(), err.getvalue(), root / "runs", save
+
+
+def test_cli_prep_small(prep_run):
+    code, out, err, runs, save = prep_run
+    assert code == 0
+    out.encode("ascii")
     for section in ("Setup:", "Prep steps:", "Cost:", "Odds ladder (rung 0 planned):", "Plan:"):
-        assert section in cap.out
-    assert "[prep] teams round 0:" in cap.err
-    (record,) = prep_runs.glob("prep_*[!t].json")
+        assert section in out
+    assert "[prep] teams round 0:" in err
+    (record,) = runs.glob("prep_*[!t].json")
     run = json.loads(record.read_text())
     import hashlib
 
     assert run["save_sha256"] == hashlib.sha256(Path(save).read_bytes()).hexdigest()
     assert run["deaths"] == 0 and run["cap"] == 14
-    assert f"run record: {record}" in cap.out
-    (ckpt,) = prep_runs.glob("prep_*.ckpt.json")
-    assert f"checkpoint: {ckpt}" in cap.out
+    assert f"run record: {record}" in out
+    (ckpt,) = runs.glob("prep_*.ckpt.json")
+    assert f"checkpoint: {ckpt}" in out
 
 
 def test_cli_prep_needs_a_cap(prep_runs, tmp_path, tables, names, capsys):
@@ -711,22 +733,22 @@ def test_cli_prep_bad_flags(prep_runs, tmp_path, tables, names, capsys, flags, s
         assert text.lower() in err.lower()
 
 
-def test_cli_prep_resume(prep_runs, tmp_path, tables, names, capsys):
-    save = _prep_save(tmp_path, tables, names)
-    ckpt = tmp_path / "c.json"
+def test_cli_prep_resume(prep_run, capsys):
+    _, first, _, runs, save = prep_run
+    (ckpt,) = runs.glob("prep_*.ckpt.json")
+    before = ckpt.read_bytes()
     base = ["prep", "--save", save, "--trainer", "roark", "--cap", "14", *SMALL]
-    assert main([*base, "--checkpoint", str(ckpt)]) == 0
-    first = capsys.readouterr().out
     assert main([*base, "--resume", str(ckpt)]) == 0
     second = capsys.readouterr().out
-    before = ckpt.read_bytes()
 
     def block(out):
         return out[out.index("Setup:") : out.index("Prep steps:")]
 
     assert block(first) == block(second)
+    before = ckpt.read_bytes()
     assert main([*base, "--resume", str(ckpt), "--deaths", "1"]) == 1
-    assert "settings" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert len(err.strip().splitlines()) == 1 and "settings" in err
     assert main([*base, "--resume", str(ckpt), "--checkpoint", str(ckpt)]) == 1
     assert "--resume" in capsys.readouterr().err
     assert ckpt.read_bytes() == before  # a refused resume leaves the file alone
