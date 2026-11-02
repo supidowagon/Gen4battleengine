@@ -62,6 +62,7 @@ from nuzline.engine.actions import (
     legal_replacements,
 )
 from nuzline.engine.damage import damage_table
+from nuzline.engine.hooks import intimidate
 from nuzline.engine.order import action_order, is_switch, selected_move
 from nuzline.engine.outcome import empty_outcome, hit_threshold, sample_outcome
 from nuzline.engine.state import SLOTS, BattleState
@@ -245,16 +246,27 @@ def replacement_pass(tables: Tables, state: BattleState, slot) -> tuple[BattleSt
     battler) when its active is down, the player's ``slot`` (a ``legal_replacements(state,
     0)`` slot) enters, then the opponent's, ``replace_mul`` is cleared and
     ``send_replacements`` settles what the entries leave (an opponent newcomer fainting on
-    Stealth Rock). ``refused`` (``bool``) when the opponent's pick is refused."""
+    Stealth Rock). ``refused`` (``bool``) when the opponent's pick is refused.
+
+    A player newcomer that entered while the opponent's active was down (a double KO) has
+    not announced its Intimidate (``replace`` found no living foe):
+    ``subscript_show_party_list.s`` only sends every switcher in with the hazards and a
+    faint check, and ``ShowBattleMon``'s ``BattleSystem_TriggerEffectOnSwitch``
+    (battle_controller_player.c:256, ``SWITCH_IN_CHECK_STATE_INTIMIDATE``,
+    battle_lib.c:3795-3808) fires it later against the living opposing newcomer. So it
+    fires once the opponent's side is settled (the two Intimidates touch different
+    battlers, so their speed order does not matter)."""
     mul = _carried_mul(state)
     opp_needs = needs_replacement(state)[1] == 1
     opp_slot = post_ko_switch_in(tables, state, mul)
     bad = opp_needs & (opp_slot < 0)
+    unannounced = state.hp[1, state.active[1]] == 0
     entered = replace(tables, state, 0, slot)
     both = replace(tables, entered, 1, jnp.maximum(opp_slot, 0))
     entered = _select((needs_replacement(entered)[1] == 1) & ~bad, both, entered)
     entered = entered._replace(replace_mul=jnp.zeros_like(entered.replace_mul))
     settled, refused = send_replacements(tables, entered, False, mul)
+    settled = intimidate(settled, 0, unannounced & (settled.over == 0))
     return settled, refused | bad
 
 

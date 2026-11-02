@@ -12,6 +12,7 @@ from hypothesis import strategies as st
 
 from nuzline.ai.replacement import post_ko_switch_in
 from nuzline.engine.actions import MOVE_ACTIONS, legal_replacements
+from nuzline.engine.ids import AbilityId, Stat
 from nuzline.engine.step import replace
 from nuzline.search import playout as playout_module
 from nuzline.search.playout import (
@@ -79,6 +80,30 @@ def test_player_enters_first(tables, names):
     assert int(after.replace_mul) == 0
     assert_same(after, expected)
     assert int(after.hp[0, 1]) < int(s.hp[0, 1])  # Stealth Rock hurt the newcomer
+
+
+def _intimidate_at(s, slot):
+    return s._replace(ability=s.ability.at[0, slot].set(AbilityId.INTIMIDATE))
+
+
+def test_player_intimidate_fires_on_the_opposing_newcomer_after_a_double_ko(tables, names):
+    """Both actives down: the player's Intimidate newcomer enters against a fainted foe,
+    and ShowBattleMon's switch-in check (battle_lib.c:3795) fires it later against the
+    opponent's newcomer, which then has -1 Attack."""
+    s = _intimidate_at(_both_down(tables, names), 4)  # Shinx in slot 4
+    after, refused = replacement_pass(tables, s, 4)
+    assert not bool(refused)
+    assert int(after.active[0]) == 4 and int(after.hp[1, after.active[1]]) > 0
+    assert int(after.stages[1, Stat.ATK]) == -1
+    assert int(after.stages[0, Stat.ATK]) == 0
+
+
+def test_player_intimidate_fires_once_at_a_single_replacement(tables, names):
+    """Only the player is down: Intimidate fires on entry against the living foe, once."""
+    s = _intimidate_at(at_replacement(roark_state(tables, names)), 4)
+    after, refused = replacement_pass(tables, s, 4)
+    assert not bool(refused)
+    assert int(after.stages[1, Stat.ATK]) == -1
 
 
 def test_replace_mul_reaches_the_ai(tables, names):

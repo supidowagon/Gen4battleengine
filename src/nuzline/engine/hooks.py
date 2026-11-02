@@ -195,13 +195,16 @@ def pluck_berry(tables: Tables, state: BattleState, side, cond=True) -> BattleSt
     )
 
 
-def _intimidate(state: BattleState, side) -> BattleState:
-    """``side``'s active Pokemon, alive with Intimidate, lowers the living foe's Attack
-    by 1 (clamped at -6)."""
+def intimidate(state: BattleState, side, cond=True) -> BattleState:
+    """Where ``cond``, ``side``'s active Pokemon, alive with Intimidate, lowers the living
+    foe's Attack by 1 (clamped at -6). ``on_switch_in`` runs it for a newcomer;
+    ``playout.replacement_pass`` runs it again for a player newcomer that entered while the
+    opponent's active was down (its Intimidate is still unannounced, battle_lib.c:3795)."""
     foe = 1 - side
     mon, target = state.active[side], state.active[foe]
     on = (
-        (state.ability[side, mon] == AbilityId.INTIMIDATE)
+        jnp.asarray(cond)
+        & (state.ability[side, mon] == AbilityId.INTIMIDATE)
         & (state.hp[side, mon] > 0)
         & (state.hp[foe, target] > 0)
     )
@@ -216,7 +219,7 @@ def on_switch_in(tables: Tables, state: BattleState, side) -> BattleState:
     loops over every battler)."""
     side = jnp.asarray(side, _I32)
     state = stealth_rock_damage(tables, state, side)
-    state = _intimidate(state, side)
+    state = intimidate(state, side)
     mon = state.active[side]
     state = reveal_ability(state, side, mon, SWITCH_IN, state.hp[side, mon] > 0)
     state = recover_status_by_ability(state, side)

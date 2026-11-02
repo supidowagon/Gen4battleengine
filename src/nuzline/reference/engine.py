@@ -611,7 +611,9 @@ def _switch_in_effects(turn: _Turn, s: RefState, side: int) -> None:
     entered: ``SWITCH_IN_CHECK_STATE_INTIMIDATE`` (lib.c:3795; only the newcomer has
     not announced its Intimidate) then ``SWITCH_IN_CHECK_STATE_HELD_ITEM_STATUS``
     (lib.c:4151) for every battler in ``monSpeedOrder``; each battler's check only
-    touches that battler, so the order does not matter."""
+    touches that battler, so the order does not matter. (At a double KO the player's
+    newcomer enters against a fainted foe and announces nothing here;
+    ``playout.replacement_pass`` fires its Intimidate once the opponent's newcomer is in.)"""
     mon, foe = _active(s, side), _active(s, 1 - side)
     # subscript_intimidate.s: ATTACK_DOWN_1_STAGE on a living foe (Clear Body, Hyper
     # Cutter, White Smoke, Mist and Substitute are unsupported). Its "cuts" message is
