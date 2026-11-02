@@ -34,7 +34,7 @@ __all__ = [
     "write_checkpoint",
 ]
 
-CHECKPOINT_VERSION = 1
+CHECKPOINT_VERSION = 2  # 2: a variant position names its parents
 
 # The fingerprint keys in the order they are compared, with what a mismatch says.
 _MISMATCH = (

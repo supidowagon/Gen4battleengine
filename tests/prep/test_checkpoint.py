@@ -74,6 +74,12 @@ def test_resume_equals_uninterrupted(tables, names, monkeypatch, tmp_path):
             tables, names, prob, SETTINGS, KEY, checkpoint=path, progress=progress, **VERSIONS
         )
         assert b.stats.stopped == "interrupted"
+        if stop == 4:  # inside the expansion: more rounds to go, its parents saved
+            pos = json.loads(path.read_text())["funnel"]["pos"]
+            assert pos["phase"] == "variants" and pos["r"] == 1
+            assert len(pos["pools"][prob.deaths]) > SETTINGS.variant_keep
+            assert pos["parents"][prob.deaths]
+            assert not set(pos["parents"][prob.deaths]) & set(pos["pools"][prob.deaths])
         c = run_prep(tables, names, prob, SETTINGS, KEY, resume=path, **VERSIONS)
         assert c == a, f"stopped after unit {stop} of {total}"
         assert c.stats.stopped is None

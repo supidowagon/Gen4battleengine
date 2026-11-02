@@ -5,18 +5,23 @@ them, expands the survivors by every one-change neighbour (``variant_rounds`` ex
 screened in one batch and halved over the neighbours plus their parents), then solves the
 finalists of the requested rung with Stage B and deepens the leader (rulings 1-3).
 
-Halving (ruling 2): round ``r`` tops every setup of the round up to ``T_r = screen_n *
+Halving (ruling 2): round ``r`` tops every competing setup up to ``T_r = screen_n *
 (2**(r + 1) - 1)`` playouts (grouped by how many each still needs, one ``screen`` call per
 group). A phase keeps one survivor set ``S_j`` per rung ``j`` in ``0..3``; the round's set is
 their union; afterwards ``S_k`` (``k`` = the requested rung, ``problem.deaths``) keeps its top
 ``max(keep, ceil(|S_k| / 2))`` by rung ``k`` and every other ``S_j`` its top
-``max(ladder_keep, ceil(|S_j| / 2))`` by rung ``j`` (``halving_key``): the lower Wilson bound
-first, so a parent's tight estimate over hundreds of playouts is not ranked below a
-neighbour's ``n/n`` over a handful (at equal counts the bound orders as the point estimate
-does), then, among setups the playouts cannot tell apart (an easy fight saturates at ``n/n``
-for the first rounds), the quality the playouts still measure: ``deaths.tie_deaths``, mean
-HP left, mean PP left, then the lower cost, the lower setup index last. The phase ends once
-``|S_k| <= keep``.
+``max(ladder_keep, ceil(|S_j| / 2))`` by rung ``j``. The order (``halving_key``): the point
+estimate first, then, among setups the playouts cannot tell apart (an easy fight saturates at
+``n/n`` for the first rounds), the quality the playouts still measure: ``deaths.tie_deaths``,
+mean HP left, mean PP left, then the lower cost, the lower setup index last. The rounds end
+once ``|S_k| <= keep``. In the team phase every setup competes at the same count. In a variant
+expansion the parents (the previous survivors, already screened to hundreds or thousands of
+playouts) are not halved: only the new neighbours compete in the rounds, each rung's
+neighbour set halved as above, and after the last round each rung keeps its top ``keep`` (or
+``ladder_keep``) of its parents and surviving neighbours by the same key, both groups by then
+over hundreds of playouts. A parent's count would otherwise decide a cut against a neighbour's
+handful (a lower confidence bound keeps tight parents over a better ``n/n`` neighbour; the
+point estimate drops them for lucky ``n/n`` neighbours).
 
 The answer at any moment is the best so far: the ``prep_order`` leader of ``S_k`` as the last
 completed round screened it (before that round's halving), or the best finalist. A unit of work
@@ -27,8 +32,8 @@ raised in one (or by ``progress``) ends the run with ``stopped="interrupted"``, 
 Checkpoint (ruling 12; ``prep.checkpoint``): after every unit, before ``progress`` is called, the
 whole funnel is written: the registered setups with their accumulated stats, the exclusions,
 the counters, the finalists with their Stage B results and a *position*: ``{"phase": "teams"}``
-or ``{"phase": "variants", "v": v}`` with ``"r"`` (the next halving round) and ``"pools"`` (each
-rung's survivor set), or ``{"phase": "finalists"}`` with ``"pool"``, ``"next"`` (the next
+or ``{"phase": "variants", "v": v}`` with ``"r"`` (the next halving round), ``"pools"`` (each
+rung's surviving neighbours) and ``"parents"`` (each rung's parents), or ``{"phase": "finalists"}`` with ``"pool"``, ``"next"`` (the next
 finalist to solve) and ``"deep"`` (the leader's deepening is done). Every random key comes from
 the seed, the phase and the round, so a resumed run does the remaining units exactly as the
 uninterrupted run would. The turn-0 states are rebuilt from the setups, not stored.
@@ -96,11 +101,10 @@ RUNGS = deaths.MAX_DEATH_BUDGET + 1  # the ladder: 0..3 deaths
 
 
 def halving_key(stats: ScreenStats, j: int, cost: float, index: int) -> tuple:
-    """A halving round's sort key on rung ``j``, best first (module docstring): the lower
-    Wilson bound, the point estimate, ``deaths.tie_deaths``, mean HP and PP left, the
-    cost, the setup ``index``."""
+    """A halving round's sort key on rung ``j``, best first (module docstring): the point
+    estimate, ``deaths.tie_deaths``, mean HP and PP left, the cost, the setup ``index``."""
     row = scored(stats, j, cost)
-    return (-row.ci_low, -row.score, row.tie_deaths, -row.hp_left, -row.pp_left, cost, index)
+    return (-row.score, row.tie_deaths, -row.hp_left, -row.pp_left, cost, index)
 
 
 @dataclass(frozen=True)
@@ -208,7 +212,7 @@ class PrepResult:
 class Progress:
     """After one unit of work. ``phase``: ``"teams"``, ``"variants <v>"`` (``v`` 1-based) or
     ``"finalists"``; ``round``: the halving round, or the finalist index; ``alive``: ``|S_k|``
-    (the number of finalists in ``"finalists"``); ``leader``: the best setup so far."""
+    (with the parents in a variant expansion; the number of finalists in ``"finalists"``); ``leader``: the best setup so far."""
 
     phase: str
     round: int
@@ -461,34 +465,42 @@ class _Funnel:
         keep: int,
         v: int = 0,
         r: int = 0,
+        parents: list[list[int]] | None = None,
     ) -> list[list[int]]:
         """Successive halving over the survivor sets ``pools`` from round ``r`` (module
-        docstring); returns the final sets. ``v``: the expansion (variant phases)."""
+        docstring); returns the final sets. ``v``: the expansion (variant phases). With
+        ``parents`` (a variant expansion: each rung's parents) ``pools`` are the competing
+        neighbours, and the result is each rung's final pick from parents and survivors."""
         k, st = self.k, self.settings
-        if r and len(pools[k]) <= keep:
-            return pools  # resumed after its last round
-        while True:
+        floors = [keep if j == k else st.ladder_keep for j in range(RUNGS)]
+
+        def whole(sets: list[list[int]]) -> list[list[int]]:
+            if parents is None:
+                return sets
+            return [sorted({*p, *q}) for p, q in zip(parents, sets, strict=True)]
+
+        while not (r and len(pools[k]) <= keep):  # resumed after its last round: none left
             self.before_unit()
             members = sorted(set().union(*pools))
             rkey = jax.random.fold_in(jax.random.fold_in(self.key, pid), r)
             self.top_up(members, st.screen_n * (2 ** (r + 1) - 1), rkey)
             pools = [[i for i in p if i not in self.excluded] for p in pools]
-            if not pools[k]:
+            if not whole(pools)[k]:
                 self.raise_all_refused()
-            self.last_pools = [list(p) for p in pools]
-            pools = [
-                self.top(p, j, max(keep if j == k else st.ladder_keep, ceil(len(p) / 2)))
-                for j, p in enumerate(pools)
-            ]
+            self.last_pools = [list(p) for p in whole(pools)]
+            pools = [self.top(p, j, max(floors[j], ceil(len(p) / 2))) for j, p in enumerate(pools)]
             if bucket == "teams":
                 self.team_rounds += 1
             else:
                 self.variant_halvings += 1
             pos = {"phase": bucket, "v": v, "r": r + 1, "pools": pools}
-            self.unit_done(phase, bucket, r, len(pools[k]), pos)
+            if parents is not None:
+                pos["parents"] = parents
+            self.unit_done(phase, bucket, r, len(whole(pools)[k]), pos)
             r += 1
-            if len(pools[k]) <= keep:
-                return pools
+        if parents is None:
+            return pools
+        return [self.top(p, j, floors[j]) for j, p in enumerate(whole(pools))]
 
     def raise_all_refused(self) -> None:
         reasons = "; ".join(list(self.excluded.values())[:3])
@@ -521,6 +533,7 @@ class _Funnel:
                 st.variant_keep,
                 v,
                 resume["r"],
+                resume["parents"],
             )
             self.variant_rounds += 1
             return out
@@ -546,9 +559,10 @@ class _Funnel:
             f"variants {v + 1}",
             "variants",
             phase_id("variants", v),
-            [sorted({*p, *new}) for p in pools],
+            [list(new)] * RUNGS,
             st.variant_keep,
             v,
+            parents=[list(p) for p in pools],
         )
         self.variant_rounds += 1
         return out
