@@ -145,3 +145,27 @@ Earlier fixed-budget measurements (2026-10-31, before the precision target): dep
 `B_1` = 77 400 took 85 s cold (0.75 pp); depth 2 at `B_2` = 696 600 took 909 s cold (0.60
 pp, the 600 s target missed), and a quarter of that budget reached 1.15 pp in 314 s cold.
 Leaf playouts were 97 percent of the depth-2 time.
+
+# Milestone 4: PP stall
+
+    uv run python -m benchmarks.pp_stall --stall 5 20 30
+
+Roark's Cranidos alone (Rock Throw with the given PP, Leer with 30) against a tank (Geodude,
+Defense Curl only, stats overridden so it survives every Rock Throw), an attacker (Starly) and
+a decoy (Shinx); no bag, no resources (`tests/prep/fixtures.py::pp_stall_problem`). The only
+deathless lines stall Rock Throw's PP with the tank, then bring in an attacker. `run_prep` with
+default settings and the fight's own horizon (Cranidos's total PP, 35 / 50 / 60 turns), seed 0.
+Measured 2026-11-02, 13th Gen Intel(R) Core(TM) i5-13600K (20 host devices), Windows 11, with
+warm compile caches.
+
+| stall (Rock Throw PP) | found | rung-0 estimate (95 % interval) | best tank-less screen | seconds |
+|-----------------------|-------|---------------------------------|-----------------------|---------|
+| 5                     | yes   | 1.000 (0.996 - 1.000)           | 0.125                 | 83      |
+| 20                    | yes   | 1.000 (0.998 - 1.000)           | 0.125                 | 74      |
+| 30                    | yes   | 1.000 (0.998 - 1.000)           | 0.054                 | 78      |
+
+"Found" means the chosen team holds the tank and an attacker. The long stalls (spec section
+10.2: reported, not blocking) fall short nowhere on this fight: the default funnel finds the
+stall line at 20 and 30 PP as well (Starly leads and switches to the tank), the tank-less
+screen values staying far below the pick. The short stall is required by
+`tests/prep/test_pp_stall.py`.
