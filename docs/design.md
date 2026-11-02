@@ -213,7 +213,7 @@ Fidelity is the product: a wrong mechanic silently corrupts every recommendation
 - **Milestone 0 spike** (before the engine exists): a throwaway masked step with ~100 fake effects at batch 10k on CPU, measuring steps/s and compile time, to confirm the one-big-step design before committing to it.
 - Keep the graph small with data-driven effects and per-fight specialization.
 - Small integer dtypes save memory bandwidth on GPU; they are not expected to help on CPU, and damage intermediates are always `int32`.
-- No Python control flow inside `jit`, fixed loop bounds with masking, and a hard turn cap. Playouts terminate on the first player faint, which ends most losing lines early.
+- No Python control flow inside `jit`, fixed loop bounds with masking, and a hard turn cap. A player faint is a death, not the end of the battle: playouts end at a whiteout, the last opponent faint or the turn cap, with no early stop.
 - **Chunked playouts with compaction.** Under `vmap`, a `while_loop` runs until the slowest battle in the batch finishes, so one long stall wastes the whole batch. Playouts instead run in fixed `scan` chunks of a few turns; between chunks, finished battles are compacted out and the batch is refilled, which keeps utilization high.
 - **Persistent compilation cache.** JAX's persistent cache is enabled so per-fight specializations survive restarts; cache keys include the table version.
 - Develop on CPU (native Windows); GPU runs via WSL2 or cloud, since JAX CUDA wheels are Linux-only.
