@@ -210,7 +210,9 @@ def levelled_moves(
 class PrepProblem:
     """Everything the prep search is given. ``protected``: candidate indices; ``prestatus``:
     ``ids.Status`` values the user declares; ``source``: ``"save:<sha256>"`` or a test name;
-    ``levelled``: per candidate, see :func:`levelled_moves`."""
+    ``levelled``: per candidate, see :func:`levelled_moves`; ``left_out_party``: ``(party slot,
+    name)`` of every save party member that is not a candidate (eggs, excluded, unsupported),
+    which the prep steps deposit."""
 
     candidates: tuple[Candidate, ...]
     trainer: Trainer
@@ -223,6 +225,7 @@ class PrepProblem:
     cap: int
     source: str
     levelled: tuple[tuple[tuple[int, int], ...], ...]
+    left_out_party: tuple[tuple[int, str], ...] = ()
 
 
 def _lookup(lookup: Callable[[str], int], name: str, what: str) -> int:
@@ -297,5 +300,13 @@ def build_problem(
         cap=cap,
         source=f"save:{save.sha256}",
         levelled=levelled_moves(tables, usable, learnsets, cap),
+        left_out_party=tuple(
+            (
+                m.location[2],
+                "Egg" if m.is_egg else (m.nickname or names.species_names[m.species]),
+            )
+            for m in save.party
+            if m.location not in index
+        ),
     )
     return problem, warnings

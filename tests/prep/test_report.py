@@ -70,7 +70,7 @@ def test_prep_steps_text(tables, names):
     assert prep_steps(prob, names, setup) == [
         "Deposit ZUBAT (party slot 3).",
         "Withdraw KRICKETOT (box 1 slot 1).",
-        "Rare Candy x11 on KRICKETOT (Lv5 -> 16), then heal at a Pokemon Center.",
+        "Rare Candy x11 on KRICKETOT (Lv5 -> 16), cancelling any evolution (press B), then heal at a Pokemon Center.",
         "KRICKETOT learns Bug Bite at Lv16 while levelling.",
         "Move Relearner (1 Heart Scale): FURRET forgets Foresight, learns Fury Swipes.",
         "TM10 (Hidden Power) on FURRET: forgets Defense Curl.",
@@ -231,3 +231,15 @@ def test_record_is_json(tables, names):
     assert rec["stats"]["setups_screened"] == 40
     bare = record(make_result(prob, setup, plan=False), prob, names, PrepSettings(), 7, "tv")
     assert bare["plan"] is None and bare["finalists"] == []
+
+
+def test_prep_steps_deposits_left_out_party(tables, names):
+    prob, setup = fixture(tables, names)
+    prob = replace(prob, left_out_party=((1, "Egg"), (4, "GEODUDE")))
+    steps = prep_steps(prob, names, setup)
+    assert steps[:4] == [
+        "Deposit Egg (party slot 1).",
+        "Deposit ZUBAT (party slot 3).",
+        "Deposit GEODUDE (party slot 4).",
+        "Withdraw KRICKETOT (box 1 slot 1).",
+    ]

@@ -267,6 +267,13 @@ def ai_kill_damage(
     return tuple(sorted(d for d in out if d > 0))
 
 
+def percent_cut(kind: str, percent: int, max_hp: int) -> int:
+    """The highest HP on the keep-off side of one ``AI_DEFENDER_HP_CHECKS`` entry."""
+    if kind == "greater":
+        return ((percent + 1) * max_hp - 1) // 100
+    return (percent * max_hp - 1) // 100
+
+
 def hp_cuts(
     tables: Tables, spec: PokemonSpec, max_hp: int, kill_damage: Sequence[int] = ()
 ) -> tuple[int, ...]:
@@ -275,10 +282,7 @@ def hp_cuts(
     ``max_hp // 3`` for Blaze, Torrent and Overgrow. Unsorted, may repeat."""
     cuts = []
     for kind, percent in AI_DEFENDER_HP_CHECKS:
-        if kind == "greater":
-            cuts.append(((percent + 1) * max_hp - 1) // 100)
-        else:
-            cuts.append((percent * max_hp - 1) // 100)
+        cuts.append(percent_cut(kind, percent, max_hp))
     cuts.extend(d for d in kill_damage if 1 <= d < max_hp)
     ability = int(np.asarray(tables.species_abilities)[spec.species, spec.ability_slot])
     if ability in _PINCH_ABILITIES:

@@ -227,3 +227,20 @@ def test_pick_nickname_on_pool_candidates(tmp_path, tables, names, learnsets):
     assert cands[0].label == "party slot 0 FURRET" and cands[0].nickname == "Zorro"
     assert pick(cands, names, "zorro") == 0
     assert pick(cands, names, "furret") == 0
+
+
+def test_left_out_party_lists_excluded_and_unsupported(tmp_path, tables, names, learnsets):
+    save = _save(
+        tmp_path,
+        tables,
+        names,
+        [
+            (("Furret", 16, ("Scratch",)), {"ability_slot": 1}),
+            (("Spinarak", 16, ("Metronome",)), {}),
+            (("Geodude", 16, ("Tackle",)), {}),
+        ],
+        [],
+    )
+    p, _ = _build(tables, names, save, learnsets, exclude=["party:2"])
+    assert [c.location[2] for c in p.candidates] == [0]
+    assert p.left_out_party == ((1, "SPINARAK"), (2, "GEODUDE"))

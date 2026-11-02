@@ -32,6 +32,7 @@ from nuzline.prep.variants import (
     ai_kill_damage,
     max_hp_of,
     member_spec,
+    percent_cut,
 )
 from nuzline.search import plan_tree
 
@@ -60,8 +61,7 @@ def _hp_why(problem: PrepProblem, names: Names, member: Member) -> str:
     top = max_hp_of(tables, spec)
     hp = member.hp
     for kind, percent in AI_DEFENDER_HP_CHECKS:
-        cut = ((percent + 1) * top - 1) // 100 if kind == "greater" else (percent * top - 1) // 100
-        if hp == cut:
+        if hp == percent_cut(kind, percent, top):
             return f"at most {percent} % keeps the trainer AI's high-HP check off"
     ability = int(np.asarray(tables.species_abilities)[spec.species, spec.ability_slot])
     if hp == top // 3 and ability in _PINCH_ABILITIES:
@@ -82,9 +82,14 @@ def prep_steps(problem: PrepProblem, names: Names, setup: Setup) -> list[str]:
     def nick(i: int) -> str:
         return _nick(problem, names, i)
 
-    for i, cand in enumerate(cands):
-        if cand.location[0] == "party" and i not in brought:
-            steps.append(f"Deposit {nick(i)} (party slot {cand.location[2]}).")
+    deposits = [
+        (cand.location[2], nick(i))
+        for i, cand in enumerate(cands)
+        if cand.location[0] == "party" and i not in brought
+    ]
+    deposits += list(problem.left_out_party)
+    for slot, who in sorted(deposits, key=lambda d: d[0]):
+        steps.append(f"Deposit {who} (party slot {slot}).")
     for m in setup.members:
         kind, box, slot = cands[m.candidate].location
         if kind == "box":
@@ -95,7 +100,7 @@ def prep_steps(problem: PrepProblem, names: Names, setup: Setup) -> list[str]:
             steps.append(
                 f"Rare Candy x{cand.candies} on {nick(m.candidate)} "
                 f"(Lv{cand.spec.level - cand.candies} -> {problem.cap}), "
-                "then heal at a Pokemon Center."
+                "cancelling any evolution (press B), then heal at a Pokemon Center."
             )
     for source in ("level", "relearner", "tm"):
         for m in setup.members:
