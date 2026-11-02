@@ -112,7 +112,7 @@ def main(argv: list[str] | None = None) -> int:
         "--finalists", type=int, default=None, help="pass --finalists (the CLI default is 3)"
     )
     parser.add_argument(
-        "--screen-n", type=int, default=None, help="pass --screen-n (the CLI default is 6)"
+        "--screen-n", type=int, default=None, help="pass --screen-n (the CLI default is 8)"
     )
     args = parser.parse_args(argv)
 
