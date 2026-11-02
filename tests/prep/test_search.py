@@ -242,6 +242,83 @@ def test_finalists_then_deepening(tables, names, monkeypatch, max_depth):
     assert result.stats.phase == "finalists"
 
 
+def raising_solve(fakes, raised, bad, inner):
+    """``solve`` raising HiddenLegality for the setups ``bad(setup, depth)`` selects (they are
+    appended to ``raised``)."""
+    ok = fake_solve(fakes, [], inner)
+
+    def solve(tables, names, state, key, settings):
+        setup = fakes.of_bytes[row_bytes(jax.tree.map(lambda f: f[None], state), 1)[0].tobytes()]
+        if bad(setup, settings.max_depth):
+            raised.append(setup)
+            raise search.HiddenLegality("hidden")
+        return ok(tables, names, state, key, settings)
+
+    return solve
+
+
+def _assert_excluded_everywhere(result, gone):
+    assert len(result.excluded) == len(gone)
+    assert result.chosen not in gone
+    assert all(r.setup not in gone for r in result.ladder)
+    assert all(f.setup not in gone for f in result.finalists)
+
+
+def _exclusion_settings(max_depth=1):
+    return PrepSettings(
+        screen_n=4, team_keep=2, variant_rounds=0, finalists=2, max_depth=max_depth, max_team=2
+    )
+
+
+def test_stage_b_exclusion_of_one_finalist(tables, names, monkeypatch):
+    prob = make_problem(tables, names)
+    fakes = Fakes(monkeypatch, falling)
+    monkeypatch.setattr(search, "solve", fake_solve(fakes, [], lambda s, i: 0.5))
+    probe = run_prep(tables, names, prob, _exclusion_settings(), KEY)
+    first = probe.chosen
+    raised: list = []
+    monkeypatch.setattr(
+        search, "solve", raising_solve(fakes, raised, lambda s, d: s == first, lambda s, i: 0.5)
+    )
+    result = run_prep(tables, names, prob, _exclusion_settings(), KEY)
+    assert raised == [first]
+    _assert_excluded_everywhere(result, raised)
+    assert len(result.finalists) == 1
+
+
+def test_stage_b_exclusion_of_every_finalist(tables, names, monkeypatch):
+    prob = make_problem(tables, names)
+    fakes = Fakes(monkeypatch, falling)
+    monkeypatch.setattr(search, "solve", fake_solve(fakes, [], lambda s, i: 0.5))
+    probe = run_prep(tables, names, prob, _exclusion_settings(), KEY)
+    gone = [f.setup for f in probe.finalists]
+    raised: list = []
+    monkeypatch.setattr(
+        search, "solve", raising_solve(fakes, raised, lambda s, d: s in gone, lambda s, i: 0.5)
+    )
+    result = run_prep(tables, names, prob, _exclusion_settings(), KEY)
+    assert sorted(map(str, raised)) == sorted(map(str, gone))
+    assert result.finalists == ()
+    assert result.plan is None
+    _assert_excluded_everywhere(result, gone)
+
+
+def test_deep_failure_drops_the_leader(tables, names, monkeypatch):
+    prob = make_problem(tables, names)
+    fakes = Fakes(monkeypatch, falling)
+    raised: list = []
+    monkeypatch.setattr(
+        search, "solve",
+        raising_solve(fakes, raised, lambda s, d: d == 2, lambda s, i: 0.4 + 0.2 * i),
+    )  # fmt: skip
+    result = run_prep(tables, names, prob, _exclusion_settings(2), KEY)
+    assert len(raised) == 1
+    _assert_excluded_everywhere(result, raised)
+    assert len(result.finalists) == 1
+    assert result.chosen == result.finalists[0].setup
+    assert result.plan.depth == 1
+
+
 def test_budget_stops_after_first_round(tables, names, monkeypatch):
     prob = make_problem(tables, names)
     fakes = Fakes(monkeypatch, falling)

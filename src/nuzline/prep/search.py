@@ -431,6 +431,8 @@ class _Funnel:
         except (UnsupportedAi, HiddenLegality) as e:
             idx = self.index[setup]
             self.excluded[idx] = f"{setup_label(self.names, self.problem, setup)}: {e}"
+            # the answer is built from last_pools, which were filtered before Stage B ran
+            self.last_pools = [[i for i in p if i != idx] for p in self.last_pools]
             return None
 
     def finalist_row(self, f: Finalist) -> Scored:
@@ -468,6 +470,8 @@ class _Funnel:
             if deep is not None and deep.ranking:
                 self.playouts += deep.playouts
                 self.finalists[0] = Finalist(lead.setup, deep)
+            elif self.index[lead.setup] in self.excluded:
+                self.finalists.pop(0)  # excluded and named, so no longer the answer
             self.unit_done("finalists", "finalists", 0, len(picks))
         self.phase = "finalists"
 
@@ -476,6 +480,8 @@ class _Funnel:
     def result(self, stopped: str | None) -> PrepResult:
         k = self.k
         pools = self.last_pools
+        if not self.finalists and not pools[k]:
+            self.raise_all_refused()
         if self.finalists:
             lead = self.finalists[0]
             chosen = lead.setup
