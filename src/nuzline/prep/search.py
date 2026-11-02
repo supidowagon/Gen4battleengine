@@ -17,7 +17,16 @@ The answer at any moment is the best so far: the ``prep_order`` leader of ``S_k`
 completed round screened it (before that round's halving), or the best finalist. A unit of work
 is a halving round or a Stage B solve; ``progress`` is called after each, a ``KeyboardInterrupt``
 raised in one (or by ``progress``) ends the run with ``stopped="interrupted"``, and
-``budget_seconds`` is checked before every unit but the very first (ruling 11).
+``budget_seconds`` is checked before every unit but the first of this invocation (ruling 11).
+
+Checkpoint (ruling 12; ``prep.checkpoint``): after every unit, before ``progress`` is called, the
+whole funnel is written: the registered setups with their accumulated stats, the exclusions,
+the counters, the finalists with their Stage B results and a *position*: ``{"phase": "teams"}``
+or ``{"phase": "variants", "v": v}`` with ``"r"`` (the next halving round) and ``"pools"`` (each
+rung's survivor set), or ``{"phase": "finalists"}`` with ``"pool"``, ``"next"`` (the next
+finalist to solve) and ``"deep"`` (the leader's deepening is done). Every random key comes from
+the seed, the phase and the round, so a resumed run does the remaining units exactly as the
+uninterrupted run would. The turn-0 states are rebuilt from the setups, not stored.
 """
 
 from __future__ import annotations
@@ -33,6 +42,16 @@ import numpy as np
 
 from nuzline.ai.policy import UnsupportedAi
 from nuzline.data.tables import Names, Tables
+from nuzline.prep.checkpoint import (
+    CHECKPOINT_VERSION,
+    fingerprint,
+    read_checkpoint,
+    setup_from_json,
+    setup_to_json,
+    stats_from_json,
+    stats_to_json,
+    write_checkpoint,
+)
 from nuzline.prep.problem import PrepProblem
 from nuzline.prep.screen import Scored, ScreenStats, prep_order, scored, screen
 from nuzline.prep.setups import (
@@ -46,7 +65,14 @@ from nuzline.prep.setups import (
 from nuzline.prep.variants import DEFAULT_WEIGHTS, Member, prune, single_changes
 from nuzline.search import deaths
 from nuzline.search.rows import row_bytes
-from nuzline.search.stage_b import HiddenLegality, SolveResult, SolveSettings, solve
+from nuzline.search.stage_b import (
+    HiddenLegality,
+    SolveResult,
+    SolveSettings,
+    result_from_dict,
+    result_to_dict,
+    solve,
+)
 
 __all__ = [
     "Finalist",
@@ -225,9 +251,12 @@ class _Funnel:
         key,
         progress: Callable[[Progress], None] | None,
         clock: Callable[[], float],
+        sink: Path | None = None,
+        print_: dict[str, str] | None = None,
     ) -> None:
         self.tables, self.names, self.problem, self.settings = tables, names, problem, settings
         self.key, self.progress, self.clock = key, progress, clock
+        self.sink, self.fingerprint = sink, print_
         self.k = problem.deaths
         self.weights = dict(settings.weights)
         self.start = clock()
@@ -242,7 +271,9 @@ class _Funnel:
         self.excluded: dict[int, str] = {}
         self.playouts = 0
         self.team_rounds = self.variant_rounds = self.variant_halvings = 0
-        self.units = 0
+        self.units = 0  # of this invocation (the budget exempts the first)
+        self.prior = 0.0  # seconds spent by earlier invocations (resume)
+        self.pos: dict | None = None  # where to continue (module docstring)
         self.phase = ""
         self.seconds: dict[str, float] = {}
         self.last_pools: list[list[int]] = [[] for _ in range(RUNGS)]
@@ -295,7 +326,12 @@ class _Funnel:
     # ------------------------------------------------------------------ units
 
     def elapsed(self) -> float:
+        """Seconds of this invocation (the time budget limits these)."""
         return self.clock() - self.start
+
+    def total(self) -> float:
+        """Seconds over all invocations of this run."""
+        return self.prior + self.elapsed()
 
     def before_unit(self) -> None:
         budget = self.settings.budget_seconds
@@ -306,13 +342,70 @@ class _Funnel:
         budget = self.settings.budget_seconds
         return None if budget is None else max(0.0, budget - self.elapsed())
 
-    def unit_done(self, phase: str, bucket: str, round_: int, alive: int) -> None:
+    def unit_done(self, phase: str, bucket: str, round_: int, alive: int, pos: dict) -> None:
         self.units += 1
         now = self.clock()
         self.seconds[bucket] = self.seconds.get(bucket, 0.0) + now - self.mark
         self.mark = now
+        self.pos = pos
+        if self.sink is not None:
+            write_checkpoint(self.sink, self.snapshot())
         if self.progress is not None:
-            self.progress(Progress(phase, round_, alive, now - self.start, self.leader()))
+            self.progress(Progress(phase, round_, alive, self.total(), self.leader()))
+
+    # ------------------------------------------------------------------ checkpoint
+
+    def snapshot(self) -> dict:
+        """The whole funnel as a checkpoint document (module docstring)."""
+        funnel = {
+            "setups": [setup_to_json(s) for s in self.setups],
+            "stats": [stats_to_json(self.stats[i]) for i in range(len(self.setups))],
+            "excluded": {str(i): why for i, why in self.excluded.items()},
+            "playouts": self.playouts,
+            "team_rounds": self.team_rounds,
+            "variant_rounds": self.variant_rounds,
+            "variant_halvings": self.variant_halvings,
+            "phase": self.phase,
+            "seconds": dict(self.seconds),
+            "elapsed": self.total(),
+            "last_pools": self.last_pools,
+            "finalists": [
+                {"setup": setup_to_json(f.setup), "result": result_to_dict(f.result)}
+                for f in self.finalists
+            ],
+            "pos": self.pos,
+        }
+        return {"version": CHECKPOINT_VERSION, "fingerprint": self.fingerprint, "funnel": funnel}
+
+    def restore(self, funnel: dict) -> None:
+        """Load a checkpoint's ``funnel``: re-register the saved setups in order (their turn-0
+        states are rebuilt in one batch) and set every counter and the position."""
+        setups = [setup_from_json(s) for s in funnel["setups"]]
+        if setups:
+            states = setup_states(self.tables, self.problem, setups)
+            keys = row_bytes(states, len(setups))
+            for i, setup in enumerate(setups):
+                self.by_bytes[keys[i].tobytes()] = i
+                self.rows.append(jax.tree.map(lambda f, i=i: np.asarray(f)[i], states))
+                self.cost.append(setup_cost(self.problem, setup).weighted(self.weights))
+        self.setups = setups
+        self.index = {s: i for i, s in enumerate(setups)}
+        self.known = set(setups)
+        self.stats = {i: stats_from_json(d) for i, d in enumerate(funnel["stats"])}
+        self.excluded = {int(i): why for i, why in funnel["excluded"].items()}
+        self.playouts = funnel["playouts"]
+        self.team_rounds = funnel["team_rounds"]
+        self.variant_rounds = funnel["variant_rounds"]
+        self.variant_halvings = funnel["variant_halvings"]
+        self.phase = funnel["phase"]
+        self.seconds = dict(funnel["seconds"])
+        self.prior = funnel["elapsed"]
+        self.last_pools = [list(p) for p in funnel["last_pools"]]
+        self.finalists = [
+            Finalist(setup_from_json(f["setup"]), result_from_dict(f["result"]))
+            for f in funnel["finalists"]
+        ]
+        self.pos = funnel["pos"]
 
     def leader(self) -> Setup:
         if self.finalists:
@@ -345,12 +438,20 @@ class _Funnel:
     # ------------------------------------------------------------------ phases
 
     def halving(
-        self, phase: str, bucket: str, pid: int, pools: list[list[int]], keep: int
+        self,
+        phase: str,
+        bucket: str,
+        pid: int,
+        pools: list[list[int]],
+        keep: int,
+        v: int = 0,
+        r: int = 0,
     ) -> list[list[int]]:
-        """Successive halving over the survivor sets ``pools`` (module docstring); returns
-        the final sets."""
+        """Successive halving over the survivor sets ``pools`` from round ``r`` (module
+        docstring); returns the final sets. ``v``: the expansion (variant phases)."""
         k, st = self.k, self.settings
-        r = 0
+        if r and len(pools[k]) <= keep:
+            return pools  # resumed after its last round
         while True:
             self.before_unit()
             members = sorted(set().union(*pools))
@@ -368,7 +469,8 @@ class _Funnel:
                 self.team_rounds += 1
             else:
                 self.variant_halvings += 1
-            self.unit_done(phase, bucket, r, len(pools[k]))
+            pos = {"phase": bucket, "v": v, "r": r + 1, "pools": pools}
+            self.unit_done(phase, bucket, r, len(pools[k]), pos)
             r += 1
             if len(pools[k]) <= keep:
                 return pools
@@ -377,18 +479,36 @@ class _Funnel:
         reasons = "; ".join(list(self.excluded.values())[:3])
         raise ValueError(f"every setup refused: {reasons}")
 
-    def team_phase(self) -> list[list[int]]:
+    def team_phase(self, resume: dict | None) -> list[list[int]]:
         st = self.settings
-        everyone = self.register(team_setups(self.problem, st.max_team))
-        pools = self.halving(
-            "teams", "teams", phase_id("teams"), [list(everyone)] * RUNGS, st.team_keep
-        )
+        if resume is None:
+            everyone = self.register(team_setups(self.problem, st.max_team))
+            pools, r = [list(everyone)] * RUNGS, 0
+        else:
+            pools, r = resume["pools"], resume["r"]
+        pools = self.halving("teams", "teams", phase_id("teams"), pools, st.team_keep, r=r)
         self.phase = "teams"
         return pools
 
-    def expansion(self, v: int, pools: list[list[int]]) -> list[list[int]] | None:
-        """One variant expansion; ``None`` when the survivors have no new neighbour."""
+    def expansion(
+        self, v: int, pools: list[list[int]], resume: dict | None = None
+    ) -> list[list[int]] | None:
+        """One variant expansion; ``None`` when the survivors have no new neighbour. With
+        ``resume`` (the position saved inside this expansion) it continues at its next round
+        over ``resume["pools"]``."""
         st = self.settings
+        if resume is not None:
+            out = self.halving(
+                f"variants {v + 1}",
+                "variants",
+                phase_id("variants", v),
+                resume["pools"],
+                st.variant_keep,
+                v,
+                resume["r"],
+            )
+            self.variant_rounds += 1
+            return out
         fresh: list[Setup] = []
         for i in pools[self.k]:
             fresh.extend(
@@ -412,6 +532,7 @@ class _Funnel:
             phase_id("variants", v),
             [sorted({*p, *new}) for p in pools],
             st.variant_keep,
+            v,
         )
         self.variant_rounds += 1
         return out
@@ -449,11 +570,14 @@ class _Funnel:
             stats.mean_pp,
         )
 
-    def finalists_phase(self, pool: list[int]) -> None:
+    def finalists_phase(self, pool: list[int], resume: dict | None = None) -> None:
         st = self.settings
         picks = self.ranked(pool, self.k)[: st.finalists]
         fkey = jax.random.fold_in(self.key, phase_id("finalists"))
-        for n, i in enumerate(picks):
+        first = 0 if resume is None else resume["next"]
+        deepened = resume is not None and resume["deep"]
+        for n in range(first, len(picks)):
+            i = picks[n]
             self.before_unit()
             result = self.stage_b(self.setups[i], jax.random.fold_in(fkey, n), 1)
             if result is not None and result.ranking:
@@ -461,8 +585,9 @@ class _Funnel:
                 self.finalists.append(Finalist(self.setups[i], result))
                 rows = [self.finalist_row(f) for f in self.finalists]
                 self.finalists = [self.finalists[o] for o in prep_order(rows)]
-            self.unit_done("finalists", "finalists", n, len(picks))
-        if st.max_depth >= 2 and self.finalists:
+            pos = {"phase": "finalists", "pool": pool, "next": n + 1, "deep": False}
+            self.unit_done("finalists", "finalists", n, len(picks), pos)
+        if st.max_depth >= 2 and self.finalists and not deepened:
             self.before_unit()
             lead = self.finalists[0]
             dkey = jax.random.fold_in(jax.random.fold_in(self.key, phase_id("deep")), 0)
@@ -472,8 +597,32 @@ class _Funnel:
                 self.finalists[0] = Finalist(lead.setup, deep)
             elif self.index[lead.setup] in self.excluded:
                 self.finalists.pop(0)  # excluded and named, so no longer the answer
-            self.unit_done("finalists", "finalists", 0, len(picks))
+            pos = {"phase": "finalists", "pool": pool, "next": len(picks), "deep": True}
+            self.unit_done("finalists", "finalists", 0, len(picks), pos)
         self.phase = "finalists"
+
+    def drive(self, pos: dict | None) -> None:
+        """Run the phases from the saved position ``pos`` (``None``: from the start)."""
+        st = self.settings
+        stage = "teams" if pos is None else pos["phase"]
+        if stage == "finalists":
+            if st.max_depth >= 1:
+                self.finalists_phase(pos["pool"], pos)
+            return
+        if stage == "teams":
+            pools = self.team_phase(pos)
+            first, mid = 0, None
+        else:
+            pools, first, mid = pos["pools"], pos["v"], pos
+        for v in range(first, st.variant_rounds):
+            nxt = self.expansion(v, pools, mid if v == first else None)
+            if nxt is None:
+                break
+            pools = nxt
+        if st.variant_rounds:
+            self.phase = "variants"
+        if st.max_depth >= 1:
+            self.finalists_phase(pools[self.k])
 
     # ------------------------------------------------------------------ result
 
@@ -501,7 +650,7 @@ class _Funnel:
             low, high = self.stats[best].interval(j)
             ladder.append(Rung(j, self.setups[best], self.stats[best].rung(j), low, high, "screen"))
         dist = top.distribution if top is not None and top.distribution is not None else None
-        seconds = self.elapsed()
+        seconds = self.total()
         run_stats = SearchStats(
             setups_screened=sum(1 for s in self.stats.values() if s.n),
             playouts=self.playouts,
@@ -526,6 +675,15 @@ class _Funnel:
         )
 
 
+def _seed_of(key) -> int:
+    """The run's seed as an integer: the key's own bits (a legacy or a typed key)."""
+    try:
+        data = jax.random.key_data(key)
+    except (TypeError, ValueError):
+        data = key
+    return int.from_bytes(np.asarray(data).tobytes(), "little")
+
+
 def run_prep(
     tables: Tables,
     names: Names,
@@ -537,12 +695,34 @@ def run_prep(
     resume: Path | None = None,
     progress: Callable[[Progress], None] | None = None,
     clock: Callable[[], float] = time.perf_counter,
+    table_version: str | None = None,
+    code_version: str | None = None,
 ) -> PrepResult:
     """Run the funnel (module docstring) and return the best answer reached.
-    ``ValueError`` when every setup is refused ("every setup refused: ...")."""
-    if checkpoint is not None or resume is not None:
-        raise NotImplementedError("checkpoint and resume arrive with plan 4c Task 8")
-    funnel = _Funnel(tables, names, problem, settings, key, progress, clock)
+    ``ValueError`` when every setup is refused ("every setup refused: ...") or when ``resume``
+    names a checkpoint of another run (``checkpoint.read_checkpoint``; nothing is written then).
+
+    ``checkpoint``: write the whole state there after every unit. ``resume``: first read that
+    file, continue where it stopped (its elapsed time is added to ``stats.seconds``;
+    ``settings.budget_seconds`` limits this invocation only) and keep writing to it unless
+    ``checkpoint`` names another file. ``table_version`` and ``code_version`` (default: the
+    shipped tables' and the package's, ``jaxcache``) are what a checkpoint is tied to."""
+    sink = checkpoint if checkpoint is not None else resume
+    print_ = None
+    saved = None
+    if sink is not None:
+        if table_version is None or code_version is None:
+            from nuzline import jaxcache
+            from nuzline.data import tables as tables_module
+
+            table_version = table_version or jaxcache.table_version(tables_module.DEFAULT)
+            code_version = code_version or jaxcache.code_version()
+        print_ = fingerprint(problem, settings, _seed_of(key), table_version, code_version)
+    if resume is not None:
+        saved = read_checkpoint(resume, print_)["funnel"]
+    funnel = _Funnel(tables, names, problem, settings, key, progress, clock, sink, print_)
+    if saved is not None:
+        funnel.restore(saved)
     st = settings
     for c in range(len(problem.candidates)):
         variants = single_changes(
@@ -558,16 +738,7 @@ def run_prep(
     funnel.dropped = {d for d, _ in funnel.pruned}
     stopped = None
     try:
-        pools = funnel.team_phase()
-        for v in range(st.variant_rounds):
-            nxt = funnel.expansion(v, pools)
-            if nxt is None:
-                break
-            pools = nxt
-        if st.variant_rounds:
-            funnel.phase = "variants"
-        if st.max_depth >= 1:
-            funnel.finalists_phase(pools[funnel.k])
+        funnel.drive(funnel.pos)
     except _Stop:
         stopped = "budget"
     except KeyboardInterrupt:

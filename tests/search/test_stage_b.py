@@ -5,6 +5,7 @@ time budget, refused mass, an all-terminal root and reproducibility."""
 
 from __future__ import annotations
 
+import json
 from collections import defaultdict
 from dataclasses import replace
 
@@ -645,3 +646,24 @@ def test_win_after_a_new_death_scores_zero_at_k0(tables, names):
         exact, _ = exhaustive(tables, s, 1)
         assert exact[0] == pytest.approx(want, abs=1e-9)
         assert row(result, 0).estimate == pytest.approx(want, abs=1e-9)
+
+
+def test_result_dict_round_trip(tables, names):
+    # Plan 4c Task 8: a checkpoint holds finished solves as JSON; nothing may be lost.
+    from tests.search.fixtures import certain_zero_leaf, sacrifice_endgame
+
+    pixel = pixel_endgame(tables, names)
+    sacrifice = sacrifice_endgame(tables, names).with_budget(1)
+    solves = [
+        solve(tables, names, pixel, KEY, SolveSettings(max_depth=2, epsilon=0.0, n_depth0=8), ZERO),
+        solve(
+            tables, names, sacrifice, KEY,
+            SolveSettings(max_depth=2, epsilon=0.0, n_depth0=8), certain_zero_leaf,
+        ),
+    ]  # fmt: skip
+    for r in solves:
+        assert any(n.children for n in plan_nodes(r.plan.children[r.ranking[0].action]))
+        assert any(a.distribution is not None for a in r.ranking)
+        back = stage_b.result_from_dict(json.loads(json.dumps(stage_b.result_to_dict(r))))
+        assert back == r
+        assert back.seconds == r.seconds

@@ -95,7 +95,7 @@ from __future__ import annotations
 import math
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field, fields, replace
 from typing import NamedTuple
 
 import jax
@@ -121,6 +121,8 @@ __all__ = [
     "PlanNode",
     "SolveResult",
     "SolveSettings",
+    "result_from_dict",
+    "result_to_dict",
     "solve",
 ]
 
@@ -1077,4 +1079,96 @@ def solve(
         met,
         int(state.faint_budget),
         _protected(state),
+    )
+
+
+# ---------------------------------------------------------------------- serialization
+
+
+def _action_to_dict(a: ActionValue) -> dict:
+    out = {f.name: getattr(a, f.name) for f in fields(ActionValue)}
+    out["action"] = int(a.action)
+    out["sampled_nodes"] = int(a.sampled_nodes)
+    for name in (
+        "estimate", "ci_low", "ci_high", "lower_bound", "unexplored", "sampled",
+        "refused", "e_deaths", "failed",
+    ):  # fmt: skip
+        out[name] = float(out[name])
+    out["tied_with_best"] = bool(a.tied_with_best)
+    out["distribution"] = None if a.distribution is None else a.distribution.as_dict()
+    return out
+
+
+def _action_from_dict(d: dict) -> ActionValue:
+    dist = d["distribution"]
+    if dist is not None:
+        probs = tuple(float(dist[name]) for name in deaths.BUCKETS)
+        dist = deaths.DeathDistribution(probs, dist["n"])
+    return ActionValue(**{**d, "distribution": dist})
+
+
+def _node_to_dict(n: PlanNode) -> dict:
+    return {
+        "obs": None if n.obs is None else n.obs.hex(),
+        "prob": float(n.prob),
+        "action": None if n.action is None else int(n.action),
+        "values": {str(int(k)): float(v) for k, v in n.values.items()},
+        "children": {str(int(k)): [_node_to_dict(c) for c in v] for k, v in n.children.items()},
+        "kind": n.kind,
+        "opp_action": None if n.opp_action is None else int(n.opp_action),
+        "opp_label": n.opp_label,
+        "replacement": bool(n.replacement),
+    }
+
+
+def _node_from_dict(d: dict) -> PlanNode:
+    return PlanNode(
+        obs=None if d["obs"] is None else bytes.fromhex(d["obs"]),
+        prob=d["prob"],
+        action=d["action"],
+        values={int(k): v for k, v in d["values"].items()},
+        children={int(k): [_node_from_dict(c) for c in v] for k, v in d["children"].items()},
+        kind=d["kind"],
+        opp_action=d["opp_action"],
+        opp_label=d["opp_label"],
+        replacement=d["replacement"],
+    )
+
+
+def result_to_dict(result: SolveResult) -> dict:
+    """``result`` as JSON-safe plain data (every field, recursively: observation bytes as hex,
+    integer dict keys as strings, ``DeathDistribution`` by ``as_dict``)."""
+    return {
+        "ranking": [_action_to_dict(a) for a in result.ranking],
+        "dropped": {str(int(k)): v for k, v in result.dropped.items()},
+        "depth": int(result.depth),
+        "plan": _node_to_dict(result.plan),
+        "playouts": int(result.playouts),
+        "seconds": float(result.seconds),
+        "settings": {f.name: getattr(result.settings, f.name) for f in fields(SolveSettings)},
+        "leaf_budget": result.leaf_budget,
+        "rounds": int(result.rounds),
+        "half_width_a": result.half_width_a,
+        "precision_met": result.precision_met,
+        "deaths_allowed": int(result.deaths_allowed),
+        "protected": [int(p) for p in result.protected],
+    }
+
+
+def result_from_dict(d: dict) -> SolveResult:
+    """The inverse of :func:`result_to_dict`: ``result_from_dict(result_to_dict(r)) == r``."""
+    return SolveResult(
+        ranking=[_action_from_dict(a) for a in d["ranking"]],
+        dropped={int(k): v for k, v in d["dropped"].items()},
+        depth=d["depth"],
+        plan=_node_from_dict(d["plan"]),
+        playouts=d["playouts"],
+        seconds=d["seconds"],
+        settings=SolveSettings(**d["settings"]),
+        leaf_budget=d["leaf_budget"],
+        rounds=d["rounds"],
+        half_width_a=d["half_width_a"],
+        precision_met=d["precision_met"],
+        deaths_allowed=d["deaths_allowed"],
+        protected=tuple(d["protected"]),
     )
