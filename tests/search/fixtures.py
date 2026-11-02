@@ -12,6 +12,7 @@ from nuzline.data.tables import Names, Tables
 from nuzline.engine.actions import MOVE_ACTIONS, legal_actions
 from nuzline.engine.ids import Stat
 from nuzline.engine.state import BattleState
+from nuzline.search.leaves import LeafValue
 from tests.ai.fixtures import trace_f
 from tests.engine.helpers import roark_state
 
@@ -194,3 +195,90 @@ def dead_monferno(tables: Tables, names: Names, **kw) -> BattleState:
     return s.replace_hp(0, monferno, 0)._replace(
         deaths=s.deaths.at[monferno].set(1), player_faints=s.player_faints + 1
     )
+
+
+def certain_zero_leaf(states, weights, pairs=None) -> list[LeafValue]:
+    """A ``leaf_fn`` worth 0 with a negligible interval (``n = 10**6``). Unlike
+    ``test_plan_tree.zero_leaf`` (``n = 1``, an interval half-width of about 0.9 per unit of
+    leaf weight) it cannot make a zero leaf's interval overlap a valued line's, and it
+    reports no expected deaths, so the tie rule never reorders a solve by them."""
+    return [LeafValue(0, 10**6, 0, 10**6, False) for _ in range(len(states.hp))]
+
+
+def _knowing_only(state: BattleState, slot: int, move_slot: int) -> BattleState:
+    """The player's party member ``slot`` with the PP of every move but ``move_slot`` zeroed."""
+    pp = [int(p) if i == move_slot else 0 for i, p in enumerate(state.pp[0, slot])]
+    return state.with_pp(0, slot, pp)
+
+
+def _team_of_four(tables: Tables, names: Names) -> BattleState:
+    """Monferno, Prinplup, (Grotle's slot emptied) and Starly against Geodude alone; Roark's
+    bag emptied and Geodude knowing only Tackle."""
+    s = empty_bag(roark_state(tables, names, player_count=4, opp_count=1))
+    s = s._replace(species=s.species.at[0, 2].set(0), hp=s.hp.at[0, 2].set(0))
+    return s.with_pp(1, 0, [int(p) if i == 0 else 0 for i, p in enumerate(s.pp[1, 0])])
+
+
+def _bubble_slot(names: Names, state: BattleState) -> int:
+    return np.asarray(state.moves[0, 1]).tolist().index(names.move("Bubble"))
+
+
+def _facing(state: BattleState, slot: int) -> BattleState:
+    """``state`` with the player's party member ``slot`` active (for ``damage_table``)."""
+    return state._replace(active=state.active.at[0].set(slot))
+
+
+def faint_pending_root(tables: Tables, names: Names) -> BattleState:
+    """A player replacement decision: Monferno fainted (``deaths[0] = 1``, ``player_faints =
+    1``) with Prinplup (Bubble only) and Starly to send in against a full-HP Geodude
+    (Tackle only, slower than Prinplup), ``with_budget(k=1)``. Asserts the numbers the tests
+    rely on: one Bubble always KOs Geodude, Starly cannot KO it in one hit (even critical),
+    and Prinplup is faster."""
+    from nuzline.engine.damage import damage_table
+
+    s = at_replacement(_team_of_four(tables, names))
+    s = _knowing_only(s, 1, _bubble_slot(names, s))
+    hp = int(s.hp[1, 0])
+    bubble = damage_table(tables, _facing(s, 1), 0, names.move("Bubble"), 0)
+    assert int(np.asarray(bubble).min()) >= hp, "one Bubble does not always KO Geodude"
+    for move in np.asarray(s.moves[0, 3]).tolist():
+        if move > 0:
+            table = damage_table(tables, _facing(s, 3), 0, move, 1)
+            assert int(np.asarray(table).max()) < hp, "Starly can KO Geodude in one hit"
+    assert int(s.stats[1, 0, _SPE]) < int(s.stats[0, 1, _SPE]), "Geodude is not slower"
+    return s.with_budget(1)
+
+
+_SACRIFICE_CHECKED: set[int] = set()
+
+
+def sacrifice_endgame(tables: Tables, names: Names) -> BattleState:
+    """The ``faint_pending_root`` team before the faint: no deaths, ``faint_budget`` 0 (set
+    ``k`` with ``with_budget``), Monferno alive at 1 HP knowing only Leer with its Spe stat
+    one below Geodude's, Prinplup at 4 HP knowing only Bubble, Geodude at full HP knowing
+    only Tackle. A direct switch to Prinplup eats a Tackle that KOs it 95 % of the time;
+    after Leer sacrifices Monferno, Prinplup enters free, moves first and wins. Asserts the
+    speed order, both KO facts and, with ``exhaustive`` (cap 2), that the death budget is
+    worth at least 0.3 here and that some root value lies strictly between 0 and 1."""
+    from nuzline.engine.damage import damage_table
+    from tests.search.exhaustive import exhaustive
+
+    s = _team_of_four(tables, names)
+    s = _knowing_only(s, 0, np.asarray(s.moves[0, 0]).tolist().index(names.move("Leer")))
+    s = _knowing_only(s, 1, _bubble_slot(names, s))
+    s = s.replace_hp(0, 0, 1).replace_hp(0, 1, 4)
+    s = s._replace(stats=s.stats.at[0, 0, _SPE].set(s.stats[1, 0, _SPE] - 1))
+    spe_monferno, spe_geodude, spe_prinplup = (
+        int(s.stats[i, j, _SPE]) for i, j in ((0, 0), (1, 0), (0, 1))
+    )
+    assert spe_monferno < spe_geodude < spe_prinplup, "Spe order Monferno < Geodude < Prinplup"
+    tackle = damage_table(tables, _facing(s, 1), 1, names.move("Tackle"), 0)
+    assert int(np.asarray(tackle).min()) >= 4, "a Tackle that hits does not KO Prinplup"
+    bubble = damage_table(tables, _facing(s, 1), 0, names.move("Bubble"), 0)
+    assert int(np.asarray(bubble).min()) >= int(s.hp[1, 0]), "one Bubble does not KO Geodude"
+    if id(tables) not in _SACRIFICE_CHECKED:
+        exact = [exhaustive(tables, s.with_budget(k), 2)[0] for k in (0, 1)]
+        assert max(exact[1].values()) - max(exact[0].values()) >= 0.3, "the budget is worth <0.3"
+        assert any(0 < v < 1 for e in exact for v in e.values()), "every root value is 0 or 1"
+        _SACRIFICE_CHECKED.add(id(tables))
+    return s

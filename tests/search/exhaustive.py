@@ -11,6 +11,13 @@ one module-level ``jax.jit(jax.vmap(_turn))`` (the playout's turn recipe,
 replacement's ``power_mul``, then ``observe``), merged on the host by (state bytes,
 observation bytes, refused) and grouped by observation into belief nodes. A refused
 child is valued 0 (plan ruling 4); a state not over at the cap counts 0.
+
+A finished battle is worth ``deaths.success`` of its state; a failed state (over the death
+budget, plan ruling 3) is worth 0 and not expanded. A pending state (the player's active
+Pokemon fainted, a healthy one left) is a decision over ``decision_actions`` whose children
+come from ``playout.replacement_pass`` and ``replacement_observation`` (one outcome each,
+grouped by observation); a replacement does not count a turn, so a cap of ``cap`` counts
+turns only.
 """
 
 from __future__ import annotations
@@ -22,14 +29,14 @@ import jax.numpy as jnp
 import numpy as np
 
 from nuzline.ai.policy import ai_action_distribution
-from nuzline.engine.actions import legal_actions
+from nuzline.engine.actions import MOVE_ACTIONS, decision_actions
 from nuzline.engine.enumerate import enumerate_outcomes, outcome_laws
-from nuzline.engine.observe import OBS_SIZE, observe
+from nuzline.engine.observe import OBS_SIZE, observe, replacement_observation
 from nuzline.engine.order import is_switch
 from nuzline.engine.state import BattleState
-from nuzline.engine.step import WINNER_PLAYER, replacement_power_mul, step
+from nuzline.engine.step import WINNER_PLAYER, needs_replacement, replacement_power_mul, step
 from nuzline.search import deaths
-from nuzline.search.playout import send_replacements
+from nuzline.search.playout import replacement_pass, send_replacements
 
 P = 8192  # outcome rows per program call (padded)
 _OBS_BYTES = OBS_SIZE * 4  # int32 observation
@@ -44,7 +51,16 @@ def _turn(tables, before, actions, outcome):
 
 _turns = jax.jit(jax.vmap(_turn, in_axes=(None, None, None, 0)))
 _laws = jax.jit(outcome_laws)
-_legal = jax.jit(lambda tables, state: legal_actions(tables, state, 0))
+_legal = jax.jit(decision_actions)
+
+
+def _replace(tables, state, action):
+    after, refused = replacement_pass(tables, state, action - MOVE_ACTIONS)
+    return after, refused, replacement_observation(after)
+
+
+_replaced = jax.jit(_replace)
+_pending = jax.jit(lambda state: needs_replacement(state)[0] == 1)
 
 
 def state_bytes(state: BattleState) -> bytes:
@@ -93,6 +109,28 @@ def children(
     return out
 
 
+_REPLACED: dict[tuple, list] = {}
+
+
+def replacement_children(
+    tables, state: BattleState, a: int
+) -> list[tuple[BattleState, bool, bytes, float]]:
+    """``children`` of the replacement ``a`` (``MOVE_ACTIONS + slot``) at a pending
+    ``state``: one child, probability 1."""
+    key = (id(tables), state_bytes(state), a)
+    if key not in _REPLACED:
+        after, refused, obs = jax.device_get(_replaced(tables, state, jnp.int32(a)))
+        _REPLACED[key] = [
+            (
+                jax.tree.map(np.asarray, after),
+                bool(refused),
+                np.asarray(obs, np.int32).tobytes(),
+                1.0,
+            )
+        ]
+    return _REPLACED[key]
+
+
 def _ai(tables, state: BattleState) -> np.ndarray:
     return np.asarray(ai_action_distribution(tables, state), np.float64)
 
@@ -108,38 +146,48 @@ def exhaustive(
     choices: dict[tuple[bytes, ...], int | None] = {}
 
     def value(belief: list[tuple[BattleState, float]], left: int, path) -> dict[int, float]:
+        pending = bool(_pending(belief[0][0]))
         legal = np.flatnonzero(np.asarray(_legal(tables, belief[0][0])))
-        qs = [_ai(tables, s) for s, _ in belief]
+        qs = [None if pending else _ai(tables, s) for s, _ in belief]
         values = {}
         for a in legal.tolist():
             total = 0.0
             groups: dict[bytes, dict[bytes, list]] = {}
+            # (state, reach, child) for every outcome of ``a``: a replacement has one
+            # outcome and no opponent action; a turn is ``left - 1`` turns from here.
+            outcomes = []
             for (s, w), q in zip(belief, qs, strict=True):
+                if pending:
+                    outcomes.extend((w * c[3], c) for c in replacement_children(tables, s, a))
+                    continue
                 for o in np.flatnonzero(q > 0).tolist():
-                    for after, refused, ob, p in children(tables, s, a, o):
-                        reach = w * q[o] * p
-                        if refused:
-                            continue
-                        if int(after.over) != 0:
-                            total += reach * bool(
-                                deaths.success(
-                                    int(after.winner) == WINNER_PLAYER,
-                                    int(after.player_faints),
-                                    np.asarray(after.deaths),
-                                    int(after.faint_budget),
-                                    np.asarray(after.protected),
-                                )
-                            )
-                            continue
-                        if left == 1:
-                            continue
-                        sb = state_bytes(after)
-                        gkey = ob if group else ob + sb
-                        member = groups.setdefault(gkey, {}).setdefault(sb, [after, 0.0])
-                        member[1] += reach
+                    outcomes.extend((w * q[o] * c[3], c) for c in children(tables, s, a, o))
+            after_left = left if pending else left - 1
+            for reach, (after, refused, ob, _) in outcomes:
+                if refused:
+                    continue
+                if int(after.over) != 0:
+                    total += reach * bool(
+                        deaths.success(
+                            int(after.winner) == WINNER_PLAYER,
+                            int(after.player_faints),
+                            np.asarray(after.deaths),
+                            int(after.faint_budget),
+                            np.asarray(after.protected),
+                        )
+                    )
+                    continue
+                if bool(deaths.over_budget(after)):
+                    continue
+                if after_left == 0 and not bool(_pending(after)):
+                    continue
+                sb = state_bytes(after)
+                gkey = ob if group else ob + sb
+                member = groups.setdefault(gkey, {}).setdefault(sb, [after, 0.0])
+                member[1] += reach
             for gkey, members in groups.items():
                 belief_next = [(m[0], m[1]) for m in members.values()]
-                sub = value(belief_next, left - 1, (*path, gkey[:_OBS_BYTES]))
+                sub = value(belief_next, after_left, (*path, gkey[:_OBS_BYTES]))
                 total += max(sub.values())
             values[a] = total
         best = max(values, key=lambda a: (values[a], -a))

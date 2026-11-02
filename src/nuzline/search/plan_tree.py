@@ -79,6 +79,7 @@ _KIND_TEXT = {
     "pruned": "unexplored (below epsilon)",
     "sampled": "sampled (too many outcomes to enumerate)",
     "refused": "refused",
+    "failed": "over the death budget",
     "terminal": "battle over",
     "leaf": "leaf",
     "decision": "decision",
@@ -337,9 +338,16 @@ class _Walk:
         return _action_label(f, self.names, a, self.root, self.labels)
 
 
-def _plain(row: dict) -> dict:
-    """``row`` with numpy scalars as Python ones (``json`` refuses ``np.bool_``/``np.int64``)."""
-    return {k: v.item() if isinstance(v, np.generic) else v for k, v in row.items()}
+def _plain(value):
+    """``value`` (a ``dataclasses.asdict`` row) with numpy scalars as Python ones (``json``
+    refuses ``np.bool_``/``np.int64``) and tuples as lists (what a JSON round trip gives)."""
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, dict):
+        return {k: _plain(v) for k, v in value.items()}
+    if isinstance(value, tuple | list):
+        return [_plain(v) for v in value]
+    return value
 
 
 def _node_json(walk: _Walk, node: PlanNode, lab: str, prev_opp: int | None, depth: int) -> dict:

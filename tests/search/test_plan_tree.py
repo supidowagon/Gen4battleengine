@@ -192,7 +192,7 @@ def test_render_shows_the_sampled_node_count(roark, names):
     assert "1.2 % (3)" in lines[2]
 
 
-def test_depth0_prints_no_plan_and_labels_its_leaves(names, monkeypatch):
+def test_depth0_prints_no_plan_and_labels_its_leaves(tables, names, monkeypatch):
     """At depth 0 (Stage A) ``render`` shows no plan under the best action, and the JSON
     leaves say what they are: every foe reply, valued by Stage A's AI-driven playouts."""
     canned = Ranking.of(
@@ -203,7 +203,7 @@ def test_depth0_prints_no_plan_and_labels_its_leaves(names, monkeypatch):
     )
     monkeypatch.setattr(stage_b, "rank_actions", lambda *args: canned)
     settings = SolveSettings(max_depth=0, n_depth0=200)
-    result = solve(None, names, None, KEY, settings)
+    result = solve(None, names, roark_state(tables, names), KEY, settings)
     lines = render(result, names, 1)
     assert not any(line.lstrip().startswith("if ") for line in lines), lines
     assert "Stage A (depth 0)" in lines[-1]

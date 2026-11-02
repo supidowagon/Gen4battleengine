@@ -14,7 +14,7 @@ import pytest
 
 from nuzline.engine.damage import damage_table
 from nuzline.engine.step import WINNER_PLAYER
-from nuzline.search import stage_b
+from nuzline.search import deaths, stage_b
 from nuzline.search.expand import ai_rows, expand
 from nuzline.search.leaves import LeafValue, allocate
 from nuzline.search.plan_tree import render
@@ -199,12 +199,15 @@ def test_pruning_bound(tables, names):
     store, kids = expand(tables, batch(state), pairs)
     pruned = defaultdict(float)
     groups = defaultdict(float)
+    failed = np.asarray(deaths.over_budget(store))
     for i, (_, a, o) in enumerate(pairs):
         if q[o] < eps:
             pruned[a] += q[o]
             continue
         for c in kids[i]:
-            if not c.refused and int(store.over[c.state_row]) == 0:
+            # (a failed child, over the death budget, is not pruned: it is worth 0 and played
+            # out only for the distribution)
+            if not c.refused and int(store.over[c.state_row]) == 0 and not failed[c.state_row]:
                 groups[(a, c.obs)] += q[o] * c.prob
     for (a, _), g in groups.items():
         if g < eps:
@@ -263,8 +266,10 @@ def test_refused_replacement_mass(tables, names):
     assert all(v == 0 for o, v in refused.items() if o != to_geodude)
     r = row(result, tackle)
     assert r.refused == pytest.approx(q[to_geodude] * refused[to_geodude], abs=1e-6)
-    # Every leaf is worth 1, so the estimate is all the mass but the refused and the lost.
-    assert r.estimate == pytest.approx(1 - r.refused - lost, abs=1e-6)
+    # Every leaf is worth 1 and every failed node (over the death budget) 0, so the estimate
+    # is all the mass but the refused, the lost and the failed.
+    assert r.failed > 0
+    assert r.estimate == pytest.approx(1 - r.refused - lost - r.failed, abs=1e-6)
 
 
 def test_all_terminal_root(tables, names):
@@ -613,12 +618,15 @@ def test_terminal_win_after_a_death_scores_zero_at_k0(tables, names):
     table = np.asarray(damage_table(tables, state, 0, names.move("Bubble"), 0))
     assert table.min() >= int(state.hp[1, 0])  # one Bubble always KOs
     settings = SolveSettings(max_depth=1, epsilon=0.0, n_depth0=8, max_turns=TURNS)
-    for k, want in ((0, 0.0), (1, 1.0)):
-        s = state.with_budget(k)
-        result = solve(tables, names, s, KEY, settings, leaf_fn=ZERO)
-        exact, _ = exhaustive(tables, s, 1)
-        assert exact[bubble] == pytest.approx(want, abs=1e-9)
-        assert all(r.estimate == pytest.approx(want, abs=1e-9) for r in result.ranking)
+    exact, _ = exhaustive(tables, state.with_budget(0), 1)
+    assert exact[bubble] == pytest.approx(0.0, abs=1e-9)
+    with pytest.raises(ValueError, match="death budget"):  # Monferno's death is over budget
+        solve(tables, names, state.with_budget(0), KEY, settings, leaf_fn=ZERO)
+    s = state.with_budget(1)
+    result = solve(tables, names, s, KEY, settings, leaf_fn=ZERO)
+    exact, _ = exhaustive(tables, s, 1)
+    assert exact[bubble] == pytest.approx(1.0, abs=1e-9)
+    assert all(r.estimate == pytest.approx(1.0, abs=1e-9) for r in result.ranking)
 
 
 def test_win_after_a_new_death_scores_zero_at_k0(tables, names):
