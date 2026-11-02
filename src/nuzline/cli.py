@@ -27,6 +27,18 @@
   (default 1.5); ``--playouts N`` instead fixes every pass's leaf budget (no top-ups). Exit
   code 2 when the fight or the opponent AI is refused, or a belief node's states differ in
   the player's legal actions (``stage_b.HiddenLegality``).
+* ``nuzline prep --save SAVE (--trainer NAME | --trainer-id N) [--cap N] [--deaths K]
+  [--protect NAME ...] [--exclude NAME ...] [--reserve ITEM ...] [--prestatus STATUS ...]
+  [--no-entry-hp] [--weight KIND=W ...] [--budget SECONDS] [--checkpoint FILE | --resume FILE]
+  [--max-depth 2] [--finalists 3] [--screen-n 8] [--seed 0] [--devices N] [--tree FILE.json]
+  [--show-depth 1]``: the prep search (``prep.search``): which Pokemon, moves, items and entry
+  HP to bring from the save's party and boxes, the costed prep steps, the odds ladder for
+  0-3 deaths and the Stage B plan, a run record ``runs/prep_<time>.json`` and a checkpoint
+  (default ``runs/prep_<time>.ckpt.json``) that ``--resume`` continues. ``--cap`` defaults to
+  ``config/level_caps.toml``. ``--protect`` and ``--exclude`` name a Pokemon by species,
+  nickname, ``party:N`` or ``box:B:S`` (the labels of ``save show``). Exit code 2 when the
+  opponent is unsupported or every setup is refused; an interrupted or budget-stopped run
+  exits 0 with its best answer.
 * ``nuzline trainers``: every trainer's id, name and class.
 * ``nuzline save show SAVE [--json] [--allow-corrupt]``: the save's trainer, loaded copy,
   party and boxes (one line per Pokemon), or the whole save as JSON.
@@ -223,6 +235,61 @@ def _parser() -> argparse.ArgumentParser:
     solve.add_argument("--devices", type=int, default=os.cpu_count(), help="host CPU devices")
     solve.add_argument("--tree", type=Path, default=None, help="write the plan tree as JSON")
     solve.add_argument("--show-depth", type=int, default=1, help="plan levels printed")
+    prep = sub.add_parser("prep", help="find the setup to bring from a save, with its odds")
+    prep.add_argument("--save", type=Path, required=True, help="a Platinum .sav/.dsv")
+    prep.add_argument("--allow-corrupt", action="store_true", help="load a corrupt save anyway")
+    who = prep.add_mutually_exclusive_group(required=True)
+    who.add_argument("--trainer", help="trainer name (a Leader is preferred)")
+    who.add_argument("--trainer-id", type=int, help="exact trainer id")
+    prep.add_argument(
+        "--cap", type=int, default=None, help="level cap (default: config/level_caps.toml)"
+    )
+    prep.add_argument("--deaths", type=int, default=0, help="player faints allowed, 0..3")
+    for flag, what in (("--protect", "must not faint"), ("--exclude", "is not brought")):
+        prep.add_argument(
+            flag,
+            action="append",
+            default=[],
+            metavar="NAME",
+            help=f"a Pokemon that {what}: species, nickname, party:N or box:B:S; repeatable",
+        )
+    prep.add_argument(
+        "--reserve",
+        action="extend",
+        nargs="+",
+        default=[],
+        metavar="ITEM",
+        help="bag items the search must not use",
+    )
+    prep.add_argument(
+        "--prestatus",
+        action="append",
+        default=[],
+        metavar="STATUS",
+        help="a status you may inflict before the fight: poison, burn or paralysis; repeatable",
+    )
+    prep.add_argument(
+        "--no-entry-hp", action="store_true", help="always enter at full HP (no HP variants)"
+    )
+    prep.add_argument(
+        "--weight",
+        action="append",
+        default=[],
+        metavar="KIND=W",
+        help="cost weight of candy, heart_scale, tm, hm or held (tie-break); repeatable",
+    )
+    prep.add_argument(
+        "--budget", type=float, default=None, help="seconds after which no new work starts"
+    )
+    prep.add_argument("--checkpoint", type=Path, default=None, help="checkpoint file to write")
+    prep.add_argument("--resume", type=Path, default=None, help="continue from this checkpoint")
+    prep.add_argument("--max-depth", type=int, default=2, help="deepest Stage B pass (0 = screen)")
+    prep.add_argument("--finalists", type=int, default=3, help="setups solved by Stage B")
+    prep.add_argument("--screen-n", type=int, default=8, help="playouts per setup in round 0")
+    prep.add_argument("--seed", type=int, default=0, help="PRNG seed")
+    prep.add_argument("--devices", type=int, default=os.cpu_count(), help="host CPU devices")
+    prep.add_argument("--tree", type=Path, default=None, help="write the plan tree as JSON")
+    prep.add_argument("--show-depth", type=int, default=1, help="plan levels printed")
     sub.add_parser("trainers", help="list trainer ids, names and classes")
     save = sub.add_parser("save", help="inspect or export a Platinum save")
     save_sub = save.add_subparsers(dest="save_command", required=True)
@@ -294,18 +361,25 @@ def _coverage(args) -> int:
     report = check_coverage(tables, names, player, trainer, opp, weather, leads)
     _print_report(report)
     if args.save is not None:
-        _print_pool(args, tables, names, player)
+        _print_pool(args, tables, names, player, trainer)
     return EXIT_REFUSED if report.missing else EXIT_OK
 
 
-def _print_pool(args, tables, names, player) -> None:
-    """The pool section of ``coverage --save``; it never changes the exit code."""
+def _print_pool(args, tables, names, player, trainer) -> None:
+    """The pool section of ``coverage --save``; it never changes the exit code. The cap is
+    ``--cap``, else the trainer's in ``config/level_caps.toml``, else the highest party level."""
     from nuzline.data.learnsets import load_learnsets
+    from nuzline.prep.caps import default_cap
     from nuzline.prep.pool import check_pool, pool_candidates
     from nuzline.saves import load_save
 
     save = load_save(args.save, allow_corrupt=args.allow_corrupt, tables=tables, names=names)
-    cap = args.cap if args.cap is not None else max(spec.level for spec in player)
+    cap = args.cap
+    if cap is None:
+        try:
+            cap = default_cap(trainer)
+        except ValueError:
+            cap = max(spec.level for spec in player)
     candidates, left_out = pool_candidates(save, tables, names, load_learnsets(), cap)
     print(f"Pool at level cap {cap} ({len(candidates)} Pokemon):")
     _print_report(check_pool(tables, names, candidates))
@@ -463,6 +537,136 @@ def _solve(args) -> int:
     return EXIT_OK
 
 
+def _parse_weights(values: Sequence[str]) -> tuple[tuple[str, float], ...]:
+    """The cost weights: the defaults overridden by ``--weight KIND=W`` values."""
+    from nuzline.prep.variants import DEFAULT_WEIGHTS
+
+    weights = dict(DEFAULT_WEIGHTS)
+    for value in values:
+        kind, sep, number = value.partition("=")
+        try:
+            weight = float(number)
+        except ValueError:
+            weight = -1.0
+        if kind not in weights or not sep or not weight >= 0:
+            raise ValueError(
+                f"--weight {value}: expected KIND=W with KIND one of {', '.join(weights)} "
+                "and W a number of at least 0"
+            )
+        weights[kind] = weight
+    return tuple(weights.items())
+
+
+def _prep(args) -> int:
+    import jax
+
+    from nuzline.data import tables as tables_module
+    from nuzline.data.learnsets import load_learnsets
+    from nuzline.data.tables import load_names, load_tables
+    from nuzline.data.trainer import IntermediateData, build_trainer_party, load_trainers
+    from nuzline.engine.coverage import check_opponent, start_weather
+    from nuzline.jaxcache import code_version, enable_compile_cache, table_version
+    from nuzline.prep import report
+    from nuzline.prep.caps import default_cap
+    from nuzline.prep.problem import build_problem
+    from nuzline.prep.search import PrepSettings, run_prep
+    from nuzline.saves import load_save
+
+    _check_deaths(args)
+    if args.resume is not None and args.checkpoint is not None:
+        raise ValueError("--resume continues and rewrites its own file: not with --checkpoint")
+    if args.budget is not None and args.budget < 0:
+        raise ValueError("--budget must not be negative")
+    if args.show_depth < 0:
+        raise ValueError("--show-depth must not be negative")
+    settings = PrepSettings(
+        screen_n=args.screen_n,
+        finalists=args.finalists,
+        max_depth=args.max_depth,
+        entry_hp=not args.no_entry_hp,
+        budget_seconds=args.budget,
+        weights=_parse_weights(args.weight),
+    )
+    tables_version = table_version(tables_module.DEFAULT)
+    # Before anything compiles: JAX opens the persistent cache at the first compile.
+    enable_compile_cache(tables_version + code_version())
+    trainer = resolve_trainer(
+        load_trainers(INTERMEDIATE), name=args.trainer, trainer_id=args.trainer_id
+    )
+    cap = args.cap if args.cap is not None else default_cap(trainer)
+    tables, names = load_tables(), load_names()
+    save = load_save(args.save, allow_corrupt=args.allow_corrupt, tables=tables, names=names)
+    opp = build_trainer_party(trainer, IntermediateData(INTERMEDIATE))
+    weather = start_weather(trainer)
+    problem, warnings = build_problem(
+        tables,
+        names,
+        save,
+        trainer,
+        opp,
+        weather,
+        load_learnsets(),
+        cap=cap,
+        deaths=args.deaths,
+        protect=args.protect,
+        exclude=args.exclude,
+        reserve=args.reserve,
+        prestatus=args.prestatus,
+    )
+    for line in warnings:
+        print(line, file=sys.stderr)
+    print(_trainer_line(trainer))
+    theirs = check_opponent(tables, names, trainer, opp, weather)
+    if theirs.missing:
+        _print_report(theirs)
+        return EXIT_REFUSED
+
+    def progress(p) -> None:
+        print(
+            f"[prep] {p.phase} round {p.round}: {p.alive} setups, {p.elapsed:.1f} s",
+            file=sys.stderr,
+            flush=True,
+        )
+
+    checkpoint = args.checkpoint
+    if checkpoint is None and args.resume is None:
+        checkpoint = RUNS / f"prep_{datetime.now().strftime('%Y%m%d_%H%M%S')}.ckpt.json"
+    try:
+        result = run_prep(
+            tables,
+            names,
+            problem,
+            settings,
+            jax.random.PRNGKey(args.seed),
+            checkpoint=checkpoint,
+            resume=args.resume,
+            progress=progress,
+            table_version=tables_version,
+        )
+    except ValueError as e:
+        if not str(e).startswith("every setup refused"):
+            raise
+        print(f"refused: {e}")
+        return EXIT_REFUSED
+    except (KeyError, TypeError, IndexError) as e:
+        if args.resume is None:
+            raise
+        raise ValueError(f"checkpoint {args.resume} is damaged: {e!r}") from e
+    for line in report.render(result, problem, names, args.show_depth):
+        print(line)
+    rec = report.record(result, problem, names, settings, args.seed, tables_version, args.reserve)
+    if args.tree is not None:
+        if rec["plan"] is None:
+            print("no plan tree: screen only")
+        else:
+            args.tree.write_text(json.dumps(rec["plan"], indent=1))
+            print(f"plan tree: {args.tree}")
+    rec = {**_source_hash(args), "devices": jax.device_count(), **rec}
+    print(f"run record: {_write_run_record(rec, 'prep')}")
+    print(f"checkpoint: {checkpoint or args.resume}")
+    return EXIT_OK
+
+
 def _source_hash(args) -> dict:
     """The run record's hash of the player's party source: ``party_sha256`` of the TOML,
     or ``save_sha256`` of the save file."""
@@ -471,14 +675,14 @@ def _source_hash(args) -> dict:
     return {"party_sha256": hashlib.sha256(args.party.read_bytes()).hexdigest()}
 
 
-def _write_run_record(record: dict) -> Path:
-    """Write ``record`` to a new ``runs/solve_<time to the microsecond>[_n].json`` and
+def _write_run_record(record: dict, prefix: str = "solve") -> Path:
+    """Write ``record`` to a new ``runs/<prefix>_<time to the microsecond>[_n].json`` and
     return its path; an existing record is never overwritten (open mode ``x``)."""
     RUNS.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     text = json.dumps(record, indent=1)
     for n in itertools.count():
-        path = RUNS / f"solve_{stamp}{f'_{n}' if n else ''}.json"
+        path = RUNS / f"{prefix}_{stamp}{f'_{n}' if n else ''}.json"
         try:
             with path.open("x", encoding="utf-8") as f:
                 f.write(text)
@@ -525,7 +729,7 @@ def _save_export(args) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
-    if args.command in ("rank", "solve"):
+    if args.command in ("rank", "solve", "prep"):
         if args.devices is not None and args.devices < 1:
             print("nuzline: error: --devices must be at least 1", file=sys.stderr)
             return EXIT_ERROR
@@ -534,6 +738,7 @@ def main(argv: list[str] | None = None) -> int:
         "coverage": _coverage,
         "rank": _rank,
         "solve": _solve,
+        "prep": _prep,
         "trainers": _trainers,
         "save": lambda a: {"show": _save_show, "export": _save_export}[a.save_command](a),
     }[args.command]

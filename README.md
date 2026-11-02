@@ -24,6 +24,18 @@ uv run nuzline rank --party tests/fixtures/sample_party.toml --trainer roark --d
 uv run nuzline solve --party tests/fixtures/sample_party.toml --trainer roark --max-depth 1 --deaths 1
 ```
 
+Find the setup to bring (team, lead, moves, held items, entry HP) from your save's party and boxes, with its odds:
+
+```
+uv run nuzline prep --save path/to/platinum.sav --trainer roark --deaths 1 --protect Prinplup
+uv run nuzline prep --save path/to/platinum.sav --trainer roark --budget 600 --checkpoint roark.ckpt.json
+uv run nuzline prep --save path/to/platinum.sav --trainer roark --resume roark.ckpt.json
+```
+
+`--save` is required. `--cap N` is the level cap (default: `config/level_caps.toml`, which lists only Roark; any other trainer needs `--cap`). `--protect` and `--exclude` (repeatable) name a Pokemon by species, nickname, `party:N` or `box:B:S` (slots 0-based, boxes 1-based, as in `save show`); a species both in the party and a box is ambiguous and must be named that way, a bare number is refused. `--reserve ITEM ...` keeps bag items out of the search, `--prestatus poison|burn|paralysis` (repeatable) allows a status inflicted beforehand, `--no-entry-hp` always enters at full HP, `--weight KIND=W` (candy, heart_scale, tm, hm, held) sets the resource cost weights of the tie-break. Search size: `--max-depth` (0 = screen only), `--finalists`, `--screen-n`, `--seed`, `--devices`; `--tree FILE.json` writes the plan tree and `--show-depth` sets the plan levels printed.
+
+The output has the `Setup:` card, the `Prep steps:` (Rare Candies, Heart Scale relearns, TMs, items, deposits and withdrawals, in order), the `Cost:` line (every resource spent), the `Odds ladder` for 0-3 deaths (the requested rung is planned by Stage B, the others are labelled "screen"), the Stage B `Plan:` and a `Search:` summary. Progress lines (`[prep] ...`) go to stderr. A run record is written to `runs/prep_<time>.json` (with the save's `save_sha256`) and a checkpoint to `runs/prep_<time>.ckpt.json` after every unit of work. `--budget SECONDS` stops starting new work after that time and prints the best answer so far ("screen only, no plan" when no solve finished), as does Ctrl-C; the exit code is 0. `--resume FILE` continues from a checkpoint and gives the same answer as an uninterrupted run; it needs the same save, trainer, settings, seed and program version (otherwise one line says what differs, exit 1) and cannot be combined with `--checkpoint`. Exit codes: 0 ok, 1 error, 2 the opponent is unsupported or every setup is refused.
+
 Read a Platinum save (see `docs/saves.md`), or use it in place of `--party` with `--save`:
 
 ```
@@ -46,3 +58,5 @@ save; keep it outside the repository.
 ```
 NUZLINE_USER_SAVE=path/to/platinum.dsv uv run pytest tests/test_user_save.py -v
 ```
+
+Slow tests (minutes each: the exhaustive check of the prep funnel on Roark, the long PP-stall fight) are skipped unless `NUZLINE_SLOW_TESTS=1` is set; the default suite stays under about a minute per file on one device.

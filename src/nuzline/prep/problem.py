@@ -157,6 +157,13 @@ def pick(candidates: Sequence[Candidate], names: Names, value: str) -> int:
     ``box:B:S`` (B 1-based, S as in the label), else a case-insensitive species name or
     nickname. ``ValueError`` for no match, and for several (each listed with its syntax)."""
     text = value.strip()
+    if text.isdigit():
+        mine = next((c for c in candidates if c.location == ("party", 0, int(text))), None)
+        hint = f"; party:{text} is {mine.label}" if mine else ""
+        raise ValueError(
+            f"{value!r}: a bare number is ambiguous (party and boxes are both candidates); "
+            f"use {SYNTAX}{hint}"
+        )
     want = None
     if m := re.fullmatch(r"party:(\d+)", text, re.IGNORECASE):
         want = ("party", 0, int(m.group(1)))

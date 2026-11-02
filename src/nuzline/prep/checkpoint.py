@@ -38,7 +38,7 @@ CHECKPOINT_VERSION = 1
 
 # The fingerprint keys in the order they are compared, with what a mismatch says.
 _MISMATCH = (
-    ("problem", "checkpoint is for another save or pool"),
+    ("problem", "checkpoint is for another save or pool, or other fight settings (deaths, cap)"),
     ("settings", "checkpoint is for other settings"),
     ("seed", "checkpoint is for another seed"),
     ("tables", "checkpoint is for other tables"),
