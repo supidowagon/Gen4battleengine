@@ -99,7 +99,7 @@ class PrepSettings:
     the variant space (``levelled=False``: no free level-up slot replacements); ``budget_seconds``: the anytime limit (ruling 11); ``weights``: the
     resource cost weights of the tie rule (ruling 7)."""
 
-    screen_n: int = 8
+    screen_n: int = 6
     team_keep: int = 32
     variant_rounds: int = 2
     variant_keep: int = 8

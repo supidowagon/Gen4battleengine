@@ -213,25 +213,34 @@ Windows 11, measured 2026-11-02. Wall seconds; phase seconds are the cold run's.
 
 | settings (cumulative)               | cold  | warm  | teams | variants | finalists | screened | playouts  | rung 0 |
 |-------------------------------------|-------|-------|-------|----------|-----------|----------|-----------|--------|
-| defaults (32 / 3 / 2)               | 964.2 | 878.2 | 737.7 | 127.8    | 92.9      | 9770     | 1,144,478 | 1.000  |
+| old defaults (`screen_n` 8, 32 / 3 / 2) | 964.2 | 878.2 | 737.7 | 127.8    | 92.9      | 9770     | 1,144,478 | 1.000  |
 | `team_keep` 16                      | 925.5 | 842.8 | 779.7 | 60.2     | 80.5      | 8377     | 1,100,648 | 1.000  |
 | + `finalists` 2                     | 923.6 | 840.1 | 781.7 | 60.2     | 76.5      | 8377     | 1,090,648 | 1.000  |
 | + `variant_rounds` 1                | 929.6 | 845.8 | 781.1 | 48.5     | 94.8      | 8102     | 1,093,818 | 0.997  |
+| `screen_n` 4, `finalists` 2         | 636.8 | crash | 437.8 | 84.8     | 108.6     | 9621     | 608,244   | 0.992  |
+| `screen_n` 6, `finalists` 2         | 817.1 | 730.4 | 599.6 | 111.5    | 100.5     | 9727     | 841,772   | 0.993  |
+| **new defaults** (`screen_n` 6, 32 / 3 / 2) | 822.1 | 734.6 | 600.1 | 111.8    | 104.8     | 9727     | 853,772   | 0.993  |
 
 The first version of this table passed no `--finalists` (the CLI's own default of 3 overrides
 `PrepSettings.finalists`), so its `finalists` 2 row changed nothing; rows 3 and 4 were re-measured
 with `python -m benchmarks.prep_timing --finalists 2` (`team_keep` and `variant_rounds` are not CLI
 options, so they were set by temporarily editing the `PrepSettings` defaults).
 
-The cold run misses 900 s by 64 s with the defaults, and none of the three reductions in the
-plan's order meets it (best 923.6 s), so `PrepSettings` keeps its defaults (`team_keep` 32, `finalists` 3,
-`variant_rounds` 2). The teams phase is 740-780 s of every run: it screens the whole team space
-in round 0 (about 8,000 setups, more than a million playouts in all) and halving it, and none of
-these knobs shortens it. Cold minus warm is the 85-90 s compile cost. The warm run is under the
-target. Two further attempts of the same measurements died with a Windows access violation
-(exit 3221225477) in the teams phase and were repeated; the table holds the completed runs.
+With the original defaults (`screen_n` 8, first row) the cold run missed 900 s by 64 s, and none of the
+three reductions in the plan's order (`team_keep`, `finalists`, `variant_rounds`) met it (best 923.6 s).
+The teams phase is 740-780 s of those runs: round 0 screens the whole team space (3509 setups) and
+every halving round costs about as much again, all proportional to `screen_n`. Lowering `screen_n`
+from 8 to 6 (now the default for `PrepSettings` and `--screen-n`) brings the cold run to 822.1 s and the
+warm one to 734.6 s, under the 900 s target, at a rung-0 value of 0.993 against 1.000 (rungs 1-3 stay
+1.000; the chosen setup now has Furret with Fury Swipes by Move Relearner and 10 HP instead of Monferno
+with two relearned moves). `screen_n` 4 gives 636.8 s cold but the same 0.992 and halves the screening
+sample, so 6 is kept. The row `screen_n` 4 has no warm time: that run died with a Windows access
+violation (exit 3221226505) after the cold run; the intermittent crash is the one in the Task 13 ruling.
+Cold minus warm is the 85-90 s compile cost. Two earlier attempts of the first measurements died with
+a Windows access violation (exit 3221225477) in the teams phase and were repeated; the table holds the
+completed runs.
 
-Chosen setup on the defaults run: PSYDUCK (party slot 5, unchanged), MONFERNO (party slot 2: Mach
+Chosen setup on the original-defaults run: PSYDUCK (party slot 5, unchanged), MONFERNO (party slot 2: Mach
 Punch, Leer, Fury Swipes by Move Relearner for one Heart Scale, Rock Smash by HM06), SPINARAK
 (party slot 4, unchanged); rung 0 value 1.000 (interval 0.995 - 1.000, from the plan); cost 1
 Heart Scale and HM06.

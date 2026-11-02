@@ -30,7 +30,7 @@
 * ``nuzline prep --save SAVE (--trainer NAME | --trainer-id N) [--cap N] [--deaths K]
   [--protect NAME ...] [--exclude NAME ...] [--reserve ITEM ...] [--prestatus STATUS ...]
   [--no-entry-hp] [--weight KIND=W ...] [--budget SECONDS] [--checkpoint FILE | --resume FILE]
-  [--max-depth 2] [--finalists 3] [--screen-n 8] [--seed 0] [--devices N] [--tree FILE.json]
+  [--max-depth 2] [--finalists 3] [--screen-n 6] [--seed 0] [--devices N] [--tree FILE.json]
   [--show-depth 1]``: the prep search (``prep.search``): which Pokemon, moves, items and entry
   HP to bring from the save's party and boxes, the costed prep steps, the odds ladder for
   0-3 deaths and the Stage B plan, a run record ``runs/prep_<time>.json`` and a checkpoint
@@ -285,7 +285,7 @@ def _parser() -> argparse.ArgumentParser:
     prep.add_argument("--resume", type=Path, default=None, help="continue from this checkpoint")
     prep.add_argument("--max-depth", type=int, default=2, help="deepest Stage B pass (0 = screen)")
     prep.add_argument("--finalists", type=int, default=3, help="setups solved by Stage B")
-    prep.add_argument("--screen-n", type=int, default=8, help="playouts per setup in round 0")
+    prep.add_argument("--screen-n", type=int, default=6, help="playouts per setup in round 0")
     prep.add_argument("--seed", type=int, default=0, help="PRNG seed")
     prep.add_argument("--devices", type=int, default=os.cpu_count(), help="host CPU devices")
     prep.add_argument("--tree", type=Path, default=None, help="write the plan tree as JSON")
