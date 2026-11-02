@@ -104,7 +104,7 @@ many are real). Decomp sources:
 
 Unreachable branches are not modelled: Substitute, Mist, Safeguard and Uproar
 come from unsupported moves; Shield Dust, Clear Body, Hyper Cutter, Immunity,
-Limber, Insomnia, Leaf Guard, Liquid Ooze, Magic Guard, Reckless, Serene Grace,
+Limber, Leaf Guard, Liquid Ooze, Magic Guard, Reckless, Serene Grace,
 Skill Link, Own Tempo, Levitate, Normalize and Color Change are unsupported
 abilities; Big Root and Grip Claw are unsupported items.
 """

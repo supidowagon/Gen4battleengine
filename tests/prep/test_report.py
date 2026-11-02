@@ -65,6 +65,22 @@ def fixture(tables, names):
     return prob, setup
 
 
+def test_same_names_carry_their_location(tables, names):
+    """Two un-nicknamed Pokemon of one species: every step but Deposit/Withdraw (which print
+    the location already) names which one."""
+    a = candidate(names, _spec(names, "Geodude", ("Tackle",)), 0)
+    b = replace(
+        candidate(names, _spec(names, "Geodude", ("Tackle",), level=10), 1, candies=4),
+        location=("box", 0, 0),
+        label="box 1 slot 0 GEODUDE",
+    )
+    prob = problem(tables, names, [a, b], resources=Resources(0, (), (), ()), levelled=[(), ()])
+    steps = prep_steps(prob, names, Setup((Member(1), Member(0))))
+    assert "Withdraw GEODUDE (box 1 slot 0)." in steps
+    assert any(t.startswith("Rare Candy x4 on GEODUDE (box 1 slot 0) ") for t in steps)
+    assert steps[-1] == ("Party order: GEODUDE (box 1 slot 0) first, then GEODUDE (party slot 0).")
+
+
 def test_prep_steps_text(tables, names):
     prob, setup = fixture(tables, names)
     assert prep_steps(prob, names, setup) == [

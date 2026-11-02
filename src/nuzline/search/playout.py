@@ -14,7 +14,9 @@ actions against the opponent's exact action distribution (``ai_action_distributi
 Each pair of actions is valued ``(1 - death_cost * risk) * (1 + fraction of the
 target's current HP removed)``, ``risk`` the chance the player's Pokemon faints this turn
 and ``death_cost`` what that faint costs against the faint budget (plan ruling 6: 1 with no
-budget left, for a protected Pokemon or the last one, else ``1 / (deaths left + 1)``), from the exact non-critical damage tables (16 rolls) and
+budget left, for a protected Pokemon or the last one, 1/2 in a failed state (over the budget
+already, ``deaths.over_budget``) unless it is the last one, else ``1 / (deaths left + 1)``;
+``death_cost``), from the exact non-critical damage tables (16 rolls) and
 the accuracy of both moves: the player is at risk only if the opponent's move KOs, and the
 opponent's move does not run when the player acts first (``action_order``, a speed tie
 counted as 1/2) and KOs. A switch is valued against the incoming Pokemon (stages reset);

@@ -163,8 +163,10 @@ _REFUSED_FORM_SPECIES = frozenset({386, 413, 479, 487, 492, 493})
 
 
 def _label(location: tuple[str, int, int]) -> str:
+    """``party slot S`` or ``box B slot S``: ``location``'s box index is 0-based, the label's
+    box number 1-based like ``save show`` and ``--exclude box:B:S``."""
     kind, box, slot = location
-    return f"party slot {slot}" if kind == "party" else f"box {box} slot {slot}"
+    return f"party slot {slot}" if kind == "party" else f"box {box + 1} slot {slot}"
 
 
 def _u16(b: bytes, o: int) -> int:

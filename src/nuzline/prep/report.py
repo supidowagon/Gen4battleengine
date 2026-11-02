@@ -41,9 +41,28 @@ __all__ = ["cost_line", "ladder_lines", "prep_steps", "record", "render", "setup
 HM_NOTE = "(an HM move needs the Move Deleter to remove)"
 
 
-def _nick(problem: PrepProblem, names: Names, candidate: int) -> str:
+def _shown_name(problem: PrepProblem, names: Names, candidate: int) -> str:
     cand = problem.candidates[candidate]
     return cand.nickname or names.species_names[cand.spec.species]
+
+
+def _where(location: tuple[str, int, int]) -> str:
+    kind, box, slot = location
+    return f"party slot {slot}" if kind == "party" else f"box {box + 1} slot {slot}"
+
+
+def _nick(problem: PrepProblem, names: Names, candidate: int) -> str:
+    """The candidate's nickname or species name, with its location when another candidate
+    or a left-out party Pokemon shows the same name (``GEODUDE (box 1 slot 0)``), so every
+    step names one Pokemon."""
+    name = _shown_name(problem, names, candidate)
+    others = [
+        _shown_name(problem, names, j) for j in range(len(problem.candidates)) if j != candidate
+    ]
+    others += [who for _, who in problem.left_out_party]
+    if name in others:
+        return f"{name} ({_where(problem.candidates[candidate].location)})"
+    return name
 
 
 def _plural(n: int, one: str, many: str) -> str:
@@ -83,7 +102,7 @@ def prep_steps(problem: PrepProblem, names: Names, setup: Setup) -> list[str]:
         return _nick(problem, names, i)
 
     deposits = [
-        (cand.location[2], nick(i))
+        (cand.location[2], _shown_name(problem, names, i))
         for i, cand in enumerate(cands)
         if cand.location[0] == "party" and i not in brought
     ]
@@ -93,7 +112,9 @@ def prep_steps(problem: PrepProblem, names: Names, setup: Setup) -> list[str]:
     for m in setup.members:
         kind, box, slot = cands[m.candidate].location
         if kind == "box":
-            steps.append(f"Withdraw {nick(m.candidate)} (box {box + 1} slot {slot}).")
+            steps.append(
+                f"Withdraw {_shown_name(problem, names, m.candidate)} (box {box + 1} slot {slot})."
+            )
     for m in setup.members:
         cand = cands[m.candidate]
         if cand.candies:

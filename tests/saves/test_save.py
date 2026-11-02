@@ -232,7 +232,7 @@ def test_bad_record_names_location(tmp_path, tables, names):
     rec = bytearray(mon_record(species=63, level=10))
     rec[0x20] ^= 1
     image = build_image(boxes={(4, 9): bytes(rec)})
-    with pytest.raises(RecordError, match="box 4 slot 9"):
+    with pytest.raises(RecordError, match="box 5 slot 9"):
         _load(tmp_path, image, tables, names)
 
 
