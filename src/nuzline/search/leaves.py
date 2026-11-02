@@ -63,7 +63,9 @@ class LeafValue:
 
     ``wins_*`` count successes (``deaths.success`` with the evaluated state's own
     ``faint_budget`` and ``protected``). ``deaths_*`` sum the playouts' ``player_faints`` per
-    half; ``buckets_b`` counts half B's playouts per ``deaths.BUCKETS`` entry."""
+    half; ``buckets_a`` and ``buckets_b`` count each half's playouts per ``deaths.BUCKETS``
+    entry. ``hp_left`` and ``pp_left`` sum ``PlayoutResult.hp_left``/``pp_left`` over both
+    halves (refused playouts add 0)."""
 
     wins_a: int
     n_a: int
@@ -73,6 +75,9 @@ class LeafValue:
     deaths_a: int = 0
     deaths_b: int = 0
     buckets_b: tuple[int, ...] = ()
+    buckets_a: tuple[int, ...] = ()
+    hp_left: float = 0.0
+    pp_left: float = 0.0
 
     @property
     def e_deaths_a(self) -> float:
@@ -86,6 +91,8 @@ class LeafValue:
         """Both evaluations' playouts together: every count added, ``refused`` or-ed."""
         mine = self.buckets_b or (0,) * len(other.buckets_b)
         theirs = other.buckets_b or (0,) * len(mine)
+        mine_a = self.buckets_a or (0,) * len(other.buckets_a)
+        theirs_a = other.buckets_a or (0,) * len(mine_a)
         return LeafValue(
             self.wins_a + other.wins_a,
             self.n_a + other.n_a,
@@ -95,6 +102,9 @@ class LeafValue:
             self.deaths_a + other.deaths_a,
             self.deaths_b + other.deaths_b,
             tuple(a + b for a, b in zip(mine, theirs, strict=True)),
+            tuple(a + b for a, b in zip(mine_a, theirs_a, strict=True)),
+            self.hp_left + other.hp_left,
+            self.pp_left + other.pp_left,
         )
 
     @property
@@ -165,6 +175,8 @@ def _forced_one(tables: Tables, state: BattleState, pair, key, max_turns: int) -
         refused=(refused | (rest.refused == 1)).astype(jnp.int8),
         deaths=rest.deaths,
         ended=rest.ended,
+        hp_left=rest.hp_left,
+        pp_left=rest.pp_left,
     )
 
 
@@ -182,6 +194,7 @@ def _run(fn, name: str, max_turns: int, tables: Tables, rows: tuple, row_of, key
     sharding = NamedSharding(Mesh(jax.devices(), ("d",)), PartitionSpec("d"))
     program = partial(fn, max_turns=max_turns)
     won, refused, faints, deaths_of, ended = [], [], [], [], []
+    hp_left, pp_left = [], []
     for start in range(0, n, LEAF_CHUNK):
         idx = np.arange(start, min(start + LEAF_CHUNK, n))
         pad = np.concatenate([idx, np.full(size - len(idx), idx[0])])
@@ -197,8 +210,11 @@ def _run(fn, name: str, max_turns: int, tables: Tables, rows: tuple, row_of, key
         faints.append(np.asarray(out.player_faints)[: len(idx)])
         deaths_of.append(np.asarray(out.deaths)[: len(idx)])
         ended.append(np.asarray(out.ended)[: len(idx)])
+        hp_left.append(np.asarray(out.hp_left)[: len(idx)])
+        pp_left.append(np.asarray(out.pp_left)[: len(idx)])
     won, refused = np.concatenate(won), np.concatenate(refused).astype(bool)
     faints, deaths_of, ended = (np.concatenate(x) for x in (faints, deaths_of, ended))
+    hp_left, pp_left = np.concatenate(hp_left), np.concatenate(pp_left)
     states = rows[0]
     protected = np.asarray(states.protected)[row_of]
     success = deaths.success(
@@ -212,6 +228,7 @@ def _run(fn, name: str, max_turns: int, tables: Tables, rows: tuple, row_of, key
         sl = slice(starts[i], starts[i + 1])
         w, f, r = success[sl], faints[sl].astype(np.int64), refused[sl]
         buckets = np.bincount(bucket[sl][h:], minlength=len(deaths.BUCKETS))
+        buckets_a = np.bincount(bucket[sl][:h], minlength=len(deaths.BUCKETS))
         values.append(
             LeafValue(
                 int(w[:h].sum()),
@@ -222,6 +239,9 @@ def _run(fn, name: str, max_turns: int, tables: Tables, rows: tuple, row_of, key
                 int(f[:h].sum()),
                 int(f[h:].sum()),
                 tuple(int(b) for b in buckets),
+                tuple(int(b) for b in buckets_a),
+                float(hp_left[sl].sum(dtype=np.float64)),
+                float(pp_left[sl].sum(dtype=np.float64)),
             )
         )
     return values

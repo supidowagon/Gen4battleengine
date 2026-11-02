@@ -301,3 +301,38 @@ def test_device_count_invariant(tables):
     one = _on_devices(1)
     assert len(one) == 4
     assert _on_devices(3) == one
+
+
+def test_both_halves_have_buckets(tables, names):
+    states = [dead_monferno(tables, names).with_budget(2), roark_state(tables, names)]
+    values = evaluate_leaves(tables, jax.tree.map(lambda *x: np.stack(x), *states), [64, 64], KEY)
+    for i, (state, value) in enumerate(zip(states, values, strict=True)):
+        keys = jnp.concatenate(leaf_keys(KEY, i, 64))
+        batch_ = jax.tree.map(lambda x: jnp.broadcast_to(x, (64, *x.shape)), state)
+        out = jax.device_get(batched_playout(tables, batch_, keys))
+        assert not np.any(out.refused)
+        bucket = deaths.bucket(
+            np.asarray(out.won) == 1,
+            out.ended,
+            np.asarray(out.player_faints).astype(int),
+            out.deaths,
+            np.asarray(state.protected),
+        )
+        assert sum(value.buckets_a) == value.n_a and sum(value.buckets_b) == value.n_b
+        assert value.buckets_a == tuple(np.bincount(bucket[:32], minlength=8).tolist())
+        assert value.buckets_b == tuple(np.bincount(bucket[32:], minlength=8).tolist())
+        assert value.hp_left == pytest.approx(float(np.asarray(out.hp_left, np.float64).sum()))
+        assert value.pp_left == pytest.approx(float(np.asarray(out.pp_left, np.float64).sum()))
+        assert 0 < value.hp_left <= 64 and 0 < value.pp_left <= 64
+
+
+def test_merge_sums_new_fields():
+    a = LeafValue(1, 2, 3, 4, False, 5, 6, (1,) * 8, (0, 2, 0, 0, 0, 0, 0, 0), 1.5, 2.5)
+    b = LeafValue(2, 4, 1, 2, True, 1, 2, (), (1, 0, 0, 0, 0, 0, 0, 0), 0.25, 0.5)
+    m = a.merge(b)
+    assert m.buckets_a == (1, 2, 0, 0, 0, 0, 0, 0) and m.buckets_b == (1,) * 8
+    assert (m.hp_left, m.pp_left) == (1.75, 3.0)
+    assert b.merge(a) == m.__class__(
+        3, 6, 4, 6, True, 6, 8, (1,) * 8, (1, 2, 0, 0, 0, 0, 0, 0), 1.75, 3.0
+    )
+    assert LeafValue(1, 2, 1, 2, False).merge(LeafValue(1, 2, 1, 2, False)).buckets_a == ()

@@ -39,7 +39,7 @@ from tests.engine.helpers import (
     roark_real_state,
     roark_state,
 )
-from tests.search.fixtures import at_replacement
+from tests.search.fixtures import at_replacement, switch_refusal_root
 from tests.strategies import supported_state
 
 HP_AT_RISK = 10  # Monferno's HP in the budget test: Rock Throw KOs it, Mach Punch cannot KO
@@ -411,3 +411,31 @@ def test_replacement_policy_spares_a_protected_pokemon(tables, names):
     r = at_replacement(s)
     assert int(replacement_policy(tables, r.with_budget(2))) == 1
     assert int(replacement_policy(tables, r.with_budget(2, protected=[1]))) == 3
+
+
+def _left(tables, state):
+    """``(hp_left, pp_left)`` of a final state by the module's formula, in numpy."""
+    hp, max_hp = np.asarray(state.hp[0], np.float64), np.asarray(state.max_hp[0], np.float64)
+    full = np.asarray(tables.move_pp)[np.asarray(state.moves[0])].astype(np.float64).sum()
+    return hp.sum() / max_hp.sum(), np.asarray(state.pp[0], np.float64).sum() / max(1.0, full)
+
+
+def test_hp_and_pp_left(tables, names):
+    state = roark_real_state(tables, names)
+    for i in range(8):
+        key = jax.random.PRNGKey(100 + i)
+        out = playout(tables, state, key)
+        final = _replay(tables, state, key)[-1][2]
+        hp, pp = _left(tables, final)
+        assert abs(float(out.hp_left) - hp) < 1e-6 and abs(float(out.pp_left) - pp) < 1e-6
+        assert 0.0 <= float(out.hp_left) <= 1.0 and 0.0 < float(out.pp_left) <= 1.0
+    # A refused playout has no result: 0 and 0.
+    root = switch_refusal_root(tables, names)
+    keys = jax.random.split(jax.random.PRNGKey(5), 64)
+    batch = jax.tree.map(lambda x: jnp.broadcast_to(x, (64, *x.shape)), root)
+    out = jax.device_get(batched_playout(tables, batch, keys))
+    refused = np.asarray(out.refused) == 1
+    assert refused.any()
+    assert np.all(np.asarray(out.hp_left)[refused] == 0)
+    assert np.all(np.asarray(out.pp_left)[refused] == 0)
+    assert np.all(np.asarray(out.hp_left)[~refused] > 0) or (~refused).sum() == 0

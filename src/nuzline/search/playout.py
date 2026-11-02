@@ -102,6 +102,17 @@ class PlayoutResult(NamedTuple):
     refused: jnp.ndarray  # int8[], 1 = stopped at a refused mechanic (no result)
     deaths: jnp.ndarray  # int8[6], the final state's per-slot death record
     ended: jnp.ndarray  # int8[], 1 = the battle is over (not cut off by max_turns)
+    hp_left: jnp.ndarray  # float32[], player party HP / max HP at the end (refused: 0)
+    pp_left: jnp.ndarray  # float32[], player party PP / full PP of its moves (refused: 0)
+
+
+def _resources_left(tables: Tables, state: BattleState) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """``(hp_left, pp_left)`` (``float32``): the player party's HP over its max HP, and its
+    PP over the full PP of the moves it knows (an empty slot counts 0)."""
+    hp = jnp.sum(state.hp[0].astype(_F32)) / jnp.maximum(jnp.sum(state.max_hp[0].astype(_F32)), 1)
+    full = jnp.sum(tables.move_pp[state.moves[0]].astype(_F32))
+    pp = jnp.sum(state.pp[0].astype(_F32)) / jnp.maximum(full, 1.0)
+    return hp.astype(_F32), pp.astype(_F32)
 
 
 def _select(cond, a, b):
@@ -371,6 +382,7 @@ def _run(tables: Tables, state: BattleState, key, max_turns: int, first_action):
     init = (state, key, jnp.int32(0), refused0)
     s, _, turns, refused = jax.lax.while_loop(cond, body, init)
     won = (s.over != 0) & (s.winner == WINNER_PLAYER)
+    hp_left, pp_left = _resources_left(tables, s)
     return PlayoutResult(
         won=jnp.where(refused, REFUSED_WON, won).astype(jnp.int8),
         player_faints=s.player_faints.astype(jnp.int8),
@@ -378,6 +390,8 @@ def _run(tables: Tables, state: BattleState, key, max_turns: int, first_action):
         refused=refused.astype(jnp.int8),
         deaths=s.deaths.astype(jnp.int8),
         ended=(s.over != 0).astype(jnp.int8),
+        hp_left=jnp.where(refused, 0.0, hp_left).astype(_F32),
+        pp_left=jnp.where(refused, 0.0, pp_left).astype(_F32),
     )
 
 
