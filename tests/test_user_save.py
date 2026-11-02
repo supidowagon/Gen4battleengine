@@ -56,7 +56,9 @@ def test_prep_on_the_user_save(capsys):
     args = ["prep", "--save", _SAVE, "--trainer", "roark", "--max-depth", "1"]
     args += ["--finalists", "1", "--budget", "300", "--devices", "1"]
     assert main(args) == 0
-    out = capsys.readouterr().out
+    captured = capsys.readouterr()
+    out = captured.out
     assert "Setup:" in out
     assert "Odds ladder (rung 0 planned):" in out
-    assert "left out" not in out
+    assert "left out" not in out.lower()
+    assert "left out" not in captured.err.lower()

@@ -215,11 +215,16 @@ Windows 11, measured 2026-11-02. Wall seconds; phase seconds are the cold run's.
 |-------------------------------------|-------|-------|-------|----------|-----------|----------|-----------|--------|
 | defaults (32 / 3 / 2)               | 964.2 | 878.2 | 737.7 | 127.8    | 92.9      | 9770     | 1,144,478 | 1.000  |
 | `team_keep` 16                      | 925.5 | 842.8 | 779.7 | 60.2     | 80.5      | 8377     | 1,100,648 | 1.000  |
-| + `finalists` 2                     | 926.2 | 844.2 | 780.1 | 60.4     | 80.5      | 8377     | 1,100,648 | 1.000  |
-| + `variant_rounds` 1                | 935.2 | 851.1 | 781.6 | 48.5     | 99.9      | 8102     | 1,105,822 | 0.997  |
+| + `finalists` 2                     | 923.6 | 840.1 | 781.7 | 60.2     | 76.5      | 8377     | 1,090,648 | 1.000  |
+| + `variant_rounds` 1                | 929.6 | 845.8 | 781.1 | 48.5     | 94.8      | 8102     | 1,093,818 | 0.997  |
+
+The first version of this table passed no `--finalists` (the CLI's own default of 3 overrides
+`PrepSettings.finalists`), so its `finalists` 2 row changed nothing; rows 3 and 4 were re-measured
+with `python -m benchmarks.prep_timing --finalists 2` (`team_keep` and `variant_rounds` are not CLI
+options, so they were set by temporarily editing the `PrepSettings` defaults).
 
 The cold run misses 900 s by 64 s with the defaults, and none of the three reductions in the
-plan's order meets it, so `PrepSettings` keeps its defaults (`team_keep` 32, `finalists` 3,
+plan's order meets it (best 923.6 s), so `PrepSettings` keeps its defaults (`team_keep` 32, `finalists` 3,
 `variant_rounds` 2). The teams phase is 740-780 s of every run: it screens the whole team space
 in round 0 (about 8,000 setups, more than a million playouts in all) and halving it, and none of
 these knobs shortens it. Cold minus warm is the 85-90 s compile cost. The warm run is under the

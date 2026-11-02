@@ -27,7 +27,7 @@ from benchmarks.rank_timing import RESULTS, ROOT, machine
 TARGET_SECONDS = 900.0
 
 
-def prep_command(save: Path, devices: int | None) -> list[str]:
+def prep_command(save: Path, devices: int | None, finalists: int | None = None) -> list[str]:
     """The ``nuzline prep`` command line: Roark, every other option at its default."""
     cmd = [
         sys.executable,
@@ -41,6 +41,8 @@ def prep_command(save: Path, devices: int | None) -> list[str]:
     ]
     if devices is not None:
         cmd += ["--devices", str(devices)]
+    if finalists is not None:
+        cmd += ["--finalists", str(finalists)]
     return cmd
 
 
@@ -66,7 +68,9 @@ def parse_record(stdout: str) -> dict:
     }
 
 
-def run_prep_timed(save: Path, devices: int | None, cache_dir: str) -> dict:
+def run_prep_timed(
+    save: Path, devices: int | None, cache_dir: str, finalists: int | None = None
+) -> dict:
     """One ``nuzline prep`` subprocess: its record's numbers plus ``wall_s`` and whether the
     output held a ``Setup:`` block."""
     env = {**os.environ, "NUZLINE_CACHE_DIR": cache_dir}
@@ -75,7 +79,7 @@ def run_prep_timed(save: Path, devices: int | None, cache_dir: str) -> dict:
     )
     start = time.perf_counter()
     done = subprocess.run(
-        prep_command(save, devices),
+        prep_command(save, devices, finalists),
         cwd=ROOT,
         env=env,
         check=True,
@@ -93,12 +97,15 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--save", type=Path, required=True)
     parser.add_argument("--devices", type=int, default=None)
+    parser.add_argument(
+        "--finalists", type=int, default=None, help="pass --finalists (the CLI default is 3)"
+    )
     args = parser.parse_args(argv)
 
     with tempfile.TemporaryDirectory(prefix="nuzline-bench-") as cache_dir:
-        cold = run_prep_timed(args.save, args.devices, cache_dir)
+        cold = run_prep_timed(args.save, args.devices, cache_dir, args.finalists)
         print(f"cold: {cold['wall_s']:.1f} s (target {TARGET_SECONDS:.0f} s)", flush=True)
-        warm = run_prep_timed(args.save, args.devices, cache_dir)
+        warm = run_prep_timed(args.save, args.devices, cache_dir, args.finalists)
         print(f"warm: {warm['wall_s']:.1f} s", flush=True)
 
     RESULTS.mkdir(exist_ok=True)
