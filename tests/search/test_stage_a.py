@@ -7,6 +7,7 @@ import pytest
 
 from nuzline.ai.policy import UnsupportedAi
 from nuzline.engine.actions import MOVE_ACTIONS
+from nuzline.search.deaths import DeathDistribution
 from nuzline.search.stage_a import ActionResult, Ranking, rank_actions, wilson
 from tests.engine.helpers import roark_real_state, roark_state
 from tests.search.fixtures import at_replacement, dead_monferno
@@ -54,6 +55,16 @@ def test_tie_rule_prefers_fewer_expected_deaths():
     assert [a.action for a in r] == [1, 2, 4, 3, 0]
     assert [a.tied_with_best for a in r] == [False, True, True, True, False]
     assert r.all_zero is False
+
+
+def test_tie_rule_never_trades_a_whiteout_for_fewer_deaths():
+    """Spec section 2: A (50 % deathless, 45 % one death, 5 % whiteout; 0.75 expected deaths)
+    and B (50 % deathless, 50 % two deaths, no whiteout; 1.0) tie on rung 0: B leads."""
+    a = ActionResult(0, "a", 0.5, 0.45, 0.55, 0.95, 0.75, 1000,
+                     distribution=DeathDistribution((0.5, 0.45, 0, 0, 0, 0, 0.05, 0), 1000))  # fmt: skip
+    b = ActionResult(1, "b", 0.5, 0.45, 0.55, 1.0, 1.0, 1000,
+                     distribution=DeathDistribution((0.5, 0, 0.5, 0, 0, 0, 0, 0), 1000))  # fmt: skip
+    assert [r.action for r in Ranking.of([a, b])] == [1, 0]
 
 
 def test_rank_reports_ladder_and_distribution(tables, names):

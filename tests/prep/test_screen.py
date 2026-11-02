@@ -48,12 +48,31 @@ def test_prep_order():
     assert prep_order([]) == []
 
 
+def test_prep_order_never_trades_a_whiteout_for_fewer_deaths():
+    """Spec section 2: a whiteout is worse than any number of deaths. A solo team and the
+    same lead with a bench tie on rung 0 (the bench only acts after the lead faints); the
+    solo team whites out where the bench wins with deaths, so its plain expected deaths
+    are lower, yet the whiteout-free team leads."""
+    full = ScreenStats((1100, 0, 900, 0, 0, 0, 0, 0), 1800, 0.0, 0.0, False)
+    solo = ScreenStats((1100, 0, 0, 0, 0, 0, 900, 0), 900, 0.0, 0.0, False)
+    assert solo.e_deaths < full.e_deaths
+    for cost_full, cost_solo in ((0.0, 0.0), (1.0, 0.0), (0.0, 1.0)):
+        rows = [scored(full, 0, cost_full), scored(solo, 0, cost_solo)]
+        assert prep_order(rows)[0] == 0
+    # A milder case: the lead sweeps 90 %; when it dies the bench wins, 60 % of those with a
+    # second death. Plain expected deaths 0.16 against 0.10.
+    full = ScreenStats((900, 40, 60, 0, 0, 0, 0, 0), 160, 0.0, 0.0, False)
+    solo = ScreenStats((900, 0, 0, 0, 0, 0, 100, 0), 100, 0.0, 0.0, False)
+    assert prep_order([scored(solo, 0, 0.0), scored(full, 0, 1.0)])[0] == 1
+
+
 def test_rung_k_score():
     stats = ScreenStats((10, 6, 0, 0, 0, 0, 4, 0), 7, 5.0, 10.0, False)
     s = scored(stats, 1, 2.0)
     assert s.score == stats.rung(1) == 0.8
     assert (s.ci_low, s.ci_high) == stats.interval(1)
     assert (s.e_deaths, s.cost, s.hp_left, s.pp_left) == (7 / 20, 2.0, 0.25, 0.5)
+    assert s.loss == 4 / 20
     assert np.isclose(sum(stats.distribution.probs), 1.0)
 
 

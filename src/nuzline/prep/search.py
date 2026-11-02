@@ -570,6 +570,7 @@ class _Funnel:
             self.cost[i],
             stats.mean_hp,
             stats.mean_pp,
+            top.distribution.p_loss if top.distribution is not None else 0.0,
         )
 
     def finalists_phase(self, pool: list[int], resume: dict | None = None) -> None:

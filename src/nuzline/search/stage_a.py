@@ -12,7 +12,9 @@ on optimal play (the playout policy is a heuristic). At a pending player replace
 ranked actions are the replacements (``decision_actions``).
 
 The ranking follows ``tie_ordered`` (plan ruling 5): among the actions whose interval
-overlaps the best score's, the leader has the fewest expected deaths; the other actions
+overlaps the best score's, the leader has the fewest expected deaths, a lost playout
+counting ``deaths.LOSS_DEATHS`` more (``deaths.tie_deaths``: a whiteout is never traded for
+fewer deaths); the other actions
 follow by ``(-score, e_faints, action)``. ``ActionResult.tied_with_best`` marks the
 actions whose interval overlaps the leader's (never the leader itself). A playout that meets a refused mechanic
 (``PlayoutResult.refused``) has no result; any such playout makes ``rank_actions``
@@ -98,6 +100,11 @@ def tie_ordered[R](
     ]
 
 
+def _tie_deaths(r: ActionResult) -> float:
+    loss = r.distribution.p_loss if r.distribution is not None else 0.0
+    return deaths.tie_deaths(r.e_faints, loss)
+
+
 class Ranking(list):
     """``ActionResult``s, best first; ``all_zero`` when every ``score`` is 0."""
 
@@ -105,8 +112,9 @@ class Ranking(list):
 
     @classmethod
     def of(cls, results: Iterable[ActionResult]) -> Ranking:
-        """``results`` in ``tie_ordered`` order (``score``, ``e_faints``)."""
-        rows = tie_ordered(list(results), lambda r: r.score, lambda r: r.e_faints)
+        """``results`` in ``tie_ordered`` order (``score``, ``e_faints`` with a lost playout
+        weighted by ``deaths.tie_deaths``)."""
+        rows = tie_ordered(list(results), lambda r: r.score, _tie_deaths)
         ranking = cls(rows)
         ranking.all_zero = all(r.score == 0 for r in rows)
         return ranking

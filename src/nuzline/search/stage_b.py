@@ -264,7 +264,8 @@ class _Node:
 class Backup(NamedTuple):
     """What a node backs up (absolute, reach-weighted): the half-A and half-B values, the
     half-B lower bound, ``{evaluation: reach}`` (ruling 6), the plan nodes, the half-A and
-    half-B expected deaths and half B's bucket probabilities (``deaths.BUCKETS``)."""
+    half-B expected deaths, half B's bucket probabilities (``deaths.BUCKETS``) and half A's
+    lost mass (whiteout or unfinished; ``_leader``'s ``deaths.tie_deaths``)."""
 
     a: float
     b: float
@@ -274,6 +275,7 @@ class Backup(NamedTuple):
     deaths_a: float
     deaths_b: float
     buckets_b: np.ndarray
+    loss_a: float = 0.0
 
 
 class _Store:
@@ -687,7 +689,8 @@ class _Solver:
             for s, w in node.states.items():
                 buckets[self.store.bucket[s]] += w
             plan = [PlanNode(node.obs, prob, None, {}, {}, "terminal")]
-            return Backup(won, won, won, {}, plan, lost, lost, buckets)
+            loss = deaths.loss_mass(buckets)
+            return Backup(won, won, won, {}, plan, lost, lost, buckets, loss)
         if node.forced is not None:
             i, value = forced[node.forced]
             if value.refused:
@@ -703,10 +706,11 @@ class _Solver:
                 prob * value.e_deaths_a,
                 prob * value.e_deaths_b,
                 prob * _bucket_probs(value),
+                prob * _loss_a(value),
             )
         if kind in ("leaf", "pruned", "failed"):
             a_sum, b_sum, weights, kept, lost = 0.0, 0.0, {}, [], []
-            d_a, d_b, buckets = 0.0, 0.0, np.zeros(len(deaths.BUCKETS))
+            d_a, d_b, buckets, loss_a = 0.0, 0.0, np.zeros(len(deaths.BUCKETS)), 0.0
             for s, w in node.states.items():
                 i, value = self._failed[s] if kind == "failed" else leaf[s]
                 if value.refused:
@@ -716,6 +720,7 @@ class _Solver:
                 d_a += w * value.e_deaths_a
                 d_b += w * value.e_deaths_b
                 buckets += w * _bucket_probs(value)
+                loss_a += w * _loss_a(value)
                 if kind != "failed":
                     a_sum += w * value.p_a
                     b_sum += w * value.p_b
@@ -726,7 +731,7 @@ class _Solver:
             if lost:
                 plan.append(PlanNode(node.obs, math.fsum(lost), None, {}, {}, "refused"))
             bound = b_sum if kind == "leaf" else 0.0
-            return Backup(a_sum, b_sum, bound, weights, plan, d_a, d_b, buckets)
+            return Backup(a_sum, b_sum, bound, weights, plan, d_a, d_b, buckets, loss_a)
         per_action = {
             a: self._branch(kids, leaf, forced, with_plan) for a, kids in node.branches.items()
         }
@@ -747,7 +752,7 @@ class _Solver:
     def _branch(self, kids: list[_Node], leaf, forced, with_plan: bool = True) -> Backup:
         total = Backup(0.0, 0.0, 0.0, {}, [], 0.0, 0.0, np.zeros(len(deaths.BUCKETS)))
         weights, plan = {}, []
-        a_sum = b_sum = bound = d_a = d_b = 0.0
+        a_sum = b_sum = bound = d_a = d_b = loss_a = 0.0
         buckets = total.buckets_b
         for kid in kids:
             got = self._backup(kid, leaf, forced, with_plan)
@@ -756,11 +761,12 @@ class _Solver:
             bound += got.bound
             d_a += got.deaths_a
             d_b += got.deaths_b
+            loss_a += got.loss_a
             buckets = buckets + got.buckets_b
             for j, x in got.weights.items():
                 weights[j] = weights.get(j, 0.0) + x
             plan.extend(got.plan)
-        return Backup(a_sum, b_sum, bound, weights, plan, d_a, d_b, buckets)
+        return Backup(a_sum, b_sum, bound, weights, plan, d_a, d_b, buckets, loss_a)
 
     # -- one pass -------------------------------------------------------------------------
 
@@ -971,16 +977,34 @@ def _bucket_probs(value: LeafValue) -> np.ndarray:
     return np.asarray(value.buckets_b, np.float64) / value.n_b
 
 
+def _loss_a(value: LeafValue) -> float:
+    """Half A's lost fraction (whiteout or unfinished) of an evaluation; 0 when it has no
+    buckets (a stub ``leaf_fn``)."""
+    return deaths.loss_mass(value.buckets_a) / value.n_a if value.buckets_a else 0.0
+
+
 def _leader(per_action: dict[int, Backup]) -> int:
     """The action with the highest half-A value, values equal to 12 decimals breaking on
-    fewer half-A expected deaths, then the lower action (ruling 5): the choice at every
-    inner belief node and the precision check's leader."""
-    return max(per_action, key=lambda a: (round(per_action[a].a, 12), -per_action[a].deaths_a, -a))
+    fewer half-A expected deaths (a lost playout weighted by ``deaths.tie_deaths``), then
+    the lower action (ruling 5): the choice at every inner belief node and the precision
+    check's leader."""
+
+    def key(a: int):
+        v = per_action[a]
+        return (round(v.a, 12), -deaths.tie_deaths(v.deaths_a, v.loss_a), -a)
+
+    return max(per_action, key=key)
 
 
 def _rank(rows: list[ActionValue]) -> list[ActionValue]:
-    """``stage_a.tie_ordered`` by ``estimate`` and ``e_deaths`` (ruling 5)."""
-    return tie_ordered(rows, lambda r: r.estimate, lambda r: r.e_deaths)
+    """``stage_a.tie_ordered`` by ``estimate`` and ``e_deaths`` (ruling 5), a lost playout
+    weighted by ``deaths.tie_deaths``."""
+
+    def key(r: ActionValue) -> float:
+        loss = r.distribution.p_loss if r.distribution is not None else 0.0
+        return deaths.tie_deaths(r.e_deaths, loss)
+
+    return tie_ordered(rows, lambda r: r.estimate, key)
 
 
 def _stage_a(tables, names, state, key, settings: SolveSettings, start: float) -> SolveResult:

@@ -12,6 +12,7 @@ from nuzline.ai.policy import UnsupportedAi
 from nuzline.engine.actions import MOVE_ACTIONS
 from nuzline.engine.damage import damage_table
 from nuzline.search import stage_b
+from nuzline.search.deaths import DeathDistribution
 from nuzline.search.expand import ai_rows
 from nuzline.search.leaves import LeafValue
 from nuzline.search.rows import row_bytes
@@ -244,6 +245,24 @@ def test_inner_tie_prefers_fewer_deaths():
     ranked = stage_b._rank(rows)
     assert [r.action for r in ranked] == [1, 0, 2]
     assert [r.tied_with_best for r in ranked] == [False, True, False]
+
+
+def test_ties_never_trade_a_whiteout_for_fewer_deaths():
+    """Spec section 2: inner nodes (``_leader``) and the root (``_rank``) weigh a lost
+    playout above any number of deaths."""
+    risky = Backup(0.5, 0.5, 0.0, {}, [], 0.75, 0.75, np.zeros(8), 0.05)
+    safe = Backup(0.5, 0.5, 0.0, {}, [], 1.0, 1.0, np.zeros(8), 0.0)
+    assert stage_b._leader({4: risky, 7: safe}) == 7
+
+    def value(action, e_deaths, probs):
+        return ActionValue(action, str(action), 0.5, 0.45, 0.55, 0.5, 0, 0, 0, False,
+                           e_deaths=e_deaths, distribution=DeathDistribution(probs))  # fmt: skip
+
+    rows = [
+        value(0, 0.75, (0.5, 0.45, 0, 0, 0, 0, 0.05, 0)),
+        value(1, 1.0, (0.5, 0, 0.5, 0, 0, 0, 0, 0)),
+    ]
+    assert [r.action for r in stage_b._rank(rows)] == [1, 0]
 
 
 def test_budget_does_not_change_k0(tables, names):

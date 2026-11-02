@@ -5,7 +5,9 @@ halves pooled; ruling 10) and keeps the 8 ``deaths.BUCKETS`` counts, so one batc
 every rung. ``ScreenStats`` accumulate across halving rounds (``merge``). ``prep_order`` is
 the spec section 4 tie rule over scored setups (ruling 7): it reuses ``stage_a.tied_with``
 for the interval overlap, so the whole search has one overlap definition, but its key chain
-(deaths within ``DEATHS_TOL``, cost, HP, PP) is its own.
+(deaths within ``DEATHS_TOL``, cost, HP, PP) is its own. Its deaths key is
+``deaths.tie_deaths``: a lost playout (whiteout or unfinished) counts ``deaths.LOSS_DEATHS``
+more, so a setup that risks a whiteout never leads for fewer deaths (spec section 2).
 """
 
 from __future__ import annotations
@@ -106,7 +108,8 @@ def screen(
 @dataclass(frozen=True)
 class Scored:
     """One setup's numbers for the tie rule: rung score and interval, expected deaths,
-    weighted resource cost and mean HP and PP fractions left."""
+    weighted resource cost, mean HP and PP fractions left and P(whiteout or unfinished)
+    (``loss``)."""
 
     score: float
     ci_low: float
@@ -115,30 +118,41 @@ class Scored:
     cost: float
     hp_left: float
     pp_left: float
+    loss: float = 0.0
+
+    @property
+    def tie_deaths(self) -> float:
+        """The deaths key of ``prep_order`` (``deaths.tie_deaths``)."""
+        return deaths.tie_deaths(self.e_deaths, self.loss)
 
 
 def scored(stats: ScreenStats, k: int, cost: float) -> Scored:
     """``stats`` as rung ``k``'s row for ``prep_order``."""
     low, high = stats.interval(k)
-    return Scored(stats.rung(k), low, high, stats.e_deaths, cost, stats.mean_hp, stats.mean_pp)
+    loss = deaths.loss_mass(stats.buckets) / stats.n if stats.n else 0.0
+    return Scored(
+        stats.rung(k), low, high, stats.e_deaths, cost, stats.mean_hp, stats.mean_pp, loss
+    )
 
 
 def prep_order(rows: Sequence[Scored]) -> list[int]:
     """Row indices best first (plan ruling 7). Among the rows whose interval overlaps the
-    top-scoring row's, the leader has expected deaths within ``DEATHS_TOL`` of the fewest,
-    then the lowest cost, the highest mean HP left, the highest mean PP left, the higher
-    score, the lower index. The rest follow by ``(-score, e_deaths, cost, index)``."""
+    top-scoring row's, the leader has a deaths key (``Scored.tie_deaths``: expected deaths,
+    a lost playout counting ``deaths.LOSS_DEATHS`` more) within ``DEATHS_TOL`` of the
+    fewest, then the lowest cost, the highest mean HP left, the highest mean PP left, the
+    higher score, the lower index. The rest follow by ``(-score, tie_deaths, cost,
+    index)``."""
     if not rows:
         return []
 
     def by_score(i: int):
-        return (-rows[i].score, rows[i].e_deaths, rows[i].cost, i)
+        return (-rows[i].score, rows[i].tie_deaths, rows[i].cost, i)
 
     ranked = sorted(range(len(rows)), key=by_score)
     top = rows[ranked[0]]
     overlap = [i for i in ranked if tied_with(rows[i], top)]
-    fewest = min(rows[i].e_deaths for i in overlap)
-    near = [i for i in overlap if rows[i].e_deaths <= fewest + DEATHS_TOL]
+    fewest = min(rows[i].tie_deaths for i in overlap)
+    near = [i for i in overlap if rows[i].tie_deaths <= fewest + DEATHS_TOL]
     leader = min(
         near,
         key=lambda i: (rows[i].cost, -rows[i].hp_left, -rows[i].pp_left, -rows[i].score, i),

@@ -13,9 +13,18 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from nuzline.engine.state import MAX_DEATH_BUDGET
+from nuzline.engine.state import MAX_DEATH_BUDGET, SLOTS
 
-__all__ = ["BUCKETS", "DeathDistribution", "bucket", "over_budget", "success"]
+__all__ = [
+    "BUCKETS",
+    "LOSS_DEATHS",
+    "DeathDistribution",
+    "bucket",
+    "loss_mass",
+    "over_budget",
+    "success",
+    "tie_deaths",
+]
 
 BUCKETS = (
     "win_0",
@@ -29,6 +38,23 @@ BUCKETS = (
 )
 _WIN_PROTECTED, _WHITEOUT, _UNFINISHED = 5, 6, 7
 _LAST_COUNTED = 4  # win_4plus
+
+# The tie rule's deaths key (spec section 2: a whiteout is worse than any number of deaths, a
+# loss is never traded for fewer deaths): a playout that does not win (whiteout or unfinished)
+# counts ``SLOTS + 1`` deaths on top of its faints, more than any win can lose (at most
+# ``SLOTS - 1``), so turning a loss into a win always lowers the key.
+LOSS_DEATHS = SLOTS + 1
+
+
+def loss_mass(probs: Sequence[float]) -> float:
+    """The whiteout and unfinished mass of a ``BUCKETS`` vector (probabilities or counts)."""
+    return float(probs[_WHITEOUT] + probs[_UNFINISHED])
+
+
+def tie_deaths(e_deaths: float, p_loss: float) -> float:
+    """The tie rule's deaths key: expected deaths plus ``LOSS_DEATHS`` per lost playout
+    (``p_loss``: P(whiteout or unfinished)). Never reported, only compared."""
+    return e_deaths + LOSS_DEATHS * p_loss
 
 
 def over_budget(state):
@@ -80,6 +106,11 @@ class DeathDistribution:
     def p_win(self) -> float:
         """P(win), however many deaths and including protected losses."""
         return float(sum(self.probs[: _WIN_PROTECTED + 1]))
+
+    @property
+    def p_loss(self) -> float:
+        """P(whiteout or unfinished): the playouts that do not win."""
+        return loss_mass(self.probs)
 
     def as_dict(self) -> dict:
         return {**dict(zip(BUCKETS, self.probs, strict=True)), "n": self.n}
