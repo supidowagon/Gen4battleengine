@@ -107,7 +107,7 @@ from nuzline.data.tables import Names, Tables
 from nuzline.engine.actions import FIRST_ITEM_ACTION, MOVE_ACTIONS, decision_actions, usable_moves
 from nuzline.engine.enumerate import SamplingOnly
 from nuzline.engine.state import BattleState
-from nuzline.engine.step import WINNER_PLAYER
+from nuzline.engine.step import WINNER_PLAYER, needs_replacement
 from nuzline.search import deaths
 from nuzline.search.expand import ai_rows, expand, expand_replacements
 from nuzline.search.leaves import LeafValue, allocate, evaluate_forced, evaluate_leaves
@@ -325,15 +325,13 @@ class _Store:
         return take(self._all, np.asarray(ids, np.int64))
 
 
+_pending_jit = jax.jit(jax.vmap(needs_replacement))
+
+
 def _pending(part: BattleState) -> np.ndarray:
     """``bool[N]``: the player's active Pokemon fainted with a healthy one left and the
-    battle on (``step.needs_replacement`` on the host)."""
-    hp, species, active = np.asarray(part.hp), np.asarray(part.species), np.asarray(part.active)
-    n, slots = len(hp), np.arange(hp.shape[2])
-    mine = active[:, 0]
-    down = hp[np.arange(n), 0, mine] == 0
-    bench = (species[:, 0] != 0) & (hp[:, 0] > 0) & (slots[None, :] != mine[:, None])
-    return down & bench.any(axis=1) & (np.asarray(part.over) == 0)
+    battle on (``step.needs_replacement`` side 0, derived from the engine)."""
+    return np.asarray(_pending_jit(part))[:, 0] == 1
 
 
 _legal_jit = jax.jit(lambda tables, state: decision_actions(tables, state))
