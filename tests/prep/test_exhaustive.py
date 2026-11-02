@@ -164,11 +164,23 @@ def test_funnel_matches_exhaustive_small(tables, names, k):
     assert out.passed, (out, values)
 
 
+STARLY = ("Growl", "Quick Attack", "Wing Attack", "Double Team")
+
+
 def _ci_pool(tables, names, k, max_team, budget):
-    bite = names.move("Bite")
-    prob = small_problem(tables, names, (0, 1, 2, 3), deaths=k, scales=1, relearner=(bite,))
+    """Monferno, Prinplup and Grotle may relearn Bite; Starly (``STARLY`` moves) Tackle or
+    Scratch, so the prune drops Tackle (dominated by Scratch) and the pruned half of the
+    pass condition has setups to check."""
+    bite, tackle, scratch = (names.move(m) for m in ("Bite", "Tackle", "Scratch"))
+    prob = small_problem(
+        tables, names, (0, 1, 2, 3), deaths=k, scales=1, relearner=(bite,), starly_moves=STARLY
+    )
+    cands = list(prob.candidates)
+    cands[3] = replace(cands[3], relearner=(tackle, scratch))
+    prob = replace(prob, candidates=tuple(cands))
     restricted = restricted_setups(tables, prob, max_team)
     extra, _ = pruned_setups(tables, prob, max_team)
+    assert extra, "the prune must drop a variant for the pruned check to mean anything"
     everything = restricted + extra
     values = exhaustive_values(
         tables, names, prob, everything, KEY, depth=1, budget_playouts=budget
@@ -190,17 +202,19 @@ def _ci_pool(tables, names, k, max_team, budget):
     )
     pick = run_prep(tables, names, prob, settings, jax.random.PRNGKey(0)).chosen
     pruned = range(len(restricted), len(everything))
-    return restricted, values, verdict(values, everything.index(pick), pruned)
+    return restricted, values, verdict(values, everything.index(pick), pruned), len(extra)
 
 
 def test_funnel_matches_exhaustive_ci(tables, names):
-    restricted, values, out = _ci_pool(tables, names, 0, 2, 100)
+    restricted, values, out, n_pruned = _ci_pool(tables, names, 0, 2, 100)
     assert len(restricted) == 4 * 2 + 6 * 2 * 3
+    assert n_pruned > 0  # the prune dropped a Starly relearner variant: setups to check
     assert out.passed, (out, values)
 
 
 @pytest.mark.skipif(not SLOW, reason="NUZLINE_SLOW_TESTS=1 only")
 @pytest.mark.parametrize("k", [0, 1])
 def test_funnel_matches_exhaustive_ci_full(tables, names, k):
-    _, values, out = _ci_pool(tables, names, k, 4, 500)
+    _, values, out, n_pruned = _ci_pool(tables, names, k, 4, 500)
+    assert n_pruned > 0
     assert out.passed, (out, values)
