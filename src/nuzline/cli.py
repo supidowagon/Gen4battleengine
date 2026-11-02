@@ -30,8 +30,8 @@
 * ``nuzline prep --save SAVE (--trainer NAME | --trainer-id N) [--cap N] [--deaths K]
   [--protect NAME ...] [--exclude NAME ...] [--reserve ITEM ...] [--prestatus STATUS ...]
   [--no-entry-hp] [--weight KIND=W ...] [--budget SECONDS] [--checkpoint FILE | --resume FILE]
-  [--max-depth 2] [--finalists 3] [--screen-n 8] [--seed 0] [--devices N] [--tree FILE.json]
-  [--show-depth 1]``: the prep search (``prep.search``): which Pokemon, moves, items and entry
+  [--max-depth 2] [--finalists 3] [--screen-n 8] [--max-team 6] [--max-setups 25000]
+  [--seed 0] [--devices N] [--tree FILE.json] [--show-depth 1]``: the prep search (``prep.search``): which Pokemon, moves, items and entry
   HP to bring from the save's party and boxes, the costed prep steps, the odds ladder for
   0-3 deaths and the Stage B plan, a run record ``runs/prep_<time>.json`` and a checkpoint
   (default ``runs/prep_<time>.ckpt.json``) that ``--resume`` continues. ``--cap`` defaults to
@@ -286,6 +286,13 @@ def _parser() -> argparse.ArgumentParser:
     prep.add_argument("--max-depth", type=int, default=2, help="deepest Stage B pass (0 = screen)")
     prep.add_argument("--finalists", type=int, default=3, help="setups solved by Stage B")
     prep.add_argument("--screen-n", type=int, default=8, help="playouts per setup in round 0")
+    prep.add_argument("--max-team", type=int, default=6, help="largest team brought (1-6)")
+    prep.add_argument(
+        "--max-setups",
+        type=int,
+        default=None,
+        help="refuse a team space larger than this (default 25000; see --exclude)",
+    )
     prep.add_argument("--seed", type=int, default=0, help="PRNG seed")
     prep.add_argument("--devices", type=int, default=os.cpu_count(), help="host CPU devices")
     prep.add_argument("--tree", type=Path, default=None, help="write the plan tree as JSON")
@@ -570,6 +577,7 @@ def _prep(args) -> int:
     from nuzline.prep.caps import default_cap
     from nuzline.prep.problem import build_problem
     from nuzline.prep.search import PrepSettings, run_prep
+    from nuzline.prep.setups import MAX_TEAM_SETUPS, check_team_space
     from nuzline.saves import load_save
 
     _check_deaths(args)
@@ -579,8 +587,11 @@ def _prep(args) -> int:
         raise ValueError("--budget must not be negative")
     if args.show_depth < 0:
         raise ValueError("--show-depth must not be negative")
+    if not 1 <= args.max_team <= 6:
+        raise ValueError(f"--max-team {args.max_team}: must be between 1 and 6")
     settings = PrepSettings(
         screen_n=args.screen_n,
+        max_team=args.max_team,
         finalists=args.finalists,
         max_depth=args.max_depth,
         entry_hp=not args.no_entry_hp,
@@ -615,6 +626,8 @@ def _prep(args) -> int:
     )
     for line in warnings:
         print(line, file=sys.stderr)
+    limit = MAX_TEAM_SETUPS if args.max_setups is None else args.max_setups
+    check_team_space(len(problem.candidates), settings.max_team, limit)
     print(_trainer_line(trainer))
     theirs = check_opponent(tables, names, trainer, opp, weather)
     if theirs.missing:
@@ -631,6 +644,8 @@ def _prep(args) -> int:
     checkpoint = args.checkpoint
     if checkpoint is None and args.resume is None:
         checkpoint = RUNS / f"prep_{datetime.now().strftime('%Y%m%d_%H%M%S')}.ckpt.json"
+    # Up front, so a crashed run can be continued with --resume.
+    print(f"[prep] checkpoint: {checkpoint or args.resume}", file=sys.stderr, flush=True)
     try:
         result = run_prep(
             tables,

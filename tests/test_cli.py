@@ -676,6 +676,7 @@ def test_cli_prep_small(prep_run):
     for section in ("Setup:", "Prep steps:", "Cost:", "Odds ladder (rung 0 planned):", "Plan:"):
         assert section in out
     assert "[prep] teams round 0:" in err
+    assert err.index("[prep] checkpoint: ") < err.index("[prep] teams round 0:")
     (record,) = runs.glob("prep_*[!t].json")
     run = json.loads(record.read_text())
     import hashlib
@@ -709,6 +710,8 @@ def test_cli_prep_needs_a_cap(prep_runs, tmp_path, tables, names, capsys):
         (["--weight", "bogus=1"], ["bogus"]),
         (["--protect", "1"], ["party:1", "PRINPLUP"]),
         (["--protect", "Monferno"], ["party:0", "box:1:0", "box:B:S"]),
+        (["--max-setups", "5"], ["32", "--exclude", "--max-team"]),
+        (["--max-team", "7"], ["--max-team 7"]),
     ],
 )
 def test_cli_prep_bad_flags(prep_runs, tmp_path, tables, names, capsys, flags, shown):
@@ -748,7 +751,8 @@ def test_cli_prep_resume(prep_run, capsys):
     before = ckpt.read_bytes()
     assert main([*base, "--resume", str(ckpt), "--deaths", "1"]) == 1
     err = capsys.readouterr().err
-    assert len(err.strip().splitlines()) == 1 and "settings" in err
+    errors = [line for line in err.splitlines() if not line.startswith("[prep] checkpoint: ")]
+    assert len(errors) == 1 and "settings" in err
     assert main([*base, "--resume", str(ckpt), "--checkpoint", str(ckpt)]) == 1
     assert "--resume" in capsys.readouterr().err
     assert ckpt.read_bytes() == before  # a refused resume leaves the file alone

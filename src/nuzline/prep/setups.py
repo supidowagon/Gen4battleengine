@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import dataclasses
 import itertools
+import math
 from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 
@@ -34,15 +35,25 @@ from nuzline.prep.variants import (
 from nuzline.search.rows import row_bytes
 
 __all__ = [
+    "MAX_TEAM_SETUPS",
     "Setup",
+    "check_team_space",
     "dedupe",
     "neighbours",
     "protected_slots",
     "setup_cost",
     "setup_specs",
     "setup_states",
+    "team_count",
     "team_setups",
 ]
+
+# The default limit on the team phase's (team, lead) setups. Round 0 screens every one of them
+# at once and keeps each one's turn-0 state (about 13 KB a setup), so the time and memory grow
+# with this count: the user's 11-candidate Roark pool (7,018 setups) spends about 740 s in the
+# team phase; 25,000 is about 13 candidates at a team size of 6, roughly the spec's 60-minute
+# target for a gym.
+MAX_TEAM_SETUPS = 25_000
 
 
 @dataclass(frozen=True)
@@ -68,6 +79,24 @@ def team_setups(problem: PrepProblem, max_team: int = 6) -> list[Setup]:
             for lead in team:
                 out.append(_arranged(base[lead], [base[i] for i in team if i != lead]))
     return out
+
+
+def team_count(n: int, max_team: int = 6) -> int:
+    """How many setups ``team_setups`` lists for ``n`` candidates: ``sum s * C(n, s)`` over
+    team sizes ``s`` in ``1..min(max_team, n)``."""
+    return sum(s * math.comb(n, s) for s in range(1, min(max_team, n) + 1))
+
+
+def check_team_space(n: int, max_team: int, limit: int = MAX_TEAM_SETUPS) -> None:
+    """``ValueError`` when ``n`` candidates at teams of up to ``max_team`` give more than
+    ``limit`` setups (``team_count``), naming the ways to shrink the search."""
+    count = team_count(n, max_team)
+    if count > limit:
+        raise ValueError(
+            f"{n} candidates in teams of up to {max_team} give {count:,} (team, lead) setups, "
+            f"over the limit of {limit:,} (the search would take hours and many GB of memory): "
+            "leave Pokemon out with --exclude NAME, lower --max-team, or raise --max-setups"
+        )
 
 
 def setup_specs(

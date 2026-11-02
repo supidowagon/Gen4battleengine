@@ -185,3 +185,22 @@ def test_levelled_knob_drops_free_replacements(tables, names):
     assert level_ups(m for s in neighbours(tables, prob, setup, **kw) for m in s.members) != []
     off = neighbours(tables, prob, setup, levelled=False, **kw)
     assert level_ups(m for s in off for m in s.members) == []
+
+
+def test_team_count_and_the_team_space_limit():
+    """The team phase registers every (team, lead) at once: its size is counted before
+    any work and refused above the limit, naming --exclude and --max-team."""
+    import pytest
+
+    from nuzline.prep.setups import MAX_TEAM_SETUPS, check_team_space, team_count
+
+    assert team_count(4) == 32
+    assert team_count(11) == 7018
+    assert team_count(20) == 333_280
+    assert team_count(20, 2) == 20 + 2 * 190
+    check_team_space(11, 6)
+    check_team_space(13, 6)  # 20,618
+    with pytest.raises(ValueError, match="--exclude.*--max-team") as e:
+        check_team_space(20, 6)
+    assert "333,280" in str(e.value) and f"{MAX_TEAM_SETUPS:,}" in str(e.value)
+    check_team_space(20, 6, limit=400_000)
