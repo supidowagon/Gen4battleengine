@@ -171,9 +171,7 @@ def pick(candidates: Sequence[Candidate], names: Names, value: str) -> int:
     hits = []
     for i, cand in enumerate(candidates):
         species = names.species_names[cand.spec.species].casefold()
-        rest = re.sub(r"^(party|box \d+) slot \d+ ", "", cand.label).casefold()
-        words = set(re.findall(r"[^\s()\"']+", rest))
-        if key in {species, rest} or key in words:
+        if key in {species, cand.nickname.casefold()}:
             hits.append(i)
     if not hits:
         raise ValueError(f"no Pokemon matches {value!r} (name it by species, nickname or {SYNTAX})")

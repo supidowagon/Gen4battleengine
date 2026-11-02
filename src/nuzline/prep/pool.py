@@ -29,7 +29,8 @@ from nuzline.saves.save import SaveFile
 @dataclass(frozen=True)
 class Candidate:
     """One Pokemon the user could bring. ``location``: ``("party", 0, slot)`` or
-    ``("box", box, slot)`` (0-based); ``spec`` is at the cap; ``tms``: ``(item, move)``."""
+    ``("box", box, slot)`` (0-based); ``spec`` is at the cap; ``tms``: ``(item, move)``;
+    ``nickname``: the save's (it equals the species name when the Pokemon has none)."""
 
     location: tuple[str, int, int]
     label: str
@@ -37,6 +38,7 @@ class Candidate:
     candies: int
     relearner: tuple[int, ...]
     tms: tuple[tuple[int, int], ...]
+    nickname: str = ""
 
 
 def _label(location: tuple[str, int, int], species: str) -> str:
@@ -71,7 +73,15 @@ def pool_candidates(
             if learnsets.can_learn_tm(mon.species, item) and learnsets.tm_move(item) not in known
         )
         out.append(
-            Candidate(mon.location, label, spec, candies_to_cap(mon.level, cap), relearner, tms)
+            Candidate(
+                mon.location,
+                label,
+                spec,
+                candies_to_cap(mon.level, cap),
+                relearner,
+                tms,
+                mon.nickname,
+            )
         )
     return out, left_out
 

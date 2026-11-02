@@ -95,7 +95,10 @@ def test_pick_ambiguous_and_locations(names):
     spec = replace(sample_party(names)[0], species=names.species("Venonat"))
     first = replace(candidate(names, spec, 1), location=("box", 0, 1), label="box 1 slot 1 VENONAT")
     second = replace(
-        candidate(names, spec, 2), location=("box", 0, 2), label="box 1 slot 2 VENONAT (Bug)"
+        candidate(names, spec, 2),
+        location=("box", 0, 2),
+        label="box 1 slot 2 VENONAT",
+        nickname="Bug",
     )
     pool = [first, second]
     with pytest.raises(ValueError, match="box:B:S") as e:
@@ -200,3 +203,27 @@ def test_levelled_moves(tmp_path, tables, names, learnsets):
     assert q.levelled == ((), ())
     cands, _ = pool_candidates(save, tables, names, learnsets, 16)
     assert problem(tables, names, cands).levelled == p.levelled
+
+
+def test_pick_nickname_on_pool_candidates(tmp_path, tables, names, learnsets):
+    inv = {v: k for k, v in names.charmap.items() if len(v) == 1}
+    p = tmp_path / "nick.sav"
+    p.write_bytes(
+        build_image(
+            party=[
+                party_record(
+                    tables,
+                    names,
+                    "Furret",
+                    16,
+                    ("Scratch",),
+                    nickname_codes=tuple(inv[c] for c in "Zorro"),
+                )
+            ]
+        )
+    )
+    save = load_save(p, tables=tables, names=names)
+    cands, _ = pool_candidates(save, tables, names, learnsets, 16)
+    assert cands[0].label == "party slot 0 FURRET" and cands[0].nickname == "Zorro"
+    assert pick(cands, names, "zorro") == 0
+    assert pick(cands, names, "furret") == 0
