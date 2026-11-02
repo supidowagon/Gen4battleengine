@@ -180,12 +180,14 @@ Venonat (box 1 slot 1) and Geodude (box 1 slot 4), the configured cap, no items,
 team of 1-6 with every lead, each member its base moves plus at most one member on its
 designated Move Relearner change (`prep/exhaustive.py::restricted_setups`), and the *pruned*
 setups (`pruned_setups`: the restricted shape with one member on a variant the conservative prune
-dropped from the `relearner="all"` variants; none, and then the result says so, when the prune
+dropped from the `relearner="all"` variants, built with no free level-up replacements; none, and then the result says so, when the prune
 drops nothing on the save). Per rung 0 and 1: phase 1 values every setup by Stage B depth 1 at
 2000 playouts, phase 2 re-solves at the 1.5 pp precision target the setups overlapping the best,
 the pick and every pruned setup whose phase-1 interval reaches above the pick's. The run
 checkpoints after every setup (`--resume FILE` continues across nights; it prints an ETA after 20
-setups) and writes `benchmarks/exhaustive_roark.json`. A failed verdict is a finding for the
+setups) and writes `benchmarks/exhaustive_roark.json`. The benchmark's funnel runs with
+`levelled=False` (no free level-up slot replacements, which the valued space does not contain)
+and the problem's Heart Scales are pinned to at most one. A failed verdict is a finding for the
 controller, not an error.
 
 Test sizes (`tests/prep/test_exhaustive.py`, one device, 13th Gen Intel(R) Core(TM) i5-13600K,

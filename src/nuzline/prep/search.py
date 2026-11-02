@@ -95,8 +95,8 @@ class PrepSettings:
     ``variant_keep`` / ``ladder_keep``: the survivor floors of ruling 2; ``variant_rounds``:
     expansions; ``finalists``: Stage B solves at depth 1; ``max_depth``: the leader's deepest
     solve (0 = screen only); ``precision``: the Stage B target half-width, or
-    ``finalist_playouts`` a fixed ``budget_playouts`` instead; ``max_team`` .. ``entry_hp``:
-    the variant space; ``budget_seconds``: the anytime limit (ruling 11); ``weights``: the
+    ``finalist_playouts`` a fixed ``budget_playouts`` instead; ``max_team`` .. ``levelled``:
+    the variant space (``levelled=False``: no free level-up slot replacements); ``budget_seconds``: the anytime limit (ruling 11); ``weights``: the
     resource cost weights of the tie rule (ruling 7)."""
 
     screen_n: int = 8
@@ -113,6 +113,7 @@ class PrepSettings:
     tms: bool = True
     items: bool = True
     entry_hp: bool = True
+    levelled: bool = True
     max_turns: int = 100
     budget_seconds: float | None = None
     weights: tuple[tuple[str, float], ...] = tuple(DEFAULT_WEIGHTS.items())
@@ -521,6 +522,7 @@ class _Funnel:
                     tms=st.tms,
                     items=st.items,
                     entry_hp=st.entry_hp,
+                    levelled=st.levelled,
                 )
             )
         new = self.register(fresh)
@@ -733,6 +735,7 @@ def run_prep(
             tms=st.tms,
             items=st.items,
             entry_hp=st.entry_hp,
+            levelled=st.levelled,
         )
         funnel.pruned.extend(prune(tables, problem, variants)[1])
     funnel.dropped = {d for d, _ in funnel.pruned}

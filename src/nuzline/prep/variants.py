@@ -384,11 +384,13 @@ def single_changes(
     tms: bool = True,
     items: bool = True,
     entry_hp: bool = True,
+    levelled: bool = True,
 ) -> list[Member]:
     """Every one-change variant of ``base_member`` that fits ``problem.resources``: a move
     from levelling that met a full set, a Move Relearner move (``relearner``: ``"all"``,
     ``"designated"`` or ``"none"``), a TM/HM move (``tms``), a bag item or taking the item off
-    (``items``), an entry-HP region (``entry_hp``) and a declared prestatus."""
+    (``items``), an entry-HP region (``entry_hp``) and a declared prestatus. ``levelled=False``
+    offers no free level-up replacement."""
     cand = problem.candidates[candidate]
     base = base_member(problem, candidate)
     spec = member_spec(problem, base, tables)
@@ -401,9 +403,10 @@ def single_changes(
     def add_move(change: MoveChange) -> None:
         add(dataclasses.replace(base, moves=(*base.moves, change)))
 
-    for _, move in problem.levelled[candidate]:
-        for change in _free_changes(spec, base, move, LEVEL_UP):
-            add_move(change)
+    if levelled:
+        for _, move in problem.levelled[candidate]:
+            for change in _free_changes(spec, base, move, LEVEL_UP):
+                add_move(change)
     if relearner == "designated":
         if (change := designated_change(tables, problem, candidate)) is not None:
             add_move(change)

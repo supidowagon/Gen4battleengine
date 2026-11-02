@@ -186,6 +186,7 @@ def _ci_pool(tables, names, k, max_team, budget):
         tms=False,
         items=False,
         entry_hp=False,
+        levelled=False,
     )
     pick = run_prep(tables, names, prob, settings, jax.random.PRNGKey(0)).chosen
     pruned = range(len(restricted), len(everything))

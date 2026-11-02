@@ -18,12 +18,14 @@ from nuzline.prep.setups import (
     team_setups,
 )
 from nuzline.prep.variants import (
+    LEVEL_UP,
     RELEARNER,
     Member,
     base_member,
     designated_change,
     max_hp_of,
     member_spec,
+    single_changes,
 )
 from nuzline.search.rows import row_bytes
 from tests.engine.helpers import roark_party, roark_trainer, sample_party
@@ -162,3 +164,24 @@ def test_dedupe_keeps_the_cheapest(tables, names):
     assert dedupe(states, setups, [2.0, 1.0, 5.0]) == [1, 2]
     assert dedupe(states, setups, [1.0, 1.0, 5.0]) == [0, 2]
     assert isinstance(plain.members[0], Member)
+
+
+def test_levelled_knob_drops_free_replacements(tables, names):
+    """A levelled move that meets a full set is a free LEVEL_UP replacement only with
+    ``levelled=True``; ``base_member`` is the same either way."""
+    bite = names.move("Bug Bite")
+    spec = replace(sample_party(names)[0], level=16)
+    cand = candidate(names, spec, 0)
+    prob = problem(tables, names, [cand], levelled=[((16, bite),)])
+    assert base_member(prob, 0) == Member(0)
+    setup = Setup((base_member(prob, 0),))
+
+    def level_ups(members):
+        return [c for m in members for c in m.moves if c.source == LEVEL_UP]
+
+    kw = {"relearner": "none", "tms": False, "items": False, "entry_hp": False}
+    assert level_ups(single_changes(tables, prob, 0, **kw)) != []
+    assert level_ups(single_changes(tables, prob, 0, levelled=False, **kw)) == []
+    assert level_ups(m for s in neighbours(tables, prob, setup, **kw) for m in s.members) != []
+    off = neighbours(tables, prob, setup, levelled=False, **kw)
+    assert level_ups(m for s in off for m in s.members) == []

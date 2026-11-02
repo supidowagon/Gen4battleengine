@@ -59,4 +59,4 @@ save; keep it outside the repository.
 NUZLINE_USER_SAVE=path/to/platinum.dsv uv run pytest tests/test_user_save.py -v
 ```
 
-Slow tests (minutes each: the exhaustive check of the prep funnel on Roark, the long PP-stall fight) are skipped unless `NUZLINE_SLOW_TESTS=1` is set; the default suite stays under about a minute per file on one device, except `tests/test_cli.py` (one end-to-end `nuzline prep` run at depth 1, about 2 minutes for the file).
+Slow tests (minutes each: the full-pool exhaustive check of the prep funnel on Roark) are skipped unless `NUZLINE_SLOW_TESTS=1` is set; the default suite stays under about a minute per file on one device, except `tests/test_cli.py` (one end-to-end `nuzline prep` run at depth 1, about 2 minutes for the file) and `tests/prep/test_exhaustive.py` (about 300 s on one device: dozens of depth-1 solves).

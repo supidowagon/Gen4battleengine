@@ -99,6 +99,7 @@ def _member_changes(
     tms: bool,
     items: bool,
     entry_hp: bool,
+    levelled: bool = True,
 ) -> list[Member]:
     """Every one-change variant of ``member`` (ruling 4): a move into a slot no change has
     taken, a bag item or the item taken off (if the item is unchanged), an entry-HP region
@@ -113,8 +114,9 @@ def _member_changes(
         for change in _free_changes(spec, member, move, source):
             out.append(dataclasses.replace(member, moves=(*member.moves, change)))
 
-    for _, move in problem.levelled[member.candidate]:
-        add_moves(move, LEVEL_UP)
+    if levelled:
+        for _, move in problem.levelled[member.candidate]:
+            add_moves(move, LEVEL_UP)
     if relearner == "designated":
         change = designated_change(tables, problem, member.candidate)
         if (
@@ -165,6 +167,7 @@ def neighbours(
     tms: bool = True,
     items: bool = True,
     entry_hp: bool = True,
+    levelled: bool = True,
 ) -> list[Setup]:
     """The setups one change from ``setup`` (ruling 4): one change to one member, or another
     member as lead. Only setups that fit the unreserved resources, none whose changed member is
@@ -179,7 +182,14 @@ def neighbours(
 
     for i, member in enumerate(setup.members):
         for variant in _member_changes(
-            tables, problem, member, relearner=relearner, tms=tms, items=items, entry_hp=entry_hp
+            tables,
+            problem,
+            member,
+            relearner=relearner,
+            tms=tms,
+            items=items,
+            entry_hp=entry_hp,
+            levelled=levelled,
         ):
             if variant not in pruned:
                 members = list(setup.members)

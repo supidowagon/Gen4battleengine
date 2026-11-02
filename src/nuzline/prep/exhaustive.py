@@ -5,7 +5,8 @@ of 1..``max_team`` candidates with every lead, each member its ``base_member``, 
 member on its designated Move Relearner change when a Heart Scale is spare; ruling 14) and of the
 *pruned* setups: the restricted-shape setups holding one member on a variant that the
 conservative prune (ruling 8, a heuristic) dropped. ``verdict`` passes when the pick's interval
-overlaps the best restricted setup's and no pruned setup is clearly above the pick.
+overlaps the best restricted setup's and no pruned setup is clearly above the pick. The funnel
+under test runs with ``levelled=False``: free level-up slot replacements are outside this space.
 """
 
 from __future__ import annotations
@@ -99,7 +100,14 @@ def pruned_setups(
     setups: list[Setup] = []
     for c in range(n):
         variants = single_changes(
-            tables, problem, c, relearner="all", tms=False, items=False, entry_hp=False
+            tables,
+            problem,
+            c,
+            relearner="all",
+            tms=False,
+            items=False,
+            entry_hp=False,
+            levelled=False,
         )
         pairs.extend(prune(tables, problem, variants)[1])
     for dropped, _ in pairs:
