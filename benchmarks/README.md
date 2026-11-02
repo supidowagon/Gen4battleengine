@@ -169,3 +169,33 @@ warm compile caches.
 stall line at 20 and 30 PP as well (Starly leads and switches to the tank), the tank-less
 screen values staying far below the pick. The short stall is required by
 `tests/prep/test_pp_stall.py`.
+
+# Milestone 4: exhaustive check
+
+    uv run python -m benchmarks.exhaustive_roark --save "$NUZLINE_USER_SAVE" [--resume FILE]
+
+The funnel's pick on Roark from the user's save against the value of every setup of the
+restricted space (spec section 8, plan 4c ruling 14): the six party Pokemon plus the first
+Venonat (box 1 slot 1) and Geodude (box 1 slot 4), the configured cap, no items, full HP, every
+team of 1-6 with every lead, each member its base moves plus at most one member on its
+designated Move Relearner change (`prep/exhaustive.py::restricted_setups`), and the *pruned*
+setups (`pruned_setups`: the restricted shape with one member on a variant the conservative prune
+dropped from the `relearner="all"` variants; none, and then the result says so, when the prune
+drops nothing on the save). Per rung 0 and 1: phase 1 values every setup by Stage B depth 1 at
+2000 playouts, phase 2 re-solves at the 1.5 pp precision target the setups overlapping the best,
+the pick and every pruned setup whose phase-1 interval reaches above the pick's. The run
+checkpoints after every setup (`--resume FILE` continues across nights; it prints an ETA after 20
+setups) and writes `benchmarks/exhaustive_roark.json`. A failed verdict is a finding for the
+controller, not an error.
+
+Test sizes (`tests/prep/test_exhaustive.py`, one device, 13th Gen Intel(R) Core(TM) i5-13600K,
+measured 2026-11-02): default suite, whole file about 300 s (`test_funnel_matches_exhaustive_ci`
+160 s: 44 depth-1 solves plus a funnel run, per-solve overhead dominates, so lowering
+`budget_playouts` from 100 to 50 saved only 5 s; `test_pruned_setups_are_valued` 85 s;
+`test_funnel_matches_exhaustive_small` 25 s each), over the ~60 s default-file limit.
+`NUZLINE_SLOW_TESTS=1`: `test_funnel_matches_exhaustive_ci_full` (every team of the 4-Pokemon pool,
+rungs 0 and 1, 500 playouts) 484 s and 394 s, 880 s in all; both rungs pass. The default-suite
+overrun is reported to the controller rather than gated (plan Step 3).
+
+The overnight result is committed as `benchmarks/exhaustive_roark.json` when the run finishes
+(it needs the user's save, which is not available to the implementer; see the task report).
