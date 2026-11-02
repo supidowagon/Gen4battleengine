@@ -82,6 +82,25 @@ def test_resume_equals_uninterrupted(tables, names, monkeypatch, tmp_path):
         assert d == a
 
 
+def test_interrupt_in_the_first_unit_of_a_resumed_run_keeps_the_answer(
+    tables, names, monkeypatch, tmp_path
+):
+    prob, _ = setup_run(monkeypatch, tables, names)
+    units = []
+    run_prep(tables, names, prob, SETTINGS, KEY, progress=units.append, **VERSIONS)
+    path = tmp_path / "first.ckpt.json"
+    progress, _ = interrupting(len(units) - 1)  # stops inside the finalists
+    run_prep(tables, names, prob, SETTINGS, KEY, checkpoint=path, progress=progress, **VERSIONS)
+
+    def solve_interrupted(*args, **kwargs):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(search, "solve", solve_interrupted)
+    r = run_prep(tables, names, prob, SETTINGS, KEY, resume=path, **VERSIONS)
+    assert r.stats.stopped == "interrupted"
+    assert r.chosen is not None
+
+
 def test_resume_equals_uninterrupted_with_a_deep_leader(tables, names, monkeypatch, tmp_path):
     prob, _ = setup_run(monkeypatch, tables, names)
     settings = dataclasses.replace(SETTINGS, max_depth=2)

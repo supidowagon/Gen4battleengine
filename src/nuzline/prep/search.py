@@ -742,7 +742,7 @@ def run_prep(
     except _Stop:
         stopped = "budget"
     except KeyboardInterrupt:
-        if not funnel.units:
+        if not funnel.units and saved is None:
             raise
         stopped = "interrupted"
     return funnel.result(stopped)
