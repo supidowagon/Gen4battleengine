@@ -201,3 +201,32 @@ overrun is reported to the controller rather than gated (plan Step 3).
 
 The overnight result is committed as `benchmarks/exhaustive_roark.json` when the run finishes
 (it needs the user's save, which is not available to the implementer; see the task report).
+
+# Milestone 4: `nuzline prep` wall time
+
+    uv run python -m benchmarks.prep_timing --save "$NUZLINE_USER_SAVE" [--devices N]
+
+`nuzline prep --save S --trainer roark` (defaults otherwise, 20 host devices) as one cold
+subprocess (fresh `NUZLINE_CACHE_DIR`) and then one warm one, against the 900 s target
+(`TARGET_SECONDS`, spec section 8). User's save, 13th Gen Intel(R) Core(TM) i5-13600K,
+Windows 11, measured 2026-11-02. Wall seconds; phase seconds are the cold run's.
+
+| settings (cumulative)               | cold  | warm  | teams | variants | finalists | screened | playouts  | rung 0 |
+|-------------------------------------|-------|-------|-------|----------|-----------|----------|-----------|--------|
+| defaults (32 / 3 / 2)               | 964.2 | 878.2 | 737.7 | 127.8    | 92.9      | 9770     | 1,144,478 | 1.000  |
+| `team_keep` 16                      | 925.5 | 842.8 | 779.7 | 60.2     | 80.5      | 8377     | 1,100,648 | 1.000  |
+| + `finalists` 2                     | 926.2 | 844.2 | 780.1 | 60.4     | 80.5      | 8377     | 1,100,648 | 1.000  |
+| + `variant_rounds` 1                | 935.2 | 851.1 | 781.6 | 48.5     | 99.9      | 8102     | 1,105,822 | 0.997  |
+
+The cold run misses 900 s by 64 s with the defaults, and none of the three reductions in the
+plan's order meets it, so `PrepSettings` keeps its defaults (`team_keep` 32, `finalists` 3,
+`variant_rounds` 2). The teams phase is 740-780 s of every run: it screens the whole team space
+in round 0 (about 8,000 setups, more than a million playouts in all) and halving it, and none of
+these knobs shortens it. Cold minus warm is the 85-90 s compile cost. The warm run is under the
+target. Two further attempts of the same measurements died with a Windows access violation
+(exit 3221225477) in the teams phase and were repeated; the table holds the completed runs.
+
+Chosen setup on the defaults run: PSYDUCK (party slot 5, unchanged), MONFERNO (party slot 2: Mach
+Punch, Leer, Fury Swipes by Move Relearner for one Heart Scale, Rock Smash by HM06), SPINARAK
+(party slot 4, unchanged); rung 0 value 1.000 (interval 0.995 - 1.000, from the plan); cost 1
+Heart Scale and HM06.
