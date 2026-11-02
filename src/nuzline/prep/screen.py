@@ -58,8 +58,8 @@ class ScreenStats:
         return self.pp_left / self.n if self.n else 0.0
 
     def _count(self, k: int) -> int:
-        if not 0 <= k < len(deaths.BUCKETS):
-            raise ValueError(f"rung {k} outside the death buckets")
+        if not 0 <= k <= deaths.MAX_DEATH_BUDGET:
+            raise ValueError(f"rung {k} outside [0, {deaths.MAX_DEATH_BUDGET}]")
         return sum(self.buckets[: k + 1])
 
     def rung(self, k: int) -> float:

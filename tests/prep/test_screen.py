@@ -55,3 +55,15 @@ def test_rung_k_score():
     assert (s.ci_low, s.ci_high) == stats.interval(1)
     assert (s.e_deaths, s.cost, s.hp_left, s.pp_left) == (7 / 20, 2.0, 0.25, 0.5)
     assert np.isclose(sum(stats.distribution.probs), 1.0)
+
+
+def test_rung_outside_ladder_raises():
+    import pytest
+
+    s = ScreenStats((1, 1, 1, 1, 1, 1, 1, 1), 0, 0.0, 0.0, False)
+    assert s.rung(3) == 0.5
+    for k in (4, 5, -1):
+        with pytest.raises(ValueError):
+            s.rung(k)
+        with pytest.raises(ValueError):
+            s.interval(k)
