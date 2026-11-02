@@ -13,18 +13,29 @@ import pytest
 
 from nuzline.ai.outcome import sample_ai_outcome
 from nuzline.ai.policy import ai_policy
-from nuzline.engine.actions import legal_actions, legal_opponent_actions
+from nuzline.engine.actions import (
+    MOVE_ACTIONS,
+    decision_actions,
+    legal_actions,
+    legal_opponent_actions,
+    legal_replacements,
+)
 from nuzline.engine.enumerate import SamplingOnly, enumerate_outcomes, outcome_laws
-from nuzline.engine.observe import observe
+from nuzline.engine.observe import OBS_FIELDS, observe, replacement_observation
 from nuzline.engine.order import is_switch, selected_move
 from nuzline.engine.outcome import sample_outcome
-from nuzline.engine.step import PURSUIT_POWER_MUL, pursuit_fires, step
+from nuzline.engine.step import NORMAL_POWER_MUL, PURSUIT_POWER_MUL, pursuit_fires, step
 from nuzline.search import expand as expand_mod
 from nuzline.search import playout
-from nuzline.search.expand import CHUNK, Child, ai_rows, expand
-from nuzline.search.playout import send_replacements
-from tests.engine.helpers import roark_real_state
-from tests.search.fixtures import shinx_vs_cranidos, spike_cannon_root, switch_refusal_root
+from nuzline.search.expand import CHUNK, Child, ai_rows, expand, expand_replacements
+from nuzline.search.playout import replacement_pass, send_replacements
+from tests.engine.helpers import A, roark_real_state, roark_state
+from tests.search.fixtures import (
+    at_replacement,
+    shinx_vs_cranidos,
+    spike_cannon_root,
+    switch_refusal_root,
+)
 
 SMALL = 256  # the independent re-step program's batch (test_merged_child_equals_each_member)
 
@@ -255,3 +266,67 @@ def test_device_count_invariant(tables):
     one = _expand_on_devices(1)
     assert one["store"] and one["children"]
     assert _expand_on_devices(3) == one
+
+
+def test_expand_replacements_match_replacement_pass(tables, names):
+    s = at_replacement(roark_state(tables, names), opp_down=True)
+    slots = np.flatnonzero(np.asarray(legal_replacements(s, 0))).tolist()
+    assert len(slots) >= 2
+    requests = [(0, MOVE_ACTIONS + slot) for slot in slots] + [(0, MOVE_ACTIONS + slots[0])]
+    store, children = expand_replacements(tables, batch(s), requests)
+    assert sorted(children) == list(range(len(requests)))
+    for r, (_, action) in enumerate(requests):
+        after, refused = replacement_pass(tables, s, action - MOVE_ACTIONS)
+        child = children[r]
+        assert child.prob == 1.0
+        assert child.refused == bool(refused)
+        assert child.obs == np.asarray(replacement_observation(after), np.int32).tobytes()
+        assert row_keys(take_row(store, child.state_row)) == row_keys(batch(after))
+    # Two requests reaching one state share a store row.
+    assert children[0].state_row == children[len(slots)].state_row
+    assert len(store.hp) == len({c.state_row for c in children.values()})
+
+
+def take_row(tree, i: int):
+    return jax.tree.map(lambda f: np.asarray(f)[i : i + 1], tree)
+
+
+def test_turn_child_stops_at_the_player_replacement(tables, names):
+    s = roark_state(tables, names, opp_faster=True, player_moves=["Leer"]).replace_hp(0, 0, 1)
+    pair = (0, *[int(x) for x in A("Leer", "Tackle", s, names)])
+    store, children = expand(tables, batch(s), [pair])
+    downed = [c for c in children[0] if int(store.hp[c.state_row, 0, 0]) == 0]
+    assert downed
+    for c in downed:
+        child = take_row(store, c.state_row)
+        assert int(child.over[0]) == 0
+        assert np.asarray(child.active[0]).tolist() == np.asarray(s.active).tolist()
+        obs = np.frombuffer(c.obs, np.int32)
+        assert int(obs[dict(OBS_FIELDS)["player_hp"]][0]) == 0
+
+    # Both actives down in one turn: Struggle's recoil KOs its user.
+    s = roark_state(tables, names, opp_count=2, opp_faster=True, player_moves=["Leer"])
+    s = s.replace_hp(0, 0, 1).replace_hp(1, 0, 1).with_pp(1, 0, [0, 0, 0, 0])
+    assert 0 in np.flatnonzero(np.asarray(legal_actions(tables, s, 1)))
+    store, children = expand(tables, batch(s), [(0, int(A("Leer", 0, s, names)[0]), 0)])
+    assert children[0]
+    for c in children[0]:
+        child = take_row(store, c.state_row)
+        assert int(child.hp[0, 0, 0]) == 0 and int(child.hp[0, 1, 0]) == 0
+        assert int(child.over[0]) == 0
+        assert np.asarray(child.active[0]).tolist() == [0, 0]
+        assert int(child.replace_mul[0]) == NORMAL_POWER_MUL
+        assert int(child.deaths[0, 0]) == 1
+
+
+def test_decision_actions_constant_on_equal_obs(tables, names):
+    root = roark_real_state(tables, names)
+    store, children = expand(tables, batch(root), legal_pairs(tables, root))
+    groups: dict[bytes, set[bytes]] = defaultdict(set)
+    for kids in children.values():
+        for c in kids:
+            child = jax.tree.map(lambda f, i=c.state_row: np.asarray(f)[i], store)
+            mask = np.asarray(decision_actions(tables, child))
+            groups[c.obs].add(mask.tobytes())
+    assert groups
+    assert all(len(masks) == 1 for masks in groups.values())

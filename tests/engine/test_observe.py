@@ -12,11 +12,18 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
-from nuzline.engine.actions import legal_actions, legal_opponent_actions
+from nuzline.engine.actions import legal_actions, legal_opponent_actions, legal_replacements
 from nuzline.engine.damage import STATUS
 from nuzline.engine.enumerate import SamplingOnly, enumerate_outcomes, outcome_laws
 from nuzline.engine.ids import AbilityId, Status, Weather
-from nuzline.engine.observe import OBS_FIELDS, OBS_SIZE, hp_pixels, observation, observe
+from nuzline.engine.observe import (
+    OBS_FIELDS,
+    OBS_SIZE,
+    hp_pixels,
+    observation,
+    observe,
+    replacement_observation,
+)
 from nuzline.engine.order import (
     MOVE_ACTIONS,
     effective_speed,
@@ -26,9 +33,10 @@ from nuzline.engine.order import (
 from nuzline.engine.outcome import MAX_HITS, Outcome, empty_outcome
 from nuzline.engine.state import BattleState
 from nuzline.engine.step import PURSUIT_POWER_MUL, pursuit_fires, step, step_events
-from nuzline.search.playout import send_replacements
+from nuzline.search.playout import replacement_pass, send_replacements
 from tests.engine.helpers import A, roark_real_state, roark_state
 from tests.search.fixtures import (
+    at_replacement,
     bind_1v1,
     confuse_ray_1v1,
     shinx_vs_cranidos,
@@ -750,3 +758,21 @@ def test_magnitude_level_is_observed_only_when_shown(tables, names):
     ]
     low, high = observe_levels("Staravia")
     assert (low == high).all()
+
+
+def test_replacement_observation_shows_both_newcomers(tables, names):
+    s = at_replacement(roark_state(tables, names), opp_down=True)
+    slot = int(np.flatnonzero(np.asarray(legal_replacements(s, 0)))[0])
+    after, refused = replacement_pass(tables, s, slot)
+    assert not bool(refused)
+    assert int(after.active[1]) != int(s.active[1])
+    obs = np.asarray(replacement_observation(after))
+    assert obs.shape == (OBS_SIZE,)
+    assert field(obs, "active").tolist() == np.asarray(after.active).tolist()
+    assert field(obs, "active").tolist() == [slot, int(after.active[1])]
+    assert field(obs, "act_kind").tolist() == [0, 0]
+    assert field(obs, "order").tolist() == [-1]
+    assert field(obs, "pursuit").tolist() == [0]
+    assert not field(obs, "crit").any()
+    for name in ("act_id", "magnitude"):
+        assert not field(obs, name).any(), name

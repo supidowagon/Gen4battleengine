@@ -5,7 +5,8 @@ Two children of a belief node with equal observations are one information set: t
 player's next decision is one action for all of them. The observation is an
 ``int32[OBS_SIZE]`` vector, laid out by ``OBS_FIELDS``; ``after`` is the state after the
 opponent's forced replacement (``search.playout.send_replacements``), since the
-replacement is seen.
+replacement is seen. A player replacement runs no action: ``replacement_observation``
+is the same vector with every event at its no-action value (faint-budget spec §4).
 
 **The turn's events** are recorded by ``step`` itself: ``step.turn_events`` replays the
 action phase (``_use_move``'s status checks and hits, ``execute_actions``' order, items,
@@ -85,6 +86,7 @@ from nuzline.engine.step import (
     ACT_SWITCH,
     ACT_TAUNTED,
     EVENT_FLAGS,
+    _empty_events,
     turn_events,
 )
 
@@ -101,6 +103,7 @@ __all__ = [
     "hp_pixels",
     "observation",
     "observe",
+    "replacement_observation",
 ]
 
 _I32 = jnp.int32
@@ -236,3 +239,12 @@ def observation(events: dict, after: BattleState) -> jnp.ndarray:
             raise ValueError(f"observation field {name}: shape {value.shape}, want {shape}")
         parts.append(value.reshape(-1))
     return jnp.concatenate(parts)
+
+
+def replacement_observation(after: BattleState) -> jnp.ndarray:
+    """The observation of a replacement: no action ran, so every event is at its
+    no-action value (``ACT_NONE``, flags 0, ``order`` -1, no Pursuit), and the visible
+    projection is ``after``'s (both newcomers on screen). Built from the full event set
+    ``step_events`` returns, so a new event field cannot be missed."""
+    events = {**_empty_events(), "order": jnp.full((2,), -1, _I32), "pursuit": jnp.int32(0)}
+    return observation(events, after)
