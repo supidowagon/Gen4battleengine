@@ -115,7 +115,8 @@ def main(argv: list[str] | None = None) -> int:
     boxed = [c for c in base.candidates if c.location[0] == "box"]
     for species, box, slot in BOXED:
         if not any(
-            c.location[1:] == (box, slot) and names.species_names[c.spec.species] == species
+            c.location[1:] == (box, slot)
+            and names.species_names[c.spec.species].casefold() == species.casefold()
             for c in boxed
         ):
             raise SystemExit(f"box {box + 1} slot {slot} is not a usable {species}: wrong save?")
