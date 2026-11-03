@@ -66,7 +66,12 @@ def main(argv: list[str] | None = None) -> int:
     from nuzline.data.trainer import IntermediateData, build_trainer_party, load_trainers
     from nuzline.engine.coverage import start_weather
     from nuzline.prep.caps import default_cap
-    from nuzline.prep.checkpoint import fingerprint, read_checkpoint, write_checkpoint
+    from nuzline.prep.checkpoint import (
+        CHECKPOINT_VERSION,
+        fingerprint,
+        read_checkpoint,
+        write_checkpoint,
+    )
     from nuzline.prep.exhaustive import (
         Value,
         exhaustive_values,
@@ -155,7 +160,9 @@ def main(argv: list[str] | None = None) -> int:
     print(f"checkpoint: {sink}")
 
     def save_state() -> None:
-        write_checkpoint(sink, {"version": 1, "fingerprint": print_, "funnel": funnel})
+        write_checkpoint(
+            sink, {"version": CHECKPOINT_VERSION, "fingerprint": print_, "funnel": funnel}
+        )
 
     started = time.perf_counter()
     rungs_out = {}
