@@ -88,8 +88,10 @@ class SymbolMap:
     def find(self, name: str) -> Symbol:
         found = self._by_name.get(name, [])
         if len(found) != 1:
-            raise KeyError(f"symbol {name!r} is {'ambiguous' if found else 'not in the map'}"
-                           + (f" ({len(found)} definitions)" if found else ""))
+            raise KeyError(
+                f"symbol {name!r} is {'ambiguous' if found else 'not in the map'}"
+                + (f" ({len(found)} definitions)" if found else "")
+            )
         return found[0]
 
     def symbols(self, module: str) -> list[Symbol]:
@@ -156,9 +158,11 @@ def _parse(path: Path) -> list[Symbol]:
         else:
             raise SymbolMapError(
                 f"{path}:{lineno}: symbol in section .{section}, which is neither ARM9 "
-                f"nor an overlay with an SDK_OVERLAY_{section}_ID line before it")
-        out.append(Symbol(module, int(sym[1], 16), int(sym[2], 16), sym[4],
-                          sym[5].strip(), sym[3] or ""))
+                f"nor an overlay with an SDK_OVERLAY_{section}_ID line before it"
+            )
+        out.append(
+            Symbol(module, int(sym[1], 16), int(sym[2], 16), sym[4], sym[5].strip(), sym[3] or "")
+        )
     else:
         raise SymbolMapError(f"{path}: no '# Memory map:' line; the map looks truncated")
     return out

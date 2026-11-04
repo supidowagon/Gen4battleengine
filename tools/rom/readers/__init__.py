@@ -25,7 +25,9 @@ def symbol_bytes(rom: RomFiles, symbols: SymbolMap, name: str) -> bytes:
         for ram, data in rom.arm9_sections():
             if ram <= lo and hi <= ram + len(data):
                 return data[lo - ram : hi - ram]
-        raise ReaderError(f"symbol {name} ({sym.address:#x}+{sym.size}) is outside the ARM9 sections")
+        raise ReaderError(
+            f"symbol {name} ({sym.address:#x}+{sym.size}) is outside the ARM9 sections"
+        )
     if not sym.module.startswith("overlay"):
         raise ReaderError(f"symbol {name}: unknown module {sym.module!r}")
     n = int(sym.module[len("overlay") :])

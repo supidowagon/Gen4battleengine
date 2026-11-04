@@ -4,7 +4,7 @@ import struct
 
 import pytest
 
-from tools.extract_decomp import _text_bank, extract_species
+from tools.extract_decomp import ExtractError, _text_bank, extract_species
 from tools.rom.readers import ReaderError, fixed_members, symbol_bytes
 from tools.rom.readers.text import decode_bank, message_bank
 
@@ -56,6 +56,43 @@ def test_compressed_marker_raises(charmap):
         decode_bank(bad, charmap)
 
 
+def test_premature_terminator_raises(charmap):
+    bad = encode_bank([[0x0001, 0xFFFF, 0x0001]], 0x1234, charmap)
+    # encode_bank appends its own terminator, so entry 0 is 4 codes with one at index 1
+    with pytest.raises(
+        ReaderError, match=r"entry 0 \(offset 0x[0-9a-f]+\).*terminator at character 1"
+    ):
+        decode_bank(bad, charmap)
+
+
+def test_missing_terminator_raises(charmap):
+    good = encode_bank([[0x0001]], 0x1234, charmap)
+    # drop the terminator: shrink the entry length by one character
+    import struct
+
+    seed = 0x1234
+    k = (seed * 765) & 0xFFFF
+    k |= k << 16
+    _off, length = struct.unpack_from("<II", good, 4)
+    bad = good[:8] + struct.pack("<I", ((length ^ k) - 1) ^ k) + good[12:]
+    with pytest.raises(
+        ReaderError, match=r"entry 0 \(offset 0x[0-9a-f]+\).*not the 0xffff terminator"
+    ):
+        decode_bank(bad, charmap)
+
+
+def test_offset_inside_table_raises(charmap):
+    good = encode_bank(["A"], 0x1234, charmap)
+    seed = 0x1234
+    k = (seed * 765) & 0xFFFF
+    k |= k << 16
+    import struct
+
+    bad = good[:4] + struct.pack("<I", 4 ^ k) + good[8:]
+    with pytest.raises(ReaderError, match="entry 0.*inside the entry table"):
+        decode_bank(bad, charmap)
+
+
 def test_truncated_bank_raises(charmap):
     data = encode_bank(["Abra"], 0x1234, charmap)
     with pytest.raises(ReaderError, match="entry 0"):
@@ -94,7 +131,7 @@ def test_vanilla_banks_match_decomp(vanilla_files, decomp, charmap):
 
 
 def test_unknown_bank_raises(vanilla_files, decomp, charmap):
-    with pytest.raises(Exception, match="TEXT_BANK_NOPE"):
+    with pytest.raises(ExtractError, match="TEXT_BANK_NOPE"):
         message_bank(vanilla_files, decomp, "TEXT_BANK_NOPE", charmap)
 
 
