@@ -73,3 +73,28 @@ at `.cache/decomp/<commit>/main.nef.xMAP` and the decomp at `external/pokeplatin
 `status` is `modelled`, `irrelevant` or `unknown`). `--init-classification` writes an
 all-`unknown` skeleton and refuses to overwrite an existing file. An entry that matches no
 current change is an error naming it, so a renamed or moved change cannot hide.
+
+## Extraction
+
+```bash
+uv run --group rom python -m tools.extract_rom --game vanilla [--out DIR] [--decomp external/pokeplatinum] \
+    [--symbols .cache/decomp/<commit>/main.nef.xMAP] [--config data/local.toml]
+```
+
+`--out` defaults to `data/intermediate` (vanilla) or `data/intermediate_kaizo` (kaizo).
+`species, moves, items, learnsets, exp_tables` and `trainers` (with start conditions derived
+from the ROM's map headers, events and scripts) are read from the ROM; `types, natures,
+charmap, abilities` are copied from a fresh `extract_decomp.extract_static` run (the charmap is
+the font encoding and has no table in the ROM). For vanilla, the output equals the decomp
+extractor's, which `tests/tools/rom/test_extract_rom.py` checks file by file.
+
+`rom_sources.json` beside the outputs maps each file to `"rom"` or a `"decomp: ..."` reason.
+
+Writes go to a temporary directory next to `--out` and are moved in file by file with
+`os.replace`; other files in `--out` are kept, and on failure `--out` is not created or changed.
+
+`--game kaizo` runs the ROM diff, checks that the sources of the reused tables
+(`sTypeMatchupMultipliers`, `sNatureStatAffinities`, the ability, type and nature name banks)
+are unchanged, runs the readers that do not depend on the trainer layout as layout checks, and
+then refuses: `trainers: the Kaizo trainer layout is not confirmed (spec §5.4); Kaizo
+extraction lands in K2b`. Nothing is written.
