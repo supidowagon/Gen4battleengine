@@ -1,6 +1,6 @@
 # Platinum Kaizo as a second data set — design
 
-Status: draft for review, 2026-11-03. Parent: `docs/design.md` (§2 scope, §4.1 data layer, §6
+Status: approved by the user, 2026-11-03. Parent: `docs/design.md` (§2 scope, §4.1 data layer, §6
 caches, §9 extensibility). Related: `docs/superpowers/specs/2026-10-31-prep-search-design.md`
 (milestone 4, whose non-goals deferred "reading data from a ROM, and difficulty hacks" to this
 work).
