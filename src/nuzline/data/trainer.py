@@ -50,7 +50,8 @@ class TrainerMon:
 
 @dataclass(frozen=True)
 class Trainer:
-    """One ``trainers.json`` entry; ``trainer_class`` is the JSON's ``class``."""
+    """One ``trainers.json`` entry; ``trainer_class`` is the JSON's ``class``.
+    ``format`` is the battle format of the trainer's header, "single" or "double"."""
 
     id: int
     name: str
@@ -61,6 +62,7 @@ class Trainer:
     items: tuple[int, ...]
     party: tuple[TrainerMon, ...]
     start_condition: str
+    format: str
 
 
 def _mon(d: dict) -> TrainerMon:
@@ -81,6 +83,11 @@ def _read(dir: Path, name: str):
 
 def load_trainers(dir: Path) -> list[Trainer]:
     """Every trainer in ``<dir>/trainers.json``, indexed by trainer id."""
+    rows = _read(dir, "trainers")
+    if rows and "format" not in rows[0]:
+        raise ValueError(
+            f"{Path(dir) / 'trainers.json'} has no battle format: re-run tools/extract_decomp.py"
+        )
     return [
         Trainer(
             id=t["id"],
@@ -92,8 +99,9 @@ def load_trainers(dir: Path) -> list[Trainer]:
             items=tuple(t["items"]),
             party=tuple(_mon(m) for m in t["party"]),
             start_condition=t["start_condition"],
+            format=t["format"],
         )
-        for t in _read(dir, "trainers")
+        for t in rows
     ]
 
 

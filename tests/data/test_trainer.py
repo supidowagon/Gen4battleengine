@@ -120,3 +120,10 @@ def test_roark_party_identity():
         assert mon.nature == pid % 25
         assert mon.friendship == inter.species[mon.species]["base_friendship"]
         assert (mon.item, mon.form, mon.current_hp, mon.status) == (0, 0, None, 0)
+
+
+def test_trainers_without_a_format_are_refused(tmp_path):
+    # An intermediate extracted before the battle format was recorded.
+    (tmp_path / "trainers.json").write_text(json.dumps([{"id": 0}]), encoding="utf-8")
+    with pytest.raises(ValueError, match="no battle format"):
+        load_trainers(tmp_path)

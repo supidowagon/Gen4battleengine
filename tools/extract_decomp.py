@@ -631,6 +631,10 @@ def extract_trainers(decomp_root: Path, out_dir: Path) -> None:
       MOVE_NONE (0) to four slots, because TrainerData_BuildParty
       (``src/trainer_data.c``) writes all four. Without, ``moves`` is null: the mon
       keeps the species' default moveset at its level. No held item is item 0.
+    * ``format`` is "double" when the file sets ``double_battle`` and "single"
+      otherwise: trainerproc (``tools/dataproc/src/trainerproc.c``) turns it into
+      ``TrainerHeader.battleType`` (``BATTLE_TYPE_DOUBLES`` or 0). Tag and multi
+      battles that a script assembles from single-format trainers are not marked.
     * ``start_condition`` comes from the weather of the maps where the trainer is
       fought (``_trainer_maps``, ``_weather_conditions``), assuming the player has
       not cleared fog with Defog (``src/field_map_change.c``). A trainer the decomp
@@ -701,6 +705,8 @@ def extract_trainers(decomp_root: Path, out_dir: Path) -> None:
             if flag not in ai_bits:
                 raise ExtractError(f"{path}: unknown AI flag {flag!r}")
             ai_flags |= ai_bits[flag]
+        if not isinstance(d["double_battle"], bool):
+            raise ExtractError(f"{path}: double_battle is not a boolean")
         derived = set()
         for header in where.get(const, ()):
             derived |= weather[headers[header]["weather"]]
@@ -714,6 +720,7 @@ def extract_trainers(decomp_root: Path, out_dir: Path) -> None:
                 "ai_flags": ai_flags,
                 "items": [item_id(i) for i in d["items"]],
                 "party": members,
+                "format": "double" if d["double_battle"] else "single",
                 "start_condition": _start_condition(const, derived, overrides),
             }
         )

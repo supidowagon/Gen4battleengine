@@ -31,7 +31,9 @@ items) and plan 1b (Task 2b: trainer items; Task 3: Roark's AI flags) implement:
 * AI flags: bits 0-2 (``AI_FLAG_BASIC``, ``AI_FLAG_EVAL_ATTACK``, ``AI_FLAG_EXPERT``).
   ``ai.policy`` always runs those three scripts, so a trainer must have exactly them;
 * weather: only ``Weather.NONE``. Rain, sun, sandstorm, hail and fog need the
-  field-condition pass and are refused (plan ruling).
+  field-condition pass and are refused (plan ruling);
+* battle format: only "single". The engine models one battler per side, so a trainer
+  whose header is a double battle (``Trainer.format``) is refused.
 
 ``check_coverage`` also runs the AI's own refusals (``ai.policy.ai_refusals``: opponent
 moves without transcribed script paths, too many script-roll sites, type-chart
@@ -100,6 +102,8 @@ IMPLEMENTED_WEATHER: dict[Weather, Support] = {
     Weather.HAIL: Support.NONE,
     Weather.FOG: Support.NONE,
 }
+# Trainer.format (trainers.json, TrainerHeader.battleType).
+IMPLEMENTED_FORMATS: dict[str, Support] = {"single": Support.EXACT, "double": Support.NONE}
 # Trainer.start_condition (trainers.json) as a Weather.
 START_CONDITIONS = {
     "none": Weather.NONE,
@@ -176,6 +180,8 @@ def _check_party(
 
 
 def _check_trainer(c: _Collector, tables: Tables, names: Names, trainer: Trainer) -> None:
+    support = IMPLEMENTED_FORMATS.get(trainer.format, Support.NONE)
+    c.add(support, f"{trainer.name}: a {trainer.format} battle", "battle format")
     effect = np.asarray(tables.trainer_item_effect)
     bag = [item for item in trainer.items if item]
     for item in bag:

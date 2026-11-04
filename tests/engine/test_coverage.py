@@ -58,6 +58,28 @@ def test_hail_route_trainer_is_refused(tables, names):
     assert "Hail" in str(e.value)
 
 
+def test_double_battle_trainer_is_refused(tables, names):
+    # TRAINER_TWINS_EMMA_AND_LIL (res/trainers/data/twins_emma_and_lil.json) is a
+    # double battle; the engine models singles only.
+    emma = next(t for t in load_trainers(INTERMEDIATE) if t.name == "Emma & Lil")
+    assert emma.format == "double"
+    opp = build_trainer_party(emma, _inter())
+    with pytest.raises(UnsupportedMechanics) as e:
+        require_coverage(tables, names, sample_party(names), emma, opp, 0)
+    assert "Emma & Lil: a double battle (battle format UNSUPPORTED)" in e.value.report.missing
+    theirs = check_opponent(tables, names, emma, opp, 0)
+    assert "Emma & Lil: a double battle (battle format UNSUPPORTED)" in theirs.missing
+
+
+def test_roark_is_a_single_battle(tables, names):
+    assert roark_trainer().format == "single"
+    r = check_opponent(tables, names, roark_trainer(), roark_party(names), 0)
+    assert not any("battle format" in m for m in r.missing)
+    unknown = replace(roark_trainer(), format="triple")
+    r = check_opponent(tables, names, unknown, roark_party(names), 0)
+    assert "Roark: a triple battle (battle format UNSUPPORTED)" in r.missing
+
+
 def test_start_condition_argument_is_checked(tables, names):
     r = check_coverage(
         tables, names, sample_party(names), roark_trainer(), roark_party(names), Weather.RAIN

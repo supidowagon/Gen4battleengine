@@ -83,3 +83,19 @@ def test_trainer_class_id_and_gender(trainers):
     assert {t["class_gender"] for t in trainers} == {0, 1, 2}
     gardenia = next(t for t in trainers if t["name"] == "Gardenia")
     assert gardenia["class_gender"] == 1
+
+
+def test_battle_format_follows_double_battle(trainers):
+    # res/trainers/data/twins_emma_and_lil.json sets "double_battle": true, which
+    # trainerproc turns into TrainerHeader.battleType = BATTLE_TYPE_DOUBLES.
+    assert roark(trainers)["format"] == "single"
+    consts = (DECOMP / "generated" / "trainers.txt").read_text(encoding="utf-8").split()
+    emma = trainers[consts.index("TRAINER_TWINS_EMMA_AND_LIL")]
+    assert (emma["name"], emma["format"]) == ("Emma & Lil", "double")
+    doubles = {
+        p.stem
+        for p in (DECOMP / "res" / "trainers" / "data").glob("*.json")
+        if json.loads(p.read_text(encoding="utf-8"))["double_battle"]
+    }
+    assert sum(t["format"] == "double" for t in trainers) == len(doubles) > 0
+    assert {t["format"] for t in trainers} == {"single", "double"}
