@@ -1,0 +1,43 @@
+"""Shared fixtures for the ROM pipeline tests.
+
+Every fixture that needs a local input skips when it is absent, like the decomp
+tests in ``tests/tools/test_extract_decomp.py``.
+"""
+
+import pytest
+
+from tools.extract_decomp import extract_charmap
+from tools.rom.inputs import REPO_ROOT, VANILLA_SHA1, RomInputError, load_inputs, read_checked
+
+
+@pytest.fixture(scope="session")
+def rom_inputs():
+    """The configured inputs; skips when no vanilla ROM is configured or present."""
+    try:
+        inputs = load_inputs()
+    except RomInputError:
+        pytest.skip("no data/local.toml or NUZLINE_VANILLA_ROM")
+    if not inputs.vanilla_rom.exists():
+        pytest.skip("no data/local.toml or NUZLINE_VANILLA_ROM")
+    return inputs
+
+
+@pytest.fixture(scope="session")
+def vanilla_bytes(rom_inputs):
+    """The vanilla ROM bytes, SHA-1 checked."""
+    return read_checked(rom_inputs.vanilla_rom, VANILLA_SHA1, "sha1")
+
+
+@pytest.fixture(scope="session")
+def decomp():
+    """The pinned decomp checkout; skips when it is not cloned."""
+    path = REPO_ROOT / "external" / "pokeplatinum"
+    if not path.exists():
+        pytest.skip("decomp not cloned")
+    return path
+
+
+@pytest.fixture(scope="session")
+def charmap(decomp):
+    """The decomp's font charmap, for decoding message banks."""
+    return extract_charmap(decomp)
