@@ -76,3 +76,13 @@ def kaizo_files(kaizo_bytes):
     from tools.rom.nds import RomFiles
 
     return RomFiles.open(kaizo_bytes)
+
+
+@pytest.fixture(scope="session")
+def symbols():
+    """The vanilla decomp build's linker-map symbols; skips when the map is not copied in."""
+    from tools.rom.symbols import DEFAULT_MAP, SymbolMap
+
+    if not DEFAULT_MAP.exists():
+        pytest.skip(f"no linker map at {DEFAULT_MAP} (docs/rom_pipeline.md, Decomp build)")
+    return SymbolMap.from_map(DEFAULT_MAP)

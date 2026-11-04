@@ -25,3 +25,37 @@ A hash mismatch stops the build with the path, the expected hash and the actual 
 Tests that need a local input skip when it is absent.
 
 **Never commit `data/local.toml`, a ROM, a patch or a save.**
+
+## Decomp build
+
+The ROM diff names the function or data symbol behind every changed byte from the
+Metrowerks linker map of the vanilla decomp build (`build/main.nef.xMAP`, written by
+`-map closure,unused` at `meson.build:99`). Build it once, in WSL
+(`external/pokeplatinum/INSTALL.md`, WSL2 section and §2-3):
+
+0. Precheck, in PowerShell: `wsl -l -v` must list `Ubuntu` with `VERSION 2`. On WSL 1,
+   `INSTALL.md` advises building on the Windows drive instead of the Linux filesystem;
+   stop and ask rather than adapting the steps.
+1. In `wsl -d Ubuntu` (needs your sudo password; `INSTALL.md:72-75`):
+   `sudo dpkg --add-architecture i386 && sudo apt update`
+   `sudo apt install bison flex g++ gcc-arm-none-eabi git make ninja-build pkg-config wget python3 xz-utils nasm libc6:i386 libpng-dev`
+2. Then, in the Linux filesystem (`INSTALL.md:66-69, 315-318, 324-334`):
+   `cd ~ && git clone https://github.com/pret/pokeplatinum && cd pokeplatinum && git -c advice.detachedHead=false checkout 579d2d5c65e736a1a4268fb7acbfd70712177c6c && make`
+   `make` is `release check` (`Makefile:96-106`): it downloads metroskrew and meson 1.12.0,
+   builds `build/pokeplatinum.us.nds`, and its "ROM Checksum" test must pass (SHA-1
+   `0862ec35…755c`, `INSTALL.md:334`).
+3. `ls build/*.xMAP`. Expected `build/main.nef.xMAP`.
+4. Copy the map and `platinum.us/main.lsf` into the worktree. In WSL, with `WT` set to the
+   worktree's Windows path exactly as `git rev-parse --show-toplevel` prints it there (for
+   example `G:/Farry/Claude Workspace/Pokemon Platinum Game Engine/.claude/worktrees/k1-rom-pipeline`):
+   ```bash
+   DEST="$(wslpath -a "$WT")/.cache/decomp/579d2d5c65e736a1a4268fb7acbfd70712177c6c"
+   mkdir -p "$DEST" && cp build/main.nef.xMAP platinum.us/main.lsf "$DEST/" && ls -l "$DEST"
+   ```
+
+Expected: `sha1sum build/pokeplatinum.us.nds` prints `0862ec35b24de5c7e2dcb88c9eea0873110d755c`.
+
+`tools/rom/symbols.py` reads the map from `.cache/decomp/<commit>/main.nef.xMAP`
+(git-ignored); the symbol tests skip when it is absent. **Never commit the map or
+`main.lsf`**; only the hand-cut excerpt `tests/tools/rom/fixtures/xmap_excerpt.txt`
+(names and addresses) is committed.
