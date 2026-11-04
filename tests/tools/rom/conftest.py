@@ -58,3 +58,21 @@ def kaizo_bytes(kaizo_inputs):
 
     path, _ = kaizo_rom(kaizo_inputs)
     return path.read_bytes()
+
+
+@pytest.fixture(scope="session")
+def vanilla_files(vanilla_bytes):
+    """The vanilla ROM's unpacked file system."""
+    pytest.importorskip("ndspy")
+    from tools.rom.nds import RomFiles
+
+    return RomFiles.open(vanilla_bytes)
+
+
+@pytest.fixture(scope="session")
+def kaizo_files(kaizo_bytes):
+    """The patched Kaizo ROM's unpacked file system."""
+    pytest.importorskip("ndspy")
+    from tools.rom.nds import RomFiles
+
+    return RomFiles.open(kaizo_bytes)
