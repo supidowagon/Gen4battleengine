@@ -630,7 +630,9 @@ def _files_lines(diff: RomDiff, decomp: Path | None) -> list[str]:
 def _code_lines(diff: RomDiff, classification: dict) -> list[str]:
     total = sum(diff.relocations.values())
     summary = (f"{len(diff.code)} changed ranges; {total} relocated units are counted apart "
-               "(re-encoded only because what they point at moved).")
+               "(re-encoded only because what they point at moved). Rows with status `-` and 0 bytes "
+               "changed are symbols with no changed range, only such re-encoded references to "
+               "moved code or data: they are counted, not classified, and not stale-checked.")
     out = ["## Code", "", summary, ""]
     by_key: dict[tuple[str, str], list[CodeChange]] = {}
     for c in diff.code:
@@ -712,6 +714,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.init_classification and args.classification.exists():
         print(f"{args.classification} exists; not overwriting it", file=sys.stderr)
         return 1
+    if not args.decomp.exists():
+        print(f"decomp not found at {args.decomp}: the report's member labels come from it "
+              "(clone it with tools/clone_decomp.sh, or pass --decomp)", file=sys.stderr)
+        return 1
 
     from tools.rom.inputs import VANILLA_SHA1, load_inputs, read_checked
     from tools.rom.nds import RomFiles
@@ -730,10 +736,13 @@ def main(argv: list[str] | None = None) -> int:
                                        newline="\n")
         print(f"wrote {args.classification}: {len(_changed_keys(diff))} entries")
         return 0
-    classification = (load_classification(args.classification)
-                      if args.classification.exists() else {})
-    write_report(diff, classification, args.out,
-                 decomp=args.decomp if args.decomp.exists() else None)
+    if args.classification.exists():
+        classification = load_classification(args.classification)
+    else:
+        print(f"{args.classification} not found; every change is reported as unknown "
+              "(--init-classification writes one)", file=sys.stderr)
+        classification = {}
+    write_report(diff, classification, args.out, decomp=args.decomp)
     print(f"wrote {args.out}")
     return 0
 

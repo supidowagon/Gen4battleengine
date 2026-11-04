@@ -93,21 +93,25 @@ def test_unknown_status_raises(tmp_path):
         load_classification(p)
 
 
-def test_range_key_for_code_outside_symbols():
+def test_range_key_for_code_outside_symbols(tmp_path):
     d = diff_roms(fake(), fake(ov3=poke(CODE, 0x04, b"\xff")), SYMS)
     assert [c.symbol for c in d.code] == [None]
-    assert set(load_classification_text(classification_skeleton(d))) == {
-        ("overlay3", "0x02200004-0x02200005")}
+    p = tmp_path / "c.toml"
+    p.write_text(classification_skeleton(d))
+    assert set(load_classification(p)) == {("overlay3", "0x02200004-0x02200005")}
 
 
-def load_classification_text(text):
-    import tempfile
-    from pathlib import Path
+def test_missing_decomp_is_an_error(tmp_path, capsys):
+    argv = ["--decomp", str(tmp_path / "nope"), "--classification", str(tmp_path / "c.toml"),
+            "--out", str(tmp_path / "r.md")]
+    assert main(argv) == 1
+    assert "decomp not found" in capsys.readouterr().err
+    assert not (tmp_path / "r.md").exists()
 
-    with tempfile.TemporaryDirectory() as t:
-        p = Path(t) / "c.toml"
-        p.write_text(text)
-        return load_classification(p)
+
+def test_report_explains_relocation_only_rows(tmp_path):
+    write_report(D, {}, tmp_path / "r.md", PROV)
+    assert "not stale-checked" in (tmp_path / "r.md").read_text()
 
 
 def test_files_section(tmp_path):

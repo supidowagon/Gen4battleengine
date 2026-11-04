@@ -95,7 +95,7 @@ None.
 
 ## Code
 
-398 changed ranges; 4642 relocated units are counted apart (re-encoded only because what they point at moved).
+398 changed ranges; 4642 relocated units are counted apart (re-encoded only because what they point at moved). Rows with status `-` and 0 bytes changed are symbols with no changed range, only such re-encoded references to moved code or data: they are counted, not classified, and not stale-checked.
 
 ### arm9
 
