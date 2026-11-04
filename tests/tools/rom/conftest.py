@@ -41,3 +41,20 @@ def decomp():
 def charmap(decomp):
     """The decomp's font charmap, for decoding message banks."""
     return extract_charmap(decomp)
+
+
+@pytest.fixture(scope="session")
+def kaizo_inputs(rom_inputs):
+    """The configured inputs with a Kaizo patch; skips when the patch is absent."""
+    if rom_inputs.kaizo_patch is None or not rom_inputs.kaizo_patch.exists():
+        pytest.skip("no kaizo_patch configured")
+    return rom_inputs
+
+
+@pytest.fixture(scope="session")
+def kaizo_bytes(kaizo_inputs):
+    """The patched Kaizo ROM bytes, built once into the default cache."""
+    from tools.rom.patch import kaizo_rom
+
+    path, _ = kaizo_rom(kaizo_inputs)
+    return path.read_bytes()

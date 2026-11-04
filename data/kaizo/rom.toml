@@ -1,0 +1,10 @@
+# Patched Kaizo ROM (vanilla Platinum US + Nightmare Update Final xdelta). Hashes only, no ROM bytes.
+# game_code is JAK7, not vanilla's CPUE: measured 2026-11-03 (plan K1 Ruling 1); the patch changes it.
+vanilla_sha1 = "0862ec35b24de5c7e2dcb88c9eea0873110d755c"
+patch_sha256 = "b787e743b5fa78e1b31bae9277e656482b7248b82e490a6e95236606ae92f433"
+sha1 = "e8d13c6504406324a4a9ea9daf8d6bd409f8a644"
+size = 134217728
+title = "POKEMON PL"
+game_code = "JAK7"
+maker = "01"
+revision = 1
