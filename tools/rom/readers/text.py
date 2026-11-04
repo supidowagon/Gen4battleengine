@@ -19,7 +19,32 @@ TERMINATOR = 0xFFFF
 COMPRESSED = 0xF100  # tools/msgenc/MessagesDecoder.cpp:138
 
 
-def decode_bank(data: bytes, charmap: dict[int, str]) -> list[str]:
+def _trainer_name(words: list[int], where: str, charmap: dict[int, str]) -> str:
+    """Unpack a trainer name: 9-bit codes packed 15 bits to a u16, ending at 0x1FF
+    (``String_ConcatTrainerName``, ``src/string_gf.c:428-466``; the encoder side is
+    ``tools/msgenc/MessagesDecoder.cpp:69-88``). ``words`` follow the marker and include
+    the entry's 0xFFFF terminator."""
+    chars = []
+    bit = 0
+    at = 0
+    while True:
+        if at >= len(words):
+            raise ReaderError(f"{where}: trainer name has no 0x1ff terminator")
+        code = (words[at] >> bit) & 0x1FF
+        bit += 9
+        if bit >= 15:
+            at += 1
+            bit -= 15
+            if bit:
+                code |= (words[at] << (9 - bit)) & 0x1FF
+        if code == 0x1FF:
+            return "".join(chars)
+        if code not in charmap:
+            raise ReaderError(f"{where}: trainer name code {code:#x} is not in the charmap")
+        chars.append(charmap[code])
+
+
+def decode_bank(data: bytes, charmap: dict[int, str], trainer_names: bool = False) -> list[str]:
     """Decode a message bank: header ``u16 count, u16 seed`` and ``count`` ``(u32 offset,
     u32 length)`` entries (``include/message.h:9-19``), offsets from the bank start,
     lengths in u16 characters.
@@ -27,7 +52,8 @@ def decode_bank(data: bytes, charmap: dict[int, str]) -> list[str]:
     The entry is XORed with ``seed' | seed' << 16`` where ``seed' = (seed * 765 *
     (i + 1)) & 0xFFFF`` (``src/message.c:16-23``); character ``k`` is XORed with
     ``((i + 1) * 596947 + k * 18749) & 0xFFFF`` (``src/message.c:25-34``). Each entry must end with
-    ``0xFFFF`` at its last character and contain none earlier. A code outside the charmap or the ``0xF100`` compressed marker raises.
+    ``0xFFFF`` at its last character and contain none earlier. A code outside the charmap or the ``0xF100`` compressed marker raises, except that with ``trainer_names`` an
+    entry starting with the marker is unpacked as a trainer name.
     """
     if len(data) < 4:
         raise ReaderError(f"message bank: {len(data)} bytes, shorter than its header")
@@ -54,6 +80,18 @@ def decode_bank(data: bytes, charmap: dict[int, str]) -> list[str]:
                 f"in {len(data)} bytes or is empty"
             )
         key = (i + 1) * KEY_START
+        if trainer_names:
+            ws = []
+            for j in range(length):
+                ws.append(
+                    struct.unpack_from("<H", data, off + 2 * j)[0] ^ ((key + j * KEY_INC) & 0xFFFF)
+                )
+            if ws[0] == COMPRESSED:
+                where = f"message bank entry {i} (offset {off:#x})"
+                if ws[-1] != TERMINATOR:
+                    raise ReaderError(f"{where}: last character {ws[-1]:#x} is not 0xffff")
+                out.append(_trainer_name(ws[1:], where, charmap))
+                continue
         chars = []
         for j in range(length):
             at = off + 2 * j
@@ -84,7 +122,13 @@ def decode_bank(data: bytes, charmap: dict[int, str]) -> list[str]:
     return out
 
 
-def message_bank(rom: RomFiles, decomp: Path, bank: str, charmap: dict[int, str]) -> list[str]:
+def message_bank(
+    rom: RomFiles,
+    decomp: Path,
+    bank: str,
+    charmap: dict[int, str],
+    trainer_names: bool = False,
+) -> list[str]:
     """Bank ``bank`` (a ``TEXT_BANK_*`` constant) of ``pl_msg.narc``; the member index is
     the constant's line in ``generated/text_banks.txt`` (``res/text/meson.build:4-8``)."""
     index = _index(_constants(decomp, "text_banks", "TEXT_BANK_"), "text bank")(bank)
@@ -94,6 +138,6 @@ def message_bank(rom: RomFiles, decomp: Path, bank: str, charmap: dict[int, str]
             f"{MSG_NARC}: {bank} is member {index} but the archive has {len(members)}"
         )
     try:
-        return decode_bank(members[index], charmap)
+        return decode_bank(members[index], charmap, trainer_names)
     except ReaderError as e:
         raise ReaderError(f"{MSG_NARC} member {index} ({bank}): {e}") from e
