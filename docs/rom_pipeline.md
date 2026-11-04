@@ -68,6 +68,14 @@ addresses, sizes and counts only, never ROM bytes. Defaults find `data/local.tom
 at `.cache/decomp/<commit>/main.nef.xMAP` and the decomp at `external/pokeplatinum`; the flags
 `--symbols`, `--decomp`, `--classification` and `--out` override them.
 
+Beyond the file system the report compares the ARM9 overlay table (per entry: RAM address,
+RAM size, BSS size, static-initialiser range, file id, compressed size and flags), the ARM9
+footer, the ARM7 binary and overlay table, and the banner (binaries by size and SHA-1),
+listing differing fields only. Its "Injected code" section names code the patch loads from a
+file-system member (declared in `tools/rom/diff.py` `KAIZO_INJECTED_CODE`) with every listed
+code change whose Thumb `BL` targets it; a `BL` from a listed change to an address in no
+module and no declared region is listed as an unexplained far call.
+
 `data/kaizo/rom_diff.toml` classifies every changed symbol (`[[code]]` tables with `module`,
 `symbol`, `status` and `note`; `symbol` is `"0xSTART-0xEND"` for a range outside every symbol;
 `status` is `modelled`, `irrelevant` or `unknown`). `--init-classification` writes an
@@ -89,12 +97,49 @@ the font encoding and has no table in the ROM). For vanilla, the output equals t
 extractor's, which `tests/tools/rom/test_extract_rom.py` checks file by file.
 
 `rom_sources.json` beside the outputs maps each file to `"rom"` or a `"decomp: ..."` reason.
+`rom_unresolved.json` lists every trainer battle command whose operand is a variable that some
+walked script path reaches with no constant assigned (script member, offset, variable, and how
+many constants other paths give); each is also printed to stderr as a warning, since a trainer
+it hides is placed on no map through it. Vanilla has two: `scripts_pokemon_mansion.s:183` and
+`scripts_battleground.s:242` (scr_seq members 454 and 1101).
 
 Writes go to a temporary directory next to `--out` and are moved in file by file with
-`os.replace`; other files in `--out` are kept, and on failure `--out` is not created or changed.
+`os.replace`; other files in `--out` are kept, and a failure before the files are moved in
+leaves `--out` untouched (a failure of `os.replace` midway leaves the files moved so far).
 
 `--game kaizo` runs the ROM diff, checks that the sources of the reused tables
 (`sTypeMatchupMultipliers`, `sNatureStatAffinities`, the ability, type and nature name banks)
 are unchanged, runs the readers that do not depend on the trainer layout as layout checks, and
 then refuses: `trainers: the Kaizo trainer layout is not confirmed (spec §5.4); Kaizo
 extraction lands in K2b`. Nothing is written.
+
+## Known Kaizo differences
+
+Found by the K1 final review; each is refused or reported rather than read silently.
+
+- **Map headers moved.** Kaizo rewrote every `MapHeader_Get*` accessor (`muls` /
+  `&sMapHeaders + field` became `adds` / `nop` with a bare field-offset literal) and
+  `MapHeader_IDBoundsCheck` (now a NARC load), and reads DSPRE dynamic headers from
+  `debug/cb_edit/d_test.narc` (618 members of 24 bytes). The ARM9 `sMapHeaders` bytes are
+  untouched, so the code diff shows nothing there: only 455 of 593 headers equal vanilla, 61
+  differ in weather and 25 maps are new; `zone_event.narc` has 557 members (vanilla 534) and
+  `scr_seq.narc` 1126 (1124). `tools.rom.readers.maps` (`trainer_start_conditions`,
+  `trainer_maps`, the weather lookup) raises for any game code other than `CPUE`; reading
+  `d_test.narc` is K2b work.
+- **Overlay 16 grew** by 32 bytes; `sTypeMatchupMultipliers` sits 28 bytes further on.
+  `symbol_bytes` raises when a module image's size differs from the linker map's
+  (`SDK_STATIC_SIZE`, `SDK_AUTOLOAD.<name>.SIZE`, `SDK_OVERLAY.<name>.SIZE`), so no
+  symbol is read at a stale address; a reader of a moved symbol needs an explicit address
+  mapping.
+- **Injected code.** `data/weather_sys.narc` member 9 grew from 552 to 90112 bytes: it is
+  code loaded at `0x023C8000` (`NitroMain` and `OS_GetInitArenaLo` changed to load it), called
+  from `HandleInput_Main`, `PartyMenuCB_LevelUp` and `SetMonDataFromMon` (the report's
+  "Injected code" section).
+- **Overlay table.** Every ARM9 overlay entry stores its size in the compressed-size word
+  (vanilla 0, flags unchanged); overlay 16's RAM size and static-initialiser range moved.
+  The ARM9 footer's ModuleParams offset changed (`0xBA0` -> `0xAD8`).
+- **Learnsets.** One species (member 359) has 21 level-up entries (vanilla at most 20,
+  `MAX_LEARNSET_ENTRIES`; 21 still fit the 44-byte `SpeciesLearnset` buffer with the
+  terminator), and 48 members are 2 mod 4 bytes long.
+- **Unresolved battle operand.** `scr_seq.narc` member 136 (Veilstone City) has a battle
+  whose variable no constant reaches (vanilla's two are listed under Extraction).
