@@ -199,8 +199,16 @@ measured 2026-11-02): default suite, whole file about 300 s (`test_funnel_matche
 rungs 0 and 1, 500 playouts) 484 s and 394 s, 880 s in all; both rungs pass. The default-suite
 overrun is reported to the controller rather than gated (plan Step 3).
 
-The overnight result is committed as `benchmarks/exhaustive_roark.json` when the run finishes
-(it needs the user's save, which is not available to the implementer; see the task report).
+Result (`benchmarks/exhaustive_roark.json`, user's save, 20 host devices, i5-13600K, run
+2026-11-02 to 2026-11-04, about 37 h of compute over several resumes): 3555 restricted setups, 0
+pruned (the prune drops nothing on this save). **Rung 0 FAILED**: pick #3357 (PSYDUCK / FURRET /
+ZUBAT / SPINARAK / VENONAT / GEODUDE with Rock Polish) 0.989 [0.982, 0.996], best #891 (PSYDUCK /
+FURRET with Fury Swipes / MONFERNO / ZUBAT) 0.999 [0.996, 1.0]; phase 2 covered 2335 setups. **Rung
+1 PASSED**: pick #2961 1.0 [0.998, 1.0], e_deaths 0.005, ties best #23 1.0 [0.993, 1.0]; phase 2
+covered 2930 setups. Phase seconds: rung 0 funnel 165, phase 1 10903, phase 2 39998; rung 1 funnel
+105, phase 1 16675, phase 2 54313. The rung-0 miss was traced to the funnel's saturated tie-breaks
+(unequal playout counts at the variant cut, whole-party HP left, and the cost-first leader rule);
+the fixes are checked against these stored values rather than by a new run.
 
 # Milestone 4: `nuzline prep` wall time
 
