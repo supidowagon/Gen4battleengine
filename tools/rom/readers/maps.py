@@ -19,6 +19,13 @@ Two controller rulings (Task 12) refine Ruling 12 for the script walk (details i
   trainer on the map: it becomes the player's walking partner and joins the map's battles
   (``src/scrcmd_trainer.c:133-134``, ``src/overlay006/wild_encounters.c:344,531,661``).
   This places 608 Cheryl, 609 Riley, 610 Marley, 611 Buck and 612 Mira as the decomp does.
+  Limitation: the partner is placed only on the map whose script sets the variable,
+  although it stays the partner, and fights, on every map it crosses until the variable
+  is cleared; the start conditions of those other maps are not added.
+
+A battle operand variable that some walked path reaches with no constant assigned places
+nothing from that path; it is returned as an ``UnresolvedOperand`` so ``extract_rom``
+reports it (K1 final review).
 """
 
 from __future__ import annotations
@@ -27,7 +34,7 @@ import re
 import struct
 from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
 
 from tools.extract_decomp import (
     START_CONDITIONS_FILE,
@@ -57,6 +64,9 @@ DAYS_OF_YEAR = 366
 REMATCH_SYMBOL = "gVsSeekerRematchData"  # src/overlay005/vs_seeker.c:79-81,125
 REMATCH_SLOTS = 6  # VS_SEEKER_MAX_REMATCHES, vs_seeker.c:43
 REMATCH_NONE = (0, 0xFFFF)  # VS_SEEKER_REMATCH_DATA_END / _NONE, vs_seeker.c:44-45
+# The game whose MapHeader_* accessors read sMapHeaders (src/map_header.c:8-21).
+VANILLA_GAME_CODE = "CPUE"
+KAIZO_MAP_HEADERS = "debug/cb_edit/d_test.narc"
 
 # zone_event.narc member (tools/jsoncnv/event.py:25-131): bg events, object events, warp
 # events and coord events, each a u32 count followed by fixed-size records.
@@ -100,6 +110,17 @@ _PATH_ENDS = {"SCRCMD_END", "SCRCMD_RETURN", "SCRCMD_GOTO"}
 # Battle commands whose every operand is a trainer (asm/macros/scrcmd.inc:1427,1780,4020).
 _BATTLES = {"SCRCMD_STARTTRAINERBATTLE", "SCRCMD_STARTTAGBATTLE", "SCRCMD_STARTFIRSTBATTLE"}
 _SET_VAR = "SCRCMD_SETVARFROMVALUE"  # destVarID u16, value u16 (scrcmd.inc:297-301)
+
+
+class UnresolvedOperand(NamedTuple):
+    """A battle command operand that is a variable some walked path reaches with no
+    constant assigned: ``scr_seq.narc`` member, offset of the battle command in it,
+    variable id, and how many constants other paths give it (0: none at all)."""
+
+    member: int
+    offset: int
+    variable: int
+    constants: int
 
 
 class ScriptDecodeError(ReaderError):
@@ -383,11 +404,19 @@ def _decode(script: bytes, table: CommandTable, name: str, pos: int):
     return op, values, end
 
 
-# A path's constant variable values: var -> the values its last SetVarFromValue gave.
+# A path's constant variable values: var -> the values its last SetVarFromValue gave, with
+# NOT_CONSTANT for a path on which no SetVarFromValue gave one. An absent var is _UNSET.
 _Env = dict[int, frozenset[int]]
+NOT_CONSTANT = -1
+_UNSET = frozenset({NOT_CONSTANT})
 
 
-def script_battles(script: bytes, table: CommandTable, name: str = "script") -> set[int]:
+def script_battles(
+    script: bytes,
+    table: CommandTable,
+    name: str = "script",
+    unresolved: list[tuple[int, int, int]] | None = None,
+) -> set[int]:
     """Trainer ids placed on the map by the script, walking by control flow from every
     header entry.
 
@@ -405,7 +434,11 @@ def script_battles(script: bytes, table: CommandTable, name: str = "script") -> 
       item and accessory ids written to ``VAR_0x8004`` for unrelated reasons and
       misplaced 12 vanilla trainers (e.g. 390 Arthur from ``ITEM_TM63`` in Veilstone
       City, 447 Willie from ``ITEM_SUPER_ROD`` in the Fight Area). Variables written by
-      other commands are not constants and add nothing.
+      other commands are not constants and add nothing. A battle operand variable that
+      some walked path reaches with no constant assigned is appended to ``unresolved``
+      (when given) as ``(offset of the battle command, variable, number of constants the
+      other paths give)``, sorted, so a caller can report it: whatever that path holds in
+      the variable is a trainer this walk does not place.
     * A constant assigned to ``VAR_PARTNER_TRAINER_ID`` on a reached path places that
       trainer too (controller ruling B): it makes the trainer the player's walking
       partner, who joins the battles on that map. The battle setup reads it through
@@ -426,6 +459,7 @@ def script_battles(script: bytes, table: CommandTable, name: str = "script") -> 
     decoded: dict[int, tuple[int, list[int], int]] = {}
     seen: dict[tuple[int, tuple[int, ...]], _Env] = {}
     out: set[int] = set()
+    operands: dict[tuple[int, int], set[int]] = {}  # (battle offset, variable) -> values
     work: list[tuple[int, tuple[int, ...], _Env]] = [
         (e, (), {}) for e in script_entries(script, name)
     ]
@@ -433,9 +467,7 @@ def script_battles(script: bytes, table: CommandTable, name: str = "script") -> 
         pos, stack, env = work.pop()
         old = seen.get((pos, stack))
         if old is not None:
-            merged = {
-                v: old.get(v, frozenset()) | env.get(v, frozenset()) for v in old.keys() | env
-            }
+            merged = {v: old.get(v, _UNSET) | env.get(v, _UNSET) for v in old.keys() | env}
             if merged == old:
                 continue
             env = merged
@@ -445,7 +477,12 @@ def script_battles(script: bytes, table: CommandTable, name: str = "script") -> 
         op, values, end = decoded[pos]
         if op in battles:
             for v in values:
-                out |= env.get(v, frozenset()) if v >= VARS_START else {v}
+                if v >= VARS_START:
+                    values_of = env.get(v, _UNSET)
+                    operands.setdefault((pos, v), set()).update(values_of)
+                    out |= values_of - _UNSET
+                else:
+                    out.add(v)
         elif op == set_var:
             if values[0] == table.partner_var:
                 out.add(values[1])
@@ -468,6 +505,14 @@ def script_battles(script: bytes, table: CommandTable, name: str = "script") -> 
             continue
         work.append((end, stack, env))
     out.discard(0)
+    if unresolved is not None:
+        unresolved.extend(
+            sorted(
+                (pos, v, len(vals) - 1)
+                for (pos, v), vals in operands.items()
+                if NOT_CONSTANT in vals
+            )
+        )
     return out
 
 
@@ -497,6 +542,26 @@ def _events_object_scripts(member: bytes, index: int) -> list[int]:
     return scripts
 
 
+def require_vanilla_map_headers(rom: RomFiles) -> None:
+    """Raise unless ``rom`` is vanilla Platinum (game code ``CPUE``).
+
+    ``sMapHeaders`` and ``sYearlyWeather`` are read at their vanilla linker-map addresses,
+    which is sound only while the game's accessors read them. Kaizo (``JAK7``) rewrote
+    every ``MapHeader_Get*`` accessor (``muls``/``&sMapHeaders + field`` became
+    ``adds``/``nop`` with a bare field offset) and ``MapHeader_IDBoundsCheck`` (now a NARC
+    load) to read DSPRE dynamic headers from ``debug/cb_edit/d_test.narc`` (618 members of
+    24 bytes), and left the ARM9 ``sMapHeaders`` bytes untouched: the stale table would be
+    read without any diff showing it (K1 final review: 455 of 593 headers equal vanilla,
+    61 differ in weather, 25 maps are new).
+    """
+    if rom.game_code != VANILLA_GAME_CODE:
+        raise ReaderError(
+            f"map headers: this ROM (game code {rom.game_code}) does not read "
+            f"{MAP_HEADER_SYMBOL} (Kaizo moved them to {KAIZO_MAP_HEADERS}); "
+            "reading them is K2b work (K1 final review)"
+        )
+
+
 def _weather_names(decomp: Path) -> tuple[dict[int, str], int, int]:
     """Overworld weather id -> constant (``include/constants/overworld_weather.h``), as
     ``_weather_conditions`` reads it, with the yearly weathers' first id and count."""
@@ -517,6 +582,7 @@ def _weather_names(decomp: Path) -> tuple[dict[int, str], int, int]:
 
 def _map_conditions(rom: RomFiles, decomp: Path, symbols: SymbolMap, weathers: list[int]):
     """Map header weather id -> the set of start conditions it can give."""
+    require_vanilla_map_headers(rom)
     names, start, count = _weather_names(decomp)
     yearly = symbol_bytes(rom, symbols, YEARLY_SYMBOL)
     if len(yearly) != DAYS_OF_YEAR * count:
@@ -537,10 +603,19 @@ def _map_conditions(rom: RomFiles, decomp: Path, symbols: SymbolMap, weathers: l
 
 
 def trainer_maps(
-    rom: RomFiles, decomp: Path, symbols: SymbolMap, n_trainers: int
+    rom: RomFiles,
+    decomp: Path,
+    symbols: SymbolMap,
+    n_trainers: int,
+    unresolved: list[UnresolvedOperand] | None = None,
 ) -> tuple[dict[int, set[int]], list[int]]:
     """Trainer id -> the map header ids where a battle with it starts, and each map
-    header's weather id."""
+    header's weather id. Vanilla only (``require_vanilla_map_headers``).
+
+    Each battle operand variable no constant reaches is appended to ``unresolved`` (when
+    given), once per script file, in script member order.
+    """
+    require_vanilla_map_headers(rom)
     raw = symbol_bytes(rom, symbols, MAP_HEADER_SYMBOL)
     if len(raw) % MAP_HEADER_SIZE:
         raise ReaderError(f"{MAP_HEADER_SYMBOL}: {len(raw)} bytes, not whole {MAP_HEADER_SIZE}s")
@@ -550,6 +625,7 @@ def trainer_maps(
     battles: dict[int, set[int]] = {}
     where: dict[int, set[int]] = {}
     weathers = []
+    found: list[UnresolvedOperand] = []
 
     def place(trainer: int, header: int, source: str) -> None:
         if not 0 < trainer < n_trainers:
@@ -571,9 +647,11 @@ def trainer_maps(
             elif DOUBLE_BATTLE_SCRIPTS <= s < VISIBLE_ITEM_SCRIPTS:
                 place(s - DOUBLE_BATTLE_SCRIPTS + 1, header, f"{EVENTS_NARC} {events_id}")
         if script_id not in battles:
+            sites: list[tuple[int, int, int]] = []
             battles[script_id] = script_battles(
-                scripts[script_id], table, f"{SCRIPTS_NARC} member {script_id}"
+                scripts[script_id], table, f"{SCRIPTS_NARC} member {script_id}", sites
             )
+            found.extend(UnresolvedOperand(script_id, *site) for site in sites)
         for t in battles[script_id]:
             place(t, header, f"{SCRIPTS_NARC} {script_id}")
 
@@ -583,12 +661,16 @@ def trainer_maps(
         raise ReaderError(f"{REMATCH_SYMBOL}: {len(rematch)} bytes, not whole {row}-byte rows")
     for off in range(0, len(rematch), row):
         base, *rematches = struct.unpack_from(f"<{REMATCH_SLOTS}H", rematch, off)
+        if not 0 < base < n_trainers:
+            raise ReaderError(f"{REMATCH_SYMBOL} offset {off}: unknown base trainer {base}")
         for t in rematches:
             if t in REMATCH_NONE:
                 continue
             if not 0 < t < n_trainers:
                 raise ReaderError(f"{REMATCH_SYMBOL} offset {off}: unknown trainer {t}")
             where.setdefault(t, set()).update(where.get(base, set()))
+    if unresolved is not None:
+        unresolved.extend(sorted(found))
     return where, weathers
 
 
@@ -598,12 +680,17 @@ def trainer_start_conditions(
     symbols: SymbolMap,
     *,
     overrides: Path | None = START_CONDITIONS_FILE,
+    unresolved: list[UnresolvedOperand] | None = None,
 ) -> list[str]:
     """One start condition per trainer id, derived as ``extract_decomp.extract_trainers``
-    does (§6.3) from the maps of ``trainer_maps``."""
+    does (§6.3) from the maps of ``trainer_maps``. Vanilla only: any other game code
+    raises (``require_vanilla_map_headers``). Battle operand variables that no constant
+    reaches are appended to ``unresolved`` (see ``trainer_maps``): a trainer behind one is
+    on no map through that battle, so callers must report them."""
+    require_vanilla_map_headers(rom)
     decomp = Path(decomp)
     trainers = _constants(decomp, "trainers", "TRAINER_")
-    where, weathers = trainer_maps(rom, decomp, symbols, len(trainers))
+    where, weathers = trainer_maps(rom, decomp, symbols, len(trainers), unresolved)
     conditions = _map_conditions(rom, decomp, symbols, weathers)
     fixed = _start_condition_overrides(overrides, trainers) if overrides else {}
     out = []

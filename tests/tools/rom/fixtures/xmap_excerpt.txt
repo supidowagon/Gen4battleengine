@@ -6,6 +6,7 @@
   020793B8 00000410 .text   TrainerData_BuildParty	(src_trainer_data.c.o)
   020793B8 00000000 .text   $t	(src_trainer_data.c.o)
   020796E0 00000000 .text   $d	(src_trainer_data.c.o)
+#>00101D20          SDK_STATIC_SIZE (linker command file)
 # .ITCM
 #>00000000          SDK_AUTOLOAD_ITCM_ID (linker command file)
 #>00000000          SDK_AUTOLOAD.ITCM.ID (linker command file)
@@ -13,6 +14,7 @@
 #>01FF8000          SDK_AUTOLOAD.ITCM.TEXT_START (linker command file)
   01FF8000 00000000 .itcm   $a	(libos.a src_os_irqhandl)
   01FF8000 00000068 .itcm   OS_IrqHandler	(libos.a src_os_irqhandl)
+#>00000660          SDK_AUTOLOAD.ITCM.SIZE (linker command file)
 # .trainer_ai
 #>0000000E          SDK_OVERLAY_trainer_ai_ID (linker command file)
 #>0000000E          SDK_OVERLAY.trainer_ai.ID (linker command file)
@@ -20,6 +22,7 @@
 #>0221FC20          SDK_OVERLAY.trainer_ai.TEXT_START (linker command file)
   0221FC20 000000D2 .text   TrainerAI_Init	(src_battle_trainer_ai_trainer_ai.c.o)
   02222E84 000003F8 .text   TrainerAI_CalcDamage	(src_battle_trainer_ai_trainer_ai.c.o)
+#>0000F460          SDK_OVERLAY.trainer_ai.SIZE (linker command file)
 # .trainer_ai.bss
 #>0222F080          SDK_OVERLAY.trainer_ai.BSS_START (linker command file)
 # .battle
@@ -29,6 +32,7 @@
 #>0223B140          SDK_OVERLAY.battle.TEXT_START (linker command file)
   0223B140 00000000 .text   $t	(src_battle_battle_main.c.o)
   0226ECD4 00000150 .rodata sTypeMatchupMultipliers	(src_battle_battle_lib.c.o)
+#>00035A80          SDK_OVERLAY.battle.SIZE (linker command file)
 # .battle.bss
 #>02270BC0          SDK_OVERLAY.battle.BSS_START (linker command file)
 # Memory map:

@@ -53,3 +53,19 @@ def test_example_config_parses():
 
 def test_vanilla_rom_hash(vanilla_bytes):  # skips without inputs
     assert len(vanilla_bytes) == 134217728 and vanilla_bytes[12:16] == b"CPUE"
+
+
+def test_rom_fixture_skips_only_when_not_configured(tmp_path):
+    from tests.tools.rom.conftest import inputs_or_skip
+
+    with pytest.raises(pytest.skip.Exception, match="vanilla_rom is not set"):
+        inputs_or_skip(tmp_path / "absent.toml", {})
+    with pytest.raises(pytest.skip.Exception, match="absent"):
+        inputs_or_skip(tmp_path / "absent.toml", {"NUZLINE_VANILLA_ROM": str(tmp_path / "v.nds")})
+    bad = tmp_path / "local.toml"
+    bad.write_text('vanilla_rom = "G:\\x"\n')  # a basic string with a bad escape
+    with pytest.raises(RomInputError, match="literal strings"):
+        inputs_or_skip(bad, {})
+    bad.write_text("vanila_rom = 'x.nds'\n")
+    with pytest.raises(RomInputError, match="unknown key"):
+        inputs_or_skip(bad, {})

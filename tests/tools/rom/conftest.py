@@ -4,21 +4,34 @@ Every fixture that needs a local input skips when it is absent, like the decomp
 tests in ``tests/tools/test_extract_decomp.py``.
 """
 
+import os
+
 import pytest
 
 from tools.extract_decomp import extract_charmap
-from tools.rom.inputs import REPO_ROOT, VANILLA_SHA1, RomInputError, load_inputs, read_checked
+from tools.rom.inputs import REPO_ROOT, VANILLA_SHA1, RomInputNotSet, load_inputs, read_checked
 
 
 @pytest.fixture(scope="session")
 def rom_inputs():
-    """The configured inputs; skips when no vanilla ROM is configured or present."""
+    """The configured inputs; skips when no vanilla ROM is configured or present.
+
+    Only "not configured" skips (no ``data/local.toml`` and no ``NUZLINE_VANILLA_ROM``, or a
+    configured file that is absent): any other ``RomInputError``, such as a malformed
+    ``local.toml``, fails, so it cannot silently skip every ROM test.
+    """
+    return inputs_or_skip(REPO_ROOT / "data" / "local.toml", os.environ)
+
+
+def inputs_or_skip(config, environ):
+    """``load_inputs(config, environ)``; skips only when ``vanilla_rom`` is not set
+    (``RomInputNotSet``) or the configured file is absent."""
     try:
-        inputs = load_inputs()
-    except RomInputError:
-        pytest.skip("no data/local.toml or NUZLINE_VANILLA_ROM")
+        inputs = load_inputs(config, environ)
+    except RomInputNotSet as e:
+        pytest.skip(str(e))
     if not inputs.vanilla_rom.exists():
-        pytest.skip("no data/local.toml or NUZLINE_VANILLA_ROM")
+        pytest.skip(f"configured vanilla ROM {inputs.vanilla_rom} is absent")
     return inputs
 
 

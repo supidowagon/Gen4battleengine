@@ -6,7 +6,7 @@ import pytest
 
 from tools.extract_decomp import extract_trainers
 from tools.rom.readers import ReaderError
-from tools.rom.readers.trainers import party_bytes, read_trainers
+from tools.rom.readers.trainers import TRPOKE_NARC, party_bytes, read_trainers
 
 
 def test_trainers_match_decomp_except_start(vanilla_files, decomp, symbols, charmap, tmp_path):
@@ -34,3 +34,28 @@ def test_party_size_rule():
         party_bytes(bytes(90) + b"\x01\x00", 5, 3, 5)
     with pytest.raises(ReaderError, match="trainer 6"):
         party_bytes(bytes(96), 6, 3, 5)
+
+
+class _Patched:
+    """``rom`` with one ``trpoke.narc`` member replaced."""
+
+    def __init__(self, rom, trainer, member):
+        self._rom, self._trainer, self._member = rom, trainer, member
+
+    def __getattr__(self, name):
+        return getattr(self._rom, name)
+
+    def narc(self, path):
+        members = self._rom.narc(path)
+        if path == TRPOKE_NARC:
+            members = [*members]
+            members[self._trainer] = self._member
+        return members
+
+
+def test_level_above_100_raises(vanilla_files, decomp, symbols, charmap):
+    # Roark (246): the first mon's level is the u16 at offset 2.
+    member = vanilla_files.narc(TRPOKE_NARC)[246]
+    bad = member[:2] + (101).to_bytes(2, "little") + member[4:]
+    with pytest.raises(ReaderError, match="trainer 246 offset 0: level 101 exceeds 100"):
+        read_trainers(_Patched(vanilla_files, 246, bad), decomp, symbols, charmap, ["none"] * 928)

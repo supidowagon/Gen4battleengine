@@ -170,3 +170,77 @@ def test_partner_trainer_var_places_trainer(decomp, table):
         + _cmd(table, "End")
     )
     assert script_battles(head + body, table) == {610}
+
+
+def test_unresolved_operand_reported(table):
+    # Path 1 sets the var, path 2 reaches the same battle with it unset (another command
+    # wrote it); the battle is reported with the one constant the other path gives.
+    head = _script(0)
+    battle = _cmd(table, "StartTrainerBattle", 0x8005, 0) + _cmd(table, "End")
+    set_path = _cmd(table, "SetVarFromValue", 0x8005, 9)
+    goto = _cmd(table, "GoToIf", 1, len(set_path))
+    script = head + goto + set_path + battle
+    sites = []
+    assert script_battles(script, table, unresolved=sites) == {9}
+    at = len(head) + len(goto) + len(set_path)
+    assert sites == [(at, 0x8005, 1)]
+    sites = []
+    assert script_battles(_script(0) + battle, table, unresolved=sites) == set()
+    assert sites == [(6, 0x8005, 0)]
+    sites = []
+    script_battles(_script(0) + _cmd(table, "SetVarFromValue", 0x8005, 9) + battle, table,
+                   unresolved=sites)
+    assert sites == []
+
+
+def test_vanilla_unresolved_operands_pinned(vanilla_files, decomp, symbols):
+    # scr_seq members are scripts.order lines: 454 scripts_pokemon_mansion.s:183
+    # (StartTrainerBattle VAR_0x8007) and 1101 scripts_battleground.s:242
+    # (VAR_MAP_LOCAL_0x05). scripts_pokemon_center_daily_trainers.s:272 (member 400) is no
+    # map header's script file, so the walk never reaches it.
+    from tools.rom.readers.maps import UnresolvedOperand
+
+    found = []
+    trainer_start_conditions(vanilla_files, decomp, symbols, unresolved=found)
+    assert found == [
+        UnresolvedOperand(454, 0x321, 0x8007, 2),
+        UnresolvedOperand(1101, 0x341, 0x4005, 13),
+    ]
+
+
+def test_kaizo_map_headers_refused(kaizo_files, decomp, symbols):
+    from tools.rom.readers import ReaderError
+    from tools.rom.readers.maps import trainer_maps
+
+    with pytest.raises(ReaderError, match=r"JAK7.*sMapHeaders.*debug/cb_edit/d_test\.narc.*K2b"):
+        trainer_start_conditions(kaizo_files, decomp, symbols)
+    with pytest.raises(ReaderError, match="d_test"):
+        trainer_maps(kaizo_files, decomp, symbols, 928)
+
+
+def test_kaizo_unresolved_operands(kaizo_files, table):
+    # The walk over the Kaizo scripts alone (its map headers are not read in K1): member
+    # 136 (Veilstone City) adds a fully unresolved site to vanilla's two.
+    from tools.rom.readers.maps import SCRIPTS_NARC
+
+    scripts = kaizo_files.narc(SCRIPTS_NARC)
+    got = {}
+    for m in (136, 454, 1101):
+        sites = []
+        script_battles(scripts[m], table, unresolved=sites)
+        got[m] = sites
+    assert got == {136: [(909, 0x8004, 0)], 454: [(1403, 0x8007, 2)], 1101: [(833, 0x4005, 13)]}
+
+
+def test_rematch_base_out_of_range_raises(vanilla_files, decomp, symbols, monkeypatch):
+    from tools.rom.readers import ReaderError, maps
+
+    real = maps.symbol_bytes
+
+    def fake(rom, syms, name):
+        data = real(rom, syms, name)
+        return (5000).to_bytes(2, "little") + data[2:] if name == maps.REMATCH_SYMBOL else data
+
+    monkeypatch.setattr(maps, "symbol_bytes", fake)
+    with pytest.raises(ReaderError, match="offset 0: unknown base trainer 5000"):
+        maps.trainer_maps(vanilla_files, decomp, symbols, 928)

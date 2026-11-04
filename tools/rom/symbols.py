@@ -12,6 +12,12 @@ writes ``build/main.nef.xMAP``. ``docs/rom_pipeline.md`` ("Decomp build") copies
   symbols are ``#>ADDRESS          NAME (linker command file)``; among them
   ``SDK_OVERLAY_<name>_ID`` gives the overlay's id (what ``FS_OVERLAY_ID(battle)``
   resolves to, ``src/unk_0203D1B8.c:238``), so section ``battle`` is ``overlay16``.
+  The linker symbols ``SDK_STATIC_START``/``SDK_STATIC_SIZE`` (in ``.main``),
+  ``SDK_AUTOLOAD.<name>.START``/``.SIZE`` (in ``.<name>``) and
+  ``SDK_OVERLAY.<name>.START``/``.SIZE`` (in ``.<name>``) give each module image's RAM
+  start and stored size, read as ``extent``. The same names also appear, with other
+  values, outside their own section (``SDK_AUTOLOAD.ITCM.START`` = 0 size inside
+  ``.main.bss``); only the ones in their own section count.
 - Symbol lines ``  ADDRESS SIZE SECTION NAME\\t(OBJECT)``, hex fields of 8 digits; the
   one ``Exception Table Index`` line has no section. Names may contain spaces
   (``virtual table for ...``). Zero-size lines are labels (``$t``, ``$d``, ``.text``).
@@ -38,6 +44,7 @@ _ARM9_SECTIONS = {"main", "ITCM", "DTCM"}
 _HEADER = re.compile(r"# \.(\S+)")
 _LINKER = re.compile(r"#>([0-9A-F]{8}) +(\S+) \(linker command file\)")
 _OVERLAY_ID = re.compile(r"SDK_OVERLAY_(\w+)_ID")
+_EXTENT = re.compile(r"SDK_(?:STATIC_|(?:AUTOLOAD|OVERLAY)\.(\w+)\.)(START|SIZE)")
 _SYMBOL = re.compile(r"  ([0-9A-F]{8}) ([0-9A-F]{8}) (?:(\.\S+) +| +)(\S.*?)\t\((.*)\)")
 
 
@@ -58,8 +65,11 @@ class Symbol:
 class SymbolMap:
     """Symbols by module; ``lookup`` names the smallest symbol containing an address."""
 
-    def __init__(self, symbols: Iterable[Symbol]):
+    def __init__(
+        self, symbols: Iterable[Symbol], extents: dict[tuple[str, int], int] | None = None
+    ):
         self._all = list(symbols)
+        self._extents = dict(extents or {})
         by_name: dict[str, list[Symbol]] = {}
         by_module: dict[str, list[tuple[int, Symbol]]] = {}
         for order, s in enumerate(self._all):
@@ -74,7 +84,12 @@ class SymbolMap:
 
     @classmethod
     def from_map(cls, path: Path) -> SymbolMap:
-        return cls(_parse(path))
+        return cls(*_parse(path))
+
+    def extent(self, module: str, start: int) -> int | None:
+        """Stored size of the image of ``module`` that starts at RAM ``start`` (an
+        overlay, or one ARM9 section: static, ITCM, DTCM), or None if the map has none."""
+        return self._extents.get((module, start))
 
     def lookup(self, module: str, address: int) -> str | None:
         """Name of the smallest sized symbol whose ``[address, address + size)`` holds it."""
@@ -126,9 +141,10 @@ def _segments(entries: list[tuple[int, Symbol]]) -> tuple[list[int], list[Symbol
     return starts, winners
 
 
-def _parse(path: Path) -> list[Symbol]:
+def _parse(path: Path) -> tuple[list[Symbol], dict[tuple[str, int], int]]:
     text = path.read_text(encoding="utf-8")
     ids: dict[str, int] = {}
+    found: dict[tuple[str, str], int] = {}  # (section, "START" | "SIZE") -> value
     section: str | None = None  # current header's name without ".bss"
     out: list[Symbol] = []
     for lineno, line in enumerate(text.splitlines(), 1):
@@ -142,6 +158,11 @@ def _parse(path: Path) -> list[Symbol]:
             continue  # preamble, blank line, or the ETABLE index title inside ".main"
         linker = _LINKER.fullmatch(line)
         if linker:
+            ext = _EXTENT.fullmatch(linker[2])
+            if ext and (ext[1] or "main") == section:
+                value = int(linker[1], 16)
+                if found.setdefault((section, ext[2]), value) != value:
+                    raise SymbolMapError(f"{path}:{lineno}: {linker[2]} redefined as {value:#x}")
             ov = _OVERLAY_ID.fullmatch(linker[2])
             if ov:
                 value = int(linker[1], 16)
@@ -165,4 +186,15 @@ def _parse(path: Path) -> list[Symbol]:
         )
     else:
         raise SymbolMapError(f"{path}: no '# Memory map:' line; the map looks truncated")
-    return out
+    extents: dict[tuple[str, int], int] = {}
+    for sec in sorted({sec for sec, _ in found}):
+        if (sec, "START") not in found or (sec, "SIZE") not in found:
+            raise SymbolMapError(f"{path}: section .{sec} has a START or SIZE but not both")
+        if sec in _ARM9_SECTIONS:
+            module = "arm9"
+        elif sec in ids:
+            module = f"overlay{ids[sec]}"
+        else:
+            raise SymbolMapError(f"{path}: extent of .{sec}, which has no module")
+        extents[(module, found[(sec, "START")])] = found[(sec, "SIZE")]
+    return out, extents

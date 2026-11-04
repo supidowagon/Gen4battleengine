@@ -110,7 +110,29 @@ def test_fixed_members_reports_member():
 def test_symbol_bytes(vanilla_files, symbols):
     sym = symbols.find("sNatureStatAffinities")
     data = symbol_bytes(vanilla_files, symbols, "sNatureStatAffinities")
-    assert len(data) == sym.size > 0
+    assert len(data) == sym.size == 25 * 5
+    # src/pokemon.c:2415: s8 [nature][stat - 1], stats in the order Attack, Defense, Speed,
+    # Sp. Atk, Sp. Def; nature n raises stat n // 5 and lowers stat n % 5 (neutral if equal).
+    want = bytes(
+        (int(k == n // 5) - int(k == n % 5)) & 0xFF for n in range(25) for k in range(5)
+    )
+    assert data == want
+    ram, arm9 = vanilla_files.arm9_sections()[0]
+    assert data == arm9[sym.address - ram : sym.address - ram + sym.size]
+
+
+def test_symbol_bytes_refuses_resized_overlay(kaizo_files, symbols):
+    # Kaizo's overlay 16 is 0x20 bytes longer and its type chart 28 bytes further on.
+    with pytest.raises(ReaderError, match=r"sTypeMatchupMultipliers.*overlay 16.*0x35aa0.*0x35a80"):
+        symbol_bytes(kaizo_files, symbols, "sTypeMatchupMultipliers")
+
+
+def test_symbol_bytes_without_extent_raises(vanilla_files, symbols):
+    from tools.rom.symbols import SymbolMap
+
+    bare = SymbolMap([symbols.find("sNatureStatAffinities")])
+    with pytest.raises(ReaderError, match="no extent"):
+        symbol_bytes(vanilla_files, bare, "sNatureStatAffinities")
 
 
 def test_symbol_bytes_outside_module_raises(vanilla_files, symbols):
@@ -141,3 +163,33 @@ def test_kaizo_renamed_move(kaizo_files, vanilla_files, decomp, charmap):
     assert moves[4] == "Water Ball"
     van = message_bank(vanilla_files, decomp, "TEXT_BANK_MOVE_NAMES", charmap)
     assert van[4] != moves[4]
+
+
+def pack_name(codes):
+    """9-bit codes packed 15 bits to a u16, low bits first (MessagesDecoder.cpp:69-88)."""
+    bits = sum(c << (9 * i) for i, c in enumerate(codes))
+    n = (9 * len(codes) + 14) // 15
+    return [(bits >> (15 * i)) & 0x7FFF for i in range(n)]
+
+
+def test_compressed_trainer_name_round_trip(charmap):
+    rev = {v: k for k, v in charmap.items()}
+    codes = [rev[c] for c in "Roark"]
+    assert all(c < 0x1FF for c in codes)
+    bank = encode_bank([[0xF100, *pack_name([*codes, 0x1FF])], "Plain"], 0x1234, charmap)
+    assert decode_bank(bank, charmap, trainer_names=True) == ["Roark", "Plain"]
+
+
+def test_malformed_compressed_name_raises_reader_error(charmap):
+    from tools.rom.readers.text import _trainer_name
+
+    rev = {v: k for k, v in charmap.items()}
+    # Words that end in the middle of a code, and words with no 0x1ff code at all.
+    with pytest.raises(ReaderError, match="ends inside a 9-bit code"):
+        _trainer_name(pack_name([rev["A"], rev["B"]]), "entry 0", charmap)
+    with pytest.raises(ReaderError, match="no 0x1ff terminator"):
+        _trainer_name(pack_name([rev["A"]] * 5), "entry 0", charmap)
+    missing = next(c for c in range(0x1FF) if c not in charmap)
+    bank = encode_bank([[0xF100, *pack_name([missing, 0x1FF])]], 0x1234, charmap)
+    with pytest.raises(ReaderError, match=f"entry 0.*{missing:#x} is not in the charmap"):
+        decode_bank(bank, charmap, trainer_names=True)

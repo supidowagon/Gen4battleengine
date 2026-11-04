@@ -36,6 +36,10 @@ class RomInputError(Exception):
     """A ROM pipeline input is missing, malformed or fails its hash check."""
 
 
+class RomInputNotSet(RomInputError):
+    """``vanilla_rom`` is configured nowhere (neither the environment nor the TOML)."""
+
+
 @dataclass(frozen=True)
 class RomInputs:
     """Paths to the local inputs; only ``vanilla_rom`` is required."""
@@ -84,7 +88,7 @@ def load_inputs(
         else:
             found[key] = None
     if found["vanilla_rom"] is None:
-        raise RomInputError(
+        raise RomInputNotSet(
             f"vanilla_rom is not set: add it to {config} or set NUZLINE_VANILLA_ROM"
         )
     return RomInputs(**found)  # type: ignore[arg-type]

@@ -29,6 +29,7 @@ HAS_MOVES = (False, True, False, True)
 HAS_ITEM = (False, False, True, True)
 FORM_SHIFT = 10  # TRAINER_MON_FORM_SHIFT, trainer_data.h:11
 SPECIES_MASK = (1 << FORM_SHIFT) - 1
+MAX_LEVEL = 100  # MAX_POKEMON_LEVEL, include/constants/pokemon.h:22
 GENDER_SYMBOL = "sTrainerClassGender"  # u8 per class, src/trainer_data.c:9,166
 
 
@@ -126,6 +127,10 @@ def read_trainers(
                 raise ReaderError(f"{where}: species {species} out of range")
             if item >= item_n or (moves and max(moves) >= move_n):
                 raise ReaderError(f"{where}: item or move out of range")
+            if level > MAX_LEVEL:
+                raise ReaderError(f"{where}: level {level} exceeds {MAX_LEVEL}")
+            # ivScale ("difficulty") is left unbounded: on Kaizo it is u8 difficulty + u8
+            # ability override (K2b Ruling 6), and 113 Kaizo party mons exceed 255.
             party.append(
                 {
                     "species": species,

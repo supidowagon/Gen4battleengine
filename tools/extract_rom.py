@@ -6,9 +6,15 @@ readers; ``types, natures, charmap, abilities`` are reused from a fresh decomp e
 reused for a non-vanilla game only when the ROM diff shows them unchanged). Outputs are
 formatted by ``extract_decomp._write``.
 
+Battle command operands that are variables no constant reaches on some walked script path
+(``tools.rom.readers.maps.UnresolvedOperand``) place no trainer; each is printed to stderr
+and listed in ``rom_unresolved.json`` beside the outputs, so a trainer they hide is visible
+(K1 final review).
+
 Writes go to a temporary directory beside ``out`` and are moved in file by file with
-``os.replace``; files already in ``out`` that this run does not write are left alone, and
-on any failure ``out`` is neither created nor changed (Ruling 13).
+``os.replace``; files already in ``out`` that this run does not write are left alone, and a
+failure before the files are moved in leaves ``out`` untouched (Ruling 13). A failure of
+``os.replace`` midway through the move leaves the files moved so far.
 
 CLI: ``python -m tools.extract_rom --game vanilla|kaizo [--out DIR] [--decomp DIR]
 [--symbols MAP] [--config data/local.toml]``.
@@ -19,6 +25,7 @@ from __future__ import annotations
 import argparse
 import os
 import shutil
+import sys
 import tempfile
 from pathlib import Path
 
@@ -48,10 +55,28 @@ REUSE_BANKS = (
 KAIZO_REFUSAL = (
     "trainers: the Kaizo trainer layout is not confirmed (spec §5.4); Kaizo extraction lands in K2b"
 )
+UNRESOLVED_FILE = "rom_unresolved.json"
 DEFAULT_OUT = {
     "vanilla": REPO_ROOT / "data" / "intermediate",
     "kaizo": REPO_ROOT / "data" / "intermediate_kaizo",
 }
+
+
+def check_reuse_names(symbols, decomp: Path) -> None:
+    """Raise unless every ``REUSE_SYMBOLS`` name is in the linker map and every
+    ``REUSE_BANKS`` name in ``generated/text_banks.txt``: a misspelt name would match no
+    diff entry and pass the reuse check silently."""
+    from tools.extract_decomp import _constants
+
+    banks = set(_constants(Path(decomp), "text_banks", "TEXT_BANK_"))
+    missing = [b for b in REUSE_BANKS if b not in banks]
+    for name in REUSE_SYMBOLS:
+        try:
+            symbols.find(name)
+        except KeyError as e:
+            missing.append(f"{name} ({e.args[0]})")
+    if missing:
+        raise RomInputError(f"reuse check names not found: {', '.join(missing)}")
 
 
 def reuse_violations(diff, decomp: Path) -> list[str]:
@@ -81,6 +106,7 @@ def _kaizo_checks(inputs: RomInputs, decomp: Path, symbols_path: Path, vanilla_f
     from tools.rom.symbols import SymbolMap
 
     symbols = SymbolMap.from_map(symbols_path)
+    check_reuse_names(symbols, decomp)
     path, _ = kaizo_rom(inputs)
     kaizo = RomFiles.open(path.read_bytes())
     diff = diff_roms(vanilla_files, kaizo, symbols)
@@ -98,8 +124,27 @@ def _kaizo_checks(inputs: RomInputs, decomp: Path, symbols_path: Path, vanilla_f
     raise RomInputError(KAIZO_REFUSAL)
 
 
+def _unresolved_rows(unresolved, decomp: Path) -> list[dict]:
+    from tools.rom.readers.maps import SCRIPTS_NARC, var_ids
+
+    names = {v: k for k, v in var_ids(decomp).items()}
+    return [
+        {
+            "narc": SCRIPTS_NARC,
+            "member": u.member,
+            "offset": u.offset,
+            "variable": u.variable,
+            "variable_name": names.get(u.variable),
+            "constants_on_other_paths": u.constants,
+        }
+        for u in unresolved
+    ]
+
+
 def extract(game: str, out: Path, decomp: Path, symbols: Path, inputs: RomInputs) -> dict[str, str]:
-    """Write the intermediate files for ``game`` into ``out``; return ``rom_sources.json``."""
+    """Write the intermediate files for ``game`` into ``out``; return ``rom_sources.json``.
+
+    Unresolved battle operands are printed to stderr and written to ``UNRESOLVED_FILE``."""
     if game not in DEFAULT_OUT:
         raise ValueError(f"unknown game {game!r}")
     out, decomp, symbols = Path(out), Path(decomp), Path(symbols)
@@ -123,7 +168,17 @@ def extract(game: str, out: Path, decomp: Path, symbols: Path, inputs: RomInputs
     stage = Path(tempfile.mkdtemp(prefix=f".{out.name}-", dir=out.parent))
     try:
         charmap = extract_charmap(decomp)
-        starts = trainer_start_conditions(vanilla_files, decomp, smap)
+        unresolved = []
+        starts = trainer_start_conditions(vanilla_files, decomp, smap, unresolved=unresolved)
+        rows = _unresolved_rows(unresolved, decomp)
+        for r in rows:
+            print(
+                f"warning: {r['narc']} member {r['member']} offset {r['offset']:#x}: battle "
+                f"operand {r['variable_name'] or hex(r['variable'])} has no constant on some "
+                f"path ({r['constants_on_other_paths']} on others); its trainer is placed "
+                "on no map through it",
+                file=sys.stderr,
+            )
         tables = {
             "species": read_species(vanilla_files, decomp, charmap),
             "moves": read_moves(vanilla_files, decomp, charmap),
@@ -144,6 +199,7 @@ def extract(game: str, out: Path, decomp: Path, symbols: Path, inputs: RomInputs
             {f"{n}.json": "decomp: vanilla ROM (decomp is the source)" for n in REUSED_FILES}
         )
         _write(stage / "rom_sources.json", sources)
+        _write(stage / UNRESOLVED_FILE, rows)
         out.mkdir(parents=True, exist_ok=True)
         for p in sorted(stage.iterdir()):
             os.replace(p, out / p.name)
@@ -173,7 +229,7 @@ def main(argv: list[str] | None = None) -> int:
         inputs = load_inputs(args.config)
         sources = extract(args.game, args.out, args.decomp, args.symbols, inputs)
     except RomInputError as e:
-        print(f"error: {e}", file=__import__("sys").stderr)
+        print(f"error: {e}", file=sys.stderr)
         return 1
     for name, src in sorted(sources.items()):
         print(f"{name}: {src}")

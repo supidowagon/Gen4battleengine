@@ -114,3 +114,44 @@ def test_known_functions_start_with_thumb_push(symbols, vanilla_files):
         s = symbols.find(name)
         first = _code_at(vanilla_files, s.module, s.address, 2)
         assert first[1] == 0xB5, (name, first.hex())  # Thumb push {..., lr}, little-endian
+
+
+def test_excerpt_extents():
+    m = SymbolMap.from_map(FIXTURES / "xmap_excerpt.txt")
+    assert m.extent("arm9", 0x02000000) == 0x101D20
+    assert m.extent("arm9", 0x01FF8000) == 0x660
+    assert m.extent("overlay14", 0x0221FC20) == 0xF460
+    assert m.extent("overlay16", 0x0223B140) == 0x35A80
+    assert m.extent("overlay16", 0x0223B144) is None
+    assert SymbolMap([]).extent("arm9", 0x02000000) is None
+
+
+def test_extent_outside_own_section_ignored(tmp_path):
+    # The real map repeats SDK_AUTOLOAD.ITCM.START/SIZE with zero size inside .main.bss.
+    path = tmp_path / "m.xMAP"
+    path.write_text(
+        "# .main\n#>02000000          SDK_STATIC_START (linker command file)\n"
+        "#>00000100          SDK_STATIC_SIZE (linker command file)\n"
+        "# .main.bss\n#>01FF8000          SDK_AUTOLOAD.ITCM.START (linker command file)\n"
+        "#>00000000          SDK_AUTOLOAD.ITCM.SIZE (linker command file)\n"
+        "# .ITCM\n#>01FF8000          SDK_AUTOLOAD.ITCM.START (linker command file)\n"
+        "#>00000660          SDK_AUTOLOAD.ITCM.SIZE (linker command file)\n# Memory map:\n"
+    )
+    m = SymbolMap.from_map(path)
+    assert m.extent("arm9", 0x02000000) == 0x100 and m.extent("arm9", 0x01FF8000) == 0x660
+
+
+def test_extent_without_size_raises(tmp_path):
+    path = tmp_path / "m.xMAP"
+    path.write_text("# .main\n#>02000000          SDK_STATIC_START (linker command file)\n"
+                    "# Memory map:\n")
+    with pytest.raises(SymbolMapError, match="START or SIZE"):
+        SymbolMap.from_map(path)
+
+
+def test_every_rom_module_has_its_extent(symbols, vanilla_files):
+    for ram, data in vanilla_files.arm9_sections():
+        assert symbols.extent("arm9", ram) == len(data), hex(ram)
+    for i in vanilla_files.overlay_ids():
+        ram = vanilla_files.overlay_info(i)[0]
+        assert symbols.extent(f"overlay{i}", ram) == len(vanilla_files.overlay(i)), i

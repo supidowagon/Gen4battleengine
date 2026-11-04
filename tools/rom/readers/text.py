@@ -36,6 +36,8 @@ def _trainer_name(words: list[int], where: str, charmap: dict[int, str]) -> str:
             at += 1
             bit -= 15
             if bit:
+                if at >= len(words):
+                    raise ReaderError(f"{where}: trainer name ends inside a 9-bit code")
                 code |= (words[at] << (9 - bit)) & 0x1FF
         if code == 0x1FF:
             return "".join(chars)
