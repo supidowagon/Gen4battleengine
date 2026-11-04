@@ -1,6 +1,9 @@
 """Unit tests for tools.rom.diff on synthetic ROMs (``diff_helpers.FakeRom``)."""
 
+import difflib
 import struct
+
+import pytest
 
 from tests.tools.rom.diff_helpers import (
     BASE,
@@ -154,6 +157,45 @@ def test_moved_call_out_of_the_module_is_a_relocation():
     d = diff_roms(fake(ov3=van), fake(ov3=pat), RELOC_SYMS)
     assert [c.symbol for c in d.code] == ["Grown"]
     assert d.relocations[("overlay3", "Holder")] == 2  # the BL and the literal word
+
+
+@pytest.mark.parametrize("offsets", [(0x08, 0x0C), (0x00, 0x04, 0x08, 0x0C, 0x14)])
+def test_bl_dense_region_fragmenting_the_word_alignment_is_relocations(offsets):
+    # Thumb BLs in a row (with the one at 0x10), all to Callee, each re-encoded +8:
+    # patched word k equals vanilla word k - 2, so the word alignment splits the region
+    # into an insert, a coincidentally equal run (1 or 4 words) and a delete, each of
+    # unequal length
+    van, pat = reloc_van(), reloc_pat()
+    for off in offsets:
+        van = poke(van, off, thumb_bl(BASE + off, BASE + 0xC0))
+        pat = poke(pat, off, thumb_bl(BASE + off, BASE + 0xC8))
+    words = [[c[i:i + 4] for i in range(0, len(c), 4)] for c in (van, pat)]
+    tags = [op[0] for op in difflib.SequenceMatcher(None, *words, autojunk=False).get_opcodes()]
+    assert "insert" in tags[:3] and "delete" in tags[:4]  # the fragmentation happens
+    d = diff_roms(fake(ov3=van), fake(ov3=pat), RELOC_SYMS)
+    assert [c.symbol for c in d.code] == ["Grown"]
+    assert d.relocations[("overlay3", "Caller")] == len(offsets) + 1
+
+
+def test_fragmented_region_with_a_real_change_still_lists_it():
+    van, pat = reloc_van(), reloc_pat()
+    for off in (0x08, 0x0C):
+        van = poke(van, off, thumb_bl(BASE + off, BASE + 0xC0))
+        pat = poke(pat, off, thumb_bl(BASE + off, BASE + 0xC8))
+    pat = poke(pat, 0x0C, thumb_bl(BASE + 0x0C, BASE + 0xCC))  # this one really retargets
+    d = diff_roms(fake(ov3=van), fake(ov3=pat), RELOC_SYMS)
+    assert [(c.start - BASE, c.symbol) for c in d.code] == [(0x0E, "Caller"), (0x60, "Grown")]
+    assert d.relocations[("overlay3", "Caller")] == 2
+
+
+def test_pointer_into_a_relocated_table_maps_through_its_replace_block():
+    # Holder's word at 0x90 is itself relocated, so [0x90, 0x94) is a one-word replace
+    # block; a pointer at 0x18 to that table entry must still map 0x90 -> 0x98
+    van = poke(reloc_van(), 0x18, struct.pack("<I", BASE + 0x90))
+    pat = poke(reloc_pat(), 0x18, struct.pack("<I", BASE + 0x98))
+    d = diff_roms(fake(ov3=van), fake(ov3=pat), RELOC_SYMS)
+    assert [c.symbol for c in d.code] == ["Grown"]
+    assert d.relocations[("overlay3", "Caller")] == 2
 
 
 def test_itcm_section_addresses():

@@ -28,7 +28,8 @@ unit that differs only because what it points at moved:
   ``pc``.
 
 "Maps through the alignment" means: a vanilla address in an equal block of the same
-module moves by that block's offset; the module's end and an overlay's BSS after it move
+module, or in a non-equal block whose two sides have equal length (a table whose own
+entries were relocated, say), moves by that block's constant offset; the module's end and an overlay's BSS after it move
 with the end. A target inside changed code maps to nothing, so such a unit stays a change.
 An address outside the module (ARM9 called from an overlay, say) maps to itself: this
 module's alignment does not move it, so a call re-encoded only because the caller moved
@@ -37,7 +38,10 @@ since a word is only looked at when it differs and the identity would leave it e
 Nothing else is a relocation: a PC-relative ``LDR``/``ADR`` or a ``B`` whose offset changed
 because code was inserted between it and its target stays a listed change (on Kaizo these
 only occur inside functions that changed anyway), and no unit inside an unequal-length
-block is examined.
+block is examined. Re-encoded BLs straddling words can fragment the word alignment into an
+insert, a coincidentally equal word and a delete; a run of non-equal blocks split only by
+such short equal runs is first joined into one block when its two sides have equal length
+(``_coalesce``), so its units are examined at that block's constant offset.
 
 The remaining changed bytes form ranges; ranges with fewer than 4 equal bytes between them
 merge. With a symbol map, a range is split at every symbol boundary inside it and each
@@ -275,7 +279,7 @@ class _Module:
         wb = [b[i:i + 4] for i in range(0, len(b), 4)]
         ops = difflib.SequenceMatcher(None, wa, wb, autojunk=False).get_opcodes()
         out = []
-        for tag, i1, i2, j1, j2 in ops:  # word indices to byte offsets
+        for tag, i1, i2, j1, j2 in _coalesce(ops):  # word indices to byte offsets
             out.append((tag, 4 * i1, min(4 * i2, len(a)), 4 * j1, min(4 * j2, len(b))))
         return out
 
@@ -289,8 +293,9 @@ class _Module:
             ra, a, rb, b = region.ra, region.a, region.rb, region.b
             off = addr - ra
             if 0 <= off < len(a):
-                tag, i1, _, j1, _ = ops[bisect.bisect_right(starts, off) - 1]
-                return rb + j1 + off - i1 if tag == "equal" else None
+                _, i1, i2, j1, j2 = ops[bisect.bisect_right(starts, off) - 1]
+                # an equal block, or a replace block of equal length: a constant offset
+                return rb + j1 + off - i1 if i2 - i1 == j2 - j1 else None
             if len(a) <= off < len(a) + region.bss or off == len(a):
                 return rb + off - len(a) + len(b)
         return addr
@@ -389,6 +394,42 @@ class _Module:
             plo = min(pstart + lo - start, pend)
             phi = pend if k == len(pieces) - 1 else min(pstart + hi - start, pend)
             self.code.append(CodeChange(self.name, lo, hi, plo, phi, sym))
+
+
+SHORT_EQUAL = 8  # words; an equal run this short between non-equal opcodes may be chance
+
+
+def _coalesce(ops: list[tuple]) -> list[tuple]:
+    """Join non-equal opcodes split by short equal runs when the join has equal lengths.
+
+    Re-encoded Thumb BLs straddling words can make the word alignment pair a patched word
+    with a coincidentally equal vanilla word elsewhere, splitting a region of constant
+    offset into an insert, a short equal run and a delete. A maximal run of non-equal
+    opcodes separated by equal runs of at most ``SHORT_EQUAL`` words becomes one
+    ``replace`` when its vanilla and patched lengths agree, so it is compared at that
+    constant offset and its relocations are recognised; otherwise it is kept as found.
+    """
+    out: list[tuple] = []
+    k = 0
+    while k < len(ops):
+        if ops[k][0] == "equal":
+            out.append(ops[k])
+            k += 1
+            continue
+        end = k  # the run is ops[k:end + 1], from non-equal to non-equal
+        n = k + 1
+        while (n + 1 < len(ops) and ops[n][0] == "equal" and ops[n][2] - ops[n][1] <= SHORT_EQUAL
+               and ops[n + 1][0] != "equal"):
+            end = n + 1
+            n += 2
+        run = ops[k:end + 1]
+        i1, j1, i2, j2 = run[0][1], run[0][3], run[-1][2], run[-1][4]
+        if len(run) > 1 and i2 - i1 == j2 - j1:
+            out.append(("replace", i1, i2, j1, j2))
+        else:
+            out.extend(run)
+        k = end + 1
+    return out
 
 
 def _merge(ranges: list[list[int]]) -> list[list[int]]:
