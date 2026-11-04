@@ -2,7 +2,7 @@
 
 from collections import Counter
 
-from tools.rom.diff import HEADER_FIELDS, HeaderChange, diff_roms
+from tools.rom.diff import HEADER_FIELDS, KAIZO_INJECTED_CODE, HeaderChange, diff_roms
 
 
 def test_kaizo_diff_shape(vanilla_files, kaizo_files, symbols):
@@ -21,3 +21,21 @@ def test_kaizo_diff_shape(vanilla_files, kaizo_files, symbols):
     for c in unnamed:
         print(f"  {c.module} {c.start:#010x}-{c.end:#010x} -> "
               f"{c.patched_start:#010x}-{c.patched_end:#010x}")
+
+
+def test_kaizo_injected_code_and_parts(vanilla_files, kaizo_files, symbols):
+    # K1 final review: weather_sys.narc member 9 is code loaded at 0x023C8000.
+    d = diff_roms(vanilla_files, kaizo_files, symbols, KAIZO_INJECTED_CODE)
+    (r,) = d.injected
+    assert (r.path, r.member, r.load_address) == ("data/weather_sys.narc", 9, 0x023C8000)
+    assert (r.vanilla_size, r.patched_size) == (552, 90112)
+    assert {(c.symbol, c.target) for c in r.calls} == {
+        ("PartyMenuCB_LevelUp", 0x023C82E2),
+        ("HandleInput_Main", 0x023C8452),
+        ("SetMonDataFromMon", 0x023C8482),
+    }
+    assert d.far_calls == ()
+    fields = {(c.part, c.field) for c in d.parts}
+    assert ("arm9_overlay_table", "entry 16 ram_size") in fields
+    assert ("arm9_footer", "module_params_offset") in fields
+    assert not {p for p, _ in fields} & {"arm7", "arm7_overlay_table", "banner"}

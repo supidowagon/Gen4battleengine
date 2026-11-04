@@ -22,11 +22,29 @@ SYMS = SymbolMap([
 class FakeRom:
     """A ROM with the ``RomFiles`` interface, from in-memory files and code."""
 
-    def __init__(self, files: dict, arm9: list[tuple[int, bytes]], ov3: bytes, header: bytes):
+    def __init__(self, files: dict, arm9: list[tuple[int, bytes]], ov3: bytes, header: bytes,
+                 parts: dict | None = None):
         self._files = files
         self._arm9 = arm9
         self._ov3 = ov3
         self._header = header
+        self._parts = {"arm9_overlay_table": b"", "arm9_footer": b"", "arm7": b"",
+                       "arm7_overlay_table": b"", "banner": b"", **(parts or {})}
+
+    def arm9_overlay_table(self) -> bytes:
+        return self._parts["arm9_overlay_table"]
+
+    def arm9_footer(self) -> bytes:
+        return self._parts["arm9_footer"]
+
+    def arm7(self) -> bytes:
+        return self._parts["arm7"]
+
+    def arm7_overlay_table(self) -> bytes:
+        return self._parts["arm7_overlay_table"]
+
+    def banner(self) -> bytes:
+        return self._parts["banner"]
 
     @property
     def game_code(self) -> str:
@@ -74,13 +92,15 @@ def _default_header() -> bytes:
     return bytes(h)
 
 
-def fake(files=None, arm9=None, ov3=None, header=None) -> FakeRom:
-    """A ``FakeRom``; ``files`` maps a path to bytes, or to a member list for a NARC."""
+def fake(files=None, arm9=None, ov3=None, header=None, parts=None) -> FakeRom:
+    """A ``FakeRom``; ``files`` maps a path to bytes, or to a member list for a NARC;
+    ``parts`` overrides the parts outside the file system (default empty)."""
     return FakeRom(
         files or {},
         arm9 if arm9 is not None else [(0x02000000, b"")],
         CODE if ov3 is None else ov3,
         header if header is not None else _default_header(),
+        parts,
     )
 
 

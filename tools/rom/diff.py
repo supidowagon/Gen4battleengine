@@ -54,6 +54,20 @@ the patched bytes in step with its vanilla bytes, and the last piece keeps the r
 
 Anything this cannot pair (an overlay or ARM9 section only one ROM has, or ARM9 sections
 at different addresses) raises ``ValueError`` naming it.
+
+**Outside the file system** (``parts``). The ARM9 overlay table is compared field by field
+per 32-byte entry (GBATEK "DS Cartridge ARM9/ARM7 Overlay Tables": id, RAM address, RAM
+size, BSS size, static-initialiser start and end, file id, and a word holding the
+compressed size in bits 0-23 and flags in bits 24-31); so is the ARM7 overlay table. The
+12-byte ARM9 footer is three words (``0xDEC00621``, the ModuleParams offset, 0). The ARM7
+binary and the banner are compared by size and SHA-1. Only differing fields are listed.
+
+**Injected code** (``injected``, ``far_calls``). Every Thumb ``BL``/``BLX`` inside a listed
+code change is decoded at its patched address. A target outside every patched module
+image (ARM9 sections, overlays) is a call into code loaded from elsewhere: it is assigned to
+the declared injected region (``injected_code``: a NARC member and the address it is loaded
+at, ``KAIZO_INJECTED_CODE``) whose ``[address, address + member size)`` holds it, else it is
+a ``far_calls`` entry, which the report lists as unexplained. ARM ``BL`` is not decoded.
 """
 
 from __future__ import annotations
@@ -61,6 +75,7 @@ from __future__ import annotations
 import bisect
 import difflib
 import functools
+import hashlib
 import json
 import sys
 import tomllib
@@ -103,6 +118,24 @@ HEADER_FIELDS: dict[str, tuple[int, int, str]] = {
     "header_crc": (0x15E, 2, "int"),
 }
 
+# Code the Kaizo patch adds outside every module (K1 final review): data/weather_sys.narc
+# member 9 grows from 552 to 90112 bytes and is loaded at 0x023C8000 by the changed
+# NitroMain and OS_GetInitArenaLo; HandleInput_Main, PartyMenuCB_LevelUp and
+# SetMonDataFromMon call into it. (path, member, load address).
+KAIZO_INJECTED_CODE: tuple[tuple[str, int, int], ...] = (("data/weather_sys.narc", 9, 0x023C8000),)
+
+OVERLAY_ENTRY_SIZE = 32
+OVERLAY_ENTRY_FIELDS = (
+    "id",
+    "ram_address",
+    "ram_size",
+    "bss_size",
+    "sinit_start",
+    "sinit_end",
+    "file_id",
+)
+FOOTER_FIELDS = ("nitrocode", "module_params_offset", "reserved")
+
 MERGE_GAP = 4  # change ranges with fewer equal bytes than this between them merge
 
 
@@ -134,31 +167,171 @@ class CodeChange:
 
 
 @dataclass(frozen=True)
+class PartChange:
+    part: str  # "arm9_overlay_table" | "arm9_footer" | "arm7" | "arm7_overlay_table" | "banner"
+    field: str
+    vanilla: str  # 0x-hex, a count, or a SHA-1
+    patched: str
+
+
+@dataclass(frozen=True)
+class FarCall:
+    module: str  # the module of the calling code change
+    symbol: str | None  # its symbol
+    address: int  # patched RAM address of the BL
+    target: int
+
+
+@dataclass(frozen=True)
+class InjectedCode:
+    path: str
+    member: int
+    load_address: int
+    vanilla_size: int | None  # None when the member is new
+    patched_size: int
+    calls: tuple[FarCall, ...]  # listed code changes calling into it
+
+
+@dataclass(frozen=True)
 class RomDiff:
     header: tuple[HeaderChange, ...]
     files: tuple[FileChange, ...]
     code: tuple[CodeChange, ...]
     relocations: dict[tuple[str, str | None], int]  # (module, symbol) -> relocated units
     modules: dict[str, tuple[int, int]]  # vanilla and patched size of each differing module
+    parts: tuple[PartChange, ...] = ()
+    injected: tuple[InjectedCode, ...] = ()
+    far_calls: tuple[FarCall, ...] = ()  # calls outside every module and injected region
 
 
-def diff_roms(vanilla, patched, symbols) -> RomDiff:
-    """Compare two ROMs (``RomFiles``-like); ``symbols`` is a ``SymbolMap`` or ``None``."""
+def diff_roms(vanilla, patched, symbols, injected_code=()) -> RomDiff:
+    """Compare two ROMs (``RomFiles``-like); ``symbols`` is a ``SymbolMap`` or ``None``;
+    ``injected_code`` declares ``(path, member, load address)`` regions of code the patched
+    ROM loads from a NARC member (``KAIZO_INJECTED_CODE``). A declared member the patched
+    ROM lacks raises ``ValueError``."""
     code: list[CodeChange] = []
     relocations: Counter = Counter()
     modules: dict[str, tuple[int, int]] = {}
+    images: dict[str, list[tuple[int, bytes]]] = {}
     for name, regions in _modules(vanilla, patched):
+        images[name] = [(r.rb, r.b) for r in regions]
         if all(r.a == r.b for r in regions):
             continue
         modules[name] = (sum(len(r.a) for r in regions), sum(len(r.b) for r in regions))
         _Module(name, regions, symbols, code, relocations).diff()
+    injected, far = _far_calls(vanilla, patched, code, images, injected_code)
     return RomDiff(
         _header(vanilla.header(), patched.header()),
         _files(vanilla, patched),
         tuple(code),
         dict(relocations),
         modules,
+        _parts(vanilla, patched),
+        injected,
+        far,
     )
+
+
+# --- parts outside the file system ------------------------------------------------------
+
+
+def _hex(n: int) -> str:
+    return f"0x{n:X}"
+
+
+def _words(data: bytes) -> list[int]:
+    return [int.from_bytes(data[i : i + 4], "little") for i in range(0, len(data) - 3, 4)]
+
+
+def _overlay_table(part: str, a: bytes, b: bytes) -> list[PartChange]:
+    for side, data in (("vanilla", a), ("patched", b)):
+        if len(data) % OVERLAY_ENTRY_SIZE:
+            raise ValueError(f"{part}: {side} table is {len(data)} bytes, not whole entries")
+    out = []
+    na, nb = len(a) // OVERLAY_ENTRY_SIZE, len(b) // OVERLAY_ENTRY_SIZE
+    if na != nb:
+        out.append(PartChange(part, "entries", str(na), str(nb)))
+    names = (*OVERLAY_ENTRY_FIELDS, "compressed_size", "compressed_flags")
+    for i in range(min(na, nb)):
+        ea = _words(a[i * OVERLAY_ENTRY_SIZE : (i + 1) * OVERLAY_ENTRY_SIZE])
+        eb = _words(b[i * OVERLAY_ENTRY_SIZE : (i + 1) * OVERLAY_ENTRY_SIZE])
+        fa = [*ea[:7], ea[7] & 0xFFFFFF, ea[7] >> 24]
+        fb = [*eb[:7], eb[7] & 0xFFFFFF, eb[7] >> 24]
+        for field, va, vb in zip(names, fa, fb, strict=True):
+            if va != vb:
+                out.append(PartChange(part, f"entry {i} {field}", _hex(va), _hex(vb)))
+    return out
+
+
+def _blob(part: str, a: bytes, b: bytes) -> list[PartChange]:
+    if a == b:
+        return []
+    out = []
+    if len(a) != len(b):
+        out.append(PartChange(part, "size", _hex(len(a)), _hex(len(b))))
+    out.append(PartChange(part, "sha1", hashlib.sha1(a).hexdigest(), hashlib.sha1(b).hexdigest()))
+    return out
+
+
+def _parts(vanilla, patched) -> tuple[PartChange, ...]:
+    out = _overlay_table(
+        "arm9_overlay_table", vanilla.arm9_overlay_table(), patched.arm9_overlay_table()
+    )
+    fa, fb = vanilla.arm9_footer(), patched.arm9_footer()
+    if fa != fb:
+        if len(fa) != 12 or len(fb) != 12:
+            out += _blob("arm9_footer", fa, fb)
+        else:
+            for field, va, vb in zip(FOOTER_FIELDS, _words(fa), _words(fb), strict=True):
+                if va != vb:
+                    out.append(PartChange("arm9_footer", field, _hex(va), _hex(vb)))
+    out += _blob("arm7", vanilla.arm7(), patched.arm7())
+    out += _overlay_table(
+        "arm7_overlay_table", vanilla.arm7_overlay_table(), patched.arm7_overlay_table()
+    )
+    out += _blob("banner", vanilla.banner(), patched.banner())
+    return tuple(out)
+
+
+# --- calls into injected code -----------------------------------------------------------
+
+
+def _far_calls(vanilla, patched, code, images, injected_code):
+    """(declared injected regions with their callers, calls into no module and no region)."""
+    regions = []
+    for path, member, address in injected_code:
+        members = patched.narc(path)
+        if member >= len(members):
+            raise ValueError(
+                f"injected code {path} member {member}: the patched ROM has {len(members)} members"
+            )
+        old = vanilla.narc(path) if path in vanilla.paths() else []
+        vsize = len(old[member]) if member < len(old) else None
+        regions.append((path, member, address, vsize, len(members[member])))
+    known = [(ram, ram + len(data)) for imgs in images.values() for ram, data in imgs]
+    calls: list[list[FarCall]] = [[] for _ in regions]
+    far: list[FarCall] = []
+    for c in code:
+        for ram, data in images[c.module]:
+            if not ram <= c.patched_start < ram + len(data):
+                continue
+            for pc in range(c.patched_start & ~1, c.patched_end, 2):
+                target = _thumb_bl(data, pc - ram, pc)
+                if target is None or any(lo <= target < hi for lo, hi in known):
+                    continue
+                call = FarCall(c.module, c.symbol, pc, target)
+                for k, (_, _, address, _, size) in enumerate(regions):
+                    if address <= target < address + size:
+                        calls[k].append(call)
+                        break
+                else:
+                    far.append(call)
+            break
+    injected = tuple(
+        InjectedCode(path, member, address, vsize, psize, tuple(calls[k]))
+        for k, (path, member, address, vsize, psize) in enumerate(regions)
+    )
+    return injected, tuple(far)
 
 
 # --- header -----------------------------------------------------------------------------
@@ -756,7 +929,71 @@ def _report_lines(diff, classification, provenance, decomp) -> list[str]:
             for m, (a, b) in sorted(diff.modules.items(), key=lambda kv: _module_order(kv[0]))
         ],
     )
-    return out + _files_lines(diff, decomp) + _code_lines(diff, classification)
+    return (
+        out
+        + _files_lines(diff, decomp)
+        + _parts_lines(diff)
+        + _injected_lines(diff)
+        + _code_lines(diff, classification)
+    )
+
+
+def _parts_lines(diff: RomDiff) -> list[str]:
+    out = [
+        "## Outside the file system",
+        "",
+        (
+            "ARM9 overlay table (per entry), ARM9 footer, ARM7 binary, ARM7 overlay table and "
+            "banner; differing fields only (binaries by size and SHA-1)."
+        ),
+        "",
+    ]
+    if not diff.parts:
+        return [*out, "None.", ""]
+    return out + _table(
+        ["part", "field", "vanilla", "patched"],
+        [[p.part, p.field, p.vanilla, p.patched] for p in diff.parts],
+    )
+
+
+def _call_rows(calls) -> list[list[object]]:
+    return [
+        [c.module, c.symbol or "(outside symbols)", f"0x{c.address:08X}", f"0x{c.target:08X}"]
+        for c in calls
+    ]
+
+
+def _injected_lines(diff: RomDiff) -> list[str]:
+    out = [
+        "## Injected code",
+        "",
+        (
+            "Code loaded from a file-system member to an address outside every module. Its callers "
+            "are the Thumb BL/BLX inside listed code changes whose target lies in the region."
+        ),
+        "",
+    ]
+    if not diff.injected:
+        out += ["None declared.", ""]
+    for r in diff.injected:
+        end = r.load_address + r.patched_size
+        out += [
+            f"### {r.path} member {r.member}",
+            "",
+            (
+                f"{_size(r.vanilla_size)} -> {r.patched_size} bytes, loaded at "
+                f"0x{r.load_address:08X}-0x{end:08X}; {len(r.calls)} calls from listed changes."
+            ),
+            "",
+        ]
+        out += _table(["module", "symbol", "BL at", "target"], _call_rows(r.calls))
+    out += [f"### Unexplained far calls ({len(diff.far_calls)})", ""]
+    out += (
+        _table(["module", "symbol", "BL at", "target"], _call_rows(diff.far_calls))
+        if diff.far_calls
+        else ["None: every call outside the modules lands in a declared region.", ""]
+    )
+    return out
 
 
 def write_report(
@@ -823,7 +1060,7 @@ def main(argv: list[str] | None = None) -> int:
     vanilla = RomFiles.open(read_checked(inputs.vanilla_rom, VANILLA_SHA1, "sha1"))
     patched_path, _ = kaizo_rom(inputs)
     patched = RomFiles.open(patched_path.read_bytes())
-    diff = diff_roms(vanilla, patched, SymbolMap.from_map(args.symbols))
+    diff = diff_roms(vanilla, patched, SymbolMap.from_map(args.symbols), KAIZO_INJECTED_CODE)
 
     if args.init_classification:
         args.classification.parent.mkdir(parents=True, exist_ok=True)

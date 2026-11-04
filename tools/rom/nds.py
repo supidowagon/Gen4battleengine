@@ -1,7 +1,8 @@
 """The NDS file system of a ROM, read through ndspy.
 
 ``RomFiles`` unpacks the FNT/FAT files, NARC archives, the ARM9 binary with its
-sections, and the ARM9 overlays. ndspy is imported inside ``open`` only, so the rest
+sections, the ARM9 overlays, and the parts outside the file system (overlay tables, ARM9
+footer, ARM7 binary, banner). ndspy is imported inside ``open`` only, so the rest
 of ``tools.rom`` imports without it. Nothing is skipped silently: unknown paths and
 overlay ids raise, naming what was asked for.
 """
@@ -99,6 +100,26 @@ class RomFiles:
     def overlay(self, i: int) -> bytes:
         """Overlay ``i``, decompressed when flagged."""
         return bytes(self._ov(i).data)
+
+    def arm9_overlay_table(self) -> bytes:
+        """The raw ARM9 overlay table (``y9``): 32 bytes per overlay."""
+        return bytes(self._rom.arm9OverlayTable)
+
+    def arm9_footer(self) -> bytes:
+        """The 12 bytes stored after the ARM9 binary (ndspy ``arm9PostData``)."""
+        return bytes(self._rom.arm9PostData)
+
+    def arm7(self) -> bytes:
+        """The ARM7 binary as stored."""
+        return bytes(self._rom.arm7)
+
+    def arm7_overlay_table(self) -> bytes:
+        """The raw ARM7 overlay table (``y7``)."""
+        return bytes(self._rom.arm7OverlayTable)
+
+    def banner(self) -> bytes:
+        """The icon/title banner as stored."""
+        return bytes(self._rom.iconBanner)
 
     def overlay_info(self, i: int) -> tuple[int, int, int]:
         """(RAM address, RAM size, BSS size) of overlay ``i``."""

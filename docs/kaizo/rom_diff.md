@@ -93,6 +93,157 @@ Collapsed per folder.
 
 None.
 
+## Outside the file system
+
+ARM9 overlay table (per entry), ARM9 footer, ARM7 binary, ARM7 overlay table and banner; differing fields only (binaries by size and SHA-1).
+
+| part | field | vanilla | patched |
+| --- | --- | --- | --- |
+| arm9_overlay_table | entry 0 compressed_size | 0x0 | 0x20 |
+| arm9_overlay_table | entry 1 compressed_size | 0x0 | 0x20 |
+| arm9_overlay_table | entry 2 compressed_size | 0x0 | 0x20 |
+| arm9_overlay_table | entry 3 compressed_size | 0x0 | 0x20 |
+| arm9_overlay_table | entry 4 compressed_size | 0x0 | 0x49680 |
+| arm9_overlay_table | entry 5 compressed_size | 0x0 | 0x313A0 |
+| arm9_overlay_table | entry 6 compressed_size | 0x0 | 0xB800 |
+| arm9_overlay_table | entry 7 compressed_size | 0x0 | 0x5C40 |
+| arm9_overlay_table | entry 8 compressed_size | 0x0 | 0x4E20 |
+| arm9_overlay_table | entry 9 compressed_size | 0x0 | 0xA380 |
+| arm9_overlay_table | entry 10 compressed_size | 0x0 | 0x3AA0 |
+| arm9_overlay_table | entry 11 compressed_size | 0x0 | 0x420 |
+| arm9_overlay_table | entry 12 compressed_size | 0x0 | 0x1B520 |
+| arm9_overlay_table | entry 13 compressed_size | 0x0 | 0xA200 |
+| arm9_overlay_table | entry 14 compressed_size | 0x0 | 0xF460 |
+| arm9_overlay_table | entry 15 compressed_size | 0x0 | 0x20 |
+| arm9_overlay_table | entry 16 ram_size | 0x35A80 | 0x35AA0 |
+| arm9_overlay_table | entry 16 sinit_start | 0x2270B0C | 0x2270B28 |
+| arm9_overlay_table | entry 16 sinit_end | 0x2270B14 | 0x2270B30 |
+| arm9_overlay_table | entry 16 compressed_size | 0x0 | 0x35AA0 |
+| arm9_overlay_table | entry 17 compressed_size | 0x0 | 0x19CA0 |
+| arm9_overlay_table | entry 18 compressed_size | 0x0 | 0x2BA60 |
+| arm9_overlay_table | entry 19 compressed_size | 0x0 | 0xF860 |
+| arm9_overlay_table | entry 20 compressed_size | 0x0 | 0x46C0 |
+| arm9_overlay_table | entry 21 compressed_size | 0x0 | 0x19200 |
+| arm9_overlay_table | entry 22 compressed_size | 0x0 | 0x70A0 |
+| arm9_overlay_table | entry 23 compressed_size | 0x0 | 0x19600 |
+| arm9_overlay_table | entry 24 compressed_size | 0x0 | 0x100 |
+| arm9_overlay_table | entry 25 compressed_size | 0x0 | 0x24E0 |
+| arm9_overlay_table | entry 26 compressed_size | 0x0 | 0x5E0 |
+| arm9_overlay_table | entry 27 compressed_size | 0x0 | 0xF00 |
+| arm9_overlay_table | entry 28 compressed_size | 0x0 | 0x1900 |
+| arm9_overlay_table | entry 29 compressed_size | 0x0 | 0xA60 |
+| arm9_overlay_table | entry 30 compressed_size | 0x0 | 0x560 |
+| arm9_overlay_table | entry 31 compressed_size | 0x0 | 0x800 |
+| arm9_overlay_table | entry 32 compressed_size | 0x0 | 0xBA0 |
+| arm9_overlay_table | entry 33 compressed_size | 0x0 | 0x17A0 |
+| arm9_overlay_table | entry 34 compressed_size | 0x0 | 0x900 |
+| arm9_overlay_table | entry 35 compressed_size | 0x0 | 0x600 |
+| arm9_overlay_table | entry 36 compressed_size | 0x0 | 0x600 |
+| arm9_overlay_table | entry 37 compressed_size | 0x0 | 0x4A0 |
+| arm9_overlay_table | entry 38 compressed_size | 0x0 | 0x320 |
+| arm9_overlay_table | entry 39 compressed_size | 0x0 | 0x4C0 |
+| arm9_overlay_table | entry 40 compressed_size | 0x0 | 0x9A0 |
+| arm9_overlay_table | entry 41 compressed_size | 0x0 | 0xCC0 |
+| arm9_overlay_table | entry 42 compressed_size | 0x0 | 0x560 |
+| arm9_overlay_table | entry 43 compressed_size | 0x0 | 0xB40 |
+| arm9_overlay_table | entry 44 compressed_size | 0x0 | 0xCE0 |
+| arm9_overlay_table | entry 45 compressed_size | 0x0 | 0xC60 |
+| arm9_overlay_table | entry 46 compressed_size | 0x0 | 0x1140 |
+| arm9_overlay_table | entry 47 compressed_size | 0x0 | 0x900 |
+| arm9_overlay_table | entry 48 compressed_size | 0x0 | 0x9C0 |
+| arm9_overlay_table | entry 49 compressed_size | 0x0 | 0x4A0 |
+| arm9_overlay_table | entry 50 compressed_size | 0x0 | 0x940 |
+| arm9_overlay_table | entry 51 compressed_size | 0x0 | 0x320 |
+| arm9_overlay_table | entry 52 compressed_size | 0x0 | 0xCA0 |
+| arm9_overlay_table | entry 53 compressed_size | 0x0 | 0x8A0 |
+| arm9_overlay_table | entry 54 compressed_size | 0x0 | 0x660 |
+| arm9_overlay_table | entry 55 compressed_size | 0x0 | 0x320 |
+| arm9_overlay_table | entry 56 compressed_size | 0x0 | 0x1140 |
+| arm9_overlay_table | entry 57 compressed_size | 0x0 | 0x400 |
+| arm9_overlay_table | entry 58 compressed_size | 0x0 | 0x24C0 |
+| arm9_overlay_table | entry 59 compressed_size | 0x0 | 0x2780 |
+| arm9_overlay_table | entry 60 compressed_size | 0x0 | 0xA620 |
+| arm9_overlay_table | entry 61 compressed_size | 0x0 | 0x3900 |
+| arm9_overlay_table | entry 62 compressed_size | 0x0 | 0x1A6E0 |
+| arm9_overlay_table | entry 63 compressed_size | 0x0 | 0x2E80 |
+| arm9_overlay_table | entry 64 compressed_size | 0x0 | 0x4840 |
+| arm9_overlay_table | entry 65 compressed_size | 0x0 | 0xC180 |
+| arm9_overlay_table | entry 66 compressed_size | 0x0 | 0x2D9E0 |
+| arm9_overlay_table | entry 67 compressed_size | 0x0 | 0xDA0 |
+| arm9_overlay_table | entry 68 compressed_size | 0x0 | 0x17C0 |
+| arm9_overlay_table | entry 69 compressed_size | 0x0 | 0x2D40 |
+| arm9_overlay_table | entry 70 compressed_size | 0x0 | 0x120C0 |
+| arm9_overlay_table | entry 71 compressed_size | 0x0 | 0x2660 |
+| arm9_overlay_table | entry 72 compressed_size | 0x0 | 0x15C0 |
+| arm9_overlay_table | entry 73 compressed_size | 0x0 | 0x2D80 |
+| arm9_overlay_table | entry 74 compressed_size | 0x0 | 0xFA0 |
+| arm9_overlay_table | entry 75 compressed_size | 0x0 | 0x10C0 |
+| arm9_overlay_table | entry 76 compressed_size | 0x0 | 0x3E40 |
+| arm9_overlay_table | entry 77 compressed_size | 0x0 | 0x6C80 |
+| arm9_overlay_table | entry 78 compressed_size | 0x0 | 0x1C80 |
+| arm9_overlay_table | entry 79 compressed_size | 0x0 | 0x3020 |
+| arm9_overlay_table | entry 80 compressed_size | 0x0 | 0x26A0 |
+| arm9_overlay_table | entry 81 compressed_size | 0x0 | 0x27C0 |
+| arm9_overlay_table | entry 82 compressed_size | 0x0 | 0x460 |
+| arm9_overlay_table | entry 83 compressed_size | 0x0 | 0x5060 |
+| arm9_overlay_table | entry 84 compressed_size | 0x0 | 0x5EA0 |
+| arm9_overlay_table | entry 85 compressed_size | 0x0 | 0x1620 |
+| arm9_overlay_table | entry 86 compressed_size | 0x0 | 0x2420 |
+| arm9_overlay_table | entry 87 compressed_size | 0x0 | 0xE40 |
+| arm9_overlay_table | entry 88 compressed_size | 0x0 | 0x40C0 |
+| arm9_overlay_table | entry 89 compressed_size | 0x0 | 0x20 |
+| arm9_overlay_table | entry 90 compressed_size | 0x0 | 0x1240 |
+| arm9_overlay_table | entry 91 compressed_size | 0x0 | 0x1E40 |
+| arm9_overlay_table | entry 92 compressed_size | 0x0 | 0x1D40 |
+| arm9_overlay_table | entry 93 compressed_size | 0x0 | 0x880 |
+| arm9_overlay_table | entry 94 compressed_size | 0x0 | 0xB980 |
+| arm9_overlay_table | entry 95 compressed_size | 0x0 | 0x56C0 |
+| arm9_overlay_table | entry 96 compressed_size | 0x0 | 0x2CA0 |
+| arm9_overlay_table | entry 97 compressed_size | 0x0 | 0x14320 |
+| arm9_overlay_table | entry 98 compressed_size | 0x0 | 0x3200 |
+| arm9_overlay_table | entry 99 compressed_size | 0x0 | 0x4760 |
+| arm9_overlay_table | entry 100 compressed_size | 0x0 | 0x47C0 |
+| arm9_overlay_table | entry 101 compressed_size | 0x0 | 0x9100 |
+| arm9_overlay_table | entry 102 compressed_size | 0x0 | 0x820 |
+| arm9_overlay_table | entry 103 compressed_size | 0x0 | 0x20 |
+| arm9_overlay_table | entry 104 compressed_size | 0x0 | 0x13DE0 |
+| arm9_overlay_table | entry 105 compressed_size | 0x0 | 0x49E0 |
+| arm9_overlay_table | entry 106 compressed_size | 0x0 | 0x1DC0 |
+| arm9_overlay_table | entry 107 compressed_size | 0x0 | 0x8840 |
+| arm9_overlay_table | entry 108 compressed_size | 0x0 | 0x1CC0 |
+| arm9_overlay_table | entry 109 compressed_size | 0x0 | 0x51E0 |
+| arm9_overlay_table | entry 110 compressed_size | 0x0 | 0x15C0 |
+| arm9_overlay_table | entry 111 compressed_size | 0x0 | 0x2BE0 |
+| arm9_overlay_table | entry 112 compressed_size | 0x0 | 0x1280 |
+| arm9_overlay_table | entry 113 compressed_size | 0x0 | 0x4E80 |
+| arm9_overlay_table | entry 114 compressed_size | 0x0 | 0x3D40 |
+| arm9_overlay_table | entry 115 compressed_size | 0x0 | 0x6280 |
+| arm9_overlay_table | entry 116 compressed_size | 0x0 | 0x7C20 |
+| arm9_overlay_table | entry 117 compressed_size | 0x0 | 0x6C00 |
+| arm9_overlay_table | entry 118 compressed_size | 0x0 | 0x440 |
+| arm9_overlay_table | entry 119 compressed_size | 0x0 | 0x1940 |
+| arm9_overlay_table | entry 120 compressed_size | 0x0 | 0x4C0 |
+| arm9_overlay_table | entry 121 compressed_size | 0x0 | 0x640 |
+| arm9_footer | module_params_offset | 0xBA0 | 0xAD8 |
+
+## Injected code
+
+Code loaded from a file-system member to an address outside every module. Its callers are the Thumb BL/BLX inside listed code changes whose target lies in the region.
+
+### data/weather_sys.narc member 9
+
+552 -> 90112 bytes, loaded at 0x023C8000-0x023DE000; 3 calls from listed changes.
+
+| module | symbol | BL at | target |
+| --- | --- | --- | --- |
+| arm9 | PartyMenuCB_LevelUp | 0x02085EC6 | 0x023C82E2 |
+| arm9 | HandleInput_Main | 0x0208CA34 | 0x023C8452 |
+| arm9 | SetMonDataFromMon | 0x0208D3B2 | 0x023C8482 |
+
+### Unexplained far calls (0)
+
+None: every call outside the modules lands in a declared region.
+
 ## Code
 
 398 changed ranges; 4642 relocated units are counted apart (re-encoded only because what they point at moved). Rows with status `-` and 0 bytes changed are symbols with no changed range, only such re-encoded references to moved code or data: they are counted, not classified, and not stale-checked.
