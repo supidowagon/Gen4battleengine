@@ -1,0 +1,573 @@
+# Classification of every code change the Kaizo patch makes (plan K1 Ruling 16).
+# status: modelled | irrelevant | unknown.  symbol: a name, or 0xSTART-0xEND for a
+# range outside every symbol.  An entry matching no current change is an error.
+
+[[code]]
+module = "arm9"
+symbol = "NitroMain"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "arm9"
+symbol = "Options_Init"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "arm9"
+symbol = "MapHeader_IDBoundsCheck"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "arm9"
+symbol = "MapHeader_GetAreaDataArchiveID"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "arm9"
+symbol = "MapHeader_GetPreloadedMapObjectsArchiveID"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "arm9"
+symbol = "MapHeader_GetMapMatrixID"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "arm9"
+symbol = "MapHeader_GetMsgArchiveID"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "arm9"
+symbol = "MapHeader_GetScriptsArchiveID"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "arm9"
+symbol = "MapHeader_GetInitScriptsArchiveID"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "arm9"
+symbol = "MapHeader_GetDayMusicID"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "arm9"
+symbol = "MapHeader_GetNightMusicID"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "arm9"
+symbol = "MapHeader_HasWildEncounters"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "arm9"
+symbol = "MapHeader_GetWildEncountersArchiveID"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "arm9"
+symbol = "MapHeader_GetEventsArchiveID"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "arm9"
+symbol = "MapHeader_GetMapLabelTextID"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "arm9"
+symbol = "MapHeader_GetMapLabelWindowID"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "arm9"
+symbol = "MapHeader_GetWeatherType"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "arm9"
+symbol = "MapHeader_GetCameraType"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "arm9"
+symbol = "MapHeader_GetBattleBG"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "arm9"
+symbol = "MapHeader_IsEscapeRopeAllowed"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "arm9"
+symbol = "MapHeader_IsFlyAllowed"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "arm9"
+symbol = "MapHeader_IsBikeAllowed"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "arm9"
+symbol = "MapHeader_GetMapType"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "arm9"
+symbol = "ScrCmd_GetWallpaperFromCustomMessageWords"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "arm9"
+symbol = "ScrCmd_Dummy088"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "arm9"
+symbol = "0x0204EB22-0x0204EB24"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "arm9"
+symbol = "EncEffects_GetEffectPair"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "arm9"
+symbol = "Trainer_Encounter"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "arm9"
+symbol = "TrainerData_BuildParty"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "arm9"
+symbol = "PCBoxes_UnlockWallpaper"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "arm9"
+symbol = "sub_0207AD40"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "arm9"
+symbol = "PartyMenuCB_LevelUp"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "arm9"
+symbol = "HandleInput_Main"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "arm9"
+symbol = "SetMonDataFromMon"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "arm9"
+symbol = "OS_GetInitArenaLo"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "arm9"
+symbol = "sSpawnLocations"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "arm9"
+symbol = "gHiddenItems"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "arm9"
+symbol = "gFieldScriptCommands"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "arm9"
+symbol = "sEncEffectsTable"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "arm9"
+symbol = "sTrainerEncounterBGMs"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "arm9"
+symbol = "sTMHMMoves"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "arm9"
+symbol = "sItemArchiveIDs"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "arm9"
+symbol = "@29"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "overlay5"
+symbol = "sTeachableMoves"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "overlay5"
+symbol = "sSpeciesLearnsetsByTutor"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "overlay13"
+symbol = "InitializeCursor"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "overlay13"
+symbol = "CleanupCursor"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "overlay13"
+symbol = "BattlePartySprites_DisableCursor"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "overlay13"
+symbol = "BattleBagTask_CatchTutorial"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "overlay13"
+symbol = "BattleBagTask_GetSelectedPartySlot"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "overlay13"
+symbol = "BattleBagSprites_DisableCursor"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "overlay13"
+symbol = "InitializeCatchTutorialCursor"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "overlay13"
+symbol = "CleanupCatchTutorialCursor"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "overlay13"
+symbol = "BattleBagSprites_SetupCatchTutorialCursor"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "overlay13"
+symbol = "SetBattleSubMenuCursorCurrentPosition"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "overlay13"
+symbol = "SetBattleSubMenuCursorPositions"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "overlay13"
+symbol = "IsCursorVisible"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "overlay13"
+symbol = "BattleSubMenuCursorTick"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "overlay14"
+symbol = "TrainerAI_Init"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "overlay14"
+symbol = "TrainerAI_Main"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "overlay14"
+symbol = "TrainerAI_MainDoubles"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "overlay14"
+symbol = "AICmd_LoadTypeFrom"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "overlay14"
+symbol = "AICmd_FlagBattlerIsType"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "overlay14"
+symbol = "AICmd_FlagMoveDamageScore"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "overlay14"
+symbol = "AICmd_IfSpeedCompareEqualTo"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "overlay14"
+symbol = "AICmd_IfSpeedCompareNotEqualTo"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "overlay14"
+symbol = "AICmd_CalcMaxEffectiveness"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "overlay14"
+symbol = "AICmd_IfMoveEffectivenessEquals"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "overlay14"
+symbol = "AICmd_IfCurrentMoveKills"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "overlay14"
+symbol = "AICmd_IfCurrentMoveDoesNotKill"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "overlay14"
+symbol = "AICmd_LoadHeldItemEffect"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "overlay14"
+symbol = "AICmd_LoadFlingPower"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "overlay14"
+symbol = "AICmd_IfCanUseLastResort"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "overlay14"
+symbol = "AICmd_LoadBattlerSpeedRank"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "overlay14"
+symbol = "AICmd_IfPartyMemberDealsMoreDamage"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "overlay14"
+symbol = "AICmd_IfBattlerDealsMoreDamage"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "overlay14"
+symbol = "AICmd_CheckIfHighestDamageWithPartner"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "overlay14"
+symbol = "AICmd_LoadAbility"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "overlay14"
+symbol = "TrainerAI_CalcDamage"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "overlay14"
+symbol = "TrainerAI_MoveType"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "overlay14"
+symbol = "AI_CannotDamageWonderGuard"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "overlay14"
+symbol = "AI_OnlyIneffectiveMoves"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "overlay14"
+symbol = "AI_HasSuperEffectiveMove"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "overlay14"
+symbol = "AI_HasAbsorbAbilityInParty"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "overlay14"
+symbol = "AI_HasPartyMemberWithSuperEffectiveMove"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "overlay14"
+symbol = "AI_IsAsleepWithNaturalCure"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "overlay14"
+symbol = "TrainerAI_ShouldSwitch"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "overlay14"
+symbol = "TrainerAI_PickCommand"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "overlay14"
+symbol = "TrainerAI_ShouldUseItem"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "overlay14"
+symbol = "0x022249CC-0x022249CD"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "overlay16"
+symbol = "BattleControllerPlayer_CheckObedience"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "overlay16"
+symbol = "BattleControllerPlayer_CheckMoveHitAccuracy"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "overlay16"
+symbol = "BattleControllerPlayer_CheckMoveHitOverrides"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "overlay16"
+symbol = "BattleSystem_TriggerEffectOnSwitch"
+status = "unknown"
+note = ""
+
+[[code]]
+module = "overlay16"
+symbol = "sTrainerClassPrizeMul"
+status = "unknown"
+note = ""

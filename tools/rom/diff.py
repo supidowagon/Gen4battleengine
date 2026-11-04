@@ -1,7 +1,9 @@
 """What one NDS ROM changes against another: header fields, files, NARC members, code.
 
 ``diff_roms(vanilla, patched, symbols)`` compares two ``RomFiles`` (any object with its
-methods). Task 7 turns the result into ``docs/kaizo/rom_diff.md``.
+methods). ``write_report`` turns the result into ``docs/kaizo/rom_diff.md``, with the
+hand-edited classification in ``data/kaizo/rom_diff.toml`` (plan Ruling 16); ``main`` is the
+``python -m tools.rom.diff`` command that does both on the real ROMs.
 
 **Files.** Every FNT path is compared; a path only one side has is ``added`` or
 ``removed``. A changed file that is a NARC on both sides (by its ``NARC`` magic, not its
@@ -59,9 +61,14 @@ from __future__ import annotations
 import bisect
 import difflib
 import functools
+import json
+import sys
+import tomllib
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 # GBATEK "DS Cartridge Header": (offset, width, kind).
 HEADER_FIELDS: dict[str, tuple[int, int, str]] = {
@@ -475,3 +482,261 @@ def member_label(path: str, index: int, decomp: Path) -> str | None:
         return None
     names = _member_names(Path(decomp), *kind)
     return names[index] if 0 <= index < len(names) else None
+
+
+# --- classification ---------------------------------------------------------------------
+
+STATUSES = ("modelled", "irrelevant", "unknown")
+
+
+def _key(c: CodeChange) -> tuple[str, str]:
+    """(module, symbol), or (module, "0xSTART-0xEND") for a range outside every symbol."""
+    return c.module, c.symbol if c.symbol is not None else f"0x{c.start:08X}-0x{c.end:08X}"
+
+
+def _module_order(module: str) -> tuple[int, int]:
+    return (0, 0) if module == "arm9" else (1, int(module.removeprefix("overlay")))
+
+
+def load_classification(path: Path) -> dict[tuple[str, str], tuple[str, str]]:
+    """``(module, symbol-or-range) -> (status, note)`` from the ``[[code]]`` tables."""
+    with Path(path).open("rb") as f:
+        data = tomllib.load(f)
+    out: dict[tuple[str, str], tuple[str, str]] = {}
+    for entry in data.get("code", []):
+        try:
+            key = (entry["module"], entry["symbol"])
+            status, note = entry["status"], entry.get("note", "")
+        except KeyError as e:
+            raise ValueError(f"{path}: [[code]] entry {entry} lacks {e}") from e
+        if status not in STATUSES:
+            raise ValueError(f"{path}: {key[0]} {key[1]}: unknown status {status!r}; "
+                             f"expected one of {STATUSES}")
+        if key in out:
+            raise ValueError(f"{path}: duplicate entry {key[0]} {key[1]}")
+        out[key] = (status, note)
+    return out
+
+
+def _changed_keys(diff: RomDiff) -> list[tuple[str, str]]:
+    """Each changed (module, symbol-or-range) once, by module then first address."""
+    first: dict[tuple[str, str], int] = {}
+    for c in diff.code:
+        first.setdefault(_key(c), c.start)
+    return sorted(first, key=lambda k: (_module_order(k[0]), first[k], k[1]))
+
+
+def classification_skeleton(diff: RomDiff) -> str:
+    """TOML with an ``unknown`` entry for every changed (module, symbol), by address."""
+    lines = ["# Classification of every code change the Kaizo patch makes (plan K1 Ruling 16).",
+             "# status: modelled | irrelevant | unknown.  symbol: a name, or 0xSTART-0xEND for a",
+             "# range outside every symbol.  An entry matching no current change is an error.",
+             ""]
+    for module, symbol in _changed_keys(diff):
+        lines += ["[[code]]", f"module = {json.dumps(module)}", f"symbol = {json.dumps(symbol)}",
+                  'status = "unknown"', 'note = ""', ""]
+    return "\n".join(lines)
+
+
+def stale_entries(diff: RomDiff, classification: dict) -> list[tuple[str, str]]:
+    """Classification keys that match no change in ``diff``, sorted."""
+    current = set(_changed_keys(diff))
+    return sorted(k for k in classification if k not in current)
+
+
+# --- report -----------------------------------------------------------------------------
+
+
+def default_provenance() -> dict[str, str]:
+    """The pinned inputs' hashes and the decomp commit; reads no input file."""
+    from tools.rom.inputs import KAIZO_PATCH_SHA256, VANILLA_SHA1
+    from tools.rom.patch import expected_patched
+    from tools.rom.symbols import DECOMP_COMMIT
+
+    exp = expected_patched()
+    return {"vanilla_sha1": VANILLA_SHA1, "patch_sha256": KAIZO_PATCH_SHA256,
+            "patched_sha1": exp["sha1"] if exp else "unknown", "decomp_commit": DECOMP_COMMIT}
+
+
+def _cell(text: object) -> str:
+    return (str(text).encode("ascii", "backslashreplace").decode("ascii")
+            .replace("|", "\\|").replace("\n", " "))
+
+
+def _table(header: list[str], rows: list[list[object]]) -> list[str]:
+    out = ["| " + " | ".join(header) + " |", "|" + "|".join(" --- " for _ in header) + "|"]
+    out += ["| " + " | ".join(_cell(c) for c in row) + " |" for row in rows]
+    return [*out, ""]
+
+
+def _index_ranges(indices: tuple[int, ...]) -> list[tuple[int, int]]:
+    out: list[list[int]] = []
+    for i in sorted(indices):
+        if out and i == out[-1][1] + 1:
+            out[-1][1] = i
+        else:
+            out.append([i, i])
+    return [(a, b) for a, b in out]
+
+
+def _members(f: FileChange, decomp: Path | None) -> str:
+    if f.member_counts is None:
+        return ""
+    parts = []
+    if f.member_counts[0] != f.member_counts[1]:
+        parts.append(f"{f.member_counts[0]} -> {f.member_counts[1]} members")
+    if not f.members_changed:
+        if f.member_counts[0] == f.member_counts[1]:
+            parts.append("container changed, no member changed")
+        return "; ".join(parts)
+    texts = []
+    for lo, hi in _index_ranges(f.members_changed):
+        text = str(lo) if lo == hi else f"{lo}-{hi}"
+        if decomp is not None:
+            a, b = member_label(f.path, lo, decomp), member_label(f.path, hi, decomp)
+            if a and b:
+                text += f" ({a})" if lo == hi else f" ({a} .. {b})"
+        texts.append(text)
+    parts.append(f"{len(f.members_changed)} changed: " + ", ".join(texts))
+    return "; ".join(parts)
+
+
+def _size(n: int | None) -> str:
+    return "-" if n is None else str(n)
+
+
+def _files_lines(diff: RomDiff, decomp: Path | None) -> list[str]:
+    changed = [f for f in diff.files if f.status == "changed"]
+    added = [f for f in diff.files if f.status == "added"]
+    removed = [f for f in diff.files if f.status == "removed"]
+    out = [f"## Changed files ({len(changed)})", ""]
+    out += _table(["path", "vanilla bytes", "patched bytes", "members"],
+                  [[f.path, _size(f.vanilla_size), _size(f.patched_size), _members(f, decomp)]
+                   for f in changed])
+    out += [f"## Added files ({len(added)})", "", "Collapsed per folder.", ""]
+    folders: dict[str, list[int]] = {}
+    for f in added:
+        entry = folders.setdefault(f.path.rpartition("/")[0] or "(root)", [0, 0])
+        entry[0] += 1
+        entry[1] += f.patched_size or 0
+    out += _table(["folder", "files", "bytes"],
+                  [[k, v[0], v[1]] for k, v in sorted(folders.items())])
+    out += [f"## Removed files ({len(removed)})", ""]
+    out += (_table(["path", "vanilla bytes"], [[f.path, _size(f.vanilla_size)] for f in removed])
+            if removed else ["None.", ""])
+    return out
+
+
+def _code_lines(diff: RomDiff, classification: dict) -> list[str]:
+    total = sum(diff.relocations.values())
+    summary = (f"{len(diff.code)} changed ranges; {total} relocated units are counted apart "
+               "(re-encoded only because what they point at moved).")
+    out = ["## Code", "", summary, ""]
+    by_key: dict[tuple[str, str], list[CodeChange]] = {}
+    for c in diff.code:
+        by_key.setdefault(_key(c), []).append(c)
+    keys = _changed_keys(diff)
+    modules = sorted({m for m, _ in keys} | {m for m, _ in diff.relocations}, key=_module_order)
+    for module in modules:
+        out += [f"### {module}", ""]
+        rows: list[list[object]] = []
+        for m, name in (k for k in keys if k[0] == module):
+            cs = by_key[(m, name)]
+            nbytes = sum(max(c.end - c.start, c.patched_end - c.patched_start) for c in cs)
+            status, note = classification.get((m, name), ("unknown", ""))
+            reloc = diff.relocations.get((m, cs[0].symbol), 0) if cs[0].symbol else 0
+            rows.append([name, len(cs), nbytes, reloc, status, note])
+        listed = {r[0] for r in rows}
+        for (m, sym), n in sorted(diff.relocations.items(),
+                                  key=lambda kv: (kv[0][1] is None, kv[0][1] or "")):
+            if m == module and sym not in listed:
+                rows.append([sym or "(outside symbols)", 0, 0, n, "-", "relocations only"])
+        out += _table(["symbol", "ranges", "bytes changed", "relocations", "status", "note"],
+                      rows)
+    return out
+
+
+def _report_lines(diff, classification, provenance, decomp) -> list[str]:
+    out = ["# Kaizo ROM diff", "",
+           "Generated by `python -m tools.rom.diff`; names, addresses, sizes and counts only.",
+           "Statuses come from `data/kaizo/rom_diff.toml`.", "", "## Provenance", ""]
+    out += _table(["input", "value"], [
+        ["vanilla SHA-1", provenance["vanilla_sha1"]],
+        ["patch SHA-256", provenance["patch_sha256"]],
+        ["patched SHA-1", provenance["patched_sha1"]],
+        ["decomp commit", provenance["decomp_commit"]]])
+    out += ["## Header changes", ""]
+    out += (_table(["field", "vanilla", "patched"],
+                   [[h.field, h.vanilla, h.patched] for h in diff.header])
+            if diff.header else ["None.", ""])
+    out += ["## Module sizes", "",
+            "Modules whose bytes differ (ARM9 is the sum of its sections).", ""]
+    out += _table(["module", "vanilla bytes", "patched bytes", "delta"], [
+        [m, a, b, f"{b - a:+d}"]
+        for m, (a, b) in sorted(diff.modules.items(), key=lambda kv: _module_order(kv[0]))])
+    return out + _files_lines(diff, decomp) + _code_lines(diff, classification)
+
+
+def write_report(diff: RomDiff, classification: dict, path: Path,
+                 provenance: dict[str, str] | None = None, decomp: Path | None = None) -> None:
+    """Write the deterministic ASCII Markdown report; stale classification entries raise."""
+    stale = stale_entries(diff, classification)
+    if stale:
+        raise ValueError("classification entries matching no current change: "
+                         + ", ".join(f"{m} {s}" for m, s in stale))
+    lines = _report_lines(diff, classification, provenance or default_provenance(), decomp)
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(("\n".join(lines).rstrip("\n") + "\n").encode("ascii"))
+
+
+# --- command line -----------------------------------------------------------------------
+
+
+def main(argv: list[str] | None = None) -> int:
+    import argparse
+
+    from tools.rom.symbols import DEFAULT_MAP
+
+    ap = argparse.ArgumentParser(prog="python -m tools.rom.diff",
+                                 description="Diff vanilla Platinum against the Kaizo ROM.")
+    ap.add_argument("--symbols", type=Path, default=DEFAULT_MAP)
+    ap.add_argument("--decomp", type=Path, default=REPO_ROOT / "external" / "pokeplatinum")
+    ap.add_argument("--classification", type=Path,
+                    default=REPO_ROOT / "data" / "kaizo" / "rom_diff.toml")
+    ap.add_argument("--out", type=Path, default=REPO_ROOT / "docs" / "kaizo" / "rom_diff.md")
+    ap.add_argument("--init-classification", action="store_true",
+                    help="write an all-unknown classification; refuses to overwrite one")
+    args = ap.parse_args(argv)
+
+    if args.init_classification and args.classification.exists():
+        print(f"{args.classification} exists; not overwriting it", file=sys.stderr)
+        return 1
+
+    from tools.rom.inputs import VANILLA_SHA1, load_inputs, read_checked
+    from tools.rom.nds import RomFiles
+    from tools.rom.patch import kaizo_rom
+    from tools.rom.symbols import SymbolMap
+
+    inputs = load_inputs()
+    vanilla = RomFiles.open(read_checked(inputs.vanilla_rom, VANILLA_SHA1, "sha1"))
+    patched_path, _ = kaizo_rom(inputs)
+    patched = RomFiles.open(patched_path.read_bytes())
+    diff = diff_roms(vanilla, patched, SymbolMap.from_map(args.symbols))
+
+    if args.init_classification:
+        args.classification.parent.mkdir(parents=True, exist_ok=True)
+        args.classification.write_text(classification_skeleton(diff), encoding="ascii",
+                                       newline="\n")
+        print(f"wrote {args.classification}: {len(_changed_keys(diff))} entries")
+        return 0
+    classification = (load_classification(args.classification)
+                      if args.classification.exists() else {})
+    write_report(diff, classification, args.out,
+                 decomp=args.decomp if args.decomp.exists() else None)
+    print(f"wrote {args.out}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

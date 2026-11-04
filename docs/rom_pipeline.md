@@ -59,3 +59,17 @@ Expected: `sha1sum build/pokeplatinum.us.nds` prints `0862ec35b24de5c7e2dcb88c9e
 (git-ignored); the symbol tests skip when it is absent. **Never commit the map or
 `main.lsf`**; only the hand-cut excerpt `tests/tools/rom/fixtures/xmap_excerpt.txt`
 (names and addresses) is committed.
+
+## ROM diff
+
+`python -m tools.rom.diff` compares the vanilla ROM with the patched Kaizo ROM (header,
+files, NARC members, code by linker-map symbol) and writes `docs/kaizo/rom_diff.md`: names,
+addresses, sizes and counts only, never ROM bytes. Defaults find `data/local.toml`, the map
+at `.cache/decomp/<commit>/main.nef.xMAP` and the decomp at `external/pokeplatinum`; the flags
+`--symbols`, `--decomp`, `--classification` and `--out` override them.
+
+`data/kaizo/rom_diff.toml` classifies every changed symbol (`[[code]]` tables with `module`,
+`symbol`, `status` and `note`; `symbol` is `"0xSTART-0xEND"` for a range outside every symbol;
+`status` is `modelled`, `irrelevant` or `unknown`). `--init-classification` writes an
+all-`unknown` skeleton and refuses to overwrite an existing file. An entry that matches no
+current change is an error naming it, so a renamed or moved change cannot hide.
