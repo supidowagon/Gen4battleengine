@@ -13,23 +13,37 @@ from tools.rom.symbols import Symbol, SymbolMap
 BASE = 0x02200000  # overlay 3's RAM address
 CODE = bytes(range(256))  # overlay 3's default code
 
-SYMS = SymbolMap([
-    Symbol("overlay3", BASE + 0x40, 0x20, "Foo", "a.o", ".text"),
-    Symbol("overlay3", BASE + 0x60, 0x20, "Bar", "a.o", ".text"),
-])
+SYMS = SymbolMap(
+    [
+        Symbol("overlay3", BASE + 0x40, 0x20, "Foo", "a.o", ".text"),
+        Symbol("overlay3", BASE + 0x60, 0x20, "Bar", "a.o", ".text"),
+    ]
+)
 
 
 class FakeRom:
     """A ROM with the ``RomFiles`` interface, from in-memory files and code."""
 
-    def __init__(self, files: dict, arm9: list[tuple[int, bytes]], ov3: bytes, header: bytes,
-                 parts: dict | None = None):
+    def __init__(
+        self,
+        files: dict,
+        arm9: list[tuple[int, bytes]],
+        ov3: bytes,
+        header: bytes,
+        parts: dict | None = None,
+    ):
         self._files = files
         self._arm9 = arm9
         self._ov3 = ov3
         self._header = header
-        self._parts = {"arm9_overlay_table": b"", "arm9_footer": b"", "arm7": b"",
-                       "arm7_overlay_table": b"", "banner": b"", **(parts or {})}
+        self._parts = {
+            "arm9_overlay_table": b"",
+            "arm9_footer": b"",
+            "arm7": b"",
+            "arm7_overlay_table": b"",
+            "banner": b"",
+            **(parts or {}),
+        }
 
     def arm9_overlay_table(self) -> bytes:
         return self._parts["arm9_overlay_table"]
@@ -106,7 +120,7 @@ def fake(files=None, arm9=None, ov3=None, header=None, parts=None) -> FakeRom:
 
 def poke(data: bytes, off: int, new: bytes) -> bytes:
     """``data`` with ``new`` written at ``off``."""
-    return data[:off] + new + data[off + len(new):]
+    return data[:off] + new + data[off + len(new) :]
 
 
 # Relocation fixture: 0x100 bytes of overlay 3 made of distinct filler words that are
@@ -126,12 +140,14 @@ def _filler() -> bytes:
     return b"".join(struct.pack("<I", 0x11000000 + i) for i in range(0x40))
 
 
-RELOC_SYMS = SymbolMap([
-    Symbol("overlay3", BASE + 0x00, 0x20, "Caller", "b.o", ".text"),
-    Symbol("overlay3", BASE + 0x40, 0x40, "Grown", "b.o", ".text"),
-    Symbol("overlay3", BASE + 0x80, 0x20, "Holder", "b.o", ".rodata"),
-    Symbol("overlay3", BASE + 0xC0, 0x20, "Callee", "b.o", ".text"),
-])
+RELOC_SYMS = SymbolMap(
+    [
+        Symbol("overlay3", BASE + 0x00, 0x20, "Caller", "b.o", ".text"),
+        Symbol("overlay3", BASE + 0x40, 0x40, "Grown", "b.o", ".text"),
+        Symbol("overlay3", BASE + 0x80, 0x20, "Holder", "b.o", ".rodata"),
+        Symbol("overlay3", BASE + 0xC0, 0x20, "Callee", "b.o", ".text"),
+    ]
+)
 
 
 def reloc_van() -> bytes:

@@ -113,9 +113,7 @@ def test_symbol_bytes(vanilla_files, symbols):
     assert len(data) == sym.size == 25 * 5
     # src/pokemon.c:2415: s8 [nature][stat - 1], stats in the order Attack, Defense, Speed,
     # Sp. Atk, Sp. Def; nature n raises stat n // 5 and lowers stat n % 5 (neutral if equal).
-    want = bytes(
-        (int(k == n // 5) - int(k == n % 5)) & 0xFF for n in range(25) for k in range(5)
-    )
+    want = bytes((int(k == n // 5) - int(k == n % 5)) & 0xFF for n in range(25) for k in range(5))
     assert data == want
     ram, arm9 = vanilla_files.arm9_sections()[0]
     assert data == arm9[sym.address - ram : sym.address - ram + sym.size]

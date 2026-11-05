@@ -102,8 +102,14 @@ def test_range_key_for_code_outside_symbols(tmp_path):
 
 
 def test_missing_decomp_is_an_error(tmp_path, capsys):
-    argv = ["--decomp", str(tmp_path / "nope"), "--classification", str(tmp_path / "c.toml"),
-            "--out", str(tmp_path / "r.md")]
+    argv = [
+        "--decomp",
+        str(tmp_path / "nope"),
+        "--classification",
+        str(tmp_path / "c.toml"),
+        "--out",
+        str(tmp_path / "r.md"),
+    ]
     assert main(argv) == 1
     assert "decomp not found" in capsys.readouterr().err
     assert not (tmp_path / "r.md").exists()
@@ -125,7 +131,10 @@ def test_files_section(tmp_path):
             FileChange("x/b", "added", None, 7),
             FileChange("gone", "removed", 3, None),
         ),
-        (), {}, {})
+        (),
+        {},
+        {},
+    )
     write_report(d, {}, tmp_path / "r.md", PROV)
     t = (tmp_path / "r.md").read_text()
     assert "game_code" in t and "CPUE" in t and "JAK7" in t
@@ -140,6 +149,7 @@ def test_relocation_only_symbol_is_listed(tmp_path):
     d = dataclasses.replace(D, relocations={("overlay3", "Bar"): 7, ("overlay3", "Foo"): 2})
     write_report(d, {}, tmp_path / "r.md", PROV)
     t = (tmp_path / "r.md").read_text()
-    assert next(line for line in t.splitlines() if line.startswith("| Bar |")).split("|")[4:5] \
-        == [" 7 "]
+    assert next(line for line in t.splitlines() if line.startswith("| Bar |")).split("|")[4:5] == [
+        " 7 "
+    ]
     assert foo_row(t).split("|")[4] == " 2 "

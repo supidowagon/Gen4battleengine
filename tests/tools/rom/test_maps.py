@@ -188,8 +188,9 @@ def test_unresolved_operand_reported(table):
     assert script_battles(_script(0) + battle, table, unresolved=sites) == set()
     assert sites == [(6, 0x8005, 0)]
     sites = []
-    script_battles(_script(0) + _cmd(table, "SetVarFromValue", 0x8005, 9) + battle, table,
-                   unresolved=sites)
+    script_battles(
+        _script(0) + _cmd(table, "SetVarFromValue", 0x8005, 9) + battle, table, unresolved=sites
+    )
     assert sites == []
 
 

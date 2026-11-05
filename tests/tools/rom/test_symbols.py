@@ -36,8 +36,9 @@ def test_excerpt_parses():
     assert m.lookup("overlay16", 0x0226ECD4 + 0x14F) == "sTypeMatchupMultipliers"
     assert m.lookup("overlay16", 0x02222E84) is None  # wrong module
     s = m.find("TrainerData_BuildParty")
-    assert s == Symbol("arm9", 0x020793B8, 0x410, "TrainerData_BuildParty",
-                       "src_trainer_data.c.o", ".text")
+    assert s == Symbol(
+        "arm9", 0x020793B8, 0x410, "TrainerData_BuildParty", "src_trainer_data.c.o", ".text"
+    )
     assert [x.name for x in m.symbols("overlay14")] == ["TrainerAI_Init", "TrainerAI_CalcDamage"]
     with pytest.raises(KeyError):
         m.find("$t")  # ambiguous
@@ -61,7 +62,9 @@ def test_unparsed_line_raises(tmp_path):
 
 
 def test_decomp_commit_pinned():
-    manifest = json.loads((REPO_ROOT / "data/gen4_platinum/manifest.json").read_text(encoding="utf-8"))
+    manifest = json.loads(
+        (REPO_ROOT / "data/gen4_platinum/manifest.json").read_text(encoding="utf-8")
+    )
     assert DECOMP_COMMIT == manifest["decomp_commit"]
     script = (REPO_ROOT / "tools/clone_decomp.sh").read_text(encoding="utf-8")
     pinned = re.search(r'^PINNED_COMMIT="([0-9a-f]{40})"\r?$', script, re.MULTILINE)
@@ -69,17 +72,25 @@ def test_decomp_commit_pinned():
 
 
 def test_zero_size_and_alias_lookup():
-    m = SymbolMap([Symbol("arm9", 0x100, 0, "Label", "a.o", ".text"),
-                   Symbol("arm9", 0x100, 0x20, "Outer", "a.o", ".text"),
-                   Symbol("arm9", 0x100, 0x10, "Inner", "a.o", ".text")])
+    m = SymbolMap(
+        [
+            Symbol("arm9", 0x100, 0, "Label", "a.o", ".text"),
+            Symbol("arm9", 0x100, 0x20, "Outer", "a.o", ".text"),
+            Symbol("arm9", 0x100, 0x10, "Inner", "a.o", ".text"),
+        ]
+    )
     assert m.lookup("arm9", 0x104) == "Inner" and m.lookup("arm9", 0x118) == "Outer"
     assert m.lookup("arm9", 0x120) is None and m.find("Label").size == 0
     assert m.lookup("arm9", 0x100) == "Inner"
 
 
 def test_alias_tie_goes_to_first():
-    m = SymbolMap([Symbol("arm9", 0x100, 0x10, "First", "a.o", ".text"),
-                   Symbol("arm9", 0x100, 0x10, "Second", "a.o", ".text")])
+    m = SymbolMap(
+        [
+            Symbol("arm9", 0x100, 0x10, "First", "a.o", ".text"),
+            Symbol("arm9", 0x100, 0x10, "Second", "a.o", ".text"),
+        ]
+    )
     assert m.lookup("arm9", 0x108) == "First"
 
 
@@ -87,8 +98,13 @@ def test_known_symbols(symbols):
     assert symbols.find("TrainerData_BuildParty").module == "arm9"
     assert symbols.find("TrainerAI_CalcDamage").module == "overlay14"  # trainer_ai, main.lsf order
     assert symbols.find("sTypeMatchupMultipliers").module == "overlay16"  # battle
-    for name in ("sMapHeaders", "sYearlyWeather", "sTrainerClassGender", "sItemArchiveIDs",
-                 "sNatureStatAffinities"):
+    for name in (
+        "sMapHeaders",
+        "sYearlyWeather",
+        "sTrainerClassGender",
+        "sItemArchiveIDs",
+        "sNatureStatAffinities",
+    ):
         assert symbols.find(name).module == "arm9"
     assert symbols.find("gVsSeekerRematchData").module == "overlay5"
 
@@ -96,8 +112,10 @@ def test_known_symbols(symbols):
 def test_overlay_symbols_inside_rom_overlays(symbols, vanilla_files):
     for i in vanilla_files.overlay_ids():
         ram, size, bss = vanilla_files.overlay_info(i)
-        assert all(ram <= s.address and s.address + s.size <= ram + size + bss
-                   for s in symbols.symbols(f"overlay{i}"))
+        assert all(
+            ram <= s.address and s.address + s.size <= ram + size + bss
+            for s in symbols.symbols(f"overlay{i}")
+        )
     assert {f"overlay{i}" for i in vanilla_files.overlay_ids()} >= set(symbols.modules()) - {"arm9"}
 
 
@@ -143,8 +161,9 @@ def test_extent_outside_own_section_ignored(tmp_path):
 
 def test_extent_without_size_raises(tmp_path):
     path = tmp_path / "m.xMAP"
-    path.write_text("# .main\n#>02000000          SDK_STATIC_START (linker command file)\n"
-                    "# Memory map:\n")
+    path.write_text(
+        "# .main\n#>02000000          SDK_STATIC_START (linker command file)\n# Memory map:\n"
+    )
     with pytest.raises(SymbolMapError, match="START or SIZE"):
         SymbolMap.from_map(path)
 
