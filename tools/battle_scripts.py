@@ -120,6 +120,12 @@ def _run(ops: list[Op], labels: dict[str, int], label: str, var: int, gender: in
     env: dict[int, int] = {}
     pc, stack = labels[label], []
     seen = set()
+
+    def jump(op: Op, target) -> int:
+        if target not in labels:
+            raise ValueError(f"partner routine {label!r}: {op} jumps to unknown label {target!r}")
+        return labels[target]
+
     for _ in range(_MAX_STEPS):
         if pc >= len(ops):
             raise ValueError(f"partner routine {label!r} runs off the end of the script")
@@ -142,12 +148,12 @@ def _run(ops: list[Op], labels: dict[str, int], label: str, var: int, gender: in
             if v not in env:
                 raise ValueError(f"partner routine {label!r}: {op} reads an unset variable")
             if env[v] == value:
-                pc = labels[target]
+                pc = jump(op, target)
         elif op.name == "GoTo":
-            pc = labels[op.args[0]]
+            pc = jump(op, op.args[0])
         elif op.name == "Call":
             stack.append(pc)
-            pc = labels[op.args[0]]
+            pc = jump(op, op.args[0])
         elif op.name == "Return":
             if stack:
                 pc = stack.pop()
@@ -261,9 +267,12 @@ def battle_structures(
     for header, ops in scripts.items():
         for i, op in enumerate(ops):
             if op.name == "StartTrainerBattle":
-                t1, t2 = op.args
-                if t2 == 0 or is_var(t1) or is_var(t2):
-                    continue  # one enemy, or trainers that spot the player (Ruling 4)
+                if op.args[1] == 0:
+                    continue  # one enemy
+                # A variable operand resolves through the SetVar before it, else raises.
+                # Ruling 4's spotting pair (scripts_battles.s:173) is a common script that
+                # no map header runs, so it never reaches here.
+                t1, t2 = (_resolve(ops, i, t, f"map {header}") for t in op.args)
                 claim(t1, ("pair", t2), header)
                 claim(t2, ("pair", t1), header)
             elif op.name == "StartTagBattle":

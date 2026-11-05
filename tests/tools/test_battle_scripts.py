@@ -151,10 +151,46 @@ def test_the_same_pair_twice_is_one_structure():
     assert got[5] == BattleStructure("double_two_trainer", 6, ())
 
 
-def test_variable_pair_is_not_recorded():
-    # scripts_battles.s:173: two trainers spotting the player (Ruling 4).
+def test_variable_pair_resolves_through_setvar():
+    ops = [
+        Op("SetVar", (V, 5)),
+        Op("SetVar", (0x8005, 6)),
+        Op("StartTrainerBattle", (V, 0x8005)),
+    ]
+    assert battle_structures({"A": ops}, {}) == {
+        5: BattleStructure("double_two_trainer", 6, ()),
+        6: BattleStructure("double_two_trainer", 5, ()),
+    }
+
+
+def test_unresolved_variable_pair_raises():
+    # Like scripts_battles.s:173 (Ruling 4), but on a map script: never skipped silently.
     scripts = {"A": [Op("StartTrainerBattle", (V, 0x8005))]}
-    assert battle_structures(scripts, {}) == {}
+    with pytest.raises(ValueError, match="map A"):
+        battle_structures(scripts, {})
+
+
+def test_single_variable_battle_is_not_a_pair():
+    # scripts_pokemon_mansion.s:183: StartTrainerBattle VAR_0x8007 (enemyTrainer2 = 0).
+    assert battle_structures({"A": [Op("StartTrainerBattle", (0x8007, 0))]}, {}) == {}
+
+
+def test_jump_to_unknown_label_raises_value_error():
+    ops = [Op("label", ("A",)), Op("GoTo", ("Elsewhere",))]
+    with pytest.raises(ValueError, match="unknown label 'Elsewhere'"):
+        partner_variants(ops, "A", V)
+    ops = [Op("label", ("A",)), Op("Call", ("Elsewhere",)), Op("Return", ())]
+    with pytest.raises(ValueError, match="unknown label 'Elsewhere'"):
+        partner_variants(ops, "A", V)
+    ops = [
+        Op("label", ("A",)),
+        Op("GetPlayerGender", (R,)),
+        Op("GoToIfEq", (R, 0, "Elsewhere")),
+        Op("SetVar", (V, 1)),
+        Op("Return", ()),
+    ]
+    with pytest.raises(ValueError, match="unknown label 'Elsewhere'"):
+        partner_variants(ops, "A", V)
 
 
 def test_tag_battle_partner_from_the_call_before_it():
