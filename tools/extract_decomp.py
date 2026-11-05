@@ -363,11 +363,19 @@ def extract_natures(decomp: Path) -> list[dict]:
 def extract_items(decomp: Path) -> list[dict]:
     items = _constants(decomp, "items", "ITEM_")
     hold_id = _index(_constants(decomp, "item_hold_effects", "HOLD_EFFECT_"), "hold effect")
+    move_id = _index(_constants(decomp, "moves", "MOVE_"), "move")
     out = []
     for const in items:
         if const.startswith("ITEM_UNUSED_"):
             # tools/dataproc/src/itemproc.c HasData: unused ids have no data file.
-            out.append({"name": const, "hold_effect": hold_id("HOLD_EFFECT_NONE"), "hold_param": 0})
+            out.append(
+                {
+                    "name": const,
+                    "hold_effect": hold_id("HOLD_EFFECT_NONE"),
+                    "hold_param": 0,
+                    "teaches_move": None,
+                }
+            )
             continue
         d = _load_json(decomp / "res" / "items" / "data" / f"{_stem(const, 'ITEM_')}.json")
         out.append(
@@ -375,6 +383,8 @@ def extract_items(decomp: Path) -> list[dict]:
                 "name": d["name"],
                 "hold_effect": hold_id(d["holdEffect"]),
                 "hold_param": int(d["effectParam"]),
+                # res/items/data/tm10.json `teachesMove`; null for every other item.
+                "teaches_move": move_id(d["teachesMove"]) if d.get("teachesMove") else None,
             }
         )
     return out
@@ -396,6 +406,29 @@ def extract_learnsets(decomp: Path) -> dict[str, list[list[int]]]:
         _, d = _species_json(decomp, const)
         by_level = d.get("learnset", {}).get("by_level", [])
         out[str(sid)] = [[int(level), move_id(move)] for level, move in by_level]
+    return out
+
+
+_NUM_TMS = 92  # NUM_TMS
+_NUM_HMS = 8  # NUM_HMS
+
+
+def extract_tm_learnsets(decomp: Path) -> dict[str, list[int]]:
+    """Species id -> sorted TM/HM indices from ``learnset.by_tm``, numbered as
+    tools/dataproc/src/speciesproc.c ProcTMLearnset sets the bits: TM01-TM92 are
+    0-91 and HM01-HM08 are 92-99."""
+    species = _constants(decomp, "species", "SPECIES_")
+    out = {}
+    for sid, const in enumerate(species):
+        _, d = _species_json(decomp, const)
+        bits = set()
+        for marker in d.get("learnset", {}).get("by_tm", []):
+            m = re.fullmatch(r"(TM|HM)(\d+)", marker)
+            is_hm = bool(m) and m.group(1) == "HM"
+            if not m or not 1 <= int(m.group(2)) <= (_NUM_HMS if is_hm else _NUM_TMS):
+                raise ExtractError(f"species {const}: bad TM/HM marker {marker!r}")
+            bits.add(int(m.group(2)) - 1 + (_NUM_TMS if is_hm else 0))
+        out[str(sid)] = sorted(bits)
     return out
 
 
@@ -701,6 +734,7 @@ def extract_static(decomp_root: Path, out_dir: Path) -> None:
     _write(out_dir / "items.json", extract_items(decomp_root))
     _write(out_dir / "abilities.json", extract_abilities(decomp_root))
     _write(out_dir / "learnsets.json", extract_learnsets(decomp_root))
+    _write(out_dir / "tm_learnsets.json", extract_tm_learnsets(decomp_root))
     _write(out_dir / "exp_tables.json", extract_exp_tables(decomp_root))
     _write(
         out_dir / "charmap.json",

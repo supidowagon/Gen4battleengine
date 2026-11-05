@@ -16,7 +16,8 @@ Encodings:
 * ``stages[side, ids.Stat]`` are the active Pokemon's stat stages, 0 = neutral
   (the decomp stores 6 = neutral); index 0 (HP) is unused.
 * ``weather`` is an ``ids.Weather``; ``weather_timer == 0`` means permanent.
-* ``winner``: 0 none, 1 player lost (or any player Pokemon fainted), 2 player won.
+* ``winner``: 0 none, 1 player lost (no player Pokemon with HP left, a
+  double KO included), 2 player won.
 * ``turn`` is the decomp's ``totalTurns`` while a turn is played and at each decision;
   ``step`` adds 1 at the end, so a faint replacement (``step.replace``, run after
   ``step``) sees ``turn`` one ahead of the decomp's, which increments after it
@@ -26,6 +27,11 @@ Encodings:
   is ``fake_out_turn >= turn``.
 * ``move_hit`` is ``moveHit``: the last move aimed at the side's active battler since its
   own last action ended (see ``step``).
+* ``foresight``, ``disabled_move``/``disable_turns``, ``locked_move`` (0 = not locked),
+  ``bide_turns``/``bide_damage`` (``bide_damage`` is ``storedDamage`` only while
+  ``bide_turns > 0``, else 0), ``curled`` and ``mud_sport`` are the active battler's
+  matching volatile / move-effect state; all are reset like the other volatiles
+  (``step._VOLATILE``).
 * ``trainer_item_count`` is ``aiContext.trainerItemCounts``: the bag's size at battle
   start, never decremented.
 """
@@ -44,6 +50,7 @@ from nuzline.engine.ids import Stat, Weather
 from nuzline.engine.stats import calc_stats
 
 SIDES, SLOTS, MOVES = 2, 6, 4
+MAX_DEATH_BUDGET = 3  # the ladder's range: k = 0..3 deaths allowed (spec §4)
 BAG_SLOTS = 4  # MAX_TRAINER_ITEMS: trainer_items[side] holds the AI's bag
 STAGE_MIN, STAGE_MAX = -6, 6
 _STAGE_KEYWORDS = {
@@ -97,6 +104,14 @@ class BattleState(NamedTuple):
     water_sport: jnp.ndarray  # int8
     fake_out_turn: jnp.ndarray  # int16, fakeOutTurnNumber
     move_hit: jnp.ndarray  # int16, moveHit: decomp move id, 0 = none
+    foresight: jnp.ndarray  # int8, VOLATILE_CONDITION_FORESIGHT
+    disabled_move: jnp.ndarray  # int16, MoveEffectsData.disabledMove: move id, 0 = none
+    disable_turns: jnp.ndarray  # int8, MoveEffectsData.disabledTurns (hidden)
+    locked_move: jnp.ndarray  # int16, moveLockedInto while VOLATILE_CONDITION_MOVE_LOCKED
+    bide_turns: jnp.ndarray  # int8, VOLATILE_CONDITION_BIDE turns, 0-2
+    bide_damage: jnp.ndarray  # int16, storedDamage while Biding (hidden), else 0
+    curled: jnp.ndarray  # int8, VOLATILE_CONDITION_DEFENSE_CURL
+    mud_sport: jnp.ndarray  # int8, MOVE_EFFECT_MUD_SPORT in moveEffectsMask
     # per side [2]
     spikes: jnp.ndarray  # int8, layers
     toxic_spikes: jnp.ndarray  # int8, layers
@@ -118,7 +133,6 @@ class BattleState(NamedTuple):
     weather_timer: jnp.ndarray  # int8, 0 = permanent
     trick_room: jnp.ndarray  # int8
     gravity: jnp.ndarray  # int8
-    mud_sport: jnp.ndarray  # int8
     turn: jnp.ndarray  # int16
     over: jnp.ndarray  # int8
     winner: jnp.ndarray  # int8
@@ -126,6 +140,11 @@ class BattleState(NamedTuple):
     # AI knowledge of the player
     ai_seen_moves: jnp.ndarray  # int8[6,4], player slot x move slot
     ai_ability_known: jnp.ndarray  # int8[6]
+    # faint budget (search data; the engine only records deaths and never reads k)
+    deaths: jnp.ndarray  # int8[6], 1 where the player's party slot fainted this battle
+    faint_budget: jnp.ndarray  # int8, k: the deaths the search allows
+    protected: jnp.ndarray  # int8[6], 1 where the player's slot must not faint
+    replace_mul: jnp.ndarray  # int8, the turn's powerMul while a player replacement is pending
 
     def replace_hp(self, side: int, slot: int, hp: int) -> BattleState:
         return self._replace(hp=self.hp.at[side, slot].set(hp))
@@ -150,6 +169,31 @@ class BattleState(NamedTuple):
             status=self.status.at[side, slot].set(status),
             status_counter=self.status_counter.at[side, slot].set(counter),
         )
+
+    def with_budget(self, k: int = 0, protected: Sequence[int] = ()) -> BattleState:
+        """Set the faint budget ``k`` (0..``MAX_DEATH_BUDGET``) and the protected player
+        slots: each must hold a living Pokemon (not empty, not fainted)."""
+        mask = protected_mask(self.species[0], self.hp[0], k, protected)
+        return self._replace(
+            faint_budget=jnp.asarray(k, jnp.int8), protected=jnp.asarray(mask, jnp.int8)
+        )
+
+
+def protected_mask(species, hp, k: int, protected: Sequence[int]) -> np.ndarray:
+    """``int8[SLOTS]`` mask of the protected player slots, after ``with_budget``'s checks
+    on the budget ``k`` and on ``species`` / ``hp`` (the player's per-slot arrays)."""
+    if not 0 <= k <= MAX_DEATH_BUDGET:
+        raise ValueError(f"faint budget {k} outside [0, {MAX_DEATH_BUDGET}]")
+    mask = np.zeros(SLOTS, np.int8)
+    for slot in protected:
+        if not 0 <= slot < SLOTS:
+            raise ValueError(f"protected slot {slot} outside [0, {SLOTS - 1}]")
+        if int(species[slot]) == 0:
+            raise ValueError(f"protected slot {slot} is empty")
+        if int(hp[slot]) == 0:
+            raise ValueError(f"protected slot {slot} has already fainted")
+        mask[slot] = 1
+    return mask
 
 
 # Shape and storage dtype of every field, in BattleState order.
@@ -192,6 +236,14 @@ LAYOUT: dict[str, tuple[tuple[int, ...], type]] = {
     "water_sport": (_SIDE, np.int8),
     "fake_out_turn": (_SIDE, np.int16),
     "move_hit": (_SIDE, np.int16),
+    "foresight": (_SIDE, np.int8),
+    "disabled_move": (_SIDE, np.int16),
+    "disable_turns": (_SIDE, np.int8),
+    "locked_move": (_SIDE, np.int16),
+    "bide_turns": (_SIDE, np.int8),
+    "bide_damage": (_SIDE, np.int16),
+    "curled": (_SIDE, np.int8),
+    "mud_sport": (_SIDE, np.int8),
     "spikes": (_SIDE, np.int8),
     "toxic_spikes": (_SIDE, np.int8),
     "stealth_rock": (_SIDE, np.int8),
@@ -211,13 +263,16 @@ LAYOUT: dict[str, tuple[tuple[int, ...], type]] = {
     "weather_timer": (_FIELD, np.int8),
     "trick_room": (_FIELD, np.int8),
     "gravity": (_FIELD, np.int8),
-    "mud_sport": (_FIELD, np.int8),
     "turn": (_FIELD, np.int16),
     "over": (_FIELD, np.int8),
     "winner": (_FIELD, np.int8),
     "player_faints": (_FIELD, np.int8),
     "ai_seen_moves": ((SLOTS, MOVES), np.int8),
     "ai_ability_known": ((SLOTS,), np.int8),
+    "deaths": ((SLOTS,), np.int8),
+    "faint_budget": (_FIELD, np.int8),
+    "protected": ((SLOTS,), np.int8),
+    "replace_mul": (_FIELD, np.int8),
 }
 if tuple(LAYOUT) != BattleState._fields:
     raise RuntimeError("LAYOUT must list every BattleState field, in order")
@@ -236,6 +291,7 @@ def _fill_slot(a: dict[str, np.ndarray], tables: Tables, side: int, slot: int, m
             np.asarray(mon.evs),
             mon.level,
             np.asarray(tables.nature_mods[mon.nature]),
+            species=species,
         )
     max_hp = int(stats[Stat.HP])
     hp = max_hp if mon.current_hp is None else mon.current_hp
@@ -261,15 +317,16 @@ def _fill_slot(a: dict[str, np.ndarray], tables: Tables, side: int, slot: int, m
     a["ivs"][side, slot] = mon.ivs
 
 
-def make_state(
+def initial_arrays(
     tables: Tables,
     player: list[PokemonSpec],
     opp: list[PokemonSpec],
     start_condition: int = Weather.NONE,
     opp_items: Sequence[int] = (),
     leads: tuple[int, int] = (0, 0),
-) -> BattleState:
-    """Build the turn-0 state: stats via ``calc_stats``, empty slots all zero
+) -> dict[str, np.ndarray]:
+    """Every ``LAYOUT`` field of the turn-0 state, before the switch-in hooks, as numpy
+    (``make_state`` is this plus the two ``on_switch_in`` calls): stats via ``calc_stats``, empty slots all zero
     (``species = 0, hp = 0``), the leads in party slots ``leads`` (player, opponent),
     no volatiles, hazards or screens, and
     ``weather = start_condition`` with a permanent timer (0). The leads'
@@ -283,8 +340,6 @@ def make_state(
     ``fake_out_turn`` is 0: the battle-start send-out does not run
     ``BattleSystem_UpdateAfterSwitch``, and ``BattleContext`` starts zeroed
     (battle_controller_player.c:180-184)."""
-    from nuzline.engine.hooks import on_switch_in  # hooks imports this module
-
     a = {name: np.zeros(shape, dtype) for name, (shape, dtype) in LAYOUT.items()}
     for side, party in enumerate((player, opp)):
         if not 1 <= len(party) <= SLOTS:
@@ -301,6 +356,23 @@ def make_state(
     a["trainer_items"][1, : len(bag)] = bag
     a["trainer_item_count"][1] = len(bag)
     a["weather"][...] = Weather(start_condition)
+    return a
+
+
+def make_state(
+    tables: Tables,
+    player: list[PokemonSpec],
+    opp: list[PokemonSpec],
+    start_condition: int = Weather.NONE,
+    opp_items: Sequence[int] = (),
+    leads: tuple[int, int] = (0, 0),
+) -> BattleState:
+    """Build the turn-0 state (``initial_arrays``), then run the leads' switch-in
+    effects (``hooks.on_switch_in``, player first; the decomp's ``monSpeedOrder`` gives
+    the same result in singles, see ``hooks``)."""
+    from nuzline.engine.hooks import on_switch_in  # hooks imports this module
+
+    a = initial_arrays(tables, player, opp, start_condition, opp_items, leads)
     state = BattleState(**{name: jnp.asarray(a[name]) for name in BattleState._fields})
     for side in (0, 1):
         state = on_switch_in(tables, state, side)

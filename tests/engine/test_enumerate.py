@@ -24,7 +24,7 @@ from nuzline.engine.enumerate import (
     enumerate_outcomes,
     outcome_laws,
 )
-from nuzline.engine.ids import EffectId, Status
+from nuzline.engine.ids import AbilityId, EffectId, Status
 from nuzline.engine.order import selected_move
 from nuzline.engine.outcome import (
     Outcome,
@@ -234,6 +234,107 @@ def test_matches_sampled_frequencies(tables, names, case, player, opp):
     check_frequencies(expected, sampled(tables, s, acts, n), n)
 
 
+def test_magnitude_law_exact(tables, names):
+    s = roark_state(
+        tables, names, player_species="Geodude", player_moves=("Magnitude",), opp_moves=("Leer",)
+    )
+    acts = A("Magnitude", "Leer", s, names)
+    laws = laws_of(tables, s, acts)
+    assert laws.relevant.magnitude.tolist() == [True, False]
+    outcomes, probs = enumerate_outcomes(laws)
+    column = np.asarray(outcomes.magnitude)[:, 0]
+    expected = dict(zip(range(4, 11), (Fraction(n, 100) for n in (5, 10, 20, 30, 20, 10, 5)),
+                        strict=True))  # fmt: skip
+    assert set(column.tolist()) == set(expected)
+    for level, p in expected.items():
+        assert math.fsum(probs[column == level]) == float(p), level
+    # The foe's (irrelevant) element keeps its empty value.
+    assert (np.asarray(outcomes.magnitude)[:, 1] == 4).all()
+    # Magnitude is an ordinary damaging move: crit and roll are read.
+    assert bool(laws.relevant.crit[0, 0]) and bool(laws.relevant.roll[0, 0])
+
+
+def test_night_shade_has_no_crit_or_roll(tables, names):
+    s = roark_state(
+        tables, names, player_species="Spinarak", player_moves=("Night Shade",), opp_moves=("Leer",)
+    )
+    acts = A("Night Shade", "Leer", s, names)
+    laws = laws_of(tables, s, acts)
+    assert not laws.relevant.crit[0].any() and not laws.relevant.roll[0].any()
+    assert not laws.relevant.magnitude.any()
+    assert bool(laws.relevant.hit[0, 0])
+    outcomes, probs = enumerate_outcomes(laws)
+    assert (np.asarray(outcomes.crit)[:, 0] == 0).all()
+    assert (np.asarray(outcomes.roll)[:, 0] == 15).all()
+    assert abs(math.fsum(probs) - 1) < 1e-12
+
+
+def test_confusion_secondary_and_duration_laws(tables, names):
+    s = roark_state(
+        tables,
+        names,
+        player_species="Venonat",
+        player_moves=("Confusion",),
+        opp_species="Geodude",
+        opp_moves=("Leer",),
+    )
+    acts = A("Confusion", "Leer", s, names)
+    laws = laws_of(tables, s, acts)
+    assert int(laws.secondary_chance[0]) == 10
+    assert bool(laws.relevant.secondary[0, 0]) and bool(laws.relevant.duration[0])
+    # The foe (not the Confusion user) may hit itself the turn it is confused.
+    assert laws.relevant.confusion_hit.tolist() == [False, True]
+    outcomes, probs = enumerate_outcomes(laws)
+    secondary = np.asarray(outcomes.secondary)[:, 0, 0]
+    assert math.fsum(probs[secondary == 1]) == pytest.approx(0.10)
+    duration = np.asarray(outcomes.duration)[:, 0]
+    assert set(duration.tolist()) == {2, 3, 4, 5}
+    for d in (2, 3, 4, 5):
+        assert math.fsum(probs[duration == d]) == pytest.approx(0.25)
+
+
+def test_disable_duration_law(tables, names):
+    # BtlCmd_TryDisable (battle_script.c:4590): RandNext() % 4 + 3, uniform on 3-6.
+    s = roark_state(
+        tables,
+        names,
+        player_species="Psyduck",
+        player_moves=("Disable",),
+        opp_species="Geodude",
+        opp_moves=("Rock Throw",),
+    )
+    laws = laws_of(tables, s, A("Disable", "Rock Throw", s, names))
+    assert bool(laws.relevant.duration[0]) and not bool(laws.relevant.duration[1])
+    outcomes, probs = enumerate_outcomes(laws)
+    duration = np.asarray(outcomes.duration)[:, 0]
+    assert set(duration.tolist()) == {3, 4, 5, 6}
+    for d in (3, 4, 5, 6):
+        assert math.fsum(probs[duration == d]) == pytest.approx(0.25)
+
+
+def test_shed_skin_marginal_is_three_tenths(tables, names):
+    s = roark_state(
+        tables,
+        names,
+        player_species="Kricketot",
+        player_ability="Shed Skin",
+        player_moves=("Growl",),
+    )
+    laws = laws_of(tables, s, A("Growl", "Tackle", s, names))
+    assert laws.relevant.shed_skin.tolist() == [True, False]
+    outcomes, probs = enumerate_outcomes(laws)
+    shed = np.asarray(outcomes.shed_skin)[:, 0]
+    assert set(shed.tolist()) == {0, 1}
+    assert math.fsum(probs[shed == 1]) == pytest.approx(0.3, abs=1e-15)
+    assert math.fsum(probs[shed == 0]) == pytest.approx(0.7, abs=1e-15)
+    # an incoming holder counts as well; a holder-free state never rolls it
+    plain = roark_state(tables, names)
+    assert not laws_of(tables, plain, A(0, "Tackle", plain, names)).relevant.shed_skin.any()
+    bench = plain._replace(ability=plain.ability.at[0, 1].set(AbilityId.SHED_SKIN))
+    incoming = laws_of(tables, bench, A(4 + 1, "Tackle", bench, names))
+    assert incoming.relevant.shed_skin.tolist() == [True, False]
+
+
 # --- generated cases ---------------------------------------------------------------
 
 
@@ -269,12 +370,17 @@ def decomp_law(tables, state, actions, name: str, index: tuple) -> dict[int, Fra
         effect = int(tables.move_effect[move])
         if effect == EffectId.TAUNT:
             return {d: Fraction(1, 3) for d in (3, 4, 5)}
-        low = 3 if effect == EffectId.TRAP else 2
+        low = 3 if effect in (EffectId.TRAP, EffectId.DISABLE) else 2
         return {d: Fraction(1, 4) for d in range(low, low + 4)}
     if name == "full_para":
         return coin(Fraction(1, 4))
     if name == "thaw":
         return coin(Fraction(1, 5))
+    if name == "shed_skin":  # ShedSkin (battle_lib.c:3567): RandNext() % 10 < 3
+        return coin(Fraction(3, 10))
+    if name == "magnitude":  # BtlCmd_CalcMagnitude (battle_script.c:5820-5852)
+        return dict(zip(range(4, 11), (Fraction(n, 100) for n in (5, 10, 20, 30, 20, 10, 5)),
+                        strict=True))  # fmt: skip
     return {0: Fraction(1)}  # flinch_item, quick_claw
 
 

@@ -30,6 +30,7 @@ from nuzline.engine.ids import MOVE_STRUGGLE, AbilityId, EffectId, Stat, Status,
 from nuzline.engine.outcome import MAX_HITS, Outcome
 from nuzline.engine.state import (
     BAG_SLOTS,
+    MAX_DEATH_BUDGET,
     SLOTS,
     STAGE_MAX,
     STAGE_MIN,
@@ -53,6 +54,12 @@ M1_SPECIES = (
     "Cranidos",
     "Zubat",
     "Bidoof",
+    "Furret",
+    "Staravia",
+    "Spinarak",
+    "Psyduck",
+    "Venonat",
+    "Kricketot",
 )
 M1_ITEMS = ("", "Oran Berry", "Sitrus Berry")
 M1_BAG_ITEMS = ("", "Potion")  # the opponent's bag (ids.TrainerItemId)
@@ -63,6 +70,7 @@ _SLEEP_TURNS = (1, 5)  # BtlCmd_Random 3, 2 stores 2-5; a counter of 1 wakes nex
 _TOXIC_MAX = 15  # step.TOXIC_COUNTER_MAX
 _CONFUSION_MAX, _TAUNT_MAX, _BIND_MAX = 5, 5, 6  # outcome.sample_outcome's duration ranges
 _DURATION = (2, 6)  # outcome.duration over every move: 2-5 sleep/confusion, 3-6 Bind, 3-5 Taunt
+_DISABLE_MAX = 6  # Disable stores RandNext() % 4 + 3
 _TIMER_MAX = 5  # screens, Tailwind, Trick Room: turns left
 
 
@@ -87,6 +95,19 @@ SHARED_MOVES = (
     "Fury Swipes",
     "Thunder Wave",
     "Stun Spore",
+    "Foresight",
+    "Night Shade",
+    "Seismic Toss",
+    "Hidden Power",
+    "Magnitude",
+    "Confusion",
+    "Mud Sport",
+    "Bug Bite",
+    "Disable",
+    "Bide",
+    "Rollout",
+    "Ice Ball",
+    "Defense Curl",
 )
 
 
@@ -143,7 +164,9 @@ def supported_pokemon(draw, tables: Tables, names: Names) -> PokemonSpec:
     evs = tuple(draw(st.lists(st.integers(0, 85), min_size=6, max_size=6)))
     moves = draw(st.lists(st.sampled_from(pools[species]), min_size=1, max_size=4, unique=True))
     abilities = names.species_abilities(species)
-    ability_slot = draw(st.sampled_from([i for i, a in enumerate(abilities) if a]))
+    # a slot whose ability is not implemented (Run Away, Damp, ...) is never drawn
+    supported = np.asarray(tables.species_abilities[species]) != AbilityId.UNSUPPORTED
+    ability_slot = draw(st.sampled_from([i for i, a in enumerate(abilities) if a and supported[i]]))
     item = names.item(draw(st.sampled_from(M1_ITEMS)))
     gender = draw(st.sampled_from(possible_genders(int(tables.species_gender[species]))))
     max_hp = _max_hp(tables, species, ivs, evs, level, nature)
@@ -188,17 +211,39 @@ def _party(draw, tables: Tables, names: Names) -> tuple[list[PokemonSpec], int]:
     return party, active
 
 
+def _draw_lock(draw, a: dict, side: int, active: int, names: Names) -> None:
+    """Maybe lock the active Pokemon into a Bide or Rollout / Ice Ball it knows (not while
+    it sleeps: ``step`` unlocks a sleeper), with the matching hidden counters: Bide's
+    turns left (1 or 2: the counter starts at 2 and the unleash turn finds 1; a locked Bide
+    never rests at 0) and stored damage, Rollout's count (1-4)."""
+    if a["status"][side, active] == Status.SLEEP or not draw(st.booleans()):
+        return
+    bide, rollout, ice_ball = (names.move(m) for m in ("Bide", "Rollout", "Ice Ball"))
+    known = [int(m) for m in a["moves"][side, active] if int(m) in (bide, rollout, ice_ball)]
+    if not known:
+        return
+    move = draw(st.sampled_from(known))
+    a["locked_move"][side] = move
+    if move == bide:
+        a["bide_turns"][side] = draw(st.integers(1, 2))
+        a["bide_damage"][side] = draw(st.integers(0, 2 * int(a["max_hp"][side, active])))
+    else:
+        a["rollout_count"][side] = draw(st.integers(1, 4))
+
+
 @st.composite
 def supported_state(draw, tables: Tables, names: Names) -> BattleState:
     """A mid-battle state: 1-6 Pokemon per side (``supported_pokemon``), any active
-    slot, random PP, status counters, stat stages, confusion, Taunt, Bind, Leech Seed,
-    Water Sport, Stealth Rock, screens, Tailwind, Trick Room, Mud Sport, weather, the
-    turn, each active's ``fake_out_turn`` (0 to ``turn + 1``), ``move_hit`` (none or
+    slot, random PP, status counters, stat stages, confusion, Taunt, Bind, Leech Seed, Disable (a move of the active and its turns), Defense Curl, a Bide / Rollout lock (``_draw_lock``),
+    Water Sport, Foresight, Stealth Rock, screens, Tailwind, Trick Room, Mud Sport, weather,
+    the turn, each active's ``fake_out_turn`` (0 to ``turn + 1``), ``move_hit`` (none or
     one of the foe's active's moves) and ``last_move`` (none, one of its own moves or
     Struggle), and the opponent's bag (a size of 0-4 in
     ``trainer_item_count``, ``M1_BAG_ITEMS`` in each slot below it, gaps allowed as
     after a use) and the AI's knowledge of the player (any ``ai_seen_moves`` and
-    ``ai_ability_known`` flags), each within its legal range; the battle is not over."""
+    ``ai_ability_known`` flags), the death record (``deaths`` = the fainted player slots), a
+    faint budget 0-3 and a random set of living player slots as ``protected``, each within
+    its legal range; the battle is not over."""
     parties = [draw(_party(tables, names)) for _ in (0, 1)]
     s = make_state(tables, parties[0][0], parties[1][0])
     a = {name: np.asarray(getattr(s, name)).copy() for name in BattleState._fields}
@@ -222,6 +267,9 @@ def supported_state(draw, tables: Tables, names: Names) -> BattleState:
         a["trap_move"][side] = draw(st.sampled_from(trap_moves.tolist())) if trapped else 0
         a["leech_seed"][side] = draw(st.integers(0, 1))
         a["water_sport"][side] = draw(st.integers(0, 1))
+        a["mud_sport"][side] = draw(st.integers(0, 1))
+        a["curled"][side] = draw(st.integers(0, 1))
+        a["foresight"][side] = draw(st.integers(0, 1))
         a["stealth_rock"][side] = draw(st.integers(0, 1))
         a["reflect"][side] = draw(st.integers(0, _TIMER_MAX))
         a["light_screen"][side] = draw(st.integers(0, _TIMER_MAX))
@@ -231,18 +279,28 @@ def supported_state(draw, tables: Tables, names: Names) -> BattleState:
         a["move_hit"][side] = draw(st.sampled_from([0, *foe_moves]))
         own_moves = [int(m) for m in a["moves"][side, active] if m]
         a["last_move"][side] = draw(st.sampled_from([0, *own_moves, MOVE_STRUGGLE]))
+        disabled = draw(st.sampled_from([0, *own_moves]))
+        a["disabled_move"][side] = disabled
+        turns = draw(st.integers(0, _DISABLE_MAX))
+        a["disable_turns"][side] = turns if disabled else 0
+        _draw_lock(draw, a, side, active, names)
     count = draw(st.integers(0, BAG_SLOTS))
     bag = draw(st.lists(st.sampled_from(M1_BAG_ITEMS), min_size=count, max_size=count))
     a["trainer_items"][1] = [names.item(i) for i in bag] + [0] * (BAG_SLOTS - count)
     a["trainer_item_count"][1] = count
     a["weather"][...] = draw(st.sampled_from(list(Weather)))  # permanent: timer 0
     a["trick_room"][...] = draw(st.integers(0, _TIMER_MAX))
-    a["mud_sport"][...] = draw(st.integers(0, 1))
     a["turn"][...] = turn
     for name in ("ai_seen_moves", "ai_ability_known"):
         flags = draw(st.lists(st.integers(0, 1), min_size=a[name].size, max_size=a[name].size))
         a[name][...] = np.reshape(flags, a[name].shape)
-    a["player_faints"][...] = int(np.sum((a["species"][0] > 0) & (a["hp"][0] == 0)))
+    fainted = (a["species"][0] > 0) & (a["hp"][0] == 0)
+    a["player_faints"][...] = int(np.sum(fainted))
+    a["deaths"][...] = fainted
+    a["faint_budget"][...] = draw(st.integers(0, MAX_DEATH_BUDGET))
+    living = (a["species"][0] > 0) & (a["hp"][0] > 0)
+    a["protected"][...] = [int(draw(st.booleans())) if alive else 0 for alive in living]
+    a["replace_mul"][...] = 0
     return BattleState(**{name: jnp.asarray(a[name]) for name in BattleState._fields})
 
 
@@ -288,6 +346,8 @@ def any_outcome() -> st.SearchStrategy[Outcome]:
         flinch_item=_flag(sides),
         quick_claw=_flag(sides),
         end_speed_tie=_flag(()),
+        magnitude=_ints(4, 10, sides),
+        shed_skin=_flag(sides),
     )
 
 
@@ -313,9 +373,19 @@ LAW_MOVES = (
     "Rock Polish",
     "Razor Leaf",
     "Tackle",
+    "Magnitude",
+    "Confusion",
+    "Disable",
 )
 # Abilities the outcome relevance reads (contact procs, Steadfast, Simple's Speed).
-LAW_ABILITIES = (AbilityId.STATIC, AbilityId.POISON_POINT, AbilityId.STEADFAST, AbilityId.SIMPLE)
+LAW_ABILITIES = (
+    AbilityId.STATIC,
+    AbilityId.POISON_POINT,
+    AbilityId.STEADFAST,
+    AbilityId.SIMPLE,
+    AbilityId.SHED_SKIN,
+    AbilityId.COMPOUNDEYES,
+)
 
 
 @st.composite

@@ -194,5 +194,5 @@ def test_struggle_recoil_comes_before_static(tables, names):
     s = s._replace(ability=s.ability.at[1, 0].set(AbilityId.STATIC))
     o = empty_outcome()._replace(contact_proc=jnp.ones((2, 5), jnp.int8))
     out = step(tables, s, jnp.array([0, 0]), o)
-    assert int(out.hp[0, 0]) == 0 and int(out.over) == 1
+    assert int(out.hp[0, 0]) == 0
     assert int(out.status[0, 0]) == Status.NONE

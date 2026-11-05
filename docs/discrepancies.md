@@ -132,6 +132,18 @@ does not generate those matchups (`_smogon_departs`).
   Struggle taking one of its four entries, the decomp cannot record the player's fourth
   distinct move, while the engines can. That needs a player Pokemon that Struggles (no
   PP left, or Taunted with only status moves) and later uses all four of its moves.
+- **A locked battler's move is fixed at the start of the turn.** `FightCommand`
+  (`src/battle/battle_controller_player.c:1885-1888`) re-reads `Battler_CanPickCommand` when
+  the battler acts, and `ppDecremented` is set at command selection (`:335`). The engines
+  take both from the turn's starting state (`step._execute_actions`: `choices[2]`). They differ
+  only when the foe unlocks the battler earlier in the same turn (puts it to sleep or freezes
+  it) and the battler still acts (a freeze it then thaws out of): the decomp would then use
+  `moves[moveSlot]` and spend PP, the engines use the locked move and spend none.
+- **Bide's unleash ignores the foe's chart and records `moveHit`.** The unleash script
+  prints no attack message of its own; the engines write `moveHit[foe] = Bide` for a
+  successful unleash (the foe is the defender `CHECK_STATUS_STATE_BIDE` picks, `:2704-2713`),
+  assuming the controller's attack-message flag is set as for any damaging move. A Bide
+  that failed (nothing stored) or found no target leaves `moveHit` untouched.
 - **A fainted player Pokemon's AI knowledge.** `BattleSystem_CleanupFaintedMon`
   (`src/battle/battle_lib.c:2223-2225`) clears the AI's knowledge of a fainted battler;
   the engines clear a player Pokemon's `ai_seen_moves` / `ai_ability_known` row only

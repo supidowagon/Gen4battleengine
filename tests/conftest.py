@@ -1,6 +1,8 @@
 """Shared fixtures. Tables are loaded once per session, never at import time, and
 every test that needs them skips when ``data/gen4_platinum/tables.npz`` is absent."""
 
+import gc
+import sys
 from pathlib import Path
 
 import pytest
@@ -16,6 +18,17 @@ TABLES_DIR = Path(__file__).resolve().parents[1] / "data" / "gen4_platinum"
 _COMPILE_CACHE = cache_root() / "jax-tests" / code_version()
 prune_other_versions(_COMPILE_CACHE)
 set_compile_cache_dir(_COMPILE_CACHE)
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_protocol(item, nextitem):
+    """Drop JAX's in-memory compiled programs after each test module. One process
+    running the whole suite otherwise keeps every module's executables and reached
+    38 GB of commit (29 GB for tests/engine alone; 6 GB peak with this)."""
+    yield
+    if (nextitem is None or nextitem.module is not item.module) and "jax" in sys.modules:
+        sys.modules["jax"].clear_caches()
+        gc.collect()
 
 
 def _require_tables() -> None:

@@ -34,8 +34,8 @@ def test_miss_deals_no_damage(tables, names):
     assert int(out.hp[1, 0]) == int(s.hp[1, 0])
 
 
-def test_player_faint_is_terminal(tables, names):
-    s = roark_state(tables, names).replace_hp(0, 0, 1)  # player's active at 1 HP
+def test_last_player_faint_is_a_whiteout(tables, names):
+    s = roark_state(tables, names, player_count=1).replace_hp(0, 0, 1)  # the only Pokemon
     out = step(tables, s, jnp.array([0, 0]), empty_outcome())
     assert int(out.hp[0, 0]) == 0 and int(out.over) == 1 and int(out.winner) == 1
     assert int(out.player_faints) == 1

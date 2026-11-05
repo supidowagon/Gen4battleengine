@@ -64,7 +64,7 @@ from nuzline.ai.switching import (
     switching_refusals,
 )
 from nuzline.data.tables import Tables
-from nuzline.engine.actions import FIRST_ITEM_ACTION, NUM_OPP_ACTIONS, usable_moves
+from nuzline.engine.actions import FIRST_ITEM_ACTION, NUM_OPP_ACTIONS, locked_slot, usable_moves
 from nuzline.engine.ids import POTION_HP_RESTORED, Stat, TrainerItemId
 from nuzline.engine.state import BAG_SLOTS, MOVES, BattleState
 
@@ -323,9 +323,31 @@ _FLAGS = (_basic, _eval_attack, _expert)  # Roark's ai_flags = 7, in bit order (
 _ATTACKER_ABILITIES = ("Normalize", "Adaptability", "Scrappy", "Tinted Lens")
 _DEFENDER_ABILITIES = ("Levitate", "Wonder Guard", "Filter", "Solid Rock")
 _STATE_MOVE_IDS = {
-    n: switching.MOVE_IDS[n]
-    for n in ("Foresight", "Odor Sleuth", "Miracle Eye", "Roost", "Magnet Rise", "Ingrain")
+    n: switching.MOVE_IDS[n] for n in ("Miracle Eye", "Roost", "Magnet Rise", "Ingrain")
 }
+
+
+def player_move_refusal(move: int) -> str | None:
+    """Why the AI refuses a fight whose player Pokemon knows ``move`` (decomp id), or None."""
+    if move in switching.PLAYER_MOVE_REFUSALS:
+        return f"AI switching: {switching.PLAYER_MOVE_REFUSALS[move]}"
+    for name, move_id in _STATE_MOVE_IDS.items():
+        if move == move_id:
+            return f"AI scoring: move {name} leaves a type-chart state the engine does not carry"
+    return None
+
+
+def player_ability_refusal(ability: int) -> str | None:
+    """Why the AI refuses a fight whose player Pokemon has ``ability`` (decomp id), or None."""
+    if ability in switching.PLAYER_ABILITY_REFUSALS:
+        return f"AI switching: {switching.PLAYER_ABILITY_REFUSALS[ability]}"
+    for name in _DEFENDER_ABILITIES:
+        if ability == _ABILITY[name]:
+            return (
+                f"AI scoring: ability {name} changes IfMoveEffectivenessEquals "
+                "and is not implemented"
+            )
+    return None
 
 
 class _Refused(NamedTuple):
@@ -559,6 +581,10 @@ def _policy(tables: Tables, state: BattleState, ai_outcome: AiOutcome) -> jnp.nd
     item = _use_item(tables, state)
     move = _pick(tables, state, _scores(tables, state, ai_outcome), ai_outcome.tiebreak)
     action = jnp.where(switch != NO_SWITCH, switch, jnp.where(item != NO_ITEM, item, move))
+    # A battler locked into a move picks no command, so the AI never runs for it
+    # (battle_controller_player.c:335): its action is the locked slot.
+    lock = locked_slot(state, 1)
+    action = jnp.where(lock >= 0, lock, action)
     return jnp.where(_refused(tables, state).any, REFUSED_ACTION, action).astype(_I32)
 
 
@@ -647,8 +673,10 @@ def _distribution(tables: Tables, state: BattleState) -> jnp.ndarray:
         jnp.zeros(NUM_OPP_ACTIONS, jnp.float32).at[:MOVES].set(_move_distribution(tables, state))
     )
     stay = jnp.where(item != NO_ITEM, jax.nn.one_hot(item, NUM_OPP_ACTIONS), moves)
+    lock = locked_slot(state, 1)
+    dist = jnp.where(lock >= 0, jax.nn.one_hot(lock, NUM_OPP_ACTIONS), dist + p_stay * stay)
     refused = _refused(tables, state).any | jnp.any(switch == REFUSED_ACTION)
-    return jnp.where(refused, jnp.nan, dist + p_stay * stay)
+    return jnp.where(refused, jnp.nan, dist)
 
 
 def ai_action_distribution(tables: Tables, state: BattleState) -> jnp.ndarray:

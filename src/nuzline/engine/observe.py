@@ -5,7 +5,8 @@ Two children of a belief node with equal observations are one information set: t
 player's next decision is one action for all of them. The observation is an
 ``int32[OBS_SIZE]`` vector, laid out by ``OBS_FIELDS``; ``after`` is the state after the
 opponent's forced replacement (``search.playout.send_replacements``), since the
-replacement is seen.
+replacement is seen. A player replacement runs no action: ``replacement_observation``
+is the same vector with every event at its no-action value (faint-budget spec §4).
 
 **The turn's events** are recorded by ``step`` itself: ``step.turn_events`` replays the
 action phase (``_use_move``'s status checks and hits, ``execute_actions``' order, items,
@@ -25,7 +26,8 @@ Events, per side (``[side]``; 0 = player):
   id, Struggle's when struggling; the PP delta of critic.md B.2 names the same slot), a
   switch (``ACT_SWITCH``, the party slot), a bag item (``ACT_ITEM``, its item id), a
   move refused by Taunt (``ACT_TAUNTED``, the move: "can't use MOVE after the taunt",
-  step.py:352-353). A move that never ran (the battler fainted first, slept, froze,
+  step.py:352-353), or by Disable (``ACT_DISABLED``, the move: "MOVE is disabled!",
+  ``subscript_move_is_disabled.s``; no PP spent). A move that never ran (the battler fainted first, slept, froze,
   flinched, was fully paralyzed or hurt itself) is not shown (``ACT_NONE``, id 0).
 * ``order``: the side that acted first when both showed a message at their turn
   (``action_order``, order.py:67-85), else -1; ``pursuit``: Pursuit hit the switching
@@ -34,6 +36,9 @@ Events, per side (``[side]``; 0 = player):
   earlier this turn, step.py:390), ``hits`` (hits that landed: "Hit N times",
   battle_controller_player.c:3777-3812), ``crit[side, i]`` (hit ``i`` landed, dealt
   damage and was a crit: ``subscript_critical_hit.s``, bcp.c:4547-4554).
+* ``magnitude``: the level "Magnitude N!" showed (4-10) when the side's Magnitude hit
+  and dealt damage, else 0 (``subscript_magnitude.s``: the message is a primary effect
+  that an ineffective hit does not run).
 * The status checks before a move (step.py:327-377, bcp.c:2417-2728): ``asleep``
   (stays asleep), ``woke``, ``frozen`` (stays frozen), ``thawed`` (its own thaw roll or a
   thawing move), ``flinched``, ``confused`` ("is confused"), ``snapped_out``,
@@ -74,16 +79,19 @@ from nuzline.data.tables import Tables
 from nuzline.engine.outcome import MAX_HITS, Outcome
 from nuzline.engine.state import MOVES, SIDES, SLOTS, BattleState
 from nuzline.engine.step import (
+    ACT_DISABLED,
     ACT_ITEM,
     ACT_MOVE,
     ACT_NONE,
     ACT_SWITCH,
     ACT_TAUNTED,
     EVENT_FLAGS,
+    _empty_events,
     turn_events,
 )
 
 __all__ = [
+    "ACT_DISABLED",
     "ACT_ITEM",
     "ACT_MOVE",
     "ACT_NONE",
@@ -95,6 +103,7 @@ __all__ = [
     "hp_pixels",
     "observation",
     "observe",
+    "replacement_observation",
 ]
 
 _I32 = jnp.int32
@@ -116,8 +125,12 @@ _NONZERO_SIDE = (
     "mist",
     "lucky_chant",
     "tailwind",
+    "foresight",
+    "curled",
+    "bide_turns",
+    "mud_sport",
 )
-_NONZERO_FIELD = ("trick_room", "gravity", "mud_sport")
+_NONZERO_FIELD = ("trick_room", "gravity")
 
 _LAYOUT: tuple[tuple[str, tuple[int, ...]], ...] = (
     ("order", ()),
@@ -125,6 +138,7 @@ _LAYOUT: tuple[tuple[str, tuple[int, ...]], ...] = (
     ("act_kind", _SIDE),
     ("act_id", _SIDE),
     ("crit", (SIDES, MAX_HITS)),
+    ("magnitude", _SIDE),
     *((name, _SIDE) for name in EVENT_FLAGS),
     ("active", _SIDE),
     ("species", _SLOT),
@@ -135,6 +149,8 @@ _LAYOUT: tuple[tuple[str, tuple[int, ...]], ...] = (
     ("opp_pixels", (SLOTS,)),
     ("player_pp", (SLOTS, MOVES)),
     ("stages", (SIDES, 8)),
+    ("disabled_move", _SIDE),
+    ("locked_move", _SIDE),
     *((name, _SIDE) for name in _NONZERO_SIDE),
     ("spikes", _SIDE),
     ("toxic_spikes", _SIDE),
@@ -206,6 +222,8 @@ def observation(events: dict, after: BattleState) -> jnp.ndarray:
         "opp_pixels": hp_pixels(after.hp[1], after.max_hp[1]),
         "player_pp": after.pp[0],
         "stages": after.stages,
+        "disabled_move": after.disabled_move,
+        "locked_move": after.locked_move,
         **{name: _nonzero(getattr(after, name)) for name in _NONZERO_SIDE},
         "spikes": after.spikes,
         "toxic_spikes": after.toxic_spikes,
@@ -221,3 +239,12 @@ def observation(events: dict, after: BattleState) -> jnp.ndarray:
             raise ValueError(f"observation field {name}: shape {value.shape}, want {shape}")
         parts.append(value.reshape(-1))
     return jnp.concatenate(parts)
+
+
+def replacement_observation(after: BattleState) -> jnp.ndarray:
+    """The observation of a replacement: no action ran, so every event is at its
+    no-action value (``ACT_NONE``, flags 0, ``order`` -1, no Pursuit), and the visible
+    projection is ``after``'s (both newcomers on screen). Built from the full event set
+    ``step_events`` returns, so a new event field cannot be missed."""
+    events = {**_empty_events(), "order": jnp.full((2,), -1, _I32), "pursuit": jnp.int32(0)}
+    return observation(events, after)

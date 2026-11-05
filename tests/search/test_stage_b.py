@@ -5,6 +5,7 @@ time budget, refused mass, an all-terminal root and reproducibility."""
 
 from __future__ import annotations
 
+import json
 from collections import defaultdict
 from dataclasses import replace
 
@@ -12,8 +13,9 @@ import jax
 import numpy as np
 import pytest
 
+from nuzline.engine.damage import damage_table
 from nuzline.engine.step import WINNER_PLAYER
-from nuzline.search import stage_b
+from nuzline.search import deaths, stage_b
 from nuzline.search.expand import ai_rows, expand
 from nuzline.search.leaves import LeafValue, allocate
 from nuzline.search.plan_tree import render
@@ -23,6 +25,7 @@ from tests.engine.helpers import roark_real_state, roark_state
 from tests.search.exhaustive import children, exhaustive
 from tests.search.fixtures import (
     all_terminal_root,
+    dead_monferno,
     empty_bag,
     low_hp_endgame,
     pixel_endgame,
@@ -197,12 +200,15 @@ def test_pruning_bound(tables, names):
     store, kids = expand(tables, batch(state), pairs)
     pruned = defaultdict(float)
     groups = defaultdict(float)
+    failed = np.asarray(deaths.over_budget(store))
     for i, (_, a, o) in enumerate(pairs):
         if q[o] < eps:
             pruned[a] += q[o]
             continue
         for c in kids[i]:
-            if not c.refused and int(store.over[c.state_row]) == 0:
+            # (a failed child, over the death budget, is not pruned: it is worth 0 and played
+            # out only for the distribution)
+            if not c.refused and int(store.over[c.state_row]) == 0 and not failed[c.state_row]:
                 groups[(a, c.obs)] += q[o] * c.prob
     for (a, _), g in groups.items():
         if g < eps:
@@ -261,8 +267,10 @@ def test_refused_replacement_mass(tables, names):
     assert all(v == 0 for o, v in refused.items() if o != to_geodude)
     r = row(result, tackle)
     assert r.refused == pytest.approx(q[to_geodude] * refused[to_geodude], abs=1e-6)
-    # Every leaf is worth 1, so the estimate is all the mass but the refused and the lost.
-    assert r.estimate == pytest.approx(1 - r.refused - lost, abs=1e-6)
+    # Every leaf is worth 1 and every failed node (over the death budget) 0, so the estimate
+    # is all the mass but the refused, the lost and the failed.
+    assert r.failed > 0
+    assert r.estimate == pytest.approx(1 - r.refused - lost - r.failed, abs=1e-6)
 
 
 def test_all_terminal_root(tables, names):
@@ -288,6 +296,30 @@ def test_reproducible(tables, names, monkeypatch):
     assert a == b
     assert a.playouts >= 2000
     assert a.ranking and all(r.ci_low <= r.estimate <= r.ci_high for r in a.ranking)
+
+
+def test_locked_player_solves(tables, names):
+    """Review Focus 2: a 1v1 depth-1 solve from a state where the player is locked into
+    Bide ranks the one legal action and finds no hidden legality (the lock is on screen)."""
+    s = roark_state(
+        tables,
+        names,
+        player_species="Kricketot",
+        player_moves=("Bide", "Growl"),
+        opp_species="Geodude",
+        opp_moves=("Tackle",),
+        player_count=1,
+        opp_count=1,
+    )
+    s = s._replace(
+        locked_move=s.locked_move.at[0].set(names.move("Bide")),
+        bide_turns=s.bide_turns.at[0].set(2),
+        bide_damage=s.bide_damage.at[0].set(10),
+    )
+    settings = SolveSettings(max_depth=1, budget_playouts=200, n_depth0=8, max_turns=TURNS)
+    result = solve(tables, names, s, KEY, settings, leaf_fn=ZERO)
+    assert [r.action for r in result.ranking] == [names.move_slot(s, 0, "Bide")]
+    assert result.ranking[0].label == "Bide"
 
 
 def test_hidden_legality_raises(tables, names):
@@ -566,3 +598,72 @@ def test_precision_must_be_positive(tables, names):
     for bad in (0.0, -0.01):
         with pytest.raises(ValueError, match="invalid settings"):
             solve(tables, names, state, KEY, replace(PRECISE, precision=bad), leaf_fn=ZERO)
+
+
+def test_store_terminal_is_success(tables, names):
+    base = dead_monferno(tables, names)._replace(over=np.int8(1), winner=np.int8(WINNER_PLAYER))
+    protected = base.with_budget(3)._replace(
+        protected=base.protected.at[int(np.flatnonzero(np.asarray(base.deaths))[0])].set(1)
+    )
+    lost = base.with_budget(3)._replace(winner=np.int8(1 - WINNER_PLAYER))
+    store = stage_b._Store()
+    store.add(batch(base.with_budget(0), base.with_budget(1), protected, lost))
+    assert store.won == [False, True, False, False]
+    assert store.over == [True] * 4
+
+
+def test_terminal_win_after_a_death_scores_zero_at_k0(tables, names):
+    state = empty_bag(dead_monferno(tables, names, player_moves=["Bubble"], opp_moves=["Tackle"]))
+    state = state.with_pp(0, 0, [int(p) if i == 0 else 0 for i, p in enumerate(state.pp[0, 0])])
+    bubble = names.move_slot(state, 0, "Bubble")
+    table = np.asarray(damage_table(tables, state, 0, names.move("Bubble"), 0))
+    assert table.min() >= int(state.hp[1, 0])  # one Bubble always KOs
+    settings = SolveSettings(max_depth=1, epsilon=0.0, n_depth0=8, max_turns=TURNS)
+    exact, _ = exhaustive(tables, state.with_budget(0), 1)
+    assert exact[bubble] == pytest.approx(0.0, abs=1e-9)
+    with pytest.raises(ValueError, match="death budget"):  # Monferno's death is over budget
+        solve(tables, names, state.with_budget(0), KEY, settings, leaf_fn=ZERO)
+    s = state.with_budget(1)
+    result = solve(tables, names, s, KEY, settings, leaf_fn=ZERO)
+    exact, _ = exhaustive(tables, s, 1)
+    assert exact[bubble] == pytest.approx(1.0, abs=1e-9)
+    assert all(r.estimate == pytest.approx(1.0, abs=1e-9) for r in result.ranking)
+
+
+def test_win_after_a_new_death_scores_zero_at_k0(tables, names):
+    # The lead's Struggle KOs the last Geodude and its recoil KOs the lead; a living bench
+    # Pokemon makes it a win reached through a death made inside the search.
+    state = empty_bag(
+        roark_state(tables, names, player_count=2, opp_count=1)
+        .replace_hp(0, 0, 1)
+        .replace_hp(1, 0, 1)
+        .with_pp(0, 0, [0, 0, 0, 0])
+    )
+    settings = SolveSettings(max_depth=1, epsilon=0.0, n_depth0=8, max_turns=TURNS)
+    for k, want in ((0, 0.0), (1, 1.0)):
+        s = state.with_budget(k)
+        result = solve(tables, names, s, KEY, settings, leaf_fn=ZERO)
+        exact, _ = exhaustive(tables, s, 1)
+        assert exact[0] == pytest.approx(want, abs=1e-9)
+        assert row(result, 0).estimate == pytest.approx(want, abs=1e-9)
+
+
+def test_result_dict_round_trip(tables, names):
+    # Plan 4c Task 8: a checkpoint holds finished solves as JSON; nothing may be lost.
+    from tests.search.fixtures import certain_zero_leaf, sacrifice_endgame
+
+    pixel = pixel_endgame(tables, names)
+    sacrifice = sacrifice_endgame(tables, names).with_budget(1)
+    solves = [
+        solve(tables, names, pixel, KEY, SolveSettings(max_depth=2, epsilon=0.0, n_depth0=8), ZERO),
+        solve(
+            tables, names, sacrifice, KEY,
+            SolveSettings(max_depth=2, epsilon=0.0, n_depth0=8), certain_zero_leaf,
+        ),
+    ]  # fmt: skip
+    for r in solves:
+        assert any(n.children for n in plan_nodes(r.plan.children[r.ranking[0].action]))
+        assert any(a.distribution is not None for a in r.ranking)
+        back = stage_b.result_from_dict(json.loads(json.dumps(stage_b.result_to_dict(r))))
+        assert back == r
+        assert back.seconds == r.seconds

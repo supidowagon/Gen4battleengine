@@ -1,0 +1,95 @@
+{
+ "save_sha256": "f9304bac107b8dae518244724738c16d91a0379dd208cdee6ce21d6cca4f2087",
+ "pool": [
+  "party slot 0 FURRET",
+  "party slot 1 STARAVIA",
+  "party slot 2 MONFERNO",
+  "party slot 3 ZUBAT",
+  "party slot 4 SPINARAK",
+  "party slot 5 PSYDUCK",
+  "box 1 slot 1 VENONAT",
+  "box 1 slot 4 GEODUDE"
+ ],
+ "setups": 3555,
+ "restricted_setups": 3555,
+ "pruned_setups": 0,
+ "pruned_note": "prune dropped nothing on this save: the pruned-setup criterion is vacuous here (the check rests on test_pruned_setups_are_valued)",
+ "value_fields": [
+  "estimate",
+  "ci_low",
+  "ci_high",
+  "e_deaths"
+ ],
+ "rungs": {
+  "0": {
+   "best": {
+    "index": 891,
+    "setup": "party slot 5 PSYDUCK / party slot 0 FURRET (Fury Swipes) / party slot 2 MONFERNO / party slot 3 ZUBAT",
+    "value": [
+     0.9990019960079841,
+     0.9962411806870167,
+     1.0,
+     0.000998003992015968
+    ]
+   },
+   "pick": {
+    "index": 3357,
+    "setup": "party slot 5 PSYDUCK / party slot 0 FURRET / party slot 3 ZUBAT / party slot 4 SPINARAK / box 1 slot 1 VENONAT / box 1 slot 4 GEODUDE (Rock Polish)",
+    "value": [
+     0.9890329012961118,
+     0.9823108040592311,
+     0.9957549985329924,
+     0.019940179461615158
+    ]
+   },
+   "pick_ties_best": false,
+   "passed": false,
+   "pruned_beating_pick": [],
+   "phase_seconds": {
+    "funnel": 165.43014139999286,
+    "phase1": 10903.3277981,
+    "phase2": 39998.473401999996
+   }
+  },
+  "1": {
+   "best": {
+    "index": 23,
+    "setup": "party slot 2 MONFERNO / party slot 0 FURRET (Fury Swipes)",
+    "value": [
+     1.0,
+     0.9928307178915765,
+     1.0,
+     0.018006903308254853
+    ]
+   },
+   "pick": {
+    "index": 2961,
+    "setup": "party slot 5 PSYDUCK / party slot 0 FURRET / party slot 1 STARAVIA / party slot 2 MONFERNO / party slot 4 SPINARAK / box 1 slot 1 VENONAT",
+    "value": [
+     1.0,
+     0.9980251876628837,
+     1.0,
+     0.0050454086781029275
+    ]
+   },
+   "pick_ties_best": true,
+   "passed": true,
+   "pruned_beating_pick": [],
+   "phase_seconds": {
+    "funnel": 105.34838529999979,
+    "phase1": 16674.584052299993,
+    "phase2": 54313.00613160001
+   }
+  }
+ },
+ "passed": false,
+ "wall_seconds_this_invocation": 70987.7844889,
+ "machine": {
+  "cpu": "13th Gen Intel(R) Core(TM) i5-13600K",
+  "logical_cpus": 20,
+  "jax": "0.12.0.1",
+  "os": "Windows-11-10.0.26200-SP0",
+  "python": "3.12.16"
+ },
+ "devices": 20
+}

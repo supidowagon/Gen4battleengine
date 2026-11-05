@@ -12,14 +12,23 @@ from enum import IntEnum, IntFlag
 class EffectId(IntEnum):
     """Move effect. Params live in ``tables.move_param[m, 0..2]``:
 
-    * stat effects (``STAT_SELF``, ``STAT_FOE``, ``SECONDARY_STAT_*``): ``(Stat, stages, 0)``
+    * stat effects (``STAT_SELF``, ``STAT_FOE``, ``SECONDARY_STAT_*``): ``(Stat, stages, 0)``;
+      ``STAT_SELF`` with ``move_param[m, 2] == 1`` (Defense Curl) also sets ``curled``
     * status effects (``STATUS_FOE``, ``SECONDARY_STATUS``): ``(Status, type_checked,
       thaws_user)``; ``type_checked`` is 1 for a status move the decomp runs through
       the type chart (Thunder Wave: Ground is immune), else 0; ``thaws_user`` is 1 for
       ``BATTLE_EFFECT_THAW_AND_BURN_HIT`` (Flame Wheel, Sacred Fire), which a frozen
       user can use and which thaws it, else 0
     * ``DRAIN``, ``RECOIL``: ``(percent of damage dealt, 0, 0)``
-    * everything else: zeros.
+    * everything else: zeros. ``LEVEL_DAMAGE`` (Night Shade, Seismic Toss) deals the user's
+      level; ``HIDDEN_POWER`` and ``MAGNITUDE`` take their type and power from the
+      battler and ``Outcome.magnitude`` (``engine/damage.py``).
+    * ``SECONDARY_CONFUSE`` (Confusion, Psybeam, ...): zeros; confuses the target at the
+      move's effect chance. ``MUD_SPORT``: zeros. ``EAT_BERRY`` (Bug Bite, Pluck): zeros;
+      the user eats the target's Oran or Sitrus Berry (``hooks.pluck_berry``).
+    ``DISABLE``: zeros; disables the target's last move for 3-6 turns (``effects._disable``).
+    ``BIDE``, ``ROLLOUT`` (Rollout, Ice Ball): zeros; they lock the user into the move
+    (``BattleState.locked_move``, ``engine/step.py``, ``engine/damage.py``).
 
     The proc chance of a ``SECONDARY_*`` or ``FLINCH`` effect is the move's own
     ``move_effect_chance``; a ``SECONDARY_*`` move with chance 0 applies its
@@ -46,6 +55,16 @@ class EffectId(IntEnum):
     MULTI_HIT = 17
     WATER_SPORT = 18
     RECOIL = 19
+    FORESIGHT = 20
+    LEVEL_DAMAGE = 21
+    HIDDEN_POWER = 22
+    MAGNITUDE = 23
+    SECONDARY_CONFUSE = 24
+    MUD_SPORT = 25
+    EAT_BERRY = 26
+    DISABLE = 27
+    BIDE = 28
+    ROLLOUT = 29
 
 
 class AbilityId(IntEnum):
@@ -68,6 +87,10 @@ class AbilityId(IntEnum):
     STATIC = 16
     GUTS = 17
     STEADFAST = 18
+    INSOMNIA = 19
+    CLOUD_NINE = 20
+    COMPOUNDEYES = 21
+    SHED_SKIN = 22
 
 
 class ItemId(IntEnum):

@@ -98,7 +98,7 @@ def test_party_fields(tables, names):
 def test_checksum_mismatch_raises(tables, names):
     raw = bytearray(mon_record(species=63))
     raw[0x20] ^= 1
-    with pytest.raises(RecordError, match="box 0 slot 3"):
+    with pytest.raises(RecordError, match="box 1 slot 3"):
         decode_mon(bytes(raw), ("box", 0, 3), tables, names.charmap)
 
 
@@ -130,13 +130,13 @@ def test_species_zero_with_bad_checksum_raises(tables, names):
     plain[6:8] = ((int.from_bytes(plain[6:8], "little") + 1) & 0xFFFF).to_bytes(2, "little")
     raw = encrypt_record(bytes(plain))
     assert any(raw)
-    with pytest.raises(RecordError, match="box 1 slot 4"):
+    with pytest.raises(RecordError, match="box 2 slot 4"):
         decode_mon(raw, ("box", 1, 4), tables, names.charmap)
 
 
 def test_unknown_move_id_names_the_slot(tables, names):
     raw = mon_record(species=63, moves=(33, 0, 9999, 0))
-    with pytest.raises(RecordError, match=r"box 0 slot 3: move slot 2 has unknown move id 9999"):
+    with pytest.raises(RecordError, match=r"box 1 slot 3: move slot 2 has unknown move id 9999"):
         decode_mon(raw, ("box", 0, 3), tables, names.charmap)
 
 
@@ -148,5 +148,5 @@ def test_unknown_item_id_names_the_slot(tables, names):
 
 def test_out_of_range_species_names_the_slot(tables, names):
     raw = mon_record(species=9999, exp=0)
-    with pytest.raises(RecordError, match=r"box 2 slot 5: species 9999 out of range"):
+    with pytest.raises(RecordError, match=r"box 3 slot 5: species 9999 out of range"):
         decode_mon(raw, ("box", 2, 5), tables, names.charmap)

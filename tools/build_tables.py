@@ -15,6 +15,9 @@ Encodings:
 * ``type_chart_order[attacker, defender]``: row index of the pair in the decomp's
   ``sTypeMatchupMultipliers``, -1 when unlisted (neutral); a dual type's two
   multipliers apply in row order (``BattleSystem_ApplyTypeChart``).
+* ``type_chart_foresight[attacker, defender]``: 1 for the pairs listed after the 0xFE
+  separator (the Ghost immunities), which a Foresight-identified defender ignores
+  (``BattleSystem_ApplyTypeChart``, battle_lib.c:2611).
 * ``nature_mods[nature, stat]``: +1 raised, -1 lowered, 0 otherwise (HP always 0).
 * ``item_param[item]``: ``(decomp hold param, 0)`` for supported items, else zeros.
 * ``trainer_item_effect[item]``: ``ids.TrainerItemId`` of the item used from a trainer's
@@ -53,7 +56,9 @@ from tools.effect_map import (
     UNSUPPORTED_MOVES,
 )
 
-MANIFEST_VERSION = 6
+MANIFEST_VERSION = 7
+NUM_TMS = 92
+NUM_HMS = 8
 CLONE_SCRIPT = Path(__file__).with_name("clone_decomp.sh")
 
 # generated/move_classes.txt order.
@@ -128,6 +133,17 @@ def build_arrays(inter: Path) -> tuple[dict[str, np.ndarray], dict]:
     natures = _load(inter, "natures")
     exp_tables = _load(inter, "exp_tables")
     charmap = _load(inter, "charmap")
+    level_learnsets = _load(inter, "learnsets")
+    tm_learnsets = _load(inter, "tm_learnsets")
+    item_ids_by_name = {i["name"]: n for n, i in enumerate(items)}
+    first_tm_item = item_ids_by_name["TM01"]
+    tm_moves = []
+    for n in range(NUM_TMS + NUM_HMS):
+        item = items[first_tm_item + n]
+        want = f"TM{n + 1:02d}" if n < NUM_TMS else f"HM{n - NUM_TMS + 1:02d}"
+        if item["name"] != want or item["teaches_move"] is None:
+            raise BuildError(f"item {first_tm_item + n} is {item['name']!r}, expected {want}")
+        tm_moves.append(item["teaches_move"])
 
     move_names = {m["name"] for m in moves}
     missing = sorted(
@@ -154,6 +170,10 @@ def build_arrays(inter: Path) -> tuple[dict[str, np.ndarray], dict]:
     for what, grid in (("type chart", chart), ("type chart order", chart_order)):
         if len(grid) != n_types or any(len(row) != n_types for row in grid):
             raise BuildError(f"{what} is not {n_types}x{n_types}")
+
+    chart_foresight = np.zeros((n_types, n_types), dtype=np.int64)
+    for a, d in types["foresight_immunities"]:
+        chart_foresight[a, d] = 1
 
     nature_mods = np.zeros((len(natures), 6), dtype=np.int64)
     for i, n in enumerate(natures):
@@ -195,6 +215,7 @@ def build_arrays(inter: Path) -> tuple[dict[str, np.ndarray], dict]:
         "move_flags": _arr([_move_flags(m) for m in moves], np.int16, "move flags"),
         "type_chart": _arr(chart, np.int8, "type chart"),
         "type_chart_order": _arr(chart_order, np.int16, "type chart order"),
+        "type_chart_foresight": _arr(chart_foresight, np.int8, "type chart foresight"),
         "nature_mods": _arr(nature_mods, np.int8, "nature mods"),
         "item_effect": _arr(item_ids, np.int16, "item effect"),
         "item_param": _arr(
@@ -223,6 +244,14 @@ def build_arrays(inter: Path) -> tuple[dict[str, np.ndarray], dict]:
         "category_names": list(MOVE_CATEGORIES),
         "target_names": list(MOVE_TARGETS),
         "charmap": charmap,
+        # Host-only lookups (nuzline.data.learnsets): per species id, the level-up
+        # (level, move) pairs in learn order and the TM/HM indices it can learn;
+        # tm_moves[index] is the move that TM/HM teaches; first_tm_item is ITEM_TM01
+        # (TM01-TM92 then HM01-HM08 are consecutive ids).
+        "level_learnsets": level_learnsets,
+        "tm_learnsets": tm_learnsets,
+        "tm_moves": tm_moves,
+        "first_tm_item": first_tm_item,
     }
     return arrays, manifest
 

@@ -196,7 +196,7 @@ def test_too_many_sites_are_refused(tables, names):
 @pytest.mark.parametrize(
     ("change", "missing"),
     [
-        ("player_move", "Foresight"),
+        ("player_move", "Miracle Eye"),
         ("opp_move", "Hidden Power"),
         ("item", "Iron Ball"),
         ("ability", "Levitate"),
@@ -206,7 +206,7 @@ def test_too_many_sites_are_refused(tables, names):
 def test_unimplemented_modifiers_are_refused(tables, names, change, missing):
     s = roark_state(tables, names)
     if change == "player_move":
-        s = s._replace(moves=s.moves.at[0, 3, 1].set(names.move("Foresight")))
+        s = s._replace(moves=s.moves.at[0, 3, 1].set(names.move(missing)))
     elif change == "opp_move":
         s = s._replace(moves=s.moves.at[1, 2, 3].set(names.move("Hidden Power")))
     elif change == "item":
@@ -220,6 +220,26 @@ def test_unimplemented_modifiers_are_refused(tables, names, change, missing):
     with pytest.raises(UnsupportedSwitching, match=missing):
         switch_sites(tables, s)
     assert jax.jit(switch_sites)(tables, s).tolist() == [K.REFUSED] * SWITCH_SITES
+
+
+def test_hidden_power_move_hit_type(tables, names):
+    """Review Focus 5: moveHit = the player's Hidden Power is typed by the player's active
+    IVs (here Water), not Normal (TrainerAI_MoveType, trainer_ai.c:3208-3220, :3767)."""
+    s = _trace_f(tables, names)
+    water_ivs = jnp.asarray([30, 31, 31, 30, 31, 30], s.ivs.dtype)  # ids.Stat order
+    s = s._replace(ivs=s.ivs.at[0, 0].set(water_ivs))
+
+    def with_hit(move):
+        return s._replace(move_hit=s.move_hit.at[1].set(names.move(move)))
+
+    hidden = with_hit("Hidden Power")
+    assert switching_refusals(tables, hidden) == []
+    layout = switch_sites(tables, hidden).tolist()
+    assert layout == switch_sites(tables, with_hit("Water Gun")).tolist()
+    assert layout != switch_sites(tables, with_hit("Tackle")).tolist()
+    # Hidden Power is still refused on the opponent's own side.
+    own = hidden._replace(moves=hidden.moves.at[1, 2, 3].set(names.move("Hidden Power")))
+    assert any("Hidden Power" in r for r in switching_refusals(tables, own))
 
 
 def test_only_ineffective_moves_is_refused(tables, names):

@@ -87,7 +87,7 @@ def test_pp_with_pp_ups_converts_and_above_max_raises(tables, names):
     kw = {"moves": (33, 0, 0, 0), "pp_ups": (3, 0, 0, 0)}  # Tackle, base 35
     assert int(tables.move_pp[33]) == 35
     assert _box(tables, names, pp=(56, 0, 0, 0), **kw).to_spec(tables).pp[0] == 56
-    with pytest.raises(RecordError, match="box 1 slot 4"):
+    with pytest.raises(RecordError, match="box 2 slot 4"):
         _box(tables, names, pp=(57, 0, 0, 0), **kw).to_spec(tables)
 
 
@@ -105,7 +105,7 @@ def test_toxic_counter_dropped(tables, names):
     "species", ["Rotom", "Wormadam", "Giratina", "Shaymin", "Deoxys", "Arceus"]
 )
 def test_alternate_form_raises(tables, names, species):
-    with pytest.raises(RecordError, match="box 1 slot 4"):
+    with pytest.raises(RecordError, match="box 2 slot 4"):
         _box(tables, names, species=species, form=1).to_spec(tables)
     assert _box(tables, names, species=species, form=0).to_spec(tables).form == 0
 
@@ -123,13 +123,13 @@ def test_current_hp_above_max_raises(tables, names):
 
 
 def test_egg_raises(tables, names):
-    with pytest.raises(RecordError, match="box 1 slot 4"):
+    with pytest.raises(RecordError, match="box 2 slot 4"):
         _box(tables, names, is_egg=True).to_spec(tables)
 
 
 def test_foreign_ability_raises(tables, names):
     mon = dataclasses.replace(_box(tables, names), ability=123)
-    with pytest.raises(RecordError, match="box 1 slot 4"):
+    with pytest.raises(RecordError, match="box 2 slot 4"):
         mon.to_spec(tables)
 
 

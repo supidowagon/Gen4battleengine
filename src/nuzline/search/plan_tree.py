@@ -34,6 +34,7 @@ from nuzline.data.tables import Names
 from nuzline.engine.actions import MOVE_ACTIONS
 from nuzline.engine.ids import Status
 from nuzline.engine.observe import (
+    ACT_DISABLED,
     ACT_ITEM,
     ACT_MOVE,
     ACT_SWITCH,
@@ -47,7 +48,7 @@ from nuzline.engine.step import WINNER_PLAYER
 from nuzline.jaxcache import code_version
 from nuzline.search.stage_b import PlanNode, SolveResult
 
-__all__ = ["label", "render", "to_json"]
+__all__ = ["distribution_line", "label", "render", "to_json"]
 
 _FIELDS = dict(OBS_FIELDS)
 # (flag, text) in the order a message sequence reads; ``hits`` and ``crit`` are special.
@@ -78,6 +79,7 @@ _KIND_TEXT = {
     "pruned": "unexplored (below epsilon)",
     "sampled": "sampled (too many outcomes to enumerate)",
     "refused": "refused",
+    "failed": "over the death budget: play on for the win, not planned",
     "terminal": "battle over",
     "leaf": "leaf",
     "decision": "decision",
@@ -118,6 +120,8 @@ def _side_text(f: dict, names: Names, side: int, who: str, trainer: str) -> str:
         head = f"{who} used {names.move_names[act]}"
     elif kind == ACT_TAUNTED:
         head = f"{who} can't use {names.move_names[act]} after the taunt"
+    elif kind == ACT_DISABLED:
+        head = f"{who}'s {names.move_names[act]} is disabled"
     elif kind == ACT_SWITCH:
         slot_name = _species(names, f, side, act)
         head = f"{trainer} sent out {slot_name}" if side else f"you switched to {slot_name}"
@@ -135,12 +139,21 @@ def label(
     names: Names,
     *,
     prev_opp: int | None = None,
+    prev_mine: int | None = None,
     trainer: str = "Opponent",
     max_hp: list[int] | None = None,
+    budget: tuple[int, int] | None = None,
 ) -> str:
     """ASCII sentence for one observation (module docstring), e.g. ``Geodude used Rock
     Throw, crit, you 12/58 HP, foe 71 %``, ``Roark sent out Onix`` after a faint. The
-    sides are listed in the order they acted (``order``; the opponent first when unknown)."""
+    sides are listed in the order they acted (``order``; the opponent first when unknown).
+
+    A player active at 0 HP reads ``Monferno fainted``; with ``budget = (k, n)`` (the
+    deaths allowed, and the fainted slots the root already had that are not deaths of this
+    battle) it adds ``(death d of k allowed)`` or, past the budget, ``(death d, over the
+    k allowed)``, ``d`` counting the fainted slots beyond ``n``. ``prev_mine`` (the
+    player's active slot before the turn) names ``you sent in X`` when the active changed
+    without a switch action: a replacement."""
     f = decode(obs)
     opp_slot, my_slot = int(f["active"][1]), int(f["active"][0])
     opp = _species(names, f, 1, opp_slot)
@@ -154,6 +167,22 @@ def label(
         if int(f["act_kind"][1]) != ACT_SWITCH:
             parts.append(f"{trainer} sent out {opp}")
     hp = int(f["player_hp"][my_slot])
+    if hp == 0:
+        text = f"{_species(names, f, 0, my_slot)} fainted"
+        if budget is not None:
+            k, base = budget
+            gone = sum(
+                1
+                for slot in range(SLOTS)
+                if int(f["species"][slot]) and int(f["player_hp"][slot]) == 0
+            )
+            d = max(gone - base, 1)
+            text += (
+                f" (death {d} of {k} allowed)" if d <= k else f" (death {d}, over the {k} allowed)"
+            )
+        parts.append(text)
+    elif prev_mine is not None and prev_mine != my_slot and int(f["act_kind"][0]) != ACT_SWITCH:
+        parts.append(f"you sent in {_species(names, f, 0, my_slot)}")
     total = f"/{max_hp[my_slot]}" if max_hp is not None else ""
     mine = f"you {hp}{total} HP"
     if s := _status(f, 0):
@@ -185,6 +214,10 @@ _COND_TEXT = {
     "mist": "Mist",
     "lucky_chant": "Lucky Chant",
     "tailwind": "Tailwind",
+    "foresight": "identified",
+    "curled": "curled up",
+    "bide_turns": "storing energy",
+    "mud_sport": "Mud Sport",
     "spikes": "Spikes",
     "toxic_spikes": "Toxic Spikes",
 }
@@ -207,6 +240,13 @@ def _differences(f: dict, others: list[dict], names: Names) -> list[str]:
             if differs(name, side):
                 on = int(f[name][side]) != 0
                 out.append(f"{who[side]} {text}" if on else f"{who[side]} no {text}")
+        for name, text in (("disabled_move", "{} disabled"), ("locked_move", "locked into {}")):
+            if differs(name, side):
+                move = int(f[name][side])
+                if move:
+                    out.append(f"{who[side]} {text.format(names.move_names[move])}")
+                else:
+                    out.append(f"{who[side]} no {name.replace('_', ' ')}")
     for slot in range(SLOTS):
         for side in (0, 1):
             i = side * SLOTS + slot
@@ -225,7 +265,6 @@ def _differences(f: dict, others: list[dict], names: Names) -> list[str]:
     for name, text in (
         ("trick_room", "Trick Room"),
         ("gravity", "Gravity"),
-        ("mud_sport", "Mud Sport"),
     ):
         if differs(name, 0):
             out.append(text if int(f[name][0]) else f"no {text}")
@@ -285,8 +324,13 @@ class _Walk:
         self.labels = {r.action: r.label for r in result.ranking}
         self.max_hp = None if root is None else np.asarray(root.max_hp)[0].tolist()
         self.root_opp = None if root is None else int(np.asarray(root.active)[1])
+        self.root_mine = None if root is None else int(np.asarray(root.active)[0])
+        self.budget = None
+        if root is not None:  # fainted slots that are not deaths of this battle
+            down = (np.asarray(root.species)[0] != 0) & (np.asarray(root.hp)[0] == 0)
+            self.budget = (result.deaths_allowed, int(down.sum()) - int(root.player_faints))
 
-    def node_label(self, node: PlanNode, prev_opp: int | None) -> str:
+    def node_label(self, node: PlanNode, prev_opp: int | None, prev_mine: int | None) -> str:
         if node.obs is None:
             if node.opp_label:
                 return node.opp_label
@@ -296,14 +340,27 @@ class _Walk:
                 return "the foe's AI is not modelled here"
             raise ValueError(f"a {node.kind} node with no observation and no opponent action")
         return label(
-            node.obs, self.names, prev_opp=prev_opp, trainer=self.trainer, max_hp=self.max_hp
+            node.obs,
+            self.names,
+            prev_opp=prev_opp,
+            prev_mine=prev_mine,
+            trainer=self.trainer,
+            max_hp=self.max_hp,
+            budget=self.budget,
         )
 
-    def kids(self, node: PlanNode, prev_opp: int | None, a: int, marks: bool = True):
+    def kids(
+        self,
+        node: PlanNode,
+        prev_opp: int | None,
+        a: int,
+        marks: bool = True,
+        prev_mine: int | None = None,
+    ):
         """``[(child, label, opp slot after)]`` of ``node``'s children under ``a``, with
-        distinct labels (``_unique``)."""
+        distinct labels (``_unique``); ``prev_opp``/``prev_mine``: the active slots before."""
         kids = node.children[a]
-        base = [self.node_label(k, prev_opp) for k in kids]
+        base = [self.node_label(k, prev_opp, prev_mine) for k in kids]
         fields = [None if k.obs is None else decode(k.obs) for k in kids]
         for lab in set(base):
             group = [i for i, b in enumerate(base) if b == lab]
@@ -315,8 +372,8 @@ class _Walk:
                     base[i] = ", ".join([base[i], *more])
         labs = _unique(base, [k.kind for k in kids], [k.obs is not None for k in kids], marks)
         return [
-            (k, lab, None if k.obs is None else int(decode(k.obs)["active"][1]))
-            for k, lab in zip(kids, labs, strict=True)
+            (k, lab, None if f is None else int(f["active"][1]))
+            for k, lab, f in zip(kids, labs, fields, strict=True)
         ]
 
     def action_label(self, node: PlanNode, a: int) -> str:
@@ -324,12 +381,31 @@ class _Walk:
         return _action_label(f, self.names, a, self.root, self.labels)
 
 
-def _plain(row: dict) -> dict:
-    """``row`` with numpy scalars as Python ones (``json`` refuses ``np.bool_``/``np.int64``)."""
-    return {k: v.item() if isinstance(v, np.generic) else v for k, v in row.items()}
+def _plain(value):
+    """``value`` (a ``dataclasses.asdict`` row) with numpy scalars as Python ones (``json``
+    refuses ``np.bool_``/``np.int64``) and tuples as lists (what a JSON round trip gives)."""
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, dict):
+        return {k: _plain(v) for k, v in value.items()}
+    if isinstance(value, tuple | list):
+        return [_plain(v) for v in value]
+    return value
 
 
-def _node_json(walk: _Walk, node: PlanNode, lab: str, prev_opp: int | None, depth: int) -> dict:
+def _active(node: PlanNode) -> int | None:
+    """The player's active slot in ``node``'s observation (``None`` without one)."""
+    return None if node.obs is None else int(decode(node.obs)["active"][0])
+
+
+def _node_json(
+    walk: _Walk,
+    node: PlanNode,
+    lab: str,
+    prev_opp: int | None,
+    prev_mine: int | None,
+    depth: int,
+) -> dict:
     """``node`` as JSON; ``depth``: the turns played to reach it (the root is 0)."""
     out = {
         "kind": node.kind,
@@ -342,6 +418,7 @@ def _node_json(walk: _Walk, node: PlanNode, lab: str, prev_opp: int | None, dept
             name: (int(v[0]) if v.size == 1 else v.tolist()) for name, v in decode(node.obs).items()
         },
         "opp_action": node.opp_action,
+        "replacement": node.replacement,
         "action": None if node.action is None else int(node.action),
         "action_label": None if node.action is None else walk.action_label(node, node.action),
         "values": {walk.action_label(node, a): float(v) for a, v in node.values.items()},
@@ -349,8 +426,8 @@ def _node_json(walk: _Walk, node: PlanNode, lab: str, prev_opp: int | None, dept
     }
     for a in node.children:
         out["children"][walk.action_label(node, a)] = [
-            _node_json(walk, k, klab, opp, depth + 1)
-            for k, klab, opp in walk.kids(node, prev_opp, a)
+            _node_json(walk, k, klab, opp, _active(k), depth + 1)
+            for k, klab, opp in walk.kids(node, prev_opp, a, prev_mine=prev_mine)
         ]
     return out
 
@@ -368,7 +445,12 @@ def to_json(
     docstring; ``root`` is the solved state, optional). ``table_version``: the
     ``jaxcache.table_version`` of the tables the solve used (``None``: not known)."""
     walk = _Walk(result, names, root, trainer)
-    plan = _node_json(walk, result.plan, "root", walk.root_opp, 0)
+    plan = _node_json(walk, result.plan, "root", walk.root_opp, walk.root_mine, 0)
+    ranking = []
+    for r in result.ranking:
+        row = _plain(dataclasses.asdict(r))
+        row["distribution"] = None if r.distribution is None else r.distribution.as_dict()
+        ranking.append(row)
     return {
         "settings": dataclasses.asdict(result.settings),
         "depth": result.depth,
@@ -376,7 +458,9 @@ def to_json(
         "rounds": int(result.rounds),
         "half_width_a": None if result.half_width_a is None else float(result.half_width_a),
         "precision_met": result.precision_met,
-        "ranking": [_plain(dataclasses.asdict(r)) for r in result.ranking],
+        "deaths_allowed": result.deaths_allowed,
+        "protected": list(result.protected),
+        "ranking": ranking,
         "dropped": [
             {"action": int(a), "label": walk.labels.get(a, f"action {a}"), "reason": why}
             for a, why in result.dropped.items()
@@ -393,6 +477,22 @@ def _pct(p: float) -> str:
     return f"{100 * p:5.1f} %"
 
 
+def distribution_line(dist) -> str:
+    """``deaths under the leader: 0: a %  1: b % ...`` from a ``DeathDistribution`` (3 and
+    4+ deaths folded into ``3+``)."""
+    p = dist.probs
+    cells = (
+        ("0", p[0]),
+        ("1", p[1]),
+        ("2", p[2]),
+        ("3+", p[3] + p[4]),
+        ("whiteout", p[6]),
+        ("unfinished", p[7]),
+        ("protected lost", p[5]),
+    )
+    return "deaths under the leader: " + "  ".join(f"{n}: {100 * v:.1f} %" for n, v in cells)
+
+
 def _precision_line(result: SolveResult) -> str:
     """The precision target of the final pass: met or not, the half-A leader's half-width
     and the top-up rounds run."""
@@ -407,16 +507,27 @@ def _precision_line(result: SolveResult) -> str:
 
 def _outcome_text(node: PlanNode, walk: _Walk) -> str:
     if node.kind == "decision":
-        return walk.action_label(node, node.action) if node.action is not None else "?"
+        if node.action is None:
+            return "?"
+        text = walk.action_label(node, node.action)
+        return text.replace("Switch -> ", "send in ", 1) if node.replacement else text
     return f"({_KIND_TEXT[node.kind]})"
 
 
-def _lines(walk: _Walk, node: PlanNode, a: int, prev_opp: int | None, depth: int, indent: int):
+def _lines(
+    walk: _Walk,
+    node: PlanNode,
+    a: int,
+    prev_opp: int | None,
+    prev_mine: int | None,
+    depth: int,
+    indent: int,
+):
     pad = " " * indent
-    for kid, lab, opp in walk.kids(node, prev_opp, a, marks=False):
+    for kid, lab, opp in walk.kids(node, prev_opp, a, marks=False, prev_mine=prev_mine):
         yield f"{pad}if {lab}  [{_pct(kid.prob).strip()}] -> {_outcome_text(kid, walk)}"
         if depth > 1 and kid.kind == "decision" and kid.action in kid.children:
-            yield from _lines(walk, kid, kid.action, opp, depth - 1, indent + 3)
+            yield from _lines(walk, kid, kid.action, opp, _active(kid), depth - 1, indent + 3)
 
 
 def render(
@@ -426,14 +537,16 @@ def render(
     ``show_depth`` levels of observations, then the budget footer."""
     walk = _Walk(result, names, root, trainer)
     s = result.settings
+    k = result.deaths_allowed
+    win = "P(win, 0 faints)" if k == 0 else f"P(win, <={k} deaths)"
     out = [
         (
             f"depth reached {result.depth} of {s.max_depth}; {result.playouts} playouts, "
             f"{result.seconds:.1f} s"
         ),
         (
-            f"     #  {'action':<24}  {'P(win, 0 faints) [95% CI]':<27}  {'lower':>7}  "
-            f"{'unexplored':>10}  {'sampled (nodes)':>15}  {'refused':>8}"
+            f"     #  {'action':<24}  {win + ' [95% CI]':<27}  {'lower':>7}  "
+            f"{'unexplored':>10}  {'sampled (nodes)':>15}  {'refused':>8}  {'over budget':>11}"
         ),
     ]
     for i, r in enumerate(result.ranking, 1):
@@ -442,11 +555,23 @@ def render(
         sampled = f"{_pct(r.sampled)} ({r.sampled_nodes})"
         out.append(
             f"  {mark} {i:2d}  {r.label:<24}  {odds:<27}  {_pct(r.lower_bound):>7}  "
-            f"{_pct(r.unexplored):>10}  {sampled:>15}  {_pct(r.refused):>8}"
+            f"{_pct(r.unexplored):>10}  {sampled:>15}  {_pct(r.refused):>8}  {_pct(r.failed):>11}"
         )
         staged = result.leaf_budget is not None  # depth 0 (Stage A) has no plan to show
         if i == 1 and staged and show_depth > 0 and r.action in result.plan.children:
-            out.extend(_lines(walk, result.plan, r.action, walk.root_opp, show_depth, 6))
+            out.extend(
+                _lines(walk, result.plan, r.action, walk.root_opp, walk.root_mine, show_depth, 6)
+            )
+    if result.ranking and result.ranking[0].distribution is not None:
+        out.append(distribution_line(result.ranking[0].distribution))
+    if result.protected:
+        who = ", ".join(
+            f"slot {slot}"
+            if root is None
+            else names.species_names[int(np.asarray(root.species)[0, slot])]
+            for slot in result.protected
+        )
+        out.append(f"protected: {who} (a line where one faints fails)")
     if any(r.tied_with_best for r in result.ranking):
         out.append("* the interval overlaps the leader's: a statistical tie, not reordered")
     for why in result.dropped.values():

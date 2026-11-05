@@ -28,7 +28,8 @@ with the first candidate's slot 0 empty or of power 1. That slot is skipped but 
 comparison after it still runs (battle_lib.c:8076), on the ``score`` left over from stage
 1, which this module does not track. The type-chart modifiers (Levitate, Wonder Guard,
 Normalize, Scrappy, Adaptability, Tinted Lens, Filter, Solid Rock, Expert Belt, Iron
-Ball, the Foresight-style volatiles, the variable-type moves) are not implemented here:
+Ball, Miracle Eye, the variable-type moves; the player's Foresight flag is read through
+``apply_type_chart``) are not implemented here:
 ``policy.ai_refusals`` refuses every one of them for the fight, so the precondition is
 that the fight passed it (the coverage registry and every ``ai_policy`` call check it).
 """

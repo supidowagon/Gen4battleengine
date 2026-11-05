@@ -1,6 +1,7 @@
 """The ``nuzline`` command line: coverage, rank and trainers (plan Task 8)."""
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -464,3 +465,307 @@ def test_save_export_unwritable_output_exit_1(save_path, tmp_path, capsys):
     assert main(["save", "export", str(save_path), "-o", str(out)]) == 1
     err = capsys.readouterr().err
     assert err.startswith("nuzline: error:") and len(err.strip().splitlines()) == 1
+
+
+def _pool_save(tmp_path, tables, names, box_moves=("Growl", "Bide")):
+    from tests.saves.synthetic import box_record, party_record
+    from tests.saves.writer import build_image
+
+    path = tmp_path / "pool.sav"
+    path.write_bytes(
+        build_image(
+            party=[
+                party_record(tables, names, "Furret", 16, ("Scratch",), ability_slot=1),
+                party_record(tables, names, "Geodude", 16, ("Tackle",)),
+            ],
+            boxes={
+                (0, 0): box_record(tables, names, "Kricketot", 5, box_moves),
+                (0, 1): box_record(tables, names, "Bidoof", 4, ("Tackle",)),
+            },
+            bag={"tms_hms": [(names.item("TM10"), 1)]},
+        )
+    )
+    return path
+
+
+def test_coverage_save_reports_pool(tmp_path, tables, names, capsys):
+    path = _pool_save(tmp_path, tables, names)
+    assert main(["coverage", "--save", str(path), "--trainer", "roark"]) == 0
+    out = capsys.readouterr().out
+    assert "Pool at level cap 16 (4 Pokemon):" in out
+    assert out.count("Support: EXACT") == 2
+
+
+def test_coverage_pool_does_not_change_exit_code(tmp_path, tables, names, capsys):
+    path = _pool_save(tmp_path, tables, names, box_moves=("Metronome",))
+    assert main(["coverage", "--save", str(path), "--trainer", "roark"]) == 0
+    out = capsys.readouterr().out
+    assert "box 1 slot 0 KRICKETOT: Metronome (current, move effect UNSUPPORTED)" in out
+    assert "Support: NONE" in out
+
+
+def test_cap_needs_save(capsys):
+    assert main(["coverage", "--party", PARTY, "--trainer", "roark", "--cap", "16"]) == 1
+    assert "--cap needs --save" in capsys.readouterr().err
+
+
+# ---- --deaths and --protect (plan 4b Task 10) ----
+
+SAMPLE = PARTY
+FAINTED = str(ROOT / "tests" / "fixtures" / "sample_party_fainted.toml")
+
+
+def test_protected_slots(tables, names):
+    from nuzline.cli import protected_slots
+    from nuzline.data.party import load_party
+
+    party = load_party(Path(PARTY), names)  # Monferno Prinplup Grotle Starly Shinx Budew
+    # Digits are 0-based party indices, like --lead (plan 4b ruling).
+    assert protected_slots(party, names, ["1"]) == (1,)
+    assert protected_slots(party, names, ["prinplup", "1"]) == (1,)
+    assert protected_slots(party, names, ["0", "Starly"]) == (0, 3)
+    assert protected_slots(party, names, ["STARLY", "starly"]) == (3,)
+    assert protected_slots(party, names, []) == ()
+    for bad in ("6", "9", "-1", "Pikachu"):
+        with pytest.raises(ValueError, match=f"--protect {bad}"):
+            protected_slots(party, names, [bad])
+
+
+def test_all_zero_footer_names_the_budget():
+    from nuzline.cli import ALL_ZERO_FOOTER, all_zero_footer
+
+    assert all_zero_footer(0) == ALL_ZERO_FOOTER
+    assert all_zero_footer(2) == "all lines 0 %: no line within 2 deaths found at this depth"
+
+
+def test_cli_rank_deaths_and_protect(capsys):
+    args = ["rank", "--party", SAMPLE, "--trainer", "roark", "--deaths", "1"]
+    assert main([*args, "--protect", "Prinplup", "--n", "50", "--devices", "1"]) == 0
+    out = capsys.readouterr().out
+    out.encode("cp1252")
+    assert out.isascii()
+    assert "P(win, <=1 deaths)" in out and "E[deaths]" in out
+    assert "<=0" in out and "<=3" in out and "(screen)" in out
+    assert "protected: prinplup" in out.lower()
+    assert "deaths under the leader:" in out
+
+
+def test_cli_rank_default_budget_keeps_the_header(capsys):
+    assert (
+        main(["rank", "--party", SAMPLE, "--trainer", "roark", "--n", "20", "--devices", "1"]) == 0
+    )
+    out = capsys.readouterr().out
+    assert "P(win, 0 faints) [95% CI]" in out and "protected:" not in out
+
+
+def test_cli_solve_deaths(tmp_path, monkeypatch, capsys):
+    from nuzline import cli
+
+    monkeypatch.setattr(cli, "RUNS", tmp_path / "runs")
+    args = ["solve", "--party", SAMPLE, "--trainer", "roark", "--max-depth", "1"]
+    assert main([*args, "--playouts", "2000", "--deaths", "1", "--devices", "1"]) == 0
+    out = capsys.readouterr().out
+    assert "P(win, <=1 deaths)" in out and "deaths under the leader:" in out
+    (record,) = (tmp_path / "runs").glob("solve_*.json")
+    run = json.loads(record.read_text())
+    assert run["deaths"] == 1 and run["protected"] == []
+    assert run["result"]["deaths_allowed"] == 1
+
+
+def _two_starly(tmp_path) -> str:
+    text = Path(PARTY).read_text()
+    start = text.index('[[pokemon]]\nspecies = "Starly"')
+    block = text[start : text.index("[[pokemon]]", start + 1)]
+    path = tmp_path / "two_starly.toml"
+    last = text.rindex("[[pokemon]]")  # six is the party limit: Budew makes room
+    path.write_text(text[:last] + block)
+    return str(path)
+
+
+@pytest.mark.parametrize(
+    ("flags", "party", "named"),
+    [
+        (["--deaths", "4"], PARTY, ("--deaths", "4")),
+        (["--deaths", "-1"], PARTY, ("--deaths", "-1")),
+        (["--protect", "Pikachu"], PARTY, ("--protect", "Pikachu")),
+        (["--protect", "9"], PARTY, ("--protect", "9")),
+        (["--protect", "6"], PARTY, ("--protect", "6")),
+        (["--protect", "Budew"], FAINTED, ("--protect", "Budew")),
+        (["--protect", "Starly"], None, ("--protect", "Starly")),
+    ],
+)
+@pytest.mark.parametrize("command", ["rank", "solve"])
+def test_cli_bad_budget_flags(capsys, tmp_path, command, flags, party, named):
+    party = party or _two_starly(tmp_path)
+    assert main([command, "--party", party, "--trainer", "roark", *flags, "--devices", "1"]) == 1
+    err = capsys.readouterr().err
+    assert len(err.strip().splitlines()) == 1
+    assert named[0] in err and named[1] in err
+
+
+def test_cli_user_save_rank(capsys):
+    save = os.environ.get("NUZLINE_USER_SAVE")
+    if not save:
+        pytest.skip("NUZLINE_USER_SAVE not set")
+    args = ["rank", "--save", save, "--trainer", "roark", "--deaths", "1", "--protect", "Furret"]
+    assert main([*args, "--n", "50", "--devices", "1"]) == 0
+    assert "<=0" in capsys.readouterr().out
+
+
+# ---- nuzline prep (plan 4c Task 10) ----
+
+
+def _prep_save(tmp_path, tables, names):
+    """A synthetic save: Monferno, Prinplup and Grotle (L14), a Starly (L10) in box 1 slot 0,
+    a Heart Scale and TM10 in the bag."""
+    from tests.saves.synthetic import SAMPLE, box_record, party_record
+    from tests.saves.writer import build_image
+
+    path = tmp_path / "prep.sav"
+    path.write_bytes(
+        build_image(
+            party=[party_record(tables, names, *row) for row in SAMPLE],
+            boxes={(0, 0): box_record(tables, names, "Starly", 10, ("Tackle", "Growl"))},
+            bag={
+                "items": [(names.item("Heart Scale"), 1)],
+                "tms_hms": [(names.item("TM10"), 1)],
+            },
+        )
+    )
+    return str(path)
+
+
+@pytest.fixture
+def prep_runs(tmp_path, monkeypatch):
+    from nuzline import cli
+
+    monkeypatch.setattr(cli, "RUNS", tmp_path / "runs")
+    return tmp_path / "runs"
+
+
+SMALL = ["--max-depth", "1", "--finalists", "1", "--screen-n", "4", "--devices", "1"]
+
+
+@pytest.fixture(scope="module")
+def prep_run(tables, names, tmp_path_factory):
+    """ONE small ``nuzline prep`` run (the slow part) shared by the tests below:
+    (exit code, stdout, stderr, runs dir, save path), default checkpoint path."""
+    import contextlib
+    import io
+
+    from nuzline import cli
+
+    root = tmp_path_factory.mktemp("prep_run")
+    save = _prep_save(root, tables, names)
+    out, err = io.StringIO(), io.StringIO()
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(cli, "RUNS", root / "runs")
+        mp.setenv("XLA_FLAGS", "")
+        mp.delenv("XLA_FLAGS")
+        argv = ["prep", "--save", save, "--trainer", "roark", "--cap", "14", *SMALL]
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = main(argv)
+        os.environ.pop("XLA_FLAGS", None)
+    return code, out.getvalue(), err.getvalue(), root / "runs", save
+
+
+def test_cli_prep_small(prep_run):
+    code, out, err, runs, save = prep_run
+    assert code == 0
+    out.encode("ascii")
+    for section in ("Setup:", "Prep steps:", "Cost:", "Odds ladder (rung 0 planned):", "Plan:"):
+        assert section in out
+    assert "[prep] teams round 0:" in err
+    assert err.index("[prep] checkpoint: ") < err.index("[prep] teams round 0:")
+    (record,) = runs.glob("prep_*[!t].json")
+    run = json.loads(record.read_text())
+    import hashlib
+
+    assert run["save_sha256"] == hashlib.sha256(Path(save).read_bytes()).hexdigest()
+    assert run["deaths"] == 0 and run["cap"] == 14
+    assert f"run record: {record}" in out
+    (ckpt,) = runs.glob("prep_*.ckpt.json")
+    assert f"checkpoint: {ckpt}" in out
+
+
+def test_cli_prep_needs_a_cap(prep_runs, tmp_path, tables, names, capsys):
+    save = _prep_save(tmp_path, tables, names)
+    assert main(["prep", "--save", save, "--trainer-id", "858", *SMALL]) == 1
+    assert "config/level_caps.toml" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("flags", "shown"),
+    [
+        (["--deaths", "4"], ["4"]),
+        (["--protect", "Starly", "--exclude", "Starly"], ["starly"]),
+        (
+            ["--exclude", "party:0", "--exclude", "party:1", "--exclude", "party:2"]
+            + ["--exclude", "box:1:0"],
+            ["no usable Pokemon"],
+        ),
+        (["--reserve", "Potionx"], ["Potionx"]),
+        (["--prestatus", "sleep"], ["sleep"]),
+        (["--weight", "tm=x"], ["tm=x"]),
+        (["--weight", "bogus=1"], ["bogus"]),
+        (["--protect", "1"], ["party:1", "PRINPLUP"]),
+        (["--protect", "Monferno"], ["party:0", "box:1:0", "box:B:S"]),
+        (["--max-setups", "5"], ["32", "--exclude", "--max-team"]),
+        (["--max-team", "7"], ["--max-team 7"]),
+    ],
+)
+def test_cli_prep_bad_flags(prep_runs, tmp_path, tables, names, capsys, flags, shown):
+    from tests.saves.synthetic import SAMPLE
+
+    save = _prep_save(tmp_path, tables, names)
+    if "Monferno" in flags:  # a second Monferno in the box instead of the Starly
+        from tests.saves.synthetic import box_record, party_record
+        from tests.saves.writer import build_image
+
+        Path(save).write_bytes(
+            build_image(
+                party=[party_record(tables, names, *row) for row in SAMPLE],
+                boxes={(0, 0): box_record(tables, names, "Monferno", 14, SAMPLE[0][2])},
+            )
+        )
+    args = ["prep", "--save", save, "--trainer", "roark", "--cap", "14", *SMALL, *flags]
+    assert main(args) == 1
+    err = capsys.readouterr().err
+    assert len(err.strip().splitlines()) == 1 and err.startswith("nuzline: error:")
+    for text in shown:
+        assert text.lower() in err.lower()
+
+
+def test_cli_prep_resume(prep_run, capsys):
+    _, first, _, runs, save = prep_run
+    (ckpt,) = runs.glob("prep_*.ckpt.json")
+    before = ckpt.read_bytes()
+    base = ["prep", "--save", save, "--trainer", "roark", "--cap", "14", *SMALL]
+    assert main([*base, "--resume", str(ckpt)]) == 0
+    second = capsys.readouterr().out
+
+    def block(out):
+        return out[out.index("Setup:") : out.index("Prep steps:")]
+
+    assert block(first) == block(second)
+    before = ckpt.read_bytes()
+    assert main([*base, "--resume", str(ckpt), "--deaths", "1"]) == 1
+    err = capsys.readouterr().err
+    errors = [line for line in err.splitlines() if not line.startswith("[prep] checkpoint: ")]
+    assert len(errors) == 1 and "settings" in err
+    assert main([*base, "--resume", str(ckpt), "--checkpoint", str(ckpt)]) == 1
+    assert "--resume" in capsys.readouterr().err
+    assert ckpt.read_bytes() == before  # a refused resume leaves the file alone
+
+
+def test_cli_prep_unsupported_opponent(prep_runs, tmp_path, tables, names, capsys):
+    save = _prep_save(tmp_path, tables, names)
+    args = ["prep", "--save", save, "--trainer-id", "858", "--cap", "60", *SMALL]
+    assert main(args) == 2
+    assert "Missing (" in capsys.readouterr().out
+
+
+def test_coverage_save_uses_the_config_cap(tmp_path, tables, names, capsys):
+    save = _prep_save(tmp_path, tables, names)
+    assert main(["coverage", "--save", save, "--trainer", "roark"]) == 0
+    assert "Pool at level cap 16" in capsys.readouterr().out

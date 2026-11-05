@@ -99,12 +99,35 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     # itself lets a frozen user move and thaw (battle_controller_player.c:2481, :2728),
     # flagged by move_param[m, 2] = 1. RECOIL_BURN_HIT (Flare Blitz, 254) also has a
     # third recoil and stays unsupported.
+    # Foresight, Odor Sleuth: effect_script_0113.s, an on-hit indirect effect
+    # (subscript_foresight.s sets VOLATILE_CONDITION_FORESIGHT on the defender).
+    # Confusion, Psybeam, Dizzy Punch, ...: effect_script_0076.s, a probabilistic indirect
+    # effect (no ON_HIT flag) running subscript_confuse.s.
+    76: ("BATTLE_EFFECT_CONFUSE_HIT", _E.SECONDARY_CONFUSE, (0, 0, 0)),
+    # Mud Sport: effect_script_0201.s sets MOVE_EFFECT_MUD_SPORT on the user.
+    201: ("BATTLE_EFFECT_HALVE_ELECTRIC_DAMAGE", _E.MUD_SPORT, (0, 0, 0)),
+    # Bug Bite, Pluck: effect_script_0224.s, an ON_HIT indirect effect (subscript_pluck.s).
+    224: ("BATTLE_EFFECT_EAT_BERRY", _E.EAT_BERRY, (0, 0, 0)),
+    # Disable: effect_script_0086.s, an on-hit indirect effect (subscript_disable_start.s).
+    86: ("BATTLE_EFFECT_DISABLE", _E.DISABLE, (0, 0, 0)),
+    113: ("BATTLE_EFFECT_FORESIGHT", _E.FORESIGHT, (0, 0, 0)),
+    # Night Shade, Seismic Toss: effect_script_0087.s, damage = the attacker's level.
+    87: ("BATTLE_EFFECT_LEVEL_DAMAGE_FLAT", _E.LEVEL_DAMAGE, (0, 0, 0)),
+    # Hidden Power: effect_script_0135.s CalcHiddenPowerParams (type and power from IVs).
+    135: ("BATTLE_EFFECT_RANDOM_POWER_BASED_ON_IVS", _E.HIDDEN_POWER, (0, 0, 0)),
+    # Magnitude: the decomp's name is PSYWAVE but effect_script_0126.s is Magnitude's.
+    126: ("BATTLE_EFFECT_PSYWAVE", _E.MAGNITUDE, (0, 0, 0)),
     125: ("BATTLE_EFFECT_THAW_AND_BURN_HIT", _E.SECONDARY_STATUS, (Status.BURN, 0, 1)),
     128: ("BATTLE_EFFECT_HIT_BEFORE_SWITCH", _E.PURSUIT, (0, 0, 0)),
     138: ("BATTLE_EFFECT_RAISE_DEF_HIT", _E.SECONDARY_STAT_SELF, (_DEF, 1, 0)),
     139: ("BATTLE_EFFECT_RAISE_ATTACK_HIT", _E.SECONDARY_STAT_SELF, (_ATK, 1, 0)),
-    # Defense Curl: Rollout doubling is a later milestone (plan ruling, Task 8b).
-    156: ("BATTLE_EFFECT_DEF_UP_DOUBLE_ROLLOUT_POWER", _E.STAT_SELF, (_DEF, 1, 0)),
+    # Defense Curl: effect_script_0156.s sets VOLATILE_CONDITION_DEFENSE_CURL, then Def +1;
+    # move_param[m, 2] = 1 sets `curled` (Rollout and Ice Ball double their power).
+    156: ("BATTLE_EFFECT_DEF_UP_DOUBLE_ROLLOUT_POWER", _E.STAT_SELF, (_DEF, 1, 1)),
+    # Bide: effect_script_0026.s -> subscript_bide_start.s (lock, BIDE_1, storedDamage = 0).
+    26: ("BATTLE_EFFECT_BIDE", _E.BIDE, (0, 0, 0)),
+    # Rollout, Ice Ball: effect_script_0117.s, CalcRolloutPower (battle_script.c:5661).
+    117: ("BATTLE_EFFECT_DOUBLE_POWER_EACH_TURN_LOCK_INTO", _E.ROLLOUT, (0, 0, 0)),
     167: ("BATTLE_EFFECT_STATUS_BURN", _E.STATUS_FOE, (Status.BURN, 0, 0)),
     175: ("BATTLE_EFFECT_TAUNT", _E.TAUNT, (0, 0, 0)),
     210: ("BATTLE_EFFECT_HALVE_FIRE_DAMAGE", _E.WATER_SPORT, (0, 0, 0)),
@@ -156,6 +179,10 @@ DECOMP_ABILITY_TO_ID: dict[str, AbilityId] = {
     "Static": AbilityId.STATIC,
     "Guts": AbilityId.GUTS,
     "Steadfast": AbilityId.STEADFAST,
+    "Insomnia": AbilityId.INSOMNIA,
+    "Cloud Nine": AbilityId.CLOUD_NINE,
+    "Compoundeyes": AbilityId.COMPOUNDEYES,
+    "Shed Skin": AbilityId.SHED_SKIN,
 }
 
 DECOMP_ITEM_TO_ID: dict[str, ItemId] = {

@@ -51,11 +51,15 @@ class Outcome(NamedTuple):
     n_hits: jnp.ndarray  # int8[2], 2-5
     full_para: jnp.ndarray  # int8[2]
     confusion_hit: jnp.ndarray  # int8[2]
-    duration: jnp.ndarray  # int8[2], sleep/confusion/Bind/Taunt counter rolled at infliction
+    duration: (
+        jnp.ndarray
+    )  # int8[2], sleep/confusion/Bind/Taunt/Disable counter rolled at infliction
     thaw: jnp.ndarray  # int8[2]
     flinch_item: jnp.ndarray  # int8[2], reserved: King's Rock / Razor Fang (unsupported items)
     quick_claw: jnp.ndarray  # int8[2], reserved: Quick Claw (unsupported item)
     end_speed_tie: jnp.ndarray  # int8[], 0 = player first in the end-of-turn order on equal speed
+    magnitude: jnp.ndarray  # int8[2], Magnitude's level 4-10 of each side's move
+    shed_skin: jnp.ndarray  # int8[2], Shed Skin's RandNext() % 10 < 3
 
 
 def empty_outcome() -> Outcome:
@@ -76,6 +80,8 @@ def empty_outcome() -> Outcome:
         flinch_item=sides,
         quick_claw=sides,
         end_speed_tie=jnp.zeros((), _I8),
+        magnitude=sides + 4,
+        shed_skin=sides,
     )
 
 
@@ -112,8 +118,15 @@ def _hit_threshold(tables: Tables, state: BattleState, actions, side) -> jnp.nda
     eva = jnp.where(d_ability == AbilityId.SIMPLE, eva * 2, eva)
     acc = jnp.where(d_ability == AbilityId.UNAWARE, 0, acc)
     eva = jnp.where(a_ability == AbilityId.UNAWARE, 0, eva)
+    # MON_IS_IDENTIFIED(defender) && evaStages < 0 (:2888): a Foresight-identified
+    # defender's positive evasion is ignored (evaStages = 6 - boost, so eva = -boost).
+    # A defender that switches in this turn is the fresh Pokemon, not identified.
+    identified = ~target_switches & (state.foresight[target] != 0)
+    eva = jnp.where(identified & (eva < 0), 0, eva)
     total = jnp.clip(6 + eva + acc, 0, 12)
     rate = accuracy * _ACC_NUM[total] // _ACC_DEN[total]
+    # Compoundeyes (battle_controller_player.c:2922-2924), right after the stage scaling.
+    rate = jnp.where(a_ability == AbilityId.COMPOUNDEYES, rate * 130 // 100, rate)
     rate = jnp.where(state.weather == Weather.FOG, rate * 6 // 10, rate)  # deep fog
     rate = jnp.where(state.gravity != 0, rate * 10 // 6, rate)
     # Accuracy 0 never misses (the check returns before rolling); a switch or an item
@@ -138,6 +151,12 @@ def crit_odds(tables: Tables, state: BattleState, actions) -> jnp.ndarray:
     moves = jnp.stack([selected_move(tables, state, side, actions[side])[0] for side in (0, 1)])
     stage = (tables.move_effect[moves] == EffectId.HIGH_CRIT).astype(_I32)
     return _CRIT_ODDS[jnp.minimum(stage, 4)]
+
+
+def _magnitude_level(rand) -> jnp.ndarray:
+    """Magnitude's level 4-10 from ``rand % 100``: <5 -> 4, <15 -> 5, <35 -> 6, <65 -> 7,
+    <85 -> 8, <95 -> 9, else 10 (battle_script.c:5820-5852)."""
+    return 4 + jnp.searchsorted(jnp.array([5, 15, 35, 65, 85, 95], _I32), rand, side="right")
 
 
 def sample_outcome(key, tables: Tables, state: BattleState, actions) -> Outcome:
@@ -165,12 +184,14 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions) -> Outcome:
     n_hits = jnp.where(first < 2, first + 2, second + 2)
     # BtlCmd_Random (battle_script.c:3207) ``Random r, o`` is rand % (r + 1) + o, by the
     # acting side's move: Random 3, 2 (subscript_fall_asleep.s, subscript_confuse.s),
-    # Random 3, 3 (subscript_bind_start.s), Random 2, 3 (subscript_taunt_start.s).
+    # Random 3, 3 (subscript_bind_start.s), Random 2, 3 (subscript_taunt_start.s);
+    # TryDisable (battle_script.c:4590) stores RandNext() % 4 + 3, the same 3-6 as Bind.
     effect = tables.move_effect[moves]
     duration = jnp.where(
         effect == EffectId.TAUNT,
         draw(13, per_side, 3) + 3,
-        draw(10, per_side, 4) + jnp.where(effect == EffectId.TRAP, 3, 2),
+        draw(10, per_side, 4)
+        + jnp.where((effect == EffectId.TRAP) | (effect == EffectId.DISABLE), 3, 2),
     )
     outcome = Outcome(
         speed_tie=draw(5, (), 2),  # battle_lib.c:1445, RandNext() & 1
@@ -189,5 +210,12 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions) -> Outcome:
         quick_claw=jnp.zeros(per_side, _I32),
         # BattleSystem_SortMonSpeedOrder (battle_lib.c:3364) on equal speed: RandNext() & 1.
         end_speed_tie=draw(12, (), 2),
+        # BtlCmd_CalcMagnitude (battle_script.c:5820-5852): rand % 100 mapped to the
+        # level; ShedSkin (battle_lib.c:3567-3575): RandNext() % 10 < 3. Drawn from
+        # fold_in keys so every field above keeps its samples.
+        magnitude=_magnitude_level(
+            jax.random.randint(jax.random.fold_in(key, 14), per_side, 0, 100, dtype=_I32)
+        ),
+        shed_skin=jax.random.randint(jax.random.fold_in(key, 15), per_side, 0, 10, dtype=_I32) < 3,
     )
     return Outcome(*(jnp.asarray(f).astype(_I8) for f in outcome))

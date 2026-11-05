@@ -32,8 +32,8 @@ of the turn:
 * ``full_para[s]`` / ``thaw[s]``: ``s`` moves and is paralyzed / frozen at the start,
   or the foe uses a move that inflicts it (step.py:277-278, :305).
 * ``confusion_hit[s]``: ``s`` moves and its confusion counter is >= 2, or the foe uses
-  a ``CONFUSE_FOE`` move (counter 2-5; step.py:292-294).
-* ``duration[s]``: ``s``'s move is Taunt, Bind, ``CONFUSE_FOE`` or inflicts sleep
+  a ``CONFUSE_FOE`` or ``SECONDARY_CONFUSE`` move (counter 2-5; step.py:292-294).
+* ``duration[s]``: ``s``'s move is Taunt, Bind, ``CONFUSE_FOE``, ``SECONDARY_CONFUSE`` or inflicts sleep
   (effects.py:189, :286, :297, :307).
 * ``speed_tie``: two actions of one kind, equal priority and equal effective speeds
   at the start (order.py:67-85), exactly as ``action_order`` decides.
@@ -41,6 +41,13 @@ of the turn:
   (step.py:663-673): each side's possible end speeds cover every Speed stage when a
   stage change is possible this turn, paralysis when it can be inflicted, and the
   neutral speed of a fainted battler (``_faint_check`` resets stages and status).
+* ``magnitude[s]``: ``s`` uses a ``MAGNITUDE`` move (``BtlCmd_CalcMagnitudePower``).
+  ``crit``/``roll`` are not relevant for ``LEVEL_DAMAGE`` (Night Shade deals its user's
+  level with no crit or roll, ``damage.fixed_damage``) nor for ``BIDE`` (the unleash is
+  ``2 * storedDamage``, also fixed). A locked side's move is its locked move
+  (``order.selected_move``), so the masks above read it.
+* ``shed_skin[d]``: side ``d``'s active or incoming Pokemon has Shed Skin
+  (``step._turn_end_ability``; over-approximate: it only rolls with a status and HP).
 * ``flinch_item``, ``quick_claw``: never read.
 * Nothing is relevant once the battle is over (``step`` returns the state, step.py:700).
 """
@@ -77,7 +84,7 @@ WIDTH_CAP = 131072
 
 # ``OutcomeLaws.duration_kind``: the acting side's ``Random`` command (outcome.py:166-174).
 DURATION_DEFAULT = 0  # Random 3, 2: 2-5 (sleep, confusion and every other move)
-DURATION_TRAP = 1  # Random 3, 3: 3-6 (Bind)
+DURATION_TRAP = 1  # Random 3, 3: 3-6 (Bind; Disable: RandNext() % 4 + 3, the same law)
 DURATION_TAUNT = 2  # Random 2, 3: 3-5
 
 # Effects whose hits read ``outcome.secondary`` through ``proc`` (effects.py:468).
@@ -87,6 +94,7 @@ _PROC_EFFECTS = (
     _E.SECONDARY_STATUS,
     _E.FLINCH,
     _E.TRAP,
+    _E.SECONDARY_CONFUSE,
 )
 
 
@@ -183,6 +191,8 @@ def outcome_laws(tables: Tables, state: BattleState, actions) -> OutcomeLaws:
     foe_move = moves[::-1]
     chance = tables.move_effect_chance[moves].astype(_I32)
     damaging = (tables.move_category[moves] != STATUS) & (tables.move_power[moves] != 0)
+    # LEVEL_DAMAGE and Bide's unleash: no crit, no roll (damage.fixed_damage)
+    rolled = damaging & (effect != _E.LEVEL_DAMAGE) & (effect != _E.BIDE)
     contact = (tables.move_flags[moves] & MoveFlag.CONTACT) != 0
     multi = effect == _E.MULTI_HIT
     status = state.status[sides, state.active]
@@ -190,9 +200,13 @@ def outcome_laws(tables: Tables, state: BattleState, actions) -> OutcomeLaws:
     hit_index = jnp.arange(MAX_HITS)[None, :]
     lands = uses_move[:, None] & ((hit_index == 0) | multi[:, None])  # [2,5]
     hit = uses_move[:, None] & (tables.move_accuracy[moves] != 0)[:, None] & (hit_index == 0)
-    crit = lands & damaging[:, None]
+    crit = lands & rolled[:, None]
     confusable = uses_move & (
-        (state.confusion >= 2) | (foe_moves & (tables.move_effect[foe_move] == _E.CONFUSE_FOE))
+        (state.confusion >= 2)
+        | (
+            foe_moves
+            & _any_of(tables.move_effect[foe_move], (_E.CONFUSE_FOE, _E.SECONDARY_CONFUSE))
+        )
     )
     roll = crit | (confusable[:, None] & (hit_index == 0))
     secondary = lands & ((chance != 0) & _any_of(effect, _PROC_EFFECTS))[:, None]
@@ -205,7 +219,7 @@ def outcome_laws(tables: Tables, state: BattleState, actions) -> OutcomeLaws:
         (status == Status.FREEZE) | (foe_moves & _inflicts(tables, foe_move, Status.FREEZE))
     )
     duration = uses_move & (
-        _any_of(effect, (_E.TAUNT, _E.TRAP, _E.CONFUSE_FOE))
+        _any_of(effect, (_E.TAUNT, _E.TRAP, _E.DISABLE, _E.CONFUSE_FOE, _E.SECONDARY_CONFUSE))
         | _inflicts(tables, moves, Status.SLEEP)
     )
 
@@ -255,11 +269,13 @@ def outcome_laws(tables: Tables, state: BattleState, actions) -> OutcomeLaws:
         flinch_item=never,
         quick_claw=never,
         end_speed_tie=end_speed_tie,
+        magnitude=uses_move & (effect == _E.MAGNITUDE),
+        shed_skin=live & _holds(state, actions, (AbilityId.SHED_SKIN,)),
     )
     kind = jnp.where(
         effect == _E.TAUNT,
         DURATION_TAUNT,
-        jnp.where(effect == _E.TRAP, DURATION_TRAP, DURATION_DEFAULT),
+        jnp.where(_any_of(effect, (_E.TRAP, _E.DISABLE)), DURATION_TRAP, DURATION_DEFAULT),
     )
     return OutcomeLaws(
         hit_threshold=hit_threshold(tables, state, actions),
@@ -328,6 +344,15 @@ def _thaw(laws: OutcomeLaws, side: int) -> _Law:
     return [0, 1], [4, 1], 5  # rand % 5 == 0
 
 
+def _magnitude(laws: OutcomeLaws, side: int) -> _Law:
+    # BtlCmd_CalcMagnitude (battle_script.c:5820-5852): rand % 100 -> level 4-10.
+    return list(range(4, 11)), [5, 10, 20, 30, 20, 10, 5], 100
+
+
+def _shed_skin(laws: OutcomeLaws, side: int) -> _Law:
+    return [0, 1], [7, 3], 10  # RandNext() % 10 < 3, battle_lib.c:3567
+
+
 def _zero(laws: OutcomeLaws, side: int) -> _Law:
     return [0], [1], 1
 
@@ -347,6 +372,8 @@ _LAWS = {
     "flinch_item": _zero,
     "quick_claw": _zero,
     "end_speed_tie": _coin,
+    "magnitude": _magnitude,
+    "shed_skin": _shed_skin,
 }
 
 

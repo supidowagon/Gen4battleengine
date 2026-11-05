@@ -74,10 +74,20 @@ default and its cost is reported as candies, not as risk.
   user decides between "safest deathless" and "allow deaths" (the user's "maybe have the user
   decide"). My call: other objective functions ("fewest expected deaths") are deferred; they need
   new interval maths, and the ladder plus the distribution already expose the trade-off.
-- Ties (overlapping intervals, design.md §4.1) break on fewer expected deaths, then resource cost
-  (user-weighted), then expected HP and PP left. Within rung `k`, a line that loses fewer
-  Pokémon is preferred at equal P(win, deaths ≤ k), so "deaths as a tool" never means dying for
-  nothing.
+- Ranking (user decision 2026-11-03, recorded 2026-11-04; supersedes the cost-first tie rule of
+  plan ruling 7). The user's words: "This should depend, on whether the user has toggled the option
+  to allow items. If they have show the safest line." Among the setups the user's toggles allow,
+  the higher P(win, deaths <= k) leads. When win chances are statistically tied (overlapping
+  intervals, design.md section 4.1; user decision 2026-11-04), fewer expected deaths lead (a lost
+  playout counts `LOSS_DEATHS`), then the higher win chance. Only then does the lower resource cost
+  lead (user-weighted). A seeded tie rank decides last. A resource the user allows (its toggle on,
+  not reserved) never outranks win chance or deaths; a reserved resource is never spent (it is
+  removed from the bag before the search). This is the battle tie rule (plan 4b ruling 5,
+  `stage_a.tie_ordered`) applied at every position. Cost is always listed on the card; when a
+  cheaper finalist is tied within noise with the chosen setup, the card names it and what it saves.
+  Expected HP and PP left are reported, not ranked: measured over the whole party they favour
+  bigger teams. Within rung `k`, a line that loses fewer Pokemon is preferred at equal P(win,
+  deaths <= k), so "deaths as a tool" never means dying for nothing.
 
 **Ladder semantics (my call).** Each rung has its own best setup and plan: allowing a death may
 change who you bring. One playout yields the death count, so the Stage A screen and halving score
@@ -144,6 +154,26 @@ design.md §4.4 already fixes the funnel; this milestone implements it:
 3. **Conservative prune**, then a **Stage A screen** of every surviving (team, lead, variant)
    in one batch, then **successive halving**, then **Stage B** on the finalists with the faint
    budget, at the precision target from the milestone-2 amendment.
+   Halving compares setups at equal playout counts. In a variant expansion the new neighbours
+   halve alone. The surviving neighbours and the parents are then topped up together to the
+   first halving count at or above the parents' count, and cut to the survivor floor there.
+   At a cut that reaches a survivor floor, setups tied exactly (score and deaths) with the last
+   survivor are kept and screened further, doubling each round, until the tie breaks or
+   `tie_playouts` (1016) is reached; only then do cost and the seeded tie rank decide there.
+   Exact ties are kept and screened further only at a cut that reaches a survivor floor;
+   elsewhere an exact tie on score and deaths goes to the lower cost, then the seeded tie rank.
+   HP and registration order never decide. (Added 2026-11-04 after the exhaustive rung-0 miss.)
+   The finalists are chosen by a **fresh race**: before Stage B, every final survivor of the
+   requested rung is screened again with `race_playouts` (2040) new playouts, and the finalists
+   are the best of that fresh screen alone (`prep_order`: fewer deaths inside a win-chance tie, then score, then cost). The
+   accumulated screen stats are biased: a setup survived every cut partly by luck, so its
+   accumulated estimate overstates it (the winner's curse). In the rung-0 seed-4 re-check, 6 of
+   the 8 final survivors were within the stored best's interval, yet the pick by accumulated
+   stats was #1719, which screened 0.998 over 1016 playouts against a true 0.989. Simulated over
+   those 8, a fresh race picks wrong 1.1 % of the time at 1016 playouts each, 0.1 % at 2040. The
+   race's playouts are counted but never merged into the halving stats, and its picks are saved
+   in the checkpoint, so a resumed run never races again. `race_playouts = 0` turns it off.
+   (Added 2026-11-04, user approved.)
 4. **Anytime and checkpointing:** a time budget (`--budget`), a current best answer always
    printable, state saved to disk so a run can stop and resume.
 
@@ -184,6 +214,10 @@ smarter playout player, deeper search on the line in question, or both, is left 
   target. It runs as a one-off overnight job whose result is committed under `benchmarks/`; a CI
   version shrinks the pool to 4 Pokémon. Pass: the funnel's pick has an interval overlapping the
   exhaustive best's (a tie counts), on both rungs, and no setup the prune dropped beats it.
+  A funnel change after the exhaustive run is re-checked against the stored values
+  (`benchmarks/exhaustive_roark.py --recheck`): the new pick is looked up in phase 2, else
+  phase 1, else solved at the precision target, and judged by the same overlap rule over
+  seeds 0-4.
 - **The user's save** is the fixture for the real-fight runs. It is not committed: tests and
   benchmarks find it through `NUZLINE_USER_SAVE` and skip without it, as the PKHeX oracle does.
   Its bag: TM10, one Heart Scale, no holdable battle items.

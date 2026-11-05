@@ -25,6 +25,14 @@ in a dict keyed by the child's state bytes and observation bytes (ruling 2; a by
 dict, not ``np.unique(axis=0)``, which is ~150x slower: notes/stage-b/integration.md
 §13). The refusal flag is part of the key too; it is a function of the state in
 practice, so this never splits a child in two.
+
+**Player replacements** (faint-budget spec §4): a turn's child that stops at a pending
+player replacement is the decision-point state (``send_replacements`` stopped before
+anyone entered), observed as any turn child. The replacement itself is a request
+``(state index, player action)`` of ``expand_replacements``: ``replace_rows`` runs
+``playout.replacement_pass`` for the chosen slot (``action - MOVE_ACTIONS``) and observes
+the result with ``replacement_observation`` (no action ran). It has no outcome draw, so
+the one child has probability 1; the store is deduplicated by state bytes as ``expand``'s.
 """
 
 from __future__ import annotations
@@ -40,17 +48,27 @@ from jax.sharding import Mesh, NamedSharding, PartitionSpec
 import nuzline.search.stage_a  # noqa: F401 - registers Tables/BattleState for jax.export
 from nuzline.ai.policy import _distribution
 from nuzline.data.tables import Tables
+from nuzline.engine.actions import MOVE_ACTIONS
 from nuzline.engine.enumerate import OutcomeLaws, SamplingOnly, enumerate_outcomes, outcome_laws
-from nuzline.engine.observe import observation
+from nuzline.engine.observe import observation, replacement_observation
 from nuzline.engine.order import is_switch
 from nuzline.engine.outcome import Outcome
 from nuzline.engine.state import BattleState
 from nuzline.engine.step import replacement_power_mul, step_events
 from nuzline.jaxcache import cached_export, code_version
-from nuzline.search.playout import send_replacements
+from nuzline.search.playout import replacement_pass, send_replacements
 from nuzline.search.rows import concat, row_bytes, take
 
-__all__ = ["CHUNK", "Child", "ai_rows", "expand", "laws_rows", "step_rows"]
+__all__ = [
+    "CHUNK",
+    "Child",
+    "ai_rows",
+    "expand",
+    "expand_replacements",
+    "laws_rows",
+    "replace_rows",
+    "step_rows",
+]
 
 CHUNK = 16384  # rows per program call, before padding to the device count
 
@@ -223,3 +241,49 @@ def expand(
             out[r] = [Child(*entry) for entry in merger.children[r].values()]
     store = concat(merger.parts) if merger.parts else take(states, slice(0, 0))
     return store, dict(sorted(out.items()))
+
+
+def _replace(tables: Tables, state: BattleState, action):
+    after, refused = replacement_pass(tables, state, action - MOVE_ACTIONS)
+    return after, refused, replacement_observation(after)
+
+
+def _replaces(tables: Tables, states: BattleState, actions):
+    return jax.vmap(_replace, in_axes=(None, 0, 0))(tables, states, actions)
+
+
+def replace_rows(
+    tables: Tables, states: BattleState, actions
+) -> tuple[BattleState, np.ndarray, np.ndarray]:
+    """``(after, refused bool[N], observation int32[N, OBS_SIZE])`` of ``N`` rows of
+    (state at a player replacement, player action ``MOVE_ACTIONS + slot``):
+    ``replacement_pass`` and ``replacement_observation``, in one cached program."""
+    actions = np.asarray(actions, np.int32)
+    after, refused, obs = _run(_replaces, "expand_replace", tables, (states, actions), len(actions))
+    return after, np.asarray(refused, bool), np.asarray(obs, np.int32)
+
+
+def expand_replacements(
+    tables: Tables, states: BattleState, requests: list[tuple[int, int]]
+) -> tuple[BattleState, dict[int, Child]]:
+    """The child of each request ``(state index, player action)`` on the numpy
+    ``states``: ``(store, children)`` as ``expand`` returns them, one ``Child`` per
+    request with ``prob`` 1.0, the store deduplicated by state bytes."""
+    states = jax.tree.map(np.asarray, states)
+    index = np.asarray([r[0] for r in requests], np.int64).reshape(-1)
+    actions = np.asarray([r[1] for r in requests], np.int32)
+    after, refused, obs = replace_rows(tables, take(states, index), actions)
+    n = len(requests)
+    state_bytes, obs_bytes = row_bytes(after, n), row_bytes(obs, n)
+    rows: dict[bytes, int] = {}
+    new: list[int] = []
+    children: dict[int, Child] = {}
+    for i in range(n):
+        key = state_bytes[i].tobytes()
+        row = rows.get(key)
+        if row is None:
+            row = rows[key] = len(rows)
+            new.append(i)
+        children[i] = Child(row, obs_bytes[i].tobytes(), 1.0, bool(refused[i]))
+    store = take(after, np.asarray(new)) if new else take(states, slice(0, 0))
+    return store, children

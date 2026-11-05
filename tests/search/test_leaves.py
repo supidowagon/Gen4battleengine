@@ -11,6 +11,7 @@ import pytest
 from nuzline.ai.policy import ai_action_distribution
 from nuzline.engine.actions import legal_actions
 from nuzline.engine.step import WINNER_PLAYER
+from nuzline.search import deaths
 from nuzline.search.expand import expand
 from nuzline.search.leaves import (
     LEAF_CHUNK,
@@ -23,6 +24,7 @@ from nuzline.search.leaves import (
 )
 from nuzline.search.playout import REFUSED_WON, batched_playout, playout_from_action
 from tests.engine.helpers import roark_state
+from tests.search.fixtures import at_replacement, dead_monferno
 from tests.search.test_expand import batch, row_keys
 
 KEY = jax.random.PRNGKey(11)
@@ -145,6 +147,66 @@ def test_leaf_value_properties():
     assert v.var_a == pytest.approx(q * (1 - q) / 4)
 
 
+def _playouts(tables, state, n=64):
+    """``evaluate_leaves``'s value of ``state`` and the playouts behind it (same keys)."""
+    (value,) = evaluate_leaves(tables, batch(state), np.array([n]), KEY)
+    keys = jnp.concatenate(leaf_keys(KEY, 0, n))
+    states = jax.tree.map(lambda x: jnp.broadcast_to(x, (n, *x.shape)), state)
+    out = jax.device_get(batched_playout(tables, states, keys))
+    assert not np.any(out.refused)
+    return value, out
+
+
+def test_wins_count_successes(tables, names):
+    state = dead_monferno(tables, names)
+    value, out = _playouts(tables, state)
+    won = np.asarray(out.won) == 1
+    assert won.any()  # the playouts do win ...
+    assert (value.wins_a, value.wins_b) == (0, 0)  # ... but not within k = 0
+    value, out = _playouts(tables, state.with_budget(1))
+    ok = (np.asarray(out.won) == 1) & (np.asarray(out.player_faints) <= 1)
+    assert 0 < ok.sum()
+    assert (value.wins_a, value.wins_b) == (int(ok[:32].sum()), int(ok[32:].sum()))
+
+
+def test_protected_death_is_a_failure(tables, names):
+    state = dead_monferno(tables, names).with_budget(3)
+    monferno = int(np.flatnonzero(np.asarray(state.deaths))[0])
+    state = state._replace(protected=state.protected.at[monferno].set(1))
+    value, out = _playouts(tables, state)
+    assert (np.asarray(out.won) == 1).any()
+    assert (value.wins_a, value.wins_b) == (0, 0)
+
+
+def test_deaths_and_buckets(tables, names):
+    state = dead_monferno(tables, names).with_budget(2)
+    value, out = _playouts(tables, state)
+    faints = np.asarray(out.player_faints).astype(int)
+    assert (value.deaths_a, value.deaths_b) == (int(faints[:32].sum()), int(faints[32:].sum()))
+    assert value.e_deaths_b == value.deaths_b / 32
+    bucket = deaths.bucket(
+        np.asarray(out.won) == 1, out.ended, faints, out.deaths, np.asarray(state.protected)
+    )
+    assert value.buckets_b == tuple(np.bincount(bucket[32:], minlength=8).tolist())
+    assert sum(value.buckets_b) == 32
+
+
+def test_merge():
+    a = LeafValue(1, 2, 3, 4, False, 5, 6, (1, 0, 0, 0, 0, 0, 3, 0))
+    b = LeafValue(2, 4, 1, 2, True, 1, 2, (0, 2, 0, 0, 0, 0, 0, 0))
+    assert a.merge(b) == LeafValue(3, 6, 4, 6, True, 6, 8, (1, 2, 0, 0, 0, 0, 3, 0))
+    assert a.merge(a).refused is False
+
+
+def test_pending_leaf(tables, names):
+    state = at_replacement(roark_state(tables, names)).with_budget(2)
+    value, out = _playouts(tables, state, 16)
+    ok = (np.asarray(out.won) == 1) & (np.asarray(out.player_faints) <= 2)
+    assert ok.any()
+    assert (value.wins_a, value.wins_b) == (int(ok[:8].sum()), int(ok[8:].sum()))
+    assert int(np.asarray(out.player_faints).min()) >= 1
+
+
 def test_terminal_state_rejected(tables, names):
     state = roark_state(tables, names)
     done = state._replace(over=jnp.int8(1))
@@ -239,3 +301,38 @@ def test_device_count_invariant(tables):
     one = _on_devices(1)
     assert len(one) == 4
     assert _on_devices(3) == one
+
+
+def test_both_halves_have_buckets(tables, names):
+    states = [dead_monferno(tables, names).with_budget(2), roark_state(tables, names)]
+    values = evaluate_leaves(tables, jax.tree.map(lambda *x: np.stack(x), *states), [64, 64], KEY)
+    for i, (state, value) in enumerate(zip(states, values, strict=True)):
+        keys = jnp.concatenate(leaf_keys(KEY, i, 64))
+        batch_ = jax.tree.map(lambda x: jnp.broadcast_to(x, (64, *x.shape)), state)
+        out = jax.device_get(batched_playout(tables, batch_, keys))
+        assert not np.any(out.refused)
+        bucket = deaths.bucket(
+            np.asarray(out.won) == 1,
+            out.ended,
+            np.asarray(out.player_faints).astype(int),
+            out.deaths,
+            np.asarray(state.protected),
+        )
+        assert sum(value.buckets_a) == value.n_a and sum(value.buckets_b) == value.n_b
+        assert value.buckets_a == tuple(np.bincount(bucket[:32], minlength=8).tolist())
+        assert value.buckets_b == tuple(np.bincount(bucket[32:], minlength=8).tolist())
+        assert value.hp_left == pytest.approx(float(np.asarray(out.hp_left, np.float64).sum()))
+        assert value.pp_left == pytest.approx(float(np.asarray(out.pp_left, np.float64).sum()))
+        assert 0 < value.hp_left <= 64 and 0 < value.pp_left <= 64
+
+
+def test_merge_sums_new_fields():
+    a = LeafValue(1, 2, 3, 4, False, 5, 6, (1,) * 8, (0, 2, 0, 0, 0, 0, 0, 0), 1.5, 2.5)
+    b = LeafValue(2, 4, 1, 2, True, 1, 2, (), (1, 0, 0, 0, 0, 0, 0, 0), 0.25, 0.5)
+    m = a.merge(b)
+    assert m.buckets_a == (1, 2, 0, 0, 0, 0, 0, 0) and m.buckets_b == (1,) * 8
+    assert (m.hp_left, m.pp_left) == (1.75, 3.0)
+    assert b.merge(a) == m.__class__(
+        3, 6, 4, 6, True, 6, 8, (1,) * 8, (1, 2, 0, 0, 0, 0, 0, 0), 1.75, 3.0
+    )
+    assert LeafValue(1, 2, 1, 2, False).merge(LeafValue(1, 2, 1, 2, False)).buckets_a == ()

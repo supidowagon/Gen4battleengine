@@ -15,7 +15,7 @@ import numpy as np
 
 from nuzline.data.spec import PokemonSpec
 from nuzline.engine.ids import Stat, Status
-from nuzline.engine.stats import calc_stats
+from nuzline.engine.stats import SPECIES_SHEDINJA, calc_stats
 from nuzline.saves.crypto import decrypt_record, record_checksum
 from nuzline.saves.status import decode_status
 
@@ -117,11 +117,11 @@ class SaveMon:
         EV vector no larger than today's."""
         base = _as_np(tables.species_base_stats)[self.species]
         mods = _as_np(tables.nature_mods)[self.nature]
-        low = calc_stats(base, self.ivs, (0,) * 6, self.level, mods)
-        high = calc_stats(base, self.ivs, self.evs, self.level, mods)
+        low = calc_stats(base, self.ivs, (0,) * 6, self.level, mods, self.species)
+        high = calc_stats(base, self.ivs, self.evs, self.level, mods, self.species)
         for stat in (Stat.HP, Stat.ATK, Stat.DEF, Stat.SPA, Stat.SPD, Stat.SPE):
             stored = self.stored_stats[stat]
-            if self.species == _SHEDINJA and stat == Stat.HP:
+            if self.species == SPECIES_SHEDINJA and stat == Stat.HP:
                 if stored != 1:  # Pokemon_CalcStats (src/pokemon.c:598) pins max HP at 1
                     raise RecordError(f"{label}: Shedinja HP {stored} must be 1")
                 continue
@@ -159,13 +159,14 @@ def level_from_exp(tables, species: int, exp: int) -> int:
 # ids (line N of generated/species.txt is id N-1): Deoxys 386, Wormadam 413, Rotom 479,
 # Giratina 487, Shaymin 492, Arceus 493. Burmy, Shellos, Gastrodon, Unown and Cherrim
 # forms are cosmetic and pass.
-_SHEDINJA = 292
 _REFUSED_FORM_SPECIES = frozenset({386, 413, 479, 487, 492, 493})
 
 
 def _label(location: tuple[str, int, int]) -> str:
+    """``party slot S`` or ``box B slot S``: ``location``'s box index is 0-based, the label's
+    box number 1-based like ``save show`` and ``--exclude box:B:S``."""
     kind, box, slot = location
-    return f"party slot {slot}" if kind == "party" else f"box {box} slot {slot}"
+    return f"party slot {slot}" if kind == "party" else f"box {box + 1} slot {slot}"
 
 
 def _u16(b: bytes, o: int) -> int:

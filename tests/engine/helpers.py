@@ -7,13 +7,14 @@ from dataclasses import replace as _replace_spec
 from functools import lru_cache
 from pathlib import Path
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
 
 from nuzline.data.party import load_party
 from nuzline.data.spec import PokemonSpec
-from nuzline.data.tables import Names, Tables, load_names
+from nuzline.data.tables import Names, Tables, load_names, to_numpy
 from nuzline.data.trainer import (
     IntermediateData,
     Trainer,
@@ -22,7 +23,11 @@ from nuzline.data.trainer import (
     load_trainers,
 )
 from nuzline.engine.ids import AbilityId, EffectId, Stat
+from nuzline.engine.outcome import Outcome, outcome_to_py
 from nuzline.engine.state import BattleState, make_state
+from nuzline.engine.step import step
+from nuzline.reference.convert import from_ref, to_ref
+from nuzline.reference.engine import ref_step
 
 PHYSICAL, SPECIAL, STATUS = 0, 1, 2  # tables.move_category
 
@@ -278,3 +283,24 @@ def A(player, opp, state: BattleState, names: Names) -> jnp.ndarray:
         return names.move_slot(state, side, a) if isinstance(a, str) else int(a)
 
     return jnp.array([one(0, player), one(1, opp)], jnp.int32)
+
+
+def assert_matches_reference(
+    tables: Tables, state: BattleState, actions, outcome: Outcome
+) -> BattleState:
+    """Step ``state`` with the JAX engine (``jax.jit(step)``) and the plain-Python
+    reference engine (``ref_step`` through ``to_ref`` / ``from_ref``), assert every
+    field equal (the field name is in the message), and return the JAX state."""
+    acts = jnp.asarray(actions, jnp.int32)
+    out = jax.jit(step)(tables, state, acts, outcome)
+    ref = from_ref(
+        ref_step(
+            to_numpy(tables),
+            to_ref(state),
+            tuple(int(a) for a in np.asarray(acts)),
+            outcome_to_py(outcome),
+        )
+    )
+    for name, x, y in zip(out._fields, out, ref, strict=True):
+        np.testing.assert_array_equal(np.asarray(x), np.asarray(y), err_msg=name)
+    return out

@@ -21,7 +21,7 @@ from __future__ import annotations
 import jax.numpy as jnp
 
 from nuzline.data.tables import Tables
-from nuzline.engine.actions import FIRST_ITEM_ACTION, MOVE_ACTIONS, usable_moves
+from nuzline.engine.actions import FIRST_ITEM_ACTION, MOVE_ACTIONS, locked_slot, usable_moves
 from nuzline.engine.damage import apply_stage, simple_stage
 from nuzline.engine.ids import MOVE_STRUGGLE, AbilityId, Stat, Status
 from nuzline.engine.state import BattleState
@@ -44,14 +44,17 @@ def selected_move(
 ) -> tuple[jnp.ndarray, jnp.ndarray]:
     """``(move id, struggling)`` for a move action by ``side``'s active Pokemon in the
     state it was chosen in: the slot's move, or Struggle when no slot is usable
-    (``actions.usable_moves``: no move, no PP, or power 0 while taunted), the decomp's
+    (``actions.usable_moves``: no move, no PP, disabled, or power 0 while taunted), the decomp's
     ``STRUGGLING_ALL`` (battle_controller_player.c:433). The legality mask then only
-    allows action 0. Meaningless for a switch or item action (callers mask it)."""
+    allows action 0. A locked battler picks no command and uses ``moveLockedInto``
+    (``FightCommand``, battle_controller_player.c:1885-1888), never Struggling. Meaningless
+    for a switch or item action (callers mask it)."""
     slot = jnp.clip(jnp.asarray(action, _I32), 0, MOVE_ACTIONS - 1)
     mon = state.active[side]
     struggling = ~jnp.any(usable_moves(tables, state, side))
     move = jnp.where(struggling, MOVE_STRUGGLE, state.moves[side, mon, slot].astype(_I32))
-    return move, struggling
+    locked = locked_slot(state, side) >= 0
+    return jnp.where(locked, state.locked_move[side].astype(_I32), move), struggling
 
 
 def effective_speed(state: BattleState, side) -> jnp.ndarray:

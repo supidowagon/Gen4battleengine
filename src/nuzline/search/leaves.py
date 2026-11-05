@@ -6,8 +6,8 @@ decision point after the opponent's replacement, so the policy chooses from the 
 turn; ``max_turns`` counts from the leaf). ``evaluate_forced`` evaluates a fixed (player,
 opponent) action pair of a state, as the solver needs for a pair it cannot enumerate
 (sampling-only) and for pruned opponent actions: one turn with the pair, its outcome
-drawn by ``sample_outcome``, then ``send_replacements`` with the playout's ``ai_switched``
-and ``replacement_power_mul`` (``playout._play``, playout.py:177-186), then ``playout``
+drawn by ``sample_outcome``, then ``finish_turn`` with the playout's ``ai_switched``
+and ``replacement_power_mul`` (``playout._turn``), then the player's replacements, then ``playout``
 with ``max_turns - 1`` turns (a battle already over is a win iff the player won it).
 
 Every leaf has two halves with independent key streams (``leaf_keys``): half A picks the
@@ -39,7 +39,8 @@ from nuzline.engine.outcome import sample_outcome
 from nuzline.engine.state import BattleState
 from nuzline.engine.step import replacement_power_mul, step
 from nuzline.jaxcache import cached_export, code_version
-from nuzline.search.playout import REFUSED_WON, PlayoutResult, playout, send_replacements
+from nuzline.search import deaths
+from nuzline.search.playout import REFUSED_WON, PlayoutResult, finish_turn, playout
 
 __all__ = [
     "LEAF_CHUNK",
@@ -58,13 +59,53 @@ _I32 = jnp.int32
 @dataclass(frozen=True)
 class LeafValue:
     """Wins and playouts of the two halves of one evaluated state. ``refused``: some
-    playout met a refused mechanic (the leaf has no value; ruling 4)."""
+    playout met a refused mechanic (the leaf has no value; ruling 4).
+
+    ``wins_*`` count successes (``deaths.success`` with the evaluated state's own
+    ``faint_budget`` and ``protected``). ``deaths_*`` sum the playouts' ``player_faints`` per
+    half; ``buckets_a`` and ``buckets_b`` count each half's playouts per ``deaths.BUCKETS``
+    entry. ``hp_left`` and ``pp_left`` sum ``PlayoutResult.hp_left``/``pp_left`` over both
+    halves (refused playouts add 0)."""
 
     wins_a: int
     n_a: int
     wins_b: int
     n_b: int
     refused: bool
+    deaths_a: int = 0
+    deaths_b: int = 0
+    buckets_b: tuple[int, ...] = ()
+    buckets_a: tuple[int, ...] = ()
+    hp_left: float = 0.0
+    pp_left: float = 0.0
+
+    @property
+    def e_deaths_a(self) -> float:
+        return self.deaths_a / self.n_a
+
+    @property
+    def e_deaths_b(self) -> float:
+        return self.deaths_b / self.n_b
+
+    def merge(self, other: LeafValue) -> LeafValue:
+        """Both evaluations' playouts together: every count added, ``refused`` or-ed."""
+        mine = self.buckets_b or (0,) * len(other.buckets_b)
+        theirs = other.buckets_b or (0,) * len(mine)
+        mine_a = self.buckets_a or (0,) * len(other.buckets_a)
+        theirs_a = other.buckets_a or (0,) * len(mine_a)
+        return LeafValue(
+            self.wins_a + other.wins_a,
+            self.n_a + other.n_a,
+            self.wins_b + other.wins_b,
+            self.n_b + other.n_b,
+            self.refused or other.refused,
+            self.deaths_a + other.deaths_a,
+            self.deaths_b + other.deaths_b,
+            tuple(a + b for a, b in zip(mine, theirs, strict=True)),
+            tuple(a + b for a, b in zip(mine_a, theirs_a, strict=True)),
+            self.hp_left + other.hp_left,
+            self.pp_left + other.pp_left,
+        )
 
     @property
     def p_a(self) -> float:
@@ -114,13 +155,13 @@ def _leaf_program(tables: Tables, states: BattleState, keys, max_turns: int) -> 
 def _forced_turn(tables: Tables, state: BattleState, pair, key):
     """The forced first turn: ``playout_from_action``'s key rule (playout._run) -- the
     turn's draws come from the second split of ``k_turn``. Returns the state after
-    ``send_replacements``, whether that was refused, and the key for the rest."""
+    ``finish_turn`` (opponent's and the player's replacements), whether that was refused, and the key for the rest."""
     key, _, k_turn = jax.random.split(key, 3)
     actions = pair.astype(_I32)
     power_mul = replacement_power_mul(tables, state, actions)
     outcome = sample_outcome(jax.random.split(k_turn)[1], tables, state, actions)
     stepped = step(tables, state, actions, outcome)
-    after, refused = send_replacements(tables, stepped, is_switch(actions[1]), power_mul)
+    after, refused = finish_turn(tables, stepped, is_switch(actions[1]), power_mul)
     return after, refused, key
 
 
@@ -132,6 +173,10 @@ def _forced_one(tables: Tables, state: BattleState, pair, key, max_turns: int) -
         player_faints=rest.player_faints,
         turns=rest.turns + 1,
         refused=(refused | (rest.refused == 1)).astype(jnp.int8),
+        deaths=rest.deaths,
+        ended=rest.ended,
+        hp_left=rest.hp_left,
+        pp_left=rest.pp_left,
     )
 
 
@@ -148,7 +193,8 @@ def _run(fn, name: str, max_turns: int, tables: Tables, rows: tuple, row_of, key
     size = -(-LEAF_CHUNK // devices) * devices
     sharding = NamedSharding(Mesh(jax.devices(), ("d",)), PartitionSpec("d"))
     program = partial(fn, max_turns=max_turns)
-    won, refused = [], []
+    won, refused, faints, deaths_of, ended = [], [], [], [], []
+    hp_left, pp_left = [], []
     for start in range(0, n, LEAF_CHUNK):
         idx = np.arange(start, min(start + LEAF_CHUNK, n))
         pad = np.concatenate([idx, np.full(size - len(idx), idx[0])])
@@ -161,14 +207,43 @@ def _run(fn, name: str, max_turns: int, tables: Tables, rows: tuple, row_of, key
         out = jax.device_get(exported(*args))
         won.append(np.asarray(out.won)[: len(idx)])
         refused.append(np.asarray(out.refused)[: len(idx)])
+        faints.append(np.asarray(out.player_faints)[: len(idx)])
+        deaths_of.append(np.asarray(out.deaths)[: len(idx)])
+        ended.append(np.asarray(out.ended)[: len(idx)])
+        hp_left.append(np.asarray(out.hp_left)[: len(idx)])
+        pp_left.append(np.asarray(out.pp_left)[: len(idx)])
     won, refused = np.concatenate(won), np.concatenate(refused).astype(bool)
+    faints, deaths_of, ended = (np.concatenate(x) for x in (faints, deaths_of, ended))
+    hp_left, pp_left = np.concatenate(hp_left), np.concatenate(pp_left)
+    states = rows[0]
+    protected = np.asarray(states.protected)[row_of]
+    success = deaths.success(
+        won == 1, faints, deaths_of, np.asarray(states.faint_budget)[row_of], protected
+    )
+    bucket = deaths.bucket(won == 1, ended, faints, deaths_of, protected)
     starts = np.concatenate([[0], np.cumsum(counts)])
     values = []
     for i, c in enumerate(counts):
         h = int(c) // 2
-        w = won[starts[i] : starts[i + 1]] == 1
-        r = refused[starts[i] : starts[i + 1]]
-        values.append(LeafValue(int(w[:h].sum()), h, int(w[h:].sum()), h, bool(r.any())))
+        sl = slice(starts[i], starts[i + 1])
+        w, f, r = success[sl], faints[sl].astype(np.int64), refused[sl]
+        buckets = np.bincount(bucket[sl][h:], minlength=len(deaths.BUCKETS))
+        buckets_a = np.bincount(bucket[sl][:h], minlength=len(deaths.BUCKETS))
+        values.append(
+            LeafValue(
+                int(w[:h].sum()),
+                h,
+                int(w[h:].sum()),
+                h,
+                bool(r.any()),
+                int(f[:h].sum()),
+                int(f[h:].sum()),
+                tuple(int(b) for b in buckets),
+                tuple(int(b) for b in buckets_a),
+                float(hp_left[sl].sum(dtype=np.float64)),
+                float(pp_left[sl].sum(dtype=np.float64)),
+            )
+        )
     return values
 
 

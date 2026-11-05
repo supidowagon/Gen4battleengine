@@ -63,6 +63,14 @@ class RefSide:
     water_sport: int
     fake_out_turn: int
     move_hit: int
+    foresight: int
+    disabled_move: int
+    disable_turns: int
+    locked_move: int
+    bide_turns: int
+    bide_damage: int
+    curled: int
+    mud_sport: int
     spikes: int
     toxic_spikes: int
     stealth_rock: int
@@ -87,13 +95,16 @@ class RefState:
     weather_timer: int
     trick_room: int
     gravity: int
-    mud_sport: int
     turn: int
     over: int
     winner: int
     player_faints: int
     ai_seen_moves: list[list[int]]
     ai_ability_known: list[int]
+    deaths: list[int]
+    faint_budget: int
+    protected: list[int]
+    replace_mul: int
 
 
 # BattleState field names by level.

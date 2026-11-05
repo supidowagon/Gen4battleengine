@@ -33,7 +33,7 @@ from tests.ai.fixtures import (
     trace_f,
     versus,
 )
-from tests.engine.helpers import INTERMEDIATE
+from tests.engine.helpers import INTERMEDIATE, roark_state
 
 
 def test_hand_traced_scores(tables, names):
@@ -232,3 +232,24 @@ def test_stealth_rock_quadruple_bonus(tables, names):
     rock_throw = int(ai_scores(tables, s, outcome((1, 1, 1, 0)))[1])
     assert ai_scores(tables, s, outcome((0, 1, 1, 0))).tolist() == [102, rock_throw, 0, 0]
     assert ai_scores(tables, s, outcome((1, 1, 1, 0))).tolist() == [100, rock_throw, 0, 0]
+
+
+def test_ai_reads_player_foresight(tables, names):
+    """ApplyTypeChart skips the Ghost immunities for an identified defender
+    (battle_lib.c:2611): Headbutt on a Dark/Ghost player is immune, then neutral."""
+    cls = commands.TypeMulti
+    s = versus(tables, names, CRANIDOS, "Sableye")
+    headbutt = names.move("Headbutt")
+    assert int(commands.effectiveness_class(tables, s, headbutt)) == cls.IMMUNE
+    identified = s._replace(foresight=s.foresight.at[0].set(1))
+    dark = names.type("Dark")
+    pure_dark = s._replace(types=s.types.at[0, 0].set(jnp.asarray([dark, dark], jnp.int8)))
+    expected = int(commands.effectiveness_class(tables, pure_dark, headbutt))
+    assert expected == cls.BASE
+    assert int(commands.effectiveness_class(tables, identified, headbutt)) == expected
+
+
+def test_player_foresight_is_not_refused(tables, names):
+    s = roark_state(tables, names)
+    s = s._replace(moves=s.moves.at[0, 3, 1].set(names.move("Foresight")))
+    assert ai_refusals(tables, s) == []

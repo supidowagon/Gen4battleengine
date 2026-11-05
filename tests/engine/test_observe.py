@@ -12,11 +12,18 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
-from nuzline.engine.actions import legal_actions, legal_opponent_actions
+from nuzline.engine.actions import legal_actions, legal_opponent_actions, legal_replacements
 from nuzline.engine.damage import STATUS
 from nuzline.engine.enumerate import SamplingOnly, enumerate_outcomes, outcome_laws
 from nuzline.engine.ids import AbilityId, Status, Weather
-from nuzline.engine.observe import OBS_FIELDS, OBS_SIZE, hp_pixels, observation, observe
+from nuzline.engine.observe import (
+    OBS_FIELDS,
+    OBS_SIZE,
+    hp_pixels,
+    observation,
+    observe,
+    replacement_observation,
+)
 from nuzline.engine.order import (
     MOVE_ACTIONS,
     effective_speed,
@@ -26,9 +33,10 @@ from nuzline.engine.order import (
 from nuzline.engine.outcome import MAX_HITS, Outcome, empty_outcome
 from nuzline.engine.state import BattleState
 from nuzline.engine.step import PURSUIT_POWER_MUL, pursuit_fires, step, step_events
-from nuzline.search.playout import send_replacements
+from nuzline.search.playout import replacement_pass, send_replacements
 from tests.engine.helpers import A, roark_real_state, roark_state
 from tests.search.fixtures import (
+    at_replacement,
     bind_1v1,
     confuse_ray_1v1,
     shinx_vs_cranidos,
@@ -241,6 +249,12 @@ def test_hidden_counters_grouped(tables, names, build, move, counter):
 
 
 VISIBLE_CLASSES = (
+    "disabled move",
+    "locked move",
+    "foresight",
+    "curled",
+    "bide",
+    "mud sport",
     "stat stage",
     "weather",
     "stealth rock",
@@ -278,6 +292,13 @@ def visible_cases(tables, names):
     berry = int(played.item[0, 2])  # Grotle's Sitrus Berry
     switches = [np.asarray([4 + 1, 0], np.int32), np.asarray([4 + 2, 0], np.int32)]
     return {
+        "disabled move": projected("disabled_move", lambda a: set_field(a, "disabled_move", 1, 33)),
+        "locked move": projected("locked_move", lambda a: set_field(a, "locked_move", 0, 33)),
+        "foresight": projected("foresight", lambda a: set_field(a, "foresight", 1, 1)),
+        "curled": projected("curled", lambda a: set_field(a, "curled", 0, 1)),
+        "bide": projected("bide_turns", lambda a: set_field(a, "bide_turns", 1, 2)),
+        # Mud Sport is per battler: one side's sport differs from the other's.
+        "mud sport": projected("mud_sport", lambda a: set_field(a, "mud_sport", 1, 1)),
         "stat stage": (
             "stages",
             leer,
@@ -349,6 +370,29 @@ def test_visible_message_classes(tables, names, name):
         acts = acts if isinstance(acts, list) else [acts, acts]
         obs = turns(tables, _stack([s, s]), np.stack(acts), _stack(outcomes))[2]
     assert (field(obs[0], fld) != field(obs[1], fld)).any(), name
+
+
+def test_hidden_new_counters_grouped(tables, names):
+    # Disable's turn count and Bide's stored damage are not on screen (spec §4.2 "hidden
+    # counters"): the observation shows only the Disabled move and that the foe is Biding.
+    s = roark_state(tables, names)
+    acts = np.asarray(A("Scratch", "Tackle", s, names))
+    played, _ = one_turn(tables, s, acts, with_outcome())
+    played = set_field(set_field(played, "disabled_move", 1, 33), "bide_turns", 1, 2)
+    rows = [
+        (
+            s,
+            acts,
+            with_outcome(),
+            set_field(set_field(played, "disable_turns", 1, n), "bide_damage", 1, d),
+        )
+        for n, d in ((1, 10), (4, 250))
+    ]
+    obs = obs_rows(tables, rows)
+    assert (obs[0] == obs[1]).all()
+    cleared = set_field(set_field(played, "disable_turns", 1, 0), "disabled_move", 1, 0)
+    obs = obs_rows(tables, [rows[0], (s, acts, with_outcome(), cleared)])
+    assert (obs[0] != obs[1]).any()
 
 
 def _equal_obs(tables, s, acts, a: Outcome, b: Outcome):
@@ -562,6 +606,25 @@ def assert_constant(groups):
         assert len(set(children.values())) == 1
 
 
+def locked_bide(tables, names, turns=2):
+    """Kricketot (``turns`` Bide turns left, 30 damage stored) against Geodude and Onix."""
+    s = roark_state(
+        tables,
+        names,
+        player_species="Kricketot",
+        player_moves=("Bide", "Growl"),
+        opp_species="Geodude",
+        opp_moves=("Tackle", "Leer"),
+        player_count=2,
+        opp_count=2,
+    )
+    return s._replace(
+        locked_move=s.locked_move.at[0].set(names.move("Bide")),
+        bide_turns=s.bide_turns.at[0].set(turns),
+        bide_damage=s.bide_damage.at[0].set(30),
+    )
+
+
 def test_legality_constant_on_equal_obs(tables, names):
     s = roark_real_state(tables, names)
     groups = grouped_children(tables, [s], lambda p: legal_pairs(tables, p))
@@ -581,6 +644,44 @@ def test_legality_constant_on_equal_obs(tables, names):
     groups = grouped_children(tables, [s], lambda p: pair)
     assert_constant(groups)
     assert max(len(c) for c in groups.values()) >= 2
+
+    # A player locked into Bide (Review Focus 2): the lock is on screen, so the legal
+    # actions (the locked slot alone) are constant over every enumerated outcome.
+    parents = [locked_bide(tables, names, turns) for turns in (2, 1)]
+    for s in parents:
+        legal = np.asarray(legal_actions(tables, s, 0))
+        assert np.flatnonzero(legal).tolist() == [names.move_slot(s, 0, "Bide")]
+    groups = grouped_children(tables, parents, lambda p: legal_pairs(tables, p))
+    assert groups
+    assert_constant(groups)
+
+
+def test_legality_disable_splits_on_move_groups_on_turns(tables, names):
+    """A Disabled move splits information sets (``disabled_move`` is on screen); its
+    turn count does not, and the legal actions after the tick agree within a set."""
+    base = roark_state(
+        tables, names, player_count=1, opp_count=1, player_moves=("Tackle", "Scratch", "Leer")
+    )
+    scratch, other = names.move("Scratch"), names.move("Leer")
+    parents = [
+        set_field(set_field(base, "disabled_move", 0, move), "disable_turns", 0, turns)
+        for move, turns in ((scratch, 2), (scratch, 3), (other, 2))
+    ]
+    acts = np.asarray(A("Tackle", "Tackle", base, names), np.int32)
+    groups = grouped_children(tables, parents, lambda p: [tuple(int(x) for x in acts)])
+    assert_constant(groups)
+    # The two Scratch parents differ only in the hidden counter: one observation, two states.
+    assert max(len(c) for c in groups.values()) >= 2
+    obs = {k for k in groups}
+    assert len(obs) >= 2  # the other disabled move is a different observation
+    # A counter at 0 clears the move at the end of the turn: visible.
+    ends = set_field(set_field(base, "disabled_move", 0, scratch), "disable_turns", 0, 0)
+    still = set_field(set_field(base, "disabled_move", 0, scratch), "disable_turns", 0, 1)
+    out = turns(
+        tables, _stack([ends, still]), np.stack([acts, acts]), _stack([empty_outcome()] * 2)
+    )
+    assert field(out[2][0], "disabled_move").tolist() == [0, 0]
+    assert field(out[2][1], "disabled_move").tolist() == [scratch, 0]
 
 
 def test_legality_splits_on_taunt(tables, names):
@@ -626,3 +727,52 @@ def test_step_events_match_step_and_observe(tables, names, data):
     outcome = _np(data.draw(any_outcome()))
     out = turns(tables, _stack([s]), acts[None], _stack([outcome]))
     check_events_path(out[4], out[5])
+
+
+def test_magnitude_level_is_observed_only_when_shown(tables, names):
+    """ "Magnitude N!" (subscript_magnitude.s) tells the player the level: two draws that
+    differ only in it are different observations when the hit lands, and the same one when
+    the target is immune (no message, no damage)."""
+
+    def observe_levels(opp):
+        s = roark_state(
+            tables,
+            names,
+            player_species="Geodude",
+            player_moves=("Magnitude",),
+            opp_species=opp,
+            opp_moves=("Leer",),
+        )
+        acts = A("Magnitude", "Leer", s, names)
+        out = []
+        for level in (4, 10):
+            o = empty_outcome()._replace(magnitude=jnp.full((2,), level, jnp.int8))
+            after = step(tables, s, acts, o)
+            out.append(np.asarray(observe(tables, s, acts, o, after)))
+        return out
+
+    low, high = observe_levels("Bidoof")
+    assert field(low, "magnitude").tolist() == [4, 0] and field(high, "magnitude").tolist() == [
+        10,
+        0,
+    ]
+    low, high = observe_levels("Staravia")
+    assert (low == high).all()
+
+
+def test_replacement_observation_shows_both_newcomers(tables, names):
+    s = at_replacement(roark_state(tables, names), opp_down=True)
+    slot = int(np.flatnonzero(np.asarray(legal_replacements(s, 0)))[0])
+    after, refused = replacement_pass(tables, s, slot)
+    assert not bool(refused)
+    assert int(after.active[1]) != int(s.active[1])
+    obs = np.asarray(replacement_observation(after))
+    assert obs.shape == (OBS_SIZE,)
+    assert field(obs, "active").tolist() == np.asarray(after.active).tolist()
+    assert field(obs, "active").tolist() == [slot, int(after.active[1])]
+    assert field(obs, "act_kind").tolist() == [0, 0]
+    assert field(obs, "order").tolist() == [-1]
+    assert field(obs, "pursuit").tolist() == [0]
+    assert not field(obs, "crit").any()
+    for name in ("act_id", "magnitude"):
+        assert not field(obs, name).any(), name
