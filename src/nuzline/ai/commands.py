@@ -256,10 +256,10 @@ def effectiveness_class(tables: Tables, state: BattleState, move) -> jnp.ndarray
 def attacker_ability(tables: Tables, state: BattleState) -> jnp.ndarray:
     """``int32``: the AI's active Pokemon's true ability (decomp id)."""
     a = state.active[1].astype(_I32)
-    species = state.species[1, a].astype(_I32)
-    return tables.species_abilities_decomp[species, state.ability_slot[1, a].astype(_I32)].astype(
-        _I32
-    )
+    row = tables.species_form_row[state.species[1, a].astype(_I32), state.form[1, a].astype(_I32)]
+    return tables.species_abilities_decomp[
+        row.astype(_I32), state.ability_slot[1, a].astype(_I32)
+    ].astype(_I32)
 
 
 def defender_ability(tables: Tables, state: BattleState, ability_guess) -> jnp.ndarray:
@@ -269,8 +269,8 @@ def defender_ability(tables: Tables, state: BattleState, ability_guess) -> jnp.n
     abilities; else its only one. The engine has no ability suppression (Gastro Acid),
     so the ``ABILITY_NONE`` case never applies."""
     d = state.active[0].astype(_I32)
-    species = state.species[0, d].astype(_I32)
-    both = tables.species_abilities_decomp[species].astype(_I32)
+    row = tables.species_form_row[state.species[0, d].astype(_I32), state.form[0, d].astype(_I32)]
+    both = tables.species_abilities_decomp[row.astype(_I32)].astype(_I32)
     true = both[state.ability_slot[0, d].astype(_I32)]
     known = (state.ai_ability_known[d] > 0) | jnp.isin(true, _TRAPPING)
     guess = both[jnp.clip(jnp.asarray(ability_guess, _I32), 0, 1)]

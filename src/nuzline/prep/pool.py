@@ -9,6 +9,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from nuzline.data.forms import personal_row
 from nuzline.data.learnsets import Learnsets
 from nuzline.data.spec import PokemonSpec
 from nuzline.data.tables import Names, Tables
@@ -66,11 +67,16 @@ def pool_candidates(
             left_out.append(f"{label}: left out ({e})")
             continue
         known = set(mon.moves)
-        relearner = tuple(m for m in learnsets.relearner_moves(mon.species, cap) if m not in known)
+        # Learnsets are keyed by the form's personal row (plan K2a Ruling 7); level_to_cap
+        # has refused a form the species does not have.
+        relearner = tuple(
+            m for m in learnsets.relearner_moves(mon.species, cap, mon.form) if m not in known
+        )
         tms = tuple(
             (item, learnsets.tm_move(item))
             for item, _ in save.bag.get("tms_hms", ())
-            if learnsets.can_learn_tm(mon.species, item) and learnsets.tm_move(item) not in known
+            if learnsets.can_learn_tm(mon.species, item, mon.form)
+            and learnsets.tm_move(item) not in known
         )
         out.append(
             Candidate(
@@ -113,12 +119,13 @@ def check_pool(tables: Tables, names: Names, candidates: Sequence[Candidate]) ->
     for cand in candidates:
         spec = cand.spec
         slot = spec.ability_slot
-        ability = AbilityId(int(abilities[spec.species, slot]))
-        ability_name = names.ability_names[names.species_abilities(spec.species)[slot]]
+        row = personal_row(tables, spec.species, spec.form)
+        ability = AbilityId(int(abilities[row, slot]))
+        ability_name = names.ability_names[names.species_abilities(spec.species, spec.form)[slot]]
         support = IMPLEMENTED_ABILITIES.get(ability, Support.NONE)
         c.add(support, f"{cand.label}: {ability_name}", "ability")
         if support != Support.NONE and (
-            reason := player_ability_refusal(int(decomp_abilities[spec.species][slot]))
+            reason := player_ability_refusal(int(decomp_abilities[row][slot]))
         ):
             refuse(f"{cand.label}: {ability_name} (ability, {reason})")
         item = ItemId(int(item_effect[spec.item]))

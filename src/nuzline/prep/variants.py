@@ -13,6 +13,7 @@ from functools import lru_cache
 import numpy as np
 
 from nuzline.ai.commands import SIM_ROLL_MAX, ai_damage, is_damaging
+from nuzline.data.forms import personal_row
 from nuzline.data.spec import PokemonSpec
 from nuzline.data.tables import Tables, load_names, load_tables
 from nuzline.engine.ids import AbilityId, EffectId, MoveFlag, Status, Type, Weather
@@ -240,7 +241,7 @@ def max_hp_of(tables: Tables, spec: PokemonSpec) -> int:
     if spec.stats is not None:
         return int(spec.stats[0])
     stats = calc_stats(
-        np.asarray(tables.species_base_stats)[spec.species],
+        np.asarray(tables.species_base_stats)[personal_row(tables, spec.species, spec.form)],
         np.asarray(spec.ivs),
         np.asarray(spec.evs),
         spec.level,
@@ -286,7 +287,8 @@ def hp_cuts(
     for kind, percent in AI_DEFENDER_HP_CHECKS:
         cuts.append(percent_cut(kind, percent, max_hp))
     cuts.extend(d for d in kill_damage if 1 <= d < max_hp)
-    ability = int(np.asarray(tables.species_abilities)[spec.species, spec.ability_slot])
+    row = personal_row(tables, spec.species, spec.form)
+    ability = int(np.asarray(tables.species_abilities)[row, spec.ability_slot])
     if ability in _PINCH_ABILITIES:
         cuts.append(max_hp // 3)
     return tuple(c for c in cuts if 1 <= c < max_hp)
@@ -312,8 +314,9 @@ def prestatus_options(
 ) -> tuple[int, ...]:
     """``declared`` minus the statuses ``spec`` cannot have, by type (Poison and Steel: poison;
     Fire: burn) or ability (``STATUS_BLOCKING_ABILITIES``), ruling 6."""
-    types = {int(t) for t in np.asarray(tables.species_types)[spec.species]}
-    ability = int(np.asarray(tables.species_abilities_decomp)[spec.species][spec.ability_slot])
+    row = personal_row(tables, spec.species, spec.form)
+    types = {int(t) for t in np.asarray(tables.species_types)[row]}
+    ability = int(np.asarray(tables.species_abilities_decomp)[row][spec.ability_slot])
     by_ability = _blocking_ability_ids().get(ability)
     return tuple(
         s

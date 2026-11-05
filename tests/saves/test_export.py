@@ -85,3 +85,59 @@ def test_show_lines_form_and_nickname(tmp_path, tables, names):
     lines = show_lines(load_save(p, tables=tables, names=names), names)
     assert 'MONFERNO Lv14 | form 1 | "Blaze" |' in lines[3]
     assert "form" not in lines[4] and '"' not in lines[4]  # same name as the species
+
+
+def test_export_round_trips_a_form(tmp_path, tables, names):
+    # The brief's ``export_party([spec], names)`` is ``party_toml(save, names, tables)``,
+    # and its ``_write`` is the ``out.write_text`` of the tests above.
+    import numpy as np
+
+    from nuzline.engine.stats import calc_stats
+    from tests.saves.synthetic import IVS
+    from tests.saves.writer import mon_record, personality_for
+
+    sp, form, row, level = 479, 2, 504, 20
+    stats = tuple(
+        int(v)
+        for v in calc_stats(
+            np.asarray(tables.species_base_stats)[row],
+            IVS,
+            (0,) * 6,
+            level,
+            np.asarray(tables.nature_mods)[3],
+            species=sp,
+        )
+    )
+    rec = mon_record(
+        species=sp,
+        form=form,
+        personality=personality_for(3, 5),
+        level=level,
+        ivs=IVS,
+        moves=(names.move("Astonish"), 0, 0, 0),
+        pp=(int(np.asarray(tables.move_pp)[names.move("Astonish")]), 0, 0, 0),
+        ability=names.ability("Levitate"),
+        party={"status": 0, "level": level, "hp": stats[0], "stats": stats},
+    )
+    p = tmp_path / "g.sav"
+    p.write_bytes(build_image(party=[rec]))
+    save = load_save(p, tables=tables, names=names)
+    text = party_toml(save, names, tables)
+    assert 'form = "Wash"' in text
+    out = tmp_path / "party.toml"
+    out.write_text(text, encoding="utf-8")
+    assert load_party(out, names) == [save.party[0].to_spec(tables)]
+    # A base form writes no form key.
+    assert "form" not in party_toml(_save(tmp_path, tables, names), names, tables)
+
+
+def test_export_writes_a_cosmetic_form_as_its_number(tmp_path, tables, names):
+    rec = party_record(tables, names, "Unown", 20, ("Hidden Power",), form=5)
+    p = tmp_path / "u.sav"
+    p.write_bytes(build_image(party=[rec]))
+    save = load_save(p, tables=tables, names=names)
+    text = party_toml(save, names, tables)
+    assert "\nform = 5\n" in text
+    out = tmp_path / "party.toml"
+    out.write_text(text, encoding="utf-8")
+    assert load_party(out, names) == [save.party[0].to_spec(tables)]

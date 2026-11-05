@@ -29,6 +29,13 @@ def _item_name(names, item: int) -> str:
     return "" if item == 0 else names.item_names[item]
 
 
+def _form_value(names, spec) -> str:
+    """The TOML value of a non-zero form: its name (``Names.form_names``), or its number
+    for a cosmetic form, which has none."""
+    form_names = names.form_names(spec.species)
+    return json.dumps(form_names[spec.form]) if spec.form < len(form_names) else str(spec.form)
+
+
 def _status_name(mon: SaveMon) -> str:
     return decode_status(mon.status_raw)[0].name.lower()
 
@@ -44,10 +51,11 @@ def party_toml(save: SaveFile, names, tables=None) -> str:
             continue
         spec = mon.to_spec(tables)
         listed = max([i + 1 for i, m in enumerate(spec.moves) if m] or [1])
-        ability = names.species_abilities(spec.species)[spec.ability_slot]
+        ability = names.species_abilities(spec.species, spec.form)[spec.ability_slot]
         lines = [
             "[[pokemon]]",
             f"species = {json.dumps(names.species_names[spec.species])}",
+            *([f"form = {_form_value(names, spec)}"] if spec.form else []),
             f"level = {spec.level}",
             f"nature = {json.dumps(names.nature_names[spec.nature])}",
             f"ivs = {list(spec.ivs)}",

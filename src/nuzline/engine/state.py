@@ -9,8 +9,10 @@ Encodings:
 * ``species``/``moves``/``item``/``item_consumed``/``trainer_items``/``trap_move``/
   ``choice_lock``/``last_move``/``move_hit`` hold decomp ids (0 = none); ``ability``
   holds an ``ids.AbilityId`` (from ``tables.species_abilities``) and ``ability_slot``
-  the species slot (0/1) it came from, so ``tables.species_abilities_decomp[species,
-  ability_slot]`` is the decomp ability id; ``status`` an ``ids.Status``.
+  the species slot (0/1) it came from, so ``tables.species_abilities_decomp[row,
+  ability_slot]`` is the decomp ability id, ``row = tables.species_form_row[species,
+  form]`` the personal row of the Pokemon's form (base stats, types and abilities are
+  read by row); ``status`` an ``ids.Status``.
 * ``stats[..., 0..4]`` are Atk, Def, SpA, SpD, Spe (``ids.Stat`` minus one); HP is
   ``max_hp``. ``ivs`` are in ``ids.Stat`` order.
 * ``stages[side, ids.Stat]`` are the active Pokemon's stat stages, 0 = neutral
@@ -44,6 +46,7 @@ from typing import NamedTuple
 import jax.numpy as jnp
 import numpy as np
 
+from nuzline.data.forms import personal_row
 from nuzline.data.spec import PokemonSpec
 from nuzline.data.tables import Tables
 from nuzline.engine.ids import Stat, Weather
@@ -280,13 +283,14 @@ if tuple(LAYOUT) != BattleState._fields:
 
 def _fill_slot(a: dict[str, np.ndarray], tables: Tables, side: int, slot: int, mon: PokemonSpec):
     species = mon.species
+    row = personal_row(tables, species, mon.form)  # ValueError: no such form
     if mon.stats is not None:
         if len(mon.stats) != 6:
             raise ValueError(f"species {species}: stats needs 6 values, got {len(mon.stats)}")
         stats = np.asarray(mon.stats)
     else:
         stats = calc_stats(
-            np.asarray(tables.species_base_stats[species]),
+            np.asarray(tables.species_base_stats[row]),
             np.asarray(mon.ivs),
             np.asarray(mon.evs),
             mon.level,
@@ -304,8 +308,8 @@ def _fill_slot(a: dict[str, np.ndarray], tables: Tables, side: int, slot: int, m
     a["hp"][side, slot] = hp
     a["max_hp"][side, slot] = max_hp
     a["stats"][side, slot] = stats[Stat.ATK : Stat.SPE + 1]
-    a["types"][side, slot] = np.asarray(tables.species_types[species])
-    a["ability"][side, slot] = int(tables.species_abilities[species, mon.ability_slot])
+    a["types"][side, slot] = np.asarray(tables.species_types[row])
+    a["ability"][side, slot] = int(tables.species_abilities[row, mon.ability_slot])
     a["ability_slot"][side, slot] = mon.ability_slot
     a["item"][side, slot] = mon.item
     a["moves"][side, slot] = mon.moves

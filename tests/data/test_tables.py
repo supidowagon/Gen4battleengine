@@ -249,3 +249,14 @@ def test_form_row_lookup():
 def test_import_forms_does_not_import_jax():
     code = "import sys, nuzline.data.forms; assert 'jax' not in sys.modules, 'jax imported'"
     subprocess.run([sys.executable, "-c", code], check=True)
+
+
+def test_names_form_checks_the_species_range(names):
+    # Task 5 review: a negative id wrapped round species_names, a large one raised IndexError.
+    for species in (-1, 496):
+        with pytest.raises(ValueError, match=f"species {species} out of range"):
+            names.form_names(species)
+        with pytest.raises(ValueError, match=f"species {species} out of range"):
+            names.form(species, "Wash")
+    with pytest.raises(ValueError, match=r"ROTOM has no form 6 \(forms: ROTOM, Heat"):
+        names.form(479, 6)

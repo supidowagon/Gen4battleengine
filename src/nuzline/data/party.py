@@ -4,7 +4,9 @@ Each ``[[pokemon]]`` table has ``species``, ``level``, ``nature``, ``ivs`` and
 ``evs`` (six values each, HP/Atk/Def/SpA/SpD/Spe), ``moves`` (up to four names),
 ``item`` (``""`` for none), ``ability`` (one of the species' abilities) and
 ``gender`` (``male``/``female``/``none``). Optional: ``hp`` (current HP; omitted
-means full), ``friendship`` (omitted means the species' base friendship), ``status``
+means full), ``form`` (a form name from ``Names.form_names``, case-insensitive, such as
+``"Wash"`` for Rotom, or a form number; omitted means 0, the base form, whose name is the
+species'), ``friendship`` (omitted means the form's base friendship), ``status``
 (``none``/``sleep``/``poison``/``burn``/``freeze``/``paralysis``/``toxic``, default
 ``none``), ``sleep_turns`` (sleep turns left;
 needs ``status = "sleep"``), ``pp`` (current PP, one value per listed move, padded with 0
@@ -46,13 +48,39 @@ def _status(entry: dict) -> tuple[int, int]:
     return int(status), turns
 
 
+def _form(entry: dict, names: Names, species: int) -> int:
+    """The ``form`` key's form number; ``ValueError`` naming the species as written and its
+    valid forms."""
+    if "form" not in entry:
+        return 0
+    value = entry["form"]
+    if isinstance(value, bool) or not isinstance(value, (str, int)):
+        # A bad party file is a ValueError throughout this loader, whatever the cause.
+        raise ValueError(  # noqa: TRY004
+            f"{entry['species']}: form must be a name or a number, got {value!r}"
+        )
+    try:
+        return names.form(species, value)
+    except ValueError:
+        pass
+    try:
+        names.form_row(species, 1)
+    except ValueError:
+        raise ValueError(f"{entry['species']} has no forms, got form {value!r}") from None
+    valid = ", ".join(names.form_names(species))
+    if len(names.form_names(species)) == 1:  # cosmetic forms only (Unown, Burmy, ...)
+        valid += ", or a form number"
+    raise ValueError(f"{entry['species']} has no form {value!r} (forms: {valid})")
+
+
 def _spec(entry: dict, names: Names) -> PokemonSpec:
     species = names.species(entry["species"])
+    form = _form(entry, names, species)
     moves = [names.move(m) for m in entry["moves"]]
     if not 1 <= len(moves) <= 4:
         raise ValueError(f"{entry['species']}: needs 1-4 moves, got {len(moves)}")
     ability = names.ability(entry["ability"])
-    slots = names.species_abilities(species)
+    slots = names.species_abilities(species, form)
     if ability == 0 or ability not in slots:
         raise ValueError(f"{entry['species']} cannot have ability {entry['ability']!r}")
     natures = {n.lower(): i for i, n in enumerate(names.nature_names)}
@@ -82,7 +110,8 @@ def _spec(entry: dict, names: Names) -> PokemonSpec:
         item=names.item(entry["item"]),
         ability_slot=slots.index(ability),
         gender=GENDERS[entry["gender"]],
-        friendship=int(entry.get("friendship", names.species_base_friendship(species))),
+        friendship=int(entry.get("friendship", names.species_base_friendship(species, form))),
+        form=form,
         current_hp=None if "hp" not in entry else int(entry["hp"]),
         status=status,
         status_counter=status_counter,

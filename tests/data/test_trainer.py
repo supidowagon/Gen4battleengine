@@ -143,3 +143,31 @@ def test_partner_variants_load():
     grunt = next(t for t in load_trainers(INTER) if t.format == "multi" and len(t.partner) == 6)
     assert isinstance(grunt.partner[0], PartnerVariant) and grunt.opponent_2 is not None
     assert {p.player_gender for p in grunt.partner} == {0, 1}
+
+
+@needs_inter
+def test_trainer_form_uses_row(names):
+    from dataclasses import replace
+
+    inter = IntermediateData(INTER)
+    roark = _roark()
+    t = replace(roark, party=(replace(roark.party[0], species=487, form=1),))
+    (mon,) = build_trainer_party(t, inter)
+    assert mon.form == 1
+    assert names.species_abilities(487, 1)[mon.ability_slot] == names.ability("Levitate")
+    assert mon.friendship == names.species_base_friendship(487, 1)
+
+
+@needs_inter
+def test_trainer_form_default_moves_use_the_row_learnset():
+    # Wormadam-Sandy's level-up learnset (row 499) parts from Plant Cloak's at level 26.
+    from dataclasses import replace
+
+    inter = IntermediateData(INTER)
+    roark = _roark()
+    raw = replace(roark.party[0], species=413, form=1, level=30, moves=None)
+    (mon,) = build_trainer_party(replace(roark, party=(raw,)), inter)
+    assert mon.moves == default_moves(inter.learnsets[499], 30)
+    assert mon.moves != default_moves(inter.learnsets[413], 30)
+    with pytest.raises(ValueError, match="species 413 has no form 3"):
+        build_trainer_party(replace(roark, party=(replace(raw, form=3),)), inter)

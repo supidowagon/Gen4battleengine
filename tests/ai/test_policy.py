@@ -258,3 +258,23 @@ def test_player_foresight_is_not_refused(tables, names):
     s = roark_state(tables, names)
     s = s._replace(moves=s.moves.at[0, 3, 1].set(names.move("Foresight")))
     assert ai_refusals(tables, s) == []
+
+
+def test_ai_reads_the_form_row_ability(tables, names):
+    # The brief's ``attacker_ability(tables, s, side=1)`` is ``commands.attacker_ability``,
+    # which always reads side 1 (the AI's active Pokemon) and takes no ``side``.
+    import dataclasses
+
+    from nuzline.data.party import load_party
+    from nuzline.engine.state import make_state
+    from tests.engine.helpers import SAMPLE_PARTY
+
+    sample_spec = load_party(SAMPLE_PARTY, names)[0]
+    origin = dataclasses.replace(sample_spec, species=487, form=1, item=names.item("Griseous Orb"))
+    s = make_state(tables, [sample_spec], [origin])
+    levitate = int(np.asarray(tables.species_abilities_decomp)[501, 0])
+    assert levitate == names.ability("Levitate")
+    assert int(commands.attacker_ability(tables, s)) == levitate
+    # The defender side reads the row too, and the scoring refusals see the same ability.
+    swapped = make_state(tables, [origin], [sample_spec])
+    assert int(commands.defender_ability(tables, swapped, 0)) == levitate

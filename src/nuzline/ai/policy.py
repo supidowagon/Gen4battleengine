@@ -368,8 +368,8 @@ def _refused(tables: Tables, state: BattleState) -> _Refused:
     transcribed = jnp.isin(moves[1], jnp.array(list(c.MOVE_EFFECTS), _I32)) | (moves[1] == 0)
     move = present[1][:, None] & ~transcribed
     sites = present[1] & (jax.vmap(script_roll_count)(moves[1]) > MAX_SCRIPT_ROLLS)
-    species = state.species.astype(_I32)
-    ability = tables.species_abilities_decomp[species, state.ability_slot.astype(_I32)]
+    row = tables.species_form_row[state.species.astype(_I32), state.form.astype(_I32)]
+    ability = tables.species_abilities_decomp[row.astype(_I32), state.ability_slot.astype(_I32)]
     side_abilities = (_DEFENDER_ABILITIES, _ATTACKER_ABILITIES)
     ability_bad = jnp.stack(
         [
@@ -432,9 +432,11 @@ def _scoring_refusals(tables: Tables, state: BattleState) -> list[str]:
             f"ai scoring: opponent slot {s}: its moveset has more IfRandomLessThan sites "
             f"than the {MAX_SCRIPT_ROLLS} AiOutcome.script_rolls encodes"
         )
-    species = np.asarray(state.species).astype(np.int64)
+    row = np.asarray(tables.species_form_row)[
+        np.asarray(state.species).astype(np.int64), np.asarray(state.form).astype(np.int64)
+    ].astype(np.int64)
     ability = np.asarray(tables.species_abilities_decomp)[
-        species, np.asarray(state.ability_slot).astype(np.int64)
+        row, np.asarray(state.ability_slot).astype(np.int64)
     ]
     ability_names = {v: k for k, v in _ABILITY.items()}
     for side, s in zip(*np.nonzero(np.asarray(r.ability)), strict=True):

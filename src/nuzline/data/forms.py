@@ -25,3 +25,19 @@ def form_row(grid, species: int, form: int) -> int:
     if row < 0:
         raise ValueError(f"species {species} has no form {form}")
     return row
+
+
+_grids: dict[int, tuple[object, object]] = {}
+
+
+def personal_row(tables, species: int, form: int = 0) -> int:
+    """``form_row`` on ``tables.species_form_row`` (a jax or numpy ``Tables`` array), read
+    through a host copy made once per array (jax scalar indexing is slow)."""
+    import numpy as np
+
+    grid = tables.species_form_row
+    hit = _grids.get(id(grid))
+    if hit is None or hit[0] is not grid:
+        hit = (grid, np.asarray(grid))
+        _grids[id(grid)] = hit
+    return form_row(hit[1], species, form)

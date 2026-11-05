@@ -13,6 +13,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from nuzline.data.forms import form_row
 from nuzline.data.spec import PokemonSpec
 from nuzline.engine.ids import Stat, Status
 from nuzline.engine.stats import SPECIES_SHEDINJA, calc_stats
@@ -62,15 +63,19 @@ class SaveMon:
 
     def to_spec(self, tables) -> PokemonSpec:
         """The engine's :class:`PokemonSpec`. Raises :class:`RecordError` for an egg, an
-        alternate form that changes stats/types/abilities, an ability the species
-        cannot have, PP above the move's maximum, or (party) a stored stat outside the
-        band the current EVs allow."""
+        Arceus form (its plate type; Multitype is unsupported), a form beyond the species'
+        form count, an ability the form cannot have, PP above the move's maximum, or
+        (party) a stored stat outside the band the current EVs allow. Base stats and
+        abilities are the form's personal row (``nuzline.data.forms.form_row``)."""
         label = _label(self.location)
         if self.is_egg:
             raise RecordError(f"{label}: is an egg")
         if self.form != 0 and self.species in _REFUSED_FORM_SPECIES:
-            raise RecordError(f"{label}: species {self.species} form {self.form} is unsupported")
-        abilities = [int(a) for a in _as_np(tables.species_abilities_decomp)[self.species]]
+            raise RecordError(
+                f"{label}: Arceus form {self.form} is unsupported (Multitype, plan Ruling 8)"
+            )
+        row = self._row(tables, label)
+        abilities = [int(a) for a in _as_np(tables.species_abilities_decomp)[row]]
         if self.ability == 0 or self.ability not in abilities:
             raise RecordError(
                 f"{label}: ability {self.ability} is not one of the species' {abilities}"
@@ -85,7 +90,7 @@ class SaveMon:
                     f"{label}: move slot {i} has PP {self.pp[i]} above the maximum {limit}"
                 )
         if self.stored_stats is not None:
-            self._check_stats(tables, label)
+            self._check_stats(tables, label, row)
             if self.current_hp is not None and self.current_hp > self.stored_stats[Stat.HP]:
                 raise RecordError(
                     f"{label}: current HP {self.current_hp} exceeds max HP "
@@ -111,11 +116,19 @@ class SaveMon:
             stats=self.stored_stats,
         )
 
-    def _check_stats(self, tables, label: str) -> None:
+    def _row(self, tables, label: str) -> int:
+        """The personal row of this species' form; ``RecordError`` naming the slot when the
+        species has no such form (a corrupt record)."""
+        try:
+            return form_row(_as_np(tables.species_form_row), self.species, self.form)
+        except ValueError as e:
+            raise RecordError(f"{label}: {e}") from None
+
+    def _check_stats(self, tables, label: str, row: int) -> None:
         """Each stored stat lies between the stats with 0 EVs and with the current EVs
         (same IVs, nature and level): the game recomputes stats at level-up from an
         EV vector no larger than today's."""
-        base = _as_np(tables.species_base_stats)[self.species]
+        base = _as_np(tables.species_base_stats)[row]
         mods = _as_np(tables.nature_mods)[self.nature]
         low = calc_stats(base, self.ivs, (0,) * 6, self.level, mods, self.species)
         high = calc_stats(base, self.ivs, self.evs, self.level, mods, self.species)
@@ -150,18 +163,22 @@ def level_from_exp(tables, species: int, exp: int) -> int:
     """Highest level (1-100) whose experience entry is <= ``exp``."""
     rates = _as_np(tables.species_exp_rate)
     # species_exp_rate has a row per personal row (forms too); the species ids are the
-    # rows of the form grid.
+    # rows of the form grid. Indexed by species, not form row, as the game does
+    # (Pokemon_GetSpeciesLevelAt, src/pokemon.c:2368, loads the species), and every form
+    # has its species' rate.
     if not 0 <= species < len(_as_np(tables.species_form_row)):
         raise RecordError(f"species {species} out of range")
     row = _as_np(tables.exp_table)[int(rates[species])]
     return max(1, int(np.searchsorted(row[1:], exp, side="right")))
 
 
-# Species whose non-zero forms change stats, types or abilities (plan Ruling 2), as decomp
-# ids (line N of generated/species.txt is id N-1): Deoxys 386, Wormadam 413, Rotom 479,
-# Giratina 487, Shaymin 492, Arceus 493. Burmy, Shellos, Gastrodon, Unown and Cherrim
-# forms are cosmetic and pass.
-_REFUSED_FORM_SPECIES = frozenset({386, 413, 479, 487, 492, 493})
+# Species whose non-zero forms the save parser refuses (plan K2a Ruling 8), as decomp ids
+# (line N of generated/species.txt is id N-1): Arceus 493, whose form is its plate type
+# and whose Multitype the engine does not model. Deoxys, Wormadam, Rotom, Giratina and
+# Shaymin forms convert through their personal row (coverage refuses Giratina-Origin
+# without the Griseous Orb and Shaymin-Sky); Burmy, Shellos, Gastrodon, Unown and Cherrim
+# forms are cosmetic (their row is the species') and pass.
+_REFUSED_FORM_SPECIES = frozenset({493})
 
 
 def _label(location: tuple[str, int, int]) -> str:

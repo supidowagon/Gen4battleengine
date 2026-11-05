@@ -311,3 +311,34 @@ def test_ref_roundtrip_new_fields(tables, names):
     for name, x, y in zip(s._fields, s, back, strict=True):
         assert x.dtype == y.dtype and bool((x == y).all()), name
     assert [side.disabled_move for side in to_ref(s).sides] == [33, 1000]
+
+
+def test_rotom_wash_state_uses_its_row(tables, sample_spec):
+    import numpy as np
+
+    from nuzline.engine.stats import calc_stats
+
+    wash = dataclasses.replace(sample_spec, species=479, form=2, ability_slot=0)
+    s = make_state(tables, [wash], [sample_spec])
+    assert s.types[0, 0].tolist() == [
+        int(tables.species_types[504, 0]),
+        int(tables.species_types[504, 1]),
+    ]
+    assert int(s.ability[0, 0]) == int(tables.species_abilities[504, 0])
+    sp = sample_spec
+    want = calc_stats(
+        np.asarray(tables.species_base_stats[504]),
+        np.asarray(sp.ivs),
+        np.asarray(sp.evs),
+        sp.level,
+        np.asarray(tables.nature_mods[sp.nature]),
+        species=479,
+    )
+    assert int(s.max_hp[0, 0]) == int(want[0])
+    assert s.stats[0, 0].tolist() == [int(v) for v in want[1:]]
+    assert int(s.form[0, 0]) == 2
+
+
+def test_bad_form_raises(tables, sample_spec):
+    with pytest.raises(ValueError, match="species 479 has no form 6"):
+        make_state(tables, [dataclasses.replace(sample_spec, species=479, form=6)], [sample_spec])

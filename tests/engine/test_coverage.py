@@ -166,3 +166,58 @@ def test_check_opponent_matches_check_coverage(tables, names, monkeypatch, train
     monkeypatch.setattr("nuzline.engine.coverage.make_state", no_state)
     theirs = check_opponent(tables, names, trainer, opp, 0)
     assert theirs.missing == expected
+
+
+@pytest.mark.parametrize(
+    ("species", "form", "item", "line"),
+    [
+        (
+            487,
+            1,
+            "no item",
+            "Giratina (slot 0): Origin Forme without the Griseous Orb (form change UNSUPPORTED)",
+        ),
+        (
+            492,
+            1,
+            "Griseous Orb",
+            "Shaymin (slot 0): Sky Forme reverts when frozen (form change UNSUPPORTED)",
+        ),
+    ],
+)
+def test_in_battle_form_changes_are_refused(tables, names, species, form, item, line):  # Ruling 8
+    # The brief writes the species title-cased; ``where`` names it as the data does
+    # (``names.species_names``, upper case), so the line is compared with that name.
+    line = line.replace(names.species_names[species].title(), names.species_names[species], 1)
+    mon = replace(
+        sample_party(names)[0],
+        species=species,
+        form=form,
+        item=0 if item == "no item" else names.item(item),
+    )
+    r = check_coverage(tables, names, [mon], roark_trainer(), roark_party(names), Weather.NONE)
+    assert any(m.endswith(line) for m in r.missing)
+    # Either side: the same form on the trainer's side is refused too.
+    r = check_coverage(
+        tables, names, sample_party(names), roark_trainer(), [mon, *roark_party(names)[1:]], 0
+    )
+    assert any(m.endswith(line) for m in r.missing)
+    ok = replace(mon, species=487, form=1, item=names.item("Griseous Orb"))
+    r = check_coverage(tables, names, [ok], roark_trainer(), roark_party(names), Weather.NONE)
+    assert not any("form change" in m for m in r.missing)
+
+
+def test_coverage_reads_the_form_row_ability(tables, names):
+    origin = replace(sample_party(names)[0], species=487, form=1, item=names.item("Griseous Orb"))
+    r = check_coverage(tables, names, [origin], roark_trainer(), roark_party(names), 0)
+    assert any(m.endswith("GIRATINA (slot 0): Levitate (ability UNSUPPORTED)") for m in r.missing)
+    assert not any("Pressure" in m for m in r.missing)  # Altered Forme's ability
+    with pytest.raises(ValueError, match="species 479 has no form 6"):
+        check_coverage(
+            tables,
+            names,
+            [replace(origin, species=479, form=6)],
+            roark_trainer(),
+            roark_party(names),
+            0,
+        )

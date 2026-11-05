@@ -112,19 +112,35 @@ class Names:
         """The personal row of ``species``' ``form``; ``ValueError`` if it has no such form."""
         return form_row(self._form_rows, species, form)
 
+    def _species_id(self, species: int) -> int:
+        """``species`` as an int; ``ValueError`` outside the species ids (a negative id
+        would otherwise wrap round the name tuple)."""
+        species = int(species)
+        if not 0 <= species < len(self.species_names):
+            raise ValueError(f"species {species} out of range")
+        return species
+
     def form_names(self, species: int) -> tuple[str, ...]:
         """``(species name, form 1 name, ...)`` for a species with data forms, else
-        ``(species name,)``."""
-        return self._form_names.get(int(species), (self.species_names[species],))
+        ``(species name,)``. ``ValueError`` for a species id out of range."""
+        species = self._species_id(species)
+        return self._form_names.get(species, (self.species_names[species],))
 
     def form(self, species: int, name: str | int) -> int:
         """The form number of ``species`` named ``name`` (case-insensitive, from
         ``form_names``), or ``name`` itself when it is a form number the species has.
-        Raises ``ValueError`` naming the valid forms."""
-        if not isinstance(name, str):
-            self.form_row(species, name)
-            return int(name)
+        Raises ``ValueError`` naming the valid forms (or the species id out of range)."""
+        species = self._species_id(species)
         valid = self.form_names(species)
+        if not isinstance(name, str):
+            try:
+                self.form_row(species, name)
+            except ValueError:
+                raise ValueError(
+                    f"{self.species_names[species]} has no form {name!r} "
+                    f"(forms: {', '.join(valid)})"
+                ) from None
+            return int(name)
         for i, n in enumerate(valid):
             if n.lower() == name.lower():
                 return i
