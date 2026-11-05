@@ -196,7 +196,7 @@ def test_phase_keys_are_disjoint():
     with pytest.raises(ValueError):
         PrepSettings(ladder_keep=0)
     for bad in ({"screen_n": 7}, {"screen_n": 0}, {"team_keep": 0}, {"finalists": 0},
-                {"max_depth": -1}, {"variant_keep": 0}):  # fmt: skip
+                {"max_depth": -1}, {"variant_keep": 0}, {"tie_playouts": -1}):  # fmt: skip
         with pytest.raises(ValueError):
             PrepSettings(**bad)
 
@@ -450,8 +450,13 @@ class Expansion:
     count after ``m`` playouts; ``hp[i]`` is its mean HP left. A turn-0 state row is the setup
     index itself."""
 
-    def __init__(self, monkeypatch, parents, n_new, losses, hp, keep=8, cost=None, tie=None):
-        settings = PrepSettings(screen_n=8, variant_keep=keep, ladder_keep=4)
+    def __init__(
+        self, monkeypatch, parents, n_new, losses, hp, keep=8, cost=None, tie=None,
+        tie_playouts=1016,
+    ):  # fmt: skip
+        settings = PrepSettings(
+            screen_n=8, variant_keep=keep, ladder_keep=4, tie_playouts=tie_playouts
+        )  # fmt: skip
         funnel = search._Funnel(None, None, SimpleNamespace(deaths=0), settings, KEY, None, float)
         total = len(parents) + n_new
         funnel.setups = [f"setup {i}" for i in range(total)]
@@ -514,3 +519,41 @@ def test_expansion_keeps_a_parent_against_lucky_neighbours(monkeypatch):
 
     out = Expansion(monkeypatch, parents, n_new, losses, hp).run()
     assert set(out) == set(range(8))
+
+
+def _bare(stats, tie=None):
+    funnel = search._Funnel(None, None, SimpleNamespace(deaths=0), PrepSettings(), KEY, None, float)
+    funnel.stats = dict(enumerate(stats))
+    funnel.cost = [0.0] * len(stats)
+    funnel.tie = list(tie) if tie is not None else list(range(len(stats)))
+    return funnel
+
+
+def test_top_keeps_the_tied_block():
+    stats = [_saturated(10, 10, 0.5)] * 6 + [_saturated(9, 10, 0.5)] * 4
+    stats += [_saturated(8, 10, 0.5)] * 2
+    f = _bare(stats)
+    assert f.top(range(12), 0, 8, ties=True) == list(range(10))  # ranks 7-10 tie at the cut
+    assert f.top(range(12), 0, 8) == list(range(8))
+    assert f.top(range(12), 0, 6, ties=True) == list(range(6))  # no tie across the boundary
+    assert f.top(range(12), 0, 12, ties=True) == list(range(12))
+
+
+def test_floor_cut_screens_an_exact_tie_further(monkeypatch):
+    """12 setups, keep 8: the best (last by tie rank) never loses; the other 11 lose exactly one
+    playout after 300. A cut at n/n used to go by HP, then index, and dropped it."""
+    best = 11
+
+    def losses(i, m):
+        return 0 if i == best else int(m > 300)
+
+    hp = {i: (0.1 if i == best else 0.9) for i in range(12)}
+    pid = phase_id("teams")
+    e = Expansion(monkeypatch, [], 12, losses, hp, keep=8)
+    out = e.funnel.halving("teams", "teams", pid, [list(e.new)] * search.RUNGS, 8)[0]
+    assert best in out and len(out) == 8
+    assert max(e.funnel.stats[i].n for i in out) == 1016  # bounded by tie_playouts
+    assert e.funnel.playouts == 12 * 1016
+    off = Expansion(monkeypatch, [], 12, losses, hp, keep=8, tie_playouts=0)
+    out = off.funnel.halving("teams", "teams", pid, [list(off.new)] * search.RUNGS, 8)[0]
+    assert best not in out and len(out) == 8  # retention off: the old saturated cut

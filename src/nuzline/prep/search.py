@@ -126,7 +126,10 @@ class PrepSettings:
     solve (0 = screen only); ``precision``: the Stage B target half-width, or
     ``finalist_playouts`` a fixed ``budget_playouts`` instead; ``max_team`` .. ``levelled``:
     the variant space (``levelled=False``: no free level-up slot replacements); ``budget_seconds``: the anytime limit (ruling 11); ``weights``: the
-    resource cost weights of the tie rule (ruling 7)."""
+    resource cost weights of the tie rule (ruling 7); ``tie_playouts``: at a cut reaching a
+    survivor floor, setups tied exactly with the last survivor are kept and screened further
+    until the tie breaks or they reach this many playouts (0: off; 1016 = ``screen_n`` 8's
+    round 6)."""
 
     screen_n: int = 8
     team_keep: int = 32
@@ -146,6 +149,7 @@ class PrepSettings:
     max_turns: int = 100
     budget_seconds: float | None = None
     weights: tuple[tuple[str, float], ...] = tuple(DEFAULT_WEIGHTS.items())
+    tie_playouts: int = 1016
 
     def __post_init__(self) -> None:
         if self.screen_n < 2 or self.screen_n % 2:
@@ -161,6 +165,8 @@ class PrepSettings:
             raise ValueError(f"max_depth must not be negative, not {self.max_depth}")
         if self.max_team < 1:
             raise ValueError(f"max_team must be at least 1, not {self.max_team}")
+        if self.tie_playouts < 0:
+            raise ValueError(f"tie_playouts must not be negative, not {self.tie_playouts}")
 
 
 @dataclass(frozen=True)
@@ -351,12 +357,20 @@ class _Funnel:
         order = prep_order([self.row(i, j) for i in indices])
         return [indices[o] for o in order]
 
-    def top(self, indices: Sequence[int], j: int, count: int) -> list[int]:
-        """The ``count`` best on rung ``j`` by ``halving_key``, ascending."""
-        best = sorted(
-            indices, key=lambda i: halving_key(self.stats[i], j, self.cost[i], self.tie[i])
-        )
-        return sorted(best[:count])
+    def top(self, indices: Sequence[int], j: int, count: int, ties: bool = False) -> list[int]:
+        """The ``count`` best on rung ``j`` by ``halving_key``, ascending. With ``ties``, every
+        setup tied with the ``count``-th on (score, deaths) is kept as well."""
+
+        def key(i):
+            return halving_key(self.stats[i], j, self.cost[i], self.tie[i])
+
+        best = sorted(indices, key=key)
+        end = count
+        if ties and 0 < count < len(best):
+            edge = key(best[count - 1])[:2]
+            while end < len(best) and key(best[end])[:2] == edge:
+                end += 1
+        return sorted(best[:end])
 
     # ------------------------------------------------------------------ units
 
@@ -487,7 +501,9 @@ class _Funnel:
         """Successive halving over the survivor sets ``pools`` from round ``r`` (module
         docstring); returns the final sets. ``v``: the expansion (variant phases). With
         ``parents`` (a variant expansion: each rung's parents) ``pools`` are the competing
-        neighbours, and the result is each rung's final pick from parents and survivors."""
+        neighbours, and the result is each rung's final pick from parents and survivors. Without
+        ``parents``, a cut of rung ``k`` to its floor keeps the exact ties at the edge and screens
+        them further while the round's target is below ``tie_playouts``."""
         k, st = self.k, self.settings
         floors = [keep if j == k else st.ladder_keep for j in range(RUNGS)]
 
@@ -500,12 +516,27 @@ class _Funnel:
             self.before_unit()
             members = sorted(set().union(*pools))
             rkey = jax.random.fold_in(jax.random.fold_in(self.key, pid), r)
-            self.top_up(members, st.screen_n * (2 ** (r + 1) - 1), rkey)
+            t_r = st.screen_n * (2 ** (r + 1) - 1)
+            self.top_up(members, t_r, rkey)
             pools = [[i for i in p if i not in self.excluded] for p in pools]
             if not whole(pools)[k]:
                 self.raise_all_refused()
             self.last_pools = [list(p) for p in whole(pools)]
-            pools = [self.top(p, j, max(floors[j], ceil(len(p) / 2))) for j, p in enumerate(pools)]
+            counts = [max(floors[j], ceil(len(p) / 2)) for j, p in enumerate(pools)]
+            pools = [
+                self.top(
+                    p,
+                    j,
+                    counts[j],
+                    ties=(
+                        j == k
+                        and parents is None
+                        and counts[j] == floors[j]
+                        and t_r < st.tie_playouts
+                    ),
+                )
+                for j, p in enumerate(pools)
+            ]
             if bucket == "teams":
                 self.team_rounds += 1
             else:
