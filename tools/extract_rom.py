@@ -46,9 +46,19 @@ from tools.rom.inputs import (
 )
 from tools.rom.symbols import DEFAULT_MAP
 
-ROM_FILES = ("species", "moves", "items", "learnsets", "tm_learnsets", "exp_tables", "trainers")
+ROM_FILES = (
+    "species",
+    "moves",
+    "items",
+    "learnsets",
+    "tm_learnsets",
+    "evolutions",
+    "egg_moves",
+    "exp_tables",
+    "trainers",
+)
 REUSED_FILES = ("types", "natures", "charmap", "abilities")
-DECOMP_FILES = ("form_rows",)  # taken from the decomp for every game (Ruling 6)
+DECOMP_FILES = ("form_rows", "evolution_methods")  # taken from the decomp for every game (Ruling 6)
 REUSE_SYMBOLS = ("sTypeMatchupMultipliers", "sNatureStatAffinities")
 REUSE_BANKS = (
     "TEXT_BANK_ABILITY_NAMES",
@@ -102,6 +112,7 @@ def _kaizo_checks(inputs: RomInputs, decomp: Path, symbols_path: Path, vanilla_f
     from tools.rom.diff import diff_roms
     from tools.rom.nds import RomFiles
     from tools.rom.patch import kaizo_rom
+    from tools.rom.readers.evolutions import read_evolutions
     from tools.rom.readers.items import read_items
     from tools.rom.readers.learnsets import read_learnsets
     from tools.rom.readers.moves import read_moves
@@ -128,6 +139,7 @@ def _kaizo_checks(inputs: RomInputs, decomp: Path, symbols_path: Path, vanilla_f
     read_exp_tables(kaizo)
     read_learnsets(kaizo, decomp)
     read_tm_learnsets(kaizo)
+    read_evolutions(kaizo)
     read_forms(kaizo, decomp, charmap)
     read_moves(kaizo, decomp, charmap)
     read_items(kaizo, decomp, symbols, charmap)
@@ -165,6 +177,8 @@ def extract(game: str, out: Path, decomp: Path, symbols: Path, inputs: RomInputs
     if game == "kaizo":
         _kaizo_checks(inputs, decomp, symbols, vanilla_files)
 
+    from tools.rom.readers.code_tables import egg_moves
+    from tools.rom.readers.evolutions import read_evolutions
     from tools.rom.readers.items import read_items
     from tools.rom.readers.learnsets import read_learnsets
     from tools.rom.readers.maps import trainer_start_conditions
@@ -201,6 +215,8 @@ def extract(game: str, out: Path, decomp: Path, symbols: Path, inputs: RomInputs
             "items": read_items(vanilla_files, decomp, smap, charmap),
             "learnsets": read_learnsets(vanilla_files, decomp),
             "tm_learnsets": read_tm_learnsets(vanilla_files),
+            "evolutions": read_evolutions(vanilla_files),
+            "egg_moves": {str(k): v for k, v in egg_moves(vanilla_files, smap, decomp).items()},
             "exp_tables": read_exp_tables(vanilla_files),
             "trainers": read_trainers(vanilla_files, decomp, smap, charmap, starts),
         }
@@ -214,6 +230,7 @@ def extract(game: str, out: Path, decomp: Path, symbols: Path, inputs: RomInputs
         sources = {f"{n}.json": "rom" for n in ROM_FILES}
         sources["forms.json"] = "rom; names: decomp"
         sources["form_rows.json"] = "decomp: form registry"
+        sources["evolution_methods.json"] = "decomp: generated/evolution_methods.txt"
         sources.update(
             {f"{n}.json": "decomp: vanilla ROM (decomp is the source)" for n in REUSED_FILES}
         )

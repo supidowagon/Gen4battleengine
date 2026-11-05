@@ -600,6 +600,113 @@ def extract_tm_learnsets(decomp: Path) -> dict[str, list[int]]:
     return out
 
 
+MAX_EVOLUTIONS = 7  # include/struct_defs/species.h:8
+
+# How ProcEvolutions (tools/dataproc/src/speciesproc.c:391-468) packs ``param`` and which
+# fields follow the method in a ``data.json`` entry: ``[method, species]`` (param 0) or
+# ``[method, <param>, species]``.
+_EVO_NO_PARAM = frozenset(
+    [
+        "EVO_NONE",
+        "EVO_LEVEL_HAPPINESS",
+        "EVO_LEVEL_HAPPINESS_DAY",
+        "EVO_LEVEL_HAPPINESS_NIGHT",
+        "EVO_TRADE",
+        "EVO_LEVEL_MAGNETIC_FIELD",
+        "EVO_LEVEL_MOSS_ROCK",
+        "EVO_LEVEL_ICE_ROCK",
+    ]
+)
+_EVO_LEVEL_PARAM = frozenset(
+    [
+        "EVO_LEVEL",
+        "EVO_LEVEL_ATK_GT_DEF",
+        "EVO_LEVEL_ATK_EQ_DEF",
+        "EVO_LEVEL_ATK_LT_DEF",
+        "EVO_LEVEL_PID_LOW",
+        "EVO_LEVEL_PID_HIGH",
+        "EVO_LEVEL_NINJASK",
+        "EVO_LEVEL_SHEDINJA",
+        "EVO_LEVEL_BEAUTY",
+        "EVO_LEVEL_MALE",
+        "EVO_LEVEL_FEMALE",
+    ]
+)
+_EVO_ITEM_PARAM = frozenset(
+    [
+        "EVO_TRADE_WITH_HELD_ITEM",
+        "EVO_USE_ITEM",
+        "EVO_USE_ITEM_MALE",
+        "EVO_USE_ITEM_FEMALE",
+        "EVO_LEVEL_WITH_HELD_ITEM_DAY",
+        "EVO_LEVEL_WITH_HELD_ITEM_NIGHT",
+    ]
+)
+
+
+def extract_evolution_methods(decomp: Path) -> list[str]:
+    """The ``generated/evolution_methods.txt`` stems, lowercased; list index = method id."""
+    return [_stem(c, "EVO_") for c in _constants(decomp, "evolution_methods", "EVO_")]
+
+
+def extract_evolutions(decomp: Path) -> dict[str, list[list[int]]]:
+    """Species id -> ``[[method, param, target], ...]`` from ``evolutions``, for species
+    0-495 (``LoadSpeciesEvolutions`` is keyed by species, ``src/pokemon.c:4812``). ``method``
+    is the ``generated/evolution_methods.txt`` id and ``param`` is packed as ``ProcEvolutions``
+    packs it: the level, item id, move id or species id, else 0. Method 0 slots are dropped;
+    more than ``MAX_EVOLUTIONS`` entries raise (the packer drops the rest with a warning)."""
+    method_id = _index(_constants(decomp, "evolution_methods", "EVO_"), "evolution method")
+    species = _constants(decomp, "species", "SPECIES_")
+    species_id = _index(species, "species")
+    item_id = _index(_constants(decomp, "items", "ITEM_"), "item")
+    move_id = _index(_constants(decomp, "moves", "MOVE_"), "move")
+    out = {}
+    for sid, const in enumerate(species):
+        path, d = _species_json(decomp, const)
+        entries = d.get("evolutions", [])
+        if len(entries) > MAX_EVOLUTIONS:
+            raise ExtractError(f"{path}: {len(entries)} evolutions, more than {MAX_EVOLUTIONS}")
+        rows = []
+        for entry in entries:
+            name = entry[0]
+            want = 2 if name in _EVO_NO_PARAM else 3
+            if len(entry) != want:
+                raise ExtractError(f"{path}: evolution {entry!r} has {len(entry)} fields")
+            if name in _EVO_NO_PARAM:
+                param = 0
+            elif name in _EVO_LEVEL_PARAM:
+                param = int(entry[1])
+            elif name in _EVO_ITEM_PARAM:
+                param = item_id(entry[1])
+            elif name == "EVO_LEVEL_KNOW_MOVE":
+                param = move_id(entry[1])
+            elif name == "EVO_LEVEL_SPECIES_IN_PARTY":
+                param = species_id(entry[1])
+            else:
+                raise ExtractError(f"{path}: no packing rule for evolution method {name!r}")
+            method = method_id(name)
+            if method:  # ProcEvolutions keeps EVO_NONE as an all-zero slot
+                rows.append([method, param, species_id(entry[-1])])
+        out[str(sid)] = rows
+    return out
+
+
+def extract_egg_moves(decomp: Path) -> dict[str, list[int]]:
+    """Species id -> egg moves, for species with at least one (``learnset.egg_moves``,
+    emitted by ``EmitEggMoves``, ``speciesproc.c:681-692``, into ``sEggMoves``; read by
+    ``LoadSpeciesEggMoves``, ``src/overlay005/daycare.c:445``, at most ``MAX_EGG_MOVES`` = 16)."""
+    move_id = _index(_constants(decomp, "moves", "MOVE_"), "move")
+    out = {}
+    for sid, const in enumerate(_constants(decomp, "species", "SPECIES_")):
+        path, d = _species_json(decomp, const)
+        moves = d.get("learnset", {}).get("egg_moves", [])
+        if len(moves) > 16:
+            raise ExtractError(f"{path}: {len(moves)} egg moves, more than MAX_EGG_MOVES (16)")
+        if moves:
+            out[str(sid)] = [move_id(m) for m in moves]
+    return out
+
+
 # Battle start condition for each overworld weather that the battle inherits
 # (src/battle/battle_lib.c BattleSystem_TriggerEffectOnSwitch, state
 # SWITCH_IN_CHECK_STATE_FIELD_WEATHER). Every other weather, including
@@ -1071,6 +1178,9 @@ def extract_static(decomp_root: Path, out_dir: Path) -> None:
     _write(out_dir / "abilities.json", extract_abilities(decomp_root))
     _write(out_dir / "learnsets.json", extract_learnsets(decomp_root))
     _write(out_dir / "tm_learnsets.json", extract_tm_learnsets(decomp_root))
+    _write(out_dir / "evolutions.json", extract_evolutions(decomp_root))
+    _write(out_dir / "egg_moves.json", extract_egg_moves(decomp_root))
+    _write(out_dir / "evolution_methods.json", extract_evolution_methods(decomp_root))
     _write(out_dir / "exp_tables.json", extract_exp_tables(decomp_root))
     _write(out_dir / "forms.json", extract_forms(decomp_root))
     _write(out_dir / "form_rows.json", species_form_rows(decomp_root))

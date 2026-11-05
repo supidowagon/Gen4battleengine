@@ -5,7 +5,8 @@ import json
 import pytest
 
 from tools.rom.readers import ReaderError
-from tools.rom.readers.code_tables import tm_moves
+from tools.rom.readers.code_tables import egg_moves, tm_moves
+from tools.rom.readers.evolutions import read_evolutions
 
 
 def test_tm_table_symbol(symbols):
@@ -35,3 +36,13 @@ def test_tm_learnsets_match_decomp(vanilla_files, decomp, decomp_inter):
 
     want = json.loads((decomp_inter / "tm_learnsets.json").read_text("utf-8"))
     assert read_tm_learnsets(vanilla_files) == want
+
+
+def test_rom_egg_moves_match(vanilla_files, symbols, decomp_inter):
+    want = json.loads((decomp_inter / "egg_moves.json").read_text("utf-8"))
+    assert egg_moves(vanilla_files, symbols) == {int(k): v for k, v in want.items()}
+
+
+def test_rom_evolutions_match(vanilla_files, decomp_inter):
+    want = json.loads((decomp_inter / "evolutions.json").read_text("utf-8"))
+    assert read_evolutions(vanilla_files) == want

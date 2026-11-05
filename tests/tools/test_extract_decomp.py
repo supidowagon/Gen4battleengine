@@ -5,6 +5,8 @@ import pytest
 
 from tools.extract_decomp import (
     extract_charmap,
+    extract_egg_moves,
+    extract_evolutions,
     extract_exp_tables,
     extract_forms,
     extract_species,
@@ -174,3 +176,20 @@ def test_form_intermediates(out):
     tm = json.loads((out / "tm_learnsets.json").read_text("utf-8"))
     assert sorted(map(int, learn)) == list(range(508)) == sorted(map(int, tm))
     assert tm["504"] == _by_tm_indices("rotom/forms/wash")
+
+
+def test_evolutions():
+    ev = extract_evolutions(DECOMP)
+    assert ev["1"] == [[4, 16, 2]]  # EVO_LEVEL 16 -> Ivysaur
+    assert len(ev["133"]) == 7 and ev["133"][0] == [25, 0, 470]  # Eevee: MOSS_ROCK -> Leafeon
+    assert ev["3"] == []  # Venusaur
+
+
+def test_egg_moves():
+    assert extract_egg_moves(DECOMP)["1"][:3] == [113, 130, 219]  # Light Screen, Skull Bash, ...
+
+
+def test_static_writes_evolutions_and_egg_moves(out):
+    ev = json.loads((out / "evolutions.json").read_text("utf-8"))
+    assert len(ev) == 496 and ev["1"] == [[4, 16, 2]]
+    assert "3" not in json.loads((out / "egg_moves.json").read_text("utf-8"))

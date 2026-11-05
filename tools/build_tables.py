@@ -188,6 +188,9 @@ def build_arrays(inter: Path) -> tuple[dict[str, np.ndarray], dict]:
     charmap = _load(inter, "charmap")
     level_learnsets = _load(inter, "learnsets")
     tm_learnsets = _load(inter, "tm_learnsets")
+    evolutions = _load(inter, "evolutions")
+    egg_moves = _load(inter, "egg_moves")
+    evolution_methods = _load(inter, "evolution_methods")
     species = _personal_rows(species_only, forms, form_rows)
     item_ids_by_name = {i["name"]: n for n, i in enumerate(items)}
     first_tm_item = item_ids_by_name["TM01"]
@@ -313,6 +316,14 @@ def build_arrays(inter: Path) -> tuple[dict[str, np.ndarray], dict]:
         "tm_learnsets": tm_learnsets,
         "tm_moves": tm_moves,
         "first_tm_item": first_tm_item,
+        # Keyed by species id (LoadSpeciesEvolutions, src/pokemon.c:4812;
+        # LoadSpeciesEggMoves, src/overlay005/daycare.c:445): evolutions are
+        # [method, param, target] with method an index into evolution_methods (the
+        # generated/evolution_methods.txt stems, lowercased); egg_moves lists the moves of
+        # the species that have any.
+        "evolutions": evolutions,
+        "evolution_methods": evolution_methods,
+        "egg_moves": egg_moves,
     }
     return arrays, manifest
 

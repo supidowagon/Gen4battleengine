@@ -30,6 +30,13 @@ class Learnsets:
         self._tm_moves = tuple(int(m) for m in manifest["tm_moves"])
         self._first_tm_item = int(manifest["first_tm_item"])
         self._form_rows = manifest["species_form_row"]
+        self._evolutions = {
+            int(s): tuple((int(m), int(p), int(t)) for m, p, t in rows)
+            for s, rows in manifest["evolutions"].items()
+        }
+        self._egg_moves = {
+            int(s): tuple(int(m) for m in ms) for s, ms in manifest["egg_moves"].items()
+        }
 
     def level_up(self, species: int, form: int = 0) -> tuple[tuple[int, int], ...]:
         """The form's ``(level, move)`` pairs in learn order."""
@@ -63,6 +70,19 @@ class Learnsets:
         row = form_row(self._form_rows, species, form)
         i = self._tm_index(item)
         return i is not None and i in self._tm[row]
+
+    def evolutions(self, species: int) -> tuple[tuple[int, int, int], ...]:
+        """``(method, param, target species)`` per evolution; ``method`` indexes the
+        manifest's ``evolution_methods`` and ``param`` is the level, item, move or species
+        the method needs, else 0. Keyed by species id (``LoadSpeciesEvolutions``,
+        ``src/pokemon.c:4812``), so a form has the species' evolutions. A lookup only: prep
+        does not use it (Ruling 12)."""
+        return self._evolutions[species]
+
+    def egg_moves(self, species: int) -> tuple[int, ...]:
+        """The species' egg moves in table order, empty for a species with none (keyed by
+        species id; ``LoadSpeciesEggMoves``, ``src/overlay005/daycare.c:445``). A lookup only."""
+        return self._egg_moves.get(species, ())
 
 
 def load_learnsets(dir: Path = tables.DEFAULT) -> Learnsets:

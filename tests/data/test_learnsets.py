@@ -90,3 +90,9 @@ def test_form_rows_have_learnsets(learnsets, names):
     assert learnsets.relearner_moves(479, 1, form=2) == learnsets.relearner_moves(479, 1)
     with pytest.raises(ValueError, match="species 479 has no form 6"):
         learnsets.level_up(479, form=6)
+
+
+def test_learnsets_evolutions_and_egg_moves(learnsets):
+    assert learnsets.evolutions(1) == ((4, 16, 2),)
+    assert learnsets.evolutions(3) == ()  # Venusaur
+    assert learnsets.egg_moves(1)[:3] == (113, 130, 219) and learnsets.egg_moves(3) == ()
