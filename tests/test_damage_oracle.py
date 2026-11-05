@@ -7,7 +7,14 @@ damage-relevant ones (Blaze, Torrent, Overgrow, Rivalry, Simple, Unaware, Mold
 Breaker) are exercised through low HP, genders and stat stages, the others have no
 damage effect in either calculator. Matchups where @smogon/calc departs from the
 decomp are not generated; each such case is logged in docs/discrepancies.md
-("Damage oracle") with the decomp lines that settle it.
+("Damage oracle") with the decomp lines that settle it. Neither are matchups outside
+the engine's scope: a Cloud Nine battler in weather (Cloud Nine has no behaviour, as
+coverage refuses every weather but none; ``engine/hooks.py``).
+
+Hidden Power and Magnitude take their power (and Hidden Power its type) from the
+engine (``damage.hidden_power``; ``damage_table`` takes Magnitude at level 4), passed
+to @smogon/calc as move overrides. Fixed-damage moves (Night Shade, Seismic Toss, Bide)
+have no base power to compare: the tables carry a placeholder 1, @smogon/calc 0.
 
 Skips when ``node`` or the npm package is missing
 (``npm install --prefix tools/smogon_calc``).
@@ -26,8 +33,8 @@ import pytest
 
 from nuzline.data.spec import PokemonSpec
 from nuzline.data.tables import Names, Tables
-from nuzline.engine.damage import STATUS, damage_table
-from nuzline.engine.ids import AbilityId, Stat, Status, Type, Weather
+from nuzline.engine.damage import MAGNITUDE_POWER, STATUS, damage_table, hidden_power
+from nuzline.engine.ids import AbilityId, EffectId, Stat, Status, Type, Weather
 from nuzline.engine.state import make_state
 from tests.strategies import m1_move_pools, possible_genders
 
@@ -47,6 +54,7 @@ _WEATHER = {
 }
 _GENDER = {0: "M", 1: "F", 2: "N"}
 _CATEGORY = {"Physical": 0, "Special": 1}
+_NO_POWER = (EffectId.LEVEL_DAMAGE, EffectId.BIDE)  # fixed damage: no base power
 
 jit_damage_table = jax.jit(damage_table)
 
@@ -133,6 +141,21 @@ def _matchups(tables: Tables, names: Names) -> list[dict]:
         ability = {0: int(s.ability[0, 0]), 1: int(s.ability[1, 0])}
         if _smogon_departs(m, tables, ability, move):
             continue
+        if m["weather"] != Weather.NONE and AbilityId.CLOUD_NINE in ability.values():
+            continue  # outside the engine's scope (engine/hooks.py)
+        m["power"], m["type"] = int(tables.move_power[move]), int(tables.move_type[move])
+        effect = int(tables.move_effect[move])
+        if effect == EffectId.HIDDEN_POWER:
+            m["type"], m["power"] = (int(x) for x in hidden_power(np.asarray(a.ivs)))
+        elif effect == EffectId.MAGNITUDE:
+            m["power"] = int(MAGNITUDE_POWER[0])  # damage_table's default level 4
+        m["no_power"] = effect in _NO_POWER
+        overrides = {}
+        if effect in (EffectId.HIDDEN_POWER, EffectId.MAGNITUDE):
+            overrides = {
+                "basePower": m["power"],
+                "type": names.type_names[m["type"]].capitalize(),
+            }
         stages = np.zeros((2, 8), np.int8)  # overwrites a lead's Intimidate
         for side, key in ((0, "atk_stages"), (1, "def_stages")):
             stages[side, list(_BOOSTED)] = m[key]
@@ -149,6 +172,7 @@ def _matchups(tables: Tables, names: Names) -> list[dict]:
             "attacker": _smogon_mon(names, a, m["atk_stages"], hp, m["burn"]),
             "defender": _smogon_mon(names, d, m["def_stages"], None, False),
             "move": names.move_names[move],
+            "overrides": overrides,
             "crit": m["crit"],
             "weather": _WEATHER[m["weather"]],
             "reflect": m["reflect"],
@@ -201,8 +225,9 @@ def test_oracle_inputs_match_the_tables(tables, names, oracle):
         for side, key in ((0, "attacker"), (1, "defender")):
             ours = [int(s.max_hp[side, 0])] + [int(x) for x in s.stats[side, 0]]
             assert ours == [r[key][k] for k in _STAT_KEYS], _describe(m)
-        assert r["move"]["bp"] == int(tables.move_power[move]), _describe(m)
-        assert names.type(r["move"]["type"]) == int(tables.move_type[move]), _describe(m)
+        if not m["no_power"]:
+            assert r["move"]["bp"] == m["power"], _describe(m)
+        assert names.type(r["move"]["type"]) == m["type"], _describe(m)
         assert _CATEGORY[r["move"]["category"]] == int(tables.move_category[move])
 
 

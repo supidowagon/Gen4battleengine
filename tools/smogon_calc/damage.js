@@ -2,7 +2,8 @@
 // calculation. Reads a JSON array of matchups on stdin and writes one JSON result per
 // matchup to stdout:
 //   {damage: [16 ints], attacker: {stats}, defender: {stats}, move: {bp, type, category}}
-// A matchup is {attacker, defender, move, crit, weather, reflect, lightScreen}, where
+// A matchup is {attacker, defender, move, overrides, crit, weather, reflect, lightScreen}
+// (overrides: the move's {basePower, type}, e.g. Hidden Power's from the IVs), where
 // attacker/defender are {species, level, nature, ivs, evs, gender, ability, boosts,
 // status, curHP} in @smogon/calc's own option names. Install with
 // `npm install --prefix tools/smogon_calc`.
@@ -44,6 +45,7 @@ function one(m) {
   const move = new Move(gen, lookup(gen.moves, m.move, 'move', MOVE_ALIASES), {
     isCrit: m.crit,
     hits: 1,
+    overrides: m.overrides,
   });
   const field = new Field({
     gameType: 'Singles',
