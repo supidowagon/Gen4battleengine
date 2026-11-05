@@ -98,6 +98,16 @@ def test_learnsets_evolutions_and_egg_moves(learnsets):
     assert learnsets.egg_moves(1)[:3] == (113, 130, 219) and learnsets.egg_moves(3) == ()
 
 
+@pytest.mark.parametrize("species", [-1, 496, 10_000])
+def test_evolutions_and_egg_moves_check_the_species_range(learnsets, species):
+    # Final review: evolutions raised a bare KeyError, egg_moves returned () for any id.
+    for lookup in (learnsets.evolutions, learnsets.egg_moves):
+        with pytest.raises(ValueError, match=f"species {species} out of range"):
+            lookup(species)
+    assert learnsets.evolutions(0) == () and learnsets.egg_moves(0) == ()  # SPECIES_NONE
+    assert learnsets.evolutions(495) == () and learnsets.egg_moves(495) == ()  # Arceus
+
+
 def test_can_learn_tutor(learnsets):
     assert learnsets.can_learn_tutor(479, 189) is True  # Rotom, Mud-Slap
     assert learnsets.can_learn_tutor(479, 291) is False  # Rotom, Dive

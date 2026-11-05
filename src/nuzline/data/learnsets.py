@@ -100,13 +100,22 @@ class Learnsets:
         manifest's ``evolution_methods`` and ``param`` is the level, item, move or species
         the method needs, else 0. Keyed by species id (``LoadSpeciesEvolutions``,
         ``src/pokemon.c:4812``), so a form has the species' evolutions. A lookup only: prep
-        does not use it (Ruling 12)."""
-        return self._evolutions[species]
+        does not use it (Ruling 12). ``ValueError`` for a species id out of range."""
+        return self._evolutions.get(self._species_id(species), ())
 
     def egg_moves(self, species: int) -> tuple[int, ...]:
         """The species' egg moves in table order, empty for a species with none (keyed by
-        species id; ``LoadSpeciesEggMoves``, ``src/overlay005/daycare.c:445``). A lookup only."""
-        return self._egg_moves.get(species, ())
+        species id; ``LoadSpeciesEggMoves``, ``src/overlay005/daycare.c:445``). A lookup only.
+        ``ValueError`` for a species id out of range."""
+        return self._egg_moves.get(self._species_id(species), ())
+
+    def _species_id(self, species: int) -> int:
+        """``species`` as an int; ``ValueError`` outside the species ids, as ``form_row``
+        and ``Names`` raise."""
+        species = int(species)
+        if not 0 <= species < len(self._form_rows):
+            raise ValueError(f"species {species} out of range")
+        return species
 
     def tutor_moves(self) -> tuple[TutorMove, ...]:
         """The move tutors' table in ``sTeachableMoves`` order. A lookup only."""
