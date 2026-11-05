@@ -331,7 +331,11 @@ def test_budget_stops_after_first_round(tables, names, monkeypatch):
     assert result.stats.stopped == "budget"
     assert result.plan is None and not result.finalists
     setups = fakes.calls[0][0]
-    rows = [scored(_stats(fakes, s), 0, 0.0) for s in setups]
+    reg = search._Funnel(tables, names, prob, settings, KEY, None, float)  # same cost, tie rank
+    reg.register(setups)
+    rows = [
+        scored(_stats(fakes, s), 0, reg.cost[reg.index[s]], reg.tie[reg.index[s]]) for s in setups
+    ]
     assert result.chosen == setups[prep_order(rows)[0]]
     assert all(r.source == "screen" for r in result.ladder)
 
@@ -420,31 +424,23 @@ def _saturated(wins0: int, n: int, hp: float) -> ScreenStats:
     return ScreenStats((wins0, n - wins0, 0, 0, 0, 0, 0, 0), n - wins0, hp * n, 0.5 * n, False)
 
 
-def test_halving_does_not_cut_by_registration_order():
-    """A saturated variant round (finding prep-1): every neighbour at 6/6. The cut keeps the
-    ones with the most HP left, wherever their parent was registered; index order no longer
-    decides. (The parents do not compete in a variant round, finding N1.)"""
-    parents = 4
-    per_parent = 10
-    stats, cost = [], []
-    for p in range(parents):
-        for m in range(per_parent):
-            best = p == parents - 1 and m == per_parent - 1
-            stats.append(_saturated(6, 6, 0.9 if best else 0.3))
-            cost.append(0.0)
-    indices = list(range(len(stats)))
-    order = sorted(indices, key=lambda i: search.halving_key(stats[i], 0, cost[i], i))
-    assert order[0] == len(stats) - 1
-    # The point estimate first, whatever the counts; ties at equal everything go by index.
+def test_halving_key_ignores_hp_pp_and_index():
+    """Whole-party HP left favours big teams (bench members never lose HP); in the rung-0 gate
+    it dropped the two best setups (#933, #92 at 248/248). Only score, deaths, cost and the
+    seeded tie rank order a cut."""
+    hi, lo = _saturated(6, 6, 0.9), _saturated(6, 6, 0.3)
+    assert search.halving_key(hi, 0, 0.0, 5) == search.halving_key(lo, 0, 0.0, 5)
     assert search.halving_key(_saturated(761, 762, 0.9), 0, 0.0, 0) > search.halving_key(
-        _saturated(6, 6, 0.3), 0, 0.0, 1
-    )
-    assert search.halving_key(_saturated(5, 6, 0.3), 0, 0.0, 0) > search.halving_key(
-        _saturated(6, 6, 0.3), 0, 0.0, 1
-    )
-    assert search.halving_key(_saturated(6, 6, 0.3), 0, 0.0, 0) < search.halving_key(
-        _saturated(6, 6, 0.3), 0, 0.0, 1
-    )
+        lo, 0, 0.0, 1
+    )  # the point estimate first, whatever the counts
+    assert search.halving_key(lo, 0, 0.0, 9) < search.halving_key(lo, 0, 3.0, 0)  # cost, then tie
+    assert search.halving_key(lo, 0, 0.0, 1) < search.halving_key(lo, 0, 0.0, 2)
+
+
+def test_tie_rank_is_seeded_and_order_free():
+    assert search.tie_rank(b"seed", b"row") == search.tie_rank(b"seed", b"row")
+    assert search.tie_rank(b"seed", b"row") != search.tie_rank(b"seed2", b"row")
+    assert 0 <= search.tie_rank(b"", b"") < 2**64
 
 
 class Expansion:
@@ -454,13 +450,14 @@ class Expansion:
     count after ``m`` playouts; ``hp[i]`` is its mean HP left. A turn-0 state row is the setup
     index itself."""
 
-    def __init__(self, monkeypatch, parents, n_new, losses, hp, keep=8):
+    def __init__(self, monkeypatch, parents, n_new, losses, hp, keep=8, cost=None, tie=None):
         settings = PrepSettings(screen_n=8, variant_keep=keep, ladder_keep=4)
         funnel = search._Funnel(None, None, SimpleNamespace(deaths=0), settings, KEY, None, float)
         total = len(parents) + n_new
         funnel.setups = [f"setup {i}" for i in range(total)]
         funnel.rows = [np.asarray(i) for i in range(total)]
-        funnel.cost = [0.0] * total
+        funnel.cost = list(cost) if cost is not None else [0.0] * total
+        funnel.tie = list(tie) if tie is not None else list(range(total))
         empty = ScreenStats((0,) * len(deaths.BUCKETS), 0, 0.0, 0.0, False)
         funnel.stats = {i: (parents[i] if i < len(parents) else empty) for i in range(total)}
         self.parents = list(range(len(parents)))
@@ -488,15 +485,17 @@ class Expansion:
 @pytest.mark.parametrize("where", ["first", "last"])
 def test_expansion_keeps_a_better_neighbour_against_tight_parents(monkeypatch, where):
     """Finding N1: 8 parents at 0.997 over 4088 playouts (a second expansion), 60 neighbours
-    truly 0.99 and one truly 1.000 with the most HP left. The parents' tight lower bound beat
-    the 1.000 neighbour's ``n/n`` at every cut, wherever it was registered; it must survive."""
+    truly 0.99 and one truly 1.000. The parents' tight lower bound beat the 1.000 neighbour's
+    ``n/n`` at every cut, wherever it was registered; it must survive. Every other neighbour
+    loses one of its first 8, so the 1.000 neighbour leads from round 0 and is compared with the
+    parents at their 4088 playouts (Task 5)."""
     parents = [_saturated(4076, 4088, 0.6)] * 8
     n_new = 61
     best = 8 if where == "first" else 8 + n_new - 1
     hp = {i: (0.95 if i == best else 0.3 + 0.005 * (i % 60)) for i in range(8 + n_new)}
 
     def losses(i, m):
-        return 0 if i == best else m // 100  # about 0.99
+        return 0 if i == best else (0 if m == 0 else 1 + m // 100)  # about 0.99
 
     out = Expansion(monkeypatch, parents, n_new, losses, hp).run()
     assert best in out

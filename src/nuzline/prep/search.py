@@ -12,8 +12,9 @@ their union; afterwards ``S_k`` (``k`` = the requested rung, ``problem.deaths``)
 ``max(keep, ceil(|S_k| / 2))`` by rung ``k`` and every other ``S_j`` its top
 ``max(ladder_keep, ceil(|S_j| / 2))`` by rung ``j``. The order (``halving_key``): the point
 estimate first, then, among setups the playouts cannot tell apart (an easy fight saturates at
-``n/n`` for the first rounds), the quality the playouts still measure: ``deaths.tie_deaths``,
-mean HP left, mean PP left, then the lower cost, the lower setup index last. The rounds end
+``n/n`` for the first rounds), ``deaths.tie_deaths``, then the lower cost, the seeded tie rank
+(``tie_rank``) last. Mean HP and PP left are reported, not ranked: measured over the whole
+party they favour bigger teams. The rounds end
 once ``|S_k| <= keep``. In the team phase every setup competes at the same count. In a variant
 expansion the parents (the previous survivors, already screened to hundreds or thousands of
 playouts) are not halved: only the new neighbours compete in the rounds, each rung's
@@ -41,6 +42,7 @@ uninterrupted run would. The turn-0 states are rebuilt from the setups, not stor
 
 from __future__ import annotations
 
+import hashlib
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
@@ -95,16 +97,25 @@ __all__ = [
     "phase_id",
     "run_prep",
     "setup_label",
+    "tie_rank",
 ]
 
 RUNGS = deaths.MAX_DEATH_BUDGET + 1  # the ladder: 0..3 deaths
 
 
-def halving_key(stats: ScreenStats, j: int, cost: float, index: int) -> tuple:
+def tie_rank(seed: bytes, row: bytes) -> int:
+    """A setup's last tie-break: 8 bytes of blake2b over the run seed and its turn-0 state
+    bytes. Unbiased by enumeration order, cost or HP, and the same after a resume (rebuilt from
+    the setups, never stored)."""
+    return int.from_bytes(hashlib.blake2b(seed + row, digest_size=8).digest(), "little")
+
+
+def halving_key(stats: ScreenStats, j: int, cost: float, tie: int) -> tuple:
     """A halving round's sort key on rung ``j``, best first (module docstring): the point
-    estimate, ``deaths.tie_deaths``, mean HP and PP left, the cost, the setup ``index``."""
+    estimate, ``deaths.tie_deaths``, the cost, the seeded ``tie`` rank. HP and PP left are not
+    keys: measured over the whole party they favour bigger teams."""
     row = scored(stats, j, cost)
-    return (-row.score, row.tie_deaths, -row.hp_left, -row.pp_left, cost, index)
+    return (-row.score, row.tie_deaths, cost, tie)
 
 
 @dataclass(frozen=True)
@@ -286,6 +297,8 @@ class _Funnel:
         self.by_bytes: dict[bytes, int] = {}
         self.rows: list = []  # turn-0 state per registered setup (numpy, one row)
         self.cost: list[float] = []
+        self.seed = _seed_bytes(key)
+        self.tie: list[int] = []  # seeded tie rank per registered setup (``tie_rank``)
         self.stats: dict[int, ScreenStats] = {}
         self.excluded: dict[int, str] = {}
         self.playouts = 0
@@ -323,6 +336,7 @@ class _Funnel:
             self.index[new[i]] = idx
             self.rows.append(jax.tree.map(lambda f, i=i: np.asarray(f)[i], states))
             self.cost.append(costs[i])
+            self.tie.append(tie_rank(self.seed, blob))
             self.stats[idx] = ScreenStats((0,) * len(deaths.BUCKETS), 0, 0.0, 0.0, False)
             out.append(idx)
         return out
@@ -330,7 +344,7 @@ class _Funnel:
     # ------------------------------------------------------------------ ranking
 
     def row(self, i: int, j: int) -> Scored:
-        return scored(self.stats[i], j, self.cost[i])
+        return scored(self.stats[i], j, self.cost[i], self.tie[i])
 
     def ranked(self, indices: Sequence[int], j: int) -> list[int]:
         """``indices`` best first on rung ``j`` by the tie rule."""
@@ -339,7 +353,9 @@ class _Funnel:
 
     def top(self, indices: Sequence[int], j: int, count: int) -> list[int]:
         """The ``count`` best on rung ``j`` by ``halving_key``, ascending."""
-        best = sorted(indices, key=lambda i: halving_key(self.stats[i], j, self.cost[i], i))
+        best = sorted(
+            indices, key=lambda i: halving_key(self.stats[i], j, self.cost[i], self.tie[i])
+        )
         return sorted(best[:count])
 
     # ------------------------------------------------------------------ units
@@ -407,6 +423,7 @@ class _Funnel:
                 self.by_bytes[keys[i].tobytes()] = i
                 self.rows.append(jax.tree.map(lambda f, i=i: np.asarray(f)[i], states))
                 self.cost.append(setup_cost(self.problem, setup).weighted(self.weights))
+                self.tie.append(tie_rank(self.seed, keys[i].tobytes()))
         self.setups = setups
         self.index = {s: i for i, s in enumerate(setups)}
         self.known = set(setups)
@@ -599,6 +616,7 @@ class _Funnel:
             stats.mean_hp,
             stats.mean_pp,
             top.distribution.p_loss if top.distribution is not None else 0.0,
+            tie=self.tie[i],
         )
 
     def finalists_phase(self, pool: list[int], resume: dict | None = None) -> None:
@@ -706,13 +724,18 @@ class _Funnel:
         )
 
 
-def _seed_of(key) -> int:
-    """The run's seed as an integer: the key's own bits (a legacy or a typed key)."""
+def _seed_bytes(key) -> bytes:
+    """The run's seed as bytes: the key's own bits (a legacy or a typed key)."""
     try:
         data = jax.random.key_data(key)
     except (TypeError, ValueError):
         data = key
-    return int.from_bytes(np.asarray(data).tobytes(), "little")
+    return np.asarray(data).tobytes()
+
+
+def _seed_of(key) -> int:
+    """The run's seed as an integer (``_seed_bytes``)."""
+    return int.from_bytes(_seed_bytes(key), "little")
 
 
 def run_prep(

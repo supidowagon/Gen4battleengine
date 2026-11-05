@@ -9,6 +9,7 @@ only, since a resumed run makes fewer calls than the uninterrupted one.
 import dataclasses
 import json
 import os
+import time
 
 import jax
 import pytest
@@ -276,3 +277,23 @@ def test_setup_and_stats_json_round_trip(tables, names):
         assert setup_from_json(json.loads(json.dumps(setup_to_json(s)))) == s
     stats = ScreenStats((3, 1, 0, 0, 0, 0, 2, 0), 5, 1.25, 0.5, True)
     assert stats_from_json(json.loads(json.dumps(stats_to_json(stats)))) == stats
+
+
+def test_restore_rebuilds_the_same_tie_ranks(tables, names):
+    prob = make_problem(tables, names)
+    teams = team_setups(prob, 2)
+
+    def funnel(key=KEY):
+        return search._Funnel(tables, names, prob, SETTINGS, key, None, time.perf_counter)
+
+    f = funnel()
+    f.register(teams)
+    g = funnel()
+    g.restore(f.snapshot()["funnel"])
+    assert g.tie == f.tie and len(set(f.tie)) == len(f.tie)
+    h = funnel()
+    h.register(list(reversed(teams)))
+    assert sorted(h.tie) == sorted(f.tie)  # registration order does not change any rank
+    other = funnel(jax.random.PRNGKey(8))
+    other.register(teams)
+    assert other.tie != f.tie
