@@ -267,15 +267,24 @@ def defender_ability(tables: Tables, state: BattleState, ability_guess) -> jnp.n
     true ability when the AI has learned it or when it is Shadow Tag, Magnet Pull or
     Arena Trap; else the guessed species slot ``ability_guess`` when the species has two
     abilities; else its only one. The engine has no ability suppression (Gastro Acid),
-    so the ``ABILITY_NONE`` case never applies."""
+    so the ``ABILITY_NONE`` case never applies.
+
+    The true ability is the form's (its personal row: ``BoxPokemon_SetGiratinaForm``
+    recomputes it, ``src/pokemon.c:4391-4400``); the guess is the base species' two
+    abilities, whatever the form, since ``AICmd_LoadBattlerAbility`` reads
+    ``SpeciesData_GetSpeciesValue(species, SPECIES_DATA_ABILITY_1/2)``
+    (``trainer_ai.c:1191-1192``; ``AICmd_CheckBattlerAbility`` likewise, ``:1236-1237``),
+    which loads the personal data of the species id (``src/pokemon.c:2283``)."""
     d = state.active[0].astype(_I32)
-    row = tables.species_form_row[state.species[0, d].astype(_I32), state.form[0, d].astype(_I32)]
-    both = tables.species_abilities_decomp[row.astype(_I32)].astype(_I32)
-    true = both[state.ability_slot[0, d].astype(_I32)]
+    species = state.species[0, d].astype(_I32)
+    row = tables.species_form_row[species, state.form[0, d].astype(_I32)]
+    true = tables.species_abilities_decomp[row.astype(_I32), state.ability_slot[0, d].astype(_I32)]
+    true = true.astype(_I32)
     known = (state.ai_ability_known[d] > 0) | jnp.isin(true, _TRAPPING)
-    guess = both[jnp.clip(jnp.asarray(ability_guess, _I32), 0, 1)]
-    only = jnp.where(both[0] != 0, both[0], both[1])
-    resolved = jnp.where((both[0] != 0) & (both[1] != 0), guess, only)
+    base = tables.species_abilities_decomp[species].astype(_I32)
+    guess = base[jnp.clip(jnp.asarray(ability_guess, _I32), 0, 1)]
+    only = jnp.where(base[0] != 0, base[0], base[1])
+    resolved = jnp.where((base[0] != 0) & (base[1] != 0), guess, only)
     return jnp.where(known, true, resolved)
 
 
