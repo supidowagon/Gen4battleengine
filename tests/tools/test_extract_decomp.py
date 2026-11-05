@@ -80,6 +80,16 @@ def test_species_exp_rate():
     assert species["abra"]["exp_rate"] == 3  # EXP_RATE_MEDIUM_SLOW
 
 
+def test_exp_yield(out):
+    sp = json.loads((out / "species.json").read_text("utf-8"))
+    assert (sp[1]["exp_yield"], sp[487]["exp_yield"]) == (64, 220)  # Bulbasaur, Giratina
+
+
+def test_ai_effect_equals_effect_in_vanilla(out):
+    moves = json.loads((out / "moves.json").read_text("utf-8"))
+    assert all(m["ai_effect"] == m["effect"] for m in moves)
+
+
 def test_exp_tables():
     t = extract_exp_tables(DECOMP)
     assert len(t) == 8 and all(len(r) == 101 for r in t)

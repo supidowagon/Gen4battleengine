@@ -183,6 +183,7 @@ def extract_species(decomp: Path) -> list[dict]:
                 "weight_hg": _weight_hg(dex, const, path),
                 "base_friendship": int(d["base_friendship"]),
                 "exp_rate": exp_rate_id(d["exp_rate"]),
+                "exp_yield": int(d["base_exp_reward"]),
             }
         )
     return out
@@ -247,6 +248,9 @@ def extract_moves(decomp: Path) -> list[dict]:
                 "priority": int(d["priority"]),
                 "target": d["range"],
                 "effect": effect_id(d["effect"]["type"]),
+                # The id the game stores (MoveTable.effect) and the AI scripts read; equal
+                # to ``effect`` in vanilla (Kaizo may remap ``effect`` onto mechanics).
+                "ai_effect": effect_id(d["effect"]["type"]),
                 "effect_chance": int(d["effect"]["chance"]),
                 "flags": list(d["flags"]),
             }

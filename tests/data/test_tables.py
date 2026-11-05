@@ -203,5 +203,10 @@ def test_growth_tables(tables, names):
     assert int(tables.exp_table[0, 100]) == 1_000_000
 
 
+def test_ai_effect_and_exp_yield_arrays(tables, names):
+    assert int(tables.species_exp_yield[names.species("Bulbasaur")]) == 64
+    assert int(tables.move_ai_effect[names.move("Stealth Rock")]) == 266
+
+
 def test_charmap_loaded(names):
     assert names.charmap[0x0145] == "a"

@@ -59,7 +59,7 @@ def read_species(rom: RomFiles, decomp: Path, charmap: dict[int, str]) -> list[d
     """``species.json`` rows for ids ``0..495``.
 
     ``SpeciesData`` (``include/struct_defs/species.h:39-58``): stats 0-5, types 6-7,
-    gender ratio 16, base friendship 18, exp rate 19, abilities 22-23. Names come from
+    base exp reward 9, gender ratio 16, base friendship 18, exp rate 19, abilities 22-23. Names come from
     ``TEXT_BANK_SPECIES_NAME``.
     """
     members = fixed_members(rom.narc(PERSONAL_NARC), PERSONAL_SIZE, PERSONAL_NARC)
@@ -99,6 +99,7 @@ def read_species(rom: RomFiles, decomp: Path, charmap: dict[int, str]) -> list[d
                 "weight_hg": weights[sid],
                 "base_friendship": m[18],
                 "exp_rate": check(sid, "exp rate", m[19], EXP_RATES, 19),
+                "exp_yield": m[9],  # baseExpReward, include/struct_defs/species.h:43
             }
         )
     return out

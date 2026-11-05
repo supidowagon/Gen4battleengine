@@ -25,6 +25,7 @@ class Tables(NamedTuple):
     species_gender: jnp.ndarray  # int16[S], decomp gender ratio
     species_friendship: jnp.ndarray  # int16[S] (140 does not fit int8)
     species_exp_rate: jnp.ndarray  # int8[S], 0 medium fast .. 5 slow (exp_rates.txt order)
+    species_exp_yield: jnp.ndarray  # int16[S], SpeciesData.baseExpReward
     exp_table: jnp.ndarray  # int32[8,101], [rate, level] -> experience
     move_power: jnp.ndarray  # int16[M]
     move_type: jnp.ndarray  # int8[M]
@@ -34,7 +35,8 @@ class Tables(NamedTuple):
     move_priority: jnp.ndarray  # int8[M]
     move_target: jnp.ndarray  # int8[M], index into manifest target_names
     move_effect: jnp.ndarray  # int16[M], ids.EffectId
-    move_effect_chance: jnp.ndarray  # int8[M]
+    move_effect_chance: jnp.ndarray  # int8[M]; a chance-0 non-certain secondary packs as PLAIN
+    move_ai_effect: jnp.ndarray  # int16[M], the decomp battle effect id the AI scripts read
     move_param: jnp.ndarray  # int16[M,3]
     move_flags: jnp.ndarray  # int16[M], ids.MoveFlag bits
     type_chart: jnp.ndarray  # int8[T,T], tenths

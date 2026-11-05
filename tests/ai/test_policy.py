@@ -207,6 +207,11 @@ def test_transcribed_move_effects_match_the_decomp():
         assert moves[move]["effect"] == effect, moves[move]["name"]
 
 
+def test_transcribed_move_effects_match_tables(tables):
+    for move, effect in commands.MOVE_EFFECTS.items():
+        assert int(tables.move_ai_effect[move]) == effect
+
+
 def test_effectiveness_class(tables, names):
     """roark.md 7.2: 40 through ApplyTypeChart with STAB, then mapped to a class."""
     cls = commands.TypeMulti

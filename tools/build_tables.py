@@ -25,6 +25,13 @@ Encodings:
 * ``species_exp_rate[species]``: growth rate id (``generated/exp_rates.txt`` order: 0 medium
   fast, 1 erratic, 2 fluctuating, 3 medium slow, 4 fast, 5 slow); ``exp_table[rate, level]``
   is the experience for ``level`` 0..100 (``exp_tables.csv``, same rate order).
+* ``species_exp_yield[species]``: ``SpeciesData.baseExpReward`` (int16).
+* ``move_ai_effect[move]``: the decomp battle effect id as stored (``MoveTable.effect``),
+  unmapped, which is what the AI scripts read; ``move_effect`` is the engine's mapped id.
+* A ``SECONDARY_*`` move that is not in ``CERTAIN_SECONDARY_EFFECTS`` and has
+  ``effect_chance`` 0 never fires its proc, so ``move_effect`` packs it as ``PLAIN`` with
+  params ``(0, 0, 0)`` (``move_effect_chance`` stays 0, ``move_ai_effect`` keeps the id). A
+  certain effect with a nonzero chance is a ``BuildError``.
 * ``manifest["charmap"]``: text code (hex string) -> character, for decoding nicknames.
 * ``species_friendship`` is int16, not int8: base friendship reaches 140.
 * ``species_abilities_decomp[species, slot]``: the decomp's own ability ids (0 =
@@ -112,11 +119,13 @@ def _move_effect(move: dict) -> tuple[int, tuple[int, int, int]]:
     eid, params = DECOMP_EFFECT_TO_ID.get(move["effect"], (EffectId.UNSUPPORTED, (0, 0, 0)))
     if eid in SECONDARY:
         certain = move["effect"] in CERTAIN_SECONDARY_EFFECTS
-        if certain != (move["effect_chance"] == 0):
+        if certain and move["effect_chance"] != 0:
             raise BuildError(
-                f"move {move['name']!r}: effect {move['effect']} certain={certain} "
+                f"move {move['name']!r}: effect {move['effect']} is certain "
                 f"but effect_chance={move['effect_chance']}"
             )
+        if not certain and move["effect_chance"] == 0:
+            return int(EffectId.PLAIN), (0, 0, 0)  # the proc never fires
     if move["name"] in TYPE_CHART_STATUS_MOVES:
         if eid != EffectId.STATUS_FOE:
             raise BuildError(f"move {move['name']!r}: type-checked but not STATUS_FOE")
@@ -201,6 +210,7 @@ def build_arrays(inter: Path) -> tuple[dict[str, np.ndarray], dict]:
         "species_gender": _arr([s["gender_ratio"] for s in species], np.int16, "gender"),
         "species_friendship": _arr([s["base_friendship"] for s in species], np.int16, "friendship"),
         "species_exp_rate": _arr([s["exp_rate"] for s in species], np.int8, "exp rate"),
+        "species_exp_yield": _arr([s["exp_yield"] for s in species], np.int16, "exp yield"),
         "exp_table": _arr(exp_tables, np.int32, "exp table"),
         "move_power": _arr([m["power"] for m in moves], np.int16, "power"),
         "move_type": _arr([m["type"] for m in moves], np.int8, "move type"),
@@ -211,6 +221,7 @@ def build_arrays(inter: Path) -> tuple[dict[str, np.ndarray], dict]:
         "move_target": _arr([MOVE_TARGETS.index(m["target"]) for m in moves], np.int8, "target"),
         "move_effect": _arr([e for e, _ in effects], np.int16, "effect"),
         "move_effect_chance": _arr([m["effect_chance"] for m in moves], np.int8, "chance"),
+        "move_ai_effect": _arr([m["ai_effect"] for m in moves], np.int16, "ai effect"),
         "move_param": _arr([p for _, p in effects], np.int16, "move param"),
         "move_flags": _arr([_move_flags(m) for m in moves], np.int16, "move flags"),
         "type_chart": _arr(chart, np.int8, "type chart"),

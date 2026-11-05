@@ -56,6 +56,7 @@ def decode_move(decomp: Path, move_id: int, m: bytes, name: str = "") -> dict:
         "priority": prio,
         "target": ranges[rng],
         "effect": effect,
+        "ai_effect": effect,  # both come from MoveTable.effect in the game's own data
         "effect_chance": chance,
         "flags": [n for bit, n in enumerate(flag_names) if flags >> bit & 1],
     }
