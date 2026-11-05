@@ -16,7 +16,7 @@ from nuzline.prep import search
 from nuzline.prep.problem import Resources
 from nuzline.prep.screen import ScreenStats, prep_order, scored
 from nuzline.prep.search import PrepSettings, phase_id, run_prep
-from nuzline.prep.setups import neighbours, protected_slots, team_setups
+from nuzline.prep.setups import neighbours, protected_slots, setup_cost, team_setups
 from nuzline.search import deaths
 from nuzline.search.rows import row_bytes
 from nuzline.search.stage_b import ActionValue, PlanNode, SolveResult
@@ -598,3 +598,24 @@ def test_expansion_compares_parents_and_neighbours_at_equal_n(monkeypatch):
 def test_ladder_round():
     got = [search.ladder_round(8, n) for n in (1, 24, 25, 248, 762, 1016, 4088)]
     assert got == [1, 1, 2, 4, 6, 6, 8]
+
+
+@pytest.mark.parametrize("scales", [0, 1])
+def test_a_reserved_heart_scale_is_never_spent(tables, names, monkeypatch, scales):
+    """Reserving the Heart Scale leaves 0 in the problem's bag (problem.resources_without);
+    no setup the funnel registers may then use the Move Relearner."""
+    party = sample_party(names)
+    bite = names.move("Bite")
+    cands = [candidate(names, party[i], i, relearner=(bite,)) for i in range(3)]
+    prob = problem(tables, names, cands, resources=Resources(scales, (), (), ()), levelled=[()] * 3)
+    fakes = Fakes(monkeypatch, falling)
+    settings = PrepSettings(
+        screen_n=4, team_keep=2, variant_keep=2, variant_rounds=1, max_depth=0, max_team=2
+    )
+    run_prep(tables, names, prob, settings, KEY)
+    spent = [setup_cost(prob, s).heart_scales for s in fakes.order]
+    assert fakes.order
+    if scales == 0:
+        assert not any(spent)
+    else:
+        assert any(spent)  # the neighbour space does offer the relearner when allowed
