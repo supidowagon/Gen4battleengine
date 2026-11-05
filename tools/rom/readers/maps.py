@@ -36,6 +36,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
 
+from tools.battle_scripts import BattleStructure, Op, battle_structures, placed_enemies, var_ids
 from tools.extract_decomp import (
     START_CONDITIONS_FILE,
     WEATHER_CONDITION,
@@ -326,33 +327,6 @@ def command_table(decomp: Path) -> CommandTable:
     return CommandTable(table, constants, decoders, var_ids(decomp)[PARTNER_VAR])
 
 
-def var_ids(decomp: Path) -> dict[str, int]:
-    """Var/flag constant -> id from ``generated/vars_flags.txt`` (a metang enum,
-    ``generated/meson.build:112``): a bare name is one more than the previous entry, and
-    ``NAME = X`` sets it to the integer or earlier name ``X``, as a C enum counts."""
-    path = Path(decomp) / "generated" / "vars_flags.txt"
-    out: dict[str, int] = {}
-    value = -1
-    for lineno, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-        line = raw.strip()
-        if not line:
-            continue
-        m = re.fullmatch(r"([A-Za-z_]\w*)(?:\s*=\s*(\w+))?", line)
-        if not m:
-            raise ReaderError(f"{path}:{lineno}: unparsed line {raw!r}")
-        name, expr = m.groups()
-        if expr is None:
-            value += 1
-        elif expr.isdecimal():
-            value = int(expr)
-        elif expr in out:
-            value = out[expr]
-        else:
-            raise ReaderError(f"{path}:{lineno}: {expr!r} is not defined earlier")
-        out[name] = value
-    return out
-
-
 def script_entries(script: bytes, name: str = "script") -> list[int]:
     """Absolute offsets of a script file's entries (``scrcmd.inc:5105-5116``): u32
     ``label-.-4`` offsets until the u16 ``0xFD13``.
@@ -411,41 +385,10 @@ NOT_CONSTANT = -1
 _UNSET = frozenset({NOT_CONSTANT})
 
 
-def script_battles(
-    script: bytes,
-    table: CommandTable,
-    name: str = "script",
-    unresolved: list[tuple[int, int, int]] | None = None,
-) -> set[int]:
-    """Trainer ids placed on the map by the script, walking by control flow from every
-    header entry.
-
-    * Every operand of a reached ``StartTrainerBattle``, ``StartTagBattle`` or
-      ``StartFirstBattle`` counts (Ruling 12). 0 is no trainer.
-    * An operand at or above ``VARS_START`` is a variable. It resolves only to the
-      constants assigned to it (``SetVarFromValue``, which the ``SetVar`` macro assembles
-      to for a constant, ``scrcmd.inc:309-315``) on the paths that reach that battle
-      command: each path carries var -> values, a ``SetVarFromValue`` replaces the
-      variable's values, and paths that meet at a command (with the same call stack) are
-      merged. ``Call``/``CallIf`` push the return offset and ``Return`` pops it; an empty
-      stack ends the path, as ``ScriptContext_Pop`` returns NULL
-      (``src/field_script_context.c:112-135``). Controller ruling A (Task 12): the
-      file-wide rule ("every ``SetVarFromValue`` of the variable in the file") picked up
-      item and accessory ids written to ``VAR_0x8004`` for unrelated reasons and
-      misplaced 12 vanilla trainers (e.g. 390 Arthur from ``ITEM_TM63`` in Veilstone
-      City, 447 Willie from ``ITEM_SUPER_ROD`` in the Fight Area). Variables written by
-      other commands are not constants and add nothing. A battle operand variable that
-      some walked path reaches with no constant assigned is appended to ``unresolved``
-      (when given) as ``(offset of the battle command, variable, number of constants the
-      other paths give)``, sorted, so a caller can report it: whatever that path holds in
-      the variable is a trainer this walk does not place.
-    * A constant assigned to ``VAR_PARTNER_TRAINER_ID`` on a reached path places that
-      trainer too (controller ruling B): it makes the trainer the player's walking
-      partner, who joins the battles on that map. The battle setup reads it through
-      ``SystemVars_GetPartnerTrainerID`` (``src/system_vars.c:60-63``) for script
-      trainer battles (``src/scrcmd_trainer.c:133-134``) and wild battles
-      (``src/overlay006/wild_encounters.c:344,531,661``).
-    """
+def _walk(script: bytes, table: CommandTable, name: str):
+    """K1's control-flow walk from every header entry (``script_battles``): the decoded
+    commands it reaches (offset -> (opcode, operands, end)), the trainers it places, and
+    each battle operand variable's values ((offset, variable) -> values)."""
     oc = table.opcode
     branch = {oc[c] for c in _BRANCHES}
     calls = {oc["SCRCMD_CALL"], oc["SCRCMD_CALLIF"]}
@@ -505,6 +448,45 @@ def script_battles(
             continue
         work.append((end, stack, env))
     out.discard(0)
+    return decoded, out, operands
+
+
+def script_battles(
+    script: bytes,
+    table: CommandTable,
+    name: str = "script",
+    unresolved: list[tuple[int, int, int]] | None = None,
+) -> set[int]:
+    """Trainer ids placed on the map by the script, walking by control flow from every
+    header entry.
+
+    * Every operand of a reached ``StartTrainerBattle``, ``StartTagBattle`` or
+      ``StartFirstBattle`` counts (Ruling 12). 0 is no trainer.
+    * An operand at or above ``VARS_START`` is a variable. It resolves only to the
+      constants assigned to it (``SetVarFromValue``, which the ``SetVar`` macro assembles
+      to for a constant, ``scrcmd.inc:309-315``) on the paths that reach that battle
+      command: each path carries var -> values, a ``SetVarFromValue`` replaces the
+      variable's values, and paths that meet at a command (with the same call stack) are
+      merged. ``Call``/``CallIf`` push the return offset and ``Return`` pops it; an empty
+      stack ends the path, as ``ScriptContext_Pop`` returns NULL
+      (``src/field_script_context.c:112-135``). Controller ruling A (Task 12): the
+      file-wide rule ("every ``SetVarFromValue`` of the variable in the file") picked up
+      item and accessory ids written to ``VAR_0x8004`` for unrelated reasons and
+      misplaced 12 vanilla trainers (e.g. 390 Arthur from ``ITEM_TM63`` in Veilstone
+      City, 447 Willie from ``ITEM_SUPER_ROD`` in the Fight Area). Variables written by
+      other commands are not constants and add nothing. A battle operand variable that
+      some walked path reaches with no constant assigned is appended to ``unresolved``
+      (when given) as ``(offset of the battle command, variable, number of constants the
+      other paths give)``, sorted, so a caller can report it: whatever that path holds in
+      the variable is a trainer this walk does not place.
+    * A constant assigned to ``VAR_PARTNER_TRAINER_ID`` on a reached path places that
+      trainer too (controller ruling B): it makes the trainer the player's walking
+      partner, who joins the battles on that map. The battle setup reads it through
+      ``SystemVars_GetPartnerTrainerID`` (``src/system_vars.c:60-63``) for script
+      trainer battles (``src/scrcmd_trainer.c:133-134``) and wild battles
+      (``src/overlay006/wild_encounters.c:344,531,661``).
+    """
+    _, out, operands = _walk(script, table, name)
     if unresolved is not None:
         unresolved.extend(
             sorted(
@@ -514,6 +496,69 @@ def script_battles(
             )
         )
     return out
+
+
+# Commands kept as ops (tools/battle_scripts.py), by constant; the rest are `other`.
+_KEPT = {
+    "SCRCMD_STARTTRAINERBATTLE": "StartTrainerBattle",
+    "SCRCMD_STARTTAGBATTLE": "StartTagBattle",
+    "SCRCMD_SETVARFROMVALUE": "SetVar",
+    "SCRCMD_RETURN": "Return",
+    "SCRCMD_END": "End",
+    "SCRCMD_GETPLAYERGENDER": "GetPlayerGender",
+    "SCRCMD_GETPLAYERSTARTERSPECIES": "GetPlayerStarterSpecies",
+    "SCRCMD_SETHASPARTNER": "SetHasPartner",
+}
+_JUMPS = {"SCRCMD_GOTO": "GoTo", "SCRCMD_CALL": "Call"}  # (offset) -> (label)
+GOTOIF_EQ = 1  # GoToIfEq's condition (asm/macros/scrcmd.inc:5005-5008)
+
+
+def script_ops(script: bytes, table: CommandTable, name: str = "script") -> list[Op]:
+    """The ``battle_scripts.Op`` list of a script file, in address order.
+
+    The commands are those K1's walk (``_walk``, as ``script_battles``) reaches from the
+    header entries; an unknown opcode raises ``ScriptDecodeError``. Each header entry and
+    each branch target gets a ``label`` op ``f"@{offset}"`` in front of it, so a run that
+    falls off one block into a labelled one continues as in the decomp text, and
+    ``GoTo``/``Call`` name their target's label. ``CompareVarToValue v, x`` directly
+    followed by ``GoToIf 1, off`` (no label between) is ``GoToIfEq v, x, "@off"``, as the
+    ``GoToIfEq`` macro assembles (``asm/macros/scrcmd.inc:5005-5008``); another
+    condition, or a ``CompareVarToValue`` not directly followed by its ``GoToIf``, is
+    ``other``. ``SetVarFromValue`` is ``SetVar``.
+    """
+    decoded, _, _ = _walk(script, table, name)
+    oc = table.opcode
+    branch = {oc[c] for c in _BRANCHES}
+    kept = {oc[c]: n for c, n in _KEPT.items()}
+    jumps = {oc[c]: n for c, n in _JUMPS.items()}
+    compare, goto_if = oc["SCRCMD_COMPAREVARTOVALUE"], oc["SCRCMD_GOTOIF"]
+    labels = set(script_entries(script, name))
+    labels |= {end + values[-1] for op, values, end in decoded.values() if op in branch}
+    ops: list[Op] = []
+    last_end = -1
+    fused: set[int] = set()
+    for pos in sorted(decoded):
+        if pos < last_end:
+            raise ScriptDecodeError(name, pos, None, f"overlaps the command ending {last_end:#x}")
+        op, values, end = decoded[pos]
+        last_end = end
+        if pos in labels:
+            ops.append(Op("label", (f"@{pos}",)))
+        if pos in fused:
+            continue
+        if op == compare and end in decoded and end not in labels:
+            nxt, nvalues, nend = decoded[end]
+            if nxt == goto_if and nvalues[0] == GOTOIF_EQ:
+                ops.append(Op("GoToIfEq", (values[0], values[1], f"@{nend + nvalues[-1]}")))
+                fused.add(end)
+                continue
+        if op in kept:
+            ops.append(Op(kept[op], tuple(values)))
+        elif op in jumps:
+            ops.append(Op(jumps[op], (f"@{end + values[-1]}",)))
+        else:
+            ops.append(Op("other", (table[op][0],)))
+    return ops
 
 
 def _events_object_scripts(member: bytes, index: int) -> list[int]:
@@ -602,6 +647,55 @@ def _map_conditions(rom: RomFiles, decomp: Path, symbols: SymbolMap, weathers: l
     return out
 
 
+def _map_header_rows(rom: RomFiles, symbols: SymbolMap) -> list[tuple[int, int, int]]:
+    """(scripts archive id, events archive id, weather) of each ``sMapHeaders`` entry."""
+    raw = symbol_bytes(rom, symbols, MAP_HEADER_SYMBOL)
+    if len(raw) % MAP_HEADER_SIZE:
+        raise ReaderError(f"{MAP_HEADER_SYMBOL}: {len(raw)} bytes, not whole {MAP_HEADER_SIZE}s")
+    return [
+        (
+            struct.unpack_from("<H", raw, base + HEADER_SCRIPTS)[0],
+            struct.unpack_from("<H", raw, base + HEADER_EVENTS)[0],
+            raw[base + HEADER_WEATHER],
+        )
+        for base in range(0, len(raw), MAP_HEADER_SIZE)
+    ]
+
+
+def _object_trainers(member: bytes, index: int) -> list[int]:
+    """The trainer ids of one ``zone_event.narc`` member's object events: their battle
+    scripts (``SINGLE_BATTLE_SCRIPTS``, ``DOUBLE_BATTLE_SCRIPTS``)."""
+    out = []
+    for s in _events_object_scripts(member, index):
+        if SINGLE_BATTLE_SCRIPTS <= s < DOUBLE_BATTLE_SCRIPTS:
+            out.append(s - SINGLE_BATTLE_SCRIPTS + 1)
+        elif DOUBLE_BATTLE_SCRIPTS <= s < VISIBLE_ITEM_SCRIPTS:
+            out.append(s - DOUBLE_BATTLE_SCRIPTS + 1)
+    return out
+
+
+def _rematches(rom: RomFiles, symbols: SymbolMap, n_trainers: int) -> list[tuple[int, list[int]]]:
+    """(base trainer, its rematch trainers) per ``gVsSeekerRematchData`` row."""
+    rematch = symbol_bytes(rom, symbols, REMATCH_SYMBOL)
+    row = 2 * REMATCH_SLOTS
+    if len(rematch) % row:
+        raise ReaderError(f"{REMATCH_SYMBOL}: {len(rematch)} bytes, not whole {row}-byte rows")
+    out = []
+    for off in range(0, len(rematch), row):
+        base, *rematches = struct.unpack_from(f"<{REMATCH_SLOTS}H", rematch, off)
+        if not 0 < base < n_trainers:
+            raise ReaderError(f"{REMATCH_SYMBOL} offset {off}: unknown base trainer {base}")
+        kept = []
+        for t in rematches:
+            if t in REMATCH_NONE:
+                continue
+            if not 0 < t < n_trainers:
+                raise ReaderError(f"{REMATCH_SYMBOL} offset {off}: unknown trainer {t}")
+            kept.append(t)
+        out.append((base, kept))
+    return out
+
+
 def trainer_maps(
     rom: RomFiles,
     decomp: Path,
@@ -616,9 +710,7 @@ def trainer_maps(
     given), once per script file, in script member order.
     """
     require_vanilla_map_headers(rom)
-    raw = symbol_bytes(rom, symbols, MAP_HEADER_SYMBOL)
-    if len(raw) % MAP_HEADER_SIZE:
-        raise ReaderError(f"{MAP_HEADER_SYMBOL}: {len(raw)} bytes, not whole {MAP_HEADER_SIZE}s")
+    rows = _map_header_rows(rom, symbols)
     scripts = rom.narc(SCRIPTS_NARC)
     events = rom.narc(EVENTS_NARC)
     table = command_table(decomp)
@@ -632,20 +724,12 @@ def trainer_maps(
             raise ReaderError(f"map header {header}: {source} names unknown trainer {trainer}")
         where.setdefault(trainer, set()).add(header)
 
-    for header in range(len(raw) // MAP_HEADER_SIZE):
-        base = header * MAP_HEADER_SIZE
-        script_id, events_id = (
-            struct.unpack_from("<H", raw, base + HEADER_SCRIPTS)[0],
-            struct.unpack_from("<H", raw, base + HEADER_EVENTS)[0],
-        )
-        weathers.append(raw[base + HEADER_WEATHER])
+    for header, (script_id, events_id, weather) in enumerate(rows):
+        weathers.append(weather)
         if events_id >= len(events) or script_id >= len(scripts):
             raise ReaderError(f"map header {header}: events {events_id} / scripts {script_id}")
-        for s in _events_object_scripts(events[events_id], events_id):
-            if SINGLE_BATTLE_SCRIPTS <= s < DOUBLE_BATTLE_SCRIPTS:
-                place(s - SINGLE_BATTLE_SCRIPTS + 1, header, f"{EVENTS_NARC} {events_id}")
-            elif DOUBLE_BATTLE_SCRIPTS <= s < VISIBLE_ITEM_SCRIPTS:
-                place(s - DOUBLE_BATTLE_SCRIPTS + 1, header, f"{EVENTS_NARC} {events_id}")
+        for t in _object_trainers(events[events_id], events_id):
+            place(t, header, f"{EVENTS_NARC} {events_id}")
         if script_id not in battles:
             sites: list[tuple[int, int, int]] = []
             battles[script_id] = script_battles(
@@ -655,19 +739,8 @@ def trainer_maps(
         for t in battles[script_id]:
             place(t, header, f"{SCRIPTS_NARC} {script_id}")
 
-    rematch = symbol_bytes(rom, symbols, REMATCH_SYMBOL)
-    row = 2 * REMATCH_SLOTS
-    if len(rematch) % row:
-        raise ReaderError(f"{REMATCH_SYMBOL}: {len(rematch)} bytes, not whole {row}-byte rows")
-    for off in range(0, len(rematch), row):
-        base, *rematches = struct.unpack_from(f"<{REMATCH_SLOTS}H", rematch, off)
-        if not 0 < base < n_trainers:
-            raise ReaderError(f"{REMATCH_SYMBOL} offset {off}: unknown base trainer {base}")
+    for base, rematches in _rematches(rom, symbols, n_trainers):
         for t in rematches:
-            if t in REMATCH_NONE:
-                continue
-            if not 0 < t < n_trainers:
-                raise ReaderError(f"{REMATCH_SYMBOL} offset {off}: unknown trainer {t}")
             where.setdefault(t, set()).update(where.get(base, set()))
     if unresolved is not None:
         unresolved.extend(sorted(found))
@@ -700,3 +773,41 @@ def trainer_start_conditions(
             derived |= conditions[weathers[header]]
         out.append(_start_condition(const, derived, fixed))
     return out
+
+
+def rom_battle_structures(
+    rom: RomFiles, decomp: Path, symbols: SymbolMap, n_trainers: int
+) -> dict[int, BattleStructure]:
+    """``battle_scripts.battle_structures`` of the ROM's map scripts: each map header's
+    ``script_ops``, and for each header whose script runs ``SetHasPartner`` its placed
+    enemies (Ruling 3: trainer object events, the script's battle enemies, their Vs. Seeker
+    rematches, less the partner ids). Vanilla only (``require_vanilla_map_headers``); an
+    inconsistent structure raises ``ReaderError``."""
+    require_vanilla_map_headers(rom)
+    rows = _map_header_rows(rom, symbols)
+    scripts = rom.narc(SCRIPTS_NARC)
+    events = rom.narc(EVENTS_NARC)
+    table = command_table(Path(decomp))
+    rematches: dict[int, list[int]] = {}
+    for base, ts in _rematches(rom, symbols, n_trainers):
+        rematches.setdefault(base, []).extend(ts)
+    ops: dict[int, list[Op]] = {}
+    by_header: dict[int, list[Op]] = {}
+    placed: dict[int, set[int]] = {}
+    try:
+        for header, (script_id, events_id, _) in enumerate(rows):
+            if events_id >= len(events) or script_id >= len(scripts):
+                raise ReaderError(f"map header {header}: events {events_id} / scripts {script_id}")
+            if script_id not in ops:
+                ops[script_id] = script_ops(
+                    scripts[script_id], table, f"{SCRIPTS_NARC} member {script_id}"
+                )
+            by_header[header] = ops[script_id]
+            if any(op.name == "SetHasPartner" for op in ops[script_id]):
+                objects = set(_object_trainers(events[events_id], events_id))
+                placed[header] = placed_enemies(
+                    ops[script_id], objects, rematches, f"map header {header}"
+                )
+        return battle_structures(by_header, placed)
+    except ValueError as e:
+        raise ReaderError(f"battle structures: {e}") from e

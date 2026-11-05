@@ -80,6 +80,28 @@ def test_roark_is_a_single_battle(tables, names):
     assert "Roark: a triple battle (battle format UNSUPPORTED)" in r.missing
 
 
+@pytest.mark.parametrize(
+    ("name", "fmt"), [("Mars", "multi"), ("Ismael", "double_two_trainer"), ("Jack", "multi")]
+)
+def test_multi_and_two_trainer_battles_are_refused(tables, names, name, fmt):
+    # Mars @ Spear Pillar (tag), Artist Ismael (restaurant pair), Bug Catcher Jack (Eterna
+    # Forest, Cheryl)
+    t = next(t for t in load_trainers(INTERMEDIATE) if t.name == name and t.format == fmt)
+    r = check_opponent(tables, names, t, build_trainer_party(t, _inter()), 0)
+    assert f"{name}: a {fmt} battle (battle format UNSUPPORTED)" in r.missing
+    assert r.level == Support.NONE
+
+
+def test_partner_trainer_is_not_refused_for_its_format(tables, names):
+    # Cheryl walks with the player (Ruling 3); her own row stays a single battle.
+    cheryls = [t for t in load_trainers(INTERMEDIATE) if t.name == "Cheryl"]
+    assert cheryls
+    for cheryl in cheryls:
+        assert (cheryl.format, cheryl.opponent_2, cheryl.partner) == ("single", None, ())
+        r = check_opponent(tables, names, cheryl, build_trainer_party(cheryl, _inter()), 0)
+        assert not any("battle format" in m for m in r.missing)
+
+
 def test_start_condition_argument_is_checked(tables, names):
     r = check_coverage(
         tables, names, sample_party(names), roark_trainer(), roark_party(names), Weather.RAIN

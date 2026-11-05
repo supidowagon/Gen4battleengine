@@ -33,7 +33,9 @@ items) and plan 1b (Task 2b: trainer items; Task 3: Roark's AI flags) implement:
 * weather: only ``Weather.NONE``. Rain, sun, sandstorm, hail and fog need the
   field-condition pass and are refused (plan ruling);
 * battle format: only "single". The engine models one battler per side, so a trainer
-  whose header is a double battle (``Trainer.format``) is refused.
+  whose header is a double battle, who is fought beside a second enemy trainer
+  ("double_two_trainer") or who is fought while the player has a partner ("multi", tag
+  battles and walking partners) is refused (``Trainer.format``).
 
 ``check_coverage`` also runs the AI's own refusals (``ai.policy.ai_refusals``: opponent
 moves without transcribed script paths, too many script-roll sites, type-chart
@@ -102,8 +104,13 @@ IMPLEMENTED_WEATHER: dict[Weather, Support] = {
     Weather.HAIL: Support.NONE,
     Weather.FOG: Support.NONE,
 }
-# Trainer.format (trainers.json, TrainerHeader.battleType).
-IMPLEMENTED_FORMATS: dict[str, Support] = {"single": Support.EXACT, "double": Support.NONE}
+# Trainer.format (trainers.json: TrainerHeader.battleType, then the field scripts).
+IMPLEMENTED_FORMATS: dict[str, Support] = {
+    "single": Support.EXACT,
+    "double": Support.NONE,
+    "double_two_trainer": Support.NONE,
+    "multi": Support.NONE,
+}
 # Trainer.start_condition (trainers.json) as a Weather.
 START_CONDITIONS = {
     "none": Weather.NONE,

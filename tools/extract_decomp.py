@@ -31,6 +31,16 @@ import math
 import re
 from pathlib import Path
 
+from tools.battle_scripts import (
+    Op,
+    battle_structures,
+    has_partner,
+    is_var,
+    placed_enemies,
+    structure_fields,
+    var_ids,
+)
+
 # Our stat order (index = ids.Stat) as keys of the decomp's species `base_stats`.
 STAT_KEYS = ("hp", "attack", "defense", "special_attack", "special_defense", "speed")
 
@@ -524,6 +534,33 @@ def _weather_conditions(decomp: Path) -> dict[str, set[str]]:
     return out
 
 
+def _object_trainers(decomp: Path, header: dict[str, str]) -> list[str]:
+    """The TRAINER_* scripts of a map's object events (``res/field/events/<id>.json``)."""
+    events = decomp / "res" / "field" / "events" / f"{header['eventsArchiveID']}.json"
+    return [
+        obj["script"]
+        for obj in _load_json(events)["object_events"]
+        if str(obj["script"]).startswith("TRAINER_")
+    ]
+
+
+def _rematches(decomp: Path) -> dict[str, list[str]]:
+    """Base TRAINER_* -> its Vs. Seeker rematch TRAINER_* ids (``gVsSeekerRematchData``,
+    ``src/overlay005/vs_seeker.c``)."""
+    path = decomp / "src" / "overlay005" / "vs_seeker.c"
+    out: dict[str, list[str]] = {}
+    for lineno, line in _c_array_body(path, r"gVsSeekerRematchData\[\]\s*=\s*\{"):
+        s = line.strip()
+        if not s or s.startswith("//") or re.fullmatch(r"NoUniqueRematches\(\w+\),", s):
+            continue
+        m = re.fullmatch(r"\{([^}]*)\},?", s)
+        if not m:
+            raise ExtractError(f"{path}:{lineno}: unparsed rematch line {line!r}")
+        base, *rematches = [t.strip() for t in m.group(1).split(",")]
+        out.setdefault(base, []).extend(t for t in rematches if t.startswith("TRAINER_"))
+    return out
+
+
 def _trainer_maps(decomp: Path, headers: dict[str, dict[str, str]]) -> dict[str, set[str]]:
     """TRAINER_* -> the map headers where a battle with that trainer starts.
 
@@ -534,28 +571,146 @@ def _trainer_maps(decomp: Path, headers: dict[str, dict[str, str]]) -> dict[str,
     """
     where: dict[str, set[str]] = {}
     for header, h in headers.items():
-        events = decomp / "res" / "field" / "events" / f"{h['eventsArchiveID']}.json"
-        for obj in _load_json(events)["object_events"]:
-            if str(obj["script"]).startswith("TRAINER_"):
-                where.setdefault(obj["script"], set()).add(header)
+        for trainer in _object_trainers(decomp, h):
+            where.setdefault(trainer, set()).add(header)
         script = decomp / "res" / "field" / "scripts" / f"{h['scriptsArchiveID']}.s"
         for line in script.read_text(encoding="utf-8").splitlines():
             if _BATTLE_SCRIPT_LINE.fullmatch(line):
                 for trainer in re.findall(r"\bTRAINER_\w+", line):
                     where.setdefault(trainer, set()).add(header)
-    path = decomp / "src" / "overlay005" / "vs_seeker.c"
-    for lineno, line in _c_array_body(path, r"gVsSeekerRematchData\[\]\s*=\s*\{"):
-        s = line.strip()
-        if not s or s.startswith("//") or re.fullmatch(r"NoUniqueRematches\(\w+\),", s):
-            continue
-        m = re.fullmatch(r"\{([^}]*)\},?", s)
-        if not m:
-            raise ExtractError(f"{path}:{lineno}: unparsed rematch line {line!r}")
-        base, *rematches = [t.strip() for t in m.group(1).split(",")]
+    for base, rematches in _rematches(decomp).items():
         for t in rematches:
-            if t.startswith("TRAINER_"):
-                where.setdefault(t, set()).update(where.get(base, set()))
+            where.setdefault(t, set()).update(where.get(base, set()))
     return where
+
+
+# Field script commands kept as ops (tools/battle_scripts.py): name -> the kinds of its
+# operands. "trainer" and "var" operands must resolve. A "value" that is a variable, or a
+# constant outside _script_symbols (OBJ_EVENT_GFX_*, DIR_*, ITEM_*, ...), makes the op
+# `other`: the ROM assembles the first as a different command (SetVarFromVar,
+# CompareVarToVar; asm/macros/scrcmd.inc:178-184,309-315), and the evaluator raises on an
+# `other` it meets, so neither is ever read as a value.
+_SCRIPT_OPS = {
+    "StartTrainerBattle": ("trainer", "trainer"),
+    "StartTagBattle": ("trainer", "trainer", "trainer"),
+    "SetVar": ("var", "value"),
+    "SetVarFromValue": ("var", "value"),
+    "GoToIfEq": ("var", "value", "label"),
+    "GoTo": ("label",),
+    "Call": ("label",),
+    "Return": (),
+    "End": (),
+    "GetPlayerGender": ("var",),
+    "GetPlayerStarterSpecies": ("var",),
+    "SetHasPartner": (),
+}
+# A constant with one of these prefixes names an id that must resolve.
+_STRICT_PREFIXES = ("TRAINER_", "SPECIES_", "GENDER_", "VAR_")
+
+
+def _script_symbols(decomp: Path) -> dict[str, int]:
+    """Constants a kept op may name: trainers, species and genders (their
+    ``generated/*.txt`` line), variables (``battle_scripts.var_ids``), TRUE and FALSE."""
+    out = {"TRUE": 1, "FALSE": 0}
+    for name, prefix in (("trainers", "TRAINER_"), ("species", "SPECIES_"), ("genders", "GENDER_")):
+        out.update({c: i for i, c in enumerate(_constants(decomp, name, prefix))})
+    out.update({k: v for k, v in var_ids(decomp).items() if is_var(v)})
+    return out
+
+
+def _script_file_ops(path: Path, symbols: dict[str, int]) -> list[Op]:
+    """One ``.s`` file's ops in file order: a label per ``Name:`` line, an op per command
+    line (``_SCRIPT_OPS``, else ``other``). The file's own ``#define``s are expanded."""
+    defines: dict[str, str] = {}
+    ops: list[Op] = []
+
+    def value(token: str, where: str, depth: int = 0) -> int | None:
+        token = token.strip()
+        if re.fullmatch(r"\d+|0[xX][0-9a-fA-F]+", token):
+            return int(token, 0)
+        if token in defines and depth < 8:
+            return value(defines[token], where, depth + 1)
+        if token in symbols:
+            return symbols[token]
+        if token.startswith(_STRICT_PREFIXES):
+            raise ExtractError(f"{where}: unknown constant {token!r}")
+        return None
+
+    text = re.sub(r"/\*.*?\*/", "", path.read_text(encoding="utf-8"), flags=re.DOTALL)
+    for lineno, raw in enumerate(text.splitlines(), 1):
+        line = re.split(r"//|@", raw, maxsplit=1)[0].strip()  # `@` comments (GNU as, ARM)
+        where = f"{path}:{lineno}"
+        if not line:
+            continue
+        if line.startswith("#"):
+            m = re.fullmatch(r"#define\s+(\w+)\s+(.+)", line)
+            if m:
+                defines[m.group(1)] = m.group(2).strip()
+            elif not line.startswith("#include"):
+                raise ExtractError(f"{where}: unhandled directive {line!r}")
+            continue
+        m = re.fullmatch(r"(\w+):", line)
+        if m:
+            ops.append(Op("label", (m.group(1),)))
+            continue
+        name, _, rest = line.partition(" ")
+        kinds = _SCRIPT_OPS.get(name)
+        if kinds is None:
+            ops.append(Op("other", (name,)))
+            continue
+        args = [a.strip() for a in rest.split(",")] if rest.strip() else []
+        if name == "StartTrainerBattle" and len(args) == 1:
+            args.append("0")  # enemyTrainer2=0 (scrcmd.inc:1427)
+        if len(args) != len(kinds):
+            raise ExtractError(f"{where}: {name} takes {len(kinds)} operands: {line!r}")
+        out: list[int | str] | None = []
+        for kind, a in zip(kinds, args, strict=True):
+            if kind == "label":
+                if not re.fullmatch(r"\w+", a):
+                    raise ExtractError(f"{where}: {name} target {a!r} is not a label")
+                out.append(a)
+                continue
+            v = value(a, where)
+            if kind == "value":
+                if v is None or is_var(v):
+                    out = None
+                    break
+            elif v is None:
+                raise ExtractError(f"{where}: {name} operand {a!r} is not a {kind}")
+            elif kind == "var" and not is_var(v):
+                raise ExtractError(f"{where}: {name} operand {a!r} is not a variable")
+            out.append(v)
+        if out is None:
+            ops.append(Op("other", (name,)))
+        else:
+            ops.append(Op("SetVar" if name == "SetVarFromValue" else name, tuple(out)))
+    return ops
+
+
+def _script_ops(decomp: Path, files) -> dict[str, list[Op]]:
+    """``res/field/scripts/<file>.s`` -> its ops, for each script archive id in ``files``."""
+    symbols = _script_symbols(decomp)
+    return {
+        f: _script_file_ops(decomp / "res" / "field" / "scripts" / f"{f}.s", symbols)
+        for f in sorted(set(files))
+    }
+
+
+def _placed_enemies(
+    decomp: Path, headers: dict[str, dict[str, str]], scripts: dict[str, list[Op]]
+) -> dict[str, set[int]]:
+    """MAP_HEADER_* -> its placed enemy trainer ids (Ruling 3), for each header whose script
+    runs ``SetHasPartner``: trainer object events, the script's battle enemies, their
+    Vs. Seeker rematches, less the partner ids (``battle_scripts.placed_enemies``)."""
+    trainer = _index(_constants(decomp, "trainers", "TRAINER_"), "trainer")
+    rematches = {trainer(b): [trainer(t) for t in ts] for b, ts in _rematches(decomp).items()}
+    out = {}
+    for header, h in headers.items():
+        ops = scripts[h["scriptsArchiveID"]]
+        if has_partner(ops):
+            objects = {trainer(t) for t in _object_trainers(decomp, h)}
+            out[header] = placed_enemies(ops, objects, rematches, header)
+    return out
 
 
 def _start_condition_overrides(path: Path, trainers: list[str]) -> dict[str, str]:
@@ -633,8 +788,14 @@ def extract_trainers(decomp_root: Path, out_dir: Path) -> None:
       keeps the species' default moveset at its level. No held item is item 0.
     * ``format`` is "double" when the file sets ``double_battle`` and "single"
       otherwise: trainerproc (``tools/dataproc/src/trainerproc.c``) turns it into
-      ``TrainerHeader.battleType`` (``BATTLE_TYPE_DOUBLES`` or 0). Tag and multi
-      battles that a script assembles from single-format trainers are not marked.
+      ``TrainerHeader.battleType`` (``BATTLE_TYPE_DOUBLES`` or 0). The map scripts
+      override it (``tools/battle_scripts.py``, plan Rulings 2-5): "multi" for an enemy
+      of a tag battle or one placed on a walking-partner map, else
+      "double_two_trainer" for an operand of a ``StartTrainerBattle`` with two trainer
+      constants. ``opponent_2`` is the other enemy of that pair or tag battle (else
+      null), and ``partner`` the teams the player's partner can field
+      ([{``trainer``, ``starter``, ``player_gender``}], a field the team does not
+      depend on being null; empty unless "multi").
     * ``start_condition`` comes from the weather of the maps where the trainer is
       fought (``_trainer_maps``, ``_weather_conditions``), assuming the player has
       not cleared fog with Defog (``src/field_map_change.c``). A trainer the decomp
@@ -661,6 +822,14 @@ def extract_trainers(decomp_root: Path, out_dir: Path) -> None:
     headers = _map_headers(decomp)
     weather = _weather_conditions(decomp)
     where = _trainer_maps(decomp, headers)
+    scripts = _script_ops(decomp, [h["scriptsArchiveID"] for h in headers.values()])
+    try:
+        structures = battle_structures(
+            {name: scripts[h["scriptsArchiveID"]] for name, h in headers.items()},
+            _placed_enemies(decomp, headers, scripts),
+        )
+    except ValueError as e:
+        raise ExtractError(f"battle structures: {e}") from e
     for header, h in headers.items():
         if h["weather"] not in weather:
             raise ExtractError(f"{header}: unknown weather {h['weather']!r}")
@@ -720,7 +889,9 @@ def extract_trainers(decomp_root: Path, out_dir: Path) -> None:
                 "ai_flags": ai_flags,
                 "items": [item_id(i) for i in d["items"]],
                 "party": members,
-                "format": "double" if d["double_battle"] else "single",
+                **structure_fields(
+                    structures.get(tid), "double" if d["double_battle"] else "single"
+                ),
                 "start_condition": _start_condition(const, derived, overrides),
             }
         )

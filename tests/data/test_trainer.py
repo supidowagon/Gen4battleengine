@@ -5,6 +5,7 @@ import pytest
 
 from nuzline.data.trainer import (
     IntermediateData,
+    PartnerVariant,
     build_trainer_party,
     default_moves,
     difficulty_to_ivs,
@@ -127,3 +128,18 @@ def test_trainers_without_a_format_are_refused(tmp_path):
     (tmp_path / "trainers.json").write_text(json.dumps([{"id": 0}]), encoding="utf-8")
     with pytest.raises(ValueError, match="no battle format"):
         load_trainers(tmp_path)
+
+
+def test_trainers_without_a_battle_structure_are_refused(tmp_path):
+    # An intermediate extracted before two-trainer, tag and partner battles were recorded.
+    row = {"id": 0, "format": "single", "opponent_2": None}
+    (tmp_path / "trainers.json").write_text(json.dumps([row]), encoding="utf-8")
+    with pytest.raises(ValueError, match="has no battle structure: re-run"):
+        load_trainers(tmp_path)
+
+
+@needs_inter
+def test_partner_variants_load():
+    grunt = next(t for t in load_trainers(INTER) if t.format == "multi" and len(t.partner) == 6)
+    assert isinstance(grunt.partner[0], PartnerVariant) and grunt.opponent_2 is not None
+    assert {p.player_gender for p in grunt.partner} == {0, 1}

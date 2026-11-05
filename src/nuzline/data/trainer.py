@@ -49,9 +49,25 @@ class TrainerMon:
 
 
 @dataclass(frozen=True)
+class PartnerVariant:
+    """One team the player's partner can field in a multi battle: ``trainer`` is the
+    partner's trainer id for a player of gender ``player_gender`` (0 male, 1 female) whose
+    starter is species ``starter``. A field the team does not depend on is None."""
+
+    trainer: int
+    starter: int | None
+    player_gender: int | None
+
+
+@dataclass(frozen=True)
 class Trainer:
     """One ``trainers.json`` entry; ``trainer_class`` is the JSON's ``class``.
-    ``format`` is the battle format of the trainer's header, "single" or "double"."""
+
+    ``format`` is the battle format: "single" or "double" from the trainer's header, or
+    "double_two_trainer" (fought beside ``opponent_2`` against the player alone) or
+    "multi" (the player fights beside a partner, whose possible teams are ``partner``)
+    from the field scripts (``tools/battle_scripts.py``). ``opponent_2`` is the other
+    enemy of a two-trainer or tag battle, else None."""
 
     id: int
     name: str
@@ -63,6 +79,8 @@ class Trainer:
     party: tuple[TrainerMon, ...]
     start_condition: str
     format: str
+    opponent_2: int | None = None
+    partner: tuple[PartnerVariant, ...] = ()
 
 
 def _mon(d: dict) -> TrainerMon:
@@ -88,6 +106,10 @@ def load_trainers(dir: Path) -> list[Trainer]:
         raise ValueError(
             f"{Path(dir) / 'trainers.json'} has no battle format: re-run tools/extract_decomp.py"
         )
+    if rows and not {"opponent_2", "partner"} <= rows[0].keys():
+        raise ValueError(
+            f"{Path(dir) / 'trainers.json'} has no battle structure: re-run tools/extract_decomp.py"
+        )
     return [
         Trainer(
             id=t["id"],
@@ -100,6 +122,10 @@ def load_trainers(dir: Path) -> list[Trainer]:
             party=tuple(_mon(m) for m in t["party"]),
             start_condition=t["start_condition"],
             format=t["format"],
+            opponent_2=t["opponent_2"],
+            partner=tuple(
+                PartnerVariant(p["trainer"], p["starter"], p["player_gender"]) for p in t["partner"]
+            ),
         )
         for t in rows
     ]
