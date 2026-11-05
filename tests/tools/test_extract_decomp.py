@@ -6,8 +6,10 @@ import pytest
 from tools.extract_decomp import (
     extract_charmap,
     extract_exp_tables,
+    extract_forms,
     extract_species,
     extract_static,
+    species_form_rows,
 )
 
 DECOMP = Path("external/pokeplatinum")
@@ -137,3 +139,38 @@ def test_tm_learnsets_match_by_tm(out):
     assert teaches("TM10") == "Hidden Power"
     assert teaches("HM08") == "Rock Climb"
     assert teaches("Potion") is None
+
+
+def test_forms_registry_order_matches_narc_index():
+    f = extract_forms(DECOMP)
+    assert [(x["species"], x["form"], x["row"]) for x in f][:3] == [
+        (386, 1, 496),
+        (386, 2, 497),
+        (386, 3, 498),
+    ]
+    assert [x["row"] for x in f] == list(range(496, 508))
+    wash = next(x for x in f if (x["species"], x["form"]) == (479, 2))
+    assert wash["row"] == 504 and wash["base_stats"] == [50, 65, 107, 105, 107, 86]
+    assert wash["name"] == "Wash"
+    sp = extract_species(DECOMP)
+    assert set(wash) - {"species", "form", "row"} == set(sp[479])
+    origin = next(x for x in f if x["row"] == 501)
+    assert origin["weight_hg"] == sp[487]["weight_hg"]  # weight from the base species
+
+
+def test_form_grid():
+    g = species_form_rows(DECOMP)
+    assert len(g) == 496 and all(len(r) == 28 for r in g)
+    assert g[479][:7] == [479, 503, 504, 505, 506, 507, -1] and g[201][27] == 201
+    assert g[201][0] == 201
+    assert g[493][17] == 493 and g[493][18] == -1 and g[1][1] == -1
+
+
+def test_form_intermediates(out):
+    forms = json.loads((out / "forms.json").read_text("utf-8"))
+    assert forms == extract_forms(DECOMP)
+    assert json.loads((out / "form_rows.json").read_text("utf-8")) == species_form_rows(DECOMP)
+    learn = json.loads((out / "learnsets.json").read_text("utf-8"))
+    tm = json.loads((out / "tm_learnsets.json").read_text("utf-8"))
+    assert sorted(map(int, learn)) == list(range(508)) == sorted(map(int, tm))
+    assert tm["504"] == _by_tm_indices("rotom/forms/wash")

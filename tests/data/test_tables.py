@@ -1,10 +1,14 @@
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 import jax.numpy as jnp
 import numpy as np
 import pytest
 
+from nuzline.data.forms import form_row
+from nuzline.data.tables import Tables
 from nuzline.engine.ids import AbilityId, EffectId, ItemId, MoveFlag, MoveTarget, Stat, Status
 
 TABLES = Path(__file__).resolve().parents[2] / "data" / "gen4_platinum"
@@ -210,3 +214,38 @@ def test_ai_effect_and_exp_yield_arrays(tables, names):
 
 def test_charmap_loaded(names):
     assert names.charmap[0x0145] == "a"
+
+
+def test_form_tables(tables, names):
+    origin = form_row(tables.species_form_row, names.species("Giratina"), 1)
+    assert origin == 501 and int(tables.species_abilities_decomp[origin, 0]) == names.ability(
+        "Levitate"
+    )
+    assert tables.species_base_stats.shape[0] == 508 and len(names.species_names) == 496
+    assert tables.species_form_row.shape == (496, 28) and tables.species_form_row.dtype == jnp.int16
+    for f in Tables._fields:
+        if f.startswith("species_") and f != "species_form_row":
+            assert getattr(tables, f).shape[0] == 508, f
+    assert names.form(479, "wash") == 2 and names.form_names(479)[1] == "Heat"
+    assert names.form_names(479)[0] == names.species_names[479] and names.form(479, "rotom") == 0
+    assert names.form_names(1) == (names.species_names[1],)
+    assert names.form(479, 0) == 0
+    assert names.species_abilities(487, 1) == (names.ability("Levitate"), 0)
+    assert names.species_base_friendship(479, 2) == 70
+    with pytest.raises(ValueError, match="species 479 has no form 6"):
+        names.species_abilities(479, 6)
+    with pytest.raises(ValueError, match="Heat"):
+        names.form(479, "Plasma")
+
+
+def test_form_row_lookup():
+    grid = [[0, -1], [1, 5]]
+    assert form_row(grid, 1, 1) == 5 and form_row(np.asarray(grid), 1, 0) == 1
+    for species, form in ((0, 1), (1, -1), (1, 28)):
+        with pytest.raises(ValueError, match=f"species {species} has no form {form}"):
+            form_row(grid, species, form)
+
+
+def test_import_forms_does_not_import_jax():
+    code = "import sys, nuzline.data.forms; assert 'jax' not in sys.modules, 'jax imported'"
+    subprocess.run([sys.executable, "-c", code], check=True)

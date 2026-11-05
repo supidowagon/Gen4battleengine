@@ -161,32 +161,187 @@ def _species_json(decomp: Path, const: str) -> tuple[Path, dict]:
     return path, _load_json(path)
 
 
-def extract_species(decomp: Path) -> list[dict]:
-    species = _constants(decomp, "species", "SPECIES_")
+def _row_fields(decomp: Path):
+    """A function ``(path, data) -> dict`` of the personal-row fields a species or form
+    ``data.json`` holds itself (every ``extract_species`` key except name and weight)."""
     type_id = _index(_constants(decomp, "pokemon_types", "TYPE_"), "type")
     ability_id = _index(_constants(decomp, "abilities", "ABILITY_"), "ability")
     exp_rate_id = _index(_constants(decomp, "exp_rates", "EXP_RATE_"), "exp rate")
     ratios = _gender_ratios(decomp)
-    out = []
-    for const in species:
-        path, d = _species_json(decomp, const)
-        dex = d["pokedex_data"]
+
+    def fields(path: Path, d: dict) -> dict:
         if d["gender_ratio"] not in ratios:
             raise ExtractError(f"{path}: unknown gender ratio {d['gender_ratio']!r}")
+        return {
+            "base_stats": [int(d["base_stats"][k]) for k in STAT_KEYS],
+            "types": [type_id(t) for t in d["types"]],
+            "abilities": [ability_id(a) for a in d["abilities"]],
+            "gender_ratio": ratios[d["gender_ratio"]],
+            "base_friendship": int(d["base_friendship"]),
+            "exp_rate": exp_rate_id(d["exp_rate"]),
+            "exp_yield": int(d["base_exp_reward"]),
+        }
+
+    return fields
+
+
+def extract_species(decomp: Path) -> list[dict]:
+    fields = _row_fields(decomp)
+    out = []
+    for const in _constants(decomp, "species", "SPECIES_"):
+        path, d = _species_json(decomp, const)
+        dex = d["pokedex_data"]
+        row = fields(path, d)
         out.append(
             {
                 "name": dex["en"]["name"],
-                "base_stats": [int(d["base_stats"][k]) for k in STAT_KEYS],
-                "types": [type_id(t) for t in d["types"]],
-                "abilities": [ability_id(a) for a in d["abilities"]],
-                "gender_ratio": ratios[d["gender_ratio"]],
+                "base_stats": row["base_stats"],
+                "types": row["types"],
+                "abilities": row["abilities"],
+                "gender_ratio": row["gender_ratio"],
                 "weight_hg": _weight_hg(dex, const, path),
-                "base_friendship": int(d["base_friendship"]),
-                "exp_rate": exp_rate_id(d["exp_rate"]),
-                "exp_yield": int(d["base_exp_reward"]),
+                "base_friendship": row["base_friendship"],
+                "exp_rate": row["exp_rate"],
+                "exp_yield": row["exp_yield"],
             }
         )
     return out
+
+
+FORM_REGISTRY = Path("res/pokemon/form_registry.json")
+FORMS_H = Path("include/constants/forms.h")
+POKEMON_C = Path("src/pokemon.c")
+FORM_SLOTS = 28  # UNOWN_FORM_COUNT, the widest *_FORM_COUNT (include/constants/forms.h)
+_REGISTRY_KINDS = ("data", "icon", "sprite")
+_NARC_INDEX_CASE = re.compile(
+    r"case (SPECIES_[A-Z0-9_]+):\s*if \(monForm && monForm <= ([A-Z0-9_]+)_FORM_COUNT - 1\) "
+    r"\{\s*monSpecies = \((\d+) - 1\) \+ monForm;"
+)
+
+
+def _form_counts(decomp: Path, species: list[str]) -> dict[int, int]:
+    """Species id -> ``<SPECIES>_FORM_COUNT`` (``include/constants/forms.h``)."""
+    path = decomp / FORMS_H
+    out = {}
+    text = path.read_text("utf-8")
+    pattern = r"^#define ([A-Z0-9_]+)_FORM_COUNT\s+(\d+)\s*$"
+    for m in re.finditer(pattern, text, re.MULTILINE):
+        const = f"SPECIES_{m.group(1)}"
+        if const not in species:
+            raise ExtractError(f"{path}: {m.group(1)}_FORM_COUNT names no species")
+        count = int(m.group(2))
+        if not 1 <= count <= FORM_SLOTS:
+            raise ExtractError(f"{path}: {m.group(1)}_FORM_COUNT {count} is out of range")
+        out[species.index(const)] = count
+    return out
+
+
+def _data_forms(decomp: Path) -> list[tuple[int, int, str, int]]:
+    """``(species id, form, registry key, personal row)`` for every data form, in
+    ``res/pokemon/form_registry.json`` order (rows from 496 on, Ruling 6). A species'
+    forms are numbered from 1 in its registry entry's key order (``__`` keys are flags).
+    Checked against ``Pokemon_GetFormNarcIndex`` (``src/pokemon.c:4929-4962``)."""
+    species = _constants(decomp, "species", "SPECIES_")
+    counts = _form_counts(decomp, species)
+    path = decomp / FORM_REGISTRY
+    out = []
+    for name, entry in _load_json(path).items():
+        const = f"SPECIES_{name.upper()}"
+        if const not in species:
+            raise ExtractError(f"{path}: {name!r} names no species")
+        sid = species.index(const)
+        keys = [k for k in entry if not k.startswith("__")]
+        for form, key in enumerate(keys, 1):
+            if entry[key] not in _REGISTRY_KINDS:
+                raise ExtractError(f"{path}: {name}.{key} has unknown kind {entry[key]!r}")
+            if form >= counts.get(sid, 1):
+                raise ExtractError(f"{path}: {name}.{key} is form {form}, beyond the form count")
+            if entry[key] == "data":
+                out.append((sid, form, key, len(species) + len(out)))
+    _check_narc_index(decomp, species, counts, out)
+    return out
+
+
+def _check_narc_index(decomp: Path, species: list[str], counts: dict[int, int], forms) -> None:
+    """Raise unless ``Pokemon_GetFormNarcIndex`` maps exactly ``forms``' (species, form)
+    pairs to their rows (``src/pokemon.c:4929-4962``: ``(base - 1) + monForm``)."""
+    path = decomp / POKEMON_C
+    text = path.read_text("utf-8")
+    m = re.search(r"^static int Pokemon_GetFormNarcIndex\([^;{]*\)\s*\{", text, re.MULTILINE)
+    start = m.end() if m else -1
+    end = text.find("\n}\n", start)
+    if start < 0 or end < 0:
+        raise ExtractError(f"{path}: no Pokemon_GetFormNarcIndex")
+    body = text[start:end]
+    want = {}
+    cases = _NARC_INDEX_CASE.findall(body)
+    if len(cases) != body.count("case SPECIES_"):
+        raise ExtractError(f"{path}: Pokemon_GetFormNarcIndex has a case this parser misses")
+    for const, prefix, base in cases:
+        if const not in species or const != f"SPECIES_{prefix}":
+            raise ExtractError(f"{path}: Pokemon_GetFormNarcIndex case {const} uses {prefix}")
+        sid = species.index(const)
+        for form in range(1, counts.get(sid, 1)):
+            want[(sid, form)] = int(base) - 1 + form
+    got = {(sid, form): row for sid, form, _, row in forms}
+    if got != want:
+        raise ExtractError(
+            f"{path}: Pokemon_GetFormNarcIndex rows {sorted(want.items())} differ from "
+            f"{FORM_REGISTRY}'s data forms {sorted(got.items())}"
+        )
+
+
+def _form_json(decomp: Path, const: str, key: str) -> tuple[Path, dict]:
+    path = decomp / "res" / "pokemon" / _stem(const, "SPECIES_") / "forms" / key / "data.json"
+    return path, _load_json(path)
+
+
+def extract_forms(decomp: Path) -> list[dict]:
+    """``forms.json``: one entry per data form in personal-row order (Ruling 6), with
+    ``extract_species``' row fields from ``res/pokemon/<species>/forms/<key>/data.json``.
+    The weight is the base species' (form files have no ``pokedex_data``), and the name is
+    the registry key title-cased."""
+    species = _constants(decomp, "species", "SPECIES_")
+    fields = _row_fields(decomp)
+    out = []
+    for sid, form, key, row in _data_forms(decomp):
+        base_path, base = _species_json(decomp, species[sid])
+        path, d = _form_json(decomp, species[sid], key)
+        out.append(
+            {
+                "species": sid,
+                "form": form,
+                "row": row,
+                "name": key.title(),
+                **fields(path, d),
+                "weight_hg": _weight_hg(base["pokedex_data"], species[sid], base_path),
+            }
+        )
+    return out
+
+
+def species_form_rows(decomp: Path) -> list[list[int]]:
+    """``form_rows.json``: ``[species][form]`` -> personal row (Ruling 6): the data row of
+    a data form, the species itself for a form below its ``*_FORM_COUNT`` without data
+    (form 0 of every species), -1 beyond the count; ``FORM_SLOTS`` columns."""
+    species = _constants(decomp, "species", "SPECIES_")
+    counts = _form_counts(decomp, species)
+    grid = [
+        [sid if form < counts.get(sid, 1) else -1 for form in range(FORM_SLOTS)]
+        for sid in range(len(species))
+    ]
+    for sid, form, _, row in _data_forms(decomp):
+        grid[sid][form] = row
+    return grid
+
+
+def _personal_rows(decomp: Path):
+    """``(row, label, data.json)`` for every personal row: species, then data forms."""
+    species = _constants(decomp, "species", "SPECIES_")
+    for sid, const in enumerate(species):
+        yield sid, const, _species_json(decomp, const)[1]
+    for sid, form, key, row in _data_forms(decomp):
+        yield row, f"{species[sid]} form {form}", _form_json(decomp, species[sid], key)[1]
 
 
 def extract_exp_tables(decomp: Path) -> list[list[int]]:
@@ -413,11 +568,12 @@ def extract_abilities(decomp: Path) -> list[dict]:
 
 
 def extract_learnsets(decomp: Path) -> dict[str, list[list[int]]]:
-    species = _constants(decomp, "species", "SPECIES_")
+    """Personal row (species, then data forms) -> ``[[level, move], ...]`` from
+    ``learnset.by_level``, keyed by row as ``Pokemon_LoadLevelUpMovesOf`` loads it
+    (``src/pokemon.c:4585``)."""
     move_id = _index(_constants(decomp, "moves", "MOVE_"), "move")
     out = {}
-    for sid, const in enumerate(species):
-        _, d = _species_json(decomp, const)
+    for sid, _, d in _personal_rows(decomp):
         by_level = d.get("learnset", {}).get("by_level", [])
         out[str(sid)] = [[int(level), move_id(move)] for level, move in by_level]
     return out
@@ -428,13 +584,11 @@ _NUM_HMS = 8  # NUM_HMS
 
 
 def extract_tm_learnsets(decomp: Path) -> dict[str, list[int]]:
-    """Species id -> sorted TM/HM indices from ``learnset.by_tm``, numbered as
-    tools/dataproc/src/speciesproc.c ProcTMLearnset sets the bits: TM01-TM92 are
-    0-91 and HM01-HM08 are 92-99."""
-    species = _constants(decomp, "species", "SPECIES_")
+    """Personal row (species, then data forms) -> sorted TM/HM indices from
+    ``learnset.by_tm``, numbered as tools/dataproc/src/speciesproc.c ProcTMLearnset sets
+    the bits: TM01-TM92 are 0-91 and HM01-HM08 are 92-99."""
     out = {}
-    for sid, const in enumerate(species):
-        _, d = _species_json(decomp, const)
+    for sid, const, d in _personal_rows(decomp):
         bits = set()
         for marker in d.get("learnset", {}).get("by_tm", []):
             m = re.fullmatch(r"(TM|HM)(\d+)", marker)
@@ -918,6 +1072,8 @@ def extract_static(decomp_root: Path, out_dir: Path) -> None:
     _write(out_dir / "learnsets.json", extract_learnsets(decomp_root))
     _write(out_dir / "tm_learnsets.json", extract_tm_learnsets(decomp_root))
     _write(out_dir / "exp_tables.json", extract_exp_tables(decomp_root))
+    _write(out_dir / "forms.json", extract_forms(decomp_root))
+    _write(out_dir / "form_rows.json", species_form_rows(decomp_root))
     _write(
         out_dir / "charmap.json",
         {f"{k:04X}": v for k, v in extract_charmap(decomp_root).items()},

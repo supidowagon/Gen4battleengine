@@ -149,7 +149,9 @@ def _as_np(arr) -> np.ndarray:
 def level_from_exp(tables, species: int, exp: int) -> int:
     """Highest level (1-100) whose experience entry is <= ``exp``."""
     rates = _as_np(tables.species_exp_rate)
-    if not 0 <= species < len(rates):
+    # species_exp_rate has a row per personal row (forms too); the species ids are the
+    # rows of the form grid.
+    if not 0 <= species < len(_as_np(tables.species_form_row)):
         raise RecordError(f"species {species} out of range")
     row = _as_np(tables.exp_table)[int(rates[species])]
     return max(1, int(np.searchsorted(row[1:], exp, side="right")))

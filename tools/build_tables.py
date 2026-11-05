@@ -32,6 +32,11 @@ Encodings:
   ``effect_chance`` 0 never fires its proc, so ``move_effect`` packs it as ``PLAIN`` with
   params ``(0, 0, 0)`` (``move_effect_chance`` stays 0, ``move_ai_effect`` keeps the id). A
   certain effect with a nonzero chance is a ``BuildError``.
+* Every ``species_*`` array has one row per personal row: species ids ``0..495``, then
+  the data forms ``496..507`` (``forms.json``, Ruling 6). ``species_form_row[species,
+  form]`` (int16[496, 28]) is the personal row of a form (``form_rows.json``; the species
+  itself for a form without data, -1 beyond the species' form count), the same grid as
+  ``manifest["species_form_row"]``. ``manifest["species_names"]`` stays per species id.
 * ``manifest["charmap"]``: text code (hex string) -> character, for decoding nicknames.
 * ``species_friendship`` is int16, not int8: base friendship reaches 140.
 * ``species_abilities_decomp[species, slot]``: the decomp's own ability ids (0 =
@@ -133,8 +138,47 @@ def _move_effect(move: dict) -> tuple[int, tuple[int, int, int]]:
     return int(eid), params
 
 
+def _personal_rows(
+    species: list[dict], forms: list[dict], form_rows: list[list[int]]
+) -> list[dict]:
+    """The personal rows: species ``0..S-1``, then the data forms by ``row`` (Ruling 6),
+    checked against the ``form_rows`` grid so a row is never misplaced."""
+    rows = list(species)
+    for i, f in enumerate(forms):
+        if f["row"] != len(species) + i:
+            raise BuildError(f"forms.json entry {i}: row {f['row']}, expected {len(species) + i}")
+        if not 0 <= f["species"] < len(species) or not 0 <= f["form"] < len(form_rows[0]):
+            raise BuildError(f"forms.json entry {i}: species {f['species']} form {f['form']}")
+        if form_rows[f["species"]][f["form"]] != f["row"]:
+            raise BuildError(
+                f"form_rows.json [{f['species']}][{f['form']}] is "
+                f"{form_rows[f['species']][f['form']]}, forms.json says row {f['row']}"
+            )
+        rows.append({k: v for k, v in f.items() if k not in ("species", "form", "row")})
+    if len(form_rows) != len(species):
+        raise BuildError(f"form_rows.json has {len(form_rows)} species, expected {len(species)}")
+    for sid, grid_row in enumerate(form_rows):
+        for form, row in enumerate(grid_row):
+            if not (row == -1 or row == sid or len(species) <= row < len(rows)):
+                raise BuildError(f"form_rows.json [{sid}][{form}] = {row} is no personal row")
+    return rows
+
+
+def _form_names(species: list[dict], forms: list[dict]) -> dict[str, list[str]]:
+    """``{species id: [species name, form 1 name, ...]}`` for species with data forms."""
+    out: dict[str, list[str]] = {}
+    for f in forms:
+        names = out.setdefault(str(f["species"]), [species[f["species"]]["name"]])
+        if f["form"] != len(names):
+            raise BuildError(f"forms.json: species {f['species']} form {f['form']} out of order")
+        names.append(f["name"])
+    return out
+
+
 def build_arrays(inter: Path) -> tuple[dict[str, np.ndarray], dict]:
-    species = _load(inter, "species")
+    species_only = _load(inter, "species")
+    forms = _load(inter, "forms")
+    form_rows = _load(inter, "form_rows")
     moves = _load(inter, "moves")
     items = _load(inter, "items")
     abilities = _load(inter, "abilities")
@@ -144,6 +188,7 @@ def build_arrays(inter: Path) -> tuple[dict[str, np.ndarray], dict]:
     charmap = _load(inter, "charmap")
     level_learnsets = _load(inter, "learnsets")
     tm_learnsets = _load(inter, "tm_learnsets")
+    species = _personal_rows(species_only, forms, form_rows)
     item_ids_by_name = {i["name"]: n for n, i in enumerate(items)}
     first_tm_item = item_ids_by_name["TM01"]
     tm_moves = []
@@ -211,6 +256,7 @@ def build_arrays(inter: Path) -> tuple[dict[str, np.ndarray], dict]:
         "species_friendship": _arr([s["base_friendship"] for s in species], np.int16, "friendship"),
         "species_exp_rate": _arr([s["exp_rate"] for s in species], np.int8, "exp rate"),
         "species_exp_yield": _arr([s["exp_yield"] for s in species], np.int16, "exp yield"),
+        "species_form_row": _arr(form_rows, np.int16, "form rows"),
         "exp_table": _arr(exp_tables, np.int32, "exp table"),
         "move_power": _arr([m["power"] for m in moves], np.int16, "power"),
         "move_type": _arr([m["type"] for m in moves], np.int8, "move type"),
@@ -242,8 +288,12 @@ def build_arrays(inter: Path) -> tuple[dict[str, np.ndarray], dict]:
     manifest = {
         "version": MANIFEST_VERSION,
         "decomp_commit": _decomp_commit(),
-        "species_names": [s["name"] for s in species],
-        # Decomp ability ids (not engine ids) per species slot, so a party file's
+        "species_names": [s["name"] for s in species_only],
+        # Personal row (species, then data forms; nuzline.data.forms.form_row) per
+        # [species][form], and each data-form species' form names (form 0 = the species).
+        "species_form_row": form_rows,
+        "form_names": _form_names(species_only, forms),
+        # Decomp ability ids (not engine ids) per personal-row slot, so a party file's
         # ability name resolves to its slot; and base friendship for its default.
         "species_abilities": [list(s["abilities"]) for s in species],
         "species_base_friendship": [s["base_friendship"] for s in species],
@@ -255,7 +305,7 @@ def build_arrays(inter: Path) -> tuple[dict[str, np.ndarray], dict]:
         "category_names": list(MOVE_CATEGORIES),
         "target_names": list(MOVE_TARGETS),
         "charmap": charmap,
-        # Host-only lookups (nuzline.data.learnsets): per species id, the level-up
+        # Host-only lookups (nuzline.data.learnsets): per personal row, the level-up
         # (level, move) pairs in learn order and the TM/HM indices it can learn;
         # tm_moves[index] is the move that TM/HM teaches; first_tm_item is ITEM_TM01
         # (TM01-TM92 then HM01-HM08 are consecutive ids).

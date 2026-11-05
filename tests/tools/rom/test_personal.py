@@ -1,5 +1,7 @@
 """Species, experience tables and learnsets read from the ROM."""
 
+import json
+
 import pytest
 
 from tools.extract_decomp import (
@@ -10,7 +12,7 @@ from tools.extract_decomp import (
 )
 from tools.rom.readers import ReaderError, fixed_members
 from tools.rom.readers.learnsets import read_learnsets
-from tools.rom.readers.personal import read_exp_tables, read_species
+from tools.rom.readers.personal import read_exp_tables, read_forms, read_species
 
 
 def test_species_match_decomp(vanilla_files, decomp, charmap):
@@ -41,7 +43,7 @@ class _Wotbl:
     """A ROM whose wotbl.narc is ``members`` padded with empty learnsets to 496."""
 
     def __init__(self, first: bytes):
-        self.members = [first] + [b"\xff\xff\x00\x00"] * 495
+        self.members = [first] + [b"\xff\xff\x00\x00"] * 507
 
     def narc(self, path):
         return self.members
@@ -66,9 +68,23 @@ def test_learnset_layout_checks(decomp):
         read_learnsets(_Wotbl(_learnset(1, b"\x00\x01")), decomp)
     with pytest.raises(ReaderError, match="unaccounted bytes"):
         read_learnsets(_Wotbl(_learnset(1, b"\x00" * 4)), decomp)
+    short = _Wotbl(_learnset(1))
+    short.members = short.members[:496]
+    with pytest.raises(ReaderError, match=r"wotbl\.narc: 496 members, expected 508"):
+        read_learnsets(short, decomp)
 
 
 def test_vanilla_learnsets_within_max_entries(vanilla_files, decomp):
     got = read_learnsets(vanilla_files, decomp)
     assert max(len(v) for v in got.values()) == 20
     assert all(len(m) % 4 == 0 for m in vanilla_files.narc("poketool/personal/wotbl.narc"))
+
+
+def test_personal_narcs_have_508_members(vanilla_files):
+    for path in ("poketool/personal/pl_personal.narc", "poketool/personal/wotbl.narc"):
+        assert len(vanilla_files.narc(path)) == 508
+
+
+def test_rom_forms_match_decomp(vanilla_files, decomp, charmap, decomp_inter):
+    want = json.loads((decomp_inter / "forms.json").read_text("utf-8"))
+    assert read_forms(vanilla_files, decomp, charmap) == want  # row fields read from the NARC

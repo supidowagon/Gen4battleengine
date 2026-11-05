@@ -6,7 +6,7 @@ import struct
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from tools.extract_decomp import STAT_KEYS, _constants
+from tools.extract_decomp import STAT_KEYS, _constants, _data_forms, species_form_rows
 from tools.rom.readers import ReaderError, fixed_members
 from tools.rom.readers.text import message_bank
 
@@ -17,7 +17,9 @@ PERSONAL_NARC = "poketool/personal/pl_personal.narc"
 GROWTBL_NARC = "poketool/personal/pl_growtbl.narc"
 GIRA_NARC = "application/zukanlist/zkn_data/zukan_data_gira.narc"
 PERSONAL_SIZE = 44  # sizeof(SpeciesData), include/struct_defs/species.h:39-58
-SPECIES_COUNT = 496  # lines of generated/species.txt; forms (496-507) are K2a
+SPECIES_COUNT = 496  # lines of generated/species.txt
+FORM_ROW_COUNT = 12  # data forms, personal rows 496-507 (Pokemon_GetFormNarcIndex, Ruling 6)
+ROW_COUNT = SPECIES_COUNT + FORM_ROW_COUNT  # members of pl_personal.narc and wotbl.narc
 DEX_COUNT = 494  # National Dex 0..493; Egg and Bad Egg have no dex entry
 WEIGHT_MEMBER = 1  # PackDexData: height is member 0, weight member 1 (speciesproc.c:963-966)
 EXP_RATES = 8
@@ -55,54 +57,103 @@ def _weights(rom: RomFiles) -> list[int]:
     return list(struct.unpack(f"<{DEX_COUNT}I", data)) + [0] * (SPECIES_COUNT - DEX_COUNT)
 
 
-def read_species(rom: RomFiles, decomp: Path, charmap: dict[int, str]) -> list[dict]:
-    """``species.json`` rows for ids ``0..495``.
-
-    ``SpeciesData`` (``include/struct_defs/species.h:39-58``): stats 0-5, types 6-7,
-    base exp reward 9, gender ratio 16, base friendship 18, exp rate 19, abilities 22-23. Names come from
-    ``TEXT_BANK_SPECIES_NAME``.
-    """
+def _personal_members(rom: RomFiles) -> list[bytes]:
+    """The ``ROW_COUNT`` members of ``pl_personal.narc`` (species, then data forms)."""
     members = fixed_members(rom.narc(PERSONAL_NARC), PERSONAL_SIZE, PERSONAL_NARC)
-    if len(members) < SPECIES_COUNT:
-        raise ReaderError(f"{PERSONAL_NARC}: {len(members)} members, need {SPECIES_COUNT}")
-    names = message_bank(rom, decomp, "TEXT_BANK_SPECIES_NAME", charmap)
-    if len(names) < SPECIES_COUNT:
-        raise ReaderError(f"TEXT_BANK_SPECIES_NAME: {len(names)} entries, need {SPECIES_COUNT}")
+    if len(members) != ROW_COUNT:
+        raise ReaderError(f"{PERSONAL_NARC}: {len(members)} members, expected {ROW_COUNT}")
+    return members
+
+
+def _row_reader(decomp: Path):
+    """A function ``(members, row) -> dict`` of member ``row``'s ``SpeciesData`` fields
+    (``include/struct_defs/species.h:39-58``): stats 0-5, types 6-7, base exp reward 9,
+    gender ratio 16, base friendship 18, exp rate 19, abilities 22-23. No name or weight."""
     n_types = len(_constants(decomp, "pokemon_types", "TYPE_"))
     n_abilities = len(_constants(decomp, "abilities", "ABILITY_"))
-    weights = _weights(rom)
 
-    def check(sid: int, what: str, value: int, limit: int, off: int) -> int:
+    def check(row: int, what: str, value: int, limit: int, off: int) -> int:
         if value >= limit:
             raise ReaderError(
-                f"{PERSONAL_NARC} member {sid} offset {off}: {what} {value} is out of range"
+                f"{PERSONAL_NARC} member {row} offset {off}: {what} {value} is out of range"
             )
         return value
 
+    def read(members: list[bytes], row: int) -> dict:
+        m = members[row]
+        return {
+            "base_stats": [m[_STAT_OFFSET[k]] for k in STAT_KEYS],
+            "types": [check(row, "type", m[6 + i], n_types, 6 + i) for i in range(2)],
+            "abilities": [check(row, "ability", m[22 + i], n_abilities, 22 + i) for i in range(2)],
+            # Any byte is a valid ratio threshold (Kaizo gives Vespiquen 207, which no
+            # GENDER_RATIO_* names), so it is not checked against the named set.
+            "gender_ratio": m[16],
+            "base_friendship": m[18],
+            "exp_rate": check(row, "exp rate", m[19], EXP_RATES, 19),
+            "exp_yield": m[9],  # baseExpReward, include/struct_defs/species.h:43
+        }
+
+    return read
+
+
+def read_species(rom: RomFiles, decomp: Path, charmap: dict[int, str]) -> list[dict]:
+    """``species.json`` rows for ids ``0..495`` (``_row_reader``'s fields). Names come from
+    ``TEXT_BANK_SPECIES_NAME``."""
+    members = _personal_members(rom)
+    names = message_bank(rom, decomp, "TEXT_BANK_SPECIES_NAME", charmap)
+    if len(names) < SPECIES_COUNT:
+        raise ReaderError(f"TEXT_BANK_SPECIES_NAME: {len(names)} entries, need {SPECIES_COUNT}")
+    read = _row_reader(decomp)
+    weights = _weights(rom)
     out = []
     for sid in range(SPECIES_COUNT):
-        m = members[sid]
+        row = read(members, sid)
         out.append(
             {
                 # The ROM bank calls species 0 "-----" (speciesproc.c:846) but
                 # extract_species names SPECIES_NONE "----------"; id 0 is not a real
                 # species and the round trip needs equality, so use the extractor's.
                 "name": "----------" if sid == 0 else names[sid],
-                "base_stats": [m[_STAT_OFFSET[k]] for k in STAT_KEYS],
-                "types": [check(sid, "type", m[6 + i], n_types, 6 + i) for i in range(2)],
-                "abilities": [
-                    check(sid, "ability", m[22 + i], n_abilities, 22 + i) for i in range(2)
-                ],
-                # Any byte is a valid ratio threshold (Kaizo gives Vespiquen 207, which no
-                # GENDER_RATIO_* names), so it is not checked against the named set.
-                "gender_ratio": m[16],
+                "base_stats": row["base_stats"],
+                "types": row["types"],
+                "abilities": row["abilities"],
+                "gender_ratio": row["gender_ratio"],
                 "weight_hg": weights[sid],
-                "base_friendship": m[18],
-                "exp_rate": check(sid, "exp rate", m[19], EXP_RATES, 19),
-                "exp_yield": m[9],  # baseExpReward, include/struct_defs/species.h:43
+                "base_friendship": row["base_friendship"],
+                "exp_rate": row["exp_rate"],
+                "exp_yield": row["exp_yield"],
             }
         )
     return out
+
+
+def read_forms(rom: RomFiles, decomp: Path, charmap: dict[int, str]) -> list[dict]:
+    """``forms.json``: the data forms' row fields read from ``pl_personal.narc`` members
+    496-507. Each form's species, form number, row and name come from the decomp's form
+    registry (Ruling 6; the ROM holds no form names), and its weight is the base species'
+    (the dex weight is per species). The decomp grid's data rows must be exactly
+    ``496..ROW_COUNT - 1``. ``charmap`` is unused; it keeps ``read_species``' signature."""
+    del charmap
+    members = _personal_members(rom)
+    data_rows = sorted({r for row in species_form_rows(decomp) for r in row if r >= SPECIES_COUNT})
+    if data_rows != list(range(SPECIES_COUNT, len(members))):
+        raise ReaderError(
+            f"decomp form rows {data_rows} are not the data members "
+            f"{SPECIES_COUNT}..{len(members) - 1} of {PERSONAL_NARC}"
+        )
+    read = _row_reader(decomp)
+    weights = _weights(rom)
+    return [
+        {
+            "species": sid,
+            "form": form,
+            "row": row,
+            "name": key.title(),
+            **read(members, row),
+            "weight_hg": weights[sid],
+        }
+        for sid, form, key, row in _data_forms(decomp)
+    ]
 
 
 TM_MASK_OFFSET = (
@@ -112,14 +163,13 @@ TM_BITS = 100  # NUM_TMS + NUM_HMS; bits 100-127 are unused
 
 
 def read_tm_learnsets(rom: RomFiles) -> dict[str, list[int]]:
-    """``tm_learnsets.json``: species id -> sorted TM/HM indices set in ``tmLearnsetMasks``
+    """``tm_learnsets.json``: personal row -> sorted TM/HM indices set in ``tmLearnsetMasks``
     (bit n = TM index n: TM01-TM92 are 0-91, HM01-HM08 are 92-99, as ``ProcTMLearnset`` in
-    ``tools/dataproc/src/speciesproc.c`` sets them) for rows ``0..495``."""
-    members = fixed_members(rom.narc(PERSONAL_NARC), PERSONAL_SIZE, PERSONAL_NARC)
-    if len(members) < SPECIES_COUNT:
-        raise ReaderError(f"{PERSONAL_NARC}: {len(members)} members, need {SPECIES_COUNT}")
+    ``tools/dataproc/src/speciesproc.c`` sets them) for personal rows ``0..507`` (species,
+    then data forms)."""
+    members = _personal_members(rom)
     out = {}
-    for sid in range(SPECIES_COUNT):
+    for sid in range(ROW_COUNT):
         masks = struct.unpack_from("<4I", members[sid], TM_MASK_OFFSET)
         mask = sum(w << (32 * i) for i, w in enumerate(masks))
         if mask >> TM_BITS:

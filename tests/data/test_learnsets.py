@@ -1,7 +1,12 @@
+import json
+from pathlib import Path
+
 import pytest
 
 from nuzline.data.learnsets import load_learnsets
 from nuzline.data.tables import load_names
+
+DECOMP = Path("external/pokeplatinum")
 
 
 @pytest.fixture(scope="module")
@@ -70,3 +75,18 @@ def test_tm_compatibility(names, learnsets):
     for s in ("Kricketot", "Magikarp"):
         assert not learnsets.can_learn_tm(names.species(s), tm10), s
     assert not learnsets.can_learn_tm(names.species("Furret"), names.item("Potion"))
+
+
+@pytest.mark.skipif(not DECOMP.exists(), reason="decomp not cloned")
+def test_form_rows_have_learnsets(learnsets, names):
+    wash = json.loads((DECOMP / "res/pokemon/rotom/forms/wash/data.json").read_text("utf-8"))
+    consts = (DECOMP / "generated" / "moves.txt").read_text("utf-8").split()
+    assert [m for _, m in learnsets.level_up(479, form=2)] == [
+        consts.index(n) for _, n in wash["learnset"]["by_level"]
+    ]
+    assert learnsets.can_learn_tm(479, names.item("TM17"), form=2) == (
+        "TM17" in wash["learnset"]["by_tm"]
+    )
+    assert learnsets.relearner_moves(479, 1, form=2) == learnsets.relearner_moves(479, 1)
+    with pytest.raises(ValueError, match="species 479 has no form 6"):
+        learnsets.level_up(479, form=6)
