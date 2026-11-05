@@ -210,6 +210,12 @@ covered 2930 setups. Phase seconds: rung 0 funnel 165, phase 1 10903, phase 2 39
 (unequal playout counts at the variant cut, whole-party HP left, and the cost-first leader rule);
 the fixes are checked against these stored values rather than by a new run.
 
+2026-11-04: after the funnel fix (equal-n variant cuts, exact-tie retention, fewer deaths inside a
+win-chance tie), re-checked against these stored values over seeds 0-4: rung 0 4/5, rung 1 5/5 pass
+(`exhaustive_roark_recheck.json`). The rung 0 seed 4 miss is a screening loss: all three finalists
+(#1719, #3389, #1647) store 0.988-0.990 while 722 of the 2335 phase-2 setups overlap the best
+(#891, 0.999); Stage B rated #1719 0.994 on its own playouts. Funnels took 82-152 s on 20 devices.
+
 # Milestone 4: `nuzline prep` wall time
 
     uv run python -m benchmarks.prep_timing --save "$NUZLINE_USER_SAVE" [--devices N]
