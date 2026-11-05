@@ -59,33 +59,39 @@ def interrupting(after: int):
     return progress, seen
 
 
-def test_resume_equals_uninterrupted(tables, names, monkeypatch, tmp_path):
+# SETTINGS ends with a final pool of ``finalists`` (no race); variant_keep 3 adds the race unit
+RESUME_SETTINGS = [SETTINGS, dataclasses.replace(SETTINGS, variant_keep=3)]
+
+
+@pytest.mark.parametrize("settings", RESUME_SETTINGS, ids=["no-race", "race"])
+def test_resume_equals_uninterrupted(tables, names, monkeypatch, tmp_path, settings):
     prob, _ = setup_run(monkeypatch, tables, names)
     units = []
-    a = run_prep(tables, names, prob, SETTINGS, KEY, progress=units.append, **VERSIONS)
+    a = run_prep(tables, names, prob, settings, KEY, progress=units.append, **VERSIONS)
     total = len(units)
     assert a.stats.stopped is None and a.plan is not None and a.stats.variant_rounds == 1
-    phases = {u.phase for u in units}
-    assert {"teams", "variants 1", "finalists"} <= phases
-    # a stop in the team phase, at its end, in a variant round, in the finalists and at the end
-    for n, stop in enumerate([1, 3, 4, total - 2, total - 1, total]):
-        path = tmp_path / f"run{n}.ckpt.json"
+    phases = [u.phase for u in units]
+    assert {"teams", "variants 1", "finalists"} <= set(phases)
+    assert ("race" in phases) == (settings.variant_keep > settings.finalists)
+    # a stop after every unit: the team phase, the variant rounds, the race and each finalist
+    for stop in range(1, total + 1):
+        path = tmp_path / f"run{stop}.ckpt.json"
         progress, _ = interrupting(stop)
         b = run_prep(
-            tables, names, prob, SETTINGS, KEY, checkpoint=path, progress=progress, **VERSIONS
+            tables, names, prob, settings, KEY, checkpoint=path, progress=progress, **VERSIONS
         )
         assert b.stats.stopped == "interrupted"
-        if stop == 4:  # inside the expansion: more rounds to go, its parents saved
+        if settings is SETTINGS and stop == 4:  # inside the expansion: its parents saved
             pos = json.loads(path.read_text())["funnel"]["pos"]
             assert pos["phase"] == "variants" and pos["r"] == 1
-            assert len(pos["pools"][prob.deaths]) > SETTINGS.variant_keep
+            assert len(pos["pools"][prob.deaths]) > settings.variant_keep
             assert pos["parents"][prob.deaths]
             assert not set(pos["parents"][prob.deaths]) & set(pos["pools"][prob.deaths])
-        c = run_prep(tables, names, prob, SETTINGS, KEY, resume=path, **VERSIONS)
-        assert c == a, f"stopped after unit {stop} of {total}"
+        c = run_prep(tables, names, prob, settings, KEY, resume=path, **VERSIONS)
+        assert c == a, f"stopped after unit {stop} of {total} ({phases[stop - 1]})"
         assert c.stats.stopped is None
         # the resumed run keeps writing to the same file: a second resume has nothing to do
-        d = run_prep(tables, names, prob, SETTINGS, KEY, resume=path, **VERSIONS)
+        d = run_prep(tables, names, prob, settings, KEY, resume=path, **VERSIONS)
         assert d == a
 
 
@@ -108,15 +114,21 @@ def test_interrupt_in_the_first_unit_of_a_resumed_run_keeps_the_answer(
     assert r.chosen is not None
 
 
-def test_resume_equals_uninterrupted_with_a_deep_leader(tables, names, monkeypatch, tmp_path):
+@pytest.mark.parametrize("base", RESUME_SETTINGS, ids=["no-race", "race"])
+def test_resume_equals_uninterrupted_with_a_deep_leader(tables, names, monkeypatch, tmp_path, base):
     prob, _ = setup_run(monkeypatch, tables, names)
-    settings = dataclasses.replace(SETTINGS, max_depth=2)
+    settings = dataclasses.replace(base, max_depth=2)
     units = []
     a = run_prep(tables, names, prob, settings, KEY, progress=units.append, **VERSIONS)
-    path = tmp_path / "deep.ckpt.json"
-    progress, _ = interrupting(len(units) - 1)  # after the second finalist, before the deepening
-    run_prep(tables, names, prob, settings, KEY, checkpoint=path, progress=progress, **VERSIONS)
-    assert run_prep(tables, names, prob, settings, KEY, resume=path, **VERSIONS) == a
+    phases = [u.phase for u in units]
+    assert ("race" in phases) == (settings.variant_keep > settings.finalists)
+    # a stop after every unit, the race, each finalist and the deepening among them
+    for stop in range(1, len(units) + 1):
+        path = tmp_path / f"deep{stop}.ckpt.json"
+        progress, _ = interrupting(stop)
+        run_prep(tables, names, prob, settings, KEY, checkpoint=path, progress=progress, **VERSIONS)
+        c = run_prep(tables, names, prob, settings, KEY, resume=path, **VERSIONS)
+        assert c == a, f"stopped after unit {stop} of {len(units)} ({phases[stop - 1]})"
 
 
 def test_resume_inside_the_merged_stage(tables, names, monkeypatch, tmp_path):

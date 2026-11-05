@@ -264,8 +264,9 @@ class PrepResult:
 @dataclass(frozen=True)
 class Progress:
     """After one unit of work. ``phase``: ``"teams"``, ``"variants <v>"`` (``v`` 1-based),
-    ``"race"`` or ``"finalists"``; ``round``: the halving round, or the finalist index; ``alive``: ``|S_k|``
-    (with the parents in a variant expansion; the number of finalists in ``"finalists"``); ``leader``: the best setup so far."""
+    ``"race"`` or ``"finalists"``; ``round``: the halving round, or the finalist index;
+    ``alive``: ``|S_k|`` (with the parents in a variant expansion; the number of finalists in
+    ``"finalists"``); ``leader``: the best setup so far."""
 
     phase: str
     round: int

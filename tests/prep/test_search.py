@@ -5,6 +5,7 @@ its turn-0 state bytes, so the funnel's bookkeeping is tested without playout no
 reproducibility test runs the real engine.
 """
 
+import dataclasses
 import itertools
 from types import SimpleNamespace
 
@@ -723,3 +724,66 @@ def test_budget_stop_before_the_race_keeps_the_screen_leader(tables, names, monk
         scored(_stats(fakes, s), 0, reg.cost[reg.index[s]], reg.tie[reg.index[s]]) for s in setups
     ]
     assert result.chosen == setups[prep_order(rows)[0]]
+
+
+@pytest.mark.parametrize("finalists", [3, 4])
+def test_no_race_when_the_final_pool_is_not_larger_than_the_finalists(
+    tables, names, monkeypatch, finalists
+):
+    prob = make_problem(tables, names)
+    fakes, raced = _race_fakes(monkeypatch, None)
+    record: list = []
+    monkeypatch.setattr(search, "solve", fake_solve(fakes, record, lambda s, i: 0.5))
+    units: list = []
+    settings = dataclasses.replace(_race_settings(race_playouts=2040), finalists=finalists)
+    result = run_prep(tables, names, prob, settings, KEY, progress=units.append)
+    assert not raced  # the 3 survivors are all finalists: nothing to race
+    assert "race" not in {u.phase for u in units}
+    assert "race" not in dict(result.stats.phase_seconds)
+    assert len(record) == 3
+
+
+def _race_refusing_fakes(monkeypatch, refused):
+    """``Fakes`` (``falling``) refusing the playouts of setups in ``refused`` on the race's call
+    only; the race's calls are appended to ``raced``."""
+    racing = [False]
+    raced: list = []
+    fakes = Fakes(monkeypatch, falling, refuse=lambda s: racing[0] and refused(s))
+    inner = fakes.screen
+
+    def screen(tables, states, n, key, max_turns=100):
+        racing[0] = np.array_equal(np.asarray(key), np.asarray(race_key()))
+        if racing[0]:
+            raced.append(fakes.setup_of(states))
+        return inner(tables, states, n, key, max_turns)
+
+    monkeypatch.setattr(search, "screen", screen)
+    return fakes, raced
+
+
+def test_a_setup_refused_in_the_race_is_excluded_and_not_a_pick(tables, names, monkeypatch):
+    prob = make_problem(tables, names)
+    a = team_setups(prob, 2)[0]  # the halving's best (``falling``), fine until the race
+    fakes, raced = _race_refusing_fakes(monkeypatch, lambda s: s == a)
+    record: list = []
+    monkeypatch.setattr(search, "solve", fake_solve(fakes, record, lambda s, i: 0.5))
+    result = run_prep(tables, names, prob, _race_settings(race_playouts=2040), KEY)
+    assert len(raced) == 1 and a in raced[0] and len(raced[0]) == 3
+    assert a not in [s for s, _ in record] and len(record) == 2
+    assert result.chosen != a
+    assert all(f.setup != a for f in result.finalists)
+    assert all(r.setup != a for r in result.ladder)
+    assert len(result.excluded) == 1
+    assert prob.candidates[a.members[0].candidate].label in result.excluded[0]
+    assert "refused" in result.excluded[0]
+
+
+def test_every_setup_refused_in_the_race_raises(tables, names, monkeypatch):
+    prob = make_problem(tables, names)
+    fakes, raced = _race_refusing_fakes(monkeypatch, lambda s: True)
+    record: list = []
+    monkeypatch.setattr(search, "solve", fake_solve(fakes, record, lambda s, i: 0.5))
+    with pytest.raises(ValueError, match="every setup refused"):
+        run_prep(tables, names, prob, _race_settings(race_playouts=2040), KEY)
+    assert len(raced) == 1 and len(raced[0]) == 3  # the halving itself refused nothing
+    assert not record
