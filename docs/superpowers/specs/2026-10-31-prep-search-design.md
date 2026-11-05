@@ -165,7 +165,7 @@ design.md §4.4 already fixes the funnel; this milestone implements it:
    HP and registration order never decide. (Added 2026-11-04 after the exhaustive rung-0 miss.)
    The finalists are chosen by a **fresh race**: before Stage B, every final survivor of the
    requested rung is screened again with `race_playouts` (2040) new playouts, and the finalists
-   are the best of that fresh screen alone (win chance, then expected deaths, then cost). The
+   are the best of that fresh screen alone (`prep_order`: fewer deaths inside a win-chance tie, then score, then cost). The
    accumulated screen stats are biased: a setup survived every cut partly by luck, so its
    accumulated estimate overstates it (the winner's curse). In the rung-0 seed-4 re-check, 6 of
    the 8 final survivors were within the stored best's interval, yet the pick by accumulated
