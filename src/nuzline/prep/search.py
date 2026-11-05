@@ -3,7 +3,10 @@
 ``run_prep`` screens every (team, lead) of base members in one batch (the team phase), halves
 them, expands the survivors by every one-change neighbour (``variant_rounds`` expansions, each
 screened in one batch and halved over the neighbours plus their parents), then solves the
-finalists of the requested rung with Stage B and deepens the leader (rulings 1-3).
+finalists of the requested rung with Stage B and deepens the leader (rulings 1-3). The
+finalists come from a fresh race (``race_playouts`` new playouts per final survivor of ``S_k``,
+ranked by those alone and never merged into the halving stats), not from the accumulated
+stats, which carry the luck that let a setup survive every cut.
 
 Halving (ruling 2): round ``r`` tops every competing setup up to ``T_r = screen_n *
 (2**(r + 1) - 1)`` playouts (grouped by how many each still needs, one ``screen`` call per
@@ -152,7 +155,10 @@ class PrepSettings:
     resource cost weights of the tie rule (ruling 7); ``tie_playouts``: at a cut reaching a
     survivor floor, setups tied exactly with the last survivor are kept and screened further
     until the tie breaks or they reach this many playouts (0: off; 1016 = ``screen_n`` 8's
-    round 6)."""
+    round 6); ``race_playouts``: before Stage B, rung ``k``'s final survivors are screened
+    afresh with this many playouts each and the finalists are the top ``finalists`` of that fresh
+    screen alone by ``prep_order`` (0: off, the finalists are then picked from the accumulated
+    stats)."""
 
     screen_n: int = 8
     team_keep: int = 32
@@ -173,6 +179,7 @@ class PrepSettings:
     budget_seconds: float | None = None
     weights: tuple[tuple[str, float], ...] = tuple(DEFAULT_WEIGHTS.items())
     tie_playouts: int = 1016
+    race_playouts: int = 2040
 
     def __post_init__(self) -> None:
         if self.screen_n < 2 or self.screen_n % 2:
@@ -190,6 +197,10 @@ class PrepSettings:
             raise ValueError(f"max_team must be at least 1, not {self.max_team}")
         if self.tie_playouts < 0:
             raise ValueError(f"tie_playouts must not be negative, not {self.tie_playouts}")
+        if self.race_playouts < 0 or self.race_playouts % 2:
+            raise ValueError(
+                f"race_playouts must be even and not negative, not {self.race_playouts}"
+            )
 
 
 @dataclass(frozen=True)
@@ -216,7 +227,7 @@ class Rung:
 @dataclass
 class SearchStats:
     """What the run did. ``phase``: the last phase finished (``"teams"``, ``"variants"``,
-    ``"finalists"``, ``""`` for none); ``stopped``: ``None``, ``"budget"`` or
+    ``"race"``, ``"finalists"``, ``""`` for none); ``stopped``: ``None``, ``"budget"`` or
     ``"interrupted"``; ``seconds`` and ``phase_seconds`` are timings and not compared."""
 
     setups_screened: int
@@ -252,8 +263,8 @@ class PrepResult:
 
 @dataclass(frozen=True)
 class Progress:
-    """After one unit of work. ``phase``: ``"teams"``, ``"variants <v>"`` (``v`` 1-based) or
-    ``"finalists"``; ``round``: the halving round, or the finalist index; ``alive``: ``|S_k|``
+    """After one unit of work. ``phase``: ``"teams"``, ``"variants <v>"`` (``v`` 1-based),
+    ``"race"`` or ``"finalists"``; ``round``: the halving round, or the finalist index; ``alive``: ``|S_k|``
     (with the parents in a variant expansion; the number of finalists in ``"finalists"``); ``leader``: the best setup so far."""
 
     phase: str
@@ -263,12 +274,13 @@ class Progress:
     leader: Setup
 
 
-_PHASES = {"finalists": 0, "teams": 1, "deep": 2}
+_PHASES = {"finalists": 0, "teams": 1, "deep": 2, "race": 1 << 21}
 
 
 def phase_id(phase: str, v: int = 0) -> int:
-    """The key-derivation id of a phase: ``finalists`` 0, ``teams`` 1, ``deep`` 2, variant
-    expansion ``v`` (0-based) ``3 + v``; disjoint for every ``v >= 0``."""
+    """The key-derivation id of a phase: ``finalists`` 0, ``teams`` 1, ``deep`` 2, ``race``
+    ``1 << 21``, variant expansion ``v`` (0-based) ``3 + v``; disjoint for every ``v >= 0``
+    below ``(1 << 21) - 3``."""
     if phase == "variants":
         if v < 0:
             raise ValueError(f"expansion {v} is negative")
@@ -504,11 +516,47 @@ class _Funnel:
             self.playouts += need * len(idxs)
         for i, s in results.items():
             self.stats[i] = self.stats[i].merge(s)
-            if self.stats[i].refused and i not in self.excluded:
-                self.excluded[i] = (
-                    f"{setup_label(self.names, self.problem, self.setups[i])}: "
-                    "a playout was refused (unsupported mechanic)"
-                )
+            if self.stats[i].refused:
+                self.refuse(i)
+
+    def refuse(self, i: int) -> None:
+        """Exclude setup ``i``: one of its playouts was refused."""
+        if i not in self.excluded:
+            self.excluded[i] = (
+                f"{setup_label(self.names, self.problem, self.setups[i])}: "
+                "a playout was refused (unsupported mechanic)"
+            )
+
+    def race(self, pool: list[int]) -> list[int]:
+        """The finalist race (one unit): every non-excluded member of ``pool`` is screened with
+        ``race_playouts`` fresh playouts in one call, and the picks are the top ``finalists`` of
+        that fresh screen alone by ``prep_order``. The fresh stats are counted in the playouts
+        but never merged into the halving stats (they would carry the luck that let a setup
+        survive the cuts); the position saves the picks, so a resume never re-races."""
+        self.before_unit()
+        st = self.settings
+        members = [i for i in pool if i not in self.excluded]
+        fresh: dict[int, ScreenStats] = {}
+        if members:
+            states = jax.tree.map(lambda *fs: np.stack(fs), *[self.rows[i] for i in members])
+            rkey = jax.random.fold_in(self.key, phase_id("race"))
+            out = screen(self.tables, states, st.race_playouts, rkey, st.max_turns)
+            self.playouts += st.race_playouts * len(members)
+            for i, s in zip(members, out, strict=True):
+                if s.refused:
+                    self.refuse(i)
+                else:
+                    fresh[i] = s
+        alive = [i for i in pool if i in fresh]
+        if not alive:
+            self.raise_all_refused()
+        rows = [scored(fresh[i], self.k, self.cost[i], self.tie[i]) for i in alive]
+        picks = [alive[o] for o in prep_order(rows)][: st.finalists]
+        self.last_pools = [[i for i in p if i not in self.excluded] for p in self.last_pools]
+        self.phase = "race"
+        pos = {"phase": "finalists", "pool": pool, "next": 0, "deep": False, "picks": picks}
+        self.unit_done("race", "race", 0, len(pool), pos)
+        return picks
 
     # ------------------------------------------------------------------ phases
 
@@ -754,7 +802,12 @@ class _Funnel:
         if st.variant_rounds:
             self.phase = "variants"
         if st.max_depth >= 1:
-            self.finalists_phase(pools[self.k])
+            pool = pools[self.k]
+            if st.race_playouts > 0 and len(pool) > st.finalists:
+                picks = self.race(pool)
+                self.finalists_phase(pool, {"next": 0, "deep": False, "picks": picks})
+            else:
+                self.finalists_phase(pool)
 
     # ------------------------------------------------------------------ result
 

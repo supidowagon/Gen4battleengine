@@ -162,6 +162,17 @@ design.md §4.4 already fixes the funnel; this milestone implements it:
    `tie_playouts` (1016) is reached. Only then do cost and the seeded tie rank decide. Cost, HP
    and registration order never decide which setups get more playouts while the playouts can
    still tell them apart. (Added 2026-11-04 after the exhaustive rung-0 miss.)
+   The finalists are chosen by a **fresh race**: before Stage B, every final survivor of the
+   requested rung is screened again with `race_playouts` (2040) new playouts, and the finalists
+   are the best of that fresh screen alone (win chance, then expected deaths, then cost). The
+   accumulated screen stats are biased: a setup survived every cut partly by luck, so its
+   accumulated estimate overstates it (the winner's curse). In the rung-0 seed-4 re-check, 6 of
+   the 8 final survivors were within the stored best's interval, yet the pick by accumulated
+   stats was #1719, which screened 0.998 over 1016 playouts against a true 0.989. Simulated over
+   those 8, a fresh race picks wrong 1.1 % of the time at 1016 playouts each, 0.1 % at 2040. The
+   race's playouts are counted but never merged into the halving stats, and its picks are saved
+   in the checkpoint, so a resumed run never races again. `race_playouts = 0` turns it off.
+   (Added 2026-11-04, user approved.)
 4. **Anytime and checkpointing:** a time budget (`--budget`), a current best answer always
    printable, state saved to disk so a run can stop and resume.
 

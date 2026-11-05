@@ -160,6 +160,35 @@ def test_resume_reuses_the_saved_finalist_picks(tables, names, monkeypatch, tmp_
     assert record[0][0] == setups[other]
 
 
+def test_resume_after_the_race_reuses_its_picks(tables, names, monkeypatch, tmp_path):
+    prob, fakes = setup_run(monkeypatch, tables, names)
+    settings = dataclasses.replace(SETTINGS, variant_keep=3)  # a pool larger than the picks
+    units = []
+    a = run_prep(tables, names, prob, settings, KEY, progress=units.append, **VERSIONS)
+    race = [n for n, u in enumerate(units, 1) if u.phase == "race"]
+    assert len(race) == 1 and units[race[0]].phase == "finalists"
+    path = tmp_path / "race.ckpt.json"
+    progress, _ = interrupting(race[0])
+    b = run_prep(tables, names, prob, settings, KEY, checkpoint=path, progress=progress, **VERSIONS)
+    assert b.stats.stopped == "interrupted"
+    doc = json.loads(path.read_text())
+    pos = doc["funnel"]["pos"]
+    assert pos["phase"] == "finalists" and pos["next"] == 0 and not pos["deep"]
+    assert len(pos["picks"]) == settings.finalists < len(pos["pool"])
+    calls = len(fakes.calls)
+    record = []
+    monkeypatch.setattr(
+        search,
+        "solve",
+        fake_solve(fakes, record, lambda s, i: 0.5 + 0.04 * (fakes.order.index(s) % 10)),
+    )
+    c = run_prep(tables, names, prob, settings, KEY, resume=path, **VERSIONS)
+    assert len(fakes.calls) == calls  # never re-raced
+    setups = [setup_from_json(s) for s in doc["funnel"]["setups"]]
+    assert [s for s, _ in record] == [setups[i] for i in pos["picks"]]
+    assert c == a
+
+
 def test_version_2_checkpoint_is_refused(tables, names, saved):
     _, path = saved
     doc = json.loads(path.read_text())

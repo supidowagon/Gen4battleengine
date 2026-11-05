@@ -619,3 +619,107 @@ def test_a_reserved_heart_scale_is_never_spent(tables, names, monkeypatch, scale
         assert not any(spent)
     else:
         assert any(spent)  # the neighbour space does offer the relearner when allowed
+
+
+def race_key():
+    return jax.random.fold_in(KEY, phase_id("race"))
+
+
+def _race_settings(**kw):
+    """Team phase only: 9 setups halve to 3 survivors (T_1 = 12), 2 finalists at depth 1."""
+    return PrepSettings(
+        screen_n=4, team_keep=3, variant_rounds=0, finalists=2, max_depth=1, max_team=2, **kw
+    )
+
+
+def _race_fakes(monkeypatch, worse):
+    """``Fakes`` (``falling``) whose ``screen`` makes ``worse`` the worst setup on calls made with
+    the race's key only; the calls of the race are appended to ``raced``."""
+    racing = [False]
+    raced: list = []
+
+    def cum(setup, index):
+        if racing[0] and setup == worse:
+            return (0.1,) * 4
+        return falling(setup, index)
+
+    fakes = Fakes(monkeypatch, cum)
+    inner = fakes.screen
+
+    def screen(tables, states, n, key, max_turns=100):
+        racing[0] = np.array_equal(np.asarray(key), np.asarray(race_key()))
+        if racing[0]:
+            raced.append((fakes.setup_of(states), n))
+        return inner(tables, states, n, key, max_turns)
+
+    monkeypatch.setattr(search, "screen", screen)
+    return fakes, raced
+
+
+def test_finalists_are_picked_by_a_fresh_race(tables, names, monkeypatch):
+    """The winner's curse of the seed-4 recheck: a setup that leads on the accumulated halving
+    stats but is worse on fresh playouts must not be a finalist."""
+    prob = make_problem(tables, names)
+    a = team_setups(prob, 2)[0]  # the halving's best (``falling``)
+    fakes, raced = _race_fakes(monkeypatch, a)
+    record: list = []
+    monkeypatch.setattr(search, "solve", fake_solve(fakes, record, lambda s, i: 0.5))
+    result = run_prep(tables, names, prob, _race_settings(race_playouts=2040), KEY)
+    assert len(raced) == 1 and raced[0][1] == 2040 and a in raced[0][0]
+    assert len(raced[0][0]) == 3  # every final survivor of S_k, in one call
+    assert a not in [s for s, _ in record] and len(record) == 2
+    assert result.stats.phase == "finalists"
+    fakes, raced = _race_fakes(monkeypatch, a)
+    record = []
+    monkeypatch.setattr(search, "solve", fake_solve(fakes, record, lambda s, i: 0.5))
+    run_prep(tables, names, prob, _race_settings(race_playouts=0), KEY)
+    assert not raced
+    assert a in [s for s, _ in record]
+
+
+def test_race_playouts_are_counted_and_not_merged(tables, names, monkeypatch):
+    prob = make_problem(tables, names)
+    runs = {}
+    for race in (0, 2040):
+        fakes = Fakes(monkeypatch, falling)
+        monkeypatch.setattr(search, "solve", fake_solve(fakes, [], lambda s, i: 0.5))
+        runs[race] = run_prep(tables, names, prob, _race_settings(race_playouts=race), KEY)
+    assert runs[2040].stats.playouts == runs[0].stats.playouts + 2040 * 3
+    assert runs[2040].screen.n == runs[0].screen.n == 12  # the halving's T_1 only
+    assert dict(runs[2040].stats.phase_seconds).keys() >= {"teams", "race", "finalists"}
+
+
+def test_race_settings_validation():
+    for bad in (-2, 3):
+        with pytest.raises(ValueError, match="race_playouts"):
+            PrepSettings(race_playouts=bad)
+    assert PrepSettings(race_playouts=0).race_playouts == 0
+    assert PrepSettings().race_playouts == 2040
+
+
+def test_race_key_is_disjoint():
+    race = phase_id("race")
+    others = {phase_id("finalists"), phase_id("teams"), phase_id("deep")}
+    others |= {phase_id("variants", v) for v in range(1001)}
+    assert race not in others
+
+
+def test_budget_stop_before_the_race_keeps_the_screen_leader(tables, names, monkeypatch):
+    prob = make_problem(tables, names)
+    fakes = Fakes(monkeypatch, falling)
+    settings = _race_settings(budget_seconds=1)
+
+    def clock():  # the time runs out once the team phase's two rounds are screened
+        return 100.0 if len(fakes.calls) >= 2 else 0.0
+
+    result = run_prep(tables, names, prob, settings, KEY, clock=clock)
+    assert len(fakes.calls) == 2  # no race call
+    assert result.stats.stopped == "budget"
+    assert result.plan is None and not result.finalists
+    setups = fakes.calls[-1][0]  # the last pools: S_k as the last round screened it
+    reg = search._Funnel(tables, names, prob, settings, KEY, None, float)
+    reg.register(setups)
+    rows = [
+        scored(_stats(fakes, s), 0, reg.cost[reg.index[s]], reg.tie[reg.index[s]]) for s in setups
+    ]
+    assert result.chosen == setups[prep_order(rows)[0]]
