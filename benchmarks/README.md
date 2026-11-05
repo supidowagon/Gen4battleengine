@@ -239,6 +239,7 @@ Windows 11, measured 2026-11-02. Wall seconds; phase seconds are the cold run's.
 | `screen_n` 4, `finalists` 2         | 636.8 | crash | 437.8 | 84.8     | 108.6     | 9621     | 608,244   | 0.992  |
 | `screen_n` 6, `finalists` 2         | 817.1 | 730.4 | 599.6 | 111.5    | 100.5     | 9727     | 841,772   | 0.993  |
 | `screen_n` 6 (32 / 3 / 2)           | 822.1 | 734.6 | 600.1 | 111.8    | 104.8     | 9727     | 853,772   | 0.993  |
+| **after funnel fix 2026-11-04** (defaults, `tie_playouts` 1016, `race_playouts` 2040) | 766.8 | 679.0 | 525.6 | 140.2 | 92.4 (+4.0 race) | 9708 | 928,940 | 1.000 |
 
 The first version of this table passed no `--finalists` (the CLI's own default of 3 overrides
 `PrepSettings.finalists`), so its `finalists` 2 row changed nothing; rows 3 and 4 were re-measured
@@ -256,7 +257,16 @@ relearned moves); `screen_n` 4 gives 636.8 s cold and 0.992. By controller rulin
 default stays at `screen_n` 8: the user ranks a safer answer over about a minute of run time, and the
 spec's anti-goal is never to return a worse answer silently. **The Roark cold time therefore misses
 the 900 s target by about 64 s (~964 s).** Faster round-0 screening (the teams phase) is follow-up
-work. The row `screen_n` 4 has no warm time: that run died with a Windows access
+work.
+
+**After the funnel fix (measured 2026-11-05, same machine and save, defaults):** cold 766.8 s,
+warm 679.0 s, inside the 900 s target with rung 0 1.000 (PSYDUCK, MONFERNO, GEODUDE with Magnitude
+and Rock Polish by level-up, no Heart Scale). The teams phase fell from 737.7 s to 525.6 s and the
+playouts from 1,144,478 to 928,940 although its round sizes are unchanged; the likely cause (not
+isolated) is that the halving cuts no longer prefer big teams by whole-party HP left, and six-member
+battles take longer to play out and to solve. The race itself costs about 4 s.
+
+The row `screen_n` 4 has no warm time: that run died with a Windows access
 violation (exit 3221226505) after the cold run; the intermittent crash is the one in the Task 13 ruling.
 Cold minus warm is the 85-90 s compile cost. Two earlier attempts of the first measurements died with
 a Windows access violation (exit 3221225477) in the teams phase and were repeated; the table holds the
