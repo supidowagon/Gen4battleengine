@@ -1,6 +1,6 @@
 """Write the intermediate JSON files from the ROM (spec §6.3, §9.1).
 
-``species, moves, items, learnsets, exp_tables`` and ``trainers`` come from the ROM
+``species, moves, items, learnsets, tm_learnsets, exp_tables`` and ``trainers`` come from the ROM
 readers; ``types, natures, charmap, abilities`` are reused from a fresh decomp extraction
 (Ruling 14: the charmap is the font encoding and has no table in the ROM; the others are
 reused for a non-vanilla game only when the ROM diff shows them unchanged). Outputs are
@@ -44,7 +44,7 @@ from tools.rom.inputs import (
 )
 from tools.rom.symbols import DEFAULT_MAP
 
-ROM_FILES = ("species", "moves", "items", "learnsets", "exp_tables", "trainers")
+ROM_FILES = ("species", "moves", "items", "learnsets", "tm_learnsets", "exp_tables", "trainers")
 REUSED_FILES = ("types", "natures", "charmap", "abilities")
 REUSE_SYMBOLS = ("sTypeMatchupMultipliers", "sNatureStatAffinities")
 REUSE_BANKS = (
@@ -102,7 +102,7 @@ def _kaizo_checks(inputs: RomInputs, decomp: Path, symbols_path: Path, vanilla_f
     from tools.rom.readers.items import read_items
     from tools.rom.readers.learnsets import read_learnsets
     from tools.rom.readers.moves import read_moves
-    from tools.rom.readers.personal import read_exp_tables, read_species
+    from tools.rom.readers.personal import read_exp_tables, read_species, read_tm_learnsets
     from tools.rom.symbols import SymbolMap
 
     symbols = SymbolMap.from_map(symbols_path)
@@ -119,6 +119,7 @@ def _kaizo_checks(inputs: RomInputs, decomp: Path, symbols_path: Path, vanilla_f
     read_species(kaizo, decomp, charmap)
     read_exp_tables(kaizo)
     read_learnsets(kaizo, decomp)
+    read_tm_learnsets(kaizo)
     read_moves(kaizo, decomp, charmap)
     read_items(kaizo, decomp, symbols, charmap)
     raise RomInputError(KAIZO_REFUSAL)
@@ -159,7 +160,7 @@ def extract(game: str, out: Path, decomp: Path, symbols: Path, inputs: RomInputs
     from tools.rom.readers.learnsets import read_learnsets
     from tools.rom.readers.maps import trainer_start_conditions
     from tools.rom.readers.moves import read_moves
-    from tools.rom.readers.personal import read_exp_tables, read_species
+    from tools.rom.readers.personal import read_exp_tables, read_species, read_tm_learnsets
     from tools.rom.readers.trainers import read_trainers
     from tools.rom.symbols import SymbolMap
 
@@ -184,6 +185,7 @@ def extract(game: str, out: Path, decomp: Path, symbols: Path, inputs: RomInputs
             "moves": read_moves(vanilla_files, decomp, charmap),
             "items": read_items(vanilla_files, decomp, smap, charmap),
             "learnsets": read_learnsets(vanilla_files, decomp),
+            "tm_learnsets": read_tm_learnsets(vanilla_files),
             "exp_tables": read_exp_tables(vanilla_files),
             "trainers": read_trainers(vanilla_files, decomp, smap, charmap, starts),
         }

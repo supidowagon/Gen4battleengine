@@ -102,3 +102,29 @@ def read_species(rom: RomFiles, decomp: Path, charmap: dict[int, str]) -> list[d
             }
         )
     return out
+
+
+TM_MASK_OFFSET = (
+    28  # tmLearnsetMasks, include/struct_defs/species.h:57 (u32[4], after abilities etc.)
+)
+TM_BITS = 100  # NUM_TMS + NUM_HMS; bits 100-127 are unused
+
+
+def read_tm_learnsets(rom: RomFiles) -> dict[str, list[int]]:
+    """``tm_learnsets.json``: species id -> sorted TM/HM indices set in ``tmLearnsetMasks``
+    (bit n = TM index n: TM01-TM92 are 0-91, HM01-HM08 are 92-99, as ``ProcTMLearnset`` in
+    ``tools/dataproc/src/speciesproc.c`` sets them) for rows ``0..495``."""
+    members = fixed_members(rom.narc(PERSONAL_NARC), PERSONAL_SIZE, PERSONAL_NARC)
+    if len(members) < SPECIES_COUNT:
+        raise ReaderError(f"{PERSONAL_NARC}: {len(members)} members, need {SPECIES_COUNT}")
+    out = {}
+    for sid in range(SPECIES_COUNT):
+        masks = struct.unpack_from("<4I", members[sid], TM_MASK_OFFSET)
+        mask = sum(w << (32 * i) for i, w in enumerate(masks))
+        if mask >> TM_BITS:
+            raise ReaderError(
+                f"{PERSONAL_NARC} member {sid} offset {TM_MASK_OFFSET}: "
+                f"TM mask bits above {TM_BITS - 1} are set"
+            )
+        out[str(sid)] = [b for b in range(TM_BITS) if mask >> b & 1]
+    return out
