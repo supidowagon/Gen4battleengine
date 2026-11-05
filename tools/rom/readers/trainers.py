@@ -30,6 +30,7 @@ HAS_ITEM = (False, False, True, True)
 FORM_SHIFT = 10  # TRAINER_MON_FORM_SHIFT, trainer_data.h:11
 SPECIES_MASK = (1 << FORM_SHIFT) - 1
 MAX_LEVEL = 100  # MAX_POKEMON_LEVEL, include/constants/pokemon.h:22
+BATTLE_TYPE_DOUBLES = 1 << 1  # include/constants/battle.h:27
 GENDER_SYMBOL = "sTrainerClassGender"  # u8 per class, src/trainer_data.c:9,166
 
 
@@ -96,7 +97,12 @@ def read_trainers(
             raise ReaderError(f"{TRDATA_NARC} member {tid}: {len(head)} bytes, need {HEADER_SIZE}")
         data_type, cls, size = head[0], head[1], head[3]
         bag = struct.unpack_from(f"<{MAX_ITEMS}H", head, 4)
-        (ai_mask,) = struct.unpack_from("<I", head, 12)
+        (ai_mask, battle_type) = struct.unpack_from("<2I", head, 12)
+        if battle_type not in (0, BATTLE_TYPE_DOUBLES):
+            raise ReaderError(
+                f"{TRDATA_NARC} member {tid} offset 16: battle type {battle_type:#x} "
+                "is neither single nor double"
+            )
         if cls >= len(classes):
             raise ReaderError(f"{TRDATA_NARC} member {tid} offset 1: class {cls} out of range")
         if size > PARTY_MAX:
@@ -151,6 +157,7 @@ def read_trainers(
                 "ai_flags": ai_mask,
                 "items": [i for i in bag if i],
                 "party": party,
+                "format": "double" if battle_type else "single",
                 "start_condition": start_conditions[tid],
             }
         )
