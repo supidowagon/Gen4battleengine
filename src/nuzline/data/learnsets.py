@@ -12,12 +12,26 @@ Both are keyed by personal row (species, then data forms; ``Pokemon_LoadLevelUpM
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from pathlib import Path
 
 from nuzline.data import tables
 from nuzline.data.forms import form_row
 
 HM_FIRST_INDEX = 92  # TM01-TM92 = 0-91, HM01-HM08 = 92-99
+
+
+@dataclass(frozen=True)
+class TutorMove:
+    """One ``TeachableMove`` (``include/tutor_movesets.h:7-14``): the move, its shard costs and
+    the tutor's ``generated/tutor_locations.txt`` stem."""
+
+    move: int
+    red: int
+    blue: int
+    yellow: int
+    green: int
+    location: str
 
 
 class Learnsets:
@@ -36,6 +50,17 @@ class Learnsets:
         }
         self._egg_moves = {
             int(s): tuple(int(m) for m in ms) for s, ms in manifest["egg_moves"].items()
+        }
+        self._tutor_moves = tuple(
+            TutorMove(
+                int(t["move"]),
+                *(int(t["costs"][k]) for k in ("red", "blue", "yellow", "green")),
+                str(t["location"]),
+            )
+            for t in manifest["tutor_moves"]
+        )
+        self._tutor_sets = {
+            int(r): frozenset(int(i) for i in ix) for r, ix in manifest["tutor_learnsets"].items()
         }
 
     def level_up(self, species: int, form: int = 0) -> tuple[tuple[int, int], ...]:
@@ -83,6 +108,19 @@ class Learnsets:
         """The species' egg moves in table order, empty for a species with none (keyed by
         species id; ``LoadSpeciesEggMoves``, ``src/overlay005/daycare.c:445``). A lookup only."""
         return self._egg_moves.get(species, ())
+
+    def tutor_moves(self) -> tuple[TutorMove, ...]:
+        """The move tutors' table in ``sTeachableMoves`` order. A lookup only."""
+        return self._tutor_moves
+
+    def can_learn_tutor(self, species: int, move: int, form: int = 0) -> bool:
+        """Whether a move tutor can teach ``move`` to the form. Keyed by personal row
+        (``Pokemon_ReadMovesetMaskByte``, ``src/overlay005/scrcmd_move_tutor.c:211-259``). A
+        lookup only: prep does not use it (Ruling 12)."""
+        row = form_row(self._form_rows, species, form)
+        return any(
+            t.move == move and i in self._tutor_sets[row] for i, t in enumerate(self._tutor_moves)
+        )
 
 
 def load_learnsets(dir: Path = tables.DEFAULT) -> Learnsets:

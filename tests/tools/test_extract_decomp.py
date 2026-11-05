@@ -1,9 +1,12 @@
 import json
+from collections import Counter
 from pathlib import Path
 
 import pytest
 
 from tools.extract_decomp import (
+    ExtractError,
+    _tutor_indices,
     extract_charmap,
     extract_egg_moves,
     extract_evolutions,
@@ -11,6 +14,8 @@ from tools.extract_decomp import (
     extract_forms,
     extract_species,
     extract_static,
+    extract_tutor_learnsets,
+    extract_tutor_moves,
     species_form_rows,
 )
 
@@ -193,3 +198,37 @@ def test_static_writes_evolutions_and_egg_moves(out):
     ev = json.loads((out / "evolutions.json").read_text("utf-8"))
     assert len(ev) == 496 and ev["1"] == [[4, 16, 2]]
     assert "3" not in json.loads((out / "egg_moves.json").read_text("utf-8"))
+
+
+def test_tutor_moves():
+    t = extract_tutor_moves(DECOMP)
+    assert len(t) == 38 and t[0] == {
+        "move": 291,
+        "costs": {"red": 2, "blue": 4, "yellow": 2, "green": 0},
+        "location": "route_212",
+    }
+    assert t[1]["move"] == 189 and t[1]["location"] == "survival_area"  # Mud-Slap
+    assert t[-1]["move"] == 253 and t[-1]["location"] == "snowpoint_city"  # Uproar
+    assert sorted(Counter(x["location"] for x in t).values()) == [8, 13, 17]
+
+
+def test_tutor_learnsets_rotom_and_forms():
+    tl = extract_tutor_learnsets(DECOMP)
+    assert sorted(map(int, tl)) == list(range(508))
+    assert 1 in tl["479"] and len(tl["479"]) == 9  # Rotom: Mud-Slap (index 1) among its 9
+    assert tl["504"] == tl["479"] and tl["0"] == tl["494"] == tl["495"] == []  # Wash = base list
+    assert all(i == sorted(set(i)) for i in tl.values())
+
+
+def test_unlisted_tutor_move_raises():
+    with pytest.raises(ExtractError, match="MOVE_TACKLE") as e:
+        _tutor_indices(
+            ["MOVE_MUD_SLAP", "MOVE_TACKLE"], ["MOVE_DIVE", "MOVE_MUD_SLAP"], Path("x/data.json")
+        )
+    assert "x" in str(e.value) and "data.json" in str(e.value)
+    assert _tutor_indices(["MOVE_MUD_SLAP"], ["MOVE_DIVE", "MOVE_MUD_SLAP"], Path("x")) == [1]
+
+
+def test_static_writes_tutor_files(out):
+    assert len(json.loads((out / "tutor_moves.json").read_text("utf-8"))) == 38
+    assert len(json.loads((out / "tutor_learnsets.json").read_text("utf-8"))) == 508

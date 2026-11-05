@@ -6,9 +6,9 @@ import struct
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from tools.extract_decomp import _constants
+from tools.extract_decomp import MAX_TUTOR_COST, _constants, _stem
 from tools.rom.readers import ReaderError, symbol_bytes
-from tools.rom.readers.personal import SPECIES_COUNT
+from tools.rom.readers.personal import FORM_ROW_COUNT, ROW_COUNT, SPECIES_COUNT
 
 if TYPE_CHECKING:
     from tools.rom.nds import RomFiles
@@ -20,6 +20,15 @@ EGG_SYMBOL = "sEggMoves"
 EGG_OFFSET = 20000  # EGG_MOVES_SPECIES_OFFSET
 EGG_TERMINATOR = 0xFFFF  # EGG_MOVES_TERMINATOR
 MAX_EGG_MOVES = 16  # include/constants/daycare.h:19
+TUTOR_MOVES_SYMBOL = "sTeachableMoves"
+TUTOR_SETS_SYMBOL = "sSpeciesLearnsetsByTutor"
+TUTOR_ENTRY = struct.Struct(
+    "<H4BHI"
+)  # TeachableMove (2 pad bytes before the u32), include/tutor_movesets.h:7-14
+# Personal rows with no tutor set (SPECIES_NONE, SPECIES_EGG, SPECIES_BAD_EGG; HasTutorSet,
+# tools/dataproc/src/speciesproc.c:258).
+TUTOR_NO_SET_ROWS = (0, SPECIES_COUNT - 2, SPECIES_COUNT - 1)
+NATIONAL_DEX_COUNT = SPECIES_COUNT - 3  # MAX_SPECIES - 2, include/constants/species.h:7
 
 
 def tm_moves(rom: RomFiles, symbols: SymbolMap, decomp: Path | None = None) -> list[int]:
@@ -86,3 +95,91 @@ def egg_moves(
             if len(cur) > MAX_EGG_MOVES:
                 raise ReaderError(f"{EGG_SYMBOL}[{i}]: more than {MAX_EGG_MOVES} egg moves")
     return {k: v for k, v in out.items() if v}
+
+
+def _decomp_root(decomp: Path | None) -> Path:
+    if decomp is None:
+        from tools.rom.inputs import REPO_ROOT
+
+        decomp = REPO_ROOT / "external" / "pokeplatinum"
+    return Path(decomp)
+
+
+def tutor_moves(rom: RomFiles, symbols: SymbolMap, decomp: Path | None = None) -> list[dict]:
+    """The move tutors' table from ``sTeachableMoves`` (``include/tutor_movesets.h:7-14``,
+    ``res/pokemon/tutorable_moves.h``): 12-byte ``TeachableMove`` entries, a u16 move, four u8
+    shard costs (red, blue, yellow, green), two pad bytes and a u32 ``TutorLocation``. Returned as
+    ``extract_tutor_moves`` writes them, ``location`` being the
+    ``generated/tutor_locations.txt`` stem.
+
+    Shape checks: a whole number of entries (at least one), every move real
+    (``0 < m < len(moves)``), every cost 0..``MAX_TUTOR_COST``, zero pad bytes and a location
+    below the number of ``tutor_locations`` (the count is the decomp's)."""
+    decomp = _decomp_root(decomp)
+    n_moves = len(_constants(decomp, "moves", "MOVE_"))
+    locations = _constants(decomp, "tutor_locations", "TUTOR_LOCATION_")
+    data = symbol_bytes(rom, symbols, TUTOR_MOVES_SYMBOL)
+    size = TUTOR_ENTRY.size
+    if not data or len(data) % size:
+        raise ReaderError(
+            f"{TUTOR_MOVES_SYMBOL}: {len(data)} bytes is not a whole number of {size}-byte entries"
+        )
+    out = []
+    for i, (move, *costs, pad, loc) in enumerate(TUTOR_ENTRY.iter_unpack(data)):
+        if not 0 < move < n_moves:
+            raise ReaderError(
+                f"{TUTOR_MOVES_SYMBOL}[{i}]: move {move} is out of range (1..{n_moves - 1})"
+            )
+        if any(c > MAX_TUTOR_COST for c in costs):
+            raise ReaderError(f"{TUTOR_MOVES_SYMBOL}[{i}]: cost {costs} is above {MAX_TUTOR_COST}")
+        if pad:
+            raise ReaderError(f"{TUTOR_MOVES_SYMBOL}[{i}]: pad bytes are {pad:#x}, expected 0")
+        if loc >= len(locations):
+            raise ReaderError(
+                f"{TUTOR_MOVES_SYMBOL}[{i}]: location {loc} is out of range "
+                f"(0..{len(locations) - 1})"
+            )
+        out.append(
+            {
+                "move": move,
+                "costs": dict(zip(("red", "blue", "yellow", "green"), costs, strict=True)),
+                "location": _stem(locations[loc], "TUTOR_LOCATION_"),
+            }
+        )
+    return out
+
+
+def tutor_learnsets(rom: RomFiles, symbols: SymbolMap, n_tutor: int) -> dict[str, list[int]]:
+    """Personal row -> sorted tutor indices, from ``sSpeciesLearnsetsByTutor``: one
+    ``(n_tutor + 7) // 8``-byte bit mask per moveset (``MovesetMask``,
+    ``include/tutor_movesets.h:20-26``), bit ``j`` being ``sTeachableMoves[j]``. Moveset ``m``
+    is at index ``m - 1``; species ``s`` uses moveset ``s`` and personal row ``r >= 496`` (a
+    data form) uses ``NATIONAL_DEX_COUNT + (r - 495)`` (``include/constants/forms.h:6-19``,
+    ``Pokemon_ReadMovesetMaskByte``, ``src/overlay005/scrcmd_move_tutor.c:211-259``). Rows 0,
+    494 and 495 have no mask and get ``[]``.
+
+    Shape checks: exactly one mask for each species 1..493 and each form row, and no bit set at
+    or above ``n_tutor``."""
+    if n_tutor < 1:
+        raise ReaderError(f"{TUTOR_SETS_SYMBOL}: {n_tutor} tutor moves")
+    width = (n_tutor + 7) // 8
+    n_sets = NATIONAL_DEX_COUNT + FORM_ROW_COUNT
+    data = symbol_bytes(rom, symbols, TUTOR_SETS_SYMBOL)
+    if len(data) != width * n_sets:
+        raise ReaderError(
+            f"{TUTOR_SETS_SYMBOL}: {len(data)} bytes, expected {width * n_sets} "
+            f"({n_sets} masks of {width})"
+        )
+    out: dict[str, list[int]] = {}
+    for row in range(ROW_COUNT):
+        if row in TUTOR_NO_SET_ROWS:
+            out[str(row)] = []
+            continue
+        moveset = row if row < SPECIES_COUNT else NATIONAL_DEX_COUNT + (row - (SPECIES_COUNT - 1))
+        mask = int.from_bytes(data[(moveset - 1) * width : moveset * width], "little")
+        if mask >> n_tutor:
+            raise ReaderError(
+                f"{TUTOR_SETS_SYMBOL}: moveset {moveset} has a bit past tutor {n_tutor - 1}"
+            )
+        out[str(row)] = [j for j in range(n_tutor) if mask >> j & 1]
+    return out

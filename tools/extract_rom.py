@@ -54,6 +54,8 @@ ROM_FILES = (
     "tm_learnsets",
     "evolutions",
     "egg_moves",
+    "tutor_moves",
+    "tutor_learnsets",
     "exp_tables",
     "trainers",
 )
@@ -177,7 +179,7 @@ def extract(game: str, out: Path, decomp: Path, symbols: Path, inputs: RomInputs
     if game == "kaizo":
         _kaizo_checks(inputs, decomp, symbols, vanilla_files)
 
-    from tools.rom.readers.code_tables import egg_moves
+    from tools.rom.readers.code_tables import egg_moves, tutor_learnsets, tutor_moves
     from tools.rom.readers.evolutions import read_evolutions
     from tools.rom.readers.items import read_items
     from tools.rom.readers.learnsets import read_learnsets
@@ -208,6 +210,7 @@ def extract(game: str, out: Path, decomp: Path, symbols: Path, inputs: RomInputs
                 "on no map through it",
                 file=sys.stderr,
             )
+        tutors = tutor_moves(vanilla_files, smap, decomp)
         tables = {
             "species": read_species(vanilla_files, decomp, charmap),
             "forms": read_forms(vanilla_files, decomp, charmap),
@@ -217,6 +220,8 @@ def extract(game: str, out: Path, decomp: Path, symbols: Path, inputs: RomInputs
             "tm_learnsets": read_tm_learnsets(vanilla_files),
             "evolutions": read_evolutions(vanilla_files),
             "egg_moves": {str(k): v for k, v in egg_moves(vanilla_files, smap, decomp).items()},
+            "tutor_moves": tutors,
+            "tutor_learnsets": tutor_learnsets(vanilla_files, smap, len(tutors)),
             "exp_tables": read_exp_tables(vanilla_files),
             "trainers": read_trainers(vanilla_files, decomp, smap, charmap, starts),
         }

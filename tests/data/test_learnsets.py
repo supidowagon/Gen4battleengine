@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from nuzline.data.learnsets import load_learnsets
+from nuzline.data.learnsets import TutorMove, load_learnsets
 from nuzline.data.tables import load_names
 
 DECOMP = Path("external/pokeplatinum")
@@ -96,3 +96,12 @@ def test_learnsets_evolutions_and_egg_moves(learnsets):
     assert learnsets.evolutions(1) == ((4, 16, 2),)
     assert learnsets.evolutions(3) == ()  # Venusaur
     assert learnsets.egg_moves(1)[:3] == (113, 130, 219) and learnsets.egg_moves(3) == ()
+
+
+def test_can_learn_tutor(learnsets):
+    assert learnsets.can_learn_tutor(479, 189) is True  # Rotom, Mud-Slap
+    assert learnsets.can_learn_tutor(479, 291) is False  # Rotom, Dive
+    assert learnsets.can_learn_tutor(479, 189, form=2) is True  # Rotom-Wash
+    assert learnsets.tutor_moves()[0] == TutorMove(291, 2, 4, 2, 0, "route_212")
+    assert len(learnsets.tutor_moves()) == 38
+    assert learnsets.can_learn_tutor(479, 1) is False  # a move no tutor teaches

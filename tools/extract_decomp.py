@@ -707,6 +707,72 @@ def extract_egg_moves(decomp: Path) -> dict[str, list[int]]:
     return out
 
 
+TUTOR_MOVES_FILE = Path("res") / "pokemon" / "move_tutors.json"
+_COST_KEYS = ("red", "blue", "yellow", "green")
+_NO_TUTOR_SET = ("SPECIES_NONE", "SPECIES_EGG", "SPECIES_BAD_EGG")  # HasTutorSet
+MAX_TUTOR_COST = 99  # sanity bound on a shard cost (Bag stacks hold 99); the field is a u8
+
+
+def extract_tutor_moves(decomp: Path) -> list[dict]:
+    """``res/pokemon/move_tutors.json`` in file order, which is ``sTeachableMoves`` order
+    (``LoadTutorMoves``, ``tools/dataproc/src/speciesproc.c:260-283``; ``TeachableMove``,
+    ``include/tutor_movesets.h:7-14``): ``{"move", "costs": {red, blue, yellow, green},
+    "location"}`` with ``location`` the ``generated/tutor_locations.txt`` stem. Costs are
+    checked to be 0..``MAX_TUTOR_COST``."""
+    path = decomp / TUTOR_MOVES_FILE
+    move_id = _index(_constants(decomp, "moves", "MOVE_"), "move")
+    locations = _constants(decomp, "tutor_locations", "TUTOR_LOCATION_")
+    location_id = _index(locations, "tutor location")
+    out = []
+    for n, t in enumerate(_load_json(path)):
+        costs = {k: int(t[f"{k}Cost"]) for k in _COST_KEYS}
+        if any(not 0 <= c <= MAX_TUTOR_COST for c in costs.values()):
+            raise ExtractError(f"{path}: tutor {n} has a cost outside 0..{MAX_TUTOR_COST}")
+        loc = t["location"]
+        out.append(
+            {
+                "move": move_id(t["move"]),
+                "costs": costs,
+                "location": _stem(locations[location_id(loc)], "TUTOR_LOCATION_"),
+            }
+        )
+    return out
+
+
+def _tutor_indices(by_tutor: list[str], tutor_moves: list[str], path: Path) -> list[int]:
+    """Sorted indices into ``tutor_moves`` (the ``MOVE_*`` of each tutor, in table order) of
+    the moves in a species' ``learnset.by_tutor``. ``EmitTutorLearnset`` only warns and skips
+    a move no tutor teaches; here it is an ``ExtractError`` naming ``path`` (Ruling 12)."""
+    out = set()
+    for move in by_tutor:
+        if move not in tutor_moves:
+            raise ExtractError(f"{path}: {move} in learnset.by_tutor is taught by no move tutor")
+        out.add(tutor_moves.index(move))
+    return sorted(out)
+
+
+def extract_tutor_learnsets(decomp: Path) -> dict[str, list[int]]:
+    """Personal row (species, then data forms) -> sorted indices into ``tutor_moves.json``
+    from ``learnset.by_tutor``. Rows 0, 494 and 495 (``SPECIES_NONE``, ``SPECIES_EGG``,
+    ``SPECIES_BAD_EGG``) have no set (``HasTutorSet``, ``speciesproc.c:258``) and get ``[]``;
+    the game indexes the rest by species, or ``NATIONAL_DEX_COUNT + n`` for a form
+    (``include/constants/forms.h``, ``Pokemon_ReadMovesetMaskByte``,
+    ``src/overlay005/scrcmd_move_tutor.c:211-259``), the same order as the personal rows."""
+    species = _constants(decomp, "species", "SPECIES_")
+    no_set = {i for i, c in enumerate(species) if c in _NO_TUTOR_SET}
+    tutor_consts = [t["move"] for t in _load_json(decomp / TUTOR_MOVES_FILE)]
+    out = {}
+    for row, label, d in _personal_rows(decomp):
+        if row in no_set:
+            out[str(row)] = []
+            continue
+        path = decomp / "res" / "pokemon" / f"<{label}>" / "data.json"
+        out[str(row)] = _tutor_indices(
+            d.get("learnset", {}).get("by_tutor", []), tutor_consts, path
+        )
+    return out
+
+
 # Battle start condition for each overworld weather that the battle inherits
 # (src/battle/battle_lib.c BattleSystem_TriggerEffectOnSwitch, state
 # SWITCH_IN_CHECK_STATE_FIELD_WEATHER). Every other weather, including
@@ -1181,6 +1247,8 @@ def extract_static(decomp_root: Path, out_dir: Path) -> None:
     _write(out_dir / "evolutions.json", extract_evolutions(decomp_root))
     _write(out_dir / "egg_moves.json", extract_egg_moves(decomp_root))
     _write(out_dir / "evolution_methods.json", extract_evolution_methods(decomp_root))
+    _write(out_dir / "tutor_moves.json", extract_tutor_moves(decomp_root))
+    _write(out_dir / "tutor_learnsets.json", extract_tutor_learnsets(decomp_root))
     _write(out_dir / "exp_tables.json", extract_exp_tables(decomp_root))
     _write(out_dir / "forms.json", extract_forms(decomp_root))
     _write(out_dir / "form_rows.json", species_form_rows(decomp_root))

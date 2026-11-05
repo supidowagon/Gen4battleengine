@@ -191,6 +191,8 @@ def build_arrays(inter: Path) -> tuple[dict[str, np.ndarray], dict]:
     evolutions = _load(inter, "evolutions")
     egg_moves = _load(inter, "egg_moves")
     evolution_methods = _load(inter, "evolution_methods")
+    tutor_moves = _load(inter, "tutor_moves")
+    tutor_learnsets = _load(inter, "tutor_learnsets")
     species = _personal_rows(species_only, forms, form_rows)
     item_ids_by_name = {i["name"]: n for n, i in enumerate(items)}
     first_tm_item = item_ids_by_name["TM01"]
@@ -324,6 +326,11 @@ def build_arrays(inter: Path) -> tuple[dict[str, np.ndarray], dict]:
         "evolutions": evolutions,
         "evolution_methods": evolution_methods,
         "egg_moves": egg_moves,
+        # Move tutors (sTeachableMoves order): {move, costs: {red, blue, yellow, green},
+        # location}; tutor_learnsets maps a personal row to indices into tutor_moves
+        # (Pokemon_ReadMovesetMaskByte, src/overlay005/scrcmd_move_tutor.c:211-259).
+        "tutor_moves": tutor_moves,
+        "tutor_learnsets": tutor_learnsets,
     }
     return arrays, manifest
 
