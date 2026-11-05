@@ -253,3 +253,13 @@ def test_layout_sizes_match_decomp_arithmetic():
     body = sizeof + (4 - sizeof % 4) + 4  # SaveTableEntry_BodySize
     assert BOXES_SIZE == body + 20
     assert NORMAL_SIZE == 0xCF2C
+
+
+def test_default_tables_and_names_refuse_stale_tables(tmp_path):
+    from nuzline.saves.save import default_tables_and_names
+
+    (tmp_path / "manifest.json").write_text('{"version": 7}')
+    with pytest.raises(ValueError, match="re-run tools/extract_decomp.py"):
+        default_tables_and_names(None, None, tmp_path)
+    with pytest.raises(ValueError, match="re-run tools/extract_decomp.py"):
+        default_tables_and_names(object(), object(), tmp_path)

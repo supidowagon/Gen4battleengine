@@ -199,19 +199,21 @@ def select_copies(image: bytes) -> tuple[str, int, int]:
         return "corrupt", curr_normal, curr_box
 
 
-def default_tables_and_names(tables, names):
+def default_tables_and_names(tables, names, dir=None):
     """numpy tables from ``tables.npz`` and the manifest names. Imported here, not at
     module top, so ``import nuzline.saves`` stays free of jax (``nuzline.data.tables``
     imports it)."""
     import numpy as np
 
-    from nuzline.data.tables import DEFAULT, Tables, load_names
+    from nuzline.data.tables import DEFAULT, Tables, _read_manifest, load_names
 
+    dir = DEFAULT if dir is None else dir
+    _read_manifest(dir)  # stale tables: one rebuild message, even when both are passed
     if tables is None:
-        with np.load(DEFAULT / "tables.npz") as z:
+        with np.load(dir / "tables.npz") as z:
             tables = Tables(**{f: z[f] for f in Tables._fields})
     if names is None:
-        names = load_names(DEFAULT)
+        names = load_names(dir)
     return tables, names
 
 
