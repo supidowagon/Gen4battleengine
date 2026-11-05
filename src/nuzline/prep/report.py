@@ -293,6 +293,34 @@ def _ascii(line: str) -> str:
     return line.encode("ascii", "replace").decode("ascii")
 
 
+def _cheaper_lines(result: PrepResult, problem: PrepProblem, names: Names) -> list[str]:
+    """The display-only "Cheaper, tied within noise" line (``PrepResult.cheaper``), or none."""
+    f = result.cheaper
+    if f is None:
+        return []
+    top = f.result.ranking[0]
+    line = (
+        f"Cheaper, tied within noise: {setup_label(names, problem, f.setup)} "
+        f"{top.estimate:.1%} ({top.ci_low:.1%}-{top.ci_high:.1%}), "
+        f"{cost_line(problem, names, f.setup)}"
+    )
+    return [line]
+
+
+def _cheaper_json(result: PrepResult, problem: PrepProblem, names: Names) -> dict | None:
+    f = result.cheaper
+    if f is None:
+        return None
+    top = f.result.ranking[0]
+    return {
+        "label": setup_label(names, problem, f.setup),
+        "value": top.estimate,
+        "ci_low": top.ci_low,
+        "ci_high": top.ci_high,
+        "cost": cost_line(problem, names, f.setup),
+    }
+
+
 def render(
     result: PrepResult, problem: PrepProblem, names: Names, show_depth: int = 1
 ) -> list[str]:
@@ -313,6 +341,7 @@ def render(
         "Prep steps:",
         *(f"  {i}. {s}" for i, s in enumerate(prep_steps(problem, names, result.chosen), 1)),
         cost_line(problem, names, result.chosen),
+        *_cheaper_lines(result, problem, names),
         *ladder_lines(result, problem, names),
     ]
     if _no_deathless(result):
@@ -449,4 +478,5 @@ def record(
             }
             for dropped, by in result.pruned
         ],
+        "cheaper_alternative": _cheaper_json(result, problem, names),
     }

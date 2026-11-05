@@ -23,7 +23,15 @@ from nuzline.search import deaths
 from nuzline.search.leaves import evaluate_leaves
 from nuzline.search.stage_a import tied_with, wilson
 
-__all__ = ["EMPTY", "Scored", "ScreenStats", "prep_order", "scored", "screen"]
+__all__ = [
+    "EMPTY",
+    "Scored",
+    "ScreenStats",
+    "cheaper_alternative",
+    "prep_order",
+    "scored",
+    "screen",
+]
 
 
 @dataclass(frozen=True)
@@ -156,3 +164,17 @@ def prep_order(rows: Sequence[Scored]) -> list[int]:
         order.append(nxt)
         left.remove(nxt)
     return order
+
+
+def cheaper_alternative(rows: Sequence[Scored]) -> int | None:
+    """``rows`` in ``prep_order`` (row 0 the answer): the cheapest later row whose interval
+    overlaps the answer's and that costs less (ties: the earlier row), else ``None``. Shown on
+    the card only; it never reorders (spec section 4)."""
+    if not rows:
+        return None
+    cheaper = [
+        i
+        for i in range(1, len(rows))
+        if rows[i].cost < rows[0].cost and tied_with(rows[i], rows[0])
+    ]
+    return min(cheaper, key=lambda i: (rows[i].cost, i)) if cheaper else None

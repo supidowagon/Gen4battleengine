@@ -71,7 +71,14 @@ from nuzline.prep.checkpoint import (
     write_checkpoint,
 )
 from nuzline.prep.problem import PrepProblem
-from nuzline.prep.screen import Scored, ScreenStats, prep_order, scored, screen
+from nuzline.prep.screen import (
+    Scored,
+    ScreenStats,
+    cheaper_alternative,
+    prep_order,
+    scored,
+    screen,
+)
 from nuzline.prep.setups import (
     Setup,
     dedupe,
@@ -228,7 +235,8 @@ class PrepResult:
     """The answer: ``chosen`` setup, its ``screen`` numbers, the Stage B ``plan`` (``None``
     for a screen-only answer), the odds ``ladder`` for 0-3 deaths, the death ``distribution``
     (the plan leader's, else the screen's), the ``finalists``, the setups left out
-    (``excluded``, named) and the variants the prune dropped with what dominated them."""
+    (``excluded``, named), the variants the prune dropped with what dominated them and
+    ``cheaper``: a cheaper finalist tied within noise with the answer (display only)."""
 
     chosen: Setup
     screen: ScreenStats
@@ -239,6 +247,7 @@ class PrepResult:
     excluded: tuple[str, ...]
     pruned: tuple[tuple[Member, Member], ...]
     stats: SearchStats
+    cheaper: Finalist | None = None
 
 
 @dataclass(frozen=True)
@@ -773,6 +782,10 @@ class _Funnel:
             low, high = self.stats[best].interval(j)
             ladder.append(Rung(j, self.setups[best], self.stats[best].rung(j), low, high, "screen"))
         dist = top.distribution if top is not None and top.distribution is not None else None
+        cheaper = None
+        if self.finalists:
+            c = cheaper_alternative([self.finalist_row(f) for f in self.finalists])
+            cheaper = self.finalists[c] if c is not None else None
         seconds = self.total()
         run_stats = SearchStats(
             setups_screened=sum(1 for s in self.stats.values() if s.n),
@@ -795,6 +808,7 @@ class _Funnel:
             excluded=tuple(self.excluded.values()),
             pruned=tuple(self.pruned),
             stats=run_stats,
+            cheaper=cheaper,
         )
 
 

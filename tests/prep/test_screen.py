@@ -6,7 +6,15 @@ import itertools
 import jax
 import numpy as np
 
-from nuzline.prep.screen import EMPTY, Scored, ScreenStats, prep_order, scored, screen
+from nuzline.prep.screen import (
+    EMPTY,
+    Scored,
+    ScreenStats,
+    cheaper_alternative,
+    prep_order,
+    scored,
+    screen,
+)
 from nuzline.search.leaves import evaluate_leaves
 from nuzline.search.stage_a import wilson
 from tests.engine.helpers import roark_real_state
@@ -140,3 +148,14 @@ def test_rung_outside_ladder_raises():
             s.rung(k)
         with pytest.raises(ValueError):
             s.interval(k)
+
+
+def test_cheaper_alternative():
+    lead = Scored(0.99213, 0.98491, 0.99935, 0.0079, 3.0, 0.5, 0.5)
+    tied_cheap = Scored(0.98704, 0.97896, 0.99511, 0.0287, 0.0, 0.5, 0.5)
+    tied_dear = Scored(0.99202, 0.98619, 0.99785, 0.0080, 3.0, 0.5, 0.5)
+    far_cheap = Scored(0.95, 0.94, 0.96, 0.05, 0.0, 0.5, 0.5)
+    assert cheaper_alternative([lead, tied_dear, tied_cheap]) == 2
+    assert cheaper_alternative([lead, tied_dear, far_cheap]) is None
+    assert cheaper_alternative([tied_cheap, lead]) is None  # the leader is already the cheapest
+    assert cheaper_alternative([]) is None

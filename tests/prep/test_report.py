@@ -8,7 +8,14 @@ from nuzline.engine.ids import Status
 from nuzline.prep.problem import Resources
 from nuzline.prep.report import cost_line, ladder_lines, prep_steps, record, render, setup_card
 from nuzline.prep.screen import ScreenStats
-from nuzline.prep.search import Finalist, PrepResult, PrepSettings, Rung, SearchStats
+from nuzline.prep.search import (
+    Finalist,
+    PrepResult,
+    PrepSettings,
+    Rung,
+    SearchStats,
+    setup_label,
+)
 from nuzline.prep.setups import Setup
 from nuzline.prep.variants import LEVEL_UP, RELEARNER, Member, MoveChange
 from nuzline.search import deaths
@@ -234,7 +241,7 @@ def test_record_is_json(tables, names):
     assert set(rec) == {
         "trainer_id", "trainer", "cap", "deaths", "protected", "reserved", "settings", "seed",
         "fingerprint", "setup", "prep_steps", "cost", "ladder", "distribution", "plan",
-        "finalists", "stats", "excluded", "pruned",
+        "finalists", "stats", "excluded", "pruned", "cheaper_alternative",
     }  # fmt: skip
     assert rec["protected"] == ["party slot 1 FURRET"] and rec["reserved"] == ["Oran Berry"]
     assert rec["setup"][0]["label"] == "box 1 slot 1 KRICKETOT"
@@ -247,6 +254,27 @@ def test_record_is_json(tables, names):
     assert rec["stats"]["setups_screened"] == 40
     bare = record(make_result(prob, setup, plan=False), prob, names, PrepSettings(), 7, "tv")
     assert bare["plan"] is None and bare["finalists"] == []
+
+
+def test_cheaper_alternative_line(tables, names):
+    prob, setup = fixture(tables, names)
+    cheap = Setup((Member(2), Member(1)))
+    assert cost_line(prob, names, cheap) == "Cost: none"
+    assert "1 Heart Scale" in cost_line(prob, names, setup)
+    base = make_result(prob, setup)
+    other = Finalist(cheap, base.finalists[0].result)
+    result = replace(base, finalists=(*base.finalists, other), cheaper=other)
+    lines = render(result, prob, names)
+    found = [line for line in lines if line.startswith("Cheaper, tied within noise: ")]
+    assert len(found) == 1 and "Cost: none" in found[0]
+    assert "\n".join(lines).isascii()
+    rec = record(result, prob, names, PrepSettings(), 7, "tv")
+    assert json.loads(json.dumps(rec)) == rec
+    assert rec["cheaper_alternative"]["label"] == setup_label(names, prob, cheap)
+    assert rec["cheaper_alternative"]["cost"] == "Cost: none"
+    lines = render(base, prob, names)
+    assert not any(line.startswith("Cheaper, tied within noise: ") for line in lines)
+    assert record(base, prob, names, PrepSettings(), 7, "tv")["cheaper_alternative"] is None
 
 
 def test_prep_steps_deposits_left_out_party(tables, names):
