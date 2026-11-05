@@ -2,6 +2,7 @@
 
     uv run python -m benchmarks.exhaustive_roark --save "$NUZLINE_USER_SAVE" [--resume FILE]
                                                  [--devices N] [--out FILE]
+                                                 [--recheck VALUES [--seeds 0,1,2,3,4]]
 
 The pool is the save's party plus the first Venonat (box 1 slot 1) and Geodude (box 1 slot 4)
 (ruling 14); the level cap is the configured one, no bag items, full HP. The valued setups are
@@ -15,11 +16,20 @@ phase 2. The run checkpoints after every setup (``--resume`` continues across ni
 checkpoint is tied to the problem, settings, tables and code like a prep checkpoint) and writes
 ``benchmarks/exhaustive_roark.json`` (``--out``). A failed verdict is a finding, not an error:
 the exit code is 0 either way.
+
+``--recheck VALUES`` values nothing else: it runs the funnel fresh for each rung and each seed
+of ``--seeds`` (``PRNGKey(seed)``) and judges each pick with ``recheck_verdict`` against the
+stored values of an earlier exhaustive checkpoint (read as raw JSON, so a checkpoint of an older
+version or fingerprint still serves; it must hold the same setup count). The pick's value is its
+stored phase-2 value, else its phase-1 one, else (``"solved"``) a fresh solve at precision 0.015.
+It writes ``benchmarks/exhaustive_roark_recheck.json`` (``--out``), never
+``exhaustive_roark.json``; a failed verdict is again a finding, with exit code 0.
 """
 
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import hashlib
 import json
 import os
@@ -30,6 +40,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 RESULT = HERE / "exhaustive_roark.json"
+RECHECK = HERE / "exhaustive_roark_recheck.json"
 RESULTS = HERE / "results"
 BOXED = (("Venonat", 0, 1), ("Geodude", 0, 4))  # (species, 0-based box, slot): ruling 14
 PHASE1_PLAYOUTS = 2000
@@ -46,8 +57,23 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--save", type=Path, default=os.environ.get("NUZLINE_USER_SAVE"))
     parser.add_argument("--resume", type=Path, default=None, help="continue from this checkpoint")
     parser.add_argument("--devices", type=int, default=os.cpu_count())
-    parser.add_argument("--out", type=Path, default=RESULT)
+    parser.add_argument("--out", type=Path, default=None, help=f"default {RESULT.name}")
+    parser.add_argument(
+        "--recheck",
+        type=Path,
+        default=None,
+        metavar="VALUES",
+        help="judge fresh funnel picks against this exhaustive checkpoint's stored values;"
+        f" values nothing else (default --out {RECHECK.name})",
+    )
+    parser.add_argument("--seeds", default="0,1,2,3,4", help="--recheck: the funnel seeds")
     args = parser.parse_args(argv)
+    if args.out is None:
+        args.out = RESULT if args.recheck is None else RECHECK
+    try:
+        args.seeds = [int(s) for s in args.seeds.split(",") if s.strip()]
+    except ValueError:
+        parser.error(f"--seeds must be comma-separated integers, not {args.seeds!r}")
     if not args.save:
         parser.error("--save (or NUZLINE_USER_SAVE) is required")
     args.save = Path(args.save)
@@ -150,6 +176,8 @@ def main(argv: list[str] | None = None) -> int:
         levelled=False,
         max_team=6,
     )
+    if args.recheck is not None:
+        return _recheck(args, tables, names, base, setups, pruned_ids, settings)
     print_ = fingerprint(base, settings, 0, table_version, jaxcache.code_version())
     funnel: dict = {"setups": len(setups), "rungs": {}}
     sink = args.resume or RESULTS / f"exhaustive_roark_{datetime.now():%Y%m%d_%H%M%S}.ckpt.json"
@@ -294,6 +322,105 @@ def main(argv: list[str] | None = None) -> int:
     }
     args.out.write_text(json.dumps(doc, indent=1), encoding="utf-8")
     print(f"wrote {args.out}: {'PASSED' if doc['passed'] else 'FAILED'}")
+    return 0
+
+
+def _plain(obj):
+    """A dataclass (or nested tuples of one) as JSON-ready plain values."""
+    if dataclasses.is_dataclass(obj):
+        return {f.name: _plain(getattr(obj, f.name)) for f in dataclasses.fields(obj)}
+    if isinstance(obj, (tuple, list)):
+        return [_plain(v) for v in obj]
+    return obj
+
+
+def _recheck(args, tables, names, base, setups, pruned_ids, settings) -> int:
+    """``--recheck``: fresh funnel picks for rungs 0 and 1 and each seed, judged against the
+    stored values of ``args.recheck``; writes ``args.out`` and returns 0."""
+    import jax
+
+    from benchmarks.rank_timing import machine
+    from nuzline.prep.exhaustive import (
+        Value,
+        exhaustive_values,
+        recheck_verdict,
+        stored_value,
+    )
+    from nuzline.prep.search import run_prep, setup_label
+
+    # Raw JSON: the stored file may be an older checkpoint version with an older fingerprint.
+    doc = json.loads(args.recheck.read_text(encoding="utf-8"))
+    if doc["funnel"]["setups"] != len(setups):
+        raise SystemExit(
+            f"{args.recheck} holds {doc['funnel']['setups']} setups, this save {len(setups)}"
+        )
+    runs = []
+    for k in (0, 1):
+        prob = replace(base, deaths=k)
+        rung = doc["funnel"]["rungs"][str(k)]
+        for seed in args.seeds:
+            t0 = time.perf_counter()
+            result = run_prep(tables, names, prob, settings, jax.random.PRNGKey(seed))
+            seconds = time.perf_counter() - t0
+            if result.chosen not in setups:
+                raise SystemExit(f"rung {k} seed {seed}: the pick is outside the valued space")
+            pick = setups.index(result.chosen)
+            found = stored_value(rung, pick)
+            if found is None:
+                key = jax.random.fold_in(jax.random.PRNGKey(3), k)
+                solved = exhaustive_values(
+                    tables, names, prob, [setups[pick]], key, depth=1, precision=PHASE2_PRECISION
+                )
+                found = ("solved", solved[0])
+            src, value = found
+            v = recheck_verdict(rung, pick, value, pruned_ids)
+            best_value = Value(*rung["phase2"][str(v.best)])
+            print(
+                f"rung {k} seed {seed}: {'PASS' if v.passed else 'FAIL'} pick #{pick} ({src})"
+                f" {value} vs best #{v.best} {best_value}, funnel {seconds:.1f} s,"
+                f" {result.stats.playouts} playouts"
+            )
+            finalists = []
+            for f in result.finalists:
+                top = f.result.ranking[0] if f.result.ranking else None
+                index = setups.index(f.setup) if f.setup in setups else None
+                stored = stored_value(rung, index) if index is not None else None
+                finalists.append(
+                    {
+                        "index": index,
+                        "estimate": top.estimate if top else None,
+                        "ci_low": top.ci_low if top else None,
+                        "ci_high": top.ci_high if top else None,
+                        "stored": [stored[0], _value_json(stored[1])] if stored else None,
+                    }
+                )
+            runs.append(
+                {
+                    "k": k,
+                    "seed": seed,
+                    "pick": pick,
+                    "setup": setup_label(names, prob, setups[pick]),
+                    "source": src,
+                    "value": _value_json(value),
+                    "best": v.best,
+                    "best_value": _value_json(best_value),
+                    "passed": v.passed,
+                    "funnel_seconds": seconds,
+                    "playouts": result.stats.playouts,
+                    "finalists": finalists,
+                }
+            )
+    out = {
+        "values_file": str(args.recheck),
+        "runs": runs,
+        "passed": all(r["passed"] for r in runs),
+        "machine": machine(),
+        "devices": jax.device_count(),
+        "settings": _plain(settings),
+    }
+    args.out.write_text(json.dumps(out, indent=1), encoding="utf-8")
+    passed = sum(r["passed"] for r in runs)
+    print(f"wrote {args.out}: {passed}/{len(runs)} passed")
     return 0
 
 

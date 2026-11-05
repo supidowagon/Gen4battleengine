@@ -39,7 +39,9 @@ __all__ = [
     "Verdict",
     "exhaustive_values",
     "pruned_setups",
+    "recheck_verdict",
     "restricted_setups",
+    "stored_value",
     "verdict",
 ]
 
@@ -206,4 +208,29 @@ def verdict(values: Mapping[int, Value], pick: int, pruned: Collection[int]) -> 
     best = min((i for i in values if i not in pruned_set), key=lambda i: (-values[i].estimate, i))
     ties = tied_with(values[pick], values[best])
     beaten = tuple(sorted(i for i in pruned_set if values[i].ci_low > values[pick].ci_high))
+    return Verdict(best, pick, ties, beaten, ties and not beaten)
+
+
+def stored_value(rung: Mapping, pick: int) -> tuple[str, Value] | None:
+    """The pick's value in a stored exhaustive rung (``{"phase1": .., "phase2": ..}``, values
+    ``[estimate, ci_low, ci_high, e_deaths]`` keyed by str index): phase 2, else phase 1."""
+    for phase in ("phase2", "phase1"):
+        if str(pick) in rung.get(phase, {}):
+            return phase, Value(*rung[phase][str(pick)])
+    return None
+
+
+def recheck_verdict(
+    rung: Mapping, pick: int, value: Value, pruned: Collection[int] = ()
+) -> Verdict:
+    """``verdict`` for a new funnel pick against a stored rung: the best is the stored phase-2
+    best (the pick's own ``value`` never becomes it); the pick ties when its interval overlaps
+    the best's."""
+    stored = {int(i): Value(*v) for i, v in rung["phase2"].items()}
+    pruned_set = set(pruned)
+    best = min((i for i in stored if i not in pruned_set), key=lambda i: (-stored[i].estimate, i))
+    ties = tied_with(value, stored[best])
+    beaten = tuple(
+        sorted(i for i in pruned_set if i in stored and stored[i].ci_low > value.ci_high)
+    )
     return Verdict(best, pick, ties, beaten, ties and not beaten)

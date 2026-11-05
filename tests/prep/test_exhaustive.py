@@ -13,7 +13,9 @@ from nuzline.prep.exhaustive import (
     Value,
     exhaustive_values,
     pruned_setups,
+    recheck_verdict,
     restricted_setups,
+    stored_value,
     verdict,
 )
 from nuzline.prep.problem import Resources
@@ -218,3 +220,33 @@ def test_funnel_matches_exhaustive_ci_full(tables, names, k):
     _, values, out, n_pruned = _ci_pool(tables, names, k, 4, 500)
     assert n_pruned > 0
     assert out.passed, (out, values)
+
+
+RUNG0 = {
+    "phase1": {
+        "891": [0.9985, 0.996, 1.0, 0.0015],
+        "3357": [0.99, 0.985, 0.995, 0.02],
+        "510": [0.996, 0.993, 0.999, 0.004],
+        "77": [1.0, 0.998, 1.0, 0.0],
+    },
+    "phase2": {
+        "891": [0.99900, 0.99624, 1.0, 0.0010],
+        "3357": [0.98903, 0.98231, 0.99575, 0.0199],
+        "510": [0.99602, 0.98970, 1.0, 0.0040],
+    },
+}
+
+
+def test_stored_value_prefers_phase2_then_phase1():
+    assert stored_value(RUNG0, 510) == ("phase2", Value(0.99602, 0.98970, 1.0, 0.0040))
+    assert stored_value(RUNG0, 77) == ("phase1", Value(1.0, 0.998, 1.0, 0.0))
+    assert stored_value(RUNG0, 12345) is None
+
+
+def test_recheck_verdict_on_the_stored_rung0_values():
+    old = recheck_verdict(RUNG0, 3357, Value(0.98903, 0.98231, 0.99575, 0.0199))
+    assert old.best == 891 and not old.passed  # the gate's original failure
+    new = recheck_verdict(RUNG0, 510, Value(0.99602, 0.98970, 1.0, 0.0040))
+    assert new.best == 891 and new.passed
+    coarse = recheck_verdict(RUNG0, 77, Value(1.0, 0.998, 1.0, 0.0))
+    assert coarse.best == 891  # a value put in from phase 1 never becomes the best
