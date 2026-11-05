@@ -886,3 +886,32 @@ def recheck_verdict(rung: Mapping, pick: int, value: Value, pruned: Collection[i
 - The cold and warm wall time against 900 s, and the change from 964.2 s.
 - The behaviour change the user confirmed on 2026-11-04: inside a win-chance tie fewer deaths decides at every position, cost only after deaths; `DEATHS_TOL` is gone.
 - The deferred levers (finalist race, more finalists) if the gate is ever required to hit the exact argmax.
+
+---
+
+## Task 13: Fresh finalist race (added 2026-11-04 after the recheck's rung-0 seed-4 miss)
+
+**Why.** The recheck passed 9/10. Rung 0 seed 4 picked #1719 (stored 0.98903 [0.98231, 0.99575]). A trace showed that 6 of the 8 final survivors of `S_k` (n = 1016 each) pass, among them #510 (stored 0.996), but `ranked(pool)[:finalists]` chose by the accumulated screen stats, which carry the luck that let those setups survive every cut (winner's curse): #1719 screened 0.998 at n = 1016 against a true 0.989. A simulation of fresh playouts over those 8 (stored estimates as truth): a wrong pick 1.1 % at 1016 fresh playouts each, 0.1 % at 2040, about 0 at 4088. The user approved the fix on 2026-11-04 ("Yes, add it").
+
+**Files:** `src/nuzline/prep/search.py`, `tests/prep/test_search.py`, `tests/prep/test_checkpoint.py`, `docs/superpowers/specs/2026-10-31-prep-search-design.md` (section 6, the finalists step), `.superpowers/sdd/2026-10-31-m4c-prep-search/progress.md` (ledger, not committed: `.superpowers/` is ignored).
+
+**Design (decided; implement exactly):**
+- `PrepSettings.race_playouts: int = 2040` (docstring: before Stage B, rung `k`'s final survivors are screened afresh with this many playouts each and the finalists are the top `finalists` of that fresh screen alone by `prep_order`; 0 = off, the finalists are then picked from the accumulated stats as before). Validate in `__post_init__`: negative or odd (and non-zero) raises `ValueError` with the same wording style as `tie_playouts`/`screen_n`.
+- Key: a new phase id `race`, `_PHASES["race"] = 1 << 21` (disjoint from finalists 0, teams 1, deep 2 and variants `3 + v`; update the `phase_id` docstring). The race key is `jax.random.fold_in(self.key, phase_id("race"))`.
+- `_Funnel.race(self, pool: list[int]) -> list[int]`: one anytime unit (`before_unit()` first). It screens every non-excluded member of `pool` with `race_playouts` fresh playouts in one `screen` call (the same stacking as `top_up`), adds them to `self.playouts`, and keeps the fresh stats in a local dict. They are **not** merged into `self.stats`. A refused playout excludes the setup exactly as `top_up` does (factor that exclusion into a small helper both use). It returns the picks: `pool` members ranked by `prep_order` over `scored(fresh[i], self.k, self.cost[i], self.tie[i])`, the first `settings.finalists`. If every member is excluded, `raise_all_refused()`. It ends with `unit_done("race", "race", 0, len(pool), pos)` where `pos = {"phase": "finalists", "pool": pool, "next": 0, "deep": False, "picks": picks}`, so a resume goes straight to the finalists with the saved picks and the fresh stats never need checkpointing.
+- `drive`: when `max_depth >= 1`, a fresh run calls `picks = self.race(pools[self.k])` if `race_playouts > 0` and `len(pools[self.k]) > settings.finalists`, then `self.finalists_phase(pools[self.k], {"next": 0, "deep": False, "picks": picks})` (or pass `picks` through a keyword: keep it simple and keep the resume path working). Otherwise the old path. With `max_depth == 0` no race runs (the screen-only answer is unchanged). A resumed run at a finalists position never re-races.
+- `self.phase` and `SearchStats.phase_seconds` get a `"race"` bucket through `unit_done`. No other report change.
+- No `CHECKPOINT_VERSION` bump: the settings digest in `fingerprint` already changes with the new field, so older checkpoints are refused as a settings mismatch.
+- Spec section 6: one paragraph after the finalists step: the fresh race, why (selection bias of the accumulated screen; the seed-4 trace), `race_playouts` 2040, and that its playouts never feed the halving stats.
+
+**Tests (write first, see them fail):**
+1. `test_finalists_are_picked_by_a_fresh_race` (test_search.py, with the `Fakes` pattern): the fake `screen` makes setup A look best on the halving counts but worse on the race's call (tell the race call apart by its `n == race_playouts` or by its key), so with the race on A is not among the finalists, and with `race_playouts=0` it is.
+2. `test_race_playouts_are_counted_and_not_merged`: `result.stats.playouts` grows by `race_playouts * len(pool)`, and the chosen setup's `result.screen.n` is unchanged by the race.
+3. `test_race_settings_validation`: -2 and 3 raise `ValueError`, 0 and 2040 are fine.
+4. `test_race_key_is_disjoint`: `phase_id("race")` differs from `phase_id(p)` for finalists, teams, deep and variants 0..1000.
+5. test_checkpoint.py: `test_resume_equals_uninterrupted` (and the deep-leader variant) still pass with the race unit in the run (it stops at every unit); add `test_resume_after_the_race_reuses_its_picks`: stop right after the race unit, resume, the finalists solved are the race's picks and the result equals the uninterrupted run.
+6. A budget stop before the race leaves the answer as the `prep_order` leader of the last pools (existing behaviour; add an assertion where a budget test already exists, or a small test).
+
+**Verify:** `uv run pytest tests/prep -q`, then `uv run ruff check src tests benchmarks` and `uv run ruff format --check src tests benchmarks`.
+
+**Commit:** `feat(prep): finalists come from a fresh race of the last survivors (race_playouts 2040)` with the trailer.
