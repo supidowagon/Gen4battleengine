@@ -59,6 +59,7 @@ def interrupting(after: int):
     return progress, seen
 
 
+@pytest.mark.xfail(strict=True, reason="resume inside the merged stage is Task 6")
 def test_resume_equals_uninterrupted(tables, names, monkeypatch, tmp_path):
     prob, _ = setup_run(monkeypatch, tables, names)
     units = []

@@ -557,3 +557,44 @@ def test_floor_cut_screens_an_exact_tie_further(monkeypatch):
     off = Expansion(monkeypatch, [], 12, losses, hp, keep=8, tie_playouts=0)
     out = off.funnel.halving("teams", "teams", pid, [list(off.new)] * search.RUNGS, 8)[0]
     assert best not in out and len(out) == 8  # retention off: the old saturated cut
+
+
+def test_expansion_compares_parents_and_neighbours_at_equal_n(monkeypatch):
+    """The rung-0 gate miss, expansion 1's final cut (trace cut 9): 32 parents at 248, two of
+    them truly ~0.999 with little HP left (#933, #92), one lucky (#3357, truly ~0.989, the most
+    HP); 105 cost-3 neighbours stop halving at 120/120 with more HP. The one-step cut at
+    unequal n kept the neighbours and the lucky parent and dropped both safe parents."""
+    safe, lucky = (0, 1), 2
+    parents = [
+        _saturated(248, 248, 0.944),
+        _saturated(248, 248, 0.886),
+        _saturated(248, 248, 0.9665),
+    ] + [_saturated(246, 248, 0.5)] * 29
+    n_new = 105
+    total = 32 + n_new
+    hp = {i: (0.963 + 0.007 * (i % 10) / 10 if i >= 32 else 0.5) for i in range(total)}
+    cost = [0.0] * 32 + [3.0] * n_new
+
+    def losses(i, m):
+        if i in safe:
+            return 0
+        if i == lucky:
+            return max(0, m - 248) // 90
+        if i < 32:
+            return max(0, m - 248) // 120
+        return max(0, m - 120) // 100
+
+    e = Expansion(monkeypatch, parents, n_new, losses, hp, keep=8, cost=cost)
+    out = e.run()
+    assert set(safe) <= set(out) and len(out) == 8
+    assert {e.funnel.stats[i].n for i in out} == {1016}  # one count for the whole cut
+
+    def key(i):
+        return search.halving_key(e.funnel.stats[i], 0, cost[i], e.funnel.tie[i])
+
+    assert min(out, key=key) in safe
+
+
+def test_ladder_round():
+    got = [search.ladder_round(8, n) for n in (1, 24, 25, 248, 762, 1016, 4088)]
+    assert got == [1, 1, 2, 4, 6, 6, 8]

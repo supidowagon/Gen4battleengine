@@ -17,12 +17,15 @@ estimate first, then, among setups the playouts cannot tell apart (an easy fight
 party they favour bigger teams. The rounds end
 once ``|S_k| <= keep``. In the team phase every setup competes at the same count. In a variant
 expansion the parents (the previous survivors, already screened to hundreds or thousands of
-playouts) are not halved: only the new neighbours compete in the rounds, each rung's
-neighbour set halved as above, and after the last round each rung keeps its top ``keep`` (or
-``ladder_keep``) of its parents and surviving neighbours by the same key, both groups by then
-over hundreds of playouts. A parent's count would otherwise decide a cut against a neighbour's
-handful (a lower confidence bound keeps tight parents over a better ``n/n`` neighbour; the
-point estimate drops them for lucky ``n/n`` neighbours).
+playouts) are not halved at first: the new neighbours halve alone, each rung's neighbour set
+as above. Then the *merged stage*: rung ``k``'s parents and surviving neighbours are topped up
+together to the first halving count at or above the parents' largest count
+(``ladder_round``; round keys salted by ``MERGED``) and cut to the floor there, with the exact
+ties at the edge kept and screened further while ``T_r < tie_playouts``; the ladder rungs (screen-only
+answers) are cut to their floors in the first merged round at the counts they have. Every cut
+of rung ``k`` thus compares setups at one playout count: a parent's count would otherwise
+decide a cut against a neighbour's handful (a lower confidence bound keeps tight parents over
+a better ``n/n`` neighbour; the point estimate drops them for lucky ``n/n`` neighbours).
 
 The answer at any moment is the best so far: the ``prep_order`` leader of ``S_k`` as the last
 completed round screened it (before that round's halving), or the best finalist. A unit of work
@@ -101,6 +104,16 @@ __all__ = [
 ]
 
 RUNGS = deaths.MAX_DEATH_BUDGET + 1  # the ladder: 0..3 deaths
+MERGED = 1 << 20  # key salt of a variant expansion's merged stage (disjoint from round keys)
+
+
+def ladder_round(screen_n: int, n: int) -> int:
+    """The first halving round ``r >= 1`` whose ``T_r = screen_n * (2**(r + 1) - 1)`` reaches
+    ``n`` playouts."""
+    r = 1
+    while screen_n * (2 ** (r + 1) - 1) < n:
+        r += 1
+    return r
 
 
 def tie_rank(seed: bytes, row: bytes) -> int:
@@ -497,13 +510,17 @@ class _Funnel:
         v: int = 0,
         r: int = 0,
         parents: list[list[int]] | None = None,
+        merged: bool = False,
     ) -> list[list[int]]:
         """Successive halving over the survivor sets ``pools`` from round ``r`` (module
         docstring); returns the final sets. ``v``: the expansion (variant phases). With
         ``parents`` (a variant expansion: each rung's parents) ``pools`` are the competing
         neighbours, and the result is each rung's final pick from parents and survivors. Without
         ``parents``, a cut of rung ``k`` to its floor keeps the exact ties at the edge and screens
-        them further while the round's target is below ``tie_playouts``."""
+        them further while the round's target is below ``tie_playouts``. With ``merged`` (a
+        variant expansion's merged stage) only rung ``k``'s set is topped up, every set is cut
+        to its floor, and the round keys are salted by ``MERGED``."""
+        assert not (merged and parents is not None)
         k, st = self.k, self.settings
         floors = [keep if j == k else st.ladder_keep for j in range(RUNGS)]
 
@@ -514,15 +531,22 @@ class _Funnel:
 
         while not (r and len(pools[k]) <= keep):  # resumed after its last round: none left
             self.before_unit()
-            members = sorted(set().union(*pools))
-            rkey = jax.random.fold_in(jax.random.fold_in(self.key, pid), r)
+            # the merged stage tops up rung k only: ladder rungs are screen-only answers
+            members = sorted(pools[k]) if merged else sorted(set().union(*pools))
+            base = jax.random.fold_in(self.key, pid)
+            if merged:
+                base = jax.random.fold_in(base, MERGED)
+            rkey = jax.random.fold_in(base, r)
             t_r = st.screen_n * (2 ** (r + 1) - 1)
             self.top_up(members, t_r, rkey)
             pools = [[i for i in p if i not in self.excluded] for p in pools]
             if not whole(pools)[k]:
                 self.raise_all_refused()
             self.last_pools = [list(p) for p in whole(pools)]
-            counts = [max(floors[j], ceil(len(p) / 2)) for j, p in enumerate(pools)]
+            counts = [
+                floors[j] if merged else max(floors[j], ceil(len(p) / 2))
+                for j, p in enumerate(pools)
+            ]
             pools = [
                 self.top(
                     p,
@@ -544,11 +568,17 @@ class _Funnel:
             pos = {"phase": bucket, "v": v, "r": r + 1, "pools": pools}
             if parents is not None:
                 pos["parents"] = parents
+            if merged:
+                pos["stage"] = "merged"
             self.unit_done(phase, bucket, r, len(whole(pools)[k]), pos)
             r += 1
         if parents is None:
             return pools
-        return [self.top(p, j, floors[j]) for j, p in enumerate(whole(pools))]
+        union = whole(pools)
+        if len(union[k]) <= keep:
+            return [self.top(p, j, floors[j]) for j, p in enumerate(union)]
+        start = ladder_round(st.screen_n, max(self.stats[i].n for i in union[k]))
+        return self.halving(phase, bucket, pid, union, keep, v, start, merged=True)
 
     def raise_all_refused(self) -> None:
         reasons = "; ".join(list(self.excluded.values())[:3])
