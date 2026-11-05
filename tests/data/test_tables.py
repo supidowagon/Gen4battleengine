@@ -279,3 +279,31 @@ def test_old_tables_are_refused(tmp_path, manifest):  # no npz needed: check_man
     for load in (load_tables, load_names, load_learnsets):
         with pytest.raises(ValueError, match="re-run tools/extract_decomp.py"):
             load(tmp_path)
+
+
+STALE_NPZ = (
+    r"tables\.npz is version \w+; .*re-run tools/extract_decomp\.py and tools/build_tables\.py"
+)
+
+
+def _stale_npz(dir: Path, version: int | None) -> None:
+    """A current manifest beside a ``tables.npz`` built by an older nuzline: the tracked
+    manifest is pulled while the git-ignored npz stays (final review, stale tables)."""
+    (dir / "manifest.json").write_text(json.dumps({"version": MANIFEST_VERSION}))
+    arrays = {"species_base_stats": np.zeros((496, 6), np.int16)}
+    if version is not None:
+        arrays["version"] = np.int16(version)
+    np.savez_compressed(dir / "tables.npz", **arrays)
+
+
+@pytest.mark.parametrize("version", [None, 7])
+def test_stale_npz_beside_current_manifest_is_refused(tmp_path, version):
+    _stale_npz(tmp_path, version)
+    with pytest.raises(ValueError, match=STALE_NPZ):
+        load_tables(tmp_path)
+
+
+def test_built_npz_records_its_version(tables):
+    with np.load(TABLES / "tables.npz") as z:
+        assert "version" in z.files and int(z["version"]) == MANIFEST_VERSION
+    assert "version" not in Tables._fields

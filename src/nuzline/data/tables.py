@@ -36,6 +36,19 @@ def check_manifest(manifest: dict, dir: Path) -> None:
         )
 
 
+def check_npz(z, dir: Path) -> None:
+    """Raise ``ValueError`` unless the opened ``tables.npz`` ``z`` carries ``version``
+    ``MANIFEST_VERSION``. ``manifest.json`` is tracked in git and ``tables.npz`` is not, so
+    after a pull a current manifest can sit beside an old npz; only the npz's own
+    ``version`` array (absent before version 8, read as stale) proves its version."""
+    v = int(z["version"]) if "version" in z.files else None
+    if v != MANIFEST_VERSION:
+        raise ValueError(
+            f"{Path(dir) / 'tables.npz'} is version {v}; this nuzline needs "
+            f"{MANIFEST_VERSION}: re-run tools/extract_decomp.py and tools/build_tables.py"
+        )
+
+
 def _read_manifest(dir: Path) -> dict:
     manifest = json.loads((Path(dir) / "manifest.json").read_text(encoding="utf-8"))
     check_manifest(manifest, dir)
@@ -79,6 +92,7 @@ class Tables(NamedTuple):
 def load_tables(dir: Path = DEFAULT) -> Tables:
     _read_manifest(dir)
     with np.load(Path(dir) / "tables.npz") as z:
+        check_npz(z, dir)
         return Tables(**{f: jnp.asarray(z[f]) for f in Tables._fields})
 
 

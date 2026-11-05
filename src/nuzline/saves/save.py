@@ -205,12 +205,13 @@ def default_tables_and_names(tables, names, dir=None):
     imports it)."""
     import numpy as np
 
-    from nuzline.data.tables import DEFAULT, Tables, _read_manifest, load_names
+    from nuzline.data.tables import DEFAULT, Tables, _read_manifest, check_npz, load_names
 
     dir = DEFAULT if dir is None else dir
     _read_manifest(dir)  # stale tables: one rebuild message, even when both are passed
     if tables is None:
         with np.load(dir / "tables.npz") as z:
+            check_npz(z, dir)
             tables = Tables(**{f: z[f] for f in Tables._fields})
     if names is None:
         names = load_names(dir)

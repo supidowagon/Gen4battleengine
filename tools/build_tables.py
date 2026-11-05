@@ -339,7 +339,9 @@ def build(intermediate_dir: Path, out_dir: Path) -> None:
     arrays, manifest = build_arrays(Path(intermediate_dir))
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    np.savez_compressed(out_dir / "tables.npz", **arrays)
+    # The npz carries its own version too (nuzline.data.tables.check_npz): manifest.json
+    # is tracked in git and tables.npz is not, so the manifest cannot vouch for the npz.
+    np.savez_compressed(out_dir / "tables.npz", version=np.int16(MANIFEST_VERSION), **arrays)
     (out_dir / "manifest.json").write_text(
         json.dumps(manifest, indent=1, ensure_ascii=False) + "\n", encoding="utf-8"
     )
