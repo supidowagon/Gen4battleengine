@@ -302,7 +302,7 @@ def _cheaper_lines(result: PrepResult, problem: PrepProblem, names: Names) -> li
     line = (
         f"Cheaper, tied within noise: {setup_label(names, problem, f.setup)} "
         f"{top.estimate:.1%} ({top.ci_low:.1%}-{top.ci_high:.1%}), "
-        f"{cost_line(problem, names, f.setup)}"
+        f"{top.e_deaths:.3f} expected deaths, {cost_line(problem, names, f.setup)}"
     )
     return [line]
 
@@ -317,6 +317,7 @@ def _cheaper_json(result: PrepResult, problem: PrepProblem, names: Names) -> dic
         "value": top.estimate,
         "ci_low": top.ci_low,
         "ci_high": top.ci_high,
+        "e_deaths": top.e_deaths,
         "cost": cost_line(problem, names, f.setup),
     }
 

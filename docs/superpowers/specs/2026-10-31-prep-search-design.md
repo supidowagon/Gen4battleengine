@@ -159,9 +159,10 @@ design.md §4.4 already fixes the funnel; this milestone implements it:
    first halving count at or above the parents' count, and cut to the survivor floor there.
    At a cut that reaches a survivor floor, setups tied exactly (score and deaths) with the last
    survivor are kept and screened further, doubling each round, until the tie breaks or
-   `tie_playouts` (1016) is reached. Only then do cost and the seeded tie rank decide. Cost, HP
-   and registration order never decide which setups get more playouts while the playouts can
-   still tell them apart. (Added 2026-11-04 after the exhaustive rung-0 miss.)
+   `tie_playouts` (1016) is reached; only then do cost and the seeded tie rank decide there.
+   Exact ties are kept and screened further only at a cut that reaches a survivor floor;
+   elsewhere an exact tie on score and deaths goes to the lower cost, then the seeded tie rank.
+   HP and registration order never decide. (Added 2026-11-04 after the exhaustive rung-0 miss.)
    The finalists are chosen by a **fresh race**: before Stage B, every final survivor of the
    requested rung is screened again with `race_playouts` (2040) new playouts, and the finalists
    are the best of that fresh screen alone (win chance, then expected deaths, then cost). The

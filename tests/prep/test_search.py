@@ -7,6 +7,7 @@ reproducibility test runs the real engine.
 
 import dataclasses
 import itertools
+import json
 from types import SimpleNamespace
 
 import jax
@@ -14,6 +15,7 @@ import numpy as np
 import pytest
 
 from nuzline.prep import search
+from nuzline.prep.checkpoint import setup_from_json
 from nuzline.prep.problem import Resources
 from nuzline.prep.screen import ScreenStats, prep_order, scored
 from nuzline.prep.search import PrepSettings, phase_id, run_prep
@@ -724,6 +726,81 @@ def test_budget_stop_before_the_race_keeps_the_screen_leader(tables, names, monk
         scored(_stats(fakes, s), 0, reg.cost[reg.index[s]], reg.tie[reg.index[s]]) for s in setups
     ]
     assert result.chosen == setups[prep_order(rows)[0]]
+
+
+def _race_favouring_fakes(monkeypatch, best):
+    """``Fakes`` (``falling``) whose ``screen`` makes ``best[0]`` clearly the best setup and every
+    other setup clearly worse on calls made with the race's key only; the calls of the race are
+    appended to ``raced``."""
+    racing = [False]
+    raced: list = []
+
+    def cum(setup, index):
+        if racing[0]:
+            return (0.9,) * 4 if setup == best[0] else (0.1,) * 4
+        return falling(setup, index)
+
+    fakes = Fakes(monkeypatch, cum)
+    inner = fakes.screen
+
+    def screen(tables, states, n, key, max_turns=100):
+        racing[0] = np.array_equal(np.asarray(key), np.asarray(race_key()))
+        if racing[0]:
+            raced.append(fakes.setup_of(states))
+        return inner(tables, states, n, key, max_turns)
+
+    monkeypatch.setattr(search, "screen", screen)
+    return fakes, raced
+
+
+def test_budget_stop_after_the_race_answers_its_first_pick(tables, names, monkeypatch, tmp_path):
+    """A stop after the race but before any finalist is solved: the screen-only answer (and the
+    progress leader) is the race's first pick, not the leader of the accumulated halving stats,
+    which the race overrules."""
+    prob = make_problem(tables, names)
+    best: list = [None]
+    fakes, raced = _race_favouring_fakes(monkeypatch, best)
+    record: list = []
+    monkeypatch.setattr(search, "solve", fake_solve(fakes, record, lambda s, i: 0.5))
+    early = run_prep(
+        tables,
+        names,
+        prob,
+        _race_settings(race_playouts=2040, budget_seconds=1),
+        KEY,
+        clock=lambda: 100.0 if len(fakes.calls) >= 2 else 0.0,
+    )
+    assert not raced and early.stats.stopped == "budget"
+    halving_leader = early.chosen  # the answer of a stop before the race
+    survivors = fakes.calls[-1][0]
+    best[0] = next(s for s in survivors if s != halving_leader)
+
+    fakes, raced = _race_favouring_fakes(monkeypatch, best)
+    monkeypatch.setattr(search, "solve", fake_solve(fakes, record, lambda s, i: 0.5))
+    units: list = []
+    path = tmp_path / "race.ckpt.json"
+    result = run_prep(
+        tables,
+        names,
+        prob,
+        _race_settings(race_playouts=2040, budget_seconds=1),
+        KEY,
+        clock=lambda: 100.0 if len(fakes.calls) >= 3 else 0.0,  # out once the race is screened
+        progress=units.append,
+        checkpoint=path,
+        table_version="t",
+        code_version="c",
+    )
+    assert len(raced) == 1 and not record  # raced, then stopped before any Stage B solve
+    assert result.stats.stopped == "budget" and result.stats.phase == "race"
+    assert result.plan is None and not result.finalists
+    funnel = json.loads(path.read_text())["funnel"]
+    assert funnel["pos"]["phase"] == "finalists" and funnel["pos"]["next"] == 0
+    pick = setup_from_json(funnel["setups"][funnel["pos"]["picks"][0]])
+    assert pick == best[0] != halving_leader
+    assert result.chosen == pick
+    assert result.ladder[0].setup == pick and result.ladder[0].source == "screen"
+    assert units[-1].phase == "race" and units[-1].leader == pick
 
 
 @pytest.mark.parametrize("finalists", [3, 4])

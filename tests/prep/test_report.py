@@ -262,16 +262,20 @@ def test_cheaper_alternative_line(tables, names):
     assert cost_line(prob, names, cheap) == "Cost: none"
     assert "1 Heart Scale" in cost_line(prob, names, setup)
     base = make_result(prob, setup)
-    other = Finalist(cheap, base.finalists[0].result)
+    solved = base.finalists[0].result
+    top = replace(solved.ranking[0], e_deaths=0.0123)
+    other = Finalist(cheap, replace(solved, ranking=[top, *solved.ranking[1:]]))
     result = replace(base, finalists=(*base.finalists, other), cheaper=other)
     lines = render(result, prob, names)
     found = [line for line in lines if line.startswith("Cheaper, tied within noise: ")]
     assert len(found) == 1 and "Cost: none" in found[0]
+    assert "0.012 expected deaths" in found[0]
     assert "\n".join(lines).isascii()
     rec = record(result, prob, names, PrepSettings(), 7, "tv")
     assert json.loads(json.dumps(rec)) == rec
     assert rec["cheaper_alternative"]["label"] == setup_label(names, prob, cheap)
     assert rec["cheaper_alternative"]["cost"] == "Cost: none"
+    assert rec["cheaper_alternative"]["e_deaths"] == 0.0123
     lines = render(base, prob, names)
     assert not any(line.startswith("Cheaper, tied within noise: ") for line in lines)
     assert record(base, prob, names, PrepSettings(), 7, "tv")["cheaper_alternative"] is None

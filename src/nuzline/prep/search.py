@@ -31,10 +31,11 @@ decide a cut against a neighbour's handful (a lower confidence bound keeps tight
 a better ``n/n`` neighbour; the point estimate drops them for lucky ``n/n`` neighbours).
 
 The answer at any moment is the best so far: the ``prep_order`` leader of ``S_k`` as the last
-completed round screened it (before that round's halving), or the best finalist. A unit of work
-is a halving round or a Stage B solve; ``progress`` is called after each, a ``KeyboardInterrupt``
-raised in one (or by ``progress``) ends the run with ``stopped="interrupted"``, and
-``budget_seconds`` is checked before every unit but the first of this invocation (ruling 11).
+completed round screened it (before that round's halving), after the race its first pick, or
+the best finalist. A unit of work is a halving round, the race or a Stage B solve;
+``progress`` is called after each, a ``KeyboardInterrupt`` raised in one (or by ``progress``)
+ends the run with ``stopped="interrupted"``, and ``budget_seconds`` is checked before every
+unit but the first of this invocation (ruling 11).
 
 Checkpoint (ruling 12; ``prep.checkpoint``): after every unit, before ``progress`` is called, the
 whole funnel is written: the registered setups with their accumulated stats, the exclusions,
@@ -151,14 +152,15 @@ class PrepSettings:
     expansions; ``finalists``: Stage B solves at depth 1; ``max_depth``: the leader's deepest
     solve (0 = screen only); ``precision``: the Stage B target half-width, or
     ``finalist_playouts`` a fixed ``budget_playouts`` instead; ``max_team`` .. ``levelled``:
-    the variant space (``levelled=False``: no free level-up slot replacements); ``budget_seconds``: the anytime limit (ruling 11); ``weights``: the
-    resource cost weights of the tie rule (ruling 7); ``tie_playouts``: at a cut reaching a
-    survivor floor, setups tied exactly with the last survivor are kept and screened further
-    until the tie breaks or they reach this many playouts (0: off; 1016 = ``screen_n`` 8's
-    round 6); ``race_playouts``: before Stage B, rung ``k``'s final survivors are screened
-    afresh with this many playouts each and the finalists are the top ``finalists`` of that fresh
-    screen alone by ``prep_order`` (0: off, the finalists are then picked from the accumulated
-    stats)."""
+    the variant space (``levelled=False``: no free level-up slot replacements);
+    ``budget_seconds``: the anytime limit (ruling 11); ``weights``: the resource cost weights,
+    the last tie-break, after win chance and deaths (spec section 4, user decision
+    2026-11-04); ``tie_playouts``: at a cut reaching a survivor floor, setups tied exactly with
+    the last survivor are kept and screened further until the tie breaks or they reach this
+    many playouts (0: off; 1016 = ``screen_n`` 8's round 6); ``race_playouts``: before Stage
+    B, rung ``k``'s final survivors are screened afresh with this many playouts each and the
+    finalists are the top ``finalists`` of that fresh screen alone by ``prep_order`` (0: off,
+    the finalists are then picked from the accumulated stats)."""
 
     screen_n: int = 8
     team_keep: int = 32
@@ -265,8 +267,9 @@ class PrepResult:
 class Progress:
     """After one unit of work. ``phase``: ``"teams"``, ``"variants <v>"`` (``v`` 1-based),
     ``"race"`` or ``"finalists"``; ``round``: the halving round, or the finalist index;
-    ``alive``: ``|S_k|`` (with the parents in a variant expansion; the number of finalists in
-    ``"finalists"``); ``leader``: the best setup so far."""
+    ``alive``: ``|S_k|`` (with the parents in a variant expansion; the number of setups raced
+    in ``"race"``; the number of finalists in ``"finalists"``); ``leader``: the best setup so
+    far."""
 
     phase: str
     round: int
@@ -495,10 +498,21 @@ class _Funnel:
         ]
         self.pos = funnel["pos"]
 
+    def screen_leader(self) -> int:
+        """The screen-only answer's index: after the race (the position holds its ``picks``)
+        its first pick still in the run, else the ``prep_order`` leader of ``S_k`` on the
+        accumulated stats."""
+        pos = self.pos
+        if pos is not None and pos.get("phase") == "finalists" and "picks" in pos:
+            picks = [i for i in pos["picks"] if i not in self.excluded]
+            if picks:
+                return picks[0]
+        return self.ranked(self.last_pools[self.k], self.k)[0]
+
     def leader(self) -> Setup:
         if self.finalists:
             return self.finalists[0].setup
-        return self.setups[self.ranked(self.last_pools[self.k], self.k)[0]]
+        return self.setups[self.screen_leader()]
 
     def top_up(self, members: Sequence[int], target: int, key) -> None:
         """Screen every member up to ``target`` playouts, one call per distinct shortfall; the
@@ -823,7 +837,7 @@ class _Funnel:
             plan = lead.result
             top = plan.ranking[0]
         else:
-            chosen = self.setups[self.ranked(pools[k], k)[0]]
+            chosen = self.setups[self.screen_leader()]
             plan, top = None, None
         ci = self.index[chosen]
         stats = self.stats[ci]
@@ -832,7 +846,7 @@ class _Funnel:
             if j == k and top is not None:
                 ladder.append(Rung(j, chosen, top.estimate, top.ci_low, top.ci_high, "plan"))
                 continue
-            best = self.ranked(pools[j] or pools[k], j)[0]
+            best = ci if j == k else self.ranked(pools[j] or pools[k], j)[0]
             low, high = self.stats[best].interval(j)
             ladder.append(Rung(j, self.setups[best], self.stats[best].rung(j), low, high, "screen"))
         dist = top.distribution if top is not None and top.distribution is not None else None
