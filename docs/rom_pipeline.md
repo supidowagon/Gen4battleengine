@@ -90,8 +90,9 @@ uv run --group rom python -m tools.extract_rom --game vanilla [--out DIR] [--dec
 ```
 
 `--out` defaults to `data/intermediate` (vanilla) or `data/intermediate_kaizo` (kaizo).
-`species, moves, items, learnsets, exp_tables` and `trainers` (with start conditions derived
-from the ROM's map headers, events and scripts) are read from the ROM; `types, natures,
+`species, forms, moves, items, learnsets, tm_learnsets, evolutions, egg_moves, tutor_moves,
+tutor_learnsets, exp_tables` and `trainers` (with start conditions derived
+from the ROM's map headers, events and scripts) are read from the ROM; `form_rows` and `evolution_methods` come from the decomp for every game (K2a, Ruling 6); `types, natures,
 charmap, abilities` are copied from a fresh `extract_decomp.extract_static` run (the charmap is
 the font encoding and has no table in the ROM). For vanilla, the output equals the decomp
 extractor's, which `tests/tools/rom/test_extract_rom.py` checks file by file.

@@ -19,6 +19,28 @@ from nuzline.data.forms import form_row
 
 DEFAULT = Path(__file__).resolve().parents[3] / "data" / "gen4_platinum"
 
+# The version ``tools/build_tables.py`` writes into ``manifest.json``. Bump it with any change
+# to the packed arrays or manifest keys; every loader refuses tables of another version.
+MANIFEST_VERSION = 8
+
+
+def check_manifest(manifest: dict, dir: Path) -> None:
+    """Raise ``ValueError`` unless ``manifest`` is table version ``MANIFEST_VERSION`` (a
+    missing ``version`` counts as stale), so old tables give one rebuild message instead of
+    a ``KeyError`` on whichever new array or key is read first."""
+    v = manifest.get("version")
+    if v != MANIFEST_VERSION:
+        raise ValueError(
+            f"{Path(dir) / 'manifest.json'} is version {v}; this nuzline needs "
+            f"{MANIFEST_VERSION}: re-run tools/extract_decomp.py and tools/build_tables.py"
+        )
+
+
+def _read_manifest(dir: Path) -> dict:
+    manifest = json.loads((Path(dir) / "manifest.json").read_text(encoding="utf-8"))
+    check_manifest(manifest, dir)
+    return manifest
+
 
 class Tables(NamedTuple):
     # S = 508 personal rows: species 0-495, then the data forms (Ruling 6).
@@ -55,6 +77,7 @@ class Tables(NamedTuple):
 
 
 def load_tables(dir: Path = DEFAULT) -> Tables:
+    _read_manifest(dir)
     with np.load(Path(dir) / "tables.npz") as z:
         return Tables(**{f: jnp.asarray(z[f]) for f in Tables._fields})
 
@@ -181,4 +204,4 @@ class Names:
 
 
 def load_names(dir: Path = DEFAULT) -> Names:
-    return Names(json.loads((Path(dir) / "manifest.json").read_text(encoding="utf-8")))
+    return Names(_read_manifest(dir))

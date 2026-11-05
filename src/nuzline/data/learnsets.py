@@ -11,7 +11,6 @@ Both are keyed by personal row (species, then data forms; ``Pokemon_LoadLevelUpM
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -124,4 +123,4 @@ class Learnsets:
 
 
 def load_learnsets(dir: Path = tables.DEFAULT) -> Learnsets:
-    return Learnsets(json.loads((Path(dir) / "manifest.json").read_text(encoding="utf-8")))
+    return Learnsets(tables._read_manifest(dir))

@@ -8,7 +8,8 @@ import numpy as np
 import pytest
 
 from nuzline.data.forms import form_row
-from nuzline.data.tables import Tables
+from nuzline.data.learnsets import load_learnsets
+from nuzline.data.tables import MANIFEST_VERSION, Tables, load_names, load_tables
 from nuzline.engine.ids import AbilityId, EffectId, ItemId, MoveFlag, MoveTarget, Stat, Status
 
 TABLES = Path(__file__).resolve().parents[2] / "data" / "gen4_platinum"
@@ -260,3 +261,21 @@ def test_names_form_checks_the_species_range(names):
             names.form(species, "Wash")
     with pytest.raises(ValueError, match=r"ROTOM has no form 6 \(forms: ROTOM, Heat"):
         names.form(479, 6)
+
+
+def test_manifest_version_is_8(
+    names,
+):  # the committed manifest; `names` skips when tables are absent
+    assert (
+        json.loads((TABLES / "manifest.json").read_text("utf-8"))["version"]
+        == MANIFEST_VERSION
+        == 8
+    )
+
+
+@pytest.mark.parametrize("manifest", ['{"version": 7}', "{}"])
+def test_old_tables_are_refused(tmp_path, manifest):  # no npz needed: check_manifest runs first
+    (tmp_path / "manifest.json").write_text(manifest)
+    for load in (load_tables, load_names, load_learnsets):
+        with pytest.raises(ValueError, match="re-run tools/extract_decomp.py"):
+            load(tmp_path)

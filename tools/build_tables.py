@@ -55,6 +55,7 @@ from pathlib import Path
 
 import numpy as np
 
+from nuzline.data.tables import MANIFEST_VERSION
 from nuzline.engine.ids import AbilityId, EffectId, ItemId, MoveFlag, MoveTarget, TrainerItemId
 from tools.effect_map import (
     CERTAIN_SECONDARY_EFFECTS,
@@ -68,7 +69,6 @@ from tools.effect_map import (
     UNSUPPORTED_MOVES,
 )
 
-MANIFEST_VERSION = 7
 NUM_TMS = 92
 NUM_HMS = 8
 CLONE_SCRIPT = Path(__file__).with_name("clone_decomp.sh")
