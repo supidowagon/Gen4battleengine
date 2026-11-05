@@ -220,16 +220,21 @@ _NARC_INDEX_CASE = re.compile(
 
 
 def _form_counts(decomp: Path, species: list[str]) -> dict[int, int]:
-    """Species id -> ``<SPECIES>_FORM_COUNT`` (``include/constants/forms.h``)."""
+    """Species id -> ``<SPECIES>_FORM_COUNT`` (``include/constants/forms.h``). A count
+    that is not a bare decimal (an expression, a hex literal, a trailing comment) raises
+    rather than leave the species at one form."""
     path = decomp / FORMS_H
     out = {}
     text = path.read_text("utf-8")
-    pattern = r"^#define ([A-Z0-9_]+)_FORM_COUNT\s+(\d+)\s*$"
+    pattern = r"^\s*#\s*define\s+(\w+)_FORM_COUNT\b(.*)$"
     for m in re.finditer(pattern, text, re.MULTILINE):
+        value = m.group(2).strip()
+        if not value.isdecimal():
+            raise ExtractError(f"{path}: {m.group(1)}_FORM_COUNT is {value!r}, not a decimal count")
         const = f"SPECIES_{m.group(1)}"
         if const not in species:
             raise ExtractError(f"{path}: {m.group(1)}_FORM_COUNT names no species")
-        count = int(m.group(2))
+        count = int(value)
         if not 1 <= count <= FORM_SLOTS:
             raise ExtractError(f"{path}: {m.group(1)}_FORM_COUNT {count} is out of range")
         out[species.index(const)] = count
@@ -919,8 +924,10 @@ def _trainer_maps(decomp: Path, headers: dict[str, dict[str, str]]) -> dict[str,
 # operands. "trainer" and "var" operands must resolve. A "value" that is a variable, or a
 # constant outside _script_symbols (OBJ_EVENT_GFX_*, DIR_*, ITEM_*, ...), makes the op
 # `other`: the ROM assembles the first as a different command (SetVarFromVar,
-# CompareVarToVar; asm/macros/scrcmd.inc:178-184,309-315), and the evaluator raises on an
-# `other` it meets, so neither is ever read as a value.
+# CompareVarToVar; asm/macros/scrcmd.inc:178-184,309-315), and neither is ever read as a
+# value: the partner evaluator (battle_scripts._run) raises on an `other` it meets, and
+# battle_scripts._resolve raises on an `other` (or Call, GoTo, End, Return) between a
+# battle and the SetVar that feeds its var operand.
 _SCRIPT_OPS = {
     "StartTrainerBattle": ("trainer", "trainer"),
     "StartTagBattle": ("trainer", "trainer", "trainer"),
@@ -984,7 +991,7 @@ def _script_file_ops(path: Path, symbols: dict[str, int]) -> list[Op]:
         if m:
             ops.append(Op("label", (m.group(1),)))
             continue
-        name, _, rest = line.partition(" ")
+        name, rest = re.fullmatch(r"(\S+)\s*(.*)", line).groups()  # any whitespace
         kinds = _SCRIPT_OPS.get(name)
         if kinds is None:
             ops.append(Op("other", (name,)))

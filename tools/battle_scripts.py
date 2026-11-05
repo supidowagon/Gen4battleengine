@@ -190,14 +190,38 @@ def partner_variants(ops: list[Op], label: str, var: int) -> tuple[PartnerVarian
 
 def _resolve(ops: list[Op], i: int, value: int, where: str) -> int:
     """A battle operand: a constant, or a var through the ``SetVar`` of it before op ``i``
-    in the same label block (Ruling 3)."""
+    in the same label block (Ruling 3).
+
+    Only straight-line ops that cannot write the var may sit between that ``SetVar`` and
+    op ``i``: a ``SetVar``, ``GetPlayerGender`` or ``GetPlayerStarterSpecies`` of another
+    var, ``SetHasPartner``, and a ``GoToIfEq`` to a known label (every branch target is a
+    label, so its fall-through still holds the ``SetVar``). Anything else met first raises
+    ``ValueError`` naming ``where`` (refuse, never approximate): an ``other`` (decomp
+    ``SetVar V, VAR_X`` and ROM ``SetVarFromVar``/``CopyVar`` are ``other``), a ``Call``
+    (its callee may write the var), a ``GoTo``, ``End`` or ``Return`` (the scan left the
+    block), a write of the var, another battle, or a ``GoToIfEq`` to an unknown label. A
+    ``label`` ends the scan, as does the start of the script."""
     if not is_var(value):
         return value
-    for op in reversed(ops[:i]):
+    labels = _labels(ops)
+    for j in range(i - 1, -1, -1):
+        op = ops[j]
         if op.name == "label":
             break
-        if op.name == "SetVar" and op.args[0] == value:
-            return int(op.args[1])
+        if op.name == "SetVar":
+            if op.args[0] == value:
+                return int(op.args[1])
+            continue
+        if op.name in ("GetPlayerGender", "GetPlayerStarterSpecies") and op.args[0] != value:
+            continue
+        if op.name == "SetHasPartner":
+            continue
+        if op.name == "GoToIfEq" and op.args[2] in labels:
+            continue
+        raise ValueError(
+            f"{where}: {ops[i]} has variable operand {value:#x}, and {op} before it may "
+            f"change it or leave the block; refused rather than read a stale SetVar"
+        )
     raise ValueError(f"{where}: {ops[i]} has variable operand {value:#x} with no SetVar before it")
 
 

@@ -5,7 +5,9 @@ from pathlib import Path
 import pytest
 
 from tools.extract_decomp import (
+    FORMS_H,
     ExtractError,
+    _form_counts,
     _tutor_indices,
     extract_charmap,
     extract_egg_moves,
@@ -232,3 +234,17 @@ def test_unlisted_tutor_move_raises():
 def test_static_writes_tutor_files(out):
     assert len(json.loads((out / "tutor_moves.json").read_text("utf-8"))) == 38
     assert len(json.loads((out / "tutor_learnsets.json").read_text("utf-8"))) == 508
+
+
+@pytest.mark.parametrize("value", ["(NUM_TYPES)", "0x12", "2 // east/west", "SHELLOS_FORMS"])
+def test_form_count_that_is_not_a_decimal_raises(tmp_path, value):
+    # Final review: such a define was skipped and the species defaulted to one form.
+    (tmp_path / FORMS_H).parent.mkdir(parents=True)
+    text = f"#define UNOWN_FORM_COUNT 28\n#define SHELLOS_FORM_COUNT {value}\n"
+    (tmp_path / FORMS_H).write_text(text, "utf-8")
+    species = ["SPECIES_NONE", "SPECIES_UNOWN", "SPECIES_SHELLOS"]
+    with pytest.raises(ExtractError, match=r"forms\.h: SHELLOS_FORM_COUNT") as e:
+        _form_counts(tmp_path, species)
+    assert value in str(e.value)
+    (tmp_path / FORMS_H).write_text("#define  SHELLOS_FORM_COUNT\t2  \n", "utf-8")
+    assert _form_counts(tmp_path, species) == {2: 2}

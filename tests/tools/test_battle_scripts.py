@@ -12,8 +12,10 @@ from tools.battle_scripts import (
     Op,
     battle_structures,
     partner_variants,
+    script_enemies,
     var_ids,
 )
+from tools.extract_decomp import _script_file_ops
 
 DECOMP = Path("external/pokeplatinum")
 R, V = 0x800C, 0x8004  # VAR_RESULT, VAR_0x8004
@@ -170,6 +172,62 @@ def test_unresolved_variable_pair_raises():
         battle_structures(scripts, {})
 
 
+# Final review: _resolve scanned back past ops that may rewrite the var (an `other`
+# such as decomp `SetVar V, VAR_X` or ROM SetVarFromVar, a Call whose callee writes it)
+# and across GoTo/End/Return, so a stale SetVar was read. Each now refuses.
+SUB = [Op("label", ("Sub",)), Op("other", ("SetVar",)), Op("Return", ())]
+
+
+@pytest.mark.parametrize(
+    "between, extra",
+    [
+        (Op("other", ("SetVar",)), []),
+        (Op("other", ("SCRCMD_SETVARFROMVAR",)), []),
+        (Op("Call", ("Sub",)), SUB),
+        (Op("GoTo", ("Sub",)), SUB),
+        (Op("End", ()), []),
+        (Op("Return", ()), []),
+        (Op("GetPlayerGender", (V,)), []),
+        (Op("GetPlayerStarterSpecies", (V,)), []),
+        (Op("GoToIfEq", (R, 1, "Nowhere")), []),
+        (Op("StartTrainerBattle", (9, 0)), []),
+    ],
+    ids=lambda x: getattr(x, "name", None) and f"{x.name}{x.args}",
+)
+def test_stale_setvar_is_refused(between, extra):
+    ops = [
+        Op("label", ("Battle",)),
+        Op("SetVar", (V, 5)),
+        between,
+        Op("StartTrainerBattle", (V, 7)),
+        Op("End", ()),
+        *extra,
+    ]
+    with pytest.raises(ValueError, match=r"map A: .*StartTrainerBattle"):
+        battle_structures({"A": ops}, {})
+    single = [*ops[:3], Op("StartTrainerBattle", (V, 0)), *ops[4:]]
+    with pytest.raises(ValueError, match=r"map A: .*StartTrainerBattle"):
+        script_enemies(single, "map A")
+
+
+def test_resolve_passes_ops_that_cannot_write_the_var():
+    # Another var's SetVar or GetPlayerGender, SetHasPartner, and a GoToIfEq to a label
+    # outside the block: on the fall-through path the SetVar still holds.
+    ops = [
+        Op("label", ("Battle",)),
+        Op("SetVar", (V, 5)),
+        Op("SetVar", (0x8005, 6)),
+        Op("GetPlayerGender", (R,)),
+        Op("GoToIfEq", (R, 1, "Other")),
+        Op("SetHasPartner", ()),
+        Op("StartTrainerBattle", (V, 0)),
+        Op("End", ()),
+        Op("label", ("Other",)),
+        Op("End", ()),
+    ]
+    assert script_enemies(ops, "map A") == {5}
+
+
 def test_single_variable_battle_is_not_a_pair():
     # scripts_pokemon_mansion.s:183: StartTrainerBattle VAR_0x8007 (enemyTrainer2 = 0).
     assert battle_structures({"A": [Op("StartTrainerBattle", (0x8007, 0))]}, {}) == {}
@@ -257,3 +315,21 @@ def test_var_ids():
     ids = var_ids(DECOMP)
     assert ids["VAR_0x8004"] == 0x8004 and ids["VAR_RESULT"] == 0x800C
     assert ids["VAR_PARTNER_TRAINER_ID"] == PARTNER_VAR
+
+
+def test_decomp_script_line_splits_on_any_whitespace(tmp_path):
+    # Final review: `StartTrainerBattle\tTRAINER_X` was split on " " only and became
+    # `other`, losing its battle. (_script_file_ops needs no decomp checkout.)
+    path = tmp_path / "s.s"
+    path.write_text(
+        "Battle:\n\tStartTrainerBattle\tTRAINER_A,  TRAINER_B\n"
+        "    SetVar\t VAR_0x8004, TRAINER_A\n\tEnd\n",
+        "utf-8",
+    )
+    symbols = {"TRAINER_A": 5, "TRAINER_B": 6, "VAR_0x8004": V}
+    assert _script_file_ops(path, symbols) == [
+        Op("label", ("Battle",)),
+        Op("StartTrainerBattle", (5, 6)),
+        Op("SetVar", (V, 5)),
+        Op("End", ()),
+    ]
