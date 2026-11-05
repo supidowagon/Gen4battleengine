@@ -276,7 +276,10 @@ def _parser() -> argparse.ArgumentParser:
         action="append",
         default=[],
         metavar="KIND=W",
-        help="cost weight of candy, heart_scale, tm, hm or held (tie-break); repeatable",
+        help=(
+            "cost weight of candy, heart_scale, tm, hm or held "
+            "(last tie-break, after win chance and deaths); repeatable"
+        ),
     )
     prep.add_argument(
         "--budget", type=float, default=None, help="seconds after which no new work starts"

@@ -47,6 +47,8 @@ __all__ = [
 RELEARNER = 0  # MoveChange.source: the Move Relearner (1 Heart Scale)
 LEVEL_UP = -1  # MoveChange.source: learned by levelling (Rare Candies, already paid)
 
+# resource cost weights: the last tie-break only, after win chance and expected deaths
+# (spec section 4)
 DEFAULT_WEIGHTS: dict[str, float] = {
     "candy": 0.0,
     "heart_scale": 3.0,

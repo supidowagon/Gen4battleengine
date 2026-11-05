@@ -111,7 +111,8 @@ class PlayoutResult(NamedTuple):
 
 def _resources_left(tables: Tables, state: BattleState) -> tuple[jnp.ndarray, jnp.ndarray]:
     """``(hp_left, pp_left)`` (``float32``): the player party's HP over its max HP, and its
-    PP over the full PP of the moves it knows (an empty slot counts 0)."""
+    PP over the full PP of the moves it knows (an empty slot counts 0). hp_left/pp_left are
+    reported by the prep search, not ranked."""
     hp = jnp.sum(state.hp[0].astype(_F32)) / jnp.maximum(jnp.sum(state.max_hp[0].astype(_F32)), 1)
     full = jnp.sum(tables.move_pp[state.moves[0]].astype(_F32))
     pp = jnp.sum(state.pp[0].astype(_F32)) / jnp.maximum(full, 1.0)
