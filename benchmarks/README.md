@@ -216,6 +216,11 @@ win-chance tie), re-checked against these stored values over seeds 0-4: rung 0 4
 (#1719, #3389, #1647) store 0.988-0.990 while 722 of the 2335 phase-2 setups overlap the best
 (#891, 0.999); Stage B rated #1719 0.994 on its own playouts. Funnels took 82-152 s on 20 devices.
 
+After adding the fresh finalist race (`race_playouts` 2040: the last survivors are re-screened
+afresh and the finalists picked from that alone), re-checked again over seeds 0-4: **rung 0 5/5,
+rung 1 5/5 pass**. Rung 0 picks #231, #231, #510, #891 (the exhaustive best), #510, all stored
+0.996-0.999; rung 1 picks store 0.003-0.007 expected deaths. Funnels took 87-154 s on 20 devices.
+
 # Milestone 4: `nuzline prep` wall time
 
     uv run python -m benchmarks.prep_timing --save "$NUZLINE_USER_SAVE" [--devices N]
