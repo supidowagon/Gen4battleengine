@@ -59,7 +59,6 @@ def interrupting(after: int):
     return progress, seen
 
 
-@pytest.mark.xfail(strict=True, reason="resume inside the merged stage is Task 6")
 def test_resume_equals_uninterrupted(tables, names, monkeypatch, tmp_path):
     prob, _ = setup_run(monkeypatch, tables, names)
     units = []
@@ -118,6 +117,57 @@ def test_resume_equals_uninterrupted_with_a_deep_leader(tables, names, monkeypat
     progress, _ = interrupting(len(units) - 1)  # after the second finalist, before the deepening
     run_prep(tables, names, prob, settings, KEY, checkpoint=path, progress=progress, **VERSIONS)
     assert run_prep(tables, names, prob, settings, KEY, resume=path, **VERSIONS) == a
+
+
+def test_resume_inside_the_merged_stage(tables, names, monkeypatch, tmp_path):
+    prob, _ = setup_run(monkeypatch, tables, names)
+    probe = tmp_path / "probe.ckpt.json"
+    seen = []
+    a = run_prep(
+        tables, names, prob, SETTINGS, KEY, checkpoint=probe,
+        progress=lambda p: seen.append(json.loads(probe.read_text())["funnel"]["pos"]),
+        **VERSIONS,
+    )  # fmt: skip
+    merged = [n for n, pos in enumerate(seen, 1) if pos.get("stage") == "merged"]
+    assert merged, "the run never reached a merged round"
+    assert "parents" not in seen[merged[0] - 1]
+    path = tmp_path / "merged.ckpt.json"
+    progress, _ = interrupting(merged[0])
+    b = run_prep(tables, names, prob, SETTINGS, KEY, checkpoint=path, progress=progress, **VERSIONS)
+    assert b.stats.stopped == "interrupted"
+    assert run_prep(tables, names, prob, SETTINGS, KEY, resume=path, **VERSIONS) == a
+
+
+def test_resume_reuses_the_saved_finalist_picks(tables, names, monkeypatch, tmp_path):
+    prob, fakes = setup_run(monkeypatch, tables, names)
+    settings = dataclasses.replace(SETTINGS, variant_keep=3)  # a pool larger than the picks
+    units = []
+    run_prep(tables, names, prob, settings, KEY, progress=units.append, **VERSIONS)
+    first_final = next(n for n, u in enumerate(units, 1) if u.phase == "finalists")
+    path = tmp_path / "picks.ckpt.json"
+    progress, _ = interrupting(first_final)
+    run_prep(tables, names, prob, settings, KEY, checkpoint=path, progress=progress, **VERSIONS)
+    doc = json.loads(path.read_text())
+    pos = doc["funnel"]["pos"]
+    assert pos["phase"] == "finalists" and len(pos["picks"]) == settings.finalists
+    other = next(i for i in pos["pool"] if i not in pos["picks"])
+    pos["picks"][1] = other  # a resume must solve what the position says, not re-rank the pool
+    path.write_text(json.dumps(doc))
+    record = []
+    monkeypatch.setattr(search, "solve", fake_solve(fakes, record, lambda s, i: 0.5))
+    run_prep(tables, names, prob, settings, KEY, resume=path, **VERSIONS)
+    setups = [setup_from_json(s) for s in doc["funnel"]["setups"]]
+    assert record[0][0] == setups[other]
+
+
+def test_version_2_checkpoint_is_refused(tables, names, saved):
+    _, path = saved
+    doc = json.loads(path.read_text())
+    before = json.dumps({**doc, "version": 2})
+    path.write_text(before)
+    with pytest.raises(ValueError, match="version 2"):
+        read_checkpoint(path, doc["fingerprint"])
+    assert path.read_text() == before  # nothing written
 
 
 def test_elapsed_time_adds_up_across_sessions(tables, names, monkeypatch, tmp_path):

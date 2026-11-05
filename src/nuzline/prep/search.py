@@ -37,8 +37,11 @@ Checkpoint (ruling 12; ``prep.checkpoint``): after every unit, before ``progress
 whole funnel is written: the registered setups with their accumulated stats, the exclusions,
 the counters, the finalists with their Stage B results and a *position*: ``{"phase": "teams"}``
 or ``{"phase": "variants", "v": v}`` with ``"r"`` (the next halving round), ``"pools"`` (each
-rung's surviving neighbours) and ``"parents"`` (each rung's parents), or ``{"phase": "finalists"}`` with ``"pool"``, ``"next"`` (the next
-finalist to solve) and ``"deep"`` (the leader's deepening is done). Every random key comes from
+rung's surviving neighbours) and ``"parents"`` (each rung's parents); in the merged stage
+``"stage": "merged"`` with ``"pools"`` the merged sets and no ``"parents"``; or
+``{"phase": "finalists"}`` with ``"pool"``, ``"picks"`` (the finalists chosen from it, solved
+as saved, never re-ranked), ``"next"`` (the next pick to solve) and ``"deep"`` (the leader's
+deepening is done). Every random key comes from
 the seed, the phase and the round, so a resumed run does the remaining units exactly as the
 uninterrupted run would. The turn-0 states are rebuilt from the setups, not stored.
 """
@@ -611,7 +614,8 @@ class _Funnel:
                 st.variant_keep,
                 v,
                 resume["r"],
-                resume["parents"],
+                None if resume.get("stage") == "merged" else resume["parents"],
+                merged=resume.get("stage") == "merged",
             )
             self.variant_rounds += 1
             return out
@@ -682,7 +686,10 @@ class _Funnel:
 
     def finalists_phase(self, pool: list[int], resume: dict | None = None) -> None:
         st = self.settings
-        picks = self.ranked(pool, self.k)[: st.finalists]
+        if resume is not None and "picks" in resume:
+            picks = list(resume["picks"])
+        else:
+            picks = self.ranked(pool, self.k)[: st.finalists]
         fkey = jax.random.fold_in(self.key, phase_id("finalists"))
         first = 0 if resume is None else resume["next"]
         deepened = resume is not None and resume["deep"]
@@ -695,7 +702,7 @@ class _Funnel:
                 self.finalists.append(Finalist(self.setups[i], result))
                 rows = [self.finalist_row(f) for f in self.finalists]
                 self.finalists = [self.finalists[o] for o in prep_order(rows)]
-            pos = {"phase": "finalists", "pool": pool, "next": n + 1, "deep": False}
+            pos = {"phase": "finalists", "pool": pool, "next": n + 1, "deep": False, "picks": picks}
             self.unit_done("finalists", "finalists", n, len(picks), pos)
         if st.max_depth >= 2 and self.finalists and not deepened:
             self.before_unit()
@@ -707,7 +714,13 @@ class _Funnel:
                 self.finalists[0] = Finalist(lead.setup, deep)
             elif self.index[lead.setup] in self.excluded:
                 self.finalists.pop(0)  # excluded and named, so no longer the answer
-            pos = {"phase": "finalists", "pool": pool, "next": len(picks), "deep": True}
+            pos = {
+                "phase": "finalists",
+                "pool": pool,
+                "next": len(picks),
+                "deep": True,
+                "picks": picks,
+            }
             self.unit_done("finalists", "finalists", 0, len(picks), pos)
         self.phase = "finalists"
 

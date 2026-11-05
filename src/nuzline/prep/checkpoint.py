@@ -34,7 +34,7 @@ __all__ = [
     "write_checkpoint",
 ]
 
-CHECKPOINT_VERSION = 2  # 2: a variant position names its parents
+CHECKPOINT_VERSION = 3  # 3: merged variant stage, finalist picks, tie ranks (2026-11-04)
 
 # The fingerprint keys in the order they are compared, with what a mismatch says.
 _MISMATCH = (
