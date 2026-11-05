@@ -38,6 +38,13 @@ items) and plan 1b (Task 2b: trainer items; Task 3: Roark's AI flags) implement:
   (``battle_lib.c:4536``, ``battle_controller_player.c:3500``); the engine models neither.
   Rotom, Deoxys and Wormadam forms never change in battle and are read by personal row
   (``Tables.species_form_row``), like Giratina-Origin holding the Orb;
+* trainer Pokemon in a data form (controller ruling, K2a Task 6): the opponent's party
+  member whose form has its own personal row (``species_form_row[species, form] !=
+  species``) is refused. ``TrainerData_BuildParty`` builds it from the base form and sets
+  the form afterwards (``src/trainer_data.c:216-218``), so it keeps the base form's stats,
+  ability and moves while its types follow the form (``src/pokemon.c:1224``); Kaizo patched
+  that function, so the exact rule is per game (K2b). Cosmetic and battle-only forms and
+  Arceus, which have no data row, pass;
 * battle format: only "single". The engine models one battler per side, so a trainer
   whose header is a double battle, who is fought beside a second enemy trainer
   ("double_two_trainer") or who is fought while the player has a partner ("multi", tag
@@ -177,7 +184,12 @@ class _Collector:
 
 
 def _check_party(
-    c: _Collector, tables: Tables, names: Names, owner: str, party: Sequence[PokemonSpec]
+    c: _Collector,
+    tables: Tables,
+    names: Names,
+    owner: str,
+    party: Sequence[PokemonSpec],
+    trainer_side: bool = False,
 ) -> None:
     move_effect = np.asarray(tables.move_effect)
     abilities = np.asarray(tables.species_abilities)
@@ -200,6 +212,13 @@ def _check_party(
         item_name = names.item_names[mon.item] if mon.item else "no item"
         c.add(IMPLEMENTED_ITEMS.get(item, Support.NONE), f"{where}: {item_name}", "held item")
         _check_form(c, where, mon)
+        if trainer_side and row != mon.species:
+            c.add(
+                Support.NONE,
+                f"{where}: trainer Pokemon in a data form keeps its base form's stats, "
+                "ability and moves",
+                "form",
+            )
 
 
 def _check_form(c: _Collector, where: str, mon: PokemonSpec) -> None:
@@ -262,7 +281,7 @@ def check_opponent(
     lines. It runs no ``ai_refusals``: those depend on the player's party, so a caller
     that needs them runs them per setup."""
     c = _Collector()
-    _check_party(c, tables, names, trainer.name, opp)
+    _check_party(c, tables, names, trainer.name, opp, trainer_side=True)
     _check_trainer(c, tables, names, trainer)
     _check_weather(c, [start_condition, start_weather(trainer)])
     return c.report

@@ -8,7 +8,7 @@ ability slot. Listed moves overwrite all four default move slots.
 
 A party member's ability, gender ratio, base friendship and default moves are read from
 its form's personal row (``form_rows.json``, ``forms.json``; plan K2a Task 6). The decomp
-differs (open question, K2a Task 6 report): ``TrainerData_BuildParty`` sets
+differs, so coverage refuses such a Pokemon (``engine.coverage``): ``TrainerData_BuildParty`` sets
 ``MON_DATA_FORM`` only after ``Pokemon_InitWith`` has picked the ability and default moves
 from the base species (``src/pokemon.c:473-489``) and computed the stats
 (``src/pokemon.c:402``), and nothing recomputes them (``src/trainer_data.c:216-218``).
@@ -210,6 +210,8 @@ def default_moves(learnset: Sequence[tuple[int, int]], level: int) -> tuple[int,
 def build_trainer_party(trainer: Trainer, inter: IntermediateData) -> list[PokemonSpec]:
     party = []
     for mon in trainer.party:
+        # The game keeps base-form stats, ability and moves (src/trainer_data.c:216-218);
+        # coverage refuses a trainer Pokemon in a data form, so this spec is never simulated.
         row = inter.row(mon.species, mon.form)
         species = inter.personal[row]
         pid = trainer_pid(
