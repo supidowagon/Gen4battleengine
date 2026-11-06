@@ -8,10 +8,12 @@ from tools.rom.readers.moves import read_move_lists
 
 
 class FakeRom:
-    """Just the three accessors ``read_move_lists`` uses."""
+    """Just the accessors ``read_move_lists`` uses."""
 
-    def __init__(self, arm9: bytes, overlays: dict[int, bytes] | None = None):
-        self._arm9, self._overlays = arm9, overlays or {}
+    def __init__(
+        self, arm9: bytes, overlays: dict[int, bytes] | None = None, game_code: str = "CPUE"
+    ):
+        self._arm9, self._overlays, self.game_code = arm9, overlays or {}, game_code
 
     def arm9(self) -> bytes:
         return self._arm9
@@ -60,3 +62,40 @@ def test_ambiguous_list_raises_even_with_override():
     rom = FakeRom(BOTH + BOTH)
     with pytest.raises(ReaderError, match="sSoundMoves found 2 times"):
         read_move_lists(rom, LISTS, {"sound": [1], "punch": [2]})
+
+
+PAD = _u16([0x1111])
+TAIL = _u16([0x2222])
+VANILLA = FakeRom(PAD + BOTH + TAIL)
+
+
+def _patched(image: bytes) -> FakeRom:
+    return FakeRom(image, game_code="CPUK")
+
+
+def test_patched_rom_with_unchanged_neighbours_is_accepted():
+    rom = _patched(_u16([0, 0]) + PAD + BOTH + TAIL)  # moved, same context
+    assert read_move_lists(rom, LISTS, vanilla_rom=VANILLA) == LISTS
+
+
+def test_appended_move_is_refused():
+    rom = _patched(PAD + BOTH + _u16([7]) + TAIL)  # punch list gains a move
+    with pytest.raises(ReaderError, match="sPunchingMoves not found unchanged"):
+        read_move_lists(rom, LISTS, vanilla_rom=VANILLA)
+    got = read_move_lists(rom, LISTS, {"punch": [4, 5, 7]}, vanilla_rom=VANILLA)
+    assert got == {"sound": LISTS["sound"], "punch": [4, 5, 7]}
+
+
+def test_prepended_move_is_refused():
+    rom = _patched(_u16([9]) + BOTH + TAIL)  # sound list gains a move at the front
+    with pytest.raises(ReaderError, match="sSoundMoves not found unchanged"):
+        read_move_lists(rom, LISTS, vanilla_rom=VANILLA)
+
+
+def test_non_vanilla_rom_without_vanilla_rom_raises():
+    with pytest.raises(ReaderError, match="pass vanilla_rom"):
+        read_move_lists(_patched(PAD + BOTH + TAIL), LISTS)
+
+
+def test_vanilla_rom_skips_the_neighbour_comparison():
+    assert read_move_lists(FakeRom(_u16([0x3333]) + BOTH + _u16([0x4444])), LISTS) == LISTS
