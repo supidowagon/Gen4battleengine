@@ -432,6 +432,31 @@ def _c_array_body(path: Path, decl_regex: str) -> list[tuple[int, str]]:
     raise ExtractError(f"{path}:{start + 1}: array never closed")
 
 
+MOVE_LIST_ARRAYS = {"sound": "sSoundMoves", "punch": "sPunchingMoves"}
+
+
+def extract_move_lists(decomp: Path) -> dict[str, list[int]]:
+    """``move_lists.json``: the move ids of ``sSoundMoves`` (Soundproof) and
+    ``sPunchingMoves`` (Iron Fist) in ``src/battle/battle_lib.c``, in source order."""
+    move_id = _index(_constants(decomp, "moves", "MOVE_"), "move")
+    path = decomp / "src" / "battle" / "battle_lib.c"
+    out = {}
+    for key, array in MOVE_LIST_ARRAYS.items():
+        body = _c_array_body(path, rf"{array}\[\]\s*=\s*\{{")
+        ids = []
+        for lineno, line in body:
+            line = line.split("//")[0].strip().rstrip(",").strip()
+            if not line:
+                continue
+            if not re.fullmatch(r"MOVE_[A-Z0-9_]+", line):
+                raise ExtractError(f"{path}:{lineno}: unexpected {array} entry {line!r}")
+            ids.append(move_id(line))
+        if not ids:
+            raise ExtractError(f"{path}: {array} is empty")
+        out[key] = ids
+    return out
+
+
 def extract_types(decomp: Path) -> dict:
     types = _constants(decomp, "pokemon_types", "TYPE_")
     type_id = _index(types, "type")
@@ -1251,6 +1276,7 @@ def extract_static(decomp_root: Path, out_dir: Path) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     _write(out_dir / "species.json", extract_species(decomp_root))
     _write(out_dir / "moves.json", extract_moves(decomp_root))
+    _write(out_dir / "move_lists.json", extract_move_lists(decomp_root))
     _write(out_dir / "types.json", extract_types(decomp_root))
     _write(out_dir / "natures.json", extract_natures(decomp_root))
     _write(out_dir / "items.json", extract_items(decomp_root))

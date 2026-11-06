@@ -65,8 +65,6 @@ from tools.effect_map import (
     DECOMP_EFFECT_TO_ID,
     DECOMP_ITEM_TO_ID,
     DECOMP_TRAINER_ITEM_TO_ID,
-    PUNCH_MOVES,
-    SOUND_MOVES,
     TYPE_CHART_STATUS_MOVES,
     UNSUPPORTED_MOVES,
 )
@@ -109,13 +107,14 @@ def _decomp_commit() -> str:
     return m.group(1)
 
 
-def _move_flags(move: dict) -> int:
+def _move_flags(move: dict, move_id: int, lists: dict[str, list[int]]) -> int:
+    """The move's flag bits; SOUND and PUNCH come from ``move_lists.json`` by move id."""
     bits = 0
     for flag in move["flags"]:
         bits |= DECOMP_FLAG_BITS.get(flag, 0)
-    if move["name"] in SOUND_MOVES:
+    if move_id in lists["sound"]:
         bits |= MoveFlag.SOUND
-    if move["name"] in PUNCH_MOVES:
+    if move_id in lists["punch"]:
         bits |= MoveFlag.PUNCH
     return int(bits)
 
@@ -182,6 +181,7 @@ def build_arrays(inter: Path, game: str = "platinum_us") -> tuple[dict[str, np.n
     forms = _load(inter, "forms")
     form_rows = _load(inter, "form_rows")
     moves = _load(inter, "moves")
+    move_lists = _load(inter, "move_lists")
     items = _load(inter, "items")
     abilities = _load(inter, "abilities")
     types = _load(inter, "types")
@@ -207,9 +207,7 @@ def build_arrays(inter: Path, game: str = "platinum_us") -> tuple[dict[str, np.n
         tm_moves.append(item["teaches_move"])
 
     move_names = {m["name"] for m in moves}
-    missing = sorted(
-        (SOUND_MOVES | PUNCH_MOVES | UNSUPPORTED_MOVES | TYPE_CHART_STATUS_MOVES) - move_names
-    )
+    missing = sorted((UNSUPPORTED_MOVES | TYPE_CHART_STATUS_MOVES) - move_names)
     if missing:
         raise BuildError(f"effect_map moves not in moves.json: {missing}")
     ability_names = [a["name"] for a in abilities]
@@ -276,7 +274,9 @@ def build_arrays(inter: Path, game: str = "platinum_us") -> tuple[dict[str, np.n
         "move_effect_chance": _arr([m["effect_chance"] for m in moves], np.int8, "chance"),
         "move_ai_effect": _arr([m["ai_effect"] for m in moves], np.int16, "ai effect"),
         "move_param": _arr([p for _, p in effects], np.int16, "move param"),
-        "move_flags": _arr([_move_flags(m) for m in moves], np.int16, "move flags"),
+        "move_flags": _arr(
+            [_move_flags(m, i, move_lists) for i, m in enumerate(moves)], np.int16, "move flags"
+        ),
         "type_chart": _arr(chart, np.int8, "type chart"),
         "type_chart_order": _arr(chart_order, np.int16, "type chart order"),
         "type_chart_foresight": _arr(chart_foresight, np.int8, "type chart foresight"),

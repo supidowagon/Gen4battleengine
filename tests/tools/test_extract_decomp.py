@@ -15,6 +15,7 @@ from tools.extract_decomp import (
     extract_exp_tables,
     extract_forms,
     extract_items,
+    extract_move_lists,
     extract_species,
     extract_static,
     extract_tutor_learnsets,
@@ -258,3 +259,10 @@ def test_hp_restored_extracted():
     # Max Potion's -1 (restore all) is 255 in the ROM.
     assert items["Max Potion"]["hp_restored"] == 255
     assert items["Expert Belt"]["hp_restored"] == 0  # no itemUseParams
+
+
+def test_decomp_lists():
+    lists = extract_move_lists(DECOMP)
+    assert list(lists) == ["sound", "punch"]
+    assert 4 in lists["punch"] and len(lists["punch"]) == 15 and len(lists["sound"]) == 12
+    assert lists["sound"][:2] == [45, 46]  # Growl, Roar: source order

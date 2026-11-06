@@ -230,8 +230,9 @@ CONSTANTS: tuple[Constant, ...] = (
     Constant("nuzline.ai.policy._basic", "ability", 26, "Levitate", _P),
 )
 
-# Lists that are game data: "module.ATTR" -> the intermediate file that replaces it
-# (Task 5 moves both to the game's move_lists.json).
+# Lists that are game data: "module.ATTR" -> the intermediate file that replaces it.
+# Both names were removed from tools/effect_map.py (K2b Task 5); the lists now come from each
+# game's move_lists.json by move id, and these entries record where they went.
 GAME_DATA: dict[str, str] = {
     # src/battle/battle_lib.c sSoundMoves (:3473).
     "tools.effect_map.SOUND_MOVES": "move_lists.json",

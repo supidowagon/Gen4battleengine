@@ -72,3 +72,49 @@ def read_moves(rom: RomFiles, decomp: Path, charmap: dict[int, str]) -> list[dic
     if len(names) < count:
         raise ReaderError(f"TEXT_BANK_MOVE_NAMES: {len(names)} entries, need {count}")
     return [decode_move(decomp, i, members[i], names[i]) for i in range(count)]
+
+
+MOVE_LIST_ARRAYS = {"sound": "sSoundMoves", "punch": "sPunchingMoves"}
+
+
+def _hits(haystack: bytes, needle: bytes) -> int:
+    """Occurrences of ``needle`` in ``haystack``, overlapping ones included."""
+    n, at = 0, haystack.find(needle)
+    while at != -1:
+        n += 1
+        at = haystack.find(needle, at + 1)
+    return n
+
+
+def read_move_lists(
+    rom: RomFiles,
+    vanilla_lists: dict[str, list[int]],
+    override: dict[str, list[int]] | None = None,
+) -> dict[str, list[int]]:
+    """``move_lists.json`` for the ROM: ``{"sound": [ids], "punch": [ids]}``.
+
+    The game keeps no table for these (``sSoundMoves`` and ``sPunchingMoves`` are C arrays
+    in ``battle_lib.c``), so each vanilla list is searched for as consecutive little-endian
+    u16 in the decompressed ARM9 and every decompressed overlay. Exactly one hit means the
+    list is unchanged. No hit means the ROM changed it: ``override[key]`` (transcribed by
+    hand) is used if given, else this raises. More than one hit is ambiguous and always
+    raises."""
+    out = {}
+    images = [("ARM9", rom.arm9())] + [(f"overlay {i}", rom.overlay(i)) for i in rom.overlay_ids()]
+    for key, array in MOVE_LIST_ARRAYS.items():
+        needle = b"".join(struct.pack("<H", m) for m in vanilla_lists[key])
+        found = [(where, _hits(data, needle)) for where, data in images]
+        found = [(where, n) for where, n in found if n]
+        total = sum(n for _, n in found)
+        if total == 1:
+            out[key] = list(vanilla_lists[key])
+        elif total == 0 and override is not None and key in override:
+            out[key] = [int(m) for m in override[key]]
+        elif total == 0:
+            raise ReaderError(
+                f"{array} not found unchanged: transcribe it into "
+                "data/kaizo/overrides.toml [move_lists]"
+            )
+        else:
+            raise ReaderError(f"{array} found {total} times ({found}); it must be unique")
+    return out

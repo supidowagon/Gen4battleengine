@@ -12,11 +12,11 @@ Sources (decomp at the pin in ``tools/clone_decomp.sh``):
   ``tests/tools/test_effect_map.py`` re-checks both against the decomp.
 * Ability, item and trainer-item keys are the decomp's English names as they appear in
   ``data/intermediate/{abilities,items}.json``.
-* ``SOUND_MOVES`` / ``PUNCH_MOVES`` mirror ``sSoundMoves`` and ``sPunchingMoves``
-  in ``src/battle/battle_lib.c``; the decomp has no move-data flag for either.
+* The Soundproof and Iron Fist move lists (``sSoundMoves`` and ``sPunchingMoves`` in
+  ``src/battle/battle_lib.c``) are not here: they are per-game data in ``move_lists.json``,
+  by move id, and ``tools/build_tables.py`` sets ``MoveFlag.SOUND`` / ``PUNCH`` from it.
 
-Per game (spec §7.2, classified in ``nuzline.data.game_constants``): ``SOUND_MOVES`` and
-``PUNCH_MOVES`` are game data, which K2b Task 5 moves to each game's ``move_lists.json``.
+Per game (spec §7.2, classified in ``nuzline.data.game_constants``):
 ``TYPE_CHART_STATUS_MOVES`` (Thunder Wave) is checked by name against every game's data at
 load. Every other map here is keyed by name or decomp effect id, so it is looked up in each
 game's own data: it describes the engine semantics of the vanilla scripts, and a game that
@@ -203,16 +203,3 @@ DECOMP_TRAINER_ITEM_TO_ID: dict[str, TrainerItemId] = {
     "None": TrainerItemId.NONE,  # ITEM_NONE (id 0): an empty bag slot
     "Potion": TrainerItemId.POTION,  # itemUseParams.hpRestored 20
 }
-
-# src/battle/battle_lib.c sSoundMoves (Soundproof).
-SOUND_MOVES: frozenset[str] = frozenset({
-    "Growl", "Roar", "Sing", "Supersonic", "Screech", "Snore", "Uproar", "Metal Sound",
-    "GrassWhistle", "Hyper Voice", "Bug Buzz", "Chatter",
-})  # fmt: skip
-
-# src/battle/battle_lib.c sPunchingMoves (Iron Fist).
-PUNCH_MOVES: frozenset[str] = frozenset({
-    "Ice Punch", "Fire Punch", "ThunderPunch", "Mach Punch", "Focus Punch", "Dizzy Punch",
-    "DynamicPunch", "Hammer Arm", "Mega Punch", "Comet Punch", "Meteor Mash",
-    "Shadow Punch", "Drain Punch", "Bullet Punch", "Sky Uppercut",
-})  # fmt: skip

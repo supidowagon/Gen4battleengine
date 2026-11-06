@@ -34,6 +34,7 @@ from pathlib import Path
 from tools.extract_decomp import (
     _write,
     extract_charmap,
+    extract_move_lists,
     extract_static,
 )
 from tools.rom.inputs import (
@@ -49,6 +50,7 @@ from tools.rom.symbols import DEFAULT_MAP
 ROM_FILES = (
     "species",
     "moves",
+    "move_lists",
     "items",
     "learnsets",
     "tm_learnsets",
@@ -184,7 +186,7 @@ def extract(game: str, out: Path, decomp: Path, symbols: Path, inputs: RomInputs
     from tools.rom.readers.items import read_items
     from tools.rom.readers.learnsets import read_learnsets
     from tools.rom.readers.maps import trainer_start_conditions
-    from tools.rom.readers.moves import read_moves
+    from tools.rom.readers.moves import read_move_lists, read_moves
     from tools.rom.readers.personal import (
         read_exp_tables,
         read_forms,
@@ -215,6 +217,7 @@ def extract(game: str, out: Path, decomp: Path, symbols: Path, inputs: RomInputs
             "species": read_species(vanilla_files, decomp, charmap),
             "forms": read_forms(vanilla_files, decomp, charmap),
             "moves": read_moves(vanilla_files, decomp, charmap),
+            "move_lists": read_move_lists(vanilla_files, extract_move_lists(decomp)),
             "items": read_items(vanilla_files, decomp, smap, charmap),
             "learnsets": read_learnsets(vanilla_files, decomp),
             "tm_learnsets": read_tm_learnsets(vanilla_files),
