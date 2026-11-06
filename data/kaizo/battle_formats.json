@@ -1,0 +1,8 @@
+{
+ "comment": [
+  "Kaizo trainers whose battle format the field scripts leave to game state (tools/rom/readers/maps.py rom_battle_structures, tools/battle_scripts.py battle_structures 'refused'). Keys are trainer ids; each value is {\"trainer\": the Kaizo ROM text name at that id, \"format\": \"unknown\"}. The format is written to trainers.json as 'unknown', which coverage refuses (IMPLEMENTED_FORMATS has no entry for it). An entry for a trainer whose script claims do not conflict is stale and fails extraction.",
+  "521 Mercury, 527 Venus (Spear Pillar). ROM: scr_seq.narc member 236 (map header SPEAR_PILLAR) offset 1118 runs CheckTrainerFlag 864 (Mira) and GoToIf to offset 1438, StartTagBattle 864, 521, 527 (multi beside Mira); otherwise offset 1129 runs StartTrainerBattle 521, 527 (a two-trainer double). Vanilla's script has only the StartTrainerBattle. Which one runs depends on trainer flag 864 (where the patched scripts set it was not traced; Mira is the partner of the optional Wayward Cave gauntlet (sheet Galactic Split:105 'Wayward Cave - OPTIONAL Gauntlet With Mira*', :107 'Mira (Tag Partner)')). Sheet: Galactic Split:1143 'Galactic Mercury (MUTLI BATTLE with Galactic Venus)' and :1153 'Galactic Venus (MULTI BATTLE with Galactic Mercury)' in section :1131 'SPEAR PILLAR' (the sheet writes MULTI BATTLE for two-trainer doubles too). PKCalc: flags.js:393-395 tag battle 'Galactic Mercury #5' + 'Galactic Venus #5' with 'Pokémon Trainer Mira @ Spear Pillar'. The evidence shows both formats are reachable, so the format is refused rather than picked."
+ ],
+ "521": {"trainer": "Mercury", "format": "unknown"},
+ "527": {"trainer": "Venus", "format": "unknown"}
+}

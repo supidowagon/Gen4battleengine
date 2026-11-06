@@ -307,6 +307,21 @@ def test_conflicting_partner_claims_unknown_when_allowed():
         battle_structures({"A": pairs}, {}, unknown_partner=True)
 
 
+def test_pair_and_tag_claims_raise_even_with_unknown_partner():
+    # Kaizo Spear Pillar (scr_seq 236): a two-trainer battle and a tag battle on the same
+    # enemies disagree on the format, not on the partner (fix round 1, I1).
+    ops = [Op("StartTrainerBattle", (40, 41)), Op("StartTagBattle", (3, 40, 41))]
+    with pytest.raises(ValueError, match="trainer 40 is claimed by 2"):
+        battle_structures({"A": ops}, {}, unknown_partner=True)
+    got = battle_structures({"A": ops}, {}, unknown_partner=True, refused={40: "x", 41: "x"})
+    assert got == {
+        40: BattleStructure("unknown", 41, None),
+        41: BattleStructure("unknown", 40, None),
+    }
+    with pytest.raises(ValueError, match="without conflicting claims.*42"):
+        battle_structures({"A": ops}, {}, unknown_partner=True, refused={40: "x", 41: "x", 42: "x"})
+
+
 def test_walking_partner_map():
     # scripts_iron_island_b2f_left_room.s: Riley walks with the player, and a pair started
     # on his map is a multi battle with him (Ruling 2).

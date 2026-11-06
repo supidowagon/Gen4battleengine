@@ -39,6 +39,9 @@ PARTNER_VAR = 0x403F  # VAR_PARTNER_TRAINER_ID (generated/vars_flags.txt, checke
 # (asm/macros/scrcmd.inc:179,310): VARS_START..VARS_END and
 # SCRIPT_LOCAL_VARS_START..SCRIPT_LOCAL_VARS_END, inclusive (checked by var_ids).
 VAR_RANGES = ((0x4000, 0x4120), (0x8000, 0x800D))
+# The format of a trainer whose battle structure the scripts leave to game state
+# (battle_structures' ``refused``): not modelled, so coverage refuses it.
+UNKNOWN_FORMAT = "unknown"
 # A partner routine's evaluation stops after this many ops (none in vanilla needs 20).
 _MAX_STEPS = 10_000
 
@@ -266,6 +269,7 @@ def battle_structures(
     placed: Mapping[Hashable, set[int]],
     *,
     unknown_partner: bool = False,
+    refused: Mapping[int, str] | None = None,
 ) -> dict[int, BattleStructure]:
     """Trainer id -> its battle structure, for the trainers fought in a two-trainer or
     multi battle (Rulings 2-3). ``scripts`` maps each map header to its script's ops in
@@ -286,11 +290,17 @@ def battle_structures(
     The same structure seen twice (a pair fought from two scripts, a script shared by
     several headers) is one structure. A trainer claimed by two different pairs, two
     different tag battles, two different partners, or a tag battle and anything else
-    raises ``ValueError`` naming it; with ``unknown_partner``, claims that agree on the other
-    enemy but not on the partner (Kaizo's Lake Verity: a tag battle per player gender on a
-    walking-partner map) give "multi" with partner ``None``. A pair on a walking-partner
+    raises ``ValueError`` naming it; with ``unknown_partner``, tag or walking claims that
+    agree on the other enemy but not on the partner (Kaizo's Lake Verity: a tag battle per
+    player gender on a walking-partner map) give "multi" with partner ``None``. A pair claim
+    beside a tag claim is a disagreement about the format, not the partner, and still
+    raises. A trainer in ``refused`` (trainer id -> reason; the Kaizo ROM reader's
+    ``data/kaizo/battle_formats.json``) whose claims conflict gets format ``"unknown"``,
+    which coverage refuses, with its other enemy if all claims agree on one; an entry for a
+    trainer whose claims do not conflict is stale and raises. A pair on a walking-partner
     map is "multi" with both the pair's other enemy and the partner.
     """
+    refused = dict(refused or {})
     claims: dict[int, dict[tuple, set]] = {}
 
     def claim(t: int, kind: tuple, header) -> None:
@@ -351,7 +361,13 @@ def battle_structures(
         if len(pairs) > 1 or len(tags) > 1 or len(walks) > 1 or (tags and (pairs or walks)):
             listed = "; ".join(f"{c} on maps {sorted(map(str, h))}" for c, h in cs.items())
             others = {c[1] for c in pairs + tags}
-            if unknown_partner and (tags or walks) and len(others) <= 1:
+            if t in refused:
+                refused.pop(t)
+                out[t] = BattleStructure(
+                    UNKNOWN_FORMAT, next(iter(others), None) if len(others) == 1 else None, None
+                )
+                continue
+            if unknown_partner and (tags or walks) and not (pairs and tags) and len(others) <= 1:
                 # One enemy pair, several partner claims: multi, partner not evaluated.
                 out[t] = BattleStructure("multi", next(iter(others), None), None)
                 continue
@@ -362,6 +378,8 @@ def battle_structures(
             out[t] = BattleStructure("multi", pairs[0][1] if pairs else None, walks[0][1])
         else:
             out[t] = BattleStructure("double_two_trainer", pairs[0][1], ())
+    if refused:
+        raise ValueError(f"refused formats for trainers without conflicting claims: {refused}")
     return out
 
 

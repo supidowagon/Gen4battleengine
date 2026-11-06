@@ -122,6 +122,10 @@ are unchanged, and then runs every reader on the patched ROM (K2b Task 8):
   where the evidence does not settle them). Trainers with an `unknown` start condition, tag or
   walking partners the script rules cannot evaluate (`partner` null) and the field effects map
   weathers start (`rom_field_effects.json`: Trick Room) are printed to stderr;
+- a trainer whose script claims disagree on the format itself (a two-trainer battle and a
+  tag battle, Spear Pillar 521/527 behind `CheckTrainerFlag 864`) fails extraction unless
+  `data/kaizo/battle_formats.json` refuses it with evidence: its format is `unknown`, which
+  coverage refuses;
 - `changed_scripts.json`: the changed members of `battle/skill/be_seq.narc`,
   `battle/skill/sub_seq.narc` and `battle/tr_ai/tr_ai_seq.narc`, each classified by a
   `[[member]]` entry in `data/kaizo/rom_diff.toml` (a stale entry fails the run; the CLI appends

@@ -34,6 +34,10 @@ SPECIES_MASK = (1 << FORM_SHIFT) - 1
 MAX_LEVEL = 100  # MAX_POKEMON_LEVEL, include/constants/pokemon.h:22
 BATTLE_TYPE_DOUBLES = 1 << 1  # include/constants/battle.h:27
 GENDER_SYMBOL = "sTrainerClassGender"  # u8 per class, src/trainer_data.c:9,166
+# Read at its vanilla address on Kaizo too: the ARM9 image is vanilla's size, the bytes are
+# unchanged, and its only reader TrainerClass_Gender (trainer_data.c:164-167) is no code
+# change of the ROM diff (no [[code]] entry in data/kaizo/rom_diff.toml;
+# tests/tools/rom/test_kaizo_rom.py test_vanilla_address_readers_unchanged).
 LAYOUTS = ("vanilla", "kaizo")
 # Kaizo's override byte (K2b Ruling 6, spec 5.4: the sheet's "Ability Number"): flags, 16
 # forces ability slot 0, 32 slot 1, 2 female. The ROM holds 0, 2, 16, 32 and one 18 (16|2).

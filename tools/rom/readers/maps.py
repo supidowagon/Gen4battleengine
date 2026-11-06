@@ -38,7 +38,14 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
 
-from tools.battle_scripts import BattleStructure, Op, battle_structures, placed_enemies, var_ids
+from tools.battle_scripts import (
+    UNKNOWN_FORMAT,
+    BattleStructure,
+    Op,
+    battle_structures,
+    placed_enemies,
+    var_ids,
+)
 from tools.extract_decomp import (
     START_CONDITIONS,
     START_CONDITIONS_FILE,
@@ -78,6 +85,17 @@ KAIZO_GAME_CODE = "JAK7"
 KAIZO_MAP_HEADERS = "debug/cb_edit/d_test.narc"  # platinum.us/filesys.csv:315
 KAIZO_HEADERS_NARC_ID = 148  # NARC_INDEX_DEBUG__CB_EDIT__D_TEST, include/constants/narc.h:154
 KAIZO_START_CONDITIONS = REPO_ROOT / "data" / "kaizo" / "start_conditions.json"
+KAIZO_BATTLE_FORMATS = REPO_ROOT / "data" / "kaizo" / "battle_formats.json"
+
+
+class _GameDefault:
+    """``trainer_start_conditions``' default ``overrides``: the game's own file."""
+
+    def __repr__(self) -> str:
+        return "GAME_DEFAULT"
+
+
+GAME_DEFAULT = _GameDefault()
 
 # zone_event.narc member (tools/jsoncnv/event.py:25-131): bg events, object events, warp
 # events and coord events, each a u32 count followed by fixed-size records.
@@ -828,10 +846,12 @@ def weather_switch_conditions(
             out[w] = "none"
             continue
         if h(t) >> 8 == 0x48:  # ldr r0, [pc, #imm]
-            sub = literal(t)
+            sub, store = literal(t), t + 2
         elif h(t) >> 8 == 0x20 and h(t + 2) & 0xF83F == 0x0000:  # movs r0, #a; lsls r0, #b
-            sub = (h(t) & 0xFF) << ((h(t + 2) >> 6) & 0x1F)
+            sub, store = (h(t) & 0xFF) << ((h(t + 2) >> 6) & 0x1F), t + 4
         else:
+            store = None
+        if store is None or h(store) >> 8 != 0x90:  # str r0, [sp, #imm]
             raise ReaderError(f"{SWITCH_SYMBOL}: weather {w} case at {ram + t:#x} not decoded")
         name = order[sub] if 0 <= sub < len(order) else None
         out[w] = SUBSCRIPT_CONDITION.get(name, f"subscript {sub}")
@@ -929,7 +949,14 @@ def _object_trainers(member: bytes, index: int) -> list[int]:
 
 
 def _rematches(rom: RomFiles, symbols: SymbolMap, n_trainers: int) -> list[tuple[int, list[int]]]:
-    """(base trainer, its rematch trainers) per ``gVsSeekerRematchData`` row."""
+    """(base trainer, its rematch trainers) per ``gVsSeekerRematchData`` row.
+
+    Read at its vanilla address on Kaizo too: overlay 5 is vanilla's size, the bytes are
+    unchanged, and its readers (``VsSeeker_GetRematchDataIndexForTrainer``,
+    ``_GetCurrentLevelForRematchData``, ``_GetNextLowerRematchLevel``,
+    ``_GetTrainerIDForRematchLevel``, src/overlay005/vs_seeker.c:713-773) are no code change
+    of the ROM diff (no [[code]] entry in data/kaizo/rom_diff.toml;
+    test_kaizo_rom.py test_vanilla_address_readers_unchanged)."""
     rematch = symbol_bytes(rom, symbols, REMATCH_SYMBOL)
     row = 2 * REMATCH_SLOTS
     if len(rematch) % row:
@@ -1000,12 +1027,50 @@ def trainer_maps(
     return where, weathers
 
 
+def _rom_trainer_names(rom: RomFiles, decomp: Path, n_trainers: int) -> list[str]:
+    """The ROM trainer-name bank's first ``n_trainers`` names (Kaizo's trainer labels)."""
+    from tools.extract_decomp import extract_charmap
+    from tools.rom.readers.text import message_bank
+
+    names = message_bank(rom, decomp, "TEXT_BANK_NPC_TRAINER_NAMES", extract_charmap(decomp), True)
+    if len(names) < n_trainers:
+        raise ReaderError(f"TEXT_BANK_NPC_TRAINER_NAMES: {len(names)} names for {n_trainers}")
+    return names[:n_trainers]
+
+
+def refused_formats(path: Path, name_at: Callable[[int], str]) -> dict[int, str]:
+    """``data/kaizo/battle_formats.json``: ``{id: {"trainer": ROM name, "format":
+    "unknown"}}`` -> {id: "unknown"}, for trainers whose battle format the scripts leave to
+    game state (``battle_structures``' ``refused``). The name must be ``name_at(id)``; any
+    other format value raises (the file refuses, it never sets a format)."""
+    import json
+
+    out = {}
+    for key, entry in json.loads(Path(path).read_text(encoding="utf-8")).items():
+        if key == "comment":
+            continue
+        try:
+            if not key.isdecimal():
+                raise KeyError(key)
+            name = name_at(int(key))
+        except (KeyError, IndexError):
+            raise ReaderError(f"{path}: {key!r} is not a trainer id") from None
+        if not isinstance(entry, dict) or set(entry) != {"trainer", "format"}:
+            raise ReaderError(f"{path}: entry {key} must be {{trainer, format}}")
+        if entry["trainer"] != name:
+            raise ReaderError(f"{path}: id {key} is {name}, not {entry['trainer']}")
+        if entry["format"] != UNKNOWN_FORMAT:
+            raise ReaderError(f"{path}: {key}: format must be {UNKNOWN_FORMAT!r}")
+        out[int(key)] = entry["format"]
+    return out
+
+
 def trainer_start_conditions(
     rom: RomFiles,
     decomp: Path,
     symbols: SymbolMap,
     *,
-    overrides: Path | None = None,
+    overrides: Path | None | _GameDefault = GAME_DEFAULT,
     unresolved: list[UnresolvedOperand] | None = None,
     field_effects: dict[int, dict[str, list[int]]] | None = None,
 ) -> list[str]:
@@ -1014,8 +1079,9 @@ def trainer_start_conditions(
     constant reaches are appended to ``unresolved`` (see ``trainer_maps``): a trainer
     behind one is on no map through that battle, so callers must report them.
 
-    ``overrides`` defaults to the game's file: ``tools/start_conditions.json`` (entries
-    named by ``TRAINER_*`` constant) for vanilla, ``data/kaizo/start_conditions.json``
+    ``overrides`` is a file, ``None`` (no overrides) or ``GAME_DEFAULT`` (the default), the
+    game's file: ``tools/start_conditions.json`` (entries named by ``TRAINER_*`` constant)
+    for vanilla, ``data/kaizo/start_conditions.json``
     (entries named by the ROM trainer-name bank, K2b Ruling 8) for Kaizo, which may also
     give ``UNKNOWN_CONDITION`` (only to a trainer whose maps give several conditions).
     Error messages name each trainer the same way.
@@ -1026,22 +1092,14 @@ def trainer_start_conditions(
     decomp = Path(decomp)
     trainers = _constants(decomp, "trainers", "TRAINER_")
     if rom.game_code == KAIZO_GAME_CODE:
-        from tools.extract_decomp import extract_charmap
-        from tools.rom.readers.text import message_bank
-
-        names = message_bank(
-            rom, decomp, "TEXT_BANK_NPC_TRAINER_NAMES", extract_charmap(decomp), True
-        )
-        if len(names) < len(trainers):
-            raise ReaderError(f"TEXT_BANK_NPC_TRAINER_NAMES: {len(names)} names")
-        labels, default = names[: len(trainers)], KAIZO_START_CONDITIONS
+        labels, default = _rom_trainer_names(rom, decomp, len(trainers)), KAIZO_START_CONDITIONS
         allowed = (*START_CONDITIONS, UNKNOWN_CONDITION)
     else:
         labels, default, allowed = trainers, START_CONDITIONS_FILE, START_CONDITIONS
-    path = Path(overrides) if overrides is not None else default
+    path = default if overrides is GAME_DEFAULT else overrides
     where, weathers = trainer_maps(rom, decomp, symbols, len(trainers), unresolved)
     conditions = _map_conditions(rom, decomp, symbols, weathers)
-    fixed = _start_condition_overrides(path, labels.__getitem__, allowed)
+    fixed = _start_condition_overrides(path, labels.__getitem__, allowed) if path else {}
     out = []
     for tid, label in enumerate(labels):
         derived = set()
@@ -1051,7 +1109,7 @@ def trainer_start_conditions(
             for effect in sorted(conds & set(FIELD_EFFECTS)):
                 if field_effects is not None:
                     field_effects.setdefault(tid, {}).setdefault(effect, []).append(header)
-        out.append(_start_condition(tid, label, derived, fixed, path))
+        out.append(_start_condition(tid, label, derived, fixed, path or default))
     return out
 
 
@@ -1065,7 +1123,10 @@ def rom_battle_structures(
     inconsistent structure raises ``ReaderError``. On Kaizo a tag battle whose variable
     partner is not set by a ``Call`` right before it (scr_seq 136, Veilstone City, reaches
     it through ``GoTo``s) gets partner ``None`` (``battle_structures``' ``unknown_partner``)
-    instead of raising: the pair and its format are read, the partner is not guessed."""
+    instead of raising: the pair and its format are read, the partner is not guessed. A
+    trainer whose claims disagree on the format itself (a two-trainer battle and a tag
+    battle) raises unless ``KAIZO_BATTLE_FORMATS`` refuses it (format ``"unknown"``)."""
+    decomp = Path(decomp)
     rows = map_header_rows(rom, symbols)
     scripts = rom.narc(SCRIPTS_NARC)
     events = rom.narc(EVENTS_NARC)
@@ -1090,8 +1151,14 @@ def rom_battle_structures(
                 placed[header] = placed_enemies(
                     ops[script_id], objects, rematches, f"map header {header}"
                 )
-        return battle_structures(
-            by_header, placed, unknown_partner=rom.game_code == KAIZO_GAME_CODE
+        kaizo = rom.game_code == KAIZO_GAME_CODE
+        refused = (
+            refused_formats(
+                KAIZO_BATTLE_FORMATS, _rom_trainer_names(rom, decomp, n_trainers).__getitem__
+            )
+            if kaizo
+            else None
         )
+        return battle_structures(by_header, placed, unknown_partner=kaizo, refused=refused)
     except ValueError as e:
         raise ReaderError(f"battle structures: {e}") from e

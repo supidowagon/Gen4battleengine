@@ -171,8 +171,31 @@ def test_kaizo_field_effects_and_unknown_starts(kaizo_rom_dir, kaizo_rom_trainer
     assert by_id[403]["name"] == "Cyrus" and kaizo_rom_trainers[403]["start_condition"] == "none"
     assert len(rows) == 53
     unknown = [t["id"] for t in kaizo_rom_trainers if t["start_condition"] == "unknown"]
-    assert unknown == [509, 559, 610, 649, 676, 746, 747]
+    assert unknown == [325, 343, 509, 559, 610, 649, 676, 746, 747]
+    assert [kaizo_rom_trainers[i]["format"] for i in (521, 527)] == ["unknown", "unknown"]
     assert kaizo_rom_trainers[94]["start_condition"] == "rain"  # Route 212 South
+
+
+def test_vanilla_address_readers_unchanged(vanilla_files, kaizo_files, symbols):
+    # sTrainerClassGender and gVsSeekerRematchData are read at vanilla addresses on Kaizo
+    # (fix round 1): neither they nor their readers are a code change, and the classified
+    # [[code]] entries name none of them.
+    from tools.rom.diff import load_classification
+
+    names = {
+        "sTrainerClassGender",
+        "TrainerClass_Gender",
+        "gVsSeekerRematchData",
+        "VsSeeker_GetRematchDataIndexForTrainer",
+        "VsSeeker_GetCurrentLevelForRematchData",
+        "VsSeeker_GetNextLowerRematchLevel",
+        "VsSeeker_GetTrainerIDForRematchLevel",
+    }
+    for n in names:
+        symbols.find(n)  # each name is in the linker map
+    changed = {c.symbol for c in diff_roms(vanilla_files, kaizo_files, symbols).code}
+    assert not names & changed
+    assert not names & {symbol for _, symbol in load_classification(ROM_DIFF)}
 
 
 def test_kaizo_trainer_maps_report_member_136(kaizo_files, decomp, symbols):

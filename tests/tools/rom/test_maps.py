@@ -135,6 +135,14 @@ def test_vanilla_start_conditions_match_decomp(vanilla_files, decomp, symbols, t
     }
 
 
+def test_start_conditions_overrides_none_means_none(vanilla_files, decomp, symbols):
+    # overrides=None reads no file (fix round 1): vanilla's date-dependent trainers raise.
+    from tools.extract_decomp import ExtractError
+
+    with pytest.raises(ExtractError, match="can start with any of.*list it in"):
+        trainer_start_conditions(vanilla_files, decomp, symbols, overrides=None)
+
+
 def test_setvar_resolution_follows_paths(table):
     # entry: GoToIf -> battle path; fall-through path sets the var to an item id and
     # ends without reaching the battle. Only the trainer id reaches StartTagBattle.

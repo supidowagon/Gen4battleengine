@@ -173,15 +173,22 @@ def append_unknown_members(path: Path, changed: dict[str, list[int]]) -> list[tu
 
 def _report_kaizo(trainers: list[dict], effects: dict[int, dict[str, list[int]]]) -> list[dict]:
     """Print what the Kaizo trainers leave open to stderr: each ``unknown`` start
-    condition (``data/kaizo/start_conditions.json``), each partner not evaluated
+    condition (``data/kaizo/start_conditions.json``) and format, each partner not evaluated
     (``partner`` null) and the field effects map weathers start (Trick Room); return the
     ``FIELD_EFFECTS_FILE`` rows ``{id, name, effect, map_headers}`` (the trainer's map
     headers whose weather starts ``effect``; it may be on other maps too)."""
+    from tools.battle_scripts import UNKNOWN_FORMAT
     from tools.extract_decomp import UNKNOWN_CONDITION
 
     unknown = [t["id"] for t in trainers if t["start_condition"] == UNKNOWN_CONDITION]
     if unknown:
         print(f"warning: start condition unknown for trainers {unknown}", file=sys.stderr)
+    formats = [t["id"] for t in trainers if t["format"] == UNKNOWN_FORMAT]
+    if formats:
+        print(
+            f"warning: battle format unknown (data/kaizo/battle_formats.json) for {formats}",
+            file=sys.stderr,
+        )
     partners = [t["id"] for t in trainers if t["partner"] is None]
     if partners:
         print(f"warning: partner not evaluated for trainers {partners}", file=sys.stderr)
