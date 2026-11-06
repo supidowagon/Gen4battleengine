@@ -548,10 +548,12 @@ def extract_items(decomp: Path) -> list[dict]:
                     "hold_effect": hold_id("HOLD_EFFECT_NONE"),
                     "hold_param": 0,
                     "teaches_move": None,
+                    "hp_restored": 0,
                 }
             )
             continue
         d = _load_json(decomp / "res" / "items" / "data" / f"{_stem(const, 'ITEM_')}.json")
+        params = d.get("itemUseParams") or {}
         out.append(
             {
                 "name": d["name"],
@@ -559,6 +561,10 @@ def extract_items(decomp: Path) -> list[dict]:
                 "hold_param": int(d["effectParam"]),
                 # res/items/data/tm10.json `teachesMove`; null for every other item.
                 "teaches_move": move_id(d["teachesMove"]) if d.get("teachesMove") else None,
+                # ItemPartyParam.hpRestored (include/item.h:48), a u8 that itemproc.c:168
+                # fills from the JSON's s8: -1 (Max Potion: restore all) is 255. 0 without
+                # itemUseParams (no party-use data).
+                "hp_restored": int(params.get("hpRestored", 0)) & 0xFF,
             }
         )
     return out

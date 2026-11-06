@@ -15,6 +15,13 @@ Sources (decomp at the pin in ``tools/clone_decomp.sh``):
 * ``SOUND_MOVES`` / ``PUNCH_MOVES`` mirror ``sSoundMoves`` and ``sPunchingMoves``
   in ``src/battle/battle_lib.c``; the decomp has no move-data flag for either.
 
+Per game (spec §7.2, classified in ``nuzline.data.game_constants``): ``SOUND_MOVES`` and
+``PUNCH_MOVES`` are game data, which K2b Task 5 moves to each game's ``move_lists.json``.
+``TYPE_CHART_STATUS_MOVES`` (Thunder Wave) is checked by name against every game's data at
+load. Every other map here is keyed by name or decomp effect id, so it is looked up in each
+game's own data: it describes the engine semantics of the vanilla scripts, and a game that
+changes those scripts declares it in ``rom_diff.toml`` (Ruling 13).
+
 Deliberately unsupported although close to a supported family:
 
 * ``BATTLE_EFFECT_RECOIL_THIRD`` (198): the decomp divides damage by 3

@@ -2,7 +2,8 @@
 
 ``load_game`` checks the files on disk before it imports ``nuzline.data.tables`` (which
 imports jax), so a missing or mismatched data set is refused with the rebuild command
-instead of a jax start-up or a ``FileNotFoundError``.
+instead of a jax start-up or a ``FileNotFoundError``. It then checks every hard-coded game
+id against the game's data (``nuzline.data.game_constants``, spec §7.2).
 """
 
 from __future__ import annotations
@@ -34,6 +35,11 @@ GAMES: dict[str, Game] = {
     KAIZO: Game(KAIZO, _DATA / "gen4_platinum_kaizo", _DATA / "intermediate_kaizo"),
 }
 ALIASES = {"vanilla": VANILLA, "kaizo": KAIZO}
+# The command that writes each game's intermediate_dir.
+EXTRACT = {
+    VANILLA: "python -m tools.extract_decomp --out data/intermediate",
+    KAIZO: "python -m tools.extract_rom --game kaizo",
+}
 
 
 class GameDataError(ValueError):
@@ -69,8 +75,19 @@ def load_game(game: Game) -> tuple[Tables, Names]:
         raise GameDataError(
             f"{manifest_path} is for game {found!r}, not {game.id!r}; rebuild with: {build}"
         )
+    items_path = game.intermediate_dir / "items.json"
+    if not items_path.exists():
+        extract = EXTRACT.get(game.id, "the game's extractor")
+        raise GameDataError(f"{game.id}: no {items_path}; extract it with: {extract}")
+    items = json.loads(items_path.read_text(encoding="utf-8"))
+    from nuzline.data.game_constants import check_constants
     from nuzline.data.tables import load_names, load_tables
 
     tables, names = load_tables(game.tables_dir), load_names(game.tables_dir)
-    # Task 4: check_constants(...) goes here; a non-empty result raises GameDataError.
+    lines = check_constants(game.id, names, items)
+    if lines:
+        raise GameDataError(
+            f"{game.id}: {len(lines)} hard-coded id(s) contradicted by the game's data "
+            "(nuzline.data.game_constants):\n  " + "\n  ".join(lines)
+        )
     return tables, names

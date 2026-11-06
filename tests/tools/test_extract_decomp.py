@@ -14,6 +14,7 @@ from tools.extract_decomp import (
     extract_evolutions,
     extract_exp_tables,
     extract_forms,
+    extract_items,
     extract_species,
     extract_static,
     extract_tutor_learnsets,
@@ -248,3 +249,12 @@ def test_form_count_that_is_not_a_decimal_raises(tmp_path, value):
     assert value in str(e.value)
     (tmp_path / FORMS_H).write_text("#define  SHELLOS_FORM_COUNT\t2  \n", "utf-8")
     assert _form_counts(tmp_path, species) == {2: 2}
+
+
+def test_hp_restored_extracted():
+    items = {i["name"]: i for i in extract_items(DECOMP)}
+    assert items["Potion"]["hp_restored"] == 20
+    # ItemPartyParam.hpRestored is a u8 the data processor fills from an s8 (itemproc.c:168):
+    # Max Potion's -1 (restore all) is 255 in the ROM.
+    assert items["Max Potion"]["hp_restored"] == 255
+    assert items["Expert Belt"]["hp_restored"] == 0  # no itemUseParams

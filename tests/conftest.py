@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from nuzline.data.games import GAMES, KAIZO, VANILLA
 from nuzline.data.tables import load_names, load_tables
 from nuzline.jaxcache import cache_root, code_version, prune_other_versions, set_compile_cache_dir
 
@@ -53,3 +54,70 @@ def names():
 def vanilla_manifest():
     _require_tables()
     return json.loads((TABLES_DIR / "manifest.json").read_text(encoding="utf-8"))
+
+
+@pytest.fixture(scope="session")
+def vanilla_items():
+    """``data/intermediate/items.json`` rows (skips when the vanilla data is absent)."""
+    path = GAMES[VANILLA].intermediate_dir / "items.json"
+    if not path.exists():
+        pytest.skip("vanilla intermediates not extracted (run python -m tools.extract_decomp)")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+# --- Kaizo: every fixture skips until the Kaizo tables are built (Task 15) ----------
+
+KAIZO_TABLES_DIR = GAMES[KAIZO].tables_dir
+KAIZO_INTERMEDIATE = GAMES[KAIZO].intermediate_dir
+
+
+def _require_kaizo_tables() -> None:
+    if not (KAIZO_TABLES_DIR / "tables.npz").exists():
+        pytest.skip("Kaizo tables not built (run python -m tools.build_tables --game kaizo)")
+
+
+@pytest.fixture(scope="session")
+def kaizo_tables():
+    _require_kaizo_tables()
+    return load_tables(KAIZO_TABLES_DIR)
+
+
+@pytest.fixture(scope="session")
+def kaizo_names():
+    _require_kaizo_tables()
+    return load_names(KAIZO_TABLES_DIR)
+
+
+@pytest.fixture(scope="session")
+def kaizo_manifest():
+    _require_kaizo_tables()
+    return json.loads((KAIZO_TABLES_DIR / "manifest.json").read_text(encoding="utf-8"))
+
+
+@pytest.fixture(scope="session")
+def kaizo_learnsets():
+    from nuzline.data.learnsets import load_learnsets
+
+    _require_kaizo_tables()
+    return load_learnsets(KAIZO_TABLES_DIR)
+
+
+@pytest.fixture(scope="session")
+def kaizo_trainers():
+    from nuzline.data.trainer import load_trainers
+
+    _require_kaizo_tables()
+    return load_trainers(KAIZO_INTERMEDIATE)
+
+
+@pytest.fixture(scope="session")
+def kaizo_roark(kaizo_trainers):
+    """Kaizo's Roark: the first trainer named Roark, as in vanilla."""
+    return next(t for t in kaizo_trainers if t.name == "Roark")
+
+
+@pytest.fixture(scope="session")
+def kaizo_roark_party(kaizo_roark):
+    from nuzline.data.trainer import IntermediateData, build_trainer_party
+
+    return build_trainer_party(kaizo_roark, IntermediateData(KAIZO_INTERMEDIATE))

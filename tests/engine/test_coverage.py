@@ -5,6 +5,8 @@ from dataclasses import replace
 
 import pytest
 
+from nuzline.data.games import KAIZO
+from nuzline.data.tables import Names
 from nuzline.data.trainer import build_trainer_party, load_trainers
 from nuzline.engine.coverage import (
     IMPLEMENTED_ABILITIES,
@@ -253,3 +255,20 @@ def test_player_rotom_wash_is_not_refused_for_its_form(tables, names):
     wash = replace(sample_party(names)[0], species=479, form=2, ability_slot=0)
     r = check_coverage(tables, names, [wash], roark_trainer(), roark_party(names), 0)
     assert not any("form" in m for m in r.missing)
+
+
+NO_POLICY = "Roark: no transcribed AI policy for this game (spec 5.10) (AI policy UNSUPPORTED)"
+
+
+def test_trainer_of_a_game_without_ai_policy_refused(tables, names, vanilla_manifest):
+    # Vanilla's data under the Kaizo game id: Kaizo has no transcribed AI policy yet.
+    kaizo = Names({**vanilla_manifest, "game": KAIZO})
+    report = check_opponent(tables, kaizo, roark_trainer(), roark_party(names), Weather.NONE)
+    assert NO_POLICY in report.missing and report.level == Support.NONE
+    vanilla = check_opponent(tables, names, roark_trainer(), roark_party(names), Weather.NONE)
+    assert vanilla.missing == []
+
+
+def test_kaizo_trainer_ai_refused(kaizo_tables, kaizo_names, kaizo_roark, kaizo_roark_party):
+    report = check_opponent(kaizo_tables, kaizo_names, kaizo_roark, kaizo_roark_party, Weather.NONE)
+    assert NO_POLICY in report.missing

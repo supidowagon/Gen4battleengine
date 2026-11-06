@@ -68,6 +68,7 @@ from enum import IntEnum
 import numpy as np
 
 from nuzline.data.forms import personal_row
+from nuzline.data.game_constants import POLICY
 from nuzline.data.spec import PokemonSpec
 from nuzline.data.tables import Names, Tables
 from nuzline.data.trainer import Trainer
@@ -75,6 +76,7 @@ from nuzline.engine.ids import AbilityId, EffectId, ItemId, TrainerItemId, Weath
 from nuzline.engine.state import make_state
 
 # include/constants/forms.h:94, :98; generated/species.txt and items.txt (line N is id N-1).
+# Checked against each game's data at load (nuzline.data.game_constants).
 SPECIES_GIRATINA, GIRATINA_FORM_ORIGIN = 487, 1
 SPECIES_SHAYMIN, SHAYMIN_FORM_SKY = 492, 1
 ITEM_GRISEOUS_ORB = 112
@@ -234,6 +236,12 @@ def _check_form(c: _Collector, where: str, mon: PokemonSpec) -> None:
 
 
 def _check_trainer(c: _Collector, tables: Tables, names: Names, trainer: Trainer) -> None:
+    if POLICY.get(names.game) is None:
+        c.add(
+            Support.NONE,
+            f"{trainer.name}: no transcribed AI policy for this game (spec 5.10)",
+            "AI policy",
+        )
     support = IMPLEMENTED_FORMATS.get(trainer.format, Support.NONE)
     c.add(support, f"{trainer.name}: a {trainer.format} battle", "battle format")
     effect = np.asarray(tables.trainer_item_effect)
