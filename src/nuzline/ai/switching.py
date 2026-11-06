@@ -279,7 +279,8 @@ def _layout(tables: Tables, state: BattleState) -> _Layout:
     gravity = state.gravity
     d_types = state.types[0, d]
     species = state.species.astype(_I32)
-    ability = tables.species_abilities_decomp[species, state.ability_slot.astype(_I32)]
+    row = tables.species_form_row[species, state.form.astype(_I32)].astype(_I32)
+    ability = tables.species_abilities_decomp[row, state.ability_slot.astype(_I32)]
     ability = ability.astype(_I32)
     d_ability = ability[0, d]
     present = species > 0
@@ -370,8 +371,10 @@ def _layout(tables: Tables, state: BattleState) -> _Layout:
 def _refusals(lay: _Layout, state: BattleState, tables: Tables) -> list[str]:
     out: list[str] = []
     species = np.asarray(state.species).astype(np.int64)
+    form = np.asarray(state.form).astype(np.int64)
+    row = np.asarray(tables.species_form_row)[species, form].astype(np.int64)
     slot = np.asarray(state.ability_slot).astype(np.int64)
-    ability = np.asarray(tables.species_abilities_decomp)[species, slot]
+    ability = np.asarray(tables.species_abilities_decomp)[row, slot]
     for side, s in zip(*np.nonzero(np.asarray(lay.ability_refused)), strict=True):
         name = _ABILITY_NAMES[int(ability[side, s])]
         why = (_ANY_SIDE_ABILITIES | _AI_SIDE_ABILITIES)[name]

@@ -1,10 +1,15 @@
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 import jax.numpy as jnp
 import numpy as np
 import pytest
 
+from nuzline.data.forms import form_row
+from nuzline.data.learnsets import load_learnsets
+from nuzline.data.tables import MANIFEST_VERSION, Tables, load_names, load_tables
 from nuzline.engine.ids import AbilityId, EffectId, ItemId, MoveFlag, MoveTarget, Stat, Status
 
 TABLES = Path(__file__).resolve().parents[2] / "data" / "gen4_platinum"
@@ -203,5 +208,102 @@ def test_growth_tables(tables, names):
     assert int(tables.exp_table[0, 100]) == 1_000_000
 
 
+def test_ai_effect_and_exp_yield_arrays(tables, names):
+    assert int(tables.species_exp_yield[names.species("Bulbasaur")]) == 64
+    assert int(tables.move_ai_effect[names.move("Stealth Rock")]) == 266
+
+
 def test_charmap_loaded(names):
     assert names.charmap[0x0145] == "a"
+
+
+def test_form_tables(tables, names):
+    origin = form_row(tables.species_form_row, names.species("Giratina"), 1)
+    assert origin == 501 and int(tables.species_abilities_decomp[origin, 0]) == names.ability(
+        "Levitate"
+    )
+    assert tables.species_base_stats.shape[0] == 508 and len(names.species_names) == 496
+    assert tables.species_form_row.shape == (496, 28) and tables.species_form_row.dtype == jnp.int16
+    for f in Tables._fields:
+        if f.startswith("species_") and f != "species_form_row":
+            assert getattr(tables, f).shape[0] == 508, f
+    assert names.form(479, "wash") == 2 and names.form_names(479)[1] == "Heat"
+    assert names.form_names(479)[0] == names.species_names[479] and names.form(479, "rotom") == 0
+    assert names.form_names(1) == (names.species_names[1],)
+    assert names.form(479, 0) == 0
+    assert names.species_abilities(487, 1) == (names.ability("Levitate"), 0)
+    assert names.species_base_friendship(479, 2) == 70
+    with pytest.raises(ValueError, match="species 479 has no form 6"):
+        names.species_abilities(479, 6)
+    with pytest.raises(ValueError, match="Heat"):
+        names.form(479, "Plasma")
+
+
+def test_form_row_lookup():
+    grid = [[0, -1], [1, 5]]
+    assert form_row(grid, 1, 1) == 5 and form_row(np.asarray(grid), 1, 0) == 1
+    for species, form in ((0, 1), (1, -1), (1, 28)):
+        with pytest.raises(ValueError, match=f"species {species} has no form {form}"):
+            form_row(grid, species, form)
+
+
+def test_import_forms_does_not_import_jax():
+    code = "import sys, nuzline.data.forms; assert 'jax' not in sys.modules, 'jax imported'"
+    subprocess.run([sys.executable, "-c", code], check=True)
+
+
+def test_names_form_checks_the_species_range(names):
+    # Task 5 review: a negative id wrapped round species_names, a large one raised IndexError.
+    for species in (-1, 496):
+        with pytest.raises(ValueError, match=f"species {species} out of range"):
+            names.form_names(species)
+        with pytest.raises(ValueError, match=f"species {species} out of range"):
+            names.form(species, "Wash")
+    with pytest.raises(ValueError, match=r"ROTOM has no form 6 \(forms: ROTOM, Heat"):
+        names.form(479, 6)
+
+
+def test_manifest_version_is_8(
+    names,
+):  # the committed manifest; `names` skips when tables are absent
+    assert (
+        json.loads((TABLES / "manifest.json").read_text("utf-8"))["version"]
+        == MANIFEST_VERSION
+        == 8
+    )
+
+
+@pytest.mark.parametrize("manifest", ['{"version": 7}', "{}"])
+def test_old_tables_are_refused(tmp_path, manifest):  # no npz needed: check_manifest runs first
+    (tmp_path / "manifest.json").write_text(manifest)
+    for load in (load_tables, load_names, load_learnsets):
+        with pytest.raises(ValueError, match="re-run tools/extract_decomp.py"):
+            load(tmp_path)
+
+
+STALE_NPZ = (
+    r"tables\.npz is version \w+; .*re-run tools/extract_decomp\.py and tools/build_tables\.py"
+)
+
+
+def _stale_npz(dir: Path, version: int | None) -> None:
+    """A current manifest beside a ``tables.npz`` built by an older nuzline: the tracked
+    manifest is pulled while the git-ignored npz stays (final review, stale tables)."""
+    (dir / "manifest.json").write_text(json.dumps({"version": MANIFEST_VERSION}))
+    arrays = {"species_base_stats": np.zeros((496, 6), np.int16)}
+    if version is not None:
+        arrays["version"] = np.int16(version)
+    np.savez_compressed(dir / "tables.npz", **arrays)
+
+
+@pytest.mark.parametrize("version", [None, 7])
+def test_stale_npz_beside_current_manifest_is_refused(tmp_path, version):
+    _stale_npz(tmp_path, version)
+    with pytest.raises(ValueError, match=STALE_NPZ):
+        load_tables(tmp_path)
+
+
+def test_built_npz_records_its_version(tables):
+    with np.load(TABLES / "tables.npz") as z:
+        assert "version" in z.files and int(z["version"]) == MANIFEST_VERSION
+    assert "version" not in Tables._fields

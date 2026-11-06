@@ -5,6 +5,7 @@ import pytest
 
 from nuzline.data.trainer import (
     IntermediateData,
+    PartnerVariant,
     build_trainer_party,
     default_moves,
     difficulty_to_ivs,
@@ -120,3 +121,53 @@ def test_roark_party_identity():
         assert mon.nature == pid % 25
         assert mon.friendship == inter.species[mon.species]["base_friendship"]
         assert (mon.item, mon.form, mon.current_hp, mon.status) == (0, 0, None, 0)
+
+
+def test_trainers_without_a_format_are_refused(tmp_path):
+    # An intermediate extracted before the battle format was recorded.
+    (tmp_path / "trainers.json").write_text(json.dumps([{"id": 0}]), encoding="utf-8")
+    with pytest.raises(ValueError, match="no battle format"):
+        load_trainers(tmp_path)
+
+
+def test_trainers_without_a_battle_structure_are_refused(tmp_path):
+    # An intermediate extracted before two-trainer, tag and partner battles were recorded.
+    row = {"id": 0, "format": "single", "opponent_2": None}
+    (tmp_path / "trainers.json").write_text(json.dumps([row]), encoding="utf-8")
+    with pytest.raises(ValueError, match="has no battle structure: re-run"):
+        load_trainers(tmp_path)
+
+
+@needs_inter
+def test_partner_variants_load():
+    grunt = next(t for t in load_trainers(INTER) if t.format == "multi" and len(t.partner) == 6)
+    assert isinstance(grunt.partner[0], PartnerVariant) and grunt.opponent_2 is not None
+    assert {p.player_gender for p in grunt.partner} == {0, 1}
+
+
+@needs_inter
+def test_trainer_form_uses_row(names):
+    from dataclasses import replace
+
+    inter = IntermediateData(INTER)
+    roark = _roark()
+    t = replace(roark, party=(replace(roark.party[0], species=487, form=1),))
+    (mon,) = build_trainer_party(t, inter)
+    assert mon.form == 1
+    assert names.species_abilities(487, 1)[mon.ability_slot] == names.ability("Levitate")
+    assert mon.friendship == names.species_base_friendship(487, 1)
+
+
+@needs_inter
+def test_trainer_form_default_moves_use_the_row_learnset():
+    # Wormadam-Sandy's level-up learnset (row 499) parts from Plant Cloak's at level 26.
+    from dataclasses import replace
+
+    inter = IntermediateData(INTER)
+    roark = _roark()
+    raw = replace(roark.party[0], species=413, form=1, level=30, moves=None)
+    (mon,) = build_trainer_party(replace(roark, party=(raw,)), inter)
+    assert mon.moves == default_moves(inter.learnsets[499], 30)
+    assert mon.moves != default_moves(inter.learnsets[413], 30)
+    with pytest.raises(ValueError, match="species 413 has no form 3"):
+        build_trainer_party(replace(roark, party=(replace(raw, form=3),)), inter)

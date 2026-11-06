@@ -14,6 +14,7 @@ from collections.abc import Sequence
 
 import numpy as np
 
+from nuzline.data.forms import personal_row
 from nuzline.data.tables import Names
 from nuzline.engine.ids import Status
 from nuzline.engine.state import BattleState, make_state
@@ -82,9 +83,13 @@ def _hp_why(problem: PrepProblem, names: Names, member: Member) -> str:
     for kind, percent in AI_DEFENDER_HP_CHECKS:
         if hp == percent_cut(kind, percent, top):
             return f"at most {percent} % keeps the trainer AI's high-HP check off"
-    ability = int(np.asarray(tables.species_abilities)[spec.species, spec.ability_slot])
+    row = personal_row(tables, spec.species, spec.form)
+    ability = int(np.asarray(tables.species_abilities)[row, spec.ability_slot])
     if hp == top // 3 and ability in _PINCH_ABILITIES:
-        return f"at most 1/3: {names.ability_names[names.species_abilities(spec.species)[spec.ability_slot]]} active"
+        name = names.ability_names[
+            names.species_abilities(spec.species, spec.form)[spec.ability_slot]
+        ]
+        return f"at most 1/3: {name} active"
     kill = ai_kill_damage(tables, spec, problem.opp, problem.start_condition, problem.trainer.items)
     if hp in kill:
         return f"at most {hp}: the trainer AI sees a kill"
@@ -204,7 +209,9 @@ def setup_card(problem: PrepProblem, names: Names, setup: Setup) -> list[str]:
         spec = member_spec(problem, m, tables)
         top = max_hp_of(tables, spec)
         species = names.species_names[spec.species]
-        ability = names.ability_names[names.species_abilities(spec.species)[spec.ability_slot]]
+        ability = names.ability_names[
+            names.species_abilities(spec.species, spec.form)[spec.ability_slot]
+        ]
         item = names.item_names[spec.item] if spec.item else "no item"
         hp = top if spec.current_hp is None else spec.current_hp
         status = _status_name(spec.status) if spec.status else "healthy"

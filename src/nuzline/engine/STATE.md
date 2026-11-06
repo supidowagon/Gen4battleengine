@@ -118,9 +118,9 @@ three structs has a row.
     ended, nor for a pursuer, whose action `TryPursuit` ends, battle_script.c:6931),
     and so do a switch-in (battle_lib.c:2121) and a faint (:2199).
   - `ability_slot`: the species ability slot (from the personality, resolved into
-    `PokemonSpec.ability_slot`); `tables.species_abilities_decomp[species,
-    ability_slot]` is the decomp ability id, also for abilities the engine does not
-    implement (`ability` is then `UNSUPPORTED`).
+    `PokemonSpec.ability_slot`); `tables.species_abilities_decomp[row, ability_slot]`,
+    with `row = tables.species_form_row[species, form]`, is the decomp ability id, also
+    for abilities the engine does not implement (`ability` is then `UNSUPPORTED`).
 - **Not from a struct field.** `pursuit_target` and `wish_hp` are
   `BattleState`'s own bookkeeping: the decomp derives Pursuit's pre-switch hit
   from per-turn scratch (the opposing battler's selected move when a switch is

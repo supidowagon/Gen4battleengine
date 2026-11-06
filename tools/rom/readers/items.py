@@ -1,4 +1,4 @@
-"""Item hold effects from ``itemtool/itemdata/pl_item_data.narc``."""
+"""Item hold effects from ``itemtool/itemdata/pl_item_data.narc`` and the TM table."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 from tools.extract_decomp import _constants
 from tools.rom.readers import ReaderError, symbol_bytes
+from tools.rom.readers.code_tables import tm_moves
 from tools.rom.readers.text import message_bank
 
 if TYPE_CHECKING:
@@ -33,6 +34,10 @@ def read_items(
     ``HOLD_EFFECT_NONE`` and 0; every other id reads the data member named by
     ``sItemArchiveIDs[id].dataID`` (item 0 uses member 0, ``src/item.c:48-57``)."""
     ids = _constants(decomp, "items", "ITEM_")
+    tm01, hm08 = ids.index("ITEM_TM01"), ids.index("ITEM_HM08")
+    teaches = tm_moves(rom, symbols, decomp)
+    if hm08 - tm01 + 1 != len(teaches):
+        raise ReaderError(f"ITEM_TM01..ITEM_HM08 span {hm08 - tm01 + 1} ids, not {len(teaches)}")
     holds = _constants(decomp, "item_hold_effects", "HOLD_EFFECT_")
     none = holds.index("HOLD_EFFECT_NONE")
     members = rom.narc(ITEM_DATA_NARC)
@@ -56,7 +61,7 @@ def read_items(
     out = []
     for item, const in enumerate(ids):
         if const.startswith("ITEM_UNUSED_"):
-            out.append({"name": const, "hold_effect": none, "hold_param": 0})
+            out.append({"name": const, "hold_effect": none, "hold_param": 0, "teaches_move": None})
             continue
         data_id = 0 if item == 0 else struct.unpack_from("<H", table, item * ARCHIVE_ENTRY)[0]
         if data_id >= len(members):
@@ -75,6 +80,8 @@ def read_items(
                 "name": names[item],
                 "hold_effect": effect,
                 "hold_param": members[data_id][HOLD_PARAM_OFFSET],
+                # sTMHMMoves[item - ITEM_TM01] (src/item.c:296-304); null for every other item.
+                "teaches_move": teaches[item - tm01] if tm01 <= item <= hm08 else None,
             }
         )
     return out

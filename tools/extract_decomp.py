@@ -31,6 +31,16 @@ import math
 import re
 from pathlib import Path
 
+from tools.battle_scripts import (
+    Op,
+    battle_structures,
+    has_partner,
+    is_var,
+    placed_enemies,
+    structure_fields,
+    var_ids,
+)
+
 # Our stat order (index = ids.Stat) as keys of the decomp's species `base_stats`.
 STAT_KEYS = ("hp", "attack", "defense", "special_attack", "special_defense", "speed")
 
@@ -151,31 +161,192 @@ def _species_json(decomp: Path, const: str) -> tuple[Path, dict]:
     return path, _load_json(path)
 
 
-def extract_species(decomp: Path) -> list[dict]:
-    species = _constants(decomp, "species", "SPECIES_")
+def _row_fields(decomp: Path):
+    """A function ``(path, data) -> dict`` of the personal-row fields a species or form
+    ``data.json`` holds itself (every ``extract_species`` key except name and weight)."""
     type_id = _index(_constants(decomp, "pokemon_types", "TYPE_"), "type")
     ability_id = _index(_constants(decomp, "abilities", "ABILITY_"), "ability")
     exp_rate_id = _index(_constants(decomp, "exp_rates", "EXP_RATE_"), "exp rate")
     ratios = _gender_ratios(decomp)
-    out = []
-    for const in species:
-        path, d = _species_json(decomp, const)
-        dex = d["pokedex_data"]
+
+    def fields(path: Path, d: dict) -> dict:
         if d["gender_ratio"] not in ratios:
             raise ExtractError(f"{path}: unknown gender ratio {d['gender_ratio']!r}")
+        return {
+            "base_stats": [int(d["base_stats"][k]) for k in STAT_KEYS],
+            "types": [type_id(t) for t in d["types"]],
+            "abilities": [ability_id(a) for a in d["abilities"]],
+            "gender_ratio": ratios[d["gender_ratio"]],
+            "base_friendship": int(d["base_friendship"]),
+            "exp_rate": exp_rate_id(d["exp_rate"]),
+            "exp_yield": int(d["base_exp_reward"]),
+        }
+
+    return fields
+
+
+def extract_species(decomp: Path) -> list[dict]:
+    fields = _row_fields(decomp)
+    out = []
+    for const in _constants(decomp, "species", "SPECIES_"):
+        path, d = _species_json(decomp, const)
+        dex = d["pokedex_data"]
+        row = fields(path, d)
         out.append(
             {
                 "name": dex["en"]["name"],
-                "base_stats": [int(d["base_stats"][k]) for k in STAT_KEYS],
-                "types": [type_id(t) for t in d["types"]],
-                "abilities": [ability_id(a) for a in d["abilities"]],
-                "gender_ratio": ratios[d["gender_ratio"]],
+                "base_stats": row["base_stats"],
+                "types": row["types"],
+                "abilities": row["abilities"],
+                "gender_ratio": row["gender_ratio"],
                 "weight_hg": _weight_hg(dex, const, path),
-                "base_friendship": int(d["base_friendship"]),
-                "exp_rate": exp_rate_id(d["exp_rate"]),
+                "base_friendship": row["base_friendship"],
+                "exp_rate": row["exp_rate"],
+                "exp_yield": row["exp_yield"],
             }
         )
     return out
+
+
+FORM_REGISTRY = Path("res/pokemon/form_registry.json")
+FORMS_H = Path("include/constants/forms.h")
+POKEMON_C = Path("src/pokemon.c")
+FORM_SLOTS = 28  # UNOWN_FORM_COUNT, the widest *_FORM_COUNT (include/constants/forms.h)
+_REGISTRY_KINDS = ("data", "icon", "sprite")
+_NARC_INDEX_CASE = re.compile(
+    r"case (SPECIES_[A-Z0-9_]+):\s*if \(monForm && monForm <= ([A-Z0-9_]+)_FORM_COUNT - 1\) "
+    r"\{\s*monSpecies = \((\d+) - 1\) \+ monForm;"
+)
+
+
+def _form_counts(decomp: Path, species: list[str]) -> dict[int, int]:
+    """Species id -> ``<SPECIES>_FORM_COUNT`` (``include/constants/forms.h``). A count
+    that is not a bare decimal (an expression, a hex literal, a trailing comment) raises
+    rather than leave the species at one form."""
+    path = decomp / FORMS_H
+    out = {}
+    text = path.read_text("utf-8")
+    pattern = r"^\s*#\s*define\s+(\w+)_FORM_COUNT\b(.*)$"
+    for m in re.finditer(pattern, text, re.MULTILINE):
+        value = m.group(2).strip()
+        if not value.isdecimal():
+            raise ExtractError(f"{path}: {m.group(1)}_FORM_COUNT is {value!r}, not a decimal count")
+        const = f"SPECIES_{m.group(1)}"
+        if const not in species:
+            raise ExtractError(f"{path}: {m.group(1)}_FORM_COUNT names no species")
+        count = int(value)
+        if not 1 <= count <= FORM_SLOTS:
+            raise ExtractError(f"{path}: {m.group(1)}_FORM_COUNT {count} is out of range")
+        out[species.index(const)] = count
+    return out
+
+
+def _data_forms(decomp: Path) -> list[tuple[int, int, str, int]]:
+    """``(species id, form, registry key, personal row)`` for every data form, in
+    ``res/pokemon/form_registry.json`` order (rows from 496 on, Ruling 6). A species'
+    forms are numbered from 1 in its registry entry's key order (``__`` keys are flags).
+    Checked against ``Pokemon_GetFormNarcIndex`` (``src/pokemon.c:4929-4962``)."""
+    species = _constants(decomp, "species", "SPECIES_")
+    counts = _form_counts(decomp, species)
+    path = decomp / FORM_REGISTRY
+    out = []
+    for name, entry in _load_json(path).items():
+        const = f"SPECIES_{name.upper()}"
+        if const not in species:
+            raise ExtractError(f"{path}: {name!r} names no species")
+        sid = species.index(const)
+        keys = [k for k in entry if not k.startswith("__")]
+        for form, key in enumerate(keys, 1):
+            if entry[key] not in _REGISTRY_KINDS:
+                raise ExtractError(f"{path}: {name}.{key} has unknown kind {entry[key]!r}")
+            if form >= counts.get(sid, 1):
+                raise ExtractError(f"{path}: {name}.{key} is form {form}, beyond the form count")
+            if entry[key] == "data":
+                out.append((sid, form, key, len(species) + len(out)))
+    _check_narc_index(decomp, species, counts, out)
+    return out
+
+
+def _check_narc_index(decomp: Path, species: list[str], counts: dict[int, int], forms) -> None:
+    """Raise unless ``Pokemon_GetFormNarcIndex`` maps exactly ``forms``' (species, form)
+    pairs to their rows (``src/pokemon.c:4929-4962``: ``(base - 1) + monForm``)."""
+    path = decomp / POKEMON_C
+    text = path.read_text("utf-8")
+    m = re.search(r"^static int Pokemon_GetFormNarcIndex\([^;{]*\)\s*\{", text, re.MULTILINE)
+    start = m.end() if m else -1
+    end = text.find("\n}\n", start)
+    if start < 0 or end < 0:
+        raise ExtractError(f"{path}: no Pokemon_GetFormNarcIndex")
+    body = text[start:end]
+    want = {}
+    cases = _NARC_INDEX_CASE.findall(body)
+    if len(cases) != body.count("case SPECIES_"):
+        raise ExtractError(f"{path}: Pokemon_GetFormNarcIndex has a case this parser misses")
+    for const, prefix, base in cases:
+        if const not in species or const != f"SPECIES_{prefix}":
+            raise ExtractError(f"{path}: Pokemon_GetFormNarcIndex case {const} uses {prefix}")
+        sid = species.index(const)
+        for form in range(1, counts.get(sid, 1)):
+            want[(sid, form)] = int(base) - 1 + form
+    got = {(sid, form): row for sid, form, _, row in forms}
+    if got != want:
+        raise ExtractError(
+            f"{path}: Pokemon_GetFormNarcIndex rows {sorted(want.items())} differ from "
+            f"{FORM_REGISTRY}'s data forms {sorted(got.items())}"
+        )
+
+
+def _form_json(decomp: Path, const: str, key: str) -> tuple[Path, dict]:
+    path = decomp / "res" / "pokemon" / _stem(const, "SPECIES_") / "forms" / key / "data.json"
+    return path, _load_json(path)
+
+
+def extract_forms(decomp: Path) -> list[dict]:
+    """``forms.json``: one entry per data form in personal-row order (Ruling 6), with
+    ``extract_species``' row fields from ``res/pokemon/<species>/forms/<key>/data.json``.
+    The weight is the base species' (form files have no ``pokedex_data``), and the name is
+    the registry key title-cased."""
+    species = _constants(decomp, "species", "SPECIES_")
+    fields = _row_fields(decomp)
+    out = []
+    for sid, form, key, row in _data_forms(decomp):
+        base_path, base = _species_json(decomp, species[sid])
+        path, d = _form_json(decomp, species[sid], key)
+        out.append(
+            {
+                "species": sid,
+                "form": form,
+                "row": row,
+                "name": key.title(),
+                **fields(path, d),
+                "weight_hg": _weight_hg(base["pokedex_data"], species[sid], base_path),
+            }
+        )
+    return out
+
+
+def species_form_rows(decomp: Path) -> list[list[int]]:
+    """``form_rows.json``: ``[species][form]`` -> personal row (Ruling 6): the data row of
+    a data form, the species itself for a form below its ``*_FORM_COUNT`` without data
+    (form 0 of every species), -1 beyond the count; ``FORM_SLOTS`` columns."""
+    species = _constants(decomp, "species", "SPECIES_")
+    counts = _form_counts(decomp, species)
+    grid = [
+        [sid if form < counts.get(sid, 1) else -1 for form in range(FORM_SLOTS)]
+        for sid in range(len(species))
+    ]
+    for sid, form, _, row in _data_forms(decomp):
+        grid[sid][form] = row
+    return grid
+
+
+def _personal_rows(decomp: Path):
+    """``(row, label, data.json)`` for every personal row: species, then data forms."""
+    species = _constants(decomp, "species", "SPECIES_")
+    for sid, const in enumerate(species):
+        yield sid, const, _species_json(decomp, const)[1]
+    for sid, form, key, row in _data_forms(decomp):
+        yield row, f"{species[sid]} form {form}", _form_json(decomp, species[sid], key)[1]
 
 
 def extract_exp_tables(decomp: Path) -> list[list[int]]:
@@ -237,6 +408,9 @@ def extract_moves(decomp: Path) -> list[dict]:
                 "priority": int(d["priority"]),
                 "target": d["range"],
                 "effect": effect_id(d["effect"]["type"]),
+                # The id the game stores (MoveTable.effect) and the AI scripts read; equal
+                # to ``effect`` in vanilla (Kaizo may remap ``effect`` onto mechanics).
+                "ai_effect": effect_id(d["effect"]["type"]),
                 "effect_chance": int(d["effect"]["chance"]),
                 "flags": list(d["flags"]),
             }
@@ -399,11 +573,12 @@ def extract_abilities(decomp: Path) -> list[dict]:
 
 
 def extract_learnsets(decomp: Path) -> dict[str, list[list[int]]]:
-    species = _constants(decomp, "species", "SPECIES_")
+    """Personal row (species, then data forms) -> ``[[level, move], ...]`` from
+    ``learnset.by_level``, keyed by row as ``Pokemon_LoadLevelUpMovesOf`` loads it
+    (``src/pokemon.c:4585``)."""
     move_id = _index(_constants(decomp, "moves", "MOVE_"), "move")
     out = {}
-    for sid, const in enumerate(species):
-        _, d = _species_json(decomp, const)
+    for sid, _, d in _personal_rows(decomp):
         by_level = d.get("learnset", {}).get("by_level", [])
         out[str(sid)] = [[int(level), move_id(move)] for level, move in by_level]
     return out
@@ -414,13 +589,11 @@ _NUM_HMS = 8  # NUM_HMS
 
 
 def extract_tm_learnsets(decomp: Path) -> dict[str, list[int]]:
-    """Species id -> sorted TM/HM indices from ``learnset.by_tm``, numbered as
-    tools/dataproc/src/speciesproc.c ProcTMLearnset sets the bits: TM01-TM92 are
-    0-91 and HM01-HM08 are 92-99."""
-    species = _constants(decomp, "species", "SPECIES_")
+    """Personal row (species, then data forms) -> sorted TM/HM indices from
+    ``learnset.by_tm``, numbered as tools/dataproc/src/speciesproc.c ProcTMLearnset sets
+    the bits: TM01-TM92 are 0-91 and HM01-HM08 are 92-99."""
     out = {}
-    for sid, const in enumerate(species):
-        _, d = _species_json(decomp, const)
+    for sid, const, d in _personal_rows(decomp):
         bits = set()
         for marker in d.get("learnset", {}).get("by_tm", []):
             m = re.fullmatch(r"(TM|HM)(\d+)", marker)
@@ -429,6 +602,179 @@ def extract_tm_learnsets(decomp: Path) -> dict[str, list[int]]:
                 raise ExtractError(f"species {const}: bad TM/HM marker {marker!r}")
             bits.add(int(m.group(2)) - 1 + (_NUM_TMS if is_hm else 0))
         out[str(sid)] = sorted(bits)
+    return out
+
+
+MAX_EVOLUTIONS = 7  # include/struct_defs/species.h:8
+
+# How ProcEvolutions (tools/dataproc/src/speciesproc.c:391-468) packs ``param`` and which
+# fields follow the method in a ``data.json`` entry: ``[method, species]`` (param 0) or
+# ``[method, <param>, species]``.
+_EVO_NO_PARAM = frozenset(
+    [
+        "EVO_NONE",
+        "EVO_LEVEL_HAPPINESS",
+        "EVO_LEVEL_HAPPINESS_DAY",
+        "EVO_LEVEL_HAPPINESS_NIGHT",
+        "EVO_TRADE",
+        "EVO_LEVEL_MAGNETIC_FIELD",
+        "EVO_LEVEL_MOSS_ROCK",
+        "EVO_LEVEL_ICE_ROCK",
+    ]
+)
+_EVO_LEVEL_PARAM = frozenset(
+    [
+        "EVO_LEVEL",
+        "EVO_LEVEL_ATK_GT_DEF",
+        "EVO_LEVEL_ATK_EQ_DEF",
+        "EVO_LEVEL_ATK_LT_DEF",
+        "EVO_LEVEL_PID_LOW",
+        "EVO_LEVEL_PID_HIGH",
+        "EVO_LEVEL_NINJASK",
+        "EVO_LEVEL_SHEDINJA",
+        "EVO_LEVEL_BEAUTY",
+        "EVO_LEVEL_MALE",
+        "EVO_LEVEL_FEMALE",
+    ]
+)
+_EVO_ITEM_PARAM = frozenset(
+    [
+        "EVO_TRADE_WITH_HELD_ITEM",
+        "EVO_USE_ITEM",
+        "EVO_USE_ITEM_MALE",
+        "EVO_USE_ITEM_FEMALE",
+        "EVO_LEVEL_WITH_HELD_ITEM_DAY",
+        "EVO_LEVEL_WITH_HELD_ITEM_NIGHT",
+    ]
+)
+
+
+def extract_evolution_methods(decomp: Path) -> list[str]:
+    """The ``generated/evolution_methods.txt`` stems, lowercased; list index = method id."""
+    return [_stem(c, "EVO_") for c in _constants(decomp, "evolution_methods", "EVO_")]
+
+
+def extract_evolutions(decomp: Path) -> dict[str, list[list[int]]]:
+    """Species id -> ``[[method, param, target], ...]`` from ``evolutions``, for species
+    0-495 (``LoadSpeciesEvolutions`` is keyed by species, ``src/pokemon.c:4812``). ``method``
+    is the ``generated/evolution_methods.txt`` id and ``param`` is packed as ``ProcEvolutions``
+    packs it: the level, item id, move id or species id, else 0. Method 0 slots are dropped;
+    more than ``MAX_EVOLUTIONS`` entries raise (the packer drops the rest with a warning)."""
+    method_id = _index(_constants(decomp, "evolution_methods", "EVO_"), "evolution method")
+    species = _constants(decomp, "species", "SPECIES_")
+    species_id = _index(species, "species")
+    item_id = _index(_constants(decomp, "items", "ITEM_"), "item")
+    move_id = _index(_constants(decomp, "moves", "MOVE_"), "move")
+    out = {}
+    for sid, const in enumerate(species):
+        path, d = _species_json(decomp, const)
+        entries = d.get("evolutions", [])
+        if len(entries) > MAX_EVOLUTIONS:
+            raise ExtractError(f"{path}: {len(entries)} evolutions, more than {MAX_EVOLUTIONS}")
+        rows = []
+        for entry in entries:
+            name = entry[0]
+            want = 2 if name in _EVO_NO_PARAM else 3
+            if len(entry) != want:
+                raise ExtractError(f"{path}: evolution {entry!r} has {len(entry)} fields")
+            if name in _EVO_NO_PARAM:
+                param = 0
+            elif name in _EVO_LEVEL_PARAM:
+                param = int(entry[1])
+            elif name in _EVO_ITEM_PARAM:
+                param = item_id(entry[1])
+            elif name == "EVO_LEVEL_KNOW_MOVE":
+                param = move_id(entry[1])
+            elif name == "EVO_LEVEL_SPECIES_IN_PARTY":
+                param = species_id(entry[1])
+            else:
+                raise ExtractError(f"{path}: no packing rule for evolution method {name!r}")
+            method = method_id(name)
+            if method:  # ProcEvolutions keeps EVO_NONE as an all-zero slot
+                rows.append([method, param, species_id(entry[-1])])
+        out[str(sid)] = rows
+    return out
+
+
+def extract_egg_moves(decomp: Path) -> dict[str, list[int]]:
+    """Species id -> egg moves, for species with at least one (``learnset.egg_moves``,
+    emitted by ``EmitEggMoves``, ``speciesproc.c:681-692``, into ``sEggMoves``; read by
+    ``LoadSpeciesEggMoves``, ``src/overlay005/daycare.c:445``, at most ``MAX_EGG_MOVES`` = 16)."""
+    move_id = _index(_constants(decomp, "moves", "MOVE_"), "move")
+    out = {}
+    for sid, const in enumerate(_constants(decomp, "species", "SPECIES_")):
+        path, d = _species_json(decomp, const)
+        moves = d.get("learnset", {}).get("egg_moves", [])
+        if len(moves) > 16:
+            raise ExtractError(f"{path}: {len(moves)} egg moves, more than MAX_EGG_MOVES (16)")
+        if moves:
+            out[str(sid)] = [move_id(m) for m in moves]
+    return out
+
+
+TUTOR_MOVES_FILE = Path("res") / "pokemon" / "move_tutors.json"
+_COST_KEYS = ("red", "blue", "yellow", "green")
+_NO_TUTOR_SET = ("SPECIES_NONE", "SPECIES_EGG", "SPECIES_BAD_EGG")  # HasTutorSet
+MAX_TUTOR_COST = 99  # sanity bound on a shard cost (Bag stacks hold 99); the field is a u8
+
+
+def extract_tutor_moves(decomp: Path) -> list[dict]:
+    """``res/pokemon/move_tutors.json`` in file order, which is ``sTeachableMoves`` order
+    (``LoadTutorMoves``, ``tools/dataproc/src/speciesproc.c:260-283``; ``TeachableMove``,
+    ``include/tutor_movesets.h:7-14``): ``{"move", "costs": {red, blue, yellow, green},
+    "location"}`` with ``location`` the ``generated/tutor_locations.txt`` stem. Costs are
+    checked to be 0..``MAX_TUTOR_COST``."""
+    path = decomp / TUTOR_MOVES_FILE
+    move_id = _index(_constants(decomp, "moves", "MOVE_"), "move")
+    locations = _constants(decomp, "tutor_locations", "TUTOR_LOCATION_")
+    location_id = _index(locations, "tutor location")
+    out = []
+    for n, t in enumerate(_load_json(path)):
+        costs = {k: int(t[f"{k}Cost"]) for k in _COST_KEYS}
+        if any(not 0 <= c <= MAX_TUTOR_COST for c in costs.values()):
+            raise ExtractError(f"{path}: tutor {n} has a cost outside 0..{MAX_TUTOR_COST}")
+        loc = t["location"]
+        out.append(
+            {
+                "move": move_id(t["move"]),
+                "costs": costs,
+                "location": _stem(locations[location_id(loc)], "TUTOR_LOCATION_"),
+            }
+        )
+    return out
+
+
+def _tutor_indices(by_tutor: list[str], tutor_moves: list[str], path: Path) -> list[int]:
+    """Sorted indices into ``tutor_moves`` (the ``MOVE_*`` of each tutor, in table order) of
+    the moves in a species' ``learnset.by_tutor``. ``EmitTutorLearnset`` only warns and skips
+    a move no tutor teaches; here it is an ``ExtractError`` naming ``path`` (Ruling 12)."""
+    out = set()
+    for move in by_tutor:
+        if move not in tutor_moves:
+            raise ExtractError(f"{path}: {move} in learnset.by_tutor is taught by no move tutor")
+        out.add(tutor_moves.index(move))
+    return sorted(out)
+
+
+def extract_tutor_learnsets(decomp: Path) -> dict[str, list[int]]:
+    """Personal row (species, then data forms) -> sorted indices into ``tutor_moves.json``
+    from ``learnset.by_tutor``. Rows 0, 494 and 495 (``SPECIES_NONE``, ``SPECIES_EGG``,
+    ``SPECIES_BAD_EGG``) have no set (``HasTutorSet``, ``speciesproc.c:258``) and get ``[]``;
+    the game indexes the rest by species, or ``NATIONAL_DEX_COUNT + n`` for a form
+    (``include/constants/forms.h``, ``Pokemon_ReadMovesetMaskByte``,
+    ``src/overlay005/scrcmd_move_tutor.c:211-259``), the same order as the personal rows."""
+    species = _constants(decomp, "species", "SPECIES_")
+    no_set = {i for i, c in enumerate(species) if c in _NO_TUTOR_SET}
+    tutor_consts = [t["move"] for t in _load_json(decomp / TUTOR_MOVES_FILE)]
+    out = {}
+    for row, label, d in _personal_rows(decomp):
+        if row in no_set:
+            out[str(row)] = []
+            continue
+        path = decomp / "res" / "pokemon" / f"<{label}>" / "data.json"
+        out[str(row)] = _tutor_indices(
+            d.get("learnset", {}).get("by_tutor", []), tutor_consts, path
+        )
     return out
 
 
@@ -524,6 +870,33 @@ def _weather_conditions(decomp: Path) -> dict[str, set[str]]:
     return out
 
 
+def _object_trainers(decomp: Path, header: dict[str, str]) -> list[str]:
+    """The TRAINER_* scripts of a map's object events (``res/field/events/<id>.json``)."""
+    events = decomp / "res" / "field" / "events" / f"{header['eventsArchiveID']}.json"
+    return [
+        obj["script"]
+        for obj in _load_json(events)["object_events"]
+        if str(obj["script"]).startswith("TRAINER_")
+    ]
+
+
+def _rematches(decomp: Path) -> dict[str, list[str]]:
+    """Base TRAINER_* -> its Vs. Seeker rematch TRAINER_* ids (``gVsSeekerRematchData``,
+    ``src/overlay005/vs_seeker.c``)."""
+    path = decomp / "src" / "overlay005" / "vs_seeker.c"
+    out: dict[str, list[str]] = {}
+    for lineno, line in _c_array_body(path, r"gVsSeekerRematchData\[\]\s*=\s*\{"):
+        s = line.strip()
+        if not s or s.startswith("//") or re.fullmatch(r"NoUniqueRematches\(\w+\),", s):
+            continue
+        m = re.fullmatch(r"\{([^}]*)\},?", s)
+        if not m:
+            raise ExtractError(f"{path}:{lineno}: unparsed rematch line {line!r}")
+        base, *rematches = [t.strip() for t in m.group(1).split(",")]
+        out.setdefault(base, []).extend(t for t in rematches if t.startswith("TRAINER_"))
+    return out
+
+
 def _trainer_maps(decomp: Path, headers: dict[str, dict[str, str]]) -> dict[str, set[str]]:
     """TRAINER_* -> the map headers where a battle with that trainer starts.
 
@@ -534,28 +907,148 @@ def _trainer_maps(decomp: Path, headers: dict[str, dict[str, str]]) -> dict[str,
     """
     where: dict[str, set[str]] = {}
     for header, h in headers.items():
-        events = decomp / "res" / "field" / "events" / f"{h['eventsArchiveID']}.json"
-        for obj in _load_json(events)["object_events"]:
-            if str(obj["script"]).startswith("TRAINER_"):
-                where.setdefault(obj["script"], set()).add(header)
+        for trainer in _object_trainers(decomp, h):
+            where.setdefault(trainer, set()).add(header)
         script = decomp / "res" / "field" / "scripts" / f"{h['scriptsArchiveID']}.s"
         for line in script.read_text(encoding="utf-8").splitlines():
             if _BATTLE_SCRIPT_LINE.fullmatch(line):
                 for trainer in re.findall(r"\bTRAINER_\w+", line):
                     where.setdefault(trainer, set()).add(header)
-    path = decomp / "src" / "overlay005" / "vs_seeker.c"
-    for lineno, line in _c_array_body(path, r"gVsSeekerRematchData\[\]\s*=\s*\{"):
-        s = line.strip()
-        if not s or s.startswith("//") or re.fullmatch(r"NoUniqueRematches\(\w+\),", s):
-            continue
-        m = re.fullmatch(r"\{([^}]*)\},?", s)
-        if not m:
-            raise ExtractError(f"{path}:{lineno}: unparsed rematch line {line!r}")
-        base, *rematches = [t.strip() for t in m.group(1).split(",")]
+    for base, rematches in _rematches(decomp).items():
         for t in rematches:
-            if t.startswith("TRAINER_"):
-                where.setdefault(t, set()).update(where.get(base, set()))
+            where.setdefault(t, set()).update(where.get(base, set()))
     return where
+
+
+# Field script commands kept as ops (tools/battle_scripts.py): name -> the kinds of its
+# operands. "trainer" and "var" operands must resolve. A "value" that is a variable, or a
+# constant outside _script_symbols (OBJ_EVENT_GFX_*, DIR_*, ITEM_*, ...), makes the op
+# `other`: the ROM assembles the first as a different command (SetVarFromVar,
+# CompareVarToVar; asm/macros/scrcmd.inc:178-184,309-315), and neither is ever read as a
+# value: the partner evaluator (battle_scripts._run) raises on an `other` it meets, and
+# battle_scripts._resolve raises on an `other` (or Call, GoTo, End, Return) between a
+# battle and the SetVar that feeds its var operand.
+_SCRIPT_OPS = {
+    "StartTrainerBattle": ("trainer", "trainer"),
+    "StartTagBattle": ("trainer", "trainer", "trainer"),
+    "SetVar": ("var", "value"),
+    "SetVarFromValue": ("var", "value"),
+    "GoToIfEq": ("var", "value", "label"),
+    "GoTo": ("label",),
+    "Call": ("label",),
+    "Return": (),
+    "End": (),
+    "GetPlayerGender": ("var",),
+    "GetPlayerStarterSpecies": ("var",),
+    "SetHasPartner": (),
+}
+# A constant with one of these prefixes names an id that must resolve.
+_STRICT_PREFIXES = ("TRAINER_", "SPECIES_", "GENDER_", "VAR_")
+
+
+def _script_symbols(decomp: Path) -> dict[str, int]:
+    """Constants a kept op may name: trainers, species and genders (their
+    ``generated/*.txt`` line), variables (``battle_scripts.var_ids``), TRUE and FALSE."""
+    out = {"TRUE": 1, "FALSE": 0}
+    for name, prefix in (("trainers", "TRAINER_"), ("species", "SPECIES_"), ("genders", "GENDER_")):
+        out.update({c: i for i, c in enumerate(_constants(decomp, name, prefix))})
+    out.update({k: v for k, v in var_ids(decomp).items() if is_var(v)})
+    return out
+
+
+def _script_file_ops(path: Path, symbols: dict[str, int]) -> list[Op]:
+    """One ``.s`` file's ops in file order: a label per ``Name:`` line, an op per command
+    line (``_SCRIPT_OPS``, else ``other``). The file's own ``#define``s are expanded."""
+    defines: dict[str, str] = {}
+    ops: list[Op] = []
+
+    def value(token: str, where: str, depth: int = 0) -> int | None:
+        token = token.strip()
+        if re.fullmatch(r"\d+|0[xX][0-9a-fA-F]+", token):
+            return int(token, 0)
+        if token in defines and depth < 8:
+            return value(defines[token], where, depth + 1)
+        if token in symbols:
+            return symbols[token]
+        if token.startswith(_STRICT_PREFIXES):
+            raise ExtractError(f"{where}: unknown constant {token!r}")
+        return None
+
+    text = re.sub(r"/\*.*?\*/", "", path.read_text(encoding="utf-8"), flags=re.DOTALL)
+    for lineno, raw in enumerate(text.splitlines(), 1):
+        line = re.split(r"//|@", raw, maxsplit=1)[0].strip()  # `@` comments (GNU as, ARM)
+        where = f"{path}:{lineno}"
+        if not line:
+            continue
+        if line.startswith("#"):
+            m = re.fullmatch(r"#define\s+(\w+)\s+(.+)", line)
+            if m:
+                defines[m.group(1)] = m.group(2).strip()
+            elif not line.startswith("#include"):
+                raise ExtractError(f"{where}: unhandled directive {line!r}")
+            continue
+        m = re.fullmatch(r"(\w+):", line)
+        if m:
+            ops.append(Op("label", (m.group(1),)))
+            continue
+        name, rest = re.fullmatch(r"(\S+)\s*(.*)", line).groups()  # any whitespace
+        kinds = _SCRIPT_OPS.get(name)
+        if kinds is None:
+            ops.append(Op("other", (name,)))
+            continue
+        args = [a.strip() for a in rest.split(",")] if rest.strip() else []
+        if name == "StartTrainerBattle" and len(args) == 1:
+            args.append("0")  # enemyTrainer2=0 (scrcmd.inc:1427)
+        if len(args) != len(kinds):
+            raise ExtractError(f"{where}: {name} takes {len(kinds)} operands: {line!r}")
+        out: list[int | str] | None = []
+        for kind, a in zip(kinds, args, strict=True):
+            if kind == "label":
+                if not re.fullmatch(r"\w+", a):
+                    raise ExtractError(f"{where}: {name} target {a!r} is not a label")
+                out.append(a)
+                continue
+            v = value(a, where)
+            if kind == "value":
+                if v is None or is_var(v):
+                    out = None
+                    break
+            elif v is None:
+                raise ExtractError(f"{where}: {name} operand {a!r} is not a {kind}")
+            elif kind == "var" and not is_var(v):
+                raise ExtractError(f"{where}: {name} operand {a!r} is not a variable")
+            out.append(v)
+        if out is None:
+            ops.append(Op("other", (name,)))
+        else:
+            ops.append(Op("SetVar" if name == "SetVarFromValue" else name, tuple(out)))
+    return ops
+
+
+def _script_ops(decomp: Path, files) -> dict[str, list[Op]]:
+    """``res/field/scripts/<file>.s`` -> its ops, for each script archive id in ``files``."""
+    symbols = _script_symbols(decomp)
+    return {
+        f: _script_file_ops(decomp / "res" / "field" / "scripts" / f"{f}.s", symbols)
+        for f in sorted(set(files))
+    }
+
+
+def _placed_enemies(
+    decomp: Path, headers: dict[str, dict[str, str]], scripts: dict[str, list[Op]]
+) -> dict[str, set[int]]:
+    """MAP_HEADER_* -> its placed enemy trainer ids (Ruling 3), for each header whose script
+    runs ``SetHasPartner``: trainer object events, the script's battle enemies, their
+    Vs. Seeker rematches, less the partner ids (``battle_scripts.placed_enemies``)."""
+    trainer = _index(_constants(decomp, "trainers", "TRAINER_"), "trainer")
+    rematches = {trainer(b): [trainer(t) for t in ts] for b, ts in _rematches(decomp).items()}
+    out = {}
+    for header, h in headers.items():
+        ops = scripts[h["scriptsArchiveID"]]
+        if has_partner(ops):
+            objects = {trainer(t) for t in _object_trainers(decomp, h)}
+            out[header] = placed_enemies(ops, objects, rematches, header)
+    return out
 
 
 def _start_condition_overrides(path: Path, trainers: list[str]) -> dict[str, str]:
@@ -631,6 +1124,16 @@ def extract_trainers(decomp_root: Path, out_dir: Path) -> None:
       MOVE_NONE (0) to four slots, because TrainerData_BuildParty
       (``src/trainer_data.c``) writes all four. Without, ``moves`` is null: the mon
       keeps the species' default moveset at its level. No held item is item 0.
+    * ``format`` is "double" when the file sets ``double_battle`` and "single"
+      otherwise: trainerproc (``tools/dataproc/src/trainerproc.c``) turns it into
+      ``TrainerHeader.battleType`` (``BATTLE_TYPE_DOUBLES`` or 0). The map scripts
+      override it (``tools/battle_scripts.py``, plan Rulings 2-5): "multi" for an enemy
+      of a tag battle or one placed on a walking-partner map, else
+      "double_two_trainer" for an operand of a ``StartTrainerBattle`` with two trainer
+      constants. ``opponent_2`` is the other enemy of that pair or tag battle (else
+      null), and ``partner`` the teams the player's partner can field
+      ([{``trainer``, ``starter``, ``player_gender``}], a field the team does not
+      depend on being null; empty unless "multi").
     * ``start_condition`` comes from the weather of the maps where the trainer is
       fought (``_trainer_maps``, ``_weather_conditions``), assuming the player has
       not cleared fog with Defog (``src/field_map_change.c``). A trainer the decomp
@@ -657,6 +1160,14 @@ def extract_trainers(decomp_root: Path, out_dir: Path) -> None:
     headers = _map_headers(decomp)
     weather = _weather_conditions(decomp)
     where = _trainer_maps(decomp, headers)
+    scripts = _script_ops(decomp, [h["scriptsArchiveID"] for h in headers.values()])
+    try:
+        structures = battle_structures(
+            {name: scripts[h["scriptsArchiveID"]] for name, h in headers.items()},
+            _placed_enemies(decomp, headers, scripts),
+        )
+    except ValueError as e:
+        raise ExtractError(f"battle structures: {e}") from e
     for header, h in headers.items():
         if h["weather"] not in weather:
             raise ExtractError(f"{header}: unknown weather {h['weather']!r}")
@@ -701,6 +1212,8 @@ def extract_trainers(decomp_root: Path, out_dir: Path) -> None:
             if flag not in ai_bits:
                 raise ExtractError(f"{path}: unknown AI flag {flag!r}")
             ai_flags |= ai_bits[flag]
+        if not isinstance(d["double_battle"], bool):
+            raise ExtractError(f"{path}: double_battle is not a boolean")
         derived = set()
         for header in where.get(const, ()):
             derived |= weather[headers[header]["weather"]]
@@ -714,6 +1227,9 @@ def extract_trainers(decomp_root: Path, out_dir: Path) -> None:
                 "ai_flags": ai_flags,
                 "items": [item_id(i) for i in d["items"]],
                 "party": members,
+                **structure_fields(
+                    structures.get(tid), "double" if d["double_battle"] else "single"
+                ),
                 "start_condition": _start_condition(const, derived, overrides),
             }
         )
@@ -735,7 +1251,14 @@ def extract_static(decomp_root: Path, out_dir: Path) -> None:
     _write(out_dir / "abilities.json", extract_abilities(decomp_root))
     _write(out_dir / "learnsets.json", extract_learnsets(decomp_root))
     _write(out_dir / "tm_learnsets.json", extract_tm_learnsets(decomp_root))
+    _write(out_dir / "evolutions.json", extract_evolutions(decomp_root))
+    _write(out_dir / "egg_moves.json", extract_egg_moves(decomp_root))
+    _write(out_dir / "evolution_methods.json", extract_evolution_methods(decomp_root))
+    _write(out_dir / "tutor_moves.json", extract_tutor_moves(decomp_root))
+    _write(out_dir / "tutor_learnsets.json", extract_tutor_learnsets(decomp_root))
     _write(out_dir / "exp_tables.json", extract_exp_tables(decomp_root))
+    _write(out_dir / "forms.json", extract_forms(decomp_root))
+    _write(out_dir / "form_rows.json", species_form_rows(decomp_root))
     _write(
         out_dir / "charmap.json",
         {f"{k:04X}": v for k, v in extract_charmap(decomp_root).items()},

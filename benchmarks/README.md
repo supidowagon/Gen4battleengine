@@ -172,6 +172,11 @@ screen values staying far below the pick. The short stall is required by
 
 # Milestone 4: exhaustive check
 
+> **Stale since K2a.** `benchmarks/exhaustive_roark.json` was computed on table version 7. K2a's
+> version 8 (forms, exp yield, AI effect ids, structures, evolutions, egg moves, tutors) makes
+> that result stale. Re-running it needs the user's save and is the user's call; it has not
+> been re-run.
+
     uv run python -m benchmarks.exhaustive_roark --save "$NUZLINE_USER_SAVE" [--resume FILE]
 
 The funnel's pick on Roark from the user's save against the value of every setup of the

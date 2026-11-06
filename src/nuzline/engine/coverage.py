@@ -31,7 +31,24 @@ items) and plan 1b (Task 2b: trainer items; Task 3: Roark's AI flags) implement:
 * AI flags: bits 0-2 (``AI_FLAG_BASIC``, ``AI_FLAG_EVAL_ATTACK``, ``AI_FLAG_EXPERT``).
   ``ai.policy`` always runs those three scripts, so a trainer must have exactly them;
 * weather: only ``Weather.NONE``. Rain, sun, sandstorm, hail and fog need the
-  field-condition pass and are refused (plan ruling).
+  field-condition pass and are refused (plan ruling);
+* in-battle form changes (plan K2a Ruling 8), on either side: Giratina-Origin without the
+  Griseous Orb reverts to Altered Forme at battle start (``battle_lib.c:6412-6417``,
+  ``subscript_form_change``) and Shaymin-Sky reverts to Land Forme when frozen
+  (``battle_lib.c:4536``, ``battle_controller_player.c:3500``); the engine models neither.
+  Rotom, Deoxys and Wormadam forms never change in battle and are read by personal row
+  (``Tables.species_form_row``), like Giratina-Origin holding the Orb;
+* trainer Pokemon in a data form (controller ruling, K2a Task 6): the opponent's party
+  member whose form has its own personal row (``species_form_row[species, form] !=
+  species``) is refused. ``TrainerData_BuildParty`` builds it from the base form and sets
+  the form afterwards (``src/trainer_data.c:216-218``), so it keeps the base form's stats,
+  ability and moves while its types follow the form (``src/pokemon.c:1224``); Kaizo patched
+  that function, so the exact rule is per game (K2b). Cosmetic and battle-only forms and
+  Arceus, which have no data row, pass;
+* battle format: only "single". The engine models one battler per side, so a trainer
+  whose header is a double battle, who is fought beside a second enemy trainer
+  ("double_two_trainer") or who is fought while the player has a partner ("multi", tag
+  battles and walking partners) is refused (``Trainer.format``).
 
 ``check_coverage`` also runs the AI's own refusals (``ai.policy.ai_refusals``: opponent
 moves without transcribed script paths, too many script-roll sites, type-chart
@@ -50,11 +67,17 @@ from enum import IntEnum
 
 import numpy as np
 
+from nuzline.data.forms import personal_row
 from nuzline.data.spec import PokemonSpec
 from nuzline.data.tables import Names, Tables
 from nuzline.data.trainer import Trainer
 from nuzline.engine.ids import AbilityId, EffectId, ItemId, TrainerItemId, Weather
 from nuzline.engine.state import make_state
+
+# include/constants/forms.h:94, :98; generated/species.txt and items.txt (line N is id N-1).
+SPECIES_GIRATINA, GIRATINA_FORM_ORIGIN = 487, 1
+SPECIES_SHAYMIN, SHAYMIN_FORM_SKY = 492, 1
+ITEM_GRISEOUS_ORB = 112
 
 
 class Support(IntEnum):
@@ -99,6 +122,13 @@ IMPLEMENTED_WEATHER: dict[Weather, Support] = {
     Weather.SANDSTORM: Support.NONE,
     Weather.HAIL: Support.NONE,
     Weather.FOG: Support.NONE,
+}
+# Trainer.format (trainers.json: TrainerHeader.battleType, then the field scripts).
+IMPLEMENTED_FORMATS: dict[str, Support] = {
+    "single": Support.EXACT,
+    "double": Support.NONE,
+    "double_two_trainer": Support.NONE,
+    "multi": Support.NONE,
 }
 # Trainer.start_condition (trainers.json) as a Weather.
 START_CONDITIONS = {
@@ -154,7 +184,12 @@ class _Collector:
 
 
 def _check_party(
-    c: _Collector, tables: Tables, names: Names, owner: str, party: Sequence[PokemonSpec]
+    c: _Collector,
+    tables: Tables,
+    names: Names,
+    owner: str,
+    party: Sequence[PokemonSpec],
+    trainer_side: bool = False,
 ) -> None:
     move_effect = np.asarray(tables.move_effect)
     abilities = np.asarray(tables.species_abilities)
@@ -165,17 +200,42 @@ def _check_party(
             if move:
                 support = IMPLEMENTED_EFFECTS.get(EffectId(int(move_effect[move])), Support.NONE)
                 c.add(support, f"{where}: {names.move_names[move]}", "move effect")
-        ability = AbilityId(int(abilities[mon.species, mon.ability_slot]))
-        ability_name = names.ability_names[names.species_abilities(mon.species)[mon.ability_slot]]
+        row = personal_row(tables, mon.species, mon.form)  # ValueError: no such form
+        ability = AbilityId(int(abilities[row, mon.ability_slot]))
+        ability_name = names.ability_names[
+            names.species_abilities(mon.species, mon.form)[mon.ability_slot]
+        ]
         c.add(
             IMPLEMENTED_ABILITIES.get(ability, Support.NONE), f"{where}: {ability_name}", "ability"
         )
         item = ItemId(int(item_effect[mon.item]))
         item_name = names.item_names[mon.item] if mon.item else "no item"
         c.add(IMPLEMENTED_ITEMS.get(item, Support.NONE), f"{where}: {item_name}", "held item")
+        _check_form(c, where, mon)
+        if trainer_side and row != mon.species:
+            c.add(
+                Support.NONE,
+                f"{where}: trainer Pokemon in a data form keeps its base form's stats, "
+                "ability and moves",
+                "form",
+            )
+
+
+def _check_form(c: _Collector, where: str, mon: PokemonSpec) -> None:
+    """Ruling 8: a form the battle changes, which the engine does not model."""
+    if (
+        mon.species == SPECIES_GIRATINA
+        and mon.form == GIRATINA_FORM_ORIGIN
+        and mon.item != ITEM_GRISEOUS_ORB
+    ):
+        c.add(Support.NONE, f"{where}: Origin Forme without the Griseous Orb", "form change")
+    if mon.species == SPECIES_SHAYMIN and mon.form == SHAYMIN_FORM_SKY:
+        c.add(Support.NONE, f"{where}: Sky Forme reverts when frozen", "form change")
 
 
 def _check_trainer(c: _Collector, tables: Tables, names: Names, trainer: Trainer) -> None:
+    support = IMPLEMENTED_FORMATS.get(trainer.format, Support.NONE)
+    c.add(support, f"{trainer.name}: a {trainer.format} battle", "battle format")
     effect = np.asarray(tables.trainer_item_effect)
     bag = [item for item in trainer.items if item]
     for item in bag:
@@ -221,7 +281,7 @@ def check_opponent(
     lines. It runs no ``ai_refusals``: those depend on the player's party, so a caller
     that needs them runs them per setup."""
     c = _Collector()
-    _check_party(c, tables, names, trainer.name, opp)
+    _check_party(c, tables, names, trainer.name, opp, trainer_side=True)
     _check_trainer(c, tables, names, trainer)
     _check_weather(c, [start_condition, start_weather(trainer)])
     return c.report

@@ -83,11 +83,17 @@ def test_reuse_violations_names_changed_sources(decomp):
     other = banks.index("TEXT_BANK_SPECIES_NAME")
     diff = RomDiff(
         (),
-        (FileChange("msgdata/pl_msg.narc", "changed", 1, 2, (other, nature), (900, 900)),
-         FileChange("poketool/personal/pl_personal.narc", "changed", 1, 2, (0,), (9, 9))),
-        (CodeChange("overlay16", 1, 2, 1, 2, "sTypeMatchupMultipliers"),
-         CodeChange("arm9", 1, 2, 1, 2, "SomethingElse")),
-        {}, {})
+        (
+            FileChange("msgdata/pl_msg.narc", "changed", 1, 2, (other, nature), (900, 900)),
+            FileChange("poketool/personal/pl_personal.narc", "changed", 1, 2, (0,), (9, 9)),
+        ),
+        (
+            CodeChange("overlay16", 1, 2, 1, 2, "sTypeMatchupMultipliers"),
+            CodeChange("arm9", 1, 2, 1, 2, "SomethingElse"),
+        ),
+        {},
+        {},
+    )
     assert reuse_violations(diff, decomp) == [
         "symbol sTypeMatchupMultipliers (overlay16)",
         f"msgdata/pl_msg.narc member {nature} (TEXT_BANK_NATURE_NAMES)",

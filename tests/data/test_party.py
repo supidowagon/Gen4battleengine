@@ -94,3 +94,47 @@ def test_party_toml_new_key_errors(tmp_path, names, extra, match):
     f.write_text(_SHINX.format(nature="Hardy", ability="Rivalry") + extra, encoding="utf-8")
     with pytest.raises(ValueError, match=match):
         load_party(f, names)
+
+
+def _party(tmp_path, names, head, ability="Levitate"):
+    """A one-Pokemon party whose first lines are ``head`` (species, form, ...)."""
+    f = tmp_path / "p.toml"
+    f.write_text(
+        f'[[pokemon]]\n{head}\nlevel = 20\nnature = "Hardy"\n'
+        "ivs = [1,2,3,4,5,6]\nevs = [0,0,0,0,0,0]\n"
+        f'moves = ["Tackle"]\nitem = ""\nability = "{ability}"\ngender = "none"\n',
+        encoding="utf-8",
+    )
+    return load_party(f, names)
+
+
+def test_party_toml_form(tmp_path, names):
+    assert _party(tmp_path, names, 'species = "Rotom"\nform = "Wash"')[0].form == 2
+    assert _party(tmp_path, names, 'species = "Rotom"\nform = "wash"')[0].form == 2
+    assert _party(tmp_path, names, 'species = "Rotom"\nform = 2')[0].form == 2
+    assert _party(tmp_path, names, 'species = "Rotom"\nform = "Rotom"')[0].form == 0
+    assert _party(tmp_path, names, 'species = "Rotom"')[0].form == 0
+    with pytest.raises(ValueError, match="Heat, Wash, Frost, Fan, Mow"):
+        _party(tmp_path, names, 'species = "Rotom"\nform = "Blue"')
+    with pytest.raises(ValueError, match="Heat, Wash, Frost, Fan, Mow"):
+        _party(tmp_path, names, 'species = "Rotom"\nform = 6')
+    with pytest.raises(ValueError, match="Bulbasaur has no forms"):
+        _party(tmp_path, names, 'species = "Bulbasaur"\nform = "Sky"', ability="Overgrow")
+    with pytest.raises(ValueError, match="Bulbasaur has no forms"):
+        _party(tmp_path, names, 'species = "Bulbasaur"\nform = 1', ability="Overgrow")
+    # A cosmetic form has no name, only its number.
+    unown = 'species = "Unown"\nform = {}'
+    assert _party(tmp_path, names, unown.format(5), ability="Levitate")[0].form == 5
+    with pytest.raises(ValueError, match=r"Unown has no form 28 \(forms: UNOWN, or a form number"):
+        _party(tmp_path, names, unown.format(28), ability="Levitate")
+    with pytest.raises(ValueError, match="form must be a name or a number"):
+        _party(tmp_path, names, 'species = "Rotom"\nform = true')
+
+
+def test_party_toml_form_ability_and_friendship(tmp_path, names):
+    # Giratina-Origin's ability is Levitate (its row); Altered Forme's Pressure is refused.
+    (mon,) = _party(tmp_path, names, 'species = "Giratina"\nform = "Origin"')
+    assert mon.form == 1 and mon.ability_slot == 0
+    assert mon.friendship == names.species_base_friendship(487, 1)
+    with pytest.raises(ValueError, match="cannot have ability 'Pressure'"):
+        _party(tmp_path, names, 'species = "Giratina"\nform = "Origin"', ability="Pressure")

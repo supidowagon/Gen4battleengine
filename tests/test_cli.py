@@ -143,7 +143,7 @@ def test_trainers_lists_names_and_ids(capsys):
 
 
 def _t(id: int, name: str, cls: str) -> Trainer:
-    return Trainer(id, name, cls, 0, 0, 7, (), (), "none")
+    return Trainer(id, name, cls, 0, 0, 7, (), (), "none", "single")
 
 
 def test_trainer_name_prefers_a_leader_then_the_first_match():

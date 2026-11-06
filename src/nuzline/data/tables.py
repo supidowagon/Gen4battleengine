@@ -1,7 +1,9 @@
 """Load the packed Gen 4 Platinum tables (built by ``tools/build_tables.py``).
 
 Every array is indexed by the decomp's own ids; encodings are documented in
-``tools/build_tables.py``. ``Names`` resolves English names to those ids.
+``tools/build_tables.py``. ``Names`` resolves English names to those ids. ``species_*``
+arrays are indexed by personal row: species ids 0-495, then the data forms 496-507
+(``nuzline.data.forms.form_row`` maps a species and form to its row).
 """
 
 from __future__ import annotations
@@ -13,10 +15,48 @@ from typing import NamedTuple
 import jax.numpy as jnp
 import numpy as np
 
+from nuzline.data.forms import form_row
+
 DEFAULT = Path(__file__).resolve().parents[3] / "data" / "gen4_platinum"
+
+# The version ``tools/build_tables.py`` writes into ``manifest.json``. Bump it with any change
+# to the packed arrays or manifest keys; every loader refuses tables of another version.
+MANIFEST_VERSION = 8
+
+
+def check_manifest(manifest: dict, dir: Path) -> None:
+    """Raise ``ValueError`` unless ``manifest`` is table version ``MANIFEST_VERSION`` (a
+    missing ``version`` counts as stale), so old tables give one rebuild message instead of
+    a ``KeyError`` on whichever new array or key is read first."""
+    v = manifest.get("version")
+    if v != MANIFEST_VERSION:
+        raise ValueError(
+            f"{Path(dir) / 'manifest.json'} is version {v}; this nuzline needs "
+            f"{MANIFEST_VERSION}: re-run tools/extract_decomp.py and tools/build_tables.py"
+        )
+
+
+def check_npz(z, dir: Path) -> None:
+    """Raise ``ValueError`` unless the opened ``tables.npz`` ``z`` carries ``version``
+    ``MANIFEST_VERSION``. ``manifest.json`` is tracked in git and ``tables.npz`` is not, so
+    after a pull a current manifest can sit beside an old npz; only the npz's own
+    ``version`` array (absent before version 8, read as stale) proves its version."""
+    v = int(z["version"]) if "version" in z.files else None
+    if v != MANIFEST_VERSION:
+        raise ValueError(
+            f"{Path(dir) / 'tables.npz'} is version {v}; this nuzline needs "
+            f"{MANIFEST_VERSION}: re-run tools/extract_decomp.py and tools/build_tables.py"
+        )
+
+
+def _read_manifest(dir: Path) -> dict:
+    manifest = json.loads((Path(dir) / "manifest.json").read_text(encoding="utf-8"))
+    check_manifest(manifest, dir)
+    return manifest
 
 
 class Tables(NamedTuple):
+    # S = 508 personal rows: species 0-495, then the data forms (Ruling 6).
     species_base_stats: jnp.ndarray  # int16[S,6], index = ids.Stat
     species_types: jnp.ndarray  # int8[S,2]
     species_abilities: jnp.ndarray  # int16[S,2], ids.AbilityId
@@ -25,6 +65,8 @@ class Tables(NamedTuple):
     species_gender: jnp.ndarray  # int16[S], decomp gender ratio
     species_friendship: jnp.ndarray  # int16[S] (140 does not fit int8)
     species_exp_rate: jnp.ndarray  # int8[S], 0 medium fast .. 5 slow (exp_rates.txt order)
+    species_exp_yield: jnp.ndarray  # int16[S], SpeciesData.baseExpReward
+    species_form_row: jnp.ndarray  # int16[496,28], [species, form] -> personal row, -1 none
     exp_table: jnp.ndarray  # int32[8,101], [rate, level] -> experience
     move_power: jnp.ndarray  # int16[M]
     move_type: jnp.ndarray  # int8[M]
@@ -34,7 +76,8 @@ class Tables(NamedTuple):
     move_priority: jnp.ndarray  # int8[M]
     move_target: jnp.ndarray  # int8[M], index into manifest target_names
     move_effect: jnp.ndarray  # int16[M], ids.EffectId
-    move_effect_chance: jnp.ndarray  # int8[M]
+    move_effect_chance: jnp.ndarray  # int8[M]; a chance-0 non-certain secondary packs as PLAIN
+    move_ai_effect: jnp.ndarray  # int16[M], the decomp battle effect id the AI scripts read
     move_param: jnp.ndarray  # int16[M,3]
     move_flags: jnp.ndarray  # int16[M], ids.MoveFlag bits
     type_chart: jnp.ndarray  # int8[T,T], tenths
@@ -47,7 +90,9 @@ class Tables(NamedTuple):
 
 
 def load_tables(dir: Path = DEFAULT) -> Tables:
+    _read_manifest(dir)
     with np.load(Path(dir) / "tables.npz") as z:
+        check_npz(z, dir)
         return Tables(**{f: jnp.asarray(z[f]) for f in Tables._fields})
 
 
@@ -79,8 +124,11 @@ class Names:
         self.nature_names: tuple[str, ...] = tuple(manifest["nature_names"])
         # Text code -> character (JSON keys are hex strings).
         self.charmap: dict[int, str] = {int(k, 16): v for k, v in manifest["charmap"].items()}
+        # Per personal row (species, then data forms).
         self._species_abilities = tuple(tuple(a) for a in manifest["species_abilities"])
         self._species_friendship = tuple(manifest["species_base_friendship"])
+        self._form_rows = manifest["species_form_row"]
+        self._form_names = {int(s): tuple(names) for s, names in manifest["form_names"].items()}
         self._species = _index(manifest["species_names"], "species")
         self._moves = _index(manifest["move_names"], "move")
         self._items = _index(manifest["item_names"], "item")
@@ -97,12 +145,52 @@ class Names:
     def species(self, name: str) -> int:
         return self._get(self._species, name, "species")
 
-    def species_abilities(self, species: int) -> tuple[int, int]:
-        """The species' two decomp ability ids; slot 1 is 0 (ABILITY_NONE) when absent."""
-        return self._species_abilities[species]
+    def form_row(self, species: int, form: int = 0) -> int:
+        """The personal row of ``species``' ``form``; ``ValueError`` if it has no such form."""
+        return form_row(self._form_rows, species, form)
 
-    def species_base_friendship(self, species: int) -> int:
-        return self._species_friendship[species]
+    def _species_id(self, species: int) -> int:
+        """``species`` as an int; ``ValueError`` outside the species ids (a negative id
+        would otherwise wrap round the name tuple)."""
+        species = int(species)
+        if not 0 <= species < len(self.species_names):
+            raise ValueError(f"species {species} out of range")
+        return species
+
+    def form_names(self, species: int) -> tuple[str, ...]:
+        """``(species name, form 1 name, ...)`` for a species with data forms, else
+        ``(species name,)``. ``ValueError`` for a species id out of range."""
+        species = self._species_id(species)
+        return self._form_names.get(species, (self.species_names[species],))
+
+    def form(self, species: int, name: str | int) -> int:
+        """The form number of ``species`` named ``name`` (case-insensitive, from
+        ``form_names``), or ``name`` itself when it is a form number the species has.
+        Raises ``ValueError`` naming the valid forms (or the species id out of range)."""
+        species = self._species_id(species)
+        valid = self.form_names(species)
+        if not isinstance(name, str):
+            try:
+                self.form_row(species, name)
+            except ValueError:
+                raise ValueError(
+                    f"{self.species_names[species]} has no form {name!r} "
+                    f"(forms: {', '.join(valid)})"
+                ) from None
+            return int(name)
+        for i, n in enumerate(valid):
+            if n.lower() == name.lower():
+                return i
+        raise ValueError(
+            f"{self.species_names[species]} has no form {name!r} (forms: {', '.join(valid)})"
+        )
+
+    def species_abilities(self, species: int, form: int = 0) -> tuple[int, int]:
+        """The form's two decomp ability ids; slot 1 is 0 (ABILITY_NONE) when absent."""
+        return self._species_abilities[self.form_row(species, form)]
+
+    def species_base_friendship(self, species: int, form: int = 0) -> int:
+        return self._species_friendship[self.form_row(species, form)]
 
     def move(self, name: str) -> int:
         """Move id; ``""`` is 0 (no move)."""
@@ -130,4 +218,4 @@ class Names:
 
 
 def load_names(dir: Path = DEFAULT) -> Names:
-    return Names(json.loads((Path(dir) / "manifest.json").read_text(encoding="utf-8")))
+    return Names(_read_manifest(dir))

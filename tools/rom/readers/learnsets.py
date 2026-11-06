@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 
 from tools.extract_decomp import _constants
 from tools.rom.readers import ReaderError
-from tools.rom.readers.personal import SPECIES_COUNT
+from tools.rom.readers.personal import ROW_COUNT
 
 if TYPE_CHECKING:
     from tools.rom.nds import RomFiles
@@ -34,7 +34,8 @@ def max_learnset_entries(decomp: Path) -> int:
 
 
 def read_learnsets(rom: RomFiles, decomp: Path) -> dict[str, list[list[int]]]:
-    """``{species id: [[level, move], ...]}`` for ids ``0..495``.
+    """``{personal row: [[level, move], ...]}`` for rows ``0..507`` (species, then the data
+    forms; the game loads member ``Pokemon_GetFormNarcIndex(species, form)``).
 
     Each member is u16 entries ``move | level << 9`` up to ``0xFFFF``, then at most one
     zero u16 of padding (``speciesproc.c:472-494`` pads to 4 bytes). An odd length, any
@@ -48,12 +49,12 @@ def read_learnsets(rom: RomFiles, decomp: Path) -> dict[str, list[list[int]]]:
     bytes" holds there; K2b must confirm how the patched game loads member 359.
     """
     members = rom.narc(WOTBL_NARC)
-    if len(members) < SPECIES_COUNT:
-        raise ReaderError(f"{WOTBL_NARC}: {len(members)} members, need {SPECIES_COUNT}")
+    if len(members) != ROW_COUNT:
+        raise ReaderError(f"{WOTBL_NARC}: {len(members)} members, expected {ROW_COUNT}")
     n_moves = len(_constants(decomp, "moves", "MOVE_"))
     max_entries = max_learnset_entries(decomp) + 1  # the buffer's slots, terminator aside
     out = {}
-    for sid in range(SPECIES_COUNT):
+    for sid in range(ROW_COUNT):
         m = members[sid]
         where = f"{WOTBL_NARC} member {sid}"
         if len(m) % 2:

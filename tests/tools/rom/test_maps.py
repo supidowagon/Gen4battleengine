@@ -6,13 +6,16 @@ import struct
 
 import pytest
 
+from tools.battle_scripts import Op
 from tools.extract_decomp import extract_trainers
 from tools.rom.readers.maps import (
     ScriptDecodeError,
     command_table,
     script_battles,
+    script_ops,
     trainer_start_conditions,
 )
+from tools.rom.readers.trainers import read_trainers
 
 
 @pytest.fixture(scope="module")
@@ -188,8 +191,9 @@ def test_unresolved_operand_reported(table):
     assert script_battles(_script(0) + battle, table, unresolved=sites) == set()
     assert sites == [(6, 0x8005, 0)]
     sites = []
-    script_battles(_script(0) + _cmd(table, "SetVarFromValue", 0x8005, 9) + battle, table,
-                   unresolved=sites)
+    script_battles(
+        _script(0) + _cmd(table, "SetVarFromValue", 0x8005, 9) + battle, table, unresolved=sites
+    )
     assert sites == []
 
 
@@ -244,3 +248,91 @@ def test_rematch_base_out_of_range_raises(vanilla_files, decomp, symbols, monkey
     monkeypatch.setattr(maps, "symbol_bytes", fake)
     with pytest.raises(ReaderError, match="offset 0: unknown base trainer 5000"):
         maps.trainer_maps(vanilla_files, decomp, symbols, 928)
+
+
+# scrcmd.inc wrapper macros that pick a command by operand (scrcmd.inc:178-184,309-315); the
+# helper takes constants, so the value form is the one assembled.
+_WRAPPERS = {"CompareVar": "CompareVarToValue", "SetVar": "SetVarFromValue"}
+
+
+def assemble(table, *cmds) -> bytes:
+    """A one-entry header plus ``cmds`` (macro name, operands...); a jump operand is the
+    offset from the end of its command, as ``scrcmd.inc`` encodes it."""
+    return _script(0) + b"".join(_cmd(table, _WRAPPERS.get(n, n), *ops) for n, *ops in cmds)
+
+
+def test_script_ops_fuse_compare_and_branch(decomp):  # hand-assembled with K1's opcodes
+    table = command_table(decomp)
+    script = assemble(table, ("CompareVar", 0x8004, 3), ("GoToIf", 1, 2), ("End",), ("Return",))
+    ops = script_ops(script, table)  # offset 2 skips the 2-byte End -> the Return
+    assert [o.name for o in ops] == ["label", "GoToIfEq", "End", "label", "Return"]
+    assert ops[1].args == (0x8004, 3, ops[3].args[0])
+    assert (ops[0].args, ops[3].args) == (("@6",), ("@21",))
+
+
+def test_script_ops_other_conditions_are_not_fused(table):
+    # GoToIf 5 is GoToIfNe (scrcmd.inc); a CompareVar without its GoToIf is not fused.
+    script = assemble(
+        table, ("CompareVar", 0x8004, 3), ("GoToIf", 5, 0), ("CompareVar", 0x8004, 3), ("End",)
+    )
+    assert [o.name for o in script_ops(script, table)] == [
+        "label",
+        "other",
+        "other",
+        "label",
+        "other",
+        "End",
+    ]
+
+
+def test_script_ops_kept_commands(table):
+    script = assemble(
+        table,
+        ("SetVar", 0x403F, 609),
+        ("SetHasPartner",),
+        ("GetPlayerGender", 0x800C),
+        ("GetPlayerStarterSpecies", 0x800C),
+        ("Call", 16),
+        ("StartTagBattle", 0x8004, 3, 4),
+        ("StartTrainerBattle", 5, 6),
+        ("End",),
+        ("SetVar", 0x8004, 7),
+        ("GoTo", 0),
+        ("Return",),
+    )
+    ops = script_ops(script, table)
+    assert ops == [
+        Op("label", ("@6",)),
+        Op("SetVar", (0x403F, 609)),
+        Op("SetHasPartner", ()),
+        Op("GetPlayerGender", (0x800C,)),
+        Op("GetPlayerStarterSpecies", (0x800C,)),
+        Op("Call", ("@44",)),
+        Op("StartTagBattle", (0x8004, 3, 4)),
+        Op("StartTrainerBattle", (5, 6)),
+        Op("End", ()),
+        Op("label", ("@44",)),
+        Op("SetVar", (0x8004, 7)),
+        Op("GoTo", ("@56",)),
+        Op("label", ("@56",)),
+        Op("Return", ()),
+    ]
+
+
+def test_script_ops_unknown_opcode_raises(table):
+    script = _script(0) + struct.pack("<H", len(table))
+    with pytest.raises(ScriptDecodeError, match="offset 0x6"):
+        script_ops(script, table)
+
+
+def test_rom_battle_structures_match(vanilla_files, decomp, symbols, charmap, decomp_inter):
+    want = json.loads((decomp_inter / "trainers.json").read_text("utf-8"))
+    got = read_trainers(
+        vanilla_files, decomp, symbols, charmap, [t["start_condition"] for t in want]
+    )
+
+    def key(t):
+        return (t["format"], t["opponent_2"], t["partner"])
+
+    assert [key(t) for t in got] == [key(t) for t in want]
+    assert sum(t["format"] == "double_two_trainer" for t in got) == 20

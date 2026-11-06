@@ -99,3 +99,14 @@ def symbols():
     if not DEFAULT_MAP.exists():
         pytest.skip(f"no linker map at {DEFAULT_MAP} (docs/rom_pipeline.md, Decomp build)")
     return SymbolMap.from_map(DEFAULT_MAP)
+
+
+@pytest.fixture(scope="session")
+def decomp_inter(decomp, tmp_path_factory):
+    """The decomp extractor's static and trainer intermediate files, written once."""
+    from tools.extract_decomp import extract_static, extract_trainers
+
+    d = tmp_path_factory.mktemp("decomp_inter")
+    extract_static(decomp, d)
+    extract_trainers(decomp, d)
+    return d

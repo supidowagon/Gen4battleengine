@@ -101,13 +101,63 @@ def test_toxic_counter_dropped(tables, names):
     assert (spec.status, spec.status_counter) == (Status.TOXIC, 0)
 
 
+def _row_party(tables, names, species, form, slot=0):
+    """A party record of ``species`` ``form`` with stored stats from its personal row, at
+    party slot ``slot``. (The brief's ``mon_record(...).to_spec`` and ``load_party_record``:
+    ``mon_record`` returns the encrypted bytes, so the record is decoded here.)"""
+    sp = names.species(species)
+    row = int(tables.species_form_row[sp, form])
+    personality = personality_for(3, 0)
+    ivs = (10, 11, 12, 13, 14, 15)
+    stats = tuple(int(v) for v in _calc(tables, row, ivs, (0,) * 6, 30, personality % 25))
+    raw = mon_record(
+        species=sp,
+        form=form,
+        personality=personality,
+        level=30,
+        ivs=ivs,
+        ability=int(tables.species_abilities_decomp[row][0]),
+        party={"status": 0, "level": 30, "hp": stats[0], "stats": stats},
+    )
+    return decode_mon(raw, ("party", 0, slot), tables, names.charmap)
+
+
 @pytest.mark.parametrize(
-    "species", ["Rotom", "Wormadam", "Giratina", "Shaymin", "Deoxys", "Arceus"]
+    ("species", "form"),
+    [("Rotom", 2), ("Rotom", 5), ("Wormadam", 1), ("Giratina", 1), ("Shaymin", 1), ("Deoxys", 3)],
 )
-def test_alternate_form_raises(tables, names, species):
-    with pytest.raises(RecordError, match="box 2 slot 4"):
-        _box(tables, names, species=species, form=1).to_spec(tables)
-    assert _box(tables, names, species=species, form=0).to_spec(tables).form == 0
+def test_data_form_converts(tables, names, species, form):
+    spec = _row_party(tables, names, species, form).to_spec(tables)
+    assert spec.form == form and spec.species == names.species(species)
+
+
+def test_data_form_converts_arceus_form_raises(
+    tables, names
+):  # replaces test_alternate_form_raises
+    assert _row_party(tables, names, "Rotom", 2).to_spec(tables).form == 2
+    with pytest.raises(RecordError, match="Arceus"):
+        _box(tables, names, species="Arceus", form=3).to_spec(tables)
+    assert _box(tables, names, species="Arceus", form=0).to_spec(tables).form == 0
+    with pytest.raises(RecordError, match="party slot 0: species 479 has no form 6"):
+        mon = dataclasses.replace(_row_party(tables, names, "Rotom", 0), form=6)
+        mon.to_spec(tables)
+
+
+def test_form_beyond_the_count_raises(tables, names):
+    # Unown has 28 forms (0-27); a cosmetic species' form past its count is no form at all.
+    with pytest.raises(RecordError, match="box 2 slot 4: species 201 has no form 28"):
+        _box(tables, names, species="Unown", form=28).to_spec(tables)
+    with pytest.raises(RecordError, match="box 2 slot 4: species 25 has no form 1"):
+        _box(tables, names, species="Pikachu", form=1).to_spec(tables)
+
+
+def test_form_ability_comes_from_the_row(tables, names):
+    # Giratina-Origin stores Levitate (row 501), which Altered Forme cannot have.
+    spec = _row_party(tables, names, "Giratina", 1).to_spec(tables)
+    assert spec.ability_slot == 0
+    altered = dataclasses.replace(_row_party(tables, names, "Giratina", 1), form=0)
+    with pytest.raises(RecordError, match="party slot 0: ability"):
+        altered.to_spec(tables)
 
 
 @pytest.mark.parametrize("species", ["Unown", "Burmy", "Shellos", "Gastrodon"])

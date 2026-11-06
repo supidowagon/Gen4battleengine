@@ -211,7 +211,8 @@ def test_ability_slot_and_decomp_ability_ids(tables, names):
     decomp = tables.species_abilities_decomp
     assert decomp.dtype == jnp.int16 and decomp.shape == tables.species_abilities.shape
     rows = np.asarray(decomp).tolist()
-    assert rows == [list(names.species_abilities(i)) for i in range(len(rows))]
+    species = range(len(names.species_names))
+    assert rows[: len(species)] == [list(names.species_abilities(i)) for i in species]
     shinx = names.species("Shinx")
     assert int(decomp[shinx, 1]) == names.ability("Intimidate")
     # An ability the engine does not implement still has its decomp id.

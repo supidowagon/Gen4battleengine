@@ -253,3 +253,33 @@ def test_layout_sizes_match_decomp_arithmetic():
     body = sizeof + (4 - sizeof % 4) + 4  # SaveTableEntry_BodySize
     assert BOXES_SIZE == body + 20
     assert NORMAL_SIZE == 0xCF2C
+
+
+def test_default_tables_and_names_refuse_stale_tables(tmp_path):
+    from nuzline.saves.save import default_tables_and_names
+
+    (tmp_path / "manifest.json").write_text('{"version": 7}')
+    with pytest.raises(ValueError, match="re-run tools/extract_decomp.py"):
+        default_tables_and_names(None, None, tmp_path)
+    with pytest.raises(ValueError, match="re-run tools/extract_decomp.py"):
+        default_tables_and_names(object(), object(), tmp_path)
+
+
+@pytest.mark.parametrize("version", [None, 7])
+def test_default_tables_and_names_refuse_a_stale_npz(tmp_path, version):
+    # The tracked manifest is current, the git-ignored npz is not (final review).
+    import json
+
+    import numpy as np
+
+    from nuzline.data.tables import MANIFEST_VERSION
+    from nuzline.saves.save import default_tables_and_names
+
+    (tmp_path / "manifest.json").write_text(json.dumps({"version": MANIFEST_VERSION}))
+    arrays = {"species_base_stats": np.zeros((496, 6), np.int16)}
+    if version is not None:
+        arrays["version"] = np.int16(version)
+    np.savez_compressed(tmp_path / "tables.npz", **arrays)
+    stale = r"tables\.npz is version \w+; .*re-run tools/extract_decomp\.py and tools/build_tables"
+    with pytest.raises(ValueError, match=stale):
+        default_tables_and_names(None, None, tmp_path)

@@ -25,6 +25,18 @@ Encodings:
 * ``species_exp_rate[species]``: growth rate id (``generated/exp_rates.txt`` order: 0 medium
   fast, 1 erratic, 2 fluctuating, 3 medium slow, 4 fast, 5 slow); ``exp_table[rate, level]``
   is the experience for ``level`` 0..100 (``exp_tables.csv``, same rate order).
+* ``species_exp_yield[species]``: ``SpeciesData.baseExpReward`` (int16).
+* ``move_ai_effect[move]``: the decomp battle effect id as stored (``MoveTable.effect``),
+  unmapped, which is what the AI scripts read; ``move_effect`` is the engine's mapped id.
+* A ``SECONDARY_*`` move that is not in ``CERTAIN_SECONDARY_EFFECTS`` and has
+  ``effect_chance`` 0 never fires its proc, so ``move_effect`` packs it as ``PLAIN`` with
+  params ``(0, 0, 0)`` (``move_effect_chance`` stays 0, ``move_ai_effect`` keeps the id). A
+  certain effect with a nonzero chance is a ``BuildError``.
+* Every ``species_*`` array has one row per personal row: species ids ``0..495``, then
+  the data forms ``496..507`` (``forms.json``, Ruling 6). ``species_form_row[species,
+  form]`` (int16[496, 28]) is the personal row of a form (``form_rows.json``; the species
+  itself for a form without data, -1 beyond the species' form count), the same grid as
+  ``manifest["species_form_row"]``. ``manifest["species_names"]`` stays per species id.
 * ``manifest["charmap"]``: text code (hex string) -> character, for decoding nicknames.
 * ``species_friendship`` is int16, not int8: base friendship reaches 140.
 * ``species_abilities_decomp[species, slot]``: the decomp's own ability ids (0 =
@@ -43,6 +55,7 @@ from pathlib import Path
 
 import numpy as np
 
+from nuzline.data.tables import MANIFEST_VERSION
 from nuzline.engine.ids import AbilityId, EffectId, ItemId, MoveFlag, MoveTarget, TrainerItemId
 from tools.effect_map import (
     CERTAIN_SECONDARY_EFFECTS,
@@ -56,7 +69,6 @@ from tools.effect_map import (
     UNSUPPORTED_MOVES,
 )
 
-MANIFEST_VERSION = 7
 NUM_TMS = 92
 NUM_HMS = 8
 CLONE_SCRIPT = Path(__file__).with_name("clone_decomp.sh")
@@ -112,11 +124,13 @@ def _move_effect(move: dict) -> tuple[int, tuple[int, int, int]]:
     eid, params = DECOMP_EFFECT_TO_ID.get(move["effect"], (EffectId.UNSUPPORTED, (0, 0, 0)))
     if eid in SECONDARY:
         certain = move["effect"] in CERTAIN_SECONDARY_EFFECTS
-        if certain != (move["effect_chance"] == 0):
+        if certain and move["effect_chance"] != 0:
             raise BuildError(
-                f"move {move['name']!r}: effect {move['effect']} certain={certain} "
+                f"move {move['name']!r}: effect {move['effect']} is certain "
                 f"but effect_chance={move['effect_chance']}"
             )
+        if not certain and move["effect_chance"] == 0:
+            return int(EffectId.PLAIN), (0, 0, 0)  # the proc never fires
     if move["name"] in TYPE_CHART_STATUS_MOVES:
         if eid != EffectId.STATUS_FOE:
             raise BuildError(f"move {move['name']!r}: type-checked but not STATUS_FOE")
@@ -124,8 +138,47 @@ def _move_effect(move: dict) -> tuple[int, tuple[int, int, int]]:
     return int(eid), params
 
 
+def _personal_rows(
+    species: list[dict], forms: list[dict], form_rows: list[list[int]]
+) -> list[dict]:
+    """The personal rows: species ``0..S-1``, then the data forms by ``row`` (Ruling 6),
+    checked against the ``form_rows`` grid so a row is never misplaced."""
+    rows = list(species)
+    for i, f in enumerate(forms):
+        if f["row"] != len(species) + i:
+            raise BuildError(f"forms.json entry {i}: row {f['row']}, expected {len(species) + i}")
+        if not 0 <= f["species"] < len(species) or not 0 <= f["form"] < len(form_rows[0]):
+            raise BuildError(f"forms.json entry {i}: species {f['species']} form {f['form']}")
+        if form_rows[f["species"]][f["form"]] != f["row"]:
+            raise BuildError(
+                f"form_rows.json [{f['species']}][{f['form']}] is "
+                f"{form_rows[f['species']][f['form']]}, forms.json says row {f['row']}"
+            )
+        rows.append({k: v for k, v in f.items() if k not in ("species", "form", "row")})
+    if len(form_rows) != len(species):
+        raise BuildError(f"form_rows.json has {len(form_rows)} species, expected {len(species)}")
+    for sid, grid_row in enumerate(form_rows):
+        for form, row in enumerate(grid_row):
+            if not (row == -1 or row == sid or len(species) <= row < len(rows)):
+                raise BuildError(f"form_rows.json [{sid}][{form}] = {row} is no personal row")
+    return rows
+
+
+def _form_names(species: list[dict], forms: list[dict]) -> dict[str, list[str]]:
+    """``{species id: [species name, form 1 name, ...]}`` for species with data forms."""
+    out: dict[str, list[str]] = {}
+    for f in forms:
+        names = out.setdefault(str(f["species"]), [species[f["species"]]["name"]])
+        if f["form"] != len(names):
+            raise BuildError(f"forms.json: species {f['species']} form {f['form']} out of order")
+        names.append(f["name"])
+    return out
+
+
 def build_arrays(inter: Path) -> tuple[dict[str, np.ndarray], dict]:
-    species = _load(inter, "species")
+    species_only = _load(inter, "species")
+    forms = _load(inter, "forms")
+    form_rows = _load(inter, "form_rows")
     moves = _load(inter, "moves")
     items = _load(inter, "items")
     abilities = _load(inter, "abilities")
@@ -135,6 +188,12 @@ def build_arrays(inter: Path) -> tuple[dict[str, np.ndarray], dict]:
     charmap = _load(inter, "charmap")
     level_learnsets = _load(inter, "learnsets")
     tm_learnsets = _load(inter, "tm_learnsets")
+    evolutions = _load(inter, "evolutions")
+    egg_moves = _load(inter, "egg_moves")
+    evolution_methods = _load(inter, "evolution_methods")
+    tutor_moves = _load(inter, "tutor_moves")
+    tutor_learnsets = _load(inter, "tutor_learnsets")
+    species = _personal_rows(species_only, forms, form_rows)
     item_ids_by_name = {i["name"]: n for n, i in enumerate(items)}
     first_tm_item = item_ids_by_name["TM01"]
     tm_moves = []
@@ -201,6 +260,8 @@ def build_arrays(inter: Path) -> tuple[dict[str, np.ndarray], dict]:
         "species_gender": _arr([s["gender_ratio"] for s in species], np.int16, "gender"),
         "species_friendship": _arr([s["base_friendship"] for s in species], np.int16, "friendship"),
         "species_exp_rate": _arr([s["exp_rate"] for s in species], np.int8, "exp rate"),
+        "species_exp_yield": _arr([s["exp_yield"] for s in species], np.int16, "exp yield"),
+        "species_form_row": _arr(form_rows, np.int16, "form rows"),
         "exp_table": _arr(exp_tables, np.int32, "exp table"),
         "move_power": _arr([m["power"] for m in moves], np.int16, "power"),
         "move_type": _arr([m["type"] for m in moves], np.int8, "move type"),
@@ -211,6 +272,7 @@ def build_arrays(inter: Path) -> tuple[dict[str, np.ndarray], dict]:
         "move_target": _arr([MOVE_TARGETS.index(m["target"]) for m in moves], np.int8, "target"),
         "move_effect": _arr([e for e, _ in effects], np.int16, "effect"),
         "move_effect_chance": _arr([m["effect_chance"] for m in moves], np.int8, "chance"),
+        "move_ai_effect": _arr([m["ai_effect"] for m in moves], np.int16, "ai effect"),
         "move_param": _arr([p for _, p in effects], np.int16, "move param"),
         "move_flags": _arr([_move_flags(m) for m in moves], np.int16, "move flags"),
         "type_chart": _arr(chart, np.int8, "type chart"),
@@ -231,8 +293,12 @@ def build_arrays(inter: Path) -> tuple[dict[str, np.ndarray], dict]:
     manifest = {
         "version": MANIFEST_VERSION,
         "decomp_commit": _decomp_commit(),
-        "species_names": [s["name"] for s in species],
-        # Decomp ability ids (not engine ids) per species slot, so a party file's
+        "species_names": [s["name"] for s in species_only],
+        # Personal row (species, then data forms; nuzline.data.forms.form_row) per
+        # [species][form], and each data-form species' form names (form 0 = the species).
+        "species_form_row": form_rows,
+        "form_names": _form_names(species_only, forms),
+        # Decomp ability ids (not engine ids) per personal-row slot, so a party file's
         # ability name resolves to its slot; and base friendship for its default.
         "species_abilities": [list(s["abilities"]) for s in species],
         "species_base_friendship": [s["base_friendship"] for s in species],
@@ -244,7 +310,7 @@ def build_arrays(inter: Path) -> tuple[dict[str, np.ndarray], dict]:
         "category_names": list(MOVE_CATEGORIES),
         "target_names": list(MOVE_TARGETS),
         "charmap": charmap,
-        # Host-only lookups (nuzline.data.learnsets): per species id, the level-up
+        # Host-only lookups (nuzline.data.learnsets): per personal row, the level-up
         # (level, move) pairs in learn order and the TM/HM indices it can learn;
         # tm_moves[index] is the move that TM/HM teaches; first_tm_item is ITEM_TM01
         # (TM01-TM92 then HM01-HM08 are consecutive ids).
@@ -252,6 +318,19 @@ def build_arrays(inter: Path) -> tuple[dict[str, np.ndarray], dict]:
         "tm_learnsets": tm_learnsets,
         "tm_moves": tm_moves,
         "first_tm_item": first_tm_item,
+        # Keyed by species id (LoadSpeciesEvolutions, src/pokemon.c:4812;
+        # LoadSpeciesEggMoves, src/overlay005/daycare.c:445): evolutions are
+        # [method, param, target] with method an index into evolution_methods (the
+        # generated/evolution_methods.txt stems, lowercased); egg_moves lists the moves of
+        # the species that have any.
+        "evolutions": evolutions,
+        "evolution_methods": evolution_methods,
+        "egg_moves": egg_moves,
+        # Move tutors (sTeachableMoves order): {move, costs: {red, blue, yellow, green},
+        # location}; tutor_learnsets maps a personal row to indices into tutor_moves
+        # (Pokemon_ReadMovesetMaskByte, src/overlay005/scrcmd_move_tutor.c:211-259).
+        "tutor_moves": tutor_moves,
+        "tutor_learnsets": tutor_learnsets,
     }
     return arrays, manifest
 
@@ -260,7 +339,9 @@ def build(intermediate_dir: Path, out_dir: Path) -> None:
     arrays, manifest = build_arrays(Path(intermediate_dir))
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    np.savez_compressed(out_dir / "tables.npz", **arrays)
+    # The npz carries its own version too (nuzline.data.tables.check_npz): manifest.json
+    # is tracked in git and tables.npz is not, so the manifest cannot vouch for the npz.
+    np.savez_compressed(out_dir / "tables.npz", version=np.int16(MANIFEST_VERSION), **arrays)
     (out_dir / "manifest.json").write_text(
         json.dumps(manifest, indent=1, ensure_ascii=False) + "\n", encoding="utf-8"
     )

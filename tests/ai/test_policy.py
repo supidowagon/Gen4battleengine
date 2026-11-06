@@ -207,6 +207,11 @@ def test_transcribed_move_effects_match_the_decomp():
         assert moves[move]["effect"] == effect, moves[move]["name"]
 
 
+def test_transcribed_move_effects_match_tables(tables):
+    for move, effect in commands.MOVE_EFFECTS.items():
+        assert int(tables.move_ai_effect[move]) == effect
+
+
 def test_effectiveness_class(tables, names):
     """roark.md 7.2: 40 through ApplyTypeChart with STAB, then mapped to a class."""
     cls = commands.TypeMulti
@@ -253,3 +258,46 @@ def test_player_foresight_is_not_refused(tables, names):
     s = roark_state(tables, names)
     s = s._replace(moves=s.moves.at[0, 3, 1].set(names.move("Foresight")))
     assert ai_refusals(tables, s) == []
+
+
+def test_ai_reads_the_form_row_ability(tables, names):
+    # The brief's ``attacker_ability(tables, s, side=1)`` is ``commands.attacker_ability``,
+    # which always reads side 1 (the AI's active Pokemon) and takes no ``side``.
+    import dataclasses
+
+    from nuzline.data.party import load_party
+    from nuzline.engine.state import make_state
+    from tests.engine.helpers import SAMPLE_PARTY
+
+    sample_spec = load_party(SAMPLE_PARTY, names)[0]
+    origin = dataclasses.replace(sample_spec, species=487, form=1, item=names.item("Griseous Orb"))
+    s = make_state(tables, [sample_spec], [origin])
+    levitate = int(np.asarray(tables.species_abilities_decomp)[501, 0])
+    assert levitate == names.ability("Levitate")
+    assert int(commands.attacker_ability(tables, s)) == levitate
+    # The defender's true ability follows the row too, once the AI knows it.
+    swapped = make_state(tables, [origin], [sample_spec])
+    swapped = swapped._replace(ai_ability_known=swapped.ai_ability_known.at[0].set(1))
+    assert int(commands.defender_ability(tables, swapped, 0)) == levitate
+
+
+def test_ai_guesses_an_unknown_ability_from_the_base_species(tables, names):
+    # AICmd_LoadBattlerAbility guesses from SpeciesData_GetSpeciesValue(species, ...)
+    # (trainer_ai.c:1191-1192), which loads the base species' row (pokemon.c:2283): the
+    # player's Giratina-Origin is guessed Pressure until the AI learns its Levitate.
+    import dataclasses
+
+    from nuzline.data.party import load_party
+    from nuzline.engine.state import make_state
+    from tests.engine.helpers import SAMPLE_PARTY
+
+    sample_spec = load_party(SAMPLE_PARTY, names)[0]
+    origin = dataclasses.replace(sample_spec, species=487, form=1, item=names.item("Griseous Orb"))
+    s = make_state(tables, [origin], [sample_spec])
+    pressure, levitate = names.ability("Pressure"), names.ability("Levitate")
+    assert (pressure, levitate) == (46, 26)
+    for guess in (0, 1):
+        assert int(commands.defender_ability(tables, s, guess)) == pressure
+    known = s._replace(ai_ability_known=s.ai_ability_known.at[0].set(1))
+    for guess in (0, 1):
+        assert int(commands.defender_ability(tables, known, guess)) == levitate

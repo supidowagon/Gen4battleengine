@@ -5,6 +5,15 @@
 (``sub_02073E18``, ``src/pokemon.c:405``): IVs from the difficulty, EVs 0, a PID
 from the LCRNG seeded per party member, and from the PID the nature, gender and
 ability slot. Listed moves overwrite all four default move slots.
+
+A party member's ability, gender ratio, base friendship and default moves are read from
+its form's personal row (``form_rows.json``, ``forms.json``; plan K2a Task 6). The decomp
+differs, so coverage refuses such a Pokemon (``engine.coverage``): ``TrainerData_BuildParty`` sets
+``MON_DATA_FORM`` only after ``Pokemon_InitWith`` has picked the ability and default moves
+from the base species (``src/pokemon.c:473-489``) and computed the stats
+(``src/pokemon.c:402``), and nothing recomputes them (``src/trainer_data.c:216-218``).
+Vanilla's only data-form trainer Pokemon (Devon's Wormadam-Sandy and -Trash, trainer
+491) has the same ability, gender ratio, friendship and level-24 default moves either way.
 """
 
 from __future__ import annotations
@@ -14,6 +23,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from nuzline.data.forms import form_row
 from nuzline.data.spec import PokemonSpec
 
 MAX_IV = 31  # MAX_IVS_SINGLE_STAT
@@ -49,8 +59,25 @@ class TrainerMon:
 
 
 @dataclass(frozen=True)
+class PartnerVariant:
+    """One team the player's partner can field in a multi battle: ``trainer`` is the
+    partner's trainer id for a player of gender ``player_gender`` (0 male, 1 female) whose
+    starter is species ``starter``. A field the team does not depend on is None."""
+
+    trainer: int
+    starter: int | None
+    player_gender: int | None
+
+
+@dataclass(frozen=True)
 class Trainer:
-    """One ``trainers.json`` entry; ``trainer_class`` is the JSON's ``class``."""
+    """One ``trainers.json`` entry; ``trainer_class`` is the JSON's ``class``.
+
+    ``format`` is the battle format: "single" or "double" from the trainer's header, or
+    "double_two_trainer" (fought beside ``opponent_2`` against the player alone) or
+    "multi" (the player fights beside a partner, whose possible teams are ``partner``)
+    from the field scripts (``tools/battle_scripts.py``). ``opponent_2`` is the other
+    enemy of a two-trainer or tag battle, else None."""
 
     id: int
     name: str
@@ -61,6 +88,9 @@ class Trainer:
     items: tuple[int, ...]
     party: tuple[TrainerMon, ...]
     start_condition: str
+    format: str
+    opponent_2: int | None = None
+    partner: tuple[PartnerVariant, ...] = ()
 
 
 def _mon(d: dict) -> TrainerMon:
@@ -81,6 +111,15 @@ def _read(dir: Path, name: str):
 
 def load_trainers(dir: Path) -> list[Trainer]:
     """Every trainer in ``<dir>/trainers.json``, indexed by trainer id."""
+    rows = _read(dir, "trainers")
+    if rows and "format" not in rows[0]:
+        raise ValueError(
+            f"{Path(dir) / 'trainers.json'} has no battle format: re-run tools/extract_decomp.py"
+        )
+    if rows and not {"opponent_2", "partner"} <= rows[0].keys():
+        raise ValueError(
+            f"{Path(dir) / 'trainers.json'} has no battle structure: re-run tools/extract_decomp.py"
+        )
     return [
         Trainer(
             id=t["id"],
@@ -92,19 +131,32 @@ def load_trainers(dir: Path) -> list[Trainer]:
             items=tuple(t["items"]),
             party=tuple(_mon(m) for m in t["party"]),
             start_condition=t["start_condition"],
+            format=t["format"],
+            opponent_2=t["opponent_2"],
+            partner=tuple(
+                PartnerVariant(p["trainer"], p["starter"], p["player_gender"]) for p in t["partner"]
+            ),
         )
-        for t in _read(dir, "trainers")
+        for t in rows
     ]
 
 
 class IntermediateData:
-    """Thin loader of the extractor's species and learnset JSON."""
+    """Thin loader of the extractor's species, form and learnset JSON. ``species`` is indexed
+    by species id, ``personal`` and ``learnsets`` by personal row (the species, then the
+    data forms of ``forms.json``), and ``form_rows`` maps ``[species][form]`` to the row."""
 
     def __init__(self, dir: Path):
         self.species: list[dict] = _read(dir, "species")
+        self.personal: list[dict] = self.species + _read(dir, "forms")
+        self.form_rows: list[list[int]] = _read(dir, "form_rows")
         self.learnsets: dict[int, list[tuple[int, int]]] = {
             int(k): [(lvl, move) for lvl, move in v] for k, v in _read(dir, "learnsets").items()
         }
+
+    def row(self, species: int, form: int = 0) -> int:
+        """The personal row of ``species``' ``form``; ``ValueError`` if it has no such form."""
+        return form_row(self.form_rows, species, form)
 
 
 def difficulty_to_ivs(difficulty: int) -> int:
@@ -158,7 +210,10 @@ def default_moves(learnset: Sequence[tuple[int, int]], level: int) -> tuple[int,
 def build_trainer_party(trainer: Trainer, inter: IntermediateData) -> list[PokemonSpec]:
     party = []
     for mon in trainer.party:
-        species = inter.species[mon.species]
+        # The game keeps base-form stats, ability and moves (src/trainer_data.c:216-218);
+        # coverage refuses a trainer Pokemon in a data form, so this spec is never simulated.
+        row = inter.row(mon.species, mon.form)
+        species = inter.personal[row]
         pid = trainer_pid(
             mon.difficulty,
             mon.level,
@@ -171,7 +226,7 @@ def build_trainer_party(trainer: Trainer, inter: IntermediateData) -> list[Pokem
         ability_slot = 1 if species["abilities"][1] != 0 and pid & 1 else 0
         moves = mon.moves
         if moves is None:
-            moves = default_moves(inter.learnsets[mon.species], mon.level)
+            moves = default_moves(inter.learnsets[row], mon.level)
         ivs = difficulty_to_ivs(mon.difficulty)
         party.append(
             PokemonSpec(

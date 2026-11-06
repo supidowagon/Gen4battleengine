@@ -17,6 +17,15 @@ def test_trainers_match_decomp_except_start(vanilla_files, decomp, symbols, char
     assert got == want
 
 
+def test_rom_trainer_format_from_battle_type(vanilla_files, decomp, symbols, charmap, decomp_inter):
+    want = json.loads((decomp_inter / "trainers.json").read_text("utf-8"))
+    rows = read_trainers(
+        vanilla_files, decomp, symbols, charmap, [t["start_condition"] for t in want]
+    )
+    assert sum(t["format"] == "double" for t in rows) == 28
+    assert [t["format"] for t in rows] == [t["format"] for t in want]
+
+
 def test_roark(vanilla_files, decomp, symbols, charmap):
     t = read_trainers(vanilla_files, decomp, symbols, charmap, ["none"] * 928)[246]
     assert (t["name"], t["class_id"], t["ai_flags"], t["items"]) == ("Roark", 62, 7, [17, 17])

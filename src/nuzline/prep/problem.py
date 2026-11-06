@@ -11,6 +11,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from nuzline.data.forms import personal_row
 from nuzline.data.learnsets import Learnsets
 from nuzline.data.spec import PokemonSpec
 from nuzline.data.tables import Names, Tables
@@ -90,10 +91,11 @@ def _ability_refusal(tables: Tables, spec: PokemonSpec) -> str | None:
     """Why the engine or the AI refuses ``spec``'s ability, or None."""
     from nuzline.ai.policy import player_ability_refusal
 
-    ability = AbilityId(int(np.asarray(tables.species_abilities)[spec.species, spec.ability_slot]))
+    row = personal_row(tables, spec.species, spec.form)
+    ability = AbilityId(int(np.asarray(tables.species_abilities)[row, spec.ability_slot]))
     if IMPLEMENTED_ABILITIES.get(ability, Support.NONE) == Support.NONE:
         return "ability not implemented"
-    decomp = int(np.asarray(tables.species_abilities_decomp)[spec.species][spec.ability_slot])
+    decomp = int(np.asarray(tables.species_abilities_decomp)[row][spec.ability_slot])
     return player_ability_refusal(decomp)
 
 
@@ -120,7 +122,9 @@ def usable_pool(
         spec = cand.spec
         why: list[str] = []
         if (r := _ability_refusal(tables, spec)) is not None:
-            ability = names.ability_names[names.species_abilities(spec.species)[spec.ability_slot]]
+            ability = names.ability_names[
+                names.species_abilities(spec.species, spec.form)[spec.ability_slot]
+            ]
             why.append(f"{ability} ({r})")
         for move in spec.moves:
             if move and (r := _move_refusal(tables, move)) is not None:
@@ -203,7 +207,8 @@ def levelled_moves(
         spec = cand.spec
         seen = set(spec.moves)
         learned: list[tuple[int, int]] = []
-        for level, move in sorted(learnsets.level_up(spec.species), key=lambda p: p[0]):
+        level_up = learnsets.level_up(spec.species, spec.form)
+        for level, move in sorted(level_up, key=lambda p: p[0]):
             if not spec.level - cand.candies < level <= cap or move in seen:
                 continue
             seen.add(move)

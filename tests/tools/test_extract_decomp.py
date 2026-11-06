@@ -1,13 +1,24 @@
 import json
+from collections import Counter
 from pathlib import Path
 
 import pytest
 
 from tools.extract_decomp import (
+    FORMS_H,
+    ExtractError,
+    _form_counts,
+    _tutor_indices,
     extract_charmap,
+    extract_egg_moves,
+    extract_evolutions,
     extract_exp_tables,
+    extract_forms,
     extract_species,
     extract_static,
+    extract_tutor_learnsets,
+    extract_tutor_moves,
+    species_form_rows,
 )
 
 DECOMP = Path("external/pokeplatinum")
@@ -80,6 +91,16 @@ def test_species_exp_rate():
     assert species["abra"]["exp_rate"] == 3  # EXP_RATE_MEDIUM_SLOW
 
 
+def test_exp_yield(out):
+    sp = json.loads((out / "species.json").read_text("utf-8"))
+    assert (sp[1]["exp_yield"], sp[487]["exp_yield"]) == (64, 220)  # Bulbasaur, Giratina
+
+
+def test_ai_effect_equals_effect_in_vanilla(out):
+    moves = json.loads((out / "moves.json").read_text("utf-8"))
+    assert all(m["ai_effect"] == m["effect"] for m in moves)
+
+
 def test_exp_tables():
     t = extract_exp_tables(DECOMP)
     assert len(t) == 8 and all(len(r) == 101 for r in t)
@@ -127,3 +148,103 @@ def test_tm_learnsets_match_by_tm(out):
     assert teaches("TM10") == "Hidden Power"
     assert teaches("HM08") == "Rock Climb"
     assert teaches("Potion") is None
+
+
+def test_forms_registry_order_matches_narc_index():
+    f = extract_forms(DECOMP)
+    assert [(x["species"], x["form"], x["row"]) for x in f][:3] == [
+        (386, 1, 496),
+        (386, 2, 497),
+        (386, 3, 498),
+    ]
+    assert [x["row"] for x in f] == list(range(496, 508))
+    wash = next(x for x in f if (x["species"], x["form"]) == (479, 2))
+    assert wash["row"] == 504 and wash["base_stats"] == [50, 65, 107, 105, 107, 86]
+    assert wash["name"] == "Wash"
+    sp = extract_species(DECOMP)
+    assert set(wash) - {"species", "form", "row"} == set(sp[479])
+    origin = next(x for x in f if x["row"] == 501)
+    assert origin["weight_hg"] == sp[487]["weight_hg"]  # weight from the base species
+
+
+def test_form_grid():
+    g = species_form_rows(DECOMP)
+    assert len(g) == 496 and all(len(r) == 28 for r in g)
+    assert g[479][:7] == [479, 503, 504, 505, 506, 507, -1] and g[201][27] == 201
+    assert g[201][0] == 201
+    assert g[493][17] == 493 and g[493][18] == -1 and g[1][1] == -1
+
+
+def test_form_intermediates(out):
+    forms = json.loads((out / "forms.json").read_text("utf-8"))
+    assert forms == extract_forms(DECOMP)
+    assert json.loads((out / "form_rows.json").read_text("utf-8")) == species_form_rows(DECOMP)
+    learn = json.loads((out / "learnsets.json").read_text("utf-8"))
+    tm = json.loads((out / "tm_learnsets.json").read_text("utf-8"))
+    assert sorted(map(int, learn)) == list(range(508)) == sorted(map(int, tm))
+    assert tm["504"] == _by_tm_indices("rotom/forms/wash")
+
+
+def test_evolutions():
+    ev = extract_evolutions(DECOMP)
+    assert ev["1"] == [[4, 16, 2]]  # EVO_LEVEL 16 -> Ivysaur
+    assert len(ev["133"]) == 7 and ev["133"][0] == [25, 0, 470]  # Eevee: MOSS_ROCK -> Leafeon
+    assert ev["3"] == []  # Venusaur
+
+
+def test_egg_moves():
+    assert extract_egg_moves(DECOMP)["1"][:3] == [113, 130, 219]  # Light Screen, Skull Bash, ...
+
+
+def test_static_writes_evolutions_and_egg_moves(out):
+    ev = json.loads((out / "evolutions.json").read_text("utf-8"))
+    assert len(ev) == 496 and ev["1"] == [[4, 16, 2]]
+    assert "3" not in json.loads((out / "egg_moves.json").read_text("utf-8"))
+
+
+def test_tutor_moves():
+    t = extract_tutor_moves(DECOMP)
+    assert len(t) == 38 and t[0] == {
+        "move": 291,
+        "costs": {"red": 2, "blue": 4, "yellow": 2, "green": 0},
+        "location": "route_212",
+    }
+    assert t[1]["move"] == 189 and t[1]["location"] == "survival_area"  # Mud-Slap
+    assert t[-1]["move"] == 253 and t[-1]["location"] == "snowpoint_city"  # Uproar
+    assert sorted(Counter(x["location"] for x in t).values()) == [8, 13, 17]
+
+
+def test_tutor_learnsets_rotom_and_forms():
+    tl = extract_tutor_learnsets(DECOMP)
+    assert sorted(map(int, tl)) == list(range(508))
+    assert 1 in tl["479"] and len(tl["479"]) == 9  # Rotom: Mud-Slap (index 1) among its 9
+    assert tl["504"] == tl["479"] and tl["0"] == tl["494"] == tl["495"] == []  # Wash = base list
+    assert all(i == sorted(set(i)) for i in tl.values())
+
+
+def test_unlisted_tutor_move_raises():
+    with pytest.raises(ExtractError, match="MOVE_TACKLE") as e:
+        _tutor_indices(
+            ["MOVE_MUD_SLAP", "MOVE_TACKLE"], ["MOVE_DIVE", "MOVE_MUD_SLAP"], Path("x/data.json")
+        )
+    assert "x" in str(e.value) and "data.json" in str(e.value)
+    assert _tutor_indices(["MOVE_MUD_SLAP"], ["MOVE_DIVE", "MOVE_MUD_SLAP"], Path("x")) == [1]
+
+
+def test_static_writes_tutor_files(out):
+    assert len(json.loads((out / "tutor_moves.json").read_text("utf-8"))) == 38
+    assert len(json.loads((out / "tutor_learnsets.json").read_text("utf-8"))) == 508
+
+
+@pytest.mark.parametrize("value", ["(NUM_TYPES)", "0x12", "2 // east/west", "SHELLOS_FORMS"])
+def test_form_count_that_is_not_a_decimal_raises(tmp_path, value):
+    # Final review: such a define was skipped and the species defaulted to one form.
+    (tmp_path / FORMS_H).parent.mkdir(parents=True)
+    text = f"#define UNOWN_FORM_COUNT 28\n#define SHELLOS_FORM_COUNT {value}\n"
+    (tmp_path / FORMS_H).write_text(text, "utf-8")
+    species = ["SPECIES_NONE", "SPECIES_UNOWN", "SPECIES_SHELLOS"]
+    with pytest.raises(ExtractError, match=r"forms\.h: SHELLOS_FORM_COUNT") as e:
+        _form_counts(tmp_path, species)
+    assert value in str(e.value)
+    (tmp_path / FORMS_H).write_text("#define  SHELLOS_FORM_COUNT\t2  \n", "utf-8")
+    assert _form_counts(tmp_path, species) == {2: 2}

@@ -1,7 +1,12 @@
+import json
+from pathlib import Path
+
 import pytest
 
-from nuzline.data.learnsets import load_learnsets
+from nuzline.data.learnsets import TutorMove, load_learnsets
 from nuzline.data.tables import load_names
+
+DECOMP = Path("external/pokeplatinum")
 
 
 @pytest.fixture(scope="module")
@@ -70,3 +75,43 @@ def test_tm_compatibility(names, learnsets):
     for s in ("Kricketot", "Magikarp"):
         assert not learnsets.can_learn_tm(names.species(s), tm10), s
     assert not learnsets.can_learn_tm(names.species("Furret"), names.item("Potion"))
+
+
+@pytest.mark.skipif(not DECOMP.exists(), reason="decomp not cloned")
+def test_form_rows_have_learnsets(learnsets, names):
+    wash = json.loads((DECOMP / "res/pokemon/rotom/forms/wash/data.json").read_text("utf-8"))
+    consts = (DECOMP / "generated" / "moves.txt").read_text("utf-8").split()
+    assert [m for _, m in learnsets.level_up(479, form=2)] == [
+        consts.index(n) for _, n in wash["learnset"]["by_level"]
+    ]
+    assert learnsets.can_learn_tm(479, names.item("TM17"), form=2) == (
+        "TM17" in wash["learnset"]["by_tm"]
+    )
+    assert learnsets.relearner_moves(479, 1, form=2) == learnsets.relearner_moves(479, 1)
+    with pytest.raises(ValueError, match="species 479 has no form 6"):
+        learnsets.level_up(479, form=6)
+
+
+def test_learnsets_evolutions_and_egg_moves(learnsets):
+    assert learnsets.evolutions(1) == ((4, 16, 2),)
+    assert learnsets.evolutions(3) == ()  # Venusaur
+    assert learnsets.egg_moves(1)[:3] == (113, 130, 219) and learnsets.egg_moves(3) == ()
+
+
+@pytest.mark.parametrize("species", [-1, 496, 10_000])
+def test_evolutions_and_egg_moves_check_the_species_range(learnsets, species):
+    # Final review: evolutions raised a bare KeyError, egg_moves returned () for any id.
+    for lookup in (learnsets.evolutions, learnsets.egg_moves):
+        with pytest.raises(ValueError, match=f"species {species} out of range"):
+            lookup(species)
+    assert learnsets.evolutions(0) == () and learnsets.egg_moves(0) == ()  # SPECIES_NONE
+    assert learnsets.evolutions(495) == () and learnsets.egg_moves(495) == ()  # Arceus
+
+
+def test_can_learn_tutor(learnsets):
+    assert learnsets.can_learn_tutor(479, 189) is True  # Rotom, Mud-Slap
+    assert learnsets.can_learn_tutor(479, 291) is False  # Rotom, Dive
+    assert learnsets.can_learn_tutor(479, 189, form=2) is True  # Rotom-Wash
+    assert learnsets.tutor_moves()[0] == TutorMove(291, 2, 4, 2, 0, "route_212")
+    assert len(learnsets.tutor_moves()) == 38
+    assert learnsets.can_learn_tutor(479, 1) is False  # a move no tutor teaches
