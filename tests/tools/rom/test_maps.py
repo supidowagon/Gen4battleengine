@@ -212,19 +212,9 @@ def test_vanilla_unresolved_operands_pinned(vanilla_files, decomp, symbols):
     ]
 
 
-def test_kaizo_map_headers_refused(kaizo_files, decomp, symbols):
-    from tools.rom.readers import ReaderError
-    from tools.rom.readers.maps import trainer_maps
-
-    with pytest.raises(ReaderError, match=r"JAK7.*sMapHeaders.*debug/cb_edit/d_test\.narc.*K2b"):
-        trainer_start_conditions(kaizo_files, decomp, symbols)
-    with pytest.raises(ReaderError, match="d_test"):
-        trainer_maps(kaizo_files, decomp, symbols, 928)
-
-
 def test_kaizo_unresolved_operands(kaizo_files, table):
-    # The walk over the Kaizo scripts alone (its map headers are not read in K1): member
-    # 136 (Veilstone City) adds a fully unresolved site to vanilla's two.
+    # The walk over the Kaizo scripts alone (test_kaizo_rom.py walks them from the map
+    # headers): member 136 (Veilstone City) adds a fully unresolved site to vanilla's two.
     from tools.rom.readers.maps import SCRIPTS_NARC
 
     scripts = kaizo_files.narc(SCRIPTS_NARC)

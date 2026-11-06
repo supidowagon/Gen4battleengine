@@ -571,3 +571,57 @@ module = "overlay16"
 symbol = "sTrainerClassPrizeMul"
 status = "unknown"
 note = ""
+
+# Changed members of the battle script NARCs (K2b Ruling 13): narc as RomFiles.paths()
+# spells it, index = member (be_seq: battle effect id).  status: modelled | irrelevant |
+# unknown.  An entry naming an unchanged member is an error (tools.rom.diff
+# load_member_classification); extract_rom --game kaizo appends any missing one as unknown.
+# battle/tr_ai/tr_ai_seq.narc is unchanged.
+
+[[member]]
+narc = "battle/skill/be_seq.narc"
+index = 48
+status = "unknown"
+note = "vanilla effect 48 (effect_script_0048.s: 1/4 recoil, Reckless; Take Down, Submission); patched: same commands with a different recoil subscript id (0x0E -> 0x8A in the side-effect flags). Kaizo users: Hyper Beam, Outrage, Superpower, Hydro Cannon, Giga Impact, Draco Meteor. Not transcribed."
+
+[[member]]
+narc = "battle/skill/be_seq.narc"
+index = 88
+status = "unknown"
+note = "vanilla effect 88 (effect_script_0088.s: Psywave damage); patched: byte-identical to the patched member 104 (a multi-hit script). Kaizo users: Triple Axel (slot 149), Fury Cutter. Not transcribed."
+
+[[member]]
+narc = "battle/skill/be_seq.narc"
+index = 104
+status = "unknown"
+note = "vanilla effect 104 (effect_script_0104.s: Triple Kick, SetMultiHit 3 with +10 power per hit); patched: 64 bytes, other operands. Kaizo users: Triple Kick, Rock Wrecker (slot 439). Not transcribed."
+
+[[member]]
+narc = "battle/skill/be_seq.narc"
+index = 141
+status = "unknown"
+note = "vanilla effect 141 (effect_script_0141.s: plain CalcCrit/CalcDamage, no vanilla user); patched: 44 bytes, extra commands before the damage. Kaizo user: Hurricane (slot 140). Not transcribed."
+
+[[member]]
+narc = "battle/skill/be_seq.narc"
+index = 182
+status = "unknown"
+note = "vanilla effect 182 (effect_script_0182.s: Superpower, user Atk/Def -1); patched: the vanilla effect 48 recoil script (1/4 recoil, Reckless). Kaizo users: Take Down, Close Combat, Brave Bird. Not transcribed."
+
+[[member]]
+narc = "battle/skill/sub_seq.narc"
+index = 238
+status = "unknown"
+note = "vanilla subscript_gravity_end (sub_seq.order line 239, 28 bytes); patched: 324 bytes. Gravity is set by overrides in K2b (Ruling 8); what the patched end script does is not transcribed."
+
+[[member]]
+narc = "battle/skill/sub_seq.narc"
+index = 251
+status = "unknown"
+note = "vanilla subscript_trick_room_end (sub_seq.order line 252, 28 bytes); patched: 136 bytes. Kaizo maps with weather 18 start Trick Room (maps.weather_switch_conditions); what the patched end script does is not transcribed."
+
+[[member]]
+narc = "battle/skill/sub_seq.narc"
+index = 297
+status = "unknown"
+note = "new member (vanilla has 297). The patched field-weather switch (BattleSystem_TriggerEffectOnSwitch) runs it for map weather 12, which no Kaizo map header uses; other references not scanned. Not transcribed."

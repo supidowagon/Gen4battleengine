@@ -34,20 +34,40 @@ SPECIES_MASK = (1 << FORM_SHIFT) - 1
 MAX_LEVEL = 100  # MAX_POKEMON_LEVEL, include/constants/pokemon.h:22
 BATTLE_TYPE_DOUBLES = 1 << 1  # include/constants/battle.h:27
 GENDER_SYMBOL = "sTrainerClassGender"  # u8 per class, src/trainer_data.c:9,166
+LAYOUTS = ("vanilla", "kaizo")
+# Kaizo's override byte (K2b Ruling 6, spec 5.4: the sheet's "Ability Number"): flags, 16
+# forces ability slot 0, 32 slot 1, 2 female. The ROM holds 0, 2, 16, 32 and one 18 (16|2).
+OVERRIDE_FEMALE, OVERRIDE_SLOT_0, OVERRIDE_SLOT_1 = 2, 16, 32
+OVERRIDE_BITS = OVERRIDE_FEMALE | OVERRIDE_SLOT_0 | OVERRIDE_SLOT_1
 
 
-def party_bytes(member: bytes, trainer_id: int, data_type: int, party_size: int) -> bytes:
+def kaizo_party_fields(iv_scale: int, where: str) -> dict[str, int]:
+    """Kaizo's reading of vanilla's ``u16 ivScale`` (``include/struct_defs/trainer_data.h:35``):
+    ``u8 difficulty`` (low byte) + ``u8 ability_override`` (high byte), K2b Ruling 6. An
+    override with a bit outside ``OVERRIDE_BITS``, or forcing both ability slots, is not
+    one the sheet explains and raises."""
+    override = iv_scale >> 8
+    if override & ~OVERRIDE_BITS or (override & OVERRIDE_SLOT_0 and override & OVERRIDE_SLOT_1):
+        raise ReaderError(f"{where}: ability override byte {override:#x} is not 2/16/32 flags")
+    return {"difficulty": iv_scale & 0xFF, "ability_override": override}
+
+
+def party_bytes(
+    member: bytes, trainer_id: int, data_type: int, party_size: int, *, unpadded: bool = False
+) -> bytes:
     """The mon records of one ``trpoke.narc`` member, without its padding.
 
     The member is ``round_up_4(party_size * MON_SIZES[data_type])`` bytes (measured on
     vanilla: the packer pads to 4), every padding byte zero; a party of 0 is an 8-byte
-    all-zero placeholder (trainer 0). Any other size or a non-zero padding byte raises.
+    all-zero placeholder (trainer 0). With ``unpadded`` (the Kaizo layout: 868 of its 928
+    members are exactly their records, the other 60 padded as vanilla's) the unpadded size
+    is accepted too. Any other size or a non-zero padding byte raises.
     """
     if not 0 <= data_type < len(MON_SIZES):
         raise ReaderError(f"trainer {trainer_id}: unknown data type {data_type}")
     used = party_size * MON_SIZES[data_type]
     want = (used + 3) & ~3 if party_size else 8
-    if len(member) != want:
+    if len(member) != want and not (unpadded and party_size and len(member) == used):
         raise ReaderError(
             f"{TRPOKE_NARC} trainer {trainer_id}: expected {want} bytes, got {len(member)} "
             f"(party {party_size}, data type {data_type})"
@@ -67,13 +87,21 @@ def read_trainers(
     symbols: SymbolMap,
     charmap: dict[int, str],
     start_conditions: list[str],
+    *,
+    layout: str = "vanilla",
 ) -> list[dict]:
     """``trainers.json`` rows. ``start_conditions[id]`` is supplied by the caller.
 
     ``format`` is the header's ``battleType``, overridden with ``opponent_2`` and
     ``partner`` by the battle structures of the map scripts (``rom_battle_structures``,
-    as ``extract_decomp.extract_trainers`` does). Vanilla only: the map headers are read
-    from ``sMapHeaders`` (``maps.require_vanilla_map_headers``)."""
+    as ``extract_decomp.extract_trainers`` does; the map headers come from
+    ``maps.map_header_rows``, per game code).
+
+    ``layout`` is the party record's: ``"vanilla"`` keeps ``ivScale`` whole as
+    ``difficulty``; ``"kaizo"`` splits it into ``difficulty`` and ``ability_override``
+    (``kaizo_party_fields``)."""
+    if layout not in LAYOUTS:
+        raise ValueError(f"unknown trainer layout {layout!r}; expected one of {LAYOUTS}")
     ids = _constants(decomp, "trainers", "TRAINER_")
     classes = _constants(decomp, "trainer_classes", "TRAINER_CLASS_")
     species_n = len(_constants(decomp, "species", "SPECIES_"))
@@ -118,7 +146,7 @@ def read_trainers(
         for i, it in enumerate(bag):
             if it >= item_n:
                 raise ReaderError(f"{TRDATA_NARC} member {tid} offset {4 + 2 * i}: item {it}")
-        body = party_bytes(member, tid, data_type, size)
+        body = party_bytes(member, tid, data_type, size, unpadded=layout == "kaizo")
         rec = MON_SIZES[data_type]
         party = []
         for k in range(size):
@@ -143,18 +171,13 @@ def read_trainers(
                 raise ReaderError(f"{where}: item or move out of range")
             if level > MAX_LEVEL:
                 raise ReaderError(f"{where}: level {level} exceeds {MAX_LEVEL}")
-            # ivScale ("difficulty") is left unbounded: on Kaizo it is u8 difficulty + u8
-            # ability override (K2b Ruling 6), and 113 Kaizo party mons exceed 255.
-            party.append(
-                {
-                    "species": species,
-                    "level": level,
-                    "difficulty": iv,
-                    "moves": moves,
-                    "item": item,
-                    "form": sp >> FORM_SHIFT,
-                }
-            )
+            # Vanilla's ivScale ("difficulty") is left unbounded (one vanilla mon exceeds
+            # 255); Kaizo splits it (K2b Ruling 6).
+            mon = {"species": species, "level": level, "difficulty": iv}
+            if layout == "kaizo":
+                mon.update(kaizo_party_fields(iv, where))
+            mon.update({"moves": moves, "item": item, "form": sp >> FORM_SHIFT})
+            party.append(mon)
         out.append(
             {
                 "id": tid,

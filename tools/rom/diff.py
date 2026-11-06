@@ -702,7 +702,8 @@ def _module_order(module: str) -> tuple[int, int]:
 
 
 def load_classification(path: Path) -> dict[tuple[str, str], tuple[str, str]]:
-    """``(module, symbol-or-range) -> (status, note)`` from the ``[[code]]`` tables."""
+    """``(module, symbol-or-range) -> (status, note)`` from the ``[[code]]`` tables;
+    ``[[member]]`` tables are ``load_member_classification``'s."""
     with Path(path).open("rb") as f:
         data = tomllib.load(f)
     out: dict[tuple[str, str], tuple[str, str]] = {}
@@ -719,6 +720,68 @@ def load_classification(path: Path) -> dict[tuple[str, str], tuple[str, str]]:
         if key in out:
             raise ValueError(f"{path}: duplicate entry {key[0]} {key[1]}")
         out[key] = (status, note)
+    return out
+
+
+# The battle script NARCs whose changed members are classified one by one (K2b Ruling 13;
+# platinum.us/filesys.csv:180,181,284): be_seq member = battle effect id.
+SCRIPT_NARCS = (
+    "battle/skill/be_seq.narc",
+    "battle/skill/sub_seq.narc",
+    "battle/tr_ai/tr_ai_seq.narc",
+)
+
+
+def changed_members(diff: RomDiff, path: str) -> list[int]:
+    """The member indices of NARC ``path`` that ``diff`` found changed (bytes differ, or
+    the member exists on one side only: ``_files``), ``[]`` when the file is unchanged.
+    A NARC only one ROM has raises ``ValueError``: it has no members to compare."""
+    for f in diff.files:
+        if f.path == path:
+            if f.status != "changed" or f.member_counts is None:
+                raise ValueError(f"{path}: {f.status}, not a NARC present in both ROMs")
+            return list(f.members_changed)
+    return []
+
+
+def changed_scripts(diff: RomDiff) -> dict[str, list[int]]:
+    """``changed_scripts.json``: each ``SCRIPT_NARCS`` path -> its changed members."""
+    return {path: changed_members(diff, path) for path in SCRIPT_NARCS}
+
+
+def load_member_classification(
+    path: Path, changed: dict[str, list[int]]
+) -> dict[tuple[str, int], tuple[str, str]]:
+    """``(narc, index) -> (status, note)`` for every member in ``changed``, from the
+    ``[[member]] {narc, index, status, note}`` tables of ``path`` (K2b Ruling 13), with
+    K1's rules: an unknown status or a duplicate raises, an entry naming a member not in
+    ``changed`` is stale and raises, and a changed member with no entry reads as
+    ``("unknown", "")``."""
+    with Path(path).open("rb") as f:
+        data = tomllib.load(f)
+    want = {(narc, i) for narc, ids in changed.items() for i in ids}
+    out: dict[tuple[str, int], tuple[str, str]] = {}
+    stale = []
+    for entry in data.get("member", []):
+        try:
+            key = (entry["narc"], entry["index"])
+            status, note = entry["status"], entry.get("note", "")
+        except KeyError as e:
+            raise ValueError(f"{path}: [[member]] entry {entry} lacks {e}") from e
+        label = f"{key[0]}#{key[1]}"
+        if status not in STATUSES:
+            raise ValueError(
+                f"{path}: {label}: unknown status {status!r}; expected one of {STATUSES}"
+            )
+        if key in out:
+            raise ValueError(f"{path}: duplicate entry {label}")
+        if key not in want:
+            stale.append(label)
+        out[key] = (status, note)
+    if stale:
+        raise ValueError(f"{path}: {', '.join(stale)}: stale (member not changed)")
+    for key in sorted(want - set(out)):
+        out[key] = ("unknown", "")
     return out
 
 

@@ -8,7 +8,9 @@ pytest.importorskip("ndspy")
 
 from tools.extract_decomp import extract_static, extract_trainers
 from tools.extract_rom import (
+    CHANGED_SCRIPTS_FILE,
     REUSE_BANKS,
+    ROM_FILES,
     UNRESOLVED_FILE,
     check_reuse_names,
     extract,
@@ -46,10 +48,18 @@ def test_vanilla_round_trip(rom_inputs, decomp, symbols, tmp_path, capsys):
     assert sorted(p.name for p in tmp_path.iterdir()) == ["d", "r"]  # no staging dir left
 
 
-def test_kaizo_refused_and_nothing_written(kaizo_inputs, decomp, symbols, tmp_path):
-    with pytest.raises(RomInputError, match="K2b"):
-        extract("kaizo", tmp_path / "k", decomp, DEFAULT_MAP, kaizo_inputs)
-    assert sorted(p.name for p in tmp_path.iterdir()) == []
+def test_kaizo_extract_writes_patched_data(kaizo_rom_dir):
+    # The K1 refusal is gone (K2b Task 8): the Kaizo ROM's own tables are written.
+    names = {p.name for p in kaizo_rom_dir.glob("*.json")}
+    assert {f"{n}.json" for n in ROM_FILES} | {CHANGED_SCRIPTS_FILE, UNRESOLVED_FILE} <= names
+    sources = _json(kaizo_rom_dir / "rom_sources.json")
+    assert sources["trainers.json"] == "rom" and sources[CHANGED_SCRIPTS_FILE] == "rom diff"
+    roark = _json(kaizo_rom_dir / "trainers.json")[246]
+    assert [m["species"] for m in roark["party"]] == [438, 345, 443, 222, 213, 408]
+    unresolved = _json(kaizo_rom_dir / UNRESOLVED_FILE)
+    assert (136, 909, "VAR_0x8004") in [
+        (u["member"], u["offset"], u["variable_name"]) for u in unresolved
+    ]
 
 
 def test_existing_out_files_kept(rom_inputs, decomp, symbols, tmp_path):
@@ -68,7 +78,7 @@ def test_failure_leaves_out_untouched(rom_inputs, decomp, symbols, tmp_path):
 
 def test_cli_default_out():
     assert parse_args(["--game", "vanilla"]).out.as_posix().endswith("data/intermediate")
-    assert parse_args(["--game", "kaizo"]).out.as_posix().endswith("data/intermediate_kaizo")
+    assert parse_args(["--game", "kaizo"]).out.as_posix().endswith("data/intermediate_kaizo/rom")
     assert parse_args(["--game", "vanilla", "--out", "x"]).out.as_posix() == "x"
     with pytest.raises(SystemExit) as e:
         parse_args(["--game", "emerald"])

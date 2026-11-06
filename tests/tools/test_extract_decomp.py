@@ -8,6 +8,8 @@ from tools.extract_decomp import (
     FORMS_H,
     ExtractError,
     _form_counts,
+    _start_condition,
+    _start_condition_overrides,
     _tutor_indices,
     extract_charmap,
     extract_egg_moves,
@@ -266,3 +268,48 @@ def test_decomp_lists():
     assert list(lists) == ["sound", "punch"]
     assert 4 in lists["punch"] and len(lists["punch"]) == 15 and len(lists["sound"]) == 12
     assert lists["sound"][:2] == [45, 46]  # Growl, Roar: source order
+
+
+def _write(tmp_path, text, name="sc.json"):
+    p = tmp_path / name
+    p.write_text(text, encoding="utf-8")
+    return p
+
+
+def test_start_condition_names_checked(tmp_path):
+    p = _write(tmp_path, '{"246": {"trainer": "Byron", "condition": "none"}}')
+    with pytest.raises(ExtractError, match="id 246 is Roark, not Byron"):
+        _start_condition_overrides(p, {246: "Roark"}.__getitem__)
+    p = _write(tmp_path, '{"999": {"trainer": "Roark", "condition": "none"}}', "b.json")
+    with pytest.raises(ExtractError, match="not a trainer id"):
+        _start_condition_overrides(p, {246: "Roark"}.__getitem__)
+    with pytest.raises(ExtractError, match="not a trainer id"):
+        _start_condition_overrides(p, ["Roark"].__getitem__)  # a list raises IndexError
+
+
+def test_start_condition_overrides_keyed_by_id(tmp_path):
+    # Kaizo ROM names repeat ("Grunt"): an override applies to its id only.
+    names = {10: "Grunt", 11: "Grunt"}
+    p = _write(tmp_path, '{"comment": ["x"], "10": {"trainer": "Grunt", "condition": "rain"}}')
+    fixed = _start_condition_overrides(p, names.__getitem__)
+    assert fixed == {10: "rain"}
+    assert _start_condition(10, "Grunt", {"rain", "none"}, fixed, p) == "rain"
+    assert _start_condition(11, "Grunt", {"none"}, fixed, p) == "none"
+    with pytest.raises(ExtractError, match=r"Grunt \(id 11\) can start with any of.*sc\.json"):
+        _start_condition(11, "Grunt", {"rain", "none"}, fixed, p)
+    with pytest.raises(ExtractError, match=r"sc\.json: Grunt is 'rain' but the maps give 'sun'"):
+        _start_condition(10, "Grunt", {"sun"}, fixed, p)
+
+
+def test_unknown_start_condition_only_where_allowed(tmp_path):
+    from tools.extract_decomp import START_CONDITIONS, UNKNOWN_CONDITION
+
+    p = _write(tmp_path, '{"10": {"trainer": "Grunt", "condition": "unknown"}}')
+    with pytest.raises(ExtractError, match="unknown start condition 'unknown'"):
+        _start_condition_overrides(p, {10: "Grunt"}.__getitem__)
+    fixed = _start_condition_overrides(
+        p, {10: "Grunt"}.__getitem__, (*START_CONDITIONS, UNKNOWN_CONDITION)
+    )
+    assert _start_condition(10, "Grunt", {"rain", "hail"}, fixed, p) == "unknown"
+    with pytest.raises(ExtractError, match="'unknown' but the maps give 'rain'"):
+        _start_condition(10, "Grunt", {"rain"}, fixed, p)

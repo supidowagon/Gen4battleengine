@@ -29,6 +29,7 @@ import csv
 import json
 import math
 import re
+from collections.abc import Callable
 from pathlib import Path
 
 from tools.battle_scripts import (
@@ -829,6 +830,10 @@ WEATHER_CONDITION = {
     "OVERWORLD_WEATHER_TRICK_ROOM": "trick_room",
 }
 START_CONDITIONS = ("none", "rain", "hail", "sandstorm", "sun", "fog")
+# A Kaizo override for a trainer the evidence does not settle (data/kaizo/start_conditions.json):
+# the trainer's maps give several conditions and the sheet and PKCalc do not decide between
+# them. It is written to trainers.json as is, so no consumer can mistake it for a condition.
+UNKNOWN_CONDITION = "unknown"
 
 # Map-script lines whose TRAINER_* operands start a battle on the map that owns the
 # script. SetVar feeds the `StartTrainerBattle VAR_...` form.
@@ -1082,40 +1087,53 @@ def _placed_enemies(
     return out
 
 
-def _start_condition_overrides(path: Path, trainers: list[str]) -> dict[str, str]:
-    """Read ``{trainer_id: {"trainer": TRAINER_*, "condition": ...}}`` and return
-    TRAINER_* -> condition. Each entry's constant must be the one at its id in
-    ``generated/trainers.txt``, so an id drift fails instead of moving an override."""
+def _start_condition_overrides(
+    path: Path, name_at: Callable[[int], str], allowed: tuple[str, ...] = START_CONDITIONS
+) -> dict[int, str]:
+    """Read ``{trainer_id: {"trainer": name, "condition": ...}}`` and return trainer id ->
+    condition. Each entry's name must be ``name_at(id)``, so an id drift fails instead of
+    moving an override. ``name_at`` raising ``KeyError`` or ``IndexError`` means the key is
+    not a trainer id. Vanilla passes the ``TRAINER_*`` list's ``__getitem__``; Kaizo the
+    ROM trainer-name bank's (plan Ruling 8), whose names repeat, hence the id keys. A
+    condition outside ``allowed`` raises (Kaizo also allows ``UNKNOWN_CONDITION``)."""
     out = {}
     for key, entry in _load_json(path).items():
         if key == "comment":
             continue
-        if not key.isdecimal() or int(key) >= len(trainers):
-            raise ExtractError(f"{path}: {key!r} is not a trainer id")
+        try:
+            if not key.isdecimal():
+                raise KeyError(key)
+            name = name_at(int(key))
+        except (KeyError, IndexError):
+            raise ExtractError(f"{path}: {key!r} is not a trainer id") from None
         if not isinstance(entry, dict) or set(entry) != {"trainer", "condition"}:
             raise ExtractError(f"{path}: entry {key} must be {{trainer, condition}}")
-        const, cond = entry["trainer"], entry["condition"]
-        if trainers[int(key)] != const:
-            raise ExtractError(f"{path}: id {key} is {trainers[int(key)]}, not {const}")
-        if cond not in START_CONDITIONS:
-            raise ExtractError(f"{path}: {key} ({const}) has unknown start condition {cond!r}")
-        out[const] = cond
+        given, cond = entry["trainer"], entry["condition"]
+        if name != given:
+            raise ExtractError(f"{path}: id {key} is {name}, not {given}")
+        if cond not in allowed:
+            raise ExtractError(f"{path}: {key} ({given}) has unknown start condition {cond!r}")
+        out[int(key)] = cond
     return out
 
 
-def _start_condition(const: str, derived: set[str], overrides: dict[str, str]) -> str:
+def _start_condition(
+    tid: int, label: str, derived: set[str], overrides: dict[int, str], path: Path
+) -> str:
+    """Trainer ``tid``'s start condition: its override from ``path`` if any (which may not
+    contradict a single derived condition), else the one derived condition, else "none".
+    ``label`` (the ``TRAINER_*`` constant or the Kaizo ROM name) names it in errors."""
     if not derived <= set(START_CONDITIONS):
-        raise ExtractError(f"{const} starts under {sorted(derived)}; not a supported condition")
-    if const in overrides:
-        if len(derived) == 1 and derived != {overrides[const]}:
+        raise ExtractError(f"{label} starts under {sorted(derived)}; not a supported condition")
+    if tid in overrides:
+        if len(derived) == 1 and derived != {overrides[tid]}:
             raise ExtractError(
-                f"{START_CONDITIONS_FILE}: {const} is {overrides[const]!r} but the decomp "
-                f"gives {next(iter(derived))!r}"
+                f"{path}: {label} is {overrides[tid]!r} but the maps give {next(iter(derived))!r}"
             )
-        return overrides[const]
+        return overrides[tid]
     if len(derived) > 1:
         raise ExtractError(
-            f"{const} can start with any of {sorted(derived)}; list it in {START_CONDITIONS_FILE}"
+            f"{label} (id {tid}) can start with any of {sorted(derived)}; list it in {path}"
         )
     return next(iter(derived)) if derived else "none"
 
@@ -1202,7 +1220,7 @@ def extract_trainers(decomp_root: Path, out_dir: Path) -> None:
     for header, h in headers.items():
         if h["weather"] not in weather:
             raise ExtractError(f"{header}: unknown weather {h['weather']!r}")
-    overrides = _start_condition_overrides(START_CONDITIONS_FILE, trainers)
+    overrides = _start_condition_overrides(START_CONDITIONS_FILE, trainers.__getitem__)
     unknown = sorted(set(where) - set(trainers))
     if unknown:
         raise ExtractError(f"maps name unknown trainers {unknown}")
@@ -1261,7 +1279,9 @@ def extract_trainers(decomp_root: Path, out_dir: Path) -> None:
                 **structure_fields(
                     structures.get(tid), "double" if d["double_battle"] else "single"
                 ),
-                "start_condition": _start_condition(const, derived, overrides),
+                "start_condition": _start_condition(
+                    tid, const, derived, overrides, START_CONDITIONS_FILE
+                ),
             }
         )
     _write(out_dir / "trainers.json", out)

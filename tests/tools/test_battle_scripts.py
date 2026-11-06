@@ -13,6 +13,7 @@ from tools.battle_scripts import (
     battle_structures,
     partner_variants,
     script_enemies,
+    structure_fields,
     var_ids,
 )
 from tools.extract_decomp import _script_file_ops
@@ -273,6 +274,37 @@ def test_tag_battle_partner_var_without_a_call_raises():
     ops = [Op("SetVar", (V, 3)), Op("StartTagBattle", (V, 40, 41))]
     with pytest.raises(ValueError, match="Call"):
         battle_structures({"A": ops}, {})
+
+
+def test_tag_battle_partner_var_without_a_call_unknown_when_allowed():
+    # Kaizo's Veilstone City tag battle reaches its partner SetVar through GoTos (K2b
+    # Task 8): with unknown_partner the pair is kept and the partner is None (not known).
+    ops = [Op("SetVar", (V, 3)), Op("StartTagBattle", (V, 40, 41))]
+    got = battle_structures({"A": ops}, {}, unknown_partner=True)
+    assert got == {40: BattleStructure("multi", 41, None), 41: BattleStructure("multi", 40, None)}
+    assert structure_fields(got[40], "single") == {
+        "format": "multi",
+        "opponent_2": 41,
+        "partner": None,
+    }
+
+
+def test_conflicting_partner_claims_unknown_when_allowed():
+    # Kaizo Lake Verity (map 312): one tag battle per partner on a walking-partner map.
+    ops = [
+        Op("SetHasPartner"),
+        Op("SetVar", (PARTNER_VAR, 800)),
+        Op("SetVar", (PARTNER_VAR, 801)),
+        Op("StartTagBattle", (800, 40, 41)),
+        Op("StartTagBattle", (801, 40, 41)),
+    ]
+    with pytest.raises(ValueError, match=r"partner ids \[800, 801\], not one"):
+        battle_structures({"A": ops}, {"A": {40, 41}})
+    got = battle_structures({"A": ops}, {"A": {40, 41}}, unknown_partner=True)
+    assert got == {40: BattleStructure("multi", 41, None), 41: BattleStructure("multi", 40, None)}
+    pairs = [Op("StartTrainerBattle", (40, 41)), Op("StartTrainerBattle", (40, 42))]
+    with pytest.raises(ValueError, match="trainer 40 is claimed"):
+        battle_structures({"A": pairs}, {}, unknown_partner=True)
 
 
 def test_walking_partner_map():

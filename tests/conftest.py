@@ -95,6 +95,51 @@ def docs(tmp_path_factory):
     return extract_kaizo_docs(path, moves, abilities, tmp_path_factory.mktemp("docs"))
 
 
+@pytest.fixture(scope="session")
+def kaizo_rom_dir(tmp_path_factory):
+    """``extract_rom.extract("kaizo", ...)`` output, written once per session.
+
+    Skips when ``load_inputs()`` raises ``RomInputError``, the vanilla ROM or Kaizo patch
+    is not set or absent, ndspy is not importable, or the decomp or its linker map is
+    missing. ``data/kaizo/rom_diff.toml`` is only read (``extract`` never appends to it).
+    """
+    from tools.rom.inputs import REPO_ROOT, RomInputError, load_inputs
+
+    try:
+        inputs = load_inputs()
+    except RomInputError as e:
+        pytest.skip(str(e))
+    if not inputs.vanilla_rom.exists():
+        pytest.skip(f"configured vanilla ROM {inputs.vanilla_rom} is absent")
+    if inputs.kaizo_patch is None or not inputs.kaizo_patch.exists():
+        pytest.skip("no kaizo_patch configured")
+    pytest.importorskip("ndspy")
+    from tools.rom.symbols import DEFAULT_MAP
+
+    decomp = REPO_ROOT / "external" / "pokeplatinum"
+    if not decomp.exists():
+        pytest.skip("decomp not cloned")
+    if not DEFAULT_MAP.exists():
+        pytest.skip(f"no linker map at {DEFAULT_MAP}")
+    from tools.extract_rom import extract
+
+    out = tmp_path_factory.mktemp("kaizo_rom") / "rom"
+    extract("kaizo", out, decomp, DEFAULT_MAP, inputs)
+    return out
+
+
+@pytest.fixture(scope="session")
+def kaizo_rom_trainers(kaizo_rom_dir):
+    """The Kaizo ROM's ``trainers.json`` rows (``kaizo_rom_dir``)."""
+    return json.loads((kaizo_rom_dir / "trainers.json").read_text(encoding="utf-8"))
+
+
+@pytest.fixture(scope="session")
+def species(kaizo_rom_dir):
+    """The Kaizo ROM's ``species.json`` rows (``kaizo_rom_dir``)."""
+    return json.loads((kaizo_rom_dir / "species.json").read_text(encoding="utf-8"))
+
+
 # --- Kaizo: every fixture skips until the Kaizo tables are built (Task 15) ----------
 
 KAIZO_TABLES_DIR = GAMES[KAIZO].tables_dir

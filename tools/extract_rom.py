@@ -8,6 +8,13 @@ fresh decomp extraction (Ruling 14: the charmap is the font encoding and has no 
 reused for a non-vanilla game only when the ROM diff shows them unchanged). Outputs are
 formatted by ``extract_decomp._write``.
 
+``--game kaizo`` reads the patched ROM (``tools.rom.patch.kaizo_rom``) with every reader,
+after the ROM diff's reuse check: trainers with the Kaizo party layout (K2b Ruling 6), map
+headers from ``d_test.narc`` (Ruling 8) and start conditions settled by
+``data/kaizo/start_conditions.json``. It also writes ``changed_scripts.json`` (the changed
+members of the battle script NARCs, Ruling 13); the CLI appends an explicit ``unknown``
+``[[member]]`` entry to ``data/kaizo/rom_diff.toml`` for each changed member it lacks.
+
 Battle command operands that are variables no constant reaches on some walked script path
 (``tools.rom.readers.maps.UnresolvedOperand``) place no trainer; each is printed to stderr
 and listed in ``rom_unresolved.json`` beside the outputs, so a trainer they hide is visible
@@ -25,6 +32,7 @@ CLI: ``python -m tools.extract_rom --game vanilla|kaizo [--out DIR] [--decomp DI
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import shutil
 import sys
@@ -69,13 +77,14 @@ REUSE_BANKS = (
     "TEXT_BANK_POKEMON_TYPE_NAMES",
     "TEXT_BANK_NATURE_NAMES",
 )
-KAIZO_REFUSAL = (
-    "trainers: the Kaizo trainer layout is not confirmed (spec §5.4); Kaizo extraction lands in K2b"
-)
 UNRESOLVED_FILE = "rom_unresolved.json"
+FIELD_EFFECTS_FILE = "rom_field_effects.json"
+CHANGED_SCRIPTS_FILE = "changed_scripts.json"
+ROM_DIFF_TOML = REPO_ROOT / "data" / "kaizo" / "rom_diff.toml"
+# Raw ROM output; data/intermediate_kaizo/*.json are the resolved files (K2b Ruling 2).
 DEFAULT_OUT = {
     "vanilla": REPO_ROOT / "data" / "intermediate",
-    "kaizo": REPO_ROOT / "data" / "intermediate_kaizo",
+    "kaizo": REPO_ROOT / "data" / "intermediate_kaizo" / "rom",
 }
 
 
@@ -111,21 +120,11 @@ def reuse_violations(diff, decomp: Path) -> list[str]:
     return bad
 
 
-def _kaizo_checks(inputs: RomInputs, decomp: Path, symbols_path: Path, vanilla_files) -> None:
-    """Diff, reuse check and reader layout checks on the Kaizo ROM, then the refusal."""
+def _kaizo_checks(inputs: RomInputs, decomp: Path, symbols_path: Path, vanilla_files):
+    """The patched Kaizo ROM and its diff against vanilla, once the reuse check passes."""
     from tools.rom.diff import diff_roms
     from tools.rom.nds import RomFiles
     from tools.rom.patch import kaizo_rom
-    from tools.rom.readers.evolutions import read_evolutions
-    from tools.rom.readers.items import read_items
-    from tools.rom.readers.learnsets import read_learnsets
-    from tools.rom.readers.moves import read_moves
-    from tools.rom.readers.personal import (
-        read_exp_tables,
-        read_forms,
-        read_species,
-        read_tm_learnsets,
-    )
     from tools.rom.symbols import SymbolMap
 
     symbols = SymbolMap.from_map(symbols_path)
@@ -138,16 +137,66 @@ def _kaizo_checks(inputs: RomInputs, decomp: Path, symbols_path: Path, vanilla_f
         raise RomInputError(
             "the Kaizo ROM changes the sources of the reused tables: " + "; ".join(bad)
         )
-    charmap = extract_charmap(decomp)
-    read_species(kaizo, decomp, charmap)
-    read_exp_tables(kaizo)
-    read_learnsets(kaizo, decomp)
-    read_tm_learnsets(kaizo)
-    read_evolutions(kaizo)
-    read_forms(kaizo, decomp, charmap)
-    read_moves(kaizo, decomp, charmap)
-    read_items(kaizo, decomp, symbols, charmap)
-    raise RomInputError(KAIZO_REFUSAL)
+    return kaizo, diff
+
+
+def _member_entries(path: Path, changed: dict[str, list[int]]) -> set[tuple[str, int]]:
+    """The ``[[member]]`` keys ``path`` lists, once ``load_member_classification`` accepts
+    it against ``changed`` (an unknown status or a stale entry raises ``RomInputError``)."""
+    import tomllib
+
+    from tools.rom.diff import load_member_classification
+
+    try:
+        load_member_classification(path, changed)
+    except ValueError as e:
+        raise RomInputError(str(e)) from e
+    with Path(path).open("rb") as f:
+        return {(m["narc"], m["index"]) for m in tomllib.load(f).get("member", [])}
+
+
+def append_unknown_members(path: Path, changed: dict[str, list[int]]) -> list[tuple[str, int]]:
+    """Append an explicit ``unknown`` ``[[member]]`` entry to ``path`` for each changed
+    member it does not list (K2b Ruling 13); return those (narc, index), sorted."""
+    listed = _member_entries(path, changed)
+    missing = sorted({(n, i) for n, ids in changed.items() for i in ids} - listed)
+    if missing:
+        text = Path(path).read_text(encoding="utf-8")
+        blocks = [
+            f'[[member]]\nnarc = "{n}"\nindex = {i}\nstatus = "unknown"\nnote = ""\n'
+            for n, i in missing
+        ]
+        head = text.rstrip("\n") + "\n\n" if text.strip() else ""
+        Path(path).write_text(head + "\n".join(blocks), encoding="utf-8", newline="\n")
+    return missing
+
+
+def _report_kaizo(trainers: list[dict], effects: dict[int, dict[str, list[int]]]) -> list[dict]:
+    """Print what the Kaizo trainers leave open to stderr: each ``unknown`` start
+    condition (``data/kaizo/start_conditions.json``), each partner not evaluated
+    (``partner`` null) and the field effects map weathers start (Trick Room); return the
+    ``FIELD_EFFECTS_FILE`` rows ``{id, name, effect, map_headers}`` (the trainer's map
+    headers whose weather starts ``effect``; it may be on other maps too)."""
+    from tools.extract_decomp import UNKNOWN_CONDITION
+
+    unknown = [t["id"] for t in trainers if t["start_condition"] == UNKNOWN_CONDITION]
+    if unknown:
+        print(f"warning: start condition unknown for trainers {unknown}", file=sys.stderr)
+    partners = [t["id"] for t in trainers if t["partner"] is None]
+    if partners:
+        print(f"warning: partner not evaluated for trainers {partners}", file=sys.stderr)
+    rows = []
+    for tid, by_effect in sorted(effects.items()):
+        for effect, headers in sorted(by_effect.items()):
+            row = {"id": tid, "name": trainers[tid]["name"], "effect": effect}
+            rows.append({**row, "map_headers": headers})
+    if rows:
+        print(
+            f"note: {len(rows)} trainers fought on a map that starts a field effect "
+            f"(listed in {FIELD_EFFECTS_FILE})",
+            file=sys.stderr,
+        )
+    return rows
 
 
 def _unresolved_rows(unresolved, decomp: Path) -> list[dict]:
@@ -170,7 +219,10 @@ def _unresolved_rows(unresolved, decomp: Path) -> list[dict]:
 def extract(game: str, out: Path, decomp: Path, symbols: Path, inputs: RomInputs) -> dict[str, str]:
     """Write the intermediate files for ``game`` into ``out``; return ``rom_sources.json``.
 
-    Unresolved battle operands are printed to stderr and written to ``UNRESOLVED_FILE``."""
+    Unresolved battle operands are printed to stderr and written to ``UNRESOLVED_FILE``.
+    For Kaizo every reader reads the patched ROM, and ``CHANGED_SCRIPTS_FILE`` is written
+    from the ROM diff; ``ROM_DIFF_TOML``'s ``[[member]]`` entries are checked (a stale one
+    raises) but never written here (``main`` appends the missing ones)."""
     if game not in DEFAULT_OUT:
         raise ValueError(f"unknown game {game!r}")
     out, decomp, symbols = Path(out), Path(decomp), Path(symbols)
@@ -178,8 +230,13 @@ def extract(game: str, out: Path, decomp: Path, symbols: Path, inputs: RomInputs
     from tools.rom.nds import RomFiles
 
     vanilla_files = RomFiles.open(read_checked(inputs.vanilla_rom, VANILLA_SHA1, "sha1"))
+    rom, changed = vanilla_files, None
     if game == "kaizo":
-        _kaizo_checks(inputs, decomp, symbols, vanilla_files)
+        from tools.rom.diff import changed_scripts
+
+        rom, diff = _kaizo_checks(inputs, decomp, symbols, vanilla_files)
+        changed = changed_scripts(diff)
+        _member_entries(ROM_DIFF_TOML, changed)
 
     from tools.rom.readers.code_tables import egg_moves, tutor_learnsets, tutor_moves
     from tools.rom.readers.evolutions import read_evolutions
@@ -202,7 +259,10 @@ def extract(game: str, out: Path, decomp: Path, symbols: Path, inputs: RomInputs
     try:
         charmap = extract_charmap(decomp)
         unresolved = []
-        starts = trainer_start_conditions(vanilla_files, decomp, smap, unresolved=unresolved)
+        effects: dict[int, dict[str, list[int]]] = {}
+        starts = trainer_start_conditions(
+            rom, decomp, smap, unresolved=unresolved, field_effects=effects
+        )
         rows = _unresolved_rows(unresolved, decomp)
         for r in rows:
             print(
@@ -212,24 +272,28 @@ def extract(game: str, out: Path, decomp: Path, symbols: Path, inputs: RomInputs
                 "on no map through it",
                 file=sys.stderr,
             )
-        tutors = tutor_moves(vanilla_files, smap, decomp)
+        tutors = tutor_moves(rom, smap, decomp)
+        vanilla_rom = vanilla_files if rom is not vanilla_files else None
         tables = {
-            "species": read_species(vanilla_files, decomp, charmap),
-            "forms": read_forms(vanilla_files, decomp, charmap),
-            "moves": read_moves(vanilla_files, decomp, charmap),
-            "move_lists": read_move_lists(vanilla_files, extract_move_lists(decomp)),
-            "items": read_items(vanilla_files, decomp, smap, charmap),
-            "learnsets": read_learnsets(vanilla_files, decomp),
-            "tm_learnsets": read_tm_learnsets(vanilla_files),
-            "evolutions": read_evolutions(vanilla_files),
-            "egg_moves": {str(k): v for k, v in egg_moves(vanilla_files, smap, decomp).items()},
+            "species": read_species(rom, decomp, charmap),
+            "forms": read_forms(rom, decomp, charmap),
+            "moves": read_moves(rom, decomp, charmap),
+            "move_lists": read_move_lists(rom, extract_move_lists(decomp), vanilla_rom=vanilla_rom),
+            "items": read_items(rom, decomp, smap, charmap),
+            "learnsets": read_learnsets(rom, decomp),
+            "tm_learnsets": read_tm_learnsets(rom),
+            "evolutions": read_evolutions(rom),
+            "egg_moves": {str(k): v for k, v in egg_moves(rom, smap, decomp).items()},
             "tutor_moves": tutors,
-            "tutor_learnsets": tutor_learnsets(vanilla_files, smap, len(tutors)),
-            "exp_tables": read_exp_tables(vanilla_files),
-            "trainers": read_trainers(vanilla_files, decomp, smap, charmap, starts),
+            "tutor_learnsets": tutor_learnsets(rom, smap, len(tutors)),
+            "exp_tables": read_exp_tables(rom),
+            "trainers": read_trainers(rom, decomp, smap, charmap, starts, layout=game),
         }
         for name, data in tables.items():
             _write(stage / f"{name}.json", data)
+        if changed is not None:
+            _write(stage / CHANGED_SCRIPTS_FILE, changed)
+            _write(stage / FIELD_EFFECTS_FILE, _report_kaizo(tables["trainers"], effects))
         fresh = stage / "decomp"
         extract_static(decomp, fresh)
         for name in (*REUSED_FILES, *DECOMP_FILES):
@@ -239,9 +303,15 @@ def extract(game: str, out: Path, decomp: Path, symbols: Path, inputs: RomInputs
         sources["forms.json"] = "rom; names: decomp"
         sources["form_rows.json"] = "decomp: form registry"
         sources["evolution_methods.json"] = "decomp: generated/evolution_methods.txt"
-        sources.update(
-            {f"{n}.json": "decomp: vanilla ROM (decomp is the source)" for n in REUSED_FILES}
+        reused = (
+            "decomp: vanilla ROM (decomp is the source)"
+            if changed is None
+            else "decomp: the Kaizo ROM leaves its sources unchanged (reuse check)"
         )
+        sources.update({f"{n}.json": reused for n in REUSED_FILES})
+        if changed is not None:
+            sources[CHANGED_SCRIPTS_FILE] = "rom diff"
+            sources[FIELD_EFFECTS_FILE] = "rom: map weather through the battle weather switch"
         _write(stage / "rom_sources.json", sources)
         _write(stage / UNRESOLVED_FILE, rows)
         out.mkdir(parents=True, exist_ok=True)
@@ -272,9 +342,18 @@ def main(argv: list[str] | None = None) -> int:
     try:
         inputs = load_inputs(args.config)
         sources = extract(args.game, args.out, args.decomp, args.symbols, inputs)
+        added = []
+        if args.game == "kaizo":
+            changed = json.loads((args.out / CHANGED_SCRIPTS_FILE).read_text(encoding="utf-8"))
+            added = append_unknown_members(ROM_DIFF_TOML, changed)
     except RomInputError as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
+    if added:
+        print(
+            f"{ROM_DIFF_TOML}: appended {len(added)} unknown [[member]] entries: "
+            + ", ".join(f"{n}#{i}" for n, i in added)
+        )
     for name, src in sorted(sources.items()):
         print(f"{name}: {src}")
     return 0
