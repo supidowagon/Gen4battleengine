@@ -1,8 +1,9 @@
 """Persistent caches that make repeat runs start fast (docs/design.md §6).
 
 * The XLA compilation cache (``enable_compile_cache``): compiled executables survive
-  restarts. Its directory is keyed by the table and code versions (spec §6: "cache keys
-  include the table version").
+  restarts. Its directory is ``jax/<game>/<version>``, the version being the table and
+  code versions (spec §6: "cache keys include the table version"); each game keeps its
+  own, and pruning never reaches another game's.
 * The serialized-trace cache (``cached_export``): the traced program of a function at
   given argument shapes, dtypes and shardings is saved with ``jax.export`` and loaded by
   later runs, so they skip tracing. The file name hashes everything the program depends
@@ -26,6 +27,8 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 
 import jax
+
+from nuzline.data.games import VANILLA
 
 __all__ = [
     "cache_root",
@@ -116,11 +119,16 @@ def set_compile_cache_dir(directory: Path) -> None:
     jax.config.update("jax_persistent_cache_min_compile_time_secs", 1.0)
 
 
-def enable_compile_cache(version: str) -> Path:
-    """Enable the XLA compilation cache in ``cache_root()/"jax"/version``, deleting the
-    other versions' directories; returns it."""
-    directory = cache_root() / "jax" / version
+def enable_compile_cache(version: str, game: str = VANILLA) -> Path:
+    """Enable the XLA compilation cache in ``cache_root()/"jax"/game/version``, deleting
+    the other versions' directories of that game (never another game's) and the
+    version-named directories directly under ``jax/`` (the layout before games had
+    their own); returns it."""
+    game_dir = cache_root() / "jax" / game
+    directory = game_dir / version
+    directory.mkdir(parents=True, exist_ok=True)
     prune_other_versions(directory)
+    prune_other_versions(game_dir)  # legacy flat ``jax/<version>`` directories
     set_compile_cache_dir(directory)
     return directory
 

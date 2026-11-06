@@ -406,6 +406,7 @@ def _rank(args) -> int:
 
     from nuzline.ai.policy import UnsupportedAi
     from nuzline.data import tables as tables_module
+    from nuzline.data.games import VANILLA
     from nuzline.engine.coverage import UnsupportedMechanics, require_coverage
     from nuzline.engine.state import make_state
     from nuzline.jaxcache import code_version, enable_compile_cache, table_version
@@ -416,7 +417,7 @@ def _rank(args) -> int:
         raise ValueError("--n must be at least 1")
     _check_deaths(args)
     # Before anything compiles: JAX opens the persistent cache at the first compile.
-    enable_compile_cache(table_version(tables_module.DEFAULT) + code_version())
+    enable_compile_cache(table_version(tables_module.DEFAULT) + code_version(), VANILLA)
     tables, names, trainer, player, opp, weather = _fight(args)
     slots = protected_slots(player, names, args.protect)
     leads = (args.lead, args.opp_active)
@@ -469,6 +470,7 @@ def _solve(args) -> int:
 
     from nuzline.ai.policy import UnsupportedAi
     from nuzline.data import tables as tables_module
+    from nuzline.data.games import VANILLA
     from nuzline.engine.coverage import UnsupportedMechanics, require_coverage
     from nuzline.engine.state import make_state
     from nuzline.jaxcache import code_version, enable_compile_cache, table_version
@@ -499,7 +501,7 @@ def _solve(args) -> int:
     )
     # _fight loads the tables from tables_module.DEFAULT: the version the run records.
     tables_version = table_version(tables_module.DEFAULT)
-    enable_compile_cache(tables_version + code_version())
+    enable_compile_cache(tables_version + code_version(), VANILLA)
     tables, names, trainer, player, opp, weather = _fight(args)
     slots = protected_slots(player, names, args.protect)
     leads = (args.lead, args.opp_active)
@@ -571,6 +573,7 @@ def _prep(args) -> int:
     import jax
 
     from nuzline.data import tables as tables_module
+    from nuzline.data.games import VANILLA
     from nuzline.data.learnsets import load_learnsets
     from nuzline.data.tables import load_names, load_tables
     from nuzline.data.trainer import IntermediateData, build_trainer_party, load_trainers
@@ -603,7 +606,7 @@ def _prep(args) -> int:
     )
     tables_version = table_version(tables_module.DEFAULT)
     # Before anything compiles: JAX opens the persistent cache at the first compile.
-    enable_compile_cache(tables_version + code_version())
+    enable_compile_cache(tables_version + code_version(), VANILLA)
     trainer = resolve_trainer(
         load_trainers(INTERMEDIATE), name=args.trainer, trainer_id=args.trainer_id
     )

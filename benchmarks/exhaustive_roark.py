@@ -87,6 +87,7 @@ def main(argv: list[str] | None = None) -> int:
     from benchmarks.rank_timing import machine
     from nuzline import jaxcache
     from nuzline.data import tables as tables_module
+    from nuzline.data.games import VANILLA
     from nuzline.data.learnsets import load_learnsets
     from nuzline.data.tables import load_names, load_tables
     from nuzline.data.trainer import IntermediateData, build_trainer_party, load_trainers
@@ -111,7 +112,7 @@ def main(argv: list[str] | None = None) -> int:
     from nuzline.saves import load_save
 
     table_version = jaxcache.table_version(tables_module.DEFAULT)
-    jaxcache.enable_compile_cache(table_version + jaxcache.code_version())
+    jaxcache.enable_compile_cache(table_version + jaxcache.code_version(), VANILLA)
     tables, names = load_tables(), load_names()
     trainer = resolve_trainer(load_trainers(INTERMEDIATE), name="roark", trainer_id=None)
     cap = default_cap(trainer)
