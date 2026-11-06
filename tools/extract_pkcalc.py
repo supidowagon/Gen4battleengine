@@ -357,11 +357,17 @@ def _species(raw: dict) -> tuple[dict, dict]:
         }
         if out[pkey]["types"][1] is None:  # one type: the personal record repeats it
             out[pkey]["types"][1] = out[pkey]["types"][0]
-    by_name = {
-        raw["SPECIES"][key]["name"]: _species_key(key, raw["SPECIES"][key])[1:]
-        for key in raw["SPECIES"]
-        if raw["SPECIES"][key]["num"]
-    }
+    by_name: dict[str, tuple[int, int]] = {}
+    keys: dict[str, str] = {}
+    for key, s in raw["SPECIES"].items():
+        if not s["num"]:
+            continue
+        if s["name"] in by_name:  # forms have their own names ("Rotom-Heat")
+            raise ExtractError(
+                f"species.js {key!r}: name {s['name']!r} is also {keys[s['name']]!r}"
+            )
+        by_name[s["name"]] = _species_key(key, s)[1:]
+        keys[s["name"]] = key
     return out, by_name
 
 
@@ -499,6 +505,22 @@ def _flags(raw: dict) -> dict:
     }
 
 
+def _by_num(entries: dict, file: str) -> dict:
+    """items.js / abilities.js: ``{num: {name, aliases: [calcName], desc}}``; a num or
+    display name two entries share raises."""
+    out: dict[str, dict] = {}
+    keys: dict[object, str] = {}
+    for key, e in entries.items():
+        for clash in (("num", e["num"]), ("name", e["name"])):
+            if clash in keys:
+                raise ExtractError(
+                    f"{file} {key!r}: {clash[0]} {clash[1]!r} is also {keys[clash]!r}"
+                )
+            keys[clash] = key
+        out[str(e["num"])] = {"name": e["name"], "aliases": [e["calcName"]], "desc": e["desc"]}
+    return out
+
+
 def normalise(raw: dict, sha256: str) -> dict:
     """The ``pkcalc.json`` schema from the evaluated globals.
 
@@ -528,14 +550,8 @@ def normalise(raw: dict, sha256: str) -> dict:
         "sha256": sha256,
         "moves": moves,
         "species": species,
-        "items": {
-            str(i["num"]): {"name": i["name"], "aliases": [i["calcName"]], "desc": i["desc"]}
-            for i in raw["ITEMS"].values()
-        },
-        "abilities": {
-            str(a["num"]): {"name": a["name"], "aliases": [a["calcName"]], "desc": a["desc"]}
-            for a in raw["ABILITIES"].values()
-        },
+        "items": _by_num(raw["ITEMS"], "items.js"),
+        "abilities": _by_num(raw["ABILITIES"], "abilities.js"),
         "trainers": trainers,
         "ai_flags": _ai_flags(raw, trainers),
         **flags,
