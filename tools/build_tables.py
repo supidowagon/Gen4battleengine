@@ -43,7 +43,8 @@ Encodings:
   ``ABILITY_NONE``), next to ``species_abilities``' engine ids, so the trainer AI can
   name abilities the engine does not implement.
 
-CLI: ``uv run python -m tools.build_tables --inter data/intermediate --out data/gen4_platinum``
+CLI: ``uv run python -m tools.build_tables [--game vanilla|kaizo]`` (default vanilla: reads
+``data/intermediate``, writes ``data/gen4_platinum``)
 """
 
 from __future__ import annotations
@@ -55,6 +56,7 @@ from pathlib import Path
 
 import numpy as np
 
+from nuzline.data.games import get_game
 from nuzline.data.tables import MANIFEST_VERSION
 from nuzline.engine.ids import AbilityId, EffectId, ItemId, MoveFlag, MoveTarget, TrainerItemId
 from tools.effect_map import (
@@ -175,7 +177,7 @@ def _form_names(species: list[dict], forms: list[dict]) -> dict[str, list[str]]:
     return out
 
 
-def build_arrays(inter: Path) -> tuple[dict[str, np.ndarray], dict]:
+def build_arrays(inter: Path, game: str = "platinum_us") -> tuple[dict[str, np.ndarray], dict]:
     species_only = _load(inter, "species")
     forms = _load(inter, "forms")
     form_rows = _load(inter, "form_rows")
@@ -292,6 +294,8 @@ def build_arrays(inter: Path) -> tuple[dict[str, np.ndarray], dict]:
     }
     manifest = {
         "version": MANIFEST_VERSION,
+        # The game id (nuzline.data.games); manifest only, the npz arrays do not carry it.
+        "game": game,
         "decomp_commit": _decomp_commit(),
         "species_names": [s["name"] for s in species_only],
         # Personal row (species, then data forms; nuzline.data.forms.form_row) per
@@ -335,8 +339,8 @@ def build_arrays(inter: Path) -> tuple[dict[str, np.ndarray], dict]:
     return arrays, manifest
 
 
-def build(intermediate_dir: Path, out_dir: Path) -> None:
-    arrays, manifest = build_arrays(Path(intermediate_dir))
+def build(intermediate_dir: Path, out_dir: Path, game: str = "platinum_us") -> None:
+    arrays, manifest = build_arrays(Path(intermediate_dir), get_game(game).id)
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     # The npz carries its own version too (nuzline.data.tables.check_npz): manifest.json
@@ -349,10 +353,12 @@ def build(intermediate_dir: Path, out_dir: Path) -> None:
 
 def main(argv: list[str] | None = None) -> None:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    p.add_argument("--inter", type=Path, default=Path("data/intermediate"))
-    p.add_argument("--out", type=Path, default=Path("data/gen4_platinum"))
+    p.add_argument("--game", default="vanilla", help="vanilla or kaizo (or a full game id)")
+    p.add_argument("--inter", type=Path, help="default: the game's intermediate_dir")
+    p.add_argument("--out", type=Path, help="default: the game's tables_dir")
     args = p.parse_args(argv)
-    build(args.inter, args.out)
+    game = get_game(args.game)
+    build(args.inter or game.intermediate_dir, args.out or game.tables_dir, game.id)
 
 
 if __name__ == "__main__":
