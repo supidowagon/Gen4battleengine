@@ -2,6 +2,7 @@
 every test that needs them skips when ``data/gen4_platinum/tables.npz`` is absent."""
 
 import gc
+import json
 import sys
 from pathlib import Path
 
@@ -46,3 +47,9 @@ def tables():
 def names():
     _require_tables()
     return load_names(TABLES_DIR)
+
+
+@pytest.fixture(scope="session")
+def vanilla_manifest():
+    _require_tables()
+    return json.loads((TABLES_DIR / "manifest.json").read_text(encoding="utf-8"))
