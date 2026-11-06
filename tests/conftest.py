@@ -65,6 +65,36 @@ def vanilla_items():
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+# --- Kaizo source extractions (each skips when its local input is absent) -----------
+
+
+@pytest.fixture(scope="session")
+def docs(tmp_path_factory):
+    """``docs.json`` extracted once per session from the configured Kaizo docs workbook.
+
+    Skips when ``load_inputs()`` raises ``RomInputError``, ``kaizo_docs`` is not set or
+    absent, openpyxl is not importable, or the vanilla intermediates are missing.
+    """
+    from tools.rom.inputs import RomInputError, load_inputs
+
+    try:
+        path = load_inputs().kaizo_docs
+    except RomInputError as e:
+        pytest.skip(str(e))
+    if path is None:
+        pytest.skip("kaizo_docs is not configured (data/local.toml or NUZLINE_KAIZO_DOCS)")
+    if not path.exists():
+        pytest.skip(f"configured Kaizo docs workbook {path} is absent")
+    pytest.importorskip("openpyxl")
+    inter = GAMES[VANILLA].intermediate_dir
+    if not (inter / "moves.json").exists() or not (inter / "abilities.json").exists():
+        pytest.skip("vanilla intermediates not extracted (run python -m tools.extract_decomp)")
+    from tools.extract_kaizo_docs import extract_kaizo_docs, load_vanilla
+
+    moves, abilities = load_vanilla(inter)
+    return extract_kaizo_docs(path, moves, abilities, tmp_path_factory.mktemp("docs"))
+
+
 # --- Kaizo: every fixture skips until the Kaizo tables are built (Task 15) ----------
 
 KAIZO_TABLES_DIR = GAMES[KAIZO].tables_dir
