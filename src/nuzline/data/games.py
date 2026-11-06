@@ -35,10 +35,11 @@ GAMES: dict[str, Game] = {
     KAIZO: Game(KAIZO, _DATA / "gen4_platinum_kaizo", _DATA / "intermediate_kaizo"),
 }
 ALIASES = {"vanilla": VANILLA, "kaizo": KAIZO}
-# The command that writes each game's intermediate_dir.
+# The command that writes each game's intermediate_dir (Kaizo's is the resolved directory
+# build_tables writes; extract_rom's raw rows go to its rom/ subdirectory).
 EXTRACT = {
     VANILLA: "python -m tools.extract_decomp --out data/intermediate",
-    KAIZO: "python -m tools.extract_rom --game kaizo",
+    KAIZO: "python -m tools.build_tables --game kaizo",
 }
 
 

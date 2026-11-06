@@ -192,6 +192,7 @@ CONSTANTS: tuple[Constant, ...] = (
     *_table("nuzline.ai.commands.MOVE_EFFECTS", "move", _P, _TRANSCRIBED_MOVES),
     # BattleEffect's ids are the battle effects of the transcribed moves; asserted
     # through those moves (MOVE_EFFECTS maps each one to its member).
+    # A classification marker: these entries hold move ids, not effect ids.
     *_table("nuzline.ai.commands.BattleEffect", "move", _P, _TRANSCRIBED_MOVES),
     *_table("nuzline.ai.outcome._SITES", "move", _P, _TRANSCRIBED_MOVES),
     # Basic_Main's OHKO and Roar checks (script.s:52), Expert's U-turn, and the
@@ -268,6 +269,9 @@ EXEMPT: dict[str, str] = {
     "nuzline.ai.commands.SideCondition": _AI_ENCODING + " (SIDE_CONDITION_*)",
     "nuzline.ai.commands.TypeMulti": _AI_ENCODING + " (TYPE_MULTI_*, battle.h:144-153)",
     "nuzline.ai.switching.SwitchSite": "kind of an AI switch draw (roark.md 11.1), not a game id",
+    "nuzline.ai.switching._CANDIDATE_TARGETS": (
+        "party slot of each AI switch candidate (-1: keep the battler), an engine layout"
+    ),
     "tools.effect_map.DECOMP_EFFECT_TO_ID": _KEYED_BY_EFFECT,
     "tools.effect_map._EFFECTS": _KEYED_BY_EFFECT,
     "tools.effect_map.DECOMP_EFFECT_NAMES": _KEYED_BY_EFFECT,

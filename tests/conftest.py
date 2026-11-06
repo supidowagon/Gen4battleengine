@@ -113,7 +113,10 @@ def kaizo_trainers():
 @pytest.fixture(scope="session")
 def kaizo_roark(kaizo_trainers):
     """Kaizo's Roark: the first trainer named Roark, as in vanilla."""
-    return next(t for t in kaizo_trainers if t.name == "Roark")
+    roark = next((t for t in kaizo_trainers if t.name == "Roark"), None)
+    if roark is None:
+        pytest.fail("no trainer named Roark in the Kaizo trainers")
+    return roark
 
 
 @pytest.fixture(scope="session")

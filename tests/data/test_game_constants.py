@@ -75,6 +75,7 @@ LISTED = [
     "nuzline.ai.commands.SideCondition",
     "nuzline.ai.commands.TypeMulti",
     "nuzline.ai.switching.SwitchSite",
+    "nuzline.ai.switching._CANDIDATE_TARGETS",  # engine layout (found by the array scan)
     # game data (Task 5)
     "tools.effect_map.SOUND_MOVES",
     "tools.effect_map.PUNCH_MOVES",
@@ -99,7 +100,7 @@ MODULES = [
     "tools.effect_map",
 ]
 _UPPER = re.compile(r"_?[A-Z][A-Z0-9_]*")
-_CONTAINER_CALLS = {"frozenset", "tuple", "set"}
+_CONTAINER_CALLS = {"frozenset", "tuple", "set", "dict"}
 
 
 def _holds_int(node: ast.AST) -> bool:
@@ -109,17 +110,19 @@ def _holds_int(node: ast.AST) -> bool:
 def _is_id_table(value: ast.AST) -> bool:
     if isinstance(value, ast.Dict | ast.Set | ast.Tuple | ast.List):
         return _holds_int(value)
-    return (
-        isinstance(value, ast.Call)
-        and isinstance(value.func, ast.Name)
-        and value.func.id in _CONTAINER_CALLS
-        and _holds_int(value)
+    if not isinstance(value, ast.Call):
+        return False
+    func = value.func
+    container = (isinstance(func, ast.Name) and func.id in _CONTAINER_CALLS) or (
+        isinstance(func, ast.Attribute) and func.attr == "array"  # jnp.array([...]), np.array
     )
+    return container and _holds_int(value)
 
 
 def scan_id_tables(modules: list[str]) -> set[str]:
     """Every module-level IntEnum/IntFlag class, and every UPPER/_UPPER name assigned a
-    dict/set/tuple/list literal (or frozenset()/tuple()/set() call) holding an int."""
+    dict/set/tuple/list literal (or frozenset()/tuple()/set()/dict() call, or an ``x.array``
+    call such as ``jnp.array``) holding an int."""
     found = set()
     for module in modules:
         path = Path(importlib.util.find_spec(module).origin)
@@ -283,3 +286,13 @@ def test_load_game_refuses_a_contradicted_constant(tmp_path, vanilla_items):
 def test_load_game_without_items_names_the_extract_command(tmp_path):
     with pytest.raises(GameDataError, match=r"tools\.extract_decomp"):
         load_game(_tmp_game(tmp_path, None))
+
+
+def test_kaizo_load_game_without_items_names_build_tables(tmp_path):
+    game = _tmp_game(tmp_path, None)
+    manifest = json.loads((game.tables_dir / "manifest.json").read_text(encoding="utf-8"))
+    (game.tables_dir / "manifest.json").write_text(
+        json.dumps({**manifest, "game": KAIZO}), encoding="utf-8"
+    )
+    with pytest.raises(GameDataError, match=r"tools\.build_tables --game kaizo"):
+        load_game(Game(KAIZO, game.tables_dir, game.intermediate_dir))
