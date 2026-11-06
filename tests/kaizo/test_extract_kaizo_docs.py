@@ -69,6 +69,7 @@ ABILITIES = ["-", "Drizzle", "Sand Stream", "Shadow Tag", "Snow Warning"]
         ("Leader Roark", {}),
         ("Mount Coronet - Room 1", {}),
         # Grammar extensions found on the real workbook (Step 3).
+        ("GalacticF Bebhionn (OPTIONAL Top Trainer)", {"optional": True, "note": "Top Trainer"}),
         (
             "Galactic Oberon (Optional Bottom Path, MULTI BATTLE with Galactic Puck)*",
             {"optional": True, "note": "Bottom Path", "multi_with": "Galactic Puck"},
@@ -111,6 +112,22 @@ def test_header_names(text, name):
 def test_keyword_that_does_not_parse_raises():
     with pytest.raises(ExtractError, match="unparsed tag 'PERMANENT FROST'"):
         parse_header("Ace (PERMANENT FROST)", ABILITIES, cite="Candice Split:9")
+
+
+@pytest.mark.parametrize(
+    "item",
+    [
+        "RAIN for 3 turns",
+        "PERMANENT SUN until X",
+        "DOUBLE Kick",
+        "TRICK ROOM 5 turns",
+        "Hail Mary",
+        "OPTIONAL Top Trainer With Gauntlet",
+    ],
+)
+def test_partly_parsed_item_raises(item):
+    with pytest.raises(ExtractError, match=f"x:1: unparsed tag '{item}'"):
+        parse_header(f"Ace ({item})", ABILITIES, cite="x:1")
 
 
 def test_keyword_after_a_note_raises():
@@ -185,11 +202,16 @@ def test_new_label_decodes_to_none(docs):
 def test_split_tags(docs):
     assert section(docs, "Roark", "Oreburgh Gym")["tags"]["permanent"] == "sandstorm"
     hq = section(docs, "Galactic", "Galactic HQ")
-    assert hq["tags"]["permanent"] == "trick_room" and len(hq["trainers"]) == 25
+    assert hq["tags"]["permanent"] == "trick_room"
     assert section(docs, "Candice", "Snowpoint Gym")["tags"] == {
         "weather": "hail",
         "assumed_permanent": True,
     }
+
+
+def test_galactic_hq_count(docs):
+    audited(docs)
+    assert len(section(docs, "Galactic", "Galactic HQ")["trainers"]) == 25
 
 
 def test_gauntlet_and_rival_tags(docs):
@@ -229,6 +251,18 @@ def test_unanchored_ai_cell_is_not_a_flag(docs):
     natalie = tags_trainer(docs, "Roark", "Lass Natalie")
     assert {"cell": "D24", "ref": "O11", "flag": "Weather", "on_key": False} in natalie["ai_cells"]
     assert "Weather" not in natalie["ai_flags"]
+
+
+def test_trainer_without_ai_icons_is_unknown(docs):
+    angel = next(
+        t
+        for s in docs["splits"]["Gardenia"]["sections"]
+        for t in s["trainers"]
+        if t["cite"] == "Gardenia Split:474"
+    )
+    assert angel["ai_known"] is False
+    assert angel["ai_flags"] is None and angel["left_side"] is None
+    assert tags_trainer(docs, "Roark", "Youngster Tristan")["ai_known"] is True
 
 
 def tags_trainer(docs, split, name):

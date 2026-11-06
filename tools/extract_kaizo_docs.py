@@ -25,10 +25,20 @@ Every row written carries ``"cite": "<sheet>:<1-based row>"``. ``docs.json``:
   ball_seal}``.
 - ``splits[<split>]`` for the ten ``* Split`` sheets in game order: ``sections`` (``name``,
   ``text``, ``tags``, ``cite``, ``trainers``), each trainer ``{text, name, tags, party
-  [{species, level}], ai_cells, ai_flags, left_side, cite}``: ``ai_cells`` are the AI
-  area's formula cells (``{cell, ref, flag, on_key}``), ``ai_flags`` the key names of those
-  that point at the key row (``on_key``), ``left_side`` whether "Left Side AI" is among
-  them. ``tags`` follow the header grammar (plan Ruling 22, ``GRAMMAR``).
+  [{species, level}], ai_cells, ai_known, ai_flags, left_side, cite}``. ``ai_cells`` are
+  the AI area's formula cells (``{cell, ref, flag, on_key}``). ``ai_known`` is true when at
+  least one cell points at the key row (``on_key``); then ``ai_flags`` lists those cells'
+  key names and ``left_side`` says whether "Left Side AI" is among them. When it is false
+  the sheet shows no AI icon for the trainer (the export lost most of them), so
+  ``ai_flags`` and ``left_side`` are ``None``: unknown, never "off".
+- Header ``tags`` (plan Ruling 22, ``GRAMMAR``) use only these keys: ``permanent``
+  (``rain|sun|sandstorm|hail|trick_room|gravity``); ``weather`` (``rain|sun|hail``) and
+  ``trick_room`` (``true``), each with ``assumed_permanent``; ``fog``; ``format``
+  (``double``); ``multi_with``; ``tag_partner``; ``player_starter`` (387|390|393);
+  ``gauntlet`` (``start|middle|end``); ``gauntlet_with`` ("Gauntlet With <name>");
+  ``b2b_with``; ``gym_gauntlet`` ("GYM TRAINERS ARE A GAUNTLET"); ``optional``; ``note``.
+  ``PARTNER`` maps to ``tag_partner`` and the sheet's typo ``MUTLI BATTLE with`` to
+  ``multi_with``: neither adds a key.
 
 Usage: python -m tools.extract_kaizo_docs [--xlsx PATH] [--out data/intermediate_kaizo/docs]
 """
@@ -123,9 +133,20 @@ def _const(tags: _Tags) -> _Producer:
     return lambda m: dict(tags)
 
 
+# An item containing one of these that the grammar does not consume raises (Ruling 22).
+KEYWORDS = (
+    "PERMANENT", "RAIN", "SUN", "HAIL", "SANDSTORM", "FOG", "TRICK ROOM", "GRAVITY", "DOUBLE",
+    "MULTI", "MUTLI", "TAG", "PARTNER", "GAUNTLET", "B2B", "OPTIONAL", "picked", "chose",
+    "selected",
+)  # fmt: skip
+_KEYWORD = re.compile(r"\b(?:" + "|".join(KEYWORDS) + r")\b", re.IGNORECASE)
+_KEYWORD_FREE = r"(?:(?!\b(?:" + "|".join(KEYWORDS) + r")\b).)+"
+
 # Each entry is matched case-insensitively at the start of what is left of an item, and must
-# end at a word boundary; an item may hold several (``OPTIONAL DOUBLE BATTLE``). Order
-# matters where one pattern is a prefix of another. A ``(.+)`` name runs to the item's end.
+# end at a word boundary; an item may hold several (``OPTIONAL DOUBLE BATTLE``) and must be
+# consumed whole: a remainder raises ``unparsed tag``. Order matters where one pattern is a
+# prefix of another. A ``(.+)`` name runs to the item's end. Free text is a note only as a
+# whole item without a keyword, or through the explicit ``optional <text>`` entry.
 GRAMMAR: tuple[tuple[str, _Producer], ...] = (
     (r"permanent (rain|sun|sandstorm|hail)", lambda m: {"permanent": m[1].lower()}),
     (r"permanent trick room", _const({"permanent": "trick_room"})),
@@ -155,18 +176,14 @@ GRAMMAR: tuple[tuple[str, _Producer], ...] = (
     (r"gauntlet with (.+)", lambda m: {"gauntlet_with": m[1].strip()}),
     (r"gauntlet", _const({"gauntlet": "middle"})),
     (r"b2b with (.+)", lambda m: {"b2b_with": m[1].strip()}),
+    # "OPTIONAL Top Trainer" (Galactic Split:432), "Optional Bottom Path" (Galactic
+    # Split:472): the only free text a tag may carry, and only text without a keyword.
+    (rf"optional ({_KEYWORD_FREE})$", lambda m: {"optional": True, "note": m[1].strip()}),
     (r"optional", _const({"optional": True})),
 )
 _GRAMMAR = tuple(
     (re.compile(rf"{pattern}(?:\b|$)\s*", re.IGNORECASE), produce) for pattern, produce in GRAMMAR
 )
-# An item containing one of these that the grammar does not consume raises (Ruling 22).
-KEYWORDS = (
-    "PERMANENT", "RAIN", "SUN", "HAIL", "SANDSTORM", "FOG", "TRICK ROOM", "GRAVITY", "DOUBLE",
-    "MULTI", "MUTLI", "TAG", "PARTNER", "GAUNTLET", "B2B", "OPTIONAL", "picked", "chose",
-    "selected",
-)  # fmt: skip
-_KEYWORD = re.compile(r"\b(?:" + "|".join(KEYWORDS) + r")\b", re.IGNORECASE)
 _PAREN = re.compile(r"\(([^()]*)\)")
 _TAG_PARTNER_PREFIX = re.compile(r"tag partner\s+(.+)", re.IGNORECASE)
 
@@ -207,10 +224,10 @@ def _parse_item(item: str, abilities: set[str], cite: str) -> tuple[_Tags, str |
         else:
             break
     if not rest:
-        return tags, None
-    if _KEYWORD.search(rest):
-        raise ExtractError(f"{cite}: unparsed tag '{rest}'")
-    return tags, rest
+        return tags, tags.pop("note", None)
+    if rest == item and not _KEYWORD.search(item):
+        return {}, item  # a whole item without a keyword: a location or remark
+    raise ExtractError(f"{cite}: unparsed tag '{item}'")
 
 
 def _merge(tags: _Tags, new: _Tags, cite: str) -> None:
@@ -567,7 +584,12 @@ def _raw_trainers(data: _Rows, mons: _Rows, species: dict[str, dict]) -> dict[st
     _check_header(mons, "RAW TRAINER POKEMON", ("ID Number", "Name", *TRAINER_MON_HEADER))
     # Base species by name (Personal 0..493; 0 is "-----", in empty slots such as trainer
     # 62's); forms are the Form Number column.
-    by_name = {s["name"]: int(k) for k, s in species.items() if int(k) <= 493}
+    by_name: dict[str, int] = {}
+    for k, s in species.items():
+        if int(k) <= 493:
+            if s["name"] in by_name:
+                raise ExtractError(f"{s['cite']}: species name {s['name']!r} is not unique")
+            by_name[s["name"]] = int(k)
     width = 2 + len(TRAINER_MON_HEADER)
     out: dict[str, dict] = {}
     for n, row in _data_rows(data):
@@ -710,8 +732,9 @@ def _split(
         if trainer is not None:
             cells = trainer.setdefault("ai_cells", [])
             on_key = {x["flag"] for x in cells if x["on_key"]}
-            trainer["ai_flags"] = [f for f in AI_KEY if f in on_key]
-            trainer["left_side"] = LEFT_SIDE in trainer["ai_flags"]
+            trainer["ai_known"] = bool(on_key)
+            trainer["ai_flags"] = [f for f in AI_KEY if f in on_key] if on_key else None
+            trainer["left_side"] = (LEFT_SIDE in on_key) if on_key else None
     return {"sheet": sheet, "sections": sections}
 
 
@@ -829,7 +852,8 @@ def main(argv: list[str] | None = None) -> int:
         moves, abilities = load_vanilla(args.vanilla)
         docs = extract_kaizo_docs(xlsx, moves, abilities, args.out)
     except (RomInputError, ExtractError, OSError) as e:
-        print(f"error: {e}", file=sys.stderr)
+        message = str(e).encode("ascii", "backslashreplace").decode()
+        print(f"error: {message}", file=sys.stderr)
         return 1
     trainers = sum(len(s["trainers"]) for sp in docs["splits"].values() for s in sp["sections"])
     print(f"sha256: {docs['sha256']}")
