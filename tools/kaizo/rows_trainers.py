@@ -7,7 +7,9 @@ Sources: the Kaizo ROM's ``trainers.json`` (K1 reader with K2a's ``format``,
 the PKCalc label and sheet header mappings (Tasks 9-10, the ``Mappings`` bundle),
 ``pkcalc.json`` (Task 6), ``docs.json`` (Task 7: the split headers' tags and AI cells, and
 the ``RAW TRAINER`` rows keyed by trainer id) and ``overrides.toml`` (Task 10). ``species``
-is the ROM bundle of ``rows_tables.load_rom`` (``species``, ``learnsets``, ``items``).
+is the ROM bundle of ``rows_tables.load_rom`` (``species``, ``forms``, ``learnsets``,
+``items``); ``trainer_maps`` is ``rom_trainer_maps.json`` (trainer id -> map headers, the
+ROM trainer -> map join), read for sight pairs.
 
 Rows are table ``trainers``, one set per PKCalc label mapped to a ROM id: trainer fields
 keyed ``"<id> <label>"``, party fields keyed ``"<id> <label>/<slot>"`` (slot 0-based, as
@@ -29,8 +31,11 @@ keyed ``"<id> <label>"``, party fields keyed ``"<id> <label>/<slot>"`` (slot 0-b
 - ``ai_flags``: bits 0-10 (``AI_MASK``) of ROM and PKCalc vs the split's AI cells (the AI
   key's first eleven names in bit order; ``Left Side AI`` is no bit). A header without AI
   cells (``ai_known`` false) gives ``None``, never 0. Bits above 10 go to ``area_section``.
-- ``format``, ``opponent_2``, ``partner_present`` (Ruling 10): ROM K2a fields vs PKCalc
-  ``formats`` (``true_double`` -> ``double``; a ``double`` pair -> ``double_two_trainer``
+- ``format``, ``opponent_2``, ``partner_present`` (Ruling 10; Task 13 fix round 1): the ROM
+  side is K2a's scripted structures (a scripted pair, a tag battle, a walking partner, the
+  header's double flag). "No second opponent" is ``"none"`` in every source that makes a
+  claim (ROM always; PKCalc for a single or one-trainer double; the sheet for ``DOUBLE``),
+  never ``None``, so a ROM pair against PKCalc single disagrees. PKCalc ``formats`` (``true_double`` -> ``double``; a ``double`` pair -> ``double_two_trainer``
   with the other label's id; a ``tag`` triple -> ``multi`` with the other label's id and a
   partner) vs the sheet: ``DOUBLE`` -> ``double`` without a partner; ``TAG BATTLE with X``
   (``tag_partner`` + ``multi_with``) -> ``multi`` with a partner; ``MULTI BATTLE with X``
@@ -39,6 +44,13 @@ keyed ``"<id> <label>"``, party fields keyed ``"<id> <label>/<slot>"`` (slot 0-b
   same section whose name ends with X's last word; no single such header -> ``"name: X"``.
   A ROM ``partner`` of ``null`` (a partner the rules cannot evaluate) counts as present.
   A label PKCalc lists only as a tag partner gets no PKCalc format values.
+- ``sight_pair`` replaces ``opponent_2`` when PKCalc or the sheet pairs the trainer and the
+  ROM scripts no pair for it: two trainers who spot the player in the same step
+  (``APPROACH_TYPE_VS2``) are runtime geometry, which K2a does not record (K2a Ruling 4).
+  The ROM value is the claimed partner's id when both trainers share a map header in the
+  ROM trainer -> map join (cited in ``area_section`` as "rom: map header N, sight pair
+  (K2a Ruling 4)"), else ``None``. A ROM single whose only PKCalc claim is that pair
+  (``double_two_trainer``) gets no ``format`` row: the ``sight_pair`` row is the claim.
 - ``player_starter`` (Ruling 11, preflight #28): the ``rom`` slot holds the derived value:
   the overrides ``fields`` entry, else the ROM partner variant's starter (K2a
   ``PartnerVariant``), else the sheet tag, else the PKCalc bracket. PKCalc's bracket names
@@ -60,30 +72,30 @@ from __future__ import annotations
 import re
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
 from typing import Any
 
 from nuzline.data.trainer import (
     GENDER_FEMALE,
     GENDER_MALE,
+    GENDER_MOD_FEMALE_CLASS,
+    GENDER_MOD_OTHER_CLASS,
     GENDER_NONE,
     default_moves,
     difficulty_to_ivs,
     gender_of,
+    lcrng_next,
     trainer_pid,
 )
 from tools.extract_kaizo_docs import AI_KEY, LEFT_SIDE
 from tools.kaizo.crosscheck import Row
 from tools.kaizo.overrides import GRAVITY_LABEL, Mappings, Overrides
-from tools.kaizo.rows_tables import (
-    _get,
-    _name_index,
-    _ref,
-    _sheet_item_ids,
-    _sheet_move_index,
-)
+from tools.kaizo.rows_common import get, name_index, ref, sheet_item_ids, sheet_move_index
 from tools.kaizo.trainer_map import NATURES
 
 TABLE = "trainers"
+NONE = "none"  # no second opponent: a claim, unlike None (no claim)
+SIGHT_CITE = "rom: map header {header}, sight pair (K2a Ruling 4)"
 AI_BITS = 11  # AI_FLAG_BASIC .. AI_FLAG_HARASSMENT
 AI_MASK = (1 << AI_BITS) - 1
 SHEET_AI_BITS = {name: bit for bit, name in enumerate(AI_KEY[:AI_BITS])}
@@ -287,6 +299,75 @@ def _pk_weathers(pkcalc: dict) -> dict[str, set[str]]:
     return out
 
 
+@dataclass(frozen=True)
+class _Fmt:
+    """One trainer's format claims. ``*_pair``: the other opponent's id, ``NONE``, a
+    ``"label: X"`` / ``"name: X"`` string no id carries, or ``None`` (no claim)."""
+
+    rom_pair: Any
+    pk_format: Any
+    pk_pair: Any
+    pk_partner: Any
+    pk_other: str | None
+    pk_partner_label: str | None
+    sheet_format: Any
+    sheet_pair: Any
+    sheet_partner: Any
+    sight: bool
+
+
+def _formats(
+    t: dict,
+    label: str,
+    headers: list[tuple[dict, dict]],
+    formats: dict[str, tuple[str, str | None, str | None]],
+    partner_only: set[str],
+    label_ids: dict[str, int | None],
+    sheet_ids: dict[str, int | None],
+) -> _Fmt:
+    if label in partner_only:
+        pk_fmt = pk_pair = pk_partner = other = partner = None
+    else:
+        pk_fmt, other, partner = formats.get(label, ("single", None, None))
+        pk_pair = NONE
+        if other is not None:
+            pk_pair = label_ids.get(other)
+            if pk_pair is None:
+                pk_pair = f"label: {other}"
+        pk_partner = pk_fmt == "multi"
+    sheet_fmts = [_sheet_format(h) for _, h in headers]
+    sheet_format = _joined(f for f, _ in sheet_fmts)
+    sheet_pair = _joined(_sheet_opponent(sec, h, sheet_ids) for sec, h in headers)
+    if sheet_pair is None and sheet_format == "double":
+        sheet_pair = NONE
+    rom_pair = t["opponent_2"] if t["opponent_2"] is not None else NONE
+
+    def pairs(v: Any) -> bool:
+        return v is not None and v != NONE
+
+    sight = rom_pair == NONE and (pairs(pk_pair) or pairs(sheet_pair))
+    return _Fmt(
+        rom_pair, pk_fmt, pk_pair, pk_partner, other, partner,
+        sheet_format, sheet_pair, _joined(p for _, p in sheet_fmts), sight,
+    )  # fmt: skip
+
+
+def _sight(
+    tid: int, fmt: _Fmt, trainer_maps: dict[int, Iterable[int]] | None
+) -> tuple[int | None, int | None]:
+    """(the claimed partner sharing a ROM map header with ``tid``, that header), PKCalc's
+    claim first, else (None, None)."""
+    if trainer_maps is None:
+        return None, None
+    mine = set(trainer_maps.get(tid, ()))
+    for cand in (fmt.pk_pair, fmt.sheet_pair):
+        if isinstance(cand, int) and not isinstance(cand, bool):
+            shared = mine & set(trainer_maps.get(cand, ()))
+            if shared:
+                return cand, min(shared)
+    return None, None
+
+
 def trainer_rows(
     rom: Sequence[dict],
     mappings: Mappings,
@@ -294,9 +375,10 @@ def trainer_rows(
     docs: dict,
     species: dict[str, Any],
     overrides: Overrides,
+    trainer_maps: dict[int, Iterable[int]] | None = None,
 ) -> list[Row]:
     """Every Task 13 row (module docstring), in PKCalc label order, then the unmapped
-    sheet headers."""
+    sheet headers. Without ``trainer_maps`` no sight pair is confirmed (ROM ``None``)."""
     by_id = {t["id"]: t for t in rom}
     pk_trainers = pkcalc.get("trainers", {})
     label_ids = {m.label: m.id for m in mappings.pkcalc}
@@ -308,9 +390,9 @@ def trainer_rows(
     ability_names = {int(k): a["name"] for k, a in pkcalc.get("abilities", {}).items()}
     partner_starts = _partner_starters(rom)
     personal = species["species"]
-    sheet_moves = _sheet_move_index(docs)
-    sheet_items = _name_index(
-        ((i, n) for n, i in _sheet_item_ids(docs, species["items"]).items()), "sheet item"
+    sheet_moves = sheet_move_index(docs)
+    sheet_items = name_index(
+        ((i, n) for n, i in sheet_item_ids(docs, species["items"]).items()), "sheet item"
     )
 
     rows: list[Row] = []
@@ -337,18 +419,18 @@ def trainer_rows(
             def mon(field: str, rv: Any, pv: Any, sv: Any, mkey: str = mkey) -> None:
                 row(field, rv, pv, sv, key=mkey)
 
-            def get(d: dict | None, name: str) -> Any:
+            def val(d: dict | None, name: str) -> Any:
                 return None if d is None else d.get(name)
 
-            mon("species", get(rm, "species"), get(pm, "species"), get(sm, "species"))
-            mon("form", get(rm, "form"), get(pm, "form"), get(sm, "form"))
-            mon("level", get(rm, "level"), get(pm, "level"), get(sm, "level"))
+            mon("species", val(rm, "species"), val(pm, "species"), val(sm, "species"))
+            mon("form", val(rm, "form"), val(pm, "form"), val(sm, "form"))
+            mon("level", val(rm, "level"), val(pm, "level"), val(sm, "level"))
             sheet_item = None
             if sm is not None and raw_t["has_items"]:
-                sheet_item = 0 if sm["item"] is None else _ref(sheet_items, sm["item"])
+                sheet_item = 0 if sm["item"] is None else ref(sheet_items, sm["item"])
             mon(
                 "item",
-                get(rm, "item"),
+                val(rm, "item"),
                 None if pm is None else (pm.get("item") or 0),
                 sheet_item,
             )
@@ -356,27 +438,25 @@ def trainer_rows(
             if rm is not None:
                 rom_moves = rm["moves"]
                 if rom_moves is None:
-                    rom_moves = default_moves(
-                        _get(species["learnsets"], rm["species"]), rm["level"]
-                    )
+                    rom_moves = default_moves(get(species["learnsets"], rm["species"]), rm["level"])
             sheet_mv = None
             if sm is not None and raw_t["has_moves"]:
-                sheet_mv = [_ref(sheet_moves, n) for n in sm["moves"] if n is not None]
-            mon("moves", _moves(rom_moves), _moves(get(pm, "moves")), sheet_mv)
+                sheet_mv = [ref(sheet_moves, n) for n in sm["moves"] if n is not None]
+            mon("moves", _moves(rom_moves), _moves(val(pm, "moves")), sheet_mv)
             mon(
                 "ivs",
                 None if rm is None else [difficulty_to_ivs(rm["difficulty"])] * 6,
                 None if pm is None else list(pm["ivs"]),
                 None,
             )
-            mon("difficulty", get(rm, "difficulty"), None, get(sm, "difficulty"))
-            mon("ability_override", get(rm, "ability_override"), None, get(sm, "ability_number"))
+            mon("difficulty", val(rm, "difficulty"), None, val(sm, "difficulty"))
+            mon("ability_override", val(rm, "ability_override"), None, val(sm, "ability_number"))
             if rm is not None:
                 forced = _forced_ability(
                     rm["ability_override"], personal[rm["species"]]["abilities"]
                 )
                 if forced is not None:
-                    mon("ability_slot", forced, get(pm, "ability"), None)
+                    mon("ability_slot", forced, val(pm, "ability"), None)
 
         headers = sheet.get(m.id, [])
         pk_ai = pkcalc.get("ai_flags", {}).get(label)
@@ -387,31 +467,22 @@ def trainer_rows(
             _joined(_sheet_ai(h) for _, h in headers),
         )
 
-        if label in partner_only:
-            pk_fmt = pk_opp = pk_partner = None
-            other = partner = None
-        else:
-            pk_fmt, other, partner = formats.get(label, ("single", None, None))
-            pk_opp = None
-            if other is not None:
-                pk_opp = label_ids.get(other)
-                if pk_opp is None:
-                    pk_opp = f"label: {other}"
-            pk_partner = pk_fmt == "multi"
-        sheet_fmts = [_sheet_format(h) for _, h in headers]
+        fmt = _formats(t, label, headers, formats, partner_only, label_ids, sheet_ids)
+        other, partner = fmt.pk_other, fmt.pk_partner_label
         if t["format"] != UNKNOWN:
-            row("format", t["format"], pk_fmt, _joined(f for f, _ in sheet_fmts))
-            row(
-                "opponent_2",
-                t["opponent_2"],
-                pk_opp,
-                _joined(_sheet_opponent(sec, h, sheet_ids) for sec, h in headers),
-            )
+            if fmt.sight:
+                rom_pair, _header = _sight(m.id, fmt, trainer_maps)
+                row("sight_pair", rom_pair, fmt.pk_pair, fmt.sheet_pair)
+                if not (t["format"] == "single" and fmt.pk_format == "double_two_trainer"):
+                    row("format", t["format"], fmt.pk_format, fmt.sheet_format)
+            else:
+                row("format", t["format"], fmt.pk_format, fmt.sheet_format)
+                row("opponent_2", fmt.rom_pair, fmt.pk_pair, fmt.sheet_pair)
             row(
                 "partner_present",
                 t["partner"] is None or len(t["partner"]) > 0,
-                pk_partner,
-                _joined(p for _, p in sheet_fmts),
+                fmt.pk_partner,
+                fmt.sheet_partner,
             )
 
         pk_start = _pk_starter(label)
@@ -423,7 +494,7 @@ def trainer_rows(
         if t["start_condition"] != UNKNOWN:
             pk_w = set(weathers.get(label, set()))
             leads = (other, partner)
-            pk_w -= _explained(label, pk_trainers, leads, pk_fmt == "double", ability_names)
+            pk_w -= _explained(label, pk_trainers, leads, fmt.pk_format == "double", ability_names)
             row(
                 "area_weather",
                 t["start_condition"],
@@ -491,6 +562,11 @@ def mapping_section(mappings: Mappings) -> list[str]:
             if m.lost_to is not None:
                 text += f"; lost id {m.lost_to} to an override"
             lines.append(text)
+    unmapped = [m.label for m in mappings.sheet if m.id is None]
+    lines.append(
+        f"unmapped sheet headers (non-blocking, sheet_only by controller ruling): {len(unmapped)}"
+        + (": " + ", ".join(unmapped) if unmapped else "")
+    )
     shared: dict[int, list[str]] = defaultdict(list)
     for m in mappings.sheet:
         if m.id is not None:
@@ -579,14 +655,64 @@ def pid_section(
             complete += good == checked
         if m.label in PID_HEADLINE:
             headline.append(f"{m.label} ({m.id}): {good}/{checked}")
+    c_mons = c_nature = c_ng = 0
+    for m in mappings.pkcalc:
+        if m.id is None:
+            continue
+        party = pk_trainers[m.label].get("party") or []
+        for got, pm in zip(_carry_over_party(by_id[m.id], species), party, strict=False):
+            c_mons += 1
+            c_nature += got[0] == pm["nature"]
+            c_ng += got[0] == pm["nature"] and got[1] == _GENDERS[pm.get("gender")]
     return [
         f"nature and gender reproduced for {ng_ok} of {n_mons} override-0 Pokemon",
         f"ability reproduced for {ab_ok} of {n_mons}",
         f"trainers reproduced completely: {complete} of {n_trainers}",
+        f"nature and gender with the patched genderMod carry-over: {c_ng} of {c_mons}",
+        f"nature with the patched genderMod carry-over: {c_nature} of {c_mons}",
         *headline,
         *misses,
         *unchecked,
     ]
+
+
+def _carry_over_party(t: dict, species: dict[str, Any]) -> list[tuple[str, int, int]]:
+    """(nature, gender, ability) per party mon by the patched ``TrainerData_BuildParty`` as
+    decoded in ``docs/kaizo/rom_diff.md`` ("TrainerData_BuildParty, decoded"), run as a
+    cross-check only (Ruling 7). The seed takes the difficulty byte; the override helper
+    (arm9 0x020795A0) rewrites the trainer's one gender-modifier slot, which the rest of the
+    party keeps: a gender nibble sets it to the form's gender ratio +2 (1) / -2 (2); an
+    ability nibble then clears (1) or sets (2) bit 0 of the helper's working value, which
+    is the species id when no gender nibble was given (the ROM's bug)."""
+    personal = species["species"]
+    ratios = {(f["species"], f["form"]): f["gender_ratio"] for f in species.get("forms", [])}
+    mod = GENDER_MOD_FEMALE_CLASS if t["class_gender"] == GENDER_FEMALE else GENDER_MOD_OTHER_CLASS
+    out = []
+    for mon in t["party"]:
+        override = mon["ability_override"]
+        if override:
+            gender, ability = override & 0xF, override >> 4
+            work = mon["species"]
+            if gender:
+                ratio = ratios.get(
+                    (mon["species"], mon["form"]), personal[mon["species"]]["gender_ratio"]
+                )
+                work = ratio + 2 if gender == 1 else ratio - 2
+                mod = work
+            if ability == 1:
+                mod = work & ~1
+            elif ability == 2:
+                mod = work | 1
+        state = rnd = (mon["difficulty"] + mon["level"] + mon["species"] + t["id"]) & 0xFFFFFFFF
+        for _ in range(t["class_id"]):
+            state, rnd = lcrng_next(state)
+        pid = ((rnd << 8) + mod) & 0xFFFFFFFF
+        sp = personal[mon["species"]]
+        a1, a2 = sp["abilities"]
+        out.append(
+            (NATURES[pid % 25], gender_of(sp["gender_ratio"], pid), a2 if a2 and pid & 1 else a1)
+        )
+    return out
 
 
 def _v(value: Any) -> str:
@@ -599,11 +725,12 @@ def area_section(
     pkcalc: dict,
     docs: dict,
     overrides: Overrides,
+    trainer_maps: dict[int, Iterable[int]] | None = None,
 ) -> list[str]:
     """Battle setup claims by source: refused ``unknown`` start conditions and formats (with
     every source), Trick Room and Gravity (ROM map weather, overrides, sheet, PKCalc),
-    non-single formats, derived player starters, AI flag bits above 10, and the flags.js
-    labels without a party."""
+    non-single formats, sight pairs with their ROM map-header citation, derived player
+    starters, AI flag bits above 10, and the flags.js labels without a party."""
     by_id = {t["id"]: t for t in rom}
     labels: dict[int, list[str]] = defaultdict(list)
     for m in mappings.pkcalc:
@@ -726,6 +853,23 @@ def area_section(
         )
 
     lines.append("")
+    lines.append("Sight pairs (PKCalc or sheet pair, no ROM scripted pair; K2a Ruling 4):")
+    label_ids = {m.label: m.id for m in mappings.pkcalc}
+    for m in mappings.pkcalc:
+        if m.id is None or by_id[m.id]["format"] == UNKNOWN:
+            continue
+        heads = sheet.get(m.id, [])
+        fmt = _formats(by_id[m.id], m.label, heads, formats, partner_only, label_ids, sheet_ids)
+        if not fmt.sight:
+            continue
+        pair, header = _sight(m.id, fmt, trainer_maps)
+        cite = "no shared ROM map header" if header is None else SIGHT_CITE.format(header=header)
+        lines.append(
+            f"sight_pair: {m.id} {m.label}: ROM {_v(pair)} ({cite}) | PKCalc {_v(fmt.pk_pair)} "
+            f"| sheet {_v(fmt.sheet_pair)}"
+        )
+
+    lines.append("")
     lines.append("player_starter derived values (overrides, ROM partner variant, sheet, PKCalc):")
     partner_starts = _partner_starters(rom)
     for m in mappings.pkcalc:
@@ -735,7 +879,8 @@ def area_section(
         sheet_start = _joined(h["tags"].get("player_starter") for _, h in sheet.get(m.id, []))
         derived, source = _starter(m.id, overrides, partner_starts, sheet_start, pk_start)
         if derived is not None:
-            lines.append(f"player_starter: {m.id} {m.label}: {derived} from {source}")
+            note = " (PKCalc only, unconfirmed)" if source == "pkcalc bracket" else ""
+            lines.append(f"player_starter: {m.id} {m.label}: {derived} from {source}{note}")
 
     lines.append("")
     high = [

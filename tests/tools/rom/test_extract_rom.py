@@ -11,6 +11,7 @@ from tools.extract_rom import (
     CHANGED_SCRIPTS_FILE,
     REUSE_BANKS,
     ROM_FILES,
+    TRAINER_MAPS_FILE,
     UNRESOLVED_FILE,
     check_reuse_names,
     extract,
@@ -61,6 +62,24 @@ def test_kaizo_extract_writes_patched_data(kaizo_rom_dir):
     assert (136, 909, "VAR_0x8004") in [
         (u["member"], u["offset"], u["variable_name"]) for u in unresolved
     ]
+
+
+def test_kaizo_trainer_maps_file(kaizo_rom_dir):
+    # Task 13 fix round 1: the trainer -> map header join, for sight pairs. Cyclists Axel
+    # and John (25, 27) share Route 206's header 350.
+    maps = _json(kaizo_rom_dir / TRAINER_MAPS_FILE)
+    assert 350 in maps["25"] and 350 in maps["27"]
+    assert all(h == sorted(h) for h in maps.values())
+    assert TRAINER_MAPS_FILE in _json(kaizo_rom_dir / "rom_sources.json")
+
+
+def test_kaizo_self_pairs_are_one_trainer_doubles(kaizo_rom_dir):
+    # StartTrainerBattle t, t is BATTLE_TYPE_TRAINER_DOUBLES (src/encounter.c:736-737).
+    trainers = _json(kaizo_rom_dir / "trainers.json")
+    assert not [t["id"] for t in trainers if t["opponent_2"] == t["id"]]
+    for tid in (240, 295, 320, 404, 409, 416, 441, 442, 666, 843):
+        assert (trainers[tid]["format"], trainers[tid]["opponent_2"]) == ("double", None)
+    assert (trainers[545]["format"], trainers[545]["opponent_2"]) == ("double_two_trainer", 546)
 
 
 def test_existing_out_files_kept(rom_inputs, decomp, symbols, tmp_path):

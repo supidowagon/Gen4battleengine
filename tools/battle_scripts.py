@@ -13,6 +13,8 @@ in two-trainer doubles, tag battles and beside a walking partner (plan Rulings 2
   constants. Two trainers who spot the player in the same step
   (``res/field/scripts/scripts_battles.s:173``, ``StartTrainerBattle VAR_0x8004,
   VAR_0x8005``) depend on runtime geometry and are not recorded (Ruling 4).
+* ``double``: ``StartTrainerBattle t, t``, one trainer in a double
+  (``BATTLE_TYPE_TRAINER_DOUBLES``, ``src/encounter.c:736-737``); Kaizo uses it.
 * Otherwise the header's format ("double" or "single") stands; that is the caller's.
 
 Ops (``Op.name``): ``label``(name), ``StartTrainerBattle``(t1, t2),
@@ -315,6 +317,11 @@ def battle_structures(
                 # Ruling 4's spotting pair (scripts_battles.s:173) is a common script that
                 # no map header runs, so it never reaches here.
                 t1, t2 = (_resolve(ops, i, t, f"map {header}") for t in op.args)
+                if t1 == t2:
+                    # Encounter_NewVsTrainer: the same trainer twice is one trainer in a
+                    # double, BATTLE_TYPE_TRAINER_DOUBLES (src/encounter.c:736-737).
+                    claim(t1, ("self",), header)
+                    continue
                 claim(t1, ("pair", t2), header)
                 claim(t2, ("pair", t1), header)
             elif op.name == "StartTagBattle":
@@ -358,7 +365,17 @@ def battle_structures(
         pairs = [c for c in cs if c[0] == "pair"]
         tags = [c for c in cs if c[0] == "tag"]
         walks = [c for c in cs if c[0] == "walk"]
-        if len(pairs) > 1 or len(tags) > 1 or len(walks) > 1 or (tags and (pairs or walks)):
+        selfs = [c for c in cs if c[0] == "self"]
+        if selfs and len(cs) == 1:
+            out[t] = BattleStructure("double", None, ())
+            continue
+        if (
+            len(pairs) > 1
+            or len(tags) > 1
+            or len(walks) > 1
+            or (tags and (pairs or walks))
+            or selfs
+        ):
             listed = "; ".join(f"{c} on maps {sorted(map(str, h))}" for c, h in cs.items())
             others = {c[1] for c in pairs + tags}
             if t in refused:
@@ -367,7 +384,13 @@ def battle_structures(
                     UNKNOWN_FORMAT, next(iter(others), None) if len(others) == 1 else None, None
                 )
                 continue
-            if unknown_partner and (tags or walks) and not (pairs and tags) and len(others) <= 1:
+            if (
+                unknown_partner
+                and (tags or walks)
+                and not (pairs and tags)
+                and not selfs
+                and len(others) <= 1
+            ):
                 # One enemy pair, several partner claims: multi, partner not evaluated.
                 out[t] = BattleStructure("multi", next(iter(others), None), None)
                 continue

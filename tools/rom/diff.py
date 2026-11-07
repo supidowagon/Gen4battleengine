@@ -1059,6 +1059,11 @@ def _injected_lines(diff: RomDiff) -> list[str]:
     return out
 
 
+# The report keeps everything after this line across regenerations: hand-written notes
+# (addresses and prose only, never bytes), e.g. a decoded routine (K2b Task 13).
+HAND_WRITTEN = "<!-- Hand-written below this line; python -m tools.rom.diff keeps it. -->"
+
+
 def write_report(
     diff: RomDiff,
     classification: dict,
@@ -1066,7 +1071,8 @@ def write_report(
     provenance: dict[str, str] | None = None,
     decomp: Path | None = None,
 ) -> None:
-    """Write the deterministic ASCII Markdown report; stale classification entries raise."""
+    """Write the deterministic ASCII Markdown report; stale classification entries raise.
+    A ``HAND_WRITTEN`` section already at ``path`` is kept after the generated text."""
     stale = stale_entries(diff, classification)
     if stale:
         raise ValueError(
@@ -1075,8 +1081,13 @@ def write_report(
         )
     lines = _report_lines(diff, classification, provenance or default_provenance(), decomp)
     path = Path(path)
+    kept = ""
+    if path.exists():
+        old = path.read_text(encoding="ascii")
+        if HAND_WRITTEN in old:
+            kept = "\n" + HAND_WRITTEN + old.split(HAND_WRITTEN, 1)[1].rstrip("\n") + "\n"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(("\n".join(lines).rstrip("\n") + "\n").encode("ascii"))
+    path.write_bytes(("\n".join(lines).rstrip("\n") + "\n" + kept).encode("ascii"))
 
 
 # --- command line -----------------------------------------------------------------------

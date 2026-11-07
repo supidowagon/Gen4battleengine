@@ -34,12 +34,20 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 from nuzline.engine.ids import MoveTarget
 from tools.kaizo.crosscheck import Row
+from tools.kaizo.rows_common import (
+    Names,
+    get,
+    name_index,
+    ref,
+    sheet_item_ids,
+    sheet_move_index,
+)
 
 ROM_FILES = (
     "moves",
@@ -158,14 +166,6 @@ def _ids(*tables: Mapping | list | None) -> list[int]:
     return sorted(out)
 
 
-def _get(table: Mapping | list | None, i: int) -> Any:
-    if table is None:
-        return None
-    if isinstance(table, list):
-        return table[i] if 0 <= i < len(table) else None
-    return table.get(str(i))
-
-
 def _field(entry: Mapping | None, name: str) -> Any:
     return None if entry is None else entry.get(name)
 
@@ -174,44 +174,11 @@ def _key(i: int, *names: str | None) -> str:
     return f"{i} {next((n for n in names if n), '?')}"
 
 
-class _Names(dict):
-    """Name -> id, with ``folded`` (case-folded name -> id) built alongside."""
-
-    folded: dict[str, int]
-
-
-def _name_index(names: Iterable[tuple[int, str]], what: str) -> _Names:
-    """Name -> id from ``(id, name)`` pairs; a name (or two names that differ only by case)
-    on two ids raises."""
-    out = _Names()
-    out.folded = {}
-    for i, name in names:
-        for index, n in ((out, name), (out.folded, name.casefold())):
-            if index.setdefault(n, i) != i:
-                raise ValueError(f"{what} name {name!r} is both {index[n]} and {i}")
-    return out
-
-
 def _lookup(index: Mapping[str, int], name: str, what: str, where: str) -> int:
     try:
         return index[name]
     except KeyError:
         raise ValueError(f"{where}: unknown {what} {name!r}") from None
-
-
-def _ref(index: _Names, name: str) -> int | str:
-    """A sheet name's id: exact, else case-insensitive (the sheet writes "Solarbeam",
-    "U-Turn"); a name no id carries (a vanilla name of a renamed slot, e.g. "Taunt") stays
-    as ``"name: <text>"``, so it is reported as a disagreement instead of guessed."""
-    if name in index:
-        return index[name]
-    return index.folded.get(name.casefold(), f"name: {name}")
-
-
-def _sheet_move_index(docs: dict) -> dict[str, int]:
-    return _name_index(
-        ((int(k), m["name"]) for k, m in docs.get("moves", {}).items() if int(k)), "sheet move"
-    )
 
 
 # --- moves -------------------------------------------------------------------------------
@@ -258,7 +225,7 @@ def move_rows(rom_moves: list[dict], pkcalc: dict, docs: dict) -> list[Row]:
     pk_moves, sheet_moves = pkcalc.get("moves", {}), docs.get("moves", {})
     rows: list[Row] = []
     for i in _ids(rom_moves, pk_moves, sheet_moves):
-        rom, pk, sheet = _get(rom_moves, i), _get(pk_moves, i), _get(sheet_moves, i)
+        rom, pk, sheet = get(rom_moves, i), get(pk_moves, i), get(sheet_moves, i)
         key = _key(i, _field(pk, "name"), _field(rom, "name"), _field(sheet, "name"))
         for source, entry in (("ROM", rom), ("PKCalc", pk), ("sheet", sheet)):
             _check_priority(key, source, _field(entry, "priority"))
@@ -314,18 +281,18 @@ def _effective(abilities: list[int] | None) -> list[int] | None:
     return [a1, a2 or a1]
 
 
-def _sheet_abilities(sheet: dict | None, index: _Names) -> object:
+def _sheet_abilities(sheet: dict | None, index: Names) -> object:
     if sheet is None:
         return None
-    ids = [0 if n == "-" else _ref(index, n) for n in sheet["abilities"]]
+    ids = [0 if n == "-" else ref(index, n) for n in sheet["abilities"]]
     return _effective(ids)
 
 
-def _ability_index(rom: Mapping[str, Any], pkcalc: dict) -> _Names:
+def _ability_index(rom: Mapping[str, Any], pkcalc: dict) -> Names:
     pairs = [(i, a["name"]) for i, a in enumerate(rom.get("abilities", [])) if i]
     for k, a in pkcalc.get("abilities", {}).items():
         pairs += [(int(k), n) for n in (a["name"], *a.get("aliases", []))]
-    return _name_index(pairs, "ability")
+    return name_index(pairs, "ability")
 
 
 def _upper(name: str | None) -> str | None:
@@ -341,7 +308,7 @@ def species_rows(rom: Mapping[str, Any], pkcalc: dict, docs: dict) -> list[Row]:
     abilities = _ability_index(rom, pkcalc)
     rows: list[Row] = []
     for i in _ids(personal, pk_species, sheet_species):
-        r, pk, sh = personal.get(i), _get(pk_species, i), _get(sheet_species, i)
+        r, pk, sh = personal.get(i), get(pk_species, i), get(sheet_species, i)
         key = _key(i, _field(pk, "name"), _field(r, "name"), _field(sh, "name"))
         where = f"species {key!r}"
         growth = _field(sh, "growth_rate")
@@ -412,12 +379,12 @@ def _sheet_evolutions(
         elif isinstance(req, int):
             param = req
         elif method == "level_know_move":
-            param = _ref(sheet_moves, req)
+            param = ref(sheet_moves, req)
         elif method == "level_species_in_party":
-            param = _ref(species, req.upper())
+            param = ref(species, req.upper())
         else:
-            param = _ref(items, req)
-        out.append([method, param, _ref(species, e["result"].upper())])
+            param = ref(items, req)
+        out.append([method, param, ref(species, e["result"].upper())])
     return out
 
 
@@ -433,7 +400,7 @@ def learnset_rows(rom: Mapping[str, Any], pkcalc: dict, docs: dict) -> list[Row]
     (machine labels in machine order) and ``tutor`` (sorted move ids); ``evolutions`` ([[method name, param, species]], ROM
     vs sheet, base species only: the ROM keys evolutions by species id)."""
     pk_species = pkcalc.get("species", {})
-    sheet_moves = _sheet_move_index(docs)
+    sheet_moves = sheet_move_index(docs)
     machines = [name for _, name in _tm_labels(rom["items"])]
     order = {name: n for n, name in enumerate(machines)}
     pk_machine: dict[int, str] = {}
@@ -448,10 +415,10 @@ def learnset_rows(rom: Mapping[str, Any], pkcalc: dict, docs: dict) -> list[Row]
     personal = _personal(rom)
     names = {
         "moves": sheet_moves,
-        "items": _name_index(
-            ((i, n) for n, i in _sheet_item_ids(docs, rom["items"]).items()), "sheet item"
+        "items": name_index(
+            ((i, n) for n, i in sheet_item_ids(docs, rom["items"]).items()), "sheet item"
         ),
-        "species": _name_index(
+        "species": name_index(
             (
                 (int(k), s["name"].upper())
                 for k, s in docs.get("species", {}).items()
@@ -463,8 +430,8 @@ def learnset_rows(rom: Mapping[str, Any], pkcalc: dict, docs: dict) -> list[Row]
     rows: list[Row] = []
     tables = (rom["learnsets"], rom["tm_learnsets"], rom["tutor_learnsets"], pk_species)
     for i in _ids(*tables):
-        pk = _get(pk_species, i)
-        sheet_name = _field(_get(docs.get("level_up"), i), "name")
+        pk = get(pk_species, i)
+        sheet_name = _field(get(docs.get("level_up"), i), "name")
         key = _key(i, _field(pk, "name"), _field(personal.get(i), "name"), sheet_name)
         where = f"learnsets {key!r}"
 
@@ -473,10 +440,10 @@ def learnset_rows(rom: Mapping[str, Any], pkcalc: dict, docs: dict) -> list[Row]
         ) -> Row:
             return Row("learnsets", key, field, rv, pv, sv, executed)
 
-        lv = _get(rom["learnsets"], i)
-        sheet_lv = _get(docs.get("level_up"), i)
+        lv = get(rom["learnsets"], i)
+        sheet_lv = get(docs.get("level_up"), i)
         if sheet_lv is not None:
-            sheet_lv = [[level, _ref(sheet_moves, m)] for m, level in sheet_lv["moves"]]
+            sheet_lv = [[level, ref(sheet_moves, m)] for m, level in sheet_lv["moves"]]
         rows.append(
             row(
                 "level_up",
@@ -485,8 +452,8 @@ def learnset_rows(rom: Mapping[str, Any], pkcalc: dict, docs: dict) -> list[Row]
                 sheet_lv,
             )
         )
-        tm = _get(rom["tm_learnsets"], i)
-        sheet_tm = _get(docs.get("tm"), i)
+        tm = get(rom["tm_learnsets"], i)
+        sheet_tm = get(docs.get("tm"), i)
         if sheet_tm is not None:
             sheet_tm = sorted(
                 sheet_tm["machines"],
@@ -500,7 +467,7 @@ def learnset_rows(rom: Mapping[str, Any], pkcalc: dict, docs: dict) -> list[Row]
                 sheet_tm,
             )
         )
-        tutor = _get(rom["tutor_learnsets"], i)
+        tutor = get(rom["tutor_learnsets"], i)
         rows.append(
             row(
                 "tutor",
@@ -510,9 +477,9 @@ def learnset_rows(rom: Mapping[str, Any], pkcalc: dict, docs: dict) -> list[Row]
             )
         )
         if i < len(rom["species"]):
-            evo = _get(rom["evolutions"], i)
+            evo = get(rom["evolutions"], i)
             rom_evo = None if evo is None else [[methods[m], p, t] for m, p, t in evo]
-            sheet_evo = _sheet_evolutions(_get(docs.get("evolutions"), i), names, where)
+            sheet_evo = _sheet_evolutions(get(docs.get("evolutions"), i), names, where)
             rows.append(row("evolutions", rom_evo, None, sheet_evo, False))
     return rows
 
@@ -524,7 +491,7 @@ def tm_rows(rom: Mapping[str, Any], pkcalc: dict, docs: dict) -> list[Row]:
     """``tm_table``, key ``"TM07"``: the move the machine teaches, executed; ROM
     (``items.json`` ``teaches_move``) vs PKCalc ``tm_table`` (from ``machine``) vs the
     sheet's ``TM Learnsets`` row 2."""
-    sheet_moves = _sheet_move_index(docs)
+    sheet_moves = sheet_move_index(docs)
     pk_table = pkcalc.get("tm_table", {})
     sheet_table = docs.get("tm_moves", {})
     labels = [name for _, name in _tm_labels(rom["items"])]
@@ -534,7 +501,7 @@ def tm_rows(rom: Mapping[str, Any], pkcalc: dict, docs: dict) -> list[Row]:
     rows = []
     for i, label in _tm_labels(rom["items"]):
         sheet = sheet_table.get(label)
-        sv = None if sheet is None else _ref(sheet_moves, sheet["move"])
+        sv = None if sheet is None else ref(sheet_moves, sheet["move"])
         pv = pk_table.get(_pk_tm_key(label))
         rows.append(Row("tm_table", label, "move", rom["items"][i]["teaches_move"], pv, sv, True))
     known = {_pk_tm_key(label) for label in labels}
@@ -565,7 +532,7 @@ def tutor_rows(rom: Mapping[str, Any], pkcalc: dict, docs: dict) -> list[Row]:
     pk_moves = pkcalc.get("moves", {})
     rows = []
     for move in sorted(set(rom_t) | set(pk_t)):
-        name = _field(_get(pk_moves, move), "name") or _field(_get(rom.get("moves"), move), "name")
+        name = _field(get(pk_moves, move), "name") or _field(get(rom.get("moves"), move), "name")
         key = _key(move, name)
         r, p = rom_t.get(move), pk_t.get(move)
         rows.append(Row("tutor_table", key, "move", r is not None, p is not None, None, True))
@@ -589,39 +556,18 @@ def tutor_rows(rom: Mapping[str, Any], pkcalc: dict, docs: dict) -> list[Row]:
 # --- items and abilities ----------------------------------------------------------------
 
 
-def _sheet_item_ids(docs: dict, rom_items: list[dict]) -> dict[str, int]:
-    """Sheet item name -> item id. ``sheet_id`` counts the items without the
-    ``ITEM_UNUSED_*`` rows (113-134), so it is unpacked through the ROM's used ids and
-    checked against the ROM names (a renamed slot, e.g. Nugget -> Big Nugget, joins by id)."""
-    items = docs.get("items", {})
-    used = [i for i, it in enumerate(rom_items) if not it["name"].startswith("ITEM_UNUSED_")]
-    rom_ids = _name_index(((i, rom_items[i]["name"]) for i in used), "ROM item")
-    out = {}
-    for name, v in items.items():
-        if not 0 <= v["sheet_id"] < len(used):
-            raise ValueError(f"sheet item {name!r}: sheet_id {v['sheet_id']} is out of range")
-        i = used[v["sheet_id"]]
-        if name in rom_ids and rom_ids[name] != i:
-            raise ValueError(
-                f"sheet item {name!r}: sheet_id {v['sheet_id']} unpacks to {i}, "
-                f"but the ROM names it at {rom_ids[name]}"
-            )
-        out[name] = i
-    return out
-
-
 def item_rows(rom: Mapping[str, Any], pkcalc: dict, docs: dict) -> list[Row]:
     """Executed hold effect, hold param and fling power (ROM vs sheet; PKCalc has no
     numeric hold fields); unexecuted name. ``ITEM_UNUSED_*`` ids are skipped."""
     rom_items = rom["items"]
-    sheet_ids = _sheet_item_ids(docs, rom_items)
+    sheet_ids = sheet_item_ids(docs, rom_items)
     sheet_by_id = {i: (n, docs["items"][n]) for n, i in sheet_ids.items()}
     if len(sheet_by_id) != len(sheet_ids):
         raise ValueError("two sheet items unpack to the same item id")
     pk_items = pkcalc.get("items", {})
     rows = []
     for i in _ids(rom_items, pk_items, {str(k): v for k, v in sheet_by_id.items()}):
-        r, pk = _get(rom_items, i), _get(pk_items, i)
+        r, pk = get(rom_items, i), get(pk_items, i)
         sheet_name, sh = sheet_by_id.get(i, (None, None))
         if r is not None and r["name"].startswith("ITEM_UNUSED_") and pk is None and sh is None:
             continue
@@ -643,7 +589,7 @@ def ability_rows(rom: Mapping[str, Any], pkcalc: dict, docs: dict) -> list[Row]:
     rom_ab, pk_ab = rom["abilities"], pkcalc.get("abilities", {})
     rows = []
     for i in _ids(rom_ab, pk_ab):
-        r, pk = _get(rom_ab, i), _get(pk_ab, i)
+        r, pk = get(rom_ab, i), get(pk_ab, i)
         key = _key(i, _field(pk, "name"), _field(r, "name"))
         rows.append(
             Row("abilities", key, "name", _field(r, "name"), _field(pk, "name"), None, False)

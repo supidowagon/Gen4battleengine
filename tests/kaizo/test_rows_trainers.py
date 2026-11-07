@@ -313,15 +313,13 @@ def test_ability_override_18_vs_sheet_2_is_rom_vs_sheet():
 
 @pytest.mark.parametrize(
     ("override", "species_slot2", "want"),
-    [(16, 11, 10), (32, 11, 11), (18, 11, 10)],
+    [(16, 11, 10), (32, 11, 11), (18, 11, 10), (32, 0, 10)],
 )
 def test_ability_slot_row_from_override(override, species_slot2, want):
-    row = find(
-        trainer_rows(*synthetic(rom_override=override, pk_ability=11)),
-        "trainers",
-        "5 Ace X/0",
-        "ability_slot",
-    )
+    rom, maps, pk, docs, species, o = synthetic(rom_override=override, pk_ability=11)
+    species["species"][1]["abilities"] = [10, species_slot2]
+    rows = trainer_rows(rom, maps, pk, docs, species, o)
+    row = find(rows, "trainers", "5 Ace X/0", "ability_slot")
     assert (row.rom, row.pkcalc, row.executed) == (want, 11, True)
 
 
@@ -389,8 +387,59 @@ def test_sheet_tag_battle_tags():
 
 def test_sheet_multi_with_unknown_name_is_reported_not_guessed():
     rows = trainer_rows(*synthetic(header_tags={"multi_with": "Ace Zed"}))
-    assert find(rows, "trainers", "5 Ace X", "opponent_2").sheet == "name: Ace Zed"
+    assert find(rows, "trainers", "5 Ace X", "sight_pair").sheet == "name: Ace Zed"
     assert find(rows, "trainers", "5 Ace X", "format").sheet is None
+
+
+# --- sight pairs (fix round 1, I1) -------------------------------------------------------
+
+_DOUBLE_PAIR = [["Ace X", "Ace Y"]]
+
+
+def test_sight_pair_sharing_a_header_agrees():  # Cyclist Axel/John on Route 206 (350)
+    src = synthetic(pkcalc_double=_DOUBLE_PAIR)
+    where = {5: [350, 351], 9: [350]}
+    rows = trainer_rows(*src, trainer_maps=where)
+    row = find(rows, "trainers", "5 Ace X", "sight_pair")
+    assert (row.rom, row.pkcalc, row.executed) == (9, 9, True)
+    assert not [r for r in rows if r.key == "5 Ace X" and r.field in ("format", "opponent_2")]
+    assert compare(rows, []).unresolved == []
+    lines = area_section(src[0], src[1], src[2], src[3], src[5], where)
+    assert any(
+        ln.startswith("sight_pair: 5 Ace X: ROM 9") and "rom: map header 350, sight pair" in ln
+        for ln in lines
+    )
+
+
+def test_sight_pair_without_a_shared_header_is_unresolved():
+    rows = trainer_rows(*synthetic(pkcalc_double=_DOUBLE_PAIR), trainer_maps={5: [1], 9: [2]})
+    row = find(rows, "trainers", "5 Ace X", "sight_pair")
+    assert (row.rom, row.pkcalc) == (None, 9)
+    assert [(r.key, r.field) for r in compare(rows, []).unresolved] == [
+        ("5 Ace X", "sight_pair"),
+        ("9 Ace Y", "sight_pair"),
+    ]
+
+
+def test_rom_pair_against_pkcalc_single_disagrees():
+    rows = trainer_rows(*synthetic(rom_format="double_two_trainer", rom_opponent_2=9))
+    row = find(rows, "trainers", "5 Ace X", "opponent_2")
+    assert (row.rom, row.pkcalc) == (9, "none")
+    assert ("5 Ace X", "opponent_2") in [(r.key, r.field) for r in compare(rows, []).unresolved]
+
+
+def test_no_second_opponent_is_none_not_absent():
+    row = find(trainer_rows(*synthetic()), "trainers", "5 Ace X", "opponent_2")
+    assert (row.rom, row.pkcalc, row.sheet) == ("none", "none", None)
+
+
+def test_walk_multi_keeps_its_format_row_beside_the_sight_pair():
+    rows = trainer_rows(
+        *synthetic(rom_format="multi", pkcalc_tag=[["Ace X", "Ace Y", "Cheryl"]]),
+        trainer_maps={5: [7], 9: [7]},
+    )
+    assert find(rows, "trainers", "5 Ace X", "format").rom == "multi"
+    assert find(rows, "trainers", "5 Ace X", "sight_pair").rom == 9
 
 
 def test_unknown_start_condition_and_format_are_not_rows():
@@ -405,6 +454,19 @@ def test_sheet_area_weather_from_section():
     )
     row = find(rows, "trainers", "5 Ace X", "area_weather")
     assert (row.rom, row.pkcalc, row.sheet) == ("sandstorm", None, "sandstorm")
+
+
+def test_sheet_weather_header_tag_wins_over_section():
+    rows = trainer_rows(
+        *synthetic(
+            rom_condition="rain",
+            section_tags={"permanent": "sandstorm"},
+            header_tags={"weather": "rain", "assumed_permanent": True},
+        )
+    )
+    assert find(rows, "trainers", "5 Ace X", "area_weather").sheet == "rain"
+    # Ace Y has no tag of its own: its section's tag spreads to it.
+    assert find(rows, "trainers", "9 Ace Y", "area_weather").sheet == "sandstorm"
 
 
 def test_pkcalc_sand_list_is_sandstorm():
@@ -528,6 +590,21 @@ def test_area_section_lists_refused_unknowns_and_flag_labels():
     assert any("Maid Yoki" in ln for ln in lines)
 
 
+def test_area_section_marks_pkcalc_only_starters():
+    label = "Pok\u00e9mon Trainer Barry #2 [Piplup]"
+    rom, maps, pk, docs, _species, o = synthetic(x_label=label)
+    lines = area_section(rom, maps, pk, docs, o)
+    line = next(ln for ln in lines if ln.startswith(f"player_starter: 5 {label}"))
+    assert line.endswith("from pkcalc bracket (PKCalc only, unconfirmed)")
+
+
+def test_mapping_section_lists_unmapped_headers():
+    _, maps, *_ = synthetic()
+    maps = Mappings(maps.pkcalc, (Mapping("S Split:7", None, "unmapped", ()),), {}, ())
+    want = "unmapped sheet headers (non-blocking, sheet_only by controller ruling): 1: S Split:7"
+    assert want in mapping_section(maps)
+
+
 def test_area_section_trick_room_sheet_only():  # the Hooded Figure shape: sheet yes, ROM no
     rom, maps, pk, docs, _species, _o = synthetic(header_tags={"permanent": "trick_room"})
     o = Overrides(area={5: AreaOverride(True, False, None, "S Split:7")})
@@ -551,7 +628,8 @@ def real_sources(kaizo_rom_dir, pkcalc, docs):
     maps = build_mappings(
         pkcalc["trainers"], docs, rom, species["species"], effects, overrides.trainer_ids
     )
-    return rom, maps, pkcalc, docs, species, overrides
+    where = json.loads((kaizo_rom_dir / "rom_trainer_maps.json").read_text(encoding="utf-8"))
+    return rom, maps, pkcalc, docs, species, overrides, {int(k): v for k, v in where.items()}
 
 
 @pytest.fixture(scope="module")
@@ -561,11 +639,11 @@ def real_rows(real_sources):
 
 @pytest.fixture(scope="module")
 def real_sections(real_sources):
-    rom, maps, pk, docs, species, overrides = real_sources
+    rom, maps, pk, docs, species, overrides, where = real_sources
     return {
         "mapping": mapping_section(maps),
         "pid": pid_section(rom, maps, pk, species),
-        "area": area_section(rom, maps, pk, docs, overrides),
+        "area": area_section(rom, maps, pk, docs, overrides, where),
     }
 
 
@@ -583,6 +661,29 @@ def test_pid_section_format(real_sections):
     assert re.fullmatch(r"nature and gender reproduced for \d+ of \d+ override-0 Pokemon", lines[0])
     assert re.fullmatch(r"ability reproduced for \d+ of \d+", lines[1])
     assert re.fullmatch(r"trainers reproduced completely: \d+ of \d+", lines[2])
+
+
+def test_pid_carry_over_model_leaves_no_nature_miss(real_sections):  # fix round 1, I3
+    line = next(
+        ln for ln in real_sections["pid"] if ln.startswith("nature with the patched genderMod")
+    )
+    n, m = map(int, re.fullmatch(r".*: (\d+) of (\d+)", line).groups())
+    assert n == m > 2000
+
+
+def test_real_sight_pairs_cite_shared_headers(real_rows, real_sections):
+    row = find(real_rows, "trainers", "25 Cyclist Axel", "sight_pair")
+    assert (row.rom, row.pkcalc) == (27, 27)
+    assert any(
+        ln.startswith("sight_pair: 25 Cyclist Axel: ROM 27 (rom: map header 350, sight pair")
+        for ln in real_sections["area"]
+    )
+
+
+def test_real_self_pairs_agree_as_doubles(real_rows):  # fix round 1, I2: Volkner
+    assert find(real_rows, "trainers", "320 Leader Volkner", "format").rom == "double"
+    row = find(real_rows, "trainers", "320 Leader Volkner", "opponent_2")
+    assert (row.rom, row.pkcalc) == ("none", "none")
 
 
 def test_real_override_18_is_rom_vs_sheet(real_rows):  # Task 8: one mon 18 where the sheet says 2

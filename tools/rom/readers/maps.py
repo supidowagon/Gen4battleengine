@@ -1073,6 +1073,7 @@ def trainer_start_conditions(
     overrides: Path | None | _GameDefault = GAME_DEFAULT,
     unresolved: list[UnresolvedOperand] | None = None,
     field_effects: dict[int, dict[str, list[int]]] | None = None,
+    maps: dict[int, list[int]] | None = None,
 ) -> list[str]:
     """One start condition per trainer id, derived as ``extract_decomp.extract_trainers``
     does (§6.3) from the maps of ``trainer_maps``. Battle operand variables that no
@@ -1088,7 +1089,8 @@ def trainer_start_conditions(
 
     A map whose weather starts a ``FIELD_EFFECTS`` effect (Kaizo's map weather 18: Trick
     Room) gives the weather "none"; the effect is recorded in ``field_effects`` (when
-    given) as trainer id -> {effect: [its map headers with it]}, never dropped silently."""
+    given) as trainer id -> {effect: [its map headers with it]}, never dropped silently.
+    ``maps`` (when given) receives the join itself: trainer id -> its sorted map headers."""
     decomp = Path(decomp)
     trainers = _constants(decomp, "trainers", "TRAINER_")
     if rom.game_code == KAIZO_GAME_CODE:
@@ -1098,6 +1100,8 @@ def trainer_start_conditions(
         labels, default, allowed = trainers, START_CONDITIONS_FILE, START_CONDITIONS
     path = default if overrides is GAME_DEFAULT else overrides
     where, weathers = trainer_maps(rom, decomp, symbols, len(trainers), unresolved)
+    if maps is not None:
+        maps.update({t: sorted(h) for t, h in sorted(where.items())})
     conditions = _map_conditions(rom, decomp, symbols, weathers)
     fixed = _start_condition_overrides(path, labels.__getitem__, allowed) if path else {}
     out = []

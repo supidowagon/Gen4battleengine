@@ -12,7 +12,8 @@ formatted by ``extract_decomp._write``.
 after the ROM diff's reuse check: trainers with the Kaizo party layout (K2b Ruling 6), map
 headers from ``d_test.narc`` (Ruling 8) and start conditions settled by
 ``data/kaizo/start_conditions.json``. It also writes ``changed_scripts.json`` (the changed
-members of the battle script NARCs, Ruling 13); the CLI appends an explicit ``unknown``
+members of the battle script NARCs, Ruling 13) and ``rom_trainer_maps.json`` (trainer id ->
+the map headers of the trainer -> map join, for Task 13's sight pairs); the CLI appends an explicit ``unknown``
 ``[[member]]`` entry to ``data/kaizo/rom_diff.toml`` for each changed member it lacks.
 
 Battle command operands that are variables no constant reaches on some walked script path
@@ -79,6 +80,7 @@ REUSE_BANKS = (
 )
 UNRESOLVED_FILE = "rom_unresolved.json"
 FIELD_EFFECTS_FILE = "rom_field_effects.json"
+TRAINER_MAPS_FILE = "rom_trainer_maps.json"  # Kaizo: trainer id -> map headers (sight pairs)
 CHANGED_SCRIPTS_FILE = "changed_scripts.json"
 ROM_DIFF_TOML = REPO_ROOT / "data" / "kaizo" / "rom_diff.toml"
 # Raw ROM output; data/intermediate_kaizo/*.json are the resolved files (K2b Ruling 2).
@@ -280,8 +282,9 @@ def extract(game: str, out: Path, decomp: Path, symbols: Path, inputs: RomInputs
         charmap = extract_charmap(decomp)
         unresolved = []
         effects: dict[int, dict[str, list[int]]] = {}
+        where: dict[int, list[int]] = {}
         starts = trainer_start_conditions(
-            rom, decomp, smap, unresolved=unresolved, field_effects=effects
+            rom, decomp, smap, unresolved=unresolved, field_effects=effects, maps=where
         )
         rows = _unresolved_rows(unresolved, decomp)
         for r in rows:
@@ -319,6 +322,7 @@ def extract(game: str, out: Path, decomp: Path, symbols: Path, inputs: RomInputs
         if changed is not None:
             _write(stage / CHANGED_SCRIPTS_FILE, changed)
             _write(stage / FIELD_EFFECTS_FILE, _report_kaizo(tables["trainers"], effects))
+            _write(stage / TRAINER_MAPS_FILE, {str(t): h for t, h in where.items()})
         fresh = stage / "decomp"
         extract_static(decomp, fresh)
         for name in (*REUSED_FILES, *DECOMP_FILES):
@@ -337,6 +341,7 @@ def extract(game: str, out: Path, decomp: Path, symbols: Path, inputs: RomInputs
         if changed is not None:
             sources[CHANGED_SCRIPTS_FILE] = "rom diff"
             sources[FIELD_EFFECTS_FILE] = "rom: map weather through the battle weather switch"
+            sources[TRAINER_MAPS_FILE] = "rom: trainer -> map header join (map scripts, events)"
         _write(stage / "rom_sources.json", sources)
         _write(stage / UNRESOLVED_FILE, rows)
         out.mkdir(parents=True, exist_ok=True)

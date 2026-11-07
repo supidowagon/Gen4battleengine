@@ -147,6 +147,19 @@ def test_two_trainer_pair():
     }
 
 
+def test_self_pair_is_a_one_trainer_double():
+    # StartTrainerBattle t, t: Encounter_NewVsTrainer's BATTLE_TYPE_TRAINER_DOUBLES
+    # (src/encounter.c:736-737), Kaizo's Volkner and Cyrus.
+    got = battle_structures({"A": [Op("StartTrainerBattle", (5, 5))]}, {})
+    assert got == {5: BattleStructure("double", None, ())}
+
+
+def test_self_pair_beside_another_pair_raises():
+    scripts = {"A": [Op("StartTrainerBattle", (5, 5)), Op("StartTrainerBattle", (5, 6))]}
+    with pytest.raises(ValueError, match="trainer 5"):
+        battle_structures(scripts, {})
+
+
 def test_the_same_pair_twice_is_one_structure():
     # scripts_restaurant.s fights each pair from two scripts, and headers share files.
     pair = [Op("StartTrainerBattle", (5, 6))]
