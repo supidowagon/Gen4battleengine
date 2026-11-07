@@ -307,6 +307,7 @@ trick_room = true
 source = "rom:map header 310 weather 18 (Trick Room)"
 
 # 666 Hooded Figure; sheet: Elite Four Split:206 ['trick_room']
+# rom: no map of this trainer has weather 18 and start_condition is 'none': a sheet-only claim (Task 13 reports it)
 [area.666]
 trick_room = true
 source = "Elite Four Split:206"
@@ -408,8 +409,8 @@ source = "Galactic Split:105"
 id = 296
 source = "pkcalc:src/js/data/sets.js:988"
 
-# Galactic HQ (PERMANENT TRICK ROOM) headers whose levels differ from every ROM party (same
-# species in the same order). Each is the only ROM trainer of that name on a Trick Room map
+# Warehouse/HQ (PERMANENT TRICK ROOM) headers whose levels differ from every ROM party
+# (same species in the same order). Each is the only ROM trainer of that name on a Trick Room map
 # (rom_field_effects.json), and PKCalc's label for that id agrees.
 # Galactic Prospero: ROM 463, 526 elsewhere; 550 on map 310 (PKCalc "Galactic Prospero #2").
 [trainer_ids."Galactic Split:492"]

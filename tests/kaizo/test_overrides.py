@@ -15,6 +15,7 @@ from tools.kaizo.overrides import (
     OverridesError,
     build_mappings,
     check_citations,
+    check_gauntlet_members,
     check_rom_trick_room,
     check_trainer_ids,
     draft_overrides,
@@ -239,7 +240,7 @@ def test_rom_trick_room_needs_override_or_exception():
     ]
     o = overrides_with(
         area={
-            5: AreaOverride(True, False, None, "rom:x"),
+            5: AreaOverride(True, False, None, "rom:map header 305 weather 18 (Trick Room)"),
             8: AreaOverride(False, True, None, "rom:x"),
         },
         area_exceptions={6: AreaException("two maps", "rom:y")},
@@ -254,6 +255,91 @@ def test_rom_trick_room_needs_override_or_exception():
             "and no area_exception"
         ),
     ]
+
+
+TR_ROWS = [
+    {"id": 5, "name": "Saturn", "effect": "trick_room", "map_headers": [305]},
+    {"id": 6, "name": "Io", "effect": "trick_room", "map_headers": [305, 306]},
+]
+
+
+@pytest.mark.parametrize(
+    ("tid", "source", "problem"),
+    [
+        (5, "rom:map header 305 weather 18 (Trick Room)", None),
+        (6, "rom:map headers 305, 306 weather 18 (Trick Room)", None),
+        (246, "rom:map header 999 weather 18 (Trick Room)", "has no Trick Room row"),
+        (5, "rom:map header 306 weather 18 (Trick Room)", "has map headers [305]"),
+        (5, "rom:somewhere with Trick Room", "is no ROM Trick Room citation"),
+    ],
+)
+def test_rom_trick_room_citations_checked_back(tid, source, problem):
+    rows = [*TR_ROWS, {"id": 7, "name": "X", "effect": "trick_room", "map_headers": [1]}]
+    o = overrides_with(
+        area={tid: AreaOverride(True, False, None, source)},
+        area_exceptions={i: AreaException("r", "rom:y") for i in (5, 6, 7) if i != tid},
+    )
+    got = check_rom_trick_room(o, rows)
+    if problem is None:
+        assert got == []
+    else:
+        assert len(got) == 1 and got[0].startswith(f"area.{tid}: ") and problem in got[0]
+
+
+@pytest.mark.parametrize(
+    ("tid", "source", "problem"),
+    [
+        (5, "rom:only Saturn on a Trick Room map (rom_field_effects.json, map header 305)", None),
+        (
+            9,
+            "rom:only Saturn on a Trick Room map (rom_field_effects.json, map header 305)",
+            "not 9",
+        ),
+        (
+            5,
+            "rom:only Saturn on a Trick Room map (rom_field_effects.json, map header 999)",
+            "[305]",
+        ),
+        (5, "rom:only Mars on a Trick Room map (rom_field_effects.json, map header 305)", "not 5"),
+        (5, "rom:only Saturn somewhere", "is no ROM Trick Room citation"),
+    ],
+)
+def test_rom_only_trainer_id_citations_checked(tid, source, problem):
+    o = overrides_with(
+        trainer_ids={"S Split:2": tid},
+        sources={"trainer_ids.S Split:2": source},
+        area_exceptions={5: AreaException("r", "rom:y"), 6: AreaException("r", "rom:y")},
+    )
+    got = check_rom_trick_room(o, TR_ROWS)
+    if problem is None:
+        assert got == []
+    else:
+        assert len(got) == 1 and got[0].startswith("trainer_ids.S Split:2: ") and problem in got[0]
+
+
+def test_gauntlet_members_tied_to_cited_group():
+    sheet = [
+        Mapping("S Split:11", 21, "exact", (21,)),
+        Mapping("S Split:12", 22, "exact", (22,)),
+        Mapping("S Split:13", 23, "exact", (23,)),
+        Mapping("S Split:2", 2, "exact", (2,)),
+    ]
+    o = overrides_with(
+        gauntlets=(
+            Gauntlet("ok", (21, 22), {}, "S Split:11"),
+            Gauntlet("wrong", (2, 23), {}, "S Split:11"),
+        )
+    )
+    got = check_gauntlet_members(o, SYN, sheet)
+    assert [p.split(":")[0] for p in got] == ["gauntlet 'wrong'", "gauntlet 'wrong'"]
+    assert "trainer 2 " in got[0] and "trainer 23 " in got[1]  # 23 is outside the chain
+
+
+def test_trainer_in_two_gauntlets_refused(tmp_path):
+    g = '[[gauntlet]]\nname = "{}"\ntrainers = {}\nrules = {{}}\nsource = "user, 2026-11-03"\n'
+    text = g.format("a", "[1, 2]") + g.format("b", "[2, 3]")
+    with pytest.raises(OverridesError, match="gauntlet 'b': trainer 2 .*'a'"):
+        load_overrides(write(tmp_path, text))
 
 
 def test_ids_must_be_rom_trainers():
@@ -394,7 +480,8 @@ def test_draft_rom_trick_room_from_the_rom(syn_draft):
 
 
 def test_draft_sheet_only_trick_room_from_the_sheet(syn_draft):
-    _, o = syn_draft
+    text, o = syn_draft
+    assert "no map of this trainer has weather 18 and start_condition is 'none'" in text
     assert o.area[39] == AreaOverride(True, False, None, "S Split:51")
 
 
@@ -502,7 +589,24 @@ def test_committed_file_covers_rom_trick_room(field_effects, kaizo_rom_trainers)
 
 
 def test_committed_override_keys_known(mappings):
-    assert mappings.sheet  # build_mappings ran check_override_keys on the committed keys
+    by_label = {m.label: m for m in (*mappings.pkcalc, *mappings.sheet)}
+    for label, tid in load_overrides().trainer_ids.items():
+        assert (by_label[label].how, by_label[label].id) == ("override", tid)
+
+
+def test_committed_gauntlet_members_tied_to_their_cite(docs, mappings):
+    assert check_gauntlet_members(load_overrides(), docs, mappings.sheet) == []
+    probe = overrides_with(gauntlets=(Gauntlet("wrong", (246, 870), {}, "Roark Split:229"),))
+    assert len(check_gauntlet_members(probe, docs, mappings.sheet)) == 2
+
+
+def test_committed_rom_citations_hold(field_effects):
+    o = load_overrides()
+    assert check_rom_trick_room(o, field_effects) == []
+    probe = overrides_with(
+        area={246: AreaOverride(True, False, None, "rom:map header 999 weather 18 (Trick Room)")}
+    )
+    assert any(p.startswith("area.246: ") for p in check_rom_trick_room(probe, field_effects))
 
 
 def test_trick_room_and_gravity_present():

@@ -197,6 +197,14 @@ def _gauntlets(raw: list) -> tuple[Gauntlet, ...]:
         for k, v in rules.items():
             _bool(entry, k, v)
         out.append(Gauntlet(t["name"], tuple(trainers), dict(rules), src))
+    owner: dict[int, str] = {}
+    for g in out:
+        for tid in g.trainers:
+            if tid in owner:
+                raise OverridesError(
+                    f"gauntlet {g.name!r}: trainer {tid} is already in gauntlet {owner[tid]!r}"
+                )
+            owner[tid] = g.name
     return tuple(out)
 
 
@@ -352,14 +360,64 @@ def check_citations(overrides: Overrides, docs: dict) -> list[str]:
     return out
 
 
+_ROM_TR_CITE = re.compile(
+    rf"rom:map headers? (\d+(?:, \d+)*) weather {TRICK_ROOM_WEATHER} \(Trick Room\)"
+)
+_ROM_ONLY_CITE = re.compile(
+    r"rom:only (.+) on a Trick Room map \(rom_field_effects\.json, map headers? "
+    r"(\d+(?:, \d+)*)\)"
+)
+
+
+def _headers(text: str) -> list[int]:
+    return [int(x) for x in text.split(", ")]
+
+
 def check_rom_trick_room(overrides: Overrides, field_effects: Iterable[dict]) -> list[str]:
-    """Every ROM Trick Room trainer (``rom_field_effects.json``) needs an ``area`` entry
-    with ``trick_room = true`` or an ``area_exception`` (Kaizo map weather 18, a ROM fact
-    that supersedes Ruling 8's "no map header holds Trick Room")."""
+    """Both directions of the ROM Trick Room join (Kaizo map weather 18, a ROM fact that
+    supersedes Ruling 8's "no map header holds Trick Room"):
+
+    - every ``rom_field_effects.json`` trick_room trainer needs an ``area`` entry with
+      ``trick_room = true`` or an ``area_exception``;
+    - every ``trick_room`` entry citing ``rom:`` must cite ``map header(s) N weather 18
+      (Trick Room)`` with exactly that trainer's rom_field_effects headers;
+    - every ``trainer_ids`` entry citing ``rom:only <name> on a Trick Room map (...)`` must
+      name the only rom_field_effects trainer of that name, with those headers."""
+    rows = [r for r in field_effects if r["effect"] == "trick_room"]
+    by_id = {r["id"]: r for r in rows}
     out = []
-    for r in field_effects:
-        if r["effect"] != "trick_room":
+    for tid, a in overrides.area.items():
+        if not (a.trick_room and a.source.startswith("rom:")):
             continue
+        m = _ROM_TR_CITE.fullmatch(a.source)
+        if m is None:
+            out.append(f"area.{tid}: {a.source!r} is no ROM Trick Room citation")
+        elif tid not in by_id:
+            out.append(f"area.{tid}: {a.source!r} but rom_field_effects.json has no Trick Room row")
+        elif _headers(m[1]) != by_id[tid]["map_headers"]:
+            out.append(
+                f"area.{tid}: {a.source!r} but rom_field_effects.json has map headers "
+                f"{by_id[tid]['map_headers']}"
+            )
+    for entry, src in overrides.sources.items():
+        if not (entry.startswith("trainer_ids.") and src.startswith("rom:only ")):
+            continue
+        m = _ROM_ONLY_CITE.fullmatch(src)
+        tid = overrides.trainer_ids[entry.removeprefix("trainer_ids.")]
+        named = [r for r in rows if m is not None and r["name"] == m[1]]
+        if m is None:
+            out.append(f"{entry}: {src!r} is no ROM Trick Room citation")
+        elif len(named) != 1 or named[0]["id"] != tid:
+            ids = [r["id"] for r in named]
+            out.append(
+                f"{entry}: {src!r} but rom_field_effects.json has {m[1]} at {ids}, not {tid}"
+            )
+        elif _headers(m[2]) != named[0]["map_headers"]:
+            out.append(
+                f"{entry}: {src!r} but rom_field_effects.json has map headers "
+                f"{named[0]['map_headers']}"
+            )
+    for r in rows:
         tid = r["id"]
         a = overrides.area.get(tid)
         if (a is not None and a.trick_room) or tid in overrides.area_exceptions:
@@ -384,6 +442,32 @@ def check_trainer_ids(overrides: Overrides, rom_ids: set[int]) -> list[str]:
         out += [
             f"gauntlet {g.name!r}: {i} is no ROM trainer id" for i in g.trainers if i not in rom_ids
         ]
+    return out
+
+
+def check_gauntlet_members(overrides: Overrides, docs: dict, sheet: Iterable[Mapping]) -> list[str]:
+    """Every member of a sheet-cited gauntlet must map (``sheet``, Task 9 header mappings)
+    from a row of the cited group: the drafted group whose source is that cite (a chain,
+    a B2B pair, a gym or "Gauntlet With" section), else the cited row's section."""
+    rows = _rows(docs)
+    cites_of: dict[int, set[str]] = defaultdict(set)
+    for m in sheet:
+        if m.id is not None:
+            cites_of[m.id].add(m.label)
+    groups: dict[str, set[str]] = defaultdict(set)
+    for _name, src, members, _problem in _gauntlet_groups(docs):
+        groups[src] |= {h["cite"] for h in members}
+    out = []
+    for g in overrides.gauntlets:
+        if not _SHEET.fullmatch(g.source) or g.source not in rows:
+            continue  # check_citations reports a missing row
+        allowed = groups.get(g.source) or {h["cite"] for h in rows[g.source][0]["trainers"]}
+        for tid in g.trainers:
+            if not cites_of[tid] & allowed:
+                out.append(
+                    f"gauntlet {g.name!r}: trainer {tid} maps to no row of {g.source}'s group "
+                    f"(its rows: {sorted(cites_of[tid]) or 'none'})"
+                )
     return out
 
 
@@ -620,6 +704,12 @@ def draft_overrides(docs: dict, mappings: Mappings) -> str:
         if not others and not unknown:
             n_tr += 1
             out.append(f"# {tid} {name_of(tid)}; {sheet_note(tid)}")
+            if tid not in rom_tr:
+                start = rom.get(tid, {}).get("start_condition")
+                out.append(
+                    f"# rom: no map of this trainer has weather {TRICK_ROOM_WEATHER} and "
+                    f"start_condition is {start!r}: a sheet-only claim (Task 13 reports it)"
+                )
             out += lines
             out.append("")
             continue
@@ -755,6 +845,7 @@ def main(argv: list[str] | None = None) -> int:
     problems = (
         check_citations(o, docs)
         + check_rom_trick_room(o, effects)
+        + check_gauntlet_members(o, docs, m.sheet)
         + check_trainer_ids(o, {t["id"] for t in rom_trainers})
     )
     for p in problems:

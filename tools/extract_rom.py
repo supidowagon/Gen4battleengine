@@ -211,9 +211,12 @@ def move_list_override(game: str) -> dict[str, list[int]] | None:
     punch list the reader cannot find unchanged; pre-flight #17). Vanilla: none."""
     if game != "kaizo":
         return None
-    from tools.kaizo.overrides import load_overrides
+    from tools.kaizo.overrides import DEFAULT_PATH, OverridesError, load_overrides
 
-    return load_overrides().move_lists
+    try:
+        return load_overrides().move_lists
+    except OverridesError as e:
+        raise RomInputError(f"{DEFAULT_PATH}: {e}") from e
 
 
 def _unresolved_rows(unresolved, decomp: Path) -> list[dict]:

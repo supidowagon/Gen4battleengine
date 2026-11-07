@@ -130,3 +130,14 @@ def test_move_list_override_per_game():
 
     assert move_list_override("vanilla") is None
     assert move_list_override("kaizo") == load_overrides().move_lists
+
+
+def test_move_list_override_bad_file_is_input_error(monkeypatch):
+    import tools.kaizo.overrides as ov
+
+    def bad():
+        raise ov.OverridesError("area.7: entry has no source")
+
+    monkeypatch.setattr(ov, "load_overrides", bad)
+    with pytest.raises(RomInputError, match=r"overrides\.toml: area\.7"):
+        move_list_override("kaizo")
