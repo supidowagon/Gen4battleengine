@@ -150,10 +150,16 @@ with `source = "user, YYYY-MM-DD"`, then `overrides check` and a rebuild:
   sheet citation cannot settle these trainers: the ROM holds both placements.
 - *Unknown format*: add `[fields.<id>] format = "single"`, `"double"`,
   `"double_two_trainer"` (with `opponent_2 = <the other trainer's id>`) or `"multi"`
-  (`opponent_2` optional), replacing a `format = "unknown"`. Only a `user,` source may set a
-  format. For 521 and 527 also delete their entry in `data/kaizo/battle_formats.json` and
-  re-run `extract_rom`. If the cross-check then shows a disagreement on that trainer, it needs
-  a resolution as usual.
+  (`opponent_2` and `partner = <the player's partner's trainer id>` optional), replacing a
+  `format = "unknown"`. Only a `user,` source may set a format. Record a pair on both sides.
+  For 521 and 527 keep their entries in `data/kaizo/battle_formats.json`: the ROM's script
+  claims still conflict, and `extract_rom` stops on a conflict that file does not list; the
+  `[fields]` answer replaces the refused format. The cross-check then compares the answer
+  with PKCalc and the sheet; a disagreement needs a resolution as usual.
+- *Weather where the ROM disagrees with PKCalc and the sheet*: add `[area.<id>] weather`
+  with a `user,` source. The ROM-vs-PKCalc row compares the ROM map byte and keeps its
+  `use = "rom"` resolution (say in its `reason` that the user's answer sets the start
+  condition); the report then drops the call.
 
 **Level caps**: edit `data/kaizo/level_caps.toml` (`[splits]` per split sheet, `[fights]` per
 fight label prefix). No rebuild needed.
@@ -207,19 +213,22 @@ These are refused until you decide them. The "User calls" section of
 each; "Settling a user call" above says how to enter an answer. The kinds:
 
 - **Unknown start conditions**: trainers placed on maps that start different weather
-  (`start_conditions.json`; for example 318 Fantina and 343 "Fantina?").
+  (`start_conditions.json`; 676 Corbin, unreachable, is the one left).
 - **No map placement found**: trainers with a party that the ROM's trainer -> map join
-  places on no map (for example 874 Flint and 468 Raul). Their start condition is refused as
-  unknown, never read as no weather; the report lists them as one call.
+  places on no map (for example 468 Raul and the postgame daily trainers 906-920). Their start
+  condition is refused as unknown, never read as no weather; the report lists them as one
+  call. The story-reachable Pokemon Center daily trainers (874-891, 894-896) are answered.
 - **Trick Room on one placement only**: trainers placed both on a Trick Room map and on a
-  map without it (Rosalind 509, Puck 559, Kari 649 and most Galactic HQ grunts). Their start
-  condition is refused as unknown.
-- **Unknown formats**: 521 Mercury and 527 Venus (scripts disagree, `battle_formats.json`),
-  and the trainers the ROM fights in two different structures on two maps (`[fields]` in
-  `overrides.toml`).
-- **Weather where the ROM disagrees with PKCalc and the sheet**: Route 213 trainers (ROM: no
-  rain) and Idol Catherine #2 (ROM: no fog). The ROM value is used.
-- **Gravity** on Champion Cynthia rests on PKCalc alone.
+  map without it. Their start condition is refused as unknown until answered (all 35, among
+  them Rosalind 509, Puck 559 and Kari 649, are answered: the Galactic HQ fight).
+- **Unknown formats**: trainers whose scripts disagree (`battle_formats.json`) or that the
+  ROM fights in two different structures on two maps (`[fields]` in `overrides.toml`). All
+  are answered today (521 Mercury and 527 Venus: a multi beside Mira 864).
+- **Weather where the ROM disagrees with PKCalc and the sheet**, listed until answered
+  (Route 213 is rain and Idol Catherine #2 fog, by your answers).
+- **Gravity** whose entry cites PKCalc while no sheet row claims it (Champion Cynthia cites
+  the sheet row Elite Four Split:298).
+- **Unclassified ROM changes** (Ruling 13).
 
 ## What is refused
 

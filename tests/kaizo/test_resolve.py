@@ -11,7 +11,7 @@ import pytest
 from nuzline.data.games import GAMES, KAIZO
 from nuzline.data.trainer import GENDER_NONE, AreaCondition
 from tools.extract_rom import INPUTS_KEY, MOVE_LISTS_INPUT, kaizo_input_hashes
-from tools.kaizo.crosscheck import CrossCheck, CrossCheckError, Outcome, Row
+from tools.kaizo.crosscheck import CrossCheck, CrossCheckError, Outcome, Resolution, Row
 from tools.kaizo.overrides import AreaOverride, Overrides
 from tools.kaizo.resolve import (
     ResolveError,
@@ -266,6 +266,29 @@ def test_refusing_overrides_apply_to_the_rom_trainer():
     assert rom[0]["format"] == "multi"  # the input is not changed
 
 
+def test_users_format_answer_applies_before_the_cross_check():
+    buck = [{"trainer": 611, "starter": None, "player_gender": None}]
+    rom = [
+        {"id": 556, "format": "multi", "opponent_2": None, "partner": buck},
+        {"id": 521, "format": "unknown", "opponent_2": 527, "partner": None},
+        {"id": 202, "format": "multi", "opponent_2": None, "partner": buck},
+    ]
+    ov = Overrides(
+        fields={
+            556: {"format": "double_two_trainer", "opponent_2": 557},
+            521: {"format": "multi", "opponent_2": 527, "partner": 864},
+            202: {"format": "multi"},
+        }
+    )
+    out = with_overrides(rom, ov)
+    assert [(t["format"], t["opponent_2"], t["partner"]) for t in out] == [
+        ("double_two_trainer", 557, []),  # the ROM's partner goes with its structure
+        ("multi", 527, [{"trainer": 864, "starter": None, "player_gender": None}]),
+        ("multi", None, buck),  # no partner named: the ROM's stands
+    ]
+    assert rom[0]["partner"] == buck  # the input is not changed
+
+
 def test_provenance_hash_ignores_line_endings(tmp_path):
     lf, crlf = tmp_path / "lf.toml", tmp_path / "crlf.toml"
     lf.write_bytes(b'a = 1\nb = "x"\n')
@@ -482,16 +505,43 @@ def test_sight_pair_becomes_a_two_trainer_double(resolved_trainers):  # Cyclist 
     assert axel["sources"]["format"].startswith("rom: map header 350, sight pair")
 
 
-def test_two_structure_trainers_are_refused(resolved_trainers):
-    for tid in (521, 527, 539, 552, 556, 561, 569):
-        assert resolved_trainers[tid]["format"] == "unknown", tid
+# The user's format answers (2026-11-07): the Galactic HQ layout, and Spear Pillar beside Mira.
+USER_FORMATS = {
+    539: ("double_two_trainer", 540), 540: ("double_two_trainer", 539),
+    541: ("double_two_trainer", 542), 542: ("double_two_trainer", 541),
+    543: ("double_two_trainer", 544), 544: ("double_two_trainer", 543),
+    551: ("double_two_trainer", 552), 552: ("double_two_trainer", 551),
+    556: ("double_two_trainer", 557), 557: ("double_two_trainer", 556),
+    569: ("double_two_trainer", 627), 627: ("double_two_trainer", 569),
+    545: ("double", None), 546: ("double", None), 561: ("double", None),
+    547: ("single", None), 548: ("single", None), 549: ("single", None), 550: ("single", None),
+    521: ("multi", 527), 527: ("multi", 521),
+}  # fmt: skip
 
 
-def test_user_call_start_conditions_stay_unknown(resolved_trainers):
-    for tid in (318, 325, 343, 509, 559, 610, 649, 676, 746, 747):
+def test_two_structure_trainers_take_the_users_format(resolved_trainers):
+    for tid, (fmt, opp) in USER_FORMATS.items():
         t = resolved_trainers[tid]
-        assert t["start_condition"] == "unknown"
-        assert t["area_condition"]["weather"] == "unknown"
+        assert (t["format"], t["opponent_2"]) == (fmt, opp), tid
+        assert t["sources"]["format"] == f"overrides fields.{tid} (user, 2026-11-07)", tid
+        # Only the Spear Pillar multi has a partner; Buck 611 (Stark Mountain) is dropped.
+        want = [{"trainer": 864, "starter": None, "player_gender": None}] if fmt == "multi" else []
+        assert t["partner"] == want, tid
+
+
+def test_user_call_start_conditions(resolved_trainers):
+    corbin = resolved_trainers[676]  # unreachable: stays unknown
+    assert corbin["start_condition"] == "unknown"
+    assert corbin["area_condition"]["weather"] == "unknown"
+    answers = {318: "none", 325: "fog", 343: "none", 610: "rain", 746: "none", 747: "none",
+               103: "rain", 491: "rain", 291: "fog", 874: "none", 896: "none"}  # fmt: skip
+    for tid, start in answers.items():
+        t = resolved_trainers[tid]
+        assert t["start_condition"] == start, tid
+        assert "overrides area" in t["sources"]["start_condition"], tid
+    for tid in (906, 920, 468):  # postgame daily trainers, cut content: still refused
+        assert resolved_trainers[tid]["start_condition"] == "unknown", tid
+    assert resolved_trainers[870]["area_condition"]["gravity"] is True
 
 
 def test_start_condition_matches_area_condition(resolved_trainers):
@@ -536,15 +586,12 @@ def test_two_placement_trick_room_set(kaizo_intermediate):
     assert set(got) == TWO_PLACEMENT_TRICK_ROOM and len(got) == 35
 
 
-def test_two_placement_trick_room_trainers_are_refused(resolved_trainers):
+def test_two_placement_trick_room_trainers_take_the_users_answer(resolved_trainers):
+    # The user's answer (2026-11-07): the Galactic HQ fight, Trick Room with no weather.
     for tid in TWO_PLACEMENT_TRICK_ROOM:
         t = resolved_trainers[tid]
-        assert t["start_condition"] == "unknown" and not t["area_condition"]["trick_room"], tid
-
-
-def test_unknown_formats_have_no_opponent_2(resolved_trainers):
-    for tid in (*range(539, 553), 556, 561, 569):
-        assert resolved_trainers[tid]["opponent_2"] is None, tid
+        assert t["start_condition"] == "none" and t["area_condition"]["trick_room"], tid
+        assert "user, 2026-11-07" in t["sources"]["area_condition"], tid
 
 
 def test_report_lists_user_calls():
@@ -554,7 +601,38 @@ def test_report_lists_user_calls():
         pytest.skip("no report")
     text = DEFAULT_REPORT.read_text("utf-8")
     calls = text[text.index("## User calls") :].split("\n## ", 1)[0]
-    for needle in ("Trick Room on one placement only: 627", "format unknown: 556",
-                   "area weather 107 Tuber Jared", "area weather 291 Idol Catherine #2",
-                   "Gravity: 870", "ROM changes unclassified"):  # fmt: skip
-        assert needle in calls, needle
+    lines = [ln for ln in calls.splitlines() if ln.startswith("- ")]
+    assert [ln.split(":", 1)[0] for ln in lines] == [
+        "- start condition unknown",
+        "- no map placement found",
+        "- 103 ROM changes unclassified in data/kaizo/rom_diff.toml",
+    ]
+    assert lines[0].startswith("- start condition unknown: 676 Corbin")
+    unplaced = {int(i) for i in lines[1].rsplit(": ", 1)[1].split(", ")}
+    assert len(unplaced) == 278 and {906, 920, 468} <= unplaced
+    assert not unplaced & {*range(874, 892), 894, 895, 896}
+
+
+def test_user_calls_drop_answered_weather_and_sheet_backed_gravity():
+    from tools.kaizo.overrides import Mappings
+    from tools.kaizo.resolve import Sources, user_calls
+    from tools.kaizo.trainer_map import Mapping
+
+    rom = [_trainer(1, party=[{"species": 1, "level": 5}]), _trainer(2)]
+    docs = {"splits": {"S": {"sheet": "S Split", "sections": [
+        {"name": "Room", "tags": {}, "trainers": [
+            {"cite": "S Split:2", "tags": {"permanent": "gravity"}}]}]}}}  # fmt: skip
+    src = Sources({}, rom, [], {1: [10], 2: [10]}, {}, docs)
+    row = Row("trainers", "1 T1", "area_weather", "none", "rain", "rain", True)
+    res = Resolution("trainers", ("1 T1",), "area_weather", "rain", "rom", "r", "rom: x")
+    check = CrossCheck([Outcome(row, "resolved", "none", res)])
+    grav = AreaOverride(False, True, None, "pkcalc:src/js/shared_controls.js:611")
+    ov = Overrides(area={2: grav})
+
+    def calls(ov, maps=None):
+        return [c for c in user_calls(rom, check, ov, src, 0, maps) if "ROM changes" not in c]
+
+    assert [c[:22] for c in calls(ov)] == ["- area weather 1 T1: R", "- Gravity: 2 T2 rests "]
+    rain = AreaOverride(False, False, "rain", "user, 2026-11-07")
+    maps = Mappings((), (Mapping("S Split:2", 2, "exact", (2,)),), {}, ())
+    assert calls(Overrides(area={1: rain, 2: grav}), maps) == []

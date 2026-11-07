@@ -60,7 +60,7 @@ keys = [
 field = "area_weather"
 pkcalc = "rain"
 use = "rom"
-reason = "the patch changes Route 213's map header weather byte from 33 to 0 (no weather); the sheet tag and PKCalc say rain. ROM used by the source policy; listed as a user call"
+reason = "the patch changes Route 213's map header weather byte from 33 to 0 (no weather); the sheet tag and PKCalc say rain. This row compares the ROM map byte, so the ROM value stands here; the start condition is the user's answer, rain (overrides area.<id> weather, source user, 2026-11-07: a Kaizo script event starts rain, sheet Wake Split:192 'Route 213 (PERMANENT RAIN)')"
 evidence = "rom: d_test.narc map header 373 (ROUTE_213) weather byte 0 in Kaizo (vanilla 33), the only header of these trainers in the trainer -> map join (rom_trainer_maps.json)"
 
 [[resolution]]
@@ -83,11 +83,20 @@ evidence = "rom: d_test.narc map header 307 (GALACTIC_HQ_3F) weather 18 (Trick R
 
 [[resolution]]
 table = "trainers"
+keys = ["641 Galactic Bebhionn"]
+field = "area_weather"
+pkcalc = "rain"
+use = "rom"
+reason = "the user's answer (user, 2026-11-07; overrides area.641, map_header 307) is the Galactic HQ 3F fight: Trick Room, no weather. Neither ROM placement starts rain (header 356 ROUTE_209, the base game's Vs. Seeker rematch slot, has none too); PKCalc's rain list names this label (flags.js:650) with no rain-setting ability in the party (Vaporeon, Azumarill, Rotom), and the sheet makes no weather claim"
+evidence = "rom: d_test.narc map header 307 (GALACTIC_HQ_3F) weather 18 (Trick Room, no weather) and header 356 (ROUTE_209) no weather (rom_trainer_maps.json 641 headers 307, 356); sheet Galactic Split:432 in section :239 'Veilstone Warehouse (PERMANENT TRICK ROOM)'"
+
+[[resolution]]
+table = "trainers"
 keys = ["291 Idol Catherine #2"]
 field = "area_weather"
 pkcalc = "fog"
 use = "rom"
-reason = "the patch changes header 93's weather byte from 0 to 26, which the patched battle weather switch reads as no weather or fog; the sheet tag and PKCalc say fog. ROM used by the source policy; listed as a user call"
+reason = "the patch changes header 93's weather byte from 0 to 26, which the patched battle weather switch reads as no weather; the sheet tag and PKCalc say fog. This row compares the ROM map weather, so the ROM value stands here; the start condition is the user's answer, fog for 291 only (overrides area.291 weather, source user, 2026-11-07; sheet Fantina Split:405)"
 evidence = "rom: d_test.narc map header 93 (HEARTHOME_CITY_DP_GYM_ELEVATOR_ROOM_1) weather 26 in Kaizo (vanilla 0); tools/rom/readers/maps.py weather_switch_conditions: ids above the switch's top take its default, none"
 
 # --- trainers: formats --------------------------------------------------------------------

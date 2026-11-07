@@ -25,7 +25,8 @@ Tables (keys are ROM trainer ids unless said otherwise):
   one ``trainers.json`` format cannot hold (coverage refuses it, K2b Task 15); or, with a
   ``"user, <date>"`` source only, the user's answer: a concrete format (``FORMATS``), with
   ``opponent_2`` (the second trainer's id) for ``double_two_trainer`` (required) and
-  ``multi`` (optional).
+  ``multi`` (optional), and ``partner`` (the player's partner's trainer id, ``multi`` only,
+  optional: absent, the ROM's partner stands).
 - ``[move_lists.<sound|punch>]``: ``ids``, for ``read_move_lists(..., override=...)``.
 
 :func:`check_citations` re-reads every sheet citation against ``docs.json``;
@@ -72,6 +73,7 @@ FIELD_TYPES = {
     "player_starter": int,
     "format": str,
     "opponent_2": int,
+    "partner": int,
 }
 UNKNOWN_FORMAT = "unknown"  # the format a [fields.<id>] entry sets to refuse a trainer
 # The concrete formats a user's answer may set (tools/battle_scripts.py battle structures).
@@ -300,6 +302,8 @@ def load_overrides(path: Path = DEFAULT_PATH) -> Overrides:
             raise OverridesError(f"{entry}: opponent_2 needs format one of {_PAIRED}")
         if fmt == "double_two_trainer" and "opponent_2" not in values:
             raise OverridesError(f"{entry}: format double_two_trainer needs opponent_2")
+        if "partner" in values and fmt != "multi":
+            raise OverridesError(f"{entry}: partner needs format 'multi'")
         fields_[_id(entry, key)] = values
 
     move_lists = {}
@@ -544,8 +548,9 @@ def check_trainer_ids(overrides: Overrides, rom_ids: set[int]) -> list[str]:
             f"gauntlet {g.name!r}: {i} is no ROM trainer id" for i in g.trainers if i not in rom_ids
         ]
     for tid, values in overrides.fields.items():
-        if "opponent_2" in values and values["opponent_2"] not in rom_ids:
-            out.append(f"fields.{tid}: opponent_2 {values['opponent_2']} is no ROM trainer id")
+        for k in ("opponent_2", "partner"):
+            if k in values and values[k] not in rom_ids:
+                out.append(f"fields.{tid}: {k} {values[k]} is no ROM trainer id")
     return out
 
 
