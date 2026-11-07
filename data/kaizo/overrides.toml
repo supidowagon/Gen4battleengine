@@ -437,3 +437,89 @@ source = "rom:only Io on a Trick Room map (rom_field_effects.json, map header 49
 [trainer_ids."Galactic Split:747"]
 id = 409
 source = "rom:only Saturn on a Trick Room map (rom_field_effects.json, map header 494)"
+
+
+# --- Battle format corrections (K2b Task 15) ---------------------------------------------
+# format = "unknown": the ROM fights the trainer in two battle structures on two maps, which
+# one trainers.json format cannot hold; coverage refuses it (user call, like 521/527 in
+# data/kaizo/battle_formats.json, which only takes trainers whose script claims conflict).
+#
+# Restaurant slots reused for Galactic HQ trainers: scr_seq member 417 (map header 337
+# RESTAURANT, changed by the patch, still reached from its header entries) runs
+# StartTrainerBattle on vanilla's nine restaurant pairs (535-552), while the patched event
+# files also place these ids on the Galactic HQ maps, where no script pairs them (PKCalc and
+# the sheet pair them differently there: HQ sight pairs or one-trainer doubles).
+
+[fields.539]
+format = "unknown"
+source = "rom:scr_seq 417 (map header 337 RESTAURANT) block at offset 6354 runs StartTrainerBattle with 535; zone events 298 (map header 310 GALACTIC_HQ_B2F) place 539 Portia alone"
+
+[fields.540]
+format = "unknown"
+source = "rom:scr_seq 417 (map header 337 RESTAURANT) block at offset 6644 runs StartTrainerBattle with 548; zone events 298 (map header 310 GALACTIC_HQ_B2F) place 540 Cressida alone"
+
+[fields.541]
+format = "unknown"
+source = "rom:scr_seq 417 (map header 337 RESTAURANT) block at offset 7514 runs StartTrainerBattle with 550; zone events 298 (map header 310 GALACTIC_HQ_B2F) place 541 Umbriel alone"
+
+[fields.542]
+format = "unknown"
+source = "rom:scr_seq 417 (map header 337 RESTAURANT) block at offset 6064 runs StartTrainerBattle with 543; zone events 298 (map header 310 GALACTIC_HQ_B2F) place 542 Francisco alone"
+
+[fields.543]
+format = "unknown"
+source = "rom:scr_seq 417 (map header 337 RESTAURANT) block at offset 6064 runs StartTrainerBattle with 542; zone events 293 (map header 305 GALACTIC_HQ_1F) place 543 Margaret alone"
+
+[fields.544]
+format = "unknown"
+source = "rom:scr_seq 417 (map header 337 RESTAURANT) block at offset 6934 runs StartTrainerBattle with 552; zone events 293 (map header 305 GALACTIC_HQ_1F) place 544 Cupid alone"
+
+[fields.545]
+format = "unknown"
+source = "rom:scr_seq 417 (map header 337 RESTAURANT) block at offset 5774 runs StartTrainerBattle with 546; zone events 297 (map header 309 GALACTIC_HQ_B1F) place 545 Juliet alone"
+
+[fields.546]
+format = "unknown"
+source = "rom:scr_seq 417 (map header 337 RESTAURANT) block at offset 5774 runs StartTrainerBattle with 545; zone events 295 (map header 307 GALACTIC_HQ_3F) place 546 Belinda alone"
+
+[fields.547]
+format = "unknown"
+source = "rom:scr_seq 417 (map header 337 RESTAURANT) block at offset 7224 runs StartTrainerBattle with 538; zone events 298 (map header 310 GALACTIC_HQ_B2F) place 547 Caliban alone"
+
+[fields.548]
+format = "unknown"
+source = "rom:scr_seq 417 (map header 337 RESTAURANT) block at offset 6644 runs StartTrainerBattle with 540; zone events 293 (map header 305 GALACTIC_HQ_1F) place 548 Stephano alone"
+
+[fields.549]
+format = "unknown"
+source = "rom:scr_seq 417 (map header 337 RESTAURANT) block at offset 7804 runs StartTrainerBattle with 537; zone events 298 (map header 310 GALACTIC_HQ_B2F) place 549 Trinculo alone"
+
+[fields.550]
+format = "unknown"
+source = "rom:scr_seq 417 (map header 337 RESTAURANT) block at offset 7514 runs StartTrainerBattle with 541; zone events 298 (map header 310 GALACTIC_HQ_B2F) place 550 Prospero alone"
+
+[fields.551]
+format = "unknown"
+source = "rom:scr_seq 417 (map header 337 RESTAURANT) block at offset 5484 runs StartTrainerBattle with 536; zone events 293 (map header 305 GALACTIC_HQ_1F) place 551 Setebos alone"
+
+[fields.552]
+format = "unknown"
+source = "rom:scr_seq 417 (map header 337 RESTAURANT) block at offset 6934 runs StartTrainerBattle with 544; zone events 293 (map header 305 GALACTIC_HQ_1F) place 552 Sycorax alone"
+
+# Stark Mountain slots reused for Galactic HQ trainers: zone events 257 (map header 264
+# STARK_MOUNTAIN_ROOM_2, unchanged from vanilla) place them on a map whose script (scr_seq
+# 285) runs SetHasPartner with Buck 611 (a multi, K2a Ruling 3), and the patched Galactic HQ
+# events place them where no partner walks (PKCalc pairs 556 and 569 by sight, 561 is a
+# one-trainer double).
+
+[fields.556]
+format = "unknown"
+source = "rom:zone events 257 (map header 264 STARK_MOUNTAIN_ROOM_2) place 556 Miranda beside partner Buck 611; zone events 298 (map header 310 GALACTIC_HQ_B2F) place it with no partner"
+
+[fields.561]
+format = "unknown"
+source = "rom:zone events 257 (map header 264 STARK_MOUNTAIN_ROOM_2) place 561 Perdita beside partner Buck 611; zone events 293 (map header 305 GALACTIC_HQ_1F) place it with no partner"
+
+[fields.569]
+format = "unknown"
+source = "rom:zone events 257 (map header 264 STARK_MOUNTAIN_ROOM_2) place 569 Iapetus beside partner Buck 611; zone events 294 (map header 306 GALACTIC_HQ_2F) place it with no partner"
