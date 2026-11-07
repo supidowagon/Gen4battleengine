@@ -989,6 +989,11 @@ def trainer_maps(
 
     Each battle operand variable no constant reaches is appended to ``unresolved`` (when
     given), once per script file, in script member order.
+
+    Limitation (``rom_trainer_maps.json`` on Kaizo): ten trainers (562, 572, 581, 582, 583,
+    606, 676, 861, 863, 865) each join to 136-137 headers, through scripts that many map
+    headers share. The join cannot say where they are fought, so their header lists are no
+    placement evidence (``tools.kaizo.resolve.NOISY_MAP_JOIN``).
     """
     rows = map_header_rows(rom, symbols)
     scripts = rom.narc(SCRIPTS_NARC)

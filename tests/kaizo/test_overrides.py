@@ -611,9 +611,11 @@ def test_committed_rom_citations_hold(field_effects):
 
 def test_trick_room_and_gravity_present():
     o = load_overrides()
-    assert sum(a.trick_room for a in o.area.values()) >= 51 and any(
-        a.gravity for a in o.area.values()
-    )
+    # K2b Task 15 fix round 1: 35 ROM Trick Room trainers with a second, non-Trick-Room
+    # placement became area_exceptions (start condition refused); together >= 51 as before.
+    tr = {i for i, a in o.area.items() if a.trick_room}
+    assert len(tr) >= 19 and len(tr | set(o.area_exceptions)) >= 51
+    assert any(a.gravity for a in o.area.values())
 
 
 def test_committed_file_leaves_unknown_starts_unsettled():

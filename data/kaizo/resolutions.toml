@@ -60,7 +60,7 @@ keys = [
 field = "area_weather"
 pkcalc = "rain"
 use = "rom"
-reason = "the patched ROM sets Route 213's map weather to clear; PKCalc and the sheet still say rain (they predate or ignore the header change)"
+reason = "the patch changes Route 213's map header weather byte from 33 to 0 (no weather); the sheet tag and PKCalc say rain. ROM used by the source policy; listed as a user call"
 evidence = "rom: d_test.narc map header 373 (ROUTE_213) weather byte 0 in Kaizo (vanilla 33), the only header of these trainers in the trainer -> map join (rom_trainer_maps.json)"
 
 [[resolution]]
@@ -71,15 +71,6 @@ pkcalc = "rain"
 use = "rom"
 reason = "the ROM map has no weather; PKCalc's rain list names these Iron Island trainers and the sheet makes no claim"
 evidence = "rom: d_test.narc map header 293 (IRON_ISLAND_B2F_LEFT_ROOM) weather byte 0 (as vanilla), their only header in rom_trainer_maps.json"
-
-[[resolution]]
-table = "trainers"
-keys = ["641 Galactic Bebhionn"]
-field = "area_weather"
-pkcalc = "rain"
-use = "rom"
-reason = "neither of the trainer's ROM maps starts rain; PKCalc's rain list names it and the sheet makes no claim"
-evidence = "rom: d_test.narc map header 307 (GALACTIC_HQ_3F) weather 18 (Trick Room, no weather; overrides area.641) and map header 356 (ROUTE_209) weather 0, its headers in rom_trainer_maps.json"
 
 [[resolution]]
 table = "trainers"
@@ -96,7 +87,7 @@ keys = ["291 Idol Catherine #2"]
 field = "area_weather"
 pkcalc = "fog"
 use = "rom"
-reason = "the patched map weather 26 is above the patched battle weather switch's top, so the battle starts with no weather or fog; PKCalc and the sheet say fog"
+reason = "the patch changes header 93's weather byte from 0 to 26, which the patched battle weather switch reads as no weather or fog; the sheet tag and PKCalc say fog. ROM used by the source policy; listed as a user call"
 evidence = "rom: d_test.narc map header 93 (HEARTHOME_CITY_DP_GYM_ELEVATOR_ROOM_1) weather 26 in Kaizo (vanilla 0); tools/rom/readers/maps.py weather_switch_conditions: ids above the switch's top take its default, none"
 
 # --- trainers: formats --------------------------------------------------------------------

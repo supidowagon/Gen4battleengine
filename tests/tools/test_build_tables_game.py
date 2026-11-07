@@ -91,3 +91,10 @@ def test_kaizo_item_maps_need_the_vanilla_name_and_hold_effect():
     assert hold[1] == hold[2] == int(ItemId.UNSUPPORTED)  # re-purposed (hold effect), renamed
     assert bag[3] == int(TrainerItemId.POTION) and bag[4] == int(TrainerItemId.UNSUPPORTED)
     assert build_tables._item_maps(vanilla, None)[0][:2] == [ItemId.ORAN_BERRY, ItemId.SITRUS_BERRY]
+
+
+def test_kaizo_bag_item_needs_vanilla_restore_amount():
+    vanilla = [{"name": "Potion", "hold_effect": 0, "hp_restored": 20}]
+    kaizo = [{"name": "Potion", "hold_effect": 0, "hp_restored": 30}]
+    assert build_tables._item_maps(kaizo, vanilla)[1] == [int(TrainerItemId.UNSUPPORTED)]
+    assert build_tables._item_maps(vanilla, vanilla)[1] == [int(TrainerItemId.POTION)]

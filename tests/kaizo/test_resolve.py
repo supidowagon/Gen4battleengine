@@ -14,11 +14,13 @@ from tools.kaizo.crosscheck import CrossCheck, CrossCheckError, Outcome, Row
 from tools.kaizo.overrides import Overrides
 from tools.kaizo.resolve import (
     ResolveError,
+    _sha256,
     check_used,
     names,
     resolve,
     spelling,
-    with_format_overrides,
+    two_placement_trick_room,
+    with_overrides,
 )
 from tools.rom.inputs import RomInputs
 
@@ -223,11 +225,42 @@ def test_names_and_rows_without_a_rom_slot_are_not_written():
     assert len(check_used(check)) == 2
 
 
-def test_format_unknown_override_applies_to_the_rom_trainer():
-    rom = [{"id": 556, "format": "multi"}, {"id": 557, "format": "single"}]
-    ov = Overrides(fields={556: {"format": "unknown"}})
-    assert [t["format"] for t in with_format_overrides(rom, ov)] == ["unknown", "single"]
+def test_refusing_overrides_apply_to_the_rom_trainer():
+    from tools.kaizo.overrides import AreaException
+
+    rom = [
+        {"id": 556, "format": "multi", "opponent_2": 557, "start_condition": "none"},
+        {"id": 557, "format": "single", "opponent_2": None, "start_condition": "none"},
+        {"id": 627, "format": "single", "opponent_2": None, "start_condition": "none"},
+    ]
+    ov = Overrides(
+        fields={556: {"format": "unknown"}},
+        area_exceptions={627: AreaException("two placements", "rom:x")},
+    )
+    out = with_overrides(rom, ov)
+    assert [(t["format"], t["opponent_2"]) for t in out[:2]] == [
+        ("unknown", None),
+        ("single", None),
+    ]
+    assert [t["start_condition"] for t in out] == ["none", "none", "unknown"]
     assert rom[0]["format"] == "multi"  # the input is not changed
+
+
+def test_provenance_hash_ignores_line_endings(tmp_path):
+    lf, crlf = tmp_path / "lf.toml", tmp_path / "crlf.toml"
+    lf.write_bytes(b'a = 1\nb = "x"\n')
+    crlf.write_bytes(b'a = 1\r\nb = "x"\r\n')
+    assert _sha256(lf) == _sha256(crlf)
+
+
+def test_two_placement_trick_room_rule():
+    effects = [
+        {"id": 1, "effect": "trick_room", "map_headers": [306]},
+        {"id": 2, "effect": "trick_room", "map_headers": [306]},
+        {"id": 562, "effect": "trick_room", "map_headers": [306]},  # noisy map join
+    ]
+    maps = {1: [306, 347], 2: [306], 562: [306, 1, 2, 3]}
+    assert two_placement_trick_room(effects, maps) == {1: ([306], [347])}
 
 
 # --- the real resolved intermediates (skip until built) -----------------------------------
@@ -320,3 +353,41 @@ def test_json_shapes(resolved_trainers):
         assert t["split_order"] is None or len(t["split_order"]) == 2
         assert isinstance(t["gauntlet_rules"], dict) and isinstance(t["sources"], dict)
         assert set(t["area_condition"]) == {"weather", "fog", "trick_room", "gravity", "permanent"}
+
+
+# Derived from rom_trainer_maps.json and rom_field_effects.json (fix round 1): ROM Trick Room
+# trainers also placed on a header without Trick Room, the noisy map join excepted.
+TWO_PLACEMENT_TRICK_ROOM = {509, 559, 649, *range(539, 553), 556, 561, 569,
+                            *range(627, 633), *range(639, 647), 653}  # fmt: skip
+
+
+def test_two_placement_trick_room_set(kaizo_intermediate):
+    rom = kaizo_intermediate / "rom"
+    effects = json.loads((rom / "rom_field_effects.json").read_text("utf-8"))
+    maps = json.loads((rom / "rom_trainer_maps.json").read_text("utf-8"))
+    got = two_placement_trick_room(effects, {int(k): v for k, v in maps.items()})
+    assert set(got) == TWO_PLACEMENT_TRICK_ROOM and len(got) == 35
+
+
+def test_two_placement_trick_room_trainers_are_refused(resolved_trainers):
+    for tid in TWO_PLACEMENT_TRICK_ROOM:
+        t = resolved_trainers[tid]
+        assert t["start_condition"] == "unknown" and not t["area_condition"]["trick_room"], tid
+
+
+def test_unknown_formats_have_no_opponent_2(resolved_trainers):
+    for tid in (*range(539, 553), 556, 561, 569):
+        assert resolved_trainers[tid]["opponent_2"] is None, tid
+
+
+def test_report_lists_user_calls():
+    from tools.kaizo.crosscheck import DEFAULT_REPORT
+
+    if not DEFAULT_REPORT.exists():
+        pytest.skip("no report")
+    text = DEFAULT_REPORT.read_text("utf-8")
+    calls = text[text.index("## User calls") :].split("\n## ", 1)[0]
+    for needle in ("Trick Room on one placement only: 627", "format unknown: 556",
+                   "area weather 107 Tuber Jared", "area weather 291 Idol Catherine #2",
+                   "Gravity: 870", "ROM changes unclassified"):  # fmt: skip
+        assert needle in calls, needle

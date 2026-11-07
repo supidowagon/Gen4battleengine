@@ -82,6 +82,7 @@ from tools.kaizo.rows_trainers import (
 from tools.rom.inputs import KAIZO_PATCH_SHA256, REPO_ROOT, VANILLA_SHA1, RomInputs
 
 ROM_DIFF = REPO_ROOT / "data" / "kaizo" / "rom_diff.toml"
+UNKNOWN_START = "unknown"  # a start condition the evidence leaves to the user
 START_CONDITIONS = REPO_ROOT / "data" / "kaizo" / "start_conditions.json"
 
 # The vanilla-schema files the runtime and build_tables read, copied from <inter>/rom.
@@ -135,6 +136,12 @@ def _write(path: Path, data: Any) -> None:
 
 
 def _sha256(path: Path) -> str:
+    """SHA-256 of a committed text file with CRLF folded to LF, so the hash does not depend
+    on a checkout's line endings (``.gitattributes`` also pins them to LF)."""
+    return hashlib.sha256(Path(path).read_bytes().replace(b"\r\n", b"\n")).hexdigest()
+
+
+def _file_sha256(path: Path) -> str:
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
@@ -177,13 +184,43 @@ def load_sources(inter: Path) -> Sources:
     )
 
 
-def with_format_overrides(trainers: list[dict], overrides: Overrides) -> list[dict]:
-    """The ROM trainers with ``[fields.<id>] format = "unknown"`` applied (the cross-check
-    then lists them with the refused unknowns instead of comparing their format)."""
+# Trainers the ROM trainer -> map join places on 136-137 map headers each, through scripts
+# that many map headers share (rom_trainer_maps.json; tools/rom/readers/maps.py
+# trainer_maps). Their header lists are no placement evidence, so the two-placement Trick
+# Room rule skips them.
+NOISY_MAP_JOIN = frozenset({562, 572, 581, 582, 583, 606, 676, 861, 863, 865})
+
+
+def two_placement_trick_room(
+    field_effects: list[dict], trainer_maps: dict[int, list[int]]
+) -> dict[int, tuple[list[int], list[int]]]:
+    """Trainer id -> (its Trick Room headers, its other headers) for every ROM Trick Room
+    trainer (map weather 18) the trainer -> map join also places on a header without Trick
+    Room, ``NOISY_MAP_JOIN`` excepted. Which fight is meant is a user call (the
+    Rosalind/Puck/Kari precedent): each needs an ``[area_exception]``."""
+    out = {}
+    for r in field_effects:
+        if r["effect"] != "trick_room" or r["id"] in NOISY_MAP_JOIN:
+            continue
+        other = sorted(set(trainer_maps.get(r["id"], ())) - set(r["map_headers"]))
+        if other:
+            out[r["id"]] = (list(r["map_headers"]), other)
+    return out
+
+
+def with_overrides(trainers: list[dict], overrides: Overrides) -> list[dict]:
+    """The ROM trainers with the overrides that refuse a field applied, so the cross-check
+    lists them with the refused unknowns instead of comparing them: ``[fields.<id>] format =
+    "unknown"`` (``opponent_2`` None: the structures disagree on it) and ``[area_exception]``
+    (start condition ``"unknown"``)."""
     out = []
     for t in trainers:
         fmt = overrides.fields.get(t["id"], {}).get("format")
-        out.append(dict(t, format=fmt) if fmt is not None else t)
+        if fmt is not None:
+            t = dict(t, format=fmt, opponent_2=None)
+        if t["id"] in overrides.area_exceptions:
+            t = dict(t, start_condition=UNKNOWN_START)
+        out.append(t)
     return out
 
 
@@ -200,7 +237,14 @@ def cross_check(
         + check_rom_trick_room(overrides, src.field_effects)
         + check_trainer_ids(overrides, {t["id"] for t in src.trainers})
     )
-    trainers = with_format_overrides(src.trainers, overrides)
+    two = two_placement_trick_room(src.field_effects, src.trainer_maps)
+    problems += [
+        f"trainer {tid}: Trick Room headers {tr} and other headers {other}; needs an "
+        "area_exception (the fight meant is a user call), not a trick_room area entry"
+        for tid, (tr, other) in sorted(two.items())
+        if tid not in overrides.area_exceptions
+    ]
+    trainers = with_overrides(src.trainers, overrides)
     maps = build_mappings(
         src.pkcalc.get("trainers", {}),
         src.docs,
@@ -331,7 +375,10 @@ def names(
 
 def _area(start_condition: str, area: Any) -> tuple[str, dict]:
     """(start_condition, area_condition) from the ROM start condition and an overrides
-    ``[area.<id>]`` entry (weather replaces the start condition; Trick Room, Gravity add)."""
+    ``[area.<id>]`` entry (weather replaces the start condition; Trick Room, Gravity add).
+    ``permanent`` is True for every Kaizo area condition: map weather is permanent in battle
+    (``FIELD_CONDITION_*_PERM``, Ruling 8) and a bare sheet tag such as ``(SUN)`` is read as
+    permanent (user-confirmed, Ruling 22)."""
     weather = getattr(area, "weather", None)
     start = start_condition if weather is None else weather
     cond = AreaCondition.from_start_condition(start)
@@ -342,10 +389,11 @@ def _area(start_condition: str, area: Any) -> tuple[str, dict]:
         "gravity": bool(getattr(area, "gravity", False)),
         "permanent": True,
     }
-    if AreaCondition.from_start_condition(start) != AreaCondition(
-        weather=out["weather"], fog=out["fog"]
-    ):
-        raise ResolveError(f"start condition {start!r} does not map to {out}")
+    # Round trip: the start condition coverage reads (start_weather) is rebuilt from the
+    # area condition's weather and fog.
+    back = "fog" if out["fog"] else (out["weather"] or "none")
+    if (out["fog"] and out["weather"] is not None) or back != start:
+        raise ResolveError(f"start condition {start!r} does not round-trip through {out}")
     return start, out
 
 
@@ -532,6 +580,69 @@ def resolve_trainers(
     return out, lines
 
 
+# --- user calls -------------------------------------------------------------------------
+
+
+def user_calls(
+    trainers: list[dict],
+    check: CrossCheck,
+    overrides: Overrides,
+    src: Sources,
+    unclassified: int,
+) -> list[str]:
+    """Every item only the user can settle, one line each with its evidence."""
+    by_id = {t["id"]: t for t in trainers}
+    two = two_placement_trick_room(src.field_effects, src.trainer_maps)
+    lines = []
+
+    def name(tid: int) -> str:
+        return f"{tid} {by_id[tid]['name']}"
+
+    for t in trainers:
+        if t["start_condition"] == UNKNOWN_START and t["id"] not in two:
+            lines.append(
+                f"- start condition unknown: {name(t['id'])} (data/kaizo/start_conditions.json: "
+                "its maps start different conditions)"
+            )
+    for tid, (tr, other) in sorted(two.items()):
+        exc = overrides.area_exceptions.get(tid)
+        lines.append(
+            f"- Trick Room on one placement only: {name(tid)}: Trick Room headers {tr}, other "
+            f"headers {other}; start condition refused ({exc.source if exc else 'no exception'})"
+        )
+    for t in trainers:
+        if t["format"] == UNKNOWN_FORMAT:
+            tid = t["id"]
+            if "format" in overrides.fields.get(tid, {}):
+                why = overrides.sources.get(f"fields.{tid}", "?")
+            else:
+                why = "data/kaizo/battle_formats.json (script claims conflict)"
+            lines.append(f"- format unknown: {name(tid)} ({why})")
+    for o in check.outcomes:
+        r = o.row
+        if (
+            o.kind == "resolved"
+            and r.field == "area_weather"
+            and r.sheet is not None
+            and r.sheet == r.pkcalc
+        ):
+            lines.append(
+                f"- area weather {r.key}: ROM {r.rom} against PKCalc and the sheet {r.pkcalc}; "
+                f"ROM used ({o.resolution.evidence})"
+            )
+    for tid, a in sorted(overrides.area.items()):
+        if a.gravity and a.source.startswith("pkcalc:"):
+            lines.append(
+                f"- Gravity: {name(tid)} rests on PKCalc only ({a.source}); no ROM field effect "
+                f"on its headers {sorted(src.trainer_maps.get(tid, []))}"
+            )
+    lines.append(
+        f"- {unclassified} ROM changes unclassified in data/kaizo/rom_diff.toml: every Kaizo "
+        "fight is refused until they are classified (Ruling 13)"
+    )
+    return lines
+
+
 # --- resolve ----------------------------------------------------------------------------
 
 
@@ -560,23 +671,39 @@ def _report_sources(src: Sources, overrides_path: Path, resolutions_path: Path) 
     return out
 
 
-def provenance(
-    inputs: RomInputs, src: Sources, overrides_path: Path, resolutions_path: Path
-) -> dict[str, str]:
-    """Input hashes for the manifest (the patched ROM is built and checked by K1's
-    ``kaizo_rom``, which verifies the vanilla SHA-1 and the patch SHA-256 first)."""
-    from tools.rom.patch import kaizo_rom
-
-    _, patched_sha1 = kaizo_rom(inputs)
+def check_input_hashes(inputs: RomInputs, src: Sources) -> list[str]:
+    """Re-hash the configured PKCalc zip and docs workbook against the SHA-256 their
+    extracted JSON records; a mismatch raises, an input not configured or absent is a
+    report line (its JSON is used as extracted)."""
+    lines = []
     for what, configured, recorded in (
         ("PKCalc zip", inputs.pkcalc_zip, src.pkcalc.get("sha256")),
         ("Kaizo docs workbook", inputs.kaizo_docs, src.docs.get("sha256")),
     ):
-        if configured is not None and configured.exists() and _sha256(configured) != recorded:
+        if configured is None or not configured.exists():
+            lines.append(
+                f"{what}: not configured or absent ({configured}); re-hash skipped, the "
+                f"extracted JSON's sha256 {recorded} is used as recorded"
+            )
+        elif _file_sha256(configured) != recorded:
             raise ResolveError(
                 f"{what} {configured} does not match the extracted intermediates "
                 f"(sha256 {recorded}); re-run its extractor"
             )
+        else:
+            lines.append(f"{what}: {configured} re-hashed, matches {recorded}")
+    return lines
+
+
+def provenance(
+    inputs: RomInputs, src: Sources, overrides_path: Path, resolutions_path: Path
+) -> dict[str, str]:
+    """Input hashes for the manifest (the patched ROM is built and checked by K1's
+    ``kaizo_rom``, which verifies the vanilla SHA-1 and the patch SHA-256 first). The
+    committed text files hash LF-normalised (``_sha256``)."""
+    from tools.rom.patch import kaizo_rom
+
+    _, patched_sha1 = kaizo_rom(inputs)
     return {
         "vanilla_rom_sha1": VANILLA_SHA1,
         "patch_sha256": KAIZO_PATCH_SHA256,
@@ -610,9 +737,16 @@ def resolve(
             skipped = check_used(check)
             name_set = names(src.rom, _vanilla_tables(vanilla), src.pkcalc)
             resolved_trainers, trainer_lines = resolve_trainers(src, trainers, check, maps, ov)
+            hash_lines = check_input_hashes(inputs, src)
+            from tools.build_tables import _kaizo_rom_changes
+
+            _, unclassified = _kaizo_rom_changes(inter)
+            calls = user_calls(resolved_trainers, check, ov, src, unclassified)
         except Exception:
             write_report(check, sections, sources, report)
             raise
+        sections = {"User calls": calls, **sections}
+        sections["input re-hash"] = hash_lines
         sections["names (Ruling 3)"] = name_set.notes
         sections["resolved trainers"] = trainer_lines
         sections["rows with nothing to write (names, no ROM slot, mapped)"] = skipped

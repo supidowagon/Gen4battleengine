@@ -213,7 +213,8 @@ def _form_names(species: list[dict], forms: list[dict]) -> dict[str, list[str]]:
 def _item_maps(items: list[dict], vanilla: list[dict] | None) -> tuple[list[int], list[int]]:
     """``(ItemId, TrainerItemId)`` per item. Vanilla: by name. Kaizo (``vanilla`` given):
     by the slot's vanilla name, only when the slot keeps that name (up to spelling) and
-    vanilla's hold effect; a renamed or re-purposed item is ``UNSUPPORTED``."""
+    vanilla's hold effect (and, for the bag item, vanilla's ``hp_restored``); a renamed or
+    re-purposed item is ``UNSUPPORTED``."""
     if vanilla is None:
         hold = [int(DECOMP_ITEM_TO_ID.get(i["name"], ItemId.UNSUPPORTED)) for i in items]
         bag = [
@@ -226,20 +227,22 @@ def _item_maps(items: list[dict], vanilla: list[dict] | None) -> tuple[list[int]
         raise BuildError(f"items: {len(items)} rows, vanilla has {len(vanilla)}")
     hold, bag = [], []
     for item, van in zip(items, vanilla, strict=True):
-        same = (
-            spelling(item["name"]) == spelling(van["name"])
-            and item["hold_effect"] == van["hold_effect"]
-        )
-        hold.append(int(DECOMP_ITEM_TO_ID.get(van["name"], ItemId.UNSUPPORTED) if same else 0))
-        bag.append(int(DECOMP_TRAINER_ITEM_TO_ID.get(van["name"], TrainerItemId.UNSUPPORTED)))
-        if not same:
-            hold[-1], bag[-1] = int(ItemId.UNSUPPORTED), int(TrainerItemId.UNSUPPORTED)
+        same_name = spelling(item["name"]) == spelling(van["name"])
+        same_hold = same_name and item["hold_effect"] == van["hold_effect"]
+        # A bag item's effect also rests on its restore amount (Potion's 20, ids.py).
+        same_bag = same_hold and item.get("hp_restored") == van.get("hp_restored")
+        held = DECOMP_ITEM_TO_ID.get(van["name"], ItemId.UNSUPPORTED)
+        used = DECOMP_TRAINER_ITEM_TO_ID.get(van["name"], TrainerItemId.UNSUPPORTED)
+        hold.append(int(held if same_hold else ItemId.UNSUPPORTED))
+        bag.append(int(used if same_bag else TrainerItemId.UNSUPPORTED))
     return hold, bag
 
 
 def _kaizo_rom_changes(inter: Path) -> tuple[frozenset[int], int]:
     """(effect ids whose ``be_seq`` member changed and is not ``modelled``, the count of
-    ``unknown`` ``[[code]]`` and ``[[member]]`` entries in ``rom_diff.toml``)."""
+    ``unknown`` ``[[code]]`` and ``[[member]]`` entries in ``rom_diff.toml``). A member marked
+    ``irrelevant`` is UNSUPPORTED too: deliberately conservative, since "irrelevant" says the
+    change does not matter to the classifier, not that the engine models the new script."""
     from tools.rom.diff import load_classification, load_member_classification
 
     changed = _load(inter / "rom", "changed_scripts")
@@ -459,12 +462,19 @@ def main(argv: list[str] | None = None) -> int:
         try:
             resolve(load_inputs(), inter)
         except (CrossCheckError, ResolveError, RomInputError, FileNotFoundError) as e:
-            text = str(e).encode("ascii", "backslashreplace").decode("ascii")
-            print(f"error: {text}", file=sys.stderr)
+            print(f"error: {_ascii(str(e))}", file=sys.stderr)
             print(f"report: {DEFAULT_REPORT}", file=sys.stderr)
             return 1
-    build(inter, args.out or game.tables_dir, game.id)
+    try:
+        build(inter, args.out or game.tables_dir, game.id)
+    except BuildError as e:
+        print(f"error: {_ascii(str(e))}", file=sys.stderr)
+        return 1
     return 0
+
+
+def _ascii(text: str) -> str:
+    return text.encode("ascii", "backslashreplace").decode("ascii")
 
 
 if __name__ == "__main__":
