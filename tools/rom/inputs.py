@@ -21,6 +21,12 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 VANILLA_SHA1 = "0862ec35b24de5c7e2dcb88c9eea0873110d755c"
 # Platinum Kaizo Nightmare Update Final.xdelta
 KAIZO_PATCH_SHA256 = "b787e743b5fa78e1b31bae9277e656482b7248b82e490a6e95236606ae92f433"
+# PKCalc-main.zip audited 2026-11-03. Recorded only, not checked by read_checked (plan
+# Ruling 19): extract_pkcalc records the zip's hash; audited-count tests skip on another.
+PKCALC_SHA256 = "849733e658fc0116aaf0fc2f27db71d416165d79107cf3a0e29effce7062eb0f"
+# Platinum Kaizo Docs.xlsx audited 2026-11-03. Recorded only, not checked by read_checked
+# (plan Ruling 19).
+KAIZO_DOCS_SHA256 = "41c0c7fe8bb2b5d2179670f6e92655431ff86752a45370a11605715be8b1d74f"
 
 # TOML key -> environment variable.
 _ENV = {
@@ -29,6 +35,7 @@ _ENV = {
     "pkcalc_zip": "NUZLINE_PKCALC_ZIP",
     "kaizo_docs": "NUZLINE_KAIZO_DOCS",
     "kaizo_save": "NUZLINE_KAIZO_SAVE",
+    "kaizo_save_pre_roark": "NUZLINE_KAIZO_SAVE_PRE_ROARK",
 }
 
 
@@ -49,6 +56,7 @@ class RomInputs:
     pkcalc_zip: Path | None
     kaizo_docs: Path | None
     kaizo_save: Path | None
+    kaizo_save_pre_roark: Path | None = None  # a second, earlier save (pre-Roark)
 
 
 def _read_toml(config: Path) -> dict[str, object]:

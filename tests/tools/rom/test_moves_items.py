@@ -50,3 +50,5 @@ def test_kaizo_changes(vanilla_files, kaizo_files, decomp, symbols, charmap):
     k_items = read_items(kaizo_files, decomp, symbols, charmap)
     assert _by_name(v_items, "Flame Plate")["hold_param"] == 20
     assert _by_name(k_items, "Flame Plate")["hold_param"] == 50
+    assert _by_name(v_items, "Town Map")["fling_power"] == 0  # spec 5.5: 0 -> 120
+    assert _by_name(k_items, "Town Map")["fling_power"] == 120

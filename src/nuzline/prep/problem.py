@@ -218,6 +218,24 @@ def levelled_moves(
     return tuple(out)
 
 
+# Abilities that rule out a declared prestatus (ruling 6), by name: each game's own
+# ``Names`` gives their ids (``build_problem``).
+STATUS_BLOCKING_ABILITIES = {
+    "Limber": Status.PARALYSIS,
+    "Immunity": Status.POISON,
+    "Water Veil": Status.BURN,
+}
+
+
+def blocking_abilities(names: Names) -> tuple[tuple[int, int], ...]:
+    """``STATUS_BLOCKING_ABILITIES`` as (ability id in ``names``' game, ``Status``)."""
+    return tuple(
+        sorted(
+            (names.ability(name), int(status)) for name, status in STATUS_BLOCKING_ABILITIES.items()
+        )
+    )
+
+
 @dataclass(frozen=True)
 class PrepProblem:
     """Everything the prep search is given. ``protected``: candidate indices; ``prestatus``:
@@ -238,6 +256,9 @@ class PrepProblem:
     source: str
     levelled: tuple[tuple[tuple[int, int], ...], ...]
     left_out_party: tuple[tuple[int, str], ...] = ()
+    # (decomp ability id, Status) of STATUS_BLOCKING_ABILITIES in the problem's game
+    # (``build_problem`` looks the names up in its ``Names``); None: the shipped tables'.
+    blocking_abilities: tuple[tuple[int, int], ...] | None = None
 
 
 def _lookup(lookup: Callable[[str], int], name: str, what: str) -> int:
@@ -320,5 +341,6 @@ def build_problem(
             for m in save.party
             if m.location not in index
         ),
+        blocking_abilities=blocking_abilities(names),
     )
     return problem, warnings

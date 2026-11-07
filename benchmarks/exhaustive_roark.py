@@ -7,12 +7,13 @@
 The pool is the save's party plus the first Venonat (box 1 slot 1) and Geodude (box 1 slot 4)
 (ruling 14); the level cap is the configured one, no bag items, full HP. The valued setups are
 ``restricted_setups`` plus ``pruned_setups`` (the prune run with ``relearner="all"``). For each
-rung ``k`` in (0, 1): the funnel's pick (``relearner="designated"``, no TMs, items, entry HP or free level-up
-replacements (``levelled=False``: the valued space has none), ``max_depth=1``; the problem's Heart
-Scales are pinned to at most one); phase 1 values every setup by Stage B depth 1 at ``budget_playouts=2000``;
-phase 2 re-solves at precision 0.015 the setups whose phase-1 interval overlaps the best's, the
-pick, and every pruned setup whose phase-1 interval reaches above the pick's; ``verdict`` on
-phase 2. The run checkpoints after every setup (``--resume`` continues across nights; the
+rung ``k`` in (0, 1): the funnel's pick (``relearner="designated"``, no TMs, items, entry HP or
+free level-up replacements (``levelled=False``: the valued space has none), ``max_depth=1``; the
+problem's Heart Scales are pinned to at most one); phase 1 values every setup by Stage B depth 1
+at ``budget_playouts=2000``; phase 2 re-solves at precision 0.015 the setups whose phase-1
+interval overlaps the best's, the pick, and every pruned setup whose phase-1 interval reaches
+above the pick's; ``verdict`` on phase 2. The run checkpoints after every setup (``--resume``
+continues across nights; the
 checkpoint is tied to the problem, settings, tables and code like a prep checkpoint) and writes
 ``benchmarks/exhaustive_roark.json`` (``--out``). A failed verdict is a finding, not an error:
 the exit code is 0 either way.
@@ -87,6 +88,7 @@ def main(argv: list[str] | None = None) -> int:
     from benchmarks.rank_timing import machine
     from nuzline import jaxcache
     from nuzline.data import tables as tables_module
+    from nuzline.data.games import VANILLA
     from nuzline.data.learnsets import load_learnsets
     from nuzline.data.tables import load_names, load_tables
     from nuzline.data.trainer import IntermediateData, build_trainer_party, load_trainers
@@ -111,7 +113,7 @@ def main(argv: list[str] | None = None) -> int:
     from nuzline.saves import load_save
 
     table_version = jaxcache.table_version(tables_module.DEFAULT)
-    jaxcache.enable_compile_cache(table_version + jaxcache.code_version())
+    jaxcache.enable_compile_cache(table_version + jaxcache.code_version(), VANILLA)
     tables, names = load_tables(), load_names()
     trainer = resolve_trainer(load_trainers(INTERMEDIATE), name="roark", trainer_id=None)
     cap = default_cap(trainer)

@@ -11,8 +11,6 @@ from tools.effect_map import (
     CERTAIN_SECONDARY_EFFECTS,
     DECOMP_EFFECT_NAMES,
     DECOMP_EFFECT_TO_ID,
-    PUNCH_MOVES,
-    SOUND_MOVES,
     TYPE_CHART_STATUS_MOVES,
 )
 
@@ -83,18 +81,6 @@ def _move_names(text: str) -> set[str]:
         data = DECOMP / "res/moves" / const.lower() / "data.json"
         names.add(json.loads(data.read_text(encoding="utf-8"))["name"])
     return names
-
-
-def _c_move_names(array: str) -> set[str]:
-    """English names of the MOVE_* constants listed in a battle_lib.c array."""
-    src = (DECOMP / "src/battle/battle_lib.c").read_text(encoding="utf-8")
-    body = re.search(array + r"\[\]\s*=\s*\{(.*?)\};", src, re.DOTALL).group(1)
-    return _move_names(body)
-
-
-def test_sound_and_punch_lists_match_decomp():
-    assert SOUND_MOVES == _c_move_names("sSoundMoves")
-    assert PUNCH_MOVES == _c_move_names("sPunchingMoves")
 
 
 def test_type_checked_status_moves_are_flagged():

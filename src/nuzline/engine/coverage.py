@@ -48,7 +48,15 @@ items) and plan 1b (Task 2b: trainer items; Task 3: Roark's AI flags) implement:
 * battle format: only "single". The engine models one battler per side, so a trainer
   whose header is a double battle, who is fought beside a second enemy trainer
   ("double_two_trainer") or who is fought while the player has a partner ("multi", tag
-  battles and walking partners) is refused (``Trainer.format``).
+  battles and walking partners) is refused (``Trainer.format``);
+* Kaizo trainer fields (plan K2b Task 14): a permanent Trick Room or Gravity area
+  (``Trainer.area_condition``; the engine has neither field effect), a gauntlet (a chain
+  of fights, ``Trainer.gauntlet``), a start condition the extraction left to the user
+  (``"unknown"``, never read as a weather), a party member with no nature, gender or
+  ability data when the trainer has no PID routine (no PKCalc set; plan preflight #34)
+  and, for the Kaizo game, ROM code changes not yet classified
+  (``Names.unclassified_rom_changes``). Area weather and fog stay refused through
+  ``start_weather`` like vanilla's; ``Trainer.optional`` refuses nothing.
 
 ``check_coverage`` also runs the AI's own refusals (``ai.policy.ai_refusals``: opponent
 moves without transcribed script paths, too many script-roll sites, type-chart
@@ -68,13 +76,16 @@ from enum import IntEnum
 import numpy as np
 
 from nuzline.data.forms import personal_row
+from nuzline.data.game_constants import POLICY
+from nuzline.data.games import KAIZO, VANILLA
 from nuzline.data.spec import PokemonSpec
 from nuzline.data.tables import Names, Tables
-from nuzline.data.trainer import Trainer
+from nuzline.data.trainer import UNKNOWN_CONDITION, Trainer, missing_set_data
 from nuzline.engine.ids import AbilityId, EffectId, ItemId, TrainerItemId, Weather
 from nuzline.engine.state import make_state
 
 # include/constants/forms.h:94, :98; generated/species.txt and items.txt (line N is id N-1).
+# Checked against each game's data at load (nuzline.data.game_constants).
 SPECIES_GIRATINA, GIRATINA_FORM_ORIGIN = 487, 1
 SPECIES_SHAYMIN, SHAYMIN_FORM_SKY = 492, 1
 ITEM_GRISEOUS_ORB = 112
@@ -129,6 +140,9 @@ IMPLEMENTED_FORMATS: dict[str, Support] = {
     "double": Support.NONE,
     "double_two_trainer": Support.NONE,
     "multi": Support.NONE,
+    # Kaizo: a format the field scripts leave to game state (data/kaizo/battle_formats.json,
+    # tools/battle_scripts.py UNKNOWN_FORMAT), refused explicitly.
+    "unknown": Support.NONE,
 }
 # Trainer.start_condition (trainers.json) as a Weather.
 START_CONDITIONS = {
@@ -163,11 +177,30 @@ class UnsupportedMechanics(ValueError):
 
 
 def start_weather(trainer: Trainer) -> Weather:
-    """The weather a trainer's fight starts in (``Trainer.start_condition``)."""
+    """The weather a trainer's fight starts in (``Trainer.start_condition``). A start
+    condition of ``"unknown"`` (a user call) is no weather: ``ValueError``, like any
+    other unknown value; ``check_opponent`` refuses it instead."""
+    if trainer.start_condition == UNKNOWN_CONDITION:
+        raise ValueError(
+            f"trainer {trainer.id}: start condition unknown is a pending user call, not a "
+            "weather; coverage refuses it (check_opponent)"
+        )
     try:
         return START_CONDITIONS[trainer.start_condition]
     except KeyError:
         raise ValueError(f"unknown start condition {trainer.start_condition!r}") from None
+
+
+def unknown_start(trainer: Trainer) -> bool:
+    """The fight's start condition is a pending user call ("unknown"), never a weather."""
+    return UNKNOWN_CONDITION in (trainer.start_condition, trainer.area_condition.weather)
+
+
+def display_name(trainer: Trainer) -> str:
+    """How a report names ``trainer``: its label when it has one (Kaizo: "Leader Roark",
+    "Pokemon Trainer Barry #3 [Empoleon]"), else its name. ``Trainer.name`` stays the ROM
+    name for data and matching (plan K2b Ruling 5); vanilla has no labels."""
+    return trainer.label or trainer.name
 
 
 class _Collector:
@@ -213,12 +246,19 @@ def _check_party(
         c.add(IMPLEMENTED_ITEMS.get(item, Support.NONE), f"{where}: {item_name}", "held item")
         _check_form(c, where, mon)
         if trainer_side and row != mon.species:
-            c.add(
-                Support.NONE,
-                f"{where}: trainer Pokemon in a data form keeps its base form's stats, "
-                "ability and moves",
-                "form",
-            )
+            c.add(Support.NONE, f"{where}: {_data_form_reason(names)}", "form")
+
+
+def _data_form_reason(names: Names) -> str:
+    """Why a trainer Pokemon in a data form is refused, true for ``names``' game: vanilla's
+    TrainerData_BuildParty builds it from the base form (src/trainer_data.c:216-218);
+    Kaizo's patched builder computes its stats after the form (docs/kaizo/rom_diff.md)."""
+    if names.game == VANILLA:
+        return "trainer Pokemon in a data form keeps its base form's stats, ability and moves"
+    return (
+        "trainer Pokemon in a data form: this game's party builder applies the form before "
+        "computing its stats, which the engine's trainer party build does not model"
+    )
 
 
 def _check_form(c: _Collector, where: str, mon: PokemonSpec) -> None:
@@ -234,28 +274,77 @@ def _check_form(c: _Collector, where: str, mon: PokemonSpec) -> None:
 
 
 def _check_trainer(c: _Collector, tables: Tables, names: Names, trainer: Trainer) -> None:
+    if POLICY.get(names.game) is None:
+        c.add(
+            Support.NONE,
+            f"{display_name(trainer)}: no transcribed AI policy for this game (spec 5.10)",
+            "AI policy",
+        )
     support = IMPLEMENTED_FORMATS.get(trainer.format, Support.NONE)
-    c.add(support, f"{trainer.name}: a {trainer.format} battle", "battle format")
+    if trainer.format == "unknown":
+        what = f"{display_name(trainer)}: battle format unknown (depends on game state)"
+    else:
+        what = f"{display_name(trainer)}: a {trainer.format} battle"
+    c.add(support, what, "battle format")
+    _check_kaizo_fields(c, names, trainer)
     effect = np.asarray(tables.trainer_item_effect)
     bag = [item for item in trainer.items if item]
     for item in bag:
         support = IMPLEMENTED_TRAINER_ITEMS.get(TrainerItemId(int(effect[item])), Support.NONE)
-        c.add(support, f"{trainer.name}: {names.item_names[item]}", "trainer item")
+        c.add(support, f"{display_name(trainer)}: {names.item_names[item]}", "trainer item")
     if len(set(bag)) > 1:
         mixed = ", ".join(names.item_names[i] for i in bag)
-        c.add(Support.NONE, f"{trainer.name}: a bag of mixed items {mixed}", "multi-slot item use")
+        c.add(
+            Support.NONE,
+            f"{display_name(trainer)}: a bag of mixed items {mixed}",
+            "multi-slot item use",
+        )
     flags = int(trainer.ai_flags)
     for bit in range(flags.bit_length()):
         if flags >> bit & 1:
             name = AI_FLAG_NAMES[bit] if bit < len(AI_FLAG_NAMES) else f"UNUSED_{bit}"
             support = IMPLEMENTED_AI_FLAGS.get(bit, Support.NONE)
-            c.add(support, f"{trainer.name}: AI_FLAG_{name}", "AI flag")
+            c.add(support, f"{display_name(trainer)}: AI_FLAG_{name}", "AI flag")
     if flags & POLICY_AI_FLAGS != POLICY_AI_FLAGS:
         c.add(
             Support.NONE,
-            f"{trainer.name}: AI flags {flags:#x} without all of BASIC, EVAL_ATTACK and "
+            f"{display_name(trainer)}: AI flags {flags:#x} without all of BASIC, EVAL_ATTACK and "
             "EXPERT, which the AI policy always runs together",
             "AI flag set",
+        )
+
+
+def _check_kaizo_fields(c: _Collector, names: Names, trainer: Trainer) -> None:
+    """The Kaizo trainer fields the engine does not model (plan K2b Task 14)."""
+    area = trainer.area_condition
+    permanent = "permanent " if area.permanent else ""
+    if area.trick_room:
+        c.add(Support.NONE, f"Battle start: {permanent}Trick Room", "field condition")
+    if area.gravity:
+        c.add(Support.NONE, f"Battle start: {permanent}Gravity", "field condition")
+    if unknown_start(trainer):
+        c.add(Support.NONE, "Battle start: condition unknown (user call)", "start condition")
+    if trainer.gauntlet is not None:
+        group, position = trainer.gauntlet
+        rules = ", ".join(f"{k}={str(v).lower()}" for k, v in trainer.gauntlet_rules.items())
+        c.add(
+            Support.NONE,
+            f"{display_name(trainer)}: gauntlet {group} (position {position}; "
+            f"rules {rules or 'not recorded'})",
+            "battle format",
+        )
+    for k in missing_set_data(trainer):
+        c.add(
+            Support.NONE,
+            f"{display_name(trainer)} slot {k}: nature/gender/ability unknown (no PKCalc set)",
+            "trainer data",
+        )
+    if names.game == KAIZO and names.unclassified_rom_changes > 0:
+        c.add(
+            Support.NONE,
+            f"Kaizo ROM: {names.unclassified_rom_changes} code changes unclassified "
+            "(docs/kaizo/rom_diff.md)",
+            "ROM change",
         )
 
 
@@ -281,9 +370,13 @@ def check_opponent(
     lines. It runs no ``ai_refusals``: those depend on the player's party, so a caller
     that needs them runs them per setup."""
     c = _Collector()
-    _check_party(c, tables, names, trainer.name, opp, trainer_side=True)
+    _check_party(c, tables, names, display_name(trainer), opp, trainer_side=True)
     _check_trainer(c, tables, names, trainer)
-    _check_weather(c, [start_condition, start_weather(trainer)])
+    # An "unknown" start condition is refused by _check_trainer, never read as a weather.
+    weathers = [start_condition]
+    if not unknown_start(trainer):
+        weathers.append(start_weather(trainer))
+    _check_weather(c, weathers)
     return c.report
 
 
@@ -309,8 +402,8 @@ def check_coverage(
     from nuzline.ai.policy import ai_refusals  # nuzline.ai imports the engine
 
     state = make_state(tables, player, opp, start_condition, opp_items=trainer.items, leads=leads)
-    for reason in ai_refusals(tables, state):
-        c.add(Support.NONE, f"{trainer.name}: {reason}", "trainer AI")
+    for reason in ai_refusals(tables, state, names):
+        c.add(Support.NONE, f"{display_name(trainer)}: {reason}", "trainer AI")
     return c.report
 
 

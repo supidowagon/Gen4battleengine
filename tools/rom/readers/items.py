@@ -25,6 +25,11 @@ ARCHIVE_SYMBOL = "sItemArchiveIDs"  # src/item.c:48-57; 4 x u16: data, icon, pal
 ARCHIVE_ENTRY = 8
 HOLD_EFFECT_OFFSET = 2  # include/item.h:57-59
 HOLD_PARAM_OFFSET = 3
+# u16 price, holdEffect, effectParam, pluckEffect, flingEffect, flingPower (include/item.h:56-62)
+FLING_POWER_OFFSET = 6
+# ItemData.partyUseParam starts at byte 14, after padding_0D (include/item.h:72-75); its u8
+# hpRestored follows seven bytes of bit fields and six s8 EVs (include/item.h:9-48): byte 27.
+HP_RESTORED_OFFSET = 27
 
 
 def read_items(
@@ -61,7 +66,16 @@ def read_items(
     out = []
     for item, const in enumerate(ids):
         if const.startswith("ITEM_UNUSED_"):
-            out.append({"name": const, "hold_effect": none, "hold_param": 0, "teaches_move": None})
+            out.append(
+                {
+                    "name": const,
+                    "hold_effect": none,
+                    "hold_param": 0,
+                    "teaches_move": None,
+                    "hp_restored": 0,
+                    "fling_power": 0,
+                }
+            )
             continue
         data_id = 0 if item == 0 else struct.unpack_from("<H", table, item * ARCHIVE_ENTRY)[0]
         if data_id >= len(members):
@@ -82,6 +96,8 @@ def read_items(
                 "hold_param": members[data_id][HOLD_PARAM_OFFSET],
                 # sTMHMMoves[item - ITEM_TM01] (src/item.c:296-304); null for every other item.
                 "teaches_move": teaches[item - tm01] if tm01 <= item <= hm08 else None,
+                "hp_restored": members[data_id][HP_RESTORED_OFFSET],
+                "fling_power": members[data_id][FLING_POWER_OFFSET],
             }
         )
     return out

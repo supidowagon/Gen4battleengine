@@ -251,6 +251,7 @@ def refusal_cases(tables, names):
         ("settings", {"settings": dataclasses.replace(SETTINGS, screen_n=6)}, "other settings"),
         ("tables", {"table_version": "tables-2"}, "other tables"),
         ("code", {"code_version": "code-2"}, "another code version"),
+        ("game", {"game": "platinum_kaizo_nightmare_final"}, "another game"),
     ]
 
 
@@ -265,7 +266,7 @@ def saved(tables, names, monkeypatch, tmp_path):
     return prob, path
 
 
-@pytest.mark.parametrize("which", range(7))
+@pytest.mark.parametrize("which", range(8))
 def test_resume_refuses_mismatch(tables, names, saved, which):
     prob, path = saved
     name, change, message = refusal_cases(tables, names)[which]
@@ -283,6 +284,26 @@ def test_resume_refuses_mismatch(tables, names, saved, which):
             resume=path, **args,
         )  # fmt: skip
     assert path.read_bytes() == before, name
+
+
+def test_checkpoint_game_is_checked_first(tmp_path):  # final review M10
+    from nuzline.prep.checkpoint import CHECKPOINT_VERSION, read_checkpoint
+
+    expected = {"problem": "p", "settings": "s", "seed": "1", "tables": "t", "code": "c"}
+    expected["game"] = "platinum_us"
+    path = tmp_path / "x.ckpt.json"
+
+    def write(found):
+        doc = {"version": CHECKPOINT_VERSION, "fingerprint": found, "funnel": {}}
+        path.write_text(json.dumps(doc), encoding="utf-8")
+
+    write({**expected, "game": "platinum_kaizo_nightmare_final", "problem": "q", "tables": "u"})
+    with pytest.raises(ValueError, match="another game"):
+        read_checkpoint(path, expected)
+    old = {k: v for k, v in expected.items() if k != "game"}
+    write({**old, "tables": "older"})  # written before K2b: no game key
+    with pytest.raises(ValueError, match="predates K2b"):
+        read_checkpoint(path, expected)
 
 
 def test_resume_refuses_a_damaged_or_future_file(tables, names, saved):
@@ -311,7 +332,10 @@ def test_resume_refuses_a_damaged_or_future_file(tables, names, saved):
 def test_fingerprint_ignores_the_budget_only(tables, names):
     prob = make_problem(tables, names)
     base = fingerprint(prob, SETTINGS, 7, "t", "c")
-    assert set(base) == {"problem", "settings", "seed", "tables", "code"}
+    assert set(base) == {"problem", "settings", "seed", "tables", "code", "game"}
+    assert base["game"] == "platinum_us"  # plan K2b ruling 17: the game is recorded
+    kaizo = fingerprint(prob, SETTINGS, 7, "t", "c", "platinum_kaizo_nightmare_final")
+    assert kaizo != base and kaizo["game"] == "platinum_kaizo_nightmare_final"
     budgeted = dataclasses.replace(SETTINGS, budget_seconds=5.0)
     assert fingerprint(prob, budgeted, 7, "t", "c") == base
     assert fingerprint(prob, dataclasses.replace(SETTINGS, finalists=3), 7, "t", "c") != base
@@ -344,6 +368,7 @@ def test_checkpoint_write_is_atomic(tmp_path, monkeypatch):
 def test_read_checkpoint_never_writes(tmp_path):
     path = tmp_path / "r.ckpt.json"
     print_ = {"problem": "p", "settings": "s", "seed": "1", "tables": "t", "code": "c"}
+    print_["game"] = "platinum_us"
     write_checkpoint(
         path, {"version": CHECKPOINT_VERSION, "fingerprint": print_, "funnel": {"x": 1}}
     )

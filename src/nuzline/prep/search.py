@@ -24,9 +24,10 @@ playouts) are not halved at first: the new neighbours halve alone, each rung's n
 as above. Then the *merged stage*: rung ``k``'s parents and surviving neighbours are topped up
 together to the first halving count at or above the parents' largest count
 (``ladder_round``; round keys salted by ``MERGED``) and cut to the floor there, with the exact
-ties at the edge kept and screened further while ``T_r < tie_playouts``; the ladder rungs (screen-only
-answers) are cut to their floors in the first merged round at the counts they have. Every cut
-of rung ``k`` thus compares setups at one playout count: a parent's count would otherwise
+ties at the edge kept and screened further while ``T_r < tie_playouts``; the ladder rungs
+(screen-only answers) are cut to their floors in the first merged round at the counts they
+have. Every cut of rung ``k`` thus compares setups at one playout count: a parent's count would
+otherwise
 decide a cut against a neighbour's handful (a lower confidence bound keeps tight parents over
 a better ``n/n`` neighbour; the point estimate drops them for lucky ``n/n`` neighbours).
 
@@ -907,6 +908,7 @@ def run_prep(
     clock: Callable[[], float] = time.perf_counter,
     table_version: str | None = None,
     code_version: str | None = None,
+    game: str = "platinum_us",
 ) -> PrepResult:
     """Run the funnel (module docstring) and return the best answer reached.
     ``ValueError`` when every setup is refused ("every setup refused: ...") or when ``resume``
@@ -916,18 +918,19 @@ def run_prep(
     file, continue where it stopped (its elapsed time is added to ``stats.seconds``;
     ``settings.budget_seconds`` limits this invocation only) and keep writing to it unless
     ``checkpoint`` names another file. ``table_version`` and ``code_version`` (default: the
-    shipped tables' and the package's, ``jaxcache``) are what a checkpoint is tied to."""
+    shipped tables' and the package's, ``jaxcache``) and ``game`` (the game id) are what a
+    checkpoint is tied to."""
     sink = checkpoint if checkpoint is not None else resume
     print_ = None
     saved = None
     if sink is not None:
         if table_version is None or code_version is None:
             from nuzline import jaxcache
-            from nuzline.data import tables as tables_module
+            from nuzline.data.games import get_game
 
-            table_version = table_version or jaxcache.table_version(tables_module.DEFAULT)
+            table_version = table_version or jaxcache.table_version(get_game(game).tables_dir)
             code_version = code_version or jaxcache.code_version()
-        print_ = fingerprint(problem, settings, _seed_of(key), table_version, code_version)
+        print_ = fingerprint(problem, settings, _seed_of(key), table_version, code_version, game)
     if resume is not None:
         saved = read_checkpoint(resume, print_)["funnel"]
     funnel = _Funnel(tables, names, problem, settings, key, progress, clock, sink, print_)

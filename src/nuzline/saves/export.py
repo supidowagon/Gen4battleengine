@@ -7,18 +7,18 @@ from __future__ import annotations
 import dataclasses
 import json
 
+from nuzline.data.games import VANILLA
 from nuzline.saves.pkm import SaveMon
 from nuzline.saves.save import SaveFile, default_tables_and_names
 from nuzline.saves.status import decode_status
+from nuzline.text import ascii_text
 
 __all__ = ["party_toml", "save_json", "show_lines"]
 
 _GENDERS = ("male", "female", "none")
 
 
-def _ascii(text: str) -> str:
-    """``text`` with every non-ASCII character escaped (a default Windows console is cp1252)."""
-    return text.encode("ascii", "backslashreplace").decode("ascii")
+_ascii = ascii_text  # every non-ASCII character escaped (nuzline.text)
 
 
 def _move_name(names, move: int) -> str:
@@ -40,11 +40,11 @@ def _status_name(mon: SaveMon) -> str:
     return decode_status(mon.status_raw)[0].name.lower()
 
 
-def party_toml(save: SaveFile, names, tables=None) -> str:
+def party_toml(save: SaveFile, names, tables=None, game: str = VANILLA) -> str:
     """The party (eggs dropped) in the ``--party`` TOML format, with ``hp``, ``pp``,
-    ``sleep_turns`` and ``stats``. ``tables`` (default: the built tables) feed
-    ``SaveMon.to_spec``'s checks."""
-    tables, names = default_tables_and_names(tables, names)
+    ``sleep_turns`` and ``stats``. ``tables`` (default: ``game``'s built tables) feed
+    ``SaveMon.to_spec``'s checks; ``names`` must be the same game's."""
+    tables, names = default_tables_and_names(tables, names, game=game)
     out = ["# Exported by `nuzline save export`; eggs are left out.", ""]
     for mon in save.party:
         if mon.is_egg:

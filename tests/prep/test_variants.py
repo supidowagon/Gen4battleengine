@@ -200,6 +200,23 @@ def test_prestatus_options(tables, names):
     )
 
 
+def test_prestatus_blocking_abilities_are_the_games(tables, names, vanilla_manifest):
+    # Final review I4: the blocking abilities are looked up in the problem's own Names.
+    from nuzline.data.tables import Names
+    from nuzline.prep.problem import blocking_abilities
+
+    both = (Status.POISON, Status.PARALYSIS)
+    snorlax = _spec(names, "Snorlax", ability_slot=0)  # Immunity
+    assert prestatus_options(tables, snorlax, both, blocking_abilities(names)) == (
+        Status.PARALYSIS,
+    )
+    abilities = list(vanilla_manifest["ability_names"])
+    immunity = names.ability("Immunity")
+    abilities[immunity], abilities[immunity + 1] = abilities[immunity + 1], "Immunity"
+    moved = blocking_abilities(Names({**vanilla_manifest, "ability_names": abilities}))
+    assert prestatus_options(tables, snorlax, both, moved) == both  # Immunity is elsewhere
+
+
 def _geodude(names, moves, relearner):
     spec = _spec(names, "Geodude", moves)
     ids = tuple(names.move(m) for m in relearner)

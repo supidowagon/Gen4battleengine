@@ -4,9 +4,11 @@
 #   vanilla_rom -> NUZLINE_VANILLA_ROM    kaizo_patch -> NUZLINE_KAIZO_PATCH
 #   pkcalc_zip  -> NUZLINE_PKCALC_ZIP     kaizo_docs  -> NUZLINE_KAIZO_DOCS
 #   kaizo_save  -> NUZLINE_KAIZO_SAVE
+#   kaizo_save_pre_roark -> NUZLINE_KAIZO_SAVE_PRE_ROARK  (.sav or DeSmuME .dsv)
 # Only vanilla_rom is required.
 vanilla_rom = 'C:\roms\Pokemon - Platinum Version (U).nds'
 kaizo_patch = 'C:\roms\Pokemon Platinum Kaizo Nightmare Update Final.xdelta'
 pkcalc_zip = 'C:\roms\PKCalc-main.zip'
 kaizo_docs = 'C:\roms\Platinum Kaizo Docs.xlsx'
 kaizo_save = 'C:\roms\Platinum Kaizo Nightmare.sav'
+kaizo_save_pre_roark = 'C:\roms\Platinum Kaizo Base.dsv'

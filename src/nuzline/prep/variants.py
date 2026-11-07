@@ -19,7 +19,12 @@ from nuzline.data.tables import Tables, load_names, load_tables
 from nuzline.engine.ids import AbilityId, EffectId, MoveFlag, Status, Type, Weather
 from nuzline.engine.state import make_state
 from nuzline.engine.stats import calc_stats
-from nuzline.prep.problem import PrepProblem, Resources
+from nuzline.prep.problem import (
+    STATUS_BLOCKING_ABILITIES,
+    PrepProblem,
+    Resources,
+    blocking_abilities,
+)
 
 __all__ = [
     "AI_DEFENDER_HP_CHECKS",
@@ -74,11 +79,6 @@ AI_HP_READERS: dict[str, str] = {
     "_layout": "opponent",
 }
 
-STATUS_BLOCKING_ABILITIES = {
-    "Limber": Status.PARALYSIS,
-    "Immunity": Status.POISON,
-    "Water Veil": Status.BURN,
-}
 _STATUS_BLOCKING_TYPES = {
     Status.POISON: (Type.POISON, Type.STEEL),
     Status.BURN: (Type.FIRE,),
@@ -304,20 +304,24 @@ def hp_regions(
 
 
 @lru_cache(maxsize=1)
-def _blocking_ability_ids() -> dict[int, Status]:
-    names = load_names()
-    return {names.ability(name): status for name, status in STATUS_BLOCKING_ABILITIES.items()}
+def _blocking_ability_ids() -> tuple[tuple[int, int], ...]:
+    return blocking_abilities(load_names())
 
 
 def prestatus_options(
-    tables: Tables, spec: PokemonSpec, declared: Sequence[int]
+    tables: Tables,
+    spec: PokemonSpec,
+    declared: Sequence[int],
+    blocking: Sequence[tuple[int, int]] | None = None,
 ) -> tuple[int, ...]:
     """``declared`` minus the statuses ``spec`` cannot have, by type (Poison and Steel: poison;
-    Fire: burn) or ability (``STATUS_BLOCKING_ABILITIES``), ruling 6."""
+    Fire: burn) or ability (``STATUS_BLOCKING_ABILITIES``), ruling 6. ``blocking``: those
+    abilities' (id, status) in ``tables``' game (``PrepProblem.blocking_abilities``); None
+    reads them from the shipped tables."""
     row = personal_row(tables, spec.species, spec.form)
     types = {int(t) for t in np.asarray(tables.species_types)[row]}
     ability = int(np.asarray(tables.species_abilities_decomp)[row][spec.ability_slot])
-    by_ability = _blocking_ability_ids().get(ability)
+    by_ability = dict(_blocking_ability_ids() if blocking is None else blocking).get(ability)
     return tuple(
         s
         for s in declared
@@ -439,7 +443,7 @@ def single_changes(
         )
         for top in hp_regions(tables, spec, max_hp_of(tables, spec), kill)[1:]:
             add(dataclasses.replace(base, hp=top))
-    for status in prestatus_options(tables, spec, problem.prestatus):
+    for status in prestatus_options(tables, spec, problem.prestatus, problem.blocking_abilities):
         add(dataclasses.replace(base, status=status))
     return out
 

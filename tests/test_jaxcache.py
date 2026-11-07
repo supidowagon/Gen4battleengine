@@ -261,3 +261,35 @@ def test_export_key_includes_the_backend(monkeypatch):
     assert jaxcache._export_key({"scale": 1.0}, treedef, specs) == key
     monkeypatch.setattr(jaxcache.jax, "default_backend", lambda: "gpu")
     assert jaxcache._export_key({"scale": 1.0}, treedef, specs) != key
+
+
+@pytest.fixture
+def game_cache(tmp_path, monkeypatch):
+    monkeypatch.setenv("NUZLINE_CACHE_DIR", str(tmp_path))
+    monkeypatch.setattr(jaxcache, "set_compile_cache_dir", lambda directory: None)
+    return tmp_path
+
+
+def test_game_dirs_do_not_prune_each_other(game_cache):
+    a = jaxcache.enable_compile_cache("a" * 32, "platinum_us")
+    b = jaxcache.enable_compile_cache("b" * 32, "platinum_kaizo_nightmare_final")
+    assert a.is_dir() and b.is_dir() and a.parent != b.parent
+    assert a.parent == game_cache / "jax" / "platinum_us"
+
+
+def test_other_versions_of_same_game_pruned(game_cache):
+    old = jaxcache.enable_compile_cache("a" * 32, "platinum_us")
+    new = jaxcache.enable_compile_cache("c" * 32, "platinum_us")
+    assert not old.exists() and new.is_dir()
+
+
+def test_legacy_flat_dirs_pruned(game_cache):
+    legacy = game_cache / "jax" / ("d" * 32)
+    legacy.mkdir(parents=True)
+    kept = jaxcache.enable_compile_cache("b" * 32, "platinum_kaizo_nightmare_final")
+    jaxcache.enable_compile_cache("a" * 32, "platinum_us")
+    assert not legacy.exists() and kept.is_dir()
+
+
+def test_default_game_is_vanilla(game_cache):
+    assert jaxcache.enable_compile_cache("a" * 32).parent.name == "platinum_us"

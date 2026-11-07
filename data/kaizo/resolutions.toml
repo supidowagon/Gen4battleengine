@@ -1,0 +1,130 @@
+# Resolutions for ROM-vs-PKCalc conflicts on executed fields (spec 6.5, plan Ruling 12).
+# Written by the builder, reviewed once at the end of K2. Each entry:
+#   [[resolution]]
+#   table    = "moves"             # cross-check table
+#   keys     = ["14 Swords Dance"] # grouped when one cause explains many rows
+#   field    = "pp"
+#   pkcalc   = 2                   # the PKCalc value being resolved (entry is stale if it changes)
+#   use      = "rom"               # "rom" (default policy) or "pkcalc"
+#   reason   = "..."
+#   evidence = "..."               # use = "pkcalc" needs evidence starting "trace:"
+# An entry that matches no current ROM-vs-PKCalc conflict is stale and fails the build.
+
+# --- moves --------------------------------------------------------------------------------
+
+[[resolution]]
+table = "moves"
+keys = ["270 Helping Hand", "367 Acupressure", "382 Me First"]
+field = "target"
+pkcalc = "RANGE_SINGLE_TARGET"
+use = "rom"
+reason = "PKCalc vocabulary gap: its moves.js gives the ally and Me First moves target 'normal' (no ally range in a singles calc); the ROM range and the sheet agree"
+evidence = "rom: poketool/waza/pl_waza_tbl.narc ranges RANGE_ALLY (270), RANGE_USER_OR_ALLY (367), RANGE_SINGLE_TARGET_ME_FIRST (382); sheet Moves:272, Moves:369, Moves:384 agree; PKCalc raw MOVES.json target 'normal' for all three"
+
+# --- trainers: forms ----------------------------------------------------------------------
+
+[[resolution]]
+table = "trainers"
+keys = [
+  "356 Bug Catcher Sebastian/0",
+  "22 Fisherman Andrew/0",
+  "107 Tuber Jared/1",
+  "293 Pokémon Ranger Erick/1",
+  "75 Galactic Leda/4",
+  "399 Galactic Pan #1/2",
+  "144 Skier Madison/0",
+  "268 Skier Mirabelle/2",
+  "646 Galactic Skymir/0",
+  "236 Idol Zoe/3",
+]
+field = "form"
+pkcalc = 0
+use = "rom"
+reason = "PKCalc sets carry no form for these cosmetic or Unown forms (form 0); the ROM party entry's form bits (species | form << 10) and the sheet's RAW TRAINER rows agree on the form (Task 9 mapped these labels how='form')"
+evidence = "rom: trainers.json party form (Burmy 412 form 1, Shellos 422 / Gastrodon 423 form 1, Castform 351 form 2, Unown 201 forms 6 and 25); sheet RAW TRAINER DATA:358, :24, :109, :295, :77, :401, :146, :270, :648, :238 give the same forms"
+
+# --- trainers: area weather ---------------------------------------------------------------
+
+[[resolution]]
+table = "trainers"
+keys = [
+  "103 Swimmer Sheltin",
+  "105 Swimmer Haley",
+  "106 Swimmer Mary",
+  "107 Tuber Jared",
+  "108 Tuber Chelsea",
+  "110 Sailor Paul",
+  "111 Fisherman Kenneth",
+  "491 Beauty Chelle",
+]
+field = "area_weather"
+pkcalc = "rain"
+use = "rom"
+reason = "the patch changes Route 213's map header weather byte from 33 to 0 (no weather); the sheet tag and PKCalc say rain. ROM used by the source policy; listed as a user call"
+evidence = "rom: d_test.narc map header 373 (ROUTE_213) weather byte 0 in Kaizo (vanilla 33), the only header of these trainers in the trainer -> map join (rom_trainer_maps.json)"
+
+[[resolution]]
+table = "trainers"
+keys = ["835 Galactic Triton #2", "836 Galactic Neptune #2"]
+field = "area_weather"
+pkcalc = "rain"
+use = "rom"
+reason = "the ROM map has no weather; PKCalc's rain list names these Iron Island trainers and the sheet makes no claim"
+evidence = "rom: d_test.narc map header 293 (IRON_ISLAND_B2F_LEFT_ROOM) weather byte 0 (as vanilla), their only header in rom_trainer_maps.json"
+
+[[resolution]]
+table = "trainers"
+keys = ["560 Galactic Uranus #3"]
+field = "area_weather"
+pkcalc = "hail"
+use = "rom"
+reason = "the trainer's ROM map starts Trick Room, not hail; PKCalc's hail list names it and the sheet makes no claim"
+evidence = "rom: d_test.narc map header 307 (GALACTIC_HQ_3F) weather 18 (Trick Room; overrides area.560), its only header in rom_trainer_maps.json"
+
+[[resolution]]
+table = "trainers"
+keys = ["291 Idol Catherine #2"]
+field = "area_weather"
+pkcalc = "fog"
+use = "rom"
+reason = "the patch changes header 93's weather byte from 0 to 26, which the patched battle weather switch reads as no weather or fog; the sheet tag and PKCalc say fog. ROM used by the source policy; listed as a user call"
+evidence = "rom: d_test.narc map header 93 (HEARTHOME_CITY_DP_GYM_ELEVATOR_ROOM_1) weather 26 in Kaizo (vanilla 0); tools/rom/readers/maps.py weather_switch_conditions: ids above the switch's top take its default, none"
+
+# --- trainers: formats --------------------------------------------------------------------
+
+[[resolution]]
+table = "trainers"
+keys = [
+  "202 Galactic Mercury #2",
+  "203 Galactic Venus #2",
+  "411 Galactic Puck #1",
+  "413 Galactic Trinculo #1",
+]
+field = "format"
+pkcalc = "single"
+use = "rom"
+reason = "placed enemies on Eterna Forest, whose script makes Cheryl the walking partner, are fought beside her (K2a Ruling 3); PKCalc lists them as singles and the sheet makes no claim"
+evidence = "rom: scr_seq 219 (map header 203 ETERNA_FOREST) runs SetHasPartner with VAR_PARTNER_TRAINER_ID 608 Cheryl; zone events 201 place 202, 203, 411, 413 on that map (rom_trainer_maps.json: header 203 only)"
+
+[[resolution]]
+table = "trainers"
+keys = [
+  "202 Galactic Mercury #2",
+  "203 Galactic Venus #2",
+  "411 Galactic Puck #1",
+  "413 Galactic Trinculo #1",
+]
+field = "partner_present"
+pkcalc = false
+use = "rom"
+reason = "the same walking-partner multi: Cheryl fights beside the player (K2a Ruling 3); PKCalc lists no partner"
+evidence = "rom: scr_seq 219 (map header 203 ETERNA_FOREST) SetHasPartner, partner 608 Cheryl (trainers.json partner)"
+
+[[resolution]]
+table = "trainers"
+keys = ["846 Worker Conrad"]
+field = "format"
+pkcalc = "single"
+use = "rom"
+reason = "the patched trainer data makes Conrad a one-trainer double (no script pairs him); PKCalc lists him as a single and the sheet makes no claim"
+evidence = "rom: trainer data 846 battle type double (trainers.json format from the trainer header, K2a Ruling 2; vanilla 846 is a single); five-mon party"

@@ -43,6 +43,18 @@ uv run nuzline save show path/to/platinum.sav
 uv run nuzline rank --save path/to/platinum.sav --trainer roark
 ```
 
+Every command takes `--game vanilla|kaizo` (default vanilla; Kaizo needs `python -m tools.build_tables --game kaizo` first, and the game is never guessed from a save): `uv run nuzline trainers --game kaizo --save path/to/kaizo.sav` lists the Kaizo trainers, optional and gauntlet fights marked, with only the rival variants of the save's starter.
+
+Build the Platinum Kaizo data set from your own ROM, patch, PKCalc zip and Kaizo docs spreadsheet (paths in `data/local.toml`; inputs, commands, corrections and the open user calls: `docs/kaizo/pipeline.md`):
+
+```
+uv run --group rom python -m tools.extract_rom --game kaizo --out data/intermediate_kaizo/rom
+uv run --group rom python -m tools.extract_pkcalc --out data/intermediate_kaizo/pkcalc
+uv run --group rom python -m tools.extract_kaizo_docs --out data/intermediate_kaizo/docs
+uv run --group rom python -m tools.kaizo.overrides check
+uv run --group rom python -m tools.build_tables --game kaizo
+```
+
 ## Files
 
 * `config/level_caps.toml`: the level cap per trainer id (Roark, 246: 16) that `prep` uses; a trainer without an entry needs `--cap`.

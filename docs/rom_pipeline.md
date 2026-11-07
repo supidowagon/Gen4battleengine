@@ -20,6 +20,7 @@ repository root. Use single-quoted literal strings for Windows paths.
 | `pkcalc_zip` | `NUZLINE_PKCALC_ZIP` | no | none |
 | `kaizo_docs` | `NUZLINE_KAIZO_DOCS` | no | none |
 | `kaizo_save` | `NUZLINE_KAIZO_SAVE` | no | none |
+| `kaizo_save_pre_roark` | `NUZLINE_KAIZO_SAVE_PRE_ROARK` | no | none (`.sav` or DeSmuME `.dsv`) |
 
 A hash mismatch stops the build with the path, the expected hash and the actual hash.
 Tests that need a local input skip when it is absent.
@@ -89,7 +90,8 @@ uv run --group rom python -m tools.extract_rom --game vanilla [--out DIR] [--dec
     [--symbols .cache/decomp/<commit>/main.nef.xMAP] [--config data/local.toml]
 ```
 
-`--out` defaults to `data/intermediate` (vanilla) or `data/intermediate_kaizo` (kaizo).
+`--out` defaults to `data/intermediate` (vanilla) or `data/intermediate_kaizo/rom` (kaizo; the
+resolved files the runtime reads are `data/intermediate_kaizo/*.json`, K2b Ruling 2).
 `species, forms, moves, items, learnsets, tm_learnsets, evolutions, egg_moves, tutor_moves,
 tutor_learnsets, exp_tables` and `trainers` (with start conditions derived
 from the ROM's map headers, events and scripts) are read from the ROM; `form_rows` and `evolution_methods` come from the decomp for every game (K2a, Ruling 6); `types, natures,
@@ -110,9 +112,25 @@ leaves `--out` untouched (a failure of `os.replace` midway leaves the files move
 
 `--game kaizo` runs the ROM diff, checks that the sources of the reused tables
 (`sTypeMatchupMultipliers`, `sNatureStatAffinities`, the ability, type and nature name banks)
-are unchanged, runs the readers that do not depend on the trainer layout as layout checks, and
-then refuses: `trainers: the Kaizo trainer layout is not confirmed (spec §5.4); Kaizo
-extraction lands in K2b`. Nothing is written.
+are unchanged, and then runs every reader on the patched ROM (K2b Task 8):
+
+- trainers with the Kaizo party layout: `ivScale` is `difficulty` (low byte) and
+  `ability_override` (high byte: flags 16 slot 0, 32 slot 1, 2 female); most `trpoke.narc`
+  members are unpadded;
+- map headers from `d_test.narc` and the map weather through the patched battle weather switch
+  (below); start conditions the maps leave ambiguous are settled, with their evidence, in
+  `data/kaizo/start_conditions.json` (keyed by id, named by the ROM trainer-name bank; `unknown`
+  where the evidence does not settle them). Trainers with an `unknown` start condition, tag or
+  walking partners the script rules cannot evaluate (`partner` null) and the field effects map
+  weathers start (`rom_field_effects.json`: Trick Room) are printed to stderr;
+- a trainer whose script claims disagree on the format itself (a two-trainer battle and a
+  tag battle, Spear Pillar 521/527 behind `CheckTrainerFlag 864`) fails extraction unless
+  `data/kaizo/battle_formats.json` refuses it with evidence: its format is `unknown`, which
+  coverage refuses;
+- `changed_scripts.json`: the changed members of `battle/skill/be_seq.narc`,
+  `battle/skill/sub_seq.narc` and `battle/tr_ai/tr_ai_seq.narc`, each classified by a
+  `[[member]]` entry in `data/kaizo/rom_diff.toml` (a stale entry fails the run; the CLI appends
+  an `unknown` entry for each missing one and says so).
 
 ## Known Kaizo differences
 
@@ -124,9 +142,15 @@ Found by the K1 final review; each is refused or reported rather than read silen
   `debug/cb_edit/d_test.narc` (618 members of 24 bytes). The ARM9 `sMapHeaders` bytes are
   untouched, so the code diff shows nothing there: only 455 of 593 headers equal vanilla, 61
   differ in weather and 25 maps are new; `zone_event.narc` has 557 members (vanilla 534) and
-  `scr_seq.narc` 1126 (1124). `tools.rom.readers.maps` (`trainer_start_conditions`,
-  `trainer_maps`, the weather lookup) raises for any game code other than `CPUE`; reading
-  `d_test.narc` is K2b work.
+  `scr_seq.narc` 1126 (1124). `tools.rom.readers.maps.map_header_rows` reads `d_test.narc`
+  for `JAK7` once `check_kaizo_map_headers` confirms the patched accessors load member
+  `mapHeaderID` of NARC 148 at the vanilla field offsets and `FieldSystem_GetWeather` still
+  reads `sYearlyWeather`; any other game code but `CPUE` raises.
+- **Battle weather switch.** `BattleSystem_TriggerEffectOnSwitch`'s field-weather switch
+  covers map weathers 0-18 (vanilla 0-15): 17 starts sun, 18 Trick Room, 12 a new subscript
+  (`sub_seq.narc` member 297, used by no map header). `maps.weather_switch_conditions` decodes
+  it from the ROM; on vanilla it reproduces `WEATHER_CONDITION`. The Galactic HQ maps have
+  weather 18.
 - **Overlay 16 grew** by 32 bytes; `sTypeMatchupMultipliers` sits 28 bytes further on.
   `symbol_bytes` raises when a module image's size differs from the linker map's
   (`SDK_STATIC_SIZE`, `SDK_AUTOLOAD.<name>.SIZE`, `SDK_OVERLAY.<name>.SIZE`), so no

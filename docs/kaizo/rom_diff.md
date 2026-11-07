@@ -1068,3 +1068,99 @@ None: every call outside the modules lands in a declared region.
 | sBattleControlCommands | 0 | 0 | 24 | - | relocations only |
 | sBattleMenuConfigs | 0 | 0 | 117 | - | relocations only |
 | sCatchTutorialInputHandlers | 0 | 0 | 2 | - | relocations only |
+
+<!-- Hand-written below this line; python -m tools.rom.diff keeps it. -->
+
+## TrainerData_BuildParty, decoded (K2b Task 13)
+
+Read from the patched ARM9 (Thumb) by hand, K2b Task 13 fix round 1. This note gives
+addresses and behaviour only, never code bytes. The routine is still `unknown` in
+`data/kaizo/rom_diff.toml` (Ruling 13), and K2b does not transcribe it (Ruling 7).
+`tools.kaizo.rows_trainers` runs it only as a cross-check (`pid_section`, the
+"with the patched genderMod carry-over" lines). `tests/tools/rom/test_kaizo_trainer_party.py`
+pins the instruction pattern of the two helpers and the calls into them.
+
+### Routine and helpers
+
+- **`TrainerData_BuildParty`** (arm9 0x020793B8, 1040 bytes; vanilla `src/trainer_data.c`).
+  - It is rewritten in place. One loop serves every party data type: bit 0 of the data
+    type reads moves, and bit 1 reads a held item.
+  - The rewritten body ends at 0x0207956C.
+  - The rest of the original extent holds two new helpers, followed by 0xFF padding.
+- **Override helper** at 0x020795A0, `(species, form, override, &genderMod)`.
+- **Friendship helper** at 0x02079570, `(mon)`.
+
+### Party entry layout
+
+The fields come in this order:
+
+1. `u8 difficulty`
+2. `u8 override`
+3. `u16 level`
+4. `u16 species | form << 10`
+5. `u16 item`, only when (data type & 2)
+6. `4 x u16 moves`, only when (data type & 1)
+7. `u16 ball seal`
+
+The entry sizes are vanilla's. This confirms Ruling 6's split of vanilla's `u16 ivScale`.
+
+### Per mon, in order
+
+1. **Decode the entry.** Species is `& 0x3FF` and form is `>> 10`. The form is kept for
+   `MON_DATA_FORM`.
+2. **Call the override helper** (bl at 0x02079468), before the seed is computed.
+3. **Seed.** `seed = difficulty + level + species + trainerID`. Only the difficulty
+   byte goes in, where vanilla used the whole `ivScale`. `LCRNG_SetSeed(seed)` is
+   followed by `LCRNG_Next` (trainer class) times, as in vanilla.
+4. **PID.** `pid = (rnd << 8) + genderMod`.
+5. **IVs.** `difficulty * 31 / 255` for all six.
+6. **Create the mon.** `Pokemon_InitWith(mon, species, level, ivs, TRUE, pid,
+   OTID_NOT_SHINY, 0)` with the **base** species. The ability is picked here, by the
+   unmodified `BoxPokemon_InitWith` (`src/pokemon.c:473-483`): slot 2 when `pid & 1` and
+   ability 2 is not 0, else slot 1. No pokemon.c routine is in the code diff.
+7. **Item and moves.** The held item is set if present (`MON_DATA_HELD_ITEM`). The four
+   moves are set if present (`BoxPokemon_SetMoveSlot`).
+8. **Friendship helper** (bl at 0x02079512).
+9. **Ball seal.** `Pokemon_SetBallSeal`.
+10. **Form.** `Pokemon_SetValue(mon, MON_DATA_FORM, &form)`.
+11. **Stats.** `Pokemon_CalcStats(mon)` (bl at 0x02079534). This call is new, so stats
+    follow the form.
+12. **Add to the party.** `Party_AddPokemon`.
+
+### The gender modifier and its carry-over
+
+- **The slot.** `genderMod` (120 for a female trainer class, else 136) is computed once
+  per trainer. It goes into one stack slot (the store at 0x0207940E) before the party
+  loop, which starts at 0x0207943C.
+- **The override helper rewrites that slot in place.**
+  - The low nibble of the override is the gender (1 male, 2 female). The high nibble is
+    the ability slot (1 or 2).
+  - Override 0: return, leaving the slot unchanged.
+  - Gender nibble set: `work = SpeciesData_GetFormValue(species, form,
+    SPECIES_DATA_GENDER_RATIO)` + 2 (male) or - 2 (female). This is stored to the slot.
+  - Ability nibble 1: `slot = work & ~1`. Ability nibble 2: `slot = work | 1`.
+- **ROM bug.** When the gender nibble is 0, `work` is still the helper's first argument,
+  the species id. So override 16 or 32 sets the modifier to `species & ~1` or
+  `species | 1`, not to the old modifier with bit 0 changed. HGSS has the same shape of
+  bug.
+- **Carry-over.** The slot is never reset inside the loop. Every later mon in the party,
+  override 0 included, is built with the last value the helper wrote.
+- **Evidence (PKCalc, all 485 mapped labels, 2112 mons).**
+  - This model reproduces every nature and every ability.
+  - Gender differs on 44 mons, all with or after an override. On several of them PKCalc
+    gives "Male" for a genderless species (Darkrai 491, Porygon-Z 474).
+  - The vanilla routine misses 38 natures, all on override-0 mons that follow an
+    override.
+  - Without the species bug, override-mon natures drop to 11 of 112.
+
+### Friendship helper (0x02079570)
+
+- It reads moves 1-4 (`Pokemon_GetValue`, `MON_DATA_MOVE1` + i).
+- It then sets friendship (`Pokemon_SetValue`, `MON_DATA_FRIENDSHIP`) to **0 if any
+  move is Frustration (218), else 255**.
+- Vanilla trainer mons keep the species' base friendship.
+- PKCalc has no friendship field, so this cannot be checked against data. The instruction
+  pattern is pinned by `tests/tools/rom/test_kaizo_trainer_party.py`: the constants 255,
+  `MON_DATA_MOVE1`, 4 moves, 218, 0 and `MON_DATA_FRIENDSHIP`, and the calls to
+  `Pokemon_GetValue` and `Pokemon_SetValue`.
+- Its effect in battle (Return, Frustration) has not been traced.

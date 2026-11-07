@@ -20,7 +20,14 @@ from nuzline.engine.stats import SPECIES_SHEDINJA, calc_stats
 from nuzline.saves.crypto import decrypt_record, record_checksum
 from nuzline.saves.status import decode_status
 
-__all__ = ["RecordError", "SaveMon", "decode_mon", "decode_text", "level_from_exp"]
+__all__ = [
+    "RecordError",
+    "SaveMon",
+    "decode_mon",
+    "decode_text",
+    "level_from_exp",
+    "location_label",
+]
 
 # Offsets in the decrypted, A-B-C-D ordered record (header 8 bytes, blocks 32 each).
 _A, _B, _C = 8, 40, 72
@@ -67,7 +74,7 @@ class SaveMon:
         form count, an ability the form cannot have, PP above the move's maximum, or
         (party) a stored stat outside the band the current EVs allow. Base stats and
         abilities are the form's personal row (``nuzline.data.forms.form_row``)."""
-        label = _label(self.location)
+        label = location_label(self.location)
         if self.is_egg:
             raise RecordError(f"{label}: is an egg")
         if self.form != 0 and self.species in _REFUSED_FORM_SPECIES:
@@ -181,7 +188,7 @@ def level_from_exp(tables, species: int, exp: int) -> int:
 _REFUSED_FORM_SPECIES = frozenset({493})
 
 
-def _label(location: tuple[str, int, int]) -> str:
+def location_label(location: tuple[str, int, int]) -> str:
     """``party slot S`` or ``box B slot S``: ``location``'s box index is 0-based, the label's
     box number 1-based like ``save show`` and ``--exclude box:B:S``."""
     kind, box, slot = location
@@ -219,7 +226,7 @@ def decode_mon(
 
     Empty means an all-zero box part, or a checksum-valid record with species 0.
     """
-    label = _label(location)
+    label = location_label(location)
     if not any(raw[:_PARTY]):
         return None  # all-zero box part: an empty slot, never decrypted
     rec = decrypt_record(raw)

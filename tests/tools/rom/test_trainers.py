@@ -13,7 +13,7 @@ def test_trainers_match_decomp_except_start(vanilla_files, decomp, symbols, char
     extract_trainers(decomp, tmp_path)
     want = json.loads((tmp_path / "trainers.json").read_text("utf-8"))
     starts = [t["start_condition"] for t in want]
-    got = read_trainers(vanilla_files, decomp, symbols, charmap, starts)
+    got = read_trainers(vanilla_files, decomp, symbols, charmap, starts, layout="vanilla")
     assert got == want
 
 
@@ -43,6 +43,13 @@ def test_party_size_rule():
         party_bytes(bytes(90) + b"\x01\x00", 5, 3, 5)
     with pytest.raises(ReaderError, match="trainer 6"):
         party_bytes(bytes(96), 6, 3, 5)
+    # Kaizo's packer leaves most members unpadded (K2b Task 8)
+    with pytest.raises(ReaderError, match="trainer 7.*56.*54"):
+        party_bytes(bytes(54), 7, 3, 3)
+    assert len(party_bytes(bytes(54), 7, 3, 3, unpadded=True)) == 54
+    assert len(party_bytes(bytes(56), 7, 3, 3, unpadded=True)) == 54
+    with pytest.raises(ReaderError, match="trainer 7"):
+        party_bytes(bytes(55), 7, 3, 3, unpadded=True)
 
 
 class _Patched:

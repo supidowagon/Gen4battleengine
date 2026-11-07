@@ -36,8 +36,10 @@ __all__ = [
 
 CHECKPOINT_VERSION = 3  # 3: merged variant stage, finalist picks, tie ranks (2026-11-04)
 
-# The fingerprint keys in the order they are compared, with what a mismatch says.
+# The fingerprint keys in the order they are compared, with what a mismatch says. The game
+# comes first: another game's checkpoint differs in its problem and tables too.
 _MISMATCH = (
+    ("game", "checkpoint is for another game"),
     ("problem", "checkpoint is for another save or pool, or other fight settings (deaths, cap)"),
     ("settings", "checkpoint is for other settings"),
     ("seed", "checkpoint is for another seed"),
@@ -67,13 +69,20 @@ def _digest(value) -> str:
 
 
 def fingerprint(
-    problem: PrepProblem, settings, seed: int, table_version: str, code_version: str
+    problem: PrepProblem,
+    settings,
+    seed: int,
+    table_version: str,
+    code_version: str,
+    game: str = "platinum_us",
 ) -> dict[str, str]:
-    """What a checkpoint is tied to. ``problem``: the sha256 of the canonical JSON of the
-    candidates (specs, locations, relearner and TM options, candies), the ``levelled`` moves,
-    the opponent specs, the trainer id, start condition, resources, deaths budget, protected
-    set, prestatus, cap and source. ``settings``: the same for the settings without
-    ``budget_seconds`` (a resumed run may have another budget)."""
+    """What a checkpoint is tied to. ``game``: the game id (plan K2b ruling 17; its
+    ``table_version`` differs per game too, as the manifest records the game). ``problem``:
+    the sha256 of the canonical JSON of the candidates (specs, locations, relearner and TM
+    options, candies), the ``levelled`` moves, the opponent specs, the trainer id, start
+    condition, resources, deaths budget, protected set, prestatus, cap and source.
+    ``settings``: the same for the settings without ``budget_seconds`` (a resumed run may
+    have another budget)."""
     body = {
         "candidates": problem.candidates,
         "levelled": problem.levelled,
@@ -94,6 +103,7 @@ def fingerprint(
         "seed": str(seed),
         "tables": table_version,
         "code": code_version,
+        "game": game,
     }
 
 
@@ -129,6 +139,11 @@ def read_checkpoint(path: Path, expected: dict[str, str]) -> dict:
     if version != CHECKPOINT_VERSION:
         raise ValueError(
             f"checkpoint {path} has version {version}, this program reads {CHECKPOINT_VERSION}"
+        )
+    if "game" not in found:
+        raise ValueError(
+            "checkpoint predates K2b (it records no game, and its tables are older): "
+            "start a new run"
         )
     for key, message in _MISMATCH:
         if found.get(key) != expected.get(key):

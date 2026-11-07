@@ -13,6 +13,12 @@ def test_toml_and_env_precedence(tmp_path):
     assert got.vanilla_rom == REPO_ROOT / "roms" / "v.nds"
     assert got.kaizo_patch == Path("C:\\p\\k.xdelta") and got.kaizo_save == Path("s.sav")
     assert got.pkcalc_zip is None and got.kaizo_docs is None
+    assert got.kaizo_save_pre_roark is None
+    pre = {"NUZLINE_KAIZO_SAVE_PRE_ROARK": "base.dsv"}
+    assert load_inputs(cfg, environ=pre).kaizo_save_pre_roark == Path("base.dsv")
+    cfg.write_text("vanilla_rom = 'v.nds'\nkaizo_save_pre_roark = 'saves/base.dsv'\n")
+    got = load_inputs(cfg, environ={})
+    assert got.kaizo_save_pre_roark == REPO_ROOT / "saves" / "base.dsv"
     assert load_inputs(cfg, environ={"NUZLINE_VANILLA_ROM": "x.nds"}).vanilla_rom == Path("x.nds")
 
 
@@ -49,6 +55,7 @@ def test_example_config_parses():
     got = load_inputs(REPO_ROOT / "data" / "local.example.toml", environ={})
     assert got.vanilla_rom.suffix == ".nds" and got.kaizo_patch.suffix == ".xdelta"
     assert got.kaizo_save.suffix == ".sav"
+    assert got.kaizo_save_pre_roark.suffix == ".dsv"
 
 
 def test_vanilla_rom_hash(vanilla_bytes):  # skips without inputs

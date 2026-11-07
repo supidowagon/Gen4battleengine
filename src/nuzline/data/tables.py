@@ -16,6 +16,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from nuzline.data.forms import form_row
+from nuzline.data.games import manifest_game
 
 DEFAULT = Path(__file__).resolve().parents[3] / "data" / "gen4_platinum"
 
@@ -113,9 +114,17 @@ def _index(names: list[str], what: str) -> dict[str, int]:
 
 
 class Names:
-    """Case-insensitive English name -> decomp id lookups."""
+    """Case-insensitive English name -> decomp id lookups.
+
+    A game's manifest may carry ``aliases`` (``{kind: {alias: id}}``: extra names that
+    resolve to an id) and ``renamed`` (``{kind: {old lowercase vanilla name: new name}}``:
+    slots the game renamed, whose old name is refused with a pointer to the new one). Both
+    are absent in vanilla, which means empty.
+    """
 
     def __init__(self, manifest: dict):
+        self.game: str = manifest_game(manifest)
+        self.unclassified_rom_changes: int = int(manifest.get("unclassified_rom_changes", 0))
         self.species_names: tuple[str, ...] = tuple(manifest["species_names"])
         self.move_names: tuple[str, ...] = tuple(manifest["move_names"])
         self.item_names: tuple[str, ...] = tuple(manifest["item_names"])
@@ -134,6 +143,45 @@ class Names:
         self._items = _index(manifest["item_names"], "item")
         self._abilities = _index(manifest["ability_names"], "ability")
         self._types = _index(manifest["type_names"], "type")
+        indexes = {
+            "species": self._species,
+            "move": self._moves,
+            "item": self._items,
+            "ability": self._abilities,
+        }
+        self._renamed: dict[str, dict[str, str]] = {
+            kind: {
+                old.lower(): new for old, new in manifest.get("renamed", {}).get(kind, {}).items()
+            }
+            for kind in indexes
+        }
+        for kind, index in indexes.items():
+            for alias, i in manifest.get("aliases", {}).get(kind, {}).items():
+                key = alias.lower()
+                if key in index:
+                    raise ValueError(
+                        f"{kind} alias {alias!r} collides with the name of id {index[key]}"
+                        f" (alias id {i})"
+                    )
+                new = self._renamed[kind].get(key)
+                if new is not None:
+                    raise ValueError(
+                        f"{kind} alias {alias!r} collides with the renamed name of id "
+                        f"{index.get(new.lower())} (now {new!r}; alias id {i})"
+                    )
+                index[key] = int(i)
+
+    def _lookup(self, index: dict[str, int], name: str, what: str) -> int:
+        key = name.lower()
+        try:
+            return index[key]
+        except KeyError:
+            new = self._renamed.get(what, {}).get(key)
+            if new is not None:
+                raise KeyError(
+                    f"unknown {what} {name!r}: in this game that slot is {new!r}"
+                ) from None
+            raise KeyError(f"unknown {what} {name!r}") from None
 
     @staticmethod
     def _get(index: dict[str, int], name: str, what: str) -> int:
@@ -143,7 +191,7 @@ class Names:
             raise KeyError(f"unknown {what} {name!r}") from None
 
     def species(self, name: str) -> int:
-        return self._get(self._species, name, "species")
+        return self._lookup(self._species, name, "species")
 
     def form_row(self, species: int, form: int = 0) -> int:
         """The personal row of ``species``' ``form``; ``ValueError`` if it has no such form."""
@@ -194,7 +242,7 @@ class Names:
 
     def move(self, name: str) -> int:
         """Move id; ``""`` is 0 (no move)."""
-        return 0 if name == "" else self._get(self._moves, name, "move")
+        return 0 if name == "" else self._lookup(self._moves, name, "move")
 
     def move_slot(self, state, side: int, name: str) -> int:
         """Move slot (0-3) of ``name`` on ``side``'s active Pokemon in a ``BattleState``;
@@ -207,10 +255,10 @@ class Names:
 
     def item(self, name: str) -> int:
         """Item id; ``""`` is 0 (no item)."""
-        return 0 if name == "" else self._get(self._items, name, "item")
+        return 0 if name == "" else self._lookup(self._items, name, "item")
 
     def ability(self, name: str) -> int:
-        return self._get(self._abilities, name, "ability")
+        return self._lookup(self._abilities, name, "ability")
 
     def type(self, name: str) -> int:
         """Decomp type id, e.g. ``type("Fire")``; the Mystery type is ``"???"``."""

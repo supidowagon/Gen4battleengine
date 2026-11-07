@@ -1,0 +1,22 @@
+# Kaizo level caps, read at runtime by nuzline.prep.caps (a deliberate departure from spec
+# 6.4/13, which put caps in overrides.toml: prep reads them, trainers.json does not bake them).
+source = "user, 2026-11-03 (spec 5.12); Galactic confirmed 100 (user, 2026-11-05)"
+
+# Cap of every fight in the split (the split comes from the spreadsheet's * Split sheets).
+[splits]
+Roark = 16
+Gardenia = 28
+Fantina = 38
+Maylene = 47
+Wake = 54
+Byron = 65
+Candice = 74
+# Ruling 15: Galactic fights use 100. Caps: user, 2026-11-03; Galactic 100 confirmed 2026-11-05.
+Galactic = 100
+Volkner = 84
+"Elite Four" = 100
+
+# A fight whose label starts with the key uses this cap instead of its split's (Barry only).
+[fights]
+"Pokémon Trainer Barry #3" = 42
+"Pokémon Trainer Barry #5" = 63

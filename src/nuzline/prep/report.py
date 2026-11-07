@@ -15,7 +15,7 @@ from collections.abc import Sequence
 import numpy as np
 
 from nuzline.data.forms import personal_row
-from nuzline.data.tables import Names
+from nuzline.data.tables import Names, Tables
 from nuzline.engine.ids import Status
 from nuzline.engine.state import BattleState, make_state
 from nuzline.jaxcache import code_version
@@ -29,7 +29,6 @@ from nuzline.prep.variants import (
     LEVEL_UP,
     RELEARNER,
     Member,
-    _default_tables,
     ai_kill_damage,
     max_hp_of,
     member_spec,
@@ -74,9 +73,8 @@ def _status_name(status: int) -> str:
     return Status(status).name.title()
 
 
-def _hp_why(problem: PrepProblem, names: Names, member: Member) -> str:
+def _hp_why(problem: PrepProblem, names: Names, member: Member, tables: Tables) -> str:
     """Why ``member.hp`` is an HP worth bringing: the check the region's top keeps off or on."""
-    tables = _default_tables()
     spec = problem.candidates[member.candidate].spec
     top = max_hp_of(tables, spec)
     hp = member.hp
@@ -96,9 +94,9 @@ def _hp_why(problem: PrepProblem, names: Names, member: Member) -> str:
     return "a region of the trainer AI's HP checks"
 
 
-def prep_steps(problem: PrepProblem, names: Names, setup: Setup) -> list[str]:
-    """What to do before the fight, unnumbered, in the order of the module docstring."""
-    tables = _default_tables()
+def prep_steps(problem: PrepProblem, names: Names, setup: Setup, tables: Tables) -> list[str]:
+    """What to do before the fight, unnumbered, in the order of the module docstring.
+    ``tables`` and ``names`` are the problem's game's (every function here takes both)."""
     brought = {m.candidate for m in setup.members}
     cands = problem.candidates
     steps: list[str] = []
@@ -163,7 +161,7 @@ def prep_steps(problem: PrepProblem, names: Names, setup: Setup) -> list[str]:
         if m.hp is not None:
             top = max_hp_of(tables, cands[m.candidate].spec)
             steps.append(
-                f"Bring {nick(m.candidate)} to {m.hp}/{top} HP ({_hp_why(problem, names, m)})."
+                f"Bring {nick(m.candidate)} to {m.hp}/{top} HP ({_hp_why(problem, names, m, tables)})."
             )
     for m in setup.members:
         if m.status:
@@ -200,10 +198,9 @@ def _moves_text(names: Names, moves: Sequence[int]) -> str:
     return ", ".join(names.move_names[m] for m in moves if m) or "no moves"
 
 
-def setup_card(problem: PrepProblem, names: Names, setup: Setup) -> list[str]:
+def setup_card(problem: PrepProblem, names: Names, setup: Setup, tables: Tables) -> list[str]:
     """One line per member, the lead marked ``*``: nickname, species, level, ability, item, HP,
     status and the four moves."""
-    tables = _default_tables()
     out = []
     for i, m in enumerate(setup.members):
         spec = member_spec(problem, m, tables)
@@ -271,8 +268,7 @@ def ladder_lines(result: PrepResult, problem: PrepProblem, names: Names) -> list
     return out
 
 
-def _root(problem: PrepProblem, setup: Setup) -> BattleState:
-    tables = _default_tables()
+def _root(problem: PrepProblem, setup: Setup, tables: Tables) -> BattleState:
     return make_state(
         tables,
         setup_specs(problem, setup, tables),
@@ -330,7 +326,7 @@ def _cheaper_json(result: PrepResult, problem: PrepProblem, names: Names) -> dic
 
 
 def render(
-    result: PrepResult, problem: PrepProblem, names: Names, show_depth: int = 1
+    result: PrepResult, problem: PrepProblem, names: Names, show_depth: int = 1, *, tables: Tables
 ) -> list[str]:
     """The whole answer as ASCII lines (module docstring; spec section 7)."""
     from nuzline.cli import all_zero_footer
@@ -345,9 +341,12 @@ def render(
     out = [
         head,
         "Setup:",
-        *(f"  {line}" for line in setup_card(problem, names, result.chosen)),
+        *(f"  {line}" for line in setup_card(problem, names, result.chosen, tables)),
         "Prep steps:",
-        *(f"  {i}. {s}" for i, s in enumerate(prep_steps(problem, names, result.chosen), 1)),
+        *(
+            f"  {i}. {s}"
+            for i, s in enumerate(prep_steps(problem, names, result.chosen, tables), 1)
+        ),
         cost_line(problem, names, result.chosen),
         *_cheaper_lines(result, problem, names),
         *ladder_lines(result, problem, names),
@@ -361,7 +360,7 @@ def render(
                 result.plan,
                 names,
                 show_depth,
-                root=_root(problem, result.chosen),
+                root=_root(problem, result.chosen, tables),
                 trainer=trainer.name or "Opponent",
             )
         )
@@ -383,8 +382,8 @@ def render(
     return [_ascii(line) for line in out]
 
 
-def _member_json(problem: PrepProblem, names: Names, member: Member) -> dict:
-    spec = member_spec(problem, member, _default_tables())
+def _member_json(problem: PrepProblem, names: Names, member: Member, tables: Tables) -> dict:
+    spec = member_spec(problem, member, tables)
     return {
         "label": problem.candidates[member.candidate].label,
         "moves": [names.move_names[m] for m in spec.moves if m],
@@ -410,8 +409,8 @@ def _source_text(names: Names, source: int) -> str:
     return names.item_names[source]
 
 
-def _setup_json(problem: PrepProblem, names: Names, setup: Setup) -> list[dict]:
-    return [_member_json(problem, names, m) for m in setup.members]
+def _setup_json(problem: PrepProblem, names: Names, setup: Setup, tables: Tables) -> list[dict]:
+    return [_member_json(problem, names, m, tables) for m in setup.members]
 
 
 def record(
@@ -422,10 +421,14 @@ def record(
     seed: int,
     table_version: str,
     reserved: Sequence[str] = (),
+    game: str = "platinum_us",
+    *,
+    tables: Tables,
 ) -> dict:
     """The run as JSON-ready data (spec section 7). ``reserved``: the item names the user
-    reserved (the problem keeps only what is left in the bag). ``pruned`` lists every variant
-    the prune dropped with the variant that dominated it (plan 4c ruling 8)."""
+    reserved (the problem keeps only what is left in the bag). ``game``: the game id, kept
+    next to ``table_version`` in the record and its plan tree (plan K2b Task 18). ``pruned``
+    lists every variant the prune dropped with the variant that dominated it (plan 4c ruling 8)."""
     cost = setup_cost(problem, result.chosen)
     trainer = problem.trainer
     plan = None
@@ -433,11 +436,14 @@ def record(
         plan = plan_tree.to_json(
             result.plan,
             names,
-            root=_root(problem, result.chosen),
+            root=_root(problem, result.chosen, tables),
             trainer=trainer.name or "Opponent",
             table_version=table_version,
         )
+        plan["game"] = game
     return {
+        "game": game,
+        "table_version": table_version,
         "trainer_id": trainer.id,
         "trainer": trainer.name,
         "cap": problem.cap,
@@ -446,9 +452,9 @@ def record(
         "reserved": list(reserved),
         "settings": _plain(settings),
         "seed": seed,
-        "fingerprint": fingerprint(problem, settings, seed, table_version, code_version()),
-        "setup": _setup_json(problem, names, result.chosen),
-        "prep_steps": prep_steps(problem, names, result.chosen),
+        "fingerprint": fingerprint(problem, settings, seed, table_version, code_version(), game),
+        "setup": _setup_json(problem, names, result.chosen, tables),
+        "prep_steps": prep_steps(problem, names, result.chosen, tables),
         "cost": {
             "text": cost_line(problem, names, result.chosen),
             "candies": cost.candies,
@@ -464,7 +470,7 @@ def record(
                 "ci_low": r.ci_low,
                 "ci_high": r.ci_high,
                 "source": r.source,
-                "setup": _setup_json(problem, names, r.setup),
+                "setup": _setup_json(problem, names, r.setup, tables),
             }
             for r in result.ladder
         ],
@@ -481,8 +487,8 @@ def record(
         "excluded": list(result.excluded),
         "pruned": [
             {
-                "dropped": _member_json(problem, names, dropped),
-                "dominated_by": _member_json(problem, names, by),
+                "dropped": _member_json(problem, names, dropped, tables),
+                "dominated_by": _member_json(problem, names, by, tables),
             }
             for dropped, by in result.pruned
         ],

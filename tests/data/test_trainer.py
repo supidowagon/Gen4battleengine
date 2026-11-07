@@ -1,9 +1,11 @@
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 from nuzline.data.trainer import (
+    AreaCondition,
     IntermediateData,
     PartnerVariant,
     build_trainer_party,
@@ -13,6 +15,7 @@ from nuzline.data.trainer import (
     load_trainers,
     trainer_pid,
 )
+from tests.engine.helpers import roark_trainer
 
 INTER = Path(__file__).resolve().parents[2] / "data" / "intermediate"
 needs_inter = pytest.mark.skipif(not INTER.exists(), reason="intermediate data not extracted")
@@ -171,3 +174,213 @@ def test_trainer_form_default_moves_use_the_row_learnset():
     assert mon.moves != default_moves(inter.learnsets[413], 30)
     with pytest.raises(ValueError, match="species 413 has no form 3"):
         build_trainer_party(replace(roark, party=(replace(raw, form=3),)), inter)
+
+
+# --- Kaizo trainer fields (K2b Task 14) ----------------------------------------------
+
+
+def test_vanilla_trainers_load_with_defaults(trainers):  # data/intermediate trainers.json
+    assert all(
+        t.label is None
+        and t.pid_routine == "vanilla"
+        and not t.optional
+        and t.gauntlet is None
+        and t.sources == {}
+        and t.gauntlet_rules == {}
+        and t.player_starter is None
+        and not t.left_side
+        and t.split is None
+        and t.split_order is None
+        for t in trainers
+    )
+    assert all(
+        m.nature is None
+        and m.gender is None
+        and m.ability_slot is None
+        and m.ability_override == 0
+        and m.friendship is None
+        for t in trainers
+        for m in t.party
+    )
+    assert trainers[246].area_condition == AreaCondition()  # vanilla Roark starts in no weather
+
+
+def test_vanilla_area_condition_follows_start_condition(trainers):
+    for t in trainers:
+        area = t.area_condition
+        if t.start_condition == "none":
+            assert area == AreaCondition()
+        elif t.start_condition == "fog":
+            assert area == AreaCondition(fog=True)
+        else:
+            assert area == AreaCondition(weather=t.start_condition)
+    assert {t.area_condition.weather for t in trainers} == {None, "rain", "hail", "sandstorm"}
+
+
+def test_unknown_start_condition_is_not_a_weather():
+    # Kaizo trainers whose start condition is a user call (318, 325, ... 747).
+    assert AreaCondition.from_start_condition("unknown") == AreaCondition(weather="unknown")
+    assert AreaCondition.from_start_condition("sun") == AreaCondition(weather="sun")
+    with pytest.raises(ValueError, match="unknown start condition 'frost'"):
+        AreaCondition.from_start_condition("frost")
+
+
+def test_area_condition_kinds():
+    # The sheet grammar: PERMANENT RAIN|SUN|SANDSTORM|HAIL, FOG, TRICK ROOM, GRAVITY.
+    for w in ("rain", "sun", "sandstorm", "hail"):
+        assert AreaCondition(weather=w).permanent
+    assert AreaCondition(trick_room=True, gravity=True, fog=True).permanent
+    with pytest.raises(ValueError, match="area weather 'fog'"):
+        AreaCondition(weather="fog")
+
+
+def _kaizo_row(**fields):
+    mon = {"species": 74, "level": 12, "difficulty": 0, "moves": None, "item": 0, "form": 0}
+    row = {
+        "id": 7,
+        "name": "Worker C",
+        "class": "Worker",
+        "class_id": 3,
+        "class_gender": 0,
+        "ai_flags": 7,
+        "items": [0, 0, 0, 0],
+        "party": [mon],
+        "start_condition": "none",
+        "format": "single",
+        "opponent_2": None,
+        "partner": [],
+    }
+    return {**row, **fields}
+
+
+def _write(tmp_path, rows):
+    (tmp_path / "trainers.json").write_text(json.dumps(rows), encoding="utf-8")
+    return load_trainers(tmp_path)
+
+
+def test_kaizo_fields_load(tmp_path):
+    mon = {
+        "species": 74,
+        "level": 12,
+        "difficulty": 0,
+        "moves": None,
+        "item": 0,
+        "form": 0,
+        "nature": 3,
+        "gender": 1,
+        "ability_slot": 1,
+        "ability_override": 16,
+        "friendship": 0,
+    }
+    row = _kaizo_row(
+        party=[mon],
+        label="Worker C (Oreburgh Gym)",
+        pid_routine=None,
+        player_starter=390,
+        gauntlet=["Oreburgh Gym", 2],
+        gauntlet_rules={"heal_between": True},
+        optional=True,
+        left_side=True,
+        area_condition={
+            "weather": "rain",
+            "fog": False,
+            "trick_room": True,
+            "gravity": False,
+            "permanent": True,
+        },
+        split="Roark Split",
+        split_order=[1, 4],
+        sources={"area_condition": "overrides.toml:12"},
+    )
+    (t,) = _write(tmp_path, [row])
+    assert (t.label, t.pid_routine, t.player_starter) == ("Worker C (Oreburgh Gym)", None, 390)
+    assert t.gauntlet == ("Oreburgh Gym", 2) and t.gauntlet_rules == {"heal_between": True}
+    assert t.optional and t.left_side and t.split == "Roark Split" and t.split_order == (1, 4)
+    assert t.area_condition == AreaCondition(weather="rain", trick_room=True)
+    assert t.sources == {"area_condition": "overrides.toml:12"}
+    m = t.party[0]
+    assert (m.nature, m.gender, m.ability_slot, m.ability_override, m.friendship) == (
+        3,
+        1,
+        1,
+        16,
+        0,
+    )
+
+
+def test_area_condition_from_start_condition_when_absent(tmp_path):
+    (t,) = _write(tmp_path, [_kaizo_row(start_condition="unknown")])
+    assert t.area_condition == AreaCondition(weather="unknown")
+
+
+def test_explicit_nature_wins(inter):
+    roark = roark_trainer()
+    explicit = replace(roark.party[0], nature=3, gender=1, ability_slot=1)
+    built = build_trainer_party(replace(roark, party=(explicit,)), inter)[0]
+    assert (built.nature, built.gender, built.ability_slot) == (3, 1, 1)
+    vanilla = build_trainer_party(roark, inter)[0]
+    assert (vanilla.nature, vanilla.gender, vanilla.ability_slot) == (9, 0, 0)  # Lax Geodude
+
+
+def test_each_explicit_value_wins_alone(inter):
+    roark = roark_trainer()
+    only_gender = replace(roark.party[0], gender=1)
+    built = build_trainer_party(replace(roark, party=(only_gender,)), inter)[0]
+    assert (built.nature, built.gender, built.ability_slot) == (9, 1, 0)
+
+
+def test_explicit_friendship_wins(inter):
+    # Kaizo's party builder sets 255, or 0 for a Pokemon with Frustration.
+    roark = roark_trainer()
+    for value in (0, 255):
+        mon = replace(roark.party[0], friendship=value)
+        assert build_trainer_party(replace(roark, party=(mon,)), inter)[0].friendship == value
+    base = inter.species[roark.party[0].species]["base_friendship"]
+    assert build_trainer_party(roark, inter)[0].friendship == base
+
+
+def test_no_routine_without_data_raises(inter):
+    t = replace(roark_trainer(), pid_routine=None)
+    with pytest.raises(ValueError, match="trainer 246 slot 0: no nature/gender/ability data"):
+        build_trainer_party(t, inter)
+    partial = replace(t.party[0], nature=3, gender=0)
+    with pytest.raises(ValueError, match="trainer 246 slot 0: no nature/gender/ability data"):
+        build_trainer_party(replace(t, party=(partial,)), inter)
+
+
+def test_no_routine_with_data_builds(inter):
+    t = replace(roark_trainer(), pid_routine=None)
+    party = tuple(replace(m, nature=3, gender=1, ability_slot=0) for m in t.party)
+    built = build_trainer_party(replace(t, party=party), inter)
+    assert [(m.nature, m.gender, m.ability_slot) for m in built] == [(3, 1, 0)] * len(party)
+
+
+def test_ability_override_without_set_data_raises(inter):  # review I1
+    roark = roark_trainer()
+    assert roark.pid_routine == "vanilla"
+    override = replace(roark.party[0], ability_override=16, nature=3, gender=0)
+    with pytest.raises(ValueError, match="trainer 246 slot 0: no nature/gender/ability data"):
+        build_trainer_party(replace(roark, party=(override,)), inter)
+    full = replace(override, ability_slot=1)
+    built = build_trainer_party(replace(roark, party=(full,)), inter)[0]
+    assert (built.nature, built.gender, built.ability_slot) == (3, 0, 1)
+
+
+@pytest.mark.parametrize("key", ["gauntlet", "split_order"])
+def test_pair_fields_must_be_pairs(tmp_path, key):
+    with pytest.raises(ValueError, match=f"trainer 7: {key} .* is not a pair"):
+        _write(tmp_path, [_kaizo_row(**{key: ["Oreburgh Gym", 2, 3]})])
+
+
+def test_vanilla_area_conditions_pinned(trainers):
+    # Map weather (tools/extract_decomp.py _start_condition): Juan in rain, Keegan in a
+    # sandstorm, Blake in hail, Ernest in fog.
+    assert trainers[91].area_condition == AreaCondition(weather="rain")
+    assert trainers[559].area_condition == AreaCondition(weather="sandstorm")
+    assert trainers[132].area_condition == AreaCondition(weather="hail")
+    assert trainers[66].area_condition == AreaCondition(fog=True)
+
+
+def test_null_partner_loads_as_none(tmp_path):  # Kaizo: a partner present, not evaluated
+    (t,) = _write(tmp_path, [_kaizo_row(format="multi", partner=None)])
+    assert t.format == "multi" and t.partner is None

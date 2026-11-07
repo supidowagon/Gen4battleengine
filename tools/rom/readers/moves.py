@@ -6,7 +6,7 @@ import struct
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from tools.extract_decomp import _constants
+from tools.extract_decomp import MOVE_LIST_ARRAYS, _constants
 from tools.rom.readers import ReaderError, fixed_members
 from tools.rom.readers.text import message_bank
 
@@ -72,3 +72,75 @@ def read_moves(rom: RomFiles, decomp: Path, charmap: dict[int, str]) -> list[dic
     if len(names) < count:
         raise ReaderError(f"TEXT_BANK_MOVE_NAMES: {len(names)} entries, need {count}")
     return [decode_move(decomp, i, members[i], names[i]) for i in range(count)]
+
+
+VANILLA_GAME_CODE = "CPUE"
+
+
+def _hits(rom: RomFiles, needle: bytes) -> list[tuple[str, int, bytes]]:
+    """Every (image, offset, image bytes) where ``needle`` occurs in the decompressed ARM9
+    and overlays of ``rom``, overlapping hits included."""
+    images = [("ARM9", rom.arm9())] + [(f"overlay {i}", rom.overlay(i)) for i in rom.overlay_ids()]
+    out = []
+    for where, data in images:
+        at = data.find(needle)
+        while at != -1:
+            out.append((where, at, data))
+            at = data.find(needle, at + 1)
+    return out
+
+
+def _context(hit: tuple[str, int, bytes], size: int) -> tuple[str, bytes, bytes]:
+    """The image, and the u16 just before and just after a hit of ``size`` bytes."""
+    where, at, data = hit
+    return where, data[max(at - 2, 0) : at], data[at + size : at + size + 2]
+
+
+def read_move_lists(
+    rom: RomFiles,
+    vanilla_lists: dict[str, list[int]],
+    override: dict[str, list[int]] | None = None,
+    vanilla_rom: RomFiles | None = None,
+) -> dict[str, list[int]]:
+    """``move_lists.json`` for the ROM: ``{"sound": [ids], "punch": [ids]}``.
+
+    The game keeps no table for these (``sSoundMoves`` and ``sPunchingMoves`` are C arrays
+    in ``battle_lib.c``), so each vanilla list is searched for as consecutive little-endian
+    u16 in the decompressed ARM9 and every decompressed overlay. A list is unchanged when
+    it is found exactly once and, unless ``rom`` is the vanilla ROM, the u16 before and
+    after it equal those around the single hit in ``vanilla_rom`` (required for any other
+    ROM): a move appended or prepended to the array leaves the vanilla bytes in place, so
+    the bytes alone cannot show it. A list not found unchanged takes ``override[key]``
+    (transcribed by hand) if given, else this raises. More than one hit is ambiguous and
+    always raises."""
+    patched = rom.game_code != VANILLA_GAME_CODE
+    if patched and vanilla_rom is None:
+        raise ReaderError(
+            f"ROM {rom.game_code!r} is not the vanilla ROM: pass vanilla_rom to compare "
+            "the move lists' neighbouring bytes"
+        )
+    out = {}
+    for key, array in MOVE_LIST_ARRAYS.items():
+        needle = b"".join(struct.pack("<H", m) for m in vanilla_lists[key])
+        hits = _hits(rom, needle)
+        if len(hits) > 1:
+            raise ReaderError(
+                f"{array} found {len(hits)} times ({[(w, a) for w, a, _ in hits]}); "
+                "it must be unique"
+            )
+        unchanged = len(hits) == 1
+        if unchanged and patched:
+            base = _hits(vanilla_rom, needle)
+            if len(base) != 1:
+                raise ReaderError(f"{array} found {len(base)} times in the vanilla ROM, need 1")
+            unchanged = _context(hits[0], len(needle)) == _context(base[0], len(needle))
+        if unchanged:
+            out[key] = list(vanilla_lists[key])
+        elif override is not None and key in override:
+            out[key] = [int(m) for m in override[key]]
+        else:
+            raise ReaderError(
+                f"{array} not found unchanged: transcribe it into "
+                "data/kaizo/overrides.toml [move_lists]"
+            )
+    return out

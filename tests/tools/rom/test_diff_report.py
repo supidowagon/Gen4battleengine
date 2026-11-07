@@ -6,6 +6,7 @@ import pytest
 
 from tests.tools.rom.diff_helpers import CODE, SYMS, fake, poke
 from tools.rom.diff import (
+    HAND_WRITTEN,
     CodeChange,
     FileChange,
     HeaderChange,
@@ -33,6 +34,19 @@ def test_report_deterministic_and_ascii(tmp_path):
         write_report(D, {}, tmp_path / n, PROV)
     a = (tmp_path / "a.md").read_bytes()
     assert a == (tmp_path / "b.md").read_bytes() and a.isascii()
+
+
+def test_hand_written_section_is_kept(tmp_path):  # K2b Task 13: decoded routines
+    path = tmp_path / "r.md"
+    write_report(D, {}, path, PROV)
+    path.write_text(path.read_text() + "\n" + HAND_WRITTEN + "\n\n## Notes\n\nkept\n")
+    write_report(D_MOVED, {}, path, PROV)
+    text = path.read_text()
+    assert text.endswith(HAND_WRITTEN + "\n\n## Notes\n\nkept\n")
+    assert text.count(HAND_WRITTEN) == 1 and text.isascii()
+    fresh = tmp_path / "fresh.md"
+    write_report(D_MOVED, {}, fresh, PROV)
+    assert text.startswith(fresh.read_text())
 
 
 def test_default_status_is_unknown(tmp_path):

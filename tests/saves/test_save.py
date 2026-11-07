@@ -5,7 +5,14 @@ import sys
 import pytest
 
 from nuzline.saves import RecordError, SaveError, SaveFile, load_save
-from nuzline.saves.layout import BOXES_SIZE, NORMAL_SIZE, PARTY_COUNT
+from nuzline.saves.layout import (
+    BAG,
+    BOXES_SIZE,
+    NORMAL_SIZE,
+    PARTY_COUNT,
+    VAR_PLAYER_STARTER_INDEX,
+    VARS,
+)
 from nuzline.saves.save import DSV_MARKER, read_image, select_copies
 from tests.saves.writer import build_image as _build_image
 from tests.saves.writer import (
@@ -283,3 +290,37 @@ def test_default_tables_and_names_refuse_a_stale_npz(tmp_path, version):
     stale = r"tables\.npz is version \w+; .*re-run tools/extract_decomp\.py and tools/build_tables"
     with pytest.raises(ValueError, match=stale):
         default_tables_and_names(None, None, tmp_path)
+
+
+def test_vars_offset_matches_decomp_arithmetic():
+    # Pages before VarsFlags (src/savedata/save_table.c): SYSTEM, PLAYER, PARTY, BAG.
+    bag = 4 * (165 + 50 + 100 + 12 + 40 + 64 + 15 + 30) + 4  # pockets + u32 registeredItem
+    assert VARS == BAG + bag + (4 - bag % 4) + 4 == 0xDAC  # SaveTableEntry_BodySize
+    assert VAR_PLAYER_STARTER_INDEX == 0x4030 - 0x4000
+
+
+def test_player_starter_round_trip(tmp_path, tables, names):
+    image = build_image(vars={VAR_PLAYER_STARTER_INDEX: 390})
+    assert _load(tmp_path, image, tables, names).player_starter == 390
+
+
+def test_player_starter_zero_before_the_choice(tmp_path, tables, names):
+    assert _load(tmp_path, build_image(), tables, names).player_starter == 0
+
+
+# DeSmuME's footer: the marker, six u32 (actual size, padded size, type, address size,
+# memory size, version), then "|-DESMUME SAVE-|" (122 bytes after a 512 KiB image).
+_DESMUME_FOOTER = (
+    DSV_MARKER
+    + b"".join(v.to_bytes(4, "little") for v in (0x80000, 0x80000, 0, 3, 0x80000, 0))
+    + b"|-DESMUME SAVE-|"
+)
+
+
+def test_dsv_with_the_desmume_footer(tmp_path, tables, names):
+    image = build_image(tid=77, vars={VAR_PLAYER_STARTER_INDEX: 393})
+    assert len(_DESMUME_FOOTER) == 122
+    save = load_save(
+        _write(tmp_path, image + _DESMUME_FOOTER, "game.dsv"), tables=tables, names=names
+    )
+    assert save.tid == 77 and save.player_starter == 393

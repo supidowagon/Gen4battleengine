@@ -408,24 +408,25 @@ def _names():
         return None
 
 
-def _move_name(move: int) -> str:
-    names = _names()
+def _move_name(move: int, names=None) -> str:
+    """``move``'s name in ``names`` (the caller's game); without them, the shipped tables'."""
+    names = names if names is not None else _names()
     return names.move_names[move] if names is not None else f"move id {move}"
 
 
-def _item_name(item: int) -> str:
-    names = _names()
+def _item_name(item: int, names=None) -> str:
+    names = names if names is not None else _names()
     return names.item_names[item] if names is not None else f"item id {item}"
 
 
-def _scoring_refusals(tables: Tables, state: BattleState) -> list[str]:
+def _scoring_refusals(tables: Tables, state: BattleState, names=None) -> list[str]:
     r = _refused(tables, state)
     moves = np.asarray(state.moves)
     out: list[str] = []
     for s, k in zip(*np.nonzero(np.asarray(r.move)), strict=True):
         out.append(
             f"ai scoring: opponent slot {s}: the script paths of move "
-            f"{_move_name(int(moves[1, s, k]))} are not transcribed (docs/ai/roark.md 5)"
+            f"{_move_name(int(moves[1, s, k]), names)} are not transcribed (docs/ai/roark.md 5)"
         )
     for s in np.flatnonzero(np.asarray(r.sites)):
         out.append(
@@ -447,7 +448,7 @@ def _scoring_refusals(tables: Tables, state: BattleState) -> list[str]:
     items = np.asarray(state.item)
     for side, s in zip(*np.nonzero(np.asarray(r.item)), strict=True):
         out.append(
-            f"ai scoring: side {side} slot {s}: item {_item_name(int(items[side, s]))} "
+            f"ai scoring: side {side} slot {s}: item {_item_name(int(items[side, s]), names)} "
             "changes IfMoveEffectivenessEquals and is not implemented"
         )
     move_names = {v: k for k, v in _STATE_MOVE_IDS.items()}
@@ -459,21 +460,23 @@ def _scoring_refusals(tables: Tables, state: BattleState) -> list[str]:
     return out
 
 
-def _item_refusals(tables: Tables, state: BattleState) -> list[str]:
+def _item_refusals(tables: Tables, state: BattleState, names=None) -> list[str]:
     bag = np.asarray(state.trainer_items[1])
     return [
-        f"item use: bag slot {k}: {_item_name(int(bag[k]))} is not a transcribed "
+        f"item use: bag slot {k}: {_item_name(int(bag[k]), names)} is not a transcribed "
         "TrainerAI_ShouldUseItem item (only Potion)"
         for k in np.flatnonzero(np.asarray(_refused(tables, state).bag))
     ]
 
 
-def ai_refusals(tables: Tables, state: BattleState) -> list[str]:
+def ai_refusals(tables: Tables, state: BattleState, names=None) -> list[str]:
     """Every reason the AI of this (concrete) state is refused, one human-readable line
-    each; empty when ``ai_policy`` is exact for it."""
+    each; empty when ``ai_policy`` is exact for it. Moves and items are named from
+    ``names``, the ``Names`` of ``tables``' game (``check_coverage`` passes them; Kaizo
+    renames slots), else from the shipped vanilla tables."""
     return (
-        _scoring_refusals(tables, state)
-        + _item_refusals(tables, state)
+        _scoring_refusals(tables, state, names)
+        + _item_refusals(tables, state, names)
         + switching_refusals(tables, state)
     )
 

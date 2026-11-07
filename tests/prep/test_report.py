@@ -4,6 +4,8 @@ Task 9). Results are fabricated over fixture candidates; no search runs."""
 import json
 from dataclasses import replace
 
+import numpy as np
+
 from nuzline.engine.ids import Status
 from nuzline.prep.problem import Resources
 from nuzline.prep.report import cost_line, ladder_lines, prep_steps, record, render, setup_card
@@ -82,7 +84,7 @@ def test_same_names_carry_their_location(tables, names):
         label="box 1 slot 0 GEODUDE",
     )
     prob = problem(tables, names, [a, b], resources=Resources(0, (), (), ()), levelled=[(), ()])
-    steps = prep_steps(prob, names, Setup((Member(1), Member(0))))
+    steps = prep_steps(prob, names, Setup((Member(1), Member(0))), tables)
     assert "Withdraw GEODUDE (box 1 slot 0)." in steps
     assert any(t.startswith("Rare Candy x4 on GEODUDE (box 1 slot 0) ") for t in steps)
     assert steps[-1] == ("Party order: GEODUDE (box 1 slot 0) first, then GEODUDE (party slot 0).")
@@ -90,10 +92,13 @@ def test_same_names_carry_their_location(tables, names):
 
 def test_prep_steps_text(tables, names):
     prob, setup = fixture(tables, names)
-    assert prep_steps(prob, names, setup) == [
+    assert prep_steps(prob, names, setup, tables) == [
         "Deposit ZUBAT (party slot 3).",
         "Withdraw KRICKETOT (box 1 slot 1).",
-        "Rare Candy x11 on KRICKETOT (Lv5 -> 16), cancelling any evolution (press B), then heal at a Pokemon Center.",
+        (
+            "Rare Candy x11 on KRICKETOT (Lv5 -> 16), cancelling any evolution (press B), "
+            "then heal at a Pokemon Center."
+        ),
         "KRICKETOT learns Bug Bite at Lv16 while levelling.",
         "Move Relearner (1 Heart Scale): FURRET forgets Foresight, learns Fury Swipes.",
         "TM10 (Hidden Power) on FURRET: forgets Defense Curl.",
@@ -112,7 +117,7 @@ def test_prep_steps_items_status_and_alone(tables, names):
     cands[2] = replace(cands[2], spec=spec)
     prob = replace(prob, candidates=tuple(cands), resources=Resources(1, (), (), ((held, 1),)))
     lead = Member(1, item=oran, status=int(Status.POISON))
-    steps = prep_steps(prob, names, Setup((lead, Member(2, item=-1))))
+    steps = prep_steps(prob, names, Setup((lead, Member(2, item=-1))), tables)
     assert "Give FURRET the Oran Berry." in steps
     assert "Take the Sitrus Berry from MONFERNO." in steps
     assert "Poison FURRET before the fight." in steps
@@ -120,7 +125,9 @@ def test_prep_steps_items_status_and_alone(tables, names):
         "Poison FURRET before the fight."
     )
     assert steps[-1] == "Party order: FURRET first, then MONFERNO."
-    assert prep_steps(prob, names, Setup((Member(2),)))[-1] == "Party order: MONFERNO alone."
+    assert (
+        prep_steps(prob, names, Setup((Member(2),)), tables)[-1] == "Party order: MONFERNO alone."
+    )
 
 
 def test_cost_line(tables, names):
@@ -134,13 +141,38 @@ def test_cost_line(tables, names):
 
 def test_setup_card(tables, names):
     prob, setup = fixture(tables, names)
-    card = setup_card(prob, names, setup)
+    card = setup_card(prob, names, setup, tables)
     assert len(card) == 3
     assert card[0].startswith("* KRICKETOT (KRICKETOT) Lv16")
     assert card[1].startswith("  FURRET (FURRET) Lv")
     assert "HP 40/57" in card[1] and "HP 16/48" in card[2]
     assert "Bug Bite" in card[0] and "Hidden Power" in card[1] and "Fury Swipes" in card[1]
     assert "Foresight" not in card[1] and "healthy" in card[0]
+
+
+def test_report_reads_only_the_given_tables(tables, names, monkeypatch):
+    # Final review I4: the report path takes the game's tables from the caller; it never
+    # loads the shipped (vanilla) ones, so a Kaizo run shows Kaizo HP, abilities and PP.
+    from nuzline.prep import variants
+
+    def shipped():
+        raise AssertionError("the report read the shipped tables")
+
+    monkeypatch.setattr(variants, "load_tables", shipped)
+    variants._default_tables.cache_clear()
+    prob, setup = fixture(tables, names)
+    result = make_result(prob, setup)
+    lines = render(result, prob, names, tables=tables)
+    rec = record(result, prob, names, PrepSettings(), 7, "tv", tables=tables)
+    assert "Setup:" in lines and rec["setup"] and rec["plan"] is not None
+    # Another game's base HP is what the card shows (Kricketot's stats are computed).
+    kricketot = prob.candidates[setup.members[0].candidate].spec
+    row = int(np.asarray(tables.species_form_row)[kricketot.species, kricketot.form])
+    base = tables.species_base_stats.at[row, 0].set(tables.species_base_stats[row, 0] + 50)
+    other = tables._replace(species_base_stats=base)
+    hp = setup_card(prob, names, setup, tables)[0].split("HP ")[1].split()[0]
+    assert setup_card(prob, names, setup, other)[0].split("HP ")[1].split()[0] != hp
+    variants._default_tables.cache_clear()
 
 
 def make_result(prob, setup, *, plan=True, other=None, zero=False, stopped=None, k=0):
@@ -201,7 +233,7 @@ def test_ladder_lines(tables, names):
 
 def test_render_with_plan(tables, names):
     prob, setup = fixture(tables, names)
-    lines = render(make_result(prob, setup), prob, names)
+    lines = render(make_result(prob, setup), prob, names, tables=tables)
     text = "\n".join(lines)
     assert lines[1] == "Setup:" and "Prep steps:" in lines
     assert "  1. Deposit ZUBAT (party slot 3)." in lines
@@ -215,7 +247,7 @@ def test_render_with_plan(tables, names):
 def test_report_without_a_deathless_line(tables, names):
     prob, setup = fixture(tables, names)
     prob = replace(prob, deaths=1)
-    lines = render(make_result(prob, setup, zero=True, k=1), prob, names)
+    lines = render(make_result(prob, setup, zero=True, k=1), prob, names, tables=tables)
     assert "No deathless line found: every setup's 0-death chance is 0 %." in lines
     ladder = [line for line in lines if line.startswith("  deaths <=")]
     assert len(ladder) == 4 and ladder[0].startswith("  deaths <= 0: 0.0 %")
@@ -225,7 +257,9 @@ def test_report_without_a_deathless_line(tables, names):
 
 def test_screen_only_report(tables, names):
     prob, setup = fixture(tables, names)
-    lines = render(make_result(prob, setup, plan=False, stopped="budget"), prob, names)
+    lines = render(
+        make_result(prob, setup, plan=False, stopped="budget"), prob, names, tables=tables
+    )
     assert "screen only, no plan (budget)" in lines
     assert "Plan:" not in lines
     assert any(line.startswith("Deaths (screen): 0: 85.0 %") for line in lines)
@@ -235,10 +269,18 @@ def test_record_is_json(tables, names):
     prob, setup = fixture(tables, names)
     prob = replace(prob, protected=frozenset({1}))
     rec = record(
-        make_result(prob, setup), prob, names, PrepSettings(), 7, "tv", reserved=("Oran Berry",)
+        make_result(prob, setup),
+        prob,
+        names,
+        PrepSettings(),
+        7,
+        "tv",
+        reserved=("Oran Berry",),
+        tables=tables,
     )
     assert json.loads(json.dumps(rec)) == rec
     assert set(rec) == {
+        "game", "table_version",
         "trainer_id", "trainer", "cap", "deaths", "protected", "reserved", "settings", "seed",
         "fingerprint", "setup", "prep_steps", "cost", "ladder", "distribution", "plan",
         "finalists", "stats", "excluded", "pruned", "cheaper_alternative",
@@ -248,11 +290,15 @@ def test_record_is_json(tables, names):
     assert rec["setup"][1]["moves"][1:3] == ["Fury Swipes", "Hidden Power"]
     assert rec["cost"]["text"] == "Cost: 11 Rare Candies, 1 Heart Scale, TM10"
     assert rec["plan"]["deaths_allowed"] == 0 and rec["plan"]["table_version"] == "tv"
+    assert rec["game"] == rec["plan"]["game"] == rec["fingerprint"]["game"] == "platinum_us"
+    assert rec["table_version"] == "tv"
     assert len(rec["ladder"]) == 4 and rec["distribution"]["win_0"] == 0.85
     assert rec["finalists"][0]["value"] == 0.85
     assert rec["pruned"][0]["dominated_by"]["hp"] == 40
     assert rec["stats"]["setups_screened"] == 40
-    bare = record(make_result(prob, setup, plan=False), prob, names, PrepSettings(), 7, "tv")
+    bare = record(
+        make_result(prob, setup, plan=False), prob, names, PrepSettings(), 7, "tv", tables=tables
+    )
     assert bare["plan"] is None and bare["finalists"] == []
 
 
@@ -266,25 +312,28 @@ def test_cheaper_alternative_line(tables, names):
     top = replace(solved.ranking[0], e_deaths=0.0123)
     other = Finalist(cheap, replace(solved, ranking=[top, *solved.ranking[1:]]))
     result = replace(base, finalists=(*base.finalists, other), cheaper=other)
-    lines = render(result, prob, names)
+    lines = render(result, prob, names, tables=tables)
     found = [line for line in lines if line.startswith("Cheaper, tied within noise: ")]
     assert len(found) == 1 and "Cost: none" in found[0]
     assert "0.012 expected deaths" in found[0]
     assert "\n".join(lines).isascii()
-    rec = record(result, prob, names, PrepSettings(), 7, "tv")
+    rec = record(result, prob, names, PrepSettings(), 7, "tv", tables=tables)
     assert json.loads(json.dumps(rec)) == rec
     assert rec["cheaper_alternative"]["label"] == setup_label(names, prob, cheap)
     assert rec["cheaper_alternative"]["cost"] == "Cost: none"
     assert rec["cheaper_alternative"]["e_deaths"] == 0.0123
-    lines = render(base, prob, names)
+    lines = render(base, prob, names, tables=tables)
     assert not any(line.startswith("Cheaper, tied within noise: ") for line in lines)
-    assert record(base, prob, names, PrepSettings(), 7, "tv")["cheaper_alternative"] is None
+    assert (
+        record(base, prob, names, PrepSettings(), 7, "tv", tables=tables)["cheaper_alternative"]
+        is None
+    )
 
 
 def test_prep_steps_deposits_left_out_party(tables, names):
     prob, setup = fixture(tables, names)
     prob = replace(prob, left_out_party=((1, "Egg"), (4, "GEODUDE")))
-    steps = prep_steps(prob, names, setup)
+    steps = prep_steps(prob, names, setup, tables)
     assert steps[:4] == [
         "Deposit Egg (party slot 1).",
         "Deposit ZUBAT (party slot 3).",

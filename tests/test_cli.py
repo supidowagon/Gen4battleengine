@@ -2,11 +2,16 @@
 
 import json
 import os
+import subprocess
+import sys
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 from nuzline.cli import main, resolve_trainer
+from nuzline.data import games
+from nuzline.data.games import Game
 from nuzline.data.trainer import Trainer
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -690,8 +695,12 @@ def test_cli_prep_small(prep_run):
 
 def test_cli_prep_needs_a_cap(prep_runs, tmp_path, tables, names, capsys):
     save = _prep_save(tmp_path, tables, names)
-    assert main(["prep", "--save", save, "--trainer-id", "858", *SMALL]) == 1
+    # Anthony (34) is a supported fight with no configured cap.
+    assert main(["prep", "--save", save, "--trainer-id", "34", *SMALL]) == 1
     assert "config/level_caps.toml" in capsys.readouterr().err
+    # A refused fight exits 2 before the cap is needed (final review M8).
+    assert main(["prep", "--save", save, "--trainer-id", "858", *SMALL]) == 2
+    assert "Support: NONE" in capsys.readouterr().out
 
 
 @pytest.mark.parametrize(
@@ -769,3 +778,481 @@ def test_coverage_save_uses_the_config_cap(tmp_path, tables, names, capsys):
     save = _prep_save(tmp_path, tables, names)
     assert main(["coverage", "--save", save, "--trainer", "roark"]) == 0
     assert "Pool at level cap 16" in capsys.readouterr().out
+
+
+# ---- --game vanilla|kaizo, rivals and optional trainers (plan K2b Task 18) ----
+
+_KAIZO = "platinum_kaizo_nightmare_final"
+
+
+def kt(label, *, id=0, starter=None, optional=False, gauntlet=None, fmt="single", cls="Trainer"):
+    """A Kaizo-style trainer known by ``label`` (its ROM name is the label's last word)."""
+    return replace(
+        Trainer(id, label.split()[-1], cls, 0, 0, 7, (), (), "none", fmt),
+        label=label,
+        player_starter=starter,
+        optional=optional,
+        gauntlet=gauntlet,
+    )
+
+
+def write_trainers(dir: Path, trainers) -> None:
+    """``trainers`` as a ``trainers.json`` that ``load_trainers`` reads back."""
+    rows = [
+        {
+            "id": t.id,
+            "name": t.name,
+            "class": t.trainer_class,
+            "class_id": t.class_id,
+            "class_gender": t.class_gender,
+            "ai_flags": t.ai_flags,
+            "items": list(t.items),
+            "party": [],
+            "start_condition": t.start_condition,
+            "format": t.format,
+            "opponent_2": t.opponent_2,
+            "partner": [],
+            "label": t.label,
+            "player_starter": t.player_starter,
+            "optional": t.optional,
+            "gauntlet": None if t.gauntlet is None else list(t.gauntlet),
+        }
+        for t in trainers
+    ]
+    (dir / "trainers.json").write_text(json.dumps(rows), encoding="utf-8")
+
+
+def run_solve_with_record(tmp_path) -> Path:
+    """The solve-record test's command, made small; returns the run record it wrote."""
+    from nuzline import cli
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(cli, "RUNS", tmp_path / "runs")
+        args = ["solve", "--party", SAMPLE, "--trainer", "roark", "--max-depth", "0"]
+        assert main([*args, "--playouts", "50", "--devices", "1"]) == 0
+    (record,) = (tmp_path / "runs").glob("solve_*.json")
+    return record
+
+
+def test_default_game_is_vanilla(capsys):
+    rc = main(["coverage", "--party", SAMPLE, "--trainer", "roark"])
+    plain = capsys.readouterr().out
+    assert main(["coverage", "--game", "vanilla", "--party", SAMPLE, "--trainer", "roark"]) == rc
+    assert capsys.readouterr().out == plain
+
+
+def test_kaizo_without_tables_exit_1(tmp_path, monkeypatch, capsys):
+    monkeypatch.setitem(games.GAMES, _KAIZO, Game(_KAIZO, tmp_path, tmp_path))
+    assert main(["coverage", "--game", "kaizo", "--party", SAMPLE, "--trainer", "roark"]) == 1
+    assert "tools.build_tables --game kaizo" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("command", ["rank", "solve", "prep", "trainers"])
+def test_kaizo_without_tables_every_command(tmp_path, monkeypatch, capsys, command):
+    monkeypatch.setitem(games.GAMES, _KAIZO, Game(_KAIZO, tmp_path, tmp_path))
+    args = {
+        "rank": ["--party", SAMPLE, "--trainer", "roark", "--devices", "1"],
+        "solve": ["--party", SAMPLE, "--trainer", "roark", "--devices", "1"],
+        "prep": ["--save", SAMPLE, "--trainer", "roark", "--devices", "1"],
+        "trainers": [],
+    }[command]
+    assert main([command, "--game", "kaizo", *args]) == 1
+    err = capsys.readouterr().err
+    # trainers needs only the trainer list: a missing one names the Kaizo build too.
+    assert "tools.build_tables --game kaizo" in err and len(err.strip().splitlines()) == 1
+
+
+def test_kaizo_without_tables_loads_no_jax(tmp_path):  # Review Focus 1, in a subprocess
+    code = (
+        "import sys; from pathlib import Path; from nuzline.data import games; "
+        "from nuzline.cli import main;"
+        f"games.GAMES['{_KAIZO}'] = games.Game('{_KAIZO}', Path(r'{tmp_path}'), "
+        f"Path(r'{tmp_path}'));"
+        f"rc = main(['coverage', '--game', 'kaizo', '--party', r'{SAMPLE}', '--trainer', 'roark']);"
+        "assert rc == 1 and 'jax' not in sys.modules"
+    )
+    env = {**os.environ, "PYTHONPATH": str(ROOT / "src")}
+    done = subprocess.run(
+        [sys.executable, "-c", code], check=False, cwd=ROOT, env=env, capture_output=True, text=True
+    )
+    assert done.returncode == 0, done.stderr
+
+
+def test_solve_record_has_game(tmp_path, capsys):
+    record = json.loads(run_solve_with_record(tmp_path).read_text("utf-8"))
+    assert record["game"] == "platinum_us" and "table_version" in record
+    assert record["result"]["game"] == "platinum_us"
+
+
+def test_rival_variants_need_save():
+    ts = [
+        kt("Pok\xe9mon Trainer Barry #3 [Empoleon]", id=10, starter=390),
+        kt("Pok\xe9mon Trainer Barry #3 [Torterra]", id=11, starter=393),
+        kt("Pok\xe9mon Trainer Barry #3 [Infernape]", id=12, starter=387),
+    ]
+    with pytest.raises(ValueError, match=r"10, 11, 12.*--save or --trainer-id"):
+        resolve_trainer(ts, name="barry #3")
+    assert resolve_trainer(ts, name="barry #3", player_starter=390).id == 10
+
+
+def test_resolve_trainer_label_rules():
+    # Exact name or label first; a label substring only when nothing matches exactly.
+    ts = [kt("Leader Roark", id=1, cls="Leader"), kt("Hiker Roark", id=2), kt("Lass B", id=3)]
+    assert resolve_trainer(ts, name="hiker roark").id == 2
+    assert resolve_trainer(ts, name="ROARK").id == 1  # the ROM name, a Leader preferred
+    assert resolve_trainer(ts, name="lass").id == 3
+    with pytest.raises(ValueError, match="no trainer named"):
+        resolve_trainer(ts, name="barry")
+    # Different fights sharing a substring are not starter variants: the first is taken.
+    assert resolve_trainer(ts, name="r roark").id == 1
+
+
+def test_trainers_marks_optional(tmp_path, monkeypatch, capsys):  # synthetic Kaizo dir
+    write_trainers(
+        tmp_path,
+        [
+            kt("Lass B", optional=True),
+            kt("Worker C", id=1, gauntlet=("Oreburgh Gym", 2)),
+            kt("Twins D & E", id=2, fmt="double"),
+        ],
+    )
+    monkeypatch.setitem(games.GAMES, _KAIZO, Game(_KAIZO, tmp_path, tmp_path))
+    assert main(["trainers", "--game", "kaizo"]) == 0
+    out = capsys.readouterr().out
+    assert "Lass B [optional]" in out and "Worker C [gauntlet Oreburgh Gym #2]" in out
+    assert "Twins D & E [double]" in out
+
+
+def test_trainers_with_save_shows_only_its_rival(tmp_path, monkeypatch, tables, names, capsys):
+    from nuzline.saves.layout import VAR_PLAYER_STARTER_INDEX
+    from tests.saves.synthetic import party_record
+    from tests.saves.writer import build_image
+
+    vanilla = games.GAMES[games.VANILLA]
+    inter = tmp_path / "inter"
+    inter.mkdir()
+    (inter / "items.json").write_bytes((vanilla.intermediate_dir / "items.json").read_bytes())
+    write_trainers(
+        inter,
+        [
+            kt("Pok\xe9mon Trainer Barry #1 [Turtwig]", id=1, starter=393),
+            kt("Pok\xe9mon Trainer Barry #1 [Piplup]", id=2, starter=390),
+            kt("Lass B", id=3),
+        ],
+    )
+    monkeypatch.setitem(games.GAMES, games.VANILLA, Game(games.VANILLA, vanilla.tables_dir, inter))
+    save = tmp_path / "s.sav"
+    party = [party_record(tables, names, "Prinplup", 14, ("Pound", "Bubble"))]
+    save.write_bytes(build_image(party=party, vars={VAR_PLAYER_STARTER_INDEX: 390}))
+    assert main(["trainers"]) == 0
+    assert "[Turtwig]" in capsys.readouterr().out
+    assert main(["trainers", "--save", str(save)]) == 0
+    out = capsys.readouterr().out
+    assert "[Piplup]" in out and "[Turtwig]" not in out and "Lass B" in out
+
+
+def _kaizo_party(tmp_path, names) -> str:
+    """SAMPLE for Kaizo (plan K2b preflight #3): every move Kaizo renamed (``renamed.move``
+    in its manifest) under its new name, and each Pokemon's ability its first Kaizo one."""
+    import tomllib
+
+    manifest = json.loads(
+        (games.GAMES[_KAIZO].tables_dir / "manifest.json").read_text(encoding="utf-8")
+    )
+    renamed = manifest["renamed"]["move"]
+    lines = []
+    for mon in tomllib.loads(Path(SAMPLE).read_text(encoding="utf-8"))["pokemon"]:
+        mon["moves"] = [renamed.get(m.lower(), m) for m in mon["moves"]]
+        first = names.species_abilities(names.species(mon["species"]), 0)[0]
+        mon["ability"] = names.ability_names[first]
+        lines.append("[[pokemon]]")
+        lines += [f"{key} = {json.dumps(value)}" for key, value in mon.items()]
+    path = tmp_path / "kaizo_party.toml"
+    path.write_text("".join(f"{line}\n" for line in lines), encoding="utf-8")
+    return str(path)
+
+
+def test_kaizo_roark_refused(tmp_path, capsys, kaizo_tables, kaizo_names):  # exit 2
+    party = _kaizo_party(tmp_path, kaizo_names)
+    assert main(["coverage", "--game", "kaizo", "--party", party, "--trainer", "roark"]) == 2
+    out = capsys.readouterr().out
+    assert "Battle start: Sandstorm (weather UNSUPPORTED)" in out
+    assert "no transcribed AI policy for this game" in out and "code changes unclassified" in out
+    # Final review I3: Kaizo Roark's move 205 is Accelerock; Rollout is no Kaizo move.
+    assert "move Accelerock are not transcribed" in out and "Rollout" not in out
+
+
+def test_cli_still_imports_without_jax():
+    env = {**os.environ, "PYTHONPATH": str(ROOT / "src")}
+    code = "import sys, nuzline.cli; assert 'jax' not in sys.modules"
+    done = subprocess.run([sys.executable, "-c", code], check=False, env=env, cwd=ROOT)
+    assert done.returncode == 0
+
+
+def _patched_roark(monkeypatch, **changes) -> list[int]:
+    """Every load of the trainers gives Roark (246) ``changes``; returns the ids
+    ``build_trainer_party`` is called with."""
+    from nuzline.data import trainer as trainer_module
+
+    load, build = trainer_module.load_trainers, trainer_module.build_trainer_party
+    built: list[int] = []
+
+    def patched(dir):
+        return [replace(t, **changes) if t.id == 246 else t for t in load(dir)]
+
+    def spy(trainer, inter):
+        built.append(trainer.id)
+        return build(trainer, inter)
+
+    monkeypatch.setattr(trainer_module, "load_trainers", patched)
+    monkeypatch.setattr(trainer_module, "build_trainer_party", spy)
+    return built
+
+
+UNKNOWN_LINE = "Battle start: condition unknown (user call) (start condition UNSUPPORTED)"
+NO_SET_LINE = "Roark slot 0: nature/gender/ability unknown (no PKCalc set)"
+
+
+@pytest.mark.parametrize("command", ["coverage", "rank", "solve"])
+def test_unknown_start_condition_is_refused(command, monkeypatch, tmp_path, capsys):
+    from nuzline import cli
+
+    monkeypatch.setattr(cli, "RUNS", tmp_path / "runs")
+    _patched_roark(monkeypatch, start_condition="unknown")
+    extra = [] if command == "coverage" else ["--devices", "1"]
+    assert main([command, "--party", SAMPLE, "--trainer", "roark", *extra]) == 2
+    captured = capsys.readouterr()
+    assert UNKNOWN_LINE in captured.out and "Roark (Leader, id 246)" in captured.out
+    assert captured.err == "" and not (tmp_path / "runs").exists()
+
+
+@pytest.mark.parametrize("command", ["coverage", "rank", "solve"])
+def test_missing_set_data_is_refused_without_building(command, monkeypatch, tmp_path, capsys):
+    from nuzline import cli
+
+    monkeypatch.setattr(cli, "RUNS", tmp_path / "runs")
+    built = _patched_roark(monkeypatch, pid_routine=None)
+    extra = [] if command == "coverage" else ["--devices", "1"]
+    assert main([command, "--party", SAMPLE, "--trainer", "roark", *extra]) == 2
+    captured = capsys.readouterr()
+    assert NO_SET_LINE in captured.out and captured.err == "" and built == []
+
+
+@pytest.mark.parametrize(
+    ("changes", "line"),
+    [({"start_condition": "unknown"}, UNKNOWN_LINE), ({"pid_routine": None}, NO_SET_LINE)],
+)
+def test_prep_refuses_unknown_start_and_missing_sets(
+    changes, line, prep_runs, monkeypatch, tmp_path, tables, names, capsys
+):
+    built = _patched_roark(monkeypatch, **changes)
+    save = _prep_save(tmp_path, tables, names)
+    assert main(["prep", "--save", save, "--trainer", "roark", "--cap", "14", *SMALL]) == 2
+    out = capsys.readouterr().out
+    assert line in out and "Roark (Leader, id 246)" in out
+    assert built == ([] if "pid_routine" in changes else [246])
+    assert not prep_runs.exists()
+
+
+def test_impossible_save_contents_warn(tmp_path, tables, names, capsys):
+    # Spec section 8: the game is never inferred from a save; impossible contents warn
+    # loudly on stderr and the command goes on.
+    from tests.saves.synthetic import party_record
+    from tests.saves.writer import build_image
+
+    path = tmp_path / "odd.sav"
+    path.write_bytes(
+        build_image(
+            party=[
+                party_record(tables, names, "Monferno", 14, ("Scratch", "Ember")),
+                party_record(tables, names, "Starly", 10, ("Tackle", "Hydro Pump")),
+            ]
+        )
+    )
+    for argv in (
+        ["save", "show", str(path)],
+        ["save", "export", str(path), "-o", str(tmp_path / "p.toml")],
+        ["coverage", "--save", str(path), "--trainer", "roark"],
+        ["trainers", "--save", str(path)],
+    ):
+        assert main(argv) == 0, argv
+        err = capsys.readouterr().err
+        warnings = [line for line in err.splitlines() if "Hydro Pump" in line]
+        assert len(warnings) == 1, (argv, err)
+        assert warnings[0].startswith("warning: ") and "STARLY" in warnings[0].upper()
+
+
+# ---- Task 18 fix round 1: ASCII output; a rival name needs the starter ----
+
+BARRYS = [
+    kt("Pok\xe9mon Trainer Barry #2 [Turtwig]", id=247, starter=393),
+    kt("Pok\xe9mon Trainer Barry #2 [Piplup]", id=249, starter=390),
+    kt("Pok\xe9mon Trainer Barry #3 [Torterra]", id=470, starter=393),
+    kt("Pok\xe9mon Trainer Barry #3 [Empoleon]", id=472, starter=390),
+]
+
+
+def test_bare_rival_name_needs_a_save():
+    # One fight's variants without a save: never guessed (fix round 1, I2).
+    with pytest.raises(ValueError, match=r"470, 472.*--save or --trainer-id"):
+        resolve_trainer(BARRYS, name="barry #3")
+    assert resolve_trainer(BARRYS, name="barry #3", player_starter=390).id == 472
+    assert resolve_trainer(BARRYS, trainer_id=470).id == 470
+
+
+@pytest.mark.parametrize("starter", [None, 390])
+def test_rival_name_of_several_fights_must_name_the_fight(starter):
+    # Fix round 2: "barry" is Barry #2 and Barry #3, with or without a save.
+    fights = "Pok\xe9mon Trainer Barry #2; Pok\xe9mon Trainer Barry #3"
+    with pytest.raises(ValueError, match=rf"2 rival fights: {fights}.*--trainer-id") as e:
+        resolve_trainer(BARRYS, name="barry", player_starter=starter)
+    assert "--trainer 'Pok\xe9mon Trainer Barry #3'" in str(e.value)
+    # A non-rival name still takes the first match (ruling #39).
+    grunts = [kt("Galactic Grunt Ann", id=1), kt("Galactic Grunt Bob", id=2)]
+    assert resolve_trainer(grunts, name="grunt", player_starter=starter).id == 1
+
+
+def test_rival_fights_with_a_save_on_the_command_line(tmp_path, monkeypatch, tables, names, capsys):
+    from nuzline.saves.layout import VAR_PLAYER_STARTER_INDEX
+    from tests.saves.synthetic import party_record
+    from tests.saves.writer import build_image
+
+    vanilla = games.GAMES[games.VANILLA]
+    inter = tmp_path / "inter"
+    inter.mkdir()
+    (inter / "items.json").write_bytes((vanilla.intermediate_dir / "items.json").read_bytes())
+    write_trainers(inter, BARRYS)
+    monkeypatch.setitem(games.GAMES, games.VANILLA, Game(games.VANILLA, vanilla.tables_dir, inter))
+    save = tmp_path / "s.sav"
+    party = [party_record(tables, names, "Prinplup", 14, ("Pound", "Bubble"))]
+    save.write_bytes(build_image(party=party, vars={VAR_PLAYER_STARTER_INDEX: 390}))
+    args = ["coverage", "--save", str(save), "--trainer"]
+    assert main([*args, "barry"]) == 1
+    err = capsys.readouterr().err
+    assert "2 rival fights: Pok\\xe9mon Trainer Barry #2; Pok\\xe9mon Trainer Barry #3" in err
+    assert err.isascii()
+    # "barry #3" with the save: the save's starter picks Empoleon's team (472). The spy
+    # stops the command there (the synthetic trainers have no party to fight).
+    from nuzline import cli
+
+    seen = []
+    resolve = cli.resolve_trainer
+
+    def spy(*a, **k):
+        seen.append(resolve(*a, **k))
+        raise ValueError("stop after resolution")
+
+    monkeypatch.setattr(cli, "resolve_trainer", spy)
+    assert main([*args, "barry #3"]) == 1
+    assert "stop after resolution" in capsys.readouterr().err
+    assert [t.id for t in seen] == [472]
+
+
+def test_rival_without_the_saves_starter_names_it():
+    with pytest.raises(ValueError, match=r"starter \(species 387\).*470, 472"):
+        resolve_trainer(BARRYS, name="barry #3", player_starter=387)
+
+
+def test_trainers_output_is_ascii(tmp_path, monkeypatch, capsys):
+    write_trainers(
+        tmp_path,
+        [kt("Pok\xe9mon Trainer Barry #1 [Piplup]", starter=390, cls="Swimmer♂")],
+    )
+    monkeypatch.setitem(games.GAMES, _KAIZO, Game(_KAIZO, tmp_path, tmp_path))
+    assert main(["trainers", "--game", "kaizo"]) == 0
+    out = capsys.readouterr().out
+    assert out.isascii() and "Pok\\xe9mon Trainer Barry #1 [Piplup]" in out
+    assert "(Swimmer\\u2642)" in out
+
+
+def _cp1252_cli(*argv: str) -> subprocess.CompletedProcess:
+    """``python -m nuzline.cli ARGV`` with stdout and stderr encoded as cp1252, the default
+    Windows console; output decoded as cp1252."""
+    env = {**os.environ, "PYTHONPATH": str(ROOT / "src"), "PYTHONIOENCODING": "cp1252"}
+    return subprocess.run(
+        [sys.executable, "-m", "nuzline.cli", *argv],
+        check=False,
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        encoding="cp1252",
+    )
+
+
+def test_trainers_prints_on_a_cp1252_console():
+    done = _cp1252_cli("trainers")
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.isascii() and "246  Roark  (Leader)" in done.stdout
+
+
+def test_kaizo_rival_refusal_prints_on_a_cp1252_console(tmp_path, kaizo_tables, kaizo_names):
+    party = _kaizo_party(tmp_path, kaizo_names)
+    done = _cp1252_cli("coverage", "--game", "kaizo", "--party", party, "--trainer-id", "472")
+    assert done.returncode == 2, done.stderr
+    out = done.stdout
+    assert out.isascii() and "Pok\\xe9mon Trainer Barry #3 [Empoleon] (" in out
+    assert "Support: NONE" in out and "Missing (" in out
+    assert "Pok\\xe9mon Trainer Barry #3 [Empoleon]: no transcribed AI policy" in out
+
+
+@pytest.mark.parametrize("which", ["kaizo_save_pre_roark_path", "kaizo_save_path"])
+def test_kaizo_save_export_checks_kaizo_tables(which, tmp_path, request, kaizo_tables, kaizo_names):
+    # Final review I2: the party is checked against the Kaizo tables (Sandshrew's Kaizo
+    # Rough Skin is no vanilla Sandshrew ability), and round-trips through load_party.
+    from nuzline.data.party import load_party
+    from nuzline.saves import load_save
+
+    path = request.getfixturevalue(which)  # read in place, never copied
+    out = tmp_path / "party.toml"
+    assert main(["save", "export", "--game", "kaizo", str(path), "-o", str(out)]) == 0
+    save = load_save(path, tables=kaizo_tables, names=kaizo_names, game=_KAIZO)
+    want = [m.to_spec(kaizo_tables) for m in save.party if not m.is_egg]
+    assert load_party(out, kaizo_names) == want
+
+
+def test_renamed_slot_lookup_is_one_error_line(capsys, kaizo_tables, kaizo_names):  # M7
+    # A vanilla party file under --game kaizo: Water Sport's slot is Scald in Kaizo.
+    party = str(ROOT / "tests" / "fixtures" / "golden_party_roark_01.toml")
+    assert main(["coverage", "--game", "kaizo", "--party", party, "--trainer", "roark"]) == 1
+    err = capsys.readouterr().err.strip().splitlines()
+    assert len(err) == 1 and err[0].startswith("nuzline: error: unknown move")
+    assert "in this game that slot is" in err[0] and "Traceback" not in err[0]
+
+
+def test_kaizo_prep_refusal_exits_2_before_the_cap(
+    tmp_path, monkeypatch, capsys, kaizo_tables, kaizo_names, kaizo_save_pre_roark_path
+):  # M8: Martha (51) is placed on a map but has no split, so default_cap would raise "pass --cap" (exit 1)
+    from nuzline import cli
+
+    monkeypatch.setattr(cli, "RUNS", tmp_path / "runs")
+    path = str(kaizo_save_pre_roark_path)
+    args = ["prep", "--game", "kaizo", "--save", path, "--trainer-id", "51", "--devices", "1"]
+    assert main(args) == 2
+    out = capsys.readouterr().out
+    assert "Support: NONE" in out and "no transcribed AI policy" in out
+    assert not (tmp_path / "runs").exists()
+
+
+def test_kaizo_pool_cap_is_never_defaulted(
+    capsys, kaizo_tables, kaizo_names, kaizo_save_pre_roark_path
+):
+    # M9: Martha (51) is placed on a map but has no split, so there is no cap; the pool is not shown at the party max.
+    path = str(kaizo_save_pre_roark_path)
+    assert main(["coverage", "--game", "kaizo", "--save", path, "--trainer-id", "51"]) == 2
+    captured = capsys.readouterr()
+    assert "Pool at level cap" not in captured.out
+    assert "nuzline: error: pool left out: no level cap for" in captured.err
+    assert "--cap" in captured.err
+    assert (
+        main(["coverage", "--game", "kaizo", "--save", path, "--trainer-id", "51", "--cap", "12"])
+        == 2
+    )
+    assert "Pool at level cap 12" in capsys.readouterr().out
+
+
+def test_pkmn_glyphs_print_as_pkmn():  # final review M13
+    from nuzline.cli import _listing_line, _trainer_line
+
+    barry = kt("Pok\xe9mon Trainer Barry #2 [Turtwig]", id=247, cls="\u20a7\u20a6 Trainer")
+    assert _trainer_line(barry) == "Pok\\xe9mon Trainer Barry #2 [Turtwig] (PKMN Trainer, id 247)"
+    assert _listing_line(barry).endswith("(PKMN Trainer)") and _listing_line(barry).isascii()

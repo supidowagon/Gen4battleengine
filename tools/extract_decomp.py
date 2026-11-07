@@ -8,7 +8,8 @@ Conventions:
 
 * A ``generated/<name>.txt`` constant's numeric id is its 0-based line number.
   A trailing count sentinel (``MAX_MOVES``, ``NUM_POKEMON_TYPES``,
-  ``NATURE_COUNT``) is not an id and is dropped. Every output list is indexed by the decomp's own id.
+  ``NATURE_COUNT``) is not an id and is dropped. Every output list is indexed by the decomp's
+  own id.
 * Stat vectors use the order HP, Atk, Def, SpA, SpD, Spe (index = ``ids.Stat``).
   The decomp orders stats HP, Atk, Def, Spe, SpA, SpD
   (``generated/pokemon_stats.txt``), so this module reorders them.
@@ -19,7 +20,8 @@ Conventions:
 * Anything that cannot be parsed raises ``ExtractError`` naming the offending
   file (and line, for C sources); nothing is skipped silently.
 
-CLI: ``uv run python -m tools.extract_decomp --decomp external/pokeplatinum --out data/intermediate``
+CLI:
+``uv run python -m tools.extract_decomp --decomp external/pokeplatinum --out data/intermediate``
 """
 
 from __future__ import annotations
@@ -29,6 +31,7 @@ import csv
 import json
 import math
 import re
+from collections.abc import Callable
 from pathlib import Path
 
 from tools.battle_scripts import (
@@ -180,6 +183,7 @@ def _row_fields(decomp: Path):
             "base_friendship": int(d["base_friendship"]),
             "exp_rate": exp_rate_id(d["exp_rate"]),
             "exp_yield": int(d["base_exp_reward"]),
+            "catch_rate": int(d["catch_rate"]),
         }
 
     return fields
@@ -203,6 +207,7 @@ def extract_species(decomp: Path) -> list[dict]:
                 "base_friendship": row["base_friendship"],
                 "exp_rate": row["exp_rate"],
                 "exp_yield": row["exp_yield"],
+                "catch_rate": row["catch_rate"],
             }
         )
     return out
@@ -432,6 +437,31 @@ def _c_array_body(path: Path, decl_regex: str) -> list[tuple[int, str]]:
     raise ExtractError(f"{path}:{start + 1}: array never closed")
 
 
+MOVE_LIST_ARRAYS = {"sound": "sSoundMoves", "punch": "sPunchingMoves"}
+
+
+def extract_move_lists(decomp: Path) -> dict[str, list[int]]:
+    """``move_lists.json``: the move ids of ``sSoundMoves`` (Soundproof) and
+    ``sPunchingMoves`` (Iron Fist) in ``src/battle/battle_lib.c``, in source order."""
+    move_id = _index(_constants(decomp, "moves", "MOVE_"), "move")
+    path = decomp / "src" / "battle" / "battle_lib.c"
+    out = {}
+    for key, array in MOVE_LIST_ARRAYS.items():
+        body = _c_array_body(path, rf"{array}\[\]\s*=\s*\{{")
+        ids = []
+        for lineno, line in body:
+            line = line.split("//")[0].strip().rstrip(",").strip()
+            if not line:
+                continue
+            if not re.fullmatch(r"MOVE_[A-Z0-9_]+", line):
+                raise ExtractError(f"{path}:{lineno}: unexpected {array} entry {line!r}")
+            ids.append(move_id(line))
+        if not ids:
+            raise ExtractError(f"{path}: {array} is empty")
+        out[key] = ids
+    return out
+
+
 def extract_types(decomp: Path) -> dict:
     types = _constants(decomp, "pokemon_types", "TYPE_")
     type_id = _index(types, "type")
@@ -548,10 +578,13 @@ def extract_items(decomp: Path) -> list[dict]:
                     "hold_effect": hold_id("HOLD_EFFECT_NONE"),
                     "hold_param": 0,
                     "teaches_move": None,
+                    "hp_restored": 0,
+                    "fling_power": 0,
                 }
             )
             continue
         d = _load_json(decomp / "res" / "items" / "data" / f"{_stem(const, 'ITEM_')}.json")
+        params = d.get("itemUseParams") or {}
         out.append(
             {
                 "name": d["name"],
@@ -559,6 +592,11 @@ def extract_items(decomp: Path) -> list[dict]:
                 "hold_param": int(d["effectParam"]),
                 # res/items/data/tm10.json `teachesMove`; null for every other item.
                 "teaches_move": move_id(d["teachesMove"]) if d.get("teachesMove") else None,
+                # ItemPartyParam.hpRestored (include/item.h:48), a u8 that itemproc.c:168
+                # fills from the JSON's s8: -1 (Max Potion: restore all) is 255. 0 without
+                # itemUseParams (no party-use data).
+                "hp_restored": int(params.get("hpRestored", 0)) & 0xFF,
+                "fling_power": int(d["flingPower"]),  # ItemData.flingPower (include/item.h:62)
             }
         )
     return out
@@ -798,6 +836,10 @@ WEATHER_CONDITION = {
     "OVERWORLD_WEATHER_TRICK_ROOM": "trick_room",
 }
 START_CONDITIONS = ("none", "rain", "hail", "sandstorm", "sun", "fog")
+# A Kaizo override for a trainer the evidence does not settle (data/kaizo/start_conditions.json):
+# the trainer's maps give several conditions and the sheet and PKCalc do not decide between
+# them. It is written to trainers.json as is, so no consumer can mistake it for a condition.
+UNKNOWN_CONDITION = "unknown"
 
 # Map-script lines whose TRAINER_* operands start a battle on the map that owns the
 # script. SetVar feeds the `StartTrainerBattle VAR_...` form.
@@ -1051,40 +1093,53 @@ def _placed_enemies(
     return out
 
 
-def _start_condition_overrides(path: Path, trainers: list[str]) -> dict[str, str]:
-    """Read ``{trainer_id: {"trainer": TRAINER_*, "condition": ...}}`` and return
-    TRAINER_* -> condition. Each entry's constant must be the one at its id in
-    ``generated/trainers.txt``, so an id drift fails instead of moving an override."""
+def _start_condition_overrides(
+    path: Path, name_at: Callable[[int], str], allowed: tuple[str, ...] = START_CONDITIONS
+) -> dict[int, str]:
+    """Read ``{trainer_id: {"trainer": name, "condition": ...}}`` and return trainer id ->
+    condition. Each entry's name must be ``name_at(id)``, so an id drift fails instead of
+    moving an override. ``name_at`` raising ``KeyError`` or ``IndexError`` means the key is
+    not a trainer id. Vanilla passes the ``TRAINER_*`` list's ``__getitem__``; Kaizo the
+    ROM trainer-name bank's (plan Ruling 8), whose names repeat, hence the id keys. A
+    condition outside ``allowed`` raises (Kaizo also allows ``UNKNOWN_CONDITION``)."""
     out = {}
     for key, entry in _load_json(path).items():
         if key == "comment":
             continue
-        if not key.isdecimal() or int(key) >= len(trainers):
-            raise ExtractError(f"{path}: {key!r} is not a trainer id")
+        try:
+            if not key.isdecimal():
+                raise KeyError(key)
+            name = name_at(int(key))
+        except (KeyError, IndexError):
+            raise ExtractError(f"{path}: {key!r} is not a trainer id") from None
         if not isinstance(entry, dict) or set(entry) != {"trainer", "condition"}:
             raise ExtractError(f"{path}: entry {key} must be {{trainer, condition}}")
-        const, cond = entry["trainer"], entry["condition"]
-        if trainers[int(key)] != const:
-            raise ExtractError(f"{path}: id {key} is {trainers[int(key)]}, not {const}")
-        if cond not in START_CONDITIONS:
-            raise ExtractError(f"{path}: {key} ({const}) has unknown start condition {cond!r}")
-        out[const] = cond
+        given, cond = entry["trainer"], entry["condition"]
+        if name != given:
+            raise ExtractError(f"{path}: id {key} is {name}, not {given}")
+        if cond not in allowed:
+            raise ExtractError(f"{path}: {key} ({given}) has unknown start condition {cond!r}")
+        out[int(key)] = cond
     return out
 
 
-def _start_condition(const: str, derived: set[str], overrides: dict[str, str]) -> str:
+def _start_condition(
+    tid: int, label: str, derived: set[str], overrides: dict[int, str], path: Path
+) -> str:
+    """Trainer ``tid``'s start condition: its override from ``path`` if any (which may not
+    contradict a single derived condition), else the one derived condition, else "none".
+    ``label`` (the ``TRAINER_*`` constant or the Kaizo ROM name) names it in errors."""
     if not derived <= set(START_CONDITIONS):
-        raise ExtractError(f"{const} starts under {sorted(derived)}; not a supported condition")
-    if const in overrides:
-        if len(derived) == 1 and derived != {overrides[const]}:
+        raise ExtractError(f"{label} starts under {sorted(derived)}; not a supported condition")
+    if tid in overrides:
+        if len(derived) == 1 and derived != {overrides[tid]}:
             raise ExtractError(
-                f"{START_CONDITIONS_FILE}: {const} is {overrides[const]!r} but the decomp "
-                f"gives {next(iter(derived))!r}"
+                f"{path}: {label} is {overrides[tid]!r} but the maps give {next(iter(derived))!r}"
             )
-        return overrides[const]
+        return overrides[tid]
     if len(derived) > 1:
         raise ExtractError(
-            f"{const} can start with any of {sorted(derived)}; list it in {START_CONDITIONS_FILE}"
+            f"{label} (id {tid}) can start with any of {sorted(derived)}; list it in {path}"
         )
     return next(iter(derived)) if derived else "none"
 
@@ -1171,7 +1226,7 @@ def extract_trainers(decomp_root: Path, out_dir: Path) -> None:
     for header, h in headers.items():
         if h["weather"] not in weather:
             raise ExtractError(f"{header}: unknown weather {h['weather']!r}")
-    overrides = _start_condition_overrides(START_CONDITIONS_FILE, trainers)
+    overrides = _start_condition_overrides(START_CONDITIONS_FILE, trainers.__getitem__)
     unknown = sorted(set(where) - set(trainers))
     if unknown:
         raise ExtractError(f"maps name unknown trainers {unknown}")
@@ -1230,7 +1285,9 @@ def extract_trainers(decomp_root: Path, out_dir: Path) -> None:
                 **structure_fields(
                     structures.get(tid), "double" if d["double_battle"] else "single"
                 ),
-                "start_condition": _start_condition(const, derived, overrides),
+                "start_condition": _start_condition(
+                    tid, const, derived, overrides, START_CONDITIONS_FILE
+                ),
             }
         )
     _write(out_dir / "trainers.json", out)
@@ -1245,6 +1302,7 @@ def extract_static(decomp_root: Path, out_dir: Path) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     _write(out_dir / "species.json", extract_species(decomp_root))
     _write(out_dir / "moves.json", extract_moves(decomp_root))
+    _write(out_dir / "move_lists.json", extract_move_lists(decomp_root))
     _write(out_dir / "types.json", extract_types(decomp_root))
     _write(out_dir / "natures.json", extract_natures(decomp_root))
     _write(out_dir / "items.json", extract_items(decomp_root))

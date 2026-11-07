@@ -13,6 +13,8 @@ in two-trainer doubles, tag battles and beside a walking partner (plan Rulings 2
   constants. Two trainers who spot the player in the same step
   (``res/field/scripts/scripts_battles.s:173``, ``StartTrainerBattle VAR_0x8004,
   VAR_0x8005``) depend on runtime geometry and are not recorded (Ruling 4).
+* ``double``: ``StartTrainerBattle t, t``, one trainer in a double
+  (``BATTLE_TYPE_TRAINER_DOUBLES``, ``src/encounter.c:736-737``); Kaizo uses it.
 * Otherwise the header's format ("double" or "single") stands; that is the caller's.
 
 Ops (``Op.name``): ``label``(name), ``StartTrainerBattle``(t1, t2),
@@ -39,6 +41,9 @@ PARTNER_VAR = 0x403F  # VAR_PARTNER_TRAINER_ID (generated/vars_flags.txt, checke
 # (asm/macros/scrcmd.inc:179,310): VARS_START..VARS_END and
 # SCRIPT_LOCAL_VARS_START..SCRIPT_LOCAL_VARS_END, inclusive (checked by var_ids).
 VAR_RANGES = ((0x4000, 0x4120), (0x8000, 0x800D))
+# The format of a trainer whose battle structure the scripts leave to game state
+# (battle_structures' ``refused``): not modelled, so coverage refuses it.
+UNKNOWN_FORMAT = "unknown"
 # A partner routine's evaluation stops after this many ops (none in vanilla needs 20).
 _MAX_STEPS = 10_000
 
@@ -53,7 +58,7 @@ class Op:
 class BattleStructure:
     format: str
     opponent_2: int | None
-    partner: tuple[PartnerVariant, ...]
+    partner: tuple[PartnerVariant, ...] | None  # None: not evaluated (``unknown_partner``)
 
 
 def is_var(value: int | str) -> bool:
@@ -262,7 +267,11 @@ def placed_enemies(
 
 
 def battle_structures(
-    scripts: Mapping[Hashable, list[Op]], placed: Mapping[Hashable, set[int]]
+    scripts: Mapping[Hashable, list[Op]],
+    placed: Mapping[Hashable, set[int]],
+    *,
+    unknown_partner: bool = False,
+    refused: Mapping[int, str] | None = None,
 ) -> dict[int, BattleStructure]:
     """Trainer id -> its battle structure, for the trainers fought in a two-trainer or
     multi battle (Rulings 2-3). ``scripts`` maps each map header to its script's ops in
@@ -272,17 +281,28 @@ def battle_structures(
     * A ``StartTrainerBattle t1, t2`` with two constant trainers pairs them.
     * A ``StartTagBattle partner, e1, e2`` pairs ``e1`` and ``e2`` beside the partner. A
       variable partner's teams come from the ``Call`` immediately before the battle
-      (``partner_variants``); any other op there raises.
+      (``partner_variants``); any other op there raises, unless ``unknown_partner`` (the
+      Kaizo ROM reader, K2b Task 8), which keeps the pair with partner ``None``: present
+      but not evaluated, never guessed.
     * On a header whose script runs ``SetHasPartner``, every placed enemy is fought beside
       the one trainer the script assigns to ``VAR_PARTNER_TRAINER_ID``. Placed enemies
-      with no such trainer, or with several, raise.
+      with no such trainer, or with several, raise (with several and ``unknown_partner``,
+      the partner is ``None``).
 
     The same structure seen twice (a pair fought from two scripts, a script shared by
     several headers) is one structure. A trainer claimed by two different pairs, two
     different tag battles, two different partners, or a tag battle and anything else
-    raises ``ValueError`` naming it. A pair on a walking-partner map is "multi" with
-    both the pair's other enemy and the partner.
+    raises ``ValueError`` naming it; with ``unknown_partner``, tag or walking claims that
+    agree on the other enemy but not on the partner (Kaizo's Lake Verity: a tag battle per
+    player gender on a walking-partner map) give "multi" with partner ``None``. A pair claim
+    beside a tag claim is a disagreement about the format, not the partner, and still
+    raises. A trainer in ``refused`` (trainer id -> reason; the Kaizo ROM reader's
+    ``data/kaizo/battle_formats.json``) whose claims conflict gets format ``"unknown"``,
+    which coverage refuses, with its other enemy if all claims agree on one; an entry for a
+    trainer whose claims do not conflict is stale and raises. A pair on a walking-partner
+    map is "multi" with both the pair's other enemy and the partner.
     """
+    refused = dict(refused or {})
     claims: dict[int, dict[tuple, set]] = {}
 
     def claim(t: int, kind: tuple, header) -> None:
@@ -297,6 +317,11 @@ def battle_structures(
                 # Ruling 4's spotting pair (scripts_battles.s:173) is a common script that
                 # no map header runs, so it never reaches here.
                 t1, t2 = (_resolve(ops, i, t, f"map {header}") for t in op.args)
+                if t1 == t2:
+                    # Encounter_NewVsTrainer: the same trainer twice is one trainer in a
+                    # double, BATTLE_TYPE_TRAINER_DOUBLES (src/encounter.c:736-737).
+                    claim(t1, ("self",), header)
+                    continue
                 claim(t1, ("pair", t2), header)
                 claim(t2, ("pair", t1), header)
             elif op.name == "StartTagBattle":
@@ -305,11 +330,14 @@ def battle_structures(
                     raise ValueError(f"map {header}: {op} has a variable enemy")
                 if is_var(p):
                     prev = ops[i - 1] if i else None
-                    if prev is None or prev.name != "Call":
+                    if prev is not None and prev.name == "Call":
+                        team = partner_variants(ops, str(prev.args[0]), int(p))
+                    elif unknown_partner:
+                        team = None
+                    else:
                         raise ValueError(
                             f"map {header}: {op} has a variable partner and no Call before it"
                         )
-                    team = partner_variants(ops, str(prev.args[0]), int(p))
                 else:
                     team = (PartnerVariant(int(p), None, None),)
                 claim(e1, ("tag", e2, team), header)
@@ -320,12 +348,15 @@ def battle_structures(
         if not enemies:
             continue
         partners = partner_ids(ops)
-        if len(partners) != 1:
+        if len(partners) == 1:
+            team = (PartnerVariant(partners.pop(), None, None),)
+        elif unknown_partner and partners:
+            team = None
+        else:
             raise ValueError(
                 f"map {header}: runs SetHasPartner and places enemy trainers "
                 f"{sorted(enemies)} but sets partner ids {sorted(partners)}, not one"
             )
-        team = (PartnerVariant(partners.pop(), None, None),)
         for t in enemies:
             claim(t, ("walk", team), header)
 
@@ -334,8 +365,35 @@ def battle_structures(
         pairs = [c for c in cs if c[0] == "pair"]
         tags = [c for c in cs if c[0] == "tag"]
         walks = [c for c in cs if c[0] == "walk"]
-        if len(pairs) > 1 or len(tags) > 1 or len(walks) > 1 or (tags and (pairs or walks)):
+        selfs = [c for c in cs if c[0] == "self"]
+        if selfs and len(cs) == 1:
+            out[t] = BattleStructure("double", None, ())
+            continue
+        if (
+            len(pairs) > 1
+            or len(tags) > 1
+            or len(walks) > 1
+            or (tags and (pairs or walks))
+            or selfs
+        ):
             listed = "; ".join(f"{c} on maps {sorted(map(str, h))}" for c, h in cs.items())
+            others = {c[1] for c in pairs + tags}
+            if t in refused:
+                refused.pop(t)
+                out[t] = BattleStructure(
+                    UNKNOWN_FORMAT, next(iter(others), None) if len(others) == 1 else None, None
+                )
+                continue
+            if (
+                unknown_partner
+                and (tags or walks)
+                and not (pairs and tags)
+                and not selfs
+                and len(others) <= 1
+            ):
+                # One enemy pair, several partner claims: multi, partner not evaluated.
+                out[t] = BattleStructure("multi", next(iter(others), None), None)
+                continue
             raise ValueError(f"trainer {t} is claimed by {len(cs)} battle structures: {listed}")
         if tags:
             out[t] = BattleStructure("multi", tags[0][1], tags[0][2])
@@ -343,18 +401,23 @@ def battle_structures(
             out[t] = BattleStructure("multi", pairs[0][1] if pairs else None, walks[0][1])
         else:
             out[t] = BattleStructure("double_two_trainer", pairs[0][1], ())
+    if refused:
+        raise ValueError(f"refused formats for trainers without conflicting claims: {refused}")
     return out
 
 
 def structure_fields(structure: BattleStructure | None, header_format: str) -> dict:
     """The ``trainers.json`` fields ``format``, ``opponent_2`` and ``partner`` of a trainer
-    whose header format is ``header_format`` (Ruling 2's precedence)."""
+    whose header format is ``header_format`` (Ruling 2's precedence). ``partner`` is null
+    for a partner present but not evaluated (``battle_structures``' ``unknown_partner``)."""
     if structure is None:
         return {"format": header_format, "opponent_2": None, "partner": []}
     return {
         "format": structure.format,
         "opponent_2": structure.opponent_2,
-        "partner": [
+        "partner": None
+        if structure.partner is None
+        else [
             {"trainer": p.trainer, "starter": p.starter, "player_gender": p.player_gender}
             for p in structure.partner
         ],

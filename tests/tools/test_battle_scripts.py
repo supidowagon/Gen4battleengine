@@ -13,6 +13,7 @@ from tools.battle_scripts import (
     battle_structures,
     partner_variants,
     script_enemies,
+    structure_fields,
     var_ids,
 )
 from tools.extract_decomp import _script_file_ops
@@ -146,6 +147,19 @@ def test_two_trainer_pair():
     }
 
 
+def test_self_pair_is_a_one_trainer_double():
+    # StartTrainerBattle t, t: Encounter_NewVsTrainer's BATTLE_TYPE_TRAINER_DOUBLES
+    # (src/encounter.c:736-737), Kaizo's Volkner and Cyrus.
+    got = battle_structures({"A": [Op("StartTrainerBattle", (5, 5))]}, {})
+    assert got == {5: BattleStructure("double", None, ())}
+
+
+def test_self_pair_beside_another_pair_raises():
+    scripts = {"A": [Op("StartTrainerBattle", (5, 5)), Op("StartTrainerBattle", (5, 6))]}
+    with pytest.raises(ValueError, match="trainer 5"):
+        battle_structures(scripts, {})
+
+
 def test_the_same_pair_twice_is_one_structure():
     # scripts_restaurant.s fights each pair from two scripts, and headers share files.
     pair = [Op("StartTrainerBattle", (5, 6))]
@@ -273,6 +287,52 @@ def test_tag_battle_partner_var_without_a_call_raises():
     ops = [Op("SetVar", (V, 3)), Op("StartTagBattle", (V, 40, 41))]
     with pytest.raises(ValueError, match="Call"):
         battle_structures({"A": ops}, {})
+
+
+def test_tag_battle_partner_var_without_a_call_unknown_when_allowed():
+    # Kaizo's Veilstone City tag battle reaches its partner SetVar through GoTos (K2b
+    # Task 8): with unknown_partner the pair is kept and the partner is None (not known).
+    ops = [Op("SetVar", (V, 3)), Op("StartTagBattle", (V, 40, 41))]
+    got = battle_structures({"A": ops}, {}, unknown_partner=True)
+    assert got == {40: BattleStructure("multi", 41, None), 41: BattleStructure("multi", 40, None)}
+    assert structure_fields(got[40], "single") == {
+        "format": "multi",
+        "opponent_2": 41,
+        "partner": None,
+    }
+
+
+def test_conflicting_partner_claims_unknown_when_allowed():
+    # Kaizo Lake Verity (map 312): one tag battle per partner on a walking-partner map.
+    ops = [
+        Op("SetHasPartner"),
+        Op("SetVar", (PARTNER_VAR, 800)),
+        Op("SetVar", (PARTNER_VAR, 801)),
+        Op("StartTagBattle", (800, 40, 41)),
+        Op("StartTagBattle", (801, 40, 41)),
+    ]
+    with pytest.raises(ValueError, match=r"partner ids \[800, 801\], not one"):
+        battle_structures({"A": ops}, {"A": {40, 41}})
+    got = battle_structures({"A": ops}, {"A": {40, 41}}, unknown_partner=True)
+    assert got == {40: BattleStructure("multi", 41, None), 41: BattleStructure("multi", 40, None)}
+    pairs = [Op("StartTrainerBattle", (40, 41)), Op("StartTrainerBattle", (40, 42))]
+    with pytest.raises(ValueError, match="trainer 40 is claimed"):
+        battle_structures({"A": pairs}, {}, unknown_partner=True)
+
+
+def test_pair_and_tag_claims_raise_even_with_unknown_partner():
+    # Kaizo Spear Pillar (scr_seq 236): a two-trainer battle and a tag battle on the same
+    # enemies disagree on the format, not on the partner (fix round 1, I1).
+    ops = [Op("StartTrainerBattle", (40, 41)), Op("StartTagBattle", (3, 40, 41))]
+    with pytest.raises(ValueError, match="trainer 40 is claimed by 2"):
+        battle_structures({"A": ops}, {}, unknown_partner=True)
+    got = battle_structures({"A": ops}, {}, unknown_partner=True, refused={40: "x", 41: "x"})
+    assert got == {
+        40: BattleStructure("unknown", 41, None),
+        41: BattleStructure("unknown", 40, None),
+    }
+    with pytest.raises(ValueError, match="without conflicting claims.*42"):
+        battle_structures({"A": ops}, {}, unknown_partner=True, refused={40: "x", 41: "x", 42: "x"})
 
 
 def test_walking_partner_map():

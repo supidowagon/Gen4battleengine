@@ -5,6 +5,8 @@ from dataclasses import replace
 
 import pytest
 
+from nuzline.data.games import KAIZO
+from nuzline.data.tables import Names
 from nuzline.data.trainer import build_trainer_party, load_trainers
 from nuzline.engine.coverage import (
     IMPLEMENTED_ABILITIES,
@@ -19,6 +21,7 @@ from nuzline.engine.coverage import (
     check_opponent,
     require_coverage,
     start_weather,
+    unknown_start,
 )
 from nuzline.engine.ids import Weather
 from tests.engine.helpers import INTERMEDIATE, _inter, roark_party, roark_trainer, sample_party
@@ -78,6 +81,18 @@ def test_roark_is_a_single_battle(tables, names):
     unknown = replace(roark_trainer(), format="triple")
     r = check_opponent(tables, names, unknown, roark_party(names), 0)
     assert "Roark: a triple battle (battle format UNSUPPORTED)" in r.missing
+
+
+def test_unknown_battle_format_is_refused_explicitly(tables, names):
+    # Kaizo's Spear Pillar 521/527 (data/kaizo/battle_formats.json): an explicit entry.
+    from nuzline.engine.coverage import IMPLEMENTED_FORMATS
+
+    assert IMPLEMENTED_FORMATS["unknown"] == Support.NONE
+    t = replace(roark_trainer(), format="unknown")
+    r = check_opponent(tables, names, t, roark_party(names), 0)
+    msg = "Roark: battle format unknown (depends on game state) (battle format UNSUPPORTED)"
+    assert msg in r.missing
+    assert r.level == Support.NONE
 
 
 @pytest.mark.parametrize(
@@ -242,6 +257,18 @@ def test_trainer_pokemon_in_a_data_form_is_refused(tables, names):
     assert r.level == Support.NONE
 
 
+def test_data_form_reason_is_true_for_the_game(tables, names, vanilla_manifest):
+    # Final review M11: Kaizo's patched TrainerData_BuildParty computes stats after the
+    # form, so the vanilla "keeps its base form's stats" would be false there.
+    devon = next(t for t in load_trainers(INTERMEDIATE) if t.id == 491)
+    opp = build_trainer_party(devon, _inter())
+    kaizo = Names({**vanilla_manifest, "game": KAIZO})
+    r = check_opponent(tables, kaizo, devon, opp, 0)
+    hits = [m for m in r.missing if "data form" in m]
+    assert len(hits) == 2 and not any("keeps its base form" in m for m in hits)
+    assert all("applies the form before computing its stats" in m for m in hits)
+
+
 @pytest.mark.parametrize(("species", "form"), [("Shellos", 1), ("Unown", 5), ("Arceus", 3)])
 def test_trainer_pokemon_in_a_form_without_data_passes(tables, names, species, form):
     mon = replace(roark_party(names)[0], species=names.species(species), form=form)
@@ -253,3 +280,155 @@ def test_player_rotom_wash_is_not_refused_for_its_form(tables, names):
     wash = replace(sample_party(names)[0], species=479, form=2, ability_slot=0)
     r = check_coverage(tables, names, [wash], roark_trainer(), roark_party(names), 0)
     assert not any("form" in m for m in r.missing)
+
+
+NO_POLICY = "Roark: no transcribed AI policy for this game (spec 5.10) (AI policy UNSUPPORTED)"
+
+
+def test_trainer_of_a_game_without_ai_policy_refused(tables, names, vanilla_manifest):
+    # Vanilla's data under the Kaizo game id: Kaizo has no transcribed AI policy yet.
+    kaizo = Names({**vanilla_manifest, "game": KAIZO})
+    report = check_opponent(tables, kaizo, roark_trainer(), roark_party(names), Weather.NONE)
+    assert NO_POLICY in report.missing and report.level == Support.NONE
+    vanilla = check_opponent(tables, names, roark_trainer(), roark_party(names), Weather.NONE)
+    assert vanilla.missing == []
+
+
+def test_kaizo_trainer_ai_refused(kaizo_tables, kaizo_names, kaizo_roark, kaizo_roark_party):
+    report = check_opponent(kaizo_tables, kaizo_names, kaizo_roark, kaizo_roark_party, Weather.NONE)
+    # Reports name a labelled trainer by its label (Task 18 fix round 1).
+    assert kaizo_roark.label == "Leader Roark" and f"Leader {NO_POLICY}" in report.missing
+
+
+# --- Kaizo trainer fields (K2b Task 14) ----------------------------------------------
+
+
+def with_area(trainer, **fields):
+    return replace(trainer, area_condition=replace(trainer.area_condition, **fields))
+
+
+def test_trick_room_refused(tables, names):
+    report = check_opponent(
+        tables, names, with_area(roark_trainer(), trick_room=True), roark_party(names), 0
+    )
+    assert "Battle start: permanent Trick Room (field condition UNSUPPORTED)" in report.missing
+    assert report.level == Support.NONE
+
+
+def test_gravity_refused(tables, names):
+    report = check_opponent(
+        tables, names, with_area(roark_trainer(), gravity=True), roark_party(names), 0
+    )
+    assert "Battle start: permanent Gravity (field condition UNSUPPORTED)" in report.missing
+
+
+def test_gauntlet_refused_rules_not_recorded(tables, names):
+    t = replace(roark_trainer(), gauntlet=("Oreburgh Gym", 2))
+    report = check_opponent(tables, names, t, roark_party(names), 0)
+    line = (
+        "Roark: gauntlet Oreburgh Gym (position 2; rules not recorded) (battle format UNSUPPORTED)"
+    )
+    assert line in report.missing
+
+
+def test_gauntlet_refused_with_rules(tables, names):
+    t = replace(
+        roark_trainer(),
+        gauntlet=("Oreburgh Gym", 1),
+        gauntlet_rules={"heal_between": False, "change_team": True},
+    )
+    report = check_opponent(tables, names, t, roark_party(names), 0)
+    line = (
+        "Roark: gauntlet Oreburgh Gym (position 1; rules heal_between=false, "
+        "change_team=true) (battle format UNSUPPORTED)"
+    )
+    assert line in report.missing
+
+
+def test_optional_not_refused(tables, names):
+    plain = check_opponent(tables, names, roark_trainer(), roark_party(names), 0)
+    optional = replace(roark_trainer(), optional=True)
+    assert check_opponent(tables, names, optional, roark_party(names), 0).missing == plain.missing
+
+
+def test_missing_pkcalc_set_refused(tables, names):  # preflight ruling #34
+    t = replace(roark_trainer(), pid_routine=None)
+    report = check_opponent(tables, names, t, roark_party(names), 0)
+    for k in range(len(t.party)):
+        line = (
+            f"Roark slot {k}: nature/gender/ability unknown (no PKCalc set) "
+            "(trainer data UNSUPPORTED)"
+        )
+        assert line in report.missing
+    full = replace(t.party[0], nature=3, gender=0, ability_slot=0)
+    t = replace(t, party=(full, *t.party[1:]))
+    report = check_opponent(tables, names, t, roark_party(names), 0)
+    assert not any(m.startswith("Roark slot 0:") for m in report.missing)
+    assert any(m.startswith("Roark slot 1:") for m in report.missing)
+
+
+def test_unclassified_kaizo_rom_changes_refused(tables, names, vanilla_manifest):
+    line = (
+        "Kaizo ROM: 3 code changes unclassified (docs/kaizo/rom_diff.md) (ROM change UNSUPPORTED)"
+    )
+    kaizo = Names({**vanilla_manifest, "game": KAIZO, "unclassified_rom_changes": 3})
+    report = check_opponent(tables, kaizo, roark_trainer(), roark_party(names), 0)
+    assert line in report.missing
+    clean = Names({**vanilla_manifest, "game": KAIZO, "unclassified_rom_changes": 0})
+    report = check_opponent(tables, clean, roark_trainer(), roark_party(names), 0)
+    assert not any("ROM change" in m for m in report.missing)
+    # Vanilla never carries the line, whatever its manifest says.
+    other = Names({**vanilla_manifest, "unclassified_rom_changes": 3})
+    assert check_opponent(tables, other, roark_trainer(), roark_party(names), 0).missing == []
+
+
+def test_unknown_start_condition_refused_not_read_as_weather(tables, names):
+    # Kaizo trainers 318, 325, 343, 509, 559, 610, 649, 676, 746 and 747.
+    line = "Battle start: condition unknown (user call) (start condition UNSUPPORTED)"
+    t = replace(roark_trainer(), start_condition="unknown")
+    report = check_opponent(tables, names, t, roark_party(names), 0)
+    assert line in report.missing
+    assert not any("(weather UNSUPPORTED)" in m for m in report.missing)
+    with pytest.raises(ValueError, match="pending user call, not a weather; coverage refuses"):
+        start_weather(t)
+    area_only = with_area(roark_trainer(), weather="unknown")
+    assert line in check_opponent(tables, names, area_only, roark_party(names), 0).missing
+
+
+def test_area_weather_keeps_the_weather_refusal(tables, names):
+    for cond, line in (
+        ("sandstorm", "Battle start: Sandstorm (weather UNSUPPORTED)"),
+        ("sun", "Battle start: Sun (weather UNSUPPORTED)"),
+        ("fog", "Battle start: Fog (weather UNSUPPORTED)"),
+    ):
+        t = replace(roark_trainer(), start_condition=cond)
+        assert line in check_opponent(tables, names, t, roark_party(names), 0).missing
+
+
+def test_ability_override_without_set_data_refused(tables, names):  # review I1
+    roark = roark_trainer()
+    assert roark.pid_routine == "vanilla"
+    t = replace(roark, party=(replace(roark.party[0], ability_override=16), *roark.party[1:]))
+    report = check_opponent(tables, names, t, roark_party(names), 0)
+    line = "Roark slot 0: nature/gender/ability unknown (no PKCalc set) (trainer data UNSUPPORTED)"
+    assert line in report.missing
+    assert not any(m.startswith("Roark slot 1:") for m in report.missing)
+    full = replace(t.party[0], nature=3, gender=0, ability_slot=1)
+    t = replace(t, party=(full, *t.party[1:]))
+    report = check_opponent(tables, names, t, roark_party(names), 0)
+    assert not any("no PKCalc set" in m for m in report.missing)
+
+
+def test_report_names_a_labelled_trainer_by_its_label(tables, names):
+    # Task 18 fix round 1: a Kaizo label is what a report shows; the ROM name stays data.
+    t = replace(roark_trainer(), label="Leader Roark", format="double")
+    opp = roark_party(names)
+    opp[0] = replace(opp[0], moves=(names.move("Metronome"), 0, 0, 0))
+    report = check_opponent(tables, names, t, opp, 0)
+    assert "Leader Roark: a double battle (battle format UNSUPPORTED)" in report.missing
+    line = "Leader Roark GEODUDE (slot 0): Metronome (move effect UNSUPPORTED)"
+    assert line.lower() in [m.lower() for m in report.missing]
+    assert not any(m.startswith("Roark") for m in report.missing + report.sampling_only)
+    assert t.name == "Roark"
+    assert unknown_start(replace(t, start_condition="unknown"))
+    assert not unknown_start(t)

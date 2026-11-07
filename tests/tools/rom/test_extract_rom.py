@@ -8,10 +8,14 @@ pytest.importorskip("ndspy")
 
 from tools.extract_decomp import extract_static, extract_trainers
 from tools.extract_rom import (
+    CHANGED_SCRIPTS_FILE,
     REUSE_BANKS,
+    ROM_FILES,
+    TRAINER_MAPS_FILE,
     UNRESOLVED_FILE,
     check_reuse_names,
     extract,
+    move_list_override,
     parse_args,
     reuse_violations,
 )
@@ -46,10 +50,36 @@ def test_vanilla_round_trip(rom_inputs, decomp, symbols, tmp_path, capsys):
     assert sorted(p.name for p in tmp_path.iterdir()) == ["d", "r"]  # no staging dir left
 
 
-def test_kaizo_refused_and_nothing_written(kaizo_inputs, decomp, symbols, tmp_path):
-    with pytest.raises(RomInputError, match="K2b"):
-        extract("kaizo", tmp_path / "k", decomp, DEFAULT_MAP, kaizo_inputs)
-    assert sorted(p.name for p in tmp_path.iterdir()) == []
+def test_kaizo_extract_writes_patched_data(kaizo_rom_dir):
+    # The K1 refusal is gone (K2b Task 8): the Kaizo ROM's own tables are written.
+    names = {p.name for p in kaizo_rom_dir.glob("*.json")}
+    assert {f"{n}.json" for n in ROM_FILES} | {CHANGED_SCRIPTS_FILE, UNRESOLVED_FILE} <= names
+    sources = _json(kaizo_rom_dir / "rom_sources.json")
+    assert sources["trainers.json"] == "rom" and sources[CHANGED_SCRIPTS_FILE] == "rom diff"
+    roark = _json(kaizo_rom_dir / "trainers.json")[246]
+    assert [m["species"] for m in roark["party"]] == [438, 345, 443, 222, 213, 408]
+    unresolved = _json(kaizo_rom_dir / UNRESOLVED_FILE)
+    assert (136, 909, "VAR_0x8004") in [
+        (u["member"], u["offset"], u["variable_name"]) for u in unresolved
+    ]
+
+
+def test_kaizo_trainer_maps_file(kaizo_rom_dir):
+    # Task 13 fix round 1: the trainer -> map header join, for sight pairs. Cyclists Axel
+    # and John (25, 27) share Route 206's header 350.
+    maps = _json(kaizo_rom_dir / TRAINER_MAPS_FILE)
+    assert 350 in maps["25"] and 350 in maps["27"]
+    assert all(h == sorted(h) for h in maps.values())
+    assert TRAINER_MAPS_FILE in _json(kaizo_rom_dir / "rom_sources.json")
+
+
+def test_kaizo_self_pairs_are_one_trainer_doubles(kaizo_rom_dir):
+    # StartTrainerBattle t, t is BATTLE_TYPE_TRAINER_DOUBLES (src/encounter.c:736-737).
+    trainers = _json(kaizo_rom_dir / "trainers.json")
+    assert not [t["id"] for t in trainers if t["opponent_2"] == t["id"]]
+    for tid in (240, 295, 320, 404, 409, 416, 441, 442, 666, 843):
+        assert (trainers[tid]["format"], trainers[tid]["opponent_2"]) == ("double", None)
+    assert (trainers[545]["format"], trainers[545]["opponent_2"]) == ("double_two_trainer", 546)
 
 
 def test_existing_out_files_kept(rom_inputs, decomp, symbols, tmp_path):
@@ -68,7 +98,7 @@ def test_failure_leaves_out_untouched(rom_inputs, decomp, symbols, tmp_path):
 
 def test_cli_default_out():
     assert parse_args(["--game", "vanilla"]).out.as_posix().endswith("data/intermediate")
-    assert parse_args(["--game", "kaizo"]).out.as_posix().endswith("data/intermediate_kaizo")
+    assert parse_args(["--game", "kaizo"]).out.as_posix().endswith("data/intermediate_kaizo/rom")
     assert parse_args(["--game", "vanilla", "--out", "x"]).out.as_posix() == "x"
     with pytest.raises(SystemExit) as e:
         parse_args(["--game", "emerald"])
@@ -112,3 +142,21 @@ def test_reuse_names_checked(symbols, decomp, monkeypatch):
     monkeypatch.setattr(er, "REUSE_BANKS", (*REUSE_BANKS, "TEXT_BANK_NATURES"))
     with pytest.raises(RomInputError, match="TEXT_BANK_NATURES"):
         check_reuse_names(symbols, decomp)
+
+
+def test_move_list_override_per_game():
+    from tools.kaizo.overrides import load_overrides
+
+    assert move_list_override("vanilla") is None
+    assert move_list_override("kaizo") == load_overrides().move_lists
+
+
+def test_move_list_override_bad_file_is_input_error(monkeypatch):
+    import tools.kaizo.overrides as ov
+
+    def bad():
+        raise ov.OverridesError("area.7: entry has no source")
+
+    monkeypatch.setattr(ov, "load_overrides", bad)
+    with pytest.raises(RomInputError, match=r"overrides\.toml: area\.7"):
+        move_list_override("kaizo")
