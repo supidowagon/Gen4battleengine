@@ -12,16 +12,24 @@ PKCalc labels (:func:`map_trainers`), in order:
 3. ``pid``: several do; keep those whose vanilla party PID (``TrainerData_BuildParty``:
    difficulty = the low byte, mons with a non-zero ``ability_override`` high byte left
    out) reproduces the most PKCalc natures and genders; one left.
-4. ``name``: still several; the one whose ROM name occurs in the label.
+4. ``name``: still several; the one whose ROM name occurs in the label as a whole word.
+
+When the strict signature has no ROM trainer, the same steps run again on
+``(species, level)`` alone; a trainer settled that way has ``how="form"`` and
+``form_diffs`` names every slot where PKCalc's form differs from the ROM's (a PKCalc-vs-ROM
+field conflict for Task 15 to report).
 
 Spreadsheet headers (:func:`map_sheet_headers`) use steps 1, 2 and 4 only, never the PID
-tie-break (the sheet has no natures), and are labelled by the header's ``cite``.
+tie-break (the sheet has no natures), and are labelled by the header's ``cite``. A label
+that loses an id to an override is ``unmapped`` with ``lost_to`` set to that id.
+:func:`check_override_keys` rejects override keys that are neither label nor cite.
 """
 
 from __future__ import annotations
 
 import re
 from collections import defaultdict
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 from nuzline.data.trainer import GENDER_FEMALE, GENDER_MALE, GENDER_NONE, gender_of, trainer_pid
@@ -42,13 +50,17 @@ class MappingError(ValueError):
 
 @dataclass(frozen=True)
 class Mapping:
-    """``how``: ``override``, ``exact``, ``pid``, ``name`` or ``unmapped``. ``candidates``
-    are the ROM ids sharing the label's party signature, before any tie-break."""
+    """``how``: ``override``, ``exact``, ``pid``, ``name``, ``form`` or ``unmapped``.
+    ``candidates`` are the ROM ids sharing the label's party signature, before any
+    tie-break. ``form_diffs`` (``how="form"``) is ``(slot, pkcalc_form, rom_form)`` per
+    differing slot. ``lost_to`` is the id an override took from this label."""
 
     label: str
     id: int | None
     how: str
     candidates: tuple[int, ...]
+    form_diffs: tuple[tuple[int, int, int], ...] = ()
+    lost_to: int | None = None
 
 
 def _pid_score(label_party: list[dict], trainer: dict, species: list[dict]) -> int:
@@ -92,7 +104,12 @@ def _settle(
         if len(kept) == 1:
             return Mapping(label, kept[0]["id"], "pid", ids)
         candidates = kept
-    named = [t for t in candidates if t["name"] and t["name"] in text]
+    named = [
+        t
+        for t in candidates
+        if t["name"]
+        and re.search("(?<![A-Za-z0-9_])" + re.escape(t["name"]) + "(?![A-Za-z0-9_])", text)
+    ]
     if len(named) == 1:
         return Mapping(label, named[0]["id"], "name", ids)
     return Mapping(label, None, "unmapped", ids)
@@ -108,7 +125,7 @@ def _resolve_claims(
     for m in maps:
         if m.id is not None:
             claims[m.id].append(m)
-    demote: set[str] = set()
+    demote: dict[str, int] = {}
     for tid, group in claims.items():
         if len(group) < 2:
             continue
@@ -116,12 +133,15 @@ def _resolve_claims(
             continue
         winners = [m for m in group if m.how == "override"]
         if len(winners) == 1:
-            demote.update(m.label for m in group if m is not winners[0])
+            demote.update({m.label: tid for m in group if m is not winners[0]})
             continue
         labels = ", ".join(repr(m.label) for m in group)
         raise MappingError(f"trainer id {tid} is claimed by {len(group)} labels: {labels}")
     return [
-        Mapping(m.label, None, "unmapped", m.candidates) if m.label in demote else m for m in maps
+        Mapping(m.label, None, "unmapped", m.candidates, lost_to=demote[m.label])
+        if m.label in demote
+        else m
+        for m in maps
     ]
 
 
@@ -129,6 +149,17 @@ def _check_overrides(overrides: dict[str, int], labels: list[str], known: set[in
     for label in labels:
         if label in overrides and overrides[label] not in known:
             raise MappingError(f"override {label!r} names {overrides[label]}, not a ROM trainer id")
+
+
+def check_override_keys(
+    overrides: dict[str, int], labels: Iterable[str], cites: Iterable[str]
+) -> None:
+    """Raise ``MappingError`` naming every override key that is neither a PKCalc label
+    nor a spreadsheet header cite (a typo would otherwise be ignored silently)."""
+    known = set(labels) | set(cites)
+    bad = sorted(k for k in overrides if k not in known)
+    if bad:
+        raise MappingError(f"override keys match no PKCalc label or sheet cite: {bad}")
 
 
 def map_trainers(
@@ -144,6 +175,10 @@ def map_trainers(
     for t in rom_trainers:
         if t["party"]:
             by_sig[tuple((m["species"], m["form"], m["level"]) for m in t["party"])].append(t)
+    by_blind: dict[tuple, list[dict]] = defaultdict(list)
+    for t in rom_trainers:
+        if t["party"]:
+            by_blind[tuple((m["species"], m["level"]) for m in t["party"])].append(t)
     labels = [k for k, v in pkcalc_trainers.items() if not v.get("template")]
     _check_overrides(overrides, labels, known)
     maps = []
@@ -156,7 +191,20 @@ def map_trainers(
             maps.append(Mapping(label, None, "unmapped", ()))
             continue
         sig = tuple((m["species"], m["form"], m["level"]) for m in party)
-        maps.append(_settle(label, label, by_sig.get(sig, []), party, species))
+        if sig in by_sig:
+            maps.append(_settle(label, label, by_sig[sig], party, species))
+            continue
+        blind = by_blind.get(tuple((s, lv) for s, _f, lv in sig), [])
+        m = _settle(label, label, blind, party, species)
+        if m.id is not None:
+            rom = next(t for t in blind if t["id"] == m.id)
+            diffs = tuple(
+                (i, want["form"], have["form"])
+                for i, (want, have) in enumerate(zip(party, rom["party"], strict=True))
+                if want["form"] != have["form"]
+            )
+            m = Mapping(label, m.id, "form", m.candidates, diffs)
+        maps.append(m)
     return _resolve_claims(maps)
 
 
@@ -177,7 +225,8 @@ def map_sheet_headers(
 
     The signature is ``(species, level)`` in party order. Several ROM ids: the one whose
     name occurs in the header text (``name``), else unmapped. Overrides are keyed by cite.
-    A header whose species name matches no ROM species is unmapped. The same trainer
+    A form-suffixed species (``Rotom-Mow``) resolves by its base name when the full name is
+    no ROM species; a name matching neither leaves the header unmapped. The same trainer
     (equal normalised name and party, e.g. Galactic Rosalind) listed in several places is
     no conflict; different headers on one id raise ``MappingError``."""
     known = {t["id"] for t in rom_trainers}
@@ -189,6 +238,15 @@ def map_sheet_headers(
         if t["party"]:
             by_len[len(t["party"])].append(t)
 
+    def ids_of(raw: str) -> set[int]:
+        """ROM species ids for a sheet species: the full name, else (a form suffix such
+        as ``Rotom-Mow`` or ``Shellos -West``) the base before the first ``-``, space or
+        ``/`` when that is a ROM species."""
+        full = ids_by_name.get(_norm(raw))
+        if full:
+            return full
+        return ids_by_name.get(_norm(re.split(r"[-\s/]", raw.strip(), maxsplit=1)[0]), set())
+
     headers = [
         h for split in docs["splits"].values() for sec in split["sections"] for h in sec["trainers"]
     ]
@@ -198,8 +256,11 @@ def map_sheet_headers(
     same: dict[str, object] = {}
     for h in headers:
         label = h["cite"]
-        sheet = [(_norm(m["species"]), m["level"]) for m in h["party"]]
-        same[label] = (_norm(h["name"]), tuple(sheet))
+        sheet = [(frozenset(ids_of(m["species"])), m["level"]) for m in h["party"]]
+        same[label] = (
+            _norm(h["name"]),
+            tuple((_norm(m["species"]), m["level"]) for m in h["party"]),
+        )
         if label in overrides:
             maps.append(Mapping(label, overrides[label], "override", (overrides[label],)))
             continue
@@ -207,8 +268,8 @@ def map_sheet_headers(
             t
             for t in by_len.get(len(sheet), [])
             if all(
-                m["species"] in ids_by_name.get(name, ()) and m["level"] == level
-                for m, (name, level) in zip(t["party"], sheet, strict=True)
+                m["species"] in ids and m["level"] == level
+                for m, (ids, level) in zip(t["party"], sheet, strict=True)
             )
         ]
         maps.append(_settle(label, h["text"], candidates, None, species))

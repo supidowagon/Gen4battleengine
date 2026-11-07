@@ -3,7 +3,15 @@
 import pytest
 
 from nuzline.data.trainer import trainer_pid
-from tools.kaizo.trainer_map import NATURES, Mapping, MappingError, map_sheet_headers, map_trainers
+from tools.kaizo.trainer_map import (
+    NATURES,
+    Mapping,
+    MappingError,
+    check_override_keys,
+    map_sheet_headers,
+    map_trainers,
+)
+from tools.rom.inputs import KAIZO_DOCS_SHA256, PKCALC_SHA256
 
 P = ((74, 0, 12), (95, 0, 14))
 # Geodude (74) and Onix (95) are both 50 % female; index by species id.
@@ -155,6 +163,7 @@ def docs_of(*headers):
     return {"splits": {"S": {"sheet": "S Split", "sections": [{"trainers": list(headers)}]}}}
 
 
+MAPPED_HEADERS = 416
 SHEET_P = (("Geodude", 12), ("ONIX", 14))
 
 
@@ -199,6 +208,63 @@ def test_sheet_different_headers_one_id_raise():
         map_sheet_headers(d, [rom_trainer(5, "X", P)], SPECIES, {})
 
 
+def test_override_loser_records_why():
+    m = {
+        x.label: x
+        for x in map_trainers({"A": pk(P), "B": pk(P)}, [rom_trainer(5, "X", P)], SPECIES, {"B": 5})
+    }
+    assert (m["A"].how, m["A"].candidates, m["A"].lost_to) == ("unmapped", (5,), 5)
+
+
+def test_name_tiebreak_matches_whole_words_only():
+    roms = [rom_trainer(6, "Ann", P, override=2), rom_trainer(7, "Bob", P, override=2)]
+    m = map_trainers({"Lady Joanna": pk(P)}, roms, SPECIES, {})
+    assert m[0].id is None
+    m = map_trainers({"Lady Ann": pk(P)}, roms, SPECIES, {})
+    assert m[0].id == 6
+
+
+def test_form_blind_retry_records_the_form_conflict():
+    sig_rom = ((74, 1, 12), (95, 0, 14))
+    m = map_trainers({"Hiker Y": pk(P)}, [rom_trainer(5, "Y", sig_rom)], SPECIES, {})
+    assert m == [Mapping("Hiker Y", 5, "form", (5,), ((0, 0, 1),))]
+
+
+def test_form_blind_retry_still_refuses_ties():
+    sig_rom = ((74, 1, 12), (95, 0, 14))
+    roms = [rom_trainer(5, "A", sig_rom, override=2), rom_trainer(6, "B", sig_rom, override=2)]
+    m = map_trainers({"Hiker": pk(P)}, roms, SPECIES, {})
+    assert m == [Mapping("Hiker", None, "unmapped", (5, 6))]
+
+
+def test_strict_signature_beats_the_form_blind_one():
+    roms = [rom_trainer(5, "Y", ((74, 1, 12), (95, 0, 14))), rom_trainer(6, "Y", P)]
+    m = map_trainers({"Hiker Y": pk(P)}, roms, SPECIES, {})
+    assert (m[0].id, m[0].how) == (6, "exact")
+
+
+def test_check_override_keys_rejects_typos():
+    check_override_keys(
+        {"Leader Roark": 1, "Roark Split:5": 2}, ["Leader Roark"], ["Roark Split:5"]
+    )
+    with pytest.raises(MappingError, match="Leader Roak"):
+        check_override_keys({"Leader Roak": 246}, ["Leader Roark"], ["Roark Split:5"])
+
+
+def test_sheet_form_suffix_resolves_by_base_species():
+    species = [*SPECIES, {"name": "ROTOM", "gender_ratio": 255}]  # id 100
+    rom = rom_trainer(5, "X", ((100, 5, 30), (95, 0, 14)))
+    d = docs_of(header("S Split:5", "Leader X", (("Rotom-Mow", 30), ("Onix", 14))))
+    assert map_sheet_headers(d, [rom], species, {}) == [Mapping("S Split:5", 5, "exact", (5,))]
+
+
+def test_sheet_full_name_wins_over_base():
+    species = [*SPECIES, {"name": "HO-OH", "gender_ratio": 255}, {"name": "HO", "gender_ratio": 0}]
+    rom = rom_trainer(5, "X", ((100, 0, 30),))
+    d = docs_of(header("S Split:5", "Leader X", (("Ho-Oh", 30),)))
+    assert map_sheet_headers(d, [rom], species, {})[0].id == 5
+
+
 # --- real inputs (skip without them) -----------------------------------------------------
 
 
@@ -206,10 +272,14 @@ def test_real_mapping(pkcalc, kaizo_rom_trainers, species):
     m = {x.label: x for x in map_trainers(pkcalc["trainers"], kaizo_rom_trainers, species, {})}
     assert m["Leader Roark"].id == 246
     assert len(m) == 485
-    assert not any(k for k, v in pkcalc["trainers"].items() if v.get("template") and k in m)
-    unmapped = [x for x in m.values() if x.id is None]
-    assert all(x.how == "unmapped" for x in unmapped)
-    assert all(x.how != "unmapped" for x in m.values() if x.id is not None)
+    assert sum(x.id is not None for x in m.values()) >= 473
+    assert not any(v.get("template") and k in m for k, v in pkcalc["trainers"].items())
+    assert all((x.how == "unmapped") == (x.id is None) for x in m.values())
+    if pkcalc["sha256"] == PKCALC_SHA256:  # pin the audited zip's result
+        assert sorted(x.label for x in m.values() if x.id is None) == []
+        forms = {x.label: x.id for x in m.values() if x.how == "form"}
+        assert forms["Bug Catcher Sebastian"] == 356 and forms["Idol Zoe"] == 236
+        assert len(forms) == 10
 
 
 def test_real_sheet_headers(docs, kaizo_rom_trainers, species):
@@ -221,3 +291,13 @@ def test_real_sheet_headers(docs, kaizo_rom_trainers, species):
         if t["text"] == "Leader Roark"
     )
     assert m[cite].id == 246
+    if docs["sha256"] == KAIZO_DOCS_SHA256:
+        mapped = sum(x.id is not None for x in m.values())
+        assert (len(m), mapped) == (482, MAPPED_HEADERS)
+        for c, tid in {
+            "Gardenia Split:484": 315,
+            "Fantina Split:452": 318,
+            "Elite Four Split:298": 870,
+            "Galactic Split:1229": 780,
+        }.items():
+            assert m[c].id == tid
