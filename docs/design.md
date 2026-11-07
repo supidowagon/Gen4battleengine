@@ -259,6 +259,7 @@ Tooling: `uv`, `pytest`, `hypothesis`, `ruff`, and `jax[cpu]` for development.
 - The **data schema** is generation-neutral; each generation gets its own table directory.
 - **Mechanics** are generation-specific modules selected by a static config passed to `jit` (`static_argnums`), so each generation compiles only its own rules.
 - No generic multi-generation abstractions until a second generation is actually being added.
+- **A second game of the same generation** (Platinum Kaizo) is a second data set selected by `--game`, not a new mechanics module: design `docs/superpowers/specs/2026-11-03-kaizo-data-design.md`; plans `docs/superpowers/plans/2026-11-03-k1-rom-pipeline.md` (K1, ROM reading), `docs/superpowers/plans/2026-11-03-k2a-vanilla-schema.md` (K2a, shared schema) and `docs/superpowers/plans/2026-11-03-k2b-kaizo-tables.md` (K2b, the Kaizo tables; build guide `docs/kaizo/pipeline.md`).
 
 ## 10. Risks and open items
 
