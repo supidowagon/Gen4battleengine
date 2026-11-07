@@ -619,11 +619,27 @@ def test_trick_room_and_gravity_present():
     assert any(a.gravity for a in o.area.values())
 
 
-def test_committed_file_leaves_unknown_starts_unsettled():
+# The user's answers (2026-11-07) to the K2b start-condition calls; 676 Corbin stays unknown.
+USER_WEATHERS = {
+    318: "none", 325: "fog", 343: "none", 610: "rain", 746: "none", 747: "none",
+    103: "rain", 105: "rain", 106: "rain", 107: "rain", 108: "rain", 110: "rain",
+    111: "rain", 491: "rain", 291: "fog",
+    **{i: "none" for i in (*range(874, 892), 894, 895, 896)},
+}  # fmt: skip
+
+
+def test_committed_file_records_the_users_start_answers():
     o = load_overrides()
-    unknown = {318, 325, 343, 509, 559, 610, 649, 676, 746, 747}
-    assert not unknown & set(o.area)
-    assert all(a.weather is None for a in o.area.values())
+    assert 676 not in o.area and 676 not in o.area_exceptions
+    for tid, weather in USER_WEATHERS.items():
+        a = o.area[tid]
+        assert (a.weather, a.source, a.trick_room) == (weather, "user, 2026-11-07", False), tid
+    # Only a user's answer sets a weather; the two-placement Trick Room answers say "none".
+    assert all(a.user for a in o.area.values() if a.weather is not None)
+    for tid in (509, 559, 649):
+        a = o.area[tid]
+        assert (a.trick_room, a.weather, a.user) == (True, "none", True), tid
+    assert o.area[870].gravity and o.area[870].source == "Elite Four Split:298"
 
 
 def test_committed_rules_unset():
@@ -655,9 +671,18 @@ def test_fields_format_unknown_or_the_users_answer(tmp_path):  # Task 15; final 
         (pair.replace("opponent_2 = 557\n", ""), "needs opponent_2"),
         (user.replace('"single"', '"triple"'), "one of"),
         (user.replace('"single"\n', '"single"\nopponent_2 = 557\n'), "opponent_2 needs format"),
+        (user.replace('"single"\n', '"single"\npartner = 864\n'), "partner needs format 'multi'"),
     ):
         with pytest.raises(OverridesError, match=message):
             load_overrides(write(tmp_path, text))
+    multi = (
+        '[fields.521]\nformat = "multi"\nopponent_2 = 527\npartner = 864\n'
+        'source = "user, 2026-11-07"\n'
+    )
+    o = load_overrides(write(tmp_path, multi))
+    assert o.fields == {521: {"format": "multi", "opponent_2": 527, "partner": 864}}
+    assert check_trainer_ids(o, {521, 527}) == ["fields.521: partner 864 is no ROM trainer id"]
+    assert check_trainer_ids(o, {521, 527, 864}) == []
 
 
 # --- the user's answer to a two-placement Trick Room trainer (final review I5) -------------
@@ -727,13 +752,15 @@ def _real_inputs():
 
 
 def test_overrides_check_runs_the_two_placement_rule(tmp_path, capsys):
-    # The documented route (pipeline.md): replace [area_exception.539] with the user's
-    # [area.539]. A rom: Trick Room entry instead fails `overrides check`, as the build does.
+    # The documented route (pipeline.md): the user's [area.539] replaces the area_exception
+    # (the committed file holds the answer, the Galactic HQ fight). The other placement is
+    # an answer too; a rom: Trick Room entry instead fails `overrides check`, as the build does.
     from tools.kaizo.overrides import main
 
     inter = _real_inputs()
+    assert main(["check", "--overrides", str(DEFAULT_PATH), "--intermediate", str(inter)]) == 0
     text = DEFAULT_PATH.read_text(encoding="utf-8")
-    start = text.index("[area_exception.539]")
+    start = text.index("[area.539]")
     end = text.index("\n\n", start) + 2
     user = '[area.539]\nweather = "none"\nmap_header = 337\nsource = "user, 2026-11-07"\n\n'
     path = write(tmp_path, text[:start] + user + text[end:])

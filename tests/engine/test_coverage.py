@@ -84,7 +84,8 @@ def test_roark_is_a_single_battle(tables, names):
 
 
 def test_unknown_battle_format_is_refused_explicitly(tables, names):
-    # Kaizo's Spear Pillar 521/527 (data/kaizo/battle_formats.json): an explicit entry.
+    # Kaizo's Spear Pillar 521/527 at the ROM level (data/kaizo/battle_formats.json): an explicit
+    # entry (the user's answer in overrides.toml then sets their format).
     from nuzline.engine.coverage import IMPLEMENTED_FORMATS
 
     assert IMPLEMENTED_FORMATS["unknown"] == Support.NONE
@@ -383,7 +384,7 @@ def test_unclassified_kaizo_rom_changes_refused(tables, names, vanilla_manifest)
 
 
 def test_unknown_start_condition_refused_not_read_as_weather(tables, names):
-    # Kaizo trainers 318, 325, 343, 509, 559, 610, 649, 676, 746 and 747.
+    # Kaizo trainer 676 Corbin and the unplaced trainers the user left unanswered.
     line = "Battle start: condition unknown (user call) (start condition UNSUPPORTED)"
     t = replace(roark_trainer(), start_condition="unknown")
     report = check_opponent(tables, names, t, roark_party(names), 0)

@@ -20,8 +20,9 @@ unresolved or stale row (``CrossCheckError``). Clean, it writes into ``inter``:
 - ``trainers.json`` in Task 14's schema (``trainer_record``): explicit nature, gender and
   ability slot from the patched routine's carry-over decode (``carry_over_sets``),
   friendship 255 (0 with Frustration, helper 0x02079570), ``pid_routine`` None, the
-  PKCalc label, confirmed sight pairs (K2a Ruling 4), the ``format = "unknown"``
-  corrections of ``overrides.toml``, the derived player starter, gauntlets, the split
+  PKCalc label, confirmed sight pairs (K2a Ruling 4), the ``format`` corrections of
+  ``overrides.toml`` (``"unknown"``, or the user's answer with its ``opponent_2`` and
+  ``partner``), the derived player starter, gauntlets, the split
   fields from the sheet headers (Ruling 9; None when no header maps to the trainer),
   ``area_condition`` with ``start_condition`` kept consistent, and ``sources`` per field.
 - ``kaizo.json``: ``aliases`` and ``provenance`` (input hashes).
@@ -58,6 +59,7 @@ from tools.kaizo.overrides import (
     UNKNOWN_FORMAT,
     Mappings,
     Overrides,
+    _row_claims,
     build_mappings,
     check_citations,
     check_gauntlet_members,
@@ -195,21 +197,41 @@ def unplaced_ids(trainers: list[dict], trainer_maps: Mapping[int, list[int]]) ->
     return [t["id"] for t in trainers if t["party"] and not trainer_maps.get(t["id"])]
 
 
+def user_format(fields: Mapping[str, object], t: Mapping[str, Any]) -> dict:
+    """``format``, ``opponent_2`` and ``partner`` from the user's ``[fields.<id>] format``
+    answer (``load_overrides`` takes a concrete format from a ``"user, <date>"`` source
+    only). Only a multi has a partner: ``partner`` when the answer names one, else the ROM
+    trainer's (``None``: present, not evaluated)."""
+    fmt = fields["format"]
+    if fmt != "multi":
+        partner: list | None = []
+    elif "partner" in fields:
+        partner = [{"trainer": fields["partner"], "starter": None, "player_gender": None}]
+    else:
+        partner = t.get("partner")
+    return {"format": fmt, "opponent_2": fields.get("opponent_2"), "partner": partner}
+
+
 def with_overrides(
     trainers: list[dict], overrides: Overrides, trainer_maps: Mapping[int, list[int]] | None = None
 ) -> list[dict]:
-    """The ROM trainers with the overrides that refuse a field applied, so the cross-check
-    lists them with the refused unknowns instead of comparing them: ``[fields.<id>] format =
-    "unknown"`` (``opponent_2`` None: the structures disagree on it), ``[area_exception]``
-    (start condition ``"unknown"``) and, given ``trainer_maps``, each ``unplaced_ids`` trainer
-    (start condition ``"unknown"``) unless an ``[area.<id>]`` weather settles it."""
+    """The ROM trainers with the format and refusing overrides applied, so the cross-check
+    lists the refused ones with the unknowns instead of comparing them, and compares the
+    user's format answers against PKCalc and the sheet: ``[fields.<id>] format =
+    "unknown"`` (``opponent_2`` None: the structures disagree on it) or the user's format
+    (``user_format``), ``[area_exception]`` (start condition ``"unknown"``) and, given
+    ``trainer_maps``, each ``unplaced_ids`` trainer (start condition ``"unknown"``) unless an
+    ``[area.<id>]`` weather settles it."""
     no_map = set(unplaced_ids(trainers, trainer_maps)) if trainer_maps is not None else set()
     out = []
     for t in trainers:
         tid = t["id"]
-        fmt = overrides.fields.get(tid, {}).get("format")
+        fields = overrides.fields.get(tid, {})
+        fmt = fields.get("format")
         if fmt == UNKNOWN_FORMAT:
             t = dict(t, format=fmt, opponent_2=None)
+        elif fmt is not None:
+            t = dict(t, **user_format(fields, t))
         settled = getattr(overrides.area.get(tid), "weather", None) is not None
         if tid in overrides.area_exceptions or (tid in no_map and not settled):
             t = dict(t, start_condition=UNKNOWN_START)
@@ -510,7 +532,8 @@ def trainer_record(
     if fields.get("format") is not None:
         out["format"] = fields["format"]
         if fields["format"] != UNKNOWN_FORMAT:  # the user's answer (overrides FORMATS)
-            out["opponent_2"] = fields.get("opponent_2")
+            out.update(user_format(fields, t))
+            sources["partner"] = fsrc
         fmt_source = fsrc
     elif tid in ctx.sight and t["format"] != UNKNOWN_FORMAT:
         pair, header = ctx.sight[tid]
@@ -575,6 +598,8 @@ def trainer_record(
     a = overrides.area.get(tid)
     if a is not None:
         sources["area_condition"] += f"; overrides area.{tid} ({a.source})"
+        if a.weather is not None:  # the override replaces the ROM start condition
+            sources["start_condition"] += f"; overrides area.{tid} weather ({a.source})"
     if tid in overrides.area_exceptions:
         e = overrides.area_exceptions[tid]
         sources["area_condition"] += f"; area_exception ({e.reason}; {e.source})"
@@ -653,9 +678,13 @@ def user_calls(
     overrides: Overrides,
     src: Sources,
     unclassified: int,
+    maps: Mappings | None = None,
 ) -> list[str]:
-    """Every item only the user can settle, one line each with its evidence."""
+    """Every item only the user can settle, one line each with its evidence. An area
+    weather the user's ``[area.<id>]`` answer sets is settled; Gravity is listed only when
+    its entry cites PKCalc and no sheet row mapped to the trainer (``maps``) claims it."""
     by_id = {t["id"]: t for t in trainers}
+    sheet = _sheet_by_id(src.docs, maps) if maps is not None else {}
     two = two_placement_trick_room(src.field_effects, src.trainer_maps)
     no_map = [
         tid for tid in unplaced_ids(src.trainers, src.trainer_maps)
@@ -697,18 +726,22 @@ def user_calls(
             lines.append(f"- format unknown: {name(tid)} ({why})")
     for o in check.outcomes:
         r = o.row
+        head = str(r.key).split(" ", 1)[0]
+        a = overrides.area.get(int(head)) if head.isdigit() else None
         if (
             o.kind == "resolved"
             and r.field == "area_weather"
             and r.sheet is not None
             and r.sheet == r.pkcalc
+            and not (a is not None and a.user and a.weather is not None)
         ):
             lines.append(
                 f"- area weather {r.key}: ROM {r.rom} against PKCalc and the sheet {r.pkcalc}; "
                 f"ROM used ({o.resolution.evidence})"
             )
     for tid, a in sorted(overrides.area.items()):
-        if a.gravity and a.source.startswith("pkcalc:"):
+        on_sheet = any("gravity" in _row_claims(sec, h) for sec, h in sheet.get(tid, []))
+        if a.gravity and a.source.startswith("pkcalc:") and not on_sheet:
             lines.append(
                 f"- Gravity: {name(tid)} rests on PKCalc only ({a.source}); no ROM field effect "
                 f"on its headers {sorted(src.trainer_maps.get(tid, []))}"
@@ -845,7 +878,7 @@ def resolve(
             from tools.build_tables import _kaizo_rom_changes
 
             _, unclassified = _kaizo_rom_changes(inter)
-            calls = user_calls(resolved_trainers, check, ov, src, unclassified)
+            calls = user_calls(resolved_trainers, check, ov, src, unclassified, maps)
         except Exception:
             write_report(check, sections, sources, report)
             raise

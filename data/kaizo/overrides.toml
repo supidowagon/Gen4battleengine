@@ -12,11 +12,12 @@
 # trick_room entry citing the ROM, or an [area_exception] saying why not. Gravity (Champion
 # Cynthia) and sheet-only Trick Room stay here. A trainer claimed by two areas is never
 # settled by guess: its claim stays commented out with every citation. The ten start
-# conditions left "unknown" by ruling (318 325 343 509 559 610 649 676 746 747) are not
-# settled here. A ROM Trick Room trainer also placed on a map without Trick Room
-# (tools.kaizo.resolve.two_placement_trick_room; K2b Task 15 fix round 1) gets an
-# [area_exception] citing both placements, and its start condition is refused as "unknown"
-# (a user call), like Rosalind 509, Puck 559 and Kari 649.
+# conditions left "unknown" by ruling (318 325 343 509 559 610 649 676 746 747) are settled
+# here only by the user's answers (2026-11-07; 676 stays unknown). A ROM Trick Room trainer
+# also placed on a map without Trick Room (tools.kaizo.resolve.two_placement_trick_room;
+# K2b Task 15 fix round 1) gets an [area_exception] citing both placements, and its start
+# condition is refused as "unknown" (a user call), until the user's answer replaces it with
+# an [area.<id>] naming the placement (map_header): all 35 are answered (2026-11-07).
 #
 # Ruling 9 (split, optional, left side): derived from the sheet at every build, with a
 # per-field citation; [fields.<id>] only corrects them. Gauntlet groups are drafted from the
@@ -39,7 +40,7 @@ source = "rom:map header 308 weather 18 (Trick Room)"
 trick_room = true
 source = "rom:map header 494 weather 18 (Trick Room)"
 
-# CONFLICT 509 Rosalind: claimed by two areas; left unsettled.
+# CONFLICT 509 Rosalind: claimed by two areas; settled by the user's answer below.
 #   rom:map header 307 weather 18 (Trick Room)
 #   rom:trainers.json start_condition unknown (data/kaizo/start_conditions.json: its maps start different conditions)
 #   Galactic Split:412: ['trick_room']
@@ -47,79 +48,139 @@ source = "rom:map header 494 weather 18 (Trick Room)"
 # [area.509]
 # trick_room = true
 # source = "rom:map header 307 weather 18 (Trick Room)"
-[area_exception.509]
-reason = "start condition unknown by ruling; ROM maps disagree"
-source = "rom:trainers.json 509 start_condition unknown"
+# user answer: the Galactic HQ fight (header 307 GALACTIC_HQ_3F: Trick Room, no weather);
+# the other placement, header 211 MT_CORONET_OUTSIDE_SOUTH (hail), shares the trainer flag and comes later in story order
+[area.509]
+trick_room = true
+weather = "none"
+map_header = 307
+source = "user, 2026-11-07"
 
 # 539 Portia; sheet: Galactic Split:252 ['trick_room']
-[area_exception.539]
-reason = "placed on a Trick Room map (header 310 GALACTIC_HQ_B2F, weather 18) and on a map without Trick Room (header 337 RESTAURANT); which fight is meant is a user call"
-source = "rom:rom_trainer_maps.json 539 headers 310, 337; rom_field_effects.json Trick Room headers 310"
+# user answer: the Galactic HQ fight (header 310 GALACTIC_HQ_B2F: Trick Room, no weather);
+# the other placement, header 337 RESTAURANT, is the base game's optional diner fight (one random pair a day, scripts_restaurant.s), left out
+[area.539]
+trick_room = true
+weather = "none"
+map_header = 310
+source = "user, 2026-11-07"
 
 # 540 Cressida; sheet: Galactic Split:262 ['trick_room']
-[area_exception.540]
-reason = "placed on a Trick Room map (header 310 GALACTIC_HQ_B2F, weather 18) and on a map without Trick Room (header 337 RESTAURANT); which fight is meant is a user call"
-source = "rom:rom_trainer_maps.json 540 headers 310, 337; rom_field_effects.json Trick Room headers 310"
+# user answer: the Galactic HQ fight (header 310 GALACTIC_HQ_B2F: Trick Room, no weather);
+# the other placement, header 337 RESTAURANT, is the base game's optional diner fight (one random pair a day, scripts_restaurant.s), left out
+[area.540]
+trick_room = true
+weather = "none"
+map_header = 310
+source = "user, 2026-11-07"
 
 # 541 Umbriel; sheet: Galactic Split:282 ['trick_room']
-[area_exception.541]
-reason = "placed on a Trick Room map (header 310 GALACTIC_HQ_B2F, weather 18) and on a map without Trick Room (header 337 RESTAURANT); which fight is meant is a user call"
-source = "rom:rom_trainer_maps.json 541 headers 310, 337; rom_field_effects.json Trick Room headers 310"
+# user answer: the Galactic HQ fight (header 310 GALACTIC_HQ_B2F: Trick Room, no weather);
+# the other placement, header 337 RESTAURANT, is the base game's optional diner fight (one random pair a day, scripts_restaurant.s), left out
+[area.541]
+trick_room = true
+weather = "none"
+map_header = 310
+source = "user, 2026-11-07"
 
 # 542 Francisco; sheet: Galactic Split:292 ['trick_room']
-[area_exception.542]
-reason = "placed on a Trick Room map (header 310 GALACTIC_HQ_B2F, weather 18) and on a map without Trick Room (header 337 RESTAURANT); which fight is meant is a user call"
-source = "rom:rom_trainer_maps.json 542 headers 310, 337; rom_field_effects.json Trick Room headers 310"
+# user answer: the Galactic HQ fight (header 310 GALACTIC_HQ_B2F: Trick Room, no weather);
+# the other placement, header 337 RESTAURANT, is the base game's optional diner fight (one random pair a day, scripts_restaurant.s), left out
+[area.542]
+trick_room = true
+weather = "none"
+map_header = 310
+source = "user, 2026-11-07"
 
 # 543 Margaret; sheet: Galactic Split:332 ['trick_room']
-[area_exception.543]
-reason = "placed on a Trick Room map (header 305 GALACTIC_HQ_1F, weather 18) and on a map without Trick Room (header 337 RESTAURANT); which fight is meant is a user call"
-source = "rom:rom_trainer_maps.json 543 headers 305, 337; rom_field_effects.json Trick Room headers 305"
+# user answer: the Galactic HQ fight (header 305 GALACTIC_HQ_1F: Trick Room, no weather);
+# the other placement, header 337 RESTAURANT, is the base game's optional diner fight (one random pair a day, scripts_restaurant.s), left out
+[area.543]
+trick_room = true
+weather = "none"
+map_header = 305
+source = "user, 2026-11-07"
 
 # 544 Cupid; sheet: Galactic Split:342 ['trick_room']
-[area_exception.544]
-reason = "placed on a Trick Room map (header 305 GALACTIC_HQ_1F, weather 18) and on a map without Trick Room (header 337 RESTAURANT); which fight is meant is a user call"
-source = "rom:rom_trainer_maps.json 544 headers 305, 337; rom_field_effects.json Trick Room headers 305"
+# user answer: the Galactic HQ fight (header 305 GALACTIC_HQ_1F: Trick Room, no weather);
+# the other placement, header 337 RESTAURANT, is the base game's optional diner fight (one random pair a day, scripts_restaurant.s), left out
+[area.544]
+trick_room = true
+weather = "none"
+map_header = 305
+source = "user, 2026-11-07"
 
 # 545 Juliet; sheet: Galactic Split:322 ['trick_room']
-[area_exception.545]
-reason = "placed on a Trick Room map (header 309 GALACTIC_HQ_B1F, weather 18) and on a map without Trick Room (header 337 RESTAURANT); which fight is meant is a user call"
-source = "rom:rom_trainer_maps.json 545 headers 309, 337; rom_field_effects.json Trick Room headers 309"
+# user answer: the Galactic HQ fight (header 309 GALACTIC_HQ_B1F: Trick Room, no weather);
+# the other placement, header 337 RESTAURANT, is the base game's optional diner fight (one random pair a day, scripts_restaurant.s), left out
+[area.545]
+trick_room = true
+weather = "none"
+map_header = 309
+source = "user, 2026-11-07"
 
 # 546 Belinda; sheet: Galactic Split:422 ['trick_room']
-[area_exception.546]
-reason = "placed on a Trick Room map (header 307 GALACTIC_HQ_3F, weather 18) and on a map without Trick Room (header 337 RESTAURANT); which fight is meant is a user call"
-source = "rom:rom_trainer_maps.json 546 headers 307, 337; rom_field_effects.json Trick Room headers 307"
+# user answer: the Galactic HQ fight (header 307 GALACTIC_HQ_3F: Trick Room, no weather);
+# the other placement, header 337 RESTAURANT, is the base game's optional diner fight (one random pair a day, scripts_restaurant.s), left out
+[area.546]
+trick_room = true
+weather = "none"
+map_header = 307
+source = "user, 2026-11-07"
 
 # 547 Caliban; sheet: Galactic Split:242 ['trick_room']
-[area_exception.547]
-reason = "placed on a Trick Room map (header 310 GALACTIC_HQ_B2F, weather 18) and on a map without Trick Room (header 337 RESTAURANT); which fight is meant is a user call"
-source = "rom:rom_trainer_maps.json 547 headers 310, 337; rom_field_effects.json Trick Room headers 310"
+# user answer: the Galactic HQ fight (header 310 GALACTIC_HQ_B2F: Trick Room, no weather);
+# the other placement, header 337 RESTAURANT, is the base game's optional diner fight (one random pair a day, scripts_restaurant.s), left out
+[area.547]
+trick_room = true
+weather = "none"
+map_header = 310
+source = "user, 2026-11-07"
 
 # 548 Stephano; sheet: Galactic Split:462 ['trick_room']
-[area_exception.548]
-reason = "placed on a Trick Room map (header 305 GALACTIC_HQ_1F, weather 18) and on a map without Trick Room (header 337 RESTAURANT); which fight is meant is a user call"
-source = "rom:rom_trainer_maps.json 548 headers 305, 337; rom_field_effects.json Trick Room headers 305"
+# user answer: the Galactic HQ fight (header 305 GALACTIC_HQ_1F: Trick Room, no weather);
+# the other placement, header 337 RESTAURANT, is the base game's optional diner fight (one random pair a day, scripts_restaurant.s), left out
+[area.548]
+trick_room = true
+weather = "none"
+map_header = 305
+source = "user, 2026-11-07"
 
 # 549 Trinculo; sheet: Galactic Split:272 ['trick_room']
-[area_exception.549]
-reason = "placed on a Trick Room map (header 310 GALACTIC_HQ_B2F, weather 18) and on a map without Trick Room (header 337 RESTAURANT); which fight is meant is a user call"
-source = "rom:rom_trainer_maps.json 549 headers 310, 337; rom_field_effects.json Trick Room headers 310"
+# user answer: the Galactic HQ fight (header 310 GALACTIC_HQ_B2F: Trick Room, no weather);
+# the other placement, header 337 RESTAURANT, is the base game's optional diner fight (one random pair a day, scripts_restaurant.s), left out
+[area.549]
+trick_room = true
+weather = "none"
+map_header = 310
+source = "user, 2026-11-07"
 
 # 550 Prospero; sheet: Galactic Split:492 ['trick_room']
-[area_exception.550]
-reason = "placed on a Trick Room map (header 310 GALACTIC_HQ_B2F, weather 18) and on a map without Trick Room (header 337 RESTAURANT); which fight is meant is a user call"
-source = "rom:rom_trainer_maps.json 550 headers 310, 337; rom_field_effects.json Trick Room headers 310"
+# user answer: the Galactic HQ fight (header 310 GALACTIC_HQ_B2F: Trick Room, no weather);
+# the other placement, header 337 RESTAURANT, is the base game's optional diner fight (one random pair a day, scripts_restaurant.s), left out
+[area.550]
+trick_room = true
+weather = "none"
+map_header = 310
+source = "user, 2026-11-07"
 
 # 551 Setebos; sheet: Galactic Split:362 ['trick_room']
-[area_exception.551]
-reason = "placed on a Trick Room map (header 305 GALACTIC_HQ_1F, weather 18) and on a map without Trick Room (header 337 RESTAURANT); which fight is meant is a user call"
-source = "rom:rom_trainer_maps.json 551 headers 305, 337; rom_field_effects.json Trick Room headers 305"
+# user answer: the Galactic HQ fight (header 305 GALACTIC_HQ_1F: Trick Room, no weather);
+# the other placement, header 337 RESTAURANT, is the base game's optional diner fight (one random pair a day, scripts_restaurant.s), left out
+[area.551]
+trick_room = true
+weather = "none"
+map_header = 305
+source = "user, 2026-11-07"
 
 # 552 Sycorax; sheet: Galactic Split:372 ['trick_room']
-[area_exception.552]
-reason = "placed on a Trick Room map (header 305 GALACTIC_HQ_1F, weather 18) and on a map without Trick Room (header 337 RESTAURANT); which fight is meant is a user call"
-source = "rom:rom_trainer_maps.json 552 headers 305, 337; rom_field_effects.json Trick Room headers 305"
+# user answer: the Galactic HQ fight (header 305 GALACTIC_HQ_1F: Trick Room, no weather);
+# the other placement, header 337 RESTAURANT, is the base game's optional diner fight (one random pair a day, scripts_restaurant.s), left out
+[area.552]
+trick_room = true
+weather = "none"
+map_header = 305
+source = "user, 2026-11-07"
 
 # 553 Ariel; sheet: Galactic Split:382 ['trick_room']
 [area.553]
@@ -137,9 +198,13 @@ trick_room = true
 source = "rom:map header 307 weather 18 (Trick Room)"
 
 # 556 Miranda; sheet: Galactic Split:302 ['trick_room']
-[area_exception.556]
-reason = "placed on a Trick Room map (header 310 GALACTIC_HQ_B2F, weather 18) and on a map without Trick Room (header 264 STARK_MOUNTAIN_ROOM_2); which fight is meant is a user call"
-source = "rom:rom_trainer_maps.json 556 headers 264, 310; rom_field_effects.json Trick Room headers 310"
+# user answer: the Galactic HQ fight (header 310 GALACTIC_HQ_B2F: Trick Room, no weather);
+# the other placement, header 264 STARK_MOUNTAIN_ROOM_2, is postgame (beside Buck 611)
+[area.556]
+trick_room = true
+weather = "none"
+map_header = 310
+source = "user, 2026-11-07"
 
 # 557 Ferdinand; sheet: Galactic Split:312 ['trick_room']
 [area.557]
@@ -151,7 +216,7 @@ source = "rom:map header 310 weather 18 (Trick Room)"
 trick_room = true
 source = "rom:map header 305 weather 18 (Trick Room)"
 
-# CONFLICT 559 Puck: claimed by two areas; left unsettled.
+# CONFLICT 559 Puck: claimed by two areas; settled by the user's answer below.
 #   rom:map header 305 weather 18 (Trick Room)
 #   rom:trainers.json start_condition unknown (data/kaizo/start_conditions.json: its maps start different conditions)
 #   Galactic Split:482: ['trick_room']
@@ -159,9 +224,13 @@ source = "rom:map header 305 weather 18 (Trick Room)"
 # [area.559]
 # trick_room = true
 # source = "rom:map header 305 weather 18 (Trick Room)"
-[area_exception.559]
-reason = "start condition unknown by ruling; ROM maps disagree"
-source = "rom:trainers.json 559 start_condition unknown"
+# user answer: the Galactic HQ fight (header 305 GALACTIC_HQ_1F: Trick Room, no weather);
+# the other placement, header 211 MT_CORONET_OUTSIDE_SOUTH (hail), shares the trainer flag and comes later in story order
+[area.559]
+trick_room = true
+weather = "none"
+map_header = 305
+source = "user, 2026-11-07"
 
 # 560 Uranus; sheet: Galactic Split:717 ['trick_room']
 [area.560]
@@ -169,9 +238,13 @@ trick_room = true
 source = "rom:map header 307 weather 18 (Trick Room)"
 
 # 561 Perdita; sheet: Galactic Split:352 ['trick_room']
-[area_exception.561]
-reason = "placed on a Trick Room map (header 305 GALACTIC_HQ_1F, weather 18) and on a map without Trick Room (header 264 STARK_MOUNTAIN_ROOM_2); which fight is meant is a user call"
-source = "rom:rom_trainer_maps.json 561 headers 264, 305; rom_field_effects.json Trick Room headers 305"
+# user answer: the Galactic HQ fight (header 305 GALACTIC_HQ_1F: Trick Room, no weather);
+# the other placement, header 264 STARK_MOUNTAIN_ROOM_2, is postgame (beside Buck 611)
+[area.561]
+trick_room = true
+weather = "none"
+map_header = 305
+source = "user, 2026-11-07"
 
 # 564 Epimetheus; sheet: Galactic Split:587 ['trick_room']
 [area.564]
@@ -199,39 +272,67 @@ trick_room = true
 source = "rom:map header 306 weather 18 (Trick Room)"
 
 # 569 Iapetus; sheet: Galactic Split:677 ['trick_room']
-[area_exception.569]
-reason = "placed on a Trick Room map (header 306 GALACTIC_HQ_2F, weather 18) and on a map without Trick Room (header 264 STARK_MOUNTAIN_ROOM_2); which fight is meant is a user call"
-source = "rom:rom_trainer_maps.json 569 headers 264, 306; rom_field_effects.json Trick Room headers 306"
+# user answer: the Galactic HQ fight (header 306 GALACTIC_HQ_2F: Trick Room, no weather);
+# the other placement, header 264 STARK_MOUNTAIN_ROOM_2, is postgame (beside Buck 611)
+[area.569]
+trick_room = true
+weather = "none"
+map_header = 306
+source = "user, 2026-11-07"
 
 # 627 Phoebe; sheet: Galactic Split:687 ['trick_room']
-[area_exception.627]
-reason = "placed on a Trick Room map (header 306 GALACTIC_HQ_2F, weather 18) and on a map without Trick Room (header 347 ROUTE_205_SOUTH); which fight is meant is a user call"
-source = "rom:rom_trainer_maps.json 627 headers 306, 347; rom_field_effects.json Trick Room headers 306"
+# user answer: the Galactic HQ fight (header 306 GALACTIC_HQ_2F: Trick Room, no weather);
+# the other placement, header 347 ROUTE_205_SOUTH, exists only as a base-game Vs. Seeker rematch slot
+[area.627]
+trick_room = true
+weather = "none"
+map_header = 306
+source = "user, 2026-11-07"
 
 # 628 Hyperion; sheet: Galactic Split:537 ['trick_room']
-[area_exception.628]
-reason = "placed on a Trick Room map (header 305 GALACTIC_HQ_1F, weather 18) and on a map without Trick Room (header 347 ROUTE_205_SOUTH); which fight is meant is a user call"
-source = "rom:rom_trainer_maps.json 628 headers 305, 347; rom_field_effects.json Trick Room headers 305"
+# user answer: the Galactic HQ fight (header 305 GALACTIC_HQ_1F: Trick Room, no weather);
+# the other placement, header 347 ROUTE_205_SOUTH, exists only as a base-game Vs. Seeker rematch slot
+[area.628]
+trick_room = true
+weather = "none"
+map_header = 305
+source = "user, 2026-11-07"
 
 # 629 Prometheus; sheet: Galactic Split:547 ['trick_room']
-[area_exception.629]
-reason = "placed on a Trick Room map (header 305 GALACTIC_HQ_1F, weather 18) and on a map without Trick Room (header 347 ROUTE_205_SOUTH); which fight is meant is a user call"
-source = "rom:rom_trainer_maps.json 629 headers 305, 347; rom_field_effects.json Trick Room headers 305"
+# user answer: the Galactic HQ fight (header 305 GALACTIC_HQ_1F: Trick Room, no weather);
+# the other placement, header 347 ROUTE_205_SOUTH, exists only as a base-game Vs. Seeker rematch slot
+[area.629]
+trick_room = true
+weather = "none"
+map_header = 305
+source = "user, 2026-11-07"
 
 # 630 Daphnis; sheet: Galactic Split:627 ['trick_room']
-[area_exception.630]
-reason = "placed on a Trick Room map (header 306 GALACTIC_HQ_2F, weather 18) and on a map without Trick Room (header 354 ROUTE_208); which fight is meant is a user call"
-source = "rom:rom_trainer_maps.json 630 headers 306, 354; rom_field_effects.json Trick Room headers 306"
+# user answer: the Galactic HQ fight (header 306 GALACTIC_HQ_2F: Trick Room, no weather);
+# the other placement, header 354 ROUTE_208, exists only as a base-game Vs. Seeker rematch slot
+[area.630]
+trick_room = true
+weather = "none"
+map_header = 306
+source = "user, 2026-11-07"
 
 # 631 Pan; sheet: Galactic Split:637 ['trick_room']
-[area_exception.631]
-reason = "placed on a Trick Room map (header 306 GALACTIC_HQ_2F, weather 18) and on a map without Trick Room (header 354 ROUTE_208); which fight is meant is a user call"
-source = "rom:rom_trainer_maps.json 631 headers 306, 354; rom_field_effects.json Trick Room headers 306"
+# user answer: the Galactic HQ fight (header 306 GALACTIC_HQ_2F: Trick Room, no weather);
+# the other placement, header 354 ROUTE_208, exists only as a base-game Vs. Seeker rematch slot
+[area.631]
+trick_room = true
+weather = "none"
+map_header = 306
+source = "user, 2026-11-07"
 
 # 632 Dione; sheet: Galactic Split:567 ['trick_room']
-[area_exception.632]
-reason = "placed on a Trick Room map (header 305 GALACTIC_HQ_1F, weather 18) and on a map without Trick Room (header 354 ROUTE_208); which fight is meant is a user call"
-source = "rom:rom_trainer_maps.json 632 headers 305, 354; rom_field_effects.json Trick Room headers 305"
+# user answer: the Galactic HQ fight (header 305 GALACTIC_HQ_1F: Trick Room, no weather);
+# the other placement, header 354 ROUTE_208, exists only as a base-game Vs. Seeker rematch slot
+[area.632]
+trick_room = true
+weather = "none"
+map_header = 305
+source = "user, 2026-11-07"
 
 # 638 Tethys; sheet: Galactic Split:557 ['trick_room']
 [area.638]
@@ -239,55 +340,91 @@ trick_room = true
 source = "rom:map header 305 weather 18 (Trick Room)"
 
 # 639 Rhea; sheet: Galactic Split:707 ['trick_room']
-[area_exception.639]
-reason = "placed on a Trick Room map (header 306 GALACTIC_HQ_2F, weather 18) and on a map without Trick Room (header 356 ROUTE_209); which fight is meant is a user call"
-source = "rom:rom_trainer_maps.json 639 headers 306, 356; rom_field_effects.json Trick Room headers 306"
+# user answer: the Galactic HQ fight (header 306 GALACTIC_HQ_2F: Trick Room, no weather);
+# the other placement, header 356 ROUTE_209, exists only as a base-game Vs. Seeker rematch slot
+[area.639]
+trick_room = true
+weather = "none"
+map_header = 306
+source = "user, 2026-11-07"
 
 # 640 Erripaus; sheet: Galactic Split:442 ['trick_room']
-[area_exception.640]
-reason = "placed on a Trick Room map (header 307 GALACTIC_HQ_3F, weather 18) and on a map without Trick Room (header 356 ROUTE_209); which fight is meant is a user call"
-source = "rom:rom_trainer_maps.json 640 headers 307, 356; rom_field_effects.json Trick Room headers 307"
+# user answer: the Galactic HQ fight (header 307 GALACTIC_HQ_3F: Trick Room, no weather);
+# the other placement, header 356 ROUTE_209, exists only as a base-game Vs. Seeker rematch slot
+[area.640]
+trick_room = true
+weather = "none"
+map_header = 307
+source = "user, 2026-11-07"
 
 # 641 Bebhionn; sheet: Galactic Split:432 ['trick_room']
-[area_exception.641]
-reason = "placed on a Trick Room map (header 307 GALACTIC_HQ_3F, weather 18) and on a map without Trick Room (header 356 ROUTE_209); which fight is meant is a user call"
-source = "rom:rom_trainer_maps.json 641 headers 307, 356; rom_field_effects.json Trick Room headers 307"
+# user answer: the Galactic HQ fight (header 307 GALACTIC_HQ_3F: Trick Room, no weather);
+# the other placement, header 356 ROUTE_209, exists only as a base-game Vs. Seeker rematch slot
+[area.641]
+trick_room = true
+weather = "none"
+map_header = 307
+source = "user, 2026-11-07"
 
 # 642 Geirrod; sheet: Galactic Split:657 ['trick_room']
-[area_exception.642]
-reason = "placed on a Trick Room map (header 306 GALACTIC_HQ_2F, weather 18) and on a map without Trick Room (header 356 ROUTE_209); which fight is meant is a user call"
-source = "rom:rom_trainer_maps.json 642 headers 306, 356; rom_field_effects.json Trick Room headers 306"
+# user answer: the Galactic HQ fight (header 306 GALACTIC_HQ_2F: Trick Room, no weather);
+# the other placement, header 356 ROUTE_209, exists only as a base-game Vs. Seeker rematch slot
+[area.642]
+trick_room = true
+weather = "none"
+map_header = 306
+source = "user, 2026-11-07"
 
 # 643 Greip; sheet: Galactic Split:667 ['trick_room']
-[area_exception.643]
-reason = "placed on a Trick Room map (header 306 GALACTIC_HQ_2F, weather 18) and on a map without Trick Room (header 356 ROUTE_209); which fight is meant is a user call"
-source = "rom:rom_trainer_maps.json 643 headers 306, 356; rom_field_effects.json Trick Room headers 306"
+# user answer: the Galactic HQ fight (header 306 GALACTIC_HQ_2F: Trick Room, no weather);
+# the other placement, header 356 ROUTE_209, exists only as a base-game Vs. Seeker rematch slot
+[area.643]
+trick_room = true
+weather = "none"
+map_header = 306
+source = "user, 2026-11-07"
 
 # 644 Janus; sheet: Galactic Split:452 ['trick_room']
-[area_exception.644]
-reason = "placed on a Trick Room map (header 306 GALACTIC_HQ_2F, weather 18) and on a map without Trick Room (header 356 ROUTE_209); which fight is meant is a user call"
-source = "rom:rom_trainer_maps.json 644 headers 306, 356; rom_field_effects.json Trick Room headers 306"
+# user answer: the Galactic HQ fight (header 306 GALACTIC_HQ_2F: Trick Room, no weather);
+# the other placement, header 356 ROUTE_209, exists only as a base-game Vs. Seeker rematch slot
+[area.644]
+trick_room = true
+weather = "none"
+map_header = 306
+source = "user, 2026-11-07"
 
 # 645 Loge; sheet: Galactic Split:527 ['trick_room']
-[area_exception.645]
-reason = "placed on a Trick Room map (header 305 GALACTIC_HQ_1F, weather 18) and on a map without Trick Room (header 347 ROUTE_205_SOUTH); which fight is meant is a user call"
-source = "rom:rom_trainer_maps.json 645 headers 305, 347; rom_field_effects.json Trick Room headers 305"
+# user answer: the Galactic HQ fight (header 305 GALACTIC_HQ_1F: Trick Room, no weather);
+# the other placement, header 347 ROUTE_205_SOUTH, exists only as a base-game Vs. Seeker rematch slot
+[area.645]
+trick_room = true
+weather = "none"
+map_header = 305
+source = "user, 2026-11-07"
 
 # 646 Skymir; sheet: Galactic Split:517 ['trick_room']
-[area_exception.646]
-reason = "placed on a Trick Room map (header 305 GALACTIC_HQ_1F, weather 18) and on a map without Trick Room (header 347 ROUTE_205_SOUTH); which fight is meant is a user call"
-source = "rom:rom_trainer_maps.json 646 headers 305, 347; rom_field_effects.json Trick Room headers 305"
+# user answer: the Galactic HQ fight (header 305 GALACTIC_HQ_1F: Trick Room, no weather);
+# the other placement, header 347 ROUTE_205_SOUTH, exists only as a base-game Vs. Seeker rematch slot
+[area.646]
+trick_room = true
+weather = "none"
+map_header = 305
+source = "user, 2026-11-07"
 
-# CONFLICT 649 Kari: claimed by two areas; left unsettled.
+# CONFLICT 649 Kari: claimed by two areas; settled by the user's answer below.
 #   rom:map header 306 weather 18 (Trick Room)
 #   rom:trainers.json start_condition unknown (data/kaizo/start_conditions.json: its maps start different conditions)
 #   Galactic Split:647: ['trick_room']
 # [area.649]
 # trick_room = true
 # source = "rom:map header 306 weather 18 (Trick Room)"
-[area_exception.649]
-reason = "start condition unknown by ruling; ROM maps disagree"
-source = "rom:trainers.json 649 start_condition unknown"
+# user answer: the Galactic HQ fight (header 306 GALACTIC_HQ_2F: Trick Room, no weather);
+# the other placement, header 385 ROUTE_217, exists only as a base-game Vs. Seeker rematch slot; PKCalc's sand is Hippowdon's Sand Stream
+[area.649]
+trick_room = true
+weather = "none"
+map_header = 306
+source = "user, 2026-11-07"
 
 # 651 Alborix; sheet: Galactic Split:507 ['trick_room']
 [area.651]
@@ -300,9 +437,13 @@ trick_room = true
 source = "rom:map header 305 weather 18 (Trick Room)"
 
 # 653 Io; sheet: Galactic Split:737 ['trick_room']
-[area_exception.653]
-reason = "placed on a Trick Room map (header 497 GALACTIC_HQ_LABORATORY, weather 18) and on a map without Trick Room (header 350 ROUTE_206); which fight is meant is a user call"
-source = "rom:rom_trainer_maps.json 653 headers 350, 497; rom_field_effects.json Trick Room headers 497"
+# user answer: the Galactic HQ fight (header 497 GALACTIC_HQ_LABORATORY: Trick Room, no weather);
+# the other placement, header 350 ROUTE_206, exists only as a base-game Vs. Seeker rematch slot
+[area.653]
+trick_room = true
+weather = "none"
+map_header = 497
+source = "user, 2026-11-07"
 
 # 662 Geoffrey; sheet: no mapped row
 [area.662]
@@ -322,10 +463,12 @@ source = "rom:map header 306 weather 18 (Trick Room)"
 
 # --- Gravity ----------------------------------------------------------
 
-# 870 Cynthia; sheet: Elite Four Split:298 ['gravity']
+# 870 Cynthia; sheet: Elite Four Split:298 'Champion Cynthia (Permanent Gravity)' ['gravity']
+# Also PKCalc: pkcalc:src/js/shared_controls.js:611 (Gravity ticked for this label);
+# confirmed by the user, 2026-11-07.
 [area.870]
 gravity = true
-source = "pkcalc:src/js/shared_controls.js:611"
+source = "Elite Four Split:298"
 
 # --- Gauntlets (rules stay {} until play reaches each group) ----------
 
@@ -443,9 +586,12 @@ source = "rom:only Saturn on a Trick Room map (rom_field_effects.json, map heade
 
 
 # --- Battle format corrections (K2b Task 15) ---------------------------------------------
-# format = "unknown": the ROM fights the trainer in two battle structures on two maps, which
-# one trainers.json format cannot hold; coverage refuses it (user call, like 521/527 in
-# data/kaizo/battle_formats.json, which only takes trainers whose script claims conflict).
+# The ROM fights these trainers in two battle structures on two maps, which one trainers.json
+# format cannot hold (format "unknown" refused them). The user answered each (2026-11-07):
+# the Galactic HQ fight's format (HQ layout: facing sight pairs, one-trainer doubles from
+# trdata battle type 2, singles), recorded on both sides of every pair. Evidence: the ROM
+# object coordinates, facings and sight ranges on the HQ maps; sheet Galactic Split:239 and
+# :504 sections; PKCalc flags.js:64-81 (double), :116-117, :181-184 (trueDouble).
 #
 # Restaurant slots reused for Galactic HQ trainers: scr_seq member 417 (map header 337
 # RESTAURANT, changed by the patch, still reached from its header entries) runs
@@ -453,61 +599,83 @@ source = "rom:only Saturn on a Trick Room map (rom_field_effects.json, map heade
 # files also place these ids on the Galactic HQ maps with no scripted pair (PKCalc and the
 # sheet pair them differently there: HQ sight pairs, one-trainer doubles or singles).
 
+# ROM: scr_seq 417 (map header 337 RESTAURANT) block at offset 6354 runs StartTrainerBattle with 535; zone events 298 (map header 310 GALACTIC_HQ_B2F) place 539 Portia with no scripted pair; PKCalc pairs it with 540 Cressida by sight (shared header 310)
 [fields.539]
-format = "unknown"
-source = "rom:scr_seq 417 (map header 337 RESTAURANT) block at offset 6354 runs StartTrainerBattle with 535; zone events 298 (map header 310 GALACTIC_HQ_B2F) place 539 Portia with no scripted pair; PKCalc pairs it with 540 Cressida by sight (shared header 310)"
+format = "double_two_trainer"
+opponent_2 = 540
+source = "user, 2026-11-07"
 
+# ROM: scr_seq 417 (map header 337 RESTAURANT) block at offset 6644 runs StartTrainerBattle with 548; zone events 298 (map header 310 GALACTIC_HQ_B2F) place 540 Cressida with no scripted pair; PKCalc pairs it with 539 Portia by sight (shared header 310)
 [fields.540]
-format = "unknown"
-source = "rom:scr_seq 417 (map header 337 RESTAURANT) block at offset 6644 runs StartTrainerBattle with 548; zone events 298 (map header 310 GALACTIC_HQ_B2F) place 540 Cressida with no scripted pair; PKCalc pairs it with 539 Portia by sight (shared header 310)"
+format = "double_two_trainer"
+opponent_2 = 539
+source = "user, 2026-11-07"
 
+# ROM: scr_seq 417 (map header 337 RESTAURANT) block at offset 7514 runs StartTrainerBattle with 550; zone events 298 (map header 310 GALACTIC_HQ_B2F) place 541 Umbriel with no scripted pair; PKCalc pairs it with 542 Francisco by sight (shared header 310)
 [fields.541]
-format = "unknown"
-source = "rom:scr_seq 417 (map header 337 RESTAURANT) block at offset 7514 runs StartTrainerBattle with 550; zone events 298 (map header 310 GALACTIC_HQ_B2F) place 541 Umbriel with no scripted pair; PKCalc pairs it with 542 Francisco by sight (shared header 310)"
+format = "double_two_trainer"
+opponent_2 = 542
+source = "user, 2026-11-07"
 
+# ROM: scr_seq 417 (map header 337 RESTAURANT) block at offset 6064 runs StartTrainerBattle with 543; zone events 298 (map header 310 GALACTIC_HQ_B2F) place 542 Francisco with no scripted pair; PKCalc pairs it with 541 Umbriel by sight (shared header 310)
 [fields.542]
-format = "unknown"
-source = "rom:scr_seq 417 (map header 337 RESTAURANT) block at offset 6064 runs StartTrainerBattle with 543; zone events 298 (map header 310 GALACTIC_HQ_B2F) place 542 Francisco with no scripted pair; PKCalc pairs it with 541 Umbriel by sight (shared header 310)"
+format = "double_two_trainer"
+opponent_2 = 541
+source = "user, 2026-11-07"
 
+# ROM: scr_seq 417 (map header 337 RESTAURANT) block at offset 6064 runs StartTrainerBattle with 542; zone events 293 (map header 305 GALACTIC_HQ_1F) place 543 Margaret with no scripted pair; PKCalc pairs it with 544 Cupid by sight (shared header 305)
 [fields.543]
-format = "unknown"
-source = "rom:scr_seq 417 (map header 337 RESTAURANT) block at offset 6064 runs StartTrainerBattle with 542; zone events 293 (map header 305 GALACTIC_HQ_1F) place 543 Margaret with no scripted pair; PKCalc pairs it with 544 Cupid by sight (shared header 305)"
+format = "double_two_trainer"
+opponent_2 = 544
+source = "user, 2026-11-07"
 
+# ROM: scr_seq 417 (map header 337 RESTAURANT) block at offset 6934 runs StartTrainerBattle with 552; zone events 293 (map header 305 GALACTIC_HQ_1F) place 544 Cupid with no scripted pair; PKCalc pairs it with 543 Margaret by sight (shared header 305)
 [fields.544]
-format = "unknown"
-source = "rom:scr_seq 417 (map header 337 RESTAURANT) block at offset 6934 runs StartTrainerBattle with 552; zone events 293 (map header 305 GALACTIC_HQ_1F) place 544 Cupid with no scripted pair; PKCalc pairs it with 543 Margaret by sight (shared header 305)"
+format = "double_two_trainer"
+opponent_2 = 543
+source = "user, 2026-11-07"
 
+# ROM: scr_seq 417 (map header 337 RESTAURANT) block at offset 5774 runs StartTrainerBattle with 546; zone events 297 (map header 309 GALACTIC_HQ_B1F) place 545 Juliet with no scripted pair; PKCalc: a one-trainer double
 [fields.545]
-format = "unknown"
-source = "rom:scr_seq 417 (map header 337 RESTAURANT) block at offset 5774 runs StartTrainerBattle with 546; zone events 297 (map header 309 GALACTIC_HQ_B1F) place 545 Juliet with no scripted pair; PKCalc: a one-trainer double"
+format = "double"
+source = "user, 2026-11-07"
 
+# ROM: scr_seq 417 (map header 337 RESTAURANT) block at offset 5774 runs StartTrainerBattle with 545; zone events 295 (map header 307 GALACTIC_HQ_3F) place 546 Belinda with no scripted pair; PKCalc: a one-trainer double
 [fields.546]
-format = "unknown"
-source = "rom:scr_seq 417 (map header 337 RESTAURANT) block at offset 5774 runs StartTrainerBattle with 545; zone events 295 (map header 307 GALACTIC_HQ_3F) place 546 Belinda with no scripted pair; PKCalc: a one-trainer double"
+format = "double"
+source = "user, 2026-11-07"
 
+# ROM: scr_seq 417 (map header 337 RESTAURANT) block at offset 7224 runs StartTrainerBattle with 538; zone events 298 (map header 310 GALACTIC_HQ_B2F) place 547 Caliban with no scripted pair; PKCalc: a single
 [fields.547]
-format = "unknown"
-source = "rom:scr_seq 417 (map header 337 RESTAURANT) block at offset 7224 runs StartTrainerBattle with 538; zone events 298 (map header 310 GALACTIC_HQ_B2F) place 547 Caliban with no scripted pair; PKCalc: a single"
+format = "single"
+source = "user, 2026-11-07"
 
+# ROM: scr_seq 417 (map header 337 RESTAURANT) block at offset 6644 runs StartTrainerBattle with 540; zone events 293 (map header 305 GALACTIC_HQ_1F) place 548 Stephano with no scripted pair; PKCalc: a single
 [fields.548]
-format = "unknown"
-source = "rom:scr_seq 417 (map header 337 RESTAURANT) block at offset 6644 runs StartTrainerBattle with 540; zone events 293 (map header 305 GALACTIC_HQ_1F) place 548 Stephano with no scripted pair; PKCalc: a single"
+format = "single"
+source = "user, 2026-11-07"
 
+# ROM: scr_seq 417 (map header 337 RESTAURANT) block at offset 7804 runs StartTrainerBattle with 537; zone events 298 (map header 310 GALACTIC_HQ_B2F) place 549 Trinculo with no scripted pair; PKCalc: a single
 [fields.549]
-format = "unknown"
-source = "rom:scr_seq 417 (map header 337 RESTAURANT) block at offset 7804 runs StartTrainerBattle with 537; zone events 298 (map header 310 GALACTIC_HQ_B2F) place 549 Trinculo with no scripted pair; PKCalc: a single"
+format = "single"
+source = "user, 2026-11-07"
 
+# ROM: scr_seq 417 (map header 337 RESTAURANT) block at offset 7514 runs StartTrainerBattle with 541; zone events 298 (map header 310 GALACTIC_HQ_B2F) place 550 Prospero with no scripted pair; PKCalc: a single
 [fields.550]
-format = "unknown"
-source = "rom:scr_seq 417 (map header 337 RESTAURANT) block at offset 7514 runs StartTrainerBattle with 541; zone events 298 (map header 310 GALACTIC_HQ_B2F) place 550 Prospero with no scripted pair; PKCalc: a single"
+format = "single"
+source = "user, 2026-11-07"
 
+# ROM: scr_seq 417 (map header 337 RESTAURANT) block at offset 5484 runs StartTrainerBattle with 536; zone events 293 (map header 305 GALACTIC_HQ_1F) place 551 Setebos with no scripted pair; PKCalc pairs it with 552 Sycorax by sight (shared header 305)
 [fields.551]
-format = "unknown"
-source = "rom:scr_seq 417 (map header 337 RESTAURANT) block at offset 5484 runs StartTrainerBattle with 536; zone events 293 (map header 305 GALACTIC_HQ_1F) place 551 Setebos with no scripted pair; PKCalc pairs it with 552 Sycorax by sight (shared header 305)"
+format = "double_two_trainer"
+opponent_2 = 552
+source = "user, 2026-11-07"
 
+# ROM: scr_seq 417 (map header 337 RESTAURANT) block at offset 6934 runs StartTrainerBattle with 544; zone events 293 (map header 305 GALACTIC_HQ_1F) place 552 Sycorax with no scripted pair; PKCalc pairs it with 551 Setebos by sight (shared header 305)
 [fields.552]
-format = "unknown"
-source = "rom:scr_seq 417 (map header 337 RESTAURANT) block at offset 6934 runs StartTrainerBattle with 544; zone events 293 (map header 305 GALACTIC_HQ_1F) place 552 Sycorax with no scripted pair; PKCalc pairs it with 551 Setebos by sight (shared header 305)"
+format = "double_two_trainer"
+opponent_2 = 551
+source = "user, 2026-11-07"
 
 # Stark Mountain slots reused for Galactic HQ trainers: zone events 257 (map header 264
 # STARK_MOUNTAIN_ROOM_2, unchanged from vanilla) place them on a map whose script (scr_seq
@@ -515,14 +683,226 @@ source = "rom:scr_seq 417 (map header 337 RESTAURANT) block at offset 6934 runs 
 # events place them where no partner walks (PKCalc pairs 556 and 569 by sight, 561 is a
 # one-trainer double).
 
+# ROM: zone events 257 (map header 264 STARK_MOUNTAIN_ROOM_2) place 556 Miranda beside partner Buck 611; zone events 298 (map header 310 GALACTIC_HQ_B2F) place it with no partner
 [fields.556]
-format = "unknown"
-source = "rom:zone events 257 (map header 264 STARK_MOUNTAIN_ROOM_2) place 556 Miranda beside partner Buck 611; zone events 298 (map header 310 GALACTIC_HQ_B2F) place it with no partner"
+format = "double_two_trainer"
+opponent_2 = 557
+source = "user, 2026-11-07"
 
+# ROM: zone events 257 (map header 264 STARK_MOUNTAIN_ROOM_2) place 561 Perdita beside partner Buck 611; zone events 293 (map header 305 GALACTIC_HQ_1F) place it with no partner
 [fields.561]
-format = "unknown"
-source = "rom:zone events 257 (map header 264 STARK_MOUNTAIN_ROOM_2) place 561 Perdita beside partner Buck 611; zone events 293 (map header 305 GALACTIC_HQ_1F) place it with no partner"
+format = "double"
+source = "user, 2026-11-07"
 
+# 557 Ferdinand: the other side of 556's pair (single in trainers.json); faces Miranda on
+# header 310 GALACTIC_HQ_B2F, sight 10 each; sheet Galactic Split:302/:312, PKCalc flags.js:72-73.
+[fields.557]
+format = "double_two_trainer"
+opponent_2 = 556
+source = "user, 2026-11-07"
+
+# ROM: zone events 257 (map header 264 STARK_MOUNTAIN_ROOM_2) place 569 Iapetus beside partner Buck 611; zone events 294 (map header 306 GALACTIC_HQ_2F) place it with no partner
 [fields.569]
-format = "unknown"
-source = "rom:zone events 257 (map header 264 STARK_MOUNTAIN_ROOM_2) place 569 Iapetus beside partner Buck 611; zone events 294 (map header 306 GALACTIC_HQ_2F) place it with no partner"
+format = "double_two_trainer"
+opponent_2 = 627
+source = "user, 2026-11-07"
+
+# 627 Phoebe: the other side of 569's pair (single in trainers.json); faces Iapetus on
+# header 306 GALACTIC_HQ_2F, sight 4 each; sheet Galactic Split:677/:687, PKCalc flags.js:116-117.
+[fields.627]
+format = "double_two_trainer"
+opponent_2 = 569
+source = "user, 2026-11-07"
+
+# Spear Pillar (header 220 SPEAR_PILLAR): scr_seq 236 offset 1118 runs CheckTrainerFlag 864
+# (Mira; set by the Wayward Cave escort, scr_seq 318 offset 1037) and branches to offset
+# 1438 StartTagBattle 864, 521, 527 (multi beside Mira), else offset 1129 StartTrainerBattle
+# 521, 527. data/kaizo/battle_formats.json keeps refusing the ROM's two script claims; the
+# user did the Mira escort, so the tag battle is the fight. Sheet Galactic Split:1133 'TAG
+# PARTNER MIRA', :1143, :1153; PKCalc flags.js:393-395.
+[fields.521]
+format = "multi"
+opponent_2 = 527
+partner = 864
+source = "user, 2026-11-07"
+
+[fields.527]
+format = "multi"
+opponent_2 = 521
+partner = 864
+source = "user, 2026-11-07"
+
+# --- Start conditions the ROM leaves open (user answers, 2026-11-07) ----------------------
+# Each [area.<id>] weather replaces the ROM start condition (start_conditions.json
+# "unknown", a ROM-vs-PKCalc weather dispute, or no map placement found).
+
+# Route 213 (header 373 ROUTE_213): the patch sets the map header's weather byte to 0
+# (vanilla 33), but a Kaizo script event starts rain (scr_seq 459); sheet Wake Split:192
+# 'Route 213 (PERMANENT RAIN)', PKCalc rain list (raw/FLAGS_PK.json). The user: rain for all
+# eight, overriding the ROM byte (resolutions.toml records the ROM-vs-PKCalc row).
+[area.103]
+weather = "rain"
+source = "user, 2026-11-07"
+
+[area.105]
+weather = "rain"
+source = "user, 2026-11-07"
+
+[area.106]
+weather = "rain"
+source = "user, 2026-11-07"
+
+[area.107]
+weather = "rain"
+source = "user, 2026-11-07"
+
+[area.108]
+weather = "rain"
+source = "user, 2026-11-07"
+
+[area.110]
+weather = "rain"
+source = "user, 2026-11-07"
+
+[area.111]
+weather = "rain"
+source = "user, 2026-11-07"
+
+[area.491]
+weather = "rain"
+source = "user, 2026-11-07"
+
+# 291 Idol Catherine #2, Hearthome Gym Room 5 (header 93, weather 26): fog for this trainer
+# only (sheet Fantina Split:405 and PKCalc's fog list agree). The decoder's reading of
+# weather 26 (none) is unchanged: header 90 (Room 2) also has 26 and the sheet leaves it
+# untagged.
+[area.291]
+weather = "fog"
+source = "user, 2026-11-07"
+
+# Hearthome Gym: rooms run 88 -> 89 -> 90 -> ... -> 95 in a fixed order.
+# 318 Fantina: fought in Room 7 (header 95, weather 28: none); only header 95 has her object.
+[area.318]
+weather = "none"
+source = "user, 2026-11-07"
+
+# 325 Morton: Room 1 (header 89, weather 15 fog) comes before Room 5; sheet Fantina
+# Split:271 'Policeman Morton (FOG, Also Appears in Room 5)', PKCalc fog flags.js:781.
+[area.325]
+weather = "fog"
+source = "user, 2026-11-07"
+
+# 343 Fantina?: the forced Room 3 fight (header 91, weather 0; script 98, the bollards open
+# only after a win).
+[area.343]
+weather = "none"
+source = "user, 2026-11-07"
+
+# 610 Marley: tag partner at Lake Valor / Valor Cavern (headers 314, 316, weather 2 rain);
+# the header 247 (fog) Victory Road follower cannot be reached in Kaizo. Sheet Candice
+# Split:5 'Lake Valor (PERMANENT RAIN)'.
+[area.610]
+weather = "rain"
+source = "user, 2026-11-07"
+
+# 746, 747 Shaun: practice fights at the Mt. Coronet camp (header 216, weather 1: no battle
+# weather), scr_seq 232 StartTrainerBattle 743-747.
+[area.746]
+weather = "none"
+source = "user, 2026-11-07"
+
+[area.747]
+weather = "none"
+source = "user, 2026-11-07"
+
+# 676 Corbin: unreachable (no object and no battle command uses 676): left unknown, refused.
+
+# Pokemon Center daily trainers (Pokemon Center 1F interiors; scr_seq member 400
+# pokemon_center_daily_trainers, whose 10401/10402 NPCs the map join misses): the first
+# battles (Route 207 on), rematch 1 (Celestic Town on) and rematch 2 (Spear Pillar on) a
+# story run can meet. 874 (Cameraman Tevin's first battle) is Kaizo's Lv 100 copy of E4
+# Flint 868's team. The postgame tiers (906-912, 914-920) and the other unplaced trainers
+# stay unknown (refused).
+[area.874]
+weather = "none"
+source = "user, 2026-11-07"
+
+[area.875]
+weather = "none"
+source = "user, 2026-11-07"
+
+[area.876]
+weather = "none"
+source = "user, 2026-11-07"
+
+[area.877]
+weather = "none"
+source = "user, 2026-11-07"
+
+[area.878]
+weather = "none"
+source = "user, 2026-11-07"
+
+[area.879]
+weather = "none"
+source = "user, 2026-11-07"
+
+[area.880]
+weather = "none"
+source = "user, 2026-11-07"
+
+[area.881]
+weather = "none"
+source = "user, 2026-11-07"
+
+[area.882]
+weather = "none"
+source = "user, 2026-11-07"
+
+[area.883]
+weather = "none"
+source = "user, 2026-11-07"
+
+[area.884]
+weather = "none"
+source = "user, 2026-11-07"
+
+[area.885]
+weather = "none"
+source = "user, 2026-11-07"
+
+[area.886]
+weather = "none"
+source = "user, 2026-11-07"
+
+[area.887]
+weather = "none"
+source = "user, 2026-11-07"
+
+[area.888]
+weather = "none"
+source = "user, 2026-11-07"
+
+[area.889]
+weather = "none"
+source = "user, 2026-11-07"
+
+[area.890]
+weather = "none"
+source = "user, 2026-11-07"
+
+[area.891]
+weather = "none"
+source = "user, 2026-11-07"
+
+[area.894]
+weather = "none"
+source = "user, 2026-11-07"
+
+[area.895]
+weather = "none"
+source = "user, 2026-11-07"
+
+[area.896]
+weather = "none"
+source = "user, 2026-11-07"
