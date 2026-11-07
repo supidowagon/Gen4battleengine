@@ -561,7 +561,7 @@ class _Solver:
             ra = node.root_action
             if ra is None:
                 if self.ai[0] is None:
-                    reasons = ai_refusals(self.tables, self.root)
+                    reasons = ai_refusals(self.tables, self.root, self.names)
                     raise UnsupportedAi(
                         "; ".join(reasons) or "the AI's action distribution is refused"
                     )
@@ -574,7 +574,7 @@ class _Solver:
                 )
         if self._root.replacement and self._root_actions <= self._refused_roots:
             bad = next(s for node in frontier for s in node.states if self.ai[s] is None)
-            reasons = ai_refusals(self.tables, _first(self.store.take([bad])))
+            reasons = ai_refusals(self.tables, _first(self.store.take([bad])), self.names)
             raise UnsupportedAi(
                 "; ".join(reasons)
                 or "the AI's action distribution after every replacement is refused"

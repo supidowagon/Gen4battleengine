@@ -181,7 +181,7 @@ def _member_changes(
     if member.status == 0:
         out.extend(
             dataclasses.replace(member, status=s)
-            for s in prestatus_options(tables, spec, problem.prestatus)
+            for s in prestatus_options(tables, spec, problem.prestatus, problem.blocking_abilities)
         )
     return out
 

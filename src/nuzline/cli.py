@@ -84,7 +84,7 @@ from pathlib import Path
 
 from nuzline.data.games import ALIASES
 from nuzline.data.trainer import Trainer
-from nuzline.text import ascii_text
+from nuzline.text import ascii_text, class_text
 
 # The vanilla trainers directory (benchmarks/ and tests read it; commands use the game's).
 INTERMEDIATE = Path(__file__).resolve().parents[2] / "data" / "intermediate"
@@ -424,7 +424,7 @@ def _say(text: str) -> None:
 
 
 def _trainer_line(t: Trainer) -> str:
-    return ascii_text(f"{t.label or t.name} ({t.trainer_class}, id {t.id})")
+    return ascii_text(f"{t.label or t.name} ({class_text(t.trainer_class)}, id {t.id})")
 
 
 def _print_report(report) -> None:
@@ -572,8 +572,11 @@ def _coverage(args) -> int:
 
 def _print_pool(args, game, tables, names, player, trainer, save) -> None:
     """The pool section of ``coverage --save``; it never changes the exit code. The cap is
-    ``--cap``, else the trainer's in the game's caps file (``prep.caps.default_cap``), else
-    the highest party level."""
+    ``--cap``, else the trainer's in the game's caps file (``prep.caps.default_cap``), else,
+    for vanilla only, the highest party level. A Kaizo cap is never defaulted (its split
+    gaps are user calls): with none, the pool is left out and ``default_cap``'s message,
+    which asks for ``--cap``, is the error line."""
+    from nuzline.data.games import VANILLA
     from nuzline.data.learnsets import load_learnsets
     from nuzline.prep.caps import default_cap
     from nuzline.prep.pool import check_pool, pool_candidates
@@ -582,7 +585,10 @@ def _print_pool(args, game, tables, names, player, trainer, save) -> None:
     if cap is None:
         try:
             cap = default_cap(trainer, game=game.id)
-        except ValueError:
+        except ValueError as e:
+            if game.id != VANILLA:
+                print(ascii_text(f"nuzline: error: pool left out: {e}"), file=sys.stderr)
+                return
             cap = max(spec.level for spec in player)
     learnsets = load_learnsets(game.tables_dir)
     candidates, left_out = pool_candidates(save, tables, names, learnsets, cap)
@@ -811,9 +817,15 @@ def _prep(args) -> int:
     )
     inter = IntermediateData(game.intermediate_dir)
     _check_buildable(tables, names, trainer, inter)
-    cap = args.cap if args.cap is not None else default_cap(trainer, game=game.id)
     opp = build_trainer_party(trainer, inter)
     weather = start_weather(trainer)
+    # A refused fight exits 2 before the cap, the pool or the team space can fail it.
+    theirs = check_opponent(tables, names, trainer, opp, weather)
+    if theirs.missing:
+        print(_trainer_line(trainer))
+        _print_report(theirs)
+        return EXIT_REFUSED
+    cap = args.cap if args.cap is not None else default_cap(trainer, game=game.id)
     problem, warnings = build_problem(
         tables,
         names,
@@ -834,10 +846,6 @@ def _prep(args) -> int:
     limit = MAX_TEAM_SETUPS if args.max_setups is None else args.max_setups
     check_team_space(len(problem.candidates), settings.max_team, limit)
     print(_trainer_line(trainer))
-    theirs = check_opponent(tables, names, trainer, opp, weather)
-    if theirs.missing:
-        _print_report(theirs)
-        return EXIT_REFUSED
 
     def progress(p) -> None:
         print(
@@ -873,10 +881,18 @@ def _prep(args) -> int:
         if args.resume is None:
             raise
         raise ValueError(f"checkpoint {args.resume} is damaged: {e!r}") from e
-    for line in report.render(result, problem, names, args.show_depth):
+    for line in report.render(result, problem, names, args.show_depth, tables=tables):
         _say(line)
     rec = report.record(
-        result, problem, names, settings, args.seed, tables_version, args.reserve, game=game.id
+        result,
+        problem,
+        names,
+        settings,
+        args.seed,
+        tables_version,
+        args.reserve,
+        game=game.id,
+        tables=tables,
     )
     if args.tree is not None:
         if rec["plan"] is None:
@@ -925,7 +941,7 @@ def _listing_line(t: Trainer) -> str:
         marks += f" [gauntlet {group} #{position}]"
     if t.format != "single":
         marks += f" [{t.format}]"
-    return ascii_text(f"{t.id:4d}  {t.label or t.name}{marks}  ({t.trainer_class})")
+    return ascii_text(f"{t.id:4d}  {t.label or t.name}{marks}  ({class_text(t.trainer_class)})")
 
 
 def _trainers(args) -> int:
@@ -945,18 +961,19 @@ def _trainers(args) -> int:
 
 
 def _load_save_command(args):
-    """(names, save) of ``nuzline save show|export``, read with ``--game``'s data."""
+    """(game, tables, names, save) of ``nuzline save show|export``, read with ``--game``'s
+    data."""
     from nuzline.data.games import load_game
 
     game = _game(args)
     tables, names = load_game(game)
-    return names, _load_save(args.save_path, args.allow_corrupt, game, tables, names)
+    return game, tables, names, _load_save(args.save_path, args.allow_corrupt, game, tables, names)
 
 
 def _save_show(args) -> int:
     from nuzline.saves.export import save_json, show_lines
 
-    names, save = _load_save_command(args)
+    _, _, names, save = _load_save_command(args)
     if args.json:
         print(json.dumps(save_json(save, names), indent=1))  # ensure_ascii: ASCII only
     else:
@@ -968,8 +985,9 @@ def _save_show(args) -> int:
 def _save_export(args) -> int:
     from nuzline.saves.export import party_toml
 
-    names, save = _load_save_command(args)
-    text = party_toml(save, names)  # may raise RecordError before anything is written
+    game, tables, names, save = _load_save_command(args)
+    # The game's own tables: SaveMon.to_spec checks the party against them.
+    text = party_toml(save, names, tables, game=game.id)  # may raise RecordError first
     args.output.write_text(text, encoding="utf-8")
     print(f"wrote {args.output}")
     return EXIT_OK
@@ -998,6 +1016,9 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_REFUSED
     except (ValueError, OSError) as e:
         print(ascii_text(f"nuzline: error: {e}"), file=sys.stderr)
+        return EXIT_ERROR
+    except KeyError as e:  # a Names lookup ("unknown move 'Water Sport': ... is 'Scald'")
+        print(ascii_text(f"nuzline: error: {e.args[0] if e.args else e}"), file=sys.stderr)
         return EXIT_ERROR
 
 

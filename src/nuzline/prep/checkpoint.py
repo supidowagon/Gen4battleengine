@@ -36,12 +36,13 @@ __all__ = [
 
 CHECKPOINT_VERSION = 3  # 3: merged variant stage, finalist picks, tie ranks (2026-11-04)
 
-# The fingerprint keys in the order they are compared, with what a mismatch says.
+# The fingerprint keys in the order they are compared, with what a mismatch says. The game
+# comes first: another game's checkpoint differs in its problem and tables too.
 _MISMATCH = (
+    ("game", "checkpoint is for another game"),
     ("problem", "checkpoint is for another save or pool, or other fight settings (deaths, cap)"),
     ("settings", "checkpoint is for other settings"),
     ("seed", "checkpoint is for another seed"),
-    ("game", "checkpoint is for another game"),
     ("tables", "checkpoint is for other tables"),
     ("code", "checkpoint is for another code version"),
 )
@@ -138,6 +139,11 @@ def read_checkpoint(path: Path, expected: dict[str, str]) -> dict:
     if version != CHECKPOINT_VERSION:
         raise ValueError(
             f"checkpoint {path} has version {version}, this program reads {CHECKPOINT_VERSION}"
+        )
+    if "game" not in found:
+        raise ValueError(
+            "checkpoint predates K2b (it records no game, and its tables are older): "
+            "start a new run"
         )
     for key, message in _MISMATCH:
         if found.get(key) != expected.get(key):

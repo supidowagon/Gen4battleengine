@@ -695,8 +695,12 @@ def test_cli_prep_small(prep_run):
 
 def test_cli_prep_needs_a_cap(prep_runs, tmp_path, tables, names, capsys):
     save = _prep_save(tmp_path, tables, names)
-    assert main(["prep", "--save", save, "--trainer-id", "858", *SMALL]) == 1
+    # Anthony (34) is a supported fight with no configured cap.
+    assert main(["prep", "--save", save, "--trainer-id", "34", *SMALL]) == 1
     assert "config/level_caps.toml" in capsys.readouterr().err
+    # A refused fight exits 2 before the cap is needed (final review M8).
+    assert main(["prep", "--save", save, "--trainer-id", "858", *SMALL]) == 2
+    assert "Support: NONE" in capsys.readouterr().out
 
 
 @pytest.mark.parametrize(
@@ -974,6 +978,8 @@ def test_kaizo_roark_refused(tmp_path, capsys, kaizo_tables, kaizo_names):  # ex
     out = capsys.readouterr().out
     assert "Battle start: Sandstorm (weather UNSUPPORTED)" in out
     assert "no transcribed AI policy for this game" in out and "code changes unclassified" in out
+    # Final review I3: Kaizo Roark's move 205 is Accelerock; Rollout is no Kaizo move.
+    assert "move Accelerock are not transcribed" in out and "Rollout" not in out
 
 
 def test_cli_still_imports_without_jax():
@@ -1187,3 +1193,66 @@ def test_kaizo_rival_refusal_prints_on_a_cp1252_console(tmp_path, kaizo_tables, 
     assert out.isascii() and "Pok\\xe9mon Trainer Barry #3 [Empoleon] (" in out
     assert "Support: NONE" in out and "Missing (" in out
     assert "Pok\\xe9mon Trainer Barry #3 [Empoleon]: no transcribed AI policy" in out
+
+
+@pytest.mark.parametrize("which", ["kaizo_save_pre_roark_path", "kaizo_save_path"])
+def test_kaizo_save_export_checks_kaizo_tables(which, tmp_path, request, kaizo_tables, kaizo_names):
+    # Final review I2: the party is checked against the Kaizo tables (Sandshrew's Kaizo
+    # Rough Skin is no vanilla Sandshrew ability), and round-trips through load_party.
+    from nuzline.data.party import load_party
+    from nuzline.saves import load_save
+
+    path = request.getfixturevalue(which)  # read in place, never copied
+    out = tmp_path / "party.toml"
+    assert main(["save", "export", "--game", "kaizo", str(path), "-o", str(out)]) == 0
+    save = load_save(path, tables=kaizo_tables, names=kaizo_names, game=_KAIZO)
+    want = [m.to_spec(kaizo_tables) for m in save.party if not m.is_egg]
+    assert load_party(out, kaizo_names) == want
+
+
+def test_renamed_slot_lookup_is_one_error_line(capsys, kaizo_tables, kaizo_names):  # M7
+    # A vanilla party file under --game kaizo: Water Sport's slot is Scald in Kaizo.
+    party = str(ROOT / "tests" / "fixtures" / "golden_party_roark_01.toml")
+    assert main(["coverage", "--game", "kaizo", "--party", party, "--trainer", "roark"]) == 1
+    err = capsys.readouterr().err.strip().splitlines()
+    assert len(err) == 1 and err[0].startswith("nuzline: error: unknown move")
+    assert "in this game that slot is" in err[0] and "Traceback" not in err[0]
+
+
+def test_kaizo_prep_refusal_exits_2_before_the_cap(
+    tmp_path, monkeypatch, capsys, kaizo_tables, kaizo_names, kaizo_save_pre_roark_path
+):  # M8: Mickey (5) has no split, so default_cap would raise "pass --cap" (exit 1)
+    from nuzline import cli
+
+    monkeypatch.setattr(cli, "RUNS", tmp_path / "runs")
+    path = str(kaizo_save_pre_roark_path)
+    args = ["prep", "--game", "kaizo", "--save", path, "--trainer-id", "5", "--devices", "1"]
+    assert main(args) == 2
+    out = capsys.readouterr().out
+    assert "Support: NONE" in out and "no transcribed AI policy" in out
+    assert not (tmp_path / "runs").exists()
+
+
+def test_kaizo_pool_cap_is_never_defaulted(
+    capsys, kaizo_tables, kaizo_names, kaizo_save_pre_roark_path
+):
+    # M9: Mickey (5) has no split, so there is no cap; the pool is not shown at the party max.
+    path = str(kaizo_save_pre_roark_path)
+    assert main(["coverage", "--game", "kaizo", "--save", path, "--trainer-id", "5"]) == 2
+    captured = capsys.readouterr()
+    assert "Pool at level cap" not in captured.out
+    assert "nuzline: error: pool left out: no level cap for" in captured.err
+    assert "--cap" in captured.err
+    assert (
+        main(["coverage", "--game", "kaizo", "--save", path, "--trainer-id", "5", "--cap", "12"])
+        == 2
+    )
+    assert "Pool at level cap 12" in capsys.readouterr().out
+
+
+def test_pkmn_glyphs_print_as_pkmn():  # final review M13
+    from nuzline.cli import _listing_line, _trainer_line
+
+    barry = kt("Pok\xe9mon Trainer Barry #2 [Turtwig]", id=247, cls="\u20a7\u20a6 Trainer")
+    assert _trainer_line(barry) == "Pok\\xe9mon Trainer Barry #2 [Turtwig] (PKMN Trainer, id 247)"
+    assert _listing_line(barry).endswith("(PKMN Trainer)") and _listing_line(barry).isascii()

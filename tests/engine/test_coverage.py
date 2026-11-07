@@ -257,6 +257,18 @@ def test_trainer_pokemon_in_a_data_form_is_refused(tables, names):
     assert r.level == Support.NONE
 
 
+def test_data_form_reason_is_true_for_the_game(tables, names, vanilla_manifest):
+    # Final review M11: Kaizo's patched TrainerData_BuildParty computes stats after the
+    # form, so the vanilla "keeps its base form's stats" would be false there.
+    devon = next(t for t in load_trainers(INTERMEDIATE) if t.id == 491)
+    opp = build_trainer_party(devon, _inter())
+    kaizo = Names({**vanilla_manifest, "game": KAIZO})
+    r = check_opponent(tables, kaizo, devon, opp, 0)
+    hits = [m for m in r.missing if "data form" in m]
+    assert len(hits) == 2 and not any("keeps its base form" in m for m in hits)
+    assert all("applies the form before computing its stats" in m for m in hits)
+
+
 @pytest.mark.parametrize(("species", "form"), [("Shellos", 1), ("Unown", 5), ("Arceus", 3)])
 def test_trainer_pokemon_in_a_form_without_data_passes(tables, names, species, form):
     mon = replace(roark_party(names)[0], species=names.species(species), form=form)

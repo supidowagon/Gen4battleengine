@@ -286,6 +286,26 @@ def test_resume_refuses_mismatch(tables, names, saved, which):
     assert path.read_bytes() == before, name
 
 
+def test_checkpoint_game_is_checked_first(tmp_path):  # final review M10
+    from nuzline.prep.checkpoint import CHECKPOINT_VERSION, read_checkpoint
+
+    expected = {"problem": "p", "settings": "s", "seed": "1", "tables": "t", "code": "c"}
+    expected["game"] = "platinum_us"
+    path = tmp_path / "x.ckpt.json"
+
+    def write(found):
+        doc = {"version": CHECKPOINT_VERSION, "fingerprint": found, "funnel": {}}
+        path.write_text(json.dumps(doc), encoding="utf-8")
+
+    write({**expected, "game": "platinum_kaizo_nightmare_final", "problem": "q", "tables": "u"})
+    with pytest.raises(ValueError, match="another game"):
+        read_checkpoint(path, expected)
+    old = {k: v for k, v in expected.items() if k != "game"}
+    write({**old, "tables": "older"})  # written before K2b: no game key
+    with pytest.raises(ValueError, match="predates K2b"):
+        read_checkpoint(path, expected)
+
+
 def test_resume_refuses_a_damaged_or_future_file(tables, names, saved):
     prob, path = saved
     good = path.read_bytes()
@@ -348,6 +368,7 @@ def test_checkpoint_write_is_atomic(tmp_path, monkeypatch):
 def test_read_checkpoint_never_writes(tmp_path):
     path = tmp_path / "r.ckpt.json"
     print_ = {"problem": "p", "settings": "s", "seed": "1", "tables": "t", "code": "c"}
+    print_["game"] = "platinum_us"
     write_checkpoint(
         path, {"version": CHECKPOINT_VERSION, "fingerprint": print_, "funnel": {"x": 1}}
     )

@@ -47,6 +47,15 @@ LISTED = [
     "nuzline.ai.commands.ITEM_EXPERT_BELT",
     "nuzline.ai.switching.ITEM_IRON_BALL",
     "nuzline.engine.ids.POTION_HP_RESTORED",
+    # engine: saves/check.py's special routes (final review M12)
+    "nuzline.saves.check.SPECIES_SMEARGLE",
+    "nuzline.saves.check.SPECIES_PICHU",
+    "nuzline.saves.check.SPECIES_ROTOM",
+    "nuzline.saves.check.TYPE_DRAGON",
+    "nuzline.saves.check.MOVE_DRACO_METEOR",
+    "nuzline.saves.check.MOVE_VOLT_TACKLE",
+    "nuzline.saves.check.ROTOM_FORM_MOVES",
+    "nuzline.saves.check.ULTIMATE_MOVES",
     # vanilla_policy
     "nuzline.ai.commands.MOVE_EFFECTS",
     "nuzline.ai.commands.BattleEffect",
@@ -98,6 +107,7 @@ MODULES = [
     "nuzline.ai.policy",
     "nuzline.engine.ids",
     "tools.effect_map",
+    "nuzline.saves.check",
 ]
 _UPPER = re.compile(r"_?[A-Z][A-Z0-9_]*")
 _CONTAINER_CALLS = {"frozenset", "tuple", "set", "dict"}
@@ -189,6 +199,8 @@ def _code_entries(where: str) -> set:
     if where == "nuzline.ai.commands.BattleEffect":
         assert set(commands.MOVE_EFFECTS.values()) == set(obj)
         return {(None, m) for m in commands.MOVE_EFFECTS}
+    if where == "nuzline.saves.check.ULTIMATE_MOVES":  # species keys and move values
+        return {(None, k) for k in obj} | {(None, v) for v in set(obj.values())}
     if where == "nuzline.ai.switching._MOVES":
         return {(n, switching.MOVE_IDS[n]) for n in obj}
     if isinstance(obj, type) and issubclass(obj, IntEnum | IntFlag):

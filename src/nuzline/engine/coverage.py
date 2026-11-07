@@ -77,7 +77,7 @@ import numpy as np
 
 from nuzline.data.forms import personal_row
 from nuzline.data.game_constants import POLICY
-from nuzline.data.games import KAIZO
+from nuzline.data.games import KAIZO, VANILLA
 from nuzline.data.spec import PokemonSpec
 from nuzline.data.tables import Names, Tables
 from nuzline.data.trainer import UNKNOWN_CONDITION, Trainer, missing_set_data
@@ -246,12 +246,19 @@ def _check_party(
         c.add(IMPLEMENTED_ITEMS.get(item, Support.NONE), f"{where}: {item_name}", "held item")
         _check_form(c, where, mon)
         if trainer_side and row != mon.species:
-            c.add(
-                Support.NONE,
-                f"{where}: trainer Pokemon in a data form keeps its base form's stats, "
-                "ability and moves",
-                "form",
-            )
+            c.add(Support.NONE, f"{where}: {_data_form_reason(names)}", "form")
+
+
+def _data_form_reason(names: Names) -> str:
+    """Why a trainer Pokemon in a data form is refused, true for ``names``' game: vanilla's
+    TrainerData_BuildParty builds it from the base form (src/trainer_data.c:216-218);
+    Kaizo's patched builder computes its stats after the form (docs/kaizo/rom_diff.md)."""
+    if names.game == VANILLA:
+        return "trainer Pokemon in a data form keeps its base form's stats, ability and moves"
+    return (
+        "trainer Pokemon in a data form: this game's party builder applies the form before "
+        "computing its stats, which the engine's trainer party build does not model"
+    )
 
 
 def _check_form(c: _Collector, where: str, mon: PokemonSpec) -> None:
@@ -395,7 +402,7 @@ def check_coverage(
     from nuzline.ai.policy import ai_refusals  # nuzline.ai imports the engine
 
     state = make_state(tables, player, opp, start_condition, opp_items=trainer.items, leads=leads)
-    for reason in ai_refusals(tables, state):
+    for reason in ai_refusals(tables, state, names):
         c.add(Support.NONE, f"{display_name(trainer)}: {reason}", "trainer AI")
     return c.report
 

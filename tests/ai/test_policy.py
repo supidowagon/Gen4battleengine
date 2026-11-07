@@ -158,6 +158,28 @@ def test_refuses_untranscribed_opponent_move(tables, names):
         ai_action_distribution(tables, s)
 
 
+def test_refusals_name_moves_and_items_in_the_callers_game(tables, names, vanilla_manifest):
+    # Final review I3: a game that renames a slot (Kaizo: Rollout is Accelerock) must not
+    # see the shipped vanilla name in its refusal lines.
+    from nuzline.data.tables import Names
+
+    ember, belt = names.move("Ember"), names.item("Expert Belt")
+    move_names, item_names = (
+        list(vanilla_manifest["move_names"]),
+        list(vanilla_manifest["item_names"]),
+    )
+    move_names[ember], item_names[belt] = "Fire Sting", "Belt of Doom"
+    other = Names({**vanilla_manifest, "move_names": move_names, "item_names": item_names})
+    s = trace_a(tables, names)
+    s = s._replace(moves=s.moves.at[1, 0, 2].set(ember))
+    assert any("Fire Sting" in r for r in ai_refusals(tables, s, other))
+    assert not any("Ember" in r for r in ai_refusals(tables, s, other))
+    assert any("Ember" in r for r in ai_refusals(tables, s))  # default: the shipped names
+    s = versus(tables, names, CRANIDOS, "Starly")
+    s = s._replace(item=s.item.at[1, CRANIDOS].set(belt))
+    assert any("Belt of Doom" in r for r in ai_refusals(tables, s, other))
+
+
 def test_refuses_effectiveness_modifiers(tables, names):
     s = versus(tables, names, CRANIDOS, "Starly")
     belt = s._replace(item=s.item.at[1, CRANIDOS].set(names.item("Expert Belt")))

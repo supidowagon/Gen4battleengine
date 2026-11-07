@@ -184,6 +184,8 @@ def test_build_problem_fields(tmp_path, tables, names, learnsets):
     assert p.source == f"save:{save.sha256}" and p.cap == 16
     assert p.resources.heart_scales == 2
     assert warnings == ["Leftovers: reserved but not in the bag"]
+    immunity = (names.ability("Immunity"), int(PRESTATUS["poison"]))
+    assert immunity in p.blocking_abilities  # from the game's own Names (final review I4)
     q, _ = _build(tables, names, save, learnsets, reserve=["Heart Scale"])
     assert q.resources.heart_scales == 0
 

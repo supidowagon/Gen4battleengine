@@ -188,6 +188,54 @@ CONSTANTS: tuple[Constant, ...] = (
     # Potion's itemUseParams.hpRestored (res/items/data/potion.json), which
     # BattleSystem_UseBagItem (src/battle/battle_system.c:435) restores.
     Constant("nuzline.engine.ids.POTION_HP_RESTORED", "item", 17, "Potion", _E, hp_restored=20),
+    # saves/check.py: Sketch's user and the special routes outside the learnset tables
+    # (Rotom's form moves, Route 228's ultimate moves, Wilma's Draco Meteor for Dragon
+    # types, the Pichu egg's Volt Tackle); each route is cited there.
+    Constant("nuzline.saves.check.SPECIES_SMEARGLE", "species", 235, "Smeargle", _E),
+    Constant("nuzline.saves.check.SPECIES_PICHU", "species", 172, "Pichu", _E),
+    Constant("nuzline.saves.check.SPECIES_ROTOM", "species", 479, "Rotom", _E),
+    Constant("nuzline.saves.check.TYPE_DRAGON", "type", 16, "Dragon", _E),
+    Constant("nuzline.saves.check.MOVE_DRACO_METEOR", "move", 434, "Draco Meteor", _E),
+    Constant("nuzline.saves.check.MOVE_VOLT_TACKLE", "move", 344, "Volt Tackle", _E),
+    *_table(
+        "nuzline.saves.check.ROTOM_FORM_MOVES",
+        "move",
+        _E,
+        {
+            "-": 0,
+            "Overheat": 315,
+            "Hydro Pump": 56,
+            "Blizzard": 59,
+            "Air Slash": 403,
+            "Leaf Storm": 437,
+        },
+    ),
+    # ULTIMATE_MOVES: its species keys, then the three moves its values name.
+    *_table(
+        "nuzline.saves.check.ULTIMATE_MOVES",
+        "species",
+        _E,
+        {
+            "Charizard": 6,
+            "Typhlosion": 157,
+            "Blaziken": 257,
+            "Infernape": 392,
+            "Blastoise": 9,
+            "Feraligatr": 160,
+            "Swampert": 260,
+            "Empoleon": 395,
+            "Venusaur": 3,
+            "Meganium": 154,
+            "Sceptile": 254,
+            "Torterra": 389,
+        },
+    ),
+    *_table(
+        "nuzline.saves.check.ULTIMATE_MOVES",
+        "move",
+        _E,
+        {"Blast Burn": 307, "Hydro Cannon": 308, "Frenzy Plant": 338},
+    ),
     # --- vanilla_policy: the transcribed vanilla AI scripts --------------------------
     *_table("nuzline.ai.commands.MOVE_EFFECTS", "move", _P, _TRANSCRIBED_MOVES),
     # BattleEffect's ids are the battle effects of the transcribed moves; asserted
