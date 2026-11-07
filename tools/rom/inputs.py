@@ -35,6 +35,7 @@ _ENV = {
     "pkcalc_zip": "NUZLINE_PKCALC_ZIP",
     "kaizo_docs": "NUZLINE_KAIZO_DOCS",
     "kaizo_save": "NUZLINE_KAIZO_SAVE",
+    "kaizo_save_pre_roark": "NUZLINE_KAIZO_SAVE_PRE_ROARK",
 }
 
 
@@ -55,6 +56,7 @@ class RomInputs:
     pkcalc_zip: Path | None
     kaizo_docs: Path | None
     kaizo_save: Path | None
+    kaizo_save_pre_roark: Path | None = None  # a second, earlier save (pre-Roark)
 
 
 def _read_toml(config: Path) -> dict[str, object]:

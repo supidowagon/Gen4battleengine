@@ -2,7 +2,8 @@
 
 Skipped unless ``NUZLINE_ORACLE_DIR`` names a folder holding exactly one ``.sav``/``.dsv``,
 one PKHeX Box Data Report ``.csv`` and the party Pokemon as ``.pk4`` files (see
-``docs/saves.md``). The PKHeX CSV column headers are not known exactly, so columns are
+``docs/saves.md``). ``NUZLINE_ORACLE_GAME`` (``vanilla`` or ``kaizo``, default ``vanilla``)
+picks the tables and names the save is read with. The PKHeX CSV column headers are not known exactly, so columns are
 found by header name with a small alias table and the test fails listing the headers it
 saw when a required one has no match.
 """
@@ -23,6 +24,7 @@ from nuzline.saves.crypto import decrypt_record
 from nuzline.saves.save import _block, default_tables_and_names, read_image, select_copies
 
 _DIR = os.environ.get("NUZLINE_ORACLE_DIR")
+_GAME = os.environ.get("NUZLINE_ORACLE_GAME", "vanilla")
 
 pytestmark = pytest.mark.skipif(not _DIR, reason="NUZLINE_ORACLE_DIR not set")
 
@@ -187,9 +189,9 @@ def _check_boxes(save, names, csv_path: Path) -> int:
 
 def test_matches_pkhex():
     save_path, csv_path, pk4s = _oracle_files(Path(_DIR))
-    save = load_save(save_path)
+    save = load_save(save_path, game=_GAME)
     assert save.load_result == "ok"
     _check_party(save_path, pk4s, len(save.party))
 
-    _, names = default_tables_and_names(None, None)
+    _, names = default_tables_and_names(None, None, game=_GAME)
     assert _check_boxes(save, names, csv_path) > 0, "the CSV listed no Pokemon"

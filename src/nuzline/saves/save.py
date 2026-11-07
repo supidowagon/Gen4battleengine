@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import NamedTuple
 
+from nuzline.data.games import VANILLA, GameDataError, get_game, manifest_game
 from nuzline.saves import layout as L
 from nuzline.saves.crypto import crc16_ccitt
 from nuzline.saves.pkm import SaveMon, decode_mon, decode_text
@@ -55,6 +56,7 @@ class SaveFile:
     boxes_copy: str
     save_counter: int
     sha256: str  # of the file as read
+    player_starter: int  # VAR_PLAYER_STARTER: the starter's species id, 0 before the choice
 
 
 def read_image(data: bytes) -> bytes:
@@ -199,16 +201,24 @@ def select_copies(image: bytes) -> tuple[str, int, int]:
         return "corrupt", curr_normal, curr_box
 
 
-def default_tables_and_names(tables, names, dir=None):
+def default_tables_and_names(tables, names, dir=None, game=None):
     """numpy tables from ``tables.npz`` and the manifest names. Imported here, not at
     module top, so ``import nuzline.saves`` stays free of jax (``nuzline.data.tables``
-    imports it)."""
+    imports it).
+
+    ``game`` (an id or alias) reads that game's tables directory and refuses a manifest
+    built for another game (``GameDataError``); ``dir`` overrides the directory."""
     import numpy as np
 
     from nuzline.data.tables import DEFAULT, Tables, _read_manifest, check_npz, load_names
 
-    dir = DEFAULT if dir is None else dir
-    _read_manifest(dir)  # stale tables: one rebuild message, even when both are passed
+    expected = None if game is None else get_game(game)
+    if dir is None:
+        dir = DEFAULT if expected is None else expected.tables_dir
+    # Stale tables: one rebuild message, even when both are passed.
+    found = manifest_game(_read_manifest(dir))
+    if expected is not None and found != expected.id:
+        raise GameDataError(f"{dir / 'manifest.json'} is for game {found!r}, not {expected.id!r}")
     if tables is None:
         with np.load(dir / "tables.npz") as z:
             check_npz(z, dir)
@@ -260,10 +270,19 @@ def _boxes(box_block: bytes, tables, charmap) -> tuple[tuple[SaveMon | None, ...
     return tuple(boxes)
 
 
-def load_save(path: Path, *, allow_corrupt: bool = False, tables=None, names=None) -> SaveFile:
+def load_save(
+    path: Path,
+    *,
+    allow_corrupt: bool = False,
+    tables=None,
+    names=None,
+    game: str = VANILLA,
+) -> SaveFile:
     """Parse a Platinum save, picking the blocks the game would load.
 
-    Raises :class:`SaveError` for a wrong size, ``"empty"``/``"error"`` load results,
+    ``game`` (id or alias) chooses the tables and names used when they are not passed;
+    nothing about the save itself selects or checks the game (spec §8: a Kaizo save looks
+    like a vanilla one). Raises :class:`SaveError` for a wrong size, ``"empty"``/``"error"`` load results,
     ``"corrupt"`` unless ``allow_corrupt``, or a bad party count; a record that fails its
     checks raises ``RecordError`` naming its location.
     """
@@ -277,7 +296,7 @@ def load_save(path: Path, *, allow_corrupt: bool = False, tables=None, names=Non
             "save is corrupt: the game would fall back to an older block "
             "(use allow_corrupt to load it)"
         )
-    tables, names = default_tables_and_names(tables, names)
+    tables, names = default_tables_and_names(tables, names, game=game)
     charmap = names.charmap
 
     normal = _block(image, normal_copy, "normal")
@@ -296,4 +315,5 @@ def load_save(path: Path, *, allow_corrupt: bool = False, tables=None, names=Non
         boxes_copy=_COPY_NAMES[boxes_copy],
         save_counter=_u32(normal, L.NORMAL_SIZE - L.FOOTER_SIZE),
         sha256=hashlib.sha256(data).hexdigest(),
+        player_starter=_u16(normal, L.VARS + 2 * L.VAR_PLAYER_STARTER_INDEX),
     )

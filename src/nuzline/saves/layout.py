@@ -28,6 +28,8 @@ __all__ = [
     "TRAINER_ID",
     "TRAINER_NAME",
     "TRAINER_NAME_LEN",
+    "VARS",
+    "VAR_PLAYER_STARTER_INDEX",
 ]
 
 # --- container -------------------------------------------------------------------------
@@ -75,6 +77,16 @@ POCKETS: tuple[tuple[str, int], ...] = (
     ("poke_balls", 15),
     ("battle_items", 30),
 )
+# VarsFlags page (SAVE_TABLE_ENTRY_VARS_FLAGS, src/savedata/save_table.c:53) follows the
+# bag: struct Bag (include/bag.h:35) is the pockets above (476 BagItems, 0x770) plus
+# u32 registeredItem = 0x774, rounded to 0x77C. VarsFlags.vars (include/vars_flags.h:12,
+# u16 vars[NUM_VARS]) is the page's first member: 0x630 + 0x77C = 0xDAC.
+VARS = 0xDAC
+# VAR_PLAYER_STARTER = 0x4030 - VARS_START 0x4000 (VarsFlags_GetVarAddress,
+# src/vars_flags.c:65). generated/vars_flags.txt:4107-4159 counted as C enum values (alias
+# lines such as MAP_LOCAL_VARS_END = VAR_MAP_LOCAL_0x1F do not advance); the next line,
+# VAR_UNUSED_0x4031, confirms it. Holds the starter's species id, 0 before the choice.
+VAR_PLAYER_STARTER_INDEX = 48
 
 # --- boxes block (PCBoxes, include/pc_boxes.h:17) ----------------------------------------
 BOX_MONS = 4  # after u32 currentBoxID

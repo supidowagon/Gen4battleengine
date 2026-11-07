@@ -7,6 +7,7 @@ from __future__ import annotations
 import dataclasses
 import json
 
+from nuzline.data.games import VANILLA
 from nuzline.saves.pkm import SaveMon
 from nuzline.saves.save import SaveFile, default_tables_and_names
 from nuzline.saves.status import decode_status
@@ -40,11 +41,11 @@ def _status_name(mon: SaveMon) -> str:
     return decode_status(mon.status_raw)[0].name.lower()
 
 
-def party_toml(save: SaveFile, names, tables=None) -> str:
+def party_toml(save: SaveFile, names, tables=None, game: str = VANILLA) -> str:
     """The party (eggs dropped) in the ``--party`` TOML format, with ``hp``, ``pp``,
-    ``sleep_turns`` and ``stats``. ``tables`` (default: the built tables) feed
-    ``SaveMon.to_spec``'s checks."""
-    tables, names = default_tables_and_names(tables, names)
+    ``sleep_turns`` and ``stats``. ``tables`` (default: ``game``'s built tables) feed
+    ``SaveMon.to_spec``'s checks; ``names`` must be the same game's."""
+    tables, names = default_tables_and_names(tables, names, game=game)
     out = ["# Exported by `nuzline save export`; eggs are left out.", ""]
     for mon in save.party:
         if mon.is_egg:

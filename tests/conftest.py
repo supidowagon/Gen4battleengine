@@ -51,6 +51,14 @@ def names():
 
 
 @pytest.fixture(scope="session")
+def learnsets():
+    from nuzline.data.learnsets import load_learnsets
+
+    _require_tables()
+    return load_learnsets(TABLES_DIR)
+
+
+@pytest.fixture(scope="session")
 def vanilla_manifest():
     _require_tables()
     return json.loads((TABLES_DIR / "manifest.json").read_text(encoding="utf-8"))
@@ -86,6 +94,39 @@ def trainers():
 
     _require_vanilla_intermediate()
     return load_trainers(GAMES[VANILLA].intermediate_dir)
+
+
+# --- Kaizo saves (each skips when its save is not configured or absent) --------------
+
+
+def _configured_save(key: str, env: str) -> Path:
+    """The save ``RomInputs.<key>`` names; skips on ``RomInputError``, an unset key or a
+    missing file. Not ``rom_inputs``: that gates on the vanilla ROM existing."""
+    import os
+
+    from tools.rom.inputs import REPO_ROOT, RomInputError, load_inputs
+
+    try:
+        path = getattr(load_inputs(REPO_ROOT / "data" / "local.toml", os.environ), key)
+    except RomInputError as e:
+        pytest.skip(str(e))
+    if path is None:
+        pytest.skip(f"{key} is not configured (data/local.toml or {env})")
+    if not path.exists():
+        pytest.skip(f"configured {key} {path} is absent")
+    return path
+
+
+@pytest.fixture(scope="session")
+def kaizo_save_path():
+    """The Maylene Kaizo save (``kaizo_save``)."""
+    return _configured_save("kaizo_save", "NUZLINE_KAIZO_SAVE")
+
+
+@pytest.fixture(scope="session")
+def kaizo_save_pre_roark_path():
+    """The pre-Roark Kaizo save (``kaizo_save_pre_roark``)."""
+    return _configured_save("kaizo_save_pre_roark", "NUZLINE_KAIZO_SAVE_PRE_ROARK")
 
 
 # --- Kaizo source extractions (each skips when its local input is absent) -----------
