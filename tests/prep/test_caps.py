@@ -112,5 +112,12 @@ def test_next_fight_cap_crosses_split(tmp_path):
 
 
 def test_every_leader_cap_is_his_max_level(kaizo_trainers):  # spec 5.12
-    for t in (t for t in kaizo_trainers if t.label and t.label.startswith("Leader ")):
+    # Spec 5.12: a leader's cap is his highest level. "Leader Fantina?" (id 343, levels 31-34) is
+    # the Hearthome gym decoy, not the leader (id 318), so labels ending in "?" are skipped.
+    leaders = (
+        t
+        for t in kaizo_trainers
+        if t.label and t.label.startswith("Leader ") and not t.label.endswith("?")
+    )
+    for t in leaders:
         assert default_cap(t, game=KAIZO) == max(m.level for m in t.party), t.label

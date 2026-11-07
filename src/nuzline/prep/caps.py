@@ -61,6 +61,7 @@ def default_cap(trainer: Trainer, path: Path | None = None, game: str = "platinu
     """The configured cap for ``trainer``. Vanilla: ``ValueError`` when the file has none for
     its id, or names a different trainer under that id. Kaizo: the ``[fights]`` entry whose
     key starts the trainer's label, else its split's ``[splits]`` cap, else ``ValueError``.
+    The sheets name splits "Roark Split"; a trailing " Split" is stripped to find the table key.
     ``path`` overrides the game's file in ``CAPS_FILES``."""
     if game not in CAPS_FILES:
         raise ValueError(f"no level caps file for game {game!r}")
