@@ -12,7 +12,7 @@ from nuzline.data.games import GAMES, KAIZO
 from nuzline.data.trainer import GENDER_NONE, AreaCondition
 from tools.extract_rom import INPUTS_KEY, MOVE_LISTS_INPUT, kaizo_input_hashes
 from tools.kaizo.crosscheck import CrossCheck, CrossCheckError, Outcome, Row
-from tools.kaizo.overrides import Overrides
+from tools.kaizo.overrides import AreaOverride, Overrides
 from tools.kaizo.resolve import (
     ResolveError,
     _sha256,
@@ -22,6 +22,7 @@ from tools.kaizo.resolve import (
     resolve,
     spelling,
     two_placement_trick_room,
+    unplaced_ids,
     with_overrides,
 )
 from tools.rom.inputs import RomInputs
@@ -272,6 +273,22 @@ def test_provenance_hash_ignores_line_endings(tmp_path):
     assert _sha256(lf) == _sha256(crlf)
 
 
+def test_committed_kaizo_inputs_are_lf_pinned():  # final review M15
+    # The provenance and extract-input hashes fold CRLF anyway; the checkout stays LF too.
+    import shutil
+    import subprocess
+
+    from tools.rom.inputs import REPO_ROOT
+
+    rules = (REPO_ROOT / ".gitattributes").read_text("utf-8").splitlines()
+    assert "data/kaizo/*.json text eol=lf" in rules
+    if shutil.which("git"):
+        files = ["data/kaizo/battle_formats.json", "data/kaizo/start_conditions.json"]
+        out = subprocess.run(["git", "check-attr", "eol", *files], cwd=REPO_ROOT,
+                             capture_output=True, text=True, check=True).stdout  # fmt: skip
+        assert out.count("eol: lf") == 2
+
+
 def test_two_placement_trick_room_rule():
     effects = [
         {"id": 1, "effect": "trick_room", "map_headers": [306]},
@@ -280,6 +297,137 @@ def test_two_placement_trick_room_rule():
     ]
     maps = {1: [306, 347], 2: [306], 562: [306, 1, 2, 3]}
     assert two_placement_trick_room(effects, maps) == {1: ([306], [347])}
+
+
+# --- final review fixes: sight pairs, headers, split, unplaced, permanence, paths -------
+
+
+def _trainer(tid, **kw):
+    t = {"id": tid, "name": f"T{tid}", "party": [], "start_condition": "none",
+         "format": "single", "opponent_2": None, "class_gender": 0, "class_id": 0}  # fmt: skip
+    return {**t, **kw}
+
+
+def _sight_check(*pairs):
+    """A cross-check whose sight_pair rows confirm ``pairs`` (trainer id, partner id)."""
+    return CrossCheck(
+        [
+            Outcome(Row("trainers", f"{a} T{a}", "sight_pair", b, b, None, True), "agree", b, None)
+            for a, b in pairs
+        ]
+    )
+
+
+def test_one_sided_sight_pair_raises():  # M2
+    from tools.kaizo.overrides import Mappings
+    from tools.kaizo.resolve import trainer_context
+
+    maps = Mappings((), (), {}, ())
+    where = {5: [1], 6: [1]}
+    ctx = trainer_context(_sight_check((5, 6), (6, 5)), maps, Overrides(), where, {"splits": {}})
+    assert ctx.sight == {5: (6, 1), 6: (5, 1)}
+    with pytest.raises(ResolveError, match="confirmed on 5's side only"):
+        trainer_context(_sight_check((5, 6)), maps, Overrides(), where, {"splits": {}},
+                        {5: "single", 6: "single"})  # fmt: skip
+    # A partner whose format is unknown is refused anyway (535-538, 557, 627 today).
+    trainer_context(_sight_check((5, 6)), maps, Overrides(), where, {"splits": {}},
+                    {5: "single", 6: "unknown"})  # fmt: skip
+
+
+def _record(cites, fields=None):
+    """``trainer_record`` of a partyless trainer 1 with sheet headers ``cites``."""
+    from tools.kaizo.resolve import Sources, TrainerContext, trainer_record
+
+    rows = {
+        "A Split:10": (0, "A Split", {"tags": {"optional": True}}, {"tags": {}}),
+        "A Split:20": (0, "A Split", {"tags": {}}, {"tags": {}, "ai_known": False}),
+        "A Split:30": (0, "A Split", {"tags": {}}, {"tags": {"optional": True}}),
+    }
+    ctx = TrainerContext({}, {1: list(cites)}, {}, {})
+    ov = Overrides(fields={1: fields} if fields else {}, sources={"fields.1": "user, 2026-11-07"})
+    src = Sources({"learnsets": {}, "species": []}, [], [], {1: [5]}, {}, {})
+    return trainer_record(_trainer(1), ctx, ov, src, {}, {}, rows)
+
+
+def test_headers_that_disagree_give_unknown():  # M3
+    agree = _record(["A Split:10", "A Split:30"])
+    assert agree["optional"] is True and agree["split_order"] == [0, 10]
+    split = _record(["A Split:10", "A Split:20"])
+    assert split["optional"] is None
+    assert "headers disagree: A Split:10 true, A Split:20 false" in split["sources"]["optional"]
+    assert split["split"] == "A Split" and split["split_order"] == [0, 10]
+
+
+def test_split_override_drops_the_sheet_position():  # M5
+    t = _record(["A Split:10"], {"split": "B Split"})
+    assert (t["split"], t["split_order"]) == ("B Split", None)
+    assert t["sources"]["split_order"].startswith("overrides fields.1 (user, 2026-11-07)")
+
+
+def test_unplaced_trainers_start_unknown():  # M4
+    mon = {"species": 1, "level": 5}
+    rom = [
+        _trainer(1, party=[mon]),  # placed
+        _trainer(2, party=[mon]),  # no join at all
+        _trainer(3, party=[mon]),  # a rematch of an unplaced trainer: empty join
+        _trainer(4),  # no party: nothing to fight
+        _trainer(5, party=[mon]),  # unplaced, settled by the user
+    ]
+    where = {1: [10], 3: []}
+    ov = Overrides(area={5: AreaOverride(False, False, "rain", "user, 2026-11-07")})
+    assert unplaced_ids(rom, where) == [2, 3, 5]
+    out = with_overrides(rom, ov, where)
+    assert [t["start_condition"] for t in out] == ["none", "unknown", "unknown", "none", "none"]
+    assert [t["start_condition"] for t in with_overrides(rom, ov)] == ["none"] * 5  # no join
+
+
+def test_unplaced_trainers_are_one_user_call():  # M4
+    from tools.kaizo.resolve import Sources, user_calls
+
+    mon = {"species": 1, "level": 5}
+    rom = [_trainer(i, party=[mon]) for i in (1, 2, 3)] + [_trainer(4, start_condition="unknown")]
+    src = Sources({}, rom, [], {1: [10]}, {}, {})
+    resolved = with_overrides(rom, Overrides(), src.trainer_maps)
+    calls = user_calls(resolved, CrossCheck(), Overrides(), src, 0)
+    grouped = [c for c in calls if c.startswith("- no map placement found: 2 trainers")]
+    assert len(grouped) == 1 and grouped[0].endswith(": 2, 3")
+    singles = [c for c in calls if c.startswith("- start condition unknown")]
+    want = (
+        "- start condition unknown: 4 T4 (data/kaizo/start_conditions.json: its maps start "
+        "different conditions)"
+    )
+    assert singles == [want]
+
+
+def test_bare_weather_lever_flips_permanence(monkeypatch):  # M16 (Ruling 22)
+    from tools.kaizo import resolve as r
+
+    rows = [({"tags": {}}, {"tags": {"weather": "sun", "assumed_permanent": True}})]
+    bare = r.bare_tags(rows)
+    assert bare == {"sun"}
+    assert r._area("sun", None, bare)[1]["permanent"] is True  # user-confirmed 2026-11-05
+    monkeypatch.setattr(r, "BARE_WEATHER_PERMANENT", False)
+    assert r._area("sun", None, bare)[1]["permanent"] is False
+    assert r._area("rain", None, bare)[1]["permanent"] is True  # not the bare tag's weather
+    assert r._area("sun", None)[1]["permanent"] is True  # map weather is permanent
+    tr = AreaOverride(True, False, None, "user, 2026-11-07")
+    room = r.bare_tags([({"tags": {"trick_room": True, "assumed_permanent": True}}, {"tags": {}})])
+    assert r._area("none", tr, room)[1]["permanent"] is False
+
+
+def test_rehash_lines_name_files_not_paths(tmp_path):  # M14
+    import hashlib
+
+    from tools.kaizo.resolve import Sources, check_input_hashes
+
+    local = tmp_path / "private" / "PKCalc-main.zip"
+    local.parent.mkdir()
+    local.write_bytes(b"zip")
+    sha = hashlib.sha256(b"zip").hexdigest()
+    src = Sources({}, [], [], {}, {"sha256": sha}, {"sha256": "1" * 64})
+    lines = check_input_hashes(RomInputs(None, None, local, tmp_path / "absent.xlsx", None), src)
+    assert lines[0] == f"PKCalc zip: PKCalc-main.zip re-hashed, matches {sha}"
+    assert "absent.xlsx" in lines[1] and not any(str(tmp_path) in line for line in lines)
 
 
 # --- the real resolved intermediates (skip until built) -----------------------------------

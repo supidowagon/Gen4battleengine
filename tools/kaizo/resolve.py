@@ -54,6 +54,7 @@ from tools.kaizo.overrides import (
     DEFAULT_PATH as DEFAULT_OVERRIDES,
 )
 from tools.kaizo.overrides import (
+    NOISY_MAP_JOIN,  # noqa: F401  (re-exported: callers and tests name it here)
     UNKNOWN_FORMAT,
     Mappings,
     Overrides,
@@ -62,7 +63,9 @@ from tools.kaizo.overrides import (
     check_gauntlet_members,
     check_rom_trick_room,
     check_trainer_ids,
+    check_two_placement,
     load_overrides,
+    two_placement_trick_room,
 )
 from tools.kaizo.rows_common import get
 from tools.kaizo.rows_tables import load_rom, table_rows
@@ -185,41 +188,30 @@ def load_sources(inter: Path) -> Sources:
     )
 
 
-# Trainers the ROM trainer -> map join places on 136-137 map headers each, through scripts
-# that many map headers share (rom_trainer_maps.json; tools/rom/readers/maps.py
-# trainer_maps). Their header lists are no placement evidence, so the two-placement Trick
-# Room rule skips them.
-NOISY_MAP_JOIN = frozenset({562, 572, 581, 582, 583, 606, 676, 861, 863, 865})
+def unplaced_ids(trainers: list[dict], trainer_maps: Mapping[int, list[int]]) -> list[int]:
+    """Trainers with a party that the trainer -> map join places on no map header (none, or
+    an empty list: a rematch of an unplaced trainer). Their start condition is unknown,
+    never the extractor's default "none" (final review M4; Kaizo only)."""
+    return [t["id"] for t in trainers if t["party"] and not trainer_maps.get(t["id"])]
 
 
-def two_placement_trick_room(
-    field_effects: list[dict], trainer_maps: dict[int, list[int]]
-) -> dict[int, tuple[list[int], list[int]]]:
-    """Trainer id -> (its Trick Room headers, its other headers) for every ROM Trick Room
-    trainer (map weather 18) the trainer -> map join also places on a header without Trick
-    Room, ``NOISY_MAP_JOIN`` excepted. Which fight is meant is a user call (the
-    Rosalind/Puck/Kari precedent): each needs an ``[area_exception]``."""
-    out = {}
-    for r in field_effects:
-        if r["effect"] != "trick_room" or r["id"] in NOISY_MAP_JOIN:
-            continue
-        other = sorted(set(trainer_maps.get(r["id"], ())) - set(r["map_headers"]))
-        if other:
-            out[r["id"]] = (list(r["map_headers"]), other)
-    return out
-
-
-def with_overrides(trainers: list[dict], overrides: Overrides) -> list[dict]:
+def with_overrides(
+    trainers: list[dict], overrides: Overrides, trainer_maps: Mapping[int, list[int]] | None = None
+) -> list[dict]:
     """The ROM trainers with the overrides that refuse a field applied, so the cross-check
     lists them with the refused unknowns instead of comparing them: ``[fields.<id>] format =
-    "unknown"`` (``opponent_2`` None: the structures disagree on it) and ``[area_exception]``
-    (start condition ``"unknown"``)."""
+    "unknown"`` (``opponent_2`` None: the structures disagree on it), ``[area_exception]``
+    (start condition ``"unknown"``) and, given ``trainer_maps``, each ``unplaced_ids`` trainer
+    (start condition ``"unknown"``) unless an ``[area.<id>]`` weather settles it."""
+    no_map = set(unplaced_ids(trainers, trainer_maps)) if trainer_maps is not None else set()
     out = []
     for t in trainers:
-        fmt = overrides.fields.get(t["id"], {}).get("format")
-        if fmt is not None:
+        tid = t["id"]
+        fmt = overrides.fields.get(tid, {}).get("format")
+        if fmt == UNKNOWN_FORMAT:
             t = dict(t, format=fmt, opponent_2=None)
-        if t["id"] in overrides.area_exceptions:
+        settled = getattr(overrides.area.get(tid), "weather", None) is not None
+        if tid in overrides.area_exceptions or (tid in no_map and not settled):
             t = dict(t, start_condition=UNKNOWN_START)
         out.append(t)
     return out
@@ -238,14 +230,8 @@ def cross_check(
         + check_rom_trick_room(overrides, src.field_effects)
         + check_trainer_ids(overrides, {t["id"] for t in src.trainers})
     )
-    two = two_placement_trick_room(src.field_effects, src.trainer_maps)
-    problems += [
-        f"trainer {tid}: Trick Room headers {tr} and other headers {other}; needs an "
-        "area_exception (the fight meant is a user call), not a trick_room area entry"
-        for tid, (tr, other) in sorted(two.items())
-        if tid not in overrides.area_exceptions
-    ]
-    trainers = with_overrides(src.trainers, overrides)
+    problems += check_two_placement(overrides, src.field_effects, src.trainer_maps)
+    trainers = with_overrides(src.trainers, overrides, src.trainer_maps)
     maps = build_mappings(
         src.pkcalc.get("trainers", {}),
         src.docs,
@@ -374,12 +360,32 @@ def names(
 # --- trainers ---------------------------------------------------------------------------
 
 
-def _area(start_condition: str, area: Any) -> tuple[str, dict]:
+# Ruling 22: a bare sheet weather tag such as "(SUN)" (extract_kaizo_docs marks it
+# ``assumed_permanent``) is read as permanent: user-confirmed 2026-11-05. Flip this one
+# constant (and rebuild) if play shows such weather ending.
+BARE_WEATHER_PERMANENT = True
+
+
+def bare_tags(rows: list[tuple[dict, dict]]) -> frozenset[str]:
+    """The conditions a trainer's sheet section or header tags only barely (``weather``
+    or ``trick_room`` with ``assumed_permanent``), e.g. ``{"sun"}`` for ``(SUN)``."""
+    out = set()
+    for sec, h in rows:
+        for tags in (sec.get("tags", {}), h.get("tags", {})):
+            if tags.get("assumed_permanent"):
+                if tags.get("weather"):
+                    out.add(tags["weather"])
+                if tags.get("trick_room"):
+                    out.add("trick_room")
+    return frozenset(out)
+
+
+def _area(start_condition: str, area: Any, bare: frozenset[str] = frozenset()) -> tuple[str, dict]:
     """(start_condition, area_condition) from the ROM start condition and an overrides
     ``[area.<id>]`` entry (weather replaces the start condition; Trick Room, Gravity add).
-    ``permanent`` is True for every Kaizo area condition: map weather is permanent in battle
-    (``FIELD_CONDITION_*_PERM``, Ruling 8) and a bare sheet tag such as ``(SUN)`` is read as
-    permanent (user-confirmed, Ruling 22)."""
+    ``permanent``: map weather is permanent in battle (``FIELD_CONDITION_*_PERM``, Ruling 8),
+    so it is True, except where the trainer's sheet tags its weather or Trick Room only
+    barely (``bare``, ``bare_tags``): there it is ``BARE_WEATHER_PERMANENT`` (Ruling 22)."""
     weather = getattr(area, "weather", None)
     start = start_condition if weather is None else weather
     cond = AreaCondition.from_start_condition(start)
@@ -390,6 +396,9 @@ def _area(start_condition: str, area: Any) -> tuple[str, dict]:
         "gravity": bool(getattr(area, "gravity", False)),
         "permanent": True,
     }
+    barely = (out["weather"] in bare) or (out["trick_room"] and "trick_room" in bare)
+    if barely:
+        out["permanent"] = BARE_WEATHER_PERMANENT
     # Round trip: the start condition coverage reads (start_weather) is rebuilt from the
     # area condition's weather and fog.
     back = "fog" if out["fog"] else (out["weather"] or "none")
@@ -421,7 +430,13 @@ class TrainerContext:
 
 
 def trainer_context(check: CrossCheck, maps: Mappings, overrides: Overrides,
-                    trainer_maps: dict[int, list[int]], docs: dict) -> TrainerContext:  # fmt: skip
+                    trainer_maps: dict[int, list[int]], docs: dict,
+                    formats: Mapping[int, str] | None = None) -> TrainerContext:  # fmt: skip
+    """The per-trainer facts ``trainer_record`` joins. A confirmed sight pair must be
+    confirmed from both sides: a pair claimed by one trainer only would make it a
+    two-trainer double while its partner stays a runnable single, so it raises, unless the
+    partner's format (``formats``, the trainers after ``with_overrides``) is ``"unknown"``
+    and so refused anyway."""
     labels = {m.id: (m.label, m.how) for m in maps.pkcalc if m.id is not None}
     order = {c: n for n, c in enumerate(_split_rows(docs))}
     headers: dict[int, list[str]] = defaultdict(list)
@@ -438,6 +453,11 @@ def trainer_context(check: CrossCheck, maps: Mappings, overrides: Overrides,
     for tid, (pair, _) in sight.items():
         if pair in sight and sight[pair][0] != tid:
             raise ResolveError(f"sight pairs disagree: {tid} -> {pair} -> {sight[pair][0]}")
+        if pair not in sight and (formats or {}).get(pair) != UNKNOWN_FORMAT:
+            raise ResolveError(
+                f"sight pair {tid} -> {pair} is confirmed on {tid}'s side only: {pair} would "
+                "stay a runnable single (needs a trainer_ids or fields correction)"
+            )
     gauntlets: dict[int, tuple[str, int, dict, str]] = {}
     for g in overrides.gauntlets:
         for pos, tid in enumerate(g.trainers, 1):
@@ -489,6 +509,8 @@ def trainer_record(
     fmt_source = "rom: trainers.json (K2a battle_structures over the patched field scripts)"
     if fields.get("format") is not None:
         out["format"] = fields["format"]
+        if fields["format"] != UNKNOWN_FORMAT:  # the user's answer (overrides FORMATS)
+            out["opponent_2"] = fields.get("opponent_2")
         fmt_source = fsrc
     elif tid in ctx.sight and t["format"] != UNKNOWN_FORMAT:
         pair, header = ctx.sight[tid]
@@ -515,14 +537,19 @@ def trainer_record(
 
     cites = ctx.headers.get(tid, [])
     if cites:
-        idx, sheet_name, sec, h = split_rows[cites[0]]
+        idx, sheet_name, _, _ = split_rows[cites[0]]
         out["split"] = sheet_name
         out["split_order"] = [idx, _line(cites[0])]
-        out["optional"] = bool(h["tags"].get("optional") or sec["tags"].get("optional"))
-        out["left_side"] = h.get("left_side") if h.get("ai_known") else None
         cite = ", ".join(cites)
-        for k in ("split", "split_order", "optional", "left_side"):
+        for k in ("split", "split_order"):
             sources[k] = f"sheet {cite}"
+        for k, values in _header_fields(cites, split_rows).items():
+            # Several headers that disagree settle nothing (Task 13 M1 ruling): unknown.
+            out[k] = values[0][1] if len({v for _, v in values}) == 1 else None
+            sources[k] = f"sheet {cite}"
+            if out[k] is None and len(values) > 1:
+                said = ", ".join(f"{c} {_cell_text(v)}" for c, v in values)
+                sources[k] += f" (headers disagree: {said}; unknown)"
     else:
         out.update(split=None, split_order=None, optional=None, left_side=None)
     for k in ("split", "optional", "left_side"):
@@ -530,14 +557,20 @@ def trainer_record(
             out[k] = fields[k]
             sources[k] = fsrc
             if k == "split":
-                sources["split_order"] = fsrc
+                # The sheet position belongs to the old split: none is known for the new one.
+                out["split_order"] = None
+                sources["split_order"] = fsrc + "; no sheet position for the corrected split"
 
-    start, area = _area(t["start_condition"], overrides.area.get(tid))
+    start, area = _area(
+        t["start_condition"], overrides.area.get(tid), bare_tags(sheet.get(tid, []))
+    )
     out["start_condition"], out["area_condition"] = start, area
     where = ", ".join(map(str, sorted(src.trainer_maps.get(tid, [])))) or "none"
     sources["start_condition"] = sources["area_condition"] = (
         f"rom: map header weather through the trainer -> map join (headers {where}; "
         "data/kaizo/start_conditions.json)"
+        if where != "none" or not t["party"]
+        else "rom: no map placement found (trainer -> map join): unknown (user call)"
     )
     a = overrides.area.get(tid)
     if a is not None:
@@ -549,10 +582,29 @@ def trainer_record(
     return out
 
 
+def _header_fields(
+    cites: list[str], split_rows: dict[str, tuple[int, str, dict, dict]]
+) -> dict[str, list[tuple[str, object]]]:
+    """``optional`` and ``left_side`` as each of a trainer's sheet headers says them:
+    field -> [(cite, value)] in workbook order."""
+    out: dict[str, list[tuple[str, object]]] = {"optional": [], "left_side": []}
+    for c in cites:
+        _, _, sec, h = split_rows[c]
+        out["optional"].append((c, bool(h["tags"].get("optional") or sec["tags"].get("optional"))))
+        out["left_side"].append((c, h.get("left_side") if h.get("ai_known") else None))
+    return out
+
+
+def _cell_text(v: object) -> str:
+    return "-" if v is None else str(v).lower()
+
+
 def resolve_trainers(
     src: Sources, trainers: list[dict], check: CrossCheck, maps: Mappings, overrides: Overrides
 ) -> tuple[list[dict], list[str]]:
-    ctx = trainer_context(check, maps, overrides, src.trainer_maps, src.docs)
+    formats = {t["id"]: t["format"] for t in trainers}
+    no_map = set(unplaced_ids(src.trainers, src.trainer_maps))
+    ctx = trainer_context(check, maps, overrides, src.trainer_maps, src.docs, formats)
     sheet = _sheet_by_id(src.docs, maps)
     partner_starts = _partner_starters(trainers)
     split_rows = _split_rows(src.docs)
@@ -569,7 +621,18 @@ def resolve_trainers(
         "format unknown (user call): "
         + ", ".join(f"{t['id']} {t['name']}" for t in out if t["format"] == UNKNOWN_FORMAT),
         "start condition unknown (user call): "
-        + ", ".join(f"{t['id']} {t['name']}" for t in out if t["start_condition"] == "unknown"),
+        + ", ".join(
+            f"{t['id']} {t['name']}"
+            for t in out
+            if t["start_condition"] == "unknown" and t["id"] not in no_map
+        ),
+        f"start condition unknown, no map placement found (one user call): {len(no_map)}",
+    ]
+    lines += [
+        f"sheet headers disagree on {k}: {t['id']} {t['name']}: {t['sources'][k]}"
+        for t in out
+        for k in ("optional", "left_side")
+        if "headers disagree" in t["sources"].get(k, "")
     ]
     unplaced = [
         f"{t['id']} {t['label']}" for t in out if t["label"] is not None and t["split"] is None
@@ -594,22 +657,35 @@ def user_calls(
     """Every item only the user can settle, one line each with its evidence."""
     by_id = {t["id"]: t for t in trainers}
     two = two_placement_trick_room(src.field_effects, src.trainer_maps)
+    no_map = [
+        tid for tid in unplaced_ids(src.trainers, src.trainer_maps)
+        if by_id[tid]["start_condition"] == UNKNOWN_START
+    ]  # fmt: skip
     lines = []
 
     def name(tid: int) -> str:
         return f"{tid} {by_id[tid]['name']}"
 
     for t in trainers:
-        if t["start_condition"] == UNKNOWN_START and t["id"] not in two:
+        if t["start_condition"] == UNKNOWN_START and t["id"] not in two and t["id"] not in no_map:
             lines.append(
                 f"- start condition unknown: {name(t['id'])} (data/kaizo/start_conditions.json: "
                 "its maps start different conditions)"
             )
+    if no_map:
+        lines.append(
+            f"- no map placement found: {len(no_map)} trainers with a party that the trainer "
+            "-> map join places on no map header (rom_trainer_maps.json), so their start "
+            "condition is refused as unknown, never read as no weather; settle one with an "
+            "[area.<id>] weather entry: " + ", ".join(map(str, no_map))
+        )
     for tid, (tr, other) in sorted(two.items()):
         exc = overrides.area_exceptions.get(tid)
+        if exc is None:
+            continue  # settled by the user's answer (check_two_placement)
         lines.append(
             f"- Trick Room on one placement only: {name(tid)}: Trick Room headers {tr}, other "
-            f"headers {other}; start condition refused ({exc.source if exc else 'no exception'})"
+            f"headers {other}; start condition refused ({exc.source})"
         )
     for t in trainers:
         if t["format"] == UNKNOWN_FORMAT:
@@ -697,15 +773,17 @@ def check_extract_inputs(inter: Path, overrides: Overrides) -> None:
 def check_input_hashes(inputs: RomInputs, src: Sources) -> list[str]:
     """Re-hash the configured PKCalc zip and docs workbook against the SHA-256 their
     extracted JSON records; a mismatch raises, an input not configured or absent is a
-    report line (its JSON is used as extracted)."""
+    report line (its JSON is used as extracted). The committed report names each input by
+    its file name only, never its local path."""
     lines = []
     for what, configured, recorded in (
         ("PKCalc zip", inputs.pkcalc_zip, src.pkcalc.get("sha256")),
         ("Kaizo docs workbook", inputs.kaizo_docs, src.docs.get("sha256")),
     ):
         if configured is None or not configured.exists():
+            shown = "not configured" if configured is None else configured.name
             lines.append(
-                f"{what}: not configured or absent ({configured}); re-hash skipped, the "
+                f"{what}: not configured or absent ({shown}); re-hash skipped, the "
                 f"extracted JSON's sha256 {recorded} is used as recorded"
             )
         elif _file_sha256(configured) != recorded:
@@ -714,7 +792,7 @@ def check_input_hashes(inputs: RomInputs, src: Sources) -> list[str]:
                 f"(sha256 {recorded}); re-run its extractor"
             )
         else:
-            lines.append(f"{what}: {configured} re-hashed, matches {recorded}")
+            lines.append(f"{what}: {configured.name} re-hashed, matches {recorded}")
     return lines
 
 

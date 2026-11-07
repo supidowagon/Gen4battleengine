@@ -18,6 +18,7 @@ from tools.kaizo.overrides import (
     check_gauntlet_members,
     check_rom_trick_room,
     check_trainer_ids,
+    check_two_placement,
     draft_overrides,
     load_overrides,
 )
@@ -635,9 +636,109 @@ def test_real_mapping_with_overrides(pkcalc, kaizo_rom_trainers, species):
     assert sum(x.id is not None for x in m) >= 473
 
 
-def test_fields_format_only_unknown(tmp_path):  # K2b Task 15: two-structure trainers
+def test_fields_format_unknown_or_the_users_answer(tmp_path):  # Task 15; final review M17
     ok = '[fields.556]\nformat = "unknown"\nsource = "rom:zone events 257"\n'
     assert load_overrides(write(tmp_path, ok)).fields == {556: {"format": "unknown"}}
     bad = '[fields.556]\nformat = "double"\nsource = "rom:zone events 257"\n'
-    with pytest.raises(OverridesError, match="format may only be set"):
+    with pytest.raises(OverridesError, match="with a 'user, <date>' source"):
         load_overrides(write(tmp_path, bad))
+    user = '[fields.556]\nformat = "single"\nsource = "user, 2026-11-07"\n'
+    assert load_overrides(write(tmp_path, user)).fields == {556: {"format": "single"}}
+    pair = (
+        '[fields.556]\nformat = "double_two_trainer"\nopponent_2 = 557\n'
+        'source = "user, 2026-11-07"\n'
+    )
+    o = load_overrides(write(tmp_path, pair))
+    assert o.fields == {556: {"format": "double_two_trainer", "opponent_2": 557}}
+    assert check_trainer_ids(o, {556}) == ["fields.556: opponent_2 557 is no ROM trainer id"]
+    for text, message in (
+        (pair.replace("opponent_2 = 557\n", ""), "needs opponent_2"),
+        (user.replace('"single"', '"triple"'), "one of"),
+        (user.replace('"single"\n', '"single"\nopponent_2 = 557\n'), "opponent_2 needs format"),
+    ):
+        with pytest.raises(OverridesError, match=message):
+            load_overrides(write(tmp_path, text))
+
+
+# --- the user's answer to a two-placement Trick Room trainer (final review I5) -------------
+
+TWO_EFFECTS = [{"id": 9, "name": "Grunt", "effect": "trick_room", "map_headers": [310]}]
+TWO_MAPS = {9: [310, 337]}
+
+
+def test_area_map_header_needs_a_user_source(tmp_path):
+    user = '[area.9]\nweather = "none"\nmap_header = 337\nsource = "user, 2026-11-07"\n'
+    o = load_overrides(write(tmp_path, user))
+    assert o.area[9] == AreaOverride(False, False, "none", "user, 2026-11-07", 337)
+    assert o.area[9].user
+    with pytest.raises(OverridesError, match="map_header names a user's choice"):
+        load_overrides(write(tmp_path, user.replace("user, 2026-11-07", "rom:x")))
+    with pytest.raises(OverridesError, match="map_header must be an integer"):
+        load_overrides(write(tmp_path, user.replace("337", '"337"')))
+
+
+@pytest.mark.parametrize(
+    ("area", "exceptions", "problem"),
+    [
+        ({}, {9: AreaException("two maps", "rom:y")}, None),  # refused until answered
+        ({9: AreaOverride(False, False, "none", "user, 2026-11-07")}, {}, None),
+        ({9: AreaOverride(True, False, None, "user, 2026-11-07", 310)}, {}, None),
+        ({9: AreaOverride(False, False, "none", "user, 2026-11-07", 337)}, {}, None),
+        (
+            {9: AreaOverride(True, False, None, "rom:map header 310 weather 18 (Trick Room)")},
+            {},
+            "needs an area_exception",
+        ),
+        ({}, {}, "needs an area_exception"),
+        (
+            {9: AreaOverride(False, False, "none", "user, 2026-11-07", 310)},
+            {},
+            "map_header 310 has Trick Room, but trick_room is false",
+        ),
+        (
+            {9: AreaOverride(True, False, None, "user, 2026-11-07", 337)},
+            {},
+            "map_header 337 has no Trick Room",
+        ),
+        (
+            {9: AreaOverride(True, False, None, "user, 2026-11-07", 1)},
+            {},
+            "map_header 1 is not one of [310, 337]",
+        ),
+    ],
+)
+def test_two_placement_rule_takes_the_users_answer(area, exceptions, problem):
+    o = overrides_with(area=area, area_exceptions=exceptions)
+    got = check_two_placement(o, TWO_EFFECTS, TWO_MAPS)
+    if problem is None:
+        assert got == [] and check_rom_trick_room(o, TWO_EFFECTS) == []
+    else:
+        assert len(got) == 1 and problem in got[0]
+
+
+def _real_inputs():
+    from tools.kaizo.overrides import INTERMEDIATE
+
+    if not (INTERMEDIATE / "rom" / "rom_trainer_maps.json").exists():
+        pytest.skip("Kaizo intermediates not extracted")
+    if not (INTERMEDIATE / "docs" / "docs.json").exists():
+        pytest.skip("Kaizo docs not extracted")
+    return INTERMEDIATE
+
+
+def test_overrides_check_runs_the_two_placement_rule(tmp_path, capsys):
+    # The documented route (pipeline.md): replace [area_exception.539] with the user's
+    # [area.539]. A rom: Trick Room entry instead fails `overrides check`, as the build does.
+    from tools.kaizo.overrides import main
+
+    inter = _real_inputs()
+    text = DEFAULT_PATH.read_text(encoding="utf-8")
+    start = text.index("[area_exception.539]")
+    end = text.index("\n\n", start) + 2
+    user = '[area.539]\nweather = "none"\nmap_header = 337\nsource = "user, 2026-11-07"\n\n'
+    path = write(tmp_path, text[:start] + user + text[end:])
+    assert main(["check", "--overrides", str(path), "--intermediate", str(inter)]) == 0
+    rom = '[area.539]\ntrick_room = true\nsource = "rom:map header 310 weather 18 (Trick Room)"\n\n'
+    path = write(tmp_path, text[:start] + rom + text[end:])
+    assert main(["check", "--overrides", str(path), "--intermediate", str(inter)]) == 1
+    assert "trainer 539: Trick Room headers [310]" in capsys.readouterr().out

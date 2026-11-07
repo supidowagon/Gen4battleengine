@@ -9,7 +9,10 @@ move lists. Every entry carries ``source``: ``"<sheet>:<row>"``, ``"pkcalc:<file
 Tables (keys are ROM trainer ids unless said otherwise):
 
 - ``[area.<id>]``: ``trick_room``, ``gravity`` (bool, default false), ``weather``
-  (``rain|sun|sandstorm|hail|fog|none``; absent = the ROM-derived start condition stands).
+  (``rain|sun|sandstorm|hail|fog|none``; absent = the ROM-derived start condition stands),
+  and ``map_header`` (int, optional): the placement a user answer chose. An entry whose
+  source is ``"user, <date>"`` is the user's answer, which settles a ROM Trick Room trainer
+  in place of an ``area_exception`` (``check_rom_trick_room``, ``check_two_placement``).
 - ``[area_exception.<id>]``: ``reason``. A ROM Trick Room trainer (``rom_field_effects.json``)
   deliberately left without a ``trick_room`` override, e.g. one whose start condition the
   evidence does not settle (``data/kaizo/start_conditions.json`` ``unknown``).
@@ -17,9 +20,12 @@ Tables (keys are ROM trainer ids unless said otherwise):
   ``heal_between`` / ``change_team``, bool; empty until play reaches the group, spec 12.4).
 - ``[trainer_ids."<label or sheet cite>"]``: ``id``, read by ``trainer_map``.
 - ``[fields.<id>]``: corrections to derived fields: ``split``, ``optional``, ``left_side``,
-  ``player_starter``, and ``format`` (only ``"unknown"``: a trainer the ROM fights in two
+  ``player_starter``, and ``format``: ``"unknown"`` for a trainer the ROM fights in two
   battle structures, e.g. a scripted pair on one map and placed alone on another, which
-  one ``trainers.json`` format cannot hold; coverage refuses it, K2b Task 15).
+  one ``trainers.json`` format cannot hold (coverage refuses it, K2b Task 15); or, with a
+  ``"user, <date>"`` source only, the user's answer: a concrete format (``FORMATS``), with
+  ``opponent_2`` (the second trainer's id) for ``double_two_trainer`` (required) and
+  ``multi`` (optional).
 - ``[move_lists.<sound|punch>]``: ``ids``, for ``read_move_lists(..., override=...)``.
 
 :func:`check_citations` re-reads every sheet citation against ``docs.json``;
@@ -38,6 +44,7 @@ import sys
 import tomllib
 from collections import defaultdict
 from collections.abc import Iterable, Iterator
+from collections.abc import Mapping as MappingABC
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -64,8 +71,12 @@ FIELD_TYPES = {
     "left_side": bool,
     "player_starter": int,
     "format": str,
+    "opponent_2": int,
 }
-UNKNOWN_FORMAT = "unknown"  # the only format a [fields.<id>] entry may set
+UNKNOWN_FORMAT = "unknown"  # the format a [fields.<id>] entry sets to refuse a trainer
+# The concrete formats a user's answer may set (tools/battle_scripts.py battle structures).
+FORMATS = ("single", "double", "double_two_trainer", "multi")
+_PAIRED = ("double_two_trainer", "multi")
 # Champion Cynthia's Gravity: PKCalc's UI ticks Gravity for this label only.
 GRAVITY_LABEL = "Champion Cynthia"
 GRAVITY_SOURCE = "pkcalc:src/js/shared_controls.js:611"
@@ -91,6 +102,12 @@ class AreaOverride:
     gravity: bool
     weather: str | None
     source: str
+    map_header: int | None = None  # the placement a user answer chose (optional)
+
+    @property
+    def user(self) -> bool:
+        """Whether this entry is the user's answer (source ``"user, <date>"``)."""
+        return self.source.startswith("user, ")
 
 
 @dataclass(frozen=True)
@@ -169,7 +186,7 @@ def _area(raw: dict) -> dict[int, AreaOverride]:
     for key, t in raw.items():
         entry = f"area.{key}"
         src = _source(entry, t)
-        _keys(entry, t, ("trick_room", "gravity", "weather"))
+        _keys(entry, t, ("trick_room", "gravity", "weather", "map_header"))
         tr = _bool(entry, "trick_room", t.get("trick_room", False))
         grav = _bool(entry, "gravity", t.get("gravity", False))
         weather = t.get("weather")
@@ -177,7 +194,12 @@ def _area(raw: dict) -> dict[int, AreaOverride]:
             raise OverridesError(f"{entry}: weather {weather!r} is not one of {WEATHERS}")
         if not (tr or grav or weather is not None):
             raise OverridesError(f"{entry}: claims nothing (trick_room, gravity, weather)")
-        out[_id(entry, key)] = AreaOverride(tr, grav, weather, src)
+        header = t.get("map_header")
+        if header is not None and (not isinstance(header, int) or isinstance(header, bool)):
+            raise OverridesError(f"{entry}: map_header must be an integer")
+        if header is not None and not src.startswith("user, "):
+            raise OverridesError(f"{entry}: map_header names a user's choice ('user, <date>')")
+        out[_id(entry, key)] = AreaOverride(tr, grav, weather, src, header)
     return out
 
 
@@ -267,8 +289,17 @@ def load_overrides(path: Path = DEFAULT_PATH) -> Overrides:
                 raise OverridesError(f"{entry}: {k} must be {FIELD_TYPES[k].__name__}")
         if "player_starter" in values and values["player_starter"] not in STARTERS:
             raise OverridesError(f"{entry}: player_starter must be one of {STARTERS}")
-        if "format" in values and values["format"] != UNKNOWN_FORMAT:
-            raise OverridesError(f"{entry}: format may only be set to {UNKNOWN_FORMAT!r}")
+        fmt = values.get("format")
+        user = sources[entry].startswith("user, ")
+        if fmt is not None and fmt != UNKNOWN_FORMAT and not (user and fmt in FORMATS):
+            raise OverridesError(
+                f"{entry}: format must be {UNKNOWN_FORMAT!r}, or with a 'user, <date>' source "
+                f"one of {FORMATS}"
+            )
+        if "opponent_2" in values and fmt not in _PAIRED:
+            raise OverridesError(f"{entry}: opponent_2 needs format one of {_PAIRED}")
+        if fmt == "double_two_trainer" and "opponent_2" not in values:
+            raise OverridesError(f"{entry}: format double_two_trainer needs opponent_2")
         fields_[_id(entry, key)] = values
 
     move_lists = {}
@@ -431,12 +462,71 @@ def check_rom_trick_room(overrides: Overrides, field_effects: Iterable[dict]) ->
     for r in rows:
         tid = r["id"]
         a = overrides.area.get(tid)
-        if (a is not None and a.trick_room) or tid in overrides.area_exceptions:
+        if (a is not None and (a.trick_room or a.user)) or tid in overrides.area_exceptions:
             continue
         out.append(
             f"area.{tid}: ROM Trick Room ({r['name']}, map headers {r['map_headers']}) has no "
             "trick_room override and no area_exception"
         )
+    return out
+
+
+# Trainers the ROM trainer -> map join places on 136-137 map headers each, through scripts
+# that many map headers share (rom_trainer_maps.json; tools/rom/readers/maps.py
+# trainer_maps). Their header lists are no placement evidence, so the two-placement Trick
+# Room rule skips them.
+NOISY_MAP_JOIN = frozenset({562, 572, 581, 582, 583, 606, 676, 861, 863, 865})
+
+
+def two_placement_trick_room(
+    field_effects: Iterable[dict], trainer_maps: MappingABC[int, list[int]]
+) -> dict[int, tuple[list[int], list[int]]]:
+    """Trainer id -> (its Trick Room headers, its other headers) for every ROM Trick Room
+    trainer (map weather 18) the trainer -> map join also places on a header without Trick
+    Room, ``NOISY_MAP_JOIN`` excepted. Which fight is meant is a user call (the
+    Rosalind/Puck/Kari precedent): ``check_two_placement``."""
+    out = {}
+    for r in field_effects:
+        if r["effect"] != "trick_room" or r["id"] in NOISY_MAP_JOIN:
+            continue
+        other = sorted(set(trainer_maps.get(r["id"], ())) - set(r["map_headers"]))
+        if other:
+            out[r["id"]] = (list(r["map_headers"]), other)
+    return out
+
+
+def check_two_placement(
+    overrides: Overrides,
+    field_effects: Iterable[dict],
+    trainer_maps: MappingABC[int, list[int]],
+) -> list[str]:
+    """Every two-placement Trick Room trainer (``two_placement_trick_room``) needs either an
+    ``area_exception`` (refused until the user answers) or the user's answer: an ``area``
+    entry with source ``"user, <date>"``. A ``rom:`` or sheet Trick Room entry cannot settle
+    it: the ROM holds both placements. An answer naming ``map_header`` must name one of the
+    trainer's placements, with ``trick_room`` true exactly when that header has Trick Room."""
+    out = []
+    two = two_placement_trick_room(field_effects, trainer_maps)
+    for tid, (tr, other) in sorted(two.items()):
+        if tid in overrides.area_exceptions:
+            continue
+        a = overrides.area.get(tid)
+        if a is None or not a.user:
+            out.append(
+                f"trainer {tid}: Trick Room headers {tr} and other headers {other}; needs an "
+                "area_exception (the fight meant is a user call) or the user's answer as an "
+                "area entry with source 'user, <date>', not a rom: or sheet trick_room entry"
+            )
+        elif a.map_header is None:
+            continue
+        elif a.map_header not in (*tr, *other):
+            out.append(f"area.{tid}: map_header {a.map_header} is not one of {tr + other}")
+        elif a.trick_room != (a.map_header in tr):
+            has = "has" if a.map_header in tr else "has no"
+            out.append(
+                f"area.{tid}: map_header {a.map_header} {has} Trick Room, but trick_room is "
+                f"{str(a.trick_room).lower()}"
+            )
     return out
 
 
@@ -453,6 +543,9 @@ def check_trainer_ids(overrides: Overrides, rom_ids: set[int]) -> list[str]:
         out += [
             f"gauntlet {g.name!r}: {i} is no ROM trainer id" for i in g.trainers if i not in rom_ids
         ]
+    for tid, values in overrides.fields.items():
+        if "opponent_2" in values and values["opponent_2"] not in rom_ids:
+            out.append(f"fields.{tid}: opponent_2 {values['opponent_2']} is no ROM trainer id")
     return out
 
 
@@ -820,13 +913,14 @@ def _read(path: Path):
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def _inputs(inter: Path) -> tuple[dict, dict, list, list, list]:
+def _inputs(inter: Path) -> tuple[dict, dict, list, list, list, dict]:
     paths = (
         inter / "docs" / "docs.json",
         inter / "pkcalc" / "pkcalc.json",
         inter / "rom" / "trainers.json",
         inter / "rom" / "species.json",
         inter / "rom" / "rom_field_effects.json",
+        inter / "rom" / "rom_trainer_maps.json",
     )
     missing = [str(p) for p in paths if not p.exists()]
     if missing:
@@ -842,7 +936,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--out", type=Path, default=DRAFT_PATH, help="draft output")
     args = ap.parse_args(argv)
     try:
-        docs, pkcalc, rom_trainers, species, effects = _inputs(args.intermediate)
+        docs, pkcalc, rom_trainers, species, effects, where = _inputs(args.intermediate)
         o = load_overrides(args.overrides)
         m = build_mappings(pkcalc["trainers"], docs, rom_trainers, species, effects, o.trainer_ids)
     except (FileNotFoundError, OverridesError, MappingError) as e:
@@ -856,6 +950,7 @@ def main(argv: list[str] | None = None) -> int:
     problems = (
         check_citations(o, docs)
         + check_rom_trick_room(o, effects)
+        + check_two_placement(o, effects, {int(k): v for k, v in where.items()})
         + check_gauntlet_members(o, docs, m.sheet)
         + check_trainer_ids(o, {t["id"] for t in rom_trainers})
     )

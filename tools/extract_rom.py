@@ -17,7 +17,9 @@ key, ``[module, symbol-or-range]``, so the build counts a key ``rom_diff.toml`` 
 unknown; a stale ``[[code]]`` entry raises here) and ``rom_trainer_maps.json`` (trainer id ->
 the map headers of the trainer -> map join, for Task 13's sight pairs); the CLI appends an
 explicit ``unknown`` ``[[member]]`` entry to ``data/kaizo/rom_diff.toml`` for each changed
-member it lacks.
+member it lacks. ``rom_sources.json`` also records, under ``inputs_sha256``, the hashes of
+the committed inputs only this extraction reads (``kaizo_input_hashes``), so the build can
+refuse intermediates older than an edit to them.
 
 Battle command operands that are variables no constant reaches on some walked script path
 (``tools.rom.readers.maps.UnresolvedOperand``) place no trainer; each is printed to stderr

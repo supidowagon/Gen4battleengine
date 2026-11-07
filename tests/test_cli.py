@@ -1221,12 +1221,12 @@ def test_renamed_slot_lookup_is_one_error_line(capsys, kaizo_tables, kaizo_names
 
 def test_kaizo_prep_refusal_exits_2_before_the_cap(
     tmp_path, monkeypatch, capsys, kaizo_tables, kaizo_names, kaizo_save_pre_roark_path
-):  # M8: Mickey (5) has no split, so default_cap would raise "pass --cap" (exit 1)
+):  # M8: Martha (51) is placed on a map but has no split, so default_cap would raise "pass --cap" (exit 1)
     from nuzline import cli
 
     monkeypatch.setattr(cli, "RUNS", tmp_path / "runs")
     path = str(kaizo_save_pre_roark_path)
-    args = ["prep", "--game", "kaizo", "--save", path, "--trainer-id", "5", "--devices", "1"]
+    args = ["prep", "--game", "kaizo", "--save", path, "--trainer-id", "51", "--devices", "1"]
     assert main(args) == 2
     out = capsys.readouterr().out
     assert "Support: NONE" in out and "no transcribed AI policy" in out
@@ -1236,15 +1236,15 @@ def test_kaizo_prep_refusal_exits_2_before_the_cap(
 def test_kaizo_pool_cap_is_never_defaulted(
     capsys, kaizo_tables, kaizo_names, kaizo_save_pre_roark_path
 ):
-    # M9: Mickey (5) has no split, so there is no cap; the pool is not shown at the party max.
+    # M9: Martha (51) is placed on a map but has no split, so there is no cap; the pool is not shown at the party max.
     path = str(kaizo_save_pre_roark_path)
-    assert main(["coverage", "--game", "kaizo", "--save", path, "--trainer-id", "5"]) == 2
+    assert main(["coverage", "--game", "kaizo", "--save", path, "--trainer-id", "51"]) == 2
     captured = capsys.readouterr()
     assert "Pool at level cap" not in captured.out
     assert "nuzline: error: pool left out: no level cap for" in captured.err
     assert "--cap" in captured.err
     assert (
-        main(["coverage", "--game", "kaizo", "--save", path, "--trainer-id", "5", "--cap", "12"])
+        main(["coverage", "--game", "kaizo", "--save", path, "--trainer-id", "51", "--cap", "12"])
         == 2
     )
     assert "Pool at level cap 12" in capsys.readouterr().out
