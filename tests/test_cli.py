@@ -1087,17 +1087,64 @@ BARRYS = [
 
 
 def test_bare_rival_name_needs_a_save():
-    # Two different Barry fights: no single fight's variants, still never guessed (I2).
-    with pytest.raises(ValueError, match=r"247, 249, 470, 472.*--save or --trainer-id"):
-        resolve_trainer(BARRYS, name="barry")
-    assert resolve_trainer(BARRYS, name="barry", player_starter=390).id == 249
+    # One fight's variants without a save: never guessed (fix round 1, I2).
+    with pytest.raises(ValueError, match=r"470, 472.*--save or --trainer-id"):
+        resolve_trainer(BARRYS, name="barry #3")
     assert resolve_trainer(BARRYS, name="barry #3", player_starter=390).id == 472
     assert resolve_trainer(BARRYS, trainer_id=470).id == 470
 
 
+@pytest.mark.parametrize("starter", [None, 390])
+def test_rival_name_of_several_fights_must_name_the_fight(starter):
+    # Fix round 2: "barry" is Barry #2 and Barry #3, with or without a save.
+    fights = "Pok\xe9mon Trainer Barry #2; Pok\xe9mon Trainer Barry #3"
+    with pytest.raises(ValueError, match=rf"2 rival fights: {fights}.*--trainer-id") as e:
+        resolve_trainer(BARRYS, name="barry", player_starter=starter)
+    assert "--trainer 'Pok\xe9mon Trainer Barry #3'" in str(e.value)
+    # A non-rival name still takes the first match (ruling #39).
+    grunts = [kt("Galactic Grunt Ann", id=1), kt("Galactic Grunt Bob", id=2)]
+    assert resolve_trainer(grunts, name="grunt", player_starter=starter).id == 1
+
+
+def test_rival_fights_with_a_save_on_the_command_line(tmp_path, monkeypatch, tables, names, capsys):
+    from nuzline.saves.layout import VAR_PLAYER_STARTER_INDEX
+    from tests.saves.synthetic import party_record
+    from tests.saves.writer import build_image
+
+    vanilla = games.GAMES[games.VANILLA]
+    inter = tmp_path / "inter"
+    inter.mkdir()
+    (inter / "items.json").write_bytes((vanilla.intermediate_dir / "items.json").read_bytes())
+    write_trainers(inter, BARRYS)
+    monkeypatch.setitem(games.GAMES, games.VANILLA, Game(games.VANILLA, vanilla.tables_dir, inter))
+    save = tmp_path / "s.sav"
+    party = [party_record(tables, names, "Prinplup", 14, ("Pound", "Bubble"))]
+    save.write_bytes(build_image(party=party, vars={VAR_PLAYER_STARTER_INDEX: 390}))
+    args = ["coverage", "--save", str(save), "--trainer"]
+    assert main([*args, "barry"]) == 1
+    err = capsys.readouterr().err
+    assert "2 rival fights: Pok\\xe9mon Trainer Barry #2; Pok\\xe9mon Trainer Barry #3" in err
+    assert err.isascii()
+    # "barry #3" with the save: the save's starter picks Empoleon's team (472). The spy
+    # stops the command there (the synthetic trainers have no party to fight).
+    from nuzline import cli
+
+    seen = []
+    resolve = cli.resolve_trainer
+
+    def spy(*a, **k):
+        seen.append(resolve(*a, **k))
+        raise ValueError("stop after resolution")
+
+    monkeypatch.setattr(cli, "resolve_trainer", spy)
+    assert main([*args, "barry #3"]) == 1
+    assert "stop after resolution" in capsys.readouterr().err
+    assert [t.id for t in seen] == [472]
+
+
 def test_rival_without_the_saves_starter_names_it():
-    with pytest.raises(ValueError, match=r"starter \(species 387\).*247, 249, 470, 472"):
-        resolve_trainer(BARRYS, name="barry", player_starter=387)
+    with pytest.raises(ValueError, match=r"starter \(species 387\).*470, 472"):
+        resolve_trainer(BARRYS, name="barry #3", player_starter=387)
 
 
 def test_trainers_output_is_ascii(tmp_path, monkeypatch, capsys):

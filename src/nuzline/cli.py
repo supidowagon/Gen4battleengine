@@ -152,13 +152,17 @@ class _Refused(Exception):
         self.trainer, self.report = trainer, report
 
 
-def _variant_key(t: Trainer) -> str:
+def _fight_name(t: Trainer) -> str:
     """The fight a starter variant belongs to: its label without the trailing
     ``[Starter]`` (labels like "Pokemon Trainer Barry #3 [Empoleon]")."""
     label = (t.label or t.name).strip()
     if label.endswith("]") and "[" in label:
         label = label[: label.rindex("[")]
-    return label.strip().lower()
+    return label.strip()
+
+
+def _variant_key(t: Trainer) -> str:
+    return _fight_name(t).lower()
 
 
 def resolve_trainer(
@@ -185,6 +189,14 @@ def resolve_trainer(
         matches = [t for t in trainers if t.label is not None and key in t.label.lower()]
     if not matches:
         raise ValueError(f"no trainer named {name!r} (see `nuzline trainers`)")
+    # Starter-variant trainers of several fights (Barry #2 and #3): never guess the fight,
+    # with or without a save (fix round 2). Other names keep the first match (ruling #39).
+    fights = list(dict.fromkeys(_fight_name(t) for t in matches if t.player_starter is not None))
+    if len(fights) > 1:
+        raise ValueError(
+            f"{name!r} matches {len(fights)} rival fights: {'; '.join(fights)}; pass the "
+            f"fight's name (e.g. --trainer {fights[-1]!r}) or --trainer-id"
+        )
     if player_starter is not None:
         kept = [t for t in matches if t.player_starter in (None, player_starter)]
         if not kept:
@@ -817,7 +829,7 @@ def _prep(args) -> int:
         prestatus=args.prestatus,
     )
     for line in warnings:
-        print(line, file=sys.stderr)
+        print(ascii_text(line), file=sys.stderr)
     limit = MAX_TEAM_SETUPS if args.max_setups is None else args.max_setups
     check_team_space(len(problem.candidates), settings.max_team, limit)
     print(_trainer_line(trainer))
