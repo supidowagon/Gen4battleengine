@@ -353,3 +353,29 @@ def test_no_routine_with_data_builds(inter):
     party = tuple(replace(m, nature=3, gender=1, ability_slot=0) for m in t.party)
     built = build_trainer_party(replace(t, party=party), inter)
     assert [(m.nature, m.gender, m.ability_slot) for m in built] == [(3, 1, 0)] * len(party)
+
+
+def test_ability_override_without_set_data_raises(inter):  # review I1
+    roark = roark_trainer()
+    assert roark.pid_routine == "vanilla"
+    override = replace(roark.party[0], ability_override=16, nature=3, gender=0)
+    with pytest.raises(ValueError, match="trainer 246 slot 0: no nature/gender/ability data"):
+        build_trainer_party(replace(roark, party=(override,)), inter)
+    full = replace(override, ability_slot=1)
+    built = build_trainer_party(replace(roark, party=(full,)), inter)[0]
+    assert (built.nature, built.gender, built.ability_slot) == (3, 0, 1)
+
+
+@pytest.mark.parametrize("key", ["gauntlet", "split_order"])
+def test_pair_fields_must_be_pairs(tmp_path, key):
+    with pytest.raises(ValueError, match=f"trainer 7: {key} .* is not a pair"):
+        _write(tmp_path, [_kaizo_row(**{key: ["Oreburgh Gym", 2, 3]})])
+
+
+def test_vanilla_area_conditions_pinned(trainers):
+    # Map weather (tools/extract_decomp.py _start_condition): Juan in rain, Keegan in a
+    # sandstorm, Blake in hail, Ernest in fog.
+    assert trainers[91].area_condition == AreaCondition(weather="rain")
+    assert trainers[559].area_condition == AreaCondition(weather="sandstorm")
+    assert trainers[132].area_condition == AreaCondition(weather="hail")
+    assert trainers[66].area_condition == AreaCondition(fog=True)

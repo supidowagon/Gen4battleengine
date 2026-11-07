@@ -180,6 +180,11 @@ def start_weather(trainer: Trainer) -> Weather:
     """The weather a trainer's fight starts in (``Trainer.start_condition``). A start
     condition of ``"unknown"`` (a user call) is no weather: ``ValueError``, like any
     other unknown value; ``check_opponent`` refuses it instead."""
+    if trainer.start_condition == UNKNOWN_CONDITION:
+        raise ValueError(
+            f"trainer {trainer.id}: start condition unknown is a pending user call, not a "
+            "weather; coverage refuses it (check_opponent)"
+        )
     try:
         return START_CONDITIONS[trainer.start_condition]
     except KeyError:

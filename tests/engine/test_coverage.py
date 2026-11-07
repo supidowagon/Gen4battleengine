@@ -341,7 +341,10 @@ def test_missing_pkcalc_set_refused(tables, names):  # preflight ruling #34
     t = replace(roark_trainer(), pid_routine=None)
     report = check_opponent(tables, names, t, roark_party(names), 0)
     for k in range(len(t.party)):
-        line = f"Roark slot {k}: nature/gender/ability unknown (no PKCalc set) (trainer data UNSUPPORTED)"
+        line = (
+            f"Roark slot {k}: nature/gender/ability unknown (no PKCalc set) "
+            "(trainer data UNSUPPORTED)"
+        )
         assert line in report.missing
     full = replace(t.party[0], nature=3, gender=0, ability_slot=0)
     t = replace(t, party=(full, *t.party[1:]))
@@ -372,7 +375,7 @@ def test_unknown_start_condition_refused_not_read_as_weather(tables, names):
     report = check_opponent(tables, names, t, roark_party(names), 0)
     assert line in report.missing
     assert not any("(weather UNSUPPORTED)" in m for m in report.missing)
-    with pytest.raises(ValueError, match="unknown"):
+    with pytest.raises(ValueError, match="pending user call, not a weather; coverage refuses"):
         start_weather(t)
     area_only = with_area(roark_trainer(), weather="unknown")
     assert line in check_opponent(tables, names, area_only, roark_party(names), 0).missing
@@ -386,3 +389,17 @@ def test_area_weather_keeps_the_weather_refusal(tables, names):
     ):
         t = replace(roark_trainer(), start_condition=cond)
         assert line in check_opponent(tables, names, t, roark_party(names), 0).missing
+
+
+def test_ability_override_without_set_data_refused(tables, names):  # review I1
+    roark = roark_trainer()
+    assert roark.pid_routine == "vanilla"
+    t = replace(roark, party=(replace(roark.party[0], ability_override=16), *roark.party[1:]))
+    report = check_opponent(tables, names, t, roark_party(names), 0)
+    line = "Roark slot 0: nature/gender/ability unknown (no PKCalc set) (trainer data UNSUPPORTED)"
+    assert line in report.missing
+    assert not any(m.startswith("Roark slot 1:") for m in report.missing)
+    full = replace(t.party[0], nature=3, gender=0, ability_slot=1)
+    t = replace(t, party=(full, *t.party[1:]))
+    report = check_opponent(tables, names, t, roark_party(names), 0)
+    assert not any("no PKCalc set" in m for m in report.missing)

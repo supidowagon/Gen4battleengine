@@ -70,7 +70,8 @@ class TrainerMon:
     gender: int | None = None
     ability_slot: int | None = None
     # Kaizo's per-Pokemon Ability Number byte (16: ability slot 1, 32: slot 2, 2: female;
-    # spec 5.4); 0 in vanilla. Recorded only: the patched routine is not transcribed.
+    # spec 5.4); 0 in vanilla. The patched routine is not transcribed, so a member with a
+    # non-zero override needs explicit nature, gender and ability slot (missing_set_data).
     ability_override: int = 0
     friendship: int | None = None  # None: the species' base friendship
 
@@ -142,7 +143,10 @@ class Trainer:
     recorded); ``optional`` and ``left_side`` (the split's Left Side AI) come from the
     spreadsheet; ``area_condition`` is what the fight starts with (built from
     ``start_condition`` when the JSON has none); ``split`` and ``split_order`` (split
-    index, line) place the fight in the level-cap splits; ``sources`` cites each field."""
+    index, line) place the fight in the level-cap splits; ``sources`` cites each field.
+
+    A ``Trainer`` is unhashable: ``gauntlet_rules`` and ``sources`` are dicts, so the
+    derived ``__hash__`` raises ``TypeError``; key caches by ``Trainer.id``."""
 
     id: int
     name: str
@@ -193,8 +197,13 @@ def _area(t: dict) -> AreaCondition:
     return AreaCondition(**area)
 
 
-def _pair(value):
-    return None if value is None else tuple(value)
+def _pair(t: dict, key: str):
+    value = t.get(key)
+    if value is None:
+        return None
+    if len(value) != 2:
+        raise ValueError(f"trainer {t['id']}: {key} {value!r} is not a pair")
+    return tuple(value)
 
 
 def _read(dir: Path, name: str):
@@ -231,13 +240,13 @@ def load_trainers(dir: Path) -> list[Trainer]:
             label=t.get("label"),
             pid_routine=t.get("pid_routine", "vanilla"),
             player_starter=t.get("player_starter"),
-            gauntlet=_pair(t.get("gauntlet")),
+            gauntlet=_pair(t, "gauntlet"),
             gauntlet_rules=dict(t.get("gauntlet_rules", {})),
             optional=t.get("optional", False),
             left_side=t.get("left_side", False),
             area_condition=_area(t),
             split=t.get("split"),
-            split_order=_pair(t.get("split_order")),
+            split_order=_pair(t, "split_order"),
             sources=dict(t.get("sources", {})),
         )
         for t in rows
@@ -311,21 +320,22 @@ def default_moves(learnset: Sequence[tuple[int, int]], level: int) -> tuple[int,
 
 
 def missing_set_data(trainer: Trainer) -> list[int]:
-    """The party slots ``build_trainer_party`` cannot build: with no PID routine
-    (``pid_routine`` None), a member lacking an explicit nature, gender or ability slot."""
-    if trainer.pid_routine is not None:
-        return []
+    """The party slots ``build_trainer_party`` cannot build: a member lacking an explicit
+    nature, gender or ability slot when the trainer has no PID routine (``pid_routine``
+    None) or the member has a Kaizo ``ability_override`` (untranscribed routine)."""
     return [
         k
         for k, mon in enumerate(trainer.party)
-        if None in (mon.nature, mon.gender, mon.ability_slot)
+        if (trainer.pid_routine is None or mon.ability_override != 0)
+        and None in (mon.nature, mon.gender, mon.ability_slot)
     ]
 
 
 def build_trainer_party(trainer: Trainer, inter: IntermediateData) -> list[PokemonSpec]:
     """The trainer's battle party. Explicit ``TrainerMon`` nature, gender, ability slot and
     friendship win; the rest follows the vanilla routine. With ``pid_routine`` None a
-    member without all three of nature, gender and ability slot is a ``ValueError``."""
+    member without all three of nature, gender and ability slot is a ``ValueError``, as
+    is one with a non-zero ``ability_override`` (``missing_set_data``)."""
     missing = missing_set_data(trainer)
     if missing:
         raise ValueError(f"trainer {trainer.id} slot {missing[0]}: no nature/gender/ability data")
