@@ -631,3 +631,11 @@ def test_committed_rules_unset():
 def test_real_mapping_with_overrides(pkcalc, kaizo_rom_trainers, species):
     m = map_trainers(pkcalc["trainers"], kaizo_rom_trainers, species, load_overrides().trainer_ids)
     assert sum(x.id is not None for x in m) >= 473
+
+
+def test_fields_format_only_unknown(tmp_path):  # K2b Task 15: two-structure trainers
+    ok = '[fields.556]\nformat = "unknown"\nsource = "rom:zone events 257"\n'
+    assert load_overrides(write(tmp_path, ok)).fields == {556: {"format": "unknown"}}
+    bad = '[fields.556]\nformat = "double"\nsource = "rom:zone events 257"\n'
+    with pytest.raises(OverridesError, match="format may only be set"):
+        load_overrides(write(tmp_path, bad))

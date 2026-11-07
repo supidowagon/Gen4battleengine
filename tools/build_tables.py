@@ -29,9 +29,12 @@ Encodings:
 * ``move_ai_effect[move]``: the decomp battle effect id as stored (``MoveTable.effect``),
   unmapped, which is what the AI scripts read; ``move_effect`` is the engine's mapped id.
 * A ``SECONDARY_*`` move that is not in ``CERTAIN_SECONDARY_EFFECTS`` and has
-  ``effect_chance`` 0 never fires its proc, so ``move_effect`` packs it as ``PLAIN`` with
-  params ``(0, 0, 0)`` (``move_effect_chance`` stays 0, ``move_ai_effect`` keeps the id). A
-  certain effect with a nonzero chance is a ``BuildError``.
+  ``effect_chance`` 0 never fires its proc (K2b Ruling 21), so ``move_effect`` packs it as
+  ``PLAIN`` with params ``(0, 0, 0)`` when the mapped params carry nothing beyond the
+  secondary (``params[2]``, e.g. effect 125's ``thaws_user``, is 0), else ``UNSUPPORTED``
+  (``move_effect_chance`` stays 0, ``move_ai_effect`` keeps the id); the Kaizo manifest lists
+  those moves as ``no_secondary_moves``. A certain effect with a nonzero chance is a
+  ``BuildError``.
 * Every ``species_*`` array has one row per personal row: species ids ``0..495``, then
   the data forms ``496..507`` (``forms.json``, Ruling 6). ``species_form_row[species,
   form]`` (int16[496, 28]) is the personal row of a form (``form_rows.json``; the species
@@ -43,6 +46,17 @@ Encodings:
   ``ABILITY_NONE``), next to ``species_abilities``' engine ids, so the trainer AI can
   name abilities the engine does not implement.
 
+Kaizo (``--game kaizo``, K2b Task 15): ``tools.kaizo.resolve.resolve`` first cross-checks
+the sources and writes the resolved ``data/intermediate_kaizo/*.json`` (and
+``docs/kaizo/discrepancies.md``; exit 1 on an unresolved or stale row), then the same packing
+runs with three Kaizo rules: an item maps to its ``ItemId``/``TrainerItemId`` only when the
+slot keeps its vanilla name (up to spelling) and vanilla's hold effect, else ``UNSUPPORTED``
+(Shoal Salt -> Berserk Gene, Lava Cookie as a Lum clone); a move whose battle effect script
+(``be_seq`` member = effect id) changed is ``UNSUPPORTED`` unless ``rom_diff.toml`` marks the
+member ``modelled`` (Ruling 13; manifest ``changed_effects``); and the manifest gains the
+provenance hashes, ``aliases``, ``renamed``, ``no_secondary_moves`` and
+``unclassified_rom_changes`` (the ``unknown`` ``[[code]]`` and ``[[member]]`` entries).
+
 CLI: ``uv run python -m tools.build_tables [--game vanilla|kaizo]`` (default vanilla: reads
 ``data/intermediate``, writes ``data/gen4_platinum``)
 """
@@ -52,11 +66,12 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import sys
 from pathlib import Path
 
 import numpy as np
 
-from nuzline.data.games import get_game
+from nuzline.data.games import GAMES, KAIZO, VANILLA, get_game
 from nuzline.data.tables import MANIFEST_VERSION
 from nuzline.engine.ids import AbilityId, EffectId, ItemId, MoveFlag, MoveTarget, TrainerItemId
 from tools.effect_map import (
@@ -72,6 +87,8 @@ from tools.effect_map import (
 NUM_TMS = 92
 NUM_HMS = 8
 CLONE_SCRIPT = Path(__file__).with_name("clone_decomp.sh")
+ROM_DIFF = Path(__file__).resolve().parents[1] / "data" / "kaizo" / "rom_diff.toml"
+BE_SEQ = "battle/skill/be_seq.narc"  # member index = battle effect id (Ruling 13)
 
 # generated/move_classes.txt order.
 MOVE_CATEGORIES = ("PHYSICAL", "SPECIAL", "STATUS")
@@ -119,8 +136,21 @@ def _move_flags(move: dict, move_id: int, lists: dict[str, list[int]]) -> int:
     return int(bits)
 
 
-def _move_effect(move: dict) -> tuple[int, tuple[int, int, int]]:
-    if move["name"] in UNSUPPORTED_MOVES:
+def _no_secondary(move: dict) -> bool:
+    """A mapped ``SECONDARY_*`` effect outside ``CERTAIN_SECONDARY_EFFECTS`` with chance 0:
+    its proc never fires (Ruling 21)."""
+    eid, _ = DECOMP_EFFECT_TO_ID.get(move["effect"], (EffectId.UNSUPPORTED, (0, 0, 0)))
+    return (
+        eid in SECONDARY
+        and move["effect"] not in CERTAIN_SECONDARY_EFFECTS
+        and move["effect_chance"] == 0
+    )
+
+
+def _move_effect(
+    move: dict, changed_effects: frozenset[int] = frozenset()
+) -> tuple[int, tuple[int, int, int]]:
+    if move["name"] in UNSUPPORTED_MOVES or move["effect"] in changed_effects:
         return int(EffectId.UNSUPPORTED), (0, 0, 0)
     eid, params = DECOMP_EFFECT_TO_ID.get(move["effect"], (EffectId.UNSUPPORTED, (0, 0, 0)))
     if eid in SECONDARY:
@@ -131,7 +161,11 @@ def _move_effect(move: dict) -> tuple[int, tuple[int, int, int]]:
                 f"but effect_chance={move['effect_chance']}"
             )
         if not certain and move["effect_chance"] == 0:
-            return int(EffectId.PLAIN), (0, 0, 0)  # the proc never fires
+            # The proc never fires; params beyond the secondary (effect 125's thaws_user)
+            # would still act, which PLAIN cannot say.
+            if params[2] != 0:
+                return int(EffectId.UNSUPPORTED), (0, 0, 0)
+            return int(EffectId.PLAIN), (0, 0, 0)
     if move["name"] in TYPE_CHART_STATUS_MOVES:
         if eid != EffectId.STATUS_FOE:
             raise BuildError(f"move {move['name']!r}: type-checked but not STATUS_FOE")
@@ -176,7 +210,51 @@ def _form_names(species: list[dict], forms: list[dict]) -> dict[str, list[str]]:
     return out
 
 
+def _item_maps(items: list[dict], vanilla: list[dict] | None) -> tuple[list[int], list[int]]:
+    """``(ItemId, TrainerItemId)`` per item. Vanilla: by name. Kaizo (``vanilla`` given):
+    by the slot's vanilla name, only when the slot keeps that name (up to spelling) and
+    vanilla's hold effect; a renamed or re-purposed item is ``UNSUPPORTED``."""
+    if vanilla is None:
+        hold = [int(DECOMP_ITEM_TO_ID.get(i["name"], ItemId.UNSUPPORTED)) for i in items]
+        bag = [
+            int(DECOMP_TRAINER_ITEM_TO_ID.get(i["name"], TrainerItemId.UNSUPPORTED)) for i in items
+        ]
+        return hold, bag
+    from tools.kaizo.resolve import spelling
+
+    if len(vanilla) != len(items):
+        raise BuildError(f"items: {len(items)} rows, vanilla has {len(vanilla)}")
+    hold, bag = [], []
+    for item, van in zip(items, vanilla, strict=True):
+        same = (
+            spelling(item["name"]) == spelling(van["name"])
+            and item["hold_effect"] == van["hold_effect"]
+        )
+        hold.append(int(DECOMP_ITEM_TO_ID.get(van["name"], ItemId.UNSUPPORTED) if same else 0))
+        bag.append(int(DECOMP_TRAINER_ITEM_TO_ID.get(van["name"], TrainerItemId.UNSUPPORTED)))
+        if not same:
+            hold[-1], bag[-1] = int(ItemId.UNSUPPORTED), int(TrainerItemId.UNSUPPORTED)
+    return hold, bag
+
+
+def _kaizo_rom_changes(inter: Path) -> tuple[frozenset[int], int]:
+    """(effect ids whose ``be_seq`` member changed and is not ``modelled``, the count of
+    ``unknown`` ``[[code]]`` and ``[[member]]`` entries in ``rom_diff.toml``)."""
+    from tools.rom.diff import load_classification, load_member_classification
+
+    changed = _load(inter / "rom", "changed_scripts")
+    members = load_member_classification(ROM_DIFF, changed)
+    code = load_classification(ROM_DIFF)
+    effects = frozenset(
+        i for (narc, i), (status, _) in members.items() if narc == BE_SEQ and status != "modelled"
+    )
+    unknown = sum(st == "unknown" for st, _ in code.values())
+    unknown += sum(st == "unknown" for st, _ in members.values())
+    return effects, unknown
+
+
 def build_arrays(inter: Path, game: str = "platinum_us") -> tuple[dict[str, np.ndarray], dict]:
+    kaizo = game == KAIZO
     species_only = _load(inter, "species")
     forms = _load(inter, "forms")
     form_rows = _load(inter, "form_rows")
@@ -206,6 +284,8 @@ def build_arrays(inter: Path, game: str = "platinum_us") -> tuple[dict[str, np.n
             raise BuildError(f"item {first_tm_item + n} is {item['name']!r}, expected {want}")
         tm_moves.append(item["teaches_move"])
 
+    vanilla_items = _load(GAMES[VANILLA].intermediate_dir, "items") if kaizo else None
+    changed_effects, unclassified = _kaizo_rom_changes(inter) if kaizo else (frozenset(), 0)
     move_names = {m["name"] for m in moves}
     missing = sorted((UNSUPPORTED_MOVES | TYPE_CHART_STATUS_MOVES) - move_names)
     if missing:
@@ -214,7 +294,8 @@ def build_arrays(inter: Path, game: str = "platinum_us") -> tuple[dict[str, np.n
     ability_ids = [int(DECOMP_ABILITY_TO_ID.get(n, AbilityId.UNSUPPORTED)) for n in ability_names]
     unknown = sorted(set(DECOMP_ABILITY_TO_ID) - set(ability_names))
     unknown += sorted(
-        (set(DECOMP_ITEM_TO_ID) | set(DECOMP_TRAINER_ITEM_TO_ID)) - {i["name"] for i in items}
+        (set(DECOMP_ITEM_TO_ID) | set(DECOMP_TRAINER_ITEM_TO_ID))
+        - {i["name"] for i in (vanilla_items or items)}
     )
     if unknown:
         raise BuildError(f"effect_map names absent from the data: {unknown}")
@@ -240,11 +321,8 @@ def build_arrays(inter: Path, game: str = "platinum_us") -> tuple[dict[str, np.n
             nature_mods[i, n["up"]] += 1
             nature_mods[i, n["down"]] -= 1
 
-    effects = [_move_effect(m) for m in moves]
-    item_ids = [int(DECOMP_ITEM_TO_ID.get(i["name"], ItemId.UNSUPPORTED)) for i in items]
-    trainer_item_ids = [
-        int(DECOMP_TRAINER_ITEM_TO_ID.get(i["name"], TrainerItemId.UNSUPPORTED)) for i in items
-    ]
+    effects = [_move_effect(m, changed_effects) for m in moves]
+    item_ids, trainer_item_ids = _item_maps(items, vanilla_items)
     supported_item = [e not in (ItemId.UNSUPPORTED, ItemId.NONE) for e in item_ids]
 
     arrays = {
@@ -336,6 +414,20 @@ def build_arrays(inter: Path, game: str = "platinum_us") -> tuple[dict[str, np.n
         "tutor_moves": tutor_moves,
         "tutor_learnsets": tutor_learnsets,
     }
+    if kaizo:
+        meta = _load(inter, "kaizo")
+        manifest.update(meta["provenance"])
+        manifest["aliases"] = meta["aliases"]
+        manifest["renamed"] = _load(inter, "renamed")
+        # Effect ids made UNSUPPORTED by Ruling 13 (changed be_seq members, not modelled).
+        manifest["changed_effects"] = sorted(changed_effects)
+        # Moves whose chance-0 secondary never fires (Ruling 21).
+        manifest["no_secondary_moves"] = [
+            i
+            for i, m in enumerate(moves)
+            if m["effect"] not in changed_effects and _no_secondary(m)
+        ]
+        manifest["unclassified_rom_changes"] = unclassified
     return arrays, manifest
 
 
@@ -351,15 +443,29 @@ def build(intermediate_dir: Path, out_dir: Path, game: str = "platinum_us") -> N
     )
 
 
-def main(argv: list[str] | None = None) -> None:
+def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--game", default="vanilla", help="vanilla or kaizo (or a full game id)")
     p.add_argument("--inter", type=Path, help="default: the game's intermediate_dir")
     p.add_argument("--out", type=Path, help="default: the game's tables_dir")
     args = p.parse_args(argv)
     game = get_game(args.game)
-    build(args.inter or game.intermediate_dir, args.out or game.tables_dir, game.id)
+    inter = args.inter or game.intermediate_dir
+    if game.id == KAIZO:
+        from tools.kaizo.crosscheck import DEFAULT_REPORT, CrossCheckError
+        from tools.kaizo.resolve import ResolveError, resolve
+        from tools.rom.inputs import RomInputError, load_inputs
+
+        try:
+            resolve(load_inputs(), inter)
+        except (CrossCheckError, ResolveError, RomInputError, FileNotFoundError) as e:
+            text = str(e).encode("ascii", "backslashreplace").decode("ascii")
+            print(f"error: {text}", file=sys.stderr)
+            print(f"report: {DEFAULT_REPORT}", file=sys.stderr)
+            return 1
+    build(inter, args.out or game.tables_dir, game.id)
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

@@ -676,11 +676,11 @@ def pid_section(
     ]
 
 
-def _carry_over_party(t: dict, species: dict[str, Any]) -> list[tuple[str, int, int]]:
-    """(nature, gender, ability) per party mon by the patched ``TrainerData_BuildParty`` as
-    decoded in ``docs/kaizo/rom_diff.md`` ("TrainerData_BuildParty, decoded"), run as a
-    cross-check only (Ruling 7). The seed takes the difficulty byte; the override helper
-    (arm9 0x020795A0) rewrites the trainer's one gender-modifier slot, which the rest of the
+def carry_over_pids(t: dict, species: dict[str, Any]) -> list[int]:
+    """The PID of each party mon by the patched ``TrainerData_BuildParty`` as decoded in
+    ``docs/kaizo/rom_diff.md`` ("TrainerData_BuildParty, decoded"; Ruling 7: not a
+    transcription). The seed takes the difficulty byte; the override helper (arm9
+    0x020795A0) rewrites the trainer's one gender-modifier slot, which the rest of the
     party keeps: a gender nibble sets it to the form's gender ratio +2 (1) / -2 (2); an
     ability nibble then clears (1) or sets (2) bit 0 of the helper's working value, which
     is the species id when no gender nibble was given (the ROM's bug)."""
@@ -706,13 +706,32 @@ def _carry_over_party(t: dict, species: dict[str, Any]) -> list[tuple[str, int, 
         state = rnd = (mon["difficulty"] + mon["level"] + mon["species"] + t["id"]) & 0xFFFFFFFF
         for _ in range(t["class_id"]):
             state, rnd = lcrng_next(state)
-        pid = ((rnd << 8) + mod) & 0xFFFFFFFF
-        sp = personal[mon["species"]]
-        a1, a2 = sp["abilities"]
-        out.append(
-            (NATURES[pid % 25], gender_of(sp["gender_ratio"], pid), a2 if a2 and pid & 1 else a1)
-        )
+        out.append(((rnd << 8) + mod) & 0xFFFFFFFF)
     return out
+
+
+def carry_over_sets(t: dict, species: dict[str, Any]) -> list[tuple[int, int, int]]:
+    """(nature id, gender, ability slot) per party mon from ``carry_over_pids``: the
+    unmodified ``BoxPokemon_InitWith`` (``src/pokemon.c:473-483``) with the base species
+    (the patched routine sets the form afterwards): nature ``pid % 25``, gender from the
+    base species' ratio, slot 1 when ``pid & 1`` and the species has a second ability."""
+    personal = species["species"]
+    out = []
+    for mon, pid in zip(t["party"], carry_over_pids(t, species), strict=True):
+        sp = personal[mon["species"]]
+        slot = 1 if sp["abilities"][1] and pid & 1 else 0
+        out.append((pid % 25, gender_of(sp["gender_ratio"], pid), slot))
+    return out
+
+
+def _carry_over_party(t: dict, species: dict[str, Any]) -> list[tuple[str, int, int]]:
+    """(nature, gender, ability) per party mon by ``carry_over_sets``, run as a cross-check
+    of PKCalc's sets."""
+    personal = species["species"]
+    return [
+        (NATURES[nature], gender, personal[mon["species"]]["abilities"][slot])
+        for mon, (nature, gender, slot) in zip(t["party"], carry_over_sets(t, species), strict=True)
+    ]
 
 
 def _v(value: Any) -> str:

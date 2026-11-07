@@ -379,3 +379,8 @@ def test_vanilla_area_conditions_pinned(trainers):
     assert trainers[559].area_condition == AreaCondition(weather="sandstorm")
     assert trainers[132].area_condition == AreaCondition(weather="hail")
     assert trainers[66].area_condition == AreaCondition(fog=True)
+
+
+def test_null_partner_loads_as_none(tmp_path):  # Kaizo: a partner present, not evaluated
+    (t,) = _write(tmp_path, [_kaizo_row(format="multi", partner=None)])
+    assert t.format == "multi" and t.partner is None

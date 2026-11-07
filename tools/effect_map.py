@@ -153,7 +153,11 @@ DECOMP_EFFECT_TO_ID: dict[int, tuple[EffectId, tuple[int, int, int]]] = {
 }
 
 # SECONDARY_* effects the decomp applies on every hit (MOVE_SIDE_EFFECT_ON_HIT)
-# rather than with the move's effect chance; such moves carry chance 0.
+# rather than with the move's effect chance; such moves carry chance 0. Any other
+# SECONDARY_* move with chance 0 never fires its proc (K2b Ruling 21: Kaizo's Ice Ball
+# family): build_tables packs it PLAIN when its params carry nothing beyond the secondary
+# (params[2] == 0), else UNSUPPORTED (effect 125's thaws_user), and lists it in the Kaizo
+# manifest's no_secondary_moves.
 CERTAIN_SECONDARY_EFFECTS: frozenset[int] = frozenset({218})
 
 # Moves forced to UNSUPPORTED although their effect family is supported (none now).

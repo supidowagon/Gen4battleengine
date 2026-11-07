@@ -73,3 +73,26 @@ def test_tailwind_doubles_speed(tables, names):
     s = with_speed(roark_state(tables, names), 1, 20)
     tail = s._replace(tailwind=s.tailwind.at[1].set(3))
     assert order(tables, tail, [SCRATCH, TACKLE]) == [1, 0]
+
+
+def with_priorities(tables, priorities):
+    """``tables`` with ``move_priority`` replaced for the given move ids."""
+    prio = tables.move_priority
+    for move, value in priorities.items():
+        prio = prio.at[move].set(value)
+    return tables._replace(move_priority=prio)
+
+
+def test_priority_plus_seven_beats_plus_five(tables, names):
+    # K2b Task 15 regression guard (passes before K2b): Kaizo's Trick Room is +7 (spec 5.2);
+    # order.action_order and enumerate.outcome_laws cast move_priority (int8) to int32.
+    from nuzline.engine.enumerate import outcome_laws
+
+    s = roark_state(tables, names)  # Monferno (Scratch, slot 0) is faster than Geodude
+    t = with_priorities(tables, {names.move("Tackle"): 7, names.move("Scratch"): 5})
+    assert order(t, s, [SCRATCH, TACKLE]) == [1, 0]  # the slower +7 user moves first
+    tied = roark_state(tables, names, equal_speed=True)
+    actions = jnp.array([SCRATCH, TACKLE], jnp.int32)
+    assert not bool(outcome_laws(t, tied, actions).relevant.speed_tie)  # +5 vs +7: no tie to draw
+    same = with_priorities(tables, {names.move("Tackle"): 7, names.move("Scratch"): 7})
+    assert bool(outcome_laws(same, tied, actions).relevant.speed_tie)

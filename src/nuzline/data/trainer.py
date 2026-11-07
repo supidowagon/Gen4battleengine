@@ -130,8 +130,9 @@ class Trainer:
 
     ``format`` is the battle format: "single" or "double" from the trainer's header, or
     "double_two_trainer" (fought beside ``opponent_2`` against the player alone) or
-    "multi" (the player fights beside a partner, whose possible teams are ``partner``)
-    from the field scripts (``tools/battle_scripts.py``). ``opponent_2`` is the other
+    "multi" (the player fights beside a partner, whose possible teams are ``partner``;
+    None: a partner is present but the scripts do not say which, Kaizo only) from the field
+    scripts (``tools/battle_scripts.py``). ``opponent_2`` is the other
     enemy of a two-trainer or tag battle, else None.
 
     Kaizo fields (plan K2b Task 14; all defaulted to vanilla's reading): ``label`` names
@@ -159,7 +160,7 @@ class Trainer:
     start_condition: str
     format: str
     opponent_2: int | None = None
-    partner: tuple[PartnerVariant, ...] = ()
+    partner: tuple[PartnerVariant, ...] | None = ()
     label: str | None = None
     pid_routine: str | None = "vanilla"
     player_starter: int | None = None
@@ -234,7 +235,9 @@ def load_trainers(dir: Path) -> list[Trainer]:
             start_condition=t["start_condition"],
             format=t["format"],
             opponent_2=t["opponent_2"],
-            partner=tuple(
+            partner=None
+            if t["partner"] is None
+            else tuple(
                 PartnerVariant(p["trainer"], p["starter"], p["player_gender"]) for p in t["partner"]
             ),
             label=t.get("label"),

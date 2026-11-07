@@ -17,7 +17,9 @@ Tables (keys are ROM trainer ids unless said otherwise):
   ``heal_between`` / ``change_team``, bool; empty until play reaches the group, spec 12.4).
 - ``[trainer_ids."<label or sheet cite>"]``: ``id``, read by ``trainer_map``.
 - ``[fields.<id>]``: corrections to derived fields: ``split``, ``optional``, ``left_side``,
-  ``player_starter``.
+  ``player_starter``, and ``format`` (only ``"unknown"``: a trainer the ROM fights in two
+  battle structures, e.g. a scripted pair on one map and placed alone on another, which
+  one ``trainers.json`` format cannot hold; coverage refuses it, K2b Task 15).
 - ``[move_lists.<sound|punch>]``: ``ids``, for ``read_move_lists(..., override=...)``.
 
 :func:`check_citations` re-reads every sheet citation against ``docs.json``;
@@ -56,7 +58,14 @@ RULE_KEYS = ("heal_between", "change_team")
 WEATHERS = ("rain", "sun", "sandstorm", "hail", "fog", "none")
 MOVE_LIST_KEYS = ("sound", "punch")
 STARTERS = (387, 390, 393)
-FIELD_TYPES = {"split": str, "optional": bool, "left_side": bool, "player_starter": int}
+FIELD_TYPES = {
+    "split": str,
+    "optional": bool,
+    "left_side": bool,
+    "player_starter": int,
+    "format": str,
+}
+UNKNOWN_FORMAT = "unknown"  # the only format a [fields.<id>] entry may set
 # Champion Cynthia's Gravity: PKCalc's UI ticks Gravity for this label only.
 GRAVITY_LABEL = "Champion Cynthia"
 GRAVITY_SOURCE = "pkcalc:src/js/shared_controls.js:611"
@@ -258,6 +267,8 @@ def load_overrides(path: Path = DEFAULT_PATH) -> Overrides:
                 raise OverridesError(f"{entry}: {k} must be {FIELD_TYPES[k].__name__}")
         if "player_starter" in values and values["player_starter"] not in STARTERS:
             raise OverridesError(f"{entry}: player_starter must be one of {STARTERS}")
+        if "format" in values and values["format"] != UNKNOWN_FORMAT:
+            raise OverridesError(f"{entry}: format may only be set to {UNKNOWN_FORMAT!r}")
         fields_[_id(entry, key)] = values
 
     move_lists = {}

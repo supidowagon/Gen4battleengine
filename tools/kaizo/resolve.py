@@ -1,0 +1,633 @@
+"""Resolve the Kaizo sources into the intermediates the runtime reads (plan K2b Task 15;
+spec 6.5, 6.6; Rulings 2, 3, 7, 9, 12).
+
+``resolve`` runs the three-way cross-check (Tasks 11-13) over ``<inter>/rom``,
+``<inter>/pkcalc/pkcalc.json`` and ``<inter>/docs/docs.json`` with ``overrides.toml`` and
+``resolutions.toml``, writes ``docs/kaizo/discrepancies.md`` either way, and stops on an
+unresolved or stale row (``CrossCheckError``). Clean, it writes into ``inter``:
+
+- the vanilla-schema JSON (``COPIED``) from the ROM, every value the cross-check's
+  ``Outcome.used``. The ROM value is used everywhere except names (below) and rows with
+  no ROM slot (a sheet-only id, an unmapped sheet header), which have nothing to write;
+  any other non-ROM ``used`` raises (``ResolveError``), so nothing is silently dropped.
+- names per Ruling 3: the display name is PKCalc's (joined by id; a slot PKCalc lacks
+  keeps the ROM text). A slot is **renamed** when its display name differs from vanilla's
+  beyond spelling (``spelling``: case, punctuation, the gender signs), and
+  ``renamed.json`` maps the vanilla name (lower case) to the display name. An **alias**
+  is a ROM text-bank name that differs from the display name (case-insensitively); the
+  vanilla name of a renamed slot is never one, even when the ROM text still reads it
+  (listed in the report), and an alias equal to another id's display name is an error.
+- ``trainers.json`` in Task 14's schema (``trainer_record``): explicit nature, gender and
+  ability slot from the patched routine's carry-over decode (``carry_over_sets``),
+  friendship 255 (0 with Frustration, helper 0x02079570), ``pid_routine`` None, the
+  PKCalc label, confirmed sight pairs (K2a Ruling 4), the ``format = "unknown"``
+  corrections of ``overrides.toml``, the derived player starter, gauntlets, the split
+  fields from the sheet headers (Ruling 9; None when no header maps to the trainer),
+  ``area_condition`` with ``start_condition`` kept consistent, and ``sources`` per field.
+- ``kaizo.json``: ``aliases`` and ``provenance`` (input hashes).
+
+Usage: ``python -m tools.build_tables --game kaizo`` (resolve, then pack).
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+from collections import defaultdict
+from collections.abc import Mapping
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+from nuzline.data.games import GAMES, KAIZO, VANILLA
+from nuzline.data.trainer import AreaCondition, default_moves
+from tools.kaizo.crosscheck import (
+    DEFAULT_REPORT,
+    DEFAULT_RESOLUTIONS,
+    CrossCheck,
+    compare,
+    load_resolutions,
+    write_report,
+)
+from tools.kaizo.overrides import (
+    DEFAULT_PATH as DEFAULT_OVERRIDES,
+)
+from tools.kaizo.overrides import (
+    UNKNOWN_FORMAT,
+    Mappings,
+    Overrides,
+    build_mappings,
+    check_citations,
+    check_gauntlet_members,
+    check_rom_trick_room,
+    check_trainer_ids,
+    load_overrides,
+)
+from tools.kaizo.rows_common import get
+from tools.kaizo.rows_tables import load_rom, table_rows
+from tools.kaizo.rows_trainers import (
+    SIGHT_CITE,
+    _joined,
+    _partner_starters,
+    _pk_starter,
+    _sheet_by_id,
+    _starter,
+    area_section,
+    carry_over_sets,
+    mapping_section,
+    pid_section,
+    trainer_rows,
+)
+from tools.rom.inputs import KAIZO_PATCH_SHA256, REPO_ROOT, VANILLA_SHA1, RomInputs
+
+ROM_DIFF = REPO_ROOT / "data" / "kaizo" / "rom_diff.toml"
+START_CONDITIONS = REPO_ROOT / "data" / "kaizo" / "start_conditions.json"
+
+# The vanilla-schema files the runtime and build_tables read, copied from <inter>/rom.
+COPIED = (
+    "species",
+    "forms",
+    "form_rows",
+    "moves",
+    "move_lists",
+    "items",
+    "abilities",
+    "types",
+    "natures",
+    "exp_tables",
+    "charmap",
+    "learnsets",
+    "tm_learnsets",
+    "evolutions",
+    "egg_moves",
+    "evolution_methods",
+    "tutor_moves",
+    "tutor_learnsets",
+)
+# Ruling 3's kinds: (renamed.json / aliases key, intermediate file, PKCalc table).
+KINDS = (
+    ("species", "species", "species"),
+    ("move", "moves", "moves"),
+    ("item", "items", "items"),
+    ("ability", "abilities", "abilities"),
+)
+FRUSTRATION = 218
+FRIENDSHIP_MAX, FRIENDSHIP_FRUSTRATION = 255, 0  # patched builder's helper at 0x02079570
+PATCHED_SETS = "rom: patched TrainerData_BuildParty carry-over decode (docs/kaizo/rom_diff.md)"
+FRIENDSHIP_SOURCE = "rom: patched friendship helper 0x02079570 (docs/kaizo/rom_diff.md)"
+
+
+class ResolveError(ValueError):
+    """The resolved data cannot be written exactly (an unmodelled non-ROM value, a name
+    collision, an inconsistent trainer field)."""
+
+
+# --- inputs -----------------------------------------------------------------------------
+
+
+def _read(path: Path) -> Any:
+    return json.loads(Path(path).read_text(encoding="utf-8"))
+
+
+def _write(path: Path, data: Any) -> None:
+    path.write_text(json.dumps(data, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+@dataclass(frozen=True)
+class Sources:
+    """The cross-check's inputs, read from one intermediate directory."""
+
+    rom: dict[str, Any]  # rows_tables.load_rom bundle
+    trainers: list[dict]
+    field_effects: list[dict]
+    trainer_maps: dict[int, list[int]]
+    pkcalc: dict
+    docs: dict
+
+
+def load_sources(inter: Path) -> Sources:
+    inter = Path(inter)
+    rom_dir = inter / "rom"
+    paths = [
+        rom_dir / "trainers.json",
+        rom_dir / "rom_field_effects.json",
+        rom_dir / "rom_trainer_maps.json",
+        inter / "pkcalc" / "pkcalc.json",
+        inter / "docs" / "docs.json",
+    ]
+    missing = [str(p) for p in paths if not p.exists()]
+    if missing:
+        raise FileNotFoundError(
+            "missing Kaizo intermediates (run tools.extract_rom --game kaizo, "
+            "tools.extract_pkcalc, tools.extract_kaizo_docs): " + ", ".join(missing)
+        )
+    trainers, effects, where, pkcalc, docs = (_read(p) for p in paths)
+    return Sources(
+        rom=load_rom(rom_dir),
+        trainers=trainers,
+        field_effects=effects,
+        trainer_maps={int(k): list(v) for k, v in where.items()},
+        pkcalc=pkcalc,
+        docs=docs,
+    )
+
+
+def with_format_overrides(trainers: list[dict], overrides: Overrides) -> list[dict]:
+    """The ROM trainers with ``[fields.<id>] format = "unknown"`` applied (the cross-check
+    then lists them with the refused unknowns instead of comparing their format)."""
+    out = []
+    for t in trainers:
+        fmt = overrides.fields.get(t["id"], {}).get("format")
+        out.append(dict(t, format=fmt) if fmt is not None else t)
+    return out
+
+
+# --- cross-check ------------------------------------------------------------------------
+
+
+def cross_check(
+    src: Sources, overrides: Overrides, resolutions_path: Path
+) -> tuple[CrossCheck, Mappings, list[dict], dict[str, list[str]]]:
+    """Rows, outcomes and report sections. Raises ``CrossCheckError`` on a malformed
+    resolutions file and ``ResolveError`` when the overrides fail their own checks."""
+    problems = (
+        check_citations(overrides, src.docs)
+        + check_rom_trick_room(overrides, src.field_effects)
+        + check_trainer_ids(overrides, {t["id"] for t in src.trainers})
+    )
+    trainers = with_format_overrides(src.trainers, overrides)
+    maps = build_mappings(
+        src.pkcalc.get("trainers", {}),
+        src.docs,
+        trainers,
+        src.rom["species"],
+        src.field_effects,
+        overrides.trainer_ids,
+    )
+    problems += check_gauntlet_members(overrides, src.docs, maps.sheet)
+    if problems:
+        raise ResolveError("overrides.toml fails its checks:\n" + "\n".join(problems))
+    rows = table_rows(src.rom, src.pkcalc, src.docs) + trainer_rows(
+        trainers, maps, src.pkcalc, src.docs, src.rom, overrides, src.trainer_maps
+    )
+    check = compare(rows, load_resolutions(resolutions_path))
+    sections = {
+        "trainer mappings": mapping_section(maps),
+        "PID cross-check (Ruling 19; recorded, not asserted)": pid_section(
+            trainers, maps, src.pkcalc, src.rom
+        ),
+        "battle setup": area_section(
+            trainers, maps, src.pkcalc, src.docs, overrides, src.trainer_maps
+        ),
+    }
+    return check, maps, trainers, sections
+
+
+def check_used(check: CrossCheck) -> list[str]:
+    """Rows whose used value is not the ROM's and that ``resolve`` writes nowhere: names
+    (Ruling 3 writes the display name), rows with no ROM slot, the ``mapped`` rows.
+    Raises ``ResolveError`` for any other non-ROM used value."""
+    skipped, bad = [], []
+    for o in check.outcomes:
+        r = o.row
+        if o.used == r.rom and type(o.used) is type(r.rom):
+            continue
+        if r.field in ("name", "mapped") or (o.kind == "sheet_only" and r.rom is None):
+            skipped.append(f"{r.table} {r.key} {r.field}: {o.kind}, used {o.used!r}")
+            continue
+        bad.append(f"{r.table} {r.key!r} {r.field}: {o.kind} uses {o.used!r}, ROM {r.rom!r}")
+    if bad:
+        raise ResolveError(
+            "resolve writes only ROM values for these fields; a non-ROM value needs a "
+            "writer in tools/kaizo/resolve.py:\n" + "\n".join(bad)
+        )
+    return skipped
+
+
+# --- names (Ruling 3) -------------------------------------------------------------------
+
+_SIGNS = {"♀": "f", "♂": "m"}
+
+
+def spelling(name: str) -> str:
+    """A name with case, punctuation and the gender signs folded: two names with the same
+    spelling are one name written two ways ("Nidoran-F" / "NIDORAN♀", "King's Rock" /
+    "King’s Rock")."""
+    text = "".join(_SIGNS.get(c, c) for c in name.casefold())
+    return re.sub(r"[^0-9a-z]", "", text)
+
+
+def _pk_names(pkcalc: dict, table: str) -> dict[int, str]:
+    if table == "species":
+        return {
+            int(v["num"]): v["name"] for v in pkcalc.get("species", {}).values() if v["form"] == 0
+        }
+    return {int(k): v["name"] for k, v in pkcalc.get(table, {}).items()}
+
+
+@dataclass(frozen=True)
+class NameSet:
+    display: dict[str, list[str]]  # kind -> display name per id
+    renamed: dict[str, dict[str, str]]  # kind -> {vanilla lower: display}
+    aliases: dict[str, dict[str, int]]  # kind -> {alias: id}
+    notes: list[str]  # report lines
+
+
+def names(
+    rom: Mapping[str, list[dict]], vanilla: Mapping[str, list[dict]], pkcalc: dict
+) -> NameSet:
+    display: dict[str, list[str]] = {}
+    renamed: dict[str, dict[str, str]] = {}
+    aliases: dict[str, dict[str, int]] = {}
+    notes: list[str] = []
+    for kind, table, pk_table in KINDS:
+        rom_rows, van_rows = rom[table], vanilla[table]
+        if len(rom_rows) != len(van_rows):
+            raise ResolveError(f"{table}: {len(rom_rows)} ROM rows, {len(van_rows)} vanilla rows")
+        pk = _pk_names(pkcalc, pk_table)
+        shown = [pk.get(i, r["name"]) for i, r in enumerate(rom_rows)]
+        index: dict[str, int] = {}
+        for i, n in enumerate(shown):
+            if index.setdefault(n.casefold(), i) != i:
+                raise ResolveError(
+                    f"{kind} display name {n!r} is ids {index[n.casefold()]} and {i}"
+                )
+        ren: dict[str, str] = {}
+        for v, n in zip(van_rows, shown, strict=True):
+            if spelling(v["name"]) != spelling(n) and ren.setdefault(v["name"].lower(), n) != n:
+                raise ResolveError(f"{kind}: vanilla name {v['name']!r} renamed twice")
+        al: dict[str, int] = {}
+        for i, (r, n) in enumerate(zip(rom_rows, shown, strict=True)):
+            text = r["name"]
+            if text.casefold() == n.casefold():
+                continue
+            if text.lower() in ren:
+                notes.append(
+                    f"{kind} {i} {n!r}: the ROM text reads {text!r}, the vanilla name of a "
+                    "renamed slot; not an alias"
+                )
+                continue
+            other = index.get(text.casefold())
+            if other is not None:
+                raise ResolveError(
+                    f"{kind} alias {text!r} (id {i}) is the display name of id {other}"
+                )
+            if al.setdefault(text, i) != i:
+                raise ResolveError(f"{kind} alias {text!r} is ids {al[text]} and {i}")
+        display[kind], renamed[kind], aliases[kind] = shown, ren, al
+        notes.append(f"{kind}: {len(ren)} renamed, {len(al)} aliases")
+        notes += [f"{kind} renamed: {old!r} -> {new!r}" for old, new in sorted(ren.items())]
+        notes += [f"{kind} alias: {a!r} -> {i}" for a, i in sorted(al.items(), key=lambda x: x[1])]
+    return NameSet(display, renamed, aliases, notes)
+
+
+# --- trainers ---------------------------------------------------------------------------
+
+
+def _area(start_condition: str, area: Any) -> tuple[str, dict]:
+    """(start_condition, area_condition) from the ROM start condition and an overrides
+    ``[area.<id>]`` entry (weather replaces the start condition; Trick Room, Gravity add)."""
+    weather = getattr(area, "weather", None)
+    start = start_condition if weather is None else weather
+    cond = AreaCondition.from_start_condition(start)
+    out = {
+        "weather": cond.weather,
+        "fog": cond.fog,
+        "trick_room": bool(getattr(area, "trick_room", False)),
+        "gravity": bool(getattr(area, "gravity", False)),
+        "permanent": True,
+    }
+    if AreaCondition.from_start_condition(start) != AreaCondition(
+        weather=out["weather"], fog=out["fog"]
+    ):
+        raise ResolveError(f"start condition {start!r} does not map to {out}")
+    return start, out
+
+
+def _split_rows(docs: dict) -> dict[str, tuple[int, str, dict, dict]]:
+    """cite -> (split index, sheet name, section, header), in workbook order."""
+    out = {}
+    for i, split in enumerate(docs["splits"].values()):
+        for sec in split["sections"]:
+            for h in sec["trainers"]:
+                out[h["cite"]] = (i, split["sheet"], sec, h)
+    return out
+
+
+def _line(cite: str) -> int:
+    return int(cite.rsplit(":", 1)[1])
+
+
+@dataclass(frozen=True)
+class TrainerContext:
+    labels: dict[int, tuple[str, str]]  # id -> (PKCalc label, mapping how)
+    headers: dict[int, list[str]]  # id -> sheet cites, workbook order
+    sight: dict[int, tuple[int, int]]  # id -> (partner id, shared map header)
+    gauntlets: dict[int, tuple[str, int, dict, str]]  # id -> (name, position, rules, source)
+
+
+def trainer_context(check: CrossCheck, maps: Mappings, overrides: Overrides,
+                    trainer_maps: dict[int, list[int]], docs: dict) -> TrainerContext:  # fmt: skip
+    labels = {m.id: (m.label, m.how) for m in maps.pkcalc if m.id is not None}
+    order = {c: n for n, c in enumerate(_split_rows(docs))}
+    headers: dict[int, list[str]] = defaultdict(list)
+    for m in sorted((m for m in maps.sheet if m.id is not None), key=lambda m: order[m.label]):
+        headers[m.id].append(m.label)
+    sight: dict[int, tuple[int, int]] = {}
+    for o in check.outcomes:
+        if o.row.field == "sight_pair" and isinstance(o.used, int):
+            tid = int(o.row.key.split(" ", 1)[0])
+            shared = set(trainer_maps.get(tid, ())) & set(trainer_maps.get(o.used, ()))
+            if not shared:
+                raise ResolveError(f"sight pair {tid}-{o.used}: no shared ROM map header")
+            sight[tid] = (o.used, min(shared))
+    for tid, (pair, _) in sight.items():
+        if pair in sight and sight[pair][0] != tid:
+            raise ResolveError(f"sight pairs disagree: {tid} -> {pair} -> {sight[pair][0]}")
+    gauntlets: dict[int, tuple[str, int, dict, str]] = {}
+    for g in overrides.gauntlets:
+        for pos, tid in enumerate(g.trainers, 1):
+            if tid in gauntlets:
+                raise ResolveError(
+                    f"trainer {tid} is in gauntlets {gauntlets[tid][0]!r} and {g.name!r}"
+                )
+            gauntlets[tid] = (g.name, pos, dict(g.rules), g.source)
+    return TrainerContext(labels, dict(headers), sight, gauntlets)
+
+
+def trainer_record(
+    t: dict,
+    ctx: TrainerContext,
+    overrides: Overrides,
+    src: Sources,
+    sheet: dict[int, list[tuple[dict, dict]]],
+    partner_starts: dict[int, set[int]],
+    split_rows: dict[str, tuple[int, str, dict, dict]],
+) -> dict:
+    """One ``trainers.json`` entry in Task 14's schema, with ``sources`` per field."""
+    tid = t["id"]
+    fields = overrides.fields.get(tid, {})
+    fsrc = f"overrides fields.{tid} ({overrides.sources.get(f'fields.{tid}', '?')})"
+    sources: dict[str, str] = {"party": "rom: trainer party (trainers.json)"}
+    out = {k: v for k, v in t.items() if k != "party"}
+
+    party = []
+    learnsets = src.rom["learnsets"]
+    for mon, (nature, gender, slot) in zip(t["party"], carry_over_sets(t, src.rom), strict=True):
+        moves = mon["moves"]
+        if moves is None:
+            moves = default_moves(get(learnsets, mon["species"]) or [], mon["level"])
+        friendship = FRIENDSHIP_FRUSTRATION if FRUSTRATION in moves else FRIENDSHIP_MAX
+        party.append(
+            dict(mon, nature=nature, gender=gender, ability_slot=slot, friendship=friendship)
+        )
+    out["party"] = party
+    sources.update(nature=PATCHED_SETS, gender=PATCHED_SETS, ability_slot=PATCHED_SETS)
+    sources["friendship"] = FRIENDSHIP_SOURCE
+    out["pid_routine"] = None
+    sources["pid_routine"] = "rom: patched routine not transcribed (Ruling 7)"
+
+    label = ctx.labels.get(tid)
+    out["label"] = None if label is None else label[0]
+    if label is not None:
+        sources["label"] = f"pkcalc: trainer label (mapping how={label[1]})"
+
+    fmt_source = "rom: trainers.json (K2a battle_structures over the patched field scripts)"
+    if fields.get("format") is not None:
+        out["format"] = fields["format"]
+        fmt_source = fsrc
+    elif tid in ctx.sight and t["format"] != UNKNOWN_FORMAT:
+        pair, header = ctx.sight[tid]
+        if t["format"] == "single":
+            out["format"] = "double_two_trainer"
+        elif not (t["format"] == "multi" and t["opponent_2"] is None):
+            raise ResolveError(f"trainer {tid}: sight pair {pair} beside ROM format {t['format']}")
+        out["opponent_2"] = pair  # a walking-partner multi keeps multi (K2a Ruling 3)
+        fmt_source = SIGHT_CITE.format(header=header)
+    sources["format"] = sources["opponent_2"] = fmt_source
+
+    pk_start = _pk_starter(label[0]) if label is not None else None
+    sheet_start = _joined(h["tags"].get("player_starter") for _, h in sheet.get(tid, []))
+    start, how = _starter(tid, overrides, partner_starts, sheet_start, pk_start)
+    out["player_starter"] = start
+    if start is not None:
+        sources["player_starter"] = how
+
+    g = ctx.gauntlets.get(tid)
+    out["gauntlet"] = None if g is None else [g[0], g[1]]
+    out["gauntlet_rules"] = {} if g is None else g[2]
+    if g is not None:
+        sources["gauntlet"] = sources["gauntlet_rules"] = g[3]
+
+    cites = ctx.headers.get(tid, [])
+    if cites:
+        idx, sheet_name, sec, h = split_rows[cites[0]]
+        out["split"] = sheet_name
+        out["split_order"] = [idx, _line(cites[0])]
+        out["optional"] = bool(h["tags"].get("optional") or sec["tags"].get("optional"))
+        out["left_side"] = h.get("left_side") if h.get("ai_known") else None
+        cite = ", ".join(cites)
+        for k in ("split", "split_order", "optional", "left_side"):
+            sources[k] = f"sheet {cite}"
+    else:
+        out.update(split=None, split_order=None, optional=None, left_side=None)
+    for k in ("split", "optional", "left_side"):
+        if k in fields:
+            out[k] = fields[k]
+            sources[k] = fsrc
+            if k == "split":
+                sources["split_order"] = fsrc
+
+    start, area = _area(t["start_condition"], overrides.area.get(tid))
+    out["start_condition"], out["area_condition"] = start, area
+    where = ", ".join(map(str, sorted(src.trainer_maps.get(tid, [])))) or "none"
+    sources["start_condition"] = sources["area_condition"] = (
+        f"rom: map header weather through the trainer -> map join (headers {where}; "
+        "data/kaizo/start_conditions.json)"
+    )
+    a = overrides.area.get(tid)
+    if a is not None:
+        sources["area_condition"] += f"; overrides area.{tid} ({a.source})"
+    if tid in overrides.area_exceptions:
+        e = overrides.area_exceptions[tid]
+        sources["area_condition"] += f"; area_exception ({e.reason}; {e.source})"
+    out["sources"] = sources
+    return out
+
+
+def resolve_trainers(
+    src: Sources, trainers: list[dict], check: CrossCheck, maps: Mappings, overrides: Overrides
+) -> tuple[list[dict], list[str]]:
+    ctx = trainer_context(check, maps, overrides, src.trainer_maps, src.docs)
+    sheet = _sheet_by_id(src.docs, maps)
+    partner_starts = _partner_starters(trainers)
+    split_rows = _split_rows(src.docs)
+    out = [
+        trainer_record(t, ctx, overrides, src, sheet, partner_starts, split_rows) for t in trainers
+    ]
+    sight = [t for t in out if t["sources"]["format"].startswith("rom: map header")]
+    n_double = sum(1 for t in sight if t["format"] == "double_two_trainer")
+    lines = [
+        (
+            f"sight pairs applied (K2a Ruling 4): {len(sight)}; double_two_trainer {n_double}, "
+            f"multi beside a walking partner (opponent_2 set) {len(sight) - n_double}"
+        ),
+        "format unknown (user call): "
+        + ", ".join(f"{t['id']} {t['name']}" for t in out if t["format"] == UNKNOWN_FORMAT),
+        "start condition unknown (user call): "
+        + ", ".join(f"{t['id']} {t['name']}" for t in out if t["start_condition"] == "unknown"),
+    ]
+    unplaced = [
+        f"{t['id']} {t['label']}" for t in out if t["label"] is not None and t["split"] is None
+    ]
+    lines.append(
+        f"PKCalc trainers with no mapped sheet header (split, optional, left_side unknown): "
+        f"{len(unplaced)}" + (": " + "; ".join(unplaced) if unplaced else "")
+    )
+    return out, lines
+
+
+# --- resolve ----------------------------------------------------------------------------
+
+
+def _vanilla_tables(vanilla: Path) -> dict[str, list[dict]]:
+    tables = {}
+    for _, table, _ in KINDS:
+        path = Path(vanilla) / f"{table}.json"
+        if not path.exists():
+            raise FileNotFoundError(
+                f"no {path}: the vanilla names come from it (python -m tools.extract_decomp)"
+            )
+        tables[table] = _read(path)
+    return tables
+
+
+def _report_sources(src: Sources, overrides_path: Path, resolutions_path: Path) -> dict:
+    out = {
+        "PKCalc zip (pkcalc.json sha256)": src.pkcalc.get("sha256", "-"),
+        "Kaizo docs workbook (docs.json sha256)": src.docs.get("sha256", "-"),
+    }
+    for name, path in (
+        ("data/kaizo/overrides.toml", overrides_path),
+        ("data/kaizo/resolutions.toml", resolutions_path),
+    ):
+        out[name] = _sha256(path) if Path(path).exists() else "absent"
+    return out
+
+
+def provenance(
+    inputs: RomInputs, src: Sources, overrides_path: Path, resolutions_path: Path
+) -> dict[str, str]:
+    """Input hashes for the manifest (the patched ROM is built and checked by K1's
+    ``kaizo_rom``, which verifies the vanilla SHA-1 and the patch SHA-256 first)."""
+    from tools.rom.patch import kaizo_rom
+
+    _, patched_sha1 = kaizo_rom(inputs)
+    for what, configured, recorded in (
+        ("PKCalc zip", inputs.pkcalc_zip, src.pkcalc.get("sha256")),
+        ("Kaizo docs workbook", inputs.kaizo_docs, src.docs.get("sha256")),
+    ):
+        if configured is not None and configured.exists() and _sha256(configured) != recorded:
+            raise ResolveError(
+                f"{what} {configured} does not match the extracted intermediates "
+                f"(sha256 {recorded}); re-run its extractor"
+            )
+    return {
+        "vanilla_rom_sha1": VANILLA_SHA1,
+        "patch_sha256": KAIZO_PATCH_SHA256,
+        "patched_rom_sha1": patched_sha1,
+        "pkcalc_sha256": src.pkcalc["sha256"],
+        "kaizo_docs_sha256": src.docs["sha256"],
+        "overrides_sha256": _sha256(overrides_path),
+        "resolutions_sha256": _sha256(resolutions_path),
+        "rom_diff_sha256": _sha256(ROM_DIFF),
+    }
+
+
+def resolve(
+    inputs: RomInputs,
+    inter: Path = GAMES[KAIZO].intermediate_dir,
+    report: Path = DEFAULT_REPORT,
+    *,
+    resolutions: Path = DEFAULT_RESOLUTIONS,
+    overrides: Path = DEFAULT_OVERRIDES,
+    vanilla: Path = GAMES[VANILLA].intermediate_dir,
+) -> Path:
+    """Cross-check, write ``report`` (always), stop on unresolved or stale rows, then write
+    the resolved intermediates into ``inter``; returns ``inter``."""
+    inter = Path(inter)
+    src = load_sources(inter)
+    ov = load_overrides(overrides)
+    check, maps, trainers, sections = cross_check(src, ov, resolutions)
+    sources = _report_sources(src, overrides, resolutions)
+    if not (check.unresolved or check.stale):
+        try:
+            skipped = check_used(check)
+            name_set = names(src.rom, _vanilla_tables(vanilla), src.pkcalc)
+            resolved_trainers, trainer_lines = resolve_trainers(src, trainers, check, maps, ov)
+        except Exception:
+            write_report(check, sections, sources, report)
+            raise
+        sections["names (Ruling 3)"] = name_set.notes
+        sections["resolved trainers"] = trainer_lines
+        sections["rows with nothing to write (names, no ROM slot, mapped)"] = skipped
+    write_report(check, sections, sources, report)
+    check.require_clean()
+
+    prov = provenance(inputs, src, overrides, resolutions)
+    rom_dir = inter / "rom"
+    for name in COPIED:
+        data = _read(rom_dir / f"{name}.json")
+        kind = next((k for k, table, _ in KINDS if table == name), None)
+        if kind is not None:
+            data = [dict(row, name=n) for row, n in zip(data, name_set.display[kind], strict=True)]
+        _write(inter / f"{name}.json", data)
+    _write(inter / "trainers.json", resolved_trainers)
+    _write(inter / "renamed.json", name_set.renamed)
+    _write(inter / "kaizo.json", {"aliases": name_set.aliases, "provenance": prov})
+    return inter
