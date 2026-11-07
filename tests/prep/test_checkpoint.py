@@ -311,7 +311,10 @@ def test_resume_refuses_a_damaged_or_future_file(tables, names, saved):
 def test_fingerprint_ignores_the_budget_only(tables, names):
     prob = make_problem(tables, names)
     base = fingerprint(prob, SETTINGS, 7, "t", "c")
-    assert set(base) == {"problem", "settings", "seed", "tables", "code"}
+    assert set(base) == {"problem", "settings", "seed", "tables", "code", "game"}
+    assert base["game"] == "platinum_us"  # plan K2b ruling 17: the game is recorded
+    kaizo = fingerprint(prob, SETTINGS, 7, "t", "c", "platinum_kaizo_nightmare_final")
+    assert kaizo != base and kaizo["game"] == "platinum_kaizo_nightmare_final"
     budgeted = dataclasses.replace(SETTINGS, budget_seconds=5.0)
     assert fingerprint(prob, budgeted, 7, "t", "c") == base
     assert fingerprint(prob, dataclasses.replace(SETTINGS, finalists=3), 7, "t", "c") != base

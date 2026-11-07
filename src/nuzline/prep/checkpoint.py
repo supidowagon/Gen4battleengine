@@ -67,9 +67,15 @@ def _digest(value) -> str:
 
 
 def fingerprint(
-    problem: PrepProblem, settings, seed: int, table_version: str, code_version: str
+    problem: PrepProblem,
+    settings,
+    seed: int,
+    table_version: str,
+    code_version: str,
+    game: str = "platinum_us",
 ) -> dict[str, str]:
-    """What a checkpoint is tied to. ``problem``: the sha256 of the canonical JSON of the
+    """What a checkpoint is tied to. ``game``: the game id (plan K2b ruling 17; its
+    ``table_version`` differs per game too, as the manifest records the game). ``problem``: the sha256 of the canonical JSON of the
     candidates (specs, locations, relearner and TM options, candies), the ``levelled`` moves,
     the opponent specs, the trainer id, start condition, resources, deaths budget, protected
     set, prestatus, cap and source. ``settings``: the same for the settings without
@@ -94,6 +100,7 @@ def fingerprint(
         "seed": str(seed),
         "tables": table_version,
         "code": code_version,
+        "game": game,
     }
 
 

@@ -39,21 +39,34 @@
   nickname, ``party:N`` or ``box:B:S`` (the labels of ``save show``). Exit code 2 when the
   opponent is unsupported or every setup is refused; an interrupted or budget-stopped run
   exits 0 with its best answer.
-* ``nuzline trainers``: every trainer's id, name and class.
+* ``nuzline trainers [--save SAVE [--allow-corrupt]]``: every trainer's id, label (else
+  name) and class, marked ``[optional]``, ``[gauntlet GROUP #P]`` and with its format when
+  it is not a single battle; with ``--save`` only the rival variants of the save's starter.
 * ``nuzline save show SAVE [--json] [--allow-corrupt]``: the save's trainer, loaded copy,
   party and boxes (one line per Pokemon), or the whole save as JSON.
 * ``nuzline save export SAVE -o PARTY.toml [--allow-corrupt]``: the save's party (eggs
   dropped) as a ``--party`` TOML file.
+
+Every command takes ``--game vanilla|kaizo`` (default vanilla, plan K2b Task 18): the data
+set its tables, names and trainers come from (``nuzline.data.games``). Missing or
+mismatched data is one line naming the build command and exit code 1. The game is never
+inferred from a save (spec section 8): every loaded save's contents that are impossible in
+the chosen game are printed to stderr as ``warning:`` lines, and the command goes on. Run
+records (solve, prep) and the plan tree JSON carry ``"game"`` next to ``table_version``.
 
 ``coverage``, ``rank`` and ``solve`` take ``--save SAVE [--allow-corrupt]`` instead of
 ``--party``: the party is the save's, eggs left out (each reported on stderr; ``--lead``
 indexes the egg-free party), and the solve run record holds ``save_sha256``. A bad save
 or record is one line on stderr and exit code 1.
 
-``--trainer NAME`` is the first trainer whose name matches case-insensitively and whose
-class starts with "leader", else the first match; ``--trainer-id`` selects exactly
-(plan ruling). All output is plain ASCII (controller ruling: a default Windows console
-is cp1252).
+``--trainer NAME`` (``resolve_trainer``): the trainers whose name or label equals NAME
+case-insensitively, else those whose label contains it; with a save, the rival variants of
+another starter are dropped. Several starter variants of one fight left is an error (pass
+``--save`` or ``--trainer-id``); otherwise the first whose class starts with "leader",
+else the first match. ``--trainer-id`` selects exactly (plan ruling). A fight whose start
+condition is a pending user call ("unknown") or whose party lacks set data the engine
+cannot compute (``missing_set_data``) is refused (exit 2) before its party is built.
+All output is plain ASCII (controller ruling: a default Windows console is cp1252).
 """
 
 from __future__ import annotations
@@ -68,8 +81,10 @@ from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
 
+from nuzline.data.games import ALIASES
 from nuzline.data.trainer import Trainer
 
+# The vanilla trainers directory (benchmarks/ and tests read it; commands use the game's).
 INTERMEDIATE = Path(__file__).resolve().parents[2] / "data" / "intermediate"
 RUNS = Path(__file__).resolve().parents[2] / "runs"
 
@@ -127,19 +142,60 @@ def _check_deaths(args) -> None:
 EXIT_OK, EXIT_ERROR, EXIT_REFUSED = 0, 1, 2
 
 
+class _Refused(Exception):
+    """A fight refused before its party is built (``_check_buildable``): ``main`` prints
+    the trainer line and ``report``, exit code 2."""
+
+    def __init__(self, trainer: Trainer, report) -> None:
+        super().__init__(f"{trainer.id}: refused")
+        self.trainer, self.report = trainer, report
+
+
+def _variant_key(t: Trainer) -> str:
+    """The fight a starter variant belongs to: its label without the trailing
+    ``[Starter]`` (labels like "Pokemon Trainer Barry #3 [Empoleon]")."""
+    label = (t.label or t.name).strip()
+    if label.endswith("]") and "[" in label:
+        label = label[: label.rindex("[")]
+    return label.strip().lower()
+
+
 def resolve_trainer(
-    trainers: Sequence[Trainer], *, name: str | None = None, trainer_id: int | None = None
+    trainers: Sequence[Trainer],
+    *,
+    name: str | None = None,
+    trainer_id: int | None = None,
+    player_starter: int | None = None,
 ) -> Trainer:
-    """The trainer ``--trainer``/``--trainer-id`` names (module docstring); raises
-    ``ValueError`` when there is none."""
+    """The trainer ``--trainer``/``--trainer-id`` names (module docstring; plan K2b
+    preflight #39): exact case-insensitive ``name`` or ``label`` matches, else a
+    case-insensitive substring of ``label``; then the variants whose ``player_starter``
+    differs from a given ``player_starter`` are dropped. Several starter variants of one
+    fight left is a ``ValueError`` listing their ids; otherwise a Leader is preferred, then
+    the first match. Raises ``ValueError`` when there is none."""
     if trainer_id is not None:
         for t in trainers:
             if t.id == trainer_id:
                 return t
         raise ValueError(f"no trainer with id {trainer_id}")
-    matches = [t for t in trainers if t.name.lower() == (name or "").lower()]
+    key = (name or "").lower()
+    matches = [t for t in trainers if key in (t.name.lower(), (t.label or "").lower())]
+    if not matches and key:
+        matches = [t for t in trainers if t.label is not None and key in t.label.lower()]
+    if player_starter is not None:
+        matches = [t for t in matches if t.player_starter in (None, player_starter)]
     if not matches:
         raise ValueError(f"no trainer named {name!r} (see `nuzline trainers`)")
+    if (
+        len(matches) > 1
+        and all(t.player_starter is not None for t in matches)
+        and len({_variant_key(t) for t in matches}) == 1
+    ):
+        ids = ", ".join(str(t.id) for t in matches)
+        raise ValueError(
+            f"{name!r} is fought with one team per player starter (trainer ids {ids}): "
+            "pass --save or --trainer-id"
+        )
     leaders = [t for t in matches if t.trainer_class.lower().startswith("leader")]
     return (leaders or matches)[0]
 
@@ -164,7 +220,16 @@ def _parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
+    def game(cmd: argparse.ArgumentParser) -> None:
+        cmd.add_argument(
+            "--game",
+            choices=tuple(ALIASES),
+            default="vanilla",
+            help="the game's data set (default vanilla)",
+        )
+
     def fight(cmd: argparse.ArgumentParser) -> None:
+        game(cmd)
         source = cmd.add_mutually_exclusive_group(required=True)
         source.add_argument("--party", type=Path, help="the player's party TOML")
         source.add_argument("--save", type=Path, help="a Platinum .sav/.dsv: its party is used")
@@ -236,6 +301,7 @@ def _parser() -> argparse.ArgumentParser:
     solve.add_argument("--tree", type=Path, default=None, help="write the plan tree as JSON")
     solve.add_argument("--show-depth", type=int, default=1, help="plan levels printed")
     prep = sub.add_parser("prep", help="find the setup to bring from a save, with its odds")
+    game(prep)
     prep.add_argument("--save", type=Path, required=True, help="a Platinum .sav/.dsv")
     prep.add_argument("--allow-corrupt", action="store_true", help="load a corrupt save anyway")
     who = prep.add_mutually_exclusive_group(required=True)
@@ -300,13 +366,21 @@ def _parser() -> argparse.ArgumentParser:
     prep.add_argument("--devices", type=int, default=os.cpu_count(), help="host CPU devices")
     prep.add_argument("--tree", type=Path, default=None, help="write the plan tree as JSON")
     prep.add_argument("--show-depth", type=int, default=1, help="plan levels printed")
-    sub.add_parser("trainers", help="list trainer ids, names and classes")
+    trainers = sub.add_parser("trainers", help="list trainer ids, names and classes")
+    game(trainers)
+    trainers.add_argument(
+        "--save", type=Path, default=None, help="list only the rival variants of its starter"
+    )
+    trainers.add_argument(
+        "--allow-corrupt", action="store_true", help="with --save: load a corrupt save anyway"
+    )
     save = sub.add_parser("save", help="inspect or export a Platinum save")
     save_sub = save.add_subparsers(dest="save_command", required=True)
     show = save_sub.add_parser("show", help="print the save's trainer, party and boxes")
     export = save_sub.add_parser("export", help="write the save's party as a party TOML")
     for cmd in (show, export):
         cmd.add_argument("save_path", type=Path, metavar="SAVE", help="a .sav or .dsv file")
+        game(cmd)
         cmd.add_argument("--allow-corrupt", action="store_true", help="load a corrupt save anyway")
     show.add_argument("--json", action="store_true", help="print the whole save as JSON")
     export.add_argument("-o", "--output", required=True, type=Path, help="party TOML to write")
@@ -314,7 +388,7 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _trainer_line(t: Trainer) -> str:
-    return f"{t.name} ({t.trainer_class}, id {t.id})"
+    return f"{t.label or t.name} ({t.trainer_class}, id {t.id})"
 
 
 def _print_report(report) -> None:
@@ -328,22 +402,100 @@ def _print_report(report) -> None:
             print(f"  {line}")
 
 
-def _fight(args):
-    """(tables, names, trainer, player party, opponent party, start weather); raises
-    ``ValueError`` when ``--lead`` names a fainted Pokemon."""
+def _game(args):
+    from nuzline.data.games import get_game
+
+    return get_game(args.game)
+
+
+def _table_version(game) -> str:
+    """``jaxcache.table_version`` of ``game``'s tables; missing tables are ``load_game``'s
+    ``GameDataError`` naming the build command, not a bare ``FileNotFoundError``."""
+    from nuzline.jaxcache import table_version
+
+    try:
+        return table_version(game.tables_dir)
+    except FileNotFoundError:
+        from nuzline.data.games import load_game
+
+        load_game(game)  # raises GameDataError when a file is missing
+        raise
+
+
+def _load_trainers(game) -> list[Trainer]:
+    """``game``'s trainers; a missing ``trainers.json`` names the command that writes it."""
+    from nuzline.data.games import EXTRACT, GameDataError
+    from nuzline.data.trainer import load_trainers
+
+    path = game.intermediate_dir / "trainers.json"
+    if not path.exists():
+        extract = EXTRACT.get(game.id, "the game's extractor")
+        raise GameDataError(f"{game.id}: no {path}; extract it with: {extract}")
+    return load_trainers(game.intermediate_dir)
+
+
+def _load_save(path: Path, allow_corrupt: bool, game, tables, names):
+    """The save at ``path`` read with ``game``'s data. Spec section 8: the game is never
+    inferred from a save, so every content impossible in ``game`` is a ``warning:`` line on
+    stderr (``saves.check.impossible_contents``) and the caller goes on."""
+    from nuzline.data.learnsets import load_learnsets
+    from nuzline.saves import load_save
+    from nuzline.saves.check import impossible_contents
+
+    save = load_save(path, allow_corrupt=allow_corrupt, tables=tables, names=names, game=game.id)
+    lines = impossible_contents(save, tables, names, load_learnsets(game.tables_dir))
+    for line in lines:
+        print(f"warning: {line} (impossible in {game.id})", file=sys.stderr)
+    if lines:
+        print(
+            f"warning: {len(lines)} impossible content(s): is {path} a save of another game? "
+            "(--game)",
+            file=sys.stderr,
+        )
+    return save
+
+
+def _starter(save) -> int | None:
+    """The save's starter species for ``resolve_trainer``; None before the choice (0)."""
+    return None if save is None else save.player_starter or None
+
+
+def _check_buildable(tables, names, trainer: Trainer, inter) -> None:
+    """Raise ``_Refused`` with the trainer-only coverage report when the fight cannot be set
+    up: its start condition is a pending user call ("unknown", never read as a weather) or a
+    party member lacks set data (``missing_set_data``; the party is then not built, as
+    ``build_trainer_party`` would raise). Plan K2b preflight #34."""
+    from nuzline.data import trainer as trainer_module
+    from nuzline.engine.coverage import _unknown_start, check_opponent, start_weather
+    from nuzline.engine.ids import Weather
+
+    missing = trainer_module.missing_set_data(trainer)
+    unknown = _unknown_start(trainer)
+    if not missing and not unknown:
+        return
+    opp = [] if missing else trainer_module.build_trainer_party(trainer, inter)
+    weather = Weather.NONE if unknown else start_weather(trainer)
+    raise _Refused(trainer, check_opponent(tables, names, trainer, opp, weather))
+
+
+def _fight(args, loaded=None):
+    """(game, tables, names, trainer, player party, opponent party, start weather, save or
+    None) for ``args.game``; ``loaded`` is its already loaded (tables, names). Raises
+    ``ValueError`` when ``--lead`` names a fainted Pokemon and ``_Refused`` when the fight
+    cannot be set up (``_check_buildable``)."""
+    from nuzline.data.games import load_game
+
+    game = _game(args)
+    # load_game first: missing Kaizo data is its one-line GameDataError, before any jax.
+    tables, names = loaded if loaded is not None else load_game(game)
+    trainers = _load_trainers(game)
     from nuzline.data.party import load_party
-    from nuzline.data.tables import load_names, load_tables
-    from nuzline.data.trainer import IntermediateData, build_trainer_party, load_trainers
+    from nuzline.data.trainer import IntermediateData, build_trainer_party
     from nuzline.engine.coverage import start_weather
 
-    trainer = resolve_trainer(
-        load_trainers(INTERMEDIATE), name=args.trainer, trainer_id=args.trainer_id
-    )
-    tables, names = load_tables(), load_names()
+    save = None
     if args.save is not None:
-        from nuzline.saves import load_save
-
-        save = load_save(args.save, allow_corrupt=args.allow_corrupt, tables=tables, names=names)
+        save = _load_save(args.save, args.allow_corrupt, game, tables, names)
         player = []
         for slot, mon in enumerate(save.party):
             if mon.is_egg:
@@ -352,45 +504,50 @@ def _fight(args):
                 player.append(mon.to_spec(tables))
         if not player:
             raise ValueError("the save's party has no Pokemon besides eggs")
-    else:
+    trainer = resolve_trainer(
+        trainers, name=args.trainer, trainer_id=args.trainer_id, player_starter=_starter(save)
+    )
+    if save is None:
         player = load_party(args.party, names)
-    opp = build_trainer_party(trainer, IntermediateData(INTERMEDIATE))
+    inter = IntermediateData(game.intermediate_dir)
+    _check_buildable(tables, names, trainer, inter)
+    opp = build_trainer_party(trainer, inter)
     if 0 <= args.lead < len(player) and player[args.lead].current_hp == 0:
         raise ValueError(f"--lead {args.lead}: that Pokemon has fainted")
-    return tables, names, trainer, player, opp, start_weather(trainer)
+    return game, tables, names, trainer, player, opp, start_weather(trainer), save
 
 
 def _coverage(args) -> int:
-    from nuzline.engine.coverage import check_coverage
-
     if args.cap is not None and args.save is None:
         raise ValueError("--cap needs --save")
-    tables, names, trainer, player, opp, weather = _fight(args)
+    game, tables, names, trainer, player, opp, weather, save = _fight(args)
+    from nuzline.engine.coverage import check_coverage
+
     print(_trainer_line(trainer))
     leads = (args.lead, args.opp_active)
     report = check_coverage(tables, names, player, trainer, opp, weather, leads)
     _print_report(report)
-    if args.save is not None:
-        _print_pool(args, tables, names, player, trainer)
+    if save is not None:
+        _print_pool(args, game, tables, names, player, trainer, save)
     return EXIT_REFUSED if report.missing else EXIT_OK
 
 
-def _print_pool(args, tables, names, player, trainer) -> None:
+def _print_pool(args, game, tables, names, player, trainer, save) -> None:
     """The pool section of ``coverage --save``; it never changes the exit code. The cap is
-    ``--cap``, else the trainer's in ``config/level_caps.toml``, else the highest party level."""
+    ``--cap``, else the trainer's in the game's caps file (``prep.caps.default_cap``), else
+    the highest party level."""
     from nuzline.data.learnsets import load_learnsets
     from nuzline.prep.caps import default_cap
     from nuzline.prep.pool import check_pool, pool_candidates
-    from nuzline.saves import load_save
 
-    save = load_save(args.save, allow_corrupt=args.allow_corrupt, tables=tables, names=names)
     cap = args.cap
     if cap is None:
         try:
-            cap = default_cap(trainer)
+            cap = default_cap(trainer, game=game.id)
         except ValueError:
             cap = max(spec.level for spec in player)
-    candidates, left_out = pool_candidates(save, tables, names, load_learnsets(), cap)
+    learnsets = load_learnsets(game.tables_dir)
+    candidates, left_out = pool_candidates(save, tables, names, learnsets, cap)
     print(f"Pool at level cap {cap} ({len(candidates)} Pokemon):")
     _print_report(check_pool(tables, names, candidates))
     for line in left_out:
@@ -405,20 +562,19 @@ def _rank(args) -> int:
     import jax
 
     from nuzline.ai.policy import UnsupportedAi
-    from nuzline.data import tables as tables_module
-    from nuzline.data.games import VANILLA
     from nuzline.engine.coverage import UnsupportedMechanics, require_coverage
     from nuzline.engine.state import make_state
-    from nuzline.jaxcache import code_version, enable_compile_cache, table_version
+    from nuzline.jaxcache import code_version, enable_compile_cache
     from nuzline.search.plan_tree import distribution_line
     from nuzline.search.stage_a import rank_actions
 
     if args.n < 1:
         raise ValueError("--n must be at least 1")
     _check_deaths(args)
+    game = _game(args)
     # Before anything compiles: JAX opens the persistent cache at the first compile.
-    enable_compile_cache(table_version(tables_module.DEFAULT) + code_version(), VANILLA)
-    tables, names, trainer, player, opp, weather = _fight(args)
+    enable_compile_cache(_table_version(game) + code_version(), game.id)
+    _, tables, names, trainer, player, opp, weather, _ = _fight(args)
     slots = protected_slots(player, names, args.protect)
     leads = (args.lead, args.opp_active)
     print(_trainer_line(trainer))
@@ -469,11 +625,9 @@ def _solve(args) -> int:
     import jax
 
     from nuzline.ai.policy import UnsupportedAi
-    from nuzline.data import tables as tables_module
-    from nuzline.data.games import VANILLA
     from nuzline.engine.coverage import UnsupportedMechanics, require_coverage
     from nuzline.engine.state import make_state
-    from nuzline.jaxcache import code_version, enable_compile_cache, table_version
+    from nuzline.jaxcache import code_version, enable_compile_cache
     from nuzline.search.plan_tree import render, to_json
     from nuzline.search.stage_b import HiddenLegality, SolveSettings, solve
 
@@ -499,10 +653,11 @@ def _solve(args) -> int:
         if args.playouts is not None
         else (args.precision or DEFAULT_PRECISION_PP) / 100,
     )
-    # _fight loads the tables from tables_module.DEFAULT: the version the run records.
-    tables_version = table_version(tables_module.DEFAULT)
-    enable_compile_cache(tables_version + code_version(), VANILLA)
-    tables, names, trainer, player, opp, weather = _fight(args)
+    game = _game(args)
+    # _fight loads the tables from game.tables_dir: the version the run records.
+    tables_version = _table_version(game)
+    enable_compile_cache(tables_version + code_version(), game.id)
+    _, tables, names, trainer, player, opp, weather, _ = _fight(args)
     slots = protected_slots(player, names, args.protect)
     leads = (args.lead, args.opp_active)
     print(_trainer_line(trainer))
@@ -529,11 +684,14 @@ def _solve(args) -> int:
     for line in render(result, names, args.show_depth, root=state, trainer=trainer.name):
         print(line)
     tree = to_json(result, names, root=state, trainer=trainer.name, table_version=tables_version)
+    tree["game"] = game.id
     if args.tree is not None:
         args.tree.write_text(json.dumps(tree, indent=1))
         print(f"plan tree: {args.tree}")
     record = {
         **_source_hash(args),
+        "game": game.id,
+        "table_version": tables_version,
         "trainer_id": trainer.id,
         "trainer": trainer.name,
         "lead": args.lead,
@@ -572,19 +730,16 @@ def _parse_weights(values: Sequence[str]) -> tuple[tuple[str, float], ...]:
 def _prep(args) -> int:
     import jax
 
-    from nuzline.data import tables as tables_module
-    from nuzline.data.games import VANILLA
+    from nuzline.data.games import load_game
     from nuzline.data.learnsets import load_learnsets
-    from nuzline.data.tables import load_names, load_tables
-    from nuzline.data.trainer import IntermediateData, build_trainer_party, load_trainers
+    from nuzline.data.trainer import IntermediateData, build_trainer_party
     from nuzline.engine.coverage import check_opponent, start_weather
-    from nuzline.jaxcache import code_version, enable_compile_cache, table_version
+    from nuzline.jaxcache import code_version, enable_compile_cache
     from nuzline.prep import report
     from nuzline.prep.caps import default_cap
     from nuzline.prep.problem import build_problem
     from nuzline.prep.search import PrepSettings, run_prep
     from nuzline.prep.setups import MAX_TEAM_SETUPS, check_team_space
-    from nuzline.saves import load_save
 
     _check_deaths(args)
     if args.resume is not None and args.checkpoint is not None:
@@ -604,16 +759,21 @@ def _prep(args) -> int:
         budget_seconds=args.budget,
         weights=_parse_weights(args.weight),
     )
-    tables_version = table_version(tables_module.DEFAULT)
+    game = _game(args)
+    tables_version = _table_version(game)
     # Before anything compiles: JAX opens the persistent cache at the first compile.
-    enable_compile_cache(tables_version + code_version(), VANILLA)
+    enable_compile_cache(tables_version + code_version(), game.id)
+    # load_game before the trainers: missing Kaizo data is its GameDataError line.
+    tables, names = load_game(game)
+    trainers = _load_trainers(game)
+    save = _load_save(args.save, args.allow_corrupt, game, tables, names)
     trainer = resolve_trainer(
-        load_trainers(INTERMEDIATE), name=args.trainer, trainer_id=args.trainer_id
+        trainers, name=args.trainer, trainer_id=args.trainer_id, player_starter=_starter(save)
     )
-    cap = args.cap if args.cap is not None else default_cap(trainer)
-    tables, names = load_tables(), load_names()
-    save = load_save(args.save, allow_corrupt=args.allow_corrupt, tables=tables, names=names)
-    opp = build_trainer_party(trainer, IntermediateData(INTERMEDIATE))
+    inter = IntermediateData(game.intermediate_dir)
+    _check_buildable(tables, names, trainer, inter)
+    cap = args.cap if args.cap is not None else default_cap(trainer, game=game.id)
+    opp = build_trainer_party(trainer, inter)
     weather = start_weather(trainer)
     problem, warnings = build_problem(
         tables,
@@ -622,7 +782,7 @@ def _prep(args) -> int:
         trainer,
         opp,
         weather,
-        load_learnsets(),
+        load_learnsets(game.tables_dir),
         cap=cap,
         deaths=args.deaths,
         protect=args.protect,
@@ -663,6 +823,7 @@ def _prep(args) -> int:
             resume=args.resume,
             progress=progress,
             table_version=tables_version,
+            game=game.id,
         )
     except ValueError as e:
         if not str(e).startswith("every setup refused"):
@@ -675,7 +836,9 @@ def _prep(args) -> int:
         raise ValueError(f"checkpoint {args.resume} is damaged: {e!r}") from e
     for line in report.render(result, problem, names, args.show_depth):
         print(line)
-    rec = report.record(result, problem, names, settings, args.seed, tables_version, args.reserve)
+    rec = report.record(
+        result, problem, names, settings, args.seed, tables_version, args.reserve, game=game.id
+    )
     if args.tree is not None:
         if rec["plan"] is None:
             print("no plan tree: screen only")
@@ -712,21 +875,49 @@ def _write_run_record(record: dict, prefix: str = "solve") -> Path:
         return path
 
 
-def _trainers(args) -> int:
-    from nuzline.data.trainer import load_trainers
+def _listing_line(t: Trainer) -> str:
+    """One ``nuzline trainers`` line: id, label (else name), the optional, gauntlet and
+    non-single format marks, and the class."""
+    marks = ""
+    if t.optional:
+        marks += " [optional]"
+    if t.gauntlet is not None:
+        group, position = t.gauntlet
+        marks += f" [gauntlet {group} #{position}]"
+    if t.format != "single":
+        marks += f" [{t.format}]"
+    return f"{t.id:4d}  {t.label or t.name}{marks}  ({t.trainer_class})"
 
-    for t in load_trainers(INTERMEDIATE):
-        print(f"{t.id:4d}  {t.name}  ({t.trainer_class})")
+
+def _trainers(args) -> int:
+    game = _game(args)
+    trainers = _load_trainers(game)
+    starter = None
+    if args.save is not None:
+        from nuzline.data.games import load_game
+
+        tables, names = load_game(game)
+        starter = _starter(_load_save(args.save, args.allow_corrupt, game, tables, names))
+    for t in trainers:
+        if starter is not None and t.player_starter not in (None, starter):
+            continue  # another starter's rival variant
+        print(_listing_line(t))
     return EXIT_OK
 
 
+def _load_save_command(args):
+    """(names, save) of ``nuzline save show|export``, read with ``--game``'s data."""
+    from nuzline.data.games import load_game
+
+    game = _game(args)
+    tables, names = load_game(game)
+    return names, _load_save(args.save_path, args.allow_corrupt, game, tables, names)
+
+
 def _save_show(args) -> int:
-    from nuzline.data.tables import load_names
-    from nuzline.saves import load_save
     from nuzline.saves.export import save_json, show_lines
 
-    names = load_names()
-    save = load_save(args.save_path, allow_corrupt=args.allow_corrupt, names=names)
+    names, save = _load_save_command(args)
     if args.json:
         print(json.dumps(save_json(save, names), indent=1))  # ensure_ascii: ASCII only
     else:
@@ -736,12 +927,9 @@ def _save_show(args) -> int:
 
 
 def _save_export(args) -> int:
-    from nuzline.data.tables import load_names
-    from nuzline.saves import load_save
     from nuzline.saves.export import party_toml
 
-    names = load_names()
-    save = load_save(args.save_path, allow_corrupt=args.allow_corrupt, names=names)
+    names, save = _load_save_command(args)
     text = party_toml(save, names)  # may raise RecordError before anything is written
     args.output.write_text(text, encoding="utf-8")
     print(f"wrote {args.output}")
@@ -765,6 +953,10 @@ def main(argv: list[str] | None = None) -> int:
     }[args.command]
     try:
         return command(args)
+    except _Refused as r:
+        print(_trainer_line(r.trainer))
+        _print_report(r.report)
+        return EXIT_REFUSED
     except (ValueError, OSError) as e:
         print(f"nuzline: error: {e}", file=sys.stderr)
         return EXIT_ERROR

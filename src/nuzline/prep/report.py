@@ -422,9 +422,11 @@ def record(
     seed: int,
     table_version: str,
     reserved: Sequence[str] = (),
+    game: str = "platinum_us",
 ) -> dict:
     """The run as JSON-ready data (spec section 7). ``reserved``: the item names the user
-    reserved (the problem keeps only what is left in the bag). ``pruned`` lists every variant
+    reserved (the problem keeps only what is left in the bag). ``game``: the game id, kept
+    next to ``table_version`` in the record and its plan tree (plan K2b Task 18). ``pruned`` lists every variant
     the prune dropped with the variant that dominated it (plan 4c ruling 8)."""
     cost = setup_cost(problem, result.chosen)
     trainer = problem.trainer
@@ -437,7 +439,10 @@ def record(
             trainer=trainer.name or "Opponent",
             table_version=table_version,
         )
+        plan["game"] = game
     return {
+        "game": game,
+        "table_version": table_version,
         "trainer_id": trainer.id,
         "trainer": trainer.name,
         "cap": problem.cap,
@@ -446,7 +451,7 @@ def record(
         "reserved": list(reserved),
         "settings": _plain(settings),
         "seed": seed,
-        "fingerprint": fingerprint(problem, settings, seed, table_version, code_version()),
+        "fingerprint": fingerprint(problem, settings, seed, table_version, code_version(), game),
         "setup": _setup_json(problem, names, result.chosen),
         "prep_steps": prep_steps(problem, names, result.chosen),
         "cost": {

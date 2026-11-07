@@ -239,6 +239,7 @@ def test_record_is_json(tables, names):
     )
     assert json.loads(json.dumps(rec)) == rec
     assert set(rec) == {
+        "game", "table_version",
         "trainer_id", "trainer", "cap", "deaths", "protected", "reserved", "settings", "seed",
         "fingerprint", "setup", "prep_steps", "cost", "ladder", "distribution", "plan",
         "finalists", "stats", "excluded", "pruned", "cheaper_alternative",
@@ -248,6 +249,8 @@ def test_record_is_json(tables, names):
     assert rec["setup"][1]["moves"][1:3] == ["Fury Swipes", "Hidden Power"]
     assert rec["cost"]["text"] == "Cost: 11 Rare Candies, 1 Heart Scale, TM10"
     assert rec["plan"]["deaths_allowed"] == 0 and rec["plan"]["table_version"] == "tv"
+    assert rec["game"] == rec["plan"]["game"] == rec["fingerprint"]["game"] == "platinum_us"
+    assert rec["table_version"] == "tv"
     assert len(rec["ladder"]) == 4 and rec["distribution"]["win_0"] == 0.85
     assert rec["finalists"][0]["value"] == 0.85
     assert rec["pruned"][0]["dominated_by"]["hp"] == 40

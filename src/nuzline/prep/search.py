@@ -907,6 +907,7 @@ def run_prep(
     clock: Callable[[], float] = time.perf_counter,
     table_version: str | None = None,
     code_version: str | None = None,
+    game: str = "platinum_us",
 ) -> PrepResult:
     """Run the funnel (module docstring) and return the best answer reached.
     ``ValueError`` when every setup is refused ("every setup refused: ...") or when ``resume``
@@ -916,7 +917,8 @@ def run_prep(
     file, continue where it stopped (its elapsed time is added to ``stats.seconds``;
     ``settings.budget_seconds`` limits this invocation only) and keep writing to it unless
     ``checkpoint`` names another file. ``table_version`` and ``code_version`` (default: the
-    shipped tables' and the package's, ``jaxcache``) are what a checkpoint is tied to."""
+    shipped tables' and the package's, ``jaxcache``) and ``game`` (the game id) are what a
+    checkpoint is tied to."""
     sink = checkpoint if checkpoint is not None else resume
     print_ = None
     saved = None
@@ -927,7 +929,7 @@ def run_prep(
 
             table_version = table_version or jaxcache.table_version(tables_module.DEFAULT)
             code_version = code_version or jaxcache.code_version()
-        print_ = fingerprint(problem, settings, _seed_of(key), table_version, code_version)
+        print_ = fingerprint(problem, settings, _seed_of(key), table_version, code_version, game)
     if resume is not None:
         saved = read_checkpoint(resume, print_)["funnel"]
     funnel = _Funnel(tables, names, problem, settings, key, progress, clock, sink, print_)
