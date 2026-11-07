@@ -191,8 +191,16 @@ def start_weather(trainer: Trainer) -> Weather:
         raise ValueError(f"unknown start condition {trainer.start_condition!r}") from None
 
 
-def _unknown_start(trainer: Trainer) -> bool:
+def unknown_start(trainer: Trainer) -> bool:
+    """The fight's start condition is a pending user call ("unknown"), never a weather."""
     return UNKNOWN_CONDITION in (trainer.start_condition, trainer.area_condition.weather)
+
+
+def display_name(trainer: Trainer) -> str:
+    """How a report names ``trainer``: its label when it has one (Kaizo: "Leader Roark",
+    "Pokemon Trainer Barry #3 [Empoleon]"), else its name. ``Trainer.name`` stays the ROM
+    name for data and matching (plan K2b Ruling 5); vanilla has no labels."""
+    return trainer.label or trainer.name
 
 
 class _Collector:
@@ -262,34 +270,38 @@ def _check_trainer(c: _Collector, tables: Tables, names: Names, trainer: Trainer
     if POLICY.get(names.game) is None:
         c.add(
             Support.NONE,
-            f"{trainer.name}: no transcribed AI policy for this game (spec 5.10)",
+            f"{display_name(trainer)}: no transcribed AI policy for this game (spec 5.10)",
             "AI policy",
         )
     support = IMPLEMENTED_FORMATS.get(trainer.format, Support.NONE)
     if trainer.format == "unknown":
-        what = f"{trainer.name}: battle format unknown (depends on game state)"
+        what = f"{display_name(trainer)}: battle format unknown (depends on game state)"
     else:
-        what = f"{trainer.name}: a {trainer.format} battle"
+        what = f"{display_name(trainer)}: a {trainer.format} battle"
     c.add(support, what, "battle format")
     _check_kaizo_fields(c, names, trainer)
     effect = np.asarray(tables.trainer_item_effect)
     bag = [item for item in trainer.items if item]
     for item in bag:
         support = IMPLEMENTED_TRAINER_ITEMS.get(TrainerItemId(int(effect[item])), Support.NONE)
-        c.add(support, f"{trainer.name}: {names.item_names[item]}", "trainer item")
+        c.add(support, f"{display_name(trainer)}: {names.item_names[item]}", "trainer item")
     if len(set(bag)) > 1:
         mixed = ", ".join(names.item_names[i] for i in bag)
-        c.add(Support.NONE, f"{trainer.name}: a bag of mixed items {mixed}", "multi-slot item use")
+        c.add(
+            Support.NONE,
+            f"{display_name(trainer)}: a bag of mixed items {mixed}",
+            "multi-slot item use",
+        )
     flags = int(trainer.ai_flags)
     for bit in range(flags.bit_length()):
         if flags >> bit & 1:
             name = AI_FLAG_NAMES[bit] if bit < len(AI_FLAG_NAMES) else f"UNUSED_{bit}"
             support = IMPLEMENTED_AI_FLAGS.get(bit, Support.NONE)
-            c.add(support, f"{trainer.name}: AI_FLAG_{name}", "AI flag")
+            c.add(support, f"{display_name(trainer)}: AI_FLAG_{name}", "AI flag")
     if flags & POLICY_AI_FLAGS != POLICY_AI_FLAGS:
         c.add(
             Support.NONE,
-            f"{trainer.name}: AI flags {flags:#x} without all of BASIC, EVAL_ATTACK and "
+            f"{display_name(trainer)}: AI flags {flags:#x} without all of BASIC, EVAL_ATTACK and "
             "EXPERT, which the AI policy always runs together",
             "AI flag set",
         )
@@ -303,21 +315,21 @@ def _check_kaizo_fields(c: _Collector, names: Names, trainer: Trainer) -> None:
         c.add(Support.NONE, f"Battle start: {permanent}Trick Room", "field condition")
     if area.gravity:
         c.add(Support.NONE, f"Battle start: {permanent}Gravity", "field condition")
-    if _unknown_start(trainer):
+    if unknown_start(trainer):
         c.add(Support.NONE, "Battle start: condition unknown (user call)", "start condition")
     if trainer.gauntlet is not None:
         group, position = trainer.gauntlet
         rules = ", ".join(f"{k}={str(v).lower()}" for k, v in trainer.gauntlet_rules.items())
         c.add(
             Support.NONE,
-            f"{trainer.name}: gauntlet {group} (position {position}; "
+            f"{display_name(trainer)}: gauntlet {group} (position {position}; "
             f"rules {rules or 'not recorded'})",
             "battle format",
         )
     for k in missing_set_data(trainer):
         c.add(
             Support.NONE,
-            f"{trainer.name} slot {k}: nature/gender/ability unknown (no PKCalc set)",
+            f"{display_name(trainer)} slot {k}: nature/gender/ability unknown (no PKCalc set)",
             "trainer data",
         )
     if names.game == KAIZO and names.unclassified_rom_changes > 0:
@@ -351,11 +363,11 @@ def check_opponent(
     lines. It runs no ``ai_refusals``: those depend on the player's party, so a caller
     that needs them runs them per setup."""
     c = _Collector()
-    _check_party(c, tables, names, trainer.name, opp, trainer_side=True)
+    _check_party(c, tables, names, display_name(trainer), opp, trainer_side=True)
     _check_trainer(c, tables, names, trainer)
     # An "unknown" start condition is refused by _check_trainer, never read as a weather.
     weathers = [start_condition]
-    if not _unknown_start(trainer):
+    if not unknown_start(trainer):
         weathers.append(start_weather(trainer))
     _check_weather(c, weathers)
     return c.report
@@ -384,7 +396,7 @@ def check_coverage(
 
     state = make_state(tables, player, opp, start_condition, opp_items=trainer.items, leads=leads)
     for reason in ai_refusals(tables, state):
-        c.add(Support.NONE, f"{trainer.name}: {reason}", "trainer AI")
+        c.add(Support.NONE, f"{display_name(trainer)}: {reason}", "trainer AI")
     return c.report
 
 

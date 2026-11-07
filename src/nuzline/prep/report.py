@@ -426,8 +426,8 @@ def record(
 ) -> dict:
     """The run as JSON-ready data (spec section 7). ``reserved``: the item names the user
     reserved (the problem keeps only what is left in the bag). ``game``: the game id, kept
-    next to ``table_version`` in the record and its plan tree (plan K2b Task 18). ``pruned`` lists every variant
-    the prune dropped with the variant that dominated it (plan 4c ruling 8)."""
+    next to ``table_version`` in the record and its plan tree (plan K2b Task 18). ``pruned``
+    lists every variant the prune dropped with the variant that dominated it (plan 4c ruling 8)."""
     cost = setup_cost(problem, result.chosen)
     trainer = problem.trainer
     plan = None

@@ -925,9 +925,9 @@ def run_prep(
     if sink is not None:
         if table_version is None or code_version is None:
             from nuzline import jaxcache
-            from nuzline.data import tables as tables_module
+            from nuzline.data.games import get_game
 
-            table_version = table_version or jaxcache.table_version(tables_module.DEFAULT)
+            table_version = table_version or jaxcache.table_version(get_game(game).tables_dir)
             code_version = code_version or jaxcache.code_version()
         print_ = fingerprint(problem, settings, _seed_of(key), table_version, code_version, game)
     if resume is not None:

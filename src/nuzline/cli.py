@@ -83,6 +83,7 @@ from pathlib import Path
 
 from nuzline.data.games import ALIASES
 from nuzline.data.trainer import Trainer
+from nuzline.text import ascii_text
 
 # The vanilla trainers directory (benchmarks/ and tests read it; commands use the game's).
 INTERMEDIATE = Path(__file__).resolve().parents[2] / "data" / "intermediate"
@@ -182,22 +183,38 @@ def resolve_trainer(
     matches = [t for t in trainers if key in (t.name.lower(), (t.label or "").lower())]
     if not matches and key:
         matches = [t for t in trainers if t.label is not None and key in t.label.lower()]
-    if player_starter is not None:
-        matches = [t for t in matches if t.player_starter in (None, player_starter)]
     if not matches:
         raise ValueError(f"no trainer named {name!r} (see `nuzline trainers`)")
+    if player_starter is not None:
+        kept = [t for t in matches if t.player_starter in (None, player_starter)]
+        if not kept:
+            ids = ", ".join(str(t.id) for t in matches)
+            raise ValueError(
+                f"no trainer named {name!r} for the save's starter (species {player_starter}): "
+                f"trainer ids {ids} are other starters' variants; pass --trainer-id"
+            )
+        matches = kept
     if (
         len(matches) > 1
         and all(t.player_starter is not None for t in matches)
         and len({_variant_key(t) for t in matches}) == 1
     ):
-        ids = ", ".join(str(t.id) for t in matches)
-        raise ValueError(
-            f"{name!r} is fought with one team per player starter (trainer ids {ids}): "
-            "pass --save or --trainer-id"
-        )
+        _starter_variants(name, matches)
     leaders = [t for t in matches if t.trainer_class.lower().startswith("leader")]
-    return (leaders or matches)[0]
+    chosen = (leaders or matches)[0]
+    if player_starter is None and chosen.player_starter is not None:
+        # A rival or partner team depends on the starter: never guess it (fix round 1, I2).
+        _starter_variants(name, [t for t in matches if t.player_starter is not None])
+    return chosen
+
+
+def _starter_variants(name: str | None, variants: Sequence[Trainer]) -> None:
+    """Raise the error for a name whose fights are starter variants."""
+    ids = ", ".join(str(t.id) for t in variants)
+    raise ValueError(
+        f"{name!r} is fought with one team per player starter (trainer ids {ids}): "
+        "pass --save or --trainer-id"
+    )
 
 
 _DEVICE_FLAG = "--xla_force_host_platform_device_count"
@@ -387,8 +404,14 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _say(text: str) -> None:
+    """Print ``text`` as plain ASCII (``nuzline.text.ascii_text``): trainer, species and
+    move names can carry characters a cp1252 console cannot print."""
+    print(ascii_text(text))
+
+
 def _trainer_line(t: Trainer) -> str:
-    return f"{t.label or t.name} ({t.trainer_class}, id {t.id})"
+    return ascii_text(f"{t.label or t.name} ({t.trainer_class}, id {t.id})")
 
 
 def _print_report(report) -> None:
@@ -399,7 +422,7 @@ def _print_report(report) -> None:
             continue
         print(f"{title} ({len(lines)}):")
         for line in lines:
-            print(f"  {line}")
+            _say(f"  {line}")
 
 
 def _game(args):
@@ -445,11 +468,13 @@ def _load_save(path: Path, allow_corrupt: bool, game, tables, names):
     save = load_save(path, allow_corrupt=allow_corrupt, tables=tables, names=names, game=game.id)
     lines = impossible_contents(save, tables, names, load_learnsets(game.tables_dir))
     for line in lines:
-        print(f"warning: {line} (impossible in {game.id})", file=sys.stderr)
+        print(ascii_text(f"warning: {line} (impossible in {game.id})"), file=sys.stderr)
     if lines:
         print(
-            f"warning: {len(lines)} impossible content(s): is {path} a save of another game? "
-            "(--game)",
+            ascii_text(
+                f"warning: {len(lines)} impossible content(s): is {path} a save of another "
+                "game? (--game)"
+            ),
             file=sys.stderr,
         )
     return save
@@ -466,11 +491,11 @@ def _check_buildable(tables, names, trainer: Trainer, inter) -> None:
     party member lacks set data (``missing_set_data``; the party is then not built, as
     ``build_trainer_party`` would raise). Plan K2b preflight #34."""
     from nuzline.data import trainer as trainer_module
-    from nuzline.engine.coverage import _unknown_start, check_opponent, start_weather
+    from nuzline.engine.coverage import check_opponent, start_weather, unknown_start
     from nuzline.engine.ids import Weather
 
     missing = trainer_module.missing_set_data(trainer)
-    unknown = _unknown_start(trainer)
+    unknown = unknown_start(trainer)
     if not missing and not unknown:
         return
     opp = [] if missing else trainer_module.build_trainer_party(trainer, inter)
@@ -478,16 +503,16 @@ def _check_buildable(tables, names, trainer: Trainer, inter) -> None:
     raise _Refused(trainer, check_opponent(tables, names, trainer, opp, weather))
 
 
-def _fight(args, loaded=None):
+def _fight(args):
     """(game, tables, names, trainer, player party, opponent party, start weather, save or
-    None) for ``args.game``; ``loaded`` is its already loaded (tables, names). Raises
+    None) for ``args.game``. Raises
     ``ValueError`` when ``--lead`` names a fainted Pokemon and ``_Refused`` when the fight
     cannot be set up (``_check_buildable``)."""
     from nuzline.data.games import load_game
 
     game = _game(args)
     # load_game first: missing Kaizo data is its one-line GameDataError, before any jax.
-    tables, names = loaded if loaded is not None else load_game(game)
+    tables, names = load_game(game)
     trainers = _load_trainers(game)
     from nuzline.data.party import load_party
     from nuzline.data.trainer import IntermediateData, build_trainer_party
@@ -551,7 +576,7 @@ def _print_pool(args, game, tables, names, player, trainer, save) -> None:
     print(f"Pool at level cap {cap} ({len(candidates)} Pokemon):")
     _print_report(check_pool(tables, names, candidates))
     for line in left_out:
-        print(line)
+        _say(line)
 
 
 def _pct(p: float) -> str:
@@ -588,11 +613,11 @@ def _rank(args) -> int:
     try:
         ranking = rank_actions(tables, names, state, args.n, jax.random.PRNGKey(args.seed))
     except UnsupportedAi as e:
-        print(f"refused: {e}")
+        _say(f"refused: {e}")
         return EXIT_REFUSED
     mine = names.species_names[player[args.lead].species]
     theirs = names.species_names[opp[args.opp_active].species]
-    print(f"{mine} vs {theirs}: {args.n} playouts per action, seed {args.seed}")
+    _say(f"{mine} vs {theirs}: {args.n} playouts per action, seed {args.seed}")
     width = max(len("action"), *(len(r.label) for r in ranking))
     win = "P(win, 0 faints)" if args.deaths == 0 else f"P(win, <={args.deaths} deaths)"
     rungs = " ".join(f"{f'<={k}':>7}" for k in range(MAX_DEATHS + 1))
@@ -605,7 +630,7 @@ def _rank(args) -> int:
         odds = f"{_pct(r.score)} [{100 * r.ci_low:4.1f}, {100 * r.ci_high:5.1f}]"
         ladder = [_pct(v) for v in r.ladder] or ["-"] * (MAX_DEATHS + 1)
         cells = " ".join(f"{c:>7}" for c in ladder)
-        print(
+        _say(
             f"  {mark} {i:2d}  {r.label:<{width}}  {odds:<27}  {_pct(r.p_win):>7}  "
             f"{r.e_faints:9.2f}  {cells}"
         )
@@ -615,7 +640,7 @@ def _rank(args) -> int:
         print(distribution_line(ranking[0].distribution))
     if slots:
         who = ", ".join(names.species_names[player[i].species] for i in slots)
-        print(f"protected: {who} (a line where one faints fails)")
+        _say(f"protected: {who} (a line where one faints fails)")
     if ranking.all_zero:
         print(all_zero_footer(args.deaths))
     return EXIT_OK
@@ -664,7 +689,7 @@ def _solve(args) -> int:
     try:
         require_coverage(tables, names, player, trainer, opp, weather, leads)
     except UnsupportedMechanics as e:
-        print(f"refused: {e}")
+        _say(f"refused: {e}")
         _print_report(e.report)
         return EXIT_REFUSED
     state = make_state(tables, player, opp, weather, opp_items=trainer.items, leads=leads)
@@ -672,17 +697,18 @@ def _solve(args) -> int:
     try:
         result = solve(tables, names, state, jax.random.PRNGKey(args.seed), settings)
     except (UnsupportedAi, HiddenLegality) as e:
-        print(f"refused: {e}")
+        _say(f"refused: {e}")
         return EXIT_REFUSED
     if not result.ranking:
         # Every root action's own turn is sampling-only: nothing to recommend (spec section 5).
-        print("refused: " + "; ".join(result.dropped.values()))
+        _say("refused: " + "; ".join(result.dropped.values()))
         return EXIT_REFUSED
     mine = names.species_names[player[args.lead].species]
     theirs = names.species_names[opp[args.opp_active].species]
-    print(f"{mine} vs {theirs}: seed {args.seed}")
-    for line in render(result, names, args.show_depth, root=state, trainer=trainer.name):
-        print(line)
+    _say(f"{mine} vs {theirs}: seed {args.seed}")
+    shown = trainer.label or trainer.name
+    for line in render(result, names, args.show_depth, root=state, trainer=shown):
+        _say(line)
     tree = to_json(result, names, root=state, trainer=trainer.name, table_version=tables_version)
     tree["game"] = game.id
     if args.tree is not None:
@@ -828,14 +854,14 @@ def _prep(args) -> int:
     except ValueError as e:
         if not str(e).startswith("every setup refused"):
             raise
-        print(f"refused: {e}")
+        _say(f"refused: {e}")
         return EXIT_REFUSED
     except (KeyError, TypeError, IndexError) as e:
         if args.resume is None:
             raise
         raise ValueError(f"checkpoint {args.resume} is damaged: {e!r}") from e
     for line in report.render(result, problem, names, args.show_depth):
-        print(line)
+        _say(line)
     rec = report.record(
         result, problem, names, settings, args.seed, tables_version, args.reserve, game=game.id
     )
@@ -886,7 +912,7 @@ def _listing_line(t: Trainer) -> str:
         marks += f" [gauntlet {group} #{position}]"
     if t.format != "single":
         marks += f" [{t.format}]"
-    return f"{t.id:4d}  {t.label or t.name}{marks}  ({t.trainer_class})"
+    return ascii_text(f"{t.id:4d}  {t.label or t.name}{marks}  ({t.trainer_class})")
 
 
 def _trainers(args) -> int:
@@ -958,7 +984,7 @@ def main(argv: list[str] | None = None) -> int:
         _print_report(r.report)
         return EXIT_REFUSED
     except (ValueError, OSError) as e:
-        print(f"nuzline: error: {e}", file=sys.stderr)
+        print(ascii_text(f"nuzline: error: {e}"), file=sys.stderr)
         return EXIT_ERROR
 
 

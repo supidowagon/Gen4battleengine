@@ -41,6 +41,7 @@ _MISMATCH = (
     ("problem", "checkpoint is for another save or pool, or other fight settings (deaths, cap)"),
     ("settings", "checkpoint is for other settings"),
     ("seed", "checkpoint is for another seed"),
+    ("game", "checkpoint is for another game"),
     ("tables", "checkpoint is for other tables"),
     ("code", "checkpoint is for another code version"),
 )
@@ -75,8 +76,8 @@ def fingerprint(
     game: str = "platinum_us",
 ) -> dict[str, str]:
     """What a checkpoint is tied to. ``game``: the game id (plan K2b ruling 17; its
-    ``table_version`` differs per game too, as the manifest records the game). ``problem``: the sha256 of the canonical JSON of the
-    candidates (specs, locations, relearner and TM options, candies), the ``levelled`` moves,
+    ``table_version`` differs per game too, as the manifest records the game). ``problem``:
+    the sha256 of the canonical JSON of the candidates (specs, locations, relearner and TM options, candies), the ``levelled`` moves,
     the opponent specs, the trainer id, start condition, resources, deaths budget, protected
     set, prestatus, cap and source. ``settings``: the same for the settings without
     ``budget_seconds`` (a resumed run may have another budget)."""

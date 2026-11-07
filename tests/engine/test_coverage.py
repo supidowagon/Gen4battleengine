@@ -21,6 +21,7 @@ from nuzline.engine.coverage import (
     check_opponent,
     require_coverage,
     start_weather,
+    unknown_start,
 )
 from nuzline.engine.ids import Weather
 from tests.engine.helpers import INTERMEDIATE, _inter, roark_party, roark_trainer, sample_party
@@ -283,7 +284,8 @@ def test_trainer_of_a_game_without_ai_policy_refused(tables, names, vanilla_mani
 
 def test_kaizo_trainer_ai_refused(kaizo_tables, kaizo_names, kaizo_roark, kaizo_roark_party):
     report = check_opponent(kaizo_tables, kaizo_names, kaizo_roark, kaizo_roark_party, Weather.NONE)
-    assert NO_POLICY in report.missing
+    # Reports name a labelled trainer by its label (Task 18 fix round 1).
+    assert kaizo_roark.label == "Leader Roark" and f"Leader {NO_POLICY}" in report.missing
 
 
 # --- Kaizo trainer fields (K2b Task 14) ----------------------------------------------
@@ -403,3 +405,18 @@ def test_ability_override_without_set_data_refused(tables, names):  # review I1
     t = replace(t, party=(full, *t.party[1:]))
     report = check_opponent(tables, names, t, roark_party(names), 0)
     assert not any("no PKCalc set" in m for m in report.missing)
+
+
+def test_report_names_a_labelled_trainer_by_its_label(tables, names):
+    # Task 18 fix round 1: a Kaizo label is what a report shows; the ROM name stays data.
+    t = replace(roark_trainer(), label="Leader Roark", format="double")
+    opp = roark_party(names)
+    opp[0] = replace(opp[0], moves=(names.move("Metronome"), 0, 0, 0))
+    report = check_opponent(tables, names, t, opp, 0)
+    assert "Leader Roark: a double battle (battle format UNSUPPORTED)" in report.missing
+    line = "Leader Roark GEODUDE (slot 0): Metronome (move effect UNSUPPORTED)"
+    assert line.lower() in [m.lower() for m in report.missing]
+    assert not any(m.startswith("Roark") for m in report.missing + report.sampling_only)
+    assert t.name == "Roark"
+    assert unknown_start(replace(t, start_condition="unknown"))
+    assert not unknown_start(t)

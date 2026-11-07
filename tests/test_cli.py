@@ -1074,3 +1074,69 @@ def test_impossible_save_contents_warn(tmp_path, tables, names, capsys):
         warnings = [line for line in err.splitlines() if "Hydro Pump" in line]
         assert len(warnings) == 1, (argv, err)
         assert warnings[0].startswith("warning: ") and "STARLY" in warnings[0].upper()
+
+
+# ---- Task 18 fix round 1: ASCII output; a rival name needs the starter ----
+
+BARRYS = [
+    kt("Pok\xe9mon Trainer Barry #2 [Turtwig]", id=247, starter=393),
+    kt("Pok\xe9mon Trainer Barry #2 [Piplup]", id=249, starter=390),
+    kt("Pok\xe9mon Trainer Barry #3 [Torterra]", id=470, starter=393),
+    kt("Pok\xe9mon Trainer Barry #3 [Empoleon]", id=472, starter=390),
+]
+
+
+def test_bare_rival_name_needs_a_save():
+    # Two different Barry fights: no single fight's variants, still never guessed (I2).
+    with pytest.raises(ValueError, match=r"247, 249, 470, 472.*--save or --trainer-id"):
+        resolve_trainer(BARRYS, name="barry")
+    assert resolve_trainer(BARRYS, name="barry", player_starter=390).id == 249
+    assert resolve_trainer(BARRYS, name="barry #3", player_starter=390).id == 472
+    assert resolve_trainer(BARRYS, trainer_id=470).id == 470
+
+
+def test_rival_without_the_saves_starter_names_it():
+    with pytest.raises(ValueError, match=r"starter \(species 387\).*247, 249, 470, 472"):
+        resolve_trainer(BARRYS, name="barry", player_starter=387)
+
+
+def test_trainers_output_is_ascii(tmp_path, monkeypatch, capsys):
+    write_trainers(
+        tmp_path,
+        [kt("Pok\xe9mon Trainer Barry #1 [Piplup]", starter=390, cls="Swimmer♂")],
+    )
+    monkeypatch.setitem(games.GAMES, _KAIZO, Game(_KAIZO, tmp_path, tmp_path))
+    assert main(["trainers", "--game", "kaizo"]) == 0
+    out = capsys.readouterr().out
+    assert out.isascii() and "Pok\\xe9mon Trainer Barry #1 [Piplup]" in out
+    assert "(Swimmer\\u2642)" in out
+
+
+def _cp1252_cli(*argv: str) -> subprocess.CompletedProcess:
+    """``python -m nuzline.cli ARGV`` with stdout and stderr encoded as cp1252, the default
+    Windows console; output decoded as cp1252."""
+    env = {**os.environ, "PYTHONPATH": str(ROOT / "src"), "PYTHONIOENCODING": "cp1252"}
+    return subprocess.run(
+        [sys.executable, "-m", "nuzline.cli", *argv],
+        check=False,
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        encoding="cp1252",
+    )
+
+
+def test_trainers_prints_on_a_cp1252_console():
+    done = _cp1252_cli("trainers")
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.isascii() and "246  Roark  (Leader)" in done.stdout
+
+
+def test_kaizo_rival_refusal_prints_on_a_cp1252_console(tmp_path, kaizo_tables, kaizo_names):
+    party = _kaizo_party(tmp_path, kaizo_names)
+    done = _cp1252_cli("coverage", "--game", "kaizo", "--party", party, "--trainer-id", "472")
+    assert done.returncode == 2, done.stderr
+    out = done.stdout
+    assert out.isascii() and "Pok\\xe9mon Trainer Barry #3 [Empoleon] (" in out
+    assert "Support: NONE" in out and "Missing (" in out
+    assert "Pok\\xe9mon Trainer Barry #3 [Empoleon]: no transcribed AI policy" in out

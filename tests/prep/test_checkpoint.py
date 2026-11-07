@@ -251,6 +251,7 @@ def refusal_cases(tables, names):
         ("settings", {"settings": dataclasses.replace(SETTINGS, screen_n=6)}, "other settings"),
         ("tables", {"table_version": "tables-2"}, "other tables"),
         ("code", {"code_version": "code-2"}, "another code version"),
+        ("game", {"game": "platinum_kaizo_nightmare_final"}, "another game"),
     ]
 
 
@@ -265,7 +266,7 @@ def saved(tables, names, monkeypatch, tmp_path):
     return prob, path
 
 
-@pytest.mark.parametrize("which", range(7))
+@pytest.mark.parametrize("which", range(8))
 def test_resume_refuses_mismatch(tables, names, saved, which):
     prob, path = saved
     name, change, message = refusal_cases(tables, names)[which]

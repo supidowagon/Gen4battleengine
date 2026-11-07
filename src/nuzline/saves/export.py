@@ -11,15 +11,14 @@ from nuzline.data.games import VANILLA
 from nuzline.saves.pkm import SaveMon
 from nuzline.saves.save import SaveFile, default_tables_and_names
 from nuzline.saves.status import decode_status
+from nuzline.text import ascii_text
 
 __all__ = ["party_toml", "save_json", "show_lines"]
 
 _GENDERS = ("male", "female", "none")
 
 
-def _ascii(text: str) -> str:
-    """``text`` with every non-ASCII character escaped (a default Windows console is cp1252)."""
-    return text.encode("ascii", "backslashreplace").decode("ascii")
+_ascii = ascii_text  # every non-ASCII character escaped (nuzline.text)
 
 
 def _move_name(names, move: int) -> str:
