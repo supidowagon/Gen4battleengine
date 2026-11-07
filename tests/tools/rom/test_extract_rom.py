@@ -14,6 +14,7 @@ from tools.extract_rom import (
     UNRESOLVED_FILE,
     check_reuse_names,
     extract,
+    move_list_override,
     parse_args,
     reuse_violations,
 )
@@ -122,3 +123,10 @@ def test_reuse_names_checked(symbols, decomp, monkeypatch):
     monkeypatch.setattr(er, "REUSE_BANKS", (*REUSE_BANKS, "TEXT_BANK_NATURES"))
     with pytest.raises(RomInputError, match="TEXT_BANK_NATURES"):
         check_reuse_names(symbols, decomp)
+
+
+def test_move_list_override_per_game():
+    from tools.kaizo.overrides import load_overrides
+
+    assert move_list_override("vanilla") is None
+    assert move_list_override("kaizo") == load_overrides().move_lists

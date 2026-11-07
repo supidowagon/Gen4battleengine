@@ -206,6 +206,16 @@ def _report_kaizo(trainers: list[dict], effects: dict[int, dict[str, list[int]]]
     return rows
 
 
+def move_list_override(game: str) -> dict[str, list[int]] | None:
+    """Kaizo: ``data/kaizo/overrides.toml`` ``[move_lists]`` (hand-read lists for a sound or
+    punch list the reader cannot find unchanged; pre-flight #17). Vanilla: none."""
+    if game != "kaizo":
+        return None
+    from tools.kaizo.overrides import load_overrides
+
+    return load_overrides().move_lists
+
+
 def _unresolved_rows(unresolved, decomp: Path) -> list[dict]:
     from tools.rom.readers.maps import SCRIPTS_NARC, var_ids
 
@@ -285,7 +295,12 @@ def extract(game: str, out: Path, decomp: Path, symbols: Path, inputs: RomInputs
             "species": read_species(rom, decomp, charmap),
             "forms": read_forms(rom, decomp, charmap),
             "moves": read_moves(rom, decomp, charmap),
-            "move_lists": read_move_lists(rom, extract_move_lists(decomp), vanilla_rom=vanilla_rom),
+            "move_lists": read_move_lists(
+                rom,
+                extract_move_lists(decomp),
+                override=move_list_override(game),
+                vanilla_rom=vanilla_rom,
+            ),
             "items": read_items(rom, decomp, smap, charmap),
             "learnsets": read_learnsets(rom, decomp),
             "tm_learnsets": read_tm_learnsets(rom),

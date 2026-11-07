@@ -1,0 +1,773 @@
+"""Committed Kaizo overrides: loader, citation checks and the reviewed draft (plan Task 10).
+
+``data/kaizo/overrides.toml`` holds the facts the extractors cannot settle alone (spec 6.4,
+13; plan Rulings 8-9): Trick Room and Gravity areas, gauntlet groups, trainer-id settlements
+for PKCalc labels and sheet headers, corrections to derived trainer fields and hand-read
+move lists. Every entry carries ``source``: ``"<sheet>:<row>"``, ``"pkcalc:<file>:<line>"``,
+``"rom:<what>"`` or ``"user, <YYYY-MM-DD>"``; anything else is an ``OverridesError``.
+
+Tables (keys are ROM trainer ids unless said otherwise):
+
+- ``[area.<id>]``: ``trick_room``, ``gravity`` (bool, default false), ``weather``
+  (``rain|sun|sandstorm|hail|fog|none``; absent = the ROM-derived start condition stands).
+- ``[area_exception.<id>]``: ``reason``. A ROM Trick Room trainer (``rom_field_effects.json``)
+  deliberately left without a ``trick_room`` override, e.g. one whose start condition the
+  evidence does not settle (``data/kaizo/start_conditions.json`` ``unknown``).
+- ``[[gauntlet]]``: ``name``, ``trainers`` (ids, fight order), ``rules`` (only
+  ``heal_between`` / ``change_team``, bool; empty until play reaches the group, spec 12.4).
+- ``[trainer_ids."<label or sheet cite>"]``: ``id``, read by ``trainer_map``.
+- ``[fields.<id>]``: corrections to derived fields: ``split``, ``optional``, ``left_side``,
+  ``player_starter``.
+- ``[move_lists.<sound|punch>]``: ``ids``, for ``read_move_lists(..., override=...)``.
+
+:func:`check_citations` re-reads every sheet citation against ``docs.json``;
+:func:`check_rom_trick_room` requires every ROM Trick Room trainer to be overridden or
+excepted; :func:`draft_overrides` writes the reviewed draft.
+
+Usage: python -m tools.kaizo.overrides draft|check
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import sys
+import tomllib
+from collections import defaultdict
+from collections.abc import Iterable, Iterator
+from dataclasses import dataclass, field
+from pathlib import Path
+
+from tools.kaizo.trainer_map import (
+    Mapping,
+    MappingError,
+    check_override_keys,
+    map_sheet_headers,
+    map_trainers,
+)
+from tools.rom.inputs import REPO_ROOT
+
+DEFAULT_PATH = REPO_ROOT / "data" / "kaizo" / "overrides.toml"
+DRAFT_PATH = REPO_ROOT / ".cache" / "kaizo" / "overrides.draft.toml"
+INTERMEDIATE = REPO_ROOT / "data" / "intermediate_kaizo"
+
+RULE_KEYS = ("heal_between", "change_team")
+WEATHERS = ("rain", "sun", "sandstorm", "hail", "fog", "none")
+MOVE_LIST_KEYS = ("sound", "punch")
+STARTERS = (387, 390, 393)
+FIELD_TYPES = {"split": str, "optional": bool, "left_side": bool, "player_starter": int}
+# Champion Cynthia's Gravity: PKCalc's UI ticks Gravity for this label only.
+GRAVITY_LABEL = "Champion Cynthia"
+GRAVITY_SOURCE = "pkcalc:src/js/shared_controls.js:611"
+TRICK_ROOM_WEATHER = 18  # Kaizo map weather that starts Trick Room (tools/rom/readers/maps.py)
+
+_SOURCE = re.compile(
+    r"pkcalc:[^:\s][^:]*:\d+"
+    r"|rom:\S.*"
+    r"|user, \d{4}-\d{2}-\d{2}"
+    r"|(?!pkcalc:|rom:)[^:]+:\d+"
+)
+_SHEET = re.compile(r"(?!pkcalc:|rom:|user, )[^:]+:\d+")
+_CLAIM_NAMES = {"trick_room": "Trick Room", "gravity": "Gravity"}
+
+
+class OverridesError(ValueError):
+    """``overrides.toml`` breaks the schema."""
+
+
+@dataclass(frozen=True)
+class AreaOverride:
+    trick_room: bool
+    gravity: bool
+    weather: str | None
+    source: str
+
+
+@dataclass(frozen=True)
+class AreaException:
+    reason: str
+    source: str
+
+
+@dataclass(frozen=True)
+class Gauntlet:
+    name: str
+    trainers: tuple[int, ...]
+    rules: dict[str, bool]
+    source: str
+
+
+@dataclass(frozen=True)
+class Overrides:
+    """``sources`` holds the citation of every ``trainer_ids``, ``fields`` and
+    ``move_lists`` entry, keyed ``"<table>.<key>"`` (area and gauntlet entries carry
+    their own)."""
+
+    area: dict[int, AreaOverride] = field(default_factory=dict)
+    gauntlets: tuple[Gauntlet, ...] = ()
+    trainer_ids: dict[str, int] = field(default_factory=dict)
+    fields: dict[int, dict[str, object]] = field(default_factory=dict)
+    move_lists: dict[str, list[int]] = field(default_factory=dict)
+    area_exceptions: dict[int, AreaException] = field(default_factory=dict)
+    sources: dict[str, str] = field(default_factory=dict)
+
+
+# --- loader ---------------------------------------------------------------------------
+
+
+def _source(entry: str, table: object) -> str:
+    if not isinstance(table, dict) or "source" not in table:
+        raise OverridesError(f"{entry}: entry has no source")
+    src = table["source"]
+    if not isinstance(src, str) or not _SOURCE.fullmatch(src):
+        raise OverridesError(
+            f"{entry}: source {src!r} is not '<sheet>:<row>', 'pkcalc:<file>:<line>', "
+            "'rom:<what>' or 'user, <YYYY-MM-DD>'"
+        )
+    return src
+
+
+def _keys(entry: str, table: dict, allowed: Iterable[str]) -> None:
+    allowed = set(allowed) | {"source"}
+    bad = sorted(k for k in table if k not in allowed)
+    if bad:
+        raise OverridesError(f"{entry}: unknown key {', '.join(map(repr, bad))}")
+
+
+def _id(entry: str, key: str) -> int:
+    if not key.isdigit():
+        raise OverridesError(f"{entry}: key {key!r} is no trainer id")
+    return int(key)
+
+
+def _bool(entry: str, name: str, value: object) -> bool:
+    if not isinstance(value, bool):
+        raise OverridesError(f"{entry}: {name} must be true or false, not {value!r}")
+    return value
+
+
+def _ints(entry: str, name: str, value: object) -> list[int]:
+    if not isinstance(value, list) or not all(
+        isinstance(v, int) and not isinstance(v, bool) for v in value
+    ):
+        raise OverridesError(f"{entry}: {name} must be a list of integers")
+    return value
+
+
+def _area(raw: dict) -> dict[int, AreaOverride]:
+    out = {}
+    for key, t in raw.items():
+        entry = f"area.{key}"
+        src = _source(entry, t)
+        _keys(entry, t, ("trick_room", "gravity", "weather"))
+        tr = _bool(entry, "trick_room", t.get("trick_room", False))
+        grav = _bool(entry, "gravity", t.get("gravity", False))
+        weather = t.get("weather")
+        if weather is not None and weather not in WEATHERS:
+            raise OverridesError(f"{entry}: weather {weather!r} is not one of {WEATHERS}")
+        if not (tr or grav or weather is not None):
+            raise OverridesError(f"{entry}: claims nothing (trick_room, gravity, weather)")
+        out[_id(entry, key)] = AreaOverride(tr, grav, weather, src)
+    return out
+
+
+def _gauntlets(raw: list) -> tuple[Gauntlet, ...]:
+    out = []
+    for i, t in enumerate(raw):
+        entry = f"gauntlet[{i}]"
+        if isinstance(t, dict) and isinstance(t.get("name"), str):
+            entry = f"gauntlet {t['name']!r}"
+        src = _source(entry, t)
+        _keys(entry, t, ("name", "trainers", "rules"))
+        if not isinstance(t.get("name"), str) or not t["name"]:
+            raise OverridesError(f"{entry}: name must be a non-empty string")
+        trainers = _ints(entry, "trainers", t.get("trainers"))
+        if len(trainers) < 2 or len(set(trainers)) != len(trainers):
+            raise OverridesError(f"{entry}: trainers must be two or more distinct ids")
+        rules = t.get("rules", {})
+        if not isinstance(rules, dict):
+            raise OverridesError(f"{entry}: rules must be a table")
+        bad = sorted(k for k in rules if k not in RULE_KEYS)
+        if bad:
+            raise OverridesError(
+                f"{entry}: unknown rules key {', '.join(map(repr, bad))} "
+                f"(allowed: {', '.join(RULE_KEYS)})"
+            )
+        for k, v in rules.items():
+            _bool(entry, k, v)
+        out.append(Gauntlet(t["name"], tuple(trainers), dict(rules), src))
+    return tuple(out)
+
+
+def load_overrides(path: Path = DEFAULT_PATH) -> Overrides:
+    """Read and validate ``overrides.toml``; an absent file is empty overrides."""
+    if not path.exists():
+        return Overrides()
+    try:
+        raw = tomllib.loads(path.read_text(encoding="utf-8"))
+    except tomllib.TOMLDecodeError as e:
+        raise OverridesError(f"{path}: {e}") from e
+    tables = ("area", "area_exception", "gauntlet", "trainer_ids", "fields", "move_lists")
+    bad = sorted(k for k in raw if k not in tables)
+    if bad:
+        raise OverridesError(f"{path.name}: unknown table {', '.join(map(repr, bad))}")
+    sources: dict[str, str] = {}
+
+    exceptions = {}
+    for key, t in raw.get("area_exception", {}).items():
+        entry = f"area_exception.{key}"
+        src = _source(entry, t)
+        _keys(entry, t, ("reason",))
+        if not isinstance(t.get("reason"), str) or not t["reason"]:
+            raise OverridesError(f"{entry}: reason must be a non-empty string")
+        exceptions[_id(entry, key)] = AreaException(t["reason"], src)
+    area = _area(raw.get("area", {}))
+    both = sorted(set(area) & set(exceptions))
+    if both:
+        raise OverridesError(f"trainer ids {both} have both an area entry and an area_exception")
+
+    trainer_ids = {}
+    for label, t in raw.get("trainer_ids", {}).items():
+        entry = f"trainer_ids.{label}"
+        sources[entry] = _source(entry, t)
+        _keys(entry, t, ("id",))
+        tid = t.get("id")
+        if not isinstance(tid, int) or isinstance(tid, bool):
+            raise OverridesError(f"{entry}: id must be an integer")
+        trainer_ids[label] = tid
+
+    fields_ = {}
+    for key, t in raw.get("fields", {}).items():
+        entry = f"fields.{key}"
+        sources[entry] = _source(entry, t)
+        _keys(entry, t, FIELD_TYPES)
+        values = {k: v for k, v in t.items() if k != "source"}
+        if not values:
+            raise OverridesError(f"{entry}: corrects no field")
+        for k, v in values.items():
+            if type(v) is not FIELD_TYPES[k]:
+                raise OverridesError(f"{entry}: {k} must be {FIELD_TYPES[k].__name__}")
+        if "player_starter" in values and values["player_starter"] not in STARTERS:
+            raise OverridesError(f"{entry}: player_starter must be one of {STARTERS}")
+        fields_[_id(entry, key)] = values
+
+    move_lists = {}
+    for key, t in raw.get("move_lists", {}).items():
+        entry = f"move_lists.{key}"
+        sources[entry] = _source(entry, t)
+        _keys(entry, t, ("ids",))
+        if key not in MOVE_LIST_KEYS:
+            raise OverridesError(f"{entry}: no such move list (one of {MOVE_LIST_KEYS})")
+        move_lists[key] = _ints(entry, "ids", t.get("ids"))
+
+    return Overrides(
+        area=area,
+        gauntlets=_gauntlets(raw.get("gauntlet", [])),
+        trainer_ids=trainer_ids,
+        fields=fields_,
+        move_lists=move_lists,
+        area_exceptions=exceptions,
+        sources=sources,
+    )
+
+
+# --- sheet rows -------------------------------------------------------------------------
+
+
+def _sections(docs: dict) -> Iterator[dict]:
+    for split in docs["splits"].values():
+        yield from split["sections"]
+
+
+def _rows(docs: dict) -> dict[str, tuple[dict, dict | None]]:
+    """cite -> (section, header); a section header row has header None."""
+    out: dict[str, tuple[dict, dict | None]] = {}
+    for sec in _sections(docs):
+        out[sec["cite"]] = (sec, None)
+        for h in sec["trainers"]:
+            out[h["cite"]] = (sec, h)
+    return out
+
+
+def _claims(tags: dict) -> set[str]:
+    """Area conditions a tag dict claims: weathers, ``fog``, ``trick_room``, ``gravity``."""
+    out = set()
+    if tags.get("permanent"):
+        out.add(tags["permanent"])
+    if tags.get("weather"):
+        out.add(tags["weather"])
+    if tags.get("trick_room"):
+        out.add("trick_room")
+    if tags.get("fog"):
+        out.add("fog")
+    return out
+
+
+def _row_claims(sec: dict, h: dict | None) -> set[str]:
+    return _claims(sec["tags"]) | (_claims(h["tags"]) if h is not None else set())
+
+
+def _says_gauntlet(sec: dict, h: dict | None) -> bool:
+    sec_flag = any(k in sec["tags"] for k in ("gym_gauntlet", "gauntlet_with", "gauntlet"))
+    return sec_flag or (h is not None and any(k in h["tags"] for k in ("gauntlet", "b2b_with")))
+
+
+def check_citations(overrides: Overrides, docs: dict) -> list[str]:
+    """Every sheet citation must still be a split row whose text supports its entry: the
+    trainer header or its section carries the claimed tag (area: Trick Room, Gravity,
+    the weather; gauntlet: a gauntlet tag). Other citations only need the row to exist."""
+    rows = _rows(docs)
+    out = []
+
+    def row(entry: str, src: str) -> tuple[dict, dict | None] | None:
+        if not _SHEET.fullmatch(src):
+            return None
+        if src not in rows:
+            out.append(f"{entry}: {src} is no split sheet row")
+            return None
+        return rows[src]
+
+    for tid, a in overrides.area.items():
+        entry = f"area.{tid}"
+        r = row(entry, a.source)
+        if r is None:
+            continue
+        claims = _row_claims(*r)
+        wanted = [k for k in ("trick_room", "gravity") if getattr(a, k)]
+        if a.weather is not None:
+            wanted.append(a.weather)
+        for k in wanted:
+            if k not in claims and not (k == "none" and not claims):
+                out.append(f"{entry}: {a.source} does not say {_CLAIM_NAMES.get(k, k)}")
+    for g in overrides.gauntlets:
+        entry = f"gauntlet {g.name!r}"
+        r = row(entry, g.source)
+        if r is not None and not _says_gauntlet(*r):
+            out.append(f"{entry}: {g.source} does not say gauntlet")
+    for tid, e in overrides.area_exceptions.items():
+        row(f"area_exception.{tid}", e.source)
+    for entry, src in overrides.sources.items():
+        row(entry, src)
+    return out
+
+
+def check_rom_trick_room(overrides: Overrides, field_effects: Iterable[dict]) -> list[str]:
+    """Every ROM Trick Room trainer (``rom_field_effects.json``) needs an ``area`` entry
+    with ``trick_room = true`` or an ``area_exception`` (Kaizo map weather 18, a ROM fact
+    that supersedes Ruling 8's "no map header holds Trick Room")."""
+    out = []
+    for r in field_effects:
+        if r["effect"] != "trick_room":
+            continue
+        tid = r["id"]
+        a = overrides.area.get(tid)
+        if (a is not None and a.trick_room) or tid in overrides.area_exceptions:
+            continue
+        out.append(
+            f"area.{tid}: ROM Trick Room ({r['name']}, map headers {r['map_headers']}) has no "
+            "trick_room override and no area_exception"
+        )
+    return out
+
+
+def check_trainer_ids(overrides: Overrides, rom_ids: set[int]) -> list[str]:
+    """Every id an entry names must be a ROM trainer id."""
+    out = []
+    for table, ids in (
+        ("area", overrides.area),
+        ("area_exception", overrides.area_exceptions),
+        ("fields", overrides.fields),
+    ):
+        out += [f"{table}.{i}: {i} is no ROM trainer id" for i in ids if i not in rom_ids]
+    for g in overrides.gauntlets:
+        out += [
+            f"gauntlet {g.name!r}: {i} is no ROM trainer id" for i in g.trainers if i not in rom_ids
+        ]
+    return out
+
+
+# --- mappings -------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Mappings:
+    """Everything the draft joins: PKCalc and sheet-header mappings (Task 9), ROM trainer
+    rows by id (``start_condition``) and ``rom_field_effects.json`` rows (the ROM trainer ->
+    map join for Trick Room, Task 8)."""
+
+    pkcalc: tuple[Mapping, ...]
+    sheet: tuple[Mapping, ...]
+    rom_trainers: dict[int, dict]
+    field_effects: tuple[dict, ...]
+
+
+def build_mappings(
+    pkcalc_trainers: dict[str, dict],
+    docs: dict,
+    rom_trainers: list[dict],
+    species: list[dict],
+    field_effects: Iterable[dict],
+    overrides: dict[str, int],
+) -> Mappings:
+    """Map PKCalc labels and sheet headers with the ``trainer_ids`` overrides, after
+    ``check_override_keys`` (a key that is neither label nor cite raises)."""
+    labels = [k for k, v in pkcalc_trainers.items() if not v.get("template")]
+    cites = [h["cite"] for sec in _sections(docs) for h in sec["trainers"]]
+    check_override_keys(overrides, labels, cites)
+    return Mappings(
+        pkcalc=tuple(map_trainers(pkcalc_trainers, rom_trainers, species, overrides)),
+        sheet=tuple(map_sheet_headers(docs, rom_trainers, species, overrides)),
+        rom_trainers={t["id"]: t for t in rom_trainers},
+        field_effects=tuple(field_effects),
+    )
+
+
+# --- draft ----------------------------------------------------------------------------
+
+HEADER = """\
+# Platinum Kaizo overrides (plan K2b Task 10; spec 6.4, 12.4, 13). Hand-reviewed; every
+# entry cites its source: "<sheet>:<row>" (Kaizo docs split sheet), "pkcalc:<file>:<line>",
+# "rom:<what>" or "user, <date>". `python -m tools.kaizo.overrides check` re-validates every
+# citation against docs.json and the ROM extraction; `... draft` regenerates the draft this
+# file was reviewed from (.cache/kaizo/overrides.draft.toml).
+#
+# Ruling 8 (area conditions): weather and fog come from the ROM map headers through the
+# trainer -> map join (permanent in battle); date-dependent maps are settled in
+# data/kaizo/start_conditions.json, not here. Its "Trick Room ... no map header holds" is
+# SUPERSEDED for Kaizo: Kaizo map weather 18 starts Trick Room (decoded from the patched
+# battle weather switch, Task 8), so every trainer in rom_field_effects.json gets a
+# trick_room entry citing the ROM, or an [area_exception] saying why not. Gravity (Champion
+# Cynthia) and sheet-only Trick Room stay here. A trainer claimed by two areas is never
+# settled by guess: its claim stays commented out with every citation. The ten start
+# conditions left "unknown" by ruling (318 325 343 509 559 610 649 676 746 747) are not
+# settled here.
+#
+# Ruling 9 (split, optional, left side): derived from the sheet at every build, with a
+# per-field citation; [fields.<id>] only corrects them. Gauntlet groups are drafted from the
+# sheet: a "Gauntlet Start" .. "Gauntlet End" chain, a "B2B With X" pair, a section tagged
+# "GYM TRAINERS ARE A GAUNTLET" (its trainers in sheet order, leader excluded) and a
+# "Gauntlet With X" section (its GAUNTLET-tagged trainers, the tag partner excluded).
+# Every group's rules stay {} until play reaches it (heal_between, change_team).
+#
+# Level caps are not here: data/kaizo/level_caps.toml (read at runtime by prep).
+"""
+
+
+def _q(s: str) -> str:
+    return json.dumps(s)
+
+
+def _ascii(s: str) -> str:
+    return s.encode("ascii", "backslashreplace").decode("ascii")
+
+
+def _area_lines(tid: int, claims: dict[str, bool], source: str) -> list[str]:
+    lines = [f"[area.{tid}]"]
+    lines += [f"{k} = true" for k in ("trick_room", "gravity") if claims.get(k)]
+    lines.append(f"source = {_q(source)}")
+    return lines
+
+
+def _rom_tr_source(row: dict) -> str:
+    hdrs = row["map_headers"]
+    word = "header" if len(hdrs) == 1 else "headers"
+    joined = ", ".join(map(str, hdrs))
+    return f"rom:map {word} {joined} weather {TRICK_ROOM_WEATHER} (Trick Room)"
+
+
+def _comment(lines: list[str]) -> list[str]:
+    return [f"# {line}" for line in lines]
+
+
+def _norm(s: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", s.casefold())
+
+
+def _names_match(target: str, name: str) -> bool:
+    """``B2B With Galactic Terra`` names ``GalacticfTerra`` (the sheet's mangled sign):
+    equal, or same first and last word around a glued middle."""
+    t, n = _norm(target), _norm(name)
+    words = target.split()
+    return t == n or (
+        len(words) > 1 and n.startswith(_norm(words[0])) and n.endswith(_norm(words[-1]))
+    )
+
+
+def _is_leader(h: dict) -> bool:
+    return h["name"].split()[0].casefold() == "leader" if h["name"].split() else False
+
+
+def _chains(sec: dict) -> list[tuple[str, list[dict], str | None]]:
+    """(source cite, headers, problem) per gauntlet chain in one section: "Gauntlet Start"
+    opens a chain (a "Gauntlet With X" or section-level GAUNTLET section opens one at its
+    top, cited by the section), GAUNTLET continues it, "Gauntlet End" closes it; several
+    consecutive ends are one multi battle pair. A chain left open, an untagged header
+    inside a chain, or a tag outside any chain is a problem (drafted commented out)."""
+    chains: list[tuple[str, list[dict], str | None]] = []
+    section_wide = "gauntlet_with" in sec["tags"] or "gauntlet" in sec["tags"]
+    cur: list[dict] | None = [] if section_wide else None
+    src, closed, problem = sec["cite"], False, None
+    for h in [*sec["trainers"], None]:
+        g = None if h is None else h["tags"].get("gauntlet")
+        if cur and (h is None or g == "start" or (g is None and closed)):
+            chains.append((src, cur, problem or (None if closed else "no Gauntlet End")))
+            cur, closed, problem = None, False, None
+        if h is None:
+            break
+        if g is None:
+            if cur:
+                problem = problem or f"untagged header {h['cite']} inside the chain"
+            continue
+        if g == "start":
+            cur, src = [h], h["cite"]
+        elif cur is None:
+            chains.append((h["cite"], [h], f"'{g}' with no Gauntlet Start before it"))
+        else:
+            if g == "middle" and closed:
+                problem = problem or "GAUNTLET after Gauntlet End"
+            cur.append(h)
+            closed = closed or g == "end"
+    if section_wide and not chains:
+        chains.append((sec["cite"], [], "no GAUNTLET-tagged trainer"))
+    return chains
+
+
+def _gauntlet_groups(docs: dict) -> list[tuple[str, str, list[dict], str | None]]:
+    """(name, source cite, headers, problem) per sheet gauntlet group (Ruling 9)."""
+    groups = []
+    for sec in _sections(docs):
+        hs = sec["trainers"]
+        if sec["tags"].get("gym_gauntlet"):
+            leaders = [h for h in hs if _is_leader(h)]
+            problem = None if len(leaders) == 1 else f"{len(leaders)} leader headers"
+            members = [h for h in hs if h not in leaders]
+            groups.append((f"{sec['name']} gym trainers", sec["cite"], members, problem))
+            continue
+        chains = _chains(sec)
+        many = len(chains) > 1
+        for i, (src, members, prob) in enumerate(chains, 1):
+            name = sec["name"] + (f" #{i}" if many else "")
+            groups.append((name, src, members, prob))
+        b2b = [h for h in hs if "b2b_with" in h["tags"]]
+        paired: set[str] = set()
+        for a in b2b:
+            if a["cite"] in paired:
+                continue
+            mates = [
+                b
+                for b in b2b
+                if b is not a
+                and _names_match(a["tags"]["b2b_with"], b["name"])
+                and _names_match(b["tags"]["b2b_with"], a["name"])
+            ]
+            if len(mates) == 1:
+                paired |= {a["cite"], mates[0]["cite"]}
+                pair = [a, mates[0]]
+                groups.append((f"{sec['name']} B2B", a["cite"], pair, None))
+            else:
+                groups.append((f"{sec['name']} B2B", a["cite"], [a], f"{len(mates)} B2B partners"))
+    return groups
+
+
+def draft_overrides(docs: dict, mappings: Mappings) -> str:
+    """TOML for every Trick Room trainer (ROM ``rom_field_effects.json`` -> ``rom:`` source;
+    sheet-only -> the sheet header), Cynthia's Gravity and every gauntlet group, with
+    ``rules = {}``. A trainer claimed by two areas (two sheet rows with different area tags,
+    or a ROM start condition ``unknown``) is drafted commented out with every citation, and
+    a ROM Trick Room one gets an ``[area_exception]``. Groups or claims whose trainers do
+    not map are drafted commented out too."""
+    sheet = {m.label: m for m in mappings.sheet}
+    rom = mappings.rom_trainers
+    rom_tr = {r["id"]: r for r in mappings.field_effects if r["effect"] == "trick_room"}
+    rows = _rows(docs)
+
+    by_id: dict[int, list[tuple[str, set[str]]]] = defaultdict(list)
+    unmapped_claims = []
+    for cite, (sec, h) in rows.items():
+        if h is None:
+            continue
+        claims = _row_claims(sec, h)
+        m = sheet.get(cite)
+        if m is not None and m.id is not None:
+            by_id[m.id].append((cite, claims))
+        elif claims & {"trick_room", "gravity"}:
+            cands = m.candidates if m is not None else ()
+            unmapped_claims.append(
+                f"# UNMAPPED {cite} {_ascii(h['text'])!r} claims {sorted(claims)}; "
+                f"ROM candidates {list(cands)}"
+            )
+
+    def name_of(tid: int) -> str:
+        return _ascii(rom.get(tid, {}).get("name") or "?")
+
+    def sheet_note(tid: int) -> str:
+        cs = [f"{c} {sorted(cl) or ['no area tag']}" for c, cl in by_id.get(tid, [])]
+        return "sheet: " + ("; ".join(cs) if cs else "no mapped row")
+
+    out = [HEADER, "# --- Trick Room -------------------------------------------------------\n"]
+    sheet_tr = {tid for tid, rs in by_id.items() if any("trick_room" in cl for _c, cl in rs)}
+    n_tr = n_conflict = 0
+    for tid in sorted(set(rom_tr) | sheet_tr):
+        rs = by_id.get(tid, [])
+        if tid in rom_tr:
+            source = _rom_tr_source(rom_tr[tid])
+        else:
+            source = next(c for c, cl in rs if "trick_room" in cl)
+        others = [(c, cl) for c, cl in rs if "trick_room" not in cl]
+        unknown = rom.get(tid, {}).get("start_condition") == "unknown"
+        lines = _area_lines(tid, {"trick_room": True}, source)
+        if not others and not unknown:
+            n_tr += 1
+            out.append(f"# {tid} {name_of(tid)}; {sheet_note(tid)}")
+            out += lines
+            out.append("")
+            continue
+        n_conflict += 1
+        out.append(f"# CONFLICT {tid} {name_of(tid)}: claimed by two areas; left unsettled.")
+        if tid in rom_tr:
+            out.append(f"#   {source}")
+        if unknown:
+            out.append(
+                "#   rom:trainers.json start_condition unknown (data/kaizo/start_conditions.json:"
+                " its maps start different conditions)"
+            )
+        out += [f"#   {c}: {sorted(cl) or ['no area tag']}" for c, cl in rs]
+        out += _comment(lines)
+        if tid in rom_tr:
+            if unknown:
+                ex_src = f"rom:trainers.json {tid} start_condition unknown"
+                reason = "start condition unknown by ruling; ROM maps disagree"
+            else:
+                ex_src = others[0][0]
+                reason = f"sheet also lists it under {sorted(others[0][1]) or 'no area tag'}"
+            out += [
+                f"[area_exception.{tid}]",
+                f"reason = {_q(reason)}",
+                f"source = {_q(ex_src)}",
+            ]
+        out.append("")
+    out += [line for line in unmapped_claims if "trick_room" in line]
+    if any("trick_room" in line for line in unmapped_claims):
+        out.append("")
+
+    out.append("# --- Gravity ----------------------------------------------------------\n")
+    cynthia = next((m for m in mappings.pkcalc if m.label == GRAVITY_LABEL), None)
+    grav: dict[int, str] = {}
+    if cynthia is not None and cynthia.id is not None:
+        grav[cynthia.id] = GRAVITY_SOURCE
+    else:
+        out.append(f"# UNMAPPED PKCalc {GRAVITY_LABEL!r}: Gravity entry not drafted")
+    for tid, rs in sorted(by_id.items()):
+        for c, cl in rs:
+            if "gravity" in cl:
+                grav.setdefault(tid, c)
+    for tid, src in sorted(grav.items()):
+        lines = _area_lines(tid, {"gravity": True}, src)
+        if tid in set(rom_tr) | sheet_tr:
+            out.append(f"# CONFLICT {tid}: Gravity on a Trick Room trainer; merge by hand")
+            lines = _comment(lines)
+        out.append(f"# {tid} {name_of(tid)}; {sheet_note(tid)}")
+        out += lines
+        out.append("")
+    out += [line for line in unmapped_claims if "gravity" in line]
+
+    out.append("# --- Gauntlets (rules stay {} until play reaches each group) ----------\n")
+    seen: dict[int, str] = {}
+    n_g = n_g_bad = 0
+    for name, src, members, problem in _gauntlet_groups(docs):
+        ids = [sheet.get(h["cite"]).id if h["cite"] in sheet else None for h in members]
+        cites = ", ".join(f"{h['cite']}={i}" for h, i in zip(members, ids, strict=True))
+        if problem is None and None in ids:
+            problem = "unmapped member"
+        if problem is None and len(set(ids)) < 2:
+            problem = "fewer than two trainers"
+        clash = [f"{i} (also in {seen[i]})" for i in ids if i in seen]
+        if problem is None and clash:
+            problem = "trainer in another group: " + ", ".join(clash)
+        lines = [
+            "[[gauntlet]]",
+            f"name = {_q(_ascii(name))}",
+            f"trainers = [{', '.join(str(i) for i in ids)}]",
+            "rules = {}",
+            f"source = {_q(src)}",
+        ]
+        texts = "; ".join(_ascii(h["text"]) for h in members)
+        if problem is None:
+            n_g += 1
+            seen.update({i: src for i in ids})
+            out.append(f"# {texts}")
+            out.append(f"# rows: {cites}")
+            out += lines
+        else:
+            n_g_bad += 1
+            out.append(f"# UNSETTLED gauntlet {_ascii(name)!r} ({problem}): {texts}")
+            out.append(f"#   rows: {cites}")
+            out += _comment(lines)
+        out.append("")
+    out.append(
+        f"# draft totals: {n_tr} trick_room, {n_conflict} area conflicts, {len(grav)} gravity, "
+        f"{n_g} gauntlets, {n_g_bad} unsettled gauntlets"
+    )
+    return "\n".join(out) + "\n"
+
+
+# --- CLI ------------------------------------------------------------------------------
+
+
+def _read(path: Path):
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _inputs(inter: Path) -> tuple[dict, dict, list, list, list]:
+    paths = (
+        inter / "docs" / "docs.json",
+        inter / "pkcalc" / "pkcalc.json",
+        inter / "rom" / "trainers.json",
+        inter / "rom" / "species.json",
+        inter / "rom" / "rom_field_effects.json",
+    )
+    missing = [str(p) for p in paths if not p.exists()]
+    if missing:
+        raise FileNotFoundError("missing Kaizo intermediates: " + ", ".join(missing))
+    return tuple(_read(p) for p in paths)  # type: ignore[return-value]
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(prog="python -m tools.kaizo.overrides")
+    ap.add_argument("command", choices=("draft", "check"))
+    ap.add_argument("--overrides", type=Path, default=DEFAULT_PATH)
+    ap.add_argument("--intermediate", type=Path, default=INTERMEDIATE)
+    ap.add_argument("--out", type=Path, default=DRAFT_PATH, help="draft output")
+    args = ap.parse_args(argv)
+    try:
+        docs, pkcalc, rom_trainers, species, effects = _inputs(args.intermediate)
+        o = load_overrides(args.overrides)
+        m = build_mappings(pkcalc["trainers"], docs, rom_trainers, species, effects, o.trainer_ids)
+    except (FileNotFoundError, OverridesError, MappingError) as e:
+        print(f"error: {_ascii(str(e))}", file=sys.stderr)
+        return 1
+    if args.command == "draft":
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        args.out.write_text(draft_overrides(docs, m), encoding="utf-8")
+        print(args.out)
+        return 0
+    problems = (
+        check_citations(o, docs)
+        + check_rom_trick_room(o, effects)
+        + check_trainer_ids(o, {t["id"] for t in rom_trainers})
+    )
+    for p in problems:
+        print(_ascii(p))
+    if problems:
+        return 1
+    print(
+        f"ok: {len(o.area)} area, {len(o.area_exceptions)} area_exception, "
+        f"{len(o.gauntlets)} gauntlet, {len(o.trainer_ids)} trainer_ids, {len(o.fields)} fields, "
+        f"{len(o.move_lists)} move_lists"
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
