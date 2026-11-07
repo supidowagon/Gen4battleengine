@@ -28,7 +28,7 @@ TYPE_DRAGON = 16  # the decomp type id the Route 210 script compares (TYPE_DRAGO
 MOVE_DRACO_METEOR = 434
 MOVE_VOLT_TACKLE = 344
 
-# Pokemon_SetRotomForm, src/pokemon.c:4518-4535: changing Rotom's form replaces the old
+# Pokemon_SetRotomForm, src/pokemon.c:4520-4537: changing Rotom's form replaces the old
 # form's move with the new form's (form 1 Heat .. 5 Mow; form 0 has none). Unchanged in
 # Kaizo: the routine is not a changed arm9 symbol. Moves: -, Overheat, Hydro Pump, Blizzard,
 # Air Slash, Leaf Storm.
@@ -44,13 +44,13 @@ ULTIMATE_MOVES = {
     **dict.fromkeys((3, 154, 254, 389), 338),  # Venusaur .. Torterra: Frenzy Plant
 }
 
-# Route 210 grandma Wilma, scripts_route_210_grandma_wilma_house.s:117 (the
+# Route 210 grandma Wilma, scripts_route_210_grandma_wilma_house.s:105 (the
 # CheckSelectedDragonType call; :129-138 compares both of the party mon's types with
 # TYPE_DRAGON): any Dragon-type learns Draco Meteor. Kaizo's patched member 450 makes the
 # same type check and teaches the same move (it reorders the party scan only); the type is
 # read from the game's own tables, so Kaizo's type changes apply.
 
-# Egg_TryGiveVoltTackle, src/overlay005/daycare.c:602-615, called for a Pichu egg (:771): a
+# Egg_TryGiveVoltTackle, src/overlay005/daycare.c:602-617, called for a Pichu egg (:772): a
 # Light Ball parent gives Volt Tackle, so the Pichu line can carry it. Unchanged in Kaizo
 # (overlay5's only changed symbols are the tutor tables); the line is read from the game's
 # own evolutions, so it is the Kaizo line in Kaizo.

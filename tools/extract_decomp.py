@@ -8,7 +8,8 @@ Conventions:
 
 * A ``generated/<name>.txt`` constant's numeric id is its 0-based line number.
   A trailing count sentinel (``MAX_MOVES``, ``NUM_POKEMON_TYPES``,
-  ``NATURE_COUNT``) is not an id and is dropped. Every output list is indexed by the decomp's own id.
+  ``NATURE_COUNT``) is not an id and is dropped. Every output list is indexed by the decomp's
+  own id.
 * Stat vectors use the order HP, Atk, Def, SpA, SpD, Spe (index = ``ids.Stat``).
   The decomp orders stats HP, Atk, Def, Spe, SpA, SpD
   (``generated/pokemon_stats.txt``), so this module reorders them.
@@ -19,7 +20,8 @@ Conventions:
 * Anything that cannot be parsed raises ``ExtractError`` naming the offending
   file (and line, for C sources); nothing is skipped silently.
 
-CLI: ``uv run python -m tools.extract_decomp --decomp external/pokeplatinum --out data/intermediate``
+CLI:
+``uv run python -m tools.extract_decomp --decomp external/pokeplatinum --out data/intermediate``
 """
 
 from __future__ import annotations

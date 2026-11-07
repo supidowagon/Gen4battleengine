@@ -31,8 +31,9 @@ unit that differs only because what it points at moved:
 
 "Maps through the alignment" means: a vanilla address in an equal block of the same
 module, or in a non-equal block whose two sides have equal length (a table whose own
-entries were relocated, say), moves by that block's constant offset; the module's end and an overlay's BSS after it move
-with the end. A target inside changed code maps to nothing, so such a unit stays a change.
+entries were relocated, say), moves by that block's constant offset; the module's end and an
+overlay's BSS after it move with the end. A target inside changed code maps to nothing, so
+such a unit stays a change.
 An address outside the module (ARM9 called from an overlay, say) maps to itself: this
 module's alignment does not move it, so a call re-encoded only because the caller moved
 is a relocation. The identity never turns a changed word into a relocation by itself,

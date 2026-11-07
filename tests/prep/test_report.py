@@ -93,7 +93,10 @@ def test_prep_steps_text(tables, names):
     assert prep_steps(prob, names, setup) == [
         "Deposit ZUBAT (party slot 3).",
         "Withdraw KRICKETOT (box 1 slot 1).",
-        "Rare Candy x11 on KRICKETOT (Lv5 -> 16), cancelling any evolution (press B), then heal at a Pokemon Center.",
+        (
+            "Rare Candy x11 on KRICKETOT (Lv5 -> 16), cancelling any evolution (press B), "
+            "then heal at a Pokemon Center."
+        ),
         "KRICKETOT learns Bug Bite at Lv16 while levelling.",
         "Move Relearner (1 Heart Scale): FURRET forgets Foresight, learns Fury Swipes.",
         "TM10 (Hidden Power) on FURRET: forgets Defense Curl.",

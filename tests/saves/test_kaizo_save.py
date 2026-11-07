@@ -110,7 +110,7 @@ def _lines_for(tmp_path, tables, names, learnsets, species, move, form=0):
     [(1, "Overheat"), (2, "Hydro Pump"), (3, "Blizzard"), (4, "Air Slash"), (5, "Leaf Storm")],
 )
 def test_rotom_form_moves(tmp_path, tables, names, learnsets, form, move):
-    # Pokemon_SetRotomForm, src/pokemon.c:4518-4535: only the matching form knows it.
+    # Pokemon_SetRotomForm, src/pokemon.c:4520-4537: only the matching form knows it.
     ok = _lines_for(tmp_path, tables, names, learnsets, 479, names.move(move), form)
     assert ok == []
     other = 1 if form != 1 else 2
@@ -119,7 +119,7 @@ def test_rotom_form_moves(tmp_path, tables, names, learnsets, form, move):
 
 
 def test_draco_meteor_for_dragon_types(tmp_path, tables, names, learnsets):
-    # scripts_route_210_grandma_wilma_house.s:117,129-138: any Dragon-type.
+    # scripts_route_210_grandma_wilma_house.s:105,129-138: any Dragon-type.
     draco = names.move("Draco Meteor")
     for species in (names.species("Dratini"), names.species("Altaria")):
         assert _lines_for(tmp_path, tables, names, learnsets, species, draco) == []
@@ -151,7 +151,7 @@ def test_ultimate_move_needs_the_final_stage(tmp_path, tables, names, learnsets)
 
 
 def test_volt_tackle_for_the_pichu_line(tmp_path, tables, names, learnsets):
-    # Egg_TryGiveVoltTackle, src/overlay005/daycare.c:602-615 (Pichu eggs, :771).
+    # Egg_TryGiveVoltTackle, src/overlay005/daycare.c:602-617 (Pichu eggs, :772).
     volt = names.move("Volt Tackle")
     for species in ("Pichu", "Pikachu", "Raichu"):
         sid = names.species(species)

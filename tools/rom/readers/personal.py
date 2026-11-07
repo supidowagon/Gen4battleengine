@@ -24,7 +24,8 @@ DEX_COUNT = 494  # National Dex 0..493; Egg and Bad Egg have no dex entry
 WEIGHT_MEMBER = 1  # PackDexData: height is member 0, weight member 1 (speciesproc.c:963-966)
 EXP_RATES = 8
 EXP_LEVELS = 101  # levels 0..100, tools/scripts/make_pl_growtbl.py
-# Offsets in SpeciesBaseStats order (include/struct_defs/species.h:15-22): hp, atk, def, spe, spa, spd.
+# Offsets in SpeciesBaseStats order (include/struct_defs/species.h:15-22):
+# hp, atk, def, spe, spa, spd.
 _STAT_OFFSET = {
     "hp": 0,
     "attack": 1,

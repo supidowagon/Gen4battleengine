@@ -4,17 +4,18 @@
 readers, and so does ``forms`` except its names; those and ``form_rows`` come from the
 decomp's form registry (Ruling 6: the ROM holds no form names, and the row order is
 ``Pokemon_GetFormNarcIndex``'s). ``types, natures, charmap, abilities`` are reused from a
-fresh decomp extraction (Ruling 14: the charmap is the font encoding and has no table in the ROM; the others are
-reused for a non-vanilla game only when the ROM diff shows them unchanged). Outputs are
-formatted by ``extract_decomp._write``.
+fresh decomp extraction (Ruling 14: the charmap is the font encoding and has no table in the
+ROM; the others are reused for a non-vanilla game only when the ROM diff shows them
+unchanged). Outputs are formatted by ``extract_decomp._write``.
 
 ``--game kaizo`` reads the patched ROM (``tools.rom.patch.kaizo_rom``) with every reader,
 after the ROM diff's reuse check: trainers with the Kaizo party layout (K2b Ruling 6), map
 headers from ``d_test.narc`` (Ruling 8) and start conditions settled by
 ``data/kaizo/start_conditions.json``. It also writes ``changed_scripts.json`` (the changed
 members of the battle script NARCs, Ruling 13) and ``rom_trainer_maps.json`` (trainer id ->
-the map headers of the trainer -> map join, for Task 13's sight pairs); the CLI appends an explicit ``unknown``
-``[[member]]`` entry to ``data/kaizo/rom_diff.toml`` for each changed member it lacks.
+the map headers of the trainer -> map join, for Task 13's sight pairs); the CLI appends an
+explicit ``unknown`` ``[[member]]`` entry to ``data/kaizo/rom_diff.toml`` for each changed
+member it lacks.
 
 Battle command operands that are variables no constant reaches on some walked script path
 (``tools.rom.readers.maps.UnresolvedOperand``) place no trainer; each is printed to stderr

@@ -85,7 +85,10 @@ def test_microtasks_are_time_limited(tmp_path, tail):
     [
         "{get name() { while (true) {} }}",
         "{get message() { while (true) {} }, toString() { while (true) {} }}",
-        "new Proxy({}, {get() { while (true) {} }, getOwnPropertyDescriptor() { while (true) {} }})",
+        (
+            "new Proxy({}, {get() { while (true) {} }, "
+            "getOwnPropertyDescriptor() { while (true) {} }})"
+        ),
         "{get stack() { while (true) {} }}",
         "new Proxy({}, {get() { while (true) {} }})",
         "'a string'",

@@ -397,8 +397,9 @@ def _pk_machines(
 
 def learnset_rows(rom: Mapping[str, Any], pkcalc: dict, docs: dict) -> list[Row]:
     """Per personal index: executed ``level_up`` ([[level, move]] in learn order), ``tm``
-    (machine labels in machine order) and ``tutor`` (sorted move ids); ``evolutions`` ([[method name, param, species]], ROM
-    vs sheet, base species only: the ROM keys evolutions by species id)."""
+    (machine labels in machine order) and ``tutor`` (sorted move ids); ``evolutions``
+    ([[method name, param, species]], ROM vs sheet, base species only: the ROM keys
+    evolutions by species id)."""
     pk_species = pkcalc.get("species", {})
     sheet_moves = sheet_move_index(docs)
     machines = [name for _, name in _tm_labels(rom["items"])]

@@ -246,7 +246,8 @@ def lead_ability_id(name):
 # --- brief tests --------------------------------------------------------------------------
 
 
-def test_ability_weather_not_an_area_claim():  # PKCalc's sun list holds a trainer whose lead has Drought
+def test_ability_weather_not_an_area_claim():
+    # PKCalc's sun list holds a trainer whose lead has Drought
     rows = trainer_rows(
         *synthetic(lead_ability="Drought", pkcalc_weather={"sun": ["Ace X"]}, rom_condition="none")
     )
@@ -266,7 +267,8 @@ def test_ai_flag_bits():
     assert (row.rom, row.pkcalc, row.executed) == (23, 7, True)
 
 
-def test_format_rows_from_rom_structure():  # ROM multi with opponent_2 9; PKCalc tag pair ["Ace X", "Ace Y"]
+def test_format_rows_from_rom_structure():
+    # ROM multi with opponent_2 9; PKCalc tag pair ["Ace X", "Ace Y"]
     rows = trainer_rows(
         *synthetic(
             rom_format="multi", rom_opponent_2=9, pkcalc_tag=[["Ace X", "Ace Y", "{RIVAL2_NAME}"]]

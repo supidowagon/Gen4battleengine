@@ -24,9 +24,10 @@ playouts) are not halved at first: the new neighbours halve alone, each rung's n
 as above. Then the *merged stage*: rung ``k``'s parents and surviving neighbours are topped up
 together to the first halving count at or above the parents' largest count
 (``ladder_round``; round keys salted by ``MERGED``) and cut to the floor there, with the exact
-ties at the edge kept and screened further while ``T_r < tie_playouts``; the ladder rungs (screen-only
-answers) are cut to their floors in the first merged round at the counts they have. Every cut
-of rung ``k`` thus compares setups at one playout count: a parent's count would otherwise
+ties at the edge kept and screened further while ``T_r < tie_playouts``; the ladder rungs
+(screen-only answers) are cut to their floors in the first merged round at the counts they
+have. Every cut of rung ``k`` thus compares setups at one playout count: a parent's count would
+otherwise
 decide a cut against a neighbour's handful (a lower confidence bound keeps tight parents over
 a better ``n/n`` neighbour; the point estimate drops them for lucky ``n/n`` neighbours).
 

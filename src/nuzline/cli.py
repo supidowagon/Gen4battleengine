@@ -31,7 +31,8 @@
   [--protect NAME ...] [--exclude NAME ...] [--reserve ITEM ...] [--prestatus STATUS ...]
   [--no-entry-hp] [--weight KIND=W ...] [--budget SECONDS] [--checkpoint FILE | --resume FILE]
   [--max-depth 2] [--finalists 3] [--screen-n 8] [--max-team 6] [--max-setups 25000]
-  [--seed 0] [--devices N] [--tree FILE.json] [--show-depth 1]``: the prep search (``prep.search``): which Pokemon, moves, items and entry
+  [--seed 0] [--devices N] [--tree FILE.json] [--show-depth 1]``: the prep search
+  (``prep.search``): which Pokemon, moves, items and entry
   HP to bring from the save's party and boxes, the costed prep steps, the odds ladder for
   0-3 deaths and the Stage B plan, a run record ``runs/prep_<time>.json`` and a checkpoint
   (default ``runs/prep_<time>.ckpt.json``) that ``--resume`` continues. ``--cap`` defaults to

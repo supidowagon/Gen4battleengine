@@ -35,9 +35,10 @@ keyed ``"<id> <label>"``, party fields keyed ``"<id> <label>/<slot>"`` (slot 0-b
   side is K2a's scripted structures (a scripted pair, a tag battle, a walking partner, the
   header's double flag). "No second opponent" is ``"none"`` in every source that makes a
   claim (ROM always; PKCalc for a single or one-trainer double; the sheet for ``DOUBLE``),
-  never ``None``, so a ROM pair against PKCalc single disagrees. PKCalc ``formats`` (``true_double`` -> ``double``; a ``double`` pair -> ``double_two_trainer``
-  with the other label's id; a ``tag`` triple -> ``multi`` with the other label's id and a
-  partner) vs the sheet: ``DOUBLE`` -> ``double`` without a partner; ``TAG BATTLE with X``
+  never ``None``, so a ROM pair against PKCalc single disagrees. PKCalc ``formats``
+  (``true_double`` -> ``double``; a ``double`` pair -> ``double_two_trainer`` with the other
+  label's id; a ``tag`` triple -> ``multi`` with the other label's id and a partner) vs the
+  sheet: ``DOUBLE`` -> ``double`` without a partner; ``TAG BATTLE with X``
   (``tag_partner`` + ``multi_with``) -> ``multi`` with a partner; ``MULTI BATTLE with X``
   names the second opponent only (the sheet writes it for PKCalc's two-trainer doubles
   too, e.g. Cyclist Axel), so it sets ``opponent_2`` and no format. X is the header in the
