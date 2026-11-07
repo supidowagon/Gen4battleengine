@@ -48,7 +48,15 @@ items) and plan 1b (Task 2b: trainer items; Task 3: Roark's AI flags) implement:
 * battle format: only "single". The engine models one battler per side, so a trainer
   whose header is a double battle, who is fought beside a second enemy trainer
   ("double_two_trainer") or who is fought while the player has a partner ("multi", tag
-  battles and walking partners) is refused (``Trainer.format``).
+  battles and walking partners) is refused (``Trainer.format``);
+* Kaizo trainer fields (plan K2b Task 14): a permanent Trick Room or Gravity area
+  (``Trainer.area_condition``; the engine has neither field effect), a gauntlet (a chain
+  of fights, ``Trainer.gauntlet``), a start condition the extraction left to the user
+  (``"unknown"``, never read as a weather), a party member with no nature, gender or
+  ability data when the trainer has no PID routine (no PKCalc set; plan preflight #34)
+  and, for the Kaizo game, ROM code changes not yet classified
+  (``Names.unclassified_rom_changes``). Area weather and fog stay refused through
+  ``start_weather`` like vanilla's; ``Trainer.optional`` refuses nothing.
 
 ``check_coverage`` also runs the AI's own refusals (``ai.policy.ai_refusals``: opponent
 moves without transcribed script paths, too many script-roll sites, type-chart
@@ -69,9 +77,10 @@ import numpy as np
 
 from nuzline.data.forms import personal_row
 from nuzline.data.game_constants import POLICY
+from nuzline.data.games import KAIZO
 from nuzline.data.spec import PokemonSpec
 from nuzline.data.tables import Names, Tables
-from nuzline.data.trainer import Trainer
+from nuzline.data.trainer import UNKNOWN_CONDITION, Trainer, missing_set_data
 from nuzline.engine.ids import AbilityId, EffectId, ItemId, TrainerItemId, Weather
 from nuzline.engine.state import make_state
 
@@ -168,11 +177,17 @@ class UnsupportedMechanics(ValueError):
 
 
 def start_weather(trainer: Trainer) -> Weather:
-    """The weather a trainer's fight starts in (``Trainer.start_condition``)."""
+    """The weather a trainer's fight starts in (``Trainer.start_condition``). A start
+    condition of ``"unknown"`` (a user call) is no weather: ``ValueError``, like any
+    other unknown value; ``check_opponent`` refuses it instead."""
     try:
         return START_CONDITIONS[trainer.start_condition]
     except KeyError:
         raise ValueError(f"unknown start condition {trainer.start_condition!r}") from None
+
+
+def _unknown_start(trainer: Trainer) -> bool:
+    return UNKNOWN_CONDITION in (trainer.start_condition, trainer.area_condition.weather)
 
 
 class _Collector:
@@ -251,6 +266,7 @@ def _check_trainer(c: _Collector, tables: Tables, names: Names, trainer: Trainer
     else:
         what = f"{trainer.name}: a {trainer.format} battle"
     c.add(support, what, "battle format")
+    _check_kaizo_fields(c, names, trainer)
     effect = np.asarray(tables.trainer_item_effect)
     bag = [item for item in trainer.items if item]
     for item in bag:
@@ -271,6 +287,40 @@ def _check_trainer(c: _Collector, tables: Tables, names: Names, trainer: Trainer
             f"{trainer.name}: AI flags {flags:#x} without all of BASIC, EVAL_ATTACK and "
             "EXPERT, which the AI policy always runs together",
             "AI flag set",
+        )
+
+
+def _check_kaizo_fields(c: _Collector, names: Names, trainer: Trainer) -> None:
+    """The Kaizo trainer fields the engine does not model (plan K2b Task 14)."""
+    area = trainer.area_condition
+    permanent = "permanent " if area.permanent else ""
+    if area.trick_room:
+        c.add(Support.NONE, f"Battle start: {permanent}Trick Room", "field condition")
+    if area.gravity:
+        c.add(Support.NONE, f"Battle start: {permanent}Gravity", "field condition")
+    if _unknown_start(trainer):
+        c.add(Support.NONE, "Battle start: condition unknown (user call)", "start condition")
+    if trainer.gauntlet is not None:
+        group, position = trainer.gauntlet
+        rules = ", ".join(f"{k}={str(v).lower()}" for k, v in trainer.gauntlet_rules.items())
+        c.add(
+            Support.NONE,
+            f"{trainer.name}: gauntlet {group} (position {position}; "
+            f"rules {rules or 'not recorded'})",
+            "battle format",
+        )
+    for k in missing_set_data(trainer):
+        c.add(
+            Support.NONE,
+            f"{trainer.name} slot {k}: nature/gender/ability unknown (no PKCalc set)",
+            "trainer data",
+        )
+    if names.game == KAIZO and names.unclassified_rom_changes > 0:
+        c.add(
+            Support.NONE,
+            f"Kaizo ROM: {names.unclassified_rom_changes} code changes unclassified "
+            "(docs/kaizo/rom_diff.md)",
+            "ROM change",
         )
 
 
@@ -298,7 +348,11 @@ def check_opponent(
     c = _Collector()
     _check_party(c, tables, names, trainer.name, opp, trainer_side=True)
     _check_trainer(c, tables, names, trainer)
-    _check_weather(c, [start_condition, start_weather(trainer)])
+    # An "unknown" start condition is refused by _check_trainer, never read as a weather.
+    weathers = [start_condition]
+    if not _unknown_start(trainer):
+        weathers.append(start_weather(trainer))
+    _check_weather(c, weathers)
     return c.report
 
 

@@ -14,13 +14,22 @@ from the base species (``src/pokemon.c:473-489``) and computed the stats
 (``src/pokemon.c:402``), and nothing recomputes them (``src/trainer_data.c:216-218``).
 Vanilla's only data-form trainer Pokemon (Devon's Wormadam-Sandy and -Trash, trainer
 491) has the same ability, gender ratio, friendship and level-24 default moves either way.
+
+Kaizo (spec 5.4, 7.1; plan K2b Task 14) patched ``TrainerData_BuildParty``: its trainer
+struct gained a per-Pokemon override byte (``TrainerMon.ability_override``) and its PIDs
+no longer follow the vanilla routine for every Pokemon. Until the patched routine is
+transcribed, a Kaizo trainer has ``pid_routine`` None and each party member carries its
+nature, gender and ability slot explicitly (from PKCalc); explicit values always win over
+the routine, and the patched builder's friendship (255, or 0 for a Pokemon with
+Frustration) is explicit too. Every Kaizo field defaults to vanilla's reading, so vanilla
+``trainers.json`` loads unchanged.
 """
 
 from __future__ import annotations
 
 import json
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from nuzline.data.forms import form_row
@@ -56,6 +65,51 @@ class TrainerMon:
     moves: tuple[int, int, int, int] | None  # None: the species' default moveset
     item: int
     form: int
+    # Explicit values (Kaizo, from PKCalc) win over the PID routine; None: computed.
+    nature: int | None = None
+    gender: int | None = None
+    ability_slot: int | None = None
+    # Kaizo's per-Pokemon Ability Number byte (16: ability slot 1, 32: slot 2, 2: female;
+    # spec 5.4); 0 in vanilla. Recorded only: the patched routine is not transcribed.
+    ability_override: int = 0
+    friendship: int | None = None  # None: the species' base friendship
+
+
+# Area weathers (the sheet grammar's PERMANENT RAIN|SUN|SANDSTORM|HAIL and the bare
+# (RAIN)/(SUN)/(HAIL), read as permanent) plus "unknown": a start condition the
+# extraction leaves to the user (Kaizo trainers 318, 325, 343, 509, 559, 610, 649, 676,
+# 746, 747), which is never read as a weather.
+AREA_WEATHERS = ("rain", "sun", "sandstorm", "hail")
+UNKNOWN_CONDITION = "unknown"
+
+
+@dataclass(frozen=True)
+class AreaCondition:
+    """What a fight starts with, apart from ability weather (spec 5.8): the area's
+    ``weather`` (one of ``AREA_WEATHERS``, ``"unknown"`` or None), fog, Trick Room and
+    Gravity. ``permanent``: they never expire (every Kaizo area condition, and vanilla's
+    overworld weather)."""
+
+    weather: str | None = None
+    fog: bool = False
+    trick_room: bool = False
+    gravity: bool = False
+    permanent: bool = True
+
+    def __post_init__(self) -> None:
+        if self.weather is not None and self.weather not in (*AREA_WEATHERS, UNKNOWN_CONDITION):
+            raise ValueError(f"area weather {self.weather!r} is not one of {AREA_WEATHERS}")
+
+    @classmethod
+    def from_start_condition(cls, start_condition: str) -> AreaCondition:
+        """The area condition of a ``trainers.json`` ``start_condition``."""
+        if start_condition == "none":
+            return cls()
+        if start_condition == "fog":
+            return cls(fog=True)
+        if start_condition in (*AREA_WEATHERS, UNKNOWN_CONDITION):
+            return cls(weather=start_condition)
+        raise ValueError(f"unknown start condition {start_condition!r}")
 
 
 @dataclass(frozen=True)
@@ -77,7 +131,18 @@ class Trainer:
     "double_two_trainer" (fought beside ``opponent_2`` against the player alone) or
     "multi" (the player fights beside a partner, whose possible teams are ``partner``)
     from the field scripts (``tools/battle_scripts.py``). ``opponent_2`` is the other
-    enemy of a two-trainer or tag battle, else None."""
+    enemy of a two-trainer or tag battle, else None.
+
+    Kaizo fields (plan K2b Task 14; all defaulted to vanilla's reading): ``label`` names
+    one of several trainers sharing a name; ``pid_routine`` is "vanilla" when
+    ``build_trainer_party`` may compute nature, gender and ability from the PID, None when
+    every party member must carry them; ``player_starter`` is the starter species a rival
+    or partner variant is fought with; ``gauntlet`` is (group, position) in a chain of
+    fights with ``gauntlet_rules`` (``heal_between``, ``change_team``; empty: not
+    recorded); ``optional`` and ``left_side`` (the split's Left Side AI) come from the
+    spreadsheet; ``area_condition`` is what the fight starts with (built from
+    ``start_condition`` when the JSON has none); ``split`` and ``split_order`` (split
+    index, line) place the fight in the level-cap splits; ``sources`` cites each field."""
 
     id: int
     name: str
@@ -91,6 +156,17 @@ class Trainer:
     format: str
     opponent_2: int | None = None
     partner: tuple[PartnerVariant, ...] = ()
+    label: str | None = None
+    pid_routine: str | None = "vanilla"
+    player_starter: int | None = None
+    gauntlet: tuple[str, int] | None = None
+    gauntlet_rules: dict[str, bool] = field(default_factory=dict)
+    optional: bool = False
+    left_side: bool = False
+    area_condition: AreaCondition = AreaCondition()
+    split: str | None = None
+    split_order: tuple[int, int] | None = None
+    sources: dict[str, str] = field(default_factory=dict)
 
 
 def _mon(d: dict) -> TrainerMon:
@@ -102,7 +178,23 @@ def _mon(d: dict) -> TrainerMon:
         moves=None if moves is None else tuple(moves),
         item=d["item"],
         form=d["form"],
+        nature=d.get("nature"),
+        gender=d.get("gender"),
+        ability_slot=d.get("ability_slot"),
+        ability_override=d.get("ability_override", 0),
+        friendship=d.get("friendship"),
     )
+
+
+def _area(t: dict) -> AreaCondition:
+    area = t.get("area_condition")
+    if area is None:
+        return AreaCondition.from_start_condition(t["start_condition"])
+    return AreaCondition(**area)
+
+
+def _pair(value):
+    return None if value is None else tuple(value)
 
 
 def _read(dir: Path, name: str):
@@ -136,6 +228,17 @@ def load_trainers(dir: Path) -> list[Trainer]:
             partner=tuple(
                 PartnerVariant(p["trainer"], p["starter"], p["player_gender"]) for p in t["partner"]
             ),
+            label=t.get("label"),
+            pid_routine=t.get("pid_routine", "vanilla"),
+            player_starter=t.get("player_starter"),
+            gauntlet=_pair(t.get("gauntlet")),
+            gauntlet_rules=dict(t.get("gauntlet_rules", {})),
+            optional=t.get("optional", False),
+            left_side=t.get("left_side", False),
+            area_condition=_area(t),
+            split=t.get("split"),
+            split_order=_pair(t.get("split_order")),
+            sources=dict(t.get("sources", {})),
         )
         for t in rows
     ]
@@ -207,7 +310,25 @@ def default_moves(learnset: Sequence[tuple[int, int]], level: int) -> tuple[int,
     return tuple(slots + [0] * (MOVE_SLOTS - len(slots)))  # type: ignore[return-value]
 
 
+def missing_set_data(trainer: Trainer) -> list[int]:
+    """The party slots ``build_trainer_party`` cannot build: with no PID routine
+    (``pid_routine`` None), a member lacking an explicit nature, gender or ability slot."""
+    if trainer.pid_routine is not None:
+        return []
+    return [
+        k
+        for k, mon in enumerate(trainer.party)
+        if None in (mon.nature, mon.gender, mon.ability_slot)
+    ]
+
+
 def build_trainer_party(trainer: Trainer, inter: IntermediateData) -> list[PokemonSpec]:
+    """The trainer's battle party. Explicit ``TrainerMon`` nature, gender, ability slot and
+    friendship win; the rest follows the vanilla routine. With ``pid_routine`` None a
+    member without all three of nature, gender and ability slot is a ``ValueError``."""
+    missing = missing_set_data(trainer)
+    if missing:
+        raise ValueError(f"trainer {trainer.id} slot {missing[0]}: no nature/gender/ability data")
     party = []
     for mon in trainer.party:
         # The game keeps base-form stats, ability and moves (src/trainer_data.c:216-218);
@@ -224,6 +345,11 @@ def build_trainer_party(trainer: Trainer, inter: IntermediateData) -> list[Pokem
         )
         # sub_02073E18: PID bit 0 picks the second ability only when the species has one.
         ability_slot = 1 if species["abilities"][1] != 0 and pid & 1 else 0
+        if mon.ability_slot is not None:
+            ability_slot = mon.ability_slot
+        nature = pid % 25 if mon.nature is None else mon.nature  # Pokemon_GetNatureOf
+        gender = gender_of(species["gender_ratio"], pid) if mon.gender is None else mon.gender
+        friendship = species["base_friendship"] if mon.friendship is None else mon.friendship
         moves = mon.moves
         if moves is None:
             moves = default_moves(inter.learnsets[row], mon.level)
@@ -232,14 +358,14 @@ def build_trainer_party(trainer: Trainer, inter: IntermediateData) -> list[Pokem
             PokemonSpec(
                 species=mon.species,
                 level=mon.level,
-                nature=pid % 25,  # Pokemon_GetNatureOf
+                nature=nature,
                 ivs=(ivs,) * 6,
                 evs=(0,) * 6,
                 moves=moves,
                 item=mon.item,
                 ability_slot=ability_slot,
-                gender=gender_of(species["gender_ratio"], pid),
-                friendship=species["base_friendship"],
+                gender=gender,
+                friendship=friendship,
                 form=mon.form,
             )
         )

@@ -65,6 +65,29 @@ def vanilla_items():
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _require_vanilla_intermediate() -> None:
+    if not (GAMES[VANILLA].intermediate_dir / "trainers.json").exists():
+        pytest.skip("vanilla intermediates not extracted (run python -m tools.extract_decomp)")
+
+
+@pytest.fixture(scope="session")
+def inter():
+    """``IntermediateData`` of ``data/intermediate`` (skips when it is absent)."""
+    from nuzline.data.trainer import IntermediateData
+
+    _require_vanilla_intermediate()
+    return IntermediateData(GAMES[VANILLA].intermediate_dir)
+
+
+@pytest.fixture(scope="session")
+def trainers():
+    """Vanilla ``load_trainers(data/intermediate)`` (skips when it is absent)."""
+    from nuzline.data.trainer import load_trainers
+
+    _require_vanilla_intermediate()
+    return load_trainers(GAMES[VANILLA].intermediate_dir)
+
+
 # --- Kaizo source extractions (each skips when its local input is absent) -----------
 
 

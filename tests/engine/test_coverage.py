@@ -284,3 +284,105 @@ def test_trainer_of_a_game_without_ai_policy_refused(tables, names, vanilla_mani
 def test_kaizo_trainer_ai_refused(kaizo_tables, kaizo_names, kaizo_roark, kaizo_roark_party):
     report = check_opponent(kaizo_tables, kaizo_names, kaizo_roark, kaizo_roark_party, Weather.NONE)
     assert NO_POLICY in report.missing
+
+
+# --- Kaizo trainer fields (K2b Task 14) ----------------------------------------------
+
+
+def with_area(trainer, **fields):
+    return replace(trainer, area_condition=replace(trainer.area_condition, **fields))
+
+
+def test_trick_room_refused(tables, names):
+    report = check_opponent(
+        tables, names, with_area(roark_trainer(), trick_room=True), roark_party(names), 0
+    )
+    assert "Battle start: permanent Trick Room (field condition UNSUPPORTED)" in report.missing
+    assert report.level == Support.NONE
+
+
+def test_gravity_refused(tables, names):
+    report = check_opponent(
+        tables, names, with_area(roark_trainer(), gravity=True), roark_party(names), 0
+    )
+    assert "Battle start: permanent Gravity (field condition UNSUPPORTED)" in report.missing
+
+
+def test_gauntlet_refused_rules_not_recorded(tables, names):
+    t = replace(roark_trainer(), gauntlet=("Oreburgh Gym", 2))
+    report = check_opponent(tables, names, t, roark_party(names), 0)
+    line = (
+        "Roark: gauntlet Oreburgh Gym (position 2; rules not recorded) (battle format UNSUPPORTED)"
+    )
+    assert line in report.missing
+
+
+def test_gauntlet_refused_with_rules(tables, names):
+    t = replace(
+        roark_trainer(),
+        gauntlet=("Oreburgh Gym", 1),
+        gauntlet_rules={"heal_between": False, "change_team": True},
+    )
+    report = check_opponent(tables, names, t, roark_party(names), 0)
+    line = (
+        "Roark: gauntlet Oreburgh Gym (position 1; rules heal_between=false, "
+        "change_team=true) (battle format UNSUPPORTED)"
+    )
+    assert line in report.missing
+
+
+def test_optional_not_refused(tables, names):
+    plain = check_opponent(tables, names, roark_trainer(), roark_party(names), 0)
+    optional = replace(roark_trainer(), optional=True)
+    assert check_opponent(tables, names, optional, roark_party(names), 0).missing == plain.missing
+
+
+def test_missing_pkcalc_set_refused(tables, names):  # preflight ruling #34
+    t = replace(roark_trainer(), pid_routine=None)
+    report = check_opponent(tables, names, t, roark_party(names), 0)
+    for k in range(len(t.party)):
+        line = f"Roark slot {k}: nature/gender/ability unknown (no PKCalc set) (trainer data UNSUPPORTED)"
+        assert line in report.missing
+    full = replace(t.party[0], nature=3, gender=0, ability_slot=0)
+    t = replace(t, party=(full, *t.party[1:]))
+    report = check_opponent(tables, names, t, roark_party(names), 0)
+    assert not any(m.startswith("Roark slot 0:") for m in report.missing)
+    assert any(m.startswith("Roark slot 1:") for m in report.missing)
+
+
+def test_unclassified_kaizo_rom_changes_refused(tables, names, vanilla_manifest):
+    line = (
+        "Kaizo ROM: 3 code changes unclassified (docs/kaizo/rom_diff.md) (ROM change UNSUPPORTED)"
+    )
+    kaizo = Names({**vanilla_manifest, "game": KAIZO, "unclassified_rom_changes": 3})
+    report = check_opponent(tables, kaizo, roark_trainer(), roark_party(names), 0)
+    assert line in report.missing
+    clean = Names({**vanilla_manifest, "game": KAIZO, "unclassified_rom_changes": 0})
+    report = check_opponent(tables, clean, roark_trainer(), roark_party(names), 0)
+    assert not any("ROM change" in m for m in report.missing)
+    # Vanilla never carries the line, whatever its manifest says.
+    other = Names({**vanilla_manifest, "unclassified_rom_changes": 3})
+    assert check_opponent(tables, other, roark_trainer(), roark_party(names), 0).missing == []
+
+
+def test_unknown_start_condition_refused_not_read_as_weather(tables, names):
+    # Kaizo trainers 318, 325, 343, 509, 559, 610, 649, 676, 746 and 747.
+    line = "Battle start: condition unknown (user call) (start condition UNSUPPORTED)"
+    t = replace(roark_trainer(), start_condition="unknown")
+    report = check_opponent(tables, names, t, roark_party(names), 0)
+    assert line in report.missing
+    assert not any("(weather UNSUPPORTED)" in m for m in report.missing)
+    with pytest.raises(ValueError, match="unknown"):
+        start_weather(t)
+    area_only = with_area(roark_trainer(), weather="unknown")
+    assert line in check_opponent(tables, names, area_only, roark_party(names), 0).missing
+
+
+def test_area_weather_keeps_the_weather_refusal(tables, names):
+    for cond, line in (
+        ("sandstorm", "Battle start: Sandstorm (weather UNSUPPORTED)"),
+        ("sun", "Battle start: Sun (weather UNSUPPORTED)"),
+        ("fog", "Battle start: Fog (weather UNSUPPORTED)"),
+    ):
+        t = replace(roark_trainer(), start_condition=cond)
+        assert line in check_opponent(tables, names, t, roark_party(names), 0).missing
