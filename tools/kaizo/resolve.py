@@ -84,6 +84,7 @@ from tools.rom.inputs import KAIZO_PATCH_SHA256, REPO_ROOT, VANILLA_SHA1, RomInp
 ROM_DIFF = REPO_ROOT / "data" / "kaizo" / "rom_diff.toml"
 UNKNOWN_START = "unknown"  # a start condition the evidence leaves to the user
 START_CONDITIONS = REPO_ROOT / "data" / "kaizo" / "start_conditions.json"
+BATTLE_FORMATS = REPO_ROOT / "data" / "kaizo" / "battle_formats.json"
 
 # The vanilla-schema files the runtime and build_tables read, copied from <inter>/rom.
 COPIED = (
@@ -671,6 +672,28 @@ def _report_sources(src: Sources, overrides_path: Path, resolutions_path: Path) 
     return out
 
 
+def check_extract_inputs(inter: Path, overrides: Overrides) -> None:
+    """Raise unless ``<inter>/rom/rom_sources.json`` records the committed inputs that only
+    ``extract_rom`` reads (``start_conditions.json``, ``battle_formats.json``, the
+    ``[move_lists]`` of ``overrides``) with the hashes they have now: an edit to one of them
+    after the extraction leaves the ROM intermediates stale, and a rebuild alone would keep
+    the old values."""
+    from tools.extract_rom import INPUTS_KEY, kaizo_input_hashes
+
+    path = Path(inter) / "rom" / "rom_sources.json"
+    recorded = _read(path).get(INPUTS_KEY) if path.exists() else None
+    current = kaizo_input_hashes(overrides.move_lists)
+    if recorded is None:
+        stale = ["no input hashes recorded"]
+    else:
+        stale = [k for k in sorted(current) if recorded.get(k) != current[k]]
+    if stale:
+        raise ResolveError(
+            f"{path}: the ROM intermediates are stale ({', '.join(stale)}); re-run "
+            "python -m tools.extract_rom --game kaizo"
+        )
+
+
 def check_input_hashes(inputs: RomInputs, src: Sources) -> list[str]:
     """Re-hash the configured PKCalc zip and docs workbook against the SHA-256 their
     extracted JSON records; a mismatch raises, an input not configured or absent is a
@@ -713,6 +736,8 @@ def provenance(
         "overrides_sha256": _sha256(overrides_path),
         "resolutions_sha256": _sha256(resolutions_path),
         "rom_diff_sha256": _sha256(ROM_DIFF),
+        "start_conditions_sha256": _sha256(START_CONDITIONS),
+        "battle_formats_sha256": _sha256(BATTLE_FORMATS),
     }
 
 
@@ -730,6 +755,7 @@ def resolve(
     inter = Path(inter)
     src = load_sources(inter)
     ov = load_overrides(overrides)
+    check_extract_inputs(inter, ov)
     check, maps, trainers, sections = cross_check(src, ov, resolutions)
     sources = _report_sources(src, overrides, resolutions)
     if not (check.unresolved or check.stale):

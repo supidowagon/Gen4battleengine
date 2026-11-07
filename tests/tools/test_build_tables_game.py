@@ -98,3 +98,69 @@ def test_kaizo_bag_item_needs_vanilla_restore_amount():
     kaizo = [{"name": "Potion", "hold_effect": 0, "hp_restored": 30}]
     assert build_tables._item_maps(kaizo, vanilla)[1] == [int(TrainerItemId.UNSUPPORTED)]
     assert build_tables._item_maps(vanilla, vanilla)[1] == [int(TrainerItemId.POTION)]
+
+
+# --- the Kaizo ROM-change gate counts against the diff, not the entries (final review I1) --
+
+_BE_SEQ = "battle/skill/be_seq.narc"
+
+
+def _gate(tmp_path, code_entries: str, changed_code):
+    """``_kaizo_rom_changes`` over a synthetic diff: two changed code keys, one changed
+    be_seq member (classified), and ``code_entries`` as the ``[[code]]`` tables."""
+    rom = tmp_path / "inter" / "rom"
+    rom.mkdir(parents=True)
+    scripts = {_BE_SEQ: [7], "battle/skill/sub_seq.narc": [], "battle/tr_ai/tr_ai_seq.narc": []}
+    (rom / "changed_scripts.json").write_text(json.dumps(scripts), encoding="utf-8")
+    (rom / "changed_code.json").write_text(json.dumps(changed_code), encoding="utf-8")
+    toml = tmp_path / "rom_diff.toml"
+    member = f'[[member]]\nnarc = "{_BE_SEQ}"\nindex = 7\nstatus = "irrelevant"\nnote = ""\n'
+    toml.write_text(code_entries + member, encoding="utf-8")
+    return build_tables._kaizo_rom_changes(tmp_path / "inter", toml)
+
+
+_TWO = [["arm9", "NitroMain"], ["overlay16", "0x02200000-0x02200010"]]
+
+
+def _code(module, symbol, status="irrelevant"):
+    return f'[[code]]\nmodule = "{module}"\nsymbol = "{symbol}"\nstatus = "{status}"\n\n'
+
+
+def test_kaizo_gate_counts_classified_entries(tmp_path):
+    entries = _code(*_TWO[0]) + _code(*_TWO[1], status="unknown")
+    effects, unknown = _gate(tmp_path, entries, _TWO)
+    assert unknown == 1 and effects == frozenset({7})  # irrelevant member: still unsupported
+
+
+def test_kaizo_gate_deleting_a_code_entry_raises_the_count(tmp_path):
+    _, unknown = _gate(tmp_path, _code(*_TWO[1], status="unknown"), _TWO)
+    assert unknown == 2  # NitroMain lost its entry: it counts as unknown, never as classified
+    assert _gate(tmp_path / "none", "", _TWO)[1] == 2
+
+
+def test_kaizo_gate_stale_code_entry_raises(tmp_path):
+    entries = _code(*_TWO[0]) + _code(*_TWO[1]) + _code("arm9", "GoneFunc")
+    with pytest.raises(build_tables.BuildError, match="arm9 GoneFunc: stale"):
+        _gate(tmp_path, entries, _TWO)
+
+
+def test_kaizo_gate_needs_changed_code(tmp_path):
+    rom = tmp_path / "inter" / "rom"
+    rom.mkdir(parents=True)
+    (rom / "changed_scripts.json").write_text("{}", encoding="utf-8")
+    with pytest.raises(build_tables.BuildError, match="re-run python -m tools.extract_rom"):
+        build_tables._kaizo_rom_changes(tmp_path / "inter", tmp_path / "rom_diff.toml")
+
+
+def test_kaizo_gate_on_the_real_diff(tmp_path):  # skips until extract_rom --game kaizo ran
+    from nuzline.data.games import GAMES, KAIZO
+
+    inter = GAMES[KAIZO].intermediate_dir
+    if not (inter / "rom" / "changed_code.json").exists():
+        pytest.skip("Kaizo ROM intermediates without changed_code.json")
+    _, full = build_tables._kaizo_rom_changes(inter)
+    text = build_tables.ROM_DIFF.read_text(encoding="utf-8")
+    first = text.index("[[code]]")
+    trimmed = tmp_path / "rom_diff.toml"
+    trimmed.write_text(text[:first] + text[text.index("[[code]]", first + 1) :], "utf-8")
+    assert build_tables._kaizo_rom_changes(inter, trimmed)[1] >= full  # never fewer unknowns

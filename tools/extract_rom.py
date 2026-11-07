@@ -12,7 +12,9 @@ unchanged). Outputs are formatted by ``extract_decomp._write``.
 after the ROM diff's reuse check: trainers with the Kaizo party layout (K2b Ruling 6), map
 headers from ``d_test.narc`` (Ruling 8) and start conditions settled by
 ``data/kaizo/start_conditions.json``. It also writes ``changed_scripts.json`` (the changed
-members of the battle script NARCs, Ruling 13) and ``rom_trainer_maps.json`` (trainer id ->
+members of the battle script NARCs, Ruling 13), ``changed_code.json`` (every changed code
+key, ``[module, symbol-or-range]``, so the build counts a key ``rom_diff.toml`` lacks as
+unknown; a stale ``[[code]]`` entry raises here) and ``rom_trainer_maps.json`` (trainer id ->
 the map headers of the trainer -> map join, for Task 13's sight pairs); the CLI appends an
 explicit ``unknown`` ``[[member]]`` entry to ``data/kaizo/rom_diff.toml`` for each changed
 member it lacks.
@@ -34,6 +36,7 @@ CLI: ``python -m tools.extract_rom --game vanilla|kaizo [--out DIR] [--decomp DI
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import shutil
@@ -83,6 +86,7 @@ UNRESOLVED_FILE = "rom_unresolved.json"
 FIELD_EFFECTS_FILE = "rom_field_effects.json"
 TRAINER_MAPS_FILE = "rom_trainer_maps.json"  # Kaizo: trainer id -> map headers (sight pairs)
 CHANGED_SCRIPTS_FILE = "changed_scripts.json"
+CHANGED_CODE_FILE = "changed_code.json"  # Kaizo: every changed (module, symbol-or-range)
 ROM_DIFF_TOML = REPO_ROOT / "data" / "kaizo" / "rom_diff.toml"
 # Raw ROM output; data/intermediate_kaizo/*.json are the resolved files (K2b Ruling 2).
 DEFAULT_OUT = {
@@ -141,6 +145,18 @@ def _kaizo_checks(inputs: RomInputs, decomp: Path, symbols_path: Path, vanilla_f
             "the Kaizo ROM changes the sources of the reused tables: " + "; ".join(bad)
         )
     return kaizo, diff
+
+
+def _check_code_entries(path: Path, code: list[list[str]]) -> None:
+    """Raise ``RomInputError`` when ``path``'s ``[[code]]`` entries do not classify the
+    diff's changed code ``code`` (an unknown status, a duplicate or a stale entry); a changed
+    key with no entry is fine here and counts as unknown (``load_code_classification``)."""
+    from tools.rom.diff import load_code_classification
+
+    try:
+        load_code_classification(path, code)
+    except ValueError as e:
+        raise RomInputError(str(e)) from e
 
 
 def _member_entries(path: Path, changed: dict[str, list[int]]) -> set[tuple[str, int]]:
@@ -222,6 +238,31 @@ def move_list_override(game: str) -> dict[str, list[int]] | None:
         raise RomInputError(f"{DEFAULT_PATH}: {e}") from e
 
 
+INPUTS_KEY = "inputs_sha256"  # rom_sources.json: the committed inputs this run read (Kaizo)
+MOVE_LISTS_INPUT = "data/kaizo/overrides.toml [move_lists]"
+
+
+def lf_sha256(path: Path) -> str:
+    """SHA-256 of a committed text file with CRLF folded to LF (``.gitattributes`` pins
+    ``data/kaizo/*`` to LF), so the hash does not depend on a checkout's line endings."""
+    return hashlib.sha256(Path(path).read_bytes().replace(b"\r\n", b"\n")).hexdigest()
+
+
+def kaizo_input_hashes(move_lists: dict[str, list[int]] | None) -> dict[str, str]:
+    """The committed inputs only ``extract_rom --game kaizo`` reads, by repository path:
+    ``start_conditions.json`` and ``battle_formats.json`` (LF-normalised SHA-256) and the
+    ``[move_lists]`` of ``overrides.toml`` (SHA-256 of their canonical JSON). ``rom_sources.json``
+    records them; ``tools.kaizo.resolve`` recomputes them and refuses stale intermediates."""
+    from tools.rom.readers.maps import KAIZO_BATTLE_FORMATS, KAIZO_START_CONDITIONS
+
+    canonical = json.dumps(move_lists or {}, sort_keys=True, separators=(",", ":"))
+    return {
+        "data/kaizo/start_conditions.json": lf_sha256(KAIZO_START_CONDITIONS),
+        "data/kaizo/battle_formats.json": lf_sha256(KAIZO_BATTLE_FORMATS),
+        MOVE_LISTS_INPUT: hashlib.sha256(canonical.encode()).hexdigest(),
+    }
+
+
 def _unresolved_rows(unresolved, decomp: Path) -> list[dict]:
     from tools.rom.readers.maps import SCRIPTS_NARC, var_ids
 
@@ -239,7 +280,7 @@ def _unresolved_rows(unresolved, decomp: Path) -> list[dict]:
     ]
 
 
-def extract(game: str, out: Path, decomp: Path, symbols: Path, inputs: RomInputs) -> dict[str, str]:
+def extract(game: str, out: Path, decomp: Path, symbols: Path, inputs: RomInputs) -> dict:
     """Write the intermediate files for ``game`` into ``out``; return ``rom_sources.json``.
 
     Unresolved battle operands are printed to stderr and written to ``UNRESOLVED_FILE``.
@@ -253,13 +294,14 @@ def extract(game: str, out: Path, decomp: Path, symbols: Path, inputs: RomInputs
     from tools.rom.nds import RomFiles
 
     vanilla_files = RomFiles.open(read_checked(inputs.vanilla_rom, VANILLA_SHA1, "sha1"))
-    rom, changed = vanilla_files, None
+    rom, changed, code = vanilla_files, None, None
     if game == "kaizo":
-        from tools.rom.diff import changed_scripts
+        from tools.rom.diff import changed_code, changed_scripts
 
         rom, diff = _kaizo_checks(inputs, decomp, symbols, vanilla_files)
-        changed = changed_scripts(diff)
+        changed, code = changed_scripts(diff), changed_code(diff)
         _member_entries(ROM_DIFF_TOML, changed)
+        _check_code_entries(ROM_DIFF_TOML, code)
 
     from tools.rom.readers.code_tables import egg_moves, tutor_learnsets, tutor_moves
     from tools.rom.readers.evolutions import read_evolutions
@@ -298,6 +340,7 @@ def extract(game: str, out: Path, decomp: Path, symbols: Path, inputs: RomInputs
             )
         tutors = tutor_moves(rom, smap, decomp)
         vanilla_rom = vanilla_files if rom is not vanilla_files else None
+        move_lists = move_list_override(game)
         tables = {
             "species": read_species(rom, decomp, charmap),
             "forms": read_forms(rom, decomp, charmap),
@@ -305,7 +348,7 @@ def extract(game: str, out: Path, decomp: Path, symbols: Path, inputs: RomInputs
             "move_lists": read_move_lists(
                 rom,
                 extract_move_lists(decomp),
-                override=move_list_override(game),
+                override=move_lists,
                 vanilla_rom=vanilla_rom,
             ),
             "items": read_items(rom, decomp, smap, charmap),
@@ -322,6 +365,7 @@ def extract(game: str, out: Path, decomp: Path, symbols: Path, inputs: RomInputs
             _write(stage / f"{name}.json", data)
         if changed is not None:
             _write(stage / CHANGED_SCRIPTS_FILE, changed)
+            _write(stage / CHANGED_CODE_FILE, code)
             _write(stage / FIELD_EFFECTS_FILE, _report_kaizo(tables["trainers"], effects))
             _write(stage / TRAINER_MAPS_FILE, {str(t): h for t, h in where.items()})
         fresh = stage / "decomp"
@@ -341,8 +385,10 @@ def extract(game: str, out: Path, decomp: Path, symbols: Path, inputs: RomInputs
         sources.update({f"{n}.json": reused for n in REUSED_FILES})
         if changed is not None:
             sources[CHANGED_SCRIPTS_FILE] = "rom diff"
+            sources[CHANGED_CODE_FILE] = "rom diff (names and address ranges only)"
             sources[FIELD_EFFECTS_FILE] = "rom: map weather through the battle weather switch"
             sources[TRAINER_MAPS_FILE] = "rom: trainer -> map header join (map scripts, events)"
+            sources[INPUTS_KEY] = kaizo_input_hashes(move_lists)
         _write(stage / "rom_sources.json", sources)
         _write(stage / UNRESOLVED_FILE, rows)
         out.mkdir(parents=True, exist_ok=True)
@@ -386,6 +432,8 @@ def main(argv: list[str] | None = None) -> int:
             + ", ".join(f"{n}#{i}" for n, i in added)
         )
     for name, src in sorted(sources.items()):
+        if isinstance(src, dict):  # INPUTS_KEY
+            src = ", ".join(f"{k} {v[:12]}" for k, v in sorted(src.items()))
         print(f"{name}: {src}")
     return 0
 

@@ -238,16 +238,28 @@ def _item_maps(items: list[dict], vanilla: list[dict] | None) -> tuple[list[int]
     return hold, bag
 
 
-def _kaizo_rom_changes(inter: Path) -> tuple[frozenset[int], int]:
+def _kaizo_rom_changes(inter: Path, rom_diff: Path = ROM_DIFF) -> tuple[frozenset[int], int]:
     """(effect ids whose ``be_seq`` member changed and is not ``modelled``, the count of
-    ``unknown`` ``[[code]]`` and ``[[member]]`` entries in ``rom_diff.toml``). A member marked
-    ``irrelevant`` is UNSUPPORTED too: deliberately conservative, since "irrelevant" says the
-    change does not matter to the classifier, not that the engine models the new script."""
-    from tools.rom.diff import load_classification, load_member_classification
+    ``unknown`` changed code keys and script members). Both are counted against what the ROM
+    diff changed (``rom/changed_code.json``, ``rom/changed_scripts.json``), not against the
+    entries ``rom_diff.toml`` happens to hold: a changed key or member with no entry counts as
+    unknown, and an entry for something the diff did not change is stale and raises. A member
+    marked ``irrelevant`` is UNSUPPORTED too: deliberately conservative, since "irrelevant"
+    says the change does not matter to the classifier, not that the engine models the new
+    script."""
+    from tools.rom.diff import load_code_classification, load_member_classification
 
+    for name in ("changed_scripts", "changed_code"):
+        if not (inter / "rom" / f"{name}.json").exists():
+            raise BuildError(
+                f"no {inter / 'rom' / name}.json: re-run python -m tools.extract_rom --game kaizo"
+            )
     changed = _load(inter / "rom", "changed_scripts")
-    members = load_member_classification(ROM_DIFF, changed)
-    code = load_classification(ROM_DIFF)
+    try:
+        members = load_member_classification(rom_diff, changed)
+        code = load_code_classification(rom_diff, _load(inter / "rom", "changed_code"))
+    except ValueError as e:
+        raise BuildError(str(e)) from e
     effects = frozenset(
         i for (narc, i), (status, _) in members.items() if narc == BE_SEQ and status != "modelled"
     )
@@ -461,7 +473,7 @@ def main(argv: list[str] | None = None) -> int:
 
         try:
             resolve(load_inputs(), inter)
-        except (CrossCheckError, ResolveError, RomInputError, FileNotFoundError) as e:
+        except (BuildError, CrossCheckError, ResolveError, RomInputError, FileNotFoundError) as e:
             print(f"error: {_ascii(str(e))}", file=sys.stderr)
             print(f"report: {DEFAULT_REPORT}", file=sys.stderr)
             return 1

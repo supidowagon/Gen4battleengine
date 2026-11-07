@@ -786,6 +786,32 @@ def load_member_classification(
     return out
 
 
+def changed_code(diff: RomDiff) -> list[list[str]]:
+    """``changed_code.json``: each changed ``[module, symbol-or-range]`` once, in
+    ``_changed_keys`` order. Names and address ranges only, never bytes."""
+    return [list(k) for k in _changed_keys(diff)]
+
+
+def load_code_classification(
+    path: Path, changed: list[list[str]] | list[tuple[str, str]]
+) -> dict[tuple[str, str], tuple[str, str]]:
+    """``(module, symbol-or-range) -> (status, note)`` for every key in ``changed`` (the
+    ``changed_code.json`` of the ROM diff), with ``load_member_classification``'s rules: an
+    entry naming a key not in ``changed`` is stale and raises, and a changed key with no
+    entry reads as ``("unknown", "")``. Deleting a ``[[code]]`` entry therefore never lowers
+    the count of unknown changes."""
+    entries = load_classification(path)
+    want = {(m, s) for m, s in changed}
+    stale = sorted(k for k in entries if k not in want)
+    if stale:
+        listed = ", ".join(f"{m} {s}" for m, s in stale)
+        raise ValueError(f"{path}: {listed}: stale (code not changed)")
+    out = dict(entries)
+    for key in sorted(want - set(entries)):
+        out[key] = ("unknown", "")
+    return out
+
+
 def _changed_keys(diff: RomDiff) -> list[tuple[str, str]]:
     """Each changed (module, symbol-or-range) once, by module then first address."""
     first: dict[tuple[str, str], int] = {}

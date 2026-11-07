@@ -10,11 +10,13 @@ import pytest
 
 from nuzline.data.games import GAMES, KAIZO
 from nuzline.data.trainer import GENDER_NONE, AreaCondition
+from tools.extract_rom import INPUTS_KEY, MOVE_LISTS_INPUT, kaizo_input_hashes
 from tools.kaizo.crosscheck import CrossCheck, CrossCheckError, Outcome, Row
 from tools.kaizo.overrides import Overrides
 from tools.kaizo.resolve import (
     ResolveError,
     _sha256,
+    check_extract_inputs,
     check_used,
     names,
     resolve,
@@ -122,6 +124,7 @@ def fake_inter(tmp_path):
     }
     for name, data in rom.items():
         _write(inter / "rom" / f"{name}.json", data)
+    _write(inter / "rom" / "rom_sources.json", {INPUTS_KEY: kaizo_input_hashes({})})
     pkcalc = {"sha256": "0" * 64, "moves": {"1": _pk_move("Pound")}, "trainers": {}}
     _write(inter / "pkcalc" / "pkcalc.json", pkcalc)
     docs = {"sha256": "1" * 64, "moves": {}, "items": {}, "splits": {}, "raw_trainers": {}}
@@ -158,6 +161,22 @@ def test_stale_resolution_stops_the_build(fake_inputs, fake_inter, tmp_path):
     )
     with pytest.raises(CrossCheckError, match="stale resolution"):
         _resolve(fake_inputs, tmp_path, fake_inter)
+
+
+def test_stale_extract_inputs_stop_the_build(fake_inputs, fake_inter, tmp_path):  # M1
+    sources = fake_inter / "rom" / "rom_sources.json"
+    check_extract_inputs(fake_inter, Overrides())  # recorded = current
+    with pytest.raises(ResolveError, match=r"\[move_lists\].*re-run python -m tools.extract_rom"):
+        check_extract_inputs(fake_inter, Overrides(move_lists={"sound": [45]}))
+    recorded = json.loads(sources.read_text("utf-8"))
+    recorded[INPUTS_KEY]["data/kaizo/battle_formats.json"] = "0" * 64  # edited since extract
+    _write(sources, recorded)
+    with pytest.raises(ResolveError, match="battle_formats.json"):
+        _resolve(fake_inputs, tmp_path, fake_inter)
+    _write(sources, {})  # extracted before the hashes were recorded
+    with pytest.raises(ResolveError, match="no input hashes recorded"):
+        check_extract_inputs(fake_inter, Overrides())
+    assert MOVE_LISTS_INPUT in kaizo_input_hashes(None)
 
 
 # --- names (Ruling 3) -------------------------------------------------------------------
