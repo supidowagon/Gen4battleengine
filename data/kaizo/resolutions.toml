@@ -1,0 +1,11 @@
+# Resolutions for ROM-vs-PKCalc conflicts on executed fields (spec 6.5, plan Ruling 12).
+# Written by the builder, reviewed once at the end of K2. Each entry:
+#   [[resolution]]
+#   table    = "moves"             # cross-check table
+#   keys     = ["14 Swords Dance"] # grouped when one cause explains many rows
+#   field    = "pp"
+#   pkcalc   = 2                   # the PKCalc value being resolved (entry is stale if it changes)
+#   use      = "rom"               # "rom" (default policy) or "pkcalc"
+#   reason   = "..."
+#   evidence = "..."               # use = "pkcalc" needs evidence starting "trace:"
+# An entry that matches no current ROM-vs-PKCalc conflict is stale and fails the build.
