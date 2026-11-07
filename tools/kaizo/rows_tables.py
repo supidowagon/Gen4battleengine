@@ -17,22 +17,24 @@ Value conventions (so ``compare`` sees like with like):
   and ``:4753-4762`` pick slot 1 whenever ability 2 is ``ABILITY_NONE``), so the ROM's
   ``[65, 65]`` and PKCalc's padded ``[65, 0]`` agree.
 - Species names compare upper-cased (the ROM's species text bank is upper case).
-- Learnset ``tm`` and ``tutor`` sets are sorted move ids, each source going through its own
-  table (ROM: ``items.json`` ``teaches_move`` / ``tutor_moves.json``; sheet: ``tm_moves``).
+- Learnset ``tm`` sets are machine labels in machine order (``["TM06", "HM01"]``): ROM
+  indices name their machine, PKCalc's moves go through PKCalc's own ``tm_table`` and the
+  sheet lists labels, so TM contents are compared only in ``tm_table``. Learnset ``tutor``
+  sets are sorted move ids (ROM indices through ``tutor_moves.json``).
 - ``tutor_table`` rows are keyed by move (preflight #32): ``move`` is membership (bool,
   executed); ``cost`` (the four-shard dict, the same shape in both sources) and
   ``location`` (lower-case alphanumerics: ``route_212`` = ``route212``) are compared only
   for moves in both tables, unexecuted.
 - Items: the sheet's ``sheet_id`` is packed (no ``ITEM_UNUSED_*`` rows); it is unpacked to
-  the item id and checked against the sheet name. ROM ``items.json`` has no fling power,
-  so ``fling_power`` rows carry ROM ``None``.
+  the item id and checked against the sheet name. Fling power is ``ItemData.flingPower``
+  (``items.json`` ``fling_power``); catch rate is ``SpeciesData.catchRate``.
 """
 
 from __future__ import annotations
 
 import json
 import re
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -70,7 +72,8 @@ PKCALC_TARGETS = {
     "adjacentAllyOrSelf": "RANGE_USER_OR_ALLY",
     "adjacentFoe": "RANGE_SINGLE_TARGET_ME_FIRST",
 }
-assert set(PKCALC_TARGETS.values()) <= set(MoveTarget.__members__)
+if not set(PKCALC_TARGETS.values()) <= set(MoveTarget.__members__):
+    raise ValueError("PKCALC_TARGETS names a target that is not an ids.MoveTarget")
 
 PRIORITY_MIN, PRIORITY_MAX = -7, 7  # spec 5.2
 
@@ -171,12 +174,21 @@ def _key(i: int, *names: str | None) -> str:
     return f"{i} {next((n for n in names if n), '?')}"
 
 
-def _name_index(names: Mapping[int, str], what: str) -> dict[str, int]:
-    out: dict[str, int] = {}
-    for i, name in names.items():
-        if name in out and out[name] != i:
-            raise ValueError(f"{what} name {name!r} is both {out[name]} and {i}")
-        out[name] = i
+class _Names(dict):
+    """Name -> id, with ``folded`` (case-folded name -> id) built alongside."""
+
+    folded: dict[str, int]
+
+
+def _name_index(names: Iterable[tuple[int, str]], what: str) -> _Names:
+    """Name -> id from ``(id, name)`` pairs; a name (or two names that differ only by case)
+    on two ids raises."""
+    out = _Names()
+    out.folded = {}
+    for i, name in names:
+        for index, n in ((out, name), (out.folded, name.casefold())):
+            if index.setdefault(n, i) != i:
+                raise ValueError(f"{what} name {name!r} is both {index[n]} and {i}")
     return out
 
 
@@ -187,19 +199,18 @@ def _lookup(index: Mapping[str, int], name: str, what: str, where: str) -> int:
         raise ValueError(f"{where}: unknown {what} {name!r}") from None
 
 
-def _ref(index: Mapping[str, int], name: str) -> int | str:
+def _ref(index: _Names, name: str) -> int | str:
     """A sheet name's id: exact, else case-insensitive (the sheet writes "Solarbeam",
     "U-Turn"); a name no id carries (a vanilla name of a renamed slot, e.g. "Taunt") stays
     as ``"name: <text>"``, so it is reported as a disagreement instead of guessed."""
     if name in index:
         return index[name]
-    folded = {n.casefold(): i for n, i in index.items()}
-    return folded.get(name.casefold(), f"name: {name}")
+    return index.folded.get(name.casefold(), f"name: {name}")
 
 
 def _sheet_move_index(docs: dict) -> dict[str, int]:
     return _name_index(
-        {int(k): m["name"] for k, m in docs.get("moves", {}).items() if int(k)}, "sheet move"
+        ((int(k), m["name"]) for k, m in docs.get("moves", {}).items() if int(k)), "sheet move"
     )
 
 
@@ -222,7 +233,7 @@ def _target(pk: dict | None, key: str) -> str | None:
     try:
         return PKCALC_TARGETS[pk["target"]]
     except KeyError:
-        raise ValueError(f"moves {key!r}: unmapped PKCalc target {pk['target']!r}") from None
+        raise ValueError(f"moves {key!r}: unmapped PKCalc target {pk.get('target')!r}") from None
 
 
 def _check_priority(key: str, source: str, value: object) -> None:
@@ -303,23 +314,18 @@ def _effective(abilities: list[int] | None) -> list[int] | None:
     return [a1, a2 or a1]
 
 
-def _sheet_abilities(sheet: dict | None, index: Mapping[str, int], where: str) -> object:
+def _sheet_abilities(sheet: dict | None, index: _Names) -> object:
     if sheet is None:
         return None
     ids = [0 if n == "-" else _ref(index, n) for n in sheet["abilities"]]
     return _effective(ids)
 
 
-def _ability_index(rom: Mapping[str, Any], pkcalc: dict) -> dict[str, int]:
-    names: dict[str, int] = {}
-    for i, a in enumerate(rom.get("abilities", [])):
-        if i:
-            names.setdefault(a["name"], i)
+def _ability_index(rom: Mapping[str, Any], pkcalc: dict) -> _Names:
+    pairs = [(i, a["name"]) for i, a in enumerate(rom.get("abilities", [])) if i]
     for k, a in pkcalc.get("abilities", {}).items():
-        for n in (a["name"], *a.get("aliases", [])):
-            if names.setdefault(n, int(k)) != int(k):
-                raise ValueError(f"ability name {n!r} is both {names[n]} and {k}")
-    return names
+        pairs += [(int(k), n) for n in (a["name"], *a.get("aliases", []))]
+    return _name_index(pairs, "ability")
 
 
 def _upper(name: str | None) -> str | None:
@@ -329,7 +335,7 @@ def _upper(name: str | None) -> str | None:
 def species_rows(rom: Mapping[str, Any], pkcalc: dict, docs: dict) -> list[Row]:
     """Per personal index, forms included (Ruling 4). Executed: base stats, types,
     abilities (effective pair), exp yield, growth rate, gender ratio; unexecuted: catch
-    rate (the ROM intermediate has none), name."""
+    rate, name."""
     personal = _personal(rom)
     pk_species, sheet_species = pkcalc.get("species", {}), docs.get("species", {})
     abilities = _ability_index(rom, pkcalc)
@@ -352,13 +358,14 @@ def species_rows(rom: Mapping[str, Any], pkcalc: dict, docs: dict) -> list[Row]:
                 _field(sh, "base_stats")),
             row("types", _field(r, "types"), _field(pk, "types"), _field(sh, "types")),
             row("abilities", _effective(_field(r, "abilities")),
-                _effective(_field(pk, "abilities")), _sheet_abilities(sh, abilities, where)),
+                _effective(_field(pk, "abilities")), _sheet_abilities(sh, abilities)),
             row("exp_yield", _field(r, "exp_yield"), _field(pk, "exp_yield"),
                 _field(sh, "exp_yield")),
             row("growth_rate", _field(r, "exp_rate"), _field(pk, "growth_rate"), growth),
             row("gender_ratio", _field(r, "gender_ratio"), _field(pk, "gender_ratio"),
                 _field(sh, "gender_ratio")),
-            row("catch_rate", None, _field(pk, "catch_rate"), _field(sh, "catch_rate"), False),
+            row("catch_rate", _field(r, "catch_rate"), _field(pk, "catch_rate"),
+                _field(sh, "catch_rate"), False),
             row("name", _upper(_field(r, "name")), _upper(_field(pk, "name")),
                 _upper(_field(sh, "name")), False),
         ]  # fmt: skip
@@ -423,29 +430,33 @@ def _pk_machines(
 
 def learnset_rows(rom: Mapping[str, Any], pkcalc: dict, docs: dict) -> list[Row]:
     """Per personal index: executed ``level_up`` ([[level, move]] in learn order), ``tm``
-    and ``tutor`` (sorted move ids); ``evolutions`` ([[method name, param, species]], ROM
+    (machine labels in machine order) and ``tutor`` (sorted move ids); ``evolutions`` ([[method name, param, species]], ROM
     vs sheet, base species only: the ROM keys evolutions by species id)."""
     pk_species = pkcalc.get("species", {})
     sheet_moves = _sheet_move_index(docs)
     machines = [name for _, name in _tm_labels(rom["items"])]
     order = {name: n for n, name in enumerate(machines)}
-    pk_machine = {
-        move: label
-        for label in machines
-        if (move := pkcalc.get("tm_table", {}).get(_pk_tm_key(label))) is not None
-    }
+    pk_machine: dict[int, str] = {}
+    for label in machines:
+        move = pkcalc.get("tm_table", {}).get(_pk_tm_key(label))
+        if move is not None and pk_machine.setdefault(move, label) != label:
+            raise ValueError(
+                f"PKCalc tm_table: move {move} is taught by both {pk_machine[move]} and {label}"
+            )
     tutor_moves = [t["move"] for t in rom["tutor_moves"]]
     methods = rom["evolution_methods"]
     personal = _personal(rom)
     names = {
         "moves": sheet_moves,
-        "items": _sheet_item_ids(docs, rom["items"]),
+        "items": _name_index(
+            ((i, n) for n, i in _sheet_item_ids(docs, rom["items"]).items()), "sheet item"
+        ),
         "species": _name_index(
-            {
-                int(k): s["name"].upper()
+            (
+                (int(k), s["name"].upper())
                 for k, s in docs.get("species", {}).items()
                 if 0 < int(k) < len(rom["species"])
-            },
+            ),
             "sheet species",
         ),
     }
@@ -584,7 +595,7 @@ def _sheet_item_ids(docs: dict, rom_items: list[dict]) -> dict[str, int]:
     checked against the ROM names (a renamed slot, e.g. Nugget -> Big Nugget, joins by id)."""
     items = docs.get("items", {})
     used = [i for i, it in enumerate(rom_items) if not it["name"].startswith("ITEM_UNUSED_")]
-    rom_ids = _name_index({i: rom_items[i]["name"] for i in used}, "ROM item")
+    rom_ids = _name_index(((i, rom_items[i]["name"]) for i in used), "ROM item")
     out = {}
     for name, v in items.items():
         if not 0 <= v["sheet_id"] < len(used):

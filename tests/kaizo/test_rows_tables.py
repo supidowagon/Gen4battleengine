@@ -18,6 +18,7 @@ from tools.kaizo.rows_tables import (
     tm_rows,
     tutor_rows,
 )
+from tools.rom.inputs import KAIZO_DOCS_SHA256, PKCALC_SHA256
 
 
 def find(rows, table, key, field):
@@ -112,6 +113,7 @@ def _species(stats, types, abilities, **kw):
         "base_friendship": 70,
         "exp_rate": 3,
         "exp_yield": 64,
+        "catch_rate": 45,
     }
     s.update(kw)
     return s
@@ -150,7 +152,13 @@ def synthetic_sources():
         "evolution_methods": ["none", "level_happiness", "x2", "x3", "level"],
         "items": [
             {"name": "None", "hold_effect": 0, "hold_param": 0, "teaches_move": None},
-            {"name": "Charcoal", "hold_effect": 5, "hold_param": 20, "teaches_move": None},
+            {
+                "name": "Charcoal",
+                "hold_effect": 5,
+                "hold_param": 20,
+                "teaches_move": None,
+                "fling_power": 30,
+            },
             {"name": "ITEM_UNUSED_2", "hold_effect": 0, "hold_param": 0, "teaches_move": None},
             {"name": "TM01", "hold_effect": 0, "hold_param": 0, "teaches_move": 3},
             {"name": "HM01", "hold_effect": 0, "hold_param": 0, "teaches_move": 1},
@@ -360,7 +368,7 @@ def test_species_fields(synthetic_sources):
     form = find(rows, "species", "3 Ivysaur-Mega", "base_stats")
     assert form.rom == form.pkcalc == [60, 62, 63, 80, 80, 91]
     catch = find(rows, "species", "1 Bulbasaur", "catch_rate")
-    assert (catch.rom, catch.pkcalc, catch.sheet) == (None, 45, 59)
+    assert (catch.rom, catch.pkcalc, catch.sheet) == (45, 45, 59)
     growth = find(rows, "species", "1 Bulbasaur", "growth_rate")
     assert growth.rom == growth.pkcalc == growth.sheet == 3
     name = find(rows, "species", "1 Bulbasaur", "name")
@@ -463,7 +471,7 @@ def test_item_rows(synthetic_sources):
     hold = find(rows, "items", "1 Charcoal", "hold_param")
     assert (hold.rom, hold.pkcalc, hold.sheet, hold.executed) == (20, None, 50, True)
     fling = find(rows, "items", "1 Charcoal", "fling_power")
-    assert (fling.rom, fling.pkcalc, fling.sheet) == (None, None, 30)
+    assert (fling.rom, fling.pkcalc, fling.sheet) == (30, None, 30)
     assert not find(rows, "items", "1 Charcoal", "name").executed
     assert not [r for r in rows if r.key.startswith("2 ")]  # ITEM_UNUSED_*
 
@@ -540,3 +548,46 @@ def test_real_tutor_table_has_38_moves(real_rows):
 def test_real_abilities_all_equal(real_check):
     out = [o for o in real_check.outcomes if o.row.table == "abilities"]
     assert len(out) == 123 and {o.kind for o in out} == {"agree"}
+
+
+def test_pkcalc_machine_teaching_one_move_twice_raises(synthetic_sources):
+    rom, pk, docs = synthetic_sources
+    pk["tm_table"]["93"] = 3  # HM01 teaches TM01's move
+    with pytest.raises(ValueError, match="taught by both TM01 and HM01"):
+        learnset_rows(rom, pk, docs)
+
+
+def test_sheet_names_differing_only_by_case_raise(synthetic_sources):
+    rom, pk, docs = synthetic_sources
+    docs["moves"]["2"]["name"] = "POUND"
+    with pytest.raises(ValueError, match="sheet move name 'POUND'"):
+        learnset_rows(rom, pk, docs)
+
+
+def test_spec_5_5_fling_power_from_rom(real_check):  # Town Map 0 -> 120 (spec 5.5)
+    out = next(
+        o
+        for o in real_check.outcomes
+        if o.row.table == "items" and o.row.key == "442 Town Map" and o.row.field == "fling_power"
+    )
+    assert (out.row.rom, out.row.sheet, out.kind) == (120, 120, "agree")
+
+
+def test_spec_5_3_catch_rate_from_rom(real_check):  # sheet catch rate disagrees (spec 5.3)
+    out = next(
+        o
+        for o in real_check.outcomes
+        if o.row.table == "species" and o.row.key == "1 Bulbasaur" and o.row.field == "catch_rate"
+    )
+    assert (out.row.rom, out.row.pkcalc, out.row.sheet, out.kind) == (175, 175, 59, "sheet_only")
+
+
+def test_real_unresolved_set(real_check, pkcalc, docs):  # Ruling 19: audited inputs only
+    if pkcalc["sha256"] != PKCALC_SHA256 or docs["sha256"] != KAIZO_DOCS_SHA256:
+        pytest.skip("PKCalc zip or docs workbook is not the audited one")
+    got = sorted((r.table, r.key, r.field) for r in real_check.unresolved)
+    assert got == [
+        ("moves", "270 Helping Hand", "target"),
+        ("moves", "367 Acupressure", "target"),
+        ("moves", "382 Me First", "target"),
+    ]

@@ -181,6 +181,7 @@ def _row_fields(decomp: Path):
             "base_friendship": int(d["base_friendship"]),
             "exp_rate": exp_rate_id(d["exp_rate"]),
             "exp_yield": int(d["base_exp_reward"]),
+            "catch_rate": int(d["catch_rate"]),
         }
 
     return fields
@@ -204,6 +205,7 @@ def extract_species(decomp: Path) -> list[dict]:
                 "base_friendship": row["base_friendship"],
                 "exp_rate": row["exp_rate"],
                 "exp_yield": row["exp_yield"],
+                "catch_rate": row["catch_rate"],
             }
         )
     return out
@@ -575,6 +577,7 @@ def extract_items(decomp: Path) -> list[dict]:
                     "hold_param": 0,
                     "teaches_move": None,
                     "hp_restored": 0,
+                    "fling_power": 0,
                 }
             )
             continue
@@ -591,6 +594,7 @@ def extract_items(decomp: Path) -> list[dict]:
                 # fills from the JSON's s8: -1 (Max Potion: restore all) is 255. 0 without
                 # itemUseParams (no party-use data).
                 "hp_restored": int(params.get("hpRestored", 0)) & 0xFF,
+                "fling_power": int(d["flingPower"]),  # ItemData.flingPower (include/item.h:62)
             }
         )
     return out

@@ -67,8 +67,9 @@ def _personal_members(rom: RomFiles) -> list[bytes]:
 
 def _row_reader(decomp: Path):
     """A function ``(members, row) -> dict`` of member ``row``'s ``SpeciesData`` fields
-    (``include/struct_defs/species.h:39-58``): stats 0-5, types 6-7, base exp reward 9,
-    gender ratio 16, base friendship 18, exp rate 19, abilities 22-23. No name or weight."""
+    (``include/struct_defs/species.h:39-58``): stats 0-5, types 6-7, catch rate 8, base exp
+    reward 9, gender ratio 16, base friendship 18, exp rate 19, abilities 22-23. No name or
+    weight."""
     n_types = len(_constants(decomp, "pokemon_types", "TYPE_"))
     n_abilities = len(_constants(decomp, "abilities", "ABILITY_"))
 
@@ -91,6 +92,7 @@ def _row_reader(decomp: Path):
             "base_friendship": m[18],
             "exp_rate": check(row, "exp rate", m[19], EXP_RATES, 19),
             "exp_yield": m[9],  # baseExpReward, include/struct_defs/species.h:43
+            "catch_rate": m[8],  # catchRate, include/struct_defs/species.h:42
         }
 
     return read
@@ -122,6 +124,7 @@ def read_species(rom: RomFiles, decomp: Path, charmap: dict[int, str]) -> list[d
                 "base_friendship": row["base_friendship"],
                 "exp_rate": row["exp_rate"],
                 "exp_yield": row["exp_yield"],
+                "catch_rate": row["catch_rate"],
             }
         )
     return out

@@ -37,6 +37,8 @@ def test_kaizo_species_read(kaizo_files, decomp, charmap):
     assert len(species) == 496
     solid_rock = _constants(decomp, "abilities", "ABILITY_").index("ABILITY_SOLID_ROCK")
     assert solid_rock in species[345]["abilities"]
+    # spec 5.3: catch rate changed on 452 species; Bulbasaur 45 -> 175 (PKCalc agrees)
+    assert (species[1]["name"], species[1]["catch_rate"]) == ("BULBASAUR", 175)
 
 
 class _Wotbl:
