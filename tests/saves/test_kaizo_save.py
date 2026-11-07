@@ -76,8 +76,88 @@ def test_other_games_tables_refused(tables):
 def test_impossible_move_warned(tmp_path, tables, names, learnsets):  # Bulbasaur with Surf
     save = save_with_party(bulbasaur(moves=(57,)), tmp_path=tmp_path, tables=tables, names=names)
     lines = impossible_contents(save, tables, names, learnsets)
-    # The manifest's species name, as ``save show`` prints it (the plan wrote "Bulbasaur").
+    # The game's manifest name: upper case in vanilla, title case in Kaizo (controller ruling).
     assert lines == ["party slot 0 BULBASAUR: Surf is not learnable"]
+
+
+def test_impossible_move_warned_kaizo_title_case(
+    tmp_path, kaizo_tables, kaizo_names, kaizo_learnsets
+):
+    save = save_with_party(
+        bulbasaur(moves=(57,)), tmp_path=tmp_path, tables=kaizo_tables, names=kaizo_names
+    )
+    lines = impossible_contents(save, kaizo_tables, kaizo_names, kaizo_learnsets)
+    assert lines == ["party slot 0 Bulbasaur: Surf is not learnable"]
+
+
+def _lines_for(tmp_path, tables, names, learnsets, species, move, form=0):
+    rec = _party_mon(species=species, level=50, moves=(move, 0, 0, 0))
+    if form:
+        rec = writer.mon_record(
+            species=species,
+            level=50,
+            form=form,
+            moves=(move, 0, 0, 0),
+            pp=(5, 0, 0, 0),
+            party={"status": 0, "level": 50, "hp": 20, "stats": (20,) * 6},
+        )
+    save = save_with_party(rec, tmp_path=tmp_path, tables=tables, names=names)
+    return impossible_contents(save, tables, names, learnsets)
+
+
+@pytest.mark.parametrize(
+    ("form", "move"),
+    [(1, "Overheat"), (2, "Hydro Pump"), (3, "Blizzard"), (4, "Air Slash"), (5, "Leaf Storm")],
+)
+def test_rotom_form_moves(tmp_path, tables, names, learnsets, form, move):
+    # Pokemon_SetRotomForm, src/pokemon.c:4518-4535: only the matching form knows it.
+    ok = _lines_for(tmp_path, tables, names, learnsets, 479, names.move(move), form)
+    assert ok == []
+    other = 1 if form != 1 else 2
+    bad = _lines_for(tmp_path, tables, names, learnsets, 479, names.move(move), other)
+    assert bad == [f"party slot 0 ROTOM: {move} is not learnable"]
+
+
+def test_draco_meteor_for_dragon_types(tmp_path, tables, names, learnsets):
+    # scripts_route_210_grandma_wilma_house.s:117,129-138: any Dragon-type.
+    draco = names.move("Draco Meteor")
+    for species in (names.species("Dratini"), names.species("Altaria")):
+        assert _lines_for(tmp_path, tables, names, learnsets, species, draco) == []
+    lines = _lines_for(tmp_path, tables, names, learnsets, names.species("Swablu"), draco)
+    assert lines == ["party slot 0 SWABLU: Draco Meteor is not learnable"]  # Normal/Flying
+
+
+@pytest.mark.parametrize(
+    ("species", "move"),
+    [
+        ("Charizard", "Blast Burn"),
+        ("Infernape", "Blast Burn"),
+        ("Blastoise", "Hydro Cannon"),
+        ("Empoleon", "Hydro Cannon"),
+        ("Venusaur", "Frenzy Plant"),
+        ("Torterra", "Frenzy Plant"),
+    ],
+)
+def test_ultimate_moves_for_final_starters(tmp_path, tables, names, learnsets, species, move):
+    # scripts_route_228_north_house.s:55,69 (CheckFinalStageStarter :85-110).
+    lines = _lines_for(tmp_path, tables, names, learnsets, names.species(species), names.move(move))
+    assert lines == []
+
+
+def test_ultimate_move_needs_the_final_stage(tmp_path, tables, names, learnsets):
+    blast_burn = names.move("Blast Burn")
+    lines = _lines_for(tmp_path, tables, names, learnsets, names.species("Monferno"), blast_burn)
+    assert lines == ["party slot 0 MONFERNO: Blast Burn is not learnable"]
+
+
+def test_volt_tackle_for_the_pichu_line(tmp_path, tables, names, learnsets):
+    # Egg_TryGiveVoltTackle, src/overlay005/daycare.c:602-615 (Pichu eggs, :771).
+    volt = names.move("Volt Tackle")
+    for species in ("Pichu", "Pikachu", "Raichu"):
+        sid = names.species(species)
+        assert _lines_for(tmp_path, tables, names, learnsets, sid, volt) == []
+    lines = _lines_for(tmp_path, tables, names, learnsets, names.species("Shinx"), volt)
+    assert lines == ["party slot 0 SHINX: Volt Tackle is not learnable"]
 
 
 def test_learnable_moves_pass(tmp_path, tables, names, learnsets):

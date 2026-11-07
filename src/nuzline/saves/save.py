@@ -282,9 +282,9 @@ def load_save(
 
     ``game`` (id or alias) chooses the tables and names used when they are not passed;
     nothing about the save itself selects or checks the game (spec §8: a Kaizo save looks
-    like a vanilla one). Raises :class:`SaveError` for a wrong size, ``"empty"``/``"error"`` load results,
-    ``"corrupt"`` unless ``allow_corrupt``, or a bad party count; a record that fails its
-    checks raises ``RecordError`` naming its location.
+    like a vanilla one). Raises :class:`SaveError` for a wrong size, ``"empty"``/``"error"``
+    load results, ``"corrupt"`` unless ``allow_corrupt``, or a bad party count; a record
+    that fails its checks raises ``RecordError`` naming its location.
     """
     data = Path(path).read_bytes()
     image = read_image(data)

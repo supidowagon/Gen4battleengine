@@ -3,9 +3,9 @@
 Skipped unless ``NUZLINE_ORACLE_DIR`` names a folder holding exactly one ``.sav``/``.dsv``,
 one PKHeX Box Data Report ``.csv`` and the party Pokemon as ``.pk4`` files (see
 ``docs/saves.md``). ``NUZLINE_ORACLE_GAME`` (``vanilla`` or ``kaizo``, default ``vanilla``)
-picks the tables and names the save is read with. The PKHeX CSV column headers are not known exactly, so columns are
-found by header name with a small alias table and the test fails listing the headers it
-saw when a required one has no match.
+picks the tables and names the save is read with. The PKHeX CSV column headers are not
+known exactly, so columns are found by header name with a small alias table and the test
+fails listing the headers it saw when a required one has no match.
 """
 
 from __future__ import annotations
