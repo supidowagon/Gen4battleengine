@@ -24,10 +24,14 @@ A ROM or patch hash mismatch stops the build. The PKCalc and spreadsheet hashes 
 in the report, not enforced; tests that pin audited counts skip on another copy. Tests that
 need a missing input skip.
 
-Also needed: the vanilla intermediates (`uv run python -m tools.extract_decomp --decomp
-external/pokeplatinum --out data/intermediate`), the decomp at `external/pokeplatinum` with its linker map (`docs/rom_pipeline.md`), `node` on
-`PATH` (PKCalc's data files are evaluated in a locked-down `vm`; no PKCalc code runs), and the
-`rom` dependency group (`uv run --group rom ...`).
+Also needed:
+
+- the vanilla intermediates (`uv run python -m tools.extract_decomp --decomp
+  external/pokeplatinum --out data/intermediate`);
+- the decomp at `external/pokeplatinum` with its linker map (`docs/rom_pipeline.md`);
+- `node` on `PATH` (PKCalc's data files are evaluated in a locked-down `vm`; no PKCalc code
+  runs);
+- the `rom` dependency group (`uv run --group rom ...`).
 
 ## Commands
 
@@ -41,9 +45,14 @@ uv run --group rom python -m tools.kaizo.overrides check
 uv run --group rom python -m tools.build_tables --game kaizo
 ```
 
-1. `extract_rom` patches the ROM in memory (cached under `.cache/rom/`) and reads species,
-   moves, items, learnsets, trainers, map weather and battle formats from it. It prints the
-   trainers whose start condition or format is left to you (see "User calls").
+1. `extract_rom` patches the ROM (the patched copy is cached under `.cache/rom/`) and reads
+   species, moves, items, learnsets, trainers, map weather and battle formats from it. It
+   prints the trainers whose start condition or format is left to you (see "User calls").
+   It also records which code the patch changed (`changed_code.json`) and the hashes of the
+   committed files it read: `data/kaizo/start_conditions.json`,
+   `data/kaizo/battle_formats.json` and the `[move_lists]` of `data/kaizo/overrides.toml`.
+   After editing one of those, re-run `extract_rom`: the build refuses ROM intermediates
+   older than them ("re-run tools.extract_rom --game kaizo").
 2. `extract_pkcalc` and `extract_kaizo_docs` turn PKCalc and the spreadsheet into JSON for the
    cross-check.
 3. `overrides check` re-validates every citation in `data/kaizo/overrides.toml` against the
@@ -112,18 +121,39 @@ each with a `source` (`"<Sheet>:<row>"`, `"pkcalc:<file>:<line>"`, `"rom:<what>"
 
 - `[area.<id>]`: `trick_room`, `gravity`, `weather` (`rain|sun|sandstorm|hail|fog|none`;
   replaces the ROM start condition). This is also how you settle an "unknown" start
-  condition: replace its `[area_exception.<id>]` with an `[area.<id>]` entry.
+  condition (see "Settling a user call").
 - `[area_exception.<id>]`: a ROM Trick Room trainer deliberately left without Trick Room, with
   the `reason`.
 - `[[gauntlet]]`: `name`, `trainers` (ids in fight order), `rules` (`heal_between`,
   `change_team`; fill in when play reaches the gauntlet).
 - `[trainer_ids."<label or Sheet:row>"]`: `id`, when a PKCalc label or sheet header matches
   the wrong ROM trainer.
-- `[fields.<id>]`: `split`, `optional`, `left_side`, `player_starter`, or `format = "unknown"`.
+- `[fields.<id>]`: `split` (the trainer's sheet position is then unknown), `optional`,
+  `left_side`, `player_starter`, or `format`: `"unknown"` to refuse a trainer, or your answer
+  (see "Settling a user call").
 
 `python -m tools.kaizo.overrides draft` writes a fresh draft to
 `.cache/kaizo/overrides.draft.toml` to compare against; the committed file is the reviewed one.
 Run `overrides check`, then rebuild.
+
+**Settling a user call.** Each user call (below) is settled in `data/kaizo/overrides.toml`
+with `source = "user, YYYY-MM-DD"`, then `overrides check` and a rebuild:
+
+- *Unknown start condition* (a `start_conditions.json` "unknown", or no map placement
+  found): add `[area.<id>]` with the `weather` the fight starts in (and `trick_room = true`
+  if it has Trick Room). Where the trainer has an `[area_exception.<id>]`, replace it.
+- *Trick Room on one placement only*: replace the trainer's `[area_exception.<id>]` with
+  `[area.<id>]`, `source = "user, YYYY-MM-DD"`. Say which fight is meant: `trick_room = true`
+  for the Trick Room map, or the other map's `weather` (`"none"` for none). You may name the
+  placement with `map_header = N` (one of the trainer's headers in the report); the check
+  then requires `trick_room = true` exactly when that header has Trick Room. A `rom:` or
+  sheet citation cannot settle these trainers: the ROM holds both placements.
+- *Unknown format*: add `[fields.<id>] format = "single"`, `"double"`,
+  `"double_two_trainer"` (with `opponent_2 = <the other trainer's id>`) or `"multi"`
+  (`opponent_2` optional), replacing a `format = "unknown"`. Only a `user,` source may set a
+  format. For 521 and 527 also delete their entry in `data/kaizo/battle_formats.json` and
+  re-run `extract_rom`. If the cross-check then shows a disagreement on that trainer, it needs
+  a resolution as usual.
 
 **Level caps**: edit `data/kaizo/level_caps.toml` (`[splits]` per split sheet, `[fights]` per
 fight label prefix). No rebuild needed.
@@ -136,9 +166,10 @@ fight label prefix). No rebuild needed.
   that no map holds, and Cynthia's Gravity, come from `overrides.toml`. Maps whose weather
   depends on the date are settled in `start_conditions.json`.
 - **Split, optional, left side (9).** Read from the spreadsheet on every build, with a
-  citation; `overrides.toml` can correct them. Gauntlet groups are in `overrides.toml` (nine
-  today), drafted from the spreadsheet's gauntlet and "B2B With" tags; their healing and
-  team-change rules stay empty until you reach them.
+  citation; `overrides.toml` can correct them. When a trainer's sheet headers disagree on
+  `optional` or `left_side`, the field is unknown and the report says so. Gauntlet groups
+  are in `overrides.toml`, drafted from the spreadsheet's gauntlet and "B2B With" tags; their
+  healing and team-change rules stay empty until you reach them.
 - **Battle formats (10).** Single, double, two-trainer double or multi come from the ROM's
   field scripts. When PKCalc or the sheet pairs two trainers that the scripts do not, and both
   stand on the same map, they are a sight pair (both see you in one step): a two-trainer
@@ -149,10 +180,12 @@ fight label prefix). No rebuild needed.
   (`"barry #3"`) or use `--trainer-id`.
 - **Resolutions (12).** As above: explicit keys, a reason and evidence; the ROM value is the
   default, and overruling the ROM needs an emulator trace.
-- **Unclassified ROM changes (13).** The patch changes 103 pieces of game code that are not
-  yet classified in `data/kaizo/rom_diff.toml`. Until they are, each one is assumed to matter
-  to every fight, so **every Kaizo fight is refused today**. A move whose battle script the
-  patch changed is unsupported until that script is modelled.
+- **Unclassified ROM changes (13).** The patch changes game code and battle scripts that are
+  not yet classified in `data/kaizo/rom_diff.toml` (the count is the last user call in the
+  report). Until they are, each one is assumed to matter to every fight, so **every Kaizo
+  fight is refused today**. The count is taken against what the patch changed, so a change
+  whose entry is missing from `rom_diff.toml` still counts as unclassified. A move whose
+  battle script the patch changed is unsupported until that script is modelled.
 - **AI (14).** Only the vanilla trainer AI is transcribed. Kaizo fights are refused on the AI
   until the Kaizo AI is transcribed (milestone K3).
 - **Level caps (15).** From `data/kaizo/level_caps.toml`. The Galactic split cap is 100,
@@ -162,22 +195,27 @@ fight label prefix). No rebuild needed.
 - **Chance-0 secondary effects (21).** A move whose side effect has a 0% chance in Kaizo
   never applies it: it is plain damage, or unsupported if the move also does something else.
 - **Spreadsheet tags (22).** Weather written as just `(RAIN)`, `(HAIL)` or `(SUN)` counts as
-  permanent; bare `(SUN)` as permanent is confirmed by you (2026-11-05) and is one table
-  entry, so it can be flipped. Bare `(Trick Room)` counts as permanent Trick Room. A tag that
-  looks like a keyword but does not parse stops the extraction.
+  permanent, and bare `(Trick Room)` as permanent Trick Room; this is confirmed by you
+  (2026-11-05). It is one constant, `BARE_WEATHER_PERMANENT` in `tools/kaizo/resolve.py`:
+  set it to `False` and rebuild if play shows such weather ending. A tag that looks like a
+  keyword but does not parse stops the extraction.
 
 ## User calls
 
-These are refused until you decide them; the "User calls" section of
-`docs/kaizo/discrepancies.md` lists each with its evidence.
+These are refused until you decide them. The "User calls" section of
+`docs/kaizo/discrepancies.md` is the current list, with the ids, counts and evidence of
+each; "Settling a user call" above says how to enter an answer. The kinds:
 
 - **Unknown start conditions**: trainers placed on maps that start different weather
-  (318 Fantina, 325, 343 "Fantina?", 610, 676, 746, 747).
-- **Trick Room on one placement only**: 35 trainers placed both on a Trick Room map and on a
+  (`start_conditions.json`; for example 318 Fantina and 343 "Fantina?").
+- **No map placement found**: trainers with a party that the ROM's trainer -> map join
+  places on no map (for example 874 Flint and 468 Raul). Their start condition is refused as
+  unknown, never read as no weather; the report lists them as one call.
+- **Trick Room on one placement only**: trainers placed both on a Trick Room map and on a
   map without it (Rosalind 509, Puck 559, Kari 649 and most Galactic HQ grunts). Their start
   condition is refused as unknown.
 - **Unknown formats**: 521 Mercury and 527 Venus (scripts disagree, `battle_formats.json`),
-  and 17 trainers the ROM fights in two different structures on two maps (`[fields]` in
+  and the trainers the ROM fights in two different structures on two maps (`[fields]` in
   `overrides.toml`).
 - **Weather where the ROM disagrees with PKCalc and the sheet**: Route 213 trainers (ROM: no
   rain) and Idol Catherine #2 (ROM: no fog). The ROM value is used.
@@ -186,5 +224,5 @@ These are refused until you decide them; the "User calls" section of
 ## What is refused
 
 `coverage --game kaizo` exits 2 and lists every reason. For Roark today that includes the
-Kaizo AI line, the 103 unclassified ROM changes, `Battle start: Sandstorm (weather
+Kaizo AI line, the unclassified ROM changes, `Battle start: Sandstorm (weather
 UNSUPPORTED)`, and Roark's unsupported moves, abilities and items.

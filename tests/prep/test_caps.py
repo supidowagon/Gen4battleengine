@@ -97,6 +97,13 @@ def test_kaizo_file_needs_a_source(tmp_path):
     assert load_kaizo_caps(CAPS_FILES[KAIZO])[0]["Galactic"] == 100
 
 
+def test_kaizo_galactic_confirmation_date():  # final review M19: the ledger's date
+    import tomllib
+
+    source = tomllib.loads(CAPS_FILES[KAIZO].read_text(encoding="utf-8"))["source"]
+    assert "Galactic confirmed 100 (user, 2026-11-05)" in source
+
+
 def test_next_fight_cap_crosses_split(tmp_path):
     caps = write(
         tmp_path, '[splits]\nRoark = 16\nGardenia = 28\n[fights]\n"Rival [Torterra]" = 20\n'
