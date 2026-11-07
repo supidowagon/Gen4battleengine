@@ -82,6 +82,18 @@ def test_roark_is_a_single_battle(tables, names):
     assert "Roark: a triple battle (battle format UNSUPPORTED)" in r.missing
 
 
+def test_unknown_battle_format_is_refused_explicitly(tables, names):
+    # Kaizo's Spear Pillar 521/527 (data/kaizo/battle_formats.json): an explicit entry.
+    from nuzline.engine.coverage import IMPLEMENTED_FORMATS
+
+    assert IMPLEMENTED_FORMATS["unknown"] == Support.NONE
+    t = replace(roark_trainer(), format="unknown")
+    r = check_opponent(tables, names, t, roark_party(names), 0)
+    msg = "Roark: battle format unknown (depends on game state) (battle format UNSUPPORTED)"
+    assert msg in r.missing
+    assert r.level == Support.NONE
+
+
 @pytest.mark.parametrize(
     ("name", "fmt"), [("Mars", "multi"), ("Ismael", "double_two_trainer"), ("Jack", "multi")]
 )

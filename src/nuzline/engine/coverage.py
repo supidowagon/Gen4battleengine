@@ -131,6 +131,9 @@ IMPLEMENTED_FORMATS: dict[str, Support] = {
     "double": Support.NONE,
     "double_two_trainer": Support.NONE,
     "multi": Support.NONE,
+    # Kaizo: a format the field scripts leave to game state (data/kaizo/battle_formats.json,
+    # tools/battle_scripts.py UNKNOWN_FORMAT), refused explicitly.
+    "unknown": Support.NONE,
 }
 # Trainer.start_condition (trainers.json) as a Weather.
 START_CONDITIONS = {
@@ -243,7 +246,11 @@ def _check_trainer(c: _Collector, tables: Tables, names: Names, trainer: Trainer
             "AI policy",
         )
     support = IMPLEMENTED_FORMATS.get(trainer.format, Support.NONE)
-    c.add(support, f"{trainer.name}: a {trainer.format} battle", "battle format")
+    if trainer.format == "unknown":
+        what = f"{trainer.name}: battle format unknown (depends on game state)"
+    else:
+        what = f"{trainer.name}: a {trainer.format} battle"
+    c.add(support, what, "battle format")
     effect = np.asarray(tables.trainer_item_effect)
     bag = [item for item in trainer.items if item]
     for item in bag:
