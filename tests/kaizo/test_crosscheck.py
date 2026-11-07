@@ -172,7 +172,7 @@ def test_report_is_deterministic(tmp_path):
     assert "| moves | 14 Swords Dance | pp | 20 | 20 | 30 | 20 |" in text
 
 
-def test_report_order_independent_ascii_and_escaped(tmp_path):
+def test_report_order_independent_utf8_and_escaped(tmp_path):
     rows = [
         Row("moves", "2 B", "name", "Café|x", "Cafe", None, True),
         Row("items", "1 A", "hold", [1, "a"], [1, "a"], 5, True),
@@ -184,7 +184,75 @@ def test_report_order_independent_ascii_and_escaped(tmp_path):
         write_report(compare(order, []), {"mapping": ["café"]}, {"pkcalc": "h"}, p)
         paths.append(p)
     assert paths[0].read_bytes() == paths[1].read_bytes()
-    text = paths[0].read_text("ascii")
-    assert "Caf\\xe9\\|x" in text and "[1, a]" in text and "caf\\xe9" in text
+    text = paths[0].read_text("utf-8")
+    assert "Café\\|x" in text and "[1, a]" in text and "café" in text
     assert "\r" not in text
     assert "## unresolved (1)" in text
+
+
+def test_grouped_resolution_reports_dead_keys():
+    res = Resolution("moves", ("1 A", "2 B", "3 C"), "power", 5, "rom", "r", "e")
+    rows = [
+        Row("moves", "1 A", "power", 4, 5, None, True),
+        Row("moves", "2 B", "power", 5, 5, None, True),
+    ]
+    check = compare(rows, [res])
+    assert [s.keys for s in check.stale] == [("2 B", "3 C")]
+    with pytest.raises(CrossCheckError, match="2 B.*3 C"):
+        check.require_clean()
+
+
+def test_resolution_matching_is_type_strict():
+    for pk, rv in ((1, True), (True, 1), (1, 1.0), (1.0, 1)):
+        res = Resolution("moves", ("1 A",), "f", rv, "rom", "r", "e")
+        check = compare([Row("moves", "1 A", "f", 9, pk, None, True)], [res])
+        assert check.stale == [res] and len(check.unresolved) == 1
+
+
+def test_tuple_value_matches_list_resolution():
+    res = Resolution("moves", ("1 A",), "f", [1, 2], "rom", "r", "e")
+    check = compare([Row("moves", "1 A", "f", (9,), (1, 2), None, True)], [res])
+    assert not check.stale and not check.unresolved
+
+
+def test_rom_and_pkcalc_absent_sheet_is_only_source():
+    out = compare([Row("items", "1 A", "e", None, None, 4, True)], []).outcomes[0]
+    assert (out.kind, out.used) == ("sheet_only", 4)
+
+
+def test_unexecuted_with_rom_absent():
+    out = compare([Row("moves", "1 A", "name", None, "X", None, False)], []).outcomes[0]
+    assert (out.kind, out.used) == ("unexecuted", "X")
+
+
+def test_pkcalc_use_on_rom_absent_row():
+    res = Resolution("trainers", ("1 A",), "mapped", 7, "pkcalc", "r", "trace:t")
+    check = compare([Row("trainers", "1 A", "mapped", None, 7, None, True)], [res])
+    assert (check.outcomes[0].kind, check.outcomes[0].used) == ("resolved", 7)
+
+
+def test_report_stale_sections_and_utf8(tmp_path):
+    res = Resolution("moves", ("1 A",), "pp", 1, "rom", "r", "e")
+    p = tmp_path / "r.md"
+    write_report(compare([], [res]), {"area\nx": ["lé"]}, {"a\nb": "h"}, p)
+    raw = p.read_bytes()
+    assert not raw.startswith(b"\xef\xbb\xbf") and b"\r" not in raw
+    text = raw.decode("utf-8")
+    assert "## stale resolutions (1)" in text and "| moves | [1 A] | pp | 1 | rom |" in text
+    assert "## area\\nx" in text and "| a\\nb | h |" in text and "lé" in text
+
+
+def test_report_escapes_markdown_and_sorts_ties_and_sets(tmp_path):
+    rows = [
+        Row("t", "k", "f", {2, 1}, {2, 1}, "a`b<c", True),
+        Row("t", "k", "f", {3}, {3}, "z", True),
+    ]
+    out = []
+    for i, order in enumerate((rows, rows[::-1])):
+        p = tmp_path / f"{i}.md"
+        write_report(compare(order, []), {}, {}, p)
+        out.append(p.read_bytes())
+    assert out[0] == out[1]
+    text = out[0].decode("utf-8")
+    assert "{1, 2}" in text and "a\\`b\\<c" in text
+    assert text.index("{1, 2}") < text.index("{3}")

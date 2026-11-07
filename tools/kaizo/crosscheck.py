@@ -3,15 +3,17 @@
 Policy, per row (``None`` = that source has no value and never counts as a disagreement):
 
 - PKCalc ``None``: ``rom_vs_sheet`` when the sheet has a value that differs from the ROM,
-  else ``agree``; the ROM value is used.
+  else ``agree``; the ROM value is used. With ROM ``None`` as well and a sheet value,
+  the sheet is the only source: ``sheet_only``, sheet value used.
 - ROM = PKCalc: ``agree``, or ``sheet_only`` when the sheet has a different value.
 - ROM != PKCalc (ROM ``None`` with PKCalc set counts), not executed: ``unexecuted``, PKCalc used.
 - ROM != PKCalc, executed: ``resolved`` through the matching entry of ``resolutions.toml``
   (``use`` = ``rom`` or ``pkcalc``), else ``unresolved`` (ROM used) and the build fails.
 
-A resolution matches on table, field, key and the PKCalc value it was written against; one
-that matches no executed disagreement is stale and fails the build too. A resolution against
-the ROM (``use = "pkcalc"``) needs ``evidence`` starting ``trace:``.
+A resolution matches on table, field, key and the PKCalc value it was written against
+(type-strict: 1, True and 1.0 differ; tuples and lists are alike). Keys that match no executed
+disagreement are stale and fail the build too; a grouped entry is reported with its dead
+keys. A resolution against the ROM (``use = "pkcalc"``) needs ``evidence`` starting ``trace:``.
 """
 
 from __future__ import annotations
@@ -19,7 +21,7 @@ from __future__ import annotations
 import tomllib
 from collections import Counter
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from tools.rom.inputs import REPO_ROOT
@@ -79,7 +81,7 @@ class CrossCheck:
         ]
         lines += [
             f"stale resolution: {s.table} {', '.join(map(repr, s.keys))} {s.field} "
-            f"(pkcalc {s.pkcalc!r}) matches no current ROM-vs-PKCalc conflict"
+            f"(pkcalc {s.pkcalc!r}) has no current ROM-vs-PKCalc conflict"
             for s in self.stale
         ]
         if lines:
@@ -145,16 +147,33 @@ def load_resolutions(path: Path = DEFAULT_RESOLUTIONS) -> list[Resolution]:
 # --- compare --------------------------------------------------------------------------
 
 
+def _tag(v: object) -> object:
+    """Type-tagged, tuple-normalised form of a value for strict equality."""
+    if isinstance(v, list | tuple):
+        return ("list", [_tag(x) for x in v])
+    if isinstance(v, set | frozenset):
+        return ("set", sorted((_tag(x) for x in v), key=repr))
+    if isinstance(v, dict):
+        return ("dict", sorted(((_tag(k), _tag(x)) for k, x in v.items()), key=repr))
+    return (type(v).__name__, v)
+
+
+def _same(a: object, b: object) -> bool:
+    return _tag(a) == _tag(b)
+
+
 def compare(rows: Iterable[Row], resolutions: Sequence[Resolution]) -> CrossCheck:
     index: dict[tuple[str, str, str], Resolution] = {}
     for res in resolutions:
         for k in res.keys:
             index[(res.table, res.field, k)] = res
-    used_res: set[int] = set()
+    hit: set[tuple[str, str, str]] = set()
     check = CrossCheck()
     for row in rows:
         resolution = None
-        if row.pkcalc is None:
+        if row.pkcalc is None and row.rom is None and row.sheet is not None:
+            kind, used = "sheet_only", row.sheet
+        elif row.pkcalc is None:
             differs = row.sheet is not None and row.sheet != row.rom
             kind, used = ("rom_vs_sheet" if differs else "agree"), row.rom
         elif row.rom == row.pkcalc:
@@ -164,57 +183,75 @@ def compare(rows: Iterable[Row], resolutions: Sequence[Resolution]) -> CrossChec
             kind, used = "unexecuted", row.pkcalc
         else:
             cand = index.get((row.table, row.field, row.key))
-            if cand is not None and cand.pkcalc == row.pkcalc:
+            if cand is not None and _same(cand.pkcalc, row.pkcalc):
                 resolution = cand
-                used_res.add(id(cand))
+                hit.add((row.table, row.field, row.key))
                 kind = "resolved"
                 used = row.pkcalc if cand.use == "pkcalc" else row.rom
             else:
                 kind, used = "unresolved", row.rom
                 check.unresolved.append(row)
         check.outcomes.append(Outcome(row, kind, used, resolution))
-    check.stale = [r for r in resolutions if id(r) not in used_res]
+    for res in resolutions:
+        dead = tuple(k for k in res.keys if (res.table, res.field, k) not in hit)
+        if dead:
+            check.stale.append(res if dead == res.keys else replace(res, keys=dead))
     return check
 
 
 # --- report ---------------------------------------------------------------------------
 
+_ESCAPES = {
+    "\\": "\\\\",
+    "|": "\\|",
+    "`": "\\`",
+    "<": "\\<",
+    "\r": "\\r",
+    "\n": "\\n",
+}
 
-def _ascii(text: str) -> str:
-    return text.encode("ascii", "backslashreplace").decode("ascii")
+
+def _esc(text: str) -> str:
+    return "".join(_ESCAPES.get(c, c) for c in text)
 
 
 def _cell(value: object) -> str:
-    """Deterministic, ASCII-only, table-safe rendering of a row value."""
+    """Deterministic, table-safe rendering of a row value (UTF-8 report)."""
     if value is None:
         return "-"
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, list | tuple):
         return "[" + ", ".join(_cell(v) for v in value) + "]"
-    text = str(value).replace("\\", "\\\\").replace("|", "\\|")
-    text = text.replace("\r", "\\r").replace("\n", "\\n")
-    return _ascii(text)
+    if isinstance(value, set | frozenset):
+        return "{" + ", ".join(sorted(_cell(v) for v in value)) + "}"
+    if isinstance(value, dict):
+        items = sorted((_cell(k), _cell(v)) for k, v in value.items())
+        return "{" + ", ".join(f"{k}: {v}" for k, v in items) + "}"
+    return _esc(str(value))
 
 
 def _why(o: Outcome) -> str:
     if o.resolution is not None:
         return f"{o.resolution.reason} ({o.resolution.evidence})"
     return {
-        "sheet_only": "sheet differs; ROM and PKCalc agree",
+        "sheet_only": "sheet differs or is the only source",
         "rom_vs_sheet": "PKCalc has no value; ROM differs from the sheet",
         "unexecuted": "field not executed; PKCalc value used",
         "unresolved": "needs an entry in resolutions.toml",
     }.get(o.kind, "")
 
 
-def _sort_key(o: Outcome) -> tuple[str, str, str]:
-    return (o.row.table, o.row.key, o.row.field)
+def _sort_key(o: Outcome) -> tuple:
+    r = o.row
+    cells = tuple(_cell(c) for c in (r.rom, r.pkcalc, r.sheet, o.used))
+    return (r.table, r.key, r.field, cells, _why(o))
 
 
 def write_report(
     check: CrossCheck, sections: dict[str, list[str]], sources: dict[str, str], path: Path
 ) -> None:
+    """Write the report as UTF-8 (no BOM) with LF line endings."""
     lines = [
         "# Kaizo discrepancies",
         "",
@@ -249,12 +286,12 @@ def write_report(
     if check.stale:
         lines += ["| table | keys | field | pkcalc | use |", "| --- | --- | --- | --- | --- |"]
         for s in sorted(check.stale, key=lambda s: (s.table, s.field, s.keys)):
-            cells = [s.table, ", ".join(s.keys), s.field, s.pkcalc, s.use]
+            cells = [s.table, list(s.keys), s.field, s.pkcalc, s.use]
             lines.append("| " + " | ".join(_cell(c) for c in cells) + " |")
     else:
         lines.append("None.")
     for name, body in sections.items():
-        lines += ["", f"## {_ascii(name)}", ""]
-        lines += [_ascii(str(ln)) for ln in body]
+        lines += ["", f"## {_cell(name)}", ""]
+        lines += [str(ln) for ln in body]
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(("\n".join(lines) + "\n").encode("ascii"))
+    path.write_bytes(("\n".join(lines) + "\n").encode("utf-8"))
