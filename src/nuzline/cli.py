@@ -593,7 +593,7 @@ def _print_pool(args, game, tables, names, player, trainer, save) -> None:
     learnsets = load_learnsets(game.tables_dir)
     candidates, left_out = pool_candidates(save, tables, names, learnsets, cap)
     print(f"Pool at level cap {cap} ({len(candidates)} Pokemon):")
-    _print_report(check_pool(tables, names, candidates))
+    _print_report(check_pool(tables, names, candidates, trainer))
     for line in left_out:
         _say(line)
 

@@ -1,6 +1,7 @@
 """The coverage registry refuses a fight that uses unimplemented mechanics and names
 every one of them (spec §3)."""
 
+import dataclasses
 from dataclasses import replace
 
 import pytest
@@ -20,11 +21,19 @@ from nuzline.engine.coverage import (
     check_coverage,
     check_opponent,
     require_coverage,
+    rom_change_refusals,
     start_weather,
     unknown_start,
 )
 from nuzline.engine.ids import Weather
-from tests.engine.helpers import INTERMEDIATE, _inter, roark_party, roark_trainer, sample_party
+from tests.engine.helpers import (
+    INTERMEDIATE,
+    _inter,
+    kaizo_names_with,
+    roark_party,
+    roark_trainer,
+    sample_party,
+)
 
 
 def test_roark_vs_sample_party_is_fully_covered(tables, names):
@@ -433,3 +442,93 @@ def test_report_names_a_labelled_trainer_by_its_label(tables, names):
     assert t.name == "Roark"
     assert unknown_start(replace(t, start_condition="unknown"))
     assert not unknown_start(t)
+
+
+# Gen IV move index of Rock Throw (names.move("Rock Throw") in the vanilla manifest; it is on
+# Roark's Geodude and Onix, tests/engine/helpers.roark_party).
+MOVE_ROCK_THROW = 88
+
+
+@pytest.mark.parametrize(
+    "cond, reached",
+    [
+        ({"formats": ["double"]}, False),  # Roark is single
+        ({"formats": ["single"]}, True),
+        ({"areas": ["gravity"]}, False),
+        ({"moves": [MOVE_ROCK_THROW]}, True),  # a vanilla Roark move
+        ({"trainer_items": True}, True),  # vanilla Roark has Potions
+        ({"trainers": [246]}, True),
+        ({"trainers": [247]}, False),
+    ],
+)
+def test_rom_change_refusals(tables, names, vanilla_manifest, cond, reached):
+    kaizo = kaizo_names_with(vanilla_manifest, [cond])
+    roark, mons = roark_trainer(), sample_party(names) + roark_party(names)
+    assert rom_change_refusals(tables, kaizo, roark, mons) == (["c"] if reached else [])
+
+
+def test_area_ability_and_item_terms(tables, names, vanilla_manifest):
+    roark, mons = roark_trainer(), sample_party(names)
+    gravity = with_area(roark, gravity=True)
+    kaizo = kaizo_names_with(vanilla_manifest, [{"areas": ["gravity"]}])
+    assert rom_change_refusals(tables, kaizo, gravity, mons) == ["c"]
+    assert rom_change_refusals(tables, kaizo, with_area(roark, trick_room=True), mons) == []
+    leftovers = names.item("Leftovers")
+    held = [replace(mons[0], item=leftovers), *mons[1:]]
+    kaizo = kaizo_names_with(vanilla_manifest, [{"items": [leftovers]}])
+    assert rom_change_refusals(tables, kaizo, roark, held) == ["c"]
+    assert rom_change_refusals(tables, kaizo, roark, mons) == []
+    import numpy as np
+
+    from nuzline.data.forms import personal_row
+
+    spec = mons[0]
+    row = personal_row(tables, spec.species, spec.form)
+    ability = int(np.asarray(tables.species_abilities_decomp)[row][spec.ability_slot])
+    kaizo = kaizo_names_with(vanilla_manifest, [{"abilities": [ability]}])
+    assert rom_change_refusals(tables, kaizo, roark, [spec]) == ["c"]
+    assert rom_change_refusals(tables, kaizo, roark, []) == []
+
+
+def test_extra_moves_reach_a_condition(tables, names, vanilla_manifest):
+    kaizo = kaizo_names_with(vanilla_manifest, [{"moves": [MOVE_ROCK_THROW]}])
+    assert rom_change_refusals(tables, kaizo, roark_trainer(), []) == []
+    assert rom_change_refusals(tables, kaizo, roark_trainer(), [], [MOVE_ROCK_THROW]) == ["c"]
+
+
+def test_unknown_format_matches_format_conditions(tables, names, vanilla_manifest):
+    kaizo = kaizo_names_with(vanilla_manifest, [{"formats": ["multi"]}])
+    roark = dataclasses.replace(roark_trainer(), format=None)
+    assert rom_change_refusals(tables, kaizo, roark, sample_party(names)) == ["c"]
+    no_format = kaizo_names_with(vanilla_manifest, [{"moves": [MOVE_ROCK_THROW]}])
+    assert rom_change_refusals(tables, no_format, roark, sample_party(names)) == []
+
+
+def test_vanilla_has_no_rom_lines(tables, names, vanilla_manifest):
+    roark, mons = roark_trainer(), sample_party(names) + roark_party(names)
+    assert rom_change_refusals(tables, names, roark, mons) == []
+    plain = kaizo_names_with(vanilla_manifest, [])
+    assert rom_change_refusals(tables, plain, roark, mons) == []
+
+
+def test_only_a_reached_condition_refuses_the_fight(tables, names, vanilla_manifest):
+    line = (
+        "Kaizo ROM: c is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) "
+        "(ROM change UNSUPPORTED)"
+    )
+    roark, opp, player = roark_trainer(), roark_party(names), sample_party(names)
+    hit = kaizo_names_with(vanilla_manifest, [{"moves": [MOVE_ROCK_THROW]}])
+    assert line in check_opponent(tables, hit, roark, opp, 0).missing
+    assert line in check_coverage(tables, hit, player, roark, opp, 0).missing
+    miss = kaizo_names_with(vanilla_manifest, [{"formats": ["double"]}])
+    assert not any(
+        "ROM change" in m for m in check_coverage(tables, miss, player, roark, opp, 0).missing
+    )
+    # A move only the player has reaches the condition through check_coverage, not check_opponent.
+    mine = replace(player[0], moves=(MOVE_ROCK_THROW, 0, 0, 0))
+    only_player = kaizo_names_with(vanilla_manifest, [{"moves": [mine.moves[0]]}])
+    no_rock = [
+        replace(m, moves=tuple(0 if x == MOVE_ROCK_THROW else x for x in m.moves)) for m in opp
+    ]
+    assert line not in check_opponent(tables, only_player, roark, no_rock, 0).missing
+    assert line in check_opponent(tables, only_player, roark, no_rock, 0, [mine]).missing
