@@ -123,7 +123,48 @@ TASK7 = (
     ),
 )
 
-DONE_GROUPS = [TASK5, TASK6, TASK7]
+TASK8 = (
+    "task 8: overlay14, the trainer AI",
+    tuple(
+        ("overlay14", s)
+        for s in (
+            "TrainerAI_Init",
+            "TrainerAI_Main",
+            "TrainerAI_MainDoubles",
+            "AICmd_LoadTypeFrom",
+            "AICmd_FlagBattlerIsType",
+            "AICmd_FlagMoveDamageScore",
+            "AICmd_IfSpeedCompareEqualTo",
+            "AICmd_IfSpeedCompareNotEqualTo",
+            "AICmd_CalcMaxEffectiveness",
+            "AICmd_IfMoveEffectivenessEquals",
+            "AICmd_IfCurrentMoveKills",
+            "AICmd_IfCurrentMoveDoesNotKill",
+            "AICmd_LoadHeldItemEffect",
+            "AICmd_LoadFlingPower",
+            "AICmd_IfCanUseLastResort",
+            "AICmd_LoadBattlerSpeedRank",
+            "AICmd_IfPartyMemberDealsMoreDamage",
+            "AICmd_IfBattlerDealsMoreDamage",
+            "AICmd_CheckIfHighestDamageWithPartner",
+            "AICmd_LoadAbility",
+            "TrainerAI_CalcDamage",
+            "TrainerAI_MoveType",
+            "AI_CannotDamageWonderGuard",
+            "AI_OnlyIneffectiveMoves",
+            "AI_HasSuperEffectiveMove",
+            "AI_HasAbsorbAbilityInParty",
+            "AI_HasPartyMemberWithSuperEffectiveMove",
+            "AI_IsAsleepWithNaturalCure",
+            "TrainerAI_ShouldSwitch",
+            "TrainerAI_PickCommand",
+            "TrainerAI_ShouldUseItem",
+            "0x022249CC-0x022249CD",
+        )
+    ),
+)
+
+DONE_GROUPS = [TASK5, TASK6, TASK7, TASK8]
 
 
 def _data() -> dict:
