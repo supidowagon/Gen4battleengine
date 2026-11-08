@@ -61,6 +61,11 @@ many are real). Decomp sources:
   targets are immune. The end-of-turn drain is in ``step``.
 * Water Sport: ``effect_script_0210.s`` sets the user's flag (fails if set);
   ``damage.py`` halves Fire power while any active battler has it.
+* Light Screen, Reflect: ``effect_script_0035.s`` / ``_0065.s`` (``BtlCmd_TryLightScreen``,
+  script.c:4214): fail when the user's side has it, else 5 turns (``_screen``); the damage
+  halving is in ``damage.py``, the countdown in ``step``.
+* Brick Break: ``effect_script_0186.s``, a direct ``BREAK_SCREENS`` effect after the hit,
+  even on an immune target (``_brick_break``); its own damage ignores the screens.
 * Night Shade, Seismic Toss (``LEVEL_DAMAGE``), Hidden Power, Magnitude: damage and type
   come from ``damage.py`` (``fixed_damage``, ``hidden_power``, ``MAGNITUDE_POWER``); no
   effect function runs for them.
@@ -417,6 +422,28 @@ def _mud_sport(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     return _set(state, "mud_sport", h.side, 1, cond)
 
 
+SCREEN_TURNS = 5  # NUM_SCREEN_TURNS (include/constants/battle.h:142)
+
+
+def _screen(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    """Light Screen, Reflect: ``BtlCmd_TryLightScreen`` / ``TryReflect`` (script.c:4214,
+    :4257) fail when the user's side has it, else set it for ``NUM_SCREEN_TURNS``. Light
+    Clay (``HOLD_EFFECT_EXTEND_SCREENS``) is an unmapped item, so coverage refuses it."""
+    for effect, field in ((_E.LIGHT_SCREEN, "light_screen"), (_E.REFLECT, "reflect")):
+        cond = (h.effect == effect) & h.landed & (getattr(state, field)[h.side] == 0)
+        state = _set(state, field, h.side, SCREEN_TURNS, cond)
+    return state
+
+
+def _brick_break(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    """Brick Break: a direct ``BREAK_SCREENS`` effect (lib.c:1481-1510) that still applies
+    on an immune target (``MOVE_STATUS_DID_NOT_AFFECT``) but not on a miss;
+    ``BtlCmd_TryBreakScreens`` (script.c:6550) clears both screens of the defender's side."""
+    cond = (h.effect == _E.BRICK_BREAK) & h.landed
+    state = _set(state, "reflect", h.target_side, 0, cond)
+    return _set(state, "light_screen", h.target_side, 0, cond)
+
+
 def _eat_berry(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     # Local import: hooks imports this module.
     from nuzline.engine.hooks import pluck_berry
@@ -630,6 +657,8 @@ def apply_move_effect(
         _leech_seed,
         _water_sport,
         _mud_sport,
+        _screen,
+        _brick_break,
         _eat_berry,
         _foresight,
         _bide,

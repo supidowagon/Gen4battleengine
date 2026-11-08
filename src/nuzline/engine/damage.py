@@ -328,7 +328,7 @@ def _pre_random(
     damage = jnp.where(burned, damage // 2, damage)
     # :6982 Reflect / :7023 Light Screen on the defender's side halve it, not on a crit.
     screen = jnp.where(is_physical, s.reflect[def_side], s.light_screen[def_side]) != 0
-    screen = screen & (not self_hit)
+    screen = screen & (not self_hit) & (effect != EffectId.BRICK_BREAK)  # :6984, :7025
     damage = jnp.where(screen & ~crit, damage // 2, damage)
 
     # :7047 rain: Fire x0.5, Water x1.5; :7062 sun: Fire x1.5, Water x0.5. Fog: nothing.

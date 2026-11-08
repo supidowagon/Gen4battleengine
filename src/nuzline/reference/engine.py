@@ -388,7 +388,7 @@ def _calc_move_damage(
             damage //= 2
         # lib.c:6982 Reflect, :7023 Light Screen on the defender's side, not on a crit.
         screen = s.sides[defender].reflect if physical else s.sides[defender].light_screen
-        if side_conditions and screen and not crit:
+        if side_conditions and screen and not crit and effect != EffectId.BRICK_BREAK:
             damage //= 2
     # lib.c:7047 rain, :7062 sun (fog does nothing here).
     if weather == Weather.RAIN:
@@ -802,6 +802,15 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
     elif effect == EffectId.MUD_SPORT and landed and not s.sides[side].mud_sport:
         # effect_script_0201.s: fails when the user already has it.
         s.sides[side].mud_sport = 1
+    elif effect in (EffectId.LIGHT_SCREEN, EffectId.REFLECT) and landed:
+        # BtlCmd_TryLightScreen / TryReflect (script.c:4214, :4257): fail when already up,
+        # else NUM_SCREEN_TURNS (Light Clay is unmapped, so coverage refuses it).
+        name = "light_screen" if effect == EffectId.LIGHT_SCREEN else "reflect"
+        if not getattr(s.sides[side], name):
+            setattr(s.sides[side], name, 5)
+    elif effect == EffectId.BRICK_BREAK and landed:
+        # lib.c:1481-1510: applies on an immune target, not on a miss; script.c:6550.
+        s.sides[target].reflect = s.sides[target].light_screen = 0
     elif effect == EffectId.EAT_BERRY and effective:
         # effect_script_0224.s / subscript_pluck.s: an ON_HIT effect, no HP check.
         _pluck_berry(turn, s, side)

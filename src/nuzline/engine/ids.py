@@ -27,6 +27,9 @@ class EffectId(IntEnum):
       move's effect chance. ``MUD_SPORT``: zeros. ``EAT_BERRY`` (Bug Bite, Pluck): zeros;
       the user eats the target's Oran or Sitrus Berry (``hooks.pluck_berry``).
     ``DISABLE``: zeros; disables the target's last move for 3-6 turns (``effects._disable``).
+    ``LIGHT_SCREEN``, ``REFLECT``: zeros; set the user's side screen for 5 turns
+    (``effects._screen``). ``BRICK_BREAK``: zeros; ignores the screens in its damage and
+    clears both of the defender's side after the hit (``effects._brick_break``).
     ``BIDE``, ``ROLLOUT`` (Rollout, Ice Ball): zeros; they lock the user into the move
     (``BattleState.locked_move``, ``engine/step.py``, ``engine/damage.py``).
 
@@ -65,6 +68,9 @@ class EffectId(IntEnum):
     DISABLE = 27
     BIDE = 28
     ROLLOUT = 29
+    LIGHT_SCREEN = 30
+    REFLECT = 31
+    BRICK_BREAK = 32
 
 
 class AbilityId(IntEnum):

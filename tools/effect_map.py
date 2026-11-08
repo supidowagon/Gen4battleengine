@@ -111,6 +111,13 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     # Confusion, Psybeam, Dizzy Punch, ...: effect_script_0076.s, a probabilistic indirect
     # effect (no ON_HIT flag) running subscript_confuse.s.
     76: ("BATTLE_EFFECT_CONFUSE_HIT", _E.SECONDARY_CONFUSE, (0, 0, 0)),
+    # Light Screen, Reflect: effect_script_0035.s / _0065.s, an ON_HIT direct effect running
+    # subscript_light_screen.s / subscript_reflect.s (BtlCmd_TryLightScreen, script.c:4214).
+    35: ("BATTLE_EFFECT_SET_LIGHT_SCREEN", _E.LIGHT_SCREEN, (0, 0, 0)),
+    65: ("BATTLE_EFFECT_SET_REFLECT", _E.REFLECT, (0, 0, 0)),
+    # Brick Break: effect_script_0186.s, damage plus a direct BREAK_SCREENS effect
+    # (BtlCmd_TryBreakScreens, script.c:6550).
+    186: ("BATTLE_EFFECT_REMOVE_SCREENS", _E.BRICK_BREAK, (0, 0, 0)),
     # Mud Sport: effect_script_0201.s sets MOVE_EFFECT_MUD_SPORT on the user.
     201: ("BATTLE_EFFECT_HALVE_ELECTRIC_DAMAGE", _E.MUD_SPORT, (0, 0, 0)),
     # Bug Bite, Pluck: effect_script_0224.s, an ON_HIT indirect effect (subscript_pluck.s).
