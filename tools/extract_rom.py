@@ -87,6 +87,7 @@ REUSE_BANKS = (
 UNRESOLVED_FILE = "rom_unresolved.json"
 FIELD_EFFECTS_FILE = "rom_field_effects.json"
 TRAINER_MAPS_FILE = "rom_trainer_maps.json"  # Kaizo: trainer id -> map headers (sight pairs)
+MAP_WEATHER_FILE = "rom_map_weather.json"  # Kaizo: weather byte of each map header, by header id
 CHANGED_SCRIPTS_FILE = "changed_scripts.json"
 CHANGED_CODE_FILE = "changed_code.json"  # Kaizo: every changed (module, symbol-or-range)
 ROM_DIFF_TOML = REPO_ROOT / "data" / "kaizo" / "rom_diff.toml"
@@ -309,7 +310,7 @@ def extract(game: str, out: Path, decomp: Path, symbols: Path, inputs: RomInputs
     from tools.rom.readers.evolutions import read_evolutions
     from tools.rom.readers.items import read_items
     from tools.rom.readers.learnsets import read_learnsets
-    from tools.rom.readers.maps import trainer_start_conditions
+    from tools.rom.readers.maps import map_header_rows, trainer_start_conditions
     from tools.rom.readers.moves import read_move_lists, read_moves
     from tools.rom.readers.personal import (
         read_exp_tables,
@@ -370,6 +371,7 @@ def extract(game: str, out: Path, decomp: Path, symbols: Path, inputs: RomInputs
             _write(stage / CHANGED_CODE_FILE, code)
             _write(stage / FIELD_EFFECTS_FILE, _report_kaizo(tables["trainers"], effects))
             _write(stage / TRAINER_MAPS_FILE, {str(t): h for t, h in where.items()})
+            _write(stage / MAP_WEATHER_FILE, [w for _, _, w in map_header_rows(rom, smap)])
         fresh = stage / "decomp"
         extract_static(decomp, fresh)
         for name in (*REUSED_FILES, *DECOMP_FILES):
@@ -390,6 +392,7 @@ def extract(game: str, out: Path, decomp: Path, symbols: Path, inputs: RomInputs
             sources[CHANGED_CODE_FILE] = "rom diff (names and address ranges only)"
             sources[FIELD_EFFECTS_FILE] = "rom: map weather through the battle weather switch"
             sources[TRAINER_MAPS_FILE] = "rom: trainer -> map header join (map scripts, events)"
+            sources[MAP_WEATHER_FILE] = "rom: map header weather byte (the raw id, per header)"
             sources[INPUTS_KEY] = kaizo_input_hashes(move_lists)
         _write(stage / "rom_sources.json", sources)
         _write(stage / UNRESOLVED_FILE, rows)

@@ -457,13 +457,6 @@ def test_rehash_lines_name_files_not_paths(tmp_path):  # M14
 
 
 @pytest.fixture(scope="module")
-def kaizo_intermediate():
-    if not (KAIZO_INTER / "renamed.json").exists():
-        pytest.skip("Kaizo intermediates not resolved (python -m tools.build_tables --game kaizo)")
-    return KAIZO_INTER
-
-
-@pytest.fixture(scope="module")
 def resolved_trainers(kaizo_intermediate):
     rows = json.loads((kaizo_intermediate / "trainers.json").read_text("utf-8"))
     return {t["id"]: t for t in rows}

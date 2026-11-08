@@ -268,6 +268,63 @@ def _kaizo_rom_changes(inter: Path, rom_diff: Path = ROM_DIFF) -> tuple[frozense
     return effects, unknown
 
 
+def resolve_conditions(inter: Path, rom_diff: Path = ROM_DIFF) -> list[dict]:
+    """The ``not_reached`` conditions of ``rom_diff`` as ids, sorted by label. ``moves`` are the
+    move ids whose ROM ``effect`` (the be_seq index) is in ``move_effect``; ``abilities`` and
+    ``items`` are the decomp ids of the named ability or held item (exact name, case-
+    insensitive); ``trainers`` are the trainers placed on a map header whose weather byte is in
+    ``map_weather`` (``rom/rom_trainer_maps.json`` joined with ``rom/rom_map_weather.json``).
+    A name that matches nothing, or a missing intermediate, raises ``BuildError``."""
+    from tools.rom.diff import load_conditions
+
+    try:
+        raw = load_conditions(rom_diff)
+    except ValueError as e:
+        raise BuildError(str(e)) from e
+    moves = _load(inter, "moves")
+    names = {
+        kind: {n["name"].lower(): i for i, n in reversed(list(enumerate(_load(inter, file))))}
+        for kind, file in (("ability", "abilities"), ("held_item", "items"))
+    }
+    out = []
+    for label, when in sorted(raw.items()):
+        effects, weathers = set(when.get("move_effect", ())), set(when.get("map_weather", ()))
+        ids = {}
+        for kind in ("ability", "held_item"):
+            ids[kind] = []
+            for name in when.get(kind, ()):
+                if name.lower() not in names[kind]:
+                    raise BuildError(f"{rom_diff}: {label}: no {kind} named {name!r}")
+                ids[kind].append(names[kind][name.lower()])
+        trainers = []
+        if weathers:
+            for name in ("rom_trainer_maps", "rom_map_weather"):
+                if not (inter / "rom" / f"{name}.json").exists():
+                    raise BuildError(
+                        f"no {inter / 'rom' / name}.json: re-run python -m tools.extract_rom "
+                        "--game kaizo"
+                    )
+            weather = _load(inter / "rom", "rom_map_weather")
+            trainers = sorted(
+                int(t)
+                for t, headers in _load(inter / "rom", "rom_trainer_maps").items()
+                if any(weather[h] in weathers for h in headers)
+            )
+        out.append(
+            {
+                "label": label,
+                "formats": list(when.get("format", ())),
+                "areas": list(when.get("area_condition", ())),
+                "moves": [i for i, m in enumerate(moves) if m["effect"] in effects],
+                "abilities": ids["ability"],
+                "items": ids["held_item"],
+                "trainers": trainers,
+                "trainer_items": bool(when.get("trainer_items", False)),
+            }
+        )
+    return out
+
+
 def build_arrays(inter: Path, game: str = "platinum_us") -> tuple[dict[str, np.ndarray], dict]:
     kaizo = game == KAIZO
     species_only = _load(inter, "species")
@@ -443,6 +500,8 @@ def build_arrays(inter: Path, game: str = "platinum_us") -> tuple[dict[str, np.n
             if m["effect"] not in changed_effects and _no_secondary(m)
         ]
         manifest["unclassified_rom_changes"] = unclassified
+        # The not_reached entries as ids, for coverage to refuse a fight that reaches one.
+        manifest["rom_change_conditions"] = resolve_conditions(inter)
     return arrays, manifest
 
 
