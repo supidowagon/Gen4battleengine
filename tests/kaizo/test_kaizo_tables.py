@@ -83,9 +83,7 @@ def test_kaizo_roark_party_from_the_rom_decode(kaizo_roark, kaizo_roark_party, k
     assert len(kaizo_roark_party) == 6
 
 
-MEMBER88 = (
-    '[[member]]\nnarc="battle/skill/be_seq.narc"\nindex=88\nstatus="not_reached"\nnote="n"\n'
-)
+MEMBER88 = '[[member]]\nnarc="battle/skill/be_seq.narc"\nindex=88\nstatus="not_reached"\nnote="n"\n'
 
 
 def test_conditions_resolve_names(tmp_path, kaizo_intermediate):
@@ -117,5 +115,10 @@ def test_unresolved_name_fails_build(tmp_path, kaizo_intermediate):
         )
 
 
-def test_manifest_has_no_conditions_today(kaizo_manifest):
-    assert kaizo_manifest["rom_change_conditions"] == []
+def test_manifest_conditions_are_the_not_reached_entries(kaizo_manifest):
+    from tools.build_tables import ROM_DIFF
+    from tools.rom.diff import load_conditions
+
+    labels = [c["label"] for c in kaizo_manifest["rom_change_conditions"]]
+    assert labels == sorted(load_conditions(ROM_DIFF))
+    assert "arm9 MapHeader_GetBattleBG" in labels  # K3a Task 5: terrain moves

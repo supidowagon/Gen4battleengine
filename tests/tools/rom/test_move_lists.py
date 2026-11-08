@@ -1,8 +1,13 @@
-"""Soundproof and punch lists searched for in the ROM's code."""
+"""Soundproof and punch lists searched for in the ROM's code, and the Kaizo TM and tutor
+tables."""
+
+import json
+import struct
+from pathlib import Path
 
 import pytest
 
-from tools.extract_decomp import extract_move_lists
+from tools.extract_decomp import _constants, extract_move_lists
 from tools.rom.readers import ReaderError
 from tools.rom.readers.moves import read_move_lists
 
@@ -99,3 +104,75 @@ def test_non_vanilla_rom_without_vanilla_rom_raises():
 
 def test_vanilla_rom_skips_the_neighbour_comparison():
     assert read_move_lists(FakeRom(_u16([0x3333]) + BOTH + _u16([0x4444])), LISTS) == LISTS
+
+
+# --- K3a Task 5: the Kaizo TM and tutor tables the K2b readers feed the intermediates -----
+# sTMHMMoves (arm9) and sTeachableMoves / sSpeciesLearnsetsByTutor (overlay5) differ in the
+# Kaizo ROM. Each table is decoded here straight from the patched module bytes at its
+# linker-map address and compared with what data/intermediate_kaizo holds (written by
+# tools.extract_rom through tools/rom/readers/code_tables.py); the rom_diff.toml entries are
+# ``modelled`` on the strength of these two tests.
+
+KAIZO_INTER = Path(__file__).resolve().parents[3] / "data" / "intermediate_kaizo"
+ITEM_TM01 = 328  # ITEM_TM01..ITEM_HM08 are items 328..427 (generated/items.txt)
+
+
+def _kaizo_intermediate(name: str):
+    path = KAIZO_INTER / name
+    if not path.exists():
+        pytest.skip(f"no {path}: run tools.extract_rom --game kaizo and tools.build_tables")
+    return json.loads(path.read_text("utf-8"))
+
+
+def _module_bytes(rom, symbols, name: str) -> bytes:
+    """The bytes of ``name`` at its vanilla linker-map address in ``rom``'s module image."""
+    sym = symbols.find(name)
+    if sym.module == "arm9":
+        regions = list(rom.arm9_sections())
+    else:
+        n = int(sym.module.removeprefix("overlay"))
+        regions = [(rom.overlay_info(n)[0], rom.overlay(n))]
+    for ram, data in regions:
+        if ram <= sym.address and sym.address + sym.size <= ram + len(data):
+            assert len(data) == symbols.extent(sym.module, ram), f"{sym.module} moved"
+            return data[sym.address - ram : sym.address - ram + sym.size]
+    raise AssertionError(f"{name} is outside {sym.module}")
+
+
+def test_tm_table_matches_rom(kaizo_files, symbols):
+    raw = _module_bytes(kaizo_files, symbols, "sTMHMMoves")
+    decoded = list(struct.unpack("<100H", raw))
+    items = _kaizo_intermediate("items.json")
+    assert [i["teaches_move"] for i in items[ITEM_TM01 : ITEM_TM01 + 100]] == decoded
+    assert decoded[6] == 62  # TM07: vanilla Hail (258), Kaizo Aurora Beam
+
+
+def test_tutor_table_matches_rom(kaizo_files, symbols, decomp):
+    raw = _module_bytes(kaizo_files, symbols, "sTeachableMoves")
+    locations = _constants(decomp, "tutor_locations", "TUTOR_LOCATION_")
+    decoded = [
+        {
+            "move": move,
+            "costs": dict(zip(("red", "blue", "yellow", "green"), costs, strict=True)),
+            "location": locations[loc].removeprefix("TUTOR_LOCATION_").lower(),
+        }
+        for move, *costs, _pad, loc in struct.iter_unpack("<H4BHI", raw)
+    ]
+    assert _kaizo_intermediate("tutor_moves.json") == decoded
+    assert decoded[0]["move"] == 392  # vanilla Dive (291), Kaizo Aqua Ring
+
+    masks = _module_bytes(kaizo_files, symbols, "sSpeciesLearnsetsByTutor")
+    width = (len(decoded) + 7) // 8
+    learnsets = _kaizo_intermediate("tutor_learnsets.json")
+    # Moveset m (1-based) is mask m - 1; personal row r < 496 uses moveset r, a form row
+    # r >= 496 uses 493 + (r - 495); rows 0, 494, 495 have none (include/tutor_movesets.h:20-26,
+    # src/overlay005/scrcmd_move_tutor.c:211-259).
+    for row, tutors in learnsets.items():
+        r = int(row)
+        if r in (0, 494, 495):
+            assert tutors == [], row
+            continue
+        moveset = r if r < 496 else 493 + (r - 495)
+        mask = int.from_bytes(masks[(moveset - 1) * width : moveset * width], "little")
+        assert tutors == [j for j in range(len(decoded)) if mask >> j & 1], row
+    assert len(masks) == width * (493 + len(learnsets) - 496)
