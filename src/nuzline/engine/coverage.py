@@ -288,8 +288,8 @@ def rom_change_refusals(
     """The labels of the ``not_reached`` ROM-change conditions
     (``Names.rom_change_conditions``) that hold for a fight against ``trainer`` with ``specs``
     on the field (both sides), plus ``extra_moves`` a pool candidate could learn. A condition
-    holds when any of: the trainer's format is listed (an unknown format, ``None``, matches
-    any condition that lists one); the trainer's area condition has a listed area
+    holds when any of: the trainer's format is listed (an unknown format, ``"unknown"`` in
+    the data or ``None``, matches any condition that lists one); the trainer's area condition has a listed area
     (``trick_room``/``gravity``, the ``tools/rom/diff.py`` area names); a move, a decomp
     ability (``species_abilities_decomp`` at the spec's personal row and ability slot) or a
     held item is listed; the trainer is listed; or the condition covers trainer items and the
@@ -306,10 +306,11 @@ def rom_change_refusals(
         int(decomp[personal_row(tables, s.species, s.form)][s.ability_slot]) for s in specs
     }
     bag = any(trainer.items)
+    unknown_format = trainer.format in (None, "unknown")
     out: list[str] = []
     for cond in names.rom_change_conditions:
         fight_level = (
-            (trainer.format in cond.formats if trainer.format is not None else bool(cond.formats))
+            (trainer.format in cond.formats or (unknown_format and bool(cond.formats)))
             or areas & set(cond.areas)
             or trainer.id in cond.trainers
             or (cond.trainer_items and bag)

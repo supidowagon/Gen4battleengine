@@ -495,10 +495,13 @@ def test_extra_moves_reach_a_condition(tables, names, vanilla_manifest):
 
 def test_unknown_format_matches_format_conditions(tables, names, vanilla_manifest):
     kaizo = kaizo_names_with(vanilla_manifest, [{"formats": ["multi"]}])
-    roark = replace(roark_trainer(), format=None)
-    assert rom_change_refusals(tables, kaizo, roark, sample_party(names)) == ["c"]
+    # Final review M1: the data's unknown format is the string "unknown"
+    # (tools/battle_scripts.py); None is matched the same way.
     no_format = kaizo_names_with(vanilla_manifest, [{"moves": [MOVE_ROCK_THROW]}])
-    assert rom_change_refusals(tables, no_format, roark, sample_party(names)) == []
+    for fmt in ("unknown", None):
+        roark = replace(roark_trainer(), format=fmt)
+        assert rom_change_refusals(tables, kaizo, roark, sample_party(names)) == ["c"]
+        assert rom_change_refusals(tables, no_format, roark, sample_party(names)) == []
 
 
 def test_vanilla_has_no_rom_lines(tables, names, vanilla_manifest):
