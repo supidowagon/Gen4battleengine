@@ -41,3 +41,16 @@ def test_chance_zero_secondary_with_more_than_the_secondary_is_unsupported():
 def test_changed_effect_is_unsupported():  # K2b Ruling 13
     assert _move_effect(EMBER, frozenset({4}))[0] == int(EffectId.UNSUPPORTED)
     assert _move_effect(EMBER, frozenset({5}))[0] == int(EffectId.SECONDARY_STATUS)
+
+
+def test_fake_out_without_a_chance_is_unsupported():
+    # effect_script_0158.s rolls the move's chance; chance 0 would read as an ON_HIT flinch.
+    fake_out = {"name": "Fake Out", "effect": 158, "effect_chance": 100}
+    assert _move_effect(fake_out)[0] == int(EffectId.FAKE_OUT)
+    assert _move_effect({**fake_out, "effect_chance": 0})[0] == int(EffectId.UNSUPPORTED)
+
+
+def test_chance_zero_ancientpower_is_plain():
+    ancient = {"name": "AncientPower", "effect": 140, "effect_chance": 10}
+    assert _move_effect(ancient)[0] == int(EffectId.RAISE_ALL_STATS_HIT)
+    assert _move_effect({**ancient, "effect_chance": 0}) == (int(EffectId.PLAIN), (0, 0, 0))

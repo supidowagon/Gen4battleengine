@@ -17,15 +17,15 @@ from nuzline.data.tables import Names, Tables
 from nuzline.data.trainer import Trainer
 from nuzline.engine.coverage import (
     IMPLEMENTED_ABILITIES,
-    IMPLEMENTED_EFFECTS,
     IMPLEMENTED_ITEMS,
     CoverageReport,
     Support,
     _Collector,
+    move_effect_line,
     rom_change_line,
     rom_change_refusals,
 )
-from nuzline.engine.ids import AbilityId, EffectId, ItemId
+from nuzline.engine.ids import AbilityId, ItemId
 from nuzline.prep.leveling import candies_to_cap, level_to_cap
 from nuzline.saves.pkm import RecordError
 from nuzline.saves.save import SaveFile
@@ -119,14 +119,12 @@ def check_pool(
         c.report.level = Support.NONE
         c.report.missing.append(line)
 
-    effect = np.asarray(tables.move_effect)
     abilities = np.asarray(tables.species_abilities)
     decomp_abilities = np.asarray(tables.species_abilities_decomp)
     item_effect = np.asarray(tables.item_effect)
 
-    def check_move(label: str, move: int, kind: str) -> None:
-        name = names.move_names[move]
-        support = IMPLEMENTED_EFFECTS.get(EffectId(int(effect[move])), Support.NONE)
+    def check_move(label: str, move: int, kind: str, row: int) -> None:
+        support, name = move_effect_line(tables, names, move, row)
         c.add(support, f"{label}: {name}", f"{kind}, move effect")
         if support != Support.NONE and (reason := player_move_refusal(move)) is not None:
             refuse(f"{label}: {name} ({kind}, {reason})")
@@ -157,11 +155,11 @@ def check_pool(
                 c.add(Support.NONE, f"{cand.label}: {rom_change_line(cond)}", "ROM change")
         for move in spec.moves:
             if move:
-                check_move(cand.label, move, "current")
+                check_move(cand.label, move, "current", row)
         for move in cand.relearner:
-            check_move(cand.label, move, "relearner")
+            check_move(cand.label, move, "relearner", row)
         for item_id, move in cand.tms:
-            check_move(cand.label, move, names.item_names[item_id])
+            check_move(cand.label, move, names.item_names[item_id], row)
     hold_effect = np.asarray(tables.item_hold_effect)
     for item_id in sorted({item for item, _ in bag}):
         if int(hold_effect[item_id]) != 0:

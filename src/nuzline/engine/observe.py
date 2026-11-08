@@ -32,7 +32,8 @@ Events, per side (``[side]``; 0 = player):
 * ``order``: the side that acted first when both showed a message at their turn
   (``action_order``, order.py:67-85), else -1; ``pursuit``: Pursuit hit the switching
   Pokemon first (step.py:545-590).
-* ``missed`` (accuracy check failed, step.py:398), ``no_target`` (the foe fainted
+* ``missed`` (accuracy check failed, step.py:398; not for a Fake Out that failed, whose
+  "But it failed!" subscript_missed.s prints instead), ``no_target`` (the foe fainted
   earlier this turn, step.py:390), ``hits`` (hits that landed: "Hit N times",
   battle_controller_player.c:3777-3812), ``crit[side, i]`` (hit ``i`` landed, dealt
   damage and was a crit: ``subscript_critical_hit.s``, bcp.c:4547-4554).

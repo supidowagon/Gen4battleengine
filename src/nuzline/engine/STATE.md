@@ -111,7 +111,8 @@ three structs has a row.
     send-out does not call `BattleSystem_UpdateAfterSwitch`), `totalTurns + 1` after
     every switch-in (battle_lib.c:2117: switch action, Pursuit-interrupted switch,
     faint replacement) and faint (`BattleSystem_CleanupFaintedMon`, :2195).
-    `LoadIsFirstTurnInBattle` (trainer_ai.c:2487) is `fake_out_turn >= turn`. `turn`
+    `LoadIsFirstTurnInBattle` (trainer_ai.c:2487) is `fake_out_turn >= turn`; Fake Out
+    (`effect_script_0158.s`) fails unless `fake_out_turn == turn` (`step._use_move`). `turn`
     is `totalTurns` during a turn, so `step` writes `turn + 1`; `step.replace` runs
     after `step` counted the turn but before the decomp's `totalTurns++`
     (battle_controller_player.c:1844-1852), so it writes `turn`.

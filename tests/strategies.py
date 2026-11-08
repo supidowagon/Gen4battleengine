@@ -26,7 +26,7 @@ from nuzline.data.spec import PokemonSpec
 from nuzline.data.tables import Names, Tables
 from nuzline.data.trainer import IntermediateData
 from nuzline.engine.actions import legal_actions, legal_opponent_actions
-from nuzline.engine.ids import MOVE_STRUGGLE, AbilityId, EffectId, Stat, Status, Weather
+from nuzline.engine.ids import MOVE_STRUGGLE, AbilityId, EffectId, Stat, Status, Type, Weather
 from nuzline.engine.outcome import MAX_HITS, Outcome
 from nuzline.engine.state import (
     BAG_SLOTS,
@@ -86,7 +86,9 @@ def _learnsets() -> dict[int, list[tuple[int, int]]]:
 
 
 # The fixture and effect-test moves, given to every species so the infliction,
-# trapping, flinch, multi-hit and stat-stage branches run in the differential test.
+# trapping, flinch, multi-hit (2-5 and fixed two), stat-stage, Recover, Fake Out and Curse
+# branches run in the differential test (no M1 species is Ghost-type: Curse is the
+# non-Ghost one).
 SHARED_MOVES = (
     "Stealth Rock",
     "Taunt",
@@ -112,6 +114,11 @@ SHARED_MOVES = (
     "Rollout",
     "Ice Ball",
     "Defense Curl",
+    "Recover",
+    "Fake Out",
+    "AncientPower",
+    "Curse",
+    "Double Kick",
 )
 
 
@@ -127,6 +134,9 @@ def m1_move_pools(tables: Tables, names: Names) -> dict[int, tuple[int, ...]]:
     pools = {}
     for name in M1_SPECIES:
         species = names.species(name)
+        if Type.GHOST in np.asarray(tables.species_types[species]).tolist():
+            # Curse is shared: a Ghost user takes the branch coverage refuses.
+            raise ValueError(f"M1 species {name} is Ghost-type")
         moves = {m for _, m in learnsets[species] if effect[m] != EffectId.UNSUPPORTED}
         moves |= shared
         pools[species] = tuple(sorted(moves))

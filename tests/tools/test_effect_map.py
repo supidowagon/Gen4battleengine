@@ -33,7 +33,12 @@ STAT_EFFECTS = {
     EffectId.SECONDARY_STAT_SELF: ("INDIRECT", "TO_ATTACKER"),
     EffectId.SECONDARY_STAT_FOE: ("INDIRECT", "TO_DEFENDER"),
 }
-SECONDARY = (EffectId.SECONDARY_STAT_SELF, EffectId.SECONDARY_STAT_FOE, EffectId.SECONDARY_STATUS)
+SECONDARY = (
+    EffectId.SECONDARY_STAT_SELF,
+    EffectId.SECONDARY_STAT_FOE,
+    EffectId.SECONDARY_STATUS,
+    EffectId.RAISE_ALL_STATS_HIT,
+)
 
 
 def _script(effect: int) -> str:
@@ -146,7 +151,6 @@ _KAIZO_MAPPED = {
 def _check_mapped(tables, names, vanilla_names, expected):
     from dataclasses import replace
 
-    from nuzline.engine.coverage import Support
     from nuzline.prep.pool import Candidate, check_pool
     from tests.engine.helpers import sample_party
 
@@ -174,7 +178,7 @@ def test_mapping_only_moves(tables, names, kaizo_tables, kaizo_names):
 def test_mapping_only_scripts_do_what_the_effect_does():
     """The decomp scripts behind the mapping-only effects carry nothing the target effect lacks."""
     s17, s34, s149 = _script(17), _script(34), _script(149)
-    assert re.findall(r"^\s+([A-Z]\w+)", s17, re.M) == ["CalcCrit", "CalcDamage", "End"]
+    assert re.findall(r"^\s+([A-Z]\w+)", s17, re.MULTILINE) == ["CalcCrit", "CalcDamage", "End"]
     # Pay Day: a damage hit plus the money subscript only
     assert "MOVE_SUBSCRIPT_PTR_PAY_DAY" in s34 and "CalcDamage" in s34
     assert _script(33).count("UpdateVar") == 1 and "MOVE_SUBSCRIPT_PTR_BADLY_POISON" in _script(33)
@@ -208,3 +212,75 @@ def test_whirlpool_bind_matches_bind():
     Grip Claw, and no dive state is reachable (Dive is unsupported)."""
     text = (DECOMP / "res/battle/scripts/subscripts/subscript_bind_start.s").read_text("utf-8")
     assert "Random 3, 3" in text and "0x00000006" in text
+
+
+_SMALL = {
+    "Recover": (EffectId.RECOVER, (0, 0, 0)),
+    "Fake Out": (EffectId.FAKE_OUT, (0, 0, 0)),
+    "AncientPower": (EffectId.RAISE_ALL_STATS_HIT, (0, 0, 0)),
+    "Curse": (EffectId.CURSE, (0, 0, 0)),
+    "Double Kick": (EffectId.MULTI_HIT, (2, 0, 0)),
+    "DoubleSlap": (EffectId.MULTI_HIT, (0, 0, 0)),  # vanilla: effect 29, the 2-5 law
+}
+
+
+def test_small_moves_mapped(tables, names, kaizo_tables, kaizo_names):
+    """Task K3b1-7: Recover, Fake Out, AncientPower, Curse and the fixed two-hit family map in
+    both games (Kaizo's DoubleSlap is effect 44, two hits), and the pool grades them EXACT."""
+    _check_mapped(tables, names, names, _SMALL)
+    kaizo = {**_SMALL, "DoubleSlap": (EffectId.MULTI_HIT, (2, 0, 0))}
+    _check_mapped(kaizo_tables, kaizo_names, names, kaizo)
+
+
+def _subscript(name: str) -> str:
+    return (DECOMP / "res/battle/scripts/subscripts" / f"{name}.s").read_text("utf-8")
+
+
+def _stat_steps(text: str) -> list[tuple[str, int]]:
+    """The ``MOVE_SUBSCRIPT_PTR_<STAT>_<UP|DOWN>_1_STAGE`` params a subscript sets, in order."""
+    return [
+        (stat, 1 if d == "UP" else -1)
+        for stat, d in re.findall(r"MOVE_SUBSCRIPT_PTR_([A-Z_]+?)_(UP|DOWN)_1_STAGE", text)
+    ]
+
+
+def test_small_move_scripts_do_what_the_engine_does():
+    """The decomp scripts behind effects 32, 158, 140, 109 and 44 (engine/effects.py)."""
+    from nuzline.engine.effects import ALL_STATS_RAISED, CURSE_STAGES
+
+    # Recover: an ON_HIT direct effect; maxHP / 2; "HP is full" when cur == max.
+    assert "FLAGS_DIRECT, MOVE_SIDE_EFFECT_ON_HIT|MOVE_SUBSCRIPT_PTR_RECOVER_HALF_MAX_HP" in (
+        _script(32)
+    )
+    half = _subscript("subscript_recover_half_max_hp")
+    assert "BATTLEMON_MAX_HP" in half and "DivideVarByValue BTLVAR_HP_CALC_TEMP, 2" in half
+    assert "CompareMonDataToVar OPCODE_EQU, BTLSCR_MSG_TEMP, BATTLEMON_CUR_HP" in (
+        _subscript("subscript_recover_hp")
+    )
+    # Fake Out: fails unless fakeOutTurnNumber == totalTurns, else an indirect flinch.
+    s158 = _script(158)
+    assert "OPCODE_NEQ, BTLSCR_ATTACKER, BATTLEMON_FAKE_OUT_TURN_NUMBER, BTLVAR_TOTAL_TURNS" in s158
+    assert "FLAGS_INDIRECT, MOVE_SIDE_EFFECT_TO_DEFENDER|MOVE_SUBSCRIPT_PTR_FLINCH" in s158
+    assert "MOVE_STATUS_FAILED" in s158
+    # The flinch subscript names Inner Focus for Fake Out only (hooks.FLINCH_BLOCKED).
+    flinch = _subscript("subscript_flinch_mon")
+    assert "BTLVAR_CURRENT_MOVE, MOVE_FAKE_OUT" in flinch and "ABILITY_INNER_FOCUS" in flinch
+    # AncientPower: indirect TO_ATTACKER, five +1 steps.
+    assert "FLAGS_INDIRECT, MOVE_SIDE_EFFECT_TO_ATTACKER|MOVE_SUBSCRIPT_PTR_BOOST_ALL_STATS" in (
+        _script(140)
+    )
+    boost = [
+        (SUBSCRIPT_STAT[s], d) for s, d in _stat_steps(_subscript("subscript_boost_all_stats"))
+    ]
+    assert boost == [(stat, 1) for stat in ALL_STATS_RAISED]
+    # Curse: a Ghost-type check on both types, else the direct TO_ATTACKER normal branch.
+    s109 = _script(109)
+    assert s109.count("TYPE_GHOST") == 2
+    assert "FLAGS_DIRECT, MOVE_SIDE_EFFECT_TO_ATTACKER|MOVE_SUBSCRIPT_PTR_CURSE_NORMAL" in s109
+    curse = [(SUBSCRIPT_STAT[s], d) for s, d in _stat_steps(_subscript("subscript_curse_normal"))]
+    assert curse == list(CURSE_STAGES)
+    # The two multi-hit scripts: SetMultiHit 0 (2-5) and SetMultiHit 2, accuracy once.
+    assert "SetMultiHit 0, SYSCTL_MULTI_HIT_MOVE" in _script(29)
+    assert "SetMultiHit 2, SYSCTL_MULTI_HIT_MOVE" in _script(44)
+    assert DECOMP_EFFECT_TO_ID[29] == (EffectId.MULTI_HIT, (0, 0, 0))
+    assert DECOMP_EFFECT_TO_ID[44] == (EffectId.MULTI_HIT, (2, 0, 0))

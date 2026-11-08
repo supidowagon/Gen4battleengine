@@ -169,6 +169,8 @@ CONSTANTS: tuple[Constant, ...] = (
     *_table("nuzline.engine.ids.Type", "type", _E, _TYPES),
     # MOVE_STRUGGLE (generated/moves.txt line 166).
     Constant("nuzline.engine.ids.MOVE_STRUGGLE", "move", 165, "Struggle", _E),
+    # MOVE_FAKE_OUT (generated/moves.txt line 253): subscript_flinch_mon.s:18.
+    Constant("nuzline.engine.ids.MOVE_FAKE_OUT", "move", 252, "Fake Out", _E),
     # The weather code's decomp abilities (generated/abilities.txt line N is id N-1).
     *_table(
         "nuzline.engine.ids.WEATHER_ABILITY_IDS",

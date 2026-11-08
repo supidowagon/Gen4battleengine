@@ -31,6 +31,7 @@ import copy
 from dataclasses import dataclass, field
 
 from nuzline.engine.ids import (
+    MOVE_FAKE_OUT,
     MOVE_STRUGGLE,
     POTION_HP_RESTORED,
     WEATHER_ABILITY_IDS,
@@ -667,6 +668,22 @@ def _move_target(tables, move: int) -> int:
     return _t(tables, "move_target", move)
 
 
+def _curse_on_user(tables, move: int) -> bool:
+    """A non-Ghost user's Curse (coverage refuses a Ghost-type one) targets its user although
+    its data range is RANGE_SINGLE_TARGET: ``BattleControllerPlayer_MustSelectTarget``
+    (bcp.c:4344-4346) gives it ``RANGE_USER``, so the chosen target is the user (:4363) and
+    ``BattleSystem_Defender`` (lib.c:1709-1718) returns it: like a ``TARGETS_USER`` move."""
+    return _t(tables, "move_effect", move) == EffectId.CURSE
+
+
+def _targets_user(tables, move: int) -> bool:
+    return _move_target(tables, move) in TARGETS_USER or _curse_on_user(tables, move)
+
+
+def _defender_always(tables, move: int) -> bool:
+    return _move_target(tables, move) in DEFENDER_ALWAYS or _curse_on_user(tables, move)
+
+
 def _can_have_status(s: RefState, side: int, status: int) -> bool:
     """No status yet and no immunity: ``subscript_burn.s`` (Fire), ``subscript_poison.s``
     (Poison, Steel), ``subscript_freeze.s`` (Ice, or sun)."""
@@ -757,10 +774,32 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
     elif effect in (EffectId.STATUS_FOE, EffectId.SECONDARY_STATUS) and effective:
         if effect == EffectId.STATUS_FOE or proc:
             _inflict(turn, s, side, target, p0)
-    elif effect == EffectId.FLINCH and effective and proc:
-        # subscript_flinch_mon.s: a living target that has not moved yet; Inner Focus.
-        if target_alive and not target_moved and seen != AbilityId.INNER_FOCUS:
-            s.sides[target].flinched = 1
+    elif effect in (EffectId.FLINCH, EffectId.FAKE_OUT) and effective and proc:
+        # subscript_flinch_mon.s: a living target that has not moved yet; Inner Focus,
+        # whose message (:18-23, TAG_NICKNAME_ABILITY) is shown for Fake Out only.
+        if target_alive and not target_moved:
+            if seen != AbilityId.INNER_FOCUS:
+                s.sides[target].flinched = 1
+            elif move == MOVE_FAKE_OUT and target == 0:
+                s.ai_ability_known[s.sides[0].active] = 1
+    elif effect == EffectId.RAISE_ALL_STATS_HIT and effective and proc:
+        # effect_script_0140.s: indirect TO_ATTACKER at the move's chance; the recipient,
+        # the user, must have HP (lib.c:1570-1586). subscript_boost_all_stats.s.
+        if _active(s, side).hp > 0:
+            for stat in (Stat.ATK, Stat.DEF, Stat.SPE, Stat.SPA, Stat.SPD):
+                _change_stage(s, side, stat, 1)
+    elif effect == EffectId.CURSE and landed and _active(s, side).hp > 0:
+        # effect_script_0109.s (non-Ghost user) -> subscript_curse_normal.s: three
+        # ChangeStatStage calls, each skipped on its own at the cap.
+        _change_stage(s, side, Stat.SPE, -1)
+        _change_stage(s, side, Stat.ATK, 1)
+        _change_stage(s, side, Stat.DEF, 1)
+    elif effect == EffectId.RECOVER and landed:
+        # subscript_recover_half_max_hp.s: Divide(maxHP, 2); subscript_recover_hp.s:6:
+        # "HP is full!" at full HP, else the HP update (capped).
+        user = _active(s, side)
+        if user.hp != user.max_hp:
+            _gain_hp(s, side, _divide(user.max_hp, 2))
     elif effect == EffectId.DRAIN and effective and dealt > 0:
         # subscript_drain_half_damage_dealt.s: Divide(hitDamage * percent, 100).
         _gain_hp(s, side, _divide(dealt * p0, 100))
@@ -898,12 +937,9 @@ def _hit(turn: _Turn, s: RefState, side: int, move: int, hit: int, struggling: b
     target_mon = _active(s, target)
     # The move reaches its defender (BattleSystem_Defender): the living foe, or the
     # defender a DEFENDER_ALWAYS move always has; a TARGETS_USER move hits its user.
-    landed = target_mon.hp > 0 or _move_target(tables, move) in DEFENDER_ALWAYS
+    landed = target_mon.hp > 0 or _defender_always(tables, move)
     # Bide is a RANGE_USER move whose unleash hits the foe (bcp.c:2702-2713).
-    hits_foe = (
-        _move_target(tables, move) not in TARGETS_USER
-        or _t(tables, "move_effect", move) == EffectId.BIDE
-    )
+    hits_foe = not _targets_user(tables, move) or _t(tables, "move_effect", move) == EffectId.BIDE
 
     damage = _move_damage(
         tables,
@@ -1045,8 +1081,10 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
     # FightCommand (bcp.c:1900) picks the defender first: the foe while it is alive (any
     # HP for RANGE_OPPONENT_SIDE), the user for SELF_DEFENDER ranges.
     target_range = _move_target(tables, move)
-    foe_defender = target_range not in SELF_DEFENDER and (
-        _active(s, 1 - side).hp > 0 or target_range == MoveTarget.RANGE_OPPONENT_SIDE
+    foe_defender = (
+        target_range not in SELF_DEFENDER
+        and not _curse_on_user(tables, move)
+        and (_active(s, 1 - side).hp > 0 or target_range == MoveTarget.RANGE_OPPONENT_SIDE)
     )
     # UpdateMoveBuffers (bcp.c:3945-3949), reached on every path of a battler that acts:
     # movePrevByBattler is MOVE_NONE unless the move succeeded (below).
@@ -1070,18 +1108,29 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
         mon.pp[slot] -= 1
     # BattleControllerPlayer_HasNoTarget (bcp.c:2306): BattleSystem_Defender found no
     # living foe for a move aimed at it.
-    if _move_target(tables, move) not in DEFENDER_ALWAYS and _active(s, 1 - side).hp == 0:
+    if not _defender_always(tables, move) and _active(s, 1 - side).hp == 0:
         _unlock(s.sides[side])  # subscript_no_target.s
         return record
     # SYSCTL_MOVE_SUCCEEDED (bcp.c:3212): UpdateMoveBuffers (bcp.c:3945) keeps the move
     # (Struggle's own id when struggling) in movePrevByBattler.
     s.sides[side].last_move = move
+    # The move script (bcp.c:3214): effect_script_0158.s (Fake Out) sets MOVE_STATUS_FAILED
+    # unless fakeOutTurnNumber == totalTurns; TryMove then ends in subscript_missed.s
+    # ("But it failed!").
+    effect = _t(tables, "move_effect", move)
+    if effect == EffectId.FAKE_OUT and s.sides[side].fake_out_turn != s.turn:
+        _unlock(s.sides[side])  # subscript_missed.s
+        return record
     # CheckMoveHitAccuracy (bcp.c:2865): accuracy 0 never misses; a multi-hit move
     # checks only its first hit (SYSCTL_MULTI_HIT_MOVE).
     if _t(tables, "move_accuracy", move) != 0 and not o.hit[side][0]:
         _unlock(s.sides[side])  # subscript_missed.s
         return record
-    hits = o.n_hits[side] if _t(tables, "move_effect", move) == EffectId.MULTI_HIT else 1
+    # BtlCmd_SetMultiHit (script.c:2634): SetMultiHit 2 (effect_script_0044.s) is fixed,
+    # SetMultiHit 0 draws 2-5.
+    hits = 1
+    if effect == EffectId.MULTI_HIT:
+        hits = _t(tables, "move_param", move, 0) or o.n_hits[side]
     for hit in range(hits):
         # BattleControllerPlayer_LoopMultiHit (bcp.c:3777) stops once the target fainted.
         if hit > 0 and _active(s, 1 - side).hp == 0:

@@ -19,16 +19,17 @@ of the turn:
   its first hit, effects.py docstring). A threshold of 100 or more gives the single
   value 1.
 * ``crit[s, i]``, ``roll[s, i]``: a damaging move (status moves and power 0 deal 0,
-  damage.py:254), index 0, or 0-4 for ``MULTI_HIT`` (effects.py:123-127). ``roll[s, 0]``
+  damage.py:254), index 0, or for ``MULTI_HIT`` 0-4 (the 2-5 law) or the indices below its
+  fixed count (``move_param[m, 0]``, ``effects.hit_count``). ``roll[s, 0]``
   also when a confusion self-hit is possible (step.py:296). The Pursuit pre-switch hit
   reads ``[pursuer, 0]`` (step.py:464-474), a move action too.
 * ``secondary[s, i]``: as ``crit``, for a move with chance != 0 whose effect reads
-  ``proc`` (effects.py:468: the two secondary stat effects, secondary status, flinch,
-  Bind).
+  ``proc`` (``_PROC_EFFECTS``: the secondary stat effects, AncientPower's, secondary
+  status, flinch, Fake Out, Bind, secondary confusion).
 * ``contact_proc[d, i]``: the attacker's damaging contact move against a Static or
   Poison Point holder on side ``d``: its active Pokemon (Pursuit hits the outgoing
   one) or the one it switches in (effects.py:343-365).
-* ``n_hits[s]``: ``MULTI_HIT``.
+* ``n_hits[s]``: ``MULTI_HIT`` without a fixed count (``move_param[m, 0] == 0``).
 * ``full_para[s]`` / ``thaw[s]``: ``s`` moves and is paralyzed / frozen at the start,
   or the foe uses a move that inflicts it (step.py:277-278, :305).
 * ``confusion_hit[s]``: ``s`` moves and its confusion counter is >= 2, or the foe uses
@@ -39,7 +40,8 @@ of the turn:
   at the start (order.py:67-85), exactly as ``action_order`` decides.
 * ``end_speed_tie``: the effective speeds after the actions can be equal
   (step.py:663-673): each side's possible end speeds cover every Speed stage when a
-  stage change is possible this turn, paralysis when it can be inflicted, and the
+  stage change is possible this turn (a Speed stat effect, AncientPower, Curse, a
+  flinched Steadfast), paralysis when it can be inflicted, and the
   neutral speed of a fainted battler (``_faint_check`` resets stages and status).
 * ``magnitude[s]``: ``s`` uses a ``MAGNITUDE`` move (``BtlCmd_CalcMagnitudePower``).
   ``crit``/``roll`` are not relevant for ``LEVEL_DAMAGE`` (Night Shade deals its user's
@@ -93,6 +95,8 @@ _PROC_EFFECTS = (
     _E.SECONDARY_STAT_FOE,
     _E.SECONDARY_STATUS,
     _E.FLINCH,
+    _E.FAKE_OUT,
+    _E.RAISE_ALL_STATS_HIT,
     _E.TRAP,
     _E.SECONDARY_CONFUSE,
 )
@@ -195,10 +199,13 @@ def outcome_laws(tables: Tables, state: BattleState, actions) -> OutcomeLaws:
     rolled = damaging & (effect != _E.LEVEL_DAMAGE) & (effect != _E.BIDE)
     contact = (tables.move_flags[moves] & MoveFlag.CONTACT) != 0
     multi = effect == _E.MULTI_HIT
+    fixed_hits = tables.move_param[moves, 0].astype(_I32)
+    drawn_hits = multi & (fixed_hits == 0)  # the 2-5 law
+    max_hits = jnp.where(multi, jnp.where(drawn_hits, MAX_HITS, fixed_hits), 1)
     status = state.status[sides, state.active]
 
     hit_index = jnp.arange(MAX_HITS)[None, :]
-    lands = uses_move[:, None] & ((hit_index == 0) | multi[:, None])  # [2,5]
+    lands = uses_move[:, None] & (hit_index < max_hits[:, None])  # [2,5]
     hit = uses_move[:, None] & (tables.move_accuracy[moves] != 0)[:, None] & (hit_index == 0)
     crit = lands & rolled[:, None]
     confusable = uses_move & (
@@ -235,11 +242,13 @@ def outcome_laws(tables: Tables, state: BattleState, actions) -> OutcomeLaws:
     )
 
     param0 = tables.move_param[moves, 0]
-    own_speed = _any_of(effect, (_E.STAT_SELF, _E.SECONDARY_STAT_SELF)) & (param0 == Stat.SPE)
+    own_speed = (_any_of(effect, (_E.STAT_SELF, _E.SECONDARY_STAT_SELF)) & (param0 == Stat.SPE)) | (
+        _any_of(effect, (_E.RAISE_ALL_STATS_HIT, _E.CURSE))
+    )
     foe_speed = _any_of(effect, (_E.STAT_FOE, _E.SECONDARY_STAT_FOE)) & (param0 == Stat.SPE)
     # subscript_flinched.s:10-14: a flinched Steadfast Pokemon gains +1 Speed.
     steadfast = _holds(state, actions, (AbilityId.STEADFAST,)) & foe_moves
-    steadfast = steadfast & (tables.move_effect[foe_move] == _E.FLINCH)
+    steadfast = steadfast & _any_of(tables.move_effect[foe_move], (_E.FLINCH, _E.FAKE_OUT))
     stage_free = (uses_move & own_speed) | (foe_moves & foe_speed[::-1]) | steadfast
     static = _holds(state, actions, (AbilityId.STATIC,))
     para_free = (foe_moves & _inflicts(tables, foe_move, Status.PARALYSIS)) | (
@@ -262,7 +271,7 @@ def outcome_laws(tables: Tables, state: BattleState, actions) -> OutcomeLaws:
         roll=roll,
         secondary=secondary,
         contact_proc=contact_proc,
-        n_hits=uses_move & multi,
+        n_hits=uses_move & drawn_hits,
         full_para=full_para,
         confusion_hit=confusable,
         duration=duration,

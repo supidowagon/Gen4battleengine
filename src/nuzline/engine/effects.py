@@ -26,6 +26,27 @@ many are real). Decomp sources:
   ``move_param[m, 1]`` (Thunder Wave, ``BattleControllerPlayer_CheckTypeChart``).
 * Flinch: ``subscript_flinch_mon.s``: only a target that has not moved yet this
   turn, not Inner Focus (ignorable). Steadfast's Speed boost is in ``step``.
+* Fake Out (``FAKE_OUT``): ``effect_script_0158.s`` fails unless ``fakeOutTurnNumber ==
+  totalTurns`` (``step._use_move``: the move then does not connect), else it is an indirect
+  TO_DEFENDER flinch at the move's chance through the same ``subscript_flinch_mon.s``; there
+  Inner Focus's "won't flinch" message (:18-23), shown for ``MOVE_FAKE_OUT`` only, names the
+  ability (``hooks.FLINCH_BLOCKED``).
+* Recover (``RECOVER``): ``effect_script_0032.s`` -> ``subscript_recover_half_max_hp.s``:
+  ``DivideVarByValue(maxHP, 2)`` (``BattleSystem_Divide``, at least 1), then
+  ``subscript_recover_hp.s``: "HP is full!" at full HP (:6), else the HP update, capped at
+  max HP. Heal Block (which would stop it in ``CheckStatusDisruption``) comes from an
+  unsupported move.
+* AncientPower (``RAISE_ALL_STATS_HIT``): ``effect_script_0140.s``, an indirect TO_ATTACKER
+  effect at the move's chance (battle_lib.c:1570-1586: the roll, then the recipient, the
+  user, must have HP; the target's HP does not matter) running
+  ``subscript_boost_all_stats.s``: Atk, Def, Spe, SpA, SpD +1, each its own
+  ``BtlCmd_ChangeStatStage`` (a capped one is skipped).
+* Curse, non-Ghost user (``CURSE``): ``effect_script_0109.s`` -> ``subscript_curse_normal.s``,
+  a direct TO_ATTACKER effect: Spe -1, then Atk +1, then Def +1, each its own
+  ``BtlCmd_ChangeStatStage`` (a capped stage prints "won't go higher/lower" and the next one
+  still runs; none sets ``MOVE_STATUS_FAILED``). Its defender is the user
+  (``targets_user``). A Ghost-type user takes ``subscript_curse_ghost.s``: refused by
+  coverage.
 * Drain / recoil: ``subscript_drain_half_damage_dealt.s``,
   ``subscript_recoil_1_{2,4}.s``: a fraction of ``hitDamage``, the damage dealt
   capped at the target's HP (``BtlCmd_UpdateHealthBarValue``, battle_script.c:1701),
@@ -34,7 +55,10 @@ many are real). Decomp sources:
   ``BattleControllerPlayer_LoopMultiHit`` (battle_controller_player.c:3777): the
   move script reruns per hit with ``SYSCTL_MULTI_HIT_MOVE``, which skips the
   accuracy check, so only ``outcome.hit[side, 0]`` matters while crit and roll
-  are per hit; the loop stops once the target faints.
+  are per hit; the loop stops once the target faints. ``SetMultiHit 0`` draws 2-5
+  (``outcome.n_hits``); ``SetMultiHit 2`` (``effect_script_0044.s``) is two hits
+  (``move_param[m, 0]``). Focus Sash, when supported, must trigger only on a hit taken
+  at full HP (bcp.c:3386-3404), so on the first of these hits at most.
 * ``HIGH_CRIT`` only raises the crit stage ``sample_outcome`` uses; here the
   engine reads ``outcome.crit``.
 * Stealth Rock: ``effect_script_0266.s`` sets the flag on the defender's side
@@ -123,6 +147,7 @@ import jax.numpy as jnp
 from nuzline.data.tables import Tables
 from nuzline.engine.damage import STATUS, damage_for_roll, effectiveness, move_type_of
 from nuzline.engine.ids import (
+    MOVE_FAKE_OUT,
     AbilityId,
     EffectId,
     MoveFlag,
@@ -162,10 +187,13 @@ class _Hit(NamedTuple):
 
 
 def hit_count(tables: Tables, move, outcome: Outcome, side) -> jnp.ndarray:
-    """``int32``: hits the move makes if nothing faints: ``outcome.n_hits[side]`` for
-    ``MULTI_HIT``, else 1."""
+    """``int32``: hits the move makes if nothing faints: for ``MULTI_HIT`` its fixed count
+    ``move_param[m, 0]`` (``SetMultiHit 2``), or ``outcome.n_hits[side]`` when that is 0
+    (``SetMultiHit 0``, the 2-5 law); else 1."""
     multi = tables.move_effect[move] == _E.MULTI_HIT
-    return jnp.where(multi, outcome.n_hits[side].astype(_I32), 1)
+    fixed = tables.move_param[move, 0].astype(_I32)
+    drawn = outcome.n_hits[side].astype(_I32)
+    return jnp.where(multi, jnp.where(fixed > 0, fixed, drawn), 1)
 
 
 def _alive(state: BattleState, side, slot) -> jnp.ndarray:
@@ -260,18 +288,57 @@ def _secondary_status(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
 
 
 def _flinch(tables, state, h: _Hit) -> BattleState:
-    cond = (
-        (h.effect == _E.FLINCH)
+    """``FLINCH`` and ``FAKE_OUT`` (a Fake Out that failed did not connect):
+    ``subscript_flinch_mon.s``."""
+    reached = (
+        ((h.effect == _E.FLINCH) | (h.effect == _E.FAKE_OUT))
         & h.effective
         & h.proc
         & _alive(state, h.target_side, h.target)
         & ~h.target_moved
-        & (h.target_ignorable != AbilityId.INNER_FOCUS)
     )
+    inner_focus = h.target_ignorable == AbilityId.INNER_FOCUS
+    # :18-23: Inner Focus's message (TAG_NICKNAME_ABILITY) is shown for Fake Out only.
+    from nuzline.engine.hooks import FLINCH_BLOCKED, reveal_ability  # hooks imports this module
+
+    shown = reached & inner_focus & (h.move == MOVE_FAKE_OUT)
+    state = reveal_ability(state, h.target_side, h.target, FLINCH_BLOCKED, shown)
+    cond = reached & ~inner_focus
     old = state.flinched[h.target_side]
     return state._replace(
         flinched=state.flinched.at[h.target_side].set(jnp.where(cond, 1, old).astype(old.dtype))
     )
+
+
+def _recover(tables, state, h: _Hit) -> BattleState:
+    """Recover: ``subscript_recover_half_max_hp.s`` + ``subscript_recover_hp.s`` (an ON_HIT
+    direct effect on the user; module docstring)."""
+    hp = state.hp[h.side, h.user].astype(_I32)
+    max_hp = state.max_hp[h.side, h.user].astype(_I32)
+    cond = (h.effect == _E.RECOVER) & h.landed & (hp != max_hp)
+    healed = jnp.minimum(hp + jnp.maximum(max_hp // 2, 1), max_hp)
+    return _set(state, "hp", (h.side, h.user), healed, cond)
+
+
+# subscript_boost_all_stats.s and subscript_curse_normal.s, in script order.
+ALL_STATS_RAISED = (Stat.ATK, Stat.DEF, Stat.SPE, Stat.SPA, Stat.SPD)
+CURSE_STAGES = ((Stat.SPE, -1), (Stat.ATK, 1), (Stat.DEF, 1))
+
+
+def _raise_all_stats(tables, state, h: _Hit) -> BattleState:
+    user_alive = _alive(state, h.side, h.user)
+    cond = (h.effect == _E.RAISE_ALL_STATS_HIT) & h.effective & h.proc & user_alive
+    for stat in ALL_STATS_RAISED:
+        state = change_stage(state, h.side, stat, 1, cond)
+    return state
+
+
+def _curse(tables, state, h: _Hit) -> BattleState:
+    # BattleSystem_TriggerPrimaryEffect (battle_lib.c:1491): the recipient (the user) has HP.
+    cond = (h.effect == _E.CURSE) & h.landed & _alive(state, h.side, h.user)
+    for stat, delta in CURSE_STAGES:
+        state = change_stage(state, h.side, stat, delta, cond)
+    return state
 
 
 def _percent_of_dealt(h: _Hit) -> jnp.ndarray:
@@ -296,12 +363,16 @@ def _recoil(tables, state, h: _Hit) -> BattleState:
 def targets_user(tables: Tables, move) -> jnp.ndarray:
     """The move's decomp defender is the user itself: ``RANGE_USER``,
     ``RANGE_USER_SIDE`` and ``RANGE_FIELD`` (battle_lib.c:1665-1669), e.g. Growth,
-    Reflect, Water Sport."""
+    Reflect, Water Sport; and a non-Ghost user's Curse (``RANGE_SINGLE_TARGET`` in the
+    data): ``BattleControllerPlayer_MustSelectTarget`` (bcp.c:4344-4346) makes its range
+    ``RANGE_USER``, so the chosen target is the user (:4363-4364) and
+    ``BattleSystem_Defender``'s single-target branch returns it (battle_lib.c:1709-1718)."""
     target = tables.move_target[move]
     return (
         (target == MoveTarget.RANGE_USER)
         | (target == MoveTarget.RANGE_USER_SIDE)
         | (target == MoveTarget.RANGE_FIELD)
+        | (tables.move_effect[move] == _E.CURSE)
     )
 
 
@@ -640,6 +711,9 @@ def apply_move_effect(
         _stat_foe,
         _secondary_stat_self,
         _secondary_stat_foe,
+        _raise_all_stats,
+        _curse,
+        _recover,
         _flinch,
         _drain,
         _recoil,

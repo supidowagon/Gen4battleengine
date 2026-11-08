@@ -28,7 +28,6 @@ Deliberately unsupported although close to a supported family:
   (``subscript_recoil_1_3.s``), which a ``RECOIL`` percent cannot express exactly.
 * ``BATTLE_EFFECT_STATUS_BADLY_POISON`` / ``BADLY_POISON_HIT`` (33, 202): Toxic
   infliction is not in M1.
-* ``BATTLE_EFFECT_HIT_TWICE`` (44): a fixed hit count, unlike ``MULTI_HIT``'s 2-5.
 * ``SPEED_UP``, ``ACC_UP``, ``SP_DEF_UP``, ``SP_ATK_DOWN``, ``SP_DEF_DOWN``,
   ``ACC_UP_2``, ``EVA_UP_2``, ``SP_ATK_DOWN_2``, ``EVA_DOWN_2``, ``ACC_DOWN_2``,
   ``LOWER_EVASION_HIT`` (12, 14, 15, 21, 22, 55, 56, 61, 63, 64, 74): no move uses
@@ -76,6 +75,22 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     23: ("BATTLE_EFFECT_ACC_DOWN", _E.STAT_FOE, (_ACC, -1, 0)),
     24: ("BATTLE_EFFECT_EVA_DOWN", _E.STAT_FOE, (_EVA, -1, 0)),
     29: ("BATTLE_EFFECT_MULTI_HIT", _E.MULTI_HIT, (0, 0, 0)),
+    # Double Kick, Bonemerang, Double Hit, Kaizo's DoubleSlap: effect_script_0044.s is
+    # SetMultiHit 2, SYSCTL_MULTI_HIT_MOVE (accuracy once), CalcCrit, CalcDamage: two hits.
+    44: ("BATTLE_EFFECT_HIT_TWICE", _E.MULTI_HIT, (2, 0, 0)),
+    # Recover, Softboiled, Milk Drink, Slack Off, Heal Order (Kaizo: Lunar Dance too):
+    # effect_script_0032.s, an ON_HIT direct effect running subscript_recover_half_max_hp.s
+    # (maxHP / 2, fails at full HP).
+    32: ("BATTLE_EFFECT_RESTORE_HALF_HP", _E.RECOVER, (0, 0, 0)),
+    # Fake Out: effect_script_0158.s fails unless fakeOutTurnNumber == totalTurns, else an
+    # indirect TO_DEFENDER flinch at the move's chance (subscript_flinch_mon.s).
+    158: ("BATTLE_EFFECT_ALWAYS_FLINCH_FIRST_TURN_ONLY", _E.FAKE_OUT, (0, 0, 0)),
+    # AncientPower, Silver Wind, Ominous Wind: effect_script_0140.s, an indirect TO_ATTACKER
+    # effect at the move's chance running subscript_boost_all_stats.s.
+    140: ("BATTLE_EFFECT_RAISE_ALL_STATS_HIT", _E.RAISE_ALL_STATS_HIT, (0, 0, 0)),
+    # Curse: effect_script_0109.s; a non-Ghost user runs subscript_curse_normal.s (direct,
+    # TO_ATTACKER). The Ghost branch (subscript_curse_ghost.s) is refused by coverage.
+    109: ("BATTLE_EFFECT_CURSE", _E.CURSE, (0, 0, 0)),
     31: ("BATTLE_EFFECT_FLINCH_HIT", _E.FLINCH, (0, 0, 0)),
     # Swift, Shock Wave, Kaizo's Aurora Beam: effect_script_0017.s is CalcCrit, CalcDamage;
     # the never-miss comes from accuracy 0.

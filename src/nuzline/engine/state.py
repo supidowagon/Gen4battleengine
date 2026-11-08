@@ -26,7 +26,7 @@ Encodings:
   (battle_controller_player.c:1844-1852).
 * ``fake_out_turn`` is ``fakeOutTurnNumber``: 0 for the leads, ``totalTurns + 1`` after
   every switch-in and faint; the AI's ``LoadIsFirstTurnInBattle`` (trainer_ai.c:2487)
-  is ``fake_out_turn >= turn``.
+  is ``fake_out_turn >= turn``; Fake Out fails unless ``fake_out_turn == turn``.
 * ``move_hit`` is ``moveHit``: the last move aimed at the side's active battler since its
   own last action ended (see ``step``).
 * ``foresight``, ``disabled_move``/``disable_turns``, ``locked_move`` (0 = not locked),

@@ -68,6 +68,7 @@ _I32 = jnp.int32
 # The phases at which a Pokemon's ability can reveal itself to the AI.
 SWITCH_IN, CONTACT_STATUS = "switch_in", "contact_status"
 SLEEP_BLOCKED, STATUS_CURE = "sleep_blocked", "status_cure"
+FLINCH_BLOCKED = "flinch_blocked"
 # Ability -> the phases at which it shows a message tagging it, for the implemented
 # abilities that ever do:
 # * Mold Breaker: SWITCH_IN_CHECK_STATE_MOLD_BREAKER (battle_lib.c:4075), a living
@@ -83,10 +84,11 @@ SLEEP_BLOCKED, STATUS_CURE = "sleep_blocked", "status_cure"
 #   ``BTLSCR_MSG_TEMP``).
 # * Shed Skin: subscript_ability_restore_status.s:8 tags the holder
 #   (``TAG_NICKNAME_ABILITY_STATUS``).
+# * Inner Focus: a Fake Out flinch it blocks (``effects._flinch``): subscript_flinch_mon.s:18-23
+#   prints "won't flinch because of its {1}" with ``TAG_NICKNAME_ABILITY`` for
+#   ``MOVE_FAKE_OUT`` (or a direct flinch effect, which no supported move has).
 # The others never reveal: Intimidate's "cuts" message and Keen Eye's "prevents"
 # message are built in C (``BtlCmd_ChangeStatStage``, battle_script.c:2956, :2900);
-# Inner Focus prints only against Fake Out or a direct flinch effect
-# (subscript_flinch_mon.s:26-36), and every implemented flinch is a secondary effect;
 # Blaze, Torrent, Overgrow, Rivalry, Guts, Simple, Unaware, Rock Head, Natural Cure,
 # Steadfast, Sturdy, Cloud Nine, Compoundeyes, Sand Veil, Snow Cloak and Swift Swim show no
 # ability message in M1.
@@ -96,6 +98,7 @@ REVEALS_ON: dict[int, frozenset[str]] = {
     AbilityId.POISON_POINT: frozenset({CONTACT_STATUS}),
     AbilityId.INSOMNIA: frozenset({SLEEP_BLOCKED, STATUS_CURE}),
     AbilityId.SHED_SKIN: frozenset({STATUS_CURE}),
+    AbilityId.INNER_FOCUS: frozenset({FLINCH_BLOCKED}),
 }
 
 

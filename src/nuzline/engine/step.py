@@ -65,6 +65,7 @@ from nuzline.engine.effects import (
     change_stage,
     defender_always,
     hit_count,
+    targets_user,
     unlock_move,
 )
 from nuzline.engine.hooks import (
@@ -358,9 +359,13 @@ def _use_move(
     ready = (state.over == 0) & (state.hp[side, user] > 0)
     # BattleControllerPlayer_FightCommand (battle_controller_player.c:1900) fixes the
     # defender before the status checks: the foe when it is alive (any HP for
-    # RANGE_OPPONENT_SIDE: BattleSystem_RandomOpponent), the user for _SELF_DEFENDER.
+    # RANGE_OPPONENT_SIDE: BattleSystem_RandomOpponent), the user for _SELF_DEFENDER and
+    # a non-Ghost Curse (effects.targets_user).
     move_range = tables.move_target[move]
-    foe_defender = ~jnp.isin(move_range, jnp.asarray(_SELF_DEFENDER, move_range.dtype)) & (
+    self_defender = jnp.isin(move_range, jnp.asarray(_SELF_DEFENDER, move_range.dtype)) | (
+        targets_user(tables, move)
+    )
+    foe_defender = ~self_defender & (
         (state.hp[target_side, target] > 0) | (move_range == MoveTarget.RANGE_OPPONENT_SIDE)
     )
 
@@ -461,10 +466,17 @@ def _use_move(
     succeeded = can_act & has_target
     state = _set_last_move(state, side, jnp.where(succeeded, move, 0), ready)
     hit = (outcome.hit[side, 0] != 0) | never_misses
-    connected = can_act & has_target & hit
+    # The move script runs next (BATTLE_CONTROL_EXEC_SCRIPT, :3214): Fake Out's
+    # (effect_script_0158.s) sets MOVE_STATUS_FAILED unless fakeOutTurnNumber == totalTurns.
+    # The accuracy roll still happens, but subscript_missed.s prints "But it failed!" (:97)
+    # ahead of the miss message, so only an attempt that did not fail can show a miss.
+    failed = (tables.move_effect[move] == EffectId.FAKE_OUT) & (
+        state.fake_out_turn[side].astype(_I32) != state.turn.astype(_I32)
+    )
+    connected = can_act & has_target & hit & ~failed
     # subscript_no_target.s and subscript_missed.s unlock the attacker (a Rollout that
     # missed; a first use never locked, so this is then a no-op).
-    state = _unlock(state, side, can_act & ~(has_target & hit))
+    state = _unlock(state, side, can_act & ~connected)
     n_hits = hit_count(tables, move, outcome, side)
 
     # A loop, not unrolled: one copy of the effect code in the program, not MAX_HITS
@@ -546,7 +558,7 @@ def _use_move(
         ),
         "act_id": jnp.where(can_act | taunted | disabled, move, 0),
         "shown": ready,
-        "missed": can_act & has_target & ~hit,
+        "missed": can_act & has_target & ~hit & ~failed,
         "no_target": can_act & ~has_target,
         "hits": hits,
         # subscript_magnitude.s prints "Magnitude N!" through the ON_HIT primary effect

@@ -32,9 +32,18 @@ class EffectId(IntEnum):
     clears both of the defender's side after the hit (``effects._brick_break``).
     ``BIDE``, ``ROLLOUT`` (Rollout, Ice Ball): zeros; they lock the user into the move
     (``BattleState.locked_move``, ``engine/step.py``, ``engine/damage.py``).
+    * ``MULTI_HIT``: ``(hits, 0, 0)``: ``hits == 0`` is the 2-5 law (``Outcome.n_hits``,
+      ``BATTLE_EFFECT_MULTI_HIT``), else exactly that many hits (``BATTLE_EFFECT_HIT_TWICE``:
+      Double Kick, Kaizo's DoubleSlap, ``SetMultiHit 2``).
+    * Multi-stat effects: the stat list is the effect's own, so the params stay zeros.
+      ``RAISE_ALL_STATS_HIT`` (AncientPower): Atk, Def, Spe, SpA, SpD +1 on the user at the
+      move's effect chance; ``CURSE`` (a non-Ghost user; coverage refuses a Ghost-type one):
+      Spe -1, Atk +1, Def +1 on the user.
+    * ``RECOVER``: zeros; heals ``maxHP / 2``, fails at full HP. ``FAKE_OUT``: zeros; fails
+      unless it is the user's first turn out, else flinches at the move's chance.
 
-    The proc chance of a ``SECONDARY_*`` or ``FLINCH`` effect is the move's own
-    ``move_effect_chance``; a ``SECONDARY_*`` move with chance 0 applies its
+    The proc chance of a ``SECONDARY_*``, ``FLINCH``, ``FAKE_OUT`` or ``RAISE_ALL_STATS_HIT``
+    effect is the move's own ``move_effect_chance``; a ``SECONDARY_*`` move with chance 0 applies its
     effect on every hit (the decomp's ``MOVE_SIDE_EFFECT_ON_HIT``, e.g. Hammer Arm).
     """
 
@@ -71,6 +80,10 @@ class EffectId(IntEnum):
     LIGHT_SCREEN = 30
     REFLECT = 31
     BRICK_BREAK = 32
+    RECOVER = 33
+    FAKE_OUT = 34
+    RAISE_ALL_STATS_HIT = 35
+    CURSE = 36
 
 
 class AbilityId(IntEnum):
@@ -215,6 +228,10 @@ class Type(IntEnum):
 # Decomp move id the engine names directly (``generated/moves.txt`` line 166, 0-based
 # from MOVE_NONE): Struggle replaces the chosen move when it has no PP left.
 MOVE_STRUGGLE = 165
+# Fake Out (``generated/moves.txt`` line 253): ``subscript_flinch_mon.s:18`` shows Inner
+# Focus's message, which names the ability, only for ``BTLVAR_CURRENT_MOVE == MOVE_FAKE_OUT``
+# (or a direct flinch effect, which no supported move has).
+MOVE_FAKE_OUT = 252
 
 # Decomp ability ids the weather code names directly (``generated/abilities.txt`` line N is
 # id N-1), read through ``tables.species_abilities_decomp`` (``Battler_Ability``) rather than

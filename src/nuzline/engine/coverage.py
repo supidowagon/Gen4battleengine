@@ -23,7 +23,10 @@ a sampling-only opponent, before anything can be marked as such.
 The registries list exactly what plan 1a (Tasks 8a-8e: move effects, abilities, held
 items) and plan 1b (Task 2b: trainer items; Task 3: Roark's AI flags) implement:
 
-* move effects: every ``ids.EffectId`` but ``UNSUPPORTED``. Moves the tables map to
+* move effects: every ``ids.EffectId`` but ``UNSUPPORTED``, except ``CURSE`` used by a
+  Ghost-type Pokemon (``ghost_curse``: ``effect_script_0109.s`` sends it down the Ghost
+  branch, ``subscript_curse_ghost.s``, which is not modelled), refused per Pokemon on both
+  sides and in the pool. Moves the tables map to
   ``UNSUPPORTED`` include every move that sets weather, Reflect, Light Screen, Tailwind
   or Trick Room: the engines' ``CheckFieldConditions`` pass (``step.field_conditions``)
   counts screens and weather down, but those moves are not modelled yet (plan ruling);
@@ -87,7 +90,7 @@ from nuzline.data.games import KAIZO, VANILLA
 from nuzline.data.spec import PokemonSpec
 from nuzline.data.tables import Names, Tables
 from nuzline.data.trainer import UNKNOWN_CONDITION, Trainer, missing_set_data
-from nuzline.engine.ids import AbilityId, EffectId, ItemId, TrainerItemId, Weather
+from nuzline.engine.ids import AbilityId, EffectId, ItemId, TrainerItemId, Type, Weather
 from nuzline.engine.state import make_state
 
 # include/constants/forms.h:94, :98; generated/species.txt and items.txt (line N is id N-1).
@@ -222,6 +225,27 @@ class _Collector:
             self.report.sampling_only.append(f"{what} ({kind} SAMPLING_ONLY)")
 
 
+def ghost_curse(tables: Tables, move: int, row: int) -> bool:
+    """``move`` is Curse (``EffectId.CURSE``) and personal ``row`` is Ghost-type:
+    ``effect_script_0109.s:5-6`` (``BATTLEMON_TYPE_1``/``_2 == TYPE_GHOST``) takes the
+    Ghost branch, which the engine does not model. Types never change in battle in the
+    implemented set (Camouflage, Conversion and Color Change are unsupported)."""
+    if int(np.asarray(tables.move_effect)[move]) != EffectId.CURSE:
+        return False
+    return Type.GHOST in [int(t) for t in np.asarray(tables.species_types)[row]]
+
+
+def move_effect_line(tables: Tables, names: Names, move: int, row: int) -> tuple[Support, str]:
+    """The support of ``move`` for the Pokemon at personal ``row`` and its name as a report
+    line shows it: by engine effect, ``" (Ghost user)"`` added and refused for
+    ``ghost_curse``."""
+    name = names.move_names[move]
+    if ghost_curse(tables, move, row):
+        return Support.NONE, f"{name} (Ghost user)"
+    effect = EffectId(int(np.asarray(tables.move_effect)[move]))
+    return IMPLEMENTED_EFFECTS.get(effect, Support.NONE), name
+
+
 def _check_party(
     c: _Collector,
     tables: Tables,
@@ -230,16 +254,15 @@ def _check_party(
     party: Sequence[PokemonSpec],
     trainer_side: bool = False,
 ) -> None:
-    move_effect = np.asarray(tables.move_effect)
     abilities = np.asarray(tables.species_abilities)
     item_effect = np.asarray(tables.item_effect)
     for slot, mon in enumerate(party):
         where = f"{owner} {names.species_names[mon.species]} (slot {slot})"
+        row = personal_row(tables, mon.species, mon.form)  # ValueError: no such form
         for move in mon.moves:
             if move:
-                support = IMPLEMENTED_EFFECTS.get(EffectId(int(move_effect[move])), Support.NONE)
-                c.add(support, f"{where}: {names.move_names[move]}", "move effect")
-        row = personal_row(tables, mon.species, mon.form)  # ValueError: no such form
+                support, name = move_effect_line(tables, names, move, row)
+                c.add(support, f"{where}: {name}", "move effect")
         ability = AbilityId(int(abilities[row, mon.ability_slot]))
         ability_name = names.ability_names[
             names.species_abilities(mon.species, mon.form)[mon.ability_slot]

@@ -100,7 +100,12 @@ DECOMP_FLAG_BITS = {
     "MOVE_FLAG_MAKES_CONTACT": MoveFlag.CONTACT,
     "MOVE_FLAG_CAN_PROTECT": MoveFlag.PROTECT,
 }
-SECONDARY = (EffectId.SECONDARY_STAT_SELF, EffectId.SECONDARY_STAT_FOE, EffectId.SECONDARY_STATUS)
+SECONDARY = (
+    EffectId.SECONDARY_STAT_SELF,
+    EffectId.SECONDARY_STAT_FOE,
+    EffectId.SECONDARY_STATUS,
+    EffectId.RAISE_ALL_STATS_HIT,
+)
 
 
 class BuildError(RuntimeError):
@@ -168,6 +173,10 @@ def _move_effect(
             if params[2] != 0:
                 return int(EffectId.UNSUPPORTED), (0, 0, 0)
             return int(EffectId.PLAIN), (0, 0, 0)
+    if eid == EffectId.FAKE_OUT and move["effect_chance"] == 0:
+        # effect_script_0158.s rolls RandNext() % 100 < chance: chance 0 never flinches, but
+        # the engine reads chance 0 as an ON_HIT effect, and PLAIN would drop the failure.
+        return int(EffectId.UNSUPPORTED), (0, 0, 0)
     if move["name"] in TYPE_CHART_STATUS_MOVES:
         if eid != EffectId.STATUS_FOE:
             raise BuildError(f"move {move['name']!r}: type-checked but not STATUS_FOE")
