@@ -10,9 +10,11 @@ from dataclasses import dataclass
 import numpy as np
 
 from nuzline.data.forms import personal_row
+from nuzline.data.games import KAIZO
 from nuzline.data.learnsets import Learnsets
 from nuzline.data.spec import PokemonSpec
 from nuzline.data.tables import Names, Tables
+from nuzline.data.trainer import Trainer
 from nuzline.engine.coverage import (
     IMPLEMENTED_ABILITIES,
     IMPLEMENTED_EFFECTS,
@@ -20,6 +22,8 @@ from nuzline.engine.coverage import (
     CoverageReport,
     Support,
     _Collector,
+    rom_change_line,
+    rom_change_refusals,
 )
 from nuzline.engine.ids import AbilityId, EffectId, ItemId
 from nuzline.prep.leveling import candies_to_cap, level_to_cap
@@ -92,10 +96,18 @@ def pool_candidates(
     return out, left_out
 
 
-def check_pool(tables: Tables, names: Names, candidates: Sequence[Candidate]) -> CoverageReport:
+def check_pool(
+    tables: Tables,
+    names: Names,
+    candidates: Sequence[Candidate],
+    trainer: Trainer | None = None,
+) -> CoverageReport:
     """The support level of the pool: per candidate its ability and held item, and every move
     it could know (current, Move Relearner, TM), by engine effect and the AI's player-side
-    refusals (``ai.policy.player_move_refusal``/``player_ability_refusal``)."""
+    refusals (``ai.policy.player_move_refusal``/``player_ability_refusal``). With ``trainer``
+    (Kaizo), a candidate a ``not_reached`` ROM-change condition reaches through its own spec
+    or a move it could learn is refused; the condition terms about the fight alone are
+    already on the fight's report."""
     from nuzline.ai.policy import player_ability_refusal, player_move_refusal
 
     c = _Collector()
@@ -134,6 +146,12 @@ def check_pool(tables: Tables, names: Names, candidates: Sequence[Candidate]) ->
             f"{cand.label}: {names.item_names[spec.item]}",
             "held item",
         )
+        if trainer is not None and names.game == KAIZO:
+            could_learn = [*cand.relearner, *(move for _, move in cand.tms)]
+            for cond in rom_change_refusals(
+                tables, names, trainer, [spec], could_learn, spec_terms_only=True
+            ):
+                c.add(Support.NONE, f"{cand.label}: {rom_change_line(cond)}", "ROM change")
         for move in spec.moves:
             if move:
                 check_move(cand.label, move, "current")

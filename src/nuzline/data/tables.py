@@ -9,6 +9,7 @@ arrays are indexed by personal row: species ids 0-495, then the data forms 496-5
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from pathlib import Path
 from typing import NamedTuple
 
@@ -113,6 +114,22 @@ def _index(names: list[str], what: str) -> dict[str, int]:
     return out
 
 
+@dataclass(frozen=True)
+class RomCondition:
+    """A ``not_reached`` ROM change (``data/kaizo/rom_diff.toml``) as ids: it can only matter in
+    a fight where one of these holds (a format or area condition, a move, ability or held item
+    on a side, a trainer, or any trainer item)."""
+
+    label: str
+    formats: tuple[str, ...]
+    areas: tuple[str, ...]
+    moves: tuple[int, ...]
+    abilities: tuple[int, ...]
+    items: tuple[int, ...]
+    trainers: tuple[int, ...]
+    trainer_items: bool
+
+
 class Names:
     """Case-insensitive English name -> decomp id lookups.
 
@@ -125,6 +142,19 @@ class Names:
     def __init__(self, manifest: dict):
         self.game: str = manifest_game(manifest)
         self.unclassified_rom_changes: int = int(manifest.get("unclassified_rom_changes", 0))
+        self.rom_change_conditions: tuple[RomCondition, ...] = tuple(
+            RomCondition(
+                c["label"],
+                tuple(c["formats"]),
+                tuple(c["areas"]),
+                tuple(c["moves"]),
+                tuple(c["abilities"]),
+                tuple(c["items"]),
+                tuple(c["trainers"]),
+                bool(c["trainer_items"]),
+            )
+            for c in manifest.get("rom_change_conditions", ())
+        )
         self.species_names: tuple[str, ...] = tuple(manifest["species_names"])
         self.move_names: tuple[str, ...] = tuple(manifest["move_names"])
         self.item_names: tuple[str, ...] = tuple(manifest["item_names"])

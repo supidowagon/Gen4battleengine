@@ -593,7 +593,7 @@ def _print_pool(args, game, tables, names, player, trainer, save) -> None:
     learnsets = load_learnsets(game.tables_dir)
     candidates, left_out = pool_candidates(save, tables, names, learnsets, cap)
     print(f"Pool at level cap {cap} ({len(candidates)} Pokemon):")
-    _print_report(check_pool(tables, names, candidates))
+    _print_report(check_pool(tables, names, candidates, trainer))
     for line in left_out:
         _say(line)
 
@@ -819,7 +819,9 @@ def _prep(args) -> int:
     _check_buildable(tables, names, trainer, inter)
     opp = build_trainer_party(trainer, inter)
     weather = start_weather(trainer)
-    # A refused fight exits 2 before the cap, the pool or the team space can fail it.
+    # A refused fight exits 2 before the cap, the pool or the team space can fail it. No
+    # player party here: the team is not chosen yet, so build_problem's usable_pool checks
+    # each candidate's side of the Kaizo ROM-change conditions instead.
     theirs = check_opponent(tables, names, trainer, opp, weather)
     if theirs.missing:
         print(_trainer_line(trainer))

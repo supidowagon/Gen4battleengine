@@ -5,8 +5,9 @@ import pytest
 from nuzline.ai.policy import player_ability_refusal, player_move_refusal
 from nuzline.data.learnsets import load_learnsets
 from nuzline.engine.coverage import Support
-from nuzline.prep.pool import check_pool, pool_candidates
+from nuzline.prep.pool import Candidate, check_pool, pool_candidates
 from nuzline.saves import load_save
+from tests.engine.helpers import kaizo_names_with, roark_trainer, sample_party
 from tests.saves.synthetic import box_record, party_record
 from tests.saves.writer import build_image
 
@@ -114,3 +115,47 @@ def test_player_move_refusal(names):
 def test_player_ability_refusal(names):
     assert player_ability_refusal(26)  # Levitate
     assert player_ability_refusal(51) is None  # Keen Eye
+
+
+# Gen IV move index of Water Gun (names.move("Water Gun")): an implemented move no sample
+# or Roark party member knows, so only a candidate's relearner list carries it.
+MOVE_X = 55
+
+
+def test_pool_candidate_reached_by_relearner_move(tables, names, vanilla_manifest):
+    spec = sample_party(names)[0]
+    cand = Candidate(("party", 0, 0), "party slot 0 MONFERNO", spec, 0, (MOVE_X,), ())
+    other = Candidate(("party", 0, 1), "party slot 1 MONFERNO", spec, 0, (), ())
+    kaizo = kaizo_names_with(vanilla_manifest, [{"moves": [MOVE_X]}])
+    report = check_pool(tables, kaizo, [cand, other], trainer=roark_trainer())
+    assert report.missing == [
+        (
+            "party slot 0 MONFERNO: Kaizo ROM: c is not modelled and this fight reaches it "
+            "(docs/kaizo/rom_diff.md) (ROM change UNSUPPORTED)"
+        )
+    ]
+    # Without the fight's trainer, or in vanilla, the pool refuses nothing for it.
+    assert check_pool(tables, kaizo, [cand, other]).missing == []
+    assert check_pool(tables, names, [cand, other], trainer=roark_trainer()).missing == []
+
+
+def test_pool_candidate_reached_by_tm_move(tables, names, vanilla_manifest):
+    spec = sample_party(names)[0]
+    cand = Candidate(
+        ("party", 0, 0), "party slot 0 MONFERNO", spec, 0, (), ((names.item("TM10"), MOVE_X),)
+    )
+    kaizo = kaizo_names_with(vanilla_manifest, [{"moves": [MOVE_X]}])
+    assert len(check_pool(tables, kaizo, [cand], trainer=roark_trainer()).missing) == 1
+
+
+@pytest.mark.parametrize(
+    "cond", [{"trainers": [246]}, {"trainer_items": True}, {"formats": ["single"]}]
+)
+def test_pool_ignores_fight_level_conditions(tables, names, vanilla_manifest, cond):
+    # Roark's id, bag and format hold, but they are the fight's report's lines, not a candidate's.
+    spec = sample_party(names)[0]
+    cands = [
+        Candidate(("party", 0, i), f"party slot {i} MONFERNO", spec, 0, (), ()) for i in range(2)
+    ]
+    kaizo = kaizo_names_with(vanilla_manifest, [cond])
+    assert check_pool(tables, kaizo, cands, trainer=roark_trainer()).missing == []

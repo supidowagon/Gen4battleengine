@@ -12,6 +12,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
+from nuzline.data.games import KAIZO
 from nuzline.data.party import load_party
 from nuzline.data.spec import PokemonSpec
 from nuzline.data.tables import Names, Tables, load_names, to_numpy
@@ -304,3 +305,27 @@ def assert_matches_reference(
     for name, x, y in zip(out._fields, out, ref, strict=True):
         np.testing.assert_array_equal(np.asarray(x), np.asarray(y), err_msg=name)
     return out
+
+
+EMPTY_COND = {
+    "label": "",
+    "formats": [],
+    "areas": [],
+    "moves": [],
+    "abilities": [],
+    "items": [],
+    "trainers": [],
+    "trainer_items": False,
+}
+
+
+def kaizo_names_with(manifest, conditions):
+    """A Kaizo ``Names`` over the vanilla manifest with these ``rom_change_conditions``."""
+    return Names(
+        {
+            **manifest,
+            "game": KAIZO,
+            "unclassified_rom_changes": 0,
+            "rom_change_conditions": [{**EMPTY_COND, "label": "c", **c} for c in conditions],
+        }
+    )

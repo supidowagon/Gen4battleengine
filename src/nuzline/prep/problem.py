@@ -12,6 +12,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from nuzline.data.forms import personal_row
+from nuzline.data.games import KAIZO
 from nuzline.data.learnsets import Learnsets
 from nuzline.data.spec import PokemonSpec
 from nuzline.data.tables import Names, Tables
@@ -21,6 +22,8 @@ from nuzline.engine.coverage import (
     IMPLEMENTED_EFFECTS,
     IMPLEMENTED_ITEMS,
     Support,
+    rom_change_line,
+    rom_change_refusals,
 )
 from nuzline.engine.ids import AbilityId, EffectId, ItemId, Status
 from nuzline.engine.state import MAX_DEATH_BUDGET
@@ -106,8 +109,28 @@ def _item_refusal(tables: Tables, item: int) -> str | None:
     return None
 
 
+def _rom_change_refusal(
+    tables: Tables,
+    names: Names,
+    trainer: Trainer | None,
+    specs: Sequence[PokemonSpec] = (),
+    moves: Sequence[int] = (),
+) -> str | None:
+    """Why a Kaizo ``not_reached`` ROM-change condition refuses these player-side ``specs`` or
+    ``moves`` against ``trainer`` (``coverage.rom_change_refusals`` with ``spec_terms_only``:
+    the fight-level terms are the fight's own report), or None; always None without a
+    trainer or outside Kaizo (spec design.md §3)."""
+    if trainer is None or names.game != KAIZO:
+        return None
+    labels = rom_change_refusals(tables, names, trainer, specs, moves, spec_terms_only=True)
+    return "; ".join(rom_change_line(label) for label in labels) or None
+
+
 def usable_pool(
-    tables: Tables, names: Names, candidates: Sequence[Candidate]
+    tables: Tables,
+    names: Names,
+    candidates: Sequence[Candidate],
+    trainer: Trainer | None = None,
 ) -> tuple[list[Candidate], list[str]]:
     """The candidates the engine and the AI can play, and one line per exclusion or trim.
 
@@ -115,35 +138,45 @@ def usable_pool(
     (``"<label>: left out: <what> (<reason>)"``). Plan 4c ruling (held items): one whose only
     unsupported part is its held item stays with the item taken off (``"<label>: <item> taken
     off (<reason>)"``), as spec §6.1 offers "none". An unsupported or refused relearner or TM
-    option is removed (``"<label>: <move> not offered (<reason>)"``)."""
+    option is removed (``"<label>: <move> not offered (<reason>)"``). With ``trainer`` on
+    Kaizo, an ability, move or held item a ``not_reached`` ROM-change condition lists counts
+    as refused the same way (``_rom_change_refusal``)."""
+
+    def rom(specs: Sequence[PokemonSpec] = (), moves: Sequence[int] = ()) -> str | None:
+        return _rom_change_refusal(tables, names, trainer, specs, moves)
+
+    def move_refusal(move: int) -> str | None:
+        return _move_refusal(tables, move) or rom(moves=[move])
+
     out: list[Candidate] = []
     lines: list[str] = []
     for cand in candidates:
         spec = cand.spec
         why: list[str] = []
-        if (r := _ability_refusal(tables, spec)) is not None:
+        bare = dataclasses.replace(spec, moves=(), item=0)  # the ability alone
+        if (r := _ability_refusal(tables, spec) or rom([bare])) is not None:
             ability = names.ability_names[
                 names.species_abilities(spec.species, spec.form)[spec.ability_slot]
             ]
             why.append(f"{ability} ({r})")
         for move in spec.moves:
-            if move and (r := _move_refusal(tables, move)) is not None:
+            if move and (r := move_refusal(move)) is not None:
                 why.append(f"{names.move_names[move]} ({r})")
         if why:
             lines.extend(f"{cand.label}: left out: {w}" for w in why)
             continue
-        if (r := _item_refusal(tables, spec.item)) is not None:
+        if (r := _item_refusal(tables, spec.item) or rom([spec])) is not None:
             lines.append(f"{cand.label}: {names.item_names[spec.item]} taken off ({r})")
             cand = dataclasses.replace(cand, spec=dataclasses.replace(spec, item=0))
         relearner = []
         for move in cand.relearner:
-            if (r := _move_refusal(tables, move)) is None:
+            if (r := move_refusal(move)) is None:
                 relearner.append(move)
             else:
                 lines.append(f"{cand.label}: {names.move_names[move]} not offered ({r})")
         tms = []
         for item, move in cand.tms:
-            if (r := _move_refusal(tables, move)) is None:
+            if (r := move_refusal(move)) is None:
                 tms.append((item, move))
             else:
                 lines.append(f"{cand.label}: {names.move_names[move]} not offered ({r})")
@@ -197,11 +230,14 @@ def levelled_moves(
     candidates: Sequence[Candidate],
     learnsets: Learnsets,
     cap: int,
+    names: Names | None = None,
+    trainer: Trainer | None = None,
 ) -> tuple[tuple[tuple[int, int], ...], ...]:
     """Per candidate the ``(level, move)`` pairs it learns going from its save level
     (``spec.level - candies``) to ``cap``: levels above the save level and at most the cap,
     moves its spec does not know and the engine and AI support, ascending, first occurrence
-    per move (plan 4c ruling 4)."""
+    per move (plan 4c ruling 4). With ``names`` and ``trainer`` on Kaizo, a move a
+    ``not_reached`` ROM-change condition lists is dropped too (``_rom_change_refusal``)."""
     out = []
     for cand in candidates:
         spec = cand.spec
@@ -212,7 +248,9 @@ def levelled_moves(
             if not spec.level - cand.candies < level <= cap or move in seen:
                 continue
             seen.add(move)
-            if _move_refusal(tables, move) is None:
+            if _move_refusal(tables, move) is None and (
+                names is None or _rom_change_refusal(tables, names, trainer, moves=[move]) is None
+            ):
                 learned.append((level, move))
         out.append(tuple(learned))
     return tuple(out)
@@ -303,7 +341,7 @@ def build_problem(
         raise ValueError(f"{pool[both[0]].label} is both protected and excluded")
     reasons = [f"{pool[i].label}: excluded" for i in sorted(excluded_at)] + warnings
     kept = [c for i, c in enumerate(pool) if i not in excluded_at]
-    usable, lines = usable_pool(tables, names, kept)
+    usable, lines = usable_pool(tables, names, kept, trainer)
     warnings += lines
     reasons += lines
     if not usable:
@@ -315,6 +353,17 @@ def build_problem(
             why = "; ".join(line for line in lines if line.startswith(pool[i].label + ":"))
             raise ValueError(f"cannot protect {pool[i].label}: {why or 'left out'}")
         protected.add(index[pool[i].location])
+    resources = bag_resources(save.bag, tables, names, learnsets, set(reserved))
+    if names.game == KAIZO:  # a held item a not_reached condition lists (design.md §3)
+        held = []
+        for item, qty in resources.held:
+            labels = [c.label for c in names.rom_change_conditions if item in c.items]
+            if labels:
+                why = "; ".join(rom_change_line(label) for label in labels)
+                warnings.append(f"{names.item_names[item]}: not offered ({why})")
+            else:
+                held.append((item, qty))
+        resources = dataclasses.replace(resources, held=tuple(held))
     in_bag = {item for entries in save.bag.values() for item, _ in entries}
     warnings += [
         f"{name}: reserved but not in the bag"
@@ -326,13 +375,13 @@ def build_problem(
         trainer=trainer,
         opp=tuple(opp),
         start_condition=start_condition,
-        resources=bag_resources(save.bag, tables, names, learnsets, set(reserved)),
+        resources=resources,
         deaths=deaths,
         protected=frozenset(protected),
         prestatus=tuple(statuses),
         cap=cap,
         source=f"save:{save.sha256}",
-        levelled=levelled_moves(tables, usable, learnsets, cap),
+        levelled=levelled_moves(tables, usable, learnsets, cap, names, trainer),
         left_out_party=tuple(
             (
                 m.location[2],

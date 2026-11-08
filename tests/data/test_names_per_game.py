@@ -53,3 +53,25 @@ def test_game_and_unclassified_read_from_manifest(vanilla_manifest):
     }
     n = Names(m)
     assert n.game == "platinum_kaizo_nightmare_final" and n.unclassified_rom_changes == 3
+
+
+def test_names_reads_conditions(vanilla_manifest):
+    n = Names(
+        {
+            **vanilla_manifest,
+            "rom_change_conditions": [
+                {
+                    "label": "x",
+                    "formats": ["double"],
+                    "areas": [],
+                    "moves": [],
+                    "abilities": [],
+                    "items": [],
+                    "trainers": [],
+                    "trainer_items": False,
+                }
+            ],
+        }
+    )
+    assert n.rom_change_conditions[0].formats == ("double",)
+    assert Names(vanilla_manifest).rom_change_conditions == ()

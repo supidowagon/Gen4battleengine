@@ -14,6 +14,8 @@ from tools.rom.diff import (
     classification_skeleton,
     diff_roms,
     load_classification,
+    load_code_classification,
+    load_conditions,
     main,
     stale_entries,
     write_report,
@@ -167,3 +169,78 @@ def test_relocation_only_symbol_is_listed(tmp_path):
         " 7 "
     ]
     assert foo_row(t).split("|")[4] == " 2 "
+
+
+def _toml(tmp_path, text):
+    p = tmp_path / "c.toml"
+    p.write_text(text, encoding="utf-8")
+    return p
+
+
+def test_not_reached_needs_when(tmp_path):
+    p = _toml(
+        tmp_path, '[[code]]\nmodule="overlay14"\nsymbol="X"\nstatus="not_reached"\nnote="n"\n'
+    )
+    with pytest.raises(ValueError, match="not_reached needs a when"):
+        load_conditions(p)
+
+
+def test_when_only_on_not_reached(tmp_path):
+    p = _toml(
+        tmp_path,
+        '[[code]]\nmodule="o"\nsymbol="X"\nstatus="irrelevant"\nnote="n"\n'
+        'when={format=["double"]}\n',
+    )
+    with pytest.raises(ValueError, match="when is only allowed on not_reached"):
+        load_conditions(p)
+
+
+def test_when_rejects_unknown_key_and_value(tmp_path):
+    for bad in ('{weather=["sun"]}', '{format=["triple"]}', "{trainer_items=false}", "{}"):
+        p = _toml(
+            tmp_path,
+            f'[[member]]\nnarc="battle/skill/be_seq.narc"\nindex=88\n'
+            f'status="not_reached"\nnote="n"\nwhen={bad}\n',
+        )
+        with pytest.raises(ValueError):
+            load_conditions(p)
+
+
+def test_when_map_header_takes_header_ids(tmp_path):
+    entry = '[[code]]\nmodule="arm9"\nsymbol="X"\nstatus="not_reached"\nnote="n"\nwhen='
+    p = _toml(tmp_path, entry + "{map_header=[172, 293]}\n")
+    assert load_conditions(p) == {"arm9 X": {"map_header": [172, 293]}}
+    for bad in (
+        '{map_header=["172"]}',
+        "{map_header=[]}",
+        "{map_header=172}",
+        "{map_header=[true]}",
+    ):
+        p = _toml(tmp_path, entry + bad + "\n")
+        with pytest.raises(ValueError, match="map_header"):
+            load_conditions(p)
+
+
+def test_conditions_keyed_by_label(tmp_path):
+    p = _toml(
+        tmp_path,
+        '[[code]]\nmodule="overlay14"\nsymbol="TrainerAI_MainDoubles"\nstatus="not_reached"\n'
+        'note="n"\nwhen={format=["double","double_two_trainer","multi"]}\n'
+        '[[member]]\nnarc="battle/skill/be_seq.narc"\nindex=88\nstatus="not_reached"\n'
+        'note="n"\nwhen={move_effect=[88]}\n',
+    )
+    assert load_conditions(p) == {
+        "overlay14 TrainerAI_MainDoubles": {"format": ["double", "double_two_trainer", "multi"]},
+        "battle/skill/be_seq.narc#88": {"move_effect": [88]},
+    }
+
+
+def test_not_reached_kept_by_code_loader(tmp_path):
+    p = _toml(
+        tmp_path,
+        '[[code]]\nmodule="overlay14"\nsymbol="X"\nstatus="not_reached"\n'
+        'note="n"\nwhen={format=["multi"]}\n',
+    )
+    assert load_code_classification(p, [["overlay14", "X"]]) == {
+        ("overlay14", "X"): ("not_reached", "n")
+    }

@@ -7,9 +7,10 @@
 --   {"kind":"hit",...}       when a move's damage is about to be applied, and when a
 --                            confused battler hurts itself (attacker == defender)
 --   {"kind":"move_end",...}  at the end of every move
--- Convert the trace with tools/trace_to_state.py. Every address below comes from the
--- decomp's struct definitions (docs/tracing.md, "RAM layout"); the VERIFY ones are not
--- yet checked on the emulator.
+-- Convert the trace with tools/trace_to_state.py. Every SYS/CTX/MON offset below is
+-- checked against the machine code of both ROMs (vanilla and Kaizo) by
+-- `python -m tools.rom.offsets` (docs/tracing.md, "RAM layout"); the VERIFY notes are
+-- what only the emulator can confirm (tools/probe_battle.lua).
 
 ---------------------------------------------------------------------------- config
 
@@ -30,7 +31,7 @@ local RAM_START, RAM_END = 0x02000000, 0x02400000
 local SYS = {
   battleCtx = 0x30,
   parties = 0x68, -- Party *parties[4]; battler 0 = player, 1 = opponent
-  seedRandNext = 0x2444,
+  seedRandNext = 0x2448, -- BattleSystem_RandNext's literal; the decomp's unread_2440 name is 4 off
 }
 
 -- struct BattleContext (include/battle/battle_context.h)
@@ -39,13 +40,13 @@ local CTX = {
   commandNext = 0x0C,
   attacker = 0x64,
   defender = 0x6C,
-  totalTurns = 0x150, -- VERIFY: forward chain from padding0060 (enum NarcID = 4 bytes)
-  fieldConditionsMask = 0x180, -- VERIFY: same chain
+  totalTurns = 0x150,
+  fieldConditionsMask = 0x180,
   damage = 0x2144, -- int, negative at BATTLE_CONTROL_UPDATE_HP
   criticalMul = 0x2150,
   hpCalcTemp = 0x215C, -- int, minus the confusion self-hit damage
   moveStatusFlags = 0x216C,
-  selectedPartySlot = 0x219C, -- u8[4]; VERIFY that it indexes the battle's Party
+  selectedPartySlot = 0x219C, -- u8[4]; VERIFY (probe) that it indexes the battle's Party
   battleMons = 0x2D40, -- BattleMon[4]
   moveCur = 0x3044,
 }

@@ -55,8 +55,11 @@ items) and plan 1b (Task 2b: trainer items; Task 3: Roark's AI flags) implement:
   (``"unknown"``, never read as a weather), a party member with no nature, gender or
   ability data when the trainer has no PID routine (no PKCalc set; plan preflight #34)
   and, for the Kaizo game, ROM code changes not yet classified
-  (``Names.unclassified_rom_changes``). Area weather and fog stay refused through
-  ``start_weather`` like vanilla's; ``Trainer.optional`` refuses nothing.
+  (``Names.unclassified_rom_changes``) and ``not_reached`` ROM changes whose resolved
+  condition (``Names.rom_change_conditions``, ``rom_change_refusals``) holds for the fight:
+  a battle format or area, a move, ability or held item on either side, a trainer or a
+  trainer bag. A condition that does not hold refuses nothing. Area weather and fog stay
+  refused through ``start_weather`` like vanilla's; ``Trainer.optional`` refuses nothing.
 
 ``check_coverage`` also runs the AI's own refusals (``ai.policy.ai_refusals``: opponent
 moves without transcribed script paths, too many script-roll sites, type-chart
@@ -273,7 +276,66 @@ def _check_form(c: _Collector, where: str, mon: PokemonSpec) -> None:
         c.add(Support.NONE, f"{where}: Sky Forme reverts when frozen", "form change")
 
 
-def _check_trainer(c: _Collector, tables: Tables, names: Names, trainer: Trainer) -> None:
+def rom_change_refusals(
+    tables: Tables,
+    names: Names,
+    trainer: Trainer,
+    specs: Sequence[PokemonSpec],
+    extra_moves: Sequence[int] = (),
+    *,
+    spec_terms_only: bool = False,
+) -> list[str]:
+    """The labels of the ``not_reached`` ROM-change conditions
+    (``Names.rom_change_conditions``) that hold for a fight against ``trainer`` with ``specs``
+    on the field (both sides), plus ``extra_moves`` a pool candidate could learn. A condition
+    holds when any of: the trainer's format is listed (an unknown format, ``"unknown"`` in
+    the data or ``None``, matches any condition that lists one); the trainer's area condition has a listed area
+    (``trick_room``/``gravity``, the ``tools/rom/diff.py`` area names); a move, a decomp
+    ability (``species_abilities_decomp`` at the spec's personal row and ability slot) or a
+    held item is listed; the trainer is listed; or the condition covers trainer items and the
+    bag holds one. ``spec_terms_only`` keeps just the moves, abilities and items: the pool
+    asks it per candidate, the fight-level terms being the fight's own."""
+    area = trainer.area_condition
+    areas = {
+        name for name, on in (("trick_room", area.trick_room), ("gravity", area.gravity)) if on
+    }
+    moves = {int(m) for s in specs for m in s.moves if m} | {int(m) for m in extra_moves}
+    items = {int(s.item) for s in specs}
+    decomp = np.asarray(tables.species_abilities_decomp)
+    abilities = {
+        int(decomp[personal_row(tables, s.species, s.form)][s.ability_slot]) for s in specs
+    }
+    bag = any(trainer.items)
+    unknown_format = trainer.format in (None, "unknown")
+    out: list[str] = []
+    for cond in names.rom_change_conditions:
+        fight_level = (
+            (trainer.format in cond.formats or (unknown_format and bool(cond.formats)))
+            or areas & set(cond.areas)
+            or trainer.id in cond.trainers
+            or (cond.trainer_items and bag)
+        )
+        if (
+            moves & set(cond.moves)
+            or abilities & set(cond.abilities)
+            or items & set(cond.items)
+            or (fight_level and not spec_terms_only)
+        ):
+            out.append(cond.label)
+    return out
+
+
+def rom_change_line(label: str) -> str:
+    return f"Kaizo ROM: {label} is not modelled and this fight reaches it (docs/kaizo/rom_diff.md)"
+
+
+def _check_trainer(
+    c: _Collector,
+    tables: Tables,
+    names: Names,
+    trainer: Trainer,
+    specs: Sequence[PokemonSpec],
+) -> None:
     if POLICY.get(names.game) is None:
         c.add(
             Support.NONE,
@@ -287,6 +349,9 @@ def _check_trainer(c: _Collector, tables: Tables, names: Names, trainer: Trainer
         what = f"{display_name(trainer)}: a {trainer.format} battle"
     c.add(support, what, "battle format")
     _check_kaizo_fields(c, names, trainer)
+    if names.game == KAIZO:
+        for label in rom_change_refusals(tables, names, trainer, specs):
+            c.add(Support.NONE, rom_change_line(label), "ROM change")
     effect = np.asarray(tables.trainer_item_effect)
     bag = [item for item in trainer.items if item]
     for item in bag:
@@ -365,13 +430,14 @@ def check_opponent(
     trainer: Trainer,
     opp: Sequence[PokemonSpec],
     start_condition: int,
+    player: Sequence[PokemonSpec] = (),
 ) -> CoverageReport:
     """The trainer's side of ``check_coverage``: its party, bag, AI flags and the weather
-    lines. It runs no ``ai_refusals``: those depend on the player's party, so a caller
+    lines (``player``, when given, only widens the Kaizo ROM-change conditions). It runs no ``ai_refusals``: those depend on the player's party, so a caller
     that needs them runs them per setup."""
     c = _Collector()
     _check_party(c, tables, names, display_name(trainer), opp, trainer_side=True)
-    _check_trainer(c, tables, names, trainer)
+    _check_trainer(c, tables, names, trainer, [*player, *opp])
     # An "unknown" start condition is refused by _check_trainer, never read as a weather.
     weathers = [start_condition]
     if not unknown_start(trainer):
@@ -395,7 +461,7 @@ def check_coverage(
     ``leads`` (``make_state``), whose turn-0 state the AI's refusals are run on."""
     c = _Collector()
     _check_party(c, tables, names, "Player", player)
-    theirs = check_opponent(tables, names, trainer, opp, start_condition)
+    theirs = check_opponent(tables, names, trainer, opp, start_condition, player)
     c.report.missing.extend(theirs.missing)
     c.report.sampling_only.extend(theirs.sampling_only)
     c.report.level = min(c.report.level, theirs.level)

@@ -457,13 +457,6 @@ def test_rehash_lines_name_files_not_paths(tmp_path):  # M14
 
 
 @pytest.fixture(scope="module")
-def kaizo_intermediate():
-    if not (KAIZO_INTER / "renamed.json").exists():
-        pytest.skip("Kaizo intermediates not resolved (python -m tools.build_tables --game kaizo)")
-    return KAIZO_INTER
-
-
-@pytest.fixture(scope="module")
 def resolved_trainers(kaizo_intermediate):
     rows = json.loads((kaizo_intermediate / "trainers.json").read_text("utf-8"))
     return {t["id"]: t for t in rows}
@@ -594,6 +587,17 @@ def test_two_placement_trick_room_trainers_take_the_users_answer(resolved_traine
         assert "user, 2026-11-07" in t["sources"]["area_condition"], tid
 
 
+def _unclassified() -> int:
+    """The ``unknown`` entries of ``data/kaizo/rom_diff.toml`` (code and members)."""
+    import tomllib
+
+    from tools.build_tables import ROM_DIFF
+
+    with ROM_DIFF.open("rb") as f:
+        data = tomllib.load(f)
+    return sum(e["status"] == "unknown" for t in ("code", "member") for e in data.get(t, []))
+
+
 def test_report_lists_user_calls():
     from tools.kaizo.crosscheck import DEFAULT_REPORT
 
@@ -605,7 +609,7 @@ def test_report_lists_user_calls():
     assert [ln.split(":", 1)[0] for ln in lines] == [
         "- start condition unknown",
         "- no map placement found",
-        "- 103 ROM changes unclassified in data/kaizo/rom_diff.toml",
+        f"- {_unclassified()} ROM changes unclassified in data/kaizo/rom_diff.toml",
     ]
     assert lines[0].startswith("- start condition unknown: 676 Corbin")
     unplaced = {int(i) for i in lines[1].rsplit(": ", 1)[1].split(", ")}

@@ -9,6 +9,7 @@ import shutil
 
 import pytest
 
+from nuzline.data.games import GAMES, KAIZO
 from tools.rom.inputs import RomInputError, load_inputs
 
 
@@ -34,3 +35,12 @@ def pkcalc(pkcalc_zip, tmp_path_factory):
     from tools.extract_pkcalc import extract_pkcalc
 
     return extract_pkcalc(pkcalc_zip, tmp_path_factory.mktemp("pkcalc"))
+
+
+@pytest.fixture(scope="session")
+def kaizo_intermediate():
+    """The resolved Kaizo intermediates directory; skips until it is built."""
+    inter = GAMES[KAIZO].intermediate_dir
+    if not (inter / "renamed.json").exists():
+        pytest.skip("Kaizo intermediates not resolved (python -m tools.build_tables --game kaizo)")
+    return inter
