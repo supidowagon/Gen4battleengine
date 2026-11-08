@@ -40,3 +40,38 @@ def test_offsets_vanilla_and_kaizo(kaizo_inputs, symbols, game):
     assert len(checks) == len(ACCESSES)
     bad = [c for c in checks if not c.ok]
     assert bad == [], bad  # a failure names the field to fix in trace_battle.lua
+
+
+# Each mutation gives a field its neighbour's offset; the pinned instructions must refuse it.
+SWAPS = [
+    {("MON", "curHP"): 0x50, ("MON", "maxHP"): 0x4C},
+    {("MON", "maxHP"): 0x4C},
+    {("MON", "curHP"): 0x50},
+    {("CTX", "commandNext"): 0x08},
+    {("CTX", "criticalMul"): 0x216C},
+    {("CTX", "hpCalcTemp"): 0x2D8C},
+    {("SYS", "parties"): 0x2C},
+]
+
+
+@pytest.mark.parametrize("game", ["platinum_us", "platinum_kaizo_nightmare_final"])
+@pytest.mark.parametrize("swap", SWAPS, ids=lambda s: "+".join(f"{t}.{n}" for t, n in s))
+def test_a_neighbours_offset_fails(kaizo_inputs, symbols, game, swap):
+    pytest.importorskip("capstone")
+    tables = {**lua_tables(), **swap}
+    bad = {tuple(c.field.split(".")) for c in check_offsets(game, tables) if not c.ok}
+    assert bad == set(swap)
+
+
+@pytest.mark.parametrize("game", ["platinum_us", "platinum_kaizo_nightmare_final"])
+def test_no_field_accepts_another_fields_offset(kaizo_inputs, symbols, game):
+    pytest.importorskip("capstone")
+    tables = lua_tables()
+    accepted = []
+    for key, offset in tables.items():
+        for other, wrong in tables.items():
+            if other[0] == key[0] and wrong != offset:
+                checks = check_offsets(game, {**tables, key: wrong})
+                if next(c for c in checks if c.field == ".".join(key)).ok:
+                    accepted.append((key, other))
+    assert accepted == []

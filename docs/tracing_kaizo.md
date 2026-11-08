@@ -101,8 +101,10 @@ a sure way in if it does not.
     - whether any weather happened, and on which turn,
     - anything that looked odd.
 
-You do not need to read the file yourself. Each line ends in **OK** or **CHECK**, and
-Claude compares the party lines with your save. For reference, each turn the file has:
+You do not need to read the file yourself. The lines the script can judge by itself
+(`totalTurns`, `seedRandNext`, `selectedPartySlot`, `damage`) end in **OK** or **CHECK**.
+The weather line is judged from what you report, and Claude compares the party lines with
+your save. For reference, each turn the file has:
 
 - `totalTurns`: should count 0, 1, 2, ... one per turn.
 - `fieldConditionsMask`: should be nonzero during a sandstorm (or other weather), and 0
@@ -120,8 +122,15 @@ Claude compares the party lines with your save. For reference, each turn the fil
 Do this only after Claude has confirmed the address check. It uses the same practice copy
 (Part 1).
 
-1. Load the game from the copy (steps 5 to 9). Walk to Roark, and make a save state just
-   before talking to him: **File > Save State > 2**.
+1. Load the game from the copy (steps 5 to 9) and walk to Roark. Standing in front of
+   him, **save in the game** (menu > SAVE). This writes your party as it is now into the
+   copy `G:\Farry\Kaizo Probe\Kaizo Probe.dsv`, which is what the conversion reads.
+   Then make a save state: **File > Save State > 2**.
+   - From that in-game save until the fight, nothing about the party may change: no
+     other battle, no level-up, no new or forgotten move, no held-item change, no party
+     reordering. If anything changes, save in the game again and make the save state
+     again.
+   - Do not save in the game after the Roark fight.
 2. Open `tools\trace_battle.lua` in Notepad and set, near the top:
    - `TRACE_PATH = TRACE_PATH or "G:/Farry/Claude Workspace/Pokemon Platinum Game Engine/traces/roark_kaizo_01.jsonl"`
      (with forward slashes, as written; the `traces` folder was made by the probe),
@@ -137,13 +146,15 @@ Do this only after Claude has confirmed the address check. It uses the same prac
    - Use only moves and switches, never an item from your bag.
    - Fight at least 3 turns.
    If a rule breaks, click Stop, **File > Load State > 2**, and start again from step 3.
-5. When the console prints `trace: battle over`, click Stop and tell Claude
-   "the Roark recording is done". Claude converts it with the party read straight from
-   your save, so you do not need to type in your Pokemon:
+5. When the console prints `trace: battle over`, click Stop, close DeSmuME (so the save
+   file is fully written) and tell Claude "the Roark recording is done". Claude converts
+   it with the party read straight from the copy's in-game save (step 1), so you do not
+   need to type in your Pokemon:
 
    ```
-   uv run python -m tools.trace_to_state --game kaizo --save "G:\Farry\Downloads\Platinum Kaizo Base.dsv" --trace traces\roark_kaizo_01.jsonl --out tests\golden\roark_kaizo_01.json
+   uv run python -m tools.trace_to_state --game kaizo --save "G:\Farry\Kaizo Probe\Kaizo Probe.dsv" --trace traces\roark_kaizo_01.jsonl --out tests\golden\roark_kaizo_01.json
    ```
 
-   This only reads the save. The recording and the save stay out of the project's history
+   This only reads the save. Your original `Platinum Kaizo Base.dsv` in Downloads is not
+   used here: it would miss any change to your party on the way to Roark. The recording and the save stay out of the project's history
    (`traces/` and `*.dsv` are never committed).

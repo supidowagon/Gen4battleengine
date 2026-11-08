@@ -4,10 +4,14 @@
 offsets laid out by hand from the decomp's struct definitions (docs/tracing.md, "RAM
 layout"). This module checks them against the machine code instead: for each field of the
 script's ``SYS``, ``CTX`` and ``MON`` tables it disassembles decomp functions that touch the
-field (``ACCESSES``, with the source line of the access), follows the struct pointer
-through each function, and collects the offsets of the loads and stores of the field's
-width made through it. ``check_offsets(game)`` does this on that game's ROM. A field is
-``ok`` when the script's offset is among the offsets found in every listed function.
+field (``ACCESSES``, with the source line of the access) and follows the struct pointer
+through each function. Each ``Access`` is pinned to the instruction of its source line: the
+loads or stores of the field's width through the pointer, narrowed by whether it is a
+store, the constant stored, the register loaded and its ordinal among the remaining ones
+(e.g. ``BattleSystem_SetupLoop`` stores 1 to ``criticalMul`` and 0 to
+``moveStatusFlags``). ``check_offsets(game)`` does this on that game's ROM. A field is
+``ok`` only when every listed instruction resolves to exactly the script's offset, so two
+neighbouring fields swapped in the script fail.
 
 ``MON`` fields are found through ``BattleContext.battleMons[battler]``: an access at
 context offset ``x`` inside ``battleMons`` counts as ``BattleMon`` offset
@@ -25,9 +29,10 @@ The analysis is a linear walk over the function's Thumb code. Per register it tr
 constant, a pointer (``base + offset``, where a base is an argument register at entry, or
 the word loaded through a pointer) or nothing. A pointer plus an unknown value (an array
 index such as ``battler * 0xC0``) keeps its offset. Literal-pool loads read the ROM;
-``sp`` slots carry spilled registers. Branches are not followed: after a call or an
-unconditional branch the scratch registers r0-r3 and r12 are forgotten. Nothing is written
-to disk.
+``sp`` slots carry spilled registers. A forward branch carries the register state to its
+target, where it is merged with the fall-through state (only agreeing values survive);
+loops are not iterated. After a call the scratch registers r0-r3 and r12 are forgotten, as
+they are at code reached only by a backward branch. Nothing is written to disk.
 
 CLI: ``uv run --group rom python -m tools.rom.offsets [--game kaizo]``.
 """
@@ -59,21 +64,28 @@ _KAIZO_OVERLAY16_SHIFT = (
 
 @dataclass(frozen=True)
 class Access:
-    """A decomp function whose code touches a field: the struct pointer is in argument
-    register ``arg`` at entry, and the access is ``width`` bytes wide (0: the field is
-    ``MON.size``, found as a multiplier of the battler index)."""
+    """The instruction of a decomp function that accesses a field. The struct pointer is in
+    argument register ``arg`` at entry and the access is ``width`` bytes wide (0: the field
+    is ``MON.size``, found as a multiplier of the battler index). Among those accesses
+    (for ``MON``, those inside ``battleMons``) the optional filters pick the cited one:
+    ``store`` (a store, or a load), ``value`` (the constant stored), ``reg`` (the register
+    loaded or stored), then ``nth`` (its ordinal among what is left)."""
 
     function: str
     source: str  # external/pokeplatinum file:line of the access
     arg: int
     width: int
+    store: bool | None = None
+    value: int | None = None
+    reg: str | None = None
+    nth: int | None = None
 
 
 @dataclass(frozen=True)
 class OffsetCheck:
     """One field of trace_battle.lua (``"CTX.totalTurns"``): its offset there, the offsets
-    found in the ROM's code for an access of the field's width through the struct
-    pointer, and whether every listed function has the script's offset among them."""
+    the ROM's code uses at the field's pinned instructions (``ACCESSES``), and whether
+    that is exactly the script's offset."""
 
     field: str
     offset: int
@@ -92,34 +104,60 @@ _SYS = "src/battle/battle_system.c"
 # r0; BattleContext ones take (battleSys, battleCtx) or (battleCtx, ...).
 ACCESSES: dict[tuple[str, str], tuple[Access, ...]] = {
     ("SYS", "battleCtx"): (Access("BattleSystem_GetBattleContext", f"{_SYS}:111", 0, 4),),
-    ("SYS", "parties"): (Access("BattleSystem_GetParty", f"{_SYS}:127", 0, 4),),
-    ("SYS", "seedRandNext"): (Access("BattleSystem_RandNext", f"{_SYS}:1310", 0, 4),),
-    ("CTX", "command"): (
-        Access("BattleControllerPlayer_UseMove", f"{_BCP}:3337", 1, 4),
-        Access("BattleControllerPlayer_TurnEnd", f"{_BCP}:1857", 1, 4),
+    # The Party pointer is loaded into r0 (returned, or passed on); battleType goes to r1/r2.
+    ("SYS", "parties"): (
+        Access("BattleSystem_GetParty", f"{_SYS}:127", 0, 4, reg="r0"),
+        Access("BattleSystem_GetPartyCount", f"{_SYS}:140", 0, 4, reg="r0"),
     ),
-    ("CTX", "commandNext"): (Access("BattleControllerPlayer_UseMove", f"{_BCP}:3338", 1, 4),),
-    ("CTX", "attacker"): (Access("BtlCmd_TrickRoom", f"{_BS}:7863", 1, 4),),
-    ("CTX", "defender"): (Access("BtlCmd_SetRandomTarget", f"{_BS}:9224", 1, 4),),
+    ("SYS", "seedRandNext"): (Access("BattleSystem_RandNext", f"{_SYS}:1310", 0, 4, store=True),),
+    # command = EXEC_SCRIPT (21) / TRAINER_MESSAGE (2); commandNext = UPDATE_HP (27) /
+    # TRAINER_MESSAGE (2).
+    ("CTX", "command"): (
+        Access("BattleControllerPlayer_UseMove", f"{_BCP}:3337", 1, 4, value=21),
+        Access("BattleControllerPlayer_TurnEnd", f"{_BCP}:1857", 1, 4, value=2),
+    ),
+    ("CTX", "commandNext"): (
+        Access("BattleControllerPlayer_UseMove", f"{_BCP}:3338", 1, 4, value=27),
+        Access("BattleControllerPlayer_StartEncounter", f"{_BCP}:238", 1, 4, value=2),
+    ),
+    # ATTACKER_SELF_TURN_FLAGS: attacker is loaded first, then selfTurnFlags[attacker].
+    ("CTX", "attacker"): (
+        Access("BtlCmd_TrickRoom", f"{_BS}:7863", 1, 4, store=False, nth=0),
+        Access("BattleSystem_CanWhirlwind", f"{_BL}:3076", 1, 4, nth=1),
+    ),
+    ("CTX", "defender"): (
+        Access("BtlCmd_SetRandomTarget", f"{_BS}:9224", 1, 4, store=True),
+        Access("BattleSystem_CanWhirlwind", f"{_BL}:3076", 1, 4, nth=0),
+    ),
+    # TurnEnd: totalTurns++ is the first word store; CheckTruant: battleMons[b].
+    # moveEffectsData is loaded before totalTurns.
     ("CTX", "totalTurns"): (
-        Access("BattleControllerPlayer_TurnEnd", f"{_BCP}:1852", 1, 4),
-        Access("Battler_CheckTruant", f"{_BL}:3309", 0, 4),
+        Access("BattleControllerPlayer_TurnEnd", f"{_BCP}:1852", 1, 4, store=True, nth=0),
+        Access("Battler_CheckTruant", f"{_BL}:3309", 0, 4, nth=1),
     ),
     ("CTX", "fieldConditionsMask"): (
         Access("Move_FailsInHighGravity", f"{_BL}:3398", 1, 4),
-        Access("Battler_Ability", f"{_BL}:3094", 0, 4),
+        Access("Battler_Ability", f"{_BL}:3094", 0, 4, nth=1),
     ),
-    ("CTX", "damage"): (Access("BtlCmd_CalcMaxDamage", f"{_BS}:1407", 1, 4),),
-    ("CTX", "criticalMul"): (Access("BattleSystem_SetupLoop", f"{_BL}:3360", 1, 4),),
-    ("CTX", "hpCalcTemp"): (Access("BtlCmd_TrySubstitute", f"{_BS}:5220", 1, 4),),
+    ("CTX", "damage"): (Access("BtlCmd_CalcMaxDamage", f"{_BS}:1407", 1, 4, store=True),),
+    ("CTX", "criticalMul"): (
+        Access("BattleSystem_SetupLoop", f"{_BL}:3360", 1, 4, store=True, value=1),
+    ),
+    # TrySubstitute: hpCalcTemp = -subHP, then moveEffectsData.substituteHP, then
+    # statusVolatile; Present: three movePower = 40/80/120 stores, then hpCalcTemp.
+    ("CTX", "hpCalcTemp"): (
+        Access("BtlCmd_TrySubstitute", f"{_BS}:5220", 1, 4, store=True, nth=0),
+        Access("BtlCmd_Present", f"{_BS}:5802", 1, 4, store=True, nth=3),
+    ),
     ("CTX", "moveStatusFlags"): (
-        Access("BattleSystem_SetupLoop", f"{_BL}:3359", 1, 4),
+        Access("BattleSystem_SetupLoop", f"{_BL}:3359", 1, 4, store=True, value=0),
         Access("BtlCmd_FlickerMon", f"{_BS}:1667", 1, 4),
     ),
     ("CTX", "selectedPartySlot"): (Access("BattleMessage_PokeTag", f"{_BS}:11861", 1, 1),),
     ("CTX", "battleMons"): (Access("BattleSystem_CalcCriticalMulti", f"{_BL}:7119", 1, 2),),
+    # LockMoveChoice: statusVolatile, then moveCur (moveLockedInto[b] is the store).
     ("CTX", "moveCur"): (
-        Access("Battler_LockMoveChoice", f"{_BL}:1831", 1, 4),
+        Access("Battler_LockMoveChoice", f"{_BL}:1831", 1, 4, store=False, nth=1),
         Access("BtlCmd_CheckCurMoveIsType", f"{_BS}:9394", 1, 4),
     ),
     ("MON", "size"): (
@@ -128,13 +166,24 @@ ACCESSES: dict[tuple[str, str], tuple[Access, ...]] = {
     ),
     ("MON", "species"): (Access("BattleSystem_CalcCriticalMulti", f"{_BL}:7119", 1, 2),),
     ("MON", "moves"): (Access("Battler_CountMoves", f"{_BL}:3465", 1, 2),),
-    ("MON", "statBoosts"): (Access("BtlCmd_ResetAllStatChanges", f"{_BS}:3541", 1, 1),),
-    ("MON", "ppCur"): (Access("BattleSystem_DecPPForPressure", f"{_BL}:3393", 0, 1),),
+    ("MON", "statBoosts"): (
+        Access("BtlCmd_ResetAllStatChanges", f"{_BS}:3541", 1, 1, store=True, value=6),
+    ),
+    ("MON", "ppCur"): (Access("BattleSystem_DecPPForPressure", f"{_BL}:3393", 0, 1, store=True),),
     ("MON", "level"): (Access("BattleSystem_CanWhirlwind", f"{_BL}:3076", 1, 1),),
-    ("MON", "curHP"): (Access("Battler_CryModulation", f"{_BL}:6214", 0, 4),),
-    ("MON", "maxHP"): (Access("Battler_CryModulation", f"{_BL}:6214", 0, 4),),
+    # CryModulation: HealthBar_Color(curHP in r0, maxHP in r1, ...), then status.
+    # TrySubstitute: Divide(maxHP, 4) first, then curHP <= subHP. Present: Divide(maxHP, 4).
+    ("MON", "curHP"): (
+        Access("Battler_CryModulation", f"{_BL}:6214", 0, 4, reg="r0"),
+        Access("BtlCmd_TrySubstitute", f"{_BS}:5217", 1, 4, store=False, nth=1),
+    ),
+    ("MON", "maxHP"): (
+        Access("Battler_CryModulation", f"{_BL}:6214", 0, 4, nth=1),
+        Access("BtlCmd_TrySubstitute", f"{_BS}:5215", 1, 4, store=False, nth=0),
+        Access("BtlCmd_Present", f"{_BS}:5802", 1, 4),
+    ),
     ("MON", "status"): (
-        Access("Battler_CryModulation", f"{_BL}:6216", 0, 4),
+        Access("Battler_CryModulation", f"{_BL}:6216", 0, 4, nth=2),
         Access("Battler_StatusCondition", f"{_BL}:1845", 0, 4),
     ),
     ("MON", "heldItem"): (Access("BattleSystem_NotHoldingMail", f"{_BL}:3069", 0, 2),),
@@ -179,6 +228,8 @@ class MemAccess:
     off: int
     width: int
     store: bool
+    reg: str  # the register loaded or stored
+    value: int | None  # a store's value, when it is a known constant
 
 
 @dataclass(frozen=True)
@@ -294,7 +345,18 @@ def analyse(data: bytes, base: int, start: int, size: int) -> Analysis:
                 index = md.reg_name(mem.mem.index) if mem.mem.index else None
                 p = _add(regs.get(rn), regs.get(index) if index else mem.mem.disp)
                 if isinstance(p, _Ptr):
-                    accesses.append(MemAccess(insn.address, p.base, p.off, _WIDTH[mn], store))
+                    value = regs.get(rd) if store else None
+                    accesses.append(
+                        MemAccess(
+                            insn.address,
+                            p.base,
+                            p.off,
+                            _WIDTH[mn],
+                            store,
+                            rd,
+                            value if isinstance(value, int) else None,
+                        )
+                    )
                 if not store:
                     if isinstance(p, _Ptr) and _WIDTH[mn] == 4:
                         regs[rd] = _Ptr(f"[{p.base}+{p.off:#x}]", 0)
@@ -385,26 +447,41 @@ class _Rom:
 
 
 def _found(rom: _Rom, table: str, access: Access) -> tuple[int, ...]:
+    """The offsets at ``access``'s pinned instruction(s) (``Access``)."""
     a = rom.function(access.function)
     if access.width == 0:
         return tuple(sorted(set(a.multipliers)))
-    offs = {m.off for m in a.accesses if m.base == f"arg{access.arg}" and m.width == access.width}
+    first, count, size = BATTLE_MONS
+    picked = [
+        m
+        for m in a.accesses
+        if m.base == f"arg{access.arg}"
+        and m.width == access.width
+        and (table != "MON" or first <= m.off < first + count * size)
+        and access.store in (None, m.store)
+        and (access.value is None or m.value == access.value)
+        and access.reg in (None, m.reg)
+    ]
+    if access.nth is not None:
+        picked = picked[access.nth : access.nth + 1]
+    offs = {m.off for m in picked}
     if table == "MON":
-        first, count, size = BATTLE_MONS
-        offs = {(x - first) % size for x in offs if first <= x < first + count * size}
+        offs = {(x - first) % size for x in offs}
     return tuple(sorted(offs))
 
 
-def check_offsets(game: str) -> list[OffsetCheck]:
+def check_offsets(game: str, tables: dict[tuple[str, str], int] | None = None) -> list[OffsetCheck]:
     """One ``OffsetCheck`` per ``SYS``/``CTX``/``MON`` field of trace_battle.lua, from
-    ``game``'s ROM (id or alias). A field with no entry in ``ACCESSES`` fails."""
+    ``game``'s ROM (id or alias), for the offsets in ``tables`` (default: the script's).
+    A field is ok only when every pinned instruction uses exactly its offset; a field with
+    no entry in ``ACCESSES`` fails."""
     rom = _Rom(game)
     out = []
-    for (table, name), offset in lua_tables().items():
+    for (table, name), offset in (lua_tables() if tables is None else tables).items():
         accesses = ACCESSES.get((table, name), ())
         per_function = [_found(rom, table, a) for a in accesses]
         found = tuple(sorted({x for f in per_function for x in f}))
-        ok = bool(per_function) and all(offset in f for f in per_function)
+        ok = bool(per_function) and all(f == (offset,) for f in per_function)
         out.append(OffsetCheck(f"{table}.{name}", offset, found, ok))
     return out
 

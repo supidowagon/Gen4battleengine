@@ -3,8 +3,9 @@
 -- DeSmuME 0.9.x (Lua 5.1 with the `bit` library): Tools > Lua Scripting > New Lua Script
 -- Window > Browse > this file > Run, then start any battle. The script finds the battle
 -- structures exactly as trace_battle.lua does, and at every turn it writes one line per
--- check with the address, the value it read and what that value should be. Each line
--- ends in OK or CHECK. It records no trace. Output: traces/probe.txt in the project folder
+-- check with the address, the value it read and what that value should be. Lines the
+-- script can judge itself end in OK or CHECK; weather and the party lines are compared by
+-- hand (or by Claude, against the save). It records no trace. Output: traces/probe.txt in the project folder
 -- (the Lua console prints the full path). Player guide: docs/tracing_kaizo.md; what each
 -- check means: docs/tracing.md, "Verifying the addresses".
 
@@ -161,7 +162,7 @@ line(string.format("probe_battle.lua: LOCATE_SPECIES %d, LOCATE_LEVEL %d", LOCAT
 
 local function battle_mon(ctx, battler) return ctx + CTX.battleMons + battler * MON.size end
 
-local turns_seen, last_turn, last_rng = 0, nil, nil
+local turns_seen, last_rng = 0, nil
 local commands = {}
 
 local function turn_checks(sys, ctx)
@@ -200,7 +201,6 @@ local function turn_checks(sys, ctx)
       m.moves[1], m.moves[2], m.moves[3], m.moves[4]))
   end
   turns_seen = turns_seen + 1
-  last_turn = turn
   commands = {}
 end
 
@@ -250,8 +250,10 @@ while true do
       if cmd ~= prev_cmd then
         commands[#commands + 1] = tostring(cmd)
         if cmd == CMD.INIT_COMMAND_SELECTION or cmd == CMD.COMMAND_SELECTION_INPUT then
-          local turn = s32(ctx + CTX.totalTurns)
-          if turn ~= last_turn then
+          -- Every entry to the command menu is a turn boundary, so a totalTurns that does
+          -- not move shows as CHECK. INPUT counts only before the first check, for a
+          -- probe located after INIT had passed.
+          if cmd == CMD.INIT_COMMAND_SELECTION or turns_seen == 0 then
             turn_checks(sys, ctx)
             print("probe: turn " .. (turns_seen - 1))
           end

@@ -126,8 +126,10 @@ static.
 tested by `tests/tools/rom/test_offsets.py`) reads the script's `SYS`, `CTX` and `MON`
 tables and, for each field, disassembles decomp functions that access it (the list in
 `ACCESSES` cites the source line of each access). It follows the struct pointer through
-each function and collects the offsets of the loads and stores of the field's width. A
-field passes when the script's offset is among them in every listed function. `MON`
+each function and pins each listed access to one instruction, using its width, whether it
+is a load or a store, the constant stored, the register used and its position. A field
+passes only when every pinned instruction uses exactly the script's offset, so the
+script giving a field its neighbour's offset fails (the tests try every such swap). `MON`
 fields are read through `battleMons[battler]`, and `MON.size` is the multiplier applied
 to the battler index. Kaizo's overlay16 code moved by +4 to +0x20 bytes, so each function
 is read at its shifted address, and its instruction sequence must match vanilla's.
