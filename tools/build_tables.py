@@ -268,14 +268,36 @@ def _kaizo_rom_changes(inter: Path, rom_diff: Path = ROM_DIFF) -> tuple[frozense
     return effects, unknown
 
 
+def _rom_intermediate(inter: Path, name: str):
+    """``inter/rom/<name>.json``, or ``BuildError`` asking for the Kaizo extraction."""
+    if not (inter / "rom" / f"{name}.json").exists():
+        raise BuildError(
+            f"no {inter / 'rom' / name}.json: re-run python -m tools.extract_rom --game kaizo"
+        )
+    return _load(inter / "rom", name)
+
+
+def _check_range(
+    rom_diff: Path, label: str, key: str, values: set[int], end: int, what: str
+) -> None:
+    """``BuildError`` naming ``label`` for a ``when.<key>`` value outside ``0..end-1``."""
+    for v in sorted(values):
+        if not 0 <= v < end:
+            raise BuildError(f"{rom_diff}: {label}: when.{key} value {v} is outside {what}")
+
+
 def resolve_conditions(inter: Path, rom_diff: Path = ROM_DIFF) -> list[dict]:
     """The ``not_reached`` conditions of ``rom_diff`` as ids, sorted by label. ``moves`` are the
     move ids whose ROM ``effect`` (the be_seq index) is in ``move_effect``; ``abilities`` and
     ``items`` are the decomp ids of the named ability or held item (exact name, case-
     insensitive); ``trainers`` are the trainers placed on a map header whose weather byte is in
     ``map_weather`` or whose id is in ``map_header`` (``rom/rom_trainer_maps.json``, joined with
-    ``rom/rom_map_weather.json`` for the weather).
-    A name that matches nothing, or a missing intermediate, raises ``BuildError``."""
+    ``rom/rom_map_weather.json`` for the weather), plus, for any such map-keyed condition,
+    every trainer with a party that no map header places (``trainers.json``).
+    A name that matches nothing, an integer outside its ROM table (a ``move_effect`` not a
+    ``be_seq`` member, ``rom/rom_script_counts.json``; a ``map_header`` not a header id; a
+    ``map_weather`` above the largest weather byte any header holds), or a missing
+    intermediate raises ``BuildError``."""
     from tools.rom.diff import load_conditions
 
     try:
@@ -298,19 +320,30 @@ def resolve_conditions(inter: Path, rom_diff: Path = ROM_DIFF) -> list[dict]:
                 if name.lower() not in names[kind]:
                     raise BuildError(f"{rom_diff}: {label}: no {kind} named {name!r}")
                 ids[kind].append(names[kind][name.lower()])
+        if effects:
+            count = _rom_intermediate(inter, "rom_script_counts")[BE_SEQ]
+            _check_range(rom_diff, label, "move_effect", effects, count, f"{BE_SEQ} members")
         trainers = []
         if weathers or map_headers:
-            for name in ("rom_trainer_maps", "rom_map_weather"):
-                if not (inter / "rom" / f"{name}.json").exists():
-                    raise BuildError(
-                        f"no {inter / 'rom' / name}.json: re-run python -m tools.extract_rom "
-                        "--game kaizo"
-                    )
-            weather = _load(inter / "rom", "rom_map_weather")
+            weather = _rom_intermediate(inter, "rom_map_weather")
+            placements = _rom_intermediate(inter, "rom_trainer_maps")
+            _check_range(rom_diff, label, "map_header", map_headers, len(weather), "map headers")
+            top = max(weather)
+            _check_range(rom_diff, label, "map_weather", weathers, top + 1, f"0..{top}")
+            # Final review I2: a trainer with a party that no map header places may be fought
+            # on any map, so every map-keyed condition lists it (safety over coverage).
+            unplaced = {
+                t["id"]
+                for t in _load(inter, "trainers")
+                if t["party"] and str(t["id"]) not in placements
+            }
             trainers = sorted(
-                int(t)
-                for t, placed in _load(inter / "rom", "rom_trainer_maps").items()
-                if any(weather[h] in weathers or h in map_headers for h in placed)
+                unplaced
+                | {
+                    int(t)
+                    for t, placed in placements.items()
+                    if any(weather[h] in weathers or h in map_headers for h in placed)
+                }
             )
         out.append(
             {

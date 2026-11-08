@@ -12,9 +12,10 @@ unchanged). Outputs are formatted by ``extract_decomp._write``.
 after the ROM diff's reuse check: trainers with the Kaizo party layout (K2b Ruling 6), map
 headers from ``d_test.narc`` (Ruling 8) and start conditions settled by
 ``data/kaizo/start_conditions.json``. It also writes ``changed_scripts.json`` (the changed
-members of the battle script NARCs, Ruling 13), ``changed_code.json`` (every changed code
-key, ``[module, symbol-or-range]``, so the build counts a key ``rom_diff.toml`` lacks as
-unknown; a stale ``[[code]]`` entry raises here) and ``rom_trainer_maps.json`` (trainer id ->
+members of the battle script NARCs, Ruling 13; ``rom_script_counts.json`` holds each one's
+member count, so the build range-checks a ``move_effect`` condition), ``changed_code.json``
+(every changed code key, ``[module, symbol-or-range]``, so the build counts a key
+``rom_diff.toml`` lacks as unknown; a stale ``[[code]]`` entry raises here) and ``rom_trainer_maps.json`` (trainer id ->
 the map headers of the trainer -> map join, for Task 13's sight pairs); the CLI appends an
 explicit ``unknown`` ``[[member]]`` entry to ``data/kaizo/rom_diff.toml`` for each changed
 member it lacks. ``rom_sources.json`` also records, under ``inputs_sha256``, the hashes of
@@ -89,6 +90,7 @@ FIELD_EFFECTS_FILE = "rom_field_effects.json"
 TRAINER_MAPS_FILE = "rom_trainer_maps.json"  # Kaizo: trainer id -> map headers (sight pairs)
 MAP_WEATHER_FILE = "rom_map_weather.json"  # Kaizo: weather byte of each map header, by header id
 CHANGED_SCRIPTS_FILE = "changed_scripts.json"
+SCRIPT_COUNTS_FILE = "rom_script_counts.json"  # Kaizo: member count of each SCRIPT_NARCS path
 CHANGED_CODE_FILE = "changed_code.json"  # Kaizo: every changed (module, symbol-or-range)
 ROM_DIFF_TOML = REPO_ROOT / "data" / "kaizo" / "rom_diff.toml"
 # Raw ROM output; data/intermediate_kaizo/*.json are the resolved files (K2b Ruling 2).
@@ -299,7 +301,7 @@ def extract(game: str, out: Path, decomp: Path, symbols: Path, inputs: RomInputs
     vanilla_files = RomFiles.open(read_checked(inputs.vanilla_rom, VANILLA_SHA1, "sha1"))
     rom, changed, code = vanilla_files, None, None
     if game == "kaizo":
-        from tools.rom.diff import changed_code, changed_scripts
+        from tools.rom.diff import SCRIPT_NARCS, changed_code, changed_scripts
 
         rom, diff = _kaizo_checks(inputs, decomp, symbols, vanilla_files)
         changed, code = changed_scripts(diff), changed_code(diff)
@@ -369,6 +371,7 @@ def extract(game: str, out: Path, decomp: Path, symbols: Path, inputs: RomInputs
         if changed is not None:
             _write(stage / CHANGED_SCRIPTS_FILE, changed)
             _write(stage / CHANGED_CODE_FILE, code)
+            _write(stage / SCRIPT_COUNTS_FILE, {p: len(rom.narc(p)) for p in SCRIPT_NARCS})
             _write(stage / FIELD_EFFECTS_FILE, _report_kaizo(tables["trainers"], effects))
             _write(stage / TRAINER_MAPS_FILE, {str(t): h for t, h in where.items()})
             _write(stage / MAP_WEATHER_FILE, [w for _, _, w in map_header_rows(rom, smap)])
@@ -390,6 +393,7 @@ def extract(game: str, out: Path, decomp: Path, symbols: Path, inputs: RomInputs
         if changed is not None:
             sources[CHANGED_SCRIPTS_FILE] = "rom diff"
             sources[CHANGED_CODE_FILE] = "rom diff (names and address ranges only)"
+            sources[SCRIPT_COUNTS_FILE] = "rom: member count of each battle script NARC"
             sources[FIELD_EFFECTS_FILE] = "rom: map weather through the battle weather switch"
             sources[TRAINER_MAPS_FILE] = "rom: trainer -> map header join (map scripts, events)"
             sources[MAP_WEATHER_FILE] = "rom: map header weather byte (the raw id, per header)"

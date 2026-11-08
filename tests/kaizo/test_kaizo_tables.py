@@ -108,14 +108,62 @@ def test_map_weather_resolves_to_trainers(tmp_path, kaizo_intermediate):
     assert c["trainers"] and {r["id"] for r in rows} <= set(c["trainers"])
 
 
+def _rom_json(inter, name):
+    return json.loads((inter / "rom" / f"{name}.json").read_text("utf-8"))
+
+
+def _unplaced(inter):
+    """The ids of the trainers with a party that no map header places."""
+    placed = _rom_json(inter, "rom_trainer_maps")
+    trainers = json.loads((inter / "trainers.json").read_text("utf-8"))
+    return sorted(t["id"] for t in trainers if t["party"] and str(t["id"]) not in placed)
+
+
+def _resolve_when(tmp_path, inter, when):
+    return resolve_conditions(inter, _write(tmp_path, MEMBER88 + f"when={{{when}}}\n"))
+
+
 def test_map_header_resolves_to_its_trainers(tmp_path, kaizo_intermediate):
-    placed = json.loads((kaizo_intermediate / "rom" / "rom_trainer_maps.json").read_text("utf-8"))
+    placed = _rom_json(kaizo_intermediate, "rom_trainer_maps")
     want = sorted(int(t) for t, headers in placed.items() if 293 in headers)
-    (c,) = resolve_conditions(
-        kaizo_intermediate, _write(tmp_path, MEMBER88 + "when={map_header=[293]}\n")
-    )
-    assert want and c["trainers"] == want and c["moves"] == []
+    (c,) = _resolve_when(tmp_path, kaizo_intermediate, "map_header=[293]")
+    assert want and c["trainers"] == sorted(want + _unplaced(kaizo_intermediate))
+    assert c["moves"] == []
     assert 246 not in c["trainers"]  # Roark is on header 47
+
+
+@pytest.mark.parametrize("when", ["map_header=[293]", "map_weather=[18]"])
+def test_unplaced_trainers_join_every_map_condition(tmp_path, kaizo_intermediate, when):
+    # Final review I2 (controller ruling): a trainer with a party but no map placement may be
+    # fought on any map, so every map-keyed condition lists it (safety over coverage).
+    unplaced = _unplaced(kaizo_intermediate)
+    assert unplaced
+    (c,) = _resolve_when(tmp_path, kaizo_intermediate, when)
+    assert set(unplaced) <= set(c["trainers"])
+    (c,) = _resolve_when(tmp_path, kaizo_intermediate, "move_effect=[88]")
+    assert c["trainers"] == []
+
+
+def test_out_of_range_when_ints_fail_build(tmp_path, kaizo_intermediate):
+    # Final review M2: an integer the ROM tables cannot hold fails the build, naming its entry.
+    weather = _rom_json(kaizo_intermediate, "rom_map_weather")
+    count = _rom_json(kaizo_intermediate, "rom_script_counts")["battle/skill/be_seq.narc"]
+    bad = [
+        ("map_header", len(weather)),
+        ("map_header", -1),
+        ("map_weather", max(weather) + 1),
+        ("map_weather", 256),
+        ("map_weather", -1),
+        ("move_effect", count),
+        ("move_effect", -1),
+    ]
+    for key, value in bad:
+        with pytest.raises(BuildError, match=rf"be_seq.narc#88: when.{key} value {value}\b"):
+            _resolve_when(tmp_path, kaizo_intermediate, f"{key}=[{value}]")
+    edge = (
+        f"map_header=[{len(weather) - 1}], map_weather=[{max(weather)}], move_effect=[{count - 1}]"
+    )
+    assert _resolve_when(tmp_path, kaizo_intermediate, edge)
 
 
 def test_unresolved_name_fails_build(tmp_path, kaizo_intermediate):

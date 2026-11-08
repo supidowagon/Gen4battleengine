@@ -130,7 +130,9 @@ are unchanged, and then runs every reader on the patched ROM (K2b Task 8):
 - `changed_scripts.json`: the changed members of `battle/skill/be_seq.narc`,
   `battle/skill/sub_seq.narc` and `battle/tr_ai/tr_ai_seq.narc`, each classified by a
   `[[member]]` entry in `data/kaizo/rom_diff.toml` (a stale entry fails the run; the CLI appends
-  an `unknown` entry for each missing one and says so).
+  an `unknown` entry for each missing one and says so); `rom_script_counts.json` holds each of
+  those NARCs' member counts, so the build fails a `move_effect` condition that names no
+  `be_seq` member.
 
 ## Known Kaizo differences
 

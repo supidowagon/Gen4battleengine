@@ -193,7 +193,9 @@ fight label prefix). No rebuild needed.
   `when` condition) and `unknown`. `when` keys: `format`, `area_condition`, `move_effect`,
   `ability`, `held_item`, `map_weather`, `map_header`, `trainer_items`. Coverage evaluates
   `when` per fight (and per pool candidate), so a `not_reached` entry refuses only the
-  fights that reach it. An `unknown` entry refuses every Kaizo fight. A change with no entry
+  fights that reach it. A `map_weather` or `map_header` condition also lists every trainer
+  with a party that no map header places (safety over coverage: such a trainer may be fought
+  on any map). An `unknown` entry refuses every Kaizo fight. A change with no entry
   still counts as `unknown`. A move whose battle script the patch changed is refused as
   unsupported only when its `be_seq` member is `not_reached` for that move effect.
 - **AI (14).** Only the vanilla trainer AI is transcribed. Kaizo fights are refused on the AI
