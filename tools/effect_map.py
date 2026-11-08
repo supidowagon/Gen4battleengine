@@ -77,7 +77,22 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     24: ("BATTLE_EFFECT_EVA_DOWN", _E.STAT_FOE, (_EVA, -1, 0)),
     29: ("BATTLE_EFFECT_MULTI_HIT", _E.MULTI_HIT, (0, 0, 0)),
     31: ("BATTLE_EFFECT_FLINCH_HIT", _E.FLINCH, (0, 0, 0)),
+    # Swift, Shock Wave, Kaizo's Aurora Beam: effect_script_0017.s is CalcCrit, CalcDamage;
+    # the never-miss comes from accuracy 0.
+    17: ("BATTLE_EFFECT_BYPASS_ACCURACY", _E.PLAIN, (0, 0, 0)),
+    # Toxic: effect_script_0033.s sets a direct TO_DEFENDER badly-poison subscript; its
+    # immunities (Poison, Steel, Immunity, Leaf Guard in sun, status, Safeguard, substitute)
+    # are can_have_status's, and it skips the type chart like Poison Powder (effect 66).
+    33: ("BATTLE_EFFECT_STATUS_BADLY_POISON", _E.STATUS_FOE, (Status.TOXIC, 0, 0)),
+    # Pay Day: effect_script_0034.s, a hit plus subscript_pay_day.s (prize money only).
+    34: ("BATTLE_EFFECT_INCREASE_PRIZE_MONEY", _E.PLAIN, (0, 0, 0)),
     42: ("BATTLE_EFFECT_BIND_HIT", _E.TRAP, (0, 0, 0)),
+    # Gust: effect_script_0149.s doubles the power against MOVE_EFFECT_AIRBORNE (Fly,
+    # Bounce), which no supported move sets (test_gust_note_holds).
+    149: ("BATTLE_EFFECT_DOUBLE_DAMAGE_FLY_OR_BOUNCE", _E.PLAIN, (0, 0, 0)),
+    # Sand Tomb (Kaizo), Whirlpool: effect_script_0261.s is Bind's script (the same
+    # BIND_TARGET indirect effect) plus a x2 against MOVE_EFFECT_UNDERWATER (Dive, unsupported).
+    261: ("BATTLE_EFFECT_WHIRLPOOL", _E.TRAP, (0, 0, 0)),
     43: ("BATTLE_EFFECT_HIGH_CRITICAL", _E.HIGH_CRIT, (0, 0, 0)),
     # subscript_recoil_1_4: damage / 4 == damage * 25 // 100
     48: ("BATTLE_EFFECT_RECOIL_QUARTER", _E.RECOIL, (25, 0, 0)),

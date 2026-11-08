@@ -124,3 +124,87 @@ def test_thaw_flag_matches_the_self_thaw_check():
     }
     assert flagged <= thawing
     assert thawing - flagged <= thawing - set(DECOMP_EFFECT_NAMES.values())
+
+
+# move -> (EffectId, params) in every game that has the move with that decomp effect.
+_TOXIC = (EffectId.STATUS_FOE, (6, 0, 0))  # Status.TOXIC; Toxic is not type-checked
+_PLAIN = (EffectId.PLAIN, (0, 0, 0))
+_VANILLA_MAPPED = {
+    "Toxic": _TOXIC,
+    "Swift": _PLAIN,
+    "Shock Wave": _PLAIN,
+    "Pay Day": _PLAIN,
+    "Gust": _PLAIN,
+}
+_KAIZO_MAPPED = {
+    **_VANILLA_MAPPED,
+    "Sand Tomb": (EffectId.TRAP, (0, 0, 0)),  # Kaizo effect 261 (Whirlpool's script)
+    "Aurora Beam": _PLAIN,  # Kaizo effect 17; vanilla's Aurora Beam lowers Attack
+}
+
+
+def _check_mapped(tables, names, vanilla_names, expected):
+    from dataclasses import replace
+
+    from nuzline.engine.coverage import Support
+    from nuzline.prep.pool import Candidate, check_pool
+    from tests.engine.helpers import sample_party
+
+    for move, (eid, params) in expected.items():
+        m = names.move(move)
+        assert int(tables.move_effect[m]) == eid, move
+        assert tuple(int(x) for x in tables.move_param[m]) == params, move
+    moves = list(expected)
+    for i in range(0, len(moves), 4):
+        chunk = moves[i : i + 4]
+        ids = [names.move(m) for m in chunk]
+        spec = replace(sample_party(vanilla_names, {})[0], moves=tuple(ids + [0] * (4 - len(ids))))
+        cand = Candidate(("party", 0, 0), "P", spec, 0, (), ())
+        report = check_pool(tables, names, [cand])
+        assert [ln for ln in report.missing if "move effect" in ln] == [], chunk
+
+
+def test_mapping_only_moves(tables, names, kaizo_tables, kaizo_names):
+    """Toxic, Swift, Shock Wave, Pay Day, Gust (and Kaizo's Sand Tomb and Aurora Beam) map to
+    an effect the engine has, and the pool grades their move rows EXACT."""
+    _check_mapped(tables, names, names, _VANILLA_MAPPED)
+    _check_mapped(kaizo_tables, kaizo_names, names, _KAIZO_MAPPED)
+
+
+def test_mapping_only_scripts_do_what_the_effect_does():
+    """The decomp scripts behind the mapping-only effects carry nothing the target effect lacks."""
+    s17, s34, s149 = _script(17), _script(34), _script(149)
+    assert re.findall(r"^\s+([A-Z]\w+)", s17, re.M) == ["CalcCrit", "CalcDamage", "End"]
+    # Pay Day: a damage hit plus the money subscript only
+    assert "MOVE_SUBSCRIPT_PTR_PAY_DAY" in s34 and "CalcDamage" in s34
+    assert _script(33).count("UpdateVar") == 1 and "MOVE_SUBSCRIPT_PTR_BADLY_POISON" in _script(33)
+    # Sand Tomb: Whirlpool's script is Bind's (effect 42) plus the dive double
+    s42, s261 = _script(42), _script(261)
+    assert "MOVE_SUBSCRIPT_PTR_BIND_TARGET" in s42 and "MOVE_SUBSCRIPT_PTR_BIND_TARGET" in s261
+    assert "SYSCTL_HIT_DURING_DIVE" in s261 and "MOVE_EFFECT_UNDERWATER" in s261
+    # Gust: x2 only against an airborne defender
+    assert "MOVE_EFFECT_AIRBORNE" in s149 and "BTLVAR_POWER_MULTI, 20" in s149
+
+
+def test_gust_note_holds(tables, names, kaizo_tables, kaizo_names):
+    """Gust's x2 against Fly/Bounce (effect 149) and Whirlpool's against Dive (effect 261) are
+    unreachable only while the moves that set MOVE_EFFECT_AIRBORNE / MOVE_EFFECT_UNDERWATER stay
+    unsupported: Fly (155), Dive (255) and Bounce (263). Kaizo rewrites Dive to a plain hit
+    and Bounce to a Paralyze-hit (no semi-invulnerable turn). When one becomes supported, the
+    double is reachable, and this test fails."""
+    assert not {155, 255, 263} & set(DECOMP_EFFECT_TO_ID)
+    for t, n in ((tables, names), (kaizo_tables, kaizo_names)):
+        assert int(t.move_effect[n.move("Fly")]) == EffectId.UNSUPPORTED
+    assert int(tables.move_effect[names.move("Dive")]) == EffectId.UNSUPPORTED
+    assert int(tables.move_effect[names.move("Bounce")]) == EffectId.UNSUPPORTED
+    for move in ("Dive", "Bounce"):
+        scripts = {_script(e) for e in (0, 6)}  # Kaizo's Dive and Bounce effects
+        assert all("MOVE_EFFECT_AIRBORNE" not in s and "UNDERWATER" not in s for s in scripts)
+        assert int(kaizo_tables.move_effect[kaizo_names.move(move)]) != EffectId.UNSUPPORTED
+
+
+def test_whirlpool_bind_matches_bind():
+    """Sand Tomb runs the same bind subscript as Bind: duration Random 3, 3 (3..5), 6 with
+    Grip Claw, and no dive state is reachable (Dive is unsupported)."""
+    text = (DECOMP / "res/battle/scripts/subscripts/subscript_bind_start.s").read_text("utf-8")
+    assert "Random 3, 3" in text and "0x00000006" in text
