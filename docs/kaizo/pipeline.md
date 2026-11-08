@@ -186,12 +186,16 @@ fight label prefix). No rebuild needed.
   (`"barry #3"`) or use `--trainer-id`.
 - **Resolutions (12).** As above: explicit keys, a reason and evidence; the ROM value is the
   default, and overruling the ROM needs an emulator trace.
-- **Unclassified ROM changes (13).** The patch changes game code and battle scripts that are
-  not yet classified in `data/kaizo/rom_diff.toml` (the count is the last user call in the
-  report). Until they are, each one is assumed to matter to every fight, so **every Kaizo
-  fight is refused today**. The count is taken against what the patch changed, so a change
-  whose entry is missing from `rom_diff.toml` still counts as unclassified. A move whose
-  battle script the patch changed is unsupported until that script is modelled.
+- **ROM changes (13).** Every code change and changed battle-script member of the patch has
+  an entry in `data/kaizo/rom_diff.toml` with a decoded note. Statuses: `modelled` (the
+  engine does what the patched code does), `irrelevant` (cannot change a battle outcome or
+  an AI choice; the note says why), `not_reached` (battle-relevant, not modelled, with a
+  `when` condition) and `unknown`. `when` keys: `format`, `area_condition`, `move_effect`,
+  `ability`, `held_item`, `map_weather`, `map_header`, `trainer_items`. Coverage evaluates
+  `when` per fight (and per pool candidate), so a `not_reached` entry refuses only the
+  fights that reach it. An `unknown` entry refuses every Kaizo fight. A change with no entry
+  still counts as `unknown`. A move whose battle script the patch changed is refused as
+  unsupported only when its `be_seq` member is `not_reached` for that move effect.
 - **AI (14).** Only the vanilla trainer AI is transcribed. Kaizo fights are refused on the AI
   until the Kaizo AI is transcribed (milestone K3).
 - **Level caps (15).** From `data/kaizo/level_caps.toml`. The Galactic split cap is 100,
@@ -228,10 +232,16 @@ each; "Settling a user call" above says how to enter an answer. The kinds:
   (Route 213 is rain and Idol Catherine #2 fog, by your answers).
 - **Gravity** whose entry cites PKCalc while no sheet row claims it (Champion Cynthia cites
   the sheet row Elite Four Split:298).
-- **Unclassified ROM changes** (Ruling 13).
+- **Unclassified ROM changes** (Ruling 13): two remain, both `unknown` (see "What is refused").
 
 ## What is refused
 
 `coverage --game kaizo` exits 2 and lists every reason. For Roark today that includes the
-Kaizo AI line, the unclassified ROM changes, `Battle start: Sandstorm (weather
-UNSUPPORTED)`, and Roark's unsupported moves, abilities and items.
+Kaizo AI lines (no policy, `AI_FLAG_RISKY`, per-move script paths), `Kaizo ROM: 2 code changes
+unclassified`, `Battle start: Sandstorm (weather UNSUPPORTED)`, and Roark's unsupported moves,
+abilities and items. The two `unknown` ROM changes are overlay16
+`BattleControllerPlayer_CheckObedience` (Kaizo: every Pokemon always obeys, no RNG draw; K3b)
+and overlay14 0x022249CC-0x022249CD (the AI script's second Levitate compare in
+`Basic_CheckForImmunity` tests Dry Skin 87; K3c). Known blind spot: Kaizo field-script command
+0x3F (map headers 257 and 321, common script 9019) sets a party status that persists into
+fights on any map; coverage sees it only if the save was taken after that script.

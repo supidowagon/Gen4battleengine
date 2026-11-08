@@ -233,6 +233,17 @@ without a decoded note is not allowed.
 - `be_seq` and `sub_seq` members: `not_reached` with a move-effect or area-condition
   condition, unless a pool move uses them.
 
+**K3a outcome (2026-11-08): where decoding moved work.**
+
+- overlay14: the AI script (gTrainerAITable) equals vanilla's except one word (Dry Skin 87 in
+  the second Levitate compare of `Basic_CheckForImmunity`); every other overlay14 change is a
+  re-encoded call. K3c needs almost nothing beyond Dry Skin.
+- overlay16: only `CheckObedience` stays `unknown` (always obeys, no RNG draw; K3b).
+- `be_seq` 48, 88, 104, 141, 182: `not_reached` with `move_effect`; Roark and the pre-Roark
+  pool use none of them.
+- Battle-RAM offsets are statically verified against both ROMs (`tools/rom/offsets.py`); the
+  in-emulator probe is pending.
+
 ## 6. The Kaizo trainer AI
 
 - **A per-game policy.** The Kaizo policy reuses the vanilla script transcription where
