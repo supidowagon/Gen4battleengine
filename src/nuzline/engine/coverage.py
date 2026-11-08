@@ -25,13 +25,14 @@ items) and plan 1b (Task 2b: trainer items; Task 3: Roark's AI flags) implement:
 
 * move effects: every ``ids.EffectId`` but ``UNSUPPORTED``. Moves the tables map to
   ``UNSUPPORTED`` include every move that sets weather, Reflect, Light Screen, Tailwind
-  or Trick Room: the engines have no ``CheckFieldConditions`` pass (step.py), so those
-  stay unsupported (plan ruling);
+  or Trick Room: the engines' ``CheckFieldConditions`` pass (``step.field_conditions``)
+  counts screens and weather down, but those moves are not modelled yet (plan ruling);
 * abilities, held items, trainer items: every member but ``UNSUPPORTED``;
 * AI flags: bits 0-2 (``AI_FLAG_BASIC``, ``AI_FLAG_EVAL_ATTACK``, ``AI_FLAG_EXPERT``).
   ``ai.policy`` always runs those three scripts, so a trainer must have exactly them;
-* weather: only ``Weather.NONE``. Rain, sun, sandstorm, hail and fog need the
-  field-condition pass and are refused (plan ruling);
+* weather: only ``Weather.NONE``. Rain, sun, sandstorm, hail and fog are refused until
+  every weather effect they touch is modelled (plan ruling; the field-condition pass
+  exists, ``step.field_conditions``);
 * in-battle form changes (plan K2a Ruling 8), on either side: Giratina-Origin without the
   Griseous Orb reverts to Altered Forme at battle start (``battle_lib.c:6412-6417``,
   ``subscript_form_change``) and Shaymin-Sky reverts to Land Forme when frozen

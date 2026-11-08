@@ -37,6 +37,7 @@ LISTED = [
     "nuzline.ai.switching._TYPE_STEEL",
     "nuzline.engine.ids.Type",
     "nuzline.engine.ids.MOVE_STRUGGLE",
+    "nuzline.engine.ids.WEATHER_ABILITY_IDS",
     "nuzline.engine.stats.SPECIES_SHEDINJA",
     "nuzline.ai.switching.MOVE_STRUGGLE",
     "nuzline.prep.problem.HEART_SCALE",

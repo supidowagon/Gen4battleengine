@@ -169,6 +169,20 @@ CONSTANTS: tuple[Constant, ...] = (
     *_table("nuzline.engine.ids.Type", "type", _E, _TYPES),
     # MOVE_STRUGGLE (generated/moves.txt line 166).
     Constant("nuzline.engine.ids.MOVE_STRUGGLE", "move", 165, "Struggle", _E),
+    # The weather code's decomp abilities (generated/abilities.txt line N is id N-1).
+    *_table(
+        "nuzline.engine.ids.WEATHER_ABILITY_IDS",
+        "ability",
+        _E,
+        {
+            "Sand Veil": 8,
+            "Cloud Nine": 13,
+            "Air Lock": 76,
+            "Snow Cloak": 81,
+            "Magic Guard": 98,
+            "Ice Body": 115,
+        },
+    ),
     Constant("nuzline.ai.switching.MOVE_STRUGGLE", "move", 165, "Struggle", _E),
     # Thunder Wave: BattleControllerPlayer_CheckTypeChart's MOVE_THUNDER_WAVE
     # (src/battle/battle_controller_player.c:2357).

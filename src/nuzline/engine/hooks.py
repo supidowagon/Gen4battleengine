@@ -45,9 +45,10 @@ reveals nothing.
 Abilities handled elsewhere: Blaze, Torrent, Overgrow, Rivalry, Guts, Unaware,
 Simple and Mold Breaker in ``damage.py``; Keen Eye, Inner Focus, Rock Head,
 Static and Poison Point in ``effects.py``; Steadfast, Natural Cure and Shed Skin in
-``step.py``, Compoundeyes in ``outcome.py``. Cloud Nine has no behaviour: every decomp
-branch on it is a weather branch (``NO_CLOUD_NINE``, include/battle/common.h:63) and
-coverage refuses every weather but none. Sturdy only blocks OHKO moves in Gen 4, and
+``step.py``, Compoundeyes in ``outcome.py``. Cloud Nine: every decomp branch on it is a
+weather branch (``NO_CLOUD_NINE``, include/battle/common.h:63); the end-of-turn weather
+chip honours it (``damage.weather_suppressed``, read by decomp ability id), and coverage
+refuses every weather but none. Sturdy only blocks OHKO moves in Gen 4, and
 none is in M1, so it has no hook.
 """
 

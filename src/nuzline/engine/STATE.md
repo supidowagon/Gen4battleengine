@@ -65,6 +65,12 @@ three structs has a row.
   `tailwind`, Lucky Chant turns -> `lucky_chant`. Its Reflect, Light Screen,
   Spikes, Safeguard, Mist, Toxic Spikes, Future Sight and Wish bits are implied by
   the nonzero turn/layer counts in the mapped fields.
+- **The field-condition pass** (`step.field_conditions`,
+  `BattleControllerPlayer_CheckFieldConditions`, battle_controller_player.c:932-1254)
+  counts down `reflect`, `light_screen`, `mist`, `safeguard`, `tailwind`, `lucky_chant`,
+  a temporary weather's `weather_timer` (the weather ends at 0) and `gravity`; a turn
+  count of 0 is the condition's mask bit clear. `wish_timer` (Wish's heal) and
+  `trick_room` (the turn end's side-condition pass, :1823-1826) are not counted down yet.
 - **moveLockedInto -> `locked_move`**, not `charge_turn`: it holds the move id a
   battler is locked into for its next turn (Bide, Rollout; charge-up moves are
   later, M6), and `charge_turn` is an `int8` flag that cannot hold a move id.

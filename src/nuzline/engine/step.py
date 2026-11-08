@@ -8,7 +8,10 @@ Pure, jit- and vmap-able, fixed shapes; every random event comes from
 3. ``execute_actions``: the first actor, a faint check, the second actor, a faint
    check (``BattleControllerPlayer_CheckAnyFainted`` after each action). A switch
    facing Pursuit is preceded by the Pursuit hit and its own faint check.
-4. ``end_of_turn``: the checks of ``END_OF_TURN_ORDER`` for each battler in
+4. ``field_conditions``: ``BattleControllerPlayer_CheckFieldConditions``
+   (battle_controller_player.c:932-1254): the side-condition countdowns, the weather
+   countdown and the sandstorm / hail chip with one faint check after it, then Gravity.
+   ``end_of_turn``: the checks of ``END_OF_TURN_ORDER`` for each battler in
    ``end_of_turn_order``, each followed by a faint check (the decomp re-enters
    ``BattleControllerPlayer_CheckMonConditions``, battle_controller_player.c:1289,
    through ``AnyFainted`` / ``CheckBattleOver`` after every check that ran a script).
@@ -35,8 +38,8 @@ switching (with Natural Cure) and the switch-in hooks
 accuracy check, PP, Struggle, the move effects of ``effects.py``, the berry check
 after every hit (``hooks.after_damage_items``), Pursuit's pre-switch hit, the sleep,
 freeze, flinch, Taunt, confusion and paralysis checks before a move, the held-item,
-Leech Seed, poison, toxic, burn, Bind and Taunt end-of-turn checks, faints and the
-end of the battle. A player faint is a death, not the end (spec §4): the battle ends
+Leech Seed, poison, toxic, burn, Bind and Taunt end-of-turn checks, the field-condition
+pass (``field_conditions``), faints and the end of the battle. A player faint is a death, not the end (spec §4): the battle ends
 when a side has no Pokemon with HP left. A state that is already over is returned unchanged.
 
 ``step_events`` plays the same turn and also returns what each action showed (the move
@@ -44,12 +47,9 @@ used and the result of each status check, hits and crits: ``ACT_*``, ``EVENT_FLA
 recorded where ``_use_move`` and ``execute_actions`` run it; ``engine.observe`` builds
 the player's observation from them, ``step`` drops them.
 
-Not implemented (M6): the decomp's ``BattleControllerPlayer_CheckFieldConditions``
-pass (battle_controller_player.c:932): hail and sandstorm chip damage and the
-Reflect, Light Screen, Tailwind and Trick Room countdowns. A state with
-``Weather.HAIL`` / ``Weather.SANDSTORM`` or a nonzero screen/Tailwind/Trick Room timer
-is stepped with none of them, so M1b's coverage registry must mark those as unsupported
-(docs/discrepancies.md, "Not implemented in either engine").
+Not implemented: Wish's heal in the field pass (no supported move sets ``wish_timer``) and
+the Trick Room countdown of the turn end's side-condition pass
+(battle_controller_player.c:1823-1826): a nonzero ``trick_room`` never counts down.
 """
 
 from __future__ import annotations
@@ -59,7 +59,7 @@ import jax.numpy as jnp
 
 from nuzline.data.tables import Tables
 from nuzline.engine.actions import FIRST_ITEM_ACTION, locked_slot
-from nuzline.engine.damage import confusion_damage
+from nuzline.engine.damage import confusion_damage, decomp_abilities, weather_suppressed
 from nuzline.engine.effects import (
     apply_move_effect,
     change_stage,
@@ -76,12 +76,15 @@ from nuzline.engine.hooks import (
 )
 from nuzline.engine.ids import (
     POTION_HP_RESTORED,
+    WEATHER_ABILITY_IDS,
     AbilityId,
     EffectId,
     MoveTarget,
     Stat,
     Status,
     TrainerItemId,
+    Type,
+    Weather,
 )
 from nuzline.engine.order import (
     MOVE_ACTIONS,
@@ -980,14 +983,113 @@ def end_of_turn_order(state: BattleState, outcome: Outcome) -> jnp.ndarray:
     return jnp.stack([first, 1 - first])
 
 
+# The side conditions FIELD_COND_CHECK_STATE_REFLECT .. _LUCKY_CHANT count down, in this
+# order (battle_controller_player.c:947-1083).
+FIELD_SIDE_TIMERS = ("reflect", "light_screen", "mist", "safeguard", "tailwind", "lucky_chant")
+# The weathers with a countdown (FIELD_COND_CHECK_STATE_RAINING .. _HAILING, :1113-1211);
+# deep fog (:1213-1225) only prints a message.
+_TIMED_WEATHERS = (Weather.RAIN, Weather.SANDSTORM, Weather.SUN, Weather.HAIL)
+
+
+def _count_down(x: jnp.ndarray) -> jnp.ndarray:
+    return x - (x > 0).astype(x.dtype)
+
+
+def _weather_effect(tables: Tables, state: BattleState, side, ability) -> BattleState:
+    """``BtlCmd_EndOfTurnWeatherEffect`` (battle_script.c:5561-5647) for ``side``'s active
+    Pokemon with HP left, then ``subscript_weather_continues.s``'s HP update. Sandstorm:
+    ``BattleSystem_Divide(maxHP * -1, 16)`` unless a type is Rock, Steel or Ground or the
+    ability is Sand Veil (:5573-5583). Hail: Ice Body heals ``Divide(maxHP, 16)`` below full
+    HP, else the same chip unless a type is Ice or the ability is Snow Cloak. The script
+    skips a chip (not a heal) for Magic Guard (``CheckAbility ... ABILITY_MAGIC_GUARD``).
+    ``ability`` is ``damage.decomp_abilities``; the caller applies ``NO_CLOUD_NINE``.
+    Rain and sun act only through abilities no table maps (Dry Skin, Solar Power, Rain
+    Dish, Hydration: ``AbilityId.UNSUPPORTED``, refused by coverage), so nothing here.
+    ``MOVE_EFFECT_NO_WEATHER_DAMAGE`` (Dig / Dive) cannot be set: no charge move is
+    supported."""
+    mon = state.active[side]
+    hp, max_hp = state.hp[side, mon].astype(_I32), state.max_hp[side, mon].astype(_I32)
+    types = state.types[side, mon]
+    ab = ability[side, mon]
+
+    def has(t):
+        return jnp.any(types == t)
+
+    sixteenth = jnp.maximum(max_hp // 16, 1)
+    sand = (
+        (state.weather == Weather.SANDSTORM)
+        & ~has(Type.ROCK)
+        & ~has(Type.STEEL)
+        & ~has(Type.GROUND)
+        & (ab != WEATHER_ABILITY_IDS["Sand Veil"])
+    )
+    hail = state.weather == Weather.HAIL
+    ice_body = hail & (ab == WEATHER_ABILITY_IDS["Ice Body"])
+    hail_chip = hail & ~ice_body & ~has(Type.ICE) & (ab != WEATHER_ABILITY_IDS["Snow Cloak"])
+    chip = (sand | hail_chip) & (ab != WEATHER_ABILITY_IDS["Magic Guard"])
+    heal = ice_body & (hp < max_hp)
+    delta = jnp.where(chip, -sixteenth, jnp.where(heal, sixteenth, 0))
+    return _hp_change(state, side, mon, jnp.where(hp > 0, delta, 0))
+
+
+def field_conditions(tables: Tables, state: BattleState, sides) -> BattleState:
+    """``BattleControllerPlayer_CheckFieldConditions`` (battle_controller_player.c:
+    932-1254), between the actions and ``end_of_turn``; nothing runs once the battle is
+    over (``CheckBattleOver`` before every step, :939-944). In order:
+
+    1. ``FIELD_SIDE_TIMERS``, side 0 then side 1: a nonzero count drops by 1 and the
+       condition ends at 0 (``--reflectTurns == 0``, :947-1083).
+    2. Wish (:1085-1111) is not implemented: no supported move sets ``wish_timer``.
+    3. The weather: a temporary one (``weather_timer != 0``) drops its count and ends at 0
+       with no effect that turn (``subscript_sandstorm_end.s`` and the like); a permanent
+       one (``*_PERM``, ``weather_timer == 0``) never ends. A weather that goes on runs
+       ``_weather_effect`` for each battler in ``sides`` (``monSpeedOrder``, sorted after
+       the last action, :887) unless ``damage.weather_suppressed``. Deep fog never counts
+       down (:1213-1225). The faints the chip causes are checked once, after both
+       battlers (``BATTLE_SUBSCRIPT_FAINT_MON`` inside the subscript; the battle end only
+       when the loop resumes, :939-944): two last Pokemon down at once is a draw, a loss.
+    4. Gravity (:1227-1238) drops by 1.
+
+    Trick Room counts down in the turn end's side-condition pass (:1823-1826), not here,
+    and is not implemented."""
+    live = state.over == 0
+    counted = state._replace(
+        **{name: _count_down(getattr(state, name)) for name in FIELD_SIDE_TIMERS}
+    )
+    weather = state.weather
+    timed = jnp.isin(weather, jnp.array(_TIMED_WEATHERS, weather.dtype))
+    countdown = timed & (state.weather_timer != 0)
+    timer = jnp.where(countdown, state.weather_timer - 1, state.weather_timer)
+    ended = countdown & (timer == 0)
+    counted = counted._replace(
+        weather=jnp.where(ended, Weather.NONE, weather).astype(weather.dtype),
+        weather_timer=timer.astype(state.weather_timer.dtype),
+    )
+    state = _where(live, counted, state)
+
+    before = state
+    ability = decomp_abilities(tables, state)
+    effects = live & ~ended & ~weather_suppressed(tables, state)
+    for position in (0, 1):
+        side = sides[position]
+        state = _where(effects, _weather_effect(tables, state, side, ability), state)
+    state = _faint_check(before, state)
+
+    gravity = _count_down(state.gravity)
+    return state._replace(gravity=jnp.where(state.over == 0, gravity, state.gravity))
+
+
 def end_of_turn(
-    tables: Tables, state: BattleState, actions, outcome: Outcome, order
+    tables: Tables, state: BattleState, actions, outcome: Outcome, order, sides=None
 ) -> BattleState:
     """Phase 4: ``BattleControllerPlayer_CheckMonConditions`` (battle_controller_player.c:
     1289) runs every check of ``END_OF_TURN_ORDER`` for one battler, then for the next,
-    in ``end_of_turn_order``; a faint check follows each, and nothing runs once the
-    battle is over. Flinch lasts only for the turn it is set in."""
-    sides = end_of_turn_order(state, outcome)
+    in ``sides`` (``end_of_turn_order`` of the state after the actions: ``monSpeedOrder``
+    is sorted once, before ``field_conditions``, so a Tailwind that ended there still
+    counts); a faint check follows each, and nothing runs once the battle is over.
+    Flinch lasts only for the turn it is set in."""
+    if sides is None:
+        sides = end_of_turn_order(state, outcome)
     for position in (0, 1):
         side = sides[position]
         for name, check in END_OF_TURN_ORDER:
@@ -1033,7 +1135,9 @@ def step_events(
     ``EVENT_FLAGS``; ``order`` (``action_order``) and ``pursuit``."""
     actions = jnp.asarray(actions, _I32)
     s, events, order = _action_phase(tables, state, actions, outcome)
-    s = end_of_turn(tables, s, actions, outcome, order)
+    sides = end_of_turn_order(s, outcome)
+    s = field_conditions(tables, s, sides)
+    s = end_of_turn(tables, s, actions, outcome, order, sides)
     s = _unlock_sleepers(s)
     s = s._replace(turn=(s.turn + 1).astype(s.turn.dtype))
     return _where(state.over != 0, state, s), events

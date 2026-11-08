@@ -33,6 +33,7 @@ from dataclasses import dataclass, field
 from nuzline.engine.ids import (
     MOVE_STRUGGLE,
     POTION_HP_RESTORED,
+    WEATHER_ABILITY_IDS,
     AbilityId,
     EffectId,
     ItemId,
@@ -1150,12 +1151,90 @@ def _speed_order(s: RefState, o) -> list[int]:
     return [1, 0] if _player_second(s, (0, 0), o.end_speed_tie) else [0, 1]
 
 
-def _end_of_turn(turn: _Turn, s: RefState) -> None:
+def _decomp_ability(tables, mon: RefPokemon) -> int:
+    """``Battler_Ability``: the decomp ability id at the Pokemon's personal row and
+    ability slot."""
+    row = _t(tables, "species_form_row", mon.species, mon.form)
+    return _t(tables, "species_abilities_decomp", row, mon.ability_slot)
+
+
+def _weather_suppressed(tables, s: RefState) -> bool:
+    """Not ``NO_CLOUD_NINE`` (include/battle/common.h:63-64): an active battler with HP
+    left (``COUNT_ALIVE_BATTLERS``) has Cloud Nine or Air Lock."""
+    locks = (WEATHER_ABILITY_IDS["Cloud Nine"], WEATHER_ABILITY_IDS["Air Lock"])
+    return any(
+        _active(s, side).hp and _decomp_ability(tables, _active(s, side)) in locks
+        for side in (0, 1)
+    )
+
+
+def _weather_effect(turn: _Turn, s: RefState, side: int) -> None:
+    """``BtlCmd_EndOfTurnWeatherEffect`` (script.c:5561-5647) and
+    ``subscript_weather_continues.s`` for one battler (``NO_CLOUD_NINE`` checked by the
+    caller). Rain and sun do something only through unmapped abilities (Dry Skin, Solar
+    Power, Rain Dish, Hydration); Dig / Dive's no-weather-damage flag cannot be set."""
+    mon = _active(s, side)
+    if not mon.hp:
+        return
+    ability = _decomp_ability(turn.tables, mon)
+    hp_calc = 0
+    if s.weather == Weather.SANDSTORM:  # script.c:5573-5583
+        immune = {Type.ROCK, Type.STEEL, Type.GROUND} & set(mon.types)
+        if not immune and ability != WEATHER_ABILITY_IDS["Sand Veil"]:
+            hp_calc = -_divide(mon.max_hp, 16)
+    if s.weather == Weather.HAIL:  # the hail branch
+        if ability == WEATHER_ABILITY_IDS["Ice Body"]:
+            if mon.hp < mon.max_hp:
+                hp_calc = _divide(mon.max_hp, 16)
+        elif Type.ICE not in mon.types and ability != WEATHER_ABILITY_IDS["Snow Cloak"]:
+            hp_calc = -_divide(mon.max_hp, 16)
+    if hp_calc > 0:  # subscript_weather_continues.s _076
+        _gain_hp(s, side, hp_calc)
+    elif hp_calc < 0 and ability != WEATHER_ABILITY_IDS["Magic Guard"]:
+        _lose_hp(turn, s, side, -hp_calc)
+
+
+def _field_conditions(turn: _Turn, s: RefState, order: list[int]) -> None:
+    """``BattleControllerPlayer_CheckFieldConditions`` (bcp.c:932-1254). Every step is
+    preceded by ``AnyFainted`` / ``CheckBattleOver`` (:939-944): nothing runs once the
+    battle is over, and the chip's faints are checked once, after every battler's."""
+    if s.over:
+        return
+    # REFLECT, LIGHT_SCREEN, MIST, SAFEGUARD, TAILWIND, LUCKY_CHANT (:947-1083), each for
+    # side 0 then side 1: the count drops and the condition ends at 0.
+    for name in ("reflect", "light_screen", "mist", "safeguard", "tailwind", "lucky_chant"):
+        for sd in s.sides:
+            if getattr(sd, name):
+                setattr(sd, name, getattr(sd, name) - 1)
+    # WISH (:1085-1111): not implemented (no supported move sets it).
+    # RAINING, SANDSTORM, SUNNY, HAILING (:1113-1211): a permanent weather goes on; a
+    # temporary one ends when its count reaches 0 (subscript_*_end.s: no effect that turn).
+    # DEEP_FOG (:1213-1225) prints a message only.
+    if s.weather in (Weather.RAIN, Weather.SANDSTORM, Weather.SUN, Weather.HAIL):
+        goes_on = True
+        if s.weather_timer:
+            s.weather_timer -= 1
+            if s.weather_timer == 0:
+                s.weather = Weather.NONE
+                goes_on = False
+        # subscript_weather_continues.s: each battler in monSpeedOrder.
+        if goes_on and not _weather_suppressed(turn.tables, s):
+            for side in order:
+                _weather_effect(turn, s, side)
+        _faint_check(turn, s)
+        if s.over:
+            return
+    # GRAVITY (:1227-1238).
+    if s.gravity:
+        s.gravity -= 1
+
+
+def _end_of_turn(turn: _Turn, s: RefState, order: list[int]) -> None:
     """``BattleControllerPlayer_CheckMonConditions`` (bcp.c:1289): every implemented
-    check for one battler, then for the next, in ``monSpeedOrder`` (sorted after the
-    last action, bcp.c:887); each check that ran is followed by the faint check, and
-    nothing runs once the battle is over."""
-    for battler in _speed_order(s, turn.outcome):
+    check for one battler, then for the next, in ``monSpeedOrder`` (``order``: sorted
+    once after the last action, bcp.c:887, before the field pass); each check that ran
+    is followed by the faint check, and nothing runs once the battle is over."""
+    for battler in order:
         for check in (
             _turn_end_ability,  # MON_COND_CHECK_STATE_ABILITY, bcp.c:1355
             _held_item_hp,  # MON_COND_CHECK_STATE_USE_ITEM, bcp.c:1362
@@ -1360,7 +1439,9 @@ def ref_step(tables, state: RefState, actions: tuple[int, int], outcome) -> RefS
             _recover_status_by_ability(s, side)
             _recover_status_by_ability(s, 1 - side)
 
-    _end_of_turn(turn, s)
+    order = _speed_order(s, outcome)  # BattleSystem_SortMonSpeedOrder, bcp.c:887
+    _field_conditions(turn, s, order)
+    _end_of_turn(turn, s, order)
     # BattleSystem_SetupNextTurn (lib.c:2234) clears every flinch and unlocks a sleeping
     # battler (lib.c:2240-2243).
     for sd in s.sides:

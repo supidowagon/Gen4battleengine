@@ -31,7 +31,16 @@ from __future__ import annotations
 import jax.numpy as jnp
 
 from nuzline.data.tables import Tables
-from nuzline.engine.ids import MOVE_STRUGGLE, AbilityId, EffectId, Stat, Status, Type, Weather
+from nuzline.engine.ids import (
+    MOVE_STRUGGLE,
+    WEATHER_ABILITY_IDS,
+    AbilityId,
+    EffectId,
+    Stat,
+    Status,
+    Type,
+    Weather,
+)
 from nuzline.engine.state import BattleState
 
 PHYSICAL, SPECIAL, STATUS = 0, 1, 2  # tables.move_category
@@ -52,6 +61,25 @@ MAGNITUDE_MIN = 4
 
 def _i32(x) -> jnp.ndarray:
     return jnp.asarray(x).astype(_I32)
+
+
+def decomp_abilities(tables: Tables, state: BattleState) -> jnp.ndarray:
+    """``int32[2, SLOTS]``: every slot's decomp ability id (``Battler_Ability``), from
+    ``tables.species_abilities_decomp`` at the Pokemon's personal row and ability slot."""
+    row = tables.species_form_row[_i32(state.species), _i32(state.form)]
+    return _i32(tables.species_abilities_decomp[_i32(row), _i32(state.ability_slot)])
+
+
+def weather_suppressed(tables: Tables, state: BattleState) -> jnp.ndarray:
+    """``bool[]``: not ``NO_CLOUD_NINE`` (include/battle/common.h:63-64): an active
+    battler with HP left has Cloud Nine or Air Lock (``BattleSystem_CountAbility``,
+    ``COUNT_ALIVE_BATTLERS``), which turns off every weather effect."""
+    sides = jnp.arange(2)
+    ability = decomp_abilities(tables, state)[sides, state.active]
+    lock = (ability == WEATHER_ABILITY_IDS["Cloud Nine"]) | (
+        ability == WEATHER_ABILITY_IDS["Air Lock"]
+    )
+    return jnp.any(lock & (state.hp[sides, state.active] > 0))
 
 
 def hidden_power(ivs) -> tuple[jnp.ndarray, jnp.ndarray]:

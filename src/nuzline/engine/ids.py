@@ -206,3 +206,18 @@ class Type(IntEnum):
 # Decomp move id the engine names directly (``generated/moves.txt`` line 166, 0-based
 # from MOVE_NONE): Struggle replaces the chosen move when it has no PP left.
 MOVE_STRUGGLE = 165
+
+# Decomp ability ids the weather code names directly (``generated/abilities.txt`` line N is
+# id N-1), read through ``tables.species_abilities_decomp`` (``Battler_Ability``) rather than
+# an ``AbilityId``: Cloud Nine / Air Lock suppress weather (``NO_CLOUD_NINE``,
+# include/battle/common.h:63-64); the end-of-turn chip (``BtlCmd_EndOfTurnWeatherEffect``,
+# battle_script.c:5561-5647, and ``subscript_weather_continues.s``) skips Sand Veil, Snow
+# Cloak, Ice Body (which heals instead) and Magic Guard.
+WEATHER_ABILITY_IDS = {
+    "Sand Veil": 8,
+    "Cloud Nine": 13,
+    "Air Lock": 76,
+    "Snow Cloak": 81,
+    "Magic Guard": 98,
+    "Ice Body": 115,
+}
