@@ -10,7 +10,7 @@
 
 import jax.numpy as jnp
 
-from nuzline.engine.damage import damage_table
+from nuzline.engine.damage import _pre_random, damage_table
 from nuzline.engine.outcome import empty_outcome
 from tests.engine.helpers import A, assert_matches_reference, roark_state
 
@@ -50,6 +50,10 @@ def test_light_screen_halves_special_noncrit(tables, names):
     plain = damage_table(tables, s, 0, ember, False).tolist()
     screened = damage_table(tables, _put(s, "light_screen", 1, 3), 0, ember, False).tolist()
     assert all(b < a for a, b in zip(plain, screened, strict=True))
+    # Exactly the decomp's `damage /= 2` (lib.c:7030), before the `+ 2` (:7078).
+    base = int(_pre_random(tables, s, 0, ember, False)[0]) - 2
+    halved = int(_pre_random(tables, _put(s, "light_screen", 1, 3), 0, ember, False)[0]) - 2
+    assert halved == base // 2
     # A crit ignores it (lib.c:7023 criticalMul == 1) and Reflect does not touch special.
     assert damage_table(tables, _put(s, "light_screen", 1, 3), 0, ember, True).tolist() == (
         damage_table(tables, s, 0, ember, True).tolist()
@@ -88,6 +92,17 @@ def test_brick_break_breaks_on_immune_not_on_miss(tables, names):
     # A miss does not break them (only the end-of-turn countdown runs).
     out = assert_matches_reference(tables, both, acts, _miss())
     assert int(out.light_screen[1]) == 2 and int(out.reflect[1]) == 3
+
+
+def test_brick_break_clears_screens_when_it_kos(tables, names):
+    # Primary effects run before UpdateHP (lib.c:1494), so the break survives the KO.
+    s = roark_state(tables, names, player_moves=["Brick Break"]).replace_hp(1, 0, 1)
+    both = _put(_put(s, "light_screen", 1, 3), "reflect", 1, 4)
+    out = assert_matches_reference(
+        tables, both, A("Brick Break", "Leer", both, names), empty_outcome()
+    )
+    assert int(out.hp[1, 0]) == 0
+    assert int(out.light_screen[1]) == 0 and int(out.reflect[1]) == 0
 
 
 def test_screens_match_reference(tables, names):
