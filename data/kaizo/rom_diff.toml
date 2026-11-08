@@ -177,8 +177,8 @@ note = "decoded: String_ToChars(name, dto->trainer[i].name, 8) -> 12 (movs r2,#8
 [[code]]
 module = "arm9"
 symbol = "TrainerData_BuildParty"
-status = "unknown"
-note = ""
+status = "modelled"
+note = "decoded: the routine rewritten in place (arm9 0x020793B8-0x0207956C) plus two new helpers in its old extent: one loop for every party data type; per-mon u8 difficulty + u8 override replace u16 ivScale; an override helper (0x020795A0) rewrites the per-trainer genderMod slot from the override's gender and ability nibbles, never reset in the loop (carry-over, species-id bug when the gender nibble is 0); seed = difficulty + level + species + trainerID; IVs = difficulty * 31 / 255; a friendship helper (0x02079570) sets 255, or 0 with Frustration; Pokemon_CalcStats after MON_DATA_FORM (vanilla: none); src/trainer_data.c:176; rom:arm9@0x020793B8 (docs/kaizo/rom_diff.md, TrainerData_BuildParty, decoded); K2b models it: the difficulty/override split (tools/rom/readers/trainers.py kaizo_party_fields), IVs (nuzline.data.trainer difficulty_to_ivs), explicit nature, gender and ability slot from the carry-over decode and the friendship (tools.kaizo.resolve), pinned by tests/tools/rom/test_kaizo_trainer_party.py (helper patterns and calls) and test_every_kaizo_mon_has_explicit_set_data (tests/kaizo/test_resolve.py), and the cross-check matches every PKCalc nature and ability; the one unmodelled part, stats computed after a data form, is refused by coverage for every such trainer Pokemon (engine/coverage.py _data_form_reason)"
 
 [[code]]
 module = "arm9"
@@ -195,20 +195,20 @@ note = "decoded: BL target re-encoded, vanilla BattleController_RecvCommMessage 
 [[code]]
 module = "arm9"
 symbol = "PartyMenuCB_LevelUp"
-status = "unknown"
-note = ""
+status = "irrelevant"
+note = "decoded: the menuSelectionResult store and FADE_OUT return of LEVELUP_STATE_CHECK_EVOLUTION (strb r0,[r1]; movs r0,#0x20) -> bl 0x023C82E2 (weather_sys.narc member 9), which does the same store and, when there is no evolution and Bag_CanRemoveItem(bag, ITEM_RARE_CANDY 50, 1) (a check, nothing removed), sets usedItemID = 50, erases the message box, prints PartyMenu_Text_UseOnWhichMon and returns PARTY_MENU_STATE_USE_ITEM, else FADE_OUT as vanilla; src/applications/party_menu/callbacks.c:826; rom:weather_sys.narc[9]@0x023C82E2; after a Rare Candy level-up the field party menu stays in Rare Candy mode, and the next candy goes through the normal item path (HandleUseItem, src/applications/party_menu/main.c:546), so its only effect is ordinary Rare Candy levels and exp on the player's Pokemon, which the save shows; the callback is reached only from PartyMenuCB_UseItem_RareCandy and the level-up move exit (callbacks.c:713, 837), never in battle"
 
 [[code]]
 module = "arm9"
 symbol = "HandleInput_Main"
-status = "unknown"
-note = ""
+status = "irrelevant"
+note = "decoded: the PAD_KEY_RIGHT test (movs r1,#0x10; tst r1,r5) -> bl 0x023C8452 (weather_sys.narc member 9): on PAD_BUTTON_R (0x100) it cycles a mode byte at 0x023C859D (injected region data, RAM only, not saved) 0 -> 1 -> 2 -> 0, calls ChangeSummaryMon(summaryScreen, 0) to redraw the same Pokemon and returns 2; otherwise it redoes the vanilla test and returns; src/applications/pokemon_summary_screen/main.c:592; rom:weather_sys.narc[9]@0x023C8452; it only selects which values the summary screen's stat page shows (stats, IVs, EVs; see SetMonDataFromMon) and changes no Pokemon, party or save data"
 
 [[code]]
 module = "arm9"
 symbol = "SetMonDataFromMon"
-status = "unknown"
-note = ""
+status = "irrelevant"
+note = "decoded: str r0,[r5,#0x20]; adds r0,r6,#0 -> bl 0x023C8482 (weather_sys.narc member 9), which does that store, then fills the summary screen's PokemonSummaryMonData HP, max HP, Atk, Def, SpA, SpD (and the Speed id left for vanilla's last read, return = BL + 0x4C) from Pokemon_GetValue of the EVs (MON_DATA 13, 13, 14, 15, 17, 18; 16) in mode 2, the IVs (70, 70, 71, 72, 74, 75; 73) in mode 1, else vanilla's stats (163-169); src/applications/pokemon_summary_screen/main.c:1100-1106; rom:weather_sys.narc[9]@0x023C8482; every call is a Pokemon_GetValue read and every store goes to the summary screen's monData, whose stat fields only the summary print and health bar read (src/applications/pokemon_summary_screen/window.c:1167-1176); SetMonDataFromMon is a static of the summary screen app (main.c:1036-1055), not a battle-party or trainer-party setter, and it writes nothing to any Pokemon or the save"
 
 [[code]]
 module = "arm9"

@@ -96,7 +96,20 @@ TASK5 = (
     ),
 )
 
-DONE_GROUPS = [TASK5]
+TASK6 = (
+    "task 6: the injected code's callers and the party builder",
+    tuple(
+        ("arm9", s)
+        for s in (
+            "PartyMenuCB_LevelUp",
+            "HandleInput_Main",
+            "SetMonDataFromMon",
+            "TrainerData_BuildParty",
+        )
+    ),
+)
+
+DONE_GROUPS = [TASK5, TASK6]
 
 K2B_NOTES = {
     ("battle/skill/be_seq.narc", 48),
