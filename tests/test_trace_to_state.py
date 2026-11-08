@@ -318,9 +318,10 @@ def test_a_confusion_self_hit_is_inferred(tables, names, tmp_path):
     assert 6 in rolls and int(turns[0].outcome.roll[1, 0]) == min(rolls)
 
 
-def _lua_table(name: str) -> dict[str, int]:
-    """The integer fields of the ``local NAME = { ... }`` table in trace_battle.lua."""
-    lua = LUA.read_text(encoding="utf-8")
+def _lua_table(name: str, path: Path = LUA) -> dict[str, int]:
+    """The integer fields of the ``local NAME = { ... }`` table in trace_battle.lua (or the
+    Lua script at ``path``)."""
+    lua = path.read_text(encoding="utf-8")
     body = re.search(rf"local {name} = \{{(.*?)\n\}}", lua, re.DOTALL)
     assert body, name
     fields = re.findall(r"(\w+) = (0x[0-9A-Fa-f]+|\d+)", body.group(1))
@@ -520,3 +521,37 @@ def test_initial_state_uses_the_trainers_party_and_bag(tables, names):
     opp = build_trainer_party(trainer, IntermediateData(INTERMEDIATE))
     assert [int(s) for s in state.species[1, : len(opp)]] == [m.species for m in opp]
     assert [int(i) for i in state.trainer_items[1, :2]] == list(trainer.items)
+
+
+# --- Kaizo: the party from a save ------------------------------------------------------
+
+RAW_FIXTURE = ROOT / "tests" / "fixtures" / "raw_trace_two_records.jsonl"
+
+
+def test_bundle_from_save(kaizo_save_pre_roark_path, kaizo_names):
+    from nuzline.data.games import KAIZO
+    from nuzline.saves.save import load_save
+
+    save = load_save(kaizo_save_pre_roark_path, game=KAIZO)
+    b = bundle_trace(RAW_FIXTURE, save, kaizo_names, ROARK_ID, KAIZO)
+    names = ("Sandshrew", "Flaaffy", "Shinx", "Vulpix", "Goldeen", "Meowth")
+    assert [m["species"] for m in b["party"]] == [kaizo_names.species(n) for n in names]
+    assert [m["species"] for m in b["party"]] == [27, 180, 403, 37, 118, 52]
+    assert b["game"] == KAIZO
+    assert [r["command"] for r in b["records"]] == [4, 41]
+
+
+def test_vanilla_bundle_records_its_game(names):
+    b = bundle_trace(RAW_FIXTURE, PARTY, names, ROARK_ID)
+    assert b["game"] == "platinum_us"
+    assert len(b["party"]) == 6 and len(b["records"]) == 2
+
+
+def test_the_probe_reads_the_tracers_addresses():
+    probe = ROOT / "tools" / "probe_battle.lua"
+    for table in ("SYS", "CTX", "MON", "CMD"):
+        mine = _lua_table(table, probe)
+        assert mine, table
+        assert mine.items() <= _lua_table(table).items(), table
+    lua = probe.read_text(encoding="utf-8")
+    assert "traces" in lua and "probe.txt" in lua

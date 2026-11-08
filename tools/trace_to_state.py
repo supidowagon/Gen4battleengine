@@ -16,8 +16,11 @@ replaying every candidate through ``step`` and keeping the one that best matches
 next record.
 
 CLI: ``uv run python -m tools.trace_to_state --trace <raw.jsonl> --out
-tests/golden/roark_01.json --party tests/fixtures/golden_party_roark_01.toml
-[--trainer roark | --trainer-id N]``
+tests/golden/roark_01.json (--party tests/fixtures/golden_party_roark_01.toml | --save
+<save.dsv>) [--game vanilla|kaizo] [--trainer roark | --trainer-id N]``. ``--save`` takes
+the player's party from a save (``SaveMon.to_spec``), so no party file is typed in.
+``--game`` picks the data set (tables, trainers) the bundle is built and converted with;
+the bundle records it as ``"game"`` (a bundle without it is vanilla).
 """
 
 from __future__ import annotations
@@ -34,6 +37,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+from nuzline.data.games import VANILLA, get_game
 from nuzline.data.spec import PokemonSpec
 from nuzline.data.tables import Names, Tables
 from nuzline.data.trainer import Trainer
@@ -44,6 +48,7 @@ from nuzline.engine.order import MOVE_ACTIONS, effective_speed, selected_move
 from nuzline.engine.outcome import MAX_HITS, Outcome, empty_outcome
 from nuzline.engine.state import LAYOUT, SLOTS, BattleState, make_state
 from nuzline.engine.step import needs_replacement, replace, step
+from nuzline.saves.save import SaveFile
 from nuzline.saves.status import decode_status
 
 INTERMEDIATE = Path(__file__).resolve().parents[1] / "data" / "intermediate"
@@ -136,14 +141,18 @@ def resolve_roll(candidates: Sequence[tuple[int, int]]) -> tuple[int, int]:
 
 
 def initial_state(
-    tables: Tables, player: list[PokemonSpec], trainer: Trainer, leads: tuple[int, int]
+    tables: Tables,
+    player: list[PokemonSpec],
+    trainer: Trainer,
+    leads: tuple[int, int],
+    game: str = VANILLA,
 ) -> BattleState:
-    """The fight's turn-0 state: ``player`` against the trainer's built party, bag and
-    start weather, with the given active slots."""
+    """The fight's turn-0 state: ``player`` against the trainer's built party (from
+    ``game``'s intermediates), bag and start weather, with the given active slots."""
     from nuzline.data.trainer import IntermediateData, build_trainer_party
     from nuzline.engine.coverage import start_weather
 
-    opp = build_trainer_party(trainer, IntermediateData(INTERMEDIATE))
+    opp = build_trainer_party(trainer, IntermediateData(get_game(game).intermediate_dir))
     return make_state(
         tables, player, opp, start_weather(trainer), opp_items=trainer.items, leads=leads
     )
@@ -487,11 +496,12 @@ def _spec(d: dict) -> PokemonSpec:
     return PokemonSpec(**{k: tuple(v) if isinstance(v, list) else v for k, v in d.items()})
 
 
-def _trainer(trainer_id: int) -> Trainer:
+def _trainer(trainer_id: int, game: str = VANILLA) -> Trainer:
     from nuzline.cli import resolve_trainer
     from nuzline.data.trainer import load_trainers
 
-    return resolve_trainer(load_trainers(INTERMEDIATE), trainer_id=trainer_id)
+    trainers = load_trainers(get_game(game).intermediate_dir)
+    return resolve_trainer(trainers, trainer_id=trainer_id)
 
 
 def convert_bundle(bundle: dict, tables: Tables, names: Names) -> list[Turn]:
@@ -501,12 +511,13 @@ def convert_bundle(bundle: dict, tables: Tables, names: Names) -> list[Turn]:
     del names  # ids throughout; kept for the plan's signature
     if bundle.get("format") != BUNDLE_FORMAT:
         raise TraceError(f"not a {BUNDLE_FORMAT} bundle")
-    trainer = _trainer(bundle["trainer_id"])
+    game = bundle.get("game", VANILLA)
+    trainer = _trainer(bundle["trainer_id"], game)
     player = [_spec(d) for d in bundle["party"]]
     records, events = _records(bundle)
     first = _fields(records[0])
     leads = (int(first["active"][0]), int(first["active"][1]))
-    state = initial_state(tables, player, trainer, leads)
+    state = initial_state(tables, player, trainer, leads, game)
     _check_start(state, first)
     state = _overlay(state, first)
     turns: list[Turn] = []
@@ -537,39 +548,57 @@ def trace_to_states(
     return [(t.state, t.actions, t.outcome) for t in convert(path, tables, names)]
 
 
-def bundle_trace(raw: Path, party: Path, names: Names, trainer_id: int) -> dict:
-    """A raw trace plus the player's party (``party`` TOML) and the trainer id."""
+def bundle_trace(
+    raw: Path, party: Path | SaveFile, names: Names, trainer_id: int, game: str = VANILLA
+) -> dict:
+    """A raw trace plus the player's party, the trainer id and the game. ``party`` is a
+    party TOML or a loaded save, whose party becomes the specs (``SaveMon.to_spec`` with
+    ``game``'s tables)."""
     from nuzline.data.party import load_party
 
+    game = get_game(game).id
+    if isinstance(party, SaveFile):
+        from nuzline.data.games import load_game
+
+        tables, _ = load_game(get_game(game))
+        specs = [m.to_spec(tables) for m in party.party]
+    else:
+        specs = load_party(party, names)
     lines = Path(raw).read_text(encoding="utf-8").splitlines()
     return {
         "format": BUNDLE_FORMAT,
+        "game": game,
         "trainer_id": trainer_id,
-        "party": [dataclasses.asdict(m) for m in load_party(party, names)],
+        "party": [dataclasses.asdict(m) for m in specs],
         "records": [json.loads(line) for line in lines if line.strip()],
     }
 
 
 def main(argv: list[str] | None = None) -> int:
-    from nuzline.cli import INTERMEDIATE as CLI_INTERMEDIATE
     from nuzline.cli import resolve_trainer
-    from nuzline.data.tables import load_names, load_tables
+    from nuzline.data.games import load_game
     from nuzline.data.trainer import load_trainers
+    from nuzline.saves.save import load_save
 
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--trace", required=True, type=Path, help="raw trace (JSON lines)")
     parser.add_argument("--out", required=True, type=Path, help="bundle to write")
-    parser.add_argument("--party", required=True, type=Path, help="the player's party TOML")
+    mine = parser.add_mutually_exclusive_group(required=True)
+    mine.add_argument("--party", type=Path, help="the player's party TOML")
+    mine.add_argument("--save", type=Path, help="a save (.sav/.dsv) whose party is used")
+    parser.add_argument("--game", default="vanilla", help="vanilla (default) or kaizo")
     who = parser.add_mutually_exclusive_group()
     who.add_argument("--trainer", default="roark", help="trainer name (a Leader is preferred)")
     who.add_argument("--trainer-id", type=int, help="exact trainer id")
     args = parser.parse_args(argv)
 
+    game = get_game(args.game)
     trainer = resolve_trainer(
-        load_trainers(CLI_INTERMEDIATE), name=args.trainer, trainer_id=args.trainer_id
+        load_trainers(game.intermediate_dir), name=args.trainer, trainer_id=args.trainer_id
     )
-    tables, names = load_tables(), load_names()
-    bundle = bundle_trace(args.trace, args.party, names, trainer.id)
+    tables, names = load_game(game)
+    party = args.party if args.save is None else load_save(args.save, game=game.id)
+    bundle = bundle_trace(args.trace, party, names, trainer.id, game.id)
     try:
         turns = convert_bundle(bundle, tables, names)
     except TraceError as err:
