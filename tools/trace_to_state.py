@@ -553,7 +553,8 @@ def bundle_trace(
 ) -> dict:
     """A raw trace plus the player's party, the trainer id and the game. ``party`` is a
     party TOML or a loaded save, whose party becomes the specs (``SaveMon.to_spec`` with
-    ``game``'s tables)."""
+    ``game``'s tables); an egg there is left out with a note on stderr, as
+    ``nuzline fight --save`` does (an egg never enters a battle)."""
     from nuzline.data.party import load_party
 
     game = get_game(game).id
@@ -561,7 +562,12 @@ def bundle_trace(
         from nuzline.data.games import load_game
 
         tables, _ = load_game(get_game(game))
-        specs = [m.to_spec(tables) for m in party.party]
+        specs = []
+        for slot, mon in enumerate(party.party):
+            if mon.is_egg:
+                print(f"party slot {slot}: egg left out", file=sys.stderr)
+            else:
+                specs.append(mon.to_spec(tables))
     else:
         specs = load_party(party, names)
     lines = Path(raw).read_text(encoding="utf-8").splitlines()

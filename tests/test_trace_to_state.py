@@ -541,6 +541,20 @@ def test_bundle_from_save(kaizo_save_pre_roark_path, kaizo_names):
     assert [r["command"] for r in b["records"]] == [4, 41]
 
 
+def test_bundle_from_save_leaves_eggs_out(tables, names, tmp_path, capsys):
+    # Final review M3: an egg in the save's party is skipped (as `nuzline fight --save` does),
+    # not a RecordError traceback.
+    from nuzline.saves.save import load_save
+    from tests.saves.synthetic import write_save
+
+    save = load_save(write_save(tmp_path, tables, names, egg_first=True))
+    assert save.party[0].is_egg
+    b = bundle_trace(RAW_FIXTURE, save, names, ROARK_ID)
+    want = [m.to_spec(tables) for m in save.party[1:]]
+    assert [m["species"] for m in b["party"]] == [m.species for m in want]
+    assert "party slot 0: egg left out" in capsys.readouterr().err
+
+
 def test_vanilla_bundle_records_its_game(names):
     b = bundle_trace(RAW_FIXTURE, PARTY, names, ROARK_ID)
     assert b["game"] == "platinum_us"
