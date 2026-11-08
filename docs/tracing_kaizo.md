@@ -33,18 +33,21 @@ touch your actual run.
    Kaizo ROM cache".
 3. **Copy** that `.nds` file (Ctrl+C, Ctrl+V; do not drag it out) into
    `G:\Farry\Kaizo Probe`, and rename the copy to `Kaizo Probe.nds`.
-4. **Copy** `G:\Farry\Downloads\Platinum Kaizo Base.dsv` into `G:\Farry\Kaizo Probe`, and
-   rename the copy to `Kaizo Probe.dsv`. Both copies must have the same name before the
-   dot.
+4. **Copy** `G:\Farry\Downloads\Platinum Kaizo Base.dsv` into the **Battery folder**
+   `G:\Farry\Downloads\Battery` (the folder next to `DeSmuME-VS2022-x64-Release.exe`; see
+   below) and rename the copy to `Kaizo Probe.dsv`. The name before the dot must be the
+   ROM's name. Do this with DeSmuME **closed**, and when DeSmuME has already made a blank
+   `Kaizo Probe.dsv` there (it does so the first time it opens the ROM), copy over that
+   blank one.
 
-Why the same name: DeSmuME stores a game's save (its "battery" or "backup memory") as a
-`.dsv` file named after the ROM. On this computer it has kept those files next to the ROM
-it was playing: the save it made for the patched ROM,
-`4998 - Pokemon - Platinum Version (v01) (U)-patched.dsv`, is in `G:\Farry\Downloads`,
-and there is no `Battery` folder. (The folder is set under **Config > Path Settings**,
-"Battery".) Because the copy is named `Kaizo Probe.dsv` and sits next to
-`Kaizo Probe.nds`, DeSmuME should find it by itself. Step 7 below checks this, and gives
-a sure way in if it does not.
+Why this folder: DeSmuME stores a game's save (its "battery" or "backup memory") as a
+`.dsv` file named after the ROM. This build keeps those files in a `Battery` folder next to
+the DeSmuME program (`G:\Farry\Downloads\Battery`), **not** next to the ROM (set under
+**Config > Path Settings**, "Battery"). The first time it opens a new ROM it creates a blank
+`.dsv` there, which is why the copy in step 4 has to replace that blank file while DeSmuME
+is closed. Step 7 below checks that the save was picked up, and gives a way in if it was
+not. In the 2026-11-08 run the copy used for the Roark recording was
+`G:\Farry\Downloads\Battery\kaizo Probe.dsv`.
 
 ## Part 2: the address check (about 10 minutes)
 
@@ -54,8 +57,9 @@ a sure way in if it does not.
 6. At the title screen, press Start (Enter by default), then A (X by default).
 7. You should see **CONTINUE** with your trainer name, 0 badges and your play time.
    - If you see only NEW GAME, DeSmuME did not pick up the save. Choose
-     **File > Import Backup Memory**, select `G:\Farry\Kaizo Probe\Kaizo Probe.dsv` (the
-     copy, never the one in Downloads), and confirm. Then choose **File > Reset** and go
+     **File > Import Backup Memory**, select the copy in the Battery folder
+     (`G:\Farry\Downloads\Battery\Kaizo Probe.dsv`, never the original
+     `Platinum Kaizo Base.dsv`), and confirm. Then choose **File > Reset** and go
      to step 6 again.
 8. Continue the game. Open the Pokemon menu and check that your **first** Pokemon is
    **Sandshrew, level 16**. The script looks for exactly that Pokemon when a battle
@@ -66,9 +70,18 @@ a sure way in if it does not.
      Sandshrew) and `LOCATE_LEVEL = LOCATE_LEVEL or 16` (the level). Save the file.
 9. Make a save state, so you can replay from here: **File > Save State > 1**. (To go back
    later: **File > Load State > 1**.) Anything that writes a save here, an in-game save
-   or a loaded save state, writes only to the copy `Kaizo Probe.dsv`.
+   or a loaded save state, writes only to the copy `Kaizo Probe.dsv` in the Battery folder.
 
 ### Run the probe script
+
+**Status of the address check (2026-11-08).** It was run with `tools\probe_battle.lua` and
+`tools\trace_battle.lua` in two Lua windows at once, on a Kaizo Roark fight (lead Prinplup,
+species 394, level 16, set through small launcher files). The probe wrote only its header
+line and logged nothing else, so for now **the recording itself is the address check**:
+Claude reads `traces\kaizo_roark_01.jsonl` and compares the fields (`docs/tracing.md`,
+"Verifying the addresses", where the result is). The steps below are kept for a repeat of
+the probe. To find out why it logged nothing, run it **alone, in one Lua window**, and send
+what the Lua console prints.
 
 10. Choose **Tools > Lua Scripting > New Lua Script Window**. In the small window, click
     **Browse**, open `tools\probe_battle.lua` in the project folder, then click **Run**.
@@ -124,7 +137,7 @@ Do this only after Claude has confirmed the address check. It uses the same prac
 
 1. Load the game from the copy (steps 5 to 9) and walk to Roark. Standing in front of
    him, **save in the game** (menu > SAVE). This writes your party as it is now into the
-   copy `G:\Farry\Kaizo Probe\Kaizo Probe.dsv`, which is what the conversion reads.
+   copy `G:\Farry\Downloads\Battery\Kaizo Probe.dsv`, which is what the conversion reads.
    Then make a save state: **File > Save State > 2**.
    - From that in-game save until the fight, nothing about the party may change: no
      other battle, no level-up, no new or forgotten move, no held-item change, no party
@@ -152,9 +165,10 @@ Do this only after Claude has confirmed the address check. It uses the same prac
    need to type in your Pokemon:
 
    ```
-   uv run python -m tools.trace_to_state --game kaizo --save "G:\Farry\Kaizo Probe\Kaizo Probe.dsv" --trace traces\roark_kaizo_01.jsonl --out tests\golden\roark_kaizo_01.json
+   uv run python -m tools.trace_to_state --game kaizo --save "G:\Farry\Downloads\Battery\Kaizo Probe.dsv" --trace traces\roark_kaizo_01.jsonl --out tests\golden\roark_kaizo_01.json
    ```
 
-   This only reads the save. Your original `Platinum Kaizo Base.dsv` in Downloads is not
+   `--save` must point at the `.dsv` that DeSmuME actually wrote, in the Battery folder (a
+   copy sitting next to the ROM is not the one it uses). This only reads the save. Your original `Platinum Kaizo Base.dsv` in Downloads is not
    used here: it would miss any change to your party on the way to Roark. The recording and the save stay out of the project's history
    (`traces/` and `*.dsv` are never committed).

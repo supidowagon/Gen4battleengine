@@ -9,6 +9,12 @@
 -- (the Lua console prints the full path). Player guide: docs/tracing_kaizo.md; what each
 -- check means: docs/tracing.md, "Verifying the addresses".
 
+-- Known issue (2026-11-08): run beside trace_battle.lua in a second Lua window, in a Kaizo
+-- Roark fight, this script wrote only its header line, while trace_battle.lua (same locate
+-- code and loop) located and recorded. No bug was found. Likely causes: two windows each
+-- running a long blocking scan at once, or this window stopping on an unreported error.
+-- Run it alone and read the Lua console (docs/tracing.md, "Why the probe logged nothing").
+
 ---------------------------------------------------------------------------- config
 
 -- The player's lead, used to find its BattleMon in RAM: species id, level.
