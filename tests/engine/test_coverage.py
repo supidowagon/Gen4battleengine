@@ -1,11 +1,12 @@
 """The coverage registry refuses a fight that uses unimplemented mechanics and names
 every one of them (spec §3)."""
 
-import dataclasses
 from dataclasses import replace
 
+import numpy as np
 import pytest
 
+from nuzline.data.forms import personal_row
 from nuzline.data.games import KAIZO
 from nuzline.data.tables import Names
 from nuzline.data.trainer import build_trainer_party, load_trainers
@@ -478,10 +479,6 @@ def test_area_ability_and_item_terms(tables, names, vanilla_manifest):
     kaizo = kaizo_names_with(vanilla_manifest, [{"items": [leftovers]}])
     assert rom_change_refusals(tables, kaizo, roark, held) == ["c"]
     assert rom_change_refusals(tables, kaizo, roark, mons) == []
-    import numpy as np
-
-    from nuzline.data.forms import personal_row
-
     spec = mons[0]
     row = personal_row(tables, spec.species, spec.form)
     ability = int(np.asarray(tables.species_abilities_decomp)[row][spec.ability_slot])
@@ -498,7 +495,7 @@ def test_extra_moves_reach_a_condition(tables, names, vanilla_manifest):
 
 def test_unknown_format_matches_format_conditions(tables, names, vanilla_manifest):
     kaizo = kaizo_names_with(vanilla_manifest, [{"formats": ["multi"]}])
-    roark = dataclasses.replace(roark_trainer(), format=None)
+    roark = replace(roark_trainer(), format=None)
     assert rom_change_refusals(tables, kaizo, roark, sample_party(names)) == ["c"]
     no_format = kaizo_names_with(vanilla_manifest, [{"moves": [MOVE_ROCK_THROW]}])
     assert rom_change_refusals(tables, no_format, roark, sample_party(names)) == []

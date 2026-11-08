@@ -148,7 +148,9 @@ def check_pool(
         )
         if trainer is not None and names.game == KAIZO:
             could_learn = [*cand.relearner, *(move for _, move in cand.tms)]
-            for cond in rom_change_refusals(tables, names, trainer, [spec], could_learn):
+            for cond in rom_change_refusals(
+                tables, names, trainer, [spec], could_learn, spec_terms_only=True
+            ):
                 c.add(Support.NONE, f"{cand.label}: {rom_change_line(cond)}", "ROM change")
         for move in spec.moves:
             if move:

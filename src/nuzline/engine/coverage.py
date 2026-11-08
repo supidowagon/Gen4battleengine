@@ -58,8 +58,8 @@ items) and plan 1b (Task 2b: trainer items; Task 3: Roark's AI flags) implement:
   (``Names.unclassified_rom_changes``) and ``not_reached`` ROM changes whose resolved
   condition (``Names.rom_change_conditions``, ``rom_change_refusals``) holds for the fight:
   a battle format or area, a move, ability or held item on either side, a trainer or a
-  trainer bag. A condition that does not hold refuses nothing. Area weather and fog stay refused through
-  ``start_weather`` like vanilla's; ``Trainer.optional`` refuses nothing.
+  trainer bag. A condition that does not hold refuses nothing. Area weather and fog stay
+  refused through ``start_weather`` like vanilla's; ``Trainer.optional`` refuses nothing.
 
 ``check_coverage`` also runs the AI's own refusals (``ai.policy.ai_refusals``: opponent
 moves without transcribed script paths, too many script-roll sites, type-chart
@@ -282,16 +282,19 @@ def rom_change_refusals(
     trainer: Trainer,
     specs: Sequence[PokemonSpec],
     extra_moves: Sequence[int] = (),
+    *,
+    spec_terms_only: bool = False,
 ) -> list[str]:
-    """The labels of the ``not_reached`` ROM-change conditions (``Names.rom_change_conditions``)
-    that hold for a fight against ``trainer`` with ``specs`` on the field (both sides), plus
-    ``extra_moves`` a pool candidate could learn. A condition holds when any of: the trainer's
-    format is listed (an unknown format, ``None``, matches any condition that lists one), the
-    trainer's area condition has a listed area (``trick_room``/``gravity``, the
-    ``tools/rom/diff.py`` area names), a
-    move, a decomp ability (``species_abilities_decomp`` at the spec's personal row and ability
-    slot) or a held item is listed, the trainer is listed, or the condition covers trainer items
-    and the bag holds one."""
+    """The labels of the ``not_reached`` ROM-change conditions
+    (``Names.rom_change_conditions``) that hold for a fight against ``trainer`` with ``specs``
+    on the field (both sides), plus ``extra_moves`` a pool candidate could learn. A condition
+    holds when any of: the trainer's format is listed (an unknown format, ``None``, matches
+    any condition that lists one); the trainer's area condition has a listed area
+    (``trick_room``/``gravity``, the ``tools/rom/diff.py`` area names); a move, a decomp
+    ability (``species_abilities_decomp`` at the spec's personal row and ability slot) or a
+    held item is listed; the trainer is listed; or the condition covers trainer items and the
+    bag holds one. ``spec_terms_only`` keeps just the moves, abilities and items: the pool
+    asks it per candidate, the fight-level terms being the fight's own."""
     area = trainer.area_condition
     areas = {
         name for name, on in (("trick_room", area.trick_room), ("gravity", area.gravity)) if on
@@ -305,14 +308,17 @@ def rom_change_refusals(
     bag = any(trainer.items)
     out: list[str] = []
     for cond in names.rom_change_conditions:
-        if (
+        fight_level = (
             (trainer.format in cond.formats if trainer.format is not None else bool(cond.formats))
             or areas & set(cond.areas)
-            or moves & set(cond.moves)
-            or abilities & set(cond.abilities)
-            or items & set(cond.items)
             or trainer.id in cond.trainers
             or (cond.trainer_items and bag)
+        )
+        if (
+            moves & set(cond.moves)
+            or abilities & set(cond.abilities)
+            or items & set(cond.items)
+            or (fight_level and not spec_terms_only)
         ):
             out.append(cond.label)
     return out
@@ -327,7 +333,7 @@ def _check_trainer(
     tables: Tables,
     names: Names,
     trainer: Trainer,
-    specs: Sequence[PokemonSpec] = (),
+    specs: Sequence[PokemonSpec],
 ) -> None:
     if POLICY.get(names.game) is None:
         c.add(
