@@ -70,8 +70,8 @@ found no disagreement beyond the four above; there was nothing new to settle.
 
 `tests/test_damage_oracle.py` compares `damage_table` with @smogon/calc 0.12.0's Gen 4
 calculator (`tools/smogon_calc/damage.js`) on 300 generated matchups, all 16 rolls
-exact. The stats and move data agreed everywhere. The damage differed in two cases, and
-in both the decomp sides with the JAX engine, so the engine is unchanged and the test
+exact. The stats and move data agreed everywhere. The damage differed in three cases, and
+in each the decomp sides with the JAX engine, so the engine is unchanged and the test
 does not generate those matchups (`_smogon_departs`).
 
 ### 5. Sandstorm's SpD boost comes before the stat stage
@@ -96,6 +96,17 @@ does not generate those matchups (`_smogon_departs`).
   `:6992-7018` special).
 - **Ruling:** the engine (`damage._pre_random`: Simple, then the crit rule) is right.
   Test: `test_crit_stage_rule_applies_after_simple_doubles`.
+
+### 7. Selfdestruct and Explosion halve Defense before the stat stage
+
+- **@smogon/calc:** `calculateDefenseDPP` applies the Defense stage, then halves the
+  result for Explosion and Self-Destruct. With a non-zero Defense stage the rounding
+  differs (Defense 51 at +1: 76 / 2 = 38 against 25 x 3 / 2 = 37).
+- **Decomp:** `BattleSystem_CalcMoveDamage` halves `defenseStat` for
+  `BATTLE_EFFECT_HALVE_DEFENSE` at `src/battle/battle_lib.c:6943-6945`, before the stage
+  scales it into `stageDivisor` (`:6963-6975`).
+- **Ruling:** the engine (`damage._pre_random` halves `defense` before `apply_stage`) is
+  right. Test: `tests/engine/test_self_destruct.py::test_self_destruct_halves_defense`.
 
 ## Deliberate differences from the decomp (both engines agree)
 

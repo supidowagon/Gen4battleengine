@@ -2,7 +2,7 @@
 (``tools/smogon_calc/damage.js``) on generated matchups of M1 species and supported
 damaging moves, requiring all 16 rolls to be equal.
 
-No items. Abilities are the species' own, all of which M1 implements; the
+No items. Abilities are the species' own implemented ones (as ``tests.strategies``); the
 damage-relevant ones (Blaze, Torrent, Overgrow, Rivalry, Simple, Unaware, Mold
 Breaker) are exercised through low HP, genders and stat stages, the others have no
 damage effect in either calculator. Matchups where @smogon/calc departs from the
@@ -71,6 +71,9 @@ def node() -> str:
 
 def _mon(rng: np.random.Generator, tables: Tables, names: Names, species: int) -> PokemonSpec:
     abilities = names.species_abilities(species)
+    # Only implemented abilities (as tests.strategies draws them): Venonat's Tinted Lens, say,
+    # would double a resisted hit in @smogon/calc and nowhere in the engine.
+    supported = np.asarray(tables.species_abilities[species]) != AbilityId.UNSUPPORTED
     return PokemonSpec(
         species=species,
         level=int(rng.integers(5, 21)),
@@ -79,7 +82,7 @@ def _mon(rng: np.random.Generator, tables: Tables, names: Names, species: int) -
         evs=tuple(int(x) for x in rng.integers(0, 86, 6)),
         moves=(0, 0, 0, 0),
         item=0,
-        ability_slot=int(rng.choice([i for i, a in enumerate(abilities) if a])),
+        ability_slot=int(rng.choice([i for i, a in enumerate(abilities) if a and supported[i]])),
         gender=int(rng.choice(possible_genders(int(tables.species_gender[species])))),
         friendship=70,
     )
@@ -104,7 +107,12 @@ def _smogon_departs(m: dict, tables: Tables, ability: dict[int, int], move: int)
         AbilityId.MOLD_BREAKER,
         AbilityId.UNAWARE,
     )
-    return m["crit"] and ((a_simple and a_stage < 0) or (d_simple and d_stage > 0))
+    if m["crit"] and ((a_simple and a_stage < 0) or (d_simple and d_stage > 0)):
+        return True
+    # 3. Selfdestruct / Explosion halve the raw Defense, then its stage applies
+    #    (battle_lib.c:6943-6945, then :6963-6975); @smogon/calc halves the staged Defense.
+    halved = int(tables.move_effect[move]) == EffectId.SELF_DESTRUCT and physical
+    return halved and d_stage != 0
 
 
 def _matchups(tables: Tables, names: Names) -> list[dict]:
@@ -232,6 +240,8 @@ def test_oracle_inputs_match_the_tables(tables, names, oracle):
 def test_damage_table_matches_smogon_calc(tables, names, oracle):
     matchups, results = oracle
     assert len(matchups) >= 200
+    effects = {int(tables.move_effect[m["move"]]) for m in matchups}
+    assert EffectId.SELF_DESTRUCT in effects  # Selfdestruct / Explosion's halved Defense
     mismatches = []
     for m, r in zip(matchups, results):
         ours = np.asarray(jit_damage_table(tables, m["state"], 0, m["move"], m["crit"])).tolist()

@@ -41,6 +41,9 @@ class EffectId(IntEnum):
       Spe -1, Atk +1, Def +1 on the user.
     * ``RECOVER``: zeros; heals ``maxHP / 2``, fails at full HP. ``FAKE_OUT``: zeros; fails
       unless it is the user's first turn out, else flinches at the move's chance.
+    * ``SELF_DESTRUCT`` (Selfdestruct, Explosion; Kaizo's Memento): zeros; the move script
+      sets the user's HP to 0 before the accuracy check, and a physical one hits the halved
+      Defense (``damage.py``). Damp would stop it; Damp is ``AbilityId.UNSUPPORTED``.
 
     The proc chance of a ``SECONDARY_*``, ``FLINCH``, ``FAKE_OUT`` or ``RAISE_ALL_STATS_HIT``
     effect is the move's own ``move_effect_chance``; a ``SECONDARY_*`` move with chance 0 applies its
@@ -84,6 +87,7 @@ class EffectId(IntEnum):
     FAKE_OUT = 34
     RAISE_ALL_STATS_HIT = 35
     CURSE = 36
+    SELF_DESTRUCT = 37
 
 
 class AbilityId(IntEnum):

@@ -133,7 +133,13 @@ def _hit_threshold(tables: Tables, state: BattleState, actions, side) -> jnp.nda
     # in sand and Snow Cloak in hail (Battler_IgnorableAbility: Mold Breaker pierces them,
     # :2927, :2931) x80/100, then deep fog x6/10 (:2934).
     on_field = state.active.at[target].set(target_mon.astype(state.active.dtype))
-    weather = jnp.where(weather_suppressed(tables, state, on_field), Weather.NONE, state.weather)
+    # A Selfdestruct / Explosion user's HP is already 0 here (effect_script_0007.s runs
+    # before the check): its own Cloud Nine / Air Lock no longer counts.
+    user = state.active[side]
+    exploded = tables.move_effect[move] == EffectId.SELF_DESTRUCT
+    hp = state.hp.at[side, user].set(jnp.where(exploded, 0, state.hp[side, user]))
+    suppressed = weather_suppressed(tables, state._replace(hp=hp), on_field)
+    weather = jnp.where(suppressed, Weather.NONE, state.weather)
     veiled = ((weather == Weather.SANDSTORM) & (d_ability == AbilityId.SAND_VEIL)) | (
         (weather == Weather.HAIL) & (d_ability == AbilityId.SNOW_CLOAK)
     )

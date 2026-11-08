@@ -99,9 +99,8 @@ def test_check_pool_names_unsupported(tmp_path, tables, names, learnsets):
     )
     cands, _ = pool_candidates(save, tables, names, learnsets, 20)
     report = check_pool(tables, names, cands)
-    assert (
-        "box 1 slot 0 GEODUDE: Selfdestruct (relearner, move effect UNSUPPORTED)" in report.missing
-    )
+    # Geodude's relearner Selfdestruct is supported since Task K3b1-8 (SELF_DESTRUCT).
+    assert not [line for line in report.missing if "GEODUDE" in line]
     assert "box 1 slot 1 MONFERNO: Metronome (current, move effect UNSUPPORTED)" in report.missing
     assert report.level == Support.NONE
 

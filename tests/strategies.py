@@ -20,12 +20,14 @@ from pathlib import Path
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from hypothesis import assume
 from hypothesis import strategies as st
 
 from nuzline.data.spec import PokemonSpec
 from nuzline.data.tables import Names, Tables
 from nuzline.data.trainer import IntermediateData
 from nuzline.engine.actions import legal_actions, legal_opponent_actions
+from nuzline.engine.coverage import halved_defense_line, low_defense
 from nuzline.engine.ids import MOVE_STRUGGLE, AbilityId, EffectId, Stat, Status, Type, Weather
 from nuzline.engine.outcome import MAX_HITS, Outcome
 from nuzline.engine.state import (
@@ -119,6 +121,7 @@ SHARED_MOVES = (
     "AncientPower",
     "Curse",
     "Double Kick",
+    "Selfdestruct",
 )
 
 
@@ -259,6 +262,10 @@ def supported_state(draw, tables: Tables, names: Names) -> BattleState:
     faint budget 0-3 and a random set of living player slots as ``protected``, each within
     its legal range; the battle is not over."""
     parties = [draw(_party(tables, names)) for _ in (0, 1)]
+    for side in (0, 1):  # coverage refuses a Selfdestruct facing a Defense below 8
+        foe_defense = low_defense(tables, parties[1 - side][0])
+        moves = [m for mon in parties[side][0] for m in mon.moves if m]
+        assume(not any(halved_defense_line(tables, m, foe_defense) for m in moves))
     s = make_state(tables, parties[0][0], parties[1][0])
     a = {name: np.asarray(getattr(s, name)).copy() for name in BattleState._fields}
     trap_moves = np.flatnonzero(np.asarray(tables.move_effect) == EffectId.TRAP)

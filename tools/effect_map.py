@@ -91,6 +91,11 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     # Curse: effect_script_0109.s; a non-Ghost user runs subscript_curse_normal.s (direct,
     # TO_ATTACKER). The Ghost branch (subscript_curse_ghost.s) is refused by coverage.
     109: ("BATTLE_EFFECT_CURSE", _E.CURSE, (0, 0, 0)),
+    # Selfdestruct, Explosion (Kaizo: Memento too): effect_script_0007.s checks Damp (an
+    # unsupported ability, so never met), sets the attacker's HP to 0, then CalcCrit,
+    # CalcDamage; BattleSystem_CalcMoveDamage halves defenseStat for this effect
+    # (battle_lib.c:6943-6945).
+    7: ("BATTLE_EFFECT_HALVE_DEFENSE", _E.SELF_DESTRUCT, (0, 0, 0)),
     31: ("BATTLE_EFFECT_FLINCH_HIT", _E.FLINCH, (0, 0, 0)),
     # Swift, Shock Wave, Kaizo's Aurora Beam: effect_script_0017.s is CalcCrit, CalcDamage;
     # the never-miss comes from accuracy 0.

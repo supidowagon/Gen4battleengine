@@ -284,3 +284,24 @@ def test_small_move_scripts_do_what_the_engine_does():
     assert "SetMultiHit 2, SYSCTL_MULTI_HIT_MOVE" in _script(44)
     assert DECOMP_EFFECT_TO_ID[29] == (EffectId.MULTI_HIT, (0, 0, 0))
     assert DECOMP_EFFECT_TO_ID[44] == (EffectId.MULTI_HIT, (2, 0, 0))
+
+
+def test_self_destruct_script_does_what_the_engine_does(tables, names, kaizo_tables, kaizo_names):
+    """Effect 7 (Task K3b1-8): the Damp check, then the user's HP set to 0, then the hit;
+    the damage formula halves defenseStat for it; Selfdestruct and Explosion map in both
+    games (Kaizo's Memento too)."""
+    s7 = _script(7).splitlines()
+    steps = [line.split()[0] for line in s7 if line.startswith("    ")]
+    assert steps.index("CheckIgnorableAbility") < steps.index("UpdateMonData")
+    assert steps.index("UpdateMonData") < steps.index("CalcCrit") < steps.index("CalcDamage")
+    assert any("ABILITY_DAMP" in line for line in s7)
+    assert any("UpdateMonData OPCODE_SET, BTLSCR_ATTACKER, BATTLEMON_CUR_HP, 0" in ln for ln in s7)
+    lib = (DECOMP / "src/battle/battle_lib.c").read_text("utf-8").splitlines()
+    assert "BATTLE_EFFECT_HALVE_DEFENSE" in lib[6942] and "defenseStat / 2" in lib[6943]
+    assert DECOMP_EFFECT_TO_ID[7] == (EffectId.SELF_DESTRUCT, (0, 0, 0))
+    for t, n, moves in (
+        (tables, names, ("Selfdestruct", "Explosion")),
+        (kaizo_tables, kaizo_names, ("Selfdestruct", "Explosion", "Memento")),
+    ):
+        for move in moves:
+            assert int(t.move_effect[n.move(move)]) == EffectId.SELF_DESTRUCT, move

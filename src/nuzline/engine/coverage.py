@@ -26,7 +26,11 @@ items) and plan 1b (Task 2b: trainer items; Task 3: Roark's AI flags) implement:
 * move effects: every ``ids.EffectId`` but ``UNSUPPORTED``, except ``CURSE`` used by a
   Ghost-type Pokemon (``ghost_curse``: ``effect_script_0109.s`` sends it down the Ghost
   branch, ``subscript_curse_ghost.s``, which is not modelled), refused per Pokemon on both
-  sides and in the pool. Moves the tables map to
+  sides and in the pool; and a physical ``SELF_DESTRUCT`` move (Selfdestruct, Explosion)
+  facing a Pokemon whose Defense is below ``HALVED_DEFENSE_MIN`` (``halved_defense_line``:
+  the halved Defense at -6 makes the damage divisor 0), refused per move on both sides, in
+  the pool and in prep. ``effect_script_0007.s``'s Damp branch is never met: Damp is an
+  unsupported ability, so a Damp holder on either side is refused. Moves the tables map to
   ``UNSUPPORTED`` include every move that sets weather, Reflect, Light Screen, Tailwind
   or Trick Room: the engines' ``CheckFieldConditions`` pass (``step.field_conditions``)
   counts screens and weather down, but those moves are not modelled yet (plan ruling);
@@ -90,8 +94,10 @@ from nuzline.data.games import KAIZO, VANILLA
 from nuzline.data.spec import PokemonSpec
 from nuzline.data.tables import Names, Tables
 from nuzline.data.trainer import UNKNOWN_CONDITION, Trainer, missing_set_data
-from nuzline.engine.ids import AbilityId, EffectId, ItemId, TrainerItemId, Type, Weather
+from nuzline.engine.damage import PHYSICAL
+from nuzline.engine.ids import AbilityId, EffectId, ItemId, Stat, TrainerItemId, Type, Weather
 from nuzline.engine.state import make_state
+from nuzline.engine.stats import calc_stats
 
 # include/constants/forms.h:94, :98; generated/species.txt and items.txt (line N is id N-1).
 # Checked against each game's data at load (nuzline.data.game_constants).
@@ -233,6 +239,56 @@ def ghost_curse(tables: Tables, move: int, row: int) -> bool:
     if int(np.asarray(tables.move_effect)[move]) != EffectId.CURSE:
         return False
     return Type.GHOST in [int(t) for t in np.asarray(tables.species_types)[row]]
+
+
+# BattleSystem_CalcMoveDamage halves defenseStat for BATTLE_EFFECT_HALVE_DEFENSE
+# (battle_lib.c:6943-6945) before the stage scales it into stageDivisor (:6963-6975): at
+# -6 Defense (x2/8) a Defense below this gives stageDivisor 0, and ``damage /= 0`` is not
+# modelled by the engines.
+HALVED_DEFENSE_MIN = 8
+
+
+def halves_defense(tables: Tables, move: int) -> bool:
+    """``move`` is a physical ``SELF_DESTRUCT`` move: its damage reads the halved Defense
+    (a special one, Kaizo's Memento, halves nothing it reads)."""
+    return (
+        int(np.asarray(tables.move_effect)[move]) == EffectId.SELF_DESTRUCT
+        and int(np.asarray(tables.move_category)[move]) == PHYSICAL
+    )
+
+
+def defense_stat(tables: Tables, spec: PokemonSpec) -> int:
+    """``spec``'s Defense as ``make_state`` builds it: its stored ``stats``, else
+    ``calc_stats``."""
+    if spec.stats is not None:
+        return int(spec.stats[Stat.DEF])
+    row = personal_row(tables, spec.species, spec.form)
+    stats = calc_stats(
+        np.asarray(tables.species_base_stats[row]),
+        np.asarray(spec.ivs),
+        np.asarray(spec.evs),
+        spec.level,
+        np.asarray(tables.nature_mods[spec.nature]),
+        species=spec.species,
+    )
+    return int(stats[Stat.DEF])
+
+
+def low_defense(tables: Tables, foes: Sequence[PokemonSpec]) -> int | None:
+    """The lowest Defense below ``HALVED_DEFENSE_MIN`` among ``foes`` that can be hit (not
+    fainted), or None."""
+    defenses = [defense_stat(tables, m) for m in foes if m.species and m.current_hp != 0]
+    low = [d for d in defenses if d < HALVED_DEFENSE_MIN]
+    return min(low) if low else None
+
+
+def halved_defense_line(tables: Tables, move: int, foe_defense: int | None) -> str | None:
+    """`` against Defense N`` when ``move`` halves Defense and a foe has Defense ``N``
+    below ``HALVED_DEFENSE_MIN`` (``low_defense``): refused, the -6 stage would divide by
+    0. Else None."""
+    if foe_defense is None or not halves_defense(tables, move):
+        return None
+    return f" against Defense {foe_defense}"
 
 
 def move_effect_line(tables: Tables, names: Names, move: int, row: int) -> tuple[Support, str]:
@@ -493,6 +549,13 @@ def check_coverage(
     c.report.level = min(c.report.level, theirs.level)
     from nuzline.ai.policy import ai_refusals  # nuzline.ai imports the engine
 
+    for owner, party, foes in (("Player", player, opp), (display_name(trainer), opp, player)):
+        foe_defense = low_defense(tables, foes)
+        for slot, mon in enumerate(party):
+            for move in mon.moves:
+                if move and (low := halved_defense_line(tables, move, foe_defense)):
+                    where = f"{owner} {names.species_names[mon.species]} (slot {slot})"
+                    c.add(Support.NONE, f"{where}: {names.move_names[move]}{low}", "move effect")
     state = make_state(tables, player, opp, start_condition, opp_items=trainer.items, leads=leads)
     for reason in ai_refusals(tables, state, names):
         c.add(Support.NONE, f"{display_name(trainer)}: {reason}", "trainer AI")

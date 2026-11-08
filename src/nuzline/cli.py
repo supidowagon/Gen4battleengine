@@ -566,11 +566,11 @@ def _coverage(args) -> int:
     report = check_coverage(tables, names, player, trainer, opp, weather, leads)
     _print_report(report)
     if save is not None:
-        _print_pool(args, game, tables, names, player, trainer, save)
+        _print_pool(args, game, tables, names, player, trainer, opp, save)
     return EXIT_REFUSED if report.missing else EXIT_OK
 
 
-def _print_pool(args, game, tables, names, player, trainer, save) -> None:
+def _print_pool(args, game, tables, names, player, trainer, opp, save) -> None:
     """The pool section of ``coverage --save``; it never changes the exit code. The cap is
     ``--cap``, else the trainer's in the game's caps file (``prep.caps.default_cap``), else,
     for vanilla only, the highest party level. A Kaizo cap is never defaulted (its split
@@ -595,7 +595,7 @@ def _print_pool(args, game, tables, names, player, trainer, save) -> None:
     candidates, left_out = pool_candidates(save, tables, names, learnsets, cap)
     print(f"Pool at level cap {cap} ({len(candidates)} Pokemon):")
     bag = [entry for pocket in HELD_POCKETS for entry in save.bag.get(pocket, ())]
-    _print_report(check_pool(tables, names, candidates, trainer, bag))
+    _print_report(check_pool(tables, names, candidates, trainer, bag, opp))
     for line in left_out:
         _say(line)
 

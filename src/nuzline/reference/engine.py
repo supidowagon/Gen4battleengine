@@ -364,6 +364,9 @@ def _calc_move_damage(
     # lib.c:6926 sandstorm boosts a Rock-type defender's SpD.
     if weather == Weather.SANDSTORM and Type.ROCK in dfn.types:
         sp_defense = sp_defense * 15 // 10
+    # lib.c:6943-6945 BATTLE_EFFECT_HALVE_DEFENSE (Selfdestruct, Explosion) halves defenseStat.
+    if effect == EffectId.SELF_DESTRUCT:
+        defense //= 2
 
     damage = 0
     if move_class in (PHYSICAL, SPECIAL):
@@ -1121,6 +1124,13 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
     if effect == EffectId.FAKE_OUT and s.sides[side].fake_out_turn != s.turn:
         _unlock(s.sides[side])  # subscript_missed.s
         return record
+    # effect_script_0007.s (Selfdestruct, Explosion): Damp (unsupported) aside, the script
+    # sets the user's HP to 0 here, before the accuracy check and the type chart. It faints
+    # at BATTLE_CONTROL_FAINT_AFTER_SELFDESTRUCT (bcp.c:3889), within this action: the same
+    # faint check as the target's, where the order of the flagged faints changes nothing.
+    if effect == EffectId.SELF_DESTRUCT:
+        mon.hp = 0
+        turn.fainted.append((side, s.sides[side].active))
     # CheckMoveHitAccuracy (bcp.c:2865): accuracy 0 never misses; a multi-hit move
     # checks only its first hit (SYSCTL_MULTI_HIT_MOVE).
     if _t(tables, "move_accuracy", move) != 0 and not o.hit[side][0]:

@@ -305,6 +305,9 @@ def _pre_random(
     rock = jnp.any(d_types == Type.ROCK)
     sand = (weather == Weather.SANDSTORM) & rock & (not self_hit)
     sp_defense = jnp.where(sand, sp_defense * 15 // 10, sp_defense)
+    # :6943-6945 Selfdestruct / Explosion (BATTLE_EFFECT_HALVE_DEFENSE) halve defenseStat,
+    # before the stage scales it (coverage refuses a Defense the -6 stage would bring to 0).
+    defense = jnp.where(effect == EffectId.SELF_DESTRUCT, defense // 2, defense)
 
     # :6947 / :6992 physical uses Atk/Def, special SpA/SpD.
     is_physical = category == PHYSICAL

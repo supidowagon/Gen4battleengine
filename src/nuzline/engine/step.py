@@ -473,6 +473,14 @@ def _use_move(
     failed = (tables.move_effect[move] == EffectId.FAKE_OUT) & (
         state.fake_out_turn[side].astype(_I32) != state.turn.astype(_I32)
     )
+    # Selfdestruct / Explosion (effect_script_0007.s): the script sets the user's HP to 0
+    # before TryMove, so the user faints on a miss or into a Ghost too, and its own Cloud
+    # Nine no longer counts for the hit (COUNT_ALIVE_BATTLERS). The faint itself is
+    # BATTLE_CONTROL_FAINT_AFTER_SELFDESTRUCT (bcp.c:3889), within this action, so the
+    # action's faint check sees it with the target's. Damp (the script's other branch) is
+    # an unsupported ability.
+    self_destruct = can_act & has_target & (tables.move_effect[move] == EffectId.SELF_DESTRUCT)
+    state = _set_mon(state, "hp", side, user, 0, self_destruct)
     connected = can_act & has_target & hit & ~failed
     # subscript_no_target.s and subscript_missed.s unlock the attacker (a Rollout that
     # missed; a first use never locked, so this is then a no-op).

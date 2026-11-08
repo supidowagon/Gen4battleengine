@@ -21,6 +21,8 @@ from nuzline.engine.coverage import (
     CoverageReport,
     Support,
     _Collector,
+    halved_defense_line,
+    low_defense,
     move_effect_line,
     rom_change_line,
     rom_change_refusals,
@@ -102,6 +104,7 @@ def check_pool(
     candidates: Sequence[Candidate],
     trainer: Trainer | None = None,
     bag: Sequence[tuple[int, int]] = (),
+    opp: Sequence[PokemonSpec] = (),
 ) -> CoverageReport:
     """The support level of the pool: per candidate its ability and held item, and every move
     it could know (current, Move Relearner, TM), by engine effect and the AI's player-side
@@ -110,7 +113,9 @@ def check_pool(
     or a move it could learn is refused; the condition terms about the fight alone are
     already on the fight's report. ``bag`` is the save's ``(item, quantity)`` across the held
     pockets (``problem.HELD_POCKETS``): each distinct item with a decomp hold effect is a
-    ``bag: <item>`` row, graded like a held item."""
+    ``bag: <item>`` row, graded like a held item. With the trainer's party ``opp``, a
+    Selfdestruct-family move is refused against a foe whose Defense the halving and the -6
+    stage would bring to 0 (``coverage.halved_defense_line``)."""
     from nuzline.ai.policy import player_ability_refusal, player_move_refusal
 
     c = _Collector()
@@ -123,9 +128,13 @@ def check_pool(
     decomp_abilities = np.asarray(tables.species_abilities_decomp)
     item_effect = np.asarray(tables.item_effect)
 
+    foe_defense = low_defense(tables, opp)
+
     def check_move(label: str, move: int, kind: str, row: int) -> None:
         support, name = move_effect_line(tables, names, move, row)
         c.add(support, f"{label}: {name}", f"{kind}, move effect")
+        if (low := halved_defense_line(tables, move, foe_defense)) is not None:
+            c.add(Support.NONE, f"{label}: {name}{low}", f"{kind}, move effect")
         if support != Support.NONE and (reason := player_move_refusal(move)) is not None:
             refuse(f"{label}: {name} ({kind}, {reason})")
 

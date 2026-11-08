@@ -47,7 +47,11 @@ many are real). Decomp sources:
   still runs; none sets ``MOVE_STATUS_FAILED``). Its defender is the user
   (``targets_user``). A Ghost-type user takes ``subscript_curse_ghost.s``: refused by
   coverage.
-* Drain / recoil: ``subscript_drain_half_damage_dealt.s``,
+* Selfdestruct, Explosion (``SELF_DESTRUCT``): ``effect_script_0007.s`` sets the user's HP
+  to 0 before ``TryMove`` (``step._use_move``: before the accuracy check and the type chart;
+  not when the move has no target), then a plain hit on the halved Defense (``damage.py``).
+  No effect function runs for it. Its Damp branch is unreachable (Damp is unsupported).
+* Drain / recoil:``subscript_drain_half_damage_dealt.s``,
   ``subscript_recoil_1_{2,4}.s``: a fraction of ``hitDamage``, the damage dealt
   capped at the target's HP (``BtlCmd_UpdateHealthBarValue``, battle_script.c:1701),
   through ``BattleSystem_Divide`` (at least 1). Rock Head prevents recoil.
