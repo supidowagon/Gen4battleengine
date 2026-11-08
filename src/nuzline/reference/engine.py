@@ -138,6 +138,20 @@ def _move_type(tables, s: RefState, side: int, move: int) -> int:
 
 # BtlCmd_CalcMagnitudePower (script.c:5820-5852), indexed by level - 4.
 MAGNITUDE_POWER = [10, 30, 50, 70, 90, 110, 150]
+# sHPPixelsToFlailPower (script.c:4941-4948): (largest pixel count, power).
+FLAIL_BANDS = [(1, 200), (5, 150), (12, 100), (21, 80), (42, 40), (64, 20)]
+
+
+def _flail_power(cur: int, max_hp: int) -> int:
+    """``BtlCmd_CalcFlailPower`` (script.c:4958-4970) on ``App_PixelCount(cur, max, 64)``
+    (src/unk_0208C098.c:41-49)."""
+    pixels = cur * 64 // max_hp
+    if pixels == 0 and cur > 0:
+        pixels = 1
+    for bound, power in FLAIL_BANDS:
+        if pixels <= bound:
+            return power
+    return FLAIL_BANDS[-1][1]
 
 
 def _rollout_multiplier(s: RefState, attacker: int) -> int:
@@ -319,6 +333,8 @@ def _calc_move_damage(
         power = _hidden_power(atk.ivs)[1]
     elif not in_power and effect == EffectId.MAGNITUDE:  # script.c:5820
         power = MAGNITUDE_POWER[magnitude - 4]
+    elif not in_power and effect == EffectId.FLAIL:  # script.c:4958
+        power = _flail_power(atk.hp, atk.max_hp)
     elif not in_power and effect == EffectId.ROLLOUT:  # script.c:5661
         power *= _rollout_multiplier(s, attacker)
     move_type = _move_type(tables, s, attacker, move)  # lib.c:6680 (Normalize is unsupported)

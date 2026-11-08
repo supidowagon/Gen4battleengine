@@ -8,15 +8,19 @@
   ``subscript_magnitude.s``.
 """
 
+from dataclasses import replace
+
 import jax
 import jax.numpy as jnp
 import numpy as np
 
 from nuzline.engine.damage import (
     MAGNITUDE_POWER,
+    ai_damage_for_roll,
     damage_for_roll,
     damage_table,
     fixed_damage,
+    flail_power,
     hidden_power,
     move_type_of,
 )
@@ -24,7 +28,8 @@ from nuzline.engine.ids import EffectId, Type
 from nuzline.engine.observe import OBS_FIELDS, observation
 from nuzline.engine.outcome import empty_outcome
 from nuzline.engine.step import step, step_events
-from tests.engine.helpers import A, assert_matches_reference, roark_state
+from nuzline.prep.variants import flail_cuts, hp_cuts, hp_regions, max_hp_of
+from tests.engine.helpers import A, assert_matches_reference, roark_state, sample_party
 
 FIELDS = dict(OBS_FIELDS)
 _step = jax.jit(step)
@@ -342,3 +347,133 @@ def test_power_moves_match_reference(tables, names):
             assert_matches_reference(
                 tables, s, A("Magnitude", "Tackle", s, names), outcome(magnitude=level, roll=3)
             )
+
+
+# ------------------------------------------------------------------------------------ Flail
+# effect_script_0099.s: CalcFlailPower, CalcCrit, CalcDamage. BtlCmd_CalcFlailPower
+# (battle_script.c:4958-4970) reads App_PixelCount(curHP, maxHP, 64) (src/unk_0208C098.c:41-49:
+# `cur * 64 / max`, at least 1 while cur > 0) and takes the first row of sHPPixelsToFlailPower
+# (:4941-4948) whose bound satisfies `pixels <= bound` (not `<`).
+
+
+def decomp_flail_power(cur, max_hp):
+    """``BtlCmd_CalcFlailPower`` transcribed."""
+    pixels = cur * 64 // max_hp
+    if pixels == 0 and cur > 0:
+        pixels = 1
+    table = [(1, 200), (5, 150), (12, 100), (21, 80), (42, 40), (64, 20)]
+    for bound, power in table:
+        if pixels <= bound:
+            return power
+    return table[-1][1]
+
+
+def flail_state(tables, names, move="Flail", hp=None, opp="Bidoof"):
+    s = roark_state(
+        tables,
+        names,
+        player_species="Luvdisc",
+        player_moves=(move,),
+        opp_species=opp,
+        opp_moves=("Leer",),
+    )
+    return s if hp is None else s.replace_hp(0, 0, hp)
+
+
+def test_flail_bands():
+    # maxHP 42: pixels = hp * 64 // 42; the first hp of each band, and the one before it.
+    expected = {1: 200, 2: 150, 3: 150, 4: 100, 8: 100, 9: 80, 14: 80, 15: 40, 28: 40, 29: 20}
+    expected[42] = 20
+    for hp, power in expected.items():
+        assert int(flail_power(hp, 42)) == power == decomp_flail_power(hp, 42), hp
+    assert flail_cuts(42) == (1, 3, 8, 14, 28)
+    # The "at least 1" rule: 1 HP of 200 is 0 pixels before it, still the 200 band.
+    assert 1 * 64 // 200 == 0 and int(flail_power(1, 200)) == 200
+    # Every (cur, max) agrees with the transcription, and the bands are monotone in HP.
+    for max_hp in (1, 2, 7, 33, 42, 64, 65, 100, 101, 255, 341, 714):
+        powers = [int(flail_power(hp, max_hp)) for hp in range(1, max_hp + 1)]
+        assert powers == [decomp_flail_power(hp, max_hp) for hp in range(1, max_hp + 1)]
+        assert powers == sorted(powers, reverse=True)
+        for cut in flail_cuts(max_hp):  # the cut is the last HP of its band
+            if 1 <= cut < max_hp:
+                assert powers[cut - 1] > powers[cut], (max_hp, cut)
+
+
+def test_flail_damage_uses_the_band_power(tables, names):
+    max_hp = int(flail_state(tables, names).max_hp[0, 0])
+    for name in ("Flail", "Reversal"):
+        s = flail_state(tables, names, name)
+        acts = A(name, "Leer", s, names)
+        for hp in sorted({1, 2, max_hp // 4, max_hp // 2, max_hp - 1, max_hp} - {0}):
+            hurt = s.replace_hp(0, 0, hp)
+            plain = as_plain(tables, names, name, power=decomp_flail_power(hp, max_hp))
+            for roll in (0, 15):
+                real = foe_hp_drop(tables, hurt, acts, outcome(roll=roll))
+                assert real == foe_hp_drop(plain, hurt, acts, outcome(roll=roll)) > 0, (name, hp)
+    # A 200-power hit really outdamages a 20-power one.
+    s = flail_state(tables, names)
+    acts = A("Flail", "Leer", s, names)
+    low = foe_hp_drop(tables, s.replace_hp(0, 0, 1), acts, outcome())
+    assert low > foe_hp_drop(tables, s, acts, outcome())
+
+
+def test_flail_ai_damage_uses_power_one(tables, names):
+    """``TrainerAI_CalcDamage`` has no Flail case (trainer_ai.c:2868-3109): the AI scores
+    Flail at the move's table power (1), whatever the user's HP. Nor has it a Rollout case,
+    so a curled user's doubled Rollout is not seen either."""
+    s = flail_state(tables, names, "Flail", hp=1)
+    flail = names.move("Flail")
+    assert int(tables.move_power[flail]) == 1
+    plain1 = as_plain(tables, names, "Flail", power=1)
+    for roll in (0, 7, 15):
+        ai = int(ai_damage_for_roll(tables, s, 0, flail, roll))
+        assert ai == int(ai_damage_for_roll(plain1, s, 0, flail, roll))
+        battle = int(damage_for_roll(tables, s, 0, flail, False, roll))
+        assert battle > ai  # the real hit is the 200 band
+    rollout = names.move("Rollout")
+    curled = s._replace(curled=s.curled.at[0].set(1))
+    for roll in (0, 15):
+        assert int(ai_damage_for_roll(tables, curled, 0, rollout, roll)) == int(
+            ai_damage_for_roll(tables, s, 0, rollout, roll)
+        )
+        assert int(damage_for_roll(tables, curled, 0, rollout, False, roll)) > int(
+            damage_for_roll(tables, s, 0, rollout, False, roll)
+        )
+
+
+def test_flail_hp_cuts(tables, names):
+    flail, tackle = names.move("Flail"), names.move("Tackle")
+    base = sample_party(names)[0]
+    max_hp = max_hp_of(tables, base)
+    plain = replace(base, moves=(tackle, 0, 0, 0))
+    user = replace(base, moves=(tackle, flail, 0, 0))
+    gained = set(hp_cuts(tables, user, max_hp)) - set(hp_cuts(tables, plain, max_hp))
+    want = {c for c in flail_cuts(max_hp) if 1 <= c < max_hp}
+    assert want and want <= set(hp_cuts(tables, user, max_hp))
+    assert gained <= want
+    # HP inside one region shares one Flail power.
+    tops = hp_regions(tables, user, max_hp)
+    for hi, lo in zip(tops, (*tops[1:], 0)):
+        assert len({decomp_flail_power(h, max_hp) for h in range(lo + 1, hi + 1)}) == 1
+    # Reversal shares the effect.
+    reversal = replace(base, moves=(names.move("Reversal"), 0, 0, 0))
+    assert want <= set(hp_cuts(tables, reversal, max_hp))
+
+
+def test_flail_matches_reference(tables, names):
+    for name in ("Flail", "Reversal"):
+        s0 = flail_state(tables, names, name)
+        max_hp = int(s0.max_hp[0, 0])
+        hps = {1, 2, 3, 4, 8, 9, 14, 15, 28, 29, max_hp // 2, max_hp}
+        for hp in sorted(h for h in hps if 1 <= h <= max_hp):
+            s = s0.replace_hp(0, 0, hp)
+            for crit, roll in ((0, 0), (1, 15), (0, 9)):
+                assert_matches_reference(
+                    tables, s, A(name, "Leer", s, names), outcome(crit=crit, roll=roll)
+                )
+
+
+def test_flail_and_reversal_map_in_both_games(tables, names, kaizo_tables, kaizo_names):
+    for t, n in ((tables, names), (kaizo_tables, kaizo_names)):
+        for move in ("Flail", "Reversal"):
+            assert int(t.move_effect[n.move(move)]) == EffectId.FLAIL, move

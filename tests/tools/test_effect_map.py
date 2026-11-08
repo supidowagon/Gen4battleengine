@@ -305,3 +305,14 @@ def test_self_destruct_script_does_what_the_engine_does(tables, names, kaizo_tab
     ):
         for move in moves:
             assert int(t.move_effect[n.move(move)]) == EffectId.SELF_DESTRUCT, move
+
+
+def test_flail_script_does_what_the_engine_does(tables, names, kaizo_tables, kaizo_names):
+    """Effect 99 (Task K3b1-9): CalcFlailPower, then CalcCrit and CalcDamage; Flail and
+    Reversal share it in both games."""
+    steps = [line.split()[0] for line in _script(99).splitlines() if line.startswith("    ")]
+    assert steps[:3] == ["CalcFlailPower", "CalcCrit", "CalcDamage"]
+    assert DECOMP_EFFECT_TO_ID[99] == (EffectId.FLAIL, (0, 0, 0))
+    for t, n in ((tables, names), (kaizo_tables, kaizo_names)):
+        for move in ("Flail", "Reversal"):
+            assert int(t.move_effect[n.move(move)]) == EffectId.FLAIL, move

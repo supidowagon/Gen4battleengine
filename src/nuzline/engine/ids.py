@@ -44,6 +44,8 @@ class EffectId(IntEnum):
     * ``SELF_DESTRUCT`` (Selfdestruct, Explosion; Kaizo's Memento): zeros; the move script
       sets the user's HP to 0 before the accuracy check, and a physical one hits the halved
       Defense (``damage.py``). Damp would stop it; Damp is ``AbilityId.UNSUPPORTED``.
+    * ``FLAIL`` (Flail, Reversal): zeros; the power comes from the user's HP pixels
+      (``damage.flail_power``); the trainer AI scores it at the table power.
 
     The proc chance of a ``SECONDARY_*``, ``FLINCH``, ``FAKE_OUT`` or ``RAISE_ALL_STATS_HIT``
     effect is the move's own ``move_effect_chance``; a ``SECONDARY_*`` move with chance 0 applies its
@@ -88,6 +90,7 @@ class EffectId(IntEnum):
     RAISE_ALL_STATS_HIT = 35
     CURSE = 36
     SELF_DESTRUCT = 37
+    FLAIL = 38
 
 
 class AbilityId(IntEnum):

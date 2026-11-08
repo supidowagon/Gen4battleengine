@@ -122,6 +122,7 @@ SHARED_MOVES = (
     "Curse",
     "Double Kick",
     "Selfdestruct",
+    "Flail",
 )
 
 

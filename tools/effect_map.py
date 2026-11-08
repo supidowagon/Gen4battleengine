@@ -96,6 +96,9 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     # CalcDamage; BattleSystem_CalcMoveDamage halves defenseStat for this effect
     # (battle_lib.c:6943-6945).
     7: ("BATTLE_EFFECT_HALVE_DEFENSE", _E.SELF_DESTRUCT, (0, 0, 0)),
+    # Flail, Reversal: effect_script_0099.s runs CalcFlailPower (battle_script.c:4958) before
+    # CalcCrit and CalcDamage; the power comes from the user's HP pixels.
+    99: ("BATTLE_EFFECT_INCREASE_POWER_WITH_LESS_HP", _E.FLAIL, (0, 0, 0)),
     31: ("BATTLE_EFFECT_FLINCH_HIT", _E.FLINCH, (0, 0, 0)),
     # Swift, Shock Wave, Kaizo's Aurora Beam: effect_script_0017.s is CalcCrit, CalcDamage;
     # the never-miss comes from accuracy 0.

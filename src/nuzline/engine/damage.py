@@ -58,6 +58,27 @@ _I32 = jnp.int32
 # BtlCmd_CalcMagnitudePower (battle_script.c:5820-5852): the power of Magnitude levels 4-10.
 MAGNITUDE_POWER = jnp.array([10, 30, 50, 70, 90, 110, 150], jnp.int32)
 MAGNITUDE_MIN = 4
+# BtlCmd_CalcFlailPower (battle_script.c:4958-4970): sHPPixelsToFlailPower (:4941-4948) as
+# (largest pixel count of the band, power); the first row with pixels <= its bound wins.
+# The last row's bound is 64, the most App_PixelCount(cur, max, 64) can return.
+FLAIL_BOUNDS = (1, 5, 12, 21, 42, 64)
+FLAIL_POWER = jnp.array([200, 150, 100, 80, 40, 20], jnp.int32)
+FLAIL_PIXELS = 64
+
+
+def hp_pixels(cur, max_hp):
+    """``App_PixelCount(cur, max, 64)`` (src/unk_0208C098.c:41-49): ``cur * 64 / max`` in
+    integer arithmetic, but at least 1 while ``cur > 0``."""
+    cur, max_hp = _i32(cur), _i32(max_hp)
+    pixels = cur * FLAIL_PIXELS // jnp.maximum(max_hp, 1)
+    return jnp.where((pixels == 0) & (cur > 0), 1, pixels)
+
+
+def flail_power(cur, max_hp):
+    """``int32``: Flail / Reversal's power at ``cur`` of ``max_hp`` HP (battle_script.c:4958)."""
+    pixels = hp_pixels(cur, max_hp)
+    row = jnp.sum(pixels > jnp.asarray(FLAIL_BOUNDS, jnp.int32))
+    return FLAIL_POWER[jnp.minimum(row, len(FLAIL_BOUNDS) - 1)]
 
 
 def _i32(x) -> jnp.ndarray:
@@ -203,6 +224,7 @@ def _pre_random(
     power_mul=10,
     self_hit: bool = False,
     magnitude=MAGNITUDE_MIN,
+    ai: bool = False,
 ):
     """Damage after ``+ 2`` and the crit multiplier, before the random roll.
 
@@ -210,7 +232,9 @@ def _pre_random(
     ``self_hit`` is the confusion self-hit, ``CALC_SELF_HIT(MOVE_STRUGGLE, 40)``
     (``include/battle/common.h:35``): the attacker is its own defender, power 40, and
     no side or field conditions are passed (no screens, no weather). ``magnitude`` is
-    Magnitude's level (``Outcome.magnitude``)."""
+    Magnitude's level (``Outcome.magnitude``). ``ai`` is ``TrainerAI_CalcDamage``
+    (trainer_ai.c:2868-3109), which has no Flail or Rollout case: both keep the move's
+    table power."""
     atk_side = _i32(atk_side)
     def_side = atk_side if self_hit else 1 - atk_side
     move = _i32(move)
@@ -222,19 +246,26 @@ def _pre_random(
     effect = _i32(tables.move_effect[move])
     # CalcHiddenPowerParams (battle_script.c:6007) / CalcMagnitudePower (:5820) set movePower.
     # CalcRolloutPower (:5661) doubles movePower per use, and again when curled.
+    # CalcFlailPower (:4958) reads the attacker's current and max HP.
+    rollout_mul = 1 if ai else rollout_multiplier(s, atk_side)
     variable = jnp.where(
         effect == EffectId.HIDDEN_POWER,
         hidden_power(s.ivs[atk_side, a_slot])[1],
         jnp.where(
             effect == EffectId.ROLLOUT,
-            base_power * rollout_multiplier(s, atk_side),
-            MAGNITUDE_POWER[jnp.clip(_i32(magnitude) - MAGNITUDE_MIN, 0, 6)],
+            base_power * rollout_mul,
+            jnp.where(
+                effect == EffectId.FLAIL,
+                flail_power(s.hp[atk_side, a_slot], s.max_hp[atk_side, a_slot]),
+                MAGNITUDE_POWER[jnp.clip(_i32(magnitude) - MAGNITUDE_MIN, 0, 6)],
+            ),
         ),
     )
     has_variable = (
         (effect == EffectId.HIDDEN_POWER)
         | (effect == EffectId.MAGNITUDE)
         | (effect == EffectId.ROLLOUT)
+        | ((effect == EffectId.FLAIL) & (not ai))
     )
     power = jnp.where(has_variable, variable, base_power)
     power = jnp.asarray(CONFUSION_POWER, _I32) if self_hit else power
@@ -449,7 +480,7 @@ def ai_damage_for_roll(tables: Tables, state: BattleState, atk_side, move, roll)
     special calculation: ``BattleSystem_CalcMoveDamage`` with ``criticalMul`` 1 (screens,
     weather, abilities, items and stages as in battle), then STAB and the type chart,
     then the variance ``85 + roll`` percent last, at least 1 when non-zero."""
-    damage, move_type, category, power = _pre_random(tables, state, atk_side, move, False)
+    damage, move_type, category, power = _pre_random(tables, state, atk_side, move, False, ai=True)
     return _finish(
         tables,
         state,

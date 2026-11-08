@@ -54,7 +54,9 @@ _WEATHER = {
 }
 _GENDER = {0: "M", 1: "F", 2: "N"}
 _CATEGORY = {"Physical": 0, "Special": 1}
-_NO_POWER = (EffectId.LEVEL_DAMAGE, EffectId.BIDE)  # fixed damage: no base power
+# No table power to compare: fixed damage, and Flail (the table's 1 against @smogon/calc's 0;
+# both then take the power from the attacker's HP in 64ths, the same bands).
+_NO_POWER = (EffectId.LEVEL_DAMAGE, EffectId.BIDE, EffectId.FLAIL)
 
 jit_damage_table = jax.jit(damage_table)
 
@@ -242,6 +244,7 @@ def test_damage_table_matches_smogon_calc(tables, names, oracle):
     assert len(matchups) >= 200
     effects = {int(tables.move_effect[m["move"]]) for m in matchups}
     assert EffectId.SELF_DESTRUCT in effects  # Selfdestruct / Explosion's halved Defense
+    assert EffectId.FLAIL in effects  # Flail / Reversal: @smogon/calc has the same 64ths bands
     mismatches = []
     for m, r in zip(matchups, results):
         ours = np.asarray(jit_damage_table(tables, m["state"], 0, m["move"], m["crit"])).tolist()
