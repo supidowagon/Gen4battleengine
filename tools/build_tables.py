@@ -19,6 +19,8 @@ Encodings:
   separator (the Ghost immunities), which a Foresight-identified defender ignores
   (``BattleSystem_ApplyTypeChart``, battle_lib.c:2611).
 * ``nature_mods[nature, stat]``: +1 raised, -1 lowered, 0 otherwise (HP always 0).
+* ``item_hold_effect[item]``: the decomp hold effect as stored (``ItemData.holdEffect``; 0 = none),
+  whether or not the engine supports it (``item_effect`` is the mapped engine id).
 * ``item_param[item]``: ``(decomp hold param, 0)`` for supported items, else zeros.
 * ``trainer_item_effect[item]``: ``ids.TrainerItemId`` of the item used from a trainer's
   bag (``DECOMP_TRAINER_ITEM_TO_ID``).
@@ -476,6 +478,7 @@ def build_arrays(inter: Path, game: str = "platinum_us") -> tuple[dict[str, np.n
             "item param",
         ),
         "trainer_item_effect": _arr(trainer_item_ids, np.int8, "trainer item effect"),
+        "item_hold_effect": _arr([i["hold_effect"] for i in items], np.int16, "item hold effect"),
     }
     manifest = {
         "version": MANIFEST_VERSION,

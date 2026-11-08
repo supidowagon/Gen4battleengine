@@ -263,13 +263,13 @@ def test_names_form_checks_the_species_range(names):
         names.form(479, 6)
 
 
-def test_manifest_version_is_8(
+def test_manifest_version_is_9(
     names,
 ):  # the committed manifest; `names` skips when tables are absent
     assert (
         json.loads((TABLES / "manifest.json").read_text("utf-8"))["version"]
         == MANIFEST_VERSION
-        == 8
+        == 9
     )
 
 
@@ -307,3 +307,14 @@ def test_built_npz_records_its_version(tables):
     with np.load(TABLES / "tables.npz") as z:
         assert "version" in z.files and int(z["version"]) == MANIFEST_VERSION
     assert "version" not in Tables._fields
+
+
+def test_item_hold_effect_matches_decomp(tables, names):
+    # survey 1.5: the raw decomp hold effect, whether or not the engine models it.
+    for item, effect in (
+        ("Focus Sash", 103),
+        ("Quick Claw", 52),
+        ("Chilan Berry", 35),
+        ("Honey", 0),
+    ):
+        assert int(tables.item_hold_effect[names.item(item)]) == effect, item

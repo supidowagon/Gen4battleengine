@@ -55,12 +55,21 @@ def test_resources_from_bag(tables, names, learnsets):
         "tms_hms": [(tm10, 1), (hm01, 1)],
         "berries": [(oran, 2)],
     }
-    assert bag_resources(bag, tables, names, learnsets, ()) == Resources(
-        1, ((tm10, 1),), (hm01,), ((oran, 2),)
+    assert bag_resources(bag, tables, names, learnsets, ()) == (
+        Resources(1, ((tm10, 1),), (hm01,), ((oran, 2),)),
+        [],
     )
-    assert bag_resources(bag, tables, names, learnsets, {scale}).heart_scales == 0
-    assert bag_resources(bag, tables, names, learnsets, {tm10}).tms == ()
-    assert bag_resources(bag, tables, names, learnsets, {oran}).held == ()
+    assert bag_resources(bag, tables, names, learnsets, {scale})[0].heart_scales == 0
+    assert bag_resources(bag, tables, names, learnsets, {tm10})[0].tms == ()
+    assert bag_resources(bag, tables, names, learnsets, {oran})[0].held == ()
+
+
+def test_bag_resources_warns_on_unsupported_item(tables, names, learnsets):
+    herb, honey = names.item("White Herb"), names.item("Honey")
+    bag = {"items": [(herb, 1), (honey, 1)], "berries": [(names.item("Oran Berry"), 1)]}
+    resources, warnings = bag_resources(bag, tables, names, learnsets, ())
+    assert herb not in dict(resources.held)
+    assert warnings == ["White Herb: not offered (hold effect not supported)"]
 
 
 def test_usable_pool_excludes_and_trims(tables, names):

@@ -53,10 +53,14 @@ def bag_resources(
     names: Names,
     learnsets: Learnsets,
     reserved: Collection[int],
-) -> Resources:
+) -> tuple[Resources, list[str]]:
     """The bag's resources with every ``reserved`` item id removed entirely (design.md §4.4:
-    reserved resources are excluded from the search, never merely penalised)."""
+    reserved resources are excluded from the search, never merely penalised), and one warning
+    per holdable bag item (a decomp hold effect) the engine does not model, which is not
+    offered."""
     effect = np.asarray(tables.item_effect)
+    hold_effect = np.asarray(tables.item_hold_effect)
+    warnings: list[str] = []
     scale = names.item(HEART_SCALE)
     scales = 0
     tms: dict[int, int] = {}
@@ -77,7 +81,14 @@ def bag_resources(
                 kind = ItemId(int(effect[item]))
                 if kind in IMPLEMENTED_ITEMS and kind != ItemId.NONE:
                     held[item] = held.get(item, 0) + qty
-    return Resources(scales, tuple(sorted(tms.items())), tuple(sorted(hms)), tuple(held.items()))
+                elif int(hold_effect[item]) != 0:
+                    line = f"{names.item_names[item]}: not offered (hold effect not supported)"
+                    if line not in warnings:
+                        warnings.append(line)
+    resources = Resources(
+        scales, tuple(sorted(tms.items())), tuple(sorted(hms)), tuple(held.items())
+    )
+    return resources, warnings
 
 
 def _move_refusal(tables: Tables, move: int) -> str | None:
@@ -353,7 +364,8 @@ def build_problem(
             why = "; ".join(line for line in lines if line.startswith(pool[i].label + ":"))
             raise ValueError(f"cannot protect {pool[i].label}: {why or 'left out'}")
         protected.add(index[pool[i].location])
-    resources = bag_resources(save.bag, tables, names, learnsets, set(reserved))
+    resources, bag_warnings = bag_resources(save.bag, tables, names, learnsets, set(reserved))
+    warnings += bag_warnings
     if names.game == KAIZO:  # a held item a not_reached condition lists (design.md §3)
         held = []
         for item, qty in resources.held:

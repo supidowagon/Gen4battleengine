@@ -101,13 +101,16 @@ def check_pool(
     names: Names,
     candidates: Sequence[Candidate],
     trainer: Trainer | None = None,
+    bag: Sequence[tuple[int, int]] = (),
 ) -> CoverageReport:
     """The support level of the pool: per candidate its ability and held item, and every move
     it could know (current, Move Relearner, TM), by engine effect and the AI's player-side
     refusals (``ai.policy.player_move_refusal``/``player_ability_refusal``). With ``trainer``
     (Kaizo), a candidate a ``not_reached`` ROM-change condition reaches through its own spec
     or a move it could learn is refused; the condition terms about the fight alone are
-    already on the fight's report."""
+    already on the fight's report. ``bag`` is the save's ``(item, quantity)`` across the held
+    pockets (``problem.HELD_POCKETS``): each distinct item with a decomp hold effect is a
+    ``bag: <item>`` row, graded like a held item."""
     from nuzline.ai.policy import player_ability_refusal, player_move_refusal
 
     c = _Collector()
@@ -159,4 +162,12 @@ def check_pool(
             check_move(cand.label, move, "relearner")
         for item_id, move in cand.tms:
             check_move(cand.label, move, names.item_names[item_id])
+    hold_effect = np.asarray(tables.item_hold_effect)
+    for item_id in sorted({item for item, _ in bag}):
+        if int(hold_effect[item_id]) != 0:
+            c.add(
+                IMPLEMENTED_ITEMS.get(ItemId(int(item_effect[item_id])), Support.NONE),
+                f"bag: {names.item_names[item_id]}",
+                "held item",
+            )
     return c.report

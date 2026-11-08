@@ -159,3 +159,18 @@ def test_pool_ignores_fight_level_conditions(tables, names, vanilla_manifest, co
     ]
     kaizo = kaizo_names_with(vanilla_manifest, [cond])
     assert check_pool(tables, kaizo, cands, trainer=roark_trainer()).missing == []
+
+
+def test_pool_lists_holdable_bag_items(tables, names):
+    from nuzline.engine.coverage import Support
+
+    bag = [(names.item(n), 1) for n in ("White Herb", "Pecha Berry", "Oran Berry", "Honey")]
+    report = check_pool(tables, names, [], bag=bag)
+    assert report.missing == [
+        "bag: Pecha Berry (held item UNSUPPORTED)",
+        "bag: White Herb (held item UNSUPPORTED)",
+    ]
+    assert not any("Honey" in line for line in report.missing)
+    assert report.level == Support.NONE
+    only_oran = check_pool(tables, names, [], bag=[(names.item("Oran Berry"), 3)])
+    assert only_oran.level == Support.EXACT and not only_oran.missing
