@@ -54,3 +54,11 @@ def test_chance_zero_ancientpower_is_plain():
     ancient = {"name": "AncientPower", "effect": 140, "effect_chance": 10}
     assert _move_effect(ancient)[0] == int(EffectId.RAISE_ALL_STATS_HIT)
     assert _move_effect({**ancient, "effect_chance": 0}) == (int(EffectId.PLAIN), (0, 0, 0))
+
+
+def test_chance_zero_flinch_raises():
+    # battle_lib.c:1577 asserts effectChance != 0 for this indirect effect.
+    headbutt = {"name": "Headbutt", "effect": 31, "effect_chance": 30}
+    assert _move_effect(headbutt)[0] == int(EffectId.FLINCH)
+    with pytest.raises(BuildError, match="Headbutt"):
+        _move_effect({**headbutt, "effect_chance": 0})

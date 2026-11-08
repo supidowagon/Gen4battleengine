@@ -22,6 +22,7 @@ from nuzline.engine.coverage import (
     IMPLEMENTED_EFFECTS,
     IMPLEMENTED_ITEMS,
     Support,
+    ghost_curse,
     rom_change_line,
     rom_change_refusals,
 )
@@ -91,10 +92,17 @@ def bag_resources(
     return resources, warnings
 
 
-def _move_refusal(tables: Tables, move: int) -> str | None:
-    """Why a player's ``move`` cannot be used (engine effect or AI), or None."""
+GHOST_CURSE_REFUSAL = "Ghost-type user: move effect not implemented"
+
+
+def _move_refusal(tables: Tables, move: int, spec: PokemonSpec) -> str | None:
+    """Why ``spec``'s Pokemon cannot use ``move`` (engine effect, as ``coverage``'s
+    ``move_effect_line`` grades it for that Pokemon: a Ghost-type user's Curse is refused,
+    ``coverage.ghost_curse``; or the AI), or None."""
     from nuzline.ai.policy import player_move_refusal
 
+    if ghost_curse(tables, move, personal_row(tables, spec.species, spec.form)):
+        return GHOST_CURSE_REFUSAL
     effect = EffectId(int(np.asarray(tables.move_effect)[move]))
     if IMPLEMENTED_EFFECTS.get(effect, Support.NONE) == Support.NONE:
         return "move effect not implemented"
@@ -156,8 +164,8 @@ def usable_pool(
     def rom(specs: Sequence[PokemonSpec] = (), moves: Sequence[int] = ()) -> str | None:
         return _rom_change_refusal(tables, names, trainer, specs, moves)
 
-    def move_refusal(move: int) -> str | None:
-        return _move_refusal(tables, move) or rom(moves=[move])
+    def move_refusal(move: int, spec: PokemonSpec) -> str | None:
+        return _move_refusal(tables, move, spec) or rom(moves=[move])
 
     out: list[Candidate] = []
     lines: list[str] = []
@@ -171,7 +179,7 @@ def usable_pool(
             ]
             why.append(f"{ability} ({r})")
         for move in spec.moves:
-            if move and (r := move_refusal(move)) is not None:
+            if move and (r := move_refusal(move, spec)) is not None:
                 why.append(f"{names.move_names[move]} ({r})")
         if why:
             lines.extend(f"{cand.label}: left out: {w}" for w in why)
@@ -181,13 +189,13 @@ def usable_pool(
             cand = dataclasses.replace(cand, spec=dataclasses.replace(spec, item=0))
         relearner = []
         for move in cand.relearner:
-            if (r := move_refusal(move)) is None:
+            if (r := move_refusal(move, spec)) is None:
                 relearner.append(move)
             else:
                 lines.append(f"{cand.label}: {names.move_names[move]} not offered ({r})")
         tms = []
         for item, move in cand.tms:
-            if (r := move_refusal(move)) is None:
+            if (r := move_refusal(move, spec)) is None:
                 tms.append((item, move))
             else:
                 lines.append(f"{cand.label}: {names.move_names[move]} not offered ({r})")
@@ -259,7 +267,7 @@ def levelled_moves(
             if not spec.level - cand.candies < level <= cap or move in seen:
                 continue
             seen.add(move)
-            if _move_refusal(tables, move) is None and (
+            if _move_refusal(tables, move, spec) is None and (
                 names is None or _rom_change_refusal(tables, names, trainer, moves=[move]) is None
             ):
                 learned.append((level, move))

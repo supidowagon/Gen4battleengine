@@ -173,6 +173,11 @@ def _move_effect(
             if params[2] != 0:
                 return int(EffectId.UNSUPPORTED), (0, 0, 0)
             return int(EffectId.PLAIN), (0, 0, 0)
+    if eid == EffectId.FLINCH and move["effect_chance"] == 0:
+        # effect_script_0031.s is a plain indirect effect: BattleSystem_TriggerSecondaryEffect
+        # asserts effectChance != 0 (battle_lib.c:1577), while the engine would read chance 0
+        # as an ON_HIT flinch.
+        raise BuildError(f"move {move['name']!r}: flinch effect {move['effect']} with chance 0")
     if eid == EffectId.FAKE_OUT and move["effect_chance"] == 0:
         # effect_script_0158.s rolls RandNext() % 100 < chance: chance 0 never flinches, but
         # the engine reads chance 0 as an ON_HIT effect, and PLAIN would drop the failure.

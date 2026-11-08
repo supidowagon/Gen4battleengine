@@ -332,3 +332,32 @@ def test_kaizo_condition_drops_levelled_moves_and_bag_items(
     q, _ = _build(tables, names, save, learnsets)
     assert q.levelled == ((), ((16, names.move("Bug Bite")),))
     assert q.resources.held == ((oran, 2),)
+
+
+def test_ghost_curse_is_not_offered_in_prep(tables, names, learnsets):
+    """A Ghost-type user's Curse takes the Ghost branch (effect_script_0109.s:5-6), which the
+    engine does not model: prep refuses it per Pokemon, as coverage does (Task K3b1-7)."""
+    from nuzline.prep.problem import GHOST_CURSE_REFUSAL, levelled_moves
+
+    base = sample_party(names)[0]
+    curse, tackle = names.move("Curse"), names.move("Tackle")
+    shuppet = names.species("Shuppet")
+    slot = names.species_abilities(shuppet).index(names.ability("Insomnia"))
+    ghost = replace(base, species=shuppet, form=0, ability_slot=slot, level=16)
+    assert (13, curse) in learnsets.level_up(shuppet)
+    knows = candidate(names, replace(ghost, moves=(curse, 0, 0, 0)), 0)
+    could = candidate(names, replace(ghost, moves=(tackle, 0, 0, 0)), 1, relearner=(curse,),
+                      tms=((names.item("TM10"), curse),), candies=4)  # fmt: skip
+    furret = replace(base, species=names.species("Furret"), ability_slot=1, level=16)
+    plain = candidate(names, replace(furret, moves=(curse, 0, 0, 0)), 2, relearner=(curse,))
+    pool, lines = usable_pool(tables, names, [knows, could, plain])
+    assert [c.label for c in pool] == [could.label, plain.label]
+    assert f"{knows.label}: left out: Curse ({GHOST_CURSE_REFUSAL})" in lines
+    assert lines.count(f"{could.label}: Curse not offered ({GHOST_CURSE_REFUSAL})") == 2
+    assert pool[0].relearner == () and pool[0].tms == ()
+    assert pool[1].relearner == (curse,) and not any(plain.label in ln for ln in lines)
+    # Levelled moves: Shuppet's level-13 Curse (save level 12 -> cap 16) is dropped.
+    levelled = levelled_moves(tables, [pool[0]], learnsets, 16)
+    assert all(move != curse for _, move in levelled[0])
+    ungated = [m for lv, m in learnsets.level_up(shuppet) if 12 < lv <= 16]
+    assert curse in ungated
