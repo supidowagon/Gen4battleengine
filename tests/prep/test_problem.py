@@ -2,8 +2,10 @@
 
 from dataclasses import replace
 
+import numpy as np
 import pytest
 
+from nuzline.data.forms import personal_row
 from nuzline.data.learnsets import load_learnsets
 from nuzline.prep.pool import pool_candidates
 from nuzline.prep.problem import (
@@ -15,7 +17,7 @@ from nuzline.prep.problem import (
     usable_pool,
 )
 from nuzline.saves import load_save
-from tests.engine.helpers import roark_party, roark_trainer, sample_party
+from tests.engine.helpers import kaizo_names_with, roark_party, roark_trainer, sample_party
 from tests.prep.fixtures import candidate, problem
 from tests.saves.synthetic import box_record, party_record
 from tests.saves.writer import build_image
@@ -246,3 +248,78 @@ def test_left_out_party_lists_excluded_and_unsupported(tmp_path, tables, names, 
     p, _ = _build(tables, names, save, learnsets, exclude=["party:2"])
     assert [c.location[2] for c in p.candidates] == [0]
     assert p.left_out_party == ((1, "SPINARAK"), (2, "GEODUDE"))
+
+
+# Gen IV move index of Water Gun (names.move("Water Gun")): an implemented move no sample or
+# Roark party member knows, so only the TM or relearner lists below carry it.
+MOVE_X = 55
+ROM_LINE = "Kaizo ROM: c is not modelled and this fight reaches it (docs/kaizo/rom_diff.md)"
+
+
+def test_kaizo_condition_on_a_tm_move_drops_it(tables, names, vanilla_manifest):
+    # Final review I1: a TM or relearner move a not_reached condition lists is not offered;
+    # a candidate that already knows it is left out.
+    spec = sample_party(names)[0]
+    tm10 = names.item("TM10")
+    offered = candidate(names, spec, 0, relearner=(MOVE_X,), tms=((tm10, MOVE_X),))
+    knows = candidate(names, replace(spec, moves=(MOVE_X, *spec.moves[1:])), 1)
+    kaizo = kaizo_names_with(vanilla_manifest, [{"moves": [MOVE_X]}])
+    pool, lines = usable_pool(tables, kaizo, [offered, knows], trainer=roark_trainer())
+    assert [c.label for c in pool] == [offered.label]
+    assert pool[0].relearner == () and pool[0].tms == ()
+    assert lines == [
+        f"{offered.label}: Water Gun not offered ({ROM_LINE})",
+        f"{offered.label}: Water Gun not offered ({ROM_LINE})",
+        f"{knows.label}: left out: Water Gun ({ROM_LINE})",
+    ]
+    # Vanilla, or no trainer: nothing changes.
+    for n, t in ((names, roark_trainer()), (kaizo, None)):
+        assert usable_pool(tables, n, [offered, knows], trainer=t) == (
+            [offered, knows],
+            [],
+        )
+
+
+def test_kaizo_condition_on_an_ability_leaves_the_candidate_out(tables, names, vanilla_manifest):
+    spec = sample_party(names)[0]
+    row = personal_row(tables, spec.species, spec.form)
+    ability = int(np.asarray(tables.species_abilities_decomp)[row][spec.ability_slot])
+    kaizo = kaizo_names_with(vanilla_manifest, [{"abilities": [ability]}])
+    cand = candidate(names, spec, 0)
+    pool, lines = usable_pool(tables, kaizo, [cand], trainer=roark_trainer())
+    assert pool == []
+    assert lines == [f"{cand.label}: left out: {names.ability_names[ability]} ({ROM_LINE})"]
+    assert usable_pool(tables, names, [cand], trainer=roark_trainer()) == ([cand], [])
+
+
+def test_kaizo_condition_on_a_held_item_takes_it_off(tables, names, vanilla_manifest):
+    oran = names.item("Oran Berry")
+    spec = replace(sample_party(names)[0], item=oran)
+    kaizo = kaizo_names_with(vanilla_manifest, [{"items": [oran]}])
+    pool, lines = usable_pool(tables, kaizo, [candidate(names, spec, 0)], trainer=roark_trainer())
+    assert pool[0].spec.item == 0
+    assert lines == [f"party slot 0 MONFERNO: Oran Berry taken off ({ROM_LINE})"]
+
+
+def test_kaizo_condition_drops_levelled_moves_and_bag_items(
+    tmp_path, tables, names, learnsets, vanilla_manifest
+):
+    oran = names.item("Oran Berry")
+    save = _save(
+        tmp_path,
+        tables,
+        names,
+        [(("Furret", 16, ("Scratch", "Defense Curl")), {"ability_slot": 1})],
+        [("Kricketot", 5, ("Growl", "Bide"))],
+        bag={"berries": [(oran, 2)]},
+    )
+    kaizo = kaizo_names_with(
+        vanilla_manifest, [{"moves": [names.move("Bug Bite")], "items": [oran]}]
+    )
+    p, warnings = _build(tables, kaizo, save, learnsets)
+    assert p.levelled == ((), ())
+    assert p.resources.held == ()
+    assert f"Oran Berry: not offered ({ROM_LINE})" in warnings
+    q, _ = _build(tables, names, save, learnsets)
+    assert q.levelled == ((), ((16, names.move("Bug Bite")),))
+    assert q.resources.held == ((oran, 2),)
