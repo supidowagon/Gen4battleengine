@@ -550,8 +550,8 @@ note = "decoded: one word of the AI script gTrainerAITable, which overlay14 carr
 [[code]]
 module = "overlay16"
 symbol = "BattleControllerPlayer_CheckObedience"
-status = "unknown"
-note = "decoded: the badge gate if (TrainerInfo_BadgeCount(trInfo) >= 8) return OBEY_CHECK_SUCCESS compares with 0 instead of 8, and a badge count is never negative, so the check always returns OBEY_CHECK_SUCCESS there, before any level test or RandNext draw: every Pokemon the player sends obeys at any level, traded or not (vanilla: with fewer than 8 badges a non-OT Pokemon above the badge level cap, 10 with 0 badges, may disobey); src/battle/battle_controller_player.c:2136; rom:overlay16@0x0224E1D0; it runs on every player move in every fight, Roark's included; the engine has no obedience check (it always uses the chosen move and draws no RNG for it), which is what the patched code does, but no test pins that; K3b adds that test and marks this modelled -> K3b"
+status = "modelled"
+note = "decoded: the badge gate if (TrainerInfo_BadgeCount(trInfo) >= 8) return OBEY_CHECK_SUCCESS compares with 0 instead of 8, and a badge count is never negative, so the check always returns OBEY_CHECK_SUCCESS there, before any level test or RandNext draw: every Pokemon the player sends obeys at any level, traded or not (vanilla: with fewer than 8 badges a non-OT Pokemon above the badge level cap, 10 with 0 badges, may disobey); src/battle/battle_controller_player.c:2136; rom:overlay16@0x0224E1D0; it runs on every player move in every fight, Roark's included; the engine has no obedience check (it always uses the chosen move and draws no RNG for it), which is what the patched code does, pinned by tests/engine/test_obedience.py:13"
 
 [[code]]
 module = "overlay16"
