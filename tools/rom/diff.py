@@ -690,7 +690,25 @@ def member_label(path: str, index: int, decomp: Path) -> str | None:
 
 # --- classification ---------------------------------------------------------------------
 
-STATUSES = ("modelled", "irrelevant", "unknown")
+STATUSES = ("modelled", "irrelevant", "not_reached", "unknown")
+
+# The keys of a ``not_reached`` entry's ``when`` table (K3a): the battle conditions under
+# which the change is reached. Several keys mean OR. Values are lists, except
+# ``trainer_items`` (``true``).
+WHEN_KEYS = (
+    "format",
+    "area_condition",
+    "move_effect",
+    "ability",
+    "held_item",
+    "map_weather",
+    "trainer_items",
+)
+_WHEN_CHOICES = {
+    "format": ("double", "double_two_trainer", "multi"),
+    "area_condition": ("trick_room", "gravity"),
+}
+_WHEN_INTS = ("move_effect", "map_weather")
 
 
 def _key(c: CodeChange) -> tuple[str, str]:
@@ -721,6 +739,59 @@ def load_classification(path: Path) -> dict[tuple[str, str], tuple[str, str]]:
         if key in out:
             raise ValueError(f"{path}: duplicate entry {key[0]} {key[1]}")
         out[key] = (status, note)
+    return out
+
+
+def _check_when(label: str, when: object) -> dict[str, object]:
+    """``when`` validated against the grammar, or ``ValueError`` naming ``label``."""
+    if not isinstance(when, dict) or not when:
+        raise ValueError(f"{label}: when must be a non-empty table")
+    for key, value in when.items():
+        if key not in WHEN_KEYS:
+            raise ValueError(f"{label}: unknown when key {key!r}; expected one of {WHEN_KEYS}")
+        if key == "trainer_items":
+            if value is not True:
+                raise ValueError(f"{label}: when.trainer_items must be true")
+            continue
+        if not isinstance(value, list) or not value:
+            raise ValueError(f"{label}: when.{key} must be a non-empty list")
+        for v in value:
+            if key in _WHEN_CHOICES:
+                ok = v in _WHEN_CHOICES[key]
+            elif key in _WHEN_INTS:
+                ok = isinstance(v, int) and not isinstance(v, bool)
+            else:
+                ok = isinstance(v, str) and bool(v)
+            if not ok:
+                hint = _WHEN_CHOICES.get(key) or ("ints" if key in _WHEN_INTS else "names")
+                raise ValueError(f"{label}: when.{key} value {v!r}; expected {hint}")
+    return dict(when)
+
+
+def load_conditions(path: Path) -> dict[str, dict[str, object]]:
+    """``label -> when`` for every ``not_reached`` entry of ``path``, labelled
+    ``"<module> <symbol>"`` (``[[code]]``) or ``"<narc>#<index>"`` (``[[member]]``). A
+    ``not_reached`` entry without a ``when``, or a ``when`` on any other status, raises, as
+    does a ``when`` outside the grammar (``WHEN_KEYS``)."""
+    with Path(path).open("rb") as f:
+        data = tomllib.load(f)
+    out: dict[str, dict[str, object]] = {}
+    for table, fields, fmt in (
+        ("code", ("module", "symbol"), "{} {}"),
+        ("member", ("narc", "index"), "{}#{}"),
+    ):
+        for entry in data.get(table, []):
+            try:
+                label = fmt.format(*(entry[k] for k in fields))
+                status = entry["status"]
+            except KeyError as e:
+                raise ValueError(f"{path}: [[{table}]] entry {entry} lacks {e}") from e
+            if status == "not_reached":
+                if "when" not in entry:
+                    raise ValueError(f"{path}: {label}: not_reached needs a when")
+                out[label] = _check_when(f"{path}: {label}", entry["when"])
+            elif "when" in entry:
+                raise ValueError(f"{path}: {label}: when is only allowed on not_reached")
     return out
 
 
@@ -824,7 +895,7 @@ def classification_skeleton(diff: RomDiff) -> str:
     """TOML with an ``unknown`` entry for every changed (module, symbol), by address."""
     lines = [
         "# Classification of every code change the Kaizo patch makes (plan K1 Ruling 16).",
-        "# status: modelled | irrelevant | unknown.  symbol: a name, or 0xSTART-0xEND for a",
+        "# status: modelled | irrelevant | not_reached | unknown.  symbol: a name, or 0xSTART-0xEND for a",
         "# range outside every symbol.  An entry matching no current change is an error.",
         "",
     ]
