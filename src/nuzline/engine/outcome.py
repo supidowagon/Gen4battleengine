@@ -11,8 +11,9 @@ the decomp's ``Random`` command stores for that side's move (``sample_outcome``)
 ``sample_outcome`` reproduces each decomp roll (citations per field below). The
 hit and crit odds are read from the state at the start of the turn, with one
 correction known in advance: a target that switches out this turn is replaced by
-the incoming Pokemon (neutral evasion stage, its own ability). Stage changes made
-earlier in the same turn are not seen; no M1 move changes accuracy or evasion.
+the incoming Pokemon (neutral evasion stage, its own ability, its Cloud Nine). Stage
+changes made earlier in the same turn are not seen; no M1 move changes accuracy or
+evasion.
 Rolls whose effect depends on state that can change mid-turn (status, the
 defender's ability) are drawn unconditionally and gated by ``step``, which keeps
 their probabilities exact.
@@ -27,6 +28,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from nuzline.data.tables import Tables
+from nuzline.engine.damage import weather_suppressed
 from nuzline.engine.ids import AbilityId, EffectId, Stat, Weather
 from nuzline.engine.order import MOVE_ACTIONS, is_item, is_switch, selected_move
 from nuzline.engine.state import BattleState
@@ -127,7 +129,16 @@ def _hit_threshold(tables: Tables, state: BattleState, actions, side) -> jnp.nda
     rate = accuracy * _ACC_NUM[total] // _ACC_DEN[total]
     # Compoundeyes (battle_controller_player.c:2922-2924), right after the stage scaling.
     rate = jnp.where(a_ability == AbilityId.COMPOUNDEYES, rate * 130 // 100, rate)
-    rate = jnp.where(state.weather == Weather.FOG, rate * 6 // 10, rate)  # deep fog
+    # NO_CLOUD_NINE (:2926), with the battlers on the field when the move runs: Sand Veil
+    # in sand and Snow Cloak in hail (Battler_IgnorableAbility: Mold Breaker pierces them,
+    # :2927, :2931) x80/100, then deep fog x6/10 (:2934).
+    on_field = state.active.at[target].set(target_mon.astype(state.active.dtype))
+    weather = jnp.where(weather_suppressed(tables, state, on_field), Weather.NONE, state.weather)
+    veiled = ((weather == Weather.SANDSTORM) & (d_ability == AbilityId.SAND_VEIL)) | (
+        (weather == Weather.HAIL) & (d_ability == AbilityId.SNOW_CLOAK)
+    )
+    rate = jnp.where(veiled, rate * 80 // 100, rate)
+    rate = jnp.where(weather == Weather.FOG, rate * 6 // 10, rate)  # deep fog
     rate = jnp.where(state.gravity != 0, rate * 10 // 6, rate)
     # Accuracy 0 never misses (the check returns before rolling); a switch or an item
     # use runs no move, so it has no roll.

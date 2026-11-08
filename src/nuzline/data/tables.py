@@ -23,7 +23,7 @@ DEFAULT = Path(__file__).resolve().parents[3] / "data" / "gen4_platinum"
 
 # The version ``tools/build_tables.py`` writes into ``manifest.json``. Bump it with any change
 # to the packed arrays or manifest keys; every loader refuses tables of another version.
-MANIFEST_VERSION = 9
+MANIFEST_VERSION = 10
 
 
 def check_manifest(manifest: dict, dir: Path) -> None:

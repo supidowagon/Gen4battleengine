@@ -7,9 +7,9 @@ damage-relevant ones (Blaze, Torrent, Overgrow, Rivalry, Simple, Unaware, Mold
 Breaker) are exercised through low HP, genders and stat stages, the others have no
 damage effect in either calculator. Matchups where @smogon/calc departs from the
 decomp are not generated; each such case is logged in docs/discrepancies.md
-("Damage oracle") with the decomp lines that settle it. Neither are matchups outside
-the engine's scope: a Cloud Nine battler in weather (Cloud Nine has no behaviour, as
-coverage refuses every weather but none; ``engine/hooks.py``).
+("Damage oracle") with the decomp lines that settle it. A Cloud Nine battler in weather
+is generated: both calculators drop the weather modifiers (``NO_CLOUD_NINE``,
+battle_lib.c:6921, :7046; ``damage.weather_suppressed``).
 
 Hidden Power and Magnitude take their power (and Hidden Power its type) from the
 engine (``damage.hidden_power``; ``damage_table`` takes Magnitude at level 4), passed
@@ -141,8 +141,6 @@ def _matchups(tables: Tables, names: Names) -> list[dict]:
         ability = {0: int(s.ability[0, 0]), 1: int(s.ability[1, 0])}
         if _smogon_departs(m, tables, ability, move):
             continue
-        if m["weather"] != Weather.NONE and AbilityId.CLOUD_NINE in ability.values():
-            continue  # outside the engine's scope (engine/hooks.py)
         m["power"], m["type"] = int(tables.move_power[move]), int(tables.move_type[move])
         effect = int(tables.move_effect[move])
         if effect == EffectId.HIDDEN_POWER:

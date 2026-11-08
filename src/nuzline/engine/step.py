@@ -970,13 +970,13 @@ END_OF_TURN_ORDER = (
 )
 
 
-def end_of_turn_order(state: BattleState, outcome: Outcome) -> jnp.ndarray:
+def end_of_turn_order(tables: Tables, state: BattleState, outcome: Outcome) -> jnp.ndarray:
     """``int32[2]``: the sides in ``monSpeedOrder``, which
     ``BattleSystem_SortMonSpeedOrder`` (battle_lib.c:3364) sets after the last action
     (battle_controller_player.c:887). It compares with ``ignoreQuickClaw = TRUE``:
     speed only, no priority, Trick Room reversed; a tie swaps on ``RandNext() & 1``
     (``outcome.end_speed_tie``, 1 = opponent first)."""
-    speed0, speed1 = effective_speed(state, 0), effective_speed(state, 1)
+    speed0, speed1 = effective_speed(tables, state, 0), effective_speed(tables, state, 1)
     slower = jnp.where(state.trick_room != 0, speed0 > speed1, speed0 < speed1)
     tie = (speed0 == speed1) & (outcome.end_speed_tie != 0)
     first = (slower | tie).astype(_I32)
@@ -995,14 +995,16 @@ def _count_down(x: jnp.ndarray) -> jnp.ndarray:
     return x - (x > 0).astype(x.dtype)
 
 
-def _weather_effect(tables: Tables, state: BattleState, side, ability) -> BattleState:
+def _weather_effect(state: BattleState, side, ability) -> BattleState:
     """``BtlCmd_EndOfTurnWeatherEffect`` (battle_script.c:5561-5647) for ``side``'s active
     Pokemon with HP left, then ``subscript_weather_continues.s``'s HP update. Sandstorm:
     ``BattleSystem_Divide(maxHP * -1, 16)`` unless a type is Rock, Steel or Ground or the
     ability is Sand Veil (:5573-5583). Hail: Ice Body heals ``Divide(maxHP, 16)`` below full
     HP, else the same chip unless a type is Ice or the ability is Snow Cloak. The script
     skips a chip (not a heal) for Magic Guard (``CheckAbility ... ABILITY_MAGIC_GUARD``).
-    ``ability`` is ``damage.decomp_abilities``; the caller applies ``NO_CLOUD_NINE``.
+    Sand Veil and Snow Cloak are ``AbilityId`` members (``state.ability``); Ice Body and
+    Magic Guard, which no table maps, are read from ``ability``
+    (``damage.decomp_abilities``). The caller applies ``NO_CLOUD_NINE``.
     Rain and sun act only through abilities no table maps (Dry Skin, Solar Power, Rain
     Dish, Hydration: ``AbilityId.UNSUPPORTED``, refused by coverage), so nothing here.
     ``MOVE_EFFECT_NO_WEATHER_DAMAGE`` (Dig / Dive) cannot be set: no charge move is
@@ -1011,6 +1013,7 @@ def _weather_effect(tables: Tables, state: BattleState, side, ability) -> Battle
     hp, max_hp = state.hp[side, mon].astype(_I32), state.max_hp[side, mon].astype(_I32)
     types = state.types[side, mon]
     ab = ability[side, mon]
+    own = state.ability[side, mon]
 
     def has(t):
         return jnp.any(types == t)
@@ -1021,11 +1024,11 @@ def _weather_effect(tables: Tables, state: BattleState, side, ability) -> Battle
         & ~has(Type.ROCK)
         & ~has(Type.STEEL)
         & ~has(Type.GROUND)
-        & (ab != WEATHER_ABILITY_IDS["Sand Veil"])
+        & (own != AbilityId.SAND_VEIL)
     )
     hail = state.weather == Weather.HAIL
     ice_body = hail & (ab == WEATHER_ABILITY_IDS["Ice Body"])
-    hail_chip = hail & ~ice_body & ~has(Type.ICE) & (ab != WEATHER_ABILITY_IDS["Snow Cloak"])
+    hail_chip = hail & ~ice_body & ~has(Type.ICE) & (own != AbilityId.SNOW_CLOAK)
     chip = (sand | hail_chip) & (ab != WEATHER_ABILITY_IDS["Magic Guard"])
     heal = ice_body & (hp < max_hp)
     delta = jnp.where(chip, -sixteenth, jnp.where(heal, sixteenth, 0))
@@ -1072,7 +1075,7 @@ def field_conditions(tables: Tables, state: BattleState, sides) -> BattleState:
     effects = live & ~ended & ~weather_suppressed(tables, state)
     for position in (0, 1):
         side = sides[position]
-        state = _where(effects, _weather_effect(tables, state, side, ability), state)
+        state = _where(effects, _weather_effect(state, side, ability), state)
     state = _faint_check(before, state)
 
     gravity = _count_down(state.gravity)
@@ -1080,7 +1083,7 @@ def field_conditions(tables: Tables, state: BattleState, sides) -> BattleState:
 
 
 def end_of_turn(
-    tables: Tables, state: BattleState, actions, outcome: Outcome, order, sides=None
+    tables: Tables, state: BattleState, actions, outcome: Outcome, order, sides
 ) -> BattleState:
     """Phase 4: ``BattleControllerPlayer_CheckMonConditions`` (battle_controller_player.c:
     1289) runs every check of ``END_OF_TURN_ORDER`` for one battler, then for the next,
@@ -1088,8 +1091,6 @@ def end_of_turn(
     is sorted once, before ``field_conditions``, so a Tailwind that ended there still
     counts); a faint check follows each, and nothing runs once the battle is over.
     Flinch lasts only for the turn it is set in."""
-    if sides is None:
-        sides = end_of_turn_order(state, outcome)
     for position in (0, 1):
         side = sides[position]
         for name, check in END_OF_TURN_ORDER:
@@ -1135,7 +1136,7 @@ def step_events(
     ``EVENT_FLAGS``; ``order`` (``action_order``) and ``pursuit``."""
     actions = jnp.asarray(actions, _I32)
     s, events, order = _action_phase(tables, state, actions, outcome)
-    sides = end_of_turn_order(s, outcome)
+    sides = end_of_turn_order(tables, s, outcome)
     s = field_conditions(tables, s, sides)
     s = end_of_turn(tables, s, actions, outcome, order, sides)
     s = _unlock_sleepers(s)

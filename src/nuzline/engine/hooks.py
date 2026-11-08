@@ -45,11 +45,13 @@ reveals nothing.
 Abilities handled elsewhere: Blaze, Torrent, Overgrow, Rivalry, Guts, Unaware,
 Simple and Mold Breaker in ``damage.py``; Keen Eye, Inner Focus, Rock Head,
 Static and Poison Point in ``effects.py``; Steadfast, Natural Cure and Shed Skin in
-``step.py``, Compoundeyes in ``outcome.py``. Cloud Nine: every decomp branch on it is a
-weather branch (``NO_CLOUD_NINE``, include/battle/common.h:63); the end-of-turn weather
-chip honours it (``damage.weather_suppressed``, read by decomp ability id), and coverage
-refuses every weather but none. Sturdy only blocks OHKO moves in Gen 4, and
-none is in M1, so it has no hook.
+``step.py``, Compoundeyes, Sand Veil and Snow Cloak (accuracy) in ``outcome.py``, Swift
+Swim in ``order.py``; Sand Veil and Snow Cloak also in the end-of-turn weather chip
+(``step.py``). Cloud Nine: every decomp branch on it is a weather branch
+(``NO_CLOUD_NINE``, include/battle/common.h:63); ``damage.weather_suppressed`` (read by
+decomp ability id, with Air Lock) gates the weather modifiers of the damage formula, the
+accuracy check, Swift Swim and the end-of-turn chip. Sturdy only blocks OHKO moves in Gen
+4, and none is in M1, so it has no hook.
 """
 
 from __future__ import annotations
@@ -86,7 +88,8 @@ SLEEP_BLOCKED, STATUS_CURE = "sleep_blocked", "status_cure"
 # Inner Focus prints only against Fake Out or a direct flinch effect
 # (subscript_flinch_mon.s:26-36), and every implemented flinch is a secondary effect;
 # Blaze, Torrent, Overgrow, Rivalry, Guts, Simple, Unaware, Rock Head, Natural Cure,
-# Steadfast, Sturdy, Cloud Nine and Compoundeyes show no ability message in M1.
+# Steadfast, Sturdy, Cloud Nine, Compoundeyes, Sand Veil, Snow Cloak and Swift Swim show no
+# ability message in M1.
 REVEALS_ON: dict[int, frozenset[str]] = {
     AbilityId.MOLD_BREAKER: frozenset({SWITCH_IN}),
     AbilityId.STATIC: frozenset({CONTACT_STATUS}),

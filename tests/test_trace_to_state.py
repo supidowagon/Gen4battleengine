@@ -372,11 +372,11 @@ def test_a_status_shown_after_the_turn_is_enumerated(tables, names, status, fiel
 def test_an_end_of_turn_speed_tie_after_a_switch_is_enumerated(tables, names):
     state = _engine_trace(tables, names, [])[1][0]
     after = _fields(_turn_record(state, 1))
-    tie = int(effective_speed(state, 1))
+    tie = int(effective_speed(tables, state, 1))
     stats = np.asarray(state.stats).copy()
     stats[0, 1, Stat.SPE - 1] = tie  # Prinplup, switched in, ties Geodude
     state = state._replace(stats=jnp.asarray(stats))
-    assert int(effective_speed(state, 0)) != tie
+    assert int(effective_speed(tables, state, 0)) != tie
     assert _variant_values(tables, state, after, (TO_PRINPLUP, ROCK_THROW), "end_speed_tie") == {
         0,
         1,

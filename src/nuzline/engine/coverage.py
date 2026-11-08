@@ -30,9 +30,11 @@ items) and plan 1b (Task 2b: trainer items; Task 3: Roark's AI flags) implement:
 * abilities, held items, trainer items: every member but ``UNSUPPORTED``;
 * AI flags: bits 0-2 (``AI_FLAG_BASIC``, ``AI_FLAG_EVAL_ATTACK``, ``AI_FLAG_EXPERT``).
   ``ai.policy`` always runs those three scripts, so a trainer must have exactly them;
-* weather: only ``Weather.NONE``. Rain, sun, sandstorm, hail and fog are refused until
-  every weather effect they touch is modelled (plan ruling; the field-condition pass
-  exists, ``step.field_conditions``);
+* weather: ``Weather.NONE`` and ``Weather.SANDSTORM``. Sandstorm's every effect on the
+  implemented set is modelled: the Rock-type SpD boost (``damage.py``), the end-of-turn
+  chip (``step.field_conditions``), Sand Veil's accuracy (``outcome.hit_threshold``), all
+  gated on Cloud Nine / Air Lock (``damage.weather_suppressed``). Rain, sun, hail and fog
+  are refused until every weather effect they touch is modelled (plan ruling);
 * in-battle form changes (plan K2a Ruling 8), on either side: Giratina-Origin without the
   Griseous Orb reverts to Altered Forme at battle start (``battle_lib.c:6412-6417``,
   ``subscript_form_change``) and Shaymin-Sky reverts to Land Forme when frozen
@@ -134,7 +136,7 @@ IMPLEMENTED_WEATHER: dict[Weather, Support] = {
     Weather.NONE: Support.EXACT,
     Weather.SUN: Support.NONE,
     Weather.RAIN: Support.NONE,
-    Weather.SANDSTORM: Support.NONE,
+    Weather.SANDSTORM: Support.EXACT,
     Weather.HAIL: Support.NONE,
     Weather.FOG: Support.NONE,
 }

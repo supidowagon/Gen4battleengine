@@ -359,9 +359,9 @@ class _Turn:
         in this state with these actions (docs/tracing.md)."""
         tables, state = self.tables, self.state
         options: list[tuple[str, tuple, list]] = []  # (field, index, values)
-        if _tied(state):
+        if _tied(tables, state):
             options.append(("speed_tie", (), [0, 1]))
-        if any(_tied(s) for s in self._end_of_turn_states(actions)):
+        if any(_tied(tables, s) for s in self._end_of_turn_states(actions)):
             options.append(("end_speed_tie", (), [0, 1]))
         connected = [bool(base["hit"][s, 0]) and self._acted(s) for s in (0, 1)]
         fixed: list[tuple[str, tuple, int]] = []
@@ -471,8 +471,8 @@ class _Turn:
         return (int(pair[0]), int(pair[1])), outcome, state, mismatched
 
 
-def _tied(state: BattleState) -> bool:
-    return int(effective_speed(state, 0)) == int(effective_speed(state, 1))
+def _tied(tables: Tables, state: BattleState) -> bool:
+    return int(effective_speed(tables, state, 0)) == int(effective_speed(tables, state, 1))
 
 
 def _records(bundle: dict) -> tuple[list[dict], list[list[dict]]]:

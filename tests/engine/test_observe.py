@@ -475,7 +475,7 @@ def _gate_free(tables, s, acts, outcome: Outcome, name, index) -> bool:
     ):
         return True
     if name == "speed_tie":
-        return int(effective_speed(s, 0)) != int(effective_speed(s, 1))
+        return int(effective_speed(tables, s, 0)) != int(effective_speed(tables, s, 1))
     side = index[0]
     if acts[side] >= MOVE_ACTIONS:
         return name in ("hit", "crit")

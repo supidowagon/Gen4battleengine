@@ -175,10 +175,8 @@ CONSTANTS: tuple[Constant, ...] = (
         "ability",
         _E,
         {
-            "Sand Veil": 8,
             "Cloud Nine": 13,
             "Air Lock": 76,
-            "Snow Cloak": 81,
             "Magic Guard": 98,
             "Ice Body": 115,
         },

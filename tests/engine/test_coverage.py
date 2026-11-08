@@ -55,11 +55,10 @@ def test_all_missing_reported_at_once(tables, names):
     assert e.value.report.level == Support.NONE
 
 
-def test_only_no_weather_is_supported():
-    assert IMPLEMENTED_WEATHER[Weather.NONE] == Support.EXACT
+def test_only_no_weather_and_sandstorm_are_supported():
+    supported = (Weather.NONE, Weather.SANDSTORM)
     for w in Weather:
-        if w != Weather.NONE:
-            assert IMPLEMENTED_WEATHER[w] == Support.NONE
+        assert IMPLEMENTED_WEATHER[w] == (Support.EXACT if w in supported else Support.NONE)
 
 
 def test_hail_route_trainer_is_refused(tables, names):
@@ -408,12 +407,14 @@ def test_unknown_start_condition_refused_not_read_as_weather(tables, names):
 
 def test_area_weather_keeps_the_weather_refusal(tables, names):
     for cond, line in (
-        ("sandstorm", "Battle start: Sandstorm (weather UNSUPPORTED)"),
+        ("hail", "Battle start: Hail (weather UNSUPPORTED)"),
         ("sun", "Battle start: Sun (weather UNSUPPORTED)"),
         ("fog", "Battle start: Fog (weather UNSUPPORTED)"),
     ):
         t = replace(roark_trainer(), start_condition=cond)
         assert line in check_opponent(tables, names, t, roark_party(names), 0).missing
+    sand = replace(roark_trainer(), start_condition="sandstorm")
+    assert not check_opponent(tables, names, sand, roark_party(names), 0).missing
 
 
 def test_ability_override_without_set_data_refused(tables, names):  # review I1

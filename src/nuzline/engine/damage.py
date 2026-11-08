@@ -22,7 +22,8 @@ steps 1, 4 and then 3: ``ai_damage_for_roll`` (crit multiplier 1, variance last)
 Only mechanics of the implemented set are modelled. Abilities, items and moves
 outside it are ``UNSUPPORTED`` ids and never reach the branches here; the decomp
 modifiers they would trigger (Technician, type-boosting items, Thick Fat, Flash
-Fire, Cloud Nine, ...) are therefore omitted, not approximated. Doubles-only
+Fire, ...) are therefore omitted, not approximated. Cloud Nine and Air Lock gate the
+weather modifiers (``weather_suppressed``). Doubles-only
 spread and screen rules do not apply (singles).
 """
 
@@ -70,16 +71,20 @@ def decomp_abilities(tables: Tables, state: BattleState) -> jnp.ndarray:
     return _i32(tables.species_abilities_decomp[_i32(row), _i32(state.ability_slot)])
 
 
-def weather_suppressed(tables: Tables, state: BattleState) -> jnp.ndarray:
+def weather_suppressed(tables: Tables, state: BattleState, active=None) -> jnp.ndarray:
     """``bool[]``: not ``NO_CLOUD_NINE`` (include/battle/common.h:63-64): an active
     battler with HP left has Cloud Nine or Air Lock (``BattleSystem_CountAbility``,
-    ``COUNT_ALIVE_BATTLERS``), which turns off every weather effect."""
+    ``COUNT_ALIVE_BATTLERS``), which turns off every weather effect. ``active``
+    (``int[2]`` party slots, default ``state.active``) names the battlers on the field
+    when that differs from the state's, as for a move that meets a Pokemon switched in
+    this turn (``outcome.hit_threshold``)."""
     sides = jnp.arange(2)
-    ability = decomp_abilities(tables, state)[sides, state.active]
+    active = state.active if active is None else active
+    ability = decomp_abilities(tables, state)[sides, active]
     lock = (ability == WEATHER_ABILITY_IDS["Cloud Nine"]) | (
         ability == WEATHER_ABILITY_IDS["Air Lock"]
     )
-    return jnp.any(lock & (state.hp[sides, state.active] > 0))
+    return jnp.any(lock & (state.hp[sides, active] > 0))
 
 
 def hidden_power(ivs) -> tuple[jnp.ndarray, jnp.ndarray]:
@@ -293,9 +298,12 @@ def _pre_random(
     power = jnp.where(gendered & (a_gender == d_gender), power * 125 // 100, power)
     power = jnp.where(gendered & (a_gender != d_gender), power * 75 // 100, power)
 
+    # :6921 NO_CLOUD_NINE gates the weather modifiers here and at :7046 (the self-hit
+    # passes no field conditions).
+    weather = jnp.where(weather_suppressed(tables, s), Weather.NONE, s.weather)
     # :6926 sandstorm: a Rock-type defender's SpD x1.5.
     rock = jnp.any(d_types == Type.ROCK)
-    sand = (s.weather == Weather.SANDSTORM) & rock & (not self_hit)
+    sand = (weather == Weather.SANDSTORM) & rock & (not self_hit)
     sp_defense = jnp.where(sand, sp_defense * 15 // 10, sp_defense)
 
     # :6947 / :6992 physical uses Atk/Def, special SpA/SpD.
@@ -324,8 +332,8 @@ def _pre_random(
     damage = jnp.where(screen & ~crit, damage // 2, damage)
 
     # :7047 rain: Fire x0.5, Water x1.5; :7062 sun: Fire x1.5, Water x0.5. Fog: nothing.
-    rain = (s.weather == Weather.RAIN) & (not self_hit)
-    sun = (s.weather == Weather.SUN) & (not self_hit)
+    rain = (weather == Weather.RAIN) & (not self_hit)
+    sun = (weather == Weather.SUN) & (not self_hit)
     fire, water = move_type == Type.FIRE, move_type == Type.WATER
     damage = jnp.where(rain & fire, damage // 2, damage)
     damage = jnp.where(rain & water, damage * 15 // 10, damage)

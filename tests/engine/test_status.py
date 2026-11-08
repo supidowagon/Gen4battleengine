@@ -31,7 +31,7 @@ def test_paralysis_quarters_speed_and_full_para_skips(tables, names):
     )
     assert int(hit.status[1, 0]) == Status.PARALYSIS
     # Shinx outspeeds the paralyzed Cranidos (Speed / 4), so it moves first.
-    assert int(effective_speed(hit, 1)) == int(hit.stats[1, 0, Stat.SPE - 1]) // 4
+    assert int(effective_speed(tables, hit, 1)) == int(hit.stats[1, 0, Stat.SPE - 1]) // 4
     skipped = step(
         tables,
         hit,

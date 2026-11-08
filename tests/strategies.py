@@ -41,7 +41,8 @@ from nuzline.engine.stats import calc_stats
 
 INTERMEDIATE = Path(__file__).resolve().parents[1] / "data" / "intermediate"
 
-# The M1 species set: the sample team plus Roark's and the route-encounter species.
+# The M1 species set: the sample team plus Roark's and the route-encounter species, and
+# a holder of each weather ability (Swift Swim, Sand Veil, Snow Cloak).
 M1_SPECIES = (
     "Monferno",
     "Prinplup",
@@ -60,6 +61,9 @@ M1_SPECIES = (
     "Psyduck",
     "Venonat",
     "Kricketot",
+    "Goldeen",
+    "Sandshrew",
+    "Swinub",
 )
 M1_ITEMS = ("", "Oran Berry", "Sitrus Berry")
 M1_BAG_ITEMS = ("", "Potion")  # the opponent's bag (ids.TrainerItemId)
@@ -377,7 +381,8 @@ LAW_MOVES = (
     "Confusion",
     "Disable",
 )
-# Abilities the outcome relevance reads (contact procs, Steadfast, Simple's Speed).
+# Abilities the outcome relevance reads (contact procs, Steadfast, Simple's and Swift
+# Swim's Speed) or the hit odds read (Compoundeyes, Sand Veil, Snow Cloak).
 LAW_ABILITIES = (
     AbilityId.STATIC,
     AbilityId.POISON_POINT,
@@ -385,6 +390,9 @@ LAW_ABILITIES = (
     AbilityId.SIMPLE,
     AbilityId.SHED_SKIN,
     AbilityId.COMPOUNDEYES,
+    AbilityId.SAND_VEIL,
+    AbilityId.SNOW_CLOAK,
+    AbilityId.SWIFT_SWIM,
 )
 
 

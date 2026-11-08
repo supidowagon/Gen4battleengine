@@ -143,7 +143,7 @@ def _holds(state: BattleState, actions, abilities) -> jnp.ndarray:
     return now | later
 
 
-def _end_speeds(state: BattleState, actions, side, stage_free, para_free):
+def _end_speeds(tables: Tables, state: BattleState, actions, side, stage_free, para_free):
     """``(int32[27], bool[27])``: the effective speeds ``side`` can have after the
     actions (``end_of_turn_order`` on the post-action state, step.py:663-673) and which
     of them are possible. Grid: Speed stage -6..6 x paralyzed or not of the Pokemon
@@ -169,7 +169,7 @@ def _end_speeds(state: BattleState, actions, side, stage_free, para_free):
                 jnp.where(para, Status.PARALYSIS, Status.NONE).astype(state.status.dtype)
             ),
         )
-        return effective_speed(s, side)
+        return effective_speed(tables, s, side)
 
     speeds = jax.vmap(speed)(stages, paras)
     possible = (stage_free | (stages == stage0)) & (para_free | (paras == para0))
@@ -231,7 +231,7 @@ def outcome_laws(tables: Tables, state: BattleState, actions) -> OutcomeLaws:
         live
         & same_kind
         & (priority[0] == priority[1])
-        & (effective_speed(state, 0) == effective_speed(state, 1))
+        & (effective_speed(tables, state, 0) == effective_speed(tables, state, 1))
     )
 
     param0 = tables.move_param[moves, 0]
@@ -246,7 +246,8 @@ def outcome_laws(tables: Tables, state: BattleState, actions) -> OutcomeLaws:
         uses_move & damaging & contact & static[::-1]
     )
     speeds = [
-        _end_speeds(state, actions, side, stage_free[side], para_free[side]) for side in (0, 1)
+        _end_speeds(tables, state, actions, side, stage_free[side], para_free[side])
+        for side in (0, 1)
     ]
     (speed0, ok0), (speed1, ok1) = speeds
     end_speed_tie = live & jnp.any(

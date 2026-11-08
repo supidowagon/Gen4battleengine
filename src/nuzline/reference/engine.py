@@ -240,13 +240,20 @@ def _matchup_x40(tables, attacking_type: int, types: list[int], identified: bool
     return mul
 
 
-def _effective_speed(s: RefState, side: int) -> int:
+def _effective_speed(tables, s: RefState, side: int) -> int:
     """``BattleSystem_CompareBattlerSpeed`` (lib.c:1188), implemented modifiers only."""
     mon = _active(s, side)
     stage = s.sides[side].stages[Stat.SPE]
     if mon.ability == AbilityId.SIMPLE:  # CompareSpeed_ApplySimple, lib.c:1222
         stage = _simple(stage)
     speed = _apply_stage(mon.stats[Stat.SPE - 1], stage)  # lib.c:1225
+    # lib.c:1228-1238: Swift Swim in rain, inside NO_CLOUD_NINE.
+    if (
+        mon.ability == AbilityId.SWIFT_SWIM
+        and s.weather == Weather.RAIN
+        and not _weather_suppressed(tables, s)
+    ):
+        speed *= 2
     if mon.status == Status.PARALYSIS:  # lib.c:1260 (Quick Feet is unsupported)
         speed //= 4
     if s.sides[side].tailwind:  # lib.c:1274
@@ -254,7 +261,7 @@ def _effective_speed(s: RefState, side: int) -> int:
     return speed
 
 
-def _player_second(s: RefState, priority: tuple[int, int], tie_roll: int) -> bool:
+def _player_second(tables, s: RefState, priority: tuple[int, int], tie_roll: int) -> bool:
     """``BattleSystem_CompareBattlerSpeed(player, opponent)`` != FASTER, i.e. the two
     are swapped (lib.c:1401-1445). A fainted battler goes after a living one
     (lib.c:1205-1211)."""
@@ -265,7 +272,7 @@ def _player_second(s: RefState, priority: tuple[int, int], tie_roll: int) -> boo
         return False
     if priority[0] != priority[1]:
         return priority[0] < priority[1]
-    speed0, speed1 = _effective_speed(s, 0), _effective_speed(s, 1)
+    speed0, speed1 = _effective_speed(tables, s, 0), _effective_speed(tables, s, 1)
     if speed0 == speed1:
         return tie_roll != 0  # RandNext() & 1
     if s.trick_room:
@@ -349,8 +356,12 @@ def _calc_move_damage(
             power = power * 125 // 100
         else:
             power = power * 75 // 100
+    # lib.c:6921 NO_CLOUD_NINE gates the weather here and at lib.c:7046.
+    weather = s.weather
+    if not field_conditions or _weather_suppressed(tables, s):
+        weather = Weather.NONE
     # lib.c:6926 sandstorm boosts a Rock-type defender's SpD.
-    if field_conditions and s.weather == Weather.SANDSTORM and Type.ROCK in dfn.types:
+    if weather == Weather.SANDSTORM and Type.ROCK in dfn.types:
         sp_defense = sp_defense * 15 // 10
 
     damage = 0
@@ -380,12 +391,12 @@ def _calc_move_damage(
         if side_conditions and screen and not crit:
             damage //= 2
     # lib.c:7047 rain, :7062 sun (fog does nothing here).
-    if field_conditions and s.weather == Weather.RAIN:
+    if weather == Weather.RAIN:
         if move_type == Type.FIRE:
             damage //= 2
         elif move_type == Type.WATER:
             damage = damage * 15 // 10
-    if field_conditions and s.weather == Weather.SUN:
+    if weather == Weather.SUN:
         if move_type == Type.FIRE:
             damage = damage * 15 // 10
         elif move_type == Type.WATER:
@@ -1145,10 +1156,10 @@ def _use_item(tables, s: RefState, side: int, item: int) -> None:
 # --------------------------------------------------------------------------- end of turn
 
 
-def _speed_order(s: RefState, o) -> list[int]:
+def _speed_order(tables, s: RefState, o) -> list[int]:
     """``BattleSystem_SortMonSpeedOrder`` (lib.c:3364): ``CompareBattlerSpeed`` with
     ``ignoreQuickClaw`` (no priority); a tie swaps on ``outcome.end_speed_tie``."""
-    return [1, 0] if _player_second(s, (0, 0), o.end_speed_tie) else [0, 1]
+    return [1, 0] if _player_second(tables, s, (0, 0), o.end_speed_tie) else [0, 1]
 
 
 def _decomp_ability(tables, mon: RefPokemon) -> int:
@@ -1180,13 +1191,13 @@ def _weather_effect(turn: _Turn, s: RefState, side: int) -> None:
     hp_calc = 0
     if s.weather == Weather.SANDSTORM:  # script.c:5573-5583
         immune = {Type.ROCK, Type.STEEL, Type.GROUND} & set(mon.types)
-        if not immune and ability != WEATHER_ABILITY_IDS["Sand Veil"]:
+        if not immune and mon.ability != AbilityId.SAND_VEIL:
             hp_calc = -_divide(mon.max_hp, 16)
     if s.weather == Weather.HAIL:  # the hail branch
         if ability == WEATHER_ABILITY_IDS["Ice Body"]:
             if mon.hp < mon.max_hp:
                 hp_calc = _divide(mon.max_hp, 16)
-        elif Type.ICE not in mon.types and ability != WEATHER_ABILITY_IDS["Snow Cloak"]:
+        elif Type.ICE not in mon.types and mon.ability != AbilityId.SNOW_CLOAK:
             hp_calc = -_divide(mon.max_hp, 16)
     if hp_calc > 0:  # subscript_weather_continues.s _076
         _gain_hp(s, side, hp_calc)
@@ -1407,7 +1418,7 @@ def ref_step(tables, state: RefState, actions: tuple[int, int], outcome) -> RefS
         priority = (0, 0)
         if not early[0]:
             priority = tuple(_t(tables, "move_priority", choices[side][0]) for side in (0, 1))
-        order = [1, 0] if _player_second(s, priority, outcome.speed_tie) else [0, 1]
+        order = [1, 0] if _player_second(tables, s, priority, outcome.speed_tie) else [0, 1]
 
     for position, side in enumerate(order):
         if s.over:
@@ -1439,7 +1450,7 @@ def ref_step(tables, state: RefState, actions: tuple[int, int], outcome) -> RefS
             _recover_status_by_ability(s, side)
             _recover_status_by_ability(s, 1 - side)
 
-    order = _speed_order(s, outcome)  # BattleSystem_SortMonSpeedOrder, bcp.c:887
+    order = _speed_order(tables, s, outcome)  # BattleSystem_SortMonSpeedOrder, bcp.c:887
     _field_conditions(turn, s, order)
     _end_of_turn(turn, s, order)
     # BattleSystem_SetupNextTurn (lib.c:2234) clears every flinch and unlocks a sleeping

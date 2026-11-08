@@ -10,10 +10,11 @@ player's side does not go first (priority only between two moves, ``:1401``). An
 and a switch are different kinds, so the player's switch precedes the opponent's item.
 
 Speed modifiers of the implemented set only: stages (Simple doubled, ``:1222``),
-paralysis ``/ 4`` (``:1260``), Tailwind ``x 2`` (``:1274``) and Trick Room's
-reversal (``:1432``). Quick Claw, Custap, Lagging Tail, Stall, Quick Feet, Swift
-Swim, Chlorophyll, Slow Start, Unburden, Choice Scarf and the speed-halving items
-belong to unsupported abilities and items (``UNSUPPORTED`` ids), so they never apply.
+Swift Swim ``x 2`` in rain unless Cloud Nine / Air Lock (``:1228-1238``), paralysis
+``/ 4`` (``:1260``), Tailwind ``x 2`` (``:1274``) and Trick Room's reversal
+(``:1432``). Quick Claw, Custap, Lagging Tail, Stall, Quick Feet, Chlorophyll, Slow
+Start, Unburden, Choice Scarf and the speed-halving items belong to unsupported
+abilities and items (``UNSUPPORTED`` ids), so they never apply.
 """
 
 from __future__ import annotations
@@ -22,8 +23,8 @@ import jax.numpy as jnp
 
 from nuzline.data.tables import Tables
 from nuzline.engine.actions import FIRST_ITEM_ACTION, MOVE_ACTIONS, locked_slot, usable_moves
-from nuzline.engine.damage import apply_stage, simple_stage
-from nuzline.engine.ids import MOVE_STRUGGLE, AbilityId, Stat, Status
+from nuzline.engine.damage import apply_stage, simple_stage, weather_suppressed
+from nuzline.engine.ids import MOVE_STRUGGLE, AbilityId, Stat, Status, Weather
 from nuzline.engine.state import BattleState
 
 _I32 = jnp.int32
@@ -57,12 +58,20 @@ def selected_move(
     return jnp.where(locked, state.locked_move[side].astype(_I32), move), struggling
 
 
-def effective_speed(state: BattleState, side) -> jnp.ndarray:
+def effective_speed(tables: Tables, state: BattleState, side) -> jnp.ndarray:
     """``int32`` speed as ``BattleSystem_CompareBattlerSpeed`` computes it."""
     mon = state.active[side]
+    ability = state.ability[side, mon]
     stage = state.stages[side, Stat.SPE].astype(_I32)
-    stage = jnp.where(state.ability[side, mon] == AbilityId.SIMPLE, simple_stage(stage), stage)
+    stage = jnp.where(ability == AbilityId.SIMPLE, simple_stage(stage), stage)
     speed = apply_stage(state.stats[side, mon, Stat.SPE - 1].astype(_I32), stage)
+    # :1228-1238 Swift Swim (Battler_Ability) in rain, inside NO_CLOUD_NINE.
+    swim = (
+        (ability == AbilityId.SWIFT_SWIM)
+        & (state.weather == Weather.RAIN)
+        & ~weather_suppressed(tables, state)
+    )
+    speed = jnp.where(swim, speed * 2, speed)
     speed = jnp.where(state.status[side, mon] == Status.PARALYSIS, speed // 4, speed)
     return jnp.where(state.tailwind[side] != 0, speed * 2, speed)
 
@@ -76,7 +85,7 @@ def action_order(tables: Tables, state: BattleState, actions, outcome) -> jnp.nd
     moves = jnp.stack([selected_move(tables, state, side, actions[side])[0] for side in (0, 1)])
     both_moves = ~early[0] & ~early[1]
     priority = jnp.where(both_moves, tables.move_priority[moves].astype(_I32), 0)
-    speed0, speed1 = effective_speed(state, 0), effective_speed(state, 1)
+    speed0, speed1 = effective_speed(tables, state, 0), effective_speed(tables, state, 1)
     tie = (speed0 == speed1) & (outcome.speed_tie != 0)
     slower = jnp.where(state.trick_room != 0, speed0 > speed1, speed0 < speed1)
     player_second = (priority[0] < priority[1]) | ((priority[0] == priority[1]) & (slower | tie))

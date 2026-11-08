@@ -91,6 +91,9 @@ class AbilityId(IntEnum):
     CLOUD_NINE = 20
     COMPOUNDEYES = 21
     SHED_SKIN = 22
+    SAND_VEIL = 23
+    SNOW_CLOAK = 24
+    SWIFT_SWIM = 25
 
 
 class ItemId(IntEnum):
@@ -209,15 +212,14 @@ MOVE_STRUGGLE = 165
 
 # Decomp ability ids the weather code names directly (``generated/abilities.txt`` line N is
 # id N-1), read through ``tables.species_abilities_decomp`` (``Battler_Ability``) rather than
-# an ``AbilityId``: Cloud Nine / Air Lock suppress weather (``NO_CLOUD_NINE``,
+# an ``AbilityId``, for the abilities no table maps (Air Lock, Magic Guard, Ice Body) and the
+# lock they share with Cloud Nine: Cloud Nine / Air Lock suppress weather (``NO_CLOUD_NINE``,
 # include/battle/common.h:63-64); the end-of-turn chip (``BtlCmd_EndOfTurnWeatherEffect``,
-# battle_script.c:5561-5647, and ``subscript_weather_continues.s``) skips Sand Veil, Snow
-# Cloak, Ice Body (which heals instead) and Magic Guard.
+# battle_script.c:5561-5647, and ``subscript_weather_continues.s``) skips Ice Body (which
+# heals instead) and Magic Guard. Sand Veil and Snow Cloak are ``AbilityId`` members.
 WEATHER_ABILITY_IDS = {
-    "Sand Veil": 8,
     "Cloud Nine": 13,
     "Air Lock": 76,
-    "Snow Cloak": 81,
     "Magic Guard": 98,
     "Ice Body": 115,
 }
