@@ -6,149 +6,149 @@
 module = "arm9"
 symbol = "NitroMain"
 status = "irrelevant"
-note = "decoded: the argument loads of Font_InitManager(FONT_SYSTEM, HEAP_ID_APPLICATION) (movs r0,#0; movs r1,#3) -> bl 0x02101574, the stub written over @29, which calls NARC_ReadWholeMemberByIndexPair(0x023C8000, NARC 65 data/weather_sys.narc, member 9) and returns with r0=0, r1=3; src/main.c:77; rom:arm9@0x02000CB4; a boot-time load of the injected code: it changes no game state itself, and the injected code acts only through its callers (PartyMenuCB_LevelUp, HandleInput_Main, SetMonDataFromMon, gFieldScriptCommands), each classified on its own"
+note = "decoded: the setup of Font_InitManager's two arguments (FONT_SYSTEM, HEAP_ID_APPLICATION) -> a call to 0x02101574, the stub written over @29, which calls NARC_ReadWholeMemberByIndexPair(0x023C8000, NARC 65 data/weather_sys.narc, member 9) and returns with the same two arguments set up, so Font_InitManager runs as vanilla; src/main.c:77; rom:arm9@0x02000CB4; a boot-time load of the injected code: it changes no game state itself, and the injected code acts only through its callers (PartyMenuCB_LevelUp, HandleInput_Main, SetMonDataFromMon, gFieldScriptCommands), each classified on its own"
 
 [[code]]
 module = "arm9"
 symbol = "Options_Init"
 status = "irrelevant"
-note = "decoded: new-save option defaults: textSpeed NORMAL (1) -> FAST (2) (movs r0,#1 -> #2) and battleStyle bit 0x40 cleared -> set (bics -> orrs: SHIFT -> SET); src/game_options.c:29-31; it only initialises the Options of a new save; a fight uses the save's own Options (src/battle/battle_system.c:907), and the engine always plays Set mode (docs/design.md Nuzlocke rules), the new default; text speed is display only"
+note = "decoded: new-save option defaults: textSpeed NORMAL (1) -> FAST (2) and battleStyle bit 0x40 cleared -> set (SHIFT -> SET); src/game_options.c:29-31; it only initialises the Options of a new save; a fight uses the save's own Options (src/battle/battle_system.c:907), and the engine always plays Set mode (docs/design.md Nuzlocke rules), the new default; text speed is display only"
 
 [[code]]
 module = "arm9"
 symbol = "MapHeader_IDBoundsCheck"
 status = "modelled"
-note = "decoded: bounds check (id >= 593 -> GF_ASSERT, Jubilife) -> r3 = NARC_AllocAndReadWholeMemberByIndexPair(148 debug/cb_edit/d_test.narc, id, 0), then Heap_Free(r3); every MapHeader_* getter then reads r3 + field offset, so the header of id is d_test.narc member id (DSPRE dynamic headers); src/map_header.c:8; K2b reads the weather, scripts and events fields from those members (tools/rom/readers/maps.py map_header_rows), and check_kaizo_map_headers matches this exact patched code (test_kaizo_header_rows_vs_vanilla, tests/tools/rom/test_kaizo_rom.py)"
+note = "decoded: bounds check (id >= 593 -> GF_ASSERT, Jubilife) -> NARC_AllocAndReadWholeMemberByIndexPair(148 debug/cb_edit/d_test.narc, id, 0), then frees that buffer (Heap_Free) but leaves its address for the getters; every MapHeader_* getter then reads that buffer + field offset, so the header of id is d_test.narc member id (DSPRE dynamic headers); src/map_header.c:8; K2b reads the weather, scripts and events fields from those members (tools/rom/readers/maps.py map_header_rows), and check_kaizo_map_headers matches this exact patched code (test_kaizo_header_rows_vs_vanilla, tests/tools/rom/test_kaizo_rom.py)"
 
 [[code]]
 module = "arm9"
 symbol = "MapHeader_GetAreaDataArchiveID"
 status = "irrelevant"
-note = "decoded: the getter now reads the field from the d_test.narc member loaded by MapHeader_IDBoundsCheck (r3 + field offset) instead of sMapHeaders + 24*id + offset: movs r1,#0x18; muls r1,r0,r1 -> movs r1,r3; nop, literal 0x020E601C (sMapHeaders) -> 0 (areaDataArchiveID, u8 at 0); src/map_header.c:18; selects the map's prop and texture archives (AreaDataManager_Alloc, src/overlay005/fieldmap.c:770; include/overlay005/area_data.h:18-22): graphics only, no collision or tile behaviour"
+note = "decoded: the getter now reads the field from the d_test.narc member loaded by MapHeader_IDBoundsCheck (buffer + field offset) instead of sMapHeaders + 24*id + offset: the 24*id index is dropped and the base address 0x020E601C (sMapHeaders) becomes the bare offset 0 (areaDataArchiveID, u8 at 0); src/map_header.c:18; selects the map's prop and texture archives (AreaDataManager_Alloc, src/overlay005/fieldmap.c:770; include/overlay005/area_data.h:18-22): graphics only, no collision or tile behaviour"
 
 [[code]]
 module = "arm9"
 symbol = "MapHeader_GetPreloadedMapObjectsArchiveID"
 status = "irrelevant"
-note = "decoded: the getter now reads the field from the d_test.narc member loaded by MapHeader_IDBoundsCheck (r3 + field offset) instead of sMapHeaders + 24*id + offset: movs r1,#0x18; muls r1,r0,r1 -> movs r1,r3; nop, literal 0x020E601D -> 1 (preloadedMapObjectsArchiveID, u8 at 1); src/map_header.c:24; selects which object models are preloaded (src/overlay005/fieldmap.c:772-775): graphics only"
+note = "decoded: the getter now reads the field from the d_test.narc member loaded by MapHeader_IDBoundsCheck (buffer + field offset) instead of sMapHeaders + 24*id + offset: the 24*id index is dropped and the base address 0x020E601D becomes the bare offset 1 (preloadedMapObjectsArchiveID, u8 at 1); src/map_header.c:24; selects which object models are preloaded (src/overlay005/fieldmap.c:772-775): graphics only"
 
 [[code]]
 module = "arm9"
 symbol = "MapHeader_GetMapMatrixID"
 status = "not_reached"
-note = "decoded: the getter now reads the field from the d_test.narc member loaded by MapHeader_IDBoundsCheck (r3 + field offset) instead of sMapHeaders + 24*id + offset: movs r1,#0x18; muls r1,r0,r1 -> movs r1,r3; nop, literal 0x020E601E -> 2 (mapMatrixID, u16 at 2); src/map_header.c:30; the matrix picks the land data whose tile behaviour CalcTerrain reads first; battle terrain (CalcTerrain, src/field_battle_data_transfer.c:467-494) is read in battle only by Nature Power, Secret Power and Camouflage (effects 173, 197, 213: GetTerrainMove, GetTerrainSecondaryEffect, TryCamouflage; src/battle/battle_script.c:8007,8040,8067) and by the Dive/Dusk Ball modifiers of wild catches; the engine does not model terrain, so a fight reaches this only through those effects"
+note = "decoded: the getter now reads the field from the d_test.narc member loaded by MapHeader_IDBoundsCheck (buffer + field offset) instead of sMapHeaders + 24*id + offset: the 24*id index is dropped and the base address 0x020E601E becomes the bare offset 2 (mapMatrixID, u16 at 2); src/map_header.c:30; the matrix picks the land data whose tile behaviour CalcTerrain reads first; battle terrain (CalcTerrain, src/field_battle_data_transfer.c:467-494) is read in battle only by Nature Power, Secret Power and Camouflage (effects 173, 197, 213: GetTerrainMove, GetTerrainSecondaryEffect, TryCamouflage; src/battle/battle_script.c:8007,8040,8067) and by the Dive/Dusk Ball modifiers of wild catches; the engine does not model terrain, so a fight reaches this only through those effects"
 when = { move_effect = [173, 197, 213] }
 
 [[code]]
 module = "arm9"
 symbol = "MapHeader_GetMsgArchiveID"
 status = "irrelevant"
-note = "decoded: the getter now reads the field from the d_test.narc member loaded by MapHeader_IDBoundsCheck (r3 + field offset) instead of sMapHeaders + 24*id + offset: movs r1,#0x18; muls r1,r0,r1 -> movs r1,r3; nop, literal 0x020E6024 -> 8 (msgArchiveID, u16 at 8); src/map_header.c:42; the text bank of the map's scripts (src/script_manager.c:425): text only"
+note = "decoded: the getter now reads the field from the d_test.narc member loaded by MapHeader_IDBoundsCheck (buffer + field offset) instead of sMapHeaders + 24*id + offset: the 24*id index is dropped and the base address 0x020E6024 becomes the bare offset 8 (msgArchiveID, u16 at 8); src/map_header.c:42; the text bank of the map's scripts (src/script_manager.c:425): text only"
 
 [[code]]
 module = "arm9"
 symbol = "MapHeader_GetScriptsArchiveID"
 status = "modelled"
-note = "decoded: the getter now reads the field from the d_test.narc member loaded by MapHeader_IDBoundsCheck (r3 + field offset) instead of sMapHeaders + 24*id + offset: movs r1,#0x18; muls r1,r0,r1 -> movs r1,r3; nop, literal 0x020E6020 -> 4 (scriptsArchiveID, u16 at 4); src/map_header.c:48; K2b's trainer -> map join walks the scr_seq.narc member this field names, read from d_test.narc (maps.map_header_rows, HEADER_SCRIPTS = 4), and check_kaizo_map_headers matches this patched getter (tests/tools/rom/test_kaizo_rom.py)"
+note = "decoded: the getter now reads the field from the d_test.narc member loaded by MapHeader_IDBoundsCheck (buffer + field offset) instead of sMapHeaders + 24*id + offset: the 24*id index is dropped and the base address 0x020E6020 becomes the bare offset 4 (scriptsArchiveID, u16 at 4); src/map_header.c:48; K2b's trainer -> map join walks the scr_seq.narc member this field names, read from d_test.narc (maps.map_header_rows, HEADER_SCRIPTS = 4), and check_kaizo_map_headers matches this patched getter (tests/tools/rom/test_kaizo_rom.py)"
 
 [[code]]
 module = "arm9"
 symbol = "MapHeader_GetInitScriptsArchiveID"
 status = "irrelevant"
-note = "decoded: the getter now reads the field from the d_test.narc member loaded by MapHeader_IDBoundsCheck (r3 + field offset) instead of sMapHeaders + 24*id + offset: movs r1,#0x18; muls r1,r0,r1 -> movs r1,r3; nop, literal 0x020E6022 -> 6 (initScriptsArchiveID, u16 at 6); src/map_header.c:54; the init-script table only chooses which script ids run on map load or per frame (src/script_manager.c:706-731); it adds no script code, and the only Kaizo script effects that reach a battle (commands 0x9C weather, 0x3F status) are classified under gFieldScriptCommands"
+note = "decoded: the getter now reads the field from the d_test.narc member loaded by MapHeader_IDBoundsCheck (buffer + field offset) instead of sMapHeaders + 24*id + offset: the 24*id index is dropped and the base address 0x020E6022 becomes the bare offset 6 (initScriptsArchiveID, u16 at 6); src/map_header.c:54; the init-script table only chooses which script ids run on map load or per frame (src/script_manager.c:706-731); it adds no script code, and the only Kaizo script effects that reach a battle (commands 0x9C weather, 0x3F status) are classified under gFieldScriptCommands"
 
 [[code]]
 module = "arm9"
 symbol = "MapHeader_GetDayMusicID"
 status = "irrelevant"
-note = "decoded: the getter now reads the field from the d_test.narc member loaded by MapHeader_IDBoundsCheck (r3 + field offset) instead of sMapHeaders + 24*id + offset: movs r1,#0x18; muls r1,r0,r1 -> movs r1,r3; nop, literal 0x020E6026 -> 10 (dayMusicID, u16 at 10); src/map_header.c:60; field music only (src/field_bgm.c:179)"
+note = "decoded: the getter now reads the field from the d_test.narc member loaded by MapHeader_IDBoundsCheck (buffer + field offset) instead of sMapHeaders + 24*id + offset: the 24*id index is dropped and the base address 0x020E6026 becomes the bare offset 10 (dayMusicID, u16 at 10); src/map_header.c:60; field music only (src/field_bgm.c:179)"
 
 [[code]]
 module = "arm9"
 symbol = "MapHeader_GetNightMusicID"
 status = "irrelevant"
-note = "decoded: the getter now reads the field from the d_test.narc member loaded by MapHeader_IDBoundsCheck (r3 + field offset) instead of sMapHeaders + 24*id + offset: movs r1,#0x18; muls r1,r0,r1 -> movs r1,r3; nop, literal 0x020E6028 -> 12 (nightMusicID, u16 at 12); src/map_header.c:66; field music only (src/field_bgm.c:181)"
+note = "decoded: the getter now reads the field from the d_test.narc member loaded by MapHeader_IDBoundsCheck (buffer + field offset) instead of sMapHeaders + 24*id + offset: the 24*id index is dropped and the base address 0x020E6028 becomes the bare offset 12 (nightMusicID, u16 at 12); src/map_header.c:66; field music only (src/field_bgm.c:181)"
 
 [[code]]
 module = "arm9"
 symbol = "MapHeader_HasWildEncounters"
 status = "irrelevant"
-note = "decoded: the getter now reads the field from the d_test.narc member loaded by MapHeader_IDBoundsCheck (r3 + field offset) instead of sMapHeaders + 24*id + offset: movs r1,#0x18; muls r1,r0,r1 -> movs r1,r3; nop, literal 0x020E602A -> 14 (wildEncountersArchiveID != 0xFFFF, u16 at 14); src/map_header.c:72; decides whether the map loads wild encounter tables (src/map_header_data.c:221, src/overlay005/field_control.c:558): wild battles only; trainer fights and the save's pool never read it"
+note = "decoded: the getter now reads the field from the d_test.narc member loaded by MapHeader_IDBoundsCheck (buffer + field offset) instead of sMapHeaders + 24*id + offset: the 24*id index is dropped and the base address 0x020E602A becomes the bare offset 14 (wildEncountersArchiveID != 0xFFFF, u16 at 14); src/map_header.c:72; decides whether the map loads wild encounter tables (src/map_header_data.c:221, src/overlay005/field_control.c:558): wild battles only; trainer fights and the save's pool never read it"
 
 [[code]]
 module = "arm9"
 symbol = "MapHeader_GetWildEncountersArchiveID"
 status = "irrelevant"
-note = "decoded: the getter now reads the field from the d_test.narc member loaded by MapHeader_IDBoundsCheck (r3 + field offset) instead of sMapHeaders + 24*id + offset: movs r1,#0x18; muls r1,r0,r1 -> movs r1,r3; nop, literal 0x020E602A -> 14 (wildEncountersArchiveID, u16 at 14); src/map_header.c:78; names the wild encounter table (src/map_header_data.c:225): wild battles only; trainer fights and the save's pool never read it"
+note = "decoded: the getter now reads the field from the d_test.narc member loaded by MapHeader_IDBoundsCheck (buffer + field offset) instead of sMapHeaders + 24*id + offset: the 24*id index is dropped and the base address 0x020E602A becomes the bare offset 14 (wildEncountersArchiveID, u16 at 14); src/map_header.c:78; names the wild encounter table (src/map_header_data.c:225): wild battles only; trainer fights and the save's pool never read it"
 
 [[code]]
 module = "arm9"
 symbol = "MapHeader_GetEventsArchiveID"
 status = "modelled"
-note = "decoded: the getter now reads the field from the d_test.narc member loaded by MapHeader_IDBoundsCheck (r3 + field offset) instead of sMapHeaders + 24*id + offset: movs r1,#0x18; muls r1,r0,r1 -> movs r1,r3; nop, literal 0x020E602C -> 16 (eventsArchiveID, u16 at 16); src/map_header.c:84; K2b's trainer -> map join reads the zone_event.narc member this field names, read from d_test.narc (maps.map_header_rows, HEADER_EVENTS = 16), and check_kaizo_map_headers matches this patched getter (tests/tools/rom/test_kaizo_rom.py)"
+note = "decoded: the getter now reads the field from the d_test.narc member loaded by MapHeader_IDBoundsCheck (buffer + field offset) instead of sMapHeaders + 24*id + offset: the 24*id index is dropped and the base address 0x020E602C becomes the bare offset 16 (eventsArchiveID, u16 at 16); src/map_header.c:84; K2b's trainer -> map join reads the zone_event.narc member this field names, read from d_test.narc (maps.map_header_rows, HEADER_EVENTS = 16), and check_kaizo_map_headers matches this patched getter (tests/tools/rom/test_kaizo_rom.py)"
 
 [[code]]
 module = "arm9"
 symbol = "MapHeader_GetMapLabelTextID"
 status = "not_reached"
-note = "decoded: the getter now reads the field from the d_test.narc member loaded by MapHeader_IDBoundsCheck (r3 + field offset) instead of sMapHeaders + 24*id + offset: movs r1,#0x18; muls r1,r0,r1 -> movs r1,r3; nop, literal 0x020E601C -> 0 (mapLabelTextID, low byte of the u16 at 18); src/map_header.c:90; in battle it is the battle's location (dto->mapLabelTextID -> battleSys->mapHeader, src/field_battle_data_transfer.c:263, src/battle/battle_main.c:1054), compared with the met location for the +1 friendship bonus of an in-battle level-up or item (src/battle/battle_script.c:9857, src/battle/battle_system.c:741; reloaded into the battler, src/battle/battle_lib.c:179); friendship changes a fight only through effects 121 and 123 (power from friendship: res/battle/scripts/effects/effect_script_0121.s:5, effect_script_0123.s:5; the AI's damage estimate, src/battle/trainer_ai/trainer_ai.c:3019-3024), so a fight reaches this only through them; Kaizo's Return and Frustration are plain 121-power moves (effect 0), so no Kaizo move has either effect today"
+note = "decoded: the getter now reads the field from the d_test.narc member loaded by MapHeader_IDBoundsCheck (buffer + field offset) instead of sMapHeaders + 24*id + offset: the 24*id index is dropped and the base address 0x020E601C becomes the bare offset 0 (mapLabelTextID, low byte of the u16 at 18); src/map_header.c:90; in battle it is the battle's location (dto->mapLabelTextID -> battleSys->mapHeader, src/field_battle_data_transfer.c:263, src/battle/battle_main.c:1054), compared with the met location for the +1 friendship bonus of an in-battle level-up or item (src/battle/battle_script.c:9857, src/battle/battle_system.c:741; reloaded into the battler, src/battle/battle_lib.c:179); friendship changes a fight only through effects 121 and 123 (power from friendship: res/battle/scripts/effects/effect_script_0121.s:5, effect_script_0123.s:5; the AI's damage estimate, src/battle/trainer_ai/trainer_ai.c:3019-3024), so a fight reaches this only through them; Kaizo's Return and Frustration are plain 121-power moves (effect 0), so no Kaizo move has either effect today"
 when = { move_effect = [121, 123] }
 
 [[code]]
 module = "arm9"
 symbol = "MapHeader_GetMapLabelWindowID"
 status = "irrelevant"
-note = "decoded: the getter now reads the field from the d_test.narc member loaded by MapHeader_IDBoundsCheck (r3 + field offset) instead of sMapHeaders + 24*id + offset: movs r1,#0x18; muls r1,r0,r1 -> movs r1,r3; nop, literal 0x020E601C -> 0 (mapLabelWindowID, high byte of the u16 at 18); src/map_header.c:96; the map-name popup frame (src/overlay005/map_name_popup.c:270): display only"
+note = "decoded: the getter now reads the field from the d_test.narc member loaded by MapHeader_IDBoundsCheck (buffer + field offset) instead of sMapHeaders + 24*id + offset: the 24*id index is dropped and the base address 0x020E601C becomes the bare offset 0 (mapLabelWindowID, high byte of the u16 at 18); src/map_header.c:96; the map-name popup frame (src/overlay005/map_name_popup.c:270): display only"
 
 [[code]]
 module = "arm9"
 symbol = "MapHeader_GetWeatherType"
 status = "modelled"
-note = "decoded: the getter now reads the field from the d_test.narc member loaded by MapHeader_IDBoundsCheck (r3 + field offset) instead of sMapHeaders + 24*id + offset: movs r1,#0x18; muls r1,r0,r1 -> movs r1,r3; nop, literal 0x020E6030 -> 20 (weather, u8 at 20); src/map_header.c:102; K2b's start conditions read this byte from d_test.narc (maps.map_header_rows, HEADER_WEATHER = 20, rom_map_weather.json), and check_kaizo_map_headers matches this patched getter and FieldSystem_GetWeather's call to it (tests/tools/rom/test_kaizo_rom.py); weather set later by a script is the gFieldScriptCommands entry"
+note = "decoded: the getter now reads the field from the d_test.narc member loaded by MapHeader_IDBoundsCheck (buffer + field offset) instead of sMapHeaders + 24*id + offset: the 24*id index is dropped and the base address 0x020E6030 becomes the bare offset 20 (weather, u8 at 20); src/map_header.c:102; K2b's start conditions read this byte from d_test.narc (maps.map_header_rows, HEADER_WEATHER = 20, rom_map_weather.json), and check_kaizo_map_headers matches this patched getter and FieldSystem_GetWeather's call to it (tests/tools/rom/test_kaizo_rom.py); weather set later by a script is the gFieldScriptCommands entry"
 
 [[code]]
 module = "arm9"
 symbol = "MapHeader_GetCameraType"
 status = "irrelevant"
-note = "decoded: the getter now reads the field from the d_test.narc member loaded by MapHeader_IDBoundsCheck (r3 + field offset) instead of sMapHeaders + 24*id + offset: movs r1,#0x18; muls r1,r0,r1 -> movs r1,r3; nop, literal 0x020E6031 -> 21 (cameraType, u8 at 21); src/map_header.c:108; the field camera (src/field_map_change.c:284-288): display only"
+note = "decoded: the getter now reads the field from the d_test.narc member loaded by MapHeader_IDBoundsCheck (buffer + field offset) instead of sMapHeaders + 24*id + offset: the 24*id index is dropped and the base address 0x020E6031 becomes the bare offset 21 (cameraType, u8 at 21); src/map_header.c:108; the field camera (src/field_map_change.c:284-288): display only"
 
 [[code]]
 module = "arm9"
 symbol = "MapHeader_GetBattleBG"
 status = "not_reached"
-note = "decoded: the getter now reads the field from the d_test.narc member loaded by MapHeader_IDBoundsCheck (r3 + field offset) instead of sMapHeaders + 24*id + offset: movs r1,#0x18; muls r1,r0,r1 -> movs r1,r3; nop, literal 0x020E601C -> 0 (battleBG, bits 7-11 of the u16 at 22); src/map_header.c:114; battleBG is the battle background (graphics) and CalcTerrain's fallback (src/field_battle_data_transfer.c:488-489,499); battle terrain (CalcTerrain, src/field_battle_data_transfer.c:467-494) is read in battle only by Nature Power, Secret Power and Camouflage (effects 173, 197, 213: GetTerrainMove, GetTerrainSecondaryEffect, TryCamouflage; src/battle/battle_script.c:8007,8040,8067) and by the Dive/Dusk Ball modifiers of wild catches; the engine does not model terrain, so a fight reaches this only through those effects"
+note = "decoded: the getter now reads the field from the d_test.narc member loaded by MapHeader_IDBoundsCheck (buffer + field offset) instead of sMapHeaders + 24*id + offset: the 24*id index is dropped and the base address 0x020E601C becomes the bare offset 0 (battleBG, bits 7-11 of the u16 at 22); src/map_header.c:114; battleBG is the battle background (graphics) and CalcTerrain's fallback (src/field_battle_data_transfer.c:488-489,499); battle terrain (CalcTerrain, src/field_battle_data_transfer.c:467-494) is read in battle only by Nature Power, Secret Power and Camouflage (effects 173, 197, 213: GetTerrainMove, GetTerrainSecondaryEffect, TryCamouflage; src/battle/battle_script.c:8007,8040,8067) and by the Dive/Dusk Ball modifiers of wild catches; the engine does not model terrain, so a fight reaches this only through those effects"
 when = { move_effect = [173, 197, 213] }
 
 [[code]]
 module = "arm9"
 symbol = "MapHeader_IsEscapeRopeAllowed"
 status = "irrelevant"
-note = "decoded: the getter now reads the field from the d_test.narc member loaded by MapHeader_IDBoundsCheck (r3 + field offset) instead of sMapHeaders + 24*id + offset: movs r1,#0x18; muls r1,r0,r1 -> movs r1,r3; nop, literal 0x020E601C -> 0 (isEscapeRopeAllowed, bit 14 of the u16 at 22); src/map_header.c:120; gates Escape Rope and Dig in the field (src/item_use_functions.c:947, src/field_move_tasks.c:760): field only"
+note = "decoded: the getter now reads the field from the d_test.narc member loaded by MapHeader_IDBoundsCheck (buffer + field offset) instead of sMapHeaders + 24*id + offset: the 24*id index is dropped and the base address 0x020E601C becomes the bare offset 0 (isEscapeRopeAllowed, bit 14 of the u16 at 22); src/map_header.c:120; gates Escape Rope and Dig in the field (src/item_use_functions.c:947, src/field_move_tasks.c:760): field only"
 
 [[code]]
 module = "arm9"
 symbol = "MapHeader_IsFlyAllowed"
 status = "irrelevant"
-note = "decoded: the getter now reads the field from the d_test.narc member loaded by MapHeader_IDBoundsCheck (r3 + field offset) instead of sMapHeaders + 24*id + offset: movs r1,#0x18; muls r1,r0,r1 -> movs r1,r3; nop, literal 0x020E601C -> 0 (isFlyAllowed, bit 15 of the u16 at 22); src/map_header.c:126; gates Fly and Teleport in the field (src/field_move_tasks.c:377,713): field only"
+note = "decoded: the getter now reads the field from the d_test.narc member loaded by MapHeader_IDBoundsCheck (buffer + field offset) instead of sMapHeaders + 24*id + offset: the 24*id index is dropped and the base address 0x020E601C becomes the bare offset 0 (isFlyAllowed, bit 15 of the u16 at 22); src/map_header.c:126; gates Fly and Teleport in the field (src/field_move_tasks.c:377,713): field only"
 
 [[code]]
 module = "arm9"
 symbol = "MapHeader_IsBikeAllowed"
 status = "irrelevant"
-note = "decoded: the getter now reads the field from the d_test.narc member loaded by MapHeader_IDBoundsCheck (r3 + field offset) instead of sMapHeaders + 24*id + offset: movs r1,#0x18; muls r1,r0,r1 -> movs r1,r3; nop, literal 0x020E601C -> 0 (isBikeAllowed, bit 12 of the u16 at 22); src/map_header.c:132; gates cycling (src/field_map_change_flags.c:90, src/item_use_functions.c:494); only surfing changes the battle background, cycling does not (src/field_battle_data_transfer.c:499-502)"
+note = "decoded: the getter now reads the field from the d_test.narc member loaded by MapHeader_IDBoundsCheck (buffer + field offset) instead of sMapHeaders + 24*id + offset: the 24*id index is dropped and the base address 0x020E601C becomes the bare offset 0 (isBikeAllowed, bit 12 of the u16 at 22); src/map_header.c:132; gates cycling (src/field_map_change_flags.c:90, src/item_use_functions.c:494); only surfing changes the battle background, cycling does not (src/field_battle_data_transfer.c:499-502)"
 
 [[code]]
 module = "arm9"
 symbol = "MapHeader_GetMapType"
 status = "not_reached"
-note = "decoded: the getter now reads the field from the d_test.narc member loaded by MapHeader_IDBoundsCheck (r3 + field offset) instead of sMapHeaders + 24*id + offset: movs r1,#0x18; muls r1,r0,r1 -> movs r1,r3; nop, literal 0x020E601C -> 0 (mapType, bits 0-6 of the u16 at 22); src/map_header.c:138; read through IsCave/IsOutdoors/IsBuilding by field transitions, the journal, Escape Rope and the map-change flags; the one path to a battle: entering a non-cave map clears the Defog and Flash flags (src/field_map_change_flags.c:80-84), and those flags turn map weather 14 (fog) and 16 (dark flash) into clear (src/field_map_change.c:275-280), the weather the battle starts with"
+note = "decoded: the getter now reads the field from the d_test.narc member loaded by MapHeader_IDBoundsCheck (buffer + field offset) instead of sMapHeaders + 24*id + offset: the 24*id index is dropped and the base address 0x020E601C becomes the bare offset 0 (mapType, bits 0-6 of the u16 at 22); src/map_header.c:138; read through IsCave/IsOutdoors/IsBuilding by field transitions, the journal, Escape Rope and the map-change flags; the one path to a battle: entering a non-cave map clears the Defog and Flash flags (src/field_map_change_flags.c:80-84), and those flags turn map weather 14 (fog) and 16 (dark flash) into clear (src/field_map_change.c:275-280), the weather the battle starts with"
 when = { map_weather = [14, 16] }
 
 [[code]]
 module = "arm9"
 symbol = "ScrCmd_GetWallpaperFromCustomMessageWords"
 status = "irrelevant"
-note = "decoded: after WallpaperPasswords_CheckPassword, adds r5,r0,#0 -> movs r5,#0: any four words give wallpaper 0 instead of -1 for a wrong password; src/scrcmd.c:5583; PC box wallpapers are cosmetic"
+note = "decoded: after WallpaperPasswords_CheckPassword its result is replaced by 0: any four words give wallpaper 0 instead of -1 for a wrong password; src/scrcmd.c:5583; PC box wallpapers are cosmetic"
 
 [[code]]
 module = "arm9"
@@ -160,19 +160,19 @@ note = "decoded: script command 0x88 (include/data/scripts/scrcmd.h:144; vanilla
 module = "arm9"
 symbol = "0x0204EB22-0x0204EB24"
 status = "irrelevant"
-note = "decoded: the vanilla alignment halfword after ScrCmd_Dummy088 (0x0000) -> the high half (0x023D) of the patched ScrCmd_Dummy088's literal 0x023DFF28; rom:arm9@0x0204EB20; src/scrcmd_underground_inventory.c:75; part of that command's literal pool, irrelevant for the same reason"
+note = "decoded: the vanilla zero alignment padding after ScrCmd_Dummy088 -> the high half of the patched ScrCmd_Dummy088's literal, the RAM address 0x023DFF28; rom:arm9@0x0204EB20; src/scrcmd_underground_inventory.c:75; part of that command's literal pool, irrelevant for the same reason"
 
 [[code]]
 module = "arm9"
 symbol = "EncEffects_GetEffectPair"
 status = "irrelevant"
-note = "decoded: beq -> b at 0x02051B88: a trainer double battle no longer drops to ENCEFF_DOUBLE_BATTLE / ENCEFF_DOUBLE_LEADER but keeps its trainer-class effect; src/enc_effects.c:152; it selects only the encounter cut-in animation and battle music (EncEffects_CutInEffect/EncEffects_BGM, src/enc_effects.c:200-207)"
+note = "decoded: the double-battle test at 0x02051B88 (if (battleType & BATTLE_TYPE_DOUBLES)) now always skips its block: a trainer double battle no longer drops to ENCEFF_DOUBLE_BATTLE / ENCEFF_DOUBLE_LEADER but keeps its trainer-class effect; src/enc_effects.c:152; it selects only the encounter cut-in animation and battle music (EncEffects_CutInEffect/EncEffects_BGM, src/enc_effects.c:200-207)"
 
 [[code]]
 module = "arm9"
 symbol = "Trainer_Encounter"
 status = "irrelevant"
-note = "decoded: String_ToChars(name, dto->trainer[i].name, 8) -> 12 (movs r2,#8 -> #0xc): trainer names up to 11 characters, the extra 8 bytes landing in the Trainer's winMsg EasyChatSentence; src/trainer_data.c:43; include/struct_defs/trainer.h:13-14; the name is display text, and winMsg is read only for Battle Frontier trainer 10000 (src/battle/battle_system.c:1597-1602)"
+note = "decoded: String_ToChars(name, dto->trainer[i].name, 8) -> 12: trainer names up to 11 characters, the extra 8 bytes landing in the Trainer's winMsg EasyChatSentence; src/trainer_data.c:43; include/struct_defs/trainer.h:13-14; the name is display text, and winMsg is read only for Battle Frontier trainer 10000 (src/battle/battle_system.c:1597-1602)"
 
 [[code]]
 module = "arm9"
@@ -184,31 +184,31 @@ note = "decoded: the routine rewritten in place (arm9 0x020793B8-0x0207956C) plu
 module = "arm9"
 symbol = "PCBoxes_UnlockWallpaper"
 status = "irrelevant"
-note = "decoded: unlockedWallpapers |= 1 << wallpaper (ldrb; lsls; orrs) -> unlockedWallpapers = 0xFF (movs r1,#0xff), every special wallpaper unlocked at once; src/pc_boxes.c:373; PC box wallpapers are cosmetic"
+note = "decoded: unlockedWallpapers |= 1 << wallpaper -> unlockedWallpapers = 0xFF (all 8 bits), every special wallpaper unlocked at once; src/pc_boxes.c:373; PC box wallpapers are cosmetic"
 
 [[code]]
 module = "arm9"
 symbol = "sub_0207AD40"
 status = "irrelevant"
-note = "decoded: BL target re-encoded, vanilla BattleController_RecvCommMessage (0x02266AE4) -> 0x02266B00, the same overlay16 function moved +28 (overlay16 grew 28 bytes before this point (the BattleSystem_TriggerEffectOnSwitch insertions; the diff finds overlay16 equal at +0x1C, relocations aside, from 0x02256778 to sTrainerClassPrizeMul at 0x02270B20)); src/unk_0207A6DC.c:631; rom:overlay16@0x02266AE4+0x1C; no behaviour change"
+note = "decoded: call target re-encoded, vanilla BattleController_RecvCommMessage (0x02266AE4) -> 0x02266B00, the same overlay16 function moved +28 (overlay16 grew 28 bytes before this point: 4 + 4 from the effect-141 insertions in the two accuracy routines at 0x0224F068 and 0x0224F386 and 20 from BattleSystem_TriggerEffectOnSwitch; the diff finds overlay16 equal at +0x1C, relocations aside, from 0x02256778 to sTrainerClassPrizeMul at 0x02270B20); src/unk_0207A6DC.c:631; rom:overlay16@0x02266AE4+0x1C; no behaviour change"
 
 [[code]]
 module = "arm9"
 symbol = "PartyMenuCB_LevelUp"
 status = "irrelevant"
-note = "decoded: the menuSelectionResult store and FADE_OUT return of LEVELUP_STATE_CHECK_EVOLUTION (strb r0,[r1]; movs r0,#0x20) -> bl 0x023C82E2 (weather_sys.narc member 9), which does the same store and, when there is no evolution and Bag_CanRemoveItem(bag, ITEM_RARE_CANDY 50, 1) (a check, nothing removed), sets usedItemID = 50, erases the message box, prints PartyMenu_Text_UseOnWhichMon and returns PARTY_MENU_STATE_USE_ITEM, else FADE_OUT as vanilla; src/applications/party_menu/callbacks.c:826; rom:weather_sys.narc[9]@0x023C82E2; after a Rare Candy level-up the field party menu stays in Rare Candy mode, and the next candy goes through the normal item path (HandleUseItem, src/applications/party_menu/main.c:546), so its only effect is ordinary Rare Candy levels and exp on the player's Pokemon, which the save shows; the callback is reached only from PartyMenuCB_UseItem_RareCandy and the level-up move exit (callbacks.c:713, 837), never in battle"
+note = "decoded: the menuSelectionResult store and FADE_OUT return of LEVELUP_STATE_CHECK_EVOLUTION -> a call to 0x023C82E2 (weather_sys.narc member 9), which does the same store and, when there is no evolution and Bag_CanRemoveItem(bag, ITEM_RARE_CANDY 50, 1) (a check, nothing removed), sets usedItemID = 50, erases the message box, prints PartyMenu_Text_UseOnWhichMon and returns PARTY_MENU_STATE_USE_ITEM, else FADE_OUT as vanilla; src/applications/party_menu/callbacks.c:826; rom:weather_sys.narc[9]@0x023C82E2; after a Rare Candy level-up the field party menu stays in Rare Candy mode, and the next candy goes through the normal item path (HandleUseItem, src/applications/party_menu/main.c:546), so its only effect is ordinary Rare Candy levels and exp on the player's Pokemon, which the save shows; the callback is reached only from PartyMenuCB_UseItem_RareCandy and the level-up move exit (callbacks.c:713, 837), never in battle"
 
 [[code]]
 module = "arm9"
 symbol = "HandleInput_Main"
 status = "irrelevant"
-note = "decoded: the PAD_KEY_RIGHT test (movs r1,#0x10; tst r1,r5) -> bl 0x023C8452 (weather_sys.narc member 9): on PAD_BUTTON_R (0x100) it cycles a mode byte at 0x023C859D (injected region data, RAM only, not saved) 0 -> 1 -> 2 -> 0, calls ChangeSummaryMon(summaryScreen, 0) to redraw the same Pokemon and returns 2; otherwise it redoes the vanilla test and returns; src/applications/pokemon_summary_screen/main.c:592; rom:weather_sys.narc[9]@0x023C8452; it only selects which values the summary screen's stat page shows (stats, IVs, EVs; see SetMonDataFromMon) and changes no Pokemon, party or save data"
+note = "decoded: the PAD_KEY_RIGHT test -> a call to 0x023C8452 (weather_sys.narc member 9): on PAD_BUTTON_R (0x100) it cycles a mode byte at 0x023C859D (injected region data, RAM only, not saved) 0 -> 1 -> 2 -> 0, calls ChangeSummaryMon(summaryScreen, 0) to redraw the same Pokemon and returns 2; otherwise it redoes the vanilla test and returns; src/applications/pokemon_summary_screen/main.c:592; rom:weather_sys.narc[9]@0x023C8452; it only selects which values the summary screen's stat page shows (stats, IVs, EVs; see SetMonDataFromMon) and changes no Pokemon, party or save data"
 
 [[code]]
 module = "arm9"
 symbol = "SetMonDataFromMon"
 status = "irrelevant"
-note = "decoded: str r0,[r5,#0x20]; adds r0,r6,#0 -> bl 0x023C8482 (weather_sys.narc member 9), which does that store, then fills the summary screen's PokemonSummaryMonData HP, max HP, Atk, Def, SpA, SpD (and the Speed id left for vanilla's last read, return = BL + 0x4C) from Pokemon_GetValue of the EVs (MON_DATA 13, 13, 14, 15, 17, 18; 16) in mode 2, the IVs (70, 70, 71, 72, 74, 75; 73) in mode 1, else vanilla's stats (163-169); src/applications/pokemon_summary_screen/main.c:1100-1106; rom:weather_sys.narc[9]@0x023C8482; every call is a Pokemon_GetValue read and every store goes to the summary screen's monData, whose stat fields only the summary print and health bar read (src/applications/pokemon_summary_screen/window.c:1167-1176); SetMonDataFromMon is a static of the summary screen app (main.c:1036-1055), not a battle-party or trainer-party setter, and it writes nothing to any Pokemon or the save"
+note = "decoded: a store into the summary screen's monData and the next call's argument setup -> a call to 0x023C8482 (weather_sys.narc member 9), which does both, then fills the summary screen's PokemonSummaryMonData HP, max HP, Atk, Def, SpA, SpD (and the Speed id left for vanilla's last read, where it returns, past vanilla's other reads) from Pokemon_GetValue of the EVs (MON_DATA 13, 13, 14, 15, 17, 18; 16) in mode 2, the IVs (70, 70, 71, 72, 74, 75; 73) in mode 1, else vanilla's stats (163-169); src/applications/pokemon_summary_screen/main.c:1100-1106; rom:weather_sys.narc[9]@0x023C8482; every call is a Pokemon_GetValue read and every store goes to the summary screen's monData, whose stat fields only the summary print and health bar read (src/applications/pokemon_summary_screen/window.c:1167-1176); SetMonDataFromMon is a static of the summary screen app (main.c:1036-1055), not a battle-party or trainer-party setter, and it writes nothing to any Pokemon or the save"
 
 [[code]]
 module = "arm9"
@@ -263,7 +263,7 @@ note = "decoded: entry 70 iconID/paletteID 51/75 -> 679/87 and entry 429 550/551
 module = "arm9"
 symbol = "@29"
 status = "irrelevant"
-note = "decoded: 25 bytes of the MSL format string 'Assertion (%s) failed in ...' -> the Thumb loader stub NitroMain calls (push; NARC_ReadWholeMemberByIndexPair(0x023C8000, 65, 9); movs r0,#0; movs r1,#3; pop) with its literal 0x023C8000; rom:arm9@0x02101574 (its only reference is __msl_assertion_failed's literal pool, 0x020D40B4); src/main.c:77; the string is printed only on a failed assertion, and the stub is the loader classified under NitroMain"
+note = "decoded: 25 bytes of the MSL format string 'Assertion (%s) failed in ...' -> the Thumb loader stub NitroMain calls (NARC_ReadWholeMemberByIndexPair(0x023C8000, 65, 9), then Font_InitManager's two arguments FONT_SYSTEM and HEAP_ID_APPLICATION set up again before it returns); rom:arm9@0x02101574 (its only reference is __msl_assertion_failed's literal pool, 0x020D40B4); src/main.c:77; the string is printed only on a failed assertion, and the stub is the loader classified under NitroMain"
 
 [[code]]
 module = "overlay5"
@@ -281,79 +281,79 @@ note = "decoded: 18 changed ranges of the tutor bit masks (23 personal rows' tut
 module = "overlay13"
 symbol = "InitializeCursor"
 status = "irrelevant"
-note = "decoded: BL targets re-encoded, vanilla CursorRenderer_LoadResources (0x0226DB7C) -> 0x0226DB98; vanilla CursorRenderer_New (0x0226DC24) -> 0x0226DC40, the same overlay16 functions moved +28 (overlay16 grew 28 bytes before this point (the BattleSystem_TriggerEffectOnSwitch insertions; the diff finds overlay16 equal at +0x1C, relocations aside, from 0x02256778 to sTrainerClassPrizeMul at 0x02270B20)); src/battle_sub_menus/battle_bag_sprites.c:232, src/battle_sub_menus/battle_party_sprites.c:804 (two static functions, 2 calls each); rom:overlay16@0x0226DB7C+0x1C; no behaviour change (battle bag and party menu cursors)"
+note = "decoded: call targets re-encoded, vanilla CursorRenderer_LoadResources (0x0226DB7C) -> 0x0226DB98; vanilla CursorRenderer_New (0x0226DC24) -> 0x0226DC40, the same overlay16 functions moved +28 (overlay16 grew 28 bytes before this point: 4 + 4 from the effect-141 insertions in the two accuracy routines at 0x0224F068 and 0x0224F386 and 20 from BattleSystem_TriggerEffectOnSwitch; the diff finds overlay16 equal at +0x1C, relocations aside, from 0x02256778 to sTrainerClassPrizeMul at 0x02270B20); src/battle_sub_menus/battle_bag_sprites.c:232, src/battle_sub_menus/battle_party_sprites.c:804 (two static functions, 2 calls each); rom:overlay16@0x0226DB7C+0x1C; no behaviour change (battle bag and party menu cursors)"
 
 [[code]]
 module = "overlay13"
 symbol = "CleanupCursor"
 status = "irrelevant"
-note = "decoded: BL targets re-encoded, vanilla CursorRenderer_Delete (0x0226DCA8) -> 0x0226DCC4; vanilla CursorRenderer_UnloadResources (0x0226DBFC) -> 0x0226DC18, the same overlay16 functions moved +28 (overlay16 grew 28 bytes before this point (the BattleSystem_TriggerEffectOnSwitch insertions; the diff finds overlay16 equal at +0x1C, relocations aside, from 0x02256778 to sTrainerClassPrizeMul at 0x02270B20)); src/battle_sub_menus/battle_bag_sprites.c:243, src/battle_sub_menus/battle_party_sprites.c:815 (two static functions, 2 calls each); rom:overlay16@0x0226DCA8+0x1C; no behaviour change (battle bag and party menu cursors)"
+note = "decoded: call targets re-encoded, vanilla CursorRenderer_Delete (0x0226DCA8) -> 0x0226DCC4; vanilla CursorRenderer_UnloadResources (0x0226DBFC) -> 0x0226DC18, the same overlay16 functions moved +28 (overlay16 grew 28 bytes before this point: 4 + 4 from the effect-141 insertions in the two accuracy routines at 0x0224F068 and 0x0224F386 and 20 from BattleSystem_TriggerEffectOnSwitch; the diff finds overlay16 equal at +0x1C, relocations aside, from 0x02256778 to sTrainerClassPrizeMul at 0x02270B20); src/battle_sub_menus/battle_bag_sprites.c:243, src/battle_sub_menus/battle_party_sprites.c:815 (two static functions, 2 calls each); rom:overlay16@0x0226DCA8+0x1C; no behaviour change (battle bag and party menu cursors)"
 
 [[code]]
 module = "overlay13"
 symbol = "BattlePartySprites_DisableCursor"
 status = "irrelevant"
-note = "decoded: BL target re-encoded, vanilla CursorRenderer_HideAllSprites (0x0226DDE8) -> 0x0226DE04, the same overlay16 function moved +28 (overlay16 grew 28 bytes before this point (the BattleSystem_TriggerEffectOnSwitch insertions; the diff finds overlay16 equal at +0x1C, relocations aside, from 0x02256778 to sTrainerClassPrizeMul at 0x02270B20)); src/battle_sub_menus/battle_party_sprites.c:1340; rom:overlay16@0x0226DDE8+0x1C; no behaviour change (battle bag and party menu cursors)"
+note = "decoded: call target re-encoded, vanilla CursorRenderer_HideAllSprites (0x0226DDE8) -> 0x0226DE04, the same overlay16 function moved +28 (overlay16 grew 28 bytes before this point: 4 + 4 from the effect-141 insertions in the two accuracy routines at 0x0224F068 and 0x0224F386 and 20 from BattleSystem_TriggerEffectOnSwitch; the diff finds overlay16 equal at +0x1C, relocations aside, from 0x02256778 to sTrainerClassPrizeMul at 0x02270B20); src/battle_sub_menus/battle_party_sprites.c:1340; rom:overlay16@0x0226DDE8+0x1C; no behaviour change (battle bag and party menu cursors)"
 
 [[code]]
 module = "overlay13"
 symbol = "BattleBagTask_CatchTutorial"
 status = "irrelevant"
-note = "decoded: BL target re-encoded, vanilla Indicator_GetHasDropped (0x0226DFD4) -> 0x0226DFF0, the same overlay16 function moved +28 (overlay16 grew 28 bytes before this point (the BattleSystem_TriggerEffectOnSwitch insertions; the diff finds overlay16 equal at +0x1C, relocations aside, from 0x02256778 to sTrainerClassPrizeMul at 0x02270B20)); src/battle_sub_menus/battle_bag.c:578 (3 calls); rom:overlay16@0x0226DFD4+0x1C; no behaviour change (battle bag and party menu cursors)"
+note = "decoded: call target re-encoded, vanilla Indicator_GetHasDropped (0x0226DFD4) -> 0x0226DFF0, the same overlay16 function moved +28 (overlay16 grew 28 bytes before this point: 4 + 4 from the effect-141 insertions in the two accuracy routines at 0x0224F068 and 0x0224F386 and 20 from BattleSystem_TriggerEffectOnSwitch; the diff finds overlay16 equal at +0x1C, relocations aside, from 0x02256778 to sTrainerClassPrizeMul at 0x02270B20); src/battle_sub_menus/battle_bag.c:578 (3 calls); rom:overlay16@0x0226DFD4+0x1C; no behaviour change (battle bag and party menu cursors)"
 
 [[code]]
 module = "overlay13"
 symbol = "BattleBagTask_GetSelectedPartySlot"
 status = "irrelevant"
-note = "decoded: BL target re-encoded, vanilla BattleContext_Get (0x0225B45C) -> 0x0225B478, the same overlay16 function moved +28 (overlay16 grew 28 bytes before this point (the BattleSystem_TriggerEffectOnSwitch insertions; the diff finds overlay16 equal at +0x1C, relocations aside, from 0x02256778 to sTrainerClassPrizeMul at 0x02270B20)); src/battle_sub_menus/battle_bag.c:813; rom:overlay16@0x0225B45C+0x1C; no behaviour change (battle bag and party menu cursors)"
+note = "decoded: call target re-encoded, vanilla BattleContext_Get (0x0225B45C) -> 0x0225B478, the same overlay16 function moved +28 (overlay16 grew 28 bytes before this point: 4 + 4 from the effect-141 insertions in the two accuracy routines at 0x0224F068 and 0x0224F386 and 20 from BattleSystem_TriggerEffectOnSwitch; the diff finds overlay16 equal at +0x1C, relocations aside, from 0x02256778 to sTrainerClassPrizeMul at 0x02270B20); src/battle_sub_menus/battle_bag.c:813; rom:overlay16@0x0225B45C+0x1C; no behaviour change (battle bag and party menu cursors)"
 
 [[code]]
 module = "overlay13"
 symbol = "BattleBagSprites_DisableCursor"
 status = "irrelevant"
-note = "decoded: BL target re-encoded, vanilla CursorRenderer_HideAllSprites (0x0226DDE8) -> 0x0226DE04, the same overlay16 function moved +28 (overlay16 grew 28 bytes before this point (the BattleSystem_TriggerEffectOnSwitch insertions; the diff finds overlay16 equal at +0x1C, relocations aside, from 0x02256778 to sTrainerClassPrizeMul at 0x02270B20)); src/battle_sub_menus/battle_bag_sprites.c:450; rom:overlay16@0x0226DDE8+0x1C; no behaviour change (battle bag and party menu cursors)"
+note = "decoded: call target re-encoded, vanilla CursorRenderer_HideAllSprites (0x0226DDE8) -> 0x0226DE04, the same overlay16 function moved +28 (overlay16 grew 28 bytes before this point: 4 + 4 from the effect-141 insertions in the two accuracy routines at 0x0224F068 and 0x0224F386 and 20 from BattleSystem_TriggerEffectOnSwitch; the diff finds overlay16 equal at +0x1C, relocations aside, from 0x02256778 to sTrainerClassPrizeMul at 0x02270B20); src/battle_sub_menus/battle_bag_sprites.c:450; rom:overlay16@0x0226DDE8+0x1C; no behaviour change (battle bag and party menu cursors)"
 
 [[code]]
 module = "overlay13"
 symbol = "InitializeCatchTutorialCursor"
 status = "irrelevant"
-note = "decoded: BL targets re-encoded, vanilla Indicator_LoadResources (0x0226DE44) -> 0x0226DE60; vanilla Indicator_New (0x0226DEEC) -> 0x0226DF08, the same overlay16 functions moved +28 (overlay16 grew 28 bytes before this point (the BattleSystem_TriggerEffectOnSwitch insertions; the diff finds overlay16 equal at +0x1C, relocations aside, from 0x02256778 to sTrainerClassPrizeMul at 0x02270B20)); src/battle_sub_menus/battle_bag_sprites.c:457; rom:overlay16@0x0226DE44+0x1C; no behaviour change (battle bag and party menu cursors)"
+note = "decoded: call targets re-encoded, vanilla Indicator_LoadResources (0x0226DE44) -> 0x0226DE60; vanilla Indicator_New (0x0226DEEC) -> 0x0226DF08, the same overlay16 functions moved +28 (overlay16 grew 28 bytes before this point: 4 + 4 from the effect-141 insertions in the two accuracy routines at 0x0224F068 and 0x0224F386 and 20 from BattleSystem_TriggerEffectOnSwitch; the diff finds overlay16 equal at +0x1C, relocations aside, from 0x02256778 to sTrainerClassPrizeMul at 0x02270B20); src/battle_sub_menus/battle_bag_sprites.c:457; rom:overlay16@0x0226DE44+0x1C; no behaviour change (battle bag and party menu cursors)"
 
 [[code]]
 module = "overlay13"
 symbol = "CleanupCatchTutorialCursor"
 status = "irrelevant"
-note = "decoded: BL targets re-encoded, vanilla Indicator_Delete (0x0226DF68) -> 0x0226DF84; vanilla Indicator_UnloadResources (0x0226DEC4) -> 0x0226DEE0, the same overlay16 functions moved +28 (overlay16 grew 28 bytes before this point (the BattleSystem_TriggerEffectOnSwitch insertions; the diff finds overlay16 equal at +0x1C, relocations aside, from 0x02256778 to sTrainerClassPrizeMul at 0x02270B20)); src/battle_sub_menus/battle_bag_sprites.c:465; rom:overlay16@0x0226DF68+0x1C; no behaviour change (battle bag and party menu cursors)"
+note = "decoded: call targets re-encoded, vanilla Indicator_Delete (0x0226DF68) -> 0x0226DF84; vanilla Indicator_UnloadResources (0x0226DEC4) -> 0x0226DEE0, the same overlay16 functions moved +28 (overlay16 grew 28 bytes before this point: 4 + 4 from the effect-141 insertions in the two accuracy routines at 0x0224F068 and 0x0224F386 and 20 from BattleSystem_TriggerEffectOnSwitch; the diff finds overlay16 equal at +0x1C, relocations aside, from 0x02256778 to sTrainerClassPrizeMul at 0x02270B20); src/battle_sub_menus/battle_bag_sprites.c:465; rom:overlay16@0x0226DF68+0x1C; no behaviour change (battle bag and party menu cursors)"
 
 [[code]]
 module = "overlay13"
 symbol = "BattleBagSprites_SetupCatchTutorialCursor"
 status = "irrelevant"
-note = "decoded: BL targets re-encoded, vanilla Indicator_ShowOnSubscreen (0x0226DFB0) -> 0x0226DFCC; vanilla Indicator_SetExitTimer (0x0226DFD0) -> 0x0226DFEC; vanilla Indicator_Hide (0x0226DFBC) -> 0x0226DFD8, the same overlay16 functions moved +28 (overlay16 grew 28 bytes before this point (the BattleSystem_TriggerEffectOnSwitch insertions; the diff finds overlay16 equal at +0x1C, relocations aside, from 0x02256778 to sTrainerClassPrizeMul at 0x02270B20)); src/battle_sub_menus/battle_bag_sprites.c:477; rom:overlay16@0x0226DFB0+0x1C; no behaviour change (battle bag and party menu cursors)"
+note = "decoded: call targets re-encoded, vanilla Indicator_ShowOnSubscreen (0x0226DFB0) -> 0x0226DFCC; vanilla Indicator_SetExitTimer (0x0226DFD0) -> 0x0226DFEC; vanilla Indicator_Hide (0x0226DFBC) -> 0x0226DFD8, the same overlay16 functions moved +28 (overlay16 grew 28 bytes before this point: 4 + 4 from the effect-141 insertions in the two accuracy routines at 0x0224F068 and 0x0224F386 and 20 from BattleSystem_TriggerEffectOnSwitch; the diff finds overlay16 equal at +0x1C, relocations aside, from 0x02256778 to sTrainerClassPrizeMul at 0x02270B20); src/battle_sub_menus/battle_bag_sprites.c:477; rom:overlay16@0x0226DFB0+0x1C; no behaviour change (battle bag and party menu cursors)"
 
 [[code]]
 module = "overlay13"
 symbol = "SetBattleSubMenuCursorCurrentPosition"
 status = "irrelevant"
-note = "decoded: BL target re-encoded, vanilla CursorRenderer_DrawOnSubscreen (0x0226DD7C) -> 0x0226DD98, the same overlay16 function moved +28 (overlay16 grew 28 bytes before this point (the BattleSystem_TriggerEffectOnSwitch insertions; the diff finds overlay16 equal at +0x1C, relocations aside, from 0x02256778 to sTrainerClassPrizeMul at 0x02270B20)); src/battle_sub_menus/battle_sub_menu_cursor.c:45; rom:overlay16@0x0226DD7C+0x1C; no behaviour change (battle bag and party menu cursors)"
+note = "decoded: call target re-encoded, vanilla CursorRenderer_DrawOnSubscreen (0x0226DD7C) -> 0x0226DD98, the same overlay16 function moved +28 (overlay16 grew 28 bytes before this point: 4 + 4 from the effect-141 insertions in the two accuracy routines at 0x0224F068 and 0x0224F386 and 20 from BattleSystem_TriggerEffectOnSwitch; the diff finds overlay16 equal at +0x1C, relocations aside, from 0x02256778 to sTrainerClassPrizeMul at 0x02270B20); src/battle_sub_menus/battle_sub_menu_cursor.c:45; rom:overlay16@0x0226DD7C+0x1C; no behaviour change (battle bag and party menu cursors)"
 
 [[code]]
 module = "overlay13"
 symbol = "SetBattleSubMenuCursorPositions"
 status = "irrelevant"
-note = "decoded: BL target re-encoded, vanilla CursorRenderer_DrawOnSubscreen (0x0226DD7C) -> 0x0226DD98, the same overlay16 function moved +28 (overlay16 grew 28 bytes before this point (the BattleSystem_TriggerEffectOnSwitch insertions; the diff finds overlay16 equal at +0x1C, relocations aside, from 0x02256778 to sTrainerClassPrizeMul at 0x02270B20)); src/battle_sub_menus/battle_sub_menu_cursor.c:60; rom:overlay16@0x0226DD7C+0x1C; no behaviour change (battle bag and party menu cursors)"
+note = "decoded: call target re-encoded, vanilla CursorRenderer_DrawOnSubscreen (0x0226DD7C) -> 0x0226DD98, the same overlay16 function moved +28 (overlay16 grew 28 bytes before this point: 4 + 4 from the effect-141 insertions in the two accuracy routines at 0x0224F068 and 0x0224F386 and 20 from BattleSystem_TriggerEffectOnSwitch; the diff finds overlay16 equal at +0x1C, relocations aside, from 0x02256778 to sTrainerClassPrizeMul at 0x02270B20); src/battle_sub_menus/battle_sub_menu_cursor.c:60; rom:overlay16@0x0226DD7C+0x1C; no behaviour change (battle bag and party menu cursors)"
 
 [[code]]
 module = "overlay13"
 symbol = "IsCursorVisible"
 status = "irrelevant"
-note = "decoded: BL target re-encoded, vanilla CursorRenderer_DrawOnSubscreen (0x0226DD7C) -> 0x0226DD98, the same overlay16 function moved +28 (overlay16 grew 28 bytes before this point (the BattleSystem_TriggerEffectOnSwitch insertions; the diff finds overlay16 equal at +0x1C, relocations aside, from 0x02256778 to sTrainerClassPrizeMul at 0x02270B20)); src/battle_sub_menus/battle_sub_menu_cursor.c:77; rom:overlay16@0x0226DD7C+0x1C; no behaviour change (battle bag and party menu cursors)"
+note = "decoded: call target re-encoded, vanilla CursorRenderer_DrawOnSubscreen (0x0226DD7C) -> 0x0226DD98, the same overlay16 function moved +28 (overlay16 grew 28 bytes before this point: 4 + 4 from the effect-141 insertions in the two accuracy routines at 0x0224F068 and 0x0224F386 and 20 from BattleSystem_TriggerEffectOnSwitch; the diff finds overlay16 equal at +0x1C, relocations aside, from 0x02256778 to sTrainerClassPrizeMul at 0x02270B20); src/battle_sub_menus/battle_sub_menu_cursor.c:77; rom:overlay16@0x0226DD7C+0x1C; no behaviour change (battle bag and party menu cursors)"
 
 [[code]]
 module = "overlay13"
 symbol = "BattleSubMenuCursorTick"
 status = "irrelevant"
-note = "decoded: BL target re-encoded, vanilla CursorRenderer_DrawOnSubscreen (0x0226DD7C) -> 0x0226DD98, the same overlay16 function moved +28 (overlay16 grew 28 bytes before this point (the BattleSystem_TriggerEffectOnSwitch insertions; the diff finds overlay16 equal at +0x1C, relocations aside, from 0x02256778 to sTrainerClassPrizeMul at 0x02270B20)); src/battle_sub_menus/battle_sub_menu_cursor.c:121; rom:overlay16@0x0226DD7C+0x1C; no behaviour change (battle bag and party menu cursors)"
+note = "decoded: call target re-encoded, vanilla CursorRenderer_DrawOnSubscreen (0x0226DD7C) -> 0x0226DD98, the same overlay16 function moved +28 (overlay16 grew 28 bytes before this point: 4 + 4 from the effect-141 insertions in the two accuracy routines at 0x0224F068 and 0x0224F386 and 20 from BattleSystem_TriggerEffectOnSwitch; the diff finds overlay16 equal at +0x1C, relocations aside, from 0x02256778 to sTrainerClassPrizeMul at 0x02270B20); src/battle_sub_menus/battle_sub_menu_cursor.c:121; rom:overlay16@0x0226DD7C+0x1C; no behaviour change (battle bag and party menu cursors)"
 
 [[code]]
 module = "overlay14"
@@ -551,27 +551,27 @@ note = "decoded: one word of the AI script gTrainerAITable, which overlay14 carr
 module = "overlay16"
 symbol = "BattleControllerPlayer_CheckObedience"
 status = "unknown"
-note = "decoded: the badge gate if (TrainerInfo_BadgeCount(trInfo) >= 8) return OBEY_CHECK_SUCCESS compares with 0 (cmp r0,#8 -> cmp r0,#0 before the blt), and a badge count is never negative, so the check always returns OBEY_CHECK_SUCCESS there, before any level test or RandNext draw: every Pokemon the player sends obeys at any level, traded or not (vanilla: with fewer than 8 badges a non-OT Pokemon above the badge level cap, 10 with 0 badges, may disobey); src/battle/battle_controller_player.c:2136; rom:overlay16@0x0224E1D0; it runs on every player move in every fight, Roark's included; the engine has no obedience check (it always uses the chosen move and draws no RNG for it), which is what the patched code does, but no test pins that; K3b adds that test and marks this modelled -> K3b"
+note = "decoded: the badge gate if (TrainerInfo_BadgeCount(trInfo) >= 8) return OBEY_CHECK_SUCCESS compares with 0 instead of 8, and a badge count is never negative, so the check always returns OBEY_CHECK_SUCCESS there, before any level test or RandNext draw: every Pokemon the player sends obeys at any level, traded or not (vanilla: with fewer than 8 badges a non-OT Pokemon above the badge level cap, 10 with 0 badges, may disobey); src/battle/battle_controller_player.c:2136; rom:overlay16@0x0224E1D0; it runs on every player move in every fight, Roark's included; the engine has no obedience check (it always uses the chosen move and draws no RNG for it), which is what the patched code does, but no test pins that; K3b adds that test and marks this modelled -> K3b"
 
 [[code]]
 module = "overlay16"
 symbol = "BattleControllerPlayer_CheckMoveHitAccuracy"
 status = "not_reached"
-note = "decoded: the sun branch if (NO_CLOUD_NINE && WEATHER_IS_SUN && effect == BATTLE_EFFECT_THUNDER) hitRate = 50 also takes effect 141 (cmp r0,#0x98; bne -> cmp r0,#0x98; beq; cmp r0,#0x8D; bne: 4 bytes inserted at 0x0224F068); the other 8 changed ranges are the PC-relative literal loads and forward branches those 4 bytes moved (every literal and BL target checked equal after the overlay16 shifts); src/battle/battle_controller_player.c:2915; rom:overlay16@0x0224F068; in sun without Cloud Nine or Air Lock a move with effect 141 (Kaizo Hurricane, move 140, accuracy 70) gets base accuracy 50, as Thunder; reached only through a move with effect 141"
+note = "decoded: the sun branch if (NO_CLOUD_NINE && WEATHER_IS_SUN && effect == BATTLE_EFFECT_THUNDER) hitRate = 50 also takes effect 141 (the Thunder compare, effect 152, gains an alternative compare for effect 141: 4 bytes inserted at 0x0224F068); the other 8 changed ranges are the address-relative constant loads and forward jumps those 4 bytes moved (every literal and call target checked equal after the overlay16 shifts); src/battle/battle_controller_player.c:2915; rom:overlay16@0x0224F068; in sun without Cloud Nine or Air Lock a move with effect 141 (Kaizo Hurricane, move 140, accuracy 70) gets base accuracy 50, as Thunder; reached only through a move with effect 141"
 when = { move_effect = [141] }
 
 [[code]]
 module = "overlay16"
 symbol = "BattleControllerPlayer_CheckMoveHitOverrides"
 status = "not_reached"
-note = "decoded: the rain branch if (WEATHER_IS_RAIN && effect == BATTLE_EFFECT_THUNDER) moveStatusFlags &= ~MOVE_STATUS_MISSED (inside NO_CLOUD_NINE) also takes effect 141 (cmp r0,#0x98; bne -> cmp r0,#0x98; beq; cmp r0,#0x8D; bne: 4 bytes inserted at 0x0224F386, so overlay16 is +8 from there); the other 9 changed ranges are the PC-relative literal loads and forward branches the two 4-byte insertions moved (every literal and BL target checked equal after the overlay16 shifts); src/battle/battle_controller_player.c:3025; rom:overlay16@0x0224F384; in rain without Cloud Nine or Air Lock a move with effect 141 (Kaizo Hurricane) cannot miss, as Thunder; reached only through a move with effect 141"
+note = "decoded: the rain branch if (WEATHER_IS_RAIN && effect == BATTLE_EFFECT_THUNDER) moveStatusFlags &= ~MOVE_STATUS_MISSED (inside NO_CLOUD_NINE) also takes effect 141 (the Thunder compare, effect 152, gains an alternative compare for effect 141: 4 bytes inserted at 0x0224F386, so overlay16 is +8 from there); the other 9 changed ranges are the address-relative constant loads and forward jumps the two 4-byte insertions moved (every literal and call target checked equal after the overlay16 shifts); src/battle/battle_controller_player.c:3025; rom:overlay16@0x0224F384; in rain without Cloud Nine or Air Lock a move with effect 141 (Kaizo Hurricane) cannot miss, as Thunder; reached only through a move with effect 141"
 when = { move_effect = [141] }
 
 [[code]]
 module = "overlay16"
 symbol = "BattleSystem_TriggerEffectOnSwitch"
 status = "modelled"
-note = "decoded: only the SWITCH_IN_CHECK_STATE_FIELD_WEATHER switch on BattleSystem_GetFieldWeather changed: its jump table covers weathers 0-18 instead of 0-15 (cmp r0,#0xF -> cmp r0,#0x12, 3 more halfword entries), case 12 (OVERWORLD_WEATHER_SPIRITS, vanilla default) loads sub_seq 297 (a new 10-byte case block and literal 0x129), 16 stays default, 17 loads subscript_overworld_sun and 18 subscript_overworld_trick_room; cases 0-11 and 13-15, the OVERWORLD_WEATHER_HARSH_SUN and _TRICK_ROOM compares (1001, 1002), the trace, weather-ability and later states are unchanged: the other ranges are the literal pool moved up into the function (the loop tail placed after it), re-encoded branches and PC-relative loads, every literal and BL target equal after the overlay16 shifts (the function grew 20 bytes); src/battle/battle_lib.c:3664; rom:overlay16@0x02256440; K2b decodes this switch from the patched ROM (tools/rom/readers/maps.py weather_switch_conditions, pinned by test_weather_switch_decoded in tests/tools/rom/test_kaizo_rom.py) into each trainer's start condition: weather 17 gives sun, 18 Trick Room (every such trainer has a Trick Room area override, tools/kaizo/overrides.py check_rom_trick_room, and coverage refuses it), and a trainer on a weather-12 map fails the build (subscript 297 is no supported start condition, tools/extract_decomp.py _start_condition); no Kaizo trainer is on one"
+note = "decoded: only the SWITCH_IN_CHECK_STATE_FIELD_WEATHER switch on BattleSystem_GetFieldWeather changed: its jump table covers weathers 0-18 instead of 0-15 (its bound check accepts up to 18 instead of 15, 3 more table entries), case 12 (OVERWORLD_WEATHER_SPIRITS, vanilla default) loads sub_seq 297 (a new 10-byte case block and the constant 297 in the pool), 16 stays default, 17 loads subscript_overworld_sun and 18 subscript_overworld_trick_room; cases 0-11 and 13-15, the OVERWORLD_WEATHER_HARSH_SUN and _TRICK_ROOM compares (1001, 1002), the trace, weather-ability and later states are unchanged: the other ranges are the literal pool moved up into the function (the loop tail placed after it), re-encoded jumps and address-relative constant loads, every literal and call target equal after the overlay16 shifts (the function grew 20 bytes); src/battle/battle_lib.c:3664; rom:overlay16@0x02256440; K2b decodes this switch from the patched ROM (tools/rom/readers/maps.py weather_switch_conditions, pinned by test_weather_switch_decoded in tests/tools/rom/test_kaizo_rom.py) into each trainer's start condition: weather 17 gives sun, 18 Trick Room (every such trainer has a Trick Room area override, tools/kaizo/overrides.py check_rom_trick_room, and coverage refuses it), and a trainer on a weather-12 map fails the build (subscript 297 is no supported start condition, tools/extract_decomp.py _start_condition); no Kaizo trainer is on one"
 
 [[code]]
 module = "overlay16"
@@ -590,7 +590,7 @@ note = "decoded: the table's 105 bytes are unchanged; it moved +0x20 (0x02270B20
 narc = "battle/skill/be_seq.narc"
 index = 48
 status = "not_reached"
-note = "decoded: the 1/4-recoil script's side effect MOVE_SUBSCRIPT_PTR_QUARTER_RECOIL (14) -> MOVE_SUBSCRIPT_PTR_RECOIL_1_2 (138) (side-effect word 0x2000000E -> 0x2000008A); the Reckless x1.2 power check, CalcCrit and CalcDamage are unchanged, so effect 48 is 1/2 recoil with Reckless; res/battle/scripts/effects/effect_script_0048.s:9; Kaizo users: Hyper Beam, Outrage, Superpower, Hydro Cannon, Giga Impact, Draco Meteor (moves 63, 200, 276, 308, 416, 434); reached only through a move with effect 48"
+note = "decoded: the 1/4-recoil script's side effect MOVE_SUBSCRIPT_PTR_QUARTER_RECOIL (14) -> MOVE_SUBSCRIPT_PTR_RECOIL_1_2 (138); the Reckless x1.2 power check, CalcCrit and CalcDamage are unchanged, so effect 48 is 1/2 recoil with Reckless; res/battle/scripts/effects/effect_script_0048.s:9; Kaizo users: Hyper Beam, Outrage, Superpower, Hydro Cannon, Giga Impact, Draco Meteor (moves 63, 200, 276, 308, 416, 434); reached only through a move with effect 48"
 when = { move_effect = [48] }
 
 [[member]]
@@ -611,7 +611,7 @@ when = { move_effect = [104] }
 narc = "battle/skill/be_seq.narc"
 index = 141
 status = "not_reached"
-note = "decoded: the unused plain-damage script (CalcCrit, CalcDamage) -> SIDE_EFFECT_FLAGS_INDIRECT = MOVE_SIDE_EFFECT_TO_DEFENDER|MOVE_SUBSCRIPT_PTR_CONFUSE (0x80000007, as effect 76) and BATTLE_CTX_STATUS |= SYSCTL_HIT_DURING_FLY before CalcCrit, CalcDamage: a hit that confuses the target at the move's effect chance and hits a Fly/Bounce user; with the effect-141 branches added to CheckMoveHitAccuracy (accuracy 50 in sun) and CheckMoveHitOverrides (sure hit in rain) this is Hurricane; res/battle/scripts/effects/effect_script_0141.s:5; res/battle/scripts/effects/effect_script_0076.s:5; Kaizo user: Hurricane (move 140: 120 power, 70 accuracy, 30% chance); reached only through a move with effect 141"
+note = "decoded: the unused plain-damage script (CalcCrit, CalcDamage) -> SIDE_EFFECT_FLAGS_INDIRECT = MOVE_SIDE_EFFECT_TO_DEFENDER|MOVE_SUBSCRIPT_PTR_CONFUSE (as effect 76) and BATTLE_CTX_STATUS |= SYSCTL_HIT_DURING_FLY before CalcCrit, CalcDamage: a hit that confuses the target at the move's effect chance and hits a Fly/Bounce user; with the effect-141 branches added to CheckMoveHitAccuracy (accuracy 50 in sun) and CheckMoveHitOverrides (sure hit in rain) this is Hurricane; res/battle/scripts/effects/effect_script_0141.s:5; res/battle/scripts/effects/effect_script_0076.s:5; Kaizo user: Hurricane (move 140: 120 power, 70 accuracy, 30% chance); reached only through a move with effect 141"
 when = { move_effect = [141] }
 
 [[member]]
@@ -639,5 +639,5 @@ when = { area_condition = ["trick_room"], move_effect = [259], map_weather = [18
 narc = "battle/skill/sub_seq.narc"
 index = 297
 status = "not_reached"
-note = "decoded: a new member (vanilla has 297, 0-296): PlayMoveAnimation of MOVE_GRAVITY (356) then, byte for byte, subscript_gravity_start (sub_seq 156: Gravity intensified!, FIELD_CONDITION_GRAVITY_INIT, the grounding loop with its messages); res/battle/scripts/subscripts/subscript_gravity_start.s:6; rom:sub_seq.narc[297]; its only reference is the patched field-weather switch (BattleSystem_TriggerEffectOnSwitch case 12, literal 0x129 at overlay16 0x0225675C; no battle script calls it), so a fight on a map with weather 12 starts with Gravity; K2b's start conditions fail the build for a trainer on such a map, and none is on one"
+note = "decoded: a new member (vanilla has 297, 0-296): PlayMoveAnimation of MOVE_GRAVITY (356) then, byte for byte, subscript_gravity_start (sub_seq 156: Gravity intensified!, FIELD_CONDITION_GRAVITY_INIT, the grounding loop with its messages); res/battle/scripts/subscripts/subscript_gravity_start.s:6; rom:sub_seq.narc[297]; its only reference is the patched field-weather switch (BattleSystem_TriggerEffectOnSwitch case 12, whose constant 297 sits in the pool at overlay16 0x0225675C; no battle script calls it), so a fight on a map with weather 12 starts with Gravity; K2b's start conditions fail the build for a trainer on such a map, and none is on one"
 when = { map_weather = [12] }
