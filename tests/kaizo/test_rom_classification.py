@@ -11,10 +11,6 @@ classification task appends its own. A group is ``(label, keys)``: ``keys`` is a
 ``(module, symbol)`` for ``[[code]]`` entries (``symbol`` as the toml spells it, a
 ``0xSTART-0xEND`` range included) and ``(narc, index)`` for ``[[member]]`` entries. Every
 key must name an entry of the toml, and every entry of a done group has a decoded note.
-
-``K2B_NOTES`` holds the keys whose note K2b wrote before this format existed (the changed
-battle-script members); the two whole-file tests pass over them until Task 8 rewrites those
-notes and empties it. A done group may not contain one.
 """
 
 import re
@@ -109,18 +105,25 @@ TASK6 = (
     ),
 )
 
-DONE_GROUPS = [TASK5, TASK6]
+TASK7 = (
+    "task 7: overlay16 and the battle script members",
+    tuple(
+        [
+            ("overlay16", s)
+            for s in (
+                "BattleControllerPlayer_CheckObedience",
+                "BattleControllerPlayer_CheckMoveHitAccuracy",
+                "BattleControllerPlayer_CheckMoveHitOverrides",
+                "BattleSystem_TriggerEffectOnSwitch",
+                "sTrainerClassPrizeMul",
+            )
+        ]
+        + [("battle/skill/be_seq.narc", i) for i in (48, 88, 104, 141, 182)]
+        + [("battle/skill/sub_seq.narc", i) for i in (238, 251, 297)]
+    ),
+)
 
-K2B_NOTES = {
-    ("battle/skill/be_seq.narc", 48),
-    ("battle/skill/be_seq.narc", 88),
-    ("battle/skill/be_seq.narc", 104),
-    ("battle/skill/be_seq.narc", 141),
-    ("battle/skill/be_seq.narc", 182),
-    ("battle/skill/sub_seq.narc", 238),
-    ("battle/skill/sub_seq.narc", 251),
-    ("battle/skill/sub_seq.narc", 297),
-}
+DONE_GROUPS = [TASK5, TASK6, TASK7]
 
 
 def _data() -> dict:
@@ -129,9 +132,8 @@ def _data() -> dict:
 
 
 def _entries() -> list[dict]:
-    """Every ``[[code]]`` and ``[[member]]`` entry but ``K2B_NOTES``, ``note`` defaulting
-    to ``""``."""
-    return [e for key, e in _by_key().items() if key not in K2B_NOTES]
+    """Every ``[[code]]`` and ``[[member]]`` entry, ``note`` defaulting to ``""``."""
+    return list(_by_key().values())
 
 
 def _by_key() -> dict[tuple, dict]:
@@ -162,7 +164,6 @@ def test_group_has_no_undecoded_entries(group):
     _, keys = group
     entries = _by_key()
     assert len(set(keys)) == len(keys), "a key is listed twice"
-    assert not set(keys) & K2B_NOTES, "a done group still has a K2b-format note"
     missing = [k for k in keys if k not in entries]
     assert not missing, f"no rom_diff.toml entry for {missing}"
     undecoded = [k for k in keys if not entries[k]["note"].startswith("decoded: ")]

@@ -551,82 +551,93 @@ note = ""
 module = "overlay16"
 symbol = "BattleControllerPlayer_CheckObedience"
 status = "unknown"
-note = ""
+note = "decoded: the badge gate if (TrainerInfo_BadgeCount(trInfo) >= 8) return OBEY_CHECK_SUCCESS compares with 0 (cmp r0,#8 -> cmp r0,#0 before the blt), and a badge count is never negative, so the check always returns OBEY_CHECK_SUCCESS there, before any level test or RandNext draw: every Pokemon the player sends obeys at any level, traded or not (vanilla: with fewer than 8 badges a non-OT Pokemon above the badge level cap, 10 with 0 badges, may disobey); src/battle/battle_controller_player.c:2136; rom:overlay16@0x0224E1D0; it runs on every player move in every fight, Roark's included; the engine has no obedience check (it always uses the chosen move and draws no RNG for it), which is what the patched code does, but no test pins that; K3b adds that test and marks this modelled -> K3b"
 
 [[code]]
 module = "overlay16"
 symbol = "BattleControllerPlayer_CheckMoveHitAccuracy"
-status = "unknown"
-note = ""
+status = "not_reached"
+note = "decoded: the sun branch if (NO_CLOUD_NINE && WEATHER_IS_SUN && effect == BATTLE_EFFECT_THUNDER) hitRate = 50 also takes effect 141 (cmp r0,#0x98; bne -> cmp r0,#0x98; beq; cmp r0,#0x8D; bne: 4 bytes inserted at 0x0224F068); the other 8 changed ranges are the PC-relative literal loads and forward branches those 4 bytes moved (every literal and BL target checked equal after the overlay16 shifts); src/battle/battle_controller_player.c:2915; rom:overlay16@0x0224F068; in sun without Cloud Nine or Air Lock a move with effect 141 (Kaizo Hurricane, move 140, accuracy 70) gets base accuracy 50, as Thunder; reached only through a move with effect 141"
+when = { move_effect = [141] }
 
 [[code]]
 module = "overlay16"
 symbol = "BattleControllerPlayer_CheckMoveHitOverrides"
-status = "unknown"
-note = ""
+status = "not_reached"
+note = "decoded: the rain branch if (WEATHER_IS_RAIN && effect == BATTLE_EFFECT_THUNDER) moveStatusFlags &= ~MOVE_STATUS_MISSED (inside NO_CLOUD_NINE) also takes effect 141 (cmp r0,#0x98; bne -> cmp r0,#0x98; beq; cmp r0,#0x8D; bne: 4 bytes inserted at 0x0224F386, so overlay16 is +8 from there); the other 9 changed ranges are the PC-relative literal loads and forward branches the two 4-byte insertions moved (every literal and BL target checked equal after the overlay16 shifts); src/battle/battle_controller_player.c:3025; rom:overlay16@0x0224F384; in rain without Cloud Nine or Air Lock a move with effect 141 (Kaizo Hurricane) cannot miss, as Thunder; reached only through a move with effect 141"
+when = { move_effect = [141] }
 
 [[code]]
 module = "overlay16"
 symbol = "BattleSystem_TriggerEffectOnSwitch"
-status = "unknown"
-note = ""
+status = "modelled"
+note = "decoded: only the SWITCH_IN_CHECK_STATE_FIELD_WEATHER switch on BattleSystem_GetFieldWeather changed: its jump table covers weathers 0-18 instead of 0-15 (cmp r0,#0xF -> cmp r0,#0x12, 3 more halfword entries), case 12 (OVERWORLD_WEATHER_SPIRITS, vanilla default) loads sub_seq 297 (a new 10-byte case block and literal 0x129), 16 stays default, 17 loads subscript_overworld_sun and 18 subscript_overworld_trick_room; cases 0-11 and 13-15, the OVERWORLD_WEATHER_HARSH_SUN and _TRICK_ROOM compares (1001, 1002), the trace, weather-ability and later states are unchanged: the other ranges are the literal pool moved up into the function (the loop tail placed after it), re-encoded branches and PC-relative loads, every literal and BL target equal after the overlay16 shifts (the function grew 20 bytes); src/battle/battle_lib.c:3664; rom:overlay16@0x02256440; K2b decodes this switch from the patched ROM (tools/rom/readers/maps.py weather_switch_conditions, pinned by test_weather_switch_decoded in tests/tools/rom/test_kaizo_rom.py) into each trainer's start condition: weather 17 gives sun, 18 Trick Room (every such trainer has a Trick Room area override, tools/kaizo/overrides.py check_rom_trick_room, and coverage refuses it), and a trainer on a weather-12 map fails the build (subscript 297 is no supported start condition, tools/extract_decomp.py _start_condition); no Kaizo trainer is on one"
 
 [[code]]
 module = "overlay16"
 symbol = "sTrainerClassPrizeMul"
-status = "unknown"
-note = ""
+status = "irrelevant"
+note = "decoded: the table's 105 bytes are unchanged; it moved +0x20 (0x02270B20 -> 0x02270B40) behind 4 bytes of zero alignment padding, needed because the code before it grew 28 bytes (the diff, aligned at +0x1C there, reports the pad as a change of the table); include/data/trainer_class_prize_mul.h:4; rom:overlay16@0x02270B20; its one reader, BattleScript_CalcPrizeMoney (src/battle/battle_script.c:3684), loads it through a literal relocated to the new address; prize money is paid after the battle and cannot change a battle outcome or an AI choice"
 
 # Changed members of the battle script NARCs (K2b Ruling 13): narc as RomFiles.paths()
 # spells it, index = member (be_seq: battle effect id).  status: modelled | irrelevant |
-# unknown.  An entry naming an unchanged member is an error (tools.rom.diff
+# not_reached | unknown.  An entry naming an unchanged member is an error (tools.rom.diff
 # load_member_classification); extract_rom --game kaizo appends any missing one as unknown.
+# A be_seq member not marked modelled makes its moves UNSUPPORTED (tools/build_tables.py).
 # battle/tr_ai/tr_ai_seq.narc is unchanged.
 
 [[member]]
 narc = "battle/skill/be_seq.narc"
 index = 48
-status = "unknown"
-note = "vanilla effect 48 (effect_script_0048.s: 1/4 recoil, Reckless; Take Down, Submission); patched: same commands with a different recoil subscript id (0x0E -> 0x8A in the side-effect flags). Kaizo users: Hyper Beam, Outrage, Superpower, Hydro Cannon, Giga Impact, Draco Meteor. Not transcribed."
+status = "not_reached"
+note = "decoded: the 1/4-recoil script's side effect MOVE_SUBSCRIPT_PTR_QUARTER_RECOIL (14) -> MOVE_SUBSCRIPT_PTR_RECOIL_1_2 (138) (side-effect word 0x2000000E -> 0x2000008A); the Reckless x1.2 power check, CalcCrit and CalcDamage are unchanged, so effect 48 is 1/2 recoil with Reckless; res/battle/scripts/effects/effect_script_0048.s:9; Kaizo users: Hyper Beam, Outrage, Superpower, Hydro Cannon, Giga Impact, Draco Meteor (moves 63, 200, 276, 308, 416, 434); reached only through a move with effect 48"
+when = { move_effect = [48] }
 
 [[member]]
 narc = "battle/skill/be_seq.narc"
 index = 88
-status = "unknown"
-note = "vanilla effect 88 (effect_script_0088.s: Psywave damage); patched: byte-identical to the patched member 104 (a multi-hit script). Kaizo users: Triple Axel (slot 149), Fury Cutter. Not transcribed."
+status = "not_reached"
+note = "decoded: the Psywave script (damage = level x Random(10, 5) / 10) -> byte-identical to the patched effect 104 script: SetMultiHit 3 with SYSCTL_TRIPLE_KICK, the multi-hit message, then per hit GetCurrentMoveData MOVEATTRIBUTE_POWER and MOVE_POWER += it, CalcCrit, CalcDamage (hit k has k x base power); res/battle/scripts/effects/effect_script_0088.s:5; res/battle/scripts/effects/effect_script_0104.s:5; Kaizo users: Triple Axel (move 149, 20 power) and Fury Cutter (210, 20 power); reached only through a move with effect 88"
+when = { move_effect = [88] }
 
 [[member]]
 narc = "battle/skill/be_seq.narc"
 index = 104
-status = "unknown"
-note = "vanilla effect 104 (effect_script_0104.s: Triple Kick, SetMultiHit 3 with +10 power per hit); patched: 64 bytes, other operands. Kaizo users: Triple Kick, Rock Wrecker (slot 439). Not transcribed."
+status = "not_reached"
+note = "decoded: Triple Kick's per-hit power step UpdateVar OPCODE_ADD, BTLVAR_MOVE_POWER, 10 -> GetCurrentMoveData MOVEATTRIBUTE_POWER then UpdateVarFromVar OPCODE_ADD, BTLVAR_MOVE_POWER, BTLVAR_CALC_TEMP (+10 -> + the move's base power), the rest as vanilla (SetMultiHit 3, SYSCTL_TRIPLE_KICK); res/battle/scripts/effects/effect_script_0104.s:7; hit k has k x base power: Kaizo Triple Kick (move 167) and Rock Wrecker (439), both 30 power, hit 30/60/90 (vanilla Triple Kick, 10 power, 10/20/30); reached only through a move with effect 104"
+when = { move_effect = [104] }
 
 [[member]]
 narc = "battle/skill/be_seq.narc"
 index = 141
-status = "unknown"
-note = "vanilla effect 141 (effect_script_0141.s: plain CalcCrit/CalcDamage, no vanilla user); patched: 44 bytes, extra commands before the damage. Kaizo user: Hurricane (slot 140). Not transcribed."
+status = "not_reached"
+note = "decoded: the unused plain-damage script (CalcCrit, CalcDamage) -> SIDE_EFFECT_FLAGS_INDIRECT = MOVE_SIDE_EFFECT_TO_DEFENDER|MOVE_SUBSCRIPT_PTR_CONFUSE (0x80000007, as effect 76) and BATTLE_CTX_STATUS |= SYSCTL_HIT_DURING_FLY before CalcCrit, CalcDamage: a hit that confuses the target at the move's effect chance and hits a Fly/Bounce user; with the effect-141 branches added to CheckMoveHitAccuracy (accuracy 50 in sun) and CheckMoveHitOverrides (sure hit in rain) this is Hurricane; res/battle/scripts/effects/effect_script_0141.s:5; res/battle/scripts/effects/effect_script_0076.s:5; Kaizo user: Hurricane (move 140: 120 power, 70 accuracy, 30% chance); reached only through a move with effect 141"
+when = { move_effect = [141] }
 
 [[member]]
 narc = "battle/skill/be_seq.narc"
 index = 182
-status = "unknown"
-note = "vanilla effect 182 (effect_script_0182.s: Superpower, user Atk/Def -1); patched: the vanilla effect 48 recoil script (1/4 recoil, Reckless). Kaizo users: Take Down, Close Combat, Brave Bird. Not transcribed."
+status = "not_reached"
+note = "decoded: the Superpower script (user Atk and Def -1 after the hit, MOVE_SUBSCRIPT_PTR_USER_ATK_AND_DEF_DOWN_1_STAGE) -> byte-identical to the vanilla effect 48 script: x1.2 power with Reckless and 1/4 recoil (MOVE_SUBSCRIPT_PTR_QUARTER_RECOIL); res/battle/scripts/effects/effect_script_0182.s:5; res/battle/scripts/effects/effect_script_0048.s:5; Kaizo users: Take Down (move 36), Close Combat (370), Brave Bird (413); reached only through a move with effect 182"
+when = { move_effect = [182] }
 
 [[member]]
 narc = "battle/skill/sub_seq.narc"
 index = 238
-status = "unknown"
-note = "vanilla subscript_gravity_end (sub_seq.order line 239, 28 bytes); patched: 324 bytes. Gravity is set by overrides in K2b (Ruling 8); what the patched end script does is not transcribed."
+status = "not_reached"
+note = "decoded: subscript_gravity_end (prints Gravity returned to normal!) -> FIELD_CONDITIONS |= FIELD_CONDITION_GRAVITY_INIT (5 more turns) then subscript_gravity_start's grounding loop without its messages (per battler by speed: Magnet Rise turns := 0; a Fly/Bounce user is unlocked and made visible), so Gravity, once started, never ends; res/battle/scripts/subscripts/subscript_gravity_end.s:6; res/battle/scripts/subscripts/subscript_gravity_start.s:9; it runs when the gravity counter reaches 0 (src/battle/battle_controller_player.c:1232); Gravity starts only from effect 215 (MOVE_SUBSCRIPT_PTR_GRAVITY_START, Kaizo move 356 Gravity), sub_seq 297 (map weather 12) or a Kaizo start condition (area gravity)"
+when = { area_condition = ["gravity"], move_effect = [215], map_weather = [12] }
 
 [[member]]
 narc = "battle/skill/sub_seq.narc"
 index = 251
-status = "unknown"
-note = "vanilla subscript_trick_room_end (sub_seq.order line 252, 28 bytes); patched: 136 bytes. Kaizo maps with weather 18 start Trick Room (maps.weather_switch_conditions); what the patched end script does is not transcribed."
+status = "not_reached"
+note = "decoded: subscript_trick_room_end (prints The twisted dimensions returned to normal!) -> byte-identical to be_seq 259, the Trick Room move script: Trick Room being off when its counter ran out, it sets FIELD_CONDITION_TRICK_ROOM_INIT (5 more turns), buffers {attacker} twisted the dimensions!, sets the print-and-animate side effect and runs TrickRoom, so Trick Room, once started, never ends; res/battle/scripts/subscripts/subscript_trick_room_end.s:6; res/battle/scripts/effects/effect_script_0259.s:5; it runs when the Trick Room counter reaches 0 (src/battle/battle_controller_player.c:1826); Trick Room starts only from effect 259 (Kaizo move 433 Trick Room) or subscript_overworld_trick_room (Kaizo map weather 18, whose trainers carry the area condition trick_room)"
+when = { area_condition = ["trick_room"], move_effect = [259], map_weather = [18] }
 
 [[member]]
 narc = "battle/skill/sub_seq.narc"
 index = 297
-status = "unknown"
-note = "new member (vanilla has 297). The patched field-weather switch (BattleSystem_TriggerEffectOnSwitch) runs it for map weather 12, which no Kaizo map header uses; other references not scanned. Not transcribed."
+status = "not_reached"
+note = "decoded: a new member (vanilla has 297, 0-296): PlayMoveAnimation of MOVE_GRAVITY (356) then, byte for byte, subscript_gravity_start (sub_seq 156: Gravity intensified!, FIELD_CONDITION_GRAVITY_INIT, the grounding loop with its messages); res/battle/scripts/subscripts/subscript_gravity_start.s:6; rom:sub_seq.narc[297]; its only reference is the patched field-weather switch (BattleSystem_TriggerEffectOnSwitch case 12, literal 0x129 at overlay16 0x0225675C; no battle script calls it), so a fight on a map with weather 12 starts with Gravity; K2b's start conditions fail the build for a trainer on such a map, and none is on one"
+when = { map_weather = [12] }
