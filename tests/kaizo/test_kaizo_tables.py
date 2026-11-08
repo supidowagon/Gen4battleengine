@@ -108,6 +108,16 @@ def test_map_weather_resolves_to_trainers(tmp_path, kaizo_intermediate):
     assert c["trainers"] and {r["id"] for r in rows} <= set(c["trainers"])
 
 
+def test_map_header_resolves_to_its_trainers(tmp_path, kaizo_intermediate):
+    placed = json.loads((kaizo_intermediate / "rom" / "rom_trainer_maps.json").read_text("utf-8"))
+    want = sorted(int(t) for t, headers in placed.items() if 293 in headers)
+    (c,) = resolve_conditions(
+        kaizo_intermediate, _write(tmp_path, MEMBER88 + "when={map_header=[293]}\n")
+    )
+    assert want and c["trainers"] == want and c["moves"] == []
+    assert 246 not in c["trainers"]  # Roark is on header 47
+
+
 def test_unresolved_name_fails_build(tmp_path, kaizo_intermediate):
     with pytest.raises(BuildError, match="Dry skinn"):
         resolve_conditions(

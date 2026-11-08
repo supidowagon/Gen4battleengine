@@ -273,7 +273,8 @@ def resolve_conditions(inter: Path, rom_diff: Path = ROM_DIFF) -> list[dict]:
     move ids whose ROM ``effect`` (the be_seq index) is in ``move_effect``; ``abilities`` and
     ``items`` are the decomp ids of the named ability or held item (exact name, case-
     insensitive); ``trainers`` are the trainers placed on a map header whose weather byte is in
-    ``map_weather`` (``rom/rom_trainer_maps.json`` joined with ``rom/rom_map_weather.json``).
+    ``map_weather`` or whose id is in ``map_header`` (``rom/rom_trainer_maps.json``, joined with
+    ``rom/rom_map_weather.json`` for the weather).
     A name that matches nothing, or a missing intermediate, raises ``BuildError``."""
     from tools.rom.diff import load_conditions
 
@@ -289,6 +290,7 @@ def resolve_conditions(inter: Path, rom_diff: Path = ROM_DIFF) -> list[dict]:
     out = []
     for label, when in sorted(raw.items()):
         effects, weathers = set(when.get("move_effect", ())), set(when.get("map_weather", ()))
+        map_headers = set(when.get("map_header", ()))
         ids = {}
         for kind in ("ability", "held_item"):
             ids[kind] = []
@@ -297,7 +299,7 @@ def resolve_conditions(inter: Path, rom_diff: Path = ROM_DIFF) -> list[dict]:
                     raise BuildError(f"{rom_diff}: {label}: no {kind} named {name!r}")
                 ids[kind].append(names[kind][name.lower()])
         trainers = []
-        if weathers:
+        if weathers or map_headers:
             for name in ("rom_trainer_maps", "rom_map_weather"):
                 if not (inter / "rom" / f"{name}.json").exists():
                     raise BuildError(
@@ -307,8 +309,8 @@ def resolve_conditions(inter: Path, rom_diff: Path = ROM_DIFF) -> list[dict]:
             weather = _load(inter / "rom", "rom_map_weather")
             trainers = sorted(
                 int(t)
-                for t, headers in _load(inter / "rom", "rom_trainer_maps").items()
-                if any(weather[h] in weathers for h in headers)
+                for t, placed in _load(inter / "rom", "rom_trainer_maps").items()
+                if any(weather[h] in weathers or h in map_headers for h in placed)
             )
         out.append(
             {

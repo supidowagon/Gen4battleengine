@@ -694,7 +694,9 @@ STATUSES = ("modelled", "irrelevant", "not_reached", "unknown")
 
 # The keys of a ``not_reached`` entry's ``when`` table (K3a): the battle conditions under
 # which the change is reached. Several keys mean OR. Values are lists, except
-# ``trainer_items`` (``true``).
+# ``trainer_items`` (``true``). ``map_weather`` holds raw header weather bytes and
+# ``map_header`` map header ids; both resolve at the Kaizo build to the trainers placed on
+# those headers (``tools.build_tables.resolve_conditions``).
 WHEN_KEYS = (
     "format",
     "area_condition",
@@ -702,13 +704,14 @@ WHEN_KEYS = (
     "ability",
     "held_item",
     "map_weather",
+    "map_header",
     "trainer_items",
 )
 _WHEN_CHOICES = {
     "format": ("double", "double_two_trainer", "multi"),
     "area_condition": ("trick_room", "gravity"),
 }
-_WHEN_INTS = ("move_effect", "map_weather")
+_WHEN_INTS = ("move_effect", "map_weather", "map_header")
 
 
 def _key(c: CodeChange) -> tuple[str, str]:

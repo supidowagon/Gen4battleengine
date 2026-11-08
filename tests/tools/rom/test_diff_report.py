@@ -206,6 +206,21 @@ def test_when_rejects_unknown_key_and_value(tmp_path):
             load_conditions(p)
 
 
+def test_when_map_header_takes_header_ids(tmp_path):
+    entry = '[[code]]\nmodule="arm9"\nsymbol="X"\nstatus="not_reached"\nnote="n"\nwhen='
+    p = _toml(tmp_path, entry + "{map_header=[172, 293]}\n")
+    assert load_conditions(p) == {"arm9 X": {"map_header": [172, 293]}}
+    for bad in (
+        '{map_header=["172"]}',
+        "{map_header=[]}",
+        "{map_header=172}",
+        "{map_header=[true]}",
+    ):
+        p = _toml(tmp_path, entry + bad + "\n")
+        with pytest.raises(ValueError, match="map_header"):
+            load_conditions(p)
+
+
 def test_conditions_keyed_by_label(tmp_path):
     p = _toml(
         tmp_path,
