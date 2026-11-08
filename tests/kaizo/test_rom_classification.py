@@ -10,7 +10,8 @@ A note has the form ``"decoded: <what changed> (<vanilla> -> <patched>); <decomp
 classification task appends its own. A group is ``(label, keys)``: ``keys`` is a tuple of
 ``(module, symbol)`` for ``[[code]]`` entries (``symbol`` as the toml spells it, a
 ``0xSTART-0xEND`` range included) and ``(narc, index)`` for ``[[member]]`` entries. Every
-key must name an entry of the toml, and every entry of a done group has a decoded note.
+key must name an entry of the toml, every entry of a done group has a decoded note, and
+every entry of the toml is in some done group.
 """
 
 import re
@@ -198,6 +199,13 @@ def test_unknown_entries_name_their_milestone():
     for e in _entries():
         if e["status"] == "unknown" and e["note"]:
             assert e["note"].endswith(("-> K3b", "-> K3c")), e
+
+
+def test_done_groups_cover_every_entry():
+    # Final review M4 (K3a): a new [[code]] or [[member]] entry cannot escape the group checks.
+    grouped = {k for _, keys in DONE_GROUPS for k in keys}
+    outside = sorted(set(_by_key()) - grouped, key=str)
+    assert not outside, f"rom_diff.toml entries in no DONE_GROUPS group: {outside}"
 
 
 @pytest.mark.parametrize("group", DONE_GROUPS, ids=[g[0] for g in DONE_GROUPS])

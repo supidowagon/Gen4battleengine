@@ -229,7 +229,9 @@ without a decoded note is not allowed.
 - overlay16: `CheckMoveHitAccuracy` and `CheckMoveHitOverrides` (accuracy, which
   matters to every move), `CheckObedience`, and `BattleSystem_TriggerEffectOnSwitch`
   (210 bytes: map weather and the field conditions at switch-in). All four are on
-  Roark's path and must be `modelled`.
+  Roark's path; the K3a outcome below settles them: `CheckObedience` stays `unknown` (K3b),
+  the two accuracy routines are `not_reached` on `move_effect` 141, and
+  `BattleSystem_TriggerEffectOnSwitch` is `modelled`.
 - `be_seq` and `sub_seq` members: `not_reached` with a move-effect or area-condition
   condition, unless a pool move uses them.
 
