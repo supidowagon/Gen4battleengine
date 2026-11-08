@@ -43,8 +43,10 @@ from nuzline.engine.stats import calc_stats
 
 INTERMEDIATE = Path(__file__).resolve().parents[1] / "data" / "intermediate"
 
-# The M1 species set: the sample team plus Roark's and the route-encounter species, and
-# a holder of each weather ability (Swift Swim, Sand Veil, Snow Cloak).
+# The M1 species set: the sample team plus Roark's and the route-encounter species, a
+# holder of each weather ability (Swift Swim, Sand Veil, Snow Cloak), and of Rough Skin
+# (Carvanha), Flame Body (Magby), Limber (Glameow), Adaptability (Eevee) and Solid Rock
+# (Camerupt): their other slot is empty or unimplemented, so these are always drawn.
 M1_SPECIES = (
     "Monferno",
     "Prinplup",
@@ -66,6 +68,11 @@ M1_SPECIES = (
     "Goldeen",
     "Sandshrew",
     "Swinub",
+    "Carvanha",
+    "Magby",
+    "Glameow",
+    "Eevee",
+    "Camerupt",
 )
 M1_ITEMS = ("", "Oran Berry", "Sitrus Berry")
 M1_BAG_ITEMS = ("", "Potion")  # the opponent's bag (ids.TrainerItemId)
@@ -400,10 +407,14 @@ LAW_MOVES = (
     "Disable",
 )
 # Abilities the outcome relevance reads (contact procs, Steadfast, Simple's and Swift
-# Swim's Speed) or the hit odds read (Compoundeyes, Sand Veil, Snow Cloak).
+# Swim's Speed) or the hit odds read (Compoundeyes, Sand Veil, Snow Cloak), and Rough Skin
+# and Limber, which sit next to the contact procs and the paralysis they relate to.
 LAW_ABILITIES = (
     AbilityId.STATIC,
     AbilityId.POISON_POINT,
+    AbilityId.FLAME_BODY,
+    AbilityId.ROUGH_SKIN,
+    AbilityId.LIMBER,
     AbilityId.STEADFAST,
     AbilityId.SIMPLE,
     AbilityId.SHED_SKIN,

@@ -10,11 +10,12 @@ Mirrors the decomp's pipeline for one hit of a damaging move:
    at least 1. Our ``roll`` is ``15 - rand % 16``, so roll ``r`` multiplies by
    ``85 + r`` and ``damage_table`` is ascending.
 4. ``BattleSystem_ApplyTypeChart`` (``battle_lib.c:2560``, run later by
-   ``BattleControllerPlayer_CheckTypeChart``): STAB ``* 15 / 10``, then each
-   defender type's multiplier through ``BattleSystem_Divide`` (``:3599``, a
-   non-zero result never truncates to 0), in the order their rows appear in
-   ``sTypeMatchupMultipliers`` (``:2399``, walked at ``:2611-2646``), which is
-   not always type 1 then type 2 (``tables.type_chart_order``).
+   ``BattleControllerPlayer_CheckTypeChart``): STAB ``* 15 / 10`` (``* 2`` with
+   Adaptability), then each defender type's multiplier through ``BattleSystem_Divide``
+   (``:3599``, a non-zero result never truncates to 0), in the order their rows appear
+   in ``sTypeMatchupMultipliers`` (``:2399``, walked at ``:2611-2646``), which is not
+   always type 1 then type 2 (``tables.type_chart_order``), then Solid Rock on a
+   super-effective hit (``Divide(damage * 3, 4)``, ``:2657-2660``).
 
 The trainer AI's estimate (``TrainerAI_CalcDamage``, ``trainer_ai.c:2868``) runs
 steps 1, 4 and then 3: ``ai_damage_for_roll`` (crit multiplier 1, variance last).
@@ -403,6 +404,10 @@ def _finish(
     def_side = 1 - atk_side
     a_types = _i32(s.types[atk_side, s.active[atk_side]])
     d_types = _i32(s.types[def_side, s.active[def_side]])
+    a_ability = _i32(s.ability[atk_side, s.active[atk_side]])
+    d_ability = _i32(s.ability[def_side, s.active[def_side]])
+    # Battler_IgnorableAbility (:3108): Mold Breaker ignores the defender's ability.
+    d_ability = jnp.where(a_ability == AbilityId.MOLD_BREAKER, AbilityId.NONE, d_ability)
     variance = 85 + _i32(roll)
 
     if not variance_last:
@@ -410,8 +415,9 @@ def _finish(
         damage = jnp.maximum(damage * variance // 100, 1)
     typeless = _i32(move) == MOVE_STRUGGLE
     unchanged = damage
-    # :2592-2596 STAB x1.5 (Adaptability is not implemented).
-    damage = jnp.where(jnp.any(a_types == move_type), damage * 15 // 10, damage)
+    # :2592-2597 STAB: x2 with Adaptability (Battler_Ability), else x1.5.
+    stab = jnp.where(a_ability == AbilityId.ADAPTABILITY, damage * 2, damage * 15 // 10)
+    damage = jnp.where(jnp.any(a_types == move_type), stab, damage)
     # :2611-2646 each defender type through ApplyTypeMultiplier (:7547), in chart
     # row order; type 2 is skipped when it equals type 1 (:2635). Unlisted pairs
     # are neutral (x10/10 leaves damage unchanged), so their order is irrelevant.
@@ -422,6 +428,13 @@ def _finish(
     t2_first = tables.type_chart_order[move_type, t2] < tables.type_chart_order[move_type, t1]
     first, second = jnp.where(t2_first, e2, e1), jnp.where(t2_first, e1, e2)
     damage = divide(divide(damage * first, 10) * second, 10)
+    # :2657-2660 Solid Rock (Battler_IgnorableAbility): BattleSystem_Divide(damage * 3, 4)
+    # when MOVE_STATUS_SUPER_EFFECTIVE is set. ApplyTypeMultiplier (:7557-7574) sets it for a
+    # x2 entry unless NOT_VERY_EFFECTIVE was set, which it clears instead (and the other way
+    # round), so it stands exactly when the product is above neutral; an immunity leaves 0.
+    super_effective = first * second > 100
+    solid_rock = super_effective & (d_ability == AbilityId.SOLID_ROCK)
+    damage = jnp.where(solid_rock, divide(damage * 3, 4), damage)
     damage = jnp.where(typeless, unchanged, damage)
     if variance_last:
         # trainer_ai.c:3109; an immunity is already 0 (:3106).

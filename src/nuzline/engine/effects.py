@@ -117,16 +117,30 @@ many are real). Decomp sources:
   (a miss runs ``subscript_missed.s``, which unlocks). Power is ``damage.rollout_multiplier``.
 * Defense Curl: ``effect_script_0156.s`` sets ``curled`` before the Defense stage.
 * Pursuit is a plain hit here; its pre-switch hit at double power is in ``step``.
-* Static / Poison Point: ``BattleSystem_TriggerAbilityOnHit`` (battle_lib.c:4200),
-  run per hit after the secondary effect (``ONE_HIT_TRIGGER_ABILITY`` /
+* Static / Poison Point / Flame Body: ``BattleSystem_TriggerAbilityOnHit``
+  (battle_lib.c:4200; Static :4214, Poison Point :4303, Flame Body :4321), run per hit
+  after the secondary effect (``ONE_HIT_TRIGGER_ABILITY`` /
   ``MULTI_HIT_TRIGGER_ABILITY``, battle_controller_player.c:3513, :3573): the
-  defender's own ability (Mold Breaker does not matter), a contact move that hit,
-  was not ineffective and dealt damage, a living attacker with no status, and the
-  roll ``RandNext() % 10 < 3`` (``outcome.contact_proc[defending side, hit]``). The
-  defender need not be alive. The status goes through ``subscript_paralyze.s`` /
-  ``subscript_poison.s`` as an ability side effect: Safeguard and Substitute do not
-  apply, the type immunities do (``can_have_status``). Its message reveals the
-  holder's ability to the AI (``hooks.reveal_ability``).
+  defender's own ability (``Battler_Ability``: Mold Breaker does not matter), a contact
+  move that hit, was not ineffective and dealt damage, a living attacker with no status,
+  and the roll ``RandNext() % 10 < 3`` (``outcome.contact_proc[defending side, hit]``).
+  The defender need not be alive. The status goes through ``subscript_paralyze.s`` /
+  ``subscript_poison.s`` / ``subscript_burn.s`` as an ability side effect: Safeguard and
+  Substitute do not apply, the type immunities do (``can_have_status``: a Fire type is
+  never burned), and an attacker's own Limber stops the paralysis silently
+  (subscript_paralyze.s:5, :_170). Its message reveals the holder's ability to the AI
+  (``hooks.reveal_ability``).
+* Rough Skin (battle_lib.c:4257-4271, same function, so never with the above): a living
+  attacker (Magic Guard is unsupported), a contact move that was not ineffective and
+  dealt damage, no roll: ``subscript_rough_skin.s`` takes ``BattleSystem_Divide(maxHP,
+  8)`` from the attacker through ``BATTLE_SUBSCRIPT_UPDATE_HP`` (it may faint; not
+  Bide's stored damage, which only the controller's ``UpdateHP`` adds) and its message
+  tags the holder's ability. The faint stops a multi-hit move (``step``).
+* Limber (``_inflict``): a paralysis (Thunder Wave, a paralysis secondary effect) on a
+  living target with Limber as the attacker sees it (``target_ignorable``) inflicts
+  nothing (subscript_paralyze.s:5); the "prevents paralysis" message (:_170) is printed,
+  and reveals the ability, only for a direct effect (a status move). A pierced Limber
+  (Mold Breaker) cures at the move's end (``hooks.recover_status_by_ability``).
 * Insomnia (``_inflict``): a sleep move (or sleep secondary effect) on a living target
   with Insomnia as the attacker sees it (``target_ignorable``: Mold Breaker pierces it)
   inflicts nothing (subscript_fall_asleep.s:_055, :_202), whatever the target's other
@@ -137,7 +151,7 @@ many are real). Decomp sources:
 
 Unreachable branches are not modelled: Substitute, Mist, Safeguard and Uproar
 come from unsupported moves; Shield Dust, Clear Body, Hyper Cutter, Immunity,
-Limber, Leaf Guard, Liquid Ooze, Magic Guard, Reckless, Serene Grace,
+Leaf Guard, Liquid Ooze, Magic Guard, Reckless, Serene Grace,
 Skill Link, Own Tempo, Levitate, Normalize and Color Change are unsupported
 abilities; Big Root and Grip Claw are unsupported items.
 """
@@ -257,15 +271,26 @@ def can_have_status(state: BattleState, side, slot, status) -> jnp.ndarray:
     return (state.status[side, slot] == Status.NONE) & ~immune
 
 
-def _inflict(state: BattleState, h: _Hit, outcome: Outcome, cond) -> BattleState:
+def _inflict(state: BattleState, h: _Hit, outcome: Outcome, cond, direct) -> BattleState:
+    """``direct``: a status move's own effect (``SIDE_EFFECT_TYPE_DIRECT``), not a damaging
+    move's secondary effect (``_INDIRECT``)."""
     status = h.param[0]
     cond = cond & _alive(state, h.target_side, h.target)
     # subscript_fall_asleep.s:_055/_202/_221: an ignorable Insomnia stops the sleep before
     # any other check, and its "stayed awake" message tags the ability.
     blocked = cond & (status == Status.SLEEP) & (h.target_ignorable == AbilityId.INSOMNIA)
-    from nuzline.engine.hooks import SLEEP_BLOCKED, reveal_ability  # hooks imports this module
+    # subscript_paralyze.s:5/_170: an ignorable Limber stops a paralysis before any other
+    # check; "prevents paralysis" (TAG_NICKNAME_ABILITY) is printed for a direct effect only.
+    limber = cond & (status == Status.PARALYSIS) & (h.target_ignorable == AbilityId.LIMBER)
+    from nuzline.engine.hooks import (  # hooks imports this module
+        PARALYSIS_BLOCKED,
+        SLEEP_BLOCKED,
+        reveal_ability,
+    )
 
     state = reveal_ability(state, h.target_side, h.target, SLEEP_BLOCKED, blocked)
+    state = reveal_ability(state, h.target_side, h.target, PARALYSIS_BLOCKED, limber & direct)
+    blocked = blocked | limber
     cond = cond & ~blocked & can_have_status(state, h.target_side, h.target, status)
     counter = jnp.where(status == Status.SLEEP, outcome.duration[h.side], 0)
     old_status = state.status[h.target_side, h.target]
@@ -284,11 +309,12 @@ def _inflict(state: BattleState, h: _Hit, outcome: Outcome, cond) -> BattleState
 
 
 def _status_foe(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
-    return _inflict(state, h, outcome, (h.effect == _E.STATUS_FOE) & h.effective)
+    return _inflict(state, h, outcome, (h.effect == _E.STATUS_FOE) & h.effective, True)
 
 
 def _secondary_status(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
-    return _inflict(state, h, outcome, (h.effect == _E.SECONDARY_STATUS) & h.effective & h.proc)
+    cond = (h.effect == _E.SECONDARY_STATUS) & h.effective & h.proc
+    return _inflict(state, h, outcome, cond, False)
 
 
 def _flinch(tables, state, h: _Hit) -> BattleState:
@@ -572,23 +598,38 @@ def _contact_ability(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     status = jnp.where(
         ability == AbilityId.STATIC,
         Status.PARALYSIS,
-        jnp.where(ability == AbilityId.POISON_POINT, Status.POISON, Status.NONE),
+        jnp.where(
+            ability == AbilityId.POISON_POINT,
+            Status.POISON,
+            jnp.where(ability == AbilityId.FLAME_BODY, Status.BURN, Status.NONE),
+        ),
     )
     contact = (tables.move_flags[h.move] & MoveFlag.CONTACT) != 0
+    hit = contact & h.effective & (h.dealt > 0) & _alive(state, h.side, h.user)
+    # subscript_paralyze.s:5: the attacker's own Limber (the side-effect battler is the
+    # attacker itself, so no Mold Breaker can pierce it) ends Static's paralysis silently
+    # (:_170 ends an ABILITY side effect with no message).
+    limber = (status == Status.PARALYSIS) & (state.ability[h.side, h.user] == AbilityId.LIMBER)
     cond = (
         (status != Status.NONE)
-        & contact
-        & h.effective
-        & (h.dealt > 0)
+        & hit
         & h.contact_proc
-        & _alive(state, h.side, h.user)
+        & ~limber
         & can_have_status(state, h.side, h.user, status)
     )
-    # The status message tags the holder's ability (``hooks.REVEALS_ON``). hooks imports
-    # this module, so the import is local.
-    from nuzline.engine.hooks import CONTACT_STATUS, reveal_ability
+    # Rough Skin (battle_lib.c:4257-4271): no roll; subscript_rough_skin.s takes
+    # BattleSystem_Divide(maxHP, 8) from the attacker (it may faint).
+    rough = (ability == AbilityId.ROUGH_SKIN) & hit
+    max_hp = state.max_hp[h.side, h.user].astype(_I32)
+    hp = state.hp[h.side, h.user].astype(_I32)
+    hurt = jnp.where(rough, jnp.maximum(hp - jnp.maximum(max_hp // 8, 1), 0), hp)
+    state = state._replace(hp=state.hp.at[h.side, h.user].set(hurt.astype(state.hp.dtype)))
+    # The status message and Rough Skin's message tag the holder's ability
+    # (``hooks.REVEALS_ON``). hooks imports this module, so the import is local.
+    from nuzline.engine.hooks import CONTACT_DAMAGE, CONTACT_STATUS, reveal_ability
 
     state = reveal_ability(state, h.target_side, h.target, CONTACT_STATUS, cond)
+    state = reveal_ability(state, h.target_side, h.target, CONTACT_DAMAGE, rough)
     return _set_status(state, h.side, h.user, status, cond)
 
 

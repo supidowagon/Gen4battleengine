@@ -444,14 +444,39 @@ def _apply_type_chart(tables, s: RefState, attacker: int, defender: int, move: i
     move_type = _move_type(tables, s, attacker, move)
     atk_types = _active(s, attacker).types
     def_types = _active(s, defender).types
-    if move_type in atk_types:  # lib.c:2592 (Adaptability is unsupported)
-        damage = damage * 15 // 10
+    if move_type in atk_types:  # lib.c:2592-2597
+        if _active(s, attacker).ability == AbilityId.ADAPTABILITY:
+            damage *= 2
+        else:
+            damage = damage * 15 // 10
     identified = bool(s.sides[defender].foresight)  # lib.c:2615
+    update = _t(tables, "move_power", move) != 0  # ApplyTypeMultiplier's `update`
+    flags: set[str] = set()  # MOVE_STATUS_SUPER_EFFECTIVE / _NOT_VERY_EFFECTIVE
     for defending, mul in _chart_rows(tables, move_type, identified):  # lib.c:2611-2646
-        if defending == def_types[0] and damage:
-            damage = _divide(damage * mul, 10)
-        if defending == def_types[1] and def_types[0] != def_types[1] and damage:
-            damage = _divide(damage * mul, 10)
+        if defending == def_types[0]:
+            damage = _apply_type_multiplier(damage, mul, update, flags)
+        if defending == def_types[1] and def_types[0] != def_types[1]:
+            damage = _apply_type_multiplier(damage, mul, update, flags)
+    # lib.c:2657-2660: Solid Rock (ignorable) on a super-effective hit.
+    if "super" in flags and update and _ignorable(s, attacker, defender) == AbilityId.SOLID_ROCK:
+        damage = _divide(damage * 3, 4)
+    return damage
+
+
+def _apply_type_multiplier(damage: int, mul: int, update: bool, flags: set[str]) -> int:
+    """``ApplyTypeMultiplier`` (lib.c:7542): the damage through ``BattleSystem_Divide``
+    when non-zero, and the effectiveness flags: an immunity clears both, a x2 entry
+    clears a set "not very effective" or else sets "super", and the other way round."""
+    if damage:
+        damage = _divide(damage * mul, 10)
+    if mul == 0:
+        flags.clear()
+    elif update and mul in (5, 20):
+        mine, other = ("super", "not_very") if mul == 20 else ("not_very", "super")
+        if other in flags:
+            flags.discard(other)
+        else:
+            flags.add(mine)
     return damage
 
 
@@ -610,11 +635,13 @@ def _stealth_rock_damage(turn: _Turn, s: RefState, side: int) -> None:
 
 def _recover_status_by_ability(s: RefState, side: int) -> None:
     """``BattleSystem_RecoverStatusByAbility`` (lib.c:4378) for ``side``'s battler: an
-    asleep Insomnia holder with HP left wakes, and subscript_ability_forbids_status.s
-    tags its ability (BattleAI_SetAbility, script.c:11806). Run at each move end for the
-    attacker then the defender (bcp.c:3965-3967) and on a switch-in (lib.c:4135-4145)."""
+    asleep Insomnia holder (:4404) or a paralyzed Limber holder (:4397) with HP left is
+    cured, and subscript_ability_forbids_status.s tags its ability (BattleAI_SetAbility,
+    script.c:11806). Run at each move end for the attacker then the defender
+    (bcp.c:3965-3967) and on a switch-in (lib.c:4135-4145)."""
     mon = _active(s, side)
-    if mon.ability == AbilityId.INSOMNIA and mon.status == Status.SLEEP and mon.hp:
+    forbidden = {AbilityId.INSOMNIA: Status.SLEEP, AbilityId.LIMBER: Status.PARALYSIS}
+    if forbidden.get(mon.ability) == mon.status and mon.hp:
         mon.status = Status.NONE
         mon.status_counter = 0
         if side == 0:
@@ -719,15 +746,23 @@ def _can_have_status(s: RefState, side: int, status: int) -> bool:
     return not (status == Status.FREEZE and frozen_out)
 
 
-def _inflict(turn: _Turn, s: RefState, side: int, target: int, status: int) -> None:
+def _inflict(turn: _Turn, s: RefState, side: int, target: int, status: int,
+             direct: bool) -> None:  # fmt: skip
     """The status subscripts (``subscript_fall_asleep.s`` ... ``subscript_paralyze.s``)
     on a living target; sleep lasts ``Random 3, 2`` turns (``outcome.duration`` of the
-    inflicting side)."""
+    inflicting side). ``direct``: a status move (``SIDE_EFFECT_TYPE_DIRECT``), not a
+    secondary effect (``_INDIRECT``)."""
     mon = _active(s, target)
     # subscript_fall_asleep.s:_055/_202/_221: an ignorable Insomnia stops the sleep before
     # the other checks and its "stayed awake" message tags the ability.
     if mon.hp and status == Status.SLEEP and _ignorable(s, side, target) == AbilityId.INSOMNIA:
         if target == 0:
+            s.ai_ability_known[s.sides[0].active] = 1
+        return
+    # subscript_paralyze.s:5/_170: an ignorable Limber stops the paralysis first; its
+    # "prevents paralysis" message (TAG_NICKNAME_ABILITY) is shown for a direct effect only.
+    if mon.hp and status == Status.PARALYSIS and _ignorable(s, side, target) == AbilityId.LIMBER:
+        if target == 0 and direct:
             s.ai_ability_known[s.sides[0].active] = 1
         return
     if mon.hp and _can_have_status(s, target, status):
@@ -792,7 +827,7 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
             _change_stage(s, target, p0, p1)
     elif effect in (EffectId.STATUS_FOE, EffectId.SECONDARY_STATUS) and effective:
         if effect == EffectId.STATUS_FOE or proc:
-            _inflict(turn, s, side, target, p0)
+            _inflict(turn, s, side, target, p0, effect == EffectId.STATUS_FOE)
     elif effect in (EffectId.FLINCH, EffectId.FAKE_OUT) and effective and proc:
         # subscript_flinch_mon.s: a living target that has not moved yet; Inner Focus,
         # whose message (:18-23, TAG_NICKNAME_ABILITY) is shown for Fake Out only.
@@ -904,29 +939,37 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
 
 def _contact_ability(turn: _Turn, s: RefState, side: int, move: int, hit: int, effective: bool,
                      dealt: int) -> None:  # fmt: skip
-    """``BattleSystem_TriggerAbilityOnHit`` (lib.c:4200): the defender's Static /
-    Poison Point (its own ability: Mold Breaker does not matter) on a contact move
-    that hit and dealt damage, a living attacker with no status, ``RandNext() % 10 <
-    3`` (``outcome.contact_proc`` of the defending side); the status goes through
-    ``subscript_paralyze.s`` / ``subscript_poison.s`` (type immunities apply)."""
+    """``BattleSystem_TriggerAbilityOnHit`` (lib.c:4200): the defender's own ability
+    (Mold Breaker does not matter) on a contact move that hit and dealt damage, with a
+    living attacker. Rough Skin (:4257) has no roll: ``subscript_rough_skin.s`` takes
+    ``BattleSystem_Divide(maxHP, 8)`` from the attacker and tags the holder's ability.
+    Static / Poison Point / Flame Body (:4214, :4303, :4321) need an attacker with no
+    status and ``RandNext() % 10 < 3`` (``outcome.contact_proc`` of the defending side);
+    the status goes through ``subscript_paralyze.s`` / ``subscript_poison.s`` /
+    ``subscript_burn.s`` (type immunities apply; the attacker's own Limber stops a
+    paralysis silently, subscript_paralyze.s:5, :_170)."""
     target = 1 - side
     ability = _active(s, target).ability
+    contact = _t(turn.tables, "move_flags", move) & MoveFlag.CONTACT
+    attacker = _active(s, side)
+    if not (contact and effective and dealt > 0 and attacker.hp > 0):
+        return
+    if ability == AbilityId.ROUGH_SKIN:
+        _lose_hp(turn, s, side, _divide(attacker.max_hp, 8))
+        if target == 0:
+            s.ai_ability_known[s.sides[0].active] = 1
+        return
     if ability == AbilityId.STATIC:
         status = Status.PARALYSIS
     elif ability == AbilityId.POISON_POINT:
         status = Status.POISON
+    elif ability == AbilityId.FLAME_BODY:
+        status = Status.BURN
     else:
         return
-    contact = _t(turn.tables, "move_flags", move) & MoveFlag.CONTACT
-    attacker = _active(s, side)
-    if (
-        contact
-        and effective
-        and dealt > 0
-        and turn.outcome.contact_proc[target][hit]
-        and attacker.hp > 0
-        and _can_have_status(s, side, status)
-    ):
+    if status == Status.PARALYSIS and attacker.ability == AbilityId.LIMBER:
+        return
+    if turn.outcome.contact_proc[target][hit] and _can_have_status(s, side, status):
         attacker.status = status
         attacker.status_counter = 0
         # subscript_paralyze.s:44 / subscript_poison.s:57 tag the holder's ability
@@ -1158,8 +1201,9 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
     if effect == EffectId.MULTI_HIT:
         hits = _t(tables, "move_param", move, 0) or o.n_hits[side]
     for hit in range(hits):
-        # BattleControllerPlayer_LoopMultiHit (bcp.c:3777) stops once the target fainted.
-        if hit > 0 and _active(s, 1 - side).hp == 0:
+        # BattleControllerPlayer_LoopMultiHit (bcp.c:3780) stops once a battler fainted
+        # (faintedMon): the target, or the attacker by Rough Skin.
+        if hit > 0 and (_active(s, 1 - side).hp == 0 or _active(s, side).hp == 0):
             break
         _hit(turn, s, side, move, hit, struggling, target_moved)
         # BattleControllerPlayer_AfterMoveEffects (bcp.c:3638), after every hit:

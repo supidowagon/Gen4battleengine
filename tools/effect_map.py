@@ -41,9 +41,10 @@ Status families reviewed against their decomp subscripts
 the only type checks there are the target-type immunities poison vs
 Poison/Steel, burn vs Fire and freeze vs Ice (and no freezing in sun), which
 ``engine/effects.py`` applies. Paralysis and sleep have none in Gen 4. Their ability immunities
-(Insomnia, Vital Spirit, Limber, Immunity, Water Veil, Magma Armor, Leaf Guard,
-Shield Dust) map to ``AbilityId.UNSUPPORTED``, and Safeguard, Substitute and
-Uproar are unsupported moves, so none of those branches can be reached silently.
+are Insomnia and Limber (implemented in ``engine/effects.py``) and Vital Spirit, Immunity,
+Water Veil, Magma Armor, Leaf Guard and Shield Dust (``AbilityId.UNSUPPORTED``), and
+Safeguard, Substitute and Uproar are unsupported moves, so none of those branches can be
+reached silently.
 """
 
 from __future__ import annotations
@@ -242,6 +243,11 @@ DECOMP_ABILITY_TO_ID: dict[str, AbilityId] = {
     "Sand Veil": AbilityId.SAND_VEIL,
     "Snow Cloak": AbilityId.SNOW_CLOAK,
     "Swift Swim": AbilityId.SWIFT_SWIM,
+    "Rough Skin": AbilityId.ROUGH_SKIN,
+    "Flame Body": AbilityId.FLAME_BODY,
+    "Limber": AbilityId.LIMBER,
+    "Adaptability": AbilityId.ADAPTABILITY,
+    "Solid Rock": AbilityId.SOLID_ROCK,
 }
 
 DECOMP_ITEM_TO_ID: dict[str, ItemId] = {

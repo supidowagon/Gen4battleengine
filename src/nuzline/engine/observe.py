@@ -45,7 +45,7 @@ Events, per side (``[side]``; 0 = player):
   thawing move), ``flinched``, ``confused`` ("is confused"), ``snapped_out``,
   ``self_hit`` (hurt itself in confusion), ``full_para`` (fully paralyzed).
 * ``thawed_by_hit``: a Fire hit thawed it (effects.py:368-375); ``contact_ability``:
-  its Static / Poison Point gave its attacker a status (effects.py:343-365), the
+  its Static / Poison Point / Flame Body gave its attacker a status (effects.py:343-365), the
   message that names the ability.
 
 The end-of-turn order (``end_speed_tie``) is not in the vector: it shows only in the

@@ -492,8 +492,12 @@ def _use_move(
     # landed ("Hit N times", battle_controller_player.c:3777-3812) and their crits.
     def one_hit(hit_index, carry):
         state, hits, crits, contact, thaw, dealt = carry
+        # BattleControllerPlayer_LoopMultiHit (bcp.c:3780) stops once a battler fainted
+        # (faintedMon): the target, or the attacker by Rough Skin (Selfdestruct's user is
+        # at 0 HP before its only hit, so the first hit is exempt).
+        going = connected & ((hit_index == 0) | (state.hp[side, user] > 0))
         landed = (
-            connected
+            going
             & (hit_index < n_hits)
             & ((state.hp[target_side, target] > 0) | defender_always(tables, move))
         )
@@ -504,7 +508,7 @@ def _use_move(
             move,
             outcome,
             hit_index,
-            connected=connected,
+            connected=going,
             target_moved=target_moved,
             struggling=struggling,
         )

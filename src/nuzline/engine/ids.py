@@ -120,6 +120,11 @@ class AbilityId(IntEnum):
     SAND_VEIL = 23
     SNOW_CLOAK = 24
     SWIFT_SWIM = 25
+    ROUGH_SKIN = 26
+    FLAME_BODY = 27
+    LIMBER = 28
+    ADAPTABILITY = 29
+    SOLID_ROCK = 30
 
 
 class ItemId(IntEnum):

@@ -43,9 +43,10 @@ does). A message the C code builds in ``msgBuffer`` itself carries the ability i
 reveals nothing.
 
 Abilities handled elsewhere: Blaze, Torrent, Overgrow, Rivalry, Guts, Unaware,
-Simple and Mold Breaker in ``damage.py``; Keen Eye, Inner Focus, Rock Head,
-Static and Poison Point in ``effects.py``; Steadfast, Natural Cure and Shed Skin in
-``step.py``, Compoundeyes, Sand Veil and Snow Cloak (accuracy) in ``outcome.py``, Swift
+Simple, Mold Breaker, Adaptability and Solid Rock in ``damage.py``; Keen Eye, Inner
+Focus, Rock Head, Static, Poison Point, Flame Body, Rough Skin and Limber in
+``effects.py`` (Limber's cure here); Steadfast, Natural Cure and Shed Skin in ``step.py``,
+Compoundeyes, Sand Veil and Snow Cloak (accuracy) in ``outcome.py``, Swift
 Swim in ``order.py``; Sand Veil and Snow Cloak also in the end-of-turn weather chip
 (``step.py``). Cloud Nine: every decomp branch on it is a weather branch
 (``NO_CLOUD_NINE``, include/battle/common.h:63); ``damage.weather_suppressed`` (read by
@@ -69,15 +70,22 @@ _I32 = jnp.int32
 SWITCH_IN, CONTACT_STATUS = "switch_in", "contact_status"
 SLEEP_BLOCKED, STATUS_CURE = "sleep_blocked", "status_cure"
 FLINCH_BLOCKED = "flinch_blocked"
+CONTACT_DAMAGE, PARALYSIS_BLOCKED = "contact_damage", "paralysis_blocked"
 # Ability -> the phases at which it shows a message tagging it, for the implemented
 # abilities that ever do:
 # * Mold Breaker: SWITCH_IN_CHECK_STATE_MOLD_BREAKER (battle_lib.c:4075), a living
 #   battler that has not announced it: subscript_mold_breaker.s prints
 #   ``TAG_NICKNAME_ABILITY, BTLSCR_MSG_TEMP, BTLSCR_MSG_BATTLER_TEMP``.
-# * Static / Poison Point: when the contact ability inflicts its status
-#   (``effects._contact_ability``): subscript_paralyze.s:44 / subscript_poison.s:57 tag
-#   ``BTLSCR_MSG_BATTLER_TEMP``, the holder. A target that cannot take the status gets
-#   no message.
+# * Static / Poison Point / Flame Body: when the contact ability inflicts its status
+#   (``effects._contact_ability``): subscript_paralyze.s:44 / subscript_poison.s:57 /
+#   subscript_burn.s:_177 tag ``BTLSCR_MSG_BATTLER_TEMP``, the holder. A target that
+#   cannot take the status (a Limber attacker against Static included, :_170) gets no
+#   message.
+# * Rough Skin: whenever it hurts the attacker: subscript_rough_skin.s prints
+#   ``TAG_NICKNAME_ABILITY_NICKNAME, BTLSCR_DEFENDER, BTLSCR_DEFENDER, BTLSCR_ATTACKER``.
+# * Limber: a direct paralysis (Thunder Wave) it blocks (subscript_paralyze.s:_170, "prevents
+#   paralysis", ``TAG_NICKNAME_ABILITY``; an indirect or ability side effect ends silently),
+#   and the cure of a paralysis (``RecoverStatusByAbility``, as Insomnia).
 # * Insomnia: a sleep move it blocks (subscript_fall_asleep.s:_221 prints "stayed awake
 #   because of its {1}" with ``TAG_NICKNAME_ABILITY``), and the cure of a sleep status
 #   (``RecoverStatusByAbility``, subscript_ability_forbids_status.s:6 tags
@@ -90,13 +98,17 @@ FLINCH_BLOCKED = "flinch_blocked"
 # The others never reveal: Intimidate's "cuts" message and Keen Eye's "prevents"
 # message are built in C (``BtlCmd_ChangeStatStage``, battle_script.c:2956, :2900);
 # Blaze, Torrent, Overgrow, Rivalry, Guts, Simple, Unaware, Rock Head, Natural Cure,
-# Steadfast, Sturdy, Cloud Nine, Compoundeyes, Sand Veil, Snow Cloak and Swift Swim show no
-# ability message in M1.
+# Steadfast, Sturdy, Cloud Nine, Compoundeyes, Sand Veil, Snow Cloak, Swift Swim,
+# Adaptability and Solid Rock show no ability message in M1 (``ApplyTypeChart`` prints
+# nothing).
 REVEALS_ON: dict[int, frozenset[str]] = {
     AbilityId.MOLD_BREAKER: frozenset({SWITCH_IN}),
     AbilityId.STATIC: frozenset({CONTACT_STATUS}),
     AbilityId.POISON_POINT: frozenset({CONTACT_STATUS}),
+    AbilityId.FLAME_BODY: frozenset({CONTACT_STATUS}),
+    AbilityId.ROUGH_SKIN: frozenset({CONTACT_DAMAGE}),
     AbilityId.INSOMNIA: frozenset({SLEEP_BLOCKED, STATUS_CURE}),
+    AbilityId.LIMBER: frozenset({PARALYSIS_BLOCKED, STATUS_CURE}),
     AbilityId.SHED_SKIN: frozenset({STATUS_CURE}),
     AbilityId.INNER_FOCUS: frozenset({FLINCH_BLOCKED}),
 }
@@ -115,19 +127,23 @@ def reveal_ability(state: BattleState, side, slot, phase: str, cond=True) -> Bat
 
 def recover_status_by_ability(state: BattleState, side, cond=True) -> BattleState:
     """``BattleSystem_RecoverStatusByAbility`` (battle_lib.c:4378) for ``side``'s active
-    Pokemon, where ``cond``: an Insomnia holder (the only ability of the family in M1)
-    that is asleep and has HP left wakes (counter 0) and shows
-    ``subscript_ability_forbids_status.s``, whose message tags its ability. The decomp
-    runs it for the attacker then the defender at each move end
+    Pokemon, where ``cond``: an asleep Insomnia holder (:4404) or a paralyzed Limber holder
+    (:4397), the abilities of the family in M1, with HP left is cured (counter 0) and
+    shows ``subscript_ability_forbids_status.s``, whose message tags its ability. The
+    ability is the holder's own (``Battler_Ability``: Mold Breaker does not matter). The
+    decomp runs it for the attacker then the defender at each move end
     (``BattleControllerPlayer_MoveEnd``, battle_controller_player.c:3965-3967) and for
     every battler on a switch-in (``SWITCH_IN_CHECK_STATE_FORBIDDEN_STATUS``,
     battle_lib.c:4135-4145)."""
     side = jnp.asarray(side, _I32)
     mon = state.active[side]
+    ability, status = state.ability[side, mon], state.status[side, mon]
     woke = (
         cond
-        & (state.ability[side, mon] == AbilityId.INSOMNIA)
-        & (state.status[side, mon] == Status.SLEEP)
+        & (
+            ((ability == AbilityId.INSOMNIA) & (status == Status.SLEEP))
+            | ((ability == AbilityId.LIMBER) & (status == Status.PARALYSIS))
+        )
         & (state.hp[side, mon] > 0)
     )
     state = state._replace(

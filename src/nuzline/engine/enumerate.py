@@ -26,8 +26,8 @@ of the turn:
 * ``secondary[s, i]``: as ``crit``, for a move with chance != 0 whose effect reads
   ``proc`` (``_PROC_EFFECTS``: the secondary stat effects, AncientPower's, secondary
   status, flinch, Fake Out, Bind, secondary confusion).
-* ``contact_proc[d, i]``: the attacker's damaging contact move against a Static or
-  Poison Point holder on side ``d``: its active Pokemon (Pursuit hits the outgoing
+* ``contact_proc[d, i]``: the attacker's damaging contact move against a Static,
+  Poison Point or Flame Body holder on side ``d`` (Rough Skin has no roll): its active Pokemon (Pursuit hits the outgoing
   one) or the one it switches in (effects.py:343-365).
 * ``n_hits[s]``: ``MULTI_HIT`` without a fixed count (``move_param[m, 0] == 0``).
 * ``full_para[s]`` / ``thaw[s]``: ``s`` moves and is paralyzed / frozen at the start,
@@ -217,7 +217,9 @@ def outcome_laws(tables: Tables, state: BattleState, actions) -> OutcomeLaws:
     )
     roll = crit | (confusable[:, None] & (hit_index == 0))
     secondary = lands & ((chance != 0) & _any_of(effect, _PROC_EFFECTS))[:, None]
-    holders = _holds(state, actions, (AbilityId.STATIC, AbilityId.POISON_POINT))
+    holders = _holds(
+        state, actions, (AbilityId.STATIC, AbilityId.POISON_POINT, AbilityId.FLAME_BODY)
+    )
     contact_proc = (lands & (damaging & contact & holders[::-1])[:, None])[::-1]
     full_para = uses_move & (
         (status == Status.PARALYSIS) | (foe_moves & _inflicts(tables, foe_move, Status.PARALYSIS))

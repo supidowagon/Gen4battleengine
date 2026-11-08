@@ -216,7 +216,7 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions) -> Outcome:
         crit=crit,
         roll=draw(6, per_hit, 16),  # BattleSystem_CalcDamageVariance, rand % 16
         secondary=secondary,
-        contact_proc=draw(7, per_hit, 10) < 3,  # Static / Poison Point, battle_lib.c:4222
+        contact_proc=draw(7, per_hit, 10) < 3,  # Static etc., battle_lib.c:4222
         n_hits=n_hits,
         full_para=draw(8, per_side, 4) == 0,  # battle_controller_player.c:2655
         confusion_hit=draw(9, per_side, 2) == 1,  # battle_controller_player.c:2621
