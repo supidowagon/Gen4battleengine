@@ -9,8 +9,8 @@ arrays are indexed by personal row: species ids 0-495, then the data forms 496-5
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from dataclasses import dataclass
+from pathlib import Path
 from typing import NamedTuple
 
 import jax.numpy as jnp
