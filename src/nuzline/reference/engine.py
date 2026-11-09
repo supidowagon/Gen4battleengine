@@ -86,6 +86,11 @@ SELF_DEFENDER = TARGETS_USER | {
 }
 # _status_disrupted's results.
 GOES_AHEAD, DISRUPTED, HURT_ITSELF = 0, 1, 2
+# HitRateByStage (include/data/hit_rate_stages.h), indexed by the clamped stage sum.
+HIT_RATE_BY_STAGE = [
+    (33, 100), (36, 100), (43, 100), (50, 100), (60, 100), (75, 100), (1, 1),
+    (133, 100), (166, 100), (2, 1), (233, 100), (133, 50), (3, 1),
+]  # fmt: skip
 
 
 # --------------------------------------------------------------------------- helpers
@@ -1302,6 +1307,43 @@ def _status_disrupted(turn: _Turn, s: RefState, side: int, move: int) -> int:
     return GOES_AHEAD
 
 
+def _hit_rate(tables, s: RefState, attacker: int, move: int) -> int:
+    """``hitRate`` of ``BattleControllerPlayer_CheckMoveHitAccuracy`` (bcp.c:2865-2979) for
+    ``attacker``'s ``move`` against the foe's active Pokemon, from the state as it is now.
+    Thunder in sun, Hustle, Tangled Feet and the accuracy items are unsupported."""
+    defender = 1 - attacker
+    atk = _active(s, attacker)
+    seen = _ignorable(s, attacker, defender)  # Battler_IgnorableAbility
+    acc_stages = s.sides[attacker].stages[Stat.ACC]  # statBoosts - 6 (:2873)
+    eva_stages = -s.sides[defender].stages[Stat.EVA]  # 6 - statBoosts (:2874)
+    if atk.ability == AbilityId.SIMPLE:  # :2876
+        acc_stages *= 2
+    if seen == AbilityId.SIMPLE:  # :2879
+        eva_stages *= 2
+    if seen == AbilityId.UNAWARE:  # :2882
+        acc_stages = 0
+    if atk.ability == AbilityId.UNAWARE:  # :2885
+        eva_stages = 0
+    if s.sides[defender].foresight and eva_stages < 0:  # MON_IS_IDENTIFIED, :2888
+        eva_stages = 0
+    total = min(max(6 + eva_stages + acc_stages, 0), 12)  # :2892-2898
+    rate = _t(tables, "move_accuracy", move)
+    num, den = HIT_RATE_BY_STAGE[total]
+    rate = rate * num // den  # :2918-2919
+    if atk.ability == AbilityId.COMPOUNDEYES:  # :2922
+        rate = rate * 130 // 100
+    if not _weather_suppressed(tables, s):  # NO_CLOUD_NINE, :2926
+        if s.weather == Weather.SANDSTORM and seen == AbilityId.SAND_VEIL:  # :2927
+            rate = rate * 80 // 100
+        if s.weather == Weather.HAIL and seen == AbilityId.SNOW_CLOAK:  # :2931
+            rate = rate * 80 // 100
+        if s.weather == Weather.FOG:  # :2935
+            rate = rate * 6 // 10
+    if s.gravity:  # FIELD_CONDITION_GRAVITY, :2972
+        rate = rate * 10 // 6
+    return rate
+
+
 def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggling: bool,
            locked: bool, target_moved: bool) -> int | None:  # fmt: skip
     """``BattleControllerPlayer_FightCommand`` through ``TryMove`` and the move script
@@ -1361,8 +1403,11 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
         mon.hp = 0
         turn.fainted.append((side, s.sides[side].active))
     # CheckMoveHitAccuracy (bcp.c:2865): accuracy 0 never misses; a multi-hit move
-    # checks only its first hit (SYSCTL_MULTI_HIT_MOVE).
-    if _t(tables, "move_accuracy", move) != 0 and not o.hit[side][0]:
+    # checks only its first hit (SYSCTL_MULTI_HIT_MOVE). The hit rate is computed here,
+    # from the stages of this moment; o.hit[side][0] is the class of the roll
+    # RandNext() % 100 + 1 (engine/outcome.py), which misses when it is 0 or above it.
+    roll = o.hit[side][0]
+    if _t(tables, "move_accuracy", move) != 0 and not 0 < roll <= _hit_rate(tables, s, side, move):
         _unlock(s.sides[side])  # subscript_missed.s
         return record
     # BtlCmd_SetMultiHit (script.c:2634): SetMultiHit 2 (effect_script_0044.s) is fixed,

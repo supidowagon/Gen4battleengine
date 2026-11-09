@@ -15,9 +15,11 @@ turn-start state; an element is relevant when it can be read under some earlier 
 of the turn:
 
 * ``hit[s, 0]``: ``s`` uses a move (not a switch or item) with accuracy != 0
-  (step.py:320, :329). Only hit index 0 is read (a multi-hit move checks accuracy on
-  its first hit, effects.py docstring). A threshold of 100 or more gives the single
-  value 1.
+  (``step._use_move``). Only hit index 0 is read (a multi-hit move checks accuracy on
+  its first hit, effects.py docstring). Its values are the interval classes of the roll
+  over ``outcome.hit_thresholds`` (``hit_class_law``): two classes for one threshold
+  below 100 (0 and 1, as before), one more per further threshold an earlier action can
+  produce, and the single value 1 when every threshold is 100 or more.
 * ``crit[s, i]``, ``roll[s, i]``: a damaging move (status moves and power 0 deal 0,
   damage.py:254), index 0, or for ``MULTI_HIT`` 0-4 (the 2-5 law) or the indices below its
   fixed count (``move_param[m, 0]``, ``effects.hit_count``). ``roll[s, 0]``
@@ -77,7 +79,7 @@ from nuzline.engine.order import (
     is_switch,
     selected_move,
 )
-from nuzline.engine.outcome import MAX_HITS, Outcome, crit_odds, empty_outcome, hit_threshold
+from nuzline.engine.outcome import MAX_HITS, Outcome, crit_odds, empty_outcome, hit_thresholds
 from nuzline.engine.state import STAGE_MAX, STAGE_MIN, BattleState
 
 _I32 = jnp.int32
@@ -109,7 +111,8 @@ class OutcomeLaws(NamedTuple):
     """Integer law parameters of one (state, action pair), per side, and the relevance
     mask. Fixed shapes; a batch adds a leading axis to every field."""
 
-    hit_threshold: jnp.ndarray  # int32[2], outcome.hit_threshold
+    hit_thresholds: jnp.ndarray  # int32[2, outcome.HIT_VARIANTS], outcome.hit_thresholds
+    hit_possible: jnp.ndarray  # bool[2, outcome.HIT_VARIANTS], which of them can occur
     crit_odds: jnp.ndarray  # int32[2], outcome.crit_odds (1 in N)
     no_crit: jnp.ndarray  # bool[2], Lucky Chant on the defending side (outcome.py:157)
     secondary_chance: jnp.ndarray  # int32[2], tables.move_effect_chance of the move
@@ -309,8 +312,10 @@ def outcome_laws(tables: Tables, state: BattleState, actions) -> OutcomeLaws:
         DURATION_TAUNT,
         jnp.where(_any_of(effect, (_E.TRAP, _E.DISABLE)), DURATION_TRAP, DURATION_DEFAULT),
     )
+    thresholds, possible = hit_thresholds(tables, state, actions)
     return OutcomeLaws(
-        hit_threshold=hit_threshold(tables, state, actions),
+        hit_thresholds=thresholds,
+        hit_possible=possible,
         crit_odds=crit_odds(tables, state, actions),
         no_crit=state.lucky_chant[::-1] != 0,
         secondary_chance=chance,
@@ -328,9 +333,22 @@ def _coin(laws: OutcomeLaws, side: int) -> _Law:
     return [0, 1], [1, 1], 2  # RandNext() & 1, battle_lib.c:1445 and :3364; % 2, :2621
 
 
+def hit_class_law(thresholds) -> _Law:
+    """The law of the accuracy roll ``u = RandNext() % 100 + 1`` (uniform on 1-100,
+    battle_controller_player.c:2976) reduced to its class over ``thresholds`` (the
+    possible ones; ``outcome.hit_class``): the cuts are the thresholds within 1-99, each
+    class weighs its width, and its value is its smallest roll, or 0 when it misses at
+    every threshold. Values in increasing order."""
+    ts = sorted({min(max(int(t), 0), 100) for t in thresholds})
+    cuts = [t for t in ts if 1 <= t <= 99]
+    lows, highs = [1, *(c + 1 for c in cuts)], [*cuts, 100]
+    law = sorted((0 if low > ts[-1] else low, high - low + 1) for low, high in zip(lows, highs))
+    return [v for v, _ in law], [w for _, w in law], 100
+
+
 def _hit(laws: OutcomeLaws, side: int) -> _Law:
-    t = min(max(int(laws.hit_threshold[side]), 0), 100)  # rand % 100 + 1 <= threshold
-    return [0, 1], [100 - t, t], 100
+    possible = np.asarray(laws.hit_possible[side], bool)
+    return hit_class_law(np.asarray(laws.hit_thresholds[side])[possible])
 
 
 def _crit(laws: OutcomeLaws, side: int) -> _Law:

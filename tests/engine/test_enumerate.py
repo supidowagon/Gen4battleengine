@@ -31,6 +31,7 @@ from nuzline.engine.outcome import (
     crit_odds,
     empty_outcome,
     hit_threshold,
+    hit_thresholds,
     outcome_to_py,
     sample_outcome,
 )
@@ -350,8 +351,15 @@ def decomp_law(tables, state, actions, name: str, index: tuple) -> dict[int, Fra
     if name in ("speed_tie", "end_speed_tie", "confusion_hit"):
         return coin(Fraction(1, 2))
     if name == "hit":
-        t = int(hit_threshold(tables, state, actions)[side])
-        return coin(Fraction(min(max(t, 0), 100), 100))
+        # The roll u = RandNext() % 100 + 1 (bcp.c:2976), each of 1-100 at 1/100, grouped
+        # by whether it hits at each threshold the move can have: a group is its smallest
+        # roll, or 0 when it hits at none (outcome.hit_class).
+        ts, ok = (np.asarray(x)[side] for x in hit_thresholds(tables, state, actions))
+        assert int(ts[0]) == int(hit_threshold(tables, state, actions)[side])
+        groups: dict[tuple, list[int]] = {}
+        for u in range(1, 101):
+            groups.setdefault(tuple(u <= t for t in ts[ok]), []).append(u)
+        return {(min(us) if any(key) else 0): Fraction(len(us), 100) for key, us in groups.items()}
     if name == "crit":
         lucky = int(state.lucky_chant[1 - side]) != 0
         return coin(

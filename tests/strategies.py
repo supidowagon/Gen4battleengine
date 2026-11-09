@@ -111,8 +111,9 @@ def _learnsets() -> dict[int, list[tuple[int, int]]]:
 
 # The fixture and effect-test moves, given to every species so the infliction,
 # trapping, flinch, multi-hit (2-5 and fixed two), stat-stage, Recover, Fake Out, Curse,
-# screen (Reflect, Light Screen, broken by Brick Break) and Toxic branches run in the
-# differential test (no M1 species is Ghost-type: Curse is the non-Ghost one).
+# screen (Reflect, Light Screen, broken by Brick Break), Toxic and mid-turn accuracy
+# (Sand-Attack, Double Team) branches run in the differential test (no M1 species is
+# Ghost-type: Curse is the non-Ghost one).
 SHARED_MOVES = (
     "Stealth Rock",
     "Taunt",
@@ -150,6 +151,8 @@ SHARED_MOVES = (
     "Reflect",
     "Brick Break",
     "Toxic",
+    "Sand-Attack",
+    "Double Team",
 )
 
 
@@ -379,12 +382,14 @@ def _flag(shape: tuple[int, ...]) -> st.SearchStrategy[jnp.ndarray]:
 
 
 def any_outcome() -> st.SearchStrategy[Outcome]:
-    """Every ``Outcome`` field uniform over its range."""
+    """Every ``Outcome`` field uniform over its range (``hit``: either flag-only or any
+    class value)."""
     hits, sides = (2, MAX_HITS), (2,)
     return st.builds(
         Outcome,
         speed_tie=_flag(()),
-        hit=_flag(hits),
+        # 0-1 as a hit / miss flag, or any class value (outcome.hit_class: a roll 1-100).
+        hit=st.one_of(_flag(hits), _ints(0, 100, hits)),
         crit=_flag(hits),
         roll=_ints(0, 15, hits),
         secondary=_flag(hits),
@@ -406,7 +411,8 @@ def any_outcome() -> st.SearchStrategy[Outcome]:
 # sleep (Spore, Hypnosis), Taunt, Bind (TRAP), multi-hit (Fury Swipes), confusion
 # (Supersonic, Confuse Ray), secondary paralysis / freeze / burn with a thawing move
 # (Spark, Ice Beam, Flame Wheel), flinch (Headbutt), a Speed drop (Bubble), a Speed
-# boost (Rock Polish), a high-crit move (Razor Leaf) and a 95 % plain move (Tackle).
+# boost (Rock Polish), a high-crit move (Razor Leaf), a 95 % plain move (Tackle) and
+# accuracy / evasion changes before the foe's check (Sand-Attack, Double Team, Mud-Slap).
 LAW_MOVES = (
     "Spore",
     "Hypnosis",
@@ -427,6 +433,9 @@ LAW_MOVES = (
     "Magnitude",
     "Confusion",
     "Disable",
+    "Sand-Attack",
+    "Double Team",
+    "Mud-Slap",
 )
 # Abilities the outcome relevance reads (contact procs, Steadfast, Simple's and Swift
 # Swim's Speed) or the hit odds read (Compoundeyes, Sand Veil, Snow Cloak), and Rough Skin

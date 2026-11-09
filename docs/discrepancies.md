@@ -130,6 +130,38 @@ could not catch this. Found while adding Flail, which shares the variable-power 
   `tests/engine/test_power_moves.py::test_flail_ai_damage_uses_power_one` (fresh, curled)
   and `::test_mid_rollout_ai_damage_uses_table_power` (locked, `rollout_count` 4, 2, 1).
 
+## Both engines vs the decomp (K3b2)
+
+Both engines took the same wrong input from `Outcome`, so the differential test could not
+catch this. Found while reading the decomp for K3b2 (`docs/kaizo/k3b2-rules.md` §0.2c).
+
+### 9. A move's accuracy was read at the start of the turn
+
+- **Engines (before K3b2 Task 1):** `outcome.hit[side, 0]` was a hit / miss flag drawn
+  against `hit_threshold`, the threshold of the turn's starting state, and both engines
+  read the flag. A stage change earlier in the same turn was not seen: after a faster
+  Sand-Attack (or Mud-Slap, SmokeScreen, Flash, Kinesis) or a faster Double Team, a
+  100-accuracy move still hit with probability 1.
+- **Decomp:** `BattleControllerPlayer_CheckMoveHitAccuracy`
+  (`src/battle/battle_controller_player.c:2865-2979`) runs at the move's own `TryMove` and
+  reads the stages of that moment (`accStages`, `evaStages`, :2873-2874), then rolls
+  `(RandNext() % 100) + 1 > hitRate` (:2976). After Sand-Attack (accuracy stage -1,
+  `HitRateByStage[5]` = 75/100, `include/data/hit_rate_stages.h`) the later move hits with
+  probability 75/100.
+- **Ruling:** `hit[side, 0]` is the roll's interval class over every threshold the move can
+  have at its check this turn (`outcome.hit_thresholds`, `outcome.hit_class`,
+  `enumerate.hit_class_law`): the smallest roll of its class, or 0 when it misses at all of
+  them. `step` and the reference engine compute the threshold at the check
+  (`outcome.live_hit_threshold`, reference `_hit_rate`) and hit when `0 < hit <= threshold`.
+  With one threshold below 100 the values are the old 0 / 1. Tests:
+  `tests/engine/test_accuracy_classes.py` (`::test_sand_attack_lowers_a_later_move_this_turn`,
+  `::test_double_team_raises_evasion_for_a_later_move`,
+  `::test_accuracy_classes_equal_raw_rolls`).
+- **Vanilla results that change:** only turns where a move that changes the attacker's
+  accuracy stage or the target's evasion stage (Sand-Attack, SmokeScreen, Kinesis, Flash,
+  Mud-Slap, Octazooka, Muddy Water, Mud Bomb, Mirror Shot, Double Team) runs before the
+  other side's move with accuracy other than 0. Every other exact result is unchanged.
+
 ## Deliberate differences from the decomp (both engines agree)
 
 - **`turn` on the last turn.** `BattleControllerPlayer_TurnEnd`

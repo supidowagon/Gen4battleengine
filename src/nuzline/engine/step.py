@@ -104,7 +104,7 @@ from nuzline.engine.order import (
     player_second,
     selected_move,
 )
-from nuzline.engine.outcome import MAX_HITS, Outcome
+from nuzline.engine.outcome import MAX_HITS, Outcome, live_hit_threshold
 from nuzline.engine.state import BAG_SLOTS, BattleState
 
 _I32 = jnp.int32
@@ -489,7 +489,6 @@ def _use_move(
     # that acts reaches it, the confusion self-hit too (LOOP_FAINTED, :2639).
     succeeded = can_act & has_target
     state = _set_last_move(state, side, jnp.where(succeeded, move, 0), ready)
-    hit = (outcome.hit[side, 0] != 0) | never_misses
     # The move script runs next (BATTLE_CONTROL_EXEC_SCRIPT, :3214): Fake Out's
     # (effect_script_0158.s) sets MOVE_STATUS_FAILED unless fakeOutTurnNumber == totalTurns.
     # The accuracy roll still happens, but subscript_missed.s prints "But it failed!" (:97)
@@ -505,6 +504,12 @@ def _use_move(
     # an unsupported ability.
     self_destruct = can_act & has_target & (tables.move_effect[move] == EffectId.SELF_DESTRUCT)
     state = _set_mon(state, "hp", side, user, 0, self_destruct)
+    # CheckMoveHitAccuracy reads the threshold now, with this moment's stages (bcp.c:
+    # 2873-2874): a faster Sand-Attack or Double Team this turn counts. outcome.hit[side, 0]
+    # is the roll's class (outcome.py): it hits when 0 < class <= threshold (:2976).
+    roll = outcome.hit[side, 0].astype(_I32)
+    threshold = live_hit_threshold(tables, state, side, move)
+    hit = never_misses | ((roll != 0) & (roll <= threshold))
     connected = can_act & has_target & hit & ~failed
     # subscript_no_target.s and subscript_missed.s unlock the attacker (a Rollout that
     # missed; a first use never locked, so this is then a no-op).
