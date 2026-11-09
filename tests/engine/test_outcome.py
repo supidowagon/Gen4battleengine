@@ -150,7 +150,7 @@ def test_existing_draws_unchanged(tables, names):
 def test_magnitude_and_shed_skin_draws(tables, names):
     e = empty_outcome()
     assert e.magnitude.tolist() == [4, 4] and e.shed_skin.tolist() == [0, 0]
-    assert Outcome._fields[-2:] == ("magnitude", "shed_skin")
+    assert Outcome._fields[14:16] == ("magnitude", "shed_skin")
     s = roark_state(tables, names)
     keys = jax.random.split(jax.random.key(0), N)
     sample = jax.jit(jax.vmap(sample_outcome, in_axes=(0, None, None, None)))

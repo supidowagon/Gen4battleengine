@@ -29,12 +29,16 @@ of the turn:
   reads ``[pursuer, 0]`` (step.py:464-474), a move action too.
 * ``secondary[s, i]``: as ``crit``, for a move with chance != 0 whose effect reads
   ``proc`` (``_PROC_EFFECTS``: the secondary stat effects, AncientPower's, secondary
-  status, flinch, Fake Out, Bind, secondary confusion). Not for a flinch move (``FLINCH``,
-  ``FAKE_OUT``) of the side moving second (``subscript_flinch_mon.s``: ``IfMovedThisTurn``
-  skips it; effects._flinch), nor, moving first with one hit, for a secondary status the
-  target cannot take (``effects.can_have_status``, or Limber against paralysis; an
-  Insomnia target is never skipped, its reveal runs on the proc) or a secondary
-  confusion on a confused target (``subscript_confuse.s``, effects._secondary_confuse).
+  status, flinch, Fake Out, Bind, secondary confusion, Thunder Fang's paralysis). Not for a
+  flinch move (``FLINCH``, ``FAKE_OUT``) of the side moving second (``subscript_flinch_mon.s``:
+  ``IfMovedThisTurn`` skips it; effects._flinch), nor, moving first with one hit, for a
+  secondary status (Thunder Fang's paralysis too) the target cannot take
+  (``effects.can_have_status``, or Limber against paralysis; an Insomnia target is never
+  skipped, its reveal runs on the proc) or a secondary confusion on a confused target
+  (``subscript_confuse.s``, effects._secondary_confuse).
+* ``fang_flinch[s]``: Thunder Fang's flinch roll (``FANG_PARALYZE_FLINCH``, effects._fang),
+  only when ``s`` acts first in the branch (``IfMovedThisTurn``: the target has not moved,
+  ``step``'s ``target_moved``) and the target has no Inner Focus as ``s`` sees it.
 * ``contact_proc[d, i]``: the attacker's damaging contact move against a Static,
   Poison Point or Flame Body holder on side ``d`` (Rough Skin has no roll): its active
   Pokemon (Pursuit hits the outgoing one) or the one it switches in (effects.py:343-365).
@@ -142,7 +146,11 @@ _PROC_EFFECTS = (
     _E.RAISE_ALL_STATS_HIT,
     _E.TRAP,
     _E.SECONDARY_CONFUSE,
+    _E.FANG_PARALYZE_FLINCH,  # its paralysis roll (effects._fang)
 )
+# Effects whose flinch roll is ``outcome.secondary`` (effects._flinch) or
+# ``outcome.fang_flinch`` (effects._fang): a flinched Steadfast gains Speed.
+_FLINCH_EFFECTS = (_E.FLINCH, _E.FAKE_OUT, _E.FANG_PARALYZE_FLINCH)
 
 
 class Reads(NamedTuple):
@@ -153,6 +161,7 @@ class Reads(NamedTuple):
     hit_gated: jnp.ndarray  # its move's reads need its accuracy roll to hit (no Pursuit)
     proc_gated: jnp.ndarray  # its duration and status infliction need a secondary proc
     flinch_sure: jnp.ndarray  # moving first, a sure hit with a proc flinches the foe
+    fang: jnp.ndarray  # its flinch roll is fang_flinch (Thunder Fang), not secondary
     confused_own: jnp.ndarray  # it moves confused (counter >= 2) at the start
     confused_by_foe: jnp.ndarray  # bool[2, 2]: it moves after a foe move that confuses
     para_own: jnp.ndarray  # it moves paralyzed at the start
@@ -194,10 +203,10 @@ def _any_of(x, values) -> jnp.ndarray:
 
 
 def _inflicts(tables: Tables, moves, status) -> jnp.ndarray:
-    """The move inflicts ``status`` on the foe (``STATUS_FOE`` / ``SECONDARY_STATUS``
-    with ``move_param[m, 0]``, effects.py:186-208)."""
+    """The move inflicts ``status`` on the foe (``STATUS_FOE`` / ``SECONDARY_STATUS`` /
+    ``FANG_PARALYZE_FLINCH`` with ``move_param[m, 0]``, effects._inflict, effects._fang)."""
     effect = tables.move_effect[moves]
-    status_effect = (effect == _E.STATUS_FOE) | (effect == _E.SECONDARY_STATUS)
+    status_effect = _any_of(effect, (_E.STATUS_FOE, _E.SECONDARY_STATUS, _E.FANG_PARALYZE_FLINCH))
     return status_effect & (tables.move_param[moves, 0] == status)
 
 
@@ -267,14 +276,17 @@ def _branch_masks(foe_first, first_self, base: dict) -> dict:
     # target has not moved, effects._flinch). A secondary status or confusion on a target
     # that cannot take it changes nothing (status eligibility), judged on the turn-start
     # state, which is the state of the hit when the user moves first with one hit.
+    status_effect = _any_of(b["effect"], (_E.SECONDARY_STATUS, _E.FANG_PARALYZE_FLINCH))
     blocked = first_self & (
-        ((b["effect"] == _E.SECONDARY_STATUS) & b["status_blocked"])
+        (status_effect & b["status_blocked"])
         | ((b["effect"] == _E.SECONDARY_CONFUSE) & b["confused_blocked"])
     )
     late_flinch = ~first_self & _any_of(b["effect"], (_E.FLINCH, _E.FAKE_OUT))
     return {
         "roll": b["crit"] | (confusable[:, None] & (b["hit_index"] == 0)),
         "secondary": b["secondary"] & ~(blocked | late_flinch)[:, None],
+        # Thunder Fang's flinch roll: the same order gate, and Inner Focus (effects._fang).
+        "fang_flinch": b["fang_flinch"] & first_self & ~b["flinch_blocked"],
         "full_para": b["para_own"] | para_by_foe,
         "confusion_hit": confusable,
         "thaw": b["freeze_own"] | freeze_by_foe,
@@ -337,6 +349,10 @@ INPUT_CLAUSE_EFFECTS = (
     _E.LIGHT_SCREEN,
     _E.MUD_SPORT,  # any side's sport (damage.py :6811, :6815)
     _E.WATER_SPORT,
+    # The attacker's paralysis: an input under Guts only. Its Speed change reorders the next
+    # turn, not this one (order.action_order is fixed at the turn start); its flinch stops
+    # the hit, which changes no input.
+    _E.FANG_PARALYZE_FLINCH,
 )
 INPUT_NEUTRAL_ABILITIES = (
     AbilityId.NONE,
@@ -419,6 +435,7 @@ TABLE_DAMAGE_EFFECTS = (
     _E.RAISE_ALL_STATS_HIT,
     _E.SELF_DESTRUCT,
     _E.FLAIL,
+    _E.FANG_PARALYZE_FLINCH,
 )
 NON_TABLE_DAMAGE_EFFECTS = (
     _E.STAT_SELF,
@@ -459,8 +476,9 @@ def damage_inputs_can_change(tables: Tables, state: BattleState, actions, foe_fi
       ``INPUT_NEUTRAL_EFFECTS`` / ``INPUT_CLAUSE_EFFECTS``), or one that changes: the
       side's attacking stat stage (``STAT_FOE``), the foe's defending stage
       (``STAT_SELF``, ``RAISE_ALL_STATS_HIT``, Curse's Defense), the side's status when
-      it matters (a burn on a physical non-Guts move, any status under Guts), the foe's
-      screen for this category, or a sport for this move type;
+      it matters (a burn on a physical non-Guts move, any status under Guts, Thunder Fang's
+      paralysis included), the foe's screen for this category, or a sport for this move
+      type;
     * **HP**: Flail's power band and Overgrow / Blaze / Torrent (damage.py :6819-6837)
       read the user's HP: any earlier foe move or earlier hit of the same move;
     * **contact**: on a later hit, the foe's Flame Body burn or Static / Poison Point
@@ -512,7 +530,7 @@ def damage_inputs_can_change(tables: Tables, state: BattleState, actions, foe_fi
 
     foe_effect, foe_param0 = effect[::-1], param0[::-1]
     unclassified = ~_any_of(foe_effect, INPUT_NEUTRAL_EFFECTS + INPUT_CLAUSE_EFFECTS)
-    status_hit = _any_of(foe_effect, (_E.STATUS_FOE, _E.SECONDARY_STATUS))
+    status_hit = _any_of(foe_effect, (_E.STATUS_FOE, _E.SECONDARY_STATUS, _E.FANG_PARALYZE_FLINCH))
     foe_move = uses_move[::-1] & (
         unclassified
         | (_any_of(foe_effect, (_E.STAT_FOE, _E.SECONDARY_STAT_FOE)) & (foe_param0 == attack_stat))
@@ -612,8 +630,10 @@ def outcome_laws(
     single = ~multi
     status_blocked = single & ~insomnia & (~can_take | limber)
     confused_blocked = single & (state.confusion[::-1] > 0)
+    # subscript_flinch_mon.s:7: Inner Focus (ignorable) stops Thunder Fang's flinch.
+    flinch_blocked = ignorable == AbilityId.INNER_FOCUS
     if loose:
-        status_blocked = confused_blocked = jnp.zeros((2,), bool)
+        status_blocked = confused_blocked = flinch_blocked = jnp.zeros((2,), bool)
     confuses = _any_of(effect, (_E.CONFUSE_FOE, _E.SECONDARY_CONFUSE))
     base = {
         "uses_move": uses_move,
@@ -623,6 +643,8 @@ def outcome_laws(
         "secondary": secondary,
         "status_blocked": status_blocked,
         "confused_blocked": confused_blocked,
+        "fang_flinch": lands[:, 0] & (effect == _E.FANG_PARALYZE_FLINCH) & (chance != 0),
+        "flinch_blocked": flinch_blocked,
         "para_own": uses_move & (status == Status.PARALYSIS),
         "freeze_own": uses_move & (status == Status.FREEZE),
         "confused_own": uses_move & (state.confusion >= 2),
@@ -661,7 +683,7 @@ def outcome_laws(
     foe_speed = _any_of(effect, (_E.STAT_FOE, _E.SECONDARY_STAT_FOE)) & (param0 == Stat.SPE)
     # subscript_flinched.s:10-14: a flinched Steadfast Pokemon gains +1 Speed.
     steadfast = _holds(state, actions, (AbilityId.STEADFAST,)) & foe_moves
-    steadfast = steadfast & _any_of(tables.move_effect[foe_move], (_E.FLINCH, _E.FAKE_OUT))
+    steadfast = steadfast & _any_of(tables.move_effect[foe_move], _FLINCH_EFFECTS)
     # A White Herb restores a lowered Speed stage (hooks.held_item_check).
     herb = _holds_item(tables, state, actions, (ItemId.WHITE_HERB,))
     stage_free = (uses_move & own_speed) | (foe_moves & foe_speed[::-1]) | steadfast | herb
@@ -704,6 +726,7 @@ def outcome_laws(
             end_speed_tie=end_speed_tie,
             magnitude=uses_move & (effect == _E.MAGNITUDE),
             shed_skin=live & _holds(state, actions, (AbilityId.SHED_SKIN,)),
+            fang_flinch=m["fang_flinch"],
         )
 
     both = zip(branch_relevant(branches[0]), branch_relevant(branches[1]), strict=True)
@@ -718,8 +741,8 @@ def outcome_laws(
     # sleep, freeze, paralysis, confusion, flinch, Disable on it, Taunt on a power-0 move
     # or Bide), deals damage at every crit and roll (play_hit's ``effective``: the flinch
     # needs it), and the target, the foe's active Pokemon using a move, has no Inner
-    # Focus as the attacker sees it (effects._flinch). Fake Out also needs its first turn
-    # (effect_script_0158.s).
+    # Focus as the attacker sees it (effects._flinch, effects._fang). Fake Out also needs its
+    # first turn (effect_script_0158.s). Thunder Fang's roll is fang_flinch (``Reads.fang``).
     clean = ~_any_of(status, (Status.SLEEP, Status.FREEZE, Status.PARALYSIS))
     reach = (
         uses_move
@@ -736,8 +759,9 @@ def outcome_laws(
     fake_out_ok = (effect == _E.FAKE_OUT) & (
         state.fake_out_turn.astype(_I32) == state.turn.astype(_I32)
     )
+    fang = effect == _E.FANG_PARALYZE_FLINCH
     flinch_sure = (
-        ((effect == _E.FLINCH) | fake_out_ok)
+        ((effect == _E.FLINCH) | fake_out_ok | fang)
         & reach
         & deals
         & (ignorable != AbilityId.INNER_FOCUS)
@@ -745,13 +769,14 @@ def outcome_laws(
         & (chance != 0)
         & single
     )
-    proc_effects = (_E.SECONDARY_STATUS, _E.SECONDARY_CONFUSE, _E.TRAP)
+    proc_effects = (_E.SECONDARY_STATUS, _E.SECONDARY_CONFUSE, _E.TRAP, _E.FANG_PARALYZE_FLINCH)
     off = jnp.zeros((2,), bool)
     reads = Reads(
         first=firsts,
         hit_gated=off if loose else uses_move & (effect != _E.PURSUIT),
         proc_gated=off if loose else uses_move & (chance != 0) & _any_of(effect, proc_effects),
         flinch_sure=off if loose else flinch_sure,
+        fang=fang,
         confused_own=base["confused_own"],
         confused_by_foe=jnp.stack([m["confused_by_foe"] for m in branches]),
         para_own=base["para_own"],
@@ -896,6 +921,7 @@ _LAWS = {
     "end_speed_tie": _coin,
     "magnitude": _magnitude,
     "shed_skin": _shed_skin,
+    "fang_flinch": _secondary,  # the same CheckEffectActivation roll at the move's chance
 }
 
 
@@ -1024,17 +1050,19 @@ def _move_reads(laws: OutcomeLaws, branch: Branch, plan: ReadPlan) -> None:
     """The reads of rules §10.3 items 1-3 on the implemented mechanics:
 
     * a move's own reads (its crits, rolls, secondary rolls, the foe's contact rolls on
-      its hits, its hit count, duration and Magnitude level) need its accuracy roll to
-      hit: every one sits behind ``play_hit``'s ``landed`` (``connected``,
-      step._use_move); Pursuit's pre-switch hit reads them with no roll, so it is not
-      gated (``Reads.hit_gated``). A confusion self-hit's ``roll[s, 0]`` is another path;
+      its hits, its hit count, duration, Magnitude level and Thunder Fang's flinch roll)
+      need its accuracy roll to hit: every one sits behind ``play_hit``'s ``landed``
+      (``connected``, step._use_move); Pursuit's pre-switch hit reads them with no roll,
+      so it is not gated (``Reads.hit_gated``). A confusion self-hit's ``roll[s, 0]`` is
+      another path;
     * (secondary, duration): a ``SECONDARY_CONFUSE`` / ``SECONDARY_STATUS`` / ``TRAP``
       duration is read only under ``proc`` (effects._secondary_confuse, _inflict, _trap);
     * (secondary, the foe's thaw / full_para / confusion_hit and self-hit roll): a read
       through the first mover's infliction needs that move to hit and, for a secondary
       effect, to proc;
     * the first mover's sure flinch (``Reads.flinch_sure``) with a certain hit (a class
-      that hits at every possible threshold) and a proc stops the second mover's move:
+      that hits at every possible threshold) and a proc (its ``secondary``, or
+      ``fang_flinch`` for Thunder Fang, ``Reads.fang``) stops the second mover's move:
       ``step._use_move`` checks the flinch before Disable, Taunt, confusion, paralysis
       and the move, so none of those elements is read (the thaw roll comes before it)."""
     reads, rel = laws.reads, branch.relevant
@@ -1072,7 +1100,7 @@ def _move_reads(laws: OutcomeLaws, branch: Branch, plan: ReadPlan) -> None:
                 plan.path(elem, "move", *hits)
             if i > 0 or bool(rel.crit[s, 0]):  # roll[s, 0]: damage, or a self-hit below
                 plan.path(("roll", (s, i)), "move", *hits)
-        for name in ("n_hits", "magnitude"):
+        for name in ("n_hits", "magnitude", "fang_flinch"):
             plan.path((name, (s,)), "move", *hits)
         proc = [procs(s)] if bool(reads.proc_gated[s]) else []
         plan.path(("duration", (s,)), "move", *hits, *proc)
@@ -1088,7 +1116,11 @@ def _move_reads(laws: OutcomeLaws, branch: Branch, plan: ReadPlan) -> None:
             if bool(by_foe[t, s]):
                 plan.path(elem, path + "_inflicted", *inflicted(foe))
 
-    secondary = rel_elem("secondary", (first, 0))
+    # The first mover's flinch roll: Thunder Fang's own element, else its secondary.
+    if bool(reads.fang[first]):
+        secondary = rel_elem("fang_flinch", (first,))
+    else:
+        secondary = rel_elem("secondary", (first, 0))
     if bool(reads.flinch_sure[first]) and secondary is not None:
         h = rel_elem("hit", (first, 0))
         possible = np.asarray(laws.hit_possible[first], bool)
@@ -1114,7 +1146,14 @@ def _move_reads(laws: OutcomeLaws, branch: Branch, plan: ReadPlan) -> None:
                 ("contact_proc", (first, i)),
             ):
                 plan.gate(elem, cond)
-        for name in ("n_hits", "duration", "magnitude", "confusion_hit", "full_para"):
+        for name in (
+            "n_hits",
+            "duration",
+            "magnitude",
+            "confusion_hit",
+            "full_para",
+            "fang_flinch",
+        ):
             plan.gate((name, (q,)), cond)
 
 

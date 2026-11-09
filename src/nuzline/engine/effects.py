@@ -31,6 +31,14 @@ many are real). Decomp sources:
   TO_DEFENDER flinch at the move's chance through the same ``subscript_flinch_mon.s``; there
   Inner Focus's "won't flinch" message (:18-23), shown for ``MOVE_FAKE_OUT`` only, names the
   ability (``hooks.FLINCH_BLOCKED``).
+* Thunder Fang (``FANG_PARALYZE_FLINCH``): ``effect_script_0275.s`` is an indirect ``ON_HIT``
+  TO_DEFENDER effect (no outer roll, battle_lib.c:1524-1529) running
+  ``subscript_paralyze_or_flinch.s``: ``CheckEffectActivation`` (``RandNext() % 100 <
+  chance`` and the target has HP, battle_script.c:8377-8378; ``outcome.secondary``) then
+  ``subscript_paralyze.s`` as a secondary paralysis (``_inflict``, non-direct: Limber is
+  silent, no type immunity), then a second ``CheckEffectActivation``
+  (``outcome.fang_flinch``) then ``subscript_flinch_mon.s`` as for ``FLINCH`` (no Inner Focus
+  message: not Fake Out, not direct). Both run before the contact ability (``_fang``).
 * Recover (``RECOVER``): ``effect_script_0032.s`` -> ``subscript_recover_half_max_hp.s``:
   ``DivideVarByValue(maxHP, 2)`` (``BattleSystem_Divide``, at least 1), then
   ``subscript_recover_hp.s``: "HP is full!" at full HP (:6), else the HP update, capped at
@@ -343,6 +351,27 @@ def _flinch(tables, state, h: _Hit) -> BattleState:
     shown = reached & inner_focus & (h.move == MOVE_FAKE_OUT)
     state = reveal_ability(state, h.target_side, h.target, FLINCH_BLOCKED, shown)
     cond = reached & ~inner_focus
+    old = state.flinched[h.target_side]
+    return state._replace(
+        flinched=state.flinched.at[h.target_side].set(jnp.where(cond, 1, old).astype(old.dtype))
+    )
+
+
+def _fang(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    """``FANG_PARALYZE_FLINCH``: ``subscript_paralyze_or_flinch.s:5-10``, the paralysis roll
+    (``h.proc``) then the flinch roll (``outcome.fang_flinch``), each needing a living
+    target (``BtlCmd_CheckEffectActivation``); the flinch also needs a target that has not
+    moved (``subscript_flinch_mon.s:5``) and no Inner Focus as the attacker sees it (:7, its
+    message is for Fake Out or a direct flinch only, :17-27)."""
+    fang = (h.effect == _E.FANG_PARALYZE_FLINCH) & h.effective
+    state = _inflict(state, h, outcome, fang & h.proc, False)
+    cond = (
+        fang
+        & (outcome.fang_flinch[h.side] != 0)
+        & _alive(state, h.target_side, h.target)
+        & ~h.target_moved
+        & (h.target_ignorable != AbilityId.INNER_FOCUS)
+    )
     old = state.flinched[h.target_side]
     return state._replace(
         flinched=state.flinched.at[h.target_side].set(jnp.where(cond, 1, old).astype(old.dtype))
@@ -953,6 +982,7 @@ def play_hit(
     for fn in (
         _status_foe,
         _secondary_status,
+        _fang,
         _stealth_rock,
         _trap,
         _taunt,

@@ -975,6 +975,16 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
     elif effect in (EffectId.STATUS_FOE, EffectId.SECONDARY_STATUS) and effective:
         if effect == EffectId.STATUS_FOE or proc:
             _inflict(turn, s, side, target, p0, effect == EffectId.STATUS_FOE)
+    elif effect == EffectId.FANG_PARALYZE_FLINCH and effective:
+        # effect_script_0275.s -> subscript_paralyze_or_flinch.s: CheckEffectActivation
+        # (the roll, then the target's HP; script.c:8377-8378) and the indirect paralysis,
+        # then a second CheckEffectActivation and subscript_flinch_mon.s (a target that has
+        # not moved, no Inner Focus; its message is for Fake Out or a direct flinch only).
+        if proc:
+            _inflict(turn, s, side, target, p0, False)
+        alive = _active(s, target).hp > 0
+        if o.fang_flinch[side] and alive and not target_moved and seen != AbilityId.INNER_FOCUS:
+            s.sides[target].flinched = 1
     elif effect in (EffectId.FLINCH, EffectId.FAKE_OUT) and effective and proc:
         # subscript_flinch_mon.s: a living target that has not moved yet; Inner Focus,
         # whose message (:18-23, TAG_NICKNAME_ABILITY) is shown for Fake Out only.

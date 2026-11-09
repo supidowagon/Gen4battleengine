@@ -48,8 +48,13 @@ class EffectId(IntEnum):
       Defense (``damage.py``). Damp would stop it; Damp is ``AbilityId.UNSUPPORTED``.
     * ``FLAIL`` (Flail, Reversal): zeros; the power comes from the user's HP pixels
       (``damage.flail_power``); the trainer AI scores it at the table power.
+    * ``FANG_PARALYZE_FLINCH`` (Thunder Fang, ``BATTLE_EFFECT_FLINCH_PARALYZE_HIT``):
+      ``(Status.PARALYSIS, 0, 0)``; two independent rolls at the move's chance, the
+      paralysis (``Outcome.secondary``) then the flinch (``Outcome.fang_flinch``)
+      (``effects._fang``).
 
-    The proc chance of a ``SECONDARY_*``, ``FLINCH``, ``FAKE_OUT`` or ``RAISE_ALL_STATS_HIT``
+    The proc chance of a ``SECONDARY_*``, ``FLINCH``, ``FAKE_OUT``, ``RAISE_ALL_STATS_HIT`` or
+    ``FANG_PARALYZE_FLINCH``
     effect is the move's own ``move_effect_chance``; a ``SECONDARY_*`` move with chance 0 applies its
     effect on every hit (the decomp's ``MOVE_SIDE_EFFECT_ON_HIT``, e.g. Hammer Arm).
     """
@@ -94,6 +99,7 @@ class EffectId(IntEnum):
     SELF_DESTRUCT = 37
     FLAIL = 38
     AQUA_RING = 39
+    FANG_PARALYZE_FLINCH = 40
 
 
 class AbilityId(IntEnum):

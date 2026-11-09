@@ -383,6 +383,8 @@ def decomp_law(tables, state, actions, name: str, index: tuple) -> dict[int, Fra
     if name == "secondary":
         chance = int(tables.move_effect_chance[move])
         return coin(Fraction(1) if chance == 0 else Fraction(chance, 100))
+    if name == "fang_flinch":  # the second CheckEffectActivation (battle_script.c:8377)
+        return coin(Fraction(int(tables.move_effect_chance[move]), 100))
     if name == "contact_proc":
         return coin(Fraction(3, 10))
     if name == "n_hits":
@@ -573,7 +575,7 @@ def assert_equals_bruteforce(tables, state, actions) -> tuple[int, int]:
 
 
 # Moves of the order-gated and conditional reads: flinch (Headbutt, Zen Headbutt at 90 %,
-# Bite, Fake Out), status inflicted directly or as a secondary (Thunder Wave, Spore, Spark,
+# Bite, Fake Out, Thunder Fang's paralysis-then-flinch), status inflicted directly or as a secondary (Thunder Wave, Spore, Spark,
 # Ice Beam, Ember, Flame Wheel), confusion (Confusion, Psybeam, Supersonic, Confuse Ray), a
 # duration (Bind, Taunt), plain and multi-hit damage and an accuracy drop.
 ORDER_MOVES = (
@@ -597,7 +599,8 @@ ORDER_MOVES = (
     "Fury Swipes",
     "Sand-Attack",
 )
-FLINCH_MOVES = ("Headbutt", "Zen Headbutt", "Bite", "Fake Out")  # drawn twice as often
+# Drawn twice as often.
+FLINCH_MOVES = ("Headbutt", "Zen Headbutt", "Bite", "Fake Out", "Thunder Fang")
 ORDER_ABILITIES = (
     AbilityId.INNER_FOCUS,
     AbilityId.MOLD_BREAKER,

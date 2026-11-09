@@ -4,9 +4,11 @@
 ``Outcome``, which ``sample_outcome`` draws (Monte Carlo) and later enumeration
 lists. Per-hit fields are ``[side, hit_index]`` with up to 5 hits; per-action
 fields are ``[side]``. ``secondary`` is indexed by the attacking side (its own
-move's secondary effect); ``contact_proc`` by the defending side (its contact
-ability); ``duration`` by the acting (inflicting) side, and it is the counter value
-the decomp's ``Random`` command stores for that side's move (``sample_outcome``).
+move's secondary effect; Thunder Fang's paralysis roll); ``fang_flinch`` by the
+attacking side too (Thunder Fang's second roll, its flinch); ``contact_proc`` by the
+defending side (its contact ability); ``duration`` by the acting (inflicting) side, and it
+is the counter value the decomp's ``Random`` command stores for that side's move
+(``sample_outcome``).
 
 ``sample_outcome`` reproduces each decomp roll (citations per field below). The
 crit odds are read from the state at the start of the turn. Rolls whose effect
@@ -70,6 +72,7 @@ class Outcome(NamedTuple):
     end_speed_tie: jnp.ndarray  # int8[], 0 = player first in the end-of-turn order on equal speed
     magnitude: jnp.ndarray  # int8[2], Magnitude's level 4-10 of each side's move
     shed_skin: jnp.ndarray  # int8[2], Shed Skin's RandNext() % 10 < 3
+    fang_flinch: jnp.ndarray  # int8[2], Thunder Fang's flinch roll (secondary is its paralysis)
 
 
 def empty_outcome() -> Outcome:
@@ -92,6 +95,7 @@ def empty_outcome() -> Outcome:
         end_speed_tie=jnp.zeros((), _I8),
         magnitude=sides + 4,
         shed_skin=sides,
+        fang_flinch=sides,
     )
 
 
@@ -376,5 +380,10 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions) -> Outcome:
             jax.random.randint(jax.random.fold_in(key, 14), per_side, 0, 100, dtype=_I32)
         ),
         shed_skin=jax.random.randint(jax.random.fold_in(key, 15), per_side, 0, 10, dtype=_I32) < 3,
+        # subscript_paralyze_or_flinch.s:9: the second CheckEffectActivation (battle_script.c:
+        # 8377), RandNext() % 100 < chance, independent of the first (``secondary``). A fang
+        # never has chance 0 (tools/build_tables.py refuses it: the decomp asserts it).
+        fang_flinch=jax.random.randint(jax.random.fold_in(key, 16), per_side, 0, 100, dtype=_I32)
+        < chance[:, 0],
     )
     return Outcome(*(jnp.asarray(f).astype(_I8) for f in outcome))

@@ -977,7 +977,7 @@ def test_kaizo_roark_refused(tmp_path, capsys, kaizo_tables, kaizo_names):  # ex
     assert main(["coverage", "--game", "kaizo", "--party", party, "--trainer", "roark"]) == 2
     out = capsys.readouterr().out
     # K3b1: sandstorm is modelled, so Roark's battle-start Sandstorm is no longer refused;
-    # the AI policy, the unclassified ROM change and a K3b2 move still refuse the fight.
+    # the AI policy and the unclassified ROM change still refuse the fight.
     assert "Sandstorm" not in out
     assert (
         "Leader Roark: no transcribed AI policy for this game (spec 5.10) (AI policy UNSUPPORTED)"
@@ -987,7 +987,8 @@ def test_kaizo_roark_refused(tmp_path, capsys, kaizo_tables, kaizo_names):  # ex
         "Kaizo ROM: 1 code changes unclassified (docs/kaizo/rom_diff.md) (ROM change UNSUPPORTED)"
         in out
     )
-    assert "Leader Roark Gible (slot 2): Thunder Fang (move effect UNSUPPORTED)" in out
+    # K3b2 Task 4: Gible's Thunder Fang (effect 275) is modelled now.
+    assert "Thunder Fang (move effect UNSUPPORTED)" not in out
     # Final review I3: Kaizo Roark's move 205 is Accelerock; Rollout is no Kaizo move.
     assert "move Accelerock are not transcribed" in out and "Rollout" not in out
 

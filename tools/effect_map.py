@@ -201,6 +201,10 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     # subscript_recoil_1_2: damage / 2 == damage * 50 // 100
     269: ("BATTLE_EFFECT_RECOIL_HALF", _E.RECOIL, (50, 0, 0)),
     271: ("BATTLE_EFFECT_LOWER_SP_DEF_2_HIT", _E.SECONDARY_STAT_FOE, (_SPD, -2, 0)),
+    # effect_script_0275.s -> subscript_paralyze_or_flinch.s: a paralysis roll, then a flinch
+    # roll (engine/effects.py ``_fang``). Fire Fang (273) and Ice Fang (274) call other
+    # subscripts and stay unmapped until those are read (docs/kaizo/k3b2-rules.md §11 item 7).
+    275: ("BATTLE_EFFECT_FLINCH_PARALYZE_HIT", _E.FANG_PARALYZE_FLINCH, (Status.PARALYSIS, 0, 0)),
     276: ("BATTLE_EFFECT_RAISE_SP_ATK_HIT", _E.SECONDARY_STAT_SELF, (_SPA, 1, 0)),
 }
 

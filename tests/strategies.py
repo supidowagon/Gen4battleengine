@@ -113,7 +113,8 @@ def _learnsets() -> dict[int, list[tuple[int, int]]]:
 # trapping, flinch, multi-hit (2-5 and fixed two), stat-stage, Recover, Fake Out, Curse,
 # screen (Reflect, Light Screen, broken by Brick Break), Toxic and mid-turn accuracy
 # (Sand-Attack, Double Team) branches run in the differential test (no M1 species is
-# Ghost-type: Curse is the non-Ghost one).
+# Ghost-type: Curse is the non-Ghost one). Thunder Fang comes from Shinx's learnset: adding
+# it here reshuffles tests/test_damage_oracle.py's seeded sample.
 SHARED_MOVES = (
     "Stealth Rock",
     "Taunt",
@@ -404,15 +405,17 @@ def any_outcome() -> st.SearchStrategy[Outcome]:
         end_speed_tie=_flag(()),
         magnitude=_ints(4, 10, sides),
         shed_skin=_flag(sides),
+        fang_flinch=_flag(sides),
     )
 
 
 # Moves whose outcome laws the enumeration tests need (tests/engine/test_enumerate.py):
 # sleep (Spore, Hypnosis), Taunt, Bind (TRAP), multi-hit (Fury Swipes), confusion
 # (Supersonic, Confuse Ray), secondary paralysis / freeze / burn with a thawing move
-# (Spark, Ice Beam, Flame Wheel), flinch (Headbutt), a Speed drop (Bubble), a Speed
-# boost (Rock Polish), a high-crit move (Razor Leaf), a 95 % plain move (Tackle) and
-# accuracy / evasion changes before the foe's check (Sand-Attack, Double Team, Mud-Slap).
+# (Spark, Ice Beam, Flame Wheel), flinch (Headbutt; Thunder Fang, paralysis then flinch), a
+# Speed drop (Bubble), a Speed boost (Rock Polish), a high-crit move (Razor Leaf), a 95 %
+# plain move (Tackle) and accuracy / evasion changes before the foe's check (Sand-Attack,
+# Double Team, Mud-Slap).
 LAW_MOVES = (
     "Spore",
     "Hypnosis",
@@ -436,6 +439,7 @@ LAW_MOVES = (
     "Sand-Attack",
     "Double Team",
     "Mud-Slap",
+    "Thunder Fang",
 )
 # Abilities the outcome relevance reads (contact procs, Steadfast, Simple's and Swift
 # Swim's Speed) or the hit odds read (Compoundeyes, Sand Veil, Snow Cloak), and Rough Skin
