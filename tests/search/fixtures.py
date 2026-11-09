@@ -4,12 +4,14 @@ chance nodes, observations and endgames the solver tests need. Each builds on
 
 from __future__ import annotations
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 
 from nuzline.ai.policy import ai_action_distribution
 from nuzline.data.tables import Names, Tables
-from nuzline.engine.actions import MOVE_ACTIONS, legal_actions
+from nuzline.engine.actions import MOVE_ACTIONS, legal_actions, legal_opponent_actions
+from nuzline.engine.enumerate import SamplingOnly, enumerate_outcomes, outcome_laws
 from nuzline.engine.ids import Stat
 from nuzline.engine.state import BattleState
 from nuzline.search.leaves import LeafValue
@@ -47,7 +49,18 @@ def spike_cannon_player_root(tables: Tables, names: Names) -> BattleState:
     Spike Cannon's hits after the first out of the damage classes; without it the classes
     bring the pair under the cap."""
     s = roark_state(tables, names, player_moves=["Spike Cannon"])
-    return s._replace(item=s.item.at[1, s.active[1]].set(names.item("White Herb")))
+    s = s._replace(item=s.item.at[1, s.active[1]].set(names.item("White Herb")))
+    # Loud if a tighter predicate ever brings it under the cap.
+    cannon = names.move_slot(s, 0, "Spike Cannon")
+    theirs = np.flatnonzero(np.asarray(legal_opponent_actions(tables, s)))
+    for b in theirs:
+        laws = jax.tree.map(np.asarray, outcome_laws(tables, s, jnp.array([cannon, b], jnp.int32)))
+        try:
+            enumerate_outcomes(laws)
+        except SamplingOnly:
+            continue
+        raise AssertionError(f"Spike Cannon against action {b} fits under the width cap")
+    return s
 
 
 def one_v_one(tables: Tables, names: Names, player_move: str) -> BattleState:

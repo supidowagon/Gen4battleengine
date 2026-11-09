@@ -390,6 +390,59 @@ INPUT_CLAUSE_ITEMS = (
 )
 _STATUS_CURES = (ItemId.CHESTO_BERRY, ItemId.PECHA_BERRY, ItemId.LUM_BERRY)
 
+# The attacker's own move effect, for ``OutcomeLaws.compress``: a hit of a
+# ``TABLE_DAMAGE_EFFECTS`` move deals exactly ``hit_damage_table``'s entry for its
+# ``(crit, roll)`` at the hit's state (``effects.play_hit`` calls ``damage_for_roll`` at the
+# default ``power_mul``, which equals ``damage_table`` for these; Hidden Power, Rollout and
+# Flail read their power from the state there too). Every other effect is
+# ``NON_TABLE_DAMAGE_EFFECTS``: no roll (status moves, ``LEVEL_DAMAGE``, ``BIDE``), a drawn
+# power (``MAGNITUDE``) or a power the table does not see (``PURSUIT``'s pre-switch x2).
+# An allowlist: a new effect is never compressed until it is classified here
+# (``tests/engine/test_damage_classes.py`` fails while it is in neither tuple).
+TABLE_DAMAGE_EFFECTS = (
+    _E.PLAIN,
+    _E.SECONDARY_STAT_SELF,
+    _E.SECONDARY_STAT_FOE,
+    _E.SECONDARY_STATUS,
+    _E.FLINCH,
+    _E.HIGH_CRIT,
+    _E.DRAIN,
+    _E.TRAP,
+    _E.MULTI_HIT,
+    _E.RECOIL,
+    _E.HIDDEN_POWER,
+    _E.SECONDARY_CONFUSE,
+    _E.EAT_BERRY,
+    _E.ROLLOUT,
+    _E.BRICK_BREAK,
+    _E.FAKE_OUT,
+    _E.RAISE_ALL_STATS_HIT,
+    _E.SELF_DESTRUCT,
+    _E.FLAIL,
+)
+NON_TABLE_DAMAGE_EFFECTS = (
+    _E.STAT_SELF,
+    _E.STAT_FOE,
+    _E.STATUS_FOE,
+    _E.STEALTH_ROCK,
+    _E.PURSUIT,
+    _E.TAUNT,
+    _E.CONFUSE_FOE,
+    _E.LEECH_SEED,
+    _E.WATER_SPORT,
+    _E.FORESIGHT,
+    _E.LEVEL_DAMAGE,
+    _E.MAGNITUDE,
+    _E.MUD_SPORT,
+    _E.DISABLE,
+    _E.BIDE,
+    _E.LIGHT_SCREEN,
+    _E.REFLECT,
+    _E.RECOVER,
+    _E.CURSE,
+    _E.AQUA_RING,
+)
+
 
 def damage_inputs_can_change(tables: Tables, state: BattleState, actions, foe_first) -> jnp.ndarray:
     """``bool[2, MAX_HITS]``: ``[side, hit]`` can deal damage other than
@@ -418,9 +471,17 @@ def damage_inputs_can_change(tables: Tables, state: BattleState, actions, foe_fi
       today), a Guts user that wakes or thaws first (its status goes to none), and
       Selfdestruct (its user's HP goes to 0 before the hit).
 
-    Extending: a mechanic that lets anything above (or a new input) change mid-turn
-    classifies its ids in the tuples above and adds a clause here, with a brute-force
-    equality test in ``tests/engine/test_damage_classes.py``."""
+    Extending (Tasks 4-11): a mechanic that lets anything above (or a new input) change
+    mid-turn classifies its ids in the ``INPUT_*`` tuples above and adds a clause here,
+    with a brute-force equality test in ``tests/engine/test_damage_classes.py``.
+
+    A mechanic whose *own* hit damage is not ``hit_damage_table``'s (a drawn power such as
+    Present's 40/80/120, a move chosen at use time such as Nature Power's, a power
+    multiplier) puts its effect in ``NON_TABLE_DAMAGE_EFFECTS``, or refines the classes
+    over every variant itself. A joint factor does not turn compression off by itself:
+    ``_damage_classes`` only skips a hit whose crit or roll *other* elements depend on, so a
+    factor that gates crit / roll *on* another element (``present`` -> crit) leaves the hit
+    compressed with the turn-start table."""
     actions = jnp.asarray(actions, _I32)
     sides = jnp.arange(2)
     mons = state.active
@@ -705,9 +766,9 @@ def outcome_laws(
     )
     # Damage classes (rules §10.3 item 5): a hit whose damage the turn-start table gives
     # whatever happened before it (damage_inputs_can_change), of a move whose table is
-    # its damage (not Magnitude: its level is drawn; not Pursuit: its pre-switch hit
-    # doubles the power), and whose roll is not also a confusion self-hit's.
-    tabled = rolled & ~_any_of(effect, (_E.MAGNITUDE, _E.PURSUIT))
+    # its damage (TABLE_DAMAGE_EFFECTS, an allowlist), and whose roll is not also a
+    # confusion self-hit's.
+    tabled = rolled & _any_of(effect, TABLE_DAMAGE_EFFECTS)
     compress = jnp.stack(
         [
             crit
@@ -1098,7 +1159,9 @@ def _damage_classes(
 ) -> dict[Elem, _DamageClasses]:
     """The hits of this branch drawn as damage classes, keyed by their crit element:
     ``laws.compress`` allows it, and the plan reads the hit's crit and roll together
-    (the same gates and paths) and no other element's read depends on either."""
+    (the same gates and paths) and no other element's read depends on either. Only that
+    direction is checked: crit / roll gated on another element are still compressed, so a
+    mechanic that changes the hit's damage must be kept out of ``TABLE_DAMAGE_EFFECTS``."""
     depended = set().union(*(plan.deps(e) for e in plan.elements)) if plan.elements else set()
     compress = np.asarray(laws.compress[branch.tie], bool)
     out: dict[Elem, _DamageClasses] = {}

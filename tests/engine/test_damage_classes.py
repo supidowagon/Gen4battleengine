@@ -24,6 +24,8 @@ from nuzline.engine.enumerate import (
     INPUT_NEUTRAL_ABILITIES,
     INPUT_NEUTRAL_EFFECTS,
     INPUT_NEUTRAL_ITEMS,
+    NON_TABLE_DAMAGE_EFFECTS,
+    TABLE_DAMAGE_EFFECTS,
     SamplingOnly,
     damage_class_law,
     enumerate_drawn,
@@ -76,8 +78,24 @@ def _state(tables, names, player, opp, order="player", setup=()):
             table = np.asarray(hit_damage_table(tables, s, 0, names.move(player)))
             hp = int(table[0, 8])
             s = s._replace(hp=s.hp.at[1, 0].set(hp), max_hp=s.max_hp.at[1, 0].set(hp))
-        elif name == "chilan":
+        elif name == "strong":  # Atk 400, no crits: a wide damage range, a small brute force
+            s = s._replace(
+                stats=s.stats.at[0, 0, 0].set(400), lucky_chant=s.lucky_chant.at[:].set(5)
+            )
+        elif name == "chilan_two_hits":
+            # A Chilan Berry (any Normal hit) with HP two middle rolls can take.
             s = s._replace(item=s.item.at[1, 0].set(names.item("Chilan Berry")))
+            table = np.asarray(hit_damage_table(tables, s, 0, names.move(player)))
+            hp = int(table[0, 8]) * 2
+            s = s._replace(
+                hp=s.hp.at[1, 0].set(hp), max_hp=s.max_hp.at[1, 0].set(max(hp, int(s.max_hp[1, 0])))
+            )
+        elif name == "sash_two_hits":
+            # A full-HP Focus Sash holder that two hits can KO.
+            s = s._replace(item=s.item.at[1, 0].set(names.item("Focus Sash")))
+            table = np.asarray(hit_damage_table(tables, s, 0, names.move(player)))
+            hp = int(table[0, 15]) + int(table[0, 0])
+            s = s._replace(hp=s.hp.at[1, 0].set(hp), max_hp=s.max_hp.at[1, 0].set(hp))
         elif name == "lucky_chant_opp":  # no crits for the opponent: a smaller brute force
             s = s._replace(lucky_chant=s.lucky_chant.at[0].set(5))
         elif name == "low_hp":  # Flail's power band moves with its user's HP
@@ -95,9 +113,14 @@ EXACT_CASES = [
     # not an input of the player's own hits.
     ("Double Kick", "Leer", "player", (), [[True, True]]),
     ("Double Kick", "Leer", "opp", (), [[True, True]]),
-    # A Focus Sash holder at full HP inside the damage range; a Chilan Berry (any Normal hit).
+    # A Focus Sash holder at full HP inside the damage range.
     ("Tackle", "Leer", "player", ("focus_sash",), [[True]]),
-    ("Double Kick", "Leer", "player", ("chilan",), [[True, True]]),
+    # Double Hit (Normal, two hits) at Atk 400 into a Chilan Berry (halves the first Normal
+    # hit, then is gone) and into a full-HP Focus Sash that two hits can KO, both orders.
+    ("Double Hit", "Leer", "player", ("strong", "chilan_two_hits"), [[True, True]]),
+    ("Double Hit", "Leer", "opp", ("strong", "chilan_two_hits"), [[True, True]]),
+    ("Double Hit", "Leer", "player", ("strong", "sash_two_hits"), [[True, True]]),
+    ("Double Hit", "Leer", "opp", ("strong", "sash_two_hits"), [[True, True]]),
     # A high-crit move: crit odds 1 in 8, so the class weights are not those of Tackle.
     ("Slash", "Leer", "player", (), [[True]]),
     # Inputs that change before the hit: compression off for that hit.
@@ -220,6 +243,24 @@ def test_every_damage_input_id_classified():
         assert not set(neutral) & set(clause), enum.__name__
         known = set(neutral) | set(clause) | {enum.UNSUPPORTED}
         assert known == set(enum), (enum.__name__, set(enum) - known)
+
+
+def test_every_effect_classified_for_table_damage():
+    # The attacker's own effect decides whether its hits can be damage classes at all: an
+    # allowlist, so a new effect (Present's drawn power, Nature Power's chosen move) is
+    # never compressed until it is classified.
+    table, other = set(TABLE_DAMAGE_EFFECTS), set(NON_TABLE_DAMAGE_EFFECTS)
+    assert not table & other
+    assert table | other | {EffectId.UNSUPPORTED} == set(EffectId), set(EffectId) - table - other
+
+
+def test_non_table_effects_never_compressed(tables, names):
+    # Magnitude's drawn power and Pursuit (x2 against a switch) keep their crit and roll.
+    for move in ("Magnitude", "Pursuit"):
+        s = _state(tables, names, move, "Leer")
+        laws = laws_of(tables, s, A(move, "Leer", s, names))
+        assert bool(laws.relevant.crit[0, 0])
+        assert not np.asarray(laws.compress)[:, 0].any(), move
 
 
 # Moves and abilities that change (or leave) damage inputs mid-turn, for the generated
@@ -350,4 +391,3 @@ def test_doubleslap_vs_corsola_water_pulse_fits(kaizo_tables, kaizo_names, monke
     assert set(exact) == set(brute)
     for key, p in brute.items():
         assert abs(exact[key] - p) < 1e-12
-    print(f"DoubleSlap vs Water Pulse: {len(brute_probs)} brute force -> {len(probs)} rows")
