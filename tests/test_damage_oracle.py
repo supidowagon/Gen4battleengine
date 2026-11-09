@@ -24,6 +24,7 @@ Skips when ``node`` or the npm package is missing
 from __future__ import annotations
 
 import json
+import math
 import shutil
 import subprocess
 from pathlib import Path
@@ -37,8 +38,11 @@ from nuzline.data.tables import Names, Tables
 from nuzline.engine.damage import (
     MAGNITUDE_POWER,
     STATUS,
+    _pre_random,
+    chart_entry,
     damage_table,
     effectiveness,
+    fixed_damage,
     hidden_power,
 )
 from nuzline.engine.ids import AbilityId, EffectId, Stat, Status, Type, Weather
@@ -98,9 +102,11 @@ def _mon(rng: np.random.Generator, tables: Tables, names: Names, species: int) -
     )
 
 
-def _smogon_departs(m: dict, tables: Tables, ability: dict[int, int], move: int) -> bool:
+def _smogon_departs(
+    m: dict, tables: Tables, names: Names, ability: dict[int, int], move: int, s
+) -> bool:
     """Matchups where @smogon/calc 0.12.0 departs from the decomp (docs/discrepancies.md,
-    "Damage oracle"); the engine follows the decomp in both."""
+    "Damage oracle"); the engine follows the decomp in all. ``s`` is the matchup's state."""
     physical = int(tables.move_category[move]) == 0
     a_stage = m["atk_stages"][0 if physical else 2]  # [atk, def, spa, spd]
     d_stage = m["def_stages"][1 if physical else 3]
@@ -122,7 +128,78 @@ def _smogon_departs(m: dict, tables: Tables, ability: dict[int, int], move: int)
     # 3. Selfdestruct / Explosion halve the raw Defense, then its stage applies
     #    (battle_lib.c:6943-6945, then :6963-6975); @smogon/calc halves the staged Defense.
     halved = int(tables.move_effect[move]) == EffectId.SELF_DESTRUCT and physical
-    return halved and d_stage != 0
+    if halved and d_stage != 0:
+        return True
+    # 4. The type chart rounding at low damage (_chart_rounding_departs).
+    return _chart_rounding_departs(tables, names, s, move, m["crit"])
+
+
+# The engine's damage before the variance roll (``damage._pre_random``) and the move type.
+_pre_chart = jax.jit(lambda t, s, move, crit: _pre_random(t, s, 0, move, crit)[:2])
+
+
+def _divide(x: int, d: int) -> int:
+    """``BattleSystem_Divide`` (battle_lib.c:3599-3618) for non-negative ``x``."""
+    return 0 if x == 0 else max(x // d, 1)
+
+
+# @smogon/calc 0.12.0's order of a defender's two types (gen4.js:104-130).
+_SMOGON_TYPE_ORDER = (
+    "NORMAL", "FIRE", "WATER", "ELECTRIC", "GRASS", "ICE", "FIGHTING", "POISON", "GROUND",
+    "FLYING", "PSYCHIC", "BUG", "ROCK", "GHOST", "DRAGON", "DARK", "STEEL",
+)  # fmt: skip
+
+
+def _chart_rounding_departs(tables: Tables, names: Names, s, move: int, crit: bool) -> bool:
+    """The decomp applies each defender type's chart row as ``BattleSystem_Divide(damage *
+    mul, 10)`` (``ApplyTypeMultiplier``, battle_lib.c:7547), in chart order
+    (``tables.type_chart_order``), and ``BattleSystem_Divide`` lifts a non-zero dividend
+    that truncates to 0 up to 1 (battle_lib.c:3599-3618). @smogon/calc floors each factor
+    (in its own type order) and takes ``max(1, damage)`` once at the end (gen4.js:228-237).
+    So 1 x0.5 x2 is 2 in the decomp (1 -> 1 -> 2) and 1 in @smogon/calc (1 -> 0 -> 0 -> 1).
+    Both are computed here from the engine's own pre-chart damage (``damage._pre_random``,
+    the variance and STAB as ``damage._finish``), and the matchup is skipped only when they
+    differ at some roll."""
+    if bool(fixed_damage(tables, s, 0, move)[0]):
+        return False
+    pre, move_type = _pre_chart(tables, s, move, crit)
+    pre, move_type = int(pre), int(move_type)
+    a_types = {int(t) for t in s.types[0, int(s.active[0])]}
+    t1, t2 = (int(t) for t in s.types[1, int(s.active[1])])
+    defender = [t1] if t1 == t2 else [t1, t2]
+    mul = {t: int(chart_entry(tables, move_type, t)) for t in defender}  # tenths
+    decomp_order = sorted(defender, key=lambda t: int(tables.type_chart_order[move_type, t]))
+    smogon_order = sorted(
+        defender,
+        key=lambda t: (
+            _SMOGON_TYPE_ORDER.index(names.type_names[t])
+            if names.type_names[t] in _SMOGON_TYPE_ORDER
+            else -1
+        ),
+    )
+    product = math.prod(mul.values())
+    a_ability, d_ability = int(s.ability[0, 0]), int(s.ability[1, 0])
+    solid = (
+        d_ability == AbilityId.SOLID_ROCK
+        and a_ability != AbilityId.MOLD_BREAKER
+        and product > 10 ** len(defender)
+    )
+    for roll in range(16):
+        base = max(pre * (85 + roll) // 100, 1)  # battle_lib.c:7084-7089
+        if move_type in a_types:
+            base = base * 2 if a_ability == AbilityId.ADAPTABILITY else base * 15 // 10
+        ours = base
+        for t in decomp_order:
+            ours = _divide(ours * mul[t], 10)
+        theirs = base
+        for t in smogon_order:
+            theirs = theirs * mul[t] // 10
+        if solid:
+            ours, theirs = _divide(ours * 3, 4), theirs * 3 // 4
+        theirs = max(1, theirs) if product else 0
+        if ours != theirs:
+            return True
+    return False
 
 
 def _matchups(tables: Tables, names: Names) -> list[dict]:
@@ -219,8 +296,6 @@ def _matchup(
     hp = int(rng.integers(1, max_hp // 3 + 1 if rng.random() < 1 / 3 else max_hp + 1))
     m["hp"] = hp
     ability = {0: int(s.ability[0, 0]), 1: int(s.ability[1, 0])}
-    if _smogon_departs(m, tables, ability, move):
-        return None
     m["power"], m["type"] = int(tables.move_power[move]), int(tables.move_type[move])
     effect = int(tables.move_effect[move])
     if effect == EffectId.HIDDEN_POWER:
@@ -246,6 +321,8 @@ def _matchup(
         light_screen=s.light_screen.at[1].set(int(m["light_screen"])),
     )
     m["state"] = s
+    if _smogon_departs(m, tables, names, ability, move, s):
+        return None
     m["smogon"] = {
         "attacker": _smogon_mon(names, a, m["atk_stages"], hp, m["burn"]),
         "defender": _smogon_mon(names, d, m["def_stages"], None, False),

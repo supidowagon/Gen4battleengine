@@ -70,7 +70,7 @@ found no disagreement beyond the four above; there was nothing new to settle.
 
 `tests/test_damage_oracle.py` compares `damage_table` with @smogon/calc 0.12.0's Gen 4
 calculator (`tools/smogon_calc/damage.js`) on 300 generated matchups, all 16 rolls
-exact. The stats and move data agreed everywhere. The damage differed in three cases, and
+exact. The stats and move data agreed everywhere. The damage differed in four cases, and
 in each the decomp sides with the JAX engine, so the engine is unchanged and the test
 does not generate those matchups (`_smogon_departs`).
 
@@ -107,6 +107,25 @@ does not generate those matchups (`_smogon_departs`).
   scales it into `stageDivisor` (`:6963-6975`).
 - **Ruling:** the engine (`damage._pre_random` halves `defense` before `apply_stage`) is
   right. Test: `tests/engine/test_self_destruct.py::test_self_destruct_halves_defense`.
+
+### 10. Each type-chart row lifts a truncated 0 to 1 (K3b2 Task 4 fix round)
+
+- **@smogon/calc:** the Gen 4 calculator floors the damage after each type factor and
+  takes `max(1, damage)` once, at the end (`gen4.js:228-237`). At 1 damage a x0.5 row
+  then a x2 row gives 1 -> 0 -> 0 -> 1.
+- **Decomp:** `ApplyTypeMultiplier` applies each defender type's row as
+  `BattleSystem_Divide(damage * mul, 10)` (`src/battle/battle_lib.c:7547`), and
+  `BattleSystem_Divide` lifts a non-zero dividend that truncates to 0 up to 1 (`:3599-3618`).
+  The rows are visited in chart order: Ground -> Grass x0.5 (`:2457`) before Ground ->
+  Poison x2 (`:2458`), Ice -> Ice (`:2434`) before Ice -> Ground (`:2435`). So 1 -> 1 -> 2.
+- **Found:** adding Thunder Fang to `tests/strategies.SHARED_MOVES` reshuffled the seeded
+  sample, which then drew three such matchups: L12 Glameow's Magnitude (power 10) into
+  L20 Budew (Grass/Poison), L7 Furret's Ice Ball into L20 Swinub (Ice/Ground), L6 Cranidos's
+  Magnitude into L19 Budew: the engine 2 at every roll, @smogon/calc 1 at all but the top roll.
+- **Ruling:** the engine (`damage._finish`: `divide` per row in `type_chart_order`) is
+  right. `_smogon_departs` rule 4 (`_chart_rounding_departs`) computes both roundings from
+  the engine's pre-chart damage and skips a matchup only when they differ. Test:
+  `tests/engine/test_damage.py::test_type_rows_lift_to_one_in_chart_order`.
 
 ## JAX engine's trainer AI path vs the decomp (K3b1)
 

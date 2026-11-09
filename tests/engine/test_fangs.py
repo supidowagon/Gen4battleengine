@@ -382,8 +382,17 @@ SETUPS = (
 )
 
 
-@pytest.mark.parametrize("opp", ["Tackle", FANG, "Zen Headbutt", "Thunder Wave"])
-@pytest.mark.parametrize("setup", SETUPS)
+# Fang against Fang at a speed tie is over the cap at 95 % accuracy: the Kaizo tables cover
+# it (test_kaizo_fang_tie_equals_bruteforce).
+FANG_CASES = [
+    (setup, opp)
+    for setup in SETUPS
+    for opp in ("Tackle", FANG, "Zen Headbutt", "Thunder Wave")
+    if not (opp == FANG and setup in ("tie", "steadfast_tie"))
+]
+
+
+@pytest.mark.parametrize(("setup", "opp"), FANG_CASES)
 def test_fang_equals_bruteforce(tables, names, setup, opp):
     """The gated enumeration (order branches, the order-gated fang flinch, the status
     eligibility of the paralysis, the sure flinch, damage classes) equals the loose brute
@@ -417,8 +426,6 @@ def test_fang_equals_bruteforce(tables, names, setup, opp):
         s = s._replace(item=s.item.at[1, 0].set(names.item("Focus Sash")))
     elif setup == "low_hp":
         s = s.replace_hp(1, 0, 3)
-    if opp == FANG and setup in ("tie", "steadfast_tie"):
-        pytest.skip("over the cap at 95 %: test_kaizo_fang_tie_equals_bruteforce")
     acts = A(FANG, opp, s, names)
     width, brute = assert_equals_bruteforce(tables, s, acts)
     assert width <= brute

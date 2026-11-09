@@ -157,13 +157,14 @@ def _move_events(tables, state, actions, outcome, turn) -> list[dict]:
             stages[side] = [6] * 8
     hp = {(side, active[side]): int(state.hp[side, active[side]]) for side in (0, 1)}
     confusion = [int(state.confusion[0]), int(state.confusion[1])]
+    flinched = [False, False]
     events = []
     for side in np.asarray(action_order(tables, state, jnp.asarray(actions), outcome)).tolist():
         if actions[side] >= MOVE_ACTIONS:
             continue
         user, target = (side, active[side]), (1 - side, active[1 - side])
-        if hp[user] == 0:
-            continue  # fainted before moving
+        if hp[user] == 0 or flinched[side]:
+            continue  # fainted, or flinched by an earlier Thunder Fang, before moving
         hit_state = state._replace(active=jnp.asarray(active, jnp.int8))
         confusion[side] = max(confusion[side] - 1, 0)
         if confusion[side] > 0 and int(outcome.confusion_hit[side]):
@@ -199,6 +200,9 @@ def _move_events(tables, state, actions, outcome, turn) -> list[dict]:
             _hit_event(state, turn, side, 1 - side, move, damage, crit, active, hp, stages),
         )
         hp[target] = max(hp[target] - damage, 0)
+        fang = int(tables.move_effect[move]) == EffectId.FANG_PARALYZE_FLINCH
+        if fang and damage > 0 and hp[target] > 0 and int(outcome.fang_flinch[side]):
+            flinched[1 - side] = True
     return events
 
 
@@ -316,6 +320,37 @@ def test_a_confusion_self_hit_is_inferred(tables, names, tmp_path):
     assert [int(c) for c in turns[1].outcome.confusion_hit] == [0, 0]
     rolls = [r for _, r in turns[0].roll_candidates[(1, 0)]]
     assert 6 in rolls and int(turns[0].outcome.roll[1, 0]) == min(rolls)
+
+
+THUNDER_FANG = 1  # Monferno's slot 1 in the fang party (Leer replaced)
+CRANIDOS = 2  # Roark's party slot
+
+
+def test_a_thunder_fang_flinch_is_inferred(tables, names, tmp_path):
+    # Monferno (faster) bites Cranidos: the flinch shows only as Cranidos's missing move,
+    # so the converter tries both fang_flinch values (tools/trace_to_state.py variants).
+    text = PARTY.read_text(encoding="utf-8").replace(
+        '"Scratch", "Leer",', '"Scratch", "Thunder Fang",', 1
+    )
+    party = tmp_path / "fang_party.toml"
+    party.write_text(text, encoding="utf-8")
+    script = [
+        ((THUNDER_FANG, 0), _outcome(p_roll=5)._replace(fang_flinch=jnp.asarray([1, 0], jnp.int8))),
+        ((THUNDER_FANG, 0), _outcome(p_roll=7, o_roll=2)),
+    ]
+    records, states = _engine_trace(tables, names, script, (0, CRANIDOS), party)
+    moved = [(r["turn"], r["attacker"]) for r in records if r["kind"] == "move_end"]
+    assert moved == [(0, 0), (1, 0), (1, 1)]
+    turns = convert(_bundle(tmp_path, names, records, party), tables, names)
+    assert len(turns) == len(states)
+    for i, (turn, expected) in enumerate(zip(turns, states)):
+        for name in BattleState._fields:
+            assert np.array_equal(getattr(turn.state, name), getattr(expected, name)), (
+                f"turn {i} field {name}"
+            )
+        assert turn.mismatched == ()
+    assert [int(f) for f in turns[0].outcome.fang_flinch] == [1, 0]
+    assert [int(f) for f in turns[1].outcome.fang_flinch] == [0, 0]
 
 
 def _lua_table(name: str, path: Path = LUA) -> dict[str, int]:

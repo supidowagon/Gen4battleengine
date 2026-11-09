@@ -160,6 +160,28 @@ def test_type_multiplier_never_rounds_to_zero(tables):
     assert table(tables, s, move) == [1] * 16
 
 
+def test_type_rows_lift_to_one_in_chart_order(tables):
+    # Base 2 (L1, SpA 1 vs SpD 999, a 20-power special Ground move: 0 + 2), rolls 1-2.
+    # Into Grass/Poison:
+    # the Grass row (x0.5, battle_lib.c type chart :2457) comes before the Poison row (x2,
+    # :2458), each through BattleSystem_Divide(damage * mul, 10) (ApplyTypeMultiplier,
+    # :7547), which lifts a non-zero result that truncates to 0 up to 1 (:3599-3618):
+    # 1 -> 1 -> 2 and 2 -> 1 -> 2. @smogon/calc's floor-then-max(1) gives 1 at the low rolls
+    # (docs/discrepancies.md, entry 10).
+    s, move = synthetic_state(
+        tables,
+        atk_level=1,
+        atk_stats=[1, 1, 1, 1, 1],
+        def_stats=[1, 1, 1, 999, 1],
+        move_power=20,
+        move_physical=False,
+        atk_types=("Normal", "Normal"),
+        def_types=("Grass", "Poison"),
+        move_type="Ground",
+    )
+    assert table(tables, s, move) == [2] * 16
+
+
 def test_stat_stages(tables):
     s, move = physical(tables)
     assert table(tables, s.with_stages(0, atk=1), move) == rolls(191)  # Atk 450: 189 + 2

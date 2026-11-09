@@ -122,8 +122,8 @@ The engine gives it 100.
   - Else sets `VOLATILE_CONDITION_FLINCH`.
 - The contact-ability trigger (`TriggerAbilityOnHit`) runs after the secondary (bcp:3514-3524).
   Static / Flame Body / Cute Charm on the defender then roll (§4, lib.c:4214, :4321, :4339).
-- Engine mapping: a new `EffectId.FANG` (params `(Status, 0, 0)`). It also covers vanilla 274
-  Fire Fang (burn) and 276 Ice Fang (freeze), whose scripts are the same shape (check before relying
+- Engine mapping: a new `EffectId.FANG` (params `(Status, 0, 0)`). It also covers vanilla 273
+  Fire Fang (burn) and 274 Ice Fang (freeze), whose scripts are the same shape (check before relying
   on this). `effects.py` reuses `_inflict` (non-direct) for the first roll and `_flinch` for the
   second. `_flinch`'s `h.proc` would then read the new field.
 
@@ -921,8 +921,8 @@ Nature Power vs Gible Thunder Fang at the speed tie is exactly at the cap only w
 5. Nature Power with an already-fainted foe: the `NO_TARGET` path and the `moveHit` write (§8a).
 6. Terrain: whether Kaizo changed matrix/land_data members, and whether "mixed" trainers exist on
    the user's route (§9).
-7. The Fang family (274/276) having the same script shape as 275 (§1a). Settle: read
-   effect_script_0274/0276.s before mapping them.
+7. The Fang family (273 Fire Fang, 274 Ice Fang) having the same script shape as 275
+   Thunder Fang (§1a). Settle: read effect_script_0273/0274.s before mapping them.
 8. Convention: `% n` treated as uniform. The exact u16 weights are given for Quick Claw (13108/65536),
    Roar (10923/10922) and Tri Attack (21846/21845/21845). Decide once project-wide.
 

@@ -381,6 +381,10 @@ class _Turn:
                 fixed.append(("secondary", per_hit, 1))  # applies on every hit
             else:
                 options.append(("secondary", per_hit, [0, 1]))
+            if effect == EffectId.FANG_PARALYZE_FLINCH:
+                # Thunder Fang's second roll (Outcome.fang_flinch): a flinch shows only as the
+                # target's missing move.
+                options.append(("fang_flinch", (side,), [0, 1]))
             target = 1 - side
             defender = int(state.ability[target, state.active[target]])
             if defender in (AbilityId.STATIC, AbilityId.POISON_POINT):

@@ -111,10 +111,9 @@ def _learnsets() -> dict[int, list[tuple[int, int]]]:
 
 # The fixture and effect-test moves, given to every species so the infliction,
 # trapping, flinch, multi-hit (2-5 and fixed two), stat-stage, Recover, Fake Out, Curse,
-# screen (Reflect, Light Screen, broken by Brick Break), Toxic and mid-turn accuracy
-# (Sand-Attack, Double Team) branches run in the differential test (no M1 species is
-# Ghost-type: Curse is the non-Ghost one). Thunder Fang comes from Shinx's learnset: adding
-# it here reshuffles tests/test_damage_oracle.py's seeded sample.
+# screen (Reflect, Light Screen, broken by Brick Break), Toxic, mid-turn accuracy
+# (Sand-Attack, Double Team) and Thunder Fang (paralysis then flinch) branches run in the
+# differential test (no M1 species is Ghost-type: Curse is the non-Ghost one).
 SHARED_MOVES = (
     "Stealth Rock",
     "Taunt",
@@ -154,6 +153,7 @@ SHARED_MOVES = (
     "Toxic",
     "Sand-Attack",
     "Double Team",
+    "Thunder Fang",
 )
 
 
