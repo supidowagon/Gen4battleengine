@@ -45,7 +45,9 @@ from nuzline.data.game_constants import CONSTANTS
 from nuzline.engine.enumerate import (
     _LAWS,
     INPUT_NEUTRAL_EFFECTS,
+    NEVER,
     NON_TABLE_DAMAGE_EFFECTS,
+    ReadPlan,
     enumerate_drawn,
     enumerate_outcomes,
 )
@@ -565,6 +567,18 @@ def test_the_foes_status_checks_are_still_read(tables, names):
     assert np.asarray(drawn.confusion_hit)[:, 1].any()
     assert np.asarray(drawn.full_para)[:, 1].any()
     assert np.asarray(drawn.roll)[:, 1, 0].any()  # the confusion self-hit's roll
+
+
+def test_restrict_needs_the_path_it_restricts():
+    # ReadPlan.restrict depends on builder order: a missing path raises unless optional.
+    plan = ReadPlan([("crit", (1, 0)), ("roll", (1, 0))])
+    with pytest.raises(ValueError, match="no 'move' read path"):
+        plan.restrict(("crit", (1, 0)), "move", NEVER)
+    plan.restrict(("roll", (1, 0)), "move", NEVER, required=False)  # no path: nothing
+    plan.restrict(("hit", (1, 0)), "move", NEVER)  # not relevant: ignored
+    plan.path(("crit", (1, 0)), "move")
+    plan.restrict(("crit", (1, 0)), "move", NEVER)
+    assert not plan.drawn(("crit", (1, 0)), {}, 1).any()
 
 
 def test_damage_classes_classify_protect():

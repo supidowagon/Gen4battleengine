@@ -452,6 +452,44 @@ def test_protect_rolls_are_inferred(tables, names, tmp_path):
     assert [int(t.outcome.protect[0]) for t in turns[:3]] == [1, 0, 1]
 
 
+def test_protect_roll_ignores_stale_move_end_records(tables, names, tmp_path):
+    # tools/trace_battle.lua writes a move_end at every MOVE_END with the context's attacker
+    # and moveCur, which a switch or bag item leaves stale. A stale record of the Protect
+    # user's side but another move (here before Protect's own) must not decide the roll; a
+    # stale one naming Protect with the other flag makes the match ambiguous: it raises.
+    text = PARTY.read_text(encoding="utf-8").replace(
+        '"Scratch", "Leer",', '"Scratch", "Protect",', 1
+    )
+    party = tmp_path / "protect_party.toml"
+    party.write_text(text, encoding="utf-8")
+    protect = names.move("Protect")
+    script = [
+        ((LEER, ROCK_THROW), _outcome(o_roll=3)._replace(protect=jnp.asarray([1, 1], jnp.int8))),
+        ((LEER, ROCK_THROW), _outcome(o_roll=3)._replace(protect=jnp.asarray([0, 1], jnp.int8))),
+    ]
+    records, states = _engine_trace(tables, names, script, (0, 0), party)
+
+    def with_stale(move, flags):
+        out = copy.deepcopy(records)
+        own = next(
+            i
+            for i, r in enumerate(out)
+            if r["kind"] == "move_end" and r["turn"] == 1 and r["attacker"] == 0
+        )
+        assert out[own]["flags"] & MOVE_STATUS_FAILED  # the failed 1/2 roll
+        stale = {"kind": "move_end", "turn": 1, "attacker": 0, "move": move, "flags": flags}
+        return out[:own] + [stale] + out[own:]
+
+    scratch = names.move("Scratch")
+    turns = convert(_bundle(tmp_path, names, with_stale(scratch, 0), party), tables, names)
+    assert [int(t.outcome.protect[0]) for t in turns[:2]] == [1, 0]
+    for turn, expected in zip(turns, states):
+        assert np.array_equal(np.asarray(turn.state.hp), np.asarray(expected.hp))
+        assert turn.mismatched == ()
+    with pytest.raises(TraceMismatch, match="disagree on MOVE_STATUS_FAILED"):
+        convert(_bundle(tmp_path, names, with_stale(protect, 0), party), tables, names)
+
+
 def _lua_table(name: str, path: Path = LUA) -> dict[str, int]:
     """The integer fields of the ``local NAME = { ... }`` table in trace_battle.lua (or the
     Lua script at ``path``)."""

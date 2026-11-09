@@ -1042,11 +1042,25 @@ class ReadPlan:
         if elem in self:
             self._paths[elem].setdefault(name, []).extend(c for c in conditions if c is not None)
 
-    def restrict(self, elem: Elem, name: str, *conditions: Condition) -> None:
-        """AND ``conditions`` into read path ``name`` of ``elem`` when that path is
-        declared; nothing otherwise (``elem`` is not read that way)."""
-        if elem in self and name in self._paths[elem]:
-            self._paths[elem][name].extend(c for c in conditions if c is not None)
+    def restrict(
+        self, elem: Elem, name: str, *conditions: Condition, required: bool = True
+    ) -> None:
+        """AND ``conditions`` into read path ``name`` of ``elem`` (ignored if ``elem`` is
+        not relevant).
+
+        It depends on builder order: it changes only the path as declared when it is called,
+        so the builder that declares the path must run first (``register_reads`` order), and a
+        builder registered later that adds another path to ``elem`` must apply the
+        restriction itself. With ``required`` (the default) a missing path raises instead of
+        letting the read escape; ``required=False`` is for an element that may be read only
+        through other paths (then it is not read through ``name`` at all)."""
+        if elem not in self:
+            return
+        if name not in self._paths[elem]:
+            if required:
+                raise ValueError(f"{elem} has no {name!r} read path to restrict")
+            return
+        self._paths[elem][name].extend(c for c in conditions if c is not None)
 
     def deps(self, elem: Elem) -> set[Elem]:
         conds = [*self._gates[elem], *(c for p in self._paths[elem].values() for c in p)]
@@ -1273,6 +1287,9 @@ def _protect_reads(laws: OutcomeLaws, branch: Branch, plan: ReadPlan) -> None:
     # The accuracy roll is read for the move alone (step._use_move: the hit and the
     # "missed" event), so this is its only path.
     plan.path(("hit", (q, 0)), "move", cond)
+    # _move_reads (registered first) declares a "move" path for each of these (restrict
+    # raises otherwise), except roll[q, 0] when the move has no crit: then it is read only by
+    # a confusion self-hit, which comes before the Protect matters.
     for i in range(MAX_HITS):
         for e in (
             ("crit", (q, i)),
@@ -1280,7 +1297,8 @@ def _protect_reads(laws: OutcomeLaws, branch: Branch, plan: ReadPlan) -> None:
             ("secondary", (q, i)),
             ("contact_proc", (first, i)),
         ):
-            plan.restrict(e, "move", cond)
+            optional = e == ("roll", (q, 0)) and ("crit", (q, 0)) not in plan
+            plan.restrict(e, "move", cond, required=not optional)
     for name in ("n_hits", "duration", "magnitude", "fang_flinch", "present"):
         plan.restrict((name, (q,)), "move", cond)
 

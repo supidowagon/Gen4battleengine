@@ -309,6 +309,32 @@ class _Turn:
                 err.candidates,
             ) from None
 
+    def _protect_roll(self, o: dict, side: int, action: int) -> None:
+        """``o["protect"][side]`` for a Protect / Detect action: BtlCmd_TryProtection
+        (battle_script.c:5167-5186) sets MOVE_STATUS_FAILED on a failure, which the move's
+        ``move_end`` record keeps; a success does not (1 replays it; a chain of 0 or a user
+        acting last ignores the roll). tools/trace_battle.lua writes a ``move_end`` at every
+        MOVE_END with the context's ``attacker`` and ``moveCur``, which a switch or a bag item
+        leaves stale, so only records naming this side and this move count. A side that never
+        reached the move (flinched, fully paralyzed) has none: the roll stays unread. Several
+        that disagree on the flag raise."""
+        move = int(selected_move(self.tables, self.state, side, action)[0])
+        if int(self.tables.move_effect[move]) != EffectId.PROTECT:
+            return
+        ends = [
+            e
+            for e in self.events
+            if e["kind"] == "move_end" and e["attacker"] == side and e.get("move") == move
+        ]
+        failed = {bool(e["flags"] & MOVE_STATUS_FAILED) for e in ends}
+        if len(failed) > 1:
+            raise self.fail(
+                f"side {side}'s Protect matches {len(ends)} move_end records that disagree on "
+                "MOVE_STATUS_FAILED"
+            )
+        if failed:
+            o["protect"][side] = 0 if failed.pop() else 1
+
     def damage_outcome(self, actions: list[list[int]]) -> dict[str, np.ndarray]:
         """``empty_outcome`` with the hits, crits and rolls of the trace's records."""
         o = {name: np.asarray(v).copy() for name, v in empty_outcome()._asdict().items()}
@@ -334,15 +360,8 @@ class _Turn:
                 raise self.fail(f"side {side} has move records but used no PP")
             if missed:
                 o["hit"][side] = 0
-            ends = [e for e in self.events if e["kind"] == "move_end" and e["attacker"] == side]
-            if known_move and ends:
-                chosen = int(selected_move(self.tables, self.state, side, actions[side][0])[0])
-                if int(self.tables.move_effect[chosen]) == EffectId.PROTECT:
-                    # BtlCmd_TryProtection (battle_script.c:5167-5186): a failure sets
-                    # MOVE_STATUS_FAILED, which the move_end record keeps; a success does
-                    # not. Outcome.protect = 1 replays the success (a chain of 0 or a user
-                    # acting last ignores the roll).
-                    o["protect"][side] = 0 if ends[0]["flags"] & MOVE_STATUS_FAILED else 1
+            if known_move:
+                self._protect_roll(o, side, actions[side][0])
             if hits:
                 move = int(selected_move(self.tables, self.state, side, actions[side][0])[0])
                 o["n_hits"][side] = min(max(len(hits), 2), MAX_HITS)
