@@ -509,7 +509,7 @@ def _use_move(
     # is the roll's class (outcome.py): it hits when 0 < class <= threshold (:2976).
     roll = outcome.hit[side, 0].astype(_I32)
     threshold = live_hit_threshold(tables, state, side, move)
-    hit = never_misses | ((roll != 0) & (roll <= threshold))
+    hit = never_misses | ((roll > 0) & (roll <= threshold))
     connected = can_act & has_target & hit & ~failed
     # subscript_no_target.s and subscript_missed.s unlock the attacker (a Rollout that
     # missed; a first use never locked, so this is then a no-op).

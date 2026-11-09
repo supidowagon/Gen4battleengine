@@ -13,6 +13,7 @@ from fractions import Fraction
 import jax
 import jax.numpy as jnp
 import numpy as np
+import pytest
 from hypothesis import HealthCheck, assume, given, settings
 from hypothesis import strategies as st
 
@@ -22,7 +23,7 @@ from nuzline.engine.enumerate import (
     hit_class_law,
     outcome_laws,
 )
-from nuzline.engine.ids import ItemId, Stat
+from nuzline.engine.ids import AbilityId, EffectId, ItemId, Stat
 from nuzline.engine.outcome import (
     Outcome,
     empty_outcome,
@@ -33,6 +34,7 @@ from nuzline.engine.outcome import (
 from nuzline.engine.step import step
 from tests.engine.helpers import A, assert_matches_reference, roark_state
 from tests.strategies import legal_action_pair, outcome_law_state
+from tools.effect_map import DECOMP_EFFECT_TO_ID
 
 CHUNK = 1024
 HYPOTHESIS = {
@@ -290,3 +292,105 @@ def test_accuracy_classes_equal_raw_rolls(tables, names, data):
     raw, grid = rows(list(range(1, 101)), list(range(1, 101)))
     got = merged(state_keys(stepped(tables, s, acts, raw)), [Fraction(1, 10_000)] * len(grid))
     assert got == want
+
+
+# (move the faster opponent uses, which side's stage, its value, White Herb, Simple)
+FIXED_CASES = [
+    *(
+        ("Sand-Attack", 0, stage, herb, simple)
+        for stage in (-6, -2, 0, 3)
+        for herb, simple in ((False, False), (True, False), (True, True))
+    ),
+    *(("Double Team", 1, stage, True, False) for stage in (-3, 0, 6)),
+]
+
+
+@pytest.mark.parametrize(("move", "holder", "stage", "herb", "simple"), FIXED_CASES)
+def test_accuracy_classes_equal_raw_rolls_fixed(tables, names, move, holder, stage, herb, simple):
+    """Hand-written cases of ``test_accuracy_classes_equal_raw_rolls``: the faster
+    opponent's Sand-Attack (on the player's accuracy stage) or Double Team (on its own
+    evasion stage), from several starting stages, with a White Herb and Simple on the
+    Pokemon whose stage changes; the player's Scratch then checks accuracy."""
+    s = roark_state(tables, names, opp_moves=[move], opp_faster=True)
+    s = s.with_stages(0, acc=stage) if holder == 0 else s.with_stages(1, eva=stage)
+    mon = int(s.active[holder])
+    if herb:
+        white_herb = int(np.flatnonzero(np.asarray(tables.item_effect) == ItemId.WHITE_HERB)[0])
+        s = s._replace(item=s.item.at[holder, mon].set(white_herb))
+    if simple:
+        s = s._replace(ability=s.ability.at[holder, mon].set(AbilityId.SIMPLE))
+    acts = A("Scratch", move, s, names)
+    law = hit_law(tables, s, acts, 0)
+
+    def rows(values):
+        base = empty_outcome()
+        return Outcome(
+            *(np.repeat(np.asarray(f)[None], len(values), axis=0) for f in base)
+        )._replace(hit=np.repeat(np.asarray(base.hit)[None], len(values), axis=0).copy())
+
+    classes, raw = rows(list(law)), rows(list(range(1, 101)))
+    classes.hit[:, 0, 0] = list(law)
+    raw.hit[:, 0, 0] = range(1, 101)
+    want = merged(
+        state_keys(stepped(tables, s, acts, classes)), [Fraction(w, 100) for w in law.values()]
+    )
+    got = merged(state_keys(stepped(tables, s, acts, raw)), [Fraction(1, 100)] * 100)
+    assert got == want
+    for value in [*law, 0]:
+        o = empty_outcome()._replace(hit=empty_outcome().hit.at[0, 0].set(value))
+        assert_matches_reference(tables, s, acts, o)
+
+
+# Every EffectId when hit_thresholds was written, classified. A new one fails
+# test_every_accuracy_or_evasion_writer_is_seen_by_hit_thresholds until it is added to
+# one of these (and, if it writes Stat.ACC / Stat.EVA, to outcome.hit_thresholds).
+_STAT_KINDS = frozenset(
+    {
+        EffectId.STAT_SELF,
+        EffectId.STAT_FOE,
+        EffectId.SECONDARY_STAT_SELF,
+        EffectId.SECONDARY_STAT_FOE,
+    }
+)
+# Effects that write no accuracy or evasion stage (effects.py; hooks.py's White Herb and
+# Intimidate are an item and an ability): RAISE_ALL_STATS_HIT raises Atk, Def, Spe, SpA,
+# SpD (subscript_boost_all_stats.s), CURSE changes Spe, Atk, Def (subscript_curse_normal.s),
+# the rest change no stage.
+_NO_ACC_EVA_WRITE = frozenset(EffectId(i) for i in range(40)) - _STAT_KINDS
+# (effect, stat) pairs hit_thresholds follows: they change a later foe move's threshold.
+_SEEN = {
+    (EffectId.STAT_FOE, Stat.ACC),
+    (EffectId.SECONDARY_STAT_FOE, Stat.ACC),
+    (EffectId.STAT_SELF, Stat.EVA),
+    (EffectId.SECONDARY_STAT_SELF, Stat.EVA),
+}
+# Pairs that cannot: the user's own accuracy and the foe's evasion only feed the user's
+# own move, which has already run (Sweet Scent lowers the foe's evasion).
+_IRRELEVANT = {
+    (EffectId.STAT_SELF, Stat.ACC),
+    (EffectId.SECONDARY_STAT_SELF, Stat.ACC),
+    (EffectId.STAT_FOE, Stat.EVA),
+    (EffectId.SECONDARY_STAT_FOE, Stat.EVA),
+}
+
+
+def test_every_accuracy_or_evasion_writer_is_seen_by_hit_thresholds(tables):
+    """``outcome.hit_thresholds`` follows the stat effects on ``Stat.ACC`` / ``Stat.EVA``
+    (``move_param[m, 0]``). An effect added later that writes them (Minimize, Haze, Psych
+    Up, ...) fails here until it is classified and, if it can, followed there."""
+    assert set(EffectId) == _NO_ACC_EVA_WRITE | _STAT_KINDS, (
+        "a new EffectId: say whether it writes Stat.ACC / Stat.EVA (outcome.hit_thresholds)"
+    )
+    pairs = {
+        (effect, params[0])
+        for effect, params in DECOMP_EFFECT_TO_ID.values()
+        if effect in _STAT_KINDS and params[0] in (Stat.ACC, Stat.EVA)
+    }
+    effect, param = np.asarray(tables.move_effect), np.asarray(tables.move_param)
+    for move in range(len(effect)):
+        e, stat = EffectId(int(effect[move])), int(param[move, 0])
+        if e in _STAT_KINDS and stat in (Stat.ACC, Stat.EVA):
+            pairs.add((e, stat))
+    assert pairs, "no accuracy / evasion stat effect found"
+    assert pairs <= _SEEN | _IRRELEVANT, pairs - _SEEN - _IRRELEVANT
+    assert (EffectId.STAT_FOE, Stat.ACC) in pairs and (EffectId.STAT_SELF, Stat.EVA) in pairs

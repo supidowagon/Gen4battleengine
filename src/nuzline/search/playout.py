@@ -166,6 +166,7 @@ def death_cost(state: BattleState, slot) -> jnp.ndarray:
 
 def _pair_value(tables: Tables, state: BattleState, a, b) -> jnp.ndarray:
     actions = jnp.stack([a, b]).astype(_I32)
+    # A policy heuristic, not an exact law: the turn-start threshold on purpose.
     hit = jnp.clip(hit_threshold(tables, state, actions), 0, 100).astype(_F32) / 100
     ko_player, removed = _move_odds(tables, state, 0, actions, hit[0])
     ko_opp, _ = _move_odds(tables, state, 1, actions, hit[1])
