@@ -406,6 +406,7 @@ def any_outcome() -> st.SearchStrategy[Outcome]:
         magnitude=_ints(4, 10, sides),
         shed_skin=_flag(sides),
         fang_flinch=_flag(sides),
+        present=_ints(0, 3, sides),
     )
 
 
@@ -414,8 +415,8 @@ def any_outcome() -> st.SearchStrategy[Outcome]:
 # (Supersonic, Confuse Ray), secondary paralysis / freeze / burn with a thawing move
 # (Spark, Ice Beam, Flame Wheel), flinch (Headbutt; Thunder Fang, paralysis then flinch), a
 # Speed drop (Bubble), a Speed boost (Rock Polish), a high-crit move (Razor Leaf), a 95 %
-# plain move (Tackle) and accuracy / evasion changes before the foe's check (Sand-Attack,
-# Double Team, Mud-Slap).
+# plain move (Tackle), accuracy / evasion changes before the foe's check (Sand-Attack,
+# Double Team, Mud-Slap) and Present (drawn power or heal).
 LAW_MOVES = (
     "Spore",
     "Hypnosis",
@@ -440,6 +441,7 @@ LAW_MOVES = (
     "Double Team",
     "Mud-Slap",
     "Thunder Fang",
+    "Present",
 )
 # Abilities the outcome relevance reads (contact procs, Steadfast, Simple's and Swift
 # Swim's Speed) or the hit odds read (Compoundeyes, Sand Veil, Snow Cloak), and Rough Skin

@@ -39,6 +39,16 @@ many are real). Decomp sources:
   silent, no type immunity), then a second ``CheckEffectActivation``
   (``outcome.fang_flinch``) then ``subscript_flinch_mon.s`` as for ``FLINCH`` (no Inner Focus
   message: not Fake Out, not direct). Both run before the contact ability (``_fang``).
+* Present (``PRESENT``): ``effect_script_0122.s`` runs ``BtlCmd_Present`` (battle_script.c:
+  5789-5806, ``outcome.present``) before ``TryMove``. Power 40/80/120: ``CalcCrit``,
+  ``CalcDamage`` and a plain Normal hit at that power (``damage.PRESENT_POWER``; the type
+  chart runs, a Ghost is immune). The heal (``PRESENT_HEAL``) jumps past both (no crit, no
+  roll, damage 0) and sets the direct ``ON_HIT`` effect ``PRESENT_HEAL`` with
+  ``SYSCTL_IGNORE_IMMUNITIES`` (``CheckTypeChart`` skips the chart, bcp.c:2355: a Ghost is
+  healed): on a hit (battle_lib.c:1485-1490) ``subscript_present_heal.s`` (Heal Block is
+  unsupported) runs ``subscript_recover_hp.s`` on the target with
+  ``BattleSystem_Divide(maxHP, 4)``: "HP is full!" at full HP, else the capped HP update
+  (``_present``).
 * Recover (``RECOVER``): ``effect_script_0032.s`` -> ``subscript_recover_half_max_hp.s``:
   ``DivideVarByValue(maxHP, 2)`` (``BattleSystem_Divide``, at least 1), then
   ``subscript_recover_hp.s``: "HP is full!" at full HP (:6), else the HP update, capped at
@@ -177,7 +187,14 @@ from typing import NamedTuple
 import jax.numpy as jnp
 
 from nuzline.data.tables import Tables
-from nuzline.engine.damage import STATUS, damage_for_roll, divide, effectiveness, move_type_of
+from nuzline.engine.damage import (
+    PRESENT_HEAL,
+    STATUS,
+    damage_for_roll,
+    divide,
+    effectiveness,
+    move_type_of,
+)
 from nuzline.engine.ids import (
     MOVE_FAKE_OUT,
     MOVE_STRUGGLE,
@@ -386,6 +403,17 @@ def _recover(tables, state, h: _Hit) -> BattleState:
     cond = (h.effect == _E.RECOVER) & h.landed & (hp != max_hp)
     healed = jnp.minimum(hp + jnp.maximum(max_hp // 2, 1), max_hp)
     return _set(state, "hp", (h.side, h.user), healed, cond)
+
+
+def _present(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    """Present's heal path: the target regains ``Divide(maxHP, 4)``, capped, unless it is at
+    full HP (module docstring). ``landed``, not ``effective``: immunities are ignored."""
+    hp = state.hp[h.target_side, h.target].astype(_I32)
+    max_hp = state.max_hp[h.target_side, h.target].astype(_I32)
+    heal = (h.effect == _E.PRESENT) & (outcome.present[h.side] == PRESENT_HEAL)
+    cond = heal & h.landed & (hp != max_hp)
+    healed = jnp.minimum(hp + jnp.maximum(max_hp // 4, 1), max_hp)
+    return _set(state, "hp", (h.target_side, h.target), healed, cond)
 
 
 # subscript_boost_all_stats.s and subscript_curse_normal.s, in script order.
@@ -882,6 +910,7 @@ def play_hit(
         outcome.roll[side, hit_index],
         power_mul,
         outcome.magnitude[side].astype(_I32),
+        outcome.present[side].astype(_I32),
     )
     target_hp = state.hp[target_side, target].astype(_I32)
     # Bide is a RANGE_USER move whose unleash hits the foe (bcp.c:2702-2713).
@@ -983,6 +1012,7 @@ def play_hit(
         _status_foe,
         _secondary_status,
         _fang,
+        _present,
         _stealth_rock,
         _trap,
         _taunt,

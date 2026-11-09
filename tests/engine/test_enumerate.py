@@ -387,6 +387,8 @@ def decomp_law(tables, state, actions, name: str, index: tuple) -> dict[int, Fra
         return coin(Fraction(int(tables.move_effect_chance[move]), 100))
     if name == "contact_proc":
         return coin(Fraction(3, 10))
+    if name == "present":  # BtlCmd_Present (battle_script.c:5793-5803): RandNext() & 0xFF
+        return {k: Fraction(w, 256) for k, w in enumerate((102, 76, 26, 52))}
     if name == "n_hits":
         return {2: Fraction(3, 8), 3: Fraction(3, 8), 4: Fraction(1, 8), 5: Fraction(1, 8)}
     if name == "duration":
@@ -578,7 +580,7 @@ def assert_equals_bruteforce(tables, state, actions) -> tuple[int, int]:
 # Bite, Fake Out, Thunder Fang's paralysis-then-flinch), status inflicted directly or as a
 # secondary (Thunder Wave, Spore, Spark, Ice Beam, Ember, Flame Wheel), confusion
 # (Confusion, Psybeam, Supersonic, Confuse Ray), a duration (Bind, Taunt), plain and
-# multi-hit damage and an accuracy drop.
+# multi-hit damage, an accuracy drop and Present (a drawn power or a heal of the foe).
 ORDER_MOVES = (
     "Headbutt",
     "Zen Headbutt",
@@ -599,6 +601,7 @@ ORDER_MOVES = (
     "Tackle",
     "Fury Swipes",
     "Sand-Attack",
+    "Present",
 )
 # Drawn twice as often.
 FLINCH_MOVES = ("Headbutt", "Zen Headbutt", "Bite", "Fake Out", "Thunder Fang")
@@ -770,7 +773,7 @@ def test_read_builders_registered():
     import nuzline.search.stage_b  # noqa: F401
     from nuzline.engine.enumerate import _READ_BUILDERS
 
-    assert [b.__name__ for b in _READ_BUILDERS] == ["_move_reads"]
+    assert [b.__name__ for b in _READ_BUILDERS] == ["_move_reads", "_present_reads"]
 
 
 def _venonat_vs_cranidos(tables, names, **kw):

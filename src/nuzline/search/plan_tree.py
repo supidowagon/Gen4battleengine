@@ -116,6 +116,9 @@ def _side_text(f: dict, names: Names, side: int, who: str, trainer: str) -> str:
         details.append(f"hit {hits} times")
     if np.any(f["crit"].reshape(2, -1)[side]):
         details.append("crit")
+    heal = int(f["present_heal"][side])  # Present's heal path (engine.observe)
+    if heal:
+        details.append("the foe regained health" if heal == 1 else "the foe's HP is full")
     if kind == ACT_MOVE:
         head = f"{who} used {names.move_names[act]}"
     elif kind == ACT_TAUNTED:

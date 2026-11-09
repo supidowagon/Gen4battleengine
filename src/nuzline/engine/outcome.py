@@ -5,7 +5,8 @@
 lists. Per-hit fields are ``[side, hit_index]`` with up to 5 hits; per-action
 fields are ``[side]``. ``secondary`` is indexed by the attacking side (its own
 move's secondary effect; Thunder Fang's paralysis roll); ``fang_flinch`` by the
-attacking side too (Thunder Fang's second roll, its flinch); ``contact_proc`` by the
+attacking side too (Thunder Fang's second roll, its flinch), and ``present`` (Present's
+power or heal); ``contact_proc`` by the
 defending side (its contact ability); ``duration`` by the acting (inflicting) side, and it
 is the counter value the decomp's ``Random`` command stores for that side's move
 (``sample_outcome``).
@@ -38,7 +39,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from nuzline.data.tables import Tables
-from nuzline.engine.damage import weather_suppressed
+from nuzline.engine.damage import PRESENT_HEAL, weather_suppressed
 from nuzline.engine.ids import AbilityId, EffectId, ItemId, Stat, Weather
 from nuzline.engine.order import MOVE_ACTIONS, action_order, is_item, is_switch, selected_move
 from nuzline.engine.state import STAGE_MAX, STAGE_MIN, BattleState
@@ -73,6 +74,7 @@ class Outcome(NamedTuple):
     magnitude: jnp.ndarray  # int8[2], Magnitude's level 4-10 of each side's move
     shed_skin: jnp.ndarray  # int8[2], Shed Skin's RandNext() % 10 < 3
     fang_flinch: jnp.ndarray  # int8[2], Thunder Fang's flinch roll (secondary is its paralysis)
+    present: jnp.ndarray  # int8[2], Present: 0/1/2 = power 40/80/120, PRESENT_HEAL = the heal
 
 
 def empty_outcome() -> Outcome:
@@ -96,6 +98,7 @@ def empty_outcome() -> Outcome:
         magnitude=sides + 4,
         shed_skin=sides,
         fang_flinch=sides,
+        present=sides,
     )
 
 
@@ -321,6 +324,20 @@ def _magnitude_level(rand) -> jnp.ndarray:
     return 4 + jnp.searchsorted(jnp.array([5, 15, 35, 65, 85, 95], _I32), rand, side="right")
 
 
+# BtlCmd_Present (battle_script.c:5789-5806): rnd = RandNext() & 0xFF (:5793), then
+# rnd < 255 * 40 / 100 -> power 40, < 255 * 70 / 100 -> 80, < 255 * 80 / 100 -> 120, else
+# the heal path (:5795-5803). Integer C arithmetic: the cuts are 102, 178 and 204, so the
+# law is (102, 76, 26, 52) / 256, exact (a power-of-two mask, not a modulo).
+PRESENT_CUTS = (255 * 40 // 100, 255 * 70 // 100, 255 * 80 // 100)
+assert len(PRESENT_CUTS) == PRESENT_HEAL  # values 0-2 are powers, PRESENT_HEAL the heal
+
+
+def present_kind(rand) -> jnp.ndarray:
+    """``Outcome.present`` from ``rnd = RandNext() & 0xFF``: 0, 1, 2 (power 40, 80, 120) or
+    ``PRESENT_HEAL`` (``PRESENT_CUTS``)."""
+    return jnp.searchsorted(jnp.array(PRESENT_CUTS, _I32), rand, side="right")
+
+
 def sample_outcome(key, tables: Tables, state: BattleState, actions) -> Outcome:
     """Draw every field from its Gen 4 probability for this state and these actions."""
     actions = jnp.asarray(actions, _I32)
@@ -385,5 +402,8 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions) -> Outcome:
         # never has chance 0 (tools/build_tables.py refuses it: the decomp asserts it).
         fang_flinch=jax.random.randint(jax.random.fold_in(key, 16), per_side, 0, 100, dtype=_I32)
         < chance[:, 0],
+        present=present_kind(
+            jax.random.randint(jax.random.fold_in(key, 17), per_side, 0, 256, dtype=_I32)
+        ),
     )
     return Outcome(*(jnp.asarray(f).astype(_I8) for f in outcome))

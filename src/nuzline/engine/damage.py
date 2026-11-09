@@ -59,6 +59,13 @@ _I32 = jnp.int32
 # BtlCmd_CalcMagnitudePower (battle_script.c:5820-5852): the power of Magnitude levels 4-10.
 MAGNITUDE_POWER = jnp.array([10, 30, 50, 70, 90, 110, 150], jnp.int32)
 MAGNITUDE_MIN = 4
+# BtlCmd_Present (battle_script.c:5795-5800): movePower 40, 80 or 120 for Outcome.present 0,
+# 1, 2; PRESENT_HEAL (3) is the heal path, which runs no CalcDamage (effect_script_0122.s).
+# PRESENT_TABLE (no drawn value) keeps the table power, as BattleSystem_CalcMoveDamage does
+# with no input power (battle_lib.c:6674): the turn-start tables and the AI's own estimates.
+PRESENT_POWER = jnp.array([40, 80, 120], jnp.int32)
+PRESENT_HEAL = 3
+PRESENT_TABLE = -1
 # BtlCmd_CalcFlailPower (battle_script.c:4958-4970): sHPPixelsToFlailPower (:4941-4948) as
 # (largest pixel count of the band, power); the first row with pixels <= its bound wins.
 # The last row's bound is 64, the most App_PixelCount(cur, max, 64) can return.
@@ -225,6 +232,7 @@ def _pre_random(
     power_mul=10,
     self_hit: bool = False,
     magnitude=MAGNITUDE_MIN,
+    present=PRESENT_TABLE,
     ai: bool = False,
 ):
     """Damage after ``+ 2`` and the crit multiplier, before the random roll.
@@ -233,9 +241,10 @@ def _pre_random(
     ``self_hit`` is the confusion self-hit, ``CALC_SELF_HIT(MOVE_STRUGGLE, 40)``
     (``include/battle/common.h:35``): the attacker is its own defender, power 40, and
     no side or field conditions are passed (no screens, no weather). ``magnitude`` is
-    Magnitude's level (``Outcome.magnitude``). ``ai`` is ``TrainerAI_CalcDamage``
-    (trainer_ai.c:2868-3109), which has no Flail or Rollout case: both keep the move's
-    table power."""
+    Magnitude's level (``Outcome.magnitude``); ``present`` is Present's draw
+    (``Outcome.present``: 0-2 is the power 40/80/120, any other value keeps the table
+    power). ``ai`` is ``TrainerAI_CalcDamage`` (trainer_ai.c:2868-3109), which has no Flail,
+    Rollout or Present case: they keep the move's table power."""
     atk_side = _i32(atk_side)
     def_side = atk_side if self_hit else 1 - atk_side
     move = _i32(move)
@@ -269,6 +278,10 @@ def _pre_random(
         | ((effect == EffectId.FLAIL) & (not ai))
     )
     power = jnp.where(has_variable, variable, base_power)
+    # BtlCmd_Present (battle_script.c:5795-5800) sets movePower before CalcDamage.
+    present = _i32(present)
+    drawn = (effect == EffectId.PRESENT) & (present >= 0) & (present < PRESENT_HEAL) & (not ai)
+    power = jnp.where(drawn, PRESENT_POWER[jnp.clip(present, 0, PRESENT_HEAL - 1)], power)
     power = jnp.asarray(CONFUSION_POWER, _I32) if self_hit else power
     power = power * _i32(power_mul) // 10  # :6688 movePower * powerMul / 10
     # :6682 moveType = MOVE_DATA(move).type, or Hidden Power's IV type (battle_script.c:6028)
@@ -449,7 +462,8 @@ def damage_table(tables: Tables, state: BattleState, atk_side, move, crit) -> jn
     other side's active Pokemon for rolls 0..15 (``85 + roll`` percent). A ``LEVEL_DAMAGE``
     move has no roll: all 16 entries are ``fixed_damage``. Magnitude is taken at level 4
     (its weakest hit; the playout heuristic's documented under-estimate); Bide's unleash
-    stays 0 (it is a forced locked action, never a chosen attack)."""
+    stays 0 (it is a forced locked action, never a chosen attack). Present keeps its table
+    power (no draw: ``PRESENT_TABLE``)."""
     damage, move_type, category, power = _pre_random(tables, state, atk_side, move, crit)
     rolls = jnp.arange(ROLLS, dtype=_I32)
     table = _finish(tables, state, atk_side, move, damage, move_type, category, power, rolls)
@@ -475,16 +489,29 @@ def damage_for_roll(
     roll,
     power_mul=10,
     magnitude=MAGNITUDE_MIN,
+    present=PRESENT_TABLE,
 ) -> jnp.ndarray:
     """``int32``: ``damage_table(...)[roll]``, the single value the engine uses.
     ``power_mul`` (tenths) scales the move's power first (Pursuit on a switch: 20);
-    ``magnitude`` is Magnitude's level."""
+    ``magnitude`` is Magnitude's level; ``present`` is Present's draw, and its heal path
+    (``PRESENT_HEAL``) deals 0: effect_script_0122.s jumps past ``CalcCrit`` and
+    ``CalcDamage``."""
     damage, move_type, category, power = _pre_random(
-        tables, state, atk_side, move, crit, power_mul=power_mul, magnitude=magnitude
+        tables,
+        state,
+        atk_side,
+        move,
+        crit,
+        power_mul=power_mul,
+        magnitude=magnitude,
+        present=present,
     )
     rolled = _finish(tables, state, atk_side, move, damage, move_type, category, power, _i32(roll))
     fixed, amount = fixed_damage(tables, state, atk_side, move)
-    return jnp.where(fixed, amount, rolled)
+    heal = (_i32(tables.move_effect[_i32(move)]) == EffectId.PRESENT) & (
+        _i32(present) == PRESENT_HEAL
+    )
+    return jnp.where(heal, 0, jnp.where(fixed, amount, rolled))
 
 
 def calc_move_damage(

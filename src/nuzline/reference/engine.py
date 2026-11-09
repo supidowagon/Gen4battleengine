@@ -149,6 +149,10 @@ def _move_type(tables, s: RefState, side: int, move: int) -> int:
 
 # BtlCmd_CalcMagnitudePower (script.c:5820-5852), indexed by level - 4.
 MAGNITUDE_POWER = [10, 30, 50, 70, 90, 110, 150]
+# BtlCmd_Present (script.c:5789-5806): rnd = RandNext() & 0xFF; < 102 -> 40, < 178 -> 80,
+# < 204 -> 120 (Outcome.present 0, 1, 2), else the heal path (PRESENT_HEAL).
+PRESENT_POWER = [40, 80, 120]
+PRESENT_HEAL = 3
 # sHPPixelsToFlailPower (script.c:4941-4948): (largest pixel count, power).
 FLAIL_BANDS = [(1, 200), (5, 150), (12, 100), (21, 80), (42, 40), (64, 20)]
 
@@ -333,6 +337,7 @@ def _calc_move_damage(
     power_mul: int = 10,
     in_power: int = 0,
     magnitude: int = 4,
+    present: int = -1,
     side_conditions: bool = True,
     field_conditions: bool = True,
 ) -> int:
@@ -357,6 +362,8 @@ def _calc_move_damage(
         power = _hidden_power(atk.ivs)[1]
     elif not in_power and effect == EffectId.MAGNITUDE:  # script.c:5820
         power = MAGNITUDE_POWER[magnitude - 4]
+    elif not in_power and effect == EffectId.PRESENT and 0 <= present < PRESENT_HEAL:
+        power = PRESENT_POWER[present]  # script.c:5795-5800; no draw: the table power
     elif not in_power and effect == EffectId.FLAIL:  # script.c:4958
         power = _flail_power(atk.hp, atk.max_hp)
     elif not in_power and effect == EffectId.ROLLOUT:  # script.c:5661
@@ -510,19 +517,29 @@ def _apply_type_multiplier(damage: int, mul: int, update: bool, flags: set[str])
 
 def _move_damage(
     tables, s: RefState, attacker: int, move: int, crit: bool, roll: int, power_mul=10,
-    magnitude: int = 4,
+    magnitude: int = 4, present: int = -1,
 ):  # fmt: skip
     """One hit's damage: the move script's ``CalcDamage`` and variance, then the
     controller's type chart (``TRY_MOVE_STATE_CHECK_TYPE_CHART``, bcp.c:3272). A
     status move never calculates damage; ``CheckTypeChart`` needs base power
-    (bcp.c:2354)."""
+    (bcp.c:2354). Present's heal path jumps past ``CalcDamage`` (effect_script_0122.s)."""
     if _t(tables, "move_category", move) == STATUS_CLASS or _t(tables, "move_power", move) == 0:
+        return 0
+    if _t(tables, "move_effect", move) == EffectId.PRESENT and present == PRESENT_HEAL:
         return 0
     defender = 1 - attacker
     if _t(tables, "move_effect", move) in (EffectId.LEVEL_DAMAGE, EffectId.BIDE):
         return _fixed_damage(tables, s, attacker, move)
     damage = _calc_move_damage(
-        tables, s, attacker, defender, move, crit, power_mul=power_mul, magnitude=magnitude
+        tables,
+        s,
+        attacker,
+        defender,
+        move,
+        crit,
+        power_mul=power_mul,
+        magnitude=magnitude,
+        present=present,
     )
     damage = _variance(damage, roll)
     return _apply_type_chart(tables, s, attacker, defender, move, damage)
@@ -1011,6 +1028,14 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
         user = _active(s, side)
         if user.hp != user.max_hp:
             _gain_hp(s, side, _divide(user.max_hp, 2))
+    elif effect == EffectId.PRESENT and landed and o.present[side] == PRESENT_HEAL:
+        # effect_script_0122.s _004: a direct ON_HIT effect under SYSCTL_IGNORE_IMMUNITIES
+        # (no type chart: a Ghost is healed). subscript_present_heal.s ->
+        # subscript_recover_hp.s on the target: "HP is full!" at full HP, else
+        # Divide(maxHP, 4), capped (script.c:5802).
+        foe = _active(s, target)
+        if foe.hp != foe.max_hp:
+            _gain_hp(s, target, _divide(foe.max_hp, 4))
     elif effect == EffectId.DRAIN and effective and dealt > 0:
         # subscript_drain_half_damage_dealt.s: Divide(hitDamage * percent, 100), then
         # Big Root.
@@ -1172,6 +1197,7 @@ def _hit(turn: _Turn, s: RefState, side: int, move: int, hit: int, struggling: b
         o.crit[side][hit] != 0,
         o.roll[side][hit],
         magnitude=o.magnitude[side],
+        present=o.present[side],
     )
     dealt = stored = 0
     if landed and hits_foe:

@@ -59,7 +59,12 @@ import jax.numpy as jnp
 
 from nuzline.data.tables import Tables
 from nuzline.engine.actions import FIRST_ITEM_ACTION, locked_slot
-from nuzline.engine.damage import confusion_damage, decomp_abilities, weather_suppressed
+from nuzline.engine.damage import (
+    PRESENT_HEAL,
+    confusion_damage,
+    decomp_abilities,
+    weather_suppressed,
+)
 from nuzline.engine.effects import (
     apply_move_effect,
     big_root,
@@ -310,7 +315,10 @@ def _send_out(tables: Tables, state: BattleState, side, slot) -> BattleState:
 def _empty_events() -> dict:
     """The turn's events before any action ran: every per-side field 0."""
     side = jnp.zeros((2,), _I32)
-    events = {name: side for name in ("act_kind", "act_id", "shown", "magnitude", *EVENT_FLAGS)}
+    events = {
+        name: side
+        for name in ("act_kind", "act_id", "shown", "magnitude", "present_heal", *EVENT_FLAGS)
+    }
     events["crit"] = jnp.zeros((2, MAX_HITS), _I32)
     return events
 
@@ -515,6 +523,16 @@ def _use_move(
     # missed; a first use never locked, so this is then a no-op).
     state = _unlock(state, side, can_act & ~connected)
     n_hits = hit_count(tables, move, outcome, side)
+    # Present's heal path (effects._present): subscript_recover_hp.s prints "regained health"
+    # (1), or "HP is full!" (2) for a target at full HP; the target's HP is unchanged
+    # between here and the hit.
+    present_heal = (
+        connected
+        & (tables.move_effect[move] == EffectId.PRESENT)
+        & (outcome.present[side] == PRESENT_HEAL)
+    )
+    target_full = state.hp[target_side, target] == state.max_hp[target_side, target]
+    present_heal = jnp.where(present_heal, jnp.where(target_full, 2, 1), 0)
 
     # A loop, not unrolled: one copy of the effect code in the program, not MAX_HITS
     # (unrolled, it dominated trace and compile time). It also counts the hits that
@@ -617,6 +635,7 @@ def _use_move(
         "magnitude": jnp.where(
             dealt & (tables.move_effect[move] == EffectId.MAGNITUDE), outcome.magnitude[side], 0
         ),
+        "present_heal": present_heal,
         "crit": crits,
         "full_para": full_para,
         "flinched": flinched,

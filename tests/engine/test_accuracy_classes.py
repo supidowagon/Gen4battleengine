@@ -356,9 +356,11 @@ _STAT_KINDS = frozenset(
 # Intimidate are an item and an ability): RAISE_ALL_STATS_HIT raises Atk, Def, Spe, SpA,
 # SpD (subscript_boost_all_stats.s), CURSE changes Spe, Atk, Def (subscript_curse_normal.s),
 # the rest change no stage. FANG_PARALYZE_FLINCH (K3b2 Task 4) paralyzes and flinches
-# (subscript_paralyze_or_flinch.s): no stage.
+# (subscript_paralyze_or_flinch.s): no stage. PRESENT (Task 5) damages or heals the target
+# (effect_script_0122.s, subscript_recover_hp.s): no stage.
 _NO_ACC_EVA_WRITE = (frozenset(EffectId(i) for i in range(40)) - _STAT_KINDS) | {
-    EffectId.FANG_PARALYZE_FLINCH
+    EffectId.FANG_PARALYZE_FLINCH,
+    EffectId.PRESENT,
 }
 # (effect, stat) pairs hit_thresholds follows: they change a later foe move's threshold.
 _SEEN = {

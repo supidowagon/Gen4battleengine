@@ -40,6 +40,9 @@ Events, per side (``[side]``; 0 = player):
 * ``magnitude``: the level "Magnitude N!" showed (4-10) when the side's Magnitude hit
   and dealt damage, else 0 (``subscript_magnitude.s``: the message is a primary effect
   that an ineffective hit does not run).
+* ``present_heal``: Present's heal path ran on a hit: 1 "regained health", 2 "HP is full!"
+  (``subscript_recover_hp.s``), else 0. Its damage path's power is never printed (only the
+  HP change shows it).
 * The status checks before a move (step.py:327-377, bcp.c:2417-2728): ``asleep``
   (stays asleep), ``woke``, ``frozen`` (stays frozen), ``thawed`` (its own thaw roll or a
   thawing move), ``flinched``, ``confused`` ("is confused"), ``snapped_out``,
@@ -143,6 +146,7 @@ _LAYOUT: tuple[tuple[str, tuple[int, ...]], ...] = (
     ("act_id", _SIDE),
     ("crit", (SIDES, MAX_HITS)),
     ("magnitude", _SIDE),
+    ("present_heal", _SIDE),
     *((name, _SIDE) for name in EVENT_FLAGS),
     ("active", _SIDE),
     ("species", _SLOT),

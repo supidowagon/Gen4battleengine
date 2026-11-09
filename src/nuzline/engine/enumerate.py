@@ -66,6 +66,8 @@ of the turn:
   level with no crit or roll, ``damage.fixed_damage``) nor for ``BIDE`` (the unleash is
   ``2 * storedDamage``, also fixed). A locked side's move is its locked move
   (``order.selected_move``), so the masks above read it.
+* ``present[s]``: ``s`` uses Present (``BtlCmd_Present``). It joins ``crit[s, 0]`` and
+  ``roll[s, 0]`` in one joint factor (``_present_reads``): the heal path reads neither.
 * ``shed_skin[d]``: side ``d``'s active or incoming Pokemon has Shed Skin
   (``step._turn_end_ability``; over-approximate: it only rolls with a status and HP).
 * ``flinch_item``, ``quick_claw``: never read.
@@ -94,12 +96,13 @@ and the same damage step to the same state and observation, and are drawn as one
 classes come from the turn-start ``OutcomeLaws.damage``; ``OutcomeLaws.compress`` allows
 them only for a hit no earlier event of the turn can change the damage inputs of
 (``damage_inputs_can_change``, per order branch), of a move whose table is its damage
-(not Magnitude or Pursuit) and whose roll no confusion self-hit can read. The brute
+(not Magnitude, Present or Pursuit) and whose roll no confusion self-hit can read. The brute
 force never compresses.
 """
 
 from __future__ import annotations
 
+import itertools
 import math
 from collections.abc import Callable
 from functools import cache
@@ -121,7 +124,15 @@ from nuzline.engine.order import (
     is_switch,
     selected_move,
 )
-from nuzline.engine.outcome import MAX_HITS, Outcome, crit_odds, empty_outcome, hit_thresholds
+from nuzline.engine.outcome import (
+    MAX_HITS,
+    PRESENT_CUTS,
+    PRESENT_HEAL,
+    Outcome,
+    crit_odds,
+    empty_outcome,
+    hit_thresholds,
+)
 from nuzline.engine.state import STAGE_MAX, STAGE_MIN, BattleState
 
 _I32 = jnp.int32
@@ -162,6 +173,7 @@ class Reads(NamedTuple):
     proc_gated: jnp.ndarray  # its duration and status infliction need a secondary proc
     flinch_sure: jnp.ndarray  # moving first, a sure hit with a proc flinches the foe
     fang: jnp.ndarray  # its flinch roll is fang_flinch (Thunder Fang), not secondary
+    present: jnp.ndarray  # it uses Present: its crit and roll need a damage path (no heal)
     confused_own: jnp.ndarray  # it moves confused (counter >= 2) at the start
     confused_by_foe: jnp.ndarray  # bool[2, 2]: it moves after a foe move that confuses
     para_own: jnp.ndarray  # it moves paralyzed at the start
@@ -335,6 +347,9 @@ INPUT_NEUTRAL_EFFECTS = (
     _E.SELF_DESTRUCT,  # the foe faints: the hit has no target
     _E.FLAIL,
     _E.AQUA_RING,
+    # Hurts or heals the foe (effects._present): only the foe's HP, which the HP clause
+    # covers (Flail and the pinch abilities read it; nothing else in the damage does).
+    _E.PRESENT,
 )
 INPUT_CLAUSE_EFFECTS = (
     _E.STAT_SELF,  # the foe's Defense / Sp. Def
@@ -412,7 +427,8 @@ _STATUS_CURES = (ItemId.CHESTO_BERRY, ItemId.PECHA_BERRY, ItemId.LUM_BERRY)
 # default ``power_mul``, which equals ``damage_table`` for these; Hidden Power, Rollout and
 # Flail read their power from the state there too). Every other effect is
 # ``NON_TABLE_DAMAGE_EFFECTS``: no roll (status moves, ``LEVEL_DAMAGE``, ``BIDE``), a drawn
-# power (``MAGNITUDE``) or a power the table does not see (``PURSUIT``'s pre-switch x2).
+# power (``MAGNITUDE``, ``PRESENT``) or a power the table does not see (``PURSUIT``'s
+# pre-switch x2).
 # An allowlist: a new effect is never compressed until it is classified here
 # (``tests/engine/test_damage_classes.py`` fails while it is in neither tuple).
 TABLE_DAMAGE_EFFECTS = (
@@ -458,6 +474,7 @@ NON_TABLE_DAMAGE_EFFECTS = (
     _E.RECOVER,
     _E.CURSE,
     _E.AQUA_RING,
+    _E.PRESENT,  # its power is drawn (40/80/120, Outcome.present); the table has power 1
 )
 
 
@@ -727,6 +744,7 @@ def outcome_laws(
             magnitude=uses_move & (effect == _E.MAGNITUDE),
             shed_skin=live & _holds(state, actions, (AbilityId.SHED_SKIN,)),
             fang_flinch=m["fang_flinch"],
+            present=uses_move & (effect == _E.PRESENT),
         )
 
     both = zip(branch_relevant(branches[0]), branch_relevant(branches[1]), strict=True)
@@ -777,6 +795,7 @@ def outcome_laws(
         proc_gated=off if loose else uses_move & (chance != 0) & _any_of(effect, proc_effects),
         flinch_sure=off if loose else flinch_sure,
         fang=fang,
+        present=off if loose else uses_move & (effect == _E.PRESENT),
         confused_own=base["confused_own"],
         confused_by_foe=jnp.stack([m["confused_by_foe"] for m in branches]),
         para_own=base["para_own"],
@@ -900,6 +919,12 @@ def _shed_skin(laws: OutcomeLaws, side: int) -> _Law:
     return [0, 1], [7, 3], 10  # RandNext() % 10 < 3, battle_lib.c:3567
 
 
+def _present(laws: OutcomeLaws, side: int) -> _Law:
+    # BtlCmd_Present (battle_script.c:5793-5803): RandNext() & 0xFF against 102, 178, 204.
+    cuts = (0, *PRESENT_CUTS, 256)
+    return list(range(PRESENT_HEAL + 1)), [b - a for a, b in itertools.pairwise(cuts)], 256
+
+
 def _zero(laws: OutcomeLaws, side: int) -> _Law:
     return [0], [1], 1
 
@@ -922,6 +947,7 @@ _LAWS = {
     "magnitude": _magnitude,
     "shed_skin": _shed_skin,
     "fang_flinch": _secondary,  # the same CheckEffectActivation roll at the move's chance
+    "present": _present,
 }
 
 
@@ -1050,11 +1076,11 @@ def _move_reads(laws: OutcomeLaws, branch: Branch, plan: ReadPlan) -> None:
     """The reads of rules §10.3 items 1-3 on the implemented mechanics:
 
     * a move's own reads (its crits, rolls, secondary rolls, the foe's contact rolls on
-      its hits, its hit count, duration, Magnitude level and Thunder Fang's flinch roll)
-      need its accuracy roll to hit: every one sits behind ``play_hit``'s ``landed``
-      (``connected``, step._use_move); Pursuit's pre-switch hit reads them with no roll,
-      so it is not gated (``Reads.hit_gated``). A confusion self-hit's ``roll[s, 0]`` is
-      another path;
+      its hits, its hit count, duration, Magnitude level, Thunder Fang's flinch roll and
+      Present's draw) need its accuracy roll to hit: every one sits behind ``play_hit``'s
+      ``landed`` (``connected``, step._use_move); Pursuit's pre-switch hit reads them with
+      no roll, so it is not gated (``Reads.hit_gated``). A confusion self-hit's
+      ``roll[s, 0]`` is another path;
     * (secondary, duration): a ``SECONDARY_CONFUSE`` / ``SECONDARY_STATUS`` / ``TRAP``
       duration is read only under ``proc`` (effects._secondary_confuse, _inflict, _trap);
     * (secondary, the foe's thaw / full_para / confusion_hit and self-hit roll): a read
@@ -1100,7 +1126,7 @@ def _move_reads(laws: OutcomeLaws, branch: Branch, plan: ReadPlan) -> None:
                 plan.path(elem, "move", *hits)
             if i > 0 or bool(rel.crit[s, 0]):  # roll[s, 0]: damage, or a self-hit below
                 plan.path(("roll", (s, i)), "move", *hits)
-        for name in ("n_hits", "magnitude", "fang_flinch"):
+        for name in ("n_hits", "magnitude", "fang_flinch", "present"):
             plan.path((name, (s,)), "move", *hits)
         proc = [procs(s)] if bool(reads.proc_gated[s]) else []
         plan.path(("duration", (s,)), "move", *hits, *proc)
@@ -1153,8 +1179,32 @@ def _move_reads(laws: OutcomeLaws, branch: Branch, plan: ReadPlan) -> None:
             "confusion_hit",
             "full_para",
             "fang_flinch",
+            "present",
         ):
             plan.gate((name, (q,)), cond)
+
+
+def _not_heal(v: np.ndarray) -> np.ndarray:
+    # SKIPPED (not drawn: the move did not reach its script) is not the heal: the damage
+    # read keeps its other conditions.
+    return v != PRESENT_HEAL
+
+
+@register_reads
+def _present_reads(laws: OutcomeLaws, branch: Branch, plan: ReadPlan) -> None:
+    """The (present, crit, roll) joint factor (rules §3(b), §10.3 item 3):
+    effect_script_0122.s's heal path jumps past ``CalcCrit`` and ``CalcDamage``, so the
+    move's own read of ``crit[s, 0]`` and ``roll[s, 0]`` (its "move" path) also needs
+    ``present[s] != PRESENT_HEAL``: 3 * 32 + 1 rows instead of 4 * 32. A confusion
+    self-hit's read of ``roll[s, 0]`` is another path and stays. Present's own crit and
+    roll are never damage classes (``NON_TABLE_DAMAGE_EFFECTS``)."""
+    for s in (0, 1):
+        elem = ("present", (s,))
+        if not bool(laws.reads.present[s]) or elem not in plan:
+            continue
+        damage = Condition((elem,), _not_heal)
+        for name in ("crit", "roll"):
+            plan.path((name, (s, 0)), "move", damage)
 
 
 def damage_class_law(

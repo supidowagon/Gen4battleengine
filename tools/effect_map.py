@@ -205,6 +205,9 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     # roll (engine/effects.py ``_fang``). Fire Fang (273) and Ice Fang (274) call other
     # subscripts and stay unmapped until those are read (docs/kaizo/k3b2-rules.md §11 item 7).
     275: ("BATTLE_EFFECT_FLINCH_PARALYZE_HIT", _E.FANG_PARALYZE_FLINCH, (Status.PARALYSIS, 0, 0)),
+    # effect_script_0122.s: BtlCmd_Present (battle_script.c:5789-5806) draws the power or the
+    # heal path (engine/effects.py ``_present``, damage.PRESENT_POWER).
+    122: ("BATTLE_EFFECT_RANDOM_POWER_MAYBE_HEAL", _E.PRESENT, (0, 0, 0)),
     276: ("BATTLE_EFFECT_RAISE_SP_ATK_HIT", _E.SECONDARY_STAT_SELF, (_SPA, 1, 0)),
 }
 

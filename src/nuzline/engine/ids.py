@@ -52,6 +52,10 @@ class EffectId(IntEnum):
       ``(Status.PARALYSIS, 0, 0)``; two independent rolls at the move's chance, the
       paralysis (``Outcome.secondary``) then the flinch (``Outcome.fang_flinch``)
       (``effects._fang``).
+    * ``PRESENT`` (Present, ``BATTLE_EFFECT_RANDOM_POWER_MAYBE_HEAL``): zeros;
+      ``Outcome.present`` draws a power of 40/80/120 for the hit (``damage.PRESENT_POWER``)
+      or a heal of the target by ``maxHP / 4`` that ignores immunities and reads no crit or
+      roll (``effects._present``).
 
     The proc chance of a ``SECONDARY_*``, ``FLINCH``, ``FAKE_OUT``, ``RAISE_ALL_STATS_HIT`` or
     ``FANG_PARALYZE_FLINCH``
@@ -100,6 +104,7 @@ class EffectId(IntEnum):
     FLAIL = 38
     AQUA_RING = 39
     FANG_PARALYZE_FLINCH = 40
+    PRESENT = 41
 
 
 class AbilityId(IntEnum):

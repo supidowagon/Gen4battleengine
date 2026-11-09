@@ -348,12 +348,18 @@ def test_resist_berry_hold_effects_match_decomp():
 
 def test_ignore_type_checks_effects_match_decomp():
     """effects.IGNORES_TYPE_CHECKS (subscript_type_resist_berry.s:5 skips them) is every
-    mapped effect whose script sets SYSCTL_IGNORE_TYPE_CHECKS or SYSCTL_IGNORE_IMMUNITIES."""
+    mapped effect whose script sets SYSCTL_IGNORE_TYPE_CHECKS or SYSCTL_IGNORE_IMMUNITIES.
+    Present sets it on its heal path only (effect_script_0122.s _004), which deals no damage,
+    so no resist-berry check runs there; its damage path keeps the berry (test_present)."""
     from nuzline.engine.effects import IGNORES_TYPE_CHECKS
+
+    heal_path_only = {EffectId.PRESENT}
 
     flag = re.compile(
         r"FLAG_ON, BTLVAR_BATTLE_CTX_STATUS, .*SYSCTL_IGNORE_(TYPE_CHECKS|IMMUNITIES)"
     )
     for effect, (eid, _) in DECOMP_EFFECT_TO_ID.items():
         sets = bool(flag.search(_script(effect)))
-        assert sets == (eid in IGNORES_TYPE_CHECKS), DECOMP_EFFECT_NAMES[effect]
+        ignores = eid in IGNORES_TYPE_CHECKS or eid in heal_path_only
+        assert sets == ignores, DECOMP_EFFECT_NAMES[effect]
+        assert not (eid in heal_path_only and eid in IGNORES_TYPE_CHECKS)
