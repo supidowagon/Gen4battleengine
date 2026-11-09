@@ -99,6 +99,15 @@ still has addresses marked VERIFY (`docs/tracing.md`).
 
 ## 4. The mechanics
 
+**Status (K3b1 done, 2026-11-08).** Landed in both engines: §4.2 permanent sandstorm, field
+pass, Light Screen and Brick Break; §4.3 Toxic, Sand Tomb, Swift family, Pay Day, Gust,
+Recover, Fake Out, AncientPower, Curse, DoubleSlap, Self-Destruct, Flail, Aurora Beam; §4.4
+Solid Rock, Sand Veil, Rough Skin, Flame Body, Swift Swim, Limber, Snow Cloak, Adaptability,
+Focus Sash, Big Root, Chesto/Rindo/Berry Juice/Lum/Pecha/Chilan berries, White Herb, Lagging
+Tail, Aqua Ring; obedience (§5). Still open for K3b2: Thunder Fang, Protect, Present, Attract,
+Cute Charm, Quick Claw, Roar, Nature Power, Camouflage, terrain. Per-rule audit:
+`docs/kaizo/k3b-rule-audit.md`.
+
 ### 4.1 Rules for every new mechanic
 
 These are the existing project rules, restated because K3 roughly doubles the engine:

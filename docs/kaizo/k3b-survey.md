@@ -1,5 +1,9 @@
 # K3b planning survey (read-only research, 2026-11-08, main at 083669a)
 
+> Note: statements here are hypotheses from a read-only survey. The per-rule audit against the
+> decomp is in `docs/kaizo/k3b-rule-audit.md`; where they disagree the audit wins. User-reported
+> in-game quirks are in `docs/kaizo/user-reported-quirks.md`.
+
 Purpose: everything a plan writer needs to cut K3b into TDD tasks without re-reading the code.
 Spec: `docs/superpowers/specs/2026-11-07-kaizo-k3-design.md` §4 (mechanics), §8 (K3b = "the field
 and the mechanics"). K3a handover: `handover.md` in this folder; `overlay16.md` §2 has the obedience
@@ -349,8 +353,9 @@ Not needed: `flinch_item` (no King's Rock/Razor Fang in the pool or on Roark). F
   "sampled" (stage_b.py:31-33) instead of exactly. There is no single width: it is per (state,
   action pair). Each new field multiplies K by its support only where its relevance mask is true
   (a never-relevant field keeps its `empty_outcome` value and costs nothing).
-- Kaizo Roark today: almost every move has accuracy 100 (threshold 100 -> `hit` has one value),
-  so a typical pair is crit 2 x roll 16 x secondary 2 per side = 4096, x2 for each tie flag.
+- Kaizo Roark today: almost every move has accuracy 100, but accuracy 100 still rolls
+  (bcp.c:2976; only accuracy 0 skips it) and Sand Veil in sand makes it 80, so `hit` is not
+  single-valued where stages or Sand Veil apply. A typical pair is crit 2 x roll 16 x secondary 2 per side = 4096, x2 for each tie flag.
 - After K3b, worst cases on this fight: Skitty DoubleSlap (acc 90: hit 2, two hits of crit 2 x
   roll 16 = 2048) vs Gible Thunder Fang into Cute Charm (crit 2 x roll 16 x secondary 2 x
   secondary2 2 x contact_proc 2 = 256) = 524 288 > cap, before Quick Claw/infatuation/ties. Present
@@ -485,7 +490,7 @@ in §1.4.
 Moves: see the "Kaizo vs vanilla" columns in §1.3. Notable semantic changes: Sand Tomb is
 Whirlpool's effect 261 (bind + double vs Dive; Dive unsupported, so it is Bind with
 power_mul 10), DoubleSlap is HIT_TWICE (fixed 2 hits) not 2-5, Aurora Beam is a never-missing
-plain hit, Fake Out has +3 priority, Toxic/Present/Thunder Fang never miss. None of their
+plain hit, Fake Out has +3 priority, Swift-family moves (accuracy 0) never miss; accuracy-100 moves such as Toxic still roll (bcp.c:2976; Sand Veil in sand: 80). None of their
 `be_seq` scripts changed (changed members are only 48, 88, 104, 141, 182; data/kaizo/rom_diff.toml
 :590-622). Items: every K3b item record equals vanilla (§1.5; only King's Rock's param changed,
 10 -> 11, and it is not in play). Abilities: names identical; code unchanged.
@@ -569,10 +574,9 @@ plain hit, Fake Out has +3 priority, Toxic/Present/Thunder Fang never miss. None
   target-not-moved rules).
 - **Flail** (99): `BtlCmd_CalcFlailPower` script.c:4958-4970, `App_PixelCount(cur, max, 64)`
   (src/unk_0208C098.c:41-49: `cur*64/max`, at least 1 if cur>0), table script.c:4941-4948
-  (<=1:200, <=5:150, <=12:100, <=21:80, <=42:40, else 20). `TrainerAI_CalcDamage` has no Flail
-  case (trainer_ai.c:2868-3075), so the AI computes Flail at table power 1: the engine's AI path
-  (`ai_damage_for_roll`, damage.py:408-425) must not apply the band power (it currently applies
-  Rollout's multiplier too; check). HP cuts: one per band boundary.
+  (<=1:200, <=5:150, <=12:100, <=21:80, <=42:40, else 20). The AI computes no damage at all for
+  moves with table power <= 1 (trainer_ai.c:1036, :1554, :1605, :2828), so Flail is never
+  scored by damage; the engine matches because `ai_damage` is gated by `is_damaging`. HP cuts: one per band boundary.
 - **Present**: heal path loads `subscript_present_heal.s` (fails on a miss; heals the target by
   maxHP/4, `SYSCTL_IGNORE_IMMUNITIES`, so even a Ghost is healed); damage path power 40/80/120.
 - **Protect**: also needs `moveProtect[battler]` (last executed move; STATE.md:85-87, :393) to reset
@@ -585,7 +589,7 @@ plain hit, Fake Out has +3 priority, Toxic/Present/Thunder Fang never miss. None
   faint). Status-check order: ... CONFUSION, PARALYSIS, ATTRACT, BIDE (bcp.c:2378-2392). Cute Charm
   needs both Pokemon alive (lib.c:4339-4355) and the attacker not already infatuated.
 - **Roar**: `subscript_force_target_to_switch_or_flee.s`: fails vs Suction Cups / Ingrain
-  (unsupported); `TryWhirlwind`; Natural Cure on the outgoing (`TryRestoreStatusOnSwitch`
+  (unsupported) and vs Soundproof (Roar is in `sSoundMoves`, lib.c:3473-3475, 3523-3527); `TryWhirlwind`; Natural Cure on the outgoing (`TryRestoreStatusOnSwitch`
   script.c:9139); the drawn slot comes in, "dragged out", hazards check
   (`BATTLE_SUBSCRIPT_HAZARDS_CHECK`), then the switch-in effects at move end. Fails if the target
   side has no other eligible Pokemon. Roar is priority -6, so it acts last.
@@ -610,7 +614,7 @@ plain hit, Fake Out has +3 priority, Toxic/Present/Thunder Fang never miss. None
 - **Focus Sash** (`HOLD_EFFECT_ENDURE`): `BattleControllerPlayer_UpdateHP` bcp.c:3386-3404 (full HP ->
   survive at 1), also `BtlCmd_CheckHoldOnWith1HP` script.c:9098-9124 used by the confusion self-hit,
   Pursuit and Future Sight subscripts; consumed in `subscript_move_followup_message.s:12-19`
-  (`RemoveItem`, so `item_consumed`). Multi-hit: only a full-HP hit triggers it.
+  (`RemoveItem`, so `item_consumed`). A full-HP hit sets the per-action `focusItemActivated` flag (cleared at action end, bcp.c:3998), so every later lethal hit of the same move is endured; multi-hit moves do not break the Sash. Pursuit and the confusion self-hit use the plain full-HP check.
 - **Quick Claw / Lagging Tail**: in `BattleSystem_CompareBattlerSpeed` lib.c:1188-1445; they apply
   among equal priority only (:1401-1440), Quick Claw beats Lagging Tail beats Stall beats Trick
   Room/speed; both also apply to `SortMonSpeedOrder` (ignoreQuickClaw=TRUE still evaluates the
@@ -648,8 +652,8 @@ the plan.
 | Curse | S (+ Ghost refusal) | multi-stat family; per-mon coverage check |
 | Self-Destruct | S-M | self-KO before accuracy; double-faint ordering |
 | Thunder Fang | M | new Outcome field + laws + relevance + strategies |
-| Flail | S-M | power by pixel bands, AI path at power 1, HP cuts, oracle check |
-| Present | M | new field, heal branch (no crit/roll), AI path at power 1 |
+| Flail | S-M | power by pixel bands, no AI damage for power <= 1, HP cuts, oracle check |
+| Present | M | new field, heal branch (no crit/roll), AI skips damage for power <= 1 |
 | Protect | M | new field, `moveProtect` chain state, last-to-move rule, blocking via MoveFlag.PROTECT, Fake Out interplay |
 | Aqua Ring | S-M | volatile flag + end-of-turn step + Big Root |
 | Attract + Cute Charm infatuation | M-L | source-tied volatile, cleared on source switch/faint, new 1/2 draw, status-check order, observe |

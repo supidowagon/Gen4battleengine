@@ -56,8 +56,8 @@ Charm, Quick Claw, Camouflage, Roar, and Nature Power with terrain. It is planne
    Task 3.
 2. Cloud Nine on the field suppresses sandstorm chip, the Rock Special Defense boost, Sand Veil
    evasion and Swift Swim, with vanilla no-weather results unchanged. Task 4.
-3. Focus Sash at full HP survives each of: a crit, a multi-hit's first hit only, a confusion
-   self-hit, and Self-Destruct targeting it. It is consumed exactly once. Task 11.
+3. Focus Sash at full HP survives each of: a crit, every hit of a multi-hit move (a full-HP hit sets the per-action
+   `focusItemActivated` flag, so later lethal hits are also capped), a confusion self-hit, and Self-Destruct targeting it. It is consumed exactly once. Task 11.
 4. A pool or bag item the engine does not model is a named pool row, and prep warns about it
    instead of dropping it silently. Task 2.
 5. Self-Destruct faints its user even on a miss or into a Ghost type. It fails only when there is
@@ -132,7 +132,8 @@ Decomp order (bcp.c:932-1254; survey §4.2):
      in speed order that is alive, not Rock, Ground or Steel, not Sand Veil, with no
      Cloud Nine/Air Lock alive. Survey §4.3 (script.c:5573-5583).
    - Hail chip: the same, except Ice types are immune and Snow Cloak replaces Sand Veil
-     (script.c, the hail branch). Coverage still refuses hail.
+     (script.c, the hail branch). Rock, Ground and Steel are not immune to hail; only Ice types and
+     Snow Cloak are, and Ice Body heals 1/16 instead (script.c:5598-5610). Coverage still refuses hail.
 4. Gravity, if a state field exists.
 5. Trick Room is not counted here (bcp.c:1823-1826, turn end).
 
@@ -195,7 +196,8 @@ Rules (survey §4.4):
 - Light Screen fails if already up, else sets 5 turns. Light Clay is not modelled; coverage
   refuses it if held.
 - Brick Break ignores the screen in its own damage. It clears both screens on the defender's
-  side after the hit, even when the target is immune, but not on a miss.
+  side before the damage is applied (bcp.c:3295-3338, lib.c:1495), even when the target is
+  immune, but not on a miss.
 
 - [ ] **Step 1: Write the tests.**
   - `test_light_screen_sets_five_turns_and_fails_when_up`.
@@ -212,7 +214,8 @@ Rules (survey §4.4):
 `effects.py` and the reference change only where a test shows a gap.
 
 Mappings, from survey §1.3 and §6:
-- 33 → `STATUS_FOE(Status.TOXIC, type_checked=1)` (Toxic).
+- 33 → `STATUS_FOE(Status.TOXIC, type_checked=0)` (Toxic). Only power moves plus Thunder Wave go
+  through the type chart (bcp.c:2350-2357); Toxic's immunities come from its subscript.
 - 261 → `TRAP` (Sand Tomb; Whirlpool's dive double is unreachable, because Dive is unsupported).
 - 17 → `PLAIN` (Swift, Shock Wave and Kaizo Aurora Beam; never-miss comes from accuracy 0).
 - 34 → `PLAIN` (Pay Day; the money is irrelevant to battle).
@@ -278,8 +281,8 @@ Damp is unsupported: coverage refuses a fight where Damp and Self-Destruct meet.
 
 **Files:** `ids.py` (`EffectId.FLAIL`), `effect_map.py` (99), `damage.py` (band power from
 `cur*64//max`, at least 1 when cur > 0; bands ≤1:200, ≤5:150, ≤12:100, ≤21:80, ≤42:40, else 20;
-script.c:4941-4970; NOT on the AI path `ai_damage_for_roll`, where the power stays 1:
-trainer_ai.c has no Flail case), `prep/variants.py` (`hp_cuts` adds the band boundaries for a
+script.c:4941-4970; NOT on the AI path: the AI computes no damage at all for moves with table power <= 1
+(trainer_ai.c:1036, :1554, :1605, :2828); the engine is right because `ai_damage` is gated by `is_damaging`), `prep/variants.py` (`hp_cuts` adds the band boundaries for a
 Flail user), `reference/engine.py`. Test: `tests/engine/test_power_moves.py` (extend).
 
 - [ ] **Step 1: Write the tests.**
@@ -318,8 +321,11 @@ holder), `reference/engine.py`. Test: `tests/engine/test_k3b_items.py`.
 
 Rules (survey §6):
 - Focus Sash: at full HP a hit that would KO leaves the holder at 1 HP. It applies at the move
-  damage site, the confusion self-hit and Pursuit. It is consumed (`item_consumed`), and only a
-  full-HP hit of a multi-hit triggers it.
+  damage site, the confusion self-hit and Pursuit. It is consumed (`item_consumed`). A full-HP
+  hit sets the per-action `focusItemActivated` flag (bcp.c:3386-3404, cleared at action end,
+  bcp.c:3998), so every later lethal hit of the same move is also capped to 1 HP and multi-hit
+  moves do not break the Sash. Pursuit and the confusion self-hit use the plain full-HP check
+  (`BtlCmd_CheckHoldOnWith1HP`).
 - Big Root: drain and Aqua Ring heals ×(100+30)/100 after the base amount, with no minimum.
   Drain is supported today; Aqua Ring lands in Task 12.
 - Berry Juice: Oran's code path with param 20. Pluck and Bug Bite do not eat it: refuse
@@ -333,7 +339,7 @@ Rules (survey §6):
 
 - [ ] **Step 1:** One test per rule, including:
   - `test_focus_sash_crit`.
-  - `test_focus_sash_multi_hit_first_only`.
+  - `test_focus_sash_multi_hit_flag_lasts_the_move`.
   - `test_focus_sash_confusion_self_hit`.
   - `test_lum_cures_confusion`.
   - `test_pecha_cures_toxic`.

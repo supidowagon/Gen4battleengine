@@ -99,7 +99,7 @@ def test_focus_sash_crit(tables, names):
     assert int(out.hp[1, 0]) == 1 and _consumed(out, 1, "Focus Sash", names)
 
 
-def test_focus_sash_multi_hit_first_only(tables, names):
+def test_focus_sash_multi_hit_flag_lasts_the_move(tables, names):
     # Only a hit taken at full HP activates the sash; the activation (focusItemActivated)
     # lasts for the rest of the move, so later hits are capped as well.
     s = roark_state(tables, names, player_moves=["Double Kick"])

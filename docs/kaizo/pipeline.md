@@ -239,11 +239,18 @@ each; "Settling a user call" above says how to enter an answer. The kinds:
 ## What is refused
 
 `coverage --game kaizo` exits 2 and lists every reason. For Roark today that includes the
-Kaizo AI lines (no policy, `AI_FLAG_RISKY`, per-move script paths), `Kaizo ROM: 2 code changes
-unclassified`, `Battle start: Sandstorm (weather UNSUPPORTED)`, and Roark's unsupported moves,
-abilities and items. The two `unknown` ROM changes are overlay16
-`BattleControllerPlayer_CheckObedience` (Kaizo: every Pokemon always obeys, no RNG draw; K3b)
-and overlay14 0x022249CC-0x022249CD (the AI script's second Levitate compare in
-`Basic_CheckForImmunity` tests Dry Skin 87; K3c). Known blind spot: Kaizo field-script command
+Kaizo AI lines (no policy, `AI_FLAG_RISKY`, per-move script paths), `Kaizo ROM: 1 code changes
+unclassified`, and the K3b2 mechanics below. K3b1 (done) models, in both engines: obedience
+(Kaizo: every Pokemon always obeys, no RNG draw), permanent sandstorm with the end-of-turn
+field pass and Cloud Nine, Sand Veil, Snow Cloak, Swift Swim, Light Screen, Brick Break,
+Toxic, Sand Tomb, the Swift family, Pay Day, Gust, Recover, Fake Out, AncientPower, Curse,
+DoubleSlap, Self-Destruct, Flail, Rough Skin, Flame Body, Limber, Adaptability, Solid Rock,
+Focus Sash, Big Root, Berry Juice, status berries, White Herb, Lagging Tail, Aqua Ring, Rindo
+and Chilan berries, and bag-item rows in the pool check. Still refused for Roark (K3b2):
+Thunder Fang, Protect, Present, Attract, Cute Charm, Quick Claw, Roar, Nature Power,
+Camouflage, and the two terrain ROM conditions (`MapHeader_GetBattleBG`,
+`MapHeader_GetMapMatrixID`). The remaining `unknown` ROM change is overlay14
+0x022249CC-0x022249CD (the AI script's second Levitate compare in `Basic_CheckForImmunity`
+tests Dry Skin 87; K3c). Known blind spot: Kaizo field-script command
 0x3F (map headers 257 and 321, common script 9019) sets a party status that persists into
 fights on any map; coverage sees it only if the save was taken after that script.
