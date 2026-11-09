@@ -39,6 +39,17 @@ def spike_cannon_root(tables: Tables, names: Names) -> BattleState:
     return roark_state(tables, names, player_moves=["Spike Cannon"], opp_moves=["Spike Cannon"])
 
 
+def spike_cannon_player_root(tables: Tables, names: Names) -> BattleState:
+    """Spike Cannon on the player's lead only (the opponent's would have no transcribed AI
+    script), whose outcome product exceeds ``enumerate.WIDTH_CAP`` against every opponent
+    action. The opponent's lead holds a White Herb, which ``hooks.held_item_check`` may
+    run after any hit (a lowered stage restored), so ``damage_inputs_can_change`` keeps
+    Spike Cannon's hits after the first out of the damage classes; without it the classes
+    bring the pair under the cap."""
+    s = roark_state(tables, names, player_moves=["Spike Cannon"])
+    return s._replace(item=s.item.at[1, s.active[1]].set(names.item("White Herb")))
+
+
 def one_v_one(tables: Tables, names: Names, player_move: str) -> BattleState:
     """Monferno with ``player_move`` in slot 0 against Geodude (fixture moves, Tackle
     first), one Pokemon a side."""

@@ -30,6 +30,7 @@ from tests.search.fixtures import (
     low_hp_endgame,
     pixel_endgame,
     shinx_vs_cranidos,
+    spike_cannon_player_root,
     spore_endgame,
     switch_refusal_root,
 )
@@ -228,7 +229,7 @@ def test_pruning_bound(tables, names):
 def test_dropped_root_action(tables, names):
     # spike_cannon_root's opponent also knows Spike Cannon, whose AI script is not
     # transcribed (the AI refuses the root); here only the player knows it.
-    state = roark_state(tables, names, player_moves=["Spike Cannon"])
+    state = spike_cannon_player_root(tables, names)
     cannon = names.move_slot(state, 0, "Spike Cannon")
     result = solve(tables, names, state, KEY, SMALL, leaf_fn=constant_leaf(1, 2))
     assert set(result.dropped) == {cannon}
@@ -373,7 +374,7 @@ def test_sampled_nodes_below_the_root(tables, names):
     # The player alone knows Spike Cannon (as in test_dropped_root_action): dropped at the
     # root, sampling-only at every depth-1 node, where every value 1 makes it the chosen
     # action (the lowest of tied actions), so the plan keeps sampled nodes.
-    state = roark_state(tables, names, player_moves=["Spike Cannon"])
+    state = spike_cannon_player_root(tables, names)
     cannon = names.move_slot(state, 0, "Spike Cannon")
     settings = SolveSettings(max_depth=2, epsilon=0.05, budget_playouts=2000, n_depth0=200)
     result = solve(tables, names, state, KEY, settings, leaf_fn=constant_leaf(1, 1))

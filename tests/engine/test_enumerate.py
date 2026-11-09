@@ -411,6 +411,9 @@ def test_field_marginals_match_decomp_laws(tables, names, data):
     s = data.draw(outcome_law_state(tables, names))
     acts = data.draw(legal_action_pair(tables, s))
     laws = laws_of(tables, s, acts)
+    # Without damage classes: a class draws (crit, roll) as one joint value, whose law
+    # test_damage_classes.test_class_law_merges_equal_damage checks.
+    laws = laws._replace(compress=np.zeros_like(np.asarray(laws.compress)))
     try:
         outcomes, probs, drawn = enumerate_drawn(laws)
     except SamplingOnly:

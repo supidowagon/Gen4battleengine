@@ -80,6 +80,18 @@ second mover's move. Later mechanics add their own with ``register_reads``. The
 brute-force reference is ``outcome_laws(..., loose=True)``: no order or eligibility
 gate and no conditional read, so its enumeration is the independent product of
 every element any order can read (tests/engine/test_enumerate.py compares the two).
+
+**Damage classes** (rules §10.3 item 5). A hit's ``(crit, roll)`` reaches ``step`` only
+through the hit's damage (``damage_for_roll`` in ``effects.play_hit``: HP, Focus Sash,
+resist berries, Bide's memory, drain, recoil and the multi-hit loop all read that
+number) and the observed crit (``step._hit_events``). So pairs with the same crit flag
+and the same damage step to the same state and observation, and are drawn as one class
+(``damage_class_law``) whose representative ``(crit, roll)`` the row carries. The
+classes come from the turn-start ``OutcomeLaws.damage``; ``OutcomeLaws.compress`` allows
+them only for a hit no earlier event of the turn can change the damage inputs of
+(``damage_inputs_can_change``, per order branch), of a move whose table is its damage
+(not Magnitude or Pursuit) and whose roll no confusion self-hit can read. The brute
+force never compresses.
 """
 
 from __future__ import annotations
@@ -94,9 +106,9 @@ import jax.numpy as jnp
 import numpy as np
 
 from nuzline.data.tables import Tables
-from nuzline.engine.damage import STATUS, damage_table
+from nuzline.engine.damage import PHYSICAL, ROLLS, SPECIAL, STATUS, hit_damage_table, move_type_of
 from nuzline.engine.effects import can_have_status
-from nuzline.engine.ids import AbilityId, EffectId, ItemId, MoveFlag, Stat, Status
+from nuzline.engine.ids import AbilityId, EffectId, ItemId, MoveFlag, Stat, Status, Type
 from nuzline.engine.order import (
     MOVE_ACTIONS,
     action_order,
@@ -162,6 +174,8 @@ class OutcomeLaws(NamedTuple):
     relevant: Outcome  # bool, each field shaped like the ``Outcome`` field: any branch
     branch_relevant: Outcome  # bool, a leading axis [2]: the branch speed_tie = 0, 1
     reads: Reads  # the conditional reads' inputs
+    damage: jnp.ndarray  # int32[2, 2, ROLLS]: per side, hit_damage_table at the turn start
+    compress: jnp.ndarray  # bool[2, 2, MAX_HITS]: [branch, side, hit] uses damage classes
 
 
 class SamplingOnly(Exception):
@@ -268,6 +282,212 @@ def _branch_masks(foe_first, first_self, base: dict) -> dict:
         "freeze_by_foe": freeze_by_foe,
         "confused_by_foe": confused_by_foe,
     }
+
+
+# --- Damage classes: what can change a hit's damage inputs mid-turn --------------------
+#
+# ``damage_inputs_can_change`` must know every implemented id. Each tuple pair below
+# splits one enum: *neutral* ids change none of a hit's damage inputs (everything
+# ``damage._pre_random`` and ``damage._finish`` read) when they act earlier in the turn,
+# except through HP damage, which the HP clause covers; *clause* ids are handled by a
+# named clause of the predicate. ``tests/engine/test_damage_classes.py`` fails while an
+# enum member is in neither, so a new mechanic must classify its ids (and, for a clause
+# id, add the clause) before it can land.
+
+# A foe move acting before the hit (effects.play_hit's effect functions).
+INPUT_NEUTRAL_EFFECTS = (
+    _E.PLAIN,
+    _E.FLINCH,
+    _E.HIGH_CRIT,
+    _E.DRAIN,  # heals the foe
+    _E.STEALTH_ROCK,
+    _E.TRAP,
+    _E.PURSUIT,
+    _E.TAUNT,
+    _E.CONFUSE_FOE,
+    _E.LEECH_SEED,
+    _E.MULTI_HIT,
+    _E.RECOIL,  # hurts the foe
+    _E.FORESIGHT,  # identifies the attacker's side; the hit reads the defender's flag
+    _E.LEVEL_DAMAGE,
+    _E.HIDDEN_POWER,
+    _E.MAGNITUDE,
+    _E.SECONDARY_CONFUSE,
+    _E.EAT_BERRY,  # takes the attacker's berry: no input, and no later cure
+    _E.DISABLE,
+    _E.BIDE,
+    _E.ROLLOUT,
+    _E.BRICK_BREAK,  # clears the attacker's side's screens; the hit reads the defender's
+    _E.RECOVER,
+    _E.FAKE_OUT,
+    _E.SELF_DESTRUCT,  # the foe faints: the hit has no target
+    _E.FLAIL,
+    _E.AQUA_RING,
+)
+INPUT_CLAUSE_EFFECTS = (
+    _E.STAT_SELF,  # the foe's Defense / Sp. Def
+    _E.SECONDARY_STAT_SELF,
+    _E.STAT_FOE,  # the attacker's Attack / Sp. Atk
+    _E.SECONDARY_STAT_FOE,
+    _E.RAISE_ALL_STATS_HIT,
+    _E.CURSE,  # the foe's Defense
+    _E.STATUS_FOE,  # the attacker's burn, or any status under Guts
+    _E.SECONDARY_STATUS,
+    _E.REFLECT,  # the defender's side's screens
+    _E.LIGHT_SCREEN,
+    _E.MUD_SPORT,  # any side's sport (damage.py :6811, :6815)
+    _E.WATER_SPORT,
+)
+INPUT_NEUTRAL_ABILITIES = (
+    AbilityId.NONE,
+    AbilityId.STURDY,
+    AbilityId.ROCK_HEAD,
+    AbilityId.MOLD_BREAKER,
+    AbilityId.RIVALRY,  # genders never change
+    AbilityId.KEEN_EYE,
+    AbilityId.SIMPLE,  # scales stages; a stage change is its own clause
+    AbilityId.UNAWARE,
+    AbilityId.NATURAL_CURE,  # on switch-out
+    AbilityId.INNER_FOCUS,
+    AbilityId.STEADFAST,  # Speed
+    AbilityId.INSOMNIA,
+    AbilityId.CLOUD_NINE,  # changes only when its holder faints: no hit follows
+    AbilityId.COMPOUNDEYES,
+    AbilityId.SHED_SKIN,  # turn end
+    AbilityId.SAND_VEIL,
+    AbilityId.SNOW_CLOAK,
+    AbilityId.SWIFT_SWIM,
+    AbilityId.LIMBER,
+    AbilityId.ADAPTABILITY,
+    AbilityId.SOLID_ROCK,
+)
+INPUT_CLAUSE_ABILITIES = (
+    AbilityId.GUTS,  # status clause
+    AbilityId.BLAZE,  # HP clause (pinch power)
+    AbilityId.TORRENT,
+    AbilityId.OVERGROW,
+    AbilityId.FLAME_BODY,  # contact clause (burn)
+    AbilityId.STATIC,  # contact clause (a status under Guts)
+    AbilityId.POISON_POINT,
+    AbilityId.ROUGH_SKIN,  # the attacker's HP: HP clause
+    AbilityId.INTIMIDATE,  # on switch-in: switch clause
+)
+INPUT_NEUTRAL_ITEMS = (
+    ItemId.NONE,
+    ItemId.FOCUS_SASH,  # after the damage (effects.play_hit)
+    ItemId.LAGGING_TAIL,
+    ItemId.RESIST_BERRY,  # after the damage (effects.resist_berry_damage)
+)
+INPUT_CLAUSE_ITEMS = (
+    ItemId.ORAN_BERRY,  # the attacker's HP: HP clause
+    ItemId.SITRUS_BERRY,
+    ItemId.BERRY_JUICE,
+    ItemId.BIG_ROOT,
+    ItemId.CHESTO_BERRY,  # item clause (status cure)
+    ItemId.PECHA_BERRY,
+    ItemId.LUM_BERRY,
+    ItemId.WHITE_HERB,  # item clause (a lowered stage restored)
+)
+_STATUS_CURES = (ItemId.CHESTO_BERRY, ItemId.PECHA_BERRY, ItemId.LUM_BERRY)
+
+
+def damage_inputs_can_change(tables: Tables, state: BattleState, actions, foe_first) -> jnp.ndarray:
+    """``bool[2, MAX_HITS]``: ``[side, hit]`` can deal damage other than
+    ``hit_damage_table`` at the turn start says, for some ``(crit, roll)``, because an
+    event earlier in the turn can change one of its damage inputs (``damage._pre_random``,
+    ``damage._finish``). ``foe_first`` (``bool[2]``): the side's foe acts before it (one
+    order branch). Sound, not tight: true whenever some clause below can apply.
+
+    Inputs and the events that can change them before ``[side, hit]``:
+
+    * **switch / item**: the foe switches (a new target, Intimidate, entry hazards,
+      weather abilities) or uses a trainer item, before the side's move;
+    * **foe move**: an earlier foe move with an unclassified effect (not in
+      ``INPUT_NEUTRAL_EFFECTS`` / ``INPUT_CLAUSE_EFFECTS``), or one that changes: the
+      side's attacking stat stage (``STAT_FOE``), the foe's defending stage
+      (``STAT_SELF``, ``RAISE_ALL_STATS_HIT``, Curse's Defense), the side's status when
+      it matters (a burn on a physical non-Guts move, any status under Guts), the foe's
+      screen for this category, or a sport for this move type;
+    * **HP**: Flail's power band and Overgrow / Blaze / Torrent (damage.py :6819-6837)
+      read the user's HP: any earlier foe move or earlier hit of the same move;
+    * **contact**: on a later hit, the foe's Flame Body burn or Static / Poison Point
+      status (effects._contact_ability), when the status matters;
+    * **items** (``hooks.held_item_check`` after every hit): a status cure on the side's
+      Pokemon when the status matters, a White Herb on either Pokemon (a lowered stage);
+    * **own move**: a later hit of a move other than ``MULTI_HIT`` (none has several hits
+      today), a Guts user that wakes or thaws first (its status goes to none), and
+      Selfdestruct (its user's HP goes to 0 before the hit).
+
+    Extending: a mechanic that lets anything above (or a new input) change mid-turn
+    classifies its ids in the tuples above and adds a clause here, with a brute-force
+    equality test in ``tests/engine/test_damage_classes.py``."""
+    actions = jnp.asarray(actions, _I32)
+    sides = jnp.arange(2)
+    mons = state.active
+    live = state.over == 0
+    moves = jnp.stack([selected_move(tables, state, side, actions[side])[0] for side in (0, 1)])
+    uses_move = live & ~is_switch(actions) & ~is_item(actions)
+    effect = tables.move_effect[moves]
+    param0 = tables.move_param[moves, 0]
+    category = tables.move_category[moves]
+    move_type = jnp.stack([move_type_of(tables, state, side, moves[side]) for side in (0, 1)])
+    ability = state.ability[sides, mons]
+    item = tables.item_effect[state.item[sides, mons]]
+    status = state.status[sides, mons]
+    contact = (tables.move_flags[moves] & MoveFlag.CONTACT) != 0
+
+    physical = category == PHYSICAL
+    special = category == SPECIAL
+    guts = physical & (ability == AbilityId.GUTS)  # any status counts (damage.py :6793)
+    burnable = physical & (ability != AbilityId.GUTS)  # a burn halves it (:6978)
+    attack_stat = jnp.where(physical, Stat.ATK, Stat.SPA)
+    defense_stat = jnp.where(physical, Stat.DEF, Stat.SPD)
+    pinch = (
+        ((move_type == Type.GRASS) & (ability == AbilityId.OVERGROW))
+        | ((move_type == Type.FIRE) & (ability == AbilityId.BLAZE))
+        | ((move_type == Type.WATER) & (ability == AbilityId.TORRENT))
+    )
+    hp_sensitive = (effect == _E.FLAIL) | pinch
+
+    foe_effect, foe_param0 = effect[::-1], param0[::-1]
+    unclassified = ~_any_of(foe_effect, INPUT_NEUTRAL_EFFECTS + INPUT_CLAUSE_EFFECTS)
+    status_hit = _any_of(foe_effect, (_E.STATUS_FOE, _E.SECONDARY_STATUS))
+    foe_move = uses_move[::-1] & (
+        unclassified
+        | (_any_of(foe_effect, (_E.STAT_FOE, _E.SECONDARY_STAT_FOE)) & (foe_param0 == attack_stat))
+        | (
+            _any_of(foe_effect, (_E.STAT_SELF, _E.SECONDARY_STAT_SELF))
+            & (foe_param0 == defense_stat)
+        )
+        | (foe_effect == _E.RAISE_ALL_STATS_HIT)
+        | ((foe_effect == _E.CURSE) & physical)
+        | (status_hit & (guts | (burnable & (foe_param0 == Status.BURN))))
+        | ((foe_effect == _E.REFLECT) & physical)
+        | ((foe_effect == _E.LIGHT_SCREEN) & special)
+        | ((foe_effect == _E.MUD_SPORT) & (move_type == Type.ELECTRIC))
+        | ((foe_effect == _E.WATER_SPORT) & (move_type == Type.FIRE))
+        | hp_sensitive
+    )
+    foe_action = live & (is_switch(actions)[::-1] | is_item(actions)[::-1] | foe_move)
+
+    white_herb = jnp.any(item == ItemId.WHITE_HERB)
+    items = (
+        white_herb | (guts & _any_of(item, _STATUS_CURES)) | (burnable & (item == ItemId.LUM_BERRY))
+    )
+
+    foe_ability = ability[::-1]
+    contact_status = contact & (
+        ((foe_ability == AbilityId.FLAME_BODY) & (guts | burnable))
+        | (_any_of(foe_ability, (AbilityId.STATIC, AbilityId.POISON_POINT)) & guts)
+    )
+    own_hits = hp_sensitive | (effect != _E.MULTI_HIT) | contact_status
+    own_pre_move = (guts & _any_of(status, (Status.SLEEP, Status.FREEZE))) | (
+        effect == _E.SELF_DESTRUCT
+    )
+
+    later = jnp.arange(MAX_HITS)[None, :] >= 1
+    before = jnp.asarray(foe_first, bool) & (foe_action | items)
+    return own_pre_move[:, None] | before[:, None] | (later & (own_hits | items)[:, None])
 
 
 def outcome_laws(
@@ -450,13 +670,8 @@ def outcome_laws(
         & ~((state.taunt > 0) & (tables.move_power[moves] == 0))
         & (state.bide_turns == 0)
     )
-    deals = jnp.stack(
-        [
-            jnp.all(damage_table(tables, state, side, moves[side], False) > 0)
-            & jnp.all(damage_table(tables, state, side, moves[side], True) > 0)
-            for side in (0, 1)
-        ]
-    )
+    damage = jnp.stack([hit_damage_table(tables, state, side, moves[side]) for side in (0, 1)])
+    deals = jnp.all(damage > 0, axis=(1, 2))
     fake_out_ok = (effect == _E.FAKE_OUT) & (
         state.fake_out_turn.astype(_I32) == state.turn.astype(_I32)
     )
@@ -488,6 +703,22 @@ def outcome_laws(
         DURATION_TAUNT,
         jnp.where(_any_of(effect, (_E.TRAP, _E.DISABLE)), DURATION_TRAP, DURATION_DEFAULT),
     )
+    # Damage classes (rules §10.3 item 5): a hit whose damage the turn-start table gives
+    # whatever happened before it (damage_inputs_can_change), of a move whose table is
+    # its damage (not Magnitude: its level is drawn; not Pursuit: its pre-switch hit
+    # doubles the power), and whose roll is not also a confusion self-hit's.
+    tabled = rolled & ~_any_of(effect, (_E.MAGNITUDE, _E.PURSUIT))
+    compress = jnp.stack(
+        [
+            crit
+            & tabled[:, None]
+            & ~damage_inputs_can_change(tables, state, actions, firsts[t] == 1 - sides)
+            & ~(m["confusion_hit"][:, None] & (hit_index == 0))
+            for t, m in enumerate(branches)
+        ]
+    )
+    if loose:
+        compress = jnp.zeros_like(compress)
     thresholds, possible = hit_thresholds(tables, state, actions)
     return OutcomeLaws(
         hit_thresholds=thresholds,
@@ -499,6 +730,8 @@ def outcome_laws(
         relevant=relevant,
         branch_relevant=per_branch,
         reads=Reads(*(jnp.asarray(f) for f in reads)),
+        damage=damage.astype(_I32),
+        compress=compress,
     )
 
 
@@ -824,6 +1057,65 @@ def _move_reads(laws: OutcomeLaws, branch: Branch, plan: ReadPlan) -> None:
             plan.gate((name, (q,)), cond)
 
 
+def damage_class_law(
+    laws: OutcomeLaws, side: int
+) -> tuple[list[int], list[int], int, list[int], list[int]]:
+    """``(values, weights, denominator, crits, rolls)``: the joint law of one hit's
+    ``(crit, roll)`` reduced to its damage classes. Two pairs share a class when they have
+    the same crit flag (a landed crit is observed, ``step._hit_events``) and the same
+    damage in ``laws.damage[side]``; a class weighs the sum of its pairs' weights over
+    ``crit odds * ROLLS``, and ``crits[v]``, ``rolls[v]`` are class ``v``'s
+    representative, its lowest roll. Values are class indices in crit-then-roll order."""
+    table = np.asarray(laws.damage[side])
+    crit_values, crit_weights, crit_den = _crit(laws, side)
+    classes: dict[tuple[int, int], int] = {}
+    weights: list[int] = []
+    crits: list[int] = []
+    rolls: list[int] = []
+    for c, wc in zip(crit_values, crit_weights):
+        if wc == 0:
+            continue
+        for r in range(ROLLS):
+            key = (c, int(table[c, r]))
+            if key not in classes:
+                classes[key] = len(weights)
+                weights.append(0)
+                crits.append(c)
+                rolls.append(r)
+            weights[classes[key]] += wc
+    return list(range(len(weights))), weights, crit_den * ROLLS, crits, rolls
+
+
+class _DamageClasses(NamedTuple):
+    roll: Elem  # the hit's roll element; its crit element carries the class
+    law: _Law
+    crits: np.ndarray  # int16[classes]: the representative's crit
+    rolls: np.ndarray  # int16[classes]: the representative's roll
+
+
+def _damage_classes(
+    laws: OutcomeLaws, branch: Branch, plan: ReadPlan
+) -> dict[Elem, _DamageClasses]:
+    """The hits of this branch drawn as damage classes, keyed by their crit element:
+    ``laws.compress`` allows it, and the plan reads the hit's crit and roll together
+    (the same gates and paths) and no other element's read depends on either."""
+    depended = set().union(*(plan.deps(e) for e in plan.elements)) if plan.elements else set()
+    compress = np.asarray(laws.compress[branch.tie], bool)
+    out: dict[Elem, _DamageClasses] = {}
+    for side, hit in np.argwhere(compress):
+        index = (int(side), int(hit))
+        crit, roll = ("crit", index), ("roll", index)
+        if crit not in plan or roll not in plan or {crit, roll} & depended:
+            continue
+        if plan._gates[crit] != plan._gates[roll] or plan._paths[crit] != plan._paths[roll]:
+            continue
+        values, weights, den, crits, rolls = damage_class_law(laws, index[0])
+        out[crit] = _DamageClasses(
+            roll, (values, weights, den), np.asarray(crits, np.int16), np.asarray(rolls, np.int16)
+        )
+    return out
+
+
 def _branch_elements(relevant: Outcome) -> list[Elem]:
     out = []
     for name in Outcome._fields:
@@ -859,12 +1151,17 @@ def _topological(plan: ReadPlan) -> list[Elem]:
 def _branch_rows(laws: OutcomeLaws, branch: Branch, budget: int, tie_weight: tuple[int, int]):
     """The rows of one branch: ``(cols, probs)``, ``cols[elem]`` the drawn values
     (``SKIPPED`` where a row does not read the element). ``tie_weight`` is the branch's
-    ``(numerator, denominator)``. Raises ``SamplingOnly`` above ``budget`` rows."""
+    ``(numerator, denominator)``. Raises ``SamplingOnly`` above ``budget`` rows.
+
+    A compressed hit (``_damage_classes``) is drawn once, as its class on the crit
+    element, and both elements get the class representative afterwards."""
     plan = ReadPlan(_branch_elements(branch.relevant))
     for builder in _READ_BUILDERS:
         builder(laws, branch, plan)
-    order = _topological(plan)
-    laws_of = {e: _law(laws, e) for e in order}
+    classes = _damage_classes(laws, branch, plan)
+    merged = {c.roll for c in classes.values()}
+    order = [e for e in _topological(plan) if e not in merged]
+    laws_of = {e: classes[e].law if e in classes else _law(laws, e) for e in order}
     den = tie_weight[1] * math.prod(law[2] for law in laws_of.values())
     exact = den <= 2**53
     n = 1
@@ -896,6 +1193,12 @@ def _branch_rows(laws: OutcomeLaws, branch: Branch, budget: int, tie_weight: tup
         n = total
     if exact:
         probs = num.astype(np.float64) / float(den)
+    for crit, c in classes.items():
+        value = cols[crit]
+        read = value != SKIPPED
+        index = np.where(read, value, 0)
+        cols[c.roll] = np.where(read, c.rolls[index], SKIPPED).astype(np.int16)
+        cols[crit] = np.where(read, c.crits[index], SKIPPED).astype(np.int16)
     return cols, probs
 
 

@@ -458,6 +458,14 @@ def damage_table(tables: Tables, state: BattleState, atk_side, move, crit) -> jn
     return jnp.where(fixed, amount, table)
 
 
+def hit_damage_table(tables: Tables, state: BattleState, atk_side, move) -> jnp.ndarray:
+    """``int32[2, ROLLS]``: one hit's damage for every ``(crit, roll)`` pair (``crit`` 0
+    or 1, then ``damage_table``'s rolls), at ``state``. It equals ``damage_for_roll`` at
+    the default ``power_mul`` for every move but Magnitude (``damage_table`` takes level 4)
+    and Bide (0 here); ``enumerate``'s damage classes use neither."""
+    return jnp.stack([damage_table(tables, state, atk_side, move, crit) for crit in (False, True)])
+
+
 def damage_for_roll(
     tables: Tables,
     state: BattleState,

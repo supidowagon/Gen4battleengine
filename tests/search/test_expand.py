@@ -63,13 +63,16 @@ def legal_pairs(tables, state, index: int = 0) -> list[tuple[int, int, int]]:
 
 @pytest.fixture(scope="module")
 def roark_expansion(tables, names):
-    """``expand`` of every legal pair at the real Roark start and two variants (the
-    leads at 20 HP), with the row count of each ``step_rows`` call recorded
-    (``test_expand_streams``): more than one ``CHUNK`` of rows (the K3b2 conditional
-    reads cut the first three roots to about 0.9)."""
+    """``expand`` of every legal pair at the real Roark start and its variants with
+    either lead or both at 30, 20, 10 or 5 HP, with the row count of each ``step_rows`` call
+    recorded (``test_expand_streams``): more than one ``CHUNK`` of rows (the K3b2
+    conditional reads and damage classes cut the four roots this used before to about
+    a third of a chunk)."""
     root = roark_real_state(tables, names)
-    roots = [root, root.replace_hp(1, 0, 20), root.replace_hp(0, 0, 20)]
-    roots.append(root.replace_hp(0, 0, 20).replace_hp(1, 0, 20))
+    roots = [root]
+    for hp in (30, 20, 10, 5):
+        roots += [root.replace_hp(1, 0, hp), root.replace_hp(0, 0, hp)]
+        roots.append(root.replace_hp(0, 0, hp).replace_hp(1, 0, hp))
     pairs = [p for i, s in enumerate(roots) for p in legal_pairs(tables, s, i)]
     sizes = []
     real = expand_mod.step_rows
