@@ -59,6 +59,7 @@ class Fakes:
         self.of_bytes: dict[bytes, tuple] = {}
         self.calls: list[tuple[list, int, object]] = []  # (setups, n, states)
         self.total: dict = {}
+        self.buckets: dict = {}  # per setup, its bucket counts summed over every call
         self.order: list = []
         real = search.setup_states
 
@@ -89,6 +90,8 @@ class Fakes:
                 counts.append(round(n * (c - prev)))
                 prev = c
             counts += [0, 0, n - sum(counts), 0]
+            summed = self.buckets.get(s, (0,) * len(counts))
+            self.buckets[s] = tuple(a + b for a, b in zip(summed, counts, strict=True))
             out.append(ScreenStats(tuple(counts), 0, 0.0, 0.0, self.refuse(s)))
         return out
 
@@ -98,8 +101,7 @@ def falling(setup, index):
 
 
 def steep(setup, index):
-    """Falls fast enough that no two setups tie at a cut: ``tie_rank`` hashes the turn-0
-    state row, so a state field added elsewhere reshuffles tied setups' ranks."""
+    """Falls faster than ``falling``: 0.05 a registration index down to a 0.01 floor."""
     return (max(0.01, 1 - 0.05 * index),) * 4
 
 
@@ -342,21 +344,19 @@ def test_budget_stops_after_first_round(tables, names, monkeypatch):
     setups = fakes.calls[0][0]
     reg = search._Funnel(tables, names, prob, settings, KEY, None, float)  # same cost, tie rank
     reg.register(setups)
+    # The funnel's own accumulated counts (each call rounds separately), so a setup tied with
+    # the leader is told apart by the same tie rank the funnel used, whatever its hash.
     rows = [
-        scored(_stats(fakes, s), 0, reg.cost[reg.index[s]], reg.tie[reg.index[s]]) for s in setups
+        scored(
+            ScreenStats(fakes.buckets[s], 0, 0.0, 0.0, False),
+            0,
+            reg.cost[reg.index[s]],
+            reg.tie[reg.index[s]],
+        )
+        for s in setups
     ]
     assert result.chosen == setups[prep_order(rows)[0]]
     assert all(r.source == "screen" for r in result.ladder)
-
-
-def _stats(fakes, setup):
-    n = fakes.total[setup]
-    cum = fakes.cum(setup, fakes.order.index(setup))
-    counts, prev = [], 0.0
-    for c in cum:
-        counts.append(round(n * (c - prev)))
-        prev = c
-    return ScreenStats((*counts, 0, 0, n - sum(counts), 0), 0, 0.0, 0.0, False)
 
 
 def test_interrupt_returns_best_so_far(tables, names, monkeypatch):
@@ -447,9 +447,31 @@ def test_halving_key_ignores_hp_pp_and_index():
 
 
 def test_tie_rank_is_seeded_and_order_free():
-    assert search.tie_rank(b"seed", b"row") == search.tie_rank(b"seed", b"row")
-    assert search.tie_rank(b"seed", b"row") != search.tie_rank(b"seed2", b"row")
-    assert 0 <= search.tie_rank(b"", b"") < 2**64
+    a = setup_from_json([[0, [[1, 33, 328]], 0, 0, 0], [2, [], 0, 0, 0]])
+    b = setup_from_json([[0, [], 0, 0, 0], [2, [], 0, 0, 0]])
+    assert search.tie_rank(b"seed", a) == search.tie_rank(b"seed", setup_from_json(json.loads(
+        json.dumps([[0, [[1, 33, 328]], 0, 0, 0], [2, [], 0, 0, 0]]))))  # fmt: skip
+    assert search.tie_rank(b"seed", a) != search.tie_rank(b"seed2", a)
+    assert search.tie_rank(b"seed", a) != search.tie_rank(b"seed", b)
+    assert 0 <= search.tie_rank(b"", b) < 2**64
+
+
+def test_tie_rank_ignores_the_state_layout(tables, names, monkeypatch):
+    """The rank hashes the setup, not its turn-0 state row: changing the row bytes (as a
+    state field added elsewhere would) leaves every registered setup's rank unchanged."""
+    prob = make_problem(tables, names)
+    teams = team_setups(prob, 2)
+    settings = PrepSettings()
+    before = search._Funnel(tables, names, prob, settings, KEY, None, float)
+    before.register(teams)
+
+    def padded(states, n):
+        return np.concatenate([row_bytes(states, n), np.ones((n, 3), np.uint8)], axis=1)
+
+    monkeypatch.setattr(search, "row_bytes", padded)
+    after = search._Funnel(tables, names, prob, settings, KEY, None, float)
+    after.register(teams)
+    assert after.setups == before.setups and after.tie == before.tie
 
 
 class Expansion:
@@ -642,7 +664,7 @@ def _race_settings(**kw):
 
 
 def _race_fakes(monkeypatch, worse):
-    """``Fakes`` (``falling``) whose ``screen`` makes ``worse`` the worst setup on calls made with
+    """``Fakes`` (``steep``) whose ``screen`` makes ``worse`` the worst setup on calls made with
     the race's key only; the calls of the race are appended to ``raced``."""
     racing = [False]
     raced: list = []
@@ -650,7 +672,7 @@ def _race_fakes(monkeypatch, worse):
     def cum(setup, index):
         if racing[0] and setup == worse:
             return (0.1,) * 4
-        return falling(setup, index)
+        return steep(setup, index)
 
     fakes = Fakes(monkeypatch, cum)
     inner = fakes.screen
@@ -669,7 +691,7 @@ def test_finalists_are_picked_by_a_fresh_race(tables, names, monkeypatch):
     """The winner's curse of the seed-4 recheck: a setup that leads on the accumulated halving
     stats but is worse on fresh playouts must not be a finalist."""
     prob = make_problem(tables, names)
-    a = team_setups(prob, 2)[0]  # the halving's best (``falling``)
+    a = team_setups(prob, 2)[0]  # the halving's best (``steep``)
     fakes, raced = _race_fakes(monkeypatch, a)
     record: list = []
     monkeypatch.setattr(search, "solve", fake_solve(fakes, record, lambda s, i: 0.5))
@@ -690,7 +712,7 @@ def test_race_playouts_are_counted_and_not_merged(tables, names, monkeypatch):
     prob = make_problem(tables, names)
     runs = {}
     for race in (0, 2040):
-        fakes = Fakes(monkeypatch, falling)
+        fakes = Fakes(monkeypatch, steep)
         monkeypatch.setattr(search, "solve", fake_solve(fakes, [], lambda s, i: 0.5))
         runs[race] = run_prep(tables, names, prob, _race_settings(race_playouts=race), KEY)
     assert runs[2040].stats.playouts == runs[0].stats.playouts + 2040 * 3
@@ -728,14 +750,22 @@ def test_budget_stop_before_the_race_keeps_the_screen_leader(tables, names, monk
     setups = fakes.calls[-1][0]  # the last pools: S_k as the last round screened it
     reg = search._Funnel(tables, names, prob, settings, KEY, None, float)
     reg.register(setups)
+    # The funnel's own accumulated counts (each call rounds separately), so a setup tied with
+    # the leader is told apart by the same tie rank the funnel used, whatever its hash.
     rows = [
-        scored(_stats(fakes, s), 0, reg.cost[reg.index[s]], reg.tie[reg.index[s]]) for s in setups
+        scored(
+            ScreenStats(fakes.buckets[s], 0, 0.0, 0.0, False),
+            0,
+            reg.cost[reg.index[s]],
+            reg.tie[reg.index[s]],
+        )
+        for s in setups
     ]
     assert result.chosen == setups[prep_order(rows)[0]]
 
 
 def _race_favouring_fakes(monkeypatch, best):
-    """``Fakes`` (``falling``) whose ``screen`` makes ``best[0]`` clearly the best setup and every
+    """``Fakes`` (``steep``) whose ``screen`` makes ``best[0]`` clearly the best setup and every
     other setup clearly worse on calls made with the race's key only; the calls of the race are
     appended to ``raced``."""
     racing = [False]
@@ -744,7 +774,7 @@ def _race_favouring_fakes(monkeypatch, best):
     def cum(setup, index):
         if racing[0]:
             return (0.9,) * 4 if setup == best[0] else (0.1,) * 4
-        return falling(setup, index)
+        return steep(setup, index)
 
     fakes = Fakes(monkeypatch, cum)
     inner = fakes.screen
@@ -827,11 +857,11 @@ def test_no_race_when_the_final_pool_is_not_larger_than_the_finalists(
 
 
 def _race_refusing_fakes(monkeypatch, refused):
-    """``Fakes`` (``falling``) refusing the playouts of setups in ``refused`` on the race's call
+    """``Fakes`` (``steep``) refusing the playouts of setups in ``refused`` on the race's call
     only; the race's calls are appended to ``raced``."""
     racing = [False]
     raced: list = []
-    fakes = Fakes(monkeypatch, falling, refuse=lambda s: racing[0] and refused(s))
+    fakes = Fakes(monkeypatch, steep, refuse=lambda s: racing[0] and refused(s))
     inner = fakes.screen
 
     def screen(tables, states, n, key, max_turns=100):
@@ -846,7 +876,7 @@ def _race_refusing_fakes(monkeypatch, refused):
 
 def test_a_setup_refused_in_the_race_is_excluded_and_not_a_pick(tables, names, monkeypatch):
     prob = make_problem(tables, names)
-    a = team_setups(prob, 2)[0]  # the halving's best (``falling``), fine until the race
+    a = team_setups(prob, 2)[0]  # the halving's best (``steep``), fine until the race
     fakes, raced = _race_refusing_fakes(monkeypatch, lambda s: s == a)
     record: list = []
     monkeypatch.setattr(search, "solve", fake_solve(fakes, record, lambda s, i: 0.5))
