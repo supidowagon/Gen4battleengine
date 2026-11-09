@@ -65,9 +65,11 @@ def legal_pairs(tables, state, index: int = 0) -> list[tuple[int, int, int]]:
 def roark_expansion(tables, names):
     """``expand`` of every legal pair at the real Roark start and two variants (the
     leads at 20 HP), with the row count of each ``step_rows`` call recorded
-    (``test_expand_streams``): about 1.7 ``CHUNK``s of rows."""
+    (``test_expand_streams``): more than one ``CHUNK`` of rows (the K3b2 conditional
+    reads cut the first three roots to about 0.9)."""
     root = roark_real_state(tables, names)
     roots = [root, root.replace_hp(1, 0, 20), root.replace_hp(0, 0, 20)]
+    roots.append(root.replace_hp(0, 0, 20).replace_hp(1, 0, 20))
     pairs = [p for i, s in enumerate(roots) for p in legal_pairs(tables, s, i)]
     sizes = []
     real = expand_mod.step_rows

@@ -93,8 +93,9 @@ def test_forced_matches_playout_from_action(tables, names):
 
 def test_forced_first_turn_matches_expand(tables, names):
     """The forced first turn's child distribution (keys as evaluate_forced uses them)
-    matches the exact children of ``expand``, bucketed by state."""
-    state, pair = _spark_into_cranidos(tables, names)
+    matches the exact children of ``expand``, bucketed by state. At 26 HP the turn
+    mixes wins and non-wins (at 1 HP every child wins: the won mass is 1 up to rounding)."""
+    state, pair = _spark_into_cranidos(tables, names, hp=26)
     spark, tackle = (int(a) for a in pair)
     store, children = expand(tables, batch(state), [(0, spark, tackle)])
     assert sum(c.prob for c in children[0]) == pytest.approx(1.0, abs=1e-12)

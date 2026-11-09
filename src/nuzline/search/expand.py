@@ -49,7 +49,13 @@ import nuzline.search.stage_a  # noqa: F401 - registers Tables/BattleState for j
 from nuzline.ai.policy import _distribution
 from nuzline.data.tables import Tables
 from nuzline.engine.actions import MOVE_ACTIONS
-from nuzline.engine.enumerate import OutcomeLaws, SamplingOnly, enumerate_outcomes, outcome_laws
+from nuzline.engine.enumerate import (
+    OutcomeLaws,
+    Reads,
+    SamplingOnly,
+    enumerate_outcomes,
+    outcome_laws,
+)
 from nuzline.engine.observe import observation, replacement_observation
 from nuzline.engine.order import is_switch
 from nuzline.engine.outcome import Outcome
@@ -74,7 +80,7 @@ CHUNK = 16384  # rows per program call, before padding to the device count
 
 # The pytrees of the programs' arguments and results, for ``jax.export`` serialization
 # (``Tables`` and ``BattleState`` are registered by ``stage_a``).
-for _cls in (Outcome, OutcomeLaws):
+for _cls in (Outcome, OutcomeLaws, Reads):
     jax.export.register_namedtuple_serialization(_cls, serialized_name=f"nuzline.{_cls.__name__}")
 
 
