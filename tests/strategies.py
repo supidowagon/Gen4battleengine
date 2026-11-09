@@ -110,9 +110,9 @@ def _learnsets() -> dict[int, list[tuple[int, int]]]:
 
 
 # The fixture and effect-test moves, given to every species so the infliction,
-# trapping, flinch, multi-hit (2-5 and fixed two), stat-stage, Recover, Fake Out and Curse
-# branches run in the differential test (no M1 species is Ghost-type: Curse is the
-# non-Ghost one).
+# trapping, flinch, multi-hit (2-5 and fixed two), stat-stage, Recover, Fake Out, Curse,
+# screen (Reflect, Light Screen, broken by Brick Break) and Toxic branches run in the
+# differential test (no M1 species is Ghost-type: Curse is the non-Ghost one).
 SHARED_MOVES = (
     "Stealth Rock",
     "Taunt",
@@ -146,6 +146,10 @@ SHARED_MOVES = (
     "Selfdestruct",
     "Flail",
     "Aqua Ring",
+    "Light Screen",
+    "Reflect",
+    "Brick Break",
+    "Toxic",
 )
 
 
