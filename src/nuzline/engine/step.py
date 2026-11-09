@@ -144,6 +144,7 @@ _VOLATILE = (
     "bide_damage",
     "curled",
     "mud_sport",
+    "aqua_ring",
 )
 # Ranges whose decomp defender is the user itself in singles (``BattleSystem_Defender``,
 # battle_lib.c:1665-1683): such a move records nothing on the foe's ``move_hit``.
@@ -889,6 +890,17 @@ def _leech_seed_check(tables: Tables, state: BattleState, side) -> BattleState:
     return _hp_change(_hp_change(state, side, mon, -drained), other, recipient, gained)
 
 
+def _aqua_ring_check(tables: Tables, state: BattleState, side) -> BattleState:
+    """A ringed ``side`` active Pokemon alive and below full HP heals
+    ``BattleSystem_Divide(maxHP, 16)``, times ``(100 + 30) / 100`` with a Big Root
+    (``effects.big_root``; ``subscript_aqua_ring_heal.s``; Heal Block is unsupported)."""
+    mon = state.active[side]
+    hp, full = state.hp[side, mon].astype(_I32), state.max_hp[side, mon].astype(_I32)
+    on = (state.aqua_ring[side] != 0) & (hp > 0) & (hp != full)
+    heal = jnp.where(on, big_root(tables, state, side, jnp.maximum(full // 16, 1)), 0)
+    return _hp_change(state, side, mon, heal)
+
+
 def _status_damage(state: BattleState, side, status, damage) -> BattleState:
     """``side``'s active Pokemon with ``status`` and HP left loses ``damage`` (capped at its
     HP, ``BATTLE_SUBSCRIPT_UPDATE_HP``)."""
@@ -993,6 +1005,8 @@ def _turn_end_ability(tables: Tables, state: BattleState, side, outcome: Outcome
 # The implemented checks of ``enum MonCondCheckState`` (battle_controller_player.c:1256),
 # in its order.
 END_OF_TURN_ORDER = (
+    # MON_COND_CHECK_STATE_AQUA_RING, battle_controller_player.c:1332
+    ("aqua_ring", _aqua_ring_check),
     # MON_COND_CHECK_STATE_ABILITY, battle_controller_player.c:1355 (the only check that
     # reads the turn's ``Outcome``, see ``end_of_turn``)
     ("ability", _turn_end_ability),

@@ -71,6 +71,7 @@ class RefSide:
     bide_damage: int
     curled: int
     mud_sport: int
+    aqua_ring: int
     spikes: int
     toxic_spikes: int
     stealth_rock: int

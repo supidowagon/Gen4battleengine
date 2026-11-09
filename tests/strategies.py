@@ -143,6 +143,7 @@ SHARED_MOVES = (
     "Double Kick",
     "Selfdestruct",
     "Flail",
+    "Aqua Ring",
 )
 
 
@@ -311,6 +312,7 @@ def supported_state(draw, tables: Tables, names: Names) -> BattleState:
         a["leech_seed"][side] = draw(st.integers(0, 1))
         a["water_sport"][side] = draw(st.integers(0, 1))
         a["mud_sport"][side] = draw(st.integers(0, 1))
+        a["aqua_ring"][side] = draw(st.integers(0, 1))
         a["curled"][side] = draw(st.integers(0, 1))
         a["foresight"][side] = draw(st.integers(0, 1))
         a["stealth_rock"][side] = draw(st.integers(0, 1))

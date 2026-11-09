@@ -26,6 +26,8 @@ class EffectId(IntEnum):
     * ``SECONDARY_CONFUSE`` (Confusion, Psybeam, ...): zeros; confuses the target at the
       move's effect chance. ``MUD_SPORT``: zeros. ``EAT_BERRY`` (Bug Bite, Pluck): zeros;
       the user eats the target's Oran or Sitrus Berry (``hooks.pluck_berry``).
+    ``AQUA_RING``: zeros; sets the user's ``aqua_ring`` (fails if set), healed at turn end
+    (``step._aqua_ring_check``).
     ``DISABLE``: zeros; disables the target's last move for 3-6 turns (``effects._disable``).
     ``LIGHT_SCREEN``, ``REFLECT``: zeros; set the user's side screen for 5 turns
     (``effects._screen``). ``BRICK_BREAK``: zeros; ignores the screens in its damage and
@@ -91,6 +93,7 @@ class EffectId(IntEnum):
     CURSE = 36
     SELF_DESTRUCT = 37
     FLAIL = 38
+    AQUA_RING = 39
 
 
 class AbilityId(IntEnum):

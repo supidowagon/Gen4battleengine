@@ -259,6 +259,7 @@ NEW_VOLATILES = (
     "bide_damage",
     "curled",
     "mud_sport",
+    "aqua_ring",
 )
 
 

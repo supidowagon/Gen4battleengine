@@ -157,6 +157,8 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     # Brick Break: effect_script_0186.s, damage plus a direct BREAK_SCREENS effect
     # (BtlCmd_TryBreakScreens, script.c:6550).
     186: ("BATTLE_EFFECT_REMOVE_SCREENS", _E.BRICK_BREAK, (0, 0, 0)),
+    # Aqua Ring: effect_script_0251.s sets MOVE_EFFECT_AQUA_RING on the user (fails if set).
+    251: ("BATTLE_EFFECT_RESTORE_HP_EVERY_TURN", _E.AQUA_RING, (0, 0, 0)),
     # Mud Sport: effect_script_0201.s sets MOVE_EFFECT_MUD_SPORT on the user.
     201: ("BATTLE_EFFECT_HALVE_ELECTRIC_DAMAGE", _E.MUD_SPORT, (0, 0, 0)),
     # Bug Bite, Pluck: effect_script_0224.s, an ON_HIT indirect effect (subscript_pluck.s).

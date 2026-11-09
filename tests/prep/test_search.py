@@ -97,9 +97,15 @@ def falling(setup, index):
     return (1 - 0.02 * index,) * 4
 
 
+def steep(setup, index):
+    """Falls fast enough that no two setups tie at a cut: ``tie_rank`` hashes the turn-0
+    state row, so a state field added elsewhere reshuffles tied setups' ranks."""
+    return (max(0.01, 1 - 0.05 * index),) * 4
+
+
 def test_team_phase_halving(tables, names, monkeypatch):
     prob = make_problem(tables, names)
-    fakes = Fakes(monkeypatch, falling)
+    fakes = Fakes(monkeypatch, steep)
     settings = PrepSettings(
         screen_n=4, team_keep=2, ladder_keep=1, variant_rounds=0, max_depth=0, max_team=2
     )
@@ -116,7 +122,7 @@ def test_team_phase_halving(tables, names, monkeypatch):
 
 def test_variant_round_screens_every_neighbour(tables, names, monkeypatch):
     prob = make_problem(tables, names)
-    fakes = Fakes(monkeypatch, falling)
+    fakes = Fakes(monkeypatch, steep)
     settings = PrepSettings(
         screen_n=4, team_keep=2, variant_keep=2, variant_rounds=1, max_depth=0, max_team=2
     )

@@ -31,14 +31,14 @@ from nuzline.prep.search import run_prep
 from nuzline.prep.setups import neighbours, team_setups
 from tests.engine.helpers import sample_party
 from tests.prep.fixtures import candidate, problem
-from tests.prep.test_search import KEY, SETTINGS, Fakes, fake_solve, falling, make_problem
+from tests.prep.test_search import KEY, SETTINGS, Fakes, fake_solve, make_problem, steep
 
 VERSIONS = {"table_version": "tables-1", "code_version": "code-1"}
 
 
 def setup_run(monkeypatch, tables, names, **problem_kw):
     prob = make_problem(tables, names, **problem_kw)
-    fakes = Fakes(monkeypatch, falling)
+    fakes = Fakes(monkeypatch, steep)
     monkeypatch.setattr(
         search,
         "solve",

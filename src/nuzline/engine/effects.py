@@ -533,6 +533,11 @@ def _secondary_confuse(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     return _set(state, "confusion", h.target_side, outcome.duration[h.side], cond)
 
 
+def _aqua_ring(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    cond = (h.effect == _E.AQUA_RING) & h.landed & (state.aqua_ring[h.side] == 0)
+    return _set(state, "aqua_ring", h.side, 1, cond)
+
+
 def _mud_sport(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     cond = (h.effect == _E.MUD_SPORT) & h.landed & (state.mud_sport[h.side] == 0)
     return _set(state, "mud_sport", h.side, 1, cond)
@@ -878,6 +883,7 @@ def play_hit(
         _leech_seed,
         _water_sport,
         _mud_sport,
+        _aqua_ring,
         _screen,
         _brick_break,
         _foresight,

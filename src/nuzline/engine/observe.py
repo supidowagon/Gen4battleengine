@@ -130,6 +130,7 @@ _NONZERO_SIDE = (
     "curled",
     "bide_turns",
     "mud_sport",
+    "aqua_ring",
 )
 _NONZERO_FIELD = ("trick_room", "gravity")
 

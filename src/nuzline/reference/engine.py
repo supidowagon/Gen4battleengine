@@ -565,6 +565,7 @@ def _reset_battler(sd: RefSide) -> None:
         "bide_damage",
         "curled",
         "mud_sport",
+        "aqua_ring",
     ):
         setattr(sd, name, 0)
 
@@ -990,6 +991,9 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
     elif effect == EffectId.MUD_SPORT and landed and not s.sides[side].mud_sport:
         # effect_script_0201.s: fails when the user already has it.
         s.sides[side].mud_sport = 1
+    elif effect == EffectId.AQUA_RING and landed and not s.sides[side].aqua_ring:
+        # effect_script_0251.s: fails when the user already has it.
+        s.sides[side].aqua_ring = 1
     elif effect in (EffectId.LIGHT_SCREEN, EffectId.REFLECT) and landed:
         # BtlCmd_TryLightScreen / TryReflect (script.c:4214, :4257): fail when already up,
         # else NUM_SCREEN_TURNS (Light Clay is unmapped, so coverage refuses it).
@@ -1486,6 +1490,7 @@ def _end_of_turn(turn: _Turn, s: RefState, order: list[int]) -> None:
     is followed by the faint check, and nothing runs once the battle is over."""
     for battler in order:
         for check in (
+            _aqua_ring_check,  # MON_COND_CHECK_STATE_AQUA_RING, bcp.c:1332
             _turn_end_ability,  # MON_COND_CHECK_STATE_ABILITY, bcp.c:1355
             _held_item_hp,  # MON_COND_CHECK_STATE_USE_ITEM, bcp.c:1362
             _leech_seed_check,  # MON_COND_CHECK_STATE_LEECH_SEED, bcp.c:1378
@@ -1501,6 +1506,15 @@ def _end_of_turn(turn: _Turn, s: RefState, order: list[int]) -> None:
                 return
             check(turn, s, battler)
             _faint_check(turn, s)
+
+
+def _aqua_ring_check(turn: _Turn, s: RefState, side: int) -> None:
+    """``MON_COND_CHECK_STATE_AQUA_RING`` (bcp.c:1332-1351): a ringed battler below full HP
+    and alive heals ``Divide(maxHP, 16)`` (``subscript_aqua_ring_heal.s``, Big Root applied).
+    Heal Block (``healBlockTurns``) is unsupported."""
+    mon = _active(s, side)
+    if s.sides[side].aqua_ring and mon.hp and mon.hp != mon.max_hp:
+        _gain_hp(s, side, _big_root(turn, s, side, _divide(mon.max_hp, 16)))
 
 
 def _leech_seed_check(turn: _Turn, s: RefState, side: int) -> None:

@@ -218,6 +218,7 @@ _COND_TEXT = {
     "curled": "curled up",
     "bide_turns": "storing energy",
     "mud_sport": "Mud Sport",
+    "aqua_ring": "Aqua Ring",
     "spikes": "Spikes",
     "toxic_spikes": "Toxic Spikes",
 }

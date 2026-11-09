@@ -255,6 +255,7 @@ VISIBLE_CLASSES = (
     "curled",
     "bide",
     "mud sport",
+    "aqua ring",
     "stat stage",
     "weather",
     "stealth rock",
@@ -299,6 +300,7 @@ def visible_cases(tables, names):
         "bide": projected("bide_turns", lambda a: set_field(a, "bide_turns", 1, 2)),
         # Mud Sport is per battler: one side's sport differs from the other's.
         "mud sport": projected("mud_sport", lambda a: set_field(a, "mud_sport", 1, 1)),
+        "aqua ring": projected("aqua_ring", lambda a: set_field(a, "aqua_ring", 1, 1)),
         "stat stage": (
             "stages",
             leer,

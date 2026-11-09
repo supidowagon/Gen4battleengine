@@ -31,7 +31,7 @@ Encodings:
   own last action ended (see ``step``).
 * ``foresight``, ``disabled_move``/``disable_turns``, ``locked_move`` (0 = not locked),
   ``bide_turns``/``bide_damage`` (``bide_damage`` is ``storedDamage`` only while
-  ``bide_turns > 0``, else 0), ``curled`` and ``mud_sport`` are the active battler's
+  ``bide_turns > 0``, else 0), ``curled``, ``mud_sport`` and ``aqua_ring`` are the active battler's
   matching volatile / move-effect state; all are reset like the other volatiles
   (``step._VOLATILE``).
 * ``trainer_item_count`` is ``aiContext.trainerItemCounts``: the bag's size at battle
@@ -115,6 +115,7 @@ class BattleState(NamedTuple):
     bide_damage: jnp.ndarray  # int16, storedDamage while Biding (hidden), else 0
     curled: jnp.ndarray  # int8, VOLATILE_CONDITION_DEFENSE_CURL
     mud_sport: jnp.ndarray  # int8, MOVE_EFFECT_MUD_SPORT in moveEffectsMask
+    aqua_ring: jnp.ndarray  # int8, MOVE_EFFECT_AQUA_RING in moveEffectsMask
     # per side [2]
     spikes: jnp.ndarray  # int8, layers
     toxic_spikes: jnp.ndarray  # int8, layers
@@ -247,6 +248,7 @@ LAYOUT: dict[str, tuple[tuple[int, ...], type]] = {
     "bide_damage": (_SIDE, np.int16),
     "curled": (_SIDE, np.int8),
     "mud_sport": (_SIDE, np.int8),
+    "aqua_ring": (_SIDE, np.int8),
     "spikes": (_SIDE, np.int8),
     "toxic_spikes": (_SIDE, np.int8),
     "stealth_rock": (_SIDE, np.int8),

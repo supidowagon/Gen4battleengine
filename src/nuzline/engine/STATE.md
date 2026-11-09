@@ -51,11 +51,11 @@ three structs has a row.
   other bits (Uproar, Thrash, Attract, Focus Energy, Transform, Rage, Substitute
   flag, Destiny Bond, Mean Look, Nightmare, Curse, Torment) are later (M6); the Substitute flag is implied by `substitute_hp > 0`.
 - **moveEffectsMask** bits mapped: Leech Seed -> `leech_seed`, Water Sport ->
-  `water_sport`, Mud Sport -> `mud_sport` (per battler, cleared on switch-out; the
+  `water_sport`, Mud Sport -> `mud_sport`, Aqua Ring -> `aqua_ring` (per battler, cleared on switch-out; the
   Electric power halving reads every active battler, `battle_lib.c:6812`). The rest
   (Perish Song, semi-invulnerable turns, Minimize,
   Charge, Ingrain, Imprison, Grudge, Gastro Acid, Miracle
-  Eye, Power Trick, Aqua Ring, Heal Block, Embargo, Magnet Rise, Lock-On) are
+  Eye, Power Trick, Heal Block, Embargo, Magnet Rise, Lock-On) are
   later (M6).
 - **fieldConditionsMask**: the weather bits (temporary vs. permanent rain, sand,
   sun, hail, plus deep fog) -> `weather` with `weather_timer == 0` meaning
@@ -192,7 +192,7 @@ three structs has a row.
 | `BattleMon.gender` | `gender` | mapped |
 | `BattleMon.OTGender` | — | not needed because it is cosmetic (names, messages, sprites, animation) |
 | `BattleMon.capturedBall` | — | not needed because it is cosmetic (names, messages, sprites, animation) |
-| `BattleMon.moveEffectsMask` | `leech_seed`, `water_sport`, `mud_sport` | mapped |
+| `BattleMon.moveEffectsMask` | `leech_seed`, `water_sport`, `mud_sport`, `aqua_ring` | mapped |
 | `BattleMon.moveEffectsTemp` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
 | `BattleMon.moveEffectsData` | `taunt`, `protect_count`, `rollout_count`, `recharge`, `substitute_hp`, `trap_move`, `choice_lock` | mapped |
 
