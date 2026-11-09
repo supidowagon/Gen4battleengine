@@ -694,6 +694,20 @@ def _tie(s):
         ("Flame Wheel", "Tackle", True, "frozen"),
         ("Spore", "Tackle", True, "insomnia"),
         ("Supersonic", "Zen Headbutt", True, None),
+        # Review probes. Mold Breaker pierces Inner Focus: the flinch is sure again.
+        ("Headbutt", "Tackle", True, "mold_breaker_vs_inner_focus"),
+        # Fake Out's first turn into a Steadfast, confused (3) and paralyzed foe: a sure
+        # flinch skips its confusion and paralysis rolls, not the Speed boost.
+        ("Fake Out", "Tackle", True, "steadfast_confused_paralyzed"),
+        # Pursuit against a switch, from either side, into a Static holder: the pre-switch
+        # hit reads crit, roll and the contact roll with no accuracy roll.
+        (4 + 1, "Pursuit", False, "static_player"),
+        ("Pursuit", 4 + 1, False, "static_opp"),
+        # A flinch into a full-HP Focus Sash holder; a foe that wakes this turn (counter 1)
+        # and can then be flinched; Ember on a frozen foe (blocked, then the thaw by hit).
+        ("Headbutt", "Tackle", True, "focus_sash"),
+        ("Headbutt", "Tackle", True, "waking"),
+        ("Ember", "Tackle", True, "frozen"),
     ],
 )
 def test_order_branches_cases(tables, names, player, opp, tie, setup):
@@ -701,9 +715,9 @@ def test_order_branches_cases(tables, names, player, opp, tie, setup):
         tables,
         names,
         player_species="Venonat",
-        player_moves=(player,),
+        player_moves=(player,) if isinstance(player, str) else None,
         opp_species="Cranidos",
-        opp_moves=(opp,),
+        opp_moves=(opp,) if isinstance(opp, str) else None,
     )
     s = s._replace(ability=s.ability.at[1, 0].set(AbilityId.STURDY))  # no Mold Breaker
     if tie:
@@ -717,9 +731,39 @@ def test_order_branches_cases(tables, names, player, opp, tie, setup):
         s = s._replace(ability=s.ability.at[1, 0].set(AbilityId.INSOMNIA))
     elif setup == "lucky_chant":
         s = s._replace(lucky_chant=s.lucky_chant.at[:].set(5))
+    elif setup == "mold_breaker_vs_inner_focus":
+        ability = s.ability.at[1, 0].set(AbilityId.INNER_FOCUS)
+        s = s._replace(ability=ability.at[0, 0].set(AbilityId.MOLD_BREAKER))
+    elif setup == "steadfast_confused_paralyzed":
+        s = s._replace(
+            fake_out_turn=s.fake_out_turn.at[0].set(s.turn),
+            ability=s.ability.at[1, 0].set(AbilityId.STEADFAST),
+            confusion=s.confusion.at[1].set(3),
+            status=s.status.at[1, 0].set(Status.PARALYSIS),
+        )
+    elif setup in ("static_player", "static_opp"):
+        side = 0 if setup == "static_player" else 1
+        s = s._replace(ability=s.ability.at[side, 0].set(AbilityId.STATIC))
+    elif setup == "focus_sash":
+        s = s._replace(item=s.item.at[1, int(s.active[1])].set(names.item("Focus Sash")))
+    elif setup == "waking":
+        s = s._replace(
+            status=s.status.at[1, 0].set(Status.SLEEP),
+            status_counter=s.status_counter.at[1, 0].set(1),
+        )
     width, brute = assert_equals_bruteforce(tables, s, A(player, opp, s, names))
     if tie:
         assert width < brute
+
+
+def test_read_builders_registered():
+    # Every conditional-read builder is registered once the engine entry points are
+    # imported (a builder left out by import order would silently drop its gates).
+    import nuzline.search.expand
+    import nuzline.search.stage_b  # noqa: F401
+    from nuzline.engine.enumerate import _READ_BUILDERS
+
+    assert [b.__name__ for b in _READ_BUILDERS] == ["_move_reads"]
 
 
 def _venonat_vs_cranidos(tables, names, **kw):

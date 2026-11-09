@@ -704,10 +704,19 @@ def register_reads(builder: ReadBuilder) -> ReadBuilder:
 
 
 def _any_proc(*values: np.ndarray) -> np.ndarray:
-    out = np.zeros(np.shape(values[0]) if values else (), bool)
+    assert values, "a proc condition needs at least one secondary roll"
+    out = np.zeros(np.shape(values[0]), bool)
     for v in values:
         out = out | (v == 1)
     return out
+
+
+def _never() -> np.ndarray:
+    return np.False_
+
+
+# Explicitly never read: for a read whose only trigger cannot happen in this branch.
+NEVER = Condition((), _never)
 
 
 def _hits_somewhere(v: np.ndarray) -> np.ndarray:
@@ -745,8 +754,12 @@ def _move_reads(laws: OutcomeLaws, branch: Branch, plan: ReadPlan) -> None:
         return None if h is None else Condition((h,), _hits_somewhere)
 
     def procs(s: int) -> Condition:
+        """Some hit of ``s``'s move procs. A proc-gated move whose secondary roll is not
+        relevant in this branch (``outcome_laws`` drops it only when the effect is
+        blocked: the target cannot take the status or is confused) never applies its
+        effect, so what needs the proc is never read: ``NEVER``, stated explicitly."""
         secs = tuple(e for i in range(MAX_HITS) if (e := rel_elem("secondary", (s, i))))
-        return Condition(secs, _any_proc)
+        return Condition(secs, _any_proc) if secs else NEVER
 
     def move_conds(s: int) -> list[Condition]:
         return [can_hit(s)] if bool(reads.hit_gated[s]) else []
@@ -865,8 +878,9 @@ def _branch_rows(laws: OutcomeLaws, branch: Branch, budget: int, tie_weight: tup
         total = int(sizes.sum())
         if total > budget:
             raise SamplingOnly(
-                f"more than {budget} outcome combinations exceed the width cap {WIDTH_CAP} "
-                f"({len(order) + 1} random elements)"
+                f"the outcome combinations exceed the width cap {WIDTH_CAP} "
+                f"(this branch alone reaches {total} rows with {budget} left; "
+                f"{len(order) + 1} random elements)"
             )
         src = np.repeat(np.arange(n), sizes)
         pos = np.arange(total) - np.repeat(np.cumsum(sizes) - sizes, sizes)
