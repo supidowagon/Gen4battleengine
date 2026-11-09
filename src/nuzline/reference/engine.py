@@ -34,6 +34,7 @@ from nuzline.engine.ids import (
     MOVE_FAKE_OUT,
     MOVE_STRUGGLE,
     POTION_HP_RESTORED,
+    PROTECT_CHAIN_MOVES,
     RESIST_ANY_NORMAL,
     WEATHER_ABILITY_IDS,
     AbilityId,
@@ -86,6 +87,8 @@ SELF_DEFENDER = TARGETS_USER | {
 }
 # _status_disrupted's results.
 GOES_AHEAD, DISRUPTED, HURT_ITSELF = 0, 1, 2
+# sProtectSuccessRate (script.c:5128-5133), indexed by protectSuccessTurns.
+PROTECT_SUCCESS_RATE = [0xFFFF, 0x7FFF, 0x3FFF, 0x1FFF]
 # HitRateByStage (include/data/hit_rate_stages.h), indexed by the clamped stage sum.
 HIT_RATE_BY_STAGE = [
     (33, 100), (36, 100), (43, 100), (50, 100), (60, 100), (75, 100), (1, 1),
@@ -112,6 +115,11 @@ class _Turn:
     # SELF_TURN_FLAG_PLUCK_BERRY (lib.c:5848).
     focus_armed: bool = False
     pluck_flag: bool = False
+    # turnFlags.protecting (cleared at the turn end, lib.c:2231): TryProtection succeeded.
+    protecting: list[bool] = field(default_factory=lambda: [False, False])
+    # SYSCTL_ATTACK_MESSAGE_SHOWN of the current action (script.c:1432), for
+    # UpdateMoveBuffers' moveProtect (bcp.c:3936-3942).
+    attack_message: bool = False
 
 
 def _active(s: RefState, side: int) -> RefPokemon:
@@ -879,6 +887,21 @@ def _defender_always(tables, move: int) -> bool:
     return _move_target(tables, move) in DEFENDER_ALWAYS or _curse_on_user(tables, move)
 
 
+def _protected(turn: _Turn, s: RefState, side: int, move: int, unleash: bool) -> bool:
+    """``BattleControllerPlayer_CheckMoveHitOverrides`` (bcp.c:3001-3014): the defender,
+    ``side``'s foe, is protecting, the move has ``MOVE_FLAG_CAN_PROTECT``, the foe is its
+    defender (not a SELF_DEFENDER range, not a non-Ghost Curse), and a multi-turn move
+    (``Move_IsMultiTurn``, lib.c:2975: Bide here) is on its last turn (the unleash)."""
+    tables = turn.tables
+    if not turn.protecting[1 - side]:
+        return False
+    if not _t(tables, "move_flags", move) & MoveFlag.PROTECT:
+        return False
+    if _t(tables, "move_effect", move) == EffectId.BIDE:
+        return unleash
+    return _move_target(tables, move) not in SELF_DEFENDER and not _curse_on_user(tables, move)
+
+
 def _can_have_status(s: RefState, side: int, status: int) -> bool:
     """No status yet and no immunity: ``subscript_burn.s`` (Fire), ``subscript_poison.s``
     (Poison, Steel), ``subscript_freeze.s`` (Ice, or sun)."""
@@ -1408,6 +1431,7 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
     # From here every path prints the attack message (subscript_no_pp.s,
     # subscript_no_target.s, subscript_missed.s, the move script): moveHit = the move.
     record = move if foe_defender else None
+    turn.attack_message = True
     # BattleControllerPlayer_DecrementPP (bcp.c:2235): one PP from the move's slot;
     # none left fails the move (MOVE_STATUS_NO_PP). Struggle spends none, nor does a
     # battler that was locked at command selection (ppDecremented, bcp.c:335).
@@ -1443,9 +1467,29 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
     # from the stages of this moment; o.hit[side][0] is the class of the roll
     # RandNext() % 100 + 1 (engine/outcome.py), which misses when it is 0 or above it.
     roll = o.hit[side][0]
-    if _t(tables, "move_accuracy", move) != 0 and not 0 < roll <= _hit_rate(tables, s, side, move):
+    missed = _t(tables, "move_accuracy", move) != 0 and not 0 < roll <= _hit_rate(
+        tables, s, side, move
+    )
+    # CheckMoveHitOverrides (bcp.c:3001-3014) after the accuracy roll: a protecting foe
+    # stops the move, Battler_UnlockMoveChoice; subscript_missed.s unlocks too.
+    if missed or _protected(turn, s, side, move, unleash):
         _unlock(s.sides[side])  # subscript_missed.s
-        return record
+        # Bide's unleash defender is the last hitter (bcp.c:2702-2706): its moveHit.
+        return move if unleash else record
+    # effect_script_0111.s (Protect, Detect) -> subscript_protect.s -> BtlCmd_TryProtection
+    # (script.c:5149-5190). The moveProtect reset (:5154-5158) is folded into protect_count
+    # at the end of each action (ref_step). The roll comes first, then the last-to-act test
+    # (waitingBattlers, bcp.c:881-886: the battler acting second is the last).
+    if effect == EffectId.PROTECT:
+        sd = s.sides[side]
+        n = sd.protect_count
+        passes = n == 0 or o.protect[side] != 0  # PROTECT_SUCCESS_RATE[n] >= RandNext()
+        if passes and not target_moved:
+            turn.protecting[side] = True
+            sd.protect_count = min(n + 1, len(PROTECT_SUCCESS_RATE) - 1)
+        else:
+            sd.protect_count = 0
+            return record  # MOVE_STATUS_FAILED: subscript_missed.s, no AfterMoveEffects
     # BtlCmd_SetMultiHit (script.c:2634): SetMultiHit 2 (effect_script_0044.s) is fixed,
     # SetMultiHit 0 draws 2-5.
     hits = 1
@@ -1842,9 +1886,15 @@ def ref_step(tables, state: RefState, actions: tuple[int, int], outcome) -> RefS
             _switch(turn, s, side, actions[side] - MOVE_ACTIONS, actions, choices)
         else:
             move, struggling, locked = choices[side]
+            turn.attack_message = False
             record = _fight(
                 turn, s, side, actions[side], move, struggling, locked, target_moved=position == 1
             )
+            # UpdateMoveBuffers (bcp.c:3936-3942): moveProtect = the move if its attack
+            # message showed, else MOVE_NONE; the next TryProtection keeps the chain only for
+            # Protect, Detect or Endure (script.c:5154-5158). Folded into protect_count here.
+            if not (turn.attack_message and move in PROTECT_CHAIN_MOVES):
+                s.sides[side].protect_count = 0
         turn.done[side] = True
         _faint_check(turn, s)  # BATTLE_CONTROL_CHECK_ANY_FAINTED after each action
         # UpdateFlagsWhenHit runs after LOOP_FAINTED (bcp.c:3820-3837): a KO'd defender

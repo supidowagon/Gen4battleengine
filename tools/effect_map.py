@@ -208,6 +208,10 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     # effect_script_0122.s: BtlCmd_Present (battle_script.c:5789-5806) draws the power or the
     # heal path (engine/effects.py ``_present``, damage.PRESENT_POWER).
     122: ("BATTLE_EFFECT_RANDOM_POWER_MAYBE_HEAL", _E.PRESENT, (0, 0, 0)),
+    # effect_script_0111.s (Protect, Detect): a direct TO_ATTACKER effect running
+    # subscript_protect.s -> BtlCmd_TryProtection (battle_script.c:5149-5190); the block is
+    # CheckMoveHitOverrides (battle_controller_player.c:3001-3014; engine/step.py).
+    111: ("BATTLE_EFFECT_PROTECT", _E.PROTECT, (0, 0, 0)),
     276: ("BATTLE_EFFECT_RAISE_SP_ATK_HIT", _E.SECONDARY_STAT_SELF, (_SPA, 1, 0)),
 }
 

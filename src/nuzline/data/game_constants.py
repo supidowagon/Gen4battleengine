@@ -171,6 +171,11 @@ CONSTANTS: tuple[Constant, ...] = (
     Constant("nuzline.engine.ids.MOVE_STRUGGLE", "move", 165, "Struggle", _E),
     # MOVE_FAKE_OUT (generated/moves.txt line 253): subscript_flinch_mon.s:18.
     Constant("nuzline.engine.ids.MOVE_FAKE_OUT", "move", 252, "Fake Out", _E),
+    # MOVE_PROTECT, MOVE_DETECT, MOVE_ENDURE (generated/moves.txt lines 183, 198, 204):
+    # BtlCmd_TryProtection's chain check (battle_script.c:5154-5156).
+    Constant("nuzline.engine.ids.MOVE_PROTECT", "move", 182, "Protect", _E),
+    Constant("nuzline.engine.ids.MOVE_DETECT", "move", 197, "Detect", _E),
+    Constant("nuzline.engine.ids.MOVE_ENDURE", "move", 203, "Endure", _E),
     # The weather code's decomp abilities (generated/abilities.txt line N is id N-1).
     *_table(
         "nuzline.engine.ids.WEATHER_ABILITY_IDS",

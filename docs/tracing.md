@@ -372,6 +372,10 @@ For each turn, `tools/trace_to_state.py` works out the following:
   roll. The heal path runs no `CalcDamage` and so writes no `hit` record: a Present that
   connected with no `hit` record is replayed with `present` 0 and the heal
   (`PRESENT_HEAL`), and the replay that matches the target's HP gain is kept.
+- **Protect.** A Protect / Detect user's `move_end` record carries `MOVE_STATUS_FAILED`
+  (bit 6) when `BtlCmd_TryProtection` failed: the converter sets `Outcome.protect` to 0
+  then, else 1 (a success; a chain of 0 or a user acting last ignores the roll). A move it
+  blocked writes no `hit` record and its `move_end` has `MOVE_STATUS_PROTECTED` (bit 15).
 - **The other chance fields** are `speed_tie`, `end_speed_tie`, `full_para`, `thaw`,
   `secondary`, `contact_proc` (only when Static or Poison Point is in play) and
   `duration`. These are enumerated only where they can matter:

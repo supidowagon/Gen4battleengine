@@ -5,8 +5,8 @@
 lists. Per-hit fields are ``[side, hit_index]`` with up to 5 hits; per-action
 fields are ``[side]``. ``secondary`` is indexed by the attacking side (its own
 move's secondary effect; Thunder Fang's paralysis roll); ``fang_flinch`` by the
-attacking side too (Thunder Fang's second roll, its flinch), and ``present`` (Present's
-power or heal); ``contact_proc`` by the
+attacking side too (Thunder Fang's second roll, its flinch), ``present`` (Present's
+power or heal) and ``protect`` (the user's Protect / Detect roll); ``contact_proc`` by the
 defending side (its contact ability); ``duration`` by the acting (inflicting) side, and it
 is the counter value the decomp's ``Random`` command stores for that side's move
 (``sample_outcome``).
@@ -75,6 +75,7 @@ class Outcome(NamedTuple):
     shed_skin: jnp.ndarray  # int8[2], Shed Skin's RandNext() % 10 < 3
     fang_flinch: jnp.ndarray  # int8[2], Thunder Fang's flinch roll (secondary is its paralysis)
     present: jnp.ndarray  # int8[2], Present: 0/1/2 = power 40/80/120, PRESENT_HEAL = the heal
+    protect: jnp.ndarray  # int8[2], 1 = the Protect / Detect roll passes (PROTECT_RATES)
 
 
 def empty_outcome() -> Outcome:
@@ -99,6 +100,7 @@ def empty_outcome() -> Outcome:
         shed_skin=sides,
         fang_flinch=sides,
         present=sides,
+        protect=sides + 1,
     )
 
 
@@ -338,6 +340,12 @@ def present_kind(rand) -> jnp.ndarray:
     return jnp.searchsorted(jnp.array(PRESENT_CUTS, _I32), rand, side="right")
 
 
+# sProtectSuccessRate (battle_script.c:5128-5133), indexed by protectSuccessTurns (0-3):
+# BtlCmd_TryProtection succeeds when ``rate >= RandNext()`` (:5167), a u16, so with
+# probability (rate + 1) / 65536 = 1, 1/2, 1/4, 1/8 exactly (a threshold, not a modulo).
+PROTECT_RATES = (0xFFFF, 0x7FFF, 0x3FFF, 0x1FFF)
+
+
 def sample_outcome(key, tables: Tables, state: BattleState, actions) -> Outcome:
     """Draw every field from its Gen 4 probability for this state and these actions."""
     actions = jnp.asarray(actions, _I32)
@@ -405,5 +413,10 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions) -> Outcome:
         present=present_kind(
             jax.random.randint(jax.random.fold_in(key, 17), per_side, 0, 256, dtype=_I32)
         ),
+        # BtlCmd_TryProtection (battle_script.c:5167): RandNext() <= the rate of the user's
+        # turn-start chain (the chain cannot change before its own action; the reset of a
+        # chain broken by another move is folded into protect_count, step._use_move).
+        protect=jax.random.randint(jax.random.fold_in(key, 18), per_side, 0, 65536, dtype=_I32)
+        <= jnp.asarray(PROTECT_RATES, _I32)[jnp.clip(state.protect_count.astype(_I32), 0, 3)],
     )
     return Outcome(*(jnp.asarray(f).astype(_I8) for f in outcome))

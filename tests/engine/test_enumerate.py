@@ -389,6 +389,10 @@ def decomp_law(tables, state, actions, name: str, index: tuple) -> dict[int, Fra
         return coin(Fraction(3, 10))
     if name == "present":  # BtlCmd_Present (battle_script.c:5793-5803): RandNext() & 0xFF
         return {k: Fraction(w, 256) for k, w in enumerate((102, 76, 26, 52))}
+    if name == "protect":  # BtlCmd_TryProtection (battle_script.c:5128-5133, :5167)
+        rate = (0xFFFF, 0x7FFF, 0x3FFF, 0x1FFF)[min(int(state.protect_count[side]), 3)]
+        p = Fraction(rate + 1, 65536)  # rate >= RandNext(), a u16
+        return {1: p} if p == 1 else coin(p)
     if name == "n_hits":
         return {2: Fraction(3, 8), 3: Fraction(3, 8), 4: Fraction(1, 8), 5: Fraction(1, 8)}
     if name == "duration":
@@ -580,7 +584,8 @@ def assert_equals_bruteforce(tables, state, actions) -> tuple[int, int]:
 # Bite, Fake Out, Thunder Fang's paralysis-then-flinch), status inflicted directly or as a
 # secondary (Thunder Wave, Spore, Spark, Ice Beam, Ember, Flame Wheel), confusion
 # (Confusion, Psybeam, Supersonic, Confuse Ray), a duration (Bind, Taunt), plain and
-# multi-hit damage, an accuracy drop and Present (a drawn power or a heal of the foe).
+# multi-hit damage, an accuracy drop, Present (a drawn power or a heal of the foe) and
+# Protect / Detect (a chain of 0-3 drawn for them: the foe's move is blocked or not).
 ORDER_MOVES = (
     "Headbutt",
     "Zen Headbutt",
@@ -602,6 +607,8 @@ ORDER_MOVES = (
     "Fury Swipes",
     "Sand-Attack",
     "Present",
+    "Protect",
+    "Detect",
 )
 # Drawn twice as often.
 FLINCH_MOVES = ("Headbutt", "Zen Headbutt", "Bite", "Fake Out", "Thunder Fang")
@@ -631,6 +638,8 @@ def order_state(draw, tables, names) -> BattleState:
             move = names.move(draw(st.sampled_from(ORDER_MOVES + FLINCH_MOVES)))
             a["moves"][side, mon, 0] = move
             a["pp"][side, mon, 0] = move_pp[move]
+            if int(tables.move_effect[move]) == EffectId.PROTECT:
+                a["protect_count"][side] = draw(st.integers(0, 3))
             if a["disabled_move"][side] == move:
                 a["disabled_move"][side], a["disable_turns"][side] = 0, 0
         if draw(st.integers(0, 3)) == 0:
@@ -773,7 +782,11 @@ def test_read_builders_registered():
     import nuzline.search.stage_b  # noqa: F401
     from nuzline.engine.enumerate import _READ_BUILDERS
 
-    assert [b.__name__ for b in _READ_BUILDERS] == ["_move_reads", "_present_reads"]
+    assert [b.__name__ for b in _READ_BUILDERS] == [
+        "_move_reads",
+        "_present_reads",
+        "_protect_reads",
+    ]
 
 
 def _venonat_vs_cranidos(tables, names, **kw):

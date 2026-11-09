@@ -180,14 +180,14 @@ def test_state_md_accounts_for_every_struct_field():
 # switch-in ability checks re-run after every move gated by the announced flags
 # (battle_lib.c:3649-4168, battle_controller_player.c:3673/3973), Quick Claw, Protect,
 # the speed values and Sketch are read later in the turn. They are needed for M6, not M1
-# (``moveLockedInto`` moved to ``locked_move`` in milestone 4a).
+# (``moveLockedInto`` moved to ``locked_move`` in milestone 4a; ``moveProtect`` folded into
+# ``protect_count`` in K3b2 Task 6, test_move_protect_is_folded_into_protect_count).
 AUDIT_LATER_ROWS = (
     "BattleMon.intimidateAnnounced",
     "BattleMon.weatherAbilityAnnounced",
     "BattleMon.traceAnnounced",
     "BattleMon.downloadAnnounced",
     "MoveEffectsData.quickClaw",
-    "BattleContext.moveProtect",
     "BattleContext.monSpeedValues",
     "BattleContext.moveSketched",
 )
@@ -197,6 +197,13 @@ def test_state_md_audit_rows_are_later_m6():
     status = {field: status for field, _, status in _state_md_rows()}
     for field in AUDIT_LATER_ROWS:
         assert status[field] == "later (M6)", f"{field}: {status[field]!r}"
+
+
+def test_move_protect_is_folded_into_protect_count():
+    # docs/kaizo/k3b2-rules.md §12: the moveProtect reset is folded into protect_count.
+    rows = {field: (pytree, status) for field, pytree, status in _state_md_rows()}
+    assert rows["BattleContext.moveProtect"] == ("protect_count", "mapped")
+    assert rows["MoveEffectsData.protectSuccessTurns"] == ("protect_count", "mapped")
 
 
 def test_leads_choose_the_active_slots_before_the_switch_in_effects(tables, names):

@@ -66,6 +66,9 @@ _FLAG_TEXT = (
     ("snapped_out", "snapped out of confusion"),
     ("self_hit", "hurt itself in confusion"),
     ("contact_ability", "ability triggered"),
+    ("protected", "the foe protected itself"),
+    ("protect_ok", "protected itself"),
+    ("protect_failed", "but it failed"),
 )
 _STATUS_TEXT = {
     Status.SLEEP: "SLP",

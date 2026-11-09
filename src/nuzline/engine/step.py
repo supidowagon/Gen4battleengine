@@ -75,10 +75,11 @@ from nuzline.engine.effects import (
     hit_count,
     holds,
     play_hit,
+    protect_blocks,
     recovers_at_full_hp,
     resist_berry,
     resist_berry_damage,
-    targets_user,
+    self_defender,
     unlock_move,
 )
 from nuzline.engine.hooks import (
@@ -91,6 +92,7 @@ from nuzline.engine.hooks import (
 )
 from nuzline.engine.ids import (
     POTION_HP_RESTORED,
+    PROTECT_CHAIN_MOVES,
     WEATHER_ABILITY_IDS,
     AbilityId,
     EffectId,
@@ -154,16 +156,9 @@ _VOLATILE = (
     "mud_sport",
     "aqua_ring",
 )
-# Ranges whose decomp defender is the user itself in singles (``BattleSystem_Defender``,
-# battle_lib.c:1665-1683): such a move records nothing on the foe's ``move_hit``.
-_SELF_DEFENDER = (
-    MoveTarget.RANGE_SINGLE_TARGET_SPECIAL,
-    MoveTarget.RANGE_USER,
-    MoveTarget.RANGE_USER_SIDE,
-    MoveTarget.RANGE_FIELD,
-    MoveTarget.RANGE_ALLY,
-    MoveTarget.RANGE_USER_OR_ALLY,
-)
+# BtlCmd_TryProtection caps protectSuccessTurns at NELEMS(sProtectSuccessRate) - 1
+# (battle_script.c:5182-5184; outcome.PROTECT_RATES).
+PROTECT_CHAIN_MAX = 3
 
 # The turn's events (``step_events``, ``turn_events``): what each side's action showed,
 # recorded where ``execute_actions`` runs it. ``engine.observe`` reads them; ``step``
@@ -185,6 +180,9 @@ EVENT_FLAGS = (
     "snapped_out",
     "self_hit",
     "contact_ability",
+    "protected",
+    "protect_ok",
+    "protect_failed",
 )
 
 
@@ -357,7 +355,14 @@ def _hit_events(before: BattleState, after: BattleState, side, landed, crit) -> 
 
 
 def _use_move(
-    tables: Tables, state: BattleState, side, action, choice, outcome: Outcome, target_moved
+    tables: Tables,
+    state: BattleState,
+    side,
+    action,
+    choice,
+    outcome: Outcome,
+    target_moved,
+    foe_protecting=False,
 ) -> tuple[BattleState, dict, dict]:
     """``side``'s active Pokemon uses the move in slot ``action`` (or Struggle).
     ``choice``: its ``(move, struggling, locked)`` from ``selected_move`` and
@@ -365,7 +370,9 @@ def _use_move(
     (battle_controller_player.c:433), so a Taunt landing earlier this turn makes a chosen
     power-0 move fail instead of Struggling, and a battler locked then spends no PP
     (``ppDecremented`` is set at command selection, :335).
-    ``target_moved``: the other side has already acted this turn.
+    ``target_moved``: the other side has already acted this turn. ``foe_protecting``: its
+    Protect succeeded earlier this turn (the decomp's ``turnFlags.protecting``, a per-turn
+    flag cleared at the turn end, battle_lib.c:2231, and on a faint, :2190-2193).
 
     Returns ``(state, own, foe)``: the state after the move, the user's events (each
     status check's result, effect-gated: set only when the check was reached and had an
@@ -378,13 +385,10 @@ def _use_move(
     ready = (state.over == 0) & (state.hp[side, user] > 0)
     # BattleControllerPlayer_FightCommand (battle_controller_player.c:1900) fixes the
     # defender before the status checks: the foe when it is alive (any HP for
-    # RANGE_OPPONENT_SIDE: BattleSystem_RandomOpponent), the user for _SELF_DEFENDER and
-    # a non-Ghost Curse (effects.targets_user).
+    # RANGE_OPPONENT_SIDE: BattleSystem_RandomOpponent), the user for a self-defender range
+    # and a non-Ghost Curse (effects.self_defender).
     move_range = tables.move_target[move]
-    self_defender = jnp.isin(move_range, jnp.asarray(_SELF_DEFENDER, move_range.dtype)) | (
-        targets_user(tables, move)
-    )
-    foe_defender = ~self_defender & (
+    foe_defender = ~self_defender(tables, move) & (
         (state.hp[target_side, target] > 0) | (move_range == MoveTarget.RANGE_OPPONENT_SIDE)
     )
 
@@ -519,7 +523,38 @@ def _use_move(
     roll = outcome.hit[side, 0].astype(_I32)
     threshold = live_hit_threshold(tables, state, side, move)
     hit = never_misses | ((roll > 0) & (roll <= threshold))
-    connected = can_act & has_target & hit & ~failed
+    # CheckMoveHitOverrides (bcp.c:3001-3014) runs after the accuracy roll, hit or miss: a
+    # protecting foe stops the move (effects.protect_blocks), MOVE_STATUS_PROTECTED, and
+    # Battler_UnlockMoveChoice (the unlock below). Selfdestruct's user already fainted.
+    blocked = jnp.asarray(foe_protecting) & protect_blocks(tables, move, bide_ends)
+    connected = can_act & has_target & hit & ~failed & ~blocked
+    # Protect / Detect (effect_script_0111.s, a direct TO_ATTACKER effect: the user has HP)
+    # -> subscript_protect.s -> BtlCmd_TryProtection (battle_script.c:5149-5190). The
+    # chain reset of :5154-5158 is folded into protect_count (below), so its value here is
+    # protectSuccessTurns. Success iff sProtectSuccessRate[n] >= RandNext()
+    # (outcome.protect; n = 0 never fails) and the user is not the last battler to act
+    # (waitingBattlers != 1, bcp.c:881-886: in singles, it acts first): turnFlags.protecting
+    # and the count up to PROTECT_CHAIN_MAX; else the count drops to 0 ("But it failed!").
+    count = state.protect_count[side].astype(_I32)
+    tried = connected & (tables.move_effect[move] == EffectId.PROTECT)
+    protect_ok = tried & ~target_moved & ((count == 0) | (outcome.protect[side] != 0))
+    protect_failed = tried & ~protect_ok
+    count = jnp.where(
+        protect_ok, jnp.minimum(count + 1, PROTECT_CHAIN_MAX), jnp.where(protect_failed, 0, count)
+    )
+    # UpdateMoveBuffers (bcp.c:3936-3942): moveProtect = the move when the attack message
+    # was shown (the move got past the status checks: can_act), else MOVE_NONE, on every
+    # path of a battler that acts. The next TryProtection resets the chain unless
+    # moveProtect is Protect, Detect or Endure (script.c:5154-5158); the engine folds that
+    # reset in here, and AICmd_LoadProtectChain (trainer_ai.c:2546-2552) reads the folded
+    # value. A switch, a bag item and Pursuit's pre-switch hit (TryPursuit ends the action
+    # without UpdateMoveBuffers, script.c:6931) leave it alone.
+    chain = jnp.asarray(PROTECT_CHAIN_MOVES, _I32)
+    keep = can_act & jnp.isin(jnp.asarray(move, _I32), chain)
+    count = jnp.where(ready & ~keep, 0, count)
+    state = state._replace(
+        protect_count=state.protect_count.at[side].set(count.astype(state.protect_count.dtype))
+    )
     # subscript_no_target.s and subscript_missed.s unlock the attacker (a Rollout that
     # missed; a first use never locked, so this is then a no-op).
     state = _unlock(state, side, can_act & ~connected)
@@ -584,7 +619,7 @@ def _use_move(
         # an attacker's item kept above can trigger again, and is removed this time. A
         # later hit that did not happen changes no HP, so its check finds what the
         # previous one found.
-        items = connected & ~no_more_work
+        items = connected & ~no_more_work & ~protect_failed  # a failed Protect: subscript_missed
         state, used = held_item_check(tables, hit_state, side, items, info.pluck_flag)
         state = after_damage_items(tables, state, 1 - side, items)
         state = after_damage_items(tables, state, side, items & used & info.pluck_flag)
@@ -632,7 +667,12 @@ def _use_move(
         ),
         "act_id": jnp.where(can_act | taunted | disabled, move, 0),
         "shown": ready,
-        "missed": can_act & has_target & ~hit & ~failed,
+        # subscript_missed.s tests PROTECTED before MISSED (:18, :157): a miss into a
+        # Protect shows "protected itself"; a failed Fake Out prints "But it failed!" (:58).
+        "missed": can_act & has_target & ~hit & ~failed & ~blocked,
+        "protected": can_act & has_target & blocked & ~failed,
+        "protect_ok": protect_ok,
+        "protect_failed": protect_failed,
         "no_target": can_act & ~has_target,
         "hits": hits,
         # subscript_magnitude.s prints "Magnitude N!" through the ON_HIT primary effect
@@ -703,6 +743,7 @@ def _act(
     items,
     outcome: Outcome,
     target_moved,
+    foe_protecting,
 ) -> tuple[BattleState, dict, dict]:
     """``side``'s action: ``(state, own, foe)`` with the events of ``_use_move``. A
     switch shows the party slot (``ACT_SWITCH``), an item its item id (``ACT_ITEM``)."""
@@ -710,7 +751,9 @@ def _act(
     switched = _send_out(tables, state, side, jnp.clip(action - MOVE_ACTIONS, 0, 5))
     used = _use_trainer_item(tables, state, side, items[side])
     choice = (choices[0][side], choices[1][side], choices[2][side])
-    moved, own, foe = _use_move(tables, state, side, action, choice, outcome, target_moved)
+    moved, own, foe = _use_move(
+        tables, state, side, action, choice, outcome, target_moved, foe_protecting
+    )
     live = state.over == 0
     switch, item = is_switch(action) & live, is_item(action) & live
     acted = _where(item, used, moved)
@@ -895,7 +938,11 @@ def _execute_actions(
         before = state
         side = order[position].astype(_I32)
         second = position == 1  # the first actor's target has not moved yet
-        acted, own, foe_events = _act(tables, state, side, actions, choices, items, outcome, second)
+        # The foe's Protect this turn (turnFlags.protecting): only a first actor's succeeds.
+        foe_protecting = events["protect_ok"][1 - side] != 0
+        acted, own, foe_events = _act(
+            tables, state, side, actions, choices, items, outcome, second, foe_protecting
+        )
         ran = (state.over == 0) & (state.hp[side, state.active[side]] > 0)
         skip = second & pursued  # the pursuer does not act again
         acted = _where(skip, state, acted)

@@ -56,6 +56,9 @@ class EffectId(IntEnum):
       ``Outcome.present`` draws a power of 40/80/120 for the hit (``damage.PRESENT_POWER``)
       or a heal of the target by ``maxHP / 4`` that ignores immunities and reads no crit or
       roll (``effects._present``).
+    * ``PROTECT`` (Protect, Detect, ``BATTLE_EFFECT_PROTECT``): zeros; ``BtlCmd_TryProtection``
+      succeeds at 2^-n by ``protect_count`` unless the user acts last, and its success blocks
+      the foe's ``MoveFlag.PROTECT`` moves for the rest of the turn (``step._use_move``).
 
     The proc chance of a ``SECONDARY_*``, ``FLINCH``, ``FAKE_OUT``, ``RAISE_ALL_STATS_HIT`` or
     ``FANG_PARALYZE_FLINCH``
@@ -105,6 +108,7 @@ class EffectId(IntEnum):
     AQUA_RING = 39
     FANG_PARALYZE_FLINCH = 40
     PRESENT = 41
+    PROTECT = 42
 
 
 class AbilityId(IntEnum):
@@ -291,6 +295,14 @@ MOVE_STRUGGLE = 165
 # Focus's message, which names the ability, only for ``BTLVAR_CURRENT_MOVE == MOVE_FAKE_OUT``
 # (or a direct flinch effect, which no supported move has).
 MOVE_FAKE_OUT = 252
+# Protect, Detect, Endure (``generated/moves.txt`` lines 183, 198, 204): ``BtlCmd_TryProtection``
+# (battle_script.c:5154-5158) keeps the chain only when ``moveProtect`` is one of them, and
+# ``AICmd_LoadProtectChain`` (trainer_ai.c:2546-2552) reads it the same way. The engine folds
+# ``moveProtect`` into ``protect_count`` (``step._use_move``).
+MOVE_PROTECT = 182
+MOVE_DETECT = 197
+MOVE_ENDURE = 203
+PROTECT_CHAIN_MOVES = (MOVE_PROTECT, MOVE_DETECT, MOVE_ENDURE)
 
 # Decomp ability ids the weather code names directly (``generated/abilities.txt`` line N is
 # id N-1), read through ``tables.species_abilities_decomp`` (``Battler_Ability``) rather than

@@ -81,6 +81,8 @@ _START_FIELDS = ("species", "level", "max_hp", "moves", "item")
 STAGE_ORDER = (Stat.HP, Stat.ATK, Stat.DEF, Stat.SPE, Stat.SPA, Stat.SPD, Stat.ACC, Stat.EVA)
 STAGE_NEUTRAL = 6
 MOVE_STATUS_MISSED = 1 << 0  # include/constants/battle/moves.h
+MOVE_STATUS_FAILED = 1 << 6  # include/constants/battle/moves.h
+MOVE_STATUS_PROTECTED = 1 << 15  # include/constants/battle/moves.h
 COMMAND_RESULT = 41  # BATTLE_CONTROL_RESULT
 NO_ACTIONS = (-1, -1)  # the last turn: the trace ends before any choice
 
@@ -332,6 +334,15 @@ class _Turn:
                 raise self.fail(f"side {side} has move records but used no PP")
             if missed:
                 o["hit"][side] = 0
+            ends = [e for e in self.events if e["kind"] == "move_end" and e["attacker"] == side]
+            if known_move and ends:
+                chosen = int(selected_move(self.tables, self.state, side, actions[side][0])[0])
+                if int(self.tables.move_effect[chosen]) == EffectId.PROTECT:
+                    # BtlCmd_TryProtection (battle_script.c:5167-5186): a failure sets
+                    # MOVE_STATUS_FAILED, which the move_end record keeps; a success does
+                    # not. Outcome.protect = 1 replays the success (a chain of 0 or a user
+                    # acting last ignores the roll).
+                    o["protect"][side] = 0 if ends[0]["flags"] & MOVE_STATUS_FAILED else 1
             if hits:
                 move = int(selected_move(self.tables, self.state, side, actions[side][0])[0])
                 o["n_hits"][side] = min(max(len(hits), 2), MAX_HITS)

@@ -23,7 +23,7 @@ import pytest
 from nuzline.data.party import load_party
 from nuzline.data.trainer import IntermediateData, build_trainer_party, load_trainers
 from nuzline.engine.damage import PRESENT_HEAL, confusion_damage, damage_for_roll
-from nuzline.engine.ids import EffectId, Stat, Status, Weather
+from nuzline.engine.ids import EffectId, MoveFlag, Stat, Status, Weather
 from nuzline.engine.order import (
     MOVE_ACTIONS,
     action_order,
@@ -37,7 +37,9 @@ from nuzline.engine.step import needs_replacement, replace, step
 from tools.trace_to_state import (
     COMPARED_FIELDS,
     INTERMEDIATE,
+    MOVE_STATUS_FAILED,
     MOVE_STATUS_MISSED,
+    MOVE_STATUS_PROTECTED,
     STAGE_ORDER,
     AmbiguousTrace,
     TraceMismatch,
@@ -159,8 +161,10 @@ def _move_events(tables, state, actions, outcome, turn) -> list[dict]:
     hp = {(side, active[side]): int(state.hp[side, active[side]]) for side in (0, 1)}
     confusion = [int(state.confusion[0]), int(state.confusion[1])]
     flinched = [False, False]
+    protecting = [False, False]
     events = []
-    for side in np.asarray(action_order(tables, state, jnp.asarray(actions), outcome)).tolist():
+    order = np.asarray(action_order(tables, state, jnp.asarray(actions), outcome)).tolist()
+    for position, side in enumerate(order):
         if actions[side] >= MOVE_ACTIONS:
             continue
         user, target = (side, active[side]), (1 - side, active[1 - side])
@@ -178,7 +182,24 @@ def _move_events(tables, state, actions, outcome, turn) -> list[dict]:
         if int(outcome.full_para[side]):
             continue  # fully paralyzed before moving
         move = int(selected_move(tables, state, side, actions[side])[0])
+        if int(tables.move_effect[move]) == EffectId.PROTECT:
+            # BtlCmd_TryProtection: the first actor, with a chain of 0 or a passing roll.
+            count = int(state.protect_count[side])
+            ok = position == 0 and (count == 0 or int(outcome.protect[side]) != 0)
+            protecting[side] = ok
+            flags = 0 if ok else MOVE_STATUS_FAILED
+            events.append(
+                {"kind": "move_end", "turn": turn, "attacker": side, "move": move, "flags": flags}
+            )
+            continue
         missed = int(outcome.hit[side, 0]) == 0
+        if protecting[1 - side] and int(tables.move_flags[move]) & MoveFlag.PROTECT:
+            # CheckMoveHitOverrides: MOVE_STATUS_PROTECTED, no hit record.
+            flags = MOVE_STATUS_PROTECTED | (MOVE_STATUS_MISSED if missed else 0)
+            events.append(
+                {"kind": "move_end", "turn": turn, "attacker": side, "move": move, "flags": flags}
+            )
+            continue
         events.append(
             {
                 "kind": "move_end",
@@ -394,6 +415,41 @@ def test_present_damage_and_heal_are_inferred(tables, names, tmp_path):
             )
         assert turn.mismatched == ()
     assert [int(t.outcome.present[0]) for t in turns[:3]] == [0, PRESENT_HEAL, 1]
+
+
+def test_protect_rolls_are_inferred(tables, names, tmp_path):
+    # Monferno's Protect (in Leer's slot) against Geodude's Rock Throw: a sure first Protect
+    # blocks it, the chained one fails its 1/2 roll (MOVE_STATUS_FAILED in the move_end
+    # record) and Rock Throw lands, the chain restarts at 0 and blocks again, and Ember
+    # resets it. The converter reads the roll off the move_end flags.
+    text = PARTY.read_text(encoding="utf-8").replace(
+        '"Scratch", "Leer",', '"Scratch", "Protect",', 1
+    )
+    party = tmp_path / "protect_party.toml"
+    party.write_text(text, encoding="utf-8")
+
+    def protect(k, **hits):
+        return _outcome(**hits)._replace(protect=jnp.asarray([k, 1], jnp.int8))
+
+    script = [
+        ((LEER, ROCK_THROW), protect(1, o_roll=3)),
+        ((LEER, ROCK_THROW), protect(0, o_roll=3)),
+        ((LEER, ROCK_THROW), protect(0, o_roll=3)),
+        ((EMBER, ROCK_THROW), protect(1, p_roll=4, o_roll=3)),
+    ]
+    records, states = _engine_trace(tables, names, script, (0, 0), party)
+    hits = [(r["turn"], r["attacker"]) for r in records if r["kind"] == "hit"]
+    assert hits == [(1, 1), (3, 0), (3, 1)]
+    assert [int(s.protect_count[0]) for s in states] == [0, 1, 0, 1, 0]
+    turns = convert(_bundle(tmp_path, names, records, party), tables, names)
+    assert len(turns) == len(states)
+    for i, (turn, expected) in enumerate(zip(turns, states)):
+        for name in BattleState._fields:
+            assert np.array_equal(getattr(turn.state, name), getattr(expected, name)), (
+                f"turn {i} field {name}"
+            )
+        assert turn.mismatched == ()
+    assert [int(t.outcome.protect[0]) for t in turns[:3]] == [1, 0, 1]
 
 
 def _lua_table(name: str, path: Path = LUA) -> dict[str, int]:

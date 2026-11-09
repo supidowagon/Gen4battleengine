@@ -407,6 +407,7 @@ def any_outcome() -> st.SearchStrategy[Outcome]:
         shed_skin=_flag(sides),
         fang_flinch=_flag(sides),
         present=_ints(0, 3, sides),
+        protect=_flag(sides),
     )
 
 
@@ -416,7 +417,8 @@ def any_outcome() -> st.SearchStrategy[Outcome]:
 # (Spark, Ice Beam, Flame Wheel), flinch (Headbutt; Thunder Fang, paralysis then flinch), a
 # Speed drop (Bubble), a Speed boost (Rock Polish), a high-crit move (Razor Leaf), a 95 %
 # plain move (Tackle), accuracy / evasion changes before the foe's check (Sand-Attack,
-# Double Team, Mud-Slap) and Present (drawn power or heal).
+# Double Team, Mud-Slap), Present (drawn power or heal) and Protect (its chain's 2^-n roll,
+# with a chain of 0-3 drawn for it).
 LAW_MOVES = (
     "Spore",
     "Hypnosis",
@@ -442,6 +444,7 @@ LAW_MOVES = (
     "Mud-Slap",
     "Thunder Fang",
     "Present",
+    "Protect",
 )
 # Abilities the outcome relevance reads (contact procs, Steadfast, Simple's and Swift
 # Swim's Speed) or the hit odds read (Compoundeyes, Sand Veil, Snow Cloak), and Rough Skin
@@ -478,6 +481,8 @@ def outcome_law_state(draw, tables: Tables, names: Names) -> BattleState:
             move = names.move(draw(st.sampled_from(LAW_MOVES)))
             a["moves"][side, mon, 0] = move
             a["pp"][side, mon, 0] = move_pp[move]
+            if int(tables.move_effect[move]) == EffectId.PROTECT:
+                a["protect_count"][side] = draw(st.integers(0, 3))
         if draw(st.integers(0, 3)) == 0:
             a["ability"][side, mon] = draw(st.sampled_from(LAW_ABILITIES))
     return BattleState(**{name: jnp.asarray(a[name]) for name in BattleState._fields})

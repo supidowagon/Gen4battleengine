@@ -40,6 +40,11 @@ Events, per side (``[side]``; 0 = player):
 * ``magnitude``: the level "Magnitude N!" showed (4-10) when the side's Magnitude hit
   and dealt damage, else 0 (``subscript_magnitude.s``: the message is a primary effect
   that an ineffective hit does not run).
+* ``protected``: the side's move was stopped by the foe's Protect / Detect ("{foe}
+  protected itself!", subscript_missed.s:63; also on an accuracy miss, which it replaces;
+  not for a failed Fake Out, which prints "But it failed!"). ``protect_ok`` /
+  ``protect_failed``: the side's own Protect / Detect succeeded ("{user} protected
+  itself!", subscript_protect.s) or failed ("But it failed!" after "X used Protect!").
 * ``present_heal``: Present's heal path ran on a hit: 1 "regained health", 2 "HP is full!"
   (``subscript_recover_hp.s``), else 0. Its damage path's power is never printed (only the
   HP change shows it).

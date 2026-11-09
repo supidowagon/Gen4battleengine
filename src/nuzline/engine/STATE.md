@@ -88,15 +88,24 @@ three structs has a row.
   mid-battle ability gain (Trace, Skill Swap, Role Play) announces again;
   `MoveEffectsData.quickClaw` is read by `BtlCmd_TryStealItem`
   (`src/battle/battle_script.c:5114`: Thief and Covet fail against a battler
-  whose Quick Claw activated this turn); `BattleContext.moveProtect`, the
-  attacker's last executed move, is read by `BtlCmd_TryProtection`
-  (`:5154-5156`: consecutive Protect, Detect and Endure); `monSpeedValues`, the
+  whose Quick Claw activated this turn); `monSpeedValues`, the
   speeds computed when the turn was ordered, by `BtlCmd_CalcGyroBallPower`
   (`:7127`); and `moveSketched` by `BtlCmd_TrySketch` (`:4848`). M1 is
   unaffected: no M1 mechanic gains an ability mid-battle, Quick Claw is
-  outcome-driven, and none of Thief, Covet, Protect, Detect, Endure, Gyro Ball or
-  Sketch is in M1. M6's coverage work must add these fields before the mechanics
-  that read them.
+  outcome-driven, and none of Thief, Covet, Gyro Ball or Sketch is in M1. M6's
+  coverage work must add these fields before the mechanics that read them.
+- **moveProtect -> `protect_count`** (K3b2 Task 6; docs/kaizo/k3b2-rules.md §2(a),
+  §12): `BattleContext.moveProtect`, the move whose attack message the battler last
+  showed (`UpdateMoveBuffers`, `src/battle/battle_controller_player.c:3936-3942`),
+  is read only by `BtlCmd_TryProtection` (`src/battle/battle_script.c:5154-5158`,
+  which zeroes `protectSuccessTurns` unless it is Protect, Detect or Endure) and by
+  `AICmd_LoadProtectChain` (`src/battle/trainer_ai/trainer_ai.c:2546-2552`, which
+  reads 0 in that case). The reset is folded into `protect_count`: at the end of
+  each move action (`step._use_move`) the count goes to 0 unless the move that showed
+  its attack message is one of `ids.PROTECT_CHAIN_MOVES`. A switch and a faint clear
+  both (`battle_lib.c:2099-2102`, `:2120`, `:2179-2182`, `:2198`); a bag item and
+  Pursuit's pre-switch hit (`BtlCmd_TryPursuit` ends the action without
+  `UpdateMoveBuffers`, `battle_script.c:6931`) leave both alone.
 - **battleEndFlag -> `over`, `winner`**: `winner` is 0 none, 1 player lost (no
   player Pokemon has HP left; a double KO of both last Pokemon is a draw, played as a
   loss), 2 player won. A player faint alone only records a death.
@@ -352,7 +361,7 @@ three structs has a row.
 | `BattleContext.fieldConditions` | `weather_timer`, `future_timer`, `future_damage`, `wish_timer` | mapped |
 | `BattleContext.sideConditionsMask` | `stealth_rock`, `tailwind`, `lucky_chant` | mapped |
 | `BattleContext.sideConditions` | `reflect`, `light_screen`, `mist`, `safeguard`, `spikes`, `toxic_spikes` | mapped |
-| `BattleContext.turnFlags` | — | not needed because it is reset every turn and `step` resolves a whole turn |
+| `BattleContext.turnFlags` | — | not needed because it is reset every turn and `step` resolves a whole turn (`protecting`: the first actor's `protect_ok` event, read by the second actor in `step._execute_actions`) |
 | `BattleContext.selfTurnFlags` | — | not needed because it is reset at every action's end (`BattleContext_Init`, bcp.c:3998) and `step` resolves a whole action; `focusItemActivated` and `SELF_TURN_FLAG_PLUCK_BERRY` live in `_use_move`'s hit loop (`effects.MoveHit`) |
 | `BattleContext.moveFailFlags` | — | not needed because it is reset every turn and `step` resolves a whole turn |
 | `BattleContext.aiContext` | `ai_seen_moves`, `ai_ability_known`, `trainer_items`, `trainer_item_count` | mapped |
@@ -397,7 +406,7 @@ three structs has a row.
 | `BattleContext.moveCur` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
 | `BattleContext.movePrev` | — | later (M6) |
 | `BattleContext.moveLockedInto` | `locked_move` | mapped |
-| `BattleContext.moveProtect` | — | later (M6) |
+| `BattleContext.moveProtect` | `protect_count` | mapped |
 | `BattleContext.moveHit` | `move_hit` | mapped |
 | `BattleContext.moveHitBattler` | — | not needed because in singles it is the opposing battler whenever `move_hit` is set: both are written together (battle_controller_player.c:4500-4507), and `ClearFlags` (:4389) clears only `moveHit` |
 | `BattleContext.moveHitType` | — | later (M6) |

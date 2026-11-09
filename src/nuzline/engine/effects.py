@@ -49,6 +49,11 @@ many are real). Decomp sources:
   unsupported) runs ``subscript_recover_hp.s`` on the target with
   ``BattleSystem_Divide(maxHP, 4)``: "HP is full!" at full HP, else the capped HP update
   (``_present``).
+* Protect, Detect (``PROTECT``): ``effect_script_0111.s`` -> ``subscript_protect.s`` ->
+  ``BtlCmd_TryProtection`` (battle_script.c:5149-5190) in ``step._use_move``: the user's
+  roll (``outcome.protect``, 2^-n by ``protect_count``), the last-actor failure and the
+  chain; the block of the foe's move is ``protect_blocks`` (``CheckMoveHitOverrides``). No
+  effect function runs for it.
 * Recover (``RECOVER``): ``effect_script_0032.s`` -> ``subscript_recover_half_max_hp.s``:
   ``DivideVarByValue(maxHP, 2)`` (``BattleSystem_Divide``, at least 1), then
   ``subscript_recover_hp.s``: "HP is full!" at full HP (:6), else the HP update, capped at
@@ -499,6 +504,39 @@ def targets_user(tables: Tables, move) -> jnp.ndarray:
         | (target == MoveTarget.RANGE_FIELD)
         | (tables.move_effect[move] == _E.CURSE)
     )
+
+
+# Ranges whose decomp defender is the user itself in singles (``BattleSystem_Defender``,
+# battle_lib.c:1665-1683): such a move records nothing on the foe's ``move_hit``.
+SELF_DEFENDER_RANGES = (
+    MoveTarget.RANGE_SINGLE_TARGET_SPECIAL,
+    MoveTarget.RANGE_USER,
+    MoveTarget.RANGE_USER_SIDE,
+    MoveTarget.RANGE_FIELD,
+    MoveTarget.RANGE_ALLY,
+    MoveTarget.RANGE_USER_OR_ALLY,
+)
+
+
+def self_defender(tables: Tables, move) -> jnp.ndarray:
+    """The move's decomp defender is its user: a ``SELF_DEFENDER_RANGES`` range or a
+    non-Ghost Curse (``targets_user``)."""
+    move_range = tables.move_target[move]
+    in_range = jnp.isin(move_range, jnp.asarray(SELF_DEFENDER_RANGES, move_range.dtype))
+    return in_range | targets_user(tables, move)
+
+
+def protect_blocks(tables: Tables, move, unleash) -> jnp.ndarray:
+    """``BattleControllerPlayer_CheckMoveHitOverrides`` (battle_controller_player.c:
+    3001-3014): a protecting defender stops ``move`` when it has ``MOVE_FLAG_CAN_PROTECT``
+    (``MoveFlag.PROTECT``), the foe is its defender (not a ``self_defender`` move, which a
+    non-Ghost Curse is) and it is not the non-final turn of a multi-turn move
+    (``Move_IsMultiTurn``, battle_lib.c:2975-2992: of the supported moves only Bide, whose
+    final turn is the unleash, ``unleash``, when ``subscript_bide_end.s`` sets
+    ``SYSCTL_LAST_OF_MULTI_TURN`` and the defender is the last hitter, bcp.c:2696-2722)."""
+    flagged = (tables.move_flags[move] & MoveFlag.PROTECT) != 0
+    bide = tables.move_effect[move] == _E.BIDE
+    return flagged & jnp.where(bide, unleash, ~self_defender(tables, move))
 
 
 def defender_always(tables: Tables, move) -> jnp.ndarray:

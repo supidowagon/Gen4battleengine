@@ -68,6 +68,10 @@ of the turn:
   (``order.selected_move``), so the masks above read it.
 * ``present[s]``: ``s`` uses Present (``BtlCmd_Present``). It joins ``crit[s, 0]`` and
   ``roll[s, 0]`` in one joint factor (``_present_reads``): the heal path reads neither.
+* ``protect[s]``: ``s`` uses a Protect-effect move with ``protect_count[s] > 0`` (at 0 the
+  rate 0xFFFF never fails: a single value) and acts first in the branch (the battler acting
+  last fails without the roll mattering, ``BtlCmd_TryProtection``). A success stops the
+  foe's blockable move, so ``_protect_reads`` gates that move's own reads on it.
 * ``shed_skin[d]``: side ``d``'s active or incoming Pokemon has Shed Skin
   (``step._turn_end_ability``; over-approximate: it only rolls with a status and HP).
 * ``flinch_item``, ``quick_claw``: never read.
@@ -82,7 +86,8 @@ set of elements linked by such conditions; it lists only the combinations that a
 read). ``_move_reads`` gives the implemented mechanics': a move's own reads need its
 accuracy roll to hit; a secondary duration needs the proc; a read through the first
 mover's infliction needs its hit and proc; and the first mover's sure flinch stops the
-second mover's move. Later mechanics add their own with ``register_reads``. The
+second mover's move. Later mechanics add their own with ``register_reads``
+(``_present_reads``, ``_protect_reads``). The
 brute-force reference is ``outcome_laws(..., loose=True)``: no order or eligibility
 gate and no conditional read, so its enumeration is the independent product of
 every element any order can read (tests/engine/test_enumerate.py compares the two).
@@ -114,7 +119,7 @@ import numpy as np
 
 from nuzline.data.tables import Tables
 from nuzline.engine.damage import PHYSICAL, ROLLS, SPECIAL, STATUS, hit_damage_table, move_type_of
-from nuzline.engine.effects import can_have_status
+from nuzline.engine.effects import can_have_status, protect_blocks
 from nuzline.engine.ids import AbilityId, EffectId, ItemId, MoveFlag, Stat, Status, Type
 from nuzline.engine.order import (
     MOVE_ACTIONS,
@@ -128,6 +133,7 @@ from nuzline.engine.outcome import (
     MAX_HITS,
     PRESENT_CUTS,
     PRESENT_HEAL,
+    PROTECT_RATES,
     Outcome,
     crit_odds,
     empty_outcome,
@@ -174,6 +180,8 @@ class Reads(NamedTuple):
     flinch_sure: jnp.ndarray  # moving first, a sure hit with a proc flinches the foe
     fang: jnp.ndarray  # its flinch roll is fang_flinch (Thunder Fang), not secondary
     present: jnp.ndarray  # it uses Present: its crit and roll need a damage path (no heal)
+    protect_sure: jnp.ndarray  # it uses Protect and reaches TryProtection whatever the rolls
+    protect_blocks: jnp.ndarray  # its move is stopped by a protecting foe (protect_blocks)
     confused_own: jnp.ndarray  # it moves confused (counter >= 2) at the start
     confused_by_foe: jnp.ndarray  # bool[2, 2]: it moves after a foe move that confuses
     para_own: jnp.ndarray  # it moves paralyzed at the start
@@ -196,6 +204,7 @@ class OutcomeLaws(NamedTuple):
     branch_relevant: Outcome  # bool, a leading axis [2]: the branch speed_tie = 0, 1
     reads: Reads  # the conditional reads' inputs
     damage: jnp.ndarray  # int32[2, 2, ROLLS]: per side, hit_damage_table at the turn start
+    protect_count: jnp.ndarray  # int32[2]: the turn-start chain (protect's law, 0-3)
     compress: jnp.ndarray  # bool[2, 2, MAX_HITS]: [branch, side, hit] uses damage classes
 
 
@@ -299,6 +308,8 @@ def _branch_masks(foe_first, first_self, base: dict) -> dict:
         "secondary": b["secondary"] & ~(blocked | late_flinch)[:, None],
         # Thunder Fang's flinch roll: the same order gate, and Inner Focus (effects._fang).
         "fang_flinch": b["fang_flinch"] & first_self & ~b["flinch_blocked"],
+        # The battler acting last fails Protect whatever its roll (waitingBattlers == 1).
+        "protect": b["protect"] & first_self,
         "full_para": b["para_own"] | para_by_foe,
         "confusion_hit": confusable,
         "thaw": b["freeze_own"] | freeze_by_foe,
@@ -350,6 +361,10 @@ INPUT_NEUTRAL_EFFECTS = (
     # Hurts or heals the foe (effects._present): only the foe's HP, which the HP clause
     # covers (Flail and the pinch abilities read it; nothing else in the damage does).
     _E.PRESENT,
+    # Changes the user's protect_count and the turn's protecting flag: no damage input. A
+    # success removes the later hit altogether (step._use_move: it does not connect), so
+    # whatever (crit, roll) class the hit would have drawn, the state is the same.
+    _E.PROTECT,
 )
 INPUT_CLAUSE_EFFECTS = (
     _E.STAT_SELF,  # the foe's Defense / Sp. Def
@@ -475,6 +490,7 @@ NON_TABLE_DAMAGE_EFFECTS = (
     _E.CURSE,
     _E.AQUA_RING,
     _E.PRESENT,  # its power is drawn (40/80/120, Outcome.present); the table has power 1
+    _E.PROTECT,  # a status move: no damage
 )
 
 
@@ -662,6 +678,7 @@ def outcome_laws(
         "confused_blocked": confused_blocked,
         "fang_flinch": lands[:, 0] & (effect == _E.FANG_PARALYZE_FLINCH) & (chance != 0),
         "flinch_blocked": flinch_blocked,
+        "protect": uses_move & (effect == _E.PROTECT) & (state.protect_count > 0),
         "para_own": uses_move & (status == Status.PARALYSIS),
         "freeze_own": uses_move & (status == Status.FREEZE),
         "confused_own": uses_move & (state.confusion >= 2),
@@ -745,6 +762,7 @@ def outcome_laws(
             shed_skin=live & _holds(state, actions, (AbilityId.SHED_SKIN,)),
             fang_flinch=m["fang_flinch"],
             present=uses_move & (effect == _E.PRESENT),
+            protect=m["protect"],
         )
 
     both = zip(branch_relevant(branches[0]), branch_relevant(branches[1]), strict=True)
@@ -796,6 +814,8 @@ def outcome_laws(
         flinch_sure=off if loose else flinch_sure,
         fang=fang,
         present=off if loose else uses_move & (effect == _E.PRESENT),
+        protect_sure=off if loose else reach & (effect == _E.PROTECT),
+        protect_blocks=off if loose else uses_move & protect_blocks(tables, moves, False),
         confused_own=base["confused_own"],
         confused_by_foe=jnp.stack([m["confused_by_foe"] for m in branches]),
         para_own=base["para_own"],
@@ -837,6 +857,7 @@ def outcome_laws(
         reads=Reads(*(jnp.asarray(f) for f in reads)),
         damage=damage.astype(_I32),
         compress=compress,
+        protect_count=state.protect_count.astype(_I32),
     )
 
 
@@ -925,6 +946,15 @@ def _present(laws: OutcomeLaws, side: int) -> _Law:
     return list(range(PRESENT_HEAL + 1)), [b - a for a, b in itertools.pairwise(cuts)], 256
 
 
+def _protect(laws: OutcomeLaws, side: int) -> _Law:
+    # BtlCmd_TryProtection (battle_script.c:5167): success iff sProtectSuccessRate[n] >=
+    # RandNext(), a u16: (rate + 1) of 65536 values, exactly 2^-n.
+    rate = PROTECT_RATES[min(max(int(laws.protect_count[side]), 0), len(PROTECT_RATES) - 1)]
+    if rate + 1 == 65536:
+        return [1], [1], 1
+    return [0, 1], [65536 - (rate + 1), rate + 1], 65536
+
+
 def _zero(laws: OutcomeLaws, side: int) -> _Law:
     return [0], [1], 1
 
@@ -948,6 +978,7 @@ _LAWS = {
     "shed_skin": _shed_skin,
     "fang_flinch": _secondary,  # the same CheckEffectActivation roll at the move's chance
     "present": _present,
+    "protect": _protect,
 }
 
 
@@ -1010,6 +1041,12 @@ class ReadPlan:
         all hold. Paths of one element are alternatives (OR)."""
         if elem in self:
             self._paths[elem].setdefault(name, []).extend(c for c in conditions if c is not None)
+
+    def restrict(self, elem: Elem, name: str, *conditions: Condition) -> None:
+        """AND ``conditions`` into read path ``name`` of ``elem`` when that path is
+        declared; nothing otherwise (``elem`` is not read that way)."""
+        if elem in self and name in self._paths[elem]:
+            self._paths[elem][name].extend(c for c in conditions if c is not None)
 
     def deps(self, elem: Elem) -> set[Elem]:
         conds = [*self._gates[elem], *(c for p in self._paths[elem].values() for c in p)]
@@ -1126,7 +1163,7 @@ def _move_reads(laws: OutcomeLaws, branch: Branch, plan: ReadPlan) -> None:
                 plan.path(elem, "move", *hits)
             if i > 0 or bool(rel.crit[s, 0]):  # roll[s, 0]: damage, or a self-hit below
                 plan.path(("roll", (s, i)), "move", *hits)
-        for name in ("n_hits", "magnitude", "fang_flinch", "present"):
+        for name in ("n_hits", "magnitude", "fang_flinch", "present", "protect"):
             plan.path((name, (s,)), "move", *hits)
         proc = [procs(s)] if bool(reads.proc_gated[s]) else []
         plan.path(("duration", (s,)), "move", *hits, *proc)
@@ -1180,6 +1217,7 @@ def _move_reads(laws: OutcomeLaws, branch: Branch, plan: ReadPlan) -> None:
             "full_para",
             "fang_flinch",
             "present",
+            "protect",
         ):
             plan.gate((name, (q,)), cond)
 
@@ -1205,6 +1243,46 @@ def _present_reads(laws: OutcomeLaws, branch: Branch, plan: ReadPlan) -> None:
         damage = Condition((elem,), _not_heal)
         for name in ("crit", "roll"):
             plan.path((name, (s, 0)), "move", damage)
+
+
+def _not_protected(v: np.ndarray) -> np.ndarray:
+    # 1: the roll passed, so the Protect succeeded (Reads.protect_sure). SKIPPED (not
+    # drawn) is not a success: the foe's reads keep their other conditions.
+    return v != 1
+
+
+@register_reads
+def _protect_reads(laws: OutcomeLaws, branch: Branch, plan: ReadPlan) -> None:
+    """The (protect, the foe's move) joint factor (rules §2(b)): the first mover's Protect
+    that certainly reaches ``BtlCmd_TryProtection`` (``Reads.protect_sure``: the checks of
+    ``CheckStatusDisruption`` cannot stop it, as for the sure flinch) succeeds when its
+    roll passes (always at ``protect_count`` 0), and then ``CheckMoveHitOverrides`` stops the
+    second mover's blockable move (``Reads.protect_blocks``; step._use_move: it does not
+    connect, after its accuracy roll, whose class is then not read either: the "protected"
+    message replaces the miss). So the move's own reads (its "move" path: hit, crits, rolls,
+    secondary rolls, the protecting side's contact rolls on its hits, its hit count,
+    duration, Magnitude level, fang flinch, Present's draw) also need the Protect to fail.
+    The second mover's status checks (sleep, thaw, confusion and its self-hit roll, full
+    paralysis) come before the move and are not gated."""
+    first, q = branch.first, 1 - branch.first
+    reads = laws.reads
+    if not (bool(reads.protect_sure[first]) and bool(reads.protect_blocks[q])):
+        return
+    elem = ("protect", (first,))
+    cond = Condition((elem,), _not_protected) if elem in plan else NEVER
+    # The accuracy roll is read for the move alone (step._use_move: the hit and the
+    # "missed" event), so this is its only path.
+    plan.path(("hit", (q, 0)), "move", cond)
+    for i in range(MAX_HITS):
+        for e in (
+            ("crit", (q, i)),
+            ("roll", (q, i)),
+            ("secondary", (q, i)),
+            ("contact_proc", (first, i)),
+        ):
+            plan.restrict(e, "move", cond)
+    for name in ("n_hits", "duration", "magnitude", "fang_flinch", "present"):
+        plan.restrict((name, (q,)), "move", cond)
 
 
 def damage_class_law(
