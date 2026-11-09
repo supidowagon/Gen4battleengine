@@ -108,6 +108,28 @@ does not generate those matchups (`_smogon_departs`).
 - **Ruling:** the engine (`damage._pre_random` halves `defense` before `apply_stage`) is
   right. Test: `tests/engine/test_self_destruct.py::test_self_destruct_halves_defense`.
 
+## JAX engine's trainer AI path vs the decomp (K3b1)
+
+The trainer AI's damage (`damage.ai_damage_for_roll`, used by `nuzline.ai.commands`) is
+the JAX engine's alone; the reference engine has no AI path, so the differential test
+could not catch this. Found while adding Flail, which shares the variable-power branch.
+
+### 8. The AI scored a rolling Rollout at its doubled power
+
+- **Engine (before f1a26d8):** `damage._pre_random` applied `rollout_multiplier` on the
+  AI path as in battle, so mid-Rollout (`locked_move` set, `rollout_count` < 5) or
+  curled, the AI scored Rollout and Ice Ball at up to 32 times the table power.
+- **Decomp:** `TrainerAI_CalcDamage` has no Rollout case: its `default` sets `power = 0`
+  (`src/battle/trainer_ai/trainer_ai.c:3074-3078`), and `BattleSystem_CalcMoveDamage`
+  then reads `MOVE_DATA(move).power` (`src/battle/battle_lib.c:6671-6675`). The doubling
+  per use and for Defense Curl lives only in `BtlCmd_CalcRolloutPower`
+  (`src/battle/battle_script.c:5661-5688`), which runs in the move's battle script, never
+  in the AI.
+- **Ruling:** the AI path keeps the table power (`_pre_random(..., ai=True)`: no Rollout
+  multiplier, no Flail band). Tests:
+  `tests/engine/test_power_moves.py::test_flail_ai_damage_uses_power_one` (fresh, curled)
+  and `::test_mid_rollout_ai_damage_uses_table_power` (locked, `rollout_count` 4, 2, 1).
+
 ## Deliberate differences from the decomp (both engines agree)
 
 - **`turn` on the last turn.** `BattleControllerPlayer_TurnEnd`

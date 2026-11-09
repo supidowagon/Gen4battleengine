@@ -441,6 +441,27 @@ def test_flail_ai_damage_uses_power_one(tables, names):
         )
 
 
+def test_mid_rollout_ai_damage_uses_table_power(tables, names):
+    """``TrainerAI_CalcDamage`` passes power 0 for Rollout (its ``default`` case,
+    trainer_ai.c:3074-3078), so ``BattleSystem_CalcMoveDamage`` reads the table power
+    (battle_lib.c:6671-6675); the doubling exists only in ``BtlCmd_CalcRolloutPower``
+    (battle_script.c:5661-5688). Mid-Rollout (locked, ``rollout_count`` < 5), curled or not,
+    the AI still scores the table power (docs/discrepancies.md 8)."""
+    rollout = names.move("Rollout")
+    fresh = flail_state(tables, names, "Rollout")
+    plain = as_plain(tables, names, "Rollout", power=int(tables.move_power[rollout]))
+    for count in (4, 2, 1):
+        rolling = fresh._replace(
+            locked_move=fresh.locked_move.at[0].set(rollout),
+            rollout_count=fresh.rollout_count.at[0].set(count),
+        )
+        for state in (rolling, rolling._replace(curled=rolling.curled.at[0].set(1))):
+            for roll in (0, 15):
+                ai = int(ai_damage_for_roll(tables, state, 0, rollout, roll))
+                assert ai == int(ai_damage_for_roll(plain, state, 0, rollout, roll)), count
+                assert int(damage_for_roll(tables, state, 0, rollout, False, roll)) > ai, count
+
+
 def test_flail_hp_cuts(tables, names):
     flail, tackle = names.move("Flail"), names.move("Tackle")
     base = sample_party(names)[0]
