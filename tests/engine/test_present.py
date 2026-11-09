@@ -285,6 +285,79 @@ def test_heal_at_full_hp_changes_nothing_and_says_so(tables, names):
     assert int(out.item[1, 0]) == names.item("Focus Sash")
 
 
+def _sitrus_delibird(tables, names, opp):
+    """Delibird (faster) at 3 HP holding a Sitrus Berry against a full-HP Cranidos."""
+    s = _state(tables, names, opp=opp)
+    s = s._replace(item=s.item.at[0, 0].set(names.item("Sitrus Berry")))
+    return s.replace_hp(0, 0, 3)
+
+
+def test_full_hp_heal_runs_no_item_check(tables, names):
+    """subscript_recover_hp.s _036 sets MOVE_STATUS_NO_MORE_WORK; CheckMoveFailure
+    (bcp.c:3313-3315) then skips AfterMoveEffects (bcp.c:3638-3769), so Delibird's Sitrus
+    (ATTACKER_ITEM) is not checked after a heal on a full-HP foe, and Cranidos's Tackle KOs
+    it. After a damage path it is checked and eaten first."""
+    s = _sitrus_delibird(tables, names, "Tackle")
+    acts = A(PRESENT, "Tackle", s, names)
+    sitrus = names.item("Sitrus Berry")
+    out = assert_matches_reference(tables, s, acts, _o(PRESENT_HEAL))
+    assert int(out.hp[0, 0]) == 0 and int(out.item[0, 0]) == sitrus
+    out = assert_matches_reference(tables, s, acts, _o(0))
+    assert int(out.item[0, 0]) == 0 and int(out.item_consumed[0, 0]) == sitrus
+    # A heal on a hurt foe ("regained health") reaches AfterMoveEffects: eaten too.
+    hurt = _hurt(s)
+    assert int(assert_matches_reference(tables, hurt, acts, _o(PRESENT_HEAL)).item[0, 0]) == 0
+
+
+@pytest.mark.parametrize("opp", ["Leer", "Rock Polish"])
+def test_skipped_sitrus_is_eaten_later_in_the_turn(tables, names, opp):
+    # The berry is not lost: Cranidos's Leer runs its own AfterMoveEffects with Delibird as
+    # the defender (DEFENDER_ITEM, bcp.c:3691); after a Rock Polish (its defender is its
+    # user) the end-of-turn MON_COND_CHECK_STATE_USE_ITEM (bcp.c:1362) eats it. Either way
+    # it is gone by the end of the turn and Delibird has 3 + Sitrus's heal.
+    s = _sitrus_delibird(tables, names, opp)
+    out = assert_matches_reference(tables, s, A(PRESENT, opp, s, names), _o(PRESENT_HEAL))
+    mx = int(s.max_hp[0, 0])
+    assert int(out.item[0, 0]) == 0 and int(out.item_consumed[0, 0]) == names.item("Sitrus Berry")
+    assert int(out.hp[0, 0]) == 3 + max(mx // 4, 1)
+
+
+def test_full_hp_recover_runs_no_item_check(tables, names):
+    """Recover (effect_script_0032.s -> subscript_recover_half_max_hp.s:16 ->
+    subscript_recover_hp.s) at full HP: the same NO_MORE_WORK path, so no item check after
+    it. A confused Onix at exactly its self-hit's damage, holding a Sitrus Berry, then
+    faints to the self-hit; the Sitrus is not eaten after the Recover."""
+    from nuzline.engine.damage import confusion_damage
+
+    s = roark_state(
+        tables,
+        names,
+        player_species="Delibird",
+        player_moves=["Recover"],
+        opp_species="Onix",
+        opp_moves=["Tackle"],
+    )
+    s = _ability(_ability(s, 0, AbilityId.NONE), 1, AbilityId.STURDY)
+    s = s._replace(
+        stats=s.stats.at[0, 0, _SPE].set(int(s.stats[1, 0, _SPE]) + 1),
+        item=s.item.at[1, 0].set(names.item("Sitrus Berry")),
+        confusion=s.confusion.at[1].set(3),
+    )
+    hit = int(confusion_damage(tables, s, 1, 15))
+    assert 0 < hit and hit * 2 <= int(s.max_hp[1, 0])  # the Sitrus would trigger
+    s = s.replace_hp(1, 0, hit)
+    acts = A("Recover", "Tackle", s, names)
+    o = empty_outcome()._replace(confusion_hit=jnp.asarray([0, 1], jnp.int8))
+    out = assert_matches_reference(tables, s, acts, o)
+    assert int(out.hp[1, 0]) == 0 and int(out.item[1, 0]) == names.item("Sitrus Berry")
+    # Below full HP the Recover reaches AfterMoveEffects (DEFENDER_ITEM is the user itself
+    # in the decomp; the engine also checks the foe's item there): Onix eats its Sitrus
+    # first and survives the self-hit.
+    hurt = s.replace_hp(0, 0, int(s.max_hp[0, 0]) // 2)
+    out = assert_matches_reference(tables, hurt, acts, o)
+    assert int(out.item[1, 0]) == 0 and int(out.hp[1, 0]) > 0
+
+
 def test_heal_ignores_immunities(tables, names):
     # SYSCTL_IGNORE_IMMUNITIES: the type chart is skipped, so a Ghost type is healed.
     s = _hurt(_state(tables, names))

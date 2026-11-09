@@ -42,7 +42,12 @@ from nuzline.data.spec import PokemonSpec
 from nuzline.data.tables import Names, Tables
 from nuzline.data.trainer import Trainer
 from nuzline.engine.actions import FIRST_ITEM_ACTION, legal_actions, usable_trainer_items
-from nuzline.engine.damage import confusion_damage, damage_for_roll
+from nuzline.engine.damage import (
+    PRESENT_HEAL,
+    PRESENT_TABLE,
+    confusion_damage,
+    damage_for_roll,
+)
 from nuzline.engine.ids import AbilityId, EffectId, Stat, Status, Weather
 from nuzline.engine.order import MOVE_ACTIONS, effective_speed, selected_move
 from nuzline.engine.outcome import MAX_HITS, Outcome, empty_outcome
@@ -221,10 +226,13 @@ def _hit_state(state: BattleState, record: dict) -> BattleState:
 
 
 @jax.jit
-def _damage_rows(tables, state, side, move, crit, power_mul):
+def _damage_rows(tables, state, side, move, crit, power_mul, present=PRESENT_TABLE):
+    """The 16 rolls' damage; ``present`` is Present's drawn power (``Outcome.present``)."""
     rolls = jnp.arange(16, dtype=_I32)
     return jax.vmap(
-        lambda r: damage_for_roll(tables, state, side, move, crit, r, power_mul=power_mul)
+        lambda r: damage_for_roll(
+            tables, state, side, move, crit, r, power_mul=power_mul, present=present
+        )
     )(rolls)
 
 
@@ -340,12 +348,23 @@ class _Turn:
                 )
                 power_mul = 20 if pursuit else 10
                 crits = (0, 1) if e["crit"] is None else (int(e["crit"]),)
-                table = {
-                    crit: np.asarray(
-                        _damage_rows(self.tables, hs, side, move, crit != 0, power_mul)
-                    ).tolist()
-                    for crit in crits
-                }
+                # Present: a hit record is its damage path; its power 40/80/120 is drawn
+                # (Outcome.present 0-2), so the lowest power with a fitting roll is used
+                # (equal damage gives the same state). Its heal leaves no hit record
+                # (``variants``).
+                present = int(self.tables.move_effect[move]) == EffectId.PRESENT
+                for k in range(PRESENT_HEAL) if present else (PRESENT_TABLE,):
+                    table = {
+                        crit: np.asarray(
+                            _damage_rows(self.tables, hs, side, move, crit != 0, power_mul, k)
+                        ).tolist()
+                        for crit in crits
+                    }
+                    fits = any(e["damage"] in rows for rows in table.values())
+                    if fits or k in (PRESENT_TABLE, PRESENT_HEAL - 1):
+                        break
+                if present:
+                    o["present"][side] = k
                 o["crit"][side, i], o["roll"][side, i] = self.fit(side, i, e, table)
             if self_hits:
                 hs = _hit_state(self.state, self_hits[0])
@@ -381,6 +400,14 @@ class _Turn:
                 fixed.append(("secondary", per_hit, 1))  # applies on every hit
             else:
                 options.append(("secondary", per_hit, [0, 1]))
+            hit_record = any(
+                e["kind"] == "hit" and e["attacker"] == side and e["defender"] == 1 - side
+                for e in self.events
+            )
+            if effect == EffectId.PRESENT and not hit_record:
+                # Present connected with no hit record: its heal (no UPDATE_HP damage), or a
+                # damage path into an immunity; the replay matches the target's HP gain.
+                options.append(("present", (side,), [0, PRESENT_HEAL]))
             if effect == EffectId.FANG_PARALYZE_FLINCH:
                 # Thunder Fang's second roll (Outcome.fang_flinch): a flinch shows only as the
                 # target's missing move.

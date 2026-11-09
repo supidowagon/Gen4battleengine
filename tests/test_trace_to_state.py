@@ -22,7 +22,7 @@ import pytest
 
 from nuzline.data.party import load_party
 from nuzline.data.trainer import IntermediateData, build_trainer_party, load_trainers
-from nuzline.engine.damage import confusion_damage, damage_for_roll
+from nuzline.engine.damage import PRESENT_HEAL, confusion_damage, damage_for_roll
 from nuzline.engine.ids import EffectId, Stat, Status, Weather
 from nuzline.engine.order import (
     MOVE_ACTIONS,
@@ -59,6 +59,7 @@ LUA = ROOT / "tools" / "trace_battle.lua"
 DECOMP = ROOT / "external" / "pokeplatinum"
 ROARK_ID = 246
 EMBER, MACH_PUNCH, BUBBLE, POUND = 2, 3, 2, 0  # move slots of Monferno / Prinplup
+LEER = 1  # Monferno's slot 1 (Present in test_present_damage_and_heal_are_inferred)
 TO_PRINPLUP = MOVE_ACTIONS + 1
 STEALTH_ROCK, ROCK_THROW, SCREECH = 0, 1, 2  # Geodude / Onix move slots
 POTION = 10  # the opponent's bag slot 0
@@ -191,9 +192,17 @@ def _move_events(tables, state, actions, outcome, turn) -> list[dict]:
             confusion[1 - side] = confusion[1 - side] or int(outcome.duration[side])
         if missed or int(tables.move_power[move]) == 0:
             continue
+        present = int(outcome.present[side])
+        if int(tables.move_effect[move]) == EffectId.PRESENT and present == PRESENT_HEAL:
+            # The heal path runs no CalcDamage: no UPDATE_HP damage, so no hit record.
+            heal = max(int(state.max_hp[target]) // 4, 1)
+            hp[target] = min(hp[target] + heal, int(state.max_hp[target]))
+            continue
         crit = int(outcome.crit[side, 0])
         damage = int(
-            damage_for_roll(tables, hit_state, side, move, crit != 0, outcome.roll[side, 0])
+            damage_for_roll(
+                tables, hit_state, side, move, crit != 0, outcome.roll[side, 0], present=present
+            )
         )
         events.insert(
             len(events) - 1,
@@ -351,6 +360,40 @@ def test_a_thunder_fang_flinch_is_inferred(tables, names, tmp_path):
         assert turn.mismatched == ()
     assert [int(f) for f in turns[0].outcome.fang_flinch] == [1, 0]
     assert [int(f) for f in turns[1].outcome.fang_flinch] == [0, 0]
+
+
+def test_present_damage_and_heal_are_inferred(tables, names, tmp_path):
+    # Monferno's Present (in Leer's slot) on Geodude: power 40 (present 0), then the heal
+    # (no hit record: the converter replays present 0 and the heal against the HP gain),
+    # then power 80 (present 1).
+    text = PARTY.read_text(encoding="utf-8").replace(
+        '"Scratch", "Leer",', '"Scratch", "Present",', 1
+    )
+    party = tmp_path / "present_party.toml"
+    party.write_text(text, encoding="utf-8")
+
+    def present(k, **hits):
+        return _outcome(**hits)._replace(present=jnp.asarray([k, 0], jnp.int8))
+
+    script = [
+        ((LEER, ROCK_THROW), present(0, p_roll=5, o_roll=3)),
+        ((LEER, ROCK_THROW), present(PRESENT_HEAL, o_roll=1)),
+        ((LEER, ROCK_THROW), present(1, p_roll=9, o_roll=0)),
+    ]
+    records, states = _engine_trace(tables, names, script, (0, 0), party)
+    hits = [(r["turn"], r["attacker"]) for r in records if r["kind"] == "hit"]
+    assert hits == [(0, 0), (0, 1), (1, 1), (2, 0), (2, 1)]
+    geodude = [int(s.hp[1, 0]) for s in states]
+    assert geodude[0] > geodude[1] < geodude[2] > geodude[3]  # hurt, healed, hurt
+    turns = convert(_bundle(tmp_path, names, records, party), tables, names)
+    assert len(turns) == len(states)
+    for i, (turn, expected) in enumerate(zip(turns, states)):
+        for name in BattleState._fields:
+            assert np.array_equal(getattr(turn.state, name), getattr(expected, name)), (
+                f"turn {i} field {name}"
+            )
+        assert turn.mismatched == ()
+    assert [int(t.outcome.present[0]) for t in turns[:3]] == [0, PRESENT_HEAL, 1]
 
 
 def _lua_table(name: str, path: Path = LUA) -> dict[str, int]:

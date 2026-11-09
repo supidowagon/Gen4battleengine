@@ -508,6 +508,9 @@ def damage_for_roll(
     )
     rolled = _finish(tables, state, atk_side, move, damage, move_type, category, power, _i32(roll))
     fixed, amount = fixed_damage(tables, state, atk_side, move)
+    # The only place Present's heal path deals 0: ``_pre_random`` above still ran at the
+    # table power (it ignores a ``present`` outside 0-2), so a caller that needs the heal's
+    # damage must come through here, not ``_pre_random`` / ``calc_move_damage``.
     heal = (_i32(tables.move_effect[_i32(move)]) == EffectId.PRESENT) & (
         _i32(present) == PRESENT_HEAL
     )

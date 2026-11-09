@@ -367,6 +367,11 @@ For each turn, `tools/trace_to_state.py` works out the following:
   raises `AmbiguousTrace`, carrying every candidate, when both a crit and a non-crit
   roll fit: whether a crit happened is an observable game event that the outcome must
   get right.
+- **Present.** A `hit` record of Present is its damage path: the converter tries
+  `Outcome.present` 0, 1, 2 (power 40, 80, 120) and keeps the lowest power with a fitting
+  roll. The heal path runs no `CalcDamage` and so writes no `hit` record: a Present that
+  connected with no `hit` record is replayed with `present` 0 and the heal
+  (`PRESENT_HEAL`), and the replay that matches the target's HP gain is kept.
 - **The other chance fields** are `speed_tie`, `end_speed_tie`, `full_para`, `thaw`,
   `secondary`, `contact_proc` (only when Static or Poison Point is in play) and
   `duration`. These are enumerated only where they can matter:

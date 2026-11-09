@@ -75,6 +75,7 @@ from nuzline.engine.effects import (
     hit_count,
     holds,
     play_hit,
+    recovers_at_full_hp,
     resist_berry,
     resist_berry_damage,
     targets_user,
@@ -533,6 +534,10 @@ def _use_move(
     )
     target_full = state.hp[target_side, target] == state.max_hp[target_side, target]
     present_heal = jnp.where(present_heal, jnp.where(target_full, 2, 1), 0)
+    # A Recover / Present heal on a full-HP recipient (single-hit moves): MOVE_STATUS_NO_MORE_WORK
+    # skips the move's AfterMoveEffects (effects.recovers_at_full_hp), so no item check runs in
+    # any loop pass below (the passes after the hit would otherwise repeat it).
+    no_more_work = connected & recovers_at_full_hp(tables, state, side, move, outcome)
 
     # A loop, not unrolled: one copy of the effect code in the program, not MAX_HITS
     # (unrolled, it dominated trace and compile time). It also counts the hits that
@@ -579,9 +584,10 @@ def _use_move(
         # an attacker's item kept above can trigger again, and is removed this time. A
         # later hit that did not happen changes no HP, so its check finds what the
         # previous one found.
-        state, used = held_item_check(tables, hit_state, side, connected, info.pluck_flag)
-        state = after_damage_items(tables, state, 1 - side, connected)
-        state = after_damage_items(tables, state, side, connected & used & info.pluck_flag)
+        items = connected & ~no_more_work
+        state, used = held_item_check(tables, hit_state, side, items, info.pluck_flag)
+        state = after_damage_items(tables, state, 1 - side, items)
+        state = after_damage_items(tables, state, side, items & used & info.pluck_flag)
         return (
             state,
             hits + landed.astype(_I32),

@@ -1457,7 +1457,17 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
         # (faintedMon): the target, or the attacker by Rough Skin.
         if hit > 0 and (_active(s, 1 - side).hp == 0 or _active(s, side).hp == 0):
             break
+        # subscript_recover_hp.s _036 ("HP is full!", for Recover's user or Present's heal
+        # target) sets MOVE_STATUS_NO_MORE_WORK: CheckMoveFailure (bcp.c:3313-3315) goes to
+        # LOOP_SPREAD_MOVES, past AfterMoveEffects (no item checks). Single-hit moves.
+        user, foe = _active(s, side), _active(s, 1 - side)
+        heal = effect == EffectId.PRESENT and o.present[side] == PRESENT_HEAL
+        full = (effect == EffectId.RECOVER and user.hp == user.max_hp) or (
+            heal and foe.hp == foe.max_hp > 0
+        )
         _hit(turn, s, side, move, hit, struggling, target_moved)
+        if full:
+            continue
         # BattleControllerPlayer_AfterMoveEffects (bcp.c:3638), after every hit:
         # AFTER_MOVE_EFFECT_ATTACKER_ITEM (bcp.c:3684), then _DEFENDER_ITEM (:3691), then
         # _HELD_ITEM_STATUS (:3730) for every battler. A restore subscript's PLUCK_CHECK

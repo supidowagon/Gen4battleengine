@@ -416,6 +416,23 @@ def _present(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     return _set(state, "hp", (h.target_side, h.target), healed, cond)
 
 
+def recovers_at_full_hp(tables, state: BattleState, side, move, outcome: Outcome) -> jnp.ndarray:
+    """``bool``: ``side``'s ``move``, if it lands, runs ``subscript_recover_hp.s`` on a
+    recipient at full HP: Recover on its user (``subscript_recover_half_max_hp.s:16``),
+    Present's heal on its target (``subscript_present_heal.s:9``). That subscript's ``_036``
+    ("HP is full!") sets ``MOVE_STATUS_NO_MORE_WORK``, so
+    ``BattleControllerPlayer_CheckMoveFailure`` (bcp.c:3313-3315) jumps to
+    ``LOOP_SPREAD_MOVES`` and the move's ``AfterMoveEffects`` (bcp.c:3638-3769: the attacker's
+    and defender's held items, ``HELD_ITEM_STATUS``) never run (``step._use_move``)."""
+    side = jnp.asarray(side, _I32)
+    effect = tables.move_effect[jnp.asarray(move, _I32)]
+    user, target = state.active[side], state.active[1 - side]
+    user_full = state.hp[side, user] == state.max_hp[side, user]
+    target_full = state.hp[1 - side, target] == state.max_hp[1 - side, target]
+    heal = (effect == _E.PRESENT) & (outcome.present[side] == PRESENT_HEAL)
+    return ((effect == _E.RECOVER) & user_full) | (heal & target_full)
+
+
 # subscript_boost_all_stats.s and subscript_curse_normal.s, in script order.
 ALL_STATS_RAISED = (Stat.ATK, Stat.DEF, Stat.SPE, Stat.SPA, Stat.SPD)
 CURSE_STAGES = ((Stat.SPE, -1), (Stat.ATK, 1), (Stat.DEF, 1))
