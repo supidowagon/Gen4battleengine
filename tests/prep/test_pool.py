@@ -163,10 +163,10 @@ def test_pool_ignores_fight_level_conditions(tables, names, vanilla_manifest, co
 def test_pool_lists_holdable_bag_items(tables, names):
     from nuzline.engine.coverage import Support
 
-    bag = [(names.item(n), 1) for n in ("Quick Claw", "Chilan Berry", "Oran Berry", "Honey")]
+    bag = [(names.item(n), 1) for n in ("Quick Claw", "Occa Berry", "Oran Berry", "Honey")]
     report = check_pool(tables, names, [], bag=bag)
     assert report.missing == [
-        "bag: Chilan Berry (held item UNSUPPORTED)",
+        "bag: Occa Berry (held item UNSUPPORTED)",
         "bag: Quick Claw (held item UNSUPPORTED)",
     ]
     assert not any("Honey" in line for line in report.missing)

@@ -70,6 +70,8 @@ from nuzline.engine.effects import (
     hit_count,
     holds,
     play_hit,
+    resist_berry,
+    resist_berry_damage,
     targets_user,
     unlock_move,
 )
@@ -418,6 +420,11 @@ def _use_move(
     # (:2633, damage.confusion_damage) instead of moving. subscript_hurt_self_in_confusion.s
     # runs CheckHoldOnWith1HP on the user (script.c:9098-9124): a Focus Sash at full HP
     # leaves 1 HP, and the followup message removes it (the user is the defender, :2629).
+    # Its BATTLE_SUBSCRIPT_UPDATE_HP then runs the resist-berry check on the user
+    # (effects.resist_berry): BattleContext_Init left moveType Normal and moveStatusFlags 0
+    # (battle_lib.c:1981-1982), so calcTemp is the table type of the move the battler
+    # chose (moveCur, bcp.c:1898; Hidden Power's too) and nothing is super-effective: a
+    # Chilan Berry halves the self-hit when that move is Normal-type, a Rindo Berry never.
     confused = go & (state.confusion[side] > 0)
     confusion = state.confusion[side] - confused.astype(state.confusion.dtype)
     still_confused = confused & (confusion > 0)
@@ -427,12 +434,15 @@ def _use_move(
     full = user_hp == state.max_hp[side, user].astype(_I32)
     raw = confusion_damage(tables, state, side, outcome.roll[side, 0])
     hurt, endured = focus_sash_damage(state, side, raw, sash & full)
+    resisted = self_hit & resist_berry(tables, state, side, tables.move_type[move], False)
+    taken = jnp.where(endured, user_hp - 1, raw)
+    hurt = resist_berry_damage(state, side, taken, resisted, hurt)
     user_hp = user_hp - jnp.where(self_hit, hurt, 0)
     state = state._replace(
         confusion=state.confusion.at[side].set(confusion),
         hp=state.hp.at[side, user].set(user_hp.astype(state.hp.dtype)),
     )
-    state = consume_item(state, side, self_hit & endured)
+    state = consume_item(state, side, (self_hit & endured) | resisted)
     state = _unlock(state, side, self_hit)  # subscript_hurt_self_in_confusion.s
     go = go & ~self_hit
     # CHECK_STATUS_STATE_PARALYSIS (:2652): RandNext() % 4 == 0 (outcome.full_para) fully

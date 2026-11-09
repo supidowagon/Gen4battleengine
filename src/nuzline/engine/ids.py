@@ -133,7 +133,7 @@ class AbilityId(IntEnum):
 class ItemId(IntEnum):
     """Held-item effect. ``tables.item_param[i, 0]`` is the decomp's hold param
     (Oran Berry, Berry Juice: HP restored; Sitrus Berry: percent of max HP; Big Root: the
-    percent added to a drain, 30); column 1 is 0.
+    percent added to a drain, 30); column 1 is a resist berry's type (below), else 0.
 
     * ``ORAN_BERRY``, ``BERRY_JUICE`` (both ``HOLD_EFFECT_HP_RESTORE``), ``SITRUS_BERRY``,
       ``CHESTO_BERRY`` (``SLP_RESTORE``), ``PECHA_BERRY`` (``PSN_RESTORE``, toxic too),
@@ -146,6 +146,10 @@ class ItemId(IntEnum):
     * ``BIG_ROOT`` (``HOLD_EFFECT_LEECH_BOOST``): drain (``effects._drain``) and Leech Seed
       (``step._leech_seed_check``).
     * ``LAGGING_TAIL`` (``HOLD_EFFECT_PRIORITY_DOWN``): ``order.player_second``.
+    * ``RESIST_BERRY`` (Rindo ``HOLD_EFFECT_WEAKEN_SE_GRASS``, Chilan ``..._WEAKEN_NORMAL``):
+      ``tables.item_param[i, 1]`` is the type the berry resists, ``RESIST_ANY_NORMAL`` for
+      Chilan (any Normal-type hit, no super-effective test); ``effects.resist_berry``
+      (``subscript_type_resist_berry.s``).
     """
 
     UNSUPPORTED = 0
@@ -160,6 +164,13 @@ class ItemId(IntEnum):
     LUM_BERRY = 9
     WHITE_HERB = 10
     LAGGING_TAIL = 11
+    RESIST_BERRY = 12
+
+
+# ``item_param[i, 1]`` of Chilan Berry (``HOLD_EFFECT_WEAKEN_NORMAL``): the berry halves any
+# hit whose type is Normal, super-effective or not (``subscript_type_resist_berry.s:_128``);
+# every other resist berry halves a super-effective hit of its type (``_135``-``_240``).
+RESIST_ANY_NORMAL = -1
 
 
 class TrainerItemId(IntEnum):

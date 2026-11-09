@@ -316,3 +316,44 @@ def test_flail_script_does_what_the_engine_does(tables, names, kaizo_tables, kai
     for t, n in ((tables, names), (kaizo_tables, kaizo_names)):
         for move in ("Flail", "Reversal"):
             assert int(t.move_effect[n.move(move)]) == EffectId.FLAIL, move
+
+
+def test_resist_berry_hold_effects_match_decomp():
+    """Names against generated/item_hold_effects.txt (line N+1 is id N) and each type
+    against subscript_type_resist_berry.s: the jump for the hold effect lands on a compare
+    of calcTemp with that type (34, Steel, compares NEQ and falls through to the halving)."""
+    from nuzline.engine.ids import RESIST_ANY_NORMAL, Type
+    from tools.effect_map import RESIST_BERRY_HOLD_EFFECTS
+
+    lines = (DECOMP / "generated/item_hold_effects.txt").read_text().split()
+    script = (DECOMP / "res/battle/scripts/subscripts/subscript_type_resist_berry.s").read_text(
+        encoding="utf-8"
+    )
+    jumps = {int(e): label for e, label in re.findall(r"BTLVAR_SCRIPT_TEMP, (\d+), (_\d+)", script)}
+    blocks = dict(
+        re.findall(
+            r"(_\d+):\n\s+CompareVarToValue OPCODE_(?:EQU|NEQ), BTLVAR_CALC_TEMP, (0x[0-9A-Fa-f]+)",
+            script,
+        )
+    )
+    assert sorted(RESIST_BERRY_HOLD_EFFECTS) == sorted(jumps) == list(range(19, 36))
+    for effect, (name, resisted) in RESIST_BERRY_HOLD_EFFECTS.items():
+        assert lines[effect] == name
+        want = Type.NORMAL if resisted == RESIST_ANY_NORMAL else resisted
+        assert int(blocks[jumps[effect]], 16) == want, name
+    # Only Chilan (35) jumps before the super-effective test.
+    assert script.index(", 35, ") < script.index("MOVE_STATUS_SUPER_EFFECTIVE")
+    assert script.index(", 19, ") > script.index("MOVE_STATUS_SUPER_EFFECTIVE")
+
+
+def test_ignore_type_checks_effects_match_decomp():
+    """effects.IGNORES_TYPE_CHECKS (subscript_type_resist_berry.s:5 skips them) is every
+    mapped effect whose script sets SYSCTL_IGNORE_TYPE_CHECKS or SYSCTL_IGNORE_IMMUNITIES."""
+    from nuzline.engine.effects import IGNORES_TYPE_CHECKS
+
+    flag = re.compile(
+        r"FLAG_ON, BTLVAR_BATTLE_CTX_STATUS, .*SYSCTL_IGNORE_(TYPE_CHECKS|IMMUNITIES)"
+    )
+    for effect, (eid, _) in DECOMP_EFFECT_TO_ID.items():
+        sets = bool(flag.search(_script(effect)))
+        assert sets == (eid in IGNORES_TYPE_CHECKS), DECOMP_EFFECT_NAMES[effect]

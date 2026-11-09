@@ -262,6 +262,8 @@ PLUCKABLE = (
     ItemId.CHESTO_BERRY,
     ItemId.PECHA_BERRY,
     ItemId.LUM_BERRY,
+    # Rindo, Chilan: PLUCK_EFFECT_NONE berries, eaten with no effect (Item_IsBerry, :5833).
+    ItemId.RESIST_BERRY,
 )
 
 
@@ -274,8 +276,9 @@ def pluck_berry(
     (``RemoveItem BTLSCR_DEFENDER``, kept in ``item_consumed``) even if the foe fainted,
     and its pluck effect acts on the eater: Oran heals its param, Sitrus
     ``Divide(maxHP * param, 100)``, each only below full HP (capped); Chesto, Pecha and Lum
-    cure as the held berry would (``_restore``: the same restore subscripts). Anything else
-    stays (:5833). ``SELF_TURN_FLAG_PLUCK_BERRY`` is set for every eaten berry
+    cure as the held berry would (``_restore``: the same restore subscripts); Rindo and
+    Chilan (``PLUCK_EFFECT_NONE`` berries) are eaten with no effect. Anything else stays
+    (:5833). ``SELF_TURN_FLAG_PLUCK_BERRY`` is set for every eaten berry
     (:5848) and cleared by the restore subscript's ``PLUCK_CHECK``, so it is left set
     (``pluck_flag``) when the berry did nothing for the eater (``nextSeq == 0``). The
     eater's own item is never touched here. Sticky Hold, Custap Berry, Klutz and Embargo

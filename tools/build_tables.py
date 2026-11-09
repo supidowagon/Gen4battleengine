@@ -21,7 +21,9 @@ Encodings:
 * ``nature_mods[nature, stat]``: +1 raised, -1 lowered, 0 otherwise (HP always 0).
 * ``item_hold_effect[item]``: the decomp hold effect as stored (``ItemData.holdEffect``; 0 = none),
   whether or not the engine supports it (``item_effect`` is the mapped engine id).
-* ``item_param[item]``: ``(decomp hold param, 0)`` for supported items, else zeros.
+* ``item_param[item]``: ``(decomp hold param, 0)`` for supported items, else zeros; a
+  ``RESIST_BERRY``'s column 1 is the type its hold effect resists
+  (``effect_map.RESIST_BERRY_HOLD_EFFECTS``).
 * ``trainer_item_effect[item]``: ``ids.TrainerItemId`` of the item used from a trainer's
   bag (``DECOMP_TRAINER_ITEM_TO_ID``).
 * ``species_exp_rate[species]``: growth rate id (``generated/exp_rates.txt`` order: 0 medium
@@ -82,6 +84,7 @@ from tools.effect_map import (
     DECOMP_EFFECT_TO_ID,
     DECOMP_ITEM_TO_ID,
     DECOMP_TRAINER_ITEM_TO_ID,
+    RESIST_BERRY_HOLD_EFFECTS,
     TYPE_CHART_STATUS_MOVES,
     UNSUPPORTED_MOVES,
 )
@@ -224,6 +227,16 @@ def _form_names(species: list[dict], forms: list[dict]) -> dict[str, list[str]]:
             raise BuildError(f"forms.json: species {f['species']} form {f['form']} out of order")
         names.append(f["name"])
     return out
+
+
+def _resisted_type(item: dict, item_id: int) -> int:
+    """``item_param[i, 1]``: the type a ``RESIST_BERRY`` resists, by its own hold effect
+    (``subscript_type_resist_berry.s``), else 0."""
+    if item_id != ItemId.RESIST_BERRY:
+        return 0
+    if item["hold_effect"] not in RESIST_BERRY_HOLD_EFFECTS:
+        raise BuildError(f"item {item['name']!r}: hold effect {item['hold_effect']} resists no type")
+    return int(RESIST_BERRY_HOLD_EFFECTS[item["hold_effect"]][1])
 
 
 def _item_maps(items: list[dict], vanilla: list[dict] | None) -> tuple[list[int], list[int]]:
@@ -447,6 +460,10 @@ def build_arrays(inter: Path, game: str = "platinum_us") -> tuple[dict[str, np.n
     effects = [_move_effect(m, changed_effects) for m in moves]
     item_ids, trainer_item_ids = _item_maps(items, vanilla_items)
     supported_item = [e not in (ItemId.UNSUPPORTED, ItemId.NONE) for e in item_ids]
+    item_params = [
+        [i["hold_param"] if ok else 0, _resisted_type(i, e)]
+        for i, ok, e in zip(items, supported_item, item_ids, strict=True)
+    ]
 
     arrays = {
         "species_base_stats": _arr([s["base_stats"] for s in species], np.int16, "base_stats"),
@@ -483,14 +500,7 @@ def build_arrays(inter: Path, game: str = "platinum_us") -> tuple[dict[str, np.n
         "type_chart_foresight": _arr(chart_foresight, np.int8, "type chart foresight"),
         "nature_mods": _arr(nature_mods, np.int8, "nature mods"),
         "item_effect": _arr(item_ids, np.int16, "item effect"),
-        "item_param": _arr(
-            [
-                [i["hold_param"] if ok else 0, 0]
-                for i, ok in zip(items, supported_item, strict=True)
-            ],
-            np.int16,
-            "item param",
-        ),
+        "item_param": _arr(item_params, np.int16, "item param"),
         "trainer_item_effect": _arr(trainer_item_ids, np.int8, "trainer item effect"),
         "item_hold_effect": _arr([i["hold_effect"] for i in items], np.int16, "item hold effect"),
     }

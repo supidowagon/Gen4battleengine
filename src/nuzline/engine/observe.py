@@ -58,7 +58,9 @@ reset, ``_VOLATILE`` step.py:94; notes/stage-b/observe.md section 1), so the cas
 arise yet; were it to, its states would stay in one set (coarser, never finer).
 
 The visible projection of ``after``: both actives, every slot's species, status and
-held/consumed item; the non-zero-ness of ``confusion``, ``taunt``, ``trapped``,
+held/consumed item (a Rindo / Chilan Berry's "weakened" message,
+``subscript_type_resist_berry.s:_245``, is always followed by its ``RemoveItem``, so
+``item_consumed`` shows it); the non-zero-ness of ``confusion``, ``taunt``, ``trapped``,
 ``leech_seed`` and ``substitute_hp`` (their counters are hidden); stat stages, Water
 Sport, hazards (Stealth Rock, Spikes layers), screens and the other side conditions
 (non-zero), weather and the field conditions; the player's exact HP and PP per party

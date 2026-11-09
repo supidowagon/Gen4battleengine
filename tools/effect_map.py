@@ -49,7 +49,16 @@ reached silently.
 
 from __future__ import annotations
 
-from nuzline.engine.ids import AbilityId, EffectId, ItemId, Stat, Status, TrainerItemId
+from nuzline.engine.ids import (
+    RESIST_ANY_NORMAL,
+    AbilityId,
+    EffectId,
+    ItemId,
+    Stat,
+    Status,
+    TrainerItemId,
+    Type,
+)
 
 _E = EffectId
 _ATK, _DEF, _SPA, _SPD, _SPE, _ACC, _EVA = (
@@ -264,6 +273,34 @@ DECOMP_ITEM_TO_ID: dict[str, ItemId] = {
     "Lum Berry": ItemId.LUM_BERRY,  # HOLD_EFFECT_STATUS_RESTORE
     "White Herb": ItemId.WHITE_HERB,  # HOLD_EFFECT_STATDOWN_RESTORE
     "Lagging Tail": ItemId.LAGGING_TAIL,  # HOLD_EFFECT_PRIORITY_DOWN
+    "Rindo Berry": ItemId.RESIST_BERRY,  # HOLD_EFFECT_WEAKEN_SE_GRASS (22)
+    "Chilan Berry": ItemId.RESIST_BERRY,  # HOLD_EFFECT_WEAKEN_NORMAL (35)
+}
+
+# The hold effects subscript_type_resist_berry.s reads (decomp hold effect id, i.e. line
+# id + 1 of generated/item_hold_effects.txt -> (name, the type it resists)): each of 19-34
+# halves a super-effective hit of its type (_135-_240); 35 (Chilan) halves any Normal-type
+# hit (_128, before the super-effective test). build_tables fills a RESIST_BERRY item's
+# item_param[i, 1] from here; only the items DECOMP_ITEM_TO_ID names are supported, the
+# others stay UNSUPPORTED. tests/tools/test_effect_map.py reads both against the decomp.
+RESIST_BERRY_HOLD_EFFECTS: dict[int, tuple[str, int]] = {
+    19: ("HOLD_EFFECT_WEAKEN_SE_FIRE", Type.FIRE),
+    20: ("HOLD_EFFECT_WEAKEN_SE_WATER", Type.WATER),
+    21: ("HOLD_EFFECT_WEAKEN_SE_ELECTRIC", Type.ELECTRIC),
+    22: ("HOLD_EFFECT_WEAKEN_SE_GRASS", Type.GRASS),
+    23: ("HOLD_EFFECT_WEAKEN_SE_ICE", Type.ICE),
+    24: ("HOLD_EFFECT_WEAKEN_SE_FIGHT", Type.FIGHTING),
+    25: ("HOLD_EFFECT_WEAKEN_SE_POISON", Type.POISON),
+    26: ("HOLD_EFFECT_WEAKEN_SE_GROUND", Type.GROUND),
+    27: ("HOLD_EFFECT_WEAKEN_SE_FLYING", Type.FLYING),
+    28: ("HOLD_EFFECT_WEAKEN_SE_PSYCHIC", Type.PSYCHIC),
+    29: ("HOLD_EFFECT_WEAKEN_SE_BUG", Type.BUG),
+    30: ("HOLD_EFFECT_WEAKEN_SE_ROCK", Type.ROCK),
+    31: ("HOLD_EFFECT_WEAKEN_SE_GHOST", Type.GHOST),
+    32: ("HOLD_EFFECT_WEAKEN_SE_DRAGON", Type.DRAGON),
+    33: ("HOLD_EFFECT_WEAKEN_SE_DARK", Type.DARK),
+    34: ("HOLD_EFFECT_WEAKEN_SE_STEEL", Type.STEEL),
+    35: ("HOLD_EFFECT_WEAKEN_NORMAL", RESIST_ANY_NORMAL),
 }
 
 # Bag items a trainer's AI may use (TrainerAI_ShouldUseItem, trainer_ai.c:4056).

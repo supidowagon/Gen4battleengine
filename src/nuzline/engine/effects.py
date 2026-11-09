@@ -64,6 +64,10 @@ many are real). Decomp sources:
   (``outcome.n_hits``); ``SetMultiHit 2`` (``effect_script_0044.s``) is two hits
   (``move_param[m, 0]``). Focus Sash activates only on a hit taken at full HP
   (bcp.c:3386-3404) and then stays active for the rest of the move (``play_hit``).
+* Rindo / Chilan Berry (``RESIST_BERRY``): ``subscript_update_hp.s:9`` calls
+  ``subscript_type_resist_berry.s`` on every move hit taken during an action (``play_hit``,
+  Pursuit's hit through it, and the confusion self-hit in ``step``): ``resist_berry``,
+  ``resist_berry_damage``.
 * ``HIGH_CRIT`` only raises the crit stage ``sample_outcome`` uses; here the
   engine reads ``outcome.crit``.
 * Stealth Rock: ``effect_script_0266.s`` sets the flag on the defender's side
@@ -165,9 +169,11 @@ from typing import NamedTuple
 import jax.numpy as jnp
 
 from nuzline.data.tables import Tables
-from nuzline.engine.damage import STATUS, damage_for_roll, effectiveness, move_type_of
+from nuzline.engine.damage import STATUS, damage_for_roll, divide, effectiveness, move_type_of
 from nuzline.engine.ids import (
     MOVE_FAKE_OUT,
+    MOVE_STRUGGLE,
+    RESIST_ANY_NORMAL,
     AbilityId,
     EffectId,
     ItemId,
@@ -706,6 +712,47 @@ def focus_sash_damage(state: BattleState, side, damage, armed) -> tuple:
     return jnp.where(endured, hp - 1, jnp.minimum(damage, hp)), endured
 
 
+# Effects whose script sets SYSCTL_IGNORE_TYPE_CHECKS or SYSCTL_IGNORE_IMMUNITIES: Night Shade
+# and Seismic Toss (effect_script_0087.s:5), Foresight (effect_script_0113.s:6, no damage).
+# subscript_type_resist_berry.s:5 skips the berry for such a hit. tests/tools/
+# test_effect_map.py checks the list against every mapped effect script.
+IGNORES_TYPE_CHECKS = (_E.LEVEL_DAMAGE, _E.FORESIGHT)
+
+
+def resist_berry(
+    tables: Tables, state: BattleState, side, move_type, super_effective
+) -> jnp.ndarray:
+    """``side``'s active Pokemon holds a Rindo or Chilan Berry that halves the hit it takes
+    (``subscript_type_resist_berry.s``, from ``subscript_update_hp.s:9``, which runs it for
+    every damaging hit while a battler still has an action, ``waitingBattlers != 0``, and
+    no ``SYSCTL_SKIP_SPRITE_BLINK``: never for recoil, Rough Skin or the end of turn).
+    ``move_type`` is the script's ``calcTemp``: ``battleCtx->moveType`` (Hidden Power's
+    type) when it is not Normal, else ``CURRENT_MOVE_DATA.type`` (:_020-_031; Normalize,
+    which would make it Normal, is unsupported). ``super_effective`` is
+    ``MOVE_STATUS_SUPER_EFFECTIVE``. Chilan (``RESIST_ANY_NORMAL``) needs a Normal type
+    only (:_128); Rindo a super-effective hit of its type (:_156). The caller skips
+    ``IGNORES_TYPE_CHECKS`` effects (:5; OHKO moves, :6, are unsupported)."""
+    item = state.item[side, state.active[side]]
+    resisted = tables.item_param[item, 1].astype(_I32)
+    move_type = jnp.asarray(move_type, _I32)
+    halves = jnp.where(
+        resisted == RESIST_ANY_NORMAL,
+        move_type == Type.NORMAL,
+        jnp.asarray(super_effective) & (move_type == resisted),
+    )
+    return (tables.item_effect[item] == ItemId.RESIST_BERRY) & halves
+
+
+def resist_berry_damage(state: BattleState, side, damage, resisted, dealt) -> jnp.ndarray:
+    """The HP ``side``'s active Pokemon loses: where ``resisted``, the berry's
+    ``DivideVarByValue BTLVAR_HP_CALC_TEMP, 2`` (``BattleSystem_Divide``: at least 1) of
+    ``damage``, ``battleCtx->damage`` after ``UpdateHP``'s endure cap (bcp.c:3396-3404) but
+    before ``BtlCmd_UpdateHealthBarValue`` caps it at the HP (battle_script.c:1699-1704);
+    else ``dealt``. The berry is then removed (``RemoveItem BTLSCR_MSG_TEMP``)."""
+    hp = state.hp[side, state.active[side]].astype(_I32)
+    return jnp.where(resisted, jnp.minimum(divide(damage, 2), hp), dealt)
+
+
 def holds(tables: Tables, state: BattleState, side, item: ItemId) -> jnp.ndarray:
     """``side``'s active Pokemon holds an item with effect ``item``."""
     return tables.item_effect[state.item[side, state.active[side]]] == item
@@ -815,23 +862,55 @@ def play_hit(
     full = target_hp == state.max_hp[target_side, target].astype(_I32)
     armed = jnp.asarray(focus_armed) | (update_hp & sash & full)
     capped, endured = focus_sash_damage(state, target_side, damage, armed & update_hp)
+    # battleCtx->damage after the endure cap: what subscript_update_hp.s receives.
+    taken = jnp.where(endured, target_hp - 1, damage)
+    effect = tables.move_effect[move].astype(_I32)
+    move_type = move_type_of(tables, state, side, move)
+    # MOVE_STATUS_SUPER_EFFECTIVE: BattleControllerPlayer_CheckTypeChart (bcp.c:2350-2358)
+    # applies the chart to a move with power that is not RANGE_USER (Bide); its
+    # ApplyTypeMultiplier (battle_lib.c:7549-7573) sets the flag when the x2 entries outnumber
+    # the x0.5 ones, only for table power != 0 (`update`); Struggle returns before the
+    # chart (battle_lib.c:2572). Only a hit with damage reaches the berry, so no immunity.
+    super_effective = (
+        (effect != _E.BIDE)
+        & (tables.move_power[move] != 0)
+        & (move != MOVE_STRUGGLE)
+        & (
+            effectiveness(
+                tables,
+                move_type,
+                state.types[target_side, target],
+                state.foresight[target_side] != 0,
+            )
+            > 100
+        )
+    )
+    resisted = (
+        update_hp
+        & ~jnp.isin(effect, jnp.asarray(IGNORES_TYPE_CHECKS, effect.dtype))
+        & resist_berry(tables, state, target_side, move_type, super_effective)
+    )
     dealt = jnp.where(landed & hits_foe, capped, 0)
+    dealt = resist_berry_damage(state, target_side, taken, resisted, dealt)
     state = state._replace(
         hp=state.hp.at[target_side, target].set((target_hp - dealt).astype(state.hp.dtype))
     )
-    state = consume_item(state, target_side, endured & sash)
-    # BattleControllerPlayer_UpdateHP (bcp.c:3407): a Biding target stores what it lost.
+    state = consume_item(state, target_side, (endured & sash) | resisted)
+    # BattleControllerPlayer_UpdateHP (bcp.c:3407): a Biding target stores battleCtx->damage,
+    # before the berry halves the HP change: what it lost, or the unhalved amount after a
+    # resist berry (a target that faints is cleared at the faint check, so the HP cap of
+    # `dealt` changes nothing there).
     biding = state.bide_turns[target_side] > 0
-    state = _set(state, "bide_damage", target_side, state.bide_damage[target_side] + dealt, biding)
+    stored = jnp.where(resisted, taken, dealt)
+    state = _set(state, "bide_damage", target_side, state.bide_damage[target_side] + stored, biding)
 
-    effect = tables.move_effect[move].astype(_I32)
     param = tables.move_param[move].astype(_I32)
     is_status = tables.move_category[move] == STATUS
     # A type-checked status move (Thunder Wave) fails on a 0x matchup.
     type_ok = (param[1] == 0) | (
         effectiveness(
             tables,
-            move_type_of(tables, state, side, move),
+            move_type,
             state.types[target_side, target],
             state.foresight[target_side] != 0,
         )

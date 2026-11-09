@@ -34,6 +34,7 @@ from nuzline.engine.ids import (
     MOVE_FAKE_OUT,
     MOVE_STRUGGLE,
     POTION_HP_RESTORED,
+    RESIST_ANY_NORMAL,
     WEATHER_ABILITY_IDS,
     AbilityId,
     EffectId,
@@ -453,10 +454,14 @@ def _variance(damage: int, roll: int) -> int:
     return max(damage * (85 + roll) // 100, 1)
 
 
-def _apply_type_chart(tables, s: RefState, attacker: int, defender: int, move: int, damage: int):
+def _apply_type_chart(tables, s: RefState, attacker: int, defender: int, move: int, damage: int,
+                      flags: set[str] | None = None):  # fmt: skip
     """``BattleSystem_ApplyTypeChart`` (lib.c:2560): STAB, then every chart row for
     the move's type in table order, each matching defender type through
-    ``ApplyTypeMultiplier`` (lib.c:7542). Struggle returns early (lib.c:2573)."""
+    ``ApplyTypeMultiplier`` (lib.c:7542). Struggle returns early (lib.c:2573). ``flags``
+    receives the ``moveStatusFlags`` effectiveness bits."""
+    if flags is None:
+        flags = set()
     if move == MOVE_STRUGGLE:
         return damage
     move_type = _move_type(tables, s, attacker, move)
@@ -469,7 +474,7 @@ def _apply_type_chart(tables, s: RefState, attacker: int, defender: int, move: i
             damage = damage * 15 // 10
     identified = bool(s.sides[defender].foresight)  # lib.c:2615
     update = _t(tables, "move_power", move) != 0  # ApplyTypeMultiplier's `update`
-    flags: set[str] = set()  # MOVE_STATUS_SUPER_EFFECTIVE / _NOT_VERY_EFFECTIVE
+    # flags: MOVE_STATUS_SUPER_EFFECTIVE / _NOT_VERY_EFFECTIVE
     for defending, mul in _chart_rows(tables, move_type, identified):  # lib.c:2611-2646
         if defending == def_types[0]:
             damage = _apply_type_multiplier(damage, mul, update, flags)
@@ -694,6 +699,46 @@ def _sash_at_full_hp(turn: _Turn, s: RefState, side: int) -> bool:
     return _item_effect(turn.tables, mon) == ItemId.FOCUS_SASH and mon.hp == mon.max_hp
 
 
+def _resist_berry(
+    turn: _Turn, s: RefState, side: int, move_type: int, super_effective: bool
+) -> bool:
+    """``subscript_type_resist_berry.s`` (``subscript_update_hp.s:9``) on ``side``'s active
+    Pokemon, the battler whose HP changes: a Chilan Berry (``HOLD_EFFECT_WEAKEN_NORMAL``,
+    ``RESIST_ANY_NORMAL``) halves any hit whose type (``calcTemp``) is Normal (:_128), a
+    Rindo Berry a super-effective Grass hit (:_156); the berry is then removed. Returns
+    whether it triggered (the caller halves ``hpCalcTemp``)."""
+    mon = _active(s, side)
+    if _item_effect(turn.tables, mon) != ItemId.RESIST_BERRY:
+        return False
+    resisted = _t(turn.tables, "item_param", mon.item, 1)
+    if resisted == RESIST_ANY_NORMAL:
+        triggered = move_type == Type.NORMAL
+    else:
+        triggered = super_effective and move_type == resisted
+    if triggered:
+        mon.item_consumed = mon.item
+        mon.item = 0
+    return triggered
+
+
+def _hit_resist_berry(turn: _Turn, s: RefState, attacker: int, move: int) -> bool:
+    """``_resist_berry`` for a move hit on the foe of ``attacker``. :5 skips a move whose
+    script set ``SYSCTL_IGNORE_TYPE_CHECKS`` / ``_IGNORE_IMMUNITIES`` (Night Shade, Seismic
+    Toss: effect_script_0087.s; OHKO moves, :6, are unsupported). ``calcTemp`` is the move's
+    type (Hidden Power's ``moveType``; Normalize is unsupported). The super-effective flag
+    comes from ``CheckTypeChart`` (bcp.c:2350-2358), which skips ``RANGE_USER`` (Bide) and
+    power-0 moves."""
+    tables = turn.tables
+    effect = _t(tables, "move_effect", move)
+    if effect in (EffectId.LEVEL_DAMAGE, EffectId.FORESIGHT):
+        return False
+    flags: set[str] = set()
+    if effect != EffectId.BIDE and _t(tables, "move_power", move) != 0:
+        _apply_type_chart(tables, s, attacker, 1 - attacker, move, 0, flags)
+    move_type = _move_type(tables, s, attacker, move)
+    return _resist_berry(turn, s, 1 - attacker, move_type, "super" in flags)
+
+
 def _big_root(turn: _Turn, s: RefState, side: int, heal: int) -> int:
     """``subscript_drain_half_damage_dealt.s:_011`` / ``subscript_leech_seed_effect.s``:
     with a Big Root (``HOLD_EFFECT_LEECH_BOOST``) the heal becomes ``heal * (param + 100)
@@ -861,7 +906,8 @@ def _pluck_berry(turn: _Turn, s: RefState, side: int) -> None:
     the item's pluck effect (res/items/data/*.json): the user eats the foe's Oran
     (``PLUCK_EFFECT_HP_RESTORE``) / Sitrus (``_HP_PCT_RESTORE``) Berry, healing (capped)
     unless at full HP, or its Chesto / Pecha / Lum (``_SLP_RESTORE`` / ``_PSN_RESTORE`` /
-    ``_ALL_RESTORE``), curing as the held berry would; the berry is removed
+    ``_ALL_RESTORE``), curing as the held berry would, or its Rindo / Chilan
+    (``PLUCK_EFFECT_NONE`` berries, no effect); the berry is removed
     (``RemoveItem BTLSCR_DEFENDER``) even when the foe fainted. Berry Juice and the other
     implemented items have ``PLUCK_EFFECT_NONE`` and are no berries (lib.c:5833): they
     stay. ``SELF_TURN_FLAG_PLUCK_BERRY`` (lib.c:5848) stays set when the berry did
@@ -874,7 +920,8 @@ def _pluck_berry(turn: _Turn, s: RefState, side: int) -> None:
         heal = power
     elif effect == ItemId.SITRUS_BERRY:
         heal = _divide(user.max_hp * power, 100)
-    elif effect in (ItemId.CHESTO_BERRY, ItemId.PECHA_BERRY, ItemId.LUM_BERRY):
+    # Rindo, Chilan (RESIST_BERRY): PLUCK_EFFECT_NONE berries, eaten with no effect (:5833).
+    elif effect in (ItemId.CHESTO_BERRY, ItemId.PECHA_BERRY, ItemId.LUM_BERRY, ItemId.RESIST_BERRY):
         heal = 0
     else:
         return
@@ -1111,16 +1158,24 @@ def _hit(turn: _Turn, s: RefState, side: int, move: int, hit: int, struggling: b
         o.roll[side][hit],
         magnitude=o.magnitude[side],
     )
-    dealt = 0
+    dealt = stored = 0
     if landed and hits_foe:
         # BattleControllerPlayer_UpdateHP (bcp.c:3346-3404) runs for a non-zero damage:
         # a Focus Sash at full HP sets focusItemActivated, which lasts the whole action.
         if damage > 0 and _sash_at_full_hp(turn, s, target):
             turn.focus_armed = True
-        dealt = _lose_hp(turn, s, target, _focus_sash(turn, s, target, damage, turn.focus_armed))
-    # BattleControllerPlayer_UpdateHP (bcp.c:3407): a Biding target stores what it lost.
+        taken = _focus_sash(turn, s, target, damage, turn.focus_armed)  # battleCtx->damage
+        # subscript_update_hp.s: the resist berry halves hpCalcTemp (BattleSystem_Divide).
+        if damage > 0 and _hit_resist_berry(turn, s, side, move):
+            dealt = _lose_hp(turn, s, target, _divide(taken, 2))
+            stored = taken
+        else:
+            dealt = stored = _lose_hp(turn, s, target, taken)
+    # BattleControllerPlayer_UpdateHP (bcp.c:3407): a Biding target stores battleCtx->damage,
+    # unhalved by a resist berry; otherwise what it lost (the same unless it fainted, and a
+    # fainted battler's is cleared at the faint check).
     if s.sides[target].bide_turns:
-        s.sides[target].bide_damage += dealt
+        s.sides[target].bide_damage += stored
 
     # Whether the move "worked" on the target: a damaging move dealt damage (not
     # MOVE_STATUS_NO_EFFECTS); a type-checked status move (move_param[1]) is not
@@ -1218,7 +1273,13 @@ def _status_disrupted(turn: _Turn, s: RefState, side: int, move: int) -> int:
             # subscript_hurt_self_in_confusion.s: CheckHoldOnWith1HP on the user
             # (script.c:9098-9124), then the followup message removes the sash.
             armed = _sash_at_full_hp(turn, s, side)
-            _lose_hp(turn, s, side, _focus_sash(turn, s, side, damage, armed))
+            taken = _focus_sash(turn, s, side, damage, armed)
+            # Its UPDATE_HP runs the resist-berry check on the user: moveType is Normal and
+            # moveStatusFlags 0 since BattleContext_Init (lib.c:1981-1982), so calcTemp is the
+            # chosen move's table type (moveCur, bcp.c:1898) and nothing is super-effective.
+            if _resist_berry(turn, s, side, _t(tables, "move_type", move), False):
+                taken = _divide(taken, 2)
+            _lose_hp(turn, s, side, taken)
             _unlock(sd)  # subscript_hurt_self_in_confusion.s
             return HURT_ITSELF
     # CHECK_STATUS_STATE_PARALYSIS (bcp.c:2652): RandNext() % 4 == 0 (Magic Guard is
@@ -1358,7 +1419,11 @@ def _pursuit(turn: _Turn, s: RefState, side: int, actions, choices) -> None:
                           PURSUIT_POWER_MUL)  # fmt: skip
     # subscript_pursuit.s: CheckHoldOnWith1HP on the target (script.c:9098-9124).
     armed = _sash_at_full_hp(turn, s, side)
-    dealt = _lose_hp(turn, s, side, _focus_sash(turn, s, side, damage, armed))
+    taken = _focus_sash(turn, s, side, damage, armed)
+    # Its UPDATE_HP runs the resist-berry check on the target (subscript_update_hp.s:9).
+    if damage > 0 and _hit_resist_berry(turn, s, pursuer, move):
+        taken = _divide(taken, 2)
+    dealt = _lose_hp(turn, s, side, taken)
     _contact_ability(turn, s, pursuer, move, 0, damage > 0, dealt)
 
 

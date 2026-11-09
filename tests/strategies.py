@@ -87,6 +87,8 @@ M1_ITEMS = (
     "Lum Berry",
     "White Herb",
     "Lagging Tail",
+    "Rindo Berry",
+    "Chilan Berry",
 )
 M1_BAG_ITEMS = ("", "Potion")  # the opponent's bag (ids.TrainerItemId)
 

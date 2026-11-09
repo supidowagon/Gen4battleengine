@@ -339,6 +339,11 @@ EXEMPT: dict[str, str] = {
     "tools.effect_map._EFFECTS": _KEYED_BY_EFFECT,
     "tools.effect_map.DECOMP_EFFECT_NAMES": _KEYED_BY_EFFECT,
     "tools.effect_map.CERTAIN_SECONDARY_EFFECTS": _KEYED_BY_EFFECT,
+    "tools.effect_map.RESIST_BERRY_HOLD_EFFECTS": (
+        "keyed by decomp hold effect id, read off the vanilla subscript_type_resist_berry.s: "
+        "each game's items carry their own hold effect (build_tables looks theirs up here), "
+        "and a game's script changes are rom_diff.toml entries (Ruling 13)"
+    ),
     "tools.effect_map.DECOMP_ABILITY_TO_ID": (
         "keyed by ability name: engine semantics of the vanilla ability handling; a game's "
         "changes to it are rom_diff.toml entries (Ruling 13)"
