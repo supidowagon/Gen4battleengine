@@ -49,7 +49,7 @@ def test_user_pool(tables, names):
     lacking = [c for c in candidates if tm10 not in {item for item, _ in c.tms}]
     assert [c.spec.species for c in lacking] == [names.species("Kricketot")]
 
-    assert check_pool(tables, names, candidates).missing == []
+    assert check_pool(tables, names, candidates, ()).missing == []
 
 
 def test_prep_on_the_user_save(capsys):

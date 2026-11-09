@@ -595,7 +595,7 @@ def _print_pool(args, game, tables, names, player, trainer, opp, save) -> None:
     candidates, left_out = pool_candidates(save, tables, names, learnsets, cap)
     print(f"Pool at level cap {cap} ({len(candidates)} Pokemon):")
     bag = [entry for pocket in HELD_POCKETS for entry in save.bag.get(pocket, ())]
-    _print_report(check_pool(tables, names, candidates, trainer, bag, opp))
+    _print_report(check_pool(tables, names, candidates, opp, trainer, bag))
     for line in left_out:
         _say(line)
 

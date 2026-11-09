@@ -23,7 +23,9 @@ from nuzline.engine.coverage import (
     IMPLEMENTED_ITEMS,
     Support,
     ghost_curse,
+    halved_by_line,
     halved_defense_line,
+    halving_moves,
     low_defense,
     rom_change_line,
     rom_change_refusals,
@@ -157,8 +159,8 @@ def usable_pool(
     tables: Tables,
     names: Names,
     candidates: Sequence[Candidate],
+    opp: Sequence[PokemonSpec],
     trainer: Trainer | None = None,
-    opp: Sequence[PokemonSpec] = (),
 ) -> tuple[list[Candidate], list[str]]:
     """The candidates the engine and the AI can play, and one line per exclusion or trim.
 
@@ -168,9 +170,12 @@ def usable_pool(
     off (<reason>)"``), as spec §6.1 offers "none". An unsupported or refused relearner or TM
     option is removed (``"<label>: <move> not offered (<reason>)"``). With ``trainer`` on
     Kaizo, an ability, move or held item a ``not_reached`` ROM-change condition lists counts
-    as refused the same way (``_rom_change_refusal``). With the trainer's party ``opp``, a
-    Selfdestruct-family move is refused against a low Defense (``_move_refusal``)."""
+    as refused the same way (``_rom_change_refusal``). Against the trainer's party ``opp``, a
+    Selfdestruct-family move is refused against a low Defense (``_move_refusal``), and a
+    candidate whose own Defense is that low is left out when a foe knows such a move
+    (``coverage.halved_by_line``)."""
     foe_defense = low_defense(tables, opp)
+    foe_halving = halving_moves(tables, opp)
 
     def rom(specs: Sequence[PokemonSpec] = (), moves: Sequence[int] = ()) -> str | None:
         return _rom_change_refusal(tables, names, trainer, specs, moves)
@@ -189,6 +194,8 @@ def usable_pool(
                 names.species_abilities(spec.species, spec.form)[spec.ability_slot]
             ]
             why.append(f"{ability} ({r})")
+        if (low := halved_by_line(tables, names, spec, foe_halving)) is not None:
+            why.append(f"{low} (zero damage divisor at -6 Defense, not implemented)")
         for move in spec.moves:
             if move and (r := move_refusal(move, spec)) is not None:
                 why.append(f"{names.move_names[move]} ({r})")
@@ -260,9 +267,9 @@ def levelled_moves(
     candidates: Sequence[Candidate],
     learnsets: Learnsets,
     cap: int,
+    opp: Sequence[PokemonSpec],
     names: Names | None = None,
     trainer: Trainer | None = None,
-    opp: Sequence[PokemonSpec] = (),
 ) -> tuple[tuple[tuple[int, int], ...], ...]:
     """Per candidate the ``(level, move)`` pairs it learns going from its save level
     (``spec.level - candies``) to ``cap``: levels above the save level and at most the cap,
@@ -375,7 +382,7 @@ def build_problem(
         raise ValueError(f"{pool[both[0]].label} is both protected and excluded")
     reasons = [f"{pool[i].label}: excluded" for i in sorted(excluded_at)] + warnings
     kept = [c for i, c in enumerate(pool) if i not in excluded_at]
-    usable, lines = usable_pool(tables, names, kept, trainer, opp)
+    usable, lines = usable_pool(tables, names, kept, opp, trainer)
     warnings += lines
     reasons += lines
     if not usable:
@@ -416,7 +423,7 @@ def build_problem(
         prestatus=tuple(statuses),
         cap=cap,
         source=f"save:{save.sha256}",
-        levelled=levelled_moves(tables, usable, learnsets, cap, names, trainer, opp),
+        levelled=levelled_moves(tables, usable, learnsets, cap, opp, names, trainer),
         left_out_party=tuple(
             (
                 m.location[2],

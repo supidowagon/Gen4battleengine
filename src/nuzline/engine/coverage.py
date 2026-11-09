@@ -28,12 +28,15 @@ items) and plan 1b (Task 2b: trainer items; Task 3: Roark's AI flags) implement:
   branch, ``subscript_curse_ghost.s``, which is not modelled), refused per Pokemon on both
   sides and in the pool; and a physical ``SELF_DESTRUCT`` move (Selfdestruct, Explosion)
   facing a Pokemon whose Defense is below ``HALVED_DEFENSE_MIN`` (``halved_defense_line``:
-  the halved Defense at -6 makes the damage divisor 0), refused per move on both sides, in
-  the pool and in prep. ``effect_script_0007.s``'s Damp branch is never met: Damp is an
-  unsupported ability, so a Damp holder on either side is refused. Moves the tables map to
-  ``UNSUPPORTED`` include every move that sets weather, Reflect, Light Screen, Tailwind
-  or Trick Room: the engines' ``CheckFieldConditions`` pass (``step.field_conditions``)
-  counts screens and weather down, but those moves are not modelled yet (plan ruling);
+  the halved Defense at -6 makes the damage divisor 0), refused per move on both sides
+  here, and in the pool and prep both ways: a player candidate's move against the
+  opponent's lowest Defense, and an opponent's move against a candidate's own Defense.
+  ``effect_script_0007.s``'s Damp branch is never met: Damp is an unsupported ability, so
+  a Damp holder on either side is refused. Reflect and Light Screen are modelled
+  (``EffectId.REFLECT``, ``EffectId.LIGHT_SCREEN``, ``effects._screen``). Moves the
+  tables map to ``UNSUPPORTED`` include every move that sets weather, Tailwind or Trick
+  Room: the engines' ``CheckFieldConditions`` pass (``step.field_conditions``) counts
+  weather down, but those moves are not modelled yet (plan ruling);
 * abilities, held items, trainer items: every member but ``UNSUPPORTED``;
 * AI flags: bits 0-2 (``AI_FLAG_BASIC``, ``AI_FLAG_EVAL_ATTACK``, ``AI_FLAG_EXPERT``).
   ``ai.policy`` always runs those three scripts, so a trainer must have exactly them;
@@ -96,8 +99,7 @@ from nuzline.data.tables import Names, Tables
 from nuzline.data.trainer import UNKNOWN_CONDITION, Trainer, missing_set_data
 from nuzline.engine.damage import PHYSICAL
 from nuzline.engine.ids import AbilityId, EffectId, ItemId, Stat, TrainerItemId, Type, Weather
-from nuzline.engine.state import make_state
-from nuzline.engine.stats import calc_stats
+from nuzline.engine.state import make_state, spec_stats
 
 # include/constants/forms.h:94, :98; generated/species.txt and items.txt (line N is id N-1).
 # Checked against each game's data at load (nuzline.data.game_constants).
@@ -258,20 +260,8 @@ def halves_defense(tables: Tables, move: int) -> bool:
 
 
 def defense_stat(tables: Tables, spec: PokemonSpec) -> int:
-    """``spec``'s Defense as ``make_state`` builds it: its stored ``stats``, else
-    ``calc_stats``."""
-    if spec.stats is not None:
-        return int(spec.stats[Stat.DEF])
-    row = personal_row(tables, spec.species, spec.form)
-    stats = calc_stats(
-        np.asarray(tables.species_base_stats[row]),
-        np.asarray(spec.ivs),
-        np.asarray(spec.evs),
-        spec.level,
-        np.asarray(tables.nature_mods[spec.nature]),
-        species=spec.species,
-    )
-    return int(stats[Stat.DEF])
+    """``spec``'s Defense as ``make_state`` builds it (``state.spec_stats``)."""
+    return int(spec_stats(tables, spec)[Stat.DEF])
 
 
 def low_defense(tables: Tables, foes: Sequence[PokemonSpec]) -> int | None:
@@ -289,6 +279,32 @@ def halved_defense_line(tables: Tables, move: int, foe_defense: int | None) -> s
     if foe_defense is None or not halves_defense(tables, move):
         return None
     return f" against Defense {foe_defense}"
+
+
+def halving_moves(tables: Tables, foes: Sequence[PokemonSpec]) -> list[int]:
+    """The distinct moves of ``foes`` that can act (not fainted) that halve Defense
+    (``halves_defense``), ascending: each is refused against a Pokemon whose own Defense is
+    below ``HALVED_DEFENSE_MIN`` (``halved_by_line``)."""
+    return sorted(
+        {
+            move
+            for m in foes
+            if m.species and m.current_hp != 0
+            for move in m.moves
+            if move and halves_defense(tables, move)
+        }
+    )
+
+
+def halved_by_line(
+    tables: Tables, names: Names, spec: PokemonSpec, moves: Sequence[int]
+) -> str | None:
+    """``Defense N against the opponent's <move>`` when ``spec``'s own Defense ``N`` is below
+    ``HALVED_DEFENSE_MIN`` and ``moves`` (``halving_moves`` of its foes) is not empty: the
+    foe's halved Defense at -6 would divide by 0. Else None."""
+    if not moves or (defense := defense_stat(tables, spec)) >= HALVED_DEFENSE_MIN:
+        return None
+    return f"Defense {defense} against the opponent's {names.move_names[moves[0]]}"
 
 
 def move_effect_line(tables: Tables, names: Names, move: int, row: int) -> tuple[Support, str]:

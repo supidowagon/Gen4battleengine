@@ -164,7 +164,7 @@ def _check_mapped(tables, names, vanilla_names, expected):
         ids = [names.move(m) for m in chunk]
         spec = replace(sample_party(vanilla_names, {})[0], moves=tuple(ids + [0] * (4 - len(ids))))
         cand = Candidate(("party", 0, 0), "P", spec, 0, (), ())
-        report = check_pool(tables, names, [cand])
+        report = check_pool(tables, names, [cand], ())
         assert [ln for ln in report.missing if "move effect" in ln] == [], chunk
 
 

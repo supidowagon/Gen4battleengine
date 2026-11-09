@@ -198,11 +198,11 @@ def test_curse_ghost_user_refused(tables, names):
     # The pool: a Ghost candidate that knows Curse or could relearn it.
     knows = Candidate(("party", 0, 0), "P", ghost, 0, (), ())
     could = Candidate(("party", 0, 1), "Q", replace(ghost, moves=(0, 0, 0, 0)), 0, (curse,), ())
-    missing = check_pool(tables, names, [knows, could]).missing
+    missing = check_pool(tables, names, [knows, could], ()).missing
     assert "P: Curse (Ghost user) (current, move effect UNSUPPORTED)" in missing
     assert "Q: Curse (Ghost user) (relearner, move effect UNSUPPORTED)" in missing
     assert not [ln for ln in check_pool(tables, names, [Candidate(("party", 0, 0), "R", plain,
-                                                                  0, (), ())]).missing
+                                                                  0, (), ())], ()).missing
                 if "Curse" in ln]  # fmt: skip
 
 

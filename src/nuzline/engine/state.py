@@ -283,22 +283,28 @@ if tuple(LAYOUT) != BattleState._fields:
     raise RuntimeError("LAYOUT must list every BattleState field, in order")
 
 
+def spec_stats(tables: Tables, mon: PokemonSpec) -> np.ndarray:
+    """``mon``'s six stats as ``make_state`` builds them: its stored ``stats``, else
+    ``calc_stats`` (ValueError: no such form, or ``stats`` not six values)."""
+    row = personal_row(tables, mon.species, mon.form)  # ValueError: no such form
+    if mon.stats is not None:
+        if len(mon.stats) != 6:
+            raise ValueError(f"species {mon.species}: stats needs 6 values, got {len(mon.stats)}")
+        return np.asarray(mon.stats)
+    return calc_stats(
+        np.asarray(tables.species_base_stats[row]),
+        np.asarray(mon.ivs),
+        np.asarray(mon.evs),
+        mon.level,
+        np.asarray(tables.nature_mods[mon.nature]),
+        species=mon.species,
+    )
+
+
 def _fill_slot(a: dict[str, np.ndarray], tables: Tables, side: int, slot: int, mon: PokemonSpec):
     species = mon.species
     row = personal_row(tables, species, mon.form)  # ValueError: no such form
-    if mon.stats is not None:
-        if len(mon.stats) != 6:
-            raise ValueError(f"species {species}: stats needs 6 values, got {len(mon.stats)}")
-        stats = np.asarray(mon.stats)
-    else:
-        stats = calc_stats(
-            np.asarray(tables.species_base_stats[row]),
-            np.asarray(mon.ivs),
-            np.asarray(mon.evs),
-            mon.level,
-            np.asarray(tables.nature_mods[mon.nature]),
-            species=species,
-        )
+    stats = spec_stats(tables, mon)
     max_hp = int(stats[Stat.HP])
     hp = max_hp if mon.current_hp is None else mon.current_hp
     if not 0 <= hp <= max_hp:

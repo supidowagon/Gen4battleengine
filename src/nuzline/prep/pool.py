@@ -21,7 +21,9 @@ from nuzline.engine.coverage import (
     CoverageReport,
     Support,
     _Collector,
+    halved_by_line,
     halved_defense_line,
+    halving_moves,
     low_defense,
     move_effect_line,
     rom_change_line,
@@ -102,9 +104,9 @@ def check_pool(
     tables: Tables,
     names: Names,
     candidates: Sequence[Candidate],
+    opp: Sequence[PokemonSpec],
     trainer: Trainer | None = None,
     bag: Sequence[tuple[int, int]] = (),
-    opp: Sequence[PokemonSpec] = (),
 ) -> CoverageReport:
     """The support level of the pool: per candidate its ability and held item, and every move
     it could know (current, Move Relearner, TM), by engine effect and the AI's player-side
@@ -113,9 +115,10 @@ def check_pool(
     or a move it could learn is refused; the condition terms about the fight alone are
     already on the fight's report. ``bag`` is the save's ``(item, quantity)`` across the held
     pockets (``problem.HELD_POCKETS``): each distinct item with a decomp hold effect is a
-    ``bag: <item>`` row, graded like a held item. With the trainer's party ``opp``, a
+    ``bag: <item>`` row, graded like a held item. Against the trainer's party ``opp``, a
     Selfdestruct-family move is refused against a foe whose Defense the halving and the -6
-    stage would bring to 0 (``coverage.halved_defense_line``)."""
+    stage would bring to 0 (``coverage.halved_defense_line``), and a candidate whose own
+    Defense is that low is refused when a foe knows such a move (``coverage.halved_by_line``)."""
     from nuzline.ai.policy import player_ability_refusal, player_move_refusal
 
     c = _Collector()
@@ -129,6 +132,7 @@ def check_pool(
     item_effect = np.asarray(tables.item_effect)
 
     foe_defense = low_defense(tables, opp)
+    foe_halving = halving_moves(tables, opp)
 
     def check_move(label: str, move: int, kind: str, row: int) -> None:
         support, name = move_effect_line(tables, names, move, row)
@@ -146,6 +150,8 @@ def check_pool(
         ability_name = names.ability_names[names.species_abilities(spec.species, spec.form)[slot]]
         support = IMPLEMENTED_ABILITIES.get(ability, Support.NONE)
         c.add(support, f"{cand.label}: {ability_name}", "ability")
+        if (low := halved_by_line(tables, names, spec, foe_halving)) is not None:
+            c.add(Support.NONE, f"{cand.label}: {low}", "opponent move effect")
         if support != Support.NONE and (
             reason := player_ability_refusal(int(decomp_abilities[row][slot]))
         ):

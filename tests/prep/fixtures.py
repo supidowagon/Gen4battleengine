@@ -53,12 +53,13 @@ def problem(
 ) -> PrepProblem:
     """A problem against Roark (his real party unless ``opp``), an empty bag unless
     ``resources``; ``levelled=None`` computes it as ``build_problem`` does."""
+    foes = tuple(roark_party(names) if opp is None else opp)
     if levelled is None:
-        levelled = levelled_moves(tables, candidates, load_learnsets(), cap)
+        levelled = levelled_moves(tables, candidates, load_learnsets(), cap, foes)
     return PrepProblem(
         candidates=tuple(candidates),
         trainer=roark_trainer(),
-        opp=tuple(roark_party(names) if opp is None else opp),
+        opp=foes,
         start_condition=0,
         resources=resources or Resources(0, (), (), ()),
         deaths=deaths,
