@@ -3,7 +3,8 @@ actions and chance outcomes.
 
 Everything stays inside the M1 implemented set: species from ``M1_SPECIES``, moves
 from their level-up learnsets with a supported effect (``move_effect !=
-UNSUPPORTED``), their own abilities (all implemented), Oran/Sitrus Berry or no item;
+UNSUPPORTED``), their own abilities (all implemented), an implemented held item
+(``M1_ITEMS``) or none;
 the opponent's bag holds Potions or nothing in each slot.
 State fields that no M1 mechanic can set are left at 0, except those the engines
 read (screens, Tailwind, Trick Room, Mud Sport, weather), which are drawn so the
@@ -74,7 +75,19 @@ M1_SPECIES = (
     "Eevee",
     "Camerupt",
 )
-M1_ITEMS = ("", "Oran Berry", "Sitrus Berry")
+M1_ITEMS = (
+    "",
+    "Oran Berry",
+    "Sitrus Berry",
+    "Focus Sash",
+    "Big Root",
+    "Berry Juice",
+    "Chesto Berry",
+    "Pecha Berry",
+    "Lum Berry",
+    "White Herb",
+    "Lagging Tail",
+)
 M1_BAG_ITEMS = ("", "Potion")  # the opponent's bag (ids.TrainerItemId)
 
 # decomp gender ratios (``tables.species_gender``) with a single possible gender
@@ -180,7 +193,8 @@ def possible_genders(ratio: int) -> tuple[int, ...]:
 def supported_pokemon(draw, tables: Tables, names: Names) -> PokemonSpec:
     """A random M1 Pokemon: level 5-20, random nature, IVs, EVs (at most 510 in all),
     1-4 supported learnset moves, its own ability, an M1 item or none, any current HP
-    including 0, and a random status (none when fainted)."""
+    including 0 (full HP drawn often: Focus Sash needs it), and a random status (none when
+    fainted)."""
     pools = m1_move_pools(tables, names)
     species = draw(st.sampled_from(sorted(pools)))
     level = draw(st.integers(5, 20))
@@ -195,7 +209,7 @@ def supported_pokemon(draw, tables: Tables, names: Names) -> PokemonSpec:
     item = names.item(draw(st.sampled_from(M1_ITEMS)))
     gender = draw(st.sampled_from(possible_genders(int(tables.species_gender[species]))))
     max_hp = _max_hp(tables, species, ivs, evs, level, nature)
-    hp = draw(st.integers(0, max_hp))
+    hp = draw(st.one_of(st.just(max_hp), st.integers(0, max_hp)))
     status = draw(st.sampled_from(list(Status))) if hp > 0 else Status.NONE
     return PokemonSpec(
         species=species,

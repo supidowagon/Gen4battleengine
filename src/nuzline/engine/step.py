@@ -62,15 +62,21 @@ from nuzline.engine.actions import FIRST_ITEM_ACTION, locked_slot
 from nuzline.engine.damage import confusion_damage, decomp_abilities, weather_suppressed
 from nuzline.engine.effects import (
     apply_move_effect,
+    big_root,
     change_stage,
+    consume_item,
     defender_always,
+    focus_sash_damage,
     hit_count,
+    holds,
+    play_hit,
     targets_user,
     unlock_move,
 )
 from nuzline.engine.hooks import (
     STATUS_CURE,
     after_damage_items,
+    held_item_check,
     on_switch_in,
     recover_status_by_ability,
     reveal_ability,
@@ -80,6 +86,7 @@ from nuzline.engine.ids import (
     WEATHER_ABILITY_IDS,
     AbilityId,
     EffectId,
+    ItemId,
     MoveTarget,
     Stat,
     Status,
@@ -90,9 +97,9 @@ from nuzline.engine.ids import (
 from nuzline.engine.order import (
     MOVE_ACTIONS,
     action_order,
-    effective_speed,
     is_item,
     is_switch,
+    player_second,
     selected_move,
 )
 from nuzline.engine.outcome import MAX_HITS, Outcome
@@ -407,18 +414,24 @@ def _use_move(
     go = go & ~taunted
     # CHECK_STATUS_STATE_CONFUSION (:2614): the counter drops first; at 0 the battler snaps
     # out and moves, otherwise RandNext() & 1 (outcome.confusion_hit) makes it hit itself
-    # (:2633, damage.confusion_damage) instead of moving.
+    # (:2633, damage.confusion_damage) instead of moving. subscript_hurt_self_in_confusion.s
+    # runs CheckHoldOnWith1HP on the user (script.c:9098-9124): a Focus Sash at full HP
+    # leaves 1 HP, and the followup message removes it (the user is the defender, :2629).
     confused = go & (state.confusion[side] > 0)
     confusion = state.confusion[side] - confused.astype(state.confusion.dtype)
     still_confused = confused & (confusion > 0)
     self_hit = still_confused & (outcome.confusion_hit[side] != 0)
     user_hp = state.hp[side, user].astype(_I32)
-    hurt = jnp.minimum(confusion_damage(tables, state, side, outcome.roll[side, 0]), user_hp)
+    sash = holds(tables, state, side, ItemId.FOCUS_SASH)
+    full = user_hp == state.max_hp[side, user].astype(_I32)
+    raw = confusion_damage(tables, state, side, outcome.roll[side, 0])
+    hurt, endured = focus_sash_damage(state, side, raw, sash & full)
     user_hp = user_hp - jnp.where(self_hit, hurt, 0)
     state = state._replace(
         confusion=state.confusion.at[side].set(confusion),
         hp=state.hp.at[side, user].set(user_hp.astype(state.hp.dtype)),
     )
+    state = consume_item(state, side, self_hit & endured)
     state = _unlock(state, side, self_hit)  # subscript_hurt_self_in_confusion.s
     go = go & ~self_hit
     # CHECK_STATUS_STATE_PARALYSIS (:2652): RandNext() % 4 == 0 (outcome.full_para) fully
@@ -491,7 +504,7 @@ def _use_move(
     # (unrolled, it dominated trace and compile time). It also counts the hits that
     # landed ("Hit N times", battle_controller_player.c:3777-3812) and their crits.
     def one_hit(hit_index, carry):
-        state, hits, crits, contact, thaw, dealt = carry
+        state, hits, crits, contact, thaw, dealt, armed = carry
         # BattleControllerPlayer_LoopMultiHit (bcp.c:3780) stops once a battler fainted
         # (faintedMon): the target, or the attacker by Rough Skin (Selfdestruct's user is
         # at 0 HP before its only hit, so the first hit is exempt).
@@ -501,7 +514,7 @@ def _use_move(
             & (hit_index < n_hits)
             & ((state.hp[target_side, target] > 0) | defender_always(tables, move))
         )
-        hit_state = apply_move_effect(
+        hit_state, info = play_hit(
             tables,
             state,
             side,
@@ -511,6 +524,7 @@ def _use_move(
             connected=going,
             target_moved=target_moved,
             struggling=struggling,
+            focus_armed=armed,
         )
         # A LEVEL_DAMAGE move never runs CalcCrit (effect_script_0087.s): no crit message.
         # (nor does Bide's unleash: its script has no CalcCrit).
@@ -522,12 +536,18 @@ def _use_move(
         # BattleControllerPlayer_AfterMoveEffects (battle_controller_player.c:3638) runs
         # after every hit of a move that connected: AFTER_MOVE_EFFECT_ATTACKER_ITEM
         # (:3684), then _DEFENDER_ITEM (:3691). A disrupted move, a confusion self-hit,
-        # a miss (MOVE_STATUS_DID_NOT_HIT, :3325) or a move with no target skips it. Its
-        # AFTER_MOVE_EFFECT_HELD_ITEM_STATUS (:3730) re-checks the same two Pokemon in
-        # singles and cannot trigger anything new. A later hit that did not happen
-        # changes no HP, so its check finds what the previous one found.
-        state = after_damage_items(tables, hit_state, side, connected)
+        # a miss (MOVE_STATUS_DID_NOT_HIT, :3325) or a move with no target skips it. A
+        # Pluck / Bug Bite that left SELF_TURN_FLAG_PLUCK_BERRY set (info.pluck_flag) keeps
+        # the next item that triggers (its PLUCK_CHECK clears the flag instead of removing
+        # the item): the attacker's, as the defender's berry is the one just eaten. Then
+        # AFTER_MOVE_EFFECT_HELD_ITEM_STATUS (:3730) re-checks both battlers. Nothing in
+        # between changes either (the defender's thaw cures no item's condition), so only
+        # an attacker's item kept above can trigger again, and is removed this time. A
+        # later hit that did not happen changes no HP, so its check finds what the
+        # previous one found.
+        state, used = held_item_check(tables, hit_state, side, connected, info.pluck_flag)
         state = after_damage_items(tables, state, 1 - side, connected)
+        state = after_damage_items(tables, state, side, connected & used & info.pluck_flag)
         return (
             state,
             hits + landed.astype(_I32),
@@ -535,6 +555,7 @@ def _use_move(
             contact | seen["contact"],
             thaw | seen["thaw"],
             dealt | seen["dealt"],
+            info.focus_armed,
         )
 
     init = (
@@ -544,8 +565,9 @@ def _use_move(
         jnp.bool_(False),
         jnp.bool_(False),
         jnp.bool_(False),
+        jnp.bool_(False),
     )
-    state, hits, crits, contact, thaw, dealt = jax.lax.fori_loop(0, MAX_HITS, one_hit, init)
+    state, hits, crits, contact, thaw, dealt, _ = jax.lax.fori_loop(0, MAX_HITS, one_hit, init)
     # The unleash script clears the lock (the Bide counter is spent); the move above still
     # saw it locked, so effect_script_0026.s did not restart Bide.
     state = _unlock(state, side, bide_ends)
@@ -855,14 +877,16 @@ def _hp_change(state: BattleState, side, mon, delta) -> BattleState:
 def _leech_seed_check(tables: Tables, state: BattleState, side) -> BattleState:
     """``side``'s seeded active Pokemon with HP left loses ``BattleSystem_Divide(maxHP, 8)``
     (capped at its HP) and the other side's active Pokemon, if alive, gains what it lost
-    (``subscript_leech_seed_effect.s``)."""
+    (``hitDamage``), times ``(100 + 30) / 100`` with a Big Root (``effects.big_root``;
+    ``subscript_leech_seed_effect.s``)."""
     other = 1 - side
     mon, recipient = state.active[side], state.active[other]
     hp = state.hp[side, mon].astype(_I32)
     on = (state.leech_seed[side] != 0) & (hp > 0) & (state.hp[other, recipient] > 0)
     drained = jnp.minimum(jnp.maximum(state.max_hp[side, mon].astype(_I32) // 8, 1), hp)
     drained = jnp.where(on, drained, 0)
-    return _hp_change(_hp_change(state, side, mon, -drained), other, recipient, drained)
+    gained = big_root(tables, state, other, drained)
+    return _hp_change(_hp_change(state, side, mon, -drained), other, recipient, gained)
 
 
 def _status_damage(state: BattleState, side, status, damage) -> BattleState:
@@ -998,12 +1022,9 @@ def end_of_turn_order(tables: Tables, state: BattleState, outcome: Outcome) -> j
     """``int32[2]``: the sides in ``monSpeedOrder``, which
     ``BattleSystem_SortMonSpeedOrder`` (battle_lib.c:3364) sets after the last action
     (battle_controller_player.c:887). It compares with ``ignoreQuickClaw = TRUE``:
-    speed only, no priority, Trick Room reversed; a tie swaps on ``RandNext() & 1``
-    (``outcome.end_speed_tie``, 1 = opponent first)."""
-    speed0, speed1 = effective_speed(tables, state, 0), effective_speed(tables, state, 1)
-    slower = jnp.where(state.trick_room != 0, speed0 > speed1, speed0 < speed1)
-    tie = (speed0 == speed1) & (outcome.end_speed_tie != 0)
-    first = (slower | tie).astype(_I32)
+    no priority, so ``order.player_second`` with Lagging Tail, Trick Room and speed; a
+    tie swaps on ``RandNext() & 1`` (``outcome.end_speed_tie``, 1 = opponent first)."""
+    first = player_second(tables, state, outcome.end_speed_tie).astype(_I32)
     return jnp.stack([first, 1 - first])
 
 

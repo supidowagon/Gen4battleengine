@@ -12,9 +12,17 @@ and a switch are different kinds, so the player's switch precedes the opponent's
 Speed modifiers of the implemented set only: stages (Simple doubled, ``:1222``),
 Swift Swim ``x 2`` in rain unless Cloud Nine / Air Lock (``:1228-1238``), paralysis
 ``/ 4`` (``:1260``), Tailwind ``x 2`` (``:1274``) and Trick Room's reversal
-(``:1432``). Quick Claw, Custap, Lagging Tail, Stall, Quick Feet, Chlorophyll, Slow
-Start, Unburden, Choice Scarf and the speed-halving items belong to unsupported
-abilities and items (``UNSUPPORTED`` ids), so they never apply.
+(``:1432``). Quick Feet, Chlorophyll, Slow Start, Unburden, Choice Scarf and the
+speed-halving items belong to unsupported abilities and items (``UNSUPPORTED`` ids), so
+they never apply.
+
+Within equal priority (``player_second``, ``:1401-1440``) the decomp decides in this
+order: Quick Claw / Custap Berry (``HOLD_EFFECT_SOMETIMES_PRIORITY`` /
+``PINCH_PRIORITY``), Lagging Tail (``HOLD_EFFECT_PRIORITY_DOWN``), Stall, then Trick Room
+or speed. Quick Claw (K3b2, ``Outcome.quick_claw``), Custap and Stall are unsupported, so
+Lagging Tail comes first here. ``SortMonSpeedOrder`` (``end_of_turn_order``) uses the same
+comparison with ``ignoreQuickClaw = TRUE`` (priorities 0; the Quick Claw flag is still
+evaluated, only its ``moveEffectsData`` write is skipped, :1278-1300).
 """
 
 from __future__ import annotations
@@ -24,7 +32,7 @@ import jax.numpy as jnp
 from nuzline.data.tables import Tables
 from nuzline.engine.actions import FIRST_ITEM_ACTION, MOVE_ACTIONS, locked_slot, usable_moves
 from nuzline.engine.damage import apply_stage, simple_stage, weather_suppressed
-from nuzline.engine.ids import MOVE_STRUGGLE, AbilityId, Stat, Status, Weather
+from nuzline.engine.ids import MOVE_STRUGGLE, AbilityId, ItemId, Stat, Status, Weather
 from nuzline.engine.state import BattleState
 
 _I32 = jnp.int32
@@ -76,6 +84,24 @@ def effective_speed(tables: Tables, state: BattleState, side) -> jnp.ndarray:
     return jnp.where(state.tailwind[side] != 0, speed * 2, speed)
 
 
+def player_second(tables: Tables, state: BattleState, tie_roll) -> jnp.ndarray:
+    """``bool``: ``BattleSystem_CompareBattlerSpeed(player, opponent)`` swaps the two
+    within equal priority (lib.c:1401-1440). [K3b2 seam: Quick Claw / Custap decide
+    first, :1402-1411.] Lagging Tail: a lone holder goes second (:1418-1421); two holders
+    compare speeds reversed, the faster second, Trick Room ignored (:1412-1417). Else
+    (Stall is unsupported) Trick Room reverses the speeds (:1432). Equal speeds swap on
+    ``tie_roll`` (``RandNext() & 1``), drawn only where the decomp compares speeds."""
+    speed0, speed1 = effective_speed(tables, state, 0), effective_speed(tables, state, 1)
+    lag0, lag1 = (
+        tables.item_effect[state.item[side, state.active[side]]] == ItemId.LAGGING_TAIL
+        for side in (0, 1)
+    )
+    reversed_ = (lag0 & lag1) | ((state.trick_room != 0) & ~lag0 & ~lag1)
+    slower = jnp.where(reversed_, speed0 > speed1, speed0 < speed1)
+    by_speed = slower | ((speed0 == speed1) & (jnp.asarray(tie_roll) != 0))
+    return jnp.where(lag0 != lag1, lag0, by_speed)
+
+
 def action_order(tables: Tables, state: BattleState, actions, outcome) -> jnp.ndarray:
     """``int8[2]``: the two sides in execution order. ``outcome.speed_tie`` decides
     equal speeds (0 = player first): the decomp swaps on ``RandNext() & 1``."""
@@ -85,13 +111,11 @@ def action_order(tables: Tables, state: BattleState, actions, outcome) -> jnp.nd
     moves = jnp.stack([selected_move(tables, state, side, actions[side])[0] for side in (0, 1)])
     both_moves = ~early[0] & ~early[1]
     priority = jnp.where(both_moves, tables.move_priority[moves].astype(_I32), 0)
-    speed0, speed1 = effective_speed(tables, state, 0), effective_speed(tables, state, 1)
-    tie = (speed0 == speed1) & (outcome.speed_tie != 0)
-    slower = jnp.where(state.trick_room != 0, speed0 > speed1, speed0 < speed1)
-    player_second = (priority[0] < priority[1]) | ((priority[0] == priority[1]) & (slower | tie))
+    second = player_second(tables, state, outcome.speed_tie)
+    player_second_ = (priority[0] < priority[1]) | ((priority[0] == priority[1]) & second)
     # Two actions of one kind compare speeds; an item and a switch go in battler order
     # (player first); a switch or item always precedes a move.
     same_kind = (switch[0] == switch[1]) & (item[0] == item[1])
-    player_second = jnp.where(same_kind, player_second, early[1] & ~early[0])
-    first = player_second.astype(jnp.int8)
+    player_second_ = jnp.where(same_kind, player_second_, early[1] & ~early[0])
+    first = player_second_.astype(jnp.int8)
     return jnp.stack([first, 1 - first]).astype(jnp.int8)

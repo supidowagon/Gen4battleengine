@@ -65,11 +65,11 @@ def test_resources_from_bag(tables, names, learnsets):
 
 
 def test_bag_resources_warns_on_unsupported_item(tables, names, learnsets):
-    herb, honey = names.item("White Herb"), names.item("Honey")
-    bag = {"items": [(herb, 1), (honey, 1)], "berries": [(names.item("Oran Berry"), 1)]}
+    claw, honey = names.item("Quick Claw"), names.item("Honey")
+    bag = {"items": [(claw, 1), (honey, 1)], "berries": [(names.item("Oran Berry"), 1)]}
     resources, warnings = bag_resources(bag, tables, names, learnsets, ())
-    assert herb not in dict(resources.held)
-    assert warnings == ["White Herb: not offered (hold effect not supported)"]
+    assert claw not in dict(resources.held)
+    assert warnings == ["Quick Claw: not offered (hold effect not supported)"]
 
 
 def test_usable_pool_excludes_and_trims(tables, names):

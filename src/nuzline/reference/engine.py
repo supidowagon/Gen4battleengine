@@ -101,6 +101,11 @@ class _Turn:
     entry_turn: int
     fainted: list[tuple[int, int]] = field(default_factory=list)  # SYSCTL_MON_FAINTED
     done: list[bool] = field(default_factory=lambda: [False, False])  # action is MOVE_END
+    # selfTurnFlags, cleared by BattleContext_Init at every action's end (bcp.c:3998,
+    # lib.c:2014): the defender's focusItemActivated (bcp.c:3391) and the attacker's
+    # SELF_TURN_FLAG_PLUCK_BERRY (lib.c:5848).
+    focus_armed: bool = False
+    pluck_flag: bool = False
 
 
 def _active(s: RefState, side: int) -> RefPokemon:
@@ -276,6 +281,10 @@ def _effective_speed(tables, s: RefState, side: int) -> int:
     return speed
 
 
+def _item_effect(tables, mon: RefPokemon) -> int:
+    return _t(tables, "item_effect", mon.item)
+
+
 def _player_second(tables, s: RefState, priority: tuple[int, int], tie_roll: int) -> bool:
     """``BattleSystem_CompareBattlerSpeed(player, opponent)`` != FASTER, i.e. the two
     are swapped (lib.c:1401-1445). A fainted battler goes after a living one
@@ -288,6 +297,15 @@ def _player_second(tables, s: RefState, priority: tuple[int, int], tie_roll: int
     if priority[0] != priority[1]:
         return priority[0] < priority[1]
     speed0, speed1 = _effective_speed(tables, s, 0), _effective_speed(tables, s, 1)
+    # Quick Claw / Custap Berry (lib.c:1402-1411) are unsupported items (K3b2).
+    lag = [_item_effect(tables, _active(s, side)) == ItemId.LAGGING_TAIL for side in (0, 1)]
+    if lag[0] and lag[1]:  # lib.c:1412-1417: the faster goes second, Trick Room ignored
+        if speed0 == speed1:
+            return tie_roll != 0
+        return speed0 > speed1
+    if lag[0] != lag[1]:  # lib.c:1418-1421: the lone holder goes second
+        return lag[0]
+    # Stall (lib.c:1422-1431) is unsupported.
     if speed0 == speed1:
         return tie_roll != 0  # RandNext() & 1
     if s.trick_room:
@@ -596,30 +614,93 @@ def _faint_check(turn: _Turn, s: RefState) -> None:
 # --------------------------------------------------------------------------- items, switch-in
 
 
-def _held_item_hp(turn: _Turn, s: RefState, side: int) -> None:
-    """The HP branch of ``BattleSystem_TriggerHeldItem`` (lib.c:4576) and
-    ``BattleSystem_TriggerHeldItemOnStatus`` (lib.c:4967): Oran Berry
-    (``HOLD_EFFECT_HP_RESTORE``) heals its power, Sitrus Berry
-    (``HOLD_EFFECT_HP_PCT_RESTORE``) ``Divide(maxHP * power, 100)``, when
-    ``curHP <= maxHP / 2`` and the holder has HP left;
-    ``subscript_held_item_hp_restore.s`` heals (capped) and removes the item
-    (``BtlCmd_RemoveItem`` keeps it as the recycle item)."""
+def _cure(s: RefState, side: int, effect: int) -> bool:
+    """The cure of a status berry or White Herb ``effect`` on ``side``'s active Pokemon,
+    as ``BattleSystem_TriggerHeldItem`` (lib.c:4608-4700, :4875-4887) and
+    ``BattleSystem_PluckBerry`` (lib.c:5577-5675) choose it, and the restore subscript it
+    runs (``subscript_held_item_{slp,psn,cnf,multi,...}_restore.s``). Returns whether it
+    did anything."""
+    mon, sd = _active(s, side), s.sides[side]
+    cured = False
+    if effect == ItemId.CHESTO_BERRY and mon.status == Status.SLEEP:
+        cured = True
+    elif effect == ItemId.PECHA_BERRY and mon.status in (Status.POISON, Status.TOXIC):
+        cured = True  # MON_CONDITION_ANY_POISON
+    elif effect == ItemId.LUM_BERRY and (mon.status != Status.NONE or sd.confusion):
+        cured = True
+        sd.confusion = 0
+    if cured:
+        mon.status = Status.NONE  # sleep turns and the toxic counter are status bits
+        mon.status_counter = 0
+        return True
+    if effect == ItemId.WHITE_HERB and any(x < 0 for x in sd.stages):
+        # lib.c:4875-4887: every stage below DEFAULT_STAT_STAGE back to it, in C.
+        sd.stages = [max(x, 0) for x in sd.stages]
+        return True
+    return False
+
+
+def _held_item(turn: _Turn, s: RefState, side: int, keep: bool = False) -> bool:
+    """``BattleSystem_TriggerHeldItem`` (lib.c:4576) / ``..._OnStatus`` (lib.c:4967) for
+    ``side``'s active Pokemon with HP left. Oran Berry and Berry Juice
+    (``HOLD_EFFECT_HP_RESTORE``) heal their power, Sitrus Berry (``HP_PCT_RESTORE``)
+    ``Divide(maxHP * power, 100)``, when ``curHP <= maxHP / 2``
+    (``subscript_held_item_hp_restore.s``, capped); Chesto, Pecha, Lum and White Herb cure
+    (``_cure``). Every subscript ends in ``BATTLE_SUBSCRIPT_PLUCK_CHECK``, which removes
+    the item (``BtlCmd_RemoveItem`` keeps it as the recycle item) unless the attacker's
+    pluck flag is set (``keep``). Returns whether the item triggered."""
     tables = turn.tables
     mon = _active(s, side)
     if mon.hp == 0:
-        return
-    effect = _t(tables, "item_effect", mon.item)
+        return False
+    effect = _item_effect(tables, mon)
     power = _t(tables, "item_param", mon.item, 0)
-    if effect == ItemId.ORAN_BERRY:
-        heal = power
-    elif effect == ItemId.SITRUS_BERRY:
-        heal = _divide(mon.max_hp * power, 100)
-    else:
-        return
-    if mon.hp <= mon.max_hp // 2:
-        _gain_hp(s, side, heal)
+    if effect in (ItemId.ORAN_BERRY, ItemId.BERRY_JUICE, ItemId.SITRUS_BERRY):
+        if mon.hp > mon.max_hp // 2:
+            return False
+        flat = effect != ItemId.SITRUS_BERRY
+        _gain_hp(s, side, power if flat else _divide(mon.max_hp * power, 100))
+    elif not _cure(s, side, effect):
+        return False
+    if not keep:
         mon.item_consumed = mon.item
         mon.item = 0
+    return True
+
+
+def _held_item_hp(turn: _Turn, s: RefState, side: int) -> None:
+    """``_held_item`` at a site no pluck flag can reach (switch-in, end of turn)."""
+    _held_item(turn, s, side)
+
+
+def _focus_sash(turn: _Turn, s: RefState, side: int, damage: int, armed: bool) -> int:
+    """The HP ``side``'s active Pokemon loses to ``damage``: ``armed`` (a Focus Sash
+    activation) and ``curHP + damage <= 0`` leave 1 HP (bcp.c:3396-3404,
+    ``BtlCmd_CheckHoldOnWith1HP`` script.c:9119-9122), and
+    ``subscript_move_followup_message.s:12-19`` removes the item while it still is a
+    Focus Sash."""
+    mon = _active(s, side)
+    if not (armed and damage > 0 and mon.hp - damage <= 0):
+        return damage
+    if _item_effect(turn.tables, mon) == ItemId.FOCUS_SASH:
+        mon.item_consumed = mon.item
+        mon.item = 0
+    return mon.hp - 1
+
+
+def _sash_at_full_hp(turn: _Turn, s: RefState, side: int) -> bool:
+    mon = _active(s, side)
+    return _item_effect(turn.tables, mon) == ItemId.FOCUS_SASH and mon.hp == mon.max_hp
+
+
+def _big_root(turn: _Turn, s: RefState, side: int, heal: int) -> int:
+    """``subscript_drain_half_damage_dealt.s:_011`` / ``subscript_leech_seed_effect.s``:
+    with a Big Root (``HOLD_EFFECT_LEECH_BOOST``) the heal becomes ``heal * (param + 100)
+    / 100`` (param 30), no minimum."""
+    mon = _active(s, side)
+    if _item_effect(turn.tables, mon) != ItemId.BIG_ROOT:
+        return heal
+    return heal * (_t(turn.tables, "item_param", mon.item, 0) + 100) // 100
 
 
 def _stealth_rock_damage(turn: _Turn, s: RefState, side: int) -> None:
@@ -775,23 +856,36 @@ def _inflict(turn: _Turn, s: RefState, side: int, target: int, status: int,
 
 
 def _pluck_berry(turn: _Turn, s: RefState, side: int) -> None:
-    """``BtlCmd_TryPluck`` (script.c:8116) -> ``BattleSystem_PluckBerry`` (lib.c:5539): the
-    user eats the foe's Oran / Sitrus Berry, healing (capped) unless at full HP; the berry
-    is removed (``BtlCmd_RemoveItem``, script.c:8972) even when the foe fainted."""
+    """``BtlCmd_TryPluck`` (script.c:8116) -> ``BattleSystem_PluckBerry`` (lib.c:5539), by
+    the item's pluck effect (res/items/data/*.json): the user eats the foe's Oran
+    (``PLUCK_EFFECT_HP_RESTORE``) / Sitrus (``_HP_PCT_RESTORE``) Berry, healing (capped)
+    unless at full HP, or its Chesto / Pecha / Lum (``_SLP_RESTORE`` / ``_PSN_RESTORE`` /
+    ``_ALL_RESTORE``), curing as the held berry would; the berry is removed
+    (``RemoveItem BTLSCR_DEFENDER``) even when the foe fainted. Berry Juice and the other
+    implemented items have ``PLUCK_EFFECT_NONE`` and are no berries (lib.c:5833): they
+    stay. ``SELF_TURN_FLAG_PLUCK_BERRY`` (lib.c:5848) stays set when the berry did
+    nothing for the eater (no restore subscript ran its PLUCK_CHECK)."""
     tables = turn.tables
     user, foe = _active(s, side), _active(s, 1 - side)
-    effect = _t(tables, "item_effect", foe.item)
+    effect = _item_effect(tables, foe)
     power = _t(tables, "item_param", foe.item, 0)
     if effect == ItemId.ORAN_BERRY:
         heal = power
     elif effect == ItemId.SITRUS_BERRY:
         heal = _divide(user.max_hp * power, 100)
+    elif effect in (ItemId.CHESTO_BERRY, ItemId.PECHA_BERRY, ItemId.LUM_BERRY):
+        heal = 0
     else:
         return
-    if user.hp != user.max_hp:
-        _gain_hp(s, side, heal)
     foe.item_consumed = foe.item
     foe.item = 0
+    if heal:
+        did = user.hp != user.max_hp
+        if did:
+            _gain_hp(s, side, heal)
+    else:
+        did = _cure(s, side, effect)
+    turn.pluck_flag = not did
 
 
 def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, landed: bool,
@@ -855,8 +949,9 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
         if user.hp != user.max_hp:
             _gain_hp(s, side, _divide(user.max_hp, 2))
     elif effect == EffectId.DRAIN and effective and dealt > 0:
-        # subscript_drain_half_damage_dealt.s: Divide(hitDamage * percent, 100).
-        _gain_hp(s, side, _divide(dealt * p0, 100))
+        # subscript_drain_half_damage_dealt.s: Divide(hitDamage * percent, 100), then
+        # Big Root.
+        _gain_hp(s, side, _big_root(turn, s, side, _divide(dealt * p0, 100)))
     elif effect == EffectId.RECOIL and effective and dealt > 0:
         # subscript_recoil_1_{2,4}.s; Rock Head prevents it.
         if _active(s, side).ability != AbilityId.ROCK_HEAD:
@@ -1012,7 +1107,13 @@ def _hit(turn: _Turn, s: RefState, side: int, move: int, hit: int, struggling: b
         o.roll[side][hit],
         magnitude=o.magnitude[side],
     )
-    dealt = _lose_hp(turn, s, target, damage) if (landed and hits_foe) else 0
+    dealt = 0
+    if landed and hits_foe:
+        # BattleControllerPlayer_UpdateHP (bcp.c:3346-3404) runs for a non-zero damage:
+        # a Focus Sash at full HP sets focusItemActivated, which lasts the whole action.
+        if damage > 0 and _sash_at_full_hp(turn, s, target):
+            turn.focus_armed = True
+        dealt = _lose_hp(turn, s, target, _focus_sash(turn, s, target, damage, turn.focus_armed))
     # BattleControllerPlayer_UpdateHP (bcp.c:3407): a Biding target stores what it lost.
     if s.sides[target].bide_turns:
         s.sides[target].bide_damage += dealt
@@ -1109,7 +1210,11 @@ def _status_disrupted(turn: _Turn, s: RefState, side: int, move: int) -> int:
                 side_conditions=False,
                 field_conditions=False,
             )
-            _lose_hp(turn, s, side, _variance(damage, o.roll[side][0]))
+            damage = _variance(damage, o.roll[side][0])
+            # subscript_hurt_self_in_confusion.s: CheckHoldOnWith1HP on the user
+            # (script.c:9098-9124), then the followup message removes the sash.
+            armed = _sash_at_full_hp(turn, s, side)
+            _lose_hp(turn, s, side, _focus_sash(turn, s, side, damage, armed))
             _unlock(sd)  # subscript_hurt_self_in_confusion.s
             return HURT_ITSELF
     # CHECK_STATUS_STATE_PARALYSIS (bcp.c:2652): RandNext() % 4 == 0 (Magic Guard is
@@ -1200,6 +1305,7 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
     hits = 1
     if effect == EffectId.MULTI_HIT:
         hits = _t(tables, "move_param", move, 0) or o.n_hits[side]
+    turn.focus_armed = turn.pluck_flag = False  # BattleContext_Init ended the last action
     for hit in range(hits):
         # BattleControllerPlayer_LoopMultiHit (bcp.c:3780) stops once a battler fainted
         # (faintedMon): the target, or the attacker by Rough Skin.
@@ -1207,9 +1313,12 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
             break
         _hit(turn, s, side, move, hit, struggling, target_moved)
         # BattleControllerPlayer_AfterMoveEffects (bcp.c:3638), after every hit:
-        # AFTER_MOVE_EFFECT_ATTACKER_ITEM (bcp.c:3684), then _DEFENDER_ITEM (:3691).
-        _held_item_hp(turn, s, side)
-        _held_item_hp(turn, s, 1 - side)
+        # AFTER_MOVE_EFFECT_ATTACKER_ITEM (bcp.c:3684), then _DEFENDER_ITEM (:3691), then
+        # _HELD_ITEM_STATUS (:3730) for every battler. A restore subscript's PLUCK_CHECK
+        # keeps the item while the pluck flag is set, and clears the flag.
+        for battler in (side, 1 - side, side, 1 - side):
+            if _held_item(turn, s, battler, keep=turn.pluck_flag):
+                turn.pluck_flag = False
     if unleash:  # the unleash script spent the Bide counter (bcp.c:2702, subscript_bide_end.s)
         _unlock(s.sides[side])
         record = move
@@ -1243,7 +1352,9 @@ def _pursuit(turn: _Turn, s: RefState, side: int, actions, choices) -> None:
     o = turn.outcome
     damage = _move_damage(tables, s, pursuer, move, o.crit[pursuer][0] != 0, o.roll[pursuer][0],
                           PURSUIT_POWER_MUL)  # fmt: skip
-    dealt = _lose_hp(turn, s, side, damage)
+    # subscript_pursuit.s: CheckHoldOnWith1HP on the target (script.c:9098-9124).
+    armed = _sash_at_full_hp(turn, s, side)
+    dealt = _lose_hp(turn, s, side, _focus_sash(turn, s, side, damage, armed))
     _contact_ability(turn, s, pursuer, move, 0, damage > 0, dealt)
 
 
@@ -1401,7 +1512,8 @@ def _leech_seed_check(turn: _Turn, s: RefState, side: int) -> None:
     mon, recipient = _active(s, side), _active(s, 1 - side)
     if mon.hp and recipient.hp:
         lost = _lose_hp(turn, s, side, max(mon.max_hp // 8, 1))
-        _gain_hp(s, 1 - side, lost)
+        # subscript_leech_seed_effect.s: the recipient gains hitDamage, Big Root applied.
+        _gain_hp(s, 1 - side, _big_root(turn, s, 1 - side, lost))
 
 
 def _poison_check(turn: _Turn, s: RefState, side: int) -> None:

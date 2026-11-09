@@ -17,7 +17,7 @@ from nuzline.data.forms import personal_row
 from nuzline.data.spec import PokemonSpec
 from nuzline.data.tables import Tables, load_names, load_tables
 from nuzline.engine.damage import FLAIL_BOUNDS
-from nuzline.engine.ids import AbilityId, EffectId, MoveFlag, Status, Type, Weather
+from nuzline.engine.ids import AbilityId, EffectId, ItemId, MoveFlag, Status, Type, Weather
 from nuzline.engine.state import make_state
 from nuzline.engine.stats import calc_stats
 from nuzline.prep.problem import (
@@ -291,8 +291,9 @@ def hp_cuts(
 ) -> tuple[int, ...]:
     """The region tops below ``max_hp`` (ruling 5): the AI's percent checks
     (``AI_DEFENDER_HP_CHECKS``), each kill damage in ``1..max_hp - 1`` and the pinch cut
-    ``max_hp // 3`` for Blaze, Torrent and Overgrow, and the Flail bands' tops when ``spec`` has
-    a ``FLAIL`` move (``flail_cuts``). Unsorted, may repeat."""
+    ``max_hp // 3`` for Blaze, Torrent and Overgrow, the Flail bands' tops when ``spec`` has
+    a ``FLAIL`` move (``flail_cuts``), and ``max_hp - 1`` for a Focus Sash holder (it only
+    saves a holder at full HP, bcp.c:3391). Unsorted, may repeat."""
     cuts = []
     for kind, percent in AI_DEFENDER_HP_CHECKS:
         cuts.append(percent_cut(kind, percent, max_hp))
@@ -304,6 +305,8 @@ def hp_cuts(
     effect = np.asarray(tables.move_effect)
     if any(m and int(effect[m]) == EffectId.FLAIL for m in spec.moves):
         cuts.extend(flail_cuts(max_hp))
+    if int(np.asarray(tables.item_effect)[spec.item]) == ItemId.FOCUS_SASH:
+        cuts.append(max_hp - 1)
     return tuple(c for c in cuts if 1 <= c < max_hp)
 
 

@@ -129,12 +129,34 @@ class AbilityId(IntEnum):
 
 class ItemId(IntEnum):
     """Held-item effect. ``tables.item_param[i, 0]`` is the decomp's hold param
-    (Oran Berry: HP restored; Sitrus Berry: percent of max HP); column 1 is 0."""
+    (Oran Berry, Berry Juice: HP restored; Sitrus Berry: percent of max HP; Big Root: the
+    percent added to a drain, 30); column 1 is 0.
+
+    * ``ORAN_BERRY``, ``BERRY_JUICE`` (both ``HOLD_EFFECT_HP_RESTORE``), ``SITRUS_BERRY``,
+      ``CHESTO_BERRY`` (``SLP_RESTORE``), ``PECHA_BERRY`` (``PSN_RESTORE``, toxic too),
+      ``LUM_BERRY`` (``STATUS_RESTORE``, confusion too), ``WHITE_HERB``
+      (``STATDOWN_RESTORE``): ``hooks.held_item_check``. Berry Juice is its own id because
+      its pluck effect is ``PLUCK_EFFECT_NONE`` and it is no berry, so Pluck / Bug Bite
+      leave it (battle_lib.c:5833, ``hooks.pluck_berry``).
+    * ``FOCUS_SASH`` (``HOLD_EFFECT_ENDURE``): ``effects.play_hit`` and the confusion
+      self-hit (``step._use_move``).
+    * ``BIG_ROOT`` (``HOLD_EFFECT_LEECH_BOOST``): drain (``effects._drain``) and Leech Seed
+      (``step._leech_seed_check``).
+    * ``LAGGING_TAIL`` (``HOLD_EFFECT_PRIORITY_DOWN``): ``order.player_second``.
+    """
 
     UNSUPPORTED = 0
     NONE = 1
     ORAN_BERRY = 2
     SITRUS_BERRY = 3
+    FOCUS_SASH = 4
+    BIG_ROOT = 5
+    BERRY_JUICE = 6
+    CHESTO_BERRY = 7
+    PECHA_BERRY = 8
+    LUM_BERRY = 9
+    WHITE_HERB = 10
+    LAGGING_TAIL = 11
 
 
 class TrainerItemId(IntEnum):

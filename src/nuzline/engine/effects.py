@@ -54,15 +54,16 @@ many are real). Decomp sources:
 * Drain / recoil:``subscript_drain_half_damage_dealt.s``,
   ``subscript_recoil_1_{2,4}.s``: a fraction of ``hitDamage``, the damage dealt
   capped at the target's HP (``BtlCmd_UpdateHealthBarValue``, battle_script.c:1701),
-  through ``BattleSystem_Divide`` (at least 1). Rock Head prevents recoil.
+  through ``BattleSystem_Divide`` (at least 1). Rock Head prevents recoil. A Big Root
+  holder's drain is then ``* (100 + 30) / 100`` (``big_root``).
 * Multi-hit: ``BtlCmd_SetMultiHit`` (battle_script.c:2634) and
   ``BattleControllerPlayer_LoopMultiHit`` (battle_controller_player.c:3777): the
   move script reruns per hit with ``SYSCTL_MULTI_HIT_MOVE``, which skips the
   accuracy check, so only ``outcome.hit[side, 0]`` matters while crit and roll
   are per hit; the loop stops once the target faints. ``SetMultiHit 0`` draws 2-5
   (``outcome.n_hits``); ``SetMultiHit 2`` (``effect_script_0044.s``) is two hits
-  (``move_param[m, 0]``). Focus Sash, when supported, must trigger only on a hit taken
-  at full HP (bcp.c:3386-3404), so on the first of these hits at most.
+  (``move_param[m, 0]``). Focus Sash activates only on a hit taken at full HP
+  (bcp.c:3386-3404) and then stays active for the rest of the move (``play_hit``).
 * ``HIGH_CRIT`` only raises the crit stage ``sample_outcome`` uses; here the
   engine reads ``outcome.crit``.
 * Stealth Rock: ``effect_script_0266.s`` sets the flag on the defender's side
@@ -84,7 +85,8 @@ many are real). Decomp sources:
 * Mud Sport: ``effect_script_0201.s`` sets the user's flag (fails if set);
   ``damage.py`` halves Electric power while any active battler has it.
 * Bug Bite, Pluck (``EAT_BERRY``): ``effect_script_0224.s``, an ``ON_HIT`` indirect effect
-  (no HP check, battle_lib.c:1519-1524) running ``subscript_pluck.s``: ``hooks.pluck_berry``.
+  (no HP check, battle_lib.c:1519-1524) running ``subscript_pluck.s``: ``hooks.pluck_berry``
+  (after every other effect function: each move has one effect).
 * Leech Seed: ``subscript_leech_seed_start.s``: Grass types and already seeded
   targets are immune. The end-of-turn drain is in ``step``.
 * Water Sport: ``effect_script_0210.s`` sets the user's flag (fails if set);
@@ -153,7 +155,7 @@ Unreachable branches are not modelled: Substitute, Mist, Safeguard and Uproar
 come from unsupported moves; Shield Dust, Clear Body, Hyper Cutter, Immunity,
 Leaf Guard, Liquid Ooze, Magic Guard, Reckless, Serene Grace,
 Skill Link, Own Tempo, Levitate, Normalize and Color Change are unsupported
-abilities; Big Root and Grip Claw are unsupported items.
+abilities; Grip Claw is an unsupported item.
 """
 
 from __future__ import annotations
@@ -168,6 +170,7 @@ from nuzline.engine.ids import (
     MOVE_FAKE_OUT,
     AbilityId,
     EffectId,
+    ItemId,
     MoveFlag,
     MoveTarget,
     Stat,
@@ -376,8 +379,20 @@ def _percent_of_dealt(h: _Hit) -> jnp.ndarray:
     return jnp.where(h.dealt > 0, jnp.maximum(h.dealt * h.param[0] // 100, 1), 0)
 
 
+def big_root(tables: Tables, state: BattleState, side, heal) -> jnp.ndarray:
+    """``heal`` for ``side``'s active Pokemon after Big Root (``HOLD_EFFECT_LEECH_BOOST``):
+    ``heal * (100 + param) / 100`` (param 30), plain integer division after the base
+    amount, no minimum (``subscript_drain_half_damage_dealt.s:_011-_031``,
+    ``subscript_leech_seed_effect.s``)."""
+    item = state.item[side, state.active[side]]
+    boost = tables.item_param[item, 0].astype(_I32) + 100
+    root = tables.item_effect[item] == ItemId.BIG_ROOT
+    return jnp.where(root, heal * boost // 100, heal)
+
+
 def _drain(tables, state, h: _Hit) -> BattleState:
     heal = jnp.where((h.effect == _E.DRAIN) & h.effective, _percent_of_dealt(h), 0)
+    heal = big_root(tables, state, h.side, heal)
     hp = state.hp[h.side, h.user].astype(_I32)
     new = jnp.minimum(hp + heal, state.max_hp[h.side, h.user].astype(_I32))
     return state._replace(hp=state.hp.at[h.side, h.user].set(new.astype(state.hp.dtype)))
@@ -545,7 +560,8 @@ def _brick_break(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     return _set(state, "light_screen", h.target_side, 0, cond)
 
 
-def _eat_berry(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+def _eat_berry(tables, state, h: _Hit, outcome: Outcome) -> tuple[BattleState, jnp.ndarray]:
+    """``(state, pluck_flag)`` (``hooks.pluck_berry``)."""
     # Local import: hooks imports this module.
     from nuzline.engine.hooks import pluck_berry
 
@@ -659,6 +675,46 @@ def stealth_rock_damage(tables: Tables, state: BattleState, side) -> BattleState
     return state._replace(hp=state.hp.at[side, mon].set((hp - damage).astype(state.hp.dtype)))
 
 
+class MoveHit(NamedTuple):
+    """What one hit leaves for the rest of the action (``play_hit``)."""
+
+    # DEFENDER_SELF_TURN_FLAGS.focusItemActivated (bcp.c:3386-3393): set on a hit taken at
+    # full HP holding a Focus Sash; it lasts until BattleContext_Init at the action's end
+    # (bcp.c:3998, battle_lib.c:2014), so every later hit of the move is capped too.
+    focus_armed: jnp.ndarray
+    # ATTACKER_SELF_TURN_FLAGS SELF_TURN_FLAG_PLUCK_BERRY left set by a Pluck / Bug Bite
+    # whose berry did nothing for the eater (hooks.pluck_berry).
+    pluck_flag: jnp.ndarray
+
+
+def focus_sash_damage(state: BattleState, side, damage, armed) -> tuple:
+    """``(dealt, endured)`` for ``damage`` (> 0) taken by ``side``'s active Pokemon:
+    ``BattleControllerPlayer_UpdateHP`` (bcp.c:3386-3404) / ``BtlCmd_CheckHoldOnWith1HP``
+    (script.c:9098-9124). ``armed`` (the hit's focus flag, or a full-HP Focus Sash
+    holder) and ``curHP + damage <= 0`` leave it at 1 HP (``MOVE_STATUS_ENDURED_ITEM``);
+    else the damage is capped at its HP. ``subscript_move_followup_message.s:12-19``
+    then removes the item only while it still is a Focus Sash
+    (``CheckItemHoldEffect ... HOLD_EFFECT_ENDURE``)."""
+    mon = state.active[side]
+    hp = state.hp[side, mon].astype(_I32)
+    endured = armed & (damage > 0) & (damage >= hp)
+    return jnp.where(endured, hp - 1, jnp.minimum(damage, hp)), endured
+
+
+def holds(tables: Tables, state: BattleState, side, item: ItemId) -> jnp.ndarray:
+    """``side``'s active Pokemon holds an item with effect ``item``."""
+    return tables.item_effect[state.item[side, state.active[side]]] == item
+
+
+def consume_item(state: BattleState, side, cond) -> BattleState:
+    """``BtlCmd_RemoveItem`` (battle_script.c:8972) on ``side``'s active Pokemon where
+    ``cond``: the item goes to ``item_consumed``."""
+    mon = state.active[side]
+    item = state.item[side, mon]
+    state = _set(state, "item_consumed", (side, mon), item, cond)
+    return _set(state, "item", (side, mon), 0, cond)
+
+
 def apply_move_effect(
     tables: Tables,
     state: BattleState,
@@ -672,6 +728,35 @@ def apply_move_effect(
     power_mul=10,
     struggling=False,
 ) -> BattleState:
+    """``play_hit``'s state, for a hit that is the first (or only) of its action."""
+    return play_hit(
+        tables,
+        state,
+        side,
+        move,
+        outcome,
+        hit_index,
+        connected=connected,
+        target_moved=target_moved,
+        power_mul=power_mul,
+        struggling=struggling,
+    )[0]
+
+
+def play_hit(
+    tables: Tables,
+    state: BattleState,
+    side,
+    move,
+    outcome: Outcome,
+    hit_index,
+    *,
+    connected,
+    target_moved,
+    power_mul=10,
+    struggling=False,
+    focus_armed=False,
+) -> tuple[BattleState, MoveHit]:
     """Hit ``hit_index`` (0-4, an int or a traced int32) of ``move`` by ``side``'s active Pokemon: damage with
     this hit's crit and roll, then the move's effect.
 
@@ -679,10 +764,21 @@ def apply_move_effect(
     against a living target (any target for a ``RANGE_USER`` move). ``target_moved``:
     the target acted earlier this turn (no flinch). ``power_mul``: power scale in
     tenths (Pursuit on a switch: 20). ``struggling``: the move is Struggle, whose
-    recoil is its secondary effect. A hit beyond ``hit_count`` or after the target
-    fainted does nothing. The order is ``BattleControllerPlayer_AfterMoveMessage``'s
+    recoil is its secondary effect. ``focus_armed``: an earlier hit of this action
+    activated the defender's Focus Sash (``MoveHit``). A hit beyond ``hit_count`` or after
+    the target fainted does nothing. The order is ``BattleControllerPlayer_AfterMoveMessage``'s
     (battle_controller_player.c:3467): the move's own effect (``*_TRIGGER_SECONDARY``)
     before the contact ability (``*_TRIGGER_ABILITY``), then the defender's thaw.
+
+    Focus Sash (``HOLD_EFFECT_ENDURE``): ``BattleControllerPlayer_UpdateHP`` runs for every
+    damaging hit (``battleCtx->damage != 0``) and sets ``focusItemActivated`` when the
+    defender holds a Focus Sash at full HP (bcp.c:3391-3393; Endure, the move, is
+    unsupported); while it is set, a hit that would KO leaves 1 HP (``focus_sash_damage``)
+    and the followup message removes the sash. The flag is never cleared between hits, so
+    after a full-HP hit every later hit of the same move is capped as well (a holder at 1 HP
+    takes 0); a holder below full HP at the first hit is never protected. Bide stores the
+    capped damage (bcp.c:3407), drain and the contact ability see it. Sturdy only blocks
+    OHKO moves (``MOVE_STATUS_ONE_HIT_KO``, bcp.c:3342), none of which is supported.
     """
     side = jnp.asarray(side, _I32)
     target_side = 1 - side
@@ -709,10 +805,16 @@ def apply_move_effect(
     target_hp = state.hp[target_side, target].astype(_I32)
     # Bide is a RANGE_USER move whose unleash hits the foe (bcp.c:2702-2713).
     hits_foe = ~targets_user(tables, move) | (tables.move_effect[move] == _E.BIDE)
-    dealt = jnp.where(landed & hits_foe, jnp.minimum(damage, target_hp), 0)
+    update_hp = landed & hits_foe & (damage > 0)  # BattleControllerPlayer_UpdateHP runs
+    sash = holds(tables, state, target_side, ItemId.FOCUS_SASH)
+    full = target_hp == state.max_hp[target_side, target].astype(_I32)
+    armed = jnp.asarray(focus_armed) | (update_hp & sash & full)
+    capped, endured = focus_sash_damage(state, target_side, damage, armed & update_hp)
+    dealt = jnp.where(landed & hits_foe, capped, 0)
     state = state._replace(
         hp=state.hp.at[target_side, target].set((target_hp - dealt).astype(state.hp.dtype))
     )
+    state = consume_item(state, target_side, endured & sash)
     # BattleControllerPlayer_UpdateHP (bcp.c:3407): a Biding target stores what it lost.
     biding = state.bide_turns[target_side] > 0
     state = _set(state, "bide_damage", target_side, state.bide_damage[target_side] + dealt, biding)
@@ -778,13 +880,13 @@ def apply_move_effect(
         _mud_sport,
         _screen,
         _brick_break,
-        _eat_berry,
         _foresight,
         _bide,
         _rollout,
     ):
         state = fn(tables, state, h, outcome)
+    state, pluck_flag = _eat_berry(tables, state, h, outcome)
     state = _struggle_recoil(state, h, jnp.asarray(struggling, jnp.bool_))
     for fn in (_contact_ability, _thaw_target):
         state = fn(tables, state, h, outcome)
-    return state
+    return state, MoveHit(focus_armed=armed, pluck_flag=pluck_flag)

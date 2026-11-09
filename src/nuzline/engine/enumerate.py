@@ -42,7 +42,10 @@ of the turn:
   (step.py:663-673): each side's possible end speeds cover every Speed stage when a
   stage change is possible this turn (a Speed stat effect, AncientPower, Curse, a
   flinched Steadfast), paralysis when it can be inflicted, and the
-  neutral speed of a fainted battler (``_faint_check`` resets stages and status).
+  neutral speed of a fainted battler (``_faint_check`` resets stages and status). A
+  White Herb holder may lose a lowered stage and a Lum Berry holder or a Pluck / Bug Bite
+  user its paralysis (over-approximate). Lagging Tail only changes which of
+  ``speed_tie`` / ``end_speed_tie`` is read when speeds are equal, never more.
 * ``magnitude[s]``: ``s`` uses a ``MAGNITUDE`` move (``BtlCmd_CalcMagnitudePower``).
   ``crit``/``roll`` are not relevant for ``LEVEL_DAMAGE`` (Night Shade deals its user's
   level with no crit or roll, ``damage.fixed_damage``) nor for ``BIDE`` (the unleash is
@@ -66,7 +69,7 @@ import numpy as np
 
 from nuzline.data.tables import Tables
 from nuzline.engine.damage import STATUS
-from nuzline.engine.ids import AbilityId, EffectId, MoveFlag, Stat, Status
+from nuzline.engine.ids import AbilityId, EffectId, ItemId, MoveFlag, Stat, Status
 from nuzline.engine.order import (
     MOVE_ACTIONS,
     effective_speed,
@@ -144,6 +147,15 @@ def _holds(state: BattleState, actions, abilities) -> jnp.ndarray:
     sides = jnp.arange(2)
     now = _any_of(state.ability[sides, state.active], abilities)
     later = _any_of(state.ability[sides, incoming], abilities) & is_switch(actions)
+    return now | later
+
+
+def _holds_item(tables: Tables, state: BattleState, actions, items) -> jnp.ndarray:
+    """``bool[2]``: as ``_holds``, for held items with one of the effects ``items``."""
+    incoming = jnp.clip(actions - MOVE_ACTIONS, 0, state.item.shape[1] - 1)
+    sides = jnp.arange(2)
+    now = _any_of(tables.item_effect[state.item[sides, state.active]], items)
+    later = _any_of(tables.item_effect[state.item[sides, incoming]], items) & is_switch(actions)
     return now | later
 
 
@@ -251,10 +263,18 @@ def outcome_laws(tables: Tables, state: BattleState, actions) -> OutcomeLaws:
     # subscript_flinched.s:10-14: a flinched Steadfast Pokemon gains +1 Speed.
     steadfast = _holds(state, actions, (AbilityId.STEADFAST,)) & foe_moves
     steadfast = steadfast & _any_of(tables.move_effect[foe_move], (_E.FLINCH, _E.FAKE_OUT))
-    stage_free = (uses_move & own_speed) | (foe_moves & foe_speed[::-1]) | steadfast
+    # A White Herb restores a lowered Speed stage (hooks.held_item_check).
+    herb = _holds_item(tables, state, actions, (ItemId.WHITE_HERB,))
+    stage_free = (uses_move & own_speed) | (foe_moves & foe_speed[::-1]) | steadfast | herb
     static = _holds(state, actions, (AbilityId.STATIC,))
-    para_free = (foe_moves & _inflicts(tables, foe_move, Status.PARALYSIS)) | (
-        uses_move & damaging & contact & static[::-1]
+    # A Lum Berry cures paralysis, held or plucked (hooks.held_item_check, pluck_berry).
+    lum = _holds_item(tables, state, actions, (ItemId.LUM_BERRY,))
+    plucks = uses_move & (effect == _E.EAT_BERRY)
+    para_free = (
+        (foe_moves & _inflicts(tables, foe_move, Status.PARALYSIS))
+        | (uses_move & damaging & contact & static[::-1])
+        | lum
+        | plucks
     )
     speeds = [
         _end_speeds(tables, state, actions, side, stage_free[side], para_free[side])

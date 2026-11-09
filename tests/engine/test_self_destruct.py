@@ -20,7 +20,6 @@ from dataclasses import replace
 import jax
 import jax.numpy as jnp
 import numpy as np
-import pytest
 
 from nuzline.data.learnsets import load_learnsets
 from nuzline.data.tables import to_numpy
@@ -153,7 +152,6 @@ def test_self_destruct_both_last_is_draw(tables, names):
     assert int(out.player_faints) == 1
 
 
-@pytest.mark.xfail(reason="Focus Sash lands in Task 11", strict=True)
 def test_self_destruct_vs_focus_sash(tables, names):
     # bcp.c:3386-3404: a full-HP Focus Sash holder survives the hit with 1 HP; the user
     # still faints (its HP was set to 0 by the script, not by damage).

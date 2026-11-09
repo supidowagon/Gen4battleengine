@@ -254,6 +254,14 @@ DECOMP_ITEM_TO_ID: dict[str, ItemId] = {
     "None": ItemId.NONE,  # ITEM_NONE (id 0)
     "Oran Berry": ItemId.ORAN_BERRY,  # HOLD_EFFECT_HP_RESTORE, param 10 HP
     "Sitrus Berry": ItemId.SITRUS_BERRY,  # HOLD_EFFECT_HP_PCT_RESTORE, param 25 %
+    "Focus Sash": ItemId.FOCUS_SASH,  # HOLD_EFFECT_ENDURE
+    "Big Root": ItemId.BIG_ROOT,  # HOLD_EFFECT_LEECH_BOOST, param 30 %
+    "Berry Juice": ItemId.BERRY_JUICE,  # HOLD_EFFECT_HP_RESTORE, param 20 HP; PLUCK_EFFECT_NONE
+    "Chesto Berry": ItemId.CHESTO_BERRY,  # HOLD_EFFECT_SLP_RESTORE
+    "Pecha Berry": ItemId.PECHA_BERRY,  # HOLD_EFFECT_PSN_RESTORE
+    "Lum Berry": ItemId.LUM_BERRY,  # HOLD_EFFECT_STATUS_RESTORE
+    "White Herb": ItemId.WHITE_HERB,  # HOLD_EFFECT_STATDOWN_RESTORE
+    "Lagging Tail": ItemId.LAGGING_TAIL,  # HOLD_EFFECT_PRIORITY_DOWN
 }
 
 # Bag items a trainer's AI may use (TrainerAI_ShouldUseItem, trainer_ai.c:4056).
