@@ -517,7 +517,10 @@ class _Turn:
                 options.append(("present", (side,), [0, PRESENT_HEAL]))
             if effect == EffectId.TRI_ATTACK:
                 # Tri Attack's status (Outcome.tri_attack): shows only as the target's status,
-                # read when the secondary procs.
+                # read only when the secondary procs. Without a proc every value replays to the
+                # same state, so the first candidate (0) is kept: the recorded value is then 0
+                # and means nothing (ties go to the first candidate; ``secondary`` is listed
+                # first, so each of its values meets 0 before 1 and 2).
                 options.append(("tri_attack", (side,), [0, 1, 2]))
             if effect == EffectId.FANG_PARALYZE_FLINCH:
                 # Thunder Fang's second roll (Outcome.fang_flinch): a flinch shows only as the

@@ -26,7 +26,7 @@ from hypothesis import strategies as st
 
 from nuzline.data.spec import PokemonSpec
 from nuzline.data.tables import Names, Tables
-from nuzline.data.trainer import IntermediateData
+from nuzline.data.trainer import TERRAIN_NAMES, TERRAIN_UNKNOWN, IntermediateData
 from nuzline.engine.actions import legal_actions, legal_opponent_actions
 from nuzline.engine.coverage import halved_defense_line, low_defense
 from nuzline.engine.ids import MOVE_STRUGGLE, AbilityId, EffectId, Stat, Status, Type, Weather
@@ -155,6 +155,10 @@ SHARED_MOVES = (
     "Sand-Attack",
     "Double Team",
     "Thunder Fang",
+    # K3b2 Task 10: the terrain moves (status moves: the damage oracle's damaging pools are
+    # unchanged); supported_state draws a terrain whenever one is known.
+    "Nature Power",
+    "Camouflage",
 )
 
 
@@ -262,6 +266,19 @@ def _party(draw, tables: Tables, names: Names) -> tuple[list[PokemonSpec], int]:
     return party, active
 
 
+# TERRAIN_UNKNOWN and every TERRAIN_* id (nuzline.data.trainer.TERRAIN_NAMES, 0-24).
+TERRAINS = (TERRAIN_UNKNOWN, *range(len(TERRAIN_NAMES)))
+
+
+def _draw_terrain(draw, tables: Tables, a: dict) -> None:
+    """A terrain (``TERRAINS``) when any Pokemon knows a move that reads it (Nature Power,
+    Camouflage), so that both engines play those moves on a known terrain too; otherwise the
+    state keeps ``make_state``'s ``TERRAIN_UNKNOWN`` (nothing reads it)."""
+    effect = np.asarray(tables.move_effect)[a["moves"]]
+    if np.isin(effect, (EffectId.NATURE_POWER, EffectId.CAMOUFLAGE)).any():
+        a["terrain"][...] = draw(st.sampled_from(TERRAINS))
+
+
 def _draw_lock(draw, a: dict, side: int, active: int, names: Names) -> None:
     """Maybe lock the active Pokemon into a Bide or Rollout / Ice Ball it knows (not while
     it sleeps: ``step`` unlocks a sleeper), with the matching hidden counters: Bide's
@@ -347,6 +364,7 @@ def supported_state(draw, tables: Tables, names: Names) -> BattleState:
     a["trainer_items"][1] = [names.item(i) for i in bag] + [0] * (BAG_SLOTS - count)
     a["trainer_item_count"][1] = count
     a["weather"][...] = draw(st.sampled_from(list(Weather)))  # permanent: timer 0
+    _draw_terrain(draw, tables, a)
     a["trick_room"][...] = draw(st.integers(0, _TIMER_MAX))
     a["turn"][...] = turn
     for name in ("ai_seen_moves", "ai_ability_known"):
@@ -424,7 +442,7 @@ def any_outcome() -> st.SearchStrategy[Outcome]:
 # plain move (Tackle), accuracy / evasion changes before the foe's check (Sand-Attack,
 # Double Team, Mud-Slap), Present (drawn power or heal), Protect (its chain's 2^-n roll,
 # with a chain of 0-3 drawn for it), Attract (the foe's attract check), Tri Attack (its
-# status draw) and Nature Power (Tri Attack called on BUILDING, the terrain drawn with it).
+# status draw), Nature Power (its call on the drawn terrain) and Camouflage (``_draw_terrain``).
 LAW_MOVES = (
     "Spore",
     "Hypnosis",
@@ -454,6 +472,7 @@ LAW_MOVES = (
     "Attract",
     "Tri Attack",
     "Nature Power",
+    "Camouflage",
 )
 # Abilities the outcome relevance reads (contact procs, Steadfast, Simple's and Swift
 # Swim's Speed) or the hit odds read (Compoundeyes, Sand Veil, Snow Cloak), and Rough Skin
@@ -475,11 +494,6 @@ LAW_ABILITIES = (
 )
 
 
-# BUILDING (Tri Attack), CAVE (Rock Slide: a flinch), GREAT_MARSH (Mud Bomb: an accuracy
-# drop), WATER (Hydro Pump, 80 %) (nuzline.data.trainer.TERRAIN_NAMES ids).
-_NATURE_POWER_TERRAINS = (9, 5, 10, 7)
-
-
 @st.composite
 def outcome_law_state(draw, tables: Tables, names: Names) -> BattleState:
     """``supported_state`` widened for the outcome-law tests: Lucky Chant on either
@@ -498,8 +512,8 @@ def outcome_law_state(draw, tables: Tables, names: Names) -> BattleState:
             a["pp"][side, mon, 0] = move_pp[move]
             if int(tables.move_effect[move]) == EffectId.PROTECT:
                 a["protect_count"][side] = draw(st.integers(0, 3))
-            if int(tables.move_effect[move]) == EffectId.NATURE_POWER:
-                a["terrain"][...] = draw(st.sampled_from(_NATURE_POWER_TERRAINS))
+
         if draw(st.integers(0, 3)) == 0:
             a["ability"][side, mon] = draw(st.sampled_from(LAW_ABILITIES))
+    _draw_terrain(draw, tables, a)  # a LAW_MOVES terrain move needs one too
     return BattleState(**{name: jnp.asarray(a[name]) for name in BattleState._fields})

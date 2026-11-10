@@ -154,6 +154,26 @@ def test_policy_prefers_a_damaging_move_to_a_status_move(tables, names):
     assert a == names.move_slot(s, 0, "Mach Punch")
 
 
+def test_nature_power_scores_as_its_call(tables, names):
+    # On BUILDING Nature Power runs Tri Attack (order.called_move): the policy's damage odds
+    # are Tri Attack's, not those of Nature Power's table power 0.
+    s = roark_state(tables, names, player_count=1, player_moves=["Nature Power", "Tri Attack"])
+    s = s._replace(terrain=jnp.asarray(9, s.terrain.dtype))  # TERRAIN_BUILDING
+    np_slot = names.move_slot(s, 0, "Nature Power")
+    tri_slot = names.move_slot(s, 0, "Tri Attack")
+    opp = jnp.asarray(names.move_slot(s, 1, "Tackle"), jnp.int32)
+    odds = [
+        playout_module._move_odds(tables, s, 0, jnp.stack([jnp.int32(a), opp]), 1.0)
+        for a in (np_slot, tri_slot)
+    ]
+    assert [float(x) for x in odds[0]] == [float(x) for x in odds[1]]
+    assert float(odds[1][1]) > 0
+    values = [
+        float(playout_module._pair_value(tables, s, jnp.int32(a), opp)) for a in (np_slot, tri_slot)
+    ]
+    assert values[0] == values[1]
+
+
 def test_illegal_actions_are_never_chosen(tables, names):
     # Only Ember has PP and switching is impossible (one Pokemon): Ember is the only legal action.
     s = roark_state(tables, names, player_count=1).with_pp(0, 0, [0, 0, 5, 0])

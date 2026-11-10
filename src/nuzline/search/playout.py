@@ -72,7 +72,7 @@ from nuzline.engine.actions import (
 )
 from nuzline.engine.damage import damage_table
 from nuzline.engine.hooks import intimidate
-from nuzline.engine.order import action_order, is_switch, selected_move
+from nuzline.engine.order import action_order, is_switch, used_move
 from nuzline.engine.outcome import empty_outcome, hit_threshold, sample_outcome
 from nuzline.engine.state import SLOTS, BattleState
 from nuzline.engine.step import (
@@ -155,7 +155,7 @@ def _move_odds(tables: Tables, state: BattleState, side, actions, hit):
     """``(P(KO), expected fraction of the target's HP removed)`` of ``side``'s action."""
     action = actions[side]
     target = _facing(state, 1 - side, actions[1 - side])
-    move, _ = selected_move(tables, state, side, action)
+    move = used_move(tables, state, side, action)  # Nature Power: its call
     damage = damage_table(tables, target, side, move, False)  # [16] non-critical rolls
     hp = target.hp[1 - side, target.active[1 - side]].astype(_I32)
     hp_ = jnp.maximum(hp, 1).astype(_F32)

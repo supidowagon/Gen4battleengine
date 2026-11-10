@@ -440,7 +440,7 @@ def test_nature_power_tri_attack_status_is_inferred(tables, names, tmp_path):
 
     script = [
         ((LEER, ROCK_THROW), tri(2, p_roll=5, p_secondary=1, o_roll=3)),
-        ((LEER, ROCK_THROW), tri(0, p_roll=9, o_roll=1)),
+        ((LEER, ROCK_THROW), tri(2, p_roll=9, o_roll=1)),  # no proc: the 2 is unread
     ]
     records, states = _engine_trace(tables, names, script, (0, 0), party)
     hits = [r["move"] for r in records if r["kind"] == "hit" and r["attacker"] == 0]
@@ -456,6 +456,9 @@ def test_nature_power_tri_attack_status_is_inferred(tables, names, tmp_path):
         assert turn.mismatched == ()
     assert int(turns[0].outcome.tri_attack[0]) == 2
     assert int(turns[0].outcome.secondary[0, 0]) == 1
+    # Turn 1 did not proc: the unread status draw is recorded as 0 (docs/tracing.md).
+    assert int(turns[1].outcome.secondary[0, 0]) == 0
+    assert int(turns[1].outcome.tri_attack[0]) == 0
 
 
 def test_protect_rolls_are_inferred(tables, names, tmp_path):
