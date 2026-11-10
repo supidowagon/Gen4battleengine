@@ -107,7 +107,7 @@ GAME_DEFAULT = _GameDefault()
 # zone_event.narc member (tools/jsoncnv/event.py:25-131): bg events, object events, warp
 # events and coord events, each a u32 count followed by fixed-size records.
 EVENT_RECORD_SIZES = (20, 32, 12, 16)
-OBJECT_EVENTS = 1
+OBJECT_EVENTS, WARP_EVENTS = 1, 2
 # Object event (event.py:52-69): local id u16 at +0, hidden flag u16 at +8, script u16 at
 # +10. A script of NO_SCRIPT makes the object a clone of the object with the same local id
 # in the map header named by its hidden flag (ObjectEvent_HasNoScript, src/map_object.c:
@@ -609,7 +609,18 @@ def _events_object_scripts(member: bytes, index: int) -> list[int]:
 
 def _object_records(member: bytes, index: int) -> list[tuple[int, int, int]]:
     """(local id, hidden flag, script) of one ``zone_event.narc`` member's object events."""
-    pos, records = 0, []
+    return _event_records(member, index)[0]
+
+
+def _warp_tiles(member: bytes, index: int) -> list[tuple[int, int]]:
+    """(x, z) of one ``zone_event.narc`` member's warp events (event.py:87-97: x u16, z
+    u16, destination header u16, destination warp u16, 4 padding bytes)."""
+    return _event_records(member, index)[1]
+
+
+def _event_records(member: bytes, index: int):
+    """(object records, warp tiles) of one ``zone_event.narc`` member."""
+    pos, records, warps = 0, [], []
     for kind, size in enumerate(EVENT_RECORD_SIZES):
         if pos + 4 > len(member):
             raise ReaderError(f"{EVENTS_NARC} member {index} offset {pos}: truncated count")
@@ -628,12 +639,14 @@ def _object_records(member: bytes, index: int) -> list[tuple[int, int, int]]:
                 )
                 for i in range(n)
             ]
+        elif kind == WARP_EVENTS:
+            warps = [struct.unpack_from("<2H", member, pos + i * size) for i in range(n)]
         pos += n * size
     if pos != len(member):
         raise ReaderError(
             f"{EVENTS_NARC} member {index} offset {pos}: {len(member) - pos} trailing bytes"
         )
-    return records
+    return records, warps
 
 
 def require_vanilla_map_headers(rom: RomFiles) -> None:
@@ -1289,12 +1302,23 @@ def check_terrain_code(changed: list[list[str]]) -> None:
         )
 
 
-def check_trainer_clones(rom: RomFiles, symbols: SymbolMap) -> None:
-    """Raise if a map header holds a clone (``NO_SCRIPT``) of a trainer object of another
-    header. Such an object survives the header change, so a battle with it could start in
-    the clone's header, which the trainer -> map join does not list (K3b2 Task 9)."""
+def check_trainer_objects(rom: RomFiles, decomp: Path, symbols: SymbolMap) -> None:
+    """Raise if a trainer object could survive a header change, so that a battle with it
+    could start in a header the trainer -> map join does not list (K3b2 Task 9).
+    ``sub_0206184C`` (src/map_object.c:171-195) deletes the old header's objects except:
+
+    * a clone (``NO_SCRIPT``) of it in the new header's events (``sub_0206244C``, :772-801);
+    * an object flagged persistent (``MAP_OBJ_STATUS_PERSISTENT``, :182), which only
+      ``SetObjectFlagIsPersistent`` sets (src/scrcmd.c:2501-2508; ``localID`` u16, ``flag``
+      u8, asm/macros/scrcmd.inc:739-743). Each map header's own script file is walked
+      (``_walk``) for it: a constant local id that is a trainer object of that header, or a
+      variable local id in a header with trainer objects, raises. Common script files are
+      not walked (vanilla's uses are map-local: Cheryl and the rival as followers)."""
     rows = map_header_rows(rom, symbols)
     events = rom.narc(EVENTS_NARC)
+    scripts = rom.narc(SCRIPTS_NARC)
+    table = command_table(Path(decomp))
+    persistent = table.opcode["SCRCMD_SETOBJECTFLAGISPERSISTENT"]
     objects = {h: _object_records(events[e], e) for h, (_, e, _) in enumerate(rows)}
     trainers = {
         (h, local)
@@ -1309,6 +1333,31 @@ def check_trainer_clones(rom: RomFiles, symbols: SymbolMap) -> None:
                     f"map header {h} clones trainer object {local} of header {flag}: its "
                     "battle can start in a header the trainer -> map join does not list"
                 )
+    walked: dict[int, list[int]] = {}
+    for h, (script_id, _, _) in enumerate(rows):
+        if not any(t == h for t, _ in trainers):
+            continue
+        if script_id not in walked:
+            decoded, _, _ = _walk(scripts[script_id], table, f"{SCRIPTS_NARC} member {script_id}")
+            walked[script_id] = [
+                values[0] for op, values, _ in decoded.values() if op == persistent and values[1]
+            ]
+        for local in walked[script_id]:
+            if local >= VARS_START or (h, local) in trainers:
+                raise ReaderError(
+                    f"map header {h}: script {script_id} makes object {local:#x} persistent "
+                    "while the header has trainer objects; the battle could start in another "
+                    "header"
+                )
+
+
+def header_arrivals(rom: RomFiles, symbols: SymbolMap) -> dict[int, list[tuple[int, int]]]:
+    """Map header id -> the tiles of its warp events, where a warp into it puts the player
+    (src/field_map_change.c:224-230)."""
+    events = rom.narc(EVENTS_NARC)
+    return {
+        h: _warp_tiles(events[e], e) for h, (_, e, _) in enumerate(map_header_rows(rom, symbols))
+    }
 
 
 def rom_terrain_rules(rom: RomFiles, symbols: SymbolMap, decomp: Path):
@@ -1335,10 +1384,12 @@ def trainer_terrain_rows(
     (``map_header_battle_fields``)."""
     from tools.terrain import header_terrains, parse_matrix, terrain_fields, trainer_terrains
 
-    check_trainer_clones(rom, symbols)
+    check_trainer_objects(rom, decomp, symbols)
     rules = rom_terrain_rules(rom, symbols, Path(decomp))
     headers = map_header_battle_fields(rom, symbols)
     matrices = [parse_matrix(m, i) for i, m in enumerate(rom.narc(MATRIX_NARC))]
     wanted = {h for hs in where.values() for h in hs}
-    by_header = header_terrains(rules, headers, matrices, rom.narc(LAND_DATA_NARC), wanted)
+    lands = rom.narc(LAND_DATA_NARC)
+    arrivals = header_arrivals(rom, symbols)
+    by_header = header_terrains(rules, headers, matrices, lands, wanted, arrivals)
     return [terrain_fields(*t) for t in trainer_terrains(n_trainers, where, by_header)]

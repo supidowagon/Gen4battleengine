@@ -12,7 +12,7 @@ from tools.terrain import (
     Matrix,
     TerrainError,
     calc_terrain,
-    decomp_check_trainer_clones,
+    decomp_check_trainer_objects,
     header_terrains,
     terrain_rules,
     trainer_terrains,
@@ -161,19 +161,90 @@ def test_trainer_terrain_one_mixed_or_unplaced():
     assert unreadable == [(TERRAIN_UNKNOWN, [TERRAIN_UNKNOWN])]
 
 
-def test_clone_of_a_trainer_object_is_refused(tmp_path):
+def test_clone_or_persistent_trainer_object_is_refused(tmp_path):
+    # An object of another header survives a header change when it is cloned there
+    # (src/map_object.c:772-801) or flagged persistent (:182, scrcmd.c:2501-2508).
     events = tmp_path / "res" / "field" / "events"
+    scripts = tmp_path / "res" / "field" / "scripts"
     events.mkdir(parents=True)
+    scripts.mkdir(parents=True)
 
-    def write(name, objects):
+    def write(name, objects, script=""):
         (events / f"{name}.json").write_text(json.dumps({"object_events": objects}), "utf-8")
+        (scripts / f"{name}.s").write_text(script, "utf-8")
 
-    write("a", [{"script": "TRAINER_X", "hidden_flag": "0"}])
+    headers = {
+        "MAP_HEADER_A": {"eventsArchiveID": "a", "scriptsArchiveID": "a"},
+        "MAP_HEADER_B": {"eventsArchiveID": "b", "scriptsArchiveID": "b"},
+    }
+    trainer = {"id": "LOCALID_X", "script": "TRAINER_X", "hidden_flag": "0"}
+    write("a", [trainer])
     write("b", [{"clone_id": 0, "script": 65535, "hidden_flag": "MAP_HEADER_A"}])
     with pytest.raises(TerrainError, match="clones trainer object 0 of MAP_HEADER_A"):
-        decomp_check_trainer_clones(tmp_path, {"MAP_HEADER_A": "a", "MAP_HEADER_B": "b"})
+        decomp_check_trainer_objects(tmp_path, headers)
     write("b", [{"clone_id": 1, "script": 65535, "hidden_flag": "MAP_HEADER_A"}])
-    decomp_check_trainer_clones(tmp_path, {"MAP_HEADER_A": "a", "MAP_HEADER_B": "b"})
+    decomp_check_trainer_objects(tmp_path, headers)
+    write("a", [trainer], "    SetObjectFlagIsPersistent LOCALID_X, TRUE\n")
+    with pytest.raises(TerrainError, match="makes object LOCALID_X persistent"):
+        decomp_check_trainer_objects(tmp_path, headers)
+    write("a", [trainer], "    SetObjectFlagIsPersistent LOCALID_X, FALSE\n")
+    decomp_check_trainer_objects(tmp_path, headers)
+    write("a", [trainer], "    SetObjectFlagIsPersistent VAR_0x8004, TRUE\n")
+    with pytest.raises(TerrainError, match="makes object VAR_0x8004 persistent"):
+        decomp_check_trainer_objects(tmp_path, headers)
+
+
+def test_a_header_reads_its_cells_in_every_loadable_matrix(decomp):
+    # The matrix is loaded once, from the arrival header (src/field_map_change.c:380), and
+    # FieldMap_ChangeZone only relabels the header (fieldmap.c:397-417): header 2's own
+    # matrix 1 is one PLAIN cell, but it is also cell 1 of matrix 0, which header 3 loads.
+    rules = _rules(decomp)
+    plain = rules.backgrounds.index("BACKGROUND_PLAIN")
+    lands = [_land(rules, [0]), _land(rules, [0x20]), _land(rules, [0x02])]  # plain, ice, grass
+    m0 = Matrix(2, 1, (3, 2), (2, 1))
+    m1 = Matrix(1, 1, None, (0,))
+    headers = [(1, plain), (1, plain), (1, plain), (0, plain)]
+    got = header_terrains(rules, headers, [m0, m1], lands, {1, 2, 3})
+    assert got[2] == {_t("PLAIN"), _t("ICE")}
+    assert got[1] == {_t("PLAIN")}  # matrix 1 has no header section: header 1's own
+    assert got[3] == {_t("GRASS")}
+    # A matrix no header loads is never read.
+    assert header_terrains(rules, [(1, plain)] * 3, [m0, m1], lands, {2})[2] == {_t("PLAIN")}
+
+
+def test_a_warp_arrival_reads_its_own_tile(decomp):
+    # Before the first step after a warp, the header is the warp's and the tile is its warp
+    # event's (src/field_map_change.c:224-230), whatever that cell's label.
+    rules = _rules(decomp)
+    plain = rules.backgrounds.index("BACKGROUND_PLAIN")
+    side = rules.tiles_x
+    tiles = [0] * side * side
+    tiles[3 * side + 5] = 0x20  # ice at (5, 3)
+    lands = [_land(rules, [0]), _land(rules, tiles)]
+    m = Matrix(2, 1, (0, 1), (0, 1))  # cell 1 is labelled header 1
+    headers = [(0, plain), (0, plain)]
+    assert header_terrains(rules, headers, [m], lands, {0})[0] == {_t("PLAIN")}
+    arrival = {0: [(side + 5, 3)]}
+    assert header_terrains(rules, headers, [m], lands, {0}, arrival)[0] == {_t("PLAIN"), _t("ICE")}
+    # The arrival's own cell is counted already; one outside the matrix cannot be read.
+    assert header_terrains(rules, headers, [m], lands, {0}, {0: [(1, 1)]})[0] == {_t("PLAIN")}
+    outside = header_terrains(rules, headers, [m], lands, {0}, {0: [(3 * side, 0)]})[0]
+    assert outside == {_t("PLAIN"), TERRAIN_UNKNOWN}
+
+
+def test_story_flag_guard_is_the_u8_matrix_id(decomp):
+    # MapMatrix.matrixID is a u8 (include/map_matrix.h:18): matrix 256 passes the
+    # `matrixID != 0` guard of the Spring/Seabreak rewrites (src/map_matrix.c:202, :223).
+    rules = _rules(decomp)
+    _, x, z, land = rules.patches[0]
+    width, height = x + 1, z + 1
+    lands = [_land(rules, [0])] * (land + 1)
+    lands[land] = _land(rules, [0x02])
+    m = Matrix(width, height, None, (0,) * (width * height))
+    plain = rules.backgrounds.index("BACKGROUND_PLAIN")
+    matrices = [m] * 257
+    for matrix, want in ((256, {_t("PLAIN"), _t("GRASS")}), (255, {_t("PLAIN")})):
+        assert header_terrains(rules, [(matrix, plain)], matrices, lands, {0})[0] == want
 
 
 # --- the ROM -----------------------------------------------------------------------------

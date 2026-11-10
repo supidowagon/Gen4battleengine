@@ -165,11 +165,29 @@ def initial_state(
     """The fight's turn-0 state: ``player`` against the trainer's built party (from
     ``game``'s intermediates), bag, start weather and battle terrain, with the given active
     slots. The terrain is the trainer's (``Trainer.terrain``) unless ``terrain`` gives the
-    one the traced battle started on (``battle_terrain``)."""
+    one the traced battle started on (``battle_terrain``). A move of either party that reads
+    the terrain (``coverage.TERRAIN_EFFECTS``) raises ``TraceError`` when the terrain is not
+    known: trace conversion runs no coverage, and no terrain table may be read at -1."""
     from nuzline.data.trainer import IntermediateData, build_trainer_party
-    from nuzline.engine.coverage import start_weather
+    from nuzline.engine.coverage import TERRAIN_EFFECTS, start_weather
 
     opp = build_trainer_party(trainer, IntermediateData(get_game(game).intermediate_dir))
+    terrain = battle_terrain(trainer, terrain)
+    if terrain < 0:
+        effect = np.asarray(tables.move_ai_effect)
+        reading = sorted(
+            {
+                int(m)
+                for s in (*player, *opp)
+                for m in s.moves
+                if m and int(effect[m]) in TERRAIN_EFFECTS
+            }
+        )
+        if reading:
+            raise TraceError(
+                f"moves {reading} read the battle terrain, which the trainer's maps do not "
+                "settle (Trainer.terrains); pass --terrain"
+            )
     return make_state(
         tables,
         player,
@@ -177,7 +195,7 @@ def initial_state(
         start_weather(trainer),
         opp_items=trainer.items,
         leads=leads,
-        terrain=battle_terrain(trainer, terrain),
+        terrain=terrain,
     )
 
 

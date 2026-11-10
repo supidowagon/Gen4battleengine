@@ -1308,10 +1308,11 @@ def _trainer_terrains(
     """Each trainer's ``terrain`` and ``terrains`` (``tools.terrain``) from its maps
     (``_trainer_maps``) and the decomp's map headers, matrices and land data."""
     from tools.terrain import (
-        decomp_check_trainer_clones,
+        decomp_check_trainer_objects,
         decomp_header_battle_fields,
         decomp_land_data,
         decomp_matrices,
+        decomp_warp_tiles,
         header_names,
         header_terrains,
         terrain_fields,
@@ -1321,14 +1322,18 @@ def _trainer_terrains(
 
     header_id = _index(header_names(decomp), "map header")
     trainer_id = _index(trainers, "trainer")
-    decomp_check_trainer_clones(decomp, {n: h["eventsArchiveID"] for n, h in headers.items()})
+    decomp_check_trainer_objects(decomp, headers)
     ids = {trainer_id(t): {header_id(h) for h in hs} for t, hs in where.items()}
+    arrivals = {
+        header_id(n): decomp_warp_tiles(decomp, h["eventsArchiveID"]) for n, h in headers.items()
+    }
     by_header = header_terrains(
         terrain_rules(decomp),
         decomp_header_battle_fields(decomp),
         decomp_matrices(decomp),
         decomp_land_data(decomp),
         {h for hs in ids.values() for h in hs},
+        arrivals,
     )
     return [terrain_fields(*t) for t in trainer_terrains(len(trainers), ids, by_header)]
 

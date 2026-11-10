@@ -23,22 +23,34 @@ read from the decomp (pokeplatinum, ``external/pokeplatinum``):
   and src/terrain_attributes.c:39-70). Its tile tests run in source order (``tile_tests``);
   without a match it returns ``sTerrainForBackground[background]`` (:441-465), and a
   background past that table asserts (:491-493).
-* ``location->mapHeaderID`` is the header of the matrix cell the player stands in:
-  ``FieldMap_ChangeZone`` (src/overlay005/fieldmap.c:397-414) sets it from
+* The matrix is loaded once per map change, from the header the player arrives in
+  (``MapMatrix_Load(location->mapHeaderID, ...)``, src/field_map_change.c:380;
+  src/map_matrix.c:84-92), and kept while the player walks. ``MapMatrixData_Load`` (:13-58)
+  gives the member layout (``parse_matrix``); a matrix with no header section gives every
+  cell the header that loaded it (:47-49).
+* ``location->mapHeaderID`` then follows the label of the cell the player stands in:
+  ``FieldMap_ChangeZone`` (src/overlay005/fieldmap.c:397-417) sets it from
   ``MapMatrix_GetMapHeaderIDAtCoords`` whenever the player's position changes
-  (``FieldMap_Main``, :250-255). The Distortion World skips that (:399-401); its matrices
-  have no header section, so every cell is the loading header anyway (below).
-* The matrix is the header's ``mapMatrixID`` (``MapMatrix_Load``, src/map_matrix.c:84-92).
-  ``MapMatrixData_Load`` (:13-58) gives the member layout (``parse_matrix``); a matrix with no
-  header section gives every cell the header that loaded it (:47-49).
-* ``FieldMapChange`` rewrites some land data ids of matrix 0 by story flag
-  (src/field_map_change.c:382-388; ``MapMatrix_RevealSpringPath`` and
-  ``MapMatrix_RevealSeabreakPath``, src/map_matrix.c:194-230): both values are possible.
+  (``FieldMap_Main``, :250-255), and never reloads the matrix. So a header ``h`` can be
+  current on any cell labelled ``h`` of any matrix some arrival header loads, not only on
+  ``h``'s own matrix. The Distortion World skips the zone change (:399-401); its matrices
+  have no header section, so every cell is the loading header anyway.
+* Before the first step after a warp, ``location`` is the warp's: the destination header
+  and the position of its warp event (src/field_map_change.c:224-230), whatever that cell's
+  label. The on-frame scripts and the trainer sight check run on every field frame, the
+  first included (``FieldInput_Process``, src/overlay005/field_control.c:176-195), so a
+  battle can start there, on that tile, under the destination header's background.
+* ``FieldMapChange`` rewrites some land data ids by story flag (src/field_map_change.c:
+  382-388; ``MapMatrix_RevealSpringPath`` and ``MapMatrix_RevealSeabreakPath``,
+  src/map_matrix.c:194-230): both values are possible. Their guard compares the loaded
+  matrix's ``u8 matrixID`` (include/map_matrix.h:18, set at src/map_matrix.c:89), so they
+  apply to every matrix whose id is 0 modulo 256, where the written cell exists.
 * While surfing, the player stands on a tile ``MapObject_IsOnWater`` accepts
   (src/map_object_move.c:740-751); the terrain is then computed with ``BACKGROUND_WATER``.
 
-So a battle in header ``h`` can only start on a tile of a cell of ``h``'s matrix whose
-header is ``h``, and its terrain is ``CalcTerrain`` of that tile's behaviour with ``h``'s
+So a battle in header ``h`` starts on a tile of a cell labelled ``h`` (in any matrix some
+header loads; every cell of ``h``'s own matrix when it has no header section) or on the
+tile of one of ``h``'s warp events, and its terrain is ``CalcTerrain`` of that tile's behaviour with ``h``'s
 ``battleBG`` (or ``BACKGROUND_WATER`` on a tile a surfing player can stand on). A trainer's
 terrain is the union over its map headers (``tools.rom.readers.maps.trainer_maps``): one
 value is the terrain, several are "mixed" and no header (no map places the trainer) is
@@ -116,7 +128,7 @@ class TerrainRules(NamedTuple):
     behaviours a surfing player can stand on; ``patches``: ``(matrix, x, z, land data
     id)`` story-flag rewrites; ``attributes``: (offset, count) of the land data's
     terrain attributes; ``mask``: the behaviour mask; ``invalid_land``:
-    ``INVALID_LAND_DATA_ID``."""
+    ``INVALID_LAND_DATA_ID``; ``tiles_x``: ``MAP_TILES_COUNT_X`` (tiles per cell row)."""
 
     names: tuple[str, ...]
     backgrounds: tuple[str, ...]
@@ -128,6 +140,7 @@ class TerrainRules(NamedTuple):
     attributes: tuple[int, int]
     mask: int
     invalid_land: int
+    tiles_x: int
 
 
 def battle_constants(decomp: Path, name: str, prefix: str) -> list[str]:
@@ -364,6 +377,7 @@ def terrain_rules(
         attributes=(defs["TERRAIN_ATTRIBUTES_OFFSET"], count),
         mask=defs["TERRAIN_ATTRIBUTES_TILE_BEHAVIOR_MASK"],
         invalid_land=defs["INVALID_LAND_DATA_ID"],
+        tiles_x=defs["MAP_TILES_COUNT_X"],
     )
 
 
@@ -403,10 +417,19 @@ def land_behaviours(rules: TerrainRules, member: bytes, index: int) -> frozenset
     return frozenset(a & rules.mask for a in struct.unpack_from(f"<{count}H", member, offset))
 
 
+def land_tiles(rules: TerrainRules, member: bytes, index: int) -> tuple[int, ...]:
+    """Each tile's behaviour of a ``land_data.narc`` member, by tile index
+    ``z * MAP_TILES_COUNT_X + x`` (``GetTileAttributes``, src/terrain_collision_manager.c:
+    176-178), after ``land_behaviours``' checks."""
+    offset, count = rules.attributes
+    land_behaviours(rules, member, index)
+    return tuple(a & rules.mask for a in struct.unpack_from(f"<{count}H", member, offset))
+
+
 def calc_terrain(rules: TerrainRules, behaviour: int, background: int) -> int:
     """``CalcTerrain`` of a tile behaviour and a battle background. A background past
     ``sTerrainForBackground`` gives ``TERRAIN_MAX`` (src/field_battle_data_transfer.c:
-    491-493): the retail build keeps ``GF_ASSERT`` (meson.build:71, ``PM_KEEP_ASSERTS``),
+    491-493): the retail build keeps ``GF_ASSERT`` (meson.build:72, ``PM_KEEP_ASSERTS``),
     but ``ErrorHandling_AssertFail`` (src/error_handling.c:11-16) only resets during a link,
     so the function goes on to ``return TERRAIN_MAX``."""
     for behaviours, terrain in rules.tests:
@@ -417,46 +440,86 @@ def calc_terrain(rules: TerrainRules, behaviour: int, background: int) -> int:
     return rules.names.index("TERRAIN_MAX")
 
 
+def _land_ids(m: Matrix, matrix_id: int, rules: TerrainRules, cells: Iterable[int]) -> set[int]:
+    """The land data ids ``cells`` of ``m`` can hold: the matrix's own and the story-flag
+    rewrites whose guard (the ``u8 matrixID``) matches ``matrix_id``."""
+    cells = set(cells)
+    ids = {m.lands[i] for i in cells}
+    for guard, x, z, land in rules.patches:
+        if matrix_id & 0xFF == guard and x + m.width * z in cells:
+            ids.add(land)
+    return ids
+
+
 def header_terrains(
     rules: TerrainRules,
     headers: Sequence[tuple[int, int]],
     matrices: Sequence[Matrix],
     lands: Sequence[bytes],
     wanted: Iterable[int],
+    arrivals: Mapping[int, Iterable[tuple[int, int]]] | None = None,
 ) -> dict[int, frozenset[int]]:
     """Map header id -> the terrains a battle in it can start with, for the ``wanted``
-    headers. ``headers[h]`` is ``(mapMatrixID, battleBG)``. The tiles are those of every
-    cell of the header's matrix whose header is ``h`` (each cell when the matrix has no
-    header section), under every land data id the cell can hold; a header whose matrix has
-    no such cell gives ``{TERRAIN_UNKNOWN}`` (where it is entered cannot be read)."""
-    behaviour_cache: dict[int, frozenset[int]] = {}
+    headers. ``headers[h]`` is ``(mapMatrixID, battleBG)``; ``arrivals[h]`` are the ``(x,
+    z)`` tiles of ``h``'s warp events, where a warp puts the player under header ``h``.
+
+    The tiles are those of every cell labelled ``h`` in every matrix some header loads (the
+    ones with a header section) and of every cell of ``h``'s own matrix when it has none,
+    under every land data id the cell can hold, plus each arrival tile (in ``h``'s own
+    matrix, which the warp loads) that lies in a cell labelled otherwise. A header with no
+    cell anywhere gives ``{TERRAIN_UNKNOWN}``: it is current only right after an arrival,
+    and the arrivals by Fly or by a script warp are not read. An arrival outside ``h``'s own
+    matrix (Kaizo headers 610 and 613: matrix 3 is 1x1, their warp events are at matrix-0
+    coordinates) adds ``TERRAIN_UNKNOWN``: what such a warp would stand on is not read."""
+    arrivals = arrivals or {}
+    side = rules.tiles_x
+    loadable = sorted({matrix for matrix, _ in headers})
+    for matrix in loadable:
+        if not 0 <= matrix < len(matrices):
+            raise TerrainError(f"matrix {matrix} is not a matrix member")
+    cache: dict[int, tuple[int, ...]] = {}
+
+    def tiles(land: int) -> tuple[int, ...]:
+        if not 0 <= land < len(lands):
+            raise TerrainError(f"land data {land} is not a member")
+        if land not in cache:
+            cache[land] = land_tiles(rules, lands[land], land)
+        return cache[land]
+
     out = {}
     for h in sorted(set(wanted)):
         if not 0 <= h < len(headers):
             raise TerrainError(f"map header {h} is not a header id")
-        matrix_id, background = headers[h]
-        if not 0 <= matrix_id < len(matrices):
-            raise TerrainError(f"map header {h}: matrix {matrix_id} is not a matrix member")
-        m = matrices[matrix_id]
-        cells = [i for i in range(m.width * m.height) if m.headers is None or m.headers[i] == h]
-        if not cells:
+        own, background = headers[h]
+        ids: set[int] = set()
+        for matrix in loadable:
+            m = matrices[matrix]
+            if m.headers is not None:
+                labelled = [i for i, label in enumerate(m.headers) if label == h]
+            elif matrix == own:
+                labelled = list(range(m.width * m.height))
+            else:
+                continue
+            ids |= _land_ids(m, matrix, rules, labelled)
+        if not ids:
             out[h] = frozenset({TERRAIN_UNKNOWN})
             continue
-        ids = {m.lands[i] for i in cells}
-        for matrix, x, z, land in rules.patches:
-            if matrix == matrix_id and x + m.width * z in cells:
-                ids.add(land)
-        behaviours: set[int] = set()
-        for land in ids:
-            if land == rules.invalid_land:
-                continue  # no map: nothing to stand on
-            if not 0 <= land < len(lands):
-                raise TerrainError(f"map header {h}: land data {land} is not a member")
-            if land not in behaviour_cache:
-                behaviour_cache[land] = land_behaviours(rules, lands[land], land)
-            behaviours |= behaviour_cache[land]
+        behaviours = {b for land in ids if land != rules.invalid_land for b in tiles(land)}
+        m = matrices[own]
+        unread = False
+        for x, z in arrivals.get(h, ()):
+            if not (0 <= x // side < m.width and 0 <= z // side < m.height):
+                unread = True  # a warp here would stand outside the loaded matrix
+                continue
+            cell = x // side + m.width * (z // side)
+            if m.headers is None or m.headers[cell] == h:
+                continue  # its cell is counted already
+            for land in _land_ids(m, own, rules, [cell]) - {rules.invalid_land}:
+                behaviours.add(tiles(land)[(z % side) * side + x % side])
         terrains = {calc_terrain(rules, b, background) for b in behaviours}
         terrains |= {calc_terrain(rules, b, rules.water) for b in behaviours & rules.on_water}
+        if unread:
+            terrains.add(TERRAIN_UNKNOWN)
         out[h] = frozenset(terrains)
     return out
 
@@ -578,18 +641,30 @@ def decomp_land_data(decomp: Path) -> list[bytes]:
     return [(Path(decomp) / LAND_DATA / f).read_bytes() for f in _order(decomp, LAND_DATA_ORDER)]
 
 
-def decomp_check_trainer_clones(decomp: Path, events_by_header: Mapping[str, str]) -> None:
-    """``tools.rom.readers.maps.check_trainer_clones`` on the decomp's events JSON
-    (``events_by_header``: MAP_HEADER_* -> its events archive name): an object whose script
-    is ``NO_SCRIPT`` clones the object with its local id (``clone_id``, else its index) in
-    the header its ``hidden_flag`` names."""
+def decomp_warp_tiles(decomp: Path, events: str) -> list[tuple[int, int]]:
+    """(x, z) of an events archive's warp events (``res/field/events/<events>.json``)."""
+    d = json.loads(_read(decomp, EVENTS / f"{events}.json"))
+    return [(w["x"], w["z"]) for w in d["warp_events"]]
+
+
+def decomp_check_trainer_objects(decomp: Path, headers: Mapping[str, Mapping[str, str]]) -> None:
+    """``tools.rom.readers.maps.check_trainer_objects`` on the decomp's sources
+    (``headers``: MAP_HEADER_* -> its ``scriptsArchiveID`` and ``eventsArchiveID``): an
+    object whose script is ``NO_SCRIPT`` clones the object with its local id (``clone_id``,
+    else its index) in the header its ``hidden_flag`` names; a ``SetObjectFlagIsPersistent
+    <id>, TRUE`` line of a header's script file naming one of its trainer objects (or not a
+    ``LOCALID_*`` constant) makes it persistent."""
     objects = {}
-    for header, events in events_by_header.items():
-        d = json.loads(_read(decomp, EVENTS / f"{events}.json"))
+    names = {}
+    for header, h in headers.items():
+        d = json.loads(_read(decomp, EVENTS / f"{h['eventsArchiveID']}.json"))
         objects[header] = [
             (o.get("clone_id", i), str(o["script"]), o["hidden_flag"])
             for i, o in enumerate(d["object_events"])
         ]
+        names[header] = {
+            o.get("id") for o in d["object_events"] if str(o["script"]).startswith("TRAINER_")
+        }
     trainers = {
         (h, local)
         for h, objs in objects.items()
@@ -602,4 +677,16 @@ def decomp_check_trainer_clones(decomp: Path, events_by_header: Mapping[str, str
                 raise TerrainError(
                     f"{h} clones trainer object {local} of {flag}: its battle can start in a "
                     "header the trainer -> map join does not list"
+                )
+    for header, h in headers.items():
+        if not names[header]:
+            continue
+        text = _read(decomp, Path("res") / "field" / "scripts" / f"{h['scriptsArchiveID']}.s")
+        for local in re.findall(
+            r"^\s*SetObjectFlagIsPersistent (\w+), TRUE\s*$", text, re.MULTILINE
+        ):
+            if local in names[header] or not local.startswith("LOCALID_"):
+                raise TerrainError(
+                    f"{header}: makes object {local} persistent while the header has trainer "
+                    "objects; the battle could start in another header"
                 )

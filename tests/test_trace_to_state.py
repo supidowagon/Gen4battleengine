@@ -885,3 +885,19 @@ def test_a_traced_battle_can_carry_its_terrain(tables, names):
     b = bundle_trace(RAW_FIXTURE, PARTY, names, ROARK_ID, terrain=9)
     assert b["terrain"] == 9
     assert "terrain" not in bundle_trace(RAW_FIXTURE, PARTY, names, ROARK_ID)
+
+
+def test_trace_refuses_a_terrain_move_without_a_known_terrain(tables, names):
+    # Trace conversion runs no coverage: a move reading the terrain needs it settled.
+    import dataclasses
+
+    from tools.trace_to_state import TraceError
+
+    trainer = next(t for t in load_trainers(INTERMEDIATE) if t.id == ROARK_ID)
+    party = load_party(PARTY, names)
+    party[0] = dataclasses.replace(party[0], moves=(names.move("Nature Power"), 0, 0, 0))
+    mixed = dataclasses.replace(trainer, terrain=-1, terrains=(0, 2))
+    with pytest.raises(TraceError, match="read the battle terrain.*pass --terrain"):
+        initial_state(tables, party, mixed, (0, 0))
+    assert int(initial_state(tables, party, mixed, (0, 0), terrain=2).terrain) == 2
+    assert int(initial_state(tables, party, trainer, (0, 0)).terrain) == trainer.terrain
