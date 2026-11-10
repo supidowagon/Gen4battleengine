@@ -358,11 +358,13 @@ _STAT_KINDS = frozenset(
 # the rest change no stage. FANG_PARALYZE_FLINCH (K3b2 Task 4) paralyzes and flinches
 # (subscript_paralyze_or_flinch.s): no stage. PRESENT (Task 5) damages or heals the target
 # (effect_script_0122.s, subscript_recover_hp.s): no stage. PROTECT (Task 6) sets the
-# user's protecting flag and chain (BtlCmd_TryProtection): no stage.
+# user's protecting flag and chain (BtlCmd_TryProtection): no stage. ATTRACT (Task 7) sets
+# the target's infatuated (BtlCmd_TryAttract): no stage.
 _NO_ACC_EVA_WRITE = (frozenset(EffectId(i) for i in range(40)) - _STAT_KINDS) | {
     EffectId.FANG_PARALYZE_FLINCH,
     EffectId.PRESENT,
     EffectId.PROTECT,
+    EffectId.ATTRACT,
 }
 # (effect, stat) pairs hit_thresholds follows: they change a later foe move's threshold.
 _SEEN = {

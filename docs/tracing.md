@@ -377,8 +377,8 @@ For each turn, `tools/trace_to_state.py` works out the following:
   then, else 1 (a success; a chain of 0 or a user acting last ignores the roll). A move it
   blocked writes no `hit` record and its `move_end` has `MOVE_STATUS_PROTECTED` (bit 15).
 - **The other chance fields** are `speed_tie`, `end_speed_tie`, `full_para`, `thaw`,
-  `secondary`, `contact_proc` (only when Static or Poison Point is in play) and
-  `duration`. These are enumerated only where they can matter:
+  `infatuation`, `secondary`, `contact_proc` (only when Static, Poison Point or Cute Charm
+  is in play) and `duration`. These are enumerated only where they can matter:
   - `speed_tie` when the start state's speeds are equal.
   - `end_speed_tie` when the speeds are equal in the start state, after the turn's
     switches, or after the switches with the next record's status and stages (a
@@ -386,7 +386,12 @@ For each turn, `tools/trace_to_state.py` works out the following:
   - `full_para` and `thaw` when the side's start-of-turn active mon is paralyzed or
     frozen at the start, in any `hit` record of the turn, or in the next record. A
     status inflicted earlier in the turn (Stun Spore, Spark, Static) can stop the
-    slower mon on the same turn. A confusion self-hit is taken from a `hit` record whose
+    slower mon on the same turn.
+  - `infatuation` when the side uses a move and is in love at the start (the engine's
+    carried `infatuated`; the trace has no volatile bits) or its foe uses Attract. An
+    immobilized mon spends no PP and writes no record, so the replay with 1 matches the
+    unchanged PP and HP; the one with 0 needs the PP drop. A confusion self-hit is taken
+    from a `hit` record whose
   attacker is also its defender, and its roll is matched against `confusion_damage`.
   Every candidate (actions times outcome fields) is replayed through `step`, followed
   by the opponent's replacement into the next record's active slot, and the candidate

@@ -83,6 +83,11 @@ CONTACT_DAMAGE, PARALYSIS_BLOCKED = "contact_damage", "paralysis_blocked"
 #   subscript_burn.s:_177 tag ``BTLSCR_MSG_BATTLER_TEMP``, the holder. A target that
 #   cannot take the status (a Limber attacker against Static included, :_170) gets no
 #   message.
+# * Cute Charm: when it infatuates the attacker (``effects._contact_ability``):
+#   subscript_infatuate.s:17 prints "{0}'s {1} infatuated {2}!" with
+#   ``TAG_NICKNAME_ABILITY_NICKNAME, BTLSCR_MSG_TEMP, BTLSCR_MSG_BATTLER_TEMP`` (the ability
+#   tag is the holder's, BattleMessage_AbilityTag, battle_script.c:11798-11809); a failed
+#   TryAttract ends silently (:60-65).
 # * Rough Skin: whenever it hurts the attacker: subscript_rough_skin.s prints
 #   ``TAG_NICKNAME_ABILITY_NICKNAME, BTLSCR_DEFENDER, BTLSCR_DEFENDER, BTLSCR_ATTACKER``.
 # * Limber: a direct paralysis (Thunder Wave) it blocks (subscript_paralyze.s:_170, "prevents
@@ -108,6 +113,7 @@ REVEALS_ON: dict[int, frozenset[str]] = {
     AbilityId.STATIC: frozenset({CONTACT_STATUS}),
     AbilityId.POISON_POINT: frozenset({CONTACT_STATUS}),
     AbilityId.FLAME_BODY: frozenset({CONTACT_STATUS}),
+    AbilityId.CUTE_CHARM: frozenset({CONTACT_STATUS}),
     AbilityId.ROUGH_SKIN: frozenset({CONTACT_DAMAGE}),
     AbilityId.INSOMNIA: frozenset({SLEEP_BLOCKED, STATUS_CURE}),
     AbilityId.LIMBER: frozenset({PARALYSIS_BLOCKED, STATUS_CURE}),

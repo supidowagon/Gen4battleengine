@@ -56,6 +56,8 @@ _FLAG_TEXT = (
     ("missed", "missed"),
     ("no_target", "no target"),
     ("full_para", "fully paralyzed"),
+    ("in_love", "is in love"),
+    ("immobilized", "is immobilized by love"),
     ("flinched", "flinched"),
     ("asleep", "is fast asleep"),
     ("woke", "woke up"),

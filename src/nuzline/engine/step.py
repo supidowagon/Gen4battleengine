@@ -37,8 +37,8 @@ switching (with Natural Cure) and the switch-in hooks
 (``hooks.on_switch_in``: Stealth Rock, Intimidate, berries), damaging moves, the
 accuracy check, PP, Struggle, the move effects of ``effects.py``, the berry check
 after every hit (``hooks.after_damage_items``), Pursuit's pre-switch hit, the sleep,
-freeze, flinch, Taunt, confusion and paralysis checks before a move, the held-item,
-Leech Seed, poison, toxic, burn, Bind and Taunt end-of-turn checks, the field-condition
+freeze, flinch, Taunt, confusion, paralysis and attract checks before a move, the
+held-item, Leech Seed, poison, toxic, burn, Bind and Taunt end-of-turn checks, the field-condition
 pass (``field_conditions``), faints and the end of the battle. A player faint is a death, not the end (spec §4): the battle ends
 when a side has no Pokemon with HP left. A state that is already over is returned unchanged.
 
@@ -155,6 +155,7 @@ _VOLATILE = (
     "curled",
     "mud_sport",
     "aqua_ring",
+    "infatuated",
 )
 # BtlCmd_TryProtection caps protectSuccessTurns at NELEMS(sProtectSuccessRate) - 1
 # (battle_script.c:5182-5184; outcome.PROTECT_RATES).
@@ -183,6 +184,8 @@ EVENT_FLAGS = (
     "protected",
     "protect_ok",
     "protect_failed",
+    "in_love",
+    "immobilized",
 )
 
 
@@ -197,6 +200,19 @@ def _release_bind(state: BattleState, side, cond) -> BattleState:
         trapped=state.trapped.at[side].set(jnp.where(cond, 0, state.trapped[side])),
         trap_move=state.trap_move.at[side].set(jnp.where(cond, 0, state.trap_move[side])),
     )
+
+
+def _source_leaves(state: BattleState, side, cond) -> BattleState:
+    """``side``'s active battler leaves the field where ``cond`` (a switch, a faint, and Roar's
+    drag): every effect it is the source of on the other side ends.
+    ``BattleSystem_UpdateAfterSwitch`` (battle_lib.c:2088-2098) and
+    ``BattleSystem_CleanupFaintedMon`` (:2168-2186) clear the ATTRACT bit sourced from it
+    (``FlagIndex(battler) << VOLATILE_CONDITION_ATTRACT_SHIFT``) and the Bind it put on a foe.
+    In singles the only possible source of the foe's ``infatuated`` is this battler."""
+    state = _release_bind(state, 1 - side, cond)
+    keep = state.infatuated[1 - side]
+    value = jnp.where(cond, 0, keep).astype(keep.dtype)
+    return state._replace(infatuated=state.infatuated.at[1 - side].set(value))
 
 
 def _set_mon(state: BattleState, field: str, side, slot, value, cond) -> BattleState:
@@ -293,15 +309,15 @@ def _forget(state: BattleState, side, slot) -> BattleState:
 
 
 def _switch_in(state: BattleState, side, slot, entry_turn) -> BattleState:
-    """``side`` sends out party ``slot``: stages and volatiles reset, the Bind the
-    outgoing Pokemon put on the other side ends, ``fake_out_turn`` becomes
-    ``entry_turn`` and the AI forgets the newcomer (``_forget``;
-    ``BattleSystem_UpdateAfterSwitch``, battle_lib.c:2094)."""
+    """``side`` sends out party ``slot``: stages and volatiles reset, the effects the
+    outgoing Pokemon is the source of end (``_source_leaves``: the Bind it put on the other
+    side, the other side's infatuation), ``fake_out_turn`` becomes ``entry_turn`` and the AI
+    forgets the newcomer (``_forget``; ``BattleSystem_UpdateAfterSwitch``, battle_lib.c:2094)."""
     state = _reset_battler(state, side, True)
     state = _forget(state, side, slot)
     state = _entered(state, side, entry_turn, True)
     state = state._replace(active=state.active.at[side].set(jnp.asarray(slot).astype(jnp.int8)))
-    return _release_bind(state, 1 - side, True)
+    return _source_leaves(state, side, True)
 
 
 def _send_out(tables: Tables, state: BattleState, side, slot) -> BattleState:
@@ -337,12 +353,14 @@ def _hit_events(before: BattleState, after: BattleState, side, landed, crit) -> 
     landed hit that dealt damage (the target's HP drop: only the hit itself lowers it,
     effects.py:441-444; a crit into a substitute is not seen, a documented coarsening in
     ``observe``'s docstring), the defender's contact ability (the only change of the
-    attacker's own status inside a hit, effects.py:343-365) and a Fire hit's thaw (the
-    only FREEZE -> NONE change of the target, effects.py:368-375)."""
+    attacker's own status, and Cute Charm the only change of its ``infatuated``, inside a
+    hit: effects._contact_ability) and a Fire hit's thaw (the only FREEZE -> NONE change of
+    the target, effects._thaw_target)."""
     foe = 1 - side
     user, target = before.active[side], before.active[foe]
     dealt = before.hp[foe, target] > after.hp[foe, target]
     contact = (before.status[side, user] == Status.NONE) & (after.status[side, user] != Status.NONE)
+    contact = contact | ((before.infatuated[side] == 0) & (after.infatuated[side] != 0))
     thaw = (before.status[foe, target] == Status.FREEZE) & (
         after.status[foe, target] == Status.NONE
     )
@@ -463,7 +481,16 @@ def _use_move(
     # Gated on reaching the check, so the event is set only when it had an effect.
     full_para = go & (state.status[side, user] == Status.PARALYSIS) & (outcome.full_para[side] != 0)
     state = _unlock(state, side, full_para)  # subscript_fully_paralyzed.s
-    can_act = go & ~full_para
+    go = go & ~full_para
+    # CHECK_STATUS_STATE_ATTRACT (:2669-2692): a battler in love (infatuated now: a faster
+    # Attract this turn counts) shows "in love" (subscript_infatuated.s); RandNext() & 1 == 0
+    # (outcome.infatuation) immobilizes it: subscript_immobilized_by_love.s unlocks it and
+    # goes to UPDATE_MOVE_BUFFERS with no attack message (no PP, last_move 0, the Protect chain
+    # resets, moveHit MOVE_NONE), like full paralysis.
+    in_love = go & (state.infatuated[side] != 0)
+    immobilized = in_love & (outcome.infatuation[side] != 0)
+    state = _unlock(state, side, immobilized)
+    can_act = go & ~immobilized
     # CHECK_STATUS_STATE_BIDE (:2694): the Bide counter drops. On reaching 0 the unleash
     # deals 2 * storedDamage (damage.fixed_damage) at the last hitter, i.e. the foe's
     # active Pokemon, a replacement included. Nothing stored (subscript_bide_end.s:
@@ -692,6 +719,8 @@ def _use_move(
         "confused": still_confused,
         "snapped_out": confused & ~still_confused,
         "self_hit": self_hit,
+        "in_love": in_love,
+        "immobilized": immobilized,
     }
     return state, own, {"contact_ability": contact, "thawed_by_hit": thaw}
 
@@ -839,8 +868,9 @@ def _faint_check(before: BattleState, after: BattleState, entry_turn=None) -> Ba
     battle_script.c:1803) does: its stat stages, ``statusVolatile``, ``moveEffectsMask``
     and ``moveEffectsData`` are cleared (``_reset_battler``, which also clears
     ``move_hit``, :2199), ``fake_out_turn`` becomes ``entry_turn`` (:2195; by default
-    ``turn + 1``, the value inside ``step``), and the Bind it put on the other side ends
-    (:2179). Every newly fainted Pokemon also loses its status condition and counter: the
+    ``turn + 1``, the value inside ``step``), and the effects it is the source of end
+    (``_source_leaves``: the Bind on the other side, :2179, and its infatuation,
+    :2174-2176). Every newly fainted Pokemon also loses its status condition and counter: the
     decomp writes ``status = 0`` for a Pokemon with no HP (battle_controller.c:1482-1486)."""
     entry_turn = after.turn + 1 if entry_turn is None else entry_turn
     fainted = (before.hp > 0) & (after.hp == 0)
@@ -865,7 +895,7 @@ def _faint_check(before: BattleState, after: BattleState, entry_turn=None) -> Ba
         active_fainted = fainted[side, after.active[side]]
         after = _reset_battler(after, side, active_fainted)
         after = _entered(after, side, entry_turn, active_fainted)
-        after = _release_bind(after, 1 - side, active_fainted)
+        after = _source_leaves(after, side, active_fainted)
     return after
 
 

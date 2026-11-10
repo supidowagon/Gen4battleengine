@@ -565,11 +565,11 @@ def _cleanup_fainted(turn: _Turn, s: RefState, side: int) -> None:
     """``BattleSystem_CleanupFaintedMon`` (lib.c:2156): the fainted battler's stat
     stages, ``statusVolatile``, ``moveEffectsMask`` and ``moveEffectsData`` are
     cleared, ``fakeOutTurnNumber = totalTurns + 1`` (lib.c:2195), ``moveHit`` and
-    ``movePrevByBattler`` reset (lib.c:2199); the Bind it put on a foe ends
-    (lib.c:2179)."""
+    ``movePrevByBattler`` reset (lib.c:2199); what it is the source of ends: the Bind it put
+    on a foe (lib.c:2179) and the foe's infatuation (:2174-2176)."""
     _reset_battler(s.sides[side])
     s.sides[side].fake_out_turn = turn.entry_turn
-    _release_bind(s.sides[1 - side])
+    _source_leaves(s, side)
 
 
 def _reset_battler(sd: RefSide) -> None:
@@ -601,6 +601,7 @@ def _reset_battler(sd: RefSide) -> None:
         "curled",
         "mud_sport",
         "aqua_ring",
+        "infatuated",
     ):
         setattr(sd, name, 0)
 
@@ -614,6 +615,13 @@ def _unlock(sd: RefSide) -> None:
 def _release_bind(sd: RefSide) -> None:
     sd.trapped = 0
     sd.trap_move = 0
+
+
+def _source_leaves(s: RefState, side: int) -> None:
+    """``side``'s battler leaves (UpdateAfterSwitch lib.c:2088-2098, CleanupFaintedMon
+    :2168-2186): the Bind it put on the foe and the foe's ATTRACT bit sourced from it end."""
+    _release_bind(s.sides[1 - side])
+    s.sides[1 - side].infatuated = 0
 
 
 def _faint_check(turn: _Turn, s: RefState) -> None:
@@ -849,8 +857,9 @@ def _enter(turn: _Turn, s: RefState, side: int, slot: int) -> None:
     """``SwitchAndUpdateMon`` -> ``BattleSystem_InitBattleMon`` (lib.c:70): a fresh
     battler (stages neutral, no volatiles; no Baton Pass in M1), and
     ``BattleSystem_UpdateAfterSwitch`` (lib.c:2094) sets ``fakeOutTurnNumber =
-    totalTurns + 1`` (lib.c:2117), clears ``moveHit`` (lib.c:2121) and ends the Bind
-    the outgoing battler put on the foe. Then the entry hazards."""
+    totalTurns + 1`` (lib.c:2117), clears ``moveHit`` (lib.c:2121) and ends what the outgoing
+    battler is the source of (the Bind on the foe, the foe's infatuation, lib.c:2088-2098).
+    Then the entry hazards."""
     sd = s.sides[side]
     sd.active = slot
     _reset_battler(sd)
@@ -860,7 +869,7 @@ def _enter(turn: _Turn, s: RefState, side: int, slot: int) -> None:
     if side == 0:
         s.ai_seen_moves[slot] = [0] * len(s.ai_seen_moves[slot])
         s.ai_ability_known[slot] = 0
-    _release_bind(s.sides[1 - side])
+    _source_leaves(s, side)
     _stealth_rock_damage(turn, s, side)
 
 
@@ -1059,6 +1068,11 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
         foe = _active(s, target)
         if foe.hp != foe.max_hp:
             _gain_hp(s, target, _divide(foe.max_hp, 4))
+    elif effect == EffectId.ATTRACT and effective:
+        # effect_script_0120.s: a direct TO_DEFENDER effect on a living defender ->
+        # subscript_infatuate.s -> BtlCmd_TryAttract (script.c:5727-5742).
+        if target_alive and _attractable(s, target, side):
+            s.sides[target].infatuated = 1
     elif effect == EffectId.DRAIN and effective and dealt > 0:
         # subscript_drain_half_damage_dealt.s: Divide(hitDamage * percent, 100), then
         # Big Root.
@@ -1146,6 +1160,13 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
             sd.locked_move = sd.rollout_count = 0
 
 
+def _attractable(s: RefState, side: int, source: int) -> bool:
+    """``BtlCmd_TryAttract`` (script.c:5727-5742): different genders, neither genderless (2),
+    and ``side``'s battler not in love yet."""
+    mine, theirs = _active(s, side).gender, _active(s, source).gender
+    return mine != theirs and 2 not in (mine, theirs) and not s.sides[side].infatuated
+
+
 def _contact_ability(turn: _Turn, s: RefState, side: int, move: int, hit: int, effective: bool,
                      dealt: int) -> None:  # fmt: skip
     """``BattleSystem_TriggerAbilityOnHit`` (lib.c:4200): the defender's own ability
@@ -1167,6 +1188,16 @@ def _contact_ability(turn: _Turn, s: RefState, side: int, move: int, hit: int, e
         _lose_hp(turn, s, side, _divide(attacker.max_hp, 8))
         if target == 0:
             s.ai_ability_known[s.sides[0].active] = 1
+        return
+    if ability == AbilityId.CUTE_CHARM:
+        # lib.c:4339-4355: an attacker not in love, a living defender, then the roll;
+        # subscript_infatuate.s, whose TryAttract fails silently; its message (:17) tags the
+        # holder's ability.
+        holder = _active(s, target)
+        if holder.hp and turn.outcome.contact_proc[target][hit] and _attractable(s, side, target):
+            s.sides[side].infatuated = 1
+            if target == 0:
+                s.ai_ability_known[s.sides[0].active] = 1
         return
     if ability == AbilityId.STATIC:
         status = Status.PARALYSIS
@@ -1350,6 +1381,11 @@ def _status_disrupted(turn: _Turn, s: RefState, side: int, move: int) -> int:
     # unsupported).
     if mon.status == Status.PARALYSIS and o.full_para[side]:
         _unlock(sd)  # subscript_fully_paralyzed.s
+        return DISRUPTED
+    # CHECK_STATUS_STATE_ATTRACT (bcp.c:2669-2692): in love, RandNext() & 1 == 0 immobilizes
+    # (subscript_immobilized_by_love.s: UnlockMoveChoice, UPDATE_MOVE_BUFFERS, no message).
+    if sd.infatuated and o.infatuation[side]:
+        _unlock(sd)
         return DISRUPTED
     # CHECK_STATUS_STATE_BIDE (bcp.c:2694): the counter drops; at 0 the unleash is
     # 2 * storedDamage at the foe's active Pokemon (the last hitter, a replacement

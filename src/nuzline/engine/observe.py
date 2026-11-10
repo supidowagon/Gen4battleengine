@@ -51,10 +51,12 @@ Events, per side (``[side]``; 0 = player):
 * The status checks before a move (step.py:327-377, bcp.c:2417-2728): ``asleep``
   (stays asleep), ``woke``, ``frozen`` (stays frozen), ``thawed`` (its own thaw roll or a
   thawing move), ``flinched``, ``confused`` ("is confused"), ``snapped_out``,
-  ``self_hit`` (hurt itself in confusion), ``full_para`` (fully paralyzed).
+  ``self_hit`` (hurt itself in confusion), ``full_para`` (fully paralyzed), ``in_love``
+  ("X is in love with Y!", subscript_infatuated.s: the attract check ran) and ``immobilized``
+  ("X is immobilized by love!", subscript_immobilized_by_love.s).
 * ``thawed_by_hit``: a Fire hit thawed it (effects.py:368-375); ``contact_ability``:
-  its Static / Poison Point / Flame Body gave its attacker a status (effects.py:343-365), the
-  message that names the ability.
+  its Static / Poison Point / Flame Body gave its attacker a status, or its Cute Charm
+  infatuated it (effects._contact_ability), the message that names the ability.
 
 The end-of-turn order (``end_speed_tie``) is not in the vector: it shows only in the
 order of residual messages, so states it separates stay in one set (coarser than the
@@ -69,7 +71,8 @@ The visible projection of ``after``: both actives, every slot's species, status 
 held/consumed item (a Rindo / Chilan Berry's "weakened" message,
 ``subscript_type_resist_berry.s:_245``, is always followed by its ``RemoveItem``, so
 ``item_consumed`` shows it); the non-zero-ness of ``confusion``, ``taunt``, ``trapped``,
-``leech_seed`` and ``substitute_hp`` (their counters are hidden); stat stages, Water
+``leech_seed`` and ``substitute_hp`` (their counters are hidden) and of ``infatuated`` ("fell in
+love", subscript_infatuate.s); stat stages, Water
 Sport, hazards (Stealth Rock, Spikes layers), screens and the other side conditions
 (non-zero), weather and the field conditions; the player's exact HP and PP per party
 slot (the player's healthbox and move menu); the opponent's HP as HP-bar pixels per
@@ -141,6 +144,7 @@ _NONZERO_SIDE = (
     "bide_turns",
     "mud_sport",
     "aqua_ring",
+    "infatuated",
 )
 _NONZERO_FIELD = ("trick_room", "gravity")
 

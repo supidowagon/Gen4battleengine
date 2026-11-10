@@ -41,11 +41,20 @@ of the turn:
   ``step``'s ``target_moved``) and the target has no Inner Focus as ``s`` sees it.
 * ``contact_proc[d, i]``: the attacker's damaging contact move against a Static,
   Poison Point or Flame Body holder on side ``d`` (Rough Skin has no roll): its active
-  Pokemon (Pursuit hits the outgoing one) or the one it switches in (effects.py:343-365).
+  Pokemon (Pursuit hits the outgoing one) or the one it switches in (effects.py:343-365);
+  or against a Cute Charm holder there of the attacker's opposite gender (neither
+  genderless) while the attacker is not in love at the start (effects._contact_ability:
+  ``BtlCmd_TryAttract`` fails otherwise; one becoming infatuated earlier in the turn only
+  removes the read).
 * ``n_hits[s]``: ``MULTI_HIT`` without a fixed count (``move_param[m, 0] == 0``).
 * ``full_para[s]`` / ``thaw[s]``: ``s`` moves and is paralyzed / frozen at the start,
   or the foe moves first with a move that inflicts it and the target can take it
   (step.py:277-278, :305).
+* ``infatuation[s]``: ``s`` moves and is in love at the start while the foe does not switch
+  (a switch goes first and ``_source_leaves`` clears it), or the foe moves first with Attract
+  and could infatuate ``s`` (opposite genders, neither genderless, ``s`` not in love yet;
+  ``effects._attract``). Cute Charm infatuates the attacker during its own move, after its
+  check: read only on a later turn.
 * ``confusion_hit[s]``: ``s`` moves and its confusion counter is >= 2, or the foe moves
   first with a ``CONFUSE_FOE`` or ``SECONDARY_CONFUSE`` move and ``s`` is not confused
   (counter 2-5; step.py:292-294).
@@ -188,6 +197,8 @@ class Reads(NamedTuple):
     para_by_foe: jnp.ndarray  # bool[2, 2]: it moves after a foe move that paralyzes
     freeze_own: jnp.ndarray  # it moves frozen at the start
     freeze_by_foe: jnp.ndarray  # bool[2, 2]: it moves after a foe move that freezes
+    infatuated_own: jnp.ndarray  # it moves in love at the start (its source stays)
+    infatuated_by_foe: jnp.ndarray  # bool[2, 2]: it moves after a foe Attract that can work
 
 
 class OutcomeLaws(NamedTuple):
@@ -292,6 +303,7 @@ def _branch_masks(foe_first, first_self, base: dict) -> dict:
     para_by_foe = b["uses_move"] & foe_first & b["para_inflict"][::-1]
     freeze_by_foe = b["uses_move"] & foe_first & b["freeze_inflict"][::-1]
     confused_by_foe = b["uses_move"] & foe_first & b["confuse_inflict"][::-1]
+    infatuated_by_foe = b["uses_move"] & foe_first & b["attract_inflict"][::-1]
     confusable = b["confused_own"] | confused_by_foe
     # A flinch roll is read only when the user moves first (subscript_flinch_mon.s: the
     # target has not moved, effects._flinch). A secondary status or confusion on a target
@@ -313,6 +325,10 @@ def _branch_masks(foe_first, first_self, base: dict) -> dict:
         "full_para": b["para_own"] | para_by_foe,
         "confusion_hit": confusable,
         "thaw": b["freeze_own"] | freeze_by_foe,
+        # CHECK_STATUS_STATE_ATTRACT (step._use_move): in love now, its own or a faster
+        # Attract's.
+        "infatuation": b["infatuated_own"] | infatuated_by_foe,
+        "infatuated_by_foe": infatuated_by_foe,
         "para_by_foe": para_by_foe,
         "freeze_by_foe": freeze_by_foe,
         "confused_by_foe": confused_by_foe,
@@ -365,6 +381,9 @@ INPUT_NEUTRAL_EFFECTS = (
     # success removes the later hit altogether (step._use_move: it does not connect), so
     # whatever (crit, roll) class the hit would have drawn, the state is the same.
     _E.PROTECT,
+    # Sets the foe's infatuated, read only by its attract check, which comes before its move
+    # and removes the hit altogether (step._use_move), like a flinch: no damage input.
+    _E.ATTRACT,
 )
 INPUT_CLAUSE_EFFECTS = (
     _E.STAT_SELF,  # the foe's Defense / Sp. Def
@@ -406,6 +425,9 @@ INPUT_NEUTRAL_ABILITIES = (
     AbilityId.LIMBER,
     AbilityId.ADAPTABILITY,
     AbilityId.SOLID_ROCK,
+    # Infatuates the attacker after its hit: read at its next attract check, not a damage
+    # input of a later hit of the move (effects._contact_ability).
+    AbilityId.CUTE_CHARM,
 )
 INPUT_CLAUSE_ABILITIES = (
     AbilityId.GUTS,  # status clause
@@ -491,6 +513,7 @@ NON_TABLE_DAMAGE_EFFECTS = (
     _E.AQUA_RING,
     _E.PRESENT,  # its power is drawn (40/80/120, Outcome.present); the table has power 1
     _E.PROTECT,  # a status move: no damage
+    _E.ATTRACT,  # a status move: no damage
 )
 
 
@@ -638,6 +661,29 @@ def outcome_laws(
     holders = _holds(
         state, actions, (AbilityId.STATIC, AbilityId.POISON_POINT, AbilityId.FLAME_BODY)
     )
+    # BtlCmd_TryAttract (effects._attractable): different genders, neither genderless.
+    gender = state.gender.astype(_I32)
+    incoming = jnp.clip(actions - MOVE_ACTIONS, 0, state.gender.shape[1] - 1)
+
+    def lovers(a, b):
+        return (a != b) & (a != 2) & (b != 2)
+
+    attacker_gender = gender[sides, mons][::-1]  # side d's attacker: the other side's active
+    # The attacker is not in love at the start, or the holder's side switches: the source
+    # leaves first (step._source_leaves) and a Cute Charm switch-in can then infatuate it.
+    calm = (state.infatuated[::-1] == 0) | switch
+    charm_now = (state.ability[sides, mons] == AbilityId.CUTE_CHARM) & lovers(
+        gender[sides, mons], attacker_gender
+    )
+    charm_later = (
+        switch
+        & (state.ability[sides, incoming] == AbilityId.CUTE_CHARM)
+        & lovers(gender[sides, incoming], attacker_gender)
+    )
+    charm = (charm_now | charm_later) & calm
+    if loose:
+        charm = _holds(state, actions, (AbilityId.CUTE_CHARM,))
+    holders = holders | charm
     contact_proc = (lands & (damaging & contact & holders[::-1])[:, None])[::-1]
     duration = uses_move & (
         _any_of(effect, (_E.TAUNT, _E.TRAP, _E.DISABLE, _E.CONFUSE_FOE, _E.SECONDARY_CONFUSE))
@@ -668,6 +714,14 @@ def outcome_laws(
     if loose:
         status_blocked = confused_blocked = flinch_blocked = jnp.zeros((2,), bool)
     confuses = _any_of(effect, (_E.CONFUSE_FOE, _E.SECONDARY_CONFUSE))
+    # Attract on the foe's active Pokemon (effects._attract); in love at the start, read
+    # unless the source switches out first (step._source_leaves).
+    foe_calm = state.infatuated[::-1] == 0
+    attract = uses_move & (effect == _E.ATTRACT)
+    infatuated_own = uses_move & (state.infatuated != 0)
+    if not loose:
+        attract = attract & lovers(gender[sides, mons], gender[sides, mons][::-1]) & foe_calm
+        infatuated_own = infatuated_own & ~switch[::-1]
     base = {
         "uses_move": uses_move,
         "effect": effect,
@@ -685,6 +739,8 @@ def outcome_laws(
         "para_inflict": uses_move & _inflicts(tables, moves, Status.PARALYSIS) & ~status_blocked,
         "freeze_inflict": uses_move & _inflicts(tables, moves, Status.FREEZE) & ~status_blocked,
         "confuse_inflict": uses_move & confuses & ~confused_blocked,
+        "infatuated_own": infatuated_own,
+        "attract_inflict": attract,
     }
 
     # Order branches: order.action_order under speed_tie = 0 and 1. speed_tie is read
@@ -763,6 +819,7 @@ def outcome_laws(
             fang_flinch=m["fang_flinch"],
             present=uses_move & (effect == _E.PRESENT),
             protect=m["protect"],
+            infatuation=m["infatuation"],
         )
 
     both = zip(branch_relevant(branches[0]), branch_relevant(branches[1]), strict=True)
@@ -774,8 +831,8 @@ def outcome_laws(
     # The first mover's sure flinch (rules §10.3, "no move after a flinch"): its move
     # reaches the hit whatever the rolls (none of the checks of
     # BattleControllerPlayer_CheckStatusDisruption, bcp.c:2417-2728, can stop it: no
-    # sleep, freeze, paralysis, confusion, flinch, Disable on it, Taunt on a power-0 move
-    # or Bide), deals damage at every crit and roll (play_hit's ``effective``: the flinch
+    # sleep, freeze, paralysis, confusion, flinch, Disable on it, Taunt on a power-0 move,
+    # infatuation or Bide; the first mover cannot fall in love before its own check), deals damage at every crit and roll (play_hit's ``effective``: the flinch
     # needs it), and the target, the foe's active Pokemon using a move, has no Inner
     # Focus as the attacker sees it (effects._flinch, effects._fang). Fake Out also needs its
     # first turn (effect_script_0158.s). Thunder Fang's roll is fang_flinch (``Reads.fang``).
@@ -788,6 +845,7 @@ def outcome_laws(
         & (state.flinched == 0)
         & ~((state.disabled_move != 0) & (state.disabled_move.astype(_I32) == moves))
         & ~((state.taunt > 0) & (tables.move_power[moves] == 0))
+        & (state.infatuated == 0)
         & (state.bide_turns == 0)
     )
     damage = jnp.stack([hit_damage_table(tables, state, side, moves[side]) for side in (0, 1)])
@@ -822,6 +880,8 @@ def outcome_laws(
         para_by_foe=jnp.stack([m["para_by_foe"] for m in branches]),
         freeze_own=base["freeze_own"],
         freeze_by_foe=jnp.stack([m["freeze_by_foe"] for m in branches]),
+        infatuated_own=base["infatuated_own"],
+        infatuated_by_foe=jnp.stack([m["infatuated_by_foe"] for m in branches]),
     )
     kind = jnp.where(
         effect == _E.TAUNT,
@@ -979,6 +1039,8 @@ _LAWS = {
     "fang_flinch": _secondary,  # the same CheckEffectActivation roll at the move's chance
     "present": _present,
     "protect": _protect,
+    # CHECK_STATUS_STATE_ATTRACT (bcp.c:2669-2692): RandNext() & 1, exact; 1 = immobilized.
+    "infatuation": _coin,
 }
 
 
@@ -1140,8 +1202,9 @@ def _move_reads(laws: OutcomeLaws, branch: Branch, plan: ReadPlan) -> None:
     * the first mover's sure flinch (``Reads.flinch_sure``) with a certain hit (a class
       that hits at every possible threshold) and a proc (its ``secondary``, or
       ``fang_flinch`` for Thunder Fang, ``Reads.fang``) stops the second mover's move:
-      ``step._use_move`` checks the flinch before Disable, Taunt, confusion, paralysis
-      and the move, so none of those elements is read (the thaw roll comes before it)."""
+      ``step._use_move`` checks the flinch before Disable, Taunt, confusion, paralysis,
+      attract and the move, so none of those elements is read (the thaw roll comes before
+      it)."""
     reads, rel = laws.reads, branch.relevant
     first, second = branch.first, 1 - branch.first
 
@@ -1186,6 +1249,7 @@ def _move_reads(laws: OutcomeLaws, branch: Branch, plan: ReadPlan) -> None:
             ("roll", reads.confused_own, reads.confused_by_foe, "confusion"),
             ("full_para", reads.para_own, reads.para_by_foe, "status"),
             ("thaw", reads.freeze_own, reads.freeze_by_foe, "status"),
+            ("infatuation", reads.infatuated_own, reads.infatuated_by_foe, "status"),
         ):
             elem = (name, (s, 0)) if name == "roll" else (name, (s,))
             if bool(own[s]):
@@ -1229,6 +1293,7 @@ def _move_reads(laws: OutcomeLaws, branch: Branch, plan: ReadPlan) -> None:
             "magnitude",
             "confusion_hit",
             "full_para",
+            "infatuation",
             "fang_flinch",
             "present",
             "protect",

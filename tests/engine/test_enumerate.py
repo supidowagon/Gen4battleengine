@@ -403,6 +403,8 @@ def decomp_law(tables, state, actions, name: str, index: tuple) -> dict[int, Fra
         return {d: Fraction(1, 4) for d in range(low, low + 4)}
     if name == "full_para":
         return coin(Fraction(1, 4))
+    if name == "infatuation":  # CHECK_STATUS_STATE_ATTRACT (bcp.c:2675): RandNext() & 1 == 0
+        return coin(Fraction(1, 2))
     if name == "thaw":
         return coin(Fraction(1, 5))
     if name == "shed_skin":  # ShedSkin (battle_lib.c:3567): RandNext() % 10 < 3
@@ -585,7 +587,8 @@ def assert_equals_bruteforce(tables, state, actions) -> tuple[int, int]:
 # secondary (Thunder Wave, Spore, Spark, Ice Beam, Ember, Flame Wheel), confusion
 # (Confusion, Psybeam, Supersonic, Confuse Ray), a duration (Bind, Taunt), plain and
 # multi-hit damage, an accuracy drop, Present (a drawn power or a heal of the foe) and
-# Protect / Detect (a chain of 0-3 drawn for them: the foe's move is blocked or not).
+# Protect / Detect (a chain of 0-3 drawn for them: the foe's move is blocked or not) and
+# Attract (the foe's attract check after it, by gender).
 ORDER_MOVES = (
     "Headbutt",
     "Zen Headbutt",
@@ -609,6 +612,7 @@ ORDER_MOVES = (
     "Present",
     "Protect",
     "Detect",
+    "Attract",
 )
 # Drawn twice as often.
 FLINCH_MOVES = ("Headbutt", "Zen Headbutt", "Bite", "Fake Out", "Thunder Fang")
@@ -619,6 +623,7 @@ ORDER_ABILITIES = (
     AbilityId.STATIC,
     AbilityId.STEADFAST,
     AbilityId.INSOMNIA,
+    AbilityId.CUTE_CHARM,
 )
 
 

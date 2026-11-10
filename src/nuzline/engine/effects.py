@@ -159,6 +159,19 @@ many are real). Decomp sources:
   never burned), and an attacker's own Limber stops the paralysis silently
   (subscript_paralyze.s:5, :_170). Its message reveals the holder's ability to the AI
   (``hooks.reveal_ability``).
+* Cute Charm (battle_lib.c:4339-4355, same function): a living attacker that is not in love,
+  a contact move that was not ineffective and dealt damage, a defender still alive after the
+  hit, then the same roll (``outcome.contact_proc``, the last ``&&`` operand). It runs
+  ``subscript_infatuate.s`` as an ability side effect on the attacker: ``BtlCmd_TryAttract``
+  (battle_script.c:5727-5742) fails silently (:60-65) on equal genders or a genderless
+  battler, else the attacker falls in love with the holder (``infatuated``); its message
+  (:17, ``TAG_NICKNAME_ABILITY_NICKNAME`` with ``BTLSCR_MSG_BATTLER_TEMP``, the holder)
+  reveals the holder's ability. Oblivious (:5) is an unsupported ability.
+* Attract (``ATTRACT``): ``effect_script_0120.s``, a direct TO_DEFENDER effect (no ON_HIT:
+  ``BattleSystem_TriggerPrimaryEffect`` needs a living defender, battle_lib.c:1492-1505)
+  running ``subscript_infatuate.s``: ``BtlCmd_TryAttract`` as above, failing on a target
+  already in love too ("But it failed!", :60-62). No type chart (a status move), and Protect
+  blocks it (``MOVE_FLAG_CAN_PROTECT``). ``_attract``; the status check is in ``step``.
 * Rough Skin (battle_lib.c:4257-4271, same function, so never with the above): a living
   attacker (Magic Guard is unsupported), a contact move that was not ineffective and
   dealt damage, no roll: ``subscript_rough_skin.s`` takes ``BattleSystem_Divide(maxHP,
@@ -716,6 +729,25 @@ def _foresight(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     return _set(state, "foresight", h.target_side, 1, cond)
 
 
+def _attractable(state: BattleState, side, slot, foe_side, foe_slot) -> jnp.ndarray:
+    """``BtlCmd_TryAttract`` (battle_script.c:5727-5742) succeeds for target ``side`` /
+    ``slot`` and source ``foe_side`` / ``foe_slot``: different genders, neither genderless
+    (``GENDER_NONE`` is 2, ``BattleState.gender``), and the target not in love yet."""
+    mine, theirs = state.gender[side, slot], state.gender[foe_side, foe_slot]
+    return (mine != theirs) & (mine != 2) & (theirs != 2) & (state.infatuated[side] == 0)
+
+
+def _attract(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    """Attract: the living target of the opposite gender falls in love with the user."""
+    cond = (
+        (h.effect == _E.ATTRACT)
+        & h.effective
+        & _alive(state, h.target_side, h.target)
+        & _attractable(state, h.target_side, h.target, h.side, h.user)
+    )
+    return _set(state, "infatuated", h.target_side, 1, cond)
+
+
 def _set_status(state: BattleState, side, slot, status, cond) -> BattleState:
     """``side``'s party ``slot`` gets ``status`` (counter 0) where ``cond``."""
     state = _set(state, "status", (side, slot), status, cond)
@@ -767,7 +799,17 @@ def _contact_ability(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     # (``hooks.REVEALS_ON``). hooks imports this module, so the import is local.
     from nuzline.engine.hooks import CONTACT_DAMAGE, CONTACT_STATUS, reveal_ability
 
-    state = reveal_ability(state, h.target_side, h.target, CONTACT_STATUS, cond)
+    # Cute Charm (battle_lib.c:4339-4355): the attacker not in love yet and the defender
+    # alive, then the roll and subscript_infatuate.s (BtlCmd_TryAttract fails silently).
+    charm = (
+        (ability == AbilityId.CUTE_CHARM)
+        & hit
+        & _alive(state, h.target_side, h.target)
+        & h.contact_proc
+        & _attractable(state, h.side, h.user, h.target_side, h.target)
+    )
+    state = _set(state, "infatuated", h.side, 1, charm)
+    state = reveal_ability(state, h.target_side, h.target, CONTACT_STATUS, cond | charm)
     state = reveal_ability(state, h.target_side, h.target, CONTACT_DAMAGE, rough)
     return _set_status(state, h.side, h.user, status, cond)
 
@@ -1081,6 +1123,7 @@ def play_hit(
         _screen,
         _brick_break,
         _foresight,
+        _attract,
         _bide,
         _rollout,
     ):

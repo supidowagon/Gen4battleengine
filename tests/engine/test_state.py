@@ -206,6 +206,15 @@ def test_move_protect_is_folded_into_protect_count():
     assert rows["MoveEffectsData.protectSuccessTurns"] == ("protect_count", "mapped")
 
 
+def test_attract_bits_map_to_infatuated():
+    # docs/kaizo/k3b2-rules.md §12: statusVolatile's ATTRACT bits are `infatuated`.
+    rows = {field: (pytree, status) for field, pytree, status in _state_md_rows()}
+    pytree, status = rows["BattleMon.statusVolatile"]
+    assert status == "mapped" and "infatuated" in re.findall(r"\w+", pytree)
+    later = re.search(r"other bits \(([^)]*)\)", STATE_MD.read_text(encoding="utf-8"))
+    assert later and "Attract" not in later.group(1)
+
+
 def test_leads_choose_the_active_slots_before_the_switch_in_effects(tables, names):
     # The leads are the active slots and the switch-in hooks run for them: an
     # Intimidate Shinx leading from opponent slot 1 lowers the player lead's Attack.

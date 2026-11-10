@@ -212,6 +212,11 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     # subscript_protect.s -> BtlCmd_TryProtection (battle_script.c:5149-5190); the block is
     # CheckMoveHitOverrides (battle_controller_player.c:3001-3014; engine/step.py).
     111: ("BATTLE_EFFECT_PROTECT", _E.PROTECT, (0, 0, 0)),
+    # effect_script_0120.s (Attract): a direct TO_DEFENDER effect running
+    # subscript_infatuate.s -> BtlCmd_TryAttract (battle_script.c:5727-5742); the status
+    # check is CHECK_STATUS_STATE_ATTRACT (battle_controller_player.c:2669-2692;
+    # engine/effects.py ``_attract``, engine/step.py).
+    120: ("BATTLE_EFFECT_INFATUATE", _E.ATTRACT, (0, 0, 0)),
     276: ("BATTLE_EFFECT_RAISE_SP_ATK_HIT", _E.SECONDARY_STAT_SELF, (_SPA, 1, 0)),
 }
 
@@ -270,6 +275,9 @@ DECOMP_ABILITY_TO_ID: dict[str, AbilityId] = {
     "Limber": AbilityId.LIMBER,
     "Adaptability": AbilityId.ADAPTABILITY,
     "Solid Rock": AbilityId.SOLID_ROCK,
+    # BattleSystem_TriggerAbilityOnHit (battle_lib.c:4339-4355); Oblivious, which would block
+    # it (subscript_infatuate.s:5), stays unsupported (coverage refuses it).
+    "Cute Charm": AbilityId.CUTE_CHARM,
 }
 
 DECOMP_ITEM_TO_ID: dict[str, ItemId] = {

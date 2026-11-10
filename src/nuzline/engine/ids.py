@@ -59,6 +59,9 @@ class EffectId(IntEnum):
     * ``PROTECT`` (Protect, Detect, ``BATTLE_EFFECT_PROTECT``): zeros; ``BtlCmd_TryProtection``
       succeeds at 2^-n by ``protect_count`` unless the user acts last, and its success blocks
       the foe's ``MoveFlag.PROTECT`` moves for the rest of the turn (``step._use_move``).
+    * ``ATTRACT`` (Attract, ``BATTLE_EFFECT_INFATUATE``): zeros; infatuates a living target of
+      the opposite gender that is not in love yet (``effects._attract``); an infatuated
+      battler is immobilized by ``Outcome.infatuation`` at its status check (``step``).
 
     The proc chance of a ``SECONDARY_*``, ``FLINCH``, ``FAKE_OUT``, ``RAISE_ALL_STATS_HIT`` or
     ``FANG_PARALYZE_FLINCH``
@@ -109,6 +112,7 @@ class EffectId(IntEnum):
     FANG_PARALYZE_FLINCH = 40
     PRESENT = 41
     PROTECT = 42
+    ATTRACT = 43
 
 
 class AbilityId(IntEnum):
@@ -143,6 +147,7 @@ class AbilityId(IntEnum):
     LIMBER = 28
     ADAPTABILITY = 29
     SOLID_ROCK = 30
+    CUTE_CHARM = 31
 
 
 class ItemId(IntEnum):

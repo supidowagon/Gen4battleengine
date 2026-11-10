@@ -420,6 +420,8 @@ class _Turn:
                 options.append(("full_para", (side,), [0, 1]))
             if Status.FREEZE in statuses:
                 options.append(("thaw", (side,), [0, 1]))
+            if self._may_be_in_love(side, actions):
+                options.append(("infatuation", (side,), [0, 1]))
             if actions[side] >= MOVE_ACTIONS or not connected[side]:
                 continue
             move = int(selected_move(tables, state, side, actions[side])[0])
@@ -444,7 +446,7 @@ class _Turn:
                 options.append(("fang_flinch", (side,), [0, 1]))
             target = 1 - side
             defender = int(state.ability[target, state.active[target]])
-            if defender in (AbilityId.STATIC, AbilityId.POISON_POINT):
+            if defender in (AbilityId.STATIC, AbilityId.POISON_POINT, AbilityId.CUTE_CHARM):
                 options.append(("contact_proc", (target, slice(None)), [0, 1]))
             sleep = (
                 effect in (EffectId.STATUS_FOE, EffectId.SECONDARY_STATUS)
@@ -477,6 +479,20 @@ class _Turn:
             if e["kind"] == "hit" and e["active"][side] == mon:
                 statuses.add(int(decode_status(e["status"][side])[0]))
         return statuses
+
+    def _may_be_in_love(self, side: int, actions: tuple[int, int]) -> bool:
+        """The side uses a move and its attract check can run (CHECK_STATUS_STATE_ATTRACT,
+        battle_controller_player.c:2669-2692): it is in love at the start (``infatuated``,
+        carried by the engine: the trace has no volatile bits) or its foe uses Attract."""
+        if actions[side] >= MOVE_ACTIONS:
+            return False
+        if int(self.state.infatuated[side]) != 0:
+            return True
+        foe = 1 - side
+        if actions[foe] >= MOVE_ACTIONS:
+            return False
+        move = int(selected_move(self.tables, self.state, foe, actions[foe])[0])
+        return int(self.tables.move_effect[move]) == EffectId.ATTRACT
 
     def _end_of_turn_states(self, actions: tuple[int, int]) -> list[BattleState]:
         """States whose speeds the end-of-turn order may compare: the start state, with

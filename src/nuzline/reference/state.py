@@ -72,6 +72,7 @@ class RefSide:
     curled: int
     mud_sport: int
     aqua_ring: int
+    infatuated: int
     spikes: int
     toxic_spikes: int
     stealth_rock: int

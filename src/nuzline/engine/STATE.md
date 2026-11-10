@@ -47,8 +47,9 @@ three structs has a row.
 - **statusVolatile** bits mapped: confusion turns -> `confusion`, flinch ->
   `flinched`, bind turns -> `trapped`, recharging -> `recharge`, Foresight ->
   `foresight`, Bide turns -> `bide_turns`, Defense Curl -> `curled`,
-  `VOLATILE_CONDITION_MOVE_LOCKED` -> `locked_move` (with `moveLockedInto`). The
-  other bits (Uproar, Thrash, Attract, Focus Energy, Transform, Rage, Substitute
+  `VOLATILE_CONDITION_MOVE_LOCKED` -> `locked_move` (with `moveLockedInto`), the
+  ATTRACT bits -> `infatuated` (below). The
+  other bits (Uproar, Thrash, Focus Energy, Transform, Rage, Substitute
   flag, Destiny Bond, Mean Look, Nightmare, Curse, Torment) are later (M6); the Substitute flag is implied by `substitute_hp > 0`.
 - **moveEffectsMask** bits mapped: Leech Seed -> `leech_seed`, Water Sport ->
   `water_sport`, Mud Sport -> `mud_sport`, Aqua Ring -> `aqua_ring` (per battler, cleared on switch-out; the
@@ -106,6 +107,15 @@ three structs has a row.
   both (`battle_lib.c:2099-2102`, `:2120`, `:2179-2182`, `:2198`); a bag item and
   Pursuit's pre-switch hit (`BtlCmd_TryPursuit` ends the action without
   `UpdateMoveBuffers`, `battle_script.c:6931`) leave both alone.
+- **statusVolatile ATTRACT -> `infatuated`** (K3b2 Task 7; docs/kaizo/k3b2-rules.md §4(c),
+  §12): `VOLATILE_CONDITION_ATTRACT_0..3` hold `FlagIndex(source)` of the battler the
+  holder is in love with (`BtlCmd_TryAttract`, `src/battle/battle_script.c:5738`). In
+  singles the source is always the other side's active battler, so `infatuated[side]` is
+  0/1. It is cleared with the holder's other volatiles (`step._VOLATILE`) and when the
+  source leaves, by a switch or a faint (`BattleSystem_UpdateAfterSwitch`,
+  `src/battle/battle_lib.c:2088-2092`; `BattleSystem_CleanupFaintedMon`, `:2168-2177`;
+  `step._source_leaves`, which Roar's drag reuses). `SELF_TURN_FLAG_INFATUATED` (a per-action
+  turn flag read only by Destiny Knot, an unsupported item) stays a local.
 - **battleEndFlag -> `over`, `winner`**: `winner` is 0 none, 1 player lost (no
   player Pokemon has HP left; a double KO of both last Pokemon is a draw, played as a
   loss), 2 player won. A player faint alone only records a death.
@@ -192,7 +202,7 @@ three structs has a row.
 | `BattleMon.exp` | — | not needed because experience and level-ups do not change the fight being searched |
 | `BattleMon.personality` | — | not needed because its battle uses (nature, ability slot, gender) are resolved into `PokemonSpec` before `make_state` |
 | `BattleMon.status` | `status`, `status_counter` | mapped |
-| `BattleMon.statusVolatile` | `confusion`, `flinched`, `trapped`, `recharge`, `foresight`, `bide_turns`, `curled`, `locked_move` | mapped |
+| `BattleMon.statusVolatile` | `confusion`, `flinched`, `trapped`, `recharge`, `foresight`, `bide_turns`, `curled`, `locked_move`, `infatuated` | mapped |
 | `BattleMon.OTId` | — | not needed because only obedience and the traded-Pokemon exp bonus read it; the tool assumes an obedient party |
 | `BattleMon.heldItem` | `item` | mapped |
 | `BattleMon.padding007A` | — | not needed because it is padding |

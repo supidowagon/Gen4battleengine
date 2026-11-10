@@ -323,6 +323,7 @@ def supported_state(draw, tables: Tables, names: Names) -> BattleState:
         a["water_sport"][side] = draw(st.integers(0, 1))
         a["mud_sport"][side] = draw(st.integers(0, 1))
         a["aqua_ring"][side] = draw(st.integers(0, 1))
+        a["infatuated"][side] = draw(st.integers(0, 1))
         a["curled"][side] = draw(st.integers(0, 1))
         a["foresight"][side] = draw(st.integers(0, 1))
         a["stealth_rock"][side] = draw(st.integers(0, 1))
@@ -408,6 +409,7 @@ def any_outcome() -> st.SearchStrategy[Outcome]:
         fang_flinch=_flag(sides),
         present=_ints(0, 3, sides),
         protect=_flag(sides),
+        infatuation=_flag(sides),
     )
 
 
@@ -417,8 +419,8 @@ def any_outcome() -> st.SearchStrategy[Outcome]:
 # (Spark, Ice Beam, Flame Wheel), flinch (Headbutt; Thunder Fang, paralysis then flinch), a
 # Speed drop (Bubble), a Speed boost (Rock Polish), a high-crit move (Razor Leaf), a 95 %
 # plain move (Tackle), accuracy / evasion changes before the foe's check (Sand-Attack,
-# Double Team, Mud-Slap), Present (drawn power or heal) and Protect (its chain's 2^-n roll,
-# with a chain of 0-3 drawn for it).
+# Double Team, Mud-Slap), Present (drawn power or heal), Protect (its chain's 2^-n roll,
+# with a chain of 0-3 drawn for it) and Attract (the foe's attract check).
 LAW_MOVES = (
     "Spore",
     "Hypnosis",
@@ -445,6 +447,7 @@ LAW_MOVES = (
     "Thunder Fang",
     "Present",
     "Protect",
+    "Attract",
 )
 # Abilities the outcome relevance reads (contact procs, Steadfast, Simple's and Swift
 # Swim's Speed) or the hit odds read (Compoundeyes, Sand Veil, Snow Cloak), and Rough Skin
@@ -453,6 +456,7 @@ LAW_ABILITIES = (
     AbilityId.STATIC,
     AbilityId.POISON_POINT,
     AbilityId.FLAME_BODY,
+    AbilityId.CUTE_CHARM,
     AbilityId.ROUGH_SKIN,
     AbilityId.LIMBER,
     AbilityId.STEADFAST,

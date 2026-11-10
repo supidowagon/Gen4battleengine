@@ -34,6 +34,10 @@ Encodings:
   ``bide_turns > 0``, else 0), ``curled``, ``mud_sport`` and ``aqua_ring`` are the active battler's
   matching volatile / move-effect state; all are reset like the other volatiles
   (``step._VOLATILE``).
+* ``infatuated`` is the active battler's ``VOLATILE_CONDITION_ATTRACT`` bits: 1 when it is in
+  love with the other side's active battler (in singles the only possible source,
+  ``BtlCmd_TryAttract``, battle_script.c:5738). It is a volatile (cleared when the battler
+  leaves) and is also cleared when its source leaves (``step._source_leaves``).
 * ``trainer_item_count`` is ``aiContext.trainerItemCounts``: the bag's size at battle
   start, never decremented.
 """
@@ -116,6 +120,7 @@ class BattleState(NamedTuple):
     curled: jnp.ndarray  # int8, VOLATILE_CONDITION_DEFENSE_CURL
     mud_sport: jnp.ndarray  # int8, MOVE_EFFECT_MUD_SPORT in moveEffectsMask
     aqua_ring: jnp.ndarray  # int8, MOVE_EFFECT_AQUA_RING in moveEffectsMask
+    infatuated: jnp.ndarray  # int8, VOLATILE_CONDITION_ATTRACT (source: the foe's active)
     # per side [2]
     spikes: jnp.ndarray  # int8, layers
     toxic_spikes: jnp.ndarray  # int8, layers
@@ -249,6 +254,7 @@ LAYOUT: dict[str, tuple[tuple[int, ...], type]] = {
     "curled": (_SIDE, np.int8),
     "mud_sport": (_SIDE, np.int8),
     "aqua_ring": (_SIDE, np.int8),
+    "infatuated": (_SIDE, np.int8),
     "spikes": (_SIDE, np.int8),
     "toxic_spikes": (_SIDE, np.int8),
     "stealth_rock": (_SIDE, np.int8),

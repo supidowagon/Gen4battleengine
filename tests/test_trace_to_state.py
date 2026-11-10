@@ -160,6 +160,8 @@ def _move_events(tables, state, actions, outcome, turn) -> list[dict]:
             stages[side] = [6] * 8
     hp = {(side, active[side]): int(state.hp[side, active[side]]) for side in (0, 1)}
     confusion = [int(state.confusion[0]), int(state.confusion[1])]
+    in_love = [int(state.infatuated[0]), int(state.infatuated[1])]
+    gender = [int(state.gender[side, active[side]]) for side in (0, 1)]
     flinched = [False, False]
     protecting = [False, False]
     events = []
@@ -181,6 +183,8 @@ def _move_events(tables, state, actions, outcome, turn) -> list[dict]:
             continue
         if int(outcome.full_para[side]):
             continue  # fully paralyzed before moving
+        if in_love[side] and int(outcome.infatuation[side]):
+            continue  # immobilized by love: no attack message, no record
         move = int(selected_move(tables, state, side, actions[side])[0])
         if int(tables.move_effect[move]) == EffectId.PROTECT:
             # BtlCmd_TryProtection: the first actor, with a chain of 0 or a passing roll.
@@ -211,6 +215,9 @@ def _move_events(tables, state, actions, outcome, turn) -> list[dict]:
         )
         if not missed and int(tables.move_effect[move]) == EffectId.CONFUSE_FOE:
             confusion[1 - side] = confusion[1 - side] or int(outcome.duration[side])
+        lovers = gender[0] != gender[1] and 2 not in gender
+        if not missed and int(tables.move_effect[move]) == EffectId.ATTRACT and lovers:
+            in_love[1 - side] = 1  # BtlCmd_TryAttract (a repeat changes nothing)
         if missed or int(tables.move_power[move]) == 0:
             continue
         present = int(outcome.present[side])
@@ -450,6 +457,48 @@ def test_protect_rolls_are_inferred(tables, names, tmp_path):
             )
         assert turn.mismatched == ()
     assert [int(t.outcome.protect[0]) for t in turns[:3]] == [1, 0, 1]
+
+
+def test_infatuation_rolls_are_inferred(tables, names, tmp_path):
+    # Monferno's Attract (in Leer's slot, its gender set opposite to Geodude's) makes the
+    # slower Geodude fall in love; it is immobilized on that turn (no PP spent, no record),
+    # moves on the next and is immobilized again on the third. The trace has no volatile
+    # bits: the converter replays both values of the roll (the engine carries `infatuated`).
+    trainer = next(t for t in load_trainers(INTERMEDIATE) if t.id == ROARK_ID)
+    geodude = build_trainer_party(trainer, IntermediateData(INTERMEDIATE))[0]
+    assert geodude.gender != 2
+    mine = "female" if geodude.gender == 0 else "male"
+    text = PARTY.read_text(encoding="utf-8").replace(
+        '"Scratch", "Leer",', '"Scratch", "Attract",', 1
+    )
+    text = text.replace('gender = "male"', f'gender = "{mine}"', 1)
+    party = tmp_path / "attract_party.toml"
+    party.write_text(text, encoding="utf-8")
+
+    def love(k, **hits):
+        return _outcome(**hits)._replace(infatuation=jnp.asarray([0, k], jnp.int8))
+
+    script = [
+        ((LEER, ROCK_THROW), love(1)),
+        ((EMBER, ROCK_THROW), love(0, p_roll=4, o_roll=3)),
+        ((EMBER, ROCK_THROW), love(1, p_roll=5)),
+    ]
+    records, states = _engine_trace(tables, names, script, (0, 0), party)
+    assert [int(s.infatuated[1]) for s in states] == [0, 1, 1, 1]
+    assert int(states[-1].hp[1, 0]) > 0
+    hits = [(r["turn"], r["attacker"]) for r in records if r["kind"] == "hit"]
+    assert hits == [(1, 0), (1, 1), (2, 0)]
+    pp = [int(s.pp[1, 0, ROCK_THROW]) for s in states]
+    assert pp[0] == pp[1] == pp[2] + 1 == pp[3] + 1
+    turns = convert(_bundle(tmp_path, names, records, party), tables, names)
+    assert len(turns) == len(states)
+    for i, (turn, expected) in enumerate(zip(turns, states)):
+        for name in BattleState._fields:
+            assert np.array_equal(getattr(turn.state, name), getattr(expected, name)), (
+                f"turn {i} field {name}"
+            )
+        assert turn.mismatched == ()
+    assert [int(t.outcome.infatuation[1]) for t in turns[:3]] == [1, 0, 1]
 
 
 def test_protect_roll_ignores_stale_move_end_records(tables, names, tmp_path):

@@ -32,7 +32,10 @@ items) and plan 1b (Task 2b: trainer items; Task 3: Roark's AI flags) implement:
   here, and in the pool and prep both ways: a player candidate's move against the
   opponent's lowest Defense, and an opponent's move against a candidate's own Defense.
   ``effect_script_0007.s``'s Damp branch is never met: Damp is an unsupported ability, so
-  a Damp holder on either side is refused. Reflect and Light Screen are modelled
+  a Damp holder on either side is refused. Likewise ``subscript_infatuate.s``'s Oblivious
+  branch (Attract, Cute Charm) and the infatuation cures (Oblivious, Mental Herb) and Destiny
+  Knot: Oblivious, Mental Herb and Destiny Knot are unsupported, so a holder on either side
+  is refused (pool and prep too). Reflect and Light Screen are modelled
   (``EffectId.REFLECT``, ``EffectId.LIGHT_SCREEN``, ``effects._screen``). Moves the
   tables map to ``UNSUPPORTED`` include every move that sets weather, Tailwind or Trick
   Room: the engines' ``CheckFieldConditions`` pass (``step.field_conditions``) counts

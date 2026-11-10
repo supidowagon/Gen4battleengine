@@ -6,8 +6,9 @@ lists. Per-hit fields are ``[side, hit_index]`` with up to 5 hits; per-action
 fields are ``[side]``. ``secondary`` is indexed by the attacking side (its own
 move's secondary effect; Thunder Fang's paralysis roll); ``fang_flinch`` by the
 attacking side too (Thunder Fang's second roll, its flinch), ``present`` (Present's
-power or heal) and ``protect`` (the user's Protect / Detect roll); ``contact_proc`` by the
-defending side (its contact ability); ``duration`` by the acting (inflicting) side, and it
+power or heal), ``protect`` (the user's Protect / Detect roll) and ``infatuation`` (the
+moving side's attract check, 1 = immobilized by love); ``contact_proc`` by the
+defending side (its contact ability: Static, Poison Point, Flame Body, Cute Charm); ``duration`` by the acting (inflicting) side, and it
 is the counter value the decomp's ``Random`` command stores for that side's move
 (``sample_outcome``).
 
@@ -76,6 +77,7 @@ class Outcome(NamedTuple):
     fang_flinch: jnp.ndarray  # int8[2], Thunder Fang's flinch roll (secondary is its paralysis)
     present: jnp.ndarray  # int8[2], Present: 0/1/2 = power 40/80/120, PRESENT_HEAL = the heal
     protect: jnp.ndarray  # int8[2], 1 = the Protect / Detect roll passes (PROTECT_RATES)
+    infatuation: jnp.ndarray  # int8[2], 1 = immobilized by love (RandNext() & 1 == 0)
 
 
 def empty_outcome() -> Outcome:
@@ -101,6 +103,7 @@ def empty_outcome() -> Outcome:
         fang_flinch=sides,
         present=sides,
         protect=sides + 1,
+        infatuation=sides,
     )
 
 
@@ -418,5 +421,11 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions) -> Outcome:
         # chain broken by another move is folded into protect_count, step._use_move).
         protect=jax.random.randint(jax.random.fold_in(key, 18), per_side, 0, 65536, dtype=_I32)
         <= jnp.asarray(PROTECT_RATES, _I32)[jnp.clip(state.protect_count.astype(_I32), 0, 3)],
+        # CHECK_STATUS_STATE_ATTRACT (battle_controller_player.c:2669-2692): RandNext() & 1
+        # nonzero moves, zero is immobilized (exact: a mask, not a modulo).
+        infatuation=(
+            jax.random.randint(jax.random.fold_in(key, 19), per_side, 0, 65536, dtype=_I32) & 1
+        )
+        == 0,
     )
     return Outcome(*(jnp.asarray(f).astype(_I8) for f in outcome))
