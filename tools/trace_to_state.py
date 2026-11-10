@@ -335,21 +335,41 @@ class _Turn:
     def fail(self, message: str) -> TraceMismatch:
         return TraceMismatch(f"turn {self.index}: {message}")
 
-    def action_choices(self, side: int) -> list[int]:
-        state, after = self.state, self.after
-        mon = int(state.active[side])
-        drop = np.asarray(state.pp[side, mon], np.int32) - after["pp"][side, mon]
+    def _used_slots(self, side: int) -> np.ndarray:
+        """The move slots of the side's start-of-turn active Pokemon whose PP dropped."""
+        mon = int(self.state.active[side])
+        drop = np.asarray(self.state.pp[side, mon], np.int32) - self.after["pp"][side, mon]
         used = np.flatnonzero(drop > 0)
         if used.size > 1:
             raise self.fail(f"side {side}: PP dropped in move slots {used.tolist()}")
+        return used
+
+    def _roared(self, side: int) -> bool:
+        """The foe used Roar / Whirlwind this turn (a PP drop on one), so the side's active
+        Pokemon may have been dragged out rather than switched."""
+        used = self._used_slots(1 - side)
+        if used.size == 0:
+            return False
+        move = int(self.state.moves[1 - side, int(self.state.active[1 - side]), int(used[0])])
+        return int(self.tables.move_effect[move]) == EffectId.ROAR
+
+    def action_choices(self, side: int) -> list[int]:
+        state, after = self.state, self.after
+        mon = int(state.active[side])
+        used = self._used_slots(side)
         if used.size == 1:
             return [int(used[0])]
+        legal = np.asarray(legal_actions(self.tables, state, side))
         if int(after["active"][side]) != mon and int(after["hp"][side, mon]) > 0:
-            return [MOVE_ACTIONS + int(after["active"][side])]
-        # It did not get to use a move: every legal move, and the trainer's bag.
-        legal = np.asarray(legal_actions(self.tables, state, side))[:MOVE_ACTIONS]
-        choices = [int(a) for a in np.flatnonzero(legal)]
-        if side == 1:
+            if not self._roared(side):
+                return [MOVE_ACTIONS + int(after["active"][side])]
+            # A foe's Roar drags the Pokemon out (step._use_move) and the newcomer does not act:
+            # a move that never ran, or a switch the drag undid. Every legal action.
+            choices = [int(a) for a in np.flatnonzero(legal)]
+        else:
+            # It did not get to use a move: every legal move.
+            choices = [int(a) for a in np.flatnonzero(legal[:MOVE_ACTIONS])]
+        if side == 1:  # and the trainer's bag
             items = np.asarray(usable_trainer_items(self.tables, state, 1))
             choices += [FIRST_ITEM_ACTION + int(k) for k in np.flatnonzero(items)]
         return choices
@@ -522,6 +542,11 @@ class _Turn:
                 # and means nothing (ties go to the first candidate; ``secondary`` is listed
                 # first, so each of its values meets 0 before 1 and 2).
                 options.append(("tri_attack", (side,), [0, 1, 2]))
+            if effect == EffectId.ROAR:
+                # Roar's level check (a user below its target's level) and its pick among the
+                # target side's eligible bench (Outcome.roar_level, roar_target): they show as
+                # the foe's new active Pokemon, or none on a failure.
+                options += self._roar_options(side, actions)
             if effect == EffectId.FANG_PARALYZE_FLINCH:
                 # Thunder Fang's second roll (Outcome.fang_flinch): a flinch shows only as the
                 # target's missing move.
@@ -561,6 +586,25 @@ class _Turn:
             out.append(o)
         return out
 
+    def _roar_options(self, side: int, actions: tuple[int, int]) -> list[tuple[str, tuple, list]]:
+        """The ``roar_level`` / ``roar_target`` values to replay for the side's Roar: its target
+        is the foe's active Pokemon or the one the foe switches in (a switch goes first)."""
+        state, foe = self.state, 1 - side
+        target = int(state.active[foe])
+        if MOVE_ACTIONS <= actions[foe] < FIRST_ITEM_ACTION:
+            target = actions[foe] - MOVE_ACTIONS
+        bench = [
+            k
+            for k in range(SLOTS)
+            if k != target and int(state.species[foe, k]) and int(state.hp[foe, k])
+        ]
+        out: list[tuple[str, tuple, list]] = []
+        if int(state.level[side, int(state.active[side])]) < int(state.level[foe, target]):
+            out.append(("roar_level", (side,), [1, 0]))
+        if len(bench) >= 2:
+            out.append(("roar_target", (side,), list(range(len(bench)))))
+        return out
+
     def _statuses(self, side: int) -> set[int]:
         """The statuses the side's start-of-turn active mon has at any point the trace
         shows: at the start, in a ``hit`` record and in the next record. A status
@@ -596,7 +640,9 @@ class _Turn:
                 active[side] = actions[side] - MOVE_ACTIONS
         switched = self.state._replace(active=jnp.asarray(active))
         shown = {name: self.after[name] for name in ("status", "stages")}
-        return [self.state, switched, _overlay(switched, shown)]
+        # The Pokemon on the field in the next record: a Roar's drag (or a replacement).
+        ended = self.state._replace(active=jnp.asarray(self.after["active"]))
+        return [self.state, switched, _overlay(switched, shown), _overlay(ended, shown)]
 
     def _acted(self, side: int) -> bool:
         return any(e["kind"] == "move_end" and e["attacker"] == side for e in self.events) or any(

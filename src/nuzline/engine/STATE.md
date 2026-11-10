@@ -435,9 +435,9 @@ three structs has a row.
 | `BattleContext.multiHitAccuracyCheck` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
 | `BattleContext.clearVolatileStatus` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
 | `BattleContext.selectedPartySlot` | — | not needed because the switch target comes from the action and is written to `active` inside `step` |
-| `BattleContext.switchedPartySlot` | — | not needed because the switch target comes from the action and is written to `active` inside `step` |
+| `BattleContext.switchedPartySlot` | — | not needed because the switch target comes from the action (or, for Roar's drag, from `Outcome.roar_target` inside `step._use_move`) and is written to `active` inside `step` |
 | `BattleContext.aiSwitchedPartySlot` | — | not needed because the switch target comes from the action and is written to `active` inside `step` |
-| `BattleContext.battlerActions` | — | not needed because it is reset every turn and `step` resolves a whole turn |
+| `BattleContext.battlerActions` | — | not needed because it is reset every turn and `step` resolves a whole turn (the MOVE_END UpdateAfterSwitch writes for a Pokemon Roar drags in is the turn's `dragged` event, which skips its action in `step._execute_actions`) |
 | `BattleContext.battlerActionOrder` | — | not needed because it is reset every turn and `step` resolves a whole turn |
 | `BattleContext.monSpeedOrder` | — | not needed because it is reset every turn and `step` resolves a whole turn |
 | `BattleContext.monSpeedValues` | — | later (M6) |

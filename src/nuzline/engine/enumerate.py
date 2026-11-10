@@ -64,7 +64,8 @@ of the turn:
 * ``speed_tie``: the two orders ``order.action_order`` gives under ``speed_tie`` 0 and 1
   differ (it is read only there: ``player_second``'s ``RandNext() & 1``, battle_lib.c:1445).
 * ``end_speed_tie``: the effective speeds after the actions can be equal
-  (step.py:663-673): each side's possible end speeds cover every Speed stage when a
+  (step.py:663-673; a foe's Roar can bring any living party member in, see ``roar_level``):
+  each side's possible end speeds cover every Speed stage when a
   stage change is possible this turn (a Speed stat effect, AncientPower, Curse, a
   flinched Steadfast), paralysis when it can be inflicted, and the
   neutral speed of a fainted battler (``_faint_check`` resets stages and status). A
@@ -89,8 +90,19 @@ of the turn:
   rate 0xFFFF never fails: a single value) and acts first in the branch (the battler acting
   last fails without the roll mattering, ``BtlCmd_TryProtection``). A success stops the
   foe's blockable move, so ``_protect_reads`` gates that move's own reads on it.
-* ``shed_skin[d]``: side ``d``'s active or incoming Pokemon has Shed Skin
+* ``shed_skin[d]``: side ``d``'s active or incoming Pokemon has Shed Skin, or the foe uses
+  Roar and a living Pokemon of side ``d`` has it (the drag can bring it in)
   (``step._turn_end_ability``; over-approximate: it only rolls with a status and HP).
+* ``roar_level[s]``: ``s`` uses Roar / Whirlwind (``step._use_move``), its level is lower than
+  its target's (the foe's active Pokemon or the one it switches in: ``outcome.roar_levels``;
+  at a higher or equal level ``BattleSystem_CanWhirlwind`` draws nothing) and the target side
+  has an eligible bench Pokemon (with none, ``BtlCmd_TryWhirlwind`` fails before the check).
+  ``roar_target[s]``: ``s`` uses Roar and the target side has two or more eligible bench
+  Pokemon (with one, the rejection loop's pick is forced). Both are the move's own reads
+  (its hit, the first mover's sure flinch, a sure Protect), and ``roar_target`` also needs
+  ``roar_level`` to pass (``_roar_reads``). A drag also changes what the end of the turn
+  reads: ``end_speed_tie`` counts the speeds of every living Pokemon of the dragged side
+  (stage 0, paralyzed or not) and ``shed_skin`` its holders (above).
 * ``quick_claw[s]``: this turn's ``speedRand`` bit of side ``s`` (``step``: the end-of-turn
   order reads it with the battler on the field after the actions, and ``step.qc_kept`` stores
   it for the next turn while a living Quick Claw holder is active or can replace a fainted
@@ -170,10 +182,13 @@ from nuzline.engine.outcome import (
     PRESENT_CUTS,
     PRESENT_HEAL,
     PROTECT_RATES,
+    ROAR_LEVEL_VALUES,
     Outcome,
     crit_odds,
     empty_outcome,
     hit_thresholds,
+    roar_inputs,
+    roar_levels,
 )
 from nuzline.engine.state import STAGE_MAX, STAGE_MIN, BattleState
 
@@ -220,6 +235,7 @@ class Reads(NamedTuple):
     tri_attack: jnp.ndarray  # its move runs Tri Attack: its status draw needs the proc
     protect_sure: jnp.ndarray  # it uses Protect and reaches TryProtection whatever the rolls
     protect_blocks: jnp.ndarray  # its move is stopped by a protecting foe (protect_blocks)
+    roar: jnp.ndarray  # it uses Roar: its slot pick needs the level check to pass
     confused_own: jnp.ndarray  # it moves confused (counter >= 2) at the start
     confused_by_foe: jnp.ndarray  # bool[2, 2]: it moves after a foe move that confuses
     para_own: jnp.ndarray  # it moves paralyzed at the start
@@ -245,6 +261,8 @@ class OutcomeLaws(NamedTuple):
     reads: Reads  # the conditional reads' inputs
     damage: jnp.ndarray  # int32[2, 2, ROLLS]: per side, hit_damage_table at the turn start
     protect_count: jnp.ndarray  # int32[2]: the turn-start chain (protect's law, 0-3)
+    roar_level_weight: jnp.ndarray  # int32[2]: of ROAR_LEVEL_VALUES, how many pass (roar_level)
+    roar_bench: jnp.ndarray  # int32[2]: the eligible bench Pokemon Roar picks from (roar_target)
     compress: jnp.ndarray  # bool[2, 2, MAX_HITS]: [branch, side, hit] uses damage classes
 
 
@@ -292,13 +310,15 @@ def _holds_item(tables: Tables, state: BattleState, actions, items) -> jnp.ndarr
     return now | later
 
 
-def _end_speeds(tables: Tables, state: BattleState, actions, side, stage_free, para_free):
-    """``(int32[27], bool[27])``: the effective speeds ``side`` can have after the
+def _end_speeds(tables: Tables, state: BattleState, actions, side, stage_free, para_free, dragged):
+    """``(int32[39], bool[39])``: the effective speeds ``side`` can have after the
     actions (``end_of_turn_order`` on the post-action state, step.py:663-673) and which
     of them are possible. Grid: Speed stage -6..6 x paralyzed or not of the Pokemon
     active after the actions, plus its neutral speed (a faint resets stages and
     status, step.py:477-510). A stage other than the start one needs ``stage_free``,
-    a paralysis state other than the start one ``para_free``."""
+    a paralysis state other than the start one ``para_free``. Where ``dragged`` (the foe
+    can Roar this side), every living party member at stage 0, paralyzed or not: the
+    Pokemon the drag brings in (``InitBattleMon`` resets its stages)."""
     switching = is_switch(actions[side])
     mon = jnp.where(switching, actions[side] - MOVE_ACTIONS, state.active[side]).astype(
         state.active.dtype
@@ -309,8 +329,18 @@ def _end_speeds(tables: Tables, state: BattleState, actions, side, stage_free, p
     paras = jnp.tile(jnp.array([False, True]), STAGE_MAX - STAGE_MIN + 1)
     stages = jnp.concatenate([stages, jnp.zeros((1,), _I32)])
     paras = jnp.concatenate([paras, jnp.zeros((1,), bool)])
+    possible = (stage_free | (stages == stage0)) & (para_free | (paras == para0))
+    possible = possible | (jnp.arange(stages.shape[0]) == stages.shape[0] - 1)  # fainted
+    mons = jnp.full(stages.shape, mon, state.active.dtype)
+    # A foe's Roar: any living party member, at stage 0, paralyzed or not.
+    slots = jnp.arange(state.hp.shape[1])
+    living = (state.species[side] != 0) & (state.hp[side] > 0)
+    mons = jnp.concatenate([mons, jnp.repeat(slots, 2).astype(state.active.dtype)])
+    stages = jnp.concatenate([stages, jnp.zeros((2 * slots.shape[0],), _I32)])
+    paras = jnp.concatenate([paras, jnp.tile(jnp.array([False, True]), slots.shape[0])])
+    possible = jnp.concatenate([possible, jnp.asarray(dragged) & jnp.repeat(living, 2)])
 
-    def speed(stage, para):
+    def speed(mon, stage, para):
         s = state._replace(
             active=state.active.at[side].set(mon),
             stages=state.stages.at[side, Stat.SPE].set(stage.astype(state.stages.dtype)),
@@ -320,10 +350,7 @@ def _end_speeds(tables: Tables, state: BattleState, actions, side, stage_free, p
         )
         return effective_speed(tables, s, side)
 
-    speeds = jax.vmap(speed)(stages, paras)
-    possible = (stage_free | (stages == stage0)) & (para_free | (paras == para0))
-    fainted = jnp.arange(stages.shape[0]) == stages.shape[0] - 1
-    return speeds, possible | fainted
+    return jax.vmap(speed)(mons, stages, paras), possible
 
 
 def _branch_masks(foe_first, first_self, base: dict) -> dict:
@@ -446,6 +473,10 @@ INPUT_CLAUSE_EFFECTS = (
     _E.FANG_PARALYZE_FLINCH,
     # A burn (the attacker's physical non-Guts hit) or any status (Guts): the status clause.
     _E.TRI_ATTACK,
+    # Drags the side's Pokemon out (step._use_move): the hit would be a newcomer's, but the
+    # dragged battler never acts after it this turn (UpdateAfterSwitch ends its action), so
+    # no such hit exists; the roar clause keeps one uncompressed anyway.
+    _E.ROAR,
     # The foe's own types (effects._camouflage): the type chart of the side's later hit
     # (damage._finish) and the Rock Sp. Def boost in sand: the camouflage clause.
     _E.CAMOUFLAGE,
@@ -566,6 +597,7 @@ NON_TABLE_DAMAGE_EFFECTS = (
     _E.PROTECT,  # a status move: no damage
     _E.ATTRACT,  # a status move: no damage
     _E.CAMOUFLAGE,  # a status move: no damage
+    _E.ROAR,  # a status move: no damage
     # Its table power is 0: its damage is the called move's. outcome_laws reads the called
     # move (order.called_move), whose own effect decides (Tri Attack's is a table hit), so
     # this entry only keeps an unresolved Nature Power (unknown terrain) uncompressed.
@@ -591,7 +623,9 @@ def damage_inputs_can_change(tables: Tables, state: BattleState, actions, foe_fi
       it matters (a burn on a physical non-Guts move, any status under Guts, Thunder Fang's
       paralysis and Tri Attack's statuses included), the foe's screen for this category, a
       sport for this move type, or the foe's own types (Camouflage: the type chart and the
-      Rock Sp. Def boost read them);
+      Rock Sp. Def boost read them); or the side's active Pokemon itself (the foe's Roar
+      drags it out; no hit of a dragged battler follows in Gen 4, its action ends, so this
+      roar clause is conservative);
     * **HP**: Flail's power band and Overgrow / Blaze / Torrent (damage.py :6819-6837)
       read the user's HP: any earlier foe move or earlier hit of the same move;
     * **contact**: on a later hit, the foe's Flame Body burn or Static / Poison Point
@@ -665,6 +699,7 @@ def damage_inputs_can_change(tables: Tables, state: BattleState, actions, foe_fi
         | ((foe_effect == _E.MUD_SPORT) & (move_type == Type.ELECTRIC))
         | ((foe_effect == _E.WATER_SPORT) & (move_type == Type.FIRE))
         | (foe_effect == _E.CAMOUFLAGE)
+        | (foe_effect == _E.ROAR)
         | hp_sensitive
     )
     foe_action = live & (is_switch(actions)[::-1] | is_item(actions)[::-1] | foe_move)
@@ -871,14 +906,36 @@ def outcome_laws(
         | lum
         | plucks
     )
+    # Roar / Whirlwind (step._use_move): BtlCmd_TryWhirlwind draws nothing with no eligible
+    # bench Pokemon, BattleSystem_CanWhirlwind nothing for a user of at least the target's
+    # level (outcome.roar_inputs, roar_levels), and the pick is forced with one.
+    roar = uses_move & (effect == _E.ROAR)
+    roar_weight, roar_bench = roar_inputs(state, actions)
+    user_level, target_level = roar_levels(state, actions)
+    roar_level = roar & (user_level < target_level) & (roar_bench >= 1)
+    roar_target = roar & (roar_bench >= 2)
+    dragged = roar[::-1]  # the foe can drag this side's Pokemon out
+    if loose:
+        # The brute force: both draws whenever the side uses Roar, whatever the levels and the
+        # bench (the pick's law is then over max(bench, 1) values), and every living party
+        # member's speed on both sides whenever anyone uses it.
+        roar_level = roar_target = roar
+        dragged = jnp.broadcast_to(jnp.any(roar), (2,))
     speeds = [
-        _end_speeds(tables, state, actions, side, stage_free[side], para_free[side])
+        _end_speeds(tables, state, actions, side, stage_free[side], para_free[side], dragged[side])
         for side in (0, 1)
     ]
     (speed0, ok0), (speed1, ok1) = speeds
     end_speed_tie = live & jnp.any(
         ok0[:, None] & ok1[None, :] & (speed0[:, None] == speed1[None, :])
     )
+    # Shed Skin of the Pokemon on the field at the turn's end: the active or incoming one, or
+    # any living one a foe's Roar can drag in.
+    living = (state.species != 0) & (state.hp > 0)
+    shed_party = jnp.any(living & (state.ability == AbilityId.SHED_SKIN), axis=1)
+    shed_skin = live & (_holds(state, actions, (AbilityId.SHED_SKIN,)) | (dragged & shed_party))
+    if loose:
+        shed_skin = shed_skin | (live & jnp.any(roar) & jnp.any(shed_party))
 
     never = jnp.zeros((2,), bool)
     # Quick Claw (step.qc_kept, end_of_turn_order): a living holder anywhere in the party.
@@ -908,12 +965,14 @@ def outcome_laws(
             quick_claw=quick_claw,
             end_speed_tie=end_speed_tie,
             magnitude=uses_move & (effect == _E.MAGNITUDE),
-            shed_skin=live & _holds(state, actions, (AbilityId.SHED_SKIN,)),
+            shed_skin=shed_skin,
             fang_flinch=m["fang_flinch"],
             present=uses_move & (effect == _E.PRESENT),
             protect=m["protect"],
             infatuation=m["infatuation"],
             tri_attack=m["tri_attack"],
+            roar_level=roar_level,
+            roar_target=roar_target,
         )
 
     both = zip(branch_relevant(branches[0]), branch_relevant(branches[1]), strict=True)
@@ -976,6 +1035,7 @@ def outcome_laws(
         tri_attack=off if loose else uses_move & (effect == _E.TRI_ATTACK) & (chance != 0),
         protect_sure=off if loose else reach & (effect == _E.PROTECT),
         protect_blocks=off if loose else uses_move & protect_blocks(tables, moves, False),
+        roar=off if loose else roar,
         confused_own=base["confused_own"],
         confused_by_foe=jnp.stack([m["confused_by_foe"] for m in branches]),
         para_own=base["para_own"],
@@ -1020,6 +1080,8 @@ def outcome_laws(
         damage=damage.astype(_I32),
         compress=compress,
         protect_count=state.protect_count.astype(_I32),
+        roar_level_weight=roar_weight,
+        roar_bench=roar_bench,
     )
 
 
@@ -1130,6 +1192,21 @@ def _quick_claw(laws: OutcomeLaws, side: int) -> _Law:
     return [0, 1], [n - 1, 1], n
 
 
+def _roar_level(laws: OutcomeLaws, side: int) -> _Law:
+    # BattleSystem_CanWhirlwind (battle_lib.c:3072-3086): RandNext() & 0xFF, exact; 1 = passes
+    # (outcome.roar_level_passes).
+    k = int(laws.roar_level_weight[side])
+    return [0, 1], [ROAR_LEVEL_VALUES - k, k], ROAR_LEVEL_VALUES
+
+
+def _roar_target(laws: OutcomeLaws, side: int) -> _Law:
+    # BtlCmd_TryWhirlwind (battle_script.c:5303-5311): the rejection loop over
+    # RandNext() % partyCount, uniform over the eligible bench by the % n convention (exact:
+    # slot i weighs #{u16 r : r % partyCount == i}); the value is the pick's rank.
+    n = max(int(laws.roar_bench[side]), 1)
+    return list(range(n)), [1] * n, n
+
+
 def _zero(laws: OutcomeLaws, side: int) -> _Law:
     return [0], [1], 1
 
@@ -1157,6 +1234,8 @@ _LAWS = {
     # CHECK_STATUS_STATE_ATTRACT (bcp.c:2669-2692): RandNext() & 1, exact; 1 = immobilized.
     "infatuation": _coin,
     "tri_attack": _tri_attack,
+    "roar_level": _roar_level,
+    "roar_target": _roar_target,
 }
 
 
@@ -1305,8 +1384,8 @@ def _move_reads(laws: OutcomeLaws, branch: Branch, plan: ReadPlan) -> None:
     """The reads of rules §10.3 items 1-3 on the implemented mechanics:
 
     * a move's own reads (its crits, rolls, secondary rolls, the foe's contact rolls on
-      its hits, its hit count, duration, Magnitude level, Thunder Fang's flinch roll and
-      Present's draw) need its accuracy roll to hit: every one sits behind ``play_hit``'s
+      its hits, its hit count, duration, Magnitude level, Thunder Fang's flinch roll,
+      Present's draw and Roar's level check and pick) need its accuracy roll to hit: every one sits behind ``play_hit``'s
       ``landed`` (``connected``, step._use_move); Pursuit's pre-switch hit reads them with
       no roll, so it is not gated (``Reads.hit_gated``). A confusion self-hit's
       ``roll[s, 0]`` is another path;
@@ -1356,7 +1435,16 @@ def _move_reads(laws: OutcomeLaws, branch: Branch, plan: ReadPlan) -> None:
                 plan.path(elem, "move", *hits)
             if i > 0 or bool(rel.crit[s, 0]):  # roll[s, 0]: damage, or a self-hit below
                 plan.path(("roll", (s, i)), "move", *hits)
-        for name in ("n_hits", "magnitude", "fang_flinch", "present", "protect", "tri_attack"):
+        for name in (
+            "n_hits",
+            "magnitude",
+            "fang_flinch",
+            "present",
+            "protect",
+            "tri_attack",
+            "roar_level",
+            "roar_target",
+        ):
             plan.path((name, (s,)), "move", *hits)
         proc = [procs(s)] if bool(reads.proc_gated[s]) else []
         plan.path(("duration", (s,)), "move", *hits, *proc)
@@ -1414,6 +1502,8 @@ def _move_reads(laws: OutcomeLaws, branch: Branch, plan: ReadPlan) -> None:
             "present",
             "protect",
             "tri_attack",
+            "roar_level",
+            "roar_target",
         ):
             plan.gate((name, (q,)), cond)
 
@@ -1457,7 +1547,8 @@ def _protect_reads(laws: OutcomeLaws, branch: Branch, plan: ReadPlan) -> None:
     connect, after its accuracy roll, whose class is then not read either: the "protected"
     message replaces the miss). So the move's own reads (its "move" path: hit, crits, rolls,
     secondary rolls, the protecting side's contact rolls on its hits, its hit count,
-    duration, Magnitude level, fang flinch, Present's draw) also need the Protect to fail.
+    duration, Magnitude level, fang flinch, Present's draw, Roar's level check and pick) also
+    need the Protect to fail.
     The second mover's status checks (sleep, thaw, confusion and its self-hit roll, full
     paralysis) come before the move and are not gated."""
     first, q = branch.first, 1 - branch.first
@@ -1481,7 +1572,16 @@ def _protect_reads(laws: OutcomeLaws, branch: Branch, plan: ReadPlan) -> None:
         ):
             optional = e == ("roll", (q, 0)) and ("crit", (q, 0)) not in plan
             plan.restrict(e, "move", cond, required=not optional)
-    for name in ("n_hits", "duration", "magnitude", "fang_flinch", "present", "tri_attack"):
+    for name in (
+        "n_hits",
+        "duration",
+        "magnitude",
+        "fang_flinch",
+        "present",
+        "tri_attack",
+        "roar_level",
+        "roar_target",
+    ):
         plan.restrict((name, (q,)), "move", cond)
 
 
@@ -1521,6 +1621,27 @@ def _tri_attack_reads(laws: OutcomeLaws, branch: Branch, plan: ReadPlan) -> None
         for name, status in (("thaw", Status.FREEZE), ("full_para", Status.PARALYSIS)):
             cond = Condition((elem,), _tri_value(status))
             plan.restrict((name, (1 - s,)), "status_inflicted", cond, required=False)
+
+
+def _passes(v: np.ndarray) -> np.ndarray:
+    # 1: the level check passed. SKIPPED (not drawn: no check) fails nothing, but the builder
+    # adds this condition only where roar_level is drawn whenever the pick is reached.
+    return v == 1
+
+
+@register_reads
+def _roar_reads(laws: OutcomeLaws, branch: Branch, plan: ReadPlan) -> None:
+    """The (roar_level, roar_target) joint factor (rules §6(b)): ``BtlCmd_TryWhirlwind``
+    (battle_script.c:5298-5311) runs its rejection loop only after
+    ``BattleSystem_CanWhirlwind`` passed, so where the level check is drawn
+    (``roar_level[s]`` relevant: a lower-levelled user), ``roar_target[s]``'s "move" path also
+    needs ``roar_level[s] == 1``. Both carry the same move conditions (``_move_reads``,
+    ``_protect_reads``), so the level check is drawn in every row that reaches the pick."""
+    for s in (0, 1):
+        level, target = ("roar_level", (s,)), ("roar_target", (s,))
+        if not bool(laws.reads.roar[s]) or target not in plan or level not in plan:
+            continue
+        plan.restrict(target, "move", Condition((level,), _passes))
 
 
 def damage_class_law(

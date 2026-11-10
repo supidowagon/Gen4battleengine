@@ -159,6 +159,9 @@ SHARED_MOVES = (
     # unchanged); supported_state draws a terrain whenever one is known.
     "Nature Power",
     "Camouflage",
+    # K3b2 Task 11: Roar and Whirlwind (status moves: the damaging pools are unchanged).
+    "Roar",
+    "Whirlwind",
 )
 
 
@@ -431,6 +434,8 @@ def any_outcome() -> st.SearchStrategy[Outcome]:
         protect=_flag(sides),
         infatuation=_flag(sides),
         tri_attack=_ints(0, 2, sides),
+        roar_level=_flag(sides),
+        roar_target=_ints(0, 4, sides),
     )
 
 
@@ -442,7 +447,8 @@ def any_outcome() -> st.SearchStrategy[Outcome]:
 # plain move (Tackle), accuracy / evasion changes before the foe's check (Sand-Attack,
 # Double Team, Mud-Slap), Present (drawn power or heal), Protect (its chain's 2^-n roll,
 # with a chain of 0-3 drawn for it), Attract (the foe's attract check), Tri Attack (its
-# status draw), Nature Power (its call on the drawn terrain) and Camouflage (``_draw_terrain``).
+# status draw), Nature Power (its call on the drawn terrain), Camouflage (``_draw_terrain``) and
+# Roar (its level check and pick).
 LAW_MOVES = (
     "Spore",
     "Hypnosis",
@@ -473,6 +479,7 @@ LAW_MOVES = (
     "Tri Attack",
     "Nature Power",
     "Camouflage",
+    "Roar",
 )
 # Abilities the outcome relevance reads (contact procs, Steadfast, Simple's and Swift
 # Swim's Speed) or the hit odds read (Compoundeyes, Sand Veil, Snow Cloak), and Rough Skin

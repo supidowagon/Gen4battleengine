@@ -413,6 +413,24 @@ def decomp_law(tables, state, actions, name: str, index: tuple) -> dict[int, Fra
         return coin(Fraction(3, 10))
     if name == "tri_attack":  # effect_script_0036.s Random 2, 3: RandNext() % 3 (% n uniform)
         return {k: Fraction(1, 3) for k in range(3)}
+    if name in ("roar_level", "roar_target"):
+        # The user and its target: the foe's active Pokemon, or the one it switches in.
+        foe = 1 - side
+        switching = 4 <= int(actions[foe]) < 10
+        mon = int(actions[foe]) - 4 if switching else int(state.active[foe])
+        if name == "roar_level":
+            # BattleSystem_CanWhirlwind (battle_lib.c:3080): (((RandNext() & 0xFF) * (La + Ld))
+            # >> 8) + 1 > Ld / 4, each of the 256 values equally likely.
+            la = int(state.level[side, int(state.active[side])])
+            ld = int(state.level[foe, mon])
+            passes = sum(((r * (la + ld)) >> 8) + 1 > ld // 4 for r in range(256))
+            return {1: Fraction(passes, 256), 0: Fraction(256 - passes, 256)}
+        # BtlCmd_TryWhirlwind (battle_script.c:5285-5311): uniform (% n convention) over the
+        # foe's slots with a species and HP other than the target, as a rank.
+        bench = sum(
+            1 for k in range(6) if k != mon and int(state.species[foe, k]) and int(state.hp[foe, k])
+        )
+        return {k: Fraction(1, max(bench, 1)) for k in range(max(bench, 1))}
     if name == "magnitude":  # BtlCmd_CalcMagnitude (battle_script.c:5820-5852)
         return dict(zip(range(4, 11), (Fraction(n, 100) for n in (5, 10, 20, 30, 20, 10, 5)),
                         strict=True))  # fmt: skip
@@ -592,7 +610,8 @@ def assert_equals_bruteforce(tables, state, actions) -> tuple[int, int]:
 # (Confusion, Psybeam, Supersonic, Confuse Ray), a duration (Bind, Taunt), plain and
 # multi-hit damage, an accuracy drop, Present (a drawn power or a heal of the foe) and
 # Protect / Detect (a chain of 0-3 drawn for them: the foe's move is blocked or not) and
-# Attract (the foe's attract check after it, by gender).
+# Attract (the foe's attract check after it, by gender) and Roar (its level check and pick;
+# Roar against Roar: the dragged-in battler does not act).
 ORDER_MOVES = (
     "Headbutt",
     "Zen Headbutt",
@@ -617,6 +636,7 @@ ORDER_MOVES = (
     "Protect",
     "Detect",
     "Attract",
+    "Roar",
 )
 # Drawn twice as often.
 FLINCH_MOVES = ("Headbutt", "Zen Headbutt", "Bite", "Fake Out", "Thunder Fang")
@@ -803,6 +823,7 @@ def test_read_builders_registered():
         "_present_reads",
         "_protect_reads",
         "_tri_attack_reads",
+        "_roar_reads",
     ]
 
 

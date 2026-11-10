@@ -357,9 +357,12 @@ battlers: 0 is the player and 1 is the opponent.
 For each turn, `tools/trace_to_state.py` works out the following:
 
 - **Actions.** A move slot is the slot whose PP dropped. A switch is an active slot that
-  changed while the old active mon is still alive. When the side did not act (it
-  fainted first, flinched, or was fully paralyzed), every legal move slot and, for
-  Roark, every usable bag slot is a candidate, and the replay below picks among them.
+  changed while the old active mon is still alive, unless the foe used Roar / Whirlwind
+  (a PP drop on one): then the change may be the drag, whose newcomer does not act, and
+  every legal action (moves, switches, Roark's usable bag slots) is a candidate. When the
+  side did not act (it fainted first, flinched, or was fully paralyzed), every legal move
+  slot and, for Roark, every usable bag slot is a candidate, and the replay below picks
+  among them.
 - **Hit, crit, roll.** Each `hit` record of a side sets `hit = 1` and `crit` for that
   hit index, and a `move_end` with `MISSED` sets `hit = 0`. The roll is matched against
   `damage_for_roll` (the engine's `damage_table`) on the **hit-time state**: the turn's
@@ -384,6 +387,11 @@ For each turn, `tools/trace_to_state.py` works out the following:
   enumerated with its `secondary` whenever the move connected; the target's status in the
   next record picks it. Without a proc the value is never read and every value replays the
   same: the converter keeps 0, which then means nothing.
+- **Roar.** `Outcome.roar_level` (only when the user's level is below its target's: the
+  foe's active Pokemon or the one it switches in) and `Outcome.roar_target` (the rank among
+  the target side's eligible bench, when it has two or more) are enumerated for a Roar that
+  connected; the next record's `active` (and the dragged Pokemon's HP after Stealth Rock)
+  picks them. A failure (no bench, or the level check) leaves the foe's active unchanged.
 - **Protect.** A Protect / Detect user's `move_end` record carries `MOVE_STATUS_FAILED`
   (bit 6) when `BtlCmd_TryProtection` failed: the converter sets `Outcome.protect` to 0
   then, else 1 (a success; a chain of 0 or a user acting last ignores the roll). A move it
@@ -404,8 +412,9 @@ For each turn, `tools/trace_to_state.py` works out the following:
   Cute Charm) and `duration`. These are enumerated only where they can matter:
   - `speed_tie` when the start state's speeds are equal.
   - `end_speed_tie` when the speeds are equal in the start state, after the turn's
-    switches, or after the switches with the next record's status and stages (a
-    switch-in, a paralysis or a Speed change can create the tie).
+    switches, or after the switches with the next record's status and stages, or with the
+    next record's active slots, status and stages (a switch-in, a Roar's drag, a
+    paralysis or a Speed change can create the tie).
   - `full_para` and `thaw` when the side's start-of-turn active mon is paralyzed or
     frozen at the start, in any `hit` record of the turn, or in the next record. A
     status inflicted earlier in the turn (Stun Spore, Spark, Static) can stop the

@@ -538,6 +538,70 @@ def test_infatuation_rolls_are_inferred(tables, names, tmp_path):
     assert [int(t.outcome.infatuation[1]) for t in turns[:3]] == [1, 0, 1]
 
 
+def _roar_party(tmp_path: Path, level: int) -> Path:
+    """The golden party with Monferno's Leer replaced by Roar, at ``level``."""
+    text = PARTY.read_text(encoding="utf-8").replace('"Scratch", "Leer",', '"Scratch", "Roar",', 1)
+    text = text.replace("level = 14", f"level = {level}", 1)
+    party = tmp_path / "roar_party.toml"
+    party.write_text(text, encoding="utf-8")
+    return party
+
+
+def test_roar_draws_are_inferred(tables, names, tmp_path):
+    # Monferno (L10, below Geodude's L12) Roars in Leer's slot after Geodude's Rock Throw
+    # (which misses): turn 0's level check fails, turn 1's passes and drags Cranidos in (rank 1
+    # of Onix, Cranidos); turn 2 Embers it. The draws show only as the foe's active slot.
+    party = _roar_party(tmp_path, 10)
+
+    def roar(level, target, **hits):
+        o = _outcome(o_hit=0, **hits)
+        return o._replace(
+            roar_level=jnp.asarray([level, 0], jnp.int8),
+            roar_target=jnp.asarray([target, 0], jnp.int8),
+        )
+
+    script = [
+        ((LEER, ROCK_THROW), roar(0, 0)),
+        ((LEER, ROCK_THROW), roar(1, 1)),
+        ((EMBER, ROCK_THROW), roar(0, 0, p_roll=4)),
+    ]
+    records, states = _engine_trace(tables, names, script, (0, 0), party)
+    assert [int(s.active[1]) for s in states] == [0, 0, 2, 2]
+    turns = convert(_bundle(tmp_path, names, records, party), tables, names)
+    assert len(turns) == len(states)
+    for i, (turn, expected) in enumerate(zip(turns, states)):
+        for name in BattleState._fields:
+            assert np.array_equal(getattr(turn.state, name), getattr(expected, name)), (
+                f"turn {i} field {name}"
+            )
+        assert turn.mismatched == ()
+    assert [int(t.outcome.roar_level[0]) for t in turns[:2]] == [0, 1]
+    assert int(turns[1].outcome.roar_target[0]) == 1
+
+
+def test_a_dragged_side_may_have_chosen_any_action(tables, names, tmp_path):
+    # Roar against Roar: the faster Monferno drags Geodude out before it moves. Geodude's
+    # active slot changed with no PP drop: a drag, not a switch, so every legal action of
+    # its side is a candidate (its own move never ran, or a switch the drag undid).
+    party = _roar_party(tmp_path, 14)
+    trainer = next(t for t in load_trainers(INTERMEDIATE) if t.id == ROARK_ID)
+    state = initial_state(tables, load_party(party, names), trainer, (0, 0))
+    roar = names.move("Roar")
+    state = state._replace(moves=state.moves.at[1, 0, 0].set(roar), pp=state.pp.at[1, 0, 0].set(20))
+    o = _outcome()
+    after = _step(tables, state, jnp.asarray([LEER, 0], jnp.int32), o)
+    assert int(after.active[1]) == 1 and int(after.pp[1, 0, 0]) == 20
+    turn = _Turn(tables, state, _fields(_turn_record(after, 1)), [], 0)
+    assert turn.action_choices(0) == [LEER]
+    choices = turn.action_choices(1)
+    assert 0 in choices and MOVE_ACTIONS + 2 in choices
+    # Without the foe's Roar the same change is the side's own switch.
+    plain = _Turn(
+        tables, state._replace(moves=state.moves.at[0, 0, LEER].set(1)), turn.after, [], 0
+    )
+    assert plain.action_choices(1) == [MOVE_ACTIONS + 1]
+
+
 GROWL = 1  # Prinplup's slot 1
 
 

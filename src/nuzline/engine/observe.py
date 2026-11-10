@@ -51,6 +51,10 @@ Events, per side (``[side]``; 0 = player):
 * ``called``: the move Nature Power turned into ("Nature Power turned into MOVE!",
   effect_script_0173.s), once its script ran, else 0. ``act_id`` stays Nature Power; the
   called move's hits, misses and crits are the side's.
+* ``dragged``: the party slot + 1 the foe's Roar / Whirlwind dragged in on this side ("{0} was
+  dragged out!", subscript_force_target_to_switch_or_flee.s), else 0: a drag told apart from
+  a switch. The newcomer runs no action this turn. A Roar that fails shows only its
+  ``act_id`` ("But it failed!"; a miss or a Protect shows ``missed`` / ``protected``).
 * The status checks before a move (step.py:327-377, bcp.c:2417-2728): ``asleep``
   (stays asleep), ``woke``, ``frozen`` (stays frozen), ``thawed`` (its own thaw roll or a
   thawing move), ``flinched``, ``confused`` ("is confused"), ``snapped_out``,
@@ -166,6 +170,7 @@ _LAYOUT: tuple[tuple[str, tuple[int, ...]], ...] = (
     ("magnitude", _SIDE),
     ("present_heal", _SIDE),
     ("called", _SIDE),
+    ("dragged", _SIDE),
     *((name, _SIDE) for name in EVENT_FLAGS),
     ("active", _SIDE),
     ("active_types", (SIDES, 2)),

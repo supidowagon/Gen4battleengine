@@ -926,6 +926,21 @@ Nature Power vs Gible Thunder Fang at the speed tie is exactly at the cap only w
 4. Roar: the toxic-counter write-back for a forced-out battler, and the berry timing after a hazard
    hit on the dragged-in Pokemon (§6a). Settle: battle_controller.c emit sites, and
    subscript_update_hp.s plus bcp:3638-3760.
+   **Settled (K3b2 Task 11):** (a) The party copy never holds a toxic counter: every write-back
+   is `BattleController_EmitUpdatePartyMon` (battle_controller.c:1462-1504, through
+   `BattleMon_CopyToParty`, battle_lib.c:1819-1826), which strips `MON_CONDITION_TOXIC_COUNTER`
+   (:1481-1483), and it runs at every status or HP write (`BtlCmd_UpdateMonData`,
+   battle_script.c:3078; the HP update, :1720; the attacker's status checks, bcp.c:2748). The
+   next `InitBattleMon` reads the party status (battle_lib.c:125), so a dragged-out battler
+   returns with counter 0 whether or not a write-back is emitted at the drag: the same as a
+   switch (`step._switch_out`, which the drag reuses). (b) `subscript_update_hp.s` has no item
+   check (it ends with `TryFaintMon`), so the dragged-in Pokemon's berry after a hazard hit
+   waits for `AfterMoveEffects` (Roar succeeded: no `MOVE_STATUS_DID_NOT_HIT`):
+   `TRIGGER_SWITCH_IN_EFFECTS` (Intimidate; `SWITCH_IN_CHECK_STATE_HELD_ITEM_STATUS`,
+   battle_lib.c:4151), then the attacker's and the new defender's `TriggerHeldItem`
+   (bcp.c:3684-3696) and `AFTER_MOVE_EFFECT_HELD_ITEM_STATUS`. That is `hooks.on_switch_in`'s
+   order (hazards, Intimidate, then the item checks of both battlers): Roar's drag runs
+   `step._send_out`, a switch action's path, before the move's own item checks.
 5. Nature Power with an already-fainted foe: the `NO_TARGET` path and the `moveHit` write (§8a).
    **Settled (K3b2 Task 10):** Nature Power's own defender is its user (RANGE_SINGLE_TARGET_SPECIAL,
    battle_lib.c:1665-1669), so `BeforeMove`'s `HasNoTarget` passes: PP spent and

@@ -263,13 +263,13 @@ def test_names_form_checks_the_species_range(names):
         names.form(479, 6)
 
 
-def test_manifest_version_is_26(
+def test_manifest_version_is_27(
     names,
 ):  # the committed manifest; `names` skips when tables are absent
     assert (
         json.loads((TABLES / "manifest.json").read_text("utf-8"))["version"]
         == MANIFEST_VERSION
-        == 26
+        == 27
     )
 
 

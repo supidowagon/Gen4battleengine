@@ -33,7 +33,7 @@ decomp's multi-slot consumption, ``_consume_trainer_items``), the AI inputs
 AI's knowledge of the player (``last_move``: ``_use_move``, ``_pursuit_hit``;
 ``ai_seen_moves``: ``_record_last_move``, ``_forget``; ``ai_ability_known``:
 ``hooks.reveal_ability``, ``_forget``),
-switching (with Natural Cure) and the switch-in hooks
+switching (with Natural Cure; Roar's drag takes the same path, ``_use_move``) and the switch-in hooks
 (``hooks.on_switch_in``: Stealth Rock, Intimidate, berries), damaging moves, the
 accuracy check, PP, Struggle, the move effects of ``effects.py``, the berry check
 after every hit (``hooks.after_damage_items``), Pursuit's pre-switch hit, the sleep,
@@ -117,7 +117,13 @@ from nuzline.engine.order import (
     quick_claw_active,
     selected_move,
 )
-from nuzline.engine.outcome import MAX_HITS, Outcome, live_hit_threshold
+from nuzline.engine.outcome import (
+    MAX_HITS,
+    Outcome,
+    live_hit_threshold,
+    roar_bench,
+    roar_slot,
+)
 from nuzline.engine.state import BAG_SLOTS, BattleState
 
 _I32 = jnp.int32
@@ -342,8 +348,8 @@ def _switch_in(tables: Tables, state: BattleState, side, slot, entry_turn) -> Ba
 
 
 def _send_out(tables: Tables, state: BattleState, side, slot) -> BattleState:
-    """A switch action: ``_switch_out``, ``_switch_in``, then ``hooks.on_switch_in``
-    (entry hazards, Intimidate, berries)."""
+    """A switch action, or Roar's drag (``_use_move``): ``_switch_out``, ``_switch_in``, then
+    ``hooks.on_switch_in`` (entry hazards, Intimidate, berries)."""
     entered = _switch_in(tables, _switch_out(state, side), side, slot, state.turn + 1)
     return on_switch_in(tables, entered, side)
 
@@ -360,6 +366,7 @@ def _empty_events() -> dict:
             "magnitude",
             "present_heal",
             "called",
+            "dragged",
             *EVENT_FLAGS,
         )
     }
@@ -423,7 +430,8 @@ def _use_move(
 
     Returns ``(state, own, foe)``: the state after the move, the user's events (each
     status check's result, effect-gated: set only when the check was reached and had an
-    effect) and the foe's (``contact_ability``, ``thawed_by_hit``)."""
+    effect) and the foe's (``contact_ability``, ``thawed_by_hit``, ``dragged``: the party
+    slot + 1 Roar dragged in, else 0)."""
     move, struggling, locked = choice
     slot = jnp.clip(action, 0, MOVE_ACTIONS - 1)
     user = state.active[side]
@@ -624,6 +632,32 @@ def _use_move(
     state = state._replace(
         protect_count=state.protect_count.at[side].set(count.astype(state.protect_count.dtype))
     )
+    # Roar / Whirlwind (effect_script_0028.s: a DIRECT ON_HIT effect, run only for a move
+    # that connected: no miss, no Protect, battle_lib.c:1485-1490; Soundproof, Suction Cups,
+    # Ingrain and the semi-invulnerable test are unsupported, refused by coverage) ->
+    # subscript_force_target_to_switch_or_flee.s -> BtlCmd_TryWhirlwind (battle_script.c:
+    # 5241-5320, the trainer-battle singles branch): with no eligible bench Pokemon
+    # (outcome.roar_bench) it fails before any draw (:5299-5300); else
+    # BattleSystem_CanWhirlwind (battle_lib.c:3072-3086) passes for a user of at least the
+    # target's level, otherwise on outcome.roar_level; then the rejection loop picks the
+    # slot (outcome.roar_target, its rank among the eligible, :5303-5311). A failure is
+    # MOVE_STATUS_FAILED: "But it failed!" (subscript_missed.s), no AfterMoveEffects.
+    # Success: the target's Natural Cure (TryRestoreStatusOnSwitch, :11 of the subscript),
+    # SwitchAndUpdateMon (InitBattleMon, UpdateAfterSwitch: battle_lib.c:2040-2155), the
+    # hazards (subscript_hazards_check.s), and the switch-in effects of AfterMoveEffects
+    # (bcp.c:3672-3680): ``_send_out``, a switch action's own path. There is no Pursuit
+    # (the subscript has none) and no faint call: a hazard faint is caught by this action's
+    # faint check. UpdateAfterSwitch ends the newcomer's turn (battlerActions = MOVE_END,
+    # battle_lib.c:2053): ``_execute_actions`` skips its action.
+    roar = connected & (tables.move_effect[used] == EffectId.ROAR)
+    eligible = roar_bench(state, target_side, target)
+    level_ok = (state.level[side, user] >= state.level[target_side, target]) | (
+        outcome.roar_level[side] != 0
+    )
+    dragged = roar & jnp.any(eligible) & level_ok
+    roar_failed = roar & ~dragged
+    drag_slot = roar_slot(eligible, outcome.roar_target[side])
+    state = _where(dragged, _send_out(tables, state, target_side, drag_slot), state)
     # subscript_no_target.s and subscript_missed.s unlock the attacker (a Rollout that
     # missed; a first use never locked, so this is then a no-op).
     state = _unlock(state, side, can_act & ~connected)
@@ -688,7 +722,8 @@ def _use_move(
         # an attacker's item kept above can trigger again, and is removed this time. A
         # later hit that did not happen changes no HP, so its check finds what the
         # previous one found.
-        items = connected & ~no_more_work & ~protect_failed  # a failed Protect: subscript_missed
+        # A failed Protect or Roar: subscript_missed.s, no AfterMoveEffects.
+        items = connected & ~no_more_work & ~protect_failed & ~roar_failed
         state, item_used = held_item_check(tables, hit_state, side, items, info.pluck_flag)
         state = after_damage_items(tables, state, 1 - side, items)
         state = after_damage_items(tables, state, side, items & item_used & info.pluck_flag)
@@ -771,7 +806,13 @@ def _use_move(
         "in_love": in_love,
         "immobilized": immobilized,
     }
-    return state, own, {"contact_ability": contact, "thawed_by_hit": thaw}
+    foe = {
+        "contact_ability": contact,
+        "thawed_by_hit": thaw,
+        # subscript_force_target_to_switch_or_flee.s: "{0} was dragged out!"
+        "dragged": jnp.where(dragged, drag_slot + 1, 0),
+    }
+    return state, own, foe
 
 
 def _bag_slot(action) -> jnp.ndarray:
@@ -841,7 +882,7 @@ def _act(
     act_id = jnp.where(switch, action - MOVE_ACTIONS, jnp.where(item, items[side], own["act_id"]))
     own = {name: jnp.where(is_move, value, 0) for name, value in own.items()}
     own.update(act_kind=kind, act_id=act_id, shown=switch | item | (own["shown"] != 0))
-    return acted, own, {name: value & is_move for name, value in foe.items()}
+    return acted, own, {name: jnp.where(is_move, value, 0) for name, value in foe.items()}
 
 
 def pursuit_fires(tables: Tables, state: BattleState, side, actions, choices) -> jnp.ndarray:
@@ -1026,12 +1067,18 @@ def _execute_actions(
             tables, state, side, actions, choices, items, outcome, second, foe_protecting
         )
         ran = (state.over == 0) & (state.hp[side, state.active[side]] > 0)
-        skip = second & pursued  # the pursuer does not act again
+        # The pursuer does not act again; a Pokemon the first actor's Roar dragged in does not
+        # act this turn (UpdateAfterSwitch, battle_lib.c:2053: its action is MOVE_END, so
+        # BranchActions runs only MoveEnd for it, bcp.c:893, whose checks repeat the first
+        # actor's and change nothing).
+        skip = second & (pursued | (events["dragged"][side] != 0))
         acted = _where(skip, state, acted)
         ran = ran & ~skip
         events = _put(events, side, own, ~skip)
         foe = 1 - side
-        foe_events = {name: v | (events[name][foe] != 0) for name, v in foe_events.items()}
+        foe_events = {
+            name: jnp.where(v != 0, v, events[name][foe]) for name, v in foe_events.items()
+        }
         events = _put(events, foe, foe_events, ~skip)
         return _move_end(_faint_check(tables, before, acted), acted, side, ran), events
 

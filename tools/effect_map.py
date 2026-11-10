@@ -228,6 +228,10 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     # effect_script_0213.s (Camouflage): BtlCmd_TryCamouflage (battle_script.c:7997-8022;
     # engine/effects.py ``_camouflage``).
     213: ("BATTLE_EFFECT_CAMOUFLAGE", _E.CAMOUFLAGE, (0, 0, 0)),
+    # effect_script_0028.s (Roar, Whirlwind): ON_HIT | subscript_force_target_to_switch_or_flee
+    # -> BtlCmd_TryWhirlwind (battle_script.c:5241-5320), BattleSystem_CanWhirlwind
+    # (battle_lib.c:3072-3086) (engine/step.py ``_roar``; Outcome.roar_level, roar_target).
+    28: ("BATTLE_EFFECT_FORCE_SWITCH", _E.ROAR, (0, 0, 0)),
 }
 
 DECOMP_EFFECT_NAMES: dict[int, str] = {k: v[0] for k, v in _EFFECTS.items()}

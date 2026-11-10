@@ -377,7 +377,9 @@ _STAT_KINDS = frozenset(
 # user's types (BtlCmd_TryCamouflage) and TRI_ATTACK a burn, freeze or paralysis
 # (effect_script_0036.s): no stage. NATURE_POWER writes none itself; the move it calls can
 # (Mud Bomb's accuracy drop at GREAT_MARSH), and hit_thresholds reads that called move's
-# effect (order.called_move): test_nature_power_call_is_seen_by_hit_thresholds.
+# effect (order.called_move): test_nature_power_call_is_seen_by_hit_thresholds. ROAR (Task 11)
+# drags the target out (BtlCmd_TryWhirlwind): the newcomer's stages are fresh, and it runs no
+# accuracy check this turn (UpdateAfterSwitch ends its action), nor does anyone after Roar.
 _NO_ACC_EVA_WRITE = (frozenset(EffectId(i) for i in range(40)) - _STAT_KINDS) | {
     EffectId.FANG_PARALYZE_FLINCH,
     EffectId.PRESENT,
@@ -386,6 +388,7 @@ _NO_ACC_EVA_WRITE = (frozenset(EffectId(i) for i in range(40)) - _STAT_KINDS) | 
     EffectId.CAMOUFLAGE,
     EffectId.NATURE_POWER,
     EffectId.TRI_ATTACK,
+    EffectId.ROAR,
 }
 # (effect, stat) pairs hit_thresholds follows: they change a later foe move's threshold.
 _SEEN = {

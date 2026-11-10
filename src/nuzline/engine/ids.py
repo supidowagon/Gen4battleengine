@@ -73,6 +73,10 @@ class EffectId(IntEnum):
     * ``TRI_ATTACK`` (Tri Attack, ``BATTLE_EFFECT_TRI_ATTACK``): zeros; at the move's chance
       (``Outcome.secondary``) a burn, freeze or paralysis (``TRI_ATTACK_STATUSES``, drawn by
       ``Outcome.tri_attack``) as a secondary status (``effects._tri_attack``).
+    * ``ROAR`` (Roar, Whirlwind, ``BATTLE_EFFECT_FORCE_SWITCH``): zeros; in a trainer battle
+      ``BtlCmd_TryWhirlwind`` drags a random eligible bench Pokemon of the target's side in
+      (``Outcome.roar_target``), after the level check of a lower-levelled user
+      (``Outcome.roar_level``); it fails with no eligible bench Pokemon (``step._roar``).
 
     The proc chance of a ``SECONDARY_*``, ``FLINCH``, ``FAKE_OUT``, ``RAISE_ALL_STATS_HIT`` or
     ``FANG_PARALYZE_FLINCH``
@@ -127,6 +131,7 @@ class EffectId(IntEnum):
     CAMOUFLAGE = 44
     NATURE_POWER = 45
     TRI_ATTACK = 46
+    ROAR = 47
 
 
 class AbilityId(IntEnum):

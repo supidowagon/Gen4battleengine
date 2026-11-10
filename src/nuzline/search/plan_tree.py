@@ -128,6 +128,9 @@ def _side_text(f: dict, names: Names, side: int, who: str, trainer: str) -> str:
     called = int(f["called"][side])  # Nature Power's call (engine.observe)
     if called:
         details.insert(0, f"it turned into {names.move_names[called]}")
+    dragged = int(f["dragged"][1 - side])  # this side's Roar dragged the foe's slot in
+    if dragged:
+        details.append(f"{_species(names, f, 1 - side, dragged - 1)} was dragged out")
     if kind == ACT_MOVE:
         head = f"{who} used {names.move_names[act]}"
     elif kind == ACT_TAUNTED:

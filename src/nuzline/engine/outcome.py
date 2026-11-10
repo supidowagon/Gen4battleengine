@@ -7,8 +7,10 @@ fields are ``[side]``. ``secondary`` is indexed by the attacking side (its own
 move's secondary effect; Thunder Fang's paralysis roll); ``fang_flinch`` by the
 attacking side too (Thunder Fang's second roll, its flinch), ``present`` (Present's
 power or heal), ``protect`` (the user's Protect / Detect roll), ``infatuation`` (the
-moving side's attract check, 1 = immobilized by love) and ``tri_attack`` (Tri Attack's
-status, ``ids.TRI_ATTACK_STATUSES``); ``contact_proc`` by the
+moving side's attract check, 1 = immobilized by love), ``tri_attack`` (Tri Attack's
+status, ``ids.TRI_ATTACK_STATUSES``), ``roar_level`` (Roar's level check passes) and
+``roar_target`` (the rank of the Pokemon Roar drags in among the target side's eligible
+bench, ``roar_slot``); ``contact_proc`` by the
 defending side (its contact ability: Static, Poison Point, Flame Body, Cute Charm);
 ``duration`` by the acting (inflicting) side, and it is the counter value the decomp's
 ``Random`` command stores for that side's move
@@ -81,6 +83,8 @@ class Outcome(NamedTuple):
     protect: jnp.ndarray  # int8[2], 1 = the Protect / Detect roll passes (PROTECT_RATES)
     infatuation: jnp.ndarray  # int8[2], 1 = immobilized by love (RandNext() & 1 == 0)
     tri_attack: jnp.ndarray  # int8[2], Tri Attack's status 0/1/2 (ids.TRI_ATTACK_STATUSES)
+    roar_level: jnp.ndarray  # int8[2], 1 = Roar's level check passes (BattleSystem_CanWhirlwind)
+    roar_target: jnp.ndarray  # int8[2], Roar's pick: a rank in the eligible bench (roar_slot)
 
 
 def empty_outcome() -> Outcome:
@@ -108,6 +112,8 @@ def empty_outcome() -> Outcome:
         protect=sides + 1,
         infatuation=sides,
         tri_attack=sides,
+        roar_level=sides,
+        roar_target=sides,
     )
 
 
@@ -355,6 +361,72 @@ def present_kind(rand) -> jnp.ndarray:
 PROTECT_RATES = (0xFFFF, 0x7FFF, 0x3FFF, 0x1FFF)
 
 
+# BattleSystem_CanWhirlwind (battle_lib.c:3072-3086): a user of a lower level than its target
+# passes when ``(((RandNext() & 0xFF) * (La + Ld)) >> 8) + 1 > Ld / 4``: one of 256 equally
+# likely values (a mask, not a modulo: exact).
+ROAR_LEVEL_VALUES = 256
+
+
+def roar_level_passes(rand, attacker_level, defender_level) -> jnp.ndarray:
+    """``bool``: the level check passes for ``rand = RandNext() & 0xFF`` (C integer division
+    for ``Ld / 4``; ``BattleMon.level`` is a u8)."""
+    la = jnp.asarray(attacker_level, _I32)
+    ld = jnp.asarray(defender_level, _I32)
+    return ((jnp.asarray(rand, _I32) * (la + ld)) >> 8) + 1 > ld // 4
+
+
+def roar_level_weight(attacker_level, defender_level) -> jnp.ndarray:
+    """``int32``: how many of the 256 values of ``RandNext() & 0xFF`` pass the level check
+    (``roar_level_passes``), whatever the levels (the check runs only when ``La < Ld``)."""
+    rand = jnp.arange(ROAR_LEVEL_VALUES, dtype=_I32)
+    la = jnp.asarray(attacker_level, _I32)[..., None]
+    ld = jnp.asarray(defender_level, _I32)[..., None]
+    return jnp.sum(roar_level_passes(rand, la, ld), axis=-1).astype(_I32)
+
+
+def roar_bench(state: BattleState, side, mon) -> jnp.ndarray:
+    """``bool[SLOTS]``: the slots of ``side``'s party Roar can drag in while ``mon`` is
+    active: ``BtlCmd_TryWhirlwind`` (battle_script.c:5285-5311) takes a slot with a species,
+    not an egg (no egg battles here) and HP left, other than the active one."""
+    slots = jnp.arange(state.hp.shape[1])
+    return (state.species[side] != 0) & (state.hp[side] > 0) & (slots != mon)
+
+
+def roar_slot(eligible, rank) -> jnp.ndarray:
+    """``int32``: the party slot of rank ``rank`` (clipped to the last) among the ``eligible``
+    slots in party order (``Outcome.roar_target``)."""
+    count = jnp.sum(eligible.astype(_I32))
+    rank = jnp.clip(jnp.asarray(rank, _I32), 0, jnp.maximum(count - 1, 0))
+    ranks = jnp.cumsum(eligible.astype(_I32)) - 1
+    return jnp.argmax(eligible & (ranks == rank)).astype(_I32)
+
+
+def roar_levels(state: BattleState, actions) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """``(int32[2], int32[2])``: each side's level and its Roar target's."""
+    la, ld = [], []
+    for side in (0, 1):
+        target, _, target_mon = _target_mon(state, actions, side)
+        la.append(state.level[side, state.active[side]].astype(_I32))
+        ld.append(state.level[target, target_mon].astype(_I32))
+    return jnp.stack(la), jnp.stack(ld)
+
+
+def roar_inputs(state: BattleState, actions) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """``(int32[2], int32[2])``: per side, as the side's Roar would meet them, the level
+    check's passing weight out of ``ROAR_LEVEL_VALUES`` (``roar_level_weight`` of the user
+    and its target: the foe's active Pokemon or the one it switches in, which goes first)
+    and the number of the target side's eligible bench Pokemon (``roar_bench``). A bench
+    Pokemon cannot lose HP during the turn and a switch only swaps the active one with one
+    of them, so the count at the turn start is the count when Roar runs."""
+    actions = jnp.asarray(actions, _I32)
+    la, ld = roar_levels(state, actions)
+    counts = []
+    for side in (0, 1):
+        target, _, target_mon = _target_mon(state, actions, side)
+        counts.append(jnp.sum(roar_bench(state, target, target_mon).astype(_I32)))
+    return roar_level_weight(la, ld), jnp.stack(counts)
+
+
 def sample_outcome(key, tables: Tables, state: BattleState, actions) -> Outcome:
     """Draw every field from its Gen 4 probability for this state and these actions."""
     actions = jnp.asarray(actions, _I32)
@@ -365,6 +437,8 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions) -> Outcome:
         """``RandNext() % n`` for each element."""
         return jax.random.randint(k[i], shape, 0, n, dtype=_I32)
 
+    roar_counts = roar_inputs(state, actions)[1]
+    roar_la, roar_ld = roar_levels(state, actions)
     # Nature Power draws for its called move (order.called_move): its accuracy, crit odds,
     # effect chance and secondary effect are the called move's.
     moves = jnp.stack([used_move(tables, state, side, actions[side]) for side in (0, 1)])
@@ -446,5 +520,19 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions) -> Outcome:
         # RandNext() % 3 picks burn, freeze or paralysis (ids.TRI_ATTACK_STATUSES), uniform by
         # the project's % n convention (exact 21846/21845/21845 of 65536).
         tri_attack=jax.random.randint(jax.random.fold_in(key, 21), per_side, 0, 3, dtype=_I32),
+        # BattleSystem_CanWhirlwind (battle_lib.c:3072-3086): RandNext() & 0xFF against the
+        # levels (roar_level_passes; exact, a mask), read only when the user's level is lower.
+        roar_level=roar_level_passes(
+            jax.random.randint(jax.random.fold_in(key, 22), per_side, 0, 256, dtype=_I32),
+            roar_la,
+            roar_ld,
+        ),
+        # BtlCmd_TryWhirlwind (battle_script.c:5303-5311) repeats RandNext() % partyCount
+        # until it picks an eligible bench slot: uniform over them by the project's % n
+        # convention (exact: each slot i weighs #{u16 r : r % partyCount == i}, e.g. 10923
+        # for slots 0-3 and 10922 for 4-5 of a party of 6). Drawn as the rank (roar_slot).
+        roar_target=jax.random.randint(
+            jax.random.fold_in(key, 23), per_side, 0, jnp.maximum(roar_counts, 1), dtype=_I32
+        ),
     )
     return Outcome(*(jnp.asarray(f).astype(_I8) for f in outcome))

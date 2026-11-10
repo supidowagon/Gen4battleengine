@@ -1599,6 +1599,13 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
         else:
             sd.protect_count = 0
             return record  # MOVE_STATUS_FAILED: subscript_missed.s, no AfterMoveEffects
+    # effect_script_0028.s (Roar, Whirlwind): its ON_HIT subscript runs for a move that got
+    # past the accuracy check and Protect; a failure ("But it failed!", subscript_missed.s)
+    # skips AfterMoveEffects. After a drag the hit below plays against the newcomer: Roar
+    # deals no damage and has no effect there, and AfterMoveEffects checks the items of the
+    # attacker and the new defender.
+    if effect == EffectId.ROAR and not _roar(turn, s, side):
+        return record
     # BtlCmd_SetMultiHit (script.c:2634): SetMultiHit 2 (effect_script_0044.s) is fixed,
     # SetMultiHit 0 draws 2-5.
     hits = 1
@@ -1632,6 +1639,43 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
         _unlock(s.sides[side])
         record = move
     return record
+
+
+def _roar(turn: _Turn, s: RefState, side: int) -> bool:
+    """``subscript_force_target_to_switch_or_flee.s`` for ``side``'s Roar on the foe; returns
+    whether it dragged a Pokemon in. Its semi-invulnerable, Suction Cups and Ingrain tests
+    (:5-7) and Soundproof (lib.c:3523-3530) cannot be met: no supported move or ability sets
+    them. ``BtlCmd_TryWhirlwind`` (script.c:5241-5320), trainer battle, singles: count the
+    foe party's slots with a species, not an egg and HP left (:5285-5296); one or none ->
+    fail with no draw (:5299-5300). ``BattleSystem_CanWhirlwind`` (lib.c:3072-3086): a user
+    of at least the target's level passes, else ``(((RandNext() & 0xFF) * (La + Ld)) >> 8) + 1
+    > Ld / 4`` (``outcome.roar_level``). The loop ``RandNext() % partyCount`` until an
+    eligible slot other than the active one (:5303-5311): ``outcome.roar_target`` is its
+    rank among them. Then ``TryRestoreStatusOnSwitch`` (Natural Cure), ``SwitchAndUpdateMon``
+    (script.c:2488-2525: InitBattleMon, UpdateAfterSwitch), the hazards, and AfterMoveEffects'
+    switch-in effects (bcp.c:3672-3680). UpdateAfterSwitch sets the newcomer's action to
+    MOVE_END (lib.c:2053): it does not act this turn."""
+    o = turn.outcome
+    foe = 1 - side
+    sd = s.sides[foe]
+    eligible = [i for i, m in enumerate(sd.party) if m.species and m.hp and i != sd.active]
+    if not eligible:
+        return False
+    if _active(s, side).level < _active(s, foe).level and not o.roar_level[side]:
+        return False
+    slot = eligible[min(int(o.roar_target[side]), len(eligible) - 1)]
+    out = _active(s, foe)
+    if out.hp and out.ability == AbilityId.NATURAL_CURE:  # TryRestoreStatusOnSwitch, :9139
+        out.status = Status.NONE
+        out.status_counter = 0
+    # Back to the party: the status is written back without MON_CONDITION_TOXIC_COUNTER
+    # (battle_controller.c:1481-1483), which every write-back strips.
+    if out.status == Status.TOXIC:
+        out.status_counter = 0
+    _enter(turn, s, foe, slot)
+    _switch_in_effects(turn, s, foe)
+    turn.done[foe] = True
+    return True
 
 
 def _pursuit(turn: _Turn, s: RefState, side: int, actions, choices) -> None:
