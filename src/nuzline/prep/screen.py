@@ -1,8 +1,8 @@
 """The all-rung Stage A screen and the prep tie rule (plan 4c Task 6).
 
 ``screen`` plays ``n`` playouts from each setup's turn-0 state (``evaluate_leaves`` from
-roots, so each playout draws the battle-start Quick Claw roll; both halves pooled; ruling 10) and keeps the 8 ``deaths.BUCKETS`` counts, so one batch scores
-every rung. ``ScreenStats`` accumulate across halving rounds (``merge``). ``prep_order`` is
+roots, so each playout draws the battle-start Quick Claw roll; both halves pooled; ruling
+10) and keeps the 8 ``deaths.BUCKETS`` counts, so one batch scores every rung. ``ScreenStats`` accumulate across halving rounds (``merge``). ``prep_order`` is
 the spec section 4 tie rule over scored setups (user decisions 2026-11-03 and 2026-11-04,
 superseding ruling 7): the battle tie rule (``stage_a.tie_ordered``, ruling 5) at every
 position, with ``stage_a.tied_with`` for the interval overlap, so the whole search has one

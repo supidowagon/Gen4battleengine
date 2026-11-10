@@ -1353,7 +1353,8 @@ def step(tables: Tables, state: BattleState, actions, outcome: Outcome) -> Battl
 def qc_kept(tables: Tables, state: BattleState) -> jnp.ndarray:
     """``bool[2]``: the side's ``speedRand`` can be read as a Quick Claw before it is redrawn
     (the tight storage rule, docs/kaizo/k3b2-rules.md §5b). Between turns its readers are the
-    next command selection's AI ``IfSpeedCompare*`` (trainer_ai.c:1102-1124), the next turn's
+    next command selection's AI ``IfSpeedCompare*`` (trainer_ai.c:1102-1124) and
+    ``LoadBattlerSpeedRank`` (trainer_ai.c:2081, a ``SortMonSpeedOrder``-like sort), the next turn's
     ``CalcTurnOrder`` (bcp.c:772-786) and the start-of-turn sorts that order the switch-in
     effects (bcp.c:251, :263; order-free in singles, ``hooks``), all with the battler on the
     field then, and ``CompareBattlerSpeed`` tests the item of that battler

@@ -821,6 +821,12 @@ def outcome_laws(
     # Quick Claw (step.qc_kept, end_of_turn_order): a living holder anywhere in the party.
     claw = tables.item_effect[state.item] == ItemId.QUICK_CLAW
     quick_claw = live & jnp.any(claw & (state.species != 0) & (state.hp > 0), axis=1)
+    if loose:
+        # The brute force: both sides' draws whenever a Quick Claw is anywhere in the battle
+        # (either party, any HP), holder or not. With no Quick Claw at all nothing can read
+        # speedRand (battle_lib.c:1278 tests the item first), and drawing it there anyway
+        # would only multiply every other brute force past the width cap.
+        quick_claw = jnp.broadcast_to(live & jnp.any(claw & (state.species != 0)), (2,))
 
     def branch_relevant(m: dict) -> Outcome:
         return Outcome(

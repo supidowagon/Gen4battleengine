@@ -430,6 +430,8 @@ M. Roar and faint cleanup must clear the source-tied bit.
     effects).
   - `SortMonActionOrder` (lib.c:7276-7300) after Trick Room activates (bcp:3990-3993; not in pool).
   - AI `IfSpeedCompareEqualTo/NotEqualTo` (ai:1102-1124, ignore TRUE).
+  - AI `LoadBattlerSpeedRank` (ai:2081, a pairwise sort with ignore TRUE; added in K3b2
+    Task 8's review round).
 - **Timing** (§0.2a): `speedRand` is drawn at battle start (lib.c:2024) and at each turn's
   pre-move step (bcp:853-857), which is after `CalcTurnOrder`. The same value orders turn N's
   end-of-turn pass, the turn-end replacement switch-ins and the AI's speed checks at the next
@@ -478,6 +480,8 @@ not observed (observe.py:51-52), so coarser, never finer.
 ### (e) AI (K3c)
 - `IfSpeedCompare*` (ai:1109, :1121) reads Quick Claw through `speedRand`, and draws `RandNext()&1`
   on a speed tie (the AI's comparison consumes the battle RNG).
+- `LoadBattlerSpeedRank` (ai:2056-2093, the compare at :2081) sorts the battlers with
+  `CompareBattlerSpeed(..., TRUE)`, so it reads Quick Claw too (and a tie's `RandNext()&1`).
 - Roark's EXPERT paths that use it: Selfdestruct ais:1864, Recover ais:2650, Rock Polish ais:2070,
   and the speed-down/paralysis lines. The AI policy needs `qc_roll` of the player's active.
 

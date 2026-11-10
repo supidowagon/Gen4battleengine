@@ -126,7 +126,8 @@ three structs has a row.
   `battle_lib.c:1278-1286`, :1344-1352; Quick Claw, param 20, the only such item), so
   `qc_roll[side]` holds that bit. The turn's draw is `Outcome.quick_claw`: the end-of-turn
   order reads it the same turn (`SortMonSpeedOrder`, bcp:888), and `step` stores it for the
-  next turn's order (and the AI's `IfSpeedCompare*`, trainer_ai.c:1102-1124) only while a
+  next turn's order (and the AI's `IfSpeedCompare*`, trainer_ai.c:1102-1124, and
+  `LoadBattlerSpeedRank`, trainer_ai.c:2081) only while a
   reader can see a holder before the redraw (`step.qc_kept`), else 0 (exact: the value
   is never read).
 - **battleEndFlag -> `over`, `winner`**: `winner` is 0 none, 1 player lost (no

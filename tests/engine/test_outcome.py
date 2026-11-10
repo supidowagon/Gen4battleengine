@@ -152,11 +152,13 @@ def test_existing_draws_unchanged(tables, names):
 def test_quick_claw_draw_has_its_own_key(tables, names):
     # Outcome fields from K3b2 on take fold_in(key, 16 + k) in order of landing: quick_claw is
     # the fifth (fang_flinch 16, present 17, protect 18, infatuation 19).
+    # Recorded at K3b2 Task 8 (fold_in(key, 20)), like EXISTING_DRAWS: keys 0-3.
     s = roark_real_state(tables, names)
-    key = jax.random.key(0)
-    o = sample_outcome(key, tables, s, acts(EMBER, 1))
-    draw = jax.random.randint(jax.random.fold_in(key, 20), (2,), 0, 5, dtype=jnp.int32) == 0
-    assert o.quick_claw.tolist() == draw.astype(jnp.int8).tolist()
+    got = [
+        sample_outcome(jax.random.key(k), tables, s, acts(EMBER, 1)).quick_claw.tolist()
+        for k in range(4)
+    ]
+    assert got == [[0, 1], [0, 0], [0, 0], [0, 1]]
 
 
 def test_magnitude_and_shed_skin_draws(tables, names):
