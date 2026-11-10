@@ -29,7 +29,7 @@ from nuzline.engine.enumerate import (
 )
 from nuzline.engine.ids import AbilityId, EffectId, Stat, Status
 from nuzline.engine.observe import observation
-from nuzline.engine.order import selected_move
+from nuzline.engine.order import used_move
 from nuzline.engine.outcome import (
     Outcome,
     crit_odds,
@@ -356,7 +356,7 @@ def decomp_law(tables, state, actions, name: str, index: tuple) -> dict[int, Fra
     """The law ``sample_outcome`` draws element ``name[index]`` from, transcribed from
     outcome.py:143-193 (not from ``engine.enumerate``)."""
     side = index[0] if index else 0
-    move = int(selected_move(tables, state, side, actions[side])[0])
+    move = int(used_move(tables, state, side, actions[side]))  # Nature Power: its call
 
     def coin(p: Fraction) -> dict[int, Fraction]:
         return {1: p, 0: 1 - p}
@@ -411,6 +411,8 @@ def decomp_law(tables, state, actions, name: str, index: tuple) -> dict[int, Fra
         return coin(Fraction(1, 5))
     if name == "shed_skin":  # ShedSkin (battle_lib.c:3567): RandNext() % 10 < 3
         return coin(Fraction(3, 10))
+    if name == "tri_attack":  # effect_script_0036.s Random 2, 3: RandNext() % 3 (% n uniform)
+        return {k: Fraction(1, 3) for k in range(3)}
     if name == "magnitude":  # BtlCmd_CalcMagnitude (battle_script.c:5820-5852)
         return dict(zip(range(4, 11), (Fraction(n, 100) for n in (5, 10, 20, 30, 20, 10, 5)),
                         strict=True))  # fmt: skip
@@ -800,6 +802,7 @@ def test_read_builders_registered():
         "_move_reads",
         "_present_reads",
         "_protect_reads",
+        "_tri_attack_reads",
     ]
 
 

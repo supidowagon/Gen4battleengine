@@ -62,6 +62,17 @@ class EffectId(IntEnum):
     * ``ATTRACT`` (Attract, ``BATTLE_EFFECT_INFATUATE``): zeros; infatuates a living target of
       the opposite gender that is not in love yet (``effects._attract``); an infatuated
       battler is immobilized by ``Outcome.infatuation`` at its status check (``step``).
+    * ``CAMOUFLAGE`` (Camouflage, ``BATTLE_EFFECT_CAMOUFLAGE``): zeros; ``BtlCmd_TryCamouflage``
+      writes ``TERRAIN_TYPES[terrain]`` to both of the user's ``types`` unless it has Multitype
+      or already has that type (``effects._camouflage``); ``step`` restores the party types
+      when the battler leaves.
+    * ``NATURE_POWER`` (Nature Power, ``BATTLE_EFFECT_NATURE_POWER``): zeros; the move runs the
+      terrain's move ``TERRAIN_MOVES[terrain]`` from its accuracy check on
+      (``order.called_move``, ``step._use_move``); it stays Nature Power for the status checks,
+      the PP, Taunt, Disable, priority and ``last_move``.
+    * ``TRI_ATTACK`` (Tri Attack, ``BATTLE_EFFECT_TRI_ATTACK``): zeros; at the move's chance
+      (``Outcome.secondary``) a burn, freeze or paralysis (``TRI_ATTACK_STATUSES``, drawn by
+      ``Outcome.tri_attack``) as a secondary status (``effects._tri_attack``).
 
     The proc chance of a ``SECONDARY_*``, ``FLINCH``, ``FAKE_OUT``, ``RAISE_ALL_STATS_HIT`` or
     ``FANG_PARALYZE_FLINCH``
@@ -113,6 +124,9 @@ class EffectId(IntEnum):
     PRESENT = 41
     PROTECT = 42
     ATTRACT = 43
+    CAMOUFLAGE = 44
+    NATURE_POWER = 45
+    TRI_ATTACK = 46
 
 
 class AbilityId(IntEnum):
@@ -321,6 +335,24 @@ MOVE_DETECT = 197
 MOVE_ENDURE = 203
 PROTECT_CHAIN_MOVES = (MOVE_PROTECT, MOVE_DETECT, MOVE_ENDURE)
 
+# ABILITY_MULTITYPE (``generated/abilities.txt`` line 122): ``BtlCmd_TryCamouflage``
+# (battle_script.c:8001-8004) fails for a Multitype user, read through
+# ``tables.species_abilities_decomp`` (``damage.decomp_abilities``). Multitype itself is an
+# unsupported ability, so coverage refuses a holder before this test can matter.
+ABILITY_MULTITYPE = 121
+
+# The battle terrain tables (include/data/terrain/to_move.h ``sTerrainMove``, to_type.h
+# ``sTerrainCamouflageType``), indexed by the decomp's ``TERRAIN_*`` id
+# (``nuzline.data.trainer.TERRAIN_NAMES``) up to ``TERRAIN_SPECIAL``: ``BtlCmd_GetTerrainMove``
+# (battle_script.c:8036-8048) and ``BtlCmd_TryCamouflage`` (:8007-8012) read
+# ``min(terrain, TERRAIN_SPECIAL)`` (include/constants/battle/terrain.h: ``TERRAIN_SPECIAL`` is
+# ``TERRAIN_AARON``, 12). The moves are decomp move ids (``generated/moves.txt`` line N is id
+# N-1): Earthquake 89, Seed Bomb 402, Rock Slide 157, Blizzard 59, Hydro Pump 56, Ice Beam 58,
+# Tri Attack 161, Mud Bomb 426, Air Slash 403. tests/engine/test_terrain_moves.py reads both
+# tables from the decomp and, through the ROM readers, from both ROMs.
+TERRAIN_SPECIAL = 12
+TERRAIN_MOVES = (89, 89, 402, 402, 157, 157, 59, 56, 58, 161, 426, 403, 161)
+
 # Decomp ability ids the weather code names directly (``generated/abilities.txt`` line N is
 # id N-1), read through ``tables.species_abilities_decomp`` (``Battler_Ability``) rather than
 # an ``AbilityId``, for the abilities no table maps (Air Lock, Magic Guard, Ice Body) and the
@@ -334,3 +366,24 @@ WEATHER_ABILITY_IDS = {
     "Magic Guard": 98,
     "Ice Body": 115,
 }
+
+# ``sTerrainCamouflageType`` (include/data/terrain/to_type.h), indexed like ``TERRAIN_MOVES``.
+TERRAIN_TYPES = (
+    Type.GROUND,  # TERRAIN_PLAIN
+    Type.GROUND,  # TERRAIN_SAND
+    Type.GRASS,  # TERRAIN_GRASS
+    Type.GRASS,  # TERRAIN_PUDDLE
+    Type.ROCK,  # TERRAIN_MOUNTAIN
+    Type.ROCK,  # TERRAIN_CAVE
+    Type.ICE,  # TERRAIN_SNOW
+    Type.WATER,  # TERRAIN_WATER
+    Type.ICE,  # TERRAIN_ICE
+    Type.NORMAL,  # TERRAIN_BUILDING
+    Type.GROUND,  # TERRAIN_GREAT_MARSH
+    Type.FLYING,  # TERRAIN_BRIDGE
+    Type.NORMAL,  # TERRAIN_SPECIAL
+)
+# effect_script_0036.s: ``Random 2, 3`` (``BtlCmd_Random``, battle_script.c:3200-3210:
+# ``RandNext() % 3 + 3``) picks MOVE_SUBSCRIPT_PTR_BURN, _FREEZE or _PARALYZE (3, 4, 5:
+# generated/battle_move_subscript_ptrs.txt lines 4-6), ``Outcome.tri_attack`` 0, 1, 2.
+TRI_ATTACK_STATUSES = (Status.BURN, Status.FREEZE, Status.PARALYSIS)

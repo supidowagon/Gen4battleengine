@@ -40,7 +40,17 @@ import jax.numpy as jnp
 from nuzline.data.tables import Tables
 from nuzline.engine.actions import FIRST_ITEM_ACTION, MOVE_ACTIONS, locked_slot, usable_moves
 from nuzline.engine.damage import apply_stage, simple_stage, weather_suppressed
-from nuzline.engine.ids import MOVE_STRUGGLE, AbilityId, ItemId, Stat, Status, Weather
+from nuzline.engine.ids import (
+    MOVE_STRUGGLE,
+    TERRAIN_MOVES,
+    TERRAIN_SPECIAL,
+    AbilityId,
+    EffectId,
+    ItemId,
+    Stat,
+    Status,
+    Weather,
+)
 from nuzline.engine.state import BattleState
 
 _I32 = jnp.int32
@@ -72,6 +82,45 @@ def selected_move(
     move = jnp.where(struggling, MOVE_STRUGGLE, state.moves[side, mon, slot].astype(_I32))
     locked = locked_slot(state, side) >= 0
     return jnp.where(locked, state.locked_move[side].astype(_I32), move), struggling
+
+
+def terrain_index(state: BattleState) -> jnp.ndarray:
+    """``int32``: the row of the terrain tables (``ids.TERRAIN_MOVES``, ``TERRAIN_TYPES``) the
+    battle reads: ``min(terrain, TERRAIN_SPECIAL)`` (``BtlCmd_GetTerrainMove``,
+    battle_script.c:8040-8043; ``BtlCmd_TryCamouflage``, :8007-8010). An unknown terrain
+    (``TERRAIN_UNKNOWN``, -1) is clamped to row 0 so that no table is ever indexed with -1;
+    its readers test ``terrain_known`` and do nothing then (coverage and ``trace_to_state``
+    refuse such a battle before it reaches the engine)."""
+    return jnp.clip(jnp.asarray(state.terrain, _I32), 0, TERRAIN_SPECIAL)
+
+
+def terrain_known(state: BattleState) -> jnp.ndarray:
+    """``bool``: the battle's terrain is a ``TERRAIN_*`` id, not ``TERRAIN_UNKNOWN``."""
+    return jnp.asarray(state.terrain, _I32) >= 0
+
+
+def called_move(tables: Tables, state: BattleState, move) -> jnp.ndarray:
+    """``int32``: the move ``move`` runs from its move script on (``battleCtx->moveCur``):
+    for Nature Power (``EffectId.NATURE_POWER``), effect_script_0173.s's ``GetTerrainMove``
+    (``msgMoveTemp = sTerrainMove[min(terrain, TERRAIN_SPECIAL)]``, battle_script.c:8036-8048)
+    then ``GoToMoveScript`` (:2111-2134: ``moveCur = msgMoveTemp``, the defender re-picked
+    for it), so the accuracy check, Protect, the type chart, the damage, the secondary
+    effect and ``moveHit`` read the called move (``step._use_move``); otherwise ``move``
+    itself. Nature Power stays the move for the status checks, the PP, Taunt, Disable,
+    priority and ``movePrevByBattler`` (``moveTemp``, set at command selection,
+    bcp.c:1861-1898, is never changed by ``GoToMoveScript``). With ``TERRAIN_UNKNOWN`` the
+    call is ``MOVE_NONE`` (0, the guard of ``terrain_index``): the move then does nothing."""
+    move = jnp.asarray(move, _I32)
+    terrain_move = jnp.asarray(TERRAIN_MOVES, _I32)[terrain_index(state)]
+    terrain_move = jnp.where(terrain_known(state), terrain_move, 0)
+    nature_power = tables.move_effect[move] == EffectId.NATURE_POWER
+    return jnp.where(nature_power, terrain_move, move)
+
+
+def used_move(tables: Tables, state: BattleState, side, action) -> jnp.ndarray:
+    """``int32``: ``called_move`` of ``selected_move``: the move whose accuracy, crit odds,
+    damage and effect a move action draws for."""
+    return called_move(tables, state, selected_move(tables, state, side, action)[0])
 
 
 def effective_speed(tables: Tables, state: BattleState, side) -> jnp.ndarray:

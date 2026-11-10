@@ -358,10 +358,43 @@ def test_terrain_code_guard(kaizo_rom_dir):
 
 
 def test_terrain_code_symbols_exist(symbols):
-    from tools.terrain import TERRAIN_CODE
+    from tools.terrain import BATTLE_TERRAIN_CODE, TERRAIN_CODE
 
-    for name in TERRAIN_CODE:
+    for name in (*TERRAIN_CODE, *BATTLE_TERRAIN_CODE):
         symbols.find(name)  # KeyError for a misspelt name, which would never match a change
+
+
+def test_battle_terrain_code_guard():
+    from tools.rom.readers import ReaderError
+    from tools.rom.readers.maps import check_terrain_code
+
+    with pytest.raises(ReaderError, match="overlay16 sTerrainMove"):
+        check_terrain_code([["overlay16", "sTerrainMove"]])
+
+
+def test_battle_terrain_tables_in_both_roms(vanilla_files, kaizo_files, symbols, kaizo_rom_dir):
+    """The engine's terrain tables (K3b2 Task 10) are both ROMs': vanilla's
+    ``sTerrainMove`` (u16 each) and ``sTerrainCamouflageType`` (u8 each) read at their
+    linker-map addresses; Kaizo's overlay 16 is longer (its symbols moved), so its diff
+    (``changed_code.json``) must list neither and each table's vanilla bytes must sit within
+    0x40 bytes after its vanilla address."""
+    import struct
+
+    from nuzline.engine.ids import TERRAIN_MOVES, TERRAIN_TYPES
+    from tools.rom.readers import symbol_bytes
+
+    tables = {
+        "sTerrainMove": struct.pack(f"<{len(TERRAIN_MOVES)}H", *TERRAIN_MOVES),
+        "sTerrainCamouflageType": bytes(int(t) for t in TERRAIN_TYPES),
+    }
+    changed = json.loads((kaizo_rom_dir / "changed_code.json").read_text("utf-8"))
+    assert not {name for _, name in changed} & set(tables)
+    for name, want in tables.items():
+        assert symbol_bytes(vanilla_files, symbols, name) == want, name
+        sym = symbols.find(name)
+        n = int(sym.module.removeprefix("overlay"))
+        start = sym.address - kaizo_files.overlay_info(n)[0]
+        assert want in kaizo_files.overlay(n)[start : start + len(want) + 0x40], name
 
 
 def test_kaizo_trainers_json_carry_terrain(kaizo_rom_trainers):

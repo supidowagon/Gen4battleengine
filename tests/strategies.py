@@ -412,6 +412,7 @@ def any_outcome() -> st.SearchStrategy[Outcome]:
         present=_ints(0, 3, sides),
         protect=_flag(sides),
         infatuation=_flag(sides),
+        tri_attack=_ints(0, 2, sides),
     )
 
 
@@ -422,7 +423,8 @@ def any_outcome() -> st.SearchStrategy[Outcome]:
 # Speed drop (Bubble), a Speed boost (Rock Polish), a high-crit move (Razor Leaf), a 95 %
 # plain move (Tackle), accuracy / evasion changes before the foe's check (Sand-Attack,
 # Double Team, Mud-Slap), Present (drawn power or heal), Protect (its chain's 2^-n roll,
-# with a chain of 0-3 drawn for it) and Attract (the foe's attract check).
+# with a chain of 0-3 drawn for it), Attract (the foe's attract check), Tri Attack (its
+# status draw) and Nature Power (Tri Attack called on BUILDING, the terrain drawn with it).
 LAW_MOVES = (
     "Spore",
     "Hypnosis",
@@ -450,6 +452,8 @@ LAW_MOVES = (
     "Present",
     "Protect",
     "Attract",
+    "Tri Attack",
+    "Nature Power",
 )
 # Abilities the outcome relevance reads (contact procs, Steadfast, Simple's and Swift
 # Swim's Speed) or the hit odds read (Compoundeyes, Sand Veil, Snow Cloak), and Rough Skin
@@ -471,6 +475,11 @@ LAW_ABILITIES = (
 )
 
 
+# BUILDING (Tri Attack), CAVE (Rock Slide: a flinch), GREAT_MARSH (Mud Bomb: an accuracy
+# drop), WATER (Hydro Pump, 80 %) (nuzline.data.trainer.TERRAIN_NAMES ids).
+_NATURE_POWER_TERRAINS = (9, 5, 10, 7)
+
+
 @st.composite
 def outcome_law_state(draw, tables: Tables, names: Names) -> BattleState:
     """``supported_state`` widened for the outcome-law tests: Lucky Chant on either
@@ -489,6 +498,8 @@ def outcome_law_state(draw, tables: Tables, names: Names) -> BattleState:
             a["pp"][side, mon, 0] = move_pp[move]
             if int(tables.move_effect[move]) == EffectId.PROTECT:
                 a["protect_count"][side] = draw(st.integers(0, 3))
+            if int(tables.move_effect[move]) == EffectId.NATURE_POWER:
+                a["terrain"][...] = draw(st.sampled_from(_NATURE_POWER_TERRAINS))
         if draw(st.integers(0, 3)) == 0:
             a["ability"][side, mon] = draw(st.sampled_from(LAW_ABILITIES))
     return BattleState(**{name: jnp.asarray(a[name]) for name in BattleState._fields})

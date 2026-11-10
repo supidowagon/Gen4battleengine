@@ -78,6 +78,13 @@ of the turn:
   (``order.selected_move``), so the masks above read it.
 * ``present[s]``: ``s`` uses Present (``BtlCmd_Present``). It joins ``crit[s, 0]`` and
   ``roll[s, 0]`` in one joint factor (``_present_reads``): the heal path reads neither.
+* ``tri_attack[s]``: ``s``'s move runs Tri Attack (its own, or Nature Power's call) and its
+  ``secondary[s, 0]`` is relevant (a target that can take none of burn, freeze and paralysis
+  drops both). It joins ``secondary[s, 0]`` in one joint factor (``_tri_attack_reads``): read
+  only on a proc, 1 + 3 rows instead of 2 * 3; the foe's thaw / full paralysis through it
+  also needs the freeze / paralysis value.
+* Nature Power: every mask above reads the move the action runs (``order.called_move``),
+  except the status checks that read the chosen move (Disable, Taunt).
 * ``protect[s]``: ``s`` uses a Protect-effect move with ``protect_count[s] > 0`` (at 0 the
   rate 0xFFFF never fails: a single value) and acts first in the branch (the battler acting
   last fails without the roll mattering, ``BtlCmd_TryProtection``). A success stops the
@@ -140,6 +147,7 @@ from nuzline.engine.damage import PHYSICAL, ROLLS, SPECIAL, STATUS, hit_damage_t
 from nuzline.engine.effects import can_have_status, protect_blocks
 from nuzline.engine.ids import (
     QUICK_CLAW_MODULUS,
+    TRI_ATTACK_STATUSES,
     AbilityId,
     EffectId,
     ItemId,
@@ -151,6 +159,7 @@ from nuzline.engine.ids import (
 from nuzline.engine.order import (
     MOVE_ACTIONS,
     action_order,
+    called_move,
     effective_speed,
     is_item,
     is_switch,
@@ -191,6 +200,7 @@ _PROC_EFFECTS = (
     _E.TRAP,
     _E.SECONDARY_CONFUSE,
     _E.FANG_PARALYZE_FLINCH,  # its paralysis roll (effects._fang)
+    _E.TRI_ATTACK,  # its status roll (effects._tri_attack)
 )
 # Effects whose flinch roll is ``outcome.secondary`` (effects._flinch) or
 # ``outcome.fang_flinch`` (effects._fang): a flinched Steadfast gains Speed.
@@ -207,6 +217,7 @@ class Reads(NamedTuple):
     flinch_sure: jnp.ndarray  # moving first, a sure hit with a proc flinches the foe
     fang: jnp.ndarray  # its flinch roll is fang_flinch (Thunder Fang), not secondary
     present: jnp.ndarray  # it uses Present: its crit and roll need a damage path (no heal)
+    tri_attack: jnp.ndarray  # its move runs Tri Attack: its status draw needs the proc
     protect_sure: jnp.ndarray  # it uses Protect and reaches TryProtection whatever the rolls
     protect_blocks: jnp.ndarray  # its move is stopped by a protecting foe (protect_blocks)
     confused_own: jnp.ndarray  # it moves confused (counter >= 2) at the start
@@ -253,11 +264,13 @@ def _any_of(x, values) -> jnp.ndarray:
 
 
 def _inflicts(tables: Tables, moves, status) -> jnp.ndarray:
-    """The move inflicts ``status`` on the foe (``STATUS_FOE`` / ``SECONDARY_STATUS`` /
-    ``FANG_PARALYZE_FLINCH`` with ``move_param[m, 0]``, effects._inflict, effects._fang)."""
+    """The move can inflict ``status`` on the foe (``STATUS_FOE`` / ``SECONDARY_STATUS`` /
+    ``FANG_PARALYZE_FLINCH`` with ``move_param[m, 0]``, effects._inflict, effects._fang; and
+    ``TRI_ATTACK`` any of ``TRI_ATTACK_STATUSES``, effects._tri_attack)."""
     effect = tables.move_effect[moves]
     status_effect = _any_of(effect, (_E.STATUS_FOE, _E.SECONDARY_STATUS, _E.FANG_PARALYZE_FLINCH))
-    return status_effect & (tables.move_param[moves, 0] == status)
+    tri = (effect == _E.TRI_ATTACK) & (status in TRI_ATTACK_STATUSES)
+    return (status_effect & (tables.move_param[moves, 0] == status)) | tri
 
 
 def _holds(state: BattleState, actions, abilities) -> jnp.ndarray:
@@ -327,15 +340,22 @@ def _branch_masks(foe_first, first_self, base: dict) -> dict:
     # target has not moved, effects._flinch). A secondary status or confusion on a target
     # that cannot take it changes nothing (status eligibility), judged on the turn-start
     # state, which is the state of the hit when the user moves first with one hit.
-    status_effect = _any_of(b["effect"], (_E.SECONDARY_STATUS, _E.FANG_PARALYZE_FLINCH))
+    status_effect = _any_of(
+        b["effect"], (_E.SECONDARY_STATUS, _E.FANG_PARALYZE_FLINCH, _E.TRI_ATTACK)
+    )
     blocked = first_self & (
         (status_effect & b["status_blocked"])
         | ((b["effect"] == _E.SECONDARY_CONFUSE) & b["confused_blocked"])
     )
     late_flinch = ~first_self & _any_of(b["effect"], (_E.FLINCH, _E.FAKE_OUT))
+    secondary = b["secondary"] & ~(blocked | late_flinch)[:, None]
     return {
         "roll": b["crit"] | (confusable[:, None] & (b["hit_index"] == 0)),
-        "secondary": b["secondary"] & ~(blocked | late_flinch)[:, None],
+        "secondary": secondary,
+        # Tri Attack's status draw: read only through its proc (effects._tri_attack), so only
+        # where that roll is; a chance-0 Tri Attack (none in either game: the decomp asserts a
+        # chance, battle_lib.c:1576) would read it on every landed hit.
+        "tri_attack": b["tri_attack"] & ~blocked & (secondary[:, 0] | b["certain"]),
         # Thunder Fang's flinch roll: the same order gate, and Inner Focus (effects._fang).
         "fang_flinch": b["fang_flinch"] & first_self & ~b["flinch_blocked"],
         # The battler acting last fails Protect whatever its roll (waitingBattlers == 1).
@@ -402,6 +422,10 @@ INPUT_NEUTRAL_EFFECTS = (
     # Sets the foe's infatuated, read only by its attract check, which comes before its move
     # and removes the hit altogether (step._use_move), like a flinch: no damage input.
     _E.ATTRACT,
+    # Never the effect read here: the predicate reads the move each action runs
+    # (order.called_move), Nature Power's call; an unresolved one (unknown terrain, refused
+    # by coverage) calls MOVE_NONE and does nothing.
+    _E.NATURE_POWER,
 )
 INPUT_CLAUSE_EFFECTS = (
     _E.STAT_SELF,  # the foe's Defense / Sp. Def
@@ -420,6 +444,11 @@ INPUT_CLAUSE_EFFECTS = (
     # turn, not this one (order.action_order is fixed at the turn start); its flinch stops
     # the hit, which changes no input.
     _E.FANG_PARALYZE_FLINCH,
+    # A burn (the attacker's physical non-Guts hit) or any status (Guts): the status clause.
+    _E.TRI_ATTACK,
+    # The foe's own types (effects._camouflage): the type chart of the side's later hit
+    # (damage._finish) and the Rock Sp. Def boost in sand: the camouflage clause.
+    _E.CAMOUFLAGE,
 )
 INPUT_NEUTRAL_ABILITIES = (
     AbilityId.NONE,
@@ -510,6 +539,7 @@ TABLE_DAMAGE_EFFECTS = (
     _E.SELF_DESTRUCT,
     _E.FLAIL,
     _E.FANG_PARALYZE_FLINCH,
+    _E.TRI_ATTACK,  # a plain hit at its table power; the status is after the damage
 )
 NON_TABLE_DAMAGE_EFFECTS = (
     _E.STAT_SELF,
@@ -535,6 +565,11 @@ NON_TABLE_DAMAGE_EFFECTS = (
     _E.PRESENT,  # its power is drawn (40/80/120, Outcome.present); the table has power 1
     _E.PROTECT,  # a status move: no damage
     _E.ATTRACT,  # a status move: no damage
+    _E.CAMOUFLAGE,  # a status move: no damage
+    # Its table power is 0: its damage is the called move's. outcome_laws reads the called
+    # move (order.called_move), whose own effect decides (Tri Attack's is a table hit), so
+    # this entry only keeps an unresolved Nature Power (unknown terrain) uncompressed.
+    _E.NATURE_POWER,
 )
 
 
@@ -554,8 +589,9 @@ def damage_inputs_can_change(tables: Tables, state: BattleState, actions, foe_fi
       side's attacking stat stage (``STAT_FOE``), the foe's defending stage
       (``STAT_SELF``, ``RAISE_ALL_STATS_HIT``, Curse's Defense), the side's status when
       it matters (a burn on a physical non-Guts move, any status under Guts, Thunder Fang's
-      paralysis included), the foe's screen for this category, or a sport for this move
-      type;
+      paralysis and Tri Attack's statuses included), the foe's screen for this category, a
+      sport for this move type, or the foe's own types (Camouflage: the type chart and the
+      Rock Sp. Def boost read them);
     * **HP**: Flail's power band and Overgrow / Blaze / Torrent (damage.py :6819-6837)
       read the user's HP: any earlier foe move or earlier hit of the same move;
     * **contact**: on a later hit, the foe's Flame Body burn or Static / Poison Point
@@ -581,7 +617,9 @@ def damage_inputs_can_change(tables: Tables, state: BattleState, actions, foe_fi
     sides = jnp.arange(2)
     mons = state.active
     live = state.over == 0
-    moves = jnp.stack([selected_move(tables, state, side, actions[side])[0] for side in (0, 1)])
+    # The move each action runs (Nature Power's call, order.called_move).
+    chosen = jnp.stack([selected_move(tables, state, side, actions[side])[0] for side in (0, 1)])
+    moves = jnp.stack([called_move(tables, state, chosen[side]) for side in (0, 1)])
     uses_move = live & ~is_switch(actions) & ~is_item(actions)
     effect = tables.move_effect[moves]
     param0 = tables.move_param[moves, 0]
@@ -607,7 +645,11 @@ def damage_inputs_can_change(tables: Tables, state: BattleState, actions, foe_fi
 
     foe_effect, foe_param0 = effect[::-1], param0[::-1]
     unclassified = ~_any_of(foe_effect, INPUT_NEUTRAL_EFFECTS + INPUT_CLAUSE_EFFECTS)
-    status_hit = _any_of(foe_effect, (_E.STATUS_FOE, _E.SECONDARY_STATUS, _E.FANG_PARALYZE_FLINCH))
+    status_hit = _any_of(
+        foe_effect,
+        (_E.STATUS_FOE, _E.SECONDARY_STATUS, _E.FANG_PARALYZE_FLINCH, _E.TRI_ATTACK),
+    )
+    foe_burns = _inflicts(tables, moves[::-1], Status.BURN)
     foe_move = uses_move[::-1] & (
         unclassified
         | (_any_of(foe_effect, (_E.STAT_FOE, _E.SECONDARY_STAT_FOE)) & (foe_param0 == attack_stat))
@@ -617,11 +659,12 @@ def damage_inputs_can_change(tables: Tables, state: BattleState, actions, foe_fi
         )
         | (foe_effect == _E.RAISE_ALL_STATS_HIT)
         | ((foe_effect == _E.CURSE) & physical)
-        | (status_hit & (guts | (burnable & (foe_param0 == Status.BURN))))
+        | (status_hit & (guts | (burnable & foe_burns)))
         | ((foe_effect == _E.REFLECT) & physical)
         | ((foe_effect == _E.LIGHT_SCREEN) & special)
         | ((foe_effect == _E.MUD_SPORT) & (move_type == Type.ELECTRIC))
         | ((foe_effect == _E.WATER_SPORT) & (move_type == Type.FIRE))
+        | (foe_effect == _E.CAMOUFLAGE)
         | hp_sensitive
     )
     foe_action = live & (is_switch(actions)[::-1] | is_item(actions)[::-1] | foe_move)
@@ -656,7 +699,10 @@ def outcome_laws(
     actions = jnp.asarray(actions, _I32)
     live = state.over == 0
     sides = jnp.arange(2)
-    moves = jnp.stack([selected_move(tables, state, side, actions[side])[0] for side in (0, 1)])
+    # ``chosen``: the move each action selects (its status checks: Disable, Taunt); ``moves``:
+    # the move it runs (Nature Power's call, order.called_move), whose draws these are.
+    chosen = jnp.stack([selected_move(tables, state, side, actions[side])[0] for side in (0, 1)])
+    moves = jnp.stack([called_move(tables, state, chosen[side]) for side in (0, 1)])
     switch, item = is_switch(actions), is_item(actions)
     uses_move = live & ~switch & ~item  # bool[2]
     foe_moves = uses_move[::-1]  # the other side uses a move
@@ -728,7 +774,22 @@ def outcome_laws(
     limber = (param0 == Status.PARALYSIS) & (ignorable == AbilityId.LIMBER)
     insomnia = (param0 == Status.SLEEP) & (ignorable == AbilityId.INSOMNIA)
     single = ~multi
-    status_blocked = single & ~insomnia & (~can_take | limber)
+
+    def takes(status) -> jnp.ndarray:
+        return jnp.stack(
+            [can_have_status(state, 1 - side, mons[1 - side], status) for side in (0, 1)]
+        )
+
+    # Tri Attack: blocked when the target can take none of its three statuses (an existing
+    # status; or Fire, Ice and Limber together, subscript_paralyze.s:5).
+    tri_open = (
+        takes(Status.BURN)
+        | takes(Status.FREEZE)
+        | (takes(Status.PARALYSIS) & (ignorable != AbilityId.LIMBER))
+    )
+    status_blocked = single & jnp.where(
+        effect == _E.TRI_ATTACK, ~tri_open, ~insomnia & (~can_take | limber)
+    )
     confused_blocked = single & (state.confusion[::-1] > 0)
     # subscript_flinch_mon.s:7: Inner Focus (ignorable) stops Thunder Fang's flinch.
     flinch_blocked = ignorable == AbilityId.INNER_FOCUS
@@ -752,6 +813,8 @@ def outcome_laws(
         "status_blocked": status_blocked,
         "confused_blocked": confused_blocked,
         "fang_flinch": lands[:, 0] & (effect == _E.FANG_PARALYZE_FLINCH) & (chance != 0),
+        "tri_attack": lands[:, 0] & (effect == _E.TRI_ATTACK),
+        "certain": chance == 0,
         "flinch_blocked": flinch_blocked,
         "protect": uses_move & (effect == _E.PROTECT) & (state.protect_count > 0),
         "para_own": uses_move & (status == Status.PARALYSIS),
@@ -850,6 +913,7 @@ def outcome_laws(
             present=uses_move & (effect == _E.PRESENT),
             protect=m["protect"],
             infatuation=m["infatuation"],
+            tri_attack=m["tri_attack"],
         )
 
     both = zip(branch_relevant(branches[0]), branch_relevant(branches[1]), strict=True)
@@ -874,8 +938,8 @@ def outcome_laws(
         & clean
         & (state.confusion == 0)
         & (state.flinched == 0)
-        & ~((state.disabled_move != 0) & (state.disabled_move.astype(_I32) == moves))
-        & ~((state.taunt > 0) & (tables.move_power[moves] == 0))
+        & ~((state.disabled_move != 0) & (state.disabled_move.astype(_I32) == chosen))
+        & ~((state.taunt > 0) & (tables.move_power[chosen] == 0))
         & (state.infatuated == 0)
         & (state.bide_turns == 0)
     )
@@ -894,7 +958,13 @@ def outcome_laws(
         & (chance != 0)
         & single
     )
-    proc_effects = (_E.SECONDARY_STATUS, _E.SECONDARY_CONFUSE, _E.TRAP, _E.FANG_PARALYZE_FLINCH)
+    proc_effects = (
+        _E.SECONDARY_STATUS,
+        _E.SECONDARY_CONFUSE,
+        _E.TRAP,
+        _E.FANG_PARALYZE_FLINCH,
+        _E.TRI_ATTACK,
+    )
     off = jnp.zeros((2,), bool)
     reads = Reads(
         first=firsts,
@@ -903,6 +973,7 @@ def outcome_laws(
         flinch_sure=off if loose else flinch_sure,
         fang=fang,
         present=off if loose else uses_move & (effect == _E.PRESENT),
+        tri_attack=off if loose else uses_move & (effect == _E.TRI_ATTACK) & (chance != 0),
         protect_sure=off if loose else reach & (effect == _E.PROTECT),
         protect_blocks=off if loose else uses_move & protect_blocks(tables, moves, False),
         confused_own=base["confused_own"],
@@ -1046,6 +1117,12 @@ def _protect(laws: OutcomeLaws, side: int) -> _Law:
     return [0, 1], [65536 - (rate + 1), rate + 1], 65536
 
 
+def _tri_attack(laws: OutcomeLaws, side: int) -> _Law:
+    # effect_script_0036.s Random 2, 3: RandNext() % 3, uniform by the % n convention (exact
+    # 21846/21845/21845 of 65536).
+    return [0, 1, 2], [1, 1, 1], 3
+
+
 def _quick_claw(laws: OutcomeLaws, side: int) -> _Law:
     # speedRand % (100 / param) == 0 (battle_lib.c:1278-1286), uniform by the % n convention
     # (exact 13108/65536 for % 5).
@@ -1079,6 +1156,7 @@ _LAWS = {
     "protect": _protect,
     # CHECK_STATUS_STATE_ATTRACT (bcp.c:2669-2692): RandNext() & 1, exact; 1 = immobilized.
     "infatuation": _coin,
+    "tri_attack": _tri_attack,
 }
 
 
@@ -1278,7 +1356,7 @@ def _move_reads(laws: OutcomeLaws, branch: Branch, plan: ReadPlan) -> None:
                 plan.path(elem, "move", *hits)
             if i > 0 or bool(rel.crit[s, 0]):  # roll[s, 0]: damage, or a self-hit below
                 plan.path(("roll", (s, i)), "move", *hits)
-        for name in ("n_hits", "magnitude", "fang_flinch", "present", "protect"):
+        for name in ("n_hits", "magnitude", "fang_flinch", "present", "protect", "tri_attack"):
             plan.path((name, (s,)), "move", *hits)
         proc = [procs(s)] if bool(reads.proc_gated[s]) else []
         plan.path(("duration", (s,)), "move", *hits, *proc)
@@ -1335,6 +1413,7 @@ def _move_reads(laws: OutcomeLaws, branch: Branch, plan: ReadPlan) -> None:
             "fang_flinch",
             "present",
             "protect",
+            "tri_attack",
         ):
             plan.gate((name, (q,)), cond)
 
@@ -1402,8 +1481,46 @@ def _protect_reads(laws: OutcomeLaws, branch: Branch, plan: ReadPlan) -> None:
         ):
             optional = e == ("roll", (q, 0)) and ("crit", (q, 0)) not in plan
             plan.restrict(e, "move", cond, required=not optional)
-    for name in ("n_hits", "duration", "magnitude", "fang_flinch", "present"):
+    for name in ("n_hits", "duration", "magnitude", "fang_flinch", "present", "tri_attack"):
         plan.restrict((name, (q,)), "move", cond)
+
+
+def _proc(v: np.ndarray) -> np.ndarray:
+    # 1: the secondary roll passed. SKIPPED (not drawn: the hit did not land) is no proc.
+    return v == 1
+
+
+def _tri_value(status: int) -> Callable[[np.ndarray], np.ndarray]:
+    value = TRI_ATTACK_STATUSES.index(status)
+
+    def test(v: np.ndarray) -> np.ndarray:
+        # SKIPPED (not drawn: no proc) inflicts nothing.
+        return v == value
+
+    return test
+
+
+@register_reads
+def _tri_attack_reads(laws: OutcomeLaws, branch: Branch, plan: ReadPlan) -> None:
+    """The (tri_attack, secondary) joint factor (rules 8(b)): effect_script_0036.s draws the
+    status (``Random 2, 3``) on every use, but ``effects._tri_attack`` reads it only when the
+    secondary roll procs (``BattleSystem_TriggerSecondaryEffect``, battle_lib.c:1570-1586), so
+    ``tri_attack[s]``'s "move" path also needs ``secondary[s, 0] == 1``: 1 + 3 rows instead of
+    2 * 3. When the first mover runs Tri Attack, the second mover's thaw / full-paralysis read
+    through that infliction (``Reads.freeze_by_foe`` / ``para_by_foe``, the
+    "status_inflicted" path) also needs the value freeze / paralysis. A chance-0 Tri Attack
+    (``Reads.tri_attack`` off) would read it on every landed hit: no restriction then."""
+    for s in (0, 1):
+        elem = ("tri_attack", (s,))
+        if not bool(laws.reads.tri_attack[s]) or elem not in plan:
+            continue
+        sec = ("secondary", (s, 0))
+        plan.restrict(elem, "move", Condition((sec,), _proc) if sec in plan else NEVER)
+        if branch.first != s:
+            continue
+        for name, status in (("thaw", Status.FREEZE), ("full_para", Status.PARALYSIS)):
+            cond = Condition((elem,), _tri_value(status))
+            plan.restrict((name, (1 - s,)), "status_inflicted", cond, required=False)
 
 
 def damage_class_law(

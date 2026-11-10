@@ -135,6 +135,20 @@ def test_double_team_raises_evasion_for_a_later_move(tables, names):
     assert abs(hit_probability(tables, s, acts, 0) - 0.75) < 1e-12
 
 
+def test_nature_power_call_is_seen_by_hit_thresholds(tables, names):
+    # On GREAT_MARSH a faster foe's Nature Power calls Mud Bomb (Mud-Slap's family:
+    # SECONDARY_STAT_FOE, accuracy -1, effect_script_0073.s): the later Scratch can meet
+    # stage -1 (hit_thresholds reads the called move, order.called_move).
+    marsh = 10  # TERRAIN_GREAT_MARSH (nuzline.data.trainer.TERRAIN_NAMES)
+    s = roark_state(tables, names, opp_moves=["Nature Power"], opp_faster=True)
+    s = s._replace(terrain=jnp.asarray(marsh, s.terrain.dtype))
+    acts = A("Scratch", "Nature Power", s, names)
+    assert hit_law(tables, s, acts, 0) == {1: 75, 76: 25}
+    o = empty_outcome()._replace(secondary=jnp.ones((2, 5), jnp.int8))
+    out = assert_matches_reference(tables, s, acts, o._replace(hit=o.hit.at[0, 0].set(76)))
+    assert int(out.stages[0, Stat.ACC]) == -1 and int(out.hp[1, 0]) == int(s.hp[1, 0])
+
+
 def test_class_values_against_live_threshold(tables, names):
     s, acts = sand_attack_first(tables, names)
     for value, connects in ((1, True), (75, True), (76, False), (0, False)):
@@ -359,12 +373,19 @@ _STAT_KINDS = frozenset(
 # (subscript_paralyze_or_flinch.s): no stage. PRESENT (Task 5) damages or heals the target
 # (effect_script_0122.s, subscript_recover_hp.s): no stage. PROTECT (Task 6) sets the
 # user's protecting flag and chain (BtlCmd_TryProtection): no stage. ATTRACT (Task 7) sets
-# the target's infatuated (BtlCmd_TryAttract): no stage.
+# the target's infatuated (BtlCmd_TryAttract): no stage. CAMOUFLAGE (Task 10) writes the
+# user's types (BtlCmd_TryCamouflage) and TRI_ATTACK a burn, freeze or paralysis
+# (effect_script_0036.s): no stage. NATURE_POWER writes none itself; the move it calls can
+# (Mud Bomb's accuracy drop at GREAT_MARSH), and hit_thresholds reads that called move's
+# effect (order.called_move): test_nature_power_call_is_seen_by_hit_thresholds.
 _NO_ACC_EVA_WRITE = (frozenset(EffectId(i) for i in range(40)) - _STAT_KINDS) | {
     EffectId.FANG_PARALYZE_FLINCH,
     EffectId.PRESENT,
     EffectId.PROTECT,
     EffectId.ATTRACT,
+    EffectId.CAMOUFLAGE,
+    EffectId.NATURE_POWER,
+    EffectId.TRI_ATTACK,
 }
 # (effect, stat) pairs hit_thresholds follows: they change a later foe move's threshold.
 _SEEN = {

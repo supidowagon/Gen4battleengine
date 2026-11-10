@@ -80,7 +80,10 @@ items) and plan 1b (Task 2b: trainer items; Task 3: Roark's AI flags) implement:
   (``TERRAIN_EFFECTS``: Nature Power, Secret Power, Camouflage), on either side or a pool
   candidate's, is refused against a trainer whose ``Trainer.terrain`` is
   ``TERRAIN_UNKNOWN``: its maps give several terrains (the line names them) or none
-  (``terrain_refusal``). A known terrain refuses nothing here.
+  (``terrain_refusal``). With a known terrain only Nature Power can be refused here: when the
+  move it calls there (``terrain_call``, ``ids.TERRAIN_MOVES``) has an unsupported effect
+  (Earthquake, Blizzard). Its call also counts as a move of the fight for the Kaizo ROM-change
+  conditions (``rom_change_refusals``).
 
 ``check_coverage`` also runs the AI's own refusals (``ai.policy.ai_refusals``: opponent
 moves without transcribed script paths, too many script-roll sites, type-chart
@@ -112,7 +115,17 @@ from nuzline.data.trainer import (
     missing_set_data,
 )
 from nuzline.engine.damage import PHYSICAL
-from nuzline.engine.ids import AbilityId, EffectId, ItemId, Stat, TrainerItemId, Type, Weather
+from nuzline.engine.ids import (
+    TERRAIN_MOVES,
+    TERRAIN_SPECIAL,
+    AbilityId,
+    EffectId,
+    ItemId,
+    Stat,
+    TrainerItemId,
+    Type,
+    Weather,
+)
 from nuzline.engine.state import make_state, spec_stats
 
 # include/constants/forms.h:94, :98; generated/species.txt and items.txt (line N is id N-1).
@@ -127,6 +140,7 @@ ITEM_GRISEOUS_ORB = 112
 # BtlCmd_GetTerrainSecondaryEffect, :8063-) and Camouflage (213, BtlCmd_TryCamouflage,
 # :7997-8022). Matched against tables.move_ai_effect (the unmapped decomp effect).
 TERRAIN_EFFECTS = (173, 197, 213)
+NATURE_POWER_EFFECT = 173  # BATTLE_EFFECT_NATURE_POWER, the decomp effect id
 
 
 class Support(IntEnum):
@@ -257,8 +271,9 @@ class _Collector:
 def ghost_curse(tables: Tables, move: int, row: int) -> bool:
     """``move`` is Curse (``EffectId.CURSE``) and personal ``row`` is Ghost-type:
     ``effect_script_0109.s:5-6`` (``BATTLEMON_TYPE_1``/``_2 == TYPE_GHOST``) takes the
-    Ghost branch, which the engine does not model. Types never change in battle in the
-    implemented set (Camouflage, Conversion and Color Change are unsupported)."""
+    Ghost branch, which the engine does not model. The only type change in the implemented
+    set is Camouflage, whose types (``ids.TERRAIN_TYPES``) include no Ghost: a non-Ghost user
+    stays non-Ghost, and a Ghost user is refused whatever it does first (conservative)."""
     if int(np.asarray(tables.move_effect)[move]) != EffectId.CURSE:
         return False
     return Type.GHOST in [int(t) for t in np.asarray(tables.species_types)[row]]
@@ -419,6 +434,8 @@ def rom_change_refusals(
         name for name, on in (("trick_room", area.trick_room), ("gravity", area.gravity)) if on
     }
     moves = {int(m) for s in specs for m in s.moves if m} | {int(m) for m in extra_moves}
+    # Nature Power's call runs its own effect script and data (terrain_calls).
+    moves |= set(terrain_calls(tables, trainer, sorted(moves)))
     items = {int(s.item) for s in specs}
     decomp = np.asarray(tables.species_abilities_decomp)
     abilities = {
@@ -444,17 +461,45 @@ def rom_change_refusals(
     return out
 
 
+def terrain_call(terrain: int) -> int | None:
+    """The move Nature Power calls on battle terrain ``terrain`` (``BtlCmd_GetTerrainMove``,
+    battle_script.c:8036-8048: ``sTerrainMove[min(terrain, TERRAIN_SPECIAL)]``), or None for
+    ``TERRAIN_UNKNOWN``."""
+    if terrain == TERRAIN_UNKNOWN:
+        return None
+    return TERRAIN_MOVES[min(terrain, TERRAIN_SPECIAL)]
+
+
+def terrain_calls(tables: Tables, trainer: Trainer, moves: Sequence[int]) -> list[int]:
+    """The moves ``moves``' Nature Power calls against ``trainer`` (``terrain_call`` of its
+    known terrain), as moves of the fight; empty when none is Nature Power or the terrain is
+    unknown (``terrain_refusal`` refuses that)."""
+    called = terrain_call(trainer.terrain)
+    effect = np.asarray(tables.move_ai_effect)
+    if called is None or not any(m and int(effect[m]) == NATURE_POWER_EFFECT for m in moves):
+        return []
+    return [called]
+
+
 def terrain_refusal(
     tables: Tables, names: Names, trainer: Trainer, moves: Sequence[int]
 ) -> str | None:
     """Why ``moves`` (decomp move ids) cannot be played against ``trainer``: some read the
     battle terrain (``TERRAIN_EFFECTS``) and the trainer's terrain is unknown, either mixed
-    (the line names every terrain its maps give) or unplaced; else None."""
-    if trainer.terrain != TERRAIN_UNKNOWN:
-        return None
+    (the line names every terrain its maps give) or unplaced; or, on a known terrain, Nature
+    Power calls a move whose effect the engine does not implement; else None."""
     effect = np.asarray(tables.move_ai_effect)
     hit = sorted({int(m) for m in moves if m and int(effect[m]) in TERRAIN_EFFECTS})
     if not hit:
+        return None
+    if trainer.terrain != TERRAIN_UNKNOWN:
+        for called in terrain_calls(tables, trainer, hit):
+            engine = EffectId(int(np.asarray(tables.move_effect)[called]))
+            if IMPLEMENTED_EFFECTS.get(engine, Support.NONE) == Support.NONE:
+                return (
+                    f"{display_name(trainer)}: on {TERRAIN_NAMES[trainer.terrain]} Nature Power "
+                    f"calls {names.move_names[called]}, whose effect is not supported"
+                )
         return None
     if trainer.terrains:
         known = [TERRAIN_NAMES[t] for t in trainer.terrains if t != TERRAIN_UNKNOWN]

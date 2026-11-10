@@ -138,6 +138,17 @@ three structs has a row.
   `:8040`, `:8067`); its other readers are graphics and wild catches. `make_state` takes
   it from `Trainer.terrain` (`tools/terrain.py`); `TERRAIN_UNKNOWN` (-1) when the trainer's
   maps give several terrains or none, and coverage then refuses those three effects.
+  Nature Power (`order.called_move`) and Camouflage (`effects._camouflage`) read it through
+  `ids.TERRAIN_MOVES` / `TERRAIN_TYPES` (K3b2 Task 10); an unknown terrain indexes no table
+  (`order.terrain_index`: those readers then do nothing).
+- **BattleMon.type1/type2 -> `types`**: per party slot, from the personal row; written for
+  the active battler by Camouflage (`BtlCmd_TryCamouflage`, `battle_script.c:7997-8022`)
+  and restored from the personal row when the battler leaves (a switch, a faint,
+  `step._restore_types`), as `BattleSystem_InitBattleMon` re-reads the party's types on the
+  next switch-in (`battle_lib.c:114-115`). The Camouflage bit of `moveEffectsMask` stays
+  later: only the AI's own Camouflage scoring reads it (`script.s:1023`).
+- **moveCur / msgMoveTemp** (Nature Power's call) stay per-action scratch: `step._use_move`
+  recomputes the called move (`order.called_move`) from the chosen move and the terrain.
 - **battleEndFlag -> `over`, `winner`**: `winner` is 0 none, 1 player lost (no
   player Pokemon has HP left; a double KO of both last Pokemon is a draw, played as a
   loss), 2 player won. A player faint alone only records a death.

@@ -54,6 +54,22 @@ many are real). Decomp sources:
   roll (``outcome.protect``, 2^-n by ``protect_count``), the last-actor failure and the
   chain; the block of the foe's move is ``protect_blocks`` (``CheckMoveHitOverrides``). No
   effect function runs for it.
+* Tri Attack (``TRI_ATTACK``; Nature Power's call at BUILDING and SPECIAL terrain):
+  ``effect_script_0036.s`` runs ``Random 2, 3`` (``outcome.tri_attack``: burn, freeze or
+  paralysis, ``TRI_ATTACK_STATUSES``) before ``CalcCrit`` and sets it as an indirect
+  probabilistic ``TO_DEFENDER`` effect: ``BattleSystem_TriggerSecondaryEffect``
+  (battle_lib.c:1570-1586) rolls ``RandNext() % 100 < chance`` (``outcome.secondary``), then
+  needs a living defender, no substitute hit and no ``MOVE_STATUS_NO_EFFECTS`` (a miss, an
+  immune target), and runs ``subscript_burn.s`` / ``subscript_freeze.s`` /
+  ``subscript_paralyze.s`` as for a ``SECONDARY_STATUS`` move (``_inflict``, non-direct: Fire
+  is never burned, Ice never frozen and nothing frozen in sun, an existing status blocks,
+  Limber blocks a paralysis silently; paralysis has no type immunity). ``_tri_attack``.
+* Camouflage (``CAMOUFLAGE``): ``effect_script_0213.s`` -> ``BtlCmd_TryCamouflage``
+  (battle_script.c:7997-8022), in the move script before ``TryMove`` (which cannot stop this
+  ``RANGE_USER``, accuracy-0 move): it fails for Multitype (``ABILITY_MULTITYPE``) or when
+  either of the user's types already is ``TERRAIN_TYPES[min(terrain, TERRAIN_SPECIAL)]``,
+  else writes that type to both (``_camouflage``). ``step`` restores the party types when
+  the battler leaves (``BattleSystem_InitBattleMon`` re-reads them, battle_lib.c:114-115).
 * Recover (``RECOVER``): ``effect_script_0032.s`` -> ``subscript_recover_half_max_hp.s``:
   ``DivideVarByValue(maxHP, 2)`` (``BattleSystem_Divide``, at least 1), then
   ``subscript_recover_hp.s``: "HP is full!" at full HP (:6), else the HP update, capped at
@@ -209,14 +225,18 @@ from nuzline.engine.damage import (
     PRESENT_HEAL,
     STATUS,
     damage_for_roll,
+    decomp_abilities,
     divide,
     effectiveness,
     move_type_of,
 )
 from nuzline.engine.ids import (
+    ABILITY_MULTITYPE,
     MOVE_FAKE_OUT,
     MOVE_STRUGGLE,
     RESIST_ANY_NORMAL,
+    TERRAIN_TYPES,
+    TRI_ATTACK_STATUSES,
     AbilityId,
     EffectId,
     ItemId,
@@ -227,6 +247,7 @@ from nuzline.engine.ids import (
     Type,
     Weather,
 )
+from nuzline.engine.order import terrain_index, terrain_known
 from nuzline.engine.outcome import Outcome
 from nuzline.engine.state import STAGE_MAX, STAGE_MIN, BattleState
 
@@ -367,6 +388,32 @@ def _status_foe(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
 def _secondary_status(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     cond = (h.effect == _E.SECONDARY_STATUS) & h.effective & h.proc
     return _inflict(state, h, outcome, cond, False)
+
+
+def _tri_attack(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    """``TRI_ATTACK``: the drawn status (``outcome.tri_attack``) as a secondary status at the
+    move's chance (module docstring)."""
+    statuses = jnp.asarray(TRI_ATTACK_STATUSES, _I32)
+    status = statuses[jnp.clip(outcome.tri_attack[h.side].astype(_I32), 0, len(statuses) - 1)]
+    cond = (h.effect == _E.TRI_ATTACK) & h.effective & h.proc
+    return _inflict(state, h._replace(param=h.param.at[0].set(status)), outcome, cond, False)
+
+
+def _camouflage(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    """``CAMOUFLAGE``: ``BtlCmd_TryCamouflage`` (module docstring). An unknown terrain
+    (``order.terrain_known``) writes nothing (coverage refuses such a fight)."""
+    new = jnp.asarray(TERRAIN_TYPES, _I32)[terrain_index(state)]
+    types = state.types[h.side, h.user]
+    multitype = decomp_abilities(tables, state)[h.side, h.user] == ABILITY_MULTITYPE
+    cond = (
+        (h.effect == _E.CAMOUFLAGE)
+        & h.landed
+        & terrain_known(state)
+        & ~multitype
+        & ~jnp.any(types.astype(_I32) == new)
+    )
+    value = jnp.where(cond, new, types.astype(_I32)).astype(types.dtype)
+    return state._replace(types=state.types.at[h.side, h.user].set(value))
 
 
 def _flinch(tables, state, h: _Hit) -> BattleState:
@@ -1108,8 +1155,10 @@ def play_hit(
     for fn in (
         _status_foe,
         _secondary_status,
+        _tri_attack,
         _fang,
         _present,
+        _camouflage,
         _stealth_rock,
         _trap,
         _taunt,

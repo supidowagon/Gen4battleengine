@@ -97,6 +97,17 @@ TERRAIN_CODE = (
     "FieldMap_ChangeZone",
     "MapObject_IsOnWater",
 )
+# The battle's terrain readers and their tables (K3b2 Task 10): the engine holds the tables as
+# nuzline.engine.ids.TERRAIN_MOVES / TERRAIN_TYPES (the decomp's include/data/terrain/), so a
+# game that changes any of them changes what Nature Power and Camouflage do:
+# check_terrain_code refuses that too.
+BATTLE_TERRAIN_CODE = (
+    "BattleSystem_GetTerrain",
+    "BtlCmd_TryCamouflage",
+    "BtlCmd_GetTerrainMove",
+    "sTerrainMove",
+    "sTerrainCamouflageType",
+)
 
 FBDT_C = Path("src") / "field_battle_data_transfer.c"
 TILE_C = Path("src") / "map_tile_behavior.c"

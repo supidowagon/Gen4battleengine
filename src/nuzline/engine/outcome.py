@@ -6,8 +6,9 @@ lists. Per-hit fields are ``[side, hit_index]`` with up to 5 hits; per-action
 fields are ``[side]``. ``secondary`` is indexed by the attacking side (its own
 move's secondary effect; Thunder Fang's paralysis roll); ``fang_flinch`` by the
 attacking side too (Thunder Fang's second roll, its flinch), ``present`` (Present's
-power or heal), ``protect`` (the user's Protect / Detect roll) and ``infatuation`` (the
-moving side's attract check, 1 = immobilized by love); ``contact_proc`` by the
+power or heal), ``protect`` (the user's Protect / Detect roll), ``infatuation`` (the
+moving side's attract check, 1 = immobilized by love) and ``tri_attack`` (Tri Attack's
+status, ``ids.TRI_ATTACK_STATUSES``); ``contact_proc`` by the
 defending side (its contact ability: Static, Poison Point, Flame Body, Cute Charm);
 ``duration`` by the acting (inflicting) side, and it is the counter value the decomp's
 ``Random`` command stores for that side's move
@@ -43,7 +44,7 @@ import numpy as np
 from nuzline.data.tables import Tables
 from nuzline.engine.damage import PRESENT_HEAL, weather_suppressed
 from nuzline.engine.ids import QUICK_CLAW_MODULUS, AbilityId, EffectId, ItemId, Stat, Weather
-from nuzline.engine.order import MOVE_ACTIONS, action_order, is_item, is_switch, selected_move
+from nuzline.engine.order import MOVE_ACTIONS, action_order, is_item, is_switch, used_move
 from nuzline.engine.state import STAGE_MAX, STAGE_MIN, BattleState
 
 MAX_HITS = 5
@@ -79,6 +80,7 @@ class Outcome(NamedTuple):
     present: jnp.ndarray  # int8[2], Present: 0/1/2 = power 40/80/120, PRESENT_HEAL = the heal
     protect: jnp.ndarray  # int8[2], 1 = the Protect / Detect roll passes (PROTECT_RATES)
     infatuation: jnp.ndarray  # int8[2], 1 = immobilized by love (RandNext() & 1 == 0)
+    tri_attack: jnp.ndarray  # int8[2], Tri Attack's status 0/1/2 (ids.TRI_ATTACK_STATUSES)
 
 
 def empty_outcome() -> Outcome:
@@ -105,6 +107,7 @@ def empty_outcome() -> Outcome:
         present=sides,
         protect=sides + 1,
         infatuation=sides,
+        tri_attack=sides,
     )
 
 
@@ -186,8 +189,9 @@ def live_hit_threshold(tables: Tables, state: BattleState, side, move) -> jnp.nd
 
 
 def _hit_threshold(tables: Tables, state: BattleState, actions, side, acc=None, eva=None):
-    """The turn-start threshold of ``side``'s move, or with these stages instead."""
-    move, _ = selected_move(tables, state, side, actions[side])
+    """The turn-start threshold of ``side``'s move, or with these stages instead. Nature
+    Power's accuracy check is its called move's (``order.called_move``)."""
+    move = used_move(tables, state, side, actions[side])
     target, target_switches, target_mon = _target_mon(state, actions, side)
     acc = state.stages[side, Stat.ACC] if acc is None else acc
     if eva is None:
@@ -265,7 +269,7 @@ def hit_thresholds(tables: Tables, state: BattleState, actions) -> tuple[jnp.nda
     actions = jnp.asarray(actions, _I32)
     live = state.over == 0
     uses_move = live & ~is_switch(actions) & ~is_item(actions)
-    moves = jnp.stack([selected_move(tables, state, side, actions[side])[0] for side in (0, 1)])
+    moves = jnp.stack([used_move(tables, state, side, actions[side]) for side in (0, 1)])
     effect = tables.move_effect[moves]
     stat = tables.move_param[moves, 0]
     delta = tables.move_param[moves, 1].astype(_I32)
@@ -317,9 +321,10 @@ def crit_odds(tables: Tables, state: BattleState, actions) -> jnp.ndarray:
     """``int32[2]``: each side's move crits 1 in N (``BattleSystem_CalcCriticalMulti``,
     battle_lib.c:7105). Only ``HIGH_CRIT`` (+1) raises the stage: Focus Energy, Super
     Luck, Scope Lens and the species items are not implemented. Lucky Chant on the
-    defending side is applied by ``sample_outcome``."""
+    defending side is applied by ``sample_outcome``. Nature Power's are its called move's
+    (``CalcCrit`` runs in the called move's script)."""
     actions = jnp.asarray(actions, _I32)
-    moves = jnp.stack([selected_move(tables, state, side, actions[side])[0] for side in (0, 1)])
+    moves = jnp.stack([used_move(tables, state, side, actions[side]) for side in (0, 1)])
     stage = (tables.move_effect[moves] == EffectId.HIGH_CRIT).astype(_I32)
     return _CRIT_ODDS[jnp.minimum(stage, 4)]
 
@@ -360,7 +365,9 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions) -> Outcome:
         """``RandNext() % n`` for each element."""
         return jax.random.randint(k[i], shape, 0, n, dtype=_I32)
 
-    moves = jnp.stack([selected_move(tables, state, side, actions[side])[0] for side in (0, 1)])
+    # Nature Power draws for its called move (order.called_move): its accuracy, crit odds,
+    # effect chance and secondary effect are the called move's.
+    moves = jnp.stack([used_move(tables, state, side, actions[side]) for side in (0, 1)])
     # The roll u = RandNext() % 100 + 1 (battle_controller_player.c:2976), as its class.
     thresholds, possible = hit_thresholds(tables, state, actions)
     hit = hit_class(draw(0, per_hit, 100) + 1, thresholds[:, None, :], possible[:, None, :])
@@ -435,5 +442,9 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions) -> Outcome:
             jax.random.randint(jax.random.fold_in(key, 19), per_side, 0, 65536, dtype=_I32) & 1
         )
         == 0,
+        # effect_script_0036.s ``Random 2, 3`` (BtlCmd_Random, battle_script.c:3200-3210):
+        # RandNext() % 3 picks burn, freeze or paralysis (ids.TRI_ATTACK_STATUSES), uniform by
+        # the project's % n convention (exact 21846/21845/21845 of 65536).
+        tri_attack=jax.random.randint(jax.random.fold_in(key, 21), per_side, 0, 3, dtype=_I32),
     )
     return Outcome(*(jnp.asarray(f).astype(_I8) for f in outcome))

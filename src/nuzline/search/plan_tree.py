@@ -125,6 +125,9 @@ def _side_text(f: dict, names: Names, side: int, who: str, trainer: str) -> str:
     heal = int(f["present_heal"][side])  # Present's heal path (engine.observe)
     if heal:
         details.append("the foe regained health" if heal == 1 else "the foe's HP is full")
+    called = int(f["called"][side])  # Nature Power's call (engine.observe)
+    if called:
+        details.insert(0, f"it turned into {names.move_names[called]}")
     if kind == ACT_MOVE:
         head = f"{who} used {names.move_names[act]}"
     elif kind == ACT_TAUNTED:

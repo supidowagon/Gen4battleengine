@@ -56,7 +56,7 @@ from nuzline.engine.damage import (
     damage_for_roll,
 )
 from nuzline.engine.ids import AbilityId, EffectId, ItemId, Stat, Status, Weather
-from nuzline.engine.order import MOVE_ACTIONS, effective_speed, selected_move
+from nuzline.engine.order import MOVE_ACTIONS, effective_speed, used_move
 from nuzline.engine.outcome import MAX_HITS, Outcome, empty_outcome
 from nuzline.engine.state import LAYOUT, SLOTS, BattleState, make_state
 from nuzline.engine.step import needs_replacement, replace, step
@@ -385,7 +385,7 @@ class _Turn:
         leaves stale, so only records naming this side and this move count. A side that never
         reached the move (flinched, fully paralyzed) has none: the roll stays unread. Several
         that disagree on the flag raise."""
-        move = int(selected_move(self.tables, self.state, side, action)[0])
+        move = int(used_move(self.tables, self.state, side, action))
         if int(self.tables.move_effect[move]) != EffectId.PROTECT:
             return
         ends = [
@@ -430,7 +430,7 @@ class _Turn:
             if known_move:
                 self._protect_roll(o, side, actions[side][0])
             if hits:
-                move = int(selected_move(self.tables, self.state, side, actions[side][0])[0])
+                move = int(used_move(self.tables, self.state, side, actions[side][0]))
                 o["n_hits"][side] = min(max(len(hits), 2), MAX_HITS)
             for i, e in enumerate(hits[:MAX_HITS]):
                 if e["move"] != move:
@@ -499,7 +499,7 @@ class _Turn:
                 options.append(("infatuation", (side,), [0, 1]))
             if actions[side] >= MOVE_ACTIONS or not connected[side]:
                 continue
-            move = int(selected_move(tables, state, side, actions[side])[0])
+            move = int(used_move(tables, state, side, actions[side]))
             effect = int(tables.move_effect[move])
             chance = int(tables.move_effect_chance[move])
             per_hit = (side, slice(None))
@@ -515,6 +515,10 @@ class _Turn:
                 # Present connected with no hit record: its heal (no UPDATE_HP damage), or a
                 # damage path into an immunity; the replay matches the target's HP gain.
                 options.append(("present", (side,), [0, PRESENT_HEAL]))
+            if effect == EffectId.TRI_ATTACK:
+                # Tri Attack's status (Outcome.tri_attack): shows only as the target's status,
+                # read when the secondary procs.
+                options.append(("tri_attack", (side,), [0, 1, 2]))
             if effect == EffectId.FANG_PARALYZE_FLINCH:
                 # Thunder Fang's second roll (Outcome.fang_flinch): a flinch shows only as the
                 # target's missing move.
@@ -577,7 +581,7 @@ class _Turn:
         foe = 1 - side
         if actions[foe] >= MOVE_ACTIONS:
             return False
-        move = int(selected_move(self.tables, self.state, foe, actions[foe])[0])
+        move = int(used_move(self.tables, self.state, foe, actions[foe]))
         return int(self.tables.move_effect[move]) == EffectId.ATTRACT
 
     def _end_of_turn_states(self, actions: tuple[int, int]) -> list[BattleState]:

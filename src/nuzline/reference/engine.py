@@ -31,11 +31,16 @@ import copy
 from dataclasses import dataclass, field
 
 from nuzline.engine.ids import (
+    ABILITY_MULTITYPE,
     MOVE_FAKE_OUT,
     MOVE_STRUGGLE,
     POTION_HP_RESTORED,
     PROTECT_CHAIN_MOVES,
     RESIST_ANY_NORMAL,
+    TERRAIN_MOVES,
+    TERRAIN_SPECIAL,
+    TERRAIN_TYPES,
+    TRI_ATTACK_STATUSES,
     WEATHER_ABILITY_IDS,
     AbilityId,
     EffectId,
@@ -128,6 +133,33 @@ def _active(s: RefState, side: int) -> RefPokemon:
 
 def _t(tables, name: str, *index) -> int:
     return int(getattr(tables, name)[index])
+
+
+def _terrain_row(s: RefState) -> int | None:
+    """The terrain tables' row ``BattleSystem_GetTerrain`` gives ``GetTerrainMove`` /
+    ``TryCamouflage`` (``min(terrain, TERRAIN_SPECIAL)``, script.c:8007-8010, :8040-8043), or
+    None for an unknown terrain (-1), which no table is indexed with (coverage refuses such a
+    fight; its readers do nothing, as the JAX engine's)."""
+    return None if s.terrain < 0 else min(s.terrain, TERRAIN_SPECIAL)
+
+
+def _called_move(tables, s: RefState, move: int) -> int:
+    """effect_script_0173.s (Nature Power): ``GetTerrainMove`` (script.c:8036-8048) then
+    ``GoToMoveScript`` (:2111-2134) runs ``sTerrainMove[row]`` as ``moveCur``; MOVE_NONE for
+    an unknown terrain. Any other move runs itself."""
+    if _t(tables, "move_effect", move) != EffectId.NATURE_POWER:
+        return move
+    row = _terrain_row(s)
+    return 0 if row is None else TERRAIN_MOVES[row]
+
+
+def _restore_types(tables, s: RefState, side: int) -> None:
+    """The leaving battler's types go back to its personal row's: Camouflage writes only the
+    battler's ``BattleMon.type1/type2``, which ``BattleSystem_InitBattleMon`` re-reads from
+    the party (lib.c:114-115)."""
+    mon = _active(s, side)
+    row = _t(tables, "species_form_row", mon.species, mon.form)
+    mon.types = [_t(tables, "species_types", row, i) for i in range(len(mon.types))]
 
 
 def _hidden_power(ivs: list[int]) -> tuple[int, int]:
@@ -579,6 +611,7 @@ def _cleanup_fainted(turn: _Turn, s: RefState, side: int) -> None:
     cleared, ``fakeOutTurnNumber = totalTurns + 1`` (lib.c:2195), ``moveHit`` and
     ``movePrevByBattler`` reset (lib.c:2199); what it is the source of ends: the Bind it put
     on a foe (lib.c:2179) and the foe's infatuation (:2174-2176)."""
+    _restore_types(turn.tables, s, side)
     _reset_battler(s.sides[side])
     s.sides[side].fake_out_turn = turn.entry_turn
     _source_leaves(s, side)
@@ -873,6 +906,7 @@ def _enter(turn: _Turn, s: RefState, side: int, slot: int) -> None:
     battler is the source of (the Bind on the foe, the foe's infatuation, lib.c:2088-2098).
     Then the entry hazards."""
     sd = s.sides[side]
+    _restore_types(turn.tables, s, side)  # the outgoing battler's Camouflage ends
     sd.active = slot
     _reset_battler(sd)
     sd.fake_out_turn = turn.entry_turn
@@ -1036,6 +1070,19 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
     elif effect in (EffectId.STATUS_FOE, EffectId.SECONDARY_STATUS) and effective:
         if effect == EffectId.STATUS_FOE or proc:
             _inflict(turn, s, side, target, p0, effect == EffectId.STATUS_FOE)
+    elif effect == EffectId.TRI_ATTACK and effective and proc:
+        # effect_script_0036.s: Random 2, 3 (script.c:3200-3210) picks burn, freeze or
+        # paralysis, an indirect TO_DEFENDER effect at the move's chance (lib.c:1570-1586:
+        # the roll, then a living defender) through subscript_burn/freeze/paralyze.s.
+        _inflict(turn, s, side, target, TRI_ATTACK_STATUSES[o.tri_attack[side]], False)
+    elif effect == EffectId.CAMOUFLAGE and landed:
+        # effect_script_0213.s -> BtlCmd_TryCamouflage (script.c:7997-8022): fails for
+        # Multitype or when either type already is the terrain's; else both become it.
+        user, row = _active(s, side), _terrain_row(s)
+        if row is not None and _decomp_ability(tables, user) != ABILITY_MULTITYPE:
+            new = int(TERRAIN_TYPES[row])
+            if new not in user.types:
+                user.types = [new] * len(user.types)
     elif effect == EffectId.FANG_PARALYZE_FLINCH and effective:
         # effect_script_0275.s -> subscript_paralyze_or_flinch.s: CheckEffectActivation
         # (the roll, then the target's HP; script.c:8377-8378) and the indirect paralysis,
@@ -1489,13 +1536,27 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
             return record
         mon.pp[slot] -= 1
     # BattleControllerPlayer_HasNoTarget (bcp.c:2306): BattleSystem_Defender found no
-    # living foe for a move aimed at it.
-    if not _defender_always(tables, move) and _active(s, 1 - side).hp == 0:
+    # living foe for a move aimed at it. Nature Power's defender is its user
+    # (RANGE_SINGLE_TARGET_SPECIAL, lib.c:1665-1669): it never fails here.
+    nature_power = _t(tables, "move_effect", move) == EffectId.NATURE_POWER
+    if not nature_power and not _defender_always(tables, move) and _active(s, 1 - side).hp == 0:
         _unlock(s.sides[side])  # subscript_no_target.s
         return record
     # SYSCTL_MOVE_SUCCEEDED (bcp.c:3212): UpdateMoveBuffers (bcp.c:3945) keeps the move
-    # (Struggle's own id when struggling) in movePrevByBattler.
+    # (Struggle's own id when struggling; Nature Power, moveTemp, for Nature Power) in
+    # movePrevByBattler.
     s.sides[side].last_move = move
+    if nature_power:
+        # effect_script_0173.s: GetTerrainMove, then GoToMoveScript (script.c:2111-2134):
+        # moveCur is the called move from here on, and the defender is re-picked for it
+        # (randomize: the living foe in singles, else BATTLER_NONE -> subscript_no_target,
+        # which unlocks; UpdateFlagsWhenHit then writes no moveHit). With a defender the foe's
+        # moveHit becomes moveCur.
+        move = _called_move(tables, s, move)
+        if not _defender_always(tables, move) and _active(s, 1 - side).hp == 0:
+            _unlock(s.sides[side])
+            return None
+        record = move
     # The move script (bcp.c:3214): effect_script_0158.s (Fake Out) sets MOVE_STATUS_FAILED
     # unless fakeOutTurnNumber == totalTurns; TryMove then ends in subscript_missed.s
     # ("But it failed!").

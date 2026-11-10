@@ -218,6 +218,16 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     # engine/effects.py ``_attract``, engine/step.py).
     120: ("BATTLE_EFFECT_INFATUATE", _E.ATTRACT, (0, 0, 0)),
     276: ("BATTLE_EFFECT_RAISE_SP_ATK_HIT", _E.SECONDARY_STAT_SELF, (_SPA, 1, 0)),
+    # effect_script_0036.s (Tri Attack): Random 2, 3 picks burn, freeze or paralysis as the
+    # indirect TO_DEFENDER effect at the move's chance (engine/effects.py ``_tri_attack``,
+    # Outcome.tri_attack).
+    36: ("BATTLE_EFFECT_TRI_ATTACK", _E.TRI_ATTACK, (0, 0, 0)),
+    # effect_script_0173.s (Nature Power): BtlCmd_GetTerrainMove (battle_script.c:8036-8048)
+    # then GoToMoveScript into the terrain's move (engine/order.py ``called_move``).
+    173: ("BATTLE_EFFECT_NATURE_POWER", _E.NATURE_POWER, (0, 0, 0)),
+    # effect_script_0213.s (Camouflage): BtlCmd_TryCamouflage (battle_script.c:7997-8022;
+    # engine/effects.py ``_camouflage``).
+    213: ("BATTLE_EFFECT_CAMOUFLAGE", _E.CAMOUFLAGE, (0, 0, 0)),
 }
 
 DECOMP_EFFECT_NAMES: dict[int, str] = {k: v[0] for k, v in _EFFECTS.items()}

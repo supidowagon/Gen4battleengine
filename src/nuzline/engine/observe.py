@@ -48,6 +48,9 @@ Events, per side (``[side]``; 0 = player):
 * ``present_heal``: Present's heal path ran on a hit: 1 "regained health", 2 "HP is full!"
   (``subscript_recover_hp.s``), else 0. Its damage path's power is never printed (only the
   HP change shows it).
+* ``called``: the move Nature Power turned into ("Nature Power turned into MOVE!",
+  effect_script_0173.s), once its script ran, else 0. ``act_id`` stays Nature Power; the
+  called move's hits, misses and crits are the side's.
 * The status checks before a move (step.py:327-377, bcp.c:2417-2728): ``asleep``
   (stays asleep), ``woke``, ``frozen`` (stays frozen), ``thawed`` (its own thaw roll or a
   thawing move), ``flinched``, ``confused`` ("is confused"), ``snapped_out``,
@@ -72,7 +75,8 @@ such a crit is not recorded. No implemented move sets ``substitute_hp`` (it is o
 reset, ``_VOLATILE`` step.py:94; notes/stage-b/observe.md section 1), so the case cannot
 arise yet; were it to, its states would stay in one set (coarser, never finer).
 
-The visible projection of ``after``: both actives, every slot's species, status and
+The visible projection of ``after``: both actives and their current types (Camouflage's
+"X transformed into the TYPE type!", effect_script_0213.s), every slot's species, status and
 held/consumed item (a Rindo / Chilan Berry's "weakened" message,
 ``subscript_type_resist_berry.s:_245``, is always followed by its ``RemoveItem``, so
 ``item_consumed`` shows it); the non-zero-ness of ``confusion``, ``taunt``, ``trapped``,
@@ -161,8 +165,10 @@ _LAYOUT: tuple[tuple[str, tuple[int, ...]], ...] = (
     ("crit", (SIDES, MAX_HITS)),
     ("magnitude", _SIDE),
     ("present_heal", _SIDE),
+    ("called", _SIDE),
     *((name, _SIDE) for name in EVENT_FLAGS),
     ("active", _SIDE),
+    ("active_types", (SIDES, 2)),
     ("species", _SLOT),
     ("status", _SLOT),
     ("item", _SLOT),
@@ -236,6 +242,7 @@ def observation(events: dict, after: BattleState) -> jnp.ndarray:
         **events,
         "order": jnp.where(both, order[0], -1),
         "active": after.active,
+        "active_types": after.types[jnp.arange(SIDES), after.active],
         "species": after.species,
         "status": after.status,
         "item": after.item,

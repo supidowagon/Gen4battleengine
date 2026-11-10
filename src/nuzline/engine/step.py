@@ -110,6 +110,7 @@ from nuzline.engine.ids import (
 from nuzline.engine.order import (
     MOVE_ACTIONS,
     action_order,
+    called_move,
     is_item,
     is_switch,
     player_second,
@@ -313,11 +314,26 @@ def _forget(state: BattleState, side, slot) -> BattleState:
     )
 
 
-def _switch_in(state: BattleState, side, slot, entry_turn) -> BattleState:
-    """``side`` sends out party ``slot``: stages and volatiles reset, the effects the
+def _restore_types(tables: Tables, state: BattleState, side, cond) -> BattleState:
+    """``side``'s active battler leaves the field where ``cond``: its ``types`` go back to its
+    personal row's (``tables.species_types`` at ``species_form_row``, as ``make_state`` builds
+    them). Only Camouflage (``effects._camouflage``) writes ``types``; the decomp writes the
+    battler's ``BattleMon.type1/type2`` and ``BattleSystem_InitBattleMon`` re-reads the party
+    Pokemon's on its next switch-in (battle_lib.c:114-115), so the party never sees it."""
+    mon = state.active[side]
+    row = tables.species_form_row[state.species[side, mon], state.form[side, mon]]
+    party = tables.species_types[row].astype(state.types.dtype)
+    value = jnp.where(cond, party, state.types[side, mon])
+    return state._replace(types=state.types.at[side, mon].set(value))
+
+
+def _switch_in(tables: Tables, state: BattleState, side, slot, entry_turn) -> BattleState:
+    """``side`` sends out party ``slot``: the outgoing battler's types are restored
+    (``_restore_types``), stages and volatiles reset, the effects the
     outgoing Pokemon is the source of end (``_source_leaves``: the Bind it put on the other
     side, the other side's infatuation), ``fake_out_turn`` becomes ``entry_turn`` and the AI
     forgets the newcomer (``_forget``; ``BattleSystem_UpdateAfterSwitch``, battle_lib.c:2094)."""
+    state = _restore_types(tables, state, side, True)
     state = _reset_battler(state, side, True)
     state = _forget(state, side, slot)
     state = _entered(state, side, entry_turn, True)
@@ -328,7 +344,7 @@ def _switch_in(state: BattleState, side, slot, entry_turn) -> BattleState:
 def _send_out(tables: Tables, state: BattleState, side, slot) -> BattleState:
     """A switch action: ``_switch_out``, ``_switch_in``, then ``hooks.on_switch_in``
     (entry hazards, Intimidate, berries)."""
-    entered = _switch_in(_switch_out(state, side), side, slot, state.turn + 1)
+    entered = _switch_in(tables, _switch_out(state, side), side, slot, state.turn + 1)
     return on_switch_in(tables, entered, side)
 
 
@@ -337,7 +353,15 @@ def _empty_events() -> dict:
     side = jnp.zeros((2,), _I32)
     events = {
         name: side
-        for name in ("act_kind", "act_id", "shown", "magnitude", "present_heal", *EVENT_FLAGS)
+        for name in (
+            "act_kind",
+            "act_id",
+            "shown",
+            "magnitude",
+            "present_heal",
+            "called",
+            *EVENT_FLAGS,
+        )
     }
     events["crit"] = jnp.zeros((2, MAX_HITS), _I32)
     return events
@@ -521,24 +545,36 @@ def _use_move(
     pp = state.pp.at[side, user, slot].add(jnp.where(spend, -1, 0).astype(state.pp.dtype))
     state = state._replace(pp=pp)
 
+    # Nature Power (effect_script_0173.s): its script turns it into the terrain's move
+    # (order.called_move: GetTerrainMove, then GoToMoveScript sets moveCur and re-picks the
+    # defender), so from here on the move that runs is ``used``; the status checks above, the
+    # PP, priority and movePrevByBattler (moveTemp) stay Nature Power's.
+    nature_power = tables.move_effect[move] == EffectId.NATURE_POWER
+    used = called_move(tables, state, move)
     # Accuracy 0 never misses (CheckMoveHitAccuracy returns before rolling, :2901). A
     # multi-hit move checks accuracy on its first hit only (effects.py).
     # The no-target check (:3190) fails a move whose defender has fainted; a move whose
     # defender exists whatever the foe's HP (effects.defender_always) never fails there.
-    never_misses = tables.move_accuracy[move] == 0
-    has_target = (state.hp[target_side, target] > 0) | defender_always(tables, move)
+    # Nature Power's own defender is its user (RANGE_SINGLE_TARGET_SPECIAL,
+    # BattleSystem_Defender battle_lib.c:1665-1669), so it passes that check; its
+    # GoToMoveScript (battle_script.c:2121-2131) re-picks the defender for the called move
+    # (``randomize``: in singles the living foe, else BATTLER_NONE, lib.c:1683-1705) and goes
+    # to subscript_no_target without one: ``has_target`` is the called move's.
+    never_misses = tables.move_accuracy[used] == 0
+    has_target = (state.hp[target_side, target] > 0) | defender_always(tables, used)
     # SYSCTL_MOVE_SUCCEEDED (battle_controller_player.c:3212) once the move got past the
     # status checks, the PP decrement and the no-target check, before the accuracy check
     # (a miss counts): UpdateMoveBuffers (:3945-3949) writes the move (Struggle's own id
-    # when struggling) to movePrevByBattler, else MOVE_NONE. Every path of a battler
-    # that acts reaches it, the confusion self-hit too (LOOP_FAINTED, :2639).
-    succeeded = can_act & has_target
+    # when struggling; Nature Power, moveTemp, for Nature Power, even when its call finds no
+    # target) to movePrevByBattler, else MOVE_NONE. Every path of a battler that acts
+    # reaches it, the confusion self-hit too (LOOP_FAINTED, :2639).
+    succeeded = can_act & (has_target | nature_power)
     state = _set_last_move(state, side, jnp.where(succeeded, move, 0), ready)
     # The move script runs next (BATTLE_CONTROL_EXEC_SCRIPT, :3214): Fake Out's
     # (effect_script_0158.s) sets MOVE_STATUS_FAILED unless fakeOutTurnNumber == totalTurns.
     # The accuracy roll still happens, but subscript_missed.s prints "But it failed!" (:97)
     # ahead of the miss message, so only an attempt that did not fail can show a miss.
-    failed = (tables.move_effect[move] == EffectId.FAKE_OUT) & (
+    failed = (tables.move_effect[used] == EffectId.FAKE_OUT) & (
         state.fake_out_turn[side].astype(_I32) != state.turn.astype(_I32)
     )
     # Selfdestruct / Explosion (effect_script_0007.s): the script sets the user's HP to 0
@@ -547,18 +583,18 @@ def _use_move(
     # BATTLE_CONTROL_FAINT_AFTER_SELFDESTRUCT (bcp.c:3889), within this action, so the
     # action's faint check sees it with the target's. Damp (the script's other branch) is
     # an unsupported ability.
-    self_destruct = can_act & has_target & (tables.move_effect[move] == EffectId.SELF_DESTRUCT)
+    self_destruct = can_act & has_target & (tables.move_effect[used] == EffectId.SELF_DESTRUCT)
     state = _set_mon(state, "hp", side, user, 0, self_destruct)
     # CheckMoveHitAccuracy reads the threshold now, with this moment's stages (bcp.c:
     # 2873-2874): a faster Sand-Attack or Double Team this turn counts. outcome.hit[side, 0]
     # is the roll's class (outcome.py): it hits when 0 < class <= threshold (:2976).
     roll = outcome.hit[side, 0].astype(_I32)
-    threshold = live_hit_threshold(tables, state, side, move)
+    threshold = live_hit_threshold(tables, state, side, used)
     hit = never_misses | ((roll > 0) & (roll <= threshold))
     # CheckMoveHitOverrides (bcp.c:3001-3014) runs after the accuracy roll, hit or miss: a
     # protecting foe stops the move (effects.protect_blocks), MOVE_STATUS_PROTECTED, and
     # Battler_UnlockMoveChoice (the unlock below). Selfdestruct's user already fainted.
-    blocked = jnp.asarray(foe_protecting) & protect_blocks(tables, move, bide_ends)
+    blocked = jnp.asarray(foe_protecting) & protect_blocks(tables, used, bide_ends)
     connected = can_act & has_target & hit & ~failed & ~blocked
     # Protect / Detect (effect_script_0111.s, a direct TO_ATTACKER effect: the user has HP)
     # -> subscript_protect.s -> BtlCmd_TryProtection (battle_script.c:5149-5190). The
@@ -568,21 +604,22 @@ def _use_move(
     # (waitingBattlers != 1, bcp.c:881-886: in singles, it acts first): turnFlags.protecting
     # and the count up to PROTECT_CHAIN_MAX; else the count drops to 0 ("But it failed!").
     count = state.protect_count[side].astype(_I32)
-    tried = connected & (tables.move_effect[move] == EffectId.PROTECT)
+    tried = connected & (tables.move_effect[used] == EffectId.PROTECT)
     protect_ok = tried & ~target_moved & ((count == 0) | (outcome.protect[side] != 0))
     protect_failed = tried & ~protect_ok
     count = jnp.where(
         protect_ok, jnp.minimum(count + 1, PROTECT_CHAIN_MAX), jnp.where(protect_failed, 0, count)
     )
-    # UpdateMoveBuffers (bcp.c:3936-3942): moveProtect = the move when the attack message
-    # was shown (the move got past the status checks: can_act), else MOVE_NONE, on every
-    # path of a battler that acts. The next TryProtection resets the chain unless
-    # moveProtect is Protect, Detect or Endure (script.c:5154-5158); the engine folds that
+    # UpdateMoveBuffers (bcp.c:3936-3942): moveProtect = moveCur (Nature Power's called move)
+    # when the attack message was shown (the move got past the status checks: can_act), else
+    # MOVE_NONE, on every path of a battler that acts. The next TryProtection resets the
+    # chain unless moveProtect is Protect, Detect or Endure (script.c:5154-5158); the engine
+    # folds that
     # reset in here, and AICmd_LoadProtectChain (trainer_ai.c:2546-2552) reads the folded
     # value. A switch, a bag item and Pursuit's pre-switch hit (TryPursuit ends the action
     # without UpdateMoveBuffers, script.c:6931) leave it alone.
     chain = jnp.asarray(PROTECT_CHAIN_MOVES, _I32)
-    keep = can_act & jnp.isin(jnp.asarray(move, _I32), chain)
+    keep = can_act & jnp.isin(jnp.asarray(used, _I32), chain)
     count = jnp.where(ready & ~keep, 0, count)
     state = state._replace(
         protect_count=state.protect_count.at[side].set(count.astype(state.protect_count.dtype))
@@ -590,13 +627,13 @@ def _use_move(
     # subscript_no_target.s and subscript_missed.s unlock the attacker (a Rollout that
     # missed; a first use never locked, so this is then a no-op).
     state = _unlock(state, side, can_act & ~connected)
-    n_hits = hit_count(tables, move, outcome, side)
+    n_hits = hit_count(tables, used, outcome, side)
     # Present's heal path (effects._present): subscript_recover_hp.s prints "regained health"
     # (1), or "HP is full!" (2) for a target at full HP; the target's HP is unchanged
     # between here and the hit.
     present_heal = (
         connected
-        & (tables.move_effect[move] == EffectId.PRESENT)
+        & (tables.move_effect[used] == EffectId.PRESENT)
         & (outcome.present[side] == PRESENT_HEAL)
     )
     target_full = state.hp[target_side, target] == state.max_hp[target_side, target]
@@ -604,7 +641,7 @@ def _use_move(
     # A Recover / Present heal on a full-HP recipient (single-hit moves): MOVE_STATUS_NO_MORE_WORK
     # skips the move's AfterMoveEffects (effects.recovers_at_full_hp), so no item check runs in
     # any loop pass below (the passes after the hit would otherwise repeat it).
-    no_more_work = connected & recovers_at_full_hp(tables, state, side, move, outcome)
+    no_more_work = connected & recovers_at_full_hp(tables, state, side, used, outcome)
 
     # A loop, not unrolled: one copy of the effect code in the program, not MAX_HITS
     # (unrolled, it dominated trace and compile time). It also counts the hits that
@@ -618,13 +655,13 @@ def _use_move(
         landed = (
             going
             & (hit_index < n_hits)
-            & ((state.hp[target_side, target] > 0) | defender_always(tables, move))
+            & ((state.hp[target_side, target] > 0) | defender_always(tables, used))
         )
         hit_state, info = play_hit(
             tables,
             state,
             side,
-            move,
+            used,
             outcome,
             hit_index,
             connected=going,
@@ -635,8 +672,8 @@ def _use_move(
         # A LEVEL_DAMAGE move never runs CalcCrit (effect_script_0087.s): no crit message.
         # (nor does Bide's unleash: its script has no CalcCrit).
         crit = (outcome.crit[side, hit_index] != 0) & (
-            (tables.move_effect[move] != EffectId.LEVEL_DAMAGE)
-            & (tables.move_effect[move] != EffectId.BIDE)
+            (tables.move_effect[used] != EffectId.LEVEL_DAMAGE)
+            & (tables.move_effect[used] != EffectId.BIDE)
         )
         seen = _hit_events(state, hit_state, side, landed, crit)
         # BattleControllerPlayer_AfterMoveEffects (battle_controller_player.c:3638) runs
@@ -652,9 +689,9 @@ def _use_move(
         # later hit that did not happen changes no HP, so its check finds what the
         # previous one found.
         items = connected & ~no_more_work & ~protect_failed  # a failed Protect: subscript_missed
-        state, used = held_item_check(tables, hit_state, side, items, info.pluck_flag)
+        state, item_used = held_item_check(tables, hit_state, side, items, info.pluck_flag)
         state = after_damage_items(tables, state, 1 - side, items)
-        state = after_damage_items(tables, state, side, items & used & info.pluck_flag)
+        state = after_damage_items(tables, state, side, items & item_used & info.pluck_flag)
         return (
             state,
             hits + landed.astype(_I32),
@@ -686,8 +723,12 @@ def _use_move(
     # self-hit makes the user the defender (battle_controller_player.c:2629), so the
     # foe's record is untouched. ``_move_end`` keeps this write past the faint check, as
     # the decomp writes it after LOOP_FAINTED.
+    # Nature Power's defender is its user until its script re-picks the foe (``has_target``):
+    # the foe gets moveCur, the called move, only then (no write when the move was disrupted
+    # first or its call found no target: the defender is the user or BATTLER_NONE).
     record = ready & ~self_hit & (foe_defender | (bide_ends & can_act))
-    move_hit = jnp.where(record, jnp.where(can_act, move, 0), state.move_hit[target_side])
+    record = jnp.where(nature_power, can_act & has_target, record)
+    move_hit = jnp.where(record, jnp.where(can_act, used, 0), state.move_hit[target_side])
     state = state._replace(
         move_hit=state.move_hit.at[target_side].set(move_hit.astype(state.move_hit.dtype))
     )
@@ -711,9 +752,12 @@ def _use_move(
         # (BattleSystem_TriggerPrimaryEffect, battle_lib.c:1481), not run for a move with
         # MOVE_STATUS_DID_NOT_HIT (an immune target): shown when the hit dealt damage.
         "magnitude": jnp.where(
-            dealt & (tables.move_effect[move] == EffectId.MAGNITUDE), outcome.magnitude[side], 0
+            dealt & (tables.move_effect[used] == EffectId.MAGNITUDE), outcome.magnitude[side], 0
         ),
         "present_heal": present_heal,
+        # effect_script_0173.s: "Nature Power turned into MOVE!" (msgMoveTemp) once its script
+        # runs: the called move's id, else 0.
+        "called": jnp.where(can_act & nature_power, used, 0),
         "crit": crits,
         "full_para": full_para,
         "flinched": flinched,
@@ -860,7 +904,9 @@ def _pursuit_hit(
     )
 
 
-def _faint_check(before: BattleState, after: BattleState, entry_turn=None) -> BattleState:
+def _faint_check(
+    tables: Tables, before: BattleState, after: BattleState, entry_turn=None
+) -> BattleState:
     """Count new player faints (``player_faints``) and record their party slots
     (``deaths``); a player faint ends the battle only when no player Pokemon has HP left.
     The battle is over when either side is out: both out at once is
@@ -875,7 +921,7 @@ def _faint_check(before: BattleState, after: BattleState, entry_turn=None) -> Ba
     ``move_hit``, :2199), ``fake_out_turn`` becomes ``entry_turn`` (:2195; by default
     ``turn + 1``, the value inside ``step``), and the effects it is the source of end
     (``_source_leaves``: the Bind on the other side, :2179, and its infatuation,
-    :2174-2176). Every newly fainted Pokemon also loses its status condition and counter: the
+    :2174-2176); its Camouflage types are restored (``_restore_types``). Every newly fainted Pokemon also loses its status condition and counter: the
     decomp writes ``status = 0`` for a Pokemon with no HP (battle_controller.c:1482-1486)."""
     entry_turn = after.turn + 1 if entry_turn is None else entry_turn
     fainted = (before.hp > 0) & (after.hp == 0)
@@ -898,6 +944,7 @@ def _faint_check(before: BattleState, after: BattleState, entry_turn=None) -> Ba
     )
     for side in (0, 1):
         active_fainted = fainted[side, after.active[side]]
+        after = _restore_types(tables, after, side, active_fainted)
         after = _reset_battler(after, side, active_fainted)
         after = _entered(after, side, entry_turn, active_fainted)
         after = _source_leaves(after, side, active_fainted)
@@ -965,7 +1012,7 @@ def _execute_actions(
     events = _put(events, pursuer, pursuer_events, pursued)
     target_events = {"contact_ability": seen["contact"], "thawed_by_hit": seen["thaw"]}
     events = _put(events, first, target_events, pursued)
-    state = _faint_check(before, _where(pursued, hit, state))
+    state = _faint_check(tables, before, _where(pursued, hit, state))
 
     # Both actors through one loop body (a loop, not unrolled: one copy of ``_act``).
     def act(position, carry):
@@ -986,7 +1033,7 @@ def _execute_actions(
         foe = 1 - side
         foe_events = {name: v | (events[name][foe] != 0) for name, v in foe_events.items()}
         events = _put(events, foe, foe_events, ~skip)
-        return _move_end(_faint_check(before, acted), acted, side, ran), events
+        return _move_end(_faint_check(tables, before, acted), acted, side, ran), events
 
     state, events = jax.lax.fori_loop(0, 2, act, (state, events))
     return state, {**events, "pursuit": pursued.astype(_I32)}
@@ -1260,7 +1307,7 @@ def field_conditions(tables: Tables, state: BattleState, sides) -> BattleState:
     for position in (0, 1):
         side = sides[position]
         state = _where(effects, _weather_effect(state, side, ability), state)
-    state = _faint_check(before, state)
+    state = _faint_check(tables, before, state)
 
     gravity = _count_down(state.gravity)
     return state._replace(gravity=jnp.where(state.over == 0, gravity, state.gravity))
@@ -1281,7 +1328,7 @@ def end_of_turn(
             before = state
             args = (outcome,) if name == "ability" else ()
             after = check(tables, state, side, *args)
-            state = _faint_check(before, _where(state.over == 0, after, state))
+            state = _faint_check(tables, before, _where(state.over == 0, after, state))
     return state._replace(flinched=jnp.zeros_like(state.flinched))
 
 
@@ -1435,8 +1482,8 @@ def replace(tables: Tables, state: BattleState, side, slot) -> BattleState:
     ``ReplaceFainted`` runs before ``totalTurns++`` (:1852), while ``step`` has already
     added 1 to ``turn``: the decomp's ``totalTurns + 1`` is ``turn`` here, for the
     newcomer's ``fake_out_turn`` and for a faint on entry."""
-    entered = _switch_in(state, side, slot, state.turn)
-    out = _faint_check(entered, on_switch_in(tables, entered, side), entry_turn=state.turn)
+    entered = _switch_in(tables, state, side, slot, state.turn)
+    out = _faint_check(tables, entered, on_switch_in(tables, entered, side), entry_turn=state.turn)
     # The slot's speedRand stays; it is unread unless the newcomer (or, after an entry
     # faint, the next replacement) can be a Quick Claw holder (qc_kept).
     return _keep_quick_claw(tables, out, out.qc_roll)

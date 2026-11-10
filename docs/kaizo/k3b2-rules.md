@@ -927,6 +927,15 @@ Nature Power vs Gible Thunder Fang at the speed tie is exactly at the cap only w
    hit on the dragged-in Pokemon (§6a). Settle: battle_controller.c emit sites, and
    subscript_update_hp.s plus bcp:3638-3760.
 5. Nature Power with an already-fainted foe: the `NO_TARGET` path and the `moveHit` write (§8a).
+   **Settled (K3b2 Task 10):** Nature Power's own defender is its user (RANGE_SINGLE_TARGET_SPECIAL,
+   battle_lib.c:1665-1669), so `BeforeMove`'s `HasNoTarget` passes: PP spent and
+   `SYSCTL_MOVE_SUCCEEDED` set (movePrevByBattler = Nature Power, bcp.c:3212, :3945-3949).
+   `GoToMoveScript` (battle_script.c:2121-2131) re-picks with `randomize` TRUE, whose branch
+   (battle_lib.c:1683-1705) gives BATTLER_NONE in singles when the foe has no HP (no RandNext
+   outside doubles): `commandNext = UPDATE_MOVE_BUFFERS` and `subscript_no_target` (attack
+   message, "no target", UnlockMoveChoice). `UpdateFlagsWhenHit` skips `moveHit` for
+   `defender == BATTLER_NONE` (bcp.c:4488): the foe's record is untouched (`step._use_move`,
+   tests/engine/test_terrain_moves.py).
 6. Terrain: whether Kaizo changed matrix/land_data members, and whether "mixed" trainers exist on
    the user's route (§9).
    **Settled (K3b2 Task 9):** the reader reads the patched ROM's matrix and land data NARCs

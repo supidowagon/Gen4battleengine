@@ -377,6 +377,12 @@ For each turn, `tools/trace_to_state.py` works out the following:
   roll. The heal path runs no `CalcDamage` and so writes no `hit` record: a Present that
   connected with no `hit` record is replayed with `present` 0 and the heal
   (`PRESENT_HEAL`), and the replay that matches the target's HP gain is kept.
+- **Nature Power, Tri Attack.** Records name `moveCur`, so a Nature Power's `hit` and
+  `move_end` records name the move it called (`order.called_move`: Tri Attack on Roark's
+  BUILDING terrain) while its PP is Nature Power's; the converter matches them against the
+  called move. Tri Attack's status (`Outcome.tri_attack` 0-2: burn, freeze, paralysis) is
+  enumerated with its `secondary` whenever the move connected; the target's status in the
+  next record picks it.
 - **Protect.** A Protect / Detect user's `move_end` record carries `MOVE_STATUS_FAILED`
   (bit 6) when `BtlCmd_TryProtection` failed: the converter sets `Outcome.protect` to 0
   then, else 1 (a success; a chain of 0 or a user acting last ignores the roll). A move it

@@ -177,6 +177,28 @@ CONSTANTS: tuple[Constant, ...] = (
     Constant("nuzline.engine.ids.MOVE_PROTECT", "move", 182, "Protect", _E),
     Constant("nuzline.engine.ids.MOVE_DETECT", "move", 197, "Detect", _E),
     Constant("nuzline.engine.ids.MOVE_ENDURE", "move", 203, "Endure", _E),
+    # ABILITY_MULTITYPE (generated/abilities.txt line 122): BtlCmd_TryCamouflage
+    # (battle_script.c:8001-8004).
+    Constant("nuzline.engine.ids.ABILITY_MULTITYPE", "ability", 121, "Multitype", _E),
+    # sTerrainMove (include/data/terrain/to_move.h): the moves Nature Power calls
+    # (BtlCmd_GetTerrainMove, battle_script.c:8036-8048); its type twin TERRAIN_TYPES holds
+    # ids.Type members, asserted with ids.Type.
+    *_table(
+        "nuzline.engine.ids.TERRAIN_MOVES",
+        "move",
+        _E,
+        {
+            "Earthquake": 89,
+            "Seed Bomb": 402,
+            "Rock Slide": 157,
+            "Blizzard": 59,
+            "Hydro Pump": 56,
+            "Ice Beam": 58,
+            "Tri Attack": 161,
+            "Mud Bomb": 426,
+            "Air Slash": 403,
+        },
+    ),
     # The weather code's decomp abilities (generated/abilities.txt line N is id N-1).
     *_table(
         "nuzline.engine.ids.WEATHER_ABILITY_IDS",

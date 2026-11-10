@@ -1287,8 +1287,9 @@ def rom_battle_structures(
 def check_terrain_code(changed: list[list[str]]) -> None:
     """Raise unless the ROM diff's changed code keys (``[module, symbol]``) leave the
     terrain path alone: every ``tools.terrain.TERRAIN_CODE`` symbol and every
-    ``TileBehavior_*`` predicate, which ``tools.terrain`` reads from the decomp."""
-    from tools.terrain import TERRAIN_CODE
+    ``TileBehavior_*`` predicate, which ``tools.terrain`` reads from the decomp, and every
+    ``BATTLE_TERRAIN_CODE`` symbol, whose tables the engine holds (``nuzline.engine.ids``)."""
+    from tools.terrain import BATTLE_TERRAIN_CODE, TERRAIN_CODE
 
     hit = sorted(
         f"{module} {name}"
@@ -1299,6 +1300,12 @@ def check_terrain_code(changed: list[list[str]]) -> None:
         raise ReaderError(
             f"the ROM changes the battle terrain code ({', '.join(hit)}); tools/terrain.py "
             "reads it from the decomp"
+        )
+    hit = sorted(f"{module} {name}" for module, name in changed if name in BATTLE_TERRAIN_CODE)
+    if hit:
+        raise ReaderError(
+            f"the ROM changes the in-battle terrain code ({', '.join(hit)}); the engine's "
+            "TERRAIN_MOVES / TERRAIN_TYPES (nuzline.engine.ids) are the decomp's"
         )
 
 

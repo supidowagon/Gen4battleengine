@@ -29,7 +29,7 @@ from nuzline.engine.order import (
     action_order,
     effective_speed,
     is_switch,
-    selected_move,
+    used_move,
 )
 from nuzline.engine.outcome import Outcome, empty_outcome
 from nuzline.engine.state import BattleState
@@ -185,7 +185,8 @@ def _move_events(tables, state, actions, outcome, turn) -> list[dict]:
             continue  # fully paralyzed before moving
         if in_love[side] and int(outcome.infatuation[side]):
             continue  # immobilized by love: no attack message, no record
-        move = int(selected_move(tables, state, side, actions[side])[0])
+        # moveCur: Nature Power's records name its called move (GoToMoveScript).
+        move = int(used_move(tables, state, side, actions[side]))
         if int(tables.move_effect[move]) == EffectId.PROTECT:
             # BtlCmd_TryProtection: the first actor, with a chain of 0 or a passing roll.
             count = int(state.protect_count[side])
@@ -422,6 +423,39 @@ def test_present_damage_and_heal_are_inferred(tables, names, tmp_path):
             )
         assert turn.mismatched == ()
     assert [int(t.outcome.present[0]) for t in turns[:3]] == [0, PRESENT_HEAL, 1]
+
+
+def test_nature_power_tri_attack_status_is_inferred(tables, names, tmp_path):
+    # Monferno's Nature Power (in Leer's slot) on Roark's BUILDING terrain calls Tri Attack:
+    # its hit records name Tri Attack (moveCur), its PP is Nature Power's. Turn 0's secondary
+    # procs and paralyzes Geodude (Outcome.tri_attack 2); turn 1's does not.
+    text = PARTY.read_text(encoding="utf-8").replace(
+        '"Scratch", "Leer",', '"Scratch", "Nature Power",', 1
+    )
+    party = tmp_path / "nature_power_party.toml"
+    party.write_text(text, encoding="utf-8")
+
+    def tri(k, **hits):
+        return _outcome(**hits)._replace(tri_attack=jnp.asarray([k, 0], jnp.int8))
+
+    script = [
+        ((LEER, ROCK_THROW), tri(2, p_roll=5, p_secondary=1, o_roll=3)),
+        ((LEER, ROCK_THROW), tri(0, p_roll=9, o_roll=1)),
+    ]
+    records, states = _engine_trace(tables, names, script, (0, 0), party)
+    hits = [r["move"] for r in records if r["kind"] == "hit" and r["attacker"] == 0]
+    assert hits == [names.move("Tri Attack")] * 2
+    assert int(states[1].status[1, 0]) == Status.PARALYSIS
+    turns = convert(_bundle(tmp_path, names, records, party), tables, names)
+    assert len(turns) == len(states)
+    for i, (turn, expected) in enumerate(zip(turns, states)):
+        for name in BattleState._fields:
+            assert np.array_equal(getattr(turn.state, name), getattr(expected, name)), (
+                f"turn {i} field {name}"
+            )
+        assert turn.mismatched == ()
+    assert int(turns[0].outcome.tri_attack[0]) == 2
+    assert int(turns[0].outcome.secondary[0, 0]) == 1
 
 
 def test_protect_rolls_are_inferred(tables, names, tmp_path):
