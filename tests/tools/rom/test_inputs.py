@@ -13,7 +13,9 @@ def test_toml_and_env_precedence(tmp_path):
     assert got.vanilla_rom == REPO_ROOT / "roms" / "v.nds"
     assert got.kaizo_patch == Path("C:\\p\\k.xdelta") and got.kaizo_save == Path("s.sav")
     assert got.pkcalc_zip is None and got.kaizo_docs is None
-    assert got.kaizo_save_pre_roark is None
+    assert got.kaizo_save_pre_roark is None and got.kaizo_save_probe is None
+    probe = {"NUZLINE_KAIZO_SAVE_PROBE": "probe.dsv"}
+    assert load_inputs(cfg, environ=probe).kaizo_save_probe == Path("probe.dsv")
     pre = {"NUZLINE_KAIZO_SAVE_PRE_ROARK": "base.dsv"}
     assert load_inputs(cfg, environ=pre).kaizo_save_pre_roark == Path("base.dsv")
     cfg.write_text("vanilla_rom = 'v.nds'\nkaizo_save_pre_roark = 'saves/base.dsv'\n")

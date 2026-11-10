@@ -19,6 +19,7 @@ single-quoted strings for Windows paths; relative paths resolve against the repo
 | `kaizo_docs` | `NUZLINE_KAIZO_DOCS` | the Kaizo docs spreadsheet (audited copy: SHA-256 `41c0c7fe...d74f`) |
 | `kaizo_save` | `NUZLINE_KAIZO_SAVE` | optional: a Kaizo save (the tests use a Maylene-era save) |
 | `kaizo_save_pre_roark` | `NUZLINE_KAIZO_SAVE_PRE_ROARK` | optional: an earlier Kaizo save (pre-Roark), `.sav` or DeSmuME `.dsv` |
+| `kaizo_save_probe` | `NUZLINE_KAIZO_SAVE_PROBE` | optional: the trace probe's save (`docs/tracing_kaizo.md`), the party taken to Roark |
 
 A ROM or patch hash mismatch stops the build. The PKCalc and spreadsheet hashes are recorded
 in the report, not enforced; tests that pin audited counts skip on another copy. Tests that

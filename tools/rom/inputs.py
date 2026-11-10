@@ -36,6 +36,7 @@ _ENV = {
     "kaizo_docs": "NUZLINE_KAIZO_DOCS",
     "kaizo_save": "NUZLINE_KAIZO_SAVE",
     "kaizo_save_pre_roark": "NUZLINE_KAIZO_SAVE_PRE_ROARK",
+    "kaizo_save_probe": "NUZLINE_KAIZO_SAVE_PROBE",
 }
 
 
@@ -57,6 +58,7 @@ class RomInputs:
     kaizo_docs: Path | None
     kaizo_save: Path | None
     kaizo_save_pre_roark: Path | None = None  # a second, earlier save (pre-Roark)
+    kaizo_save_probe: Path | None = None  # the trace probe's save (the party taken to Roark)
 
 
 def _read_toml(config: Path) -> dict[str, object]:
