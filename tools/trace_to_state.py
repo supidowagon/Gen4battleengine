@@ -444,9 +444,20 @@ class _Turn:
                 # Thunder Fang's second roll (Outcome.fang_flinch): a flinch shows only as the
                 # target's missing move.
                 options.append(("fang_flinch", (side,), [0, 1]))
+            # The contact abilities with a roll (effects._contact_ability) of the defender:
+            # the target's start-of-turn active (Pursuit hits the outgoing one) or the
+            # Pokemon it switches in.
             target = 1 - side
-            defender = int(state.ability[target, state.active[target]])
-            if defender in (AbilityId.STATIC, AbilityId.POISON_POINT, AbilityId.CUTE_CHARM):
+            defenders = [int(state.active[target])]
+            if MOVE_ACTIONS <= actions[target] < FIRST_ITEM_ACTION:
+                defenders.append(actions[target] - MOVE_ACTIONS)
+            rolled = (
+                AbilityId.STATIC,
+                AbilityId.POISON_POINT,
+                AbilityId.FLAME_BODY,
+                AbilityId.CUTE_CHARM,
+            )
+            if any(int(state.ability[target, mon]) in rolled for mon in defenders):
                 options.append(("contact_proc", (target, slice(None)), [0, 1]))
             sleep = (
                 effect in (EffectId.STATUS_FOE, EffectId.SECONDARY_STATUS)

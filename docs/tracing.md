@@ -377,8 +377,9 @@ For each turn, `tools/trace_to_state.py` works out the following:
   then, else 1 (a success; a chain of 0 or a user acting last ignores the roll). A move it
   blocked writes no `hit` record and its `move_end` has `MOVE_STATUS_PROTECTED` (bit 15).
 - **The other chance fields** are `speed_tie`, `end_speed_tie`, `full_para`, `thaw`,
-  `infatuation`, `secondary`, `contact_proc` (only when Static, Poison Point or Cute Charm
-  is in play) and `duration`. These are enumerated only where they can matter:
+  `infatuation`, `secondary`, `contact_proc` (only when the defender, the target's
+  start-of-turn active or the Pokemon it switches in, has Static, Poison Point, Flame Body or
+  Cute Charm) and `duration`. These are enumerated only where they can matter:
   - `speed_tie` when the start state's speeds are equal.
   - `end_speed_tie` when the speeds are equal in the start state, after the turn's
     switches, or after the switches with the next record's status and stages (a

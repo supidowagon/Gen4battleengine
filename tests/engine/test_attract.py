@@ -55,7 +55,7 @@ from nuzline.engine.outcome import Outcome, empty_outcome, sample_outcome
 from nuzline.engine.state import make_state
 from nuzline.engine.step import _source_leaves, replace, step, step_events
 from nuzline.prep.pool import Candidate, check_pool
-from nuzline.prep.problem import _ability_refusal
+from nuzline.prep.problem import _ability_refusal, _item_refusal
 from nuzline.search.plan_tree import _FLAG_TEXT
 from tests.engine.helpers import (
     A,
@@ -686,3 +686,20 @@ def test_oblivious_is_refused(tables, names):
     opp = [mon, *roark_party(names)[1:]]
     report = check_coverage(tables, names, base, roark_trainer(), opp, 0)
     assert any(m.endswith("Oblivious (ability UNSUPPORTED)") for m in report.missing)
+
+
+@pytest.mark.parametrize("item", ["Mental Herb", "Destiny Knot"])
+def test_infatuation_items_are_refused(tables, names, item):
+    # HOLD_EFFECT_HEAL_INFATUATION (battle_lib.c:4890, :5103) and HOLD_EFFECT_RECIPROCATE_INFAT
+    # (:4545-4559) would change infatuation; neither is modelled, so the item is refused on
+    # both sides, in the pool and in prep.
+    base = sample_party(names)
+    mon = replace_spec(base[0], item=names.item(item))
+    line = f"MONFERNO (slot 0): {item} (held item UNSUPPORTED)"
+    report = check_coverage(tables, names, [mon, *base[1:]], roark_trainer(), roark_party(names), 0)
+    assert f"Player {line}" in report.missing
+    opp = [mon, *roark_party(names)[1:]]
+    assert f"Roark {line}" in check_coverage(tables, names, base, roark_trainer(), opp, 0).missing
+    cand = Candidate(("party", 0, 0), "P", mon, 0, (), ())
+    assert f"P: {item} (held item UNSUPPORTED)" in check_pool(tables, names, [cand], ()).missing
+    assert _item_refusal(tables, mon.item) == "held item not implemented"

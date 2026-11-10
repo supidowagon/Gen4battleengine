@@ -43,9 +43,10 @@ of the turn:
   Poison Point or Flame Body holder on side ``d`` (Rough Skin has no roll): its active
   Pokemon (Pursuit hits the outgoing one) or the one it switches in (effects.py:343-365);
   or against a Cute Charm holder there of the attacker's opposite gender (neither
-  genderless) while the attacker is not in love at the start (effects._contact_ability:
-  ``BtlCmd_TryAttract`` fails otherwise; one becoming infatuated earlier in the turn only
-  removes the read).
+  genderless) while the attacker is not in love at the start, or while side ``d`` switches
+  (the outgoing source leaves first and clears the attacker's love, ``step._source_leaves``,
+  so the incoming holder's charm can work) (effects._contact_ability: ``BtlCmd_TryAttract``
+  fails otherwise; one becoming infatuated earlier in the turn only removes the read).
 * ``n_hits[s]``: ``MULTI_HIT`` without a fixed count (``move_param[m, 0] == 0``).
 * ``full_para[s]`` / ``thaw[s]``: ``s`` moves and is paralyzed / frozen at the start,
   or the foe moves first with a move that inflicts it and the target can take it
@@ -832,8 +833,9 @@ def outcome_laws(
     # reaches the hit whatever the rolls (none of the checks of
     # BattleControllerPlayer_CheckStatusDisruption, bcp.c:2417-2728, can stop it: no
     # sleep, freeze, paralysis, confusion, flinch, Disable on it, Taunt on a power-0 move,
-    # infatuation or Bide; the first mover cannot fall in love before its own check), deals damage at every crit and roll (play_hit's ``effective``: the flinch
-    # needs it), and the target, the foe's active Pokemon using a move, has no Inner
+    # infatuation or Bide; the first mover cannot fall in love before its own check),
+    # deals damage at every crit and roll (play_hit's ``effective``: the flinch needs it),
+    # and the target, the foe's active Pokemon using a move, has no Inner
     # Focus as the attacker sees it (effects._flinch, effects._fang). Fake Out also needs its
     # first turn (effect_script_0158.s). Thunder Fang's roll is fang_flinch (``Reads.fang``).
     clean = ~_any_of(status, (Status.SLEEP, Status.FREEZE, Status.PARALYSIS))

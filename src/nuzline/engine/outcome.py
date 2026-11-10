@@ -8,8 +8,9 @@ move's secondary effect; Thunder Fang's paralysis roll); ``fang_flinch`` by the
 attacking side too (Thunder Fang's second roll, its flinch), ``present`` (Present's
 power or heal), ``protect`` (the user's Protect / Detect roll) and ``infatuation`` (the
 moving side's attract check, 1 = immobilized by love); ``contact_proc`` by the
-defending side (its contact ability: Static, Poison Point, Flame Body, Cute Charm); ``duration`` by the acting (inflicting) side, and it
-is the counter value the decomp's ``Random`` command stores for that side's move
+defending side (its contact ability: Static, Poison Point, Flame Body, Cute Charm);
+``duration`` by the acting (inflicting) side, and it is the counter value the decomp's
+``Random`` command stores for that side's move
 (``sample_outcome``).
 
 ``sample_outcome`` reproduces each decomp roll (citations per field below). The

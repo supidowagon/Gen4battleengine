@@ -23,7 +23,7 @@ import pytest
 from nuzline.data.party import load_party
 from nuzline.data.trainer import IntermediateData, build_trainer_party, load_trainers
 from nuzline.engine.damage import PRESENT_HEAL, confusion_damage, damage_for_roll
-from nuzline.engine.ids import EffectId, MoveFlag, Stat, Status, Weather
+from nuzline.engine.ids import AbilityId, EffectId, MoveFlag, Stat, Status, Weather
 from nuzline.engine.order import (
     MOVE_ACTIONS,
     action_order,
@@ -588,6 +588,27 @@ def test_a_status_shown_after_the_turn_is_enumerated(tables, names, status, fiel
     assert _variant_values(tables, state, after, (EMBER, ROCK_THROW), field, (1,)) == {0}
     after["status"][1, 0] = status
     assert _variant_values(tables, state, after, (EMBER, ROCK_THROW), field, (1,)) == {0, 1}
+
+
+@pytest.mark.parametrize("ability", [AbilityId.CUTE_CHARM, AbilityId.FLAME_BODY])
+@pytest.mark.parametrize("where", ["active", "switch_in"])
+def test_contact_ability_rolls_are_enumerated(tables, names, ability, where):
+    # The player's defender with a rolled contact ability: the start-of-turn active, or the
+    # Pokemon switched in (Prinplup) that Geodude's move then hits.
+    state = _engine_trace(tables, names, [])[1][0]
+    after = _fields(_turn_record(state, 1))
+    slot = 0 if where == "active" else 1
+    actions = (EMBER, ROCK_THROW) if where == "active" else (TO_PRINPLUP, ROCK_THROW)
+    moved = [{"kind": "move_end", "turn": 0, "attacker": 1, "move": 0, "flags": 0}]
+
+    def values(s):
+        inference = _Turn(tables, s, after, moved, 0)
+        base = {name: np.asarray(v).copy() for name, v in empty_outcome()._asdict().items()}
+        return {int(o["contact_proc"][0, 0]) for o in inference.variants(actions, base)}
+
+    plain = state._replace(ability=state.ability.at[0, :].set(AbilityId.NONE))
+    assert values(plain) == {0}
+    assert values(plain._replace(ability=plain.ability.at[0, slot].set(ability))) == {0, 1}
 
 
 def test_an_end_of_turn_speed_tie_after_a_switch_is_enumerated(tables, names):
