@@ -20,6 +20,10 @@ actions whose interval overlaps the leader's (never the leader itself). A playou
 (``PlayoutResult.refused``) has no result; any such playout makes ``rank_actions``
 raise ``UnsupportedAi`` rather than count it, naming the refused mechanic of the first
 refused playout (``refusal_reason``).
+
+The root's hidden draws (the battle-start Quick Claw ``speedRand``, ``BattleState.qc_roll``)
+are a chance node: each playout draws them (``playout.root_state``) from its own key, the
+same for every action (common random numbers).
 """
 
 from __future__ import annotations
@@ -40,7 +44,12 @@ from nuzline.engine.actions import MOVE_ACTIONS, NUM_ACTIONS, decision_actions, 
 from nuzline.engine.state import MAX_DEATH_BUDGET, BattleState
 from nuzline.jaxcache import cached_export, code_version
 from nuzline.search import deaths
-from nuzline.search.playout import PlayoutResult, playout_from_action, refusal_reason
+from nuzline.search.playout import (
+    PlayoutResult,
+    playout_from_action,
+    refusal_reason,
+    root_state,
+)
 
 __all__ = [
     "ActionResult",
@@ -142,8 +151,11 @@ def _playouts(tables: Tables, state: BattleState, actions, keys, max_turns: int)
     """``PlayoutResult`` of shape ``[A, n]``: every action against every key. Run
     through ``cached_export`` (traced once per shape, sharding and source version)."""
 
+    def one(action, k):
+        return playout_from_action(tables, root_state(tables, state, k), action, k, max_turns)
+
     def per_action(action):
-        return jax.vmap(lambda k: playout_from_action(tables, state, action, k, max_turns))(keys)
+        return jax.vmap(lambda k: one(action, k))(keys)
 
     return jax.vmap(per_action)(actions)
 
@@ -199,7 +211,8 @@ def rank_actions(
         label = action_label(names, state, action, struggle)
         if refused[i].any():
             first = int(np.flatnonzero(refused[i])[0])
-            reason = refusal_reason(tables, state, action, keys[first], max_turns)
+            root = root_state(tables, state, keys[first])
+            reason = refusal_reason(tables, root, action, keys[first], max_turns)
             raise UnsupportedAi(
                 f"{int(refused[i].sum())} of {n} playouts from {label!r} refused; "
                 f"playout {first}: {reason or 'reason not reproduced outside jit'}"

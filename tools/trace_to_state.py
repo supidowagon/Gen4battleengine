@@ -15,6 +15,13 @@ matched against ``damage_for_roll``. The remaining chance fields are found by
 replaying every candidate through ``step`` and keeping the one that best matches the
 next record.
 
+Quick Claw's hidden ``speedRand`` bit (``BattleState.qc_roll``, which the trace does not
+record) is fitted per turn as a variant of the turn's *start* state, for a side whose
+active Pokemon holds a Quick Claw: the value carried from the previous turn first, so it
+is kept unless the other value matches the record better. That bit is the previous turn's
+draw (``Outcome.quick_claw``), so a changed value is written back into the previous
+turn's outcome and that turn is replayed again; on turn 0 it is the battle-start draw.
+
 CLI: ``uv run python -m tools.trace_to_state --trace <raw.jsonl> --out
 tests/golden/roark_01.json (--party tests/fixtures/golden_party_roark_01.toml | --save
 <save.dsv>) [--game vanilla|kaizo] [--trainer roark | --trainer-id N]``. ``--save`` takes
@@ -48,7 +55,7 @@ from nuzline.engine.damage import (
     confusion_damage,
     damage_for_roll,
 )
-from nuzline.engine.ids import AbilityId, EffectId, Stat, Status, Weather
+from nuzline.engine.ids import AbilityId, EffectId, ItemId, Stat, Status, Weather
 from nuzline.engine.order import MOVE_ACTIONS, effective_speed, selected_move
 from nuzline.engine.outcome import MAX_HITS, Outcome, empty_outcome
 from nuzline.engine.state import LAYOUT, SLOTS, BattleState, make_state
@@ -244,16 +251,31 @@ def _confusion_rows(tables, state, side):
 
 
 @jax.jit
-def _replay(tables, state, actions, outcomes, slot):
-    """``step`` for each candidate, then the opponent's replacement into ``slot``."""
+def _replay(tables, state, qcs, actions, outcomes, slot):
+    """``step`` for each candidate from ``state`` with that candidate's start ``qc_roll``
+    (``qcs``), then the opponent's replacement into ``slot``."""
 
-    def one(a, o):
-        s = step(tables, state, a, o)
+    def one(q, a, o):
+        s = step(tables, state._replace(qc_roll=q), a, o)
         r = replace(tables, s, 1, slot)
         need = needs_replacement(s)[1] != 0
         return jax.tree.map(lambda x, y: jnp.where(need, x, y), r, s)
 
-    return jax.vmap(one)(actions, outcomes)
+    return jax.vmap(one)(qcs, actions, outcomes)
+
+
+def _holds_quick_claw(tables: Tables, state: BattleState, side: int, mon: int) -> bool:
+    return int(tables.item_effect[int(state.item[side, mon])]) == ItemId.QUICK_CLAW
+
+
+def _mismatches(result: BattleState, after: dict[str, np.ndarray]) -> np.ndarray:
+    """``bool[N, len(COMPARED_FIELDS)]``: where each replayed row differs from ``after``."""
+    wrong = np.zeros((len(result.hp), len(COMPARED_FIELDS)), bool)
+    for f, name in enumerate(COMPARED_FIELDS):
+        got = np.asarray(getattr(result, name))
+        axes = tuple(range(1, got.ndim))
+        wrong[:, f] = ~np.all(got == after[name][None], axis=axes)
+    return wrong
 
 
 class _Turn:
@@ -415,6 +437,14 @@ class _Turn:
         connected = [bool(base["hit"][s, 0]) and self._acted(s) for s in (0, 1)]
         fixed: list[tuple[str, tuple, int]] = []
         for side in (0, 1):
+            # This turn's speedRand bit orders the end of the turn (step.end_of_turn_order)
+            # when the battler on the field then holds a Quick Claw; the next turn's fit of
+            # its start qc_roll can still rewrite it (convert_bundle).
+            end_mon = int(state.active[side])
+            if MOVE_ACTIONS <= actions[side] < FIRST_ITEM_ACTION:
+                end_mon = actions[side] - MOVE_ACTIONS
+            if _holds_quick_claw(tables, state, side, end_mon):
+                options.append(("quick_claw", (side,), [0, 1]))
             statuses = self._statuses(side)
             if Status.PARALYSIS in statuses:
                 options.append(("full_para", (side,), [0, 1]))
@@ -521,11 +551,28 @@ class _Turn:
             e["kind"] == "hit" and e["attacker"] == side for e in self.events
         )
 
-    def infer(self) -> tuple[tuple[int, int], dict, BattleState, tuple[str, ...]]:
+    def qc_variants(self) -> list[tuple[int, int]]:
+        """The start ``qc_roll`` values to replay: for a side whose active Pokemon holds a
+        Quick Claw both bits, the carried value first (so ties keep it); else 0."""
+        out = []
+        for side in (0, 1):
+            carried = int(self.state.qc_roll[side])
+            if _holds_quick_claw(self.tables, self.state, side, int(self.state.active[side])):
+                out.append([carried, 1 - carried])
+            else:
+                out.append([0])
+        return [tuple(q) for q in itertools.product(*out)]
+
+    def infer(self) -> tuple[tuple[int, int], dict, BattleState, tuple[str, ...], tuple]:
+        """``(actions, outcome, replayed state, mismatched fields, start qc_roll)`` of the
+        best candidate."""
         choices = [self.action_choices(0), self.action_choices(1)]
         base = self.damage_outcome(choices)
         candidates = [
-            (pair, o) for pair in itertools.product(*choices) for o in self.variants(pair, base)
+            (qc, pair, o)
+            for qc in self.qc_variants()
+            for pair in itertools.product(*choices)
+            for o in self.variants(pair, base)
         ]
         if len(candidates) > _MAX_CANDIDATES:
             raise TraceError(f"turn {self.index}: {len(candidates)} candidates to replay")
@@ -533,20 +580,17 @@ class _Turn:
         for start in range(0, len(candidates), _CHUNK):
             chunk = candidates[start : start + _CHUNK]
             padded = chunk + [chunk[0]] * (_CHUNK - len(chunk))
-            actions = jnp.asarray([pair for pair, _ in padded], _I32)
+            qcs = jnp.asarray([qc for qc, _, _ in padded], _I8)
+            actions = jnp.asarray([pair for _, pair, _ in padded], _I32)
             outcomes = Outcome(
                 *(
-                    jnp.asarray(np.stack([o[name] for _, o in padded]), _I8)
+                    jnp.asarray(np.stack([o[name] for _, _, o in padded]), _I8)
                     for name in Outcome._fields
                 )
             )
             slot = jnp.asarray(int(self.after["active"][1]), _I32)
-            result = _replay(self.tables, self.state, actions, outcomes, slot)
-            wrong = np.zeros((_CHUNK, len(COMPARED_FIELDS)), bool)
-            for f, name in enumerate(COMPARED_FIELDS):
-                got = np.asarray(getattr(result, name))
-                axes = tuple(range(1, got.ndim))
-                wrong[:, f] = ~np.all(got == self.after[name][None], axis=axes)
+            result = _replay(self.tables, self.state, qcs, actions, outcomes, slot)
+            wrong = _mismatches(result, self.after)
             score = wrong.sum(axis=1)[: len(chunk)]
             k = int(np.argmin(score))
             if best is None or score[k] < best[0]:
@@ -555,8 +599,8 @@ class _Turn:
                 best = (int(score[k]), chunk[k], state, names)
             if best[0] == 0:
                 break
-        _, (pair, outcome), state, mismatched = best
-        return (int(pair[0]), int(pair[1])), outcome, state, mismatched
+        _, (qc, pair, outcome), state, mismatched = best
+        return (int(pair[0]), int(pair[1])), outcome, state, mismatched, qc
 
 
 def _tied(tables: Tables, state: BattleState) -> bool:
@@ -609,18 +653,45 @@ def convert_bundle(bundle: dict, tables: Tables, names: Names) -> list[Turn]:
     _check_start(state, first)
     state = _overlay(state, first)
     turns: list[Turn] = []
+    afters: list[dict[str, np.ndarray]] = []
     for i in range(len(records) - 1):
         after = _fields(records[i + 1])
         inference = _Turn(tables, state, after, events[i], i)
-        actions, outcome, replayed, mismatched = inference.infer()
+        actions, outcome, replayed, mismatched, qc = inference.infer()
+        if qc != tuple(int(q) for q in np.asarray(state.qc_roll)):
+            # The start qc_roll is the previous turn's draw (or the battle start's).
+            state = state._replace(qc_roll=jnp.asarray(qc, _I8))
+            if turns:
+                turns[-1] = _redraw_quick_claw(tables, turns[-1], afters[-1], qc)
         outcome = Outcome(*(jnp.asarray(outcome[name], _I8) for name in Outcome._fields))
         turns.append(Turn(state, actions, outcome, inference.candidates, mismatched))
+        afters.append(after)
         fainted = (np.asarray(turns[-1].state.hp[0]) > 0) & (after["hp"][0] == 0)
         state = _overlay(replayed, after)
         if int(state.over) or np.any(fainted):
             break
     turns.append(Turn(state, NO_ACTIONS, empty_outcome(), {}, ()))
     return turns
+
+
+def _redraw_quick_claw(tables: Tables, turn: Turn, after: dict, qc: tuple) -> Turn:
+    """``turn`` with its draw ``Outcome.quick_claw`` set to the next turn's fitted start
+    ``qc_roll`` (the same ``speedRand``, bcp.c:853-857), replayed again: its
+    ``mismatched`` is recomputed (this turn's end-of-turn order reads the draw)."""
+    outcome = turn.outcome._replace(quick_claw=jnp.asarray(qc, _I8))
+    batch = jax.tree.map(lambda x: jnp.asarray(x)[None], outcome)
+    slot = jnp.asarray(int(after["active"][1]), _I32)
+    result = _replay(
+        tables,
+        turn.state,
+        jnp.asarray([np.asarray(turn.state.qc_roll)], _I8),
+        jnp.asarray([turn.actions], _I32),
+        batch,
+        slot,
+    )
+    wrong = _mismatches(result, after)[0]
+    mismatched = tuple(n for n, w in zip(COMPARED_FIELDS, wrong) if w)
+    return dataclasses.replace(turn, outcome=outcome, mismatched=mismatched)
 
 
 def convert(path: Path, tables: Tables, names: Names) -> list[Turn]:

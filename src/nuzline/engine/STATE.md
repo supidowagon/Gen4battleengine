@@ -92,8 +92,9 @@ three structs has a row.
   whose Quick Claw activated this turn); `monSpeedValues`, the
   speeds computed when the turn was ordered, by `BtlCmd_CalcGyroBallPower`
   (`:7127`); and `moveSketched` by `BtlCmd_TrySketch` (`:4848`). M1 is
-  unaffected: no M1 mechanic gains an ability mid-battle, Quick Claw is
-  outcome-driven, and none of Thief, Covet, Gyro Ball or Sketch is in M1. M6's
+  unaffected: no M1 mechanic gains an ability mid-battle, Quick Claw's
+  activation is `qc_roll` (below; the per-turn flag only shows its animation, a
+  `step` event), and none of Thief, Covet, Gyro Ball or Sketch is in M1. M6's
   coverage work must add these fields before the mechanics that read them.
 - **moveProtect -> `protect_count`** (K3b2 Task 6; docs/kaizo/k3b2-rules.md §2(a),
   §12): `BattleContext.moveProtect`, the move whose attack message the battler last
@@ -116,6 +117,18 @@ three structs has a row.
   `src/battle/battle_lib.c:2088-2092`; `BattleSystem_CleanupFaintedMon`, `:2168-2177`;
   `step._source_leaves`, which Roar's drag reuses). `SELF_TURN_FLAG_INFATUATED` (a per-action
   turn flag read only by Destiny Knot, an unsupported item) stays a local.
+- **speedRand -> `qc_roll`** (K3b2 Task 8; docs/kaizo/k3b2-rules.md §5, §12):
+  `speedRand[battler]` is one `RandNext()` per battler slot, drawn at battle start
+  (`BattleContext_InitCounters`, `src/battle/battle_lib.c:2019-2025`) and in each turn's
+  pre-move step, after the turn order is fixed (`src/battle/battle_controller_player.c:853-857`,
+  after `CalcTurnOrder` :707-790). It is read only as `speedRand % (100 / param) == 0` for a
+  `HOLD_EFFECT_SOMETIMES_PRIORITY` holder (`BattleSystem_CompareBattlerSpeed`,
+  `battle_lib.c:1278-1286`, :1344-1352; Quick Claw, param 20, the only such item), so
+  `qc_roll[side]` holds that bit. The turn's draw is `Outcome.quick_claw`: the end-of-turn
+  order reads it the same turn (`SortMonSpeedOrder`, bcp:888), and `step` stores it for the
+  next turn's order (and the AI's `IfSpeedCompare*`, trainer_ai.c:1102-1124) only while a
+  reader can see a holder before the redraw (`step.qc_kept`), else 0 (exact: the value
+  is never read).
 - **battleEndFlag -> `over`, `winner`**: `winner` is 0 none, 1 player lost (no
   player Pokemon has HP left; a double KO of both last Pokemon is a draw, played as a
   loss), 2 player won. A player faint alone only records a death.
@@ -436,7 +449,7 @@ three structs has a row.
 | `BattleContext.battlersSwitchingMask` | — | not needed because it is reset every turn and `step` resolves a whole turn |
 | `BattleContext.levelUpMons` | — | not needed because experience and level-ups do not change the fight being searched |
 | `BattleContext.padding310A` | — | not needed because it is padding |
-| `BattleContext.speedRand` | — | not needed because speed-tie draws are an outcome input |
+| `BattleContext.speedRand` | `qc_roll` | mapped |
 | `BattleContext.flingTemp` | — | later (M6) |
 | `BattleContext.flingScript` | — | later (M6) |
 | `BattleContext.safariCatchStage` | — | not needed because trainer battles have no Safari Zone |

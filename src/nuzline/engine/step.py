@@ -54,6 +54,8 @@ the Trick Room countdown of the turn end's side-condition pass
 
 from __future__ import annotations
 
+import itertools
+
 import jax
 import jax.numpy as jnp
 
@@ -93,6 +95,7 @@ from nuzline.engine.hooks import (
 from nuzline.engine.ids import (
     POTION_HP_RESTORED,
     PROTECT_CHAIN_MOVES,
+    QUICK_CLAW_MODULUS,
     WEATHER_ABILITY_IDS,
     AbilityId,
     EffectId,
@@ -110,6 +113,7 @@ from nuzline.engine.order import (
     is_item,
     is_switch,
     player_second,
+    quick_claw_active,
     selected_move,
 )
 from nuzline.engine.outcome import MAX_HITS, Outcome, live_hit_threshold
@@ -186,6 +190,7 @@ EVENT_FLAGS = (
     "protect_failed",
     "in_love",
     "immobilized",
+    "quick_claw",
 )
 
 
@@ -1153,9 +1158,12 @@ def end_of_turn_order(tables: Tables, state: BattleState, outcome: Outcome) -> j
     """``int32[2]``: the sides in ``monSpeedOrder``, which
     ``BattleSystem_SortMonSpeedOrder`` (battle_lib.c:3364) sets after the last action
     (battle_controller_player.c:887). It compares with ``ignoreQuickClaw = TRUE``:
-    no priority, so ``order.player_second`` with Lagging Tail, Trick Room and speed; a
+    no priority, so ``order.player_second`` with Quick Claw (the flag is still computed,
+    battle_lib.c:1278-1286, from this turn's ``speedRand``, drawn at bcp.c:853-857 before
+    every sort of the turn: ``outcome.quick_claw``), Lagging Tail, Trick Room and speed; a
     tie swaps on ``RandNext() & 1`` (``outcome.end_speed_tie``, 1 = opponent first)."""
-    first = player_second(tables, state, outcome.end_speed_tie).astype(_I32)
+    first = player_second(tables, state, outcome.end_speed_tie, outcome.quick_claw)
+    first = first.astype(_I32)
     return jnp.stack([first, 1 - first])
 
 
@@ -1286,14 +1294,29 @@ def _unlock_sleepers(state: BattleState) -> BattleState:
     return state
 
 
+def _quick_claw_shown(tables: Tables, state: BattleState, actions, order) -> jnp.ndarray:
+    """``int32[2]``: the side's Quick Claw animation played (``subscript_check_quick_claw.s``,
+    the first step of ``BeforeMove``, bcp.c:3140-3143). ``CalcTurnOrder`` sets the battler's
+    ``moveEffectsData.quickClaw`` only when two FIGHT commands are compared
+    (``ignoreQuickClaw = FALSE``, bcp.c:772-786; battle_lib.c:1281-1284), whatever the
+    priorities, from the turn's starting ``speedRand`` (``state.qc_roll``); the script plays
+    the held-item animation (no text) only when the battler is not the last to act
+    (``WAITING_BATTLERS != 1``): in singles, when it acts first."""
+    fight = ~is_switch(actions) & ~is_item(actions)
+    claw = quick_claw_active(tables, state, state.qc_roll)
+    first = jnp.arange(2) == order[0]
+    return (fight[0] & fight[1] & claw & first).astype(_I32)
+
+
 def _action_phase(
     tables: Tables, state: BattleState, actions, outcome: Outcome
 ) -> tuple[BattleState, dict, jnp.ndarray]:
     """Phases 2-3 with the turn's events: ``(state, events, order)``."""
     s = _record_last_move(tables, state, actions)
     order = action_order(tables, s, actions, outcome)
+    claw = _quick_claw_shown(tables, s, actions, order)
     s, events = _execute_actions(tables, s, actions, outcome, order)
-    return s, {**events, "order": order.astype(_I32)}, order
+    return s, {**events, "order": order.astype(_I32), "quick_claw": claw}, order
 
 
 def turn_events(tables: Tables, state: BattleState, actions, outcome: Outcome) -> dict:
@@ -1317,12 +1340,70 @@ def step_events(
     s = end_of_turn(tables, s, actions, outcome, order, sides)
     s = _unlock_sleepers(s)
     s = s._replace(turn=(s.turn + 1).astype(s.turn.dtype))
+    # The turn's speedRand draw, kept for the next turn's readers (qc_kept).
+    s = _keep_quick_claw(tables, s, outcome.quick_claw)
     return _where(state.over != 0, state, s), events
 
 
 def step(tables: Tables, state: BattleState, actions, outcome: Outcome) -> BattleState:
     """Play one turn: ``actions`` is ``int32[2]`` (player, opponent; see ``order``)."""
     return step_events(tables, state, actions, outcome)[0]
+
+
+def qc_kept(tables: Tables, state: BattleState) -> jnp.ndarray:
+    """``bool[2]``: the side's ``speedRand`` can be read as a Quick Claw before it is redrawn
+    (the tight storage rule, docs/kaizo/k3b2-rules.md §5b). Between turns its readers are the
+    next command selection's AI ``IfSpeedCompare*`` (trainer_ai.c:1102-1124), the next turn's
+    ``CalcTurnOrder`` (bcp.c:772-786) and the start-of-turn sorts that order the switch-in
+    effects (bcp.c:251, :263; order-free in singles, ``hooks``), all with the battler on the
+    field then, and ``CompareBattlerSpeed`` tests the item of that battler
+    (battle_lib.c:1278). So the draw is read when a living Quick Claw holder is active, or
+    when the side's active fainted and its replacement (``needs_replacement``) can be a
+    living Quick Claw holder. Elsewhere nothing reads it before the pre-move redraw
+    (bcp.c:853-857): a Pokemon that switches in during a turn is first read by that turn's
+    end-of-turn sort, which reads that turn's draw."""
+    holds = tables.item_effect[state.item] == ItemId.QUICK_CLAW
+    alive = (state.species != 0) & (state.hp > 0)
+    on_field = jnp.arange(state.hp.shape[1])[None, :] == state.active[:, None]
+    active = jnp.any(holds & alive & on_field, axis=1)
+    bench = jnp.any(holds & alive & ~on_field, axis=1)
+    return (state.over == 0) & (active | ((needs_replacement(state) != 0) & bench))
+
+
+def _keep_quick_claw(tables: Tables, state: BattleState, qc) -> BattleState:
+    """``state`` with ``qc_roll = qc`` where ``qc_kept``, else 0 (an unread value, so states
+    that differ only in it are one state)."""
+    kept = qc_kept(tables, state)
+    return state._replace(
+        qc_roll=jnp.where(kept, jnp.asarray(qc) != 0, False).astype(state.qc_roll.dtype)
+    )
+
+
+def sample_root(key, tables: Tables, state: BattleState) -> BattleState:
+    """``state`` with its hidden ``qc_roll`` drawn (Stage A's root chance node): the
+    battle-start ``speedRand`` (``BattleContext_InitCounters``, battle_lib.c:2019-2025), or at
+    a later root the previous turn's draw, which the player never sees. ``RandNext() % 5 ==
+    0`` (``QUICK_CLAW_MODULUS``), treated as uniform (1/5, the project's ``% n`` convention;
+    exact 13108/65536), for the sides ``qc_kept`` reads; 0 elsewhere."""
+    draw = jax.random.randint(key, (2,), 0, QUICK_CLAW_MODULUS) == 0
+    return _keep_quick_claw(tables, state, draw)
+
+
+def root_belief(tables: Tables, state: BattleState) -> list[tuple[BattleState, float]]:
+    """Stage B's root chance node (host): ``(state, probability)`` for every value of the
+    hidden ``qc_roll`` under ``sample_root``'s law, one state per combination over the
+    ``qc_kept`` sides (1 at 1/5, 0 at 4/5), the other sides 0. They differ only in hidden
+    state, so they are one information set. Without a kept side: ``[(state, 1.0)]``."""
+    kept = [bool(k) for k in jax.device_get(qc_kept(tables, state))]
+    n = QUICK_CLAW_MODULUS
+    out = []
+    for bits in itertools.product(*((0, 1) if k else (0,) for k in kept)):
+        prob = 1.0
+        for k, b in zip(kept, bits, strict=True):
+            if k:
+                prob *= 1 / n if b else (n - 1) / n
+        out.append((state._replace(qc_roll=jnp.asarray(bits, state.qc_roll.dtype)), prob))
+    return out
 
 
 def needs_replacement(state: BattleState) -> jnp.ndarray:
@@ -1354,4 +1435,7 @@ def replace(tables: Tables, state: BattleState, side, slot) -> BattleState:
     added 1 to ``turn``: the decomp's ``totalTurns + 1`` is ``turn`` here, for the
     newcomer's ``fake_out_turn`` and for a faint on entry."""
     entered = _switch_in(state, side, slot, state.turn)
-    return _faint_check(entered, on_switch_in(tables, entered, side), entry_turn=state.turn)
+    out = _faint_check(entered, on_switch_in(tables, entered, side), entry_turn=state.turn)
+    # The slot's speedRand stays; it is unread unless the newcomer (or, after an entry
+    # faint, the next replacement) can be a Quick Claw holder (qc_kept).
+    return _keep_quick_claw(tables, out, out.qc_roll)

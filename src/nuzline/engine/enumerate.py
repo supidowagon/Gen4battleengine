@@ -84,7 +84,15 @@ of the turn:
   foe's blockable move, so ``_protect_reads`` gates that move's own reads on it.
 * ``shed_skin[d]``: side ``d``'s active or incoming Pokemon has Shed Skin
   (``step._turn_end_ability``; over-approximate: it only rolls with a status and HP).
-* ``flinch_item``, ``quick_claw``: never read.
+* ``quick_claw[s]``: this turn's ``speedRand`` bit of side ``s`` (``step``: the end-of-turn
+  order reads it with the battler on the field after the actions, and ``step.qc_kept`` stores
+  it for the next turn while a living Quick Claw holder is active or can replace a fainted
+  active). Relevant when side ``s`` has a living Quick Claw holder anywhere in its party:
+  the active, the Pokemon it switches in, or a bench Pokemon that a replacement can send in
+  (sound, not tight: the replacement needs the active to faint this turn, which is not
+  judged here). The turn's own order reads ``BattleState.qc_roll`` (``action_order``), so
+  every order-conditioned read above already sees Quick Claw through ``Reads.first``.
+* ``flinch_item``: never read.
 * Nothing is relevant once the battle is over (``step`` returns the state, step.py:700).
 
 **Order branches and conditional reads** (rules §10.3 items 1-4). ``speed_tie`` is
@@ -130,7 +138,16 @@ import numpy as np
 from nuzline.data.tables import Tables
 from nuzline.engine.damage import PHYSICAL, ROLLS, SPECIAL, STATUS, hit_damage_table, move_type_of
 from nuzline.engine.effects import can_have_status, protect_blocks
-from nuzline.engine.ids import AbilityId, EffectId, ItemId, MoveFlag, Stat, Status, Type
+from nuzline.engine.ids import (
+    QUICK_CLAW_MODULUS,
+    AbilityId,
+    EffectId,
+    ItemId,
+    MoveFlag,
+    Stat,
+    Status,
+    Type,
+)
 from nuzline.engine.order import (
     MOVE_ACTIONS,
     action_order,
@@ -446,6 +463,9 @@ INPUT_NEUTRAL_ITEMS = (
     ItemId.FOCUS_SASH,  # after the damage (effects.play_hit)
     ItemId.LAGGING_TAIL,
     ItemId.RESIST_BERRY,  # after the damage (effects.resist_berry_damage)
+    # Changes only the order: the turn's is fixed at its start (action_order, qc_roll) and the
+    # end-of-turn order (outcome.quick_claw) runs after every hit.
+    ItemId.QUICK_CLAW,
 )
 INPUT_CLAUSE_ITEMS = (
     ItemId.ORAN_BERRY,  # the attacker's HP: HP clause
@@ -798,6 +818,9 @@ def outcome_laws(
     )
 
     never = jnp.zeros((2,), bool)
+    # Quick Claw (step.qc_kept, end_of_turn_order): a living holder anywhere in the party.
+    claw = tables.item_effect[state.item] == ItemId.QUICK_CLAW
+    quick_claw = live & jnp.any(claw & (state.species != 0) & (state.hp > 0), axis=1)
 
     def branch_relevant(m: dict) -> Outcome:
         return Outcome(
@@ -813,7 +836,7 @@ def outcome_laws(
             duration=duration,
             thaw=m["thaw"],
             flinch_item=never,
-            quick_claw=never,
+            quick_claw=quick_claw,
             end_speed_tie=end_speed_tie,
             magnitude=uses_move & (effect == _E.MAGNITUDE),
             shed_skin=live & _holds(state, actions, (AbilityId.SHED_SKIN,)),
@@ -1017,6 +1040,13 @@ def _protect(laws: OutcomeLaws, side: int) -> _Law:
     return [0, 1], [65536 - (rate + 1), rate + 1], 65536
 
 
+def _quick_claw(laws: OutcomeLaws, side: int) -> _Law:
+    # speedRand % (100 / param) == 0 (battle_lib.c:1278-1286), uniform by the % n convention
+    # (exact 13108/65536 for % 5).
+    n = QUICK_CLAW_MODULUS
+    return [0, 1], [n - 1, 1], n
+
+
 def _zero(laws: OutcomeLaws, side: int) -> _Law:
     return [0], [1], 1
 
@@ -1034,7 +1064,7 @@ _LAWS = {
     "duration": _duration,
     "thaw": _thaw,
     "flinch_item": _zero,
-    "quick_claw": _zero,
+    "quick_claw": _quick_claw,
     "end_speed_tie": _coin,
     "magnitude": _magnitude,
     "shed_skin": _shed_skin,

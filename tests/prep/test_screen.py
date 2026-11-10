@@ -29,7 +29,7 @@ def test_screen_pools_both_halves(tables, names):
     b = roark_real_state(tables, names, player_species="Machop")
     states = batch(a, b)
     stats = screen(tables, states, 64, KEY)
-    direct = evaluate_leaves(tables, states, [64, 64], KEY)
+    direct = evaluate_leaves(tables, states, [64, 64], KEY, root=True)
     for s, v in zip(stats, direct, strict=True):
         assert s.n == 64
         assert s.buckets == tuple(x + y for x, y in zip(v.buckets_a, v.buckets_b, strict=True))

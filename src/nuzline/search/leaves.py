@@ -40,7 +40,13 @@ from nuzline.engine.state import BattleState
 from nuzline.engine.step import replacement_power_mul, step
 from nuzline.jaxcache import cached_export, code_version
 from nuzline.search import deaths
-from nuzline.search.playout import REFUSED_WON, PlayoutResult, finish_turn, playout
+from nuzline.search.playout import (
+    REFUSED_WON,
+    PlayoutResult,
+    finish_turn,
+    playout,
+    root_state,
+)
 
 __all__ = [
     "LEAF_CHUNK",
@@ -150,6 +156,14 @@ def allocate(weights: np.ndarray, budget: int, floor: int = 1) -> np.ndarray:
 
 def _leaf_program(tables: Tables, states: BattleState, keys, max_turns: int) -> PlayoutResult:
     return jax.vmap(lambda s, k: playout(tables, s, k, max_turns))(states, keys)
+
+
+def _root_program(tables: Tables, states: BattleState, keys, max_turns: int) -> PlayoutResult:
+    """``_leaf_program`` from roots: each playout draws its root's hidden values first
+    (``playout.root_state``)."""
+    return jax.vmap(lambda s, k: playout(tables, root_state(tables, s, k), k, max_turns))(
+        states, keys
+    )
 
 
 def _forced_turn(tables: Tables, state: BattleState, pair, key):
@@ -272,14 +286,17 @@ def _prepare(counts, key):
 
 
 def evaluate_leaves(
-    tables: Tables, states: BattleState, counts, key, max_turns: int = 100
+    tables: Tables, states: BattleState, counts, key, max_turns: int = 100, *, root: bool = False
 ) -> list[LeafValue]:
     """``counts[i]`` playouts (even) from each of the numpy ``states`` (``N`` rows), leaf
-    ``i`` on ``leaf_keys(key, i, counts[i])``. ``ValueError`` on a finished battle or
-    ``counts`` not of length ``N``."""
+    ``i`` on ``leaf_keys(key, i, counts[i])``. ``root``: the states are roots (the prep
+    screen's turn-0 states), so each playout first draws their hidden values
+    (``playout.root_state``); a tree leaf carries the values ``step`` stored and is played as
+    it is. ``ValueError`` on a finished battle or ``counts`` not of length ``N``."""
     states = jax.tree.map(np.asarray, states)
     counts, keys, row_of = _prepare(_check("evaluate_leaves", states, counts), key)
-    return _run(_leaf_program, "leaf_playouts", max_turns, tables, (states,), row_of, keys, counts)
+    program, name = (_root_program, "root_playouts") if root else (_leaf_program, "leaf_playouts")
+    return _run(program, name, max_turns, tables, (states,), row_of, keys, counts)
 
 
 def evaluate_forced(

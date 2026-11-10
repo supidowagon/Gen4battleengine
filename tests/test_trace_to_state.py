@@ -501,6 +501,58 @@ def test_infatuation_rolls_are_inferred(tables, names, tmp_path):
     assert [int(t.outcome.infatuation[1]) for t in turns[:3]] == [1, 0, 1]
 
 
+GROWL = 1  # Prinplup's slot 1
+
+
+def test_quick_claw_rolls_are_inferred(tables, names, tmp_path, monkeypatch):
+    # Prinplup (Quick Claw) leads against a Geodude made faster; its Growl lowers Geodude's
+    # Attack before Rock Throw only when the claw moves it first, which the replayed damage
+    # shows. The trace records no speedRand: the converter fits each turn's start qc_roll
+    # (turn 0: the battle-start draw; later: the previous turn's Outcome.quick_claw, written
+    # back). Battle start 1 (Growl first, Rock Throw at -1), turn 0's draw 1 (Growl first
+    # again, Rock Throw at -2), turn 1's draw 0 (the last: never read). Turn 0 cannot tell
+    # its own draw, so turn 1's fit writes it back.
+    import sys
+
+    import tools.trace_to_state as ttt
+
+    text = PARTY.read_text(encoding="utf-8")
+    plain = '"Pound", "Growl", "Bubble", "Water Sport"]\nitem = ""'
+    text = text.replace(plain, plain[:-2] + '"Quick Claw"', 1)
+    assert 'item = "Quick Claw"' in text
+    party = tmp_path / "claw_party.toml"
+    party.write_text(text, encoding="utf-8")
+    built = ttt.initial_state
+
+    def faster_geodude(*args, **kwargs):
+        s = built(*args, **kwargs)
+        return s._replace(stats=s.stats.at[1, 0, Stat.SPE - 1].set(200))
+
+    def battle_start(*args, **kwargs):
+        s = faster_geodude(*args, **kwargs)
+        return s._replace(qc_roll=s.qc_roll.at[0].set(1))
+
+    monkeypatch.setattr(sys.modules[__name__], "initial_state", battle_start)
+    monkeypatch.setattr(ttt, "initial_state", faster_geodude)
+
+    def claw(k):
+        return _outcome()._replace(quick_claw=jnp.asarray([k, 0], jnp.int8))
+
+    script = [((GROWL, ROCK_THROW), claw(k)) for k in (1, 0)]
+    records, states = _engine_trace(tables, names, script, (1, 0), party)
+    assert [int(s.qc_roll[0]) for s in states] == [1, 1, 0]
+    assert [int(s.stages[1, Stat.ATK]) for s in states] == [0, -1, -2]
+    turns = convert(_bundle(tmp_path, names, records, party), tables, names)
+    assert len(turns) == len(states)
+    for i, (turn, expected) in enumerate(zip(turns, states)):
+        for name in BattleState._fields:
+            assert np.array_equal(getattr(turn.state, name), getattr(expected, name)), (
+                f"turn {i} field {name}"
+            )
+        assert turn.mismatched == ()
+    assert [int(t.outcome.quick_claw[0]) for t in turns[:2]] == [1, 0]
+
+
 def test_protect_roll_ignores_stale_move_end_records(tables, names, tmp_path):
     # tools/trace_battle.lua writes a move_end at every MOVE_END with the context's attacker
     # and moveCur, which a switch or bag item leaves stale. A stale record of the Protect

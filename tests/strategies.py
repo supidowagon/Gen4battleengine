@@ -87,6 +87,7 @@ M1_ITEMS = (
     "Lum Berry",
     "White Herb",
     "Lagging Tail",
+    "Quick Claw",
     "Rindo Berry",
     "Chilan Berry",
 )
@@ -324,6 +325,7 @@ def supported_state(draw, tables: Tables, names: Names) -> BattleState:
         a["mud_sport"][side] = draw(st.integers(0, 1))
         a["aqua_ring"][side] = draw(st.integers(0, 1))
         a["infatuated"][side] = draw(st.integers(0, 1))
+        a["qc_roll"][side] = draw(st.integers(0, 1))
         a["curled"][side] = draw(st.integers(0, 1))
         a["foresight"][side] = draw(st.integers(0, 1))
         a["stealth_rock"][side] = draw(st.integers(0, 1))

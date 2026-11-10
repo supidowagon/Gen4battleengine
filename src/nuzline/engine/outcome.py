@@ -42,7 +42,7 @@ import numpy as np
 
 from nuzline.data.tables import Tables
 from nuzline.engine.damage import PRESENT_HEAL, weather_suppressed
-from nuzline.engine.ids import AbilityId, EffectId, ItemId, Stat, Weather
+from nuzline.engine.ids import QUICK_CLAW_MODULUS, AbilityId, EffectId, ItemId, Stat, Weather
 from nuzline.engine.order import MOVE_ACTIONS, action_order, is_item, is_switch, selected_move
 from nuzline.engine.state import STAGE_MAX, STAGE_MIN, BattleState
 
@@ -71,7 +71,7 @@ class Outcome(NamedTuple):
     )  # int8[2], sleep/confusion/Bind/Taunt/Disable counter rolled at infliction
     thaw: jnp.ndarray  # int8[2]
     flinch_item: jnp.ndarray  # int8[2], reserved: King's Rock / Razor Fang (unsupported items)
-    quick_claw: jnp.ndarray  # int8[2], reserved: Quick Claw (unsupported item)
+    quick_claw: jnp.ndarray  # int8[2], this turn's speedRand % 5 == 0 (Quick Claw)
     end_speed_tie: jnp.ndarray  # int8[], 0 = player first in the end-of-turn order on equal speed
     magnitude: jnp.ndarray  # int8[2], Magnitude's level 4-10 of each side's move
     shed_skin: jnp.ndarray  # int8[2], Shed Skin's RandNext() % 10 < 3
@@ -397,9 +397,16 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions) -> Outcome:
         confusion_hit=draw(9, per_side, 2) == 1,  # battle_controller_player.c:2621
         duration=duration,
         thaw=draw(11, per_side, 5) == 0,  # battle_controller_player.c:2478, % 5 != 0 stays
-        # King's Rock / Razor Fang and Quick Claw are not implemented items (ItemId).
+        # King's Rock / Razor Fang are not implemented items (ItemId).
         flinch_item=jnp.zeros(per_side, _I32),
-        quick_claw=jnp.zeros(per_side, _I32),
+        # The turn's speedRand (bcp.c:853-857, after the order is fixed), Quick Claw's
+        # % (100 / param) == 0 (battle_lib.c:1278-1286): uniform 1/5 by the project's % n
+        # convention (exact 13108/65536). Read by the end-of-turn order, stored for the next
+        # turn (step.qc_kept). From a fold_in key: every field above keeps its samples.
+        quick_claw=jax.random.randint(
+            jax.random.fold_in(key, 20), per_side, 0, QUICK_CLAW_MODULUS, dtype=_I32
+        )
+        == 0,
         # BattleSystem_SortMonSpeedOrder (battle_lib.c:3364) on equal speed: RandNext() & 1.
         end_speed_tie=draw(12, (), 2),
         # BtlCmd_CalcMagnitude (battle_script.c:5820-5852): rand % 100 mapped to the

@@ -910,6 +910,10 @@ Nature Power vs Gible Thunder Fang at the speed tie is exactly at the cap only w
 
 1. Quick Claw root belief at battle start (§5b). Settle: the Stage B design for a non-degenerate
    root, with the information set by equal observation.
+   **Settled (K3b2 Task 8):** the root of a solve is a chance node over the hidden `qc_roll`
+   (`step.root_belief`: each side whose `qc_kept` holds splits 1/5 vs 4/5); the states form
+   the root belief node (one information set). Stage A draws it per playout
+   (`playout.root_state`). Stage B design doc, "Amendment 2026-11-09".
 2. `last_move` vs attack-message-shown equivalence for the Protect chain fold (§2a). Settle: a
    failed-Protect-then-Protect test, and a read of every `SYSCTL_ATTACK_MESSAGE_SHOWN` writer for
    Protect's paths.

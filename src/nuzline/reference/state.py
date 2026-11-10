@@ -88,6 +88,7 @@ class RefSide:
     future_damage: int
     trainer_items: list[int]
     trainer_item_count: int
+    qc_roll: int
 
 
 @dataclass

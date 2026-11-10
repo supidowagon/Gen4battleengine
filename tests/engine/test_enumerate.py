@@ -407,12 +407,14 @@ def decomp_law(tables, state, actions, name: str, index: tuple) -> dict[int, Fra
         return coin(Fraction(1, 2))
     if name == "thaw":
         return coin(Fraction(1, 5))
+    if name == "quick_claw":  # speedRand % (100 / 20) == 0 (battle_lib.c:1278-1286)
+        return coin(Fraction(1, 5))
     if name == "shed_skin":  # ShedSkin (battle_lib.c:3567): RandNext() % 10 < 3
         return coin(Fraction(3, 10))
     if name == "magnitude":  # BtlCmd_CalcMagnitude (battle_script.c:5820-5852)
         return dict(zip(range(4, 11), (Fraction(n, 100) for n in (5, 10, 20, 30, 20, 10, 5)),
                         strict=True))  # fmt: skip
-    return {0: Fraction(1)}  # flinch_item, quick_claw
+    return {0: Fraction(1)}  # flinch_item
 
 
 @settings(max_examples=50, **HYPOTHESIS)
@@ -616,6 +618,9 @@ ORDER_MOVES = (
 )
 # Drawn twice as often.
 FLINCH_MOVES = ("Headbutt", "Zen Headbutt", "Bite", "Fake Out", "Thunder Fang")
+# Quick Claw orders the turn by the stored draw and the turn's end by the new one; it beats
+# a Lagging Tail (order.player_second).
+ORDER_ITEMS = ("Quick Claw", "Quick Claw", "Lagging Tail")
 ORDER_ABILITIES = (
     AbilityId.INNER_FOCUS,
     AbilityId.MOLD_BREAKER,
@@ -630,7 +635,8 @@ ORDER_ABILITIES = (
 @st.composite
 def order_state(draw, tables, names) -> BattleState:
     """``outcome_law_state`` with an ``ORDER_MOVES`` move in each active Pokemon's slot
-    0 (full PP) most of the time, sometimes an ``ORDER_ABILITIES`` ability, Fake Out's
+    0 (full PP) most of the time, sometimes an ``ORDER_ABILITIES`` ability, sometimes an
+    ``ORDER_ITEMS`` item (Quick Claw or Lagging Tail) with a drawn ``qc_roll``, Fake Out's
     first turn half the time, Lucky Chant on both sides half the time, and in three cases
     of four equal effective speeds (the Spe stat copied, no Speed stage, no Tailwind, the
     same paralysis state; items, abilities and weather can still break the tie)."""
@@ -649,6 +655,9 @@ def order_state(draw, tables, names) -> BattleState:
                 a["disabled_move"][side], a["disable_turns"][side] = 0, 0
         if draw(st.integers(0, 3)) == 0:
             a["ability"][side, mon] = draw(st.sampled_from(ORDER_ABILITIES))
+        if draw(st.integers(0, 2)) == 0:  # Quick Claw (or a Lagging Tail) and its roll
+            a["item"][side, mon] = names.item(draw(st.sampled_from(ORDER_ITEMS)))
+            a["qc_roll"][side] = draw(st.integers(0, 1))
         if draw(st.booleans()):
             a["fake_out_turn"][side] = a["turn"]
     if draw(st.booleans()):  # no crits on either side: smaller brute-force products

@@ -303,10 +303,12 @@ def _item_effect(tables, mon: RefPokemon) -> int:
     return _t(tables, "item_effect", mon.item)
 
 
-def _player_second(tables, s: RefState, priority: tuple[int, int], tie_roll: int) -> bool:
+def _player_second(
+    tables, s: RefState, priority: tuple[int, int], tie_roll: int, qc: list[int]
+) -> bool:
     """``BattleSystem_CompareBattlerSpeed(player, opponent)`` != FASTER, i.e. the two
     are swapped (lib.c:1401-1445). A fainted battler goes after a living one
-    (lib.c:1205-1211)."""
+    (lib.c:1205-1211). ``qc``: each battler's ``speedRand % 5 == 0`` (lib.c:1278-1286)."""
     p_hp, o_hp = _active(s, 0).hp, _active(s, 1).hp
     if p_hp == 0 and o_hp:
         return True
@@ -315,7 +317,17 @@ def _player_second(tables, s: RefState, priority: tuple[int, int], tie_roll: int
     if priority[0] != priority[1]:
         return priority[0] < priority[1]
     speed0, speed1 = _effective_speed(tables, s, 0), _effective_speed(tables, s, 1)
-    # Quick Claw / Custap Berry (lib.c:1402-1411) are unsupported items (K3b2).
+    # Quick Claw (HOLD_EFFECT_SOMETIMES_PRIORITY, lib.c:1278-1286); Custap is unsupported.
+    claw = [
+        _item_effect(tables, _active(s, side)) == ItemId.QUICK_CLAW and qc[side] != 0
+        for side in (0, 1)
+    ]
+    if claw[0] and claw[1]:  # lib.c:1402-1407: plain speed, no Trick Room, no Lagging Tail
+        if speed0 == speed1:
+            return tie_roll != 0
+        return speed0 < speed1
+    if claw[0] != claw[1]:  # lib.c:1408-1411: the lone activated holder goes first
+        return claw[1]
     lag = [_item_effect(tables, _active(s, side)) == ItemId.LAGGING_TAIL for side in (0, 1)]
     if lag[0] and lag[1]:  # lib.c:1412-1417: the faster goes second, Trick Room ignored
         if speed0 == speed1:
@@ -1638,7 +1650,8 @@ def _use_item(tables, s: RefState, side: int, item: int) -> None:
 def _speed_order(tables, s: RefState, o) -> list[int]:
     """``BattleSystem_SortMonSpeedOrder`` (lib.c:3364): ``CompareBattlerSpeed`` with
     ``ignoreQuickClaw`` (no priority); a tie swaps on ``outcome.end_speed_tie``."""
-    return [1, 0] if _player_second(tables, s, (0, 0), o.end_speed_tie) else [0, 1]
+    second = _player_second(tables, s, (0, 0), o.end_speed_tie, list(o.quick_claw))
+    return [1, 0] if second else [0, 1]
 
 
 def _decomp_ability(tables, mon: RefPokemon) -> int:
@@ -1908,7 +1921,10 @@ def ref_step(tables, state: RefState, actions: tuple[int, int], outcome) -> RefS
         priority = (0, 0)
         if not early[0]:
             priority = tuple(_t(tables, "move_priority", choices[side][0]) for side in (0, 1))
-        order = [1, 0] if _player_second(tables, s, priority, outcome.speed_tie) else [0, 1]
+        # The order reads the speedRand drawn the turn before (qc_roll): this turn's is
+        # drawn after CalcTurnOrder (bcp.c:853-857).
+        second = _player_second(tables, s, priority, outcome.speed_tie, _qc_rolls(s))
+        order = [1, 0] if second else [0, 1]
 
     for position, side in enumerate(order):
         if s.over:
@@ -1956,7 +1972,35 @@ def ref_step(tables, state: RefState, actions: tuple[int, int], outcome) -> RefS
         if sd.party[sd.active].status == Status.SLEEP:
             _unlock(sd)
     s.turn += 1
+    # The turn's speedRand (bcp.c:853-857), kept only while it can be read (_qc_kept).
+    _keep_qc(tables, s, list(outcome.quick_claw))
     return s
+
+
+def _qc_rolls(s: RefState) -> list[int]:
+    return [sd.qc_roll for sd in s.sides]
+
+
+def _qc_kept(tables, s: RefState) -> list[bool]:
+    """``step.qc_kept``: a living Quick Claw holder is active, or the side waits for a
+    replacement and a living holder is on its bench (the next turn's order and the AI read
+    the slot's speedRand with the battler on the field then)."""
+    out = []
+    for sd in s.sides:
+
+        def claw(mon):
+            return mon.species and mon.hp and _item_effect(tables, mon) == ItemId.QUICK_CLAW
+
+        active = sd.party[sd.active]
+        bench = [m for i, m in enumerate(sd.party) if i != sd.active]
+        pending = active.hp == 0 and any(m.species and m.hp for m in bench)
+        out.append(not s.over and (bool(claw(active)) or (pending and any(claw(m) for m in bench))))
+    return out
+
+
+def _keep_qc(tables, s: RefState, qc: list[int]) -> None:
+    for sd, kept, value in zip(s.sides, _qc_kept(tables, s), qc, strict=True):
+        sd.qc_roll = int(bool(value)) if kept else 0
 
 
 def ref_replace(tables, state: RefState, side: int, slot: int) -> RefState:
@@ -1972,4 +2016,5 @@ def ref_replace(tables, state: RefState, side: int, slot: int) -> RefState:
     _faint_check(turn, s)
     if not s.over:
         _switch_in_effects(turn, s, side)
+    _keep_qc(tables, s, _qc_rolls(s))  # the slot's speedRand stays while it can be read
     return s

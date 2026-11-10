@@ -65,11 +65,12 @@ def test_resources_from_bag(tables, names, learnsets):
 
 
 def test_bag_resources_warns_on_unsupported_item(tables, names, learnsets):
-    claw, honey = names.item("Quick Claw"), names.item("Honey")
-    bag = {"items": [(claw, 1), (honey, 1)], "berries": [(names.item("Oran Berry"), 1)]}
+    # Razor Claw is unsupported (Quick Claw was, until K3b2 Task 8).
+    rock, honey = names.item("Razor Claw"), names.item("Honey")
+    bag = {"items": [(rock, 1), (honey, 1)], "berries": [(names.item("Oran Berry"), 1)]}
     resources, warnings = bag_resources(bag, tables, names, learnsets, ())
-    assert claw not in dict(resources.held)
-    assert warnings == ["Quick Claw: not offered (hold effect not supported)"]
+    assert rock not in dict(resources.held)
+    assert warnings == ["Razor Claw: not offered (hold effect not supported)"]
 
 
 def test_usable_pool_excludes_and_trims(tables, names):

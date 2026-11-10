@@ -19,10 +19,18 @@ they never apply.
 Within equal priority (``player_second``, ``:1401-1440``) the decomp decides in this
 order: Quick Claw / Custap Berry (``HOLD_EFFECT_SOMETIMES_PRIORITY`` /
 ``PINCH_PRIORITY``), Lagging Tail (``HOLD_EFFECT_PRIORITY_DOWN``), Stall, then Trick Room
-or speed. Quick Claw (K3b2, ``Outcome.quick_claw``), Custap and Stall are unsupported, so
-Lagging Tail comes first here. ``SortMonSpeedOrder`` (``end_of_turn_order``) uses the same
-comparison with ``ignoreQuickClaw = TRUE`` (priorities 0; the Quick Claw flag is still
-evaluated, only its ``moveEffectsData`` write is skipped, :1278-1300).
+or speed. Custap and Stall are unsupported. ``SortMonSpeedOrder`` (``end_of_turn_order``)
+uses the same comparison with ``ignoreQuickClaw = TRUE`` (priorities 0; the Quick Claw
+flag is still evaluated, only its ``moveEffectsData`` write is skipped, :1278-1300).
+
+Quick Claw activates when ``speedRand[battler] % (100 / param) == 0`` (:1278-1286,
+:1344-1352). ``speedRand`` is redrawn in the turn's pre-move step
+(battle_controller_player.c:853-857), *after* ``CalcTurnOrder`` (:707-790), so a turn's
+order reads the draw of the turn before (or of the battle start, battle_lib.c:2024):
+``action_order`` reads ``BattleState.qc_roll``. The same turn's draw
+(``Outcome.quick_claw``) orders that turn's end (``SortMonSpeedOrder`` at :888). The flag is
+computed for every pair ``CompareBattlerSpeed`` compares, so it also orders two switches
+(the outgoing Pokemon's item: the battler on the field) and two bag items.
 """
 
 from __future__ import annotations
@@ -84,34 +92,51 @@ def effective_speed(tables: Tables, state: BattleState, side) -> jnp.ndarray:
     return jnp.where(state.tailwind[side] != 0, speed * 2, speed)
 
 
-def player_second(tables: Tables, state: BattleState, tie_roll) -> jnp.ndarray:
-    """``bool``: ``BattleSystem_CompareBattlerSpeed(player, opponent)`` swaps the two
-    within equal priority (lib.c:1401-1440). [K3b2 seam: Quick Claw / Custap decide
-    first, :1402-1411.] Lagging Tail: a lone holder goes second (:1418-1421); two holders
-    compare speeds reversed, the faster second, Trick Room ignored (:1412-1417). Else
-    (Stall is unsupported) Trick Room reverses the speeds (:1432). Equal speeds swap on
-    ``tie_roll`` (``RandNext() & 1``), drawn only where the decomp compares speeds."""
-    speed0, speed1 = effective_speed(tables, state, 0), effective_speed(tables, state, 1)
-    lag0, lag1 = (
-        tables.item_effect[state.item[side, state.active[side]]] == ItemId.LAGGING_TAIL
-        for side in (0, 1)
+def _holds(tables: Tables, state: BattleState, side, item) -> jnp.ndarray:
+    return tables.item_effect[state.item[side, state.active[side]]] == item
+
+
+def quick_claw_active(tables: Tables, state: BattleState, qc) -> jnp.ndarray:
+    """``bool[2]``: each side's active battler holds a Quick Claw and its ``speedRand``
+    draw ``qc`` (``int[2]``, 1 = ``speedRand % 5 == 0``) activates it (lib.c:1278-1286)."""
+    qc = jnp.asarray(qc)
+    return jnp.stack(
+        [_holds(tables, state, side, ItemId.QUICK_CLAW) & (qc[side] != 0) for side in (0, 1)]
     )
-    reversed_ = (lag0 & lag1) | ((state.trick_room != 0) & ~lag0 & ~lag1)
+
+
+def player_second(tables: Tables, state: BattleState, tie_roll, qc) -> jnp.ndarray:
+    """``bool``: ``BattleSystem_CompareBattlerSpeed(player, opponent)`` swaps the two
+    within equal priority (lib.c:1401-1440). Quick Claw first (``qc``: each side's
+    ``speedRand`` bit, ``quick_claw_active``): both active compare plain speeds, Trick Room
+    and Lagging Tail ignored (:1402-1407); a lone active one goes first (:1408-1411), even
+    under Trick Room and against a Lagging Tail. Lagging Tail: a lone holder goes second
+    (:1418-1421); two holders compare speeds reversed, the faster second, Trick Room
+    ignored (:1412-1417). Else (Stall is unsupported) Trick Room reverses the speeds
+    (:1432). Equal speeds swap on ``tie_roll`` (``RandNext() & 1``), drawn only where the
+    decomp compares speeds."""
+    speed0, speed1 = effective_speed(tables, state, 0), effective_speed(tables, state, 1)
+    claw0, claw1 = quick_claw_active(tables, state, qc)
+    lag0, lag1 = (_holds(tables, state, side, ItemId.LAGGING_TAIL) for side in (0, 1))
+    reversed_ = ~(claw0 & claw1) & ((lag0 & lag1) | ((state.trick_room != 0) & ~lag0 & ~lag1))
     slower = jnp.where(reversed_, speed0 > speed1, speed0 < speed1)
     by_speed = slower | ((speed0 == speed1) & (jnp.asarray(tie_roll) != 0))
-    return jnp.where(lag0 != lag1, lag0, by_speed)
+    lagging = jnp.where(lag0 != lag1, lag0, by_speed)
+    return jnp.where(claw0 != claw1, claw1, jnp.where(claw0, by_speed, lagging))
 
 
 def action_order(tables: Tables, state: BattleState, actions, outcome) -> jnp.ndarray:
     """``int8[2]``: the two sides in execution order. ``outcome.speed_tie`` decides
-    equal speeds (0 = player first): the decomp swaps on ``RandNext() & 1``."""
+    equal speeds (0 = player first): the decomp swaps on ``RandNext() & 1``. Quick Claw
+    reads ``state.qc_roll``, the draw of the turn before (module docstring), never the
+    outcome."""
     actions = jnp.asarray(actions, _I32)
     switch, item = is_switch(actions), is_item(actions)
     early = switch | item  # items and switches go before moves
     moves = jnp.stack([selected_move(tables, state, side, actions[side])[0] for side in (0, 1)])
     both_moves = ~early[0] & ~early[1]
     priority = jnp.where(both_moves, tables.move_priority[moves].astype(_I32), 0)
-    second = player_second(tables, state, outcome.speed_tie)
+    second = player_second(tables, state, outcome.speed_tie, state.qc_roll)
     player_second_ = (priority[0] < priority[1]) | ((priority[0] == priority[1]) & second)
     # Two actions of one kind compare speeds; an item and a switch go in battler order
     # (player first); a switch or item always precedes a move.

@@ -166,6 +166,9 @@ class ItemId(IntEnum):
     * ``BIG_ROOT`` (``HOLD_EFFECT_LEECH_BOOST``): drain (``effects._drain``) and Leech Seed
       (``step._leech_seed_check``).
     * ``LAGGING_TAIL`` (``HOLD_EFFECT_PRIORITY_DOWN``): ``order.player_second``.
+    * ``QUICK_CLAW`` (``HOLD_EFFECT_SOMETIMES_PRIORITY``, param ``QUICK_CLAW_PARAM``):
+      ``order.player_second`` with the holder's ``speedRand`` draw (``BattleState.qc_roll``
+      for the turn order, ``Outcome.quick_claw`` for the end-of-turn order).
     * ``RESIST_BERRY`` (Rindo ``HOLD_EFFECT_WEAKEN_SE_GRASS``, Chilan ``..._WEAKEN_NORMAL``):
       ``tables.item_param[i, 1]`` is the type the berry resists, ``RESIST_ANY_NORMAL`` for
       Chilan (any Normal-type hit, no super-effective test); ``effects.resist_berry``
@@ -185,6 +188,7 @@ class ItemId(IntEnum):
     WHITE_HERB = 10
     LAGGING_TAIL = 11
     RESIST_BERRY = 12
+    QUICK_CLAW = 13
 
 
 # ``item_param[i, 1]`` of Chilan Berry (``HOLD_EFFECT_WEAKEN_NORMAL``): the berry halves any
@@ -206,6 +210,14 @@ class TrainerItemId(IntEnum):
 # Potion's ``itemUseParams.hpRestored`` (res/items/data/potion.json), the amount
 # ``BattleSystem_UseBagItem`` (src/battle/battle_system.c:435) restores.
 POTION_HP_RESTORED = 20
+
+# Quick Claw's hold param (res/items/data/quick_claw.json ``effectParam`` 20, the only
+# ``HOLD_EFFECT_SOMETIMES_PRIORITY`` item): ``BattleSystem_CompareBattlerSpeed`` activates it
+# when ``speedRand % (100 / param) == 0`` (battle_lib.c:1278-1286, :1344-1352). The engine
+# stores that test's result (``BattleState.qc_roll``, ``Outcome.quick_claw``), which is exact
+# only while every holder has this param: ``game_constants`` asserts it for every game.
+QUICK_CLAW_PARAM = 20
+QUICK_CLAW_MODULUS = 100 // QUICK_CLAW_PARAM  # % 5
 
 
 class Status(IntEnum):

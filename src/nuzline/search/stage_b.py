@@ -2,7 +2,11 @@
 spec §3-4; plan rulings 4-10).
 
 The tree alternates **belief nodes** (a weighted set of states at a player decision
-point; the root holds the one given state) and chance layers: for a player action ``a``,
+point) and chance layers. The root is a chance node over the given state's hidden draws
+(``step.root_belief``: the Quick Claw ``speedRand`` bit ``qc_roll`` of each side with a holder
+that can act next turn, 1/5 vs 4/5): its states differ only in hidden state, so they form the
+root belief node, weighted by their probabilities; without such a side it holds the one given
+state. Then: for a player action ``a``,
 each state ``s`` of the node (absolute reach ``w``) meets every opponent action ``o``
 with the AI's exact probability ``q_s(o)`` (``expand.ai_rows``), and every merged battle
 outcome of ``(a, o)`` (``expand.expand``: stepped, replaced and observed, merged on
@@ -107,7 +111,7 @@ from nuzline.data.tables import Names, Tables
 from nuzline.engine.actions import FIRST_ITEM_ACTION, MOVE_ACTIONS, decision_actions, usable_moves
 from nuzline.engine.enumerate import SamplingOnly
 from nuzline.engine.state import BattleState
-from nuzline.engine.step import WINNER_PLAYER, needs_replacement
+from nuzline.engine.step import WINNER_PLAYER, needs_replacement, root_belief
 from nuzline.search import deaths
 from nuzline.search.expand import ai_rows, expand, expand_replacements
 from nuzline.search.leaves import LeafValue, allocate, evaluate_forced, evaluate_leaves
@@ -383,12 +387,22 @@ def _count(nodes: list[PlanNode], kind: str) -> int:
 
 class _Solver:
     def __init__(
-        self, tables: Tables, names: Names, root, settings: SolveSettings, leaf_fn, start=None
+        self,
+        tables: Tables,
+        names: Names,
+        root,
+        settings: SolveSettings,
+        leaf_fn,
+        start=None,
+        weights=None,
     ):
         self.tables, self.names, self.settings, self.leaf_fn = tables, names, settings, leaf_fn
         self.start = time.perf_counter() if start is None else start
         self.store = _Store()
-        self.store.add(root)  # id 0
+        # The root belief (``root_belief``): ``root`` holds its states, ``weights`` their
+        # probabilities (default: one state); the first is id 0.
+        weights = [1.0] if weights is None else weights
+        self.root_states = dict(zip(self.store.add(root), weights, strict=True))
         self.root = _first(root)
         self.struggle = not bool(np.any(np.asarray(usable_moves(tables, self.root, 0))))
         self.ai: dict[int, np.ndarray | None] = {}  # float64 row, None when refused
@@ -560,8 +574,10 @@ class _Solver:
         for node in frontier:
             ra = node.root_action
             if ra is None:
-                if self.ai[0] is None:
-                    reasons = ai_refusals(self.tables, self.root, self.names)
+                bad = [s for s in node.states if self.ai[s] is None]
+                if bad:
+                    state = _first(self.store.take(bad[:1]))
+                    reasons = ai_refusals(self.tables, state, self.names)
                     raise UnsupportedAi(
                         "; ".join(reasons) or "the AI's action distribution is refused"
                     )
@@ -806,7 +822,9 @@ class _Solver:
         precision met)`` (module docstring; the last two ``None`` without a target)."""
         dropped: dict[int, str] = {}
         replacing = bool(self.store.pending[0])
-        root = self._root = _Node("decision", None, 1.0, states={0: 1.0}, replacement=replacing)
+        root = self._root = _Node(
+            "decision", None, 1.0, states=dict(self.root_states), replacement=replacing
+        )
         self._refused_roots = set()
         if replacing:  # the root decision is a replacement: expand it before the first turn
             self._expand_replacements([root], 0, depth)
@@ -1073,10 +1091,12 @@ def solve(
         raise ValueError("solve: the root state is already over the death budget")
     if settings.max_depth == 0:
         return _stage_a(tables, names, state, key, settings, start)
-    root = jax.tree.map(lambda f: np.asarray(f)[None], state)
-    if int(root.over[0]) != 0:
+    if int(state.over) != 0:
         raise ValueError("solve: the battle is already over")
-    solver = _Solver(tables, names, root, settings, leaf_fn, start)
+    belief = root_belief(tables, state)
+    root = jax.tree.map(lambda *f: np.stack([np.asarray(x) for x in f]), *(b[0] for b in belief))
+    weights = [b[1] for b in belief]
+    solver = _Solver(tables, names, root, settings, leaf_fn, start, weights)
     n_root = len(solver._legal(0))
     budget = settings.budget_playouts
     if budget is None:

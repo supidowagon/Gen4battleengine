@@ -54,6 +54,11 @@ Events, per side (``[side]``; 0 = player):
   ``self_hit`` (hurt itself in confusion), ``full_para`` (fully paralyzed), ``in_love``
   ("X is in love with Y!", subscript_infatuated.s: the attract check ran) and ``immobilized``
   ("X is immobilized by love!", subscript_immobilized_by_love.s).
+* ``quick_claw``: its Quick Claw's held-item animation played before its move (no text;
+  ``subscript_check_quick_claw.s``): both chose a move, its draw of the turn before
+  activated the claw (``state.qc_roll``) and it acts first (``step._quick_claw_shown``). The
+  turn's own draw (``Outcome.quick_claw``) shows only in the end-of-turn order, which is
+  not in the vector (below).
 * ``thawed_by_hit``: a Fire hit thawed it (effects.py:368-375); ``contact_ability``:
   its Static / Poison Point / Flame Body gave its attacker a status, or its Cute Charm
   infatuated it (effects._contact_ability), the message that names the ability.

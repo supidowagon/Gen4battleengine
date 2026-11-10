@@ -668,3 +668,56 @@ def test_result_dict_round_trip(tables, names):
         back = stage_b.result_from_dict(json.loads(json.dumps(stage_b.result_to_dict(r))))
         assert back == r
         assert back.seconds == r.seconds
+
+
+def quick_claw_endgame(tables, names):
+    """Monferno at 1 HP holding a Quick Claw (Scratch) against a faster Tackle-only Geodude
+    that any Scratch knocks out (no crits: Lucky Chant on both sides): Monferno wins when the
+    battle-start draw (the root's ``qc_roll``) moves it first, or when Tackle misses."""
+    from tests.search.fixtures import endgame
+
+    s = endgame(tables, names, ["Scratch"], ["Tackle"], player_hp=1)
+    s = s._replace(item=s.item.at[0, 0].set(names.item("Quick Claw")))
+    spe = 4  # stats[..., 0..4] are Atk..Spe
+    s = s._replace(stats=s.stats.at[1, 0, spe].set(int(s.stats[0, 0, spe]) + 1))
+    s = s._replace(lucky_chant=s.lucky_chant.at[:].set(5))
+    scratch = np.asarray(damage_table(tables, s, 0, names.move("Scratch"), False))
+    return s.replace_hp(1, 0, int(scratch.min()))
+
+
+def test_root_chance_node_for_the_battle_start_quick_claw(tables, names):
+    # Rules §5(b), §11 item 1: the lead's Quick Claw is decided by the battle-start draw
+    # (BattleContext_InitCounters, battle_lib.c:2019-2025) before turn 1's order. The root is
+    # a chance node over qc_roll (1/5, 4/5); the player sees neither value, so the two states
+    # form one belief node. Exact against the exhaustive solver over that belief.
+    from nuzline.engine.step import root_belief
+
+    state = quick_claw_endgame(tables, names)
+    belief = root_belief(tables, state)
+    assert [(int(s.qc_roll[0]), p) for s, p in belief] == [(0, 0.8), (1, 0.2)]
+    settings = SolveSettings(max_depth=CAP, epsilon=0.0, n_depth0=8)
+    result = solve(tables, names, state, KEY, settings, leaf_fn=ZERO)
+    want, _ = exhaustive(tables, state, CAP, belief=belief)
+    scratch = names.move_slot(state, 0, "Scratch")
+    assert row(result, scratch).estimate == pytest.approx(want[scratch], abs=1e-9)
+    # Each fixed root value alone gives another answer; the belief is their 4:1 mix.
+    alone = [exhaustive(tables, s, CAP)[0][scratch] for s, _ in belief]
+    assert alone[1] - alone[0] > 0.1
+    assert want[scratch] == pytest.approx(0.8 * alone[0] + 0.2 * alone[1], abs=1e-12)
+    # The given state's own qc_roll is hidden: solving it with either value is the same.
+    other = state._replace(qc_roll=state.qc_roll.at[0].set(1))
+    again = solve(tables, names, other, KEY, settings, leaf_fn=ZERO)
+    assert row(again, scratch).estimate == pytest.approx(want[scratch], abs=1e-9)
+
+
+def test_root_belief_states_share_the_root_node(tables, names):
+    state = quick_claw_endgame(tables, names)
+    solver = stage_b._Solver(tables, names, batch(state), SMALL, None)
+    assert solver.root_states == {0: 1.0}
+    from nuzline.engine.step import root_belief
+
+    belief = root_belief(tables, state)
+    solver = stage_b._Solver(
+        tables, names, batch(*(s for s, _ in belief)), SMALL, None, weights=[p for _, p in belief]
+    )
+    assert solver.root_states == {0: 0.8, 1: 0.2}

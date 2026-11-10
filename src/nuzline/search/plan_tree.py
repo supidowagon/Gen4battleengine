@@ -53,6 +53,7 @@ __all__ = ["distribution_line", "label", "render", "to_json"]
 _FIELDS = dict(OBS_FIELDS)
 # (flag, text) in the order a message sequence reads; ``hits`` and ``crit`` are special.
 _FLAG_TEXT = (
+    ("quick_claw", "Quick Claw activated"),
     ("missed", "missed"),
     ("no_target", "no target"),
     ("full_para", "fully paralyzed"),

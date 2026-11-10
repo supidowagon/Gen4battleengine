@@ -40,6 +40,15 @@ Encodings:
   leaves) and is also cleared when its source leaves (``step._source_leaves``).
 * ``trainer_item_count`` is ``aiContext.trainerItemCounts``: the bag's size at battle
   start, never decremented.
+* ``qc_roll`` is ``BattleContext.speedRand[side] % (100 / QUICK_CLAW_PARAM) == 0`` (1 = a
+  Quick Claw would activate), the per-battler draw the next turn's order reads
+  (``order.action_order``). ``speedRand`` belongs to the battler slot, not to a Pokemon: it
+  is redrawn every turn after the order is fixed (battle_controller_player.c:853-857), and
+  ``step`` stores the turn's draw (``Outcome.quick_claw``) only while something can read it
+  before the next redraw (``step.qc_kept``: a living Quick Claw holder is active, or the
+  side's replacement can send one in); else 0. Hidden from the player. At a root it is a
+  chance node (``step.root_belief``, ``step.sample_root``), as the battle-start draw
+  (``BattleContext_InitCounters``, battle_lib.c:2024) is.
 """
 
 from __future__ import annotations
@@ -137,6 +146,7 @@ class BattleState(NamedTuple):
     future_damage: jnp.ndarray  # int16
     trainer_items: jnp.ndarray  # int16[2,4], bag item ids (aiContext.trainerItems)
     trainer_item_count: jnp.ndarray  # int8, bag size at battle start (trainerItemCounts)
+    qc_roll: jnp.ndarray  # int8, speedRand % 5 == 0 (Quick Claw), hidden, see the docstring
     # field (scalars)
     weather: jnp.ndarray  # int8, ids.Weather
     weather_timer: jnp.ndarray  # int8, 0 = permanent
@@ -270,6 +280,7 @@ LAYOUT: dict[str, tuple[tuple[int, ...], type]] = {
     "future_damage": (_SIDE, np.int16),
     "trainer_items": ((SIDES, BAG_SLOTS), np.int16),
     "trainer_item_count": (_SIDE, np.int8),
+    "qc_roll": (_SIDE, np.int8),
     "weather": (_FIELD, np.int8),
     "weather_timer": (_FIELD, np.int8),
     "trick_room": (_FIELD, np.int8),

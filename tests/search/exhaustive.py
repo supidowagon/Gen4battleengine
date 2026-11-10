@@ -136,13 +136,19 @@ def _ai(tables, state: BattleState) -> np.ndarray:
 
 
 def exhaustive(
-    tables, state: BattleState, cap: int, group: bool = True
+    tables,
+    state: BattleState,
+    cap: int,
+    group: bool = True,
+    belief: list[tuple[BattleState, float]] | None = None,
 ) -> tuple[dict[int, float], Callable[[tuple[bytes, ...]], int]]:
     """The exact value of every legal player action at ``state`` over ``cap`` turns, and
     ``choose(path)``: the optimal action at the belief node reached by the observation
     ``path`` (a tuple of observation bytes, one per turn). ``group=False`` lets each
     state choose its own optimum (the peeking player); ``choose`` raises ``KeyError`` on
-    a path that names no node or two nodes with different choices."""
+    a path that names no node or two nodes with different choices. ``belief`` replaces the
+    root ``[(state, 1.0)]`` with weighted states the player cannot tell apart (a root chance
+    node, ``step.root_belief``)."""
     choices: dict[tuple[bytes, ...], int | None] = {}
 
     def value(belief: list[tuple[BattleState, float]], left: int, path) -> dict[int, float]:
@@ -197,7 +203,8 @@ def exhaustive(
             choices.setdefault(path, best)
         return values
 
-    root = value([(jax.tree.map(np.asarray, state), 1.0)], cap, ())
+    start = [(state, 1.0)] if belief is None else belief
+    root = value([(jax.tree.map(np.asarray, s), w) for s, w in start], cap, ())
 
     def choose(path: tuple[bytes, ...]) -> int:
         best = choices[tuple(path)]

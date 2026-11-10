@@ -376,6 +376,16 @@ For each turn, `tools/trace_to_state.py` works out the following:
   (bit 6) when `BtlCmd_TryProtection` failed: the converter sets `Outcome.protect` to 0
   then, else 1 (a success; a chain of 0 or a user acting last ignores the roll). A move it
   blocked writes no `hit` record and its `move_end` has `MOVE_STATUS_PROTECTED` (bit 15).
+- **Quick Claw.** `speedRand` is not dumped. For a side whose start-of-turn active Pokemon
+  holds a Quick Claw, the converter replays both values of the start state's `qc_roll`
+  (the draw that orders this turn: the battle start's on turn 0, else the previous turn's
+  `Outcome.quick_claw`), the carried value first so that a tie keeps it. When the other
+  value fits better, it is written back into the previous turn's `Outcome.quick_claw`
+  and that turn is replayed again (its `mismatched` is recomputed: its end-of-turn order
+  read the same draw). The turn's own `quick_claw` is also enumerated when the battler on
+  the field at the turn's end holds the claw (the end-of-turn order reads it). The order
+  shows only through the replay (a stat change or a faint before the other side's hit),
+  so an order that changes no compared field leaves the carried value.
 - **The other chance fields** are `speed_tie`, `end_speed_tie`, `full_para`, `thaw`,
   `infatuation`, `secondary`, `contact_proc` (only when the defender, the target's
   start-of-turn active or the Pokemon it switches in, has Static, Poison Point, Flame Body or
@@ -415,6 +425,7 @@ previous turn, so they are carried forward and never checked:
   `light_screen`, `safeguard`, `mist`, `lucky_chant`, `tailwind`, `wish_timer`,
   `wish_hp`, `future_timer`, `future_damage`, `trainer_items`, `trainer_item_count`
 - field: `weather_timer`, `trick_room`, `gravity`, `mud_sport`
+- hidden draws: `qc_roll` (fitted, see Quick Claw above)
 - bookkeeping: `turn` (the final record at `RESULT` comes before `totalTurns++`, so it
   would always differ by one), `over`, `winner`, `player_faints`, `ai_seen_moves`,
   `ai_ability_known`

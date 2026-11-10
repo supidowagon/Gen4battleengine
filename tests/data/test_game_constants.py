@@ -48,6 +48,7 @@ LISTED = [
     "nuzline.ai.commands.ITEM_EXPERT_BELT",
     "nuzline.ai.switching.ITEM_IRON_BALL",
     "nuzline.engine.ids.POTION_HP_RESTORED",
+    "nuzline.engine.ids.QUICK_CLAW_PARAM",
     # engine: saves/check.py's special routes (final review M12)
     "nuzline.saves.check.SPECIES_SMEARGLE",
     "nuzline.saves.check.SPECIES_PICHU",
@@ -173,7 +174,9 @@ def test_classes_are_disjoint_and_well_formed():
     assert not set(GAME_DATA) & set(EXEMPT)
     for c in CONSTANTS:
         assert c.kind in KINDS and c.scope in SCOPES, c
-        assert c.kind == "item" or (c.hold_effect is None and c.hp_restored is None), c
+        assert c.kind == "item" or (
+            c.hold_effect is None and c.hp_restored is None and c.hold_param is None
+        ), c
     assert POLICY == {VANILLA: "vanilla", KAIZO: None}
     assert set(POLICY) == set(GAMES)
 
@@ -197,6 +200,10 @@ def _code_entries(where: str) -> set:
         (potion,) = [c for c in CONSTANTS if c.where == where]
         assert potion.hp_restored == obj
         return {("Potion", potion.id)}
+    if where == "nuzline.engine.ids.QUICK_CLAW_PARAM":
+        (claw,) = [c for c in CONSTANTS if c.where == where]
+        assert claw.hold_param == obj
+        return {("Quick Claw", claw.id)}
     if where == "nuzline.ai.commands.BattleEffect":
         assert set(commands.MOVE_EFFECTS.values()) == set(obj)
         return {(None, m) for m in commands.MOVE_EFFECTS}
@@ -267,6 +274,15 @@ def test_hold_effect_mismatch_reported(vanilla_manifest, vanilla_items):
     lines = check_constants(VANILLA, Names(vanilla_manifest), belt)
     assert lines == [
         "ai/commands.py ITEM_EXPERT_BELT: Expert Belt has hold effect 0 in this game, expected 96"
+    ]
+
+
+def test_quick_claw_param_mismatch_reported(vanilla_manifest, vanilla_items):
+    # BattleState.qc_roll stores speedRand % (100 / param) == 0 for param 20 only.
+    claw = [dict(i, hold_param=10) if i["name"] == "Quick Claw" else i for i in vanilla_items]
+    lines = check_constants(VANILLA, Names(vanilla_manifest), claw)
+    assert lines == [
+        "engine/ids.py QUICK_CLAW_PARAM: Quick Claw has hold param 10 in this game, expected 20"
     ]
 
 

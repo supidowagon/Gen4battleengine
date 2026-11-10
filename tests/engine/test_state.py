@@ -215,6 +215,13 @@ def test_attract_bits_map_to_infatuated():
     assert later and "Attract" not in later.group(1)
 
 
+def test_speed_rand_maps_to_qc_roll():
+    # docs/kaizo/k3b2-rules.md §12: speedRand is read only through Quick Claw's test.
+    rows = {field: (pytree, status) for field, pytree, status in _state_md_rows()}
+    assert rows["BattleContext.speedRand"] == ("qc_roll", "mapped")
+    assert rows["MoveEffectsData.quickClaw"][1] == "later (M6)"
+
+
 def test_leads_choose_the_active_slots_before_the_switch_in_effects(tables, names):
     # The leads are the active slots and the switch-in hooks run for them: an
     # Intimidate Shinx leading from opponent slot 1 lowers the player lead's Attack.

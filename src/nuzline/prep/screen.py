@@ -1,7 +1,7 @@
 """The all-rung Stage A screen and the prep tie rule (plan 4c Task 6).
 
-``screen`` plays ``n`` playouts from each setup's turn-0 state (``evaluate_leaves``, both
-halves pooled; ruling 10) and keeps the 8 ``deaths.BUCKETS`` counts, so one batch scores
+``screen`` plays ``n`` playouts from each setup's turn-0 state (``evaluate_leaves`` from
+roots, so each playout draws the battle-start Quick Claw roll; both halves pooled; ruling 10) and keeps the 8 ``deaths.BUCKETS`` counts, so one batch scores
 every rung. ``ScreenStats`` accumulate across halving rounds (``merge``). ``prep_order`` is
 the spec section 4 tie rule over scored setups (user decisions 2026-11-03 and 2026-11-04,
 superseding ruling 7): the battle tie rule (``stage_a.tie_ordered``, ruling 5) at every
@@ -100,7 +100,7 @@ def screen(
 ) -> list[ScreenStats]:
     """``n`` playouts (even) from each of the ``N`` numpy ``states`` (each with its own
     ``faint_budget`` and protected slots), both halves pooled."""
-    values = evaluate_leaves(tables, states, [n] * len(states.hp), key, max_turns)
+    values = evaluate_leaves(tables, states, [n] * len(states.hp), key, max_turns, root=True)
     return [
         ScreenStats(
             tuple(a + b for a, b in zip(v.buckets_a, v.buckets_b, strict=True)),

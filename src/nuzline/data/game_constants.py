@@ -5,8 +5,8 @@ game that moves or renames those slots would silently change what that code mean
 each such constant is listed here and checked against the game's data when the game is
 loaded (``nuzline.data.games.load_game``):
 
-* ``CONSTANTS``: the ids, each with the name (and, for items, the hold effect or HP
-  restored) it must have. ``scope`` ``"engine"`` is asserted for every game;
+* ``CONSTANTS``: the ids, each with the name (and, for items, the hold effect, hold param or
+  HP restored) it must have. ``scope`` ``"engine"`` is asserted for every game;
   ``"vanilla_policy"`` only for games whose AI policy is the vanilla transcription
   (``POLICY``), since a game with no transcribed policy is refused by coverage anyway.
 * ``GAME_DATA``: lists that are game data and come from the game's intermediate files.
@@ -45,6 +45,7 @@ class Constant:
     scope: str
     hold_effect: int | None = None
     hp_restored: int | None = None
+    hold_param: int | None = None
 
 
 def _table(where: str, kind: str, scope: str, entries: Mapping[str, int]) -> tuple[Constant, ...]:
@@ -207,6 +208,12 @@ CONSTANTS: tuple[Constant, ...] = (
     # Potion's itemUseParams.hpRestored (res/items/data/potion.json), which
     # BattleSystem_UseBagItem (src/battle/battle_system.c:435) restores.
     Constant("nuzline.engine.ids.POTION_HP_RESTORED", "item", 17, "Potion", _E, hp_restored=20),
+    # Quick Claw's effectParam (res/items/data/quick_claw.json) with
+    # HOLD_EFFECT_SOMETIMES_PRIORITY (52): the engine stores speedRand % (100 / param) == 0
+    # (battle_lib.c:1278-1286) as one bit, exact only for this param.
+    Constant(
+        "nuzline.engine.ids.QUICK_CLAW_PARAM", "item", 217, "Quick Claw", _E, 52, hold_param=20
+    ),
     # saves/check.py: Sketch's user and the special routes outside the learnset tables
     # (Rotom's form moves, Route 228's ultimate moves, Wilma's Draco Meteor for Dragon
     # types, the Pichu egg's Volt Tackle); each route is cited there.
@@ -386,7 +393,7 @@ def _check(c: Constant, names: Names, items: Sequence[dict]) -> list[str]:
     lines = []
     if table[c.id].lower() != c.name.lower():
         lines.append(f"{where}: id {c.id} is {table[c.id]!r} in this game, expected {c.name!r}")
-    if c.hold_effect is None and c.hp_restored is None:
+    if c.hold_effect is None and c.hp_restored is None and c.hold_param is None:
         return lines
     if c.id >= len(items):
         return [*lines, f"{where}: item {c.id} is missing from this game's items.json"]
@@ -395,6 +402,11 @@ def _check(c: Constant, names: Names, items: Sequence[dict]) -> list[str]:
         lines.append(
             f"{where}: {c.name} has hold effect {row.get('hold_effect')} in this game, "
             f"expected {c.hold_effect}"
+        )
+    if c.hold_param is not None and row.get("hold_param") != c.hold_param:
+        lines.append(
+            f"{where}: {c.name} has hold param {row.get('hold_param')} in this game, "
+            f"expected {c.hold_param}"
         )
     if c.hp_restored is not None:
         hp = row.get("hp_restored")

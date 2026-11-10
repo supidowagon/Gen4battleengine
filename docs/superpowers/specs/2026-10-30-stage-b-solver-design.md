@@ -189,6 +189,33 @@ off).
   Without a target a pass is round 0 alone, exactly as before. The result records, for the
   final pass, the top-up rounds, the half-A half-width and whether the target was met.
 
+#### Amendment 2026-11-09: the root chance node (Quick Claw)
+
+K3b2 Task 8 (docs/kaizo/k3b2-rules.md §5, §11 item 1). A battler's Quick Claw activates on
+`speedRand % 5 == 0`, and a turn's order reads the `speedRand` drawn the turn before
+(battle_controller_player.c:853-857 redraws it after `CalcTurnOrder`); turn 1 reads the
+battle-start draw (`BattleContext_InitCounters`, battle_lib.c:2019-2025). The engine keeps the
+bit as hidden state (`BattleState.qc_roll`), and the turn's new draw is an outcome field like
+any other (`Outcome.quick_claw`, enumerated in the turn's chance node).
+
+- **Root chance node.** The draw at the root has happened but the player has not seen it. So
+  the root is a chance node over `qc_roll` (`step.root_belief`): for each side whose draw can
+  be read before the next redraw (`step.qc_kept`: a living Quick Claw holder is active, or can
+  replace a fainted active), the values 1 and 0 with 1/5 and 4/5 (the `% n` convention; exact
+  13108/65536). The value in the given state is ignored. With no such side the node is the
+  one given state.
+- **Information set.** The root states differ only in hidden state, so they are one belief
+  node, weighted by those probabilities: the player picks one root action for all of them.
+  The AI's row is computed per state (today's AI does not read `qc_roll`; K3c's
+  `IfSpeedCompare*` will). The legal actions are equal by construction.
+- **Stage A.** Each playout draws the root's `qc_roll` from its own key
+  (`playout.root_state`, `fold_in(key, ROOT_FOLD)`), the same for every root action (common
+  random numbers). The prep screen's turn-0 evaluations do the same
+  (`evaluate_leaves(root=True)`). States below the root carry the value `step` stored.
+- **Test.** `tests/search/test_stage_b.py::test_root_chance_node_for_the_battle_start_quick_claw`:
+  on a 2-turn Quick Claw endgame the solve equals the exhaustive solver over the root belief,
+  which is the 4:1 mix of the two fixed-value solves.
+
 ### 4. Objective
 
 Stage B optimizes the primary objective, P(win with zero player faints). The engine

@@ -37,6 +37,13 @@ docs/ai/roark.md 11.2), with ``powerMul`` 20 on a turn where its Pursuit hit the
 player's switch. A replacement in a turn the AI switched is refused (roark.md 14, item
 (3): ``Task_TrainerShowPartyMenu`` reads the stale ``aiSwitchedPartySlot``).
 
+A root's hidden draws (``root_state``): the battle-start ``speedRand``, which decides a
+lead's Quick Claw on turn 1 (``BattleState.qc_roll``, ``step.sample_root``), is a chance
+node. Stage A draws it per playout at its root (``stage_a.rank_actions``, and
+``leaves.evaluate_leaves(root=True)`` for the prep screen) from ``fold_in(key, ROOT_FOLD)``,
+so the playout's own key stream is unchanged; a state below a root carries the value
+``step`` stored.
+
 Refusals cannot raise under ``jit``: a playout that meets one stops with
 ``PlayoutResult.refused = 1`` and ``won = REFUSED_WON`` (-1; the turn is not played), so
 summing ``won`` over refused playouts cannot pass for losses. Callers must exclude
@@ -74,6 +81,7 @@ from nuzline.engine.step import (
     needs_replacement,
     replace,
     replacement_power_mul,
+    sample_root,
     step,
 )
 from nuzline.search.deaths import over_budget
@@ -91,11 +99,19 @@ __all__ = [
     "replacement_pass",
     "replacement_policy",
     "replacement_refusal",
+    "root_state",
     "send_replacements",
 ]
 
 _I32, _F32 = jnp.int32, jnp.float32
 REFUSED_WON = -1  # PlayoutResult.won of a refused playout
+ROOT_FOLD = 0x0C1A  # fold_in data of a playout key's root draws (root_state)
+
+
+def root_state(tables: Tables, state: BattleState, key) -> BattleState:
+    """``state`` with its hidden root draws made (module docstring): ``step.sample_root``
+    on ``fold_in(key, ROOT_FOLD)``, ``key`` being the playout's own key."""
+    return sample_root(jax.random.fold_in(key, ROOT_FOLD), tables, state)
 
 
 class PlayoutResult(NamedTuple):
