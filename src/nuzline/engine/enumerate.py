@@ -64,7 +64,8 @@ of the turn:
 * ``speed_tie``: the two orders ``order.action_order`` gives under ``speed_tie`` 0 and 1
   differ (it is read only there: ``player_second``'s ``RandNext() & 1``, battle_lib.c:1445).
 * ``end_speed_tie``: the effective speeds after the actions can be equal
-  (step.py:663-673; a foe's Roar can bring any living party member in, see ``roar_level``):
+  (step.py:663-673; a foe's Roar with an eligible bench Pokemon on this side can bring any
+  living party member in, see ``roar_level``):
   each side's possible end speeds cover every Speed stage when a
   stage change is possible this turn (a Speed stat effect, AncientPower, Curse, a
   flinched Steadfast), paralysis when it can be inflicted, and the
@@ -91,7 +92,8 @@ of the turn:
   last fails without the roll mattering, ``BtlCmd_TryProtection``). A success stops the
   foe's blockable move, so ``_protect_reads`` gates that move's own reads on it.
 * ``shed_skin[d]``: side ``d``'s active or incoming Pokemon has Shed Skin, or the foe uses
-  Roar and a living Pokemon of side ``d`` has it (the drag can bring it in)
+  Roar, side ``d`` has an eligible bench Pokemon and a living Pokemon of side ``d`` has it
+  (the drag can bring it in)
   (``step._turn_end_ability``; over-approximate: it only rolls with a status and HP).
 * ``roar_level[s]``: ``s`` uses Roar / Whirlwind (``step._use_move``), its level is lower than
   its target's (the foe's active Pokemon or the one it switches in: ``outcome.roar_levels``;
@@ -102,7 +104,8 @@ of the turn:
   (its hit, the first mover's sure flinch, a sure Protect), and ``roar_target`` also needs
   ``roar_level`` to pass (``_roar_reads``). A drag also changes what the end of the turn
   reads: ``end_speed_tie`` counts the speeds of every living Pokemon of the dragged side
-  (stage 0, paralyzed or not) and ``shed_skin`` its holders (above).
+  (stage 0, paralyzed or not) and ``shed_skin`` its holders (above), both only when that side
+  has an eligible bench Pokemon (``roar_bench >= 1``: with none no drag happens).
 * ``quick_claw[s]``: this turn's ``speedRand`` bit of side ``s`` (``step``: the end-of-turn
   order reads it with the battler on the field after the actions, and ``step.qc_kept`` stores
   it for the next turn while a living Quick Claw holder is active or can replace a fainted
@@ -631,7 +634,9 @@ def damage_inputs_can_change(tables: Tables, state: BattleState, actions, foe_fi
     * **contact**: on a later hit, the foe's Flame Body burn or Static / Poison Point
       status (effects._contact_ability), when the status matters;
     * **items** (``hooks.held_item_check`` after every hit): a status cure on the side's
-      Pokemon when the status matters, a White Herb on either Pokemon (a lowered stage);
+      Pokemon when the status matters, a White Herb on the attacker or the defender whose
+      stage the hit reads can be lowered (below 0 at the start, or a stat move on that stat
+      or a switch this turn);
     * **own move**: a later hit of a move other than ``MULTI_HIT`` (none has several hits
       today), a Guts user that wakes or thaws first (its status goes to none), and
       Selfdestruct (its user's HP goes to 0 before the hit).
@@ -704,9 +709,36 @@ def damage_inputs_can_change(tables: Tables, state: BattleState, actions, foe_fi
     )
     foe_action = live & (is_switch(actions)[::-1] | is_item(actions)[::-1] | foe_move)
 
-    white_herb = jnp.any(item == ItemId.WHITE_HERB)
+    # A White Herb resets its holder's lowered stages to 0 (hooks.held_item_check,
+    # battle_lib.c:4875-4887). The hit reads two stages only, the attacker's Attack / Sp. Atk
+    # and the defender's Defense / Sp. Def (battle_lib.c:6639-6642, damage._pre_random), so
+    # the herb matters when the side's own herb can meet a lowered attacking stage or the
+    # foe's a lowered defending stage: one below 0 at the turn start, or one an action this
+    # turn can lower (a stat move on that stat by either side, whatever its target or sign;
+    # a switch, for Intimidate, hooks.intimidate). Over-approximate: no hit of a move changes
+    # a stage today (MULTI_HIT has no stat effect), and a lowering by the foe's earlier move
+    # is its own clause above.
+    herb = item == ItemId.WHITE_HERB
+    stat_move = uses_move & _any_of(
+        effect, (_E.STAT_SELF, _E.SECONDARY_STAT_SELF, _E.STAT_FOE, _E.SECONDARY_STAT_FOE)
+    )
+    any_switch = jnp.any(live & is_switch(actions))
+
+    def lowerable(stat) -> jnp.ndarray:
+        """``bool[2]``: per side ``s``, a move this turn changes stage ``stat[s]`` (the
+        stage ``s``'s hit reads) of some battler, or a Pokemon switches in."""
+        moved = jnp.stack([jnp.any(stat_move & (param0 == stat[s])) for s in (0, 1)])
+        return moved | any_switch
+
+    attack_stage = state.stages[sides, attack_stat] < 0
+    defense_stage = state.stages[sides[::-1], defense_stat] < 0
+    herb_inputs = (herb & (attack_stage | lowerable(attack_stat))) | (
+        herb[::-1] & (defense_stage | lowerable(defense_stat))
+    )
     items = (
-        white_herb | (guts & _any_of(item, _STATUS_CURES)) | (burnable & (item == ItemId.LUM_BERRY))
+        herb_inputs
+        | (guts & _any_of(item, _STATUS_CURES))
+        | (burnable & (item == ItemId.LUM_BERRY))
     )
 
     foe_ability = ability[::-1]
@@ -914,7 +946,10 @@ def outcome_laws(
     user_level, target_level = roar_levels(state, actions)
     roar_level = roar & (user_level < target_level) & (roar_bench >= 1)
     roar_target = roar & (roar_bench >= 2)
-    dragged = roar[::-1]  # the foe can drag this side's Pokemon out
+    # The foe can drag this side's Pokemon out: its Roar with an eligible bench Pokemon here
+    # (BtlCmd_TryWhirlwind fails at eligibleMons <= 1, battle_script.c:5285-5297, before
+    # any drag).
+    dragged = (roar & (roar_bench >= 1))[::-1]
     if loose:
         # The brute force: both draws whenever the side uses Roar, whatever the levels and the
         # bench (the pick's law is then over max(bench, 1) values), and every living party

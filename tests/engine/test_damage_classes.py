@@ -98,6 +98,18 @@ def _state(tables, names, player, opp, order="player", setup=()):
             s = s._replace(hp=s.hp.at[1, 0].set(hp), max_hp=s.max_hp.at[1, 0].set(hp))
         elif name == "lucky_chant_opp":  # no crits for the opponent: a smaller brute force
             s = s._replace(lucky_chant=s.lucky_chant.at[0].set(5))
+        elif name == "herb":  # a White Herb on the player
+            s = s._replace(item=s.item.at[0, 0].set(names.item("White Herb")))
+        elif name == "herb_atk_low":  # ... restoring the Attack the player's hits read
+            s = s._replace(
+                item=s.item.at[0, 0].set(names.item("White Herb")),
+                stages=s.stages.at[0, Stat.ATK].set(-1),
+            )
+        elif name == "herb_opp_def_low":  # ... restoring the Defense they hit
+            s = s._replace(
+                item=s.item.at[1, 0].set(names.item("White Herb")),
+                stages=s.stages.at[1, Stat.DEF].set(-1),
+            )
         elif name == "low_hp":  # Flail's power band moves with its user's HP
             s = s._replace(hp=s.hp.at[0, 0].set(int(s.max_hp[0, 0]) * 2 // 5))
         else:
@@ -139,6 +151,15 @@ EXACT_CASES = [
     ("Flail", "Tackle", "player", ("low_hp", "lucky_chant_opp"), [[True]]),
     ("Tackle", "Leer", "player", ("guts_asleep",), [[False]]),
     ("Tackle", "Tackle", "opp", ("lucky_chant_opp",), [[True]]),
+    # White Herb (Task 12): Leer lowers the herb holder's Defense, which the player's own
+    # hits do not read, so they stay compressed; a lowered Attack (the player's herb) or
+    # Defense (the foe's herb) is restored after the first hit, so the second is not.
+    ("Double Kick", "Leer", "player", ("herb",), [[True, True]]),
+    ("Double Kick", "Leer", "opp", ("herb",), [[True, True]]),
+    ("Double Kick", "Leer", "player", ("herb_atk_low",), [[True, False]]),
+    ("Double Kick", "Leer", "opp", ("herb_atk_low",), [[False, False]]),
+    ("Double Kick", "Leer", "player", ("herb_opp_def_low",), [[True, False]]),
+    ("Double Kick", "Growl", "opp", ("herb",), [[False, False]]),
 ]
 
 
@@ -201,6 +222,9 @@ def _forced(laws):
         ("Flail", "Tackle", "opp", ("low_hp", "lucky_chant_opp")),
         # A sleeping Guts user wakes before its move: its status, and the boost, are gone.
         ("Tackle", "Leer", "player", ("guts_asleep",)),
+        # A White Herb restores the lowered Attack / Defense after the first hit (Task 12).
+        ("Double Kick", "Leer", "player", ("herb_atk_low",)),
+        ("Double Kick", "Leer", "player", ("herb_opp_def_low",)),
     ],
 )
 def test_compression_disabled_when_inputs_can_change(tables, names, player, opp, order, setup):

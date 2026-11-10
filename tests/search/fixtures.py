@@ -44,12 +44,14 @@ def spike_cannon_root(tables: Tables, names: Names) -> BattleState:
 def spike_cannon_player_root(tables: Tables, names: Names) -> BattleState:
     """Spike Cannon on the player's lead only (the opponent's would have no transcribed AI
     script), whose outcome product exceeds ``enumerate.WIDTH_CAP`` against every opponent
-    action. The opponent's lead holds a White Herb, which ``hooks.held_item_check`` may
-    run after any hit (a lowered stage restored), so ``damage_inputs_can_change`` keeps
-    Spike Cannon's hits after the first out of the damage classes; without it the classes
-    bring the pair under the cap."""
+    action, at the root and below it. The player's lead holds a Lum Berry, which
+    ``hooks.held_item_check`` may run after any hit (a burn cured: Spike Cannon is
+    physical), so ``damage_inputs_can_change`` keeps Spike Cannon's hits after the first
+    out of the damage classes on every turn; without it the classes bring the pair under
+    the cap. (Until K3b2 Task 12 a White Herb on the opponent did this; the herb clause now
+    needs a stage the hits read that can be lowered, and a restoring herb is used up.)"""
     s = roark_state(tables, names, player_moves=["Spike Cannon"])
-    s = s._replace(item=s.item.at[1, s.active[1]].set(names.item("White Herb")))
+    s = s._replace(item=s.item.at[0, s.active[0]].set(names.item("Lum Berry")))
     # Loud if a tighter predicate ever brings it under the cap.
     cannon = names.move_slot(s, 0, "Spike Cannon")
     theirs = np.flatnonzero(np.asarray(legal_opponent_actions(tables, s)))

@@ -594,6 +594,21 @@ def _setup(tables, names, case):
         )
     elif kind == "speed_tie_in":  # the newcomer ties the Roar user's speed at the turn's end
         s = s._replace(stats=s.stats.at[1, 2, _SPE].set(s.stats[0, 0, _SPE]))
+    elif kind == "drag_needs_bench":
+        # Geodude at four times the Roar user's Speed (tied only if paralyzed, which the
+        # drag set adds) and ``bench`` living bench Pokemon at the user's Speed: no drag
+        # without one, and end_speed_tie is not read then. The end order shows in the state:
+        # the seeded Roar user's drain heals a poisoned full-HP newcomer before or after
+        # its poison damage (the end-of-turn checks run per battler, step.END_OF_TURN_ORDER).
+        (bench,) = args[1:]
+        spe = s.stats[0, 0, _SPE]
+        s = s._replace(
+            stats=s.stats.at[1, 0, _SPE].set(4 * spe).at[1, 1:3, _SPE].set(spe),
+            status=s.status.at[1, 1:3].set(Status.POISON),
+            leech_seed=s.leech_seed.at[0].set(1),
+        )
+        s = _faint(s, 1, *range(1 + bench, 3))
+        return s, A("Roar", "Tackle", s, names)
     elif kind == "infatuated_target":  # Geodude in love with the Roar user, then dragged out
         s = s._replace(infatuated=s.infatuated.at[1].set(1))
     elif kind == "roar_vs_roar":
@@ -620,6 +635,7 @@ BRUTE_CASES = (
     + [("shed_skin_in", "opp"), ("speed_tie_in", "opp"), ("infatuated_target", "opp")]
     + [("roar_vs_roar", o) for o in ("player", "opp", "tie")]
     + [("roar_vs_roar", "opp", "claw"), ("switch_target", "opp")]
+    + [("drag_needs_bench", "opp", b) for b in (0, 1, 2)]
 )
 
 
@@ -628,6 +644,17 @@ def test_gated_equals_bruteforce(tables, names, case):
     s, acts = _setup(tables, names, case)
     width, brute = assert_equals_bruteforce(tables, s, acts)
     assert width <= brute
+
+
+@pytest.mark.parametrize("bench", [0, 1, 2])
+def test_a_drag_widens_the_end_order_only_with_a_bench(tables, names, bench):
+    # Task 12: a foe's Roar adds the dragged side's speeds to end_speed_tie only when a drag
+    # can happen (roar_bench >= 1, BtlCmd_TryWhirlwind, battle_script.c:5285-5297).
+    s, acts = _setup(tables, names, ("drag_needs_bench", "opp", bench))
+    laws = laws_of(tables, s, acts)
+    assert int(laws.roar_bench[0]) == bench
+    assert bool(laws.relevant.end_speed_tie) == (bench >= 1)
+    assert bool(laws_of(tables, s, acts, loose=True).relevant.end_speed_tie)
 
 
 @pytest.mark.parametrize("level", [12, 16])
