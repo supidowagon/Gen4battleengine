@@ -360,11 +360,13 @@ class _Turn:
         if used.size == 1:
             return [int(used[0])]
         legal = np.asarray(legal_actions(self.tables, state, side))
-        if int(after["active"][side]) != mon and int(after["hp"][side, mon]) > 0:
-            if not self._roared(side):
-                return [MOVE_ACTIONS + int(after["active"][side])]
-            # A foe's Roar drags the Pokemon out (step._use_move) and the newcomer does not act:
-            # a move that never ran, or a switch the drag undid. Every legal action.
+        roared = self._roared(side)
+        if int(after["active"][side]) != mon and int(after["hp"][side, mon]) > 0 and not roared:
+            return [MOVE_ACTIONS + int(after["active"][side])]
+        if roared:
+            # A foe's Roar drags the side's Pokemon out (step._use_move) and the newcomer does
+            # not act: a move that never ran, or a switch the drag undid, possibly dragging the
+            # start Pokemon back so that the active slot looks unchanged. Every legal action.
             choices = [int(a) for a in np.flatnonzero(legal)]
         else:
             # It did not get to use a move: every legal move.

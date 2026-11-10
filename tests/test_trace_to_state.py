@@ -602,6 +602,30 @@ def test_a_dragged_side_may_have_chosen_any_action(tables, names, tmp_path):
     assert plain.action_choices(1) == [MOVE_ACTIONS + 1]
 
 
+def test_a_switch_undone_by_a_drag_is_inferred(tables, names, tmp_path):
+    # Roark switches Geodude out for Onix, then Monferno's Roar drags Geodude back (rank 0 of
+    # Geodude, Cranidos): the next record shows Geodude active, no PP drop. The switch must be
+    # a candidate although the active slot looks unchanged (reviewer probe rv11/trace_probe.py).
+    party = _roar_party(tmp_path, 14)
+    roar = _outcome()._replace(roar_target=jnp.asarray([0, 0], jnp.int8))
+    script = [
+        ((LEER, MOVE_ACTIONS + 1), roar),
+        ((EMBER, ROCK_THROW), _outcome(p_roll=4, o_hit=0)),
+    ]
+    records, states = _engine_trace(tables, names, script, (0, 0), party)
+    assert [int(s.active[1]) for s in states] == [0, 0, 0]
+    turns = convert(_bundle(tmp_path, names, records, party), tables, names)
+    assert len(turns) == len(states)
+    for i, (turn, expected) in enumerate(zip(turns, states)):
+        for name in BattleState._fields:
+            assert np.array_equal(getattr(turn.state, name), getattr(expected, name)), (
+                f"turn {i} field {name}"
+            )
+        assert turn.mismatched == ()
+    # A switch (to Onix, or equally to Cranidos: both replay to the same state) then the drag.
+    assert MOVE_ACTIONS + 1 <= turns[0].actions[1] < MOVE_ACTIONS + 6
+
+
 GROWL = 1  # Prinplup's slot 1
 
 

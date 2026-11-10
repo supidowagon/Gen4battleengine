@@ -358,8 +358,10 @@ For each turn, `tools/trace_to_state.py` works out the following:
 
 - **Actions.** A move slot is the slot whose PP dropped. A switch is an active slot that
   changed while the old active mon is still alive, unless the foe used Roar / Whirlwind
-  (a PP drop on one): then the change may be the drag, whose newcomer does not act, and
-  every legal action (moves, switches, Roark's usable bag slots) is a candidate. When the
+  (a PP drop on one): then every legal action (moves, switches, Roark's usable bag slots)
+  of a side without a PP drop is a candidate, whether its active slot changed or not. The
+  drag's newcomer does not act, and a switch the drag undid can even end on the start slot
+  (the switch-in dragged out, the start Pokemon dragged back). When the
   side did not act (it fainted first, flinched, or was fully paralyzed), every legal move
   slot and, for Roark, every usable bag slot is a candidate, and the replay below picks
   among them.

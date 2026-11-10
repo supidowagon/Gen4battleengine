@@ -55,7 +55,7 @@ from nuzline.engine.outcome import (
     sample_outcome,
 )
 from nuzline.engine.state import make_state
-from nuzline.engine.step import _VOLATILE, needs_replacement, step, step_events
+from nuzline.engine.step import _VOLATILE, needs_replacement, replace, step, step_events
 from nuzline.search.plan_tree import label
 from tests.engine.helpers import (
     A,
@@ -392,6 +392,45 @@ def test_observation_and_label(tables, names):
     assert obs[sl].tolist() == [0, 3]
     text = label(obs.tobytes(), names)
     assert "you used Roar" in text and "was dragged out" in text
+
+
+def _sp(names, s, side, slot):
+    return names.species_names[int(s.species[side, slot])]
+
+
+def test_label_names_the_actor_and_tells_a_drag_from_a_send_out(tables, names):
+    # Geodude Tackles, then the player's Roar drags Cranidos in (review round, minor 2): the
+    # label names Geodude as the actor and says nothing of a send-out.
+    s = _state(tables, names)
+    acts = A("Roar", "Tackle", s, names)
+    o = _o(target=(1, 0))
+    after = step(tables, s, acts, o)
+    obs = np.asarray(observe(tables, s, acts, o, after)).tobytes()
+    geodude, cranidos = _sp(names, s, 1, 0), _sp(names, s, 1, 2)
+    text = label(obs, names, prev_opp=0, prev_mine=0)
+    assert text.startswith(f"{geodude} used Tackle, you used Roar, {cranidos} was dragged out")
+    assert "sent out" not in text
+    assert label(obs, names).startswith("the foe used Tackle")  # no prev_opp: no name
+    # The opponent's Roar drags the player's slot 1 in: no "you sent in" either.
+    s = _state(tables, names, mine="Tackle", opp="Roar", order="player")
+    acts = A("Tackle", "Roar", s, names)
+    o = _o()
+    after = step(tables, s, acts, o)
+    obs = np.asarray(observe(tables, s, acts, o, after)).tobytes()
+    text = label(obs, names, prev_opp=0, prev_mine=0)
+    assert f"{_sp(names, s, 0, 1)} was dragged out" in text and "sent in" not in text
+    # A Stealth Rock faint of the dragged-in Pokemon, then the replacement.
+    s = _state(tables, names)
+    s = s._replace(stealth_rock=s.stealth_rock.at[1].set(1), hp=s.hp.at[1, 1].set(1))
+    acts = A("Roar", "Tackle", s, names)
+    o = _o()
+    after = step(tables, s, acts, o)
+    shown = replace(tables, after, 1, 2)
+    obs = np.asarray(observe(tables, s, acts, o, shown)).tobytes()
+    text = label(obs, names, prev_opp=0, prev_mine=0)
+    onix = _sp(names, s, 1, 1)
+    assert f"{onix} was dragged out" in text and f"{onix} fainted" in text
+    assert f"sent out {cranidos}" in text
 
 
 def test_reference_agreement_over_draws(tables, names):

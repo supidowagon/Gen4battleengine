@@ -168,15 +168,29 @@ def label(
     battle) it adds ``(death d of k allowed)`` or, past the budget, ``(death d, over the
     k allowed)``, ``d`` counting the fainted slots beyond ``n``. ``prev_mine`` (the
     player's active slot before the turn) names ``you sent in X`` when the active changed
-    without a switch action: a replacement."""
+    without a switch action: a replacement. A Pokemon the foe's Roar dragged in (``dragged``)
+    is told in the Roar user's text ("X was dragged out"), not as a send-out; an opponent that
+    moved before being dragged out is named from ``prev_opp`` (the slot it acted from), or
+    "the foe" without it."""
     f = decode(obs)
     opp_slot, my_slot = int(f["active"][1]), int(f["active"][0])
     opp = _species(names, f, 1, opp_slot)
-    sides = [(1, opp), (0, "you")]
+    dragged = [int(f["dragged"][side]) - 1 for side in (0, 1)]  # the slot dragged in, or -1
+    actor = opp
+    if dragged[1] >= 0:  # the opponent acted (if at all) before the drag: its earlier slot
+        actor = _species(names, f, 1, prev_opp) if prev_opp is not None else "the foe"
+    sides = [(1, actor), (0, "you")]
     if int(f["order"][0]) == 0:
         sides.reverse()
     parts = [t for s, who in sides if (t := _side_text(f, names, s, who, trainer))]
-    if prev_opp is not None and prev_opp != opp_slot:
+    if dragged[1] >= 0:
+        # The dragged-in Pokemon (named in the Roar user's text) fainted to the hazards, and
+        # the replacement came in after the turn.
+        if int(f["opp_pixels"][dragged[1]]) == 0:
+            parts.append(f"{_species(names, f, 1, dragged[1])} fainted")
+        if opp_slot != dragged[1]:
+            parts.append(f"{trainer} sent out {opp}")
+    elif prev_opp is not None and prev_opp != opp_slot:
         if int(f["opp_pixels"][prev_opp]) == 0:
             parts.append(f"{_species(names, f, 1, prev_opp)} fainted")
         if int(f["act_kind"][1]) != ACT_SWITCH:
@@ -196,7 +210,12 @@ def label(
                 f" (death {d} of {k} allowed)" if d <= k else f" (death {d}, over the {k} allowed)"
             )
         parts.append(text)
-    elif prev_mine is not None and prev_mine != my_slot and int(f["act_kind"][0]) != ACT_SWITCH:
+    elif (
+        prev_mine is not None
+        and prev_mine != my_slot
+        and int(f["act_kind"][0]) != ACT_SWITCH
+        and my_slot != dragged[0]
+    ):
         parts.append(f"you sent in {_species(names, f, 0, my_slot)}")
     total = f"/{max_hp[my_slot]}" if max_hp is not None else ""
     mine = f"you {hp}{total} HP"
