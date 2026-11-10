@@ -35,9 +35,8 @@ note = "decoded: the getter now reads the field from the d_test.narc member load
 [[code]]
 module = "arm9"
 symbol = "MapHeader_GetMapMatrixID"
-status = "not_reached"
-note = "decoded: the getter now reads the field from the d_test.narc member loaded by MapHeader_IDBoundsCheck (buffer + field offset) instead of sMapHeaders + 24*id + offset: the 24*id index is dropped and the base address 0x020E601E becomes the bare offset 2 (mapMatrixID, u16 at 2); src/map_header.c:30; the matrix picks the land data whose tile behaviour CalcTerrain reads first; battle terrain (CalcTerrain, src/field_battle_data_transfer.c:467-494) is read in battle only by Nature Power, Secret Power and Camouflage (effects 173, 197, 213: GetTerrainMove, GetTerrainSecondaryEffect, TryCamouflage; src/battle/battle_script.c:8007,8040,8067) and by the Dive/Dusk Ball modifiers of wild catches; the engine does not model terrain, so a fight reaches this only through those effects"
-when = { move_effect = [173, 197, 213] }
+status = "modelled"
+note = "decoded: the getter now reads the field from the d_test.narc member loaded by MapHeader_IDBoundsCheck (buffer + field offset) instead of sMapHeaders + 24*id + offset: the 24*id index is dropped and the base address 0x020E601E becomes the bare offset 2 (mapMatrixID, u16 at 2), and vanilla's Pearl test (matrix 22 -> 23 when gGameVersion is VERSION_PEARL) is kept; src/map_header.c:28-38; the matrix picks the land data whose tile behaviour CalcTerrain reads first (src/field_battle_data_transfer.c:467-494); K3b2 Task 9's terrain reader reads this u16 from the d_test.narc member (maps.map_header_battle_fields, HEADER_MATRIX = 2, gGameVersion checked not Pearl) for each trainer's Trainer.terrain (tools/terrain.py), and check_kaizo_map_headers matches this exact patched getter (_KAIZO_MATRIX; tests/tools/rom/test_terrain.py test_kaizo_map_header_getters)"
 
 [[code]]
 module = "arm9"
@@ -115,9 +114,8 @@ note = "decoded: the getter now reads the field from the d_test.narc member load
 [[code]]
 module = "arm9"
 symbol = "MapHeader_GetBattleBG"
-status = "not_reached"
-note = "decoded: the getter now reads the field from the d_test.narc member loaded by MapHeader_IDBoundsCheck (buffer + field offset) instead of sMapHeaders + 24*id + offset: the 24*id index is dropped and the base address 0x020E601C becomes the bare offset 0 (battleBG, bits 7-11 of the u16 at 22); src/map_header.c:114; battleBG is the battle background (graphics) and CalcTerrain's fallback (src/field_battle_data_transfer.c:488-489,499); battle terrain (CalcTerrain, src/field_battle_data_transfer.c:467-494) is read in battle only by Nature Power, Secret Power and Camouflage (effects 173, 197, 213: GetTerrainMove, GetTerrainSecondaryEffect, TryCamouflage; src/battle/battle_script.c:8007,8040,8067) and by the Dive/Dusk Ball modifiers of wild catches; the engine does not model terrain, so a fight reaches this only through those effects"
-when = { move_effect = [173, 197, 213] }
+status = "modelled"
+note = "decoded: the getter now reads the field from the d_test.narc member loaded by MapHeader_IDBoundsCheck (buffer + field offset) instead of sMapHeaders + 24*id + offset: the 24*id index is dropped and the base address 0x020E601C becomes the bare offset 0 (battleBG, bits 7-11 of the u16 at 22: ldrh [r0, #22]; lsls #20; lsrs #27); src/map_header.c:111-115; battleBG is the battle background (graphics) and CalcTerrain's fallback (src/field_battle_data_transfer.c:488-489,499); K3b2 Task 9's terrain reader reads these bits from the d_test.narc member (maps.map_header_battle_fields, HEADER_FLAGS = 22, BATTLE_BG_SHIFT = 7) for each trainer's Trainer.terrain (tools/terrain.py), and check_kaizo_map_headers matches this exact patched getter (_KAIZO_BATTLE_BG; tests/tools/rom/test_terrain.py test_kaizo_map_header_getters); the remaining refusal is coverage's per-trainer mixed or unknown terrain for effects 173, 197 and 213 (engine.coverage)"
 
 [[code]]
 module = "arm9"

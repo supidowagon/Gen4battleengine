@@ -18,6 +18,7 @@ from jax.sharding import Mesh, NamedSharding, PartitionSpec
 import nuzline.search.stage_a  # noqa: F401 - registers Tables/BattleState for jax.export
 from nuzline.data.spec import PokemonSpec
 from nuzline.data.tables import Tables
+from nuzline.data.trainer import TERRAIN_UNKNOWN
 from nuzline.engine.hooks import on_switch_in
 from nuzline.engine.ids import Weather
 from nuzline.engine.state import LAYOUT, BattleState, initial_arrays, protected_mask
@@ -46,19 +47,22 @@ def make_states(
     opp_items: Sequence[int] = (),
     budget: int = 0,
     protected: Sequence[Sequence[int]] | None = None,
+    terrain: int = TERRAIN_UNKNOWN,
 ) -> BattleState:
     """The turn-0 states of ``teams`` (each a player party, lead in slot 0) against
     ``opp``, as a numpy batch with leading axis ``len(teams)``. Row ``i`` equals
     ``make_state(tables, list(teams[i]), list(opp), start_condition, opp_items,
-    leads=(0, 0)).with_budget(budget, protected[i])`` byte for byte. ``ValueError`` as
-    ``make_state`` / ``with_budget`` for a bad party, a bad budget or a protected slot
+    leads=(0, 0), terrain=terrain).with_budget(budget, protected[i])`` byte for byte.
+    ``ValueError`` as ``make_state`` / ``with_budget`` for a bad party, a bad budget or a protected slot
     that is empty or fainted."""
     n = len(teams)
     if protected is not None and len(protected) != n:
         raise ValueError(f"protected has {len(protected)} rows for {n} teams")
     rows = []
     for i, team in enumerate(teams):
-        a = initial_arrays(tables, list(team), list(opp), start_condition, opp_items)
+        a = initial_arrays(
+            tables, list(team), list(opp), start_condition, opp_items, terrain=terrain
+        )
         a["faint_budget"][...] = budget
         a["protected"][...] = protected_mask(
             a["species"][0], a["hp"][0], budget, () if protected is None else protected[i]

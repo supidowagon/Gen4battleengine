@@ -179,4 +179,7 @@ def test_manifest_conditions_are_the_not_reached_entries(kaizo_manifest):
 
     labels = [c["label"] for c in kaizo_manifest["rom_change_conditions"]]
     assert labels == sorted(load_conditions(ROM_DIFF))
-    assert "arm9 MapHeader_GetBattleBG" in labels  # K3a Task 5: terrain moves
+    # K3b2 Task 9: the terrain getters are modelled (Trainer.terrain); coverage refuses a
+    # terrain move only against a mixed or unknown terrain.
+    assert "arm9 MapHeader_GetBattleBG" not in labels
+    assert "arm9 MapHeader_GetMapMatrixID" not in labels

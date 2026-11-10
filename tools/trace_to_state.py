@@ -160,16 +160,43 @@ def initial_state(
     trainer: Trainer,
     leads: tuple[int, int],
     game: str = VANILLA,
+    terrain: int | None = None,
 ) -> BattleState:
     """The fight's turn-0 state: ``player`` against the trainer's built party (from
-    ``game``'s intermediates), bag and start weather, with the given active slots."""
+    ``game``'s intermediates), bag, start weather and battle terrain, with the given active
+    slots. The terrain is the trainer's (``Trainer.terrain``) unless ``terrain`` gives the
+    one the traced battle started on (``battle_terrain``)."""
     from nuzline.data.trainer import IntermediateData, build_trainer_party
     from nuzline.engine.coverage import start_weather
 
     opp = build_trainer_party(trainer, IntermediateData(get_game(game).intermediate_dir))
     return make_state(
-        tables, player, opp, start_weather(trainer), opp_items=trainer.items, leads=leads
+        tables,
+        player,
+        opp,
+        start_weather(trainer),
+        opp_items=trainer.items,
+        leads=leads,
+        terrain=battle_terrain(trainer, terrain),
     )
+
+
+def battle_terrain(trainer: Trainer, given: int | None) -> int:
+    """The traced battle's terrain: ``given`` (a ``TERRAIN_NAMES`` id, from the bundle's
+    ``terrain``: the trace does not record it, and a trainer whose maps give several
+    terrains, ``Trainer.terrains``, fights on the one where the battle started), else the
+    trainer's ``terrain``. ``TraceError`` for a ``given`` terrain the trainer's maps cannot
+    give."""
+    from nuzline.data.trainer import TERRAIN_NAMES
+
+    if given is None:
+        return trainer.terrain
+    if not 0 <= given < len(TERRAIN_NAMES):
+        raise TraceError(f"terrain {given} is not a TERRAIN_* id")
+    if trainer.terrains and given not in trainer.terrains:
+        maps = ", ".join(TERRAIN_NAMES[t] for t in trainer.terrains if t >= 0)
+        raise TraceError(f"{TERRAIN_NAMES[given]} is not a terrain of the trainer's maps ({maps})")
+    return given
 
 
 def _fields(record: dict) -> dict[str, np.ndarray]:
@@ -649,7 +676,7 @@ def convert_bundle(bundle: dict, tables: Tables, names: Names) -> list[Turn]:
     records, events = _records(bundle)
     first = _fields(records[0])
     leads = (int(first["active"][0]), int(first["active"][1]))
-    state = initial_state(tables, player, trainer, leads, game)
+    state = initial_state(tables, player, trainer, leads, game, bundle.get("terrain"))
     _check_start(state, first)
     state = _overlay(state, first)
     turns: list[Turn] = []
@@ -708,9 +735,15 @@ def trace_to_states(
 
 
 def bundle_trace(
-    raw: Path, party: Path | SaveFile, names: Names, trainer_id: int, game: str = VANILLA
+    raw: Path,
+    party: Path | SaveFile,
+    names: Names,
+    trainer_id: int,
+    game: str = VANILLA,
+    terrain: int | None = None,
 ) -> dict:
-    """A raw trace plus the player's party, the trainer id and the game. ``party`` is a
+    """A raw trace plus the player's party, the trainer id and the game (and, when given, the
+    battle's ``terrain``: ``battle_terrain``). ``party`` is a
     party TOML or a loaded save, whose party becomes the specs (``SaveMon.to_spec`` with
     ``game``'s tables); an egg there is left out with a note on stderr, as
     ``nuzline fight --save`` does (an egg never enters a battle)."""
@@ -730,13 +763,16 @@ def bundle_trace(
     else:
         specs = load_party(party, names)
     lines = Path(raw).read_text(encoding="utf-8").splitlines()
-    return {
+    bundle = {
         "format": BUNDLE_FORMAT,
         "game": game,
         "trainer_id": trainer_id,
         "party": [dataclasses.asdict(m) for m in specs],
         "records": [json.loads(line) for line in lines if line.strip()],
     }
+    if terrain is not None:
+        bundle["terrain"] = terrain
+    return bundle
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -755,6 +791,11 @@ def main(argv: list[str] | None = None) -> int:
     who = parser.add_mutually_exclusive_group()
     who.add_argument("--trainer", default="roark", help="trainer name (a Leader is preferred)")
     who.add_argument("--trainer-id", type=int, help="exact trainer id")
+    parser.add_argument(
+        "--terrain",
+        help="the battle terrain the trace started on (e.g. GRASS), for a trainer whose maps "
+        "give several",
+    )
     args = parser.parse_args(argv)
 
     game = get_game(args.game)
@@ -763,8 +804,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     tables, names = load_game(game)
     party = args.party if args.save is None else load_save(args.save, game=game.id)
-    bundle = bundle_trace(args.trace, party, names, trainer.id, game.id)
     try:
+        terrain = None if args.terrain is None else _terrain_id(args.terrain)
+        bundle = bundle_trace(args.trace, party, names, trainer.id, game.id, terrain)
         turns = convert_bundle(bundle, tables, names)
     except TraceError as err:
         print(f"trace_to_state: error: {err}", file=sys.stderr)
@@ -776,6 +818,17 @@ def main(argv: list[str] | None = None) -> int:
     args.out.write_text(json.dumps(bundle, indent=1) + "\n", encoding="utf-8")
     print(f"wrote {args.out}: {len(turns)} turn records, trainer {trainer.id}")
     return 0
+
+
+def _terrain_id(name: str) -> int:
+    """``GRASS`` or ``TERRAIN_GRASS`` (any case) -> its ``TERRAIN_NAMES`` id."""
+    from nuzline.data.trainer import TERRAIN_NAMES
+
+    key = name.strip().upper()
+    key = key if key.startswith("TERRAIN_") else f"TERRAIN_{key}"
+    if key not in TERRAIN_NAMES:
+        raise TraceError(f"unknown terrain {name!r}")
+    return TERRAIN_NAMES.index(key)
 
 
 if __name__ == "__main__":

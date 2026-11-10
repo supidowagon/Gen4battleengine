@@ -147,7 +147,12 @@ def test_setup_states_and_protected(tables, names):
     rows = row_bytes(states, 2)
     for i, s in enumerate((setup, other)):
         ref = make_state(
-            tables, setup_specs(prob, s), roark_party(names), 0, roark_trainer().items
+            tables,
+            setup_specs(prob, s),
+            roark_party(names),
+            0,
+            roark_trainer().items,
+            terrain=roark_trainer().terrain,
         ).with_budget(2, protected_slots(prob, s))
         ref_row = row_bytes(type(ref)(*(np.asarray(f)[None] for f in ref)), 1)[0]
         assert rows[i].tobytes() == ref_row.tobytes()

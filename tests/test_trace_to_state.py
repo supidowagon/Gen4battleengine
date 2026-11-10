@@ -863,3 +863,25 @@ def test_the_probe_reads_the_tracers_addresses():
         assert mine.items() <= _lua_table(table).items(), table
     lua = probe.read_text(encoding="utf-8")
     assert "traces" in lua and "probe.txt" in lua
+
+
+def test_a_traced_battle_can_carry_its_terrain(tables, names):
+    # K3b2 Task 9: the trace does not record the terrain; the bundle's "terrain" gives the
+    # one a mixed-terrain trainer was fought on, and it must be one its maps can give.
+    import dataclasses
+
+    from tools.trace_to_state import TraceError, _terrain_id, battle_terrain
+
+    trainer = next(t for t in load_trainers(INTERMEDIATE) if t.id == ROARK_ID)
+    assert battle_terrain(trainer, None) == trainer.terrain == _terrain_id("building")
+    state = initial_state(tables, load_party(PARTY, names), trainer, (0, 0))
+    assert int(state.terrain) == trainer.terrain
+    mixed = dataclasses.replace(trainer, terrain=-1, terrains=(0, 2))
+    assert battle_terrain(mixed, _terrain_id("TERRAIN_GRASS")) == 2
+    with pytest.raises(TraceError, match="TERRAIN_WATER is not a terrain of the trainer's maps"):
+        battle_terrain(mixed, _terrain_id("water"))
+    with pytest.raises(TraceError, match="unknown terrain"):
+        _terrain_id("lava")
+    b = bundle_trace(RAW_FIXTURE, PARTY, names, ROARK_ID, terrain=9)
+    assert b["terrain"] == 9
+    assert "terrain" not in bundle_trace(RAW_FIXTURE, PARTY, names, ROARK_ID)

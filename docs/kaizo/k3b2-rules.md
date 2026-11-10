@@ -929,6 +929,12 @@ Nature Power vs Gible Thunder Fang at the speed tie is exactly at the cap only w
 5. Nature Power with an already-fainted foe: the `NO_TARGET` path and the `moveHit` write (§8a).
 6. Terrain: whether Kaizo changed matrix/land_data members, and whether "mixed" trainers exist on
    the user's route (§9).
+   **Settled (K3b2 Task 9):** the reader reads the patched ROM's matrix and land data NARCs
+   (tools/terrain.py, `maps.trainer_terrain_rows`) and the vanilla ROM's equal the decomp's
+   (tests/tools/rom/test_terrain.py). Roark (246) is BUILDING in both games, derived from
+   header 47's tiles. With the whole-map rule (§9.3 step 1; step 2's sight-line narrowing is
+   not done) 415 vanilla and 371 Kaizo trainers are mixed; coverage refuses Nature Power,
+   Secret Power and Camouflage only against those (and the unplaced ones).
 7. The Fang family (273 Fire Fang, 274 Ice Fang) having the same script shape as 275
    Thunder Fang (§1a). Settle: read effect_script_0273/0274.s before mapping them.
 8. Convention: `% n` treated as uniform. The exact u16 weights are given for Quick Claw (13108/65536),

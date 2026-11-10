@@ -22,6 +22,11 @@ member it lacks. ``rom_sources.json`` also records, under ``inputs_sha256``, the
 the committed inputs only this extraction reads (``kaizo_input_hashes``), so the build can
 refuse intermediates older than an edit to them.
 
+Each trainer's battle terrain (``trainers.json`` ``terrain``/``terrains``, K3b2 Task 9) comes
+from the same trainer -> map join, read through ``maps.trainer_terrain_rows``
+(``tools/terrain.py``); for Kaizo the ROM diff must leave the terrain code alone
+(``maps.check_terrain_code``).
+
 Battle command operands that are variables no constant reaches on some walked script path
 (``tools.rom.readers.maps.UnresolvedOperand``) place no trainer; each is printed to stderr
 and listed in ``rom_unresolved.json`` beside the outputs, so a trainer they hide is visible
@@ -161,6 +166,18 @@ def _check_code_entries(path: Path, code: list[list[str]]) -> None:
     try:
         load_code_classification(path, code)
     except ValueError as e:
+        raise RomInputError(str(e)) from e
+
+
+def _check_terrain_code(code: list[list[str]]) -> None:
+    """``RomInputError`` when the diff changes the battle terrain code
+    (``maps.check_terrain_code``): the terrain is derived from the decomp's."""
+    from tools.rom.readers import ReaderError
+    from tools.rom.readers.maps import check_terrain_code
+
+    try:
+        check_terrain_code(code)
+    except ReaderError as e:
         raise RomInputError(str(e)) from e
 
 
@@ -305,6 +322,7 @@ def extract(game: str, out: Path, decomp: Path, symbols: Path, inputs: RomInputs
 
         rom, diff = _kaizo_checks(inputs, decomp, symbols, vanilla_files)
         changed, code = changed_scripts(diff), changed_code(diff)
+        _check_terrain_code(code)
         _member_entries(ROM_DIFF_TOML, changed)
         _check_code_entries(ROM_DIFF_TOML, code)
 
@@ -312,7 +330,11 @@ def extract(game: str, out: Path, decomp: Path, symbols: Path, inputs: RomInputs
     from tools.rom.readers.evolutions import read_evolutions
     from tools.rom.readers.items import read_items
     from tools.rom.readers.learnsets import read_learnsets
-    from tools.rom.readers.maps import map_header_rows, trainer_start_conditions
+    from tools.rom.readers.maps import (
+        map_header_rows,
+        trainer_start_conditions,
+        trainer_terrain_rows,
+    )
     from tools.rom.readers.moves import read_move_lists, read_moves
     from tools.rom.readers.personal import (
         read_exp_tables,
@@ -366,6 +388,8 @@ def extract(game: str, out: Path, decomp: Path, symbols: Path, inputs: RomInputs
             "exp_tables": read_exp_tables(rom),
             "trainers": read_trainers(rom, decomp, smap, charmap, starts, layout=game),
         }
+        terrains = trainer_terrain_rows(rom, decomp, smap, where, len(starts))
+        tables["trainers"] = [{**t, **terrains[t["id"]]} for t in tables["trainers"]]
         for name, data in tables.items():
             _write(stage / f"{name}.json", data)
         if changed is not None:

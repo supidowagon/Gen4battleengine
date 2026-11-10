@@ -40,6 +40,12 @@ Encodings:
   leaves) and is also cleared when its source leaves (``step._source_leaves``).
 * ``trainer_item_count`` is ``aiContext.trainerItemCounts``: the bag's size at battle
   start, never decremented.
+* ``terrain`` is ``BattleSystem.terrain``: the battle terrain, a decomp ``TERRAIN_*`` id
+  (``nuzline.data.trainer.TERRAIN_NAMES``) fixed when the battle starts
+  (``SetBackgroundAndTerrain``, field_battle_data_transfer.c:496-505) and never written in
+  battle; ``TERRAIN_UNKNOWN`` (-1) when the trainer's maps give several terrains or none
+  (``Trainer.terrain``, tools/terrain.py). Only Nature Power, Secret Power and Camouflage
+  read it (battle_script.c:8007, :8040, :8067), and coverage refuses them unless it is known.
 * ``qc_roll`` is ``BattleContext.speedRand[side] % (100 / QUICK_CLAW_PARAM) == 0`` (1 = a
   Quick Claw would activate), the per-battler draw the next turn's order reads
   (``order.action_order``). ``speedRand`` belongs to the battler slot, not to a Pokemon: it
@@ -62,6 +68,7 @@ import numpy as np
 from nuzline.data.forms import personal_row
 from nuzline.data.spec import PokemonSpec
 from nuzline.data.tables import Tables
+from nuzline.data.trainer import TERRAIN_NAMES, TERRAIN_UNKNOWN
 from nuzline.engine.ids import Stat, Weather
 from nuzline.engine.stats import calc_stats
 
@@ -152,6 +159,7 @@ class BattleState(NamedTuple):
     weather_timer: jnp.ndarray  # int8, 0 = permanent
     trick_room: jnp.ndarray  # int8
     gravity: jnp.ndarray  # int8
+    terrain: jnp.ndarray  # int8, decomp TERRAIN_* id, -1 unknown (constant per battle)
     turn: jnp.ndarray  # int16
     over: jnp.ndarray  # int8
     winner: jnp.ndarray  # int8
@@ -285,6 +293,7 @@ LAYOUT: dict[str, tuple[tuple[int, ...], type]] = {
     "weather_timer": (_FIELD, np.int8),
     "trick_room": (_FIELD, np.int8),
     "gravity": (_FIELD, np.int8),
+    "terrain": (_FIELD, np.int8),
     "turn": (_FIELD, np.int16),
     "over": (_FIELD, np.int8),
     "winner": (_FIELD, np.int8),
@@ -353,12 +362,14 @@ def initial_arrays(
     start_condition: int = Weather.NONE,
     opp_items: Sequence[int] = (),
     leads: tuple[int, int] = (0, 0),
+    terrain: int = TERRAIN_UNKNOWN,
 ) -> dict[str, np.ndarray]:
     """Every ``LAYOUT`` field of the turn-0 state, before the switch-in hooks, as numpy
     (``make_state`` is this plus the two ``on_switch_in`` calls): stats via ``calc_stats``, empty slots all zero
     (``species = 0, hp = 0``), the leads in party slots ``leads`` (player, opponent),
     no volatiles, hazards or screens, and
-    ``weather = start_condition`` with a permanent timer (0). The leads'
+    ``weather = start_condition`` with a permanent timer (0), and ``terrain`` (a decomp
+    ``TERRAIN_*`` id, ``Trainer.terrain``; ``TERRAIN_UNKNOWN`` by default). The leads'
     switch-in effects then run (``hooks.on_switch_in``, player first; the decomp's
     ``monSpeedOrder`` gives the same result in singles, see ``hooks``).
 
@@ -385,6 +396,9 @@ def initial_arrays(
     a["trainer_items"][1, : len(bag)] = bag
     a["trainer_item_count"][1] = len(bag)
     a["weather"][...] = Weather(start_condition)
+    if not TERRAIN_UNKNOWN <= terrain < len(TERRAIN_NAMES):
+        raise ValueError(f"terrain {terrain} is neither a TERRAIN_* id nor TERRAIN_UNKNOWN")
+    a["terrain"][...] = terrain
     return a
 
 
@@ -395,13 +409,14 @@ def make_state(
     start_condition: int = Weather.NONE,
     opp_items: Sequence[int] = (),
     leads: tuple[int, int] = (0, 0),
+    terrain: int = TERRAIN_UNKNOWN,
 ) -> BattleState:
     """Build the turn-0 state (``initial_arrays``), then run the leads' switch-in
     effects (``hooks.on_switch_in``, player first; the decomp's ``monSpeedOrder`` gives
     the same result in singles, see ``hooks``)."""
     from nuzline.engine.hooks import on_switch_in  # hooks imports this module
 
-    a = initial_arrays(tables, player, opp, start_condition, opp_items, leads)
+    a = initial_arrays(tables, player, opp, start_condition, opp_items, leads, terrain)
     state = BattleState(**{name: jnp.asarray(a[name]) for name in BattleState._fields})
     for side in (0, 1):
         state = on_switch_in(tables, state, side)

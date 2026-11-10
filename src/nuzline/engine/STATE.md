@@ -130,6 +130,14 @@ three structs has a row.
   `LoadBattlerSpeedRank`, trainer_ai.c:2081) only while a
   reader can see a holder before the redraw (`step.qc_kept`), else 0 (exact: the value
   is never read).
+- **BattleSystem.terrain -> `terrain`** (K3b2 Task 9; docs/kaizo/k3b2-rules.md §9, §12):
+  not one of the three structs above (`include/struct_defs/battle_system.h:112`), copied
+  from the field's `FieldBattleDTO.terrain` once (`src/battle/battle_main.c:1052`) and
+  never written in battle. `BattleSystem_GetTerrain` (`src/battle/battle_system.c:375-382`)
+  is read by Nature Power, Secret Power and Camouflage (`src/battle/battle_script.c:8007`,
+  `:8040`, `:8067`); its other readers are graphics and wild catches. `make_state` takes
+  it from `Trainer.terrain` (`tools/terrain.py`); `TERRAIN_UNKNOWN` (-1) when the trainer's
+  maps give several terrains or none, and coverage then refuses those three effects.
 - **battleEndFlag -> `over`, `winner`**: `winner` is 0 none, 1 player lost (no
   player Pokemon has HP left; a double KO of both last Pokemon is a draw, played as a
   loss), 2 player won. A player faint alone only records a death.
@@ -468,3 +476,9 @@ three structs has a row.
 | `BattleContext.waitingBattlers` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |
 | `BattleContext.battleProgressFlag` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |
 | `BattleContext.padding3154_01` | — | not needed because it is padding |
+
+## BattleSystem (`include/struct_defs/battle_system.h`, the fields the engine reads)
+
+| Struct.field | pytree field | status |
+|---|---|---|
+| `BattleSystem.terrain` | `terrain` | mapped |

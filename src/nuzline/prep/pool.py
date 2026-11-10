@@ -28,6 +28,7 @@ from nuzline.engine.coverage import (
     move_effect_line,
     rom_change_line,
     rom_change_refusals,
+    terrain_refusal,
 )
 from nuzline.engine.ids import AbilityId, ItemId
 from nuzline.prep.leveling import candies_to_cap, level_to_cap
@@ -168,6 +169,10 @@ def check_pool(
                 tables, names, trainer, [spec], could_learn, spec_terms_only=True
             ):
                 c.add(Support.NONE, f"{cand.label}: {rom_change_line(cond)}", "ROM change")
+        if trainer is not None:
+            could_know = [*spec.moves, *cand.relearner, *(move for _, move in cand.tms)]
+            if (line := terrain_refusal(tables, names, trainer, could_know)) is not None:
+                c.add(Support.NONE, f"{cand.label}: {line}", "battle terrain")
         for move in spec.moves:
             if move:
                 check_move(cand.label, move, "current", row)

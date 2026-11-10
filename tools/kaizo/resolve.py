@@ -595,6 +595,10 @@ def trainer_record(
         if where != "none" or not t["party"]
         else "rom: no map placement found (trainer -> map join): unknown (user call)"
     )
+    sources["terrain"] = sources["terrains"] = (
+        f"rom: CalcTerrain over the tiles of the trainer's map headers (headers {where}; "
+        "tools/terrain.py)"
+    )
     a = overrides.area.get(tid)
     if a is not None:
         sources["area_condition"] += f"; overrides area.{tid} ({a.source})"

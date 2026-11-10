@@ -45,6 +45,11 @@ player guide is `docs/tracing_kaizo.md`.
   `nuzline --trainer roark` resolves it: the first trainer named Roark whose class starts
   with "leader" (trainer 246 in the current tables). The converter builds his party with
   `build_trainer_party` and his bag with `Trainer.items`, which holds two Potions.
+- **Terrain:** the trace does not record the battle terrain. The converter uses
+  `Trainer.terrain` (Roark: `TERRAIN_BUILDING`, tools/terrain.py). For a trainer whose maps
+  give several terrains, pass the one the battle started on with
+  `python -m tools.trace_to_state ... --terrain GRASS`; it is stored as the bundle's
+  `terrain` and must be one of `Trainer.terrains`.
 - **Player:** `tests/fixtures/golden_party_roark_01.toml`. It starts as a copy of the
   M1a sample party (`tests/fixtures/sample_party.toml`), in this order:
 

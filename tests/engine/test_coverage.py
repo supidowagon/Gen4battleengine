@@ -9,7 +9,12 @@ import pytest
 from nuzline.data.forms import personal_row
 from nuzline.data.games import KAIZO
 from nuzline.data.tables import Names
-from nuzline.data.trainer import build_trainer_party, load_trainers
+from nuzline.data.trainer import (
+    TERRAIN_NAMES,
+    TERRAIN_UNKNOWN,
+    build_trainer_party,
+    load_trainers,
+)
 from nuzline.engine.coverage import (
     IMPLEMENTED_ABILITIES,
     IMPLEMENTED_AI_FLAGS,
@@ -24,6 +29,7 @@ from nuzline.engine.coverage import (
     require_coverage,
     rom_change_refusals,
     start_weather,
+    terrain_refusal,
     unknown_start,
 )
 from nuzline.engine.ids import Weather
@@ -533,3 +539,66 @@ def test_only_a_reached_condition_refuses_the_fight(tables, names, vanilla_manif
     ]
     assert line not in check_opponent(tables, only_player, roark, no_rock, 0).missing
     assert line in check_opponent(tables, only_player, roark, no_rock, 0, [mine]).missing
+
+
+# --- battle terrain (K3b2 Task 9) ----------------------------------------------------------
+
+
+def test_terrain_effects_are_the_decomp_terrain_moves(tables, names):
+    moves = [names.move(m) for m in ("Nature Power", "Secret Power", "Camouflage")]
+    assert [int(tables.move_ai_effect[m]) for m in moves] == [173, 197, 213]
+
+
+def test_terrain_moves_refused_only_for_an_unknown_terrain(tables, names):
+    nature_power, tackle = names.move("Nature Power"), names.move("Tackle")
+    roark = roark_trainer()
+    assert TERRAIN_NAMES[roark.terrain] == "TERRAIN_BUILDING"  # tools/terrain.py
+    assert terrain_refusal(tables, names, roark, [nature_power]) is None
+    mixed = replace(roark, terrain=TERRAIN_UNKNOWN, terrains=(0, 2, 7))
+    line = terrain_refusal(tables, names, mixed, [tackle, nature_power, 0])
+    assert "varies over its maps (TERRAIN_PLAIN, TERRAIN_GRASS, TERRAIN_WATER)" in line
+    assert line.endswith("and Nature Power would read it")
+    assert terrain_refusal(tables, names, mixed, [tackle]) is None
+    unplaced = replace(roark, terrain=TERRAIN_UNKNOWN, terrains=())
+    assert "no map places the trainer" in terrain_refusal(tables, names, unplaced, [nature_power])
+    unread = replace(roark, terrain=TERRAIN_UNKNOWN, terrains=(TERRAIN_UNKNOWN, 0))
+    assert "TERRAIN_PLAIN and a map whose tiles cannot be read" in terrain_refusal(
+        tables, names, unread, [nature_power]
+    )
+
+
+def test_fight_with_a_terrain_move_names_the_terrains(tables, names):
+    party = sample_party(names, override_moves={0: ["Camouflage", "Tackle"]})
+    mixed = replace(roark_trainer(), terrain=TERRAIN_UNKNOWN, terrains=(2, 6))
+    report = check_coverage(tables, names, party, mixed, roark_party(names), 0)
+    terrain = [m for m in report.missing if "battle terrain" in m]
+    want = (
+        "Roark: the battle terrain varies over its maps (TERRAIN_GRASS, TERRAIN_SNOW), and "
+        "Camouflage would read it (battle terrain UNSUPPORTED)"
+    )
+    assert terrain == [want]
+    known = check_coverage(tables, names, party, roark_trainer(), roark_party(names), 0)
+    assert not [m for m in known.missing if "battle terrain" in m]
+
+
+def test_pool_candidate_with_a_terrain_move_is_refused(tables, names):
+    from nuzline.prep.pool import Candidate, check_pool
+
+    spec = sample_party(names, override_moves={0: ["Tackle"]})[0]
+    cand = Candidate(("party", 0, 0), "party slot 0", spec, 0, (names.move("Secret Power"),), ())
+    mixed = replace(roark_trainer(), terrain=TERRAIN_UNKNOWN, terrains=(0, 2))
+    report = check_pool(tables, names, [cand], roark_party(names), mixed)
+    assert any("Secret Power would read it (battle terrain" in m for m in report.missing)
+    report = check_pool(tables, names, [cand], roark_party(names), roark_trainer())
+    assert not any("battle terrain" in m for m in report.missing)
+
+
+def test_make_state_takes_the_trainers_terrain(tables, names):
+    from nuzline.engine.state import make_state
+
+    roark = roark_trainer()
+    state = make_state(tables, sample_party(names), roark_party(names), terrain=roark.terrain)
+    assert int(state.terrain) == roark.terrain
+    assert int(make_state(tables, sample_party(names), roark_party(names)).terrain) == -1
+    with pytest.raises(ValueError, match="terrain 25"):
+        make_state(tables, sample_party(names), roark_party(names), terrain=25)

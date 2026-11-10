@@ -29,6 +29,7 @@ from nuzline.engine.coverage import (
     low_defense,
     rom_change_line,
     rom_change_refusals,
+    terrain_refusal,
 )
 from nuzline.engine.ids import AbilityId, EffectId, ItemId, Status
 from nuzline.engine.state import MAX_DEATH_BUDGET
@@ -170,18 +171,22 @@ def usable_pool(
     off (<reason>)"``), as spec §6.1 offers "none". An unsupported or refused relearner or TM
     option is removed (``"<label>: <move> not offered (<reason>)"``). With ``trainer`` on
     Kaizo, an ability, move or held item a ``not_reached`` ROM-change condition lists counts
-    as refused the same way (``_rom_change_refusal``). Against the trainer's party ``opp``, a
-    Selfdestruct-family move is refused against a low Defense (``_move_refusal``), and a
-    candidate whose own Defense is that low is left out when a foe knows such a move
-    (``coverage.halved_by_line``)."""
+    as refused the same way (``_rom_change_refusal``), and so is a move that reads the battle
+    terrain of a trainer whose terrain is unknown (``coverage.terrain_refusal``). Against the
+    trainer's party ``opp``, a Selfdestruct-family move is refused against a low Defense
+    (``_move_refusal``), and a candidate whose own Defense is that low is left out when a foe
+    knows such a move (``coverage.halved_by_line``)."""
     foe_defense = low_defense(tables, opp)
     foe_halving = halving_moves(tables, opp)
 
     def rom(specs: Sequence[PokemonSpec] = (), moves: Sequence[int] = ()) -> str | None:
         return _rom_change_refusal(tables, names, trainer, specs, moves)
 
+    def terrain(move: int) -> str | None:
+        return None if trainer is None else terrain_refusal(tables, names, trainer, [move])
+
     def move_refusal(move: int, spec: PokemonSpec) -> str | None:
-        return _move_refusal(tables, move, spec, foe_defense) or rom(moves=[move])
+        return _move_refusal(tables, move, spec, foe_defense) or rom(moves=[move]) or terrain(move)
 
     out: list[Candidate] = []
     lines: list[str] = []

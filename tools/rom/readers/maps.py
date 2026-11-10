@@ -65,12 +65,19 @@ if TYPE_CHECKING:
 SCRIPTS_NARC = "fielddata/script/scr_seq.narc"  # platinum.us/filesys.csv:189
 EVENTS_NARC = "fielddata/eventdata/zone_event.narc"  # platinum.us/filesys.csv:259
 
-# MapHeader (include/map_header.h:10-31): 24 bytes; scriptsArchiveID u16 at 4,
-# eventsArchiveID u16 at 16, the mapLabelTextID/mapLabelWindowID bitfield u16 at 18,
-# weather u8 at 20.
+# MapHeader (include/map_header.h:10-31): 24 bytes; mapMatrixID u16 at 2, scriptsArchiveID
+# u16 at 4, eventsArchiveID u16 at 16, the mapLabelTextID/mapLabelWindowID bitfield u16 at
+# 18, weather u8 at 20, and the u16 bitfield at 22 whose bits 7-11 are battleBG (after the
+# 7-bit mapType).
 MAP_HEADER_SYMBOL = "sMapHeaders"
 MAP_HEADER_SIZE = 24
-HEADER_SCRIPTS, HEADER_EVENTS, HEADER_WEATHER = 4, 16, 20
+HEADER_MATRIX, HEADER_SCRIPTS, HEADER_EVENTS, HEADER_WEATHER = 2, 4, 16, 20
+HEADER_FLAGS, BATTLE_BG_SHIFT, BATTLE_BG_BITS = 22, 7, 5
+MATRIX_NARC = "fielddata/mapmatrix/map_matrix.narc"  # platinum.us/filesys.csv:265
+LAND_DATA_NARC = "fielddata/land_data/land_data.narc"  # platinum.us/filesys.csv:271
+# MapHeader_GetMapMatrixID (src/map_header.c:28-38) turns matrix 22 into 23 only when
+# gGameVersion is VERSION_PEARL (include/constants/versions.h); both games keep that test.
+GAME_VERSION_SYMBOL = "gGameVersion"
 # u8 [366][OVERWORLD_WEATHER_YEARLY_COUNT] (src/field_overworld_weather.c:17)
 YEARLY_SYMBOL = "sYearlyWeather"
 DAYS_OF_YEAR = 366
@@ -101,7 +108,13 @@ GAME_DEFAULT = _GameDefault()
 # events and coord events, each a u32 count followed by fixed-size records.
 EVENT_RECORD_SIZES = (20, 32, 12, 16)
 OBJECT_EVENTS = 1
-OBJECT_SCRIPT = 10  # script u16 at +10 (event.py:57)
+# Object event (event.py:52-69): local id u16 at +0, hidden flag u16 at +8, script u16 at
+# +10. A script of NO_SCRIPT makes the object a clone of the object with the same local id
+# in the map header named by its hidden flag (ObjectEvent_HasNoScript, src/map_object.c:
+# 2322-2337); MapObjectMan keeps such an object across the header change (sub_0206244C,
+# :772-801; sub_0206184C, :171-195).
+OBJECT_LOCAL_ID, OBJECT_FLAG, OBJECT_SCRIPT = 0, 8, 10
+NO_SCRIPT = 0xFFFF
 # Battle scripts of object events (include/script_manager.h:93-95,
 # tools/jsoncnv/convert.py:79-83): 3000 + id - 1 single, 5000 + id - 1 double.
 SINGLE_BATTLE_SCRIPTS = 3000
@@ -591,7 +604,12 @@ def script_ops(script: bytes, table: CommandTable, name: str = "script") -> list
 
 def _events_object_scripts(member: bytes, index: int) -> list[int]:
     """The object events' script ids of one ``zone_event.narc`` member."""
-    pos, scripts = 0, []
+    return [script for _, _, script in _object_records(member, index)]
+
+
+def _object_records(member: bytes, index: int) -> list[tuple[int, int, int]]:
+    """(local id, hidden flag, script) of one ``zone_event.narc`` member's object events."""
+    pos, records = 0, []
     for kind, size in enumerate(EVENT_RECORD_SIZES):
         if pos + 4 > len(member):
             raise ReaderError(f"{EVENTS_NARC} member {index} offset {pos}: truncated count")
@@ -603,8 +621,11 @@ def _events_object_scripts(member: bytes, index: int) -> list[int]:
                 f"overrun the member ({len(member)} bytes)"
             )
         if kind == OBJECT_EVENTS:
-            scripts = [
-                struct.unpack_from("<H", member, pos + i * size + OBJECT_SCRIPT)[0]
+            records = [
+                tuple(
+                    struct.unpack_from("<H", member, pos + i * size + field)[0]
+                    for field in (OBJECT_LOCAL_ID, OBJECT_FLAG, OBJECT_SCRIPT)
+                )
                 for i in range(n)
             ]
         pos += n * size
@@ -612,7 +633,7 @@ def _events_object_scripts(member: bytes, index: int) -> list[int]:
         raise ReaderError(
             f"{EVENTS_NARC} member {index} offset {pos}: {len(member) - pos} trailing bytes"
         )
-    return scripts
+    return records
 
 
 def require_vanilla_map_headers(rom: RomFiles) -> None:
@@ -638,7 +659,7 @@ def require_vanilla_map_headers(rom: RomFiles) -> None:
 
 # Thumb halfwords of the patched Kaizo code that check_kaizo_map_headers expects; a
 # ("bl", name) item is a BL pair calling linker-map symbol ``name``, a ("word", n) item a
-# literal-pool u32.
+# literal-pool u32, a ("symbol", name) item a literal-pool u32 holding ``name``'s address.
 _PUSH_LR, _POP_PC = 0xB500, 0xBD00
 _PUSH_R3_LR, _POP_R3_PC = 0xB508, 0xBD08
 _MOV_R1_R0, _MOV_R3_R0, _MOV_R1_R3 = 0x1C01, 0x1C03, 0x0019  # adds rd, rn, #0 / movs r1, r3
@@ -672,6 +693,48 @@ def _kaizo_accessor(load: int, offset: int) -> tuple:
         _POP_R3_PC,
         ("word", offset),
     )
+
+
+VERSION_PEARL = 11  # enum Version, include/constants/versions.h:16 (checked by a test)
+# MapHeader_GetMapMatrixID, patched (vanilla: src/map_header.c:28-38): the u16 at
+# HEADER_MATRIX, then the decomp's own test: matrix 22 becomes 23 when gGameVersion is
+# VERSION_PEARL (cmp r0, #22; bne; ldr r1, =gGameVersion; ldrb r1, [r1]; cmp r1, #PEARL;
+# bne; movs r0, #23).
+_KAIZO_MATRIX = (
+    _PUSH_R3_LR,
+    ("bl", "MapHeader_IDBoundsCheck"),
+    _MOV_R1_R3,
+    _NOP,
+    0x4805,  # ldr r0, [pc, #20]
+    _LDRH_R0_R0_R1,
+    0x2816,  # cmp r0, #22
+    0xD104,  # bne pop
+    0x4904,  # ldr r1, [pc, #16]
+    0x7809,  # ldrb r1, [r1]
+    0x2900 | VERSION_PEARL,  # cmp r1, #VERSION_PEARL
+    0xD100,  # bne pop
+    0x2017,  # movs r0, #23
+    _POP_R3_PC,
+    _NOP,
+    ("word", HEADER_MATRIX),
+    ("symbol", GAME_VERSION_SYMBOL),
+)
+# MapHeader_GetBattleBG, patched (vanilla: src/map_header.c:111-115): the u16 at
+# HEADER_FLAGS shifted left then right to keep its bits BATTLE_BG_SHIFT..+BATTLE_BG_BITS-1.
+_KAIZO_BATTLE_BG = (
+    _PUSH_R3_LR,
+    ("bl", "MapHeader_IDBoundsCheck"),
+    _MOV_R1_R3,
+    _NOP,
+    0x4803,  # ldr r0, [pc, #12]
+    0x1840,  # adds r0, r0, r1
+    0x8800 | (HEADER_FLAGS // 2) << 6,  # ldrh r0, [r0, #HEADER_FLAGS]
+    (32 - BATTLE_BG_SHIFT - BATTLE_BG_BITS) << 6,  # lsls r0, r0, #20
+    0x0800 | (32 - BATTLE_BG_BITS) << 6,  # lsrs r0, r0, #27
+    _POP_R3_PC,
+    _NOP,
+    ("word", 0),
+)
 
 
 def _thumb_function(rom: RomFiles, symbols: SymbolMap, name: str) -> tuple[int, bytes]:
@@ -710,6 +773,10 @@ def _expect_code(rom: RomFiles, symbols: SymbolMap, name: str, pattern: tuple) -
             got = _bl_target(code, off, address + off)
             dest = symbols.find(item[1]).address & ~1
             ok, want, off = got == dest, f"bl {item[1]}", off + 4
+        elif item[0] == "symbol":
+            got = struct.unpack_from("<I", code, off)[0]
+            dest = symbols.find(item[1]).address
+            ok, want, off = got == dest, f".word {item[1]}", off + 4
         else:
             got = struct.unpack_from("<I", code, off)[0]
             ok, want, off = got == item[1], f".word {item[1]:#x}", off + 4
@@ -736,6 +803,10 @@ def check_kaizo_map_headers(rom: RomFiles, symbols: SymbolMap) -> None:
     * ``FieldSystem_GetWeather`` (``src/field_overworld_weather.c:398-424``) still calls
       ``MapHeader_GetWeatherType`` first and its literal pool ends with
       ``sYearlyWeather``'s address.
+    * ``MapHeader_GetMapMatrixID`` reads the u16 at ``HEADER_MATRIX`` and keeps vanilla's
+      Pearl test (``_KAIZO_MATRIX``), and ``MapHeader_GetBattleBG`` reads bits 7-11 of the
+      u16 at ``HEADER_FLAGS`` (``_KAIZO_BATTLE_BG``): the battle terrain's inputs
+      (``map_header_battle_fields``, K3b2 Task 9).
     """
     _expect_code(rom, symbols, "MapHeader_IDBoundsCheck", _KAIZO_BOUNDS)
     for name, load, offset in (
@@ -744,6 +815,8 @@ def check_kaizo_map_headers(rom: RomFiles, symbols: SymbolMap) -> None:
         ("MapHeader_GetWeatherType", _LDRB_R0_R0_R1, HEADER_WEATHER),
     ):
         _expect_code(rom, symbols, name, _kaizo_accessor(load, offset))
+    _expect_code(rom, symbols, "MapHeader_GetMapMatrixID", _KAIZO_MATRIX)
+    _expect_code(rom, symbols, "MapHeader_GetBattleBG", _KAIZO_BATTLE_BG)
     address, code = _thumb_function(rom, symbols, "FieldSystem_GetWeather")
     calls = (_bl_target(code, o, address + o) for o in range(0, len(code) - 3, 2))
     first = next((t for t in calls if t is not None), None)
@@ -911,12 +984,9 @@ def _map_conditions(rom: RomFiles, decomp: Path, symbols: SymbolMap, weathers: l
     return out
 
 
-def map_header_rows(rom: RomFiles, symbols: SymbolMap) -> list[tuple[int, int, int]]:
-    """(scripts archive id, events archive id, weather) of each map header, by header id.
-
-    By game code: vanilla (``CPUE``) reads ``sMapHeaders``; Kaizo (``JAK7``) reads the
-    members of ``KAIZO_MAP_HEADERS`` (24 bytes each) once ``check_kaizo_map_headers``
-    confirms the patched accessors read them; any other game code raises."""
+def _map_header_bytes(rom: RomFiles, symbols: SymbolMap) -> bytes:
+    """The game's map headers, ``MAP_HEADER_SIZE`` bytes each, by header id (see
+    ``map_header_rows``)."""
     _check_header_source(rom, symbols)
     if rom.game_code == KAIZO_GAME_CODE:
         source = KAIZO_MAP_HEADERS
@@ -926,6 +996,34 @@ def map_header_rows(rom: RomFiles, symbols: SymbolMap) -> list[tuple[int, int, i
         raw = symbol_bytes(rom, symbols, source)
     if len(raw) % MAP_HEADER_SIZE:
         raise ReaderError(f"{source}: {len(raw)} bytes, not whole {MAP_HEADER_SIZE}s")
+    return raw
+
+
+def map_header_battle_fields(rom: RomFiles, symbols: SymbolMap) -> list[tuple[int, int]]:
+    """(mapMatrixID, battleBG) of each map header, by header id, from the same source as
+    ``map_header_rows``. ``MapHeader_GetMapMatrixID`` changes matrix 22 only for Pearl, so
+    the game's ``gGameVersion`` must not be ``VERSION_PEARL``."""
+    raw = _map_header_bytes(rom, symbols)
+    version = symbol_bytes(rom, symbols, GAME_VERSION_SYMBOL)[0]
+    if version == VERSION_PEARL:
+        raise ReaderError(f"{GAME_VERSION_SYMBOL} is VERSION_PEARL: matrix 22 would read as 23")
+    mask = (1 << BATTLE_BG_BITS) - 1
+    return [
+        (
+            struct.unpack_from("<H", raw, base + HEADER_MATRIX)[0],
+            struct.unpack_from("<H", raw, base + HEADER_FLAGS)[0] >> BATTLE_BG_SHIFT & mask,
+        )
+        for base in range(0, len(raw), MAP_HEADER_SIZE)
+    ]
+
+
+def map_header_rows(rom: RomFiles, symbols: SymbolMap) -> list[tuple[int, int, int]]:
+    """(scripts archive id, events archive id, weather) of each map header, by header id.
+
+    By game code: vanilla (``CPUE``) reads ``sMapHeaders``; Kaizo (``JAK7``) reads the
+    members of ``KAIZO_MAP_HEADERS`` (24 bytes each) once ``check_kaizo_map_headers``
+    confirms the patched accessors read them; any other game code raises."""
+    raw = _map_header_bytes(rom, symbols)
     return [
         (
             struct.unpack_from("<H", raw, base + HEADER_SCRIPTS)[0],
@@ -1171,3 +1269,76 @@ def rom_battle_structures(
         return battle_structures(by_header, placed, unknown_partner=kaizo, refused=refused)
     except ValueError as e:
         raise ReaderError(f"battle structures: {e}") from e
+
+
+def check_terrain_code(changed: list[list[str]]) -> None:
+    """Raise unless the ROM diff's changed code keys (``[module, symbol]``) leave the
+    terrain path alone: every ``tools.terrain.TERRAIN_CODE`` symbol and every
+    ``TileBehavior_*`` predicate, which ``tools.terrain`` reads from the decomp."""
+    from tools.terrain import TERRAIN_CODE
+
+    hit = sorted(
+        f"{module} {name}"
+        for module, name in changed
+        if name in TERRAIN_CODE or name.startswith("TileBehavior_")
+    )
+    if hit:
+        raise ReaderError(
+            f"the ROM changes the battle terrain code ({', '.join(hit)}); tools/terrain.py "
+            "reads it from the decomp"
+        )
+
+
+def check_trainer_clones(rom: RomFiles, symbols: SymbolMap) -> None:
+    """Raise if a map header holds a clone (``NO_SCRIPT``) of a trainer object of another
+    header. Such an object survives the header change, so a battle with it could start in
+    the clone's header, which the trainer -> map join does not list (K3b2 Task 9)."""
+    rows = map_header_rows(rom, symbols)
+    events = rom.narc(EVENTS_NARC)
+    objects = {h: _object_records(events[e], e) for h, (_, e, _) in enumerate(rows)}
+    trainers = {
+        (h, local)
+        for h, records in objects.items()
+        for local, _, script in records
+        if SINGLE_BATTLE_SCRIPTS <= script < VISIBLE_ITEM_SCRIPTS
+    }
+    for h, records in objects.items():
+        for local, flag, script in records:
+            if script == NO_SCRIPT and (flag, local) in trainers:
+                raise ReaderError(
+                    f"map header {h} clones trainer object {local} of header {flag}: its "
+                    "battle can start in a header the trainer -> map join does not list"
+                )
+
+
+def rom_terrain_rules(rom: RomFiles, symbols: SymbolMap, decomp: Path):
+    """``tools.terrain.terrain_rules`` with the ROM's ``sTileBehaviorFlags`` (u8 each) and
+    ``sTerrainForBackground`` (enum, u32 each)."""
+    from tools.terrain import terrain_rules
+
+    flags = symbol_bytes(rom, symbols, "sTileBehaviorFlags")
+    table = symbol_bytes(rom, symbols, "sTerrainForBackground")
+    by_background = struct.unpack(f"<{len(table) // 4}I", table)
+    return terrain_rules(decomp, list(flags), by_background)
+
+
+def trainer_terrain_rows(
+    rom: RomFiles,
+    decomp: Path,
+    symbols: SymbolMap,
+    where: dict[int, list[int]],
+    n_trainers: int,
+) -> list[dict]:
+    """Per trainer id, the ``trainers.json`` terrain fields (``tools.terrain``) from the
+    trainer -> map join ``where`` (``trainer_start_conditions``' ``maps``): the map headers'
+    matrices (``MATRIX_NARC``), land data (``LAND_DATA_NARC``) and battle backgrounds
+    (``map_header_battle_fields``)."""
+    from tools.terrain import header_terrains, parse_matrix, terrain_fields, trainer_terrains
+
+    check_trainer_clones(rom, symbols)
+    rules = rom_terrain_rules(rom, symbols, Path(decomp))
+    headers = map_header_battle_fields(rom, symbols)
+    matrices = [parse_matrix(m, i) for i, m in enumerate(rom.narc(MATRIX_NARC))]
+    wanted = {h for hs in where.values() for h in hs}
+    by_header = header_terrains(rules, headers, matrices, rom.narc(LAND_DATA_NARC), wanted)
+    return [terrain_fields(*t) for t in trainer_terrains(n_trainers, where, by_header)]

@@ -4,12 +4,13 @@ from pathlib import Path
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 import pytest
 
 from nuzline.data.party import load_party
 from nuzline.engine.ids import Stat, Status, Weather
 from nuzline.engine.outcome import empty_outcome
-from nuzline.engine.state import BattleState, make_state
+from nuzline.engine.state import LAYOUT, BattleState, make_state
 from nuzline.engine.step import step
 from nuzline.reference.convert import from_ref, to_ref
 from tests.engine.helpers import A, roark_state
@@ -366,3 +367,10 @@ def test_rotom_wash_state_uses_its_row(tables, sample_spec):
 def test_bad_form_raises(tables, sample_spec):
     with pytest.raises(ValueError, match="species 479 has no form 6"):
         make_state(tables, [dataclasses.replace(sample_spec, species=479, form=6)], [sample_spec])
+
+
+def test_battle_system_terrain_maps_to_terrain():
+    # docs/kaizo/k3b2-rules.md §12: BattleSystem.terrain is a constant field scalar.
+    rows = {field: (pytree, status) for field, pytree, status in _state_md_rows()}
+    assert rows["BattleSystem.terrain"] == ("terrain", "mapped")
+    assert LAYOUT["terrain"] == ((), np.int8)

@@ -98,6 +98,7 @@ class RefState:
     weather_timer: int
     trick_room: int
     gravity: int
+    terrain: int
     turn: int
     over: int
     winner: int

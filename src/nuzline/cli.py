@@ -629,7 +629,9 @@ def _rank(args) -> int:
     except UnsupportedMechanics as e:
         _print_report(e.report)
         return EXIT_REFUSED
-    state = make_state(tables, player, opp, weather, opp_items=trainer.items, leads=leads)
+    state = make_state(
+        tables, player, opp, weather, opp_items=trainer.items, leads=leads, terrain=trainer.terrain
+    )
     state = state.with_budget(args.deaths, slots)
     try:
         ranking = rank_actions(tables, names, state, args.n, jax.random.PRNGKey(args.seed))
@@ -713,7 +715,9 @@ def _solve(args) -> int:
         _say(f"refused: {e}")
         _print_report(e.report)
         return EXIT_REFUSED
-    state = make_state(tables, player, opp, weather, opp_items=trainer.items, leads=leads)
+    state = make_state(
+        tables, player, opp, weather, opp_items=trainer.items, leads=leads, terrain=trainer.terrain
+    )
     state = state.with_budget(args.deaths, slots)
     try:
         result = solve(tables, names, state, jax.random.PRNGKey(args.seed), settings)

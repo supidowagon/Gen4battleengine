@@ -812,6 +812,8 @@ def write_trainers(dir: Path, trainers) -> None:
             "format": t.format,
             "opponent_2": t.opponent_2,
             "partner": [],
+            "terrain": t.terrain,
+            "terrains": list(t.terrains),
             "label": t.label,
             "player_starter": t.player_starter,
             "optional": t.optional,

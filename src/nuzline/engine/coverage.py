@@ -75,7 +75,12 @@ items) and plan 1b (Task 2b: trainer items; Task 3: Roark's AI flags) implement:
   condition (``Names.rom_change_conditions``, ``rom_change_refusals``) holds for the fight:
   a battle format or area, a move, ability or held item on either side, a trainer or a
   trainer bag. A condition that does not hold refuses nothing. Area weather and fog stay
-  refused through ``start_weather`` like vanilla's; ``Trainer.optional`` refuses nothing.
+  refused through ``start_weather`` like vanilla's; ``Trainer.optional`` refuses nothing;
+* battle terrain (K3b2 Task 9): a move whose decomp effect reads the terrain
+  (``TERRAIN_EFFECTS``: Nature Power, Secret Power, Camouflage), on either side or a pool
+  candidate's, is refused against a trainer whose ``Trainer.terrain`` is
+  ``TERRAIN_UNKNOWN``: its maps give several terrains (the line names them) or none
+  (``terrain_refusal``). A known terrain refuses nothing here.
 
 ``check_coverage`` also runs the AI's own refusals (``ai.policy.ai_refusals``: opponent
 moves without transcribed script paths, too many script-roll sites, type-chart
@@ -99,7 +104,13 @@ from nuzline.data.game_constants import POLICY
 from nuzline.data.games import KAIZO, VANILLA
 from nuzline.data.spec import PokemonSpec
 from nuzline.data.tables import Names, Tables
-from nuzline.data.trainer import UNKNOWN_CONDITION, Trainer, missing_set_data
+from nuzline.data.trainer import (
+    TERRAIN_NAMES,
+    TERRAIN_UNKNOWN,
+    UNKNOWN_CONDITION,
+    Trainer,
+    missing_set_data,
+)
 from nuzline.engine.damage import PHYSICAL
 from nuzline.engine.ids import AbilityId, EffectId, ItemId, Stat, TrainerItemId, Type, Weather
 from nuzline.engine.state import make_state, spec_stats
@@ -109,6 +120,13 @@ from nuzline.engine.state import make_state, spec_stats
 SPECIES_GIRATINA, GIRATINA_FORM_ORIGIN = 487, 1
 SPECIES_SHAYMIN, SHAYMIN_FORM_SKY = 492, 1
 ITEM_GRISEOUS_ORB = 112
+
+
+# Decomp battle effects whose scripts read the battle terrain (BattleSystem_GetTerrain):
+# Nature Power (173, BtlCmd_GetTerrainMove, battle_script.c:8036-8048), Secret Power (197,
+# BtlCmd_GetTerrainSecondaryEffect, :8063-) and Camouflage (213, BtlCmd_TryCamouflage,
+# :7997-8022). Matched against tables.move_ai_effect (the unmapped decomp effect).
+TERRAIN_EFFECTS = (173, 197, 213)
 
 
 class Support(IntEnum):
@@ -426,6 +444,30 @@ def rom_change_refusals(
     return out
 
 
+def terrain_refusal(
+    tables: Tables, names: Names, trainer: Trainer, moves: Sequence[int]
+) -> str | None:
+    """Why ``moves`` (decomp move ids) cannot be played against ``trainer``: some read the
+    battle terrain (``TERRAIN_EFFECTS``) and the trainer's terrain is unknown, either mixed
+    (the line names every terrain its maps give) or unplaced; else None."""
+    if trainer.terrain != TERRAIN_UNKNOWN:
+        return None
+    effect = np.asarray(tables.move_ai_effect)
+    hit = sorted({int(m) for m in moves if m and int(effect[m]) in TERRAIN_EFFECTS})
+    if not hit:
+        return None
+    if trainer.terrains:
+        known = [TERRAIN_NAMES[t] for t in trainer.terrains if t != TERRAIN_UNKNOWN]
+        unread = (
+            " and a map whose tiles cannot be read" if TERRAIN_UNKNOWN in trainer.terrains else ""
+        )
+        why = f"the battle terrain varies over its maps ({', '.join(known)}{unread})"
+    else:
+        why = "the battle terrain is unknown (no map places the trainer)"
+    moves_ = ", ".join(names.move_names[m] for m in hit)
+    return f"{display_name(trainer)}: {why}, and {moves_} would read it"
+
+
 def rom_change_line(label: str) -> str:
     return f"Kaizo ROM: {label} is not modelled and this fight reaches it (docs/kaizo/rom_diff.md)"
 
@@ -453,6 +495,9 @@ def _check_trainer(
     if names.game == KAIZO:
         for label in rom_change_refusals(tables, names, trainer, specs):
             c.add(Support.NONE, rom_change_line(label), "ROM change")
+    moves = [m for s in specs for m in s.moves]
+    if (line := terrain_refusal(tables, names, trainer, moves)) is not None:
+        c.add(Support.NONE, line, "battle terrain")
     effect = np.asarray(tables.trainer_item_effect)
     bag = [item for item in trainer.items if item]
     for item in bag:
@@ -575,7 +620,15 @@ def check_coverage(
                 if move and (low := halved_defense_line(tables, move, foe_defense)):
                     where = f"{owner} {names.species_names[mon.species]} (slot {slot})"
                     c.add(Support.NONE, f"{where}: {names.move_names[move]}{low}", "move effect")
-    state = make_state(tables, player, opp, start_condition, opp_items=trainer.items, leads=leads)
+    state = make_state(
+        tables,
+        player,
+        opp,
+        start_condition,
+        opp_items=trainer.items,
+        leads=leads,
+        terrain=trainer.terrain,
+    )
     for reason in ai_refusals(tables, state, names):
         c.add(Support.NONE, f"{display_name(trainer)}: {reason}", "trainer AI")
     return c.report

@@ -275,6 +275,7 @@ def _root(problem: PrepProblem, setup: Setup, tables: Tables) -> BattleState:
         list(problem.opp),
         problem.start_condition,
         problem.trainer.items,
+        terrain=problem.trainer.terrain,
     )
 
 
