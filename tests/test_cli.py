@@ -995,10 +995,13 @@ def test_kaizo_roark_refused(tmp_path, capsys, kaizo_tables, kaizo_names):  # ex
     assert "Thunder Fang (move effect UNSUPPORTED)" not in out
     # Final review I3: Kaizo Roark's move 205 is Accelerock; Rollout is no Kaizo move. K3c
     # Task 3 keys the Kaizo AI's script paths by battle effect, so Accelerock (HIT) is
-    # transcribed now; Selfdestruct (HALVE_DEFENSE) is not yet. The callers' names are
+    # transcribed now. K3c Task 5 transcribes the effects of all of Kaizo Roark's moves, so no
+    # "script paths" line is left; the RISKY flag above still refuses the fight. The callers' names are
     # pinned by tests/ai/test_policy.py test_refusals_name_moves_and_items_in_the_callers_game.
-    assert "move Selfdestruct are not transcribed" in out
-    assert "move Accelerock are not transcribed" not in out and "Rollout" not in out
+    assert "are not transcribed" not in out
+    # Until K3c Task 6 the moves whose Expert labels are missing are refused by name.
+    assert "Selfdestruct goes to Expert_Explosion (Expert_Main, script.s:1630)" in out
+    assert "Rollout" not in out
 
 
 def test_cli_still_imports_without_jax():

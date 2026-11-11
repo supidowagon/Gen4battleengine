@@ -207,6 +207,13 @@ CONSTANTS: tuple[Constant, ...] = (
             "Tinted Lens": 110,
             "Filter": 111,
             "Solid Rock": 116,
+            "Damp": 6,
+            "Simple": 86,
+            "Immunity": 17,
+            "Magic Guard": 98,
+            "Poison Heal": 90,
+            "Leaf Guard": 102,
+            "Hydration": 93,
         },
     ),
     *_table(
@@ -229,7 +236,10 @@ CONSTANTS: tuple[Constant, ...] = (
         "nuzline.ai.commands.TYPE_IDS",
         "type",
         _E,
-        {k: _TYPES[k] for k in ("Ground", "Ghost", "Fire", "Water", "Electric", "Psychic")},
+        {
+            k: _TYPES[k]
+            for k in ("Poison", "Ground", "Ghost", "Steel", "Fire", "Water", "Electric", "Psychic")
+        },
     ),
     Constant("nuzline.ai.switching._TYPE_FLYING", "type", 2, "Flying", _E),
     Constant("nuzline.ai.switching._TYPE_STEEL", "type", 8, "Steel", _E),
@@ -352,10 +362,6 @@ CONSTANTS: tuple[Constant, ...] = (
     ),
     # --- vanilla_policy: the transcribed vanilla AI scripts --------------------------
     *_table("nuzline.ai.commands.MOVE_EFFECTS", "move", _P, _TRANSCRIBED_MOVES),
-    # BattleEffect's ids are the battle effects of the transcribed moves; asserted
-    # through those moves (MOVE_EFFECTS maps each one to its member).
-    # A classification marker: these entries hold move ids, not effect ids.
-    *_table("nuzline.ai.commands.BattleEffect", "move", _P, _TRANSCRIBED_MOVES),
     *_policy_tables(_P),
     # The flat layout's script-roll sites, by move id (the per-slot layout keys them by battle
     # effect, ai/outcome.py EFFECT_SITE_LINES).
@@ -416,6 +422,12 @@ EXEMPT: dict[str, str] = {
     "nuzline.ai.commands.FieldCondition": _AI_ENCODING + " (FIELD_CONDITION_*, condition.h:144)",
     "nuzline.ai.commands.AiWeather": _AI_ENCODING + " (AI_WEATHER_*, trainer_ai.c:1414-1439)",
     "nuzline.ai.commands.TypeMulti": _AI_ENCODING + " (TYPE_MULTI_*, battle.h:144-153)",
+    "nuzline.ai.commands.BattleEffect": (
+        "decomp battle effect ids (BATTLE_EFFECT_*, generated/move_battle_effects.txt) that the "
+        "AI script compares with MoveTable.effect (IfCurrentMoveEffectEqualTo, trainer_ai.c:1441), "
+        "a script Kaizo did not change apart from one word (docs/ai/kaizo_roark.md 2); each "
+        "game's moves carry their own effect"
+    ),
     "nuzline.ai.commands.NO_DAMAGE_CALC_EFFECTS": (
         "decomp battle effect ids of trainer_ai.c's sNoDamageCalcMoveEffects (:31-46), compared "
         "with MoveTable.effect by the AI's C code, which Kaizo did not change "
@@ -433,6 +445,11 @@ EXEMPT: dict[str, str] = {
         "(docs/ai/kaizo_roark.md 2); each game's moves carry their own effect"
     ),
     "nuzline.ai.commands.ReadKind": "kind of a loose-oracle read (tests only), not a game id",
+    "nuzline.ai.outcome.KAIZO_EXPERT_LABELS": (
+        "decomp battle effect ids (keys) and the script.s labels and lines of their Expert_Main "
+        "entries (:1628-1808), a script Kaizo did not change apart from one word "
+        "(docs/ai/kaizo_roark.md 2); each game's moves carry their own effect"
+    ),
     "nuzline.ai.policy._LOOSE_SHARE": (
         "tie-break probabilities P(RandNext() % n == i) (trainer_ai.c:338), not game ids"
     ),

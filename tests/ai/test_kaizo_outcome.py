@@ -18,7 +18,7 @@ oracle that does not use it, and each has a test that fails when the gate is rem
 The fourth gate, the dropped speed-tie draw (Ruling 3), is checked in
 ``tests/ai/test_kaizo_commands.py`` (``test_speed_tie_never_slower``): ``IfSpeedCompareEqualTo``
 gives the tie its own loose read (``commands.ReadKind.SPEED_TIE``). It is on no transcribed
-path until K3c Tasks 5-6.
+path until K3c Task 6: its three compares are Expert labels (script.s:1864, :2070, :2650).
 """
 
 import dataclasses
@@ -36,6 +36,7 @@ from nuzline.ai.layout import KAIZO, VANILLA, layout_of
 from nuzline.ai.outcome import (
     EFFECT_SITE_LINES,
     ENUMERATION_WIDTH,
+    KAIZO_EXPERT_LABELS,
     MAX_ENUMERATED,
     MAX_SCRIPT_ROLLS,
     SIM_ROLL_MAX,
@@ -61,6 +62,11 @@ from tests.ai.fixtures import GEODUDE, outcome, versus
 ROCK_THROW, PURSUIT, LEER, SCREECH, HEADBUTT, TACKLE = 88, 228, 43, 103, 29, 33
 STEALTH_ROCK, ACCELEROCK, WATER_GUN, U_TURN = 446, 205, 55, 369
 SOUNDPROOF, CLEAR_BODY = 43, 29  # decomp ability ids (commands.ABILITY_IDS)
+# KAIZO with every Expert label counted as transcribed (layout.expert_transcribed): the
+# exact layout and the loose oracle share the script transcription, so the gates they check
+# (sites, the one guess, factoring) are checked on the effects whose Expert paths are K3c
+# Task 6 too, where KAIZO itself refuses them (NaN on both sides).
+KAIZO_ALL_EXPERT = KAIZO._replace(expert_transcribed=frozenset(KAIZO_EXPERT_LABELS))
 _SETTINGS = settings(
     deadline=None,
     max_examples=25,
@@ -106,15 +112,18 @@ def _bulky(s: BattleState, hp: int = 400) -> BattleState:
     return s._replace(hp=s.hp.at[0, 0].set(hp), max_hp=s.max_hp.at[0, 0].set(hp))
 
 
-def _move_pool(t) -> tuple[int, ...]:
-    """Kaizo moves the Kaizo policy transcribes (effect in ``KAIZO.transcribed``, no id
-    case, no alternative power)."""
+def _move_pool(t, layout=KAIZO_ALL_EXPERT) -> tuple[int, ...]:
+    """Kaizo moves ``layout`` transcribes (effect in ``layout.transcribed`` and, of
+    ``KAIZO_EXPERT_LABELS``, only those in ``layout.expert_transcribed``; no id case, no
+    alternative power)."""
     effect = np.asarray(t.move_ai_effect)
     skip = set(commands.CALC_DAMAGE_MOVES) | set(commands.MOVE_TYPE_MOVES)
+    pending = set(KAIZO_EXPERT_LABELS) - layout.expert_transcribed
     return tuple(
         m
         for m in range(1, len(effect))
-        if int(effect[m]) in KAIZO.transcribed
+        if int(effect[m]) in layout.transcribed
+        and int(effect[m]) not in pending
         and m not in skip
         and int(effect[m]) not in commands.ALT_POWER_EFFECTS
     )
@@ -159,14 +168,14 @@ def kaizo_states(draw, t, party) -> BattleState:
 
 @st.composite
 def site_layouts(draw):
-    """``KAIZO`` with a synthetic site table: each transcribed effect gets any of the
-    script's roll lines, in any order, with any N (lines its path never reads are columns
-    that are never read)."""
+    """``KAIZO_ALL_EXPERT`` with a synthetic site table: each transcribed effect gets any of
+    the script's roll lines, in any order, with any N (lines its path never reads are
+    columns that are never read)."""
     rows = []
     for effect in sorted(KAIZO.transcribed):
         lines = draw(st.lists(st.sampled_from(SITE_LINES), unique=True, max_size=4))
         rows.append((effect, tuple((line, draw(st.integers(1, 255))) for line in lines)))
-    return KAIZO._replace(effect_sites=tuple(rows))
+    return KAIZO_ALL_EXPERT._replace(effect_sites=tuple(rows))
 
 
 # --- Oracles -------------------------------------------------------------------------------
@@ -294,7 +303,9 @@ def test_slot_site_table(kaizo_tables, kaizo_names):
         PURSUIT: [(6383, 80), (3726, 128), (3731, 128)],
         STEALTH_ROCK: [(6383, 80), (6274, 128)],
         0: [],
-        120: [],  # Selfdestruct: HALVE_DEFENSE, not transcribed yet (Task 6)
+        # Selfdestruct, HALVE_DEFENSE: EvalAttack_MaybeDeprioritize's 51 roll (script.s:6365
+        # -> :6374) before the quad roll (K3c Task 5; Task 6 appends its Expert sites).
+        120: [(6374, 51), (6383, 80)],
     }
     for move, sites in expected.items():
         n_, lines = (np.asarray(a).tolist() for a in slot_site_table(t, KAIZO, move))
@@ -308,8 +319,13 @@ def test_every_transcribed_effect_has_a_site_row():
     its sites silently)."""
     assert {e for e, _ in KAIZO.effect_sites} == KAIZO.transcribed
     for _, sites in KAIZO.effect_sites:
-        assert sites[0] == (6383, 80)  # EvalAttack's quad roll, reached by every effect
+        assert (6383, 80) in sites  # EvalAttack's quad roll, reached by every effect
         assert all(SITE_N[line] == n for line, n in sites)
+        # Script order: flag order (trainer_ai.c:297-310), EvalAttack_Main (:6353-6415), then
+        # Expert_Main's labels (:1623-6352), then Risky_Main (:6521-6562); then line order.
+        lines = [line for line, _ in sites]
+        flag = lambda line: 0 if 6353 <= line <= 6415 else 1 if 1623 <= line <= 6352 else 2
+        assert lines == sorted(lines, key=lambda line: (flag(line), line))
 
 
 def test_kaizo_accelerock_is_transcribed_with_its_site(kaizo_tables, kaizo_roark_party):
@@ -325,11 +341,12 @@ def test_kaizo_accelerock_is_transcribed_with_its_site(kaizo_tables, kaizo_roark
 
 def test_kaizo_effect_check_refuses_an_untranscribed_effect(kaizo_tables, kaizo_roark_party):
     """Task 2 review m3: with the id guard gone the effect check carries the refusal. Rock
-    Throw given HALVE_DEFENSE (7, untranscribed) is refused."""
+    Throw given STATUS_SLEEP (1, untranscribed) is refused."""
     t = kaizo_tables
     s = _kaizo_state(t, kaizo_roark_party, (ROCK_THROW, LEER, 0, 0))
     assert policy.ai_refusals(t, s) == []
-    t7 = t._replace(move_ai_effect=t.move_ai_effect.at[ROCK_THROW].set(7))
+    assert 1 not in KAIZO.transcribed
+    t7 = t._replace(move_ai_effect=t.move_ai_effect.at[ROCK_THROW].set(1))
     reasons = policy.ai_refusals(t7, s)
     assert any("Rock Throw are not transcribed" in r for r in reasons), reasons
 
@@ -477,7 +494,7 @@ def test_exact_equals_loose(kaizo_tables, kaizo_roark_party, data):
     t = kaizo_tables
     s = data.draw(kaizo_states(t, kaizo_roark_party))
     assume(_sensitive_reads(t, _one(s), KAIZO)[0] <= 1)
-    _assert_exact_equals_loose(t, s)
+    _assert_exact_equals_loose(t, s, KAIZO_ALL_EXPERT)
 
 
 @pytest.mark.parametrize(
@@ -601,7 +618,7 @@ def _random_kaizo_rows(t, party, n: int, seed: int) -> BattleState:
     """``n`` random Kaizo decisions (numpy batch): Bonsly's moves from the transcribed pool,
     a two-ability player species, random HP on both sides and Defense stage."""
     rng = np.random.default_rng(seed)
-    pool = _move_pool(t)
+    pool = _move_pool(t, KAIZO)  # ai_rows uses KAIZO: no move it refuses
     species = _two_ability_species(t)
     states = []
     for _ in range(n):

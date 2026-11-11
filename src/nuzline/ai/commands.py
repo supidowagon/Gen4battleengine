@@ -144,12 +144,20 @@ class TypeMulti(IntEnum):
 
 
 class BattleEffect(IntEnum):
-    """Decomp ``BATTLE_EFFECT_*`` ids (line - 1 of generated/move_battle_effects.txt)."""
+    """Decomp ``BATTLE_EFFECT_*`` ids (line - 1 of generated/move_battle_effects.txt) that
+    the transcribed scripts compare (``IfCurrentMoveEffectEqualTo``, trainer_ai.c:1441)."""
 
     HIT = 0
+    HALVE_DEFENSE = 7  # Selfdestruct, Explosion
     DEF_DOWN = 19
     FLINCH_HIT = 31
+    RESTORE_HALF_HP = 32  # Recover
+    STATUS_BADLY_POISON = 33  # Toxic
+    SET_LIGHT_SCREEN = 35  # Light Screen
+    SPEED_UP_2 = 52  # Rock Polish
     DEF_DOWN_2 = 59
+    PRIORITY_1 = 103  # EvalAttack_ApplyKillBonuses' +2 (script.s:6400); no Roark move has it
+    CURSE = 109
     HIT_BEFORE_SWITCH = 128
     STEALTH_ROCK = 266
 
@@ -234,6 +242,15 @@ ABILITY_IDS = {
     "Tinted Lens": 110,
     "Filter": 111,
     "Solid Rock": 116,
+    # Basic_CheckCannotExplode (script.s:305), Basic_CheckHighStatStage_Speed and
+    # Basic_CheckCurse (:366, :689), Basic_CheckCannotPoison (:530-540).
+    "Damp": 6,
+    "Simple": 86,
+    "Immunity": 17,
+    "Magic Guard": 98,
+    "Poison Heal": 90,
+    "Leaf Guard": 102,
+    "Hydration": 93,
 }
 MOVE_IDS = {
     "Fissure": 90,
@@ -273,8 +290,10 @@ SOUND_MOVES = tuple(
     )
 )
 TYPE_IDS = {
+    "Poison": 3,
     "Ground": 4,
     "Ghost": 7,
+    "Steel": 8,
     "Fire": 10,
     "Water": 11,
     "Electric": 13,

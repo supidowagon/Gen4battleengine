@@ -62,7 +62,6 @@ LISTED = [
     "nuzline.saves.check.ULTIMATE_MOVES",
     # vanilla_policy
     "nuzline.ai.commands.MOVE_EFFECTS",
-    "nuzline.ai.commands.BattleEffect",
     "nuzline.ai.commands.MOVE_IDS",
     "nuzline.ai.commands.SOUND_MOVES",
     "nuzline.ai.switching.MOVE_IDS",
@@ -94,9 +93,11 @@ LISTED = [
     "nuzline.ai.commands.FieldCondition",
     "nuzline.ai.commands.AiWeather",
     "nuzline.ai.commands.TypeMulti",
+    "nuzline.ai.commands.BattleEffect",
     "nuzline.ai.commands.NO_DAMAGE_CALC_EFFECTS",
     "nuzline.ai.commands.ALT_POWER_EFFECTS",
     "nuzline.ai.outcome.EFFECT_SITE_LINES",
+    "nuzline.ai.outcome.KAIZO_EXPERT_LABELS",
     "nuzline.ai.commands.ReadKind",
     "nuzline.ai.policy._LOOSE_SHARE",
     "nuzline.ai.outcome.SITE_N",
@@ -205,7 +206,7 @@ def _resolve(where: str):
 def _code_entries(where: str) -> set:
     """The table at ``where`` as ``{(name or None, id or None)}``, to compare with its
     ``CONSTANTS`` entries."""
-    from nuzline.ai import commands, switching
+    from nuzline.ai import switching
     from nuzline.ai.layout import AiLayout
 
     obj = _resolve(where)
@@ -219,9 +220,6 @@ def _code_entries(where: str) -> set:
         (claw,) = [c for c in CONSTANTS if c.where == where]
         assert claw.hold_param == obj
         return {("Quick Claw", claw.id)}
-    if where == "nuzline.ai.commands.BattleEffect":
-        assert set(commands.MOVE_EFFECTS.values()) == set(obj)
-        return {(None, m) for m in commands.MOVE_EFFECTS}
     if where == "nuzline.saves.check.ULTIMATE_MOVES":  # species keys and move values
         return {(None, k) for k in obj} | {(None, v) for v in set(obj.values())}
     if where == "nuzline.ai.switching._MOVES":

@@ -86,6 +86,8 @@ __all__ = [
     "AI_SITE_MOVES",
     "EFFECT_SITE_LINES",
     "ENUMERATION_WIDTH",
+    "KAIZO_EXPERT_LABELS",
+    "KAIZO_EXPERT_TRANSCRIBED",
     "KAIZO_SLOT_SITES",
     "MAX_ENUMERATED",
     "MAX_EXPERT_SITES",
@@ -156,11 +158,14 @@ SITE_N: dict[int, int] = {
     3726: 128,  # Expert_Pursuit_TryScorePlus1
     3731: 128,  # Expert_Pursuit_CheckUturn
     6274: 128,  # Expert_StealthRock
+    6374: 51,  # EvalAttack_MaybeDeprioritize (-2 when it does NOT jump)
 }
 SITE_LINES = tuple(SITE_N)
 # The flat (vanilla) layout's column of script_roll_sites that each line reads: column 0 is
-# the EVAL_ATTACK site, columns 1.. the move's EXPERT sites in script order (_SITES).
-_VANILLA_COLUMN = {6383: 0, 2328: 1, 3726: 1, 3731: 2, 6274: 1}
+# the EVAL_ATTACK site, columns 1.. the move's EXPERT sites in script order (_SITES). None:
+# a line no vanilla-transcribed move reaches (:6374 is HALVE_DEFENSE's only, script.s:6365);
+# it reads an unused index, which never rolls 1.
+_VANILLA_COLUMN = {6383: 0, 2328: 1, 3726: 1, 3731: 2, 6274: 1, 6374: None}
 assert set(_VANILLA_COLUMN) == set(SITE_N)
 
 # The per-slot (Kaizo) site table, keyed by decomp battle effect (BATTLE_EFFECT_*, line - 1
@@ -168,16 +173,65 @@ assert set(_VANILLA_COLUMN) == set(SITE_N)
 # effect can reach, in script order (flag order BASIC, EVAL_ATTACK, EXPERT, trainer_ai.c
 # :297-310, then line order). EVAL_ATTACK's quad roll (:6383) is reached by every move whose
 # IfMoveEffectivenessEquals is QUADRUPLE (:6378), whatever its effect, so every effect
-# has it. K3c Tasks 5 and 6 add Roark's effects; layout.KAIZO's transcribed set is this
-# table's keys.
+# has it. No BASIC label of a transcribed effect reads IfRandomLessThan. layout.KAIZO's
+# transcribed set is this table's keys.
+#
+# K3c Task 5 adds the effects of Kaizo Roark's moves (data/intermediate_kaizo/moves.json)
+# with their EVAL_ATTACK sites. The ones marked "Expert: Task 6" have an Expert_Main entry
+# (and HALVE_DEFENSE and RAISE_ALL_STATS_HIT a Risky_RiskyEffects entry, script.s:6538,
+# :6550) whose sites K3c Task 6 appends; until then a move with one of them is refused
+# (KAIZO_EXPERT_LABELS below; RISKY: engine/coverage.py IMPLEMENTED_AI_FLAGS).
 EFFECT_SITE_LINES: dict[int, tuple[int, ...]] = {
     0: (6383,),  # HIT: no Expert_Main entry (script.s:1623-1811)
+    2: (6383,),  # POISON_HIT (Sludge Bomb): no Expert_Main entry
+    3: (6383,),  # RECOVER_HALF_DAMAGE_DEALT (Giga Drain). Expert: Task 6 (:1629)
+    4: (6383,),  # BURN_HIT (Flamethrower): no Expert_Main entry
+    6: (6383,),  # PARALYZE_HIT (DragonBreath): no Expert_Main entry
+    # HALVE_DEFENSE (Selfdestruct): EvalAttack_MaybeDeprioritize (:6365 -> :6374) before the
+    # quad roll. Expert: Task 6 (:1630).
+    7: (6374, 6383),
     19: (6383, 2328),  # DEF_DOWN: Expert_StatusDefenseDown (:1642 -> :2318)
-    31: (6383,),  # FLINCH_HIT: no Expert_Main entry
+    31: (6383,),  # FLINCH_HIT (Zen Headbutt): no Expert_Main entry
+    32: (6383,),  # RESTORE_HALF_HP (Recover). Expert: Task 6 (:1652)
+    33: (6383,),  # STATUS_BADLY_POISON (Toxic). Expert: Task 6 (:1653)
+    35: (6383,),  # SET_LIGHT_SCREEN (Light Screen). Expert: Task 6 (:1654)
+    52: (6383,),  # SPEED_UP_2 (Rock Polish). Expert: Task 6 (:1665)
     59: (6383, 2328),  # DEF_DOWN_2: Expert_StatusDefenseDown (:1671 -> :2318)
+    69: (6383,),  # LOWER_DEFENSE_HIT (Crunch): no Expert_Main entry
+    72: (6383,),  # LOWER_SP_DEF_HIT (Earth Power): no Expert_Main entry
+    76: (6383,),  # CONFUSE_HIT (Water Pulse): no Expert_Main entry
+    109: (6383,),  # CURSE (Curse). Expert: Task 6 (:1700)
     128: (6383, 3726, 3731),  # HIT_BEFORE_SWITCH: Expert_Pursuit (:1706 -> :3706)
+    140: (6383,),  # RAISE_ALL_STATS_HIT (AncientPower): no Expert_Main entry. Risky: Task 6
+    186: (6383,),  # REMOVE_SCREENS (Brick Break). Expert: Task 6 (:1739)
+    261: (6383,),  # WHIRLPOOL (Sand Tomb): no Expert_Main entry (plan K3c Ruling 5)
     266: (6383, 6274),  # STEALTH_ROCK: Expert_StealthRock (:1805 -> :6268)
+    269: (6383,),  # RECOIL_HALF (Head Smash). Expert: Task 6 (:1806)
+    275: (6383,),  # FLINCH_PARALYZE_HIT (Thunder Fang): no Expert_Main entry
 }
+# The transcribed effects (EFFECT_SITE_LINES) whose Expert_Main entry goes to a label the
+# transcription does not have yet: effect -> (label, the script.s line of its entry in
+# Expert_Main's dispatch table, :1628-1808). The other transcribed effects either have no
+# entry (they end at :1811) or go to a label policy._expert transcribes (DEF_DOWN :1642,
+# DEF_DOWN_2 :1671, HIT_BEFORE_SWITCH :1706, STEALTH_ROCK :1805). A per-slot layout refuses
+# a move whose effect is here but not in its expert_transcribed set.
+KAIZO_EXPERT_LABELS: dict[int, tuple[str, int]] = {
+    3: ("Expert_DrainMove", 1629),  # RECOVER_HALF_DAMAGE_DEALT (Giga Drain)
+    7: ("Expert_Explosion", 1630),  # HALVE_DEFENSE (Selfdestruct)
+    32: ("Expert_Recovery", 1652),  # RESTORE_HALF_HP (Recover)
+    33: ("Expert_ToxicLeechSeed", 1653),  # STATUS_BADLY_POISON (Toxic)
+    35: ("Expert_LightScreen", 1654),  # SET_LIGHT_SCREEN (Light Screen)
+    52: ("Expert_StatusSpeedUp", 1665),  # SPEED_UP_2 (Rock Polish)
+    109: ("Expert_Curse", 1700),  # CURSE (Curse)
+    186: ("Expert_BrickBreak", 1739),  # REMOVE_SCREENS (Brick Break)
+    269: ("Expert_RecoilMove", 1806),  # RECOIL_HALF (Head Smash)
+}
+# Of KAIZO_EXPERT_LABELS, the effects whose Expert label is transcribed (layout.KAIZO
+# expert_transcribed). Empty after K3c Task 5; Task 6 fills it.
+KAIZO_EXPERT_TRANSCRIBED: frozenset[int] = frozenset()
+assert set(KAIZO_EXPERT_LABELS) <= set(EFFECT_SITE_LINES)
+assert KAIZO_EXPERT_TRANSCRIBED <= set(KAIZO_EXPERT_LABELS)
+
 # The most sites one move slot can reach in the Kaizo transcription, sized for Selfdestruct
 # (HALVE_DEFENSE, K3c Task 6): EvalAttack :6374 and :6383, Expert_Explosion :1859, :1865,
 # :1870, :1875 and :1880, Risky :6530.
@@ -256,9 +310,15 @@ def line_sites(state: BattleState) -> jnp.ndarray:
     """``int32[MOVES, len(SITE_LINES)]``: ``AiContext.sites`` of the flat layout: for each
     move slot of the opponent's active Pokemon and each ``SITE_LINES`` line, the
     ``script_rolls`` index that ``script_roll_sites`` gives the column the line reads
-    (``_VANILLA_COLUMN``)."""
+    (``_VANILLA_COLUMN``), or ``MAX_SCRIPT_ROLLS`` (never rolls 1) for a line no vanilla
+    move reaches."""
     k = script_roll_sites(state)
-    return k[:, jnp.array([_VANILLA_COLUMN[line] for line in SITE_LINES])]
+    k = jnp.concatenate([k, jnp.full((MOVES, 1), MAX_SCRIPT_ROLLS, k.dtype)], axis=1)
+    unused = k.shape[1] - 1
+    columns = [
+        unused if _VANILLA_COLUMN[line] is None else _VANILLA_COLUMN[line] for line in SITE_LINES
+    ]
+    return k[:, jnp.array(columns)]
 
 
 def _effect_rows(layout: AiLayout) -> tuple[np.ndarray, np.ndarray, np.ndarray]:

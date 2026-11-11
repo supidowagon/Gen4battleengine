@@ -473,6 +473,42 @@ def test_battler_slower_is_compare_speed_not_faster(tables, names):
                             assert {r0, r1} == {COMPARE_SPEED_FASTER, COMPARE_SPEED_SLOWER}
 
 
+@pytest.mark.parametrize(
+    ("holder", "item", "expected"),
+    [
+        # Exactly one activated Quick Claw (speedRand % (100 / 20) == 0, qc_roll 1):
+        # battler1 (the AI) without, battler2 (the player) with: SLOWER (:1408-1409).
+        ("player", "Quick Claw", COMPARE_SPEED_SLOWER),
+        # battler1 with, battler2 without: FASTER (:1410-1411).
+        ("ai", "Quick Claw", COMPARE_SPEED_FASTER),
+        # No Quick Claw; battler1 alone holds Lagging Tail: SLOWER (:1418-1419).
+        ("ai", "Lagging Tail", COMPARE_SPEED_SLOWER),
+        # battler2 alone holds it: FASTER (:1420-1421).
+        ("player", "Lagging Tail", COMPARE_SPEED_FASTER),
+    ],
+)
+def test_ai_speed_compare_one_claw_or_tail_at_equal_speed(tables, names, holder, item, expected):
+    """Task 4 review m1, written from battle_lib.c ``BattleSystem_CompareBattlerSpeed``
+    rather than from ``compare_speed``: the AI's compare is battler1 = the AI, battler2 = the
+    player (trainer_ai.c:1110). At equal raw speed (45/45) these branches return before any
+    speed compare, so neither tie bit matters and no ``RandNext`` is read (the loose read is
+    off the path). ``result`` starts as FASTER (:1190)."""
+    s = _speed_state(tables, names, 45, 45)
+    side, slot = (0, 0) if holder == "player" else (1, GEODUDE)
+    s = s._replace(item=s.item.at[side, slot].set(names.item(item)))
+    qc = [0, 0]
+    if item == "Quick Claw":
+        qc[side] = 1
+    s = s._replace(qc_roll=jnp.asarray(qc, s.qc_roll.dtype))
+    for tie in (0, 1):
+        assert int(compare_speed(tables, s, 1, tie, s.qc_roll)) == expected, tie
+    assert _slower(tables, s) == (expected == COMPARE_SPEED_SLOWER)
+    bits = np.ones((MOVES, c.LOOSE_READS), np.int8)
+    ctx = c.if_speed_compare_equal_to(_ctx(tables, s, loose_bits=bits), COMPARE_SPEED_SLOWER)
+    assert _jump(ctx) == (expected == COMPARE_SPEED_SLOWER)
+    assert not bool(ctx.loose.live[0, 0])
+
+
 # --- IfMoveEffectKnown / IfMoveEffectNotKnown (trainer_ai.c:1739, :1781) -------------------
 
 

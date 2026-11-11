@@ -28,6 +28,11 @@ The fields:
   battle effect can reach, in script order (``outcome.slot_site_table``). Kaizo's is
   ``outcome.EFFECT_SITE_LINES``, and its ``transcribed`` set is that table's effects.
   Empty for the flat layout, whose sites are ``outcome._SITES`` by move id.
+* ``expert_transcribed``: of the effects of ``outcome.KAIZO_EXPERT_LABELS`` (a transcribed
+  effect whose ``Expert_Main`` entry, script.s:1628-1808, goes to a label added after the
+  vanilla transcription), those whose Expert label is transcribed. A per-slot layout refuses
+  an opponent move with any other of those effects (``policy._refused``), so a missing
+  Expert path is refused, never scored. Empty after K3c Task 5; Task 6 fills it.
 """
 
 from __future__ import annotations
@@ -38,7 +43,13 @@ from typing import NamedTuple
 import jax
 
 from nuzline.ai.commands import MOVE_EFFECTS
-from nuzline.ai.outcome import EFFECT_SITE_LINES, KAIZO_SLOT_SITES, MAX_SCRIPT_ROLLS, SITE_N
+from nuzline.ai.outcome import (
+    EFFECT_SITE_LINES,
+    KAIZO_EXPERT_TRANSCRIBED,
+    KAIZO_SLOT_SITES,
+    MAX_SCRIPT_ROLLS,
+    SITE_N,
+)
 from nuzline.ai.switching import SWITCH_SITES
 from nuzline.data.game_constants import AI_POLICIES
 from nuzline.data.tables import Tables
@@ -56,6 +67,7 @@ class AiLayout(NamedTuple):
     water2_ability: int
     transcribed: frozenset[int]
     effect_sites: tuple[tuple[int, tuple[tuple[int, int], ...]], ...] = ()
+    expert_transcribed: frozenset[int] = frozenset()
 
 
 VANILLA = AiLayout(
@@ -71,10 +83,10 @@ VANILLA = AiLayout(
 
 # Kaizo Roark's ai_flags are 23, 0b10111: BASIC, EVAL_ATTACK, EXPERT and RISKY
 # (data/intermediate_kaizo/trainers.json, trainer 246). The script-roll sites are keyed by
-# move slot (K3c Task 3, docs/ai/kaizo_roark.md 8) and by battle effect; Tasks 5 and 6 add
-# Roark's effects to EFFECT_SITE_LINES and Task 7 the six-Pokemon switch sites. The
-# transcribed effects are those of the vanilla-transcribed moves until then, none of which
-# is in Risky_RiskyEffects (script.s:6536-6561), so RISKY scores nothing yet.
+# move slot (K3c Task 3, docs/ai/kaizo_roark.md 8) and by battle effect. Task 5 added
+# Roark's effects to EFFECT_SITE_LINES with their BASIC and EVAL_ATTACK paths; Task 6 adds
+# their EXPERT paths (expert_transcribed; until then a move whose Expert label is missing is
+# refused) and RISKY, and Task 7 the six-Pokemon switch sites.
 KAIZO = AiLayout(
     name="kaizo",
     per_slot_sites=True,
@@ -88,6 +100,7 @@ KAIZO = AiLayout(
         (effect, tuple((line, SITE_N[line]) for line in lines))
         for effect, lines in sorted(EFFECT_SITE_LINES.items())
     ),
+    expert_transcribed=KAIZO_EXPERT_TRANSCRIBED,
 )
 assert max(len(sites) for _, sites in KAIZO.effect_sites) <= KAIZO.slot_sites
 

@@ -12,8 +12,9 @@ The scripts are transcribed label by label from ``src/battle/trainer_ai/script.s
 ``nuzline.ai.commands``: a jump splits ``AiContext.live`` into the fall-through path
 and the taken path, and each label block runs under the union of the paths that reach
 it. Only the branches that can be taken for the transcribed moves
-(``commands.MOVE_EFFECTS``) are written out; the effect jump tables list just those
-moves' effects (roark.md 5.4).
+(``commands.MOVE_EFFECTS`` in vanilla, the effects of ``layout.KAIZO.transcribed`` in
+Kaizo) are written out; the effect jump tables list just those moves' effects (roark.md
+5.4, docs/ai/kaizo_roark.md 5).
 
 The game's policy (``nuzline.ai.layout``): every public function takes an optional
 ``layout``; without one it reads ``layout_of(tables)`` when ``tables`` are concrete, and
@@ -24,7 +25,9 @@ distribution is factored per slot (``_slot_move_distribution``; docs/ai/kaizo_ro
 ``ai_action_distribution_loose`` is its test oracle, with every decomp draw its own.
 
 Refusals (``ai_refusals``): an opponent move whose script paths are not transcribed
-(``layout.transcribed``), an opponent move the AI's damage estimate or move type takes
+(``layout.transcribed``) or, in a per-slot layout, whose effect's Expert_Main label is
+not transcribed yet (``outcome.KAIZO_EXPERT_LABELS`` less ``layout.expert_transcribed``),
+an opponent move the AI's damage estimate or move type takes
 by an alternative power or a move-id case, a moveset with more script-roll sites than
 ``AiOutcome`` encodes, the abilities, items and moves that change
 ``effectiveness_class``, a bag item other than a Potion, and every refusal of the
@@ -57,6 +60,7 @@ from nuzline.ai.layout import VANILLA, AiLayout, layout_of
 from nuzline.ai.outcome import (
     ABILITY_GUESSES,
     ENUMERATION_WIDTH,
+    KAIZO_EXPERT_LABELS,
     MAX_SCRIPT_ROLLS,
     SIM_ROLL_MAX,
     SWITCH_NONE,
@@ -146,8 +150,8 @@ def _terminate(ctx: AiContext) -> AiContext:
 
 
 def _basic(ctx: AiContext, layout: AiLayout) -> AiContext:
-    """``Basic_Main`` (script.s:52; roark.md 5.1). ``layout.water2_ability`` is the
-    ability of the compare at script.s:78."""
+    """``Basic_Main`` (script.s:52; roark.md 5.1, docs/ai/kaizo_roark.md 5.1).
+    ``layout.water2_ability`` is the ability of the compare at script.s:78."""
     ctx = _terminate(ctx)
     ctx, ohko = _split(c.if_move_equal_to(ctx, _MOVE["Fissure"]))
     ctx, t = _split(c.if_move_equal_to(ctx, _MOVE["Horn Drill"]))
@@ -216,13 +220,115 @@ def _basic(ctx: AiContext, layout: AiLayout) -> AiContext:
         ctx = _score(ctx, t, -10)
     effect = effect | ctx.live
 
-    # Basic_ScoreMoveEffect (:133): the jump-table entries of the transcribed effects.
+    # Basic_ScoreMoveEffect (:133): the jump-table entries of the transcribed effects, in
+    # line order. A move has one effect, so only its own entry can jump.
     ctx = _at(ctx, effect)
+    ctx, explode = _split(c.if_current_move_effect_equal_to(ctx, BattleEffect.HALVE_DEFENSE))
     ctx, defense = _split(c.if_current_move_effect_equal_to(ctx, BattleEffect.DEF_DOWN))
+    ctx, recover = _split(c.if_current_move_effect_equal_to(ctx, BattleEffect.RESTORE_HALF_HP))
+    ctx, poison = _split(c.if_current_move_effect_equal_to(ctx, BattleEffect.STATUS_BADLY_POISON))
+    ctx, screen = _split(c.if_current_move_effect_equal_to(ctx, BattleEffect.SET_LIGHT_SCREEN))
+    ctx, speed = _split(c.if_current_move_effect_equal_to(ctx, BattleEffect.SPEED_UP_2))
     ctx, t = _split(c.if_current_move_effect_equal_to(ctx, BattleEffect.DEF_DOWN_2))
     defense = defense | t
+    ctx, curse = _split(c.if_current_move_effect_equal_to(ctx, BattleEffect.CURSE))
     ctx, stealth_rock = _split(c.if_current_move_effect_equal_to(ctx, BattleEffect.STEALTH_ROCK))
     ctx = c.pop_or_end(ctx)  # :286
+
+    # Basic_CheckCannotExplode (:297)
+    ctx = _at(ctx, explode)
+    ctx, t = _split(c.if_move_effectiveness_equals(ctx, TypeMulti.IMMUNE))
+    ctx = _score(ctx, t, -10)
+    ctx = c.load_battler_ability(ctx, _A)
+    ctx, last_mon = _split(c.if_loaded_equal_to(ctx, _ABILITY["Mold Breaker"]))
+    ctx = c.load_battler_ability(ctx, _D)
+    ctx, t = _split(c.if_loaded_equal_to(ctx, _ABILITY["Damp"]))
+    ctx = _score(ctx, t, -10)
+    # Basic_CheckLastMon (:307). The attacker's other living Pokemon jump to
+    # Basic_Explode_Terminate (:318), a PopOrEnd: no change.
+    ctx = c.count_alive_party_battlers(_at(ctx, last_mon | ctx.live), _A)
+    ctx, _ = _split(c.if_loaded_not_equal_to(ctx, 0))
+    ctx = c.count_alive_party_battlers(ctx, _D)
+    ctx, t = _split(c.if_loaded_not_equal_to(ctx, 0))
+    ctx = _score(ctx, t, -10)
+    ctx, t = _split(c.go_to(ctx))
+    ctx = _score(ctx, t, -1)
+
+    # Basic_CheckCanRecoverHP (:511): HP% not 100 jumps to its PopOrEnd (:516).
+    ctx = _at(ctx, recover)
+    ctx, _ = _split(c.if_hp_percent_not_equal_to(ctx, _A, 100))
+    ctx = c.pop_or_end(c.add_to_move_score(ctx, -8))
+
+    # Basic_CheckCannotPoison (:519)
+    ctx = _at(ctx, poison)
+    for target in (LoadType.DEFENDER_TYPE_1, LoadType.DEFENDER_TYPE_2):
+        ctx = c.load_type_from(ctx, target)
+        for type_name in ("Steel", "Poison"):
+            ctx, t = _split(c.if_loaded_equal_to(ctx, _TYPE[type_name]))
+            ctx = _score(ctx, t, -10)
+    ctx = c.load_battler_ability(ctx, _D)
+    for ability in ("Immunity", "Magic Guard", "Poison Heal"):
+        ctx, t = _split(c.if_loaded_equal_to(ctx, _ABILITY[ability]))
+        ctx = _score(ctx, t, -10)
+    ctx, hydration = _split(c.if_loaded_not_equal_to(ctx, _ABILITY["Leaf Guard"]))
+    ctx = c.load_current_weather(ctx)
+    ctx, t = _split(c.if_loaded_equal_to(ctx, c.AiWeather.SUNNY))
+    ctx = _score(ctx, t, -10)
+    # Basic_CheckCannotPoison_Hydration (:538)
+    ctx = c.load_battler_ability(_at(ctx, hydration | ctx.live), _D)
+    ctx, status = _split(c.if_loaded_not_equal_to(ctx, _ABILITY["Hydration"]))
+    ctx = c.load_current_weather(ctx)
+    ctx, t = _split(c.if_loaded_equal_to(ctx, c.AiWeather.RAINING))
+    ctx = _score(ctx, t, -10)
+    # Basic_CheckCannotPoison_StatusOrSafeguard (:544)
+    ctx = _at(ctx, status | ctx.live)
+    ctx, t = _split(c.if_status(ctx, _D, c.MonCondition.ANY))
+    ctx = _score(ctx, t, -10)
+    ctx, t = _split(c.if_side_condition(ctx, _D, c.SideCondition.SAFEGUARD))
+    ctx = _score(ctx, t, -10)
+    ctx = c.pop_or_end(ctx)
+
+    # Basic_CheckAlreadyUnderLightScreen (:549)
+    ctx = _at(ctx, screen)
+    ctx, t = _split(c.if_side_condition(ctx, _A, c.SideCondition.LIGHT_SCREEN))
+    ctx = _score(ctx, t, -8)
+    ctx = c.pop_or_end(ctx)
+
+    # Basic_CheckHighStatStage_Speed (:363)
+    ctx = _at(ctx, speed)
+    ctx, t = _split(c.if_field_conditions_mask(ctx, c.FieldCondition.TRICK_ROOM))
+    ctx = _score(ctx, t, -10)
+    ctx = c.load_battler_ability(ctx, _A)
+    ctx, no_simple = _split(c.if_loaded_not_equal_to(ctx, _ABILITY["Simple"]))
+    ctx, t = _split(c.if_stat_stage_greater_than(ctx, _A, Stat.SPE, 8))
+    ctx = _score(ctx, t, -10)
+    ctx = c.pop_or_end(ctx)
+    # Basic_CheckHighStatStage_Speed_NoSimple (:370)
+    ctx = _at(ctx, no_simple)
+    ctx, t = _split(c.if_stat_stage_equal_to(ctx, _A, Stat.SPE, 12))
+    ctx = _score(ctx, t, -10)
+    ctx = c.pop_or_end(ctx)
+
+    # Basic_CheckCurse (:679). A Ghost-type attacker jumps to Basic_CheckCurse_GhostType
+    # (:700), which is not transcribed: _refused refuses Curse on a Ghost type, so the
+    # jumps below are never taken.
+    ctx = _at(ctx, curse)
+    for target in (LoadType.ATTACKER_TYPE_1, LoadType.ATTACKER_TYPE_2):
+        ctx = c.load_type_from(ctx, target)
+        ctx, _ = _split(c.if_loaded_equal_to(ctx, _TYPE["Ghost"]))
+    ctx = c.load_battler_ability(ctx, _A)
+    ctx, no_simple = _split(c.if_loaded_not_equal_to(ctx, _ABILITY["Simple"]))
+    for stat in (Stat.ATK, Stat.DEF):
+        ctx, t = _split(c.if_stat_stage_greater_than(ctx, _A, stat, 8))
+        ctx = _score(ctx, t, -10)
+    ctx = c.pop_or_end(ctx)
+    # Basic_CheckCurse_NoSimple (:694)
+    ctx = _at(ctx, no_simple)
+    ctx, t = _split(c.if_stat_stage_equal_to(ctx, _A, Stat.ATK, 12))
+    ctx = _score(ctx, t, -10)
+    ctx, t = _split(c.if_stat_stage_equal_to(ctx, _A, Stat.DEF, 12))
+    ctx = _score(ctx, t, -8)
+    ctx = c.pop_or_end(ctx)
 
     # Basic_CheckLowStatStage_Defense (:434)
     ctx = _at(ctx, defense)
@@ -249,15 +355,26 @@ def _basic(ctx: AiContext, layout: AiLayout) -> AiContext:
 
 
 def _eval_attack(ctx: AiContext) -> AiContext:
-    """``EvalAttack_Main`` (script.s:6353; roark.md 5.2). The Explosion, Focus Punch,
-    Sucker Punch, Future Sight and priority-1 effect tests (:6364-6366, :6389-6399) match
-    no transcribed move and are not written out."""
+    """``EvalAttack_Main`` (script.s:6353; roark.md 5.2, docs/ai/kaizo_roark.md 5.2). The
+    Focus Punch and Sucker Punch tests (:6366-6367) and the Focus Punch, Sucker Punch and
+    Future Sight kill tests (:6394-6396, with their 170 roll at :6405) match no transcribed
+    effect and are not written out. HALVE_DEFENSE (:6365, :6389) and PRIORITY_1 (:6400) are:
+    the kill bonus keys on the effect, not the move's priority (Ruling 8), and a
+    HALVE_DEFENSE move never kills, since IfCurrentMoveKills computes no damage for a
+    ``NO_DAMAGE_CALC_EFFECTS`` move (trainer_ai.c:1539-1554)."""
     ctx = _terminate(ctx)
     ctx, kill = _split(c.if_current_move_kills(ctx, c.USE_MAX_DAMAGE))
     ctx = c.flag_move_damage_score(ctx, c.USE_MAX_DAMAGE)
     ctx, t = _split(c.if_loaded_equal_to(ctx, c.AI_NOT_HIGHEST_DAMAGE))
     ctx = _score(ctx, t, -1)
+    ctx, deprioritize = _split(c.if_current_move_effect_equal_to(ctx, BattleEffect.HALVE_DEFENSE))
     ctx, quad = _split(c.go_to(ctx))
+
+    # EvalAttack_MaybeDeprioritize (:6372): -2 unless the 51 roll jumps.
+    ctx = _at(ctx, deprioritize)
+    ctx, t = _split(c.if_random_less_than(ctx, 51, 6374))
+    ctx = c.add_to_move_score(ctx, -2)
+    quad = quad | t | ctx.live
 
     # EvalAttack_CheckQuadEffective (:6377)
     ctx = _at(ctx, quad)
@@ -269,10 +386,15 @@ def _eval_attack(ctx: AiContext) -> AiContext:
     ctx, _ = _split(c.if_random_less_than(ctx, 80, 6383))
     ctx = c.pop_or_end(c.add_to_move_score(ctx, 2))
 
-    # EvalAttack_ApplyKillBonuses (:6387) -> EvalAttack_ScorePlus4 (:6411)
+    # EvalAttack_ApplyKillBonuses (:6387): HALVE_DEFENSE ends at EvalAttack_Terminate
+    # (:6389); PRIORITY_1 takes EvalAttack_ScorePlus2 (:6400 -> :6408), which falls into
+    # EvalAttack_ScorePlus4 (:6411); anything else jumps to it (:6401).
     ctx = _at(ctx, kill)
+    ctx, _ = _split(c.if_current_move_effect_equal_to(ctx, BattleEffect.HALVE_DEFENSE))
+    ctx, priority = _split(c.if_current_move_effect_equal_to(ctx, BattleEffect.PRIORITY_1))
     ctx, plus4 = _split(c.go_to(ctx))
-    ctx = c.pop_or_end(c.add_to_move_score(_at(ctx, plus4), 4))
+    ctx = c.add_to_move_score(_at(ctx, priority), 2)
+    ctx = c.pop_or_end(c.add_to_move_score(_at(ctx, priority | plus4), 4))
     return ctx
 
 
@@ -340,8 +462,9 @@ def _expert(ctx: AiContext) -> AiContext:
 def _flags(layout: AiLayout) -> tuple:
     """The flag scripts the policy runs, in bit order (``TrainerAI_MainSingles``,
     trainer_ai.c:297-310): BASIC, EVAL_ATTACK, EXPERT (Roark's ai_flags = 7, roark.md 1).
-    Kaizo's RISKY (``layout.risky``) scores none of the transcribed effects: none is in
-    ``Risky_RiskyEffects`` (script.s:6536-6561; docs/ai/kaizo_roark.md 2)."""
+    Kaizo's RISKY (``layout.risky``) is K3c Task 6: of the transcribed effects HALVE_DEFENSE
+    and RAISE_ALL_STATS_HIT are in ``Risky_RiskyEffects`` (script.s:6538, :6550), and until
+    then coverage refuses a RISKY trainer (``engine/coverage.py`` IMPLEMENTED_AI_FLAGS)."""
     return (partial(_basic, layout=layout), _eval_attack, _expert)
 
 
@@ -379,6 +502,7 @@ def player_ability_refusal(ability: int) -> str | None:
 
 class _Refused(NamedTuple):
     move: jnp.ndarray  # bool[SLOTS, MOVES]: opponent move without transcribed script paths
+    expert: jnp.ndarray  # bool[SLOTS, MOVES]: its effect's Expert label is not transcribed
     alt_power: jnp.ndarray  # bool[SLOTS, MOVES]: opponent move with an ALT_POWER_EFFECTS effect
     calc_damage: jnp.ndarray  # bool[SLOTS, MOVES]: a TrainerAI_CalcDamage id case
     move_type: jnp.ndarray  # bool[SLOTS, MOVES]: a TrainerAI_MoveType id case
@@ -401,7 +525,19 @@ def _refused(tables: Tables, state: BattleState, layout: AiLayout = VANILLA) -> 
         transcribed = jnp.isin(moves[1], jnp.array(sorted(layout.transcribed), _I32))
     else:  # by battle effect, whose row of layout.effect_sites holds the move's sites
         transcribed = jnp.isin(effects, jnp.array(sorted(layout.transcribed), _I32))
+    # Curse by a Ghost type takes Basic_CheckCurse_GhostType (script.s:681-684 -> :700),
+    # which is not transcribed (it reads IfVolatileStatus).
+    ghost = jnp.any(state.types[1] == _TYPE["Ghost"], axis=-1)  # [SLOTS]
+    transcribed = transcribed & ~((effects == BattleEffect.CURSE) & ghost[:, None])
     move = present[1][:, None] & ~(transcribed | (moves[1] == 0))
+    # A transcribed effect whose Expert_Main entry (script.s:1628-1808) goes to a label not
+    # transcribed yet (outcome.KAIZO_EXPERT_LABELS, layout.expert_transcribed): refused.
+    pending = sorted(set(KAIZO_EXPERT_LABELS) - layout.expert_transcribed)
+    expert = present[1][:, None] & (moves[1] != 0) & ~move
+    if layout.per_slot_sites and pending:
+        expert = expert & jnp.isin(effects, jnp.array(pending, _I32))
+    else:
+        expert = jnp.zeros_like(expert)
     known = present[1][:, None] & (moves[1] != 0)
     alt_power = known & jnp.isin(effects, jnp.array(c.ALT_POWER_EFFECTS, _I32))
     calc_damage = known & jnp.isin(moves[1], jnp.array(c.CALC_DAMAGE_MOVES, _I32))
@@ -431,6 +567,7 @@ def _refused(tables: Tables, state: BattleState, layout: AiLayout = VANILLA) -> 
     bag = (bag_items != 0) & (tables.trainer_item_effect[bag_items] != TrainerItemId.POTION)
     scoring = (
         jnp.any(move)
+        | jnp.any(expert)
         | jnp.any(alt_power)
         | jnp.any(calc_damage)
         | jnp.any(move_type)
@@ -442,6 +579,7 @@ def _refused(tables: Tables, state: BattleState, layout: AiLayout = VANILLA) -> 
     )
     return _Refused(
         move,
+        expert,
         alt_power,
         calc_damage,
         move_type,
@@ -490,6 +628,15 @@ def _scoring_refusals(
         out.append(
             f"ai scoring: opponent slot {s}: the script paths of move "
             f"{_move_name(int(moves[1, s, k]), names)} are not transcribed (docs/ai/roark.md 5)"
+        )
+    effects = np.asarray(tables.move_ai_effect)
+    for s, k in zip(*np.nonzero(np.asarray(r.expert)), strict=True):
+        move = int(moves[1, s, k])
+        label, line = KAIZO_EXPERT_LABELS[int(effects[move])]
+        out.append(
+            f"ai scoring: opponent slot {s}: move {_move_name(move, names)} goes to {label} "
+            f"(Expert_Main, script.s:{line}), whose script path is not transcribed yet "
+            "(docs/ai/kaizo_roark.md 5)"
         )
     for s, k in zip(*np.nonzero(np.asarray(r.alt_power)), strict=True):
         out.append(
@@ -603,10 +750,11 @@ def resolve_player_ability(
     return c.defender_ability(tables, state, ai_outcome.ability_guess)
 
 
-def _run_flags(ctx: AiContext, layout: AiLayout) -> AiContext:
-    """The policy's flag scripts over the four move slots."""
+def _run_flags(ctx: AiContext, layout: AiLayout, flags: tuple | None = None) -> AiContext:
+    """The policy's flag scripts (``flags``, default ``_flags(layout)``; tests pass a
+    prefix of them) over the four move slots."""
     ctx = ctx._replace(slot=jnp.asarray(0, _I32))
-    for flag in _flags(layout):  # TrainerAI_MainSingles (trainer_ai.c:297-310)
+    for flag in _flags(layout) if flags is None else flags:  # trainer_ai.c:297-310
         # The slots in a loop, not unrolled: one copy of each flag script in the program.
 
         def eval_slot(slot, ctx, flag=flag):  # TrainerAI_EvalMoves (:483-525)

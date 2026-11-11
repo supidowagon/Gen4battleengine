@@ -64,16 +64,18 @@ type and battle effect, read through the same code.
   `MOVE_DATA(move).effect` (`tables.move_ai_effect`; `IfCurrentMoveEffectEqualTo`,
   `trainer_ai.c:1441`). `commands.move_effect(tables, move)` reads that array in both
   policies. Kaizo refuses an opponent move whose effect is not in `KAIZO.transcribed`.
-- That set starts as the effects of the vanilla-transcribed moves: HIT (0), DEF_DOWN (19),
-  FLINCH_HIT (31), DEF_DOWN_2 (59), HIT_BEFORE_SWITCH (128) and STEALTH_ROCK (266).
-  Tasks 5 and 6 add Roark's.
+- That set started as the effects of the vanilla-transcribed moves: HIT (0), DEF_DOWN
+  (19), FLINCH_HIT (31), DEF_DOWN_2 (59), HIT_BEFORE_SWITCH (128) and STEALTH_ROCK (266).
+  Task 5 added the effects of all of Kaizo Roark's moves (section 5) with their BASIC and
+  EVAL_ATTACK paths; Task 6 adds their EXPERT and RISKY paths. Until then coverage refuses
+  Kaizo Roark by his RISKY flag (section 1), and the AI itself refuses every move whose
+  effect goes to an Expert label not transcribed yet (section 5).
 - The script-roll sites are keyed by battle effect too (section 8, K3c Task 3), so a move is
   transcribed by its effect alone. Example: Accelerock (205, effect HIT) takes Rock Throw's
   paths and its EvalAttack quad roll (`script.s:6383`).
 - RISKY (`script.s:6521-6531`) scores only the effects of `Risky_RiskyEffects`
-  (`script.s:6536-6561`). None of the six effects above is listed there, so the Kaizo
-  policy's scores equal the three-script vanilla transcription's until Task 6 adds
-  Selfdestruct (HALVE_DEFENSE, 7) and AncientPower (RAISE_ALL_STATS_HIT, 140).
+  (`script.s:6536-6561`). Of Roark's effects it lists Selfdestruct (HALVE_DEFENSE, 7,
+  `:6538`) and AncientPower (RAISE_ALL_STATS_HIT, 140, `:6550`); Task 6 transcribes it.
 
 **2.3 No damage estimate for the no-calc effects.** These hold in both policies; only
 Kaizo data reaches them on a transcribed path.
@@ -121,6 +123,119 @@ script word changed; the C code only relocated).
 - The id cases of 2.4 are compared by id whatever a game names the slot. They are checked
   against vanilla names only (Kaizo's 149 is Triple Axel, and it still takes Psywave's
   case).
+
+## 5. What each flag's script does with Kaizo Roark's moves
+
+Kaizo Roark's moves, by Kaizo id, with the battle effect the scripts read
+(`data/intermediate_kaizo/moves.json` `effect`; `IfCurrentMoveEffectEqualTo`,
+`trainer_ai.c:1441`; `BATTLE_EFFECT_*` is line n + 1 of `generated/move_battle_effects.txt`):
+
+| Pokemon | Moves (Kaizo id: effect) |
+|---|---|
+| Bonsly | Stealth Rock 446: STEALTH_ROCK 266; Selfdestruct 120: HALVE_DEFENSE 7; Brick Break 280: REMOVE_SCREENS 186; Accelerock 205: HIT 0 |
+| Lileep | Sludge Bomb 188: POISON_HIT 2; Giga Drain 202: RECOVER_HALF_DAMAGE_DEALT 3; AncientPower 246: RAISE_ALL_STATS_HIT 140; Recover 105: RESTORE_HALF_HP 32 |
+| Gible | DragonBreath 225: PARALYZE_HIT 6; Flamethrower 53: BURN_HIT 4; Thunder Fang 422: FLINCH_PARALYZE_HIT 275; Earth Power 414: LOWER_SP_DEF_HIT 72 |
+| Corsola | Recover 105: 32; Water Pulse 352: CONFUSE_HIT 76; Light Screen 113: SET_LIGHT_SCREEN 35; Accelerock 205: 0 |
+| Shuckle | Toxic 92: STATUS_BADLY_POISON 33; Accelerock 205: 0; Curse 174: CURSE 109; Sand Tomb 328: WHIRLPOOL 261 |
+| Cranidos | Head Smash 457: RECOIL_HALF 269; Zen Headbutt 428: FLINCH_HIT 31; Crunch 242: LOWER_DEFENSE_HIT 69; Rock Polish 397: SPEED_UP_2 52 |
+
+All of these effects are in `KAIZO.transcribed` from K3c Task 5. The paths below are the
+BASIC and EVAL_ATTACK ones (Task 5); the EXPERT entries of RECOVER_HALF_DAMAGE_DEALT,
+HALVE_DEFENSE, RESTORE_HALF_HP, STATUS_BADLY_POISON, SET_LIGHT_SCREEN, SPEED_UP_2, CURSE,
+REMOVE_SCREENS and RECOIL_HALF (`script.s:1629-1806`) and RISKY are Task 6 (sections 5.3-5.4).
+
+**The Expert guard (coordinator ruling, Task 5).** A missing Expert path is refused, never
+scored. `outcome.KAIZO_EXPERT_LABELS` maps each of those nine effects to its label and the
+line of its entry in `Expert_Main`'s dispatch table (Giga Drain `Expert_DrainMove` `:1629`,
+Selfdestruct `Expert_Explosion` `:1630`, Recover `Expert_Recovery` `:1652`, Toxic
+`Expert_ToxicLeechSeed` `:1653`, Light Screen `Expert_LightScreen` `:1654`, Rock Polish
+`Expert_StatusSpeedUp` `:1665`, Curse `Expert_Curse` `:1700`, Brick Break `Expert_BrickBreak`
+`:1739`, Head Smash `Expert_RecoilMove` `:1806`). The Kaizo policy always runs EXPERT (Ruling
+10), so it refuses an opponent move with one of these effects unless the effect is in
+`KAIZO.expert_transcribed` (`policy._refused`), naming the label. That set is empty after
+Task 5; Task 6 fills it. So no Kaizo trainer, `0b111` or not, is graded with a missing
+Expert path (`test_expert_guard_refuses_a_0b111_kaizo_trainer`).
+`D` is the player's active Pokemon, `A` Roark's. A decomp stat stage is the engine stage plus
+6. `HP%` is `curHP * 100 / maxHP`, integer division (`trainer_ai.c:626`, `:641`).
+
+### 5.1 BASIC (`Basic_Main`, `script.s:52-1565`)
+
+Steps 1-5 are roark.md 5.1's. Two facts of Kaizo data decide which moves take step 4:
+- **No-calc moves skip `Basic_CheckForImmunity`.** Selfdestruct (HALVE_DEFENSE) and Head Smash
+  (RECOIL_HALF) are in `sNoDamageCalcMoveEffects` (`trainer_ai.c:31-46`), so
+  `FlagMoveDamageScore` gives `AI_NO_COMPARISON_MADE` (`trainer_ai.c:1035-1036`) and
+  `script.s:62-63` jumps to `Basic_CheckSoundproof`, as for the power-0 moves.
+- **The `:78` compare is Dry Skin** (2.1), so a Water move (Water Pulse) into a Dry Skin guess
+  scores -12.
+
+Step 6, `Basic_ScoreMoveEffect` (`:133`), has an entry for six of Roark's effects (each
+effect appears once in the table, so the order of the entries does not matter):
+
+- **HALVE_DEFENSE** (`:135`) -> `Basic_CheckCannotExplode` (`:297-319`):
+  1. `IfMoveEffectivenessEquals TYPE_MULTI_IMMUNE, ScoreMinus10` (`:299`): **-10** and stop
+     (Selfdestruct, Normal, into a Ghost type).
+  2. `LoadBattlerAbility ATTACKER`; Mold Breaker jumps to `Basic_CheckLastMon` (`:302-303`).
+  3. Otherwise `LoadBattlerAbility DEFENDER` (an ability guess, roark.md 9.2) and Damp gives
+     **-10** and stop (`:304-305`). No Kaizo species has Damp (`species.json`), so in Kaizo
+     data this read never changes a score.
+  4. `Basic_CheckLastMon` (`:307`): `CountAlivePartyBattlers ATTACKER` (`trainer_ai.c:1126-1156`:
+     the party's other members with HP above 0). Not 0 jumps to `Basic_Explode_Terminate`
+     (`:318`, `PopOrEnd`): no change. Else `CountAlivePartyBattlers DEFENDER`: not 0 is
+     **-10** (`:313`), 0 is **-1** (`GoTo ScoreMinus1`, `:316`).
+- **RESTORE_HALF_HP** (`:154`) -> `Basic_CheckCanRecoverHP` (`:511-517`):
+  `IfHPPercentNotEqualTo ATTACKER, 100` jumps to `PopOrEnd`; at 100% the move gets **-8**.
+- **STATUS_BADLY_POISON** (`:155`) -> `Basic_CheckCannotPoison` (`:519-547`). Each test
+  below jumps to `ScoreMinus10` (**-10** and stop):
+  1. `D`'s true type 1, then type 2, is Steel or Poison (`LoadTypeFrom`, `trainer_ai.c:945-959`).
+  2. `LoadBattlerAbility DEFENDER` (a guess) is Immunity, Magic Guard or Poison Heal.
+  3. It is Leaf Guard and `LoadCurrentWeather` is `AI_WEATHER_SUNNY` (`:534-536`; section 7.2:
+     the raw weather, no Cloud Nine check).
+  4. `Basic_CheckCannotPoison_Hydration` (`:538`): a **second** `LoadBattlerAbility DEFENDER`
+     (its own coin flip in the decomp) is Hydration and the weather is `AI_WEATHER_RAINING`.
+  5. `Basic_CheckCannotPoison_StatusOrSafeguard` (`:544`): `D` has any status
+     (`IfStatus ... MON_CONDITION_ANY`), or `D`'s side has Safeguard.
+- **SET_LIGHT_SCREEN** (`:156`) -> `Basic_CheckAlreadyUnderLightScreen` (`:549-552`):
+  Light Screen on `A`'s own side (`IfSideCondition AI_BATTLER_ATTACKER`) is **-8**.
+- **SPEED_UP_2** (`:166`) -> `Basic_CheckHighStatStage_Speed` (`:363-372`): Trick Room is
+  **-10** (`:364`). Then `A`'s true ability: with Simple, Speed above decomp 8 (engine +3
+  or more) is **-10** (`:367`); without, Speed at decomp 12 (engine +6) is **-10** (`:371`).
+- **CURSE** (`:196`) -> `Basic_CheckCurse` (`:679-698`): a Ghost-type `A` (true type 1 or 2)
+  jumps to `Basic_CheckCurse_GhostType` (`:700`), which is not transcribed: the AI refuses a
+  Ghost-type Curse user (`policy._refused`). Kaizo Roark's Curse user, Shuckle, is Bug/Rock.
+  With Simple, Attack or Defense above decomp 8 (engine +3 or more) is **-10**
+  (`:690-691`). Without, Attack at 12 is **-10** (`:696`), else Defense at 12 is **-8**
+  (`:697`).
+- Stealth Rock keeps roark.md's `Basic_CheckStealthRock`. Every other effect of Roark's moves
+  has no entry and reaches `PopOrEnd` (`:286`) unchanged.
+
+No label above reads `IfRandomLessThan`.
+
+### 5.2 EVAL_ATTACK (`EvalAttack_Main`, `script.s:6353-6415`)
+
+As roark.md 5.2, with these effect tests now on transcribed paths:
+1. `IfCurrentMoveKills USE_MAX_DAMAGE` (`:6358`). A no-calc move never kills: the handler
+   computes damage only when the power is above 1 and the effect is not in
+   `sNoDamageCalcMoveEffects` (`trainer_ai.c:1539-1554`). So Selfdestruct and Head Smash never
+   take the kill bonus, however low `D`'s HP.
+2. `FlagMoveDamageScore` (`:6361-6362`): `AI_NOT_HIGHEST_DAMAGE` is **-1** and stop. The
+   no-calc and power-0 moves get `AI_NO_COMPARISON_MADE`, never -1. Since no-calc moves
+   estimate 0, the highest damage of Cranidos is Crunch's or Zen Headbutt's (plan Review
+   Focus 1).
+3. HALVE_DEFENSE jumps to `EvalAttack_MaybeDeprioritize` (`:6365` -> `:6372`):
+   `IfRandomLessThan 51` (`:6374`). If the draw is below 51 it jumps on; otherwise the move
+   gets **-2** (205/256). Both paths go on to the quad check. The Focus Punch and Sucker
+   Punch effects (`:6366-6367`) are no Roark move's.
+4. `EvalAttack_CheckQuadEffective` (`:6377-6385`): QUADRUPLE runs `IfRandomLessThan 80`
+   (`:6383`), +2 when the draw is not below 80 (176/256). Every move reaches it, status
+   moves too: Rock Polish (Rock) into a Fire/Flying `D` is QUADRUPLE.
+5. `EvalAttack_ApplyKillBonuses` (`:6387-6415`), for a move that kills:
+   - HALVE_DEFENSE ends at `EvalAttack_Terminate` (`:6389`). It is unreachable for
+     Selfdestruct, which never kills (1).
+   - The Focus Punch, Sucker Punch and Future Sight effects (`:6394-6396`) are no Roark move's.
+   - `BATTLE_EFFECT_PRIORITY_1` (`:6400`) gets **+2** then **+4**. It keys on the effect, not
+     the move's priority (the decomp's comment, `:6398-6399`). Kaizo Accelerock has priority
+     +1 but effect HIT, so its kill bonus is **+4** (plan K3c Ruling 8).
+   - Anything else: **+4** (`:6401` -> `:6411`), with no draw.
 
 ## 7. The commands Kaizo Roark's labels add (K3c Task 4)
 
@@ -220,11 +335,13 @@ site is named by its `script.s` line, and `outcome.SITE_N` gives its N:
 | Effect | Sites (line: N) |
 |---|---|
 | HIT (0) | `:6383`: 80 |
+| HALVE_DEFENSE (7) | `:6374`: 51, `:6383`: 80 (Task 6 appends Expert_Explosion's and Risky's) |
 | DEF_DOWN (19) | `:6383`: 80, `:2328`: 50 |
 | FLINCH_HIT (31) | `:6383`: 80 |
 | DEF_DOWN_2 (59) | `:6383`: 80, `:2328`: 50 |
 | HIT_BEFORE_SWITCH (128) | `:6383`: 80, `:3726`: 128, `:3731`: 128 |
 | STEALTH_ROCK (266) | `:6383`: 80, `:6274`: 128 |
+| the other effects of section 5 (2, 3, 4, 6, 32, 33, 35, 52, 69, 72, 76, 109, 140, 186, 261, 269, 275) | `:6383`: 80 (Task 6 appends the Expert and Risky sites of those with entries) |
 
 - `:6383` is `EvalAttack_TryScorePlus2`. It is reached by any move whose
   `IfMoveEffectivenessEquals` is QUADRUPLE (`script.s:6378`), whatever its effect, so every
@@ -260,8 +377,14 @@ site is named by its `script.s` line, and `outcome.SITE_N` gives its N:
 **8.4 The one-scalar guess (plan K3c Ruling 6).** The decomp draws a fresh coin at every
 `LoadBattlerAbility DEFENDER` (`trainer_ai.c:1191-1198`). One scalar is exact when at most
 one such read in a decision can change a score. On the transcribed paths the reads are
-`script.s:71` (`Basic_CheckForImmunity`), `:117` (`Basic_CheckSoundproof`) and `:470`
-(`Basic_CheckClearBodyEffect`). `tests/ai/test_kaizo_outcome.py
+`script.s:71` (`Basic_CheckForImmunity`), `:117` (`Basic_CheckSoundproof`), `:470`
+(`Basic_CheckClearBodyEffect`), and from Task 5 `:304` (`Basic_CheckCannotExplode`, Damp) and
+`:529` and `:539` (`Basic_CheckCannotPoison`: Immunity, Magic Guard, Poison Heal, Leaf Guard in
+sun; Hydration in rain). The two Toxic reads are two coin flips in the decomp and one guess
+here. Both can change Toxic's score only for a species with Hydration and one of the `:529`
+abilities, and no Kaizo species has that pair (`species.json`;
+`tests/ai/test_kaizo_policy.py test_no_species_splits_the_toxic_reads`, which checks it in
+any weather, where the data test below uses the state's). `tests/ai/test_kaizo_outcome.py
 test_one_scalar_guess_is_exact_for_roark` checks this as data: for every species with two
 abilities, against each of Roark's Pokemon (Kaizo's six, vanilla's three), the loose
 oracle (8.6) finds at most one read whose coin changes a score. It re-runs with every
@@ -303,6 +426,137 @@ too.
 **8.7 RNG read order.** As roark.md 8.7, with RISKY after EXPERT (slots 0-3: its roll as
 reached), and the speed compare's tie draw where an `IfSpeedCompareEqualTo` meets equal
 speeds (no `AiOutcome` field, Ruling 3; K3d's trace replay needs the count).
+
+## 13. Hand-traced decisions (K3c Task 5 fixtures)
+
+`tests/ai/test_kaizo_policy.py`. Common setup:
+- Kaizo Roark's party as `build_trainer_party` gives it, the named Pokemon active with the
+  moves listed and the bench listed (default: Cranidos). The player's party is one or two
+  copies of Roark's own Gible (Dragon/Ground, Sand Veil / Rough Skin, neither of which any
+  label tests), at 400/400 HP unless stated: no transcribed move kills it. A "player X" is
+  that species put on the player's active slot (its types and ability slot; stats unchanged).
+- The scores are those after BASIC and EVAL_ATTACK, from 100 (`TrainerAI_Init`,
+  `trainer_ai.c:223`), with refusals not applied; an empty slot scores 0
+  (`trainer_ai.c:499-501`). EXPERT and RISKY are Task 6.
+- Rolls are named by line: "`:6374` jumps" sets that site's bit; every other bit is 0 (the
+  jump is not taken). `g` is the ability guess (0 or 1).
+- Each test first asserts its inputs: the effectiveness class (`IfMoveEffectivenessEquals`,
+  `trainer_ai.c:1311-1340`; type chart `battle_lib.c:2399-2515`, a second type counted only
+  when it differs, `:2634-2635`), which slot's damage estimate is highest, and who dies.
+
+**Trace K1: Bonsly [Stealth Rock, Selfdestruct, Brick Break, Accelerock] vs Gible.**
+Brick Break (Fighting, neutral) out-damages Accelerock (Rock, resisted by Ground,
+`battle_lib.c:2486`); Selfdestruct estimates 0 (no-calc). Walk:
+- Stealth Rock: no comparison (`:62-63`), not Soundproof, `Basic_CheckStealthRock`
+  (`:1540-1547`): no rocks on the player's side, and the player's other Pokemon alive is 1
+  (two Gibles) or 0 (one: **-10**). EVAL: not QUADRUPLE.
+- Selfdestruct: no comparison, then `Basic_CheckCannotExplode` (`:297-319`) as 5.1. EVAL:
+  `:6365` -> `:6374`; -2 unless it jumps; not QUADRUPLE.
+- Brick Break: immunity checks pass, REMOVE_SCREENS has no BASIC entry. EVAL: highest, not
+  QUADRUPLE: 100.
+- Accelerock: as Brick Break, but not the highest: **-1** (`:6362`).
+
+| Variant | Bench | Player | `:6374` | Scores |
+|---|---|---|---|---|
+| K1a | Cranidos | 2 | jumps | **[100, 100, 100, 99]** (`:311` -> `:318`) |
+| K1b | Cranidos | 2 | no | **[100, 98, 100, 99]** |
+| K1c | none | 2 | jumps | **[100, 90, 100, 99]** (`:313`) |
+| K1d | none | 2 | no | **[100, 88, 100, 99]** |
+| K1e | none | 1 | jumps | **[90, 99, 100, 99]** (`:316`; Stealth Rock `:1546-1547`) |
+| K1f | none | 1 | no | **[90, 97, 100, 99]** |
+
+**Trace K2: the Damp guess.** As K1a against player Wooper (Water/Ground) with the synthetic
+abilities [Damp, Water Absorb] (vanilla Wooper's; no Kaizo species has Damp). `:6374` jumps.
+- `g = 0`, Damp: Selfdestruct **-10** (`:305`): **[100, 90, 100, 99]**.
+- `g = 1`, Water Absorb: Selfdestruct goes on to `Basic_CheckLastMon` (no change); Brick Break
+  and Accelerock take `Basic_CheckWaterAbsorption` (`:74` -> `:86-89`), not Water: no change:
+  **[100, 100, 100, 99]**.
+- `ai_ability_known` set (Wooper's slot 0, Damp), any `g`: **[100, 90, 100, 99]**.
+
+**Trace K3: Mold Breaker.** Cranidos in ability slot 1 (Mold Breaker) [Selfdestruct, Crunch],
+bench Bonsly, against K2's Wooper: `:302-303` jumps past the Damp read for either `g`;
+Crunch skips the immunity abilities (`:69-70`). `:6374` jumps: **[100, 100, 0, 0]**; no
+jump: **[98, 100, 0, 0]**.
+
+**Trace K4: Selfdestruct into a Ghost.** Bonsly [Selfdestruct] against player Gastly:
+IMMUNE, **-10** and stop (`:299`). `:6374` jumps: **[90, 0, 0, 0]**.
+
+**Trace K5: Recover.** Lileep [Sludge Bomb, Giga Drain, AncientPower, Recover]. Giga Drain
+(Grass, STAB; Grass x2 on Ground, x0.5 on Dragon, `battle_lib.c:2426`, `:2430`) out-damages
+Sludge Bomb and AncientPower, which get **-1**; none is QUADRUPLE.
+- Lileep at full HP: Recover **-8** (`:513-514`): **[99, 100, 99, 92]**.
+- One HP lower (HP% 99): **[99, 100, 99, 100]**.
+
+**Trace K6: Toxic.** Shuckle [Toxic], bench Bonsly. Toxic is never QUADRUPLE here.
+
+| Variant | Player / state | `g` | Script | Scores |
+|---|---|---|---|---|
+| K6a | Gible | any | to `:547` | **[100, 0, 0, 0]** |
+| K6b | Mawile (Steel/Steel) | any | `:521-522` | **[90, 0, 0, 0]** |
+| K6c | Scizor (Bug/Steel) | any | `:524-525` | **[90, 0, 0, 0]** |
+| K6d | Tentacool (Water/Poison) | any | `:524`, `:526` | **[90, 0, 0, 0]** |
+| K6e | Gible paralysed | any | `:545` | **[90, 0, 0, 0]** |
+| K6f | Gible, Safeguard on the player's side | any | `:546` | **[90, 0, 0, 0]** |
+| K6g | Gible, sun | any | `:534` and `:540` jump | **[100, 0, 0, 0]** |
+| K6h | Zangoose [Hyper Cutter, Immunity] | 1 / 0 | `:530` / none | **[90, 0, 0, 0]** / **[100, ...]** |
+| K6i | Kadabra [Magic Guard, Inner Focus] | 0 / 1 | `:531` / none | **[90, ...]** / **[100, ...]** |
+| K6j | Lickilicky [Poison Heal, Guts] | 0 / 1 | `:532` / none | **[90, ...]** / **[100, ...]** |
+| K6k | Grotle [Leaf Guard, Shell Armor], sun | 0 / 1 | `:534-536` / none | **[90, ...]** / **[100, ...]** |
+| K6l | Grotle, no weather | 0 | `:536` falls through | **[100, ...]** |
+| K6m | Whiscash [Hydration, Swift Swim], rain | 0 / 1 | `:539-542` / none | **[90, ...]** / **[100, ...]** |
+| K6n | Whiscash, no weather | 0 | `:542` falls through | **[100, ...]** |
+
+**Trace K7: Light Screen.** Corsola [Recover, Light Screen] at full HP, bench Bonsly. Recover
+**-8** always (`:513-514`).
+- Light Screen up on Corsola's side: **-8** (`:551`): **[92, 92, 0, 0]**.
+- No screen: **[92, 100, 0, 0]**. A screen on the player's side only: **[92, 100, 0, 0]**.
+
+**Trace K8: Rock Polish.** Cranidos (Rock Head) [Head Smash, Zen Headbutt, Crunch, Rock
+Polish], bench Bonsly. Head Smash estimates 0 (no-calc): no immunity checks, no -1, no kill
+bonus. Crunch out-damages Zen Headbutt (**-1**). Not Simple: `:366` jumps to `_NoSimple`.
+
+| Variant | Speed stage | Trick Room | Scores |
+|---|---|---|---|
+| K8a | 0 | no | **[100, 99, 100, 100]** |
+| K8b | +5 | no | **[100, 99, 100, 100]** |
+| K8c | +6 | no | **[100, 99, 100, 90]** (`:371`) |
+| K8d | 0 | yes | **[100, 99, 100, 90]** (`:364`) |
+| K8e | Cranidos [Rock Polish] with synthetic abilities [Simple, Mold Breaker], +2 | no | **[100, 0, 0, 0]** |
+| K8f | the same, +3 | no | **[90, 0, 0, 0]** (`:367`) |
+
+**Trace K9: Curse.** Shuckle (Bug/Rock, Solid Rock) [Toxic, Accelerock, Curse, Sand Tomb],
+bench Bonsly. Sand Tomb out-damages Accelerock (**-1**). Not Ghost (`:681-684` fall
+through), not Simple (`:689` jumps).
+
+| Variant | Attack, Defense | Scores |
+|---|---|---|
+| K9a | 0, 0 | **[100, 99, 100, 100]** |
+| K9b | +6, 0 | **[100, 99, 90, 100]** (`:696`) |
+| K9c | 0, +6 | **[100, 99, 92, 100]** (`:697`) |
+| K9d | +6, +6 | **[100, 99, 90, 100]** (`:696` first) |
+| K9e | +2, +2 | **[100, 99, 100, 100]** |
+| K9f | Shuckle [Curse], synthetic [Simple, Simple]: +2, +2 / +3, 0 / 0, +3 | **[100, ...]** / **[90, ...]** / **[90, ...]** (`:690-691`) |
+
+A Ghost-type Shuckle with Curse is refused (5.1).
+
+**Trace K10: kill bonuses.** The player at 1/1 HP.
+- Bonsly [Accelerock]: kills, effect HIT: **+4** (`:6401` -> `:6411`): **[104, 0, 0, 0]**
+  (Ruling 8: not +6, though its priority is +1).
+- The same with Accelerock given effect PRIORITY_1 (synthetic, refused; scores only):
+  `:6400` -> `:6408`, **+6**: **[106, 0, 0, 0]**.
+- Bonsly [Selfdestruct, Accelerock]: Selfdestruct's real damage kills, but
+  `IfCurrentMoveKills` computes none for it (`trainer_ai.c:1539-1554`). `:6374` jumps:
+  **[100, 104, 0, 0]**; no jump: **[98, 104, 0, 0]**.
+- Cranidos [Head Smash, Crunch]: **[100, 104, 0, 0]**.
+
+**Trace K11: the quad roll on a status move.** Cranidos [Rock Polish] against player Moltres
+(Fire/Flying: Rock x2 on each, `battle_lib.c:2483`, `:2487`): QUADRUPLE. `:6383` does not
+jump: **+2**, **[102, 0, 0, 0]**; it jumps: **[100, 0, 0, 0]**.
+
+With every Expert label counted as transcribed (`KAIZO_ALL_EXPERT`; both sides share the
+script transcription, so the gates are unaffected), the exact distribution equals the loose oracle on K1c, K5, K6h with Shuckle's full moveset,
+K9b on that state, K6m with the full moveset, K7 with Corsola's full moveset, K8c and the
+Selfdestruct kill state (`test_new_paths_exact_equals_loose`, slow).
 
 ## 14. Width and cost, measured (K3c Task 3)
 
