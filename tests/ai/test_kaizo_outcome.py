@@ -506,10 +506,13 @@ def test_slot_scores_catch_a_missing_expert_site(kaizo_tables, kaizo_roark_party
     t = kaizo_tables
     s = _kaizo_state(t, kaizo_roark_party, (ROCK_THROW, LEER, 0, 0))
     s = _bulky(_with_player(t, s, 146))
-    s = s._replace(hp=s.hp.at[1, 0].set(5))  # Bonsly below 70%: the :2328 roll is reached
+    # Bonsly below 70% HP (IfHPPercentLessThan AI_BATTLER_ATTACKER, 70, script.s:2324): the
+    # :2328 roll is reached.
+    s = s._replace(hp=s.hp.at[1, 0].set(5))
     _assert_exact_equals_loose(t, s)
+    def_down = 19  # BATTLE_EFFECT_DEF_DOWN (Expert_Main's entry, script.s:1642)
     rows = tuple(
-        (e, tuple(x for x in sites if x[0] != 2328) if e == 19 else sites)
+        (e, tuple(x for x in sites if x[0] != 2328) if e == def_down else sites)
         for e, sites in KAIZO.effect_sites
     )
     dropped = KAIZO._replace(effect_sites=rows)
@@ -592,22 +595,16 @@ def test_one_scalar_guess_is_exact_for_roark(game, tables, names, kaizo_tables, 
         assert not bad, (game, j, bad)
 
 
-@pytest.mark.slow
-def test_kaizo_ai_rows_do_not_depend_on_the_bucket(kaizo_tables, kaizo_roark_party):
-    """Review I2: ``expand.ai_rows`` with the Kaizo layout gives bit-identical rows for 257
-    random Kaizo decisions across the bucket boundary (255, 256 and 257 rows: buckets 256
-    and 512) and for calls of 3, 7 and 300 rows: padding never reaches the output, and the
-    per-row program does not change with the call size (``expand._ai``)."""
-    from nuzline.search.expand import ai_rows
-
-    t = kaizo_tables
-    rng = np.random.default_rng(3)
+def _random_kaizo_rows(t, party, n: int, seed: int) -> BattleState:
+    """``n`` random Kaizo decisions (numpy batch): Bonsly's moves from the transcribed pool,
+    a two-ability player species, random HP on both sides and Defense stage."""
+    rng = np.random.default_rng(seed)
     pool = _move_pool(t)
     species = _two_ability_species(t)
     states = []
-    for _ in range(257):
+    for _ in range(n):
         moves = [int(rng.choice(pool))] + [int(rng.choice((0, *pool))) for _ in range(3)]
-        s = _kaizo_state(t, kaizo_roark_party, moves)
+        s = _kaizo_state(t, party, moves)
         s = _with_player(t, s, int(rng.choice(species)), int(rng.integers(2)))
         s = _bulky(s, int(rng.integers(20, 400)))
         s = s._replace(
@@ -615,10 +612,75 @@ def test_kaizo_ai_rows_do_not_depend_on_the_bucket(kaizo_tables, kaizo_roark_par
             stages=s.stages.at[0, Stat.DEF].set(int(rng.integers(-6, 7))),
         )
         states.append(s)
-    rows = jax.tree.map(lambda *xs: np.stack([np.asarray(x) for x in xs]), *states)
+    return jax.tree.map(lambda *xs: np.stack([np.asarray(x) for x in xs]), *states)
+
+
+@pytest.mark.slow
+def test_kaizo_ai_rows_do_not_depend_on_the_bucket(kaizo_tables, kaizo_roark_party):
+    """Review I2: ``expand.ai_rows`` with the Kaizo layout gives bit-identical rows for 257
+    random Kaizo decisions across the bucket boundary (255, 256 and 257 rows: buckets 256
+    and 512), for calls of 3, 7 and 300 rows, and against one ``CHUNK``-row call: padding
+    never reaches the output, and the per-row program does not change with the call size
+    (``expand._ai``)."""
+    from nuzline.search.expand import CHUNK, ai_rows
+
+    t = kaizo_tables
+    rows = _random_kaizo_rows(t, kaizo_roark_party, 257, seed=3)
     ref = ai_rows(t, rows)  # bucket 512
     assert (~np.isnan(ref).any(axis=1)).sum() > 100  # mostly accepted states
     for n in (255, 256):
         assert ai_rows(t, take(rows, np.arange(n))).tobytes() == ref[:n].tobytes(), n
-    for per_call in (3, 7, 300):
+    for per_call in (3, 7, 300, CHUNK):
         assert ai_rows(t, rows, per_call=per_call).tobytes() == ref.tobytes(), per_call
+
+
+_DEVICES_SCRIPT = """
+import hashlib, jax
+from nuzline.data.games import GAMES, KAIZO
+from nuzline.data.tables import load_tables
+from nuzline.data.trainer import IntermediateData, build_trainer_party, load_trainers
+from nuzline.search.expand import ai_rows
+from tests.ai.test_kaizo_outcome import _random_kaizo_rows
+
+assert jax.device_count() == DEVICES, jax.device_count()
+d = GAMES[KAIZO]
+t = load_tables(d.tables_dir)
+roark = next(x for x in load_trainers(d.intermediate_dir) if x.name == "Roark")
+party = build_trainer_party(roark, IntermediateData(d.intermediate_dir))
+rows = _random_kaizo_rows(t, party, 40, seed=5)
+print(hashlib.sha256(ai_rows(t, rows).tobytes()).hexdigest())
+"""
+
+
+def _kaizo_ai_rows_on_devices(devices: int) -> str:
+    """The sha256 of ``ai_rows`` of 40 random Kaizo decisions in a subprocess with
+    ``devices`` host devices (pattern: tests/search/test_expand.py)."""
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2]
+    env = {
+        **os.environ,
+        "XLA_FLAGS": f"--xla_force_host_platform_device_count={devices}",
+        "PYTHONPATH": os.pathsep.join([str(root / "src"), str(root)]),
+    }
+    done = subprocess.run(
+        [sys.executable, "-c", f"DEVICES = {devices}\n" + _DEVICES_SCRIPT],
+        check=False,
+        cwd=root,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert done.returncode == 0, done.stderr
+    return done.stdout.strip().splitlines()[-1]
+
+
+@pytest.mark.slow
+def test_kaizo_ai_rows_do_not_depend_on_the_device_count(kaizo_tables):
+    """Review m-R1: the Kaizo ``ai_rows`` (``lax.map`` per device under ``shard_map``) give
+    the same bytes on 1 and on 3 host devices (3 divides no bucket, so the padding
+    differs too)."""
+    assert _kaizo_ai_rows_on_devices(1) == _kaizo_ai_rows_on_devices(3)

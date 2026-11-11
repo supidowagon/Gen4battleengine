@@ -275,18 +275,30 @@ The Kaizo AI is refused, so its legal move actions stand in for the actions with
 | vanilla, depth 2 | 146 | 1867 | 0.005 s | 1.12 s | 0.5% |
 | vanilla `nuzline solve`, depth 2, 2000 playouts (`stage_b.solve`) | 179 in 2 calls | | 0.012 s | 1.87 s | 0.6% (of a 58 s solve) |
 
-**Review round (I2).** Kaizo `ai_rows` now maps its rows one at a time (`lax.map`,
-`expand._ai`), so a row's float32 result no longer depends on the call size. Under `vmap`,
-XLA fused the combine step per batch shape, and that moved some Kaizo rows by 1 ulp. Kaizo
-re-measured warm after the change:
-- bucket 256: 0.024 s;
-- bucket 512: 0.046 s;
-- bucket 1024: 0.095 s;
-- bucket 16384: 1.49 s;
-- cold: 2.7 s (512) and 4.2 s (16384);
-- depth-1 AI share: 10%.
+**Review rounds (I2, I2-R1).**
+- Kaizo `ai_rows` now maps each device's rows one at a time: `lax.map` inside `shard_map`
+  over the call's device axis (`expand._ai`). Under `vmap`, some Kaizo rows were observed
+  to differ by 1 ulp between call sizes.
+- A row's float32 result is now the same at every call size and device count
+  (`tests/ai/test_kaizo_outcome.py`, the bucket test and the device-count test).
+- `lax.map` alone, without `shard_map`, ran every row on one device, which was slower at
+  the default device count.
 
-Vanilla keeps `vmap`, with the numbers above.
+Warm `ai_rows` after the change (cold compile and export in brackets):
+
+| bucket | 1 device: vanilla | 1 device: Kaizo | 20 devices (the CLI default here): vanilla | 20 devices: Kaizo |
+|---|---|---|---|---|
+| 256 | 0.005 s | 0.025 s | 0.011 s | 0.013 s |
+| 512 | 0.008 s (3.5 s) | 0.046 s (2.8 s) | 0.012 s (3.3 s) | 0.016 s (2.4 s) |
+| 1024 | 0.013 s | 0.096 s | 0.013 s | 0.020 s |
+| 16384 | 0.243 s (3.9 s) | 1.49 s (4.2 s) | 0.044 s (3.4 s) | 0.177 s (2.5 s) |
+
+The AI share of a depth-1 expansion (one root):
+
+| | 1 device | 20 devices |
+|---|---|---|
+| Kaizo | 10% | 8% |
+| vanilla | 2.5% | 7.5% |
 
 The spec 6 stop condition (an AI share above 50%) is not met. Before bucketing the Kaizo
 depth-1 share was 91% and the vanilla one 56%, both from the 16384-row padding.

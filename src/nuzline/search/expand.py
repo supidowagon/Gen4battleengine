@@ -46,6 +46,7 @@ from functools import partial
 import jax
 import jax.numpy as jnp
 import numpy as np
+from jax import shard_map
 from jax.sharding import Mesh, NamedSharding, PartitionSpec
 
 import nuzline.search.stage_a  # noqa: F401 - registers Tables/BattleState for jax.export
@@ -136,15 +137,24 @@ def _run(fn: Callable, name: str, tables: Tables, rows: tuple, n: int, static=No
 
 
 def _ai(tables: Tables, states: BattleState, layout: AiLayout) -> jnp.ndarray:
-    """``_distribution`` of every row. A per-slot layout maps the rows one at a time
-    (``lax.map``): the per-row program is then the same at every call size, so a row's
-    float32 result does not depend on the bucket (under ``vmap`` XLA fuses the combine
-    per batch shape, which moved some Kaizo rows by 1 ulp). Vanilla keeps ``vmap``,
-    whose rows are stable (tests/search/test_expand.py)."""
+    """``_distribution`` of every row. A per-slot layout maps each device's rows one at a
+    time (``lax.map`` inside ``shard_map`` over the call's device axis): the per-row
+    program is then the same at every call size and device count, so a row's float32
+    result depends on neither. Under ``vmap`` some Kaizo rows were observed to differ by
+    1 ulp between call sizes. ``shard_map`` keeps the rows on their devices; ``lax.map``
+    alone over the sharded axis would run them on one. Vanilla keeps ``vmap``, whose rows
+    were observed stable (tests/search/test_expand.py)."""
     one = partial(_distribution, tables, layout=layout)
-    if layout.per_slot_sites:
-        return jax.lax.map(one, states)
-    return jax.vmap(one)(states)
+    if not layout.per_slot_sites:
+        return jax.vmap(one)(states)
+    mesh = Mesh(jax.devices(), ("d",))
+    return shard_map(
+        lambda rows: jax.lax.map(one, rows),
+        mesh=mesh,
+        in_specs=PartitionSpec("d"),
+        out_specs=PartitionSpec("d"),
+        check_vma=False,
+    )(states)
 
 
 def ai_rows(tables: Tables, states: BattleState, per_call: int | None = None) -> np.ndarray:
