@@ -873,7 +873,7 @@ def outcome_laws(
         attacker_ability == AbilityId.MOLD_BREAKER, AbilityId.NONE, attacker_ability[::-1]
     )
     can_take = jnp.stack(
-        [can_have_status(state, 1 - side, mons[1 - side], param0[side]) for side in (0, 1)]
+        [can_have_status(tables, state, 1 - side, mons[1 - side], param0[side]) for side in (0, 1)]
     )
     limber = (param0 == Status.PARALYSIS) & (ignorable == AbilityId.LIMBER)
     insomnia = (param0 == Status.SLEEP) & (ignorable == AbilityId.INSOMNIA)
@@ -881,7 +881,7 @@ def outcome_laws(
 
     def takes(status) -> jnp.ndarray:
         return jnp.stack(
-            [can_have_status(state, 1 - side, mons[1 - side], status) for side in (0, 1)]
+            [can_have_status(tables, state, 1 - side, mons[1 - side], status) for side in (0, 1)]
         )
 
     # Tri Attack: blocked when the target can take none of its three statuses (an existing

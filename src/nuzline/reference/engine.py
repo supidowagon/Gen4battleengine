@@ -957,9 +957,10 @@ def _protected(turn: _Turn, s: RefState, side: int, move: int, unleash: bool) ->
     return _move_target(tables, move) not in SELF_DEFENDER and not _curse_on_user(tables, move)
 
 
-def _can_have_status(s: RefState, side: int, status: int) -> bool:
+def _can_have_status(tables, s: RefState, side: int, status: int) -> bool:
     """No status yet and no immunity: ``subscript_burn.s`` (Fire), ``subscript_poison.s``
-    (Poison, Steel), ``subscript_freeze.s`` (Ice, or sun)."""
+    (Poison, Steel), ``subscript_freeze.s`` (Ice, or sun without a weather lock: the
+    ``CheckIgnoreWeather`` at :6 skips the sun check at :7, battle_script.c:9195-9206)."""
     mon = _active(s, side)
     if mon.status != Status.NONE:
         return False
@@ -969,7 +970,8 @@ def _can_have_status(s: RefState, side: int, status: int) -> bool:
         Type.POISON in mon.types or Type.STEEL in mon.types
     ):
         return False
-    frozen_out = Type.ICE in mon.types or s.weather == Weather.SUN
+    sun = s.weather == Weather.SUN and not _weather_suppressed(tables, s)
+    frozen_out = Type.ICE in mon.types or sun
     return not (status == Status.FREEZE and frozen_out)
 
 
@@ -992,7 +994,7 @@ def _inflict(turn: _Turn, s: RefState, side: int, target: int, status: int,
         if target == 0 and direct:
             s.ai_ability_known[s.sides[0].active] = 1
         return
-    if mon.hp and _can_have_status(s, target, status):
+    if mon.hp and _can_have_status(turn.tables, s, target, status):
         mon.status = status
         mon.status_counter = turn.outcome.duration[side] if status == Status.SLEEP else 0
         # subscript_fall_asleep.s:_176 and subscript_freeze.s:_073 unlock the new sleeper
@@ -1268,7 +1270,7 @@ def _contact_ability(turn: _Turn, s: RefState, side: int, move: int, hit: int, e
         return
     if status == Status.PARALYSIS and attacker.ability == AbilityId.LIMBER:
         return
-    if turn.outcome.contact_proc[target][hit] and _can_have_status(s, side, status):
+    if turn.outcome.contact_proc[target][hit] and _can_have_status(turn.tables, s, side, status):
         attacker.status = status
         attacker.status_counter = 0
         # subscript_paralyze.s:44 / subscript_poison.s:57 tag the holder's ability

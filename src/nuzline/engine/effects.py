@@ -229,6 +229,7 @@ from nuzline.engine.damage import (
     divide,
     effectiveness,
     move_type_of,
+    weather_suppressed,
 )
 from nuzline.engine.ids import (
     ABILITY_MULTITYPE,
@@ -329,9 +330,14 @@ def _secondary_stat_foe(tables, state, h: _Hit) -> BattleState:
     return _foe_stage(state, h, cond)
 
 
-def can_have_status(state: BattleState, side, slot, status) -> jnp.ndarray:
-    """No status yet and no type (or weather) immunity to ``status``."""
+def can_have_status(tables: Tables, state: BattleState, side, slot, status) -> jnp.ndarray:
+    """No status yet and no type (or weather) immunity to ``status``. Sun stops a freeze
+    only without a weather lock: ``subscript_freeze.s:6`` runs ``CheckIgnoreWeather`` before
+    the sun check at :7, and ``BtlCmd_CheckIgnoreWeather`` (battle_script.c:9195-9206) jumps
+    past it while a battler on the field with HP left has Cloud Nine or Air Lock
+    (``damage.weather_suppressed``, read on ``state``: the field when the effect runs)."""
     types = state.types[side, slot]
+    sun = (state.weather == Weather.SUN) & ~weather_suppressed(tables, state)
     has = lambda t: jnp.any(types == t)
     immune = (
         ((status == Status.BURN) & has(Type.FIRE))
@@ -339,12 +345,14 @@ def can_have_status(state: BattleState, side, slot, status) -> jnp.ndarray:
             ((status == Status.POISON) | (status == Status.TOXIC))
             & (has(Type.POISON) | has(Type.STEEL))
         )
-        | ((status == Status.FREEZE) & (has(Type.ICE) | (state.weather == Weather.SUN)))
+        | ((status == Status.FREEZE) & (has(Type.ICE) | sun))
     )
     return (state.status[side, slot] == Status.NONE) & ~immune
 
 
-def _inflict(state: BattleState, h: _Hit, outcome: Outcome, cond, direct) -> BattleState:
+def _inflict(
+    tables: Tables, state: BattleState, h: _Hit, outcome: Outcome, cond, direct
+) -> BattleState:
     """``direct``: a status move's own effect (``SIDE_EFFECT_TYPE_DIRECT``), not a damaging
     move's secondary effect (``_INDIRECT``)."""
     status = h.param[0]
@@ -364,7 +372,7 @@ def _inflict(state: BattleState, h: _Hit, outcome: Outcome, cond, direct) -> Bat
     state = reveal_ability(state, h.target_side, h.target, SLEEP_BLOCKED, blocked)
     state = reveal_ability(state, h.target_side, h.target, PARALYSIS_BLOCKED, limber & direct)
     blocked = blocked | limber
-    cond = cond & ~blocked & can_have_status(state, h.target_side, h.target, status)
+    cond = cond & ~blocked & can_have_status(tables, state, h.target_side, h.target, status)
     counter = jnp.where(status == Status.SLEEP, outcome.duration[h.side], 0)
     old_status = state.status[h.target_side, h.target]
     old_counter = state.status_counter[h.target_side, h.target]
@@ -382,12 +390,12 @@ def _inflict(state: BattleState, h: _Hit, outcome: Outcome, cond, direct) -> Bat
 
 
 def _status_foe(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
-    return _inflict(state, h, outcome, (h.effect == _E.STATUS_FOE) & h.effective, True)
+    return _inflict(tables, state, h, outcome, (h.effect == _E.STATUS_FOE) & h.effective, True)
 
 
 def _secondary_status(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     cond = (h.effect == _E.SECONDARY_STATUS) & h.effective & h.proc
-    return _inflict(state, h, outcome, cond, False)
+    return _inflict(tables, state, h, outcome, cond, False)
 
 
 def _tri_attack(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
@@ -396,7 +404,9 @@ def _tri_attack(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     statuses = jnp.asarray(TRI_ATTACK_STATUSES, _I32)
     status = statuses[jnp.clip(outcome.tri_attack[h.side].astype(_I32), 0, len(statuses) - 1)]
     cond = (h.effect == _E.TRI_ATTACK) & h.effective & h.proc
-    return _inflict(state, h._replace(param=h.param.at[0].set(status)), outcome, cond, False)
+    return _inflict(
+        tables, state, h._replace(param=h.param.at[0].set(status)), outcome, cond, False
+    )
 
 
 def _camouflage(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
@@ -446,7 +456,7 @@ def _fang(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     moved (``subscript_flinch_mon.s:5``) and no Inner Focus as the attacker sees it (:7, its
     message is for Fake Out or a direct flinch only, :17-27)."""
     fang = (h.effect == _E.FANG_PARALYZE_FLINCH) & h.effective
-    state = _inflict(state, h, outcome, fang & h.proc, False)
+    state = _inflict(tables, state, h, outcome, fang & h.proc, False)
     cond = (
         fang
         & (outcome.fang_flinch[h.side] != 0)
@@ -833,7 +843,7 @@ def _contact_ability(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
         & hit
         & h.contact_proc
         & ~limber
-        & can_have_status(state, h.side, h.user, status)
+        & can_have_status(tables, state, h.side, h.user, status)
     )
     # Rough Skin (battle_lib.c:4257-4271): no roll; subscript_rough_skin.s takes
     # BattleSystem_Divide(maxHP, 8) from the attacker (it may faint).

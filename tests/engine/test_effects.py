@@ -200,7 +200,7 @@ def test_toxic_immunities(tables, names):
     # subscript_badly_poison.s:20-26 (indirect) and 47-53 (direct): an existing
     # status, a Poison type or a Steel type fails Toxic.
     def ok(s):
-        return bool(can_have_status(s, 1, 0, Status.TOXIC))
+        return bool(can_have_status(tables, s, 1, 0, Status.TOXIC))
 
     assert not ok(roark_state(tables, names, opp_species="Zubat"))
     assert not ok(roark_state(tables, names, opp_species="Bronzor"))

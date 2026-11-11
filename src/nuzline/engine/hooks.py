@@ -53,7 +53,8 @@ Swim in ``order.py``; Sand Veil and Snow Cloak also in the end-of-turn weather c
 (``step.py``). Cloud Nine: every decomp branch on it is a weather branch
 (``NO_CLOUD_NINE``, include/battle/common.h:63); ``damage.weather_suppressed`` (read by
 decomp ability id, with Air Lock) gates the weather modifiers of the damage formula, the
-accuracy check, Swift Swim and the end-of-turn chip. Sturdy only blocks OHKO moves in Gen
+accuracy check, Swift Swim, the end-of-turn chip and the sun's freeze immunity
+(``effects.can_have_status``: ``CheckIgnoreWeather``, subscript_freeze.s:6). Sturdy only blocks OHKO moves in Gen
 4, and none is in M1, so it has no hook.
 """
 

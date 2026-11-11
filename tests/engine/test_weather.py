@@ -10,6 +10,9 @@
   (battle_controller_player.c:2922-2936).
 * Swift Swim doubles Speed in rain (battle_lib.c:1228-1238, ``NO_CLOUD_NINE``), after the
   stage and before paralysis (:1260) and Tailwind (:1274).
+* Sun stops a freeze unless a battler with HP left has Cloud Nine or Air Lock:
+  ``subscript_freeze.s:6`` runs ``CheckIgnoreWeather`` (battle_script.c:9195-9206) before the
+  sun check at :7 (K3b2 weather lock audit).
 """
 
 import jax.numpy as jnp
@@ -186,3 +189,64 @@ def test_weather_abilities_match_reference(tables, names, hit):
     o = empty_outcome()._replace(hit=jnp.full_like(empty_outcome().hit, hit))
     for s, (player, opp) in _fixed_states(tables, names):
         assert_matches_reference(tables, s, A(player, opp, s, names), o)
+
+
+# --- freeze in sun under a weather lock (subscript_freeze.s:6-7) -----------------------
+
+FREEZE = empty_outcome()._replace(secondary=jnp.ones((2, 5), jnp.int8))  # every proc
+
+
+def _freeze_case(tables, names, holder):
+    """Powder Snow (10 % freeze) into Roark's Geodude in sun. ``holder``: who has Cloud
+    Nine: "user" (the player's Psyduck), "target" (the opponent's lead made a Psyduck) or "none" (the Psyduck's Damp slot)."""
+    s = roark_state(tables, names, player_species="Psyduck", player_moves=["Powder Snow"],
+                    player_ability="Cloud Nine")  # fmt: skip
+    if holder != "user":
+        s = s._replace(ability_slot=s.ability_slot.at[0, 0].set(0))  # Damp
+    if holder == "target":
+        psyduck, slot = int(s.species[0, 0]), 1  # Psyduck's Cloud Nine slot
+        s = s._replace(
+            species=s.species.at[1, 0].set(psyduck),
+            form=s.form.at[1, 0].set(0),
+            ability_slot=s.ability_slot.at[1, 0].set(slot),
+            types=s.types.at[1, 0].set(s.types[0, 0]),
+        )
+    # Enough HP that the hit never faints the target before its secondary effect.
+    s = s._replace(max_hp=s.max_hp.at[1, 0].set(999), hp=s.hp.at[1, 0].set(999))
+    return _weather(s, Weather.SUN)
+
+
+@pytest.mark.parametrize(("holder", "frozen"), [("user", True), ("target", True), ("none", False)])
+def test_freeze_in_sun_needs_no_weather_lock(tables, names, holder, frozen):
+    s = _freeze_case(tables, names, holder)
+    out = assert_matches_reference(tables, s, A("Powder Snow", "Leer", s, names), FREEZE)
+    assert (int(out.status[1, 0]) == Status.FREEZE) == frozen
+
+
+def test_a_fainted_holder_keeps_no_lock(tables, names):
+    # COUNT_ALIVE_BATTLERS (battle_lib.c:2951-2957): a holder with no HP does not count. The
+    # opponent's Psyduck at 0 HP is no longer on the field as a battler with HP: its own
+    # freeze cannot happen (it has fainted), so test the read itself.
+    from nuzline.engine.effects import can_have_status
+
+    s = _freeze_case(tables, names, "user")
+    assert bool(can_have_status(tables, s, 1, 0, Status.FREEZE))
+    fainted = s._replace(hp=s.hp.at[0, 0].set(0))
+    assert not bool(can_have_status(tables, fainted, 1, 0, Status.FREEZE))
+
+
+@pytest.mark.parametrize("holder", ["user", "target", "none"])
+@pytest.mark.parametrize("order", ["freezer_first", "freezer_second"])
+def test_freeze_in_sun_equals_bruteforce(tables, names, holder, order):
+    # The secondary is read only when the target can be frozen (enumerate's status gate,
+    # judged on the turn-start field: the lock can only leave, never come, before the first
+    # mover's hit); a freeze by the first mover makes the target's thaw roll relevant.
+    from tests.engine.test_enumerate import assert_equals_bruteforce
+
+    s = _freeze_case(tables, names, holder)
+    s = s._replace(lucky_chant=s.lucky_chant.at[:].set(5))  # no crits: a smaller product
+    spe = s.stats[0, 0, SPE]
+    faster = spe + 1 if order == "freezer_second" else max(int(spe) - 1, 1)
+    s = s._replace(stats=s.stats.at[1, 0, SPE].set(faster))
+    width, brute = assert_equals_bruteforce(tables, s, A("Powder Snow", "Tackle", s, names))
+    assert width <= brute
