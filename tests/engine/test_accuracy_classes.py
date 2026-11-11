@@ -127,6 +127,19 @@ def test_sand_attack_lowers_a_later_move_this_turn(tables, names):
     )
 
 
+@pytest.mark.parametrize("move", ["Sand-Attack", "Double Team"])
+def test_accuracy_change_equals_bruteforce(tables, names, move):
+    # K3b2 final review I1: the brute force cuts the hit law at every threshold variant
+    # (outcome.hit_thresholds), not only the possible ones, so a variant the gated laws
+    # wrongly drop shows as a difference here.
+    from tests.engine.test_enumerate import assert_equals_bruteforce
+
+    s = roark_state(tables, names, opp_moves=[move], opp_faster=True)
+    s = s._replace(lucky_chant=s.lucky_chant.at[:].set(5))  # no crits: a smaller product
+    width, brute = assert_equals_bruteforce(tables, s, A("Scratch", move, s, names))
+    assert width <= brute
+
+
 def test_double_team_raises_evasion_for_a_later_move(tables, names):
     s = roark_state(tables, names, opp_moves=["Double Team"], opp_faster=True)
     acts = A("Scratch", "Double Team", s, names)

@@ -123,8 +123,13 @@ def used_move(tables: Tables, state: BattleState, side, action) -> jnp.ndarray:
     return called_move(tables, state, selected_move(tables, state, side, action)[0])
 
 
-def effective_speed(tables: Tables, state: BattleState, side) -> jnp.ndarray:
-    """``int32`` speed as ``BattleSystem_CompareBattlerSpeed`` computes it."""
+def effective_speed(tables: Tables, state: BattleState, side, suppressed=None) -> jnp.ndarray:
+    """``int32`` speed as ``BattleSystem_CompareBattlerSpeed`` computes it. ``suppressed``
+    (``bool``, default ``damage.weather_suppressed`` of ``state``) overrides the weather
+    lock (``NO_CLOUD_NINE``), for a lock that can change before the speed is read
+    (``enumerate._end_speeds``)."""
+    if suppressed is None:
+        suppressed = weather_suppressed(tables, state)
     mon = state.active[side]
     ability = state.ability[side, mon]
     stage = state.stages[side, Stat.SPE].astype(_I32)
@@ -134,7 +139,7 @@ def effective_speed(tables: Tables, state: BattleState, side) -> jnp.ndarray:
     swim = (
         (ability == AbilityId.SWIFT_SWIM)
         & (state.weather == Weather.RAIN)
-        & ~weather_suppressed(tables, state)
+        & ~jnp.asarray(suppressed, bool)
     )
     speed = jnp.where(swim, speed * 2, speed)
     speed = jnp.where(state.status[side, mon] == Status.PARALYSIS, speed // 4, speed)

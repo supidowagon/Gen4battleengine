@@ -383,12 +383,14 @@ SETUPS = (
 
 
 # Fang against Fang at a speed tie is over the cap at 95 % accuracy: the Kaizo tables cover
-# it (test_kaizo_fang_tie_equals_bruteforce).
+# it (test_kaizo_fang_tie_equals_bruteforce). So is Fang against Fang on a Static target
+# since the brute force draws end_speed_tie always (K3b2 final review I1):
+# test_kaizo_fang_static_equals_bruteforce.
 FANG_CASES = [
     (setup, opp)
     for setup in SETUPS
     for opp in ("Tackle", FANG, "Zen Headbutt", "Thunder Wave")
-    if not (opp == FANG and setup in ("tie", "steadfast_tie"))
+    if not (opp == FANG and setup in ("tie", "steadfast_tie", "static"))
 ]
 
 
@@ -452,6 +454,22 @@ def test_kaizo_fang_tie_equals_bruteforce(kaizo_tables, kaizo_names, steadfast):
     assert np.asarray(laws.reads.flinch_sure).tolist() == [True, True]
     width, brute = assert_equals_bruteforce(t, s, acts)
     assert width < brute
+
+
+def test_kaizo_fang_static_equals_bruteforce(kaizo_tables, kaizo_names):
+    # Two Thunder Fangs (Kaizo: 100 %, no accuracy roll) on a Static target: the contact
+    # roll joins the fang's paralysis and flinch rolls (the vanilla case is over the cap).
+    t, n = kaizo_tables, kaizo_names
+    s = make_state(t, [_kaizo_spec(n, "Luvdisc", FANG, 16)], [_kaizo_spec(n, "Cranidos", FANG, 14)])
+    s = s._replace(
+        lucky_chant=s.lucky_chant.at[:].set(5),
+        ability=s.ability.at[:, 0].set(AbilityId.STURDY),
+    )
+    s = _ability(s, 1, AbilityId.STATIC)
+    acts = jnp.zeros(2, jnp.int32)
+    assert bool(laws_of(t, s, acts).relevant.contact_proc[1, 0])
+    width, brute = assert_equals_bruteforce(t, s, acts)
+    assert width <= brute
 
 
 def test_guts_target_hit_is_not_compressed_after_a_fang(tables, names):

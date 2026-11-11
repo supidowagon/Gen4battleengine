@@ -25,8 +25,9 @@ of the turn:
 * ``crit[s, i]``, ``roll[s, i]``: a damaging move (status moves and power 0 deal 0,
   damage.py:254), index 0, or for ``MULTI_HIT`` 0-4 (the 2-5 law) or the indices below its
   fixed count (``move_param[m, 0]``, ``effects.hit_count``). ``roll[s, 0]``
-  also when a confusion self-hit is possible (step.py:296). The Pursuit pre-switch hit
-  reads ``[pursuer, 0]`` (step.py:464-474), a move action too.
+  also when a confusion self-hit is possible (``step._use_move``, step.py:503). The Pursuit
+  pre-switch hit reads ``[pursuer, 0]`` (``step._pursuit_hit``, step.py:922-946), a move
+  action too.
 * ``secondary[s, i]``: as ``crit``, for a move with chance != 0 whose effect reads
   ``proc`` (``_PROC_EFFECTS``: the secondary stat effects, AncientPower's, secondary
   status, flinch, Fake Out, Bind, secondary confusion, Thunder Fang's paralysis). Not for a
@@ -50,7 +51,7 @@ of the turn:
 * ``n_hits[s]``: ``MULTI_HIT`` without a fixed count (``move_param[m, 0] == 0``).
 * ``full_para[s]`` / ``thaw[s]``: ``s`` moves and is paralyzed / frozen at the start,
   or the foe moves first with a move that inflicts it and the target can take it
-  (step.py:277-278, :305).
+  (``step._use_move``: thaw step.py:467-468, full paralysis :519).
 * ``infatuation[s]``: ``s`` moves and is in love at the start while the foe does not switch
   (a switch goes first and ``_source_leaves`` clears it), or the foe moves first with Attract
   and could infatuate ``s`` (opposite genders, neither genderless, ``s`` not in love yet;
@@ -58,21 +59,27 @@ of the turn:
   check: read only on a later turn.
 * ``confusion_hit[s]``: ``s`` moves and its confusion counter is >= 2, or the foe moves
   first with a ``CONFUSE_FOE`` or ``SECONDARY_CONFUSE`` move and ``s`` is not confused
-  (counter 2-5; step.py:292-294).
+  (counter 2-5; ``step._use_move``, step.py:496-499).
 * ``duration[s]``: ``s``'s move is Taunt, Bind, ``CONFUSE_FOE``, ``SECONDARY_CONFUSE`` or
   inflicts sleep (effects.py:189, :286, :297, :307).
 * ``speed_tie``: the two orders ``order.action_order`` gives under ``speed_tie`` 0 and 1
   differ (it is read only there: ``player_second``'s ``RandNext() & 1``, battle_lib.c:1445).
 * ``end_speed_tie``: the effective speeds after the actions can be equal
-  (step.py:663-673; a foe's Roar with an eligible bench Pokemon on this side can bring any
-  living party member in, see ``roar_level``):
+  (``step.end_of_turn_order``, step.py:1251-1261; a foe's Roar with an eligible bench
+  Pokemon on this side can bring any living party member in, see ``roar_level``):
   each side's possible end speeds cover every Speed stage when a
   stage change is possible this turn (a Speed stat effect, AncientPower, Curse, a
   flinched Steadfast), paralysis when it can be inflicted, and the
   neutral speed of a fainted battler (``_faint_check`` resets stages and status). A
   White Herb holder may lose a lowered stage and a Lum Berry holder or a Pluck / Bug Bite
-  user its paralysis (over-approximate). Lagging Tail only changes which of
-  ``speed_tie`` / ``end_speed_tie`` is read when speeds are equal, never more.
+  user its paralysis (over-approximate). The weather lock: Swift Swim doubles in rain only
+  ``if (NO_CLOUD_NINE)`` (battle_lib.c:1228-1237), which counts the battlers on the field
+  at the turn's end with Cloud Nine / Air Lock and HP left (include/battle/common.h:63-64,
+  ``COUNT_ALIVE_BATTLERS``, battle_lib.c:2951-2957); a holder can switch in or out, be
+  dragged in or out, or faint during the turn, so while a living holder is in either
+  party every end speed is taken with the lock on and off (``_end_speeds``). Lagging Tail
+  only changes which of ``speed_tie`` / ``end_speed_tie`` is read when speeds are equal,
+  never more.
 * ``magnitude[s]``: ``s`` uses a ``MAGNITUDE`` move (``BtlCmd_CalcMagnitudePower``).
   ``crit``/``roll`` are not relevant for ``LEVEL_DAMAGE`` (Night Shade deals its user's
   level with no crit or roll, ``damage.fixed_damage``) nor for ``BIDE`` (the unleash is
@@ -115,7 +122,8 @@ of the turn:
   judged here). The turn's own order reads ``BattleState.qc_roll`` (``action_order``), so
   every order-conditioned read above already sees Quick Claw through ``Reads.first``.
 * ``flinch_item``: never read.
-* Nothing is relevant once the battle is over (``step`` returns the state, step.py:700).
+* Nothing is relevant once the battle is over (``step`` returns the state,
+  ``step.step_events``, step.py:1439).
 
 **Order branches and conditional reads** (rules §10.3 items 1-4). ``speed_tie`` is
 enumerated first: each value is a branch (``Branch``) whose order is
@@ -130,7 +138,10 @@ second mover's move. Later mechanics add their own with ``register_reads``
 (``_present_reads``, ``_protect_reads``). The
 brute-force reference is ``outcome_laws(..., loose=True)``: no order or eligibility
 gate and no conditional read, so its enumeration is the independent product of
-every element any order can read (tests/engine/test_enumerate.py compares the two).
+every element any order can read (tests/engine/test_enumerate.py compares the two). It
+reuses no gate of the exact laws: ``end_speed_tie`` is drawn whenever the battle goes on,
+and the hit law is cut at every threshold variant of ``outcome.hit_thresholds``, possible
+or not.
 
 **Damage classes** (rules §10.3 item 5). A hit's ``(crit, roll)`` reaches ``step`` only
 through the hit's damage (``damage_for_roll`` in ``effects.play_hit``: HP, Focus Sash,
@@ -158,11 +169,21 @@ import jax.numpy as jnp
 import numpy as np
 
 from nuzline.data.tables import Tables
-from nuzline.engine.damage import PHYSICAL, ROLLS, SPECIAL, STATUS, hit_damage_table, move_type_of
+from nuzline.engine.damage import (
+    PHYSICAL,
+    ROLLS,
+    SPECIAL,
+    STATUS,
+    decomp_abilities,
+    hit_damage_table,
+    move_type_of,
+    weather_suppressed,
+)
 from nuzline.engine.effects import can_have_status, protect_blocks
 from nuzline.engine.ids import (
     QUICK_CLAW_MODULUS,
     TRI_ATTACK_STATUSES,
+    WEATHER_ABILITY_IDS,
     AbilityId,
     EffectId,
     ItemId,
@@ -313,15 +334,24 @@ def _holds_item(tables: Tables, state: BattleState, actions, items) -> jnp.ndarr
     return now | later
 
 
-def _end_speeds(tables: Tables, state: BattleState, actions, side, stage_free, para_free, dragged):
-    """``(int32[39], bool[39])``: the effective speeds ``side`` can have after the
-    actions (``end_of_turn_order`` on the post-action state, step.py:663-673) and which
-    of them are possible. Grid: Speed stage -6..6 x paralyzed or not of the Pokemon
-    active after the actions, plus its neutral speed (a faint resets stages and
-    status, step.py:477-510). A stage other than the start one needs ``stage_free``,
-    a paralysis state other than the start one ``para_free``. Where ``dragged`` (the foe
+def _end_speeds(
+    tables: Tables, state: BattleState, actions, side, stage_free, para_free, dragged, lock_free
+):
+    """``(int32[3 * (39 + 2 * SLOTS)], bool[...])``: the effective speeds ``side`` can have
+    after the actions (``step.end_of_turn_order`` on the post-action state, step.py:1251-1261)
+    and which of them are possible. Grid: Speed stage -6..6 x paralyzed or not of the
+    Pokemon active after the actions, plus its neutral speed (a faint resets stages and
+    status, ``step._faint_check``, step.py:948-992). A stage other than the start one needs ``stage_free``, a
+    paralysis state other than the start one ``para_free``. Where ``dragged`` (the foe
     can Roar this side), every living party member at stage 0, paralyzed or not: the
-    Pokemon the drag brings in (``InitBattleMon`` resets its stages)."""
+    Pokemon the drag brings in (``InitBattleMon`` resets its stages).
+
+    The weather lock: every grid point is also evaluated with the lock on and with it off
+    where ``lock_free`` (a Cloud Nine / Air Lock holder can enter, leave or faint this
+    turn, so the lock of the turn's end can differ from the one of the turn start, which
+    the plain grid point reads from the other side's turn-start battler).
+    ``BattleSystem_CompareBattlerSpeed`` doubles Swift Swim in rain only
+    ``if (NO_CLOUD_NINE)`` (battle_lib.c:1228-1237; include/battle/common.h:63-64)."""
     switching = is_switch(actions[side])
     mon = jnp.where(switching, actions[side] - MOVE_ACTIONS, state.active[side]).astype(
         state.active.dtype
@@ -342,8 +372,14 @@ def _end_speeds(tables: Tables, state: BattleState, actions, side, stage_free, p
     stages = jnp.concatenate([stages, jnp.zeros((2 * slots.shape[0],), _I32)])
     paras = jnp.concatenate([paras, jnp.tile(jnp.array([False, True]), slots.shape[0])])
     possible = jnp.concatenate([possible, jnp.asarray(dragged) & jnp.repeat(living, 2)])
+    # The weather lock: 0 = as on the field of the grid point, 1 = on, 2 = off.
+    n = stages.shape[0]
+    locks = jnp.repeat(jnp.arange(3), n)
+    mons, stages, paras = jnp.tile(mons, 3), jnp.tile(stages, 3), jnp.tile(paras, 3)
+    lock_free = jnp.asarray(lock_free, bool)
+    possible = jnp.concatenate([possible, possible & lock_free, possible & lock_free])
 
-    def speed(mon, stage, para):
+    def speed(mon, stage, para, lock):
         s = state._replace(
             active=state.active.at[side].set(mon),
             stages=state.stages.at[side, Stat.SPE].set(stage.astype(state.stages.dtype)),
@@ -351,9 +387,10 @@ def _end_speeds(tables: Tables, state: BattleState, actions, side, stage_free, p
                 jnp.where(para, Status.PARALYSIS, Status.NONE).astype(state.status.dtype)
             ),
         )
-        return effective_speed(tables, s, side)
+        suppressed = jnp.where(lock == 0, weather_suppressed(tables, s), lock == 1)
+        return effective_speed(tables, s, side, suppressed)
 
-    return jax.vmap(speed)(mons, stages, paras), possible
+    return jax.vmap(speed)(mons, stages, paras, locks), possible
 
 
 def _branch_masks(foe_first, first_self, base: dict) -> dict:
@@ -956,14 +993,38 @@ def outcome_laws(
         # member's speed on both sides whenever anyone uses it.
         roar_level = roar_target = roar
         dragged = jnp.broadcast_to(jnp.any(roar), (2,))
+    # The weather lock of the turn's end (NO_CLOUD_NINE, include/battle/common.h:63-64)
+    # counts the battlers on the field with Cloud Nine / Air Lock and HP left
+    # (COUNT_ALIVE_BATTLERS, battle_lib.c:2951-2957). A living holder anywhere in either
+    # party can change it this turn: by a switch in or out, a Roar's drag in or out, or a
+    # faint (over-approximate; nothing in the engine revives, so a fainted holder never
+    # counts again).
+    abilities = decomp_abilities(tables, state)
+    lock_holder = (abilities == WEATHER_ABILITY_IDS["Cloud Nine"]) | (
+        abilities == WEATHER_ABILITY_IDS["Air Lock"]
+    )
+    lock_free = jnp.any(lock_holder & (state.species != 0) & (state.hp > 0))
     speeds = [
-        _end_speeds(tables, state, actions, side, stage_free[side], para_free[side], dragged[side])
+        _end_speeds(
+            tables,
+            state,
+            actions,
+            side,
+            stage_free[side],
+            para_free[side],
+            dragged[side],
+            lock_free,
+        )
         for side in (0, 1)
     ]
     (speed0, ok0), (speed1, ok1) = speeds
     end_speed_tie = live & jnp.any(
         ok0[:, None] & ok1[None, :] & (speed0[:, None] == speed1[None, :])
     )
+    if loose:
+        # The brute force: the end-of-turn tie roll whenever the battle goes on, with no
+        # speed gate (one binary element: at most x2).
+        end_speed_tie = live
     # Shed Skin of the Pokemon on the field at the turn's end: the active or incoming one, or
     # any living one a foe's Roar can drag in.
     living = (state.species != 0) & (state.hp > 0)
@@ -1102,6 +1163,10 @@ def outcome_laws(
     if loose:
         compress = jnp.zeros_like(compress)
     thresholds, possible = hit_thresholds(tables, state, actions)
+    if loose:
+        # The brute force: the hit law cut at every threshold variant, possible or not
+        # (an extra cut only splits a class).
+        possible = jnp.ones_like(possible)
     return OutcomeLaws(
         hit_thresholds=thresholds,
         hit_possible=possible,

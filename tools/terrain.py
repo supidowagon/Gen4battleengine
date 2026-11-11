@@ -115,7 +115,6 @@ MATRIX_C = Path("src") / "map_matrix.c"
 OBJECT_MOVE_C = Path("src") / "map_object_move.c"
 BEHAVIOURS_H = Path("include") / "constants" / "field" / "map_tile_behaviors.h"
 MAP_H = Path("include") / "constants" / "field" / "map.h"
-MATRIX_H = Path("include") / "constants" / "field" / "map_matrix.h"
 
 
 class TerrainError(ExtractError):
