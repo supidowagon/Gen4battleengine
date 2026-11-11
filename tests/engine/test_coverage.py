@@ -23,6 +23,7 @@ from nuzline.engine.coverage import (
     IMPLEMENTED_ITEMS,
     IMPLEMENTED_TRAINER_ITEMS,
     IMPLEMENTED_WEATHER,
+    POLICY_AI_FLAGS,
     Support,
     UnsupportedMechanics,
     check_coverage,
@@ -150,9 +151,11 @@ def test_unsupported_trainer_item_and_mixed_bag(tables, names):
 
 
 def test_ai_flags_outside_the_policy_are_refused(tables, names):
+    # Vanilla's policy runs BASIC, EVAL_ATTACK and EXPERT only: a vanilla 0b10111 trainer is
+    # still refused by its RISKY flag (K3c Task 6 registers RISKY for Kaizo only).
     risky = replace(roark_trainer(), ai_flags=0b10111)  # + AI_FLAG_RISKY
     r = check_coverage(tables, names, sample_party(names), risky, roark_party(names), 0)
-    assert any("AI_FLAG_RISKY" in m for m in r.missing)
+    assert "Roark: AI_FLAG_RISKY (AI flag UNSUPPORTED)" in r.missing
     basic_only = replace(roark_trainer(), ai_flags=0b1)
     r = check_coverage(tables, names, sample_party(names), basic_only, roark_party(names), 0)
     assert any("AI flag set" in m for m in r.missing)
@@ -175,7 +178,7 @@ def test_sampling_only_is_unimplemented():
         IMPLEMENTED_ABILITIES,
         IMPLEMENTED_ITEMS,
         IMPLEMENTED_TRAINER_ITEMS,
-        IMPLEMENTED_AI_FLAGS,
+        *IMPLEMENTED_AI_FLAGS.values(),
         IMPLEMENTED_WEATHER,
     )
     assert {support for r in registries for support in r.values()} <= {Support.EXACT, Support.NONE}
@@ -313,13 +316,39 @@ def test_trainer_of_a_game_without_ai_policy_refused(tables, names, vanilla_mani
     assert vanilla.missing == []
 
 
-def test_kaizo_trainer_ai_refused(kaizo_tables, kaizo_names, kaizo_roark, kaizo_roark_party):
+def test_kaizo_roark_ai_flags_exact(kaizo_tables, kaizo_names, kaizo_roark, kaizo_roark_party):
+    # Kaizo has an AI policy since K3c Task 2, and its RISKY flag since Task 6: Kaizo Roark's
+    # flags 23 (0b10111) are exactly the Kaizo policy's, so no flag line is refused, and none
+    # of his AI is (every Expert label of his moves is transcribed). Reports name a labelled
+    # trainer by its label (Task 18 fix round 1).
     report = check_opponent(kaizo_tables, kaizo_names, kaizo_roark, kaizo_roark_party, Weather.NONE)
-    # Kaizo has an AI policy since K3c Task 2; Roark's RISKY flag is refused until Task 6.
-    # Reports name a labelled trainer by its label (Task 18 fix round 1).
     assert kaizo_roark.label == "Leader Roark" and f"Leader {NO_POLICY}" not in report.missing
-    assert "Leader Roark: AI_FLAG_RISKY (AI flag UNSUPPORTED)" in report.missing
-    assert report.level == Support.NONE
+    assert kaizo_roark.ai_flags == 0b10111 == POLICY_AI_FLAGS["kaizo"]
+    assert set(IMPLEMENTED_AI_FLAGS["kaizo"]) == {0, 1, 2, 4}
+    assert not any("AI flag" in m for m in report.missing), report.missing
+    player = [kaizo_roark_party[2]]  # Roark's Gible
+    full = check_coverage(kaizo_tables, kaizo_names, player, kaizo_roark, kaizo_roark_party, 0)
+    assert not any("trainer AI" in m or "AI flag" in m for m in full.missing), full.missing
+
+
+@pytest.mark.parametrize("flags", [0b111, 0b11111, 0b110111])
+def test_kaizo_flag_set_must_be_exact(
+    kaizo_tables, kaizo_names, kaizo_roark, kaizo_roark_party, flags
+):
+    # Plan K3c Ruling 10: the Kaizo policy always runs BASIC, EVAL_ATTACK, EXPERT and RISKY,
+    # so a Kaizo trainer with any other flag set is refused by name of the rule; 0b111 (no
+    # RISKY) has no unsupported flag of its own.
+    trainer = replace(kaizo_roark, ai_flags=flags)
+    report = check_opponent(kaizo_tables, kaizo_names, trainer, kaizo_roark_party, Weather.NONE)
+    line = (
+        f"Leader Roark: AI flags {flags:#x} are not exactly BASIC, EVAL_ATTACK, EXPERT and "
+        "RISKY, which the Kaizo AI policy always runs together (plan K3c Ruling 10) "
+        "(AI flag set UNSUPPORTED)"
+    )
+    assert line in report.missing
+    flag_lines = [m for m in report.missing if "(AI flag UNSUPPORTED)" in m]
+    extra = {0b111: [], 0b11111: ["SETUP_FIRST_TURN"], 0b110111: ["PRIORITIZE_EXTREMES"]}
+    assert flag_lines == [f"Leader Roark: AI_FLAG_{x} (AI flag UNSUPPORTED)" for x in extra[flags]]
 
 
 # --- Kaizo trainer fields (K2b Task 14) ----------------------------------------------

@@ -30,6 +30,7 @@ from nuzline.prep.variants import (
     member_cost,
     member_spec,
     move_changes,
+    percent_cut,
     prestatus_options,
     prune,
     single_changes,
@@ -51,9 +52,13 @@ def _furret(names, moves=("Scratch", "Foresight", "Defense Curl", "Quick Attack"
 
 
 def test_hp_regions(tables, names):
+    # The AI's percent checks (AI_DEFENDER_HP_CHECKS): HP% = hp * 100 // max_hp (trainer_ai.c
+    # :626) above 70 (script.s:2332) is off up to (71 * max_hp - 1) // 100, above 50
+    # (script.s:2694, K3c Task 6) up to (51 * max_hp - 1) // 100. Monferno 48: 34 and 24, and
+    # Blaze's 48 // 3 = 16; Furret 57: 40 and 29; Monferno 3: 2, and 1 twice.
     monferno = sample_party(names)[0]
-    assert hp_regions(tables, monferno, 48) == (48, 34, 16)
-    assert hp_regions(tables, _furret(names), 57) == (57, 40)
+    assert hp_regions(tables, monferno, 48) == (48, 34, 24, 16)
+    assert hp_regions(tables, _furret(names), 57) == (57, 40, 29)
     assert hp_regions(tables, monferno, 3) == (3, 2, 1)
     shedinja = _spec(names, "Shedinja", ("Tackle",))
     assert hp_regions(tables, shedinja, 1) == (1,)
@@ -81,6 +86,15 @@ def test_hp_regions_include_ai_kill_checks(tables, names):
 
     assert jumps(d)
     assert not jumps(d + 1)
+
+
+@pytest.mark.parametrize(("percent", "max_hp"), [(70, 57), (50, 57), (50, 48), (50, 3), (70, 1)])
+def test_percent_cut_is_the_last_hp_off(percent, max_hp):
+    """``percent_cut("greater", p, max_hp)`` is the highest HP whose HP% (``hp * 100 //
+    max_hp``, trainer_ai.c:626) is not above p: the check is off there and on one HP up."""
+    cut = percent_cut("greater", percent, max_hp)
+    assert cut * 100 // max_hp <= percent
+    assert cut + 1 > max_hp or (cut + 1) * 100 // max_hp > percent
 
 
 def test_ai_hp_checks_pinned():

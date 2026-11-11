@@ -148,7 +148,9 @@ class BattleEffect(IntEnum):
     the transcribed scripts compare (``IfCurrentMoveEffectEqualTo``, trainer_ai.c:1441)."""
 
     HIT = 0
+    RECOVER_HALF_DAMAGE_DEALT = 3  # Giga Drain
     HALVE_DEFENSE = 7  # Selfdestruct, Explosion
+    SP_DEF_UP = 14  # Expert_ToxicLeechSeed's IfMoveEffectKnown (script.s:2699)
     DEF_DOWN = 19
     FLINCH_HIT = 31
     RESTORE_HALF_HP = 32  # Recover
@@ -158,8 +160,13 @@ class BattleEffect(IntEnum):
     DEF_DOWN_2 = 59
     PRIORITY_1 = 103  # EvalAttack_ApplyKillBonuses' +2 (script.s:6400); no Roark move has it
     CURSE = 109
+    PROTECT = 111  # Expert_ToxicLeechSeed's IfMoveEffectKnown (script.s:2700)
     HIT_BEFORE_SWITCH = 128
+    RAISE_ALL_STATS_HIT = 140  # AncientPower (Risky_RiskyEffects, script.s:6550)
+    REMOVE_SCREENS = 186  # Brick Break
+    STEAL_STATUS_MOVE = 195  # Snatch (Expert_Recovery_CheckForSnatch, script.s:2670)
     STEALTH_ROCK = 266
+    RECOIL_HALF = 269  # Head Smash
 
 
 # Decomp move id -> battle effect for every move whose script paths are transcribed
@@ -213,6 +220,39 @@ ALT_POWER_EFFECTS = (
     196,  # INCREASE_POWER_WITH_WEIGHT
 )
 _NO_DAMAGE_CALC = jnp.array(NO_DAMAGE_CALC_EFFECTS, _I32)
+# Risky_RiskyEffects (script.s:6536-6562): the effects Risky_Main scores (IfLoadedNotInTable,
+# :6527; trainer_ai.c:876-891). BATTLE_EFFECT_* ids, line - 1 of
+# generated/move_battle_effects.txt, in the table's order.
+RISKY_EFFECTS = (
+    1,  # STATUS_SLEEP
+    7,  # HALVE_DEFENSE (Selfdestruct, Explosion)
+    9,  # COPY_MOVE
+    38,  # ONE_HIT_KO
+    43,  # HIGH_CRITICAL
+    49,  # STATUS_CONFUSE
+    83,  # CALL_RANDOM_MOVE
+    88,  # RANDOM_DAMAGE_1_TO_150_LEVEL
+    89,  # COUNTER
+    98,  # KO_MON_THAT_DEFEATED_USER
+    118,  # ATK_UP_2_STATUS_CONFUSION
+    120,  # INFATUATE
+    122,  # RANDOM_POWER_MAYBE_HEAL
+    140,  # RAISE_ALL_STATS_HIT (AncientPower)
+    142,  # MAX_ATK_LOSE_HALF_MAX_HP
+    144,  # MIRROR_COAT
+    170,  # HIT_LAST_WHIFF_IF_HIT
+    185,  # DOUBLE_POWER_IF_HIT
+    199,  # CONFUSE_ALL
+    219,  # POWER_BASED_ON_LOW_SPEED
+    226,  # RANDOM_STAT_UP_2
+    227,  # METAL_BURST
+    230,  # DOUBLE_POWER_IF_MOVING_SECOND
+    241,  # USE_MOVE_FIRST
+    248,  # HIT_FIRST_IF_TARGET_ATTACKING
+)
+# A move's class (MoveTable.class, generated/move_classes.txt: line n + 1 is id n), as
+# LoadDefenderLastUsedMoveClass loads it (Expert_LightScreen, script.s:2723).
+CLASS_SPECIAL = 1
 # TrainerAI_CalcDamage's move-id cases (trainer_ai.c:2885-3056): power, type or damage of
 # these moves come from the case, not the move table, whatever the move's effect (Kaizo's
 # Return and Frustration have effect 0 and still take theirs, :3018-3026). Decomp move ids.
@@ -251,6 +291,8 @@ ABILITY_IDS = {
     "Poison Heal": 90,
     "Leaf Guard": 102,
     "Hydration": 93,
+    # Expert_RecoilMove (script.s:6297-6298; Magic Guard above).
+    "Rock Head": 69,
 }
 MOVE_IDS = {
     "Fissure": 90,
@@ -312,7 +354,9 @@ class ReadKind(IntEnum):
     SPEED_TIE = 3  # IfSpeedCompareEqualTo's tie, RandNext() & 1: P(1) = 1/2
 
 
-LOOSE_READS = 32  # LooseDraws columns: at least the reads one slot's scripts make
+# LooseDraws columns: at least the reads one slot's scripts make. Every read counts, on the
+# slot's path or not (the scripts are straight-line): 35 after K3c Task 6.
+LOOSE_READS = 48
 
 
 class LooseDraws(NamedTuple):

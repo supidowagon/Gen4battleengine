@@ -41,7 +41,7 @@ def test_layout_values():
     assert (VANILLA.water2_ability, KAIZO.water2_ability) == (26, 87)
     assert VANILLA.transcribed == frozenset(commands.MOVE_EFFECTS)
     # Kaizo transcribes the vanilla-transcribed moves' effects and, from K3c Task 5, those of
-    # Kaizo Roark's moves (tests/ai/test_kaizo_policy.py test_roark_effects_are_transcribed).
+    # Kaizo Roark's moves (tests/ai/test_kaizo_policy.py test_roark_moves_and_effects).
     assert frozenset(int(e) for e in commands.MOVE_EFFECTS.values()) < KAIZO.transcribed
     assert not VANILLA.risky and KAIZO.risky  # Kaizo Roark's ai_flags 23 (Ruling 10)
 

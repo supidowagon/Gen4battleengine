@@ -96,6 +96,7 @@ LISTED = [
     "nuzline.ai.commands.BattleEffect",
     "nuzline.ai.commands.NO_DAMAGE_CALC_EFFECTS",
     "nuzline.ai.commands.ALT_POWER_EFFECTS",
+    "nuzline.ai.commands.RISKY_EFFECTS",
     "nuzline.ai.outcome.EFFECT_SITE_LINES",
     "nuzline.ai.outcome.KAIZO_EXPERT_LABELS",
     "nuzline.ai.commands.ReadKind",

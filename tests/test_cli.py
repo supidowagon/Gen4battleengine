@@ -986,21 +986,23 @@ def test_kaizo_roark_refused(tmp_path, capsys, kaizo_tables, kaizo_names):  # ex
     assert main(["coverage", "--game", "kaizo", "--party", party, "--trainer", "roark"]) == 2
     out = capsys.readouterr().out
     # K3b1: sandstorm is modelled, so Roark's battle-start Sandstorm is no longer refused.
-    # K3c Task 2: Kaizo has an AI policy and its one AI script change is modelled; the
-    # RISKY flag and the untranscribed moves still refuse the fight.
+    # K3c Task 2: Kaizo has an AI policy and its one AI script change is modelled. K3c Task 6
+    # registers the RISKY flag for the Kaizo policy. Only the player's side (the sample
+    # party's Leaf Guard and Wild Charge) still refuses the fight.
     assert "Sandstorm" not in out
     assert "no transcribed AI policy" not in out and "code changes unclassified" not in out
-    assert "Leader Roark: AI_FLAG_RISKY (AI flag UNSUPPORTED)" in out
+    assert "AI_FLAG" not in out and "AI flag set" not in out
+    assert "Player Grotle (slot 2): Leaf Guard (ability UNSUPPORTED)" in out
     # K3b2 Task 4: Gible's Thunder Fang (effect 275) is modelled now.
     assert "Thunder Fang (move effect UNSUPPORTED)" not in out
     # Final review I3: Kaizo Roark's move 205 is Accelerock; Rollout is no Kaizo move. K3c
     # Task 3 keys the Kaizo AI's script paths by battle effect, so Accelerock (HIT) is
     # transcribed now. K3c Task 5 transcribes the effects of all of Kaizo Roark's moves, so no
-    # "script paths" line is left; the RISKY flag above still refuses the fight. The callers' names are
-    # pinned by tests/ai/test_policy.py test_refusals_name_moves_and_items_in_the_callers_game.
+    # "script paths" line is left, and K3c Task 6 their Expert labels, so no "Expert_" line
+    # is either. The callers' names are pinned by tests/ai/test_policy.py
+    # test_refusals_name_moves_and_items_in_the_callers_game.
     assert "are not transcribed" not in out
-    # Until K3c Task 6 the moves whose Expert labels are missing are refused by name.
-    assert "Selfdestruct goes to Expert_Explosion (Expert_Main, script.s:1630)" in out
+    assert "Expert_" not in out and "ai scoring" not in out
     assert "Rollout" not in out
 
 

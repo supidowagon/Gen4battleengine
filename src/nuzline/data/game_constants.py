@@ -214,6 +214,7 @@ CONSTANTS: tuple[Constant, ...] = (
             "Poison Heal": 90,
             "Leaf Guard": 102,
             "Hydration": 93,
+            "Rock Head": 69,
         },
     ),
     *_table(
@@ -432,6 +433,12 @@ EXEMPT: dict[str, str] = {
         "decomp battle effect ids of trainer_ai.c's sNoDamageCalcMoveEffects (:31-46), compared "
         "with MoveTable.effect by the AI's C code, which Kaizo did not change "
         "(docs/ai/kaizo_roark.md 2); each game's moves carry their own effect"
+    ),
+    "nuzline.ai.commands.RISKY_EFFECTS": (
+        "decomp battle effect ids of script.s's Risky_RiskyEffects (:6536-6562), compared with "
+        "MoveTable.effect (IfLoadedNotInTable, trainer_ai.c:876-891) by a script Kaizo did not "
+        "change apart from one word (docs/ai/kaizo_roark.md 2); each game's moves carry their "
+        "own effect"
     ),
     "nuzline.ai.commands.ALT_POWER_EFFECTS": (
         "decomp battle effect ids of trainer_ai.c's sAltPowerMoveEffects (:48-61), compared "

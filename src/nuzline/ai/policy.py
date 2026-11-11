@@ -4,7 +4,8 @@
 (roark.md 2): ``TrainerAI_ShouldSwitch`` (``maybe_switch``), then
 ``TrainerAI_ShouldUseItem`` (``maybe_use_item``), then ``TrainerAI_Main``: base scores,
 the BASIC, EVAL_ATTACK and EXPERT flag scripts over move slots 0-3 (``ai_scores``), and
-the highest score with ties broken by ``AiOutcome.tiebreak``. Every random draw is a
+the highest score with ties broken by ``AiOutcome.tiebreak``. The Kaizo policy also runs
+RISKY after EXPERT (``layout.risky``; docs/ai/kaizo_roark.md 1). Every random draw is a
 field of the ``AiOutcome`` input; nothing here draws randomness.
 
 The scripts are transcribed label by label from ``src/battle/trainer_ai/script.s``
@@ -25,9 +26,10 @@ distribution is factored per slot (``_slot_move_distribution``; docs/ai/kaizo_ro
 ``ai_action_distribution_loose`` is its test oracle, with every decomp draw its own.
 
 Refusals (``ai_refusals``): an opponent move whose script paths are not transcribed
-(``layout.transcribed``) or, in a per-slot layout, whose effect's Expert_Main label is
-not transcribed yet (``outcome.KAIZO_EXPERT_LABELS`` less ``layout.expert_transcribed``),
-an opponent move the AI's damage estimate or move type takes
+(``layout.transcribed``), Curse by a Ghost type (its Ghost labels are not transcribed),
+or, in a per-slot layout, a move whose effect's Expert_Main label is not transcribed
+(``outcome.KAIZO_EXPERT_LABELS`` less ``layout.expert_transcribed``; none for Kaizo
+Roark since K3c Task 6), an opponent move the AI's damage estimate or move type takes
 by an alternative power or a move-id case, a moveset with more script-roll sites than
 ``AiOutcome`` encodes, the abilities, items and moves that change
 ``effectiveness_class``, a bag item other than a Potion, and every refusal of the
@@ -88,6 +90,7 @@ from nuzline.data.tables import Tables
 from nuzline.engine.actions import FIRST_ITEM_ACTION, NUM_OPP_ACTIONS, locked_slot, usable_moves
 from nuzline.engine.enumerate import WIDTH_CAP
 from nuzline.engine.ids import POTION_HP_RESTORED, Stat, TrainerItemId
+from nuzline.engine.order import COMPARE_SPEED_SLOWER
 from nuzline.engine.state import BAG_SLOTS, MOVES, BattleState
 
 __all__ = [
@@ -398,15 +401,207 @@ def _eval_attack(ctx: AiContext) -> AiContext:
     return ctx
 
 
+def _not_resisted(ctx: AiContext) -> tuple[AiContext, jnp.ndarray]:
+    """``IfMoveEffectivenessEquals`` IMMUNE, HALF_DAMAGE, QUARTER_DAMAGE in a row, each to
+    the same label: the fall-through context and the mask of the paths that jump."""
+    ctx, taken = _split(c.if_move_effectiveness_equals(ctx, TypeMulti.IMMUNE))
+    for cls in (TypeMulti.HALF, TypeMulti.QUARTER):
+        ctx, t = _split(c.if_move_effectiveness_equals(ctx, cls))
+        taken = taken | t
+    return ctx, taken
+
+
 def _expert(ctx: AiContext) -> AiContext:
-    """``Expert_Main`` (script.s:1623; roark.md 5.3)."""
+    """``Expert_Main`` (script.s:1623; roark.md 5.3, docs/ai/kaizo_roark.md 5.3). The
+    dispatch entries of the transcribed effects, in line order; the labels after it."""
     ctx = _terminate(ctx)
+    drain_effect = BattleEffect.RECOVER_HALF_DAMAGE_DEALT
+    ctx, drain = _split(c.if_current_move_effect_equal_to(ctx, drain_effect))
+    ctx, explosion = _split(c.if_current_move_effect_equal_to(ctx, BattleEffect.HALVE_DEFENSE))
     ctx, defense = _split(c.if_current_move_effect_equal_to(ctx, BattleEffect.DEF_DOWN))
+    ctx, recovery = _split(c.if_current_move_effect_equal_to(ctx, BattleEffect.RESTORE_HALF_HP))
+    ctx, toxic = _split(c.if_current_move_effect_equal_to(ctx, BattleEffect.STATUS_BADLY_POISON))
+    ctx, screen = _split(c.if_current_move_effect_equal_to(ctx, BattleEffect.SET_LIGHT_SCREEN))
+    ctx, speed = _split(c.if_current_move_effect_equal_to(ctx, BattleEffect.SPEED_UP_2))
     ctx, t = _split(c.if_current_move_effect_equal_to(ctx, BattleEffect.DEF_DOWN_2))
     defense = defense | t
+    ctx, curse = _split(c.if_current_move_effect_equal_to(ctx, BattleEffect.CURSE))
     ctx, pursuit = _split(c.if_current_move_effect_equal_to(ctx, BattleEffect.HIT_BEFORE_SWITCH))
+    ctx, brick = _split(c.if_current_move_effect_equal_to(ctx, BattleEffect.REMOVE_SCREENS))
     ctx, stealth_rock = _split(c.if_current_move_effect_equal_to(ctx, BattleEffect.STEALTH_ROCK))
+    ctx, recoil = _split(c.if_current_move_effect_equal_to(ctx, BattleEffect.RECOIL_HALF))
     ctx = c.pop_or_end(ctx)  # :1811
+
+    # Expert_DrainMove (:1827): immune or resisted, -3 unless the 50 roll jumps.
+    ctx, minus3 = _not_resisted(_at(ctx, drain))
+    ctx, _ = _split(c.go_to(ctx))  # :1832
+    ctx, _ = _split(c.if_random_less_than(_at(ctx, minus3), 50, 1835))
+    ctx = c.pop_or_end(c.add_to_move_score(ctx, -3))
+
+    # Expert_Explosion (:1841). The player's evasion at decomp 7 or more is -1 (:1856-1857);
+    # at 10 or more, -1 again unless the 128 roll jumps (:1858-1860).
+    ctx = _at(ctx, explosion)
+    ctx, high_hp = _split(c.if_stat_stage_less_than(ctx, _D, Stat.EVA, 7))
+    ctx = c.add_to_move_score(ctx, -1)
+    ctx, t = _split(c.if_stat_stage_less_than(ctx, _D, Stat.EVA, 10))
+    high_hp = high_hp | t
+    ctx, t = _split(c.if_random_less_than(ctx, 128, 1859))
+    ctx = c.add_to_move_score(ctx, -1)
+    high_hp = high_hp | t | ctx.live
+    # Expert_Explosion_CheckUserHighHP (:1862): HP% 80 or more and not slower: ScoreMinus3
+    # unless the 50 roll jumps to the end.
+    ctx = _at(ctx, high_hp)
+    ctx, medium_hp = _split(c.if_hp_percent_less_than(ctx, _A, 80))
+    ctx, t = _split(c.if_speed_compare_equal_to(ctx, COMPARE_SPEED_SLOWER))
+    medium_hp = medium_hp | t
+    ctx, _ = _split(c.if_random_less_than(ctx, 50, 1865))
+    ctx, t = _split(c.go_to(ctx))
+    ctx = _score(ctx, t, -3)
+    # Expert_Explosion_CheckUserMediumHP (:1868): above 50%, Expert_Explosion_TryScoreMinus1;
+    # else +1 unless the 128 roll jumps, then Expert_Explosion_CheckUserLowHP.
+    ctx = _at(ctx, medium_hp)
+    ctx, minus1 = _split(c.if_hp_percent_greater_than(ctx, _A, 50))
+    ctx, low_hp = _split(c.if_random_less_than(ctx, 128, 1870))
+    ctx = c.add_to_move_score(ctx, 1)
+    low_hp = low_hp | ctx.live
+    # Expert_Explosion_CheckUserLowHP (:1873): 30% or less, +1 unless the 50 roll jumps.
+    ctx = _at(ctx, low_hp)
+    ctx, _ = _split(c.if_hp_percent_greater_than(ctx, _A, 30))
+    ctx, _ = _split(c.if_random_less_than(ctx, 50, 1875))
+    ctx = c.add_to_move_score(ctx, 1)
+    ctx, _ = _split(c.go_to(ctx))  # :1877
+    # Expert_Explosion_TryScoreMinus1 (:1879)
+    ctx, _ = _split(c.if_random_less_than(_at(ctx, minus1), 50, 1880))
+    ctx = c.pop_or_end(c.add_to_move_score(ctx, -1))
+
+    # Expert_Recovery (:2640). Expert_Recovery_Unused (:2654-2657) follows the GoTo at :2652
+    # and no jump targets it: not reached.
+    ctx = _at(ctx, recovery)
+    ctx, minus3 = _split(c.if_hp_percent_equal_to(ctx, _A, 100))
+    ctx, check_hp = _split(c.if_speed_compare_equal_to(ctx, COMPARE_SPEED_SLOWER))
+    ctx = c.add_to_move_score(ctx, -8)
+    ctx, _ = _split(c.go_to(ctx))  # :2652
+    # Expert_Recovery_ScoreMinus3AndEnd (:2659)
+    ctx = c.add_to_move_score(_at(ctx, minus3), -3)
+    ctx, _ = _split(c.go_to(ctx))
+    # Expert_Recovery_CheckHP (:2663): below 70%, or the 30 roll jumps: CheckForSnatch.
+    ctx = _at(ctx, check_hp)
+    ctx, snatch = _split(c.if_hp_percent_less_than(ctx, _A, 70))
+    ctx, t = _split(c.if_random_less_than(ctx, 30, 2665))
+    snatch = snatch | t
+    ctx = c.add_to_move_score(ctx, -3)
+    ctx, _ = _split(c.go_to(ctx))
+    # Expert_Recovery_CheckForSnatch (:2669): the player seen with a Snatch effect goes to
+    # the end unless the 100 roll falls through.
+    ctx = _at(ctx, snatch)
+    snatch_effect = BattleEffect.STEAL_STATUS_MOVE
+    ctx, plus2 = _split(c.if_move_effect_not_known(ctx, _D, snatch_effect))
+    ctx, _ = _split(c.if_random_less_than(ctx, 100, 2671))
+    plus2 = plus2 | ctx.live
+    # Expert_Recovery_TryScorePlus2 (:2673)
+    ctx, _ = _split(c.if_random_less_than(_at(ctx, plus2), 20, 2674))
+    ctx = c.pop_or_end(c.add_to_move_score(ctx, 2))
+
+    # Expert_ToxicLeechSeed (:2680). Its IfMoveEffectKnown reads are the attacker's own moves
+    # (plan K3c Ruling 9).
+    ctx = _at(ctx, toxic)
+    ctx, effects = _split(c.if_attacker_has_no_damaging_moves(ctx))
+    ctx, target_hp = _split(c.if_hp_percent_greater_than(ctx, _A, 50))
+    ctx, t = _split(c.if_random_less_than(ctx, 50, 2690))
+    ctx = c.add_to_move_score(ctx, -3)
+    target_hp = target_hp | t | ctx.live
+    # Expert_ToxicLeechSeed_CheckTargetHP (:2693)
+    ctx = _at(ctx, target_hp)
+    ctx, t = _split(c.if_hp_percent_greater_than(ctx, _D, 50))
+    effects = effects | t
+    ctx, t = _split(c.if_random_less_than(ctx, 50, 2695))
+    ctx = c.add_to_move_score(ctx, -3)
+    effects = effects | t | ctx.live
+    # Expert_ToxicLeechSeed_CheckMoveEffectsKnown (:2698)
+    ctx = _at(ctx, effects)
+    ctx, plus2 = _split(c.if_move_effect_known(ctx, _A, BattleEffect.SP_DEF_UP))
+    ctx, t = _split(c.if_move_effect_known(ctx, _A, BattleEffect.PROTECT))
+    plus2 = plus2 | t
+    ctx, _ = _split(c.go_to(ctx))
+    # Expert_ToxicLeechSeed_TryScorePlus2 (:2703)
+    ctx, _ = _split(c.if_random_less_than(_at(ctx, plus2), 60, 2704))
+    ctx = c.pop_or_end(c.add_to_move_score(ctx, 2))
+
+    # Expert_LightScreen (:2710)
+    ctx = _at(ctx, screen)
+    ctx, minus2 = _split(c.if_hp_percent_less_than(ctx, _A, 50))
+    ctx, last_move = _split(c.if_hp_percent_less_than(ctx, _A, 90))
+    ctx, t = _split(c.if_random_less_than(ctx, 128, 2718))
+    ctx = c.add_to_move_score(ctx, 1)
+    last_move = last_move | t | ctx.live
+    # Expert_LightScreen_CheckLastUsedMove (:2721)
+    ctx = c.load_defender_last_used_move_class(_at(ctx, last_move))
+    ctx, _ = _split(c.if_loaded_not_equal_to(ctx, c.CLASS_SPECIAL))
+    ctx, _ = _split(c.if_random_less_than(ctx, 64, 2724))
+    ctx = c.add_to_move_score(ctx, 1)
+    ctx, _ = _split(c.go_to(ctx))  # :2726
+    # Expert_LightScreen_ScoreMinus2 (:2728), then Expert_LightScreen_End
+    ctx = c.pop_or_end(c.add_to_move_score(_at(ctx, minus2), -2))
+
+    # Expert_StatusSpeedUp (:2066): not slower, -3; slower, +3 unless the 70 roll jumps.
+    ctx = _at(ctx, speed)
+    ctx, plus3 = _split(c.if_speed_compare_equal_to(ctx, COMPARE_SPEED_SLOWER))
+    ctx = c.add_to_move_score(ctx, -3)
+    ctx, _ = _split(c.go_to(ctx))  # :2072
+    ctx, _ = _split(c.if_random_less_than(_at(ctx, plus3), 70, 2075))
+    ctx = c.pop_or_end(c.add_to_move_score(ctx, 3))
+
+    # Expert_Curse (:3452). A Ghost-type attacker jumps to Expert_Curse_GhostCheckHP
+    # (:3467-3470 -> :3495); _refused refuses Curse on a Ghost type (Basic_CheckCurse
+    # _GhostType, script.s:700, is not transcribed), so those jumps are never taken.
+    ctx = _at(ctx, curse)
+    for target in (LoadType.ATTACKER_TYPE_1, LoadType.ATTACKER_TYPE_2):
+        ctx = c.load_type_from(ctx, target)
+        ctx, _ = _split(c.if_loaded_equal_to(ctx, _TYPE["Ghost"]))
+    ctx, _ = _split(c.if_stat_stage_greater_than(ctx, _A, Stat.DEF, 9))  # -> Expert_Curse_End
+    ctx, high = _split(c.if_move_known(ctx, _A, _MOVE["Gyro Ball"]))
+    ctx, t = _split(c.if_move_known(ctx, _A, _MOVE["Trick Room"]))
+    high = high | t
+    ctx, flip = _split(c.go_to(ctx))  # :3474
+    # Expert_Curse_HighChanceScorePlus1 (:3476): +1 unless the 32 roll jumps past the coin.
+    ctx = _at(ctx, high)
+    ctx, check = _split(c.if_random_less_than(ctx, 32, 3477))
+    ctx = c.add_to_move_score(ctx, 1)
+    flip = flip | ctx.live
+    # Expert_Curse_FlipCoinScorePlus1 (:3480)
+    ctx = _at(ctx, flip)
+    ctx, t = _split(c.if_random_less_than(ctx, 128, 3481))
+    ctx = c.add_to_move_score(ctx, 1)
+    check = check | t | ctx.live
+    # Expert_Curse_CheckDefenseStage (:3484)
+    ctx = _at(ctx, check)
+    ctx, _ = _split(c.if_stat_stage_greater_than(ctx, _A, Stat.DEF, 7))
+    ctx, any_boosts = _split(c.if_random_less_than(ctx, 128, 3486))
+    ctx = c.add_to_move_score(ctx, 1)
+    any_boosts = any_boosts | ctx.live
+    # Expert_Curse_CheckDefenseStageAnyBoosts (:3489)
+    ctx = _at(ctx, any_boosts)
+    ctx, _ = _split(c.if_stat_stage_greater_than(ctx, _A, Stat.DEF, 6))
+    ctx, _ = _split(c.if_random_less_than(ctx, 128, 3491))
+    ctx = c.pop_or_end(c.add_to_move_score(ctx, 1))
+
+    # Expert_BrickBreak (:4559): Reflect or Light Screen on the player's side, +1.
+    ctx = _at(ctx, brick)
+    ctx, plus1 = _split(c.if_side_condition(ctx, _D, c.SideCondition.REFLECT))
+    ctx, t = _split(c.if_side_condition(ctx, _D, c.SideCondition.LIGHT_SCREEN))
+    plus1 = plus1 | t
+    ctx, _ = _split(c.go_to(ctx))
+    ctx = c.pop_or_end(c.add_to_move_score(_at(ctx, plus1), 1))
+
+    # Expert_RecoilMove (:6289): not resisted and the attacker's true ability is Rock Head
+    # or Magic Guard, +1.
+    ctx, _ = _not_resisted(_at(ctx, recoil))
+    ctx = c.load_battler_ability(ctx, _A)
+    ctx, plus1 = _split(c.if_loaded_equal_to(ctx, _ABILITY["Rock Head"]))
+    ctx, t = _split(c.if_loaded_equal_to(ctx, _ABILITY["Magic Guard"]))
+    plus1 = plus1 | t
+    ctx, _ = _split(c.go_to(ctx))
+    ctx = c.pop_or_end(c.add_to_move_score(_at(ctx, plus1), 1))
 
     # Expert_StatusDefenseDown (:2318)
     ctx = _at(ctx, defense)
@@ -459,13 +654,25 @@ def _expert(ctx: AiContext) -> AiContext:
     return ctx
 
 
+def _risky(ctx: AiContext) -> AiContext:
+    """``Risky_Main`` (script.s:6521-6534; docs/ai/kaizo_roark.md 5.4): a move whose effect
+    is in ``Risky_RiskyEffects`` (``commands.RISKY_EFFECTS``, :6536-6562) gets +2 unless the
+    128 roll (:6530) jumps."""
+    ctx = _terminate(ctx)
+    ctx = c.load_current_move_effect(ctx)
+    ctx, _ = _split(c.if_loaded_not_in_table(ctx, c.RISKY_EFFECTS))  # -> Risky_Terminate
+    ctx, _ = _split(c.if_random_less_than(ctx, 128, 6530))
+    return c.pop_or_end(c.add_to_move_score(ctx, 2))
+
+
 def _flags(layout: AiLayout) -> tuple:
     """The flag scripts the policy runs, in bit order (``TrainerAI_MainSingles``,
-    trainer_ai.c:297-310): BASIC, EVAL_ATTACK, EXPERT (Roark's ai_flags = 7, roark.md 1).
-    Kaizo's RISKY (``layout.risky``) is K3c Task 6: of the transcribed effects HALVE_DEFENSE
-    and RAISE_ALL_STATS_HIT are in ``Risky_RiskyEffects`` (script.s:6538, :6550), and until
-    then coverage refuses a RISKY trainer (``engine/coverage.py`` IMPLEMENTED_AI_FLAGS)."""
-    return (partial(_basic, layout=layout), _eval_attack, _expert)
+    trainer_ai.c:297-310; ``FlagTable``, script.s:18-30): BASIC, EVAL_ATTACK, EXPERT
+    (vanilla Roark's ai_flags = 7, roark.md 1), then RISKY when ``layout.risky`` (Kaizo
+    Roark's are 23, docs/ai/kaizo_roark.md 1). The policy always runs exactly these; coverage
+    refuses a trainer with any other flag set (``engine/coverage.py``, plan K3c Ruling 10)."""
+    flags = (partial(_basic, layout=layout), _eval_attack, _expert)
+    return (*flags, _risky) if layout.risky else flags
 
 
 # --- Refusals ----------------------------------------------------------------------
@@ -502,6 +709,7 @@ def player_ability_refusal(ability: int) -> str | None:
 
 class _Refused(NamedTuple):
     move: jnp.ndarray  # bool[SLOTS, MOVES]: opponent move without transcribed script paths
+    ghost_curse: jnp.ndarray  # bool[SLOTS, MOVES]: Curse by a Ghost type (its labels are not)
     expert: jnp.ndarray  # bool[SLOTS, MOVES]: its effect's Expert label is not transcribed
     alt_power: jnp.ndarray  # bool[SLOTS, MOVES]: opponent move with an ALT_POWER_EFFECTS effect
     calc_damage: jnp.ndarray  # bool[SLOTS, MOVES]: a TrainerAI_CalcDamage id case
@@ -525,15 +733,17 @@ def _refused(tables: Tables, state: BattleState, layout: AiLayout = VANILLA) -> 
         transcribed = jnp.isin(moves[1], jnp.array(sorted(layout.transcribed), _I32))
     else:  # by battle effect, whose row of layout.effect_sites holds the move's sites
         transcribed = jnp.isin(effects, jnp.array(sorted(layout.transcribed), _I32))
-    # Curse by a Ghost type takes Basic_CheckCurse_GhostType (script.s:681-684 -> :700),
-    # which is not transcribed (it reads IfVolatileStatus).
-    ghost = jnp.any(state.types[1] == _TYPE["Ghost"], axis=-1)  # [SLOTS]
-    transcribed = transcribed & ~((effects == BattleEffect.CURSE) & ghost[:, None])
     move = present[1][:, None] & ~(transcribed | (moves[1] == 0))
+    # Curse by a Ghost type takes Basic_CheckCurse_GhostType (script.s:681-684 -> :700, which
+    # reads IfVolatileStatus) and Expert_Curse_GhostCheckHP (:3467-3470 -> :3495), which are
+    # not transcribed.
+    ghost = jnp.any(state.types[1] == _TYPE["Ghost"], axis=-1)  # [SLOTS]
+    ghost_curse = present[1][:, None] & (effects == BattleEffect.CURSE) & ghost[:, None]
+    ghost_curse = ghost_curse & ~move & (moves[1] != 0)
     # A transcribed effect whose Expert_Main entry (script.s:1628-1808) goes to a label not
     # transcribed yet (outcome.KAIZO_EXPERT_LABELS, layout.expert_transcribed): refused.
     pending = sorted(set(KAIZO_EXPERT_LABELS) - layout.expert_transcribed)
-    expert = present[1][:, None] & (moves[1] != 0) & ~move
+    expert = present[1][:, None] & (moves[1] != 0) & ~move & ~ghost_curse
     if layout.per_slot_sites and pending:
         expert = expert & jnp.isin(effects, jnp.array(pending, _I32))
     else:
@@ -567,6 +777,7 @@ def _refused(tables: Tables, state: BattleState, layout: AiLayout = VANILLA) -> 
     bag = (bag_items != 0) & (tables.trainer_item_effect[bag_items] != TrainerItemId.POTION)
     scoring = (
         jnp.any(move)
+        | jnp.any(ghost_curse)
         | jnp.any(expert)
         | jnp.any(alt_power)
         | jnp.any(calc_damage)
@@ -579,6 +790,7 @@ def _refused(tables: Tables, state: BattleState, layout: AiLayout = VANILLA) -> 
     )
     return _Refused(
         move,
+        ghost_curse,
         expert,
         alt_power,
         calc_damage,
@@ -628,6 +840,13 @@ def _scoring_refusals(
         out.append(
             f"ai scoring: opponent slot {s}: the script paths of move "
             f"{_move_name(int(moves[1, s, k]), names)} are not transcribed (docs/ai/roark.md 5)"
+        )
+    for s, k in zip(*np.nonzero(np.asarray(r.ghost_curse)), strict=True):
+        out.append(
+            f"ai scoring: opponent slot {s}: move {_move_name(int(moves[1, s, k]), names)} by a "
+            "Ghost type goes to Basic_CheckCurse_GhostType (script.s:700) and "
+            "Expert_Curse_GhostCheckHP (script.s:3495), which are not transcribed "
+            "(docs/ai/kaizo_roark.md 5.1)"
         )
     effects = np.asarray(tables.move_ai_effect)
     for s, k in zip(*np.nonzero(np.asarray(r.expert)), strict=True):
@@ -794,7 +1013,7 @@ _scores_jit = jax.jit(_scores, static_argnames="layout")
 def ai_scores(
     tables: Tables, state: BattleState, ai_outcome: AiOutcome, layout: AiLayout | None = None
 ) -> jnp.ndarray:
-    """``int32[4]``: the opponent's move scores after Roark's three flag scripts, from
+    """``int32[4]``: the opponent's move scores after the policy's flag scripts (``_flags``), from
     base 100 (``TrainerAI_Init``, trainer_ai.c:223; invalid slots 0). Raises
     ``UnsupportedAi`` on a refused concrete state; -1 per slot when traced."""
     layout = _layout(tables, layout)

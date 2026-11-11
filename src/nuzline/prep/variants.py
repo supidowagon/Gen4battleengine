@@ -66,8 +66,11 @@ DEFAULT_WEIGHTS: dict[str, float] = {
 }
 
 # The AI's checks of the player's HP percent, as (kind, percent): ``ai/policy.py`` calls
-# ``if_hp_percent_greater_than(ctx, _D, 70)`` (the defender is the player's active).
-AI_DEFENDER_HP_CHECKS: tuple[tuple[str, int], ...] = (("greater", 70),)
+# ``if_hp_percent_greater_than(ctx, _D, p)`` (the defender is the player's active) for
+# Expert_StatusDefenseDown_CheckTargetHP (script.s:2332, 70) and, since K3c Task 6,
+# Expert_ToxicLeechSeed_CheckTargetHP (script.s:2694, 50). Every check is a cut for every
+# game: a cut no AI path of the fight reads only splits a region in two.
+AI_DEFENDER_HP_CHECKS: tuple[tuple[str, int], ...] = (("greater", 70), ("greater", 50))
 
 # Every function in ``src/nuzline/ai/*.py`` that indexes an ``hp`` array at the Task 4 commit,
 # and how ``hp_cuts`` covers it: ``percent`` by ``AI_DEFENDER_HP_CHECKS``, ``kill`` by the

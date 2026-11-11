@@ -21,9 +21,15 @@ paths: Tasks 5-6; switching: Task 7; the rest: Task 8).
 - `FlagTable` (`script.s:18-22`) maps bit 4 to `Risky_Main` (`script.s:6521`).
 - `TrainerAI_MainSingles` runs the flags in bit order (`trainer_ai.c:297-310`): BASIC,
   EVAL_ATTACK, EXPERT, then RISKY.
-- The Kaizo policy runs exactly these four scripts (plan K3c Ruling 10). Until K3c Task 6
-  registers RISKY, coverage refuses the flag (`engine/coverage.py`
-  `IMPLEMENTED_AI_FLAGS`), so no Kaizo Roark fight is graded yet.
+- The Kaizo policy runs exactly these four scripts (plan K3c Ruling 10; `policy._flags`,
+  `AiLayout.risky`). Gating RISKY per trainer would need a `BattleState` field.
+- Coverage (`engine/coverage.py`) registers the flags per policy since K3c Task 6:
+  `IMPLEMENTED_AI_FLAGS` is `{0, 1, 2}` for vanilla and `{0, 1, 2, 4}` for Kaizo. A vanilla
+  trainer with RISKY stays refused by that flag. A Kaizo trainer whose `ai_flags` is not
+  exactly `0b10111` is refused by the line "AI flags ... are not exactly BASIC,
+  EVAL_ATTACK, EXPERT and RISKY, which the Kaizo AI policy always runs together (plan K3c
+  Ruling 10)" (`POLICY_AI_FLAGS`; `tests/engine/test_coverage.py
+  test_kaizo_flag_set_must_be_exact`). Kaizo Roark's flag lines are all EXACT.
 
 ## 2. Differences from vanilla
 
@@ -67,15 +73,14 @@ type and battle effect, read through the same code.
 - That set started as the effects of the vanilla-transcribed moves: HIT (0), DEF_DOWN
   (19), FLINCH_HIT (31), DEF_DOWN_2 (59), HIT_BEFORE_SWITCH (128) and STEALTH_ROCK (266).
   Task 5 added the effects of all of Kaizo Roark's moves (section 5) with their BASIC and
-  EVAL_ATTACK paths; Task 6 adds their EXPERT and RISKY paths. Until then coverage refuses
-  Kaizo Roark by his RISKY flag (section 1), and the AI itself refuses every move whose
-  effect goes to an Expert label not transcribed yet (section 5).
+  EVAL_ATTACK paths, and Task 6 their EXPERT and RISKY paths (5.3, 5.4). No move of Kaizo
+  Roark's party is refused since.
 - The script-roll sites are keyed by battle effect too (section 8, K3c Task 3), so a move is
   transcribed by its effect alone. Example: Accelerock (205, effect HIT) takes Rock Throw's
   paths and its EvalAttack quad roll (`script.s:6383`).
 - RISKY (`script.s:6521-6531`) scores only the effects of `Risky_RiskyEffects`
   (`script.s:6536-6561`). Of Roark's effects it lists Selfdestruct (HALVE_DEFENSE, 7,
-  `:6538`) and AncientPower (RAISE_ALL_STATS_HIT, 140, `:6550`); Task 6 transcribes it.
+  `:6538`) and AncientPower (RAISE_ALL_STATS_HIT, 140, `:6550`) (5.4).
 
 **2.3 No damage estimate for the no-calc effects.** These hold in both policies; only
 Kaizo data reaches them on a transcribed path.
@@ -139,10 +144,10 @@ Kaizo Roark's moves, by Kaizo id, with the battle effect the scripts read
 | Shuckle | Toxic 92: STATUS_BADLY_POISON 33; Accelerock 205: 0; Curse 174: CURSE 109; Sand Tomb 328: WHIRLPOOL 261 |
 | Cranidos | Head Smash 457: RECOIL_HALF 269; Zen Headbutt 428: FLINCH_HIT 31; Crunch 242: LOWER_DEFENSE_HIT 69; Rock Polish 397: SPEED_UP_2 52 |
 
-All of these effects are in `KAIZO.transcribed` from K3c Task 5. The paths below are the
-BASIC and EVAL_ATTACK ones (Task 5); the EXPERT entries of RECOVER_HALF_DAMAGE_DEALT,
+All of these effects are in `KAIZO.transcribed` from K3c Task 5. Their BASIC and
+EVAL_ATTACK paths (Task 5) are 5.1-5.2; the EXPERT entries of RECOVER_HALF_DAMAGE_DEALT,
 HALVE_DEFENSE, RESTORE_HALF_HP, STATUS_BADLY_POISON, SET_LIGHT_SCREEN, SPEED_UP_2, CURSE,
-REMOVE_SCREENS and RECOIL_HALF (`script.s:1629-1806`) and RISKY are Task 6 (sections 5.3-5.4).
+REMOVE_SCREENS and RECOIL_HALF (`script.s:1629-1806`) and RISKY (Task 6) are 5.3-5.4.
 
 **The Expert guard (coordinator ruling, Task 5).** A missing Expert path is refused, never
 scored. `outcome.KAIZO_EXPERT_LABELS` maps each of those nine effects to its label and the
@@ -150,11 +155,12 @@ line of its entry in `Expert_Main`'s dispatch table (Giga Drain `Expert_DrainMov
 Selfdestruct `Expert_Explosion` `:1630`, Recover `Expert_Recovery` `:1652`, Toxic
 `Expert_ToxicLeechSeed` `:1653`, Light Screen `Expert_LightScreen` `:1654`, Rock Polish
 `Expert_StatusSpeedUp` `:1665`, Curse `Expert_Curse` `:1700`, Brick Break `Expert_BrickBreak`
-`:1739`, Head Smash `Expert_RecoilMove` `:1806`). The Kaizo policy always runs EXPERT (Ruling
-10), so it refuses an opponent move with one of these effects unless the effect is in
-`KAIZO.expert_transcribed` (`policy._refused`), naming the label. That set is empty after
-Task 5; Task 6 fills it. So no Kaizo trainer, `0b111` or not, is graded with a missing
-Expert path (`test_expert_guard_refuses_a_0b111_kaizo_trainer`).
+`:1739`, Head Smash `Expert_RecoilMove` `:1806`). A per-slot layout refuses an opponent move
+with one of these effects unless the effect is in its `expert_transcribed` set
+(`policy._refused`), naming the label. Since Task 6 `KAIZO.expert_transcribed` holds all
+nine, so the guard refuses nothing of Kaizo Roark's. It stays for a later effect: a new
+effect whose Expert label is not transcribed goes into the table first
+(`test_expert_guard_refuses_an_untranscribed_label`, with a synthetic layout).
 `D` is the player's active Pokemon, `A` Roark's. A decomp stat stage is the engine stage plus
 6. `HP%` is `curHP * 100 / maxHP`, integer division (`trainer_ai.c:626`, `:641`).
 
@@ -200,8 +206,10 @@ effect appears once in the table, so the order of the entries does not matter):
   **-10** (`:364`). Then `A`'s true ability: with Simple, Speed above decomp 8 (engine +3
   or more) is **-10** (`:367`); without, Speed at decomp 12 (engine +6) is **-10** (`:371`).
 - **CURSE** (`:196`) -> `Basic_CheckCurse` (`:679-698`): a Ghost-type `A` (true type 1 or 2)
-  jumps to `Basic_CheckCurse_GhostType` (`:700`), which is not transcribed: the AI refuses a
-  Ghost-type Curse user (`policy._refused`). Kaizo Roark's Curse user, Shuckle, is Bug/Rock.
+  jumps to `Basic_CheckCurse_GhostType` (`:700`), which is not transcribed (nor is
+  `Expert_Curse_GhostCheckHP`, 5.3): the AI refuses a Ghost-type Curse user
+  (`policy._refused`, a line naming both labels). Kaizo Roark's Curse user, Shuckle, is
+  Bug/Rock.
   With Simple, Attack or Defense above decomp 8 (engine +3 or more) is **-10**
   (`:690-691`). Without, Attack at 12 is **-10** (`:696`), else Defense at 12 is **-8**
   (`:697`).
@@ -236,6 +244,86 @@ As roark.md 5.2, with these effect tests now on transcribed paths:
      the move's priority (the decomp's comment, `:6398-6399`). Kaizo Accelerock has priority
      +1 but effect HIT, so its kill bonus is **+4** (plan K3c Ruling 8).
    - Anything else: **+4** (`:6401` -> `:6411`), with no draw.
+
+### 5.3 EXPERT (`Expert_Main`, `script.s:1623-1811`)
+
+`Expert_Main`'s dispatch (`:1628-1808`) sends nine of Roark's effects to a label added in
+K3c Task 6 (`policy._expert`); Stealth Rock keeps roark.md's `Expert_StealthRock`. Every
+other effect of Roark's moves has no entry and reaches `PopOrEnd` (`:1811`). That includes
+Sand Tomb's WHIRLPOOL (261): `Expert_BindingMove` is dispatched on BIND_HIT only (`:1659`,
+Ruling 5). "N roll" means `IfRandomLessThan N`: it jumps with probability N/256, and the
+score change is on the path that does not jump. The speed compare is
+`IfSpeedCompareEqualTo COMPARE_SPEED_SLOWER` (section 7.1): Roark's Pokemon acts after the
+player (a lone activated Quick Claw of the player's counts, `battle_lib.c:1408-1411`; Trick
+Room reverses, `:1432-1439`; equal speed is never SLOWER, Ruling 3).
+
+- **RECOVER_HALF_DAMAGE_DEALT** (`:1629`) -> `Expert_DrainMove` (`:1827-1839`): IMMUNE,
+  HALF_DAMAGE or QUARTER_DAMAGE goes to the 50 roll (`:1835`), **-3**. Otherwise no change.
+- **HALVE_DEFENSE** (`:1630`) -> `Expert_Explosion` (`:1841-1884`):
+  1. `D`'s evasion at decomp 7 (+1) or more: **-1** (`:1856-1857`). At 10 (+4) or more,
+     another **-1** after the 128 roll (`:1858-1860`).
+  2. `Expert_Explosion_CheckUserHighHP` (`:1862`): `A`'s HP% at least 80 and `A` not slower:
+     the 50 roll (`:1865`), else `GoTo ScoreMinus3`, **-3**.
+  3. Otherwise `Expert_Explosion_CheckUserMediumHP` (`:1868`): HP% above 50 goes to
+     `Expert_Explosion_TryScoreMinus1` (`:1879`), the 50 roll (`:1880`), **-1**.
+  4. HP% 50 or less: the 128 roll (`:1870`), **+1**; then `Expert_Explosion_CheckUserLowHP`
+     (`:1873`): HP% 30 or less adds the 50 roll (`:1875`), **+1**. Both can apply.
+- **RESTORE_HALF_HP** (`:1652`) -> `Expert_Recovery` (`:2640-2678`):
+  1. HP% 100: `Expert_Recovery_ScoreMinus3AndEnd` (`:2659`), **-3**.
+  2. Not slower: **-8** (`:2651`).
+  3. Slower: `Expert_Recovery_CheckHP` (`:2663`). HP% at least 70: the 30 roll (`:2665`),
+     **-3**; its jump goes to 4.
+  4. `Expert_Recovery_CheckForSnatch` (`:2669`): if the AI has seen the player use a
+     STEAL_STATUS_MOVE (195) move, the 100 roll (`:2671`) can end it. No Kaizo move has that
+     effect, so `:2671` is transcribed but never reached in Kaizo data. Then the 20 roll
+     (`:2674`), **+2**.
+  - `Expert_Recovery_Unused` (`:2654-2657`) follows the `GoTo` at `:2652`, and no jump targets
+    it: it is not reached and not transcribed.
+- **STATUS_BADLY_POISON** (`:1653`) -> `Expert_ToxicLeechSeed` (`:2680-2708`):
+  1. `IfAttackerHasNoDamagingMoves` (`:2688`; power 0 for every move, `trainer_ai.c:913-929`)
+     skips to 3.
+  2. `A`'s HP% 50 or less: the 50 roll (`:2690`), **-3**. `D`'s HP% 50 or less: the 50 roll
+     (`:2695`), **-3**.
+  3. `A` knows a move with effect SP_DEF_UP (14) or PROTECT (111) (`IfMoveEffectKnown
+     ATTACKER`, its own true moveset, Ruling 9): the 60 roll (`:2704`), **+2**. No Kaizo move
+     has SP_DEF_UP; Kaizo Roark's Pokemon know no PROTECT move.
+- **SET_LIGHT_SCREEN** (`:1654`) -> `Expert_LightScreen` (`:2710-2732`): HP% below 50 is
+  **-2** (`:2716` -> `:2728`). HP% at least 90 adds the 128 roll (`:2718`), **+1**. Then
+  `LoadDefenderLastUsedMoveClass` (section 7.4): `CLASS_SPECIAL` (1) adds the 64 roll
+  (`:2724`), **+1**. After Nature Power the class is Nature Power's (status), so no +1.
+- **SPEED_UP_2** (`:1665`) -> `Expert_StatusSpeedUp` (`:2066-2079`): not slower is **-3**;
+  slower is the 70 roll (`:2075`), **+3**.
+- **CURSE** (`:1700`) -> `Expert_Curse` (`:3452-3500`):
+  1. A Ghost-type `A` goes to `Expert_Curse_GhostCheckHP` (`:3467-3470` -> `:3495`): refused
+     with `Basic_CheckCurse_GhostType` (5.1).
+  2. `A`'s Defense above decomp 9 (+4 or more) ends it (`:3471`). (The decomp's comment says
+     "+3 or higher"; the code tests > 9.)
+  3. `A` knows Gyro Ball (360) or Trick Room (433) (`IfMoveKnown ATTACKER`, `:3472-3473`):
+     the 32 roll (`:3477`), **+1**; its jump skips to 5.
+  4. The 128 roll (`:3481`), **+1**.
+  5. `Expert_Curse_CheckDefenseStage` (`:3484`): Defense above 7 (+2 or more) ends it; else
+     the 128 roll (`:3486`), **+1**.
+  6. Defense above 6 (+1 or more) ends it (`:3490`); else the 128 roll (`:3491`), **+1**.
+- **REMOVE_SCREENS** (`:1739`) -> `Expert_BrickBreak` (`:4559-4568`): Reflect or Light Screen
+  on `D`'s side (`IfSideCondition AI_BATTLER_DEFENDER`) is **+1**. No roll.
+- **RECOIL_HALF** (`:1806`) -> `Expert_RecoilMove` (`:6289-6305`): IMMUNE, HALF_DAMAGE or
+  QUARTER_DAMAGE ends it; otherwise `A`'s true ability Rock Head (69) or Magic Guard (98) is
+  **+1**. Kaizo Cranidos has Rock Head in ability slot 0 and Mold Breaker in slot 1. No roll.
+
+### 5.4 RISKY (`Risky_Main`, `script.s:6521-6534`)
+
+`LoadCurrentMoveEffect` (`trainer_ai.c:1164`), then `IfLoadedNotInTable Risky_RiskyEffects`
+(`:6527`; the table is `:6536-6562`, `commands.RISKY_EFFECTS`). A listed effect takes the 128
+roll (`:6530`), **+2**. Of Roark's effects the table lists HALVE_DEFENSE (`:6538`,
+Selfdestruct) and RAISE_ALL_STATS_HIT (`:6550`, AncientPower). RISKY runs after EXPERT, in
+bit order (`FlagTable`, `script.s:18-30`; `TrainerAI_MainSingles`, `trainer_ai.c:297-310`).
+
+RISKY is part of the Kaizo policy itself (`policy._flags` runs `_risky` when
+`AiLayout.risky`), not only of coverage. So a caller of `ai_refusals` and `ai_scores` alone
+never scores Selfdestruct or AncientPower without the roll (Task 5 review m2;
+`test_risky_is_part_of_the_policy`). `layout.py` checks at import that every transcribed
+effect of the table has the `:6530` site and that its layout runs RISKY; the vanilla
+transcription has none of those effects.
 
 ## 7. The commands Kaizo Roark's labels add (K3c Task 4)
 
@@ -335,13 +423,20 @@ site is named by its `script.s` line, and `outcome.SITE_N` gives its N:
 | Effect | Sites (line: N) |
 |---|---|
 | HIT (0) | `:6383`: 80 |
-| HALVE_DEFENSE (7) | `:6374`: 51, `:6383`: 80 (Task 6 appends Expert_Explosion's and Risky's) |
+| RECOVER_HALF_DAMAGE_DEALT (3) | `:6383`: 80, `:1835`: 50 |
+| HALVE_DEFENSE (7) | `:6374`: 51, `:6383`: 80, `:1859`: 128, `:1865`: 50, `:1870`: 128, `:1875`: 50, `:1880`: 50, `:6530`: 128 |
 | DEF_DOWN (19) | `:6383`: 80, `:2328`: 50 |
 | FLINCH_HIT (31) | `:6383`: 80 |
+| RESTORE_HALF_HP (32) | `:6383`: 80, `:2665`: 30, `:2671`: 100, `:2674`: 20 |
+| STATUS_BADLY_POISON (33) | `:6383`: 80, `:2690`: 50, `:2695`: 50, `:2704`: 60 |
+| SET_LIGHT_SCREEN (35) | `:6383`: 80, `:2718`: 128, `:2724`: 64 |
+| SPEED_UP_2 (52) | `:6383`: 80, `:2075`: 70 |
 | DEF_DOWN_2 (59) | `:6383`: 80, `:2328`: 50 |
+| CURSE (109) | `:6383`: 80, `:3477`: 32, `:3481`: 128, `:3486`: 128, `:3491`: 128 |
 | HIT_BEFORE_SWITCH (128) | `:6383`: 80, `:3726`: 128, `:3731`: 128 |
+| RAISE_ALL_STATS_HIT (140) | `:6383`: 80, `:6530`: 128 |
 | STEALTH_ROCK (266) | `:6383`: 80, `:6274`: 128 |
-| the other effects of section 5 (2, 3, 4, 6, 32, 33, 35, 52, 69, 72, 76, 109, 140, 186, 261, 269, 275) | `:6383`: 80 (Task 6 appends the Expert and Risky sites of those with entries) |
+| the other effects of section 5 (2, 4, 6, 69, 72, 76, 186, 261, 269, 275) | `:6383`: 80 |
 
 - `:6383` is `EvalAttack_TryScorePlus2`. It is reached by any move whose
   `IfMoveEffectivenessEquals` is QUADRUPLE (`script.s:6378`), whatever its effect, so every
@@ -350,14 +445,17 @@ site is named by its `script.s` line, and `outcome.SITE_N` gives its N:
 - The Expert sites follow `Expert_Main`'s dispatch (`script.s:1623-1811`): DEF_DOWN `:1642`
   and DEF_DOWN_2 `:1671` go to `Expert_StatusDefenseDown` (`:2318`, roll `:2328`);
   HIT_BEFORE_SWITCH `:1706` to `Expert_Pursuit` (`:3706`, rolls `:3726`, `:3731`);
-  STEALTH_ROCK `:1805` to `Expert_StealthRock` (`:6268`, roll `:6274`). HIT and FLINCH_HIT
-  have no entry and end at `:1811`.
+  STEALTH_ROCK `:1805` to `Expert_StealthRock` (`:6268`, roll `:6274`); the nine labels of
+  5.3 have the rolls listed there. REMOVE_SCREENS and RECOIL_HALF go to labels without a
+  roll. The effects without an entry end at `:1811`.
+- `:6530` is `Risky_Main`'s roll, for the effects of `Risky_RiskyEffects` (5.4).
+- `:2671` (`Expert_Recovery_CheckForSnatch`) is never reached in Kaizo data (5.3); it is a
+  column that is never read.
 - `KAIZO.transcribed` is exactly the table's effects, so the effect check that refuses an
   untranscribed move also guarantees the move has its row.
 - `KAIZO.slot_sites` is 8, the most sites one Kaizo Roark move reaches: Selfdestruct
   (HALVE_DEFENSE), with EvalAttack `:6374` and `:6383`, Expert_Explosion `:1859`, `:1865`,
-  `:1870`, `:1875` and `:1880`, and Risky `:6530`. Tasks 5 and 6 add Roark's effects to the
-  table.
+  `:1870`, `:1875` and `:1880`, and Risky `:6530`.
 
 **8.3 The exact distribution, factored per slot** (`policy._slot_move_distribution`).
 - `TrainerAI_EvalMoves` scores the move slots one by one (`trainer_ai.c:483-525`).
@@ -380,8 +478,9 @@ one such read in a decision can change a score. On the transcribed paths the rea
 `script.s:71` (`Basic_CheckForImmunity`), `:117` (`Basic_CheckSoundproof`), `:470`
 (`Basic_CheckClearBodyEffect`), and from Task 5 `:304` (`Basic_CheckCannotExplode`, Damp) and
 `:529` and `:539` (`Basic_CheckCannotPoison`: Immunity, Magic Guard, Poison Heal, Leaf Guard in
-sun; Hydration in rain). The two Toxic reads are two coin flips in the decomp and one guess
-here. Both can change Toxic's score only for a species with Hydration and one of the `:529`
+sun; Hydration in rain). Task 6 adds no `LoadBattlerAbility DEFENDER` read
+(`Expert_RecoilMove` loads the attacker's ability, `:6296`). The two Toxic reads are two coin
+flips in the decomp and one guess here. Both can change Toxic's score only for a species with Hydration and one of the `:529`
 abilities, and no Kaizo species has that pair (`species.json`;
 `tests/ai/test_kaizo_policy.py test_no_species_splits_the_toxic_reads`, which checks it in
 any weather, where the data test below uses the state's). `tests/ai/test_kaizo_outcome.py
@@ -420,14 +519,19 @@ The fourth gate is the dropped speed-tie draw (plan K3c Ruling 3; 7.1). At equal
 (`battle_lib.c:1401-1447`), and every compare on Roark's paths tests SLOWER.
 `IfSpeedCompareEqualTo` gives the tie its own loose bit (`ReadKind.SPEED_TIE`), and
 `tests/ai/test_kaizo_commands.py test_speed_tie_never_slower` checks the gate in every
-branch. Once Tasks 5-6 put the compare on Roark's paths, `test_exact_equals_loose` covers it
-too.
+branch. Since Task 6 the compare is on Roark's paths (`:1864`, `:2070`, `:2650`), and
+`tests/ai/test_kaizo_policy.py test_exact_equals_loose_at_equal_speed` checks exact against
+loose at equal speed on each of the three, with the loose tie read on the path, and on the
+player's Quick Claw (no tie read).
+- `LOOSE_READS` is 48: every read of the straight-line scripts counts in every slot, on the
+  path or not, and Task 6 brings them to 35.
 
 **8.7 RNG read order.** As roark.md 8.7, with RISKY after EXPERT (slots 0-3: its roll as
 reached), and the speed compare's tie draw where an `IfSpeedCompareEqualTo` meets equal
-speeds (no `AiOutcome` field, Ruling 3; K3d's trace replay needs the count).
+speeds (no `AiOutcome` field, Ruling 3; K3d's trace replay needs the count). Within a slot,
+EXPERT's draws are those of 5.3 in line order of the path taken.
 
-## 13. Hand-traced decisions (K3c Task 5 fixtures)
+## 13. Hand-traced decisions (K3c Task 5 and Task 6 fixtures)
 
 `tests/ai/test_kaizo_policy.py`. Common setup:
 - Kaizo Roark's party as `build_trainer_party` gives it, the named Pokemon active with the
@@ -435,9 +539,10 @@ speeds (no `AiOutcome` field, Ruling 3; K3d's trace replay needs the count).
   copies of Roark's own Gible (Dragon/Ground, Sand Veil / Rough Skin, neither of which any
   label tests), at 400/400 HP unless stated: no transcribed move kills it. A "player X" is
   that species put on the player's active slot (its types and ability slot; stats unchanged).
-- The scores are those after BASIC and EVAL_ATTACK, from 100 (`TrainerAI_Init`,
-  `trainer_ai.c:223`), with refusals not applied; an empty slot scores 0
-  (`trainer_ai.c:499-501`). EXPERT and RISKY are Task 6.
+- The scores of K1-K11 (Task 5) are those after BASIC and EVAL_ATTACK; those of E1-E9
+  (Task 6) after all four flags, BASIC, EVAL_ATTACK, EXPERT and RISKY. Both start from 100
+  (`TrainerAI_Init`, `trainer_ai.c:223`), with refusals not applied; an empty slot scores 0
+  (`trainer_ai.c:499-501`).
 - Rolls are named by line: "`:6374` jumps" sets that site's bit; every other bit is 0 (the
   jump is not taken). `g` is the ability guess (0 or 1).
 - Each test first asserts its inputs: the effectiveness class (`IfMoveEffectivenessEquals`,
@@ -553,12 +658,129 @@ A Ghost-type Shuckle with Curse is refused (5.1).
 (Fire/Flying: Rock x2 on each, `battle_lib.c:2483`, `:2487`): QUADRUPLE. `:6383` does not
 jump: **+2**, **[102, 0, 0, 0]**; it jumps: **[100, 0, 0, 0]**.
 
-With every Expert label counted as transcribed (`KAIZO_ALL_EXPERT`; both sides share the
-script transcription, so the gates are unaffected), the exact distribution equals the loose oracle on K1c, K5, K6h with Shuckle's full moveset,
-K9b on that state, K6m with the full moveset, K7 with Corsola's full moveset, K8c and the
-Selfdestruct kill state (`test_new_paths_exact_equals_loose`, slow).
+### Task 6 traces (all four flags)
 
-## 14. Width and cost, measured (K3c Task 3)
+Speeds are the actives' Speed stats, with no modifier: the player's Gible 20, Bonsly 12,
+Lileep 15, Corsola 19, Shuckle 11, Cranidos 28. "Player Speed s" sets the player's stat;
+each test asserts the AI's compare (`CompareBattlerSpeed(AI, player, TRUE)`, tie bit 0).
+The BASIC and EVAL_ATTACK parts of these scores are the K traces'.
+
+**Trace E1: Explosion.** Bonsly [Selfdestruct, Brick Break], bench Cranidos, two Gibles
+(Basic_CheckLastMon ends with no change, `:311` -> `:318`). Brick Break: the only damage
+estimate, Expert_BrickBreak without screens (`:4561-4563`): **100** throughout. For
+Selfdestruct, `:6374` and `:6530` jump (EVAL's -2 and RISKY's +2 not taken), so its score
+moves by Expert_Explosion (5.3) alone:
+
+| Variant | Bonsly HP | Player | Rolls that jump | Path | Selfdestruct |
+|---|---|---|---|---|---|
+| E1a | 44/44 (100%) | Speed 20 (AI slower) | none | `:1864` -> `:1868` -> `:1879`, -1 | **99** |
+| E1b | 100% | Speed 20 | `:1880` | | **100** |
+| E1c | 100% | Speed 10 (AI faster) | none | `:1865` -> ScoreMinus3 | **97** |
+| E1d | 100% | Speed 10 | `:1865` | | **100** |
+| E1e | 100% | Speed 10, Quick Claw activated | none | lone claw: AI SLOWER (`battle_lib.c:1408-1411`), -1 | **99** |
+| E1f | 31/44 (70%) | Speed 20 | none | `:1863` -> `:1868` -> -1 | **99** |
+| E1g | 22/44 (50%) | Speed 20 | none | `:1870` +1, `:1874` ends | **101** |
+| E1h | 50% | Speed 20 | `:1870` | | **100** |
+| E1i | 13/44 (29%) | Speed 20 | none | +1 (`:1871`), +1 (`:1876`) | **102** |
+| E1j | 29% | Speed 20 | `:1870` | +1 (`:1876`) | **101** |
+| E1k | 29% | Speed 20 | `:1870`, `:1875` | | **100** |
+| E1l | 100% | evasion +1 (decomp 7) | none | -1 (`:1857`), then as E1a | **98** |
+| E1m | 100% | evasion +4 (decomp 10) | none | -1, -1 (`:1860`), then as E1a | **97** |
+| E1n | 100% | evasion +4 | `:1859` | -1, then as E1a | **98** |
+
+With no roll jumping, Selfdestruct is 100 - 2 - 1 + 2 = **99** (E1a with EVAL and RISKY);
+with `:6530` jumping, **97**: **[99, 100, 0, 0]** and **[97, 100, 0, 0]**.
+
+**Trace E2: Recover.** Lileep [Sludge Bomb, Giga Drain, AncientPower, Recover] (K5). Giga
+Drain (Grass, STAB) is not resisted by Gible: `Expert_DrainMove` ends (`:1832`), **100**.
+Sludge Bomb **99**. AncientPower 99 + 2 (RISKY, `:6530`) = **101**.
+
+| Variant | Lileep HP | Player | Rolls that jump | Recover | Scores |
+|---|---|---|---|---|---|
+| E2a | 44/44 | Speed 20 | none | -8 (BASIC), -3 (`:2649` -> `:2659`) | **[99, 100, 101, 89]** |
+| E2b | 44/44 | Speed 20 | `:6530` (slot 2) | | **[99, 100, 99, 89]** |
+| E2c | 43/44 (97%) | Speed 20 | none | slower, not below 70%: -3 (`:2666`) | **[99, 100, 101, 97]** |
+| E2d | 97% | Speed 20 | `:2665` | -> `:2669`, no Snatch effect seen -> +2 (`:2675`) | **[99, 100, 101, 102]** |
+| E2e | 97% | Speed 20 | `:2665`, `:2674` | | **[99, 100, 101, 100]** |
+| E2f | 22/44 (50%) | Speed 20 | none | below 70% -> `:2669` -> +2 (Recover when slower) | **[99, 100, 101, 102]** |
+| E2g | 97% | Speed 10 | none | not slower: -8 (`:2651`) | **[99, 100, 101, 92]** |
+
+**Trace E3: Giga Drain resisted.** Lileep [Giga Drain] against player Zubat (Poison/Flying:
+each halves Grass): resisted, -3 (`:1835-1836`): **[97, 0, 0, 0]**; `:1835` jumps:
+**[100, 0, 0, 0]**.
+
+**Trace E4: Toxic.** Shuckle [Toxic, Accelerock, Curse, Sand Tomb], bench Bonsly (K6, K9).
+Accelerock **99** (-1); Curse **103** (E8a); Sand Tomb **100**.
+
+| Variant | Shuckle HP | Player HP | Rolls that jump | Toxic | Scores |
+|---|---|---|---|---|---|
+| E4a | 39/39 | 400/400 | none | both above 50%, no SP_DEF_UP/PROTECT move | **[100, 99, 103, 100]** |
+| E4b | 19/39 (48%) | 400/400 | none | -3 (`:2690-2691`) | **[97, 99, 103, 100]** |
+| E4c | 48% | 400/400 | `:2690` | | **[100, 99, 103, 100]** |
+| E4d | 39/39 | 200/400 (50%) | none | -3 (`:2695-2696`) | **[97, 99, 103, 100]** |
+| E4e | 48% | 50% | none | -3, -3 | **[94, 99, 103, 100]** |
+| E4f | Shuckle [Toxic, Curse]: 48% | 50% | none | no damaging move: `:2688` skips both | **[100, 103, 0, 0]** |
+| E4g | Shuckle [Toxic, Protect, Curse, Sand Tomb] (synthetic) | 400/400 | none / `:2704` | PROTECT known (`:2700`): +2 | Toxic **102** / **100** |
+
+**Trace E5: Light Screen.** Corsola [Recover, Light Screen], bench Bonsly; Corsola is slower.
+
+| Variant | Corsola HP | Player's last move | Rolls that jump | Scores |
+|---|---|---|---|---|
+| E5a | 46/46 | none (physical) | none | **[89, 101]** (Recover -8, -3; Light Screen +1, `:2718-2719`) |
+| E5b | 46/46 | none | `:2718` | **[89, 100]** |
+| E5c | 46/46 | Flamethrower (special) | none | **[89, 102]** (+1, `:2724-2725`) |
+| E5d | 46/46 | Flamethrower | `:2724` | **[89, 101]** |
+| E5e | 46/46 | Nature Power (status, 7.4) | none | **[89, 101]** |
+| E5f | 40/46 (86%) | Flamethrower | none | **[97, 101]** (below 90%: no `:2718`; Recover -3, `:2666`) |
+| E5g | 22/46 (47%) | Flamethrower | none | **[102, 98]** (Light Screen -2, `:2728-2729`; Recover +2) |
+
+**Trace E6: Head Smash and Rock Polish.** Cranidos [Head Smash, Zen Headbutt, Crunch, Rock
+Polish], bench Bonsly (K8). Zen Headbutt **99**, Crunch **100**.
+
+| Variant | Player | Cranidos ability | Speed / field | Rolls that jump | Scores |
+|---|---|---|---|---|---|
+| E6a | Gible | Rock Head | AI faster (28/20) | none | **[100, 99, 100, 97]** (Head Smash resisted: `:6294`; Rock Polish -3, `:2071`) |
+| E6b | Rattata (Normal) | Rock Head | faster | none | **[101, 99, 100, 97]** (not resisted, Rock Head +1, `:6297`) |
+| E6c | Rattata | Mold Breaker (slot 1) | faster | none | **[100, 99, 100, 97]** |
+| E6d | Gible | Rock Head | player Speed 30: slower | none | **[100, 99, 100, 103]** (+3, `:2075-2076`) |
+| E6e | Gible | Rock Head | slower | `:2075` | **[100, 99, 100, 100]** |
+| E6f | Gible | Rock Head | Trick Room: slower (`battle_lib.c:1432-1439`) | none | **[100, 99, 100, 93]** (BASIC -10, `:364`; +3) |
+
+**Trace E7: Brick Break.** Bonsly [Brick Break, Accelerock], bench Cranidos. Accelerock
+**99**. Reflect or Light Screen on the player's side: Brick Break **101** (`:4561-4566`);
+none, or Reflect on Bonsly's own side: **100**.
+
+**Trace E8: Curse.** Shuckle as E4a, with Defense stage d (Attack 0); Curse's score:
+
+| Variant | d (decomp) | Path | Curse |
+|---|---|---|---|
+| E8a | 0 (6) | +1 (`:3482`), +1 (`:3487`), +1 (`:3492`) | **103** |
+| E8b | +1 (7) | `:3490` ends after two | **102** |
+| E8c | +2 (8) | `:3485` ends after the coin (Curse at +2 Defense) | **101** |
+| E8d | +3 (9) | `:3471` tests > 9: as E8c | **101** |
+| E8e | +4 (10) | `:3471` ends | **100** |
+| E8f | +6 (12) | BASIC -8 (`:697`), `:3471` ends | **92** |
+| E8g | 0, Shuckle knowing Trick Room or Gyro Ball (synthetic, slot 1) | +1 (`:3478`), then as E8a | **104** |
+| E8h | as E8g, `:3477` jumps | skips the coin: +1, +1 | **102** |
+
+The full scores of E8a-E8f are **[100, 99, Curse, 100]**.
+
+**Trace E9: RISKY.** Against the scores after the first three flags, RISKY adds **+2** to
+Selfdestruct (Bonsly [Selfdestruct, Brick Break]) and to AncientPower (Lileep's set) when
+`:6530` does not jump, and nothing to any other slot or when it jumps. The same through the
+public `ai_scores` (no coverage): Bonsly **[99, 100, 0, 0]** (`:6530` jumping: Selfdestruct
+97) and Lileep **[99, 100, 101, 89]** (AncientPower 99).
+
+**Exact against loose.** The exact distribution equals the loose oracle, the slot score
+distributions too, on the real `KAIZO` layout (`test_new_paths_exact_equals_loose`, slow): on
+K1c, K5, K6h with Shuckle's full moveset, K9b on that state, K6m with the full moveset, K7
+with Corsola's full moveset, K8c and the Selfdestruct kill state, and on E1i, E1m, E4e, E5c
+with Corsola's full moveset, E2c, E8b, Lileep's set against Zubat, E6b, and Bonsly's full set
+with Reflect on the player's side. At equal speed (`test_exact_equals_loose_at_equal_speed`):
+E1a with the player at Speed 12 (`:1864`), E6a at 28 (`:2070`) and E2c at 15 (`:2650`), each
+with the loose tie read on the slot's path; and E1e (Quick Claw), with no tie read.
+
+## 14. Width and cost, measured (K3c Tasks 3 and 6)
 
 Measured 2026-11-11 on one CPU device (20 logical CPUs), warm, with Kaizo Roark's AI still
 refused (Tasks 5-7): a refused row costs what an accepted one does, since the program
@@ -629,3 +851,26 @@ The AI share of a depth-1 expansion (one root):
 
 The spec 6 stop condition (an AI share above 50%) is not met. Before bucketing the Kaizo
 depth-1 share was 91% and the vanilla one 56%, both from the 16384-row padding.
+
+**Re-measured after K3c Task 6** (2026-11-11, warm, the same machine; scripts
+`measure6.py`, reusing Task 3's `measure.py` helpers; Task 6 report). Kaizo Roark's AI is now
+accepted (no refused row), so these are the costs of real distributions.
+
+- `ai_width` with each of Kaizo Roark's six as the active (against his Gible): Bonsly 538,
+  Lileep 62, Gible 26, Corsola 66, Shuckle 114, Cranidos 30. The maximum is **538**
+  (Selfdestruct's 8 sites: 10 + 2 x (4 + 256 + 2 + 2)), against `WIDTH_CAP` 131072 and the
+  bound 2058 of 8.5. The same six values over the `kaizo_save_pre_roark` pool.
+- `ai_flat_width` (reported, not used): 3840 to 983040.
+- `ai_rows`, 1000 Kaizo states (bucket 1024), per state: **207 µs** on 1 device, **33.5 µs**
+  on 20 (the CLI default here, `os.cpu_count()`). Vanilla: 29 µs and 13.6 µs.
+  `policy._distribution` vmapped over the 1000 states: Kaizo 269 µs, vanilla 24 µs. One
+  Kaizo state (bucket 256): 0.051 s on 1 device, 0.017 s on 20.
+- The AI share of a depth-1 expansion of one Kaizo root (27 pairs, the root's real
+  distribution: Stealth Rock 0.687, Selfdestruct 0.096, Brick Break 0.217):
+
+| | 1 device | 20 devices |
+|---|---|---|
+| Kaizo | 19.3% (0.051 s of 0.262 s) | 9.7% (0.016 s of 0.169 s) |
+| vanilla | 4.0% | 8.3% |
+
+The spec 6 stop condition (above 50%) is not met.

@@ -17,8 +17,13 @@ oracle that does not use it, and each has a test that fails when the gate is rem
   (``test_one_scalar_guess_is_exact_for_roark``, ``test_loose_catches_a_split_guess``).
 The fourth gate, the dropped speed-tie draw (Ruling 3), is checked in
 ``tests/ai/test_kaizo_commands.py`` (``test_speed_tie_never_slower``): ``IfSpeedCompareEqualTo``
-gives the tie its own loose read (``commands.ReadKind.SPEED_TIE``). It is on no transcribed
-path until K3c Task 6: its three compares are Expert labels (script.s:1864, :2070, :2650).
+gives the tie its own loose read (``commands.ReadKind.SPEED_TIE``). Since K3c Task 6 its three
+compares are on transcribed paths (Expert_Explosion, Expert_StatusSpeedUp and Expert_Recovery,
+script.s:1864, :2070, :2650), and ``tests/ai/test_kaizo_policy.py
+test_exact_equals_loose_at_equal_speed`` checks exact against loose at equal speed on each.
+
+The tests run on the real ``KAIZO`` layout: since K3c Task 6 every Expert label of Kaizo
+Roark's effects is transcribed, so no test-only layout is needed.
 """
 
 import dataclasses
@@ -62,11 +67,6 @@ from tests.ai.fixtures import GEODUDE, outcome, versus
 ROCK_THROW, PURSUIT, LEER, SCREECH, HEADBUTT, TACKLE = 88, 228, 43, 103, 29, 33
 STEALTH_ROCK, ACCELEROCK, WATER_GUN, U_TURN = 446, 205, 55, 369
 SOUNDPROOF, CLEAR_BODY = 43, 29  # decomp ability ids (commands.ABILITY_IDS)
-# KAIZO with every Expert label counted as transcribed (layout.expert_transcribed): the
-# exact layout and the loose oracle share the script transcription, so the gates they check
-# (sites, the one guess, factoring) are checked on the effects whose Expert paths are K3c
-# Task 6 too, where KAIZO itself refuses them (NaN on both sides).
-KAIZO_ALL_EXPERT = KAIZO._replace(expert_transcribed=frozenset(KAIZO_EXPERT_LABELS))
 _SETTINGS = settings(
     deadline=None,
     max_examples=25,
@@ -112,7 +112,7 @@ def _bulky(s: BattleState, hp: int = 400) -> BattleState:
     return s._replace(hp=s.hp.at[0, 0].set(hp), max_hp=s.max_hp.at[0, 0].set(hp))
 
 
-def _move_pool(t, layout=KAIZO_ALL_EXPERT) -> tuple[int, ...]:
+def _move_pool(t, layout=KAIZO) -> tuple[int, ...]:
     """Kaizo moves ``layout`` transcribes (effect in ``layout.transcribed`` and, of
     ``KAIZO_EXPERT_LABELS``, only those in ``layout.expert_transcribed``; no id case, no
     alternative power)."""
@@ -168,14 +168,14 @@ def kaizo_states(draw, t, party) -> BattleState:
 
 @st.composite
 def site_layouts(draw):
-    """``KAIZO_ALL_EXPERT`` with a synthetic site table: each transcribed effect gets any of
+    """``KAIZO`` with a synthetic site table: each transcribed effect gets any of
     the script's roll lines, in any order, with any N (lines its path never reads are
     columns that are never read)."""
     rows = []
     for effect in sorted(KAIZO.transcribed):
         lines = draw(st.lists(st.sampled_from(SITE_LINES), unique=True, max_size=4))
         rows.append((effect, tuple((line, draw(st.integers(1, 255))) for line in lines)))
-    return KAIZO_ALL_EXPERT._replace(effect_sites=tuple(rows))
+    return KAIZO._replace(effect_sites=tuple(rows))
 
 
 # --- Oracles -------------------------------------------------------------------------------
@@ -304,8 +304,18 @@ def test_slot_site_table(kaizo_tables, kaizo_names):
         STEALTH_ROCK: [(6383, 80), (6274, 128)],
         0: [],
         # Selfdestruct, HALVE_DEFENSE: EvalAttack_MaybeDeprioritize's 51 roll (script.s:6365
-        # -> :6374) before the quad roll (K3c Task 5; Task 6 appends its Expert sites).
-        120: [(6374, 51), (6383, 80)],
+        # -> :6374) before the quad roll, then Expert_Explosion's (:1859, :1865, :1870,
+        # :1875, :1880) and Risky_Main's (:6530): the 8 columns of KAIZO.slot_sites.
+        120: [
+            (6374, 51),
+            (6383, 80),
+            (1859, 128),
+            (1865, 50),
+            (1870, 128),
+            (1875, 50),
+            (1880, 50),
+            (6530, 128),
+        ],
     }
     for move, sites in expected.items():
         n_, lines = (np.asarray(a).tolist() for a in slot_site_table(t, KAIZO, move))
@@ -494,7 +504,7 @@ def test_exact_equals_loose(kaizo_tables, kaizo_roark_party, data):
     t = kaizo_tables
     s = data.draw(kaizo_states(t, kaizo_roark_party))
     assume(_sensitive_reads(t, _one(s), KAIZO)[0] <= 1)
-    _assert_exact_equals_loose(t, s, KAIZO_ALL_EXPERT)
+    _assert_exact_equals_loose(t, s, KAIZO)
 
 
 @pytest.mark.parametrize(
@@ -564,6 +574,30 @@ def test_loose_catches_a_missing_site(kaizo_tables, kaizo_roark_party):
     rows = tuple((e, sites[1:] if e == 0 else sites) for e, sites in KAIZO.effect_sites)
     dropped = KAIZO._replace(effect_sites=rows)
     assert not np.allclose(np.asarray(_distribution(t, s, dropped)), loose, atol=1e-3)
+
+
+def test_refused_states_are_nan_on_both_sides(kaizo_tables, kaizo_names, kaizo_roark_party):
+    """Task 5 review m3: on a state the real ``KAIZO`` layout refuses, the exact and the loose
+    distributions are both NaN (both read ``policy._refused``).
+    - Real: Kaizo Roark's Shuckle [Toxic, Accelerock, Curse, Sand Tomb] made Ghost-type, so
+      its Curse takes Basic_CheckCurse_GhostType (script.s:681-684 -> :700), not transcribed.
+    - Synthetic: no Kaizo Roark state is refused for an Expert label since K3c Task 6, so the
+      guard is opened by a layout that lacks Expert_Recovery (RESTORE_HALF_HP, script.s:1652):
+      Corsola [Recover, Water Pulse, Light Screen, Accelerock] is refused under it and
+      accepted under ``KAIZO``."""
+    t, n, party = kaizo_tables, kaizo_names, kaizo_roark_party
+    shuckle = make_state(t, [party[2]], [party[4], party[0]])
+    assert policy.ai_refusals(t, shuckle, n) == []
+    ghost = shuckle._replace(types=shuckle.types.at[1, 0, 1].set(7))  # TYPE_GHOST
+    assert any("Basic_CheckCurse_GhostType" in r for r in policy.ai_refusals(t, ghost, n))
+    corsola = make_state(t, [party[2]], [party[3], party[0]])
+    assert policy.ai_refusals(t, corsola, n) == []
+    no_recovery = KAIZO._replace(expert_transcribed=KAIZO.expert_transcribed - {32})
+    assert any("Expert_Recovery" in r for r in policy.ai_refusals(t, corsola, n, no_recovery))
+    for s, layout in ((ghost, KAIZO), (corsola, no_recovery)):
+        assert np.isnan(np.asarray(_distribution(t, s, layout))).all()
+        assert np.isnan(policy.ai_action_distribution_loose(t, s, layout)).all()
+    assert not np.isnan(np.asarray(_distribution(t, corsola, KAIZO))).any()
 
 
 def test_loose_catches_a_split_guess(kaizo_tables, kaizo_roark_party):

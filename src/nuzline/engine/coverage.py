@@ -42,8 +42,11 @@ items) and plan 1b (Task 2b: trainer items; Task 3: Roark's AI flags) implement:
   Room: the engines' ``CheckFieldConditions`` pass (``step.field_conditions``) counts
   weather down, but those moves are not modelled yet (plan ruling);
 * abilities, held items, trainer items: every member but ``UNSUPPORTED``;
-* AI flags: bits 0-2 (``AI_FLAG_BASIC``, ``AI_FLAG_EVAL_ATTACK``, ``AI_FLAG_EXPERT``).
-  ``ai.policy`` always runs those three scripts, so a trainer must have exactly them;
+* AI flags, per AI policy (``IMPLEMENTED_AI_FLAGS``): vanilla bits 0-2 (``AI_FLAG_BASIC``,
+  ``AI_FLAG_EVAL_ATTACK``, ``AI_FLAG_EXPERT``), Kaizo those and bit 4 (``AI_FLAG_RISKY``).
+  ``ai.policy`` always runs the policy's scripts together (``policy._flags``), so a vanilla
+  trainer must have all three, and a Kaizo trainer exactly ``0b10111`` (plan K3c Ruling 10:
+  gating RISKY per trainer would need a ``BattleState`` field);
 * weather: ``Weather.NONE`` and ``Weather.SANDSTORM``. Sandstorm's every effect on the
   implemented set is modelled: the Rock-type SpD boost (``damage.py``), the end-of-turn
   chip (``step.field_conditions``), Sand Veil's accuracy (``outcome.hit_threshold``), all
@@ -176,9 +179,14 @@ AI_FLAG_NAMES = (
     "WEATHER",
     "HARRASSMENT",
 )
-IMPLEMENTED_AI_FLAGS: dict[int, Support] = {0: Support.EXACT, 1: Support.EXACT, 2: Support.EXACT}
-# ai.policy runs exactly these scripts (policy._flags), so they must all be set.
-POLICY_AI_FLAGS = 0b111
+# Per AI policy (game_constants.POLICY): the flag bits ai.policy runs (policy._flags).
+IMPLEMENTED_AI_FLAGS: dict[str, dict[int, Support]] = {
+    "vanilla": {0: Support.EXACT, 1: Support.EXACT, 2: Support.EXACT},
+    "kaizo": {0: Support.EXACT, 1: Support.EXACT, 2: Support.EXACT, 4: Support.EXACT},
+}
+# ai.policy runs these scripts together, so a trainer must have them all (vanilla), or
+# exactly them (Kaizo, plan K3c Ruling 10).
+POLICY_AI_FLAGS = {"vanilla": 0b111, "kaizo": 0b10111}
 IMPLEMENTED_WEATHER: dict[Weather, Support] = {
     Weather.NONE: Support.EXACT,
     Weather.SUN: Support.NONE,
@@ -556,17 +564,36 @@ def _check_trainer(
             f"{display_name(trainer)}: a bag of mixed items {mixed}",
             "multi-slot item use",
         )
+    _check_ai_flags(c, POLICY.get(names.game), trainer)
+
+
+def _check_ai_flags(c: _Collector, policy: str | None, trainer: Trainer) -> None:
+    """Each flag bit of ``trainer`` against ``policy``'s ``IMPLEMENTED_AI_FLAGS``, and the
+    flag set against ``POLICY_AI_FLAGS``. A game without a policy is refused already, by
+    its own line."""
+    if policy is None:
+        return
     flags = int(trainer.ai_flags)
+    implemented = IMPLEMENTED_AI_FLAGS[policy]
     for bit in range(flags.bit_length()):
         if flags >> bit & 1:
             name = AI_FLAG_NAMES[bit] if bit < len(AI_FLAG_NAMES) else f"UNUSED_{bit}"
-            support = IMPLEMENTED_AI_FLAGS.get(bit, Support.NONE)
+            support = implemented.get(bit, Support.NONE)
             c.add(support, f"{display_name(trainer)}: AI_FLAG_{name}", "AI flag")
-    if flags & POLICY_AI_FLAGS != POLICY_AI_FLAGS:
+    required = POLICY_AI_FLAGS[policy]
+    if policy == "vanilla" and flags & required != required:
         c.add(
             Support.NONE,
             f"{display_name(trainer)}: AI flags {flags:#x} without all of BASIC, EVAL_ATTACK and "
             "EXPERT, which the AI policy always runs together",
+            "AI flag set",
+        )
+    elif policy == "kaizo" and flags != required:
+        c.add(
+            Support.NONE,
+            f"{display_name(trainer)}: AI flags {flags:#x} are not exactly BASIC, EVAL_ATTACK, "
+            "EXPERT and RISKY, which the Kaizo AI policy always runs together (plan K3c "
+            "Ruling 10)",
             "AI flag set",
         )
 

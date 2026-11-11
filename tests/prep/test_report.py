@@ -108,6 +108,18 @@ def test_prep_steps_text(tables, names):
     ]
 
 
+def test_hp_why_names_each_percent_check(tables, names):
+    """Each ``AI_DEFENDER_HP_CHECKS`` cut is explained as its check: Furret (57 HP) at 40
+    keeps HP% (trainer_ai.c:626) at most 70 (script.s:2332), at 29 at most 50 (script.s:2694,
+    Expert_ToxicLeechSeed, K3c Task 6)."""
+    from nuzline.prep.report import _hp_why
+
+    prob, _ = fixture(tables, names)
+    for hp, percent in ((40, 70), (29, 50)):
+        why = _hp_why(prob, names, Member(1, hp=hp), tables)
+        assert why == f"at most {percent} % keeps the trainer AI's high-HP check off"
+
+
 def test_prep_steps_items_status_and_alone(tables, names):
     prob, _ = fixture(tables, names)
     oran = names.item("Oran Berry")
