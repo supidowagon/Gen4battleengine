@@ -11,14 +11,15 @@ mechanic absent from a registry dict is ``NONE``.
 registry would mark that trainer's AI sampling-only, Stage A would keep ranking it by
 ``sample_ai_outcome`` alone, and Stage B would say so in its report. Nothing assigns the
 grade today: no registry entry is ``SAMPLING_ONLY`` (``tests/engine/test_coverage.py``
-guards this), ``ai.outcome`` has one fixed field layout whose width (3840) is a constant
-checked once at import against ``MAX_ENUMERATED`` (4096), and ``CoverageReport
-.sampling_only`` is therefore always empty. Roark's AI is exact, so the grade is not
-needed for this milestone. The first trainer whose draws do not fit that layout needs,
-in its plan: a per-trainer width (a layout chosen from the trainer's AI flags and
-moveset rather than a module constant), a registry entry that grades the trainer's AI
-``SAMPLING_ONLY`` when its width exceeds the budget, and the Stage A and B handling of
-a sampling-only opponent, before anything can be marked as such.
+guards this), and ``CoverageReport.sampling_only`` is therefore always empty. Each game's
+AI layout (``ai.layout``) has a width bounded at import: the vanilla flat layout's 3840
+(``ai.outcome.ENUMERATION_WIDTH``) against ``MAX_ENUMERATED`` (4096), and the Kaizo
+per-slot layout's factored width (``ai.policy.ai_width``, at most 2058) against
+``WIDTH_CAP`` (``ai.policy._check_width``). Roark's AI is exact in both games, so the grade
+is not needed for this milestone. The first trainer whose draws do not fit its game's
+layout needs, in its plan: a wider layout or a per-trainer width, a registry entry that
+grades the trainer's AI ``SAMPLING_ONLY`` when its width exceeds the budget, and the
+Stage A and B handling of a sampling-only opponent, before anything can be marked as such.
 
 The registries list exactly what plan 1a (Tasks 8a-8e: move effects, abilities, held
 items) and plan 1b (Task 2b: trainer items; Task 3: Roark's AI flags) implement:

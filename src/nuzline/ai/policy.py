@@ -829,6 +829,34 @@ def _slot_move_distribution(tables: Tables, state: BattleState, layout: AiLayout
        candidates that ties, m gets ``_TIE_SHARE[|T| + 1, rank of m in T + m]``.
 
     The guesses are then averaged (1/2 each). NaN when a score is outside 0-255."""
+    scores, hist = _slot_histograms(tables, state, layout)
+    has = (state.moves[1, state.active[1]] != 0).at[0].set(True)  # the pick's candidates
+    equal = jnp.where(has[None, :, None], hist, 0.0)
+    below = jnp.where(has[None, :, None], jnp.cumsum(hist, axis=2) - hist, 1.0)
+    picked = []
+    for slot in range(MOVES):
+        others = [j for j in range(MOVES) if j != slot]
+        win = jnp.zeros((ABILITY_GUESSES, _SCORE_VALUES), jnp.float32)
+        for subset in range(2 ** len(others)):
+            tied = [j for k, j in enumerate(others) if subset >> k & 1]
+            term = jnp.ones((ABILITY_GUESSES, _SCORE_VALUES), jnp.float32)
+            for j in others:
+                term = term * (equal[:, j] if j in tied else below[:, j])
+            rank = sum(j < slot for j in tied)
+            win = win + term * _TIE_SHARE[len(tied) + 1, rank]
+        picked.append(jnp.sum(equal[:, slot] * win, axis=1))  # [G]
+    dist = jnp.mean(jnp.stack(picked, axis=1), axis=0)  # the guesses, 1/2 each
+    dist = jnp.where(jnp.any(usable_moves(tables, state, 1)), dist, jax.nn.one_hot(0, MOVES))
+    out_of_range = jnp.any((scores < 0) | (scores >= _SCORE_VALUES))
+    return jnp.where(out_of_range, jnp.nan, dist)
+
+
+def _slot_histograms(
+    tables: Tables, state: BattleState, layout: AiLayout
+) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """Steps 1 and 2 of ``_slot_move_distribution``: ``(scores int32[G, P, MOVES],
+    hist float32[G, MOVES, 256])``, ``hist[g, m, v]`` the probability that slot m scores v
+    under guess g (refusals not applied)."""
     width = layout.slot_sites
     patterns = 2**width
     bits = (np.arange(patterns)[:, None] >> np.arange(width)) & 1  # [P, S]
@@ -854,25 +882,7 @@ def _slot_move_distribution(tables: Tables, state: BattleState, layout: AiLayout
         .at[g, m, values]
         .add(jnp.broadcast_to(weight, scores.shape))
     )  # [G, M, V]: P(slot m scores v | guess)
-    has = (state.moves[1, state.active[1]] != 0).at[0].set(True)  # the pick's candidates
-    equal = jnp.where(has[None, :, None], hist, 0.0)
-    below = jnp.where(has[None, :, None], jnp.cumsum(hist, axis=2) - hist, 1.0)
-    picked = []
-    for slot in range(MOVES):
-        others = [j for j in range(MOVES) if j != slot]
-        win = jnp.zeros((ABILITY_GUESSES, _SCORE_VALUES), jnp.float32)
-        for subset in range(2 ** len(others)):
-            tied = [j for k, j in enumerate(others) if subset >> k & 1]
-            term = jnp.ones((ABILITY_GUESSES, _SCORE_VALUES), jnp.float32)
-            for j in others:
-                term = term * (equal[:, j] if j in tied else below[:, j])
-            rank = sum(j < slot for j in tied)
-            win = win + term * _TIE_SHARE[len(tied) + 1, rank]
-        picked.append(jnp.sum(equal[:, slot] * win, axis=1))  # [G]
-    dist = jnp.mean(jnp.stack(picked, axis=1), axis=0)  # the guesses, 1/2 each
-    dist = jnp.where(jnp.any(usable_moves(tables, state, 1)), dist, jax.nn.one_hot(0, MOVES))
-    out_of_range = jnp.any((scores < 0) | (scores >= _SCORE_VALUES))
-    return jnp.where(out_of_range, jnp.nan, dist)
+    return scores, hist
 
 
 @partial(jax.jit, static_argnames="layout")
@@ -909,12 +919,14 @@ def _distribution(tables: Tables, state: BattleState, layout: AiLayout = VANILLA
 
 
 def ai_width(tables: Tables, state: BattleState) -> int:
-    """The draw combinations ``ai_action_distribution`` merges for this (concrete) state,
-    before merging: the switch stops plus, per guess, the script-roll patterns of the
+    """The draw combinations of nonzero weight that ``ai_action_distribution`` merges for
+    this (concrete) state: the switch stops plus, per guess, the script-roll patterns of the
     scoring. Flat layout: ``SWITCH_SITES + 1 + ABILITY_GUESSES * 2**MAX_SCRIPT_ROLLS`` (42).
     Per-slot layout: ``switch_sites + 1 + ABILITY_GUESSES * sum_slots 2**(sites of the
-    slot)``, the slots being factored (``_slot_move_distribution``). Checked against
-    ``WIDTH_CAP`` (plan K3c Ruling 12; ``_check_width`` bounds it for every state)."""
+    slot)``, the slots being factored. The program itself always evaluates
+    ``ABILITY_GUESSES * 2**slot_sites`` scorings (512 for Kaizo), each giving every slot's
+    score, whatever the sites (``_slot_move_distribution``); ``_check_width`` bounds both
+    against ``WIDTH_CAP`` for every state (plan K3c Ruling 12)."""
     layout = layout_of(tables)
     stops = layout.switch_sites + 1
     if not layout.per_slot_sites:
@@ -1083,20 +1095,32 @@ def _loose_move_distribution(
             rows.append(np.asarray(scores)[0])
             weights.append(weight(chunk, every))
         return _loose_pick(has, np.concatenate(rows), np.concatenate(weights))
-    scores, _ = _loose_batch(tables, batch, jnp.asarray(_loose_patterns(reads)), layout)
-    scores = np.asarray(scores)[0]  # [P, MOVES]
-    support = []
-    for m in range(MOVES):
-        patterns = np.arange(2 ** len(reads[m]))
-        w = weight(patterns, [(m, r) for r in reads[m]])
-        values: dict[int, float] = {}
-        for q, wq in zip(patterns, w, strict=True):
-            values[int(scores[q, m])] = values.get(int(scores[q, m]), 0.0) + wq
-        support.append(list(values.items()))
+    support = [list(h.items()) for h in _loose_slot_scores(tables, state, layout)]
     combos = list(itertools.product(*support))
     rows = np.array([[v for v, _ in combo] for combo in combos])
     weights = np.array([np.prod([w for _, w in combo]) for combo in combos])
     return _loose_pick(has, rows, weights)
+
+
+def _loose_slot_scores(
+    tables: Tables, state: BattleState, layout: AiLayout
+) -> list[dict[int, float]]:
+    """Per move slot, the loose distribution of its score (``{score: probability}``) over
+    the slot's own reads, each its own draw (refusals not applied)."""
+    batch = jax.tree.map(lambda a: jnp.asarray(a)[None], state)
+    reads, p, _ = _loose_reads(tables, batch, layout)
+    scores, _ = _loose_batch(tables, batch, jnp.asarray(_loose_patterns(reads)), layout)
+    scores = np.asarray(scores)[0]  # [P, MOVES]
+    out = []
+    for m in range(MOVES):
+        values: dict[int, float] = {}
+        for q in range(2 ** len(reads[m])):
+            w = 1.0
+            for k, r in enumerate(reads[m]):
+                w *= p[m, r] if q >> k & 1 else 1 - p[m, r]
+            values[int(scores[q, m])] = values.get(int(scores[q, m]), 0.0) + w
+        out.append(values)
+    return out
 
 
 def ai_action_distribution_loose(
@@ -1112,8 +1136,12 @@ def ai_action_distribution_loose(
     ``RandNext() % n`` over a u16 (:338). It reads no site table and no shared guess, so it
     checks the gates of the exact layout: path-only sites, the one-scalar guess, per-slot
     factoring. The switch, the item and the locked slot are combined as ``_distribution``
-    does (roark.md 2). NaN on a state ``_distribution`` refuses (concrete only)."""
+    does (roark.md 2). NaN on every state ``_distribution`` refuses: the scoring and item
+    refusals (``_refused``) and the voluntary-switch ones (``switching_refusals``, where
+    ``switch_sites`` would raise ``UnsupportedSwitching``). Concrete only."""
     layout = _layout(tables, layout)
+    if switching_refusals(tables, state):
+        return np.full(NUM_OPP_ACTIONS, np.nan)
     stops = jnp.arange(SWITCH_SITES + 1, dtype=jnp.int8)
     switch = np.asarray(jax.vmap(lambda stop: switch_action(tables, state, stop))(stops))
     if bool(_refused(tables, state, layout).any) or np.any(switch == REFUSED_ACTION):

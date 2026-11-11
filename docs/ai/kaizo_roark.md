@@ -275,5 +275,18 @@ The Kaizo AI is refused, so its legal move actions stand in for the actions with
 | vanilla, depth 2 | 146 | 1867 | 0.005 s | 1.12 s | 0.5% |
 | vanilla `nuzline solve`, depth 2, 2000 playouts (`stage_b.solve`) | 179 in 2 calls | | 0.012 s | 1.87 s | 0.6% (of a 58 s solve) |
 
+**Review round (I2).** Kaizo `ai_rows` now maps its rows one at a time (`lax.map`,
+`expand._ai`), so a row's float32 result no longer depends on the call size. Under `vmap`,
+XLA fused the combine step per batch shape, and that moved some Kaizo rows by 1 ulp. Kaizo
+re-measured warm after the change:
+- bucket 256: 0.024 s;
+- bucket 512: 0.046 s;
+- bucket 1024: 0.095 s;
+- bucket 16384: 1.49 s;
+- cold: 2.7 s (512) and 4.2 s (16384);
+- depth-1 AI share: 10%.
+
+Vanilla keeps `vmap`, with the numbers above.
+
 The spec 6 stop condition (an AI share above 50%) is not met. Before bucketing the Kaizo
 depth-1 share was 91% and the vanilla one 56%, both from the 16384-row padding.

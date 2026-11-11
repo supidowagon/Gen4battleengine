@@ -52,6 +52,7 @@ from nuzline.engine.actions import NUM_OPP_ACTIONS
 from nuzline.engine.enumerate import WIDTH_CAP
 from nuzline.engine.ids import Stat
 from nuzline.engine.state import MOVES, BattleState, make_state
+from nuzline.search.rows import take
 from tests.ai.fixtures import GEODUDE, outcome, versus
 
 # Kaizo move ids (data/gen4_platinum_kaizo names; effects checked in test_slot_site_table).
@@ -427,21 +428,94 @@ def test_factored_equals_joint_bruteforce(kaizo_tables, kaizo_roark_party, data)
 # --- Exact against loose -------------------------------------------------------------------
 
 
+_slot_histograms = jax.jit(policy._slot_histograms, static_argnames="layout")
+
+
+def _exact_slot_scores(t, s, layout) -> np.ndarray:
+    """``float64[MOVES, 256]``: each slot's exact score distribution, the guesses averaged
+    (``policy._slot_histograms``)."""
+    _, hist = _slot_histograms(t, s, layout)
+    return np.asarray(hist, np.float64).mean(axis=0)
+
+
+def _loose_slot_scores(t, s, layout) -> np.ndarray:
+    """``float64[MOVES, 256]``: each slot's loose score distribution (every read its own
+    draw)."""
+    out = np.zeros((MOVES, 256))
+    for m, values in enumerate(policy._loose_slot_scores(t, s, layout)):
+        for v, p in values.items():
+            out[m, v] += p
+    return out
+
+
+def _assert_exact_equals_loose(t, s, layout=KAIZO) -> None:
+    """The exact and loose action distributions are NaN on the same states and otherwise
+    equal; so is each slot's score distribution before the pick (which catches a wrong site
+    or a wrong slot weight even where the pick hides it). The loose side enumerates the
+    slots jointly (its default ``joint_bits``), so it does not lean on per-slot factoring."""
+    exact = np.asarray(_distribution(t, s, layout), np.float64)
+    loose = policy.ai_action_distribution_loose(t, s, layout)
+    np.testing.assert_array_equal(np.isnan(exact), np.isnan(loose))
+    np.testing.assert_allclose(exact, loose, atol=1e-5)
+    if not np.isnan(exact).any():
+        np.testing.assert_allclose(
+            _exact_slot_scores(t, s, layout), _loose_slot_scores(t, s, layout), atol=1e-6
+        )
+
+
 @pytest.mark.slow
-@_SETTINGS
+@settings(_SETTINGS, max_examples=20)
 @given(data=st.data())
 def test_exact_equals_loose(kaizo_tables, kaizo_roark_party, data):
     """On random Kaizo decisions where at most one ability read can change a score (the
     condition Ruling 6 needs, pinned for Roark by test_one_scalar_guess_is_exact_for_roark),
-    the exact distribution equals the loose one, where every ``IfRandomLessThan`` and every
-    ``LoadBattlerAbility DEFENDER`` is its own draw. NaN on the same refused states."""
+    the exact distribution and each slot's score distribution equal the loose ones, where
+    every ``IfRandomLessThan`` and every ``LoadBattlerAbility DEFENDER`` is its own draw.
+    Both are NaN on the same refused states, the voluntary-switch refusals included."""
     t = kaizo_tables
     s = data.draw(kaizo_states(t, kaizo_roark_party))
     assume(_sensitive_reads(t, _one(s), KAIZO)[0] <= 1)
-    exact = np.asarray(_distribution(t, s, KAIZO), np.float64)
-    loose = policy.ai_action_distribution_loose(t, s, KAIZO, joint_bits=0)
-    np.testing.assert_array_equal(np.isnan(exact), np.isnan(loose))
-    np.testing.assert_allclose(exact, loose, atol=1e-5)
+    _assert_exact_equals_loose(t, s)
+
+
+@pytest.mark.parametrize(
+    ("species", "abilities", "name"),
+    [("Whismur", [113, SOUNDPROOF], "Scrappy"), ("Magnezone", [26, 42], "Levitate")],
+)
+def test_loose_is_nan_on_a_switching_refusal(
+    kaizo_tables, kaizo_names, kaizo_roark_party, species, abilities, name
+):
+    """Review I1: a player ability the switch check does not implement
+    (``switching.PLAYER_ABILITY_REFUSALS``): Whismur's Scrappy, and Magnezone's Levitate
+    (species 462, the full suite's failing draw). The exact distribution is NaN and the
+    loose oracle is NaN too, rather than raising ``UnsupportedSwitching``."""
+    t, n = kaizo_tables, kaizo_names
+    sp = n.species(species)
+    assert np.asarray(t.species_abilities_decomp)[sp].tolist() == abilities
+    s = _kaizo_state(t, kaizo_roark_party, (ROCK_THROW, LEER, 0, 0))
+    s = _bulky(_with_player(t, s, sp, 0))
+    assert any(name in r for r in policy.ai_refusals(t, s, n))
+    assert np.isnan(np.asarray(_distribution(t, s, KAIZO))).all()
+    assert np.isnan(policy.ai_action_distribution_loose(t, s, KAIZO)).all()
+
+
+def test_slot_scores_catch_a_missing_expert_site(kaizo_tables, kaizo_roark_party):
+    """Review m2: dropping DEF_DOWN's Expert_StatusDefenseDown roll (script.s:2328) from the
+    exact table can leave the pick unchanged (Leer loses to Rock Throw either way) but not
+    Leer's score distribution, which the loose oracle draws for itself."""
+    t = kaizo_tables
+    s = _kaizo_state(t, kaizo_roark_party, (ROCK_THROW, LEER, 0, 0))
+    s = _bulky(_with_player(t, s, 146))
+    s = s._replace(hp=s.hp.at[1, 0].set(5))  # Bonsly below 70%: the :2328 roll is reached
+    _assert_exact_equals_loose(t, s)
+    rows = tuple(
+        (e, tuple(x for x in sites if x[0] != 2328) if e == 19 else sites)
+        for e, sites in KAIZO.effect_sites
+    )
+    dropped = KAIZO._replace(effect_sites=rows)
+    assert not np.allclose(
+        _exact_slot_scores(t, s, dropped), _loose_slot_scores(t, s, KAIZO), atol=1e-3
+    )
 
 
 def test_loose_joint_equals_per_slot(kaizo_tables, kaizo_roark_party):
@@ -518,19 +592,33 @@ def test_one_scalar_guess_is_exact_for_roark(game, tables, names, kaizo_tables, 
         assert not bad, (game, j, bad)
 
 
+@pytest.mark.slow
 def test_kaizo_ai_rows_do_not_depend_on_the_bucket(kaizo_tables, kaizo_roark_party):
-    """``expand.ai_rows`` with the Kaizo layout: one 256-row call and 8-row calls give
-    bit-identical rows (padding never reaches the output)."""
+    """Review I2: ``expand.ai_rows`` with the Kaizo layout gives bit-identical rows for 257
+    random Kaizo decisions across the bucket boundary (255, 256 and 257 rows: buckets 256
+    and 512) and for calls of 3, 7 and 300 rows: padding never reaches the output, and the
+    per-row program does not change with the call size (``expand._ai``)."""
     from nuzline.search.expand import ai_rows
 
     t = kaizo_tables
+    rng = np.random.default_rng(3)
+    pool = _move_pool(t)
+    species = _two_ability_species(t)
     states = []
-    for moves in ((ROCK_THROW, LEER, SCREECH, PURSUIT), (ACCELEROCK, STEALTH_ROCK, TACKLE, 0)):
-        for species in (72, 146):
-            for hp in (20, 400):
-                s = _kaizo_state(t, kaizo_roark_party, moves)
-                states.append(_bulky(_with_player(t, s, species), hp))
+    for _ in range(257):
+        moves = [int(rng.choice(pool))] + [int(rng.choice((0, *pool))) for _ in range(3)]
+        s = _kaizo_state(t, kaizo_roark_party, moves)
+        s = _with_player(t, s, int(rng.choice(species)), int(rng.integers(2)))
+        s = _bulky(s, int(rng.integers(20, 400)))
+        s = s._replace(
+            hp=s.hp.at[1, 0].set(int(rng.integers(1, int(s.max_hp[1, 0]) + 1))),
+            stages=s.stages.at[0, Stat.DEF].set(int(rng.integers(-6, 7))),
+        )
+        states.append(s)
     rows = jax.tree.map(lambda *xs: np.stack([np.asarray(x) for x in xs]), *states)
-    big = ai_rows(t, rows)
-    assert not np.isnan(big).any()
-    assert big.tobytes() == ai_rows(t, rows, per_call=8).tobytes()
+    ref = ai_rows(t, rows)  # bucket 512
+    assert (~np.isnan(ref).any(axis=1)).sum() > 100  # mostly accepted states
+    for n in (255, 256):
+        assert ai_rows(t, take(rows, np.arange(n))).tobytes() == ref[:n].tobytes(), n
+    for per_call in (3, 7, 300):
+        assert ai_rows(t, rows, per_call=per_call).tobytes() == ref.tobytes(), per_call

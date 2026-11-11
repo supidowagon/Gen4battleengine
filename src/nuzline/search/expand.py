@@ -11,13 +11,14 @@ state ``send_replacements`` left and marks the child ``refused`` (ruling 4 value
 The observation is ``engine.observe``'s, projected from ``step``'s own events
 (``step.step_events``, ``observe.observation``) of the state after the replacement.
 
-Every batched program (``ai_rows``, ``laws_rows``, ``step_rows``) runs in chunks of
-``CHUNK`` rows padded to one fixed shape (``ai_rows``: a power-of-two bucket of the rows,
-``bucket_rows``, so a small frontier does not pay for ``CHUNK`` rows), ``-(-CHUNK // devices) * devices`` rows
-(padding = copies of the chunk's row 0, dropped after the call), sharded over the host
-devices as ``stage_a.rank_actions`` shards and exported through ``cached_export``, so
-a solve compiles each program once per device count and the results do not depend on
-it.
+Every batched program (``ai_rows``, ``laws_rows``, ``step_rows``, ``replace_rows``) runs
+in calls of a fixed number of rows: ``CHUNK``, except ``ai_rows``, whose calls have a
+power-of-two bucket of its rows (``bucket_rows``, 256 to ``CHUNK``), so a small frontier
+does not pay for ``CHUNK`` rows. A call's rows are rounded up to a multiple of the device
+count (padding = copies of the call's row 0, dropped after the call), sharded over the
+host devices as ``stage_a.rank_actions`` shards and exported through ``cached_export``, so
+a solve compiles each program once per call shape (``ai_rows``: at most 7 buckets) and
+device count, and a row's result depends on neither (``_ai``).
 
 ``expand`` enumerates each request's outcomes with ``enumerate_outcomes`` (float64
 probabilities from the integer laws, ruling 3: rolls are not pre-merged), streams the
@@ -112,8 +113,9 @@ def _run(fn: Callable, name: str, tables: Tables, rows: tuple, n: int, static=No
     """``fn(tables, *rows)`` (a ``vmap`` over the rows' leading axis) over ``n`` rows,
     in ``per_call``-row calls (default ``CHUNK``) padded and sharded as the module
     docstring says; numpy out. ``static`` names what else ``fn`` closes over
-    (``cached_export``). Padding rows are copies of the call's row 0 and are dropped, and
-    ``fn`` maps each row on its own, so a row's result does not depend on ``per_call``."""
+    (``cached_export``). Padding rows are copies of the call's row 0 and are dropped. A
+    row's result does not depend on ``per_call`` when ``fn``'s per-row program does not
+    change with the batch shape (``_ai`` says how ``ai_rows`` ensures it)."""
     if n == 0:
         specs = jax.tree.map(lambda a: jax.ShapeDtypeStruct((1, *a.shape[1:]), a.dtype), rows)
         shape = jax.eval_shape(fn, tables, *specs)
@@ -134,7 +136,15 @@ def _run(fn: Callable, name: str, tables: Tables, rows: tuple, n: int, static=No
 
 
 def _ai(tables: Tables, states: BattleState, layout: AiLayout) -> jnp.ndarray:
-    return jax.vmap(lambda s: _distribution(tables, s, layout))(states)
+    """``_distribution`` of every row. A per-slot layout maps the rows one at a time
+    (``lax.map``): the per-row program is then the same at every call size, so a row's
+    float32 result does not depend on the bucket (under ``vmap`` XLA fuses the combine
+    per batch shape, which moved some Kaizo rows by 1 ulp). Vanilla keeps ``vmap``,
+    whose rows are stable (tests/search/test_expand.py)."""
+    one = partial(_distribution, tables, layout=layout)
+    if layout.per_slot_sites:
+        return jax.lax.map(one, states)
+    return jax.vmap(one)(states)
 
 
 def ai_rows(tables: Tables, states: BattleState, per_call: int | None = None) -> np.ndarray:
