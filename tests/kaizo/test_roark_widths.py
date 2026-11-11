@@ -54,7 +54,12 @@ SAVES = {"pre_roark": "kaizo_save_pre_roark_path", "probe": "kaizo_save_probe_pa
 
 
 def _movesets(cand) -> list[tuple[int, int, int, int]]:
-    """The candidate's current moves, then its other learnable moves four at a time."""
+    """The candidate's current moves, then its other learnable moves four at a time.
+
+    The extra moves are tested in fixed groups of four (learnset order), not every set of
+    four: every move is used, and a pair's width depends only on the move the row uses,
+    never on its moveset neighbours. A mechanic reading the other moves (Encore, Sleep
+    Talk, an AI read of the moveset) would need every combination here."""
     known = [m for m in cand.spec.moves if m]
     extra = [m for m in (*cand.relearner, *(m for _, m in cand.tms)) if m not in known]
     out = [tuple(cand.spec.moves)]

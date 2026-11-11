@@ -592,6 +592,8 @@ def _setup(tables, names, case):
             ability=s.ability.at[1, 2].set(AbilityId.SHED_SKIN),
             status=s.status.at[1, 2].set(Status.POISON),
         )
+        if "no_bench" in args:  # Onix fainted, the holder too: no drag, nothing read
+            s = _faint(s, 1, 1, 2)
     elif kind == "speed_tie_in":  # the newcomer ties the Roar user's speed at the turn's end
         s = s._replace(stats=s.stats.at[1, 2, _SPE].set(s.stats[0, 0, _SPE]))
     elif kind == "drag_needs_bench":
@@ -633,6 +635,7 @@ BRUTE_CASES = (
     + [("infatuated_user", "opp"), ("paralysed_user", "opp")]
     + [("quick_claw_in", "opp"), ("intimidate_in", "opp"), ("natural_cure_out", "opp")]
     + [("shed_skin_in", "opp"), ("speed_tie_in", "opp"), ("infatuated_target", "opp")]
+    + [("shed_skin_in", "opp", "no_bench")]
     + [("roar_vs_roar", o) for o in ("player", "opp", "tie")]
     + [("roar_vs_roar", "opp", "claw"), ("switch_target", "opp")]
     + [("drag_needs_bench", "opp", b) for b in (0, 1, 2)]
@@ -655,6 +658,16 @@ def test_a_drag_widens_the_end_order_only_with_a_bench(tables, names, bench):
     assert int(laws.roar_bench[0]) == bench
     assert bool(laws.relevant.end_speed_tie) == (bench >= 1)
     assert bool(laws_of(tables, s, acts, loose=True).relevant.end_speed_tie)
+
+
+def test_no_shed_skin_read_without_a_bench(tables, names):
+    # The same gate guards shed_skin's drag clause. With no eligible bench the only living
+    # Pokemon of the side is the Roar's target, whose own Shed Skin the holder clause reads
+    # anyway, so the gate cannot change shed_skin (a fainted holder is never living).
+    s, acts = _setup(tables, names, ("shed_skin_in", "opp", "no_bench"))
+    laws = laws_of(tables, s, acts)
+    assert int(laws.roar_bench[0]) == 0
+    assert not bool(laws.relevant.shed_skin[1])
 
 
 @pytest.mark.parametrize("level", [12, 16])

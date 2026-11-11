@@ -159,6 +159,9 @@ EXACT_CASES = [
     ("Double Kick", "Leer", "player", ("herb_atk_low",), [[True, False]]),
     ("Double Kick", "Leer", "opp", ("herb_atk_low",), [[False, False]]),
     ("Double Kick", "Leer", "player", ("herb_opp_def_low",), [[True, False]]),
+    # Tackle changes no stage: only the foe's Defense below 0 at the start keeps the second
+    # hit out of the classes (the start term of the defender's herb clause).
+    ("Double Kick", "Tackle", "player", ("herb_opp_def_low",), [[True, False]]),
     ("Double Kick", "Growl", "opp", ("herb",), [[False, False]]),
 ]
 
@@ -224,7 +227,7 @@ def _forced(laws):
         ("Tackle", "Leer", "player", ("guts_asleep",)),
         # A White Herb restores the lowered Attack / Defense after the first hit (Task 12).
         ("Double Kick", "Leer", "player", ("herb_atk_low",)),
-        ("Double Kick", "Leer", "player", ("herb_opp_def_low",)),
+        ("Double Kick", "Tackle", "player", ("herb_opp_def_low",)),
     ],
 )
 def test_compression_disabled_when_inputs_can_change(tables, names, player, opp, order, setup):
