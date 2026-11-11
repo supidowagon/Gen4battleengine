@@ -33,6 +33,7 @@ import numpy as np
 from jax.sharding import Mesh, NamedSharding, PartitionSpec
 
 import nuzline.search.stage_a  # noqa: F401 - registers Tables/BattleState/PlayoutResult
+from nuzline.ai.layout import AiLayout, layout_of
 from nuzline.data.tables import Tables
 from nuzline.engine.order import is_switch
 from nuzline.engine.outcome import sample_outcome
@@ -154,14 +155,18 @@ def allocate(weights: np.ndarray, budget: int, floor: int = 1) -> np.ndarray:
     return (2 * np.maximum(floor, np.rint(share))).astype(np.int64)
 
 
-def _leaf_program(tables: Tables, states: BattleState, keys, max_turns: int) -> PlayoutResult:
-    return jax.vmap(lambda s, k: playout(tables, s, k, max_turns))(states, keys)
+def _leaf_program(
+    tables: Tables, states: BattleState, keys, max_turns: int, layout: AiLayout
+) -> PlayoutResult:
+    return jax.vmap(lambda s, k: playout(tables, s, k, max_turns, layout))(states, keys)
 
 
-def _root_program(tables: Tables, states: BattleState, keys, max_turns: int) -> PlayoutResult:
+def _root_program(
+    tables: Tables, states: BattleState, keys, max_turns: int, layout: AiLayout
+) -> PlayoutResult:
     """``_leaf_program`` from roots: each playout draws its root's hidden values first
     (``playout.root_state``)."""
-    return jax.vmap(lambda s, k: playout(tables, root_state(tables, s, k), k, max_turns))(
+    return jax.vmap(lambda s, k: playout(tables, root_state(tables, s, k), k, max_turns, layout))(
         states, keys
     )
 
@@ -179,9 +184,11 @@ def _forced_turn(tables: Tables, state: BattleState, pair, key):
     return after, refused, key
 
 
-def _forced_one(tables: Tables, state: BattleState, pair, key, max_turns: int) -> PlayoutResult:
+def _forced_one(
+    tables: Tables, state: BattleState, pair, key, max_turns: int, layout: AiLayout
+) -> PlayoutResult:
     after, refused, key = _forced_turn(tables, state, pair, key)
-    rest = playout(tables, after, key, max_turns - 1)
+    rest = playout(tables, after, key, max_turns - 1, layout)
     return PlayoutResult(
         won=jnp.where(refused, REFUSED_WON, rest.won).astype(jnp.int8),
         player_faints=rest.player_faints,
@@ -194,8 +201,12 @@ def _forced_one(tables: Tables, state: BattleState, pair, key, max_turns: int) -
     )
 
 
-def _forced_program(tables: Tables, states: BattleState, pairs, keys, max_turns: int):
-    return jax.vmap(lambda s, p, k: _forced_one(tables, s, p, k, max_turns))(states, pairs, keys)
+def _forced_program(
+    tables: Tables, states: BattleState, pairs, keys, max_turns: int, layout: AiLayout
+):
+    return jax.vmap(lambda s, p, k: _forced_one(tables, s, p, k, max_turns, layout))(
+        states, pairs, keys
+    )
 
 
 def _run(fn, name: str, max_turns: int, tables: Tables, rows: tuple, row_of, keys, counts):
@@ -206,7 +217,8 @@ def _run(fn, name: str, max_turns: int, tables: Tables, rows: tuple, row_of, key
     devices = jax.device_count()
     size = -(-LEAF_CHUNK // devices) * devices
     sharding = NamedSharding(Mesh(jax.devices(), ("d",)), PartitionSpec("d"))
-    program = partial(fn, max_turns=max_turns)
+    layout = layout_of(tables)  # concrete here; the programs take it as static
+    program = partial(fn, max_turns=max_turns, layout=layout)
     won, refused, faints, deaths_of, ended = [], [], [], [], []
     hp_left, pp_left = [], []
     for start in range(0, n, LEAF_CHUNK):
@@ -216,7 +228,11 @@ def _run(fn, name: str, max_turns: int, tables: Tables, rows: tuple, row_of, key
         chunk = jax.device_put(chunk, sharding) if devices > 1 else jax.device_put(chunk)
         args = (tables, *chunk)
         exported = cached_export(
-            program, args, name=name, static={"max_turns": max_turns}, version=code_version()
+            program,
+            args,
+            name=name,
+            static={"max_turns": max_turns, "layout": layout.name},
+            version=code_version(),
         )
         out = jax.device_get(exported(*args))
         won.append(np.asarray(out.won)[: len(idx)])

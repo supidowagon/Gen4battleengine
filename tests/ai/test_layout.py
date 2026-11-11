@@ -46,8 +46,8 @@ def test_layout_values():
 
 def test_is_damaging_excludes_no_calc_effects(kaizo_tables, kaizo_names, kaizo_roark_party):
     """sNoDamageCalcMoveEffects (trainer_ai.c:31-46) holds HALVE_DEFENSE (7) and
-    RECOIL_HALF (269): FlagMoveDamageScore (:1029-1036) and TrainerAI_CalcAllDamage
-    (:2828-2829) compute no damage for them, whatever their power."""
+    RECOIL_HALF (269): FlagMoveDamageScore (:1035-1036) and TrainerAI_CalcAllDamage
+    (:2827-2828) compute no damage for them, whatever their power."""
     t = kaizo_tables
     assert int(t.move_ai_effect[SELFDESTRUCT]) == 7 and int(t.move_ai_effect[HEAD_SMASH]) == 269
     assert not bool(commands.is_damaging(t, SELFDESTRUCT))
@@ -66,7 +66,7 @@ def test_is_damaging_excludes_no_calc_effects(kaizo_tables, kaizo_names, kaizo_r
 def test_kaizo_highest_damage_ignores_head_smash(kaizo_tables, kaizo_names, kaizo_roark_party):
     """Review Focus 1: Cranidos [Head Smash, Zen Headbutt, Crunch, Rock Polish]. Head Smash
     (power 150) gets AI_NO_COMPARISON_MADE and does not count in the comparison; the
-    stronger of Zen Headbutt and Crunch is AI_MOVE_IS_HIGHEST_DAMAGE (trainer_ai.c:1029-1061)."""
+    stronger of Zen Headbutt and Crunch is AI_MOVE_IS_HIGHEST_DAMAGE (trainer_ai.c:1035-1061)."""
     t, n = kaizo_tables, kaizo_names
     cranidos = _kaizo_mon(kaizo_roark_party, "Cranidos", n)
     assert [n.move_names[m] for m in cranidos.moves] == [
@@ -155,7 +155,9 @@ def test_traced_tables_without_a_layout_refuse_another_policy(tables, names):
     gets the vanilla one, and a game of another policy is refused, not misread."""
     s = trace_a(tables, names)
     kaizo_like = tables._replace(ai_policy=jnp.asarray(1, tables.ai_policy.dtype))
-    assert int(jax.jit(lambda st: ai_policy(kaizo_like, st, outcome()))(s)) == 0
+    # Concrete tables resolve their own layout: the Kaizo policy's outcome is per slot.
+    per_slot = outcome()._replace(script_rolls=jnp.zeros((4, KAIZO.slot_sites), jnp.int8))
+    assert int(jax.jit(lambda st: ai_policy(kaizo_like, st, per_slot))(s)) == 0
     traced = jax.jit(lambda t: ai_policy(t, s, outcome()))
     assert int(traced(tables)) == 0
     assert int(traced(kaizo_like)) == REFUSED_ACTION

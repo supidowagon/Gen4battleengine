@@ -750,11 +750,17 @@ def user_calls(
                 f"- Gravity: {name(tid)} rests on PKCalc only ({a.source}); no ROM field effect "
                 f"on its headers {sorted(src.trainer_maps.get(tid, []))}"
             )
-    lines.append(
-        f"- {unclassified} ROM changes unclassified in data/kaizo/rom_diff.toml: every Kaizo "
-        "fight is refused until they are classified (Ruling 13)"
-    )
+    lines.append(unclassified_line(unclassified))
     return lines
+
+
+def unclassified_line(unclassified: int) -> str:
+    """The user-call line for the ``unknown`` entries of ``data/kaizo/rom_diff.toml``: while
+    any is left every Kaizo fight is refused (Ruling 13); none left refuses nothing."""
+    head = f"- {unclassified} ROM changes unclassified in data/kaizo/rom_diff.toml"
+    if unclassified == 0:
+        return f"{head}: none is left, so no Kaizo fight is refused for one (Ruling 13)"
+    return f"{head}: every Kaizo fight is refused until they are classified (Ruling 13)"
 
 
 # --- resolve ----------------------------------------------------------------------------

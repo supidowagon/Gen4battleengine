@@ -341,3 +341,34 @@ def test_decision_actions_constant_on_equal_obs(tables, names):
             groups[c.obs].add(mask.tobytes())
     assert groups
     assert all(len(masks) == 1 for masks in groups.values())
+
+
+def test_bucket_rows():
+    from nuzline.search.expand import AI_MIN_ROWS, bucket_rows
+
+    assert [bucket_rows(n) for n in (1, 256, 257, 1000, 16384, 50000)] == [
+        AI_MIN_ROWS,
+        256,
+        512,
+        1024,
+        CHUNK,
+        CHUNK,
+    ]
+
+
+def test_ai_rows_do_not_depend_on_the_bucket(tables, names):
+    """The same states through two call sizes (one call of 256 rows, and calls of 8 rows,
+    the last one padded) give bit-identical rows: padding never reaches the output."""
+    from tests.ai.fixtures import versus
+
+    states = [
+        versus(tables, names, slot, lead, opp_hp=hp)
+        for slot in range(3)
+        for lead in ("Starly", "Grotle", None)
+        for hp in (5, 20)
+    ]
+    rows = jax.tree.map(lambda *xs: np.stack([np.asarray(x) for x in xs]), *states)
+    big = ai_rows(tables, rows)
+    small = ai_rows(tables, rows, per_call=8)
+    assert big.shape == (len(states), small.shape[1])
+    assert big.tobytes() == small.tobytes()

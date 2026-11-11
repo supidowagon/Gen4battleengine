@@ -12,7 +12,8 @@ The observation is ``engine.observe``'s, projected from ``step``'s own events
 (``step.step_events``, ``observe.observation``) of the state after the replacement.
 
 Every batched program (``ai_rows``, ``laws_rows``, ``step_rows``) runs in chunks of
-``CHUNK`` rows padded to one fixed shape, ``-(-CHUNK // devices) * devices`` rows
+``CHUNK`` rows padded to one fixed shape (``ai_rows``: a power-of-two bucket of the rows,
+``bucket_rows``, so a small frontier does not pay for ``CHUNK`` rows), ``-(-CHUNK // devices) * devices`` rows
 (padding = copies of the chunk's row 0, dropped after the call), sharded over the host
 devices as ``stage_a.rank_actions`` shards and exported through ``cached_export``, so
 a solve compiles each program once per device count and the results do not depend on
@@ -39,6 +40,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from functools import partial
 
 import jax
 import jax.numpy as jnp
@@ -46,6 +48,7 @@ import numpy as np
 from jax.sharding import Mesh, NamedSharding, PartitionSpec
 
 import nuzline.search.stage_a  # noqa: F401 - registers Tables/BattleState for jax.export
+from nuzline.ai.layout import AiLayout, layout_of
 from nuzline.ai.policy import _distribution
 from nuzline.data.tables import Tables
 from nuzline.engine.actions import MOVE_ACTIONS
@@ -69,6 +72,7 @@ __all__ = [
     "CHUNK",
     "Child",
     "ai_rows",
+    "bucket_rows",
     "expand",
     "expand_replacements",
     "laws_rows",
@@ -77,6 +81,7 @@ __all__ = [
 ]
 
 CHUNK = 16384  # rows per program call, before padding to the device count
+AI_MIN_ROWS = 256  # ai_rows' smallest call (bucket_rows)
 
 # The pytrees of the programs' arguments and results, for ``jax.export`` serialization
 # (``Tables`` and ``BattleState`` are registered by ``stage_a``).
@@ -96,37 +101,54 @@ class Child:
     refused: bool
 
 
-def _run(fn: Callable, name: str, tables: Tables, rows: tuple, n: int):
+def bucket_rows(n: int) -> int:
+    """The rows of one ``ai_rows`` program call for ``n`` rows: the smallest power of two
+    at least ``n``, between ``AI_MIN_ROWS`` and ``CHUNK`` (above ``CHUNK``, ``CHUNK``-row
+    calls). So at most 7 shapes (256 .. 16384) are compiled per device count."""
+    return min(CHUNK, max(AI_MIN_ROWS, 1 << max(n - 1, 0).bit_length()))
+
+
+def _run(fn: Callable, name: str, tables: Tables, rows: tuple, n: int, static=None, per_call=CHUNK):
     """``fn(tables, *rows)`` (a ``vmap`` over the rows' leading axis) over ``n`` rows,
-    in ``CHUNK``-row calls padded and sharded as the module docstring says; numpy out."""
+    in ``per_call``-row calls (default ``CHUNK``) padded and sharded as the module
+    docstring says; numpy out. ``static`` names what else ``fn`` closes over
+    (``cached_export``). Padding rows are copies of the call's row 0 and are dropped, and
+    ``fn`` maps each row on its own, so a row's result does not depend on ``per_call``."""
     if n == 0:
         specs = jax.tree.map(lambda a: jax.ShapeDtypeStruct((1, *a.shape[1:]), a.dtype), rows)
         shape = jax.eval_shape(fn, tables, *specs)
         return jax.tree.map(lambda s: np.zeros((0, *s.shape[1:]), s.dtype), shape)
     devices = jax.device_count()
-    size = -(-CHUNK // devices) * devices
+    size = -(-per_call // devices) * devices
     sharding = NamedSharding(Mesh(jax.devices(), ("d",)), PartitionSpec("d"))
     outs = []
-    for start in range(0, n, CHUNK):
-        idx = np.arange(start, min(start + CHUNK, n))
+    for start in range(0, n, per_call):
+        idx = np.arange(start, min(start + per_call, n))
         pad = np.concatenate([idx, np.full(size - len(idx), idx[0])])
         chunk = take(rows, pad)
         chunk = jax.device_put(chunk, sharding) if devices > 1 else jax.device_put(chunk)
         args = (tables, *chunk)
-        program = cached_export(fn, args, name=name, static={}, version=code_version())
+        program = cached_export(fn, args, name=name, static=static or {}, version=code_version())
         outs.append(take(jax.device_get(program(*args)), slice(0, len(idx))))
     return concat(outs)
 
 
-def _ai(tables: Tables, states: BattleState) -> jnp.ndarray:
-    return jax.vmap(_distribution, in_axes=(None, 0))(tables, states)
+def _ai(tables: Tables, states: BattleState, layout: AiLayout) -> jnp.ndarray:
+    return jax.vmap(lambda s: _distribution(tables, s, layout))(states)
 
 
-def ai_rows(tables: Tables, states: BattleState) -> np.ndarray:
+def ai_rows(tables: Tables, states: BattleState, per_call: int | None = None) -> np.ndarray:
     """``float32[N, NUM_OPP_ACTIONS]``: the AI's exact action distribution of each of
     ``N`` states (``policy._distribution``, the batched form of
-    ``ai_action_distribution``); a NaN row is a refused state."""
-    return _run(_ai, "expand_ai", tables, (states,), len(states.hp))
+    ``ai_action_distribution``) under the concrete ``tables``' AI layout (``layout_of``,
+    a static key of the cached program); a NaN row is a refused state. The calls have
+    ``bucket_rows(N)`` rows (``per_call`` overrides it, for tests): a lone state does not
+    pay for ``CHUNK`` rows."""
+    layout = layout_of(tables)
+    fn = partial(_ai, layout=layout)
+    n = len(states.hp)
+    per_call = bucket_rows(n) if per_call is None else per_call
+    return _run(fn, "expand_ai", tables, (states,), n, {"layout": layout.name}, per_call)
 
 
 def _laws(tables: Tables, states: BattleState, actions) -> OutcomeLaws:

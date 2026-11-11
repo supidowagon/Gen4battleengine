@@ -18,6 +18,15 @@ Only the script paths of the moves in ``MOVE_EFFECTS`` are transcribed (roark.md
 keyed by move id in vanilla and by their battle effects in Kaizo (``nuzline.ai.layout``);
 ``nuzline.ai.policy.ai_refusals`` refuses an opponent that knows any other move, and
 the mechanics ``effectiveness_class`` does not implement.
+
+**The loose oracle** (tests only; ``policy.ai_action_distribution_loose``): with
+``AiContext.loose`` set, every ``RandNext`` read of the scripts is its own independent draw,
+as in the decomp. Each ``IfRandomLessThan`` (trainer_ai.c:528-538) and each
+``LoadBattlerAbility DEFENDER`` coin flip (:1191-1198) takes the next bit of its slot's
+``LooseDraws.bits``, in the static order the straight-line scripts make the reads, and
+records the bit's probability: the read's own N/256, or 1/2. It reads neither
+``AiContext.sites`` nor ``AiOutcome.ability_guess``, so it shares no gate with the exact
+layout: no site table, no one-scalar guess.
 """
 
 from __future__ import annotations
@@ -28,7 +37,7 @@ from typing import NamedTuple
 import jax
 import jax.numpy as jnp
 
-from nuzline.ai.outcome import AiOutcome, script_roll_sites
+from nuzline.ai.outcome import SITE_LINES, AiOutcome, line_sites
 from nuzline.ai.switching import INEFFECTIVE, apply_type_chart, type_chart_flags
 from nuzline.data.tables import Tables
 from nuzline.engine.actions import usable_moves
@@ -220,6 +229,40 @@ ITEM_EXPERT_BELT = 268  # HOLD_EFFECT_POWER_UP_SE
 _TRAPPING = jnp.array([ABILITY_IDS[n] for n in ("Shadow Tag", "Magnet Pull", "Arena Trap")], _I32)
 
 
+class ReadKind(IntEnum):
+    """What a loose read draws (``LooseDraws.kind``)."""
+
+    NONE = 0  # no read at this index
+    ROLL = 1  # IfRandomLessThan N: P(1) = N/256
+    ABILITY = 2  # LoadBattlerAbility DEFENDER's coin flip: P(1) = 1/2
+
+
+LOOSE_READS = 32  # LooseDraws columns: at least the reads one slot's scripts make
+
+
+class LooseDraws(NamedTuple):
+    """The loose oracle's draws (module docstring). Read i of slot m, counted in the order
+    the straight-line scripts make the reads (``count``), takes ``bits[m, i]``."""
+
+    bits: jnp.ndarray  # int8[MOVES, LOOSE_READS]: 1 = the jump / ability slot 1
+    count: jnp.ndarray  # int32[MOVES]: reads made so far in each slot
+    p: jnp.ndarray  # float32[MOVES, LOOSE_READS]: P(bit = 1) of each read
+    kind: jnp.ndarray  # int8[MOVES, LOOSE_READS]: the ReadKind of each read
+    live: jnp.ndarray  # bool[MOVES, LOOSE_READS]: the read is on the slot's path
+
+
+def loose_draws(bits) -> LooseDraws:
+    """``LooseDraws`` with ``bits`` (``int[MOVES, LOOSE_READS]``) and no read made yet."""
+    shape = (MOVES, LOOSE_READS)
+    return LooseDraws(
+        bits=jnp.asarray(bits, jnp.int8),
+        count=jnp.zeros(MOVES, _I32),
+        p=jnp.zeros(shape, jnp.float32),
+        kind=jnp.zeros(shape, jnp.int8),
+        live=jnp.zeros(shape, bool),
+    )
+
+
 class AiContext(NamedTuple):
     """The decomp's ``AIContext`` for one decision, plus the masks of the straight-line
     scripts."""
@@ -236,7 +279,8 @@ class AiContext(NamedTuple):
     seen_moves: jnp.ndarray  # int32[4]: the player's active's moves the AI has seen, else 0
     player_ability: jnp.ndarray  # int32: LoadBattlerAbility DEFENDER (decomp id)
     damage: jnp.ndarray  # int32[4]: ai_damage of the AI's move slots, USE_MAX_DAMAGE
-    sites: jnp.ndarray  # int32[4, 1 + MAX_EXPERT_SITES]: script_rolls index per site
+    sites: jnp.ndarray  # int32[4, len(SITE_LINES)]: script_rolls index of each line
+    loose: LooseDraws | None = None  # the loose oracle's draws (tests only), else None
 
 
 def ai_damage(tables: Tables, state: BattleState, move, roll) -> jnp.ndarray:
@@ -339,10 +383,20 @@ def defender_ability(tables: Tables, state: BattleState, ability_guess) -> jnp.n
     return jnp.where(known, true, resolved)
 
 
-def new_context(tables: Tables, state: BattleState, outcome: AiOutcome) -> AiContext:
+def new_context(
+    tables: Tables,
+    state: BattleState,
+    outcome: AiOutcome,
+    sites=None,
+    loose: LooseDraws | None = None,
+) -> AiContext:
     """``TrainerAI_Init`` (trainer_ai.c:211) with ``AI_INIT_SCORE_ALL_MOVES``: every score
     100, then 0 for the slots ``BattleSystem_CheckInvalidMoves`` flags (the engine's
     ``usable_moves``: empty, no PP, Disabled, Taunt on a power-0 move).
+
+    ``sites`` is the ``script_rolls`` index of each ``SITE_LINES`` line per slot: the flat
+    layout's ``outcome.line_sites`` by default, ``outcome.slot_roll_sites`` for a per-slot
+    layout. ``loose``: the loose oracle's draws (module docstring), else None.
 
     The seen moves are the stored ``ai_seen_moves`` plus the player's pending
     ``last_move``: ``TrainerAI_MainSingles`` runs ``TrainerAI_RecordLastMove`` (:295)
@@ -368,7 +422,8 @@ def new_context(tables: Tables, state: BattleState, outcome: AiOutcome) -> AiCon
         seen_moves=seen,
         player_ability=defender_ability(tables, state, outcome.ability_guess),
         damage=_slot_damage(tables, state, jnp.full((MOVES,), SIM_ROLL_MAX, _I32)),
-        sites=script_roll_sites(state),
+        sites=line_sites(state) if sites is None else jnp.asarray(sites, _I32),
+        loose=loose,
     )
 
 
@@ -389,6 +444,22 @@ def _side(battler: Battler) -> int:
 
 def _jump(ctx: AiContext, cond) -> AiContext:
     return ctx._replace(jump=jnp.asarray(cond))
+
+
+def _loose_read(ctx: AiContext, p: float, kind: ReadKind) -> tuple[AiContext, jnp.ndarray]:
+    """The loose oracle's next draw of the current slot (module docstring): ``(ctx, bit)``,
+    with the read's probability ``p`` of a 1, its kind and whether it is on the path
+    recorded at its index."""
+    lo, slot = ctx.loose, ctx.slot
+    i = lo.count[slot]
+    bit = jnp.take(lo.bits[slot], i, mode="fill", fill_value=0)
+    lo = lo._replace(
+        count=lo.count.at[slot].add(1),
+        p=lo.p.at[slot, i].set(p, mode="drop"),
+        kind=lo.kind.at[slot, i].set(int(kind), mode="drop"),
+        live=lo.live.at[slot, i].set(ctx.live, mode="drop"),
+    )
+    return ctx._replace(loose=lo), bit
 
 
 # --- The command functions, one per row of docs/ai/script_commands.md -------------
@@ -434,6 +505,9 @@ def load_battler_ability(ctx: AiContext, battler: Battler) -> AiContext:
     flip is ``AiOutcome.ability_guess``, one per decision, roark.md 8.2)."""
     if battler == Battler.ATTACKER:
         value = attacker_ability(ctx.tables, ctx.state)
+    elif ctx.loose is not None:  # its own coin flip (trainer_ai.c:1191-1198)
+        ctx, bit = _loose_read(ctx, 0.5, ReadKind.ABILITY)
+        value = defender_ability(ctx.tables, ctx.state, bit)
     else:
         value = ctx.player_ability
     return ctx._replace(calc_temp=jnp.asarray(value, _I32))
@@ -525,12 +599,16 @@ def if_current_move_kills(ctx: AiContext, use_damage_roll: int) -> AiContext:
     return _jump(ctx, is_damaging(ctx.tables, ctx.move) & (hp <= damage))
 
 
-def if_random_less_than(ctx: AiContext, n: int, site) -> AiContext:
+def if_random_less_than(ctx: AiContext, n: int, line: int) -> AiContext:
     """``IfRandomLessThan`` (trainer_ai.c:528): ``RandNext() % 256 < n``, which is
-    ``AiOutcome.script_rolls[site] == 1`` (probability n/256, roark.md 8.3). ``site`` is
-    the draw's index from ``script_roll_sites``; ``n`` is the threshold that index's
-    probability already carries (``script_roll_thresholds``)."""
-    del n  # the draw's probability lives in the outcome's site table
+    ``AiOutcome.script_rolls[site] == 1`` (probability n/256, roark.md 8.3). ``line`` is the
+    read's ``script.s`` line (``outcome.SITE_N``); ``AiContext.sites`` gives its index into
+    the flattened ``script_rolls``, and the layout's site table carries its probability.
+    Loose (module docstring): the read's own draw, with probability ``n``/256."""
+    if ctx.loose is not None:
+        ctx, bit = _loose_read(ctx, n / 256, ReadKind.ROLL)
+        return _jump(ctx, bit == 1)
+    site = ctx.sites[ctx.slot, SITE_LINES.index(line)]
     roll = jnp.take(ctx.outcome.script_rolls, site, mode="fill", fill_value=0)
     return _jump(ctx, roll == 1)
 

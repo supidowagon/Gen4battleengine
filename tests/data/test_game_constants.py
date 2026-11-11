@@ -93,6 +93,10 @@ LISTED = [
     "nuzline.ai.commands.TypeMulti",
     "nuzline.ai.commands.NO_DAMAGE_CALC_EFFECTS",
     "nuzline.ai.commands.ALT_POWER_EFFECTS",
+    "nuzline.ai.outcome.EFFECT_SITE_LINES",
+    "nuzline.ai.commands.ReadKind",
+    "nuzline.ai.policy._LOOSE_SHARE",
+    "nuzline.ai.outcome.SITE_N",
     "nuzline.ai.switching.SwitchSite",
     "nuzline.ai.switching._CANDIDATE_TARGETS",  # engine layout (found by the array scan)
     # game data (Task 5)

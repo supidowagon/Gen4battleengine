@@ -306,7 +306,7 @@ def test_a_refused_distribution_refuses_the_playout_before_the_player_chooses(
     # patched distribution is traced in.
     s = roark_state(tables, names)
     nan = jnp.full(NUM_OPP_ACTIONS, jnp.nan, jnp.float32)
-    monkeypatch.setattr(playout_module, "ai_action_distribution", lambda tables, state: nan)
+    monkeypatch.setattr(playout_module, "ai_action_distribution", lambda tables, state, layout: nan)
     key = jax.random.PRNGKey(12)
     r = playout_module._run(tables, s, key, 100, jnp.int32(-1))
     assert (int(r.won), int(r.refused), int(r.turns)) == (REFUSED_WON, 1, 0)

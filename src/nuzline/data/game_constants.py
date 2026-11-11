@@ -176,9 +176,6 @@ def _policy_tables(scope: str) -> tuple[Constant, ...]:
             scope,
             {k: _SWITCH_MOVES[k] for k in ("Miracle Eye", "Roost", "Magnet Rise", "Ingrain")},
         ),
-        # Until K3c Task 3 keys the script-roll sites by battle effect, both policies read
-        # the site table by move id (policy._refused refuses a Kaizo move outside it).
-        *_table("nuzline.ai.outcome._SITES", "move", scope, _TRANSCRIBED_MOVES),
     )
 
 
@@ -360,6 +357,9 @@ CONSTANTS: tuple[Constant, ...] = (
     # A classification marker: these entries hold move ids, not effect ids.
     *_table("nuzline.ai.commands.BattleEffect", "move", _P, _TRANSCRIBED_MOVES),
     *_policy_tables(_P),
+    # The flat layout's script-roll sites, by move id (the per-slot layout keys them by battle
+    # effect, ai/outcome.py EFFECT_SITE_LINES).
+    *_table("nuzline.ai.outcome._SITES", "move", _P, _TRANSCRIBED_MOVES),
     # The decomp's C id cases: both policies compare these by id, whatever a game names the
     # slot (Kaizo's 149 is Triple Axel and still takes MOVE_PSYWAVE's case), so they are
     # name-checked against vanilla only.
@@ -422,6 +422,19 @@ EXEMPT: dict[str, str] = {
         "decomp battle effect ids of trainer_ai.c's sAltPowerMoveEffects (:48-61), compared "
         "with MoveTable.effect by the AI's C code, which Kaizo did not change "
         "(docs/ai/kaizo_roark.md 2); each game's moves carry their own effect"
+    ),
+    "nuzline.ai.outcome.EFFECT_SITE_LINES": (
+        "decomp battle effect ids (keys) and script.s line numbers (values): the per-slot AI "
+        "layout's script-roll sites, read through MoveTable.effect by IfCurrentMoveEffectEqualTo "
+        "(trainer_ai.c:1441), whose script Kaizo did not change apart from one word "
+        "(docs/ai/kaizo_roark.md 2); each game's moves carry their own effect"
+    ),
+    "nuzline.ai.commands.ReadKind": "kind of a loose-oracle read (tests only), not a game id",
+    "nuzline.ai.policy._LOOSE_SHARE": (
+        "tie-break probabilities P(RandNext() % n == i) (trainer_ai.c:338), not game ids"
+    ),
+    "nuzline.ai.outcome.SITE_N": (
+        "script.s line numbers and IfRandomLessThan thresholds of the AI script, not game ids"
     ),
     "nuzline.ai.switching.SwitchSite": "kind of an AI switch draw (roark.md 11.1), not a game id",
     "nuzline.ai.switching._CANDIDATE_TARGETS": (

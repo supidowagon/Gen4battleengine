@@ -44,6 +44,12 @@ node. Stage A draws it per playout at its root (``stage_a.rank_actions``, and
 so the playout's own key stream is unchanged; a state below a root carries the value
 ``step`` stored.
 
+The trainer AI's policy (``nuzline.ai.layout``): ``tables`` are traced here, so the layout
+cannot be read from them. Every function that runs the AI takes it as the static
+``layout`` (default ``VANILLA``, under which another policy's tables are refused, never
+misread); the program builders (``stage_a.rank_actions``, ``leaves``) resolve it with
+``layout_of`` on the concrete tables.
+
 Refusals cannot raise under ``jit``: a playout that meets one stops with
 ``PlayoutResult.refused = 1`` and ``won = REFUSED_WON`` (-1; the turn is not played), so
 summing ``won`` over refused playouts cannot pass for losses. Callers must exclude
@@ -59,6 +65,7 @@ from typing import NamedTuple
 import jax
 import jax.numpy as jnp
 
+from nuzline.ai.layout import VANILLA, AiLayout, layout_of
 from nuzline.ai.outcome import sample_ai_outcome
 from nuzline.ai.policy import UnsupportedAi, ai_action_distribution, ai_policy, ai_refusals
 from nuzline.ai.replacement import post_ko_switch_in
@@ -206,21 +213,25 @@ def _choose(tables: Tables, state: BattleState, q, key) -> jnp.ndarray:
     return jax.random.choice(key, NUM_ACTIONS, p=tied / jnp.sum(tied)).astype(_I32)
 
 
-def _policy(tables: Tables, state: BattleState, key) -> tuple[jnp.ndarray, jnp.ndarray]:
+def _policy(
+    tables: Tables, state: BattleState, key, layout: AiLayout = VANILLA
+) -> tuple[jnp.ndarray, jnp.ndarray]:
     """``(action, refused)``: ``playout_policy``'s action, and whether the opponent's
     distribution it was chosen against is refused (traced, a refused distribution is
     NaN; the action is then meaningless and the caller must refuse the playout)."""
-    q = ai_action_distribution(tables, state)
+    q = ai_action_distribution(tables, state, layout)
     refused = jnp.any(jnp.isnan(q))
     return _choose(tables, state, jnp.where(refused, 0.0, q), key), refused
 
 
-def playout_policy(tables: Tables, state: BattleState, key) -> jnp.ndarray:
+def playout_policy(
+    tables: Tables, state: BattleState, key, layout: AiLayout = VANILLA
+) -> jnp.ndarray:
     """``int32``: the player's action with the highest expected value (module docstring),
     a uniformly random one among exact ties; illegal actions score -inf. Raises
     ``UnsupportedAi`` on a concrete state whose AI is refused; traced, the action on a
     refused distribution is meaningless (``_run`` refuses the playout instead)."""
-    return _policy(tables, state, key)[0]
+    return _policy(tables, state, key, layout)[0]
 
 
 @jax.jit
@@ -345,11 +356,12 @@ def _replace_while_needed(tables: Tables, state: BattleState, refused, passes):
     return state, refused
 
 
-def _play(tables: Tables, state: BattleState, player_action, key):
+def _play(tables: Tables, state: BattleState, player_action, key, layout: AiLayout = VANILLA):
     """One turn after the player's choice, before the opponent's replacement:
     ``(state after step, ai_refused, ai_switched, power_mul)``."""
     k_ai, k_turn = jax.random.split(key)
-    opp_action = ai_policy(tables, state, sample_ai_outcome(k_ai, tables, state))
+    ai_outcome = sample_ai_outcome(k_ai, tables, state, layout)
+    opp_action = ai_policy(tables, state, ai_outcome, layout)
     ai_refused = opp_action < 0  # switching.REFUSED_ACTION
     actions = jnp.stack([player_action, jnp.maximum(opp_action, 0)]).astype(_I32)
     power_mul = replacement_power_mul(tables, state, actions)
@@ -357,9 +369,9 @@ def _play(tables: Tables, state: BattleState, player_action, key):
     return played, ai_refused, is_switch(actions[1]), power_mul
 
 
-def _turn(tables: Tables, state: BattleState, player_action, key):
+def _turn(tables: Tables, state: BattleState, player_action, key, layout: AiLayout = VANILLA):
     """One turn after the player's choice: ``(state, refused)``."""
-    played, refused, ai_switched, power_mul = _play(tables, state, player_action, key)
+    played, refused, ai_switched, power_mul = _play(tables, state, player_action, key, layout)
     played, replace_refused = finish_turn(tables, played, ai_switched, power_mul)
     refused = refused | replace_refused
     return _select(refused, state, played), refused
@@ -392,7 +404,14 @@ def _resolve_pending(tables: Tables, state: BattleState, first_action):
     return state, jnp.where(pending, -1, first_action).astype(_I32), refused
 
 
-def _run(tables: Tables, state: BattleState, key, max_turns: int, first_action):
+def _run(
+    tables: Tables,
+    state: BattleState,
+    key,
+    max_turns: int,
+    first_action,
+    layout: AiLayout = VANILLA,
+):
     state, first_action, refused0 = _resolve_pending(tables, state, first_action)
 
     def cond(carry):
@@ -402,11 +421,11 @@ def _run(tables: Tables, state: BattleState, key, max_turns: int, first_action):
     def body(carry):
         s, key, turns, _ = carry
         key, k_policy, k_turn = jax.random.split(key, 3)
-        chosen, q_refused = _policy(tables, s, k_policy)
+        chosen, q_refused = _policy(tables, s, k_policy, layout)
         # A refused distribution refuses the turn whenever the player's choice uses it.
         q_refused = q_refused & ~_fixed(turns, first_action)
         action = _first_action(turns, first_action, chosen)
-        played, refused = _turn(tables, s, action.astype(_I32), k_turn)
+        played, refused = _turn(tables, s, action.astype(_I32), k_turn, layout)
         refused = refused | q_refused
         s = _select(q_refused, s, played)
         return s, key, turns + jnp.where(refused, 0, 1), refused
@@ -427,29 +446,38 @@ def _run(tables: Tables, state: BattleState, key, max_turns: int, first_action):
     )
 
 
-@partial(jax.jit, static_argnames=("max_turns",))
-def playout(tables: Tables, state: BattleState, key, max_turns: int = 100) -> PlayoutResult:
+@partial(jax.jit, static_argnames=("max_turns", "layout"))
+def playout(
+    tables: Tables, state: BattleState, key, max_turns: int = 100, layout: AiLayout = VANILLA
+) -> PlayoutResult:
     """Play from ``state`` with ``playout_policy`` for the player (module docstring); a
     pending player replacement is resolved first by ``replacement_policy``."""
-    return _run(tables, state, key, max_turns, jnp.int32(-1))
+    return _run(tables, state, key, max_turns, jnp.int32(-1), layout)
 
 
-@partial(jax.jit, static_argnames=("max_turns",))
+@partial(jax.jit, static_argnames=("max_turns", "layout"))
 def playout_from_action(
-    tables: Tables, state: BattleState, action, key, max_turns: int = 100
+    tables: Tables,
+    state: BattleState,
+    action,
+    key,
+    max_turns: int = 100,
+    layout: AiLayout = VANILLA,
 ) -> PlayoutResult:
     """``playout`` with the player's first action fixed to ``action`` (a legal action; at
     a pending player replacement ``MOVE_ACTIONS + slot`` is that replacement and the policy
     chooses from the first turn on);
     the same ``key`` gives every first action the same draws (common random numbers)."""
-    return _run(tables, state, key, max_turns, jnp.asarray(action, _I32))
+    return _run(tables, state, key, max_turns, jnp.asarray(action, _I32), layout)
 
 
-@partial(jax.jit, static_argnames=("max_turns",))
-def batched_playout(tables: Tables, states: BattleState, keys, max_turns: int = 100):
+@partial(jax.jit, static_argnames=("max_turns", "layout"))
+def batched_playout(
+    tables: Tables, states: BattleState, keys, max_turns: int = 100, layout: AiLayout = VANILLA
+):
     """``playout`` over a leading batch axis of ``states`` and ``keys`` (``jax.vmap``,
-    ``tables`` shared); ``max_turns`` is static."""
-    return jax.vmap(lambda s, k: playout(tables, s, k, max_turns))(states, keys)
+    ``tables`` shared); ``max_turns`` and ``layout`` are static."""
+    return jax.vmap(lambda s, k: playout(tables, s, k, max_turns, layout))(states, keys)
 
 
 def _opponent_reason(tables: Tables, state: BattleState, ai_switched, power_mul) -> str | None:
@@ -513,19 +541,26 @@ def replacement_refusal(tables: Tables, state: BattleState, ai_switched, power_m
     return reason
 
 
-_play_jit = jax.jit(_play)
-_turn_jit = jax.jit(_turn)
-_policy_jit = jax.jit(_policy)
+_play_jit = jax.jit(_play, static_argnames="layout")
+_turn_jit = jax.jit(_turn, static_argnames="layout")
+_policy_jit = jax.jit(_policy, static_argnames="layout")
 
 
 def refusal_reason(
-    tables: Tables, state: BattleState, action, key, max_turns: int = 100
+    tables: Tables,
+    state: BattleState,
+    action,
+    key,
+    max_turns: int = 100,
+    layout: AiLayout | None = None,
 ) -> str | None:
-    """Why ``playout_from_action(tables, state, action, key, max_turns)`` is refused, or
-    ``None`` when it is not: the playout is replayed turn by turn outside the loop (the
-    same key splits) and the refused turn's AI (``ai_refusals``, also when the player's
-    choice met a refused distribution) or replacement (``replacement_refusal``) is asked
-    on its concrete state; a pending player replacement is replayed first."""
+    """Why ``playout_from_action(tables, state, action, key, max_turns, layout)`` is
+    refused, or ``None`` when it is not: the playout is replayed turn by turn outside the
+    loop (the same key splits) and the refused turn's AI (``ai_refusals``, also when the
+    player's choice met a refused distribution) or replacement (``replacement_refusal``) is
+    asked on its concrete state; a pending player replacement is replayed first.
+    ``layout`` defaults to the concrete ``tables``' own (``layout_of``)."""
+    layout = layout_of(tables) if layout is None else layout
     first = jnp.asarray(action, _I32)
     if int(needs_replacement(state)[0]) == 1:
         slot = int(first) - MOVE_ACTIONS if int(first) >= MOVE_ACTIONS else None
@@ -543,17 +578,19 @@ def refusal_reason(
         if int(state.over) != 0:
             return None
         key, k_policy, k_turn = jax.random.split(key, 3)
-        chosen, q_refused = _policy_jit(tables, state, k_policy)
+        chosen, q_refused = _policy_jit(tables, state, k_policy, layout)
         q_refused = bool(q_refused) and not bool(_fixed(turns, first))
         player_action = _first_action(turns, first, chosen).astype(_I32)
-        played, refused = _turn_jit(tables, state, player_action, k_turn)
+        played, refused = _turn_jit(tables, state, player_action, k_turn, layout)
         if q_refused or bool(refused):
-            reasons = ai_refusals(tables, state)
+            reasons = ai_refusals(tables, state, layout=layout)
             if reasons:
                 return "; ".join(reasons)
             if q_refused:
                 return "the opponent's action distribution is refused"
-            played, _, ai_switched, power_mul = _play_jit(tables, state, player_action, k_turn)
+            played, _, ai_switched, power_mul = _play_jit(
+                tables, state, player_action, k_turn, layout
+            )
             return replacement_refusal(tables, played, ai_switched, power_mul)
         state = played
     return None
