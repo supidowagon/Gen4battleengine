@@ -122,6 +122,76 @@ script word changed; the C code only relocated).
   against vanilla names only (Kaizo's 149 is Triple Axel, and it still takes Psywave's
   case).
 
+## 7. The commands Kaizo Roark's labels add (K3c Task 4)
+
+The new script commands are rows of `docs/ai/script_commands.md` (after `IfMoveNotKnown`),
+each a function of `nuzline.ai.commands` with a fixed-state test in
+`tests/ai/test_kaizo_commands.py`. Tasks 5 and 6 put them on Roark's paths. This section
+records the rules that need more than one table row.
+
+**7.1 The AI's speed compare** (`IfSpeedCompareEqualTo`, `trainer_ai.c:1102-1112`).
+- It is `BattleSystem_CompareBattlerSpeed(attacker = the AI, defender = the player, TRUE)`.
+  `order.compare_speed(tables, state, battler1, tie_roll, qc)` transcribes its
+  equal-priority result (FASTER 0, SLOWER 1, TIE 2, `include/constants/battle.h:163-165`;
+  `battle_lib.c:1401-1447`) for either side as `battler1`. `order.battler_slower` is "not
+  FASTER", and the turn order's `player_second` is its `battler1 = 0` case, unchanged.
+- **Quick Claw.** `ignoreQuickClaw` TRUE still reads `speedRand` for both battlers
+  (`battle_lib.c:1278-1286`, `:1344-1352`). The flag only skips the `moveEffectsData`
+  write there and the priority read (`:1375-1399`), so both priorities are 0. A lone
+  activated Quick Claw is FASTER (`:1408-1411`). The AI decides before the turn's
+  `speedRand` redraw (`battle_controller_player.c:853-857`), so the compare reads
+  `BattleState.qc_roll`, the previous turn's draw, as `action_order` does. So the player's
+  Quick Claw proc from the previous turn makes Roark SLOWER (plan Review Focus 2).
+- **The tie draw (plan K3c Ruling 3).** At equal speed each branch that compares speeds
+  (both Quick Claws `:1402-1407`, both Lagging Tails `:1412-1417`, Trick Room `:1432-1439`,
+  plain `:1440-1447`) gives TIE when `RandNext() & 1` is 1, else FASTER, never SLOWER. Every
+  compare on Roark's paths tests SLOWER (`script.s:1864`, `:2070`, `:2650`). So the exact
+  command passes `tie_roll = 0` (`battler_slower(..., 1, 0, qc_roll)`), has no `AiOutcome`
+  field, and asserts at trace time that its value is SLOWER. The decomp still consumes the
+  draw (8.7).
+- **Loose.** The tie is its own draw (`commands.ReadKind.SPEED_TIE`, probability 1/2). It is
+  on the path exactly where the decomp draws it: equal speed in one of those branches,
+  which is where `compare_speed` gives TIE for a 1. The loose command compares the
+  three-valued result with SLOWER, so it does not reuse the gate.
+  `test_speed_tie_never_slower` checks every branch with both bits.
+
+**7.2 Weather.** The AI reads weather in four places:
+1. `TrainerAI_CalcDamage` passes `fieldConditionsMask` to `CalcMoveDamage`
+   (`trainer_ai.c:3081-3091`). The Rock-type Special Defense boost in sand is inside
+   `NO_CLOUD_NINE` (`battle_lib.c:6921`, `:6926-6929`), which counts Cloud Nine and Air Lock
+   on every living battler (`include/battle/common.h:63-64`; `COUNT_ALIVE_BATTLERS`,
+   `battle_lib.c:2952-2959`). The engine's `ai_damage_for_roll` applies it through
+   `_pre_random(..., ai=True)` behind `damage.weather_suppressed`, the same gate
+   (`test_ai_damage_sand_spdef_gated`).
+2. `LoadCurrentWeather` (`trainer_ai.c:1414-1439`) reads the raw mask through `WEATHER_IS_*`
+   (`include/battle/common.h:68-72`), with **no** Cloud Nine check. A permanent sandstorm
+   with a Cloud Nine holder still loads `AI_WEATHER_SANDSTORM`
+   (`test_load_current_weather_ignores_cloud_nine`). On Roark's paths it is reached only
+   from `Basic_CheckCannotPoison` (`script.s:535`, `:541`), for Leaf Guard and Hydration.
+3. `IfFieldConditionsMask FIELD_CONDITION_TRICK_ROOM` (`script.s:364`).
+4. The weather speed doubling inside `CompareBattlerSpeed` (`battle_lib.c:1228-1238`, through
+   `order.effective_speed`).
+
+**7.3 Statuses and side conditions.** `IfStatus` takes a mask made of whole
+`MON_CONDITION_*` groups, each one engine `Status`; Roark's path passes
+`MON_CONDITION_ANY` (`script.s:545`). `IfSideCondition` takes the decomp's mask bits
+(`commands.SideCondition`), each read from its `BattleState` timer.
+
+**7.4 The player's last used move** (`LoadDefenderLastUsedMoveClass`,
+`trainer_ai.c:2050-2054`). `movePrevByBattler` is `moveTemp` when the move succeeded, else
+`MOVE_NONE` (`battle_controller_player.c:3944-3949`). `moveTemp` is set at command
+selection (`battle_controller_player.c:1861-1898`). For Nature Power it stays Nature Power:
+- Its script (`effect_script_0173.s`) writes `msgMoveTemp` (`GetTerrainMove`,
+  `battle_script.c:8045`) and `moveCur` (`GoToMoveScript`, `:2118`), never `moveTemp`.
+- No battle script writes `BTLVAR_MOVE_TEMP` (`battle_script.c:9585-9586`).
+  `effect_script_0092.s:6` only compares it. `subscript_pursuit.s:81` and `:117` use
+  `UpdateVarFromVar OPCODE_GET`, which copies `moveTemp` into `moveCur`
+  (`battle_script.c:3278-3279`).
+- So the class read is Nature Power's (status), not the called move's. The engine's
+  `last_move` already holds Nature Power (`step._use_move`).
+  `test_last_used_move_class_nature_power` checks it, and also the `MOVE_NONE` (physical)
+  after a failed move.
+
 ## 8. Random draws: the per-slot layout
 
 The draws themselves are roark.md 8's: `BattleSystem_RandNext` is a uniform `u16`, every
@@ -222,10 +292,13 @@ when the gate is removed (`tests/ai/test_kaizo_outcome.py` docstring):
 - the path-only sites (a move has only its effect's sites);
 - the one-scalar guess (8.4).
 
-The fourth gate, the dropped speed-tie draw (plan K3c Ruling 3: at equal speed
-`BattleSystem_CompareBattlerSpeed` returns FASTER or TIE, never SLOWER,
-`battle_lib.c:1401-1448`, while every compare on Roark's paths tests SLOWER), arrives with
-`IfSpeedCompareEqualTo` in Task 4, which gives its tie its own loose bit.
+The fourth gate is the dropped speed-tie draw (plan K3c Ruling 3; 7.1). At equal speed
+`BattleSystem_CompareBattlerSpeed` returns FASTER or TIE, never SLOWER
+(`battle_lib.c:1401-1447`), and every compare on Roark's paths tests SLOWER.
+`IfSpeedCompareEqualTo` gives the tie its own loose bit (`ReadKind.SPEED_TIE`), and
+`tests/ai/test_kaizo_commands.py test_speed_tie_never_slower` checks the gate in every
+branch. Once Tasks 5-6 put the compare on Roark's paths, `test_exact_equals_loose` covers it
+too.
 
 **8.7 RNG read order.** As roark.md 8.7, with RISKY after EXPERT (slots 0-3: its roll as
 reached), and the speed compare's tie draw where an `IfSpeedCompareEqualTo` meets equal

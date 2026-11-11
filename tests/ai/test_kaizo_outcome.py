@@ -15,8 +15,10 @@ oracle that does not use it, and each has a test that fails when the gate is rem
   ``LoadBattlerAbility DEFENDER`` read is its own coin flip, on the states where at most
   one read can change a score; and the data test that this holds for Roark
   (``test_one_scalar_guess_is_exact_for_roark``, ``test_loose_catches_a_split_guess``).
-The fourth gate, the dropped speed-tie draw (Ruling 3), has no command yet: K3c Task 4 adds
-``IfSpeedCompareEqualTo`` and its loose tie bit (``commands.ReadKind``).
+The fourth gate, the dropped speed-tie draw (Ruling 3), is checked in
+``tests/ai/test_kaizo_commands.py`` (``test_speed_tie_never_slower``): ``IfSpeedCompareEqualTo``
+gives the tie its own loose read (``commands.ReadKind.SPEED_TIE``). It is on no transcribed
+path until K3c Tasks 5-6.
 """
 
 import dataclasses

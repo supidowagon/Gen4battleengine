@@ -412,6 +412,9 @@ EXEMPT: dict[str, str] = {
     "nuzline.ai.commands.Battler": _AI_ENCODING + " (AI_BATTLER_*)",
     "nuzline.ai.commands.LoadType": _AI_ENCODING + " (LOAD_*, trainer_ai.c:937)",
     "nuzline.ai.commands.SideCondition": _AI_ENCODING + " (SIDE_CONDITION_*)",
+    "nuzline.ai.commands.MonCondition": _AI_ENCODING + " (MON_CONDITION_*, condition.h:7-25)",
+    "nuzline.ai.commands.FieldCondition": _AI_ENCODING + " (FIELD_CONDITION_*, condition.h:144)",
+    "nuzline.ai.commands.AiWeather": _AI_ENCODING + " (AI_WEATHER_*, trainer_ai.c:1414-1439)",
     "nuzline.ai.commands.TypeMulti": _AI_ENCODING + " (TYPE_MULTI_*, battle.h:144-153)",
     "nuzline.ai.commands.NO_DAMAGE_CALC_EFFECTS": (
         "decomp battle effect ids of trainer_ai.c's sNoDamageCalcMoveEffects (:31-46), compared "

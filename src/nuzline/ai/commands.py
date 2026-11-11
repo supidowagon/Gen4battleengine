@@ -21,12 +21,13 @@ the mechanics ``effectiveness_class`` does not implement.
 
 **The loose oracle** (tests only; ``policy.ai_action_distribution_loose``): with
 ``AiContext.loose`` set, every ``RandNext`` read of the scripts is its own independent draw,
-as in the decomp. Each ``IfRandomLessThan`` (trainer_ai.c:528-538) and each
-``LoadBattlerAbility DEFENDER`` coin flip (:1191-1198) takes the next bit of its slot's
-``LooseDraws.bits``, in the static order the straight-line scripts make the reads, and
-records the bit's probability: the read's own N/256, or 1/2. It reads neither
-``AiContext.sites`` nor ``AiOutcome.ability_guess``, so it shares no gate with the exact
-layout: no site table, no one-scalar guess.
+as in the decomp. Each ``IfRandomLessThan`` (trainer_ai.c:528-538), each
+``LoadBattlerAbility DEFENDER`` coin flip (:1191-1198) and each ``IfSpeedCompareEqualTo``
+tie (battle_lib.c:1401-1447) takes the next bit of its slot's ``LooseDraws.bits``, in the
+static order the straight-line scripts make the reads, and records the bit's probability:
+the read's own N/256, or 1/2. It reads neither ``AiContext.sites`` nor
+``AiOutcome.ability_guess``, and it compares the speed compare's three-valued result, so it
+shares no gate with the exact layout: no site table, no one-scalar guess, no dropped tie.
 """
 
 from __future__ import annotations
@@ -42,7 +43,13 @@ from nuzline.ai.switching import INEFFECTIVE, apply_type_chart, type_chart_flags
 from nuzline.data.tables import Tables
 from nuzline.engine.actions import usable_moves
 from nuzline.engine.damage import ai_damage_for_roll
-from nuzline.engine.ids import Stat
+from nuzline.engine.ids import Stat, Status, Weather
+from nuzline.engine.order import (
+    COMPARE_SPEED_SLOWER,
+    COMPARE_SPEED_TIE,
+    battler_slower,
+    compare_speed,
+)
 from nuzline.engine.state import MOVES, BattleState
 
 _I32 = jnp.int32
@@ -63,17 +70,65 @@ class Battler(IntEnum):
 
 
 class LoadType(IntEnum):
-    """``LoadTypeFrom`` targets Roark's scripts use (trainer_ai.c:937)."""
+    """``LoadTypeFrom`` targets Roark's scripts use (trainer_ai.c:937), with the decomp's
+    values (``LOAD_*``: line n + 1 of generated/ai_load_type_targets.txt is n)."""
 
-    MOVE_TYPE = 0  # LOAD_MOVE_TYPE
-    DEFENDER_TYPE_1 = 1  # LOAD_DEFENDER_TYPE_1
+    DEFENDER_TYPE_1 = 0  # LOAD_DEFENDER_TYPE_1
+    ATTACKER_TYPE_1 = 1  # LOAD_ATTACKER_TYPE_1
     DEFENDER_TYPE_2 = 2  # LOAD_DEFENDER_TYPE_2
+    ATTACKER_TYPE_2 = 3  # LOAD_ATTACKER_TYPE_2
+    MOVE_TYPE = 4  # LOAD_MOVE_TYPE
 
 
 class SideCondition(IntEnum):
-    """``IfSideCondition`` masks Roark's scripts use."""
+    """``IfSideCondition`` masks Roark's scripts use (``SIDE_CONDITION_*``,
+    include/constants/battle/condition.h:88-95), each read from its ``BattleState`` field
+    (``_SIDE_CONDITION_FIELDS``)."""
 
-    STEALTH_ROCK = 0  # SIDE_CONDITION_STEALTH_ROCK, BattleState.stealth_rock
+    REFLECT = 1 << 0  # BattleState.reflect
+    LIGHT_SCREEN = 1 << 1  # BattleState.light_screen
+    SAFEGUARD = 1 << 3  # BattleState.safeguard
+    STEALTH_ROCK = 1 << 7  # BattleState.stealth_rock
+
+
+_SIDE_CONDITION_FIELDS = {
+    SideCondition.REFLECT: "reflect",
+    SideCondition.LIGHT_SCREEN: "light_screen",
+    SideCondition.SAFEGUARD: "safeguard",
+    SideCondition.STEALTH_ROCK: "stealth_rock",
+}
+
+
+class MonCondition(IntEnum):
+    """``IfStatus`` masks: the decomp's ``MON_CONDITION_*`` status bits
+    (include/constants/battle/condition.h:7-14, :22, :25), each group one ``ids.Status``."""
+
+    SLEEP = 0b111  # MON_CONDITION_SLEEP: bits 0-2, any of them set is asleep
+    POISON = 1 << 3
+    BURN = 1 << 4
+    FREEZE = 1 << 5
+    PARALYSIS = 1 << 6
+    TOXIC = 1 << 7  # its counter (bits 8-11) is refused in a mask: _condition_statuses
+    ANY = 0xFF  # MON_CONDITION_ANY: every group above
+
+
+class FieldCondition(IntEnum):
+    """``IfFieldConditionsMask`` masks Roark's scripts use (``FIELD_CONDITION_*``,
+    include/constants/battle/condition.h:123-125, :144)."""
+
+    TRICK_ROOM = (1 << 16) | (1 << 17) | (1 << 18)  # BattleState.trick_room
+
+
+class AiWeather(IntEnum):
+    """``LoadCurrentWeather`` values (``AI_WEATHER_*``: line n + 1 of
+    generated/ai_weather_types.txt is n)."""
+
+    CLEAR = 0
+    SUNNY = 1
+    RAINING = 2
+    SANDSTORM = 3
+    HAILING = 4
+    DEEP_FOG = 5
 
 
 class TypeMulti(IntEnum):
@@ -235,6 +290,7 @@ class ReadKind(IntEnum):
     NONE = 0  # no read at this index
     ROLL = 1  # IfRandomLessThan N: P(1) = N/256
     ABILITY = 2  # LoadBattlerAbility DEFENDER's coin flip: P(1) = 1/2
+    SPEED_TIE = 3  # IfSpeedCompareEqualTo's tie, RandNext() & 1: P(1) = 1/2
 
 
 LOOSE_READS = 32  # LooseDraws columns: at least the reads one slot's scripts make
@@ -446,10 +502,14 @@ def _jump(ctx: AiContext, cond) -> AiContext:
     return ctx._replace(jump=jnp.asarray(cond))
 
 
-def _loose_read(ctx: AiContext, p: float, kind: ReadKind) -> tuple[AiContext, jnp.ndarray]:
+def _loose_read(
+    ctx: AiContext, p: float, kind: ReadKind, live=None
+) -> tuple[AiContext, jnp.ndarray]:
     """The loose oracle's next draw of the current slot (module docstring): ``(ctx, bit)``,
     with the read's probability ``p`` of a 1, its kind and whether it is on the path
-    recorded at its index."""
+    recorded at its index. ``live`` (default ``ctx.live``) is whether the decomp makes the
+    read here, for a read the path reaches only in some states."""
+    live = ctx.live if live is None else live
     lo, slot = ctx.loose, ctx.slot
     i = lo.count[slot]
     bit = jnp.take(lo.bits[slot], i, mode="fill", fill_value=0)
@@ -457,7 +517,7 @@ def _loose_read(ctx: AiContext, p: float, kind: ReadKind) -> tuple[AiContext, jn
         count=lo.count.at[slot].add(1),
         p=lo.p.at[slot, i].set(p, mode="drop"),
         kind=lo.kind.at[slot, i].set(int(kind), mode="drop"),
-        live=lo.live.at[slot, i].set(ctx.live, mode="drop"),
+        live=lo.live.at[slot, i].set(live, mode="drop"),
     )
     return ctx._replace(loose=lo), bit
 
@@ -514,17 +574,16 @@ def load_battler_ability(ctx: AiContext, battler: Battler) -> AiContext:
 
 
 def load_type_from(ctx: AiContext, target: LoadType) -> AiContext:
-    """``LoadTypeFrom`` (trainer_ai.c:937): the move's type, or the defender's true type
-    1 or 2."""
+    """``LoadTypeFrom`` (trainer_ai.c:937): the move's type, or the defender's or the
+    attacker's true type 1 or 2 (``BattleMon_Get``, ``BATTLEMON_TYPE_1/2``, :945-959)."""
     state = ctx.state
-    d_types = state.types[0, state.active[0]].astype(_I32)
     if target == LoadType.MOVE_TYPE:
-        value = ctx.tables.move_type[ctx.move].astype(_I32)
-    elif target == LoadType.DEFENDER_TYPE_1:
-        value = d_types[0]
-    else:
-        value = d_types[1]
-    return ctx._replace(calc_temp=value)
+        return ctx._replace(calc_temp=ctx.tables.move_type[ctx.move].astype(_I32))
+    target = LoadType(target)
+    side = 1 if target in (LoadType.ATTACKER_TYPE_1, LoadType.ATTACKER_TYPE_2) else 0
+    types = state.types[side, state.active[side]].astype(_I32)
+    index = 0 if target in (LoadType.DEFENDER_TYPE_1, LoadType.ATTACKER_TYPE_1) else 1
+    return ctx._replace(calc_temp=types[index])
 
 
 def if_temp_equal_to(ctx: AiContext, value: int) -> AiContext:
@@ -557,10 +616,20 @@ def if_stat_stage_equal_to(ctx: AiContext, battler: Battler, stat: Stat, value: 
     return _jump(ctx, _stage(ctx, battler, stat) == value)
 
 
-def if_side_condition(ctx: AiContext, battler: Battler, condition: SideCondition) -> AiContext:
-    """``IfSideCondition`` (trainer_ai.c:732) for ``SIDE_CONDITION_STEALTH_ROCK``."""
-    del condition  # SideCondition has only STEALTH_ROCK
-    return _jump(ctx, ctx.state.stealth_rock[_side(battler)] > 0)
+def if_side_condition(ctx: AiContext, battler: Battler, mask: int) -> AiContext:
+    """``IfSideCondition`` (trainer_ai.c:732): ``sideConditionsMask[side] & mask``, the
+    battler's side having any condition of ``mask``, a union of ``SideCondition`` members
+    (static; any other bit is refused at trace time). Each condition is on while its
+    ``BattleState`` field is above 0."""
+    mask = int(mask)
+    known = sum(int(m) for m in SideCondition)
+    assert mask and not mask & ~known, f"unsupported side condition mask {mask:#x}"
+    side = _side(battler)
+    on = jnp.asarray(False)
+    for member, field in _SIDE_CONDITION_FIELDS.items():
+        if mask & member:
+            on = on | (getattr(ctx.state, field)[side] > 0)
+    return _jump(ctx, on)
 
 
 def count_alive_party_battlers(ctx: AiContext, battler: Battler) -> AiContext:
@@ -662,3 +731,176 @@ def load_is_first_turn_in_battle(ctx: AiContext, battler: Battler) -> AiContext:
 def if_move_not_known(ctx: AiContext, battler: Battler, move: int) -> AiContext:
     """``IfMoveNotKnown`` (trainer_ai.c:1683): the negation of ``IfMoveKnown``."""
     return _jump(ctx, ~_knows(ctx, battler, move))
+
+
+def if_hp_percent_equal_to(ctx: AiContext, battler: Battler, percent: int) -> AiContext:
+    """``IfHPPercentEqualTo`` (trainer_ai.c:618): ``curHP * 100 / maxHP == percent``, a
+    ``u32`` with integer division (:626)."""
+    return _jump(ctx, _hp_percent(ctx, battler) == percent)
+
+
+def if_hp_percent_not_equal_to(ctx: AiContext, battler: Battler, percent: int) -> AiContext:
+    """``IfHPPercentNotEqualTo`` (trainer_ai.c:633): ``curHP * 100 / maxHP != percent``
+    (:641)."""
+    return _jump(ctx, _hp_percent(ctx, battler) != percent)
+
+
+# The engine status of each MonCondition group (one status at a time, ids.Status).
+_CONDITION_GROUPS = (
+    (MonCondition.SLEEP, Status.SLEEP),
+    (MonCondition.POISON, Status.POISON),
+    (MonCondition.BURN, Status.BURN),
+    (MonCondition.FREEZE, Status.FREEZE),
+    (MonCondition.PARALYSIS, Status.PARALYSIS),
+    (MonCondition.TOXIC, Status.TOXIC),
+)
+
+
+def _condition_statuses(mask: int) -> tuple[int, ...]:
+    """The ``ids.Status`` values whose decomp status bits meet ``mask``. ``mask`` must be a
+    union of whole ``MonCondition`` groups: a part of the sleep bits or a toxic counter
+    bit is not a function of the engine's status alone, and is refused at trace time."""
+    mask = int(mask)
+    assert not mask & ~MonCondition.ANY, f"unsupported status mask {mask:#x}"
+    statuses = []
+    for group, status in _CONDITION_GROUPS:
+        assert mask & group in (0, group), f"status mask {mask:#x} splits {group.name}"
+        if mask & group:
+            statuses.append(int(status))
+    return tuple(statuses)
+
+
+def if_status(ctx: AiContext, battler: Battler, mask: int) -> AiContext:
+    """``IfStatus`` (trainer_ai.c:648): the battler's true status meets ``mask``
+    (``battleMons[battler].status & mask``, :657), a union of ``MonCondition`` groups. An
+    asleep Pokemon meets the whole ``SLEEP`` group: the battle tests sleep as
+    ``status & MON_CONDITION_SLEEP`` (e.g. battle_lib.c:1845)."""
+    side = _side(battler)
+    status = ctx.state.status[side, ctx.state.active[side]].astype(_I32)
+    return _jump(ctx, jnp.isin(status, jnp.asarray(_condition_statuses(mask), _I32)))
+
+
+def if_stat_stage_less_than(ctx: AiContext, battler: Battler, stat: Stat, value: int) -> AiContext:
+    """``IfStatStageLessThan`` (trainer_ai.c:1465), ``value`` in decomp units."""
+    return _jump(ctx, _stage(ctx, battler, stat) < value)
+
+
+def if_field_conditions_mask(ctx: AiContext, mask: int) -> AiContext:
+    """``IfFieldConditionsMask`` (trainer_ai.c:1936-1946): ``fieldConditionsMask & mask``.
+    Only ``FieldCondition.TRICK_ROOM`` is supported (static; refused otherwise): Trick
+    Room is on while ``BattleState.trick_room`` is nonzero."""
+    assert int(mask) == FieldCondition.TRICK_ROOM, f"unsupported field mask {int(mask):#x}"
+    return _jump(ctx, ctx.state.trick_room != 0)
+
+
+def load_current_weather(ctx: AiContext) -> AiContext:
+    """``LoadCurrentWeather`` (trainer_ai.c:1414-1439): the ``AiWeather`` of the raw
+    ``fieldConditionsMask`` through ``WEATHER_IS_*`` (include/battle/common.h:68-72), with
+    **no** Cloud Nine or Air Lock check. Each ``WEATHER_IS_*`` takes both the temporary and
+    the permanent bit (``FIELD_CONDITION_SANDSTORM`` = ``_TEMP | _PERM``,
+    include/constants/battle/condition.h:112-128). The battle holds one weather at a time:
+    a weather move clears ``FIELD_CONDITION_WEATHER`` before it sets its own bit
+    (effect_script_0115.s:8-9, Sandstorm), so the decomp's last-match order does not matter
+    and the engine's single ``BattleState.weather`` gives the value."""
+    w = ctx.state.weather
+    value = jnp.select(
+        [
+            w == Weather.RAIN,
+            w == Weather.SANDSTORM,
+            w == Weather.SUN,
+            w == Weather.HAIL,
+            w == Weather.FOG,
+        ],
+        [
+            AiWeather.RAINING,
+            AiWeather.SANDSTORM,
+            AiWeather.SUNNY,
+            AiWeather.HAILING,
+            AiWeather.DEEP_FOG,
+        ],
+        AiWeather.CLEAR,
+    )
+    return ctx._replace(calc_temp=jnp.asarray(value, _I32))
+
+
+def if_speed_compare_equal_to(ctx: AiContext, value: int) -> AiContext:
+    """``IfSpeedCompareEqualTo`` (trainer_ai.c:1102-1112):
+    ``BattleSystem_CompareBattlerSpeed(attacker = the AI, defender = the player, TRUE) ==
+    value``, which is ``order.compare_speed`` with ``battler1 = 1``:
+
+    - Quick Claw is read through ``speedRand`` with ``ignoreQuickClaw`` TRUE too
+      (battle_lib.c:1278-1286, :1344-1352; the flag only skips the ``moveEffectsData``
+      write). The AI decides before the turn's redraw (battle_controller_player.c:853-857),
+      so it reads ``BattleState.qc_roll``, the previous turn's draw.
+    - ``ignoreQuickClaw`` skips the priority read (:1375-1399): both priorities are 0.
+    - The tie's ``RandNext() & 1`` is not drawn (plan K3c Ruling 3). At equal speed every
+      branch gives FASTER or TIE, never SLOWER (:1401-1447), so ``== SLOWER`` does not
+      depend on it: ``order.battler_slower`` with ``tie_roll = 0``. ``value`` must be
+      ``COMPARE_SPEED_SLOWER`` (asserted at trace time), as at every compare on Roark's
+      paths (script.s:1864, :2070, :2650). The decomp still consumes the draw (K3d).
+
+    Loose (module docstring): the tie is its own draw (``ReadKind.SPEED_TIE``), on the path
+    where the decomp makes it (equal speed in a branch that reads it, which is where
+    ``compare_speed`` gives TIE for a 1), and the decomp's three-valued result is compared
+    with ``value``."""
+    assert int(value) == COMPARE_SPEED_SLOWER, f"unsupported speed compare {value}"
+    tables, state = ctx.tables, ctx.state
+    if ctx.loose is not None:
+        reads = compare_speed(tables, state, 1, 1, state.qc_roll) == COMPARE_SPEED_TIE
+        ctx, bit = _loose_read(ctx, 0.5, ReadKind.SPEED_TIE, live=ctx.live & reads)
+        return _jump(ctx, compare_speed(tables, state, 1, bit, state.qc_roll) == value)
+    return _jump(ctx, battler_slower(tables, state, 1, 0, state.qc_roll))
+
+
+def _knows_effect(ctx: AiContext, battler: Battler, effect: int) -> jnp.ndarray:
+    state = ctx.state
+    if battler == Battler.ATTACKER:
+        moves = state.moves[1, state.active[1]].astype(_I32)
+    else:
+        moves = ctx.seen_moves  # AI_CONTEXT.battlerMoves
+    return jnp.any((moves != 0) & (move_effect(ctx.tables, moves) == effect))
+
+
+def if_move_effect_known(ctx: AiContext, battler: Battler, effect: int) -> AiContext:
+    """``IfMoveEffectKnown`` (trainer_ai.c:1739): a nonzero move whose effect
+    (``move_effect``, the game's own) is ``effect``, in the attacker's true moveset
+    (:1752-1753) or among the defender's moves the AI has seen (:1765-1766)."""
+    return _jump(ctx, _knows_effect(ctx, battler, effect))
+
+
+def if_move_effect_not_known(ctx: AiContext, battler: Battler, effect: int) -> AiContext:
+    """``IfMoveEffectNotKnown`` (trainer_ai.c:1781): the negation of ``IfMoveEffectKnown``."""
+    return _jump(ctx, ~_knows_effect(ctx, battler, effect))
+
+
+def if_attacker_has_no_damaging_moves(ctx: AiContext) -> AiContext:
+    """``IfAttackerHasNoDamagingMoves`` (trainer_ai.c:913-929): no move of the attacker's
+    true moveset is nonzero with ``MOVE_DATA(move).power`` nonzero (:920-921). Power 1
+    counts, unlike ``is_damaging``'s ``> 1``."""
+    state = ctx.state
+    moves = state.moves[1, state.active[1]].astype(_I32)
+    damaging = (moves != 0) & (ctx.tables.move_power[moves] != 0)
+    return _jump(ctx, ~jnp.any(damaging))
+
+
+def load_defender_last_used_move_class(ctx: AiContext) -> AiContext:
+    """``LoadDefenderLastUsedMoveClass`` (trainer_ai.c:2050-2054):
+    ``MOVE_DATA(movePrevByBattler[defender]).class`` (``BattleState.last_move[0]``; 0
+    physical, 1 special, 2 status). ``movePrevByBattler`` is the selected move on success,
+    else ``MOVE_NONE`` (battle_controller_player.c:3944-3949), whose class is physical
+    (res/moves/none/data.json); for Nature Power it is Nature Power."""
+    move = ctx.state.last_move[0].astype(_I32)
+    return ctx._replace(calc_temp=ctx.tables.move_category[move].astype(_I32))
+
+
+def load_current_move_effect(ctx: AiContext) -> AiContext:
+    """``LoadCurrentMoveEffect`` (trainer_ai.c:1164): ``MOVE_DATA(move).effect``."""
+    return ctx._replace(calc_temp=move_effect(ctx.tables, ctx.move))
+
+
+def if_loaded_not_in_table(ctx: AiContext, table: tuple[int, ...]) -> AiContext:
+    """``IfLoadedNotInTable`` (trainer_ai.c:876-891): ``calcTemp`` equals none of
+    ``table``'s values (the script's list up to its 0xFFFFFFFF end)."""
+    if not table:
+        return _jump(ctx, True)
+    return _jump(ctx, ~jnp.isin(ctx.calc_temp, jnp.asarray(table, _I32)))

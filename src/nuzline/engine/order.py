@@ -159,24 +159,58 @@ def quick_claw_active(tables: Tables, state: BattleState, qc) -> jnp.ndarray:
     )
 
 
+# BattleSystem_CompareBattlerSpeed's results (include/constants/battle.h:163-165).
+COMPARE_SPEED_FASTER, COMPARE_SPEED_SLOWER, COMPARE_SPEED_TIE = 0, 1, 2
+
+
+def compare_speed(tables: Tables, state: BattleState, battler1: int, tie_roll, qc) -> jnp.ndarray:
+    """``int32``: ``BattleSystem_CompareBattlerSpeed(battler1, the other side)`` within equal
+    priority (lib.c:1401-1447): ``COMPARE_SPEED_FASTER``, ``SLOWER`` or ``TIE``.
+    ``battler1`` is a side (static int). Quick Claw first (``qc``: each side's ``speedRand``
+    bit, ``quick_claw_active``): both active compare plain speeds, Trick Room and Lagging
+    Tail ignored (:1402-1407); a lone active one is FASTER (:1408-1411), even under Trick
+    Room and against a Lagging Tail. Lagging Tail: a lone holder is SLOWER (:1418-1421); two
+    holders compare speeds reversed, the faster SLOWER, Trick Room ignored (:1412-1417). Else
+    (Stall is unsupported) Trick Room reverses the speeds (:1432-1439). At equal speed each
+    of these branches gives TIE when ``tie_roll`` (``RandNext() & 1``) is 1, else FASTER,
+    never SLOWER; the decomp draws that bit only there. The dead-battler short-circuit
+    (:1205-1211) is not part of this function, as it was not of ``player_second``; the
+    trainer AI compares at its decision, with both actives alive."""
+    other = 1 - battler1
+    speed = (effective_speed(tables, state, 0), effective_speed(tables, state, 1))
+    claw = quick_claw_active(tables, state, qc)
+    lag = tuple(_holds(tables, state, side, ItemId.LAGGING_TAIL) for side in (0, 1))
+    speed1, speed2 = speed[battler1], speed[other]
+    claw1, claw2 = claw[battler1], claw[other]
+    lag1, lag2 = lag[battler1], lag[other]
+    reversed_ = ~(claw1 & claw2) & ((lag1 & lag2) | ((state.trick_room != 0) & ~lag1 & ~lag2))
+    slower = jnp.where(reversed_, speed1 > speed2, speed1 < speed2)
+    tie = (speed1 == speed2) & (jnp.asarray(tie_roll) != 0)
+    by_speed = jnp.where(
+        slower, COMPARE_SPEED_SLOWER, jnp.where(tie, COMPARE_SPEED_TIE, COMPARE_SPEED_FASTER)
+    )
+    lagging = jnp.where(
+        lag1 != lag2, jnp.where(lag1, COMPARE_SPEED_SLOWER, COMPARE_SPEED_FASTER), by_speed
+    )
+    lone_claw = jnp.where(claw2, COMPARE_SPEED_SLOWER, COMPARE_SPEED_FASTER)
+    result = jnp.where(claw1 != claw2, lone_claw, jnp.where(claw1, by_speed, lagging))
+    return result.astype(_I32)
+
+
+def battler_slower(tables: Tables, state: BattleState, battler1: int, tie_roll, qc) -> jnp.ndarray:
+    """``bool``: ``compare_speed`` is not FASTER: within equal priority ``battler1`` acts
+    after the other side. With ``tie_roll`` 0 no TIE arises, so this is exactly
+    ``compare_speed == COMPARE_SPEED_SLOWER`` (the trainer AI's speed compare,
+    ``ai.commands.if_speed_compare_equal_to``)."""
+    return compare_speed(tables, state, battler1, tie_roll, qc) != COMPARE_SPEED_FASTER
+
+
 def player_second(tables: Tables, state: BattleState, tie_roll, qc) -> jnp.ndarray:
     """``bool``: ``BattleSystem_CompareBattlerSpeed(player, opponent)`` swaps the two
-    within equal priority (lib.c:1401-1440). Quick Claw first (``qc``: each side's
-    ``speedRand`` bit, ``quick_claw_active``): both active compare plain speeds, Trick Room
-    and Lagging Tail ignored (:1402-1407); a lone active one goes first (:1408-1411), even
-    under Trick Room and against a Lagging Tail. Lagging Tail: a lone holder goes second
-    (:1418-1421); two holders compare speeds reversed, the faster second, Trick Room
-    ignored (:1412-1417). Else (Stall is unsupported) Trick Room reverses the speeds
-    (:1432). Equal speeds swap on ``tie_roll`` (``RandNext() & 1``), drawn only where the
-    decomp compares speeds."""
-    speed0, speed1 = effective_speed(tables, state, 0), effective_speed(tables, state, 1)
-    claw0, claw1 = quick_claw_active(tables, state, qc)
-    lag0, lag1 = (_holds(tables, state, side, ItemId.LAGGING_TAIL) for side in (0, 1))
-    reversed_ = ~(claw0 & claw1) & ((lag0 & lag1) | ((state.trick_room != 0) & ~lag0 & ~lag1))
-    slower = jnp.where(reversed_, speed0 > speed1, speed0 < speed1)
-    by_speed = slower | ((speed0 == speed1) & (jnp.asarray(tie_roll) != 0))
-    lagging = jnp.where(lag0 != lag1, lag0, by_speed)
-    return jnp.where(claw0 != claw1, claw1, jnp.where(claw0, by_speed, lagging))
+    within equal priority (lib.c:1401-1447): ``battler_slower`` with ``battler1 = 0``.
+    Equal speeds swap on ``tie_roll`` (``RandNext() & 1``), drawn only where the decomp
+    compares speeds."""
+    return battler_slower(tables, state, 0, tie_roll, qc)
 
 
 def action_order(tables: Tables, state: BattleState, actions, outcome) -> jnp.ndarray:
