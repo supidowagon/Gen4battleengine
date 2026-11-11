@@ -235,23 +235,45 @@ each; "Settling a user call" above says how to enter an answer. The kinds:
   (Route 213 is rain and Idol Catherine #2 fog, by your answers).
 - **Gravity** whose entry cites PKCalc while no sheet row claims it (Champion Cynthia cites
   the sheet row Elite Four Split:298).
-- **Unclassified ROM changes** (Ruling 13): two remain, both `unknown` (see "What is refused").
+- **Unclassified ROM changes** (Ruling 13): one remains, `unknown` (see "What is refused").
 
 ## What is refused
 
-`coverage --game kaizo` exits 2 and lists every reason. For Roark today that includes the
-Kaizo AI lines (no policy, `AI_FLAG_RISKY`, per-move script paths), `Kaizo ROM: 1 code changes
-unclassified`, and the K3b2 mechanics below. K3b1 (done) models, in both engines: obedience
-(Kaizo: every Pokemon always obeys, no RNG draw), permanent sandstorm with the end-of-turn
-field pass and Cloud Nine, Sand Veil, Snow Cloak, Swift Swim, Light Screen, Brick Break,
-Toxic, Sand Tomb, the Swift family, Pay Day, Gust, Recover, Fake Out, AncientPower, Curse,
-DoubleSlap, Self-Destruct, Flail, Rough Skin, Flame Body, Limber, Adaptability, Solid Rock,
-Focus Sash, Big Root, Berry Juice, status berries, White Herb, Lagging Tail, Aqua Ring, Rindo
-and Chilan berries, and bag-item rows in the pool check. Still refused for Roark (K3b2):
-Thunder Fang, Protect, Present, Attract, Cute Charm, Quick Claw, Roar, Nature Power,
-Camouflage, and the two terrain ROM conditions (`MapHeader_GetBattleBG`,
-`MapHeader_GetMapMatrixID`). The remaining `unknown` ROM change is overlay14
-0x022249CC-0x022249CD (the AI script's second Levitate compare in `Basic_CheckForImmunity`
-tests Dry Skin 87; K3c). Known blind spot: Kaizo field-script command
+`coverage --game kaizo` exits 2 and lists every reason. For Roark today (K3b2 done,
+2026-11-10) only the K3c lines remain, on both saves at `--cap 16`: the Kaizo AI lines (no
+transcribed policy, `AI_FLAG_RISKY`, the per-move script paths of Roark's moves) and `Kaizo
+ROM: 1 code changes unclassified`. The pool section reads `Support: EXACT`, `Missing: none`.
+
+K3b1 (done) models, in both engines: obedience (Kaizo: every Pokemon always obeys, no RNG
+draw), permanent sandstorm with the end-of-turn field pass and Cloud Nine, Sand Veil, Snow
+Cloak, Swift Swim, Light Screen, Brick Break, Toxic, Sand Tomb, the Swift family, Pay Day,
+Gust, Recover, Fake Out, AncientPower, Curse, DoubleSlap, Self-Destruct, Flail, Rough Skin,
+Flame Body, Limber, Adaptability, Solid Rock, Focus Sash, Big Root, Berry Juice, status
+berries, White Herb, Lagging Tail, Aqua Ring, Rindo and Chilan berries, and bag-item rows in
+the pool check.
+
+K3b2 (done) models, in both engines, with every random draw an `Outcome` field
+(`docs/kaizo/k3b2-rules.md`): Thunder Fang (two 10% secondaries), Protect (the chain and
+its success law), Present (the damage-or-heal draw), Attract and Cute Charm (infatuation),
+Quick Claw (the per-turn draw carried into the next turn's order, and a chance node at
+battle start), Roar (the level check, the target draw, the drag with its switch-in
+effects), Camouflage, Nature Power and Tri Attack, and the battle terrain. It also fixes the
+mid-turn accuracy bug (an evasion or accuracy change earlier in the turn now changes a later
+move's hit chance; `docs/discrepancies.md`). Every Roark-vs-pool action pair from both saves
+is enumerated exactly under the width cap (`tests/kaizo/test_roark_widths.py`, nothing
+sampled).
+
+The terrain is read per trainer from the ROM (`Trainer.terrain`, `tools/terrain.py`): the
+tiles of every map the trainer can be fought on, then the map header's battle background
+(the two patched getters `MapHeader_GetBattleBG` and `MapHeader_GetMapMatrixID` are
+modelled). Roark's is BUILDING, so his fight's Nature Power calls Tri Attack. A trainer
+whose maps give more than one terrain, or none, has an unknown terrain, and coverage refuses
+Nature Power, Camouflage and Secret Power in that fight: 41 of the 46 Kaizo trainers that
+know one of them, until a terrain is settled (a K3 end decision).
+
+The remaining `unknown` ROM change is overlay14 0x022249CC-0x022249CD (the AI script's
+second Levitate compare in `Basic_CheckForImmunity` tests Dry Skin 87; K3c). Still to come:
+K3c, the Kaizo trainer AI (policy, `AI_FLAG_RISKY`, script paths, the Dry Skin compare, the
+AI's reads of the K3b2 mechanics); K3d, the golden trace and acceptance. Known blind spot: Kaizo field-script command
 0x3F (map headers 257 and 321, common script 9019) sets a party status that persists into
 fights on any map; coverage sees it only if the save was taken after that script.

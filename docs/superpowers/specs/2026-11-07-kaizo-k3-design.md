@@ -104,9 +104,22 @@ pass, Light Screen and Brick Break; §4.3 Toxic, Sand Tomb, Swift family, Pay Da
 Recover, Fake Out, AncientPower, Curse, DoubleSlap, Self-Destruct, Flail, Aurora Beam; §4.4
 Solid Rock, Sand Veil, Rough Skin, Flame Body, Swift Swim, Limber, Snow Cloak, Adaptability,
 Focus Sash, Big Root, Chesto/Rindo/Berry Juice/Lum/Pecha/Chilan berries, White Herb, Lagging
-Tail, Aqua Ring; obedience (§5). Still open for K3b2: Thunder Fang, Protect, Present, Attract,
-Cute Charm, Quick Claw, Roar, Nature Power, Camouflage, terrain. Per-rule audit:
-`docs/kaizo/k3b-rule-audit.md`.
+Tail, Aqua Ring; obedience (§5). Per-rule audit: `docs/kaizo/k3b-rule-audit.md`.
+
+**Status (K3b2 done, 2026-11-10).** Landed in both engines, every draw an `Outcome` field
+(rules: `docs/kaizo/k3b2-rules.md`): §4.3 Thunder Fang, Protect, Present, Attract, Roar,
+Camouflage, Nature Power (and Tri Attack, which it calls on Roark's BUILDING terrain); §4.4
+Cute Charm, Quick Claw; the per-trainer battle terrain read from the ROM (the two patched
+map-header getters of §5 are modelled); the mid-turn accuracy fix. Every Roark-vs-pool action
+pair from both saves enumerates exactly under the width cap. `coverage --trainer roark --cap
+16` on both saves now lists only the K3c lines (no AI policy, `AI_FLAG_RISKY`, untranscribed
+move script paths, `Kaizo ROM: 1 code changes unclassified`: the Dry Skin AI compare), and the
+pool is `EXACT` with nothing missing. Left for K3c: the Kaizo AI (§6), including its reads of
+the K3b2 mechanics (Quick Claw in the AI's speed compares, the player's infatuation, Protect
+and Roar in seen moves, Camouflage's types, Nature Power's called move). Left for K3d: the
+golden trace and acceptance (§7, §9). Open user decisions at the end of K3: the `% n`
+uniformity convention, and the terrain of the 41 Kaizo terrain-move trainers whose maps give
+no single terrain (refused today).
 
 ### 4.1 Rules for every new mechanic
 
