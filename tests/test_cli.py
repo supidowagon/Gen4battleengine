@@ -985,17 +985,12 @@ def test_kaizo_roark_refused(tmp_path, capsys, kaizo_tables, kaizo_names):  # ex
     party = _kaizo_party(tmp_path, kaizo_names)
     assert main(["coverage", "--game", "kaizo", "--party", party, "--trainer", "roark"]) == 2
     out = capsys.readouterr().out
-    # K3b1: sandstorm is modelled, so Roark's battle-start Sandstorm is no longer refused;
-    # the AI policy and the unclassified ROM change still refuse the fight.
+    # K3b1: sandstorm is modelled, so Roark's battle-start Sandstorm is no longer refused.
+    # K3c Task 2: Kaizo has an AI policy and its one AI script change is modelled; the
+    # RISKY flag and the untranscribed moves still refuse the fight.
     assert "Sandstorm" not in out
-    assert (
-        "Leader Roark: no transcribed AI policy for this game (spec 5.10) (AI policy UNSUPPORTED)"
-        in out
-    )
-    assert (
-        "Kaizo ROM: 1 code changes unclassified (docs/kaizo/rom_diff.md) (ROM change UNSUPPORTED)"
-        in out
-    )
+    assert "no transcribed AI policy" not in out and "code changes unclassified" not in out
+    assert "Leader Roark: AI_FLAG_RISKY (AI flag UNSUPPORTED)" in out
     # K3b2 Task 4: Gible's Thunder Fang (effect 275) is modelled now.
     assert "Thunder Fang (move effect UNSUPPORTED)" not in out
     # Final review I3: Kaizo Roark's move 205 is Accelerock; Rollout is no Kaizo move.
@@ -1213,7 +1208,8 @@ def test_kaizo_rival_refusal_prints_on_a_cp1252_console(tmp_path, kaizo_tables, 
     out = done.stdout
     assert out.isascii() and "Pok\\xe9mon Trainer Barry #3 [Empoleon] (" in out
     assert "Support: NONE" in out and "Missing (" in out
-    assert "Pok\\xe9mon Trainer Barry #3 [Empoleon]: no transcribed AI policy" in out
+    # K3c Task 2 gave Kaizo an AI policy; Barry's CHECK_HP flag (ai_flags 279) is refused.
+    assert "Pok\\xe9mon Trainer Barry #3 [Empoleon]: AI_FLAG_CHECK_HP (AI flag UNSUPPORTED)" in out
 
 
 @pytest.mark.parametrize("which", ["kaizo_save_pre_roark_path", "kaizo_save_path"])
@@ -1250,7 +1246,7 @@ def test_kaizo_prep_refusal_exits_2_before_the_cap(
     args = ["prep", "--game", "kaizo", "--save", path, "--trainer-id", "51", "--devices", "1"]
     assert main(args) == 2
     out = capsys.readouterr().out
-    assert "Support: NONE" in out and "no transcribed AI policy" in out
+    assert "Support: NONE" in out and "Martha: AI_FLAG_CHECK_HP (AI flag UNSUPPORTED)" in out
     assert not (tmp_path / "runs").exists()
 
 

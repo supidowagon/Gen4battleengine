@@ -49,6 +49,9 @@ Encodings:
 * ``species_abilities_decomp[species, slot]``: the decomp's own ability ids (0 =
   ``ABILITY_NONE``), next to ``species_abilities``' engine ids, so the trainer AI can
   name abilities the engine does not implement.
+* ``ai_policy`` (int8 scalar): the game's trainer-AI policy, the index of
+  ``game_constants.POLICY[game]`` in ``game_constants.AI_POLICIES`` (0 vanilla, 1 kaizo;
+  ``nuzline.ai.layout.layout_of`` reads it). A game without a policy is a ``BuildError``.
 
 Kaizo (``--game kaizo``, K2b Task 15): ``tools.kaizo.resolve.resolve`` first cross-checks
 the sources and writes the resolved ``data/intermediate_kaizo/*.json`` (and
@@ -75,6 +78,7 @@ from pathlib import Path
 
 import numpy as np
 
+from nuzline.data.game_constants import AI_POLICIES, POLICY
 from nuzline.data.games import GAMES, KAIZO, VANILLA, get_game
 from nuzline.data.tables import MANIFEST_VERSION
 from nuzline.engine.ids import AbilityId, EffectId, ItemId, MoveFlag, MoveTarget, TrainerItemId
@@ -393,6 +397,14 @@ def resolve_conditions(inter: Path, rom_diff: Path = ROM_DIFF) -> list[dict]:
     return out
 
 
+def _ai_policy(game: str) -> int:
+    """``Tables.ai_policy`` of ``game``: its ``POLICY`` as an ``AI_POLICIES`` index."""
+    policy = POLICY.get(game)
+    if policy not in AI_POLICIES:
+        raise BuildError(f"game {game!r} has no AI policy in game_constants.POLICY")
+    return AI_POLICIES.index(policy)
+
+
 def build_arrays(inter: Path, game: str = "platinum_us") -> tuple[dict[str, np.ndarray], dict]:
     kaizo = game == KAIZO
     species_only = _load(inter, "species")
@@ -507,6 +519,7 @@ def build_arrays(inter: Path, game: str = "platinum_us") -> tuple[dict[str, np.n
         "item_param": _arr(item_params, np.int16, "item param"),
         "trainer_item_effect": _arr(trainer_item_ids, np.int8, "trainer item effect"),
         "item_hold_effect": _arr([i["hold_effect"] for i in items], np.int16, "item hold effect"),
+        "ai_policy": _arr(_ai_policy(game), np.int8, "ai policy"),
     }
     manifest = {
         "version": MANIFEST_VERSION,

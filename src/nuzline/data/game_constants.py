@@ -7,8 +7,9 @@ loaded (``nuzline.data.games.load_game``):
 
 * ``CONSTANTS``: the ids, each with the name (and, for items, the hold effect, hold param or
   HP restored) it must have. ``scope`` ``"engine"`` is asserted for every game;
-  ``"vanilla_policy"`` only for games whose AI policy is the vanilla transcription
-  (``POLICY``), since a game with no transcribed policy is refused by coverage anyway.
+  ``"vanilla_policy"`` and ``"kaizo_policy"`` only for games whose AI policy (``POLICY``)
+  reads them, since a game with no transcribed policy is refused by coverage anyway. A
+  table both policies read is listed once per scope.
 * ``GAME_DATA``: lists that are game data and come from the game's intermediate files.
 * ``EXEMPT``: tables that are not game ids (engine or AI-script encodings, or keyed by
   name or effect id), with the reason.
@@ -31,7 +32,10 @@ if TYPE_CHECKING:
     from nuzline.data.tables import Names
 
 KINDS = ("move", "ability", "item", "type", "species")
-SCOPES = ("engine", "vanilla_policy")
+SCOPES = ("engine", "vanilla_policy", "kaizo_policy")
+# The AI policies, in ``Tables.ai_policy`` order (``tools/build_tables.py`` packs the index;
+# ``nuzline.ai.layout.layout_of`` reads it).
+AI_POLICIES = ("vanilla", "kaizo")
 
 
 @dataclass(frozen=True)
@@ -52,7 +56,7 @@ def _table(where: str, kind: str, scope: str, entries: Mapping[str, int]) -> tup
     return tuple(Constant(where, kind, i, name, scope) for name, i in entries.items())
 
 
-_E, _P = "engine", "vanilla_policy"
+_E, _P, _K = "engine", "vanilla_policy", "kaizo_policy"
 _TYPES = {
     "Normal": 0,
     "Fighting": 1,
@@ -112,6 +116,71 @@ _SWITCH_MOVES = {
 }
 # ai/switching.py _ANY_SIDE_ABILITIES (ApplyTypeChart / CalcEffectiveness, trainer_ai.c).
 _ANY_SIDE_ABILITIES = {"Levitate": 26, "Wonder Guard": 25, "Scrappy": 113, "Normalize": 96}
+# ai/commands.py MOVE_IDS: Basic_Main's OHKO checks (script.s:57-58), Expert_Pursuit's
+# U-turn (:3730), Expert_StealthRock's Roar and Whirlwind (:6276-6277), Expert_Curse's Gyro
+# Ball and Trick Room (:3472-3473, read from K3c Task 6), and the Basic_CheckSoundproof list
+# (:121-131).
+_AI_MOVE_IDS = {
+    "Fissure": 90,
+    "Horn Drill": 32,
+    "U-turn": 369,
+    "Roar": 46,
+    "Whirlwind": 18,
+    "Gyro Ball": 360,
+    "Trick Room": 433,
+    **{k: v for k, v in _SOUND_MOVES.items() if k != "Roar"},
+}
+# ai/commands.py CALC_DAMAGE_MOVES: TrainerAI_CalcDamage's id cases (trainer_ai.c:2885-3056;
+# MOVE_* of generated/moves.txt, line N is id N-1).
+_CALC_DAMAGE_MOVES = {
+    "Natural Gift": 363,
+    "Judgment": 449,
+    "Hidden Power": 237,
+    "Gyro Ball": 360,
+    "Dragon Rage": 82,
+    "Seismic Toss": 69,
+    "Night Shade": 101,
+    "Psywave": 149,
+    "Return": 216,
+    "Frustration": 218,
+    "Magnitude": 222,
+    "SonicBoom": 49,
+    "Low Kick": 67,
+    "Grass Knot": 447,
+}
+# ai/commands.py MOVE_TYPE_MOVES: TrainerAI_MoveType's id cases (trainer_ai.c:3132-3222).
+_MOVE_TYPE_MOVES = {"Natural Gift": 363, "Judgment": 449, "Hidden Power": 237, "Weather Ball": 311}
+
+
+def _policy_tables(scope: str) -> tuple[Constant, ...]:
+    """The id tables both AI policies read by id (the script's and trainer_ai.c's ids are the
+    same numbers in both ROMs, docs/ai/kaizo_roark.md 2), asserted by name for ``scope``'s
+    games."""
+    return (
+        *_table("nuzline.ai.commands.MOVE_IDS", "move", scope, _AI_MOVE_IDS),
+        *_table("nuzline.ai.commands.SOUND_MOVES", "move", scope, _SOUND_MOVES),
+        *_table("nuzline.ai.switching.MOVE_IDS", "move", scope, _SWITCH_MOVES),
+        *_table("nuzline.ai.switching._MOVES", "move", scope, _SWITCH_MOVES),
+        *_table(
+            "nuzline.ai.switching.PLAYER_MOVE_REFUSALS",
+            "move",
+            scope,
+            {k: v for k, v in _SWITCH_MOVES.items() if k != "Hidden Power"},
+        ),
+        *_table(
+            "nuzline.ai.switching.PLAYER_ABILITY_REFUSALS", "ability", scope, _ANY_SIDE_ABILITIES
+        ),
+        *_table(
+            "nuzline.ai.policy._STATE_MOVE_IDS",
+            "move",
+            scope,
+            {k: _SWITCH_MOVES[k] for k in ("Miracle Eye", "Roost", "Magnet Rise", "Ingrain")},
+        ),
+        # Until K3c Task 3 keys the script-roll sites by battle effect, both policies read
+        # the site table by move id (policy._refused refuses a Kaizo move outside it).
+        *_table("nuzline.ai.outcome._SITES", "move", scope, _TRANSCRIBED_MOVES),
+    )
+
 
 CONSTANTS: tuple[Constant, ...] = (
     # --- engine: asserted for every game -------------------------------------------
@@ -290,40 +359,19 @@ CONSTANTS: tuple[Constant, ...] = (
     # through those moves (MOVE_EFFECTS maps each one to its member).
     # A classification marker: these entries hold move ids, not effect ids.
     *_table("nuzline.ai.commands.BattleEffect", "move", _P, _TRANSCRIBED_MOVES),
-    *_table("nuzline.ai.outcome._SITES", "move", _P, _TRANSCRIBED_MOVES),
-    # Basic_Main's OHKO and Roar checks (script.s:52), Expert's U-turn, and the
-    # Basic_CheckSoundproof list.
-    *_table(
-        "nuzline.ai.commands.MOVE_IDS",
-        "move",
-        _P,
-        {
-            "Fissure": 90,
-            "Horn Drill": 32,
-            "U-turn": 369,
-            "Roar": 46,
-            "Whirlwind": 18,
-            **{k: v for k, v in _SOUND_MOVES.items() if k != "Roar"},
-        },
-    ),
-    *_table("nuzline.ai.commands.SOUND_MOVES", "move", _P, _SOUND_MOVES),
-    *_table("nuzline.ai.switching.MOVE_IDS", "move", _P, _SWITCH_MOVES),
-    *_table("nuzline.ai.switching._MOVES", "move", _P, _SWITCH_MOVES),
-    *_table(
-        "nuzline.ai.switching.PLAYER_MOVE_REFUSALS",
-        "move",
-        _P,
-        {k: v for k, v in _SWITCH_MOVES.items() if k != "Hidden Power"},
-    ),
-    *_table("nuzline.ai.switching.PLAYER_ABILITY_REFUSALS", "ability", _P, _ANY_SIDE_ABILITIES),
-    *_table(
-        "nuzline.ai.policy._STATE_MOVE_IDS",
-        "move",
-        _P,
-        {k: _SWITCH_MOVES[k] for k in ("Miracle Eye", "Roost", "Magnet Rise", "Ingrain")},
-    ),
-    # The Dry Skin quirk (script.s:78 tests Levitate a second time; policy.py _basic).
-    Constant("nuzline.ai.policy._basic", "ability", 26, "Levitate", _P),
+    *_policy_tables(_P),
+    # The decomp's C id cases: both policies compare these by id, whatever a game names the
+    # slot (Kaizo's 149 is Triple Axel and still takes MOVE_PSYWAVE's case), so they are
+    # name-checked against vanilla only.
+    *_table("nuzline.ai.commands.CALC_DAMAGE_MOVES", "move", _P, _CALC_DAMAGE_MOVES),
+    *_table("nuzline.ai.commands.MOVE_TYPE_MOVES", "move", _P, _MOVE_TYPE_MOVES),
+    # script.s:78's compare (Basic_CheckForImmunity -> Basic_CheckWaterAbsorption2): the
+    # decomp tests Levitate a second time, which never matches (quirk).
+    Constant("nuzline.ai.layout.VANILLA", "ability", 26, "Levitate", _P),
+    # --- kaizo_policy: the vanilla transcription, read by battle effect (ai/layout.py) ---
+    *_policy_tables(_K),
+    # Kaizo's one changed script word (overlay14 0x022249CC, data/kaizo/rom_diff.toml).
+    Constant("nuzline.ai.layout.KAIZO", "ability", 87, "Dry Skin", _K),
 )
 
 # Lists that are game data: "module.ATTR" -> the intermediate file that replaces it.
@@ -365,6 +413,16 @@ EXEMPT: dict[str, str] = {
     "nuzline.ai.commands.LoadType": _AI_ENCODING + " (LOAD_*, trainer_ai.c:937)",
     "nuzline.ai.commands.SideCondition": _AI_ENCODING + " (SIDE_CONDITION_*)",
     "nuzline.ai.commands.TypeMulti": _AI_ENCODING + " (TYPE_MULTI_*, battle.h:144-153)",
+    "nuzline.ai.commands.NO_DAMAGE_CALC_EFFECTS": (
+        "decomp battle effect ids of trainer_ai.c's sNoDamageCalcMoveEffects (:31-46), compared "
+        "with MoveTable.effect by the AI's C code, which Kaizo did not change "
+        "(docs/ai/kaizo_roark.md 2); each game's moves carry their own effect"
+    ),
+    "nuzline.ai.commands.ALT_POWER_EFFECTS": (
+        "decomp battle effect ids of trainer_ai.c's sAltPowerMoveEffects (:48-61), compared "
+        "with MoveTable.effect by the AI's C code, which Kaizo did not change "
+        "(docs/ai/kaizo_roark.md 2); each game's moves carry their own effect"
+    ),
     "nuzline.ai.switching.SwitchSite": "kind of an AI switch draw (roark.md 11.1), not a game id",
     "nuzline.ai.switching._CANDIDATE_TARGETS": (
         "party slot of each AI switch candidate (-1: keep the battler), an engine layout"
@@ -391,11 +449,11 @@ EXEMPT: dict[str, str] = {
     ),
 }
 
-# Game id -> the AI policy its trainers' scripts are transcribed as (None: none yet, so
-# coverage refuses every trainer of that game, spec 5.10).
+# Game id -> the AI policy its trainers' scripts are transcribed as, one of AI_POLICIES (None:
+# none yet, so coverage refuses every trainer of that game, spec 5.10).
 POLICY: dict[str, str | None] = {
     "platinum_us": "vanilla",
-    "platinum_kaizo_nightmare_final": None,
+    "platinum_kaizo_nightmare_final": "kaizo",
 }
 
 
@@ -442,10 +500,11 @@ def _check(c: Constant, names: Names, items: Sequence[dict]) -> list[str]:
 def check_constants(game_id: str, names: Names, items: Sequence[dict]) -> list[str]:
     """One line per hard-coded id that ``game_id``'s data contradicts; ``items`` are the
     rows of the game's ``intermediate_dir/items.json``. Engine constants are checked for
-    every game, the vanilla policy's only for a game whose ``POLICY`` is ``"vanilla"``."""
+    every game, a policy's (``"vanilla_policy"``, ``"kaizo_policy"``) only for a game whose
+    ``POLICY`` it is."""
     policy = POLICY.get(game_id)
     lines: list[str] = []
     for c in CONSTANTS:
-        if c.scope == "engine" or policy == "vanilla":
+        if c.scope == "engine" or (policy is not None and c.scope == f"{policy}_policy"):
             lines += _check(c, names, items)
     return lines

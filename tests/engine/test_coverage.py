@@ -6,6 +6,7 @@ from dataclasses import replace
 import numpy as np
 import pytest
 
+import nuzline.engine.coverage as coverage_module
 from nuzline.data.forms import personal_row
 from nuzline.data.games import KAIZO
 from nuzline.data.tables import Names
@@ -301,8 +302,10 @@ def test_player_rotom_wash_is_not_refused_for_its_form(tables, names):
 NO_POLICY = "Roark: no transcribed AI policy for this game (spec 5.10) (AI policy UNSUPPORTED)"
 
 
-def test_trainer_of_a_game_without_ai_policy_refused(tables, names, vanilla_manifest):
-    # Vanilla's data under the Kaizo game id: Kaizo has no transcribed AI policy yet.
+def test_trainer_of_a_game_without_ai_policy_refused(tables, names, vanilla_manifest, monkeypatch):
+    # Vanilla's data under the Kaizo game id, with the Kaizo policy removed (K3c Task 2
+    # gave Kaizo one): a game without a transcribed AI policy is refused.
+    monkeypatch.setitem(coverage_module.POLICY, KAIZO, None)
     kaizo = Names({**vanilla_manifest, "game": KAIZO})
     report = check_opponent(tables, kaizo, roark_trainer(), roark_party(names), Weather.NONE)
     assert NO_POLICY in report.missing and report.level == Support.NONE
@@ -312,8 +315,11 @@ def test_trainer_of_a_game_without_ai_policy_refused(tables, names, vanilla_mani
 
 def test_kaizo_trainer_ai_refused(kaizo_tables, kaizo_names, kaizo_roark, kaizo_roark_party):
     report = check_opponent(kaizo_tables, kaizo_names, kaizo_roark, kaizo_roark_party, Weather.NONE)
+    # Kaizo has an AI policy since K3c Task 2; Roark's RISKY flag is refused until Task 6.
     # Reports name a labelled trainer by its label (Task 18 fix round 1).
-    assert kaizo_roark.label == "Leader Roark" and f"Leader {NO_POLICY}" in report.missing
+    assert kaizo_roark.label == "Leader Roark" and f"Leader {NO_POLICY}" not in report.missing
+    assert "Leader Roark: AI_FLAG_RISKY (AI flag UNSUPPORTED)" in report.missing
+    assert report.level == Support.NONE
 
 
 # --- Kaizo trainer fields (K2b Task 14) ----------------------------------------------

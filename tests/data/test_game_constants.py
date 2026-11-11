@@ -70,8 +70,12 @@ LISTED = [
     "nuzline.ai.switching.PLAYER_ABILITY_REFUSALS",
     "nuzline.ai.switching.PLAYER_MOVE_REFUSALS",
     "nuzline.ai.policy._STATE_MOVE_IDS",
-    "nuzline.ai.policy._basic",  # the Dry Skin quirk
     "nuzline.ai.outcome._SITES",
+    "nuzline.ai.commands.CALC_DAMAGE_MOVES",
+    "nuzline.ai.commands.MOVE_TYPE_MOVES",
+    # vanilla_policy / kaizo_policy: script.s:78's compare (the Dry Skin word)
+    "nuzline.ai.layout.VANILLA",
+    "nuzline.ai.layout.KAIZO",
     # EXEMPT: engine encodings
     "nuzline.engine.ids.MoveTarget",
     "nuzline.engine.ids.EffectId",
@@ -87,6 +91,8 @@ LISTED = [
     "nuzline.ai.commands.LoadType",
     "nuzline.ai.commands.SideCondition",
     "nuzline.ai.commands.TypeMulti",
+    "nuzline.ai.commands.NO_DAMAGE_CALC_EFFECTS",
+    "nuzline.ai.commands.ALT_POWER_EFFECTS",
     "nuzline.ai.switching.SwitchSite",
     "nuzline.ai.switching._CANDIDATE_TARGETS",  # engine layout (found by the array scan)
     # game data (Task 5)
@@ -109,6 +115,7 @@ MODULES = [
     "nuzline.ai.commands",
     "nuzline.ai.switching",
     "nuzline.ai.policy",
+    "nuzline.ai.layout",
     "nuzline.engine.ids",
     "tools.effect_map",
     "nuzline.saves.check",
@@ -179,7 +186,7 @@ def test_classes_are_disjoint_and_well_formed():
         assert c.kind == "item" or (
             c.hold_effect is None and c.hp_restored is None and c.hold_param is None
         ), c
-    assert POLICY == {VANILLA: "vanilla", KAIZO: None}
+    assert POLICY == {VANILLA: "vanilla", KAIZO: "kaizo"}
     assert set(POLICY) == set(GAMES)
 
 
@@ -192,12 +199,11 @@ def _code_entries(where: str) -> set:
     """The table at ``where`` as ``{(name or None, id or None)}``, to compare with its
     ``CONSTANTS`` entries."""
     from nuzline.ai import commands, switching
+    from nuzline.ai.layout import AiLayout
 
     obj = _resolve(where)
-    if where == "nuzline.ai.policy._basic":
-        src = Path(importlib.util.find_spec("nuzline.ai.policy").origin).read_text("utf-8")
-        assert "(quirk) :78 should test Dry Skin" in src
-        return {("Levitate", commands.ABILITY_IDS["Levitate"])}
+    if isinstance(obj, AiLayout):  # its script.s:78 compare
+        return {(None, obj.water2_ability)}
     if where == "nuzline.engine.ids.POTION_HP_RESTORED":
         (potion,) = [c for c in CONSTANTS if c.where == where]
         assert potion.hp_restored == obj
@@ -229,18 +235,19 @@ def _code_entries(where: str) -> set:
 
 
 def test_constants_match_the_code():
+    # A table both policies read is listed once per scope; each listing is the whole table.
     groups = defaultdict(list)
     for c in CONSTANTS:
-        groups[c.where].append(c)
-    for where, cs in groups.items():
+        groups[c.where, c.scope].append(c)
+    for (where, scope), cs in groups.items():
         code = _code_entries(where)
         names = {n for n, _ in code}
         ids = {i for _, i in code}
         mine = {
             (c.name if None not in names else None, c.id if None not in ids else None) for c in cs
         }
-        assert mine == code, where
-        assert len(cs) == len(code), where
+        assert mine == code, (where, scope)
+        assert len(cs) == len(code), (where, scope)
 
 
 def test_message_path():
@@ -288,12 +295,48 @@ def test_quick_claw_param_mismatch_reported(vanilla_manifest, vanilla_items):
     ]
 
 
-def test_policy_constants_only_for_vanilla_policy(vanilla_manifest, vanilla_items):
+def test_policy_constants_only_for_their_policy(vanilla_manifest, vanilla_items):
     names = list(vanilla_manifest["move_names"])
-    names[446] = "Pebble Trap"  # Stealth Rock: vanilla_policy only
+    names[446] = "Pebble Trap"  # Stealth Rock: MOVE_EFFECTS is vanilla_policy only
     renamed = Names({**vanilla_manifest, "move_names": names})
     assert any("MOVE_EFFECTS" in s for s in check_constants(VANILLA, renamed, vanilla_items))
-    assert check_constants(KAIZO, renamed, vanilla_items) == []
+    assert not any("MOVE_EFFECTS" in s for s in check_constants(KAIZO, renamed, vanilla_items))
+    abilities = list(vanilla_manifest["ability_names"])
+    abilities[87] = "Wet Skin"  # Dry Skin: script.s:78's compare in the Kaizo policy only
+    renamed = Names({**vanilla_manifest, "ability_names": abilities})
+    assert check_constants(VANILLA, renamed, vanilla_items) == []
+    assert check_constants(KAIZO, renamed, vanilla_items) == [
+        "ai/layout.py KAIZO: id 87 is 'Wet Skin' in this game, expected 'Dry Skin'"
+    ]
+
+
+def test_kaizo_policy_ids_are_checked(vanilla_manifest, vanilla_items):
+    """The script's and trainer_ai.c's ids are the same numbers in both ROMs, so a slot the
+    Kaizo paths read by id must keep its name: a renamed one is reported (149 is Triple
+    Axel in Kaizo, so an id list keyed on Psywave by name would be wrong there)."""
+    names = list(vanilla_manifest["move_names"])
+    for move, new in ((90, "Triple Axel"), (360, "Spin Ball"), (393, "Float")):
+        names[move] = new
+    renamed = Names({**vanilla_manifest, "move_names": names})
+    lines = check_constants(KAIZO, renamed, vanilla_items)
+    assert (
+        "ai/commands.py MOVE_IDS: id 90 is 'Triple Axel' in this game, expected 'Fissure'" in lines
+    )
+    assert any("MOVE_IDS: id 360" in s and "Gyro Ball" in s for s in lines)
+    assert any("switching.py MOVE_IDS: id 393" in s for s in lines)
+
+
+def test_id_cases_are_decomp_ids_in_every_policy():
+    """The TrainerAI_CalcDamage and TrainerAI_MoveType id cases are compared by id in both
+    policies (the C code is unchanged in Kaizo), so Kaizo's Triple Axel (149) hits
+    MOVE_PSYWAVE: they are vanilla_policy constants, never name-checked against Kaizo."""
+    scopes = {
+        c.scope
+        for c in CONSTANTS
+        if c.where
+        in ("nuzline.ai.commands.CALC_DAMAGE_MOVES", "nuzline.ai.commands.MOVE_TYPE_MOVES")
+    }
+    assert scopes == {"vanilla_policy"}
 
 
 def _tmp_game(tmp_path: Path, items: list[dict] | None) -> Game:

@@ -59,7 +59,8 @@ def test_kaizo_manifest_provenance(kaizo_manifest):
     assert kaizo_manifest["patch_sha256"] == KAIZO_PATCH_SHA256
     for key in (*PROVENANCE, "aliases", "renamed", "changed_effects", "no_secondary_moves"):
         assert key in kaizo_manifest, key
-    assert kaizo_manifest["unclassified_rom_changes"] > 0  # every Kaizo fight is refused
+    # K3c Task 2 classified the last one (overlay14's Dry Skin word, data/kaizo/rom_diff.toml).
+    assert kaizo_manifest["unclassified_rom_changes"] == 0
 
 
 def test_changed_effect_unsupported(kaizo_tables, kaizo_manifest):

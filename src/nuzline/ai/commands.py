@@ -14,7 +14,8 @@ Paths are relative to ``external/pokeplatinum``; ``trainer_ai.c`` is
 the player's moves and ability, which go through its knowledge (roark.md 6, 9):
 ``AiContext.seen_moves`` and ``AiContext.player_ability``.
 
-Only the script paths of the moves in ``MOVE_EFFECTS`` are transcribed (roark.md 5);
+Only the script paths of the moves in ``MOVE_EFFECTS`` are transcribed (roark.md 5),
+keyed by move id in vanilla and by their battle effects in Kaizo (``nuzline.ai.layout``);
 ``nuzline.ai.policy.ai_refusals`` refuses an opponent that knows any other move, and
 the mechanics ``effectiveness_class`` does not implement.
 """
@@ -92,8 +93,7 @@ class BattleEffect(IntEnum):
 # Decomp move id -> battle effect for every move whose script paths are transcribed
 # (roark.md 4-5, plus the test fixture's Tackle); the same set as the script-roll site
 # table (nuzline.ai.outcome.AI_SITE_MOVES). None of these effects is in
-# sNoDamageCalcMoveEffects or sAltPowerMoveEffects (trainer_ai.c:30-62), so a move is
-# damaging for the AI exactly when its power is greater than 1.
+# NO_DAMAGE_CALC_EFFECTS or ALT_POWER_EFFECTS.
 MOVE_EFFECTS: dict[int, int] = {
     446: BattleEffect.STEALTH_ROCK,  # Stealth Rock
     88: BattleEffect.HIT,  # Rock Throw
@@ -103,8 +103,51 @@ MOVE_EFFECTS: dict[int, int] = {
     29: BattleEffect.FLINCH_HIT,  # Headbutt
     33: BattleEffect.HIT,  # Tackle
 }
-_EFFECT_MOVES = jnp.array(list(MOVE_EFFECTS), _I32)
-_EFFECT_IDS = jnp.array(list(MOVE_EFFECTS.values()), _I32)
+
+# sNoDamageCalcMoveEffects (trainer_ai.c:31-46): FlagMoveDamageScore (:1035-1036),
+# IfCurrentMoveKills (:1553-1554) and TrainerAI_CalcAllDamage (:2827-2828) compute no damage
+# for a move with one of these effects. BATTLE_EFFECT_* ids, line - 1 of
+# generated/move_battle_effects.txt.
+NO_DAMAGE_CALC_EFFECTS = (
+    7,  # HALVE_DEFENSE (Selfdestruct, Explosion)
+    8,  # RECOVER_DAMAGE_SLEEP
+    39,  # CHARGE_TURN_HIGH_CRIT
+    75,  # CHARGE_TURN_HIGH_CRIT_FLINCH
+    80,  # RECHARGE_AFTER
+    145,  # CHARGE_TURN_DEF_UP
+    151,  # SKIP_CHARGE_TURN_IN_SUN
+    161,  # SPIT_UP
+    170,  # HIT_LAST_WHIFF_IF_HIT
+    182,  # LOWER_OWN_ATK_AND_DEF
+    190,  # DECREASE_POWER_WITH_LESS_USER_HP
+    248,  # HIT_FIRST_IF_TARGET_ATTACKING
+    269,  # RECOIL_HALF (Head Smash)
+)
+# sAltPowerMoveEffects (trainer_ai.c:48-61): the same three commands compute damage for a
+# move with one of these effects whatever its power (:1035, :1553, :2827),
+# through TrainerAI_CalcDamage's id cases, which the engine's AI damage does not transcribe;
+# policy.ai_refusals refuses such an opponent move.
+ALT_POWER_EFFECTS = (
+    135,  # RANDOM_POWER_BASED_ON_IVS
+    219,  # POWER_BASED_ON_LOW_SPEED
+    222,  # NATURAL_GIFT
+    268,  # JUDGEMENT
+    41,  # 40_DAMAGE_FLAT
+    87,  # LEVEL_DAMAGE_FLAT
+    88,  # RANDOM_DAMAGE_1_TO_150_LEVEL (Kaizo Triple Axel and Fury Cutter)
+    121,  # POWER_BASED_ON_FRIENDSHIP
+    123,  # POWER_BASED_ON_LOW_FRIENDSHIP
+    130,  # 20_DAMAGE_FLAT
+    196,  # INCREASE_POWER_WITH_WEIGHT
+)
+_NO_DAMAGE_CALC = jnp.array(NO_DAMAGE_CALC_EFFECTS, _I32)
+# TrainerAI_CalcDamage's move-id cases (trainer_ai.c:2885-3056): power, type or damage of
+# these moves come from the case, not the move table, whatever the move's effect (Kaizo's
+# Return and Frustration have effect 0 and still take theirs, :3018-3026). Decomp move ids.
+CALC_DAMAGE_MOVES = (363, 449, 237, 360, 82, 69, 101, 149, 216, 218, 222, 49, 67, 447)
+# TrainerAI_MoveType's move-id cases (trainer_ai.c:3132-3222): the type the AI gives
+# these moves is not their table type. Decomp move ids.
+MOVE_TYPE_MOVES = (363, 449, 237, 311)
 
 # Decomp ids, checked against the manifest by tests/ai/test_policy.py.
 ABILITY_IDS = {
@@ -134,6 +177,9 @@ MOVE_IDS = {
     "U-turn": 369,
     "Roar": 46,
     "Whirlwind": 18,
+    # Expert_Curse's IfMoveKnown checks (script.s:3472-3473), read from K3c Task 6.
+    "Gyro Ball": 360,
+    "Trick Room": 433,
     # Basic_CheckSoundproof's IfMoveEqualTo list (script.s:121-131).
     "Growl": 45,
     "Sing": 47,
@@ -198,17 +244,21 @@ def ai_damage(tables: Tables, state: BattleState, move, roll) -> jnp.ndarray:
     active Pokemon against the player's, with variance ``85 + roll`` percent applied
     after STAB and the type chart (:3109; the battle applies it before them): the
     engine's ``ai_damage_for_roll`` (roark.md 7.1), 0 for a move that is not damaging
-    (power <= 1) and for an immunity."""
+    (``is_damaging``) and for an immunity."""
     move = jnp.asarray(move, _I32)
     damage = ai_damage_for_roll(tables, state, 1, move, roll)
     return jnp.where(is_damaging(tables, move), damage, 0)
 
 
 def is_damaging(tables: Tables, move) -> jnp.ndarray:
-    """``bool``: the ``power > 1`` test of ``FlagMoveDamageScore`` (trainer_ai.c:1034) for
-    the transcribed moves, which have no no-calc or alternate-power effect."""
+    """``bool``: the AI computes damage for ``move``: it is a move, its power is greater
+    than 1 and its battle effect is not in ``NO_DAMAGE_CALC_EFFECTS``
+    (``TrainerAI_CalcAllDamage``, trainer_ai.c:2827-2828; ``FlagMoveDamageScore``,
+    :1035-1036; ``IfCurrentMoveKills``, :1553-1554). Those tests also pass a move whose
+    effect is in ``ALT_POWER_EFFECTS``; ``policy.ai_refusals`` refuses those."""
     move = jnp.asarray(move, _I32)
-    return (move != 0) & (tables.move_power[move] > 1)
+    no_calc = jnp.isin(move_effect(tables, move), _NO_DAMAGE_CALC)
+    return (move != 0) & (tables.move_power[move] > 1) & ~no_calc
 
 
 def _slot_damage(tables: Tables, state: BattleState, rolls) -> jnp.ndarray:
@@ -218,10 +268,11 @@ def _slot_damage(tables: Tables, state: BattleState, rolls) -> jnp.ndarray:
     return jax.vmap(lambda m, r: ai_damage(tables, state, m, r))(moves, jnp.asarray(rolls, _I32))
 
 
-def move_effect(move) -> jnp.ndarray:
-    """``int32``: the decomp battle effect of a transcribed move, -1 for any other."""
-    hit = jnp.asarray(move, _I32) == _EFFECT_MOVES
-    return jnp.where(jnp.any(hit), _EFFECT_IDS[jnp.argmax(hit)], -1)
+def move_effect(tables: Tables, move) -> jnp.ndarray:
+    """``int32``: the decomp battle effect of ``move`` as the AI reads it,
+    ``MOVE_DATA(move).effect`` (``tables.move_ai_effect``; ``IfCurrentMoveEffectEqualTo``,
+    trainer_ai.c:1441)."""
+    return tables.move_ai_effect[jnp.asarray(move, _I32)].astype(_I32)
 
 
 def effectiveness_class(tables: Tables, state: BattleState, move) -> jnp.ndarray:
@@ -419,7 +470,7 @@ def if_loaded_not_equal_to(ctx: AiContext, value: int) -> AiContext:
 
 def if_current_move_effect_equal_to(ctx: AiContext, effect: BattleEffect) -> AiContext:
     """``IfCurrentMoveEffectEqualTo`` (trainer_ai.c:1441)."""
-    return _jump(ctx, move_effect(ctx.move) == int(effect))
+    return _jump(ctx, move_effect(ctx.tables, ctx.move) == int(effect))
 
 
 def _stage(ctx: AiContext, battler: Battler, stat: Stat) -> jnp.ndarray:

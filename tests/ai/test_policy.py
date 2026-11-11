@@ -101,6 +101,46 @@ def test_trace_e_potion_is_certain(tables, names):
         assert d[10] == pytest.approx(1.0, abs=1e-5)
 
 
+# ai_action_distribution of every distinct state of TRACED, recorded at 4ccda05 (before the
+# K3c policy layer): the nonzero entries as float.hex of the float32 value. Vanilla is
+# frozen bit-identical (plan K3c Global Constraints, Review Focus 5).
+_A1_D1_E3 = {0: "0x1.8000000000000p-1", 1: "0x1.0000000000000p-2"}
+_B1_G4 = {0: "0x1.5555fe0000000p-1", 1: "0x1.5554000000000p-3", 2: "0x1.5554000000000p-3"}
+_POTION = {10: "0x1.0000000000000p+0"}
+FROZEN_VANILLA = {
+    "A1": _A1_D1_E3,
+    "A4": {1: "0x1.0000000000000p+0"},
+    "B1": _B1_G4,
+    "C1": {0: "0x1.0000000000000p+0"},
+    "D1": _A1_D1_E3,
+    "G1": {0: "0x1.6aaafe0000000p-1", 1: "0x1.aaaa000000000p-3", 2: "0x1.5554000000000p-4"},
+    "G4": _B1_G4,
+    "E1": _POTION,
+    "E2": _POTION,
+    "E3": _A1_D1_E3,
+    "E4": _POTION,
+    "F switch to Geodude": {
+        0: "0x1.9484be0000000p-3",
+        4: "0x1.1c738e0000000p-1",
+        5: "0x1.f9ad0a0000000p-3",
+    },
+}
+
+
+def test_vanilla_distribution_unchanged(tables, names):
+    builds = {desc: build for desc, build, *_ in TRACED}
+    assert set(FROZEN_VANILLA) <= set(builds)
+    # Every distinct build of TRACED is frozen (the others repeat one of these states).
+    distinct = {
+        (b.__name__, tuple(c.cell_contents for c in b.__closure__ or ())) for b in builds.values()
+    }
+    assert len(distinct) == len(FROZEN_VANILLA)
+    for desc, frozen in FROZEN_VANILLA.items():
+        d = np.asarray(ai_action_distribution(tables, builds[desc](tables, names)), np.float32)
+        got = {a: float(x).hex() for a, x in enumerate(d) if x != 0 or np.signbit(x)}
+        assert got == frozen, desc
+
+
 def test_maybe_switch_and_item_return_no_action_when_not_taken(tables, names):
     s = trace_a(tables, names)
     assert int(maybe_switch(tables, s, outcome())) == NO_SWITCH

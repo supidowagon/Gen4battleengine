@@ -176,7 +176,7 @@ AI_FLAG_NAMES = (
     "HARRASSMENT",
 )
 IMPLEMENTED_AI_FLAGS: dict[int, Support] = {0: Support.EXACT, 1: Support.EXACT, 2: Support.EXACT}
-# ai.policy runs exactly these scripts (policy._FLAGS), so they must all be set.
+# ai.policy runs exactly these scripts (policy._flags), so they must all be set.
 POLICY_AI_FLAGS = 0b111
 IMPLEMENTED_WEATHER: dict[Weather, Support] = {
     Weather.NONE: Support.EXACT,

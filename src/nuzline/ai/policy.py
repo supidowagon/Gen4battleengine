@@ -15,11 +15,18 @@ it. Only the branches that can be taken for the transcribed moves
 (``commands.MOVE_EFFECTS``) are written out; the effect jump tables list just those
 moves' effects (roark.md 5.4).
 
-Refusals (``ai_refusals``): an opponent move outside ``MOVE_EFFECTS``, a moveset with
-more script-roll sites than ``AiOutcome`` encodes, the abilities, items and moves that
-change ``effectiveness_class``, a bag item other than a Potion, and every refusal of
-the voluntary-switch rule (``switching.switching_refusals``). On concrete inputs the
-public functions raise ``UnsupportedAi``; traced (jit, vmap) they cannot raise, so
+The game's policy (``nuzline.ai.layout``): every public function takes an optional
+``layout``; without one it reads ``layout_of(tables)`` when ``tables`` are concrete, and
+takes ``layout.VANILLA`` when they are traced, refusing tables of another policy
+(``_Refused.policy``). The traced internals take the layout as a static argument.
+
+Refusals (``ai_refusals``): an opponent move whose script paths are not transcribed
+(``layout.transcribed``), an opponent move the AI's damage estimate or move type takes
+by an alternative power or a move-id case, a moveset with more script-roll sites than
+``AiOutcome`` encodes, the abilities, items and moves that change
+``effectiveness_class``, a bag item other than a Potion, and every refusal of the
+voluntary-switch rule (``switching.switching_refusals``). On concrete inputs the public
+functions raise ``UnsupportedAi``; traced (jit, vmap) they cannot raise, so
 ``ai_scores`` gives -1 for every slot and ``ai_policy`` gives
 ``switching.REFUSED_ACTION``. Callers that trace (Stage A) run ``ai_refusals`` on the
 fight first.
@@ -32,7 +39,7 @@ used is not known) and the player's ability only through ``resolve_player_abilit
 
 from __future__ import annotations
 
-from functools import lru_cache
+from functools import lru_cache, partial
 from typing import NamedTuple
 
 import jax
@@ -42,8 +49,10 @@ import numpy as np
 from nuzline.ai import commands as c
 from nuzline.ai import switching
 from nuzline.ai.commands import AiContext, BattleEffect, Battler, LoadType, TypeMulti
+from nuzline.ai.layout import VANILLA, AiLayout, layout_of
 from nuzline.ai.outcome import (
     ABILITY_GUESSES,
+    AI_SITE_MOVES,
     MAX_SCRIPT_ROLLS,
     SIM_ROLL_MAX,
     SWITCH_NONE,
@@ -63,6 +72,7 @@ from nuzline.ai.switching import (
     switch_sites,
     switching_refusals,
 )
+from nuzline.data.game_constants import AI_POLICIES
 from nuzline.data.tables import Tables
 from nuzline.engine.actions import FIRST_ITEM_ACTION, NUM_OPP_ACTIONS, locked_slot, usable_moves
 from nuzline.engine.ids import POTION_HP_RESTORED, Stat, TrainerItemId
@@ -124,8 +134,9 @@ def _terminate(ctx: AiContext) -> AiContext:
 # --- The flag scripts --------------------------------------------------------------
 
 
-def _basic(ctx: AiContext) -> AiContext:
-    """``Basic_Main`` (script.s:52; roark.md 5.1)."""
+def _basic(ctx: AiContext, layout: AiLayout) -> AiContext:
+    """``Basic_Main`` (script.s:52; roark.md 5.1). ``layout.water2_ability`` is the
+    ability of the compare at script.s:78."""
     ctx = _terminate(ctx)
     ctx, ohko = _split(c.if_move_equal_to(ctx, _MOVE["Fissure"]))
     ctx, t = _split(c.if_move_equal_to(ctx, _MOVE["Horn Drill"]))
@@ -147,8 +158,9 @@ def _basic(ctx: AiContext) -> AiContext:
     ctx, fire = _split(c.if_loaded_equal_to(ctx, _ABILITY["Flash Fire"]))
     ctx, wonder_guard = _split(c.if_loaded_equal_to(ctx, _ABILITY["Wonder Guard"]))
     ctx, ground = _split(c.if_loaded_equal_to(ctx, _ABILITY["Levitate"]))
-    # (quirk) :78 should test Dry Skin; a second Levitate test can never match.
-    ctx, water2 = _split(c.if_loaded_equal_to(ctx, _ABILITY["Levitate"]))
+    # :78 is Levitate again in vanilla (quirk: the decomp's comment says it should be Dry
+    # Skin; a second Levitate test never matches) and Dry Skin in Kaizo (layout.KAIZO).
+    ctx, water2 = _split(c.if_loaded_equal_to(ctx, layout.water2_ability))
     ctx, t = _split(c.go_to(ctx))
     no_immunity = no_immunity | t
 
@@ -315,7 +327,12 @@ def _expert(ctx: AiContext) -> AiContext:
     return ctx
 
 
-_FLAGS = (_basic, _eval_attack, _expert)  # Roark's ai_flags = 7, in bit order (roark.md 1)
+def _flags(layout: AiLayout) -> tuple:
+    """The flag scripts the policy runs, in bit order (``TrainerAI_MainSingles``,
+    trainer_ai.c:297-310): BASIC, EVAL_ATTACK, EXPERT (Roark's ai_flags = 7, roark.md 1).
+    Kaizo's RISKY (``layout.risky``) scores none of the transcribed effects: none is in
+    ``Risky_RiskyEffects`` (script.s:6536-6561; docs/ai/kaizo_roark.md 2)."""
+    return (partial(_basic, layout=layout), _eval_attack, _expert)
 
 
 # --- Refusals ----------------------------------------------------------------------
@@ -352,6 +369,10 @@ def player_ability_refusal(ability: int) -> str | None:
 
 class _Refused(NamedTuple):
     move: jnp.ndarray  # bool[SLOTS, MOVES]: opponent move without transcribed script paths
+    alt_power: jnp.ndarray  # bool[SLOTS, MOVES]: opponent move with an ALT_POWER_EFFECTS effect
+    calc_damage: jnp.ndarray  # bool[SLOTS, MOVES]: a TrainerAI_CalcDamage id case
+    move_type: jnp.ndarray  # bool[SLOTS, MOVES]: a TrainerAI_MoveType id case
+    policy: jnp.ndarray  # bool: tables of another policy than the layout's
     sites: jnp.ndarray  # bool[SLOTS]: opponent moveset with too many script-roll sites
     ability: jnp.ndarray  # bool[2, SLOTS]
     item: jnp.ndarray  # bool[2, SLOTS]
@@ -361,12 +382,24 @@ class _Refused(NamedTuple):
     any: jnp.ndarray  # bool: ai_policy is refused (switching aside)
 
 
-@jax.jit
-def _refused(tables: Tables, state: BattleState) -> _Refused:
+@partial(jax.jit, static_argnames="layout")
+def _refused(tables: Tables, state: BattleState, layout: AiLayout = VANILLA) -> _Refused:
     present = state.species > 0
     moves = state.moves.astype(_I32)
-    transcribed = jnp.isin(moves[1], jnp.array(list(c.MOVE_EFFECTS), _I32)) | (moves[1] == 0)
-    move = present[1][:, None] & ~transcribed
+    effects = c.move_effect(tables, moves[1])
+    if layout.name == VANILLA.name:  # by move id (MOVE_EFFECTS)
+        transcribed = jnp.isin(moves[1], jnp.array(sorted(layout.transcribed), _I32))
+    else:
+        # By battle effect; and, until K3c Task 3 keys the script-roll sites by effect,
+        # only a move the site table (keyed by move id) lists.
+        transcribed = jnp.isin(effects, jnp.array(sorted(layout.transcribed), _I32))
+        transcribed &= jnp.isin(moves[1], jnp.array(sorted(AI_SITE_MOVES), _I32))
+    move = present[1][:, None] & ~(transcribed | (moves[1] == 0))
+    known = present[1][:, None] & (moves[1] != 0)
+    alt_power = known & jnp.isin(effects, jnp.array(c.ALT_POWER_EFFECTS, _I32))
+    calc_damage = known & jnp.isin(moves[1], jnp.array(c.CALC_DAMAGE_MOVES, _I32))
+    move_type = known & jnp.isin(moves[1], jnp.array(c.MOVE_TYPE_MOVES, _I32))
+    policy = tables.ai_policy != AI_POLICIES.index(layout.name)
     sites = present[1] & (jax.vmap(script_roll_count)(moves[1]) > MAX_SCRIPT_ROLLS)
     row = tables.species_form_row[state.species.astype(_I32), state.form.astype(_I32)]
     ability = tables.species_abilities_decomp[row.astype(_I32), state.ability_slot.astype(_I32)]
@@ -388,13 +421,28 @@ def _refused(tables: Tables, state: BattleState) -> _Refused:
     bag = (bag_items != 0) & (tables.trainer_item_effect[bag_items] != TrainerItemId.POTION)
     scoring = (
         jnp.any(move)
+        | jnp.any(alt_power)
+        | jnp.any(calc_damage)
+        | jnp.any(move_type)
+        | policy
         | jnp.any(sites)
         | jnp.any(ability_bad)
         | jnp.any(item_bad)
         | jnp.any(state_move)
     )
     return _Refused(
-        move, sites, ability_bad, item_bad, state_move, bag, scoring, scoring | jnp.any(bag)
+        move,
+        alt_power,
+        calc_damage,
+        move_type,
+        policy,
+        sites,
+        ability_bad,
+        item_bad,
+        state_move,
+        bag,
+        scoring,
+        scoring | jnp.any(bag),
     )
 
 
@@ -419,14 +467,37 @@ def _item_name(item: int, names=None) -> str:
     return names.item_names[item] if names is not None else f"item id {item}"
 
 
-def _scoring_refusals(tables: Tables, state: BattleState, names=None) -> list[str]:
-    r = _refused(tables, state)
+def _scoring_refusals(
+    tables: Tables, state: BattleState, layout: AiLayout, names=None
+) -> list[str]:
+    r = _refused(tables, state, layout)
     moves = np.asarray(state.moves)
     out: list[str] = []
+    if bool(r.policy):
+        policy = AI_POLICIES[int(tables.ai_policy)]
+        out.append(f"ai: the tables' AI policy is {policy}, the layout's {layout.name}")
     for s, k in zip(*np.nonzero(np.asarray(r.move)), strict=True):
         out.append(
             f"ai scoring: opponent slot {s}: the script paths of move "
             f"{_move_name(int(moves[1, s, k]), names)} are not transcribed (docs/ai/roark.md 5)"
+        )
+    for s, k in zip(*np.nonzero(np.asarray(r.alt_power)), strict=True):
+        out.append(
+            f"ai scoring: opponent slot {s}: move {_move_name(int(moves[1, s, k]), names)} "
+            "has an alternative-power effect (sAltPowerMoveEffects, trainer_ai.c:48-61) whose "
+            "AI damage is not transcribed"
+        )
+    for s, k in zip(*np.nonzero(np.asarray(r.calc_damage)), strict=True):
+        out.append(
+            f"ai scoring: opponent slot {s}: move {_move_name(int(moves[1, s, k]), names)} "
+            "takes a TrainerAI_CalcDamage move-id case (trainer_ai.c:2885-3056) that is not "
+            "transcribed"
+        )
+    for s, k in zip(*np.nonzero(np.asarray(r.move_type)), strict=True):
+        out.append(
+            f"ai scoring: opponent slot {s}: move {_move_name(int(moves[1, s, k]), names)} "
+            "takes a TrainerAI_MoveType move-id case (trainer_ai.c:3132-3222) that is not "
+            "transcribed"
         )
     for s in np.flatnonzero(np.asarray(r.sites)):
         out.append(
@@ -460,33 +531,49 @@ def _scoring_refusals(tables: Tables, state: BattleState, names=None) -> list[st
     return out
 
 
-def _item_refusals(tables: Tables, state: BattleState, names=None) -> list[str]:
+def _item_refusals(tables: Tables, state: BattleState, layout: AiLayout, names=None) -> list[str]:
     bag = np.asarray(state.trainer_items[1])
     return [
         f"item use: bag slot {k}: {_item_name(int(bag[k]), names)} is not a transcribed "
         "TrainerAI_ShouldUseItem item (only Potion)"
-        for k in np.flatnonzero(np.asarray(_refused(tables, state).bag))
+        for k in np.flatnonzero(np.asarray(_refused(tables, state, layout).bag))
     ]
 
 
-def ai_refusals(tables: Tables, state: BattleState, names=None) -> list[str]:
-    """Every reason the AI of this (concrete) state is refused, one human-readable line
-    each; empty when ``ai_policy`` is exact for it. Moves and items are named from
-    ``names``, the ``Names`` of ``tables``' game (``check_coverage`` passes them; Kaizo
-    renames slots), else from the shipped vanilla tables."""
+def _layout(tables: Tables, layout: AiLayout | None) -> AiLayout:
+    """``layout``, else ``layout_of(tables)`` on concrete tables, else (traced tables)
+    ``VANILLA``, under which ``_Refused.policy`` refuses another policy's tables."""
+    if layout is not None:
+        return layout
+    if isinstance(tables.ai_policy, jax.core.Tracer):
+        return VANILLA
+    return layout_of(tables)
+
+
+def _all_refusals(tables: Tables, state: BattleState, layout: AiLayout, names=None) -> list[str]:
     return (
-        _scoring_refusals(tables, state, names)
-        + _item_refusals(tables, state, names)
+        _scoring_refusals(tables, state, layout, names)
+        + _item_refusals(tables, state, layout, names)
         + switching_refusals(tables, state)
     )
 
 
-def _check(tables: Tables, state: BattleState, reasons) -> None:
-    """Raise ``UnsupportedAi`` with ``reasons(tables, state)`` when there are any; under
-    a trace (jit, vmap, even of a closed-over state) the check cannot run."""
-    if isinstance(_refused(tables, state).any, jax.core.Tracer):
+def ai_refusals(
+    tables: Tables, state: BattleState, names=None, layout: AiLayout | None = None
+) -> list[str]:
+    """Every reason the AI of this (concrete) state is refused, one human-readable line
+    each; empty when ``ai_policy`` is exact for it. Moves and items are named from
+    ``names``, the ``Names`` of ``tables``' game (``check_coverage`` passes them; Kaizo
+    renames slots), else from the shipped vanilla tables."""
+    return _all_refusals(tables, state, _layout(tables, layout), names)
+
+
+def _check(tables: Tables, state: BattleState, layout: AiLayout, reasons) -> None:
+    """Raise ``UnsupportedAi`` with ``reasons(tables, state, layout)`` when there are any;
+    under a trace (jit, vmap, even of a closed-over state) the check cannot run."""
+    if isinstance(_refused(tables, state, layout).any, jax.core.Tracer):
         return
-    found = reasons(tables, state)
+    found = reasons(tables, state, layout)
     if found:
         raise UnsupportedAi("; ".join(found))
 
@@ -506,10 +593,12 @@ def resolve_player_ability(
     return c.defender_ability(tables, state, ai_outcome.ability_guess)
 
 
-def _scores(tables: Tables, state: BattleState, ai_outcome: AiOutcome) -> jnp.ndarray:
+def _scores(
+    tables: Tables, state: BattleState, ai_outcome: AiOutcome, layout: AiLayout = VANILLA
+) -> jnp.ndarray:
     ctx = c.new_context(tables, state, ai_outcome)
     ctx = ctx._replace(slot=jnp.asarray(0, _I32))
-    for flag in _FLAGS:  # TrainerAI_MainSingles (trainer_ai.c:297-310)
+    for flag in _flags(layout):  # TrainerAI_MainSingles (trainer_ai.c:297-310)
         # The slots in a loop, not unrolled: one copy of each flag script in the program.
 
         def eval_slot(slot, ctx, flag=flag):  # TrainerAI_EvalMoves (:483-525)
@@ -520,18 +609,21 @@ def _scores(tables: Tables, state: BattleState, ai_outcome: AiOutcome) -> jnp.nd
             )
 
         ctx = jax.lax.fori_loop(0, MOVES, eval_slot, ctx)
-    return jnp.where(_refused(tables, state).scoring, -1, ctx.scores).astype(_I32)
+    return jnp.where(_refused(tables, state, layout).scoring, -1, ctx.scores).astype(_I32)
 
 
-_scores_jit = jax.jit(_scores)
+_scores_jit = jax.jit(_scores, static_argnames="layout")
 
 
-def ai_scores(tables: Tables, state: BattleState, ai_outcome: AiOutcome) -> jnp.ndarray:
+def ai_scores(
+    tables: Tables, state: BattleState, ai_outcome: AiOutcome, layout: AiLayout | None = None
+) -> jnp.ndarray:
     """``int32[4]``: the opponent's move scores after Roark's three flag scripts, from
     base 100 (``TrainerAI_Init``, trainer_ai.c:223; invalid slots 0). Raises
     ``UnsupportedAi`` on a refused concrete state; -1 per slot when traced."""
-    _check(tables, state, _scoring_refusals)
-    return _scores_jit(tables, state, ai_outcome)
+    layout = _layout(tables, layout)
+    _check(tables, state, layout, _scoring_refusals)
+    return _scores_jit(tables, state, ai_outcome, layout)
 
 
 def maybe_switch(tables: Tables, state: BattleState, ai_outcome: AiOutcome) -> jnp.ndarray:
@@ -557,11 +649,13 @@ def _use_item(tables: Tables, state: BattleState) -> jnp.ndarray:
     return jnp.where(jnp.any(use), FIRST_ITEM_ACTION + jnp.argmax(use), NO_ITEM).astype(_I32)
 
 
-def maybe_use_item(tables: Tables, state: BattleState) -> jnp.ndarray:
+def maybe_use_item(
+    tables: Tables, state: BattleState, layout: AiLayout | None = None
+) -> jnp.ndarray:
     """``int32``: ``TrainerAI_ShouldUseItem`` (trainer_ai.c:4056; roark.md 12): the item
     action ``10 + k`` of the first bag slot it uses, or ``NO_ITEM``. It draws nothing.
     Both engines empty the later slots the decomp's loop also zeroes."""
-    _check(tables, state, _item_refusals)
+    _check(tables, state, _layout(tables, layout), _item_refusals)
     return _use_item(tables, state)
 
 
@@ -581,32 +675,40 @@ def _pick(tables: Tables, state: BattleState, scores, tiebreak) -> jnp.ndarray:
     return jnp.where(jnp.any(usable_moves(tables, state, 1)), pick, 0)
 
 
-def _policy(tables: Tables, state: BattleState, ai_outcome: AiOutcome) -> jnp.ndarray:
+def _policy(
+    tables: Tables, state: BattleState, ai_outcome: AiOutcome, layout: AiLayout = VANILLA
+) -> jnp.ndarray:
     switch = maybe_switch(tables, state, ai_outcome)
     item = _use_item(tables, state)
-    move = _pick(tables, state, _scores(tables, state, ai_outcome), ai_outcome.tiebreak)
+    scores = _scores(tables, state, ai_outcome, layout)
+    move = _pick(tables, state, scores, ai_outcome.tiebreak)
     action = jnp.where(switch != NO_SWITCH, switch, jnp.where(item != NO_ITEM, item, move))
     # A battler locked into a move picks no command, so the AI never runs for it
     # (battle_controller_player.c:335): its action is the locked slot.
     lock = locked_slot(state, 1)
     action = jnp.where(lock >= 0, lock, action)
-    return jnp.where(_refused(tables, state).any, REFUSED_ACTION, action).astype(_I32)
+    return jnp.where(_refused(tables, state, layout).any, REFUSED_ACTION, action).astype(_I32)
 
 
-_policy_jit = jax.jit(_policy)
+_policy_jit = jax.jit(_policy, static_argnames="layout")
 
 
-def ai_policy(tables: Tables, state: BattleState, ai_outcome: AiOutcome) -> jnp.ndarray:
+def ai_policy(
+    tables: Tables, state: BattleState, ai_outcome: AiOutcome, layout: AiLayout | None = None
+) -> jnp.ndarray:
     """``int32``: the opponent's action in plan 1a's encoding (``TrainerAI_PickCommand``
     then ``TrainerAI_Main``; roark.md 2): a voluntary switch ``4 + j``, else a bag item
     ``10 + k``, else the top-scoring move slot ``0..3``. Raises ``UnsupportedAi`` on a
     refused concrete state; ``switching.REFUSED_ACTION`` when traced."""
-    _check(tables, state, ai_refusals)
-    return _policy_jit(tables, state, ai_outcome)
+    layout = _layout(tables, layout)
+    _check(tables, state, layout, _all_refusals)
+    return _policy_jit(tables, state, ai_outcome, layout)
 
 
-@jax.jit
-def ai_action_distribution_enumerated(tables: Tables, state: BattleState) -> jnp.ndarray:
+@partial(jax.jit, static_argnames="layout")
+def ai_action_distribution_enumerated(
+    tables: Tables, state: BattleState, layout: AiLayout = VANILLA
+) -> jnp.ndarray:
     """``float32[NUM_OPP_ACTIONS]``: the opponent's action distribution by brute force,
     ``ai_policy`` under ``vmap`` over every ``AiOutcome`` of ``enumerate_ai_outcomes``
     (3840) weighted by its probability; NaN when any outcome's action is refused. It is
@@ -615,7 +717,7 @@ def ai_action_distribution_enumerated(tables: Tables, state: BattleState) -> jnp
     it never raises: a refused state gives NaN. The 3840 terms are summed pairwise
     (``_pairwise_sum``): a sequential float32 sum drifts by about 2e-6."""
     outcomes, probs = enumerate_ai_outcomes(tables, state)
-    actions = jax.vmap(lambda o: _policy(tables, state, o))(outcomes)
+    actions = jax.vmap(lambda o: _policy(tables, state, o, layout))(outcomes)
     terms = jnp.where(actions[:, None] == jnp.arange(NUM_OPP_ACTIONS), probs[:, None], 0)
     dist = _pairwise_sum(terms.astype(jnp.float32))
     return jnp.where(jnp.any(actions < 0), jnp.nan, dist)  # refused (traced only)
@@ -631,7 +733,7 @@ def _pairwise_sum(x: jnp.ndarray) -> jnp.ndarray:
     return x[0]
 
 
-def _move_distribution(tables: Tables, state: BattleState) -> jnp.ndarray:
+def _move_distribution(tables: Tables, state: BattleState, layout: AiLayout) -> jnp.ndarray:
     """``float32[MOVES]``: the distribution of ``TrainerAI_Main``'s move pick, over the
     only draws ``_scores`` and ``_pick`` read: ``ability_guess`` x ``script_rolls``
     (32 scorings) and, for each scoring, ``tiebreak`` through ``_pick`` itself."""
@@ -644,7 +746,7 @@ def _move_distribution(tables: Tables, state: BattleState) -> jnp.ndarray:
         tiebreak=jnp.zeros(n, jnp.int8),  # _scores does not read it
         switch_stop=jnp.full(n, SWITCH_NONE, jnp.int8),  # nor this
     )
-    scores = jax.vmap(lambda o: _scores(tables, state, o))(outcomes)  # [32, MOVES]
+    scores = jax.vmap(lambda o: _scores(tables, state, o, layout))(outcomes)  # [32, MOVES]
     tiebreaks = jnp.arange(TIEBREAK_MOD, dtype=jnp.int8)
     picks = jax.vmap(  # [32, TIEBREAK_MOD]
         lambda sc: jax.vmap(lambda t: _pick(tables, state, sc, t))(tiebreaks)
@@ -655,8 +757,8 @@ def _move_distribution(tables: Tables, state: BattleState) -> jnp.ndarray:
     return weight @ shares
 
 
-@jax.jit
-def _distribution(tables: Tables, state: BattleState) -> jnp.ndarray:
+@partial(jax.jit, static_argnames="layout")
+def _distribution(tables: Tables, state: BattleState, layout: AiLayout = VANILLA) -> jnp.ndarray:
     """The exact distribution, factored as ``_policy`` decides (roark.md 2): the switch
     when ``switch_stop`` means one (``maybe_switch``, ``TrainerAI_ShouldSwitch``,
     trainer_ai.c:3894), else the item when ``_use_item`` gives one
@@ -675,19 +777,24 @@ def _distribution(tables: Tables, state: BattleState) -> jnp.ndarray:
     p_stay = jnp.sum(jnp.where(switch == NO_SWITCH, p_stop, 0))
     item = _use_item(tables, state)
     moves = (
-        jnp.zeros(NUM_OPP_ACTIONS, jnp.float32).at[:MOVES].set(_move_distribution(tables, state))
+        jnp.zeros(NUM_OPP_ACTIONS, jnp.float32)
+        .at[:MOVES]
+        .set(_move_distribution(tables, state, layout))
     )
     stay = jnp.where(item != NO_ITEM, jax.nn.one_hot(item, NUM_OPP_ACTIONS), moves)
     lock = locked_slot(state, 1)
     dist = jnp.where(lock >= 0, jax.nn.one_hot(lock, NUM_OPP_ACTIONS), dist + p_stay * stay)
-    refused = _refused(tables, state).any | jnp.any(switch == REFUSED_ACTION)
+    refused = _refused(tables, state, layout).any | jnp.any(switch == REFUSED_ACTION)
     return jnp.where(refused, jnp.nan, dist)
 
 
-def ai_action_distribution(tables: Tables, state: BattleState) -> jnp.ndarray:
+def ai_action_distribution(
+    tables: Tables, state: BattleState, layout: AiLayout | None = None
+) -> jnp.ndarray:
     """``float32[NUM_OPP_ACTIONS]``: the exact probability of each opponent action over
     every ``AiOutcome``, computed factored (``_distribution``: 32 scorings instead of
     the 3840 outcomes of ``ai_action_distribution_enumerated``, which it equals).
     Raises ``UnsupportedAi`` on a refused concrete state; NaN when traced."""
-    _check(tables, state, ai_refusals)
-    return _distribution(tables, state)
+    layout = _layout(tables, layout)
+    _check(tables, state, layout, _all_refusals)
+    return _distribution(tables, state, layout)
