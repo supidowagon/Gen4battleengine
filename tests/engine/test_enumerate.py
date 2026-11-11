@@ -144,6 +144,7 @@ def legal_pairs(tables, state):
 # --- exact cases -------------------------------------------------------------------
 
 
+@pytest.mark.slow
 def test_probs_sum_to_one(tables, names):
     s = roark_real_state(tables, names)
     ai = np.asarray(ai_action_distribution(tables, s))
@@ -156,6 +157,7 @@ def test_probs_sum_to_one(tables, names):
         assert all(np.asarray(f).shape[0] == len(probs) for f in outcomes)
 
 
+@pytest.mark.slow
 def test_switches_only_fixed(tables, names):
     s = roark_real_state(tables, names)
     pairs = [(a, b) for a, b in legal_pairs(tables, s) if 4 <= a < 10 and 4 <= b < 10]
@@ -437,6 +439,7 @@ def decomp_law(tables, state, actions, name: str, index: tuple) -> dict[int, Fra
     return {0: Fraction(1)}  # flinch_item
 
 
+@pytest.mark.slow
 @settings(max_examples=50, **HYPOTHESIS)
 @given(data=st.data())
 def test_field_marginals_match_decomp_laws(tables, names, data):
@@ -473,6 +476,7 @@ def test_field_marginals_match_decomp_laws(tables, names, data):
                 assert abs(got_p - float(p) * total) <= 1e-14, (name, index)
 
 
+@pytest.mark.slow
 @settings(max_examples=200, **HYPOTHESIS)
 @given(data=st.data())
 def test_mask_sound(tables, names, data):
@@ -512,6 +516,7 @@ def test_mask_sound(tables, names, data):
     assert stepped[:n] == stepped[n:]
 
 
+@pytest.mark.slow
 @settings(max_examples=15, derandomize=True, **HYPOTHESIS)
 @given(data=st.data())
 def test_matches_sampled_frequencies_random(tables, names, data):
@@ -526,6 +531,7 @@ def test_matches_sampled_frequencies_random(tables, names, data):
     check_frequencies(children(tables, s, acts), sampled(tables, s, acts, n), n)
 
 
+@pytest.mark.slow
 @settings(max_examples=10, **HYPOTHESIS)
 @given(data=st.data())
 def test_reference_child_set(tables, names, data):
@@ -708,6 +714,7 @@ def order_actions(draw, tables, state) -> np.ndarray:
     return pair.astype(np.int32)
 
 
+@pytest.mark.slow
 @settings(max_examples=200, **HYPOTHESIS)
 @given(data=st.data())
 def test_order_branches_equal_bruteforce(tables, names, data):
@@ -729,6 +736,7 @@ def _tie(s):
     return s._replace(stats=s.stats.at[1, 0, Stat.SPE - 1].set(s.stats[0, 0, Stat.SPE - 1]))
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize(
     ("player", "opp", "tie", "setup"),
     [

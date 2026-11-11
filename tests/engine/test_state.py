@@ -310,6 +310,7 @@ def _new_volatiles(s, side):
     return [int(getattr(s, name)[side]) for name in NEW_VOLATILES]
 
 
+@pytest.mark.slow
 def test_new_volatiles_reset_on_switch_and_faint(tables, names):
     s = roark_state(tables, names)
     # A switch-out clears side 0's battler (BattleSystem_UpdateAfterSwitch zeroes

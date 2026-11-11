@@ -166,6 +166,7 @@ EXACT_CASES = [
 ]
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize(("player", "opp", "order", "setup", "expected"), EXACT_CASES)
 def test_damage_classes_equal_bruteforce(tables, names, player, opp, order, setup, expected):
     s = _state(tables, names, player, opp, order, setup)
@@ -208,6 +209,7 @@ def _forced(laws):
     return laws._replace(compress=np.ones_like(np.asarray(laws.compress)))
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize(
     ("player", "opp", "order", "setup"),
     [
@@ -362,6 +364,7 @@ def input_state(draw, tables, names) -> BattleState:
     return BattleState(**{name: np.asarray(a[name]) for name in BattleState._fields})
 
 
+@pytest.mark.slow
 @settings(max_examples=150, **HYPOTHESIS)
 @given(data=st.data())
 def test_damage_classes_equal_bruteforce_generated(tables, names, data):
@@ -393,6 +396,7 @@ def _kaizo_spec(names, species, move, level):
     )
 
 
+@pytest.mark.slow
 def test_doubleslap_vs_corsola_water_pulse_fits(kaizo_tables, kaizo_names, monkeypatch):
     # Rules §10.2/§10.4: Skitty's DoubleSlap (Kaizo: two fixed hits, 90 %) against Corsola's
     # Water Pulse overflows the cap without damage classes. Skitty is faster (21 against 19

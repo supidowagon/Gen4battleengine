@@ -90,6 +90,7 @@ def test_end_speed_tie_is_relevant(tables, names, case):
     assert bool(laws_of(tables, s, acts).relevant.end_speed_tie)
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("case", ("switch_in", "drag_in", "drag_out", "switch_out"))
 def test_the_end_order_decides_the_state(tables, names, case):
     # The two end_speed_tie values step to different states: the tie is real and read.
@@ -101,6 +102,7 @@ def test_the_end_order_decides_the_state(tables, names, case):
     )
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("case", CASES)
 def test_gated_equals_bruteforce(tables, names, case):
     s, acts = _setup(tables, names, case)

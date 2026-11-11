@@ -37,6 +37,8 @@ from tests.search.fixtures import (
     switch_refusal_root,
 )
 
+pytestmark = pytest.mark.slow
+
 SMALL = 256  # the independent re-step program's batch (test_merged_child_equals_each_member)
 
 
@@ -87,6 +89,7 @@ def roark_expansion(tables, names):
     return roots, pairs, store, children, sizes
 
 
+@pytest.mark.slow
 def test_children_sum_to_one(roark_expansion):
     _, pairs, store, children, _ = roark_expansion
     assert sorted(children) == list(range(len(pairs)))
@@ -122,6 +125,7 @@ def _turn_row(tables, before, actions, outcome):
 _restep = jax.jit(jax.vmap(_turn_row, in_axes=(None, None, None, 0)))
 
 
+@pytest.mark.slow
 def test_merged_child_equals_each_member(tables, names):
     state = shinx_vs_cranidos(tables, names, slower_opp=True)
     # Cranidos at 1 HP: Spark KOs it with or without a crit, one state seen two ways
@@ -166,6 +170,7 @@ def _playout_turn(tables, state, a, key):
     return opp, after, refused, obs
 
 
+@pytest.mark.slow
 def test_matches_playout_turn(tables, names):
     state = roark_real_state(tables, names)
     legal = np.flatnonzero(np.asarray(legal_actions(tables, state, 0)))
@@ -266,6 +271,7 @@ def _expand_on_devices(devices: int) -> dict:
     return json.loads(done.stdout.strip().splitlines()[-1])
 
 
+@pytest.mark.slow
 def test_device_count_invariant(tables):
     # 3 divides neither CHUNK nor the chunk sizes, so the padding differs.
     one = _expand_on_devices(1)

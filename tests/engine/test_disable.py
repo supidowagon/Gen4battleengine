@@ -58,6 +58,7 @@ def faster(s):
     return s._replace(stats=s.stats.at[0, 0, SPE].set(500))
 
 
+@pytest.mark.slow
 def test_disable_disables_last_move(tables, names, state):
     rock = names.move("Rock Throw")
     out = step(tables, state, A("Disable", "Tackle", state, names), outcome(4))
@@ -103,6 +104,7 @@ FAIL_SETUPS = (
 )
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize(("setup", "hit"), FAIL_SETUPS)
 def test_disable_fails(tables, names, state, setup, hit):
     s = setup(state, names)
@@ -113,6 +115,7 @@ def test_disable_fails(tables, names, state, setup, hit):
     assert (int(out.disabled_move[1]), int(out.disable_turns[1])) == expected
 
 
+@pytest.mark.slow
 def test_disable_countdown(tables, names, state):
     rock = names.move("Rock Throw")
     s = step(tables, state, A("Disable", "Tackle", state, names), outcome(3))
@@ -131,6 +134,7 @@ def test_unknown_disabled_move_is_cleared_at_once(tables, names, state):
     assert (int(out.disabled_move[1]), int(out.disable_turns[1])) == (0, 0)
 
 
+@pytest.mark.slow
 def test_countdown_end_is_observed(tables, names, state):
     rock = names.move("Rock Throw")
     acts = A("Scratch", "Tackle", state, names)
@@ -141,6 +145,7 @@ def test_countdown_end_is_observed(tables, names, state):
         assert obs[FIELDS["disabled_move"]].tolist() == [0, shown]
 
 
+@pytest.mark.slow
 def test_chosen_move_disabled_mid_turn(tables, names, state):
     # The faster Psyduck disables the Rock Throw Geodude chose this turn.
     s = faster(state)
@@ -190,6 +195,7 @@ def test_ai_struggles_when_all_disabled(tables, names):
     assert int(events["act_kind"][1]) == ACT_MOVE and int(events["act_id"][1]) == MOVE_STRUGGLE
 
 
+@pytest.mark.slow
 def test_disable_matches_reference(tables, names, state):
     for hit in (1, 0):
         for duration in (3, 6):

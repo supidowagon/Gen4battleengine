@@ -2,6 +2,7 @@
 ``hooks.py``)."""
 
 import jax.numpy as jnp
+import pytest
 
 from nuzline.engine.hooks import after_damage_items
 from nuzline.engine.ids import AbilityId, ItemId, Status
@@ -10,6 +11,7 @@ from nuzline.engine.step import replace, step
 from tests.engine.helpers import A, roark_state
 
 
+@pytest.mark.slow
 def test_intimidate_on_lead_and_on_switch_in(tables, names):
     s = roark_state(tables, names, player_species="Shinx", player_ability="Intimidate")
     assert int(s.stages[1, 1]) == -1  # make_state runs on_switch_in for leads
@@ -25,6 +27,7 @@ def test_intimidate_on_a_switch_action(tables, names):
     assert int(out.stages[1, 1]) == -1
 
 
+@pytest.mark.slow
 def test_blaze_boosts_fire_at_third_hp(tables, names):
     s = roark_state(tables, names, opp_species="Cranidos")
     low = s.replace_hp(0, 0, int(s.max_hp[0, 0]) // 3)
@@ -91,6 +94,7 @@ def test_sitrus_berry_triggers_after_stealth_rock_on_switch_in(tables, names):
     assert int(out.item[0, 2]) == 0 and int(out.item_consumed[0, 2]) == names.item("Sitrus Berry")
 
 
+@pytest.mark.slow
 def test_rivalry_same_gender_boost(tables, names):
     male = roark_state(
         tables,

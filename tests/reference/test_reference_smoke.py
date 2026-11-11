@@ -25,6 +25,7 @@ def test_round_trip_exact(tables, names):
         assert (a == b).all()
 
 
+@pytest.mark.slow
 def test_one_turn_matches_jax(tables, names):
     s = roark_state(tables, names)
     acts = A("Scratch", "Tackle", s, names)
@@ -103,6 +104,7 @@ def _scenarios(tables, names):
     }
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize(
     "name",
     [

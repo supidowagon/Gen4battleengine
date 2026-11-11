@@ -13,6 +13,7 @@ from dataclasses import replace
 import jax
 import jax.numpy as jnp
 import numpy as np
+import pytest
 
 from nuzline.engine.damage import (
     MAGNITUDE_POWER,
@@ -199,6 +200,7 @@ def night_shade_state(tables, names, opp="Geodude", move="Night Shade", foresigh
     return s._replace(foresight=s.foresight.at[1].set(int(foresight)))
 
 
+@pytest.mark.slow
 def test_night_shade_deals_level(tables, names):
     s = night_shade_state(tables, names)
     acts = A("Night Shade", "Leer", s, names)
@@ -235,6 +237,7 @@ def test_seismic_toss_foresight(tables, names):
     assert damage_table(tables, ident, 0, toss, False).tolist() == [16] * 16
 
 
+@pytest.mark.slow
 def test_night_shade_crit_is_not_seen(tables, names):
     """No ``CalcCrit`` runs for it (effect_script_0087.s): the crit draw is ignored."""
     s = night_shade_state(tables, names)

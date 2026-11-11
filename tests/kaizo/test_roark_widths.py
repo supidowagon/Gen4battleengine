@@ -159,6 +159,7 @@ def roark_widths(save_path, tables, names, learnsets, roark):
     return out, len(widths)
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("save", sorted(SAVES))
 def test_roark_pairs_fit_the_width_cap(
     request, save, kaizo_tables, kaizo_names, kaizo_learnsets, kaizo_roark

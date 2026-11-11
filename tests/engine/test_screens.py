@@ -9,6 +9,7 @@
 """
 
 import jax.numpy as jnp
+import pytest
 
 from nuzline.engine.damage import _pre_random, damage_table
 from nuzline.engine.outcome import empty_outcome
@@ -23,6 +24,7 @@ def _miss():
     return empty_outcome()._replace(hit=jnp.zeros((2, 5), jnp.int8))
 
 
+@pytest.mark.slow
 def test_light_screen_sets_five_turns_and_fails_when_up(tables, names):
     s = roark_state(tables, names, player_moves=["Light Screen"])
     acts = A("Light Screen", "Leer", s, names)

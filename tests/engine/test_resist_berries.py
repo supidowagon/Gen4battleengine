@@ -64,6 +64,7 @@ def test_tables_map_rindo_and_chilan_in_both_games(tables, names, kaizo_tables, 
         assert int(t.item_effect[n.item("Occa Berry")]) == ItemId.UNSUPPORTED
 
 
+@pytest.mark.slow
 def test_rindo_halves_se_grass_and_is_consumed(tables, names):
     s = _holder(tables, names, "Rindo Berry", player_species="Grotle")  # vs Geodude: x4
     d = _roll15(tables, s, 0, "Razor Leaf", names)
@@ -212,6 +213,7 @@ def test_pluck_eats_a_resist_berry(tables, names, move):
         assert int(out.hp[0, 0]) == int(s.hp[0, 0])
 
 
+@pytest.mark.slow
 def test_the_berry_is_seen(tables, names):
     """The berry's message ("The {item} weakened {move}'s power!") always comes with its
     RemoveItem, which the observation shows in ``item`` / ``item_consumed``."""

@@ -372,6 +372,7 @@ def _describe(m: dict) -> str:
     return json.dumps(m["smogon"], sort_keys=True)
 
 
+@pytest.mark.slow
 def test_oracle_inputs_match_the_tables(tables, names, oracle):
     """Stats and move data agree, so a damage difference is a formula difference."""
     for m, r in zip(*oracle):
@@ -385,6 +386,7 @@ def test_oracle_inputs_match_the_tables(tables, names, oracle):
         assert _CATEGORY[r["move"]["category"]] == int(tables.move_category[move])
 
 
+@pytest.mark.slow
 def test_damage_table_matches_smogon_calc(tables, names, oracle):
     matchups, results = oracle
     assert len(matchups) >= 200
@@ -405,6 +407,7 @@ def ability_oracle(tables, names, node):
     return rows, _run_smogon(node, rows)
 
 
+@pytest.mark.slow
 def test_adaptability_and_solid_rock_rows_match_smogon_calc(tables, names, ability_oracle):
     rows, results = ability_oracle
     abilities = {(int(m["state"].ability[0, 0]), int(m["state"].ability[1, 0])) for m in rows}

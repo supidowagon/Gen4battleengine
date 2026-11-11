@@ -21,6 +21,7 @@ from dataclasses import replace
 import jax
 import jax.numpy as jnp
 import numpy as np
+import pytest
 
 from nuzline.engine.coverage import check_coverage
 from nuzline.engine.damage import damage_table
@@ -61,6 +62,7 @@ def _stages(s, side=0):
 # --- Recover ------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 def test_recover_half_and_fails_full(tables, names):
     s = roark_state(tables, names, player_moves=["Recover"])
     max_hp = int(s.max_hp[0, 0])
@@ -81,6 +83,7 @@ def test_recover_half_and_fails_full(tables, names):
 # --- Fake Out -----------------------------------------------------------------------
 
 
+@pytest.mark.slow
 def test_fake_out_only_first_turn(tables, names):
     s = roark_state(tables, names, player_moves=["Fake Out"])
     acts = A("Fake Out", "Tackle", s, names)
@@ -215,6 +218,7 @@ def test_kaizo_doubleslap_is_the_fixed_two_hit(kaizo_tables, kaizo_names):
     assert [int(x) for x in kaizo_tables.move_param[slap]] == [2, 0, 0]
 
 
+@pytest.mark.slow
 def test_doubleslap_two_hits_one_accuracy(tables, names):
     # Vanilla's effect 44 users include Double Kick (vanilla DoubleSlap is the 2-5
     # MULTI_HIT); Kaizo's DoubleSlap is effect 44 (test_kaizo_doubleslap_is_the_fixed_two_hit).

@@ -111,6 +111,7 @@ def test_sample_rolls_durations_and_hit_counts(samples):
         assert abs(freq(hits, n) - p) < 4 * np.sqrt(p * (1 - p) / N)
 
 
+@pytest.mark.slow
 def test_lucky_chant_prevents_crits(tables, names):
     s = roark_state(tables, names)
     s = s._replace(lucky_chant=s.lucky_chant.at[1].set(5))

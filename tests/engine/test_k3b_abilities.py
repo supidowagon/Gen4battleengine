@@ -18,6 +18,7 @@
 import jax
 import jax.numpy as jnp
 import numpy as np
+import pytest
 
 from nuzline.ai.policy import ai_refusals, player_ability_refusal
 from nuzline.engine.damage import ai_damage_for_roll, damage_table, divide
@@ -49,6 +50,7 @@ def _eighth(s, side, slot=0):
 # --- Rough Skin -----------------------------------------------------------------------
 
 
+@pytest.mark.slow
 def test_rough_skin_hurts_a_contact_attacker_without_a_roll(tables, names):
     s = _ability(roark_state(tables, names), 1, 0, AbilityId.ROUGH_SKIN)
     out = _jit_step(tables, s, A("Scratch", "Leer", s, names), empty_outcome())
@@ -115,6 +117,7 @@ def test_flame_body_cannot_burn_a_fire_type_and_reveals_the_player(tables, names
     assert int(out.ai_ability_known[0]) == 1  # subscript_burn.s:_177 tags the holder
 
 
+@pytest.mark.slow
 def test_flame_body_makes_contact_proc_relevant(tables, names):
     s = roark_state(tables, names, player_species="Grotle", player_moves=("Tackle",))
     acts = A("Tackle", "Leer", s, names)

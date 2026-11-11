@@ -229,6 +229,7 @@ def test_roark_fight_calls_tri_attack_and_camouflages_normal(game, request):
 # --- Nature Power in step ----------------------------------------------------------------------
 
 
+@pytest.mark.slow
 def test_nature_power_is_tri_attack_from_its_script_on(tables, names):
     s = _state(tables, names, player=(NP, TRI))
     o = _o(roll=7)
@@ -452,6 +453,7 @@ def test_camouflage_changes_the_foes_type_chart_and_its_own_stab(tables, names):
     assert stab > base
 
 
+@pytest.mark.slow
 def test_observation_shows_types_and_the_call(tables, names):
     s = _state(tables, names, player=(CAMO, NP), opp=("Leer",))
     out = step(tables, s, A(CAMO, "Leer", s, names), _o())
@@ -465,6 +467,7 @@ def test_observation_shows_types_and_the_call(tables, names):
 # --- laws and enumeration ----------------------------------------------------------------------
 
 
+@pytest.mark.slow
 def test_tri_attack_law_and_draw(tables, names):
     assert _LAWS["tri_attack"](None, 0) == ([0, 1, 2], [1, 1, 1], 3)
     s = _state(tables, names)
@@ -533,6 +536,7 @@ ORDERS = ("player", "opp", "tie")
 CASES = [(setup, opp, order) for setup, opps in SETUPS.items() for opp in opps for order in ORDERS]
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize(("setup", "opp", "order"), CASES)
 def test_nature_power_equals_bruteforce(tables, names, setup, opp, order):
     """The gated enumeration (the (tri_attack, secondary) joint factor, the thaw / full

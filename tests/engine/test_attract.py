@@ -233,6 +233,7 @@ def test_scripts_match_the_engine():
         assert "FlagIndex(battler) << VOLATILE_CONDITION_ATTRACT_SHIFT" in _function(lib, fn)
 
 
+@pytest.mark.slow
 def test_law_is_a_fair_coin(tables, names):
     s = _state(tables, names, infatuated=(1, 0))
     acts = A("Scratch", "Tackle", s, names)
@@ -249,6 +250,7 @@ def test_law_is_a_fair_coin(tables, names):
 # --- Attract -----------------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 def test_attract_infatuates_an_opposite_gender_foe(tables, names):
     for genders in ((MALE, FEMALE), (FEMALE, MALE)):
         s = _state(tables, names, genders=genders)
@@ -283,6 +285,7 @@ def test_attract_into_a_fainted_foe_has_no_target(tables, names):
 # --- the status check ------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 def test_immobilized_by_love(tables, names):
     s = _state(tables, names, infatuated=(1, 0))
     s = s._replace(protect_count=s.protect_count.at[0].set(2))
@@ -457,6 +460,7 @@ def test_pursuit_into_a_switching_cute_charm_holder(tables, names):
 # --- observation and plan tree ------------------------------------------------------------------
 
 
+@pytest.mark.slow
 def test_observation_and_labels(tables, names):
     # The infatuated player's Attract on a foe already in love changes no state: the
     # observation still tells moving from immobilized.
@@ -480,6 +484,7 @@ def test_observation_and_labels(tables, names):
     assert texts["immobilized"] == "is immobilized by love"
 
 
+@pytest.mark.slow
 def test_reference_agreement_over_draws(tables, names):
     """Both engines agree over infatuation x contact_proc x hit x speed_tie, for Attract,
     contact and non-contact moves, every order, genders, Cute Charm and a start
@@ -557,6 +562,7 @@ def _switch_to_charmer(tables, names):
     )
 
 
+@pytest.mark.slow
 def test_cute_charm_of_a_switch_in_after_the_source_left(tables, names):
     s = _switch_to_charmer(tables, names)
     acts = A("Scratch", SWITCH, s, names)
@@ -583,6 +589,7 @@ def test_immobilization_probability(tables, names):
     assert math.fsum(probs[stuck]) == pytest.approx(0.5, abs=1e-15)
 
 
+@pytest.mark.slow
 def test_enumeration_matches_sampled_frequencies(tables, names):
     s = _charm(tables, names, opp="Attract", order="opp")
     acts = A("Scratch", "Attract", s, names)
@@ -614,6 +621,7 @@ BRUTE_CASES = (
 )
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("mine,opp,order,setup", BRUTE_CASES)
 def test_gated_equals_bruteforce(tables, names, mine, opp, order, setup):
     genders = {"same_gender": (MALE, MALE), "genderless": (MALE, NONE)}.get(setup, (MALE, FEMALE))
@@ -634,6 +642,7 @@ def test_gated_equals_bruteforce(tables, names, mine, opp, order, setup):
     assert width <= brute
 
 
+@pytest.mark.slow
 def test_cute_charm_then_the_infatuated_attacker_bruteforce(tables, names):
     # Turn 1: the faster Scratch into the foe's Cute Charm infatuates the attacker (its own
     # check came before: the roll is read next turn). Turn 2: the attacker's check reads it.

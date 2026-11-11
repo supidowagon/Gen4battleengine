@@ -34,6 +34,7 @@ def team_and_budget(draw, tables, names):
     return team, budget, protected
 
 
+@pytest.mark.slow
 @settings(
     max_examples=40,
     deadline=None,

@@ -4,6 +4,7 @@
 import jax
 import jax.numpy as jnp
 import numpy as np
+import pytest
 
 from nuzline.engine.damage import damage_table
 from nuzline.engine.ids import Status
@@ -17,6 +18,7 @@ from nuzline.engine.step import (
 from tests.engine.helpers import A, roark_state
 
 
+@pytest.mark.slow
 def test_stealth_rock_sets_and_damages_on_switch(tables, names):
     s = roark_state(tables, names)  # Geodude leads with Stealth Rock
     out = step(tables, s, A("Scratch", "Stealth Rock", s, names), empty_outcome())
@@ -27,6 +29,7 @@ def test_stealth_rock_sets_and_damages_on_switch(tables, names):
     assert int(out2.hp[0, 3]) <= int(out.max_hp[0, 3]) - int(out.max_hp[0, 3]) // 4
 
 
+@pytest.mark.slow
 def test_stealth_rock_damage_is_max_hp_over_8_scaled_by_rock_effectiveness(tables, names):
     # BtlCmd_CheckStealthRock (battle_script.c:8302): maxHP / 8 at neutral, / 4 at 2x.
     s = roark_state(tables, names)
@@ -45,6 +48,7 @@ def test_stealth_rock_can_faint_incoming_and_needs_a_replacement(tables, names):
     assert int(out.deaths[3]) == 1 and int(out.player_faints) == 1
 
 
+@pytest.mark.slow
 def test_bind_traps_and_ticks(tables, names):
     s = roark_state(tables, names, opp_species="Onix", opp_moves=["Bind"])
     o = empty_outcome()._replace(duration=jnp.array([0, 4], jnp.int8))
@@ -57,6 +61,7 @@ def test_bind_traps_and_ticks(tables, names):
     assert int(tick.trapped[0]) == int(out.trapped[0]) - 1
 
 
+@pytest.mark.slow
 def test_bind_counter_is_the_rolled_duration_and_last_decrement_deals_no_damage(tables, names):
     # subscript_bind_start.s stores the roll; the end-of-turn check
     # (battle_controller_player.c:1462) decrements first and only damages while it stays > 0.
@@ -79,6 +84,7 @@ def test_bind_ends_when_the_binder_switches_out(tables, names):
     assert int(out.trapped[0]) == 0 and int(out.hp[0, 0]) == int(s.hp[0, 0])
 
 
+@pytest.mark.slow
 def test_pursuit_hits_switching_target_double(tables, names):
     s = roark_state(tables, names, opp_species="Cranidos", opp_moves=["Pursuit"])
     stay = step(tables, s, A("Leer", "Pursuit", s, names), empty_outcome())
@@ -108,6 +114,7 @@ def test_pursuit_on_a_switch_ignores_accuracy_spends_pp_once_and_ends_the_turn(t
     assert int(go.pp[1, 0, 0]) == int(s.pp[1, 0, 0]) - 1
 
 
+@pytest.mark.slow
 def test_pursuit_with_its_last_pp_still_pursues(tables, names):
     # The move is fixed when chosen: spending Pursuit's last PP in BtlCmd_TryPursuit
     # does not turn the hit into Struggle (no recoil, same damage).
@@ -127,6 +134,7 @@ def test_taunt_sets_counter(tables, names):
     assert int(out.taunt[1]) > 0
 
 
+@pytest.mark.slow
 def test_taunt_counts_down_at_end_of_turn_and_blocks_status_moves(tables, names):
     # subscript_taunt_start.s stores the roll; battle_controller_player.c:1635 decrements
     # it at the end of the turn; :2557 fails a power-0 move before its PP is spent.
@@ -141,6 +149,7 @@ def test_taunt_counts_down_at_end_of_turn_and_blocks_status_moves(tables, names)
     assert int(hit.hp[0, 0]) < int(out.hp[0, 0])  # damaging moves still work
 
 
+@pytest.mark.slow
 def test_leech_seed_drains_and_grass_immune(tables, names):
     s = roark_state(tables, names, player_species="Budew", player_moves=["Leech Seed"]).replace_hp(
         0, 0, 5
@@ -180,6 +189,7 @@ def test_water_sport_sets_flag_and_halves_fire(tables, names):
     assert int(halved[-1]) < int(full[-1])
 
 
+@pytest.mark.slow
 def test_confusion_self_hit_replaces_move(tables, names):
     s = roark_state(tables, names, player_species="Zubat", player_moves=["Supersonic"])
     # Plan ruling: Outcome.duration is indexed by the acting (inflicting) side, so the
@@ -202,6 +212,7 @@ def test_confusion_counter_decrements_before_the_roll_and_snaps_out_at_zero(tabl
     assert int(out.hp[1, 0]) == int(s.hp[1, 0]) and int(out.hp[0, 0]) < int(s.hp[0, 0])
 
 
+@pytest.mark.slow
 def test_confusion_self_hit_is_40_power_typeless_physical_with_the_roll(tables, names):
     # CALC_SELF_HIT(MOVE_STRUGGLE, 40) (battle_controller_player.c:2633, common.h:35):
     # own Atk against own Def, no STAB or type chart, then the damage variance.
@@ -241,6 +252,7 @@ def test_end_of_turn_order_lists_the_implemented_checks_in_decomp_order():
     ]
 
 
+@pytest.mark.slow
 def test_end_of_turn_runs_the_faster_battler_first(tables, names):
     # Both seeded at 1 HP: the faster battler's seed drains it first and the battle ends
     # there; the slower one's check never runs (battle_controller_player.c:1289).
@@ -254,6 +266,7 @@ def test_end_of_turn_runs_the_faster_battler_first(tables, names):
     assert int(out.over) == 1 and int(out.winner) == 2 and int(out.hp[0, 0]) == 2
 
 
+@pytest.mark.slow
 def test_end_of_turn_speed_tie_uses_its_own_outcome(tables, names):
     s = roark_state(tables, names, equal_speed=True, player_count=1)
     s = s._replace(leech_seed=jnp.ones_like(s.leech_seed)).replace_hp(0, 0, 1).replace_hp(1, 0, 1)
@@ -265,6 +278,7 @@ def test_end_of_turn_speed_tie_uses_its_own_outcome(tables, names):
     assert int(first.winner) == 1 and int(second.winner) == 2
 
 
+@pytest.mark.slow
 def test_sampled_durations_follow_each_effects_random_command(tables, names):
     # Random 3, 2 (confusion, sleep): 2-5; Random 3, 3 (Bind): 3-6; Random 2, 3 (Taunt): 3-5.
     s = roark_state(tables, names, player_moves=["Taunt"], opp_species="Onix", opp_moves=["Bind"])

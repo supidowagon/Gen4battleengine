@@ -69,6 +69,7 @@ def play(tables, s, actions, outcome=None):
 # --- Bide -----------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 def test_bide_stores_and_unleashes(tables, names):
     bide = names.move("Bide")
     s0 = bide_state(tables, names)
@@ -280,6 +281,7 @@ def roll_five(tables, names, s, move):
     return damages
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("move", ["Rollout", "Ice Ball"])
 def test_rollout_power_and_curl(tables, names, move):
     s = rollout_state(tables, names, move)

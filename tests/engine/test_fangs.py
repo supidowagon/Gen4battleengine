@@ -160,6 +160,7 @@ def test_scripts_do_what_the_engine_does():
 # --- the two rolls ---------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 def test_both_rolls_independent(tables, names):
     s = _state(tables, names)
     acts = A(FANG, "Tackle", s, names)
@@ -290,6 +291,7 @@ def test_matches_reference_over_every_roll(tables, names):
 # --- laws and enumeration ------------------------------------------------------------------
 
 
+@pytest.mark.slow
 def test_sampled_rolls_are_independent_tenths(tables, names):
     s = _state(tables, names)
     acts = A(FANG, "Tackle", s, names)
@@ -306,6 +308,7 @@ def test_sampled_rolls_are_independent_tenths(tables, names):
     assert np.asarray(one.fang_flinch).tolist() == np.asarray(want).astype(int).tolist()
 
 
+@pytest.mark.slow
 def test_enumeration_matches_sampled_frequencies(tables, names):
     s = _ability(_state(tables, names), 1, AbilityId.STATIC)
     acts = A(FANG, "Tackle", s, names)
@@ -346,6 +349,7 @@ def test_fang_paralysis_read_only_on_a_target_that_can_take_it(tables, names):
     assert bool(laws_of(tables, slow, A(FANG, "Tackle", slow, names)).relevant.secondary[0, 0])
 
 
+@pytest.mark.slow
 def test_sure_fang_flinch_skips_the_foe_reads(tables, names):
     # Thunder Fang first (Lucky Chant keeps the brute force small): a sure hit that
     # flinches skips Cranidos's whole move, so fewer rows than the brute force.
@@ -394,6 +398,7 @@ FANG_CASES = [
 ]
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize(("setup", "opp"), FANG_CASES)
 def test_fang_equals_bruteforce(tables, names, setup, opp):
     """The gated enumeration (order branches, the order-gated fang flinch, the status

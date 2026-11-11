@@ -166,6 +166,7 @@ def test_law_is_exact_over_the_low_byte():
     assert (values, weights, den) == ([0, 1, 2, 3], [102, 76, 26, 52], 256)
 
 
+@pytest.mark.slow
 def test_sampled_present_follows_the_law(tables, names):
     s = _state(tables, names)
     acts = A(PRESENT, "Tackle", s, names)
@@ -208,6 +209,7 @@ def test_damage_path_is_a_normal_hit_at_the_drawn_power(tables, names):
     )
 
 
+@pytest.mark.slow
 def test_damage_path_in_step(tables, names):
     s = _state(tables, names)
     acts = A(PRESENT, "Tackle", s, names)
@@ -262,6 +264,7 @@ def test_heal_path_heals_a_quarter_of_the_targets_max_hp(tables, names):
     assert int(assert_matches_reference(tables, tiny, acts, _o(PRESENT_HEAL)).hp[1, 0]) == 2
 
 
+@pytest.mark.slow
 def test_heal_reads_no_crit_or_roll(tables, names):
     s = _hurt(_state(tables, names))
     acts = A(PRESENT, "Leer", s, names)
@@ -386,6 +389,7 @@ def test_heal_before_the_target_acts(tables, names):
     assert int(healed.hp[0, 0]) > int(hurt.hp[0, 0])  # a weaker Flail
 
 
+@pytest.mark.slow
 def test_observation_tells_the_paths_apart(tables, names):
     # Into a Ghost at full HP the state is the same on every path; the messages differ.
     s = _state(tables, names)
@@ -516,6 +520,7 @@ def test_foe_hit_after_a_present(tables, names):
     assert bool(np.asarray(laws.compress)[0, 1, 0])
 
 
+@pytest.mark.slow
 def test_enumeration_matches_sampled_frequencies(tables, names):
     s = _hurt(_state(tables, names, opp="Leer"))
     acts = A(PRESENT, "Leer", s, names)
@@ -545,6 +550,7 @@ OPP_MOVES = {
 CASES = [(setup, opp, order) for setup in SETUPS for opp in OPP_MOVES[setup] for order in ORDERS]
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize(("setup", "opp", "order"), CASES)
 def test_present_equals_bruteforce(tables, names, setup, opp, order):
     """The gated enumeration (the joint (present, crit, roll) factor, the hit gate, the

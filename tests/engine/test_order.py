@@ -2,6 +2,7 @@
 ``BattleSystem_CompareBattlerSpeed``, battle_lib.c:1188)."""
 
 import jax.numpy as jnp
+import pytest
 
 from nuzline.engine.ids import AbilityId, Stat, Status
 from nuzline.engine.order import action_order
@@ -83,6 +84,7 @@ def with_priorities(tables, priorities):
     return tables._replace(move_priority=prio)
 
 
+@pytest.mark.slow
 def test_priority_plus_seven_beats_plus_five(tables, names):
     # K2b Task 15 regression guard (passes before K2b): Kaizo's Trick Room is +7 (spec 5.2);
     # order.action_order and enumerate.outcome_laws cast move_priority (int8) to int32.

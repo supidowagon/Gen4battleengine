@@ -2,6 +2,7 @@
 obeys (data/kaizo/rom_diff.toml). The engine never had an obedience check, so this pins it."""
 
 import jax.numpy as jnp
+import pytest
 
 from nuzline.engine.damage import damage_for_roll
 from nuzline.engine.outcome import empty_outcome
@@ -10,6 +11,7 @@ from nuzline.engine.step import step
 from tests.engine.helpers import synthetic_state
 
 
+@pytest.mark.slow
 def test_player_mon_always_obeys(tables):
     # L16 attacker with no badge or trainer-ID state, using move slot 0.
     s, move = synthetic_state(

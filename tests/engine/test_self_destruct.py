@@ -20,6 +20,7 @@ from dataclasses import replace
 import jax
 import jax.numpy as jnp
 import numpy as np
+import pytest
 
 from nuzline.data.learnsets import load_learnsets
 from nuzline.data.tables import to_numpy
@@ -53,6 +54,7 @@ def _weather(s, weather):
     return s._replace(weather=jnp.asarray(weather, s.weather.dtype))
 
 
+@pytest.mark.slow
 def test_self_destruct_user_faints_on_hit_miss_and_ghost(tables, names):
     sd = names.move("Selfdestruct")
     assert int(tables.move_effect[sd]) == EffectId.SELF_DESTRUCT

@@ -188,6 +188,7 @@ def big_opponent(tables, names, hp=999):
     return set_field(s, "hp", (1, 0), hp)
 
 
+@pytest.mark.slow
 def test_opponent_hp_within_pixel_equal(tables, names):
     s = big_opponent(tables, names)
     acts = np.asarray(A("Scratch", "Tackle", s, names))
@@ -212,6 +213,7 @@ def test_player_exact_hp_splits(tables, names):
     assert (field(obs[0], "player_hp") != field(obs[1], "player_hp")).any()
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize(
     ("build", "move", "counter"),
     [
@@ -360,6 +362,7 @@ def visible_cases(tables, names):
     }
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("name", VISIBLE_CLASSES)
 def test_visible_message_classes(tables, names, name):
     cases = visible_cases(tables, names)
@@ -374,6 +377,7 @@ def test_visible_message_classes(tables, names, name):
     assert (field(obs[0], fld) != field(obs[1], fld)).any(), name
 
 
+@pytest.mark.slow
 def test_hidden_new_counters_grouped(tables, names):
     # Disable's turn count and Bide's stored damage are not on screen (spec §4.2 "hidden
     # counters"): the observation shows only the Disabled move and that the foe is Biding.
@@ -496,6 +500,7 @@ _ranges = {
 }
 
 
+@pytest.mark.slow
 @settings(max_examples=25, **HYPOTHESIS)
 @given(data=st.data())
 def test_ineffective_draws_invisible_enumerated(tables, names, data):
@@ -719,6 +724,7 @@ def test_legality_constant_on_equal_obs_random(tables, names, data):
     assert_constant(groups)
 
 
+@pytest.mark.slow
 @settings(max_examples=40, **HYPOTHESIS)
 @given(data=st.data())
 def test_step_events_match_step_and_observe(tables, names, data):
@@ -731,6 +737,7 @@ def test_step_events_match_step_and_observe(tables, names, data):
     check_events_path(out[4], out[5])
 
 
+@pytest.mark.slow
 def test_magnitude_level_is_observed_only_when_shown(tables, names):
     """ "Magnitude N!" (subscript_magnitude.s) tells the player the level: two draws that
     differ only in it are different observations when the hit lands, and the same one when

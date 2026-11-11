@@ -14,6 +14,8 @@ from nuzline.prep.setups import Setup
 from nuzline.search import deaths
 from tests.prep.fixtures import pp_stall_max_turns, pp_stall_problem, recorded_screens
 
+pytestmark = pytest.mark.slow
+
 STALL_PP = 5
 TANK = 0  # candidate index of the tank; 1 and 2 are the attacker and the decoy
 UNFINISHED = deaths.BUCKETS.index("unfinished")
@@ -46,6 +48,7 @@ def has(setup: Setup, candidate: int) -> bool:
     return any(m.candidate == candidate for m in setup.members)
 
 
+@pytest.mark.slow
 def test_short_stall_ranked_first(stall):
     result, total = stall
     chosen = result.chosen

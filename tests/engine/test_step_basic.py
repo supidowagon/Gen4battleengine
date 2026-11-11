@@ -1,5 +1,6 @@
 import jax
 import jax.numpy as jnp
+import pytest
 
 from nuzline.engine.ids import Status
 from nuzline.engine.order import action_order
@@ -10,6 +11,7 @@ from nuzline.engine.step import needs_replacement, replace, step
 from tests.engine.helpers import roark_state
 
 
+@pytest.mark.slow
 def test_faster_side_moves_first_and_deals_damage(tables, names):
     s = roark_state(tables, names)  # Monferno (Spe 30) vs Geodude (Spe 10)
     o = empty_outcome()
@@ -84,6 +86,7 @@ def test_terminal_state_is_left_unchanged(tables, names):
     assert all(bool(jnp.array_equal(a, b)) for a, b in zip(out, s, strict=True))
 
 
+@pytest.mark.slow
 def test_step_jits_and_vmaps_like_eager(tables, names):
     s = roark_state(tables, names)
     acts = jnp.array([0, 0], jnp.int32)

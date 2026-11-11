@@ -28,6 +28,7 @@ def _json(path):
     return json.loads(path.read_text("utf-8"))
 
 
+@pytest.mark.slow
 def test_vanilla_round_trip(rom_inputs, decomp, symbols, tmp_path, capsys):
     extract_static(decomp, tmp_path / "d")
     extract_trainers(decomp, tmp_path / "d")

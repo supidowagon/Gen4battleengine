@@ -3,12 +3,14 @@
 
 import jax
 import jax.numpy as jnp
+import pytest
 
 from nuzline.engine.outcome import empty_outcome, sample_outcome
 from nuzline.engine.step import step
 from tests.engine.helpers import roark_state
 
 
+@pytest.mark.slow
 def test_step_jits_and_vmaps_with_stable_shapes(tables, names):
     s = roark_state(tables, names)
     B = 16

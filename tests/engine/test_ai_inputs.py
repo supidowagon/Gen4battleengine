@@ -17,6 +17,7 @@
 
 import jax.numpy as jnp
 import numpy as np
+import pytest
 
 from nuzline.data.tables import to_numpy
 from nuzline.engine.actions import FIRST_ITEM_ACTION
@@ -73,6 +74,7 @@ def test_make_state_records_the_bag_size(tables, names):
     assert s.trainer_item_count.tolist() == [0, 2]  # trainerItemCounts, bcp.c:4796-4812
 
 
+@pytest.mark.slow
 def test_two_potions_both_spent_with_two_alive(tables, names):
     # aliveMons = 2 <= 2 - 1 + 1: slot 1 is considered after slot 0's use and zeroed too,
     # but only one Potion heals (roark.md section 12, quirk 5; trace E2).
@@ -85,6 +87,7 @@ def test_two_potions_both_spent_with_two_alive(tables, names):
     assert out.trainer_item_count.tolist() == [0, 2]  # never decremented
 
 
+@pytest.mark.slow
 def test_second_slot_untouched_with_three_alive(tables, names):
     # aliveMons = 3 > 2 - 1 + 1: slot 1 is not considered, so it keeps its Potion.
     s = roark_state(tables, names).replace_hp(1, 0, 5)
@@ -108,6 +111,7 @@ def test_bag_gate_counts_alive_mons_at_command_selection(tables, names):
 # --- fake_out_turn ---------------------------------------------------------------------
 
 
+@pytest.mark.slow
 def test_fake_out_turn_set_on_every_switch_in(tables, names):
     base = roark_state(tables, names)
     assert base.fake_out_turn.dtype == jnp.int16
@@ -136,6 +140,7 @@ def test_fake_out_turn_set_on_every_switch_in(tables, names):
     assert int(entered.fake_out_turn[1]) == 8
 
 
+@pytest.mark.slow
 def test_first_turn_check_is_true_only_on_the_first_decision(tables, names):
     # LoadIsFirstTurnInBattle (trainer_ai.c:2487): TRUE when fake_out_turn >= turn.
     s = roark_state(tables, names)._replace(turn=jnp.int16(7))
@@ -149,6 +154,7 @@ def test_first_turn_check_is_true_only_on_the_first_decision(tables, names):
 # --- move_hit --------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 def test_move_hit_tracks_last_hit_move(tables, names):
     s = _player_faster(roark_state(tables, names))
     scratch, tackle = names.move("Scratch"), names.move("Tackle")
@@ -175,6 +181,7 @@ def test_move_hit_survives_the_faint_it_causes(tables, names):
     assert int(_both_replace(tables, out, 1, 1).move_hit[1]) == 0
 
 
+@pytest.mark.slow
 def test_move_hit_resets(tables, names):
     scratch, tackle = names.move("Scratch"), names.move("Tackle")
     s = roark_state(tables, names, opp_faster=True).replace_hp(1, 0, 5)
@@ -193,6 +200,7 @@ def test_move_hit_resets(tables, names):
     assert _both(tables, para, acts).move_hit.tolist() == [0, scratch]
 
 
+@pytest.mark.slow
 def test_pursuer_keeps_its_move_hit(tables, names):
     # TryPursuit ends the pursuer's action (battlerActions = MOVE_END, battle_script.c:
     # 6931) without its own move end, so nothing clears what last hit it.

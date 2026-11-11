@@ -48,6 +48,7 @@ def _lost(before, after, side):
     return int(before.hp[side, mon]) - int(after.hp[side, mon])
 
 
+@pytest.mark.slow
 def test_screens_count_down_and_end(tables, names):
     # bcp.c:947-1083: each side's Reflect, Light Screen, Mist, Safeguard, Tailwind and
     # Lucky Chant turns drop by 1; at 0 the condition ends. Gravity likewise (:1227-1238).
@@ -69,6 +70,7 @@ def test_trick_room_is_not_counted_in_the_field_pass(tables, names):
     assert int(_leer(tables, names, s).trick_room) == 3
 
 
+@pytest.mark.slow
 def test_permanent_sand_never_ends(tables, names):
     s = _weather(roark_state(tables, names), Weather.SANDSTORM)
     for _ in range(3):
@@ -76,6 +78,7 @@ def test_permanent_sand_never_ends(tables, names):
         assert int(s.weather) == Weather.SANDSTORM and int(s.weather_timer) == 0
 
 
+@pytest.mark.slow
 def test_temporary_sand_ends_at_zero(tables, names):
     # bcp.c:1138-1161: --weatherTurns; at 0 subscript_sandstorm_end.s clears the weather
     # and no chip runs that turn (only subscript_weather_continues.s chips).
@@ -88,6 +91,7 @@ def test_temporary_sand_ends_at_zero(tables, names):
     assert _lost(mid, end, 0) == 0
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("weather", [Weather.RAIN, Weather.SUN, Weather.HAIL])
 def test_temporary_weather_counts_down(tables, names, weather):
     s = _weather(roark_state(tables, names), weather, timer=1)
@@ -102,6 +106,7 @@ def test_fog_never_counts_down(tables, names):
     assert int(out.weather) == Weather.FOG and int(out.weather_timer) == 1
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize(("max_hp", "chip"), [(46, 2), (17, 1), (15, 1)])
 def test_sand_chip_values(tables, names, max_hp, chip):
     # BattleSystem_Divide(maxHP * -1, 16): truncated, at least 1 (battle_lib.c:3599).
@@ -111,6 +116,7 @@ def test_sand_chip_values(tables, names, max_hp, chip):
     assert _lost(s, out, 1) == 0  # Geodude, Rock/Ground
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("immune", [Type.ROCK, Type.GROUND, Type.STEEL])
 def test_sand_type_immunities(tables, names, immune):
     s = _weather(roark_state(tables, names), Weather.SANDSTORM)
@@ -118,6 +124,7 @@ def test_sand_type_immunities(tables, names, immune):
     assert _lost(s, _leer(tables, names, s), 0) == 0
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize(
     ("species", "ability"),
     [("Cacnea", "Sand Veil"), ("Clefairy", "Magic Guard")],
@@ -142,6 +149,7 @@ def test_cloud_nine_alive_stops_the_chip_but_not_the_countdown(tables, names):
     assert int(out.weather_timer) == 2
 
 
+@pytest.mark.slow
 def test_hail_chip_and_immunities(tables, names):
     # script.c, the hail branch: Ice types and Snow Cloak take nothing; Ice Body heals
     # Divide(maxHP, 16) below full HP instead.
@@ -161,6 +169,7 @@ def test_hail_chip_and_immunities(tables, names):
     assert _lost(body, _leer(tables, names, body), 0) == -2
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("tie", [0, 1])
 def test_sand_double_faint_is_a_loss(tables, names, tie):
     # Both chips run inside one subscript; the battle end is checked once the field loop

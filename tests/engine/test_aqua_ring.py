@@ -11,6 +11,8 @@
   Pass is unsupported, so the carry-over is unreachable.
 """
 
+import pytest
+
 from nuzline.engine.ids import EffectId, ItemId, Status
 from nuzline.engine.outcome import empty_outcome
 from nuzline.engine.step import END_OF_TURN_ORDER
@@ -32,6 +34,7 @@ def test_aqua_ring_maps_in_both_games(tables, names, kaizo_tables, kaizo_names):
         assert int(t.move_effect[n.move("Aqua Ring")]) == EffectId.AQUA_RING
 
 
+@pytest.mark.slow
 def test_aqua_ring_fails_if_set(tables, names):
     s = _ring(tables, names)
     once = assert_matches_reference(tables, s, A("Aqua Ring", "Leer", s, names), empty_outcome())

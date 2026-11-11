@@ -27,6 +27,8 @@ from tests.engine.helpers import roark_state
 from tests.search.fixtures import at_replacement, dead_monferno
 from tests.search.test_expand import batch, row_keys
 
+pytestmark = pytest.mark.slow
+
 KEY = jax.random.PRNGKey(11)
 N_SPLIT = LEAF_CHUNK + 10  # playouts of one leaf that span two chunks
 
@@ -45,6 +47,7 @@ def _spark_into_cranidos(tables, names, hp: int = 1):
     return state, jnp.asarray(pair, jnp.int32)
 
 
+@pytest.mark.slow
 def test_halves_disjoint_and_reproducible(tables, names):
     state = roark_state(tables, names)
     states = batch(state, state.replace_hp(1, 0, 20))
@@ -58,6 +61,7 @@ def test_halves_disjoint_and_reproducible(tables, names):
         assert not {r.tobytes() for r in a} & {r.tobytes() for r in b}
 
 
+@pytest.mark.slow
 def test_matches_batched_playout(tables, names):
     state = roark_state(tables, names)
     counts = np.array([16])
@@ -72,6 +76,7 @@ def test_matches_batched_playout(tables, names):
     assert not value.refused
 
 
+@pytest.mark.slow
 def test_forced_matches_playout_from_action(tables, names):
     # Only the opponent's first move has PP: its AI row is one-hot.
     state = roark_state(tables, names, player_count=1, opp_count=1)
@@ -91,6 +96,7 @@ def test_forced_matches_playout_from_action(tables, names):
     assert not value.refused
 
 
+@pytest.mark.slow
 def test_forced_first_turn_matches_expand(tables, names):
     """The forced first turn's child distribution (keys as evaluate_forced uses them)
     matches the exact children of ``expand``, bucketed by state. At 26 HP the turn
@@ -158,6 +164,7 @@ def _playouts(tables, state, n=64):
     return value, out
 
 
+@pytest.mark.slow
 def test_wins_count_successes(tables, names):
     state = dead_monferno(tables, names)
     value, out = _playouts(tables, state)
@@ -298,6 +305,7 @@ def _on_devices(devices: int):
     return json.loads(done.stdout.strip().splitlines()[-1])
 
 
+@pytest.mark.slow
 def test_device_count_invariant(tables):
     one = _on_devices(1)
     assert len(one) == 4

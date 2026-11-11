@@ -36,6 +36,7 @@ from tests.ai.fixtures import (
 from tests.engine.helpers import INTERMEDIATE, roark_state
 
 
+@pytest.mark.slow
 def test_hand_traced_scores(tables, names):
     for desc, build, ai_o, exp_scores, exp_action in TRACED:
         s = build(tables, names)

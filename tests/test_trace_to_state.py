@@ -298,6 +298,7 @@ def engine_trace(tables, names):
     return _engine_trace(tables, names)
 
 
+@pytest.mark.slow
 def test_paralysis_inflicted_earlier_in_the_turn_can_fully_paralyze(tables, names, tmp_path):
     records, states = _engine_trace(tables, names, PARA_SCRIPT, (BUDEW, 0))
     assert int(states[1].status[1, 0]) == Status.PARALYSIS
@@ -338,6 +339,7 @@ CONFUSION_SCRIPT = [
 ]
 
 
+@pytest.mark.slow
 def test_a_confusion_self_hit_is_inferred(tables, names, tmp_path):
     party = _confusion_party(tmp_path)
     records, states = _engine_trace(tables, names, CONFUSION_SCRIPT, party=party)
@@ -629,6 +631,7 @@ def test_a_switch_undone_by_a_drag_is_inferred(tables, names, tmp_path):
 GROWL = 1  # Prinplup's slot 1
 
 
+@pytest.mark.slow
 def test_quick_claw_rolls_are_inferred(tables, names, tmp_path, monkeypatch):
     # Prinplup (Quick Claw) leads against a Geodude made faster; its Growl lowers Geodude's
     # Attack before Rock Throw only when the claw moves it first, which the replayed damage
@@ -830,6 +833,7 @@ def test_synthetic_trace_round_trips(tables, names, engine_trace, tmp_path):
     assert turns[-1].actions == (-1, -1)
 
 
+@pytest.mark.slow
 def test_recovered_turns_replay_like_the_golden_test(tables, names, engine_trace, tmp_path):
     records, _ = engine_trace
     turns = trace_to_states(_bundle(tmp_path, names, records), tables, names)

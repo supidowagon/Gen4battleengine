@@ -197,6 +197,7 @@ def test_scripts_and_try_protection_match_the_engine():
     assert "moveProtect[battleCtx->attacker] = MOVE_NONE" in buffers
 
 
+@pytest.mark.slow
 def test_law_is_two_to_the_minus_n(tables, names):
     # u16 r <= rate: (rate + 1) / 65536 = 1, 1/2, 1/4, 1/8; the index is capped at 3.
     assert [(r + 1) / 65536 for r in PROTECT_RATES] == [1, 0.5, 0.25, 0.125]
@@ -221,6 +222,7 @@ def test_law_is_two_to_the_minus_n(tables, names):
 # --- the turn: success, failure, the chain ------------------------------------------------
 
 
+@pytest.mark.slow
 def test_protect_first_blocks_the_foe(tables, names):
     s = _state(tables, names)
     acts = A("Protect", "Tackle", s, names)
@@ -235,6 +237,7 @@ def test_protect_first_blocks_the_foe(tables, names):
     assert int(out.last_move[1]) == names.move("Tackle")
 
 
+@pytest.mark.slow
 def test_protect_moving_last_fails_whatever_the_roll(tables, names):
     # Vanilla: only another +3 move goes before Protect: the foe's own, when faster.
     s = _state(tables, names, opp="Protect", order="opp", count=1)
@@ -477,6 +480,7 @@ def test_faint_and_replacement_clear_the_chain(tables, names):
 # --- observation and plan tree -------------------------------------------------------------
 
 
+@pytest.mark.slow
 def test_observation_and_labels(tables, names):
     s = _state(tables, names, count=1)
     acts = A("Protect", "Leer", s, names)
@@ -493,6 +497,7 @@ def test_observation_and_labels(tables, names):
     assert texts["protected"] == "the foe protected itself"
 
 
+@pytest.mark.slow
 def test_reference_agreement_over_draws(tables, names):
     """Both engines agree over protect x hit x crit x secondary x speed_tie, Protect or
     Detect against several foe moves, in every order and chain count."""
@@ -586,6 +591,7 @@ def test_damage_classes_classify_protect():
     assert EffectId.PROTECT in NON_TABLE_DAMAGE_EFFECTS
 
 
+@pytest.mark.slow
 def test_enumeration_matches_sampled_frequencies(tables, names):
     s = _state(tables, names, count=1)
     acts = A("Protect", "Tackle", s, names)
@@ -615,6 +621,7 @@ BRUTE_CASES = (
 )
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("mine,opp,order,count,extra", BRUTE_CASES)
 def test_gated_equals_bruteforce(tables, names, mine, opp, order, count, extra):
     s = _state(tables, names, opp=opp, order=order, count=count, opp_count=count)

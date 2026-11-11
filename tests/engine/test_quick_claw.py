@@ -300,6 +300,7 @@ def test_can_go_first_and_accuracy_thresholds_see_quick_claw(tables, names):
 # --- the end-of-turn order ----------------------------------------------------------------------
 
 
+@pytest.mark.slow
 def test_this_turns_draw_orders_the_end_of_turn(tables, names):
     # Both last Pokemon poisoned at 1 HP: the battler checked first faints first and its side
     # loses (bcp.c:1289). The faster Geodude goes first unless Monferno's Quick Claw draw of
@@ -372,6 +373,7 @@ def test_a_finished_battle_stores_nothing(tables, names):
     assert int(out.over) == 1 and [int(x) for x in out.qc_roll] == [0, 0]
 
 
+@pytest.mark.slow
 def test_reference_agreement_over_draws(tables, names):
     """Both engines agree over the stored bit, the turn's draw and the speed ties, for
     holders on either or both sides, Lagging Tail, Trick Room, switches and faints."""
@@ -419,6 +421,7 @@ def test_replace_matches_reference(tables, names):
 # --- observation --------------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 def test_the_animation_is_seen_when_the_claw_moves_it_first(tables, names):
     s = _state(tables, names, qc=(1, 0))
     acts = A("Scratch", "Tackle", s, names)
@@ -485,6 +488,7 @@ def test_end_of_turn_probability(tables, names):
     assert wins == pytest.approx(0.8, abs=1e-12)
 
 
+@pytest.mark.slow
 def test_enumeration_matches_sampled_frequencies(tables, names):
     s = _state(tables, names, holders=(0, 1), order="tie", qc=(1, 1))
     acts = A("Scratch", "Tackle", s, names)
@@ -515,6 +519,7 @@ BRUTE_CASES = (
 )
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("holders,order,qc,setup", BRUTE_CASES)
 def test_gated_equals_bruteforce(tables, names, holders, order, qc, setup):
     mine, opp = ["Scratch", "Leer"], ["Tackle", "Leer"]

@@ -105,6 +105,7 @@ def steep(setup, index):
     return (max(0.01, 1 - 0.05 * index),) * 4
 
 
+@pytest.mark.slow
 def test_team_phase_halving(tables, names, monkeypatch):
     prob = make_problem(tables, names)
     fakes = Fakes(monkeypatch, steep)
@@ -418,6 +419,7 @@ def test_states_carry_budget_and_protection(tables, names, monkeypatch):
     assert any(protected_slots(prob, s) for ss, _, _ in fakes.calls for s in ss)
 
 
+@pytest.mark.slow
 def test_reproducible(tables, names):
     prob = make_problem(tables, names)
     a = run_prep(tables, names, prob, SETTINGS, KEY)

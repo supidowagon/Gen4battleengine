@@ -53,6 +53,7 @@ def test_rock_spdef_boost_in_sand(tables, names):
     assert sand != _table(tables, s, ember)
 
 
+@pytest.mark.slow
 def test_cloud_nine_suppresses_sand_boost_and_chip(tables, names):
     s = _psyduck(tables, names, ["Water Gun", "Leer"])
     gun = names.move("Water Gun")
@@ -235,6 +236,7 @@ def test_a_fainted_holder_keeps_no_lock(tables, names):
     assert not bool(can_have_status(tables, fainted, 1, 0, Status.FREEZE))
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("holder", ["user", "target", "none"])
 @pytest.mark.parametrize("order", ["freezer_first", "freezer_second"])
 def test_freeze_in_sun_equals_bruteforce(tables, names, holder, order):

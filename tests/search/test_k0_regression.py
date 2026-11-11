@@ -20,6 +20,7 @@ def _recorded() -> dict:
     return json.loads(BASELINE.read_text())
 
 
+@pytest.mark.slow
 def test_stage_a_k0_unchanged(tables, names):
     old = _recorded()["stage_a"]
     assert old["n"] == STAGE_A_N
@@ -34,6 +35,7 @@ def test_stage_a_k0_unchanged(tables, names):
         assert abs(wins_new - wins_old) / STAGE_A_N <= bound, action
 
 
+@pytest.mark.slow
 def test_stage_b_k0_unchanged(tables, names):
     old = _recorded()["stage_b"]["actions"]
     state = roark_real_state(tables, names)

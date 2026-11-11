@@ -79,12 +79,14 @@ def test_coverage_checks_the_state_rank_would(capsys, monkeypatch):
     assert "has fainted" in capsys.readouterr().err
 
 
+@pytest.mark.slow
 def test_rank_prints_nine_rows(capsys):
     assert main(["rank", "--party", PARTY, "--trainer", "roark", "--n", "50"]) == 0
     out = capsys.readouterr().out
     assert out.count("%") >= 9 and "Switch" in out
 
 
+@pytest.mark.slow
 def test_rank_output_is_plain_ascii(capsys):
     # Controller ruling: printable on a default Windows console (cp1252).
     assert main(["rank", "--party", PARTY, "--trainer", "roark", "--n", "20"]) == 0
@@ -218,6 +220,7 @@ def test_cli_module_does_not_import_jax():
     assert done.returncode == 0, done.stderr
 
 
+@pytest.mark.slow
 def test_cli_solve_small(tmp_path, monkeypatch, capsys):
     import json
 
@@ -563,6 +566,7 @@ def test_cli_rank_default_budget_keeps_the_header(capsys):
     assert "P(win, 0 faints) [95% CI]" in out and "protected:" not in out
 
 
+@pytest.mark.slow
 def test_cli_solve_deaths(tmp_path, monkeypatch, capsys):
     from nuzline import cli
 
@@ -674,6 +678,7 @@ def prep_run(tables, names, tmp_path_factory):
     return code, out.getvalue(), err.getvalue(), root / "runs", save
 
 
+@pytest.mark.slow
 def test_cli_prep_small(prep_run):
     code, out, err, runs, save = prep_run
     assert code == 0
@@ -745,6 +750,7 @@ def test_cli_prep_bad_flags(prep_runs, tmp_path, tables, names, capsys, flags, s
         assert text.lower() in err.lower()
 
 
+@pytest.mark.slow
 def test_cli_prep_resume(prep_run, capsys):
     _, first, _, runs, save = prep_run
     (ckpt,) = runs.glob("prep_*.ckpt.json")
@@ -880,6 +886,7 @@ def test_kaizo_without_tables_loads_no_jax(tmp_path):  # Review Focus 1, in a su
     assert done.returncode == 0, done.stderr
 
 
+@pytest.mark.slow
 def test_solve_record_has_game(tmp_path, capsys):
     record = json.loads(run_solve_with_record(tmp_path).read_text("utf-8"))
     assert record["game"] == "platinum_us" and "table_version" in record
@@ -1198,6 +1205,7 @@ def test_trainers_prints_on_a_cp1252_console():
     assert done.stdout.isascii() and "246  Roark  (Leader)" in done.stdout
 
 
+@pytest.mark.slow
 def test_kaizo_rival_refusal_prints_on_a_cp1252_console(tmp_path, kaizo_tables, kaizo_names):
     party = _kaizo_party(tmp_path, kaizo_names)
     done = _cp1252_cli("coverage", "--game", "kaizo", "--party", party, "--trainer-id", "472")

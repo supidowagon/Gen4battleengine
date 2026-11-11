@@ -6,6 +6,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import jax
+import pytest
 
 from nuzline.ai import commands
 from nuzline.ai.commands import SIM_ROLL_MAX, USE_MAX_DAMAGE, ai_damage
@@ -58,6 +59,7 @@ def test_hp_regions(tables, names):
     assert hp_regions(tables, shedinja, 1) == (1,)
 
 
+@pytest.mark.slow
 def test_hp_regions_include_ai_kill_checks(tables, names):
     spec = sample_party(names)[0]
     party = roark_party(names)

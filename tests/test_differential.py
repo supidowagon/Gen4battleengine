@@ -4,6 +4,7 @@ disagreement found here is settled by the decomp and logged in docs/discrepancie
 
 import jax
 import numpy as np
+import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
@@ -26,6 +27,7 @@ from tests.strategies import (
 jit_step = jax.jit(step)
 
 
+@pytest.mark.slow
 @settings(
     max_examples=500,
     deadline=None,

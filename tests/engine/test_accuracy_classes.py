@@ -108,6 +108,7 @@ def hit_probability(tables, state, actions, side) -> float:
 # --- the bug ---------------------------------------------------------------------
 
 
+@pytest.mark.slow
 def test_sand_attack_lowers_a_later_move_this_turn(tables, names):
     s, acts = sand_attack_first(tables, names)
     # HitRateByStage[5] = 75/100 (include/data/hit_rate_stages.h) at accStages -1
@@ -127,6 +128,7 @@ def test_sand_attack_lowers_a_later_move_this_turn(tables, names):
     )
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("move", ["Sand-Attack", "Double Team"])
 def test_accuracy_change_equals_bruteforce(tables, names, move):
     # K3b2 final review I1: the brute force cuts the hit law at every threshold variant
@@ -148,6 +150,7 @@ def test_double_team_raises_evasion_for_a_later_move(tables, names):
     assert abs(hit_probability(tables, s, acts, 0) - 0.75) < 1e-12
 
 
+@pytest.mark.slow
 def test_nature_power_call_is_seen_by_hit_thresholds(tables, names):
     # On GREAT_MARSH a faster foe's Nature Power calls Mud Bomb (Mud-Slap's family:
     # SECONDARY_STAT_FOE, accuracy -1, effect_script_0073.s): the later Scratch can meet
@@ -162,6 +165,7 @@ def test_nature_power_call_is_seen_by_hit_thresholds(tables, names):
     assert int(out.stages[0, Stat.ACC]) == -1 and int(out.hp[1, 0]) == int(s.hp[1, 0])
 
 
+@pytest.mark.slow
 def test_class_values_against_live_threshold(tables, names):
     s, acts = sand_attack_first(tables, names)
     for value, connects in ((1, True), (75, True), (76, False), (0, False)):
@@ -187,6 +191,7 @@ def test_hit_class_law_examples():
     assert hit_class_law([0]) == ([0], [100], 100)
 
 
+@pytest.mark.slow
 @settings(max_examples=40, **HYPOTHESIS)
 @given(data=st.data())
 def test_accuracy_class_law_sums_to_one(tables, names, data):
@@ -282,6 +287,7 @@ def test_hit_class_maps_every_roll():
 # --- soundness: classes equal the raw rolls ----------------------------------------
 
 
+@pytest.mark.slow
 @settings(max_examples=30, **HYPOTHESIS)
 @given(data=st.data())
 def test_accuracy_classes_equal_raw_rolls(tables, names, data):

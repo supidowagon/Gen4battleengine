@@ -203,6 +203,7 @@ def test_level_law_is_exact():
 # --- behaviour (both engines) ----------------------------------------------------------------
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("rank,slot", [(0, 1), (1, 2)])
 def test_roar_drags_a_bench_pokemon_in(tables, names, rank, slot):
     s = _state(tables, names)
@@ -382,6 +383,7 @@ def test_the_ai_forgets_a_dragged_in_player_pokemon(tables, names):
     assert int(out.ai_ability_known[1]) == 0
 
 
+@pytest.mark.slow
 def test_observation_and_label(tables, names):
     s = _state(tables, names)
     acts = A("Roar", "Tackle", s, names)
@@ -398,6 +400,7 @@ def _sp(names, s, side, slot):
     return names.species_names[int(s.species[side, slot])]
 
 
+@pytest.mark.slow
 def test_label_names_the_actor_and_tells_a_drag_from_a_send_out(tables, names):
     # Geodude Tackles, then the player's Roar drags Cranidos in (review round, minor 2): the
     # label names Geodude as the actor and says nothing of a send-out.
@@ -502,6 +505,7 @@ def test_marginals_match_the_decomp(tables, names):
         assert got == pytest.approx(float(hit * p_pass / 2), abs=1e-15)
 
 
+@pytest.mark.slow
 def test_enumeration_matches_sampled_frequencies(tables, names):
     s = _level(_state(tables, names), 0, 0, 5)
     acts = A("Roar", "Tackle", s, names)
@@ -509,6 +513,7 @@ def test_enumeration_matches_sampled_frequencies(tables, names):
     check_frequencies(children(tables, s, acts), sampled(tables, s, acts, n), n)
 
 
+@pytest.mark.slow
 def test_sampled_draws(tables, names):
     s = _level(_state(tables, names), 0, 0, 5)
     acts = A("Roar", "Tackle", s, names)
@@ -543,6 +548,7 @@ def _minus_six(tables, names, move):
     return tables._replace(move_priority=priority)
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("bench", ["full", "none"])
 def test_a_hit_after_a_roar_bruteforce(tables, names, bench):
     # A constructed Tackle at -6 after the faster foe's Roar: dragged, it never runs; with no

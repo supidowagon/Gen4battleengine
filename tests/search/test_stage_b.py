@@ -35,6 +35,8 @@ from tests.search.fixtures import (
     switch_refusal_root,
 )
 
+pytestmark = pytest.mark.slow
+
 KEY = jax.random.PRNGKey(0)
 SMALL = SolveSettings(max_depth=1, budget_playouts=2000, n_depth0=200)
 CAP = 2  # the endgames' turn cap
@@ -129,6 +131,7 @@ def test_depth0_is_stage_a(tables, names, monkeypatch):
     assert "Stage A (depth 0): 200 playouts per action" in footer and "leaf budget" not in footer
 
 
+@pytest.mark.slow
 def test_matches_exhaustive_on_endgames(tables, endgame_solves):
     nontrivial = False
     for name, (state, result) in endgame_solves.items():
@@ -226,6 +229,7 @@ def test_pruning_bound(tables, names):
         assert r.estimate - r.lower_bound == pytest.approx(r.unexplored / 2, abs=1e-9)
 
 
+@pytest.mark.slow
 def test_dropped_root_action(tables, names):
     # spike_cannon_root's opponent also knows Spike Cannon, whose AI script is not
     # transcribed (the AI refuses the root); here only the player knows it.
@@ -285,6 +289,7 @@ def test_all_terminal_root(tables, names):
         assert r.unexplored == r.sampled == r.refused == 0
 
 
+@pytest.mark.slow
 def test_reproducible(tables, names, monkeypatch):
     def no_stage_a(*args):
         raise AssertionError("Stage A runs only at depth 0 (ruling 7)")
@@ -336,6 +341,7 @@ def test_hidden_legality_raises(tables, names):
         solver._node_legal(mixed)
 
 
+@pytest.mark.slow
 def test_default_forced_evaluations_get_the_floor(tables, names, monkeypatch):
     """The default evaluator's forced path inside ``solve``: every pruned opponent action
     is evaluated with exactly ``2 * leaf_floor`` playouts (ruling 8), and the default leaf
@@ -370,6 +376,7 @@ def test_default_forced_evaluations_get_the_floor(tables, names, monkeypatch):
     assert pruned and all(n.opp_action is not None and n.opp_label for n in pruned)
 
 
+@pytest.mark.slow
 def test_sampled_nodes_below_the_root(tables, names):
     # The player alone knows Spike Cannon (as in test_dropped_root_action): dropped at the
     # root, sampling-only at every depth-1 node, where every value 1 makes it the chosen
@@ -649,6 +656,7 @@ def test_win_after_a_new_death_scores_zero_at_k0(tables, names):
         assert row(result, 0).estimate == pytest.approx(want, abs=1e-9)
 
 
+@pytest.mark.slow
 def test_result_dict_round_trip(tables, names):
     # Plan 4c Task 8: a checkpoint holds finished solves as JSON; nothing may be lost.
     from tests.search.fixtures import certain_zero_leaf, sacrifice_endgame

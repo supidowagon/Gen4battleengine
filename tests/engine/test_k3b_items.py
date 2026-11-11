@@ -21,6 +21,7 @@
 
 import jax
 import jax.numpy as jnp
+import pytest
 
 from nuzline.engine.damage import damage_table
 from nuzline.engine.enumerate import outcome_laws
@@ -78,6 +79,7 @@ def test_tables_map_the_items_in_both_games(tables, names, kaizo_tables, kaizo_n
 # --- Focus Sash ---------------------------------------------------------------------
 
 
+@pytest.mark.slow
 def test_focus_sash_leaves_one_hp_and_is_consumed(tables, names):
     s = _sash(roark_state(tables, names), 1, names, 5)  # Mach Punch deals more than 5
     out = _jit_step(tables, s, A("Mach Punch", "Leer", s, names), empty_outcome())
@@ -335,6 +337,7 @@ def test_lagging_tail_end_of_turn_order(tables, names):
 # --- relevance, prep -------------------------------------------------------------------
 
 
+@pytest.mark.slow
 def test_lum_cure_makes_the_end_speed_tie_relevant(tables, names):
     # A paralyzed Lum holder is cured after its move: its end-of-turn speed is its
     # unparalyzed one, which here equals the foe's.

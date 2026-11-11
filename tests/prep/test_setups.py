@@ -4,6 +4,7 @@ from dataclasses import replace
 from math import comb
 
 import numpy as np
+import pytest
 
 from nuzline.engine.state import make_state
 from nuzline.prep.problem import Resources
@@ -57,6 +58,7 @@ def test_team_setups_count(tables, names):
             assert sorted(leads) == sorted(team)
 
 
+@pytest.mark.slow
 def test_neighbours_one_change(tables, names):
     party = sample_party(names)
     bite = names.move("Bite")

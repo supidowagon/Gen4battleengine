@@ -20,6 +20,8 @@ from nuzline.search.stage_b import PlanNode, SolveSettings, solve
 from tests.engine.helpers import roark_state
 from tests.search.fixtures import certain_zero_leaf, sacrifice_endgame
 
+pytestmark = pytest.mark.slow
+
 KEY = jax.random.PRNGKey(0)
 SETTINGS = SolveSettings(max_depth=1, budget_playouts=100, n_depth0=10)
 
@@ -41,6 +43,7 @@ def walk(node):
             yield from walk(kid)
 
 
+@pytest.mark.slow
 def test_labels_ascii_and_distinct(roark, names):
     state, result = roark
     nodes = list(walk(result.plan))
@@ -276,6 +279,7 @@ def sacrifice(tables, names):
     return out
 
 
+@pytest.mark.slow
 def test_label_names_the_faint_and_the_budget(sacrifice, names):
     state, result = sacrifice[1]
     leer = names.move_slot(state, 0, "Leer")
