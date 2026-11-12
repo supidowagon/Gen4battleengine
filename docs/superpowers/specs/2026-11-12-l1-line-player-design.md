@@ -84,7 +84,7 @@ lines is data: one compiled program plays any line, and `vmap` runs many lines o
   2 = fallback restricted to moves (`wait`).
 - `line_replacement(tables, state, line) -> slot`.
 - `line_playout(tables, state, line, key, max_turns, layout) -> PlayerResult`: `playout._run`'s loop
-  with the two choices above. `LineResult` is `PlayoutResult`'s fields plus `fallback_turns`
+  with the two choices above. `PlayerResult` is `PlayoutResult`'s fields plus `fallback_turns`
   (turns the fallback decided). It draws the root's hidden values first (`root_state`), like Stage
   A's root playouts, and uses the same key splits per turn as `playout`, so with an empty line it
   returns exactly what `playout` returns from the same root and key. That equality is a test.
@@ -203,7 +203,7 @@ a learned network), so that lines a human would not find are possible. The line 
 first step and the baseline. So:
 
 - **One interface for a player** (`search/player.py`): `act(tables, state, params, key, layout) ->
-  (action, refused, fallback)` and `replace(tables, state, params) -> slot`. `playout_policy`
+  (action, refused, fallback)` and `replace(tables, state, params, key, layout) -> (slot, refused)`. `playout_policy`
   (`GREEDY`) and the line player (`LINE`, whose params are a `Line`; a user's scripted line and a
   found line are both just params) implement it. The playout loop (`player_playout`) knows only
   the interface, so a search-based or learned player drops in without touching it.
@@ -225,5 +225,8 @@ No new search method comes with this.
   what the opponent just did, no lead choice.
 - **A refused line playout reports the count, not the mechanic.** `refusal_reason` replays the
   default policy only; `nuzline coverage` names what a fight is missing.
+- **A player has no memory between turns.** `act` sees the state, its params and a key. A
+  recurrent learned player, or a search that reuses its tree from turn to turn, needs the loop to
+  carry a player state; that is added when the first such player is built.
 - **Level-ups during the fight are not modelled** (K3d). The user's Pokemon gained levels mid-fight
   in the recording; the engine's 72 % does not include that.
