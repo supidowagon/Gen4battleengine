@@ -449,11 +449,11 @@ def _parser() -> argparse.ArgumentParser:
     find.add_argument(
         "--budget", type=float, default=None, help="seconds after which no new stage starts"
     )
-    find.add_argument("--restarts", type=int, default=None, help="random restarts (default 1)")
+    find.add_argument("--restarts", type=int, default=None, help="kicks from the best line (default 1)")
     find.add_argument(
         "--final-n", type=int, default=None, help="hold-out playouts of the found line (2000)"
     )
-    find.add_argument("--sweeps", type=int, default=None, help="most sweeps per start (4)")
+    find.add_argument("--sweeps", type=int, default=None, help="most sweeps per start (12)")
     trainers = sub.add_parser("trainers", help="list trainer ids, names and classes")
     game(trainers)
     trainers.add_argument(
