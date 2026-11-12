@@ -8,9 +8,10 @@ Paths are relative to `external/pokeplatinum`. `script.s` means
 `src/battle/trainer_ai/trainer_ai.c`. Kaizo data comes from the Kaizo tables
 (`data/intermediate_kaizo/*.json`, built into `data/gen4_platinum_kaizo`).
 
-K3c is written task by task: sections 1-2 come from Task 2, the later sections from the
-tasks that own them (draws and the outcome layout: Task 3; commands: Task 4; per-flag
-paths: Tasks 5-6; switching: Task 7; the rest: Task 8).
+K3c wrote it task by task: sections 1-2 come from Task 2, draws and the outcome layout (8)
+from Task 3, the commands (7) from Task 4, the per-flag paths (5) from Tasks 5-6, switching
+(11) from Task 7, and the rest (3, 4, 6, 8.7, 9, 10, 12, 14) from Task 8, which closed K3c.
+The sections keep roark.md's numbers, so a rule can be compared section by section.
 
 ## 1. Flags
 
@@ -128,6 +129,61 @@ script word changed; the C code only relocated).
 - The id cases of 2.4 are compared by id whatever a game names the slot. They are checked
   against vanilla names only (Kaizo's 149 is Triple Axel, and it still takes Psywave's
   case).
+
+## 3. One decision, start to finish
+
+The steps are roark.md 2's, with RISKY added and the Kaizo party and bag. At each turn's
+command selection:
+
+1. `TrainerAI_PickCommand` (`trainer_ai.c:3989`):
+   1. `TrainerAI_ShouldSwitch` (`:3894`). If it returns TRUE the AI switches (section 11),
+      and the decision ends.
+   2. Otherwise `TrainerAI_ShouldUseItem` (`:4056`). Kaizo Roark's bag is empty, so it never
+      returns TRUE (section 12).
+   3. Otherwise the command is FIGHT.
+2. For FIGHT, `TrainerAI_Main` (`trainer_ai.c:258`):
+   1. The defender is the player's active battler, `attacker ^ 1` in singles, with no draw
+      (`battle_lib.c:4193-4195`).
+   2. `TrainerAI_Init` (`:211`): every slot starts at 100 (`:223-230`), a slot that
+      `BattleSystem_CheckInvalidMoves` flags at 0 (`:234-238`), and the four simulated damage
+      rolls are drawn (`:240`; section 8).
+   3. `TrainerAI_MainSingles` (`:286`) records the player's last move (`:295`; section 9),
+      runs BASIC, EVAL_ATTACK, EXPERT and RISKY in bit order (`:297-310`; section 1), each
+      over the four slots (`TrainerAI_EvalMoves`, `:483-525`), and picks among the top scores
+      (`:315-338`; section 10).
+
+**Scores.** `moveScore` is `s8` (`include/battle/ai_context.h:14`). `AddToMoveScore` raises a
+negative result to 0 and has no upper clamp (`trainer_ai.c:576-586`). On Kaizo Roark's paths
+BASIC only subtracts (5.1), EVAL_ATTACK adds at most +4 (the kill bonus, `:6401` -> `:6411`;
+the +6 of `BATTLE_EFFECT_PRIORITY_1`, `:6400`, is no Roark move's, 5.2), EXPERT at most +4
+(Expert_Curse with Gyro Ball or Trick Room known, 5.3; Shuckle knows neither, so +3) and RISKY
++2 (`:6530`). So a score is at most 110, below 127, and int32 arithmetic gives the same values.
+
+The result is encoded as in roark.md 2: a move slot 0..3, or a switch `4 + party slot`.
+
+## 4. Kaizo Roark's Pokemon
+
+From `data/intermediate_kaizo/trainers.json`, trainer 246 (the ROM's trainer party, decoded
+by the patched `TrainerData_BuildParty`, `docs/kaizo/rom_diff.md`). Every member has ability
+slot 0. Types, abilities and items are the Kaizo tables' (`species.json`, `abilities.json`,
+`items.json`):
+
+| Party slot | Pokemon | Level | Types | Ability (slot 0) | Held item | Moves (slot order) |
+|---|---|---|---|---|---|---|
+| 0 | Bonsly | 15 | Rock | Rock Head | Focus Sash | Stealth Rock, Selfdestruct, Brick Break, Accelerock |
+| 1 | Lileep | 13 | Rock/Grass | Solid Rock | Big Root | Sludge Bomb, Giga Drain, AncientPower, Recover |
+| 2 | Gible | 14 | Dragon/Ground | Sand Veil | Chesto Berry | DragonBreath, Flamethrower, Thunder Fang, Earth Power |
+| 3 | Corsola | 14 | Water/Rock | Solid Rock | Rindo Berry | Recover, Water Pulse, Light Screen, Accelerock |
+| 4 | Shuckle | 13 | Bug/Rock | Solid Rock | Berry Juice | Toxic, Accelerock, Curse, Sand Tomb |
+| 5 | Cranidos | 16 | Rock | Rock Head | Lum Berry | Head Smash, Zen Headbutt, Crunch, Rock Polish |
+
+- The bag is empty (`items: []`). `BattleControllerPlayer_InitAI` copies only the trainer's
+  non-empty item slots into `trainerItems` (`battle_controller_player.c:4796-4812`), so
+  `trainerItems` stays zero and `trainerItemCounts` 0.
+- The battle starts in a permanent sandstorm (`start_condition: sandstorm`,
+  `area_condition.permanent`), on BUILDING terrain (9: line 10 of
+  `generated/battle_terrains.txt`).
+- The moves' battle effects, which the scripts dispatch on, are in section 5.
 
 ## 5. What each flag's script does with Kaizo Roark's moves
 
@@ -344,6 +400,44 @@ never scores Selfdestruct or AncientPower without the roll (Task 5 review m2;
 effect of the table has the `:6530` site and that its layout runs RISKY; the vanilla
 transcription has none of those effects.
 
+## 6. Where the AI reads the true battle state
+
+roark.md 6 holds: the damage estimate, the kill check and the effectiveness class read the
+real state (roark.md 7; in a sandstorm the estimate includes the Rock-type Special Defense
+boost behind the Cloud Nine gate, 7.2). Only the player's moves and ability go through the
+AI's knowledge (section 9). Kaizo Roark's labels add these reads of the real state, each by
+the command's handler:
+
+| Read | Handler | On Roark's paths |
+|---|---|---|
+| `A`'s and `D`'s HP% (`curHP * 100 / maxHP`) | `IfHPPercent*`, `trainer_ai.c:588-646` | `A`: Recover `script.s:513`, `:2649`, `:2664`; Explosion `:1863`, `:1869`, `:1874`; Toxic `:2689`; Light Screen `:2716-2717`. `D`: Toxic `:2694` |
+| stat stages | `IfStatStage*`, `trainer_ai.c:1465-1523` | `D`'s evasion `:1856`, `:1858`; `A`'s Speed `:367`, `:371`; `A`'s Attack and Defense `:690-691`, `:696-697`, `:3471`, `:3485`, `:3490` |
+| side conditions | `IfSideCondition`, `trainer_ai.c:732-745` (the side's `sideConditionsMask`) | Light Screen on `A`'s side `:551`; Reflect and Light Screen on `D`'s `:4561-4562`; Safeguard on `D`'s `:546`; Stealth Rock on `D`'s (roark.md 5.1) |
+| `D`'s status | `IfStatus`, `trainer_ai.c:648-659` | `:545`, `MON_CONDITION_ANY` |
+| Trick Room | `IfFieldConditionsMask`, `trainer_ai.c:1936-1945` | `:364` |
+| the weather, raw | `LoadCurrentWeather`, `trainer_ai.c:1414-1439` | `:535`, `:541` (7.2) |
+| true types | `LoadTypeFrom`, `trainer_ai.c:937-959` | `D`'s `:521-526`; `A`'s (Ghost Curse) `:681-684`, `:3467-3470` |
+| `A`'s own ability | `LoadBattlerAbility ATTACKER`, `trainer_ai.c:1208` | Mold Breaker `:69-70`, `:302-303`; Simple `:365-366`, `:688-689`; Rock Head and Magic Guard `:6296-6298` |
+| `A`'s own moves | `IfMoveKnown`, `IfMoveEffectKnown ATTACKER` (`trainer_ai.c:1627`; `:1750-1760`, the ATTACKER case), `IfAttackerHasNoDamagingMoves` (`:913-929`, power only) | Gyro Ball and Trick Room `:3472-3473`; SP_DEF_UP and PROTECT `:2699-2700`; `:2688` |
+| the living party members of each side | `CountAlivePartyBattlers`, `trainer_ai.c:1126-1156` | `:310`, `:312` (Basic_CheckLastMon); Stealth Rock (roark.md 5.1) |
+| the speed order | `IfSpeedCompareEqualTo`, `trainer_ai.c:1102-1112` | `:1864`, `:2070`, `:2650`: true speeds with stages, items and weather, the previous turn's Quick Claw roll, Trick Room (7.1) |
+| the player's last used move | `LoadDefenderLastUsedMoveClass`, `trainer_ai.c:2050-2054` (`movePrevByBattler`) | `:2722` (7.4) |
+| the move's own effect | `LoadCurrentMoveEffect`, `trainer_ai.c:1164-1168` | `Risky_Main` (5.4) |
+
+**The K3b2 mechanics, as the AI sees them** (the K3b2 handover's list, settled):
+- Quick Claw: the speed compare reads the previous turn's roll (7.1).
+- Infatuation: no label on Roark's paths reads it. Kaizo Sand Tomb is WHIRLPOOL, which has no
+  `Expert_BindingMove` entry (plan K3c Ruling 5; `script.s:1659`).
+- Protect: only `A`'s own moves are read (`:2699-2700`, Ruling 9). `LoadProtectChain` and the
+  player's seen Protect are on no Roark path.
+- Roar: the player's Roar is recorded as a seen move like any other (section 9). No label of
+  Roark's reads seen moves except Recover's Snatch test (section 9).
+- Camouflage: the types the AI reads are the battler's current ones, which the engine writes
+  through (`LoadTypeFrom` reads `BATTLEMON_TYPE_1/2`).
+- Nature Power: the class read is Nature Power's own (7.4).
+- `AICmd_LoadBattlerSpeedRank` (`trainer_ai.c:2056-2093`) is reached only from `TagStrategy`
+  (flag 7), which Roark lacks (Ruling 4).
+
 ## 7. The commands Kaizo Roark's labels add (K3c Task 4)
 
 The new script commands are rows of `docs/ai/script_commands.md` (after `IfMoveNotKnown`),
@@ -505,8 +599,10 @@ abilities, and no Kaizo species has that pair (`species.json`;
 any weather, where the data test below uses the state's). `tests/ai/test_kaizo_outcome.py
 test_one_scalar_guess_is_exact_for_roark` checks this as data: for every species with two
 abilities, against each of Roark's Pokemon (Kaizo's six, vanilla's three), the loose
-oracle (8.6) finds at most one read whose coin changes a score. It re-runs with every
-read a later task adds.
+oracle (8.6) finds at most one read whose coin changes a score, in four states per species
+(permanent sandstorm, clear, sun and rain, with the AI's HP at 100/69/49/29% and the player's
+from full to 1 HP; K3c Task 8). Its docstring cites why no HP or other state can add a
+sensitive read. It re-runs with every read a later task adds.
 - This holds for Roark's movesets, not for every moveset. A Pokemon with both Leer and
   Screech against Tentacool (Kaizo abilities 44 / Clear Body) has two `:470` reads that
   each change a score; the scalar moves them together and the decomp does not. Such a
@@ -545,10 +641,86 @@ player's Quick Claw (no tie read).
 - `LOOSE_READS` is 48: every read of the straight-line scripts counts in every slot, on the
   path or not, and Task 6 brings them to 35.
 
-**8.7 RNG read order.** As roark.md 8.7, with RISKY after EXPERT (slots 0-3: its roll as
-reached), and the speed compare's tie draw where an `IfSpeedCompareEqualTo` meets equal
-speeds (no `AiOutcome` field, Ruling 3; K3d's trace replay needs the count). Within a slot,
-EXPERT's draws are those of 5.3 in line order of the path taken.
+**8.7 RNG read order (for K3d's trace replay).** Every read is one `BattleSystem_RandNext`
+(`battle_system.c:1308`), made in this order in one decision. The reads marked *merged* have
+no `AiOutcome` field because they cannot change the action, but they still advance the RNG,
+so a replay that tracks the RNG must count them.
+
+1. **`TrainerAI_ShouldSwitch`** (section 11), as reached. None if `A` is trapped or no
+   other Roark Pokemon lives (`trainer_ai.c:3906-3940`; the checks after that are under
+   `if (alivePartyMons)`, `:3940`). Otherwise:
+   1. *merged:* `AI_HasAbsorbAbilityInParty`'s `RandNext() % 3` (`:3651`), when `A` has a
+      super-effective move (`AI_HasSuperEffectiveMove(..., TRUE)` itself draws nothing,
+      `:3586-3587`). Its later draw (`:3706`) needs a bench Flash Fire, Water Absorb or Volt
+      Absorb, which Kaizo Roark lacks.
+   2. The keep draws, `RandNext() % 10` (`:3588`), one per super-effective slot of `A` in
+      slot order, until one is nonzero (then no further read).
+   3. Unless `A` has 4 or more positive stages (`:3969`): pass 1, then pass 2, each
+      `RandNext() % rand` (`:3796`) per (bench Pokemon, super-effective move) in party then
+      slot order, until one is zero (a switch, and no further read of the decision).
+
+   The draws of `AI_CannotDamageWonderGuard` (`:3339`), `AI_OnlyIneffectiveMoves`
+   (`:3459`, `:3477`, `:3518`, `:3536`) and `AI_IsAsleepWithNaturalCure` (`:3828`, `:3835`,
+   `:3853`) are on refused states only (`switching_refusals`, 11.3).
+2. `TrainerAI_ShouldUseItem` makes no draw (`trainer_ai.c:4056-4199`). If the decision ended
+   with a switch, nothing below happens.
+3. **`TrainerAI_Init`**: *merged:* four damage rolls, `RandNext() % 16` (`:240`), one per slot,
+   empty slots included. No transcribed path passes anything but `USE_MAX_DAMAGE` (8.1).
+4. **BASIC**, slots 0-3 (`TrainerAI_EvalMoves`, `:483-525`; an empty or 0-PP slot runs no
+   command, `:486-503`). In a slot, each `LoadBattlerAbility DEFENDER` that guesses draws
+   `RandNext() & 1` (`:1191-1198`): the player's ability is not suppressed, not known, not
+   Shadow Tag, Magnet Pull or Arena Trap, and both species abilities are nonzero (**even when
+   they are the same ability**, `:1194`). In line order of the path taken:
+   - `script.s:71` (`Basic_CheckForImmunity`): a damaging move (`:62-63`) that is not IMMUNE
+     (`:68`), when `A` is not Mold Breaker (`:69-70`);
+   - `:117` (`Basic_CheckSoundproof`): unless the slot already ended (`ScoreMinus10` and
+     `ScoreMinus12` end it with `PopOrEnd`, `:1591-1597`);
+   - the effect's label: `:304` (Selfdestruct, not after Mold Breaker at `:302-303`), `:529`
+     and then `:539` (Toxic, after the type tests `:521-526`).
+   The exact layout has one guess for all of them (8.4): *merged* in the sense that the
+   decomp's two to five coin flips of a decision are one field, the RNG count is the number
+   of reads reached.
+5. **EVAL_ATTACK**, slots 0-3: `:6374` (Selfdestruct, 51), then `:6383` (a QUADRUPLE move,
+   80), as reached (5.2).
+6. **EXPERT**, slots 0-3: the label's `IfRandomLessThan` sites in line order of the path taken
+   (5.3; the site table, 8.2), and, where the label's `IfSpeedCompareEqualTo` (`:1864`,
+   `:2070`, `:2650`) meets equal speeds in a branch that draws, *merged:* the tie's
+   `RandNext() & 1` (`battle_lib.c:1405`, `:1415`, `:1425`, `:1437`, `:1445`; Ruling 3, 7.1).
+   The compare comes before the label's next roll: Explosion `:1864` before `:1865`,
+   Rock Polish `:2070` before `:2075`, Recover `:2650` before `:2665`.
+7. **RISKY**, slots 0-3: `:6530` (128) for Selfdestruct and AncientPower.
+8. **The tie-break**, `RandNext() % n` (`trainer_ai.c:338`), always, even with n = 1.
+
+A post-KO replacement (`BattleAI_PostKOSwitchIn`, `battle_lib.c:7923-8089`) draws nothing.
+
+## 9. What the AI knows about the player
+
+The records are roark.md 9's, kept the same way by the engine (`BattleState.ai_seen_moves`,
+`ai_ability_known`): seen moves from `TrainerAI_RecordLastMove` (`trainer_ai.c:2705`, run at
+`:295`), the ability from `BattleAI_SetAbility` (`battle_script.c:12106`), both cleared when
+the player's battler switches in or faints (`battle_lib.c:2151-2153`, `:2223-2225`). What
+Kaizo Roark's paths read from them:
+
+- **Seen moves.** One read: `Expert_Recovery_CheckForSnatch`'s `IfMoveEffectNotKnown
+  AI_BATTLER_DEFENDER, BATTLE_EFFECT_STEAL_STATUS_MOVE` (`script.s:2670`), which scans
+  `battlerMoves` (`trainer_ai.c:1781-1820`, the DEFENDER case). No Kaizo move has effect 195,
+  so the test always jumps and the `:2671` roll is never reached (5.3). The vanilla U-turn read
+  (`Expert_Pursuit`, roark.md 9.1) is on no Kaizo Roark path: none of his moves is
+  HIT_BEFORE_SWITCH.
+- **Ability.** Every `LoadBattlerAbility DEFENDER` resolves as roark.md 9.2: suppressed, then
+  known (the true ability), then Shadow Tag, Magnet Pull or Arena Trap (true), then the guess
+  (`trainer_ai.c:1170-1209`). The reads on Roark's paths and the one-scalar guess are 8.4.
+- **Not knowledge.** `IfMoveEffectKnown AI_BATTLER_ATTACKER` and `IfMoveKnown ATTACKER` read
+  the AI's own true moves (`trainer_ai.c:1750-1760`), and `LoadDefenderLastUsedMoveClass`
+  reads the battle's `movePrevByBattler`, not the AI's records (section 6, 7.4).
+- The player's held items are recorded (roark.md 9.3) and never read on Roark's paths.
+
+## 10. Picking among the top scores
+
+Unchanged: roark.md 10 (`trainer_ai.c:315-338`). Slot 0 is always a candidate; slots 1-3 when
+`A` has a move there; the pick is `list[RandNext() % n]`, encoded by `tiebreak = RandNext %
+12` (roark.md 8.4). The per-slot layout computes the same pick from the slot score
+histograms (8.3).
 
 ## 11. Switching with six Pokemon (K3c Task 7)
 
@@ -650,6 +822,15 @@ his own Gible: no line either. The pools are Sandshrew, Flaaffy, Shinx, Vulpix, 
 Meowth, Luvdisc, Wormadam, Rhyhorn, Skitty, Prinplup and Delibird. None has a refused ability
 (Rough Skin, Static, Rivalry, Flame Body, Swift Swim, Limber, Snow Cloak, Rock Head, Cute
 Charm, Torrent, Adaptability), Iron Ball or a refused move.
+
+## 12. Item use
+
+`TrainerAI_ShouldUseItem` (`trainer_ai.c:4056-4199`) runs when `ShouldSwitch` returned FALSE.
+Its loop takes each bag slot's item and skips `ITEM_NONE` (`:4089-4096`). Kaizo Roark's bag is
+empty (section 4), so every slot is `ITEM_NONE`, the result stays FALSE, and the command is
+FIGHT. The engine agrees: `make_state` gives him `trainer_items` all 0 and
+`trainer_item_count` 0, and `policy._use_item` only uses a nonzero item, so `maybe_use_item`
+never uses one, and `ai_refusals` has no item line.
 
 ## 13. Hand-traced decisions (K3c Task 5 and Task 6 fixtures)
 
@@ -900,7 +1081,57 @@ with Reflect on the player's side. At equal speed (`test_exact_equals_loose_at_e
 E1a with the player at Speed 12 (`:1864`), E6a at 28 (`:2070`) and E2c at 15 (`:2650`), each
 with the loose tie read on the slot's path; and E1e (Quick Claw), with no tie read.
 
-## 14. Width and cost, measured (K3c Tasks 3, 6 and 7)
+## 14. Width and cost, measured (K3c Tasks 3, 6, 7 and 8)
+
+### Final, at K3c close (Task 8)
+
+Measured 2026-11-12 on the final code, warm, a fresh cache per run, on the same 20-CPU
+machine (Task 7's `measure7.py`, reusing Task 3's `measure.py` helpers; Task 8 report).
+
+**Widths against both saves' pools** (`tests/kaizo/test_roark_ai_audit.py`: every pool
+candidate at cap 16, its own moves and item, leading the save's party, against each of
+Roark's six as the active at turn 0; 72 decisions per save, 12 candidates x 6 actives):
+
+| Roark's active | `ai_width` | `ai_flat_width` (not used) | loose reads |
+|---|---|---|---|
+| Bonsly | 573 | 4423680 | 11-12 |
+| Lileep | 97 | 552960 | 7-9 |
+| Gible | 61 | 17280 | 6-9 |
+| Corsola | 101 | 552960 | 7 |
+| Shuckle | 149 | 2211840 | 9-11 |
+| Cranidos | 65 | 34560 | 6-9 |
+
+- The values are the same for every candidate and for both saves (`kaizo_save_pre_roark`,
+  `kaizo_save_probe`); the test pins them (`WIDTHS`).
+- No decision is refused. The maximum is 573; the bound for any state is 2093 (8.5);
+  `WIDTH_CAP` is 131072.
+- Every decision has at most 12 loose reads, so all 144 are checked exact against the
+  joint loose enumeration (at most 2^18), each slot's score distribution too.
+
+**Cost** (1000 states of the `kaizo_save_pre_roark` pool, HP varied; bucket 1024):
+
+| per state | Kaizo, 1 device | Kaizo, 20 devices | vanilla, 1 device | vanilla, 20 devices |
+|---|---|---|---|---|
+| `ai_rows` | **215 µs** | **31.2 µs** | 13.9 µs | 13.1 µs |
+| vmapped `policy._distribution` | 265 µs | 271 µs | 10.8 µs | 11.2 µs |
+| one state (bucket 256) | 0.052 s | 0.015 s | 0.005 s | 0.010 s |
+
+**AI share of a depth-1 expansion** of one Kaizo root (27 pairs; the root's distribution:
+Stealth Rock 0.687, Selfdestruct 0.096, Brick Break 0.217):
+
+| | 1 device | 20 devices |
+|---|---|---|
+| Kaizo | 19.1% (0.051 s of 0.266 s) | 9.6% (0.016 s of 0.168 s) |
+| vanilla | 2.5% | 7.7% |
+
+The spec 6 stop condition (above 50%) is not met. These shares are warm. A first solve also
+pays the cold compile and export of each `ai_rows` bucket it uses (up to 7 per device count,
+about 2.4-5 s each, the tables below; Task 3 review m5); later runs load them from the cache
+(`jaxcache`).
+
+The rest of this section is the history, measured as the tasks landed.
+
+### Task 3
 
 Measured 2026-11-11 on one CPU device (20 logical CPUs), warm, with Kaizo Roark's AI still
 refused (Tasks 5-7): a refused row costs what an accepted one does, since the program

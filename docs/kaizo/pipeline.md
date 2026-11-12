@@ -235,14 +235,33 @@ each; "Settling a user call" above says how to enter an answer. The kinds:
   (Route 213 is rain and Idol Catherine #2 fog, by your answers).
 - **Gravity** whose entry cites PKCalc while no sheet row claims it (Champion Cynthia cites
   the sheet row Elite Four Split:298).
-- **Unclassified ROM changes** (Ruling 13): one remains, `unknown` (see "What is refused").
+- **Unclassified ROM changes** (Ruling 13): none since K3c (the last, the Dry Skin AI word, is `modelled`).
 
 ## What is refused
 
-`coverage --game kaizo` exits 2 and lists every reason. For Roark today (K3b2 done,
-2026-11-10) only the K3c lines remain, on both saves at `--cap 16`: the Kaizo AI lines (no
-transcribed policy, `AI_FLAG_RISKY`, the per-move script paths of Roark's moves) and `Kaizo
-ROM: 1 code changes unclassified`. The pool section reads `Support: EXACT`, `Missing: none`.
+`coverage --game kaizo` exits 2 and lists every reason. For Roark (K3c done, 2026-11-12)
+nothing is refused: `coverage --game kaizo --trainer roark --cap 16` exits 0 on both saves
+(`kaizo_save_pre_roark`, `kaizo_save_probe`), with `Support: EXACT`, `Missing: none` and
+`Sampling only: none` for the fight and for the pool of 12 Pokemon.
+
+K3c (done) transcribes the Kaizo trainer AI (`docs/ai/kaizo_roark.md`): a per-game policy
+(the vanilla script plus the Dry Skin word, classified `modelled`, so no ROM change is
+unclassified), `AI_FLAG_RISKY`, the BASIC, EVAL_ATTACK, EXPERT and RISKY paths of all of
+Roark's moves, the AI's reads of the K3b2 mechanics, six-Pokemon switching, and a per-slot
+`AiOutcome` layout whose width is at most 2093 (573 measured) under `WIDTH_CAP`. Every pool
+candidate of both saves against each of Roark's six is accepted by the AI and its exact
+distribution equals the loose oracle (`tests/kaizo/test_roark_ai_audit.py`).
+
+What the Kaizo AI still refuses (reached by no Roark fight; a later split's milestone):
+- a Kaizo trainer whose `ai_flags` is not exactly BASIC, EVAL_ATTACK, EXPERT and RISKY
+  (`0b10111`), including every TagStrategy (flag 7) trainer (plan K3c Ruling 10);
+- an opponent move whose battle effect has no transcribed path, or whose Expert label is not
+  transcribed (`KAIZO.transcribed`, `KAIZO.expert_transcribed`);
+- an opponent move the AI's damage estimate takes by case or by alternative power (Triple
+  Axel and Fury Cutter on effect 88, Psywave's and Magnitude's slots, Return, Frustration) or
+  whose type it takes by case (Natural Gift, Judgment, Hidden Power, Weather Ball);
+- the opponent's Roar, Nature Power and Camouflage, and a Ghost-type Curse user;
+- the voluntary-switch refusals of `ai.switching` (kaizo_roark.md 11.3).
 
 K3b1 (done) models, in both engines: obedience (Kaizo: every Pokemon always obeys, no RNG
 draw), permanent sandstorm with the end-of-turn field pass and Cloud Nine, Sand Veil, Snow
@@ -271,9 +290,8 @@ whose maps give more than one terrain, or none, has an unknown terrain, and cove
 Nature Power, Camouflage and Secret Power in that fight: 41 of the 46 Kaizo trainers that
 know one of them, until a terrain is settled (a K3 end decision).
 
-The remaining `unknown` ROM change is overlay14 0x022249CC-0x022249CD (the AI script's
-second Levitate compare in `Basic_CheckForImmunity` tests Dry Skin 87; K3c). Still to come:
-K3c, the Kaizo trainer AI (policy, `AI_FLAG_RISKY`, script paths, the Dry Skin compare, the
-AI's reads of the K3b2 mechanics); K3d, the golden trace and acceptance. Known blind spot: Kaizo field-script command
+The overlay14 change 0x022249CC-0x022249CD (the AI script's second Levitate compare in
+`Basic_CheckForImmunity` tests Dry Skin 87) is `modelled` since K3c. Still to come: K3d, the
+golden trace and acceptance. Known blind spot: Kaizo field-script command
 0x3F (map headers 257 and 321, common script 9019) sets a party status that persists into
 fights on any map; coverage sees it only if the save was taken after that script.

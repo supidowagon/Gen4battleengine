@@ -270,6 +270,21 @@ without a decoded note is not allowed.
 
 ## 6. The Kaizo trainer AI
 
+**Status (K3c done, 2026-11-12).** Landed (`docs/ai/kaizo_roark.md`, every rule cited): the
+per-game policy (`Tables.ai_policy`, `AiLayout`); the one changed AI word (the Dry Skin
+compare, `modelled`) on an otherwise vanilla script and C code; BASIC, EVAL_ATTACK, EXPERT
+and RISKY for all of Roark's moves, keyed by battle effect; the new script commands with the
+AI's reads of the K3b2 mechanics (Quick Claw in the speed compare; infatuation, the AI's
+speed rank and Protect chains are not reached, plan K3c Rulings 4, 5, 9); the id lists checked
+per game; six-Pokemon switching (44 switch sites); and the per-game outcome layout: per-slot
+script-roll sites, factored exactly, width at most 2093 (573 measured on the pools) against
+`WIDTH_CAP` 131072, with `MAX_ENUMERATED` and the vanilla layout unchanged. No AI change of
+the spreadsheet touches Roark's fight (Ruling 2). `coverage --trainer roark --cap 16` exits 0
+on both saves: fight and pool `EXACT`, nothing missing, nothing sampled. Merged draws that
+still consume RNG (the speed-compare tie, the four damage rolls, the absorb-party `% 3`, the
+repeated ability coin flips) are listed for K3d in kaizo_roark.md 8.7. Kaizo trainers with
+other AI flag sets stay refused until their split's milestone (Ruling 10).
+
 - **A per-game policy.** The Kaizo policy reuses the vanilla script transcription where
   the bytes are unchanged and replaces exactly what the overlay14 diff changed. The
   builder first confirms where the AI script bytes live in the ROM and whether Kaizo
