@@ -19,7 +19,9 @@ probability. Ranges and encodings are those of ``docs/ai/roark.md`` section 8:
   ``RandNext % n`` for n = 1..4 tied slots (``trainer_ai.c:338``; 8.4).
 * ``switch_stop``: the first of the voluntary-switch draws of
   ``TrainerAI_ShouldSwitch`` (``trainer_ai.c:3894``; roark.md 8.5 and 11.1) that
-  stops the check, 0..``SWITCH_SITES - 1``, or ``SWITCH_NONE`` (9) when none does. A
+  stops the check, 0..``sites - 1``, or ``sites`` when none does, where ``sites`` is the
+  layout's ``switch_sites``: ``SWITCH_SITES`` (9, ``SWITCH_NONE`` = 9 none) for the flat
+  layout, 44 for Kaizo's party of six (docs/ai/kaizo_roark.md 11). A
   keep draw that stops means "no switch", a party-pass draw that stops means "switch
   to that party member". Site i stops with ``prod_{h<i} (1 - p_h) * p_i``, where p
   depends on the site's ``SwitchSite`` kind, so one categorical is exact.
@@ -316,7 +318,9 @@ class AiOutcome(NamedTuple):
     # 1 = the site's jump is taken
     script_rolls: jnp.ndarray
     tiebreak: jnp.ndarray  # int8[], RandNext % 12
-    switch_stop: jnp.ndarray  # int8[], first stopping switch draw 0-8, 9 = none, -1 refused
+    # int8[]: the first stopping switch draw, 0..sites - 1; sites (layout.switch_sites: 9
+    # vanilla, 44 Kaizo) = none; -1 refused
+    switch_stop: jnp.ndarray
 
 
 def _site_table(moves) -> tuple[jnp.ndarray, jnp.ndarray]:
@@ -451,23 +455,24 @@ def script_roll_probs(state: BattleState) -> tuple[np.ndarray, jnp.ndarray]:
 
 
 def switch_stop_probs(switch_sites) -> jnp.ndarray:
-    """``float32[SWITCH_SITES + 1]``: the probability that site i is the first to stop,
+    """``float32[sites + 1]``: over the ``switch_sites`` kinds (``int8[sites]``), the
+    probability that site i is the first to stop,
     ``prod_{h<i} (1 - p_h) * p_i``, then (last entry) that none stops; all NaN for a
     refused layout."""
     kind = jnp.asarray(switch_sites, _I32)
     p = _SWITCH_P[kind]
-    reach = jnp.cumprod(jnp.concatenate([jnp.ones(1, _F32), 1 - p]))  # [SWITCH_SITES + 1]
+    reach = jnp.cumprod(jnp.concatenate([jnp.ones(1, _F32), 1 - p]))  # [sites + 1]
     probs = jnp.concatenate([reach[:-1] * p, reach[-1:]])
     return jnp.where(jnp.any(kind == SwitchSite.REFUSED), jnp.nan, probs)
 
 
 def _first_stop(draws, switch_sites) -> jnp.ndarray:
-    """The first site whose u16 ``draws[i]`` stops the check, else ``SWITCH_NONE``;
-    ``SWITCH_REFUSED`` for a refused layout."""
+    """The first site whose u16 ``draws[i]`` stops the check, else the number of sites
+    (``SWITCH_NONE`` for the flat layout); ``SWITCH_REFUSED`` for a refused layout."""
     kind = jnp.asarray(switch_sites, _I32)
     zero = draws % _SWITCH_MOD[kind] == 0
     stops = (kind != SwitchSite.NONE) & (zero == _SWITCH_STOPS_ON_ZERO[kind])
-    first = jnp.where(jnp.any(stops), jnp.argmax(stops), SWITCH_NONE)
+    first = jnp.where(jnp.any(stops), jnp.argmax(stops), kind.shape[0])
     return jnp.where(jnp.any(kind == SwitchSite.REFUSED), SWITCH_REFUSED, first)
 
 
@@ -475,17 +480,18 @@ def sample_ai_outcome(
     key, tables: Tables, state: BattleState, layout: AiLayout | None = None
 ) -> AiOutcome:
     """Draw every field from its decomp probability for this state (the switch draws
-    over ``switch_sites(tables, state)``). ``layout``: a per-slot layout draws
-    ``script_rolls`` as ``int8[MOVES, layout.slot_sites]`` (``slot_roll_thresholds``); the
-    default, and any flat layout, is the vanilla layout."""
-    layout_sites = switch_sites(tables, state)
+    over ``switch_sites(tables, state, layout.switch_sites)``). ``layout``: a per-slot layout
+    draws ``script_rolls`` as ``int8[MOVES, layout.slot_sites]`` (``slot_roll_thresholds``);
+    the default, and any flat layout, is the vanilla layout."""
+    sites = SWITCH_SITES if layout is None else layout.switch_sites
+    layout_sites = switch_sites(tables, state, sites)
     k = jax.random.split(key, 4)
     if layout is not None and layout.per_slot_sites:
         shape, thresholds = (MOVES, layout.slot_sites), slot_roll_thresholds(tables, state, layout)
     else:
         shape, thresholds = (MAX_SCRIPT_ROLLS,), script_roll_thresholds(state)
     rolls = jax.random.randint(k[1], shape, 0, 256, dtype=_I32)
-    draws = jax.random.randint(k[3], (SWITCH_SITES,), 0, 65536, dtype=_I32)
+    draws = jax.random.randint(k[3], (sites,), 0, 65536, dtype=_I32)
     return AiOutcome(
         sim_roll=jnp.full((MOVES,), SIM_ROLL_MAX, _I8),
         ability_guess=jax.random.randint(k[0], (), 0, 2, dtype=_I32).astype(_I8),
@@ -520,8 +526,8 @@ def enumerate_ai_outcomes(
 
     A per-slot ``layout`` (a test oracle, concrete inputs only): every combination of the
     used sites of the four slots, ``K = ABILITY_GUESSES * 2**sum(slot_site_counts) *
-    (SWITCH_SITES + 1) * TIEBREAK_MOD``; ``ValueError`` when the sites number more than
-    ``MAX_JOINT_SITES``."""
+    (layout.switch_sites + 1) * TIEBREAK_MOD``; ``ValueError`` when the sites number more
+    than ``MAX_JOINT_SITES``."""
     if layout is None or not layout.per_slot_sites:
         return _enumerate_flat(tables, state)
     thresholds = np.asarray(slot_roll_thresholds(tables, state, layout))
@@ -536,7 +542,7 @@ def enumerate_ai_outcomes(
         for a in np.meshgrid(
             np.arange(ABILITY_GUESSES),
             np.arange(2 ** len(used)),
-            np.arange(_SWITCH_VALUES),
+            np.arange(layout.switch_sites + 1),
             np.arange(_TIEBREAK_VALUES),
             indexing="ij",
         )
@@ -546,7 +552,9 @@ def enumerate_ai_outcomes(
     rolls[:, used[:, 0], used[:, 1]] = on
     p_jump = thresholds[used[:, 0], used[:, 1]].astype(np.float64) / 256
     p_rolls = np.prod(np.where(on == 1, p_jump, 1 - p_jump), axis=1)
-    p_switch = np.asarray(switch_stop_probs(switch_sites(tables, state)), np.float64)
+    p_switch = np.asarray(
+        switch_stop_probs(switch_sites(tables, state, layout.switch_sites)), np.float64
+    )
     probs = p_rolls * p_switch[switch] * TIEBREAK_P[tiebreak] / ABILITY_GUESSES
     outs = AiOutcome(
         sim_roll=jnp.full((len(bits), MOVES), SIM_ROLL_MAX, _I8),

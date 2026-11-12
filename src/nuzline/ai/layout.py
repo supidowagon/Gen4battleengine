@@ -14,7 +14,9 @@ The fields:
 * ``max_script_rolls``: the flat ``AiOutcome.script_rolls`` width (vanilla).
 * ``slot_sites``: the script-roll columns of one move slot (per-slot layouts), the most
   sites any transcribed effect reaches.
-* ``switch_sites``: the voluntary-switch draw sites (``switching.SWITCH_SITES``).
+* ``switch_sites``: the voluntary-switch draw sites ``AiOutcome.switch_stop`` encodes:
+  ``switching.SWITCH_SITES`` (9) for vanilla Roark's three Pokemon,
+  ``switching.KAIZO_SWITCH_SITES`` (44, every candidate draw of a party of six) for Kaizo.
 * ``risky``: the policy runs ``AI_FLAG_RISKY`` (``Risky_Main``, script.s:6521-6534) after
   EXPERT (``policy._flags``). A layout that transcribes an effect of ``Risky_RiskyEffects``
   (``commands.RISKY_EFFECTS``) must run it and give the effect the ``:6530`` site (checked
@@ -53,7 +55,7 @@ from nuzline.ai.outcome import (
     MAX_SCRIPT_ROLLS,
     SITE_N,
 )
-from nuzline.ai.switching import SWITCH_SITES
+from nuzline.ai.switching import KAIZO_SWITCH_SITES, SWITCH_SITES
 from nuzline.data.game_constants import AI_POLICIES
 from nuzline.data.tables import Tables
 
@@ -95,7 +97,9 @@ KAIZO = AiLayout(
     per_slot_sites=True,
     max_script_rolls=MAX_SCRIPT_ROLLS,  # unused: the per-slot layout is not flat
     slot_sites=KAIZO_SLOT_SITES,
-    switch_sites=SWITCH_SITES,
+    # 4 keep draws + 2 passes x 5 bench Pokemon x 4 moves (trainer_ai.c:3576-3592,
+    # :3756-3804; docs/ai/kaizo_roark.md 11): a party of six never has more.
+    switch_sites=KAIZO_SWITCH_SITES,
     risky=True,
     water2_ability=87,  # ABILITY_DRY_SKIN
     transcribed=frozenset(EFFECT_SITE_LINES),

@@ -66,7 +66,6 @@ from nuzline.ai.outcome import (
     MAX_SCRIPT_ROLLS,
     SIM_ROLL_MAX,
     SWITCH_NONE,
-    SWITCH_SITES,
     TIEBREAK_MOD,
     TIEBREAK_P,
     AiOutcome,
@@ -1047,7 +1046,7 @@ def _all_refusals(tables: Tables, state: BattleState, layout: AiLayout, names=No
     return (
         _scoring_refusals(tables, state, layout, names)
         + _item_refusals(tables, state, layout, names)
-        + switching_refusals(tables, state)
+        + switching_refusals(tables, state, layout.switch_sites)
     )
 
 
@@ -1138,11 +1137,14 @@ def ai_scores(
     return _scores_jit(tables, state, ai_outcome, layout)
 
 
-def maybe_switch(tables: Tables, state: BattleState, ai_outcome: AiOutcome) -> jnp.ndarray:
+def maybe_switch(
+    tables: Tables, state: BattleState, ai_outcome: AiOutcome, layout: AiLayout | None = None
+) -> jnp.ndarray:
     """``int32``: ``TrainerAI_ShouldSwitch`` (trainer_ai.c:3894; roark.md 11.1) under
     ``ai_outcome.switch_stop``: the switch action ``4 + j``, or ``NO_SWITCH``
-    (``switching.switch_action``)."""
-    return switch_action(tables, state, ai_outcome.switch_stop)
+    (``switching.switch_action`` over the layout's ``switch_sites``)."""
+    layout = _layout(tables, layout)
+    return switch_action(tables, state, ai_outcome.switch_stop, layout.switch_sites)
 
 
 def _use_item(tables: Tables, state: BattleState) -> jnp.ndarray:
@@ -1190,7 +1192,7 @@ def _pick(tables: Tables, state: BattleState, scores, tiebreak) -> jnp.ndarray:
 def _policy(
     tables: Tables, state: BattleState, ai_outcome: AiOutcome, layout: AiLayout = VANILLA
 ) -> jnp.ndarray:
-    switch = maybe_switch(tables, state, ai_outcome)
+    switch = maybe_switch(tables, state, ai_outcome, layout)
     item = _use_item(tables, state)
     scores = _scores(tables, state, ai_outcome, layout)
     move = _pick(tables, state, scores, ai_outcome.tiebreak)
@@ -1380,10 +1382,12 @@ def _distribution(tables: Tables, state: BattleState, layout: AiLayout = VANILLA
     outcomes of ``ai_action_distribution_enumerated`` reduce to 10 switch stops and 32
     scorings (a per-slot layout: ``_slot_move_distribution``). NaN exactly where the
     enumeration gives NaN: a refused state, or a refused switch layout (``switch_action``
-    gives ``REFUSED_ACTION`` for any stop)."""
-    stops = jnp.arange(SWITCH_SITES + 1, dtype=jnp.int8)
-    p_stop = switch_stop_probs(switch_sites(tables, state))  # [SWITCH_SITES + 1]
-    switch = jax.vmap(lambda stop: switch_action(tables, state, stop))(stops)
+    gives ``REFUSED_ACTION`` for any stop). The switch stops are the layout's
+    ``switch_sites + 1`` (10 vanilla, 45 Kaizo)."""
+    sites = layout.switch_sites
+    stops = jnp.arange(sites + 1, dtype=jnp.int8)
+    p_stop = switch_stop_probs(switch_sites(tables, state, sites))  # [sites + 1]
+    switch = jax.vmap(lambda stop: switch_action(tables, state, stop, sites))(stops)
     switches = switch >= 0
     dist = jnp.zeros(NUM_OPP_ACTIONS, jnp.float32)
     dist = dist.at[jnp.where(switches, switch, 0)].add(jnp.where(switches, p_stop, 0))
@@ -1407,9 +1411,9 @@ def ai_width(tables: Tables, state: BattleState) -> int:
     this (concrete) state: the switch stops plus, per guess, the script-roll patterns of the
     scoring. Flat layout: ``SWITCH_SITES + 1 + ABILITY_GUESSES * 2**MAX_SCRIPT_ROLLS`` (42).
     Per-slot layout: ``switch_sites + 1 + ABILITY_GUESSES * sum_slots 2**(sites of the
-    slot)``, the slots being factored. The program itself always evaluates
-    ``ABILITY_GUESSES * 2**slot_sites`` scorings (512 for Kaizo), each giving every slot's
-    score, whatever the sites (``_slot_move_distribution``); ``_check_width`` bounds both
+    slot)``, the slots being factored (45 switch stops for Kaizo). The program itself
+    always evaluates ``ABILITY_GUESSES * 2**slot_sites`` scorings (512 for Kaizo), each
+    giving every slot's score, whatever the sites (``_slot_move_distribution``); ``_check_width`` bounds both
     against ``WIDTH_CAP`` for every state (plan K3c Ruling 12)."""
     layout = layout_of(tables)
     stops = layout.switch_sites + 1
@@ -1624,13 +1628,14 @@ def ai_action_distribution_loose(
     refusals (``_refused``) and the voluntary-switch ones (``switching_refusals``, where
     ``switch_sites`` would raise ``UnsupportedSwitching``). Concrete only."""
     layout = _layout(tables, layout)
-    if switching_refusals(tables, state):
+    sites = layout.switch_sites
+    if switching_refusals(tables, state, sites):
         return np.full(NUM_OPP_ACTIONS, np.nan)
-    stops = jnp.arange(SWITCH_SITES + 1, dtype=jnp.int8)
-    switch = np.asarray(jax.vmap(lambda stop: switch_action(tables, state, stop))(stops))
+    stops = jnp.arange(sites + 1, dtype=jnp.int8)
+    switch = np.asarray(jax.vmap(lambda stop: switch_action(tables, state, stop, sites))(stops))
     if bool(_refused(tables, state, layout).any) or np.any(switch == REFUSED_ACTION):
         return np.full(NUM_OPP_ACTIONS, np.nan)
-    p_stop = np.asarray(switch_stop_probs(switch_sites(tables, state)), np.float64)
+    p_stop = np.asarray(switch_stop_probs(switch_sites(tables, state, sites)), np.float64)
     dist = np.zeros(NUM_OPP_ACTIONS)
     for action, p in zip(switch, p_stop, strict=True):
         if action >= 0:

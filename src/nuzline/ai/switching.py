@@ -10,6 +10,20 @@ categorical (``nuzline.ai.outcome``). ``switch_action`` maps a stop to the actio
 means. Both come from the same layout, so the sampler, the enumerator and Task 3's
 ``maybe_switch`` cannot disagree on it.
 
+How many sites the outcome encodes is the AI layout's ``switch_sites`` (``ai.layout``),
+passed to the functions here as ``sites`` (static): ``SWITCH_SITES`` (9) for vanilla
+Roark's three Pokemon, ``KAIZO_SWITCH_SITES`` (44) for a party of six. The candidate draws
+are the same for both: the keep draw of each of the active's four move slots
+(``AI_HasSuperEffectiveMove``, trainer_ai.c:3576-3592, the draw at :3588), then for each
+pass one draw per (bench Pokemon, move slot) (``AI_HasPartyMemberWithSuperEffectiveMove``,
+:3756-3804, the draw at :3796). The bench excludes the active slot
+(``selectedPartySlot``) and ``aiSwitchedPartySlot`` (:3762-3765), which is 6 at every
+``TrainerAI_ShouldSwitch`` call: ``BattleContext_Init`` sets it (battle_lib.c:2015) after
+every action (battle_controller_player.c:3998) and at the turn's end
+(battle_controller_player.c:1855), and inside the check only a branch that returns TRUE
+writes it (:3797). With five bench Pokemon that is ``4 + 2 * 5 * 4 = 44`` candidates, so a
+party of six never has more sites than ``KAIZO_SWITCH_SITES``.
+
 The gates in steps 1, 2 and 9 are implemented from the state: trapped (``trapped >
 0``), Shadow Tag or Arena Trap on ``D``, Magnet Pull on ``D`` with ``A`` Steel type, no
 other living party member, and positive stages summing to 4 or more (which ends the
@@ -36,7 +50,7 @@ Refused, never approximated (``switching_refusals`` names each one):
   Ball, Natural Gift and Judgment (``TrainerAI_MoveType``, :3127), and Hidden Power
   on the opponent's side only (the player's is read from its IVs: ``move_type_of``);
 * a state where ``AI_OnlyIneffectiveMoves`` (step 5, :3361) applies;
-* a layout with more than ``SWITCH_SITES`` sites.
+* a layout with more than ``sites`` sites (never under ``KAIZO_SWITCH_SITES``).
 
 Called on concrete arrays, ``switch_sites`` and ``switch_action`` raise
 ``UnsupportedSwitching`` for these. Traced (jit, vmap) they cannot raise, so every
@@ -48,6 +62,7 @@ coverage registry (Task 5) runs ``switching_refusals`` on the fight first.
 from __future__ import annotations
 
 from enum import IntEnum
+from functools import partial
 from typing import NamedTuple
 
 import jax
@@ -60,7 +75,10 @@ from nuzline.engine.damage import divide, move_type_of
 from nuzline.engine.state import MOVES, SLOTS, BattleState
 
 SWITCH_SITES = 9  # roark.md 11.1: 1 keep draw + 4 + 4 party-pass draws for Roark
-SWITCH_NONE = SWITCH_SITES  # switch_stop when no draw stops the check
+SWITCH_NONE = SWITCH_SITES  # switch_stop when no draw stops the check (vanilla layout)
+# Every candidate draw of a party of six: 4 keep draws, and 5 bench Pokemon x 4 moves in each
+# of the two passes (module docstring). A layout's switch_stop is ``sites`` when none stops.
+KAIZO_SWITCH_SITES = MOVES + 2 * (SLOTS - 1) * MOVES
 SWITCH_REFUSED = -1  # switch_stop of a refused layout (traced only)
 NO_SWITCH = -1  # switch_action: the AI does not switch
 REFUSED_ACTION = -2  # switch_action of a refused layout (traced only)
@@ -262,8 +280,8 @@ def calc_effectiveness_flags(
 
 
 class _Layout(NamedTuple):
-    kinds: jnp.ndarray  # int8[SWITCH_SITES]
-    targets: jnp.ndarray  # int8[SWITCH_SITES], party slot of a pass site, else -1
+    kinds: jnp.ndarray  # int8[sites]
+    targets: jnp.ndarray  # int8[sites], party slot of a pass site, else -1
     count: jnp.ndarray  # int32, sites found
     only_ineffective: jnp.ndarray  # bool, AI_OnlyIneffectiveMoves applies
     ability_refused: jnp.ndarray  # bool[2, SLOTS]
@@ -272,8 +290,8 @@ class _Layout(NamedTuple):
     refused: jnp.ndarray  # bool
 
 
-@jax.jit
-def _layout(tables: Tables, state: BattleState) -> _Layout:
+@partial(jax.jit, static_argnames="sites")
+def _layout(tables: Tables, state: BattleState, sites: int) -> _Layout:
     a = state.active[1].astype(_I32)
     d = state.active[0].astype(_I32)
     gravity = state.gravity
@@ -332,9 +350,9 @@ def _layout(tables: Tables, state: BattleState) -> _Layout:
     exists = jnp.concatenate([keep, *passes]) & ~gate  # [_CANDIDATES]
 
     position = jnp.cumsum(exists.astype(_I32)) - 1
-    target = jnp.where(exists, position, SWITCH_SITES)  # out of range: dropped
-    kinds = jnp.zeros(SWITCH_SITES, _I8).at[target].set(_CANDIDATE_KINDS, mode="drop")
-    targets = jnp.full(SWITCH_SITES, -1, _I8).at[target].set(_CANDIDATE_TARGETS, mode="drop")
+    target = jnp.where(exists, position, sites)  # out of range: dropped
+    kinds = jnp.zeros(sites, _I8).at[target].set(_CANDIDATE_KINDS, mode="drop")
+    targets = jnp.full(sites, -1, _I8).at[target].set(_CANDIDATE_TARGETS, mode="drop")
     count = jnp.sum(exists.astype(_I32))
 
     side = jnp.arange(2)[:, None]
@@ -349,7 +367,7 @@ def _layout(tables: Tables, state: BattleState) -> _Layout:
     )
     move_refused = move_refused & ~player_hidden_power
     refused = (
-        (count > SWITCH_SITES)
+        (count > sites)
         | only_ineffective
         | jnp.any(ability_refused)
         | jnp.any(item_refused)
@@ -368,7 +386,7 @@ def _layout(tables: Tables, state: BattleState) -> _Layout:
     )
 
 
-def _refusals(lay: _Layout, state: BattleState, tables: Tables) -> list[str]:
+def _refusals(lay: _Layout, state: BattleState, tables: Tables, sites: int) -> list[str]:
     out: list[str] = []
     species = np.asarray(state.species).astype(np.int64)
     form = np.asarray(state.form).astype(np.int64)
@@ -395,43 +413,47 @@ def _refusals(lay: _Layout, state: BattleState, tables: Tables) -> list[str]:
             "switching: AI_OnlyIneffectiveMoves (trainer_ai.c:3361) applies to the AI's "
             "active Pokemon and is not implemented"
         )
-    if int(lay.count) > SWITCH_SITES:
+    if int(lay.count) > sites:
         out.append(
             f"switching: {int(lay.count)} voluntary-switch draws exceed the "
-            f"{SWITCH_SITES} sites AiOutcome.switch_stop encodes"
+            f"{sites} sites AiOutcome.switch_stop encodes"
         )
     return out
 
 
-def switching_refusals(tables: Tables, state: BattleState) -> list[str]:
-    """Every reason the voluntary-switch layout of this (concrete) state is refused,
-    one human-readable line each; empty when it is supported."""
-    return _refusals(_layout(tables, state), state, tables)
+def switching_refusals(tables: Tables, state: BattleState, sites: int = SWITCH_SITES) -> list[str]:
+    """Every reason the voluntary-switch layout of this (concrete) state is refused under
+    a layout of ``sites`` sites, one human-readable line each; empty when it is supported."""
+    return _refusals(_layout(tables, state, sites), state, tables, sites)
 
 
-def _checked_layout(tables: Tables, state: BattleState) -> _Layout:
-    lay = _layout(tables, state)
+def _checked_layout(tables: Tables, state: BattleState, sites: int) -> _Layout:
+    lay = _layout(tables, state, sites)
     if not isinstance(lay.refused, jax.core.Tracer) and bool(lay.refused):
-        raise UnsupportedSwitching("; ".join(_refusals(lay, state, tables)))
+        raise UnsupportedSwitching("; ".join(_refusals(lay, state, tables, sites)))
     return lay
 
 
-def switch_sites(tables: Tables, state: BattleState) -> jnp.ndarray:
-    """``int8[SWITCH_SITES]``: the ``SwitchSite`` kind of each result-changing draw of
+def switch_sites(tables: Tables, state: BattleState, sites: int = SWITCH_SITES) -> jnp.ndarray:
+    """``int8[sites]``: the ``SwitchSite`` kind of each result-changing draw of
     ``TrainerAI_ShouldSwitch`` for the opponent's active Pokemon, in the decomp's order
-    (``SwitchSite.NONE`` for unused entries). Raises ``UnsupportedSwitching`` on a
-    refused layout when not traced (module docstring)."""
-    return _checked_layout(tables, state).kinds
+    (``SwitchSite.NONE`` for unused entries), under a layout of ``sites`` sites (the AI
+    layout's ``switch_sites``; the default is the vanilla 9). Raises
+    ``UnsupportedSwitching`` on a refused layout when not traced (module docstring)."""
+    return _checked_layout(tables, state, sites).kinds
 
 
-def switch_action(tables: Tables, state: BattleState, stop) -> jnp.ndarray:
-    """``int32``: what ``AiOutcome.switch_stop = stop`` means for this state: the switch
-    action ``4 + j`` when a party-pass site for slot j stops, ``NO_SWITCH`` for a keep
-    draw or no stop, ``REFUSED_ACTION`` for a refused layout."""
-    lay = _checked_layout(tables, state)
+def switch_action(
+    tables: Tables, state: BattleState, stop, sites: int = SWITCH_SITES
+) -> jnp.ndarray:
+    """``int32``: what ``AiOutcome.switch_stop = stop`` means for this state under a
+    layout of ``sites`` sites: the switch action ``4 + j`` when a party-pass site for slot
+    j stops, ``NO_SWITCH`` for a keep draw or for ``stop = sites`` (none stops),
+    ``REFUSED_ACTION`` for a refused layout."""
+    lay = _checked_layout(tables, state, sites)
     stop = jnp.asarray(stop, _I32)
-    in_range = (stop >= 0) & (stop < SWITCH_SITES)
-    index = jnp.clip(stop, 0, SWITCH_SITES - 1)
+    in_range = (stop >= 0) & (stop < sites)
+    index = jnp.clip(stop, 0, sites - 1)
     kind = lay.kinds[index]
     is_pass = in_range & (
         (kind == SwitchSite.PASS_INEFFECTIVE) | (kind == SwitchSite.PASS_NOT_VERY_EFFECTIVE)

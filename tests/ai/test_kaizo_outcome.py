@@ -372,11 +372,12 @@ def test_kaizo_width_under_cap(kaizo_tables, kaizo_roark_party):
     for j in range(len(party)):
         s = make_state(t, [party[2]], [party[j], *(m for k, m in enumerate(party) if k != j)])
         width = policy.ai_width(t, s)
-        assert 10 + 2 * MOVES <= width <= WIDTH_CAP, j
+        stops = KAIZO.switch_sites + 1  # 45: the six-party switch stops (K3c Task 7)
+        assert stops + 2 * MOVES <= width <= WIDTH_CAP, j
         counts = np.asarray(slot_roll_thresholds(t, s, KAIZO) > 0).sum(axis=1)
-        assert width == 10 + 2 * int(np.sum(2**counts))
-        assert policy.ai_flat_width(t, s) == 2 * 2 ** int(counts.sum()) * 12 * 10
-    assert 10 + 2 * MOVES * 2**KAIZO.slot_sites <= WIDTH_CAP
+        assert width == stops + 2 * int(np.sum(2**counts))
+        assert policy.ai_flat_width(t, s) == 2 * 2 ** int(counts.sum()) * 12 * stops
+    assert KAIZO.switch_sites + 1 + 2 * MOVES * 2**KAIZO.slot_sites <= WIDTH_CAP
 
 
 # --- Sampling ------------------------------------------------------------------------------

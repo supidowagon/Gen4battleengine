@@ -431,8 +431,8 @@ out (`nuzline.ai.outcome`; `AiLayout.per_slot_sites`).
   EVAL_ATTACK, EXPERT, then RISKY, `trainer_ai.c:297-310`; then line order). 1 means the
   jump is taken.
 - `tiebreak`: `RandNext % 12`, as roark.md 8.4.
-- `switch_stop`: as roark.md 8.5, over `KAIZO.switch_sites` (K3c Task 7 sets them for the
-  six-Pokemon party).
+- `switch_stop`: as roark.md 8.5, over `KAIZO.switch_sites` = 44 sites, every switch draw
+  of a party of six (section 11); 44 means no site stops.
 
 **8.2 The site table, keyed by battle effect.** A move reaches a site through
 `IfCurrentMoveEffectEqualTo` (`trainer_ai.c:1441`), so the table is keyed by the move's
@@ -514,9 +514,9 @@ read a later task adds.
 
 **8.5 Width** (plan K3c Ruling 12). `policy.ai_width` counts the combinations the factored
 distribution merges: the switch stops plus, per guess, `sum_slots 2^(sites of the slot)`.
-For Kaizo Roark's six it is at most 10 + 2 x 4 x 2^8 = 2058 for any state (checked at
+For Kaizo Roark's six it is at most 45 + 2 x 4 x 2^8 = 2093 for any state (checked at
 import, `policy._check_width`), against `WIDTH_CAP` 131072. `policy.ai_flat_width` reports
-the flat product, `2 x 2^(sum of sites) x 12 x 10`, which is not used. Section 14 has the
+the flat product, `2 x 2^(sum of sites) x 12 x 45`, which is not used. Section 14 has the
 measured numbers.
 
 **8.6 The loose oracle** (tests only; `policy.ai_action_distribution_loose`). Every
@@ -549,6 +549,107 @@ player's Quick Claw (no tie read).
 reached), and the speed compare's tie draw where an `IfSpeedCompareEqualTo` meets equal
 speeds (no `AiOutcome` field, Ruling 3; K3d's trace replay needs the count). Within a slot,
 EXPERT's draws are those of 5.3 in line order of the path taken.
+
+## 11. Switching with six Pokemon (K3c Task 7)
+
+Kaizo runs `TrainerAI_ShouldSwitch` (`trainer_ai.c:3894-3987`) and `BattleAI_PostKOSwitchIn`
+(`battle_lib.c:7923-8089`) unchanged. `docs/kaizo/rom_diff.md` decodes every change to them
+and their helpers as relocated calls: `TrainerAI_ShouldSwitch` (:356), `AI_OnlyIneffectiveMoves`,
+`AI_HasSuperEffectiveMove`, `AI_HasAbsorbAbilityInParty` and
+`AI_HasPartyMemberWithSuperEffectiveMove` (:351-354), `BattleAI_PostKOSwitchIn` (:373),
+`BattleContext_Init` (:377), `BattleSystem_ApplyTypeChart` (:597) and
+`BattleSystem_CalcEffectiveness` (:601). The rules are roark.md 11.1 and 11.2. What changes is the
+party: Kaizo Roark has six Pokemon, so five can be on the bench.
+
+### 11.1 The switch sites (`KAIZO.switch_sites` = 44)
+
+The draws that can change the result are those of roark.md 11.1:
+
+- **Keep draws.** `AI_HasSuperEffectiveMove(..., FALSE)` (called at `:3964`) loops over the
+  active's four move slots (`:3576-3592`). Each slot whose move is super effective against the
+  player's active (`BattleSystem_ApplyTypeChart` flags, `:3582`) reads `RandNext() % 10 != 0`
+  (`:3588`); a nonzero residue stops the check with "no switch". At most 4.
+- **Party passes.** `AI_HasPartyMemberWithSuperEffectiveMove` (`:3727-3807`) is called with
+  `MOVE_STATUS_INEFFECTIVE, 2` (`:3975`) and then `MOVE_STATUS_NOT_VERY_EFFECTIVE, 3`
+  (`:3981`). Each loops over the party in order (`:3756-3804`). For each bench Pokemon that
+  `moveHit` meets with the pass's bit, each of its four moves that is super effective against
+  the player (`BattleSystem_CalcEffectiveness`, any power) reads `RandNext() % rand == 0`
+  (`:3796`); a zero residue stops the check with "switch to this Pokemon" (`:3797`). At most
+  5 bench Pokemon x 4 moves per pass.
+
+So `KAIZO.switch_sites = 4 + 2 x 5 x 4 = 44` (`switching.KAIZO_SWITCH_SITES`), and vanilla
+keeps `SWITCH_SITES` = 9 (roark.md 11.1). One Pokemon can be in both passes: the two bits
+are not exclusive. `UpateMoveStatusForTypeMul` (`battle_lib.c:2781`) sets INEFFECTIVE on an
+immune chart row and then NOT_VERY_EFFECTIVE on a later resisted row, so Ground against
+Flying/Bug has both. `tests/ai/test_kaizo_switching.py test_six_bench_layout_fits` builds that
+case: the active and all five bench Pokemon with four super-effective Rock moves, Earthquake
+as `moveHit`, the bench Flying/Bug. It has exactly 44 sites, no refusal, and the stop
+probabilities `prod_{h<i}(1 - p_h) * p_i`, with p counted over the u16 residues.
+
+**The bench is every living non-active slot.** The pass skips the active
+(`selectedPartySlot`) and `aiSwitchedPartySlot` (`:3762-3765`). `aiSwitchedPartySlot` is 6
+whenever `TrainerAI_ShouldSwitch` runs:
+- `BattleContext_Init` sets it to 6 (`battle_lib.c:2015`);
+- `BattleContext_Init` runs at every turn's end (`battle_controller_player.c:1855`, after
+  `ReplaceFainted`) and after every action (`:3998`);
+- inside the check only a branch that returns TRUE writes it (`:3797`, and the post-KO
+  branches of the refused checks).
+
+So 6 never matches a party index 0-5, and the layout's candidate list (`switching._CANDIDATES`:
+4 keep draws, then each pass's 6 slots x 4 moves, the active's slot never a candidate) needed no
+change. The only vanilla limit was the 9 sites `AiOutcome.switch_stop` encodes.
+
+**Implementation.** The site count is the layout's: `switch_sites(tables, state, sites)`,
+`switch_action(..., sites)` and `switching_refusals(..., sites)` take it (default 9, the
+vanilla count, so vanilla is unchanged). `sample_ai_outcome`, `enumerate_ai_outcomes`
+(per-slot), `policy.maybe_switch`, `_policy`, `_distribution`, `ai_refusals` and the loose
+oracle pass `layout.switch_sites`. `switch_stop = 44` means no site stops under Kaizo
+(`SWITCH_NONE`, 9, stays the vanilla value). The "more draws than sites" refusal cannot fire
+under Kaizo, since 44 is every candidate a party of six has.
+
+**Merged draws.** `AI_HasAbsorbAbilityInParty`'s `RandNext() % 3` (`:3651`) is read whenever
+the active has a super-effective move (`AI_HasSuperEffectiveMove(..., TRUE)` reads nothing,
+`:3586-3587`). It cannot change the result without a bench Flash Fire, Water Absorb or Volt
+Absorb (`:3655-3713`), which `switching` refuses on the AI's side, so it is not a site. It still
+consumes RNG (8.7, K3d). Kaizo Roark's six have no switching refusal
+(`tests/ai/test_kaizo_switching.py`, and the pool check below).
+
+**The loose check.** `test_roark_switch_distribution_matches_loose` walks the decomp's control
+flow (`:3906-3987`) with every `RandNext` read its own draw, the `:3651` read included, and
+enumerates every combination of the reads (at most 12). It reads no site layout. It equals the
+switch part of the exact distribution on random states of Roark's six: any active, fainted
+bench members, player and bench types, `moveHit`, Gravity, Foresight, trapping and boosts. Four
+constructed small layouts reach every bench slot and the last site.
+`test_loose_counts_the_absorb_read` shows that the `:3651` read is a loose read with no exact
+site.
+
+### 11.2 Replacement
+
+`BattleAI_PostKOSwitchIn` is refused in one case only: stage 2 when the first candidate's move
+slot 0 is empty or has power 1. The slot is skipped (`if (move && MOVE_DATA(move).power != 1)`,
+`battle_lib.c:8053`), but the compare `maxScore < score` (`:8080`) still runs on the stale
+stage-1 score. Kaizo Roark's six never reach it. Each has a slot-0 move whose power is not 1:
+Stealth Rock 0, Sludge Bomb 95, DragonBreath 70, Recover 0, Toxic 0, Head Smash 150
+(`test_roark_moves_never_reach_the_stale_stage_2_compare`).
+`test_roark_replacement_each_faint_order` runs every state a faint order reaches (the
+fainted active and every nonempty set of living others, 6 x 31) against four players and
+both `powerMul` values: it never refuses and always picks a living non-active slot. Against
+Ghost/Dark and Fighting/Psychic none of the six has a super-effective move, so every one of
+those states runs stage 2. (The decomp's compare is at `:8080`; roark.md 11.2 and
+`replacement.py` cited `:8076`, corrected in Task 7.)
+
+### 11.3 The real pools
+
+`switching_refusals` refuses Levitate, Wonder Guard, Scrappy and Normalize on either side,
+Flash Fire, Water Absorb, Volt Absorb and Natural Cure on the AI's, Iron Ball, the state moves
+(Magnet Rise, Roost, Miracle Eye, Ingrain, Perish Song), the variable-type moves, and
+`AI_OnlyIneffectiveMoves`. Checked 2026-11-11 with each candidate of the
+`kaizo_save_pre_roark` and `kaizo_save_probe` pools (12 each, party and box, at cap 16) as the
+player's lead against each of Kaizo Roark's six as the active: no line. Roark's six against
+his own Gible: no line either. The pools are Sandshrew, Flaaffy, Shinx, Vulpix, Goldeen,
+Meowth, Luvdisc, Wormadam, Rhyhorn, Skitty, Prinplup and Delibird. None has a refused ability
+(Rough Skin, Static, Rivalry, Flame Body, Swift Swim, Limber, Snow Cloak, Rock Head, Cute
+Charm, Torrent, Adaptability), Iron Ball or a refused move.
 
 ## 13. Hand-traced decisions (K3c Task 5 and Task 6 fixtures)
 
@@ -799,7 +900,7 @@ with Reflect on the player's side. At equal speed (`test_exact_equals_loose_at_e
 E1a with the player at Speed 12 (`:1864`), E6a at 28 (`:2070`) and E2c at 15 (`:2650`), each
 with the loose tie read on the slot's path; and E1e (Quick Claw), with no tie read.
 
-## 14. Width and cost, measured (K3c Tasks 3 and 6)
+## 14. Width and cost, measured (K3c Tasks 3, 6 and 7)
 
 Measured 2026-11-11 on one CPU device (20 logical CPUs), warm, with Kaizo Roark's AI still
 refused (Tasks 5-7): a refused row costs what an accepted one does, since the program
@@ -899,5 +1000,36 @@ accepted (no refused row), so these are the costs of real distributions.
 |---|---|---|
 | Kaizo | 19.4% (0.051 s of 0.262 s) | 9.5% (0.016 s of 0.166 s) |
 | vanilla | 2.4% | 7.9% |
+
+The spec 6 stop condition (above 50%) is not met.
+
+**Re-measured after K3c Task 7** (2026-11-11, warm, the same machine; script `measure7.py`,
+reusing Task 3's `measure.py` helpers; Task 7 report). `KAIZO.switch_sites` is 44, so every
+Kaizo `ai_width` gains 35 switch stops (45 instead of 10).
+
+- `ai_width` with each of Kaizo Roark's six as the active (against his Gible): Bonsly 573,
+  Lileep 97, Gible 61, Corsola 101, Shuckle 149, Cranidos 65. The maximum is **573**. Over
+  every state of the `kaizo_save_pre_roark` pool (12 candidates x 6 actives) the widths are
+  the same six values. The bound for any state is 45 + 2 x 4 x 2^8 = **2093** (8.5). Both are
+  under `WIDTH_CAP` 131072 and under the 16384-row `ai_rows` bucket maximum.
+- `ai_flat_width` (reported, not used): 17280 to 4423680.
+- No row refused.
+
+| per state, 1000 states | Kaizo, 1 device | Kaizo, 20 devices | vanilla, 1 device | vanilla, 20 devices |
+|---|---|---|---|---|
+| `ai_rows` (bucket 1024) | **207 µs** | **33.2 µs** | 13.7 µs | 12.8 µs |
+| vmapped `policy._distribution` | 262 µs | 267 µs | 11.1 µs | 10.5 µs |
+| one state (bucket 256) | 0.051 s | 0.017 s | 0.005 s | 0.010 s |
+
+The 45 switch stops do not show in the cost: the switch part maps 45 stops through
+`switch_action` instead of 10, against 512 scorings.
+
+- The AI share of a depth-1 expansion of one Kaizo root (27 pairs, the same root distribution
+  as Task 6: Stealth Rock 0.687, Selfdestruct 0.096, Brick Break 0.217):
+
+| | 1 device | 20 devices |
+|---|---|---|
+| Kaizo | 20.6% (0.051 s of 0.250 s) | 10.2% (0.016 s of 0.161 s) |
+| vanilla | 2.5% | 7.6% |
 
 The spec 6 stop condition (above 50%) is not met.

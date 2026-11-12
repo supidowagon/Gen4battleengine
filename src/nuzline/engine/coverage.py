@@ -14,7 +14,7 @@ grade today: no registry entry is ``SAMPLING_ONLY`` (``tests/engine/test_coverag
 guards this), and ``CoverageReport.sampling_only`` is therefore always empty. Each game's
 AI layout (``ai.layout``) has a width bounded at import: the vanilla flat layout's 3840
 (``ai.outcome.ENUMERATION_WIDTH``) against ``MAX_ENUMERATED`` (4096), and the Kaizo
-per-slot layout's factored width (``ai.policy.ai_width``, at most 2058) against
+per-slot layout's factored width (``ai.policy.ai_width``, at most 2093) against
 ``WIDTH_CAP`` (``ai.policy._check_width``). Roark's AI is exact in both games, so the grade
 is not needed for this milestone. The first trainer whose draws do not fit its game's
 layout needs, in its plan: a wider layout or a per-trainer width, a registry entry that
@@ -94,8 +94,9 @@ moves without transcribed script paths, too many script-roll sites, type-chart
 modifiers the AI does not model, switching-rule refusals) on the fight's turn-0 state,
 and refuses a bag that mixes item ids (the decomp applies the last zeroed slot's item,
 docs/discrepancies.md). The AI's state-dependent refusals that can first appear later in
-the fight (more than ``SWITCH_SITES`` switch draws, ``AI_OnlyIneffectiveMoves``) are
-not visible at turn 0; ``ai_policy`` refuses them when they occur.
+the fight (more switch draws than the layout's ``switch_sites``, ``AI_OnlyIneffectiveMoves``)
+are not visible at turn 0; ``ai_policy`` refuses them when they occur. The Kaizo layout's 44
+switch sites are every draw a party of six can make, so only vanilla can exceed its count.
 """
 
 from __future__ import annotations

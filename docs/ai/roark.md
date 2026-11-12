@@ -661,7 +661,7 @@ legal slot. Two details found while implementing it:
 - `battleCtx->powerMul` is reset only by `BattleContext_Init` (`battle_lib.c:1980`),
   which `TurnEnd` runs after `ReplaceFainted`. After a Pursuit hit on a switch
   (`powerMul = 20`, `battle_script.c:6928`), stage 2 runs with doubled power.
-- In stage 2 the comparison `maxScore < score` (`:8076`) also runs for a skipped slot
+- In stage 2 the comparison `maxScore < score` (`:8080`) also runs for a skipped slot
   (no move, or power 1), on the `score` left from the previous move or from stage 1.
   This only matters before the first scored move, when the first candidate's slot 0 is
   skipped. The engine refuses that case.
