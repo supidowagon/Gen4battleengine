@@ -19,7 +19,7 @@ The sections keep roark.md's numbers, so a rule can be compared section by secti
   `0b10111`.
 - Line n+2 of `generated/ai_flags.txt` is bit n (roark.md 1), so 23 = BASIC (bit 0) +
   EVAL_ATTACK (bit 1) + EXPERT (bit 2) + RISKY (bit 4, `AI_FLAG_RISKY`, line 6).
-- `FlagTable` (`script.s:18-22`) maps bit 4 to `Risky_Main` (`script.s:6521`).
+- `FlagTable` (`script.s:18-23`) maps bit 4 to `Risky_Main` (`script.s:6521`).
 - `TrainerAI_MainSingles` runs the flags in bit order (`trainer_ai.c:297-310`): BASIC,
   EVAL_ATTACK, EXPERT, then RISKY.
 - The Kaizo policy runs exactly these four scripts (plan K3c Ruling 10; `policy._flags`,
@@ -304,8 +304,11 @@ As roark.md 5.2, with these effect tests now on transcribed paths:
    gets **-2** (205/256). Both paths go on to the quad check. The Focus Punch and Sucker
    Punch effects (`:6366-6367`) are no Roark move's.
 4. `EvalAttack_CheckQuadEffective` (`:6377-6385`): QUADRUPLE runs `IfRandomLessThan 80`
-   (`:6383`), +2 when the draw is not below 80 (176/256). Every move reaches it, status
-   moves too: Rock Polish (Rock) into a Fire/Flying `D` is QUADRUPLE.
+   (`:6383`), +2 when the draw is not below 80 (176/256). Every move that gets past items
+   1-2 reaches it (status and no-calc moves always do, since they never kill and never take
+   the -1): Rock Polish (Rock) into a Fire/Flying `D` is QUADRUPLE. A move that kills jumps
+   to item 5 (`:6358`) and one that is out-damaged stops at **-1** (`:6361-6362`,
+   `ScoreMinus1` `:1567-1569`); neither reaches `:6383`.
 5. `EvalAttack_ApplyKillBonuses` (`:6387-6415`), for a move that kills:
    - HALVE_DEFENSE ends at `EvalAttack_Terminate` (`:6389`). It is unreachable for
      Selfdestruct, which never kills (1).
@@ -459,12 +462,14 @@ records the rules that need more than one table row.
   `BattleState.qc_roll`, the previous turn's draw, as `action_order` does. So the player's
   Quick Claw proc from the previous turn makes Roark SLOWER (plan Review Focus 2).
 - **The tie draw (plan K3c Ruling 3).** At equal speed each branch that compares speeds
-  (both Quick Claws `:1402-1407`, both Lagging Tails `:1412-1417`, Trick Room `:1432-1439`,
-  plain `:1440-1447`) gives TIE when `RandNext() & 1` is 1, else FASTER, never SLOWER. Every
-  compare on Roark's paths tests SLOWER (`script.s:1864`, `:2070`, `:2650`). So the exact
+  (both Quick Claws `:1402-1407`, both Lagging Tails `:1412-1417`, both Stall `:1422-1427`,
+  Trick Room `:1432-1439`, plain `:1440-1447`) gives TIE when `RandNext() & 1` is 1, else
+  FASTER, never SLOWER. Every compare on Roark's paths tests SLOWER (`script.s:1864`, `:2070`, `:2650`). So the exact
   command passes `tie_roll = 0` (`battler_slower(..., 1, 0, qc_roll)`), has no `AiOutcome`
   field, and asserts at trace time that its value is SLOWER. The decomp still consumes the
-  draw (8.7).
+  draw (8.7). The both-Stall branch is never on a graded path: Stall is not in coverage's
+  implemented abilities, so a state with it is refused (`engine/order.py`, "Custap and Stall
+  are unsupported").
 - **Loose.** The tie is its own draw (`commands.ReadKind.SPEED_TIE`, probability 1/2). It is
   on the path exactly where the decomp draws it: equal speed in one of those branches,
   which is where `compare_speed` gives TIE for a 1. The loose command compares the
@@ -552,8 +557,8 @@ site is named by its `script.s` line, and `outcome.SITE_N` gives its N:
 | the other effects of section 5 (2, 4, 6, 69, 72, 76, 186, 261, 269, 275) | `:6383`: 80 |
 
 - `:6383` is `EvalAttack_TryScorePlus2`. It is reached by any move whose
-  `IfMoveEffectivenessEquals` is QUADRUPLE (`script.s:6378`), whatever its effect, so every
-  effect has it. The vanilla table left it out of the Normal-type moves, but a table keyed
+  `IfMoveEffectivenessEquals` is QUADRUPLE (`script.s:6379`) and that neither kills
+  (`:6358`) nor is out-damaged (`:6361-6362`), whatever its effect, so every effect has it. The vanilla table left it out of the Normal-type moves, but a table keyed
   by effect cannot know the type. An extra site that is never reached only costs width.
 - The Expert sites follow `Expert_Main`'s dispatch (`script.s:1623-1811`): DEF_DOWN `:1642`
   and DEF_DOWN_2 `:1671` go to `Expert_StatusDefenseDown` (`:2318`, roll `:2328`);
@@ -584,6 +589,22 @@ site is named by its `script.s` line, and `outcome.SITE_N` gives its N:
   m's share is `P(RandNext % (|T| + 1) == m's place in the tied list)`.
 - The two guesses are averaged. The switch comes first and the item next, as
   `_distribution` does (roark.md 2). Struggle and the locked slot are unchanged.
+- **Path refusals (K3c final review).** Two things the static refusals (`_refused`) cannot
+  see are refused on the scoring path, so the per-slot layout never ranks a score it
+  cannot vouch for:
+  - `moveScore` is `s8` (`include/battle/ai_context.h:14`), and `AddToMoveScore` adds then
+    clamps a negative result to 0 (`trainer_ai.c:581-585`), so a sum past 127 wraps
+    negative and ends at 0. `commands.add_to_move_score` models the wrap; a score outside
+    0-127 makes the distribution NaN. Kaizo Roark's largest score is about 108.
+  - An `IfRandomLessThan` reached on a move's path whose line has no column in that
+    effect's site row (8.2) would read an out-of-range index, an N/256 jump taken as never.
+    `commands.if_random_less_than` records it (`AiContext.missing_site`), and `_scores`
+    gives -1, so the distribution is NaN and `_policy` refuses. The flat (vanilla) layout
+    is not checked: its unused column is on no path, and vanilla stays bit-identical.
+  - On a concrete state `ai_policy` and `ai_action_distribution` raise `UnsupportedAi` for
+    either (`policy._PATH_REFUSAL`). Tests: `tests/ai/test_kaizo_commands.py
+    test_add_to_move_score_wraps_the_s8`, `test_a_score_past_the_s8_is_refused`;
+    `tests/ai/test_kaizo_policy.py test_a_reached_roll_without_a_site_column_is_refused`.
 
 **8.4 The one-scalar guess (plan K3c Ruling 6).** The decomp draws a fresh coin at every
 `LoadBattlerAbility DEFENDER` (`trainer_ai.c:1191-1198`). One scalar is exact when at most
@@ -607,6 +628,14 @@ sensitive read. It re-runs with every read a later task adds.
   Screech against Tentacool (Kaizo abilities 44 / Clear Body) has two `:470` reads that
   each change a score; the scalar moves them together and the decomp does not. Such a
   moveset is not on Roark's team. A later trainer's must pass the same data test.
+- Coverage enforces this (K3c final review I-4): `engine/coverage.ONE_SCALAR_GUESS_CHECKED`
+  lists the Kaizo trainer ids whose data test has run, today Roark's (246) only. Any other
+  Kaizo trainer's AI is refused, not approximated, by the line "the one-scalar ability
+  guess is not checked against this trainer's movesets (plan K3c Ruling 6; ...)" (`AI
+  ability guess`; `tests/engine/test_coverage.py
+  test_kaizo_ai_needs_the_ruling_6_data_test`). The gate is Kaizo-only, as the final
+  review scoped it; vanilla's one scalar keeps roark.md 8.2's argument for vanilla Roark. A
+  later split adds its trainer's id together with its data test.
 
 **8.5 Width** (plan K3c Ruling 12). `policy.ai_width` counts the combinations the factored
 distribution merges: the switch stops plus, per guess, `sum_slots 2^(sites of the slot)`.
@@ -641,23 +670,60 @@ player's Quick Claw (no tie read).
 - `LOOSE_READS` is 48: every read of the straight-line scripts counts in every slot, on the
   path or not, and Task 6 brings them to 35.
 
+**What the loose oracle does not check: the switch.** `ai_action_distribution_loose` builds
+its switch part from the exact path's own `switch_sites`, `switch_stop_probs` and
+`switch_action`, combined as `_distribution` does. So an exact==loose comparison through it
+(the Roark audit, `tests/kaizo/test_roark_ai_audit.py`, section 14) checks only the scoring
+and the move pick; the switch categorical is compared with itself. The switch has its own
+independent oracle and tests instead (11.1, "The loose check"): `_loose_switch`, which walks
+`trainer_ai.c:3906-3987` with every read its own draw on states with at most 12 reads, and
+`test_six_bench_layout_fits`, which reaches all 44 sites against a closed form.
+
 **8.7 RNG read order (for K3d's trace replay).** Every read is one `BattleSystem_RandNext`
 (`battle_system.c:1308`), made in this order in one decision. The reads marked *merged* have
 no `AiOutcome` field because they cannot change the action, but they still advance the RNG,
 so a replay that tracks the RNG must count them.
 
-1. **`TrainerAI_ShouldSwitch`** (section 11), as reached. None if `A` is trapped or no
-   other Roark Pokemon lives (`trainer_ai.c:3906-3940`; the checks after that are under
-   `if (alivePartyMons)`, `:3940`). Otherwise:
+0. **Precondition: which steps run at all.** The AI's command is picked by
+   `TrainerAI_PickCommand` from `Task_TrainerSetCommandSelection`
+   (`battle_display.c:3411`; steps 1-2), and its move by `TrainerAI_Main`, called only from
+   the move-select-menu task (`battle_display.c:3590`; steps 3-8). The controller skips
+   them in three cases:
+   - When `Battler_CanPickCommand` is FALSE (recharging, thrash, uproar or move-locked,
+     `battle_lib.c:6224-6236`), command selection is skipped and FIGHT is forced
+     (`battle_controller_player.c:333-337`): **no AI read at all** that turn.
+   - Under STRUGGLING_ALL (`BattleSystem_CheckInvalidMoves`,
+     `battle_controller_player.c:433-442`) the battler Struggles, and under Encore
+     (`:443-455`) the Encored slot is set directly. Neither reaches
+     `COMMAND_SELECTION_MOVE_SELECT_INIT` (`:456`, the only state that shows the move menu,
+     `:502-503`), so **only steps 1-2 draw**; steps 3-8 do not happen. Struggle is not an
+     AI choice.
+   This step is about the RNG count only: the model's action for Struggle and for a
+   move-locked battler is already the game's (`policy._pick` gives action 0 with no usable
+   move; `policy._policy` overrides a locked battler with `actions.locked_slot`).
+1. **`TrainerAI_ShouldSwitch`** (section 11), as reached. None (`trainer_ai.c:3906-3913`)
+   if `A` is trapped (`VOLATILE_CONDITION_TRAPPED`, bind or Mean Look), has Ingrain
+   (refused, 11.3), the player's side has Shadow Tag or Arena Trap, or another battler has
+   Magnet Pull while `A` is Steel-type; none either if no other Roark Pokemon lives
+   (`:3915-3940`; the checks after that are under `if (alivePartyMons)`, `:3940`).
+   Otherwise:
    1. *merged:* `AI_HasAbsorbAbilityInParty`'s `RandNext() % 3` (`:3651`), when `A` has a
       super-effective move (`AI_HasSuperEffectiveMove(..., TRUE)` itself draws nothing,
       `:3586-3587`). Its later draw (`:3706`) needs a bench Flash Fire, Water Absorb or Volt
       Absorb, which Kaizo Roark lacks.
    2. The keep draws, `RandNext() % 10` (`:3588`), one per super-effective slot of `A` in
       slot order, until one is nonzero (then no further read).
-   3. Unless `A` has 4 or more positive stages (`:3969`): pass 1, then pass 2, each
-      `RandNext() % rand` (`:3796`) per (bench Pokemon, super-effective move) in party then
-      slot order, until one is zero (a switch, and no further read of the decision).
+   3. Unless `A` has 4 or more positive stages (`:3969`): pass 1 (`0x8`, `% 2`, `:3975`),
+      then pass 2 (`0x4`, `% 3`, `:3981`). A pass reads nothing unless `moveHit[A]` is set,
+      its user `moveHitBattler[A]` is set (`:3737-3739`) and the move has nonzero power
+      (`:3742-3744`; a status move such as Toxic or Growl sets `moveHit` too,
+      `battle_controller_player.c:4498-4502`, so it blocks the pass). It then reads
+      `RandNext() % rand` (`:3796`) per (bench Pokemon, move) in party then slot order, only
+      for a bench Pokemon that `moveHit` meets with the pass's bit
+      (`effectiveness & checkEffectiveness`, `:3767-3779`), and only for its moves that are
+      super-effective against `moveHitBattler` (`:3785-3796`; the read is short-circuited
+      behind that test), until one is zero (a switch, and no further read of the decision).
+      Section 11.1 has the full rule.
 
    The draws of `AI_CannotDamageWonderGuard` (`:3339`), `AI_OnlyIneffectiveMoves`
    (`:3459`, `:3477`, `:3518`, `:3536`) and `AI_IsAsleepWithNaturalCure` (`:3828`, `:3835`,
@@ -675,13 +741,22 @@ so a replay that tracks the RNG must count them.
      (`:68`), when `A` is not Mold Breaker (`:69-70`);
    - `:117` (`Basic_CheckSoundproof`): unless the slot already ended (`ScoreMinus10` and
      `ScoreMinus12` end it with `PopOrEnd`, `:1591-1597`);
-   - the effect's label: `:304` (Selfdestruct, not after Mold Breaker at `:302-303`), `:529`
-     and then `:539` (Toxic, after the type tests `:521-526`).
+   - the effect's label (`ScoreMinus10` ends the slot's BASIC script with `PopOrEnd`,
+     `:1591-1593`; the later flags still run on the slot):
+     - `:304` (Selfdestruct), unless `IfMoveEffectivenessEquals TYPE_MULTI_IMMUNE` at `:299`
+       ended the slot (Selfdestruct is Normal, so a Ghost-type `D`), and not when `A` is Mold
+       Breaker (`:302-303`);
+     - `:529` (Toxic), unless the type tests `:521-526` ended the slot;
+     - `:539` (Toxic), unless the type tests, the `:529` guess being Immunity, Magic Guard or
+       Poison Heal (`:530-532`), or Leaf Guard in sun (`:534-536`) ended the slot. Whether
+       `:539` is drawn therefore depends on the `:529` coin.
    The exact layout has one guess for all of them (8.4): *merged* in the sense that the
    decomp's two to five coin flips of a decision are one field, the RNG count is the number
    of reads reached.
-5. **EVAL_ATTACK**, slots 0-3: `:6374` (Selfdestruct, 51), then `:6383` (a QUADRUPLE move,
-   80), as reached (5.2).
+5. **EVAL_ATTACK**, slots 0-3: `:6374` (Selfdestruct, 51), then `:6383` (80) only for a
+   QUADRUPLE move that neither kills (`:6358`) nor is out-damaged (`:6361-6362`), as
+   reached (5.2). Selfdestruct never kills and never takes the -1 (5.2 items 1-2), so it
+   always reaches `:6374`.
 6. **EXPERT**, slots 0-3: the label's `IfRandomLessThan` sites in line order of the path taken
    (5.3; the site table, 8.2), and, where the label's `IfSpeedCompareEqualTo` (`:1864`,
    `:2070`, `:2650`) meets equal speeds in a branch that draws, *merged:* the tie's
@@ -1106,7 +1181,9 @@ Roark's six as the active at turn 0; 72 decisions per save, 12 candidates x 6 ac
 - No decision is refused. The maximum is 573; the bound for any state is 2093 (8.5);
   `WIDTH_CAP` is 131072.
 - Every decision has at most 12 loose reads, so all 144 are checked exact against the
-  joint loose enumeration (at most 2^18), each slot's score distribution too.
+  joint loose enumeration (at most 2^18), each slot's score distribution too. That check
+  covers the scoring and the move pick; the switch part of the loose oracle reuses the
+  exact layout (8.6), and the switch is checked by its own oracle (11.1).
 
 **Cost** (1000 states of the `kaizo_save_pre_roark` pool, HP varied; bucket 1024):
 
