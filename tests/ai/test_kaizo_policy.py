@@ -397,6 +397,48 @@ def test_no_species_splits_the_toxic_reads(tables, kaizo_tables):
             assert not (hydration in row and first & set(row)), row
 
 
+def test_a_reached_roll_without_a_site_column_is_refused(kaizo_tables, kaizo_roark_party):
+    """K3c final review: an ``IfRandomLessThan`` on a move's path whose line has no column
+    in the effect's site row reads an out-of-range index, which never rolls 1. The exact
+    path must refuse that (NaN distribution, ``REFUSED_ACTION``) rather than take an N/256
+    jump as never. Selfdestruct always reaches EvalAttack_MaybeDeprioritize's :6374 (it
+    never kills or takes the -1, kaizo_roark.md 5.2), so a row without :6374 is caught."""
+    t = kaizo_tables
+    s = _state(t, kaizo_roark_party, BONSLY, [STEALTH_ROCK, SELFDESTRUCT, BRICK_BREAK, ACCELEROCK])
+    row = dict(KAIZO.effect_sites)[7]
+    bad = KAIZO._replace(  # the same policy (name), one site row short
+        effect_sites=tuple(
+            (e, tuple(x for x in sites if x[0] != 6374) if e == 7 else sites)
+            for e, sites in KAIZO.effect_sites
+        ),
+    )
+    assert (6374, 51) in row and len(dict(bad.effect_sites)[7]) == len(row) - 1
+    good = np.asarray(policy._slot_move_distribution(t, s, KAIZO))
+    assert not np.isnan(good).any() and np.isclose(good.sum(), 1)
+    assert np.isnan(np.asarray(policy._slot_move_distribution(t, s, bad))).all()
+    o = _outcome(t, s)
+    assert int(policy._policy(t, s, o, KAIZO)) != policy.REFUSED_ACTION
+    assert int(policy._policy(t, s, o, bad)) == policy.REFUSED_ACTION
+    # Without Selfdestruct no reached roll lacks a column, so the bad row refuses nothing.
+    s = _state(t, kaizo_roark_party, BONSLY, [STEALTH_ROCK, BRICK_BREAK, ACCELEROCK, 0])
+    assert not np.isnan(np.asarray(policy._slot_move_distribution(t, s, bad))).any()
+
+
+def test_kaizo_refusals_use_the_kaizo_names(names, kaizo_tables, kaizo_names, kaizo_roark_party):
+    """K3c final review: a refusal message without the caller's names names the move in
+    the tables' own game, never in the shipped vanilla tables (Kaizo renames ids)."""
+    t = kaizo_tables
+    hurricane = 140
+    assert names.move_names[hurricane] == "Barrage"
+    assert kaizo_names.move_names[hurricane] == "Hurricane"
+    s = _state(t, kaizo_roark_party, BONSLY, [STEALTH_ROCK, SELFDESTRUCT, BRICK_BREAK, hurricane])
+    reasons = policy.ai_refusals(t, s)
+    assert reasons == policy.ai_refusals(t, s, kaizo_names), reasons
+    assert any("Hurricane" in r for r in reasons) and not any("Barrage" in r for r in reasons)
+    with pytest.raises(policy.UnsupportedAi, match="Hurricane"):
+        policy.ai_action_distribution(t, s)
+
+
 def test_site_rows_of_roark_effects():
     """The per-slot site table (outcome.EFFECT_SITE_LINES): every effect reaches EvalAttack's
     quad roll (script.s:6383); HALVE_DEFENSE first reaches EvalAttack_MaybeDeprioritize's 51

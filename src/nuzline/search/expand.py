@@ -118,7 +118,10 @@ def _run(fn: Callable, name: str, tables: Tables, rows: tuple, n: int, static=No
     row's result does not depend on ``per_call`` when ``fn``'s per-row program does not
     change with the batch shape (``_ai`` says how ``ai_rows`` ensures it)."""
     if n == 0:
-        specs = jax.tree.map(lambda a: jax.ShapeDtypeStruct((1, *a.shape[1:]), a.dtype), rows)
+        # One row per device: a shard_map'd fn (_ai's per-slot layout) needs the leading
+        # axis to divide by the device count, even under eval_shape.
+        lead = jax.device_count()
+        specs = jax.tree.map(lambda a: jax.ShapeDtypeStruct((lead, *a.shape[1:]), a.dtype), rows)
         shape = jax.eval_shape(fn, tables, *specs)
         return jax.tree.map(lambda s: np.zeros((0, *s.shape[1:]), s.dtype), shape)
     devices = jax.device_count()

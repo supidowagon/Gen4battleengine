@@ -19,7 +19,12 @@ never counted as a loss.
 Programs run in chunks of ``LEAF_CHUNK`` rows padded to ``-(-LEAF_CHUNK // devices) *
 devices`` (padding = copies of the chunk's row 0, dropped after the call), sharded over
 the host devices and exported through ``cached_export``, as ``expand`` does, so a solve
-compiles each program once per device count and the results do not depend on it.
+compiles each program once per device count and the results do not depend on it. That
+is pinned for the vanilla policy (``tests/search/test_leaves.py
+test_device_count_invariant``); for Kaizo only Stage A's playouts are
+(``tests/search/test_stage_a.py test_kaizo_rank_actions_same_on_multiple_devices``), and
+a Kaizo leaf, which ``vmap``s the per-slot ``ai_action_distribution`` the same way, is
+not tested at more than one device count (K3c final review).
 """
 
 from __future__ import annotations

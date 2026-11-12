@@ -399,6 +399,9 @@ class AiContext(NamedTuple):
     player_ability: jnp.ndarray  # int32: LoadBattlerAbility DEFENDER (decomp id)
     damage: jnp.ndarray  # int32[4]: ai_damage of the AI's move slots, USE_MAX_DAMAGE
     sites: jnp.ndarray  # int32[4, len(SITE_LINES)]: script_rolls index of each line
+    # bool: an exact IfRandomLessThan was reached on the path at a line the slot's site row
+    # has no column for (if_random_less_than); the per-slot layout refuses the decision
+    missing_site: jnp.ndarray
     loose: LooseDraws | None = None  # the loose oracle's draws (tests only), else None
 
 
@@ -542,6 +545,7 @@ def new_context(
         player_ability=defender_ability(tables, state, outcome.ability_guess),
         damage=_slot_damage(tables, state, jnp.full((MOVES,), SIM_ROLL_MAX, _I32)),
         sites=line_sites(state) if sites is None else jnp.asarray(sites, _I32),
+        missing_site=false,
         loose=loose,
     )
 
@@ -705,10 +709,12 @@ def count_alive_party_battlers(ctx: AiContext, battler: Battler) -> AiContext:
 
 
 def add_to_move_score(ctx: AiContext, value: int) -> AiContext:
-    """``AddToMoveScore`` (trainer_ai.c:576): add, then raise a negative score to 0 (no
-    upper clamp; Roark's largest score, 106, fits the decomp's ``s8``)."""
+    """``AddToMoveScore`` (trainer_ai.c:576-586): ``moveScore[slot] += val``, then a
+    negative score becomes 0. ``moveScore`` is ``s8`` (include/battle/ai_context.h:14), so
+    the sum wraps to -128..127 before the clamp: 127 + 2 is -127, then 0. No Roark path
+    comes near it (his largest score is about 108); the wrap keeps a later one exact."""
     current = ctx.scores[ctx.slot]
-    new = jnp.maximum(current + value, 0)
+    new = jnp.maximum((current + value + 128) % 256 - 128, 0)
     return ctx._replace(scores=ctx.scores.at[ctx.slot].set(jnp.where(ctx.live, new, current)))
 
 
@@ -736,13 +742,18 @@ def if_random_less_than(ctx: AiContext, n: int, line: int) -> AiContext:
     ``AiOutcome.script_rolls[site] == 1`` (probability n/256, roark.md 8.3). ``line`` is the
     read's ``script.s`` line (``outcome.SITE_N``); ``AiContext.sites`` gives its index into
     the flattened ``script_rolls``, and the layout's site table carries its probability.
+    A line with no column in the slot's row reads index ``script_rolls.size`` (out of
+    range), which never rolls 1; when that read is on the path of a move (``live``, not
+    ``MOVE_NONE``) it is also recorded in ``missing_site``, so a per-slot layout refuses the
+    decision (``policy._scores``) instead of taking an N/256 jump as never.
     Loose (module docstring): the read's own draw, with probability ``n``/256."""
     if ctx.loose is not None:
         ctx, bit = _loose_read(ctx, n / 256, ReadKind.ROLL)
         return _jump(ctx, bit == 1)
     site = ctx.sites[ctx.slot, SITE_LINES.index(line)]
     roll = jnp.take(ctx.outcome.script_rolls, site, mode="fill", fill_value=0)
-    return _jump(ctx, roll == 1)
+    missing = ctx.live & (ctx.move != 0) & (site >= ctx.outcome.script_rolls.size)
+    return _jump(ctx._replace(missing_site=ctx.missing_site | missing), roll == 1)
 
 
 def _knows(ctx: AiContext, battler: Battler, move: int) -> jnp.ndarray:

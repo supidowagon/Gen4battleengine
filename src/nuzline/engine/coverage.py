@@ -46,7 +46,11 @@ items) and plan 1b (Task 2b: trainer items; Task 3: Roark's AI flags) implement:
   ``AI_FLAG_EVAL_ATTACK``, ``AI_FLAG_EXPERT``), Kaizo those and bit 4 (``AI_FLAG_RISKY``).
   ``ai.policy`` always runs the policy's scripts together (``policy._flags``), so a vanilla
   trainer must have all three, and a Kaizo trainer exactly ``0b10111`` (plan K3c Ruling 10:
-  gating RISKY per trainer would need a ``BattleState`` field);
+  gating RISKY per trainer would need a ``BattleState`` field). A Kaizo trainer must also be
+  in ``ONE_SCALAR_GUESS_CHECKED``: the exact layout's one ability guess per decision is
+  exact only when at most one guessing read per decision can change a score (plan K3c
+  Ruling 6, docs/ai/kaizo_roark.md 8.4), which is a data test per trainer, run for Roark
+  only (``tests/ai/test_kaizo_outcome.py test_one_scalar_guess_is_exact_for_roark``);
 * weather: ``Weather.NONE`` and ``Weather.SANDSTORM``. Sandstorm's every effect on the
   implemented set is modelled: the Rock-type SpD boost (``damage.py``), the end-of-turn
   chip (``step.field_conditions``), Sand Veil's accuracy (``outcome.hit_threshold``), all
@@ -188,6 +192,10 @@ IMPLEMENTED_AI_FLAGS: dict[str, dict[int, Support]] = {
 # ai.policy runs these scripts together, so a trainer must have them all (vanilla), or
 # exactly them (Kaizo, plan K3c Ruling 10).
 POLICY_AI_FLAGS = {"vanilla": 0b111, "kaizo": 0b10111}
+# Plan K3c Ruling 6 (docs/ai/kaizo_roark.md 8.4): the Kaizo trainer ids whose one-scalar
+# ability-guess data test has run (test_one_scalar_guess_is_exact_for_roark). Any other
+# Kaizo trainer's AI is refused rather than approximated. Roark (246) only.
+ONE_SCALAR_GUESS_CHECKED = {"kaizo": frozenset({246})}
 IMPLEMENTED_WEATHER: dict[Weather, Support] = {
     Weather.NONE: Support.EXACT,
     Weather.SUN: Support.NONE,
@@ -596,6 +604,14 @@ def _check_ai_flags(c: _Collector, policy: str | None, trainer: Trainer) -> None
             "EXPERT and RISKY, which the Kaizo AI policy always runs together (plan K3c "
             "Ruling 10)",
             "AI flag set",
+        )
+    checked = ONE_SCALAR_GUESS_CHECKED.get(policy)
+    if checked is not None and trainer.id not in checked:
+        c.add(
+            Support.NONE,
+            f"{display_name(trainer)}: the one-scalar ability guess is not checked against "
+            "this trainer's movesets (plan K3c Ruling 6; docs/ai/kaizo_roark.md 8.4)",
+            "AI ability guess",
         )
 
 

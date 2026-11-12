@@ -474,3 +474,50 @@ def test_roark_replacement_each_faint_order(
             state = s._replace(active=s.active.at[1].set(active), hp=hp)
             pick = int(post_ko_switch_in(t, state, power_mul))  # raises on the refusal
             assert pick in alive, (active, sorted(alive), pick)
+
+
+# (player, fainted active, alive others) -> the pick, hand-traced from battle_lib.c:7923-8089.
+# Stage 1 (:7959-8029) takes the first highest TypeMatchupMultiplier sum that has a move
+# super effective against the player, disregarding the others; stage 2 (:8038-8088) the
+# first highest damage of a candidate's move used by the fainted battler (its own stats).
+_PICKS = {
+    # Player Gible (Dragon/Ground): Gible (Dragon/Ground, 120) is the only one with a
+    # super-effective move (DragonBreath), so it is picked whenever it is alive.
+    ("Gible", 0, (1, 2, 5)): 2,
+    ("Gible", 5, (0, 1, 2, 3, 4)): 2,
+    # Gible fainted: nobody else has a super-effective move, so stage 2 with Gible's stats
+    # (task-7-review [vanilla-replacement]: Selfdestruct 89, Sand Tomb 31, Crunch 22,
+    # Water Pulse 9).
+    ("Gible", 2, (3, 4)): 4,
+    ("Gible", 2, (0, 1, 3)): 0,
+    ("Gible", 2, (1, 5)): 5,
+    ("Gible", 2, (3,)): 3,
+    # Player Normal/Normal: only Bonsly's Brick Break is super effective, so stage 1
+    # disregards everyone else, in party order or not, until Bonsly (slot 0).
+    ("Normal/Normal", 5, (0, 1, 2, 3, 4)): 0,
+    ("Normal/Normal", 3, (4, 0)): 0,
+    # A stage-2 tie between slots 4 and 5 (slot 5 given Shuckle's moves, so both score the
+    # same: the moves are used by the fainted Gible): the strict `maxScore < score` (:8080)
+    # keeps the first, slot 4.
+    ("Gible", 2, (4, 5), "tie"): 4,
+}
+
+
+@pytest.mark.parametrize("case", sorted(_PICKS), ids=str)
+def test_roark_replacement_picks(kaizo_tables, kaizo_names, kaizo_roark_party, case):
+    """K3c final review: the six-Pokemon picks of ``post_ko_switch_in`` pinned, not only
+    "a living slot" (``test_roark_replacement_each_faint_order``)."""
+    t, n = kaizo_tables, kaizo_names
+    player, active, alive = case[:3]
+    s = make_state(t, [kaizo_roark_party[2]], list(kaizo_roark_party))
+    if case[3:] == ("tie",):
+        s = s._replace(moves=s.moves.at[1, 5].set(s.moves[1, 4]))
+    if player != "Gible":
+        a, b = player.split("/")
+        s = s._replace(types=s.types.at[0, 0].set(_types(n, a, b)))
+    hp = s.hp.at[1, active].set(0)
+    for j in range(SLOTS):
+        if j != active and j not in alive:
+            hp = hp.at[1, j].set(0)
+    state = s._replace(active=s.active.at[1].set(active), hp=hp)
+    assert int(post_ko_switch_in(t, state, 10)) == _PICKS[case]

@@ -922,30 +922,46 @@ def _refused(tables: Tables, state: BattleState, layout: AiLayout = VANILLA) -> 
     )
 
 
-@lru_cache(maxsize=1)
-def _names():
+@lru_cache(maxsize=len(AI_POLICIES))
+def _policy_names(policy: int):
+    """The ``Names`` of the game whose AI policy is ``AI_POLICIES[policy]``
+    (``game_constants.POLICY``; Kaizo renames move and item ids, e.g. 140 is Barrage in
+    vanilla and Hurricane in Kaizo), or None when that game's tables are not built or more
+    than one game has the policy (the messages then give ids)."""
+    from nuzline.data.game_constants import POLICY
+    from nuzline.data.games import GAMES
     from nuzline.data.tables import load_names
 
+    games = [g for g, p in POLICY.items() if p == AI_POLICIES[policy]]
+    if len(games) != 1:
+        return None
     try:
-        return load_names()
+        return load_names(GAMES[games[0]].tables_dir)
     except OSError:
         return None
 
 
+def _names_for(tables: Tables, names=None):
+    """``names`` (the caller's game), else the names of ``tables``' game by its AI policy
+    (``tables.ai_policy``), never another game's. None: give ids."""
+    if names is not None:
+        return names
+    return _policy_names(int(tables.ai_policy))
+
+
 def _move_name(move: int, names=None) -> str:
-    """``move``'s name in ``names`` (the caller's game); without them, the shipped tables'."""
-    names = names if names is not None else _names()
+    """``move``'s name in ``names`` (``_names_for``), else its id."""
     return names.move_names[move] if names is not None else f"move id {move}"
 
 
 def _item_name(item: int, names=None) -> str:
-    names = names if names is not None else _names()
     return names.item_names[item] if names is not None else f"item id {item}"
 
 
 def _scoring_refusals(
     tables: Tables, state: BattleState, layout: AiLayout, names=None
 ) -> list[str]:
+    names = _names_for(tables, names)
     r = _refused(tables, state, layout)
     moves = np.asarray(state.moves)
     out: list[str] = []
@@ -1024,6 +1040,7 @@ def _scoring_refusals(
 
 
 def _item_refusals(tables: Tables, state: BattleState, layout: AiLayout, names=None) -> list[str]:
+    names = _names_for(tables, names)
     bag = np.asarray(state.trainer_items[1])
     return [
         f"item use: bag slot {k}: {_item_name(int(bag[k]), names)} is not a transcribed "
@@ -1056,8 +1073,18 @@ def ai_refusals(
     """Every reason the AI of this (concrete) state is refused, one human-readable line
     each; empty when ``ai_policy`` is exact for it. Moves and items are named from
     ``names``, the ``Names`` of ``tables``' game (``check_coverage`` passes them; Kaizo
-    renames slots), else from the shipped vanilla tables."""
+    renames slots), else from the names of the game whose AI policy the tables carry
+    (``_names_for``), or by id when those tables are not built."""
     return _all_refusals(tables, state, _layout(tables, layout), names)
+
+
+# The per-slot layout's refusals found only on a scoring path (``_scores``), after the
+# static ``_refused`` checks pass: a reached IfRandomLessThan with no column in the slot's
+# site row, or a score outside the s8 moveScore's 0-127 (_slot_move_distribution).
+_PATH_REFUSAL = (
+    "the scoring path reaches an IfRandomLessThan the move's site row lacks, or a score "
+    "outside the s8 moveScore's 0-127 (docs/ai/kaizo_roark.md 8.2, 8.3)"
+)
 
 
 def _check(tables: Tables, state: BattleState, layout: AiLayout, reasons) -> None:
@@ -1118,9 +1145,17 @@ def _sites(tables: Tables, state: BattleState, ai_outcome: AiOutcome, layout: Ai
 def _scores(
     tables: Tables, state: BattleState, ai_outcome: AiOutcome, layout: AiLayout = VANILLA
 ) -> jnp.ndarray:
+    """``int32[4]``: the scores, -1 per slot on a refused state. A per-slot layout also
+    gives -1 when an ``IfRandomLessThan`` on the path has no column in the slot's site row
+    (``AiContext.missing_site``): ``_slot_move_distribution`` is then NaN and ``_policy``
+    refuses. The flat (vanilla) layout's unused column is never on a path (outcome.py
+    ``_VANILLA_COLUMN``), so it is not checked and vanilla is unchanged."""
     sites = _sites(tables, state, ai_outcome, layout)
     ctx = _run_flags(c.new_context(tables, state, ai_outcome, sites), layout)
-    return jnp.where(_refused(tables, state, layout).scoring, -1, ctx.scores).astype(_I32)
+    refused = _refused(tables, state, layout).scoring
+    if layout.per_slot_sites:
+        refused = refused | ctx.missing_site
+    return jnp.where(refused, -1, ctx.scores).astype(_I32)
 
 
 _scores_jit = jax.jit(_scores, static_argnames="layout")
@@ -1201,7 +1236,10 @@ def _policy(
     # (battle_controller_player.c:335): its action is the locked slot.
     lock = locked_slot(state, 1)
     action = jnp.where(lock >= 0, lock, action)
-    return jnp.where(_refused(tables, state, layout).any, REFUSED_ACTION, action).astype(_I32)
+    refused = _refused(tables, state, layout).any
+    if layout.per_slot_sites:  # a missing site column (_scores); no score is otherwise < 0
+        refused = refused | jnp.any(scores < 0)
+    return jnp.where(refused, REFUSED_ACTION, action).astype(_I32)
 
 
 _policy_jit = jax.jit(_policy, static_argnames="layout")
@@ -1216,7 +1254,11 @@ def ai_policy(
     refused concrete state; ``switching.REFUSED_ACTION`` when traced."""
     layout = _layout(tables, layout)
     _check(tables, state, layout, _all_refusals)
-    return _policy_jit(tables, state, ai_outcome, layout)
+    action = _policy_jit(tables, state, ai_outcome, layout)
+    concrete = not isinstance(action, jax.core.Tracer)
+    if layout.per_slot_sites and concrete and int(action) == REFUSED_ACTION:
+        raise UnsupportedAi(_PATH_REFUSAL)
+    return action
 
 
 def ai_action_distribution_enumerated(
@@ -1293,7 +1335,11 @@ _TIE_SHARE = np.zeros((MOVES + 1, MOVES), np.float32)
 for _n in range(1, MOVES + 1):
     for _t, _p in enumerate(TIEBREAK_P):
         _TIE_SHARE[_n, _t % _n] += _p
-_SCORE_VALUES = 256  # the per-slot histograms' score range, 0..255
+# The per-slot histograms' score range, 0..255. A score is an s8 the AI clamps at 0
+# (include/battle/ai_context.h:14; trainer_ai.c:581-585, commands.add_to_move_score), so
+# it is 0..127; anything else is refused (NaN) rather than ranked.
+_SCORE_VALUES = 256
+_SCORE_MAX = 127
 
 
 def _slot_move_distribution(tables: Tables, state: BattleState, layout: AiLayout) -> jnp.ndarray:
@@ -1314,7 +1360,8 @@ def _slot_move_distribution(tables: Tables, state: BattleState, layout: AiLayout
        other candidate slot ties at v or is below it; over each subset T of the other
        candidates that ties, m gets ``_TIE_SHARE[|T| + 1, rank of m in T + m]``.
 
-    The guesses are then averaged (1/2 each). NaN when a score is outside 0-255."""
+    The guesses are then averaged (1/2 each). NaN when a score is outside the s8
+    ``moveScore``'s clamped range 0-127 (include/battle/ai_context.h:14)."""
     scores, hist = _slot_histograms(tables, state, layout)
     has = (state.moves[1, state.active[1]] != 0).at[0].set(True)  # the pick's candidates
     equal = jnp.where(has[None, :, None], hist, 0.0)
@@ -1333,7 +1380,7 @@ def _slot_move_distribution(tables: Tables, state: BattleState, layout: AiLayout
         picked.append(jnp.sum(equal[:, slot] * win, axis=1))  # [G]
     dist = jnp.mean(jnp.stack(picked, axis=1), axis=0)  # the guesses, 1/2 each
     dist = jnp.where(jnp.any(usable_moves(tables, state, 1)), dist, jax.nn.one_hot(0, MOVES))
-    out_of_range = jnp.any((scores < 0) | (scores >= _SCORE_VALUES))
+    out_of_range = jnp.any((scores < 0) | (scores > _SCORE_MAX))
     return jnp.where(out_of_range, jnp.nan, dist)
 
 
@@ -1460,7 +1507,11 @@ def ai_action_distribution(
     Raises ``UnsupportedAi`` on a refused concrete state; NaN when traced."""
     layout = _layout(tables, layout)
     _check(tables, state, layout, _all_refusals)
-    return _distribution(tables, state, layout)
+    dist = _distribution(tables, state, layout)
+    concrete = not isinstance(dist, jax.core.Tracer)
+    if layout.per_slot_sites and concrete and bool(jnp.any(jnp.isnan(dist))):
+        raise UnsupportedAi(_PATH_REFUSAL)
+    return dist
 
 
 # --- The loose oracle (tests only) ---------------------------------------------------

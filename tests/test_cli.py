@@ -1276,6 +1276,21 @@ def test_kaizo_pool_cap_is_never_defaulted(
     assert "Pool at level cap 12" in capsys.readouterr().out
 
 
+@pytest.mark.slow
+@pytest.mark.parametrize("save", ["kaizo_save_pre_roark_path", "kaizo_save_probe_path"])
+def test_kaizo_roark_coverage_on_the_saves_is_exact(request, save, capsys, kaizo_tables):
+    # K3c final review I-1: the milestone goal (plan K3c lines 5-7, Task 8 item 1) as a
+    # regression test. The save is read in place, never copied.
+    path = str(request.getfixturevalue(save))
+    args = ["coverage", "--game", "kaizo", "--save", path, "--trainer", "roark", "--cap", "16"]
+    assert main(args) == 0
+    out = capsys.readouterr().out
+    assert "Pool at level cap 16 (12 Pokemon):" in out
+    assert out.count("Support: EXACT") == 2, out
+    assert out.count("Missing: none") == 2, out
+    assert out.count("Sampling only: none") == 2, out
+
+
 def test_pkmn_glyphs_print_as_pkmn():  # final review M13
     from nuzline.cli import _listing_line, _trainer_line
 

@@ -186,9 +186,10 @@ print(json.dumps([astuple(r) for r in ranking]))
 """
 
 
-def _rank_on_devices(devices: int) -> list:
-    """The ranking printed by ``_MULTI_DEVICE_SCRIPT`` in a subprocess with ``devices``
-    host devices (whatever ``XLA_FLAGS`` this process has)."""
+def _rank_on_devices(devices: int, script: str | None = None) -> list:
+    """The ranking printed by ``script`` (default ``_MULTI_DEVICE_SCRIPT``) in a subprocess
+    with ``devices`` host devices (whatever ``XLA_FLAGS`` this process has)."""
+    script = _MULTI_DEVICE_SCRIPT if script is None else script
     import json
     import os
     import subprocess
@@ -202,7 +203,7 @@ def _rank_on_devices(devices: int) -> list:
         "PYTHONPATH": os.pathsep.join([str(root / "src"), str(root)]),
     }
     done = subprocess.run(
-        [sys.executable, "-c", f"DEVICES = {devices}\n" + _MULTI_DEVICE_SCRIPT],
+        [sys.executable, "-c", f"DEVICES = {devices}\n" + script],
         check=False,
         cwd=root,
         env=env,
@@ -218,6 +219,40 @@ def test_rank_actions_same_on_multiple_devices(tables):
     # Both runs in subprocesses, so the baseline has one device whatever XLA_FLAGS the
     # developer exported for this process.
     assert _rank_on_devices(4) == _rank_on_devices(1)
+
+
+_KAIZO_MULTI_DEVICE_SCRIPT = """
+import json, jax
+from dataclasses import astuple
+from nuzline.data.games import GAMES, KAIZO
+from nuzline.data.tables import load_names, load_tables
+from nuzline.data.trainer import IntermediateData, build_trainer_party, load_trainers
+from nuzline.engine.coverage import start_weather
+from nuzline.engine.state import make_state
+from nuzline.search.stage_a import rank_actions
+
+assert jax.device_count() == DEVICES, jax.device_count()
+d = GAMES[KAIZO]
+tables, names = load_tables(d.tables_dir), load_names(d.tables_dir)
+roark = next(x for x in load_trainers(d.intermediate_dir) if x.name == "Roark")
+party = list(build_trainer_party(roark, IntermediateData(d.intermediate_dir)))
+player = [party[2], party[5]]  # Roark's own Gible and Cranidos, as the coverage tests use
+state = make_state(
+    tables, player, party, start_weather(roark), roark.items, terrain=roark.terrain
+)
+ranking = rank_actions(tables, names, state, n=6, key=jax.random.PRNGKey(0), max_turns=3)
+print(json.dumps([astuple(r) for r in ranking]))
+"""
+
+
+@pytest.mark.slow
+def test_kaizo_rank_actions_same_on_multiple_devices(kaizo_tables):
+    """K3c final review: the device-count claim of ``rank_actions`` for the Kaizo policy,
+    whose playouts ``vmap`` the per-slot ``ai_action_distribution`` (a 1-ulp change there
+    could change ``_choose``'s exact tie). Kaizo Roark at turn 0, 1 and 3 host devices
+    (3 divides neither 6 nor a bucket, so the padding differs)."""
+    one = _rank_on_devices(1, _KAIZO_MULTI_DEVICE_SCRIPT)
+    assert one and _rank_on_devices(3, _KAIZO_MULTI_DEVICE_SCRIPT) == one
 
 
 def test_single_pokemon_ladder_is_flat(tables, names):

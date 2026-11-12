@@ -91,6 +91,42 @@ def _species_with(tables, s, side: int, species: int, ability: int):
     )
 
 
+# --- AddToMoveScore (trainer_ai.c:576-586) -------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "start, value, expected",
+    [(100, -10, 90), (5, -10, 0), (120, 7, 127), (127, 2, 0), (126, 4, 0), (100, 4, 104)],
+)
+def test_add_to_move_score_wraps_the_s8(tables, names, start, value, expected):
+    # moveScore is s8 (include/battle/ai_context.h:14): `moveScore += val` wraps to
+    # -128..127, then a negative score becomes 0 (trainer_ai.c:581-585). K3c final review.
+    assert "s8 moveScore[4];" in (DECOMP / "include/battle/ai_context.h").read_text()
+    ctx = _ctx(tables, versus(tables, names, GEODUDE))
+    ctx = ctx._replace(scores=ctx.scores.at[0].set(start))
+    assert int(c.add_to_move_score(ctx, value).scores[0]) == expected
+
+
+def test_a_score_past_the_s8_is_refused(monkeypatch, kaizo_tables, kaizo_roark_party):
+    # A score above 127 cannot come out of the wrapped AddToMoveScore; if one ever did, the
+    # factored distribution is NaN instead of ranking it (policy._slot_move_distribution).
+    from nuzline.ai import policy
+    from nuzline.ai.layout import KAIZO
+
+    s = make_state(kaizo_tables, [kaizo_roark_party[2]], list(kaizo_roark_party))
+    real = policy._slot_histograms
+    dist = np.asarray(policy._slot_move_distribution(kaizo_tables, s, KAIZO))
+    assert not np.isnan(dist).any()
+
+    def high(tables, state, layout):
+        scores, hist = real(tables, state, layout)
+        return scores.at[..., 0].set(128), hist
+
+    monkeypatch.setattr(policy, "_slot_histograms", high)
+    dist = np.asarray(policy._slot_move_distribution(kaizo_tables, s, KAIZO))
+    assert np.isnan(dist).all()
+
+
 # --- HP percent (trainer_ai.c:618, :633) ---------------------------------------------------
 
 

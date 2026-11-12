@@ -32,7 +32,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
-from hypothesis import HealthCheck, assume, given, settings
+from hypothesis import HealthCheck, assume, event, given, settings
 from hypothesis import strategies as st
 from scipy.stats import chisquare
 
@@ -183,7 +183,9 @@ def site_layouts(draw):
 
 def _joint_moves(t, s, layout) -> np.ndarray:
     """``float64[MOVES]``: the move pick by a joint enumeration of every slot's used sites,
-    both guesses and the 12 tiebreaks, through ``_scores`` and ``_pick`` (no factoring)."""
+    both guesses and the 12 tiebreaks, through ``_scores`` and ``_pick`` (no factoring).
+    NaN when a scoring is refused (-1): a synthetic row that lacks a roll the path reaches
+    is refused, not read as never jumping (``commands.if_random_less_than``)."""
     thresholds = np.asarray(slot_roll_thresholds(t, s, layout))
     used = np.argwhere(thresholds > 0)
     bits = (np.arange(2 ** len(used))[:, None] >> np.arange(len(used))) & 1
@@ -202,6 +204,8 @@ def _joint_moves(t, s, layout) -> np.ndarray:
             switch_stop=jnp.full(k, SWITCH_NONE, jnp.int8),
         )
         scores = _scores_batch(t, s, outs, layout)
+        if np.any(np.asarray(scores) < 0):  # a reached roll the synthetic row lacks
+            return np.full(MOVES, np.nan)  # (policy._scores refuses it; K3c final review)
         picks = np.asarray(_pick_batch(t, s, scores, jnp.arange(TIEBREAK_MOD, dtype=jnp.int8)))
         share = weight[:, None] * TIEBREAK_P[None, :] / 2
         for m in range(MOVES):
@@ -444,15 +448,16 @@ def test_factored_full_distribution_matches_enumerated(kaizo_tables, kaizo_roark
 def test_factored_equals_joint_bruteforce(kaizo_tables, kaizo_roark_party, data):
     """On random Kaizo decisions and synthetic site tables, the factored move pick equals a
     joint enumeration over all slots' bits, both guesses and the 12 tiebreaks, when the
-    moveset has at most 14 sites."""
+    moveset has at most 14 sites; both are NaN when the synthetic table lacks a roll the
+    path reaches (``assert_allclose`` compares NaN positions)."""
     t = kaizo_tables
     s = data.draw(kaizo_states(t, kaizo_roark_party))
     layout = data.draw(site_layouts())
     assume(not bool(policy._refused(t, s, layout).scoring))
     assume(int(np.sum(np.asarray(slot_roll_thresholds(t, s, layout)) > 0)) <= 14)
-    np.testing.assert_allclose(
-        np.asarray(_factored(t, s, layout)), _joint_moves(t, s, layout), atol=1e-5
-    )
+    factored = np.asarray(_factored(t, s, layout))
+    event("refused" if np.isnan(factored).any() else "compared")
+    np.testing.assert_allclose(factored, _joint_moves(t, s, layout), atol=1e-5)
 
 
 # --- Exact against loose -------------------------------------------------------------------
@@ -745,11 +750,13 @@ def test_kaizo_ai_rows_do_not_depend_on_the_bucket(kaizo_tables, kaizo_roark_par
 
 
 _DEVICES_SCRIPT = """
-import hashlib, jax
+import hashlib, jax, numpy as np
 from nuzline.data.games import GAMES, KAIZO
 from nuzline.data.tables import load_tables
 from nuzline.data.trainer import IntermediateData, build_trainer_party, load_trainers
+from nuzline.engine.actions import NUM_OPP_ACTIONS
 from nuzline.search.expand import ai_rows
+from nuzline.search.rows import take
 from tests.ai.test_kaizo_outcome import _random_kaizo_rows
 
 assert jax.device_count() == DEVICES, jax.device_count()
@@ -758,6 +765,8 @@ t = load_tables(d.tables_dir)
 roark = next(x for x in load_trainers(d.intermediate_dir) if x.name == "Roark")
 party = build_trainer_party(roark, IntermediateData(d.intermediate_dir))
 rows = _random_kaizo_rows(t, party, 40, seed=5)
+empty = ai_rows(t, take(rows, np.arange(0)))  # K3c final review: no rows, any device count
+assert empty.shape == (0, NUM_OPP_ACTIONS) and empty.dtype == np.float32, empty
 print(hashlib.sha256(ai_rows(t, rows).tobytes()).hexdigest())
 """
 
@@ -792,5 +801,6 @@ def _kaizo_ai_rows_on_devices(devices: int) -> str:
 def test_kaizo_ai_rows_do_not_depend_on_the_device_count(kaizo_tables):
     """Review m-R1: the Kaizo ``ai_rows`` (``lax.map`` per device under ``shard_map``) give
     the same bytes on 1 and on 3 host devices (3 divides no bucket, so the padding
-    differs too)."""
+    differs too). An empty batch gives a (0, NUM_OPP_ACTIONS) array on both (K3c final
+    review: ``shard_map`` needs the leading axis to divide by the device count)."""
     assert _kaizo_ai_rows_on_devices(1) == _kaizo_ai_rows_on_devices(3)

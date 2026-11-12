@@ -9,11 +9,19 @@ For each of these decisions:
 - the AI refuses nothing (``policy.ai_refusals`` is empty);
 - ``policy.ai_width``, the combinations the factored distribution merges (plan K3c Ruling
   12), is at most ``WIDTH_CAP``, and it is the pinned value of the active (``WIDTHS``);
-- where the loose oracle has at most ``LOOSE_JOINT_BITS`` (18) reads on the paths of the four
-  slots, so that it enumerates the slots jointly over at most 2^18 combinations, the exact
-  distribution and each slot's score distribution equal the loose ones
-  (``tests.ai.test_kaizo_outcome._assert_exact_equals_loose``: every ``IfRandomLessThan`` and
-  every ``LoadBattlerAbility DEFENDER`` its own draw, no site table, no shared guess).
+- every decision has at most ``LOOSE_JOINT_BITS`` (18) loose reads on the paths of the four
+  slots, so that the loose oracle enumerates the slots jointly over at most 2^18
+  combinations, and there the exact distribution and each slot's score distribution equal
+  the loose ones (``tests.ai.test_kaizo_outcome._assert_exact_equals_loose``: every
+  ``IfRandomLessThan`` and every ``LoadBattlerAbility DEFENDER`` its own draw, no site
+  table, no shared guess). All ``DECISIONS`` decisions of a save are compared: a later read
+  that pushes one past 18 fails here instead of silently shrinking the check.
+
+The loose oracle builds its switch part from the exact path's own ``switch_sites``,
+``switch_stop_probs`` and ``switch_action`` (``policy.ai_action_distribution_loose``), so
+exact == loose here checks the scoring and the move pick, not the switch categorical. The
+switch has its own independent oracle (``tests/ai/test_kaizo_switching.py``:
+``_loose_switch`` and ``test_six_bench_layout_fits``; kaizo_roark.md 8.6, 11.1).
 
 The flat products (``policy.ai_flat_width``, reported, not used) are recorded with the widths
 in kaizo_roark.md 14. Skips without the saves or the Kaizo tables.
@@ -38,6 +46,9 @@ from tests.conftest import KAIZO_INTERMEDIATE
 CAP = 16  # the Roark level cap (docs/kaizo/k3b-survey.md 1.1)
 
 SAVES = {"pre_roark": "kaizo_save_pre_roark_path", "probe": "kaizo_save_probe_path"}
+
+# Decisions per save: 12 pool candidates (kaizo_roark.md 14) x Roark's 6 actives.
+DECISIONS = 72
 
 # ai_width per Roark active, the same against every candidate of both pools (measured
 # 2026-11-11; kaizo_roark.md 14): 45 switch stops plus, per guess, sum_slots 2^(sites).
@@ -102,7 +113,13 @@ def test_roark_ai_against_the_pool(
     assert max(r["width"] for r in rows) <= WIDTH_CAP
     widths = {(r["active"], r["width"]) for r in rows}
     assert widths == set(WIDTHS.items()), sorted(widths)
+    assert len(rows) == DECISIONS, len(rows)
     joint = [r for r in rows if r["reads"] <= policy.LOOSE_JOINT_BITS]
-    assert joint, "no decision small enough for the joint loose enumeration"
+    too_big = [
+        (r["candidate"], r["active"], r["reads"])
+        for r in rows
+        if r["reads"] > policy.LOOSE_JOINT_BITS
+    ]
+    assert len(joint) == DECISIONS, too_big[:5]
     for r in joint:
         _assert_exact_equals_loose(t, r["state"], KAIZO)
