@@ -1,0 +1,178 @@
+"""The line search (spec docs/superpowers/specs/2026-11-12-l1-line-player-design.md §5):
+the candidate rules per foe, the key discipline (the hold-out never shares keys with the
+search), the time budget and the start line. Most tests replace ``evaluate_lines`` with a
+recorder, so only the two marked slow compile a playout program."""
+
+import jax
+import numpy as np
+import pytest
+
+from nuzline.engine.ids import EffectId
+from nuzline.search import deaths, line_search
+from nuzline.search.line import Line, empty_line
+from nuzline.search.line_search import (
+    HOLD_OUT_SALT,
+    MAJOR_STATUSES,
+    LineSearchSettings,
+    entry_candidates,
+    find_line,
+    who_what_candidates,
+)
+from nuzline.search.player_eval import PlayerOdds, evaluate_lines
+from tests.engine.helpers import roark_state
+
+KEY = jax.random.PRNGKey(11)
+SMALL = LineSearchSettings(
+    screen_n=32, keep=2, refine_n=64, max_sweeps=2, restarts=0, final_n=128, max_turns=40
+)
+
+
+def _with_moves(state, slot: int, moves: list[int]):
+    """``state`` with the player's party ``slot`` knowing exactly ``moves``."""
+    m = np.asarray(state.moves).copy()
+    m[0, slot] = moves + [0] * (4 - len(moves))
+    return state._replace(moves=m)
+
+
+def _living(state) -> set[int]:
+    return {int(i) for i in np.flatnonzero((state.species[0] > 0) & (state.hp[0] > 0))}
+
+
+def test_who_what_candidates(tables, names):
+    s = roark_state(tables, names)
+    power = np.asarray(tables.move_power)
+    effect = np.asarray(tables.move_effect)
+    param = np.asarray(tables.move_param)
+    moves = np.asarray(s.moves)
+    cands = who_what_candidates(tables, s, 0)
+    assert cands
+    firsts = set()
+    for use, move, first in cands:
+        assert use in _living(s)
+        assert power[moves[0, use, move]] > 0
+        if first != -1:
+            m = moves[0, use, first]
+            assert power[m] == 0
+            assert effect[m] == EffectId.STATUS_FOE and param[m, 0] in MAJOR_STATUSES
+            firsts.add((use, first))
+    # Budew (slot 5) knows Stun Spore in move slot 3: a paralysis opener.
+    assert (5, 3) in firsts
+
+    # A Ground move is never offered against a Flying-type foe.
+    eq = names.move("Earthquake")
+    flying = _with_moves(
+        roark_state(tables, names, opp_species="Starly"), 0, [eq, names.move("Ember")]
+    )
+    offered = {(u, m) for u, m, _ in who_what_candidates(tables, flying, 0)}
+    assert (0, 0) not in offered
+    assert (0, 1) in offered
+
+    # A Pokemon whose only damaging move cannot touch the foe yields no candidate.
+    immune = _with_moves(flying, 0, [eq, names.move("Leer")])
+    assert all(u != 0 for u, _, _ in who_what_candidates(tables, immune, 0))
+
+
+def test_entry_candidates(tables, names):
+    s = roark_state(tables, names)
+    hp = np.asarray(s.hp).copy()
+    hp[0, 2] = 0
+    s = s._replace(hp=hp)
+    assert entry_candidates(s, 1) == [(-1, 0), (-1, 1), (0, 0), (3, 0), (4, 0), (5, 0)]
+
+
+def _odds(n: int, tag: float = 0.0) -> PlayerOdds:
+    return PlayerOdds(
+        n=n,
+        wins=(0, 0, 0, 0),
+        wins_any=0,
+        deaths_total=0,
+        distribution=deaths.DeathDistribution.from_counts([1] + [0] * (len(deaths.BUCKETS) - 1)),
+        mean_turns=tag,
+        fallback_share=0.0,
+    )
+
+
+class _Recorder:
+    """Stands in for ``evaluate_lines``: records every call, returns equal odds tagged
+    with the call number (so nothing ever beats the incumbent)."""
+
+    def __init__(self):
+        self.calls = []
+
+    def __call__(self, tables, state, lines, n, key, max_turns=100):
+        out = [_odds(n, float(len(self.calls))) for _ in lines]
+        self.calls.append((list(lines), n, np.asarray(jax.random.key_data(key)), out))
+        return out
+
+
+@pytest.fixture
+def recorder(monkeypatch):
+    rec = _Recorder()
+    monkeypatch.setattr(line_search, "evaluate_lines", rec)
+    return rec
+
+
+def _same(a: Line, b: Line) -> bool:
+    return all(np.array_equal(x, y) for x, y in zip(a, b, strict=True))
+
+
+def test_hold_out_keys_are_fresh(tables, names, recorder):
+    s = roark_state(tables, names, player_count=3, opp_count=2)
+    settings = LineSearchSettings(screen_n=8, keep=2, refine_n=16, restarts=1, final_n=32)
+    result = find_line(tables, names, s, KEY, settings)
+    hold = np.asarray(jax.random.key_data(jax.random.fold_in(KEY, HOLD_OUT_SALT)))
+    *search, last = recorder.calls
+    assert search
+    assert all(not np.array_equal(key, hold) for _, _, key, _ in search)
+    assert len({key.tobytes() for _, _, key, _ in search}) == len(search)  # one key per batch
+    assert np.array_equal(last[2], hold) and last[1] == 32
+    assert _same(last[0][0], result.line)
+    assert result.odds is last[3][0]
+    assert result.evaluations == sum(len(lines) * n for lines, n, _, _ in recorder.calls)
+
+
+def test_budget_stops_the_search(tables, names, recorder):
+    s = roark_state(tables, names, player_count=3, opp_count=2)
+    start = empty_line()
+    start.use[1], start.move[1] = 0, 0
+    settings = LineSearchSettings(budget_seconds=0, final_n=32)
+    result = find_line(tables, names, s, KEY, settings, start=start, clock=lambda: 100.0)
+    assert result.stopped == "budget"
+    assert _same(result.line, start)
+    assert len(recorder.calls) == 1  # the hold-out only
+    assert recorder.calls[0][1] == 32
+    assert result.odds is recorder.calls[0][3][0]
+
+
+def test_start_line_is_used(tables, names, recorder):
+    s = roark_state(tables, names, player_count=3, opp_count=2)
+    start = empty_line()
+    start.use[0], start.move[0] = 1, 0
+    find_line(tables, names, s, KEY, SMALL, start=start)
+    assert any(_same(line, start) for line in recorder.calls[0][0])
+
+
+@pytest.fixture(scope="module")
+def small_fight(tables, names):
+    s = roark_state(tables, names, player_count=3, opp_count=2)
+    return s, find_line(tables, names, s, KEY, SMALL)
+
+
+@pytest.mark.slow
+def test_find_line_is_no_worse_than_fallback(tables, small_fight):
+    s, result = small_fight
+    k = int(s.faint_budget)
+    fallback, found = evaluate_lines(
+        tables, s, [empty_line(), result.line], 256, jax.random.PRNGKey(99), SMALL.max_turns
+    )
+    assert found.score(k)[0] >= fallback.score(k)[0] - 5
+    assert result.stopped in ("converged", "max_sweeps")
+    assert result.odds.n == SMALL.final_n
+
+
+@pytest.mark.slow
+def test_find_line_is_deterministic(tables, names, small_fight):
+    s, first = small_fight
+    again = find_line(tables, names, s, KEY, SMALL)
+    assert _same(first.line, again.line)
+    assert first.odds == again.odds
