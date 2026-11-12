@@ -83,7 +83,7 @@ lines is data: one compiled program plays any line, and `vmap` runs many lines o
 - `line_action(tables, state, line) -> (action, mode)`: `mode` 0 = fallback, 1 = the rule's action,
   2 = fallback restricted to moves (`wait`).
 - `line_replacement(tables, state, line) -> slot`.
-- `line_playout(tables, state, line, key, max_turns, layout) -> LineResult`: `playout._run`'s loop
+- `line_playout(tables, state, line, key, max_turns, layout) -> PlayerResult`: `playout._run`'s loop
   with the two choices above. `LineResult` is `PlayoutResult`'s fields plus `fallback_turns`
   (turns the fallback decided). It draws the root's hidden values first (`root_state`), like Stage
   A's root playouts, and uses the same key splits per turn as `playout`, so with an empty line it
