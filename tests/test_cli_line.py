@@ -107,8 +107,9 @@ def test_line_odds_save_needs_a_team_table(tmp_path, tables, names, capsys, monk
     assert "[[team]]" in capsys.readouterr().err
 
 
-def _found(tables, names):
-    """A fixed ``LineSearchResult``: Grotle's Razor Leaf against Geodude."""
+def _found(tables, names, wins=(10, 20, 25, 30), wins_any=40):
+    """A fixed ``LineSearchResult`` over 100 playouts: Grotle's Razor Leaf against
+    Geodude, ``wins[k]`` wins with at most k deaths and ``wins_any`` wins."""
     import numpy as np
 
     from nuzline.search import deaths
@@ -117,11 +118,13 @@ def _found(tables, names):
     from nuzline.search.player_eval import PlayerOdds
 
     counts = np.zeros(len(deaths.BUCKETS))
-    counts[0], counts[deaths.BUCKETS.index("whiteout")] = 30, 70
+    counts[:4] = [wins[0], *np.diff(wins)]
+    counts[4] = wins_any - wins[3]
+    counts[deaths.BUCKETS.index("whiteout")] = 100 - wins_any
     odds = PlayerOdds(
         n=100,
-        wins=(30, 30, 30, 30),
-        wins_any=30,
+        wins=wins,
+        wins_any=wins_any,
         deaths_total=210,
         distribution=deaths.DeathDistribution.from_counts(counts),
         mean_turns=12.5,
@@ -129,6 +132,36 @@ def _found(tables, names):
     )
     line = rules_to_line([Rule(against=0, use=2, move=3)])
     return LineSearchResult(line=line, odds=odds, sweeps=2, evaluations=999, stopped="converged")
+
+
+def _ladder(out: str) -> dict[str, str]:
+    """Each ladder row's label and percentage; a row is ``  <label padded> <pct> % [..]``
+    with at least one space between label and percentage."""
+    rows = {}
+    for line in out.splitlines():
+        for label in LADDER:
+            if line.startswith(f"  {label} "):
+                rows[label] = line[len(label) + 2 :].split()[0]
+    return rows
+
+
+def test_line_find_full_ladder_keeps_the_columns(tmp_path, tables, names, capsys, monkeypatch):
+    from nuzline.search import line_search
+
+    full = _found(tables, names, wins=(100, 100, 100, 100), wins_any=100)
+    monkeypatch.setattr(line_search, "find_line", lambda *a, **k: full)
+    assert main(["line", "find", *BASE, "--line", _file(tmp_path)]) == 0
+    assert _ladder(capsys.readouterr().out) == dict.fromkeys(LADDER, "100.0")
+
+
+def test_line_find_out_needs_its_directory(tmp_path, capsys, monkeypatch):
+    _no_playouts(monkeypatch)
+    out_path = tmp_path / "missing" / "found.toml"
+    args = ["line", "find", *BASE, "--line", _file(tmp_path), "--out", str(out_path)]
+    assert main(args) == 1
+    captured = capsys.readouterr()
+    assert "--out" in captured.err and "no directory" in captured.err
+    assert captured.out == ""
 
 
 def test_line_find_writes_out(tmp_path, tables, names, capsys, monkeypatch):
@@ -152,7 +185,14 @@ def test_line_find_writes_out(tmp_path, tables, names, capsys, monkeypatch):
     out = captured.out
     assert out.isascii()
     assert "found by search (a heuristic: a good line, not a proven best)" in out
-    assert "100 playouts, seed 0" in out and "win, any" in out
+    assert "100 playouts, seed 0" in out
+    assert _ladder(out) == {
+        "win, 0 deaths": "10.0",
+        "win, <=1 deaths": "20.0",
+        "win, <=2 deaths": "25.0",
+        "win, <=3 deaths": "30.0",
+        "win, any": "40.0",
+    }
     assert '[[rule]]\nagainst = "geodude"' in out.lower()  # vanilla names are upper case
     ((settings, start),) = seen
     assert (settings.restarts, settings.final_n, settings.max_sweeps) == (0, 100, 2)
@@ -208,11 +248,25 @@ def test_line_odds_refused_fight_exit_2(tmp_path, capsys, monkeypatch):
     assert "Roark (Leader, id 246)" in out and "Metronome" in out
 
 
+def test_line_setup_unbuildable_fight_raises_fight_refused(tmp_path, monkeypatch):
+    """``line_setup``'s callers (benchmarks) catch the public ``FightRefused``."""
+    from nuzline import cli
+
+    def refuse(tables, names, trainer, inter):
+        raise cli._Refused(trainer, None)
+
+    monkeypatch.setattr(cli, "_check_buildable", refuse)
+    with pytest.raises(cli.FightRefused) as e:
+        cli.line_setup("vanilla", 246, Path(_file(tmp_path)), party_path=Path(PARTY))
+    assert e.value.trainer.id == 246
+
+
 @pytest.mark.parametrize(
     ("flags", "shown"),
     [
         (["--deaths", "4"], "--deaths 4"),
-        (["--protect", "Piplup"], "--protect Piplup"),
+        (["--protect", "Piplup"], "--protect Piplup: no such Pokemon in the team"),
+        (["--protect", "9"], "--protect 9: no team index 9 (the team has 6)"),
         (["--n", "0"], "--n must be at least 1"),
     ],
 )
