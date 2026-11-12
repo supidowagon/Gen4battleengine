@@ -10,9 +10,10 @@ the user's claim that the TM or item is available.
 
 ``[[rule]]``: ``against`` is an opposing species (case-insensitive) or ``slot:N`` (0-based),
 which a species the opponent has twice needs; ``use``, ``via`` and ``from`` name a team
-member by species or ``slot:N`` (0-based), the latter needed for a species on the team
-twice; ``move`` and ``first`` are moves ``use`` knows. ``from`` needs ``via``, ``wait``
-excludes ``via``, ``via`` differs from ``use``, and a foe has at most one rule.
+member by species, by its ``[[team]]`` ``pokemon`` string, or ``slot:N`` (0-based), the
+latter needed for a name matching two members; ``move`` and ``first`` are moves ``use``
+knows. ``from`` needs ``via``, ``wait`` excludes ``via``, ``via`` differs from ``use``,
+``from`` differs from ``via``, and a foe has at most one rule.
 
 Every failure is a ``ValueError`` naming the table (``rule 3 (against Gible): ...``).
 This module does not import jax: ``Line`` is imported inside the two functions that build
@@ -205,9 +206,15 @@ _SLOT = re.compile(r"slot:(\d+)", re.IGNORECASE)
 
 
 def _slot_or_species(
-    value, party: Sequence[PokemonSpec], names: Names, field: str, side: str
+    value,
+    party: Sequence[PokemonSpec],
+    names: Names,
+    field: str,
+    side: str,
+    labels: Sequence[str] = (),
 ) -> int:
-    """The index in ``party`` that ``value`` names: ``slot:N`` or a species name held once."""
+    """The index in ``party`` that ``value`` names: ``slot:N``, or a species name or a
+    ``labels`` entry (slot ``i``'s listed name, case-insensitive) matching one slot only."""
     if not isinstance(value, str):
         raise ValueError(f"{field} must be a species name or slot:N, not {value!r}")  # noqa: TRY004
     if m := _SLOT.fullmatch(value.strip()):
@@ -216,7 +223,13 @@ def _slot_or_species(
             raise ValueError(f"{field} {value!r}: {side} has slots 0-{len(party) - 1}")
         return slot
     species = names.species_names
-    hits = [i for i, p in enumerate(party) if species[p.species].casefold() == value.casefold()]
+    key = value.strip().casefold()
+    hits = [
+        i
+        for i, p in enumerate(party)
+        if key == species[p.species].casefold()
+        or (i < len(labels) and key == labels[i].strip().casefold())
+    ]
     if not hits:
         listed = ", ".join(species[p.species] for p in party)
         raise ValueError(f"{field} {value!r}: {side} has no such Pokemon ({listed})")
@@ -236,7 +249,11 @@ def _move_slot(value, spec: PokemonSpec, names: Names, field: str) -> int:
 
 
 def _resolve_rule(
-    table: dict, names: Names, player: Sequence[PokemonSpec], opp: Sequence[PokemonSpec]
+    table: dict,
+    names: Names,
+    player: Sequence[PokemonSpec],
+    opp: Sequence[PokemonSpec],
+    labels: Sequence[str],
 ) -> Rule:
     for key in ("against", "use", "move"):
         if key not in table:
@@ -244,7 +261,7 @@ def _resolve_rule(
     against = _slot_or_species(table["against"], opp, names, "against", "the opponent")
 
     def member(field: str) -> int:
-        return _slot_or_species(table[field], player, names, field, "the team")
+        return _slot_or_species(table[field], player, names, field, "the team", labels)
 
     use = member("use")
     move = _move_slot(table["move"], player[use], names, "move")
@@ -260,6 +277,8 @@ def _resolve_rule(
         raise ValueError("wait cannot be set with via")
     if via == use:
         raise ValueError("via is the same Pokemon as use")
+    if via_from >= 0 and via_from == via:
+        raise ValueError("from is the same Pokemon as via")
     return Rule(against, use, move, first, via, via_from, wait)
 
 
@@ -267,14 +286,16 @@ def resolve_rules(
     file: LineFile, names: Names, player: Sequence[PokemonSpec], opp: Sequence[PokemonSpec]
 ) -> list[Rule]:
     """The ``[[rule]]`` tables resolved against the team ``player`` and the opponent's
-    party ``opp`` (module docstring), in file order."""
+    party ``opp`` (module docstring), in file order. A team member may also be named by its
+    ``[[team]]`` entry's ``pokemon`` string (slot ``i`` is entry ``i``)."""
+    labels = [e.get("pokemon") if isinstance(e.get("pokemon"), str) else "" for e in file.team]
     rules: list[Rule] = []
     owner: dict[int, int] = {}
     for i, table in enumerate(file.rules, 1):
         where = f"rule {i} (against {table.get('against')})"
         try:
             _check_keys(where, table, RULE_KEYS)
-            rule = _resolve_rule(table, names, player, opp)
+            rule = _resolve_rule(table, names, player, opp, labels)
             if rule.against in owner:
                 raise ValueError(
                     f"opposing slot {rule.against} already has rule {owner[rule.against]}"
@@ -296,7 +317,10 @@ def rules_to_line(rules: Sequence[Rule]) -> Line:
     from nuzline.search.line import Line, empty_line
 
     arrays = {f: np.array(a) for f, a in zip(_FIELDS, empty_line(), strict=True)}
+    slots = len(arrays["use"])
     for r in rules:
+        if not 0 <= r.against < slots:
+            raise ValueError(f"opposing slot {r.against} outside 0-{slots - 1}")
         if arrays["use"][r.against] >= 0:
             raise ValueError(f"two rules for opposing slot {r.against}")
         for f in _FIELDS:
@@ -379,7 +403,10 @@ def render_rules(
 
 
 def write_line_file(path: Path, file: LineFile, rules_toml: Sequence[str]) -> None:
-    """Write ``file``'s ``[[team]]`` tables, then the ``rules_toml`` tables, to ``path``."""
+    """Write ``file``'s ``[[team]]`` tables, then the ``rules_toml`` tables, to ``path``.
+    ``ValueError`` (nothing written) for a team key the reader would refuse."""
+    for i, entry in enumerate(file.team, 1):
+        _check_keys(f"team {i} ({entry.get('pokemon')})", entry, TEAM_KEYS)
     team = [_table("team", list(entry.items())) for entry in file.team]
     text = "\n\n".join([*team, *rules_toml])
     Path(path).write_text(text + "\n" if text else "", encoding="utf-8", newline="\n")

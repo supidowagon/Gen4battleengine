@@ -182,3 +182,77 @@ def test_team_from_save(tmp_path, tables, names):
 def test_module_does_not_import_jax():
     code = "import nuzline.search.line_text, sys; assert 'jax' not in sys.modules"
     subprocess.run([sys.executable, "-c", code], check=True)
+
+
+# --- review follow-ups ---------------------------------------------------------------------
+
+
+def test_member_by_team_listing(tmp_path, names, player, opp):
+    team = "".join(f'[[team]]\npokemon = "{p}"\n\n' for p in ("Fuego", "party:1", "Grotle"))
+    rules = _resolve(
+        tmp_path,
+        names,
+        player,
+        opp,
+        team + '[[rule]]\nagainst = "Onix"\nuse = "PARTY:1"\nmove = "Bubble"\nvia = "fuego"\n',
+    )
+    assert rules == [Rule(against=1, use=1, move=2, via=0)]
+
+
+def test_ambiguous_team_member(tmp_path, names, player, opp):
+    twins = [player[0], player[1], player[0]]
+    body = '[[rule]]\nagainst = "Onix"\nuse = "Monferno"\nmove = "Ember"\n'
+    _bad(tmp_path, names, twins, opp, body, r"rule 1 \(against Onix\): .*slots 0, 2.*slot:N")
+
+
+def test_from_equal_to_via(tmp_path, names, player, opp):
+    body = (
+        '[[rule]]\nagainst = "Onix"\nuse = "Prinplup"\nmove = "Bubble"\n'
+        'via = "Grotle"\nfrom = "slot:2"\n'
+    )
+    _bad(tmp_path, names, player, opp, body, r"rule 1 \(against Onix\): from is the same .*via")
+
+
+def test_wait_wrong_type(tmp_path, names, player, opp):
+    body = '[[rule]]\nagainst = "Onix"\nuse = "Prinplup"\nmove = "Bubble"\nwait = 1\n'
+    _bad(tmp_path, names, player, opp, body, r"rule 1 \(against Onix\): wait must be true")
+
+
+def test_rules_to_line_slot_range():
+    with pytest.raises(ValueError, match="opposing slot 6 outside 0-5"):
+        rules_to_line([Rule(against=6, use=0, move=0)])
+    with pytest.raises(ValueError, match="opposing slot -1"):
+        rules_to_line([Rule(against=-1, use=0, move=0)])
+
+
+def test_write_refuses_unknown_team_key(tmp_path):
+    path = tmp_path / "out.toml"
+    file = LineFile(team=({"pokemon": "Grotle", "level": 20},), rules=())
+    with pytest.raises(ValueError, match=r"team 1 \(Grotle\): unknown key\(s\) level"):
+        write_line_file(path, file, [])
+    assert not path.exists()
+
+
+def test_team_from_save_locations(tmp_path, tables, names):
+    from nuzline.saves import load_save
+    from tests.saves.synthetic import box_record, write_save
+
+    oran = names.item("Oran Berry")
+    boxes = {(1, 3): box_record(tables, names, "Bidoof", 4, ("Tackle",), item=oran)}
+    path = write_save(tmp_path, tables, names, egg_first=True, boxes=boxes)
+    save = load_save(path, tables=tables, names=names)
+    team = team_from_save(
+        LineFile(team=({"pokemon": "box:2:3", "item": ""}, {"pokemon": "party:3"}), rules=()),
+        save,
+        tables,
+        names,
+    )
+    assert save.boxes[1][3].item == oran
+    assert team[0].species == names.species("Bidoof") and team[0].item == 0
+    assert team[1].species == names.species("Grotle")
+    egg = LineFile(team=({"pokemon": "party:0"},), rules=())
+    with pytest.raises(ValueError, match=r"team 1 \(party:0\): .*egg"):
+        team_from_save(egg, save, tables, names)
+    seven = LineFile(team=tuple({"pokemon": f"party:{i}"} for i in range(7)), rules=())
+    with pytest.raises(ValueError, match="1-6 entries"):
+        team_from_save(seven, save, tables, names)
