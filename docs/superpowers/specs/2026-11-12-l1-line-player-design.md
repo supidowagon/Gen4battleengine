@@ -101,7 +101,14 @@ every line against the same `n` keys (common random numbers), chunked and sharde
 devices like `stage_a.rank_actions`, through `cached_export`. `PlayerOdds` holds, from `n` playouts:
 the ladder P(win with at most k deaths) for k = 0..3 and P(win), each with its Wilson interval
 (`stage_a.wilson`), the death distribution (`deaths.DeathDistribution`), mean turns and the share of
-turns the fallback decided. Any refused playout raises `UnsupportedAi` naming the count.
+turns the fallback decided.
+
+A refused playout (one that meets a mechanic the engine deliberately does not model) is never
+counted as a win or a loss. `line odds` and `line find` leave it out, so every rate is over the
+playouts counted, and print how many were left out and which mechanic (replayed outside `jit`).
+On Kaizo Roark this happens about once in 2000 playouts on some lines: Roark's AI switches and
+the incoming Pokemon faints the same turn (`docs/ai/roark.md` 14, item 3). The search never
+chooses a rule whose playouts are refused more than 1 % of the time.
 
 The state's `faint_budget` is the `--deaths K` the user passes. It changes how the fallback weighs a
 faint (`death_cost`) and which rung is the headline; the whole ladder is always shown. The user's
@@ -223,8 +230,6 @@ No new search method comes with this.
   not a small wiring job.
 - **The search space is the rule table of §3.** No counted setup moves, no rule keyed on HP or on
   what the opponent just did, no lead choice.
-- **A refused line playout reports the count, not the mechanic.** `refusal_reason` replays the
-  default policy only; `nuzline coverage` names what a fight is missing.
 - **A player has no memory between turns.** `act` sees the state, its params and a key. A
   recurrent learned player, or a search that reuses its tree from turn to turn, needs the loop to
   carry a player state; that is added when the first such player is built.

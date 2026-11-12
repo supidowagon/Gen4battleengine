@@ -414,3 +414,31 @@ Later players must be comparable to today's by number: one command scores every 
 - [ ] **Step 4: Run the tests, then the scoreboard** `uv run python -m benchmarks.players --n 2000` (background).
 - [ ] **Step 5: Record** the table for the three players (greedy, the user's scripted line, the found line) in `benchmarks/README.md` with machine, commit, command and seed.
 - [ ] **Step 6: Commit** — `bench(players): scoreboard of players on fixed fights`.
+
+---
+
+### Task 4b: Refused playouts are left out and named, not fatal (added 2026-11-12)
+
+Found on the real fight: a candidate line (Rhyhorn's Dig knocking out a Pokemon Roark's AI switched in the same turn) meets the engine's deliberate refusal "the opponent's Pokemon fainted in a turn its AI switched" (docs/ai/roark.md 14, item 3) about once in 2000 playouts, and `evaluate_lines` raising on it aborts a search after minutes of work. Ruling: a refused playout is never counted as a loss or a win; it is left out of the odds and the count is reported with the mechanic named. A search candidate whose refused share exceeds 1 % is never chosen.
+
+**Files:**
+- Modify: `src/nuzline/search/player_eval.py`, `src/nuzline/search/player.py`, `src/nuzline/search/line_search.py`, `src/nuzline/cli.py` (the `line` output only), their tests (`tests/search/test_player_eval.py`, `tests/search/test_player.py`, `tests/search/test_line_search.py`, `tests/test_cli_line.py`)
+- Modify: spec §4 and §8 (controller does this)
+
+**Interfaces:**
+- `PlayerOdds` gains `refused: int` (playouts left out) and `n` becomes the playouts counted (`n_total = n + refused` is not stored). Every rate and interval is over `n`.
+- `evaluate_players(..., refused: str = "raise")` and `evaluate_lines(..., refused="raise")`: `"raise"` keeps today's `UnsupportedAi`; `"exclude"` leaves refused rows out of each entry's odds. An entry whose playouts are all refused raises `UnsupportedAi` even with `"exclude"`.
+- `player.refusal_reason(tables, state, player, params, key, max_turns=100, layout=None) -> str | None`: replays one `player_playout` outside `jit` with the same key splits and names the refused mechanic, as `playout.refusal_reason` does (reuse its helpers: `ai_refusals`, `ai_path_refusals`, `replacement_refusal`, `_pass_reason`).
+- `player_eval.first_refused(...)`: not needed; instead `evaluate_players(..., refused="exclude")` returns, on each `PlayerOdds`, `refused_key: np.ndarray | None` = the first refused row's key (or None), so a caller can ask `refusal_reason` for it.
+- `line_search`: evaluates with `"exclude"`; a candidate with `refused / (n + refused) > MAX_REFUSED_SHARE = 0.01` is skipped in `stage` (never the winner, never replaces the incumbent); `LineSearchResult` gains `refused_candidates: int`. The hold-out uses `"exclude"`; its `refused` count is part of `result.odds`.
+- CLI `line odds` and `line find`: evaluate with `"exclude"`; when `odds.refused > 0` print after the ladder `N of M playouts stopped at a mechanic the engine does not model and are left out: <reason>` (reason from `refusal_reason` on `refused_key`). `find` also prints `skipped K candidate rules that met unmodelled mechanics in more than 1 % of playouts` when K > 0.
+
+- [ ] **Step 1: Failing tests.**
+  - `test_player_eval.py` (slow): on the state of `tests/search/test_playout.py::test_replacement_after_an_ai_switch_is_refused` (or the refused-distribution monkeypatch, whichever gives a mix of refused and non-refused rows across keys; if neither gives a mix, monkeypatch `player_eval._play_rows` to mark rows refused): `"raise"` raises; `"exclude"` returns `n + refused == requested n`, rates over `n`, and `refused_key` equals the first refused row's key.
+  - `test_player.py` (slow): `refusal_reason` on a refused (line, key) names the mechanic (substring "stale aiSwitchedPartySlot" or the AI refusal text of the fixture used), and returns None for a non-refused playout.
+  - `test_line_search.py` (fast, monkeypatched `evaluate_lines`): a candidate whose fake odds carry `refused` above 1 % is never chosen even with the best score; `refused_candidates` counts it; the search asks for `refused="exclude"`.
+  - `test_cli_line.py` (fast, monkeypatched): odds with `refused=3` print the "3 of ... left out" line with the reason from a monkeypatched `refusal_reason`.
+- [ ] **Step 2: Run them.** Expected: failures on the new fields/arguments.
+- [ ] **Step 3: Implement.**
+- [ ] **Step 4: Run** the four test files (slow ones in the background).
+- [ ] **Step 5: Commit** — `feat(search): leave refused playouts out and name them`.
