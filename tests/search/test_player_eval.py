@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 
 from nuzline.ai.policy import UnsupportedAi
+from nuzline.search import player_eval
 from nuzline.search.deaths import DeathDistribution
 from nuzline.search.line import empty_line, line_playout
 from nuzline.search.player import GREEDY
@@ -50,6 +51,10 @@ def test_matches_line_playout(tables, names):
         assert got.n == N
         assert got.wins_any == int(np.sum(np.asarray(out.won) == 1))
         assert got.deaths_total == int(np.asarray(out.player_faints).astype(np.int64).sum())
+        turns = np.asarray(out.turns).astype(np.int64)
+        fallback = np.asarray(out.fallback_turns).astype(np.int64)
+        assert got.mean_turns == float(turns.mean())
+        assert got.fallback_share == float(fallback.sum() / max(turns.sum(), 1))
 
 
 @pytest.mark.slow
@@ -57,11 +62,18 @@ def test_greedy_matches_the_empty_line(tables, names):
     s = _state(tables, names)
     greedy = evaluate_players(tables, s, GREEDY, [()], N, KEY, MAX_TURNS)[0]
     line = evaluate_lines(tables, s, [empty_line()], N, KEY, MAX_TURNS)[0]
-    assert (greedy.wins, greedy.wins_any, greedy.deaths_total) == (
-        line.wins,
-        line.wins_any,
-        line.deaths_total,
-    )
+    assert greedy == line
+
+
+@pytest.mark.slow
+def test_chunking_does_not_change_the_odds(tables, names, monkeypatch):
+    # 3 lines x 64 keys = 192 rows: one 512-row chunk by default, three 80-row chunks
+    # (the last padded) with ROW_CHUNK = 80.
+    s = _state(tables, names)
+    lines = [empty_line(), _rule_line(), empty_line()]
+    whole = evaluate_lines(tables, s, lines, N, KEY, MAX_TURNS)
+    monkeypatch.setattr(player_eval, "ROW_CHUNK", 80)
+    assert evaluate_lines(tables, s, lines, N, KEY, MAX_TURNS) == whole
 
 
 @pytest.mark.slow

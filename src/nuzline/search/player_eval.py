@@ -9,6 +9,8 @@ device count, padded with copies of the chunk's row 0 (dropped after the call), 
 over the host devices and exported through ``cached_export`` as ``leaves._run`` does, so
 one program compiles per player (its ``name`` is part of the export's name and static
 key) and the odds depend neither on the device count nor on how many lines are passed.
+``Player.name`` identifies the cached program, so every player needs a unique name (the
+export's static key also holds ``act``'s and ``replace``'s ``__qualname__``).
 Small chunks run faster than large ones (measured on Kaizo Roark, 20 devices: 200-800
 rows about 250-280 playouts/s, 8000 rows 63/s).
 
@@ -133,7 +135,13 @@ def _play_rows(tables, state, player: Player, params, keys, line_of, max_turns: 
             program,
             args,
             name=f"player_playouts_{player.name}",
-            static={"player": player.name, "max_turns": max_turns, "layout": layout.name},
+            static={
+                "player": player.name,
+                "act": player.act.__qualname__,
+                "replace": player.replace.__qualname__,
+                "max_turns": max_turns,
+                "layout": layout.name,
+            },
             version=code_version(),
         )
         out = jax.device_get(exported(*args))
