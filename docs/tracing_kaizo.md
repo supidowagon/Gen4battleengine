@@ -154,8 +154,9 @@ Do this only after Claude has confirmed the address check. It uses the same prac
    turn.
 4. Rules for a usable recording:
    - Lead with your first Pokemon, and fight until Roark's last Pokemon faints.
-   - **None of your Pokemon may faint.** The recording stops being useful at the first
-     faint.
+   - Your Pokemon may faint: the converter replays your replacement. Avoid a turn on
+     which both sides lose their active Pokemon, or on which the Pokemon you send in
+     faints at once to Stealth Rock: such a turn cannot be converted.
    - Use only moves and switches, never an item from your bag.
    - Fight at least 3 turns.
    If a rule breaks, click Stop, **File > Load State > 2**, and start again from step 3.
