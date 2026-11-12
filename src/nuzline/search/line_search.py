@@ -7,17 +7,17 @@ Candidates for the foe in opposing slot ``f`` (one with ``state.species[1, f] > 
 * who and what (``who_what_candidates``): ``use`` a living party slot, ``move`` one of its
   move slots with power > 0 whose ``damage_table`` against ``f`` (``use`` and ``f`` both
   active, the given state otherwise) has a positive roll, ``first`` -1 or one of its
-  power-0 move slots that inflicts a major status (``MAJOR_STATUSES``); plain entry.
-  Plus "no rule" (every field unset).
+  power-0 move slots that inflicts a major status (``MAJOR_STATUSES``) the foe can receive
+  at the given state (``_receives``); plain entry. Plus "no rule" (every field unset).
 * the entry for the rule then in place (``entry_candidates``): plain, ``wait``, or
   ``via`` each other living slot; ``via_from`` is never searched (it stays -1).
 
-A stage scores its candidates with the rest of the line fixed: one batch of ``screen_n``
-keys over all of them (the incumbent too when it is one; skipped when at most ``keep``
-differ from the incumbent: it could not cut any), then one batch of ``refine_n`` fresh
-keys over the incumbent and the best ``keep`` that differ from it. The best of those replaces the incumbent only when its
-``score(k)`` (``k = int(state.faint_budget)``) is strictly greater than the incumbent's
-on the same keys; ties keep the earlier candidate. A sweep runs both stages for each foe
+A stage scores its candidates that differ from the incumbent, the rest of the line fixed:
+one batch of ``screen_n`` keys over all of them (skipped when there are at most ``keep``:
+it could not cut any), then one batch of ``refine_n`` fresh keys over the incumbent and
+the best ``keep``. The best of those replaces the incumbent only when its ``score(k)``
+(``k = int(state.faint_budget)``) is strictly greater than the incumbent's on the same
+keys; ties keep the earlier candidate. A sweep runs both stages for each foe
 in party order; sweeps repeat until one changes nothing (``"converged"``),
 ``max_sweeps`` or the time budget (``"budget"``, checked before each stage: a started
 stage finishes).
@@ -44,7 +44,8 @@ import numpy as np
 
 from nuzline.data.tables import Names, Tables
 from nuzline.engine.actions import MOVE_ACTIONS
-from nuzline.engine.damage import damage_table
+from nuzline.engine.damage import damage_table, effectiveness, move_type_of
+from nuzline.engine.effects import can_have_status
 from nuzline.engine.ids import EffectId, Status
 from nuzline.engine.state import BattleState
 from nuzline.search.line import Line, empty_line
@@ -106,6 +107,22 @@ def _rolls(tables: Tables, state: BattleState, use, foe, move):
     return damage_table(tables, s, 0, move, False)
 
 
+@jax.jit
+def _receives(tables: Tables, state: BattleState, use, foe, move):
+    """Opposing ``foe`` can receive ``move``'s ``STATUS_FOE`` status from the player's
+    ``use``, both sent in: the two checks the engine applies to it. A type-checked move
+    (``move_param[m, 1] == 1``, Thunder Wave) needs a non-zero matchup (effects.py:1120-1131,
+    ``type_ok``), and ``can_have_status`` must hold (``_inflict``, effects.py:375). The
+    Insomnia / Limber blocks there (effects.py:362-365) are not applied."""
+    s = _facing(_facing(state, 0, MOVE_ACTIONS + use), 1, MOVE_ACTIONS + foe)
+    param = tables.move_param[move]
+    hits = effectiveness(
+        tables, move_type_of(tables, s, 0, move), s.types[1, foe], s.foresight[1] != 0
+    )
+    type_ok = (param[1] == 0) | (hits > 0)
+    return type_ok & can_have_status(tables, s, 1, foe, param[0])
+
+
 def _living(state: BattleState) -> list[int]:
     alive = (np.asarray(state.species[0]) > 0) & (np.asarray(state.hp[0]) > 0)
     return [int(i) for i in np.flatnonzero(alive)]
@@ -133,6 +150,7 @@ def who_what_candidates(tables: Tables, state: BattleState, foe: int) -> list[tu
             and power[m] == 0
             and effect[m] == EffectId.STATUS_FOE
             and param[m, 0] in MAJOR_STATUSES
+            and bool(_receives(tables, state, use, foe, m))
         ]
         out += [(use, move, first) for move in damaging for first in (-1, *openers)]
     return out
@@ -187,16 +205,16 @@ class _Run:
     def stage(self, incumbent: Line, candidates: list[Line]) -> tuple[Line, PlayerOdds | None]:
         """The stage's winner (module docstring) and its refine odds (``None``: nothing
         was scored)."""
-        finalists = [c for c in candidates if not _same(c, incumbent)]
-        if self.out_of_time() or not finalists:
+        others = [c for c in candidates if not _same(c, incumbent)]
+        if self.out_of_time() or not others:
             return incumbent, None
-        if len(finalists) > self.settings.keep:
-            screened = self.evaluate(candidates, self.settings.screen_n)
+        finalists = others
+        if len(others) > self.settings.keep:
+            screened = self.evaluate(others, self.settings.screen_n)
             order = sorted(
-                range(len(candidates)), key=lambda i: screened[i].score(self.k), reverse=True
+                range(len(others)), key=lambda i: screened[i].score(self.k), reverse=True
             )
-            ranked = [candidates[i] for i in order if not _same(candidates[i], incumbent)]
-            finalists = ranked[: self.settings.keep]
+            finalists = [others[i] for i in order[: self.settings.keep]]
         refined = self.evaluate([incumbent, *finalists], self.settings.refine_n)
         best = max(range(1, len(refined)), key=lambda i: refined[i].score(self.k))
         if refined[best].score(self.k) > refined[0].score(self.k):

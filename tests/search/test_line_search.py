@@ -7,7 +7,7 @@ import jax
 import numpy as np
 import pytest
 
-from nuzline.engine.ids import EffectId
+from nuzline.engine.ids import EffectId, Status
 from nuzline.search import deaths, line_search
 from nuzline.search.line import Line, empty_line
 from nuzline.search.line_search import (
@@ -57,6 +57,16 @@ def test_who_what_candidates(tables, names):
             firsts.add((use, first))
     # Budew (slot 5) knows Stun Spore in move slot 3: a paralysis opener.
     assert (5, 3) in firsts
+
+    # Openers the foe cannot receive are left out: Thunder Wave (type-checked) against
+    # Geodude (Ground), and any status against a foe that already has one.
+    tw = _with_moves(s, 0, [names.move("Scratch"), names.move("Thunder Wave")])
+    tw_firsts = {(u, f) for u, _, f in who_what_candidates(tables, tw, 0) if f != -1}
+    assert (0, 1) not in tw_firsts and (5, 3) in tw_firsts
+    status = np.asarray(s.status).copy()
+    status[1, 0] = Status.BURN
+    burned = s._replace(status=status)
+    assert all(f == -1 for _, _, f in who_what_candidates(tables, burned, 0))
 
     # A Ground move is never offered against a Flying-type foe.
     eq = names.move("Earthquake")
@@ -146,10 +156,15 @@ def test_budget_stops_the_search(tables, names, recorder):
 
 def test_start_line_is_used(tables, names, recorder):
     s = roark_state(tables, names, player_count=3, opp_count=2)
+    # The start's rule is on foe 1 with ``wait``: no foe-0 candidate generates it, so
+    # every line of the first batch (foe 0's screen) carries it only if ``start`` is used.
     start = empty_line()
-    start.use[0], start.move[0] = 1, 0
+    start.use[1], start.move[1], start.wait[1] = 1, 0, 1
     find_line(tables, names, s, KEY, SMALL, start=start)
-    assert any(_same(line, start) for line in recorder.calls[0][0])
+    first_batch = recorder.calls[0][0]
+    assert first_batch
+    for line in first_batch:
+        assert all(int(f[1]) == int(g[1]) for f, g in zip(line, start, strict=True))
 
 
 @pytest.fixture(scope="module")
