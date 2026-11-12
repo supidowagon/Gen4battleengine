@@ -92,10 +92,10 @@ class SwitchSite(IntEnum):
     # AI_HasSuperEffectiveMove(..., FALSE) (trainer_ai.c:3560): RandNext() % 10 != 0
     # keeps the battler in (:3588), 58982 of 65536 u16 values.
     KEEP = 1
-    # AI_HasPartyMemberWithSuperEffectiveMove(..., 0x8 = INEFFECTIVE, 2) (:3973):
-    # RandNext() % 2 == 0 switches (:3779), 32768 of 65536.
+    # AI_HasPartyMemberWithSuperEffectiveMove(..., 0x8 = INEFFECTIVE, 2) (:3975):
+    # RandNext() % 2 == 0 switches (:3796), 32768 of 65536.
     PASS_INEFFECTIVE = 2
-    # The same with 0x4 = NOT_VERY_EFFECTIVE, 3 (:3979): RandNext() % 3 == 0, 21846 of 65536.
+    # The same with 0x4 = NOT_VERY_EFFECTIVE, 3 (:3981): RandNext() % 3 == 0, 21846 of 65536.
     PASS_NOT_VERY_EFFECTIVE = 3
     # The layout is refused (module docstring); only produced under tracing.
     REFUSED = 4

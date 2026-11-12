@@ -58,7 +58,7 @@ from nuzline.ai.outcome import (
 )
 from nuzline.engine.actions import NUM_OPP_ACTIONS
 from nuzline.engine.enumerate import WIDTH_CAP
-from nuzline.engine.ids import Stat
+from nuzline.engine.ids import Stat, Weather
 from nuzline.engine.state import MOVES, BattleState, make_state
 from nuzline.search.rows import take
 from tests.ai.fixtures import GEODUDE, outcome, versus
@@ -627,7 +627,30 @@ def test_one_scalar_guess_is_exact_for_roark(game, tables, names, kaizo_tables, 
     """Ruling 6 as data: for every species of the game's table with two abilities, against
     each of Roark's Pokemon as the active (Kaizo's six, vanilla's three), at most one
     ``LoadBattlerAbility DEFENDER`` read of a decision changes a score. Re-run whenever a
-    task adds reads: the loose oracle finds every read on every path."""
+    task adds reads: the loose oracle finds every read on every path.
+
+    Each species is checked in the four states of ``_GUESS_VARIANTS`` (Task 3 review m3).
+    What can decide whether a read is reached, or whether its coin changes a score, is read
+    from the state at these places only (script.s, the reads at :71, :117, :304, :470, :529,
+    :539):
+    - the compares after each read test the move's type or id (:72-78, :121-131), the
+      ability alone (:305, :471-472, :530-532), or the weather (:535-536 Leaf Guard in sun,
+      :541-542 Hydration in rain; ``LoadCurrentWeather``, trainer_ai.c:1414-1439): hence the
+      four weathers, permanent sandstorm (Roark's) and clear among them;
+    - before a read: ``FlagMoveDamageScore``'s no-comparison test (:62-63, :112-113), which
+      reads only the move's power and effect (trainer_ai.c:1035-1036); the immunity class
+      (:68, :299: types, Levitate, Wonder Guard, Magnet Rise); the attacker's Mold Breaker
+      (:69-70, :302-303); the defender's Defense stage (:435, before :470); the defender's
+      types (:521-526, before :529);
+    - after the Toxic reads, the status and Safeguard tests (:545-546) give -10 for either
+      coin, so they can only remove a read's effect;
+    - ``AddToMoveScore`` clamps at 0 (trainer_ai.c:576-586), which can only remove one;
+    - the guess is read by BASIC only: EVAL_ATTACK, EXPERT and RISKY load no DEFENDER
+      ability on Roark's paths (kaizo_roark.md 8.4), so the later flags add the same amount
+      for either coin.
+    No HP is read on the way to a read or by its compares. The HP bands of the variants
+    (the attacker at 100/69/49/29%, the 70/50/30% cuts of Expert, and the player from full
+    to 1 HP, a kill) are checked all the same."""
     if game == "kaizo":
         t, party = kaizo_tables, kaizo_roark_party
         bases = [
@@ -640,13 +663,46 @@ def test_one_scalar_guess_is_exact_for_roark(game, tables, names, kaizo_tables, 
         bases = [versus(t, names, j) for j in range(3)]
     species = _two_ability_species(t)
     for j, base in enumerate(bases):
-        states = jax.tree.map(
-            lambda *xs: jnp.stack(xs),
-            *(_bulky(_with_player(t, base, sp), int(base.max_hp[0, 0])) for sp in species),
-        )
-        count = _sensitive_reads(t, states, layout)
-        bad = [int(species[i]) for i in np.flatnonzero(count > 1)]
-        assert not bad, (game, j, bad)
+        for v, variant in enumerate(_GUESS_VARIANTS):
+            states = jax.tree.map(
+                lambda *xs: jnp.stack(xs),
+                *(
+                    _guess_variant(
+                        _bulky(_with_player(t, base, sp), int(base.max_hp[0, 0])), *variant
+                    )
+                    for sp in species
+                ),
+            )
+            count = _sensitive_reads(t, states, layout)
+            bad = [int(species[i]) for i in np.flatnonzero(count > 1)]
+            assert not bad, (game, j, variant, bad)
+
+
+# (weather, the AI's active's HP %, the player's HP as a fraction of its max): Roark's
+# permanent sandstorm and clear, sun and rain (the Leaf Guard and Hydration compares,
+# script.s:535-536, :541-542); the attacker's HP across Expert's 70/50/30% cuts, the
+# player's from full to 1 HP.
+_GUESS_VARIANTS = (
+    (Weather.SANDSTORM, 100, 1.0),
+    (Weather.NONE, 69, 0.5),
+    (Weather.SUN, 49, 0.3),
+    (Weather.RAIN, 29, 0.0),
+)
+
+
+def _guess_variant(s: BattleState, weather: int, ai_pct: int, player_frac: float):
+    """``s`` with ``weather`` (permanent), the AI's active at ``ai_pct``% of its max HP (at
+    least 1) and the player's active at ``player_frac`` of its max (at least 1)."""
+    a = int(s.active[1])
+    ai_max, player_max = int(s.max_hp[1, a]), int(s.max_hp[0, 0])
+    return s._replace(
+        weather=jnp.asarray(weather, s.weather.dtype),
+        weather_timer=jnp.asarray(0, s.weather_timer.dtype),
+        hp=s.hp.at[1, a]
+        .set(max(1, ai_max * ai_pct // 100))
+        .at[0, 0]
+        .set(max(1, int(player_max * player_frac))),
+    )
 
 
 def _random_kaizo_rows(t, party, n: int, seed: int) -> BattleState:

@@ -306,10 +306,15 @@ def _loose_switch(t, s: BattleState) -> np.ndarray:
 
 @st.composite
 def _switch_states(draw, t, n, party):
-    """Kaizo Roark's six with a random active, fainted bench members, player types,
-    ``move_hit`` and gates; bench types drawn so that the passes are reached."""
+    """Kaizo Roark's six in a random order with a random active slot (so the bench sits on
+    both sides of it, as after a switch or a replacement), fainted bench members, player
+    types, ``move_hit`` and gates; bench types drawn so that the passes are reached."""
     order = draw(st.permutations(range(SLOTS)))
     s = make_state(t, [party[2]], [party[i] for i in order])
+    active = draw(st.integers(0, SLOTS - 1))
+    bench = [j for j in range(SLOTS) if j != active]
+    event(f"active slot {active}")
+    s = s._replace(active=s.active.at[1].set(active))
     type_names = [
         "Normal", "Fighting", "Flying", "Poison", "Ground", "Rock", "Bug", "Ghost",
         "Steel", "Fire", "Water", "Grass", "Electric", "Psychic", "Ice", "Dragon", "Dark",
@@ -319,7 +324,7 @@ def _switch_states(draw, t, n, party):
     s = s._replace(types=s.types.at[0, 0].set(_types(n, d1, d2)))
     alive = draw(st.lists(st.booleans(), min_size=SLOTS - 1, max_size=SLOTS - 1))
     hp = s.hp
-    for j, keep in zip(range(1, SLOTS), alive, strict=True):
+    for j, keep in zip(bench, alive, strict=True):
         if not keep:
             hp = hp.at[1, j].set(0)
         if draw(st.booleans()):
