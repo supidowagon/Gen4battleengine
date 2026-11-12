@@ -239,6 +239,88 @@ def test_line_find_refused_exit_2(tmp_path, capsys, monkeypatch):
     assert not out_path.exists()
 
 
+LEFT_OUT = "playouts stopped at a mechanic the engine does not model and are left out: "
+REASON = "replacement: the stale aiSwitchedPartySlot (stub)"
+
+
+def _refusal_stub(monkeypatch):
+    """``player.refusal_reason`` replaced: records its key and line, returns ``REASON``."""
+    from nuzline.search import player
+
+    asked = []
+
+    def reason(tables, state, player_, params, key, max_turns=100, layout=None):
+        asked.append((player_.name, params, key))
+        return REASON
+
+    monkeypatch.setattr(player, "refusal_reason", reason)
+    return asked
+
+
+def test_line_odds_names_refused_playouts(tmp_path, tables, names, capsys, monkeypatch):
+    import dataclasses
+
+    import numpy as np
+
+    from nuzline.search import player_eval
+
+    refused_key = np.array([5, 6], np.uint32)
+    odds = dataclasses.replace(_found(tables, names).odds, refused=3, refused_key=refused_key)
+    modes = []
+
+    def evaluate(tables_, state, lines, n, key, max_turns=100, refused="raise"):
+        modes.append(refused)
+        return [odds]
+
+    monkeypatch.setattr(player_eval, "evaluate_lines", evaluate)
+    asked = _refusal_stub(monkeypatch)
+    assert main(["line", "odds", *BASE, "--line", _file(tmp_path), "--n", "103"]) == 0
+    out = capsys.readouterr().out
+    assert out.isascii()
+    rows = out.splitlines()
+    left = rows.index(f"3 of 103 {LEFT_OUT}{REASON}")
+    assert left > max(i for i, r in enumerate(rows) if r.startswith("  win, any"))
+    assert modes == ["exclude"]
+    ((player_name, params, key),) = asked
+    assert player_name == "line" and np.array_equal(key, refused_key)
+    assert int(params.use[0]) == 2  # the file's line: Grotle against Geodude
+
+
+def test_line_odds_without_refused_playouts_says_nothing(
+    tmp_path, tables, names, capsys, monkeypatch
+):
+    from nuzline.search import player_eval
+
+    monkeypatch.setattr(player_eval, "evaluate_lines", lambda *a, **k: [_found(tables, names).odds])
+    asked = _refusal_stub(monkeypatch)
+    assert main(["line", "odds", *BASE, "--line", _file(tmp_path)]) == 0
+    assert LEFT_OUT not in capsys.readouterr().out
+    assert asked == []
+
+
+def test_line_find_names_refused_playouts_and_skipped_rules(
+    tmp_path, tables, names, capsys, monkeypatch
+):
+    import dataclasses
+
+    import numpy as np
+
+    from nuzline.search import line_search
+
+    found = _found(tables, names)
+    odds = dataclasses.replace(found.odds, refused=2, refused_key=np.array([1, 2], np.uint32))
+    result = dataclasses.replace(found, odds=odds, refused_candidates=4)
+    monkeypatch.setattr(line_search, "find_line", lambda *a, **k: result)
+    asked = _refusal_stub(monkeypatch)
+    assert main(["line", "find", *BASE, "--line", _file(tmp_path)]) == 0
+    out = capsys.readouterr().out
+    assert f"2 of 102 {LEFT_OUT}{REASON}" in out.splitlines()
+    skipped = "skipped 4 candidate rules that met unmodelled mechanics in more than 1 % of playouts"
+    assert skipped in out.splitlines()
+    ((_, params, _),) = asked
+    assert np.array_equal(params.use, result.line.use)  # the found line is replayed
+
+
 def test_line_odds_refused_fight_exit_2(tmp_path, capsys, monkeypatch):
     _no_playouts(monkeypatch)
     unsupported = str(ROOT / "tests" / "fixtures" / "sample_party_unsupported.toml")

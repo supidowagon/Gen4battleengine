@@ -31,6 +31,12 @@ The chosen line is scored once more on ``final_n`` hold-out keys
 
 Every search batch has its own key ``fold_in(key, c)``, ``c`` counting batches from 0
 and skipping the two salts, so no two batches, and never the hold-out, share keys.
+
+Refused playouts (spec §4) are left out of every batch (``evaluate_lines(...,
+refused="exclude")``), the hold-out included (its ``refused`` is in ``odds``). A
+candidate whose batch has ``refused / (n + refused) > MAX_REFUSED_SHARE`` is skipped in
+that stage, at the screen or the refine: it is never the winner and never replaces the
+incumbent. ``LineSearchResult.refused_candidates`` counts the distinct lines skipped.
 """
 
 from __future__ import annotations
@@ -55,6 +61,7 @@ from nuzline.search.playout import _facing
 __all__ = [
     "HOLD_OUT_SALT",
     "MAJOR_STATUSES",
+    "MAX_REFUSED_SHARE",
     "RESTART_SALT",
     "LineSearchResult",
     "LineSearchSettings",
@@ -65,6 +72,7 @@ __all__ = [
 
 HOLD_OUT_SALT = 0x1E1D  # fold_in(key, HOLD_OUT_SALT): the hold-out keys
 RESTART_SALT = 0xBEEF  # fold_in(key, RESTART_SALT): the random restart lines' seed
+MAX_REFUSED_SHARE = 0.01  # a candidate refused in more of its playouts is skipped
 
 # The statuses a ``first`` opener may inflict. The engine has one status-move effect,
 # ``EffectId.STATUS_FOE``, whose ``tables.move_param[m, 0]`` is the ``Status`` it applies
@@ -97,6 +105,7 @@ class LineSearchResult:
     sweeps: int  # sweeps finished, summed over the starts
     evaluations: int  # line x key playouts run, hold-out included
     stopped: str  # "converged", "max_sweeps" or "budget"
+    refused_candidates: int = 0  # distinct lines skipped for refused playouts
 
 
 @jax.jit
@@ -185,6 +194,7 @@ class _Run:
         self.clock = clock
         self.started = clock()
         self.expired = False
+        self.skipped: set[bytes] = set()  # the lines skipped for refused playouts
 
     def out_of_time(self) -> bool:
         budget = self.settings.budget_seconds
@@ -200,7 +210,20 @@ class _Run:
             key = jax.random.fold_in(self.key, self.counter)
             self.counter += 1
         self.evaluations += len(lines) * n
-        return evaluate_lines(self.tables, self.state, lines, n, key, self.settings.max_turns)
+        return evaluate_lines(
+            self.tables, self.state, lines, n, key, self.settings.max_turns, refused="exclude"
+        )
+
+    def kept(self, lines: Sequence[Line], odds: Sequence[PlayerOdds]) -> list[int]:
+        """The indices of ``lines`` not refused too often (module docstring); the others
+        are recorded as skipped."""
+        out = []
+        for i, (line, o) in enumerate(zip(lines, odds, strict=True)):
+            if o.refused > MAX_REFUSED_SHARE * (o.n + o.refused):
+                self.skipped.add(b"".join(np.asarray(f).tobytes() for f in line))
+            else:
+                out.append(i)
+        return out
 
     def stage(self, incumbent: Line, candidates: list[Line]) -> tuple[Line, PlayerOdds | None]:
         """The stage's winner (module docstring) and its refine odds (``None``: nothing
@@ -212,13 +235,17 @@ class _Run:
         if len(others) > self.settings.keep:
             screened = self.evaluate(others, self.settings.screen_n)
             order = sorted(
-                range(len(others)), key=lambda i: screened[i].score(self.k), reverse=True
+                self.kept(others, screened), key=lambda i: screened[i].score(self.k), reverse=True
             )
             finalists = [others[i] for i in order[: self.settings.keep]]
+        if not finalists:
+            return incumbent, None
         refined = self.evaluate([incumbent, *finalists], self.settings.refine_n)
-        best = max(range(1, len(refined)), key=lambda i: refined[i].score(self.k))
-        if refined[best].score(self.k) > refined[0].score(self.k):
-            return finalists[best - 1], refined[best]
+        fine = [i + 1 for i in self.kept(finalists, refined[1:])]
+        if fine:
+            best = max(fine, key=lambda i: refined[i].score(self.k))
+            if refined[best].score(self.k) > refined[0].score(self.k):
+                return finalists[best - 1], refined[best]
         return incumbent, refined[0]
 
 
@@ -317,4 +344,5 @@ def find_line(
         sweeps=sweeps,
         evaluations=run.evaluations,
         stopped="budget" if run.expired else reasons[chosen],
+        refused_candidates=len(run.skipped),
     )

@@ -19,7 +19,9 @@ from nuzline.search.player_eval import (
     evaluate_players,
     line_keys,
 )
+from nuzline.search.stage_a import wilson
 from tests.engine.helpers import roark_state
+from tests.search.fixtures import switch_refusal_root
 
 N, MAX_TURNS = 64, 40
 KEY = jax.random.PRNGKey(7)
@@ -109,6 +111,39 @@ def test_refused_playout_raises(tables, names):
     s = _state(tables, names, player_species="Gastly", player_ability="Levitate")
     with pytest.raises(UnsupportedAi, match="line playouts refused"):
         evaluate_lines(tables, s, [empty_line()], N, KEY, MAX_TURNS)
+    # Every playout refused: nothing is left to count, so "exclude" raises too.
+    with pytest.raises(UnsupportedAi, match="every playout"):
+        evaluate_lines(tables, s, [empty_line()], N, KEY, MAX_TURNS, refused="exclude")
+
+
+@pytest.mark.slow
+def test_exclude_leaves_refused_playouts_out(tables, names):
+    # switch_refusal_root: on some keys the AI switches to Geodude at 1 HP and Starly KOs
+    # it on entry, a replacement the engine refuses (roark.md 14, item 3); on the others
+    # the playout is played out.
+    s = switch_refusal_root(tables, names)
+    with pytest.raises(UnsupportedAi, match="line playouts refused"):
+        evaluate_lines(tables, s, [empty_line()], N, KEY, MAX_TURNS)
+    (odds,) = evaluate_lines(tables, s, [empty_line()], N, KEY, MAX_TURNS, refused="exclude")
+    keys = line_keys(KEY, N)
+    play = jax.vmap(partial(line_playout, max_turns=MAX_TURNS), in_axes=(None, None, None, 0))
+    out = jax.tree.map(np.asarray, play(tables, s, empty_line(), keys))
+    bad = out.refused == 1
+    assert 0 < bad.sum() < N, "the fixture gives no mix of refused and played keys"
+    assert odds.refused == int(bad.sum()) and odds.n + odds.refused == N
+    kept = out.won[~bad]
+    assert odds.wins_any == int(np.sum(kept == 1))
+    assert odds.deaths_total == int(out.player_faints[~bad].astype(np.int64).sum())
+    assert odds.distribution.n == odds.n
+    assert odds.mean_turns == float(out.turns[~bad].astype(np.int64).mean())
+    assert odds.rung(0) == odds.wins[0] / odds.n
+    assert odds.interval(None) == wilson(odds.wins_any, odds.n)
+    assert np.array_equal(odds.refused_key, np.asarray(keys)[np.argmax(bad)])
+    # No refused row: no key.
+    (clean,) = evaluate_lines(
+        tables, _state(tables, names), [empty_line()], N, KEY, MAX_TURNS, refused="exclude"
+    )
+    assert clean.refused == 0 and clean.refused_key is None and clean.n == N
 
 
 def _odds(wins, wins_any, deaths_total) -> PlayerOdds:

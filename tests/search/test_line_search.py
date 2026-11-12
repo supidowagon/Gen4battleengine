@@ -90,15 +90,16 @@ def test_entry_candidates(tables, names):
     assert entry_candidates(s, 1) == [(-1, 0), (-1, 1), (0, 0), (3, 0), (4, 0), (5, 0)]
 
 
-def _odds(n: int, tag: float = 0.0) -> PlayerOdds:
+def _odds(n: int, tag: float = 0.0, wins: int = 0, refused: int = 0) -> PlayerOdds:
     return PlayerOdds(
         n=n,
-        wins=(0, 0, 0, 0),
-        wins_any=0,
+        wins=(wins,) * 4,
+        wins_any=wins,
         deaths_total=0,
         distribution=deaths.DeathDistribution.from_counts([1] + [0] * (len(deaths.BUCKETS) - 1)),
         mean_turns=tag,
         fallback_share=0.0,
+        refused=refused,
     )
 
 
@@ -108,10 +109,12 @@ class _Recorder:
 
     def __init__(self):
         self.calls = []
+        self.refused = []
 
-    def __call__(self, tables, state, lines, n, key, max_turns=100):
+    def __call__(self, tables, state, lines, n, key, max_turns=100, refused="raise"):
         out = [_odds(n, float(len(self.calls))) for _ in lines]
         self.calls.append((list(lines), n, np.asarray(jax.random.key_data(key)), out))
+        self.refused.append(refused)
         return out
 
 
@@ -139,6 +142,43 @@ def test_hold_out_keys_are_fresh(tables, names, recorder):
     assert _same(last[0][0], result.line)
     assert result.odds is last[3][0]
     assert result.evaluations == sum(len(lines) * n for lines, n, _, _ in recorder.calls)
+    # Every batch, the hold-out included, leaves refused playouts out.
+    assert recorder.refused == ["exclude"] * len(recorder.calls)
+
+
+def _often_refused_search(tables, names, monkeypatch, refused_share: float):
+    """``find_line`` on a 3 v 2 fight where every line with foe 0's first who/what
+    candidate wins every counted playout, with ``refused_share`` of its playouts refused,
+    and every other line wins none: ``(result, that rule)``."""
+    s = roark_state(tables, names, player_count=3, opp_count=2)
+    rule = who_what_candidates(tables, s, 0)[0]
+
+    def fake(tables_, state, lines, n, key, max_turns=100, refused="raise"):
+        out = []
+        for line in lines:
+            if (int(line.use[0]), int(line.move[0]), int(line.first[0])) == rule:
+                bad = round(refused_share * n)
+                out.append(_odds(n - bad, wins=n - bad, refused=bad))
+            else:
+                out.append(_odds(n))
+        return out
+
+    monkeypatch.setattr(line_search, "evaluate_lines", fake)
+    # Batches of 100 and 200 keys: a share of 0.01 is exactly 1 % of each.
+    settings = LineSearchSettings(screen_n=100, keep=2, refine_n=200, restarts=0, final_n=100)
+    return find_line(tables, names, s, KEY, settings), rule
+
+
+def test_an_often_refused_candidate_is_never_chosen(tables, names, monkeypatch):
+    # Refused in 1 % of its playouts (at the limit) the best-scoring rule wins ...
+    result, rule = _often_refused_search(tables, names, monkeypatch, 0.01)
+    assert line_search.MAX_REFUSED_SHARE == 0.01
+    assert tuple(int(f[0]) for f in result.line[:3]) == rule
+    assert result.refused_candidates == 0
+    # ... above 1 % it is skipped (never the winner) and counted.
+    result, rule = _often_refused_search(tables, names, monkeypatch, 0.1)
+    assert tuple(int(f[0]) for f in result.line[:3]) != rule
+    assert result.refused_candidates >= 1
 
 
 def test_budget_stops_the_search(tables, names, recorder):

@@ -15,15 +15,22 @@ Small chunks run faster than large ones (measured on Kaizo Roark, 20 devices: 20
 rows about 250-280 playouts/s, 8000 rows 63/s).
 
 ``PlayerOdds.wins[k]`` counts ``deaths.success`` with ``k`` deaths allowed and the
-state's ``protected`` set; ``distribution`` buckets every playout (``deaths.bucket``).
-A refused playout (``PlayerResult.refused``) has no result: any refused row raises
-``UnsupportedAi``, it is never counted as a loss.
+state's ``protected`` set; ``distribution`` buckets every counted playout
+(``deaths.bucket``).
+
+A refused playout (``PlayerResult.refused``: it met a mechanic the engine deliberately
+does not model) has no result and is never counted as a win or a loss (spec §4). With
+``refused="raise"`` (the default) any refused row raises ``UnsupportedAi``; with
+``"exclude"`` each line's refused rows are left out: ``PlayerOdds.n`` counts the rest,
+every rate and interval is over it, ``refused`` counts those left out and ``refused_key``
+is the first one's key (for ``player.refusal_reason``). A line whose playouts are all
+refused raises ``UnsupportedAi`` either way.
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import partial
 
 import jax
@@ -57,9 +64,9 @@ for _cls in (Line, PlayerResult):
 
 @dataclass(frozen=True)
 class PlayerOdds:
-    """One line's results over its ``n`` playouts (module docstring)."""
+    """One line's results over its ``n`` counted playouts (module docstring)."""
 
-    n: int
+    n: int  # playouts counted (refused ones left out)
     # playouts won with at most k deaths, k = 0..3 (no protected loss)
     wins: tuple[int, int, int, int]
     wins_any: int  # playouts won
@@ -67,6 +74,9 @@ class PlayerOdds:
     distribution: deaths.DeathDistribution
     mean_turns: float
     fallback_share: float  # fallback turns / turns
+    refused: int = 0  # refused playouts left out (``refused="exclude"``)
+    # the first refused playout's key (``None``: none refused), for ``player.refusal_reason``
+    refused_key: np.ndarray | None = field(default=None, compare=False)
 
     def rung(self, k: int) -> float:
         """P(win with at most ``k`` deaths, no protected loss): ``wins[k] / n``."""
@@ -150,7 +160,7 @@ def _play_rows(tables, state, player: Player, params, keys, line_of, max_turns: 
     return jax.tree.map(lambda *xs: np.concatenate(xs), *parts)
 
 
-def _odds(out: PlayerResult, protected: np.ndarray) -> PlayerOdds:
+def _odds(out: PlayerResult, protected: np.ndarray, refused: int, refused_key) -> PlayerOdds:
     won = out.won == 1
     faints = out.player_faints.astype(np.int64)
     wins = tuple(
@@ -169,6 +179,8 @@ def _odds(out: PlayerResult, protected: np.ndarray) -> PlayerOdds:
         ),
         mean_turns=float(turns.mean()),
         fallback_share=float(out.fallback_turns.astype(np.int64).sum() / max(turns.sum(), 1)),
+        refused=refused,
+        refused_key=refused_key,
     )
 
 
@@ -180,32 +192,51 @@ def evaluate_players(
     n: int,
     key,
     max_turns: int = 100,
+    refused: str = "raise",
 ) -> list[PlayerOdds]:
     """One ``PlayerOdds`` per ``params`` entry of ``player``, each from ``n`` playouts
     from ``state`` on ``line_keys(key, n)`` (module docstring). For ``GREEDY`` pass
-    ``params=[()]``. Raises ``UnsupportedAi`` when any playout is refused."""
+    ``params=[()]``. ``refused``: ``"raise"`` raises ``UnsupportedAi`` when any playout
+    is refused, ``"exclude"`` leaves refused playouts out of each entry's odds (an entry
+    whose playouts are all refused still raises)."""
     if n <= 0:
         raise ValueError("evaluate_players needs n > 0")
+    if refused not in ("raise", "exclude"):
+        raise ValueError(f"refused must be 'raise' or 'exclude', not {refused!r}")
     stacked = _stack(params)
     lines = len(params)
     state = jax.tree.map(np.asarray, state)
     keys = np.asarray(line_keys(key, n))
     line_of = np.repeat(np.arange(lines), n)
     out = _play_rows(tables, state, player, stacked, np.tile(keys, (lines, 1)), line_of, max_turns)
-    refused = int(np.count_nonzero(out.refused))
-    if refused:
+    bad = out.refused != 0
+    if refused == "raise" and bad.any():
         raise UnsupportedAi(
-            f"{refused} of {lines * n} line playouts refused; run `nuzline coverage` for the fight"
+            f"{int(bad.sum())} of {lines * n} line playouts refused; "
+            "run `nuzline coverage` for the fight"
         )
     protected = np.asarray(state.protected)
-    return [
-        _odds(jax.tree.map(lambda x, i=i: x[i * n : (i + 1) * n], out), protected)
-        for i in range(lines)
-    ]
+    odds = []
+    for i in range(lines):
+        left_out = bad[i * n : (i + 1) * n]
+        if left_out.all():
+            raise UnsupportedAi(
+                f"every playout of entry {i} ({n}) refused; run `nuzline coverage` for the fight"
+            )
+        kept = jax.tree.map(lambda x, i=i, m=~left_out: x[i * n : (i + 1) * n][m], out)
+        first = keys[int(np.argmax(left_out))].copy() if left_out.any() else None
+        odds.append(_odds(kept, protected, int(left_out.sum()), first))
+    return odds
 
 
 def evaluate_lines(
-    tables: Tables, state: BattleState, lines: Sequence[Line], n: int, key, max_turns: int = 100
+    tables: Tables,
+    state: BattleState,
+    lines: Sequence[Line],
+    n: int,
+    key,
+    max_turns: int = 100,
+    refused: str = "raise",
 ) -> list[PlayerOdds]:
     """``evaluate_players`` with ``LINE``: one ``PlayerOdds`` per line."""
-    return evaluate_players(tables, state, LINE, lines, n, key, max_turns)
+    return evaluate_players(tables, state, LINE, lines, n, key, max_turns, refused)

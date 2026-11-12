@@ -54,8 +54,12 @@
   the file's rules, if any, are its first start), progress as ``[line]`` lines on stderr,
   then the found line with the same block from ``--final-n`` hold-out playouts and its
   ``[[rule]]`` TOML; ``--out`` gets the file's ``[[team]]`` and the found rules. A
-  heuristic: a good line, not a proven best. Both ``line`` commands exit 1 on a bad file,
-  name or flag and 2 when the fight or a playout is refused.
+  heuristic: a good line, not a proven best. Both ``line`` commands leave refused
+  playouts (a mechanic the engine does not model) out of the odds and print after the
+  ladder how many and which mechanic (``player.refusal_reason`` on the first); ``find``
+  also prints how many candidate rules it skipped for being refused in more than 1 % of
+  their playouts. Both exit 1 on a bad file, name or flag and 2 when the fight is refused
+  or every playout is.
 * ``nuzline trainers [--save SAVE [--allow-corrupt]]``: every trainer's id, label (else
   name) and class, marked ``[optional]``, ``[gauntlet GROUP #P]`` and with its format when
   it is not a single battle; with ``--save`` only the rival variants of the save's starter.
@@ -1129,6 +1133,22 @@ def _line_block(setup: LineSetup, rules, odds, seed: int, deaths: int) -> list[s
     return out
 
 
+def _left_out_lines(setup: LineSetup, line, odds, max_turns: int) -> list[str]:
+    """The refused playouts ``odds`` left out (spec §4), the mechanic named by replaying
+    the first (``player.refusal_reason``); nothing when none was."""
+    if not odds.refused:
+        return []
+    from nuzline.search import player
+    from nuzline.search.line import LINE
+
+    reason = player.refusal_reason(
+        setup.tables, setup.state, LINE, line, odds.refused_key, max_turns
+    )
+    total = odds.n + odds.refused
+    text = "playouts stopped at a mechanic the engine does not model and are left out"
+    return [f"{odds.refused} of {total} {text}: {reason}"]
+
+
 def _line_command(args, run) -> int:
     """The shared part of ``line odds`` and ``line find``: set up the fight, print the
     trainer and team, then ``run(setup)``; exit 2 on a refused fight or playout."""
@@ -1177,8 +1197,12 @@ def _line_odds(args) -> int:
         from nuzline.search import player_eval
 
         key = jax.random.PRNGKey(args.seed)
-        odds = player_eval.evaluate_lines(setup.tables, setup.state, [setup.line], args.n, key)
-        for line in _line_block(setup, setup.rules, odds[0], args.seed, args.deaths):
+        (odds,) = player_eval.evaluate_lines(
+            setup.tables, setup.state, [setup.line], args.n, key, refused="exclude"
+        )
+        for line in _line_block(setup, setup.rules, odds, args.seed, args.deaths):
+            _say(line)
+        for line in _left_out_lines(setup, setup.line, odds, 100):  # evaluate_lines' max_turns
             _say(line)
 
     return _line_command(args, run)
@@ -1233,6 +1257,13 @@ def _line_find(args) -> int:
         print("found by search (a heuristic: a good line, not a proven best)")
         for line in _line_block(setup, rules, result.odds, args.seed, args.deaths):
             _say(line)
+        for line in _left_out_lines(setup, result.line, result.odds, settings.max_turns):
+            _say(line)
+        if result.refused_candidates:
+            _say(
+                f"skipped {result.refused_candidates} candidate rules that met unmodelled "
+                "mechanics in more than 1 % of playouts"
+            )
         toml = render_rules(rules, setup.names, setup.player, setup.opp)
         _say("\n\n".join(toml) if toml else "# no rules: the default player decides every turn")
         if args.out is not None:
