@@ -128,22 +128,28 @@ rule". `from` is not searched: it only narrows `via`, and the user can write it.
 **Score.** Wins with at most K deaths, then wins, then fewer total deaths, compared on the same
 keys. A loss is never traded for fewer deaths (prep spec §2).
 
-**Procedure.** Coordinate ascent with common random numbers:
+**Procedure** (revised 2026-11-12 after the first measurement on Kaizo Roark: the first version
+tried entries only for the Pokemon that won with a plain switch-in, so the user's pivot against
+Gible was never scored; three independent designs and a judge chose this one). Coordinate ascent
+with common random numbers:
 
-1. Start from the empty line (pure fallback).
-2. One sweep visits each foe in party order. For that foe it scores every candidate rule with the
-   rest of the line fixed, in two stages so the cost stays bounded: who and what (`use`, `move`,
-   `first`, plain entry), then the entry for the winner (`wait`, each `via`). Each stage screens all
-   its candidates on `screen_n` keys, re-scores the best `keep` on `refine_n` fresh keys together
-   with the incumbent, and takes the best of those.
-3. Sweeps repeat until one changes nothing, `max_sweeps` is reached or the time budget runs out.
-4. `restarts` further starts from random lines; the best start wins on a shared set of keys.
+1. Start from the empty line (pure fallback), or from the user's rules when the file has some.
+2. A sweep visits each foe: odd sweeps in party order, even sweeps in reverse, so the first foes
+   are not always decided against default play on the rest. A visit races "no rule" and every
+   rule of who x what x entry (plain, `wait`, `via` each other living Pokemon) with the rest of
+   the line fixed: all on 64 keys, the best 16 on 192 more, the best 4 on 256 more (ranked by
+   wins with at most k deaths plus wins, on cumulative common keys, the incumbent always in);
+   then the single best and the incumbent on 768 fresh keys, where it replaces the incumbent only
+   if it scores strictly better. A winning `via` is then polished over `from`.
+3. Sweeps repeat until one changes nothing, 12 sweeps, or the time budget.
+4. The line at the end of every sweep is kept; `restarts` "kicks" reset two random foes of the
+   best line and ascend again; the kept lines are compared on one fresh batch.
 5. The chosen line is scored once more on `final_n` keys the search never saw. Only these numbers
    are reported: picking the best of many noisy scores flatters the pick, a fresh sample does not.
 
-Defaults (`LineSearchSettings`): `screen_n` 128, `keep` 4, `refine_n` 512, `max_sweeps` 4,
-`restarts` 1, `final_n` 2000, `budget_seconds` None. The benchmark task may retune them and records
-what it used.
+Defaults (`LineSearchSettings`): race ((64, all), (192, 16), (256, 4)), `accept_n` 768,
+`max_sweeps` 12, `restarts` 1, `final_n` 2000, `budget_seconds` None. A sweep costs about 73 000
+playouts (about 200 s on 20 CPU devices).
 
 The search is a heuristic: it finds a good line, not the best one, and its report says so. It
 never calls a fight "solved".

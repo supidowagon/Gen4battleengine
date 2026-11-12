@@ -442,3 +442,56 @@ Found on the real fight: a candidate line (Rhyhorn's Dig knocking out a Pokemon 
 - [ ] **Step 3: Implement.**
 - [ ] **Step 4: Run** the four test files (slow ones in the background).
 - [ ] **Step 5: Commit** — `feat(search): leave refused playouts out and name them`.
+
+---
+
+### Task 4c: Search v2 — joint candidates, racing, run to the fixed point (added 2026-11-12)
+
+Measured on Kaizo Roark (k = 1, 2000 shared keys): the search as built finds 33.7 % at <=1 death / 48.4 % any win; the user's line scores 44.6 % / 67.0 %; it stopped at `max_sweeps` while still improving. A three-designer panel and a judge (`.superpowers/sdd/2026-11-12-l1-line-player/search-design-verdict.md`, read it) found the main fault in code: `_visit` tries entries (`wait`, `via`) only for the who/what stage's winner, so a rule that is bad with a plain switch-in but good with a pivot (the user's Gible answer: Delibird, via Rhyhorn) is never scored. This task implements the judge's change set 1-4.
+
+**Files:**
+- Modify: `src/nuzline/search/line_search.py`, `tests/search/test_line_search.py`, and `src/nuzline/cli.py` / `tests/test_cli_line.py` only where `line find`'s flags map to removed settings; spec §5 (controller does this)
+
+**Interfaces (changes to Task 4's):**
+
+```python
+@dataclass(frozen=True)
+class LineSearchSettings:
+    race: tuple[tuple[int, int | None], ...] = ((64, None), (192, 16), (256, 4))
+        # (new keys this round, survivors kept before the round; None = all):
+        # cumulative keys 64, 256, 512
+    accept_n: int = 768          # fresh keys for the one challenger vs the incumbent
+    max_sweeps: int = 12
+    restarts: int = 1            # kicks from the best line
+    kick_foes: int = 2
+    final_n: int = 2000
+    budget_seconds: float | None = None
+    max_turns: int = 100
+    # screen_n, keep and refine_n are removed
+
+def joint_candidates(tables, state, foe: int) -> list[tuple[int, int, int, int, int]]
+    # (use, move, first, via, wait): who_what_candidates x entry_candidates(state, use); via_from -1
+```
+
+`LineSearchResult` keeps its fields (line, odds, sweeps, evaluations, stopped, refused_candidates).
+
+Behaviour (the judge's set 1-4, pinned):
+1. **Joint pool.** A foe visit races "no rule" plus every `joint_candidates` rule, with the incumbent's rule for that foe always present. After it, if the winner has a `via`, one small race over `via_from` in {-1, the `use` of every other rule in the line, the player's lead slot 0} minus {use, via}.
+2. **Racing on cumulative common keys.** Round r plays the surviving candidates and the incumbent on `race[r][0]` new keys (`fold_in(key, counter)`) and adds the counts to their totals; before round r (r > 0) it keeps the best `race[r][1]` by the ranking key `wins[k] + wins_any` on the totals so far. Task 4b's refused rule applies to the cumulative counts (`refused="skip"`, a share over 1 % is dropped). After the last round, the single best candidate by `score(k)` on the totals and the incumbent are scored together on `accept_n` fresh keys; the challenger replaces the incumbent only if its `score(k)` there is strictly greater.
+3. **Fixed point.** Sweep s (1-based) visits the foes in party order when s is odd, reversed when even. Stops: a sweep with no accepted change ("converged"), `max_sweeps`, or the budget.
+4. **Best line seen, and kicks.** The line at the end of every sweep (and of every start) is kept. At the end the distinct kept lines are scored together on one fresh batch of `accept_n` keys and the best by `score(k)` within the refused rule is chosen; then the hold-out as before. `restarts` kicks: from the best line so far, set `kick_foes` random foes (numpy rng seeded from `fold_in(key, RESTART_SALT)`) to "no rule" or to a random rule from that foe's last race's top 4, then ascend again. A user `start` is the first start; the empty line otherwise.
+
+- [ ] **Step 1: Tests** (fast unless marked; a deterministic fake `evaluate_lines` that reads a table of per-rule win rates and draws key-seeded Bernoulli counts):
+  - `test_pivot_rule_is_found`: the best rule for one foe is (use 3, via 2) while (use 3, plain) scores below (use 0, plain); the search ends with use 3, via 2 for that foe.
+  - `test_from_polish`: a via that pays only with `via_from` set is found with it; the `via_from` candidates never equal `use` or `via`.
+  - `test_race_keys_and_counts`: the incumbent is in every round; every batch key is distinct and none equals the hold-out or the restart salt; the playouts requested match the race plan.
+  - `test_planted_best_is_found`: a rule 4 points better (p 0.40 vs 0.36) among about 97 wins at least 9 of 10 seeded trials.
+  - `test_neutral_challenger_rarely_accepted`: equal rates; acceptance in at most about half the trials.
+  - `test_converges_and_alternates`: with a noiseless fake the run stops "converged" before `max_sweeps`, and even sweeps visit foes in reverse order (record the call order).
+  - `test_best_seen_is_kept`: the returned line is never worse on the shared end batch than any sweep-end line.
+  - Keep Task 4/4b's tests passing, updating fixed expectations to the new settings.
+  - (slow) `test_find_line_is_no_worse_than_fallback` keeps passing with small race settings.
+- [ ] **Step 2: Run them.** Expected: failures on the new behaviour.
+- [ ] **Step 3: Implement.**
+- [ ] **Step 4: Run** `tests/search/test_line_search.py` (slow tests in the background) and the fast tier of `tests/test_cli_line.py`.
+- [ ] **Step 5: Commit** — `feat(search): joint candidates, racing and fixed-point sweeps`.
