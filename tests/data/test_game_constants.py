@@ -99,6 +99,7 @@ LISTED = [
     "nuzline.ai.commands.RISKY_EFFECTS",
     "nuzline.ai.outcome.EFFECT_SITE_LINES",
     "nuzline.ai.outcome.KAIZO_EXPERT_LABELS",
+    "nuzline.ai.outcome.KAIZO_EXPERT_TRANSCRIBED",
     "nuzline.ai.commands.ReadKind",
     "nuzline.ai.policy._LOOSE_SHARE",
     "nuzline.ai.outcome.SITE_N",

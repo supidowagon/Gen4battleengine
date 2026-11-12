@@ -14,8 +14,8 @@ The scripts are transcribed label by label from ``src/battle/trainer_ai/script.s
 and the taken path, and each label block runs under the union of the paths that reach
 it. Only the branches that can be taken for the transcribed moves
 (``commands.MOVE_EFFECTS`` in vanilla, the effects of ``layout.KAIZO.transcribed`` in
-Kaizo) are written out; the effect jump tables list just those moves' effects (roark.md
-5.4, docs/ai/kaizo_roark.md 5).
+Kaizo) are written out; the effect jump tables list just those moves' effects, chosen per
+layout at trace time (``_dispatch``; roark.md 5.4, docs/ai/kaizo_roark.md 5).
 
 The game's policy (``nuzline.ai.layout``): every public function takes an optional
 ``layout``; without one it reads ``layout_of(tables)`` when ``tables`` are concrete, and
@@ -223,23 +223,14 @@ def _basic(ctx: AiContext, layout: AiLayout) -> AiContext:
         ctx = _score(ctx, t, -10)
     effect = effect | ctx.live
 
-    # Basic_ScoreMoveEffect (:133): the jump-table entries of the transcribed effects, in
-    # line order. A move has one effect, so only its own entry can jump.
-    ctx = _at(ctx, effect)
-    ctx, explode = _split(c.if_current_move_effect_equal_to(ctx, BattleEffect.HALVE_DEFENSE))
-    ctx, defense = _split(c.if_current_move_effect_equal_to(ctx, BattleEffect.DEF_DOWN))
-    ctx, recover = _split(c.if_current_move_effect_equal_to(ctx, BattleEffect.RESTORE_HALF_HP))
-    ctx, poison = _split(c.if_current_move_effect_equal_to(ctx, BattleEffect.STATUS_BADLY_POISON))
-    ctx, screen = _split(c.if_current_move_effect_equal_to(ctx, BattleEffect.SET_LIGHT_SCREEN))
-    ctx, speed = _split(c.if_current_move_effect_equal_to(ctx, BattleEffect.SPEED_UP_2))
-    ctx, t = _split(c.if_current_move_effect_equal_to(ctx, BattleEffect.DEF_DOWN_2))
-    defense = defense | t
-    ctx, curse = _split(c.if_current_move_effect_equal_to(ctx, BattleEffect.CURSE))
-    ctx, stealth_rock = _split(c.if_current_move_effect_equal_to(ctx, BattleEffect.STEALTH_ROCK))
-    ctx = c.pop_or_end(ctx)  # :286
+    # Basic_ScoreMoveEffect (:133): the jump table (_BASIC_LABELS), then the labels.
+    return _dispatch(_at(ctx, effect), _BASIC_LABELS, layout)
 
+
+def _basic_check_cannot_explode(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckCannotExplode`` (script.s:297-319)."""
     # Basic_CheckCannotExplode (:297)
-    ctx = _at(ctx, explode)
+    ctx = _at(ctx, mask)
     ctx, t = _split(c.if_move_effectiveness_equals(ctx, TypeMulti.IMMUNE))
     ctx = _score(ctx, t, -10)
     ctx = c.load_battler_ability(ctx, _A)
@@ -256,14 +247,22 @@ def _basic(ctx: AiContext, layout: AiLayout) -> AiContext:
     ctx = _score(ctx, t, -10)
     ctx, t = _split(c.go_to(ctx))
     ctx = _score(ctx, t, -1)
+    return ctx
 
+
+def _basic_check_can_recover_hp(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckCanRecoverHP`` (script.s:511-517)."""
     # Basic_CheckCanRecoverHP (:511): HP% not 100 jumps to its PopOrEnd (:516).
-    ctx = _at(ctx, recover)
+    ctx = _at(ctx, mask)
     ctx, _ = _split(c.if_hp_percent_not_equal_to(ctx, _A, 100))
     ctx = c.pop_or_end(c.add_to_move_score(ctx, -8))
+    return ctx
 
+
+def _basic_check_cannot_poison(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckCannotPoison`` (script.s:519-547)."""
     # Basic_CheckCannotPoison (:519)
-    ctx = _at(ctx, poison)
+    ctx = _at(ctx, mask)
     for target in (LoadType.DEFENDER_TYPE_1, LoadType.DEFENDER_TYPE_2):
         ctx = c.load_type_from(ctx, target)
         for type_name in ("Steel", "Poison"):
@@ -290,15 +289,23 @@ def _basic(ctx: AiContext, layout: AiLayout) -> AiContext:
     ctx, t = _split(c.if_side_condition(ctx, _D, c.SideCondition.SAFEGUARD))
     ctx = _score(ctx, t, -10)
     ctx = c.pop_or_end(ctx)
+    return ctx
 
+
+def _basic_check_light_screen(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckAlreadyUnderLightScreen`` (script.s:549-552)."""
     # Basic_CheckAlreadyUnderLightScreen (:549)
-    ctx = _at(ctx, screen)
+    ctx = _at(ctx, mask)
     ctx, t = _split(c.if_side_condition(ctx, _A, c.SideCondition.LIGHT_SCREEN))
     ctx = _score(ctx, t, -8)
     ctx = c.pop_or_end(ctx)
+    return ctx
 
+
+def _basic_check_speed(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckHighStatStage_Speed`` (script.s:363-372)."""
     # Basic_CheckHighStatStage_Speed (:363)
-    ctx = _at(ctx, speed)
+    ctx = _at(ctx, mask)
     ctx, t = _split(c.if_field_conditions_mask(ctx, c.FieldCondition.TRICK_ROOM))
     ctx = _score(ctx, t, -10)
     ctx = c.load_battler_ability(ctx, _A)
@@ -311,11 +318,15 @@ def _basic(ctx: AiContext, layout: AiLayout) -> AiContext:
     ctx, t = _split(c.if_stat_stage_equal_to(ctx, _A, Stat.SPE, 12))
     ctx = _score(ctx, t, -10)
     ctx = c.pop_or_end(ctx)
+    return ctx
 
+
+def _basic_check_curse(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckCurse`` (script.s:679-698)."""
     # Basic_CheckCurse (:679). A Ghost-type attacker jumps to Basic_CheckCurse_GhostType
     # (:700), which is not transcribed: _refused refuses Curse on a Ghost type, so the
     # jumps below are never taken.
-    ctx = _at(ctx, curse)
+    ctx = _at(ctx, mask)
     for target in (LoadType.ATTACKER_TYPE_1, LoadType.ATTACKER_TYPE_2):
         ctx = c.load_type_from(ctx, target)
         ctx, _ = _split(c.if_loaded_equal_to(ctx, _TYPE["Ghost"]))
@@ -332,9 +343,13 @@ def _basic(ctx: AiContext, layout: AiLayout) -> AiContext:
     ctx, t = _split(c.if_stat_stage_equal_to(ctx, _A, Stat.DEF, 12))
     ctx = _score(ctx, t, -8)
     ctx = c.pop_or_end(ctx)
+    return ctx
 
+
+def _basic_check_defense(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckLowStatStage_Defense`` (script.s:434-473)."""
     # Basic_CheckLowStatStage_Defense (:434)
-    ctx = _at(ctx, defense)
+    ctx = _at(ctx, mask)
     ctx, t = _split(c.if_stat_stage_equal_to(ctx, _D, Stat.DEF, 0))
     ctx = _score(ctx, t, -10)
     ctx, clear_body = _split(c.go_to(ctx))
@@ -346,9 +361,13 @@ def _basic(ctx: AiContext, layout: AiLayout) -> AiContext:
     ctx, t = _split(c.if_loaded_equal_to(ctx, _ABILITY["White Smoke"]))
     ctx = _score(ctx, t, -10)
     ctx = c.pop_or_end(ctx)
+    return ctx
 
+
+def _basic_check_stealth_rock(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckStealthRock`` (script.s:1540-1547)."""
     # Basic_CheckStealthRock (:1540)
-    ctx = _at(ctx, stealth_rock)
+    ctx = _at(ctx, mask)
     ctx, t = _split(c.if_side_condition(ctx, _D, c.SideCondition.STEALTH_ROCK))
     ctx = _score(ctx, t, -10)
     ctx = c.count_alive_party_battlers(ctx, _D)
@@ -411,36 +430,28 @@ def _not_resisted(ctx: AiContext) -> tuple[AiContext, jnp.ndarray]:
     return ctx, taken
 
 
-def _expert(ctx: AiContext) -> AiContext:
-    """``Expert_Main`` (script.s:1623; roark.md 5.3, docs/ai/kaizo_roark.md 5.3). The
-    dispatch entries of the transcribed effects, in line order; the labels after it."""
-    ctx = _terminate(ctx)
-    drain_effect = BattleEffect.RECOVER_HALF_DAMAGE_DEALT
-    ctx, drain = _split(c.if_current_move_effect_equal_to(ctx, drain_effect))
-    ctx, explosion = _split(c.if_current_move_effect_equal_to(ctx, BattleEffect.HALVE_DEFENSE))
-    ctx, defense = _split(c.if_current_move_effect_equal_to(ctx, BattleEffect.DEF_DOWN))
-    ctx, recovery = _split(c.if_current_move_effect_equal_to(ctx, BattleEffect.RESTORE_HALF_HP))
-    ctx, toxic = _split(c.if_current_move_effect_equal_to(ctx, BattleEffect.STATUS_BADLY_POISON))
-    ctx, screen = _split(c.if_current_move_effect_equal_to(ctx, BattleEffect.SET_LIGHT_SCREEN))
-    ctx, speed = _split(c.if_current_move_effect_equal_to(ctx, BattleEffect.SPEED_UP_2))
-    ctx, t = _split(c.if_current_move_effect_equal_to(ctx, BattleEffect.DEF_DOWN_2))
-    defense = defense | t
-    ctx, curse = _split(c.if_current_move_effect_equal_to(ctx, BattleEffect.CURSE))
-    ctx, pursuit = _split(c.if_current_move_effect_equal_to(ctx, BattleEffect.HIT_BEFORE_SWITCH))
-    ctx, brick = _split(c.if_current_move_effect_equal_to(ctx, BattleEffect.REMOVE_SCREENS))
-    ctx, stealth_rock = _split(c.if_current_move_effect_equal_to(ctx, BattleEffect.STEALTH_ROCK))
-    ctx, recoil = _split(c.if_current_move_effect_equal_to(ctx, BattleEffect.RECOIL_HALF))
-    ctx = c.pop_or_end(ctx)  # :1811
+def _expert(ctx: AiContext, layout: AiLayout) -> AiContext:
+    """``Expert_Main`` (script.s:1623; roark.md 5.3, docs/ai/kaizo_roark.md 5.3): the jump
+    table (``_EXPERT_LABELS``) restricted to ``layout``'s effects, then the labels reached;
+    every other effect ends at :1811."""
+    return _dispatch(_terminate(ctx), _EXPERT_LABELS, layout)
 
+
+def _expert_drain_move(ctx: AiContext, mask) -> AiContext:
+    """``Expert_DrainMove`` (script.s:1827-1839)."""
     # Expert_DrainMove (:1827): immune or resisted, -3 unless the 50 roll jumps.
-    ctx, minus3 = _not_resisted(_at(ctx, drain))
+    ctx, minus3 = _not_resisted(_at(ctx, mask))
     ctx, _ = _split(c.go_to(ctx))  # :1832
     ctx, _ = _split(c.if_random_less_than(_at(ctx, minus3), 50, 1835))
     ctx = c.pop_or_end(c.add_to_move_score(ctx, -3))
+    return ctx
 
+
+def _expert_explosion(ctx: AiContext, mask) -> AiContext:
+    """``Expert_Explosion`` (script.s:1841-1884)."""
     # Expert_Explosion (:1841). The player's evasion at decomp 7 or more is -1 (:1856-1857);
     # at 10 or more, -1 again unless the 128 roll jumps (:1858-1860).
-    ctx = _at(ctx, explosion)
+    ctx = _at(ctx, mask)
     ctx, high_hp = _split(c.if_stat_stage_less_than(ctx, _D, Stat.EVA, 7))
     ctx = c.add_to_move_score(ctx, -1)
     ctx, t = _split(c.if_stat_stage_less_than(ctx, _D, Stat.EVA, 10))
@@ -473,10 +484,14 @@ def _expert(ctx: AiContext) -> AiContext:
     # Expert_Explosion_TryScoreMinus1 (:1879)
     ctx, _ = _split(c.if_random_less_than(_at(ctx, minus1), 50, 1880))
     ctx = c.pop_or_end(c.add_to_move_score(ctx, -1))
+    return ctx
 
+
+def _expert_recovery(ctx: AiContext, mask) -> AiContext:
+    """``Expert_Recovery`` (script.s:2640-2678)."""
     # Expert_Recovery (:2640). Expert_Recovery_Unused (:2654-2657) follows the GoTo at :2652
     # and no jump targets it: not reached.
-    ctx = _at(ctx, recovery)
+    ctx = _at(ctx, mask)
     ctx, minus3 = _split(c.if_hp_percent_equal_to(ctx, _A, 100))
     ctx, check_hp = _split(c.if_speed_compare_equal_to(ctx, COMPARE_SPEED_SLOWER))
     ctx = c.add_to_move_score(ctx, -8)
@@ -501,10 +516,14 @@ def _expert(ctx: AiContext) -> AiContext:
     # Expert_Recovery_TryScorePlus2 (:2673)
     ctx, _ = _split(c.if_random_less_than(_at(ctx, plus2), 20, 2674))
     ctx = c.pop_or_end(c.add_to_move_score(ctx, 2))
+    return ctx
 
+
+def _expert_toxic_leech_seed(ctx: AiContext, mask) -> AiContext:
+    """``Expert_ToxicLeechSeed`` (script.s:2680-2708)."""
     # Expert_ToxicLeechSeed (:2680). Its IfMoveEffectKnown reads are the attacker's own moves
     # (plan K3c Ruling 9).
-    ctx = _at(ctx, toxic)
+    ctx = _at(ctx, mask)
     ctx, effects = _split(c.if_attacker_has_no_damaging_moves(ctx))
     ctx, target_hp = _split(c.if_hp_percent_greater_than(ctx, _A, 50))
     ctx, t = _split(c.if_random_less_than(ctx, 50, 2690))
@@ -526,9 +545,13 @@ def _expert(ctx: AiContext) -> AiContext:
     # Expert_ToxicLeechSeed_TryScorePlus2 (:2703)
     ctx, _ = _split(c.if_random_less_than(_at(ctx, plus2), 60, 2704))
     ctx = c.pop_or_end(c.add_to_move_score(ctx, 2))
+    return ctx
 
+
+def _expert_light_screen(ctx: AiContext, mask) -> AiContext:
+    """``Expert_LightScreen`` (script.s:2710-2732)."""
     # Expert_LightScreen (:2710)
-    ctx = _at(ctx, screen)
+    ctx = _at(ctx, mask)
     ctx, minus2 = _split(c.if_hp_percent_less_than(ctx, _A, 50))
     ctx, last_move = _split(c.if_hp_percent_less_than(ctx, _A, 90))
     ctx, t = _split(c.if_random_less_than(ctx, 128, 2718))
@@ -542,19 +565,27 @@ def _expert(ctx: AiContext) -> AiContext:
     ctx, _ = _split(c.go_to(ctx))  # :2726
     # Expert_LightScreen_ScoreMinus2 (:2728), then Expert_LightScreen_End
     ctx = c.pop_or_end(c.add_to_move_score(_at(ctx, minus2), -2))
+    return ctx
 
+
+def _expert_status_speed_up(ctx: AiContext, mask) -> AiContext:
+    """``Expert_StatusSpeedUp`` (script.s:2066-2079)."""
     # Expert_StatusSpeedUp (:2066): not slower, -3; slower, +3 unless the 70 roll jumps.
-    ctx = _at(ctx, speed)
+    ctx = _at(ctx, mask)
     ctx, plus3 = _split(c.if_speed_compare_equal_to(ctx, COMPARE_SPEED_SLOWER))
     ctx = c.add_to_move_score(ctx, -3)
     ctx, _ = _split(c.go_to(ctx))  # :2072
     ctx, _ = _split(c.if_random_less_than(_at(ctx, plus3), 70, 2075))
     ctx = c.pop_or_end(c.add_to_move_score(ctx, 3))
+    return ctx
 
+
+def _expert_curse(ctx: AiContext, mask) -> AiContext:
+    """``Expert_Curse`` (script.s:3452-3500)."""
     # Expert_Curse (:3452). A Ghost-type attacker jumps to Expert_Curse_GhostCheckHP
     # (:3467-3470 -> :3495); _refused refuses Curse on a Ghost type (Basic_CheckCurse
     # _GhostType, script.s:700, is not transcribed), so those jumps are never taken.
-    ctx = _at(ctx, curse)
+    ctx = _at(ctx, mask)
     for target in (LoadType.ATTACKER_TYPE_1, LoadType.ATTACKER_TYPE_2):
         ctx = c.load_type_from(ctx, target)
         ctx, _ = _split(c.if_loaded_equal_to(ctx, _TYPE["Ghost"]))
@@ -584,27 +615,39 @@ def _expert(ctx: AiContext) -> AiContext:
     ctx, _ = _split(c.if_stat_stage_greater_than(ctx, _A, Stat.DEF, 6))
     ctx, _ = _split(c.if_random_less_than(ctx, 128, 3491))
     ctx = c.pop_or_end(c.add_to_move_score(ctx, 1))
+    return ctx
 
+
+def _expert_brick_break(ctx: AiContext, mask) -> AiContext:
+    """``Expert_BrickBreak`` (script.s:4559-4569)."""
     # Expert_BrickBreak (:4559): Reflect or Light Screen on the player's side, +1.
-    ctx = _at(ctx, brick)
+    ctx = _at(ctx, mask)
     ctx, plus1 = _split(c.if_side_condition(ctx, _D, c.SideCondition.REFLECT))
     ctx, t = _split(c.if_side_condition(ctx, _D, c.SideCondition.LIGHT_SCREEN))
     plus1 = plus1 | t
     ctx, _ = _split(c.go_to(ctx))
     ctx = c.pop_or_end(c.add_to_move_score(_at(ctx, plus1), 1))
+    return ctx
 
+
+def _expert_recoil_move(ctx: AiContext, mask) -> AiContext:
+    """``Expert_RecoilMove`` (script.s:6289-6305)."""
     # Expert_RecoilMove (:6289): not resisted and the attacker's true ability is Rock Head
     # or Magic Guard, +1.
-    ctx, _ = _not_resisted(_at(ctx, recoil))
+    ctx, _ = _not_resisted(_at(ctx, mask))
     ctx = c.load_battler_ability(ctx, _A)
     ctx, plus1 = _split(c.if_loaded_equal_to(ctx, _ABILITY["Rock Head"]))
     ctx, t = _split(c.if_loaded_equal_to(ctx, _ABILITY["Magic Guard"]))
     plus1 = plus1 | t
     ctx, _ = _split(c.go_to(ctx))
     ctx = c.pop_or_end(c.add_to_move_score(_at(ctx, plus1), 1))
+    return ctx
 
+
+def _expert_status_defense_down(ctx: AiContext, mask) -> AiContext:
+    """``Expert_StatusDefenseDown`` (script.s:2318-2336)."""
     # Expert_StatusDefenseDown (:2318)
-    ctx = _at(ctx, defense)
+    ctx = _at(ctx, mask)
     ctx, roll = _split(c.if_hp_percent_less_than(ctx, _A, 70))
     ctx, target_hp = _split(c.if_stat_stage_greater_than(ctx, _D, Stat.DEF, 3))
     roll = roll | ctx.live
@@ -617,9 +660,13 @@ def _expert(ctx: AiContext) -> AiContext:
     ctx = _at(ctx, target_hp)
     ctx, _ = _split(c.if_hp_percent_greater_than(ctx, _D, 70))
     ctx = c.pop_or_end(c.add_to_move_score(ctx, -2))
+    return ctx
 
+
+def _expert_pursuit(ctx: AiContext, mask) -> AiContext:
+    """``Expert_Pursuit`` (script.s:3706-3735)."""
     # Expert_Pursuit (:3706)
-    ctx = c.load_is_first_turn_in_battle(_at(ctx, pursuit), _A)
+    ctx = c.load_is_first_turn_in_battle(_at(ctx, mask), _A)
     ctx, plus1 = _split(c.if_loaded_not_equal_to(ctx, 0))
     for target, type_name in (
         (LoadType.DEFENDER_TYPE_1, "Ghost"),
@@ -641,17 +688,87 @@ def _expert(ctx: AiContext) -> AiContext:
     ctx, _ = _split(c.if_move_not_known(ctx, _D, _MOVE["U-turn"]))
     ctx, _ = _split(c.if_random_less_than(ctx, 128, 3731))
     ctx = c.pop_or_end(c.add_to_move_score(ctx, 1))
+    return ctx
 
+
+def _expert_stealth_rock(ctx: AiContext, mask) -> AiContext:
+    """``Expert_StealthRock`` (script.s:6268-6285)."""
     # Expert_StealthRock (:6268). Expert_StealthRock_TryScorePlus1 (:6280, a 64 roll) is
     # reached only when the attacker knows Roar or Whirlwind, which are not transcribed
     # moves (ai_refusals), so the jumps below are never taken.
-    ctx = _at(ctx, stealth_rock)
+    ctx = _at(ctx, mask)
     ctx, _ = _split(c.if_random_less_than(ctx, 128, 6274))
     ctx = c.add_to_move_score(ctx, 1)
     ctx, _ = _split(c.if_move_known(ctx, _A, _MOVE["Roar"]))
     ctx, _ = _split(c.if_move_known(ctx, _A, _MOVE["Whirlwind"]))
     ctx, _ = _split(c.go_to(ctx))
     return ctx
+
+
+# --- The jump tables -----------------------------------------------------------------
+
+
+def _active_effects(layout: AiLayout) -> frozenset[int]:
+    """The battle effects whose script paths ``layout`` transcribes: its ``transcribed`` set
+    in a per-slot layout (keyed by effect), else the effects of its transcribed move ids
+    (``commands.MOVE_EFFECTS``). A move with any other effect is refused (``_refused``)."""
+    if layout.per_slot_sites:
+        return frozenset(layout.transcribed)
+    return frozenset(int(c.MOVE_EFFECTS[m]) for m in layout.transcribed)
+
+
+def _dispatch(ctx: AiContext, labels, layout: AiLayout) -> AiContext:
+    """A flag's effect jump table (``IfCurrentMoveEffectEqualTo effect, label`` in line
+    order, then ``PopOrEnd``), then each label reached, under the union of the paths of its
+    entries. The table holds only ``layout``'s effects (``_active_effects``), decided at trace
+    time: a label no transcribed move reaches is not traced, so one layout's labels cost
+    another nothing (K3c Task 6 review m1)."""
+    active = _active_effects(layout)
+    reached: dict = {}
+    for effect, label in labels:
+        if int(effect) in active:
+            ctx, t = _split(c.if_current_move_effect_equal_to(ctx, effect))
+            reached[label] = reached[label] | t if label in reached else t
+    ctx = c.pop_or_end(ctx)
+    for label, mask in reached.items():
+        ctx = label(ctx, mask)
+    return ctx
+
+
+# Basic_ScoreMoveEffect's entries (script.s:134-285) of the transcribed effects, in line
+# order. The other effects of the transcribed moves have no entry and end at :286.
+_BASIC_LABELS = (
+    (BattleEffect.HALVE_DEFENSE, _basic_check_cannot_explode),  # :135
+    (BattleEffect.DEF_DOWN, _basic_check_defense),  # :145
+    (BattleEffect.RESTORE_HALF_HP, _basic_check_can_recover_hp),  # :154
+    (BattleEffect.STATUS_BADLY_POISON, _basic_check_cannot_poison),  # :155
+    (BattleEffect.SET_LIGHT_SCREEN, _basic_check_light_screen),  # :156
+    (BattleEffect.SPEED_UP_2, _basic_check_speed),  # :166
+    (BattleEffect.DEF_DOWN_2, _basic_check_defense),  # :172
+    (BattleEffect.CURSE, _basic_check_curse),  # :196
+    (BattleEffect.STEALTH_ROCK, _basic_check_stealth_rock),  # :284
+)
+# Expert_Main's entries (script.s:1628-1808) of the transcribed effects, in line order. The
+# other effects of the transcribed moves have no entry and end at :1811.
+_EXPERT_LABELS = (
+    (BattleEffect.RECOVER_HALF_DAMAGE_DEALT, _expert_drain_move),  # :1629
+    (BattleEffect.HALVE_DEFENSE, _expert_explosion),  # :1630
+    (BattleEffect.DEF_DOWN, _expert_status_defense_down),  # :1642
+    (BattleEffect.RESTORE_HALF_HP, _expert_recovery),  # :1652
+    (BattleEffect.STATUS_BADLY_POISON, _expert_toxic_leech_seed),  # :1653
+    (BattleEffect.SET_LIGHT_SCREEN, _expert_light_screen),  # :1654
+    (BattleEffect.SPEED_UP_2, _expert_status_speed_up),  # :1665
+    (BattleEffect.DEF_DOWN_2, _expert_status_defense_down),  # :1671
+    (BattleEffect.CURSE, _expert_curse),  # :1700
+    (BattleEffect.HIT_BEFORE_SWITCH, _expert_pursuit),  # :1706
+    (BattleEffect.REMOVE_SCREENS, _expert_brick_break),  # :1739
+    (BattleEffect.STEALTH_ROCK, _expert_stealth_rock),  # :1805
+    (BattleEffect.RECOIL_HALF, _expert_recoil_move),  # :1806
+)
+# The effects _expert branches on: the per-slot guard's transcribed set
+# (outcome.KAIZO_EXPERT_TRANSCRIBED, a literal) must be among them
+# (tests/ai/test_kaizo_policy.py test_expert_transcribed_is_the_dispatch).
+EXPERT_DISPATCH = frozenset(int(e) for e, _ in _EXPERT_LABELS)
 
 
 def _risky(ctx: AiContext) -> AiContext:
@@ -671,7 +788,7 @@ def _flags(layout: AiLayout) -> tuple:
     (vanilla Roark's ai_flags = 7, roark.md 1), then RISKY when ``layout.risky`` (Kaizo
     Roark's are 23, docs/ai/kaizo_roark.md 1). The policy always runs exactly these; coverage
     refuses a trainer with any other flag set (``engine/coverage.py``, plan K3c Ruling 10)."""
-    flags = (partial(_basic, layout=layout), _eval_attack, _expert)
+    flags = (partial(_basic, layout=layout), _eval_attack, partial(_expert, layout=layout))
     return (*flags, _risky) if layout.risky else flags
 
 

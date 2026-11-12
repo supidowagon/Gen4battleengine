@@ -109,15 +109,19 @@ def test_prep_steps_text(tables, names):
 
 
 def test_hp_why_names_each_percent_check(tables, names):
-    """Each ``AI_DEFENDER_HP_CHECKS`` cut is explained as its check: Furret (57 HP) at 40
-    keeps HP% (trainer_ai.c:626) at most 70 (script.s:2332), at 29 at most 50 (script.s:2694,
-    Expert_ToxicLeechSeed, K3c Task 6)."""
+    """Each cut of the policy's ``AI_DEFENDER_HP_CHECKS`` is explained as its check: Furret
+    (57 HP) at 40 keeps HP% (trainer_ai.c:626) at most 70 (script.s:2332, both policies); at
+    29, at most 50 (script.s:2694, Expert_ToxicLeechSeed) under the Kaizo policy only (K3c
+    Task 6 review m2)."""
+    from nuzline.data.game_constants import AI_POLICIES
     from nuzline.prep.report import _hp_why
 
     prob, _ = fixture(tables, names)
-    for hp, percent in ((40, 70), (29, 50)):
-        why = _hp_why(prob, names, Member(1, hp=hp), tables)
-        assert why == f"at most {percent} % keeps the trainer AI's high-HP check off"
+    off = "at most {} % keeps the trainer AI's high-HP check off"
+    assert _hp_why(prob, names, Member(1, hp=40), tables) == off.format(70)
+    assert _hp_why(prob, names, Member(1, hp=29), tables) != off.format(50)
+    kaizo = tables._replace(ai_policy=np.asarray(AI_POLICIES.index("kaizo")))
+    assert _hp_why(prob, names, Member(1, hp=29), kaizo) == off.format(50)
 
 
 def test_prep_steps_items_status_and_alone(tables, names):

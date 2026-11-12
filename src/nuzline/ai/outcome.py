@@ -249,8 +249,9 @@ EFFECT_SITE_LINES: dict[int, tuple[int, ...]] = {
 # Expert_Main's dispatch table, :1628-1808). The other transcribed effects either have no
 # entry (they end at :1811) or go to a vanilla-transcribed label (DEF_DOWN :1642, DEF_DOWN_2
 # :1671, HIT_BEFORE_SWITCH :1706, STEALTH_ROCK :1805). A per-slot layout refuses a move whose
-# effect is here but not in its expert_transcribed set (the guard for a future effect whose
-# label is not transcribed: add it here first).
+# effect is here but not in its expert_transcribed set. A future effect with an Expert_Main
+# entry goes here first; it is refused until policy._expert dispatches it and it is added to
+# KAIZO_EXPERT_TRANSCRIBED below by hand.
 KAIZO_EXPERT_LABELS: dict[int, tuple[str, int]] = {
     3: ("Expert_DrainMove", 1629),  # RECOVER_HALF_DAMAGE_DEALT (Giga Drain)
     7: ("Expert_Explosion", 1630),  # HALVE_DEFENSE (Selfdestruct)
@@ -262,9 +263,24 @@ KAIZO_EXPERT_LABELS: dict[int, tuple[str, int]] = {
     186: ("Expert_BrickBreak", 1739),  # REMOVE_SCREENS (Brick Break)
     269: ("Expert_RecoilMove", 1806),  # RECOIL_HALF (Head Smash)
 }
-# Of KAIZO_EXPERT_LABELS, the effects whose Expert label is transcribed (layout.KAIZO
-# expert_transcribed): all nine since K3c Task 6 (policy._expert).
-KAIZO_EXPERT_TRANSCRIBED: frozenset[int] = frozenset(KAIZO_EXPERT_LABELS)
+# Of KAIZO_EXPERT_LABELS, the effects whose Expert label policy._expert transcribes
+# (layout.KAIZO expert_transcribed), written out: it is not derived from the table, so an
+# entry added to the table stays refused until its label is transcribed (K3c Task 6 review
+# I1). Pinned against policy.EXPERT_DISPATCH, the effects _expert branches on
+# (tests/ai/test_kaizo_policy.py test_expert_transcribed_is_the_dispatch).
+KAIZO_EXPERT_TRANSCRIBED: frozenset[int] = frozenset(
+    {
+        3,  # RECOVER_HALF_DAMAGE_DEALT: Expert_DrainMove
+        7,  # HALVE_DEFENSE: Expert_Explosion
+        32,  # RESTORE_HALF_HP: Expert_Recovery
+        33,  # STATUS_BADLY_POISON: Expert_ToxicLeechSeed
+        35,  # SET_LIGHT_SCREEN: Expert_LightScreen
+        52,  # SPEED_UP_2: Expert_StatusSpeedUp
+        109,  # CURSE: Expert_Curse
+        186,  # REMOVE_SCREENS: Expert_BrickBreak
+        269,  # RECOIL_HALF: Expert_RecoilMove
+    }
+)
 assert set(KAIZO_EXPERT_LABELS) <= set(EFFECT_SITE_LINES)
 assert KAIZO_EXPERT_TRANSCRIBED <= set(KAIZO_EXPERT_LABELS)
 

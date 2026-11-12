@@ -457,6 +457,11 @@ EXEMPT: dict[str, str] = {
         "entries (:1628-1808), a script Kaizo did not change apart from one word "
         "(docs/ai/kaizo_roark.md 2); each game's moves carry their own effect"
     ),
+    "nuzline.ai.outcome.KAIZO_EXPERT_TRANSCRIBED": (
+        "decomp battle effect ids whose Expert_Main label (script.s:1628-1808) the AI "
+        "transcribes; MoveTable.effect is read by a script Kaizo did not change apart from one "
+        "word (docs/ai/kaizo_roark.md 2); each game's moves carry their own effect"
+    ),
     "nuzline.ai.policy._LOOSE_SHARE": (
         "tie-break probabilities P(RandNext() % n == i) (trainer_ai.c:338), not game ids"
     ),

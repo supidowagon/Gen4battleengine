@@ -25,10 +25,10 @@ from nuzline.prep.search import PrepResult, PrepSettings, setup_label
 from nuzline.prep.setups import Setup, setup_cost, setup_specs
 from nuzline.prep.variants import (
     _PINCH_ABILITIES,
-    AI_DEFENDER_HP_CHECKS,
     LEVEL_UP,
     RELEARNER,
     Member,
+    ai_defender_hp_checks,
     ai_kill_damage,
     max_hp_of,
     member_spec,
@@ -78,7 +78,7 @@ def _hp_why(problem: PrepProblem, names: Names, member: Member, tables: Tables) 
     spec = problem.candidates[member.candidate].spec
     top = max_hp_of(tables, spec)
     hp = member.hp
-    for kind, percent in AI_DEFENDER_HP_CHECKS:
+    for kind, percent in ai_defender_hp_checks(tables):
         if hp == percent_cut(kind, percent, top):
             return f"at most {percent} % keeps the trainer AI's high-HP check off"
     row = personal_row(tables, spec.species, spec.form)

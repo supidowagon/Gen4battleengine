@@ -28,6 +28,7 @@ from nuzline.ai.commands import BattleEffect, TypeMulti
 from nuzline.ai.layout import KAIZO
 from nuzline.ai.outcome import (
     KAIZO_EXPERT_LABELS,
+    KAIZO_EXPERT_TRANSCRIBED,
     SIM_ROLL_MAX,
     SWITCH_NONE,
     AiOutcome,
@@ -230,7 +231,87 @@ def test_expert_label_table_is_the_dispatch():
         BattleEffect.STEALTH_ROCK,
     }
     assert set(dispatch) & KAIZO.transcribed == set(KAIZO_EXPERT_LABELS) | old
-    assert KAIZO.expert_transcribed == frozenset(KAIZO_EXPERT_LABELS)
+    assert KAIZO.expert_transcribed == KAIZO_EXPERT_TRANSCRIBED
+
+
+def _dispatched(t, s, flag, layout) -> set[int]:
+    """The effects ``flag`` (``policy._basic`` or ``policy._expert``) branches on under
+    ``layout``: the ``IfCurrentMoveEffectEqualTo`` commands it runs, recorded while it runs
+    once (the dispatch is decided before any value, so one state shows it)."""
+    seen = set()
+    original = c.if_current_move_effect_equal_to
+
+    def record(ctx, effect):
+        seen.add(int(effect))
+        return original(ctx, effect)
+
+    ctx = c.at_slot(c.new_context(t, s, _outcome(t, s), slot_roll_sites(t, s, KAIZO)), 0)
+    c.if_current_move_effect_equal_to = record
+    try:
+        flag(ctx, layout)
+    finally:
+        c.if_current_move_effect_equal_to = original
+    return seen
+
+
+def test_expert_transcribed_is_the_dispatch(
+    kaizo_tables, kaizo_names, kaizo_roark_party, monkeypatch
+):
+    """Task 6 review I1. (a) The guard's transcribed set (``outcome.KAIZO_EXPERT_TRANSCRIBED``,
+    a literal) is exactly the effects of ``KAIZO_EXPERT_LABELS`` that ``policy._expert``
+    branches on, recorded from a run of it (and ``policy.EXPERT_DISPATCH`` is that set of
+    branches). (b) An entry added to the table but not to the literal is refused: a synthetic
+    Expert_Main entry for FLINCH_HIT (an effect that has none, script.s:1628-1808) refuses
+    Cranidos's Zen Headbutt by its label, though FLINCH_HIT is transcribed. (c) Adding that
+    entry to outcome.py's table literal leaves KAIZO_EXPERT_TRANSCRIBED unchanged."""
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, CRANIDOS, _CRANIDOS_MOVES, bench=(BONSLY,))
+    branches = _dispatched(t, s, policy._expert, KAIZO)
+    assert branches == policy.EXPERT_DISPATCH
+    # (c) The literal does not follow the table: outcome.py's own source, with an entry added
+    # to the KAIZO_EXPERT_LABELS literal (as a later task would), still leaves it out.
+    from nuzline.ai import outcome as outcome_module
+
+    source = Path(outcome_module.__file__).read_text(encoding="utf-8")
+    anchor = "KAIZO_EXPERT_LABELS: dict[int, tuple[str, int]] = {\n"
+    assert source.count(anchor) == 1
+    grown = source.replace(anchor, anchor + "    31: ('Expert_Synthetic', 9999),\n")
+    copy: dict = {"__name__": "outcome_with_a_new_entry"}
+    exec(compile(grown, "outcome_with_a_new_entry", "exec"), copy)  # noqa: S102
+    assert 31 in copy["KAIZO_EXPERT_LABELS"]
+    assert copy["KAIZO_EXPERT_TRANSCRIBED"] == KAIZO_EXPERT_TRANSCRIBED
+    assert KAIZO_EXPERT_TRANSCRIBED == set(KAIZO_EXPERT_LABELS) & branches
+    assert set(KAIZO_EXPERT_LABELS) <= branches
+    assert policy.ai_refusals(t, s, n) == []
+    flinch = BattleEffect.FLINCH_HIT
+    assert int(t.move_ai_effect[ZEN_HEADBUTT]) == flinch and flinch in KAIZO.transcribed
+    table = {**KAIZO_EXPERT_LABELS, int(flinch): ("Expert_Synthetic", 9999)}
+    monkeypatch.setattr(policy, "KAIZO_EXPERT_LABELS", table)
+    with jax.disable_jit():  # _refused is jitted with the table as a trace-time constant
+        reasons = policy.ai_refusals(t, s, n)
+    line = (
+        "ai scoring: opponent slot 0: move Zen Headbutt goes to Expert_Synthetic (Expert_Main, "
+        "script.s:9999), whose script path is not transcribed yet (docs/ai/kaizo_roark.md 5)"
+    )
+    assert reasons == [line]
+
+
+def test_dispatch_is_static_per_layout(kaizo_tables, kaizo_roark_party):
+    """Task 6 review m1: the jump tables hold only the layout's effects, decided at trace
+    time, so the vanilla program traces none of the Kaizo labels. Vanilla's transcribed moves
+    have the effects HIT, DEF_DOWN, FLINCH_HIT, DEF_DOWN_2, HIT_BEFORE_SWITCH and STEALTH_ROCK
+    (commands.MOVE_EFFECTS): BASIC branches on DEF_DOWN, DEF_DOWN_2 and STEALTH_ROCK (:145,
+    :172, :284), EXPERT on those four with entries (:1642, :1671, :1706, :1805)."""
+    from nuzline.ai.layout import VANILLA
+
+    t = kaizo_tables
+    s = _state(t, kaizo_roark_party, CRANIDOS, _CRANIDOS_MOVES, bench=(BONSLY,))
+    e = BattleEffect
+    assert _dispatched(t, s, policy._basic, VANILLA) == {e.DEF_DOWN, e.DEF_DOWN_2, e.STEALTH_ROCK}
+    vanilla_expert = {e.DEF_DOWN, e.DEF_DOWN_2, e.HIT_BEFORE_SWITCH, e.STEALTH_ROCK}
+    assert _dispatched(t, s, policy._expert, VANILLA) == vanilla_expert
+    kaizo_basic = _dispatched(t, s, policy._basic, KAIZO)
+    assert kaizo_basic == {int(effect) for effect, _ in policy._BASIC_LABELS}
 
 
 def test_expert_guard_refuses_an_untranscribed_label(
@@ -1018,7 +1099,8 @@ def test_risky_is_part_of_the_policy(kaizo_tables, kaizo_names, kaizo_roark_part
     from nuzline.ai.layout import VANILLA
 
     t, n = kaizo_tables, kaizo_names
-    assert [f.__name__ for f in policy._flags(KAIZO)[1:]] == ["_eval_attack", "_expert", "_risky"]
+    names = [getattr(f, "func", f).__name__ for f in policy._flags(KAIZO)]
+    assert names == ["_basic", "_eval_attack", "_expert", "_risky"]
     assert len(policy._flags(VANILLA)) == 3
     cases = (
         (BONSLY, (SELFDESTRUCT, BRICK_BREAK, 0, 0), 0, [99, 100, 0, 0], 97),

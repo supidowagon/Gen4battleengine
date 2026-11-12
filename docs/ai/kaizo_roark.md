@@ -157,10 +157,14 @@ Selfdestruct `Expert_Explosion` `:1630`, Recover `Expert_Recovery` `:1652`, Toxi
 `Expert_StatusSpeedUp` `:1665`, Curse `Expert_Curse` `:1700`, Brick Break `Expert_BrickBreak`
 `:1739`, Head Smash `Expert_RecoilMove` `:1806`). A per-slot layout refuses an opponent move
 with one of these effects unless the effect is in its `expert_transcribed` set
-(`policy._refused`), naming the label. Since Task 6 `KAIZO.expert_transcribed` holds all
-nine, so the guard refuses nothing of Kaizo Roark's. It stays for a later effect: a new
-effect whose Expert label is not transcribed goes into the table first
-(`test_expert_guard_refuses_an_untranscribed_label`, with a synthetic layout).
+(`policy._refused`), naming the label. `KAIZO.expert_transcribed` is
+`outcome.KAIZO_EXPERT_TRANSCRIBED`, a literal of the nine effects `policy._expert` dispatches
+(Task 6 review I1: it is not derived from the table). So the guard refuses nothing of Kaizo
+Roark's, and an effect added to the table later stays refused until its label is
+transcribed and added to the literal by hand. `test_expert_transcribed_is_the_dispatch`
+checks the literal against the branches `_expert` takes (recorded from a run of it) and
+refuses a synthetic table entry outside it; `test_expert_guard_refuses_an_untranscribed_label`
+does the same through coverage with a smaller layout.
 `D` is the player's active Pokemon, `A` Roark's. A decomp stat stage is the engine stage plus
 6. `HP%` is `curHP * 100 / maxHP`, integer division (`trainer_ai.c:626`, `:641`).
 
@@ -248,7 +252,10 @@ As roark.md 5.2, with these effect tests now on transcribed paths:
 ### 5.3 EXPERT (`Expert_Main`, `script.s:1623-1811`)
 
 `Expert_Main`'s dispatch (`:1628-1808`) sends nine of Roark's effects to a label added in
-K3c Task 6 (`policy._expert`); Stealth Rock keeps roark.md's `Expert_StealthRock`. Every
+K3c Task 6 (`policy._expert`); Stealth Rock keeps roark.md's `Expert_StealthRock`. The jump
+tables of BASIC and EXPERT (`policy._BASIC_LABELS`, `_EXPERT_LABELS`) are restricted at trace
+time to the layout's transcribed effects (`policy._dispatch`), so the vanilla program traces
+none of the Kaizo labels (Task 6 review m1; `test_dispatch_is_static_per_layout`). Every
 other effect of Roark's moves has no entry and reaches `PopOrEnd` (`:1811`). That includes
 Sand Tomb's WHIRLPOOL (261): `Expert_BindingMove` is dispatched on BIND_HIT only (`:1659`,
 Ruling 5). "N roll" means `IfRandomLessThan N`: it jumps with probability N/256, and the
@@ -284,6 +291,8 @@ Room reverses, `:1432-1439`; equal speed is never SLOWER, Ruling 3).
      skips to 3.
   2. `A`'s HP% 50 or less: the 50 roll (`:2690`), **-3**. `D`'s HP% 50 or less: the 50 roll
      (`:2695`), **-3**.
+     The `:2694` check of `D`'s HP is a prep HP cut of the Kaizo policy only
+     (`prep/variants.py` `AI_DEFENDER_HP_CHECKS`, keyed by policy; vanilla keeps 70).
   3. `A` knows a move with effect SP_DEF_UP (14) or PROTECT (111) (`IfMoveEffectKnown
      ATTACKER`, its own true moveset, Ruling 9): the 60 roll (`:2704`), **+2**. No Kaizo move
      has SP_DEF_UP; Kaizo Roark's Pokemon know no PROTECT move.
@@ -861,16 +870,24 @@ accepted (no refused row), so these are the costs of real distributions.
   (Selfdestruct's 8 sites: 10 + 2 x (4 + 256 + 2 + 2)), against `WIDTH_CAP` 131072 and the
   bound 2058 of 8.5. The same six values over the `kaizo_save_pre_roark` pool.
 - `ai_flat_width` (reported, not used): 3840 to 983040.
-- `ai_rows`, 1000 Kaizo states (bucket 1024), per state: **207 µs** on 1 device, **33.5 µs**
-  on 20 (the CLI default here, `os.cpu_count()`). Vanilla: 29 µs and 13.6 µs.
-  `policy._distribution` vmapped over the 1000 states: Kaizo 269 µs, vanilla 24 µs. One
-  Kaizo state (bucket 256): 0.051 s on 1 device, 0.017 s on 20.
+- Cost, after the Task 6 review fix (m1: each policy's jump tables trace only its own
+  labels, `policy._dispatch`). In the commit before that fix, the vanilla program also traced
+  the Kaizo labels, masked off: vmapped vanilla `_distribution` cost 24 µs per state and
+  `ai_rows` 29 µs per state on 1 device, with a 4.0% depth-1 share.
+
+| per state, 1000 states | Kaizo, 1 device | Kaizo, 20 devices | vanilla, 1 device | vanilla, 20 devices |
+|---|---|---|---|---|
+| `ai_rows` (bucket 1024) | **206 µs** | **32.5 µs** | 14.5 µs | 12.2 µs |
+| vmapped `policy._distribution` | 269 µs | 272 µs | **10.6 µs** (Task 3: 10.2) | 10.6 µs |
+| one state (bucket 256) | 0.050 s | 0.016 s | 0.005 s | 0.010 s |
+
+  20 devices is the CLI default here (`os.cpu_count()`).
 - The AI share of a depth-1 expansion of one Kaizo root (27 pairs, the root's real
   distribution: Stealth Rock 0.687, Selfdestruct 0.096, Brick Break 0.217):
 
 | | 1 device | 20 devices |
 |---|---|---|
-| Kaizo | 19.3% (0.051 s of 0.262 s) | 9.7% (0.016 s of 0.169 s) |
-| vanilla | 4.0% | 8.3% |
+| Kaizo | 19.4% (0.051 s of 0.262 s) | 9.5% (0.016 s of 0.166 s) |
+| vanilla | 2.4% | 7.9% |
 
 The spec 6 stop condition (above 50%) is not met.
