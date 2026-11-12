@@ -160,11 +160,21 @@ with one of these effects unless the effect is in its `expert_transcribed` set
 (`policy._refused`), naming the label. `KAIZO.expert_transcribed` is
 `outcome.KAIZO_EXPERT_TRANSCRIBED`, a literal of the nine effects `policy._expert` dispatches
 (Task 6 review I1: it is not derived from the table). So the guard refuses nothing of Kaizo
-Roark's, and an effect added to the table later stays refused until its label is
-transcribed and added to the literal by hand. `test_expert_transcribed_is_the_dispatch`
-checks the literal against the branches `_expert` takes (recorded from a run of it) and
-refuses a synthetic table entry outside it; `test_expert_guard_refuses_an_untranscribed_label`
-does the same through coverage with a smaller layout.
+Roark's. The workflow for a later effect with an Expert_Main entry:
+1. Add it to the table (and its site row) first. It is then *pending*: in the table, not
+   branched on by `_expert`, not in the literal, and every move with it is refused. The
+   tests allow this state.
+2. Transcribe its label (a `policy._EXPERT_LABELS` row) and add the effect to the literal by
+   hand.
+
+`test_expert_transcribed_is_the_dispatch` records the branches a run of `_expert` takes and
+checks that the literal is the table's effects among them (and only branched effects). It
+also refuses a synthetic table entry outside the literal, and checks that adding an entry to
+`outcome.py`'s table leaves the literal unchanged.
+`test_expert_guard_refuses_an_untranscribed_label` does the same through coverage, with a
+smaller layout. BASIC's table (`policy._BASIC_LABELS`) is pinned the same way against
+`Basic_ScoreMoveEffect` (`script.s:133-286`; `test_basic_label_table_is_the_dispatch`). A
+transcribed effect with a BASIC entry needs a row there.
 `D` is the player's active Pokemon, `A` Roark's. A decomp stat stage is the engine stage plus
 6. `HP%` is `curHP * 100 / maxHP`, integer division (`trainer_ai.c:626`, `:641`).
 

@@ -118,15 +118,27 @@ def test_percent_cut_is_the_last_hp_off(percent, max_hp):
     assert cut + 1 > max_hp or (cut + 1) * 100 // max_hp > percent
 
 
+# The player-HP percent commands (ai/commands.py), by their names' suffix, and the kind
+# AI_DEFENDER_HP_CHECKS gives each. Only "greater" and "less" are prep cuts (percent_cut); an
+# EqualTo / NotEqualTo check on the player's HP (e.g. Expert_Feint, script.s:4922, or
+# Expert_WringOut, :5420) is caught here and fails the pins until prep handles it.
+_HP_PERCENT_COMMANDS = {
+    "greater_than": "greater",
+    "less_than": "less",
+    "not_equal_to": "not_equal",
+    "equal_to": "equal",
+}
+
+
 def _defender_hp_calls(monkeypatch, tables, state, layout) -> set[tuple[str, int]]:
-    """The ``if_hp_percent_*_than(ctx, DEFENDER, n)`` calls the flag scripts of ``layout`` make,
+    """The ``if_hp_percent_*(ctx, DEFENDER, n)`` calls the flag scripts of ``layout`` make,
     recorded while ``policy._scores`` traces them: each policy's jump tables trace only its
     own labels (``policy._dispatch``), so these are the calls that policy can reach."""
     from nuzline.ai import policy
 
     seen = set()
-    for kind in ("greater", "less"):
-        name = f"if_hp_percent_{kind}_than"
+    for suffix, kind in _HP_PERCENT_COMMANDS.items():
+        name = f"if_hp_percent_{suffix}"
         original = getattr(commands, name)
 
         def record(ctx, battler, percent, kind=kind, original=original):
@@ -141,25 +153,20 @@ def _defender_hp_calls(monkeypatch, tables, state, layout) -> set[tuple[str, int
     return seen
 
 
-def test_ai_hp_checks_pinned(monkeypatch, tables, names, kaizo_tables, kaizo_roark_party):
-    """``AI_DEFENDER_HP_CHECKS`` per policy is the set of player-HP percent checks that
-    policy's flag scripts call (K3c Task 6 review m2), and their union is every such call in
-    ``src/nuzline/ai`` (the source scan)."""
-    from nuzline.ai.layout import KAIZO, VANILLA
-
+def test_ai_hp_checks_pinned():
+    """Source and AST pins, no fixtures: every player-HP percent call in ``src/nuzline/ai``
+    (``if_hp_percent_*(ctx, _D, n)``, all four comparisons) is in the union of the policies'
+    ``AI_DEFENDER_HP_CHECKS``; the functions reading an ``hp`` array are ``AI_HP_READERS``;
+    and every ``if_current_move_kills`` passes ``USE_MAX_DAMAGE``."""
     sources = {p: p.read_text(encoding="utf-8") for p in sorted(AI_DIR.glob("*.py"))}
+    commands_re = "|".join(_HP_PERCENT_COMMANDS)
     found = set()
     for text in sources.values():
-        for kind, percent in re.findall(
-            r"if_hp_percent_(greater|less)_than\(ctx, _D, (\d+)\)", text
+        for suffix, percent in re.findall(
+            rf"if_hp_percent_({commands_re})\(ctx, _D, (\d+)\)", text
         ):
-            found.add((kind, int(percent)))
+            found.add((_HP_PERCENT_COMMANDS[suffix], int(percent)))
     assert found == set().union(*AI_DEFENDER_HP_CHECKS.values())
-    vanilla = make_state(tables, sample_party(names)[:1], roark_party(names))
-    kaizo = make_state(kaizo_tables, [kaizo_roark_party[2]], list(kaizo_roark_party))
-    for layout, t, s in ((VANILLA, tables, vanilla), (KAIZO, kaizo_tables, kaizo)):
-        calls = _defender_hp_calls(monkeypatch, t, s, layout)
-        assert calls == set(AI_DEFENDER_HP_CHECKS[layout.name]), layout.name
     readers = set()
     kill_calls = []
     for text in sources.values():
@@ -179,6 +186,19 @@ def test_ai_hp_checks_pinned(monkeypatch, tables, names, kaizo_tables, kaizo_roa
                     kill_calls.append(ast.unparse(fn.args[-1]))
     assert readers == set(AI_HP_READERS)
     assert kill_calls and all(arg.endswith("USE_MAX_DAMAGE") for arg in kill_calls)
+
+
+def test_ai_hp_checks_per_policy(monkeypatch, tables, names, kaizo_tables, kaizo_roark_party):
+    """``AI_DEFENDER_HP_CHECKS`` per policy is the set of player-HP percent checks (all four
+    comparisons) that policy's flag scripts call (K3c Task 6 review m2), recorded while they
+    trace: vanilla {> 70} (script.s:2332), Kaizo {> 70, > 50} (:2332, :2694)."""
+    from nuzline.ai.layout import KAIZO, VANILLA
+
+    vanilla = make_state(tables, sample_party(names)[:1], roark_party(names))
+    kaizo = make_state(kaizo_tables, [kaizo_roark_party[2]], list(kaizo_roark_party))
+    for layout, t, s in ((VANILLA, tables, vanilla), (KAIZO, kaizo_tables, kaizo)):
+        calls = _defender_hp_calls(monkeypatch, t, s, layout)
+        assert calls == set(AI_DEFENDER_HP_CHECKS[layout.name]), layout.name
 
 
 def test_move_changes(names):

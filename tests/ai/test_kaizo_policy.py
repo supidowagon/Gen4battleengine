@@ -202,7 +202,7 @@ def test_roark_moves_are_all_accepted(kaizo_tables, kaizo_names, kaizo_roark_par
     reasons = [r for r in policy.ai_refusals(t, s, n) if "opponent slot" in r]
     assert reasons == []
     roark_labels = {e for _, e in ROARK_MOVES.values()} & set(KAIZO_EXPERT_LABELS)
-    assert roark_labels == set(KAIZO_EXPERT_LABELS) <= KAIZO.expert_transcribed
+    assert roark_labels <= KAIZO.expert_transcribed
 
 
 def test_expert_label_table_is_the_dispatch():
@@ -280,8 +280,10 @@ def test_expert_transcribed_is_the_dispatch(
     exec(compile(grown, "outcome_with_a_new_entry", "exec"), copy)  # noqa: S102
     assert 31 in copy["KAIZO_EXPERT_LABELS"]
     assert copy["KAIZO_EXPERT_TRANSCRIBED"] == KAIZO_EXPERT_TRANSCRIBED
+    # A table entry may lead its label (K3c Task 6 re-review B): an effect in the table that
+    # _expert does not branch on is pending, refused by the guard, so only these two hold.
     assert KAIZO_EXPERT_TRANSCRIBED == set(KAIZO_EXPERT_LABELS) & branches
-    assert set(KAIZO_EXPERT_LABELS) <= branches
+    assert KAIZO_EXPERT_TRANSCRIBED <= branches
     assert policy.ai_refusals(t, s, n) == []
     flinch = BattleEffect.FLINCH_HIT
     assert int(t.move_ai_effect[ZEN_HEADBUTT]) == flinch and flinch in KAIZO.transcribed
@@ -310,8 +312,38 @@ def test_dispatch_is_static_per_layout(kaizo_tables, kaizo_roark_party):
     assert _dispatched(t, s, policy._basic, VANILLA) == {e.DEF_DOWN, e.DEF_DOWN_2, e.STEALTH_ROCK}
     vanilla_expert = {e.DEF_DOWN, e.DEF_DOWN_2, e.HIT_BEFORE_SWITCH, e.STEALTH_ROCK}
     assert _dispatched(t, s, policy._expert, VANILLA) == vanilla_expert
-    kaizo_basic = _dispatched(t, s, policy._basic, KAIZO)
-    assert kaizo_basic == {int(effect) for effect, _ in policy._BASIC_LABELS}
+
+
+def test_basic_label_table_is_the_dispatch():
+    """K3c Task 6 re-review A: ``policy._BASIC_LABELS`` is read off ``Basic_ScoreMoveEffect``
+    (script.s:133-286, ``IfCurrentMoveEffectEqualTo BATTLE_EFFECT_<effect>, <label>``).
+    - Every row's effect has an entry there, its function's label (the first name of its
+      docstring) is the entry's label, and the rows are in the entries' line order.
+    - Every effect a layout transcribes (``policy._active_effects``) that has an entry has a
+      row. So a new transcribed effect with a BASIC label (Sandstorm :200, Will-O-Wisp's
+      STATUS_BURN :231, ...) fails here until its label is written."""
+    from nuzline.ai.layout import LAYOUTS
+
+    script = DECOMP / "src/battle/trainer_ai/script.s"
+    effects = DECOMP / "generated/move_battle_effects.txt"
+    if not script.exists() or not effects.exists():
+        pytest.skip("decomp not present")
+    lines = script.read_text(encoding="utf-8").splitlines()
+    assert lines[132] == "Basic_ScoreMoveEffect:" and lines[285].split() == ["PopOrEnd"]
+    names = effects.read_text(encoding="utf-8").split()
+    dispatch = {}
+    for number in range(134, 286):
+        words = lines[number - 1].replace(",", " ").split()
+        assert words[:1] == ["IfCurrentMoveEffectEqualTo"], number
+        dispatch.setdefault(names.index(words[1]), (words[2], number))
+    rows = [(int(effect), label) for effect, label in policy._BASIC_LABELS]
+    for effect, label in rows:
+        assert effect in dispatch, effect
+        assert label.__doc__.split("``")[1] == dispatch[effect][0], (effect, label.__name__)
+    assert [dispatch[e][1] for e, _ in rows] == sorted(dispatch[e][1] for e, _ in rows)
+    for layout in LAYOUTS:
+        needed = policy._active_effects(layout) & set(dispatch)
+        assert needed <= {e for e, _ in rows}, (layout.name, needed - {e for e, _ in rows})
 
 
 def test_expert_guard_refuses_an_untranscribed_label(

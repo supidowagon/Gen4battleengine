@@ -249,9 +249,11 @@ EFFECT_SITE_LINES: dict[int, tuple[int, ...]] = {
 # Expert_Main's dispatch table, :1628-1808). The other transcribed effects either have no
 # entry (they end at :1811) or go to a vanilla-transcribed label (DEF_DOWN :1642, DEF_DOWN_2
 # :1671, HIT_BEFORE_SWITCH :1706, STEALTH_ROCK :1805). A per-slot layout refuses a move whose
-# effect is here but not in its expert_transcribed set. A future effect with an Expert_Main
-# entry goes here first; it is refused until policy._expert dispatches it and it is added to
-# KAIZO_EXPERT_TRANSCRIBED below by hand.
+# effect is here but not in its expert_transcribed set. The workflow for a future effect with
+# an Expert_Main entry: add it here first (with its EFFECT_SITE_LINES row). It is then
+# pending: in the table, not dispatched by policy._expert, not in KAIZO_EXPERT_TRANSCRIBED,
+# and every move with it is refused; the tests allow this state. Then transcribe its label
+# (an _EXPERT_LABELS row) and add the effect to KAIZO_EXPERT_TRANSCRIBED by hand.
 KAIZO_EXPERT_LABELS: dict[int, tuple[str, int]] = {
     3: ("Expert_DrainMove", 1629),  # RECOVER_HALF_DAMAGE_DEALT (Giga Drain)
     7: ("Expert_Explosion", 1630),  # HALVE_DEFENSE (Selfdestruct)
