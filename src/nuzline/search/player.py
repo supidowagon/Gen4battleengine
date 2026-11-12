@@ -11,15 +11,20 @@ static argument); what varies between runs is its ``params``, any pytree of arra
   player's action (``int32``, a legal action); ``refused`` (``bool``) when this choice
   cannot be made (the opponent's distribution it needs is refused), which refuses the turn;
   ``fallback`` (``bool``) when the default policy (``playout_policy``) decided the turn.
-- ``replace(tables, state, params) -> slot``: the party slot (``int32``, a
-  ``legal_replacements(state, 0)`` slot) the player sends in at a replacement.
+- ``replace(tables, state, params, key, layout) -> (slot, refused)``: the party slot
+  (``int32``, a ``legal_replacements(state, 0)`` slot) the player sends in at a
+  replacement; ``refused`` (``bool``) when this choice cannot be made, which refuses the
+  playout. ``key`` lets a player sample there; it is folded from the playout's keys
+  (``fold_in(key, REPLACE_FOLD + i)`` for pass ``i`` of a pending replacement before the
+  first turn, ``fold_in(k_policy, 1 + i)`` for pass ``i`` after a turn), so it does not
+  change the key stream.
 
 ``player_playout`` is ``playout._run``'s loop with these two choices: the root's hidden
-draws first (``root_state``), a pending player replacement resolved first (no key, no
-turn), the same key splits per turn (``act`` gets the policy key). ``GREEDY``
-(``playout_policy`` and ``replacement_policy``, ``params`` ignored) so returns what
-``playout`` returns from that root and key. ``PlayerResult.fallback_turns`` counts the
-turns ``act`` marked ``fallback``.
+draws first (``root_state``), a pending player replacement resolved first (no turn), the
+same key splits per turn (``act`` gets the policy key ``k_policy``). ``GREEDY`` is
+``playout_policy`` and ``replacement_policy`` (``params`` and the replacement key
+ignored), so it returns what ``playout`` returns from that root and key.
+``PlayerResult.fallback_turns`` counts the turns ``act`` marked ``fallback``.
 """
 
 from __future__ import annotations
@@ -50,12 +55,13 @@ from nuzline.search.playout import (
 __all__ = ["GREEDY", "Player", "PlayerResult", "player_playout"]
 
 _I32, _F32 = jnp.int32, jnp.float32
+REPLACE_FOLD = 0x5EED  # fold_in base of a pending replacement's keys (module docstring)
 
 
 class Player(NamedTuple):  # static and hashable: passed to jit as a static argument
     name: str
     act: Callable  # (tables, state, params, key, layout) -> (action, refused, fallback)
-    replace: Callable  # (tables, state, params) -> party slot int32
+    replace: Callable  # (tables, state, params, key, layout) -> (slot int32, refused bool)
 
 
 class PlayerResult(NamedTuple):
@@ -75,18 +81,27 @@ def _greedy_act(tables: Tables, state: BattleState, params, key, layout: AiLayou
     return action, refused, jnp.bool_(True)
 
 
-def _greedy_replace(tables: Tables, state: BattleState, params) -> jnp.ndarray:
-    return replacement_policy(tables, state)
+def _greedy_replace(tables: Tables, state: BattleState, params, key, layout: AiLayout):
+    return replacement_policy(tables, state), jnp.bool_(False)
 
 
 GREEDY = Player("greedy", _greedy_act, _greedy_replace)
 
 
 def _replace_while_needed(
-    tables: Tables, state: BattleState, player: Player, params, refused, passes
+    tables: Tables,
+    state: BattleState,
+    player: Player,
+    params,
+    refused,
+    passes,
+    key,
+    fold,
+    layout: AiLayout,
 ):
     """``(state, refused)``: while the player needs a replacement (``passes`` at most)
-    ``replacement_pass`` with ``player.replace``'s slot."""
+    ``replacement_pass`` with ``player.replace``'s slot, pass ``i`` given
+    ``fold_in(key, fold + i)``; a refused choice refuses."""
 
     def cond(carry):
         state, _, n = carry
@@ -94,9 +109,10 @@ def _replace_while_needed(
 
     def body(carry):
         state, refused, n = carry
-        slot = player.replace(tables, state, params)
-        passed, bad = replacement_pass(tables, state, slot)
-        return passed, refused | bad, n + 1
+        k = jax.random.fold_in(key, fold + n)
+        slot, choice_refused = player.replace(tables, state, params, k, layout)
+        passed, bad = replacement_pass(tables, state, jnp.asarray(slot, _I32))
+        return passed, refused | bad | choice_refused, n + 1
 
     state, refused, _ = jax.lax.while_loop(cond, body, (state, refused, jnp.int32(0)))
     return state, refused
@@ -113,9 +129,9 @@ def _player_run(
 ) -> tuple[PlayerResult, BattleState]:
     """``(result, final state)`` of ``player_playout``."""
     state = root_state(tables, state, key)
-    # A pending player replacement first (no key, no turn), as playout._resolve_pending.
+    # A pending player replacement first (no turn), as playout._resolve_pending.
     state, refused0 = _replace_while_needed(
-        tables, state, player, params, jnp.bool_(False), SLOTS - 1
+        tables, state, player, params, jnp.bool_(False), SLOTS - 1, key, REPLACE_FOLD, layout
     )
 
     def cond(carry):
@@ -131,7 +147,7 @@ def _player_run(
         )
         played, sent_refused = send_replacements(tables, played, ai_switched, power_mul)
         played, pass_refused = _replace_while_needed(
-            tables, played, player, params, sent_refused, SLOTS - 1
+            tables, played, player, params, sent_refused, SLOTS - 1, k_policy, 1, layout
         )
         refused = refused | pass_refused | act_refused
         s = _select(refused, s, played)

@@ -48,7 +48,7 @@ from nuzline.ai.replacement import post_ko_switch_in
 from nuzline.data.tables import Tables
 from nuzline.engine.actions import MOVE_ACTIONS, NUM_ACTIONS, legal_actions, legal_replacements
 from nuzline.engine.state import SLOTS, BattleState
-from nuzline.search.player import Player, PlayerResult, _player_run, player_playout
+from nuzline.search.player import Player, PlayerResult, player_playout
 from nuzline.search.playout import _carried_mul, _policy, replacement_policy
 
 __all__ = [
@@ -142,19 +142,12 @@ def _line_act(tables: Tables, state: BattleState, line: Line, key, layout: AiLay
     return action, q_refused & ~by_rule, ~by_rule
 
 
-LINE = Player("line", _line_act, line_replacement)
+def _line_replace(tables: Tables, state: BattleState, line: Line, key, layout: AiLayout):
+    """``LINE.replace``: ``line_replacement``'s slot; ``key`` unused, never refused."""
+    return line_replacement(tables, state, line), jnp.bool_(False)
 
 
-def _line_run(
-    tables: Tables,
-    state: BattleState,
-    line: Line,
-    key,
-    max_turns: int,
-    layout: AiLayout = VANILLA,
-) -> tuple[PlayerResult, BattleState]:
-    """``(result, final state)`` of ``line_playout``."""
-    return _player_run(tables, state, LINE, line, key, max_turns, layout)
+LINE = Player("line", _line_act, _line_replace)
 
 
 @partial(jax.jit, static_argnames=("max_turns", "layout"))

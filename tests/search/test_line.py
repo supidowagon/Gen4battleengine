@@ -15,16 +15,17 @@ from nuzline.engine.ids import Status
 from nuzline.engine.state import SLOTS
 from nuzline.search import playout as playout_module
 from nuzline.search.line import (
+    LINE,
     MODE_FALLBACK,
     MODE_MOVES_ONLY,
     MODE_RULE,
     Line,
-    _line_run,
     empty_line,
     line_action,
     line_playout,
     line_replacement,
 )
+from nuzline.search.player import _player_run
 from nuzline.search.playout import (
     REFUSED_WON,
     _carried_mul,
@@ -55,7 +56,8 @@ def _act(tables, state, line):
 
 
 _MOVES_ONLY = jnp.arange(NUM_ACTIONS) < MOVE_ACTIONS
-_RUN_1 = jax.jit(partial(_line_run, max_turns=1))  # one compile for the one-turn tests
+# One compile for the one-turn tests.
+_RUN_1 = jax.jit(partial(_player_run, player=LINE, max_turns=1))
 
 
 def _active(state, slot):
@@ -205,7 +207,7 @@ def test_empty_line_equals_playout(tables, names):
 
 
 def _greedy_first(tables, s, key):
-    """The unmasked fallback's turn-1 action in ``_line_run(tables, s, line, key)``."""
+    """The unmasked fallback's turn-1 action in ``_player_run(tables, s, LINE, line, key)``."""
     k_policy = jax.random.split(key, 3)[1]
     return int(_policy(tables, root_state(tables, s, key), k_policy)[0])
 
@@ -216,7 +218,7 @@ def test_line_changes_the_first_turn(tables, names):
     key = jax.random.PRNGKey(3)
     leer = 1  # Monferno's Leer: a move the greedy fallback does not pick here
     assert _greedy_first(tables, s, key) != leer
-    result, final = _RUN_1(tables, s, _line(use=0, move=leer), key)
+    result, final = _RUN_1(tables, s, params=_line(use=0, move=leer), key=key)
     full = int(tables.move_pp[s.moves[0, 0, leer]])
     assert int(result.turns) == 1
     assert int(final.pp[0, 0, leer]) == full - 1
@@ -232,7 +234,7 @@ def test_wait_turn_does_not_switch(tables, names):
     assert _greedy_first(tables, s, key) >= MOVE_ACTIONS
     line = _line(use=1, move=0, wait=1)
     assert _act(tables, s, line)[1] == MODE_MOVES_ONLY
-    result, final = _RUN_1(tables, s, line, key)
+    result, final = _RUN_1(tables, s, params=line, key=key)
     assert (int(result.turns), int(result.fallback_turns), int(result.refused)) == (1, 1, 0)
     spent = int(jnp.sum(s.pp[0, 0].astype(jnp.int32) - final.pp[0, 0].astype(jnp.int32)))
     assert spent == 1
@@ -245,9 +247,9 @@ def test_rule_turn_ignores_a_refused_distribution(tables, names, monkeypatch):
     nan = jnp.full(NUM_OPP_ACTIONS, jnp.nan, jnp.float32)
     monkeypatch.setattr(playout_module, "ai_action_distribution", lambda tables, state, layout: nan)
     key = jax.random.PRNGKey(12)
-    ruled, _ = _line_run(tables, s, _line(use=0, move=2), key, 1)
+    ruled, _ = _player_run(tables, s, LINE, _line(use=0, move=2), key, 1)
     assert (int(ruled.refused), int(ruled.turns), int(ruled.fallback_turns)) == (0, 1, 0)
-    fallback, _ = _line_run(tables, s, empty_line(), key, 1)
+    fallback, _ = _player_run(tables, s, LINE, empty_line(), key, 1)
     assert (int(fallback.won), int(fallback.refused), int(fallback.turns)) == (REFUSED_WON, 1, 0)
 
 
@@ -256,8 +258,8 @@ def test_pending_replacement_sends_the_answer(tables, names):
     s = at_replacement(roark_state(tables, names))
     greedy = int(replacement_policy(tables, s))
     answer = next(c for c in range(1, SLOTS) if c != greedy)
-    run = jax.jit(partial(_line_run, max_turns=0))
-    result, final = run(tables, s, _line(use=answer, move=0), jax.random.PRNGKey(6))
+    run = jax.jit(partial(_player_run, player=LINE, max_turns=0))
+    result, final = run(tables, s, params=_line(use=answer, move=0), key=jax.random.PRNGKey(6))
     assert int(result.refused) == 0 and int(result.turns) == 0
     assert int(final.active[0]) == answer
 
