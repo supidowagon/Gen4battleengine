@@ -243,21 +243,25 @@ LEFT_OUT = "playouts stopped at a mechanic the engine does not model and are lef
 REASON = "replacement: the stale aiSwitchedPartySlot (stub)"
 
 
-def _refusal_stub(monkeypatch):
-    """``player.refusal_reason`` replaced: records its key and line, returns ``REASON``."""
+def _refusal_stub(monkeypatch, answer=REASON):
+    """``player.refusal_reason`` replaced: records its player, line, key and turn cap,
+    returns ``answer``."""
     from nuzline.search import player
 
     asked = []
 
     def reason(tables, state, player_, params, key, max_turns=100, layout=None):
-        asked.append((player_.name, params, key))
-        return REASON
+        asked.append((player_.name, params, key, max_turns))
+        return answer
 
     monkeypatch.setattr(player, "refusal_reason", reason)
     return asked
 
 
-def test_line_odds_names_refused_playouts(tmp_path, tables, names, capsys, monkeypatch):
+def _refused_odds(tables, names, monkeypatch, answer=REASON):
+    """``line odds`` stubbed: ``evaluate_lines`` returns ``_found``'s odds with 3 refused
+    playouts and records ``(refused, max_turns)``; ``refusal_reason`` returns ``answer``.
+    ``(modes, asked, refused_key)``."""
     import dataclasses
 
     import numpy as np
@@ -269,21 +273,53 @@ def test_line_odds_names_refused_playouts(tmp_path, tables, names, capsys, monke
     modes = []
 
     def evaluate(tables_, state, lines, n, key, max_turns=100, refused="raise"):
-        modes.append(refused)
+        modes.append((refused, max_turns))
         return [odds]
 
     monkeypatch.setattr(player_eval, "evaluate_lines", evaluate)
-    asked = _refusal_stub(monkeypatch)
+    return modes, _refusal_stub(monkeypatch, answer), refused_key
+
+
+def test_line_odds_names_refused_playouts(tmp_path, tables, names, capsys, monkeypatch):
+    import numpy as np
+
+    modes, asked, refused_key = _refused_odds(tables, names, monkeypatch)
     assert main(["line", "odds", *BASE, "--line", _file(tmp_path), "--n", "103"]) == 0
     out = capsys.readouterr().out
     assert out.isascii()
     rows = out.splitlines()
     left = rows.index(f"3 of 103 {LEFT_OUT}{REASON}")
     assert left > max(i for i, r in enumerate(rows) if r.startswith("  win, any"))
-    assert modes == ["exclude"]
-    ((player_name, params, key),) = asked
+    ((mode, max_turns),) = modes
+    assert mode == "exclude"
+    ((player_name, params, key, replay_turns),) = asked
     assert player_name == "line" and np.array_equal(key, refused_key)
     assert int(params.use[0]) == 2  # the file's line: Grotle against Geodude
+    assert replay_turns == max_turns  # the replay plays under the same turn cap
+
+
+def test_line_odds_unnamed_refusal(tmp_path, tables, names, capsys, monkeypatch):
+    # A replay that is not refused (it should not happen) never prints "None".
+    _refused_odds(tables, names, monkeypatch, answer=None)
+    assert main(["line", "odds", *BASE, "--line", _file(tmp_path)]) == 0
+    out = capsys.readouterr().out
+    assert f"3 of 103 {LEFT_OUT}unnamed (the replay was not refused)" in out.splitlines()
+    assert "None" not in out
+
+
+def test_line_odds_every_playout_refused_exit_2(tmp_path, capsys, monkeypatch):
+    # ``line odds`` evaluates with "exclude", under which a line refused in every playout
+    # raises (``"skip"``, the search's mode, would not).
+    from nuzline.ai.policy import UnsupportedAi
+    from nuzline.search import player_eval
+
+    def evaluate(tables_, state, lines, n, key, max_turns=100, refused="raise"):
+        assert refused == "exclude"
+        raise UnsupportedAi(f"every playout of entry 0 ({n}) refused")
+
+    monkeypatch.setattr(player_eval, "evaluate_lines", evaluate)
+    assert main(["line", "odds", *BASE, "--line", _file(tmp_path), "--n", "8"]) == 2
+    assert "refused: every playout of entry 0 (8) refused" in capsys.readouterr().out
 
 
 def test_line_odds_without_refused_playouts_says_nothing(
@@ -317,8 +353,9 @@ def test_line_find_names_refused_playouts_and_skipped_rules(
     assert f"2 of 102 {LEFT_OUT}{REASON}" in out.splitlines()
     skipped = "skipped 4 candidate rules that met unmodelled mechanics in more than 1 % of playouts"
     assert skipped in out.splitlines()
-    ((_, params, _),) = asked
+    ((_, params, _, max_turns),) = asked
     assert np.array_equal(params.use, result.line.use)  # the found line is replayed
+    assert max_turns == line_search.LineSearchSettings().max_turns
 
 
 def test_line_odds_refused_fight_exit_2(tmp_path, capsys, monkeypatch):

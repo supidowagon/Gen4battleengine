@@ -32,11 +32,16 @@ The chosen line is scored once more on ``final_n`` hold-out keys
 Every search batch has its own key ``fold_in(key, c)``, ``c`` counting batches from 0
 and skipping the two salts, so no two batches, and never the hold-out, share keys.
 
-Refused playouts (spec §4) are left out of every batch (``evaluate_lines(...,
-refused="exclude")``), the hold-out included (its ``refused`` is in ``odds``). A
-candidate whose batch has ``refused / (n + refused) > MAX_REFUSED_SHARE`` is skipped in
-that stage, at the screen or the refine: it is never the winner and never replaces the
-incumbent. ``LineSearchResult.refused_candidates`` counts the distinct lines skipped.
+Refused playouts (spec §4) are left out of every batch: the search batches use
+``evaluate_lines(..., refused="skip")`` (a line refused in every playout gets ``n = 0``
+odds rather than aborting the search), the hold-out ``"exclude"`` (its ``refused`` is in
+``odds``; an all-refused hold-out raises ``UnsupportedAi``). A line whose batch has
+``refused / (n + refused) > MAX_REFUSED_SHARE`` is too refused. A too-refused candidate
+is skipped in that stage, at the screen or the refine: it is never the winner and never
+replaces the incumbent. A too-refused incumbent is replaced by the best kept finalist
+even without a greater score. The restarts' meeting chooses among the finished lines
+that are not too refused (all of them when none is). ``LineSearchResult.refused_candidates``
+counts the distinct lines skipped.
 """
 
 from __future__ import annotations
@@ -202,8 +207,10 @@ class _Run:
             self.expired = True
         return self.expired
 
-    def evaluate(self, lines: Sequence[Line], n: int, key=None) -> list[PlayerOdds]:
-        """``evaluate_lines`` on the next batch key (or ``key``)."""
+    def evaluate(
+        self, lines: Sequence[Line], n: int, key=None, refused: str = "skip"
+    ) -> list[PlayerOdds]:
+        """``evaluate_lines`` on the next batch key (or ``key``), with ``refused``."""
         if key is None:
             while self.counter in (HOLD_OUT_SALT, RESTART_SALT):
                 self.counter += 1
@@ -211,7 +218,7 @@ class _Run:
             self.counter += 1
         self.evaluations += len(lines) * n
         return evaluate_lines(
-            self.tables, self.state, lines, n, key, self.settings.max_turns, refused="exclude"
+            self.tables, self.state, lines, n, key, self.settings.max_turns, refused=refused
         )
 
     def kept(self, lines: Sequence[Line], odds: Sequence[PlayerOdds]) -> list[int]:
@@ -219,7 +226,7 @@ class _Run:
         are recorded as skipped."""
         out = []
         for i, (line, o) in enumerate(zip(lines, odds, strict=True)):
-            if o.refused > MAX_REFUSED_SHARE * (o.n + o.refused):
+            if _too_refused(o):
                 self.skipped.add(b"".join(np.asarray(f).tobytes() for f in line))
             else:
                 out.append(i)
@@ -244,9 +251,15 @@ class _Run:
         fine = [i + 1 for i in self.kept(finalists, refined[1:])]
         if fine:
             best = max(fine, key=lambda i: refined[i].score(self.k))
-            if refined[best].score(self.k) > refined[0].score(self.k):
+            beats = refined[best].score(self.k) > refined[0].score(self.k)
+            if beats or _too_refused(refined[0]):
                 return finalists[best - 1], refined[best]
         return incumbent, refined[0]
+
+
+def _too_refused(odds: PlayerOdds) -> bool:
+    """``refused / (n + refused) > MAX_REFUSED_SHARE`` (module docstring)."""
+    return odds.refused > MAX_REFUSED_SHARE * (odds.n + odds.refused)
 
 
 def _rule_of(line: Line, foe: int) -> tuple[int, ...]:
@@ -335,9 +348,10 @@ def find_line(
     chosen = 0
     if len(finished) > 1:
         odds = run.evaluate(finished, settings.refine_n)
-        chosen = max(range(len(odds)), key=lambda i: odds[i].score(run.k))
+        pool = run.kept(finished, odds) or range(len(odds))
+        chosen = max(pool, key=lambda i: odds[i].score(run.k))
     hold_out = jax.random.fold_in(key, HOLD_OUT_SALT)
-    final = run.evaluate([finished[chosen]], settings.final_n, hold_out)[0]
+    final = run.evaluate([finished[chosen]], settings.final_n, hold_out, refused="exclude")[0]
     return LineSearchResult(
         line=finished[chosen],
         odds=final,

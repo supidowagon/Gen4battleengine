@@ -114,6 +114,14 @@ def test_refused_playout_raises(tables, names):
     # Every playout refused: nothing is left to count, so "exclude" raises too.
     with pytest.raises(UnsupportedAi, match="every playout"):
         evaluate_lines(tables, s, [empty_line()], N, KEY, MAX_TURNS, refused="exclude")
+    # "skip" (the search's mode) gives each such line n = 0 odds instead of raising.
+    lines = [empty_line(), _rule_line()]
+    for odds in evaluate_lines(tables, s, lines, N, KEY, MAX_TURNS, refused="skip"):
+        assert (odds.n, odds.refused, odds.wins, odds.wins_any) == (0, N, (0, 0, 0, 0), 0)
+        assert odds.deaths_total == 0 and odds.distribution.n == 0
+        assert odds.refused_key is not None
+    with pytest.raises(ValueError, match="refused must be one of"):
+        evaluate_lines(tables, s, lines, N, KEY, MAX_TURNS, refused="ignore")
 
 
 @pytest.mark.slow
@@ -135,10 +143,15 @@ def test_exclude_leaves_refused_playouts_out(tables, names):
     assert odds.wins_any == int(np.sum(kept == 1))
     assert odds.deaths_total == int(out.player_faints[~bad].astype(np.int64).sum())
     assert odds.distribution.n == odds.n
-    assert odds.mean_turns == float(out.turns[~bad].astype(np.int64).mean())
+    turns = out.turns[~bad].astype(np.int64)
+    assert odds.mean_turns == float(turns.mean())
+    fallback = out.fallback_turns[~bad].astype(np.int64)
+    assert odds.fallback_share == float(fallback.sum() / max(turns.sum(), 1))
     assert odds.rung(0) == odds.wins[0] / odds.n
     assert odds.interval(None) == wilson(odds.wins_any, odds.n)
     assert np.array_equal(odds.refused_key, np.asarray(keys)[np.argmax(bad)])
+    # "skip" equals "exclude" when some playouts are kept.
+    assert evaluate_lines(tables, s, [empty_line()], N, KEY, MAX_TURNS, refused="skip") == [odds]
     # No refused row: no key.
     (clean,) = evaluate_lines(
         tables, _state(tables, names), [empty_line()], N, KEY, MAX_TURNS, refused="exclude"

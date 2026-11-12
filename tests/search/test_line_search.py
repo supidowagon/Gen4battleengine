@@ -142,43 +142,98 @@ def test_hold_out_keys_are_fresh(tables, names, recorder):
     assert _same(last[0][0], result.line)
     assert result.odds is last[3][0]
     assert result.evaluations == sum(len(lines) * n for lines, n, _, _ in recorder.calls)
-    # Every batch, the hold-out included, leaves refused playouts out.
-    assert recorder.refused == ["exclude"] * len(recorder.calls)
+    # Every search batch skips all-refused lines; the hold-out leaves refused playouts
+    # out (an all-refused hold-out raises).
+    assert recorder.refused == ["skip"] * len(search) + ["exclude"]
 
 
-def _often_refused_search(tables, names, monkeypatch, refused_share: float):
+def _rule_of_foe_0(line) -> tuple[int, int, int]:
+    return int(line.use[0]), int(line.move[0]), int(line.first[0])
+
+
+def _often_refused_search(
+    tables, names, monkeypatch, refused_share: float, at=None, start_on_rule=False
+):
     """``find_line`` on a 3 v 2 fight where every line with foe 0's first who/what
-    candidate wins every counted playout, with ``refused_share`` of its playouts refused,
-    and every other line wins none: ``(result, that rule)``."""
+    candidate wins every counted playout, with ``refused_share`` of its playouts refused
+    (only in batches of ``at`` keys when given), and every other line wins none; with
+    ``start_on_rule`` the search starts on that rule. ``(result, that rule, modes)``."""
     s = roark_state(tables, names, player_count=3, opp_count=2)
     rule = who_what_candidates(tables, s, 0)[0]
+    modes = []
 
     def fake(tables_, state, lines, n, key, max_turns=100, refused="raise"):
+        modes.append(refused)
         out = []
         for line in lines:
-            if (int(line.use[0]), int(line.move[0]), int(line.first[0])) == rule:
-                bad = round(refused_share * n)
+            if _rule_of_foe_0(line) == rule:
+                bad = round(refused_share * n) if at in (None, n) else 0
                 out.append(_odds(n - bad, wins=n - bad, refused=bad))
             else:
                 out.append(_odds(n))
         return out
 
     monkeypatch.setattr(line_search, "evaluate_lines", fake)
+    start = line_search._with_rule(empty_line(), 0, *rule) if start_on_rule else None
     # Batches of 100 and 200 keys: a share of 0.01 is exactly 1 % of each.
     settings = LineSearchSettings(screen_n=100, keep=2, refine_n=200, restarts=0, final_n=100)
-    return find_line(tables, names, s, KEY, settings), rule
+    return find_line(tables, names, s, KEY, settings, start=start), rule, modes
 
 
 def test_an_often_refused_candidate_is_never_chosen(tables, names, monkeypatch):
     # Refused in 1 % of its playouts (at the limit) the best-scoring rule wins ...
-    result, rule = _often_refused_search(tables, names, monkeypatch, 0.01)
+    result, rule, _ = _often_refused_search(tables, names, monkeypatch, 0.01)
     assert line_search.MAX_REFUSED_SHARE == 0.01
-    assert tuple(int(f[0]) for f in result.line[:3]) == rule
+    assert _rule_of_foe_0(result.line) == rule
     assert result.refused_candidates == 0
-    # ... above 1 % it is skipped (never the winner) and counted.
-    result, rule = _often_refused_search(tables, names, monkeypatch, 0.1)
-    assert tuple(int(f[0]) for f in result.line[:3]) != rule
+    # ... above 1 % it is skipped (never the winner) and counted ...
+    result, rule, _ = _often_refused_search(tables, names, monkeypatch, 0.1)
+    assert _rule_of_foe_0(result.line) != rule
     assert result.refused_candidates >= 1
+    # ... and refused in every playout (n = 0 odds under "skip") it does not stop the search.
+    result, rule, modes = _often_refused_search(tables, names, monkeypatch, 1.0)
+    assert _rule_of_foe_0(result.line) != rule and result.refused_candidates >= 1
+    assert set(modes[:-1]) == {"skip"} and modes[-1] == "exclude"
+
+
+def test_the_refine_filter_alone_skips_a_refused_finalist(tables, names, monkeypatch):
+    # Refused only in the refine batches (200 keys): the screen keeps it as the best,
+    # the refine skips it.
+    result, rule, _ = _often_refused_search(tables, names, monkeypatch, 0.1, at=200)
+    assert _rule_of_foe_0(result.line) != rule
+    assert result.refused_candidates >= 1
+
+
+def test_a_too_refused_incumbent_is_replaced(tables, names, monkeypatch):
+    # The start's rule scores best but is 10 % refused: the best kept finalist replaces
+    # it although it scores less.
+    result, rule, _ = _often_refused_search(tables, names, monkeypatch, 0.1, start_on_rule=True)
+    assert _rule_of_foe_0(result.line) != rule
+
+
+def test_restarts_meet_among_kept_lines(tables, names, monkeypatch):
+    # Two starts (the empty line and one restart line R) finish unchanged; R scores higher
+    # at the meeting. R is chosen unless it is refused in more than 1 % of its playouts.
+    s = roark_state(tables, names, player_count=3, opp_count=2)
+    restart = line_search._with_rule(empty_line(), 0, *who_what_candidates(tables, s, 0)[0])
+    monkeypatch.setattr(line_search, "_random_line", lambda rng, foes, options: restart)
+    monkeypatch.setattr(line_search, "_ascend", lambda run, line, *a: (line, 1, "converged"))
+    settings = LineSearchSettings(refine_n=200, restarts=1, final_n=100)
+
+    def search(share: float):
+        def fake(tables_, state, lines, n, key, max_turns=100, refused="raise"):
+            out = []
+            for line in lines:
+                bad = round(share * n) if _same(line, restart) else 0
+                out.append(_odds(n - bad, wins=n - bad if _same(line, restart) else 0, refused=bad))
+            return out
+
+        monkeypatch.setattr(line_search, "evaluate_lines", fake)
+        return find_line(tables, names, s, KEY, settings)
+
+    assert _same(search(0.0).line, restart)
+    refused = search(0.1)
+    assert _same(refused.line, empty_line()) and refused.refused_candidates == 1
 
 
 def test_budget_stops_the_search(tables, names, recorder):

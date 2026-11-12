@@ -1133,6 +1133,9 @@ def _line_block(setup: LineSetup, rules, odds, seed: int, deaths: int) -> list[s
     return out
 
 
+LINE_ODDS_MAX_TURNS = 100  # ``line odds``: the playouts' turn cap, also for the replay
+
+
 def _left_out_lines(setup: LineSetup, line, odds, max_turns: int) -> list[str]:
     """The refused playouts ``odds`` left out (spec §4), the mechanic named by replaying
     the first (``player.refusal_reason``); nothing when none was."""
@@ -1144,6 +1147,8 @@ def _left_out_lines(setup: LineSetup, line, odds, max_turns: int) -> list[str]:
     reason = player.refusal_reason(
         setup.tables, setup.state, LINE, line, odds.refused_key, max_turns
     )
+    if reason is None:
+        reason = "unnamed (the replay was not refused)"
     total = odds.n + odds.refused
     text = "playouts stopped at a mechanic the engine does not model and are left out"
     return [f"{odds.refused} of {total} {text}: {reason}"]
@@ -1198,11 +1203,17 @@ def _line_odds(args) -> int:
 
         key = jax.random.PRNGKey(args.seed)
         (odds,) = player_eval.evaluate_lines(
-            setup.tables, setup.state, [setup.line], args.n, key, refused="exclude"
+            setup.tables,
+            setup.state,
+            [setup.line],
+            args.n,
+            key,
+            LINE_ODDS_MAX_TURNS,
+            refused="exclude",
         )
         for line in _line_block(setup, setup.rules, odds, args.seed, args.deaths):
             _say(line)
-        for line in _left_out_lines(setup, setup.line, odds, 100):  # evaluate_lines' max_turns
+        for line in _left_out_lines(setup, setup.line, odds, LINE_ODDS_MAX_TURNS):
             _say(line)
 
     return _line_command(args, run)

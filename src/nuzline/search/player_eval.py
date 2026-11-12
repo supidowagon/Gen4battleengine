@@ -24,7 +24,9 @@ does not model) has no result and is never counted as a win or a loss (spec §4)
 ``"exclude"`` each line's refused rows are left out: ``PlayerOdds.n`` counts the rest,
 every rate and interval is over it, ``refused`` counts those left out and ``refused_key``
 is the first one's key (for ``player.refusal_reason``). A line whose playouts are all
-refused raises ``UnsupportedAi`` either way.
+refused raises ``UnsupportedAi`` under both; ``"skip"`` (the line search's mode) is
+``"exclude"`` but gives such a line odds with ``n = 0`` and every playout ``refused``
+instead, so one all-refused candidate does not abort a search.
 """
 
 from __future__ import annotations
@@ -57,6 +59,7 @@ __all__ = [
 ]
 
 ROW_CHUNK = 512  # rows per program call, before rounding up to the device count
+REFUSED_MODES = ("raise", "exclude", "skip")  # evaluate_players' ``refused`` (docstring)
 
 for _cls in (Line, PlayerResult):
     jax.export.register_namedtuple_serialization(_cls, serialized_name=f"nuzline.{_cls.__name__}")
@@ -184,6 +187,23 @@ def _odds(out: PlayerResult, protected: np.ndarray, refused: int, refused_key) -
     )
 
 
+def _all_refused(refused: int, refused_key) -> PlayerOdds:
+    """The odds of an entry whose ``refused`` playouts were all refused (``"skip"``):
+    ``n = 0``, nothing won, an all-zero distribution, zero turns; its rates and intervals
+    are undefined and must not be read (``refused / (n + refused)`` is 1)."""
+    return PlayerOdds(
+        n=0,
+        wins=(0, 0, 0, 0),
+        wins_any=0,
+        deaths_total=0,
+        distribution=deaths.DeathDistribution((0.0,) * len(deaths.BUCKETS), 0),
+        mean_turns=0.0,
+        fallback_share=0.0,
+        refused=refused,
+        refused_key=refused_key,
+    )
+
+
 def evaluate_players(
     tables: Tables,
     state: BattleState,
@@ -198,11 +218,12 @@ def evaluate_players(
     from ``state`` on ``line_keys(key, n)`` (module docstring). For ``GREEDY`` pass
     ``params=[()]``. ``refused``: ``"raise"`` raises ``UnsupportedAi`` when any playout
     is refused, ``"exclude"`` leaves refused playouts out of each entry's odds (an entry
-    whose playouts are all refused still raises)."""
+    whose playouts are all refused still raises), ``"skip"`` is ``"exclude"`` but such an
+    entry gets ``_all_refused`` odds (``n = 0``) instead of raising."""
     if n <= 0:
         raise ValueError("evaluate_players needs n > 0")
-    if refused not in ("raise", "exclude"):
-        raise ValueError(f"refused must be 'raise' or 'exclude', not {refused!r}")
+    if refused not in REFUSED_MODES:
+        raise ValueError(f"refused must be one of {REFUSED_MODES}, not {refused!r}")
     stacked = _stack(params)
     lines = len(params)
     state = jax.tree.map(np.asarray, state)
@@ -219,6 +240,9 @@ def evaluate_players(
     odds = []
     for i in range(lines):
         left_out = bad[i * n : (i + 1) * n]
+        if left_out.all() and refused == "skip":
+            odds.append(_all_refused(n, keys[0].copy()))
+            continue
         if left_out.all():
             raise UnsupportedAi(
                 f"every playout of entry {i} ({n}) refused; run `nuzline coverage` for the fight"
