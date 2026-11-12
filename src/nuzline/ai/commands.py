@@ -399,8 +399,9 @@ class AiContext(NamedTuple):
     player_ability: jnp.ndarray  # int32: LoadBattlerAbility DEFENDER (decomp id)
     damage: jnp.ndarray  # int32[4]: ai_damage of the AI's move slots, USE_MAX_DAMAGE
     sites: jnp.ndarray  # int32[4, len(SITE_LINES)]: script_rolls index of each line
-    # bool: an exact IfRandomLessThan was reached on the path at a line the slot's site row
-    # has no column for (if_random_less_than); the per-slot layout refuses the decision
+    # int32: 0, or 1 + slot * len(SITE_LINES) + SITE_LINES index of the first exact
+    # IfRandomLessThan reached on the path at a line the slot's site row has no column for
+    # (if_random_less_than); the per-slot layout refuses the decision
     missing_site: jnp.ndarray
     loose: LooseDraws | None = None  # the loose oracle's draws (tests only), else None
 
@@ -545,7 +546,7 @@ def new_context(
         player_ability=defender_ability(tables, state, outcome.ability_guess),
         damage=_slot_damage(tables, state, jnp.full((MOVES,), SIM_ROLL_MAX, _I32)),
         sites=line_sites(state) if sites is None else jnp.asarray(sites, _I32),
-        missing_site=false,
+        missing_site=jnp.asarray(0, _I32),
         loose=loose,
     )
 
@@ -744,7 +745,8 @@ def if_random_less_than(ctx: AiContext, n: int, line: int) -> AiContext:
     the flattened ``script_rolls``, and the layout's site table carries its probability.
     A line with no column in the slot's row reads index ``script_rolls.size`` (out of
     range), which never rolls 1; when that read is on the path of a move (``live``, not
-    ``MOVE_NONE``) it is also recorded in ``missing_site``, so a per-slot layout refuses the
+    ``MOVE_NONE``) the first such read is also recorded in ``missing_site`` (its slot and
+    line), so a per-slot layout refuses the
     decision (``policy._scores``) instead of taking an N/256 jump as never.
     Loose (module docstring): the read's own draw, with probability ``n``/256."""
     if ctx.loose is not None:
@@ -753,7 +755,9 @@ def if_random_less_than(ctx: AiContext, n: int, line: int) -> AiContext:
     site = ctx.sites[ctx.slot, SITE_LINES.index(line)]
     roll = jnp.take(ctx.outcome.script_rolls, site, mode="fill", fill_value=0)
     missing = ctx.live & (ctx.move != 0) & (site >= ctx.outcome.script_rolls.size)
-    return _jump(ctx._replace(missing_site=ctx.missing_site | missing), roll == 1)
+    code = jnp.asarray(ctx.slot, _I32) * len(SITE_LINES) + SITE_LINES.index(line) + 1
+    first = jnp.where(missing & (ctx.missing_site == 0), code, ctx.missing_site)
+    return _jump(ctx._replace(missing_site=first), roll == 1)
 
 
 def _knows(ctx: AiContext, battler: Battler, move: int) -> jnp.ndarray:

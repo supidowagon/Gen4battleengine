@@ -106,7 +106,7 @@ import jax
 import numpy as np
 
 import nuzline.search.stage_a  # noqa: F401 - registers Tables/BattleState for jax.export
-from nuzline.ai.policy import UnsupportedAi, ai_refusals
+from nuzline.ai.policy import UnsupportedAi, ai_path_refusals, ai_refusals
 from nuzline.data.tables import Names, Tables
 from nuzline.engine.actions import FIRST_ITEM_ACTION, MOVE_ACTIONS, decision_actions, usable_moves
 from nuzline.engine.enumerate import SamplingOnly
@@ -578,6 +578,7 @@ class _Solver:
                 if bad:
                     state = _first(self.store.take(bad[:1]))
                     reasons = ai_refusals(self.tables, state, self.names)
+                    reasons = reasons or ai_path_refusals(self.tables, state, self.names)
                     raise UnsupportedAi(
                         "; ".join(reasons) or "the AI's action distribution is refused"
                     )
@@ -590,7 +591,9 @@ class _Solver:
                 )
         if self._root.replacement and self._root_actions <= self._refused_roots:
             bad = next(s for node in frontier for s in node.states if self.ai[s] is None)
-            reasons = ai_refusals(self.tables, _first(self.store.take([bad])), self.names)
+            state = _first(self.store.take([bad]))
+            reasons = ai_refusals(self.tables, state, self.names)
+            reasons = reasons or ai_path_refusals(self.tables, state, self.names)
             raise UnsupportedAi(
                 "; ".join(reasons)
                 or "the AI's action distribution after every replacement is refused"

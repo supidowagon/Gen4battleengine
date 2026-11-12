@@ -32,7 +32,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
-from hypothesis import HealthCheck, assume, event, given, settings
+from hypothesis import HealthCheck, assume, given, settings, target
 from hypothesis import strategies as st
 from scipy.stats import chisquare
 
@@ -168,12 +168,19 @@ def kaizo_states(draw, t, party) -> BattleState:
 
 @st.composite
 def site_layouts(draw):
-    """``KAIZO`` with a synthetic site table: each transcribed effect gets any of
-    the script's roll lines, in any order, with any N (lines its path never reads are
-    columns that are never read)."""
+    """``KAIZO`` with a synthetic site table: each transcribed effect's row is a superset
+    of its real one (every roll its path can reach keeps a column, so nothing is refused
+    as a missing site), plus 0-3 other script roll lines, capped at ``slot_sites``, in any
+    order, with any N. The extra lines are columns the path never reads; the order and the
+    N move the columns and probabilities the factoring must follow (K3c re-review: a random
+    subset left most draws refused)."""
+    real = dict(KAIZO.effect_sites)
     rows = []
     for effect in sorted(KAIZO.transcribed):
-        lines = draw(st.lists(st.sampled_from(SITE_LINES), unique=True, max_size=4))
+        lines = [line for line, _ in real[effect]]
+        others = [line for line in SITE_LINES if line not in lines]
+        extra = draw(st.lists(st.sampled_from(others), unique=True, max_size=3))
+        lines = draw(st.permutations((lines + extra)[: KAIZO.slot_sites]))
         rows.append((effect, tuple((line, draw(st.integers(1, 255))) for line in lines)))
     return KAIZO._replace(effect_sites=tuple(rows))
 
@@ -446,18 +453,66 @@ def test_factored_full_distribution_matches_enumerated(kaizo_tables, kaizo_roark
 @_SETTINGS
 @given(data=st.data())
 def test_factored_equals_joint_bruteforce(kaizo_tables, kaizo_roark_party, data):
-    """On random Kaizo decisions and synthetic site tables, the factored move pick equals a
-    joint enumeration over all slots' bits, both guesses and the 12 tiebreaks, when the
-    moveset has at most 14 sites; both are NaN when the synthetic table lacks a roll the
-    path reaches (``assert_allclose`` compares NaN positions)."""
+    """On random Kaizo decisions and synthetic site tables (superset rows, so no draw is
+    refused), the factored move pick equals a joint enumeration over all slots' bits, both
+    guesses and the 12 tiebreaks, when the moveset has at most 14 sites. The claim needs
+    slots whose score depends on a roll, ideally several: ``target`` steers the search to
+    more of them, and ``test_factored_equals_joint_with_two_random_slots`` is the fixed
+    floor of two."""
     t = kaizo_tables
     s = data.draw(kaizo_states(t, kaizo_roark_party))
+    if data.draw(st.booleans()):
+        # Two slots whose score depends on a roll (the claim's case): Rock Throw, QUADRUPLE
+        # into a Fire/Flying player (EvalAttack :6383), and Light Screen at full HP
+        # (Expert_LightScreen :2718; script.s:2716-2719).
+        light_screen = 113
+        s = s._replace(
+            moves=s.moves.at[1, 0, 2].set(ROCK_THROW).at[1, 0, 3].set(light_screen),
+            pp=s.pp.at[1, 0, 2].set(5).at[1, 0, 3].set(5),
+            types=s.types.at[0, 0].set(jnp.asarray([10, 2], s.types.dtype)),
+            hp=s.hp.at[1, 0].set(s.max_hp[1, 0]),
+        )
     layout = data.draw(site_layouts())
     assume(not bool(policy._refused(t, s, layout).scoring))
     assume(int(np.sum(np.asarray(slot_roll_thresholds(t, s, layout)) > 0)) <= 14)
     factored = np.asarray(_factored(t, s, layout))
-    event("refused" if np.isnan(factored).any() else "compared")
+    assert not np.isnan(factored).any(), "a superset site row was refused"
+    random_slots = _random_slots(t, s, layout)
+    target(float(random_slots), label="slots whose score depends on a roll")
     np.testing.assert_allclose(factored, _joint_moves(t, s, layout), atol=1e-5)
+
+
+def _random_slots(t, s, layout) -> int:
+    """The move slots whose exact score distribution has more than one value."""
+    _, hist = _slot_histograms(t, s, layout)
+    return int(np.sum(np.sum(np.asarray(hist).mean(axis=0) > 0, axis=1) > 1))
+
+
+@pytest.mark.slow
+def test_factored_equals_joint_with_two_random_slots(kaizo_tables, kaizo_roark_party):
+    """The floor under ``test_factored_equals_joint_bruteforce``, independent of what
+    Hypothesis draws: Bonsly's Selfdestruct (EvalAttack :6374, always reached, kaizo_roark.md
+    5.2) and Rock Throw, QUADRUPLE and the highest damage into a Fire/Flying player
+    (:6383), so two slots' scores depend on their own rolls, on the real and on a permuted
+    superset site table. The factored pick equals the joint enumeration."""
+    t = kaizo_tables
+    charizard = 6
+    assert [int(x) for x in t.species_types[charizard]] == [10, 2]  # Fire, Flying
+    s = _kaizo_state(t, kaizo_roark_party, [ROCK_THROW, 120, 0, 0])
+    s = _bulky(_with_player(t, s, charizard), 400)
+    real = dict(KAIZO.effect_sites)
+    shuffled = KAIZO._replace(
+        effect_sites=tuple(
+            (e, tuple(reversed(((6530, 17), *real[e])))[: KAIZO.slot_sites])
+            if 6530 not in dict(real[e])
+            else (e, tuple(reversed(real[e])))
+            for e in sorted(real)
+        )
+    )
+    for layout in (KAIZO, shuffled):
+        assert _random_slots(t, s, layout) == 2
+        factored = np.asarray(_factored(t, s, layout))
+        np.testing.assert_allclose(factored, _joint_moves(t, s, layout), atol=1e-5)
 
 
 # --- Exact against loose -------------------------------------------------------------------

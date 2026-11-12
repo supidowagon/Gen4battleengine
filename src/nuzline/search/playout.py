@@ -67,7 +67,13 @@ import jax.numpy as jnp
 
 from nuzline.ai.layout import VANILLA, AiLayout, layout_of
 from nuzline.ai.outcome import sample_ai_outcome
-from nuzline.ai.policy import UnsupportedAi, ai_action_distribution, ai_policy, ai_refusals
+from nuzline.ai.policy import (
+    UnsupportedAi,
+    ai_action_distribution,
+    ai_path_refusals,
+    ai_policy,
+    ai_refusals,
+)
 from nuzline.ai.replacement import post_ko_switch_in
 from nuzline.data.tables import Tables
 from nuzline.engine.actions import (
@@ -556,7 +562,8 @@ def refusal_reason(
 ) -> str | None:
     """Why ``playout_from_action(tables, state, action, key, max_turns, layout)`` is
     refused, or ``None`` when it is not: the playout is replayed turn by turn outside the
-    loop (the same key splits) and the refused turn's AI (``ai_refusals``, also when the
+    loop (the same key splits) and the refused turn's AI (``ai_refusals``, then the
+    per-slot scoring path's ``ai_path_refusals``, also when the
     player's choice met a refused distribution) or replacement (``replacement_refusal``) is
     asked on its concrete state; a pending player replacement is replayed first.
     ``layout`` defaults to the concrete ``tables``' own (``layout_of``)."""
@@ -583,7 +590,9 @@ def refusal_reason(
         player_action = _first_action(turns, first, chosen).astype(_I32)
         played, refused = _turn_jit(tables, state, player_action, k_turn, layout)
         if q_refused or bool(refused):
-            reasons = ai_refusals(tables, state, layout=layout)
+            reasons = ai_refusals(tables, state, layout=layout) or ai_path_refusals(
+                tables, state, layout=layout
+            )
             if reasons:
                 return "; ".join(reasons)
             if q_refused:

@@ -601,8 +601,11 @@ site is named by its `script.s` line, and `outcome.SITE_N` gives its N:
     `commands.if_random_less_than` records it (`AiContext.missing_site`), and `_scores`
     gives -1, so the distribution is NaN and `_policy` refuses. The flat (vanilla) layout
     is not checked: its unused column is on no path, and vanilla stays bit-identical.
-  - On a concrete state `ai_policy` and `ai_action_distribution` raise `UnsupportedAi` for
-    either (`policy._PATH_REFUSAL`). Tests: `tests/ai/test_kaizo_commands.py
+  - On a concrete state `ai_scores`, `ai_policy` and `ai_action_distribution` raise
+    `UnsupportedAi` for either. `policy.ai_path_refusals` names a missing site's slot, move
+    and `script.s` line (else `policy._PATH_REFUSAL`), and Stage A's `refusal_reason` and
+    Stage B's root refusal use it after `ai_refusals`. A caller's `SWITCH_REFUSED` stop
+    still gives `REFUSED_ACTION`, not this error. Tests: `tests/ai/test_kaizo_commands.py
     test_add_to_move_score_wraps_the_s8`, `test_a_score_past_the_s8_is_refused`;
     `tests/ai/test_kaizo_policy.py test_a_reached_roll_without_a_site_column_is_refused`.
 
@@ -691,7 +694,7 @@ so a replay that tracks the RNG must count them.
    them in three cases:
    - When `Battler_CanPickCommand` is FALSE (recharging, thrash, uproar or move-locked,
      `battle_lib.c:6224-6236`), command selection is skipped and FIGHT is forced
-     (`battle_controller_player.c:333-337`): **no AI read at all** that turn.
+     (`battle_controller_player.c:334-338`): **no AI read at all** that turn.
    - Under STRUGGLING_ALL (`BattleSystem_CheckInvalidMoves`,
      `battle_controller_player.c:433-442`) the battler Struggles, and under Encore
      (`:443-455`) the Encored slot is set directly. Neither reaches

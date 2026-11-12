@@ -99,6 +99,7 @@ __all__ = [
     "ai_action_distribution_enumerated",
     "ai_action_distribution_loose",
     "ai_flat_width",
+    "ai_path_refusals",
     "ai_policy",
     "ai_refusals",
     "ai_scores",
@@ -1080,7 +1081,8 @@ def ai_refusals(
 
 # The per-slot layout's refusals found only on a scoring path (``_scores``), after the
 # static ``_refused`` checks pass: a reached IfRandomLessThan with no column in the slot's
-# site row, or a score outside the s8 moveScore's 0-127 (_slot_move_distribution).
+# site row (named by ``ai_path_refusals``), or a score outside the s8 moveScore's 0-127
+# (_slot_move_distribution); the generic message when no missing site is found.
 _PATH_REFUSAL = (
     "the scoring path reaches an IfRandomLessThan the move's site row lacks, or a score "
     "outside the s8 moveScore's 0-127 (docs/ai/kaizo_roark.md 8.2, 8.3)"
@@ -1154,7 +1156,7 @@ def _scores(
     ctx = _run_flags(c.new_context(tables, state, ai_outcome, sites), layout)
     refused = _refused(tables, state, layout).scoring
     if layout.per_slot_sites:
-        refused = refused | ctx.missing_site
+        refused = refused | (ctx.missing_site > 0)
     return jnp.where(refused, -1, ctx.scores).astype(_I32)
 
 
@@ -1166,10 +1168,15 @@ def ai_scores(
 ) -> jnp.ndarray:
     """``int32[4]``: the opponent's move scores after the policy's flag scripts (``_flags``), from
     base 100 (``TrainerAI_Init``, trainer_ai.c:223; invalid slots 0). Raises
-    ``UnsupportedAi`` on a refused concrete state; -1 per slot when traced."""
+    ``UnsupportedAi`` on a refused concrete state (a per-slot path refusal included,
+    ``ai_path_refusals``); -1 per slot when traced."""
     layout = _layout(tables, layout)
     _check(tables, state, layout, _scoring_refusals)
-    return _scores_jit(tables, state, ai_outcome, layout)
+    scores = _scores_jit(tables, state, ai_outcome, layout)
+    concrete = not isinstance(scores, jax.core.Tracer)
+    if layout.per_slot_sites and concrete and bool(jnp.any(scores < 0)):
+        _raise_path_refusal(tables, state, layout)
+    return scores
 
 
 def maybe_switch(
@@ -1256,8 +1263,10 @@ def ai_policy(
     _check(tables, state, layout, _all_refusals)
     action = _policy_jit(tables, state, ai_outcome, layout)
     concrete = not isinstance(action, jax.core.Tracer)
-    if layout.per_slot_sites and concrete and int(action) == REFUSED_ACTION:
-        raise UnsupportedAi(_PATH_REFUSAL)
+    refused = layout.per_slot_sites and concrete and int(action) == REFUSED_ACTION
+    # Only a scoring path refusal raises; a caller's SWITCH_REFUSED stop stays REFUSED_ACTION.
+    if refused and bool(jnp.any(_scores_jit(tables, state, ai_outcome, layout) < 0)):
+        _raise_path_refusal(tables, state, layout)
     return action
 
 
@@ -1384,12 +1393,10 @@ def _slot_move_distribution(tables: Tables, state: BattleState, layout: AiLayout
     return jnp.where(out_of_range, jnp.nan, dist)
 
 
-def _slot_histograms(
-    tables: Tables, state: BattleState, layout: AiLayout
-) -> tuple[jnp.ndarray, jnp.ndarray]:
-    """Steps 1 and 2 of ``_slot_move_distribution``: ``(scores int32[G, P, MOVES],
-    hist float32[G, MOVES, 256])``, ``hist[g, m, v]`` the probability that slot m scores v
-    under guess g (refusals not applied)."""
+def _pattern_outcomes(layout: AiLayout) -> tuple[np.ndarray, AiOutcome]:
+    """``(bits int[P, S], outcomes)``: the ``AiOutcome`` of each (guess, local bit pattern
+    p) of a per-slot layout, guess-major, the same p in every slot's columns
+    (``_slot_histograms``)."""
     width = layout.slot_sites
     patterns = 2**width
     bits = (np.arange(patterns)[:, None] >> np.arange(width)) & 1  # [P, S]
@@ -1402,6 +1409,61 @@ def _slot_histograms(
         tiebreak=jnp.zeros(n, jnp.int8),  # _scores does not read it
         switch_stop=jnp.full(n, SWITCH_NONE, jnp.int8),  # nor this
     )
+    return bits, outcomes
+
+
+@partial(jax.jit, static_argnames="layout")
+def _missing_sites(tables: Tables, state: BattleState, layout: AiLayout) -> jnp.ndarray:
+    """``int32[G * P]``: ``AiContext.missing_site`` of every scoring ``_slot_histograms``
+    runs (0: none)."""
+    _, outcomes = _pattern_outcomes(layout)
+
+    def one(o):
+        sites = _sites(tables, state, o, layout)
+        return _run_flags(c.new_context(tables, state, o, sites), layout).missing_site
+
+    return jax.vmap(one)(outcomes)
+
+
+def ai_path_refusals(
+    tables: Tables, state: BattleState, names=None, layout: AiLayout | None = None
+) -> list[str]:
+    """The refusals of a concrete per-slot state found only on a scoring path, after
+    ``ai_refusals`` is empty: each ``IfRandomLessThan`` a move's path reaches whose
+    ``script.s`` line has no column in its effect's site row (``AiContext.missing_site``;
+    kaizo_roark.md 8.3), naming the slot, the move and the line. Empty for the flat
+    layout, which has no such refusal."""
+    layout = _layout(tables, layout)
+    if not layout.per_slot_sites:
+        return []
+    names = _names_for(tables, names)
+    moves = np.asarray(state.moves[1, state.active[1]])
+    codes = sorted({int(x) for x in np.asarray(_missing_sites(tables, state, layout)) if x})
+    out = []
+    for code in codes:
+        slot, k = divmod(code - 1, len(c.SITE_LINES))
+        out.append(
+            f"ai scoring: opponent slot {slot}: move {_move_name(int(moves[slot]), names)} "
+            f"reaches IfRandomLessThan at script.s:{c.SITE_LINES[k]}, which its effect's "
+            "site row has no column for (docs/ai/kaizo_roark.md 8.2, 8.3)"
+        )
+    return out
+
+
+def _raise_path_refusal(tables: Tables, state: BattleState, layout: AiLayout) -> None:
+    found = ai_path_refusals(tables, state, layout=layout)
+    raise UnsupportedAi("; ".join(found) or _PATH_REFUSAL)
+
+
+def _slot_histograms(
+    tables: Tables, state: BattleState, layout: AiLayout
+) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """Steps 1 and 2 of ``_slot_move_distribution``: ``(scores int32[G, P, MOVES],
+    hist float32[G, MOVES, 256])``, ``hist[g, m, v]`` the probability that slot m scores v
+    under guess g (refusals not applied)."""
+    width = layout.slot_sites
+    patterns = 2**width
+    bits, outcomes = _pattern_outcomes(layout)
     scores = jax.vmap(lambda o: _scores(tables, state, o, layout))(outcomes)
     scores = scores.reshape(ABILITY_GUESSES, patterns, MOVES)
     p_jump = slot_roll_thresholds(tables, state, layout).astype(jnp.float32) / 256  # [M, S]
@@ -1510,7 +1572,7 @@ def ai_action_distribution(
     dist = _distribution(tables, state, layout)
     concrete = not isinstance(dist, jax.core.Tracer)
     if layout.per_slot_sites and concrete and bool(jnp.any(jnp.isnan(dist))):
-        raise UnsupportedAi(_PATH_REFUSAL)
+        _raise_path_refusal(tables, state, layout)
     return dist
 
 

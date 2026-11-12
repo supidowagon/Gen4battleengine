@@ -35,6 +35,7 @@ from nuzline.ai.outcome import (
     slot_roll_sites,
     slot_site_table,
 )
+from nuzline.ai.switching import SWITCH_REFUSED
 from nuzline.engine.damage import ai_damage_for_roll
 from nuzline.engine.ids import Stat, Status, Weather
 from nuzline.engine.order import (
@@ -397,7 +398,9 @@ def test_no_species_splits_the_toxic_reads(tables, kaizo_tables):
             assert not (hydration in row and first & set(row)), row
 
 
-def test_a_reached_roll_without_a_site_column_is_refused(kaizo_tables, kaizo_roark_party):
+def test_a_reached_roll_without_a_site_column_is_refused(
+    kaizo_tables, kaizo_names, kaizo_roark_party
+):
     """K3c final review: an ``IfRandomLessThan`` on a move's path whose line has no column
     in the effect's site row reads an out-of-range index, which never rolls 1. The exact
     path must refuse that (NaN distribution, ``REFUSED_ACTION``) rather than take an N/256
@@ -419,6 +422,31 @@ def test_a_reached_roll_without_a_site_column_is_refused(kaizo_tables, kaizo_roa
     o = _outcome(t, s)
     assert int(policy._policy(t, s, o, KAIZO)) != policy.REFUSED_ACTION
     assert int(policy._policy(t, s, o, bad)) == policy.REFUSED_ACTION
+    # Named, on every concrete API and in Stage A's explainer (K3c re-review).
+    line = (
+        "ai scoring: opponent slot 1: move Selfdestruct reaches IfRandomLessThan at "
+        "script.s:6374, which its effect's site row has no column for "
+        "(docs/ai/kaizo_roark.md 8.2, 8.3)"
+    )
+    assert policy.ai_path_refusals(t, s, kaizo_names, KAIZO) == []
+    assert policy.ai_path_refusals(t, s, kaizo_names, bad) == [line]
+    assert policy.ai_path_refusals(t, s, layout=bad) == [line]  # the tables' own names
+    for call in (
+        lambda: policy.ai_scores(t, s, o, bad),
+        lambda: policy.ai_policy(t, s, o, bad),
+        lambda: policy.ai_action_distribution(t, s, bad),
+    ):
+        with pytest.raises(policy.UnsupportedAi) as e:
+            call()
+        assert str(e.value) == line
+    assert min(np.asarray(policy.ai_scores(t, s, o, KAIZO))) >= 0
+    from nuzline.search.playout import refusal_reason
+
+    reason = refusal_reason(t, s, 0, jax.random.PRNGKey(0), max_turns=1, layout=bad)
+    assert reason == line
+    # A caller's refused switch stop is not reported as a path refusal.
+    stop = o._replace(switch_stop=jnp.asarray(SWITCH_REFUSED, jnp.int8))
+    assert int(policy.ai_policy(t, s, stop, KAIZO)) == policy.REFUSED_ACTION
     # Without Selfdestruct no reached roll lacks a column, so the bad row refuses nothing.
     s = _state(t, kaizo_roark_party, BONSLY, [STEALTH_ROCK, BRICK_BREAK, ACCELEROCK, 0])
     assert not np.isnan(np.asarray(policy._slot_move_distribution(t, s, bad))).any()
