@@ -96,9 +96,9 @@ as Stage A does.
 
 ## 4. Scoring a line
 
-`evaluate_lines(tables, state, lines, n, key) -> list[LineOdds]` in `src/nuzline/search/line_eval.py`:
+`evaluate_lines(tables, state, lines, n, key) -> list[PlayerOdds]` in `src/nuzline/search/player_eval.py`:
 every line against the same `n` keys (common random numbers), chunked and sharded over the host
-devices like `stage_a.rank_actions`, through `cached_export`. `LineOdds` holds, from `n` playouts:
+devices like `stage_a.rank_actions`, through `cached_export`. `PlayerOdds` holds, from `n` playouts:
 the ladder P(win with at most k deaths) for k = 0..3 and P(win), each with its Wilson interval
 (`stage_a.wilson`), the death distribution (`deaths.DeathDistribution`), mean turns and the share of
 turns the fallback decided. Any refused playout raises `UnsupportedAi` naming the count.
@@ -195,6 +195,25 @@ format.
 
 The save is never copied or committed; tests and the benchmark read its path from
 `data/local.toml` (`kaizo_save_pre_roark`) and skip without it.
+
+## 7a. Pluggable players and the scoreboard (added 2026-11-12 by the managing session)
+
+The user's end goal is a player that works lines out itself (exact solve, look-ahead search, later
+a learned network), so that lines a human would not find are possible. The line player is the
+first step and the baseline. So:
+
+- **One interface for a player** (`search/player.py`): `act(tables, state, params, key, layout) ->
+  (action, refused, fallback)` and `replace(tables, state, params) -> slot`. `playout_policy`
+  (`GREEDY`) and the line player (`LINE`, whose params are a `Line`; a user's scripted line and a
+  found line are both just params) implement it. The playout loop (`player_playout`) knows only
+  the interface, so a search-based or learned player drops in without touching it.
+- **A scoreboard** (`python -m benchmarks.players`): every registered player on a fixed list of
+  fights and setups (`benchmarks/fights.toml`; first entry Kaizo Roark from the pre-Roark save with
+  the user's five), the same seeds for every player, win rate and win rate with at most k deaths
+  with intervals. The table for greedy, the user's scripted line and the found line is recorded in
+  `benchmarks/README.md`.
+
+No new search method comes with this.
 
 ## 8. What L1 leaves, and why
 
