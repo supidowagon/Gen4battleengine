@@ -27,10 +27,11 @@ when it is down too, the slot ``post_ko_switch_in`` will send (as ``replacement_
 reads it): that rule's ``use`` enters when it may (``legal_replacements``), else
 ``replacement_policy`` decides. ``via`` and ``wait`` do not apply.
 
-``line_playout`` is ``playout._run``'s loop with these two choices: the root's hidden draws
-first (``root_state``), the same key splits per turn, so with ``empty_line()`` it returns
-what ``playout`` returns from that root and key. ``LineResult.fallback_turns`` counts the
-turns played in ``MODE_FALLBACK`` or ``MODE_MOVES_ONLY``.
+``LINE`` is these two choices as a ``Player`` (``nuzline.search.player``; its ``params``
+are a ``Line``), and ``line_playout`` is ``player_playout`` with it, so with
+``empty_line()`` it returns what ``playout`` returns from the same root and key.
+``PlayerResult.fallback_turns`` counts the turns played in ``MODE_FALLBACK`` or
+``MODE_MOVES_ONLY``.
 """
 
 from __future__ import annotations
@@ -47,33 +48,22 @@ from nuzline.ai.replacement import post_ko_switch_in
 from nuzline.data.tables import Tables
 from nuzline.engine.actions import MOVE_ACTIONS, NUM_ACTIONS, legal_actions, legal_replacements
 from nuzline.engine.state import SLOTS, BattleState
-from nuzline.engine.step import WINNER_PLAYER, needs_replacement
-from nuzline.search.playout import (
-    REFUSED_WON,
-    _carried_mul,
-    _play,
-    _policy,
-    _resources_left,
-    _select,
-    replacement_pass,
-    replacement_policy,
-    root_state,
-    send_replacements,
-)
+from nuzline.search.player import Player, PlayerResult, _player_run, player_playout
+from nuzline.search.playout import _carried_mul, _policy, replacement_policy
 
 __all__ = [
+    "LINE",
     "MODE_FALLBACK",
     "MODE_MOVES_ONLY",
     "MODE_RULE",
     "Line",
-    "LineResult",
     "empty_line",
     "line_action",
     "line_playout",
     "line_replacement",
 ]
 
-_I32, _F32 = jnp.int32, jnp.float32
+_I32 = jnp.int32
 MODE_FALLBACK, MODE_RULE, MODE_MOVES_ONLY = 0, 1, 2
 
 
@@ -139,33 +129,20 @@ def line_replacement(tables: Tables, state: BattleState, line: Line) -> jnp.ndar
     return jnp.where(ok, use, replacement_policy(tables, state)).astype(_I32)
 
 
-class LineResult(NamedTuple):
-    won: jnp.ndarray  # int8[], 1 = the player won the battle, REFUSED_WON = refused
-    player_faints: jnp.ndarray  # int8[]
-    turns: jnp.ndarray  # int16[], turns played
-    refused: jnp.ndarray  # int8[], 1 = stopped at a refused mechanic (no result)
-    deaths: jnp.ndarray  # int8[6], the final state's per-slot death record
-    ended: jnp.ndarray  # int8[], 1 = the battle is over (not cut off by max_turns)
-    hp_left: jnp.ndarray  # float32[], player party HP / max HP at the end (refused: 0)
-    pp_left: jnp.ndarray  # float32[], player party PP / full PP of its moves (refused: 0)
-    fallback_turns: jnp.ndarray  # int16[], turns decided by the fallback (modes 0 and 2)
+def _line_act(tables: Tables, state: BattleState, line: Line, key, layout: AiLayout):
+    """``LINE.act``: the rule's action in ``MODE_RULE``, else the fallback's (masked to
+    moves in ``MODE_MOVES_ONLY``). A refused distribution refuses the turn only when the
+    fallback's action is used."""
+    rule, mode = line_action(tables, state, line)
+    moves_only = jnp.arange(NUM_ACTIONS) < MOVE_ACTIONS
+    allowed = jnp.where(mode == MODE_MOVES_ONLY, moves_only, True)
+    chosen, q_refused = _policy(tables, state, key, layout, allowed)
+    by_rule = mode == MODE_RULE
+    action = jnp.where(by_rule, rule, chosen).astype(_I32)
+    return action, q_refused & ~by_rule, ~by_rule
 
 
-def _replace_while_needed(tables: Tables, state: BattleState, line: Line, refused, passes):
-    """``(state, refused)``: while the player needs a replacement (``passes`` at most)
-    ``replacement_pass`` with ``line_replacement``'s slot."""
-
-    def cond(carry):
-        state, _, n = carry
-        return (needs_replacement(state)[0] == 1) & (n < passes)
-
-    def body(carry):
-        state, refused, n = carry
-        passed, bad = replacement_pass(tables, state, line_replacement(tables, state, line))
-        return passed, refused | bad, n + 1
-
-    state, refused, _ = jax.lax.while_loop(cond, body, (state, refused, jnp.int32(0)))
-    return state, refused
+LINE = Player("line", _line_act, line_replacement)
 
 
 def _line_run(
@@ -175,52 +152,9 @@ def _line_run(
     key,
     max_turns: int,
     layout: AiLayout = VANILLA,
-) -> tuple[LineResult, BattleState]:
+) -> tuple[PlayerResult, BattleState]:
     """``(result, final state)`` of ``line_playout``."""
-    line = Line(*(jnp.asarray(f, _I32) for f in line))
-    state = root_state(tables, state, key)
-    # A pending player replacement first (no key, no turn), as playout._resolve_pending.
-    state, refused0 = _replace_while_needed(tables, state, line, jnp.bool_(False), SLOTS - 1)
-    moves_only = jnp.arange(NUM_ACTIONS) < MOVE_ACTIONS
-
-    def cond(carry):
-        s, _, turns, _, refused = carry
-        return (s.over == 0) & (turns < max_turns) & ~refused
-
-    def body(carry):
-        s, key, turns, fallback, _ = carry
-        key, k_policy, k_turn = jax.random.split(key, 3)
-        rule, mode = line_action(tables, s, line)
-        allowed = jnp.where(mode == MODE_MOVES_ONLY, moves_only, True)
-        chosen, q_refused = _policy(tables, s, k_policy, layout, allowed)
-        by_rule = mode == MODE_RULE
-        # A refused distribution refuses the turn only when the fallback's action is used.
-        q_refused = q_refused & ~by_rule
-        action = jnp.where(by_rule, rule, chosen).astype(_I32)
-        played, refused, ai_switched, power_mul = _play(tables, s, action, k_turn, layout)
-        played, sent_refused = send_replacements(tables, played, ai_switched, power_mul)
-        played, pass_refused = _replace_while_needed(tables, played, line, sent_refused, SLOTS - 1)
-        refused = refused | pass_refused | q_refused
-        s = _select(refused, s, played)
-        counted = jnp.where(refused, 0, 1)
-        return s, key, turns + counted, fallback + jnp.where(by_rule, 0, counted), refused
-
-    init = (state, key, jnp.int32(0), jnp.int32(0), refused0)
-    s, _, turns, fallback, refused = jax.lax.while_loop(cond, body, init)
-    won = (s.over != 0) & (s.winner == WINNER_PLAYER)
-    hp_left, pp_left = _resources_left(tables, s)
-    result = LineResult(
-        won=jnp.where(refused, REFUSED_WON, won).astype(jnp.int8),
-        player_faints=s.player_faints.astype(jnp.int8),
-        turns=turns.astype(jnp.int16),
-        refused=refused.astype(jnp.int8),
-        deaths=s.deaths.astype(jnp.int8),
-        ended=(s.over != 0).astype(jnp.int8),
-        hp_left=jnp.where(refused, 0.0, hp_left).astype(_F32),
-        pp_left=jnp.where(refused, 0.0, pp_left).astype(_F32),
-        fallback_turns=fallback.astype(jnp.int16),
-    )
-    return result, s
+    return _player_run(tables, state, LINE, line, key, max_turns, layout)
 
 
 @partial(jax.jit, static_argnames=("max_turns", "layout"))
@@ -231,8 +165,7 @@ def line_playout(
     key,
     max_turns: int = 100,
     layout: AiLayout = VANILLA,
-) -> LineResult:
-    """Play from ``state`` (its root draws made first, ``root_state``) with ``line`` for
-    the player (module docstring); ``line`` may be traced, ``max_turns`` and ``layout``
-    are static."""
-    return _line_run(tables, state, line, key, max_turns, layout)[0]
+) -> PlayerResult:
+    """``player_playout`` with ``LINE`` and ``line`` (module docstring); ``line`` may be
+    traced, ``max_turns`` and ``layout`` are static."""
+    return player_playout(tables, state, LINE, line, key, max_turns, layout)
