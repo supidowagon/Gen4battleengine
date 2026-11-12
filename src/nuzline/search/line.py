@@ -78,6 +78,9 @@ MODE_FALLBACK, MODE_RULE, MODE_MOVES_ONLY = 0, 1, 2
 
 
 class Line(NamedTuple):  # each int32[6], indexed by opposing party slot; -1 = unset
+    """Values are not checked here (traced): the boundary (the line file) validates them;
+    ``use``/``via``/``via_from`` must be party slots 0-5 and ``move``/``first`` 0-3."""
+
     use: jnp.ndarray  # player's party slot that answers the foe
     move: jnp.ndarray  # its move slot 0-3
     first: jnp.ndarray  # move slot played while the foe's status == 0
@@ -87,9 +90,11 @@ class Line(NamedTuple):  # each int32[6], indexed by opposing party slot; -1 = u
 
 
 def empty_line() -> Line:
-    """A line with no rule (numpy arrays, all -1, ``wait`` 0): the fallback plays."""
-    unset = np.full(SLOTS, -1, np.int32)
-    return Line(unset, unset, unset, unset, unset, np.zeros(SLOTS, np.int32))
+    """A line with no rule (one fresh numpy array per field, all -1, ``wait`` 0): the
+    fallback plays."""
+    return Line(
+        *(np.full(SLOTS, -1, np.int32) for _ in Line._fields[:-1]), np.zeros(SLOTS, np.int32)
+    )
 
 
 def _rule(line: Line, foe) -> Line:

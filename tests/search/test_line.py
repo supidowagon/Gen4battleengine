@@ -10,8 +10,10 @@ import numpy as np
 import pytest
 
 from nuzline.ai.replacement import post_ko_switch_in
-from nuzline.engine.actions import MOVE_ACTIONS, NUM_ACTIONS
+from nuzline.engine.actions import MOVE_ACTIONS, NUM_ACTIONS, NUM_OPP_ACTIONS
 from nuzline.engine.ids import Status
+from nuzline.engine.state import SLOTS
+from nuzline.search import playout as playout_module
 from nuzline.search.line import (
     MODE_FALLBACK,
     MODE_MOVES_ONLY,
@@ -24,6 +26,7 @@ from nuzline.search.line import (
     line_replacement,
 )
 from nuzline.search.playout import (
+    REFUSED_WON,
     _carried_mul,
     _policy,
     playout,
@@ -31,6 +34,7 @@ from nuzline.search.playout import (
     root_state,
 )
 from tests.engine.helpers import roark_state
+from tests.search.fixtures import at_replacement
 
 
 def _line(foe: int = 0, **fields: int) -> Line:
@@ -48,6 +52,10 @@ def _set(arr, i, v):
 def _act(tables, state, line):
     action, mode = line_action(tables, state, line)
     return int(action), int(mode)
+
+
+_MOVES_ONLY = jnp.arange(NUM_ACTIONS) < MOVE_ACTIONS
+_RUN_1 = jax.jit(partial(_line_run, max_turns=1))  # one compile for the one-turn tests
 
 
 def _active(state, slot):
@@ -140,18 +148,45 @@ def test_replacement_answers_the_incoming_foe(tables, names):
     assert got == 3 and got != int(line.use[0])
 
 
+def test_empty_line_fields_are_separate_arrays():
+    line = empty_line()
+    line.use[0] = 1
+    assert int(line.via[0]) == -1 and int(line.move[0]) == -1
+
+
+def _switching(tables, names):
+    """Monferno at 1 HP against Geodude: the unmasked fallback switches out."""
+    return roark_state(tables, names).replace_hp(0, 0, 1)
+
+
 def test_choose_mask_default_unchanged(tables, names):
     key = jax.random.PRNGKey(5)
     base = roark_state(tables, names)
-    states = [base, _active(base, 2), base.replace_hp(1, 0, 5)]
+    states = [base, _active(base, 2), base.replace_hp(1, 0, 5), _switching(tables, names)]
     every = jnp.ones(NUM_ACTIONS, bool)
-    moves = jnp.arange(NUM_ACTIONS) < MOVE_ACTIONS
     for s in states:
         a, r = _policy(tables, s, key)
         b, r2 = _policy(tables, s, key, allowed=every)
         assert int(a) == int(b) and bool(r) == bool(r2)
-        c, _ = _policy(tables, s, key, allowed=moves)
-        assert int(c) < MOVE_ACTIONS
+
+
+def test_choose_mask_moves_only(tables, names):
+    key = jax.random.PRNGKey(5)
+    s = _switching(tables, names)
+    assert int(_policy(tables, s, key)[0]) >= MOVE_ACTIONS
+    assert int(_policy(tables, s, key, allowed=_MOVES_ONLY)[0]) < MOVE_ACTIONS
+
+
+def test_choose_mask_ignored_when_nothing_is_left(tables, names):
+    key = jax.random.PRNGKey(5)
+    s = _switching(tables, names)
+    want = int(_policy(tables, s, key)[0])
+    assert int(_policy(tables, s, key, allowed=jnp.zeros(NUM_ACTIONS, bool))[0]) == want
+    trapped = s._replace(trapped=s.trapped.at[0].set(2))
+    switches = ~_MOVES_ONLY
+    assert int(_policy(tables, trapped, key, allowed=switches)[0]) == int(
+        _policy(tables, trapped, key)[0]
+    )
 
 
 @pytest.mark.slow
@@ -169,15 +204,62 @@ def test_empty_line_equals_playout(tables, names):
         assert int(got.fallback_turns) == int(got.turns)
 
 
+def _greedy_first(tables, s, key):
+    """The unmasked fallback's turn-1 action in ``_line_run(tables, s, line, key)``."""
+    k_policy = jax.random.split(key, 3)[1]
+    return int(_policy(tables, root_state(tables, s, key), k_policy)[0])
+
+
 @pytest.mark.slow
 def test_line_changes_the_first_turn(tables, names):
     s = roark_state(tables, names, player_count=1, opp_count=1)
-    run = jax.jit(partial(_line_run, max_turns=1))
-    result, final = run(tables, s, _line(use=0, move=3), jax.random.PRNGKey(3))
-    full = int(tables.move_pp[s.moves[0, 0, 3]])
+    key = jax.random.PRNGKey(3)
+    leer = 1  # Monferno's Leer: a move the greedy fallback does not pick here
+    assert _greedy_first(tables, s, key) != leer
+    result, final = _RUN_1(tables, s, _line(use=0, move=leer), key)
+    full = int(tables.move_pp[s.moves[0, 0, leer]])
     assert int(result.turns) == 1
-    assert int(final.pp[0, 0, 3]) == full - 1
+    assert int(final.pp[0, 0, leer]) == full - 1
     assert int(result.fallback_turns) == 0
+
+
+@pytest.mark.slow
+def test_wait_turn_does_not_switch(tables, names):
+    # The unmasked fallback would switch out; in MODE_MOVES_ONLY the lead (faster than
+    # Geodude) spends a move instead.
+    s = _switching(tables, names)
+    key = jax.random.PRNGKey(5)
+    assert _greedy_first(tables, s, key) >= MOVE_ACTIONS
+    line = _line(use=1, move=0, wait=1)
+    assert _act(tables, s, line)[1] == MODE_MOVES_ONLY
+    result, final = _RUN_1(tables, s, line, key)
+    assert (int(result.turns), int(result.fallback_turns), int(result.refused)) == (1, 1, 0)
+    spent = int(jnp.sum(s.pp[0, 0].astype(jnp.int32) - final.pp[0, 0].astype(jnp.int32)))
+    assert spent == 1
+
+
+@pytest.mark.slow
+def test_rule_turn_ignores_a_refused_distribution(tables, names, monkeypatch):
+    # As test_playout's refused-distribution test: unjitted, so the patch is traced in.
+    s = roark_state(tables, names)
+    nan = jnp.full(NUM_OPP_ACTIONS, jnp.nan, jnp.float32)
+    monkeypatch.setattr(playout_module, "ai_action_distribution", lambda tables, state, layout: nan)
+    key = jax.random.PRNGKey(12)
+    ruled, _ = _line_run(tables, s, _line(use=0, move=2), key, 1)
+    assert (int(ruled.refused), int(ruled.turns), int(ruled.fallback_turns)) == (0, 1, 0)
+    fallback, _ = _line_run(tables, s, empty_line(), key, 1)
+    assert (int(fallback.won), int(fallback.refused), int(fallback.turns)) == (REFUSED_WON, 1, 0)
+
+
+@pytest.mark.slow
+def test_pending_replacement_sends_the_answer(tables, names):
+    s = at_replacement(roark_state(tables, names))
+    greedy = int(replacement_policy(tables, s))
+    answer = next(c for c in range(1, SLOTS) if c != greedy)
+    run = jax.jit(partial(_line_run, max_turns=0))
+    result, final = run(tables, s, _line(use=answer, move=0), jax.random.PRNGKey(6))
+    assert int(result.refused) == 0 and int(result.turns) == 0
+    assert int(final.active[0]) == answer
 
 
 @pytest.mark.slow
@@ -192,5 +274,5 @@ def test_unstatusable_foe_still_ends(tables, names):
     r = line_playout(
         tables, s, _line(use=0, move=move, first=first), jax.random.PRNGKey(4), max_turns
     )
-    assert int(r.turns) <= max_turns
+    assert int(r.refused) == 0 and int(r.turns) <= max_turns
     assert int(r.ended) == 1 or int(r.turns) == max_turns
