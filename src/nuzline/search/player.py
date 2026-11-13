@@ -20,8 +20,12 @@ static argument); what varies between runs is its ``params``, any pytree of arra
   change the key stream.
 
 ``player_playout`` is ``playout._run``'s loop with these two choices: the root's hidden
-draws first (``root_state``), a pending player replacement resolved first (no turn), the
-same key splits per turn (``act`` gets the policy key ``k_policy``). ``GREEDY`` is
+draws first (``root_state``), a pending learn-move prompt and opponent replacement settled
+(``learn.settle_learns``) and a pending player replacement resolved first (no turn), the
+same key splits per turn (``act`` gets the policy key ``k_policy``), and each turn's learns
+resolved before its replacements (``learn.resolve_learns``, as ``playout.finish_turn``).
+Learn prompts are answered by ``learn.learn_policy`` (give the move up), not by the player:
+a level-up only fills an empty move slot, so a line's move slots stay valid. ``GREEDY`` is
 ``playout_policy`` and ``replacement_policy`` (``params`` and the replacement key
 ignored), so it returns what ``playout`` returns from that root and key.
 ``PlayerResult.fallback_turns`` counts the turns ``act`` marked ``fallback``.
@@ -47,6 +51,7 @@ from nuzline.engine.state import SLOTS, BattleState
 from nuzline.engine.step import WINNER_PLAYER, needs_replacement
 from nuzline.search.playout import (
     REFUSED_WON,
+    _carried_mul,
     _pass_reason,
     _play,
     _play_jit,
@@ -59,6 +64,7 @@ from nuzline.search.playout import (
     root_state,
     send_replacements,
 )
+from nuzline.search.learn import learn_reason, resolve_learns, settle_learns, settle_reason
 
 __all__ = ["GREEDY", "Player", "PlayerResult", "player_playout", "refusal_reason"]
 
@@ -137,9 +143,11 @@ def _player_run(
 ) -> tuple[PlayerResult, BattleState]:
     """``(result, final state)`` of ``player_playout``."""
     state = root_state(tables, state, key)
-    # A pending player replacement first (no turn), as playout._resolve_pending.
+    # A pending learn-move prompt and opponent replacement are settled first, then a pending
+    # player replacement (no turn), as playout._resolve_pending.
+    state, learn_refused = settle_learns(tables, state, send_replacements, _carried_mul)
     state, refused0 = _replace_while_needed(
-        tables, state, player, params, jnp.bool_(False), SLOTS - 1, key, REPLACE_FOLD, layout
+        tables, state, player, params, learn_refused, SLOTS - 1, key, REPLACE_FOLD, layout
     )
 
     def cond(carry):
@@ -153,11 +161,13 @@ def _player_run(
         played, refused, ai_switched, power_mul = _play(
             tables, s, jnp.asarray(action, _I32), k_turn, layout
         )
+        # The turn's learn-move prompts before any replacement, as playout.finish_turn.
+        played = resolve_learns(tables, played)
         played, sent_refused = send_replacements(tables, played, ai_switched, power_mul)
         played, pass_refused = _replace_while_needed(
             tables, played, player, params, sent_refused, SLOTS - 1, k_policy, 1, layout
         )
-        refused = refused | pass_refused | act_refused
+        refused = refused | pass_refused | act_refused | (played.exp_refused != 0)
         s = _select(refused, s, played)
         counted = jnp.where(refused, 0, 1)
         return s, key, turns + counted, fallback + jnp.where(by_fallback, counted, 0), refused
@@ -206,6 +216,9 @@ def _replace_jit(tables: Tables, state: BattleState, player: Player, params, key
     return player.replace(tables, state, params, key, layout)
 
 
+_resolve_jit = jax.jit(resolve_learns)
+
+
 def _ai_reason(tables: Tables, state: BattleState, layout: AiLayout) -> str | None:
     """The AI refusals of the concrete ``state`` (``ai_refusals``, then the scoring path's
     ``ai_path_refusals``), joined; ``None`` when there are none."""
@@ -244,6 +257,9 @@ def _replay(
     as in the run; at a refused pending replacement it is the one before that pass (the
     run's passes go on)."""
     state = root_state(tables, state, key)
+    reason, state = settle_reason(tables, state, _send_reason, _carried_mul)
+    if reason:
+        return reason, state, 0
     reason, state = _passes_reason(tables, state, player, params, key, REPLACE_FOLD, layout)
     if reason:
         return reason, state, 0
@@ -260,11 +276,13 @@ def _replay(
             if reason is None and bool(act_refused):
                 reason = "the opponent's action distribution is refused"
             return reason or "the opponent's AI is refused", state, turns
+        played = _resolve_jit(tables, played)
         sent, sent_refused = send_replacements(tables, played, ai_switched, power_mul)
         if bool(sent_refused):
             reason = _send_reason(tables, played, ai_switched, power_mul)[0]
             return reason or "the opponent's replacement is refused", state, turns
         reason, after = _passes_reason(tables, sent, player, params, k_policy, 1, layout)
+        reason = reason or learn_reason(after)
         if reason:
             return reason, state, turns
         state = after
@@ -287,6 +305,6 @@ def refusal_reason(
     jitted per call, and the refused step is asked on its concrete state: the AI
     (``ai_refusals``, then ``ai_path_refusals``) for a refused turn or player choice, the
     replacement mirrors (``playout._send_reason``, ``_pass_reason``) for a refused
-    replacement. ``layout`` defaults to the concrete ``tables``' own (``layout_of``)."""
+    replacement, ``learn.settle_reason`` / ``learn_reason`` for refused learn-move work. ``layout`` defaults to the concrete ``tables``' own (``layout_of``)."""
     layout = layout_of(tables) if layout is None else layout
     return _replay(tables, state, player, params, key, max_turns, layout)[0]

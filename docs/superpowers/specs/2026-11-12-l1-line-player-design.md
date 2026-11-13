@@ -254,5 +254,6 @@ No new search method comes with this.
 - **A player has no memory between turns.** `act` sees the state, its params and a key. A
   recurrent learned player, or a search that reuses its tree from turn to turn, needs the loop to
   carry a player state; that is added when the first such player is built.
-- **Level-ups during the fight are not modelled** (K3d). The user's Pokemon gained levels mid-fight
-  in the recording; the engine's 72 % does not include that.
+- **Level-ups during the fight** were not modelled when L1 was measured; K3d added them (merged at
+  `e290e12`). The player loop now resolves learn prompts as ``playout`` does (``learn.learn_policy``
+  gives every move up, so a line's move slots stay valid), and the L1 numbers predate it.

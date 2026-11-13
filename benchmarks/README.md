@@ -286,7 +286,13 @@ Heart Scale and HM06.
 
 Spec: `docs/superpowers/specs/2026-11-12-l1-line-player-design.md`. Kaizo Roark (trainer 246) from
 the user's pre-Roark save (`kaizo_save_pre_roark` in `data/local.toml`; never committed). Death
-budget 1 (the target is "win with at most one death"). Mid-fight level-ups are not modelled (K3d).
+budget 1 (the target is "win with at most one death").
+
+**Every table in this section predates level-ups.** They were measured before K3d (exp and
+mid-fight level-ups, merged at `e290e12`), when the engine did not level the user's Pokemon during
+the fight. The line player now resolves level-ups and learn prompts as playouts do (learns given
+up), so these numbers are to be re-measured; they are kept as the pre-level-up record.
+
 13th Gen Intel(R) Core(TM) i5-13600K, 20 host devices, Windows 11, jax 0.12, measured 2026-11-12.
 
 ## Main result: the user's six-member party
