@@ -281,3 +281,67 @@ Chosen setup on the defaults run: PSYDUCK (party slot 5, unchanged), MONFERNO (p
 Punch, Leer, Fury Swipes by Move Relearner for one Heart Scale, Rock Smash by HM06), SPINARAK
 (party slot 4, unchanged); rung 0 value 1.000 (interval 0.995 - 1.000, from the plan); cost 1
 Heart Scale and HM06.
+
+# Milestone L1: the line player on Kaizo Roark
+
+Spec: `docs/superpowers/specs/2026-11-12-l1-line-player-design.md`. Kaizo Roark (trainer 246) from
+the user's pre-Roark save (`kaizo_save_pre_roark` in `data/local.toml`; never committed), the
+user's five Pokemon in order: Prinplup (Quick Claw), Wormadam (Leech Life, Nature Power,
+Camouflage, Toxic), Rhyhorn, Delibird, Sandshrew (Oran Berry); all level 16. Death budget 1 (the
+target is "win with at most one death"). Mid-fight level-ups are not modelled (K3d). 13th Gen
+Intel(R) Core(TM) i5-13600K, 20 host devices, Windows 11, jax 0.12, measured 2026-11-12 while a full
+test suite shared the CPUs (wall times are therefore high).
+
+## The search finds a line at least as good as the user's
+
+    uv run python -m benchmarks.line_roark --deaths 1 --seed 0 --n 4000
+
+The search starts from the empty line (the default player decides every turn), runs 8 sweeps then
+one kick (it converged after 10 sweeps), and the three lines are then scored together on 4000
+hold-out keys the search never used (the same keys for each). Code at commit `f0546b2`; the search
+with no start is unchanged by the later fix commits, which only touch a user-given start, Ctrl-C
+handling and reporting.
+
+| line | win, 0 deaths | win, <=1 death | win, <=2 | win, <=3 | win, any | default player decided |
+|------|---------------|----------------|----------|----------|----------|------------------------|
+| found by search | 2.2 [1.8, 2.7] | **48.1 [46.6, 49.7]** | 65.1 [63.6, 66.6] | 69.1 [67.7, 70.5] | **69.9 [68.5, 71.3]** | 20 % of turns |
+| the user's line | 2.1 [1.7, 2.6] | 46.3 [44.7, 47.8] | 64.1 [62.7, 65.6] | 67.5 [66.0, 68.9] | 68.3 [66.9, 69.7] | 14 % |
+| the default player (empty line) | 0.1 [0.1, 0.3] | 1.5 [1.1, 1.9] | 4.3 [3.7, 5.0] | 6.9 [6.1, 7.7] | 7.6 [6.8, 8.5] | 100 % |
+
+Percent with 95 % Wilson intervals; no playout met a refused mechanic. Found minus user: +1.9 points
+at <=1 death and +1.6 at any win, on shared keys (a paired interval is not computed:
+`evaluate_lines` returns no per-key results). Search: 845,600 playouts, 2473 s; scoring 12,000
+playouts, 38 s. The found line is `benchmarks/lines/kaizo_roark_found_k1_s0.toml`; the user's line
+is `benchmarks/lines/kaizo_roark_user.toml`.
+
+The found line keeps most of the user's plan and changes two things: no rule against Bonsly (the
+default player decides that matchup) and against Corsola Wormadam comes in through Prinplup before
+Toxic then Leech Life. Against Gible it found the user's own pivot (Delibird's Powder Snow, through
+Rhyhorn) by itself.
+
+Earlier measurements on the way there (same fight, budget 1):
+- The user's line on 20,000 shared keys: 45.7 % at <=1 death, 67.2 % any win; `line odds` reproduces
+  the managing session's 200-playout figures (72 %, 42.5 %, at budget 3) within sampling error
+  (`tests/kaizo/test_line_roark.py`: 67.2 % / 42.2 % at 400 playouts).
+- Search v1 (who/what first, entries only for the winner) converged to 33.7 % / 48.4 %: it never
+  scored a pivot for a Pokemon that lost with a plain switch-in. Search v2 races who x what x entry
+  together.
+- A v2 run that picked among its sweep-end lines on only 768 keys ended tied with the user's line
+  (1850 vs 1851 of 4000); its best sweep-end line scored 47.5 % / 69.2 % on 20,000 keys. The pick
+  now uses 4000 keys (`pick_n`), and the recorded run stops on a sweep count, not a time budget, so it
+  is reproducible under any machine load.
+
+## Player scoreboard
+
+    uv run python -m benchmarks.players --n 2000
+
+Every registered player on `benchmarks/fights.toml`, 2000 playouts each on the same keys (seed 0).
+Adding a player is one `Entry` in `benchmarks/players.py`.
+
+| player | win, any | <=0 deaths | <=1 death | <=2 | <=3 | default player decided |
+|--------|----------|------------|-----------|-----|-----|------------------------|
+| greedy (`playout_policy`) | 7.4 [6.3, 8.6] | 0.3 [0.2, 0.7] | 1.9 [1.3, 2.5] | 5.4 [4.5, 6.5] | 7.0 [5.9, 8.1] | 100 % |
+| user's line | 67.0 [65.0, 69.1] | 2.2 [1.7, 3.0] | 43.9 [41.7, 46.1] | 62.4 [60.2, 64.4] | 66.2 [64.1, 68.2] | 14 % |
+| found line | 69.9 [67.9, 71.9] | 2.5 [1.9, 3.2] | 47.0 [44.8, 49.2] | 65.2 [63.1, 67.3] | 69.2 [67.1, 71.2] | 19 % |
+
+Fight `kaizo-roark-user-five-k1`, commit `82707b5`, 139 s.
