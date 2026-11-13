@@ -459,6 +459,84 @@ def test_best_seen_on_a_noisy_search(tables, names, monkeypatch):
     assert all(odds[chosen].score(k) >= o.score(k) for o in odds)
 
 
+def test_stopped_is_why_the_whole_search_stopped(tables, names, monkeypatch):
+    # The first ascent converges on A (the best), the kick's ascent hits ``max_sweeps``:
+    # A is returned and ``stopped`` is the last ascent's reason, not A's.
+    s = roark_state(tables, names, player_count=3, opp_count=2)
+    a, b = (line_search._with_rule(empty_line(), 0, use, 0) for use in (0, 1))
+    monkeypatch.setattr(
+        line_search, "evaluate_lines", _Rates(lambda x: 0.6 if _same(x, a) else 0.3, rho=None)
+    )
+    script = iter([(a, "converged"), (b, "max_sweeps")])
+
+    def ascend(run, line, *rest):
+        end, why = next(script)
+        return end, 1, why, [end]
+
+    monkeypatch.setattr(line_search, "_ascend", ascend)
+    monkeypatch.setattr(line_search, "_kick", lambda rng, line, *rest: b)
+    settings = LineSearchSettings(pick_n=100, restarts=1, final_n=50)
+    result = find_line(tables, names, s, KEY, settings)
+    assert _same(result.line, a)
+    assert result.stopped == "max_sweeps"
+
+
+class _Interrupting(_Rates):
+    """``_Rates`` that raises ``KeyboardInterrupt`` on its ``at``-th call (from 0)."""
+
+    def __init__(self, rate, at: int, rho: float | None = None):
+        super().__init__(rate, rho)
+        self.at, self.count = at, 0
+
+    def __call__(self, *a, **kw):
+        self.count += 1
+        if self.count - 1 == self.at:
+            raise KeyboardInterrupt
+        return super().__call__(*a, **kw)
+
+
+@pytest.mark.parametrize("at", [0, 3, 7])
+def test_ctrl_c_stops_like_a_budget(tables, names, monkeypatch, at):
+    # Ctrl-C on the ``at``-th batch (the first race; mid-sweep; around the kick) stops the
+    # search: the best kept line so far is picked and the hold-out still runs.
+    s = roark_state(tables, names, player_count=3, opp_count=2)
+
+    def rate(line):
+        return 0.2 + 0.1 * (int(line.use[0]) == 2) + 0.1 * (int(line.use[1]) == 1)
+
+    fake = _Interrupting(rate, at)
+    monkeypatch.setattr(line_search, "evaluate_lines", fake)
+    settings = LineSearchSettings(
+        race=((16, None), (32, 4), (64, 2)), accept_n=96, pick_n=160, restarts=1, final_n=64
+    )
+    result = find_line(tables, names, s, KEY, settings)
+    assert result.stopped == "interrupted"
+    lines, n, key, odds = fake.calls[-1]
+    assert n == 64 and np.array_equal(key, _key(jax.random.fold_in(KEY, HOLD_OUT_SALT)))
+    assert _same(lines[0], result.line) and result.odds is odds[0]
+    assert fake.count == len(fake.calls) + 1  # nothing ran after the interrupt but the end
+
+
+def test_a_start_line_is_kept_among_the_best_seen(tables, names, monkeypatch):
+    # A planted-best start (a user's rules) under noise: the search may wander off it,
+    # but the start is in the end pick, so it comes back. Seeds 0-11, default settings.
+    s = roark_state(tables, names, player_count=6, opp_count=1)
+    pool = joint_candidates(tables, s, 0)
+    planted = next(c for c in pool[len(pool) // 2 :] if c[3] == -1 and c[4] == 0)
+    start = line_search._with_rule(empty_line(), 0, *planted[:4], -1, planted[4])
+
+    def rate(line):
+        return 0.40 if _same(line, start) else 0.38
+
+    fake = _Rates(rate, rho=0.7)
+    monkeypatch.setattr(line_search, "evaluate_lines", fake)
+    found = [
+        _same(find_line(tables, names, s, jax.random.PRNGKey(seed), start=start).line, start)
+        for seed in range(12)
+    ]
+    assert all(found)
+
+
 def _rule_of_foe_0(line) -> tuple[int, int, int]:
     return int(line.use[0]), int(line.move[0]), int(line.first[0])
 

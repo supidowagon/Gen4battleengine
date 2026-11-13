@@ -30,10 +30,15 @@ small race over its ``via_from`` (``_from_candidates``: unset, the player's lead
 ``via``). Sweep ``s`` (from 1) visits the foes in party order when ``s`` is odd, in
 reverse when even; sweeps repeat until one changes nothing (``"converged"``),
 ``max_sweeps`` or the time budget (``"budget"``, checked before each race and each kick:
-a started race finishes).
+a started race finishes). A ``KeyboardInterrupt`` (Ctrl-C) stops the search like an
+expired budget (``"interrupted"``): the lines kept so far, with the line in place when it
+came, are picked from and the hold-out runs (a second Ctrl-C there aborts).
+``LineSearchResult.stopped`` is why the whole search stopped: ``"interrupted"``,
+``"budget"``, else the last ascent's reason.
 
 The first start is ``start`` or the empty line. The line at the end of every sweep and
-of every start is kept. ``restarts`` kicks follow, each from the best kept line so far
+of every start is kept, and so is ``start`` when given (a user's rules are never
+returned worse off than they came, on the pick's keys). ``restarts`` kicks follow, each from the best kept line so far
 (``_pick``): ``kick_foes`` distinct foes (one ``numpy.random.default_rng`` seeded by
 ``key_data(fold_in(key, RESTART_SALT))``) each get "no rule" or one of their last joint
 race's top rules, uniformly, and the ascent starts again. At the end ``_pick`` scores the
@@ -132,7 +137,7 @@ class LineSearchResult:
     odds: PlayerOdds  # hold-out: keys the search never used
     sweeps: int  # sweeps finished, summed over the starts
     evaluations: int  # line x key playouts run, hold-out included
-    stopped: str  # "converged", "max_sweeps" or "budget"
+    stopped: str  # "converged", "max_sweeps", "budget" or "interrupted"
     refused_candidates: int = 0  # distinct lines dropped for refused playouts
 
 
@@ -270,6 +275,7 @@ class _Run:
         self.clock = clock
         self.started = clock()
         self.expired = False
+        self.interrupted = False  # a KeyboardInterrupt stopped the search
         self.skipped: set[bytes] = set()  # the lines dropped for refused playouts
 
     def out_of_time(self) -> bool:
@@ -383,19 +389,24 @@ def _say_sweep(progress, label: str, sweep: int, odds: PlayerOdds | None, k: int
 
 def _ascend(run: _Run, line: Line, foes, options, tops, progress, label: str):
     """Coordinate ascent from ``line``: ``(line, sweeps finished, stopped, the line at
-    the end of each finished sweep)``."""
-    odds, ends = None, []
-    for sweep in range(1, run.settings.max_sweeps + 1):
-        before = line
-        for foe in foes if sweep % 2 else foes[::-1]:
-            line, scored = _visit(run, line, foe, options[foe], tops)
-            odds = scored or odds
-            if run.expired:
-                return line, sweep - 1, "budget", ends
-        ends.append(line)
-        _say_sweep(progress, label, sweep, odds, run.k)
-        if _same(line, before):
-            return line, sweep, "converged", ends
+    the end of each finished sweep)``. A ``KeyboardInterrupt`` sets ``run.interrupted``
+    and returns the line in place (``"interrupted"``)."""
+    odds, ends, sweep = None, [], 1
+    try:
+        for sweep in range(1, run.settings.max_sweeps + 1):
+            before = line
+            for foe in foes if sweep % 2 else foes[::-1]:
+                line, scored = _visit(run, line, foe, options[foe], tops)
+                odds = scored or odds
+                if run.expired:
+                    return line, sweep - 1, "budget", ends
+            ends.append(line)
+            _say_sweep(progress, label, sweep, odds, run.k)
+            if _same(line, before):
+                return line, sweep, "converged", ends
+    except KeyboardInterrupt:
+        run.interrupted = True
+        return line, sweep - 1, "interrupted", ends
     return line, run.settings.max_sweeps, "max_sweeps", ends
 
 
@@ -409,16 +420,16 @@ def _kick(rng: np.random.Generator, line: Line, foes, tops, kick_foes: int) -> L
     return line
 
 
-def _pick(run: _Run, seen: list[tuple[Line, str]]) -> tuple[Line, str]:
-    """The best distinct kept line and its ascent's stop (module docstring)."""
-    distinct: dict[bytes, tuple[Line, str]] = {}
-    for line, why in seen:
-        distinct.setdefault(_bytes(line), (line, why))
+def _pick(run: _Run, seen: list[Line]) -> Line:
+    """The best distinct kept line (module docstring)."""
+    distinct: dict[bytes, Line] = {}
+    for line in seen:
+        distinct.setdefault(_bytes(line), line)
     pool = list(distinct.values())
     if len(pool) == 1:
         return pool[0]
-    odds = run.evaluate([line for line, _ in pool], run.settings.pick_n)
-    kept = run.kept([line for line, _ in pool], odds) or range(len(pool))
+    odds = run.evaluate(pool, run.settings.pick_n)
+    kept = run.kept(pool, odds) or range(len(pool))
     return pool[max(kept, key=lambda i: odds[i].score(run.k))]
 
 
@@ -441,25 +452,30 @@ def find_line(
     seed = np.asarray(jax.random.key_data(jax.random.fold_in(key, RESTART_SALT)))
     rng = np.random.default_rng(seed)
     tops: dict[int, list[tuple[int, ...]]] = {}
-    seen: list[tuple[Line, str]] = []
-    line, sweeps = (empty_line() if start is None else start), 0
+    seen: list[Line] = [] if start is None else [start]
+    line, sweeps, why = (empty_line() if start is None else start), 0, "converged"
     for i in range(settings.restarts + 1):
         if i:
-            if run.out_of_time():
+            if run.interrupted or run.out_of_time():
                 break
-            line = _kick(rng, _pick(run, seen)[0], foes, tops, settings.kick_foes)
+            try:
+                line = _kick(rng, _pick(run, seen), foes, tops, settings.kick_foes)
+            except KeyboardInterrupt:
+                run.interrupted = True
+                break
         label = f"kick {i} " if i else ""
         end, done, why, ends = _ascend(run, line, foes, options, tops, progress, label)
         sweeps += done
-        seen += [(e, why) for e in (*ends, end)]
-    chosen, why = _pick(run, seen)
+        seen += [*ends, end]
+    chosen = _pick(run, seen)
     hold_out = jax.random.fold_in(key, HOLD_OUT_SALT)
     final = run.evaluate([chosen], settings.final_n, hold_out, refused="exclude")[0]
+    stopped = "interrupted" if run.interrupted else "budget" if run.expired else why
     return LineSearchResult(
         line=chosen,
         odds=final,
         sweeps=sweeps,
         evaluations=run.evaluations,
-        stopped="budget" if run.expired else why,
+        stopped=stopped,
         refused_candidates=len(run.skipped),
     )
