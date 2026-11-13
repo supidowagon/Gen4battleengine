@@ -23,6 +23,7 @@ from nuzline.data.party import load_party
 from nuzline.data.trainer import IntermediateData, build_trainer_party, load_trainers
 from nuzline.engine.damage import PRESENT_HEAL, confusion_damage, damage_for_roll
 from nuzline.engine.ids import AbilityId, EffectId, MoveFlag, Stat, Status, Weather
+from nuzline.engine.levelup import GIVE_UP, advance_learns, learn
 from nuzline.engine.order import (
     MOVE_ACTIONS,
     action_order,
@@ -271,19 +272,25 @@ def _hit_event(state, turn, attacker, defender, move, damage, crit, active, hp, 
 
 def _engine_trace(tables, names, script=SCRIPT, leads=(0, 0), party=PARTY, start=None):
     """(raw records, engine states before each turn and after the last). A script entry
-    is ``(actions, outcome)`` or ``(actions, outcome, player_slots)``: the slots the player
-    sends in, in order, for a fainted active Pokemon at the turn's end. ``start`` edits the
-    turn-0 state (fields the first record carries, such as HP and status)."""
+    is ``(actions, outcome)``, ``(actions, outcome, player_slots)`` or ``(actions, outcome,
+    player_slots, learn_choices)``: the slots the player sends in, in order, for a fainted
+    active Pokemon at the turn's end, and the answers to the turn's learn-move prompts
+    (``levelup.learn``, after ``advance_learns``, before the replacements). ``start`` edits
+    the turn-0 state (fields the first record carries, such as HP and status)."""
     trainer = next(t for t in load_trainers(INTERMEDIATE) if t.id == ROARK_ID)
     player = load_party(party, names)
     state = initial_state(tables, player, trainer, leads)
     if start is not None:
         state = start(state)
     records, states = [_turn_record(state, 0)], [state]
-    for turn, (actions, outcome, *sent) in enumerate(script):
+    for turn, (actions, outcome, *rest) in enumerate(script):
+        sent, learns = (*rest, (), ())[:2]
         records += _move_events(tables, state, actions, outcome, turn)
         state = _step(tables, state, jnp.asarray(actions, jnp.int32), outcome)
-        for slot in sent[0] if sent else ():
+        state = advance_learns(tables, state)
+        for choice in learns:
+            state = learn(tables, state, choice)
+        for slot in sent:
             assert needs_replacement(state)[0]
             state = replace(tables, state, 0, slot)
         if needs_replacement(state)[1]:
@@ -1178,6 +1185,103 @@ def test_a_quick_claw_redraw_keeps_the_player_replacement(tables, names, tmp_pat
     _same_states(turns, states)
     assert turns[0].player_slot == 1
     assert int(turns[0].outcome.quick_claw[0]) == 1
+
+
+PECK_LEVEL = 15  # vanilla Prinplup learns Peck at 15 (its four move slots are full)
+GROWL_SLOT, BUBBLE_SLOT, WATER_SPORT_SLOT = 1, 2, 3
+
+
+def _learn_party(tables, names, tmp_path: Path) -> Path:
+    """The golden party with Prinplup 1 exp short of level 15 and holding a Quick Claw."""
+    rate = int(tables.species_exp_rate[names.species("Prinplup")])
+    exp = int(tables.exp_table[rate, PECK_LEVEL]) - 1
+    text = PARTY.read_text(encoding="utf-8")
+    plain = '"Pound", "Growl", "Bubble", "Water Sport"]\nitem = ""'
+    assert plain in text
+    text = text.replace(plain, plain[:-2] + '"Quick Claw"', 1)
+    text = text.replace(
+        'species = "Prinplup"\nlevel = 14\n', f'species = "Prinplup"\nlevel = 14\nexp = {exp}\n'
+    )
+    assert f"exp = {exp}" in text
+    path = tmp_path / "learn_party.toml"
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def _learn_trace(tables, names, tmp_path: Path, monkeypatch, choice: int):
+    """Prinplup leads with Growl; on turn 1 the AI records it (``ai_seen_moves``) and Bubble
+    knocks out Geodude (5 HP): Prinplup reaches 15 and is offered Peck, answered ``choice``.
+    Onix comes in; on turn 2 the Quick Claw draw of turn 1 lets Growl go first, so turn 2's
+    fit writes it back into the learn turn (``_redraw_quick_claw``); Onix is made faster."""
+    import sys
+
+    import tools.trace_to_state as ttt
+
+    built = ttt.initial_state
+
+    def faster_onix(*args, **kwargs):
+        s = built(*args, **kwargs)
+        return s._replace(stats=s.stats.at[1, 1, Stat.SPE - 1].set(200))
+
+    monkeypatch.setattr(sys.modules[__name__], "initial_state", faster_onix)
+    monkeypatch.setattr(ttt, "initial_state", faster_onix)
+    party = _learn_party(tables, names, tmp_path)
+
+    def claw(k, **hits):
+        return _outcome(**hits)._replace(quick_claw=jnp.asarray([k, 0], jnp.int8))
+
+    script = [
+        ((GROWL_SLOT, ROCK_THROW), _outcome(o_roll=0)),
+        ((BUBBLE_SLOT, ROCK_THROW), claw(1, p_roll=0), (), (choice,)),
+        ((GROWL_SLOT, ROCK_THROW), claw(0, o_roll=3)),
+    ]
+    records, states = _engine_trace(
+        tables, names, script, leads=(1, 0), party=party, start=_hp(1, 0, 5)
+    )
+    assert int(states[2].level[0, 1]) == PECK_LEVEL and int(states[2].learn_level[1]) == 0
+    return _bundle(tmp_path, names, records, party), states
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("choice", [GIVE_UP, BUBBLE_SLOT, WATER_SPORT_SLOT])
+def test_a_learn_move_answer_is_inferred(tables, names, tmp_path, monkeypatch, choice):
+    # Design §5.4: the answer to the prompt is fitted from the next record, over giving up
+    # and every non-HM slot. Bubble is the move used this turn: its slot shows Peck's PP,
+    # not a drop (_used_slots), and the AI has not recorded it yet (trainer_ai.c:2705-2716
+    # runs at the next turn's start).
+    path, states = _learn_trace(tables, names, tmp_path, monkeypatch, choice)
+    peck = names.move("Peck")
+    assert (peck in states[2].moves[0, 1].tolist()) == (choice != GIVE_UP)
+    assert [int(s.stages[1, Stat.ATK]) for s in states] == [0, -1, 0, -1]
+    turns = convert(path, tables, names)
+    _same_states(turns, states)
+    assert [t.learn_choices for t in turns] == [(), (choice,), (), ()]
+    assert int(turns[1].outcome.quick_claw[0]) == 1  # redrawn by turn 2's fit
+    replayed = trace_to_states(path, tables, names)
+    assert replayed[1].learn_choices == (choice,)
+    assert replay_mismatches(tables, replayed) == []
+
+
+@pytest.mark.slow
+def test_a_learn_move_answer_the_engine_cannot_replay_is_refused(
+    tables, names, tmp_path, monkeypatch
+):
+    # Replacing Growl, which the AI has seen: the decomp's AI list keeps Growl's id
+    # (trainer_ai.c:2705-2716), the engine's slot flag would mark Peck as seen.
+    path, _ = _learn_trace(tables, names, tmp_path, monkeypatch, GROWL_SLOT)
+    with pytest.raises(TraceError, match="turn 1: the player replaced move 45 .*AI has seen"):
+        convert(path, tables, names)
+    # Ruling D10: a recording in which the player learned a move the engine does not
+    # support is refused; giving it up replays.
+    peck = names.move("Peck")
+    unsupported = tables._replace(
+        move_effect=jnp.asarray(tables.move_effect).at[peck].set(EffectId.UNSUPPORTED)
+    )
+    path, _ = _learn_trace(tables, names, tmp_path, monkeypatch, WATER_SPORT_SLOT)
+    with pytest.raises(TraceError, match=f"turn 1: party slot 1 learned move {peck}.*D10"):
+        convert(path, unsupported, names)
+    path, _ = _learn_trace(tables, names, tmp_path, monkeypatch, GIVE_UP)
+    assert [t.learn_choices for t in convert(path, unsupported, names)][1] == (GIVE_UP,)
 
 
 def test_cli_writes_a_bundle_that_converts(tables, names, engine_trace, tmp_path):
