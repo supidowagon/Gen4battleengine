@@ -158,5 +158,53 @@ def test_a_pending_learn_settles_the_opponent_replacement_with_the_carried_mul(t
 
 def test_a_stage_a_root_carries_no_learn_work(tables, names):
     s = _with(_prinplup_state(tables, names), learn_level={0: 17})
-    with pytest.raises(AssertionError, match="no learn work"):
+    with pytest.raises(ValueError, match="no learn work"):
         rank_actions(tables, names, s, 2, jax.random.PRNGKey(0), max_turns=1)
+
+
+def test_refusal_reason_settles_a_pending_learn_root(tables, names):
+    # A root at a learn prompt with the opponent's replacement pending (a Stage B learn
+    # node): the playout gives the moves up, then sends Onix or Cranidos (1 HP) into Stealth
+    # Rock; its payout levels Machop again with a foe left: window (c). refusal_reason must
+    # settle the root as _resolve_pending does (settle_learns) to name it.
+    s = roark_real_state(tables, names, player_species="Machop").replace_hp(1, GEODUDE, 0)
+    s = s.replace_hp(1, ONIX, 1).replace_hp(1, CRANIDOS, 1)
+    s = s._replace(stealth_rock=s.stealth_rock.at[1].set(1))
+    level = int(s.level[0, 0])
+    s = _with(s, exp={0: _base(tables, names, "Machop", level + 1) - 1})
+    s, _ = _with_prompt(tables, names, s)
+    # No turn (max_turns 0): the refusal comes from the root's settle alone.
+    key = jax.random.PRNGKey(7)
+    assert int(playout_from_action(tables, s, 0, key, 0).refused) == 1
+    assert "window (c)" in refusal_reason(tables, s, 0, key, 0)
+
+
+def test_refusal_reason_asks_the_replacement_on_the_resolved_turn(tables, names, monkeypatch):
+    # T6 review Minor 1: replacement_refusal mirrors finish_turn, which resolves the turn's
+    # learns first (the bench Magikarp auto-learns Tackle, which replacement_policy reads).
+    machop = _mon(names, "Machop", 20, current_hp=1, status=int(Status.POISON))
+    karp = _mon(names, "Magikarp", 14, moves=("Splash",))
+    opp = [_mon(names, "Magikarp", 5, moves=("Splash",))] * 2
+    s = make_state(tables, [machop, karp, karp], opp).replace_hp(1, 0, 1)
+    s = _mask(_with(s, exp={2: _base(tables, names, "Magikarp", 15) - 1}), 0, 2)
+    actions = A("Tackle", "Splash", s, names)
+    played = _step(tables, s, actions, empty_outcome())
+    seen = []
+
+    def record(tables, state, ai_switched, power_mul):
+        seen.append(state)
+        return "recorded"
+
+    # A refused turn without an AI reason (the opponent's Splash AI is itself refused, so the
+    # AI side is stubbed out): refusal_reason then asks the replacement.
+    monkeypatch.setattr(playout_module, "ai_refusals", lambda *a, **k: [])
+    monkeypatch.setattr(playout_module, "ai_path_refusals", lambda *a, **k: [])
+    monkeypatch.setattr(playout_module, "_policy_jit", lambda *a, **k: (actions[0], False))
+    monkeypatch.setattr(playout_module, "_turn_jit", lambda *a, **k: (s, jnp.bool_(True)))
+    monkeypatch.setattr(
+        playout_module, "_play_jit", lambda *a, **k: (played, False, jnp.bool_(False), 10)
+    )
+    monkeypatch.setattr(playout_module, "replacement_refusal", record)
+    key = jax.random.PRNGKey(0)
+    assert refusal_reason(tables, s, int(actions[0]), key, 1) == "recorded"
+    assert _moves(names, seen[0], 2) == ["Splash", "Tackle", "", ""]

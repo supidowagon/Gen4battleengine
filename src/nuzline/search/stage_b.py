@@ -45,16 +45,24 @@ x outcome probability; player choices are excluded. Child kinds:
   does; spec §3).
 * ``decision``: a group above the pass depth, expanded on the next level. A group at a
   player replacement (the active Pokemon fainted, a healthy one left; Set mode, the
-  player gets no switch otherwise) is a **replacement decision** (``replacement=True``)
-  wherever it arises: the player picks the slot to send in (``decision_actions``), it
-  is expanded in the same level as the turn that caused it (``expand_replacements``,
-  again for a newcomer that faints on entry) and never counts a turn or is a leaf. A
-  root may be one; the AI distribution is then required only after the replacement, and
-  a replacement whose AI is refused (or has a sampling-only pair) is dropped from the
-  ranking with the reason.
+  player gets no switch otherwise) is a **replacement decision** (``decision ==
+  "replacement"``) wherever it arises: the player picks the slot to send in
+  (``decision_actions``), it is expanded in the same level as the turn that caused it
+  (``expand_replacements``, again for a newcomer that faints on entry) and never counts a
+  turn or is a leaf. A group at a learn-move prompt (K3d-exp design §3.5: the turn's
+  child stops there, ``expand._turn``) is a **learn decision** (``decision == "learn"``),
+  handled the same way: a max node over ``levelup.learn_options`` (the D2 and pin masks
+  drop legal game choices, so its value is an achievable lower bound; ruling D2), no AI
+  distribution, expanded by ``expand_learns`` (the answer, then the opponent's
+  replacement with the turn's carried ``powerMul``), its children again pending decisions
+  when another prompt or a player replacement follows. A root may be either; the AI
+  distribution is then required only after the root's answer, and an answer whose AI is
+  refused (or has a sampling-only pair) is dropped from the ranking with the reason. A
+  root's unscanned learn work is scanned first (``advance_learns``, deterministic).
 
-A node classifies in this order: refused, terminal, failed, pruned, replacement decision,
-leaf, decision. A node's backup also carries the half-A and half-B expected deaths and
+A node classifies in this order: refused, terminal, failed, pruned, learn decision,
+replacement decision, leaf, decision. Learn work at a finished battle is no prompt (ruling
+D8): such a group is terminal. A node's backup also carries the half-A and half-B expected deaths and
 half B's ``deaths.BUCKETS`` probabilities (``Backup``), which give ``ActionValue.e_deaths``
 and ``distribution``; the root ranking is ``stage_a.tie_ordered`` by estimate and
 expected deaths.
@@ -110,10 +118,11 @@ from nuzline.ai.policy import UnsupportedAi, ai_path_refusals, ai_refusals
 from nuzline.data.tables import Names, Tables
 from nuzline.engine.actions import FIRST_ITEM_ACTION, MOVE_ACTIONS, decision_actions, usable_moves
 from nuzline.engine.enumerate import SamplingOnly
+from nuzline.engine.levelup import GIVE_UP, advance_learns, learn_options, needs_learn
 from nuzline.engine.state import BattleState
 from nuzline.engine.step import WINNER_PLAYER, needs_replacement, root_belief
 from nuzline.search import deaths
-from nuzline.search.expand import ai_rows, expand, expand_replacements
+from nuzline.search.expand import ai_rows, expand, expand_learns, expand_replacements
 from nuzline.search.leaves import LeafValue, allocate, evaluate_forced, evaluate_leaves
 from nuzline.search.rows import concat, row_bytes, take
 from nuzline.search.stage_a import action_label, rank_actions, tie_ordered
@@ -125,6 +134,7 @@ __all__ = [
     "PlanNode",
     "SolveResult",
     "SolveSettings",
+    "learn_label",
     "result_from_dict",
     "result_to_dict",
     "solve",
@@ -195,8 +205,11 @@ class PlanNode:
     half-B value given the node is reached. ``children``: per player action, the child
     nodes (at the root every ranked action; at an inner decision node only the chosen
     one; other kinds none). ``kind``: ``decision``, ``leaf``, ``terminal``, ``failed``,
-    ``pruned``, ``refused`` or ``sampled`` (module docstring); ``replacement``: a decision
-    among replacements (the player's active Pokemon fainted). ``opp_action``/``opp_label``: for a
+    ``pruned``, ``refused`` or ``sampled`` (module docstring); ``decision``: what a decision
+    node decides: ``turn`` (an action), ``replacement`` (the slot to send in: the player's
+    active Pokemon fainted; ``replacement`` is then true) or ``learn`` (the answer to a
+    learn-move prompt, ``levelup.learn_options``' indexing; ``learn_move`` is the move it
+    offers). ``opp_action``/``opp_label``: for a
     node of one opponent action not expanded into observations (a pruned opponent
     action, a sampled pair, or either refused by its evaluation), that action and its
     text, e.g. ``Geodude uses Rock Throw``; ``None`` otherwise."""
@@ -209,7 +222,13 @@ class PlanNode:
     kind: str
     opp_action: int | None = None
     opp_label: str | None = None
-    replacement: bool = False
+    decision: str = "turn"
+    learn_move: int | None = None
+
+    @property
+    def replacement(self) -> bool:
+        """A decision among replacements (the player's active Pokemon fainted)."""
+        return self.decision == "replacement"
 
 
 @dataclass
@@ -261,8 +280,8 @@ class _Node:
     forced: tuple[int, int, int] | None = None
     legal: list[int] = field(default_factory=list)
     branches: dict[int, list[_Node]] = field(default_factory=dict)
-    replacement: bool = False  # a decision among replacements
-    root_action: int | None = None  # the pending root's replacement leading here
+    decision: str = "turn"  # turn, replacement or learn (PlanNode.decision)
+    root_action: int | None = None  # the pending root's answer leading here
 
 
 class Backup(NamedTuple):
@@ -291,7 +310,7 @@ class _Store:
         self.over: list[bool] = []
         self.won: list[bool] = []
         self.failed: list[bool] = []  # over the death budget (ruling 3)
-        self.pending: list[bool] = []  # at a player replacement
+        self.pending: list[str] = []  # "learn", "replacement" or "" (``_pending``)
         self.faints: list[int] = []
         self.bucket: list[int] = []  # ``deaths.BUCKETS`` index of a finished battle
         self._all: BattleState | None = None
@@ -318,7 +337,7 @@ class _Store:
             )
             self.won.extend(ok.tolist())
             self.failed.extend(np.asarray(deaths.over_budget(part)).tolist())
-            self.pending.extend(_pending(part).tolist())
+            self.pending.extend(_pending(part))
             self.faints.extend(np.asarray(part.player_faints).astype(int).tolist())
             self.bucket.extend(
                 deaths.bucket(won, over, part.player_faints, part.deaths, part.protected).tolist()
@@ -334,15 +353,47 @@ class _Store:
 
 
 _pending_jit = jax.jit(jax.vmap(needs_replacement))
+_learn_jit = jax.jit(jax.vmap(needs_learn))
 
 
-def _pending(part: BattleState) -> np.ndarray:
-    """``bool[N]``: the player's active Pokemon fainted with a healthy one left and the
-    battle on (``step.needs_replacement`` side 0, derived from the engine)."""
-    return np.asarray(_pending_jit(part))[:, 0] == 1
+def _pending(part: BattleState) -> list[str]:
+    """Per state, the decision it waits on before the next turn: ``learn``, a learn-move
+    prompt in a battle that goes on (``levelup.needs_learn``; every stored state has had
+    its learnset scans run, ``expand._turn`` and ``solve``; learn work at a finished
+    battle is no prompt, ruling D8); else ``replacement``, the player's active Pokemon
+    fainted with a healthy one left and the battle on (``step.needs_replacement`` side
+    0); else ``""``. A learn prompt comes first: ``TurnEnd`` runs it before
+    ``ReplaceFainted`` (battle_controller_player.c:1846-1848)."""
+    over = np.asarray(part.over) != 0
+    learn = np.asarray(_learn_jit(part)) & ~over
+    replacement = np.asarray(_pending_jit(part))[:, 0] == 1
+    return np.where(learn, "learn", np.where(replacement, "replacement", "")).tolist()
 
 
 _legal_jit = jax.jit(lambda tables, state: decision_actions(tables, state))
+_learn_options_jit = jax.jit(learn_options)
+_advance_jit = jax.jit(advance_learns)
+
+
+def _offered_move(tables: Tables, state: BattleState) -> int:
+    """The move a learn-move prompt offers: the learnset entry at the cursor of the lowest
+    player slot with learn work (``levelup.needs_learn``), by species and form row."""
+    slot = int(np.flatnonzero(np.asarray(state.learn_level) > 0)[0])
+    row = int(tables.species_form_row[int(state.species[0, slot]), int(state.form[0, slot])])
+    return int(tables.learnset_move[row, int(state.learn_cursor[slot])])
+
+
+def _forgotten_move(state: BattleState, option: int) -> int:
+    """The move learn ``option`` replaces (``option < GIVE_UP``) in the prompted slot."""
+    slot = int(np.flatnonzero(np.asarray(state.learn_level) > 0)[0])
+    return int(state.moves[0, slot, option])
+
+
+def learn_label(names: Names, move: int, forgotten: int, option: int) -> str:
+    """A learn option as plan text: ``learn Slash over Tackle``, or ``give up Slash``."""
+    if option == GIVE_UP:
+        return f"give up {names.move_names[move]}"
+    return f"learn {names.move_names[move]} over {names.move_names[forgotten]}"
 
 
 def _opp_label(names: Names, state: BattleState, o: int) -> str:
@@ -408,8 +459,11 @@ class _Solver:
         self.ai: dict[int, np.ndarray | None] = {}  # float64 row, None when refused
         self.legal: dict[int, list[int]] = {}
         self.expansions: dict[tuple[int, int, int], list | SamplingOnly] = {}
-        # (state id, replacement action) -> (child state id, observation, prob, refused)
-        self.replacements: dict[tuple[int, int], tuple[int, bytes, float, bool]] = {}
+        # per pending kind: (state id, answer) -> (child state id, observation, prob, refused)
+        self.answers: dict[str, dict[tuple[int, int], tuple[int, bytes, float, bool]]] = {
+            "replacement": {},
+            "learn": {},
+        }
         self.playouts = 0
         self._root = _Node("decision", None, 1.0)  # replaced by every pass
         self._root_actions: set[int] = set()
@@ -417,6 +471,10 @@ class _Solver:
         self._failed: dict[int, tuple[int, LeafValue]] = {}
 
     def _label(self, a: int) -> str:
+        if self.store.pending[0] == "learn":
+            move = _offered_move(self.tables, self.root)
+            forgotten = 0 if a == GIVE_UP else _forgotten_move(self.root, a)
+            return learn_label(self.names, move, forgotten, a)
         return action_label(self.names, self.root, a, self.struggle)
 
     def _forced_plan(self, forced: tuple[int, int, int], prob: float, kind: str) -> PlanNode:
@@ -429,9 +487,13 @@ class _Solver:
     # -- expansion ------------------------------------------------------------------------
 
     def _legal(self, sid: int) -> list[int]:
+        """The player's legal answers at state ``sid``: its actions
+        (``decision_actions``), or at a learn-move prompt the options
+        (``levelup.learn_options``)."""
         if sid not in self.legal:
             state = jax.tree.map(lambda f: f[0], self.store.take([sid]))
-            mask = np.asarray(_legal_jit(self.tables, state))
+            fn = _learn_options_jit if self.store.pending[sid] == "learn" else _legal_jit
+            mask = np.asarray(fn(self.tables, state))
             self.legal[sid] = np.flatnonzero(mask).tolist()
         return self.legal[sid]
 
@@ -469,60 +531,64 @@ class _Solver:
                 kids = [(ids[c.state_row], c.obs, c.prob, c.refused) for c in kids]
             self.expansions[request] = kids
 
-    def _expand_replacements(self, nodes: list[_Node], played: int, depth: int) -> None:
-        """Expand the replacement decisions ``nodes`` (``played`` turns played at their
-        children): each legal replacement of each state, the children grouped by
-        ``(observation, refused)`` and classified like a turn's, again for the children
-        that are replacement decisions themselves (an entry faint). A replacement is not a
-        turn. The children of the pending root's replacement ``a`` carry ``root_action =
-        a``."""
+    def _expand_pending(self, nodes: list[_Node], played: int, depth: int) -> None:
+        """Expand the pending decisions ``nodes`` (replacements and learn-move prompts;
+        ``played`` turns played at their children): each legal answer of each state, the
+        children grouped by ``(observation, refused)`` and classified like a turn's, again
+        for the children that are pending decisions themselves (another prompt, a
+        replacement after the answer, an entry faint). An answer is not a turn. The
+        children of the pending root's answer ``a`` carry ``root_action = a``."""
         todo = nodes
         while todo:
-            requests = {}
+            requests: dict[str, dict[tuple[int, int], None]] = {"replacement": {}, "learn": {}}
             for node in todo:
                 node.legal = self._node_legal(node)
                 for a in node.legal:
                     for s in node.states:
-                        if (s, a) not in self.replacements:
-                            requests[(s, a)] = None
-            if requests:
-                self._expand_replacement_rows(list(requests))
+                        if (s, a) not in self.answers[node.decision]:
+                            requests[node.decision][(s, a)] = None
+            for kind, pending in requests.items():
+                if pending:
+                    self._expand_answer_rows(kind, list(pending))
             chained = []
             for node in todo:
+                answers = self.answers[node.decision]
                 for a in node.legal:
                     groups: dict[tuple[bytes, bool], dict[int, float]] = {}
                     for s, w in node.states.items():
-                        child, obs, p, refused = self.replacements[(s, a)]
+                        child, obs, p, refused = answers[(s, a)]
                         members = groups.setdefault((obs, refused), {})
                         members[child] = members.get(child, 0.0) + w * p
                     kids = self._group_nodes(groups, played, depth)
                     node.branches[a] = kids
                     for kid in kids:
                         kid.root_action = a if node is self._root else node.root_action
-                        if kid.replacement:
+                        if kid.decision != "turn":
                             chained.append(kid)
             todo = chained
 
-    def _expand_replacement_rows(self, requests: list[tuple[int, int]]) -> None:
+    def _expand_answer_rows(self, kind: str, requests: list[tuple[int, int]]) -> None:
+        """The children of ``kind`` (``replacement`` or ``learn``) answers ``(state id,
+        answer)``, through ``expand_replacements`` or ``expand_learns``."""
         sids = list(dict.fromkeys(r[0] for r in requests))
         index = {s: i for i, s in enumerate(sids)}
-        local, out = expand_replacements(
-            self.tables, self.store.take(sids), [(index[s], a) for s, a in requests]
-        )
+        fn = expand_learns if kind == "learn" else expand_replacements
+        local, out = fn(self.tables, self.store.take(sids), [(index[s], a) for s, a in requests])
         ids = self.store.add(local) if len(local.hp) else []
         for r, request in enumerate(requests):
             c = out[r]
-            self.replacements[request] = (ids[c.state_row], c.obs, c.prob, c.refused)
+            self.answers[kind][request] = (ids[c.state_row], c.obs, c.prob, c.refused)
 
     def _frontier(self, nodes: list[_Node]) -> list[_Node]:
-        """The decision nodes below ``nodes`` that still need a turn; the replacement
-        decisions are already expanded, so they are looked through."""
+        """The decision nodes below ``nodes`` that still need a turn; the pending
+        decisions (replacements, learn prompts) are already expanded, so they are looked
+        through."""
         out = []
         for node in nodes:
             for kids in node.branches.values():
                 for kid in kids:
                     if kid.kind == "decision":
-                        out.extend(self._frontier([kid]) if kid.replacement else [kid])
+                        out.extend(self._frontier([kid]) if kid.decision != "turn" else [kid])
         return out
 
     def _level(
@@ -530,9 +596,9 @@ class _Solver:
     ) -> None:
         """Expand every node of ``frontier`` (``k`` turns played) one turn: children per
         legal action, grouped and classified (module docstring), then the replacement
-        decisions those children hold. ``at_root``: ``frontier`` holds the outcomes of the
-        root decision (the root itself, or the children of a pending root's replacements,
-        each with its ``root_action``)."""
+        and learn decisions those children hold. ``at_root``: ``frontier`` holds the
+        outcomes of the root decision (the root itself, or the children of a pending root's
+        answers, each with its ``root_action``)."""
         eps = self.settings.epsilon
         self._ai_rows([s for node in frontier for s in node.states])
         if at_root:
@@ -564,13 +630,13 @@ class _Solver:
                 if at_root and node.root_action is None and a in dropped:
                     continue
                 node.branches[a] = self._children(node, a, k, depth)
-                replacing.extend(kid for kid in node.branches[a] if kid.replacement)
-        self._expand_replacements(replacing, k + 1, depth)
+                replacing.extend(kid for kid in node.branches[a] if kid.decision != "turn")
+        self._expand_pending(replacing, k + 1, depth)
 
     def _check_root_ai(self, frontier: list[_Node], dropped: dict[int, str]) -> None:
         """The refused-AI rules of the root level: a refused AI at the root refuses the solve;
-        below a pending root a refused AI drops that root replacement (the solve is refused
-        when every root replacement is dropped so)."""
+        below a pending root a refused AI drops that root answer (a replacement or a learn
+        option; the solve is refused when every root answer is dropped so)."""
         for node in frontier:
             ra = node.root_action
             if ra is None:
@@ -589,14 +655,14 @@ class _Solver:
                     f"{self._label(ra)} is dropped: the AI's action distribution after it "
                     "is refused",
                 )
-        if self._root.replacement and self._root_actions <= self._refused_roots:
+        if self._root.decision != "turn" and self._root_actions <= self._refused_roots:
             bad = next(s for node in frontier for s in node.states if self.ai[s] is None)
             state = _first(self.store.take([bad]))
             reasons = ai_refusals(self.tables, state, self.names)
             reasons = reasons or ai_path_refusals(self.tables, state, self.names)
             raise UnsupportedAi(
                 "; ".join(reasons)
-                or "the AI's action distribution after every replacement is refused"
+                or f"the AI's action distribution after every {self._root.decision} is refused"
             )
 
     def _drop_sampling_only(self, node: _Node, dropped: dict[int, str]) -> None:
@@ -642,14 +708,16 @@ class _Solver:
         self, groups: dict[tuple[bytes, bool], dict[int, float]], played: int, depth: int
     ) -> list[_Node]:
         """The child nodes of ``groups`` (``played`` turns played), classified in this
-        order: refused, terminal, failed (ruling 3), pruned, replacement decision (ruling
-        4), leaf, decision."""
+        order: refused, terminal, failed (ruling 3), pruned, learn decision, replacement
+        decision (ruling 4), leaf, decision. A group shares its observation, which shows
+        the prompt and the fainted active, so its first state's pending kind is the
+        group's."""
         eps = self.settings.epsilon
         kids = []
         for (obs, refused), members in groups.items():
             prob = math.fsum(members.values())
             first = next(iter(members))
-            replacement = False
+            decision = "turn"
             if refused:
                 kind = "refused"
             elif self.store.over[first]:
@@ -659,12 +727,12 @@ class _Solver:
             elif prob < eps:
                 kind = "pruned"
             elif self.store.pending[first]:
-                kind, replacement = "decision", True
+                kind, decision = "decision", self.store.pending[first]
             elif played == depth:
                 kind = "leaf"
             else:
                 kind = "decision"
-            kids.append(_Node(kind, obs, prob, states=members, replacement=replacement))
+            kids.append(_Node(kind, obs, prob, states=members, decision=decision))
         return kids
 
     # -- evaluation -----------------------------------------------------------------------
@@ -764,9 +832,17 @@ class _Solver:
             values,
             {chosen: best.plan},
             "decision",
-            replacement=node.replacement,
+            decision=node.decision,
+            learn_move=self._learn_move(node),
         )
         return best._replace(plan=[node_plan])
+
+    def _learn_move(self, node: _Node) -> int | None:
+        """The move a learn decision offers (equal over its states: the observation shows
+        the prompt), else ``None``."""
+        if node.decision != "learn":
+            return None
+        return _offered_move(self.tables, _first(self.store.take([next(iter(node.states))])))
 
     def _branch(self, kids: list[_Node], leaf, forced, with_plan: bool = True) -> Backup:
         total = Backup(0.0, 0.0, 0.0, {}, [], 0.0, 0.0, np.zeros(len(deaths.BUCKETS)))
@@ -824,13 +900,14 @@ class _Solver:
         """One pass of depth ``depth``: ``(ranking, dropped, plan, rounds, half-width,
         precision met)`` (module docstring; the last two ``None`` without a target)."""
         dropped: dict[int, str] = {}
-        replacing = bool(self.store.pending[0])
+        pending = self.store.pending[0]
+        replacing = bool(pending)
         root = self._root = _Node(
-            "decision", None, 1.0, states=dict(self.root_states), replacement=replacing
+            "decision", None, 1.0, states=dict(self.root_states), decision=pending or "turn"
         )
         self._refused_roots = set()
-        if replacing:  # the root decision is a replacement: expand it before the first turn
-            self._expand_replacements([root], 0, depth)
+        if replacing:  # a pending root (replacement, learn): its answers before the first turn
+            self._expand_pending([root], 0, depth)
             self._root_actions = set(root.branches)
             frontier = self._frontier([root])
         else:
@@ -977,7 +1054,8 @@ class _Solver:
             {r.action: r.estimate for r in ranking},
             {r.action: plans[r.action] for r in ranking},
             "decision",
-            replacement=replacing,
+            decision=root.decision,
+            learn_move=self._learn_move(root),
         )
         return ranking, dropped, plan, rounds, half_a, met
 
@@ -1079,7 +1157,9 @@ def solve(
     ``weights`` their summed reach (forced evaluations included); the values it returns
     are added to the earlier ones. Raises ``UnsupportedAi``
     when the AI is refused at the root and ``HiddenLegality`` when the states of a belief
-    node differ in the player's legal actions."""
+    node differ in the player's legal actions. A root with learnset work has its scans run
+    first (``advance_learns``, deterministic): it is then a learn decision when a prompt is
+    left (module docstring); Stage A (depth 0) refuses such a root (``rank_actions``)."""
     start = time.perf_counter()
     if (
         settings.max_depth < 0
@@ -1096,6 +1176,8 @@ def solve(
         return _stage_a(tables, names, state, key, settings, start)
     if int(state.over) != 0:
         raise ValueError("solve: the battle is already over")
+    if np.any(np.asarray(state.learn_level)):
+        state = _advance_jit(tables, state)
     belief = root_belief(tables, state)
     root = jax.tree.map(lambda *f: np.stack([np.asarray(x) for x in f]), *(b[0] for b in belief))
     weights = [b[1] for b in belief]
@@ -1165,6 +1247,8 @@ def _node_to_dict(n: PlanNode) -> dict:
         "opp_action": None if n.opp_action is None else int(n.opp_action),
         "opp_label": n.opp_label,
         "replacement": bool(n.replacement),
+        "decision": n.decision,
+        "learn_move": None if n.learn_move is None else int(n.learn_move),
     }
 
 
@@ -1178,7 +1262,8 @@ def _node_from_dict(d: dict) -> PlanNode:
         kind=d["kind"],
         opp_action=d["opp_action"],
         opp_label=d["opp_label"],
-        replacement=d["replacement"],
+        decision=d.get("decision", "replacement" if d["replacement"] else "turn"),
+        learn_move=d.get("learn_move"),
     )
 
 

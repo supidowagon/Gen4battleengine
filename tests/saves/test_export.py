@@ -172,3 +172,29 @@ def test_party_toml_keeps_the_exp_fields(tmp_path, tables, names):
     (spec,) = load_party(out, names)
     assert (spec.exp, spec.exp_boost, spec.pokerus, spec.friend_bonus) == (exp, 170, 1, 1)
     assert [spec] == [save.party[0].to_spec(tables, save.trainer)]
+
+
+def test_party_toml_keeps_egg_location_and_pp_ups(tmp_path, tables, names):
+    """T7 review M5: the coverage inputs ``egg_location`` and ``pp_ups`` round-trip."""
+    party = [
+        party_record(
+            tables,
+            names,
+            "Grotle",
+            14,
+            ("Tackle", "Absorb"),
+            pp_ups=(1, 0, 2, 3),
+            egg_location_dp=7,
+        )
+    ]
+    p = tmp_path / "g.sav"
+    p.write_bytes(build_image(party=party))
+    save = load_save(p, tables=tables, names=names)
+    text = party_toml(save, names, tables)
+    entry = tomllib.loads(text)["pokemon"][0]
+    assert entry["egg_location"] == 7 and entry["pp_ups"] == [1, 0, 2, 3]
+    out = tmp_path / "party.toml"
+    out.write_text(text, encoding="utf-8")
+    (spec,) = load_party(out, names)
+    assert (spec.egg_location, spec.pp_ups) == (7, (1, 0, 2, 3))
+    assert [spec] == [m.to_spec(tables, save.trainer) for m in save.party]

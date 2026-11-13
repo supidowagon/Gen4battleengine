@@ -98,7 +98,7 @@ from nuzline.engine.step import (
     step,
 )
 from nuzline.search.deaths import over_budget
-from nuzline.search.learn import learn_reason, resolve_learns, settle_learns
+from nuzline.search.learn import learn_reason, resolve_learns, settle_learns, settle_reason
 
 __all__ = [
     "REFUSED_WON",
@@ -571,10 +571,15 @@ def refusal_reason(
     loop (the same key splits) and the refused turn's AI (``ai_refusals``, then the
     per-slot scoring path's ``ai_path_refusals``, also when the
     player's choice met a refused distribution) or replacement (``replacement_refusal``) is
-    asked on its concrete state; a pending player replacement is replayed first.
+    asked on its concrete state (after the turn's learns, as ``finish_turn``); a pending
+    learn and a pending player replacement are replayed first (``settle_reason``, as
+    ``_resolve_pending``).
     ``layout`` defaults to the concrete ``tables``' own (``layout_of``)."""
     layout = layout_of(tables) if layout is None else layout
     first = jnp.asarray(action, _I32)
+    reason, state = settle_reason(tables, state, _send_reason, _carried_mul)
+    if reason:
+        return reason
     if int(needs_replacement(state)[0]) == 1:
         slot = int(first) - MOVE_ACTIONS if int(first) >= MOVE_ACTIONS else None
         if slot is None:
@@ -608,6 +613,6 @@ def refusal_reason(
             )
             return learn_reason(
                 finish_turn(tables, played, ai_switched, power_mul)[0]
-            ) or replacement_refusal(tables, played, ai_switched, power_mul)
+            ) or replacement_refusal(tables, resolve_learns(tables, played), ai_switched, power_mul)
         state = played
     return None

@@ -179,8 +179,10 @@ def rank_actions(
     tables: Tables, names: Names, state: BattleState, n: int, key, max_turns: int = 100
 ) -> Ranking:
     """Rank the player's legal actions at ``state`` by ``n`` shared playouts each
-    (module docstring). Raises ``UnsupportedAi`` when any playout is refused."""
-    assert not np.any(np.asarray(state.learn_level)), "a Stage A root carries no learn work"
+    (module docstring). Raises ``UnsupportedAi`` when any playout is refused and
+    ``ValueError`` on a root with learn work (Stage B answers a learn prompt; K3d-exp)."""
+    if np.any(np.asarray(state.learn_level)):
+        raise ValueError("rank_actions: a Stage A root carries no learn work")
     legal = np.flatnonzero(np.asarray(decision_actions(tables, state)))
     k = int(state.faint_budget)
     protected = np.asarray(state.protected)

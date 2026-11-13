@@ -267,3 +267,15 @@ def test_moves_that_read_the_whole_move_list_are_unsupported(request, game, move
     names = request.getfixturevalue("names" if game == "tables" else "kaizo_names")
     assert int(tables.move_effect[names.move(move)]) == EffectId.UNSUPPORTED
 
+
+def test_kaizo_row_359_scans_to_its_last_column(kaizo_tables, kaizo_names):
+    """T6 review Minor 4: Kaizo Absol (row 359) is the one 21-entry row, with no end marker
+    in the tables; its last entry is Shadow Sneak at 99. A prompt there, then the give-up,
+    runs the cursor past the last column (both engines)."""
+    tables, names = kaizo_tables, kaizo_names
+    absol = _mon(names, "Absol", 99, moves=("Bite", "Slash", "Pursuit", "Megahorn"))
+    s = _advance(tables, _mark(_state(tables, names, absol), 0, 99))
+    assert int(tables.species_form_row[names.species("Absol"), 0]) == 359
+    assert int(s.learn_cursor[0]) == 20 and _prompted_move(tables, names, s, 0) == "Shadow Sneak"
+    out = _learn(tables, s, GIVE_UP)
+    assert int(out.learn_level[0]) == 0 and not bool(needs_learn(out))

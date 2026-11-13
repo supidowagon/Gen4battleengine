@@ -20,7 +20,7 @@ from nuzline.engine.levelup import GIVE_UP, advance_learns, learn, needs_learn
 from nuzline.engine.state import SLOTS, BattleState
 from nuzline.engine.step import EXP_REFUSED_WINDOW_C, needs_replacement
 
-__all__ = ["learn_policy", "learn_reason", "resolve_learns", "settle_learns"]
+__all__ = ["learn_policy", "learn_reason", "resolve_learns", "settle_learns", "settle_reason"]
 
 _I32 = jnp.int32
 
@@ -75,6 +75,26 @@ def settle_learns(tables: Tables, state: BattleState, send, carried_mul):
 
     state, refused, _ = jax.lax.while_loop(cond, body, (state, jnp.bool_(False), jnp.int32(0)))
     return state, refused | (state.exp_refused != 0)
+
+
+_resolve_jit = jax.jit(resolve_learns)
+
+
+def settle_reason(tables: Tables, state: BattleState, send_reason, carried_mul):
+    """``(reason, state)``: ``settle_learns`` on the concrete ``state``, outside ``jit``
+    (``playout.refusal_reason``'s pending root): ``resolve_learns``, then, where the
+    opponent needs a replacement and the player does not, ``send_reason``
+    (``playout._send_reason``, the concrete ``send_replacements``) with the carried
+    ``powerMul`` (``carried_mul``) and ``replace_mul`` cleared after it. ``reason`` is that
+    send's refusal, else ``learn_reason``, else ``None``."""
+    state = _resolve_jit(tables, state)
+    need = needs_replacement(state)
+    if int(need[1]) == 1 and int(need[0]) == 0:
+        reason, state = send_reason(tables, state, False, int(carried_mul(state)))
+        if reason:
+            return reason, state
+        state = state._replace(replace_mul=jnp.zeros_like(state.replace_mul))
+    return learn_reason(state), state
 
 
 def learn_reason(state: BattleState) -> str | None:
