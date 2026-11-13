@@ -404,6 +404,21 @@ For each turn, `tools/trace_to_state.py` works out the following:
   (bit 6) when `BtlCmd_TryProtection` failed: the converter sets `Outcome.protect` to 0
   then, else 1 (a success; a chain of 0 or a user acting last ignores the roll). A move it
   blocked writes no `hit` record and its `move_end` has `MOVE_STATUS_PROTECTED` (bit 15).
+- **Level-ups and learn-move prompts.** The engine pays exp and levels inside `step`
+  (`engine/levelup.py`); `apply_turn` then runs the learnset scans and answers the turn's
+  learn-move prompts (`Turn.learn_choices`) before the replacements, as the decomp's
+  `TurnEnd` does (battle_controller_player.c:1846-1848). The per-turn fit replays no answer
+  and leaves the moves and PP of a slot with a pending prompt uncompared; then, from the
+  chosen candidate, the converter searches the answers depth first, prompt by prompt in the
+  engine's order (player slot ascending), each over giving up and every slot whose move is
+  not an HM (the game's only rule, `Item_IsHMMove`, src/item.c:306-315), not the search's
+  masks. The first answers that match the next record win. A slot whose move a prompt
+  replaced this turn shows the new move's PP; it counts as used when the side's `hit` or
+  `move_end` records name its old move. Refused: an answer that replaces a move the AI has
+  seen (the AI's move-id list keeps the old id, trainer_ai.c:2705-2716), another option
+  `levelup.learn_options` masks, and any move the engine does not support learned by an
+  answer or into an empty slot (ruling D10). A party file whose exp is not of its level is
+  refused too.
 - **Quick Claw.** `speedRand` is not dumped. For a side whose start-of-turn active Pokemon
   holds a Quick Claw, the converter replays both values of the start state's `qc_roll`
   (the draw that orders this turn: the battle start's on turn 0, else the previous turn's
@@ -481,6 +496,8 @@ previous turn, so they are carried forward and never checked:
   `wish_hp`, `future_timer`, `future_damage`, `trainer_items`, `trainer_item_count`
 - field: `weather_timer`, `trick_room`, `gravity`, `mud_sport`
 - hidden draws: `qc_roll` (fitted, see Quick Claw above)
+- experience: `exp`, `evs`, `exp_mask` and the learn fields (the trace has no exp;
+  `level`, `max_hp`, `hp`, `moves` and `pp` check the level-ups and learns)
 - bookkeeping: `turn` (the final record at `RESULT` comes before `totalTurns++`, so it
   would always differ by one), `over`, `winner`, `player_faints`, `ai_seen_moves`,
   `ai_ability_known`

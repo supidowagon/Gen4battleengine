@@ -1126,7 +1126,10 @@ def _refit(tables: Tables, turns: list[Turn], fits: list[_Turn]) -> BattleState 
     order), replay turn ``i`` with it and infer turns ``i+1 .. j`` again as usual (Quick
     Claw write-backs included). The first that explains every turn ``i .. j`` (without
     worsening turn ``i-1``) replaces ``turns``/``fits`` in place, and its next start state
-    is returned; ``None`` keeps the original."""
+    is returned; ``None`` keeps the original. Skipping ties that replay to a state already
+    tried (``_fit_key``) only saves time; the no-worsening guard is a conservative
+    check. Neither has its own test, nor has the five-turn bound
+    (``_LOOK_BACK``, docs/tracing.md "Known limits")."""
     j = len(turns) - 1
     for i in range(j - 1, max(j - 1 - _LOOK_BACK, -1), -1):
         seen = {_fit_key(f) for f in fits[i].ties() if f.index == fits[i].chosen}

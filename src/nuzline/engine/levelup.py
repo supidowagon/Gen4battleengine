@@ -399,7 +399,12 @@ def learn(tables: Tables, state: BattleState, option) -> BattleState:
     same level from the next entry (``SEQ_GET_EXP_LEARNED_MOVE_WAIT`` and
     ``SEQ_GET_EXP_GIVE_UP_LEARNING_WAIT`` -> ``SEQ_GET_EXP_CHECK_LEARN_MOVE``,
     bs.c:10132-10135, :10183-10187). Every option is applied as given: ``learn_options`` is
-    the search's mask, not a game rule here (the converter fits all non-HM options)."""
+    the search's mask, not a game rule here (the converter fits all non-HM options). This
+    is not exact for every option: replacing a slot the AI has seen leaves
+    ``ai_seen_moves[slot, k]`` set, while the decomp's AI keeps the old move's id in its
+    list (``TrainerAI_RecordLastMove``, src/battle/trainer_ai/trainer_ai.c:2705-2716) and
+    does not know the new move; the converter therefore refuses a recorded answer that
+    ``learn_options`` masks (``tools.trace_to_state._learn_refusal``)."""
     slot = _learner(state)
     cursor = state.learn_cursor[slot]
     move = tables.learnset_move[_row(tables, state, slot), cursor]

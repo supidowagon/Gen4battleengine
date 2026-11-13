@@ -52,13 +52,22 @@ x outcome probability; player choices are excluded. Child kinds:
   turn or is a leaf. A group at a learn-move prompt (K3d-exp design §3.5: the turn's
   child stops there, ``expand._turn``) is a **learn decision** (``decision == "learn"``),
   handled the same way: a max node over ``levelup.learn_options`` (the D2 and pin masks
-  drop legal game choices, so its value is an achievable lower bound; ruling D2), no AI
+  drop legal game choices, so its value is an achievable lower bound, ruling D2, apart from
+  the limitation below), no AI
   distribution, expanded by ``expand_learns`` (the answer, then the opponent's
   replacement with the turn's carried ``powerMul``), its children again pending decisions
   when another prompt or a player replacement follows. A root may be either; the AI
   distribution is then required only after the root's answer, and an answer whose AI is
   refused (or has a sampling-only pair) is dropped from the ranking with the reason. A
   root's unscanned learn work is scanned first (``advance_learns``, deterministic).
+
+  Known limitation: the learn node sits after the whole turn's outcome, while the decomp
+  can prompt mid-turn, at a payout in ``MoveEnd``, ``CheckFieldConditions`` or
+  ``CheckMonConditions`` (battle_controller_player.c:3968, :941, :1296), before a later draw
+  of the turn such as Shed Skin's (battle_lib.c:3567-3570, from
+  battle_controller_player.c:1354-1355). The answer is then chosen knowing that draw, so in
+  that rare case the node's value is an upper bound, not an achievable lower bound
+  (``STATE.md``, "Experience").
 
 A node classifies in this order: refused, terminal, failed, pruned, learn decision,
 replacement decision, leaf, decision. Learn work at a finished battle is no prompt (ruling
@@ -662,7 +671,8 @@ class _Solver:
             reasons = reasons or ai_path_refusals(self.tables, state, self.names)
             raise UnsupportedAi(
                 "; ".join(reasons)
-                or f"the AI's action distribution after every {self._root.decision} is refused"
+                or "the AI's action distribution is refused after every root "
+                + {"learn": "learn-move answer"}.get(self._root.decision, self._root.decision)
             )
 
     def _drop_sampling_only(self, node: _Node, dropped: dict[int, str]) -> None:

@@ -252,6 +252,31 @@ Roark's moves, the AI's reads of the K3b2 mechanics, six-Pokemon switching, and 
 candidate of both saves against each of Roark's six is accepted by the AI and its exact
 distribution equals the loose oracle (`tests/kaizo/test_roark_ai_audit.py`).
 
+K3d (experience, level-up and learning moves, `.superpowers` design K3d-exp, both
+engines) adds these refusals, under the coverage category `experience` (`coverage.
+exp_refusals`, `learnable_moves`). None is reached by the Roark fight on either save:
+- a player Pokemon below level 100 whose exp multiplier is unresolved (`exp_boost` 0: a
+  party not read from a save with its trainer, so the original-trainer test cannot run);
+- a player Pokemon holding Exp. Share, Lucky Egg, a Power item, Macho Brace or Soothe Bell
+  while any Pokemon in the fight has an item-moving move: the payout reads the party's item,
+  which a battle item change leaves behind (ruling D9);
+- a player Pokemon that can level, with a nonzero egg location, in a fight with Return or
+  Frustration (the friendship bonus reads the battle map; ruling D6);
+- a player Pokemon that can level and could use Transform, Mimic or Power Trick (the
+  level-up reload, battle_lib.c:173-191);
+- an empty move slot with PP Ups (a move learned there would inherit them);
+- a move the Pokemon can learn by level-up in the fight, graded like a move it knows
+  (effect, AI, terrain, ROM change). An unsupported move is refused only when it could be
+  learned into an empty move slot without a prompt; if every slot that could take it is
+  full, the game only asks, and the engine gives it up instead (ruling D10: the plan is then
+  an achievable lower bound);
+- a payout inside the opponent's replacement that leaves learn work (a newcomer fainted by
+  the hazards; `exp_refused`, design §3.3 window (c)) refuses that line of the search;
+- the trace converter (`tools/trace_to_state.py`) refuses a recording in which the player
+  learned a move the engine does not support (ruling D10), replaced a move the AI had
+  already seen, or answered with another option the search masks (the disabled, locked,
+  choice-locked or selected move), and a party file whose exp is not of its level.
+
 What the Kaizo AI still refuses (reached by no Roark fight; a later split's milestone):
 - a Kaizo trainer whose `ai_flags` is not exactly BASIC, EVAL_ATTACK, EXPERT and RISKY
   (`0b10111`), including every TagStrategy (flag 7) trainer (plan K3c Ruling 10);
@@ -295,7 +320,8 @@ Nature Power, Camouflage and Secret Power in that fight: 41 of the 46 Kaizo trai
 know one of them, until a terrain is settled (a K3 end decision).
 
 The overlay14 change 0x022249CC-0x022249CD (the AI script's second Levitate compare in
-`Basic_CheckForImmunity` tests Dry Skin 87) is `modelled` since K3c. Still to come: K3d, the
-golden trace and acceptance. Known blind spot: Kaizo field-script command
+`Basic_CheckForImmunity` tests Dry Skin 87) is `modelled` since K3c. K3d (done, 2026-11-13): exp,
+level-ups and learn prompts in both engines; the golden trace
+`tests/golden/kaizo_roark_02.json` replays with no mismatch. Known blind spot: Kaizo field-script command
 0x3F (map headers 257 and 321, common script 9019) sets a party status that persists into
 fights on any map; coverage sees it only if the save was taken after that script.

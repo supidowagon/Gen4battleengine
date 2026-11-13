@@ -153,10 +153,15 @@ Do this only after Claude has confirmed the address check. It uses the same prac
    Run. Talk to Roark. The console prints `trace: located ...`, then `trace: turn N` each
    turn.
 4. Rules for a usable recording:
-   - Lead with your first Pokemon, and fight until Roark's last Pokemon faints.
-   - Your Pokemon may faint: the converter replays your replacement. Avoid a turn on
-     which both sides lose their active Pokemon, or on which the Pokemon you send in
-     faints at once to Stealth Rock: such a turn cannot be converted.
+   - Lead with your first Pokemon (the one `LOCATE_SPECIES` names). Whether you win or
+     lose does not matter: the recording ends where the battle ends, and every turn up to
+     there is converted.
+   - Your Pokemon may faint: the converter replays faints and the Pokemon you send in
+     (K3d-exp T1), and level-ups, including a move you learn or give up (T9). Avoid a turn
+     on which both sides lose their active Pokemon, or on which the Pokemon you send in
+     faints at once to Stealth Rock: such a turn cannot be converted. A move learned that
+     the engine does not support, or one replacing a move the opponent has already seen
+     you use, is refused at conversion: give such a move up.
    - Use only moves and switches, never an item from your bag.
    - Fight at least 3 turns.
    If a rule breaks, click Stop, **File > Load State > 2**, and start again from step 3.

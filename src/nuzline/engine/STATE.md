@@ -214,6 +214,16 @@ three structs has a row.
     always gives the move up, ruling D3). The scan, auto-learns and prompts run after `step`,
     before any faint replacement (`levelup.advance_learns` / `learn`,
     `search.learn.resolve_learns`); prompts pending when the battle ends stay (ruling D8).
+  - Known limitation (T8 review M1): Stage B's learn node comes after the whole turn's
+    outcome (`expand._turn`), but the decomp can prompt mid-turn, at a payout in `MoveEnd`
+    (battle_controller_player.c:3968), `CheckFieldConditions` (:941) or `CheckMonConditions`
+    (:1296), before a later draw of the same turn such as Shed Skin's
+    (`BattleSystem_RandNext(battleSys) % 10 < 3`, battle_lib.c:3567-3570, run from
+    `MON_COND_CHECK_STATE_ABILITY`, battle_controller_player.c:1354-1355). The search then
+    picks the answer knowing that draw, which the player cannot, so in that case the learn
+    node's value is an upper bound, not an achievable lower bound. It needs a chance event
+    after a mid-turn payout in the same turn; the replayed state stays exact, only the
+    choice is better informed than the player's.
 - **Not from a struct field.** `pursuit_target` and `wish_hp` are
   `BattleState`'s own bookkeeping: the decomp derives Pursuit's pre-switch hit
   from per-turn scratch (the opposing battler's selected move when a switch is
