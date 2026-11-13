@@ -1,0 +1,48 @@
+# python -m benchmarks.line_roark --deaths 1 --seed 0 --n 4000; seed 0, deaths 1, commit f0546b223ecdc15f760d5e56ecf5b2fe48f6de37
+
+[[team]]
+pokemon = "Prinplup"
+item = "Quick Claw"
+
+[[team]]
+pokemon = "Wormadam"
+moves = ["Leech Life", "Nature Power", "Camouflage", "Toxic"]
+
+[[team]]
+pokemon = "Rhyhorn"
+
+[[team]]
+pokemon = "Delibird"
+
+[[team]]
+pokemon = "Sandshrew"
+item = "Oran Berry"
+
+[[rule]]
+against = "Lileep"
+use = "Wormadam"
+move = "Leech Life"
+
+[[rule]]
+against = "Gible"
+use = "Delibird"
+move = "Powder Snow"
+via = "Rhyhorn"
+
+[[rule]]
+against = "Corsola"
+use = "Wormadam"
+move = "Leech Life"
+first = "Toxic"
+via = "Prinplup"
+
+[[rule]]
+against = "Shuckle"
+use = "Wormadam"
+move = "Leech Life"
+first = "Toxic"
+
+[[rule]]
+against = "Cranidos"
+use = "Sandshrew"
+move = "Dig"
