@@ -305,6 +305,22 @@ def _bundle(tmp_path: Path, names, records, party=PARTY) -> Path:
     return out
 
 
+V1_FORMAT = "nuzline-golden-trace/1"
+V2_PARTY_KEYS = ("exp", "exp_boost", "pokerus", "friend_bonus")
+
+
+def _v1_bundle(path: Path) -> Path:
+    """The bundle at ``path`` rewritten as ``nuzline-golden-trace/1`` wrote it: that
+    format's tag, and party entries without the keys ``/2`` added."""
+    bundle = json.loads(path.read_text(encoding="utf-8"))
+    bundle["format"] = V1_FORMAT
+    for mon in bundle["party"]:
+        for key in V2_PARTY_KEYS:
+            mon.pop(key, None)
+    path.write_text(json.dumps(bundle), encoding="utf-8")
+    return path
+
+
 @pytest.fixture(scope="module")
 def engine_trace(tables, names):
     return _engine_trace(tables, names)
@@ -849,8 +865,7 @@ def test_a_version_1_bundle_replays_through_the_golden_test(tables, names, engin
     # The vanilla regression of tests/test_golden.py on a synthetic nuzline-golden-trace/1
     # bundle: it runs in every suite, while tests/golden/roark_01.json may be absent.
     records, _ = engine_trace
-    path = _bundle(tmp_path, names, records)
-    assert json.loads(path.read_text(encoding="utf-8"))["format"] == "nuzline-golden-trace/1"
+    path = _v1_bundle(_bundle(tmp_path, names, records))
     turns = trace_to_states(path, tables, names)
     assert len(turns) == len(SCRIPT) + 1
     assert replay_mismatches(tables, turns) == []
@@ -1048,6 +1063,54 @@ def test_a_secondary_confusion_is_refitted_from_later_self_hits(
     _same_states(turns, states)
     assert int(turns[0].outcome.secondary[0, 0]) == 1
     assert int(turns[0].outcome.duration[0]) == 3
+
+
+def _refit_stub(n_turns: int = 2):
+    """``turns``/``fits`` stand-ins for ``_refit``: turn 0 has two tied fits (0 chosen),
+    and the last turn is unexplained."""
+    from types import SimpleNamespace
+
+    def alt(index):
+        return SimpleNamespace(index=index, qc=(0, 0), state=(np.full(1, index),))
+
+    fits = [SimpleNamespace(chosen=0, state="stale start", ties=lambda: [alt(0), alt(1)])]
+    fits += [SimpleNamespace(chosen=0, ties=list) for _ in range(n_turns - 1)]
+    turns = [SimpleNamespace(state="current start", mismatched=()) for _ in range(n_turns)]
+    turns[-1].mismatched = ("hp",)
+    return turns, fits
+
+
+def test_a_refit_trial_that_raises_is_discarded(monkeypatch):
+    # T1 review Minor 1: a TraceError inside a trial (no roll fits, a double KO, ...)
+    # discards that trial; the conversion keeps the original turns.
+    import tools.trace_to_state as tts
+
+    def accept(*args):
+        raise tts.TraceError("the trial's replay cannot give the record")
+
+    monkeypatch.setattr(tts, "_accept", accept)
+    turns, fits = _refit_stub()
+    before = list(turns)
+    assert tts._refit(None, turns, fits) is None
+    assert turns == before
+
+
+def test_a_refit_trial_starts_from_the_turns_current_qc_roll(monkeypatch):
+    # T1 review Minor 2: an earlier refit may have rewritten turn i's start qc_roll (and
+    # redrawn turn i-1); the trial compares its alternative with that state, not with the
+    # stale one its _Turn was built from.
+    import tools.trace_to_state as tts
+
+    starts = []
+
+    def accept(tables, turns, fits, inference, fit):
+        starts.append(inference.state)
+        raise tts.TraceError("stop after the first accept")
+
+    monkeypatch.setattr(tts, "_accept", accept)
+    turns, fits = _refit_stub()
+    tts._refit(None, turns, fits)
+    assert starts == ["current start"]
 
 
 @pytest.mark.slow

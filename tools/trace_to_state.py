@@ -3,7 +3,8 @@
 ``tools/trace_battle.lua`` records a raw trace (JSON lines) in DeSmuME. This module
 bundles it with the player's party and the trainer id into one JSON file
 (``tests/golden/*.json``: extracted battle state only, never ROM bytes), and
-``trace_to_states`` turns a bundle into ``(state, actions, outcome)`` per turn for
+``trace_to_states`` turns a bundle into a ``ReplayTurn`` per turn (state, actions,
+outcome, the player's replacement slot and the move-learn choices) for
 ``tests/test_golden.py``. The formats, the RAM layout and the inference rules are in
 ``docs/tracing.md``.
 
@@ -939,21 +940,42 @@ def _refit(tables: Tables, turns: list[Turn], fits: list[_Turn]) -> BattleState 
             if alt.index == fits[i].chosen or key in seen:
                 continue  # the chosen one, or one replaying to a state already tried
             seen.add(key)
-            new_turns, new_fits = turns[:i], fits[:i]
-            trial = copy.copy(fits[i])
-            state = _accept(tables, new_turns, new_fits, trial, alt)
-            for k in range(i + 1, j + 1):
-                inference = _Turn(tables, state, fits[k].after, fits[k].events, k)
-                state = _accept(tables, new_turns, new_fits, inference, inference.infer())
-                if not _explained(new_turns[-1], inference):
-                    break
-            else:
-                if i and len(new_turns[i - 1].mismatched) > len(turns[i - 1].mismatched):
-                    continue
-                if all(_explained(t, f) for t, f in zip(new_turns[i:], new_fits[i:])):
-                    turns[:], fits[:] = new_turns, new_fits
-                    return state
+            trial = _trial(tables, turns, fits, i, alt)
+            if trial is None:
+                continue
+            new_turns, new_fits, state = trial
+            if i and len(new_turns[i - 1].mismatched) > len(turns[i - 1].mismatched):
+                continue
+            turns[:], fits[:] = new_turns, new_fits
+            return state
     return None
+
+
+def _trial(tables: Tables, turns: list[Turn], fits: list[_Turn], i: int, alt: _Fit):
+    """``_refit``'s trial of ``alt`` for turn ``i``: ``(turns, fits, next start state)``
+    when the replay explains every turn ``i .. len(turns)-1``, else ``None`` (also when a
+    re-inferred turn raises ``TraceError``: a trial the replay cannot give is discarded
+    like one that mismatches). ``turns``/``fits`` are not changed."""
+    new_turns, new_fits = turns[:i], fits[:i]
+    trial = copy.copy(fits[i])
+    # Turn i's start qc_roll as it stands now: an earlier refit may have rewritten it and
+    # redrawn turn i-1, so ``_accept`` must compare ``alt`` with that value.
+    trial.state = turns[i].state
+    try:
+        state = _accept(tables, new_turns, new_fits, trial, alt)
+        if not _explained(new_turns[-1], trial):
+            return None
+        for k in range(i + 1, len(turns)):
+            inference = _Turn(tables, state, fits[k].after, fits[k].events, k)
+            state = _accept(tables, new_turns, new_fits, inference, inference.infer())
+            if not _explained(new_turns[-1], inference):
+                return None
+    except TraceError:
+        return None
+    # A later turn's Quick Claw write-back replays (and may unexplain) the turn before it.
+    if not all(_explained(t, f) for t, f in zip(new_turns[i:], new_fits[i:])):
+        return None
+    return new_turns, new_fits, state
 
 
 def _fit_key(fit: _Fit) -> tuple:

@@ -468,8 +468,8 @@ previous turn, so they are carried forward and never checked:
 
 - per slot: `form`, `stats` (only max HP is dumped), `types`, `ability`,
   `ability_slot`, `item_consumed`, `gender`, `friendship`, `ivs`
-- volatiles: `confusion` (fitted from self-hits by the refit above), `leech_seed`, `substitute_hp`, `taunt`, `trapped`,
-  `trap_move`, `flinched`, `choice_lock`, `last_move`, `protect_count`,
+- volatiles: `confusion` (fitted from self-hits by the refit above), `leech_seed`,
+  `substitute_hp`, `taunt`, `trapped`, `trap_move`, `flinched`, `choice_lock`, `last_move`, `protect_count`,
   `rollout_count`, `charge_turn`, `recharge`, `pursuit_target`, `water_sport`,
   `fake_out_turn`, `move_hit`
 - side conditions: `spikes`, `toxic_spikes`, `stealth_rock`, `reflect`,
