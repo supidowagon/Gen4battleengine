@@ -269,7 +269,8 @@ exp_refusals`, `learnable_moves`). None is reached by the Roark fight on either 
   (effect, AI, terrain, ROM change). An unsupported move is refused only when it could be
   learned into an empty move slot without a prompt; if every slot that could take it is
   full, the game only asks, and the engine gives it up instead (ruling D10: the plan is then
-  an achievable lower bound);
+  an achievable lower bound, except the mid-turn-prompt case, where a learn node can be
+  possibly optimistic; `src/nuzline/engine/STATE.md`, Experience);
 - a payout inside the opponent's replacement that leaves learn work (a newcomer fainted by
   the hazards; `exp_refused`, design §3.3 window (c)) refuses that line of the search;
 - the trace converter (`tools/trace_to_state.py`) refuses a recording in which the player

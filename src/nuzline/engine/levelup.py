@@ -370,7 +370,7 @@ def learn_options(tables: Tables, state: BattleState) -> jnp.ndarray:
       battle_script.c:10007-10027); as a prompt the player may always give it up.
 
     The D2, pin and D10 masks drop legal game choices, so plan values at learn nodes are
-    achievable lower bounds (``STATE.md``)."""
+    achievable lower bounds, except the mid-turn-prompt case (``STATE.md``, Experience)."""
     slot = _learner(state)
     moves = state.moves[0, slot]
     width = tables.learnset_level.shape[1]

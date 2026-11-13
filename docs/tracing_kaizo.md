@@ -130,7 +130,7 @@ your save. For reference, each turn the file has:
 - `party[0]` to `party[5]`: your party as the script decodes it (species number, level,
   HP and moves).
 
-## Part 3: recording the Roark fight (K3d, later)
+## Part 3: recording the Roark fight (K3d)
 
 Do this only after Claude has confirmed the address check. It uses the same practice copy
 (Part 1).
@@ -159,9 +159,11 @@ Do this only after Claude has confirmed the address check. It uses the same prac
    - Your Pokemon may faint: the converter replays faints and the Pokemon you send in
      (K3d-exp T1), and level-ups, including a move you learn or give up (T9). Avoid a turn
      on which both sides lose their active Pokemon, or on which the Pokemon you send in
-     faints at once to Stealth Rock: such a turn cannot be converted. A move learned that
-     the engine does not support, or one replacing a move the opponent has already seen
-     you use, is refused at conversion: give such a move up.
+     faints at once to Stealth Rock: such a turn cannot be converted. Conversion refuses
+     a learned move the engine does not support, and a learned move that replaces one of
+     these: a move the opponent has already seen you use, or, on the Pokemon in battle, a
+     disabled move, the move it is locked into (a multi-turn move or a Choice item), or the
+     move you selected that turn when it has not run yet. Give such a move up instead.
    - Use only moves and switches, never an item from your bag.
    - Fight at least 3 turns.
    If a rule breaks, click Stop, **File > Load State > 2**, and start again from step 3.

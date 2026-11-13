@@ -385,14 +385,14 @@ Test: `tests/engine/test_resist_berries.py`.
 ### Task 14: Close K3b1
 
 - [ ] **Step 1:** Rebuild both games' tables and run the full suite (the controller runs it).
-- [ ] **Step 2:** Run `uv run nuzline coverage --game kaizo --save "G:\Farry\Downloads\Platinum
-  Kaizo Base.dsv" --trainer roark --cap 16` and record every remaining line. Expected: the K3c AI
+- [ ] **Step 2:** Run `uv run nuzline coverage --game kaizo --save <pre-Roark save>
+  --trainer roark --cap 16` and record every remaining line. Expected: the K3c AI
   lines, `Kaizo ROM: 1 code changes unclassified`, and only K3b2 mechanics: Thunder Fang,
   Protect, Present, Attract, Cute Charm, Quick Claw, Roar, Nature Power, Camouflage, and the two
   terrain ROM conditions. Anything else is a gap to fix here.
 - [ ] **Step 3:** Update `docs/kaizo/pipeline.md` ("What is refused") and spec §4 with one line
   per landed group. Write the K3b2 handover in
-  `C:\Users\Farry\AppData\Local\Claude-Data\claude_pzs8sxrjxfjjc\side-session-notes\local_a4231f03-556b-4b7f-bc82-38b27d410c76\kaizo-k3a\k3b1-handover.md`.
+  the session notes (`kaizo-k3a/k3b1-handover.md`, kept outside the repository).
   Commit `docs(kaizo): K3b1 done`.
 
 ---
