@@ -37,8 +37,10 @@ of every start is kept. ``restarts`` kicks follow, each from the best kept line 
 (``_pick``): ``kick_foes`` distinct foes (one ``numpy.random.default_rng`` seeded by
 ``key_data(fold_in(key, RESTART_SALT))``) each get "no rule" or one of their last joint
 race's top rules, uniformly, and the ascent starts again. At the end ``_pick`` scores the
-distinct kept lines on one batch of ``accept_n`` fresh keys (none when only one was kept)
-and takes the best by ``score(k)``. The chosen line is scored once more on ``final_n``
+distinct kept lines on one batch of ``pick_n`` fresh keys (none when only one was kept)
+and takes the best by ``score(k)``; each kick's ``_pick`` does the same. ``pick_n`` is
+well above ``accept_n``: kept lines are often a point or two apart, which ``accept_n``
+keys cannot separate. The chosen line is scored once more on ``final_n``
 hold-out keys (``fold_in(key, HOLD_OUT_SALT)``); only these odds are reported.
 
 Every search batch has its own key ``fold_in(key, c)``, ``c`` counting batches from 0
@@ -112,6 +114,7 @@ class LineSearchSettings:
     # cumulative keys 64, 256, 512
     race: tuple[tuple[int, int | None], ...] = ((64, None), (192, 16), (256, 4))
     accept_n: int = 768  # fresh keys for the one challenger vs the incumbent
+    pick_n: int = 4000  # fresh keys for the kept lines at each ``_pick`` (kick start, end)
     max_sweeps: int = 12
     restarts: int = 1  # kicks from the best line
     kick_foes: int = 2
@@ -414,7 +417,7 @@ def _pick(run: _Run, seen: list[tuple[Line, str]]) -> tuple[Line, str]:
     pool = list(distinct.values())
     if len(pool) == 1:
         return pool[0]
-    odds = run.evaluate([line for line, _ in pool], run.settings.accept_n)
+    odds = run.evaluate([line for line, _ in pool], run.settings.pick_n)
     kept = run.kept([line for line, _ in pool], odds) or range(len(pool))
     return pool[max(kept, key=lambda i: odds[i].score(run.k))]
 

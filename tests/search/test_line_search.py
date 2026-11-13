@@ -411,12 +411,14 @@ def test_best_seen_is_kept(tables, names, monkeypatch):
 
     monkeypatch.setattr(line_search, "_ascend", ascend)
     monkeypatch.setattr(line_search, "_kick", kick)
-    settings = LineSearchSettings(accept_n=100, restarts=1, final_n=50)
+    settings = LineSearchSettings(accept_n=100, pick_n=300, restarts=1, final_n=50)
     result = find_line(tables, names, s, KEY, settings)
     assert len(kicked_from) == 1 and _same(kicked_from[0], lines["A"])
     assert _same(result.line, lines["A"])
-    end_pick = fake.calls[-2]
-    assert end_pick[1] == 100 and len(end_pick[0]) == 3
+    # Both picks (the kick's start, the end) score the kept lines on ``pick_n`` keys.
+    kick_pick, end_pick = fake.calls[0], fake.calls[-2]
+    assert kick_pick[1] == 300 and len(kick_pick[0]) == 2
+    assert end_pick[1] == 300 and len(end_pick[0]) == 3
     assert result.sweeps == 3
 
 
@@ -440,11 +442,11 @@ def test_best_seen_on_a_noisy_search(tables, names, monkeypatch):
 
     monkeypatch.setattr(line_search, "_ascend", recording)
     settings = LineSearchSettings(
-        race=((16, None), (32, 4), (64, 2)), accept_n=96, restarts=2, final_n=64
+        race=((16, None), (32, 4), (64, 2)), accept_n=96, pick_n=160, restarts=2, final_n=64
     )
     result = find_line(tables, names, s, KEY, settings)
     lines, n, _, odds = fake.calls[-2]
-    assert n == settings.accept_n
+    assert n == settings.pick_n
     distinct = []
     for e in ends:
         if not any(_same(e, d) for d in distinct):
@@ -461,7 +463,9 @@ def _rule_of_foe_0(line) -> tuple[int, int, int]:
     return int(line.use[0]), int(line.move[0]), int(line.first[0])
 
 
-REFUSED_SETTINGS = LineSearchSettings(race=((100, None),), accept_n=200, restarts=0, final_n=100)
+REFUSED_SETTINGS = LineSearchSettings(
+    race=((100, None),), accept_n=200, pick_n=200, restarts=0, final_n=100
+)
 
 
 def _often_refused_search(

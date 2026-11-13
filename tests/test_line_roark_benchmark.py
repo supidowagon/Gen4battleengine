@@ -29,10 +29,25 @@ def test_private_cli_names_still_work():
         assert getattr(cli, old) is getattr(cli, new)
 
 
-@pytest.mark.parametrize("argv", [["--n", "0"], ["--deaths", "4"], ["--budget", "-1"]])
+@pytest.mark.parametrize(
+    "argv", [["--n", "0"], ["--deaths", "4"], ["--budget", "-1"], ["--sweeps", "0"]]
+)
 def test_bad_flags_exit_before_any_work(argv):
     from benchmarks import line_roark
 
     with pytest.raises(SystemExit) as e:
         line_roark.main(argv)
     assert e.value.code == 2
+
+
+def test_defaults_run_without_a_time_limit(monkeypatch):
+    # The recorded run stops on sweeps, not on the clock: --budget defaults to none.
+    from benchmarks import line_roark
+
+    seen = []
+    monkeypatch.setattr(cli, "configure_cpu_devices", lambda n: None)
+    monkeypatch.setattr(line_roark, "run", lambda args: seen.append(args) or 0)
+    assert line_roark.main([]) == 0
+    assert line_roark.main(["--sweeps", "3", "--budget", "60"]) == 0
+    assert (seen[0].budget, seen[0].sweeps) == (None, 8)
+    assert (seen[1].budget, seen[1].sweeps) == (60, 3)

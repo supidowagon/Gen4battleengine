@@ -143,12 +143,15 @@ with common random numbers:
    if it scores strictly better. A winning `via` is then polished over `from`.
 3. Sweeps repeat until one changes nothing, 12 sweeps, or the time budget.
 4. The line at the end of every sweep is kept; `restarts` "kicks" reset two random foes of the
-   best line and ascend again; the kept lines are compared on one fresh batch.
+   best line and ascend again; the kept lines are compared on 4000 fresh keys (`pick_n`), both to
+   choose a kick's start and at the end. Kept lines are often a point or two apart, which 768
+   keys cannot separate (measured on Kaizo Roark: a 768-key pick kept a line tied with the
+   user's although an earlier kept line scored 47.5 % to 45.75 % on 20 000 shared keys).
 5. The chosen line is scored once more on `final_n` keys the search never saw. Only these numbers
    are reported: picking the best of many noisy scores flatters the pick, a fresh sample does not.
 
 Defaults (`LineSearchSettings`): race ((64, all), (192, 16), (256, 4)), `accept_n` 768,
-`max_sweeps` 12, `restarts` 1, `final_n` 2000, `budget_seconds` None. A sweep costs about 73 000
+`pick_n` 4000, `max_sweeps` 12, `restarts` 1, `final_n` 2000, `budget_seconds` None. A sweep costs about 73 000
 playouts (about 200 s on 20 CPU devices).
 
 The search is a heuristic: it finds a good line, not the best one, and its report says so. It

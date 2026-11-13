@@ -1,4 +1,4 @@
-"""``nuzline line odds`` and ``nuzline line find`` (L1 spec §6, plan Task 5)."""
+"""``nuzline line odds`` and ``nuzline line find`` (L1 spec Â§6, plan Task 5)."""
 
 import os
 from pathlib import Path
@@ -179,7 +179,10 @@ def test_line_find_writes_out(tmp_path, tables, names, capsys, monkeypatch):
     monkeypatch.setattr(line_search, "find_line", fake)
     out_path = tmp_path / "found.toml"
     args = ["line", "find", *BASE, "--line", _file(tmp_path), "--out", str(out_path)]
-    assert main([*args, "--restarts", "0", "--final-n", "100", "--sweeps", "2"]) == 0
+    assert (
+        main([*args, "--restarts", "0", "--final-n", "100", "--sweeps", "2", "--pick-n", "500"])
+        == 0
+    )
     captured = capsys.readouterr()
     assert "[line] sweep 1: stub" in captured.err
     out = captured.out
@@ -196,6 +199,7 @@ def test_line_find_writes_out(tmp_path, tables, names, capsys, monkeypatch):
     assert '[[rule]]\nagainst = "geodude"' in out.lower()  # vanilla names are upper case
     ((settings, start),) = seen
     assert (settings.restarts, settings.final_n, settings.max_sweeps) == (0, 100, 2)
+    assert settings.pick_n == 500
     assert start is not None and int(start.use[0]) == 2 and int(start.use[1]) == 1
     file = read_line_file(out_path)
     assert file.team == ()

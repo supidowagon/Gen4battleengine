@@ -2,7 +2,7 @@
 section 7): the user's line, the line the search finds and the empty line, scored together.
 
     uv run python -m benchmarks.line_roark [--n 4000] [--deaths 1] [--seed 0] [--devices N]
-        [--budget 1800]
+        [--sweeps 8] [--budget SECONDS]
 
 The fight is ``nuzline line``'s (``cli.line_setup``): Kaizo Leader Roark (trainer id 246),
 the team of ``benchmarks/lines/kaizo_roark_user.toml`` from the pre-Roark save (its path from
@@ -10,7 +10,9 @@ the team of ``benchmarks/lines/kaizo_roark_user.toml`` from the pre-Roark save (
 ``--deaths K``. Then:
 
 1. ``find_line`` from the EMPTY line (the user's rules are not its start) with the default
-   ``LineSearchSettings`` but ``budget_seconds=--budget`` and ``final_n=--n``.
+   ``LineSearchSettings`` but ``max_sweeps=--sweeps``, ``budget_seconds=--budget`` and
+   ``final_n=--n``. With no ``--budget`` (the default) where the search stops does not
+   depend on the machine's speed or load, so a recorded run can be repeated.
 2. One ``evaluate_lines(..., refused="exclude")`` call scores the user's line, the found line
    and the empty line on the same ``--n`` hold-out keys, ``fold_in(PRNGKey(seed),
    line_search.HOLD_OUT_SALT)``: keys no search batch used. With ``final_n = --n`` these are
@@ -27,7 +29,8 @@ the team of ``benchmarks/lines/kaizo_roark_user.toml`` from the pre-Roark save (
 When the search or the shared scoring raises ``UnsupportedAi`` (a line refused in every
 playout), the benchmark prints ``refused:``,
 writes the JSON with what is known so far (the search's result if it finished) and exits 2.
-The defaults (``--n 4000``, ``--deaths 1``, ``--budget 1800``) are the controller's choice.
+The JSON records every search setting (``pick_n`` included). The defaults (``--n 4000``,
+``--deaths 1``, ``--sweeps 8``, no ``--budget``) are the controller's choice.
 
 A heuristic search: the found line is a good line, not a proven best.
 """
@@ -134,7 +137,9 @@ def run(args) -> int:
     for line in cli.team_lines(setup):
         _say(line)
 
-    settings = line_search.LineSearchSettings(budget_seconds=args.budget, final_n=args.n)
+    settings = line_search.LineSearchSettings(
+        max_sweeps=args.sweeps, budget_seconds=args.budget, final_n=args.n
+    )
     key = jax.random.PRNGKey(args.seed)
     commit = _commit()
     command = "python -m benchmarks.line_roark " + " ".join(sys.argv[1:])
@@ -285,12 +290,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--deaths", type=int, default=1, help="player faints allowed, 0..3")
     parser.add_argument("--seed", type=int, default=0, help="PRNG seed")
     parser.add_argument("--devices", type=int, default=os.cpu_count(), help="host CPU devices")
+    parser.add_argument("--sweeps", type=int, default=8, help="most sweeps per start")
     parser.add_argument(
-        "--budget", type=float, default=1800, help="search seconds after which no race starts"
+        "--budget",
+        type=float,
+        default=None,
+        help="search seconds after which no race starts (default: no limit)",
     )
     args = parser.parse_args(argv)
-    if args.n < 1 or args.devices < 1 or args.budget < 0:
-        parser.error("--n and --devices must be at least 1, --budget not negative")
+    if args.n < 1 or args.devices < 1 or args.sweeps < 1:
+        parser.error("--n, --devices and --sweeps must be at least 1")
+    if args.budget is not None and args.budget < 0:
+        parser.error("--budget must not be negative")
     if not 0 <= args.deaths <= cli.MAX_DEATHS:
         parser.error(f"--deaths must be between 0 and {cli.MAX_DEATHS}")
     cli.configure_cpu_devices(args.devices)  # before jax is imported (run imports it)

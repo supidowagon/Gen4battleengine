@@ -50,8 +50,9 @@
   the mean turns and the share of turns the default player decided. ``--protect`` names a
   team member by species or 0-based team index.
 * ``nuzline line find`` (the same flags without ``--n``) ``[--out FILE] [--budget SECONDS]
-  [--restarts N] [--final-n N] [--sweeps N]``: the line search (``search.line_search``;
-  the file's rules, if any, are its first start), progress as ``[line]`` lines on stderr,
+  [--restarts N] [--final-n N] [--pick-n N] [--sweeps N]``: the line search
+  (``search.line_search``; ``--pick-n`` the keys comparing its kept lines; the file's
+  rules, if any, are its first start), progress as ``[line]`` lines on stderr,
   then the found line with the same block from ``--final-n`` hold-out playouts and its
   ``[[rule]]`` TOML; ``--out`` gets the file's ``[[team]]`` and the found rules. A
   heuristic: a good line, not a proven best. Both ``line`` commands leave refused
@@ -454,6 +455,9 @@ def _parser() -> argparse.ArgumentParser:
     )
     find.add_argument(
         "--final-n", type=int, default=None, help="hold-out playouts of the found line (2000)"
+    )
+    find.add_argument(
+        "--pick-n", type=int, default=None, help="playouts comparing the kept lines (4000)"
     )
     find.add_argument("--sweeps", type=int, default=None, help="most sweeps per start (12)")
     trainers = sub.add_parser("trainers", help="list trainer ids, names and classes")
@@ -1233,6 +1237,7 @@ def _line_find(args) -> int:
     for flag, value, least in (
         ("--restarts", args.restarts, 0),
         ("--final-n", args.final_n, 1),
+        ("--pick-n", args.pick_n, 1),
         ("--sweeps", args.sweeps, 1),
     ):
         if value is not None and value < least:
@@ -1251,6 +1256,7 @@ def _line_find(args) -> int:
         given = {
             "restarts": args.restarts,
             "final_n": args.final_n,
+            "pick_n": args.pick_n,
             "max_sweeps": args.sweeps,
             "budget_seconds": args.budget,
         }
