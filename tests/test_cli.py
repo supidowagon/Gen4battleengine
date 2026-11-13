@@ -413,6 +413,27 @@ def test_rank_with_save(save_path, capsys):
     assert "Switch" in capsys.readouterr().out
 
 
+def test_a_fight_from_a_save_resolves_the_exp_boost_with_its_trainer(
+    tmp_path, tables, names, monkeypatch
+):
+    # K3d-exp T3: the fight's player specs come from SaveMon.to_spec with the save's
+    # trainer (cli._fight), so exp_boost is resolved (100 for the save's own Pokemon).
+    from nuzline.saves.pkm import SaveMon
+    from tests.saves.synthetic import write_save
+
+    specs = []
+    to_spec = SaveMon.to_spec
+
+    def spy(self, tables, trainer=None):
+        specs.append(to_spec(self, tables, trainer))
+        return specs[-1]
+
+    monkeypatch.setattr(SaveMon, "to_spec", spy)
+    path = write_save(tmp_path, tables, names)
+    assert main(["coverage", "--save", str(path), "--trainer", "roark"]) == 0
+    assert specs and {s.exp_boost for s in specs} == {100}
+
+
 def test_save_egg_first_is_dropped(tmp_path, tables, names, capsys):
     from tests.saves.synthetic import write_save
 

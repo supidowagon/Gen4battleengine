@@ -16,6 +16,15 @@ class PokemonSpec:
     (sleep turns left). ``pp`` (current PP per move slot) and ``stats`` (the stored
     in-game stats, ``ids.Stat`` order with max HP first) override the table PP and
     the ``calc_stats`` result when not ``None``.
+
+    Experience (K3d-exp): ``exp`` is ``MON_DATA_EXPERIENCE`` (``None``: the base of
+    ``level``). ``exp_boost`` is the exp multiplier in percent the battle applies to this
+    Pokemon (``BattleScript_GetExpTask``, battle_script.c:9757-9763): 100 when the player
+    is its original trainer, else 150, or 170 when its language differs from the ROM's;
+    0 means unresolved (``SaveMon.to_spec`` without the trainer). A hand-typed party is
+    the user's own, so 100 is the default. ``pokerus`` is 1 when the Pokerus byte is
+    nonzero (``Pokemon_HasPokerus``, pokemon.c:4184-4199); ``friend_bonus`` is 1 for a
+    Pokemon caught in a Luxury Ball (``Pokemon_UpdateFriendship``, pokemon.c:2664-2666).
     """
 
     species: int
@@ -34,3 +43,7 @@ class PokemonSpec:
     status_counter: int = 0
     pp: tuple[int, int, int, int] | None = None
     stats: tuple[int, ...] | None = None
+    exp: int | None = None
+    exp_boost: int = 100
+    pokerus: int = 0
+    friend_bonus: int = 0

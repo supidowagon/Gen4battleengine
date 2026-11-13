@@ -69,7 +69,10 @@ from nuzline.saves.save import SaveFile
 from nuzline.saves.status import decode_status
 
 INTERMEDIATE = Path(__file__).resolve().parents[1] / "data" / "intermediate"
-BUNDLE_FORMAT = "nuzline-golden-trace/1"
+# /2 (K3d-exp): party entries carry exp, exp_boost, pokerus and friend_bonus. A /1 bundle
+# still loads: its entries lack them and get the PokemonSpec defaults.
+BUNDLE_FORMAT = "nuzline-golden-trace/2"
+BUNDLE_FORMATS = ("nuzline-golden-trace/1", BUNDLE_FORMAT)
 
 # The BattleState fields a ``turn`` record fills; tests/test_golden.py compares them.
 COMPARED_FIELDS: tuple[str, ...] = (
@@ -860,8 +863,8 @@ def convert_bundle(bundle: dict, tables: Tables, names: Names) -> list[Turn]:
     end. A turn the best candidate does not explain is refitted from an earlier turn's
     tied candidates (``_refit``)."""
     del names  # ids throughout; kept for the plan's signature
-    if bundle.get("format") != BUNDLE_FORMAT:
-        raise TraceError(f"not a {BUNDLE_FORMAT} bundle")
+    if bundle.get("format") not in BUNDLE_FORMATS:
+        raise TraceError(f"not a {' or '.join(BUNDLE_FORMATS)} bundle")
     game = bundle.get("game", VANILLA)
     trainer = _trainer(bundle["trainer_id"], game)
     player = [_spec(d) for d in bundle["party"]]
@@ -1029,7 +1032,8 @@ def bundle_trace(
     """A raw trace plus the player's party, the trainer id and the game (and, when given, the
     battle's ``terrain``: ``battle_terrain``). ``party`` is a
     party TOML or a loaded save, whose party becomes the specs (``SaveMon.to_spec`` with
-    ``game``'s tables); an egg there is left out with a note on stderr, as
+    ``game``'s tables and the save's trainer, which resolves ``exp_boost``; the save is
+    read in place, never copied); an egg there is left out with a note on stderr, as
     ``nuzline fight --save`` does (an egg never enters a battle)."""
     from nuzline.data.party import load_party
 
@@ -1043,7 +1047,7 @@ def bundle_trace(
             if mon.is_egg:
                 print(f"party slot {slot}: egg left out", file=sys.stderr)
             else:
-                specs.append(mon.to_spec(tables))
+                specs.append(mon.to_spec(tables, party.trainer))
     else:
         specs = load_party(party, names)
     lines = Path(raw).read_text(encoding="utf-8").splitlines()

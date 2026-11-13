@@ -50,25 +50,35 @@ def mon_record(
     is_egg=False,
     nickname_codes=(0xFFFF,),
     party=None,
+    language=2,
+    ot_name_codes=(0xFFFF,),
+    ot_gender=0,
+    pokerus=0,
+    pokeball=4,
+    egg_location_dp=0,
+    egg_location_pt=0,
 ) -> bytes:
     """An encrypted 136-byte record, or 236 bytes when ``party`` is a dict with
     ``status``, ``level``, ``hp`` and ``stats`` (ids.Stat order, max HP first).
 
     ``exp=None`` means the experience of ``level``. ``nature`` is not applied: the
-    caller picks ``personality`` (see :func:`personality_for`).
+    caller picks ``personality`` (see :func:`personality_for`). ``ot_name_codes`` is
+    padded with ``EOS`` to 8 codes; with the defaults (``ot_id`` 0, ``ot_gender`` 0, an
+    empty name, English) the record's OT is ``build_image``'s default trainer.
     """
     if exp is None:
         t = _tables()
         exp = int(t.exp_table[int(t.species_exp_rate[species]), level])
     rec = bytearray(236 if party is not None else 136)
     rec[0:4] = personality.to_bytes(4, "little")
-    a, b, c = 8, 40, 72
+    a, b, c, d = 8, 40, 72, 104
     rec[a : a + 2] = species.to_bytes(2, "little")
     rec[a + 2 : a + 4] = item.to_bytes(2, "little")
     rec[a + 4 : a + 8] = ot_id.to_bytes(4, "little")
     rec[a + 8 : a + 12] = exp.to_bytes(4, "little")
     rec[a + 12] = friendship
     rec[a + 13] = ability
+    rec[a + 0x0F] = language
     for i, j in enumerate(_STAT_TO_STORED):
         rec[a + 0x10 + i] = evs[j]
     for i, m in enumerate(moves):
@@ -82,6 +92,14 @@ def mon_record(
     codes = list(nickname_codes) + [0xFFFF] * (11 - len(nickname_codes))
     for i, code in enumerate(codes[:11]):
         rec[c + 2 * i : c + 2 * i + 2] = code.to_bytes(2, "little")
+    rec[b + 0x1C : b + 0x1E] = egg_location_pt.to_bytes(2, "little")
+    ot = list(ot_name_codes) + [0xFFFF] * (8 - len(ot_name_codes))
+    for i, code in enumerate(ot[:8]):
+        rec[d + 2 * i : d + 2 * i + 2] = code.to_bytes(2, "little")
+    rec[d + 0x16 : d + 0x18] = egg_location_dp.to_bytes(2, "little")
+    rec[d + 0x1A] = pokerus
+    rec[d + 0x1B] = pokeball
+    rec[d + 0x1C] = ot_gender << 7
     if party is not None:
         rec[136:140] = party["status"].to_bytes(4, "little")
         rec[140] = party["level"]
@@ -123,6 +141,8 @@ def build_image(
     trainer_name_codes=(),
     tid=0,
     sid=0,
+    trainer_gender=0,
+    trainer_language=2,
     badges=0,
     counters=((1, 1, 1), None),
     party_count=None,
@@ -141,6 +161,8 @@ def build_image(
     for i, code in enumerate(codes[: L.TRAINER_NAME_LEN]):
         normal[L.TRAINER_NAME + 2 * i : L.TRAINER_NAME + 2 * i + 2] = code.to_bytes(2, "little")
     normal[L.TRAINER_ID : L.TRAINER_ID + 4] = (tid | (sid << 16)).to_bytes(4, "little")
+    normal[L.TRAINER_GENDER] = trainer_gender
+    normal[L.TRAINER_GENDER + 1] = trainer_language  # TrainerInfo.language
     normal[L.BADGES] = badges
     normal[L.PARTY_COUNT - 4 : L.PARTY_COUNT] = L.PARTY_MAX.to_bytes(4, "little")
     count = len(party) if party_count is None else party_count

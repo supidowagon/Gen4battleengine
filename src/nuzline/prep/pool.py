@@ -50,6 +50,11 @@ class Candidate:
     tms: tuple[tuple[int, int], ...]
     nickname: str = ""
 
+    @property
+    def exp(self) -> int | None:
+        """The Pokemon's exp at the cap (``level_to_cap``)."""
+        return self.spec.exp
+
 
 def _label(location: tuple[str, int, int], species: str) -> str:
     kind, box, slot = location
@@ -71,7 +76,7 @@ def pool_candidates(
             left_out.append(f"{label}: egg left out")
             continue
         try:
-            spec = level_to_cap(mon, tables, cap)
+            spec = level_to_cap(mon, tables, cap, save.trainer)
         except RecordError as e:
             left_out.append(f"{label}: left out ({e})")
             continue

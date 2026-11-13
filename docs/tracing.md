@@ -18,7 +18,11 @@ The pipeline has three stages:
    committed. Raw traces belong in `traces/`, which is git-ignored. For Kaizo, pass
    `--game kaizo --save <save.dsv>` instead of `--party`: the party is read from the
    save (`SaveMon.to_spec`), and the trainer and tables come from the Kaizo data set,
-   which the bundle records as `"game"` (`docs/tracing_kaizo.md`).
+   which the bundle records as `"game"` (`docs/tracing_kaizo.md`). The bundle format is
+   `nuzline-golden-trace/2`: each party entry also carries `exp`, `exp_boost`, `pokerus`
+   and `friend_bonus` (`PokemonSpec`; `exp_boost` is resolved with the save's trainer,
+   the OT test of `BattleSystem_PokemonIsOT`). A `/1` bundle still loads, with the
+   `PokemonSpec` defaults for those keys (the base exp of the level, boost 100, 0, 0).
 3. `trace_to_states(bundle, tables, names)` rebuilds the turn-0 state from the party and
    the trainer, overlays each recorded turn, and infers both actions and the `Outcome` of
    every turn. The golden test replays those turns.

@@ -63,6 +63,11 @@ def test_candidates(pool_save, tables, names, learnsets):
     assert kricketot.tms == ()
     tm10 = names.item("TM10")
     assert cands[0].tms == ((tm10, names.move("Hidden Power")),)
+    # K3d-exp T3: exp at the cap (the base exp of the cap for the boxed, raised ones) and
+    # the boost resolved with the save's trainer (the synthetic records are its own).
+    rates, table = tables.species_exp_rate, tables.exp_table
+    assert [c.exp for c in cands] == [int(table[int(rates[c.spec.species]), 16]) for c in cands]
+    assert [c.spec.exp_boost for c in cands] == [100] * 4
 
 
 def test_egg_is_left_out(tmp_path, tables, names, learnsets):

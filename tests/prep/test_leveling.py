@@ -96,3 +96,34 @@ def test_shedinja_to_cap(tables, names):
     state = make_state(tables, [spec], [spec])
     assert int(state.max_hp[0, 0]) == 1 and int(state.hp[0, 0]) == 1
     assert Status.NONE == spec.status
+
+
+def _base_exp(tables, species: int, level: int) -> int:
+    return int(tables.exp_table[int(tables.species_exp_rate[species]), level])
+
+
+def test_a_raised_mon_has_the_caps_base_exp(tables, names):
+    # Rare Candy: exp += Pokemon_GetExpToNextLevel (item_use_pokemon.c:291-293), so the
+    # result is the next level's base exactly (pokemon.c:2308-2319).
+    sp = names.species("Pikachu")
+    exp = _base_exp(tables, sp, 12) + 40
+    mon = _mon(tables, names, "Pikachu", 12, exp=exp, moves=(names.move("Tackle"), 0, 0, 0))
+    assert mon.experience == exp
+    assert level_to_cap(mon, tables, 16).exp == _base_exp(tables, sp, 16)
+
+
+def test_a_mon_at_or_above_the_cap_keeps_its_exp(tables, names):
+    sp = names.species("Pikachu")
+    for level in (16, 20):
+        exp = _base_exp(tables, sp, level) + 3
+        mon = _mon(tables, names, "Pikachu", level, exp=exp, moves=(names.move("Tackle"), 0, 0, 0))
+        assert level_to_cap(mon, tables, 16).exp == exp
+
+
+def test_level_to_cap_resolves_the_boost_with_the_trainer(tables, names):
+    from nuzline.saves.save import SaveTrainer
+
+    mon = _mon(tables, names, "Pikachu", 12, moves=(names.move("Tackle"), 0, 0, 0))
+    me = SaveTrainer(id=0, gender=0, name_codes=(0xFFFF,) * 8, rom_language=2)
+    assert level_to_cap(mon, tables, 16, me).exp_boost == 100
+    assert level_to_cap(mon, tables, 16).exp_boost == 0

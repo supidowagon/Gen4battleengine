@@ -44,9 +44,11 @@ from tools.trace_to_state import (
     TraceError,
     TraceMismatch,
     _fields,
+    _spec,
     _Turn,
     bundle_trace,
     convert,
+    convert_bundle,
     decode_status,
     decode_weather,
     initial_state,
@@ -1253,6 +1255,9 @@ def test_bundle_from_save(kaizo_save_pre_roark_path, kaizo_names):
     assert [m["species"] for m in b["party"]] == [27, 180, 403, 37, 118, 52]
     assert b["game"] == KAIZO
     assert [r["command"] for r in b["records"]] == [4, 41]
+    # K3d-exp T3: the save's own Pokemon (OT) and their stored exp.
+    assert [m["exp_boost"] for m in b["party"]] == [100] * 6
+    assert [m["exp"] for m in b["party"]] == [m.experience for m in save.party]
 
 
 def test_bundle_from_save_leaves_eggs_out(tables, names, tmp_path, capsys):
@@ -1264,9 +1269,28 @@ def test_bundle_from_save_leaves_eggs_out(tables, names, tmp_path, capsys):
     save = load_save(write_save(tmp_path, tables, names, egg_first=True))
     assert save.party[0].is_egg
     b = bundle_trace(RAW_FIXTURE, save, names, ROARK_ID)
-    want = [m.to_spec(tables) for m in save.party[1:]]
+    want = [m.to_spec(tables, save.trainer) for m in save.party[1:]]
     assert [m["species"] for m in b["party"]] == [m.species for m in want]
     assert "party slot 0: egg left out" in capsys.readouterr().err
+    # K3d-exp T3: /2 entries carry the exp fields, the boost resolved with the save's
+    # trainer (the synthetic records are its own: 100).
+    assert b["format"] == "nuzline-golden-trace/2"
+    assert [_spec(m) for m in b["party"]] == want
+    assert [m["exp"] for m in b["party"]] == [m.experience for m in save.party[1:]]
+    assert {m["exp_boost"] for m in b["party"]} == {100}
+
+
+def test_bundle_formats_1_and_2(tables, names):
+    # A /2 bundle's entries carry the exp fields; a /1 entry lacks them and loads with the
+    # PokemonSpec defaults (the level's base exp, boost 100, no Pokerus, no Luxury Ball).
+    b = bundle_trace(RAW_FIXTURE, PARTY, names, ROARK_ID)
+    assert b["format"] == "nuzline-golden-trace/2"
+    assert all(set(V2_PARTY_KEYS) <= set(m) for m in b["party"])
+    v1 = {k: v for k, v in b["party"][0].items() if k not in V2_PARTY_KEYS}
+    spec = _spec(v1)
+    assert (spec.exp, spec.exp_boost, spec.pokerus, spec.friend_bonus) == (None, 100, 0, 0)
+    with pytest.raises(TraceError, match="nuzline-golden-trace/1 or nuzline-golden-trace/2"):
+        convert_bundle({**b, "format": "nuzline-golden-trace/3"}, tables, names)
 
 
 def test_vanilla_bundle_records_its_game(names):

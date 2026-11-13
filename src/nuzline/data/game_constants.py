@@ -300,6 +300,8 @@ CONSTANTS: tuple[Constant, ...] = (
     # Items (generated/items.txt, line N is id N-1); prep looks Heart Scale up by name.
     Constant("nuzline.prep.problem.HEART_SCALE", "item", 93, "Heart Scale", _E),
     Constant("nuzline.engine.coverage.ITEM_GRISEOUS_ORB", "item", 112, "Griseous Orb", _E),
+    # saves/pkm.py: the Luxury Ball friendship bonus (PokemonSpec.friend_bonus).
+    Constant("nuzline.saves.pkm.ITEM_LUXURY_BALL", "item", 11, "Luxury Ball", _E),
     # Hold effects (generated/item_hold_effects.txt, line N is id N-1):
     # HOLD_EFFECT_POWER_UP_SE (96) and HOLD_EFFECT_SPEED_DOWN_GROUNDED (106).
     Constant("nuzline.ai.commands.ITEM_EXPERT_BELT", "item", 268, "Expert Belt", _E, 96),

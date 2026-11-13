@@ -12,6 +12,10 @@ species'), ``friendship`` (omitted means the form's base friendship), ``status``
 needs ``status = "sleep"``), ``pp`` (current PP, one value per listed move, padded with 0
 to four slots; omitted means the table PP) and ``stats`` (six stored stats, max HP first,
 in the ``ivs`` order; omitted means computed from level, IVs, EVs and nature).
+
+Experience (``PokemonSpec``): ``exp`` (total experience; omitted means the base of the
+level), ``exp_boost`` (100, 150 or 170: the exp multiplier in percent; omitted means 100,
+the user's own Pokemon), ``pokerus`` and ``friend_bonus`` (0 or 1; omitted means 0).
 """
 
 from __future__ import annotations
@@ -33,6 +37,29 @@ def _six(entry: dict, key: str) -> tuple[int, int, int, int, int, int]:
     if key == "stats" and any(not 1 <= v <= 999 for v in values):
         raise ValueError(f"{entry['species']}: stats must be 1-999, got {list(values)}")
     return values  # type: ignore[return-value]
+
+
+EXP_BOOSTS = (100, 150, 170)  # BattleScript_GetExpTask, battle_script.c:9757-9763
+
+
+def _exp_fields(entry: dict) -> dict:
+    """``exp``, ``exp_boost``, ``pokerus`` and ``friend_bonus`` (module docstring)."""
+    out: dict = {}
+    if "exp" in entry:
+        out["exp"] = int(entry["exp"])
+        if out["exp"] < 0:
+            raise ValueError(f"{entry['species']}: exp must be 0 or more, got {out['exp']}")
+    out["exp_boost"] = int(entry.get("exp_boost", 100))
+    if out["exp_boost"] not in EXP_BOOSTS:
+        raise ValueError(
+            f"{entry['species']}: exp_boost must be one of {list(EXP_BOOSTS)}, "
+            f"got {out['exp_boost']}"
+        )
+    for key in ("pokerus", "friend_bonus"):
+        out[key] = int(entry.get(key, 0))
+        if out[key] not in (0, 1):
+            raise ValueError(f"{entry['species']}: {key} must be 0 or 1, got {out[key]}")
+    return out
 
 
 def _status(entry: dict) -> tuple[int, int]:
@@ -117,6 +144,7 @@ def _spec(entry: dict, names: Names) -> PokemonSpec:
         status_counter=status_counter,
         pp=pp,  # type: ignore[arg-type]
         stats=_six(entry, "stats") if "stats" in entry else None,
+        **_exp_fields(entry),
     )
 
 

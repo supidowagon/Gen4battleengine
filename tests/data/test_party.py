@@ -138,3 +138,32 @@ def test_party_toml_form_ability_and_friendship(tmp_path, names):
     assert mon.friendship == names.species_base_friendship(487, 1)
     with pytest.raises(ValueError, match="cannot have ability 'Pressure'"):
         _party(tmp_path, names, 'species = "Giratina"\nform = "Origin"', ability="Pressure")
+
+
+def test_party_toml_exp_fields(tmp_path, names):
+    # K3d-exp T3: omitted means the level's base exp, the OT's boost 100, 0 and 0.
+    shinx = _SHINX.format(nature="Hardy", ability="Rivalry")
+    f = tmp_path / "p.toml"
+    f.write_text(shinx, encoding="utf-8")
+    (mon,) = load_party(f, names)
+    assert (mon.exp, mon.exp_boost, mon.pokerus, mon.friend_bonus) == (None, 100, 0, 0)
+    f.write_text(shinx + "exp = 140\nexp_boost = 170\npokerus = 1\nfriend_bonus = 1\n")
+    (mon,) = load_party(f, names)
+    assert (mon.exp, mon.exp_boost, mon.pokerus, mon.friend_bonus) == (140, 170, 1, 1)
+
+
+@pytest.mark.parametrize(
+    ("line", "match"),
+    [
+        ("exp = -1", "exp must be 0 or more"),
+        ("exp_boost = 0", "exp_boost must be one of"),
+        ("exp_boost = 120", "exp_boost must be one of"),
+        ("pokerus = 2", "pokerus must be 0 or 1"),
+        ("friend_bonus = 3", "friend_bonus must be 0 or 1"),
+    ],
+)
+def test_party_toml_bad_exp_fields(tmp_path, names, line, match):
+    f = tmp_path / "p.toml"
+    f.write_text(_SHINX.format(nature="Hardy", ability="Rivalry") + line + "\n")
+    with pytest.raises(ValueError, match=match):
+        load_party(f, names)
