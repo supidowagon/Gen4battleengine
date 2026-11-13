@@ -21,6 +21,7 @@ repository root. Use single-quoted literal strings for Windows paths.
 | `kaizo_docs` | `NUZLINE_KAIZO_DOCS` | no | none |
 | `kaizo_save` | `NUZLINE_KAIZO_SAVE` | no | none |
 | `kaizo_save_pre_roark` | `NUZLINE_KAIZO_SAVE_PRE_ROARK` | no | none (`.sav` or DeSmuME `.dsv`) |
+| `kaizo_save_probe` | `NUZLINE_KAIZO_SAVE_PROBE` | no | none (DeSmuME `.dsv`) |
 
 A hash mismatch stops the build with the path, the expected hash and the actual hash.
 Tests that need a local input skip when it is absent.

@@ -63,6 +63,7 @@ def test_a_neighbours_offset_fails(kaizo_inputs, symbols, game, swap):
     assert bad == set(swap)
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("game", ["platinum_us", "platinum_kaizo_nightmare_final"])
 def test_no_field_accepts_another_fields_offset(kaizo_inputs, symbols, game):
     pytest.importorskip("capstone")

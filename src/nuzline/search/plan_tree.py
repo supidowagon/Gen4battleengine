@@ -22,6 +22,11 @@ the line's outcome in ``render`` and as ``kind`` in ``to_json``. Without an oppo
 a depth-0 (Stage A) leaf stands for every foe reply, valued by Stage A's playouts (whose
 foe is the AI), and a refused node for a state whose AI is not modelled. ``render`` shows
 no plan at depth 0 (its footer says so); ``to_json`` keeps the leaves.
+
+A learn decision (``PlanNode.decision == "learn"``, K3d-exp) names its answers ``learn
+Slash over Tackle`` or ``give up Slash`` (``stage_b.learn_label``): the move offered is
+``PlanNode.learn_move``, the move it replaces comes from the observation (the prompted
+slot is the lowest with ``learn_level``), and at a learn root from the ranking's labels.
 """
 
 from __future__ import annotations
@@ -33,6 +38,7 @@ import numpy as np
 from nuzline.data.tables import Names
 from nuzline.engine.actions import MOVE_ACTIONS
 from nuzline.engine.ids import Status
+from nuzline.engine.levelup import GIVE_UP
 from nuzline.engine.observe import (
     ACT_DISABLED,
     ACT_ITEM,
@@ -46,16 +52,19 @@ from nuzline.engine.observe import (
 from nuzline.engine.state import SLOTS
 from nuzline.engine.step import WINNER_PLAYER
 from nuzline.jaxcache import code_version
-from nuzline.search.stage_b import PlanNode, SolveResult
+from nuzline.search.stage_b import PlanNode, SolveResult, learn_label
 
 __all__ = ["distribution_line", "label", "render", "to_json"]
 
 _FIELDS = dict(OBS_FIELDS)
 # (flag, text) in the order a message sequence reads; ``hits`` and ``crit`` are special.
 _FLAG_TEXT = (
+    ("quick_claw", "Quick Claw activated"),
     ("missed", "missed"),
     ("no_target", "no target"),
     ("full_para", "fully paralyzed"),
+    ("in_love", "is in love"),
+    ("immobilized", "is immobilized by love"),
     ("flinched", "flinched"),
     ("asleep", "is fast asleep"),
     ("woke", "woke up"),
@@ -66,6 +75,9 @@ _FLAG_TEXT = (
     ("snapped_out", "snapped out of confusion"),
     ("self_hit", "hurt itself in confusion"),
     ("contact_ability", "ability triggered"),
+    ("protected", "the foe protected itself"),
+    ("protect_ok", "protected itself"),
+    ("protect_failed", "but it failed"),
 )
 _STATUS_TEXT = {
     Status.SLEEP: "SLP",
@@ -116,6 +128,15 @@ def _side_text(f: dict, names: Names, side: int, who: str, trainer: str) -> str:
         details.append(f"hit {hits} times")
     if np.any(f["crit"].reshape(2, -1)[side]):
         details.append("crit")
+    heal = int(f["present_heal"][side])  # Present's heal path (engine.observe)
+    if heal:
+        details.append("the foe regained health" if heal == 1 else "the foe's HP is full")
+    called = int(f["called"][side])  # Nature Power's call (engine.observe)
+    if called:
+        details.insert(0, f"it turned into {names.move_names[called]}")
+    dragged = int(f["dragged"][1 - side])  # this side's Roar dragged the foe's slot in
+    if dragged:
+        details.append(f"{_species(names, f, 1 - side, dragged - 1)} was dragged out")
     if kind == ACT_MOVE:
         head = f"{who} used {names.move_names[act]}"
     elif kind == ACT_TAUNTED:
@@ -153,15 +174,29 @@ def label(
     battle) it adds ``(death d of k allowed)`` or, past the budget, ``(death d, over the
     k allowed)``, ``d`` counting the fainted slots beyond ``n``. ``prev_mine`` (the
     player's active slot before the turn) names ``you sent in X`` when the active changed
-    without a switch action: a replacement."""
+    without a switch action: a replacement. A Pokemon the foe's Roar dragged in (``dragged``)
+    is told in the Roar user's text ("X was dragged out"), not as a send-out; an opponent that
+    moved before being dragged out is named from ``prev_opp`` (the slot it acted from), or
+    "the foe" without it."""
     f = decode(obs)
     opp_slot, my_slot = int(f["active"][1]), int(f["active"][0])
     opp = _species(names, f, 1, opp_slot)
-    sides = [(1, opp), (0, "you")]
+    dragged = [int(f["dragged"][side]) - 1 for side in (0, 1)]  # the slot dragged in, or -1
+    actor = opp
+    if dragged[1] >= 0:  # the opponent acted (if at all) before the drag: its earlier slot
+        actor = _species(names, f, 1, prev_opp) if prev_opp is not None else "the foe"
+    sides = [(1, actor), (0, "you")]
     if int(f["order"][0]) == 0:
         sides.reverse()
     parts = [t for s, who in sides if (t := _side_text(f, names, s, who, trainer))]
-    if prev_opp is not None and prev_opp != opp_slot:
+    if dragged[1] >= 0:
+        # The dragged-in Pokemon (named in the Roar user's text) fainted to the hazards, and
+        # the replacement came in after the turn.
+        if int(f["opp_pixels"][dragged[1]]) == 0:
+            parts.append(f"{_species(names, f, 1, dragged[1])} fainted")
+        if opp_slot != dragged[1]:
+            parts.append(f"{trainer} sent out {opp}")
+    elif prev_opp is not None and prev_opp != opp_slot:
         if int(f["opp_pixels"][prev_opp]) == 0:
             parts.append(f"{_species(names, f, 1, prev_opp)} fainted")
         if int(f["act_kind"][1]) != ACT_SWITCH:
@@ -181,7 +216,12 @@ def label(
                 f" (death {d} of {k} allowed)" if d <= k else f" (death {d}, over the {k} allowed)"
             )
         parts.append(text)
-    elif prev_mine is not None and prev_mine != my_slot and int(f["act_kind"][0]) != ACT_SWITCH:
+    elif (
+        prev_mine is not None
+        and prev_mine != my_slot
+        and int(f["act_kind"][0]) != ACT_SWITCH
+        and my_slot != dragged[0]
+    ):
         parts.append(f"you sent in {_species(names, f, 0, my_slot)}")
     total = f"/{max_hp[my_slot]}" if max_hp is not None else ""
     mine = f"you {hp}{total} HP"
@@ -218,6 +258,7 @@ _COND_TEXT = {
     "curled": "curled up",
     "bide_turns": "storing energy",
     "mud_sport": "Mud Sport",
+    "aqua_ring": "Aqua Ring",
     "spikes": "Spikes",
     "toxic_spikes": "Toxic Spikes",
 }
@@ -280,14 +321,15 @@ def _differences(f: dict, others: list[dict], names: Names) -> list[str]:
 def _action_label(f: dict | None, names: Names, a: int, root, labels: dict[int, str]) -> str:
     """The label of player action ``a`` at a node: from the ranking at the root
     (``labels``), else from the node's observation (switch targets, Struggle from the PP
-    it shows) and the root state's moves."""
+    it shows) and its moves (``player_moves``)."""
     if f is None:
         return labels.get(a, f"action {a}")
     mon = int(f["active"][0])
     if a >= MOVE_ACTIONS:
         return f"Switch -> {_species(names, f, 0, a - MOVE_ACTIONS)}"
     if root is not None:
-        moves = np.asarray(root.moves)[0, mon]
+        # The node's own moves (a level-up can have changed them since the root).
+        moves = f["player_moves"][mon * 4 : mon * 4 + 4]
         pp = f["player_pp"][mon * 4 : mon * 4 + 4]
         if not np.any((moves > 0) & (pp > 0)):
             return "Struggle"
@@ -314,6 +356,13 @@ def _unique(labels: list[str], kinds: list[str], observed: list[bool], marks: bo
         if count[key] > 1:
             out[i] = f"{out[i]} #{count[key]}"
     return out
+
+
+def _learn_option_label(f: dict, names: Names, move: int, option: int) -> str:
+    """Learn ``option`` at a learn decision whose observation is ``f`` (module docstring)."""
+    slot = int(np.flatnonzero(f["learn_level"] > 0)[0])
+    forgotten = 0 if option == GIVE_UP else int(f["player_moves"][slot * 4 + option])
+    return learn_label(names, move, forgotten, option)
 
 
 class _Walk:
@@ -378,6 +427,8 @@ class _Walk:
 
     def action_label(self, node: PlanNode, a: int) -> str:
         f = None if node.obs is None else decode(node.obs)
+        if node.decision == "learn" and f is not None and node.learn_move is not None:
+            return _learn_option_label(f, self.names, node.learn_move, a)
         return _action_label(f, self.names, a, self.root, self.labels)
 
 
@@ -419,6 +470,7 @@ def _node_json(
         },
         "opp_action": node.opp_action,
         "replacement": node.replacement,
+        "decision": node.decision,
         "action": None if node.action is None else int(node.action),
         "action_label": None if node.action is None else walk.action_label(node, node.action),
         "values": {walk.action_label(node, a): float(v) for a, v in node.values.items()},

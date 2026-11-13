@@ -23,11 +23,24 @@ VANILLA = "platinum_us"
 KAIZO = "platinum_kaizo_nightmare_final"
 
 
+# enum Language (include/constants/versions.h:23-26): LANGUAGE_ENGLISH = 2.
+LANGUAGE_ENGLISH = 2
+
+
 @dataclass(frozen=True)
 class Game:
+    """``rom_language`` is the ROM's ``gGameLanguage`` (src/game_version.c:4), a build
+    constant: ``-DGAME_LANGUAGE=LANGUAGE_ENGLISH`` (meson.build:74) for the US ROM, game
+    code ``CPUE`` (platinum.us/rom_rev1.ini:4). Kaizo (game code ``JAK7``,
+    docs/kaizo/rom_diff.md:19) stores ``LANGUAGE_ENGLISH`` in its ``gGameLanguage`` byte
+    (tests/tools/rom/test_game_language.py); its ROM diff has no entry for it.
+    The exp boost compares a Pokemon's language with it (battle_script.c:9758), never
+    with the save's trainer-language byte."""
+
     id: str
     tables_dir: Path
     intermediate_dir: Path
+    rom_language: int = LANGUAGE_ENGLISH
 
 
 GAMES: dict[str, Game] = {

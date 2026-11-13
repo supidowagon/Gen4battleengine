@@ -3,7 +3,8 @@ actions and chance outcomes.
 
 Everything stays inside the M1 implemented set: species from ``M1_SPECIES``, moves
 from their level-up learnsets with a supported effect (``move_effect !=
-UNSUPPORTED``), their own abilities (all implemented), Oran/Sitrus Berry or no item;
+UNSUPPORTED``), their own abilities (all implemented), an implemented held item
+(``M1_ITEMS``) or none;
 the opponent's bag holds Potions or nothing in each slot.
 State fields that no M1 mechanic can set are left at 0, except those the engines
 read (screens, Tailwind, Trick Room, Mud Sport, weather), which are drawn so the
@@ -20,13 +21,15 @@ from pathlib import Path
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from hypothesis import assume
 from hypothesis import strategies as st
 
 from nuzline.data.spec import PokemonSpec
 from nuzline.data.tables import Names, Tables
-from nuzline.data.trainer import IntermediateData
+from nuzline.data.trainer import TERRAIN_NAMES, TERRAIN_UNKNOWN, IntermediateData
 from nuzline.engine.actions import legal_actions, legal_opponent_actions
-from nuzline.engine.ids import MOVE_STRUGGLE, AbilityId, EffectId, Stat, Status, Weather
+from nuzline.engine.coverage import halved_defense_line, low_defense
+from nuzline.engine.ids import MOVE_STRUGGLE, AbilityId, EffectId, Stat, Status, Type, Weather
 from nuzline.engine.outcome import MAX_HITS, Outcome
 from nuzline.engine.state import (
     BAG_SLOTS,
@@ -41,7 +44,10 @@ from nuzline.engine.stats import calc_stats
 
 INTERMEDIATE = Path(__file__).resolve().parents[1] / "data" / "intermediate"
 
-# The M1 species set: the sample team plus Roark's and the route-encounter species.
+# The M1 species set: the sample team plus Roark's and the route-encounter species, a
+# holder of each weather ability (Swift Swim, Sand Veil, Snow Cloak), and of Rough Skin
+# (Carvanha), Flame Body (Magby), Limber (Glameow), Adaptability (Eevee) and Solid Rock
+# (Camerupt): their other slot is empty or unimplemented, so these are always drawn.
 M1_SPECIES = (
     "Monferno",
     "Prinplup",
@@ -60,8 +66,31 @@ M1_SPECIES = (
     "Psyduck",
     "Venonat",
     "Kricketot",
+    "Goldeen",
+    "Sandshrew",
+    "Swinub",
+    "Carvanha",
+    "Magby",
+    "Glameow",
+    "Eevee",
+    "Camerupt",
 )
-M1_ITEMS = ("", "Oran Berry", "Sitrus Berry")
+M1_ITEMS = (
+    "",
+    "Oran Berry",
+    "Sitrus Berry",
+    "Focus Sash",
+    "Big Root",
+    "Berry Juice",
+    "Chesto Berry",
+    "Pecha Berry",
+    "Lum Berry",
+    "White Herb",
+    "Lagging Tail",
+    "Quick Claw",
+    "Rindo Berry",
+    "Chilan Berry",
+)
 M1_BAG_ITEMS = ("", "Potion")  # the opponent's bag (ids.TrainerItemId)
 
 # decomp gender ratios (``tables.species_gender``) with a single possible gender
@@ -82,7 +111,10 @@ def _learnsets() -> dict[int, list[tuple[int, int]]]:
 
 
 # The fixture and effect-test moves, given to every species so the infliction,
-# trapping, flinch, multi-hit and stat-stage branches run in the differential test.
+# trapping, flinch, multi-hit (2-5 and fixed two), stat-stage, Recover, Fake Out, Curse,
+# screen (Reflect, Light Screen, broken by Brick Break), Toxic, mid-turn accuracy
+# (Sand-Attack, Double Team) and Thunder Fang (paralysis then flinch) branches run in the
+# differential test (no M1 species is Ghost-type: Curse is the non-Ghost one).
 SHARED_MOVES = (
     "Stealth Rock",
     "Taunt",
@@ -108,6 +140,28 @@ SHARED_MOVES = (
     "Rollout",
     "Ice Ball",
     "Defense Curl",
+    "Recover",
+    "Fake Out",
+    "AncientPower",
+    "Curse",
+    "Double Kick",
+    "Selfdestruct",
+    "Flail",
+    "Aqua Ring",
+    "Light Screen",
+    "Reflect",
+    "Brick Break",
+    "Toxic",
+    "Sand-Attack",
+    "Double Team",
+    "Thunder Fang",
+    # K3b2 Task 10: the terrain moves (status moves: the damage oracle's damaging pools are
+    # unchanged); supported_state draws a terrain whenever one is known.
+    "Nature Power",
+    "Camouflage",
+    # K3b2 Task 11: Roar and Whirlwind (status moves: the damaging pools are unchanged).
+    "Roar",
+    "Whirlwind",
 )
 
 
@@ -123,6 +177,9 @@ def m1_move_pools(tables: Tables, names: Names) -> dict[int, tuple[int, ...]]:
     pools = {}
     for name in M1_SPECIES:
         species = names.species(name)
+        if Type.GHOST in np.asarray(tables.species_types[species]).tolist():
+            # Curse is shared: a Ghost user takes the branch coverage refuses.
+            raise ValueError(f"M1 species {name} is Ghost-type")
         moves = {m for _, m in learnsets[species] if effect[m] != EffectId.UNSUPPORTED}
         moves |= shared
         pools[species] = tuple(sorted(moves))
@@ -155,7 +212,8 @@ def possible_genders(ratio: int) -> tuple[int, ...]:
 def supported_pokemon(draw, tables: Tables, names: Names) -> PokemonSpec:
     """A random M1 Pokemon: level 5-20, random nature, IVs, EVs (at most 510 in all),
     1-4 supported learnset moves, its own ability, an M1 item or none, any current HP
-    including 0, and a random status (none when fainted)."""
+    including 0 (full HP drawn often: Focus Sash needs it), and a random status (none when
+    fainted)."""
     pools = m1_move_pools(tables, names)
     species = draw(st.sampled_from(sorted(pools)))
     level = draw(st.integers(5, 20))
@@ -170,7 +228,7 @@ def supported_pokemon(draw, tables: Tables, names: Names) -> PokemonSpec:
     item = names.item(draw(st.sampled_from(M1_ITEMS)))
     gender = draw(st.sampled_from(possible_genders(int(tables.species_gender[species]))))
     max_hp = _max_hp(tables, species, ivs, evs, level, nature)
-    hp = draw(st.integers(0, max_hp))
+    hp = draw(st.one_of(st.just(max_hp), st.integers(0, max_hp)))
     status = draw(st.sampled_from(list(Status))) if hp > 0 else Status.NONE
     return PokemonSpec(
         species=species,
@@ -211,6 +269,19 @@ def _party(draw, tables: Tables, names: Names) -> tuple[list[PokemonSpec], int]:
     return party, active
 
 
+# TERRAIN_UNKNOWN and every TERRAIN_* id (nuzline.data.trainer.TERRAIN_NAMES, 0-24).
+TERRAINS = (TERRAIN_UNKNOWN, *range(len(TERRAIN_NAMES)))
+
+
+def _draw_terrain(draw, tables: Tables, a: dict) -> None:
+    """A terrain (``TERRAINS``) when any Pokemon knows a move that reads it (Nature Power,
+    Camouflage), so that both engines play those moves on a known terrain too; otherwise the
+    state keeps ``make_state``'s ``TERRAIN_UNKNOWN`` (nothing reads it)."""
+    effect = np.asarray(tables.move_effect)[a["moves"]]
+    if np.isin(effect, (EffectId.NATURE_POWER, EffectId.CAMOUFLAGE)).any():
+        a["terrain"][...] = draw(st.sampled_from(TERRAINS))
+
+
 def _draw_lock(draw, a: dict, side: int, active: int, names: Names) -> None:
     """Maybe lock the active Pokemon into a Bide or Rollout / Ice Ball it knows (not while
     it sleeps: ``step`` unlocks a sleeper), with the matching hidden counters: Bide's
@@ -243,8 +314,13 @@ def supported_state(draw, tables: Tables, names: Names) -> BattleState:
     after a use) and the AI's knowledge of the player (any ``ai_seen_moves`` and
     ``ai_ability_known`` flags), the death record (``deaths`` = the fainted player slots), a
     faint budget 0-3 and a random set of living player slots as ``protected``, each within
-    its legal range; the battle is not over."""
+    its legal range, and the player's experience block (``_draw_exp``); the battle is not
+    over."""
     parties = [draw(_party(tables, names)) for _ in (0, 1)]
+    for side in (0, 1):  # coverage refuses a Selfdestruct facing a Defense below 8
+        foe_defense = low_defense(tables, parties[1 - side][0])
+        moves = [m for mon in parties[side][0] for m in mon.moves if m]
+        assume(not any(halved_defense_line(tables, m, foe_defense) for m in moves))
     s = make_state(tables, parties[0][0], parties[1][0])
     a = {name: np.asarray(getattr(s, name)).copy() for name in BattleState._fields}
     trap_moves = np.flatnonzero(np.asarray(tables.move_effect) == EffectId.TRAP)
@@ -268,6 +344,9 @@ def supported_state(draw, tables: Tables, names: Names) -> BattleState:
         a["leech_seed"][side] = draw(st.integers(0, 1))
         a["water_sport"][side] = draw(st.integers(0, 1))
         a["mud_sport"][side] = draw(st.integers(0, 1))
+        a["aqua_ring"][side] = draw(st.integers(0, 1))
+        a["infatuated"][side] = draw(st.integers(0, 1))
+        a["qc_roll"][side] = draw(st.integers(0, 1))
         a["curled"][side] = draw(st.integers(0, 1))
         a["foresight"][side] = draw(st.integers(0, 1))
         a["stealth_rock"][side] = draw(st.integers(0, 1))
@@ -289,6 +368,7 @@ def supported_state(draw, tables: Tables, names: Names) -> BattleState:
     a["trainer_items"][1] = [names.item(i) for i in bag] + [0] * (BAG_SLOTS - count)
     a["trainer_item_count"][1] = count
     a["weather"][...] = draw(st.sampled_from(list(Weather)))  # permanent: timer 0
+    _draw_terrain(draw, tables, a)
     a["trick_room"][...] = draw(st.integers(0, _TIMER_MAX))
     a["turn"][...] = turn
     for name in ("ai_seen_moves", "ai_ability_known"):
@@ -301,7 +381,28 @@ def supported_state(draw, tables: Tables, names: Names) -> BattleState:
     living = (a["species"][0] > 0) & (a["hp"][0] > 0)
     a["protected"][...] = [int(draw(st.booleans())) if alive else 0 for alive in living]
     a["replace_mul"][...] = 0
+    _draw_exp(draw, tables, a)
     return BattleState(**{name: jnp.asarray(a[name]) for name in BattleState._fields})
+
+
+def _draw_exp(draw, tables: Tables, a: dict) -> None:
+    """The player's experience block (K3d-exp): each Pokemon's ``exp`` anywhere in its level
+    (``[base(L), base(L + 1))``), its ``exp_boost`` (100 / 150 / 170), ``pokerus`` and
+    ``friend_bonus``; ``exp_mask`` is the active slot plus any other living slots (the
+    participants since the foe's entry); the learn fields and ``exp_refused`` stay 0."""
+    rates, table = np.asarray(tables.species_exp_rate), np.asarray(tables.exp_table)
+    living = (a["species"][0] > 0) & (a["hp"][0] > 0)
+    mask = 1 << int(a["active"][0])
+    for slot in np.flatnonzero(a["species"][0]):
+        row = table[rates[a["species"][0, slot]]]
+        level = int(a["level"][0, slot])
+        a["exp"][slot] = draw(st.integers(int(row[level]), int(row[level + 1]) - 1))
+        a["exp_boost"][slot] = draw(st.sampled_from((100, 150, 170)))
+        a["pokerus"][slot] = draw(st.integers(0, 1))
+        a["friend_bonus"][slot] = draw(st.integers(0, 1))
+        if living[slot] and draw(st.booleans()):
+            mask |= 1 << int(slot)
+    a["exp_mask"][...] = mask
 
 
 @st.composite
@@ -328,12 +429,14 @@ def _flag(shape: tuple[int, ...]) -> st.SearchStrategy[jnp.ndarray]:
 
 
 def any_outcome() -> st.SearchStrategy[Outcome]:
-    """Every ``Outcome`` field uniform over its range."""
+    """Every ``Outcome`` field uniform over its range (``hit``: either flag-only or any
+    class value)."""
     hits, sides = (2, MAX_HITS), (2,)
     return st.builds(
         Outcome,
         speed_tie=_flag(()),
-        hit=_flag(hits),
+        # 0-1 as a hit / miss flag, or any class value (outcome.hit_class: a roll 1-100).
+        hit=st.one_of(_flag(hits), _ints(0, 100, hits)),
         crit=_flag(hits),
         roll=_ints(0, 15, hits),
         secondary=_flag(hits),
@@ -348,14 +451,26 @@ def any_outcome() -> st.SearchStrategy[Outcome]:
         end_speed_tie=_flag(()),
         magnitude=_ints(4, 10, sides),
         shed_skin=_flag(sides),
+        fang_flinch=_flag(sides),
+        present=_ints(0, 3, sides),
+        protect=_flag(sides),
+        infatuation=_flag(sides),
+        tri_attack=_ints(0, 2, sides),
+        roar_level=_flag(sides),
+        roar_target=_ints(0, 4, sides),
     )
 
 
 # Moves whose outcome laws the enumeration tests need (tests/engine/test_enumerate.py):
 # sleep (Spore, Hypnosis), Taunt, Bind (TRAP), multi-hit (Fury Swipes), confusion
 # (Supersonic, Confuse Ray), secondary paralysis / freeze / burn with a thawing move
-# (Spark, Ice Beam, Flame Wheel), flinch (Headbutt), a Speed drop (Bubble), a Speed
-# boost (Rock Polish), a high-crit move (Razor Leaf) and a 95 % plain move (Tackle).
+# (Spark, Ice Beam, Flame Wheel), flinch (Headbutt; Thunder Fang, paralysis then flinch), a
+# Speed drop (Bubble), a Speed boost (Rock Polish), a high-crit move (Razor Leaf), a 95 %
+# plain move (Tackle), accuracy / evasion changes before the foe's check (Sand-Attack,
+# Double Team, Mud-Slap), Present (drawn power or heal), Protect (its chain's 2^-n roll,
+# with a chain of 0-3 drawn for it), Attract (the foe's attract check), Tri Attack (its
+# status draw), Nature Power (its call on the drawn terrain), Camouflage (``_draw_terrain``) and
+# Roar (its level check and pick).
 LAW_MOVES = (
     "Spore",
     "Hypnosis",
@@ -376,15 +491,35 @@ LAW_MOVES = (
     "Magnitude",
     "Confusion",
     "Disable",
+    "Sand-Attack",
+    "Double Team",
+    "Mud-Slap",
+    "Thunder Fang",
+    "Present",
+    "Protect",
+    "Attract",
+    "Tri Attack",
+    "Nature Power",
+    "Camouflage",
+    "Roar",
 )
-# Abilities the outcome relevance reads (contact procs, Steadfast, Simple's Speed).
+# Abilities the outcome relevance reads (contact procs, Steadfast, Simple's and Swift
+# Swim's Speed) or the hit odds read (Compoundeyes, Sand Veil, Snow Cloak), and Rough Skin
+# and Limber, which sit next to the contact procs and the paralysis they relate to.
 LAW_ABILITIES = (
     AbilityId.STATIC,
     AbilityId.POISON_POINT,
+    AbilityId.FLAME_BODY,
+    AbilityId.CUTE_CHARM,
+    AbilityId.ROUGH_SKIN,
+    AbilityId.LIMBER,
     AbilityId.STEADFAST,
     AbilityId.SIMPLE,
     AbilityId.SHED_SKIN,
     AbilityId.COMPOUNDEYES,
+    AbilityId.SAND_VEIL,
+    AbilityId.SNOW_CLOAK,
+    AbilityId.SWIFT_SWIM,
 )
 
 
@@ -404,6 +539,10 @@ def outcome_law_state(draw, tables: Tables, names: Names) -> BattleState:
             move = names.move(draw(st.sampled_from(LAW_MOVES)))
             a["moves"][side, mon, 0] = move
             a["pp"][side, mon, 0] = move_pp[move]
+            if int(tables.move_effect[move]) == EffectId.PROTECT:
+                a["protect_count"][side] = draw(st.integers(0, 3))
+
         if draw(st.integers(0, 3)) == 0:
             a["ability"][side, mon] = draw(st.sampled_from(LAW_ABILITIES))
+    _draw_terrain(draw, tables, a)  # a LAW_MOVES terrain move needs one too
     return BattleState(**{name: jnp.asarray(a[name]) for name in BattleState._fields})

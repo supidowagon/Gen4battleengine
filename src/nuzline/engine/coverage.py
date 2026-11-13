@@ -11,27 +11,51 @@ mechanic absent from a registry dict is ``NONE``.
 registry would mark that trainer's AI sampling-only, Stage A would keep ranking it by
 ``sample_ai_outcome`` alone, and Stage B would say so in its report. Nothing assigns the
 grade today: no registry entry is ``SAMPLING_ONLY`` (``tests/engine/test_coverage.py``
-guards this), ``ai.outcome`` has one fixed field layout whose width (3840) is a constant
-checked once at import against ``MAX_ENUMERATED`` (4096), and ``CoverageReport
-.sampling_only`` is therefore always empty. Roark's AI is exact, so the grade is not
-needed for this milestone. The first trainer whose draws do not fit that layout needs,
-in its plan: a per-trainer width (a layout chosen from the trainer's AI flags and
-moveset rather than a module constant), a registry entry that grades the trainer's AI
-``SAMPLING_ONLY`` when its width exceeds the budget, and the Stage A and B handling of
-a sampling-only opponent, before anything can be marked as such.
+guards this), and ``CoverageReport.sampling_only`` is therefore always empty. Each game's
+AI layout (``ai.layout``) has a width bounded at import: the vanilla flat layout's 3840
+(``ai.outcome.ENUMERATION_WIDTH``) against ``MAX_ENUMERATED`` (4096), and the Kaizo
+per-slot layout's factored width (``ai.policy.ai_width``, at most 2093) against
+``WIDTH_CAP`` (``ai.policy._check_width``). Roark's AI is exact in both games, so the grade
+is not needed for this milestone. The first trainer whose draws do not fit its game's
+layout needs, in its plan: a wider layout or a per-trainer width, a registry entry that
+grades the trainer's AI ``SAMPLING_ONLY`` when its width exceeds the budget, and the
+Stage A and B handling of a sampling-only opponent, before anything can be marked as such.
 
 The registries list exactly what plan 1a (Tasks 8a-8e: move effects, abilities, held
 items) and plan 1b (Task 2b: trainer items; Task 3: Roark's AI flags) implement:
 
-* move effects: every ``ids.EffectId`` but ``UNSUPPORTED``. Moves the tables map to
-  ``UNSUPPORTED`` include every move that sets weather, Reflect, Light Screen, Tailwind
-  or Trick Room: the engines have no ``CheckFieldConditions`` pass (step.py), so those
-  stay unsupported (plan ruling);
+* move effects: every ``ids.EffectId`` but ``UNSUPPORTED``, except ``CURSE`` used by a
+  Ghost-type Pokemon (``ghost_curse``: ``effect_script_0109.s`` sends it down the Ghost
+  branch, ``subscript_curse_ghost.s``, which is not modelled), refused per Pokemon on both
+  sides and in the pool; and a physical ``SELF_DESTRUCT`` move (Selfdestruct, Explosion)
+  facing a Pokemon whose Defense is below ``HALVED_DEFENSE_MIN`` (``halved_defense_line``:
+  the halved Defense at -6 makes the damage divisor 0), refused per move on both sides
+  here, and in the pool and prep both ways: a player candidate's move against the
+  opponent's lowest Defense, and an opponent's move against a candidate's own Defense.
+  ``effect_script_0007.s``'s Damp branch is never met: Damp is an unsupported ability, so
+  a Damp holder on either side is refused. Likewise ``subscript_infatuate.s``'s Oblivious
+  branch (Attract, Cute Charm) and the infatuation cures (Oblivious, Mental Herb) and Destiny
+  Knot: Oblivious, Mental Herb and Destiny Knot are unsupported, so a holder on either side
+  is refused (pool and prep too). Reflect and Light Screen are modelled
+  (``EffectId.REFLECT``, ``EffectId.LIGHT_SCREEN``, ``effects._screen``). Moves the
+  tables map to ``UNSUPPORTED`` include every move that sets weather, Tailwind or Trick
+  Room: the engines' ``CheckFieldConditions`` pass (``step.field_conditions``) counts
+  weather down, but those moves are not modelled yet (plan ruling);
 * abilities, held items, trainer items: every member but ``UNSUPPORTED``;
-* AI flags: bits 0-2 (``AI_FLAG_BASIC``, ``AI_FLAG_EVAL_ATTACK``, ``AI_FLAG_EXPERT``).
-  ``ai.policy`` always runs those three scripts, so a trainer must have exactly them;
-* weather: only ``Weather.NONE``. Rain, sun, sandstorm, hail and fog need the
-  field-condition pass and are refused (plan ruling);
+* AI flags, per AI policy (``IMPLEMENTED_AI_FLAGS``): vanilla bits 0-2 (``AI_FLAG_BASIC``,
+  ``AI_FLAG_EVAL_ATTACK``, ``AI_FLAG_EXPERT``), Kaizo those and bit 4 (``AI_FLAG_RISKY``).
+  ``ai.policy`` always runs the policy's scripts together (``policy._flags``), so a vanilla
+  trainer must have all three, and a Kaizo trainer exactly ``0b10111`` (plan K3c Ruling 10:
+  gating RISKY per trainer would need a ``BattleState`` field). A Kaizo trainer must also be
+  in ``ONE_SCALAR_GUESS_CHECKED``: the exact layout's one ability guess per decision is
+  exact only when at most one guessing read per decision can change a score (plan K3c
+  Ruling 6, docs/ai/kaizo_roark.md 8.4), which is a data test per trainer, run for Roark
+  only (``tests/ai/test_kaizo_outcome.py test_one_scalar_guess_is_exact_for_roark``);
+* weather: ``Weather.NONE`` and ``Weather.SANDSTORM``. Sandstorm's every effect on the
+  implemented set is modelled: the Rock-type SpD boost (``damage.py``), the end-of-turn
+  chip (``step.field_conditions``), Sand Veil's accuracy (``outcome.hit_threshold``), all
+  gated on Cloud Nine / Air Lock (``damage.weather_suppressed``). Rain, sun, hail and fog
+  are refused until every weather effect they touch is modelled (plan ruling);
 * in-battle form changes (plan K2a Ruling 8), on either side: Giratina-Origin without the
   Griseous Orb reverts to Altered Forme at battle start (``battle_lib.c:6412-6417``,
   ``subscript_form_change``) and Shaymin-Sky reverts to Land Forme when frozen
@@ -59,15 +83,24 @@ items) and plan 1b (Task 2b: trainer items; Task 3: Roark's AI flags) implement:
   condition (``Names.rom_change_conditions``, ``rom_change_refusals``) holds for the fight:
   a battle format or area, a move, ability or held item on either side, a trainer or a
   trainer bag. A condition that does not hold refuses nothing. Area weather and fog stay
-  refused through ``start_weather`` like vanilla's; ``Trainer.optional`` refuses nothing.
+  refused through ``start_weather`` like vanilla's; ``Trainer.optional`` refuses nothing;
+* battle terrain (K3b2 Task 9): a move whose decomp effect reads the terrain
+  (``TERRAIN_EFFECTS``: Nature Power, Secret Power, Camouflage), on either side or a pool
+  candidate's, is refused against a trainer whose ``Trainer.terrain`` is
+  ``TERRAIN_UNKNOWN``: its maps give several terrains (the line names them) or none
+  (``terrain_refusal``). With a known terrain only Nature Power can be refused here: when the
+  move it calls there (``terrain_call``, ``ids.TERRAIN_MOVES``) has an unsupported effect
+  (Earthquake, Blizzard). Its call also counts as a move of the fight for the Kaizo ROM-change
+  conditions (``rom_change_refusals``).
 
 ``check_coverage`` also runs the AI's own refusals (``ai.policy.ai_refusals``: opponent
 moves without transcribed script paths, too many script-roll sites, type-chart
 modifiers the AI does not model, switching-rule refusals) on the fight's turn-0 state,
 and refuses a bag that mixes item ids (the decomp applies the last zeroed slot's item,
 docs/discrepancies.md). The AI's state-dependent refusals that can first appear later in
-the fight (more than ``SWITCH_SITES`` switch draws, ``AI_OnlyIneffectiveMoves``) are
-not visible at turn 0; ``ai_policy`` refuses them when they occur.
+the fight (more switch draws than the layout's ``switch_sites``, ``AI_OnlyIneffectiveMoves``)
+are not visible at turn 0; ``ai_policy`` refuses them when they occur. The Kaizo layout's 44
+switch sites are every draw a party of six can make, so only vanilla can exceed its count.
 """
 
 from __future__ import annotations
@@ -83,15 +116,48 @@ from nuzline.data.game_constants import POLICY
 from nuzline.data.games import KAIZO, VANILLA
 from nuzline.data.spec import PokemonSpec
 from nuzline.data.tables import Names, Tables
-from nuzline.data.trainer import UNKNOWN_CONDITION, Trainer, missing_set_data
-from nuzline.engine.ids import AbilityId, EffectId, ItemId, TrainerItemId, Weather
-from nuzline.engine.state import make_state
+from nuzline.data.trainer import (
+    TERRAIN_NAMES,
+    TERRAIN_UNKNOWN,
+    UNKNOWN_CONDITION,
+    Trainer,
+    missing_set_data,
+)
+from nuzline.engine.damage import PHYSICAL
+from nuzline.engine.ids import (
+    TERRAIN_MOVES,
+    TERRAIN_SPECIAL,
+    AbilityId,
+    EffectId,
+    ItemId,
+    Stat,
+    TrainerItemId,
+    Type,
+    Weather,
+)
+from nuzline.engine.levelup import (
+    HOLD_EFFECT_EVS_UP_SPEED_DOWN,
+    HOLD_EFFECT_EXP_SHARE,
+    HOLD_EFFECT_EXP_UP,
+    HOLD_EFFECT_FRIENDSHIP_UP,
+    MAX_LEVEL,
+    POWER_ITEM_HOLD_EFFECTS,
+)
+from nuzline.engine.state import make_state, spec_exp, spec_stats
 
 # include/constants/forms.h:94, :98; generated/species.txt and items.txt (line N is id N-1).
 # Checked against each game's data at load (nuzline.data.game_constants).
 SPECIES_GIRATINA, GIRATINA_FORM_ORIGIN = 487, 1
 SPECIES_SHAYMIN, SHAYMIN_FORM_SKY = 492, 1
 ITEM_GRISEOUS_ORB = 112
+
+
+# Decomp battle effects whose scripts read the battle terrain (BattleSystem_GetTerrain):
+# Nature Power (173, BtlCmd_GetTerrainMove, battle_script.c:8036-8048), Secret Power (197,
+# BtlCmd_GetTerrainSecondaryEffect, :8063-) and Camouflage (213, BtlCmd_TryCamouflage,
+# :7997-8022). Matched against tables.move_ai_effect (the unmapped decomp effect).
+TERRAIN_EFFECTS = (173, 197, 213)
+NATURE_POWER_EFFECT = 173  # BATTLE_EFFECT_NATURE_POWER, the decomp effect id
 
 
 class Support(IntEnum):
@@ -126,14 +192,23 @@ AI_FLAG_NAMES = (
     "WEATHER",
     "HARRASSMENT",
 )
-IMPLEMENTED_AI_FLAGS: dict[int, Support] = {0: Support.EXACT, 1: Support.EXACT, 2: Support.EXACT}
-# ai.policy runs exactly these scripts (policy._FLAGS), so they must all be set.
-POLICY_AI_FLAGS = 0b111
+# Per AI policy (game_constants.POLICY): the flag bits ai.policy runs (policy._flags).
+IMPLEMENTED_AI_FLAGS: dict[str, dict[int, Support]] = {
+    "vanilla": {0: Support.EXACT, 1: Support.EXACT, 2: Support.EXACT},
+    "kaizo": {0: Support.EXACT, 1: Support.EXACT, 2: Support.EXACT, 4: Support.EXACT},
+}
+# ai.policy runs these scripts together, so a trainer must have them all (vanilla), or
+# exactly them (Kaizo, plan K3c Ruling 10).
+POLICY_AI_FLAGS = {"vanilla": 0b111, "kaizo": 0b10111}
+# Plan K3c Ruling 6 (docs/ai/kaizo_roark.md 8.4): the Kaizo trainer ids whose one-scalar
+# ability-guess data test has run (test_one_scalar_guess_is_exact_for_roark). Any other
+# Kaizo trainer's AI is refused rather than approximated. Roark (246) only.
+ONE_SCALAR_GUESS_CHECKED = {"kaizo": frozenset({246})}
 IMPLEMENTED_WEATHER: dict[Weather, Support] = {
     Weather.NONE: Support.EXACT,
     Weather.SUN: Support.NONE,
     Weather.RAIN: Support.NONE,
-    Weather.SANDSTORM: Support.NONE,
+    Weather.SANDSTORM: Support.EXACT,
     Weather.HAIL: Support.NONE,
     Weather.FOG: Support.NONE,
 }
@@ -219,6 +294,288 @@ class _Collector:
             self.report.sampling_only.append(f"{what} ({kind} SAMPLING_ONLY)")
 
 
+def ghost_curse(tables: Tables, move: int, row: int) -> bool:
+    """``move`` is Curse (``EffectId.CURSE``) and personal ``row`` is Ghost-type:
+    ``effect_script_0109.s:5-6`` (``BATTLEMON_TYPE_1``/``_2 == TYPE_GHOST``) takes the
+    Ghost branch, which the engine does not model. The only type change in the implemented
+    set is Camouflage, whose types (``ids.TERRAIN_TYPES``) include no Ghost: a non-Ghost user
+    stays non-Ghost, and a Ghost user is refused whatever it does first (conservative)."""
+    if int(np.asarray(tables.move_effect)[move]) != EffectId.CURSE:
+        return False
+    return Type.GHOST in [int(t) for t in np.asarray(tables.species_types)[row]]
+
+
+# BattleSystem_CalcMoveDamage halves defenseStat for BATTLE_EFFECT_HALVE_DEFENSE
+# (battle_lib.c:6943-6945) before the stage scales it into stageDivisor (:6963-6975): at
+# -6 Defense (x2/8) a Defense below this gives stageDivisor 0, and ``damage /= 0`` is not
+# modelled by the engines.
+HALVED_DEFENSE_MIN = 8
+
+
+def halves_defense(tables: Tables, move: int) -> bool:
+    """``move`` is a physical ``SELF_DESTRUCT`` move: its damage reads the halved Defense
+    (a special one, Kaizo's Memento, halves nothing it reads)."""
+    return (
+        int(np.asarray(tables.move_effect)[move]) == EffectId.SELF_DESTRUCT
+        and int(np.asarray(tables.move_category)[move]) == PHYSICAL
+    )
+
+
+def defense_stat(tables: Tables, spec: PokemonSpec) -> int:
+    """``spec``'s Defense as ``make_state`` builds it (``state.spec_stats``)."""
+    return int(spec_stats(tables, spec)[Stat.DEF])
+
+
+def low_defense(tables: Tables, foes: Sequence[PokemonSpec]) -> int | None:
+    """The lowest Defense below ``HALVED_DEFENSE_MIN`` among ``foes`` that can be hit (not
+    fainted), or None."""
+    defenses = [defense_stat(tables, m) for m in foes if m.species and m.current_hp != 0]
+    low = [d for d in defenses if d < HALVED_DEFENSE_MIN]
+    return min(low) if low else None
+
+
+def halved_defense_line(tables: Tables, move: int, foe_defense: int | None) -> str | None:
+    """`` against Defense N`` when ``move`` halves Defense and a foe has Defense ``N``
+    below ``HALVED_DEFENSE_MIN`` (``low_defense``): refused, the -6 stage would divide by
+    0. Else None."""
+    if foe_defense is None or not halves_defense(tables, move):
+        return None
+    return f" against Defense {foe_defense}"
+
+
+def halving_moves(tables: Tables, foes: Sequence[PokemonSpec]) -> list[int]:
+    """The distinct moves of ``foes`` that can act (not fainted) that halve Defense
+    (``halves_defense``), ascending: each is refused against a Pokemon whose own Defense is
+    below ``HALVED_DEFENSE_MIN`` (``halved_by_line``)."""
+    return sorted(
+        {
+            move
+            for m in foes
+            if m.species and m.current_hp != 0
+            for move in m.moves
+            if move and halves_defense(tables, move)
+        }
+    )
+
+
+def halved_by_line(
+    tables: Tables, names: Names, spec: PokemonSpec, moves: Sequence[int]
+) -> str | None:
+    """``Defense N against the opponent's <move>`` when ``spec``'s own Defense ``N`` is below
+    ``HALVED_DEFENSE_MIN`` and ``moves`` (``halving_moves`` of its foes) is not empty: the
+    foe's halved Defense at -6 would divide by 0. Else None."""
+    if not moves or (defense := defense_stat(tables, spec)) >= HALVED_DEFENSE_MIN:
+        return None
+    return f"Defense {defense} against the opponent's {names.move_names[moves[0]]}"
+
+
+def move_effect_line(tables: Tables, names: Names, move: int, row: int) -> tuple[Support, str]:
+    """The support of ``move`` for the Pokemon at personal ``row`` and its name as a report
+    line shows it: by engine effect, ``" (Ghost user)"`` added and refused for
+    ``ghost_curse``."""
+    name = names.move_names[move]
+    if ghost_curse(tables, move, row):
+        return Support.NONE, f"{name} (Ghost user)"
+    effect = EffectId(int(np.asarray(tables.move_effect)[move]))
+    return IMPLEMENTED_EFFECTS.get(effect, Support.NONE), name
+
+
+# --- Experience, level-up and learnable moves (K3d-exp design §4) ---------------------------
+
+# Decomp battle effects (generated/move_battle_effects.txt, line N is id N - 1), matched
+# against tables.move_ai_effect.
+ITEM_MOVING_EFFECTS = (
+    105,  # BATTLE_EFFECT_STEAL_HELD_ITEM (Thief, Covet): effect_script_0105.s, STEAL_ITEM
+    177,  # BATTLE_EFFECT_SWITCH_HELD_ITEMS (Trick, Switcheroo): effect_script_0177.s
+    188,  # BATTLE_EFFECT_REMOVE_HELD_ITEM (Knock Off): effect_script_0188.s, KNOCK_OFF
+    233,  # BATTLE_EFFECT_FLING: effect_script_0233.s, FLING
+)
+# BATTLE_EFFECT_POWER_BASED_ON_FRIENDSHIP (Return) and ..._LOW_FRIENDSHIP (Frustration):
+# effect_script_0121.s / 0123.s read the attacker's BATTLEMON_FRIENDSHIP.
+FRIENDSHIP_POWER_EFFECTS = (121, 123)
+# BATTLE_EFFECT_TRANSFORM (57), _COPY_MOVE_FOR_BATTLE (82, Mimic) and _SWAP_ATK_DEF (238, Power
+# Trick): BattleSystem_ReloadPokemon (battle_lib.c:169-194) skips a Transformed battler's moves
+# and exp and a Mimicked slot, and overwrites a Power Trick's swapped Attack and Defense.
+RELOAD_STATE_EFFECTS = (57, 82, 238)
+# The hold effects the payout reads from the party item (engine.levelup): Macho Brace, Exp.
+# Share, Soothe Bell, Lucky Egg and the six Power items.
+EXP_ITEM_HOLD_EFFECTS = (
+    HOLD_EFFECT_EVS_UP_SPEED_DOWN,
+    HOLD_EFFECT_EXP_SHARE,
+    HOLD_EFFECT_FRIENDSHIP_UP,
+    HOLD_EFFECT_EXP_UP,
+    *POWER_ITEM_HOLD_EFFECTS,
+)
+MAX_EXP_BOOST = 170  # the largest exp_boost (battle_script.c:9757-9763)
+
+
+def reachable_level(tables: Tables, spec: PokemonSpec, opp: Sequence[PokemonSpec]) -> int:
+    """An upper bound on the level the player's ``spec`` can reach in a fight against ``opp``:
+    the level at ``exp + sum(bound)`` over the opponents that can faint (a species and HP),
+    with ``bound = max(E, 2) * 3/2 * (Lucky Egg ? 3/2 : 1) * exp_boost / 100 + 1`` (design
+    §4.1): every payout to this Pokemon alone. ``E = yield[species] * level / 7``
+    (battle_script.c:2216-2217); one Pokemon gets ``g + h <= max(E, 2)`` (``g = max(1, ...)``,
+    ``h = max(1, ...)``, :2219-2238); then the Lucky Egg, trainer and OT multipliers
+    (:9749-9763), whose truncations only lower it; ``+ 1`` is slack. An unresolved
+    ``exp_boost`` (0) counts as the largest, 170. The level of an exp ``x`` is the last
+    ``L`` with ``table[L] <= x`` (``Pokemon_ShouldLevelUp``, pokemon.c:3501-3526), and a
+    level-100 Pokemon gains nothing (battle_script.c:9740)."""
+    if spec.level >= MAX_LEVEL:
+        return spec.level
+    yields = np.asarray(tables.species_exp_yield)
+    lucky = int(np.asarray(tables.item_hold_effect)[spec.item]) == HOLD_EFFECT_EXP_UP
+    boost = spec.exp_boost or MAX_EXP_BOOST
+    total = 0
+    for foe in opp:
+        if foe.species == 0 or foe.current_hp == 0:
+            continue
+        e = int(yields[foe.species]) * foe.level // 7
+        total += max(e, 2) * 3 * (3 if lucky else 2) * boost // (2 * 2 * 100) + 1
+    table = np.asarray(tables.exp_table)[int(np.asarray(tables.species_exp_rate)[spec.species])]
+    x = spec_exp(tables, spec) + total
+    return max(spec.level, int(np.sum(table[1 : MAX_LEVEL + 1] <= x)))
+
+
+def reachable_learn_moves(
+    tables: Tables, spec: PokemonSpec, opp: Sequence[PokemonSpec]
+) -> list[int]:
+    """Every move in the learnset of ``spec``'s form row (``Pokemon_LevelUpMove`` loads it per
+    species and form, pokemon.c:3943) at a level in ``(level, reachable_level]``, in list
+    order without repeats: the moves an in-battle level-up can auto-learn or prompt
+    (bs.c:9999-10187). A move already known is included: a prompt can replace it first."""
+    top = reachable_level(tables, spec, opp)
+    if top <= spec.level:
+        return []
+    row = personal_row(tables, spec.species, spec.form)
+    levels = np.asarray(tables.learnset_level)[row]
+    moves = np.asarray(tables.learnset_move)[row]
+    out: list[int] = []
+    for level, move in zip(levels.tolist(), moves.tolist(), strict=True):
+        if spec.level < level <= top and move and move not in out:
+            out.append(int(move))
+    return out
+
+
+def forced_learn_moves(tables: Tables, spec: PokemonSpec, opp: Sequence[PokemonSpec]) -> list[int]:
+    """The learnable moves (``reachable_learn_moves``) a level-up could put into one of
+    ``spec``'s empty move slots without asking: ``BoxPokemon_AddMove`` (pokemon.c:3852-3873)
+    takes the first empty slot (an auto-learn, battle_script.c:10021-10027) and prompts only
+    once all four are full (:10016-10018); no battle path empties a slot. So with ``e`` empty
+    slots these are at most the first ``e`` moves not already known, in scan order (levels
+    ascending, bs.c:9882; within a level, list order, pokemon.c:3945-3956). A gap before a
+    known move (AddMove learns it again) only fills slots sooner, so this is a superset."""
+    empty = sum(1 for m in spec.moves if not m)
+    top = reachable_level(tables, spec, opp)
+    if not empty or top <= spec.level:
+        return []
+    row = personal_row(tables, spec.species, spec.form)
+    levels = np.asarray(tables.learnset_level)[row].tolist()
+    moves = np.asarray(tables.learnset_move)[row].tolist()
+    order = sorted(
+        (level, i) for i, level in enumerate(levels) if spec.level < level <= top and moves[i]
+    )
+    out: list[int] = []
+    for _, i in order:
+        move = int(moves[i])
+        if move not in spec.moves and move not in out:
+            out.append(move)
+        if len(out) == empty:
+            break
+    return out
+
+
+def learn_masked(tables: Tables, move: int) -> bool:
+    """``levelup.learn_options`` (and its reference mirror) never offers to learn ``move``:
+    its effect is ``UNSUPPORTED`` (ruling D10). The player can always give it up."""
+    return int(np.asarray(tables.move_effect)[move]) == EffectId.UNSUPPORTED
+
+
+def learnable_moves(tables: Tables, spec: PokemonSpec, opp: Sequence[PokemonSpec]) -> list[int]:
+    """The ``reachable_learn_moves`` coverage must grade (ruling D10): every one but the
+    prompt-only moves the learn options mask (``learn_masked`` and not in
+    ``forced_learn_moves``), which the player never takes in the engine. A masked move is
+    then a legal game choice the search skips: plan values stay achievable lower bounds,
+    like ruling D2, except the mid-turn-prompt case (``STATE.md``, Experience). Moves refused for any other reason (the AI, terrain, a ROM change, a
+    halved Defense, a Ghost's Curse) are not masked and stay graded (refused)."""
+    forced = forced_learn_moves(tables, spec, opp)
+    return [
+        m
+        for m in reachable_learn_moves(tables, spec, opp)
+        if m in forced or m in spec.moves or not learn_masked(tables, m)
+    ]
+
+
+def _effect_moves(tables: Tables, moves: Sequence[int], effects: Sequence[int]) -> list[int]:
+    effect = np.asarray(tables.move_ai_effect)
+    return sorted({int(m) for m in moves if m and int(effect[m]) in effects})
+
+
+def exp_refusals(
+    tables: Tables,
+    names: Names,
+    spec: PokemonSpec,
+    learnable: Sequence[int],
+    fight_moves: Sequence[int],
+    levels_up: bool,
+) -> list[str]:
+    """Why the exp payout or a level-up of the player's ``spec`` would not be exact (design
+    §4.2-4.6), one line each. ``learnable``: its ``reachable_learn_moves``; ``fight_moves``:
+    every move any Pokemon of the fight could use (both sides, learnable ones included);
+    ``levels_up``: ``reachable_level`` exceeds its level.
+
+    * §4.3: below level 100 with ``exp_boost == 0`` (the OT and language test unresolved).
+    * §4.2 (ruling D9): it holds an exp item (``EXP_ITEM_HOLD_EFFECTS``) while an item-moving
+      move (``ITEM_MOVING_EFFECTS``) is in the fight. The payout reads the **party** item
+      (battle_script.c:2209, :9706, :10226; pokemon.c:2649), which a battle item change
+      leaves behind.
+    * §4.4 (ruling D6): its egg location is nonzero, it can level, and a friendship-power move
+      (``FRIENDSHIP_POWER_EFFECTS``) is in the fight: the level-up adds 1 when the egg
+      location is the battle map (pokemon.c:2668-2670), which the engine does not know
+      (Kaizo changed ``MapHeader_GetMapLabelTextID``, docs/kaizo/rom_diff.md:269).
+    * §4.5: it can level and could use Transform, Mimic or Power Trick
+      (``RELOAD_STATE_EFFECTS``; ``BattleSystem_ReloadPokemon``, battle_lib.c:173-191).
+    * §4.6: an empty move slot with PP Ups: a move learned there inherits them
+      (``BoxPokemon_SetMoveSlot``, pokemon.c:3929-3930), which the engine does not model."""
+    out = []
+    if spec.level < MAX_LEVEL and spec.exp_boost == 0:
+        out.append(
+            "exp multiplier unresolved (original trainer and language unknown: read the save "
+            "with its trainer)"
+        )
+    hold = int(np.asarray(tables.item_hold_effect)[spec.item])
+    if hold in EXP_ITEM_HOLD_EFFECTS and (
+        moving := _effect_moves(tables, fight_moves, ITEM_MOVING_EFFECTS)
+    ):
+        out.append(
+            f"{names.item_names[spec.item]} is read from the party by the exp payout, and "
+            f"{names.move_names[moving[0]]} can move held items in battle"
+        )
+    if (
+        levels_up
+        and spec.egg_location != 0
+        and (readers := _effect_moves(tables, fight_moves, FRIENDSHIP_POWER_EFFECTS))
+    ):
+        out.append(
+            f"egg location {spec.egg_location} may add 1 friendship per level-up, which "
+            f"{names.move_names[readers[0]]} reads"
+        )
+    own = [*spec.moves, *learnable]
+    if levels_up and (reload := _effect_moves(tables, own, RELOAD_STATE_EFFECTS)):
+        out.append(
+            f"a level-up reloads the battler, which {names.move_names[reload[0]]} "
+            "changes (battle_lib.c:173-191)"
+        )
+    junk = [
+        i for i, (m, ups) in enumerate(zip(spec.moves, spec.pp_ups, strict=True)) if not m and ups
+    ]
+    if junk:
+        out.append(
+            f"empty move slot {junk[0]} has {spec.pp_ups[junk[0]]} PP Ups, which a move "
+            "learned there inherits"
+        )
+    return out
+
+
 def _check_party(
     c: _Collector,
     tables: Tables,
@@ -227,16 +584,15 @@ def _check_party(
     party: Sequence[PokemonSpec],
     trainer_side: bool = False,
 ) -> None:
-    move_effect = np.asarray(tables.move_effect)
     abilities = np.asarray(tables.species_abilities)
     item_effect = np.asarray(tables.item_effect)
     for slot, mon in enumerate(party):
         where = f"{owner} {names.species_names[mon.species]} (slot {slot})"
+        row = personal_row(tables, mon.species, mon.form)  # ValueError: no such form
         for move in mon.moves:
             if move:
-                support = IMPLEMENTED_EFFECTS.get(EffectId(int(move_effect[move])), Support.NONE)
-                c.add(support, f"{where}: {names.move_names[move]}", "move effect")
-        row = personal_row(tables, mon.species, mon.form)  # ValueError: no such form
+                support, name = move_effect_line(tables, names, move, row)
+                c.add(support, f"{where}: {name}", "move effect")
         ability = AbilityId(int(abilities[row, mon.ability_slot]))
         ability_name = names.ability_names[
             names.species_abilities(mon.species, mon.form)[mon.ability_slot]
@@ -300,6 +656,8 @@ def rom_change_refusals(
         name for name, on in (("trick_room", area.trick_room), ("gravity", area.gravity)) if on
     }
     moves = {int(m) for s in specs for m in s.moves if m} | {int(m) for m in extra_moves}
+    # Nature Power's call runs its own effect script and data (terrain_calls).
+    moves |= set(terrain_calls(tables, trainer, sorted(moves)))
     items = {int(s.item) for s in specs}
     decomp = np.asarray(tables.species_abilities_decomp)
     abilities = {
@@ -325,6 +683,58 @@ def rom_change_refusals(
     return out
 
 
+def terrain_call(terrain: int) -> int | None:
+    """The move Nature Power calls on battle terrain ``terrain`` (``BtlCmd_GetTerrainMove``,
+    battle_script.c:8036-8048: ``sTerrainMove[min(terrain, TERRAIN_SPECIAL)]``), or None for
+    ``TERRAIN_UNKNOWN``."""
+    if terrain == TERRAIN_UNKNOWN:
+        return None
+    return TERRAIN_MOVES[min(terrain, TERRAIN_SPECIAL)]
+
+
+def terrain_calls(tables: Tables, trainer: Trainer, moves: Sequence[int]) -> list[int]:
+    """The moves ``moves``' Nature Power calls against ``trainer`` (``terrain_call`` of its
+    known terrain), as moves of the fight; empty when none is Nature Power or the terrain is
+    unknown (``terrain_refusal`` refuses that)."""
+    called = terrain_call(trainer.terrain)
+    effect = np.asarray(tables.move_ai_effect)
+    if called is None or not any(m and int(effect[m]) == NATURE_POWER_EFFECT for m in moves):
+        return []
+    return [called]
+
+
+def terrain_refusal(
+    tables: Tables, names: Names, trainer: Trainer, moves: Sequence[int]
+) -> str | None:
+    """Why ``moves`` (decomp move ids) cannot be played against ``trainer``: some read the
+    battle terrain (``TERRAIN_EFFECTS``) and the trainer's terrain is unknown, either mixed
+    (the line names every terrain its maps give) or unplaced; or, on a known terrain, Nature
+    Power calls a move whose effect the engine does not implement; else None."""
+    effect = np.asarray(tables.move_ai_effect)
+    hit = sorted({int(m) for m in moves if m and int(effect[m]) in TERRAIN_EFFECTS})
+    if not hit:
+        return None
+    if trainer.terrain != TERRAIN_UNKNOWN:
+        for called in terrain_calls(tables, trainer, hit):
+            engine = EffectId(int(np.asarray(tables.move_effect)[called]))
+            if IMPLEMENTED_EFFECTS.get(engine, Support.NONE) == Support.NONE:
+                return (
+                    f"{display_name(trainer)}: on {TERRAIN_NAMES[trainer.terrain]} Nature Power "
+                    f"calls {names.move_names[called]}, whose effect is not supported"
+                )
+        return None
+    if trainer.terrains:
+        known = [TERRAIN_NAMES[t] for t in trainer.terrains if t != TERRAIN_UNKNOWN]
+        unread = (
+            " and a map whose tiles cannot be read" if TERRAIN_UNKNOWN in trainer.terrains else ""
+        )
+        why = f"the battle terrain varies over its maps ({', '.join(known)}{unread})"
+    else:
+        why = "the battle terrain is unknown (no map places the trainer)"
+    moves_ = ", ".join(names.move_names[m] for m in hit)
+    return f"{display_name(trainer)}: {why}, and {moves_} would read it"
+
+
 def rom_change_line(label: str) -> str:
     return f"Kaizo ROM: {label} is not modelled and this fight reaches it (docs/kaizo/rom_diff.md)"
 
@@ -335,6 +745,7 @@ def _check_trainer(
     names: Names,
     trainer: Trainer,
     specs: Sequence[PokemonSpec],
+    extra_moves: Sequence[int] = (),
 ) -> None:
     if POLICY.get(names.game) is None:
         c.add(
@@ -350,8 +761,11 @@ def _check_trainer(
     c.add(support, what, "battle format")
     _check_kaizo_fields(c, names, trainer)
     if names.game == KAIZO:
-        for label in rom_change_refusals(tables, names, trainer, specs):
+        for label in rom_change_refusals(tables, names, trainer, specs, extra_moves):
             c.add(Support.NONE, rom_change_line(label), "ROM change")
+    moves = [m for s in specs for m in s.moves] + list(extra_moves)
+    if (line := terrain_refusal(tables, names, trainer, moves)) is not None:
+        c.add(Support.NONE, line, "battle terrain")
     effect = np.asarray(tables.trainer_item_effect)
     bag = [item for item in trainer.items if item]
     for item in bag:
@@ -364,18 +778,45 @@ def _check_trainer(
             f"{display_name(trainer)}: a bag of mixed items {mixed}",
             "multi-slot item use",
         )
+    _check_ai_flags(c, POLICY.get(names.game), trainer)
+
+
+def _check_ai_flags(c: _Collector, policy: str | None, trainer: Trainer) -> None:
+    """Each flag bit of ``trainer`` against ``policy``'s ``IMPLEMENTED_AI_FLAGS``, and the
+    flag set against ``POLICY_AI_FLAGS``. A game without a policy is refused already, by
+    its own line."""
+    if policy is None:
+        return
     flags = int(trainer.ai_flags)
+    implemented = IMPLEMENTED_AI_FLAGS[policy]
     for bit in range(flags.bit_length()):
         if flags >> bit & 1:
             name = AI_FLAG_NAMES[bit] if bit < len(AI_FLAG_NAMES) else f"UNUSED_{bit}"
-            support = IMPLEMENTED_AI_FLAGS.get(bit, Support.NONE)
+            support = implemented.get(bit, Support.NONE)
             c.add(support, f"{display_name(trainer)}: AI_FLAG_{name}", "AI flag")
-    if flags & POLICY_AI_FLAGS != POLICY_AI_FLAGS:
+    required = POLICY_AI_FLAGS[policy]
+    if policy == "vanilla" and flags & required != required:
         c.add(
             Support.NONE,
             f"{display_name(trainer)}: AI flags {flags:#x} without all of BASIC, EVAL_ATTACK and "
             "EXPERT, which the AI policy always runs together",
             "AI flag set",
+        )
+    elif policy == "kaizo" and flags != required:
+        c.add(
+            Support.NONE,
+            f"{display_name(trainer)}: AI flags {flags:#x} are not exactly BASIC, EVAL_ATTACK, "
+            "EXPERT and RISKY, which the Kaizo AI policy always runs together (plan K3c "
+            "Ruling 10)",
+            "AI flag set",
+        )
+    checked = ONE_SCALAR_GUESS_CHECKED.get(policy)
+    if checked is not None and trainer.id not in checked:
+        c.add(
+            Support.NONE,
+            f"{display_name(trainer)}: the one-scalar ability guess is not checked against "
+            "this trainer's movesets (plan K3c Ruling 6; docs/ai/kaizo_roark.md 8.4)",
+            "AI ability guess",
         )
 
 
@@ -431,13 +872,16 @@ def check_opponent(
     opp: Sequence[PokemonSpec],
     start_condition: int,
     player: Sequence[PokemonSpec] = (),
+    extra_moves: Sequence[int] = (),
 ) -> CoverageReport:
     """The trainer's side of ``check_coverage``: its party, bag, AI flags and the weather
-    lines (``player``, when given, only widens the Kaizo ROM-change conditions). It runs no ``ai_refusals``: those depend on the player's party, so a caller
-    that needs them runs them per setup."""
+    lines (``player``, when given, and ``extra_moves``, the player's learnable moves, only
+    widen the Kaizo ROM-change conditions and the terrain check). It runs no
+    ``ai_refusals``: those depend on the player's party, so a caller that needs them runs
+    them per setup."""
     c = _Collector()
     _check_party(c, tables, names, display_name(trainer), opp, trainer_side=True)
-    _check_trainer(c, tables, names, trainer, [*player, *opp])
+    _check_trainer(c, tables, names, trainer, [*player, *opp], extra_moves)
     # An "unknown" start condition is refused by _check_trainer, never read as a weather.
     weathers = [start_condition]
     if not unknown_start(trainer):
@@ -458,16 +902,59 @@ def check_coverage(
     """The support level of one fight: the player's party against ``trainer`` with
     party ``opp``, starting in weather ``start_condition`` (a ``Weather``; the
     trainer's own ``start_condition`` is checked too) with the active party slots
-    ``leads`` (``make_state``), whose turn-0 state the AI's refusals are run on."""
+    ``leads`` (``make_state``), whose turn-0 state the AI's refusals are run on.
+
+    Experience (K3d-exp design §4): each player Pokemon's ``learnable_moves`` (its
+    ``reachable_learn_moves`` but the prompt-only ones the learn options mask, ruling D10) go
+    through every check its current moves go through (``move_effect_line`` as a "level-up in
+    battle" move, the AI's ``player_move_refusal``, ``halved_defense_line``,
+    ``terrain_refusal`` and the Kaizo ``rom_change_refusals``), and ``exp_refusals`` adds its
+    exp lines. Out of scope and refused elsewhere (§4.7): every format but singles
+    (``IMPLEMENTED_FORMATS``; ``expBattler = 2`` is doubles-only, battle_script.c:9716-9720);
+    the engine plays only trainer battles; evolution and other after-battle effects are never
+    modelled. A level-100 Pokemon gains nothing (battle_script.c:9740) and is not refused."""
+    from nuzline.ai.policy import ai_refusals, player_move_refusal  # ai imports the engine
+
     c = _Collector()
     _check_party(c, tables, names, "Player", player)
-    theirs = check_opponent(tables, names, trainer, opp, start_condition, player)
+    learnable = [learnable_moves(tables, mon, opp) for mon in player]
+    extra = sorted({m for moves in learnable for m in moves})
+    theirs = check_opponent(tables, names, trainer, opp, start_condition, player, extra)
     c.report.missing.extend(theirs.missing)
     c.report.sampling_only.extend(theirs.sampling_only)
     c.report.level = min(c.report.level, theirs.level)
-    from nuzline.ai.policy import ai_refusals  # nuzline.ai imports the engine
+    fight_moves = [m for mon in (*player, *opp) for m in mon.moves if m] + extra
+    for slot, mon in enumerate(player):
+        where = f"Player {names.species_names[mon.species]} (slot {slot})"
+        row = personal_row(tables, mon.species, mon.form)
+        for move in learnable[slot]:
+            if move in mon.moves:  # graded by _check_party and ai_refusals already
+                continue
+            support, name = move_effect_line(tables, names, move, row)
+            c.add(support, f"{where}: {name}", "level-up in battle move effect")
+            if support != Support.NONE and (reason := player_move_refusal(move)) is not None:
+                c.add(Support.NONE, f"{where}: {name} (level-up in battle, {reason})", "trainer AI")
+        levels_up = reachable_level(tables, mon, opp) > mon.level
+        for line in exp_refusals(tables, names, mon, learnable[slot], fight_moves, levels_up):
+            c.add(Support.NONE, f"{where}: {line}", "experience")
 
-    state = make_state(tables, player, opp, start_condition, opp_items=trainer.items, leads=leads)
+    for owner, party, foes in (("Player", player, opp), (display_name(trainer), opp, player)):
+        foe_defense = low_defense(tables, foes)
+        for slot, mon in enumerate(party):
+            extra_moves = learnable[slot] if owner == "Player" else ()
+            for move in [*mon.moves, *(m for m in extra_moves if m not in mon.moves)]:
+                if move and (low := halved_defense_line(tables, move, foe_defense)):
+                    where = f"{owner} {names.species_names[mon.species]} (slot {slot})"
+                    c.add(Support.NONE, f"{where}: {names.move_names[move]}{low}", "move effect")
+    state = make_state(
+        tables,
+        player,
+        opp,
+        start_condition,
+        opp_items=trainer.items,
+        leads=leads,
+        terrain=trainer.terrain,
+    )
     for reason in ai_refusals(tables, state, names):
         c.add(Support.NONE, f"{display_name(trainer)}: {reason}", "trainer AI")
     return c.report

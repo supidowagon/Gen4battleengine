@@ -33,7 +33,12 @@ STAT_EFFECTS = {
     EffectId.SECONDARY_STAT_SELF: ("INDIRECT", "TO_ATTACKER"),
     EffectId.SECONDARY_STAT_FOE: ("INDIRECT", "TO_DEFENDER"),
 }
-SECONDARY = (EffectId.SECONDARY_STAT_SELF, EffectId.SECONDARY_STAT_FOE, EffectId.SECONDARY_STATUS)
+SECONDARY = (
+    EffectId.SECONDARY_STAT_SELF,
+    EffectId.SECONDARY_STAT_FOE,
+    EffectId.SECONDARY_STATUS,
+    EffectId.RAISE_ALL_STATS_HIT,
+)
 
 
 def _script(effect: int) -> str:
@@ -124,3 +129,237 @@ def test_thaw_flag_matches_the_self_thaw_check():
     }
     assert flagged <= thawing
     assert thawing - flagged <= thawing - set(DECOMP_EFFECT_NAMES.values())
+
+
+# move -> (EffectId, params) in every game that has the move with that decomp effect.
+_TOXIC = (EffectId.STATUS_FOE, (6, 0, 0))  # Status.TOXIC; Toxic is not type-checked
+_PLAIN = (EffectId.PLAIN, (0, 0, 0))
+_VANILLA_MAPPED = {
+    "Toxic": _TOXIC,
+    "Swift": _PLAIN,
+    "Shock Wave": _PLAIN,
+    "Pay Day": _PLAIN,
+    "Gust": _PLAIN,
+}
+_KAIZO_MAPPED = {
+    **_VANILLA_MAPPED,
+    "Sand Tomb": (EffectId.TRAP, (0, 0, 0)),  # Kaizo effect 261 (Whirlpool's script)
+    "Aurora Beam": _PLAIN,  # Kaizo effect 17; vanilla's Aurora Beam lowers Attack
+}
+
+
+def _check_mapped(tables, names, vanilla_names, expected):
+    from dataclasses import replace
+
+    from nuzline.prep.pool import Candidate, check_pool
+    from tests.engine.helpers import sample_party
+
+    for move, (eid, params) in expected.items():
+        m = names.move(move)
+        assert int(tables.move_effect[m]) == eid, move
+        assert tuple(int(x) for x in tables.move_param[m]) == params, move
+    moves = list(expected)
+    for i in range(0, len(moves), 4):
+        chunk = moves[i : i + 4]
+        ids = [names.move(m) for m in chunk]
+        spec = replace(sample_party(vanilla_names, {})[0], moves=tuple(ids + [0] * (4 - len(ids))))
+        cand = Candidate(("party", 0, 0), "P", spec, 0, (), ())
+        report = check_pool(tables, names, [cand], ())
+        assert [ln for ln in report.missing if "move effect" in ln] == [], chunk
+
+
+def test_mapping_only_moves(tables, names, kaizo_tables, kaizo_names):
+    """Toxic, Swift, Shock Wave, Pay Day, Gust (and Kaizo's Sand Tomb and Aurora Beam) map to
+    an effect the engine has, and the pool grades their move rows EXACT."""
+    _check_mapped(tables, names, names, _VANILLA_MAPPED)
+    _check_mapped(kaizo_tables, kaizo_names, names, _KAIZO_MAPPED)
+
+
+def test_mapping_only_scripts_do_what_the_effect_does():
+    """The decomp scripts behind the mapping-only effects carry nothing the target effect lacks."""
+    s17, s34, s149 = _script(17), _script(34), _script(149)
+    assert re.findall(r"^\s+([A-Z]\w+)", s17, re.MULTILINE) == ["CalcCrit", "CalcDamage", "End"]
+    # Pay Day: a damage hit plus the money subscript only
+    assert "MOVE_SUBSCRIPT_PTR_PAY_DAY" in s34 and "CalcDamage" in s34
+    assert _script(33).count("UpdateVar") == 1 and "MOVE_SUBSCRIPT_PTR_BADLY_POISON" in _script(33)
+    # Sand Tomb: Whirlpool's script is Bind's (effect 42) plus the dive double
+    s42, s261 = _script(42), _script(261)
+    assert "MOVE_SUBSCRIPT_PTR_BIND_TARGET" in s42 and "MOVE_SUBSCRIPT_PTR_BIND_TARGET" in s261
+    assert "SYSCTL_HIT_DURING_DIVE" in s261 and "MOVE_EFFECT_UNDERWATER" in s261
+    # Gust: x2 only against an airborne defender
+    assert "MOVE_EFFECT_AIRBORNE" in s149 and "BTLVAR_POWER_MULTI, 20" in s149
+
+
+def test_gust_note_holds(tables, names, kaizo_tables, kaizo_names):
+    """Gust's x2 against Fly/Bounce (effect 149) and Whirlpool's against Dive (effect 261) are
+    unreachable only while the moves that set MOVE_EFFECT_AIRBORNE / MOVE_EFFECT_UNDERWATER stay
+    unsupported: Fly (155), Dive (255) and Bounce (263). Kaizo rewrites Dive to a plain hit
+    and Bounce to a Paralyze-hit (no semi-invulnerable turn). When one becomes supported, the
+    double is reachable, and this test fails."""
+    assert not {155, 255, 263} & set(DECOMP_EFFECT_TO_ID)
+    for t, n in ((tables, names), (kaizo_tables, kaizo_names)):
+        assert int(t.move_effect[n.move("Fly")]) == EffectId.UNSUPPORTED
+    assert int(tables.move_effect[names.move("Dive")]) == EffectId.UNSUPPORTED
+    assert int(tables.move_effect[names.move("Bounce")]) == EffectId.UNSUPPORTED
+    for move in ("Dive", "Bounce"):
+        scripts = {_script(e) for e in (0, 6)}  # Kaizo's Dive and Bounce effects
+        assert all("MOVE_EFFECT_AIRBORNE" not in s and "UNDERWATER" not in s for s in scripts)
+        assert int(kaizo_tables.move_effect[kaizo_names.move(move)]) != EffectId.UNSUPPORTED
+
+
+def test_whirlpool_bind_matches_bind():
+    """Sand Tomb runs the same bind subscript as Bind: duration Random 3, 3 (3..5), 6 with
+    Grip Claw, and no dive state is reachable (Dive is unsupported)."""
+    text = (DECOMP / "res/battle/scripts/subscripts/subscript_bind_start.s").read_text("utf-8")
+    assert "Random 3, 3" in text and "0x00000006" in text
+
+
+_SMALL = {
+    "Recover": (EffectId.RECOVER, (0, 0, 0)),
+    "Fake Out": (EffectId.FAKE_OUT, (0, 0, 0)),
+    "AncientPower": (EffectId.RAISE_ALL_STATS_HIT, (0, 0, 0)),
+    "Curse": (EffectId.CURSE, (0, 0, 0)),
+    "Double Kick": (EffectId.MULTI_HIT, (2, 0, 0)),
+    "DoubleSlap": (EffectId.MULTI_HIT, (0, 0, 0)),  # vanilla: effect 29, the 2-5 law
+}
+
+
+def test_small_moves_mapped(tables, names, kaizo_tables, kaizo_names):
+    """Task K3b1-7: Recover, Fake Out, AncientPower, Curse and the fixed two-hit family map in
+    both games (Kaizo's DoubleSlap is effect 44, two hits), and the pool grades them EXACT."""
+    _check_mapped(tables, names, names, _SMALL)
+    kaizo = {**_SMALL, "DoubleSlap": (EffectId.MULTI_HIT, (2, 0, 0))}
+    _check_mapped(kaizo_tables, kaizo_names, names, kaizo)
+
+
+def _subscript(name: str) -> str:
+    return (DECOMP / "res/battle/scripts/subscripts" / f"{name}.s").read_text("utf-8")
+
+
+def _stat_steps(text: str) -> list[tuple[str, int]]:
+    """The ``MOVE_SUBSCRIPT_PTR_<STAT>_<UP|DOWN>_1_STAGE`` params a subscript sets, in order."""
+    return [
+        (stat, 1 if d == "UP" else -1)
+        for stat, d in re.findall(r"MOVE_SUBSCRIPT_PTR_([A-Z_]+?)_(UP|DOWN)_1_STAGE", text)
+    ]
+
+
+def test_small_move_scripts_do_what_the_engine_does():
+    """The decomp scripts behind effects 32, 158, 140, 109 and 44 (engine/effects.py)."""
+    from nuzline.engine.effects import ALL_STATS_RAISED, CURSE_STAGES
+
+    # Recover: an ON_HIT direct effect; maxHP / 2; "HP is full" when cur == max.
+    assert "FLAGS_DIRECT, MOVE_SIDE_EFFECT_ON_HIT|MOVE_SUBSCRIPT_PTR_RECOVER_HALF_MAX_HP" in (
+        _script(32)
+    )
+    half = _subscript("subscript_recover_half_max_hp")
+    assert "BATTLEMON_MAX_HP" in half and "DivideVarByValue BTLVAR_HP_CALC_TEMP, 2" in half
+    assert "CompareMonDataToVar OPCODE_EQU, BTLSCR_MSG_TEMP, BATTLEMON_CUR_HP" in (
+        _subscript("subscript_recover_hp")
+    )
+    # Fake Out: fails unless fakeOutTurnNumber == totalTurns, else an indirect flinch.
+    s158 = _script(158)
+    assert "OPCODE_NEQ, BTLSCR_ATTACKER, BATTLEMON_FAKE_OUT_TURN_NUMBER, BTLVAR_TOTAL_TURNS" in s158
+    assert "FLAGS_INDIRECT, MOVE_SIDE_EFFECT_TO_DEFENDER|MOVE_SUBSCRIPT_PTR_FLINCH" in s158
+    assert "MOVE_STATUS_FAILED" in s158
+    # The flinch subscript names Inner Focus for Fake Out only (hooks.FLINCH_BLOCKED).
+    flinch = _subscript("subscript_flinch_mon")
+    assert "BTLVAR_CURRENT_MOVE, MOVE_FAKE_OUT" in flinch and "ABILITY_INNER_FOCUS" in flinch
+    # AncientPower: indirect TO_ATTACKER, five +1 steps.
+    assert "FLAGS_INDIRECT, MOVE_SIDE_EFFECT_TO_ATTACKER|MOVE_SUBSCRIPT_PTR_BOOST_ALL_STATS" in (
+        _script(140)
+    )
+    boost = [
+        (SUBSCRIPT_STAT[s], d) for s, d in _stat_steps(_subscript("subscript_boost_all_stats"))
+    ]
+    assert boost == [(stat, 1) for stat in ALL_STATS_RAISED]
+    # Curse: a Ghost-type check on both types, else the direct TO_ATTACKER normal branch.
+    s109 = _script(109)
+    assert s109.count("TYPE_GHOST") == 2
+    assert "FLAGS_DIRECT, MOVE_SIDE_EFFECT_TO_ATTACKER|MOVE_SUBSCRIPT_PTR_CURSE_NORMAL" in s109
+    curse = [(SUBSCRIPT_STAT[s], d) for s, d in _stat_steps(_subscript("subscript_curse_normal"))]
+    assert curse == list(CURSE_STAGES)
+    # The two multi-hit scripts: SetMultiHit 0 (2-5) and SetMultiHit 2, accuracy once.
+    assert "SetMultiHit 0, SYSCTL_MULTI_HIT_MOVE" in _script(29)
+    assert "SetMultiHit 2, SYSCTL_MULTI_HIT_MOVE" in _script(44)
+    assert DECOMP_EFFECT_TO_ID[29] == (EffectId.MULTI_HIT, (0, 0, 0))
+    assert DECOMP_EFFECT_TO_ID[44] == (EffectId.MULTI_HIT, (2, 0, 0))
+
+
+def test_self_destruct_script_does_what_the_engine_does(tables, names, kaizo_tables, kaizo_names):
+    """Effect 7 (Task K3b1-8): the Damp check, then the user's HP set to 0, then the hit;
+    the damage formula halves defenseStat for it; Selfdestruct and Explosion map in both
+    games (Kaizo's Memento too)."""
+    s7 = _script(7).splitlines()
+    steps = [line.split()[0] for line in s7 if line.startswith("    ")]
+    assert steps.index("CheckIgnorableAbility") < steps.index("UpdateMonData")
+    assert steps.index("UpdateMonData") < steps.index("CalcCrit") < steps.index("CalcDamage")
+    assert any("ABILITY_DAMP" in line for line in s7)
+    assert any("UpdateMonData OPCODE_SET, BTLSCR_ATTACKER, BATTLEMON_CUR_HP, 0" in ln for ln in s7)
+    lib = (DECOMP / "src/battle/battle_lib.c").read_text("utf-8").splitlines()
+    assert "BATTLE_EFFECT_HALVE_DEFENSE" in lib[6942] and "defenseStat / 2" in lib[6943]
+    assert DECOMP_EFFECT_TO_ID[7] == (EffectId.SELF_DESTRUCT, (0, 0, 0))
+    for t, n, moves in (
+        (tables, names, ("Selfdestruct", "Explosion")),
+        (kaizo_tables, kaizo_names, ("Selfdestruct", "Explosion", "Memento")),
+    ):
+        for move in moves:
+            assert int(t.move_effect[n.move(move)]) == EffectId.SELF_DESTRUCT, move
+
+
+def test_flail_script_does_what_the_engine_does(tables, names, kaizo_tables, kaizo_names):
+    """Effect 99 (Task K3b1-9): CalcFlailPower, then CalcCrit and CalcDamage; Flail and
+    Reversal share it in both games."""
+    steps = [line.split()[0] for line in _script(99).splitlines() if line.startswith("    ")]
+    assert steps[:3] == ["CalcFlailPower", "CalcCrit", "CalcDamage"]
+    assert DECOMP_EFFECT_TO_ID[99] == (EffectId.FLAIL, (0, 0, 0))
+    for t, n in ((tables, names), (kaizo_tables, kaizo_names)):
+        for move in ("Flail", "Reversal"):
+            assert int(t.move_effect[n.move(move)]) == EffectId.FLAIL, move
+
+
+def test_resist_berry_hold_effects_match_decomp():
+    """Names against generated/item_hold_effects.txt (line N+1 is id N) and each type
+    against subscript_type_resist_berry.s: the jump for the hold effect lands on a compare
+    of calcTemp with that type (34, Steel, compares NEQ and falls through to the halving)."""
+    from nuzline.engine.ids import RESIST_ANY_NORMAL, Type
+    from tools.effect_map import RESIST_BERRY_HOLD_EFFECTS
+
+    lines = (DECOMP / "generated/item_hold_effects.txt").read_text().split()
+    script = (DECOMP / "res/battle/scripts/subscripts/subscript_type_resist_berry.s").read_text(
+        encoding="utf-8"
+    )
+    jumps = {int(e): label for e, label in re.findall(r"BTLVAR_SCRIPT_TEMP, (\d+), (_\d+)", script)}
+    blocks = dict(
+        re.findall(
+            r"(_\d+):\n\s+CompareVarToValue OPCODE_(?:EQU|NEQ), BTLVAR_CALC_TEMP, (0x[0-9A-Fa-f]+)",
+            script,
+        )
+    )
+    assert sorted(RESIST_BERRY_HOLD_EFFECTS) == sorted(jumps) == list(range(19, 36))
+    for effect, (name, resisted) in RESIST_BERRY_HOLD_EFFECTS.items():
+        assert lines[effect] == name
+        want = Type.NORMAL if resisted == RESIST_ANY_NORMAL else resisted
+        assert int(blocks[jumps[effect]], 16) == want, name
+    # Only Chilan (35) jumps before the super-effective test.
+    assert script.index(", 35, ") < script.index("MOVE_STATUS_SUPER_EFFECTIVE")
+    assert script.index(", 19, ") > script.index("MOVE_STATUS_SUPER_EFFECTIVE")
+
+
+def test_ignore_type_checks_effects_match_decomp():
+    """effects.IGNORES_TYPE_CHECKS (subscript_type_resist_berry.s:5 skips them) is every
+    mapped effect whose script sets SYSCTL_IGNORE_TYPE_CHECKS or SYSCTL_IGNORE_IMMUNITIES.
+    Present sets it on its heal path only (effect_script_0122.s _004), which deals no damage,
+    so no resist-berry check runs there; its damage path keeps the berry (test_present)."""
+    from nuzline.engine.effects import IGNORES_TYPE_CHECKS
+
+    heal_path_only = {EffectId.PRESENT}
+
+    flag = re.compile(
+        r"FLAG_ON, BTLVAR_BATTLE_CTX_STATUS, .*SYSCTL_IGNORE_(TYPE_CHECKS|IMMUNITIES)"
+    )
+    for effect, (eid, _) in DECOMP_EFFECT_TO_ID.items():
+        sets = bool(flag.search(_script(effect)))
+        ignores = eid in IGNORES_TYPE_CHECKS or eid in heal_path_only
+        assert sets == ignores, DECOMP_EFFECT_NAMES[effect]
+        assert not (eid in heal_path_only and eid in IGNORES_TYPE_CHECKS)

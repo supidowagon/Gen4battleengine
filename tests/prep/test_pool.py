@@ -63,6 +63,11 @@ def test_candidates(pool_save, tables, names, learnsets):
     assert kricketot.tms == ()
     tm10 = names.item("TM10")
     assert cands[0].tms == ((tm10, names.move("Hidden Power")),)
+    # K3d-exp T3: exp at the cap (the base exp of the cap for the boxed, raised ones) and
+    # the boost resolved with the save's trainer (the synthetic records are its own).
+    rates, table = tables.species_exp_rate, tables.exp_table
+    assert [c.exp for c in cands] == [int(table[int(rates[c.spec.species]), 16]) for c in cands]
+    assert [c.spec.exp_boost for c in cands] == [100] * 4
 
 
 def test_egg_is_left_out(tmp_path, tables, names, learnsets):
@@ -83,7 +88,7 @@ def test_egg_is_left_out(tmp_path, tables, names, learnsets):
 
 def test_check_pool_full(pool_save, tables, names, learnsets):
     cands, _ = pool_candidates(pool_save, tables, names, learnsets, 16)
-    report = check_pool(tables, names, cands)
+    report = check_pool(tables, names, cands, ())
     assert report.missing == []
     assert report.level == Support.EXACT
 
@@ -98,10 +103,9 @@ def test_check_pool_names_unsupported(tmp_path, tables, names, learnsets):
         [("Geodude", 6, ("Tackle",)), ("Monferno", 14, ("Metronome", "Scratch"))],
     )
     cands, _ = pool_candidates(save, tables, names, learnsets, 20)
-    report = check_pool(tables, names, cands)
-    assert (
-        "box 1 slot 0 GEODUDE: Selfdestruct (relearner, move effect UNSUPPORTED)" in report.missing
-    )
+    report = check_pool(tables, names, cands, ())
+    # Geodude's relearner Selfdestruct is supported since Task K3b1-8 (SELF_DESTRUCT).
+    assert not [line for line in report.missing if "GEODUDE" in line]
     assert "box 1 slot 1 MONFERNO: Metronome (current, move effect UNSUPPORTED)" in report.missing
     assert report.level == Support.NONE
 
@@ -127,7 +131,7 @@ def test_pool_candidate_reached_by_relearner_move(tables, names, vanilla_manifes
     cand = Candidate(("party", 0, 0), "party slot 0 MONFERNO", spec, 0, (MOVE_X,), ())
     other = Candidate(("party", 0, 1), "party slot 1 MONFERNO", spec, 0, (), ())
     kaizo = kaizo_names_with(vanilla_manifest, [{"moves": [MOVE_X]}])
-    report = check_pool(tables, kaizo, [cand, other], trainer=roark_trainer())
+    report = check_pool(tables, kaizo, [cand, other], (), trainer=roark_trainer())
     assert report.missing == [
         (
             "party slot 0 MONFERNO: Kaizo ROM: c is not modelled and this fight reaches it "
@@ -135,8 +139,8 @@ def test_pool_candidate_reached_by_relearner_move(tables, names, vanilla_manifes
         )
     ]
     # Without the fight's trainer, or in vanilla, the pool refuses nothing for it.
-    assert check_pool(tables, kaizo, [cand, other]).missing == []
-    assert check_pool(tables, names, [cand, other], trainer=roark_trainer()).missing == []
+    assert check_pool(tables, kaizo, [cand, other], ()).missing == []
+    assert check_pool(tables, names, [cand, other], (), trainer=roark_trainer()).missing == []
 
 
 def test_pool_candidate_reached_by_tm_move(tables, names, vanilla_manifest):
@@ -145,7 +149,7 @@ def test_pool_candidate_reached_by_tm_move(tables, names, vanilla_manifest):
         ("party", 0, 0), "party slot 0 MONFERNO", spec, 0, (), ((names.item("TM10"), MOVE_X),)
     )
     kaizo = kaizo_names_with(vanilla_manifest, [{"moves": [MOVE_X]}])
-    assert len(check_pool(tables, kaizo, [cand], trainer=roark_trainer()).missing) == 1
+    assert len(check_pool(tables, kaizo, [cand], (), trainer=roark_trainer()).missing) == 1
 
 
 @pytest.mark.parametrize(
@@ -158,4 +162,20 @@ def test_pool_ignores_fight_level_conditions(tables, names, vanilla_manifest, co
         Candidate(("party", 0, i), f"party slot {i} MONFERNO", spec, 0, (), ()) for i in range(2)
     ]
     kaizo = kaizo_names_with(vanilla_manifest, [cond])
-    assert check_pool(tables, kaizo, cands, trainer=roark_trainer()).missing == []
+    assert check_pool(tables, kaizo, cands, (), trainer=roark_trainer()).missing == []
+
+
+def test_pool_lists_holdable_bag_items(tables, names):
+    from nuzline.engine.coverage import Support
+
+    # Razor Claw is unsupported (Quick Claw was, until K3b2 Task 8).
+    bag = [(names.item(n), 1) for n in ("Razor Claw", "Occa Berry", "Oran Berry", "Honey")]
+    report = check_pool(tables, names, [], (), bag=bag)
+    assert sorted(report.missing) == [
+        "bag: Occa Berry (held item UNSUPPORTED)",
+        "bag: Razor Claw (held item UNSUPPORTED)",
+    ]
+    assert not any("Honey" in line for line in report.missing)
+    assert report.level == Support.NONE
+    only_oran = check_pool(tables, names, [], (), bag=[(names.item("Oran Berry"), 3)])
+    assert only_oran.level == Support.EXACT and not only_oran.missing

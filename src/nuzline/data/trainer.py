@@ -56,6 +56,41 @@ GENDER_MOD_OTHER_CLASS = 136
 
 MOVE_SLOTS = 4
 
+# generated/battle_terrains.txt (enum BattleTerrain), id = index; TERRAIN_MAX is reachable:
+# CalcTerrain returns it for a battle background past its table
+# (src/field_battle_data_transfer.c:491-493). Checked against the decomp by
+# tests/tools/rom/test_terrain.py.
+TERRAIN_NAMES = (
+    "TERRAIN_PLAIN",
+    "TERRAIN_SAND",
+    "TERRAIN_GRASS",
+    "TERRAIN_PUDDLE",
+    "TERRAIN_MOUNTAIN",
+    "TERRAIN_CAVE",
+    "TERRAIN_SNOW",
+    "TERRAIN_WATER",
+    "TERRAIN_ICE",
+    "TERRAIN_BUILDING",
+    "TERRAIN_GREAT_MARSH",
+    "TERRAIN_BRIDGE",
+    "TERRAIN_AARON",
+    "TERRAIN_BERTHA",
+    "TERRAIN_FLINT",
+    "TERRAIN_LUCIAN",
+    "TERRAIN_CYNTHIA",
+    "TERRAIN_DISTORTION_WORLD",
+    "TERRAIN_BATTLE_TOWER",
+    "TERRAIN_BATTLE_FACTORY",
+    "TERRAIN_BATTLE_ARCADE",
+    "TERRAIN_BATTLE_CASTLE",
+    "TERRAIN_BATTLE_HALL",
+    "TERRAIN_GIRATINA",
+    "TERRAIN_MAX",
+)
+# Trainer.terrain when the trainer's maps give several terrains (mixed) or none (tools/
+# terrain.py TERRAIN_UNKNOWN).
+TERRAIN_UNKNOWN = -1
+
 
 @dataclass(frozen=True)
 class TrainerMon:
@@ -146,6 +181,10 @@ class Trainer:
     ``start_condition`` when the JSON has none); ``split`` and ``split_order`` (split
     index, line) place the fight in the level-cap splits; ``sources`` cites each field.
 
+    ``terrain`` is the battle terrain (a ``TERRAIN_NAMES`` id) of the trainer's maps, or
+    ``TERRAIN_UNKNOWN`` when ``terrains``, every terrain those maps can give, has several
+    values (mixed) or none (no map places the trainer); tools/terrain.py, K3b2 Task 9.
+
     A ``Trainer`` is unhashable: ``gauntlet_rules`` and ``sources`` are dicts, so the
     derived ``__hash__`` raises ``TypeError``; key caches by ``Trainer.id``."""
 
@@ -172,6 +211,8 @@ class Trainer:
     split: str | None = None
     split_order: tuple[int, int] | None = None
     sources: dict[str, str] = field(default_factory=dict)
+    terrain: int = TERRAIN_UNKNOWN
+    terrains: tuple[int, ...] = ()
 
 
 def _mon(d: dict) -> TrainerMon:
@@ -222,6 +263,10 @@ def load_trainers(dir: Path) -> list[Trainer]:
         raise ValueError(
             f"{Path(dir) / 'trainers.json'} has no battle structure: re-run tools/extract_decomp.py"
         )
+    if rows and not {"terrain", "terrains"} <= rows[0].keys():
+        raise ValueError(
+            f"{Path(dir) / 'trainers.json'} has no battle terrain: re-run tools/extract_decomp.py"
+        )
     return [
         Trainer(
             id=t["id"],
@@ -251,6 +296,8 @@ def load_trainers(dir: Path) -> list[Trainer]:
             split=t.get("split"),
             split_order=_pair(t, "split_order"),
             sources=dict(t.get("sources", {})),
+            terrain=t["terrain"],
+            terrains=tuple(t["terrains"]),
         )
         for t in rows
     ]

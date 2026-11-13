@@ -241,6 +241,7 @@ def setup_states(tables: Tables, problem: PrepProblem, setups: Sequence[Setup]) 
         problem.trainer.items,
         budget=problem.deaths,
         protected=[protected_slots(problem, s) for s in setups],
+        terrain=problem.trainer.terrain,
     )
 
 

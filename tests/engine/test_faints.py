@@ -54,6 +54,7 @@ def test_with_budget(tables, names):
         base.replace_hp(0, 2, 0).with_budget(protected=[2])
 
 
+@pytest.mark.slow
 def test_faint_records_the_slot(tables, names):
     s = roark_state(tables, names, player_count=1).replace_hp(0, 0, 1)
     tackle = names.move_slot(s, 1, "Tackle")
@@ -118,6 +119,7 @@ def test_last_opponent_with_a_non_last_player_faint_is_a_win(tables, names):
     assert int(out.deaths[0]) == 1
 
 
+@pytest.mark.slow
 def test_entry_faint_needs_a_second_replacement(tables, names):
     s = roark_state(tables, names).replace_hp(0, 0, 1)
     s = s._replace(stealth_rock=s.stealth_rock.at[0].set(1))
@@ -150,6 +152,7 @@ def test_pursuit_ko_still_completes_the_switch(tables, names):
     assert int(out.deaths[0]) == 1
 
 
+@pytest.mark.slow
 @settings(
     max_examples=200,
     deadline=None,

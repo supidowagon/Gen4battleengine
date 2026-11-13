@@ -15,6 +15,7 @@ Deviations from the plan's test text (plan rulings and the decomp win):
 """
 
 import jax.numpy as jnp
+import pytest
 
 from nuzline.engine.damage import damage_table
 from nuzline.engine.effects import can_have_status
@@ -33,6 +34,7 @@ def dealt(before, after, side=1):
 # --- stat stages -------------------------------------------------------------
 
 
+@pytest.mark.slow
 def test_leer_lowers_defense_and_clamps(tables, names):
     s = roark_state(tables, names).with_stages(1, def_=-6)
     out = step(tables, s, A("Leer", "Tackle", s, names), empty_outcome())
@@ -81,6 +83,7 @@ def test_self_boost_after_foe_faints_from_its_own_recoil(tables, names):
     assert int(out.stages[0, 2]) == 1
 
 
+@pytest.mark.slow
 def test_simple_doubles_stage_change(tables, names):
     # Gen 4 Simple doubles the stage when a stat is used, not the stored change.
     s = roark_state(
@@ -102,6 +105,7 @@ def test_simple_doubles_stage_change(tables, names):
     )
 
 
+@pytest.mark.slow
 def test_keen_eye_blocks_accuracy_drop(tables, names):
     s = roark_state(tables, names, player_species="Starly", opp_moves=["Sand-Attack"])
     out = step(tables, s, A("Growl", "Sand-Attack", s, names), empty_outcome())
@@ -121,6 +125,7 @@ def test_certain_secondary_self_drop_needs_no_proc(tables, names):
     assert int(out.stages[0, Stat.SPE]) == -1
 
 
+@pytest.mark.slow
 def test_secondary_stat_effects_only_on_proc(tables, names):
     s = roark_state(
         tables, names, player_species="Prinplup", opp_species="Cranidos"
@@ -141,6 +146,7 @@ def test_no_secondary_on_fainted_target(tables, names):
 # --- status ------------------------------------------------------------------
 
 
+@pytest.mark.slow
 def test_ember_burn_only_on_secondary_proc(tables, names):
     s = roark_state(tables, names, opp_species="Cranidos")
     no = step(tables, s, A("Ember", "Leer", s, names), empty_outcome())
@@ -148,6 +154,7 @@ def test_ember_burn_only_on_secondary_proc(tables, names):
     assert int(no.status[1, 0]) == Status.NONE and int(yes.status[1, 0]) == Status.BURN
 
 
+@pytest.mark.slow
 def test_burn_halves_physical_damage(tables, names):
     s = roark_state(tables, names, opp_species="Cranidos", opp_moves=["Headbutt"])
     burned = s.with_status(1, 0, Status.BURN)
@@ -164,6 +171,7 @@ def test_fire_types_cannot_be_burned(tables, names):
     assert int(step(tables, s, A("Ember", "Leer", s, names), PROC).status[1, 0]) == Status.NONE
 
 
+@pytest.mark.slow
 def test_ice_types_cannot_be_frozen_nor_anyone_in_sun(tables, names):
     # subscript_freeze.s:21-22 (Ice), :7 (sun fails unless Cloud Nine / Air Lock).
     s = roark_state(tables, names, player_moves=["Powder Snow"], opp_species="Cranidos")
@@ -182,6 +190,7 @@ def test_ice_types_cannot_be_frozen_nor_anyone_in_sun(tables, names):
     )
 
 
+@pytest.mark.slow
 def test_poison_and_steel_types_cannot_be_poisoned(tables, names):
     # subscript_poison.s:34-37: TYPE_POISON or TYPE_STEEL fails.
     for opp, expected in (
@@ -200,7 +209,7 @@ def test_toxic_immunities(tables, names):
     # subscript_badly_poison.s:20-26 (indirect) and 47-53 (direct): an existing
     # status, a Poison type or a Steel type fails Toxic.
     def ok(s):
-        return bool(can_have_status(s, 1, 0, Status.TOXIC))
+        return bool(can_have_status(tables, s, 1, 0, Status.TOXIC))
 
     assert not ok(roark_state(tables, names, opp_species="Zubat"))
     assert not ok(roark_state(tables, names, opp_species="Bronzor"))
@@ -209,6 +218,7 @@ def test_toxic_immunities(tables, names):
     assert not ok(geodude.with_status(1, 0, Status.BURN))
 
 
+@pytest.mark.slow
 def test_stun_spore_paralyzes_and_never_overwrites(tables, names):
     s = roark_state(tables, names, player_species="Budew")
     assert (
@@ -246,6 +256,7 @@ def test_sleep_counter_comes_from_duration(tables, names):
     assert int(out.status[1, 1]) == Status.SLEEP and int(out.status_counter[1, 1]) == 3
 
 
+@pytest.mark.slow
 def test_thunder_wave_respects_the_type_chart(tables, names):
     # BattleControllerPlayer_CheckTypeChart runs Thunder Wave through the chart: Ground is immune.
     s = roark_state(tables, names, player_moves=["Thunder Wave"])
@@ -315,8 +326,17 @@ def test_no_flinch_without_proc(tables, names):
 # --- drain and recoil ----------------------------------------------------------
 
 
+def _no_exp(s):
+    """No participant: a KO pays no exp, so no level-up changes the HP these tests read
+    (K3d-exp: the payout at MoveEnd, after the drain). The game never reaches this state (its
+    active facing a living foe is always flagged, design §1.2); these tests read only the
+    drain, which comes before the payout (bcp.c:3965-3969), so it is the drain alone that is
+    checked, and the payout's own HP rule is tested in test_levelup.py."""
+    return s._replace(exp_mask=s.exp_mask * 0)
+
+
 def test_absorb_heals_half_damage_dealt(tables, names):
-    s = roark_state(tables, names, player_species="Budew").replace_hp(0, 0, 5)
+    s = _no_exp(roark_state(tables, names, player_species="Budew").replace_hp(0, 0, 5))
     out = step(tables, s, A("Absorb", "Leer", s, names), empty_outcome())
     hit = dealt(s, out)
     assert hit > 0 and int(out.hp[0, 0]) == min(int(s.max_hp[0, 0]), 5 + max(1, hit // 2))
@@ -325,6 +345,7 @@ def test_absorb_heals_half_damage_dealt(tables, names):
 def test_drain_uses_damage_capped_at_target_hp(tables, names):
     # BtlCmd_UpdateHealthBarValue caps hitDamage at the target's HP (battle_script.c:1701).
     s = roark_state(tables, names, player_species="Budew").replace_hp(0, 0, 5).replace_hp(1, 0, 3)
+    s = _no_exp(s)
     out = step(tables, s, A("Absorb", "Leer", s, names), empty_outcome())
     assert int(out.hp[1, 0]) == 0 and int(out.hp[0, 0]) == 5 + 1  # 3 // 2
 
@@ -345,6 +366,7 @@ def test_rock_head_prevents_recoil(tables, names):
 # --- multi-hit -----------------------------------------------------------------
 
 
+@pytest.mark.slow
 def test_fury_swipes_hits_n_times(tables, names):
     s = roark_state(tables, names, player_moves=["Fury Swipes"])
     two = step(
@@ -362,6 +384,7 @@ def test_fury_swipes_hits_n_times(tables, names):
     assert (int(s.hp[1, 0]) - int(five.hp[1, 0])) > (int(s.hp[1, 0]) - int(two.hp[1, 0]))
 
 
+@pytest.mark.slow
 def test_multi_hit_checks_accuracy_once(tables, names):
     # SYSCTL_MULTI_HIT_MOVE sets SYSCTL_SKIP_ACCURACY_CHECK for hits after the first.
     s = roark_state(tables, names, player_moves=["Fury Swipes"])
@@ -374,6 +397,7 @@ def test_multi_hit_checks_accuracy_once(tables, names):
     assert dealt(s, step(tables, s, A("Fury Swipes", "Leer", s, names), miss)) == 0
 
 
+@pytest.mark.slow
 def test_multi_hit_rolls_crit_per_hit(tables, names):
     s = roark_state(tables, names, player_moves=["Fury Swipes"])
     base = empty_outcome()._replace(n_hits=jnp.array([3, 2], jnp.int8))

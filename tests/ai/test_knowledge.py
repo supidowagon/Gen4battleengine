@@ -20,6 +20,7 @@
 import jax
 import jax.numpy as jnp
 import numpy as np
+import pytest
 
 from nuzline.ai.outcome import enumerate_ai_outcomes, sample_ai_outcome
 from nuzline.ai.policy import ai_scores, resolve_player_ability
@@ -55,6 +56,7 @@ def _seen(s) -> list[int]:
     return np.asarray(s.ai_seen_moves[int(s.active[0])]).tolist()
 
 
+@pytest.mark.slow
 def test_used_move_waits_in_last_move_until_the_ai_fights(tables, names):
     s = roark_state(tables, names)
     used = _both(tables, s, A("Scratch", "Leer", s, names))
@@ -65,6 +67,7 @@ def test_used_move_waits_in_last_move_until_the_ai_fights(tables, names):
     assert int(fought.last_move[0]) == names.move("Leer")  # pending again
 
 
+@pytest.mark.slow
 def test_move_replaced_while_the_ai_heals_is_never_recorded(tables, names):
     s = roark_state(tables, names)
     potion, second_potion = 10, 11
@@ -85,6 +88,7 @@ def test_ai_switch_records_nothing(tables, names):
     assert np.asarray(out.ai_seen_moves).sum() == 0
 
 
+@pytest.mark.slow
 def test_flinched_or_fully_paralysed_turn_records_nothing(tables, names):
     s = roark_state(tables, names, opp_species="Cranidos", opp_moves=["Headbutt"], opp_faster=True)
     flinch = empty_outcome()._replace(secondary=jnp.ones((2, 5), jnp.int8))
@@ -124,6 +128,7 @@ def test_a_miss_is_seen(tables, names):
     assert int(missed.last_move[0]) == names.move("Scratch")
 
 
+@pytest.mark.slow
 def test_opponent_moves_are_not_recorded(tables, names):
     s = roark_state(tables, names)
     t1 = _both(tables, s, A("Leer", "Leer", s, names))
@@ -142,6 +147,7 @@ def test_forced_struggle_skips_the_record(tables, names):
     assert _seen(out) == [0, 0, 0, 0]
 
 
+@pytest.mark.slow
 def test_player_struggle_is_written_but_not_recorded(tables, names):
     s = roark_state(tables, names)
     s = s._replace(pp=s.pp.at[0, 0].set(0))
@@ -165,6 +171,7 @@ def test_player_switch_in_resets_last_move(tables, names):
     assert int(out.last_move[0]) == 0
 
 
+@pytest.mark.slow
 def test_scores_include_the_pending_move(tables, names):
     """``TrainerAI_MainSingles`` runs ``RecordLastMove`` before scoring (trainer_ai.c:295),
     so the scores on the AI's FIGHT turn already know the player's last move."""
@@ -193,6 +200,7 @@ def test_switch_in_clears_the_newcomers_knowledge(tables, names):
     assert int(out.ai_ability_known[0]) == 1
 
 
+@pytest.mark.slow
 def test_scores_ignore_an_unseen_move(tables, names):
     """``IfMoveNotKnown DEFENDER, MOVE_U_TURN`` (Expert_Pursuit) reads the seen list:
     a U-turn the player knows but has not used changes no score."""
@@ -255,6 +263,7 @@ def test_mold_breaker_reveals_on_switch_in(tables, names):
     assert int(s.ai_ability_known[1]) == 0
 
 
+@pytest.mark.slow
 def test_poison_point_reveals_when_it_poisons(tables, names):
     """subscript_poison.s:57 tags ``BTLSCR_MSG_BATTLER_TEMP``'s (the holder's) ability."""
     s = roark_state(tables, names, player_species="Budew", player_ability="Poison Point")

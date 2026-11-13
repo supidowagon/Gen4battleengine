@@ -5,10 +5,11 @@ game that moves or renames those slots would silently change what that code mean
 each such constant is listed here and checked against the game's data when the game is
 loaded (``nuzline.data.games.load_game``):
 
-* ``CONSTANTS``: the ids, each with the name (and, for items, the hold effect or HP
-  restored) it must have. ``scope`` ``"engine"`` is asserted for every game;
-  ``"vanilla_policy"`` only for games whose AI policy is the vanilla transcription
-  (``POLICY``), since a game with no transcribed policy is refused by coverage anyway.
+* ``CONSTANTS``: the ids, each with the name (and, for items, the hold effect, hold param or
+  HP restored) it must have. ``scope`` ``"engine"`` is asserted for every game;
+  ``"vanilla_policy"`` and ``"kaizo_policy"`` only for games whose AI policy (``POLICY``)
+  reads them, since a game with no transcribed policy is refused by coverage anyway. A
+  table both policies read is listed once per scope.
 * ``GAME_DATA``: lists that are game data and come from the game's intermediate files.
 * ``EXEMPT``: tables that are not game ids (engine or AI-script encodings, or keyed by
   name or effect id), with the reason.
@@ -31,7 +32,10 @@ if TYPE_CHECKING:
     from nuzline.data.tables import Names
 
 KINDS = ("move", "ability", "item", "type", "species")
-SCOPES = ("engine", "vanilla_policy")
+SCOPES = ("engine", "vanilla_policy", "kaizo_policy")
+# The AI policies, in ``Tables.ai_policy`` order (``tools/build_tables.py`` packs the index;
+# ``nuzline.ai.layout.layout_of`` reads it).
+AI_POLICIES = ("vanilla", "kaizo")
 
 
 @dataclass(frozen=True)
@@ -45,13 +49,14 @@ class Constant:
     scope: str
     hold_effect: int | None = None
     hp_restored: int | None = None
+    hold_param: int | None = None
 
 
 def _table(where: str, kind: str, scope: str, entries: Mapping[str, int]) -> tuple[Constant, ...]:
     return tuple(Constant(where, kind, i, name, scope) for name, i in entries.items())
 
 
-_E, _P = "engine", "vanilla_policy"
+_E, _P, _K = "engine", "vanilla_policy", "kaizo_policy"
 _TYPES = {
     "Normal": 0,
     "Fighting": 1,
@@ -111,6 +116,68 @@ _SWITCH_MOVES = {
 }
 # ai/switching.py _ANY_SIDE_ABILITIES (ApplyTypeChart / CalcEffectiveness, trainer_ai.c).
 _ANY_SIDE_ABILITIES = {"Levitate": 26, "Wonder Guard": 25, "Scrappy": 113, "Normalize": 96}
+# ai/commands.py MOVE_IDS: Basic_Main's OHKO checks (script.s:57-58), Expert_Pursuit's
+# U-turn (:3730), Expert_StealthRock's Roar and Whirlwind (:6276-6277), Expert_Curse's Gyro
+# Ball and Trick Room (:3472-3473, read from K3c Task 6), and the Basic_CheckSoundproof list
+# (:121-131).
+_AI_MOVE_IDS = {
+    "Fissure": 90,
+    "Horn Drill": 32,
+    "U-turn": 369,
+    "Roar": 46,
+    "Whirlwind": 18,
+    "Gyro Ball": 360,
+    "Trick Room": 433,
+    **{k: v for k, v in _SOUND_MOVES.items() if k != "Roar"},
+}
+# ai/commands.py CALC_DAMAGE_MOVES: TrainerAI_CalcDamage's id cases (trainer_ai.c:2885-3056;
+# MOVE_* of generated/moves.txt, line N is id N-1).
+_CALC_DAMAGE_MOVES = {
+    "Natural Gift": 363,
+    "Judgment": 449,
+    "Hidden Power": 237,
+    "Gyro Ball": 360,
+    "Dragon Rage": 82,
+    "Seismic Toss": 69,
+    "Night Shade": 101,
+    "Psywave": 149,
+    "Return": 216,
+    "Frustration": 218,
+    "Magnitude": 222,
+    "SonicBoom": 49,
+    "Low Kick": 67,
+    "Grass Knot": 447,
+}
+# ai/commands.py MOVE_TYPE_MOVES: TrainerAI_MoveType's id cases (trainer_ai.c:3132-3222).
+_MOVE_TYPE_MOVES = {"Natural Gift": 363, "Judgment": 449, "Hidden Power": 237, "Weather Ball": 311}
+
+
+def _policy_tables(scope: str) -> tuple[Constant, ...]:
+    """The id tables both AI policies read by id (the script's and trainer_ai.c's ids are the
+    same numbers in both ROMs, docs/ai/kaizo_roark.md 2), asserted by name for ``scope``'s
+    games."""
+    return (
+        *_table("nuzline.ai.commands.MOVE_IDS", "move", scope, _AI_MOVE_IDS),
+        *_table("nuzline.ai.commands.SOUND_MOVES", "move", scope, _SOUND_MOVES),
+        *_table("nuzline.ai.switching.MOVE_IDS", "move", scope, _SWITCH_MOVES),
+        *_table("nuzline.ai.switching._MOVES", "move", scope, _SWITCH_MOVES),
+        *_table(
+            "nuzline.ai.switching.PLAYER_MOVE_REFUSALS",
+            "move",
+            scope,
+            {k: v for k, v in _SWITCH_MOVES.items() if k != "Hidden Power"},
+        ),
+        *_table(
+            "nuzline.ai.switching.PLAYER_ABILITY_REFUSALS", "ability", scope, _ANY_SIDE_ABILITIES
+        ),
+        *_table(
+            "nuzline.ai.policy._STATE_MOVE_IDS",
+            "move",
+            scope,
+            {k: _SWITCH_MOVES[k] for k in ("Miracle Eye", "Roost", "Magnet Rise", "Ingrain")},
+        ),
+    )
+
 
 CONSTANTS: tuple[Constant, ...] = (
     # --- engine: asserted for every game -------------------------------------------
@@ -140,6 +207,14 @@ CONSTANTS: tuple[Constant, ...] = (
             "Tinted Lens": 110,
             "Filter": 111,
             "Solid Rock": 116,
+            "Damp": 6,
+            "Simple": 86,
+            "Immunity": 17,
+            "Magic Guard": 98,
+            "Poison Heal": 90,
+            "Leaf Guard": 102,
+            "Hydration": 93,
+            "Rock Head": 69,
         },
     ),
     *_table(
@@ -162,13 +237,57 @@ CONSTANTS: tuple[Constant, ...] = (
         "nuzline.ai.commands.TYPE_IDS",
         "type",
         _E,
-        {k: _TYPES[k] for k in ("Ground", "Ghost", "Fire", "Water", "Electric", "Psychic")},
+        {
+            k: _TYPES[k]
+            for k in ("Poison", "Ground", "Ghost", "Steel", "Fire", "Water", "Electric", "Psychic")
+        },
     ),
     Constant("nuzline.ai.switching._TYPE_FLYING", "type", 2, "Flying", _E),
     Constant("nuzline.ai.switching._TYPE_STEEL", "type", 8, "Steel", _E),
     *_table("nuzline.engine.ids.Type", "type", _E, _TYPES),
     # MOVE_STRUGGLE (generated/moves.txt line 166).
     Constant("nuzline.engine.ids.MOVE_STRUGGLE", "move", 165, "Struggle", _E),
+    # MOVE_FAKE_OUT (generated/moves.txt line 253): subscript_flinch_mon.s:18.
+    Constant("nuzline.engine.ids.MOVE_FAKE_OUT", "move", 252, "Fake Out", _E),
+    # MOVE_PROTECT, MOVE_DETECT, MOVE_ENDURE (generated/moves.txt lines 183, 198, 204):
+    # BtlCmd_TryProtection's chain check (battle_script.c:5154-5156).
+    Constant("nuzline.engine.ids.MOVE_PROTECT", "move", 182, "Protect", _E),
+    Constant("nuzline.engine.ids.MOVE_DETECT", "move", 197, "Detect", _E),
+    Constant("nuzline.engine.ids.MOVE_ENDURE", "move", 203, "Endure", _E),
+    # ABILITY_MULTITYPE (generated/abilities.txt line 122): BtlCmd_TryCamouflage
+    # (battle_script.c:8001-8004).
+    Constant("nuzline.engine.ids.ABILITY_MULTITYPE", "ability", 121, "Multitype", _E),
+    # sTerrainMove (include/data/terrain/to_move.h): the moves Nature Power calls
+    # (BtlCmd_GetTerrainMove, battle_script.c:8036-8048); its type twin TERRAIN_TYPES holds
+    # ids.Type members, asserted with ids.Type.
+    *_table(
+        "nuzline.engine.ids.TERRAIN_MOVES",
+        "move",
+        _E,
+        {
+            "Earthquake": 89,
+            "Seed Bomb": 402,
+            "Rock Slide": 157,
+            "Blizzard": 59,
+            "Hydro Pump": 56,
+            "Ice Beam": 58,
+            "Tri Attack": 161,
+            "Mud Bomb": 426,
+            "Air Slash": 403,
+        },
+    ),
+    # The weather code's decomp abilities (generated/abilities.txt line N is id N-1).
+    *_table(
+        "nuzline.engine.ids.WEATHER_ABILITY_IDS",
+        "ability",
+        _E,
+        {
+            "Cloud Nine": 13,
+            "Air Lock": 76,
+            "Magic Guard": 98,
+            "Ice Body": 115,
+        },
+    ),
     Constant("nuzline.ai.switching.MOVE_STRUGGLE", "move", 165, "Struggle", _E),
     # Thunder Wave: BattleControllerPlayer_CheckTypeChart's MOVE_THUNDER_WAVE
     # (src/battle/battle_controller_player.c:2357).
@@ -181,6 +300,8 @@ CONSTANTS: tuple[Constant, ...] = (
     # Items (generated/items.txt, line N is id N-1); prep looks Heart Scale up by name.
     Constant("nuzline.prep.problem.HEART_SCALE", "item", 93, "Heart Scale", _E),
     Constant("nuzline.engine.coverage.ITEM_GRISEOUS_ORB", "item", 112, "Griseous Orb", _E),
+    # saves/pkm.py: the Luxury Ball friendship bonus (PokemonSpec.friend_bonus).
+    Constant("nuzline.saves.pkm.ITEM_LUXURY_BALL", "item", 11, "Luxury Ball", _E),
     # Hold effects (generated/item_hold_effects.txt, line N is id N-1):
     # HOLD_EFFECT_POWER_UP_SE (96) and HOLD_EFFECT_SPEED_DOWN_GROUNDED (106).
     Constant("nuzline.ai.commands.ITEM_EXPERT_BELT", "item", 268, "Expert Belt", _E, 96),
@@ -188,6 +309,12 @@ CONSTANTS: tuple[Constant, ...] = (
     # Potion's itemUseParams.hpRestored (res/items/data/potion.json), which
     # BattleSystem_UseBagItem (src/battle/battle_system.c:435) restores.
     Constant("nuzline.engine.ids.POTION_HP_RESTORED", "item", 17, "Potion", _E, hp_restored=20),
+    # Quick Claw's effectParam (res/items/data/quick_claw.json) with
+    # HOLD_EFFECT_SOMETIMES_PRIORITY (52): the engine stores speedRand % (100 / param) == 0
+    # (battle_lib.c:1278-1286) as one bit, exact only for this param.
+    Constant(
+        "nuzline.engine.ids.QUICK_CLAW_PARAM", "item", 217, "Quick Claw", _E, 52, hold_param=20
+    ),
     # saves/check.py: Sketch's user and the special routes outside the learnset tables
     # (Rotom's form moves, Route 228's ultimate moves, Wilma's Draco Meteor for Dragon
     # types, the Pichu egg's Volt Tackle); each route is cited there.
@@ -238,44 +365,22 @@ CONSTANTS: tuple[Constant, ...] = (
     ),
     # --- vanilla_policy: the transcribed vanilla AI scripts --------------------------
     *_table("nuzline.ai.commands.MOVE_EFFECTS", "move", _P, _TRANSCRIBED_MOVES),
-    # BattleEffect's ids are the battle effects of the transcribed moves; asserted
-    # through those moves (MOVE_EFFECTS maps each one to its member).
-    # A classification marker: these entries hold move ids, not effect ids.
-    *_table("nuzline.ai.commands.BattleEffect", "move", _P, _TRANSCRIBED_MOVES),
+    *_policy_tables(_P),
+    # The flat layout's script-roll sites, by move id (the per-slot layout keys them by battle
+    # effect, ai/outcome.py EFFECT_SITE_LINES).
     *_table("nuzline.ai.outcome._SITES", "move", _P, _TRANSCRIBED_MOVES),
-    # Basic_Main's OHKO and Roar checks (script.s:52), Expert's U-turn, and the
-    # Basic_CheckSoundproof list.
-    *_table(
-        "nuzline.ai.commands.MOVE_IDS",
-        "move",
-        _P,
-        {
-            "Fissure": 90,
-            "Horn Drill": 32,
-            "U-turn": 369,
-            "Roar": 46,
-            "Whirlwind": 18,
-            **{k: v for k, v in _SOUND_MOVES.items() if k != "Roar"},
-        },
-    ),
-    *_table("nuzline.ai.commands.SOUND_MOVES", "move", _P, _SOUND_MOVES),
-    *_table("nuzline.ai.switching.MOVE_IDS", "move", _P, _SWITCH_MOVES),
-    *_table("nuzline.ai.switching._MOVES", "move", _P, _SWITCH_MOVES),
-    *_table(
-        "nuzline.ai.switching.PLAYER_MOVE_REFUSALS",
-        "move",
-        _P,
-        {k: v for k, v in _SWITCH_MOVES.items() if k != "Hidden Power"},
-    ),
-    *_table("nuzline.ai.switching.PLAYER_ABILITY_REFUSALS", "ability", _P, _ANY_SIDE_ABILITIES),
-    *_table(
-        "nuzline.ai.policy._STATE_MOVE_IDS",
-        "move",
-        _P,
-        {k: _SWITCH_MOVES[k] for k in ("Miracle Eye", "Roost", "Magnet Rise", "Ingrain")},
-    ),
-    # The Dry Skin quirk (script.s:78 tests Levitate a second time; policy.py _basic).
-    Constant("nuzline.ai.policy._basic", "ability", 26, "Levitate", _P),
+    # The decomp's C id cases: both policies compare these by id, whatever a game names the
+    # slot (Kaizo's 149 is Triple Axel and still takes MOVE_PSYWAVE's case), so they are
+    # name-checked against vanilla only.
+    *_table("nuzline.ai.commands.CALC_DAMAGE_MOVES", "move", _P, _CALC_DAMAGE_MOVES),
+    *_table("nuzline.ai.commands.MOVE_TYPE_MOVES", "move", _P, _MOVE_TYPE_MOVES),
+    # script.s:78's compare (Basic_CheckForImmunity -> Basic_CheckWaterAbsorption2): the
+    # decomp tests Levitate a second time, which never matches (quirk).
+    Constant("nuzline.ai.layout.VANILLA", "ability", 26, "Levitate", _P),
+    # --- kaizo_policy: the vanilla transcription, read by battle effect (ai/layout.py) ---
+    *_policy_tables(_K),
+    # Kaizo's one changed script word (overlay14 0x022249CC, data/kaizo/rom_diff.toml).
+    Constant("nuzline.ai.layout.KAIZO", "ability", 87, "Dry Skin", _K),
 )
 
 # Lists that are game data: "module.ATTR" -> the intermediate file that replaces it.
@@ -316,7 +421,55 @@ EXEMPT: dict[str, str] = {
     "nuzline.ai.commands.Battler": _AI_ENCODING + " (AI_BATTLER_*)",
     "nuzline.ai.commands.LoadType": _AI_ENCODING + " (LOAD_*, trainer_ai.c:937)",
     "nuzline.ai.commands.SideCondition": _AI_ENCODING + " (SIDE_CONDITION_*)",
+    "nuzline.ai.commands.MonCondition": _AI_ENCODING + " (MON_CONDITION_*, condition.h:7-25)",
+    "nuzline.ai.commands.FieldCondition": _AI_ENCODING + " (FIELD_CONDITION_*, condition.h:144)",
+    "nuzline.ai.commands.AiWeather": _AI_ENCODING + " (AI_WEATHER_*, trainer_ai.c:1414-1439)",
     "nuzline.ai.commands.TypeMulti": _AI_ENCODING + " (TYPE_MULTI_*, battle.h:144-153)",
+    "nuzline.ai.commands.BattleEffect": (
+        "decomp battle effect ids (BATTLE_EFFECT_*, generated/move_battle_effects.txt) that the "
+        "AI script compares with MoveTable.effect (IfCurrentMoveEffectEqualTo, trainer_ai.c:1441), "
+        "a script Kaizo did not change apart from one word (docs/ai/kaizo_roark.md 2); each "
+        "game's moves carry their own effect"
+    ),
+    "nuzline.ai.commands.NO_DAMAGE_CALC_EFFECTS": (
+        "decomp battle effect ids of trainer_ai.c's sNoDamageCalcMoveEffects (:31-46), compared "
+        "with MoveTable.effect by the AI's C code, which Kaizo did not change "
+        "(docs/ai/kaizo_roark.md 2); each game's moves carry their own effect"
+    ),
+    "nuzline.ai.commands.RISKY_EFFECTS": (
+        "decomp battle effect ids of script.s's Risky_RiskyEffects (:6536-6562), compared with "
+        "MoveTable.effect (IfLoadedNotInTable, trainer_ai.c:876-891) by a script Kaizo did not "
+        "change apart from one word (docs/ai/kaizo_roark.md 2); each game's moves carry their "
+        "own effect"
+    ),
+    "nuzline.ai.commands.ALT_POWER_EFFECTS": (
+        "decomp battle effect ids of trainer_ai.c's sAltPowerMoveEffects (:48-61), compared "
+        "with MoveTable.effect by the AI's C code, which Kaizo did not change "
+        "(docs/ai/kaizo_roark.md 2); each game's moves carry their own effect"
+    ),
+    "nuzline.ai.outcome.EFFECT_SITE_LINES": (
+        "decomp battle effect ids (keys) and script.s line numbers (values): the per-slot AI "
+        "layout's script-roll sites, read through MoveTable.effect by IfCurrentMoveEffectEqualTo "
+        "(trainer_ai.c:1441), whose script Kaizo did not change apart from one word "
+        "(docs/ai/kaizo_roark.md 2); each game's moves carry their own effect"
+    ),
+    "nuzline.ai.commands.ReadKind": "kind of a loose-oracle read (tests only), not a game id",
+    "nuzline.ai.outcome.KAIZO_EXPERT_LABELS": (
+        "decomp battle effect ids (keys) and the script.s labels and lines of their Expert_Main "
+        "entries (:1628-1808), a script Kaizo did not change apart from one word "
+        "(docs/ai/kaizo_roark.md 2); each game's moves carry their own effect"
+    ),
+    "nuzline.ai.outcome.KAIZO_EXPERT_TRANSCRIBED": (
+        "decomp battle effect ids whose Expert_Main label (script.s:1628-1808) the AI "
+        "transcribes; MoveTable.effect is read by a script Kaizo did not change apart from one "
+        "word (docs/ai/kaizo_roark.md 2); each game's moves carry their own effect"
+    ),
+    "nuzline.ai.policy._LOOSE_SHARE": (
+        "tie-break probabilities P(RandNext() % n == i) (trainer_ai.c:338), not game ids"
+    ),
+    "nuzline.ai.outcome.SITE_N": (
+        "script.s line numbers and IfRandomLessThan thresholds of the AI script, not game ids"
+    ),
     "nuzline.ai.switching.SwitchSite": "kind of an AI switch draw (roark.md 11.1), not a game id",
     "nuzline.ai.switching._CANDIDATE_TARGETS": (
         "party slot of each AI switch candidate (-1: keep the battler), an engine layout"
@@ -325,6 +478,11 @@ EXEMPT: dict[str, str] = {
     "tools.effect_map._EFFECTS": _KEYED_BY_EFFECT,
     "tools.effect_map.DECOMP_EFFECT_NAMES": _KEYED_BY_EFFECT,
     "tools.effect_map.CERTAIN_SECONDARY_EFFECTS": _KEYED_BY_EFFECT,
+    "tools.effect_map.RESIST_BERRY_HOLD_EFFECTS": (
+        "keyed by decomp hold effect id, read off the vanilla subscript_type_resist_berry.s: "
+        "each game's items carry their own hold effect (build_tables looks theirs up here), "
+        "and a game's script changes are rom_diff.toml entries (Ruling 13)"
+    ),
     "tools.effect_map.DECOMP_ABILITY_TO_ID": (
         "keyed by ability name: engine semantics of the vanilla ability handling; a game's "
         "changes to it are rom_diff.toml entries (Ruling 13)"
@@ -338,11 +496,11 @@ EXEMPT: dict[str, str] = {
     ),
 }
 
-# Game id -> the AI policy its trainers' scripts are transcribed as (None: none yet, so
-# coverage refuses every trainer of that game, spec 5.10).
+# Game id -> the AI policy its trainers' scripts are transcribed as, one of AI_POLICIES (None:
+# none yet, so coverage refuses every trainer of that game, spec 5.10).
 POLICY: dict[str, str | None] = {
     "platinum_us": "vanilla",
-    "platinum_kaizo_nightmare_final": None,
+    "platinum_kaizo_nightmare_final": "kaizo",
 }
 
 
@@ -362,7 +520,7 @@ def _check(c: Constant, names: Names, items: Sequence[dict]) -> list[str]:
     lines = []
     if table[c.id].lower() != c.name.lower():
         lines.append(f"{where}: id {c.id} is {table[c.id]!r} in this game, expected {c.name!r}")
-    if c.hold_effect is None and c.hp_restored is None:
+    if c.hold_effect is None and c.hp_restored is None and c.hold_param is None:
         return lines
     if c.id >= len(items):
         return [*lines, f"{where}: item {c.id} is missing from this game's items.json"]
@@ -371,6 +529,11 @@ def _check(c: Constant, names: Names, items: Sequence[dict]) -> list[str]:
         lines.append(
             f"{where}: {c.name} has hold effect {row.get('hold_effect')} in this game, "
             f"expected {c.hold_effect}"
+        )
+    if c.hold_param is not None and row.get("hold_param") != c.hold_param:
+        lines.append(
+            f"{where}: {c.name} has hold param {row.get('hold_param')} in this game, "
+            f"expected {c.hold_param}"
         )
     if c.hp_restored is not None:
         hp = row.get("hp_restored")
@@ -384,10 +547,11 @@ def _check(c: Constant, names: Names, items: Sequence[dict]) -> list[str]:
 def check_constants(game_id: str, names: Names, items: Sequence[dict]) -> list[str]:
     """One line per hard-coded id that ``game_id``'s data contradicts; ``items`` are the
     rows of the game's ``intermediate_dir/items.json``. Engine constants are checked for
-    every game, the vanilla policy's only for a game whose ``POLICY`` is ``"vanilla"``."""
+    every game, a policy's (``"vanilla_policy"``, ``"kaizo_policy"``) only for a game whose
+    ``POLICY`` it is."""
     policy = POLICY.get(game_id)
     lines: list[str] = []
     for c in CONSTANTS:
-        if c.scope == "engine" or policy == "vanilla":
+        if c.scope == "engine" or (policy is not None and c.scope == f"{policy}_policy"):
             lines += _check(c, names, items)
     return lines

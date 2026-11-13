@@ -617,6 +617,20 @@ def test_report_lists_user_calls():
     assert not unplaced & {*range(874, 892), 894, 895, 896}
 
 
+def test_unclassified_line_is_true_at_zero():
+    """Task 2 review m7: with no unknown entry left the line no longer says every Kaizo fight
+    is refused."""
+    from tools.kaizo.resolve import unclassified_line
+
+    assert unclassified_line(0) == (
+        "- 0 ROM changes unclassified in data/kaizo/rom_diff.toml: none is left, so no Kaizo "
+        "fight is refused for one (Ruling 13)"
+    )
+    assert unclassified_line(2).endswith(
+        "every Kaizo fight is refused until they are classified (Ruling 13)"
+    )
+
+
 def test_user_calls_drop_answered_weather_and_sheet_backed_gravity():
     from tools.kaizo.overrides import Mappings
     from tools.kaizo.resolve import Sources, user_calls

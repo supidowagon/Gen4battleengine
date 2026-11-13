@@ -595,6 +595,10 @@ def trainer_record(
         if where != "none" or not t["party"]
         else "rom: no map placement found (trainer -> map join): unknown (user call)"
     )
+    sources["terrain"] = sources["terrains"] = (
+        f"rom: CalcTerrain over the tiles of the trainer's map headers (headers {where}; "
+        "tools/terrain.py)"
+    )
     a = overrides.area.get(tid)
     if a is not None:
         sources["area_condition"] += f"; overrides area.{tid} ({a.source})"
@@ -746,11 +750,17 @@ def user_calls(
                 f"- Gravity: {name(tid)} rests on PKCalc only ({a.source}); no ROM field effect "
                 f"on its headers {sorted(src.trainer_maps.get(tid, []))}"
             )
-    lines.append(
-        f"- {unclassified} ROM changes unclassified in data/kaizo/rom_diff.toml: every Kaizo "
-        "fight is refused until they are classified (Ruling 13)"
-    )
+    lines.append(unclassified_line(unclassified))
     return lines
+
+
+def unclassified_line(unclassified: int) -> str:
+    """The user-call line for the ``unknown`` entries of ``data/kaizo/rom_diff.toml``: while
+    any is left every Kaizo fight is refused (Ruling 13); none left refuses nothing."""
+    head = f"- {unclassified} ROM changes unclassified in data/kaizo/rom_diff.toml"
+    if unclassified == 0:
+        return f"{head}: none is left, so no Kaizo fight is refused for one (Ruling 13)"
+    return f"{head}: every Kaizo fight is refused until they are classified (Ruling 13)"
 
 
 # --- resolve ----------------------------------------------------------------------------

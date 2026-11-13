@@ -3,7 +3,7 @@
 import pytest
 
 from nuzline.engine.ids import EffectId
-from tools.build_tables import BuildError, _move_effect
+from tools.build_tables import BuildError, _learnset_grid, _move_effect
 
 # Exactly the keys _move_effect reads: name, effect (BATTLE_EFFECT_BURN_HIT = 4) and
 # effect_chance.
@@ -41,3 +41,39 @@ def test_chance_zero_secondary_with_more_than_the_secondary_is_unsupported():
 def test_changed_effect_is_unsupported():  # K2b Ruling 13
     assert _move_effect(EMBER, frozenset({4}))[0] == int(EffectId.UNSUPPORTED)
     assert _move_effect(EMBER, frozenset({5}))[0] == int(EffectId.SECONDARY_STATUS)
+
+
+def test_fake_out_without_a_chance_is_unsupported():
+    # effect_script_0158.s rolls the move's chance; chance 0 would read as an ON_HIT flinch.
+    fake_out = {"name": "Fake Out", "effect": 158, "effect_chance": 100}
+    assert _move_effect(fake_out)[0] == int(EffectId.FAKE_OUT)
+    assert _move_effect({**fake_out, "effect_chance": 0})[0] == int(EffectId.UNSUPPORTED)
+
+
+def test_chance_zero_ancientpower_is_plain():
+    ancient = {"name": "AncientPower", "effect": 140, "effect_chance": 10}
+    assert _move_effect(ancient)[0] == int(EffectId.RAISE_ALL_STATS_HIT)
+    assert _move_effect({**ancient, "effect_chance": 0}) == (int(EffectId.PLAIN), (0, 0, 0))
+
+
+def test_chance_zero_flinch_raises():
+    # battle_lib.c:1577 asserts effectChance != 0 for this indirect effect.
+    headbutt = {"name": "Headbutt", "effect": 31, "effect_chance": 30}
+    assert _move_effect(headbutt)[0] == int(EffectId.FLINCH)
+    with pytest.raises(BuildError, match="Headbutt"):
+        _move_effect({**headbutt, "effect_chance": 0})
+
+
+def test_learnset_grid_keeps_source_order_and_pads():
+    moves, levels = _learnset_grid({"0": [[8, 5], [5, 6]], "1": []}, 2)
+    assert levels == [[8, 5] + [0] * 19, [0] * 21]
+    assert moves == [[5, 6] + [0] * 19, [0] * 21]
+
+
+def test_learnset_grid_refuses_what_it_cannot_pack():
+    with pytest.raises(BuildError, match="row 0: 22 entries, more than 21"):
+        _learnset_grid({"0": [[5, 1]] * 22}, 1)
+    with pytest.raises(BuildError, match="row 0: level 0 is outside"):
+        _learnset_grid({"0": [[0, 1]]}, 1)
+    with pytest.raises(BuildError, match=r"rows are not 0\.\.1"):
+        _learnset_grid({"0": []}, 2)

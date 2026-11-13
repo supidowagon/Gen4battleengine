@@ -26,6 +26,8 @@ from tests.search.fixtures import (
     sacrifice_endgame,
 )
 
+pytestmark = pytest.mark.slow
+
 KEY = jax.random.PRNGKey(0)
 EXACT = SolveSettings(max_depth=1, epsilon=0.0, n_depth0=8)
 TO_PRINPLUP, TO_STARLY = MOVE_ACTIONS + 1, MOVE_ACTIONS + 3
@@ -65,6 +67,7 @@ def all_win_leaf(states, weights, pairs=None):
     return [LeafValue(10**6, 10**6, 10**6, 10**6, False) for _ in range(len(states.hp))]
 
 
+@pytest.mark.slow
 def test_pending_root_matches_exhaustive(tables, names):
     state = faint_pending_root(tables, names)
     result = solve(tables, names, state, KEY, EXACT, leaf_fn=certain_zero_leaf)
@@ -161,6 +164,7 @@ def test_failed_nodes_value_zero(tables, names):
     assert len(failed_calls) == 1
 
 
+@pytest.mark.slow
 def test_distribution_sums(tables, names):
     state = sacrifice_endgame(tables, names).with_budget(1)
     settings = SolveSettings(max_depth=1, budget_playouts=2000, n_depth0=200)
@@ -193,6 +197,7 @@ def protected_root(tables, names):
     return s
 
 
+@pytest.mark.slow
 def test_protected_line_matches_exhaustive(tables, names):
     base = protected_root(tables, names)
     settings = SolveSettings(max_depth=2, epsilon=0.0, n_depth0=8)

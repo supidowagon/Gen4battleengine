@@ -567,6 +567,7 @@ def test_stale_citation_detected(docs):  # Roark Split:7's header has no TRICK R
     assert check_citations(o, docs) == ["area.7: Roark Split:7 does not say Trick Room"]
 
 
+@pytest.mark.slow
 def test_rules_left_unset_by_draft(docs, mappings):
     assert "rules = {}" in draft_overrides(docs, mappings)
 

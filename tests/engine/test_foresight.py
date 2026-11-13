@@ -35,6 +35,7 @@ def identify(s):
     return s._replace(foresight=s.foresight.at[1].set(1))
 
 
+@pytest.mark.slow
 def test_foresight_sets_flag(tables, names, state):
     assert int(state.foresight[1]) == 0
     out = step(tables, state, A("Foresight", "Tackle", state, names), empty_outcome())
@@ -82,6 +83,7 @@ def test_identified_ignores_positive_evasion(tables, names, state):
     assert threshold(2, False) == 57  # 95 * 60 // 100 (HitRateByStage[4]); controller ruling
 
 
+@pytest.mark.slow
 def test_foresight_matches_reference(tables, names, state):
     hits = empty_outcome()._replace(hit=jnp.ones((2, 5), jnp.int8))
     out = assert_matches_reference(tables, state, A("Foresight", "Tackle", state, names), hits)

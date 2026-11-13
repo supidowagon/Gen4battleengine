@@ -4,12 +4,13 @@ from pathlib import Path
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 import pytest
 
 from nuzline.data.party import load_party
 from nuzline.engine.ids import Stat, Status, Weather
 from nuzline.engine.outcome import empty_outcome
-from nuzline.engine.state import BattleState, make_state
+from nuzline.engine.state import LAYOUT, BattleState, make_state
 from nuzline.engine.step import step
 from nuzline.reference.convert import from_ref, to_ref
 from tests.engine.helpers import A, roark_state
@@ -180,14 +181,14 @@ def test_state_md_accounts_for_every_struct_field():
 # switch-in ability checks re-run after every move gated by the announced flags
 # (battle_lib.c:3649-4168, battle_controller_player.c:3673/3973), Quick Claw, Protect,
 # the speed values and Sketch are read later in the turn. They are needed for M6, not M1
-# (``moveLockedInto`` moved to ``locked_move`` in milestone 4a).
+# (``moveLockedInto`` moved to ``locked_move`` in milestone 4a; ``moveProtect`` folded into
+# ``protect_count`` in K3b2 Task 6, test_move_protect_is_folded_into_protect_count).
 AUDIT_LATER_ROWS = (
     "BattleMon.intimidateAnnounced",
     "BattleMon.weatherAbilityAnnounced",
     "BattleMon.traceAnnounced",
     "BattleMon.downloadAnnounced",
     "MoveEffectsData.quickClaw",
-    "BattleContext.moveProtect",
     "BattleContext.monSpeedValues",
     "BattleContext.moveSketched",
 )
@@ -197,6 +198,29 @@ def test_state_md_audit_rows_are_later_m6():
     status = {field: status for field, _, status in _state_md_rows()}
     for field in AUDIT_LATER_ROWS:
         assert status[field] == "later (M6)", f"{field}: {status[field]!r}"
+
+
+def test_move_protect_is_folded_into_protect_count():
+    # docs/kaizo/k3b2-rules.md §12: the moveProtect reset is folded into protect_count.
+    rows = {field: (pytree, status) for field, pytree, status in _state_md_rows()}
+    assert rows["BattleContext.moveProtect"] == ("protect_count", "mapped")
+    assert rows["MoveEffectsData.protectSuccessTurns"] == ("protect_count", "mapped")
+
+
+def test_attract_bits_map_to_infatuated():
+    # docs/kaizo/k3b2-rules.md §12: statusVolatile's ATTRACT bits are `infatuated`.
+    rows = {field: (pytree, status) for field, pytree, status in _state_md_rows()}
+    pytree, status = rows["BattleMon.statusVolatile"]
+    assert status == "mapped" and "infatuated" in re.findall(r"\w+", pytree)
+    later = re.search(r"other bits \(([^)]*)\)", STATE_MD.read_text(encoding="utf-8"))
+    assert later and "Attract" not in later.group(1)
+
+
+def test_speed_rand_maps_to_qc_roll():
+    # docs/kaizo/k3b2-rules.md §12: speedRand is read only through Quick Claw's test.
+    rows = {field: (pytree, status) for field, pytree, status in _state_md_rows()}
+    assert rows["BattleContext.speedRand"] == ("qc_roll", "mapped")
+    assert rows["MoveEffectsData.quickClaw"][1] == "later (M6)"
 
 
 def test_leads_choose_the_active_slots_before_the_switch_in_effects(tables, names):
@@ -259,6 +283,7 @@ NEW_VOLATILES = (
     "bide_damage",
     "curled",
     "mud_sport",
+    "aqua_ring",
 )
 
 
@@ -285,6 +310,7 @@ def _new_volatiles(s, side):
     return [int(getattr(s, name)[side]) for name in NEW_VOLATILES]
 
 
+@pytest.mark.slow
 def test_new_volatiles_reset_on_switch_and_faint(tables, names):
     s = roark_state(tables, names)
     # A switch-out clears side 0's battler (BattleSystem_UpdateAfterSwitch zeroes
@@ -342,3 +368,10 @@ def test_rotom_wash_state_uses_its_row(tables, sample_spec):
 def test_bad_form_raises(tables, sample_spec):
     with pytest.raises(ValueError, match="species 479 has no form 6"):
         make_state(tables, [dataclasses.replace(sample_spec, species=479, form=6)], [sample_spec])
+
+
+def test_battle_system_terrain_maps_to_terrain():
+    # docs/kaizo/k3b2-rules.md §12: BattleSystem.terrain is a constant field scalar.
+    rows = {field: (pytree, status) for field, pytree, status in _state_md_rows()}
+    assert rows["BattleSystem.terrain"] == ("terrain", "mapped")
+    assert LAYOUT["terrain"] == ((), np.int8)

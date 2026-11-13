@@ -10,11 +10,12 @@ Mirrors the decomp's pipeline for one hit of a damaging move:
    at least 1. Our ``roll`` is ``15 - rand % 16``, so roll ``r`` multiplies by
    ``85 + r`` and ``damage_table`` is ascending.
 4. ``BattleSystem_ApplyTypeChart`` (``battle_lib.c:2560``, run later by
-   ``BattleControllerPlayer_CheckTypeChart``): STAB ``* 15 / 10``, then each
-   defender type's multiplier through ``BattleSystem_Divide`` (``:3599``, a
-   non-zero result never truncates to 0), in the order their rows appear in
-   ``sTypeMatchupMultipliers`` (``:2399``, walked at ``:2611-2646``), which is
-   not always type 1 then type 2 (``tables.type_chart_order``).
+   ``BattleControllerPlayer_CheckTypeChart``): STAB ``* 15 / 10`` (``* 2`` with
+   Adaptability), then each defender type's multiplier through ``BattleSystem_Divide``
+   (``:3599``, a non-zero result never truncates to 0), in the order their rows appear
+   in ``sTypeMatchupMultipliers`` (``:2399``, walked at ``:2611-2646``), which is not
+   always type 1 then type 2 (``tables.type_chart_order``), then Solid Rock on a
+   super-effective hit (``Divide(damage * 3, 4)``, ``:2657-2660``).
 
 The trainer AI's estimate (``TrainerAI_CalcDamage``, ``trainer_ai.c:2868``) runs
 steps 1, 4 and then 3: ``ai_damage_for_roll`` (crit multiplier 1, variance last).
@@ -22,7 +23,8 @@ steps 1, 4 and then 3: ``ai_damage_for_roll`` (crit multiplier 1, variance last)
 Only mechanics of the implemented set are modelled. Abilities, items and moves
 outside it are ``UNSUPPORTED`` ids and never reach the branches here; the decomp
 modifiers they would trigger (Technician, type-boosting items, Thick Fat, Flash
-Fire, Cloud Nine, ...) are therefore omitted, not approximated. Doubles-only
+Fire, ...) are therefore omitted, not approximated. Cloud Nine and Air Lock gate the
+weather modifiers (``weather_suppressed``). Doubles-only
 spread and screen rules do not apply (singles).
 """
 
@@ -31,7 +33,16 @@ from __future__ import annotations
 import jax.numpy as jnp
 
 from nuzline.data.tables import Tables
-from nuzline.engine.ids import MOVE_STRUGGLE, AbilityId, EffectId, Stat, Status, Type, Weather
+from nuzline.engine.ids import (
+    MOVE_STRUGGLE,
+    WEATHER_ABILITY_IDS,
+    AbilityId,
+    EffectId,
+    Stat,
+    Status,
+    Type,
+    Weather,
+)
 from nuzline.engine.state import BattleState
 
 PHYSICAL, SPECIAL, STATUS = 0, 1, 2  # tables.move_category
@@ -48,10 +59,61 @@ _I32 = jnp.int32
 # BtlCmd_CalcMagnitudePower (battle_script.c:5820-5852): the power of Magnitude levels 4-10.
 MAGNITUDE_POWER = jnp.array([10, 30, 50, 70, 90, 110, 150], jnp.int32)
 MAGNITUDE_MIN = 4
+# BtlCmd_Present (battle_script.c:5795-5800): movePower 40, 80 or 120 for Outcome.present 0,
+# 1, 2; PRESENT_HEAL (3) is the heal path, which runs no CalcDamage (effect_script_0122.s).
+# PRESENT_TABLE (no drawn value) keeps the table power, as BattleSystem_CalcMoveDamage does
+# with no input power (battle_lib.c:6674): the turn-start tables and the AI's own estimates.
+PRESENT_POWER = jnp.array([40, 80, 120], jnp.int32)
+PRESENT_HEAL = 3
+PRESENT_TABLE = -1
+# BtlCmd_CalcFlailPower (battle_script.c:4958-4970): sHPPixelsToFlailPower (:4941-4948) as
+# (largest pixel count of the band, power); the first row with pixels <= its bound wins.
+# The last row's bound is 64, the most App_PixelCount(cur, max, 64) can return.
+FLAIL_BOUNDS = (1, 5, 12, 21, 42, 64)
+FLAIL_POWER = jnp.array([200, 150, 100, 80, 40, 20], jnp.int32)
+FLAIL_PIXELS = 64
+
+
+def hp_pixels(cur, max_hp):
+    """``App_PixelCount(cur, max, 64)`` (src/unk_0208C098.c:41-49): ``cur * 64 / max`` in
+    integer arithmetic, but at least 1 while ``cur > 0``."""
+    cur, max_hp = _i32(cur), _i32(max_hp)
+    pixels = cur * FLAIL_PIXELS // jnp.maximum(max_hp, 1)
+    return jnp.where((pixels == 0) & (cur > 0), 1, pixels)
+
+
+def flail_power(cur, max_hp):
+    """``int32``: Flail / Reversal's power at ``cur`` of ``max_hp`` HP (battle_script.c:4958)."""
+    pixels = hp_pixels(cur, max_hp)
+    row = jnp.sum(pixels > jnp.asarray(FLAIL_BOUNDS, jnp.int32))
+    return FLAIL_POWER[jnp.minimum(row, len(FLAIL_BOUNDS) - 1)]
 
 
 def _i32(x) -> jnp.ndarray:
     return jnp.asarray(x).astype(_I32)
+
+
+def decomp_abilities(tables: Tables, state: BattleState) -> jnp.ndarray:
+    """``int32[2, SLOTS]``: every slot's decomp ability id (``Battler_Ability``), from
+    ``tables.species_abilities_decomp`` at the Pokemon's personal row and ability slot."""
+    row = tables.species_form_row[_i32(state.species), _i32(state.form)]
+    return _i32(tables.species_abilities_decomp[_i32(row), _i32(state.ability_slot)])
+
+
+def weather_suppressed(tables: Tables, state: BattleState, active=None) -> jnp.ndarray:
+    """``bool[]``: not ``NO_CLOUD_NINE`` (include/battle/common.h:63-64): an active
+    battler with HP left has Cloud Nine or Air Lock (``BattleSystem_CountAbility``,
+    ``COUNT_ALIVE_BATTLERS``), which turns off every weather effect. ``active``
+    (``int[2]`` party slots, default ``state.active``) names the battlers on the field
+    when that differs from the state's, as for a move that meets a Pokemon switched in
+    this turn (``outcome.hit_threshold``)."""
+    sides = jnp.arange(2)
+    active = state.active if active is None else active
+    ability = decomp_abilities(tables, state)[sides, active]
+    lock = (ability == WEATHER_ABILITY_IDS["Cloud Nine"]) | (
+        ability == WEATHER_ABILITY_IDS["Air Lock"]
+    )
+    return jnp.any(lock & (state.hp[sides, active] > 0))
 
 
 def hidden_power(ivs) -> tuple[jnp.ndarray, jnp.ndarray]:
@@ -170,6 +232,8 @@ def _pre_random(
     power_mul=10,
     self_hit: bool = False,
     magnitude=MAGNITUDE_MIN,
+    present=PRESENT_TABLE,
+    ai: bool = False,
 ):
     """Damage after ``+ 2`` and the crit multiplier, before the random roll.
 
@@ -177,7 +241,10 @@ def _pre_random(
     ``self_hit`` is the confusion self-hit, ``CALC_SELF_HIT(MOVE_STRUGGLE, 40)``
     (``include/battle/common.h:35``): the attacker is its own defender, power 40, and
     no side or field conditions are passed (no screens, no weather). ``magnitude`` is
-    Magnitude's level (``Outcome.magnitude``)."""
+    Magnitude's level (``Outcome.magnitude``); ``present`` is Present's draw
+    (``Outcome.present``: 0-2 is the power 40/80/120, any other value keeps the table
+    power). ``ai`` is ``TrainerAI_CalcDamage`` (trainer_ai.c:2868-3109), which has no Flail,
+    Rollout or Present case: they keep the move's table power."""
     atk_side = _i32(atk_side)
     def_side = atk_side if self_hit else 1 - atk_side
     move = _i32(move)
@@ -189,21 +256,32 @@ def _pre_random(
     effect = _i32(tables.move_effect[move])
     # CalcHiddenPowerParams (battle_script.c:6007) / CalcMagnitudePower (:5820) set movePower.
     # CalcRolloutPower (:5661) doubles movePower per use, and again when curled.
+    # CalcFlailPower (:4958) reads the attacker's current and max HP.
+    rollout_mul = 1 if ai else rollout_multiplier(s, atk_side)
     variable = jnp.where(
         effect == EffectId.HIDDEN_POWER,
         hidden_power(s.ivs[atk_side, a_slot])[1],
         jnp.where(
             effect == EffectId.ROLLOUT,
-            base_power * rollout_multiplier(s, atk_side),
-            MAGNITUDE_POWER[jnp.clip(_i32(magnitude) - MAGNITUDE_MIN, 0, 6)],
+            base_power * rollout_mul,
+            jnp.where(
+                effect == EffectId.FLAIL,
+                flail_power(s.hp[atk_side, a_slot], s.max_hp[atk_side, a_slot]),
+                MAGNITUDE_POWER[jnp.clip(_i32(magnitude) - MAGNITUDE_MIN, 0, 6)],
+            ),
         ),
     )
     has_variable = (
         (effect == EffectId.HIDDEN_POWER)
         | (effect == EffectId.MAGNITUDE)
         | (effect == EffectId.ROLLOUT)
+        | ((effect == EffectId.FLAIL) & (not ai))
     )
     power = jnp.where(has_variable, variable, base_power)
+    # BtlCmd_Present (battle_script.c:5795-5800) sets movePower before CalcDamage.
+    present = _i32(present)
+    drawn = (effect == EffectId.PRESENT) & (present >= 0) & (present < PRESENT_HEAL) & (not ai)
+    power = jnp.where(drawn, PRESENT_POWER[jnp.clip(present, 0, PRESENT_HEAL - 1)], power)
     power = jnp.asarray(CONFUSION_POWER, _I32) if self_hit else power
     power = power * _i32(power_mul) // 10  # :6688 movePower * powerMul / 10
     # :6682 moveType = MOVE_DATA(move).type, or Hidden Power's IV type (battle_script.c:6028)
@@ -265,10 +343,16 @@ def _pre_random(
     power = jnp.where(gendered & (a_gender == d_gender), power * 125 // 100, power)
     power = jnp.where(gendered & (a_gender != d_gender), power * 75 // 100, power)
 
+    # :6921 NO_CLOUD_NINE gates the weather modifiers here and at :7046 (the self-hit
+    # passes no field conditions).
+    weather = jnp.where(weather_suppressed(tables, s), Weather.NONE, s.weather)
     # :6926 sandstorm: a Rock-type defender's SpD x1.5.
     rock = jnp.any(d_types == Type.ROCK)
-    sand = (s.weather == Weather.SANDSTORM) & rock & (not self_hit)
+    sand = (weather == Weather.SANDSTORM) & rock & (not self_hit)
     sp_defense = jnp.where(sand, sp_defense * 15 // 10, sp_defense)
+    # :6943-6945 Selfdestruct / Explosion (BATTLE_EFFECT_HALVE_DEFENSE) halve defenseStat,
+    # before the stage scales it (coverage refuses a Defense the -6 stage would bring to 0).
+    defense = jnp.where(effect == EffectId.SELF_DESTRUCT, defense // 2, defense)
 
     # :6947 / :6992 physical uses Atk/Def, special SpA/SpD.
     is_physical = category == PHYSICAL
@@ -292,12 +376,12 @@ def _pre_random(
     damage = jnp.where(burned, damage // 2, damage)
     # :6982 Reflect / :7023 Light Screen on the defender's side halve it, not on a crit.
     screen = jnp.where(is_physical, s.reflect[def_side], s.light_screen[def_side]) != 0
-    screen = screen & (not self_hit)
+    screen = screen & (not self_hit) & (effect != EffectId.BRICK_BREAK)  # :6984, :7025
     damage = jnp.where(screen & ~crit, damage // 2, damage)
 
     # :7047 rain: Fire x0.5, Water x1.5; :7062 sun: Fire x1.5, Water x0.5. Fog: nothing.
-    rain = (s.weather == Weather.RAIN) & (not self_hit)
-    sun = (s.weather == Weather.SUN) & (not self_hit)
+    rain = (weather == Weather.RAIN) & (not self_hit)
+    sun = (weather == Weather.SUN) & (not self_hit)
     fire, water = move_type == Type.FIRE, move_type == Type.WATER
     damage = jnp.where(rain & fire, damage // 2, damage)
     damage = jnp.where(rain & water, damage * 15 // 10, damage)
@@ -333,6 +417,10 @@ def _finish(
     def_side = 1 - atk_side
     a_types = _i32(s.types[atk_side, s.active[atk_side]])
     d_types = _i32(s.types[def_side, s.active[def_side]])
+    a_ability = _i32(s.ability[atk_side, s.active[atk_side]])
+    d_ability = _i32(s.ability[def_side, s.active[def_side]])
+    # Battler_IgnorableAbility (:3108): Mold Breaker ignores the defender's ability.
+    d_ability = jnp.where(a_ability == AbilityId.MOLD_BREAKER, AbilityId.NONE, d_ability)
     variance = 85 + _i32(roll)
 
     if not variance_last:
@@ -340,8 +428,9 @@ def _finish(
         damage = jnp.maximum(damage * variance // 100, 1)
     typeless = _i32(move) == MOVE_STRUGGLE
     unchanged = damage
-    # :2592-2596 STAB x1.5 (Adaptability is not implemented).
-    damage = jnp.where(jnp.any(a_types == move_type), damage * 15 // 10, damage)
+    # :2592-2597 STAB: x2 with Adaptability (Battler_Ability), else x1.5.
+    stab = jnp.where(a_ability == AbilityId.ADAPTABILITY, damage * 2, damage * 15 // 10)
+    damage = jnp.where(jnp.any(a_types == move_type), stab, damage)
     # :2611-2646 each defender type through ApplyTypeMultiplier (:7547), in chart
     # row order; type 2 is skipped when it equals type 1 (:2635). Unlisted pairs
     # are neutral (x10/10 leaves damage unchanged), so their order is irrelevant.
@@ -352,6 +441,13 @@ def _finish(
     t2_first = tables.type_chart_order[move_type, t2] < tables.type_chart_order[move_type, t1]
     first, second = jnp.where(t2_first, e2, e1), jnp.where(t2_first, e1, e2)
     damage = divide(divide(damage * first, 10) * second, 10)
+    # :2657-2660 Solid Rock (Battler_IgnorableAbility): BattleSystem_Divide(damage * 3, 4)
+    # when MOVE_STATUS_SUPER_EFFECTIVE is set. ApplyTypeMultiplier (:7557-7574) sets it for a
+    # x2 entry unless NOT_VERY_EFFECTIVE was set, which it clears instead (and the other way
+    # round), so it stands exactly when the product is above neutral; an immunity leaves 0.
+    super_effective = first * second > 100
+    solid_rock = super_effective & (d_ability == AbilityId.SOLID_ROCK)
+    damage = jnp.where(solid_rock, divide(damage * 3, 4), damage)
     damage = jnp.where(typeless, unchanged, damage)
     if variance_last:
         # trainer_ai.c:3109; an immunity is already 0 (:3106).
@@ -366,13 +462,22 @@ def damage_table(tables: Tables, state: BattleState, atk_side, move, crit) -> jn
     other side's active Pokemon for rolls 0..15 (``85 + roll`` percent). A ``LEVEL_DAMAGE``
     move has no roll: all 16 entries are ``fixed_damage``. Magnitude is taken at level 4
     (its weakest hit; the playout heuristic's documented under-estimate); Bide's unleash
-    stays 0 (it is a forced locked action, never a chosen attack)."""
+    stays 0 (it is a forced locked action, never a chosen attack). Present keeps its table
+    power (no draw: ``PRESENT_TABLE``)."""
     damage, move_type, category, power = _pre_random(tables, state, atk_side, move, crit)
     rolls = jnp.arange(ROLLS, dtype=_I32)
     table = _finish(tables, state, atk_side, move, damage, move_type, category, power, rolls)
     fixed, amount = fixed_damage(tables, state, atk_side, move)
     amount = jnp.where(tables.move_effect[_i32(move)] == EffectId.BIDE, 0, amount)
     return jnp.where(fixed, amount, table)
+
+
+def hit_damage_table(tables: Tables, state: BattleState, atk_side, move) -> jnp.ndarray:
+    """``int32[2, ROLLS]``: one hit's damage for every ``(crit, roll)`` pair (``crit`` 0
+    or 1, then ``damage_table``'s rolls), at ``state``. It equals ``damage_for_roll`` at
+    the default ``power_mul`` for every move but Magnitude (``damage_table`` takes level 4)
+    and Bide (0 here); ``enumerate``'s damage classes use neither."""
+    return jnp.stack([damage_table(tables, state, atk_side, move, crit) for crit in (False, True)])
 
 
 def damage_for_roll(
@@ -384,16 +489,32 @@ def damage_for_roll(
     roll,
     power_mul=10,
     magnitude=MAGNITUDE_MIN,
+    present=PRESENT_TABLE,
 ) -> jnp.ndarray:
     """``int32``: ``damage_table(...)[roll]``, the single value the engine uses.
     ``power_mul`` (tenths) scales the move's power first (Pursuit on a switch: 20);
-    ``magnitude`` is Magnitude's level."""
+    ``magnitude`` is Magnitude's level; ``present`` is Present's draw, and its heal path
+    (``PRESENT_HEAL``) deals 0: effect_script_0122.s jumps past ``CalcCrit`` and
+    ``CalcDamage``."""
     damage, move_type, category, power = _pre_random(
-        tables, state, atk_side, move, crit, power_mul=power_mul, magnitude=magnitude
+        tables,
+        state,
+        atk_side,
+        move,
+        crit,
+        power_mul=power_mul,
+        magnitude=magnitude,
+        present=present,
     )
     rolled = _finish(tables, state, atk_side, move, damage, move_type, category, power, _i32(roll))
     fixed, amount = fixed_damage(tables, state, atk_side, move)
-    return jnp.where(fixed, amount, rolled)
+    # The only place Present's heal path deals 0: ``_pre_random`` above still ran at the
+    # table power (it ignores a ``present`` outside 0-2), so a caller that needs the heal's
+    # damage must come through here, not ``_pre_random`` / ``calc_move_damage``.
+    heal = (_i32(tables.move_effect[_i32(move)]) == EffectId.PRESENT) & (
+        _i32(present) == PRESENT_HEAL
+    )
+    return jnp.where(heal, 0, jnp.where(fixed, amount, rolled))
 
 
 def calc_move_damage(
@@ -410,7 +531,7 @@ def ai_damage_for_roll(tables: Tables, state: BattleState, atk_side, move, roll)
     special calculation: ``BattleSystem_CalcMoveDamage`` with ``criticalMul`` 1 (screens,
     weather, abilities, items and stages as in battle), then STAB and the type chart,
     then the variance ``85 + roll`` percent last, at least 1 when non-zero."""
-    damage, move_type, category, power = _pre_random(tables, state, atk_side, move, False)
+    damage, move_type, category, power = _pre_random(tables, state, atk_side, move, False, ai=True)
     return _finish(
         tables,
         state,

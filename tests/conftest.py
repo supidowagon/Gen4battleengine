@@ -129,6 +129,12 @@ def kaizo_save_pre_roark_path():
     return _configured_save("kaizo_save_pre_roark", "NUZLINE_KAIZO_SAVE_PRE_ROARK")
 
 
+@pytest.fixture(scope="session")
+def kaizo_save_probe_path():
+    """The trace probe's Kaizo save (``kaizo_save_probe``): the party taken to Roark."""
+    return _configured_save("kaizo_save_probe", "NUZLINE_KAIZO_SAVE_PROBE")
+
+
 # --- Kaizo source extractions (each skips when its local input is absent) -----------
 
 

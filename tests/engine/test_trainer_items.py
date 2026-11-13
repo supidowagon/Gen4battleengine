@@ -63,6 +63,7 @@ def test_make_state_loads_roarks_bag(tables, names):
     assert s.trainer_items.tolist() == [[0, 0, 0, 0], [POTION, POTION, 0, 0]]
 
 
+@pytest.mark.slow
 def test_potion_heals_20_and_is_consumed(tables, names):
     s = roark_state(tables, names).replace_hp(1, 0, 5)  # Geodude at 5 HP
     out = step(tables, s, jnp.array([SWITCH_TO_1, USE_SLOT_0]), empty_outcome())
@@ -78,6 +79,7 @@ def test_potion_is_capped_at_max_hp(tables, names):
     assert int(out.hp[1, 0]) == max_hp and out.trainer_items[1].tolist() == [0, POTION, 0, 0]
 
 
+@pytest.mark.slow
 def test_item_goes_before_a_faster_move(tables, names):
     # Monferno (Spe 30) outspeeds Geodude (Spe 10), yet the Potion lands first: Geodude 3
     # HP short heals to full and then takes the Scratch. Healed after the Scratch, it
@@ -129,6 +131,7 @@ def test_player_mask_is_still_10_wide(tables, names):
     assert opp[:NUM_ACTIONS].tolist() == legal_actions(tables, s, 1).tolist()
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("player", ["Scratch", SWITCH_TO_1])
 def test_reference_matches_on_item_use(tables, names, player):
     s = roark_state(tables, names).replace_hp(1, 0, 5)

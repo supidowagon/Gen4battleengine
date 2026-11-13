@@ -29,6 +29,7 @@ def test_missing_patch_refused(tmp_path):
         kaizo_rom(RomInputs(tmp_path / "v.nds", None, None, None, None), tmp_path)
 
 
+@pytest.mark.slow
 def test_kaizo_rom_and_header(kaizo_inputs, tmp_path):
     path, sha = kaizo_rom(kaizo_inputs, tmp_path)
     exp = expected_patched()
@@ -45,6 +46,7 @@ def _count_builds(monkeypatch):
     return calls
 
 
+@pytest.mark.slow
 def test_cache_hit_and_corrupt_cache_rebuilt(kaizo_inputs, tmp_path, monkeypatch):
     calls = _count_builds(monkeypatch)
     path, sha = kaizo_rom(kaizo_inputs, tmp_path)
@@ -54,6 +56,7 @@ def test_cache_hit_and_corrupt_cache_rebuilt(kaizo_inputs, tmp_path, monkeypatch
     assert hashlib.sha1(path.read_bytes()).hexdigest() == sha
 
 
+@pytest.mark.slow
 def test_foreign_sidecar_rebuilt(kaizo_inputs, tmp_path, monkeypatch):
     calls = _count_builds(monkeypatch)
     path, sha = kaizo_rom(kaizo_inputs, tmp_path)

@@ -17,15 +17,23 @@ from nuzline.data.tables import Names, Tables
 from nuzline.data.trainer import Trainer
 from nuzline.engine.coverage import (
     IMPLEMENTED_ABILITIES,
-    IMPLEMENTED_EFFECTS,
     IMPLEMENTED_ITEMS,
     CoverageReport,
     Support,
     _Collector,
+    exp_refusals,
+    halved_by_line,
+    halved_defense_line,
+    halving_moves,
+    learnable_moves,
+    low_defense,
+    move_effect_line,
+    reachable_level,
     rom_change_line,
     rom_change_refusals,
+    terrain_refusal,
 )
-from nuzline.engine.ids import AbilityId, EffectId, ItemId
+from nuzline.engine.ids import AbilityId, ItemId
 from nuzline.prep.leveling import candies_to_cap, level_to_cap
 from nuzline.saves.pkm import RecordError
 from nuzline.saves.save import SaveFile
@@ -44,6 +52,11 @@ class Candidate:
     relearner: tuple[int, ...]
     tms: tuple[tuple[int, int], ...]
     nickname: str = ""
+
+    @property
+    def exp(self) -> int | None:
+        """The Pokemon's exp at the cap (``level_to_cap``)."""
+        return self.spec.exp
 
 
 def _label(location: tuple[str, int, int], species: str) -> str:
@@ -66,7 +79,7 @@ def pool_candidates(
             left_out.append(f"{label}: egg left out")
             continue
         try:
-            spec = level_to_cap(mon, tables, cap)
+            spec = level_to_cap(mon, tables, cap, save.trainer)
         except RecordError as e:
             left_out.append(f"{label}: left out ({e})")
             continue
@@ -100,14 +113,27 @@ def check_pool(
     tables: Tables,
     names: Names,
     candidates: Sequence[Candidate],
+    opp: Sequence[PokemonSpec],
     trainer: Trainer | None = None,
+    bag: Sequence[tuple[int, int]] = (),
 ) -> CoverageReport:
     """The support level of the pool: per candidate its ability and held item, and every move
     it could know (current, Move Relearner, TM), by engine effect and the AI's player-side
     refusals (``ai.policy.player_move_refusal``/``player_ability_refusal``). With ``trainer``
     (Kaizo), a candidate a ``not_reached`` ROM-change condition reaches through its own spec
     or a move it could learn is refused; the condition terms about the fight alone are
-    already on the fight's report."""
+    already on the fight's report. ``bag`` is the save's ``(item, quantity)`` across the held
+    pockets (``problem.HELD_POCKETS``): each distinct item with a decomp hold effect is a
+    ``bag: <item>`` row, graded like a held item. Against the trainer's party ``opp``, a
+    Selfdestruct-family move is refused against a foe whose Defense the halving and the -6
+    stage would bring to 0 (``coverage.halved_defense_line``), and a candidate whose own
+    Defense is that low is refused when a foe knows such a move (``coverage.halved_by_line``).
+
+    Experience (K3d-exp design §4.1): the moves a candidate can learn by levelling up in the
+    fight against ``opp`` (``coverage.learnable_moves``: ruling D10 masks a
+    prompt-only unsupported one) are graded like its other
+    moves, as kind ``level-up in battle``, and ``coverage.exp_refusals`` adds its exp lines
+    (kind ``experience``)."""
     from nuzline.ai.policy import player_ability_refusal, player_move_refusal
 
     c = _Collector()
@@ -116,15 +142,18 @@ def check_pool(
         c.report.level = Support.NONE
         c.report.missing.append(line)
 
-    effect = np.asarray(tables.move_effect)
     abilities = np.asarray(tables.species_abilities)
     decomp_abilities = np.asarray(tables.species_abilities_decomp)
     item_effect = np.asarray(tables.item_effect)
 
-    def check_move(label: str, move: int, kind: str) -> None:
-        name = names.move_names[move]
-        support = IMPLEMENTED_EFFECTS.get(EffectId(int(effect[move])), Support.NONE)
+    foe_defense = low_defense(tables, opp)
+    foe_halving = halving_moves(tables, opp)
+
+    def check_move(label: str, move: int, kind: str, row: int) -> None:
+        support, name = move_effect_line(tables, names, move, row)
         c.add(support, f"{label}: {name}", f"{kind}, move effect")
+        if (low := halved_defense_line(tables, move, foe_defense)) is not None:
+            c.add(Support.NONE, f"{label}: {name}{low}", f"{kind}, move effect")
         if support != Support.NONE and (reason := player_move_refusal(move)) is not None:
             refuse(f"{label}: {name} ({kind}, {reason})")
 
@@ -136,6 +165,8 @@ def check_pool(
         ability_name = names.ability_names[names.species_abilities(spec.species, spec.form)[slot]]
         support = IMPLEMENTED_ABILITIES.get(ability, Support.NONE)
         c.add(support, f"{cand.label}: {ability_name}", "ability")
+        if (low := halved_by_line(tables, names, spec, foe_halving)) is not None:
+            c.add(Support.NONE, f"{cand.label}: {low}", "opponent move effect")
         if support != Support.NONE and (
             reason := player_ability_refusal(int(decomp_abilities[row][slot]))
         ):
@@ -146,17 +177,39 @@ def check_pool(
             f"{cand.label}: {names.item_names[spec.item]}",
             "held item",
         )
+        learnable = learnable_moves(tables, spec, opp)
+        could_know = [*spec.moves, *cand.relearner, *(move for _, move in cand.tms), *learnable]
+        fight_moves = [*could_know, *(m for foe in opp for m in foe.moves)]
+        levels_up = reachable_level(tables, spec, opp) > spec.level
+        for line in exp_refusals(tables, names, spec, learnable, fight_moves, levels_up):
+            c.add(Support.NONE, f"{cand.label}: {line}", "experience")
         if trainer is not None and names.game == KAIZO:
-            could_learn = [*cand.relearner, *(move for _, move in cand.tms)]
+            could_learn = [*cand.relearner, *(move for _, move in cand.tms), *learnable]
             for cond in rom_change_refusals(
                 tables, names, trainer, [spec], could_learn, spec_terms_only=True
             ):
                 c.add(Support.NONE, f"{cand.label}: {rom_change_line(cond)}", "ROM change")
+        if (
+            trainer is not None
+            and (line := terrain_refusal(tables, names, trainer, could_know)) is not None
+        ):
+            c.add(Support.NONE, f"{cand.label}: {line}", "battle terrain")
         for move in spec.moves:
             if move:
-                check_move(cand.label, move, "current")
+                check_move(cand.label, move, "current", row)
         for move in cand.relearner:
-            check_move(cand.label, move, "relearner")
+            check_move(cand.label, move, "relearner", row)
         for item_id, move in cand.tms:
-            check_move(cand.label, move, names.item_names[item_id])
+            check_move(cand.label, move, names.item_names[item_id], row)
+        for move in learnable:
+            if move not in spec.moves:  # a known move is graded above
+                check_move(cand.label, move, "level-up in battle", row)
+    hold_effect = np.asarray(tables.item_hold_effect)
+    for item_id in sorted({item for item, _ in bag}):
+        if int(hold_effect[item_id]) != 0:
+            c.add(
+                IMPLEMENTED_ITEMS.get(ItemId(int(item_effect[item_id])), Support.NONE),
+                f"bag: {names.item_names[item_id]}",
+                "held item",
+            )
     return c.report

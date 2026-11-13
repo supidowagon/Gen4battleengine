@@ -172,6 +172,14 @@ def _row_fields(decomp: Path):
     exp_rate_id = _index(_constants(decomp, "exp_rates", "EXP_RATE_"), "exp rate")
     ratios = _gender_ratios(decomp)
 
+    def ev_yield(path: Path, d: dict) -> list[int]:
+        # Each yield is a 2-bit field of SpeciesEVYields (include/struct_defs/species.h:25-32),
+        # packed by tools/dataproc/src/speciesproc.c:352-359.
+        out = [int(d["ev_yields"][k]) for k in STAT_KEYS]
+        if not all(0 <= v <= 3 for v in out):
+            raise ExtractError(f"{path}: EV yields {out} do not fit 2 bits")
+        return out
+
     def fields(path: Path, d: dict) -> dict:
         if d["gender_ratio"] not in ratios:
             raise ExtractError(f"{path}: unknown gender ratio {d['gender_ratio']!r}")
@@ -184,6 +192,7 @@ def _row_fields(decomp: Path):
             "exp_rate": exp_rate_id(d["exp_rate"]),
             "exp_yield": int(d["base_exp_reward"]),
             "catch_rate": int(d["catch_rate"]),
+            "ev_yield": ev_yield(path, d),
         }
 
     return fields
@@ -208,6 +217,7 @@ def extract_species(decomp: Path) -> list[dict]:
                 "exp_rate": row["exp_rate"],
                 "exp_yield": row["exp_yield"],
                 "catch_rate": row["catch_rate"],
+                "ev_yield": row["ev_yield"],
             }
         )
     return out
@@ -1197,6 +1207,10 @@ def extract_trainers(decomp_root: Path, out_dir: Path) -> None:
       condition must be listed in ``tools/start_conditions.json``
       ({trainer_id: {"trainer": TRAINER_*, "condition": ...}}), which may not
       contradict an unambiguous derivation.
+    * ``terrain`` and ``terrains`` are the battle terrain of the trainer's maps
+      (``tools.terrain``, K3b2 Task 9): a ``TERRAIN_*`` id (``generated/battle_terrains.txt``)
+      and every terrain the maps can give; ``terrain`` is ``TERRAIN_UNKNOWN`` (-1) when
+      they give several (mixed) or none (no map places the trainer).
     """
     decomp, out_dir = Path(decomp_root), Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -1230,6 +1244,7 @@ def extract_trainers(decomp_root: Path, out_dir: Path) -> None:
     unknown = sorted(set(where) - set(trainers))
     if unknown:
         raise ExtractError(f"maps name unknown trainers {unknown}")
+    terrains = _trainer_terrains(decomp, trainers, headers, where)
 
     out = []
     for tid, const in enumerate(trainers):
@@ -1288,9 +1303,49 @@ def extract_trainers(decomp_root: Path, out_dir: Path) -> None:
                 "start_condition": _start_condition(
                     tid, const, derived, overrides, START_CONDITIONS_FILE
                 ),
+                **terrains[tid],
             }
         )
     _write(out_dir / "trainers.json", out)
+
+
+def _trainer_terrains(
+    decomp: Path,
+    trainers: list[str],
+    headers: dict[str, dict[str, str]],
+    where: dict[str, set[str]],
+) -> list[dict]:
+    """Each trainer's ``terrain`` and ``terrains`` (``tools.terrain``) from its maps
+    (``_trainer_maps``) and the decomp's map headers, matrices and land data."""
+    from tools.terrain import (
+        decomp_check_trainer_objects,
+        decomp_header_battle_fields,
+        decomp_land_data,
+        decomp_matrices,
+        decomp_warp_tiles,
+        header_names,
+        header_terrains,
+        terrain_fields,
+        terrain_rules,
+        trainer_terrains,
+    )
+
+    header_id = _index(header_names(decomp), "map header")
+    trainer_id = _index(trainers, "trainer")
+    decomp_check_trainer_objects(decomp, headers)
+    ids = {trainer_id(t): {header_id(h) for h in hs} for t, hs in where.items()}
+    arrivals = {
+        header_id(n): decomp_warp_tiles(decomp, h["eventsArchiveID"]) for n, h in headers.items()
+    }
+    by_header = header_terrains(
+        terrain_rules(decomp),
+        decomp_header_battle_fields(decomp),
+        decomp_matrices(decomp),
+        decomp_land_data(decomp),
+        {h for hs in ids.values() for h in hs},
+        arrivals,
+    )
+    return [terrain_fields(*t) for t in trainer_terrains(len(trainers), ids, by_header)]
 
 
 def _write(path: Path, data) -> None:

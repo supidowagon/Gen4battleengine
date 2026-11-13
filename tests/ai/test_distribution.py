@@ -6,6 +6,7 @@ random M1 states of ``tests.strategies``), NaN on exactly the same refused state
 import jax
 import jax.numpy as jnp
 import numpy as np
+import pytest
 from hypothesis import HealthCheck, assume, given, settings
 from hypothesis import strategies as st
 
@@ -79,12 +80,14 @@ def _assert_same(new: np.ndarray, old: np.ndarray) -> None:
     np.testing.assert_allclose(new, old, atol=1e-6)
 
 
+@pytest.mark.slow
 @settings(_SETTINGS, max_examples=300)
 @given(data=st.data())
 def test_factored_distribution_matches_enumeration(tables, names, data):
     _assert_same(*_both(tables, data.draw(roark_states(tables, names))))
 
 
+@pytest.mark.slow
 @settings(_SETTINGS, max_examples=200)
 @given(data=st.data())
 def test_factored_distribution_matches_enumeration_on_random_m1_states(tables, names, data):
@@ -92,6 +95,7 @@ def test_factored_distribution_matches_enumeration_on_random_m1_states(tables, n
     _assert_same(*_both(tables, data.draw(supported_state(tables, names))))
 
 
+@pytest.mark.slow
 @settings(_SETTINGS, max_examples=60)
 @given(data=st.data())
 def test_distribution_sums_to_one(tables, names, data):

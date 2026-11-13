@@ -184,6 +184,7 @@ def tags(docs, split, name):
     return found[0]["tags"]
 
 
+@pytest.mark.slow
 def test_label_map_is_one_to_one(docs):
     audited(docs)
     assert len(docs["effect_labels"]) == 257 and len(set(docs["effect_labels"].values())) == 257

@@ -31,7 +31,7 @@ LAYOUT = jnp.asarray(
     + [SwitchSite.NONE] * 4,
     jnp.int8,
 )
-# The decomp's stop probability per kind over a uniform u16 (trainer_ai.c:3588, :3779).
+# The decomp's stop probability per kind over a uniform u16 (trainer_ai.c:3588, :3796).
 P_KEEP, P_PASS_1, P_PASS_2 = 58982 / 65536, 32768 / 65536, 21846 / 65536
 
 

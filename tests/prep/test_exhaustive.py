@@ -113,6 +113,7 @@ def test_verdict():
     assert verdict(tie, 1, ()).best == 0
 
 
+@pytest.mark.slow
 def test_pruned_setups_are_valued(tables, names):
     starly = ("Growl", "Quick Attack", "Wing Attack", "Double Team")
     prob = small_problem(tables, names, (0, 1, 3), scales=1, starly_moves=starly)
@@ -155,6 +156,7 @@ def _settings(**kw):
     )
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("k", [0, 1])
 def test_funnel_matches_exhaustive_small(tables, names, k):
     prob = small_problem(tables, names, (0, 1, 3), deaths=k)
@@ -207,6 +209,7 @@ def _ci_pool(tables, names, k, max_team, budget):
     return restricted, values, verdict(values, everything.index(pick), pruned), len(extra)
 
 
+@pytest.mark.slow
 def test_funnel_matches_exhaustive_ci(tables, names):
     restricted, values, out, n_pruned = _ci_pool(tables, names, 0, 2, 100)
     assert len(restricted) == 4 * 2 + 6 * 2 * 3

@@ -2,14 +2,15 @@
 (``tools/smogon_calc/damage.js``) on generated matchups of M1 species and supported
 damaging moves, requiring all 16 rolls to be equal.
 
-No items. Abilities are the species' own, all of which M1 implements; the
+No items. Abilities are the species' own implemented ones (as ``tests.strategies``); the
 damage-relevant ones (Blaze, Torrent, Overgrow, Rivalry, Simple, Unaware, Mold
-Breaker) are exercised through low HP, genders and stat stages, the others have no
-damage effect in either calculator. Matchups where @smogon/calc departs from the
+Breaker) are exercised through low HP, genders and stat stages, Adaptability and Solid
+Rock by the extra rows of ``_ability_rows``; the others have no damage effect in either
+calculator. Matchups where @smogon/calc departs from the
 decomp are not generated; each such case is logged in docs/discrepancies.md
-("Damage oracle") with the decomp lines that settle it. Neither are matchups outside
-the engine's scope: a Cloud Nine battler in weather (Cloud Nine has no behaviour, as
-coverage refuses every weather but none; ``engine/hooks.py``).
+("Damage oracle") with the decomp lines that settle it. A Cloud Nine battler in weather
+is generated: both calculators drop the weather modifiers (``NO_CLOUD_NINE``,
+battle_lib.c:6921, :7046; ``damage.weather_suppressed``).
 
 Hidden Power and Magnitude take their power (and Hidden Power its type) from the
 engine (``damage.hidden_power``; ``damage_table`` takes Magnitude at level 4), passed
@@ -23,6 +24,7 @@ Skips when ``node`` or the npm package is missing
 from __future__ import annotations
 
 import json
+import math
 import shutil
 import subprocess
 from pathlib import Path
@@ -33,7 +35,16 @@ import pytest
 
 from nuzline.data.spec import PokemonSpec
 from nuzline.data.tables import Names, Tables
-from nuzline.engine.damage import MAGNITUDE_POWER, STATUS, damage_table, hidden_power
+from nuzline.engine.damage import (
+    MAGNITUDE_POWER,
+    STATUS,
+    _pre_random,
+    chart_entry,
+    damage_table,
+    effectiveness,
+    fixed_damage,
+    hidden_power,
+)
 from nuzline.engine.ids import AbilityId, EffectId, Stat, Status, Type, Weather
 from nuzline.engine.state import make_state
 from tests.strategies import m1_move_pools, possible_genders
@@ -41,6 +52,7 @@ from tests.strategies import m1_move_pools, possible_genders
 ROOT = Path(__file__).resolve().parents[1]
 SMOGON_DIR = ROOT / "tools" / "smogon_calc"
 MATCHUPS = 300
+ABILITY_ROWS = 60
 SEED = 20261029
 
 _STAT_KEYS = ("hp", "atk", "def", "spa", "spd", "spe")  # ids.Stat order
@@ -54,7 +66,9 @@ _WEATHER = {
 }
 _GENDER = {0: "M", 1: "F", 2: "N"}
 _CATEGORY = {"Physical": 0, "Special": 1}
-_NO_POWER = (EffectId.LEVEL_DAMAGE, EffectId.BIDE)  # fixed damage: no base power
+# No table power to compare: fixed damage, and Flail (the table's 1 against @smogon/calc's 0;
+# both then take the power from the attacker's HP in 64ths, the same bands).
+_NO_POWER = (EffectId.LEVEL_DAMAGE, EffectId.BIDE, EffectId.FLAIL)
 
 jit_damage_table = jax.jit(damage_table)
 
@@ -71,6 +85,9 @@ def node() -> str:
 
 def _mon(rng: np.random.Generator, tables: Tables, names: Names, species: int) -> PokemonSpec:
     abilities = names.species_abilities(species)
+    # Only implemented abilities (as tests.strategies draws them): Venonat's Tinted Lens, say,
+    # would double a resisted hit in @smogon/calc and nowhere in the engine.
+    supported = np.asarray(tables.species_abilities[species]) != AbilityId.UNSUPPORTED
     return PokemonSpec(
         species=species,
         level=int(rng.integers(5, 21)),
@@ -79,15 +96,17 @@ def _mon(rng: np.random.Generator, tables: Tables, names: Names, species: int) -
         evs=tuple(int(x) for x in rng.integers(0, 86, 6)),
         moves=(0, 0, 0, 0),
         item=0,
-        ability_slot=int(rng.choice([i for i, a in enumerate(abilities) if a])),
+        ability_slot=int(rng.choice([i for i, a in enumerate(abilities) if a and supported[i]])),
         gender=int(rng.choice(possible_genders(int(tables.species_gender[species])))),
         friendship=70,
     )
 
 
-def _smogon_departs(m: dict, tables: Tables, ability: dict[int, int], move: int) -> bool:
+def _smogon_departs(
+    m: dict, tables: Tables, names: Names, ability: dict[int, int], move: int, s
+) -> bool:
     """Matchups where @smogon/calc 0.12.0 departs from the decomp (docs/discrepancies.md,
-    "Damage oracle"); the engine follows the decomp in both."""
+    "Damage oracle"); the engine follows the decomp in all. ``s`` is the matchup's state."""
     physical = int(tables.move_category[move]) == 0
     a_stage = m["atk_stages"][0 if physical else 2]  # [atk, def, spa, spd]
     d_stage = m["def_stages"][1 if physical else 3]
@@ -104,7 +123,83 @@ def _smogon_departs(m: dict, tables: Tables, ability: dict[int, int], move: int)
         AbilityId.MOLD_BREAKER,
         AbilityId.UNAWARE,
     )
-    return m["crit"] and ((a_simple and a_stage < 0) or (d_simple and d_stage > 0))
+    if m["crit"] and ((a_simple and a_stage < 0) or (d_simple and d_stage > 0)):
+        return True
+    # 3. Selfdestruct / Explosion halve the raw Defense, then its stage applies
+    #    (battle_lib.c:6943-6945, then :6963-6975); @smogon/calc halves the staged Defense.
+    halved = int(tables.move_effect[move]) == EffectId.SELF_DESTRUCT and physical
+    if halved and d_stage != 0:
+        return True
+    # 4. The type chart rounding at low damage (_chart_rounding_departs).
+    return _chart_rounding_departs(tables, names, s, move, m["crit"])
+
+
+# The engine's damage before the variance roll (``damage._pre_random``) and the move type.
+_pre_chart = jax.jit(lambda t, s, move, crit: _pre_random(t, s, 0, move, crit)[:2])
+
+
+def _divide(x: int, d: int) -> int:
+    """``BattleSystem_Divide`` (battle_lib.c:3599-3618) for non-negative ``x``."""
+    return 0 if x == 0 else max(x // d, 1)
+
+
+# @smogon/calc 0.12.0's order of a defender's two types (gen4.js:104-130).
+_SMOGON_TYPE_ORDER = (
+    "NORMAL", "FIRE", "WATER", "ELECTRIC", "GRASS", "ICE", "FIGHTING", "POISON", "GROUND",
+    "FLYING", "PSYCHIC", "BUG", "ROCK", "GHOST", "DRAGON", "DARK", "STEEL",
+)  # fmt: skip
+
+
+def _chart_rounding_departs(tables: Tables, names: Names, s, move: int, crit: bool) -> bool:
+    """The decomp applies each defender type's chart row as ``BattleSystem_Divide(damage *
+    mul, 10)`` (``ApplyTypeMultiplier``, battle_lib.c:7547), in chart order
+    (``tables.type_chart_order``), and ``BattleSystem_Divide`` lifts a non-zero dividend
+    that truncates to 0 up to 1 (battle_lib.c:3599-3618). @smogon/calc floors each factor
+    (in its own type order) and takes ``max(1, damage)`` once at the end (gen4.js:228-237).
+    So 1 x0.5 x2 is 2 in the decomp (1 -> 1 -> 2) and 1 in @smogon/calc (1 -> 0 -> 0 -> 1).
+    Both are computed here from the engine's own pre-chart damage (``damage._pre_random``,
+    the variance and STAB as ``damage._finish``), and the matchup is skipped only when they
+    differ at some roll."""
+    if bool(fixed_damage(tables, s, 0, move)[0]):
+        return False
+    pre, move_type = _pre_chart(tables, s, move, crit)
+    pre, move_type = int(pre), int(move_type)
+    a_types = {int(t) for t in s.types[0, int(s.active[0])]}
+    t1, t2 = (int(t) for t in s.types[1, int(s.active[1])])
+    defender = [t1] if t1 == t2 else [t1, t2]
+    mul = {t: int(chart_entry(tables, move_type, t)) for t in defender}  # tenths
+    decomp_order = sorted(defender, key=lambda t: int(tables.type_chart_order[move_type, t]))
+    smogon_order = sorted(
+        defender,
+        key=lambda t: (
+            _SMOGON_TYPE_ORDER.index(names.type_names[t])
+            if names.type_names[t] in _SMOGON_TYPE_ORDER
+            else -1
+        ),
+    )
+    product = math.prod(mul.values())
+    a_ability, d_ability = int(s.ability[0, 0]), int(s.ability[1, 0])
+    solid = (
+        d_ability == AbilityId.SOLID_ROCK
+        and a_ability != AbilityId.MOLD_BREAKER
+        and product > 10 ** len(defender)
+    )
+    for roll in range(16):
+        base = max(pre * (85 + roll) // 100, 1)  # battle_lib.c:7084-7089
+        if move_type in a_types:
+            base = base * 2 if a_ability == AbilityId.ADAPTABILITY else base * 15 // 10
+        ours = base
+        for t in decomp_order:
+            ours = _divide(ours * mul[t], 10)
+        theirs = base
+        for t in smogon_order:
+            theirs = theirs * mul[t] // 10
+        if solid:
+            ours, theirs = _divide(ours * 3, 4), theirs * 3 // 4
+        theirs = max(1, theirs) if product else 0
+        if ours != theirs:
+            return True
+    return False
 
 
 def _matchups(tables: Tables, names: Names) -> list[dict]:
@@ -121,65 +216,124 @@ def _matchups(tables: Tables, names: Names) -> list[dict]:
     while len(out) < MATCHUPS:
         atk_species, def_species = (int(x) for x in rng.choice(species_ids, 2))
         move = int(rng.choice(damaging[atk_species]))
-        a, d = _mon(rng, tables, names, atk_species), _mon(rng, tables, names, def_species)
-        m = {
-            "def_species": def_species,
-            "move": move,
-            "crit": bool(rng.random() < 0.25),
-            "weather": Weather(int(rng.choice(list(_WEATHER)))),
-            "reflect": bool(rng.random() < 0.2),
-            "light_screen": bool(rng.random() < 0.2),
-            "burn": bool(rng.random() < 0.2),
-            "atk_stages": [int(x) for x in rng.integers(-6, 7, 4)],
-            "def_stages": [int(x) for x in rng.integers(-6, 7, 4)],
-        }
-        s = make_state(tables, [a], [d])
-        # A third of attackers are at or below 1/3 HP (Blaze, Torrent, Overgrow).
-        max_hp = int(s.max_hp[0, 0])
-        hp = int(rng.integers(1, max_hp // 3 + 1 if rng.random() < 1 / 3 else max_hp + 1))
-        m["hp"] = hp
-        ability = {0: int(s.ability[0, 0]), 1: int(s.ability[1, 0])}
-        if _smogon_departs(m, tables, ability, move):
-            continue
-        if m["weather"] != Weather.NONE and AbilityId.CLOUD_NINE in ability.values():
-            continue  # outside the engine's scope (engine/hooks.py)
-        m["power"], m["type"] = int(tables.move_power[move]), int(tables.move_type[move])
-        effect = int(tables.move_effect[move])
-        if effect == EffectId.HIDDEN_POWER:
-            m["type"], m["power"] = (int(x) for x in hidden_power(np.asarray(a.ivs)))
-        elif effect == EffectId.MAGNITUDE:
-            m["power"] = int(MAGNITUDE_POWER[0])  # damage_table's default level 4
-        m["no_power"] = effect in _NO_POWER
-        overrides = {}
-        if effect in (EffectId.HIDDEN_POWER, EffectId.MAGNITUDE):
-            overrides = {
-                "basePower": m["power"],
-                "type": names.type_names[m["type"]].capitalize(),
-            }
-        stages = np.zeros((2, 8), np.int8)  # overwrites a lead's Intimidate
-        for side, key in ((0, "atk_stages"), (1, "def_stages")):
-            stages[side, list(_BOOSTED)] = m[key]
-        s = s.replace_hp(0, 0, hp)._replace(stages=s.stages.at[...].set(stages))
-        if m["burn"]:
-            s = s.with_status(0, 0, Status.BURN)
-        s = s._replace(
-            weather=s.weather.at[...].set(m["weather"]),
-            reflect=s.reflect.at[1].set(int(m["reflect"])),
-            light_screen=s.light_screen.at[1].set(int(m["light_screen"])),
-        )
-        m["state"] = s
-        m["smogon"] = {
-            "attacker": _smogon_mon(names, a, m["atk_stages"], hp, m["burn"]),
-            "defender": _smogon_mon(names, d, m["def_stages"], None, False),
-            "move": names.move_names[move],
-            "overrides": overrides,
-            "crit": m["crit"],
-            "weather": _WEATHER[m["weather"]],
-            "reflect": m["reflect"],
-            "lightScreen": m["light_screen"],
-        }
-        out.append(m)
+        m = _matchup(rng, tables, names, atk_species, def_species, move)
+        if m is not None:
+            out.append(m)
     return out
+
+
+def _ability_rows(tables: Tables, names: Names) -> list[dict]:
+    """``ABILITY_ROWS`` seeded matchups for Adaptability (Eevee's Normal-type moves) and
+    Solid Rock (Camerupt hit by a super-effective move, some by a Mold Breaker Cranidos),
+    which the random draw above rarely reaches. @smogon/calc floors ``damage * 0.75``
+    (0.75 is exact in binary, so it is ``damage * 3 // 4``) where the decomp takes
+    ``BattleSystem_Divide(damage * 3, 4)``; they differ only at damage 1 (0 against 1), and
+    @smogon/calc's final ``max(1, damage)`` closes that gap, so no row is skipped."""
+    rng = np.random.default_rng(SEED + 1)
+    pools = m1_move_pools(tables, names)
+    eevee, camerupt = names.species("Eevee"), names.species("Camerupt")
+    stab = [m for m in pools[eevee] if _damaging(tables, m) and tables.move_type[m] == Type.NORMAL]
+    cam_types = tables.species_types[camerupt]
+    hitters = [
+        (species, m)
+        for species, moves in sorted(pools.items())
+        for m in moves
+        if _damaging(tables, m) and int(effectiveness(tables, tables.move_type[m], cam_types)) > 100
+    ]
+    cranidos = names.species("Cranidos")
+    breakers = [h for h in hitters if h[0] == cranidos]
+    out: list[dict] = []
+    while len(out) < ABILITY_ROWS:
+        if len(out) % 2 == 0:
+            atk, move = eevee, int(rng.choice(stab))
+            d = int(rng.choice(sorted(pools)))
+        else:
+            pick = breakers if len(out) % 4 == 3 else hitters
+            atk, move = (int(x) for x in pick[int(rng.integers(len(pick)))])
+            d = camerupt
+        m = _matchup(rng, tables, names, atk, d, move)
+        if m is not None:
+            out.append(m)
+    return out
+
+
+def _damaging(tables: Tables, move: int) -> bool:
+    """A damaging move with a table type and power (not Hidden Power's IV type, nor the
+    placeholder power 1 of ``_NO_POWER``)."""
+    effect = int(tables.move_effect[move])
+    return (
+        int(tables.move_category[move]) != STATUS
+        and effect not in _NO_POWER
+        and effect != EffectId.HIDDEN_POWER
+    )
+
+
+def _matchup(
+    rng: np.random.Generator,
+    tables: Tables,
+    names: Names,
+    atk_species: int,
+    def_species: int,
+    move: int,
+) -> dict | None:
+    """One seeded matchup with its engine state and @smogon/calc input, or None where
+    @smogon/calc departs from the decomp (``_smogon_departs``)."""
+    a, d = _mon(rng, tables, names, atk_species), _mon(rng, tables, names, def_species)
+    m = {
+        "def_species": def_species,
+        "move": move,
+        "crit": bool(rng.random() < 0.25),
+        "weather": Weather(int(rng.choice(list(_WEATHER)))),
+        "reflect": bool(rng.random() < 0.2),
+        "light_screen": bool(rng.random() < 0.2),
+        "burn": bool(rng.random() < 0.2),
+        "atk_stages": [int(x) for x in rng.integers(-6, 7, 4)],
+        "def_stages": [int(x) for x in rng.integers(-6, 7, 4)],
+    }
+    s = make_state(tables, [a], [d])
+    # A third of attackers are at or below 1/3 HP (Blaze, Torrent, Overgrow).
+    max_hp = int(s.max_hp[0, 0])
+    hp = int(rng.integers(1, max_hp // 3 + 1 if rng.random() < 1 / 3 else max_hp + 1))
+    m["hp"] = hp
+    ability = {0: int(s.ability[0, 0]), 1: int(s.ability[1, 0])}
+    m["power"], m["type"] = int(tables.move_power[move]), int(tables.move_type[move])
+    effect = int(tables.move_effect[move])
+    if effect == EffectId.HIDDEN_POWER:
+        m["type"], m["power"] = (int(x) for x in hidden_power(np.asarray(a.ivs)))
+    elif effect == EffectId.MAGNITUDE:
+        m["power"] = int(MAGNITUDE_POWER[0])  # damage_table's default level 4
+    m["no_power"] = effect in _NO_POWER
+    overrides = {}
+    if effect in (EffectId.HIDDEN_POWER, EffectId.MAGNITUDE):
+        overrides = {
+            "basePower": m["power"],
+            "type": names.type_names[m["type"]].capitalize(),
+        }
+    stages = np.zeros((2, 8), np.int8)  # overwrites a lead's Intimidate
+    for side, key in ((0, "atk_stages"), (1, "def_stages")):
+        stages[side, list(_BOOSTED)] = m[key]
+    s = s.replace_hp(0, 0, hp)._replace(stages=s.stages.at[...].set(stages))
+    if m["burn"]:
+        s = s.with_status(0, 0, Status.BURN)
+    s = s._replace(
+        weather=s.weather.at[...].set(m["weather"]),
+        reflect=s.reflect.at[1].set(int(m["reflect"])),
+        light_screen=s.light_screen.at[1].set(int(m["light_screen"])),
+    )
+    m["state"] = s
+    if _smogon_departs(m, tables, names, ability, move, s):
+        return None
+    m["smogon"] = {
+        "attacker": _smogon_mon(names, a, m["atk_stages"], hp, m["burn"]),
+        "defender": _smogon_mon(names, d, m["def_stages"], None, False),
+        "move": names.move_names[move],
+        "overrides": overrides,
+        "crit": m["crit"],
+        "weather": _WEATHER[m["weather"]],
+        "reflect": m["reflect"],
+        "lightScreen": m["light_screen"],
+    }
+    return m
 
 
 def _smogon_mon(names: Names, mon: PokemonSpec, stages, hp, burn) -> dict:
@@ -218,6 +372,7 @@ def _describe(m: dict) -> str:
     return json.dumps(m["smogon"], sort_keys=True)
 
 
+@pytest.mark.slow
 def test_oracle_inputs_match_the_tables(tables, names, oracle):
     """Stats and move data agree, so a damage difference is a formula difference."""
     for m, r in zip(*oracle):
@@ -231,11 +386,38 @@ def test_oracle_inputs_match_the_tables(tables, names, oracle):
         assert _CATEGORY[r["move"]["category"]] == int(tables.move_category[move])
 
 
+@pytest.mark.slow
 def test_damage_table_matches_smogon_calc(tables, names, oracle):
     matchups, results = oracle
     assert len(matchups) >= 200
+    effects = {int(tables.move_effect[m["move"]]) for m in matchups}
+    assert EffectId.SELF_DESTRUCT in effects  # Selfdestruct / Explosion's halved Defense
+    assert EffectId.FLAIL in effects  # Flail / Reversal: @smogon/calc has the same 64ths bands
     mismatches = []
     for m, r in zip(matchups, results):
+        ours = np.asarray(jit_damage_table(tables, m["state"], 0, m["move"], m["crit"])).tolist()
+        if ours != r["damage"]:
+            mismatches.append(f"{_describe(m)}\n  ours   {ours}\n  smogon {r['damage']}")
+    assert not mismatches, f"{len(mismatches)} mismatches:\n" + "\n".join(mismatches[:10])
+
+
+@pytest.fixture(scope="module")
+def ability_oracle(tables, names, node):
+    rows = _ability_rows(tables, names)
+    return rows, _run_smogon(node, rows)
+
+
+@pytest.mark.slow
+def test_adaptability_and_solid_rock_rows_match_smogon_calc(tables, names, ability_oracle):
+    rows, results = ability_oracle
+    abilities = {(int(m["state"].ability[0, 0]), int(m["state"].ability[1, 0])) for m in rows}
+    assert any(a == AbilityId.ADAPTABILITY for a, _ in abilities)
+    assert any(d == AbilityId.SOLID_ROCK for _, d in abilities)
+    assert (AbilityId.MOLD_BREAKER, AbilityId.SOLID_ROCK) in abilities  # Cranidos: ignored
+    mismatches = []
+    for m, r in zip(rows, results):
+        if not m["no_power"]:
+            assert r["move"]["bp"] == m["power"], _describe(m)
         ours = np.asarray(jit_damage_table(tables, m["state"], 0, m["move"], m["crit"])).tolist()
         if ours != r["damage"]:
             mismatches.append(f"{_describe(m)}\n  ours   {ours}\n  smogon {r['damage']}")

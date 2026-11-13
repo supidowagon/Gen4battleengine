@@ -1,6 +1,8 @@
 """The ``k = 0`` numbers of Stage A and Stage B at the Roark root stay statistically
 unchanged by the faint-budget work (spec section 4); ``tests/search/k0_baseline.py``
-recorded them before it."""
+recorded them before it. Re-recorded at the K3d close: the exp payout and level-ups
+change the ``k = 0`` numbers, and with the payout disabled the old baseline was
+reproduced (``k0_baseline`` module docstring)."""
 
 import json
 from math import sqrt
@@ -20,6 +22,7 @@ def _recorded() -> dict:
     return json.loads(BASELINE.read_text())
 
 
+@pytest.mark.slow
 def test_stage_a_k0_unchanged(tables, names):
     old = _recorded()["stage_a"]
     assert old["n"] == STAGE_A_N
@@ -34,6 +37,7 @@ def test_stage_a_k0_unchanged(tables, names):
         assert abs(wins_new - wins_old) / STAGE_A_N <= bound, action
 
 
+@pytest.mark.slow
 def test_stage_b_k0_unchanged(tables, names):
     old = _recorded()["stage_b"]["actions"]
     state = roark_real_state(tables, names)

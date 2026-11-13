@@ -539,14 +539,14 @@ def _fight(args):
             if mon.is_egg:
                 print(f"party slot {slot}: egg left out", file=sys.stderr)
             else:
-                player.append(mon.to_spec(tables))
+                player.append(mon.to_spec(tables, save.trainer))
         if not player:
             raise ValueError("the save's party has no Pokemon besides eggs")
     trainer = resolve_trainer(
         trainers, name=args.trainer, trainer_id=args.trainer_id, player_starter=_starter(save)
     )
     if save is None:
-        player = load_party(args.party, names)
+        player = load_party(args.party, names, tables)
     inter = IntermediateData(game.intermediate_dir)
     _check_buildable(tables, names, trainer, inter)
     opp = build_trainer_party(trainer, inter)
@@ -566,11 +566,11 @@ def _coverage(args) -> int:
     report = check_coverage(tables, names, player, trainer, opp, weather, leads)
     _print_report(report)
     if save is not None:
-        _print_pool(args, game, tables, names, player, trainer, save)
+        _print_pool(args, game, tables, names, player, trainer, opp, save)
     return EXIT_REFUSED if report.missing else EXIT_OK
 
 
-def _print_pool(args, game, tables, names, player, trainer, save) -> None:
+def _print_pool(args, game, tables, names, player, trainer, opp, save) -> None:
     """The pool section of ``coverage --save``; it never changes the exit code. The cap is
     ``--cap``, else the trainer's in the game's caps file (``prep.caps.default_cap``), else,
     for vanilla only, the highest party level. A Kaizo cap is never defaulted (its split
@@ -580,6 +580,7 @@ def _print_pool(args, game, tables, names, player, trainer, save) -> None:
     from nuzline.data.learnsets import load_learnsets
     from nuzline.prep.caps import default_cap
     from nuzline.prep.pool import check_pool, pool_candidates
+    from nuzline.prep.problem import HELD_POCKETS
 
     cap = args.cap
     if cap is None:
@@ -593,7 +594,8 @@ def _print_pool(args, game, tables, names, player, trainer, save) -> None:
     learnsets = load_learnsets(game.tables_dir)
     candidates, left_out = pool_candidates(save, tables, names, learnsets, cap)
     print(f"Pool at level cap {cap} ({len(candidates)} Pokemon):")
-    _print_report(check_pool(tables, names, candidates, trainer))
+    bag = [entry for pocket in HELD_POCKETS for entry in save.bag.get(pocket, ())]
+    _print_report(check_pool(tables, names, candidates, opp, trainer, bag))
     for line in left_out:
         _say(line)
 
@@ -627,7 +629,9 @@ def _rank(args) -> int:
     except UnsupportedMechanics as e:
         _print_report(e.report)
         return EXIT_REFUSED
-    state = make_state(tables, player, opp, weather, opp_items=trainer.items, leads=leads)
+    state = make_state(
+        tables, player, opp, weather, opp_items=trainer.items, leads=leads, terrain=trainer.terrain
+    )
     state = state.with_budget(args.deaths, slots)
     try:
         ranking = rank_actions(tables, names, state, args.n, jax.random.PRNGKey(args.seed))
@@ -711,7 +715,9 @@ def _solve(args) -> int:
         _say(f"refused: {e}")
         _print_report(e.report)
         return EXIT_REFUSED
-    state = make_state(tables, player, opp, weather, opp_items=trainer.items, leads=leads)
+    state = make_state(
+        tables, player, opp, weather, opp_items=trainer.items, leads=leads, terrain=trainer.terrain
+    )
     state = state.with_budget(args.deaths, slots)
     try:
         result = solve(tables, names, state, jax.random.PRNGKey(args.seed), settings)

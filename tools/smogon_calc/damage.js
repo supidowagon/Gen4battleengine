@@ -55,6 +55,14 @@ function one(m) {
   const result = calculate(gen, attacker, defender, move, field);
   let damage = result.damage;
   if (typeof damage === 'number') damage = Array(16).fill(damage);
+  // A fixed-count multi-hit move (Double Kick) ignores `hits` and gives one roll array per
+  // hit; every hit is the same calculation, so the first is the per-hit damage.
+  if (Array.isArray(damage[0])) {
+    if (damage.some((hit) => JSON.stringify(hit) !== JSON.stringify(damage[0]))) {
+      throw new Error(`${m.move}: the hits differ`);
+    }
+    damage = damage[0];
+  }
   return {
     damage,
     attacker: attacker.rawStats,

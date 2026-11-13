@@ -54,6 +54,7 @@ uninterrupted run would. The turn-0 states are rebuilt from the setups, not stor
 from __future__ import annotations
 
 import hashlib
+import json
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
@@ -131,11 +132,13 @@ def ladder_round(screen_n: int, n: int) -> int:
     return r
 
 
-def tie_rank(seed: bytes, row: bytes) -> int:
-    """A setup's last tie-break: 8 bytes of blake2b over the run seed and its turn-0 state
-    bytes. Unbiased by enumeration order, cost or HP, and the same after a resume (rebuilt from
-    the setups, never stored)."""
-    return int.from_bytes(hashlib.blake2b(seed + row, digest_size=8).digest(), "little")
+def tie_rank(seed: bytes, setup: Setup) -> int:
+    """A setup's last tie-break: 8 bytes of blake2b over the run seed and the setup's canonical
+    JSON (``setup_to_json``, sorted keys). Unbiased by enumeration order, cost or HP, the same
+    after a resume (rebuilt from the setups, never stored), and independent of the battle
+    state's layout: a state field added elsewhere does not reshuffle the ranks."""
+    identity = json.dumps(setup_to_json(setup), sort_keys=True).encode()
+    return int.from_bytes(hashlib.blake2b(seed + identity, digest_size=8).digest(), "little")
 
 
 def halving_key(stats: ScreenStats, j: int, cost: float, tie: int) -> tuple:
@@ -384,7 +387,7 @@ class _Funnel:
             self.index[new[i]] = idx
             self.rows.append(jax.tree.map(lambda f, i=i: np.asarray(f)[i], states))
             self.cost.append(costs[i])
-            self.tie.append(tie_rank(self.seed, blob))
+            self.tie.append(tie_rank(self.seed, new[i]))
             self.stats[idx] = ScreenStats((0,) * len(deaths.BUCKETS), 0, 0.0, 0.0, False)
             out.append(idx)
         return out
@@ -479,7 +482,7 @@ class _Funnel:
                 self.by_bytes[keys[i].tobytes()] = i
                 self.rows.append(jax.tree.map(lambda f, i=i: np.asarray(f)[i], states))
                 self.cost.append(setup_cost(self.problem, setup).weighted(self.weights))
-                self.tie.append(tie_rank(self.seed, keys[i].tobytes()))
+                self.tie.append(tie_rank(self.seed, setup))
         self.setups = setups
         self.index = {s: i for i, s in enumerate(setups)}
         self.known = set(setups)

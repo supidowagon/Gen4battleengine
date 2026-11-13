@@ -25,7 +25,7 @@ turn (``BtlCmd_TryPursuit``, battle_script.c:6928), since only ``BattleContext_I
 
 Refused (``UnsupportedAi`` on concrete inputs, ``REFUSED_SLOT`` traced): stage 2 reached
 with the first candidate's slot 0 empty or of power 1. That slot is skipped but the
-comparison after it still runs (battle_lib.c:8076), on the ``score`` left over from stage
+comparison after it still runs (battle_lib.c:8080), on the ``score`` left over from stage
 1, which this module does not track. The type-chart modifiers (Levitate, Wonder Guard,
 Normalize, Scrappy, Adaptability, Tinted Lens, Filter, Solid Rock, Expert Belt, Iron
 Ball, Miracle Eye, the variable-type moves; the player's Foresight flag is read through
@@ -122,6 +122,6 @@ def post_ko_switch_in(tables: Tables, state: BattleState, power_mul=10) -> jnp.n
         raise UnsupportedAi(
             "replacement: stage 2 of BattleAI_PostKOSwitchIn compares the stale stage-1 "
             "score after the first candidate's empty or power-1 move slot 0 "
-            "(battle_lib.c:8076); not implemented"
+            "(battle_lib.c:8080); not implemented"
         )
     return jnp.where(stale, REFUSED_SLOT, pick).astype(_I32)

@@ -11,12 +11,14 @@ state ``send_replacements`` left and marks the child ``refused`` (ruling 4 value
 The observation is ``engine.observe``'s, projected from ``step``'s own events
 (``step.step_events``, ``observe.observation``) of the state after the replacement.
 
-Every batched program (``ai_rows``, ``laws_rows``, ``step_rows``) runs in chunks of
-``CHUNK`` rows padded to one fixed shape, ``-(-CHUNK // devices) * devices`` rows
-(padding = copies of the chunk's row 0, dropped after the call), sharded over the host
-devices as ``stage_a.rank_actions`` shards and exported through ``cached_export``, so
-a solve compiles each program once per device count and the results do not depend on
-it.
+Every batched program (``ai_rows``, ``laws_rows``, ``step_rows``, ``replace_rows``) runs
+in calls of a fixed number of rows: ``CHUNK``, except ``ai_rows``, whose calls have a
+power-of-two bucket of its rows (``bucket_rows``, 256 to ``CHUNK``), so a small frontier
+does not pay for ``CHUNK`` rows. A call's rows are rounded up to a multiple of the device
+count (padding = copies of the call's row 0, dropped after the call), sharded over the
+host devices as ``stage_a.rank_actions`` shards and exported through ``cached_export``, so
+a solve compiles each program once per call shape (``ai_rows``: at most 7 buckets) and
+device count, and a row's result depends on neither (``_ai``).
 
 ``expand`` enumerates each request's outcomes with ``enumerate_outcomes`` (float64
 probabilities from the integer laws, ruling 3: rolls are not pre-merged), streams the
@@ -33,48 +35,78 @@ anyone entered), observed as any turn child. The replacement itself is a request
 ``playout.replacement_pass`` for the chosen slot (``action - MOVE_ACTIONS``) and observes
 the result with ``replacement_observation`` (no action ran). It has no outcome draw, so
 the one child has probability 1; the store is deduplicated by state bytes as ``expand``'s.
+
+**Learn-move prompts** (K3d-exp design §3.5): ``TurnEnd`` pays exp and runs its learn-move
+prompts (battle_controller_player.c:1846) before ``ReplaceFainted`` (:1848). So a turn's
+child first runs the learnset scans (``levelup.advance_learns``); when a prompt is left and
+the battle goes on, the child **stops** at that learn decision before the opponent's
+replacement, holding the turn's ``power_mul`` in ``replace_mul`` when the opponent's active
+is down (as ``send_replacements`` holds it at a player replacement), and refused when the
+opponent needs a replacement after an AI switch (``ai_switched`` is decided now; roark.md
+14, item 3). Learn work left at a battle-ending KO is no prompt (ruling D8): the child is
+terminal. The answer is a request ``(state index, option)`` of ``expand_learns``:
+``learn_rows`` runs ``levelup.learn`` with the option (``learn_options``' indexing), then,
+once no prompt is left, ``send_replacements`` with the carried ``powerMul``
+(``playout._carried_mul``), which may stop at a player replacement and hold it again;
+``replace_mul`` is cleared when nothing is pending. It is observed with
+``replacement_observation`` (no action ran). Every row kind (turn, learn, replacement) also
+marks a child refused when ``exp_refused`` is set (design §3.3, window (c)).
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from functools import partial
 
 import jax
 import jax.numpy as jnp
 import numpy as np
+from jax import shard_map
 from jax.sharding import Mesh, NamedSharding, PartitionSpec
 
 import nuzline.search.stage_a  # noqa: F401 - registers Tables/BattleState for jax.export
+from nuzline.ai.layout import AiLayout, layout_of
 from nuzline.ai.policy import _distribution
 from nuzline.data.tables import Tables
 from nuzline.engine.actions import MOVE_ACTIONS
-from nuzline.engine.enumerate import OutcomeLaws, SamplingOnly, enumerate_outcomes, outcome_laws
+from nuzline.engine.enumerate import (
+    OutcomeLaws,
+    Reads,
+    SamplingOnly,
+    enumerate_outcomes,
+    outcome_laws,
+)
+from nuzline.engine.levelup import advance_learns, learn, needs_learn
 from nuzline.engine.observe import observation, replacement_observation
 from nuzline.engine.order import is_switch
 from nuzline.engine.outcome import Outcome
 from nuzline.engine.state import BattleState
-from nuzline.engine.step import replacement_power_mul, step_events
+from nuzline.engine.step import needs_replacement, replacement_power_mul, step_events
 from nuzline.jaxcache import cached_export, code_version
-from nuzline.search.playout import replacement_pass, send_replacements
+from nuzline.search.playout import _carried_mul, replacement_pass, send_replacements
 from nuzline.search.rows import concat, row_bytes, take
 
 __all__ = [
     "CHUNK",
     "Child",
     "ai_rows",
+    "bucket_rows",
     "expand",
+    "expand_learns",
     "expand_replacements",
     "laws_rows",
+    "learn_rows",
     "replace_rows",
     "step_rows",
 ]
 
 CHUNK = 16384  # rows per program call, before padding to the device count
+AI_MIN_ROWS = 256  # ai_rows' smallest call (bucket_rows)
 
 # The pytrees of the programs' arguments and results, for ``jax.export`` serialization
 # (``Tables`` and ``BattleState`` are registered by ``stage_a``).
-for _cls in (Outcome, OutcomeLaws):
+for _cls in (Outcome, OutcomeLaws, Reads):
     jax.export.register_namedtuple_serialization(_cls, serialized_name=f"nuzline.{_cls.__name__}")
 
 
@@ -82,7 +114,8 @@ for _cls in (Outcome, OutcomeLaws):
 class Child:
     """One merged child of a request: ``state_row`` indexes the store ``expand``
     returns; ``obs`` is the ``int32[OBS_SIZE]`` observation's bytes; ``prob`` the
-    float64 total of its outcomes; ``refused`` the opponent's replacement was refused."""
+    float64 total of its outcomes; ``refused`` the opponent's replacement was refused (or
+    ``exp_refused`` is set)."""
 
     state_row: int
     obs: bytes
@@ -90,37 +123,75 @@ class Child:
     refused: bool
 
 
-def _run(fn: Callable, name: str, tables: Tables, rows: tuple, n: int):
+def bucket_rows(n: int) -> int:
+    """The rows of one ``ai_rows`` program call for ``n`` rows: the smallest power of two
+    at least ``n``, between ``AI_MIN_ROWS`` and ``CHUNK`` (above ``CHUNK``, ``CHUNK``-row
+    calls). So at most 7 shapes (256 .. 16384) are compiled per device count."""
+    return min(CHUNK, max(AI_MIN_ROWS, 1 << max(n - 1, 0).bit_length()))
+
+
+def _run(fn: Callable, name: str, tables: Tables, rows: tuple, n: int, static=None, per_call=CHUNK):
     """``fn(tables, *rows)`` (a ``vmap`` over the rows' leading axis) over ``n`` rows,
-    in ``CHUNK``-row calls padded and sharded as the module docstring says; numpy out."""
+    in ``per_call``-row calls (default ``CHUNK``) padded and sharded as the module
+    docstring says; numpy out. ``static`` names what else ``fn`` closes over
+    (``cached_export``). Padding rows are copies of the call's row 0 and are dropped. A
+    row's result does not depend on ``per_call`` when ``fn``'s per-row program does not
+    change with the batch shape (``_ai`` says how ``ai_rows`` ensures it)."""
     if n == 0:
-        specs = jax.tree.map(lambda a: jax.ShapeDtypeStruct((1, *a.shape[1:]), a.dtype), rows)
+        # One row per device: a shard_map'd fn (_ai's per-slot layout) needs the leading
+        # axis to divide by the device count, even under eval_shape.
+        lead = jax.device_count()
+        specs = jax.tree.map(lambda a: jax.ShapeDtypeStruct((lead, *a.shape[1:]), a.dtype), rows)
         shape = jax.eval_shape(fn, tables, *specs)
         return jax.tree.map(lambda s: np.zeros((0, *s.shape[1:]), s.dtype), shape)
     devices = jax.device_count()
-    size = -(-CHUNK // devices) * devices
+    size = -(-per_call // devices) * devices
     sharding = NamedSharding(Mesh(jax.devices(), ("d",)), PartitionSpec("d"))
     outs = []
-    for start in range(0, n, CHUNK):
-        idx = np.arange(start, min(start + CHUNK, n))
+    for start in range(0, n, per_call):
+        idx = np.arange(start, min(start + per_call, n))
         pad = np.concatenate([idx, np.full(size - len(idx), idx[0])])
         chunk = take(rows, pad)
         chunk = jax.device_put(chunk, sharding) if devices > 1 else jax.device_put(chunk)
         args = (tables, *chunk)
-        program = cached_export(fn, args, name=name, static={}, version=code_version())
+        program = cached_export(fn, args, name=name, static=static or {}, version=code_version())
         outs.append(take(jax.device_get(program(*args)), slice(0, len(idx))))
     return concat(outs)
 
 
-def _ai(tables: Tables, states: BattleState) -> jnp.ndarray:
-    return jax.vmap(_distribution, in_axes=(None, 0))(tables, states)
+def _ai(tables: Tables, states: BattleState, layout: AiLayout) -> jnp.ndarray:
+    """``_distribution`` of every row. A per-slot layout maps each device's rows one at a
+    time (``lax.map`` inside ``shard_map`` over the call's device axis): the per-row
+    program is then the same at every call size and device count, so a row's float32
+    result depends on neither. Under ``vmap`` some Kaizo rows were observed to differ by
+    1 ulp between call sizes. ``shard_map`` keeps the rows on their devices; ``lax.map``
+    alone over the sharded axis would run them on one. Vanilla keeps ``vmap``, whose rows
+    were observed stable (tests/search/test_expand.py)."""
+    one = partial(_distribution, tables, layout=layout)
+    if not layout.per_slot_sites:
+        return jax.vmap(one)(states)
+    mesh = Mesh(jax.devices(), ("d",))
+    return shard_map(
+        lambda rows: jax.lax.map(one, rows),
+        mesh=mesh,
+        in_specs=PartitionSpec("d"),
+        out_specs=PartitionSpec("d"),
+        check_vma=False,
+    )(states)
 
 
-def ai_rows(tables: Tables, states: BattleState) -> np.ndarray:
+def ai_rows(tables: Tables, states: BattleState, per_call: int | None = None) -> np.ndarray:
     """``float32[N, NUM_OPP_ACTIONS]``: the AI's exact action distribution of each of
     ``N`` states (``policy._distribution``, the batched form of
-    ``ai_action_distribution``); a NaN row is a refused state."""
-    return _run(_ai, "expand_ai", tables, (states,), len(states.hp))
+    ``ai_action_distribution``) under the concrete ``tables``' AI layout (``layout_of``,
+    a static key of the cached program); a NaN row is a refused state. The calls have
+    ``bucket_rows(N)`` rows (``per_call`` overrides it, for tests): a lone state does not
+    pay for ``CHUNK`` rows."""
+    layout = layout_of(tables)
+    fn = partial(_ai, layout=layout)
+    n = len(states.hp)
+    per_call = bucket_rows(n) if per_call is None else per_call
+    return _run(fn, "expand_ai", tables, (states,), n, {"layout": layout.name}, per_call)
 
 
 def _laws(tables: Tables, states: BattleState, actions) -> OutcomeLaws:
@@ -133,12 +204,32 @@ def laws_rows(tables: Tables, states: BattleState, actions) -> OutcomeLaws:
     return _run(_laws, "expand_laws", tables, (states, actions), len(actions))
 
 
+def _select(cond, a, b):
+    return jax.tree.map(lambda x, y: jnp.where(cond, x, y), a, b)
+
+
 def _turn(tables: Tables, before: BattleState, actions, outcome: Outcome):
     """One outcome of a turn, as the playout plays it (module docstring): ``(after,
-    refused, observation)``."""
+    refused, observation)``. The learnset scans run first (``advance_learns``: the
+    ``TurnEnd`` payout's prompts come before ``ReplaceFainted``, bcp.c:1846-1848); a prompt
+    in a battle that goes on stops the child at the learn decision (module docstring),
+    else the opponent's replacement follows as in the playout (``finish_turn``)."""
     power_mul = replacement_power_mul(tables, before, actions)
+    ai_switched = is_switch(actions[1])
     stepped, events = step_events(tables, before, actions, outcome)
-    after, refused = send_replacements(tables, stepped, is_switch(actions[1]), power_mul)
+    stepped = advance_learns(tables, stepped)
+    prompt = needs_learn(stepped) & (stepped.over == 0)  # D8: no prompt once it is over
+    # The learn stop: the turn's powerMul waits in replace_mul for the opponent's
+    # replacement after the answer (as at send_replacements' player stop), and an opponent
+    # replacement after an AI switch is refused now (send_replacements' rule).
+    opp_down = stepped.hp[1, stepped.active[1]] == 0
+    held = stepped._replace(
+        replace_mul=jnp.where(opp_down, power_mul, 0).astype(stepped.replace_mul.dtype)
+    )
+    held_refused = ai_switched & (needs_replacement(stepped)[1] == 1)
+    sent, sent_refused = send_replacements(tables, stepped, ai_switched, power_mul)
+    after = _select(prompt, held, sent)
+    refused = jnp.where(prompt, held_refused, sent_refused) | (after.exp_refused != 0)
     return after, refused, observation(events, after)
 
 
@@ -245,7 +336,7 @@ def expand(
 
 def _replace(tables: Tables, state: BattleState, action):
     after, refused = replacement_pass(tables, state, action - MOVE_ACTIONS)
-    return after, refused, replacement_observation(after)
+    return after, refused | (after.exp_refused != 0), replacement_observation(after)
 
 
 def _replaces(tables: Tables, states: BattleState, actions):
@@ -263,16 +354,14 @@ def replace_rows(
     return after, np.asarray(refused, bool), np.asarray(obs, np.int32)
 
 
-def expand_replacements(
-    tables: Tables, states: BattleState, requests: list[tuple[int, int]]
-) -> tuple[BattleState, dict[int, Child]]:
-    """The child of each request ``(state index, player action)`` on the numpy
-    ``states``: ``(store, children)`` as ``expand`` returns them, one ``Child`` per
-    request with ``prob`` 1.0, the store deduplicated by state bytes."""
+def _one_child_rows(rows_fn, tables: Tables, states: BattleState, requests):
+    """``(store, children)`` of one-child requests ``(state index, action)`` through
+    ``rows_fn`` (``replace_rows``, ``learn_rows``): one ``Child`` per request with ``prob``
+    1.0, the store deduplicated by state bytes."""
     states = jax.tree.map(np.asarray, states)
     index = np.asarray([r[0] for r in requests], np.int64).reshape(-1)
     actions = np.asarray([r[1] for r in requests], np.int32)
-    after, refused, obs = replace_rows(tables, take(states, index), actions)
+    after, refused, obs = rows_fn(tables, take(states, index), actions)
     n = len(requests)
     state_bytes, obs_bytes = row_bytes(after, n), row_bytes(obs, n)
     rows: dict[bytes, int] = {}
@@ -287,3 +376,53 @@ def expand_replacements(
         children[i] = Child(row, obs_bytes[i].tobytes(), 1.0, bool(refused[i]))
     store = take(after, np.asarray(new)) if new else take(states, slice(0, 0))
     return store, children
+
+
+def expand_replacements(
+    tables: Tables, states: BattleState, requests: list[tuple[int, int]]
+) -> tuple[BattleState, dict[int, Child]]:
+    """The child of each request ``(state index, player action)`` on the numpy
+    ``states``: ``(store, children)`` as ``expand`` returns them, one ``Child`` per
+    request with ``prob`` 1.0, the store deduplicated by state bytes."""
+    return _one_child_rows(replace_rows, tables, states, requests)
+
+
+def _learn(tables: Tables, state: BattleState, option):
+    """The answer ``option`` to ``state``'s learn-move prompt (module docstring):
+    ``(after, refused, observation)``. Another prompt left stops there; else the
+    opponent's pending replacement runs with the carried ``powerMul`` (``ai_switched`` was
+    settled at the stop), and ``replace_mul`` is cleared unless the player's replacement is
+    pending (``send_replacements`` then holds it again)."""
+    answered = learn(tables, state, option)
+    prompt = needs_learn(answered) & (answered.over == 0)
+    sent, sent_refused = send_replacements(tables, answered, False, _carried_mul(answered))
+    pending = needs_replacement(sent)[0] == 1
+    sent = sent._replace(
+        replace_mul=jnp.where(pending, sent.replace_mul, 0).astype(sent.replace_mul.dtype)
+    )
+    after = _select(prompt, answered, sent)
+    refused = (~prompt & sent_refused) | (after.exp_refused != 0)
+    return after, refused, replacement_observation(after)
+
+
+def _learns(tables: Tables, states: BattleState, options):
+    return jax.vmap(_learn, in_axes=(None, 0, 0))(tables, states, options)
+
+
+def learn_rows(
+    tables: Tables, states: BattleState, options
+) -> tuple[BattleState, np.ndarray, np.ndarray]:
+    """``(after, refused bool[N], observation int32[N, OBS_SIZE])`` of ``N`` rows of
+    (state at a learn-move prompt, ``learn_options`` option): ``_learn`` in one cached
+    program."""
+    options = np.asarray(options, np.int32)
+    after, refused, obs = _run(_learns, "expand_learn", tables, (states, options), len(options))
+    return after, np.asarray(refused, bool), np.asarray(obs, np.int32)
+
+
+def expand_learns(
+    tables: Tables, states: BattleState, requests: list[tuple[int, int]]
+) -> tuple[BattleState, dict[int, Child]]:
+    """The child of each request ``(state index, learn option)`` on the numpy ``states``
+    (each at a learn-move prompt), as ``expand_replacements`` returns them."""
+    return _one_child_rows(learn_rows, tables, states, requests)

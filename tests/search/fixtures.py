@@ -4,12 +4,14 @@ chance nodes, observations and endgames the solver tests need. Each builds on
 
 from __future__ import annotations
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 
 from nuzline.ai.policy import ai_action_distribution
 from nuzline.data.tables import Names, Tables
-from nuzline.engine.actions import MOVE_ACTIONS, legal_actions
+from nuzline.engine.actions import MOVE_ACTIONS, legal_actions, legal_opponent_actions
+from nuzline.engine.enumerate import SamplingOnly, enumerate_outcomes, outcome_laws
 from nuzline.engine.ids import Stat
 from nuzline.engine.state import BattleState
 from nuzline.search.leaves import LeafValue
@@ -37,6 +39,30 @@ def spike_cannon_root(tables: Tables, names: Names) -> BattleState:
     and ruling 4 refuses a solve of it (``UnsupportedAi``);
     test_stage_b.test_dropped_root_action gives Spike Cannon to the player only."""
     return roark_state(tables, names, player_moves=["Spike Cannon"], opp_moves=["Spike Cannon"])
+
+
+def spike_cannon_player_root(tables: Tables, names: Names) -> BattleState:
+    """Spike Cannon on the player's lead only (the opponent's would have no transcribed AI
+    script), whose outcome product exceeds ``enumerate.WIDTH_CAP`` against every opponent
+    action, at the root and below it. The player's lead holds a Lum Berry, which
+    ``hooks.held_item_check`` may run after any hit (a burn cured: Spike Cannon is
+    physical), so ``damage_inputs_can_change`` keeps Spike Cannon's hits after the first
+    out of the damage classes on every turn; without it the classes bring the pair under
+    the cap. (Until K3b2 Task 12 a White Herb on the opponent did this; the herb clause now
+    needs a stage the hits read that can be lowered, and a restoring herb is used up.)"""
+    s = roark_state(tables, names, player_moves=["Spike Cannon"])
+    s = s._replace(item=s.item.at[0, s.active[0]].set(names.item("Lum Berry")))
+    # Loud if a tighter predicate ever brings it under the cap.
+    cannon = names.move_slot(s, 0, "Spike Cannon")
+    theirs = np.flatnonzero(np.asarray(legal_opponent_actions(tables, s)))
+    for b in theirs:
+        laws = jax.tree.map(np.asarray, outcome_laws(tables, s, jnp.array([cannon, b], jnp.int32)))
+        try:
+            enumerate_outcomes(laws)
+        except SamplingOnly:
+            continue
+        raise AssertionError(f"Spike Cannon against action {b} fits under the width cap")
+    return s
 
 
 def one_v_one(tables: Tables, names: Names, player_move: str) -> BattleState:

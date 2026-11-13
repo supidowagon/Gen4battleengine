@@ -19,7 +19,12 @@ never counted as a loss.
 Programs run in chunks of ``LEAF_CHUNK`` rows padded to ``-(-LEAF_CHUNK // devices) *
 devices`` (padding = copies of the chunk's row 0, dropped after the call), sharded over
 the host devices and exported through ``cached_export``, as ``expand`` does, so a solve
-compiles each program once per device count and the results do not depend on it.
+compiles each program once per device count and the results do not depend on it. That
+is pinned for the vanilla policy (``tests/search/test_leaves.py
+test_device_count_invariant``); for Kaizo only Stage A's playouts are
+(``tests/search/test_stage_a.py test_kaizo_rank_actions_same_on_multiple_devices``), and
+a Kaizo leaf, which ``vmap``s the per-slot ``ai_action_distribution`` the same way, is
+not tested at more than one device count (K3c final review).
 """
 
 from __future__ import annotations
@@ -33,6 +38,7 @@ import numpy as np
 from jax.sharding import Mesh, NamedSharding, PartitionSpec
 
 import nuzline.search.stage_a  # noqa: F401 - registers Tables/BattleState/PlayoutResult
+from nuzline.ai.layout import AiLayout, layout_of
 from nuzline.data.tables import Tables
 from nuzline.engine.order import is_switch
 from nuzline.engine.outcome import sample_outcome
@@ -40,7 +46,13 @@ from nuzline.engine.state import BattleState
 from nuzline.engine.step import replacement_power_mul, step
 from nuzline.jaxcache import cached_export, code_version
 from nuzline.search import deaths
-from nuzline.search.playout import REFUSED_WON, PlayoutResult, finish_turn, playout
+from nuzline.search.playout import (
+    REFUSED_WON,
+    PlayoutResult,
+    finish_turn,
+    playout,
+    root_state,
+)
 
 __all__ = [
     "LEAF_CHUNK",
@@ -148,8 +160,20 @@ def allocate(weights: np.ndarray, budget: int, floor: int = 1) -> np.ndarray:
     return (2 * np.maximum(floor, np.rint(share))).astype(np.int64)
 
 
-def _leaf_program(tables: Tables, states: BattleState, keys, max_turns: int) -> PlayoutResult:
-    return jax.vmap(lambda s, k: playout(tables, s, k, max_turns))(states, keys)
+def _leaf_program(
+    tables: Tables, states: BattleState, keys, max_turns: int, layout: AiLayout
+) -> PlayoutResult:
+    return jax.vmap(lambda s, k: playout(tables, s, k, max_turns, layout))(states, keys)
+
+
+def _root_program(
+    tables: Tables, states: BattleState, keys, max_turns: int, layout: AiLayout
+) -> PlayoutResult:
+    """``_leaf_program`` from roots: each playout draws its root's hidden values first
+    (``playout.root_state``)."""
+    return jax.vmap(lambda s, k: playout(tables, root_state(tables, s, k), k, max_turns, layout))(
+        states, keys
+    )
 
 
 def _forced_turn(tables: Tables, state: BattleState, pair, key):
@@ -165,9 +189,11 @@ def _forced_turn(tables: Tables, state: BattleState, pair, key):
     return after, refused, key
 
 
-def _forced_one(tables: Tables, state: BattleState, pair, key, max_turns: int) -> PlayoutResult:
+def _forced_one(
+    tables: Tables, state: BattleState, pair, key, max_turns: int, layout: AiLayout
+) -> PlayoutResult:
     after, refused, key = _forced_turn(tables, state, pair, key)
-    rest = playout(tables, after, key, max_turns - 1)
+    rest = playout(tables, after, key, max_turns - 1, layout)
     return PlayoutResult(
         won=jnp.where(refused, REFUSED_WON, rest.won).astype(jnp.int8),
         player_faints=rest.player_faints,
@@ -180,8 +206,12 @@ def _forced_one(tables: Tables, state: BattleState, pair, key, max_turns: int) -
     )
 
 
-def _forced_program(tables: Tables, states: BattleState, pairs, keys, max_turns: int):
-    return jax.vmap(lambda s, p, k: _forced_one(tables, s, p, k, max_turns))(states, pairs, keys)
+def _forced_program(
+    tables: Tables, states: BattleState, pairs, keys, max_turns: int, layout: AiLayout
+):
+    return jax.vmap(lambda s, p, k: _forced_one(tables, s, p, k, max_turns, layout))(
+        states, pairs, keys
+    )
 
 
 def _run(fn, name: str, max_turns: int, tables: Tables, rows: tuple, row_of, keys, counts):
@@ -192,7 +222,8 @@ def _run(fn, name: str, max_turns: int, tables: Tables, rows: tuple, row_of, key
     devices = jax.device_count()
     size = -(-LEAF_CHUNK // devices) * devices
     sharding = NamedSharding(Mesh(jax.devices(), ("d",)), PartitionSpec("d"))
-    program = partial(fn, max_turns=max_turns)
+    layout = layout_of(tables)  # concrete here; the programs take it as static
+    program = partial(fn, max_turns=max_turns, layout=layout)
     won, refused, faints, deaths_of, ended = [], [], [], [], []
     hp_left, pp_left = [], []
     for start in range(0, n, LEAF_CHUNK):
@@ -202,7 +233,11 @@ def _run(fn, name: str, max_turns: int, tables: Tables, rows: tuple, row_of, key
         chunk = jax.device_put(chunk, sharding) if devices > 1 else jax.device_put(chunk)
         args = (tables, *chunk)
         exported = cached_export(
-            program, args, name=name, static={"max_turns": max_turns}, version=code_version()
+            program,
+            args,
+            name=name,
+            static={"max_turns": max_turns, "layout": layout.name},
+            version=code_version(),
         )
         out = jax.device_get(exported(*args))
         won.append(np.asarray(out.won)[: len(idx)])
@@ -272,14 +307,17 @@ def _prepare(counts, key):
 
 
 def evaluate_leaves(
-    tables: Tables, states: BattleState, counts, key, max_turns: int = 100
+    tables: Tables, states: BattleState, counts, key, max_turns: int = 100, *, root: bool = False
 ) -> list[LeafValue]:
     """``counts[i]`` playouts (even) from each of the numpy ``states`` (``N`` rows), leaf
-    ``i`` on ``leaf_keys(key, i, counts[i])``. ``ValueError`` on a finished battle or
-    ``counts`` not of length ``N``."""
+    ``i`` on ``leaf_keys(key, i, counts[i])``. ``root``: the states are roots (the prep
+    screen's turn-0 states), so each playout first draws their hidden values
+    (``playout.root_state``); a tree leaf carries the values ``step`` stored and is played as
+    it is. ``ValueError`` on a finished battle or ``counts`` not of length ``N``."""
     states = jax.tree.map(np.asarray, states)
     counts, keys, row_of = _prepare(_check("evaluate_leaves", states, counts), key)
-    return _run(_leaf_program, "leaf_playouts", max_turns, tables, (states,), row_of, keys, counts)
+    program, name = (_root_program, "root_playouts") if root else (_leaf_program, "leaf_playouts")
+    return _run(program, name, max_turns, tables, (states,), row_of, keys, counts)
 
 
 def evaluate_forced(

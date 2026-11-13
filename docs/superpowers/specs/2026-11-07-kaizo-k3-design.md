@@ -99,6 +99,28 @@ still has addresses marked VERIFY (`docs/tracing.md`).
 
 ## 4. The mechanics
 
+**Status (K3b1 done, 2026-11-08).** Landed in both engines: §4.2 permanent sandstorm, field
+pass, Light Screen and Brick Break; §4.3 Toxic, Sand Tomb, Swift family, Pay Day, Gust,
+Recover, Fake Out, AncientPower, Curse, DoubleSlap, Self-Destruct, Flail, Aurora Beam; §4.4
+Solid Rock, Sand Veil, Rough Skin, Flame Body, Swift Swim, Limber, Snow Cloak, Adaptability,
+Focus Sash, Big Root, Chesto/Rindo/Berry Juice/Lum/Pecha/Chilan berries, White Herb, Lagging
+Tail, Aqua Ring; obedience (§5). Per-rule audit: `docs/kaizo/k3b-rule-audit.md`.
+
+**Status (K3b2 done, 2026-11-10).** Landed in both engines, every draw an `Outcome` field
+(rules: `docs/kaizo/k3b2-rules.md`): §4.3 Thunder Fang, Protect, Present, Attract, Roar,
+Camouflage, Nature Power (and Tri Attack, which it calls on Roark's BUILDING terrain); §4.4
+Cute Charm, Quick Claw; the per-trainer battle terrain read from the ROM (the two patched
+map-header getters of §5 are modelled); the mid-turn accuracy fix. Every Roark-vs-pool action
+pair from both saves enumerates exactly under the width cap. `coverage --trainer roark --cap
+16` on both saves now lists only the K3c lines (no AI policy, `AI_FLAG_RISKY`, untranscribed
+move script paths, `Kaizo ROM: 1 code changes unclassified`: the Dry Skin AI compare), and the
+pool is `EXACT` with nothing missing. Left for K3c: the Kaizo AI (§6), including its reads of
+the K3b2 mechanics (Quick Claw in the AI's speed compares, the player's infatuation, Protect
+and Roar in seen moves, Camouflage's types, Nature Power's called move). Left for K3d: the
+golden trace and acceptance (§7, §9). Open user decisions at the end of K3: the `% n`
+uniformity convention, and the terrain of the 41 Kaizo terrain-move trainers whose maps give
+no single terrain (refused today).
+
 ### 4.1 Rules for every new mechanic
 
 These are the existing project rules, restated because K3 roughly doubles the engine:
@@ -247,6 +269,21 @@ without a decoded note is not allowed.
   in-emulator probe is pending.
 
 ## 6. The Kaizo trainer AI
+
+**Status (K3c done, 2026-11-12).** Landed (`docs/ai/kaizo_roark.md`, every rule cited): the
+per-game policy (`Tables.ai_policy`, `AiLayout`); the one changed AI word (the Dry Skin
+compare, `modelled`) on an otherwise vanilla script and C code; BASIC, EVAL_ATTACK, EXPERT
+and RISKY for all of Roark's moves, keyed by battle effect; the new script commands with the
+AI's reads of the K3b2 mechanics (Quick Claw in the speed compare; infatuation, the AI's
+speed rank and Protect chains are not reached, plan K3c Rulings 4, 5, 9); the id lists checked
+per game; six-Pokemon switching (44 switch sites); and the per-game outcome layout: per-slot
+script-roll sites, factored exactly, width at most 2093 (573 measured on the pools) against
+`WIDTH_CAP` 131072, with `MAX_ENUMERATED` and the vanilla layout unchanged. No AI change of
+the spreadsheet touches Roark's fight (Ruling 2). `coverage --trainer roark --cap 16` exits 0
+on both saves: fight and pool `EXACT`, nothing missing, nothing sampled. Merged draws that
+still consume RNG (the speed-compare tie, the four damage rolls, the absorb-party `% 3`, the
+repeated ability coin flips) are listed for K3d in kaizo_roark.md 8.7. Kaizo trainers with
+other AI flag sets stay refused until their split's milestone (Ruling 10).
 
 - **A per-game policy.** The Kaizo policy reuses the vanilla script transcription where
   the bytes are unchanged and replaces exactly what the overlay14 diff changed. The

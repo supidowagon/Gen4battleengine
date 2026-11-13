@@ -28,7 +28,6 @@ Deliberately unsupported although close to a supported family:
   (``subscript_recoil_1_3.s``), which a ``RECOIL`` percent cannot express exactly.
 * ``BATTLE_EFFECT_STATUS_BADLY_POISON`` / ``BADLY_POISON_HIT`` (33, 202): Toxic
   infliction is not in M1.
-* ``BATTLE_EFFECT_HIT_TWICE`` (44): a fixed hit count, unlike ``MULTI_HIT``'s 2-5.
 * ``SPEED_UP``, ``ACC_UP``, ``SP_DEF_UP``, ``SP_ATK_DOWN``, ``SP_DEF_DOWN``,
   ``ACC_UP_2``, ``EVA_UP_2``, ``SP_ATK_DOWN_2``, ``EVA_DOWN_2``, ``ACC_DOWN_2``,
   ``LOWER_EVASION_HIT`` (12, 14, 15, 21, 22, 55, 56, 61, 63, 64, 74): no move uses
@@ -42,14 +41,24 @@ Status families reviewed against their decomp subscripts
 the only type checks there are the target-type immunities poison vs
 Poison/Steel, burn vs Fire and freeze vs Ice (and no freezing in sun), which
 ``engine/effects.py`` applies. Paralysis and sleep have none in Gen 4. Their ability immunities
-(Insomnia, Vital Spirit, Limber, Immunity, Water Veil, Magma Armor, Leaf Guard,
-Shield Dust) map to ``AbilityId.UNSUPPORTED``, and Safeguard, Substitute and
-Uproar are unsupported moves, so none of those branches can be reached silently.
+are Insomnia and Limber (implemented in ``engine/effects.py``) and Vital Spirit, Immunity,
+Water Veil, Magma Armor, Leaf Guard and Shield Dust (``AbilityId.UNSUPPORTED``), and
+Safeguard, Substitute and Uproar are unsupported moves, so none of those branches can be
+reached silently.
 """
 
 from __future__ import annotations
 
-from nuzline.engine.ids import AbilityId, EffectId, ItemId, Stat, Status, TrainerItemId
+from nuzline.engine.ids import (
+    RESIST_ANY_NORMAL,
+    AbilityId,
+    EffectId,
+    ItemId,
+    Stat,
+    Status,
+    TrainerItemId,
+    Type,
+)
 
 _E = EffectId
 _ATK, _DEF, _SPA, _SPD, _SPE, _ACC, _EVA = (
@@ -76,8 +85,47 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     23: ("BATTLE_EFFECT_ACC_DOWN", _E.STAT_FOE, (_ACC, -1, 0)),
     24: ("BATTLE_EFFECT_EVA_DOWN", _E.STAT_FOE, (_EVA, -1, 0)),
     29: ("BATTLE_EFFECT_MULTI_HIT", _E.MULTI_HIT, (0, 0, 0)),
+    # Double Kick, Bonemerang, Double Hit, Kaizo's DoubleSlap: effect_script_0044.s is
+    # SetMultiHit 2, SYSCTL_MULTI_HIT_MOVE (accuracy once), CalcCrit, CalcDamage: two hits.
+    44: ("BATTLE_EFFECT_HIT_TWICE", _E.MULTI_HIT, (2, 0, 0)),
+    # Recover, Softboiled, Milk Drink, Slack Off, Heal Order (Kaizo: Lunar Dance too):
+    # effect_script_0032.s, an ON_HIT direct effect running subscript_recover_half_max_hp.s
+    # (maxHP / 2, fails at full HP).
+    32: ("BATTLE_EFFECT_RESTORE_HALF_HP", _E.RECOVER, (0, 0, 0)),
+    # Fake Out: effect_script_0158.s fails unless fakeOutTurnNumber == totalTurns, else an
+    # indirect TO_DEFENDER flinch at the move's chance (subscript_flinch_mon.s).
+    158: ("BATTLE_EFFECT_ALWAYS_FLINCH_FIRST_TURN_ONLY", _E.FAKE_OUT, (0, 0, 0)),
+    # AncientPower, Silver Wind, Ominous Wind: effect_script_0140.s, an indirect TO_ATTACKER
+    # effect at the move's chance running subscript_boost_all_stats.s.
+    140: ("BATTLE_EFFECT_RAISE_ALL_STATS_HIT", _E.RAISE_ALL_STATS_HIT, (0, 0, 0)),
+    # Curse: effect_script_0109.s; a non-Ghost user runs subscript_curse_normal.s (direct,
+    # TO_ATTACKER). The Ghost branch (subscript_curse_ghost.s) is refused by coverage.
+    109: ("BATTLE_EFFECT_CURSE", _E.CURSE, (0, 0, 0)),
+    # Selfdestruct, Explosion (Kaizo: Memento too): effect_script_0007.s checks Damp (an
+    # unsupported ability, so never met), sets the attacker's HP to 0, then CalcCrit,
+    # CalcDamage; BattleSystem_CalcMoveDamage halves defenseStat for this effect
+    # (battle_lib.c:6943-6945).
+    7: ("BATTLE_EFFECT_HALVE_DEFENSE", _E.SELF_DESTRUCT, (0, 0, 0)),
+    # Flail, Reversal: effect_script_0099.s runs CalcFlailPower (battle_script.c:4958) before
+    # CalcCrit and CalcDamage; the power comes from the user's HP pixels.
+    99: ("BATTLE_EFFECT_INCREASE_POWER_WITH_LESS_HP", _E.FLAIL, (0, 0, 0)),
     31: ("BATTLE_EFFECT_FLINCH_HIT", _E.FLINCH, (0, 0, 0)),
+    # Swift, Shock Wave, Kaizo's Aurora Beam: effect_script_0017.s is CalcCrit, CalcDamage;
+    # the never-miss comes from accuracy 0.
+    17: ("BATTLE_EFFECT_BYPASS_ACCURACY", _E.PLAIN, (0, 0, 0)),
+    # Toxic: effect_script_0033.s sets a direct TO_DEFENDER badly-poison subscript; its
+    # immunities (Poison, Steel, Immunity, Leaf Guard in sun, status, Safeguard, substitute)
+    # are can_have_status's, and it skips the type chart like Poison Powder (effect 66).
+    33: ("BATTLE_EFFECT_STATUS_BADLY_POISON", _E.STATUS_FOE, (Status.TOXIC, 0, 0)),
+    # Pay Day: effect_script_0034.s, a hit plus subscript_pay_day.s (prize money only).
+    34: ("BATTLE_EFFECT_INCREASE_PRIZE_MONEY", _E.PLAIN, (0, 0, 0)),
     42: ("BATTLE_EFFECT_BIND_HIT", _E.TRAP, (0, 0, 0)),
+    # Gust: effect_script_0149.s doubles the power against MOVE_EFFECT_AIRBORNE (Fly,
+    # Bounce), which no supported move sets (test_gust_note_holds).
+    149: ("BATTLE_EFFECT_DOUBLE_DAMAGE_FLY_OR_BOUNCE", _E.PLAIN, (0, 0, 0)),
+    # Sand Tomb (Kaizo), Whirlpool: effect_script_0261.s is Bind's script (the same
+    # BIND_TARGET indirect effect) plus a x2 against MOVE_EFFECT_UNDERWATER (Dive, unsupported).
+    261: ("BATTLE_EFFECT_WHIRLPOOL", _E.TRAP, (0, 0, 0)),
     43: ("BATTLE_EFFECT_HIGH_CRITICAL", _E.HIGH_CRIT, (0, 0, 0)),
     # subscript_recoil_1_4: damage / 4 == damage * 25 // 100
     48: ("BATTLE_EFFECT_RECOIL_QUARTER", _E.RECOIL, (25, 0, 0)),
@@ -111,6 +159,15 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     # Confusion, Psybeam, Dizzy Punch, ...: effect_script_0076.s, a probabilistic indirect
     # effect (no ON_HIT flag) running subscript_confuse.s.
     76: ("BATTLE_EFFECT_CONFUSE_HIT", _E.SECONDARY_CONFUSE, (0, 0, 0)),
+    # Light Screen, Reflect: effect_script_0035.s / _0065.s, an ON_HIT direct effect running
+    # subscript_light_screen.s / subscript_reflect.s (BtlCmd_TryLightScreen, script.c:4214).
+    35: ("BATTLE_EFFECT_SET_LIGHT_SCREEN", _E.LIGHT_SCREEN, (0, 0, 0)),
+    65: ("BATTLE_EFFECT_SET_REFLECT", _E.REFLECT, (0, 0, 0)),
+    # Brick Break: effect_script_0186.s, damage plus a direct BREAK_SCREENS effect
+    # (BtlCmd_TryBreakScreens, script.c:6550).
+    186: ("BATTLE_EFFECT_REMOVE_SCREENS", _E.BRICK_BREAK, (0, 0, 0)),
+    # Aqua Ring: effect_script_0251.s sets MOVE_EFFECT_AQUA_RING on the user (fails if set).
+    251: ("BATTLE_EFFECT_RESTORE_HP_EVERY_TURN", _E.AQUA_RING, (0, 0, 0)),
     # Mud Sport: effect_script_0201.s sets MOVE_EFFECT_MUD_SPORT on the user.
     201: ("BATTLE_EFFECT_HALVE_ELECTRIC_DAMAGE", _E.MUD_SPORT, (0, 0, 0)),
     # Bug Bite, Pluck: effect_script_0224.s, an ON_HIT indirect effect (subscript_pluck.s).
@@ -144,7 +201,37 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     # subscript_recoil_1_2: damage / 2 == damage * 50 // 100
     269: ("BATTLE_EFFECT_RECOIL_HALF", _E.RECOIL, (50, 0, 0)),
     271: ("BATTLE_EFFECT_LOWER_SP_DEF_2_HIT", _E.SECONDARY_STAT_FOE, (_SPD, -2, 0)),
+    # effect_script_0275.s -> subscript_paralyze_or_flinch.s: a paralysis roll, then a flinch
+    # roll (engine/effects.py ``_fang``). Fire Fang (273) and Ice Fang (274) call other
+    # subscripts and stay unmapped until those are read (docs/kaizo/k3b2-rules.md §11 item 7).
+    275: ("BATTLE_EFFECT_FLINCH_PARALYZE_HIT", _E.FANG_PARALYZE_FLINCH, (Status.PARALYSIS, 0, 0)),
+    # effect_script_0122.s: BtlCmd_Present (battle_script.c:5789-5806) draws the power or the
+    # heal path (engine/effects.py ``_present``, damage.PRESENT_POWER).
+    122: ("BATTLE_EFFECT_RANDOM_POWER_MAYBE_HEAL", _E.PRESENT, (0, 0, 0)),
+    # effect_script_0111.s (Protect, Detect): a direct TO_ATTACKER effect running
+    # subscript_protect.s -> BtlCmd_TryProtection (battle_script.c:5149-5190); the block is
+    # CheckMoveHitOverrides (battle_controller_player.c:3001-3014; engine/step.py).
+    111: ("BATTLE_EFFECT_PROTECT", _E.PROTECT, (0, 0, 0)),
+    # effect_script_0120.s (Attract): a direct TO_DEFENDER effect running
+    # subscript_infatuate.s -> BtlCmd_TryAttract (battle_script.c:5727-5742); the status
+    # check is CHECK_STATUS_STATE_ATTRACT (battle_controller_player.c:2669-2692;
+    # engine/effects.py ``_attract``, engine/step.py).
+    120: ("BATTLE_EFFECT_INFATUATE", _E.ATTRACT, (0, 0, 0)),
     276: ("BATTLE_EFFECT_RAISE_SP_ATK_HIT", _E.SECONDARY_STAT_SELF, (_SPA, 1, 0)),
+    # effect_script_0036.s (Tri Attack): Random 2, 3 picks burn, freeze or paralysis as the
+    # indirect TO_DEFENDER effect at the move's chance (engine/effects.py ``_tri_attack``,
+    # Outcome.tri_attack).
+    36: ("BATTLE_EFFECT_TRI_ATTACK", _E.TRI_ATTACK, (0, 0, 0)),
+    # effect_script_0173.s (Nature Power): BtlCmd_GetTerrainMove (battle_script.c:8036-8048)
+    # then GoToMoveScript into the terrain's move (engine/order.py ``called_move``).
+    173: ("BATTLE_EFFECT_NATURE_POWER", _E.NATURE_POWER, (0, 0, 0)),
+    # effect_script_0213.s (Camouflage): BtlCmd_TryCamouflage (battle_script.c:7997-8022;
+    # engine/effects.py ``_camouflage``).
+    213: ("BATTLE_EFFECT_CAMOUFLAGE", _E.CAMOUFLAGE, (0, 0, 0)),
+    # effect_script_0028.s (Roar, Whirlwind): ON_HIT | subscript_force_target_to_switch_or_flee
+    # -> BtlCmd_TryWhirlwind (battle_script.c:5241-5320), BattleSystem_CanWhirlwind
+    # (battle_lib.c:3072-3086) (engine/step.py ``_use_move``; Outcome.roar_level, roar_target).
+    28: ("BATTLE_EFFECT_FORCE_SWITCH", _E.ROAR, (0, 0, 0)),
 }
 
 DECOMP_EFFECT_NAMES: dict[int, str] = {k: v[0] for k, v in _EFFECTS.items()}
@@ -194,12 +281,60 @@ DECOMP_ABILITY_TO_ID: dict[str, AbilityId] = {
     "Cloud Nine": AbilityId.CLOUD_NINE,
     "Compoundeyes": AbilityId.COMPOUNDEYES,
     "Shed Skin": AbilityId.SHED_SKIN,
+    "Sand Veil": AbilityId.SAND_VEIL,
+    "Snow Cloak": AbilityId.SNOW_CLOAK,
+    "Swift Swim": AbilityId.SWIFT_SWIM,
+    "Rough Skin": AbilityId.ROUGH_SKIN,
+    "Flame Body": AbilityId.FLAME_BODY,
+    "Limber": AbilityId.LIMBER,
+    "Adaptability": AbilityId.ADAPTABILITY,
+    "Solid Rock": AbilityId.SOLID_ROCK,
+    # BattleSystem_TriggerAbilityOnHit (battle_lib.c:4339-4355); Oblivious, which would block
+    # it (subscript_infatuate.s:5), stays unsupported (coverage refuses it).
+    "Cute Charm": AbilityId.CUTE_CHARM,
 }
 
 DECOMP_ITEM_TO_ID: dict[str, ItemId] = {
     "None": ItemId.NONE,  # ITEM_NONE (id 0)
     "Oran Berry": ItemId.ORAN_BERRY,  # HOLD_EFFECT_HP_RESTORE, param 10 HP
     "Sitrus Berry": ItemId.SITRUS_BERRY,  # HOLD_EFFECT_HP_PCT_RESTORE, param 25 %
+    "Focus Sash": ItemId.FOCUS_SASH,  # HOLD_EFFECT_ENDURE
+    "Big Root": ItemId.BIG_ROOT,  # HOLD_EFFECT_LEECH_BOOST, param 30 %
+    "Berry Juice": ItemId.BERRY_JUICE,  # HOLD_EFFECT_HP_RESTORE, param 20 HP; PLUCK_EFFECT_NONE
+    "Chesto Berry": ItemId.CHESTO_BERRY,  # HOLD_EFFECT_SLP_RESTORE
+    "Pecha Berry": ItemId.PECHA_BERRY,  # HOLD_EFFECT_PSN_RESTORE
+    "Lum Berry": ItemId.LUM_BERRY,  # HOLD_EFFECT_STATUS_RESTORE
+    "White Herb": ItemId.WHITE_HERB,  # HOLD_EFFECT_STATDOWN_RESTORE
+    "Lagging Tail": ItemId.LAGGING_TAIL,  # HOLD_EFFECT_PRIORITY_DOWN
+    "Quick Claw": ItemId.QUICK_CLAW,  # HOLD_EFFECT_SOMETIMES_PRIORITY, param 20
+    "Rindo Berry": ItemId.RESIST_BERRY,  # HOLD_EFFECT_WEAKEN_SE_GRASS (22)
+    "Chilan Berry": ItemId.RESIST_BERRY,  # HOLD_EFFECT_WEAKEN_NORMAL (35)
+}
+
+# The hold effects subscript_type_resist_berry.s reads (decomp hold effect id, i.e. line
+# id + 1 of generated/item_hold_effects.txt -> (name, the type it resists)): each of 19-34
+# halves a super-effective hit of its type (_135-_240); 35 (Chilan) halves any Normal-type
+# hit (_128, before the super-effective test). build_tables fills a RESIST_BERRY item's
+# item_param[i, 1] from here; only the items DECOMP_ITEM_TO_ID names are supported, the
+# others stay UNSUPPORTED. tests/tools/test_effect_map.py reads both against the decomp.
+RESIST_BERRY_HOLD_EFFECTS: dict[int, tuple[str, int]] = {
+    19: ("HOLD_EFFECT_WEAKEN_SE_FIRE", Type.FIRE),
+    20: ("HOLD_EFFECT_WEAKEN_SE_WATER", Type.WATER),
+    21: ("HOLD_EFFECT_WEAKEN_SE_ELECTRIC", Type.ELECTRIC),
+    22: ("HOLD_EFFECT_WEAKEN_SE_GRASS", Type.GRASS),
+    23: ("HOLD_EFFECT_WEAKEN_SE_ICE", Type.ICE),
+    24: ("HOLD_EFFECT_WEAKEN_SE_FIGHT", Type.FIGHTING),
+    25: ("HOLD_EFFECT_WEAKEN_SE_POISON", Type.POISON),
+    26: ("HOLD_EFFECT_WEAKEN_SE_GROUND", Type.GROUND),
+    27: ("HOLD_EFFECT_WEAKEN_SE_FLYING", Type.FLYING),
+    28: ("HOLD_EFFECT_WEAKEN_SE_PSYCHIC", Type.PSYCHIC),
+    29: ("HOLD_EFFECT_WEAKEN_SE_BUG", Type.BUG),
+    30: ("HOLD_EFFECT_WEAKEN_SE_ROCK", Type.ROCK),
+    31: ("HOLD_EFFECT_WEAKEN_SE_GHOST", Type.GHOST),
+    32: ("HOLD_EFFECT_WEAKEN_SE_DRAGON", Type.DRAGON),
+    33: ("HOLD_EFFECT_WEAKEN_SE_DARK", Type.DARK),
+    34: ("HOLD_EFFECT_WEAKEN_SE_STEEL", Type.STEEL),
+    35: ("HOLD_EFFECT_WEAKEN_NORMAL", RESIST_ANY_NORMAL),
 }
 
 # Bag items a trainer's AI may use (TrainerAI_ShouldUseItem, trainer_ai.c:4056).

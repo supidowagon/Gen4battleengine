@@ -4,6 +4,7 @@ from dataclasses import replace
 from math import comb
 
 import numpy as np
+import pytest
 
 from nuzline.engine.state import make_state
 from nuzline.prep.problem import Resources
@@ -57,6 +58,7 @@ def test_team_setups_count(tables, names):
             assert sorted(leads) == sorted(team)
 
 
+@pytest.mark.slow
 def test_neighbours_one_change(tables, names):
     party = sample_party(names)
     bite = names.move("Bite")
@@ -147,7 +149,12 @@ def test_setup_states_and_protected(tables, names):
     rows = row_bytes(states, 2)
     for i, s in enumerate((setup, other)):
         ref = make_state(
-            tables, setup_specs(prob, s), roark_party(names), 0, roark_trainer().items
+            tables,
+            setup_specs(prob, s),
+            roark_party(names),
+            0,
+            roark_trainer().items,
+            terrain=roark_trainer().terrain,
         ).with_budget(2, protected_slots(prob, s))
         ref_row = row_bytes(type(ref)(*(np.asarray(f)[None] for f in ref)), 1)[0]
         assert rows[i].tobytes() == ref_row.tobytes()

@@ -34,6 +34,7 @@ def team_and_budget(draw, tables, names):
     return team, budget, protected
 
 
+@pytest.mark.slow
 @settings(
     max_examples=40,
     deadline=None,
@@ -46,11 +47,15 @@ def test_make_states_matches_make_state(tables, names, data):
     budget = drawn[0][1]
     teams = [team for team, _, _ in drawn]
     protected = [[s for s in prot if s < len(team)] for team, _, prot in drawn]
-    batch = make_states(tables, teams, opp, opp_items=bag, budget=budget, protected=protected)
+    terrain = data.draw(st.sampled_from([-1, 2, 9]))
+    batch = make_states(
+        tables, teams, opp, opp_items=bag, budget=budget, protected=protected, terrain=terrain
+    )
     assert len(batch.hp) == len(teams)
     rows = row_bytes(batch, len(teams))
     for i, team in enumerate(teams):
-        ref = make_state(tables, list(team), opp, opp_items=bag).with_budget(budget, protected[i])
+        ref = make_state(tables, list(team), opp, opp_items=bag, terrain=terrain)
+        ref = ref.with_budget(budget, protected[i])
         ref_row = row_bytes(type(ref)(*(np.asarray(f)[None] for f in ref)), 1)[0]
         assert rows[i].tobytes() == ref_row.tobytes()
 

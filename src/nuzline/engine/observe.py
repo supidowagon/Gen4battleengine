@@ -32,20 +32,43 @@ Events, per side (``[side]``; 0 = player):
 * ``order``: the side that acted first when both showed a message at their turn
   (``action_order``, order.py:67-85), else -1; ``pursuit``: Pursuit hit the switching
   Pokemon first (step.py:545-590).
-* ``missed`` (accuracy check failed, step.py:398), ``no_target`` (the foe fainted
+* ``missed`` (accuracy check failed, step.py:398; not for a Fake Out that failed, whose
+  "But it failed!" subscript_missed.s prints instead), ``no_target`` (the foe fainted
   earlier this turn, step.py:390), ``hits`` (hits that landed: "Hit N times",
   battle_controller_player.c:3777-3812), ``crit[side, i]`` (hit ``i`` landed, dealt
   damage and was a crit: ``subscript_critical_hit.s``, bcp.c:4547-4554).
 * ``magnitude``: the level "Magnitude N!" showed (4-10) when the side's Magnitude hit
   and dealt damage, else 0 (``subscript_magnitude.s``: the message is a primary effect
   that an ineffective hit does not run).
+* ``protected``: the side's move was stopped by the foe's Protect / Detect ("{foe}
+  protected itself!", subscript_missed.s:63; also on an accuracy miss, which it replaces;
+  not for a failed Fake Out, which prints "But it failed!"). ``protect_ok`` /
+  ``protect_failed``: the side's own Protect / Detect succeeded ("{user} protected
+  itself!", subscript_protect.s) or failed ("But it failed!" after "X used Protect!").
+* ``present_heal``: Present's heal path ran on a hit: 1 "regained health", 2 "HP is full!"
+  (``subscript_recover_hp.s``), else 0. Its damage path's power is never printed (only the
+  HP change shows it).
+* ``called``: the move Nature Power turned into ("Nature Power turned into MOVE!",
+  effect_script_0173.s), once its script ran, else 0. ``act_id`` stays Nature Power; the
+  called move's hits, misses and crits are the side's.
+* ``dragged``: the party slot + 1 the foe's Roar / Whirlwind dragged in on this side ("{0} was
+  dragged out!", subscript_force_target_to_switch_or_flee.s), else 0: a drag told apart from
+  a switch. The newcomer runs no action this turn. A Roar that fails shows only its
+  ``act_id`` ("But it failed!"; a miss or a Protect shows ``missed`` / ``protected``).
 * The status checks before a move (step.py:327-377, bcp.c:2417-2728): ``asleep``
   (stays asleep), ``woke``, ``frozen`` (stays frozen), ``thawed`` (its own thaw roll or a
   thawing move), ``flinched``, ``confused`` ("is confused"), ``snapped_out``,
-  ``self_hit`` (hurt itself in confusion), ``full_para`` (fully paralyzed).
+  ``self_hit`` (hurt itself in confusion), ``full_para`` (fully paralyzed), ``in_love``
+  ("X is in love with Y!", subscript_infatuated.s: the attract check ran) and ``immobilized``
+  ("X is immobilized by love!", subscript_immobilized_by_love.s).
+* ``quick_claw``: its Quick Claw's held-item animation played before its move (no text;
+  ``subscript_check_quick_claw.s``): both chose a move, its draw of the turn before
+  activated the claw (``state.qc_roll``) and it acts first (``step._quick_claw_shown``). The
+  turn's own draw (``Outcome.quick_claw``) shows only in the end-of-turn order, which is
+  not in the vector (below).
 * ``thawed_by_hit``: a Fire hit thawed it (effects.py:368-375); ``contact_ability``:
-  its Static / Poison Point gave its attacker a status (effects.py:343-365), the
-  message that names the ability.
+  its Static / Poison Point / Flame Body gave its attacker a status, or its Cute Charm
+  infatuated it (effects._contact_ability), the message that names the ability.
 
 The end-of-turn order (``end_speed_tie``) is not in the vector: it shows only in the
 order of residual messages, so states it separates stay in one set (coarser than the
@@ -56,19 +79,34 @@ such a crit is not recorded. No implemented move sets ``substitute_hp`` (it is o
 reset, ``_VOLATILE`` step.py:94; notes/stage-b/observe.md section 1), so the case cannot
 arise yet; were it to, its states would stay in one set (coarser, never finer).
 
-The visible projection of ``after``: both actives, every slot's species, status and
-held/consumed item; the non-zero-ness of ``confusion``, ``taunt``, ``trapped``,
-``leech_seed`` and ``substitute_hp`` (their counters are hidden); stat stages, Water
+The visible projection of ``after``: both actives and their current types (Camouflage's
+"X transformed into the TYPE type!", effect_script_0213.s), every slot's species, status and
+held/consumed item (a Rindo / Chilan Berry's "weakened" message,
+``subscript_type_resist_berry.s:_245``, is always followed by its ``RemoveItem``, so
+``item_consumed`` shows it); the non-zero-ness of ``confusion``, ``taunt``, ``trapped``,
+``leech_seed`` and ``substitute_hp`` (their counters are hidden) and of ``infatuated`` ("fell in
+love", subscript_infatuate.s); stat stages, Water
 Sport, hazards (Stealth Rock, Spikes layers), screens and the other side conditions
 (non-zero), weather and the field conditions; the player's exact HP and PP per party
 slot (the player's healthbox and move menu); the opponent's HP as HP-bar pixels per
 slot (``hp_pixels``: the enemy healthbox never shows numbers, ``HEALTHBOX_INFO_NOT_ON_ENEMY``,
 include/battle/healthbox.h:33, healthbox.c:633-640); ``over`` and ``winner``.
 
+The player's own party as its summary and the exp messages show it (K3d-exp design §3.5): per
+slot its ``level``, ``stats``, ``max_hp`` (it depends on the EVs a payout adds, so two
+histories can differ in it alone; the healthbox shows it), ``moves``, ``exp`` ("gained N Exp.
+Points!", battle_script.c:9738) and the learn prompt it is shown (``learn_level`` and
+``learn_cursor``: the level-up move the game asks about, ``engine.levelup``). On a state
+``levelup.advance_learns`` has resolved, learn work in a battle that goes on is always a
+prompt (the scan clears a level or stops at a full move list). At the battle's end it may be
+unscanned work instead (ruling D8 keeps the work of a battle-ending KO, which no scan reaches),
+so the two learn fields read 0 once ``over`` is set: no prompt is shown, and the player has no
+decision left. The caller observes a resolved state (Stage B's learn stop, T8).
+
 Never in the vector: the opponent's exact HP, ``status_counter``, any counter value,
-the ``ai_*`` fields, an outcome element without a visible effect. Fields constant over
-a battle (levels, stats, moves) are left out. Intermediate HP-bar positions during
-the turn are seen in game but left out (notes/stage-b/observe.md §3, coarser only).
+the ``ai_*`` fields, an outcome element without a visible effect. The opponent's levels,
+stats and moves are constant over a battle and left out. Intermediate HP-bar positions
+during the turn are seen in game but left out (notes/stage-b/observe.md §3, coarser only).
 """
 
 from __future__ import annotations
@@ -129,6 +167,8 @@ _NONZERO_SIDE = (
     "curled",
     "bide_turns",
     "mud_sport",
+    "aqua_ring",
+    "infatuated",
 )
 _NONZERO_FIELD = ("trick_room", "gravity")
 
@@ -139,8 +179,12 @@ _LAYOUT: tuple[tuple[str, tuple[int, ...]], ...] = (
     ("act_id", _SIDE),
     ("crit", (SIDES, MAX_HITS)),
     ("magnitude", _SIDE),
+    ("present_heal", _SIDE),
+    ("called", _SIDE),
+    ("dragged", _SIDE),
     *((name, _SIDE) for name in EVENT_FLAGS),
     ("active", _SIDE),
+    ("active_types", (SIDES, 2)),
     ("species", _SLOT),
     ("status", _SLOT),
     ("item", _SLOT),
@@ -148,6 +192,13 @@ _LAYOUT: tuple[tuple[str, tuple[int, ...]], ...] = (
     ("player_hp", (SLOTS,)),
     ("opp_pixels", (SLOTS,)),
     ("player_pp", (SLOTS, MOVES)),
+    ("player_level", (SLOTS,)),
+    ("player_stats", (SLOTS, 5)),
+    ("player_max_hp", (SLOTS,)),
+    ("player_moves", (SLOTS, MOVES)),
+    ("player_exp", (SLOTS,)),
+    ("learn_level", (SLOTS,)),
+    ("learn_cursor", (SLOTS,)),
     ("stages", (SIDES, 8)),
     ("disabled_move", _SIDE),
     ("locked_move", _SIDE),
@@ -214,6 +265,7 @@ def observation(events: dict, after: BattleState) -> jnp.ndarray:
         **events,
         "order": jnp.where(both, order[0], -1),
         "active": after.active,
+        "active_types": after.types[jnp.arange(SIDES), after.active],
         "species": after.species,
         "status": after.status,
         "item": after.item,
@@ -221,6 +273,13 @@ def observation(events: dict, after: BattleState) -> jnp.ndarray:
         "player_hp": after.hp[0],
         "opp_pixels": hp_pixels(after.hp[1], after.max_hp[1]),
         "player_pp": after.pp[0],
+        "player_level": after.level[0],
+        "player_stats": after.stats[0],
+        "player_max_hp": after.max_hp[0],
+        "player_moves": after.moves[0],
+        "player_exp": after.exp,
+        "learn_level": jnp.where(after.over == 0, after.learn_level, 0),
+        "learn_cursor": jnp.where(after.over == 0, after.learn_cursor, 0),
         "stages": after.stages,
         "disabled_move": after.disabled_move,
         "locked_move": after.locked_move,

@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from nuzline.data.trainer import (
+    TERRAIN_UNKNOWN,
     AreaCondition,
     IntermediateData,
     PartnerVariant,
@@ -141,6 +142,21 @@ def test_trainers_without_a_battle_structure_are_refused(tmp_path):
         load_trainers(tmp_path)
 
 
+def test_trainers_without_a_terrain_are_refused(tmp_path):
+    # An intermediate extracted before the battle terrain was recorded (K3b2 Task 9).
+    row = {"id": 0, "format": "single", "opponent_2": None, "partner": []}
+    (tmp_path / "trainers.json").write_text(json.dumps([row]), encoding="utf-8")
+    with pytest.raises(ValueError, match="has no battle terrain: re-run"):
+        load_trainers(tmp_path)
+
+
+def test_terrain_fields_load(tmp_path):
+    (known,) = _write(tmp_path, [_kaizo_row()])
+    assert (known.terrain, known.terrains) == (9, (9,))
+    (mixed,) = _write(tmp_path, [_kaizo_row(terrain=-1, terrains=[0, 2, 7])])
+    assert (mixed.terrain, mixed.terrains) == (TERRAIN_UNKNOWN, (0, 2, 7))
+
+
 @needs_inter
 def test_partner_variants_load():
     grunt = next(t for t in load_trainers(INTER) if t.format == "multi" and len(t.partner) == 6)
@@ -249,6 +265,8 @@ def _kaizo_row(**fields):
         "format": "single",
         "opponent_2": None,
         "partner": [],
+        "terrain": 9,
+        "terrains": [9],
     }
     return {**row, **fields}
 

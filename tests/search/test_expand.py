@@ -37,6 +37,8 @@ from tests.search.fixtures import (
     switch_refusal_root,
 )
 
+pytestmark = pytest.mark.slow
+
 SMALL = 256  # the independent re-step program's batch (test_merged_child_equals_each_member)
 
 
@@ -63,11 +65,16 @@ def legal_pairs(tables, state, index: int = 0) -> list[tuple[int, int, int]]:
 
 @pytest.fixture(scope="module")
 def roark_expansion(tables, names):
-    """``expand`` of every legal pair at the real Roark start and two variants (the
-    leads at 20 HP), with the row count of each ``step_rows`` call recorded
-    (``test_expand_streams``): about 1.7 ``CHUNK``s of rows."""
+    """``expand`` of every legal pair at the real Roark start and its variants with
+    either lead or both at 30, 20, 10 or 5 HP, with the row count of each ``step_rows`` call
+    recorded (``test_expand_streams``): more than one ``CHUNK`` of rows (the K3b2
+    conditional reads and damage classes cut the four roots this used before to about
+    a third of a chunk)."""
     root = roark_real_state(tables, names)
-    roots = [root, root.replace_hp(1, 0, 20), root.replace_hp(0, 0, 20)]
+    roots = [root]
+    for hp in (30, 20, 10, 5):
+        roots += [root.replace_hp(1, 0, hp), root.replace_hp(0, 0, hp)]
+        roots.append(root.replace_hp(0, 0, hp).replace_hp(1, 0, hp))
     pairs = [p for i, s in enumerate(roots) for p in legal_pairs(tables, s, i)]
     sizes = []
     real = expand_mod.step_rows
@@ -82,6 +89,7 @@ def roark_expansion(tables, names):
     return roots, pairs, store, children, sizes
 
 
+@pytest.mark.slow
 def test_children_sum_to_one(roark_expansion):
     _, pairs, store, children, _ = roark_expansion
     assert sorted(children) == list(range(len(pairs)))
@@ -117,6 +125,7 @@ def _turn_row(tables, before, actions, outcome):
 _restep = jax.jit(jax.vmap(_turn_row, in_axes=(None, None, None, 0)))
 
 
+@pytest.mark.slow
 def test_merged_child_equals_each_member(tables, names):
     state = shinx_vs_cranidos(tables, names, slower_opp=True)
     # Cranidos at 1 HP: Spark KOs it with or without a crit, one state seen two ways
@@ -161,6 +170,7 @@ def _playout_turn(tables, state, a, key):
     return opp, after, refused, obs
 
 
+@pytest.mark.slow
 def test_matches_playout_turn(tables, names):
     state = roark_real_state(tables, names)
     legal = np.flatnonzero(np.asarray(legal_actions(tables, state, 0)))
@@ -261,6 +271,7 @@ def _expand_on_devices(devices: int) -> dict:
     return json.loads(done.stdout.strip().splitlines()[-1])
 
 
+@pytest.mark.slow
 def test_device_count_invariant(tables):
     # 3 divides neither CHUNK nor the chunk sizes, so the padding differs.
     one = _expand_on_devices(1)
@@ -330,3 +341,34 @@ def test_decision_actions_constant_on_equal_obs(tables, names):
             groups[c.obs].add(mask.tobytes())
     assert groups
     assert all(len(masks) == 1 for masks in groups.values())
+
+
+def test_bucket_rows():
+    from nuzline.search.expand import AI_MIN_ROWS, bucket_rows
+
+    assert [bucket_rows(n) for n in (1, 256, 257, 1000, 16384, 50000)] == [
+        AI_MIN_ROWS,
+        256,
+        512,
+        1024,
+        CHUNK,
+        CHUNK,
+    ]
+
+
+def test_ai_rows_do_not_depend_on_the_bucket(tables, names):
+    """The same states through two call sizes (one call of 256 rows, and calls of 8 rows,
+    the last one padded) give bit-identical rows: padding never reaches the output."""
+    from tests.ai.fixtures import versus
+
+    states = [
+        versus(tables, names, slot, lead, opp_hp=hp)
+        for slot in range(3)
+        for lead in ("Starly", "Grotle", None)
+        for hp in (5, 20)
+    ]
+    rows = jax.tree.map(lambda *xs: np.stack([np.asarray(x) for x in xs]), *states)
+    big = ai_rows(tables, rows)
+    small = ai_rows(tables, rows, per_call=8)
+    assert big.shape == (len(states), small.shape[1])
+    assert big.tobytes() == small.tobytes()

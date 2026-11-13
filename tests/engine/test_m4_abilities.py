@@ -56,6 +56,7 @@ def spinarak(tables, names):
 # --- Insomnia ------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 def test_insomnia_blocks_sleep(tables, names, spinarak):
     acts = A("Poison Sting", "Hypnosis", spinarak, names)
     out = step(tables, spinarak, acts, empty_outcome())
@@ -67,6 +68,7 @@ def test_insomnia_blocks_sleep(tables, names, spinarak):
     assert int(slept.status[0, 0]) == SLEEP and int(slept.ai_ability_known[0]) == 0
 
 
+@pytest.mark.slow
 def test_mold_breaker_pierces_insomnia(tables, names):
     """The sleep lands (it unlocks a locked mover, subscript_fall_asleep.s:_176), and the
     holder wakes at that move's end (``RecoverStatusByAbility`` is not ignorable)."""
@@ -91,6 +93,7 @@ def test_mold_breaker_pierces_insomnia(tables, names):
         assert int(out.status[0, 0]) == Status.NONE and int(out.ai_ability_known[0]) == 1
 
 
+@pytest.mark.slow
 def test_insomnia_cures_on_entry_and_move_end(tables, names, spinarak):
     # A sleeping Insomnia Pokemon switched in wakes (SWITCH_IN_CHECK_STATE_FORBIDDEN_STATUS).
     bench = spinarak._replace(ability=spinarak.ability.at[0, 1].set(AbilityId.INSOMNIA))
@@ -112,6 +115,7 @@ def test_insomnia_cures_on_entry_and_move_end(tables, names, spinarak):
 # --- Cloud Nine ----------------------------------------------------------------------
 
 
+@pytest.mark.slow
 @settings(
     max_examples=100,
     deadline=None,
@@ -212,6 +216,7 @@ def kricketot(tables, names):
     return s.with_status(0, 0, POISON)
 
 
+@pytest.mark.slow
 def test_shed_skin_cures_before_poison(tables, names, kricketot):
     acts = A("Growl", "Leer", kricketot, names)
     out = step(tables, kricketot, acts, shed(p=1))

@@ -47,15 +47,16 @@ three structs has a row.
 - **statusVolatile** bits mapped: confusion turns -> `confusion`, flinch ->
   `flinched`, bind turns -> `trapped`, recharging -> `recharge`, Foresight ->
   `foresight`, Bide turns -> `bide_turns`, Defense Curl -> `curled`,
-  `VOLATILE_CONDITION_MOVE_LOCKED` -> `locked_move` (with `moveLockedInto`). The
-  other bits (Uproar, Thrash, Attract, Focus Energy, Transform, Rage, Substitute
+  `VOLATILE_CONDITION_MOVE_LOCKED` -> `locked_move` (with `moveLockedInto`), the
+  ATTRACT bits -> `infatuated` (below). The
+  other bits (Uproar, Thrash, Focus Energy, Transform, Rage, Substitute
   flag, Destiny Bond, Mean Look, Nightmare, Curse, Torment) are later (M6); the Substitute flag is implied by `substitute_hp > 0`.
 - **moveEffectsMask** bits mapped: Leech Seed -> `leech_seed`, Water Sport ->
-  `water_sport`, Mud Sport -> `mud_sport` (per battler, cleared on switch-out; the
+  `water_sport`, Mud Sport -> `mud_sport`, Aqua Ring -> `aqua_ring` (per battler, cleared on switch-out; the
   Electric power halving reads every active battler, `battle_lib.c:6812`). The rest
   (Perish Song, semi-invulnerable turns, Minimize,
   Charge, Ingrain, Imprison, Grudge, Gastro Acid, Miracle
-  Eye, Power Trick, Aqua Ring, Heal Block, Embargo, Magnet Rise, Lock-On) are
+  Eye, Power Trick, Heal Block, Embargo, Magnet Rise, Lock-On) are
   later (M6).
 - **fieldConditionsMask**: the weather bits (temporary vs. permanent rain, sand,
   sun, hail, plus deep fog) -> `weather` with `weather_timer == 0` meaning
@@ -65,6 +66,12 @@ three structs has a row.
   `tailwind`, Lucky Chant turns -> `lucky_chant`. Its Reflect, Light Screen,
   Spikes, Safeguard, Mist, Toxic Spikes, Future Sight and Wish bits are implied by
   the nonzero turn/layer counts in the mapped fields.
+- **The field-condition pass** (`step.field_conditions`,
+  `BattleControllerPlayer_CheckFieldConditions`, battle_controller_player.c:932-1254)
+  counts down `reflect`, `light_screen`, `mist`, `safeguard`, `tailwind`, `lucky_chant`,
+  a temporary weather's `weather_timer` (the weather ends at 0) and `gravity`; a turn
+  count of 0 is the condition's mask bit clear. `wish_timer` (Wish's heal) and
+  `trick_room` (the turn end's side-condition pass, :1823-1826) are not counted down yet.
 - **moveLockedInto -> `locked_move`**, not `charge_turn`: it holds the move id a
   battler is locked into for its next turn (Bide, Rollout; charge-up moves are
   later, M6), and `charge_turn` is an `int8` flag that cannot hold a move id.
@@ -82,15 +89,66 @@ three structs has a row.
   mid-battle ability gain (Trace, Skill Swap, Role Play) announces again;
   `MoveEffectsData.quickClaw` is read by `BtlCmd_TryStealItem`
   (`src/battle/battle_script.c:5114`: Thief and Covet fail against a battler
-  whose Quick Claw activated this turn); `BattleContext.moveProtect`, the
-  attacker's last executed move, is read by `BtlCmd_TryProtection`
-  (`:5154-5156`: consecutive Protect, Detect and Endure); `monSpeedValues`, the
+  whose Quick Claw activated this turn); `monSpeedValues`, the
   speeds computed when the turn was ordered, by `BtlCmd_CalcGyroBallPower`
   (`:7127`); and `moveSketched` by `BtlCmd_TrySketch` (`:4848`). M1 is
-  unaffected: no M1 mechanic gains an ability mid-battle, Quick Claw is
-  outcome-driven, and none of Thief, Covet, Protect, Detect, Endure, Gyro Ball or
-  Sketch is in M1. M6's coverage work must add these fields before the mechanics
-  that read them.
+  unaffected: no M1 mechanic gains an ability mid-battle, Quick Claw's
+  activation is `qc_roll` (below; the per-turn flag only shows its animation, a
+  `step` event), and none of Thief, Covet, Gyro Ball or Sketch is in M1. M6's
+  coverage work must add these fields before the mechanics that read them.
+- **moveProtect -> `protect_count`** (K3b2 Task 6; docs/kaizo/k3b2-rules.md §2(a),
+  §12): `BattleContext.moveProtect`, the move whose attack message the battler last
+  showed (`UpdateMoveBuffers`, `src/battle/battle_controller_player.c:3936-3942`),
+  is read only by `BtlCmd_TryProtection` (`src/battle/battle_script.c:5154-5158`,
+  which zeroes `protectSuccessTurns` unless it is Protect, Detect or Endure) and by
+  `AICmd_LoadProtectChain` (`src/battle/trainer_ai/trainer_ai.c:2546-2552`, which
+  reads 0 in that case). The reset is folded into `protect_count`: at the end of
+  each move action (`step._use_move`) the count goes to 0 unless the move that showed
+  its attack message is one of `ids.PROTECT_CHAIN_MOVES`. A switch and a faint clear
+  both (`battle_lib.c:2099-2102`, `:2120`, `:2179-2182`, `:2198`); a bag item and
+  Pursuit's pre-switch hit (`BtlCmd_TryPursuit` ends the action without
+  `UpdateMoveBuffers`, `battle_script.c:6931`) leave both alone.
+- **statusVolatile ATTRACT -> `infatuated`** (K3b2 Task 7; docs/kaizo/k3b2-rules.md §4(c),
+  §12): `VOLATILE_CONDITION_ATTRACT_0..3` hold `FlagIndex(source)` of the battler the
+  holder is in love with (`BtlCmd_TryAttract`, `src/battle/battle_script.c:5738`). In
+  singles the source is always the other side's active battler, so `infatuated[side]` is
+  0/1. It is cleared with the holder's other volatiles (`step._VOLATILE`) and when the
+  source leaves, by a switch or a faint (`BattleSystem_UpdateAfterSwitch`,
+  `src/battle/battle_lib.c:2088-2092`; `BattleSystem_CleanupFaintedMon`, `:2168-2177`;
+  `step._source_leaves`, which Roar's drag reuses). `SELF_TURN_FLAG_INFATUATED` (a per-action
+  turn flag read only by Destiny Knot, an unsupported item) stays a local.
+- **speedRand -> `qc_roll`** (K3b2 Task 8; docs/kaizo/k3b2-rules.md §5, §12):
+  `speedRand[battler]` is one `RandNext()` per battler slot, drawn at battle start
+  (`BattleContext_InitCounters`, `src/battle/battle_lib.c:2019-2025`) and in each turn's
+  pre-move step, after the turn order is fixed (`src/battle/battle_controller_player.c:853-857`,
+  after `CalcTurnOrder` :707-790). It is read only as `speedRand % (100 / param) == 0` for a
+  `HOLD_EFFECT_SOMETIMES_PRIORITY` holder (`BattleSystem_CompareBattlerSpeed`,
+  `battle_lib.c:1278-1286`, :1344-1352; Quick Claw, param 20, the only such item), so
+  `qc_roll[side]` holds that bit. The turn's draw is `Outcome.quick_claw`: the end-of-turn
+  order reads it the same turn (`SortMonSpeedOrder`, bcp:888), and `step` stores it for the
+  next turn's order (and the AI's `IfSpeedCompare*`, trainer_ai.c:1102-1124, and
+  `LoadBattlerSpeedRank`, trainer_ai.c:2081) only while a
+  reader can see a holder before the redraw (`step.qc_kept`), else 0 (exact: the value
+  is never read).
+- **BattleSystem.terrain -> `terrain`** (K3b2 Task 9; docs/kaizo/k3b2-rules.md §9, §12):
+  not one of the three structs above (`include/struct_defs/battle_system.h:112`), copied
+  from the field's `FieldBattleDTO.terrain` once (`src/battle/battle_main.c:1052`) and
+  never written in battle. `BattleSystem_GetTerrain` (`src/battle/battle_system.c:375-382`)
+  is read by Nature Power, Secret Power and Camouflage (`src/battle/battle_script.c:8007`,
+  `:8040`, `:8067`); its other readers are graphics and wild catches. `make_state` takes
+  it from `Trainer.terrain` (`tools/terrain.py`); `TERRAIN_UNKNOWN` (-1) when the trainer's
+  maps give several terrains or none, and coverage then refuses those three effects.
+  Nature Power (`order.called_move`) and Camouflage (`effects._camouflage`) read it through
+  `ids.TERRAIN_MOVES` / `TERRAIN_TYPES` (K3b2 Task 10); an unknown terrain indexes no table
+  (`order.terrain_index`: those readers then do nothing).
+- **BattleMon.type1/type2 -> `types`**: per party slot, from the personal row; written for
+  the active battler by Camouflage (`BtlCmd_TryCamouflage`, `battle_script.c:7997-8022`)
+  and restored from the personal row when the battler leaves (a switch, a faint,
+  `step._restore_types`), as `BattleSystem_InitBattleMon` re-reads the party's types on the
+  next switch-in (`battle_lib.c:114-115`). The Camouflage bit of `moveEffectsMask` stays
+  later: only the AI's own Camouflage scoring reads it (`script.s:1023`).
+- **moveCur / msgMoveTemp** (Nature Power's call) stay per-action scratch: `step._use_move`
+  recomputes the called move (`order.called_move`) from the chosen move and the terrain.
 - **battleEndFlag -> `over`, `winner`**: `winner` is 0 none, 1 player lost (no
   player Pokemon has HP left; a double KO of both last Pokemon is a draw, played as a
   loss), 2 player won. A player faint alone only records a death.
@@ -105,7 +163,8 @@ three structs has a row.
     send-out does not call `BattleSystem_UpdateAfterSwitch`), `totalTurns + 1` after
     every switch-in (battle_lib.c:2117: switch action, Pursuit-interrupted switch,
     faint replacement) and faint (`BattleSystem_CleanupFaintedMon`, :2195).
-    `LoadIsFirstTurnInBattle` (trainer_ai.c:2487) is `fake_out_turn >= turn`. `turn`
+    `LoadIsFirstTurnInBattle` (trainer_ai.c:2487) is `fake_out_turn >= turn`; Fake Out
+    (`effect_script_0158.s`) fails unless `fake_out_turn == turn` (`step._use_move`). `turn`
     is `totalTurns` during a turn, so `step` writes `turn + 1`; `step.replace` runs
     after `step` counted the turn but before the decomp's `totalTurns++`
     (battle_controller_player.c:1844-1852), so it writes `turn`.
@@ -121,6 +180,50 @@ three structs has a row.
     `PokemonSpec.ability_slot`); `tables.species_abilities_decomp[row, ability_slot]`,
     with `row = tables.species_form_row[species, form]`, is the decomp ability id, also
     for abilities the engine does not implement (`ability` is then `UNSUPPORTED`).
+- **Experience (K3d-exp, design §2.1).** One block between `ai_ability_known` and
+  `deaths`. Experience changes the fight: the payout runs mid-turn and a level-up rewrites
+  the level, stats, max HP, HP and moves of a live battler (design §0, §1.4).
+  - `exp` (`int32[6]`, the one exception to `int8`/`int16` storage, ruling D1: level-100
+    values exceed `int16`) is the player party's `MON_DATA_EXPERIENCE`, which
+    `BattleSystem_ReloadPokemon` copies into `BattleMon.exp` (battle_lib.c:192). Only the
+    player's Pokemon gain exp (`BtlCmd_CalcExpGain` pays for a `SOLO_ENEMY` faint,
+    battle_script.c:2196), so the opponent's is not kept. `make_state` takes the spec's
+    `exp`, else the base of the level, and refuses an `exp` that is not of the level
+    (`SpeciesData_GetLevelAt`, pokemon.c:2379-2392).
+  - `evs` (`ids.Stat` order, like `ivs`) and `nature`, both sides: party data (no battle
+    struct holds them) that the level-up `Pokemon_CalcStats` reads.
+  - `exp_boost` (100 / 150 / 170, 0 = unresolved), `pokerus` and `friend_bonus`: the
+    player's `PokemonSpec` fields (`BattleScript_GetExpTask`, battle_script.c:9757-9763;
+    pokemon.c:4184-4199; pokemon.c:2664-2666). The host resolves the OT and language test
+    into `exp_boost`.
+  - `exp_mask` is `sideGetExpMask[0]` (row below), a bitmask over the player's party
+    slots: `1 << lead` at the start, then written by every send-out (`step._switch_in`;
+    battle_lib.c:1456-1479, battle_script.c:543-635).
+  - `learn_level` / `learn_cursor` are the deferred learnset scan: the level whose scan is
+    next and the index into it (the decomp restarts `GET_EXP_LEARNSET_INDEX` at 0 for each
+    level, battle_script.c:9882). `learn_pin` (the move slot the player selected, when a
+    payout reached its active before its move ran) and `exp_refused` (a sticky refusal
+    code) are the engine's own bookkeeping. All four are 0 until the payout and the learn
+    resolve set them.
+  - The search masks some learn-move options (ruling D2, and `learn_pin`, ruling U1):
+    replacing an AI-seen slot, the active learner's disabled, locked or choice-locked move,
+    or the slot pinned by `learn_pin`, and every replacement when the offered move's effect is
+    unsupported (ruling D10; coverage then refuses it only where it could auto-learn into an
+    empty slot, `coverage.learnable_moves`). They are legal game choices the search skips, so plan
+    values at learn nodes are achievable lower bounds (`levelup.learn_options`; the playout
+    always gives the move up, ruling D3). The scan, auto-learns and prompts run after `step`,
+    before any faint replacement (`levelup.advance_learns` / `learn`,
+    `search.learn.resolve_learns`); prompts pending when the battle ends stay (ruling D8).
+  - Known limitation (T8 review M1): Stage B's learn node comes after the whole turn's
+    outcome (`expand._turn`), but the decomp can prompt mid-turn, at a payout in `MoveEnd`
+    (battle_controller_player.c:3968), `CheckFieldConditions` (:941) or `CheckMonConditions`
+    (:1296), before a later draw of the same turn such as Shed Skin's
+    (`BattleSystem_RandNext(battleSys) % 10 < 3`, battle_lib.c:3567-3570, run from
+    `MON_COND_CHECK_STATE_ABILITY`, battle_controller_player.c:1354-1355). The search then
+    picks the answer knowing that draw, which the player cannot, so in that case the learn
+    node's value is possibly optimistic: it may exceed what the player can achieve. It
+    needs a chance event after a mid-turn payout in the same turn; the replayed state
+    stays exact, only the choice is better informed than the player's.
 - **Not from a struct field.** `pursuit_target` and `wish_hp` are
   `BattleState`'s own bookkeeping: the decomp derives Pursuit's pre-switch hit
   from per-turn scratch (the opposing battler's selected move when a switch is
@@ -173,11 +276,11 @@ three structs has a row.
 | `BattleMon.curHP` | `hp` | mapped |
 | `BattleMon.maxHP` | `max_hp` | mapped |
 | `BattleMon.OTName` | — | not needed because it is cosmetic (names, messages, sprites, animation) |
-| `BattleMon.exp` | — | not needed because experience and level-ups do not change the fight being searched |
+| `BattleMon.exp` | `exp` | mapped |
 | `BattleMon.personality` | — | not needed because its battle uses (nature, ability slot, gender) are resolved into `PokemonSpec` before `make_state` |
 | `BattleMon.status` | `status`, `status_counter` | mapped |
-| `BattleMon.statusVolatile` | `confusion`, `flinched`, `trapped`, `recharge`, `foresight`, `bide_turns`, `curled`, `locked_move` | mapped |
-| `BattleMon.OTId` | — | not needed because only obedience and the traded-Pokemon exp bonus read it; the tool assumes an obedient party |
+| `BattleMon.statusVolatile` | `confusion`, `flinched`, `trapped`, `recharge`, `foresight`, `bide_turns`, `curled`, `locked_move`, `infatuated` | mapped |
+| `BattleMon.OTId` | — | not needed because only obedience and the traded-Pokemon exp bonus read it; the tool assumes an obedient party and resolves the exp bonus into `exp_boost` before `make_state` |
 | `BattleMon.heldItem` | `item` | mapped |
 | `BattleMon.padding007A` | — | not needed because it is padding |
 | `BattleMon.timesDamaged` | — | not needed because no battle or AI logic reads it (only the generic BattleMon getter and setter) |
@@ -185,7 +288,7 @@ three structs has a row.
 | `BattleMon.gender` | `gender` | mapped |
 | `BattleMon.OTGender` | — | not needed because it is cosmetic (names, messages, sprites, animation) |
 | `BattleMon.capturedBall` | — | not needed because it is cosmetic (names, messages, sprites, animation) |
-| `BattleMon.moveEffectsMask` | `leech_seed`, `water_sport`, `mud_sport` | mapped |
+| `BattleMon.moveEffectsMask` | `leech_seed`, `water_sport`, `mud_sport`, `aqua_ring` | mapped |
 | `BattleMon.moveEffectsTemp` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
 | `BattleMon.moveEffectsData` | `taunt`, `protect_count`, `rollout_count`, `recharge`, `substitute_hp`, `trap_move`, `choice_lock` | mapped |
 
@@ -311,9 +414,9 @@ three structs has a row.
 | `BattleContext.sideEffectFlags` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
 | `BattleContext.sideEffectMon` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
 | `BattleContext.lastBattlerId` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
-| `BattleContext.gainedExp` | — | not needed because experience and level-ups do not change the fight being searched |
-| `BattleContext.sharedExp` | — | not needed because experience and level-ups do not change the fight being searched |
-| `BattleContext.sideGetExpMask` | — | not needed because experience and level-ups do not change the fight being searched |
+| `BattleContext.gainedExp` | — | not needed because it is per-payout scratch (`BtlCmd_CalcExpGain`, battle_script.c:2220-2236) that the payout recomputes from `exp_mask` and the party |
+| `BattleContext.sharedExp` | — | not needed because it is per-payout scratch (`BtlCmd_CalcExpGain`, battle_script.c:2226-2230) that the payout recomputes from the party's held items |
+| `BattleContext.sideGetExpMask` | `exp_mask` | mapped |
 | `BattleContext.scriptNarc` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |
 | `BattleContext.scriptFile` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |
 | `BattleContext.scriptCursor` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |
@@ -345,8 +448,8 @@ three structs has a row.
 | `BattleContext.fieldConditions` | `weather_timer`, `future_timer`, `future_damage`, `wish_timer` | mapped |
 | `BattleContext.sideConditionsMask` | `stealth_rock`, `tailwind`, `lucky_chant` | mapped |
 | `BattleContext.sideConditions` | `reflect`, `light_screen`, `mist`, `safeguard`, `spikes`, `toxic_spikes` | mapped |
-| `BattleContext.turnFlags` | — | not needed because it is reset every turn and `step` resolves a whole turn |
-| `BattleContext.selfTurnFlags` | — | not needed because it is reset every turn and `step` resolves a whole turn |
+| `BattleContext.turnFlags` | — | not needed because it is reset every turn and `step` resolves a whole turn (`protecting`: the first actor's `protect_ok` event, read by the second actor in `step._execute_actions`) |
+| `BattleContext.selfTurnFlags` | — | not needed because it is reset at every action's end (`BattleContext_Init`, bcp.c:3998) and `step` resolves a whole action; `focusItemActivated` and `SELF_TURN_FLAG_PLUCK_BERRY` live in `_use_move`'s hit loop (`effects.MoveHit`) |
 | `BattleContext.moveFailFlags` | — | not needed because it is reset every turn and `step` resolves a whole turn |
 | `BattleContext.aiContext` | `ai_seen_moves`, `ai_ability_known`, `trainer_items`, `trainer_item_count` | mapped |
 | `BattleContext.aiScriptTemp` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |
@@ -376,9 +479,9 @@ three structs has a row.
 | `BattleContext.multiHitAccuracyCheck` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
 | `BattleContext.clearVolatileStatus` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
 | `BattleContext.selectedPartySlot` | — | not needed because the switch target comes from the action and is written to `active` inside `step` |
-| `BattleContext.switchedPartySlot` | — | not needed because the switch target comes from the action and is written to `active` inside `step` |
+| `BattleContext.switchedPartySlot` | — | not needed because the switch target comes from the action (or, for Roar's drag, from `Outcome.roar_target` inside `step._use_move`) and is written to `active` inside `step` |
 | `BattleContext.aiSwitchedPartySlot` | — | not needed because the switch target comes from the action and is written to `active` inside `step` |
-| `BattleContext.battlerActions` | — | not needed because it is reset every turn and `step` resolves a whole turn |
+| `BattleContext.battlerActions` | — | not needed because it is reset every turn and `step` resolves a whole turn (the MOVE_END UpdateAfterSwitch writes for a Pokemon Roar drags in is the turn's `dragged` event, which skips its action in `step._execute_actions`) |
 | `BattleContext.battlerActionOrder` | — | not needed because it is reset every turn and `step` resolves a whole turn |
 | `BattleContext.monSpeedOrder` | — | not needed because it is reset every turn and `step` resolves a whole turn |
 | `BattleContext.monSpeedValues` | — | later (M6) |
@@ -390,7 +493,7 @@ three structs has a row.
 | `BattleContext.moveCur` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
 | `BattleContext.movePrev` | — | later (M6) |
 | `BattleContext.moveLockedInto` | `locked_move` | mapped |
-| `BattleContext.moveProtect` | — | later (M6) |
+| `BattleContext.moveProtect` | `protect_count` | mapped |
 | `BattleContext.moveHit` | `move_hit` | mapped |
 | `BattleContext.moveHitBattler` | — | not needed because in singles it is the opposing battler whenever `move_hit` is set: both are written together (battle_controller_player.c:4500-4507), and `ClearFlags` (:4389) clears only `moveHit` |
 | `BattleContext.moveHitType` | — | later (M6) |
@@ -408,9 +511,9 @@ three structs has a row.
 | `BattleContext.lastHitByBattler` | — | later (M6) |
 | `BattleContext.battlerSpeedTemp` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
 | `BattleContext.battlersSwitchingMask` | — | not needed because it is reset every turn and `step` resolves a whole turn |
-| `BattleContext.levelUpMons` | — | not needed because experience and level-ups do not change the fight being searched |
+| `BattleContext.levelUpMons` | — | not needed because only the battle's end reads it (`BattleMain_CopyBattleSysToDTOAndFree`, battle_main.c:723, for evolution), after the fight being searched |
 | `BattleContext.padding310A` | — | not needed because it is padding |
-| `BattleContext.speedRand` | — | not needed because speed-tie draws are an outcome input |
+| `BattleContext.speedRand` | `qc_roll` | mapped |
 | `BattleContext.flingTemp` | — | later (M6) |
 | `BattleContext.flingScript` | — | later (M6) |
 | `BattleContext.safariCatchStage` | — | not needed because trainer battles have no Safari Zone |
@@ -428,3 +531,9 @@ three structs has a row.
 | `BattleContext.waitingBattlers` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |
 | `BattleContext.battleProgressFlag` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |
 | `BattleContext.padding3154_01` | — | not needed because it is padding |
+
+## BattleSystem (`include/struct_defs/battle_system.h`, the fields the engine reads)
+
+| Struct.field | pytree field | status |
+|---|---|---|
+| `BattleSystem.terrain` | `terrain` | mapped |

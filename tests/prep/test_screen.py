@@ -5,6 +5,7 @@ import itertools
 
 import jax
 import numpy as np
+import pytest
 
 from nuzline.prep.screen import (
     EMPTY,
@@ -24,12 +25,13 @@ from tests.search.test_expand import batch
 KEY = jax.random.PRNGKey(5)
 
 
+@pytest.mark.slow
 def test_screen_pools_both_halves(tables, names):
     a = roark_real_state(tables, names)
     b = roark_real_state(tables, names, player_species="Machop")
     states = batch(a, b)
     stats = screen(tables, states, 64, KEY)
-    direct = evaluate_leaves(tables, states, [64, 64], KEY)
+    direct = evaluate_leaves(tables, states, [64, 64], KEY, root=True)
     for s, v in zip(stats, direct, strict=True):
         assert s.n == 64
         assert s.buckets == tuple(x + y for x, y in zip(v.buckets_a, v.buckets_b, strict=True))
@@ -41,6 +43,7 @@ def test_screen_pools_both_halves(tables, names):
     assert EMPTY.merge(stats[0]) == stats[0]
 
 
+@pytest.mark.slow
 def test_screen_flags_refused(tables, names):
     states = batch(switch_refusal_root(tables, names), roark_real_state(tables, names))
     refusing, fine = screen(tables, states, 256, KEY)

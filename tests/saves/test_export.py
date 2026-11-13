@@ -18,7 +18,7 @@ def test_party_toml_loads_back_to_the_specs(tmp_path, tables, names):
     save = _save(tmp_path, tables, names)
     out = tmp_path / "party.toml"
     out.write_text(party_toml(save, names, tables), encoding="utf-8")
-    assert load_party(out, names) == [m.to_spec(tables) for m in save.party]
+    assert load_party(out, names) == [m.to_spec(tables, save.trainer) for m in save.party]
 
 
 def test_party_toml_status_pp_and_eggs(tmp_path, tables, names):
@@ -38,7 +38,9 @@ def test_party_toml_status_pp_and_eggs(tmp_path, tables, names):
     assert entries[1]["moves"] == ["Tackle", "Absorb"] and len(entries[1]["pp"]) == 2
     out = tmp_path / "party.toml"
     out.write_text(text, encoding="utf-8")
-    assert load_party(out, names) == [m.to_spec(tables) for m in save.party if not m.is_egg]
+    assert load_party(out, names) == [
+        m.to_spec(tables, save.trainer) for m in save.party if not m.is_egg
+    ]
 
 
 def test_show_lines_ascii_and_json(tmp_path, tables, names):
@@ -126,7 +128,7 @@ def test_export_round_trips_a_form(tmp_path, tables, names):
     assert 'form = "Wash"' in text
     out = tmp_path / "party.toml"
     out.write_text(text, encoding="utf-8")
-    assert load_party(out, names) == [save.party[0].to_spec(tables)]
+    assert load_party(out, names) == [save.party[0].to_spec(tables, save.trainer)]
     # A base form writes no form key.
     assert "form" not in party_toml(_save(tmp_path, tables, names), names, tables)
 
@@ -140,4 +142,59 @@ def test_export_writes_a_cosmetic_form_as_its_number(tmp_path, tables, names):
     assert "\nform = 5\n" in text
     out = tmp_path / "party.toml"
     out.write_text(text, encoding="utf-8")
-    assert load_party(out, names) == [save.party[0].to_spec(tables)]
+    assert load_party(out, names) == [save.party[0].to_spec(tables, save.trainer)]
+
+
+def test_party_toml_keeps_the_exp_fields(tmp_path, tables, names):
+    # K3d-exp T3: exp (off the level's base), a resolved non-OT boost, Pokerus and the
+    # Luxury Ball survive party_toml -> load_party.
+    from nuzline.saves.pkm import ITEM_LUXURY_BALL
+
+    sp = names.species("Monferno")
+    exp = int(tables.exp_table[int(tables.species_exp_rate[sp]), 14]) + 7
+    rec = party_record(
+        tables,
+        names,
+        "Monferno",
+        14,
+        SAMPLE[0][2],
+        exp=exp,
+        ot_id=99,
+        language=1,
+        pokerus=0x10,
+        pokeball=ITEM_LUXURY_BALL,
+    )
+    p = tmp_path / "g.sav"
+    p.write_bytes(build_image(party=[rec]))
+    save = load_save(p, tables=tables, names=names)
+    out = tmp_path / "party.toml"
+    out.write_text(party_toml(save, names, tables), encoding="utf-8")
+    (spec,) = load_party(out, names)
+    assert (spec.exp, spec.exp_boost, spec.pokerus, spec.friend_bonus) == (exp, 170, 1, 1)
+    assert [spec] == [save.party[0].to_spec(tables, save.trainer)]
+
+
+def test_party_toml_keeps_egg_location_and_pp_ups(tmp_path, tables, names):
+    """T7 review M5: the coverage inputs ``egg_location`` and ``pp_ups`` round-trip."""
+    party = [
+        party_record(
+            tables,
+            names,
+            "Grotle",
+            14,
+            ("Tackle", "Absorb"),
+            pp_ups=(1, 0, 2, 3),
+            egg_location_dp=7,
+        )
+    ]
+    p = tmp_path / "g.sav"
+    p.write_bytes(build_image(party=party))
+    save = load_save(p, tables=tables, names=names)
+    text = party_toml(save, names, tables)
+    entry = tomllib.loads(text)["pokemon"][0]
+    assert entry["egg_location"] == 7 and entry["pp_ups"] == [1, 0, 2, 3]
+    out = tmp_path / "party.toml"
+    out.write_text(text, encoding="utf-8")
+    (spec,) = load_party(out, names)
+    assert (spec.egg_location, spec.pp_ups) == (7, (1, 0, 2, 3))
+    assert [spec] == [m.to_spec(tables, save.trainer) for m in save.party]

@@ -21,6 +21,7 @@ __all__ = [
     "DSV_MARKER",
     "SaveError",
     "SaveFile",
+    "SaveTrainer",
     "default_tables_and_names",
     "load_save",
     "read_image",
@@ -43,6 +44,23 @@ class SaveError(ValueError):
 
 
 @dataclass(frozen=True)
+class SaveTrainer:
+    """The player as ``BattleSystem_PokemonIsOT`` (battle_lib.c:6286-6303) and the exp
+    boost (battle_script.c:9757-9763) read them: the full u32 trainer ``id`` (TID low, SID
+    high), ``gender`` and the raw ``name_codes`` (``TrainerInfo.name``, 8 charcodes,
+    include/trainer_info.h:9-14: the OT test compares codes, which the decoded
+    ``trainer_name`` cannot, since it maps unknown codes to ``?`` and drops control
+    codes). ``rom_language`` is the game's ``gGameLanguage`` (``Game.rom_language``) for
+    the game the save was loaded as; the save's own TrainerInfo language byte plays no
+    part."""
+
+    id: int
+    gender: int
+    name_codes: tuple[int, ...]
+    rom_language: int
+
+
+@dataclass(frozen=True)
 class SaveFile:
     trainer_name: str
     tid: int
@@ -57,6 +75,7 @@ class SaveFile:
     save_counter: int
     sha256: str  # of the file as read
     player_starter: int  # VAR_PLAYER_STARTER: the starter's species id, 0 before the choice
+    trainer: SaveTrainer  # the OT test's inputs (SaveMon.to_spec's exp_boost)
 
 
 def read_image(data: bytes) -> bytes:
@@ -316,4 +335,12 @@ def load_save(
         save_counter=_u32(normal, L.NORMAL_SIZE - L.FOOTER_SIZE),
         sha256=hashlib.sha256(data).hexdigest(),
         player_starter=_u16(normal, L.VARS + 2 * L.VAR_PLAYER_STARTER_INDEX),
+        trainer=SaveTrainer(
+            id=trainer_id,
+            gender=normal[L.TRAINER_GENDER],
+            name_codes=tuple(
+                _u16(normal, L.TRAINER_NAME + 2 * i) for i in range(L.TRAINER_NAME_LEN)
+            ),
+            rom_language=get_game(game).rom_language,
+        ),
     )

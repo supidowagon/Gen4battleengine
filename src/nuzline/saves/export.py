@@ -42,14 +42,16 @@ def _status_name(mon: SaveMon) -> str:
 
 def party_toml(save: SaveFile, names, tables=None, game: str = VANILLA) -> str:
     """The party (eggs dropped) in the ``--party`` TOML format, with ``hp``, ``pp``,
-    ``sleep_turns`` and ``stats``. ``tables`` (default: ``game``'s built tables) feed
-    ``SaveMon.to_spec``'s checks; ``names`` must be the same game's."""
+    ``sleep_turns``, ``stats`` and the exp fields (``exp``, ``exp_boost`` resolved with the
+    save's trainer, ``pokerus``, ``friend_bonus``) and the coverage inputs ``egg_location`` and
+    ``pp_ups``. ``tables`` (default: ``game``'s built tables) feed ``SaveMon.to_spec``'s
+    checks; ``names`` must be the same game's."""
     tables, names = default_tables_and_names(tables, names, game=game)
     out = ["# Exported by `nuzline save export`; eggs are left out.", ""]
     for mon in save.party:
         if mon.is_egg:
             continue
-        spec = mon.to_spec(tables)
+        spec = mon.to_spec(tables, save.trainer)
         listed = max([i + 1 for i, m in enumerate(spec.moves) if m] or [1])
         ability = names.species_abilities(spec.species, spec.form)[spec.ability_slot]
         lines = [
@@ -76,6 +78,14 @@ def party_toml(save: SaveFile, names, tables=None, game: str = VANILLA) -> str:
                 lines.append(f"sleep_turns = {spec.status_counter}")
         if spec.stats is not None:
             lines.append(f"stats = {list(spec.stats)}")
+        lines += [
+            f"exp = {spec.exp}",
+            f"exp_boost = {spec.exp_boost}",
+            f"pokerus = {spec.pokerus}",
+            f"friend_bonus = {spec.friend_bonus}",
+            f"egg_location = {spec.egg_location}",
+            f"pp_ups = {list(spec.pp_ups)}",
+        ]
         out += [*lines, ""]
     return "\n".join(out)
 

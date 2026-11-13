@@ -70,8 +70,8 @@ found no disagreement beyond the four above; there was nothing new to settle.
 
 `tests/test_damage_oracle.py` compares `damage_table` with @smogon/calc 0.12.0's Gen 4
 calculator (`tools/smogon_calc/damage.js`) on 300 generated matchups, all 16 rolls
-exact. The stats and move data agreed everywhere. The damage differed in two cases, and
-in both the decomp sides with the JAX engine, so the engine is unchanged and the test
+exact. The stats and move data agreed everywhere. The damage differed in four cases, and
+in each the decomp sides with the JAX engine, so the engine is unchanged and the test
 does not generate those matchups (`_smogon_departs`).
 
 ### 5. Sandstorm's SpD boost comes before the stat stage
@@ -96,6 +96,90 @@ does not generate those matchups (`_smogon_departs`).
   `:6992-7018` special).
 - **Ruling:** the engine (`damage._pre_random`: Simple, then the crit rule) is right.
   Test: `test_crit_stage_rule_applies_after_simple_doubles`.
+
+### 7. Selfdestruct and Explosion halve Defense before the stat stage
+
+- **@smogon/calc:** `calculateDefenseDPP` applies the Defense stage, then halves the
+  result for Explosion and Self-Destruct. With a non-zero Defense stage the rounding
+  differs (Defense 51 at +1: 76 / 2 = 38 against 25 x 3 / 2 = 37).
+- **Decomp:** `BattleSystem_CalcMoveDamage` halves `defenseStat` for
+  `BATTLE_EFFECT_HALVE_DEFENSE` at `src/battle/battle_lib.c:6943-6945`, before the stage
+  scales it into `stageDivisor` (`:6963-6975`).
+- **Ruling:** the engine (`damage._pre_random` halves `defense` before `apply_stage`) is
+  right. Test: `tests/engine/test_self_destruct.py::test_self_destruct_halves_defense`.
+
+### 10. Each type-chart row lifts a truncated 0 to 1 (K3b2 Task 4 fix round)
+
+- **@smogon/calc:** the Gen 4 calculator floors the damage after each type factor and
+  takes `max(1, damage)` once, at the end (`gen4.js:228-237`). At 1 damage a x0.5 row
+  then a x2 row gives 1 -> 0 -> 0 -> 1.
+- **Decomp:** `ApplyTypeMultiplier` applies each defender type's row as
+  `BattleSystem_Divide(damage * mul, 10)` (`src/battle/battle_lib.c:7547`), and
+  `BattleSystem_Divide` lifts a non-zero dividend that truncates to 0 up to 1 (`:3599-3618`).
+  The rows are visited in chart order: Ground -> Grass x0.5 (`:2457`) before Ground ->
+  Poison x2 (`:2458`), Ice -> Ice (`:2434`) before Ice -> Ground (`:2435`). So 1 -> 1 -> 2.
+- **Found:** adding Thunder Fang to `tests/strategies.SHARED_MOVES` reshuffled the seeded
+  sample, which then drew three such matchups: L12 Glameow's Magnitude (power 10) into
+  L20 Budew (Grass/Poison), L7 Furret's Ice Ball into L20 Swinub (Ice/Ground), L6 Cranidos's
+  Magnitude into L19 Budew: the engine 2 at every roll, @smogon/calc 1 at all but the top roll.
+- **Ruling:** the engine (`damage._finish`: `divide` per row in `type_chart_order`) is
+  right. `_smogon_departs` rule 4 (`_chart_rounding_departs`) computes both roundings from
+  the engine's pre-chart damage and skips a matchup only when they differ. Test:
+  `tests/engine/test_damage.py::test_type_rows_lift_to_one_in_chart_order`.
+
+## JAX engine's trainer AI path vs the decomp (K3b1)
+
+The trainer AI's damage (`damage.ai_damage_for_roll`, used by `nuzline.ai.commands`) is
+the JAX engine's alone; the reference engine has no AI path, so the differential test
+could not catch this. Found while adding Flail, which shares the variable-power branch.
+
+### 8. The AI scored a rolling Rollout at its doubled power
+
+- **Engine (before f1a26d8):** `damage._pre_random` applied `rollout_multiplier` on the
+  AI path as in battle, so mid-Rollout (`locked_move` set, `rollout_count` < 5) or
+  curled, the AI scored Rollout and Ice Ball at up to 32 times the table power.
+- **Decomp:** `TrainerAI_CalcDamage` has no Rollout case: its `default` sets `power = 0`
+  (`src/battle/trainer_ai/trainer_ai.c:3074-3078`), and `BattleSystem_CalcMoveDamage`
+  then reads `MOVE_DATA(move).power` (`src/battle/battle_lib.c:6671-6675`). The doubling
+  per use and for Defense Curl lives only in `BtlCmd_CalcRolloutPower`
+  (`src/battle/battle_script.c:5661-5688`), which runs in the move's battle script, never
+  in the AI.
+- **Ruling:** the AI path keeps the table power (`_pre_random(..., ai=True)`: no Rollout
+  multiplier, no Flail band). Tests:
+  `tests/engine/test_power_moves.py::test_flail_ai_damage_uses_power_one` (fresh, curled)
+  and `::test_mid_rollout_ai_damage_uses_table_power` (locked, `rollout_count` 4, 2, 1).
+
+## Both engines vs the decomp (K3b2)
+
+Both engines took the same wrong input from `Outcome`, so the differential test could not
+catch this. Found while reading the decomp for K3b2 (`docs/kaizo/k3b2-rules.md` §0.2c).
+
+### 9. A move's accuracy was read at the start of the turn
+
+- **Engines (before K3b2 Task 1):** `outcome.hit[side, 0]` was a hit / miss flag drawn
+  against `hit_threshold`, the threshold of the turn's starting state, and both engines
+  read the flag. A stage change earlier in the same turn was not seen: after a faster
+  Sand-Attack (or Mud-Slap, SmokeScreen, Flash, Kinesis) or a faster Double Team, a
+  100-accuracy move still hit with probability 1.
+- **Decomp:** `BattleControllerPlayer_CheckMoveHitAccuracy`
+  (`src/battle/battle_controller_player.c:2865-2979`) runs at the move's own `TryMove` and
+  reads the stages of that moment (`accStages`, `evaStages`, :2873-2874), then rolls
+  `(RandNext() % 100) + 1 > hitRate` (:2976). After Sand-Attack (accuracy stage -1,
+  `HitRateByStage[5]` = 75/100, `include/data/hit_rate_stages.h`) the later move hits with
+  probability 75/100.
+- **Ruling:** `hit[side, 0]` is the roll's interval class over every threshold the move can
+  have at its check this turn (`outcome.hit_thresholds`, `outcome.hit_class`,
+  `enumerate.hit_class_law`): the smallest roll of its class, or 0 when it misses at all of
+  them. `step` and the reference engine compute the threshold at the check
+  (`outcome.live_hit_threshold`, reference `_hit_rate`) and hit when `0 < hit <= threshold`.
+  With one threshold below 100 the values are the old 0 / 1. Tests:
+  `tests/engine/test_accuracy_classes.py` (`::test_sand_attack_lowers_a_later_move_this_turn`,
+  `::test_double_team_raises_evasion_for_a_later_move`,
+  `::test_accuracy_classes_equal_raw_rolls`).
+- **Vanilla results that change:** only turns where a move that changes the attacker's
+  accuracy stage or the target's evasion stage (Sand-Attack, SmokeScreen, Kinesis, Flash,
+  Mud-Slap, Octazooka, Muddy Water, Mud Bomb, Mirror Shot, Double Team) runs before the
+  other side's move with accuracy other than 0. Every other exact result is unchanged.
 
 ## Deliberate differences from the decomp (both engines agree)
 
@@ -163,16 +247,13 @@ does not generate those matchups (`_smogon_departs`).
   item. M1b's coverage registry must refuse a trainer bag that mixes item ids, or that
   holds an item without a supported `TrainerItemId`.
 
-- **Field-condition end-of-turn pass.** Neither engine runs the decomp's
-  `BattleControllerPlayer_CheckFieldConditions`
-  (`src/battle/battle_controller_player.c:932`): hail and sandstorm chip damage
-  (`FIELD_COND_CHECK_STATE_HAILING` / `_SANDSTORM`, `:1188` / `:1138`) and the Reflect,
-  Light Screen, Tailwind and Trick Room countdowns (`:947-1062`, `:1227`). No M1 move or
-  ability sets any of them and Roark's fight starts with no weather, but
-  `make_state(start_condition=Weather.HAIL)` is accepted and `tests/strategies.py` draws
-  `Weather.HAIL` / `Weather.SANDSTORM` and nonzero `reflect`, `light_screen`, `tailwind`
-  and `trick_room` timers, which both engines then simulate with no chip damage and no
-  countdown (the differential test agrees because both omit them). Against spec §3
-  "never approximate silently", M1b's coverage registry (next plan, Task 1) must mark
-  `Weather.HAIL`, `Weather.SANDSTORM` and the per-side/field timers as unsupported so
-  `check_coverage` refuses a fight that starts with them, until M6 implements the pass.
+- **Field-condition end-of-turn pass: Wish and Trick Room.** Both engines run
+  `BattleControllerPlayer_CheckFieldConditions` (`src/battle/battle_controller_player.c:932-1254`;
+  `step.field_conditions`, reference `_field_conditions`, K3b1 Task 3): the side-condition
+  and Gravity countdowns, the weather countdown and the sandstorm / hail chip. Still
+  missing in both: Wish's heal (`FIELD_COND_CHECK_STATE_WISH`, `:1085-1111`; no supported
+  move sets `wish_timer`) and the Trick Room countdown of the turn end's side-condition
+  pass (`:1823-1826`), so a nonzero `trick_room` (which `tests/strategies.py` draws) never
+  counts down; coverage refuses every move and area condition that sets Trick Room. The
+  weather effects of Dry Skin, Solar Power, Rain Dish and Hydration are not modelled
+  (those abilities map to `AbilityId.UNSUPPORTED`, which coverage refuses).

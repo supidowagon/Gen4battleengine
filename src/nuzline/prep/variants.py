@@ -14,9 +14,11 @@ import numpy as np
 
 from nuzline.ai.commands import SIM_ROLL_MAX, ai_damage, is_damaging
 from nuzline.data.forms import personal_row
+from nuzline.data.game_constants import AI_POLICIES
 from nuzline.data.spec import PokemonSpec
 from nuzline.data.tables import Tables, load_names, load_tables
-from nuzline.engine.ids import AbilityId, EffectId, MoveFlag, Status, Type, Weather
+from nuzline.engine.damage import FLAIL_BOUNDS
+from nuzline.engine.ids import AbilityId, EffectId, ItemId, MoveFlag, Status, Type, Weather
 from nuzline.engine.state import make_state
 from nuzline.engine.stats import calc_stats
 from nuzline.prep.problem import (
@@ -36,9 +38,11 @@ __all__ = [
     "Cost",
     "Member",
     "MoveChange",
+    "ai_defender_hp_checks",
     "ai_kill_damage",
     "base_member",
     "designated_change",
+    "flail_cuts",
     "hp_cuts",
     "hp_regions",
     "max_hp_of",
@@ -63,9 +67,17 @@ DEFAULT_WEIGHTS: dict[str, float] = {
     "held": 1.0,
 }
 
-# The AI's checks of the player's HP percent, as (kind, percent): ``ai/policy.py`` calls
-# ``if_hp_percent_greater_than(ctx, _D, 70)`` (the defender is the player's active).
-AI_DEFENDER_HP_CHECKS: tuple[tuple[str, int], ...] = (("greater", 70),)
+# The AI's checks of the player's HP percent, per AI policy (game_constants.AI_POLICIES), as
+# (kind, percent): ``ai/policy.py`` calls ``if_hp_percent_greater_than(ctx, _D, p)`` (the
+# defender is the player's active) in Expert_StatusDefenseDown_CheckTargetHP (script.s:2332,
+# 70), whose effects both policies transcribe, and, since K3c Task 6, in
+# Expert_ToxicLeechSeed_CheckTargetHP (script.s:2694, 50), which only the Kaizo policy's
+# jump table reaches (policy._dispatch). tests/prep/test_variants.py
+# test_ai_hp_checks_pinned records the calls each policy's flag scripts make.
+AI_DEFENDER_HP_CHECKS: dict[str, tuple[tuple[str, int], ...]] = {
+    "vanilla": (("greater", 70),),
+    "kaizo": (("greater", 70), ("greater", 50)),
+}
 
 # Every function in ``src/nuzline/ai/*.py`` that indexes an ``hp`` array at the Task 4 commit,
 # and how ``hp_cuts`` covers it: ``percent`` by ``AI_DEFENDER_HP_CHECKS``, ``kill`` by the
@@ -270,6 +282,11 @@ def ai_kill_damage(
     return tuple(sorted(d for d in out if d > 0))
 
 
+def ai_defender_hp_checks(tables: Tables) -> tuple[tuple[str, int], ...]:
+    """``AI_DEFENDER_HP_CHECKS`` of ``tables``' AI policy (``Tables.ai_policy``)."""
+    return AI_DEFENDER_HP_CHECKS[AI_POLICIES[int(np.asarray(tables.ai_policy))]]
+
+
 def percent_cut(kind: str, percent: int, max_hp: int) -> int:
     """The highest HP on the keep-off side of one ``AI_DEFENDER_HP_CHECKS`` entry."""
     if kind == "greater":
@@ -277,20 +294,34 @@ def percent_cut(kind: str, percent: int, max_hp: int) -> int:
     return (percent * max_hp - 1) // 100
 
 
+def flail_cuts(max_hp: int) -> tuple[int, ...]:
+    """The highest HP of each Flail band below the top one: ``App_PixelCount(hp, max_hp, 64)``
+    is ``hp * 64 // max_hp`` (at least 1 for ``hp > 0``), so ``pixels <= bound`` holds up to
+    ``((bound + 1) * max_hp - 1) // 64`` (``BtlCmd_CalcFlailPower``, battle_script.c:4958)."""
+    return tuple(((b + 1) * max_hp - 1) // 64 for b in FLAIL_BOUNDS[:-1])
+
+
 def hp_cuts(
     tables: Tables, spec: PokemonSpec, max_hp: int, kill_damage: Sequence[int] = ()
 ) -> tuple[int, ...]:
-    """The region tops below ``max_hp`` (ruling 5): the AI's percent checks
-    (``AI_DEFENDER_HP_CHECKS``), each kill damage in ``1..max_hp - 1`` and the pinch cut
-    ``max_hp // 3`` for Blaze, Torrent and Overgrow. Unsorted, may repeat."""
+    """The region tops below ``max_hp`` (ruling 5): the AI's percent checks of ``tables``'
+    policy (``ai_defender_hp_checks``), each kill damage in ``1..max_hp - 1`` and the pinch cut
+    ``max_hp // 3`` for Blaze, Torrent and Overgrow, the Flail bands' tops when ``spec`` has
+    a ``FLAIL`` move (``flail_cuts``), and ``max_hp - 1`` for a Focus Sash holder (it only
+    saves a holder at full HP, bcp.c:3391). Unsorted, may repeat."""
     cuts = []
-    for kind, percent in AI_DEFENDER_HP_CHECKS:
+    for kind, percent in ai_defender_hp_checks(tables):
         cuts.append(percent_cut(kind, percent, max_hp))
     cuts.extend(d for d in kill_damage if 1 <= d < max_hp)
     row = personal_row(tables, spec.species, spec.form)
     ability = int(np.asarray(tables.species_abilities)[row, spec.ability_slot])
     if ability in _PINCH_ABILITIES:
         cuts.append(max_hp // 3)
+    effect = np.asarray(tables.move_effect)
+    if any(m and int(effect[m]) == EffectId.FLAIL for m in spec.moves):
+        cuts.extend(flail_cuts(max_hp))
+    if int(np.asarray(tables.item_effect)[spec.item]) == ItemId.FOCUS_SASH:
+        cuts.append(max_hp - 1)
     return tuple(c for c in cuts if 1 <= c < max_hp)
 
 

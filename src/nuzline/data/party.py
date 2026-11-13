@@ -12,6 +12,13 @@ species'), ``friendship`` (omitted means the form's base friendship), ``status``
 needs ``status = "sleep"``), ``pp`` (current PP, one value per listed move, padded with 0
 to four slots; omitted means the table PP) and ``stats`` (six stored stats, max HP first,
 in the ``ivs`` order; omitted means computed from level, IVs, EVs and nature).
+
+Experience (``PokemonSpec``): ``exp`` (total experience, of the Pokemon's ``level``;
+omitted means the base of the level), ``exp_boost`` (100, 150 or 170: the exp multiplier in
+percent; omitted means 100, the user's own Pokemon), ``pokerus`` and ``friend_bonus`` (0 or 1;
+omitted means 0). Coverage inputs (``PokemonSpec``): ``egg_location`` (a location id, omitted
+means 0) and ``pp_ups`` (four values 0-3, one per move slot including empty ones; omitted means
+none).
 """
 
 from __future__ import annotations
@@ -20,7 +27,7 @@ import tomllib
 from pathlib import Path
 
 from nuzline.data.spec import PokemonSpec
-from nuzline.data.tables import Names
+from nuzline.data.tables import Names, Tables
 from nuzline.engine.ids import Status
 
 GENDERS = {"male": 0, "female": 1, "none": 2}
@@ -33,6 +40,37 @@ def _six(entry: dict, key: str) -> tuple[int, int, int, int, int, int]:
     if key == "stats" and any(not 1 <= v <= 999 for v in values):
         raise ValueError(f"{entry['species']}: stats must be 1-999, got {list(values)}")
     return values  # type: ignore[return-value]
+
+
+EXP_BOOSTS = (100, 150, 170)  # BattleScript_GetExpTask, battle_script.c:9757-9763
+
+
+def _exp_fields(entry: dict) -> dict:
+    """``exp``, ``exp_boost``, ``pokerus``, ``friend_bonus``, ``egg_location`` and ``pp_ups``
+    (module docstring)."""
+    out: dict = {}
+    if "exp" in entry:
+        out["exp"] = int(entry["exp"])
+        if out["exp"] < 0:
+            raise ValueError(f"{entry['species']}: exp must be 0 or more, got {out['exp']}")
+    out["exp_boost"] = int(entry.get("exp_boost", 100))
+    if out["exp_boost"] not in EXP_BOOSTS:
+        raise ValueError(
+            f"{entry['species']}: exp_boost must be one of {list(EXP_BOOSTS)}, "
+            f"got {out['exp_boost']}"
+        )
+    for key in ("pokerus", "friend_bonus"):
+        out[key] = int(entry.get(key, 0))
+        if out[key] not in (0, 1):
+            raise ValueError(f"{entry['species']}: {key} must be 0 or 1, got {out[key]}")
+    out["egg_location"] = int(entry.get("egg_location", 0))
+    if not 0 <= out["egg_location"] <= 0xFFFF:
+        raise ValueError(f"{entry['species']}: egg_location must be 0-65535")
+    ups = tuple(int(v) for v in entry.get("pp_ups", (0, 0, 0, 0)))
+    if len(ups) != 4 or any(not 0 <= v <= 3 for v in ups):
+        raise ValueError(f"{entry['species']}: pp_ups needs 4 values 0-3, got {list(ups)}")
+    out["pp_ups"] = ups
+    return out
 
 
 def _status(entry: dict) -> tuple[int, int]:
@@ -117,12 +155,25 @@ def _spec(entry: dict, names: Names) -> PokemonSpec:
         status_counter=status_counter,
         pp=pp,  # type: ignore[arg-type]
         stats=_six(entry, "stats") if "stats" in entry else None,
+        **_exp_fields(entry),
     )
 
 
-def load_party(path: Path, names: Names) -> list[PokemonSpec]:
+def load_party(path: Path, names: Names, tables: Tables | None = None) -> list[PokemonSpec]:
+    """The party in ``path``. With ``tables``, an ``exp`` that is not of the Pokemon's
+    ``level`` is refused (``ValueError``, ``engine.state.spec_exp``); without them
+    ``make_state`` refuses it."""
     with open(path, "rb") as f:
         entries = tomllib.load(f)["pokemon"]
     if not 1 <= len(entries) <= 6:
         raise ValueError(f"{path}: a party has 1-6 Pokemon, got {len(entries)}")
-    return [_spec(e, names) for e in entries]
+    specs = [_spec(e, names) for e in entries]
+    if tables is not None:
+        from nuzline.engine.state import spec_exp  # the engine imports jax
+
+        for entry, spec in zip(entries, specs, strict=True):
+            try:
+                spec_exp(tables, spec)
+            except ValueError as e:
+                raise ValueError(f"{entry['species']}: {e}") from None
+    return specs

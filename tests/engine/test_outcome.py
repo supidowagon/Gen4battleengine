@@ -92,7 +92,7 @@ def test_sample_shapes_and_dtypes(samples):
         ("confusion_hit", (1,), 0.5),
         ("thaw", (0,), 0.20),
         ("flinch_item", (0,), 0.0),  # no implemented item flinches
-        ("quick_claw", (1,), 0.0),  # Quick Claw is not implemented
+        ("quick_claw", (1,), 0.2),  # speedRand % 5 == 0 (battle_lib.c:1279), K3b2 Task 8
     ],
 )
 def test_sample_bernoulli_rates(samples, field, index, p):
@@ -111,6 +111,7 @@ def test_sample_rolls_durations_and_hit_counts(samples):
         assert abs(freq(hits, n) - p) < 4 * np.sqrt(p * (1 - p) / N)
 
 
+@pytest.mark.slow
 def test_lucky_chant_prevents_crits(tables, names):
     s = roark_state(tables, names)
     s = s._replace(lucky_chant=s.lucky_chant.at[1].set(5))
@@ -134,9 +135,11 @@ EXISTING_DRAWS = {
     "duration": [5, 4],
     "thaw": [0, 0],
     "flinch_item": [0, 0],
-    "quick_claw": [0, 0],
     "end_speed_tie": 0,
 }
+# ``quick_claw`` was reserved (always 0) when these were recorded; K3b2 Task 8 made it a
+# draw from its own key ``fold_in(key, 20)``, so it is checked by
+# ``test_quick_claw_draw_has_its_own_key`` instead.
 
 
 def test_existing_draws_unchanged(tables, names):
@@ -147,10 +150,22 @@ def test_existing_draws_unchanged(tables, names):
         assert getattr(o, name).tolist() == want, name
 
 
+def test_quick_claw_draw_has_its_own_key(tables, names):
+    # Outcome fields from K3b2 on take fold_in(key, 16 + k) in order of landing: quick_claw is
+    # the fifth (fang_flinch 16, present 17, protect 18, infatuation 19).
+    # Recorded at K3b2 Task 8 (fold_in(key, 20)), like EXISTING_DRAWS: keys 0-3.
+    s = roark_real_state(tables, names)
+    got = [
+        sample_outcome(jax.random.key(k), tables, s, acts(EMBER, 1)).quick_claw.tolist()
+        for k in range(4)
+    ]
+    assert got == [[0, 1], [0, 0], [0, 0], [0, 1]]
+
+
 def test_magnitude_and_shed_skin_draws(tables, names):
     e = empty_outcome()
     assert e.magnitude.tolist() == [4, 4] and e.shed_skin.tolist() == [0, 0]
-    assert Outcome._fields[-2:] == ("magnitude", "shed_skin")
+    assert Outcome._fields[14:16] == ("magnitude", "shed_skin")
     s = roark_state(tables, names)
     keys = jax.random.split(jax.random.key(0), N)
     sample = jax.jit(jax.vmap(sample_outcome, in_axes=(0, None, None, None)))

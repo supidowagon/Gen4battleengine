@@ -6,10 +6,16 @@ from dataclasses import replace
 import numpy as np
 import pytest
 
+import nuzline.engine.coverage as coverage_module
 from nuzline.data.forms import personal_row
 from nuzline.data.games import KAIZO
 from nuzline.data.tables import Names
-from nuzline.data.trainer import build_trainer_party, load_trainers
+from nuzline.data.trainer import (
+    TERRAIN_NAMES,
+    TERRAIN_UNKNOWN,
+    build_trainer_party,
+    load_trainers,
+)
 from nuzline.engine.coverage import (
     IMPLEMENTED_ABILITIES,
     IMPLEMENTED_AI_FLAGS,
@@ -17,6 +23,8 @@ from nuzline.engine.coverage import (
     IMPLEMENTED_ITEMS,
     IMPLEMENTED_TRAINER_ITEMS,
     IMPLEMENTED_WEATHER,
+    ONE_SCALAR_GUESS_CHECKED,
+    POLICY_AI_FLAGS,
     Support,
     UnsupportedMechanics,
     check_coverage,
@@ -24,6 +32,7 @@ from nuzline.engine.coverage import (
     require_coverage,
     rom_change_refusals,
     start_weather,
+    terrain_refusal,
     unknown_start,
 )
 from nuzline.engine.ids import Weather
@@ -55,11 +64,10 @@ def test_all_missing_reported_at_once(tables, names):
     assert e.value.report.level == Support.NONE
 
 
-def test_only_no_weather_is_supported():
-    assert IMPLEMENTED_WEATHER[Weather.NONE] == Support.EXACT
+def test_only_no_weather_and_sandstorm_are_supported():
+    supported = (Weather.NONE, Weather.SANDSTORM)
     for w in Weather:
-        if w != Weather.NONE:
-            assert IMPLEMENTED_WEATHER[w] == Support.NONE
+        assert IMPLEMENTED_WEATHER[w] == (Support.EXACT if w in supported else Support.NONE)
 
 
 def test_hail_route_trainer_is_refused(tables, names):
@@ -144,9 +152,11 @@ def test_unsupported_trainer_item_and_mixed_bag(tables, names):
 
 
 def test_ai_flags_outside_the_policy_are_refused(tables, names):
+    # Vanilla's policy runs BASIC, EVAL_ATTACK and EXPERT only: a vanilla 0b10111 trainer is
+    # still refused by its RISKY flag (K3c Task 6 registers RISKY for Kaizo only).
     risky = replace(roark_trainer(), ai_flags=0b10111)  # + AI_FLAG_RISKY
     r = check_coverage(tables, names, sample_party(names), risky, roark_party(names), 0)
-    assert any("AI_FLAG_RISKY" in m for m in r.missing)
+    assert "Roark: AI_FLAG_RISKY (AI flag UNSUPPORTED)" in r.missing
     basic_only = replace(roark_trainer(), ai_flags=0b1)
     r = check_coverage(tables, names, sample_party(names), basic_only, roark_party(names), 0)
     assert any("AI flag set" in m for m in r.missing)
@@ -169,7 +179,7 @@ def test_sampling_only_is_unimplemented():
         IMPLEMENTED_ABILITIES,
         IMPLEMENTED_ITEMS,
         IMPLEMENTED_TRAINER_ITEMS,
-        IMPLEMENTED_AI_FLAGS,
+        *IMPLEMENTED_AI_FLAGS.values(),
         IMPLEMENTED_WEATHER,
     )
     assert {support for r in registries for support in r.values()} <= {Support.EXACT, Support.NONE}
@@ -296,8 +306,10 @@ def test_player_rotom_wash_is_not_refused_for_its_form(tables, names):
 NO_POLICY = "Roark: no transcribed AI policy for this game (spec 5.10) (AI policy UNSUPPORTED)"
 
 
-def test_trainer_of_a_game_without_ai_policy_refused(tables, names, vanilla_manifest):
-    # Vanilla's data under the Kaizo game id: Kaizo has no transcribed AI policy yet.
+def test_trainer_of_a_game_without_ai_policy_refused(tables, names, vanilla_manifest, monkeypatch):
+    # Vanilla's data under the Kaizo game id, with the Kaizo policy removed (K3c Task 2
+    # gave Kaizo one): a game without a transcribed AI policy is refused.
+    monkeypatch.setitem(coverage_module.POLICY, KAIZO, None)
     kaizo = Names({**vanilla_manifest, "game": KAIZO})
     report = check_opponent(tables, kaizo, roark_trainer(), roark_party(names), Weather.NONE)
     assert NO_POLICY in report.missing and report.level == Support.NONE
@@ -305,10 +317,66 @@ def test_trainer_of_a_game_without_ai_policy_refused(tables, names, vanilla_mani
     assert vanilla.missing == []
 
 
-def test_kaizo_trainer_ai_refused(kaizo_tables, kaizo_names, kaizo_roark, kaizo_roark_party):
+def test_kaizo_roark_ai_flags_exact(kaizo_tables, kaizo_names, kaizo_roark, kaizo_roark_party):
+    # Kaizo has an AI policy since K3c Task 2, and its RISKY flag since Task 6: Kaizo Roark's
+    # flags 23 (0b10111) are exactly the Kaizo policy's, so no flag line is refused, and none
+    # of his AI is (every Expert label of his moves is transcribed). Reports name a labelled
+    # trainer by its label (Task 18 fix round 1).
     report = check_opponent(kaizo_tables, kaizo_names, kaizo_roark, kaizo_roark_party, Weather.NONE)
-    # Reports name a labelled trainer by its label (Task 18 fix round 1).
-    assert kaizo_roark.label == "Leader Roark" and f"Leader {NO_POLICY}" in report.missing
+    assert kaizo_roark.label == "Leader Roark" and f"Leader {NO_POLICY}" not in report.missing
+    assert kaizo_roark.ai_flags == 0b10111 == POLICY_AI_FLAGS["kaizo"]
+    assert set(IMPLEMENTED_AI_FLAGS["kaizo"]) == {0, 1, 2, 4}
+    assert not any("AI flag" in m for m in report.missing), report.missing
+    player = [kaizo_roark_party[2]]  # Roark's Gible
+    full = check_coverage(kaizo_tables, kaizo_names, player, kaizo_roark, kaizo_roark_party, 0)
+    assert not any("trainer AI" in m or "AI flag" in m for m in full.missing), full.missing
+
+
+def test_kaizo_ai_needs_the_ruling_6_data_test(
+    tables, names, kaizo_tables, kaizo_names, kaizo_roark, kaizo_roark_party
+):
+    # K3c final review I-4 (plan K3c Ruling 6; kaizo_roark.md 8.4): the one-scalar ability
+    # guess is exact only for trainers whose data test has run, so any other Kaizo trainer
+    # is refused by name of the rule, even when everything else passes. Roark's own data
+    # under another id is that trainer.
+    assert ONE_SCALAR_GUESS_CHECKED == {"kaizo": frozenset({246})}
+    other = replace(kaizo_roark, id=999)
+    report = check_opponent(kaizo_tables, kaizo_names, other, kaizo_roark_party, Weather.NONE)
+    line = (
+        "Leader Roark: the one-scalar ability guess is not checked against this trainer's "
+        "movesets (plan K3c Ruling 6; docs/ai/kaizo_roark.md 8.4) (AI ability guess UNSUPPORTED)"
+    )
+    assert report.missing == [line], report.missing
+    assert report.level == Support.NONE
+    player = [kaizo_roark_party[2]]  # Roark's Gible
+    full = check_coverage(kaizo_tables, kaizo_names, player, other, kaizo_roark_party, 0)
+    assert full.level == Support.NONE and line in full.missing
+    # Roark himself passes, and vanilla has no such gate.
+    report = check_opponent(kaizo_tables, kaizo_names, kaizo_roark, kaizo_roark_party, 0)
+    assert not any("ability guess" in m for m in report.missing), report.missing
+    vanilla = replace(roark_trainer(), id=999)
+    report = check_opponent(tables, names, vanilla, roark_party(names), 0)
+    assert not any("ability guess" in m for m in report.missing), report.missing
+
+
+@pytest.mark.parametrize("flags", [0b111, 0b11111, 0b110111])
+def test_kaizo_flag_set_must_be_exact(
+    kaizo_tables, kaizo_names, kaizo_roark, kaizo_roark_party, flags
+):
+    # Plan K3c Ruling 10: the Kaizo policy always runs BASIC, EVAL_ATTACK, EXPERT and RISKY,
+    # so a Kaizo trainer with any other flag set is refused by name of the rule; 0b111 (no
+    # RISKY) has no unsupported flag of its own.
+    trainer = replace(kaizo_roark, ai_flags=flags)
+    report = check_opponent(kaizo_tables, kaizo_names, trainer, kaizo_roark_party, Weather.NONE)
+    line = (
+        f"Leader Roark: AI flags {flags:#x} are not exactly BASIC, EVAL_ATTACK, EXPERT and "
+        "RISKY, which the Kaizo AI policy always runs together (plan K3c Ruling 10) "
+        "(AI flag set UNSUPPORTED)"
+    )
+    assert line in report.missing
+    flag_lines = [m for m in report.missing if "(AI flag UNSUPPORTED)" in m]
+    extra = {0b111: [], 0b11111: ["SETUP_FIRST_TURN"], 0b110111: ["PRIORITIZE_EXTREMES"]}
+    assert flag_lines == [f"Leader Roark: AI_FLAG_{x} (AI flag UNSUPPORTED)" for x in extra[flags]]
 
 
 # --- Kaizo trainer fields (K2b Task 14) ----------------------------------------------
@@ -408,12 +476,14 @@ def test_unknown_start_condition_refused_not_read_as_weather(tables, names):
 
 def test_area_weather_keeps_the_weather_refusal(tables, names):
     for cond, line in (
-        ("sandstorm", "Battle start: Sandstorm (weather UNSUPPORTED)"),
+        ("hail", "Battle start: Hail (weather UNSUPPORTED)"),
         ("sun", "Battle start: Sun (weather UNSUPPORTED)"),
         ("fog", "Battle start: Fog (weather UNSUPPORTED)"),
     ):
         t = replace(roark_trainer(), start_condition=cond)
         assert line in check_opponent(tables, names, t, roark_party(names), 0).missing
+    sand = replace(roark_trainer(), start_condition="sandstorm")
+    assert not check_opponent(tables, names, sand, roark_party(names), 0).missing
 
 
 def test_ability_override_without_set_data_refused(tables, names):  # review I1
@@ -532,3 +602,66 @@ def test_only_a_reached_condition_refuses_the_fight(tables, names, vanilla_manif
     ]
     assert line not in check_opponent(tables, only_player, roark, no_rock, 0).missing
     assert line in check_opponent(tables, only_player, roark, no_rock, 0, [mine]).missing
+
+
+# --- battle terrain (K3b2 Task 9) ----------------------------------------------------------
+
+
+def test_terrain_effects_are_the_decomp_terrain_moves(tables, names):
+    moves = [names.move(m) for m in ("Nature Power", "Secret Power", "Camouflage")]
+    assert [int(tables.move_ai_effect[m]) for m in moves] == [173, 197, 213]
+
+
+def test_terrain_moves_refused_only_for_an_unknown_terrain(tables, names):
+    nature_power, tackle = names.move("Nature Power"), names.move("Tackle")
+    roark = roark_trainer()
+    assert TERRAIN_NAMES[roark.terrain] == "TERRAIN_BUILDING"  # tools/terrain.py
+    assert terrain_refusal(tables, names, roark, [nature_power]) is None
+    mixed = replace(roark, terrain=TERRAIN_UNKNOWN, terrains=(0, 2, 7))
+    line = terrain_refusal(tables, names, mixed, [tackle, nature_power, 0])
+    assert "varies over its maps (TERRAIN_PLAIN, TERRAIN_GRASS, TERRAIN_WATER)" in line
+    assert line.endswith("and Nature Power would read it")
+    assert terrain_refusal(tables, names, mixed, [tackle]) is None
+    unplaced = replace(roark, terrain=TERRAIN_UNKNOWN, terrains=())
+    assert "no map places the trainer" in terrain_refusal(tables, names, unplaced, [nature_power])
+    unread = replace(roark, terrain=TERRAIN_UNKNOWN, terrains=(TERRAIN_UNKNOWN, 0))
+    assert "TERRAIN_PLAIN and a map whose tiles cannot be read" in terrain_refusal(
+        tables, names, unread, [nature_power]
+    )
+
+
+def test_fight_with_a_terrain_move_names_the_terrains(tables, names):
+    party = sample_party(names, override_moves={0: ["Camouflage", "Tackle"]})
+    mixed = replace(roark_trainer(), terrain=TERRAIN_UNKNOWN, terrains=(2, 6))
+    report = check_coverage(tables, names, party, mixed, roark_party(names), 0)
+    terrain = [m for m in report.missing if "battle terrain" in m]
+    want = (
+        "Roark: the battle terrain varies over its maps (TERRAIN_GRASS, TERRAIN_SNOW), and "
+        "Camouflage would read it (battle terrain UNSUPPORTED)"
+    )
+    assert terrain == [want]
+    known = check_coverage(tables, names, party, roark_trainer(), roark_party(names), 0)
+    assert not [m for m in known.missing if "battle terrain" in m]
+
+
+def test_pool_candidate_with_a_terrain_move_is_refused(tables, names):
+    from nuzline.prep.pool import Candidate, check_pool
+
+    spec = sample_party(names, override_moves={0: ["Tackle"]})[0]
+    cand = Candidate(("party", 0, 0), "party slot 0", spec, 0, (names.move("Secret Power"),), ())
+    mixed = replace(roark_trainer(), terrain=TERRAIN_UNKNOWN, terrains=(0, 2))
+    report = check_pool(tables, names, [cand], roark_party(names), mixed)
+    assert any("Secret Power would read it (battle terrain" in m for m in report.missing)
+    report = check_pool(tables, names, [cand], roark_party(names), roark_trainer())
+    assert not any("battle terrain" in m for m in report.missing)
+
+
+def test_make_state_takes_the_trainers_terrain(tables, names):
+    from nuzline.engine.state import make_state
+
+    roark = roark_trainer()
+    state = make_state(tables, sample_party(names), roark_party(names), terrain=roark.terrain)
+    assert int(state.terrain) == roark.terrain
+    assert int(make_state(tables, sample_party(names), roark_party(names)).terrain) == -1
+    with pytest.raises(ValueError, match="terrain 25"):
+        make_state(tables, sample_party(names), roark_party(names), terrain=25)

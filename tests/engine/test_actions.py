@@ -1,4 +1,5 @@
 import jax.numpy as jnp
+import pytest
 
 from nuzline.engine.actions import NUM_ACTIONS, legal_actions, legal_replacements
 from nuzline.engine.outcome import empty_outcome
@@ -34,6 +35,7 @@ def test_trapped_cannot_switch_and_taunt_blocks_status(tables, names):
     assert m[leer] is False
 
 
+@pytest.mark.slow
 def test_taunted_with_only_status_moves_struggles(tables, names):
     # CHECK_INVALID_ALL includes CHECK_INVALID_TAUNTED (battle_lib.c:2282): with every
     # PP-holding move at power 0 the decomp sets STRUGGLING_ALL

@@ -1,8 +1,10 @@
 """The battle state pytree and its construction from two parties.
 
 ``BattleState`` is unbatched: side axis 0 is the player, 1 the opponent; slot axis
-is party order. Every field is ``int8``/``int16`` storage (spec §4.2). The field
-list is ticked off against the decomp's battle structs in ``STATE.md``.
+is party order. Every field is ``int8``/``int16`` storage (spec §4.2), except ``exp``:
+``int32``, because the level-100 experience of most growth rates exceeds ``int16`` (K3d-exp
+ruling D1). The field list is ticked off against the decomp's battle structs in
+``STATE.md``.
 
 Encodings:
 
@@ -26,16 +28,43 @@ Encodings:
   (battle_controller_player.c:1844-1852).
 * ``fake_out_turn`` is ``fakeOutTurnNumber``: 0 for the leads, ``totalTurns + 1`` after
   every switch-in and faint; the AI's ``LoadIsFirstTurnInBattle`` (trainer_ai.c:2487)
-  is ``fake_out_turn >= turn``.
+  is ``fake_out_turn >= turn``; Fake Out fails unless ``fake_out_turn == turn``.
 * ``move_hit`` is ``moveHit``: the last move aimed at the side's active battler since its
   own last action ended (see ``step``).
 * ``foresight``, ``disabled_move``/``disable_turns``, ``locked_move`` (0 = not locked),
   ``bide_turns``/``bide_damage`` (``bide_damage`` is ``storedDamage`` only while
-  ``bide_turns > 0``, else 0), ``curled`` and ``mud_sport`` are the active battler's
+  ``bide_turns > 0``, else 0), ``curled``, ``mud_sport`` and ``aqua_ring`` are the active battler's
   matching volatile / move-effect state; all are reset like the other volatiles
   (``step._VOLATILE``).
+* ``infatuated`` is the active battler's ``VOLATILE_CONDITION_ATTRACT`` bits: 1 when it is in
+  love with the other side's active battler (in singles the only possible source,
+  ``BtlCmd_TryAttract``, battle_script.c:5738). It is a volatile (cleared when the battler
+  leaves) and is also cleared when its source leaves (``step._source_leaves``).
 * ``trainer_item_count`` is ``aiContext.trainerItemCounts``: the bag's size at battle
   start, never decremented.
+* ``terrain`` is ``BattleSystem.terrain``: the battle terrain, a decomp ``TERRAIN_*`` id
+  (``nuzline.data.trainer.TERRAIN_NAMES``) fixed when the battle starts
+  (``SetBackgroundAndTerrain``, field_battle_data_transfer.c:496-505) and never written in
+  battle; ``TERRAIN_UNKNOWN`` (-1) when the trainer's maps give several terrains or none
+  (``Trainer.terrain``, tools/terrain.py). Only Nature Power, Secret Power and Camouflage
+  read it (battle_script.c:8007, :8040, :8067), and coverage refuses them unless it is known.
+* ``qc_roll`` is ``BattleContext.speedRand[side] % (100 / QUICK_CLAW_PARAM) == 0`` (1 = a
+  Quick Claw would activate), the per-battler draw the next turn's order reads
+  (``order.action_order``). ``speedRand`` belongs to the battler slot, not to a Pokemon: it
+  is redrawn every turn after the order is fixed (battle_controller_player.c:853-857), and
+  ``step`` stores the turn's draw (``Outcome.quick_claw``) only while something can read it
+  before the next redraw (``step.qc_kept``: a living Quick Claw holder is active, or the
+  side's replacement can send one in); else 0. Hidden from the player. At a root it is a
+  chance node (``step.root_belief``, ``step.sample_root``), as the battle-start draw
+  (``BattleContext_InitCounters``, battle_lib.c:2024) is.
+* Experience (K3d-exp; ``STATE.md`` "Experience"): ``exp`` is the player party's
+  ``MON_DATA_EXPERIENCE``; ``evs`` (``ids.Stat`` order, like ``ivs``) and ``nature`` feed the
+  level-up stat recompute; ``exp_boost``, ``pokerus`` and ``friend_bonus`` are the
+  ``PokemonSpec`` fields of the player's slots. ``exp_mask`` is ``sideGetExpMask[0]`` as a
+  bitmask over the player's party slots: ``1 << lead`` at the start, then written by every
+  send-out (``step._switch_in``). ``learn_level`` / ``learn_cursor`` (the pending learnset
+  scan), ``learn_pin`` and ``exp_refused`` are 0 until the payout and the learn resolve set
+  them (later K3d-exp tasks).
 """
 
 from __future__ import annotations
@@ -49,6 +78,7 @@ import numpy as np
 from nuzline.data.forms import personal_row
 from nuzline.data.spec import PokemonSpec
 from nuzline.data.tables import Tables
+from nuzline.data.trainer import TERRAIN_NAMES, TERRAIN_UNKNOWN
 from nuzline.engine.ids import Stat, Weather
 from nuzline.engine.stats import calc_stats
 
@@ -115,6 +145,8 @@ class BattleState(NamedTuple):
     bide_damage: jnp.ndarray  # int16, storedDamage while Biding (hidden), else 0
     curled: jnp.ndarray  # int8, VOLATILE_CONDITION_DEFENSE_CURL
     mud_sport: jnp.ndarray  # int8, MOVE_EFFECT_MUD_SPORT in moveEffectsMask
+    aqua_ring: jnp.ndarray  # int8, MOVE_EFFECT_AQUA_RING in moveEffectsMask
+    infatuated: jnp.ndarray  # int8, VOLATILE_CONDITION_ATTRACT (source: the foe's active)
     # per side [2]
     spikes: jnp.ndarray  # int8, layers
     toxic_spikes: jnp.ndarray  # int8, layers
@@ -131,11 +163,13 @@ class BattleState(NamedTuple):
     future_damage: jnp.ndarray  # int16
     trainer_items: jnp.ndarray  # int16[2,4], bag item ids (aiContext.trainerItems)
     trainer_item_count: jnp.ndarray  # int8, bag size at battle start (trainerItemCounts)
+    qc_roll: jnp.ndarray  # int8, speedRand % 5 == 0 (Quick Claw), hidden, see the docstring
     # field (scalars)
     weather: jnp.ndarray  # int8, ids.Weather
     weather_timer: jnp.ndarray  # int8, 0 = permanent
     trick_room: jnp.ndarray  # int8
     gravity: jnp.ndarray  # int8
+    terrain: jnp.ndarray  # int8, decomp TERRAIN_* id, -1 unknown (constant per battle)
     turn: jnp.ndarray  # int16
     over: jnp.ndarray  # int8
     winner: jnp.ndarray  # int8
@@ -143,6 +177,18 @@ class BattleState(NamedTuple):
     # AI knowledge of the player
     ai_seen_moves: jnp.ndarray  # int8[6,4], player slot x move slot
     ai_ability_known: jnp.ndarray  # int8[6]
+    # experience (K3d-exp, design §2.1; see the module docstring)
+    exp: jnp.ndarray  # int32[6], player party MON_DATA_EXPERIENCE
+    evs: jnp.ndarray  # int16[2,6,6], ids.Stat order
+    nature: jnp.ndarray  # int8[2,6]
+    exp_mask: jnp.ndarray  # int8, sideGetExpMask[0]: bit = player party slot
+    exp_boost: jnp.ndarray  # int16[6], 100 / 150 / 170 percent, 0 = unresolved
+    pokerus: jnp.ndarray  # int8[6], 1 = the Pokerus byte is nonzero
+    friend_bonus: jnp.ndarray  # int8[6], 1 = caught in a Luxury Ball
+    learn_level: jnp.ndarray  # int8[6], 0 = no learnset work, else the level to scan
+    learn_cursor: jnp.ndarray  # int8[6], index into that level's learnset scan
+    learn_pin: jnp.ndarray  # int8, 0 none, else 1 + the move slot the player selected
+    exp_refused: jnp.ndarray  # int8, sticky refusal code (0 none, 2 = window (c))
     # faint budget (search data; the engine only records deaths and never reads k)
     deaths: jnp.ndarray  # int8[6], 1 where the player's party slot fainted this battle
     faint_budget: jnp.ndarray  # int8, k: the deaths the search allows
@@ -247,6 +293,8 @@ LAYOUT: dict[str, tuple[tuple[int, ...], type]] = {
     "bide_damage": (_SIDE, np.int16),
     "curled": (_SIDE, np.int8),
     "mud_sport": (_SIDE, np.int8),
+    "aqua_ring": (_SIDE, np.int8),
+    "infatuated": (_SIDE, np.int8),
     "spikes": (_SIDE, np.int8),
     "toxic_spikes": (_SIDE, np.int8),
     "stealth_rock": (_SIDE, np.int8),
@@ -262,16 +310,29 @@ LAYOUT: dict[str, tuple[tuple[int, ...], type]] = {
     "future_damage": (_SIDE, np.int16),
     "trainer_items": ((SIDES, BAG_SLOTS), np.int16),
     "trainer_item_count": (_SIDE, np.int8),
+    "qc_roll": (_SIDE, np.int8),
     "weather": (_FIELD, np.int8),
     "weather_timer": (_FIELD, np.int8),
     "trick_room": (_FIELD, np.int8),
     "gravity": (_FIELD, np.int8),
+    "terrain": (_FIELD, np.int8),
     "turn": (_FIELD, np.int16),
     "over": (_FIELD, np.int8),
     "winner": (_FIELD, np.int8),
     "player_faints": (_FIELD, np.int8),
     "ai_seen_moves": ((SLOTS, MOVES), np.int8),
     "ai_ability_known": ((SLOTS,), np.int8),
+    "exp": ((SLOTS,), np.int32),
+    "evs": ((*_SLOT, 6), np.int16),
+    "nature": (_SLOT, np.int8),
+    "exp_mask": (_FIELD, np.int8),
+    "exp_boost": ((SLOTS,), np.int16),
+    "pokerus": ((SLOTS,), np.int8),
+    "friend_bonus": ((SLOTS,), np.int8),
+    "learn_level": ((SLOTS,), np.int8),
+    "learn_cursor": ((SLOTS,), np.int8),
+    "learn_pin": (_FIELD, np.int8),
+    "exp_refused": (_FIELD, np.int8),
     "deaths": ((SLOTS,), np.int8),
     "faint_budget": (_FIELD, np.int8),
     "protected": ((SLOTS,), np.int8),
@@ -281,22 +342,49 @@ if tuple(LAYOUT) != BattleState._fields:
     raise RuntimeError("LAYOUT must list every BattleState field, in order")
 
 
+def spec_stats(tables: Tables, mon: PokemonSpec) -> np.ndarray:
+    """``mon``'s six stats as ``make_state`` builds them: its stored ``stats``, else
+    ``calc_stats`` (ValueError: no such form, or ``stats`` not six values)."""
+    row = personal_row(tables, mon.species, mon.form)  # ValueError: no such form
+    if mon.stats is not None:
+        if len(mon.stats) != 6:
+            raise ValueError(f"species {mon.species}: stats needs 6 values, got {len(mon.stats)}")
+        return np.asarray(mon.stats)
+    return calc_stats(
+        np.asarray(tables.species_base_stats[row]),
+        np.asarray(mon.ivs),
+        np.asarray(mon.evs),
+        mon.level,
+        np.asarray(tables.nature_mods[mon.nature]),
+        species=mon.species,
+    )
+
+
+def spec_exp(tables: Tables, mon: PokemonSpec) -> int:
+    """``mon``'s experience as ``make_state`` stores it: its ``exp``, else the base of its
+    level (``exp_table[rate][level]``, the rate by species as ``Pokemon_GetSpeciesBaseExpAt``
+    reads it, pokemon.c:2327-2330). ``ValueError`` when ``exp`` is not of ``mon``'s level:
+    the level of ``x`` is the last ``L`` in 1..100 with ``table[L] <= x``
+    (``SpeciesData_GetLevelAt``, pokemon.c:2379-2392), so ``exp`` must lie in
+    ``[table[level], table[level + 1])``, or be at least ``table[100]`` at level 100."""
+    rate = int(np.asarray(tables.species_exp_rate)[mon.species])
+    table = np.asarray(tables.exp_table)[rate]
+    if mon.exp is None:
+        return int(table[mon.level])
+    top = len(table) - 1
+    high = None if mon.level >= top else int(table[mon.level + 1])
+    if mon.exp < table[mon.level] or (high is not None and mon.exp >= high):
+        span = f"[{int(table[mon.level])}, {high})" if high is not None else f">= {int(table[top])}"
+        raise ValueError(
+            f"species {mon.species}: exp {mon.exp} is not of level {mon.level} (needs {span})"
+        )
+    return int(mon.exp)
+
+
 def _fill_slot(a: dict[str, np.ndarray], tables: Tables, side: int, slot: int, mon: PokemonSpec):
     species = mon.species
     row = personal_row(tables, species, mon.form)  # ValueError: no such form
-    if mon.stats is not None:
-        if len(mon.stats) != 6:
-            raise ValueError(f"species {species}: stats needs 6 values, got {len(mon.stats)}")
-        stats = np.asarray(mon.stats)
-    else:
-        stats = calc_stats(
-            np.asarray(tables.species_base_stats[row]),
-            np.asarray(mon.ivs),
-            np.asarray(mon.evs),
-            mon.level,
-            np.asarray(tables.nature_mods[mon.nature]),
-            species=species,
-        )
+    stats = spec_stats(tables, mon)
     max_hp = int(stats[Stat.HP])
     hp = max_hp if mon.current_hp is None else mon.current_hp
     if not 0 <= hp <= max_hp:
@@ -319,6 +407,14 @@ def _fill_slot(a: dict[str, np.ndarray], tables: Tables, side: int, slot: int, m
     a["gender"][side, slot] = mon.gender
     a["friendship"][side, slot] = mon.friendship
     a["ivs"][side, slot] = mon.ivs
+    a["evs"][side, slot] = mon.evs
+    a["nature"][side, slot] = mon.nature
+    exp = spec_exp(tables, mon)  # ValueError: exp not of the level
+    if side == 0:  # the opponent's exp is never read (its Pokemon gain none)
+        a["exp"][slot] = exp
+        a["exp_boost"][slot] = mon.exp_boost
+        a["pokerus"][slot] = mon.pokerus
+        a["friend_bonus"][slot] = mon.friend_bonus
 
 
 def initial_arrays(
@@ -328,12 +424,14 @@ def initial_arrays(
     start_condition: int = Weather.NONE,
     opp_items: Sequence[int] = (),
     leads: tuple[int, int] = (0, 0),
+    terrain: int = TERRAIN_UNKNOWN,
 ) -> dict[str, np.ndarray]:
     """Every ``LAYOUT`` field of the turn-0 state, before the switch-in hooks, as numpy
     (``make_state`` is this plus the two ``on_switch_in`` calls): stats via ``calc_stats``, empty slots all zero
     (``species = 0, hp = 0``), the leads in party slots ``leads`` (player, opponent),
     no volatiles, hazards or screens, and
-    ``weather = start_condition`` with a permanent timer (0). The leads'
+    ``weather = start_condition`` with a permanent timer (0), and ``terrain`` (a decomp
+    ``TERRAIN_*`` id, ``Trainer.terrain``; ``TERRAIN_UNKNOWN`` by default). The leads'
     switch-in effects then run (``hooks.on_switch_in``, player first; the decomp's
     ``monSpeedOrder`` gives the same result in singles, see ``hooks``).
 
@@ -343,7 +441,15 @@ def initial_arrays(
     ``trainer_item_count[1]``; the player's bag stays empty. The leads'
     ``fake_out_turn`` is 0: the battle-start send-out does not run
     ``BattleSystem_UpdateAfterSwitch``, and ``BattleContext`` starts zeroed
-    (battle_controller_player.c:180-184)."""
+    (battle_controller_player.c:180-184).
+
+    Experience: ``exp`` is ``spec_exp`` (``ValueError`` when a spec's ``exp`` is not of its
+    level), the player's ``exp_boost`` / ``pokerus`` / ``friend_bonus`` come from its specs,
+    ``evs`` and ``nature`` from both sides', and ``exp_mask = 1 << leads[0]``: the
+    battle-start ``PokemonSlideIn`` of the enemy (clear, then flag) and of the player (flag)
+    (subscript_start_encounter.s:84, :91; ``BtlCmd_PokemonSlideIn``, battle_script.c:465-466,
+    :474-475) leave the player lead's bit (``BattleSystem_FlagBattlerExpGain``,
+    battle_lib.c:1461-1479). The learn fields and ``exp_refused`` start at 0."""
     a = {name: np.zeros(shape, dtype) for name, (shape, dtype) in LAYOUT.items()}
     for side, party in enumerate((player, opp)):
         if not 1 <= len(party) <= SLOTS:
@@ -354,12 +460,16 @@ def initial_arrays(
         if not 0 <= lead < len(party):
             raise ValueError(f"side {side}: lead slot {lead} is not in a party of {len(party)}")
         a["active"][side] = lead
+    a["exp_mask"][...] = 1 << leads[0]
     bag = [item for item in opp_items if item]
     if len(bag) > BAG_SLOTS:
         raise ValueError(f"a trainer's bag holds at most {BAG_SLOTS} items, got {len(bag)}")
     a["trainer_items"][1, : len(bag)] = bag
     a["trainer_item_count"][1] = len(bag)
     a["weather"][...] = Weather(start_condition)
+    if not TERRAIN_UNKNOWN <= terrain < len(TERRAIN_NAMES):
+        raise ValueError(f"terrain {terrain} is neither a TERRAIN_* id nor TERRAIN_UNKNOWN")
+    a["terrain"][...] = terrain
     return a
 
 
@@ -370,13 +480,14 @@ def make_state(
     start_condition: int = Weather.NONE,
     opp_items: Sequence[int] = (),
     leads: tuple[int, int] = (0, 0),
+    terrain: int = TERRAIN_UNKNOWN,
 ) -> BattleState:
     """Build the turn-0 state (``initial_arrays``), then run the leads' switch-in
     effects (``hooks.on_switch_in``, player first; the decomp's ``monSpeedOrder`` gives
     the same result in singles, see ``hooks``)."""
     from nuzline.engine.hooks import on_switch_in  # hooks imports this module
 
-    a = initial_arrays(tables, player, opp, start_condition, opp_items, leads)
+    a = initial_arrays(tables, player, opp, start_condition, opp_items, leads, terrain)
     state = BattleState(**{name: jnp.asarray(a[name]) for name in BattleState._fields})
     for side in (0, 1):
         state = on_switch_in(tables, state, side)

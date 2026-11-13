@@ -14,6 +14,7 @@ def test_tm_table_symbol(symbols):
     assert s.module == "arm9" and s.size == 200
 
 
+@pytest.mark.slow
 def test_tm_moves_match_decomp(vanilla_files, symbols, decomp_inter):
     tms = tm_moves(vanilla_files, symbols)
     assert len(tms) == 100 and tms[0] == 264  # TM01 Focus Punch

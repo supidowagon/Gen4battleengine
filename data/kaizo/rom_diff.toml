@@ -35,9 +35,8 @@ note = "decoded: the getter now reads the field from the d_test.narc member load
 [[code]]
 module = "arm9"
 symbol = "MapHeader_GetMapMatrixID"
-status = "not_reached"
-note = "decoded: the getter now reads the field from the d_test.narc member loaded by MapHeader_IDBoundsCheck (buffer + field offset) instead of sMapHeaders + 24*id + offset: the 24*id index is dropped and the base address 0x020E601E becomes the bare offset 2 (mapMatrixID, u16 at 2); src/map_header.c:30; the matrix picks the land data whose tile behaviour CalcTerrain reads first; battle terrain (CalcTerrain, src/field_battle_data_transfer.c:467-494) is read in battle only by Nature Power, Secret Power and Camouflage (effects 173, 197, 213: GetTerrainMove, GetTerrainSecondaryEffect, TryCamouflage; src/battle/battle_script.c:8007,8040,8067) and by the Dive/Dusk Ball modifiers of wild catches; the engine does not model terrain, so a fight reaches this only through those effects"
-when = { move_effect = [173, 197, 213] }
+status = "modelled"
+note = "decoded: the getter now reads the field from the d_test.narc member loaded by MapHeader_IDBoundsCheck (buffer + field offset) instead of sMapHeaders + 24*id + offset: the 24*id index is dropped and the base address 0x020E601E becomes the bare offset 2 (mapMatrixID, u16 at 2), and vanilla's Pearl test (matrix 22 -> 23 when gGameVersion is VERSION_PEARL) is kept; src/map_header.c:28-38; the matrix picks the land data whose tile behaviour CalcTerrain reads first (src/field_battle_data_transfer.c:467-494); K3b2 Task 9's terrain reader reads this u16 from the d_test.narc member (maps.map_header_battle_fields, HEADER_MATRIX = 2, gGameVersion checked not Pearl) for each trainer's Trainer.terrain (tools/terrain.py), and check_kaizo_map_headers matches this exact patched getter (_KAIZO_MATRIX; tests/tools/rom/test_terrain.py test_kaizo_map_header_getters)"
 
 [[code]]
 module = "arm9"
@@ -115,9 +114,8 @@ note = "decoded: the getter now reads the field from the d_test.narc member load
 [[code]]
 module = "arm9"
 symbol = "MapHeader_GetBattleBG"
-status = "not_reached"
-note = "decoded: the getter now reads the field from the d_test.narc member loaded by MapHeader_IDBoundsCheck (buffer + field offset) instead of sMapHeaders + 24*id + offset: the 24*id index is dropped and the base address 0x020E601C becomes the bare offset 0 (battleBG, bits 7-11 of the u16 at 22); src/map_header.c:114; battleBG is the battle background (graphics) and CalcTerrain's fallback (src/field_battle_data_transfer.c:488-489,499); battle terrain (CalcTerrain, src/field_battle_data_transfer.c:467-494) is read in battle only by Nature Power, Secret Power and Camouflage (effects 173, 197, 213: GetTerrainMove, GetTerrainSecondaryEffect, TryCamouflage; src/battle/battle_script.c:8007,8040,8067) and by the Dive/Dusk Ball modifiers of wild catches; the engine does not model terrain, so a fight reaches this only through those effects"
-when = { move_effect = [173, 197, 213] }
+status = "modelled"
+note = "decoded: the getter now reads the field from the d_test.narc member loaded by MapHeader_IDBoundsCheck (buffer + field offset) instead of sMapHeaders + 24*id + offset: the 24*id index is dropped and the base address 0x020E601C becomes the bare offset 0 (battleBG, bits 7-11 of the u16 at 22: ldrh [r0, #22]; lsls #20; lsrs #27); src/map_header.c:111-115; battleBG is the battle background (graphics) and CalcTerrain's fallback (src/field_battle_data_transfer.c:488-489,499); K3b2 Task 9's terrain reader reads these bits from the d_test.narc member (maps.map_header_battle_fields, HEADER_FLAGS = 22, BATTLE_BG_SHIFT = 7) for each trainer's Trainer.terrain (tools/terrain.py), and check_kaizo_map_headers matches this exact patched getter (_KAIZO_BATTLE_BG; tests/tools/rom/test_terrain.py test_kaizo_map_header_getters); the remaining refusal is coverage's per-trainer mixed or unknown terrain for effects 173, 197 and 213 (engine.coverage)"
 
 [[code]]
 module = "arm9"
@@ -544,14 +542,14 @@ note = "decoded: only the targets of 15 calls into overlay16 changed, each the s
 [[code]]
 module = "overlay14"
 symbol = "0x022249CC-0x022249CD"
-status = "unknown"
-note = "decoded: one word of the AI script gTrainerAITable, which overlay14 carries as data (Basic_CheckForImmunity's last defender-ability compare, the one that branches to Basic_CheckWaterAbsorption2): it tests Dry Skin instead of Levitate (ability 26 -> 87), fixing the decomp's documented bug; src/battle/trainer_ai/script.s:78; rom:overlay14@0x022249CC; with the Basic flag (Kaizo Roark has it) and an attacker without Mold Breaker, a move whose type LoadTypeFrom LOAD_MOVE_TYPE gives as Water scores -12 against a defender whose actual ability (AICmd_LoadAbility reads Battler_Ability, src/battle/trainer_ai/trainer_ai.c:2661) is Dry Skin, as against Water Absorb; vanilla never takes that branch (Levitate is caught by the compare before it); every other word of the script is unchanged; K3c's Kaizo policy must test Dry Skin (87) at the transcribed second Levitate compare (src/nuzline/ai/policy.py:151) -> K3c"
+status = "modelled"
+note = "decoded: one word of the AI script gTrainerAITable, which overlay14 carries as data (Basic_CheckForImmunity's last defender-ability compare, the one that branches to Basic_CheckWaterAbsorption2): it tests Dry Skin instead of Levitate (ability 26 -> 87), fixing the decomp's documented bug; src/battle/trainer_ai/script.s:78; rom:overlay14@0x022249CC; with the Basic flag (Kaizo Roark has it) and an attacker without Mold Breaker, a move whose type LoadTypeFrom LOAD_MOVE_TYPE gives as Water scores -12 (script.s:106-109) against a defender whose ability as the AI loads it is Dry Skin, as against Water Absorb; that load is the script's LoadBattlerAbility AI_BATTLER_DEFENDER (script.s:71, AICmd_LoadBattlerAbility, src/battle/trainer_ai/trainer_ai.c:1170-1198: the known ability, else a coin-flip guess between the species' two abilities), not AICmd_LoadAbility; vanilla never takes that branch (Levitate is caught by the compare before it); every other word of the script is unchanged; K3c Task 2 models it: the Kaizo policy's layout compares Dry Skin there (src/nuzline/ai/layout.py KAIZO.water2_ability = 87, read by src/nuzline/ai/policy.py _basic), pinned by tests/ai/test_layout.py test_dry_skin_compare_per_policy"
 
 [[code]]
 module = "overlay16"
 symbol = "BattleControllerPlayer_CheckObedience"
-status = "unknown"
-note = "decoded: the badge gate if (TrainerInfo_BadgeCount(trInfo) >= 8) return OBEY_CHECK_SUCCESS compares with 0 instead of 8, and a badge count is never negative, so the check always returns OBEY_CHECK_SUCCESS there, before any level test or RandNext draw: every Pokemon the player sends obeys at any level, traded or not (vanilla: with fewer than 8 badges a non-OT Pokemon above the badge level cap, 10 with 0 badges, may disobey); src/battle/battle_controller_player.c:2136; rom:overlay16@0x0224E1D0; it runs on every player move in every fight, Roark's included; the engine has no obedience check (it always uses the chosen move and draws no RNG for it), which is what the patched code does, but no test pins that; K3b adds that test and marks this modelled -> K3b"
+status = "modelled"
+note = "decoded: the badge gate if (TrainerInfo_BadgeCount(trInfo) >= 8) return OBEY_CHECK_SUCCESS compares with 0 instead of 8, and a badge count is never negative, so the check always returns OBEY_CHECK_SUCCESS there, before any level test or RandNext draw: every Pokemon the player sends obeys at any level, traded or not (vanilla: with fewer than 8 badges a non-OT Pokemon above the badge level cap, 10 with 0 badges, may disobey); src/battle/battle_controller_player.c:2136; rom:overlay16@0x0224E1D0; it runs on every player move in every fight, Roark's included; the engine has no obedience check (it always uses the chosen move and draws no RNG for it), which is what the patched code does, pinned by tests/engine/test_obedience.py:13"
 
 [[code]]
 module = "overlay16"

@@ -31,14 +31,14 @@ from nuzline.prep.search import run_prep
 from nuzline.prep.setups import neighbours, team_setups
 from tests.engine.helpers import sample_party
 from tests.prep.fixtures import candidate, problem
-from tests.prep.test_search import KEY, SETTINGS, Fakes, fake_solve, falling, make_problem
+from tests.prep.test_search import KEY, SETTINGS, Fakes, fake_solve, make_problem, steep
 
 VERSIONS = {"table_version": "tables-1", "code_version": "code-1"}
 
 
 def setup_run(monkeypatch, tables, names, **problem_kw):
     prob = make_problem(tables, names, **problem_kw)
-    fakes = Fakes(monkeypatch, falling)
+    fakes = Fakes(monkeypatch, steep)
     monkeypatch.setattr(
         search,
         "solve",
@@ -63,6 +63,7 @@ def interrupting(after: int):
 RESUME_SETTINGS = [SETTINGS, dataclasses.replace(SETTINGS, variant_keep=3)]
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("settings", RESUME_SETTINGS, ids=["no-race", "race"])
 def test_resume_equals_uninterrupted(tables, names, monkeypatch, tmp_path, settings):
     prob, _ = setup_run(monkeypatch, tables, names)
@@ -114,6 +115,7 @@ def test_interrupt_in_the_first_unit_of_a_resumed_run_keeps_the_answer(
     assert r.chosen is not None
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("base", RESUME_SETTINGS, ids=["no-race", "race"])
 def test_resume_equals_uninterrupted_with_a_deep_leader(tables, names, monkeypatch, tmp_path, base):
     prob, _ = setup_run(monkeypatch, tables, names)
@@ -266,6 +268,7 @@ def saved(tables, names, monkeypatch, tmp_path):
     return prob, path
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("which", range(8))
 def test_resume_refuses_mismatch(tables, names, saved, which):
     prob, path = saved

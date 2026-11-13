@@ -30,9 +30,12 @@ from tests.search.fixtures import (
     low_hp_endgame,
     pixel_endgame,
     shinx_vs_cranidos,
+    spike_cannon_player_root,
     spore_endgame,
     switch_refusal_root,
 )
+
+pytestmark = pytest.mark.slow
 
 KEY = jax.random.PRNGKey(0)
 SMALL = SolveSettings(max_depth=1, budget_playouts=2000, n_depth0=200)
@@ -128,6 +131,7 @@ def test_depth0_is_stage_a(tables, names, monkeypatch):
     assert "Stage A (depth 0): 200 playouts per action" in footer and "leaf budget" not in footer
 
 
+@pytest.mark.slow
 def test_matches_exhaustive_on_endgames(tables, endgame_solves):
     nontrivial = False
     for name, (state, result) in endgame_solves.items():
@@ -225,10 +229,11 @@ def test_pruning_bound(tables, names):
         assert r.estimate - r.lower_bound == pytest.approx(r.unexplored / 2, abs=1e-9)
 
 
+@pytest.mark.slow
 def test_dropped_root_action(tables, names):
     # spike_cannon_root's opponent also knows Spike Cannon, whose AI script is not
     # transcribed (the AI refuses the root); here only the player knows it.
-    state = roark_state(tables, names, player_moves=["Spike Cannon"])
+    state = spike_cannon_player_root(tables, names)
     cannon = names.move_slot(state, 0, "Spike Cannon")
     result = solve(tables, names, state, KEY, SMALL, leaf_fn=constant_leaf(1, 2))
     assert set(result.dropped) == {cannon}
@@ -284,6 +289,7 @@ def test_all_terminal_root(tables, names):
         assert r.unexplored == r.sampled == r.refused == 0
 
 
+@pytest.mark.slow
 def test_reproducible(tables, names, monkeypatch):
     def no_stage_a(*args):
         raise AssertionError("Stage A runs only at depth 0 (ruling 7)")
@@ -335,6 +341,7 @@ def test_hidden_legality_raises(tables, names):
         solver._node_legal(mixed)
 
 
+@pytest.mark.slow
 def test_default_forced_evaluations_get_the_floor(tables, names, monkeypatch):
     """The default evaluator's forced path inside ``solve``: every pruned opponent action
     is evaluated with exactly ``2 * leaf_floor`` playouts (ruling 8), and the default leaf
@@ -369,11 +376,12 @@ def test_default_forced_evaluations_get_the_floor(tables, names, monkeypatch):
     assert pruned and all(n.opp_action is not None and n.opp_label for n in pruned)
 
 
+@pytest.mark.slow
 def test_sampled_nodes_below_the_root(tables, names):
     # The player alone knows Spike Cannon (as in test_dropped_root_action): dropped at the
     # root, sampling-only at every depth-1 node, where every value 1 makes it the chosen
     # action (the lowest of tied actions), so the plan keeps sampled nodes.
-    state = roark_state(tables, names, player_moves=["Spike Cannon"])
+    state = spike_cannon_player_root(tables, names)
     cannon = names.move_slot(state, 0, "Spike Cannon")
     settings = SolveSettings(max_depth=2, epsilon=0.05, budget_playouts=2000, n_depth0=200)
     result = solve(tables, names, state, KEY, settings, leaf_fn=constant_leaf(1, 1))
@@ -648,6 +656,7 @@ def test_win_after_a_new_death_scores_zero_at_k0(tables, names):
         assert row(result, 0).estimate == pytest.approx(want, abs=1e-9)
 
 
+@pytest.mark.slow
 def test_result_dict_round_trip(tables, names):
     # Plan 4c Task 8: a checkpoint holds finished solves as JSON; nothing may be lost.
     from tests.search.fixtures import certain_zero_leaf, sacrifice_endgame
@@ -667,3 +676,56 @@ def test_result_dict_round_trip(tables, names):
         back = stage_b.result_from_dict(json.loads(json.dumps(stage_b.result_to_dict(r))))
         assert back == r
         assert back.seconds == r.seconds
+
+
+def quick_claw_endgame(tables, names):
+    """Monferno at 1 HP holding a Quick Claw (Scratch) against a faster Tackle-only Geodude
+    that any Scratch knocks out (no crits: Lucky Chant on both sides): Monferno wins when the
+    battle-start draw (the root's ``qc_roll``) moves it first, or when Tackle misses."""
+    from tests.search.fixtures import endgame
+
+    s = endgame(tables, names, ["Scratch"], ["Tackle"], player_hp=1)
+    s = s._replace(item=s.item.at[0, 0].set(names.item("Quick Claw")))
+    spe = 4  # stats[..., 0..4] are Atk..Spe
+    s = s._replace(stats=s.stats.at[1, 0, spe].set(int(s.stats[0, 0, spe]) + 1))
+    s = s._replace(lucky_chant=s.lucky_chant.at[:].set(5))
+    scratch = np.asarray(damage_table(tables, s, 0, names.move("Scratch"), False))
+    return s.replace_hp(1, 0, int(scratch.min()))
+
+
+def test_root_chance_node_for_the_battle_start_quick_claw(tables, names):
+    # Rules §5(b), §11 item 1: the lead's Quick Claw is decided by the battle-start draw
+    # (BattleContext_InitCounters, battle_lib.c:2019-2025) before turn 1's order. The root is
+    # a chance node over qc_roll (1/5, 4/5); the player sees neither value, so the two states
+    # form one belief node. Exact against the exhaustive solver over that belief.
+    from nuzline.engine.step import root_belief
+
+    state = quick_claw_endgame(tables, names)
+    belief = root_belief(tables, state)
+    assert [(int(s.qc_roll[0]), p) for s, p in belief] == [(0, 0.8), (1, 0.2)]
+    settings = SolveSettings(max_depth=CAP, epsilon=0.0, n_depth0=8)
+    result = solve(tables, names, state, KEY, settings, leaf_fn=ZERO)
+    want, _ = exhaustive(tables, state, CAP, belief=belief)
+    scratch = names.move_slot(state, 0, "Scratch")
+    assert row(result, scratch).estimate == pytest.approx(want[scratch], abs=1e-9)
+    # Each fixed root value alone gives another answer; the belief is their 4:1 mix.
+    alone = [exhaustive(tables, s, CAP)[0][scratch] for s, _ in belief]
+    assert alone[1] - alone[0] > 0.1
+    assert want[scratch] == pytest.approx(0.8 * alone[0] + 0.2 * alone[1], abs=1e-12)
+    # The given state's own qc_roll is hidden: solving it with either value is the same.
+    other = state._replace(qc_roll=state.qc_roll.at[0].set(1))
+    again = solve(tables, names, other, KEY, settings, leaf_fn=ZERO)
+    assert row(again, scratch).estimate == pytest.approx(want[scratch], abs=1e-9)
+
+
+def test_root_belief_states_share_the_root_node(tables, names):
+    state = quick_claw_endgame(tables, names)
+    solver = stage_b._Solver(tables, names, batch(state), SMALL, None)
+    assert solver.root_states == {0: 1.0}
+    from nuzline.engine.step import root_belief
+
+    belief = root_belief(tables, state)
+    solver = stage_b._Solver(
+        tables, names, batch(*(s for s, _ in belief)), SMALL, None, weights=[p for _, p in belief]
+    )
+    assert solver.root_states == {0: 0.8, 1: 0.2}

@@ -4,6 +4,7 @@ the opponent's faint replacement (docs/design.md §4.3)."""
 import jax
 import jax.numpy as jnp
 import numpy as np
+import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
@@ -42,21 +43,26 @@ from tests.engine.helpers import (
 from tests.search.fixtures import at_replacement, switch_refusal_root
 from tests.strategies import supported_state
 
+pytestmark = pytest.mark.slow
+
 HP_AT_RISK = 10  # Monferno's HP in the budget test: Rock Throw KOs it, Mach Punch cannot KO
 
 
+@pytest.mark.slow
 def test_policy_returns_legal_action(tables, names):
     s = roark_state(tables, names)
     a = int(playout_policy(tables, s, jax.random.PRNGKey(0)))
     assert bool(legal_actions(tables, s, 0)[a])
 
 
+@pytest.mark.slow
 def test_playout_terminates_with_result(tables, names):
     s = roark_state(tables, names)
     r = playout(tables, s, jax.random.PRNGKey(1))
     assert int(r.won) in (0, 1) and 0 < int(r.turns) <= 100
 
 
+@pytest.mark.slow
 def test_batched_playout_shapes(tables, names):
     s = roark_state(tables, names)
     B = 64
@@ -116,6 +122,7 @@ def _replay(tables, state, key, max_turns=100):
     return out
 
 
+@pytest.mark.slow
 def test_short_party_and_opponent_switch_do_not_index_empty_slot(tables, names):
     # JAX clamps an out-of-range index silently, so a switch or replacement into an
     # empty slot (species 0) or a fainted one would not raise: check every turn.
@@ -154,6 +161,26 @@ def test_policy_prefers_a_damaging_move_to_a_status_move(tables, names):
     assert a == names.move_slot(s, 0, "Mach Punch")
 
 
+def test_nature_power_scores_as_its_call(tables, names):
+    # On BUILDING Nature Power runs Tri Attack (order.called_move): the policy's damage odds
+    # are Tri Attack's, not those of Nature Power's table power 0.
+    s = roark_state(tables, names, player_count=1, player_moves=["Nature Power", "Tri Attack"])
+    s = s._replace(terrain=jnp.asarray(9, s.terrain.dtype))  # TERRAIN_BUILDING
+    np_slot = names.move_slot(s, 0, "Nature Power")
+    tri_slot = names.move_slot(s, 0, "Tri Attack")
+    opp = jnp.asarray(names.move_slot(s, 1, "Tackle"), jnp.int32)
+    odds = [
+        playout_module._move_odds(tables, s, 0, jnp.stack([jnp.int32(a), opp]), 1.0)
+        for a in (np_slot, tri_slot)
+    ]
+    assert [float(x) for x in odds[0]] == [float(x) for x in odds[1]]
+    assert float(odds[1][1]) > 0
+    values = [
+        float(playout_module._pair_value(tables, s, jnp.int32(a), opp)) for a in (np_slot, tri_slot)
+    ]
+    assert values[0] == values[1]
+
+
 def test_illegal_actions_are_never_chosen(tables, names):
     # Only Ember has PP and switching is impossible (one Pokemon): Ember is the only legal action.
     s = roark_state(tables, names, player_count=1).with_pp(0, 0, [0, 0, 5, 0])
@@ -161,6 +188,7 @@ def test_illegal_actions_are_never_chosen(tables, names):
         assert int(playout_policy(tables, s, jax.random.PRNGKey(seed))) == 2
 
 
+@pytest.mark.slow
 def test_playout_from_action_plays_that_action_first(tables, names):
     # The lead at 1 HP is slower than Geodude, whose only move with PP is Tackle (95 %
     # accurate; +6 accuracy makes it sure) and which has no party to switch to: Leer
@@ -209,6 +237,7 @@ def test_playout_is_deterministic_in_its_key(tables, names):
     assert [np.asarray(x).tolist() for x in a] == [np.asarray(x).tolist() for x in b]
 
 
+@pytest.mark.slow
 def test_turn_cap_stops_the_playout(tables, names):
     s = roark_state(tables, names)
     r = playout(tables, s, jax.random.PRNGKey(9), max_turns=1)
@@ -254,6 +283,7 @@ def test_refusal_reason_names_the_refused_mechanic(tables, names):
     assert reason is not None and "Levitate" in reason
 
 
+@pytest.mark.slow
 def test_refusal_reason_is_none_for_a_playout_that_is_not_refused(tables, names):
     s = roark_state(tables, names)
     assert int(playout_from_action(tables, s, 0, jax.random.PRNGKey(11)).refused) == 0
@@ -266,6 +296,7 @@ def test_replacement_refusal_names_the_stale_switch_slot(tables, names):
     assert replacement_refusal(tables, s, False, 10) is None
 
 
+@pytest.mark.slow
 def test_a_refused_distribution_refuses_the_playout_before_the_player_chooses(
     tables, names, monkeypatch
 ):
@@ -275,7 +306,7 @@ def test_a_refused_distribution_refuses_the_playout_before_the_player_chooses(
     # patched distribution is traced in.
     s = roark_state(tables, names)
     nan = jnp.full(NUM_OPP_ACTIONS, jnp.nan, jnp.float32)
-    monkeypatch.setattr(playout_module, "ai_action_distribution", lambda tables, state: nan)
+    monkeypatch.setattr(playout_module, "ai_action_distribution", lambda tables, state, layout: nan)
     key = jax.random.PRNGKey(12)
     r = playout_module._run(tables, s, key, 100, jnp.int32(-1))
     assert (int(r.won), int(r.refused), int(r.turns)) == (REFUSED_WON, 1, 0)

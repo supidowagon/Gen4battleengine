@@ -26,15 +26,87 @@ many are real). Decomp sources:
   ``move_param[m, 1]`` (Thunder Wave, ``BattleControllerPlayer_CheckTypeChart``).
 * Flinch: ``subscript_flinch_mon.s``: only a target that has not moved yet this
   turn, not Inner Focus (ignorable). Steadfast's Speed boost is in ``step``.
-* Drain / recoil: ``subscript_drain_half_damage_dealt.s``,
+* Fake Out (``FAKE_OUT``): ``effect_script_0158.s`` fails unless ``fakeOutTurnNumber ==
+  totalTurns`` (``step._use_move``: the move then does not connect), else it is an indirect
+  TO_DEFENDER flinch at the move's chance through the same ``subscript_flinch_mon.s``; there
+  Inner Focus's "won't flinch" message (:18-23), shown for ``MOVE_FAKE_OUT`` only, names the
+  ability (``hooks.FLINCH_BLOCKED``).
+* Thunder Fang (``FANG_PARALYZE_FLINCH``): ``effect_script_0275.s`` is an indirect ``ON_HIT``
+  TO_DEFENDER effect (no outer roll, battle_lib.c:1524-1529) running
+  ``subscript_paralyze_or_flinch.s``: ``CheckEffectActivation`` (``RandNext() % 100 <
+  chance`` and the target has HP, battle_script.c:8377-8378; ``outcome.secondary``) then
+  ``subscript_paralyze.s`` as a secondary paralysis (``_inflict``, non-direct: Limber is
+  silent, no type immunity), then a second ``CheckEffectActivation``
+  (``outcome.fang_flinch``) then ``subscript_flinch_mon.s`` as for ``FLINCH`` (no Inner Focus
+  message: not Fake Out, not direct). Both run before the contact ability (``_fang``).
+* Present (``PRESENT``): ``effect_script_0122.s`` runs ``BtlCmd_Present`` (battle_script.c:
+  5789-5806, ``outcome.present``) before ``TryMove``. Power 40/80/120: ``CalcCrit``,
+  ``CalcDamage`` and a plain Normal hit at that power (``damage.PRESENT_POWER``; the type
+  chart runs, a Ghost is immune). The heal (``PRESENT_HEAL``) jumps past both (no crit, no
+  roll, damage 0) and sets the direct ``ON_HIT`` effect ``PRESENT_HEAL`` with
+  ``SYSCTL_IGNORE_IMMUNITIES`` (``CheckTypeChart`` skips the chart, bcp.c:2355: a Ghost is
+  healed): on a hit (battle_lib.c:1485-1490) ``subscript_present_heal.s`` (Heal Block is
+  unsupported) runs ``subscript_recover_hp.s`` on the target with
+  ``BattleSystem_Divide(maxHP, 4)``: "HP is full!" at full HP, else the capped HP update
+  (``_present``).
+* Protect, Detect (``PROTECT``): ``effect_script_0111.s`` -> ``subscript_protect.s`` ->
+  ``BtlCmd_TryProtection`` (battle_script.c:5149-5190) in ``step._use_move``: the user's
+  roll (``outcome.protect``, 2^-n by ``protect_count``), the last-actor failure and the
+  chain; the block of the foe's move is ``protect_blocks`` (``CheckMoveHitOverrides``). No
+  effect function runs for it.
+* Tri Attack (``TRI_ATTACK``; Nature Power's call at BUILDING and SPECIAL terrain):
+  ``effect_script_0036.s`` runs ``Random 2, 3`` (``outcome.tri_attack``: burn, freeze or
+  paralysis, ``TRI_ATTACK_STATUSES``) before ``CalcCrit`` and sets it as an indirect
+  probabilistic ``TO_DEFENDER`` effect: ``BattleSystem_TriggerSecondaryEffect``
+  (battle_lib.c:1570-1586) rolls ``RandNext() % 100 < chance`` (``outcome.secondary``), then
+  needs a living defender, no substitute hit and no ``MOVE_STATUS_NO_EFFECTS`` (a miss, an
+  immune target), and runs ``subscript_burn.s`` / ``subscript_freeze.s`` /
+  ``subscript_paralyze.s`` as for a ``SECONDARY_STATUS`` move (``_inflict``, non-direct: Fire
+  is never burned, Ice never frozen and nothing frozen in sun, an existing status blocks,
+  Limber blocks a paralysis silently; paralysis has no type immunity). ``_tri_attack``.
+* Camouflage (``CAMOUFLAGE``): ``effect_script_0213.s`` -> ``BtlCmd_TryCamouflage``
+  (battle_script.c:7997-8022), in the move script before ``TryMove`` (which cannot stop this
+  ``RANGE_USER``, accuracy-0 move): it fails for Multitype (``ABILITY_MULTITYPE``) or when
+  either of the user's types already is ``TERRAIN_TYPES[min(terrain, TERRAIN_SPECIAL)]``,
+  else writes that type to both (``_camouflage``). ``step`` restores the party types when
+  the battler leaves (``BattleSystem_InitBattleMon`` re-reads them, battle_lib.c:114-115).
+* Recover (``RECOVER``): ``effect_script_0032.s`` -> ``subscript_recover_half_max_hp.s``:
+  ``DivideVarByValue(maxHP, 2)`` (``BattleSystem_Divide``, at least 1), then
+  ``subscript_recover_hp.s``: "HP is full!" at full HP (:6), else the HP update, capped at
+  max HP. Heal Block (which would stop it in ``CheckStatusDisruption``) comes from an
+  unsupported move.
+* AncientPower (``RAISE_ALL_STATS_HIT``): ``effect_script_0140.s``, an indirect TO_ATTACKER
+  effect at the move's chance (battle_lib.c:1570-1586: the roll, then the recipient, the
+  user, must have HP; the target's HP does not matter) running
+  ``subscript_boost_all_stats.s``: Atk, Def, Spe, SpA, SpD +1, each its own
+  ``BtlCmd_ChangeStatStage`` (a capped one is skipped).
+* Curse, non-Ghost user (``CURSE``): ``effect_script_0109.s`` -> ``subscript_curse_normal.s``,
+  a direct TO_ATTACKER effect: Spe -1, then Atk +1, then Def +1, each its own
+  ``BtlCmd_ChangeStatStage`` (a capped stage prints "won't go higher/lower" and the next one
+  still runs; none sets ``MOVE_STATUS_FAILED``). Its defender is the user
+  (``targets_user``). A Ghost-type user takes ``subscript_curse_ghost.s``: refused by
+  coverage.
+* Selfdestruct, Explosion (``SELF_DESTRUCT``): ``effect_script_0007.s`` sets the user's HP
+  to 0 before ``TryMove`` (``step._use_move``: before the accuracy check and the type chart;
+  not when the move has no target), then a plain hit on the halved Defense (``damage.py``).
+  No effect function runs for it. Its Damp branch is unreachable (Damp is unsupported).
+* Drain / recoil:``subscript_drain_half_damage_dealt.s``,
   ``subscript_recoil_1_{2,4}.s``: a fraction of ``hitDamage``, the damage dealt
   capped at the target's HP (``BtlCmd_UpdateHealthBarValue``, battle_script.c:1701),
-  through ``BattleSystem_Divide`` (at least 1). Rock Head prevents recoil.
+  through ``BattleSystem_Divide`` (at least 1). Rock Head prevents recoil. A Big Root
+  holder's drain is then ``* (100 + 30) / 100`` (``big_root``).
 * Multi-hit: ``BtlCmd_SetMultiHit`` (battle_script.c:2634) and
   ``BattleControllerPlayer_LoopMultiHit`` (battle_controller_player.c:3777): the
   move script reruns per hit with ``SYSCTL_MULTI_HIT_MOVE``, which skips the
   accuracy check, so only ``outcome.hit[side, 0]`` matters while crit and roll
-  are per hit; the loop stops once the target faints.
+  are per hit; the loop stops once the target faints. ``SetMultiHit 0`` draws 2-5
+  (``outcome.n_hits``); ``SetMultiHit 2`` (``effect_script_0044.s``) is two hits
+  (``move_param[m, 0]``). Focus Sash activates only on a hit taken at full HP
+  (bcp.c:3386-3404) and then stays active for the rest of the move (``play_hit``).
+* Rindo / Chilan Berry (``RESIST_BERRY``): ``subscript_update_hp.s:9`` calls
+  ``subscript_type_resist_berry.s`` on every move hit taken during an action (``play_hit``,
+  Pursuit's hit through it, and the confusion self-hit in ``step``): ``resist_berry``,
+  ``resist_berry_damage``.
 * ``HIGH_CRIT`` only raises the crit stage ``sample_outcome`` uses; here the
   engine reads ``outcome.crit``.
 * Stealth Rock: ``effect_script_0266.s`` sets the flag on the defender's side
@@ -56,11 +128,17 @@ many are real). Decomp sources:
 * Mud Sport: ``effect_script_0201.s`` sets the user's flag (fails if set);
   ``damage.py`` halves Electric power while any active battler has it.
 * Bug Bite, Pluck (``EAT_BERRY``): ``effect_script_0224.s``, an ``ON_HIT`` indirect effect
-  (no HP check, battle_lib.c:1519-1524) running ``subscript_pluck.s``: ``hooks.pluck_berry``.
+  (no HP check, battle_lib.c:1519-1524) running ``subscript_pluck.s``: ``hooks.pluck_berry``
+  (after every other effect function: each move has one effect).
 * Leech Seed: ``subscript_leech_seed_start.s``: Grass types and already seeded
   targets are immune. The end-of-turn drain is in ``step``.
 * Water Sport: ``effect_script_0210.s`` sets the user's flag (fails if set);
   ``damage.py`` halves Fire power while any active battler has it.
+* Light Screen, Reflect: ``effect_script_0035.s`` / ``_0065.s`` (``BtlCmd_TryLightScreen``,
+  script.c:4214): fail when the user's side has it, else 5 turns (``_screen``); the damage
+  halving is in ``damage.py``, the countdown in ``step``.
+* Brick Break: ``effect_script_0186.s``, a direct ``BREAK_SCREENS`` effect after the hit,
+  even on an immune target (``_brick_break``); its own damage ignores the screens.
 * Night Shade, Seismic Toss (``LEVEL_DAMAGE``), Hidden Power, Magnitude: damage and type
   come from ``damage.py`` (``fixed_damage``, ``hidden_power``, ``MAGNITUDE_POWER``); no
   effect function runs for them.
@@ -84,16 +162,43 @@ many are real). Decomp sources:
   (a miss runs ``subscript_missed.s``, which unlocks). Power is ``damage.rollout_multiplier``.
 * Defense Curl: ``effect_script_0156.s`` sets ``curled`` before the Defense stage.
 * Pursuit is a plain hit here; its pre-switch hit at double power is in ``step``.
-* Static / Poison Point: ``BattleSystem_TriggerAbilityOnHit`` (battle_lib.c:4200),
-  run per hit after the secondary effect (``ONE_HIT_TRIGGER_ABILITY`` /
+* Static / Poison Point / Flame Body: ``BattleSystem_TriggerAbilityOnHit``
+  (battle_lib.c:4200; Static :4214, Poison Point :4303, Flame Body :4321), run per hit
+  after the secondary effect (``ONE_HIT_TRIGGER_ABILITY`` /
   ``MULTI_HIT_TRIGGER_ABILITY``, battle_controller_player.c:3513, :3573): the
-  defender's own ability (Mold Breaker does not matter), a contact move that hit,
-  was not ineffective and dealt damage, a living attacker with no status, and the
-  roll ``RandNext() % 10 < 3`` (``outcome.contact_proc[defending side, hit]``). The
-  defender need not be alive. The status goes through ``subscript_paralyze.s`` /
-  ``subscript_poison.s`` as an ability side effect: Safeguard and Substitute do not
-  apply, the type immunities do (``can_have_status``). Its message reveals the
-  holder's ability to the AI (``hooks.reveal_ability``).
+  defender's own ability (``Battler_Ability``: Mold Breaker does not matter), a contact
+  move that hit, was not ineffective and dealt damage, a living attacker with no status,
+  and the roll ``RandNext() % 10 < 3`` (``outcome.contact_proc[defending side, hit]``).
+  The defender need not be alive. The status goes through ``subscript_paralyze.s`` /
+  ``subscript_poison.s`` / ``subscript_burn.s`` as an ability side effect: Safeguard and
+  Substitute do not apply, the type immunities do (``can_have_status``: a Fire type is
+  never burned), and an attacker's own Limber stops the paralysis silently
+  (subscript_paralyze.s:5, :_170). Its message reveals the holder's ability to the AI
+  (``hooks.reveal_ability``).
+* Cute Charm (battle_lib.c:4339-4355, same function): a living attacker that is not in love,
+  a contact move that was not ineffective and dealt damage, a defender still alive after the
+  hit, then the same roll (``outcome.contact_proc``, the last ``&&`` operand). It runs
+  ``subscript_infatuate.s`` as an ability side effect on the attacker: ``BtlCmd_TryAttract``
+  (battle_script.c:5727-5742) fails silently (:60-65) on equal genders or a genderless
+  battler, else the attacker falls in love with the holder (``infatuated``); its message
+  (:17, ``TAG_NICKNAME_ABILITY_NICKNAME`` with ``BTLSCR_MSG_BATTLER_TEMP``, the holder)
+  reveals the holder's ability. Oblivious (:5) is an unsupported ability.
+* Attract (``ATTRACT``): ``effect_script_0120.s``, a direct TO_DEFENDER effect (no ON_HIT:
+  ``BattleSystem_TriggerPrimaryEffect`` needs a living defender, battle_lib.c:1492-1505)
+  running ``subscript_infatuate.s``: ``BtlCmd_TryAttract`` as above, failing on a target
+  already in love too ("But it failed!", :60-62). No type chart (a status move), and Protect
+  blocks it (``MOVE_FLAG_CAN_PROTECT``). ``_attract``; the status check is in ``step``.
+* Rough Skin (battle_lib.c:4257-4271, same function, so never with the above): a living
+  attacker (Magic Guard is unsupported), a contact move that was not ineffective and
+  dealt damage, no roll: ``subscript_rough_skin.s`` takes ``BattleSystem_Divide(maxHP,
+  8)`` from the attacker through ``BATTLE_SUBSCRIPT_UPDATE_HP`` (it may faint; not
+  Bide's stored damage, which only the controller's ``UpdateHP`` adds) and its message
+  tags the holder's ability. The faint stops a multi-hit move (``step``).
+* Limber (``_inflict``): a paralysis (Thunder Wave, a paralysis secondary effect) on a
+  living target with Limber as the attacker sees it (``target_ignorable``) inflicts
+  nothing (subscript_paralyze.s:5); the "prevents paralysis" message (:_170) is printed,
+  and reveals the ability, only for a direct effect (a status move). A pierced Limber
+  (Mold Breaker) cures at the move's end (``hooks.recover_status_by_ability``).
 * Insomnia (``_inflict``): a sleep move (or sleep secondary effect) on a living target
   with Insomnia as the attacker sees it (``target_ignorable``: Mold Breaker pierces it)
   inflicts nothing (subscript_fall_asleep.s:_055, :_202), whatever the target's other
@@ -104,9 +209,9 @@ many are real). Decomp sources:
 
 Unreachable branches are not modelled: Substitute, Mist, Safeguard and Uproar
 come from unsupported moves; Shield Dust, Clear Body, Hyper Cutter, Immunity,
-Limber, Leaf Guard, Liquid Ooze, Magic Guard, Reckless, Serene Grace,
+Leaf Guard, Liquid Ooze, Magic Guard, Reckless, Serene Grace,
 Skill Link, Own Tempo, Levitate, Normalize and Color Change are unsupported
-abilities; Big Root and Grip Claw are unsupported items.
+abilities; Grip Claw is an unsupported item.
 """
 
 from __future__ import annotations
@@ -116,10 +221,26 @@ from typing import NamedTuple
 import jax.numpy as jnp
 
 from nuzline.data.tables import Tables
-from nuzline.engine.damage import STATUS, damage_for_roll, effectiveness, move_type_of
+from nuzline.engine.damage import (
+    PRESENT_HEAL,
+    STATUS,
+    damage_for_roll,
+    decomp_abilities,
+    divide,
+    effectiveness,
+    move_type_of,
+    weather_suppressed,
+)
 from nuzline.engine.ids import (
+    ABILITY_MULTITYPE,
+    MOVE_FAKE_OUT,
+    MOVE_STRUGGLE,
+    RESIST_ANY_NORMAL,
+    TERRAIN_TYPES,
+    TRI_ATTACK_STATUSES,
     AbilityId,
     EffectId,
+    ItemId,
     MoveFlag,
     MoveTarget,
     Stat,
@@ -127,6 +248,7 @@ from nuzline.engine.ids import (
     Type,
     Weather,
 )
+from nuzline.engine.order import terrain_index, terrain_known
 from nuzline.engine.outcome import Outcome
 from nuzline.engine.state import STAGE_MAX, STAGE_MIN, BattleState
 
@@ -157,10 +279,13 @@ class _Hit(NamedTuple):
 
 
 def hit_count(tables: Tables, move, outcome: Outcome, side) -> jnp.ndarray:
-    """``int32``: hits the move makes if nothing faints: ``outcome.n_hits[side]`` for
-    ``MULTI_HIT``, else 1."""
+    """``int32``: hits the move makes if nothing faints: for ``MULTI_HIT`` its fixed count
+    ``move_param[m, 0]`` (``SetMultiHit 2``), or ``outcome.n_hits[side]`` when that is 0
+    (``SetMultiHit 0``, the 2-5 law); else 1."""
     multi = tables.move_effect[move] == _E.MULTI_HIT
-    return jnp.where(multi, outcome.n_hits[side].astype(_I32), 1)
+    fixed = tables.move_param[move, 0].astype(_I32)
+    drawn = outcome.n_hits[side].astype(_I32)
+    return jnp.where(multi, jnp.where(fixed > 0, fixed, drawn), 1)
 
 
 def _alive(state: BattleState, side, slot) -> jnp.ndarray:
@@ -205,9 +330,14 @@ def _secondary_stat_foe(tables, state, h: _Hit) -> BattleState:
     return _foe_stage(state, h, cond)
 
 
-def can_have_status(state: BattleState, side, slot, status) -> jnp.ndarray:
-    """No status yet and no type (or weather) immunity to ``status``."""
+def can_have_status(tables: Tables, state: BattleState, side, slot, status) -> jnp.ndarray:
+    """No status yet and no type (or weather) immunity to ``status``. Sun stops a freeze
+    only without a weather lock: ``subscript_freeze.s:6`` runs ``CheckIgnoreWeather`` before
+    the sun check at :7, and ``BtlCmd_CheckIgnoreWeather`` (battle_script.c:9195-9206) jumps
+    past it while a battler on the field with HP left has Cloud Nine or Air Lock
+    (``damage.weather_suppressed``, read on ``state``: the field when the effect runs)."""
     types = state.types[side, slot]
+    sun = (state.weather == Weather.SUN) & ~weather_suppressed(tables, state)
     has = lambda t: jnp.any(types == t)
     immune = (
         ((status == Status.BURN) & has(Type.FIRE))
@@ -215,21 +345,34 @@ def can_have_status(state: BattleState, side, slot, status) -> jnp.ndarray:
             ((status == Status.POISON) | (status == Status.TOXIC))
             & (has(Type.POISON) | has(Type.STEEL))
         )
-        | ((status == Status.FREEZE) & (has(Type.ICE) | (state.weather == Weather.SUN)))
+        | ((status == Status.FREEZE) & (has(Type.ICE) | sun))
     )
     return (state.status[side, slot] == Status.NONE) & ~immune
 
 
-def _inflict(state: BattleState, h: _Hit, outcome: Outcome, cond) -> BattleState:
+def _inflict(
+    tables: Tables, state: BattleState, h: _Hit, outcome: Outcome, cond, direct
+) -> BattleState:
+    """``direct``: a status move's own effect (``SIDE_EFFECT_TYPE_DIRECT``), not a damaging
+    move's secondary effect (``_INDIRECT``)."""
     status = h.param[0]
     cond = cond & _alive(state, h.target_side, h.target)
     # subscript_fall_asleep.s:_055/_202/_221: an ignorable Insomnia stops the sleep before
     # any other check, and its "stayed awake" message tags the ability.
     blocked = cond & (status == Status.SLEEP) & (h.target_ignorable == AbilityId.INSOMNIA)
-    from nuzline.engine.hooks import SLEEP_BLOCKED, reveal_ability  # hooks imports this module
+    # subscript_paralyze.s:5/_170: an ignorable Limber stops a paralysis before any other
+    # check; "prevents paralysis" (TAG_NICKNAME_ABILITY) is printed for a direct effect only.
+    limber = cond & (status == Status.PARALYSIS) & (h.target_ignorable == AbilityId.LIMBER)
+    from nuzline.engine.hooks import (  # hooks imports this module
+        PARALYSIS_BLOCKED,
+        SLEEP_BLOCKED,
+        reveal_ability,
+    )
 
     state = reveal_ability(state, h.target_side, h.target, SLEEP_BLOCKED, blocked)
-    cond = cond & ~blocked & can_have_status(state, h.target_side, h.target, status)
+    state = reveal_ability(state, h.target_side, h.target, PARALYSIS_BLOCKED, limber & direct)
+    blocked = blocked | limber
+    cond = cond & ~blocked & can_have_status(tables, state, h.target_side, h.target, status)
     counter = jnp.where(status == Status.SLEEP, outcome.duration[h.side], 0)
     old_status = state.status[h.target_side, h.target]
     old_counter = state.status_counter[h.target_side, h.target]
@@ -247,18 +390,76 @@ def _inflict(state: BattleState, h: _Hit, outcome: Outcome, cond) -> BattleState
 
 
 def _status_foe(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
-    return _inflict(state, h, outcome, (h.effect == _E.STATUS_FOE) & h.effective)
+    return _inflict(tables, state, h, outcome, (h.effect == _E.STATUS_FOE) & h.effective, True)
 
 
 def _secondary_status(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
-    return _inflict(state, h, outcome, (h.effect == _E.SECONDARY_STATUS) & h.effective & h.proc)
+    cond = (h.effect == _E.SECONDARY_STATUS) & h.effective & h.proc
+    return _inflict(tables, state, h, outcome, cond, False)
+
+
+def _tri_attack(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    """``TRI_ATTACK``: the drawn status (``outcome.tri_attack``) as a secondary status at the
+    move's chance (module docstring)."""
+    statuses = jnp.asarray(TRI_ATTACK_STATUSES, _I32)
+    status = statuses[jnp.clip(outcome.tri_attack[h.side].astype(_I32), 0, len(statuses) - 1)]
+    cond = (h.effect == _E.TRI_ATTACK) & h.effective & h.proc
+    return _inflict(
+        tables, state, h._replace(param=h.param.at[0].set(status)), outcome, cond, False
+    )
+
+
+def _camouflage(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    """``CAMOUFLAGE``: ``BtlCmd_TryCamouflage`` (module docstring). An unknown terrain
+    (``order.terrain_known``) writes nothing (coverage refuses such a fight)."""
+    new = jnp.asarray(TERRAIN_TYPES, _I32)[terrain_index(state)]
+    types = state.types[h.side, h.user]
+    multitype = decomp_abilities(tables, state)[h.side, h.user] == ABILITY_MULTITYPE
+    cond = (
+        (h.effect == _E.CAMOUFLAGE)
+        & h.landed
+        & terrain_known(state)
+        & ~multitype
+        & ~jnp.any(types.astype(_I32) == new)
+    )
+    value = jnp.where(cond, new, types.astype(_I32)).astype(types.dtype)
+    return state._replace(types=state.types.at[h.side, h.user].set(value))
 
 
 def _flinch(tables, state, h: _Hit) -> BattleState:
-    cond = (
-        (h.effect == _E.FLINCH)
+    """``FLINCH`` and ``FAKE_OUT`` (a Fake Out that failed did not connect):
+    ``subscript_flinch_mon.s``."""
+    reached = (
+        ((h.effect == _E.FLINCH) | (h.effect == _E.FAKE_OUT))
         & h.effective
         & h.proc
+        & _alive(state, h.target_side, h.target)
+        & ~h.target_moved
+    )
+    inner_focus = h.target_ignorable == AbilityId.INNER_FOCUS
+    # :18-23: Inner Focus's message (TAG_NICKNAME_ABILITY) is shown for Fake Out only.
+    from nuzline.engine.hooks import FLINCH_BLOCKED, reveal_ability  # hooks imports this module
+
+    shown = reached & inner_focus & (h.move == MOVE_FAKE_OUT)
+    state = reveal_ability(state, h.target_side, h.target, FLINCH_BLOCKED, shown)
+    cond = reached & ~inner_focus
+    old = state.flinched[h.target_side]
+    return state._replace(
+        flinched=state.flinched.at[h.target_side].set(jnp.where(cond, 1, old).astype(old.dtype))
+    )
+
+
+def _fang(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    """``FANG_PARALYZE_FLINCH``: ``subscript_paralyze_or_flinch.s:5-10``, the paralysis roll
+    (``h.proc``) then the flinch roll (``outcome.fang_flinch``), each needing a living
+    target (``BtlCmd_CheckEffectActivation``); the flinch also needs a target that has not
+    moved (``subscript_flinch_mon.s:5``) and no Inner Focus as the attacker sees it (:7, its
+    message is for Fake Out or a direct flinch only, :17-27)."""
+    fang = (h.effect == _E.FANG_PARALYZE_FLINCH) & h.effective
+    state = _inflict(tables, state, h, outcome, fang & h.proc, False)
+    cond = (
+        fang
+        & (outcome.fang_flinch[h.side] != 0)
         & _alive(state, h.target_side, h.target)
         & ~h.target_moved
         & (h.target_ignorable != AbilityId.INNER_FOCUS)
@@ -269,13 +470,84 @@ def _flinch(tables, state, h: _Hit) -> BattleState:
     )
 
 
+def _recover(tables, state, h: _Hit) -> BattleState:
+    """Recover: ``subscript_recover_half_max_hp.s`` + ``subscript_recover_hp.s`` (an ON_HIT
+    direct effect on the user; module docstring)."""
+    hp = state.hp[h.side, h.user].astype(_I32)
+    max_hp = state.max_hp[h.side, h.user].astype(_I32)
+    cond = (h.effect == _E.RECOVER) & h.landed & (hp != max_hp)
+    healed = jnp.minimum(hp + jnp.maximum(max_hp // 2, 1), max_hp)
+    return _set(state, "hp", (h.side, h.user), healed, cond)
+
+
+def _present(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    """Present's heal path: the target regains ``Divide(maxHP, 4)``, capped, unless it is at
+    full HP (module docstring). ``landed``, not ``effective``: immunities are ignored."""
+    hp = state.hp[h.target_side, h.target].astype(_I32)
+    max_hp = state.max_hp[h.target_side, h.target].astype(_I32)
+    heal = (h.effect == _E.PRESENT) & (outcome.present[h.side] == PRESENT_HEAL)
+    cond = heal & h.landed & (hp != max_hp)
+    healed = jnp.minimum(hp + jnp.maximum(max_hp // 4, 1), max_hp)
+    return _set(state, "hp", (h.target_side, h.target), healed, cond)
+
+
+def recovers_at_full_hp(tables, state: BattleState, side, move, outcome: Outcome) -> jnp.ndarray:
+    """``bool``: ``side``'s ``move``, if it lands, runs ``subscript_recover_hp.s`` on a
+    recipient at full HP: Recover on its user (``subscript_recover_half_max_hp.s:16``),
+    Present's heal on its target (``subscript_present_heal.s:9``). That subscript's ``_036``
+    ("HP is full!") sets ``MOVE_STATUS_NO_MORE_WORK``, so
+    ``BattleControllerPlayer_CheckMoveFailure`` (bcp.c:3313-3315) jumps to
+    ``LOOP_SPREAD_MOVES`` and the move's ``AfterMoveEffects`` (bcp.c:3638-3769: the attacker's
+    and defender's held items, ``HELD_ITEM_STATUS``) never run (``step._use_move``)."""
+    side = jnp.asarray(side, _I32)
+    effect = tables.move_effect[jnp.asarray(move, _I32)]
+    user, target = state.active[side], state.active[1 - side]
+    user_full = state.hp[side, user] == state.max_hp[side, user]
+    target_full = state.hp[1 - side, target] == state.max_hp[1 - side, target]
+    heal = (effect == _E.PRESENT) & (outcome.present[side] == PRESENT_HEAL)
+    return ((effect == _E.RECOVER) & user_full) | (heal & target_full)
+
+
+# subscript_boost_all_stats.s and subscript_curse_normal.s, in script order.
+ALL_STATS_RAISED = (Stat.ATK, Stat.DEF, Stat.SPE, Stat.SPA, Stat.SPD)
+CURSE_STAGES = ((Stat.SPE, -1), (Stat.ATK, 1), (Stat.DEF, 1))
+
+
+def _raise_all_stats(tables, state, h: _Hit) -> BattleState:
+    user_alive = _alive(state, h.side, h.user)
+    cond = (h.effect == _E.RAISE_ALL_STATS_HIT) & h.effective & h.proc & user_alive
+    for stat in ALL_STATS_RAISED:
+        state = change_stage(state, h.side, stat, 1, cond)
+    return state
+
+
+def _curse(tables, state, h: _Hit) -> BattleState:
+    # BattleSystem_TriggerPrimaryEffect (battle_lib.c:1491): the recipient (the user) has HP.
+    cond = (h.effect == _E.CURSE) & h.landed & _alive(state, h.side, h.user)
+    for stat, delta in CURSE_STAGES:
+        state = change_stage(state, h.side, stat, delta, cond)
+    return state
+
+
 def _percent_of_dealt(h: _Hit) -> jnp.ndarray:
     """``BattleSystem_Divide(hitDamage, 100 / percent)``: at least 1 of a non-zero hit."""
     return jnp.where(h.dealt > 0, jnp.maximum(h.dealt * h.param[0] // 100, 1), 0)
 
 
+def big_root(tables: Tables, state: BattleState, side, heal) -> jnp.ndarray:
+    """``heal`` for ``side``'s active Pokemon after Big Root (``HOLD_EFFECT_LEECH_BOOST``):
+    ``heal * (100 + param) / 100`` (param 30), plain integer division after the base
+    amount, no minimum (``subscript_drain_half_damage_dealt.s:_011-_031``,
+    ``subscript_leech_seed_effect.s``)."""
+    item = state.item[side, state.active[side]]
+    boost = tables.item_param[item, 0].astype(_I32) + 100
+    root = tables.item_effect[item] == ItemId.BIG_ROOT
+    return jnp.where(root, heal * boost // 100, heal)
+
+
 def _drain(tables, state, h: _Hit) -> BattleState:
     heal = jnp.where((h.effect == _E.DRAIN) & h.effective, _percent_of_dealt(h), 0)
+    heal = big_root(tables, state, h.side, heal)
     hp = state.hp[h.side, h.user].astype(_I32)
     new = jnp.minimum(hp + heal, state.max_hp[h.side, h.user].astype(_I32))
     return state._replace(hp=state.hp.at[h.side, h.user].set(new.astype(state.hp.dtype)))
@@ -291,13 +563,50 @@ def _recoil(tables, state, h: _Hit) -> BattleState:
 def targets_user(tables: Tables, move) -> jnp.ndarray:
     """The move's decomp defender is the user itself: ``RANGE_USER``,
     ``RANGE_USER_SIDE`` and ``RANGE_FIELD`` (battle_lib.c:1665-1669), e.g. Growth,
-    Reflect, Water Sport."""
+    Reflect, Water Sport; and a non-Ghost user's Curse (``RANGE_SINGLE_TARGET`` in the
+    data): ``BattleControllerPlayer_MustSelectTarget`` (bcp.c:4344-4346) makes its range
+    ``RANGE_USER``, so the chosen target is the user (:4363-4364) and
+    ``BattleSystem_Defender``'s single-target branch returns it (battle_lib.c:1709-1718)."""
     target = tables.move_target[move]
     return (
         (target == MoveTarget.RANGE_USER)
         | (target == MoveTarget.RANGE_USER_SIDE)
         | (target == MoveTarget.RANGE_FIELD)
+        | (tables.move_effect[move] == _E.CURSE)
     )
+
+
+# Ranges whose decomp defender is the user itself in singles (``BattleSystem_Defender``,
+# battle_lib.c:1665-1683): such a move records nothing on the foe's ``move_hit``.
+SELF_DEFENDER_RANGES = (
+    MoveTarget.RANGE_SINGLE_TARGET_SPECIAL,
+    MoveTarget.RANGE_USER,
+    MoveTarget.RANGE_USER_SIDE,
+    MoveTarget.RANGE_FIELD,
+    MoveTarget.RANGE_ALLY,
+    MoveTarget.RANGE_USER_OR_ALLY,
+)
+
+
+def self_defender(tables: Tables, move) -> jnp.ndarray:
+    """The move's decomp defender is its user: a ``SELF_DEFENDER_RANGES`` range or a
+    non-Ghost Curse (``targets_user``)."""
+    move_range = tables.move_target[move]
+    in_range = jnp.isin(move_range, jnp.asarray(SELF_DEFENDER_RANGES, move_range.dtype))
+    return in_range | targets_user(tables, move)
+
+
+def protect_blocks(tables: Tables, move, unleash) -> jnp.ndarray:
+    """``BattleControllerPlayer_CheckMoveHitOverrides`` (battle_controller_player.c:
+    3001-3014): a protecting defender stops ``move`` when it has ``MOVE_FLAG_CAN_PROTECT``
+    (``MoveFlag.PROTECT``), the foe is its defender (not a ``self_defender`` move, which a
+    non-Ghost Curse is) and it is not the non-final turn of a multi-turn move
+    (``Move_IsMultiTurn``, battle_lib.c:2975-2992: of the supported moves only Bide, whose
+    final turn is the unleash, ``unleash``, when ``subscript_bide_end.s`` sets
+    ``SYSCTL_LAST_OF_MULTI_TURN`` and the defender is the last hitter, bcp.c:2696-2722)."""
+    flagged = (tables.move_flags[move] & MoveFlag.PROTECT) != 0
+    bide = tables.move_effect[move] == _E.BIDE
+    return flagged & jnp.where(bide, unleash, ~self_defender(tables, move))
 
 
 def defender_always(tables: Tables, move) -> jnp.ndarray:
@@ -412,12 +721,40 @@ def _secondary_confuse(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     return _set(state, "confusion", h.target_side, outcome.duration[h.side], cond)
 
 
+def _aqua_ring(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    cond = (h.effect == _E.AQUA_RING) & h.landed & (state.aqua_ring[h.side] == 0)
+    return _set(state, "aqua_ring", h.side, 1, cond)
+
+
 def _mud_sport(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     cond = (h.effect == _E.MUD_SPORT) & h.landed & (state.mud_sport[h.side] == 0)
     return _set(state, "mud_sport", h.side, 1, cond)
 
 
-def _eat_berry(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+SCREEN_TURNS = 5  # NUM_SCREEN_TURNS (include/constants/battle.h:142)
+
+
+def _screen(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    """Light Screen, Reflect: ``BtlCmd_TryLightScreen`` / ``TryReflect`` (script.c:4214,
+    :4257) fail when the user's side has it, else set it for ``NUM_SCREEN_TURNS``. Light
+    Clay (``HOLD_EFFECT_EXTEND_SCREENS``) is an unmapped item, so coverage refuses it."""
+    for effect, field in ((_E.LIGHT_SCREEN, "light_screen"), (_E.REFLECT, "reflect")):
+        cond = (h.effect == effect) & h.landed & (getattr(state, field)[h.side] == 0)
+        state = _set(state, field, h.side, SCREEN_TURNS, cond)
+    return state
+
+
+def _brick_break(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    """Brick Break: a direct ``BREAK_SCREENS`` effect (lib.c:1481-1510) that still applies
+    on an immune target (``MOVE_STATUS_DID_NOT_AFFECT``) but not on a miss;
+    ``BtlCmd_TryBreakScreens`` (script.c:6550) clears both screens of the defender's side."""
+    cond = (h.effect == _E.BRICK_BREAK) & h.landed
+    state = _set(state, "reflect", h.target_side, 0, cond)
+    return _set(state, "light_screen", h.target_side, 0, cond)
+
+
+def _eat_berry(tables, state, h: _Hit, outcome: Outcome) -> tuple[BattleState, jnp.ndarray]:
+    """``(state, pluck_flag)`` (``hooks.pluck_berry``)."""
     # Local import: hooks imports this module.
     from nuzline.engine.hooks import pluck_berry
 
@@ -449,6 +786,25 @@ def _foresight(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     return _set(state, "foresight", h.target_side, 1, cond)
 
 
+def _attractable(state: BattleState, side, slot, foe_side, foe_slot) -> jnp.ndarray:
+    """``BtlCmd_TryAttract`` (battle_script.c:5727-5742) succeeds for target ``side`` /
+    ``slot`` and source ``foe_side`` / ``foe_slot``: different genders, neither genderless
+    (``GENDER_NONE`` is 2, ``BattleState.gender``), and the target not in love yet."""
+    mine, theirs = state.gender[side, slot], state.gender[foe_side, foe_slot]
+    return (mine != theirs) & (mine != 2) & (theirs != 2) & (state.infatuated[side] == 0)
+
+
+def _attract(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    """Attract: the living target of the opposite gender falls in love with the user."""
+    cond = (
+        (h.effect == _E.ATTRACT)
+        & h.effective
+        & _alive(state, h.target_side, h.target)
+        & _attractable(state, h.target_side, h.target, h.side, h.user)
+    )
+    return _set(state, "infatuated", h.target_side, 1, cond)
+
+
 def _set_status(state: BattleState, side, slot, status, cond) -> BattleState:
     """``side``'s party ``slot`` gets ``status`` (counter 0) where ``cond``."""
     state = _set(state, "status", (side, slot), status, cond)
@@ -470,23 +826,48 @@ def _contact_ability(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     status = jnp.where(
         ability == AbilityId.STATIC,
         Status.PARALYSIS,
-        jnp.where(ability == AbilityId.POISON_POINT, Status.POISON, Status.NONE),
+        jnp.where(
+            ability == AbilityId.POISON_POINT,
+            Status.POISON,
+            jnp.where(ability == AbilityId.FLAME_BODY, Status.BURN, Status.NONE),
+        ),
     )
     contact = (tables.move_flags[h.move] & MoveFlag.CONTACT) != 0
+    hit = contact & h.effective & (h.dealt > 0) & _alive(state, h.side, h.user)
+    # subscript_paralyze.s:5: the attacker's own Limber (the side-effect battler is the
+    # attacker itself, so no Mold Breaker can pierce it) ends Static's paralysis silently
+    # (:_170 ends an ABILITY side effect with no message).
+    limber = (status == Status.PARALYSIS) & (state.ability[h.side, h.user] == AbilityId.LIMBER)
     cond = (
         (status != Status.NONE)
-        & contact
-        & h.effective
-        & (h.dealt > 0)
+        & hit
         & h.contact_proc
-        & _alive(state, h.side, h.user)
-        & can_have_status(state, h.side, h.user, status)
+        & ~limber
+        & can_have_status(tables, state, h.side, h.user, status)
     )
-    # The status message tags the holder's ability (``hooks.REVEALS_ON``). hooks imports
-    # this module, so the import is local.
-    from nuzline.engine.hooks import CONTACT_STATUS, reveal_ability
+    # Rough Skin (battle_lib.c:4257-4271): no roll; subscript_rough_skin.s takes
+    # BattleSystem_Divide(maxHP, 8) from the attacker (it may faint).
+    rough = (ability == AbilityId.ROUGH_SKIN) & hit
+    max_hp = state.max_hp[h.side, h.user].astype(_I32)
+    hp = state.hp[h.side, h.user].astype(_I32)
+    hurt = jnp.where(rough, jnp.maximum(hp - jnp.maximum(max_hp // 8, 1), 0), hp)
+    state = state._replace(hp=state.hp.at[h.side, h.user].set(hurt.astype(state.hp.dtype)))
+    # The status message and Rough Skin's message tag the holder's ability
+    # (``hooks.REVEALS_ON``). hooks imports this module, so the import is local.
+    from nuzline.engine.hooks import CONTACT_DAMAGE, CONTACT_STATUS, reveal_ability
 
-    state = reveal_ability(state, h.target_side, h.target, CONTACT_STATUS, cond)
+    # Cute Charm (battle_lib.c:4339-4355): the attacker not in love yet and the defender
+    # alive, then the roll and subscript_infatuate.s (BtlCmd_TryAttract fails silently).
+    charm = (
+        (ability == AbilityId.CUTE_CHARM)
+        & hit
+        & _alive(state, h.target_side, h.target)
+        & h.contact_proc
+        & _attractable(state, h.side, h.user, h.target_side, h.target)
+    )
+    state = _set(state, "infatuated", h.side, 1, charm)
+    state = reveal_ability(state, h.target_side, h.target, CONTACT_STATUS, cond | charm)
+    state = reveal_ability(state, h.target_side, h.target, CONTACT_DAMAGE, rough)
     return _set_status(state, h.side, h.user, status, cond)
 
 
@@ -516,6 +897,87 @@ def stealth_rock_damage(tables: Tables, state: BattleState, side) -> BattleState
     return state._replace(hp=state.hp.at[side, mon].set((hp - damage).astype(state.hp.dtype)))
 
 
+class MoveHit(NamedTuple):
+    """What one hit leaves for the rest of the action (``play_hit``)."""
+
+    # DEFENDER_SELF_TURN_FLAGS.focusItemActivated (bcp.c:3386-3393): set on a hit taken at
+    # full HP holding a Focus Sash; it lasts until BattleContext_Init at the action's end
+    # (bcp.c:3998, battle_lib.c:2014), so every later hit of the move is capped too.
+    focus_armed: jnp.ndarray
+    # ATTACKER_SELF_TURN_FLAGS SELF_TURN_FLAG_PLUCK_BERRY left set by a Pluck / Bug Bite
+    # whose berry did nothing for the eater (hooks.pluck_berry).
+    pluck_flag: jnp.ndarray
+
+
+def focus_sash_damage(state: BattleState, side, damage, armed) -> tuple:
+    """``(dealt, endured)`` for ``damage`` (> 0) taken by ``side``'s active Pokemon:
+    ``BattleControllerPlayer_UpdateHP`` (bcp.c:3386-3404) / ``BtlCmd_CheckHoldOnWith1HP``
+    (script.c:9098-9124). ``armed`` (the hit's focus flag, or a full-HP Focus Sash
+    holder) and ``curHP + damage <= 0`` leave it at 1 HP (``MOVE_STATUS_ENDURED_ITEM``);
+    else the damage is capped at its HP. ``subscript_move_followup_message.s:12-19``
+    then removes the item only while it still is a Focus Sash
+    (``CheckItemHoldEffect ... HOLD_EFFECT_ENDURE``)."""
+    mon = state.active[side]
+    hp = state.hp[side, mon].astype(_I32)
+    endured = armed & (damage > 0) & (damage >= hp)
+    return jnp.where(endured, hp - 1, jnp.minimum(damage, hp)), endured
+
+
+# Effects whose script sets SYSCTL_IGNORE_TYPE_CHECKS or SYSCTL_IGNORE_IMMUNITIES: Night Shade
+# and Seismic Toss (effect_script_0087.s:5), Foresight (effect_script_0113.s:6, no damage).
+# subscript_type_resist_berry.s:5 skips the berry for such a hit. tests/tools/
+# test_effect_map.py checks the list against every mapped effect script.
+IGNORES_TYPE_CHECKS = (_E.LEVEL_DAMAGE, _E.FORESIGHT)
+
+
+def resist_berry(
+    tables: Tables, state: BattleState, side, move_type, super_effective
+) -> jnp.ndarray:
+    """``side``'s active Pokemon holds a Rindo or Chilan Berry that halves the hit it takes
+    (``subscript_type_resist_berry.s``, from ``subscript_update_hp.s:9``, which runs it for
+    every damaging hit while a battler still has an action, ``waitingBattlers != 0``, and
+    no ``SYSCTL_SKIP_SPRITE_BLINK``: never for recoil, Rough Skin or the end of turn).
+    ``move_type`` is the script's ``calcTemp``: ``battleCtx->moveType`` (Hidden Power's
+    type) when it is not Normal, else ``CURRENT_MOVE_DATA.type`` (:_020-_031; Normalize,
+    which would make it Normal, is unsupported). ``super_effective`` is
+    ``MOVE_STATUS_SUPER_EFFECTIVE``. Chilan (``RESIST_ANY_NORMAL``) needs a Normal type
+    only (:_128); Rindo a super-effective hit of its type (:_156). The caller skips
+    ``IGNORES_TYPE_CHECKS`` effects (:5; OHKO moves, :6, are unsupported)."""
+    item = state.item[side, state.active[side]]
+    resisted = tables.item_param[item, 1].astype(_I32)
+    move_type = jnp.asarray(move_type, _I32)
+    halves = jnp.where(
+        resisted == RESIST_ANY_NORMAL,
+        move_type == Type.NORMAL,
+        jnp.asarray(super_effective) & (move_type == resisted),
+    )
+    return (tables.item_effect[item] == ItemId.RESIST_BERRY) & halves
+
+
+def resist_berry_damage(state: BattleState, side, damage, resisted, dealt) -> jnp.ndarray:
+    """The HP ``side``'s active Pokemon loses: where ``resisted``, the berry's
+    ``DivideVarByValue BTLVAR_HP_CALC_TEMP, 2`` (``BattleSystem_Divide``: at least 1) of
+    ``damage``, ``battleCtx->damage`` after ``UpdateHP``'s endure cap (bcp.c:3396-3404) but
+    before ``BtlCmd_UpdateHealthBarValue`` caps it at the HP (battle_script.c:1699-1704);
+    else ``dealt``. The berry is then removed (``RemoveItem BTLSCR_MSG_TEMP``)."""
+    hp = state.hp[side, state.active[side]].astype(_I32)
+    return jnp.where(resisted, jnp.minimum(divide(damage, 2), hp), dealt)
+
+
+def holds(tables: Tables, state: BattleState, side, item: ItemId) -> jnp.ndarray:
+    """``side``'s active Pokemon holds an item with effect ``item``."""
+    return tables.item_effect[state.item[side, state.active[side]]] == item
+
+
+def consume_item(state: BattleState, side, cond) -> BattleState:
+    """``BtlCmd_RemoveItem`` (battle_script.c:8972) on ``side``'s active Pokemon where
+    ``cond``: the item goes to ``item_consumed``."""
+    mon = state.active[side]
+    item = state.item[side, mon]
+    state = _set(state, "item_consumed", (side, mon), item, cond)
+    return _set(state, "item", (side, mon), 0, cond)
+
+
 def apply_move_effect(
     tables: Tables,
     state: BattleState,
@@ -529,6 +991,35 @@ def apply_move_effect(
     power_mul=10,
     struggling=False,
 ) -> BattleState:
+    """``play_hit``'s state, for a hit that is the first (or only) of its action."""
+    return play_hit(
+        tables,
+        state,
+        side,
+        move,
+        outcome,
+        hit_index,
+        connected=connected,
+        target_moved=target_moved,
+        power_mul=power_mul,
+        struggling=struggling,
+    )[0]
+
+
+def play_hit(
+    tables: Tables,
+    state: BattleState,
+    side,
+    move,
+    outcome: Outcome,
+    hit_index,
+    *,
+    connected,
+    target_moved,
+    power_mul=10,
+    struggling=False,
+    focus_armed=False,
+) -> tuple[BattleState, MoveHit]:
     """Hit ``hit_index`` (0-4, an int or a traced int32) of ``move`` by ``side``'s active Pokemon: damage with
     this hit's crit and roll, then the move's effect.
 
@@ -536,10 +1027,21 @@ def apply_move_effect(
     against a living target (any target for a ``RANGE_USER`` move). ``target_moved``:
     the target acted earlier this turn (no flinch). ``power_mul``: power scale in
     tenths (Pursuit on a switch: 20). ``struggling``: the move is Struggle, whose
-    recoil is its secondary effect. A hit beyond ``hit_count`` or after the target
-    fainted does nothing. The order is ``BattleControllerPlayer_AfterMoveMessage``'s
+    recoil is its secondary effect. ``focus_armed``: an earlier hit of this action
+    activated the defender's Focus Sash (``MoveHit``). A hit beyond ``hit_count`` or after
+    the target fainted does nothing. The order is ``BattleControllerPlayer_AfterMoveMessage``'s
     (battle_controller_player.c:3467): the move's own effect (``*_TRIGGER_SECONDARY``)
     before the contact ability (``*_TRIGGER_ABILITY``), then the defender's thaw.
+
+    Focus Sash (``HOLD_EFFECT_ENDURE``): ``BattleControllerPlayer_UpdateHP`` runs for every
+    damaging hit (``battleCtx->damage != 0``) and sets ``focusItemActivated`` when the
+    defender holds a Focus Sash at full HP (bcp.c:3391-3393; Endure, the move, is
+    unsupported); while it is set, a hit that would KO leaves 1 HP (``focus_sash_damage``)
+    and the followup message removes the sash. The flag is never cleared between hits, so
+    after a full-HP hit every later hit of the same move is capped as well (a holder at 1 HP
+    takes 0); a holder below full HP at the first hit is never protected. Bide stores the
+    capped damage (bcp.c:3407), drain and the contact ability see it. Sturdy only blocks
+    OHKO moves (``MOVE_STATUS_ONE_HIT_KO``, bcp.c:3342), none of which is supported.
     """
     side = jnp.asarray(side, _I32)
     target_side = 1 - side
@@ -562,26 +1064,65 @@ def apply_move_effect(
         outcome.roll[side, hit_index],
         power_mul,
         outcome.magnitude[side].astype(_I32),
+        outcome.present[side].astype(_I32),
     )
     target_hp = state.hp[target_side, target].astype(_I32)
     # Bide is a RANGE_USER move whose unleash hits the foe (bcp.c:2702-2713).
     hits_foe = ~targets_user(tables, move) | (tables.move_effect[move] == _E.BIDE)
-    dealt = jnp.where(landed & hits_foe, jnp.minimum(damage, target_hp), 0)
+    update_hp = landed & hits_foe & (damage > 0)  # BattleControllerPlayer_UpdateHP runs
+    sash = holds(tables, state, target_side, ItemId.FOCUS_SASH)
+    full = target_hp == state.max_hp[target_side, target].astype(_I32)
+    armed = jnp.asarray(focus_armed) | (update_hp & sash & full)
+    capped, endured = focus_sash_damage(state, target_side, damage, armed & update_hp)
+    # battleCtx->damage after the endure cap: what subscript_update_hp.s receives.
+    taken = jnp.where(endured, target_hp - 1, damage)
+    effect = tables.move_effect[move].astype(_I32)
+    move_type = move_type_of(tables, state, side, move)
+    # MOVE_STATUS_SUPER_EFFECTIVE: BattleControllerPlayer_CheckTypeChart (bcp.c:2350-2358)
+    # applies the chart to a move with power that is not RANGE_USER (Bide); its
+    # ApplyTypeMultiplier (battle_lib.c:7549-7573) sets the flag when the x2 entries outnumber
+    # the x0.5 ones, only for table power != 0 (`update`); Struggle returns before the
+    # chart (battle_lib.c:2572). Only a hit with damage reaches the berry, so no immunity.
+    super_effective = (
+        (effect != _E.BIDE)
+        & (tables.move_power[move] != 0)
+        & (move != MOVE_STRUGGLE)
+        & (
+            effectiveness(
+                tables,
+                move_type,
+                state.types[target_side, target],
+                state.foresight[target_side] != 0,
+            )
+            > 100
+        )
+    )
+    resisted = (
+        update_hp
+        & ~jnp.isin(effect, jnp.asarray(IGNORES_TYPE_CHECKS, effect.dtype))
+        & resist_berry(tables, state, target_side, move_type, super_effective)
+    )
+    dealt = jnp.where(landed & hits_foe, capped, 0)
+    dealt = resist_berry_damage(state, target_side, taken, resisted, dealt)
     state = state._replace(
         hp=state.hp.at[target_side, target].set((target_hp - dealt).astype(state.hp.dtype))
     )
-    # BattleControllerPlayer_UpdateHP (bcp.c:3407): a Biding target stores what it lost.
+    state = consume_item(state, target_side, (endured & sash) | resisted)
+    # BattleControllerPlayer_UpdateHP (bcp.c:3407): a Biding target stores battleCtx->damage,
+    # before the berry halves the HP change: what it lost, or the unhalved amount after a
+    # resist berry (a target that faints is cleared at the faint check, so the HP cap of
+    # `dealt` changes nothing there).
     biding = state.bide_turns[target_side] > 0
-    state = _set(state, "bide_damage", target_side, state.bide_damage[target_side] + dealt, biding)
+    stored = jnp.where(resisted, taken, dealt)
+    state = _set(state, "bide_damage", target_side, state.bide_damage[target_side] + stored, biding)
 
-    effect = tables.move_effect[move].astype(_I32)
     param = tables.move_param[move].astype(_I32)
     is_status = tables.move_category[move] == STATUS
     # A type-checked status move (Thunder Wave) fails on a 0x matchup.
     type_ok = (param[1] == 0) | (
         effectiveness(
             tables,
-            move_type_of(tables, state, side, move),
+            move_type,
             state.types[target_side, target],
             state.foresight[target_side] != 0,
         )
@@ -613,6 +1154,9 @@ def apply_move_effect(
         _stat_foe,
         _secondary_stat_self,
         _secondary_stat_foe,
+        _raise_all_stats,
+        _curse,
+        _recover,
         _flinch,
         _drain,
         _recoil,
@@ -621,6 +1165,10 @@ def apply_move_effect(
     for fn in (
         _status_foe,
         _secondary_status,
+        _tri_attack,
+        _fang,
+        _present,
+        _camouflage,
         _stealth_rock,
         _trap,
         _taunt,
@@ -630,13 +1178,17 @@ def apply_move_effect(
         _leech_seed,
         _water_sport,
         _mud_sport,
-        _eat_berry,
+        _aqua_ring,
+        _screen,
+        _brick_break,
         _foresight,
+        _attract,
         _bide,
         _rollout,
     ):
         state = fn(tables, state, h, outcome)
+    state, pluck_flag = _eat_berry(tables, state, h, outcome)
     state = _struggle_recoil(state, h, jnp.asarray(struggling, jnp.bool_))
     for fn in (_contact_ability, _thaw_target):
         state = fn(tables, state, h, outcome)
-    return state
+    return state, MoveHit(focus_armed=armed, pluck_flag=pluck_flag)

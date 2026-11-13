@@ -79,12 +79,14 @@ def test_coverage_checks_the_state_rank_would(capsys, monkeypatch):
     assert "has fainted" in capsys.readouterr().err
 
 
+@pytest.mark.slow
 def test_rank_prints_nine_rows(capsys):
     assert main(["rank", "--party", PARTY, "--trainer", "roark", "--n", "50"]) == 0
     out = capsys.readouterr().out
     assert out.count("%") >= 9 and "Switch" in out
 
 
+@pytest.mark.slow
 def test_rank_output_is_plain_ascii(capsys):
     # Controller ruling: printable on a default Windows console (cp1252).
     assert main(["rank", "--party", PARTY, "--trainer", "roark", "--n", "20"]) == 0
@@ -218,6 +220,7 @@ def test_cli_module_does_not_import_jax():
     assert done.returncode == 0, done.stderr
 
 
+@pytest.mark.slow
 def test_cli_solve_small(tmp_path, monkeypatch, capsys):
     import json
 
@@ -398,7 +401,7 @@ def test_save_export_round_trips(save_path, tmp_path, tables, names, capsys):
     out = tmp_path / "party.toml"
     assert main(["save", "export", str(save_path), "-o", str(out)]) == 0
     save = load_save(save_path, tables=tables, names=names)
-    assert load_party(out, names) == [m.to_spec(tables) for m in save.party]
+    assert load_party(out, names) == [m.to_spec(tables, save.trainer) for m in save.party]
     with pytest.raises(SystemExit) as e:  # -o is required
         main(["save", "export", str(save_path)])
     assert e.value.code == 2
@@ -408,6 +411,27 @@ def test_rank_with_save(save_path, capsys):
     args = ["rank", "--save", str(save_path), "--trainer", "roark", "--n", "20", "--devices", "1"]
     assert main(args) == 0
     assert "Switch" in capsys.readouterr().out
+
+
+def test_a_fight_from_a_save_resolves_the_exp_boost_with_its_trainer(
+    tmp_path, tables, names, monkeypatch
+):
+    # K3d-exp T3: the fight's player specs come from SaveMon.to_spec with the save's
+    # trainer (cli._fight), so exp_boost is resolved (100 for the save's own Pokemon).
+    from nuzline.saves.pkm import SaveMon
+    from tests.saves.synthetic import write_save
+
+    specs = []
+    to_spec = SaveMon.to_spec
+
+    def spy(self, tables, trainer=None):
+        specs.append(to_spec(self, tables, trainer))
+        return specs[-1]
+
+    monkeypatch.setattr(SaveMon, "to_spec", spy)
+    path = write_save(tmp_path, tables, names)
+    assert main(["coverage", "--save", str(path), "--trainer", "roark"]) == 0
+    assert specs and {s.exp_boost for s in specs} == {100}
 
 
 def test_save_egg_first_is_dropped(tmp_path, tables, names, capsys):
@@ -563,6 +587,7 @@ def test_cli_rank_default_budget_keeps_the_header(capsys):
     assert "P(win, 0 faints) [95% CI]" in out and "protected:" not in out
 
 
+@pytest.mark.slow
 def test_cli_solve_deaths(tmp_path, monkeypatch, capsys):
     from nuzline import cli
 
@@ -674,6 +699,7 @@ def prep_run(tables, names, tmp_path_factory):
     return code, out.getvalue(), err.getvalue(), root / "runs", save
 
 
+@pytest.mark.slow
 def test_cli_prep_small(prep_run):
     code, out, err, runs, save = prep_run
     assert code == 0
@@ -745,6 +771,7 @@ def test_cli_prep_bad_flags(prep_runs, tmp_path, tables, names, capsys, flags, s
         assert text.lower() in err.lower()
 
 
+@pytest.mark.slow
 def test_cli_prep_resume(prep_run, capsys):
     _, first, _, runs, save = prep_run
     (ckpt,) = runs.glob("prep_*.ckpt.json")
@@ -812,6 +839,8 @@ def write_trainers(dir: Path, trainers) -> None:
             "format": t.format,
             "opponent_2": t.opponent_2,
             "partner": [],
+            "terrain": t.terrain,
+            "terrains": list(t.terrains),
             "label": t.label,
             "player_starter": t.player_starter,
             "optional": t.optional,
@@ -878,6 +907,7 @@ def test_kaizo_without_tables_loads_no_jax(tmp_path):  # Review Focus 1, in a su
     assert done.returncode == 0, done.stderr
 
 
+@pytest.mark.slow
 def test_solve_record_has_game(tmp_path, capsys):
     record = json.loads(run_solve_with_record(tmp_path).read_text("utf-8"))
     assert record["game"] == "platinum_us" and "table_version" in record
@@ -976,10 +1006,25 @@ def test_kaizo_roark_refused(tmp_path, capsys, kaizo_tables, kaizo_names):  # ex
     party = _kaizo_party(tmp_path, kaizo_names)
     assert main(["coverage", "--game", "kaizo", "--party", party, "--trainer", "roark"]) == 2
     out = capsys.readouterr().out
-    assert "Battle start: Sandstorm (weather UNSUPPORTED)" in out
-    assert "no transcribed AI policy for this game" in out and "code changes unclassified" in out
-    # Final review I3: Kaizo Roark's move 205 is Accelerock; Rollout is no Kaizo move.
-    assert "move Accelerock are not transcribed" in out and "Rollout" not in out
+    # K3b1: sandstorm is modelled, so Roark's battle-start Sandstorm is no longer refused.
+    # K3c Task 2: Kaizo has an AI policy and its one AI script change is modelled. K3c Task 6
+    # registers the RISKY flag for the Kaizo policy. Only the player's side (the sample
+    # party's Leaf Guard and Wild Charge) still refuses the fight.
+    assert "Sandstorm" not in out
+    assert "no transcribed AI policy" not in out and "code changes unclassified" not in out
+    assert "AI_FLAG" not in out and "AI flag set" not in out
+    assert "Player Grotle (slot 2): Leaf Guard (ability UNSUPPORTED)" in out
+    # K3b2 Task 4: Gible's Thunder Fang (effect 275) is modelled now.
+    assert "Thunder Fang (move effect UNSUPPORTED)" not in out
+    # Final review I3: Kaizo Roark's move 205 is Accelerock; Rollout is no Kaizo move. K3c
+    # Task 3 keys the Kaizo AI's script paths by battle effect, so Accelerock (HIT) is
+    # transcribed now. K3c Task 5 transcribes the effects of all of Kaizo Roark's moves, so no
+    # "script paths" line is left, and K3c Task 6 their Expert labels, so no "Expert_" line
+    # is either. The callers' names are pinned by tests/ai/test_policy.py
+    # test_refusals_name_moves_and_items_in_the_callers_game.
+    assert "are not transcribed" not in out
+    assert "Expert_" not in out and "ai scoring" not in out
+    assert "Rollout" not in out
 
 
 def test_cli_still_imports_without_jax():
@@ -1185,6 +1230,7 @@ def test_trainers_prints_on_a_cp1252_console():
     assert done.stdout.isascii() and "246  Roark  (Leader)" in done.stdout
 
 
+@pytest.mark.slow
 def test_kaizo_rival_refusal_prints_on_a_cp1252_console(tmp_path, kaizo_tables, kaizo_names):
     party = _kaizo_party(tmp_path, kaizo_names)
     done = _cp1252_cli("coverage", "--game", "kaizo", "--party", party, "--trainer-id", "472")
@@ -1192,7 +1238,8 @@ def test_kaizo_rival_refusal_prints_on_a_cp1252_console(tmp_path, kaizo_tables, 
     out = done.stdout
     assert out.isascii() and "Pok\\xe9mon Trainer Barry #3 [Empoleon] (" in out
     assert "Support: NONE" in out and "Missing (" in out
-    assert "Pok\\xe9mon Trainer Barry #3 [Empoleon]: no transcribed AI policy" in out
+    # K3c Task 2 gave Kaizo an AI policy; Barry's CHECK_HP flag (ai_flags 279) is refused.
+    assert "Pok\\xe9mon Trainer Barry #3 [Empoleon]: AI_FLAG_CHECK_HP (AI flag UNSUPPORTED)" in out
 
 
 @pytest.mark.parametrize("which", ["kaizo_save_pre_roark_path", "kaizo_save_path"])
@@ -1206,7 +1253,7 @@ def test_kaizo_save_export_checks_kaizo_tables(which, tmp_path, request, kaizo_t
     out = tmp_path / "party.toml"
     assert main(["save", "export", "--game", "kaizo", str(path), "-o", str(out)]) == 0
     save = load_save(path, tables=kaizo_tables, names=kaizo_names, game=_KAIZO)
-    want = [m.to_spec(kaizo_tables) for m in save.party if not m.is_egg]
+    want = [m.to_spec(kaizo_tables, save.trainer) for m in save.party if not m.is_egg]
     assert load_party(out, kaizo_names) == want
 
 
@@ -1229,7 +1276,7 @@ def test_kaizo_prep_refusal_exits_2_before_the_cap(
     args = ["prep", "--game", "kaizo", "--save", path, "--trainer-id", "51", "--devices", "1"]
     assert main(args) == 2
     out = capsys.readouterr().out
-    assert "Support: NONE" in out and "no transcribed AI policy" in out
+    assert "Support: NONE" in out and "Martha: AI_FLAG_CHECK_HP (AI flag UNSUPPORTED)" in out
     assert not (tmp_path / "runs").exists()
 
 
@@ -1248,6 +1295,21 @@ def test_kaizo_pool_cap_is_never_defaulted(
         == 2
     )
     assert "Pool at level cap 12" in capsys.readouterr().out
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("save", ["kaizo_save_pre_roark_path", "kaizo_save_probe_path"])
+def test_kaizo_roark_coverage_on_the_saves_is_exact(request, save, capsys, kaizo_tables):
+    # K3c final review I-1: the milestone goal (plan K3c lines 5-7, Task 8 item 1) as a
+    # regression test. The save is read in place, never copied.
+    path = str(request.getfixturevalue(save))
+    args = ["coverage", "--game", "kaizo", "--save", path, "--trainer", "roark", "--cap", "16"]
+    assert main(args) == 0
+    out = capsys.readouterr().out
+    assert "Pool at level cap 16 (12 Pokemon):" in out
+    assert out.count("Support: EXACT") == 2, out
+    assert out.count("Missing: none") == 2, out
+    assert out.count("Sampling only: none") == 2, out
 
 
 def test_pkmn_glyphs_print_as_pkmn():  # final review M13

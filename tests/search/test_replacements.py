@@ -7,6 +7,7 @@ by hand (``at_replacement``): the terminal rule still ends a battle at a player 
 import jax
 import jax.numpy as jnp
 import numpy as np
+import pytest
 from hypothesis import HealthCheck, assume, given, settings
 from hypothesis import strategies as st
 
@@ -25,6 +26,8 @@ from nuzline.search.playout import (
 from tests.engine.helpers import roark_state
 from tests.search.fixtures import at_replacement
 from tests.strategies import supported_state
+
+pytestmark = pytest.mark.slow
 
 
 def assert_same(a, b):
@@ -146,6 +149,7 @@ def test_replacement_policy_is_legal(tables, names, data):
     assert bool(legal_replacements(s, 0)[slot])
 
 
+@pytest.mark.slow
 def test_playout_from_a_pending_state(tables, names):
     s = at_replacement(roark_state(tables, names))
     key = jax.random.PRNGKey(3)
@@ -164,6 +168,7 @@ def test_pending_state_with_both_down_resolves_in_a_playout(tables, names):
     assert int(r.deaths[0]) == 1  # the record the pending state carried
 
 
+@pytest.mark.slow
 def test_result_records_deaths_and_end(tables, names):
     s = roark_state(tables, names)
     key = jax.random.PRNGKey(1)

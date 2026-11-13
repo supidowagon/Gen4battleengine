@@ -12,6 +12,8 @@ from nuzline.search.stage_a import ActionResult, Ranking, rank_actions, wilson
 from tests.engine.helpers import roark_real_state, roark_state
 from tests.search.fixtures import at_replacement, dead_monferno
 
+pytestmark = pytest.mark.slow
+
 
 def test_wilson_bounds():
     lo, hi = wilson(50, 100)
@@ -19,6 +21,7 @@ def test_wilson_bounds():
     assert wilson(0, 10)[0] == 0.0 and wilson(10, 10)[1] == 1.0
 
 
+@pytest.mark.slow
 def test_ranking_covers_legal_actions_and_is_sorted(tables, names):
     s = roark_state(tables, names)
     r = rank_actions(tables, names, s, n=200, key=jax.random.PRNGKey(0))
@@ -26,6 +29,7 @@ def test_ranking_covers_legal_actions_and_is_sorted(tables, names):
     assert [a.p_win0 for a in r] == sorted([a.p_win0 for a in r], reverse=True)
 
 
+@pytest.mark.slow
 def test_common_random_numbers_are_deterministic(tables, names):
     s = roark_state(tables, names)
     a = rank_actions(tables, names, s, n=100, key=jax.random.PRNGKey(7))
@@ -33,6 +37,7 @@ def test_common_random_numbers_are_deterministic(tables, names):
     assert [(x.action, x.p_win0) for x in a] == [(x.action, x.p_win0) for x in b]
 
 
+@pytest.mark.slow
 def test_all_zero_flag(tables, names):
     s = roark_state(tables, names).replace_hp(0, 0, 1).with_pp(0, 0, [0, 0, 0, 0])
     s = s._replace(trapped=s.trapped.at[0].set(3))
@@ -79,6 +84,7 @@ def test_rank_reports_ladder_and_distribution(tables, names):
         assert row.distribution.n == 200
 
 
+@pytest.mark.slow
 def test_protected_death_fails_every_rung(tables, names):
     s = dead_monferno(tables, names).with_budget(3)
     monferno = int(np.flatnonzero(np.asarray(s.deaths))[0])
@@ -91,6 +97,7 @@ def test_protected_death_fails_every_rung(tables, names):
     assert any(row.p_win > 0 for row in r)
 
 
+@pytest.mark.slow
 def test_rank_at_a_pending_root(tables, names):
     s = at_replacement(roark_state(tables, names))
     r = rank_actions(tables, names, s, n=8, key=jax.random.PRNGKey(0))
@@ -103,6 +110,7 @@ def test_rank_at_a_pending_root(tables, names):
         )
 
 
+@pytest.mark.slow
 def test_budget_is_traced(tables, names, monkeypatch):
     from nuzline.search import stage_a
 
@@ -153,6 +161,7 @@ def test_stats_are_counts_over_the_shared_playouts(tables, names):
     assert (only.ci_low, only.ci_high) == wilson(0, 8)
 
 
+@pytest.mark.slow
 def test_refused_playouts_are_refused_loudly(tables, names):
     # Levitate on the player's lead is refused by the AI: the ranking must not count
     # those playouts as losses.
@@ -177,9 +186,10 @@ print(json.dumps([astuple(r) for r in ranking]))
 """
 
 
-def _rank_on_devices(devices: int) -> list:
-    """The ranking printed by ``_MULTI_DEVICE_SCRIPT`` in a subprocess with ``devices``
-    host devices (whatever ``XLA_FLAGS`` this process has)."""
+def _rank_on_devices(devices: int, script: str | None = None) -> list:
+    """The ranking printed by ``script`` (default ``_MULTI_DEVICE_SCRIPT``) in a subprocess
+    with ``devices`` host devices (whatever ``XLA_FLAGS`` this process has)."""
+    script = _MULTI_DEVICE_SCRIPT if script is None else script
     import json
     import os
     import subprocess
@@ -193,7 +203,7 @@ def _rank_on_devices(devices: int) -> list:
         "PYTHONPATH": os.pathsep.join([str(root / "src"), str(root)]),
     }
     done = subprocess.run(
-        [sys.executable, "-c", f"DEVICES = {devices}\n" + _MULTI_DEVICE_SCRIPT],
+        [sys.executable, "-c", f"DEVICES = {devices}\n" + script],
         check=False,
         cwd=root,
         env=env,
@@ -204,10 +214,45 @@ def _rank_on_devices(devices: int) -> list:
     return json.loads(done.stdout.strip().splitlines()[-1])
 
 
+@pytest.mark.slow
 def test_rank_actions_same_on_multiple_devices(tables):
     # Both runs in subprocesses, so the baseline has one device whatever XLA_FLAGS the
     # developer exported for this process.
     assert _rank_on_devices(4) == _rank_on_devices(1)
+
+
+_KAIZO_MULTI_DEVICE_SCRIPT = """
+import json, jax
+from dataclasses import astuple
+from nuzline.data.games import GAMES, KAIZO
+from nuzline.data.tables import load_names, load_tables
+from nuzline.data.trainer import IntermediateData, build_trainer_party, load_trainers
+from nuzline.engine.coverage import start_weather
+from nuzline.engine.state import make_state
+from nuzline.search.stage_a import rank_actions
+
+assert jax.device_count() == DEVICES, jax.device_count()
+d = GAMES[KAIZO]
+tables, names = load_tables(d.tables_dir), load_names(d.tables_dir)
+roark = next(x for x in load_trainers(d.intermediate_dir) if x.name == "Roark")
+party = list(build_trainer_party(roark, IntermediateData(d.intermediate_dir)))
+player = [party[2], party[5]]  # Roark's own Gible and Cranidos, as the coverage tests use
+state = make_state(
+    tables, player, party, start_weather(roark), roark.items, terrain=roark.terrain
+)
+ranking = rank_actions(tables, names, state, n=6, key=jax.random.PRNGKey(0), max_turns=3)
+print(json.dumps([astuple(r) for r in ranking]))
+"""
+
+
+@pytest.mark.slow
+def test_kaizo_rank_actions_same_on_multiple_devices(kaizo_tables):
+    """K3c final review: the device-count claim of ``rank_actions`` for the Kaizo policy,
+    whose playouts ``vmap`` the per-slot ``ai_action_distribution`` (a 1-ulp change there
+    could change ``_choose``'s exact tie). Kaizo Roark at turn 0, 1 and 3 host devices
+    (3 divides neither 6 nor a bucket, so the padding differs)."""
+    one = _rank_on_devices(1, _KAIZO_MULTI_DEVICE_SCRIPT)
+    assert one and _rank_on_devices(3, _KAIZO_MULTI_DEVICE_SCRIPT) == one
 
 
 def test_single_pokemon_ladder_is_flat(tables, names):

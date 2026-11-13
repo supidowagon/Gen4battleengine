@@ -40,6 +40,7 @@ def confuse(tables, names, s, outcome):
     return step(tables, s, A("Confusion", "Leer", s, names), outcome)
 
 
+@pytest.mark.slow
 def test_confusion_confuses_on_proc(tables, names, venonat):
     assert int(confuse(tables, names, venonat, DURATION_3).confusion[1]) == 3
     # No proc: Confusion deals its damage only.
@@ -56,6 +57,7 @@ def test_confusion_confuses_on_proc(tables, names, venonat):
     assert int(ko.hp[1, 0]) == 0 and int(ko.confusion[1]) == 0
 
 
+@pytest.mark.slow
 def test_mud_sport_halves_electric_until_switch(tables, names):
     s = roark_state(
         tables, names, player_species="Geodude", player_moves=("Mud Sport",), opp_species="Monferno"
@@ -113,6 +115,7 @@ def bite(tables, names, s):
     return step(tables, s, A("Bug Bite", "Leer", s, names), empty_outcome())
 
 
+@pytest.mark.slow
 def test_bug_bite_eats_berry(tables, names, kricketot):
     oran, sitrus = names.item("Oran Berry"), names.item("Sitrus Berry")
     s = kricketot
@@ -144,6 +147,7 @@ def test_bug_bite_eats_berry(tables, names, kricketot):
     assert int(out.hp[0, 0]) == int(s.hp[0, 0]) and int(out.item_consumed[1, 0]) == 0
 
 
+@pytest.mark.slow
 def test_side_effects_match_reference(tables, names, venonat, kricketot):
     for outcome in (DURATION_3, empty_outcome()):
         assert_matches_reference(tables, venonat, A("Confusion", "Leer", venonat, names), outcome)

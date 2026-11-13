@@ -10,7 +10,6 @@ hits, crits and damage rolls.
 from __future__ import annotations
 
 import copy
-import itertools
 import json
 import re
 from pathlib import Path
@@ -22,29 +21,35 @@ import pytest
 
 from nuzline.data.party import load_party
 from nuzline.data.trainer import IntermediateData, build_trainer_party, load_trainers
-from nuzline.engine.damage import confusion_damage, damage_for_roll
-from nuzline.engine.ids import EffectId, Stat, Status, Weather
+from nuzline.engine.damage import PRESENT_HEAL, confusion_damage, damage_for_roll
+from nuzline.engine.ids import AbilityId, EffectId, MoveFlag, Stat, Status, Weather
+from nuzline.engine.levelup import GIVE_UP, advance_learns, learn
 from nuzline.engine.order import (
     MOVE_ACTIONS,
     action_order,
     effective_speed,
     is_switch,
-    selected_move,
+    used_move,
 )
 from nuzline.engine.outcome import Outcome, empty_outcome
 from nuzline.engine.state import BattleState
 from nuzline.engine.step import needs_replacement, replace, step
+from tests.test_golden import replay_mismatches
 from tools.trace_to_state import (
-    COMPARED_FIELDS,
     INTERMEDIATE,
+    MOVE_STATUS_FAILED,
     MOVE_STATUS_MISSED,
+    MOVE_STATUS_PROTECTED,
     STAGE_ORDER,
     AmbiguousTrace,
+    TraceError,
     TraceMismatch,
     _fields,
+    _spec,
     _Turn,
     bundle_trace,
     convert,
+    convert_bundle,
     decode_status,
     decode_weather,
     initial_state,
@@ -59,6 +64,7 @@ LUA = ROOT / "tools" / "trace_battle.lua"
 DECOMP = ROOT / "external" / "pokeplatinum"
 ROARK_ID = 246
 EMBER, MACH_PUNCH, BUBBLE, POUND = 2, 3, 2, 0  # move slots of Monferno / Prinplup
+LEER = 1  # Monferno's slot 1 (Present in test_present_damage_and_heal_are_inferred)
 TO_PRINPLUP = MOVE_ACTIONS + 1
 STEALTH_ROCK, ROCK_THROW, SCREECH = 0, 1, 2  # Geodude / Onix move slots
 POTION = 10  # the opponent's bag slot 0
@@ -157,13 +163,18 @@ def _move_events(tables, state, actions, outcome, turn) -> list[dict]:
             stages[side] = [6] * 8
     hp = {(side, active[side]): int(state.hp[side, active[side]]) for side in (0, 1)}
     confusion = [int(state.confusion[0]), int(state.confusion[1])]
+    in_love = [int(state.infatuated[0]), int(state.infatuated[1])]
+    gender = [int(state.gender[side, active[side]]) for side in (0, 1)]
+    flinched = [False, False]
+    protecting = [False, False]
     events = []
-    for side in np.asarray(action_order(tables, state, jnp.asarray(actions), outcome)).tolist():
+    order = np.asarray(action_order(tables, state, jnp.asarray(actions), outcome)).tolist()
+    for position, side in enumerate(order):
         if actions[side] >= MOVE_ACTIONS:
             continue
         user, target = (side, active[side]), (1 - side, active[1 - side])
-        if hp[user] == 0:
-            continue  # fainted before moving
+        if hp[user] == 0 or flinched[side]:
+            continue  # fainted, or flinched by an earlier Thunder Fang, before moving
         hit_state = state._replace(active=jnp.asarray(active, jnp.int8))
         confusion[side] = max(confusion[side] - 1, 0)
         if confusion[side] > 0 and int(outcome.confusion_hit[side]):
@@ -175,8 +186,28 @@ def _move_events(tables, state, actions, outcome, turn) -> list[dict]:
             continue
         if int(outcome.full_para[side]):
             continue  # fully paralyzed before moving
-        move = int(selected_move(tables, state, side, actions[side])[0])
+        if in_love[side] and int(outcome.infatuation[side]):
+            continue  # immobilized by love: no attack message, no record
+        # moveCur: Nature Power's records name its called move (GoToMoveScript).
+        move = int(used_move(tables, state, side, actions[side]))
+        if int(tables.move_effect[move]) == EffectId.PROTECT:
+            # BtlCmd_TryProtection: the first actor, with a chain of 0 or a passing roll.
+            count = int(state.protect_count[side])
+            ok = position == 0 and (count == 0 or int(outcome.protect[side]) != 0)
+            protecting[side] = ok
+            flags = 0 if ok else MOVE_STATUS_FAILED
+            events.append(
+                {"kind": "move_end", "turn": turn, "attacker": side, "move": move, "flags": flags}
+            )
+            continue
         missed = int(outcome.hit[side, 0]) == 0
+        if protecting[1 - side] and int(tables.move_flags[move]) & MoveFlag.PROTECT:
+            # CheckMoveHitOverrides: MOVE_STATUS_PROTECTED, no hit record.
+            flags = MOVE_STATUS_PROTECTED | (MOVE_STATUS_MISSED if missed else 0)
+            events.append(
+                {"kind": "move_end", "turn": turn, "attacker": side, "move": move, "flags": flags}
+            )
+            continue
         events.append(
             {
                 "kind": "move_end",
@@ -186,19 +217,37 @@ def _move_events(tables, state, actions, outcome, turn) -> list[dict]:
                 "flags": MOVE_STATUS_MISSED if missed else 0,
             }
         )
-        if not missed and int(tables.move_effect[move]) == EffectId.CONFUSE_FOE:
+        confuses = int(tables.move_effect[move]) == EffectId.CONFUSE_FOE or (
+            int(tables.move_effect[move]) == EffectId.SECONDARY_CONFUSE
+            and int(outcome.secondary[side, 0])
+        )
+        if not missed and confuses:
             confusion[1 - side] = confusion[1 - side] or int(outcome.duration[side])
+        lovers = gender[0] != gender[1] and 2 not in gender
+        if not missed and int(tables.move_effect[move]) == EffectId.ATTRACT and lovers:
+            in_love[1 - side] = 1  # BtlCmd_TryAttract (a repeat changes nothing)
         if missed or int(tables.move_power[move]) == 0:
+            continue
+        present = int(outcome.present[side])
+        if int(tables.move_effect[move]) == EffectId.PRESENT and present == PRESENT_HEAL:
+            # The heal path runs no CalcDamage: no UPDATE_HP damage, so no hit record.
+            heal = max(int(state.max_hp[target]) // 4, 1)
+            hp[target] = min(hp[target] + heal, int(state.max_hp[target]))
             continue
         crit = int(outcome.crit[side, 0])
         damage = int(
-            damage_for_roll(tables, hit_state, side, move, crit != 0, outcome.roll[side, 0])
+            damage_for_roll(
+                tables, hit_state, side, move, crit != 0, outcome.roll[side, 0], present=present
+            )
         )
         events.insert(
             len(events) - 1,
             _hit_event(state, turn, side, 1 - side, move, damage, crit, active, hp, stages),
         )
         hp[target] = max(hp[target] - damage, 0)
+        fang = int(tables.move_effect[move]) == EffectId.FANG_PARALYZE_FLINCH
+        if fang and damage > 0 and hp[target] > 0 and int(outcome.fang_flinch[side]):
+            flinched[1 - side] = True
     return events
 
 
@@ -221,15 +270,29 @@ def _hit_event(state, turn, attacker, defender, move, damage, crit, active, hp, 
     }
 
 
-def _engine_trace(tables, names, script=SCRIPT, leads=(0, 0), party=PARTY):
-    """(raw records, engine states before each turn and after the last)."""
+def _engine_trace(tables, names, script=SCRIPT, leads=(0, 0), party=PARTY, start=None):
+    """(raw records, engine states before each turn and after the last). A script entry
+    is ``(actions, outcome)``, ``(actions, outcome, player_slots)`` or ``(actions, outcome,
+    player_slots, learn_choices)``: the slots the player sends in, in order, for a fainted
+    active Pokemon at the turn's end, and the answers to the turn's learn-move prompts
+    (``levelup.learn``, after ``advance_learns``, before the replacements). ``start`` edits
+    the turn-0 state (fields the first record carries, such as HP and status)."""
     trainer = next(t for t in load_trainers(INTERMEDIATE) if t.id == ROARK_ID)
     player = load_party(party, names)
     state = initial_state(tables, player, trainer, leads)
+    if start is not None:
+        state = start(state)
     records, states = [_turn_record(state, 0)], [state]
-    for turn, (actions, outcome) in enumerate(script):
+    for turn, (actions, outcome, *rest) in enumerate(script):
+        sent, learns = (*rest, (), ())[:2]
         records += _move_events(tables, state, actions, outcome, turn)
         state = _step(tables, state, jnp.asarray(actions, jnp.int32), outcome)
+        state = advance_learns(tables, state)
+        for choice in learns:
+            state = learn(tables, state, choice)
+        for slot in sent:
+            assert needs_replacement(state)[0]
+            state = replace(tables, state, 0, slot)
         if needs_replacement(state)[1]:
             slot = int(np.flatnonzero(np.asarray(state.hp[1]) > 0)[0])
             state = replace(tables, state, 1, slot)
@@ -251,11 +314,28 @@ def _bundle(tmp_path: Path, names, records, party=PARTY) -> Path:
     return out
 
 
+V1_FORMAT = "nuzline-golden-trace/1"
+V2_PARTY_KEYS = ("exp", "exp_boost", "pokerus", "friend_bonus")
+
+
+def _v1_bundle(path: Path) -> Path:
+    """The bundle at ``path`` rewritten as ``nuzline-golden-trace/1`` wrote it: that
+    format's tag, and party entries without the keys ``/2`` added."""
+    bundle = json.loads(path.read_text(encoding="utf-8"))
+    bundle["format"] = V1_FORMAT
+    for mon in bundle["party"]:
+        for key in V2_PARTY_KEYS:
+            mon.pop(key, None)
+    path.write_text(json.dumps(bundle), encoding="utf-8")
+    return path
+
+
 @pytest.fixture(scope="module")
 def engine_trace(tables, names):
     return _engine_trace(tables, names)
 
 
+@pytest.mark.slow
 def test_paralysis_inflicted_earlier_in_the_turn_can_fully_paralyze(tables, names, tmp_path):
     records, states = _engine_trace(tables, names, PARA_SCRIPT, (BUDEW, 0))
     assert int(states[1].status[1, 0]) == Status.PARALYSIS
@@ -296,6 +376,7 @@ CONFUSION_SCRIPT = [
 ]
 
 
+@pytest.mark.slow
 def test_a_confusion_self_hit_is_inferred(tables, names, tmp_path):
     party = _confusion_party(tmp_path)
     records, states = _engine_trace(tables, names, CONFUSION_SCRIPT, party=party)
@@ -316,6 +397,363 @@ def test_a_confusion_self_hit_is_inferred(tables, names, tmp_path):
     assert [int(c) for c in turns[1].outcome.confusion_hit] == [0, 0]
     rolls = [r for _, r in turns[0].roll_candidates[(1, 0)]]
     assert 6 in rolls and int(turns[0].outcome.roll[1, 0]) == min(rolls)
+
+
+THUNDER_FANG = 1  # Monferno's slot 1 in the fang party (Leer replaced)
+CRANIDOS = 2  # Roark's party slot
+
+
+def test_a_thunder_fang_flinch_is_inferred(tables, names, tmp_path):
+    # Monferno (faster) bites Cranidos: the flinch shows only as Cranidos's missing move,
+    # so the converter tries both fang_flinch values (tools/trace_to_state.py variants).
+    text = PARTY.read_text(encoding="utf-8").replace(
+        '"Scratch", "Leer",', '"Scratch", "Thunder Fang",', 1
+    )
+    party = tmp_path / "fang_party.toml"
+    party.write_text(text, encoding="utf-8")
+    script = [
+        ((THUNDER_FANG, 0), _outcome(p_roll=5)._replace(fang_flinch=jnp.asarray([1, 0], jnp.int8))),
+        ((THUNDER_FANG, 0), _outcome(p_roll=7, o_roll=2)),
+    ]
+    records, states = _engine_trace(tables, names, script, (0, CRANIDOS), party)
+    moved = [(r["turn"], r["attacker"]) for r in records if r["kind"] == "move_end"]
+    assert moved == [(0, 0), (1, 0), (1, 1)]
+    turns = convert(_bundle(tmp_path, names, records, party), tables, names)
+    assert len(turns) == len(states)
+    for i, (turn, expected) in enumerate(zip(turns, states)):
+        for name in BattleState._fields:
+            assert np.array_equal(getattr(turn.state, name), getattr(expected, name)), (
+                f"turn {i} field {name}"
+            )
+        assert turn.mismatched == ()
+    assert [int(f) for f in turns[0].outcome.fang_flinch] == [1, 0]
+    assert [int(f) for f in turns[1].outcome.fang_flinch] == [0, 0]
+
+
+def test_present_damage_and_heal_are_inferred(tables, names, tmp_path):
+    # Monferno's Present (in Leer's slot) on Geodude: power 40 (present 0), then the heal
+    # (no hit record: the converter replays present 0 and the heal against the HP gain),
+    # then power 80 (present 1).
+    text = PARTY.read_text(encoding="utf-8").replace(
+        '"Scratch", "Leer",', '"Scratch", "Present",', 1
+    )
+    party = tmp_path / "present_party.toml"
+    party.write_text(text, encoding="utf-8")
+
+    def present(k, **hits):
+        return _outcome(**hits)._replace(present=jnp.asarray([k, 0], jnp.int8))
+
+    script = [
+        ((LEER, ROCK_THROW), present(0, p_roll=5, o_roll=3)),
+        ((LEER, ROCK_THROW), present(PRESENT_HEAL, o_roll=1)),
+        ((LEER, ROCK_THROW), present(1, p_roll=9, o_roll=0)),
+    ]
+    records, states = _engine_trace(tables, names, script, (0, 0), party)
+    hits = [(r["turn"], r["attacker"]) for r in records if r["kind"] == "hit"]
+    assert hits == [(0, 0), (0, 1), (1, 1), (2, 0), (2, 1)]
+    geodude = [int(s.hp[1, 0]) for s in states]
+    assert geodude[0] > geodude[1] < geodude[2] > geodude[3]  # hurt, healed, hurt
+    turns = convert(_bundle(tmp_path, names, records, party), tables, names)
+    assert len(turns) == len(states)
+    for i, (turn, expected) in enumerate(zip(turns, states)):
+        for name in BattleState._fields:
+            assert np.array_equal(getattr(turn.state, name), getattr(expected, name)), (
+                f"turn {i} field {name}"
+            )
+        assert turn.mismatched == ()
+    assert [int(t.outcome.present[0]) for t in turns[:3]] == [0, PRESENT_HEAL, 1]
+
+
+def test_nature_power_tri_attack_status_is_inferred(tables, names, tmp_path):
+    # Monferno's Nature Power (in Leer's slot) on Roark's BUILDING terrain calls Tri Attack:
+    # its hit records name Tri Attack (moveCur), its PP is Nature Power's. Turn 0's secondary
+    # procs and paralyzes Geodude (Outcome.tri_attack 2); turn 1's does not.
+    text = PARTY.read_text(encoding="utf-8").replace(
+        '"Scratch", "Leer",', '"Scratch", "Nature Power",', 1
+    )
+    party = tmp_path / "nature_power_party.toml"
+    party.write_text(text, encoding="utf-8")
+
+    def tri(k, **hits):
+        return _outcome(**hits)._replace(tri_attack=jnp.asarray([k, 0], jnp.int8))
+
+    script = [
+        ((LEER, ROCK_THROW), tri(2, p_roll=5, p_secondary=1, o_roll=3)),
+        ((LEER, ROCK_THROW), tri(2, p_roll=9, o_roll=1)),  # no proc: the 2 is unread
+    ]
+    records, states = _engine_trace(tables, names, script, (0, 0), party)
+    hits = [r["move"] for r in records if r["kind"] == "hit" and r["attacker"] == 0]
+    assert hits == [names.move("Tri Attack")] * 2
+    assert int(states[1].status[1, 0]) == Status.PARALYSIS
+    turns = convert(_bundle(tmp_path, names, records, party), tables, names)
+    assert len(turns) == len(states)
+    for i, (turn, expected) in enumerate(zip(turns, states)):
+        for name in BattleState._fields:
+            assert np.array_equal(getattr(turn.state, name), getattr(expected, name)), (
+                f"turn {i} field {name}"
+            )
+        assert turn.mismatched == ()
+    assert int(turns[0].outcome.tri_attack[0]) == 2
+    assert int(turns[0].outcome.secondary[0, 0]) == 1
+    # Turn 1 did not proc: the unread status draw is recorded as 0 (docs/tracing.md).
+    assert int(turns[1].outcome.secondary[0, 0]) == 0
+    assert int(turns[1].outcome.tri_attack[0]) == 0
+
+
+def test_protect_rolls_are_inferred(tables, names, tmp_path):
+    # Monferno's Protect (in Leer's slot) against Geodude's Rock Throw: a sure first Protect
+    # blocks it, the chained one fails its 1/2 roll (MOVE_STATUS_FAILED in the move_end
+    # record) and Rock Throw lands, the chain restarts at 0 and blocks again, and Ember
+    # resets it. The converter reads the roll off the move_end flags.
+    text = PARTY.read_text(encoding="utf-8").replace(
+        '"Scratch", "Leer",', '"Scratch", "Protect",', 1
+    )
+    party = tmp_path / "protect_party.toml"
+    party.write_text(text, encoding="utf-8")
+
+    def protect(k, **hits):
+        return _outcome(**hits)._replace(protect=jnp.asarray([k, 1], jnp.int8))
+
+    script = [
+        ((LEER, ROCK_THROW), protect(1, o_roll=3)),
+        ((LEER, ROCK_THROW), protect(0, o_roll=3)),
+        ((LEER, ROCK_THROW), protect(0, o_roll=3)),
+        ((EMBER, ROCK_THROW), protect(1, p_roll=4, o_roll=3)),
+    ]
+    records, states = _engine_trace(tables, names, script, (0, 0), party)
+    hits = [(r["turn"], r["attacker"]) for r in records if r["kind"] == "hit"]
+    assert hits == [(1, 1), (3, 0), (3, 1)]
+    assert [int(s.protect_count[0]) for s in states] == [0, 1, 0, 1, 0]
+    turns = convert(_bundle(tmp_path, names, records, party), tables, names)
+    assert len(turns) == len(states)
+    for i, (turn, expected) in enumerate(zip(turns, states)):
+        for name in BattleState._fields:
+            assert np.array_equal(getattr(turn.state, name), getattr(expected, name)), (
+                f"turn {i} field {name}"
+            )
+        assert turn.mismatched == ()
+    assert [int(t.outcome.protect[0]) for t in turns[:3]] == [1, 0, 1]
+
+
+def test_infatuation_rolls_are_inferred(tables, names, tmp_path):
+    # Monferno's Attract (in Leer's slot, its gender set opposite to Geodude's) makes the
+    # slower Geodude fall in love; it is immobilized on that turn (no PP spent, no record),
+    # moves on the next and is immobilized again on the third. The trace has no volatile
+    # bits: the converter replays both values of the roll (the engine carries `infatuated`).
+    trainer = next(t for t in load_trainers(INTERMEDIATE) if t.id == ROARK_ID)
+    geodude = build_trainer_party(trainer, IntermediateData(INTERMEDIATE))[0]
+    assert geodude.gender != 2
+    mine = "female" if geodude.gender == 0 else "male"
+    text = PARTY.read_text(encoding="utf-8").replace(
+        '"Scratch", "Leer",', '"Scratch", "Attract",', 1
+    )
+    text = text.replace('gender = "male"', f'gender = "{mine}"', 1)
+    party = tmp_path / "attract_party.toml"
+    party.write_text(text, encoding="utf-8")
+
+    def love(k, **hits):
+        return _outcome(**hits)._replace(infatuation=jnp.asarray([0, k], jnp.int8))
+
+    script = [
+        ((LEER, ROCK_THROW), love(1)),
+        ((EMBER, ROCK_THROW), love(0, p_roll=4, o_roll=3)),
+        ((EMBER, ROCK_THROW), love(1, p_roll=5)),
+    ]
+    records, states = _engine_trace(tables, names, script, (0, 0), party)
+    assert [int(s.infatuated[1]) for s in states] == [0, 1, 1, 1]
+    assert int(states[-1].hp[1, 0]) > 0
+    hits = [(r["turn"], r["attacker"]) for r in records if r["kind"] == "hit"]
+    assert hits == [(1, 0), (1, 1), (2, 0)]
+    pp = [int(s.pp[1, 0, ROCK_THROW]) for s in states]
+    assert pp[0] == pp[1] == pp[2] + 1 == pp[3] + 1
+    turns = convert(_bundle(tmp_path, names, records, party), tables, names)
+    assert len(turns) == len(states)
+    for i, (turn, expected) in enumerate(zip(turns, states)):
+        for name in BattleState._fields:
+            assert np.array_equal(getattr(turn.state, name), getattr(expected, name)), (
+                f"turn {i} field {name}"
+            )
+        assert turn.mismatched == ()
+    assert [int(t.outcome.infatuation[1]) for t in turns[:3]] == [1, 0, 1]
+
+
+def _roar_party(tmp_path: Path, level: int) -> Path:
+    """The golden party with Monferno's Leer replaced by Roar, at ``level``."""
+    text = PARTY.read_text(encoding="utf-8").replace('"Scratch", "Leer",', '"Scratch", "Roar",', 1)
+    text = text.replace("level = 14", f"level = {level}", 1)
+    party = tmp_path / "roar_party.toml"
+    party.write_text(text, encoding="utf-8")
+    return party
+
+
+def test_roar_draws_are_inferred(tables, names, tmp_path):
+    # Monferno (L10, below Geodude's L12) Roars in Leer's slot after Geodude's Rock Throw
+    # (which misses): turn 0's level check fails, turn 1's passes and drags Cranidos in (rank 1
+    # of Onix, Cranidos); turn 2 Embers it. The draws show only as the foe's active slot.
+    party = _roar_party(tmp_path, 10)
+
+    def roar(level, target, **hits):
+        o = _outcome(o_hit=0, **hits)
+        return o._replace(
+            roar_level=jnp.asarray([level, 0], jnp.int8),
+            roar_target=jnp.asarray([target, 0], jnp.int8),
+        )
+
+    script = [
+        ((LEER, ROCK_THROW), roar(0, 0)),
+        ((LEER, ROCK_THROW), roar(1, 1)),
+        ((EMBER, ROCK_THROW), roar(0, 0, p_roll=4)),
+    ]
+    records, states = _engine_trace(tables, names, script, (0, 0), party)
+    assert [int(s.active[1]) for s in states] == [0, 0, 2, 2]
+    turns = convert(_bundle(tmp_path, names, records, party), tables, names)
+    assert len(turns) == len(states)
+    for i, (turn, expected) in enumerate(zip(turns, states)):
+        for name in BattleState._fields:
+            assert np.array_equal(getattr(turn.state, name), getattr(expected, name)), (
+                f"turn {i} field {name}"
+            )
+        assert turn.mismatched == ()
+    assert [int(t.outcome.roar_level[0]) for t in turns[:2]] == [0, 1]
+    assert int(turns[1].outcome.roar_target[0]) == 1
+
+
+def test_a_dragged_side_may_have_chosen_any_action(tables, names, tmp_path):
+    # Roar against Roar: the faster Monferno drags Geodude out before it moves. Geodude's
+    # active slot changed with no PP drop: a drag, not a switch, so every legal action of
+    # its side is a candidate (its own move never ran, or a switch the drag undid).
+    party = _roar_party(tmp_path, 14)
+    trainer = next(t for t in load_trainers(INTERMEDIATE) if t.id == ROARK_ID)
+    state = initial_state(tables, load_party(party, names), trainer, (0, 0))
+    roar = names.move("Roar")
+    state = state._replace(moves=state.moves.at[1, 0, 0].set(roar), pp=state.pp.at[1, 0, 0].set(20))
+    o = _outcome()
+    after = _step(tables, state, jnp.asarray([LEER, 0], jnp.int32), o)
+    assert int(after.active[1]) == 1 and int(after.pp[1, 0, 0]) == 20
+    turn = _Turn(tables, state, _fields(_turn_record(after, 1)), [], 0)
+    assert turn.action_choices(0) == [LEER]
+    choices = turn.action_choices(1)
+    assert 0 in choices and MOVE_ACTIONS + 2 in choices
+    # Without the foe's Roar the same change is the side's own switch.
+    plain = _Turn(
+        tables, state._replace(moves=state.moves.at[0, 0, LEER].set(1)), turn.after, [], 0
+    )
+    assert plain.action_choices(1) == [MOVE_ACTIONS + 1]
+
+
+def test_a_switch_undone_by_a_drag_is_inferred(tables, names, tmp_path):
+    # Roark switches Geodude out for Onix, then Monferno's Roar drags Geodude back (rank 0 of
+    # Geodude, Cranidos): the next record shows Geodude active, no PP drop. The switch must be
+    # a candidate although the active slot looks unchanged (reviewer probe rv11/trace_probe.py).
+    party = _roar_party(tmp_path, 14)
+    roar = _outcome()._replace(roar_target=jnp.asarray([0, 0], jnp.int8))
+    script = [
+        ((LEER, MOVE_ACTIONS + 1), roar),
+        ((EMBER, ROCK_THROW), _outcome(p_roll=4, o_hit=0)),
+    ]
+    records, states = _engine_trace(tables, names, script, (0, 0), party)
+    assert [int(s.active[1]) for s in states] == [0, 0, 0]
+    turns = convert(_bundle(tmp_path, names, records, party), tables, names)
+    assert len(turns) == len(states)
+    for i, (turn, expected) in enumerate(zip(turns, states)):
+        for name in BattleState._fields:
+            assert np.array_equal(getattr(turn.state, name), getattr(expected, name)), (
+                f"turn {i} field {name}"
+            )
+        assert turn.mismatched == ()
+    # A switch (to Onix, or equally to Cranidos: both replay to the same state) then the drag.
+    assert MOVE_ACTIONS + 1 <= turns[0].actions[1] < MOVE_ACTIONS + 6
+
+
+GROWL = 1  # Prinplup's slot 1
+
+
+@pytest.mark.slow
+def test_quick_claw_rolls_are_inferred(tables, names, tmp_path, monkeypatch):
+    # Prinplup (Quick Claw) leads against a Geodude made faster; its Growl lowers Geodude's
+    # Attack before Rock Throw only when the claw moves it first, which the replayed damage
+    # shows. The trace records no speedRand: the converter fits each turn's start qc_roll
+    # (turn 0: the battle-start draw; later: the previous turn's Outcome.quick_claw, written
+    # back). Battle start 1 (Growl first, Rock Throw at -1), turn 0's draw 1 (Growl first
+    # again, Rock Throw at -2), turn 1's draw 0 (the last: never read). Turn 0 cannot tell
+    # its own draw, so turn 1's fit writes it back.
+    import sys
+
+    import tools.trace_to_state as ttt
+
+    text = PARTY.read_text(encoding="utf-8")
+    plain = '"Pound", "Growl", "Bubble", "Water Sport"]\nitem = ""'
+    text = text.replace(plain, plain[:-2] + '"Quick Claw"', 1)
+    assert 'item = "Quick Claw"' in text
+    party = tmp_path / "claw_party.toml"
+    party.write_text(text, encoding="utf-8")
+    built = ttt.initial_state
+
+    def faster_geodude(*args, **kwargs):
+        s = built(*args, **kwargs)
+        return s._replace(stats=s.stats.at[1, 0, Stat.SPE - 1].set(200))
+
+    def battle_start(*args, **kwargs):
+        s = faster_geodude(*args, **kwargs)
+        return s._replace(qc_roll=s.qc_roll.at[0].set(1))
+
+    monkeypatch.setattr(sys.modules[__name__], "initial_state", battle_start)
+    monkeypatch.setattr(ttt, "initial_state", faster_geodude)
+
+    def claw(k):
+        return _outcome()._replace(quick_claw=jnp.asarray([k, 0], jnp.int8))
+
+    script = [((GROWL, ROCK_THROW), claw(k)) for k in (1, 0)]
+    records, states = _engine_trace(tables, names, script, (1, 0), party)
+    assert [int(s.qc_roll[0]) for s in states] == [1, 1, 0]
+    assert [int(s.stages[1, Stat.ATK]) for s in states] == [0, -1, -2]
+    turns = convert(_bundle(tmp_path, names, records, party), tables, names)
+    assert len(turns) == len(states)
+    for i, (turn, expected) in enumerate(zip(turns, states)):
+        for name in BattleState._fields:
+            assert np.array_equal(getattr(turn.state, name), getattr(expected, name)), (
+                f"turn {i} field {name}"
+            )
+        assert turn.mismatched == ()
+    assert [int(t.outcome.quick_claw[0]) for t in turns[:2]] == [1, 0]
+
+
+def test_protect_roll_ignores_stale_move_end_records(tables, names, tmp_path):
+    # tools/trace_battle.lua writes a move_end at every MOVE_END with the context's attacker
+    # and moveCur, which a switch or bag item leaves stale. A stale record of the Protect
+    # user's side but another move (here before Protect's own) must not decide the roll; a
+    # stale one naming Protect with the other flag makes the match ambiguous: it raises.
+    text = PARTY.read_text(encoding="utf-8").replace(
+        '"Scratch", "Leer",', '"Scratch", "Protect",', 1
+    )
+    party = tmp_path / "protect_party.toml"
+    party.write_text(text, encoding="utf-8")
+    protect = names.move("Protect")
+    script = [
+        ((LEER, ROCK_THROW), _outcome(o_roll=3)._replace(protect=jnp.asarray([1, 1], jnp.int8))),
+        ((LEER, ROCK_THROW), _outcome(o_roll=3)._replace(protect=jnp.asarray([0, 1], jnp.int8))),
+    ]
+    records, states = _engine_trace(tables, names, script, (0, 0), party)
+
+    def with_stale(move, flags):
+        out = copy.deepcopy(records)
+        own = next(
+            i
+            for i, r in enumerate(out)
+            if r["kind"] == "move_end" and r["turn"] == 1 and r["attacker"] == 0
+        )
+        assert out[own]["flags"] & MOVE_STATUS_FAILED  # the failed 1/2 roll
+        stale = {"kind": "move_end", "turn": 1, "attacker": 0, "move": move, "flags": flags}
+        return out[:own] + [stale] + out[own:]
+
+    scratch = names.move("Scratch")
+    turns = convert(_bundle(tmp_path, names, with_stale(scratch, 0), party), tables, names)
+    assert [int(t.outcome.protect[0]) for t in turns[:2]] == [1, 0]
+    for turn, expected in zip(turns, states):
+        assert np.array_equal(np.asarray(turn.state.hp), np.asarray(expected.hp))
+        assert turn.mismatched == ()
+    with pytest.raises(TraceMismatch, match="disagree on MOVE_STATUS_FAILED"):
+        convert(_bundle(tmp_path, names, with_stale(protect, 0), party), tables, names)
 
 
 def _lua_table(name: str, path: Path = LUA) -> dict[str, int]:
@@ -369,14 +807,35 @@ def test_a_status_shown_after_the_turn_is_enumerated(tables, names, status, fiel
     assert _variant_values(tables, state, after, (EMBER, ROCK_THROW), field, (1,)) == {0, 1}
 
 
+@pytest.mark.parametrize("ability", [AbilityId.CUTE_CHARM, AbilityId.FLAME_BODY])
+@pytest.mark.parametrize("where", ["active", "switch_in"])
+def test_contact_ability_rolls_are_enumerated(tables, names, ability, where):
+    # The player's defender with a rolled contact ability: the start-of-turn active, or the
+    # Pokemon switched in (Prinplup) that Geodude's move then hits.
+    state = _engine_trace(tables, names, [])[1][0]
+    after = _fields(_turn_record(state, 1))
+    slot = 0 if where == "active" else 1
+    actions = (EMBER, ROCK_THROW) if where == "active" else (TO_PRINPLUP, ROCK_THROW)
+    moved = [{"kind": "move_end", "turn": 0, "attacker": 1, "move": 0, "flags": 0}]
+
+    def values(s):
+        inference = _Turn(tables, s, after, moved, 0)
+        base = {name: np.asarray(v).copy() for name, v in empty_outcome()._asdict().items()}
+        return {int(o["contact_proc"][0, 0]) for o in inference.variants(actions, base)}
+
+    plain = state._replace(ability=state.ability.at[0, :].set(AbilityId.NONE))
+    assert values(plain) == {0}
+    assert values(plain._replace(ability=plain.ability.at[0, slot].set(ability))) == {0, 1}
+
+
 def test_an_end_of_turn_speed_tie_after_a_switch_is_enumerated(tables, names):
     state = _engine_trace(tables, names, [])[1][0]
     after = _fields(_turn_record(state, 1))
-    tie = int(effective_speed(state, 1))
+    tie = int(effective_speed(tables, state, 1))
     stats = np.asarray(state.stats).copy()
     stats[0, 1, Stat.SPE - 1] = tie  # Prinplup, switched in, ties Geodude
     state = state._replace(stats=jnp.asarray(stats))
-    assert int(effective_speed(state, 0)) != tie
+    assert int(effective_speed(tables, state, 0)) != tie
     assert _variant_values(tables, state, after, (TO_PRINPLUP, ROCK_THROW), "end_speed_tie") == {
         0,
         1,
@@ -411,15 +870,16 @@ def test_synthetic_trace_round_trips(tables, names, engine_trace, tmp_path):
     assert turns[-1].actions == (-1, -1)
 
 
-def test_recovered_turns_replay_like_the_golden_test(tables, names, engine_trace, tmp_path):
+def test_a_version_1_bundle_replays_through_the_golden_test(tables, names, engine_trace, tmp_path):
+    # The vanilla regression of tests/test_golden.py on a synthetic nuzline-golden-trace/1
+    # bundle: it runs in every suite, while tests/golden/roark_01.json may be absent.
     records, _ = engine_trace
-    turns = trace_to_states(_bundle(tmp_path, names, records), tables, names)
-    for (before, actions, outcome), (after, _, _) in itertools.pairwise(turns):
-        out = _step(tables, before, actions, outcome)
-        if needs_replacement(out)[1]:
-            out = replace(tables, out, 1, int(after.active[1]))
-        for name in COMPARED_FIELDS:
-            assert getattr(out, name).tolist() == getattr(after, name).tolist(), name
+    path = _v1_bundle(_bundle(tmp_path, names, records))
+    turns = trace_to_states(path, tables, names)
+    assert len(turns) == len(SCRIPT) + 1
+    assert replay_mismatches(tables, turns) == []
+    assert [t.player_slot for t in turns] == [-1] * len(turns)
+    assert all(t.learn_choices == () for t in turns)
 
 
 def test_rolls_with_equal_damage_are_recorded(tables, names, engine_trace, tmp_path):
@@ -454,14 +914,428 @@ def test_a_party_that_differs_from_the_trace_raises(tables, names, engine_trace,
         convert(_bundle(tmp_path, names, records), tables, names)
 
 
-def test_the_trace_stops_at_the_first_player_faint(tables, names, engine_trace, tmp_path):
+SCRATCH, GROWL_P = 0, 1  # Monferno's Scratch; Prinplup's Growl
+
+
+def _hp(side: int, slot: int, hp: int, status: int = Status.NONE):
+    """A ``start`` edit: the Pokemon's HP and status (both in the first record)."""
+
+    def edit(state: BattleState) -> BattleState:
+        return state._replace(
+            hp=state.hp.at[side, slot].set(hp),
+            status=state.status.at[side, slot].set(status),
+        )
+
+    return edit
+
+
+def _same_states(turns, states) -> None:
+    assert len(turns) == len(states)
+    for i, (turn, expected) in enumerate(zip(turns, states)):
+        for name in BattleState._fields:
+            assert np.array_equal(getattr(turn.state, name), getattr(expected, name)), (
+                f"turn {i} field {name}"
+            )
+        assert turn.mismatched == (), f"turn {i}"
+
+
+def test_a_player_faint_is_followed_by_the_replacement(tables, names, tmp_path):
+    # Geodude sets Stealth Rock, then Rock Throw knocks out Monferno (1 HP). The player
+    # sends in Prinplup (slot 1), which takes the entry chip, and the battle goes on
+    # (step.needs_replacement: a player faint is not terminal).
+    script = [
+        ((SCRATCH, STEALTH_ROCK), _outcome(p_roll=0)),
+        ((SCRATCH, ROCK_THROW), _outcome(p_roll=0, o_roll=3), (1,)),
+        ((BUBBLE, ROCK_THROW), _outcome(p_roll=2, o_roll=3)),
+    ]
+    records, states = _engine_trace(tables, names, script, start=_hp(0, 0, 1))
+    assert int(states[2].hp[0, 0]) == 0 and int(states[2].active[0]) == 1
+    prinplup = int(states[2].max_hp[0, 1])
+    assert int(states[2].hp[0, 1]) == prinplup - prinplup // 8  # Stealth Rock, neutral
+    path = _bundle(tmp_path, names, records)
+    turns = convert(path, tables, names)
+    _same_states(turns, states)
+    assert [t.player_slot for t in turns] == [-1, 1, -1, -1]
+    assert turns[1].actions == script[1][0]
+    replayed = trace_to_states(path, tables, names)
+    assert [t.player_slot for t in replayed] == [-1, 1, -1, -1]
+    assert replay_mismatches(tables, replayed) == []
+
+
+def test_a_double_ko_raises(tables, names, tmp_path):
+    # Monferno's Ember knocks out Geodude, then poison knocks out Monferno at the turn's
+    # end: both sides need a replacement, which the converter does not replay.
+    def start(state):
+        return _hp(1, 0, 5)(_hp(0, 0, 1, Status.POISON)(state))
+
+    script = [
+        ((EMBER, ROCK_THROW), _outcome(p_roll=4), (1,)),
+        ((BUBBLE, ROCK_THROW), _outcome(p_roll=2, o_roll=3)),
+    ]
+    records, states = _engine_trace(tables, names, script, start=start)
+    assert int(states[1].hp[0, 0]) == 0 and int(states[1].hp[1, 0]) == 0
+    with pytest.raises(TraceError, match="turn 0: both sides need a replacement"):
+        convert(_bundle(tmp_path, names, records), tables, names)
+
+
+def test_a_newcomer_fainting_on_entry_raises(tables, names, tmp_path):
+    # Poison knocks out Monferno; Prinplup (1 HP) faints to Stealth Rock on entry and
+    # Grotle comes in: the record shows only the last active, so the turn is refused.
+    def start(state):
+        return _hp(0, 1, 1)(_hp(0, 0, 1, Status.POISON)(state))
+
+    script = [
+        ((SCRATCH, STEALTH_ROCK), _outcome(p_roll=0), (1, 2)),
+        ((0, SCREECH), _outcome()),
+    ]
+    records, states = _engine_trace(tables, names, script, start=start)
+    assert [int(h) for h in states[1].hp[0, :3]] == [0, 0, int(states[1].hp[0, 2])]
+    assert int(states[1].active[0]) == 2
+    with pytest.raises(TraceError, match="turn 0: player slot 1 has 0 HP.*fainted on entry"):
+        convert(_bundle(tmp_path, names, records), tables, names)
+
+
+def test_a_fainted_battlers_status_is_zeroed(tables, names, engine_trace, tmp_path):
+    # The tracer reads an active battler's status from the BattleMon, which keeps a
+    # battle-ending faint's toxic bits; the decomp zeroes only the party copy
+    # (battle_controller.c:1481-1486), which the engine models.
     records = copy.deepcopy(engine_trace[0])
-    second_turn = [r for r in records if r["kind"] == "turn"][1]
-    second_turn["sides"][0]["party"][0]["hp"] = 0  # Monferno faints on turn 0
+    final = records[-1]["sides"][1]["party"]
+    fainted = [k for k, mon in enumerate(final) if mon["hp"] == 0]
+    assert fainted
+    toxic = _raw_status(Status.TOXIC, 3)
+    for k in fainted:
+        final[k]["status"] = toxic
+    fields = _fields(records[-1])
+    assert all(int(fields["status"][1, k]) == 0 for k in fainted)
+    assert all(int(fields["status_counter"][1, k]) == 0 for k in fainted)
+    alive = copy.deepcopy(records[-1])
+    alive["sides"][1]["party"][fainted[0]]["hp"] = 1
+    assert decode_status(toxic) == (Status.TOXIC, 3)
+    assert int(_fields(alive)["status"][1, fainted[0]]) == Status.TOXIC
     turns = convert(_bundle(tmp_path, names, records), tables, names)
-    assert len(turns) == 2
-    assert "hp" in turns[0].mismatched
-    assert turns[1].actions == (-1, -1)
+    assert all(t.mismatched == () for t in turns)
+
+
+CONFUSION_MOVE = 1  # Monferno's slot 1 in the refit party (Leer moved to slot 0)
+LEER_0 = 0
+
+
+def _refit_party(tmp_path: Path, move: str) -> Path:
+    text = PARTY.read_text(encoding="utf-8").replace('"Scratch", "Leer",', f'"Leer", "{move}",', 1)
+    path = tmp_path / "refit_party.toml"
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+@pytest.mark.slow
+def test_a_secondary_confusion_is_refitted_from_later_self_hits(
+    tables, names, tmp_path, monkeypatch
+):
+    # Geodude (made faster) Rock Throws, then Monferno's Confusion confuses it for 3 turns
+    # (secondary 1, duration 3): invisible on that turn. Geodude hurts itself on the next two
+    # turns and snaps out on the third. Each turn is fitted against the next record only, so
+    # turn 0 first keeps secondary 0; turn 1's self-hit rewinds it to duration 2, turn 2's to
+    # duration 3 (convert_bundle's refit).
+    import sys
+
+    import tools.trace_to_state as ttt
+
+    built = ttt.initial_state
+
+    def faster_geodude(*args, **kwargs):
+        s = built(*args, **kwargs)
+        return s._replace(stats=s.stats.at[1, 0, Stat.SPE - 1].set(200))
+
+    monkeypatch.setattr(sys.modules[__name__], "initial_state", faster_geodude)
+    monkeypatch.setattr(ttt, "initial_state", faster_geodude)
+    party = _refit_party(tmp_path, "Confusion")
+    hit_self = jnp.asarray([0, 1], jnp.int8)
+    script = [
+        (
+            (CONFUSION_MOVE, ROCK_THROW),
+            _outcome(p_roll=0, p_secondary=1, o_roll=0)._replace(
+                duration=jnp.asarray([3, 0], jnp.int8)
+            ),
+        ),
+        ((LEER_0, ROCK_THROW), _outcome(o_roll=0)._replace(confusion_hit=hit_self)),
+        ((LEER_0, ROCK_THROW), _outcome(o_roll=0)._replace(confusion_hit=hit_self)),
+        ((LEER_0, ROCK_THROW), _outcome(o_roll=0)),
+    ]
+    records, states = _engine_trace(tables, names, script, party=party)
+    assert [int(s.confusion[1]) for s in states] == [0, 3, 2, 1, 0]
+    self_hits = [
+        r["turn"] for r in records if r["kind"] == "hit" and r["attacker"] == 1 == r["defender"]
+    ]
+    assert self_hits == [1, 2]
+    turns = convert(_bundle(tmp_path, names, records, party), tables, names)
+    _same_states(turns, states)
+    assert int(turns[0].outcome.secondary[0, 0]) == 1
+    assert int(turns[0].outcome.duration[0]) == 3
+
+
+def _refit_stub(n_turns: int = 2):
+    """``turns``/``fits`` stand-ins for ``_refit``: turn 0 has two tied fits (0 chosen),
+    and the last turn is unexplained."""
+    from types import SimpleNamespace
+
+    def alt(index):
+        return SimpleNamespace(index=index, qc=(0, 0), state=(np.full(1, index),))
+
+    fits = [SimpleNamespace(chosen=0, state="stale start", ties=lambda: [alt(0), alt(1)])]
+    fits += [SimpleNamespace(chosen=0, ties=list) for _ in range(n_turns - 1)]
+    turns = [SimpleNamespace(state="current start", mismatched=()) for _ in range(n_turns)]
+    turns[-1].mismatched = ("hp",)
+    return turns, fits
+
+
+def test_a_refit_trial_that_raises_is_discarded(monkeypatch):
+    # T1 review Minor 1: a TraceError inside a trial (no roll fits, a double KO, ...)
+    # discards that trial; the conversion keeps the original turns.
+    import tools.trace_to_state as tts
+
+    def accept(*args):
+        raise tts.TraceError("the trial's replay cannot give the record")
+
+    monkeypatch.setattr(tts, "_accept", accept)
+    turns, fits = _refit_stub()
+    before = list(turns)
+    assert tts._refit(None, turns, fits) is None
+    assert turns == before
+
+
+def test_a_refit_trial_starts_from_the_turns_current_qc_roll(monkeypatch):
+    # T1 review Minor 2: an earlier refit may have rewritten turn i's start qc_roll (and
+    # redrawn turn i-1); the trial compares its alternative with that state, not with the
+    # stale one its _Turn was built from.
+    import tools.trace_to_state as tts
+
+    starts = []
+
+    def accept(tables, turns, fits, inference, fit):
+        starts.append(inference.state)
+        raise tts.TraceError("stop after the first accept")
+
+    monkeypatch.setattr(tts, "_accept", accept)
+    turns, fits = _refit_stub()
+    tts._refit(None, turns, fits)
+    assert starts == ["current start"]
+
+
+@pytest.mark.slow
+def test_a_bind_duration_is_refitted_from_a_later_residual(tables, names, tmp_path):
+    # Monferno's Fire Spin traps Geodude for 4 turns; durations 3 and 4 replay the same
+    # records until the turn where duration 3's trap has ended and no residual is taken.
+    # Turn 0 first keeps 3; that turn's mismatch rewinds it to 4 (convert_bundle's refit).
+    party = _refit_party(tmp_path, "Fire Spin")
+    trap = _outcome(p_roll=0)._replace(duration=jnp.asarray([4, 0], jnp.int8))
+    script = [((CONFUSION_MOVE, SCREECH), trap)] + [((LEER_0, SCREECH), _outcome())] * 4
+    records, states = _engine_trace(tables, names, script, party=party)
+    three = _engine_trace(
+        tables,
+        names,
+        [((CONFUSION_MOVE, SCREECH), trap._replace(duration=jnp.asarray([3, 0], jnp.int8)))]
+        + script[1:],
+        party=party,
+    )[1]
+    shown = [int(s.hp[1, 0]) for s in states]
+    differ = [i for i, s in enumerate(three) if int(s.hp[1, 0]) != shown[i]]
+    assert differ and differ[0] >= 3  # the residual shows two or more turns after turn 0
+    turns = convert(_bundle(tmp_path, names, records, party), tables, names)
+    _same_states(turns, states)
+    assert int(turns[0].outcome.duration[0]) == 4
+
+
+@pytest.mark.slow
+def test_a_quick_claw_redraw_keeps_the_player_replacement(tables, names, tmp_path, monkeypatch):
+    # Geodude (made faster) knocks out Monferno (1 HP) before it moves; Prinplup (Quick
+    # Claw) comes in. Turn 0's draw (Outcome.quick_claw 1) moves Prinplup's Growl before
+    # Rock Throw on turn 1, so turn 1's fit writes it back into turn 0, whose replay must
+    # make the same player replacement again (_redraw_quick_claw).
+    import sys
+
+    import tools.trace_to_state as ttt
+
+    text = PARTY.read_text(encoding="utf-8")
+    plain = '"Pound", "Growl", "Bubble", "Water Sport"]\nitem = ""'
+    text = text.replace(plain, plain[:-2] + '"Quick Claw"', 1)
+    assert 'item = "Quick Claw"' in text
+    party = tmp_path / "claw_party.toml"
+    party.write_text(text, encoding="utf-8")
+    built = ttt.initial_state
+
+    def faster_geodude(*args, **kwargs):
+        s = built(*args, **kwargs)
+        return s._replace(stats=s.stats.at[1, 0, Stat.SPE - 1].set(200))
+
+    monkeypatch.setattr(sys.modules[__name__], "initial_state", faster_geodude)
+    monkeypatch.setattr(ttt, "initial_state", faster_geodude)
+
+    def claw(k, **hits):
+        return _outcome(**hits)._replace(quick_claw=jnp.asarray([k, 0], jnp.int8))
+
+    script = [
+        ((SCRATCH, ROCK_THROW), claw(1, o_roll=3), (1,)),
+        ((GROWL_P, ROCK_THROW), claw(0, o_roll=3)),
+    ]
+    records, states = _engine_trace(tables, names, script, party=party, start=_hp(0, 0, 1))
+    assert int(states[1].active[0]) == 1 and int(states[1].qc_roll[0]) == 1
+    assert [int(s.stages[1, Stat.ATK]) for s in states] == [0, 0, -1]
+    turns = convert(_bundle(tmp_path, names, records, party), tables, names)
+    _same_states(turns, states)
+    assert turns[0].player_slot == 1
+    assert int(turns[0].outcome.quick_claw[0]) == 1
+
+
+PECK_LEVEL = 15  # vanilla Prinplup learns Peck at 15 (its four move slots are full)
+GROWL_SLOT, BUBBLE_SLOT, WATER_SPORT_SLOT = 1, 2, 3
+
+
+def _learn_party(tables, names, tmp_path: Path) -> Path:
+    """The golden party with Prinplup 1 exp short of level 15 and holding a Quick Claw."""
+    rate = int(tables.species_exp_rate[names.species("Prinplup")])
+    exp = int(tables.exp_table[rate, PECK_LEVEL]) - 1
+    text = PARTY.read_text(encoding="utf-8")
+    plain = '"Pound", "Growl", "Bubble", "Water Sport"]\nitem = ""'
+    assert plain in text
+    text = text.replace(plain, plain[:-2] + '"Quick Claw"', 1)
+    text = text.replace(
+        'species = "Prinplup"\nlevel = 14\n', f'species = "Prinplup"\nlevel = 14\nexp = {exp}\n'
+    )
+    assert f"exp = {exp}" in text
+    path = tmp_path / "learn_party.toml"
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def _learn_trace(tables, names, tmp_path: Path, monkeypatch, choice: int):
+    """Prinplup leads with Growl; on turn 1 the AI records it (``ai_seen_moves``) and Bubble
+    knocks out Geodude (5 HP): Prinplup reaches 15 and is offered Peck, answered ``choice``.
+    Onix comes in; on turn 2 the Quick Claw draw of turn 1 lets Growl go first, so turn 2's
+    fit writes it back into the learn turn (``_redraw_quick_claw``); Onix is made faster."""
+    import sys
+
+    import tools.trace_to_state as ttt
+
+    built = ttt.initial_state
+
+    def faster_onix(*args, **kwargs):
+        s = built(*args, **kwargs)
+        return s._replace(stats=s.stats.at[1, 1, Stat.SPE - 1].set(200))
+
+    monkeypatch.setattr(sys.modules[__name__], "initial_state", faster_onix)
+    monkeypatch.setattr(ttt, "initial_state", faster_onix)
+    party = _learn_party(tables, names, tmp_path)
+
+    def claw(k, **hits):
+        return _outcome(**hits)._replace(quick_claw=jnp.asarray([k, 0], jnp.int8))
+
+    script = [
+        ((GROWL_SLOT, ROCK_THROW), _outcome(o_roll=0)),
+        ((BUBBLE_SLOT, ROCK_THROW), claw(1, p_roll=0), (), (choice,)),
+        ((GROWL_SLOT, ROCK_THROW), claw(0, o_roll=3)),
+    ]
+    records, states = _engine_trace(
+        tables, names, script, leads=(1, 0), party=party, start=_hp(1, 0, 5)
+    )
+    assert int(states[2].level[0, 1]) == PECK_LEVEL and int(states[2].learn_level[1]) == 0
+    return _bundle(tmp_path, names, records, party), states
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("choice", [GIVE_UP, BUBBLE_SLOT, WATER_SPORT_SLOT])
+def test_a_learn_move_answer_is_inferred(tables, names, tmp_path, monkeypatch, choice):
+    # Design §5.4: the answer to the prompt is fitted from the next record, over giving up
+    # and every non-HM slot. Bubble is the move used this turn: its slot shows Peck's PP,
+    # not a drop (_used_slots), and the AI has not recorded it yet (trainer_ai.c:2705-2716
+    # runs at the next turn's start).
+    path, states = _learn_trace(tables, names, tmp_path, monkeypatch, choice)
+    peck = names.move("Peck")
+    assert (peck in states[2].moves[0, 1].tolist()) == (choice != GIVE_UP)
+    assert [int(s.stages[1, Stat.ATK]) for s in states] == [0, -1, 0, -1]
+    turns = convert(path, tables, names)
+    _same_states(turns, states)
+    assert [t.learn_choices for t in turns] == [(), (choice,), (), ()]
+    assert int(turns[1].outcome.quick_claw[0]) == 1  # redrawn by turn 2's fit
+    replayed = trace_to_states(path, tables, names)
+    assert replayed[1].learn_choices == (choice,)
+    assert replay_mismatches(tables, replayed) == []
+
+
+@pytest.mark.slow
+def test_a_learn_move_answer_the_engine_cannot_replay_is_refused(
+    tables, names, tmp_path, monkeypatch
+):
+    # Replacing Growl, which the AI has seen: the decomp's AI list keeps Growl's id
+    # (trainer_ai.c:2705-2716), the engine's slot flag would mark Peck as seen.
+    path, _ = _learn_trace(tables, names, tmp_path, monkeypatch, GROWL_SLOT)
+    with pytest.raises(TraceError, match="turn 1: the player replaced move 45 .*AI has seen"):
+        convert(path, tables, names)
+    # Ruling D10: a recording in which the player learned a move the engine does not
+    # support is refused; giving it up replays.
+    peck = names.move("Peck")
+    unsupported = tables._replace(
+        move_effect=jnp.asarray(tables.move_effect).at[peck].set(EffectId.UNSUPPORTED)
+    )
+    path, _ = _learn_trace(tables, names, tmp_path, monkeypatch, WATER_SPORT_SLOT)
+    with pytest.raises(TraceError, match=f"turn 1: party slot 1 learned move {peck}.*D10"):
+        convert(path, unsupported, names)
+    path, _ = _learn_trace(tables, names, tmp_path, monkeypatch, GIVE_UP)
+    assert [t.learn_choices for t in convert(path, unsupported, names)][1] == (GIVE_UP,)
+
+
+def _two_learns_party(tables, names, tmp_path: Path) -> Path:
+    """The golden party with Monferno (slot 0) at 15 holding an Exp. Share, 1 exp short of
+    16 (Fury Swipes), and Prinplup (slot 1) 1 exp short of 15 (Peck)."""
+
+    def short_of(species: str, level: int) -> int:
+        rate = int(tables.species_exp_rate[names.species(species)])
+        return int(tables.exp_table[rate, level]) - 1
+
+    text = PARTY.read_text(encoding="utf-8")
+    edits = [
+        (
+            'species = "Monferno"\nlevel = 14\n',
+            f'species = "Monferno"\nlevel = 15\nexp = {short_of("Monferno", 16)}\n',
+        ),
+        (
+            '"Scratch", "Leer", "Ember", "Mach Punch"]\nitem = ""',
+            '"Scratch", "Leer", "Ember", "Mach Punch"]\nitem = "Exp. Share"',
+        ),
+        (
+            'species = "Prinplup"\nlevel = 14\n',
+            f'species = "Prinplup"\nlevel = 14\nexp = {short_of("Prinplup", PECK_LEVEL)}\n',
+        ),
+    ]
+    for old, new in edits:
+        assert old in text
+        text = text.replace(old, new, 1)
+    path = tmp_path / "two_learns_party.toml"
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("choices", [(2, 3), (GIVE_UP, 3), (2, GIVE_UP), (GIVE_UP, GIVE_UP)])
+def test_two_learn_move_prompts_in_one_turn_are_inferred(tables, names, tmp_path, choices):
+    # Design §5.4: Prinplup's Bubble knocks out Geodude (5 HP); Prinplup (a participant)
+    # and Monferno (Exp. Share, bs.c:9703-9712) both level and are prompted, in party slot
+    # order (levelup._learner). The answers are fitted per prompt, in that order.
+    party = _two_learns_party(tables, names, tmp_path)
+    script = [
+        ((GROWL_SLOT, ROCK_THROW), _outcome(o_roll=0)),
+        ((BUBBLE_SLOT, ROCK_THROW), _outcome(p_roll=0), (), choices),
+        ((POUND, ROCK_THROW), _outcome(o_roll=3, p_roll=0)),
+    ]
+    records, states = _engine_trace(
+        tables, names, script, leads=(1, 0), party=party, start=_hp(1, 0, 5)
+    )
+    assert np.asarray(states[2].level[0, :2]).tolist() == [16, PECK_LEVEL]
+    path = _bundle(tmp_path, names, records, party)
+    turns = convert(path, tables, names)
+    _same_states(turns, states)
+    assert [t.learn_choices for t in turns] == [(), choices, (), ()]
+    assert replay_mismatches(tables, trace_to_states(path, tables, names)) == []
 
 
 def test_cli_writes_a_bundle_that_converts(tables, names, engine_trace, tmp_path):
@@ -539,6 +1413,9 @@ def test_bundle_from_save(kaizo_save_pre_roark_path, kaizo_names):
     assert [m["species"] for m in b["party"]] == [27, 180, 403, 37, 118, 52]
     assert b["game"] == KAIZO
     assert [r["command"] for r in b["records"]] == [4, 41]
+    # K3d-exp T3: the save's own Pokemon (OT) and their stored exp.
+    assert [m["exp_boost"] for m in b["party"]] == [100] * 6
+    assert [m["exp"] for m in b["party"]] == [m.experience for m in save.party]
 
 
 def test_bundle_from_save_leaves_eggs_out(tables, names, tmp_path, capsys):
@@ -550,9 +1427,28 @@ def test_bundle_from_save_leaves_eggs_out(tables, names, tmp_path, capsys):
     save = load_save(write_save(tmp_path, tables, names, egg_first=True))
     assert save.party[0].is_egg
     b = bundle_trace(RAW_FIXTURE, save, names, ROARK_ID)
-    want = [m.to_spec(tables) for m in save.party[1:]]
+    want = [m.to_spec(tables, save.trainer) for m in save.party[1:]]
     assert [m["species"] for m in b["party"]] == [m.species for m in want]
     assert "party slot 0: egg left out" in capsys.readouterr().err
+    # K3d-exp T3: /2 entries carry the exp fields, the boost resolved with the save's
+    # trainer (the synthetic records are its own: 100).
+    assert b["format"] == "nuzline-golden-trace/2"
+    assert [_spec(m) for m in b["party"]] == want
+    assert [m["exp"] for m in b["party"]] == [m.experience for m in save.party[1:]]
+    assert {m["exp_boost"] for m in b["party"]} == {100}
+
+
+def test_bundle_formats_1_and_2(tables, names):
+    # A /2 bundle's entries carry the exp fields; a /1 entry lacks them and loads with the
+    # PokemonSpec defaults (the level's base exp, boost 100, no Pokerus, no Luxury Ball).
+    b = bundle_trace(RAW_FIXTURE, PARTY, names, ROARK_ID)
+    assert b["format"] == "nuzline-golden-trace/2"
+    assert all(set(V2_PARTY_KEYS) <= set(m) for m in b["party"])
+    v1 = {k: v for k, v in b["party"][0].items() if k not in V2_PARTY_KEYS}
+    spec = _spec(v1)
+    assert (spec.exp, spec.exp_boost, spec.pokerus, spec.friend_bonus) == (None, 100, 0, 0)
+    with pytest.raises(TraceError, match="nuzline-golden-trace/1 or nuzline-golden-trace/2"):
+        convert_bundle({**b, "format": "nuzline-golden-trace/3"}, tables, names)
 
 
 def test_vanilla_bundle_records_its_game(names):
@@ -569,3 +1465,41 @@ def test_the_probe_reads_the_tracers_addresses():
         assert mine.items() <= _lua_table(table).items(), table
     lua = probe.read_text(encoding="utf-8")
     assert "traces" in lua and "probe.txt" in lua
+
+
+def test_a_traced_battle_can_carry_its_terrain(tables, names):
+    # K3b2 Task 9: the trace does not record the terrain; the bundle's "terrain" gives the
+    # one a mixed-terrain trainer was fought on, and it must be one its maps can give.
+    import dataclasses
+
+    from tools.trace_to_state import TraceError, _terrain_id, battle_terrain
+
+    trainer = next(t for t in load_trainers(INTERMEDIATE) if t.id == ROARK_ID)
+    assert battle_terrain(trainer, None) == trainer.terrain == _terrain_id("building")
+    state = initial_state(tables, load_party(PARTY, names), trainer, (0, 0))
+    assert int(state.terrain) == trainer.terrain
+    mixed = dataclasses.replace(trainer, terrain=-1, terrains=(0, 2))
+    assert battle_terrain(mixed, _terrain_id("TERRAIN_GRASS")) == 2
+    with pytest.raises(TraceError, match="TERRAIN_WATER is not a terrain of the trainer's maps"):
+        battle_terrain(mixed, _terrain_id("water"))
+    with pytest.raises(TraceError, match="unknown terrain"):
+        _terrain_id("lava")
+    b = bundle_trace(RAW_FIXTURE, PARTY, names, ROARK_ID, terrain=9)
+    assert b["terrain"] == 9
+    assert "terrain" not in bundle_trace(RAW_FIXTURE, PARTY, names, ROARK_ID)
+
+
+def test_trace_refuses_a_terrain_move_without_a_known_terrain(tables, names):
+    # Trace conversion runs no coverage: a move reading the terrain needs it settled.
+    import dataclasses
+
+    from tools.trace_to_state import TraceError
+
+    trainer = next(t for t in load_trainers(INTERMEDIATE) if t.id == ROARK_ID)
+    party = load_party(PARTY, names)
+    party[0] = dataclasses.replace(party[0], moves=(names.move("Nature Power"), 0, 0, 0))
+    mixed = dataclasses.replace(trainer, terrain=-1, terrains=(0, 2))
+    with pytest.raises(TraceError, match="read the battle terrain.*pass --terrain"):
+        initial_state(tables, party, mixed, (0, 0))
+    assert int(initial_state(tables, party, mixed, (0, 0), terrain=2).terrain) == 2
+    assert int(initial_state(tables, party, trainer, (0, 0)).terrain) == trainer.terrain

@@ -19,6 +19,7 @@ single-quoted strings for Windows paths; relative paths resolve against the repo
 | `kaizo_docs` | `NUZLINE_KAIZO_DOCS` | the Kaizo docs spreadsheet (audited copy: SHA-256 `41c0c7fe...d74f`) |
 | `kaizo_save` | `NUZLINE_KAIZO_SAVE` | optional: a Kaizo save (the tests use a Maylene-era save) |
 | `kaizo_save_pre_roark` | `NUZLINE_KAIZO_SAVE_PRE_ROARK` | optional: an earlier Kaizo save (pre-Roark), `.sav` or DeSmuME `.dsv` |
+| `kaizo_save_probe` | `NUZLINE_KAIZO_SAVE_PROBE` | optional: the trace probe's save (`docs/tracing_kaizo.md`), the party taken to Roark |
 
 A ROM or patch hash mismatch stops the build. The PKCalc and spreadsheet hashes are recorded
 in the report, not enforced; tests that pin audited counts skip on another copy. Tests that
@@ -234,16 +235,94 @@ each; "Settling a user call" above says how to enter an answer. The kinds:
   (Route 213 is rain and Idol Catherine #2 fog, by your answers).
 - **Gravity** whose entry cites PKCalc while no sheet row claims it (Champion Cynthia cites
   the sheet row Elite Four Split:298).
-- **Unclassified ROM changes** (Ruling 13): two remain, both `unknown` (see "What is refused").
+- **Unclassified ROM changes** (Ruling 13): none since K3c (the last, the Dry Skin AI word, is `modelled`).
 
 ## What is refused
 
-`coverage --game kaizo` exits 2 and lists every reason. For Roark today that includes the
-Kaizo AI lines (no policy, `AI_FLAG_RISKY`, per-move script paths), `Kaizo ROM: 2 code changes
-unclassified`, `Battle start: Sandstorm (weather UNSUPPORTED)`, and Roark's unsupported moves,
-abilities and items. The two `unknown` ROM changes are overlay16
-`BattleControllerPlayer_CheckObedience` (Kaizo: every Pokemon always obeys, no RNG draw; K3b)
-and overlay14 0x022249CC-0x022249CD (the AI script's second Levitate compare in
-`Basic_CheckForImmunity` tests Dry Skin 87; K3c). Known blind spot: Kaizo field-script command
+`coverage --game kaizo` exits 2 and lists every reason. For Roark (K3c done, 2026-11-12)
+nothing is refused: `coverage --game kaizo --trainer roark --cap 16` exits 0 on both saves
+(`kaizo_save_pre_roark`, `kaizo_save_probe`), with `Support: EXACT`, `Missing: none` and
+`Sampling only: none` for the fight and for the pool of 12 Pokemon.
+
+K3c (done) transcribes the Kaizo trainer AI (`docs/ai/kaizo_roark.md`): a per-game policy
+(the vanilla script plus the Dry Skin word, classified `modelled`, so no ROM change is
+unclassified), `AI_FLAG_RISKY`, the BASIC, EVAL_ATTACK, EXPERT and RISKY paths of all of
+Roark's moves, the AI's reads of the K3b2 mechanics, six-Pokemon switching, and a per-slot
+`AiOutcome` layout whose width is at most 2093 (573 measured) under `WIDTH_CAP`. Every pool
+candidate of both saves against each of Roark's six is accepted by the AI and its exact
+distribution equals the loose oracle (`tests/kaizo/test_roark_ai_audit.py`).
+
+K3d (experience, level-up and learning moves, `.superpowers` design K3d-exp, both
+engines) adds these refusals, under the coverage category `experience` (`coverage.
+exp_refusals`, `learnable_moves`). None is reached by the Roark fight on either save:
+- a player Pokemon below level 100 whose exp multiplier is unresolved (`exp_boost` 0: a
+  party not read from a save with its trainer, so the original-trainer test cannot run);
+- a player Pokemon holding Exp. Share, Lucky Egg, a Power item, Macho Brace or Soothe Bell
+  while any Pokemon in the fight has an item-moving move: the payout reads the party's item,
+  which a battle item change leaves behind (ruling D9);
+- a player Pokemon that can level, with a nonzero egg location, in a fight with Return or
+  Frustration (the friendship bonus reads the battle map; ruling D6);
+- a player Pokemon that can level and could use Transform, Mimic or Power Trick (the
+  level-up reload, battle_lib.c:173-191);
+- an empty move slot with PP Ups (a move learned there would inherit them);
+- a move the Pokemon can learn by level-up in the fight, graded like a move it knows
+  (effect, AI, terrain, ROM change). An unsupported move is refused only when it could be
+  learned into an empty move slot without a prompt; if every slot that could take it is
+  full, the game only asks, and the engine gives it up instead (ruling D10: the plan is then
+  an achievable lower bound, except the mid-turn-prompt case, where a learn node can be
+  possibly optimistic; `src/nuzline/engine/STATE.md`, Experience);
+- a payout inside the opponent's replacement that leaves learn work (a newcomer fainted by
+  the hazards; `exp_refused`, design §3.3 window (c)) refuses that line of the search;
+- the trace converter (`tools/trace_to_state.py`) refuses a recording in which the player
+  learned a move the engine does not support (ruling D10), replaced a move the AI had
+  already seen, or answered with another option the search masks (the disabled, locked,
+  choice-locked or selected move), and a party file whose exp is not of its level.
+
+What the Kaizo AI still refuses (reached by no Roark fight; a later split's milestone):
+- a Kaizo trainer whose `ai_flags` is not exactly BASIC, EVAL_ATTACK, EXPERT and RISKY
+  (`0b10111`), including every TagStrategy (flag 7) trainer (plan K3c Ruling 10);
+- every Kaizo trainer but Roark (id 246): the AI's one ability guess per decision is exact
+  only for movesets whose data test has run (plan K3c Ruling 6, kaizo_roark.md 8.4), so
+  coverage refuses any trainer outside `coverage.ONE_SCALAR_GUESS_CHECKED` by the line
+  "the one-scalar ability guess is not checked against this trainer's movesets";
+- an opponent move whose battle effect has no transcribed path, or whose Expert label is not
+  transcribed (`KAIZO.transcribed`, `KAIZO.expert_transcribed`);
+- an opponent move the AI's damage estimate takes by case or by alternative power (Triple
+  Axel and Fury Cutter on effect 88, Psywave's and Magnitude's slots, Return, Frustration) or
+  whose type it takes by case (Natural Gift, Judgment, Hidden Power, Weather Ball);
+- the opponent's Roar, Nature Power and Camouflage, and a Ghost-type Curse user;
+- the voluntary-switch refusals of `ai.switching` (kaizo_roark.md 11.3).
+
+K3b1 (done) models, in both engines: obedience (Kaizo: every Pokemon always obeys, no RNG
+draw), permanent sandstorm with the end-of-turn field pass and Cloud Nine, Sand Veil, Snow
+Cloak, Swift Swim, Light Screen, Brick Break, Toxic, Sand Tomb, the Swift family, Pay Day,
+Gust, Recover, Fake Out, AncientPower, Curse, DoubleSlap, Self-Destruct, Flail, Rough Skin,
+Flame Body, Limber, Adaptability, Solid Rock, Focus Sash, Big Root, Berry Juice, status
+berries, White Herb, Lagging Tail, Aqua Ring, Rindo and Chilan berries, and bag-item rows in
+the pool check.
+
+K3b2 (done) models, in both engines, with every random draw an `Outcome` field
+(`docs/kaizo/k3b2-rules.md`): Thunder Fang (two 10% secondaries), Protect (the chain and
+its success law), Present (the damage-or-heal draw), Attract and Cute Charm (infatuation),
+Quick Claw (the per-turn draw carried into the next turn's order, and a chance node at
+battle start), Roar (the level check, the target draw, the drag with its switch-in
+effects), Camouflage, Nature Power and Tri Attack, and the battle terrain. It also fixes the
+mid-turn accuracy bug (an evasion or accuracy change earlier in the turn now changes a later
+move's hit chance; `docs/discrepancies.md`). Every Roark-vs-pool action pair from both saves
+is enumerated exactly under the width cap (`tests/kaizo/test_roark_widths.py`, nothing
+sampled).
+
+The terrain is read per trainer from the ROM (`Trainer.terrain`, `tools/terrain.py`): the
+tiles of every map the trainer can be fought on, then the map header's battle background
+(the two patched getters `MapHeader_GetBattleBG` and `MapHeader_GetMapMatrixID` are
+modelled). Roark's is BUILDING, so his fight's Nature Power calls Tri Attack. A trainer
+whose maps give more than one terrain, or none, has an unknown terrain, and coverage refuses
+Nature Power, Camouflage and Secret Power in that fight: 41 of the 46 Kaizo trainers that
+know one of them, until a terrain is settled (a K3 end decision).
+
+The overlay14 change 0x022249CC-0x022249CD (the AI script's second Levitate compare in
+`Basic_CheckForImmunity` tests Dry Skin 87) is `modelled` since K3c. K3d (done, 2026-11-13): exp,
+level-ups and learn prompts in both engines; the golden trace
+`tests/golden/kaizo_roark_02.json` replays with no mismatch. Known blind spot: Kaizo field-script command
 0x3F (map headers 257 and 321, common script 9019) sets a party status that persists into
 fights on any map; coverage sees it only if the save was taken after that script.

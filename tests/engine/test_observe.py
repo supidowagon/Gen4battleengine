@@ -5,6 +5,8 @@ observe.md, critic.md B.1, C1, C5)."""
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -188,6 +190,7 @@ def big_opponent(tables, names, hp=999):
     return set_field(s, "hp", (1, 0), hp)
 
 
+@pytest.mark.slow
 def test_opponent_hp_within_pixel_equal(tables, names):
     s = big_opponent(tables, names)
     acts = np.asarray(A("Scratch", "Tackle", s, names))
@@ -212,6 +215,7 @@ def test_player_exact_hp_splits(tables, names):
     assert (field(obs[0], "player_hp") != field(obs[1], "player_hp")).any()
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize(
     ("build", "move", "counter"),
     [
@@ -255,6 +259,7 @@ VISIBLE_CLASSES = (
     "curled",
     "bide",
     "mud sport",
+    "aqua ring",
     "stat stage",
     "weather",
     "stealth rock",
@@ -299,6 +304,7 @@ def visible_cases(tables, names):
         "bide": projected("bide_turns", lambda a: set_field(a, "bide_turns", 1, 2)),
         # Mud Sport is per battler: one side's sport differs from the other's.
         "mud sport": projected("mud_sport", lambda a: set_field(a, "mud_sport", 1, 1)),
+        "aqua ring": projected("aqua_ring", lambda a: set_field(a, "aqua_ring", 1, 1)),
         "stat stage": (
             "stages",
             leer,
@@ -358,6 +364,7 @@ def visible_cases(tables, names):
     }
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("name", VISIBLE_CLASSES)
 def test_visible_message_classes(tables, names, name):
     cases = visible_cases(tables, names)
@@ -372,6 +379,7 @@ def test_visible_message_classes(tables, names, name):
     assert (field(obs[0], fld) != field(obs[1], fld)).any(), name
 
 
+@pytest.mark.slow
 def test_hidden_new_counters_grouped(tables, names):
     # Disable's turn count and Bide's stored damage are not on screen (spec §4.2 "hidden
     # counters"): the observation shows only the Disabled move and that the foe is Biding.
@@ -475,7 +483,7 @@ def _gate_free(tables, s, acts, outcome: Outcome, name, index) -> bool:
     ):
         return True
     if name == "speed_tie":
-        return int(effective_speed(s, 0)) != int(effective_speed(s, 1))
+        return int(effective_speed(tables, s, 0)) != int(effective_speed(tables, s, 1))
     side = index[0]
     if acts[side] >= MOVE_ACTIONS:
         return name in ("hit", "crit")
@@ -494,6 +502,7 @@ _ranges = {
 }
 
 
+@pytest.mark.slow
 @settings(max_examples=25, **HYPOTHESIS)
 @given(data=st.data())
 def test_ineffective_draws_invisible_enumerated(tables, names, data):
@@ -717,6 +726,7 @@ def test_legality_constant_on_equal_obs_random(tables, names, data):
     assert_constant(groups)
 
 
+@pytest.mark.slow
 @settings(max_examples=40, **HYPOTHESIS)
 @given(data=st.data())
 def test_step_events_match_step_and_observe(tables, names, data):
@@ -729,6 +739,7 @@ def test_step_events_match_step_and_observe(tables, names, data):
     check_events_path(out[4], out[5])
 
 
+@pytest.mark.slow
 def test_magnitude_level_is_observed_only_when_shown(tables, names):
     """ "Magnitude N!" (subscript_magnitude.s) tells the player the level: two draws that
     differ only in it are different observations when the hit lands, and the same one when
@@ -776,3 +787,88 @@ def test_replacement_observation_shows_both_newcomers(tables, names):
     assert not field(obs, "crit").any()
     for name in ("act_id", "magnitude"):
         assert not field(obs, name).any(), name
+
+
+# --- the player's party after a payout (K3d-exp T7, design §3.5) -----------------------
+
+
+def _player_obs_diff(a: BattleState, b: BattleState) -> set[str]:
+    """The observation fields in which ``a`` and ``b`` (seen as after a replacement) differ."""
+    oa = np.asarray(replacement_observation(a))
+    ob = np.asarray(replacement_observation(b))
+    return {name for name, sl in OBS_FIELDS if not np.array_equal(oa[sl], ob[sl])}
+
+
+def test_a_level_up_is_observed(tables, names):
+    """Two histories in which the same KO pays the same exp: one levels Prinplup, one does
+    not. The level, stats, max HP, HP and learn prompt split them, and the exp shows the
+    amount ("gained N Exp. Points!", battle_script.c:9738)."""
+    from nuzline.engine.levelup import pay_exp
+    from nuzline.engine.state import make_state
+    from tests.engine.helpers import roark_party, sample_party
+
+    prinplup = sample_party(names)[1]
+    rate = int(np.asarray(tables.species_exp_rate)[prinplup.species])
+    table = np.asarray(tables.exp_table)[rate]
+
+    def paid(exp):
+        before = make_state(tables, [replace(prinplup, exp=int(exp))], roark_party(names))
+        return pay_exp(tables, before, before._replace(hp=before.hp.at[1, 0].set(0)))
+
+    short, base = table[prinplup.level + 1] - 1, table[prinplup.level]
+    leveled, flat = paid(short), paid(base)
+    assert (
+        int(leveled.level[0, 0]) == prinplup.level + 1 and int(flat.level[0, 0]) == prinplup.level
+    )
+    diff = _player_obs_diff(leveled, flat)
+    assert {"player_level", "player_stats", "player_max_hp", "player_exp"} <= diff
+    assert diff <= {
+        "player_level",
+        "player_stats",
+        "player_max_hp",
+        "player_hp",
+        "player_exp",
+        "player_moves",
+        "player_pp",
+        "learn_level",
+        "learn_cursor",
+    }
+
+
+def test_max_hp_through_evs_alone_is_observed(tables, names):
+    """Two states that differ only in max HP, through the HP EVs a payout adds (Finding 21):
+    same HP, same other stats. Only ``player_max_hp`` tells them apart."""
+    from nuzline.engine.state import make_state
+    from tests.engine.helpers import roark_party, sample_party
+
+    mon = replace(sample_party(names)[0], stats=None, current_hp=20)
+    evs = list(mon.evs)
+    states = []
+    for hp_ev in range(0, 256, 4):
+        evs[0] = hp_ev
+        states.append(make_state(tables, [replace(mon, evs=tuple(evs))], roark_party(names)))
+        if int(states[-1].max_hp[0, 0]) != int(states[0].max_hp[0, 0]):
+            break
+    a, b = states[0], states[-1]
+    assert int(a.max_hp[0, 0]) != int(b.max_hp[0, 0])
+    assert np.array_equal(np.asarray(a.stats), np.asarray(b.stats))
+    assert int(a.hp[0, 0]) == int(b.hp[0, 0]) == 20
+    assert _player_obs_diff(a, b) == {"player_max_hp"}
+
+
+def test_unscanned_learn_work_at_the_battle_end_is_no_prompt(tables, names):
+    """Ruling D8 keeps the learn work of a battle-ending KO, which no scan reaches: it may be
+    unscanned work, not a prompt (T6 review hand-off). Once ``over`` is set the learn fields
+    read 0; while the battle goes on, a (resolved) prompt is shown."""
+    state = roark_state(tables, names)
+    marked = state._replace(
+        learn_level=state.learn_level.at[0].set(18), learn_cursor=state.learn_cursor.at[0].set(2)
+    )
+    assert _player_obs_diff(marked, state) == {"learn_level", "learn_cursor"}
+    over = state._replace(over=jnp.int8(1), winner=jnp.int8(0))
+    assert (
+        _player_obs_diff(
+            over._replace(learn_level=marked.learn_level, learn_cursor=marked.learn_cursor), over
+        )
+        == set()
+    )
