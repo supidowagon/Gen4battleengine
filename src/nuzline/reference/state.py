@@ -7,7 +7,8 @@ lists, grouped the way the decomp groups them.
   state (``BattleMon.statBoosts``, ``statusVolatile``, ``moveEffectsData``), plus
   the side's ``SideConditions``.
 * ``RefState``: two sides and the field (``FieldConditions``, ``totalTurns``, the
-  battle result, the AI's knowledge).
+  battle result, the AI's knowledge), and the player party's experience fields and
+  ``sideGetExpMask`` (``exp_mask``).
 
 Every encoding is ``BattleState``'s (``nuzline.engine.state``): stages 0 = neutral,
 ``stats`` is Atk, Def, SpA, SpD, Spe, ids from ``nuzline.engine.ids``. Side 0 is the
@@ -39,6 +40,8 @@ class RefPokemon:
     gender: int
     friendship: int
     ivs: list[int]
+    evs: list[int]  # ids.Stat order
+    nature: int
 
 
 @dataclass
@@ -105,6 +108,16 @@ class RefState:
     player_faints: int
     ai_seen_moves: list[list[int]]
     ai_ability_known: list[int]
+    # Experience (K3d-exp): the player party's, per slot, and sideGetExpMask[0].
+    exp: list[int]
+    exp_mask: int
+    exp_boost: list[int]
+    pokerus: list[int]
+    friend_bonus: list[int]
+    learn_level: list[int]
+    learn_cursor: list[int]
+    learn_pin: int
+    exp_refused: int
     deaths: list[int]
     faint_budget: int
     protected: list[int]

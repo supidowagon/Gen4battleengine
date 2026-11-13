@@ -614,14 +614,14 @@ def _fight(args):
             if mon.is_egg:
                 print(f"party slot {slot}: egg left out", file=sys.stderr)
             else:
-                player.append(mon.to_spec(tables))
+                player.append(mon.to_spec(tables, save.trainer))
         if not player:
             raise ValueError("the save's party has no Pokemon besides eggs")
     trainer = resolve_trainer(
         trainers, name=args.trainer, trainer_id=args.trainer_id, player_starter=_starter(save)
     )
     if save is None:
-        player = load_party(args.party, names)
+        player = load_party(args.party, names, tables)
     inter = IntermediateData(game.intermediate_dir)
     _check_buildable(tables, names, trainer, inter)
     opp = build_trainer_party(trainer, inter)

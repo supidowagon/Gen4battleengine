@@ -5,6 +5,10 @@ header; ``PartyPokemon`` extension after the 0x88-byte ``BoxPokemon``). Nature i
 ``personality % 25`` (``Pokemon_GetNatureOf``, ``src/pokemon.c:2410``); the level of a
 boxed Pokemon is the highest level whose experience entry is <= its experience
 (``SpeciesData_GetLevelAt``, ``src/pokemon.c:2378``).
+
+The exp fields (K3d-exp) come from blocks A, B and D (pokemon.h:26, 69, 89, 99, 102-105):
+the origin language, the OT's raw name codes and gender, the Pokerus byte, the ball and
+the egg location (``MON_DATA_EGG_LOCATION``'s rule, ``src/pokemon.c:1159-1166``).
 """
 
 from __future__ import annotations
@@ -21,6 +25,7 @@ from nuzline.saves.crypto import decrypt_record, record_checksum
 from nuzline.saves.status import decode_status
 
 __all__ = [
+    "ITEM_LUXURY_BALL",
     "RecordError",
     "SaveMon",
     "decode_mon",
@@ -30,13 +35,21 @@ __all__ = [
 ]
 
 # Offsets in the decrypted, A-B-C-D ordered record (header 8 bytes, blocks 32 each).
-_A, _B, _C = 8, 40, 72
+_A, _B, _C, _D = 8, 40, 72, 104
 _PARTY = 136
 # Stored order of EV/IV/stat fields is HP, Atk, Def, Spe, SpA, SpD; ids.Stat order is
 # HP, Atk, Def, SpA, SpD, Spe.
 _STORED_TO_STAT = (0, 1, 2, 4, 5, 3)
 # Charmap control codes (not glyphs): newline, carriage return, form feed.
 _CONTROL = ("\\n", "\\r", "\\f")
+CHAR_EOS = 0xFFFF
+OT_NAME_LEN = 7  # TRAINER_NAME_LEN, include/constants/string.h:5
+# ITEM_LUXURY_BALL (generated/items.txt line 12: id 11); Pokemon_UpdateFriendship's +1
+# (src/pokemon.c:2664-2666) tests the ball the Pokemon was caught in.
+ITEM_LUXURY_BALL = 11
+# FATEFUL_ENCOUNTER_LOCATION (src/pokemon.c:59): the DP egg location that defers to the
+# PtHGSS field (MON_DATA_EGG_LOCATION, src/pokemon.c:1159-1166).
+_FATEFUL_ENCOUNTER_LOCATION = 3002
 
 
 class RecordError(ValueError):
@@ -67,13 +80,26 @@ class SaveMon:
     current_hp: int | None  # party only; None in a box
     status_raw: int  # MON_CONDITION_* word; 0 in a box
     stored_stats: tuple[int, ...] | None  # party only, ids.Stat order, max HP first
+    language: int  # originLanguage (MON_DATA_LANGUAGE), block A 0x0F
+    ot_name_codes: tuple[int, ...]  # otName, 8 raw charcodes, block D 0x00
+    ot_gender: int  # otGender, block D 0x1C bit 7
+    pokerus: int  # the Pokerus byte, block D 0x1A
+    pokeball: int  # the ball's item id, block D 0x1B
+    egg_location: int  # MON_DATA_EGG_LOCATION (src/pokemon.c:1159-1166)
 
-    def to_spec(self, tables) -> PokemonSpec:
+    def to_spec(self, tables, trainer=None) -> PokemonSpec:
         """The engine's :class:`PokemonSpec`. Raises :class:`RecordError` for an egg, an
         Arceus form (its plate type; Multitype is unsupported), a form beyond the species'
         form count, an ability the form cannot have, PP above the move's maximum, or
         (party) a stored stat outside the band the current EVs allow. Base stats and
-        abilities are the form's personal row (``nuzline.data.forms.form_row``)."""
+        abilities are the form's personal row (``nuzline.data.forms.form_row``).
+
+        ``trainer`` (the save's ``SaveTrainer``) resolves ``exp_boost`` (``exp_boost``);
+        without it ``exp_boost`` is 0, unresolved, which coverage refuses for a Pokemon
+        that can gain exp. ``exp`` is the stored experience, ``pokerus`` 1 for a nonzero
+        Pokerus byte (``Pokemon_HasPokerus``, src/pokemon.c:4184-4199) and
+        ``friend_bonus`` 1 for a Luxury Ball (src/pokemon.c:2664-2666). ``egg_location`` and
+        ``pp_ups`` are copied for coverage (``PokemonSpec``)."""
         label = location_label(self.location)
         if self.is_egg:
             raise RecordError(f"{label}: is an egg")
@@ -121,7 +147,35 @@ class SaveMon:
             status_counter=0 if status == Status.TOXIC else counter,
             pp=self.pp,
             stats=self.stored_stats,
+            exp=self.experience,
+            exp_boost=0 if trainer is None else self.exp_boost(trainer),
+            pokerus=int(self.pokerus != 0),
+            friend_bonus=int(self.pokeball == ITEM_LUXURY_BALL),
+            egg_location=self.egg_location,
+            pp_ups=self.pp_ups,
         )
+
+    def is_ot(self, trainer) -> bool:
+        """``BattleSystem_PokemonIsOT`` (src/battle/battle_lib.c:6286-6303): the full u32
+        trainer id, the gender and the name all match. The name test is
+        ``CharCode_CompareNumChars(trName, monOTName, TRAINER_NAME_LEN)`` on raw codes,
+        where ``monOTName`` is ``MON_DATA_OT_NAME``: the first 7 codes of ``otName`` and
+        an ``EOS`` (src/pokemon.c:1121-1128)."""
+        mon_name = (*self.ot_name_codes[:OT_NAME_LEN], CHAR_EOS)
+        return (
+            trainer.id == self.ot_id
+            and trainer.gender == self.ot_gender
+            and _compare_num_chars(trainer.name_codes, mon_name, OT_NAME_LEN)
+        )
+
+    def exp_boost(self, trainer) -> int:
+        """The exp multiplier in percent (``BattleScript_GetExpTask``,
+        src/battle/battle_script.c:9757-9763): 100 for the OT (``is_ot``); else 170 when
+        ``MON_DATA_LANGUAGE`` differs from the ROM's ``gGameLanguage``
+        (``trainer.rom_language``, never the save's trainer-language byte), else 150."""
+        if self.is_ot(trainer):
+            return 100
+        return 170 if self.language != trainer.rom_language else 150
 
     def _row(self, tables, label: str) -> int:
         """The personal row of this species' form; ``RecordError`` naming the slot when the
@@ -193,6 +247,29 @@ def location_label(location: tuple[str, int, int]) -> str:
     box number 1-based like ``save show`` and ``--exclude box:B:S``."""
     kind, box, slot = location
     return f"party slot {slot}" if kind == "party" else f"box {box + 1} slot {slot}"
+
+
+def _compare_num_chars(a, b, num: int) -> bool:
+    """``CharCode_CompareNumChars(a, b, num) == 0`` (src/charcode_util.c:87-104), line for
+    line: equal when the codes agree up to a shared ``EOS``, or through ``num + 1``
+    codes."""
+    i = 0
+    while a[i] == b[i]:
+        if num == 0:
+            return True
+        if a[i] == CHAR_EOS and b[i] == CHAR_EOS:
+            return True
+        num -= 1
+        i += 1
+    return False
+
+
+def _egg_location(rec: bytes) -> int:
+    """``MON_DATA_EGG_LOCATION`` (src/pokemon.c:1159-1166): the PtHGSS field (block B
+    0x1C) when the DP field (block D 0x16) is the fateful-encounter location and the
+    PtHGSS field is nonzero, else the DP field."""
+    dp, pt = _u16(rec, _D + 0x16), _u16(rec, _B + 0x1C)
+    return pt if dp == _FATEFUL_ENCOUNTER_LOCATION and pt else dp
 
 
 def _u16(b: bytes, o: int) -> int:
@@ -294,4 +371,10 @@ def decode_mon(
         current_hp=current_hp,
         status_raw=status_raw,
         stored_stats=stored_stats,
+        language=rec[_A + 0x0F],
+        ot_name_codes=tuple(_u16(rec, _D + 2 * i) for i in range(OT_NAME_LEN + 1)),
+        ot_gender=rec[_D + 0x1C] >> 7,
+        pokerus=rec[_D + 0x1A],
+        pokeball=rec[_D + 0x1B],
+        egg_location=_egg_location(rec),
     )

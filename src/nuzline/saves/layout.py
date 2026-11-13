@@ -25,6 +25,7 @@ __all__ = [
     "SAVE_SIZE",
     "SECTOR_SIZE",
     "SIGNATURE",
+    "TRAINER_GENDER",
     "TRAINER_ID",
     "TRAINER_NAME",
     "TRAINER_NAME_LEN",
@@ -58,6 +59,8 @@ BLOCK_IDS = {"normal": 0, "boxes": 1}  # enum SaveBlockID
 TRAINER_NAME = 0x64 + 0x04  # TrainerInfo.name, include/trainer_info.h:9
 TRAINER_NAME_LEN = 8  # charcode_t name[TRAINER_NAME_LEN + 1], TRAINER_NAME_LEN = 7
 TRAINER_ID = TRAINER_NAME + 2 * TRAINER_NAME_LEN  # 0x78, u32: low = TID, high = SID
+# TrainerInfo (include/trainer_info.h:9-14): name, u32 id, u32 money, u8 gender, u8 language.
+TRAINER_GENDER = TRAINER_ID + 4 + 4  # 0x80: after id and money
 BADGES = TRAINER_ID + 4 + 4 + 1 + 1  # 0x82: after id, money, gender, language
 # Party page 0x98 (PlayerSave 0x2C rounded to 0x34): int capacity, int currentCount, mons.
 PARTY_COUNT = 0x98 + 4  # 0x9C

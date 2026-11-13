@@ -9,8 +9,8 @@ Spec: `docs/superpowers/specs/2026-11-07-kaizo-k3-design.md` §4 (mechanics), §
 and the mechanics"). K3a handover: `handover.md` in this folder; `overlay16.md` §2 has the obedience
 decode.
 
-Path conventions: repo-relative paths are under `G:\Farry\Claude Workspace\Pokemon Platinum Game
-Engine`; `bcp.c` = `external/pokeplatinum/src/battle/battle_controller_player.c`, `lib.c` =
+Path conventions: paths are relative to the repository root; `bcp.c` =
+`external/pokeplatinum/src/battle/battle_controller_player.c`, `lib.c` =
 `.../src/battle/battle_lib.c`, `script.c` = `.../src/battle/battle_script.c`; `.s` files are under
 `external/pokeplatinum/res/battle/scripts/`. "K" = data/intermediate_kaizo, "V" = data/intermediate.
 
@@ -20,10 +20,13 @@ Engine`; `bcp.c` = `external/pokeplatinum/src/battle/battle_controller_player.c`
 
 ### 1.1 Commands run
 
+`<pre-Roark save>` and `<probe save>` are the `kaizo_save_pre_roark` and `kaizo_save_probe`
+saves of `data/local.toml`.
+
 ```
-uv run nuzline coverage --game kaizo --save "G:\Farry\Downloads\Platinum Kaizo Base.dsv" --trainer roark --cap 16
+uv run nuzline coverage --game kaizo --save <pre-Roark save> --trainer roark --cap 16
    -> exit 2; Fight: Support NONE, Missing (54); Pool (12 Pokemon): Missing (40)
-uv run nuzline coverage --game kaizo --save "G:\Farry\Downloads\Battery\kaizo Probe.dsv" --trainer roark --cap 16
+uv run nuzline coverage --game kaizo --save <probe save> --trainer roark --cap 16
    -> exit 2; Fight: Missing (59); Pool: Missing (40)
 ```
 

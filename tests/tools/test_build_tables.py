@@ -3,7 +3,7 @@
 import pytest
 
 from nuzline.engine.ids import EffectId
-from tools.build_tables import BuildError, _move_effect
+from tools.build_tables import BuildError, _learnset_grid, _move_effect
 
 # Exactly the keys _move_effect reads: name, effect (BATTLE_EFFECT_BURN_HIT = 4) and
 # effect_chance.
@@ -62,3 +62,18 @@ def test_chance_zero_flinch_raises():
     assert _move_effect(headbutt)[0] == int(EffectId.FLINCH)
     with pytest.raises(BuildError, match="Headbutt"):
         _move_effect({**headbutt, "effect_chance": 0})
+
+
+def test_learnset_grid_keeps_source_order_and_pads():
+    moves, levels = _learnset_grid({"0": [[8, 5], [5, 6]], "1": []}, 2)
+    assert levels == [[8, 5] + [0] * 19, [0] * 21]
+    assert moves == [[5, 6] + [0] * 19, [0] * 21]
+
+
+def test_learnset_grid_refuses_what_it_cannot_pack():
+    with pytest.raises(BuildError, match="row 0: 22 entries, more than 21"):
+        _learnset_grid({"0": [[5, 1]] * 22}, 1)
+    with pytest.raises(BuildError, match="row 0: level 0 is outside"):
+        _learnset_grid({"0": [[0, 1]]}, 1)
+    with pytest.raises(BuildError, match=r"rows are not 0\.\.1"):
+        _learnset_grid({"0": []}, 2)

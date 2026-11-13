@@ -98,6 +98,7 @@ from nuzline.engine.step import (
     step,
 )
 from nuzline.search.deaths import over_budget
+from nuzline.search.learn import learn_reason, resolve_learns, settle_learns, settle_reason
 
 __all__ = [
     "REFUSED_WON",
@@ -345,9 +346,12 @@ def finish_turn(
 ) -> tuple[BattleState, jnp.ndarray]:
     """``(state, refused)``: ``send_replacements``, then while the player needs a
     replacement (``SLOTS - 1`` passes at most) ``replacement_pass`` with
-    ``replacement_policy``'s slot."""
+    ``replacement_policy``'s slot. The turn's learn-move prompts are resolved first
+    (``resolve_learns``), as ``TurnEnd`` runs them before ``ReplaceFainted``."""
+    state = resolve_learns(tables, state)
     state, refused = send_replacements(tables, state, ai_switched, power_mul)
-    return _replace_while_needed(tables, state, refused, SLOTS - 1)
+    state, refused = _replace_while_needed(tables, state, refused, SLOTS - 1)
+    return state, refused | (state.exp_refused != 0)
 
 
 def _replace_while_needed(tables: Tables, state: BattleState, refused, passes):
@@ -400,7 +404,9 @@ def _first_action(turns, first_action, chosen):
 def _resolve_pending(tables: Tables, state: BattleState, first_action):
     """``(state, first_action, refused)``: a pending player replacement resolved first
     (a switch ``first_action`` chooses the slot, else ``replacement_policy``); the policy
-    then chooses from the first turn on (``first_action`` -1)."""
+    then chooses from the first turn on (``first_action`` -1). A pending learn-move prompt
+    and a pending opponent replacement are settled before the player's (``settle_learns``)."""
+    state, learn_refused = settle_learns(tables, state, send_replacements, _carried_mul)
     pending = needs_replacement(state)[0] == 1
     chosen = jnp.where(
         first_action >= MOVE_ACTIONS,
@@ -409,7 +415,7 @@ def _resolve_pending(tables: Tables, state: BattleState, first_action):
     )
     passed, refused = replacement_pass(tables, state, chosen.astype(_I32))
     state = _select(pending, passed, state)
-    refused = pending & refused
+    refused = (pending & refused) | learn_refused
     # A newcomer that faints on entry (Stealth Rock) leaves it pending again: finish_turn's
     # loop, with this pass counted in its SLOTS - 1.
     state, refused = _replace_while_needed(tables, state, refused, SLOTS - 2)
@@ -571,10 +577,15 @@ def refusal_reason(
     loop (the same key splits) and the refused turn's AI (``ai_refusals``, then the
     per-slot scoring path's ``ai_path_refusals``, also when the
     player's choice met a refused distribution) or replacement (``replacement_refusal``) is
-    asked on its concrete state; a pending player replacement is replayed first.
+    asked on its concrete state (after the turn's learns, as ``finish_turn``); a pending
+    learn and a pending player replacement are replayed first (``settle_reason``, as
+    ``_resolve_pending``).
     ``layout`` defaults to the concrete ``tables``' own (``layout_of``)."""
     layout = layout_of(tables) if layout is None else layout
     first = jnp.asarray(action, _I32)
+    reason, state = settle_reason(tables, state, _send_reason, _carried_mul)
+    if reason:
+        return reason
     if int(needs_replacement(state)[0]) == 1:
         slot = int(first) - MOVE_ACTIONS if int(first) >= MOVE_ACTIONS else None
         if slot is None:
@@ -606,6 +617,8 @@ def refusal_reason(
             played, _, ai_switched, power_mul = _play_jit(
                 tables, state, player_action, k_turn, layout
             )
-            return replacement_refusal(tables, played, ai_switched, power_mul)
+            return learn_reason(
+                finish_turn(tables, played, ai_switched, power_mul)[0]
+            ) or replacement_refusal(tables, resolve_learns(tables, played), ai_switched, power_mul)
         state = played
     return None

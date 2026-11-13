@@ -35,6 +35,22 @@ anyone entered), observed as any turn child. The replacement itself is a request
 ``playout.replacement_pass`` for the chosen slot (``action - MOVE_ACTIONS``) and observes
 the result with ``replacement_observation`` (no action ran). It has no outcome draw, so
 the one child has probability 1; the store is deduplicated by state bytes as ``expand``'s.
+
+**Learn-move prompts** (K3d-exp design §3.5): ``TurnEnd`` pays exp and runs its learn-move
+prompts (battle_controller_player.c:1846) before ``ReplaceFainted`` (:1848). So a turn's
+child first runs the learnset scans (``levelup.advance_learns``); when a prompt is left and
+the battle goes on, the child **stops** at that learn decision before the opponent's
+replacement, holding the turn's ``power_mul`` in ``replace_mul`` when the opponent's active
+is down (as ``send_replacements`` holds it at a player replacement), and refused when the
+opponent needs a replacement after an AI switch (``ai_switched`` is decided now; roark.md
+14, item 3). Learn work left at a battle-ending KO is no prompt (ruling D8): the child is
+terminal. The answer is a request ``(state index, option)`` of ``expand_learns``:
+``learn_rows`` runs ``levelup.learn`` with the option (``learn_options``' indexing), then,
+once no prompt is left, ``send_replacements`` with the carried ``powerMul``
+(``playout._carried_mul``), which may stop at a player replacement and hold it again;
+``replace_mul`` is cleared when nothing is pending. It is observed with
+``replacement_observation`` (no action ran). Every row kind (turn, learn, replacement) also
+marks a child refused when ``exp_refused`` is set (design §3.3, window (c)).
 """
 
 from __future__ import annotations
@@ -61,13 +77,14 @@ from nuzline.engine.enumerate import (
     enumerate_outcomes,
     outcome_laws,
 )
+from nuzline.engine.levelup import advance_learns, learn, needs_learn
 from nuzline.engine.observe import observation, replacement_observation
 from nuzline.engine.order import is_switch
 from nuzline.engine.outcome import Outcome
 from nuzline.engine.state import BattleState
-from nuzline.engine.step import replacement_power_mul, step_events
+from nuzline.engine.step import needs_replacement, replacement_power_mul, step_events
 from nuzline.jaxcache import cached_export, code_version
-from nuzline.search.playout import replacement_pass, send_replacements
+from nuzline.search.playout import _carried_mul, replacement_pass, send_replacements
 from nuzline.search.rows import concat, row_bytes, take
 
 __all__ = [
@@ -76,8 +93,10 @@ __all__ = [
     "ai_rows",
     "bucket_rows",
     "expand",
+    "expand_learns",
     "expand_replacements",
     "laws_rows",
+    "learn_rows",
     "replace_rows",
     "step_rows",
 ]
@@ -95,7 +114,8 @@ for _cls in (Outcome, OutcomeLaws, Reads):
 class Child:
     """One merged child of a request: ``state_row`` indexes the store ``expand``
     returns; ``obs`` is the ``int32[OBS_SIZE]`` observation's bytes; ``prob`` the
-    float64 total of its outcomes; ``refused`` the opponent's replacement was refused."""
+    float64 total of its outcomes; ``refused`` the opponent's replacement was refused (or
+    ``exp_refused`` is set)."""
 
     state_row: int
     obs: bytes
@@ -184,12 +204,32 @@ def laws_rows(tables: Tables, states: BattleState, actions) -> OutcomeLaws:
     return _run(_laws, "expand_laws", tables, (states, actions), len(actions))
 
 
+def _select(cond, a, b):
+    return jax.tree.map(lambda x, y: jnp.where(cond, x, y), a, b)
+
+
 def _turn(tables: Tables, before: BattleState, actions, outcome: Outcome):
     """One outcome of a turn, as the playout plays it (module docstring): ``(after,
-    refused, observation)``."""
+    refused, observation)``. The learnset scans run first (``advance_learns``: the
+    ``TurnEnd`` payout's prompts come before ``ReplaceFainted``, bcp.c:1846-1848); a prompt
+    in a battle that goes on stops the child at the learn decision (module docstring),
+    else the opponent's replacement follows as in the playout (``finish_turn``)."""
     power_mul = replacement_power_mul(tables, before, actions)
+    ai_switched = is_switch(actions[1])
     stepped, events = step_events(tables, before, actions, outcome)
-    after, refused = send_replacements(tables, stepped, is_switch(actions[1]), power_mul)
+    stepped = advance_learns(tables, stepped)
+    prompt = needs_learn(stepped) & (stepped.over == 0)  # D8: no prompt once it is over
+    # The learn stop: the turn's powerMul waits in replace_mul for the opponent's
+    # replacement after the answer (as at send_replacements' player stop), and an opponent
+    # replacement after an AI switch is refused now (send_replacements' rule).
+    opp_down = stepped.hp[1, stepped.active[1]] == 0
+    held = stepped._replace(
+        replace_mul=jnp.where(opp_down, power_mul, 0).astype(stepped.replace_mul.dtype)
+    )
+    held_refused = ai_switched & (needs_replacement(stepped)[1] == 1)
+    sent, sent_refused = send_replacements(tables, stepped, ai_switched, power_mul)
+    after = _select(prompt, held, sent)
+    refused = jnp.where(prompt, held_refused, sent_refused) | (after.exp_refused != 0)
     return after, refused, observation(events, after)
 
 
@@ -296,7 +336,7 @@ def expand(
 
 def _replace(tables: Tables, state: BattleState, action):
     after, refused = replacement_pass(tables, state, action - MOVE_ACTIONS)
-    return after, refused, replacement_observation(after)
+    return after, refused | (after.exp_refused != 0), replacement_observation(after)
 
 
 def _replaces(tables: Tables, states: BattleState, actions):
@@ -314,16 +354,14 @@ def replace_rows(
     return after, np.asarray(refused, bool), np.asarray(obs, np.int32)
 
 
-def expand_replacements(
-    tables: Tables, states: BattleState, requests: list[tuple[int, int]]
-) -> tuple[BattleState, dict[int, Child]]:
-    """The child of each request ``(state index, player action)`` on the numpy
-    ``states``: ``(store, children)`` as ``expand`` returns them, one ``Child`` per
-    request with ``prob`` 1.0, the store deduplicated by state bytes."""
+def _one_child_rows(rows_fn, tables: Tables, states: BattleState, requests):
+    """``(store, children)`` of one-child requests ``(state index, action)`` through
+    ``rows_fn`` (``replace_rows``, ``learn_rows``): one ``Child`` per request with ``prob``
+    1.0, the store deduplicated by state bytes."""
     states = jax.tree.map(np.asarray, states)
     index = np.asarray([r[0] for r in requests], np.int64).reshape(-1)
     actions = np.asarray([r[1] for r in requests], np.int32)
-    after, refused, obs = replace_rows(tables, take(states, index), actions)
+    after, refused, obs = rows_fn(tables, take(states, index), actions)
     n = len(requests)
     state_bytes, obs_bytes = row_bytes(after, n), row_bytes(obs, n)
     rows: dict[bytes, int] = {}
@@ -338,3 +376,53 @@ def expand_replacements(
         children[i] = Child(row, obs_bytes[i].tobytes(), 1.0, bool(refused[i]))
     store = take(after, np.asarray(new)) if new else take(states, slice(0, 0))
     return store, children
+
+
+def expand_replacements(
+    tables: Tables, states: BattleState, requests: list[tuple[int, int]]
+) -> tuple[BattleState, dict[int, Child]]:
+    """The child of each request ``(state index, player action)`` on the numpy
+    ``states``: ``(store, children)`` as ``expand`` returns them, one ``Child`` per
+    request with ``prob`` 1.0, the store deduplicated by state bytes."""
+    return _one_child_rows(replace_rows, tables, states, requests)
+
+
+def _learn(tables: Tables, state: BattleState, option):
+    """The answer ``option`` to ``state``'s learn-move prompt (module docstring):
+    ``(after, refused, observation)``. Another prompt left stops there; else the
+    opponent's pending replacement runs with the carried ``powerMul`` (``ai_switched`` was
+    settled at the stop), and ``replace_mul`` is cleared unless the player's replacement is
+    pending (``send_replacements`` then holds it again)."""
+    answered = learn(tables, state, option)
+    prompt = needs_learn(answered) & (answered.over == 0)
+    sent, sent_refused = send_replacements(tables, answered, False, _carried_mul(answered))
+    pending = needs_replacement(sent)[0] == 1
+    sent = sent._replace(
+        replace_mul=jnp.where(pending, sent.replace_mul, 0).astype(sent.replace_mul.dtype)
+    )
+    after = _select(prompt, answered, sent)
+    refused = (~prompt & sent_refused) | (after.exp_refused != 0)
+    return after, refused, replacement_observation(after)
+
+
+def _learns(tables: Tables, states: BattleState, options):
+    return jax.vmap(_learn, in_axes=(None, 0, 0))(tables, states, options)
+
+
+def learn_rows(
+    tables: Tables, states: BattleState, options
+) -> tuple[BattleState, np.ndarray, np.ndarray]:
+    """``(after, refused bool[N], observation int32[N, OBS_SIZE])`` of ``N`` rows of
+    (state at a learn-move prompt, ``learn_options`` option): ``_learn`` in one cached
+    program."""
+    options = np.asarray(options, np.int32)
+    after, refused, obs = _run(_learns, "expand_learn", tables, (states, options), len(options))
+    return after, np.asarray(refused, bool), np.asarray(obs, np.int32)
+
+
+def expand_learns(
+    tables: Tables, states: BattleState, requests: list[tuple[int, int]]
+) -> tuple[BattleState, dict[int, Child]]:
+    """The child of each request ``(state index, learn option)`` on the numpy ``states``
+    (each at a learn-move prompt), as ``expand_replacements`` returns them."""
+    return _one_child_rows(learn_rows, tables, states, requests)

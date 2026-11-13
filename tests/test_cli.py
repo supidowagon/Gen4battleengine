@@ -401,7 +401,7 @@ def test_save_export_round_trips(save_path, tmp_path, tables, names, capsys):
     out = tmp_path / "party.toml"
     assert main(["save", "export", str(save_path), "-o", str(out)]) == 0
     save = load_save(save_path, tables=tables, names=names)
-    assert load_party(out, names) == [m.to_spec(tables) for m in save.party]
+    assert load_party(out, names) == [m.to_spec(tables, save.trainer) for m in save.party]
     with pytest.raises(SystemExit) as e:  # -o is required
         main(["save", "export", str(save_path)])
     assert e.value.code == 2
@@ -411,6 +411,27 @@ def test_rank_with_save(save_path, capsys):
     args = ["rank", "--save", str(save_path), "--trainer", "roark", "--n", "20", "--devices", "1"]
     assert main(args) == 0
     assert "Switch" in capsys.readouterr().out
+
+
+def test_a_fight_from_a_save_resolves_the_exp_boost_with_its_trainer(
+    tmp_path, tables, names, monkeypatch
+):
+    # K3d-exp T3: the fight's player specs come from SaveMon.to_spec with the save's
+    # trainer (cli._fight), so exp_boost is resolved (100 for the save's own Pokemon).
+    from nuzline.saves.pkm import SaveMon
+    from tests.saves.synthetic import write_save
+
+    specs = []
+    to_spec = SaveMon.to_spec
+
+    def spy(self, tables, trainer=None):
+        specs.append(to_spec(self, tables, trainer))
+        return specs[-1]
+
+    monkeypatch.setattr(SaveMon, "to_spec", spy)
+    path = write_save(tmp_path, tables, names)
+    assert main(["coverage", "--save", str(path), "--trainer", "roark"]) == 0
+    assert specs and {s.exp_boost for s in specs} == {100}
 
 
 def test_save_egg_first_is_dropped(tmp_path, tables, names, capsys):
@@ -1232,7 +1253,7 @@ def test_kaizo_save_export_checks_kaizo_tables(which, tmp_path, request, kaizo_t
     out = tmp_path / "party.toml"
     assert main(["save", "export", "--game", "kaizo", str(path), "-o", str(out)]) == 0
     save = load_save(path, tables=kaizo_tables, names=kaizo_names, game=_KAIZO)
-    want = [m.to_spec(kaizo_tables) for m in save.party if not m.is_egg]
+    want = [m.to_spec(kaizo_tables, save.trainer) for m in save.party if not m.is_egg]
     assert load_party(out, kaizo_names) == want
 
 

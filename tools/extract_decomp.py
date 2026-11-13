@@ -172,6 +172,14 @@ def _row_fields(decomp: Path):
     exp_rate_id = _index(_constants(decomp, "exp_rates", "EXP_RATE_"), "exp rate")
     ratios = _gender_ratios(decomp)
 
+    def ev_yield(path: Path, d: dict) -> list[int]:
+        # Each yield is a 2-bit field of SpeciesEVYields (include/struct_defs/species.h:25-32),
+        # packed by tools/dataproc/src/speciesproc.c:352-359.
+        out = [int(d["ev_yields"][k]) for k in STAT_KEYS]
+        if not all(0 <= v <= 3 for v in out):
+            raise ExtractError(f"{path}: EV yields {out} do not fit 2 bits")
+        return out
+
     def fields(path: Path, d: dict) -> dict:
         if d["gender_ratio"] not in ratios:
             raise ExtractError(f"{path}: unknown gender ratio {d['gender_ratio']!r}")
@@ -184,6 +192,7 @@ def _row_fields(decomp: Path):
             "exp_rate": exp_rate_id(d["exp_rate"]),
             "exp_yield": int(d["base_exp_reward"]),
             "catch_rate": int(d["catch_rate"]),
+            "ev_yield": ev_yield(path, d),
         }
 
     return fields
@@ -208,6 +217,7 @@ def extract_species(decomp: Path) -> list[dict]:
                 "exp_rate": row["exp_rate"],
                 "exp_yield": row["exp_yield"],
                 "catch_rate": row["catch_rate"],
+                "ev_yield": row["ev_yield"],
             }
         )
     return out

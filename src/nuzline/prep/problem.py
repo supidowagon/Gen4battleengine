@@ -22,11 +22,14 @@ from nuzline.engine.coverage import (
     IMPLEMENTED_EFFECTS,
     IMPLEMENTED_ITEMS,
     Support,
+    exp_refusals,
     ghost_curse,
     halved_by_line,
     halved_defense_line,
     halving_moves,
+    learnable_moves,
     low_defense,
+    reachable_level,
     rom_change_line,
     rom_change_refusals,
     terrain_refusal,
@@ -175,7 +178,14 @@ def usable_pool(
     terrain of a trainer whose terrain is unknown (``coverage.terrain_refusal``). Against the
     trainer's party ``opp``, a Selfdestruct-family move is refused against a low Defense
     (``_move_refusal``), and a candidate whose own Defense is that low is left out when a foe
-    knows such a move (``coverage.halved_by_line``)."""
+    knows such a move (``coverage.halved_by_line``).
+
+    Experience (K3d-exp design §4): a move the candidate can learn by levelling up in the
+    fight (``coverage.learnable_moves``: ruling D10 masks a
+    prompt-only unsupported one) is a move it may have to take (an auto-learn
+    fills an empty slot, battle_script.c:10021-10027), so a refused one leaves the candidate
+    out (``"<move> (level-up in battle, <reason>)"``), as does a ``coverage.exp_refusals``
+    line, judged with the held item the candidate keeps."""
     foe_defense = low_defense(tables, opp)
     foe_halving = halving_moves(tables, opp)
 
@@ -204,12 +214,22 @@ def usable_pool(
         for move in spec.moves:
             if move and (r := move_refusal(move, spec)) is not None:
                 why.append(f"{names.move_names[move]} ({r})")
+        learnable = learnable_moves(tables, spec, opp)
+        for move in learnable:
+            if move not in spec.moves and (r := move_refusal(move, spec)) is not None:
+                why.append(f"{names.move_names[move]} (level-up in battle, {r})")
+        item_refused = _item_refusal(tables, spec.item) or rom([spec])
+        kept = spec if item_refused is None else dataclasses.replace(spec, item=0)
+        could_know = [*spec.moves, *cand.relearner, *(m for _, m in cand.tms), *learnable]
+        fight_moves = [*could_know, *(m for foe in opp for m in foe.moves)]
+        levels_up = reachable_level(tables, kept, opp) > spec.level
+        why += exp_refusals(tables, names, kept, learnable, fight_moves, levels_up)
         if why:
             lines.extend(f"{cand.label}: left out: {w}" for w in why)
             continue
-        if (r := _item_refusal(tables, spec.item) or rom([spec])) is not None:
-            lines.append(f"{cand.label}: {names.item_names[spec.item]} taken off ({r})")
-            cand = dataclasses.replace(cand, spec=dataclasses.replace(spec, item=0))
+        if item_refused is not None:
+            lines.append(f"{cand.label}: {names.item_names[spec.item]} taken off ({item_refused})")
+            cand = dataclasses.replace(cand, spec=kept)
         relearner = []
         for move in cand.relearner:
             if (r := move_refusal(move, spec)) is None:

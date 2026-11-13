@@ -180,6 +180,50 @@ three structs has a row.
     `PokemonSpec.ability_slot`); `tables.species_abilities_decomp[row, ability_slot]`,
     with `row = tables.species_form_row[species, form]`, is the decomp ability id, also
     for abilities the engine does not implement (`ability` is then `UNSUPPORTED`).
+- **Experience (K3d-exp, design §2.1).** One block between `ai_ability_known` and
+  `deaths`. Experience changes the fight: the payout runs mid-turn and a level-up rewrites
+  the level, stats, max HP, HP and moves of a live battler (design §0, §1.4).
+  - `exp` (`int32[6]`, the one exception to `int8`/`int16` storage, ruling D1: level-100
+    values exceed `int16`) is the player party's `MON_DATA_EXPERIENCE`, which
+    `BattleSystem_ReloadPokemon` copies into `BattleMon.exp` (battle_lib.c:192). Only the
+    player's Pokemon gain exp (`BtlCmd_CalcExpGain` pays for a `SOLO_ENEMY` faint,
+    battle_script.c:2196), so the opponent's is not kept. `make_state` takes the spec's
+    `exp`, else the base of the level, and refuses an `exp` that is not of the level
+    (`SpeciesData_GetLevelAt`, pokemon.c:2379-2392).
+  - `evs` (`ids.Stat` order, like `ivs`) and `nature`, both sides: party data (no battle
+    struct holds them) that the level-up `Pokemon_CalcStats` reads.
+  - `exp_boost` (100 / 150 / 170, 0 = unresolved), `pokerus` and `friend_bonus`: the
+    player's `PokemonSpec` fields (`BattleScript_GetExpTask`, battle_script.c:9757-9763;
+    pokemon.c:4184-4199; pokemon.c:2664-2666). The host resolves the OT and language test
+    into `exp_boost`.
+  - `exp_mask` is `sideGetExpMask[0]` (row below), a bitmask over the player's party
+    slots: `1 << lead` at the start, then written by every send-out (`step._switch_in`;
+    battle_lib.c:1456-1479, battle_script.c:543-635).
+  - `learn_level` / `learn_cursor` are the deferred learnset scan: the level whose scan is
+    next and the index into it (the decomp restarts `GET_EXP_LEARNSET_INDEX` at 0 for each
+    level, battle_script.c:9882). `learn_pin` (the move slot the player selected, when a
+    payout reached its active before its move ran) and `exp_refused` (a sticky refusal
+    code) are the engine's own bookkeeping. All four are 0 until the payout and the learn
+    resolve set them.
+  - The search masks some learn-move options (ruling D2, and `learn_pin`, ruling U1):
+    replacing an AI-seen slot, the active learner's disabled, locked or choice-locked move,
+    or the slot pinned by `learn_pin`, and every replacement when the offered move's effect is
+    unsupported (ruling D10; coverage then refuses it only where it could auto-learn into an
+    empty slot, `coverage.learnable_moves`). They are legal game choices the search skips, so plan
+    values at learn nodes are achievable lower bounds (`levelup.learn_options`; the playout
+    always gives the move up, ruling D3). The scan, auto-learns and prompts run after `step`,
+    before any faint replacement (`levelup.advance_learns` / `learn`,
+    `search.learn.resolve_learns`); prompts pending when the battle ends stay (ruling D8).
+  - Known limitation (T8 review M1): Stage B's learn node comes after the whole turn's
+    outcome (`expand._turn`), but the decomp can prompt mid-turn, at a payout in `MoveEnd`
+    (battle_controller_player.c:3968), `CheckFieldConditions` (:941) or `CheckMonConditions`
+    (:1296), before a later draw of the same turn such as Shed Skin's
+    (`BattleSystem_RandNext(battleSys) % 10 < 3`, battle_lib.c:3567-3570, run from
+    `MON_COND_CHECK_STATE_ABILITY`, battle_controller_player.c:1354-1355). The search then
+    picks the answer knowing that draw, which the player cannot, so in that case the learn
+    node's value is possibly optimistic: it may exceed what the player can achieve. It
+    needs a chance event after a mid-turn payout in the same turn; the replayed state
+    stays exact, only the choice is better informed than the player's.
 - **Not from a struct field.** `pursuit_target` and `wish_hp` are
   `BattleState`'s own bookkeeping: the decomp derives Pursuit's pre-switch hit
   from per-turn scratch (the opposing battler's selected move when a switch is
@@ -232,11 +276,11 @@ three structs has a row.
 | `BattleMon.curHP` | `hp` | mapped |
 | `BattleMon.maxHP` | `max_hp` | mapped |
 | `BattleMon.OTName` | — | not needed because it is cosmetic (names, messages, sprites, animation) |
-| `BattleMon.exp` | — | not needed because experience and level-ups do not change the fight being searched |
+| `BattleMon.exp` | `exp` | mapped |
 | `BattleMon.personality` | — | not needed because its battle uses (nature, ability slot, gender) are resolved into `PokemonSpec` before `make_state` |
 | `BattleMon.status` | `status`, `status_counter` | mapped |
 | `BattleMon.statusVolatile` | `confusion`, `flinched`, `trapped`, `recharge`, `foresight`, `bide_turns`, `curled`, `locked_move`, `infatuated` | mapped |
-| `BattleMon.OTId` | — | not needed because only obedience and the traded-Pokemon exp bonus read it; the tool assumes an obedient party |
+| `BattleMon.OTId` | — | not needed because only obedience and the traded-Pokemon exp bonus read it; the tool assumes an obedient party and resolves the exp bonus into `exp_boost` before `make_state` |
 | `BattleMon.heldItem` | `item` | mapped |
 | `BattleMon.padding007A` | — | not needed because it is padding |
 | `BattleMon.timesDamaged` | — | not needed because no battle or AI logic reads it (only the generic BattleMon getter and setter) |
@@ -370,9 +414,9 @@ three structs has a row.
 | `BattleContext.sideEffectFlags` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
 | `BattleContext.sideEffectMon` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
 | `BattleContext.lastBattlerId` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
-| `BattleContext.gainedExp` | — | not needed because experience and level-ups do not change the fight being searched |
-| `BattleContext.sharedExp` | — | not needed because experience and level-ups do not change the fight being searched |
-| `BattleContext.sideGetExpMask` | — | not needed because experience and level-ups do not change the fight being searched |
+| `BattleContext.gainedExp` | — | not needed because it is per-payout scratch (`BtlCmd_CalcExpGain`, battle_script.c:2220-2236) that the payout recomputes from `exp_mask` and the party |
+| `BattleContext.sharedExp` | — | not needed because it is per-payout scratch (`BtlCmd_CalcExpGain`, battle_script.c:2226-2230) that the payout recomputes from the party's held items |
+| `BattleContext.sideGetExpMask` | `exp_mask` | mapped |
 | `BattleContext.scriptNarc` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |
 | `BattleContext.scriptFile` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |
 | `BattleContext.scriptCursor` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |
@@ -467,7 +511,7 @@ three structs has a row.
 | `BattleContext.lastHitByBattler` | — | later (M6) |
 | `BattleContext.battlerSpeedTemp` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
 | `BattleContext.battlersSwitchingMask` | — | not needed because it is reset every turn and `step` resolves a whole turn |
-| `BattleContext.levelUpMons` | — | not needed because experience and level-ups do not change the fight being searched |
+| `BattleContext.levelUpMons` | — | not needed because only the battle's end reads it (`BattleMain_CopyBattleSysToDTOAndFree`, battle_main.c:723, for evolution), after the fight being searched |
 | `BattleContext.padding310A` | — | not needed because it is padding |
 | `BattleContext.speedRand` | `qc_roll` | mapped |
 | `BattleContext.flingTemp` | — | later (M6) |

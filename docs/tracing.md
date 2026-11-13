@@ -18,7 +18,11 @@ The pipeline has three stages:
    committed. Raw traces belong in `traces/`, which is git-ignored. For Kaizo, pass
    `--game kaizo --save <save.dsv>` instead of `--party`: the party is read from the
    save (`SaveMon.to_spec`), and the trainer and tables come from the Kaizo data set,
-   which the bundle records as `"game"` (`docs/tracing_kaizo.md`).
+   which the bundle records as `"game"` (`docs/tracing_kaizo.md`). The bundle format is
+   `nuzline-golden-trace/2`: each party entry also carries `exp`, `exp_boost`, `pokerus`
+   and `friend_bonus` (`PokemonSpec`; `exp_boost` is resolved with the save's trainer,
+   the OT test of `BattleSystem_PokemonIsOT`). A `/1` bundle still loads, with the
+   `PokemonSpec` defaults for those keys (the base exp of the level, boost 100, 0, 0).
 3. `trace_to_states(bundle, tables, names)` rebuilds the turn-0 state from the party and
    the trainer, overlays each recorded turn, and infers both actions and the `Outcome` of
    every turn. The golden test replays those turns.
@@ -73,10 +77,14 @@ player guide is `docs/tracing_kaizo.md`.
   difference it finds. A wrong IV or EV usually shows up there as a max-HP difference.
   Other stat errors only show up later, as damage that fits no roll.
 - **Fight rules for a usable trace:**
-  - Lead with slot 0. Fight until Roark's last Pokemon faints.
-  - **No player Pokemon may faint.** The engine treats a player faint as terminal
-    (spec §3), so the converter stops the trace at the first player faint, and the turns
-    after it are lost.
+  - Lead with slot 0. Whether you win or lose does not matter: the recording ends where
+    the battle ends, and the converter replays every turn up to there
+    (`trace_to_state`, which stops only at `state.over`).
+  - A player Pokemon may faint: the engine treats a player faint as a death, not the end
+    of the battle (`_faint_check`, `needs_replacement`), and the converter replays the
+    player's replacement into the slot the next record shows (`apply_turn`). Two
+    replacements on one turn are refused (`TraceError`): a double KO, or a newcomer that
+    faints on entry (the record shows only the last active).
   - Use only moves and switches, never a bag item: the player's bag is not modelled.
     Roark's own Potion use is inferred and replayed (actions 10 to 13).
   - The golden test needs at least three turns: three turn boundaries plus the final
@@ -398,6 +406,21 @@ For each turn, `tools/trace_to_state.py` works out the following:
   (bit 6) when `BtlCmd_TryProtection` failed: the converter sets `Outcome.protect` to 0
   then, else 1 (a success; a chain of 0 or a user acting last ignores the roll). A move it
   blocked writes no `hit` record and its `move_end` has `MOVE_STATUS_PROTECTED` (bit 15).
+- **Level-ups and learn-move prompts.** The engine pays exp and levels inside `step`
+  (`engine/levelup.py`); `apply_turn` then runs the learnset scans and answers the turn's
+  learn-move prompts (`Turn.learn_choices`) before the replacements, as the decomp's
+  `TurnEnd` does (battle_controller_player.c:1846-1848). The per-turn fit replays no answer
+  and leaves the moves and PP of a slot with a pending prompt uncompared; then, from the
+  chosen candidate, the converter searches the answers depth first, prompt by prompt in the
+  engine's order (player slot ascending), each over giving up and every slot whose move is
+  not an HM (the game's only rule, `Item_IsHMMove`, src/item.c:306-315), not the search's
+  masks. The first answers that match the next record win. A slot whose move a prompt
+  replaced this turn shows the new move's PP; it counts as used when the side's `hit` or
+  `move_end` records name its old move. Refused: an answer that replaces a move the AI has
+  seen (the AI's move-id list keeps the old id, trainer_ai.c:2705-2716), another option
+  `levelup.learn_options` masks, and any move the engine does not support learned by an
+  answer or into an empty slot (ruling D10). A party file whose exp is not of its level is
+  refused too.
 - **Quick Claw.** `speedRand` is not dumped. For a side whose start-of-turn active Pokemon
   holds a Quick Claw, the converter replays both values of the start state's `qc_roll`
   (the draw that orders this turn: the battle start's on turn 0, else the previous turn's
@@ -427,11 +450,37 @@ For each turn, `tools/trace_to_state.py` works out the following:
     unchanged PP and HP; the one with 0 needs the PP drop. A confusion self-hit is taken
     from a `hit` record whose
   attacker is also its defender, and its roll is matched against `confusion_damage`.
-  Every candidate (actions times outcome fields) is replayed through `step`, followed
-  by the opponent's replacement into the next record's active slot, and the candidate
+  Every candidate (actions times outcome fields) is replayed through `apply_turn`:
+  `step`, then the replacement of a fainted active Pokemon into the next record's active
+  slot, the player's before the opponent's (`ReplaceFainted`,
+  battle_controller_player.c:1848, serves battler 0 first, :4078-4130). The candidate
   that matches the next record on the most `COMPARED_FIELDS` wins. Ties go to the first
   candidate. A best candidate that still disagrees is kept: the golden test then fails
-  on that turn and names the field.
+  on that turn and names the field. `Turn.player_slot` (and `ReplayTurn.player_slot`)
+  is the player's replacement slot, -1 for none.
+- **Draws that show only later: the refit.** A secondary confusion (Confusion, Psybeam,
+  Water Pulse: `SECONDARY_CONFUSE`) and its duration show only as later self-hits, and a
+  Bind-type trap's duration only on the turn its residual stops. `duration` is enumerated
+  for `SECONDARY_CONFUSE` as for `CONFUSE_FOE` (2-5: `subscript_confuse.s:34`, `Random 3,
+  2`, is `rand % 4 + 2`, `BtlCmd_Random`, battle_script.c:3200-3207) and for a trap
+  (3-6: `subscript_bind_start.s:10`, `Random 3, 3`). Each turn is fitted against the next
+  record only, so the first tied candidate is kept. When a turn's best candidate still
+  mismatches, or the turn has a self-hit record of a side that is not confused at its
+  start, the converter rewinds: for each earlier turn `i` from the previous one back
+  five turns (latest first), and each of turn `i`'s other candidates that match its next
+  record on every compared field (in candidate order: `secondary` 0 before 1, durations
+  ascending), it replays turn `i` with that candidate and infers the following turns
+  again as usual (Quick Claw write-backs included). The first that explains every turn
+  from `i` on is kept; if none does, the original fit stays and the turn's `mismatched`
+  names the fields. Two fits that replay every record identically cannot be told apart
+  (on `kaizo_roark_02`, a Water Pulse confusion on turn 16 with duration 5 or on turn 18
+  with duration 3): the rule picks the latest turn, then the lowest value.
+- **A fainted battler's status.** The tracer reads an active battler's status from the
+  BattleMon (`tools/trace_battle.lua:182-183`). The decomp zeroes the status only in the
+  party copy of a Pokemon with no HP (`BattleController_EmitUpdatePartyMon`,
+  battle_controller.c:1481-1486), which is what the engine models; a battler that faints
+  at the battle's end is never replaced, so its BattleMon keeps the bits. The converter
+  sets `status` and `status_counter` to 0 for every Pokemon at 0 HP in a record.
 
 `COMPARED_FIELDS` is `species`, `level`, `hp`, `max_hp`, `status`, `status_counter`,
 `item`, `moves`, `pp`, `active`, `stages` and `weather`. The dump does not fill the
@@ -440,8 +489,8 @@ previous turn, so they are carried forward and never checked:
 
 - per slot: `form`, `stats` (only max HP is dumped), `types`, `ability`,
   `ability_slot`, `item_consumed`, `gender`, `friendship`, `ivs`
-- volatiles: `confusion`, `leech_seed`, `substitute_hp`, `taunt`, `trapped`,
-  `trap_move`, `flinched`, `choice_lock`, `last_move`, `protect_count`,
+- volatiles: `confusion` (fitted from self-hits by the refit above), `leech_seed`,
+  `substitute_hp`, `taunt`, `trapped`, `trap_move`, `flinched`, `choice_lock`, `last_move`, `protect_count`,
   `rollout_count`, `charge_turn`, `recharge`, `pursuit_target`, `water_sport`,
   `fake_out_turn`, `move_hit`
 - side conditions: `spikes`, `toxic_spikes`, `stealth_rock`, `reflect`,
@@ -449,6 +498,8 @@ previous turn, so they are carried forward and never checked:
   `wish_hp`, `future_timer`, `future_damage`, `trainer_items`, `trainer_item_count`
 - field: `weather_timer`, `trick_room`, `gravity`, `mud_sport`
 - hidden draws: `qc_roll` (fitted, see Quick Claw above)
+- experience: `exp`, `evs`, `exp_mask` and the learn fields (the trace has no exp;
+  `level`, `max_hp`, `hp`, `moves` and `pp` check the level-ups and learns)
 - bookkeeping: `turn` (the final record at `RESULT` comes before `totalTurns++`, so it
   would always differ by one), `over`, `winner`, `player_faints`, `ai_seen_moves`,
   `ai_ability_known`
@@ -459,7 +510,10 @@ to add next. They are in `sideConditionsMask`, `BattleMon.statusVolatile` and
 
 ## Known limits
 
-- A trace ends at the first player faint, which the engine treats as terminal.
+- A turn with two replacements for one side (a newcomer fainting on entry) or one for
+  each side (a double KO) is refused, not replayed.
+- The refit looks back five turns at most. A draw that shows more than five turns later
+  stays mismatched.
 - A side that used no PP and changed no compared field (fully paralyzed, or a
   Potion at full HP) is told apart only by `trainer_items`, which is not dumped. The
   converter tries move candidates before bag slots, so it reads such a turn as a move

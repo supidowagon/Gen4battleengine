@@ -22,6 +22,11 @@ the line's outcome in ``render`` and as ``kind`` in ``to_json``. Without an oppo
 a depth-0 (Stage A) leaf stands for every foe reply, valued by Stage A's playouts (whose
 foe is the AI), and a refused node for a state whose AI is not modelled. ``render`` shows
 no plan at depth 0 (its footer says so); ``to_json`` keeps the leaves.
+
+A learn decision (``PlanNode.decision == "learn"``, K3d-exp) names its answers ``learn
+Slash over Tackle`` or ``give up Slash`` (``stage_b.learn_label``): the move offered is
+``PlanNode.learn_move``, the move it replaces comes from the observation (the prompted
+slot is the lowest with ``learn_level``), and at a learn root from the ranking's labels.
 """
 
 from __future__ import annotations
@@ -33,6 +38,7 @@ import numpy as np
 from nuzline.data.tables import Names
 from nuzline.engine.actions import MOVE_ACTIONS
 from nuzline.engine.ids import Status
+from nuzline.engine.levelup import GIVE_UP
 from nuzline.engine.observe import (
     ACT_DISABLED,
     ACT_ITEM,
@@ -46,7 +52,7 @@ from nuzline.engine.observe import (
 from nuzline.engine.state import SLOTS
 from nuzline.engine.step import WINNER_PLAYER
 from nuzline.jaxcache import code_version
-from nuzline.search.stage_b import PlanNode, SolveResult
+from nuzline.search.stage_b import PlanNode, SolveResult, learn_label
 
 __all__ = ["distribution_line", "label", "render", "to_json"]
 
@@ -315,14 +321,15 @@ def _differences(f: dict, others: list[dict], names: Names) -> list[str]:
 def _action_label(f: dict | None, names: Names, a: int, root, labels: dict[int, str]) -> str:
     """The label of player action ``a`` at a node: from the ranking at the root
     (``labels``), else from the node's observation (switch targets, Struggle from the PP
-    it shows) and the root state's moves."""
+    it shows) and its moves (``player_moves``)."""
     if f is None:
         return labels.get(a, f"action {a}")
     mon = int(f["active"][0])
     if a >= MOVE_ACTIONS:
         return f"Switch -> {_species(names, f, 0, a - MOVE_ACTIONS)}"
     if root is not None:
-        moves = np.asarray(root.moves)[0, mon]
+        # The node's own moves (a level-up can have changed them since the root).
+        moves = f["player_moves"][mon * 4 : mon * 4 + 4]
         pp = f["player_pp"][mon * 4 : mon * 4 + 4]
         if not np.any((moves > 0) & (pp > 0)):
             return "Struggle"
@@ -349,6 +356,13 @@ def _unique(labels: list[str], kinds: list[str], observed: list[bool], marks: bo
         if count[key] > 1:
             out[i] = f"{out[i]} #{count[key]}"
     return out
+
+
+def _learn_option_label(f: dict, names: Names, move: int, option: int) -> str:
+    """Learn ``option`` at a learn decision whose observation is ``f`` (module docstring)."""
+    slot = int(np.flatnonzero(f["learn_level"] > 0)[0])
+    forgotten = 0 if option == GIVE_UP else int(f["player_moves"][slot * 4 + option])
+    return learn_label(names, move, forgotten, option)
 
 
 class _Walk:
@@ -413,6 +427,8 @@ class _Walk:
 
     def action_label(self, node: PlanNode, a: int) -> str:
         f = None if node.obs is None else decode(node.obs)
+        if node.decision == "learn" and f is not None and node.learn_move is not None:
+            return _learn_option_label(f, self.names, node.learn_move, a)
         return _action_label(f, self.names, a, self.root, self.labels)
 
 
@@ -454,6 +470,7 @@ def _node_json(
         },
         "opp_action": node.opp_action,
         "replacement": node.replacement,
+        "decision": node.decision,
         "action": None if node.action is None else int(node.action),
         "action_label": None if node.action is None else walk.action_label(node, node.action),
         "values": {walk.action_label(node, a): float(v) for a, v in node.values.items()},
