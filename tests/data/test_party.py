@@ -152,6 +152,18 @@ def test_party_toml_exp_fields(tmp_path, names):
     assert (mon.exp, mon.exp_boost, mon.pokerus, mon.friend_bonus) == (140, 170, 1, 1)
 
 
+def test_party_toml_coverage_fields(tmp_path, names):
+    # K3d-exp T7: egg_location and pp_ups, omitted means 0 and none.
+    shinx = _SHINX.format(nature="Hardy", ability="Rivalry")
+    f = tmp_path / "p.toml"
+    f.write_text(shinx, encoding="utf-8")
+    (mon,) = load_party(f, names)
+    assert (mon.egg_location, mon.pp_ups) == (0, (0, 0, 0, 0))
+    f.write_text(shinx + "egg_location = 2000\npp_ups = [3, 0, 0, 1]\n")
+    (mon,) = load_party(f, names)
+    assert (mon.egg_location, mon.pp_ups) == (2000, (3, 0, 0, 1))
+
+
 @pytest.mark.parametrize(
     ("line", "match"),
     [
@@ -160,6 +172,9 @@ def test_party_toml_exp_fields(tmp_path, names):
         ("exp_boost = 120", "exp_boost must be one of"),
         ("pokerus = 2", "pokerus must be 0 or 1"),
         ("friend_bonus = 3", "friend_bonus must be 0 or 1"),
+        ("egg_location = -1", "egg_location must be 0-65535"),
+        ("pp_ups = [0, 0, 4, 0]", "pp_ups needs 4 values 0-3"),
+        ("pp_ups = [0, 0, 0]", "pp_ups needs 4 values 0-3"),
     ],
 )
 def test_party_toml_bad_exp_fields(tmp_path, names, line, match):

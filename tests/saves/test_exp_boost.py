@@ -130,8 +130,10 @@ def test_exp_pokerus_ball_and_egg_location(tmp_path, tables, names):
     assert (mon.pokerus, mon.pokeball, mon.egg_location) == (0x21, ITEM_LUXURY_BALL, 2000)
     spec = mon.to_spec(tables, save.trainer)
     assert (spec.exp, spec.pokerus, spec.friend_bonus) == (exp, 1, 1)
+    # K3d-exp T7: the egg location and PP Ups reach the spec (coverage inputs).
+    assert (spec.egg_location, spec.pp_ups) == (2000, mon.pp_ups)
     plain = _save(tmp_path, tables, names, ME, **MINE).party[0].to_spec(tables)
-    assert (plain.pokerus, plain.friend_bonus) == (0, 0)
+    assert (plain.pokerus, plain.friend_bonus, plain.egg_location) == (0, 0, 0)
 
 
 @pytest.mark.parametrize(

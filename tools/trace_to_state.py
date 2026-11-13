@@ -69,7 +69,8 @@ from nuzline.saves.save import SaveFile
 from nuzline.saves.status import decode_status
 
 INTERMEDIATE = Path(__file__).resolve().parents[1] / "data" / "intermediate"
-# /2 (K3d-exp): party entries carry exp, exp_boost, pokerus and friend_bonus. A /1 bundle
+# /2 (K3d-exp): party entries carry exp, exp_boost, pokerus and friend_bonus (and, from T7,
+# the coverage inputs egg_location and pp_ups). A /1 bundle, or a /2 one written before T7,
 # still loads: its entries lack them and get the PokemonSpec defaults.
 BUNDLE_FORMAT = "nuzline-golden-trace/2"
 BUNDLE_FORMATS = ("nuzline-golden-trace/1", BUNDLE_FORMAT)

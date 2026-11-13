@@ -135,7 +135,15 @@ from nuzline.engine.ids import (
     Type,
     Weather,
 )
-from nuzline.engine.state import make_state, spec_stats
+from nuzline.engine.levelup import (
+    HOLD_EFFECT_EVS_UP_SPEED_DOWN,
+    HOLD_EFFECT_EXP_SHARE,
+    HOLD_EFFECT_EXP_UP,
+    HOLD_EFFECT_FRIENDSHIP_UP,
+    MAX_LEVEL,
+    POWER_ITEM_HOLD_EFFECTS,
+)
+from nuzline.engine.state import make_state, spec_exp, spec_stats
 
 # include/constants/forms.h:94, :98; generated/species.txt and items.txt (line N is id N-1).
 # Checked against each game's data at load (nuzline.data.game_constants).
@@ -372,6 +380,153 @@ def move_effect_line(tables: Tables, names: Names, move: int, row: int) -> tuple
     return IMPLEMENTED_EFFECTS.get(effect, Support.NONE), name
 
 
+# --- Experience, level-up and learnable moves (K3d-exp design §4) ---------------------------
+
+# Decomp battle effects (generated/move_battle_effects.txt, line N is id N - 1), matched
+# against tables.move_ai_effect.
+ITEM_MOVING_EFFECTS = (
+    105,  # BATTLE_EFFECT_STEAL_HELD_ITEM (Thief, Covet): effect_script_0105.s, STEAL_ITEM
+    177,  # BATTLE_EFFECT_SWITCH_HELD_ITEMS (Trick, Switcheroo): effect_script_0177.s
+    188,  # BATTLE_EFFECT_REMOVE_HELD_ITEM (Knock Off): effect_script_0188.s, KNOCK_OFF
+    233,  # BATTLE_EFFECT_FLING: effect_script_0233.s, FLING
+)
+# BATTLE_EFFECT_POWER_BASED_ON_FRIENDSHIP (Return) and ..._LOW_FRIENDSHIP (Frustration):
+# effect_script_0121.s / 0123.s read the attacker's BATTLEMON_FRIENDSHIP.
+FRIENDSHIP_POWER_EFFECTS = (121, 123)
+# BATTLE_EFFECT_TRANSFORM (57), _COPY_MOVE_FOR_BATTLE (82, Mimic) and _SWAP_ATK_DEF (238, Power
+# Trick): BattleSystem_ReloadPokemon (battle_lib.c:169-194) skips a Transformed battler's moves
+# and exp and a Mimicked slot, and overwrites a Power Trick's swapped Attack and Defense.
+RELOAD_STATE_EFFECTS = (57, 82, 238)
+# The hold effects the payout reads from the party item (engine.levelup): Macho Brace, Exp.
+# Share, Soothe Bell, Lucky Egg and the six Power items.
+EXP_ITEM_HOLD_EFFECTS = (
+    HOLD_EFFECT_EVS_UP_SPEED_DOWN,
+    HOLD_EFFECT_EXP_SHARE,
+    HOLD_EFFECT_FRIENDSHIP_UP,
+    HOLD_EFFECT_EXP_UP,
+    *POWER_ITEM_HOLD_EFFECTS,
+)
+MAX_EXP_BOOST = 170  # the largest exp_boost (battle_script.c:9757-9763)
+
+
+def reachable_level(tables: Tables, spec: PokemonSpec, opp: Sequence[PokemonSpec]) -> int:
+    """An upper bound on the level the player's ``spec`` can reach in a fight against ``opp``:
+    the level at ``exp + sum(bound)`` over the opponents that can faint (a species and HP),
+    with ``bound = max(E, 2) * 3/2 * (Lucky Egg ? 3/2 : 1) * exp_boost / 100 + 1`` (design
+    §4.1): every payout to this Pokemon alone. ``E = yield[species] * level / 7``
+    (battle_script.c:2216-2217); one Pokemon gets ``g + h <= max(E, 2)`` (``g = max(1, ...)``,
+    ``h = max(1, ...)``, :2219-2238); then the Lucky Egg, trainer and OT multipliers
+    (:9749-9763), whose truncations only lower it; ``+ 1`` is slack. An unresolved
+    ``exp_boost`` (0) counts as the largest, 170. The level of an exp ``x`` is the last
+    ``L`` with ``table[L] <= x`` (``Pokemon_ShouldLevelUp``, pokemon.c:3501-3526), and a
+    level-100 Pokemon gains nothing (battle_script.c:9740)."""
+    if spec.level >= MAX_LEVEL:
+        return spec.level
+    yields = np.asarray(tables.species_exp_yield)
+    lucky = int(np.asarray(tables.item_hold_effect)[spec.item]) == HOLD_EFFECT_EXP_UP
+    boost = spec.exp_boost or MAX_EXP_BOOST
+    total = 0
+    for foe in opp:
+        if foe.species == 0 or foe.current_hp == 0:
+            continue
+        e = int(yields[foe.species]) * foe.level // 7
+        total += max(e, 2) * 3 * (3 if lucky else 2) * boost // (2 * 2 * 100) + 1
+    table = np.asarray(tables.exp_table)[int(np.asarray(tables.species_exp_rate)[spec.species])]
+    x = spec_exp(tables, spec) + total
+    return max(spec.level, int(np.sum(table[1 : MAX_LEVEL + 1] <= x)))
+
+
+def reachable_learn_moves(
+    tables: Tables, spec: PokemonSpec, opp: Sequence[PokemonSpec]
+) -> list[int]:
+    """Every move in the learnset of ``spec``'s form row (``Pokemon_LevelUpMove`` loads it per
+    species and form, pokemon.c:3943) at a level in ``(level, reachable_level]``, in list
+    order without repeats: the moves an in-battle level-up can auto-learn or prompt
+    (bs.c:9999-10187). A move already known is included: a prompt can replace it first."""
+    top = reachable_level(tables, spec, opp)
+    if top <= spec.level:
+        return []
+    row = personal_row(tables, spec.species, spec.form)
+    levels = np.asarray(tables.learnset_level)[row]
+    moves = np.asarray(tables.learnset_move)[row]
+    out: list[int] = []
+    for level, move in zip(levels.tolist(), moves.tolist(), strict=True):
+        if spec.level < level <= top and move and move not in out:
+            out.append(int(move))
+    return out
+
+
+def _effect_moves(tables: Tables, moves: Sequence[int], effects: Sequence[int]) -> list[int]:
+    effect = np.asarray(tables.move_ai_effect)
+    return sorted({int(m) for m in moves if m and int(effect[m]) in effects})
+
+
+def exp_refusals(
+    tables: Tables,
+    names: Names,
+    spec: PokemonSpec,
+    learnable: Sequence[int],
+    fight_moves: Sequence[int],
+    levels_up: bool,
+) -> list[str]:
+    """Why the exp payout or a level-up of the player's ``spec`` would not be exact (design
+    §4.2-4.6), one line each. ``learnable``: its ``reachable_learn_moves``; ``fight_moves``:
+    every move any Pokemon of the fight could use (both sides, learnable ones included);
+    ``levels_up``: ``reachable_level`` exceeds its level.
+
+    * §4.3: below level 100 with ``exp_boost == 0`` (the OT and language test unresolved).
+    * §4.2 (ruling D9): it holds an exp item (``EXP_ITEM_HOLD_EFFECTS``) while an item-moving
+      move (``ITEM_MOVING_EFFECTS``) is in the fight. The payout reads the **party** item
+      (battle_script.c:2209, :9706, :10226; pokemon.c:2649), which a battle item change
+      leaves behind.
+    * §4.4 (ruling D6): its egg location is nonzero, it can level, and a friendship-power move
+      (``FRIENDSHIP_POWER_EFFECTS``) is in the fight: the level-up adds 1 when the egg
+      location is the battle map (pokemon.c:2668-2670), which the engine does not know
+      (Kaizo changed ``MapHeader_GetMapLabelTextID``, docs/kaizo/rom_diff.md:269).
+    * §4.5: it can level and could use Transform, Mimic or Power Trick
+      (``RELOAD_STATE_EFFECTS``; ``BattleSystem_ReloadPokemon``, battle_lib.c:173-191).
+    * §4.6: an empty move slot with PP Ups: a move learned there inherits them
+      (``BoxPokemon_SetMoveSlot``, pokemon.c:3929-3930), which the engine does not model."""
+    out = []
+    if spec.level < MAX_LEVEL and spec.exp_boost == 0:
+        out.append(
+            "exp multiplier unresolved (original trainer and language unknown: read the save "
+            "with its trainer)"
+        )
+    hold = int(np.asarray(tables.item_hold_effect)[spec.item])
+    if hold in EXP_ITEM_HOLD_EFFECTS and (
+        moving := _effect_moves(tables, fight_moves, ITEM_MOVING_EFFECTS)
+    ):
+        out.append(
+            f"{names.item_names[spec.item]} is read from the party by the exp payout, and "
+            f"{names.move_names[moving[0]]} can move held items in battle"
+        )
+    if (
+        levels_up
+        and spec.egg_location != 0
+        and (readers := _effect_moves(tables, fight_moves, FRIENDSHIP_POWER_EFFECTS))
+    ):
+        out.append(
+            f"egg location {spec.egg_location} may add 1 friendship per level-up, which "
+            f"{names.move_names[readers[0]]} reads"
+        )
+    own = [*spec.moves, *learnable]
+    if levels_up and (reload := _effect_moves(tables, own, RELOAD_STATE_EFFECTS)):
+        out.append(
+            f"a level-up reloads the battler, which {names.move_names[reload[0]]} "
+            "changes (battle_lib.c:173-191)"
+        )
+    junk = [
+        i for i, (m, ups) in enumerate(zip(spec.moves, spec.pp_ups, strict=True)) if not m and ups
+    ]
+    if junk:
+        out.append(
+            f"empty move slot {junk[0]} has {spec.pp_ups[junk[0]]} PP Ups, which a move "
+            "learned there inherits"
+        )
+    return out
+
+
 def _check_party(
     c: _Collector,
     tables: Tables,
@@ -541,6 +696,7 @@ def _check_trainer(
     names: Names,
     trainer: Trainer,
     specs: Sequence[PokemonSpec],
+    extra_moves: Sequence[int] = (),
 ) -> None:
     if POLICY.get(names.game) is None:
         c.add(
@@ -556,9 +712,9 @@ def _check_trainer(
     c.add(support, what, "battle format")
     _check_kaizo_fields(c, names, trainer)
     if names.game == KAIZO:
-        for label in rom_change_refusals(tables, names, trainer, specs):
+        for label in rom_change_refusals(tables, names, trainer, specs, extra_moves):
             c.add(Support.NONE, rom_change_line(label), "ROM change")
-    moves = [m for s in specs for m in s.moves]
+    moves = [m for s in specs for m in s.moves] + list(extra_moves)
     if (line := terrain_refusal(tables, names, trainer, moves)) is not None:
         c.add(Support.NONE, line, "battle terrain")
     effect = np.asarray(tables.trainer_item_effect)
@@ -667,13 +823,16 @@ def check_opponent(
     opp: Sequence[PokemonSpec],
     start_condition: int,
     player: Sequence[PokemonSpec] = (),
+    extra_moves: Sequence[int] = (),
 ) -> CoverageReport:
     """The trainer's side of ``check_coverage``: its party, bag, AI flags and the weather
-    lines (``player``, when given, only widens the Kaizo ROM-change conditions). It runs no ``ai_refusals``: those depend on the player's party, so a caller
-    that needs them runs them per setup."""
+    lines (``player``, when given, and ``extra_moves``, the player's learnable moves, only
+    widen the Kaizo ROM-change conditions and the terrain check). It runs no
+    ``ai_refusals``: those depend on the player's party, so a caller that needs them runs
+    them per setup."""
     c = _Collector()
     _check_party(c, tables, names, display_name(trainer), opp, trainer_side=True)
-    _check_trainer(c, tables, names, trainer, [*player, *opp])
+    _check_trainer(c, tables, names, trainer, [*player, *opp], extra_moves)
     # An "unknown" start condition is refused by _check_trainer, never read as a weather.
     weathers = [start_condition]
     if not unknown_start(trainer):
@@ -694,19 +853,46 @@ def check_coverage(
     """The support level of one fight: the player's party against ``trainer`` with
     party ``opp``, starting in weather ``start_condition`` (a ``Weather``; the
     trainer's own ``start_condition`` is checked too) with the active party slots
-    ``leads`` (``make_state``), whose turn-0 state the AI's refusals are run on."""
+    ``leads`` (``make_state``), whose turn-0 state the AI's refusals are run on.
+
+    Experience (K3d-exp design §4): each player Pokemon's ``reachable_learn_moves`` go
+    through every check its current moves go through (``move_effect_line`` as a "level-up in
+    battle" move, the AI's ``player_move_refusal``, ``halved_defense_line``,
+    ``terrain_refusal`` and the Kaizo ``rom_change_refusals``), and ``exp_refusals`` adds its
+    exp lines. Out of scope and refused elsewhere (§4.7): every format but singles
+    (``IMPLEMENTED_FORMATS``; ``expBattler = 2`` is doubles-only, battle_script.c:9716-9720);
+    the engine plays only trainer battles; evolution and other after-battle effects are never
+    modelled. A level-100 Pokemon gains nothing (battle_script.c:9740) and is not refused."""
+    from nuzline.ai.policy import ai_refusals, player_move_refusal  # ai imports the engine
+
     c = _Collector()
     _check_party(c, tables, names, "Player", player)
-    theirs = check_opponent(tables, names, trainer, opp, start_condition, player)
+    learnable = [reachable_learn_moves(tables, mon, opp) for mon in player]
+    extra = sorted({m for moves in learnable for m in moves})
+    theirs = check_opponent(tables, names, trainer, opp, start_condition, player, extra)
     c.report.missing.extend(theirs.missing)
     c.report.sampling_only.extend(theirs.sampling_only)
     c.report.level = min(c.report.level, theirs.level)
-    from nuzline.ai.policy import ai_refusals  # nuzline.ai imports the engine
+    fight_moves = [m for mon in (*player, *opp) for m in mon.moves if m] + extra
+    for slot, mon in enumerate(player):
+        where = f"Player {names.species_names[mon.species]} (slot {slot})"
+        row = personal_row(tables, mon.species, mon.form)
+        for move in learnable[slot]:
+            if move in mon.moves:  # graded by _check_party and ai_refusals already
+                continue
+            support, name = move_effect_line(tables, names, move, row)
+            c.add(support, f"{where}: {name}", "level-up in battle move effect")
+            if support != Support.NONE and (reason := player_move_refusal(move)) is not None:
+                c.add(Support.NONE, f"{where}: {name} (level-up in battle, {reason})", "trainer AI")
+        levels_up = reachable_level(tables, mon, opp) > mon.level
+        for line in exp_refusals(tables, names, mon, learnable[slot], fight_moves, levels_up):
+            c.add(Support.NONE, f"{where}: {line}", "experience")
 
     for owner, party, foes in (("Player", player, opp), (display_name(trainer), opp, player)):
         foe_defense = low_defense(tables, foes)
         for slot, mon in enumerate(party):
-            for move in mon.moves:
+            extra_moves = learnable[slot] if owner == "Player" else ()
+            for move in [*mon.moves, *(m for m in extra_moves if m not in mon.moves)]:
                 if move and (low := halved_defense_line(tables, move, foe_defense)):
                     where = f"{owner} {names.species_names[mon.species]} (slot {slot})"
                     c.add(Support.NONE, f"{where}: {names.move_names[move]}{low}", "move effect")

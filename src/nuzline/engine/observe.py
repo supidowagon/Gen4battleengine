@@ -92,10 +92,21 @@ slot (the player's healthbox and move menu); the opponent's HP as HP-bar pixels 
 slot (``hp_pixels``: the enemy healthbox never shows numbers, ``HEALTHBOX_INFO_NOT_ON_ENEMY``,
 include/battle/healthbox.h:33, healthbox.c:633-640); ``over`` and ``winner``.
 
+The player's own party as its summary and the exp messages show it (K3d-exp design §3.5): per
+slot its ``level``, ``stats``, ``max_hp`` (it depends on the EVs a payout adds, so two
+histories can differ in it alone; the healthbox shows it), ``moves``, ``exp`` ("gained N Exp.
+Points!", battle_script.c:9738) and the learn prompt it is shown (``learn_level`` and
+``learn_cursor``: the level-up move the game asks about, ``engine.levelup``). On a state
+``levelup.advance_learns`` has resolved, learn work in a battle that goes on is always a
+prompt (the scan clears a level or stops at a full move list). At the battle's end it may be
+unscanned work instead (ruling D8 keeps the work of a battle-ending KO, which no scan reaches),
+so the two learn fields read 0 once ``over`` is set: no prompt is shown, and the player has no
+decision left. The caller observes a resolved state (Stage B's learn stop, T8).
+
 Never in the vector: the opponent's exact HP, ``status_counter``, any counter value,
-the ``ai_*`` fields, an outcome element without a visible effect. Fields constant over
-a battle (levels, stats, moves) are left out. Intermediate HP-bar positions during
-the turn are seen in game but left out (notes/stage-b/observe.md §3, coarser only).
+the ``ai_*`` fields, an outcome element without a visible effect. The opponent's levels,
+stats and moves are constant over a battle and left out. Intermediate HP-bar positions
+during the turn are seen in game but left out (notes/stage-b/observe.md §3, coarser only).
 """
 
 from __future__ import annotations
@@ -181,6 +192,13 @@ _LAYOUT: tuple[tuple[str, tuple[int, ...]], ...] = (
     ("player_hp", (SLOTS,)),
     ("opp_pixels", (SLOTS,)),
     ("player_pp", (SLOTS, MOVES)),
+    ("player_level", (SLOTS,)),
+    ("player_stats", (SLOTS, 5)),
+    ("player_max_hp", (SLOTS,)),
+    ("player_moves", (SLOTS, MOVES)),
+    ("player_exp", (SLOTS,)),
+    ("learn_level", (SLOTS,)),
+    ("learn_cursor", (SLOTS,)),
     ("stages", (SIDES, 8)),
     ("disabled_move", _SIDE),
     ("locked_move", _SIDE),
@@ -255,6 +273,13 @@ def observation(events: dict, after: BattleState) -> jnp.ndarray:
         "player_hp": after.hp[0],
         "opp_pixels": hp_pixels(after.hp[1], after.max_hp[1]),
         "player_pp": after.pp[0],
+        "player_level": after.level[0],
+        "player_stats": after.stats[0],
+        "player_max_hp": after.max_hp[0],
+        "player_moves": after.moves[0],
+        "player_exp": after.exp,
+        "learn_level": jnp.where(after.over == 0, after.learn_level, 0),
+        "learn_cursor": jnp.where(after.over == 0, after.learn_cursor, 0),
         "stages": after.stages,
         "disabled_move": after.disabled_move,
         "locked_move": after.locked_move,

@@ -16,7 +16,9 @@ in the ``ivs`` order; omitted means computed from level, IVs, EVs and nature).
 Experience (``PokemonSpec``): ``exp`` (total experience, of the Pokemon's ``level``;
 omitted means the base of the level), ``exp_boost`` (100, 150 or 170: the exp multiplier in
 percent; omitted means 100, the user's own Pokemon), ``pokerus`` and ``friend_bonus`` (0 or 1;
-omitted means 0).
+omitted means 0). Coverage inputs (``PokemonSpec``): ``egg_location`` (a location id, omitted
+means 0) and ``pp_ups`` (four values 0-3, one per move slot including empty ones; omitted means
+none).
 """
 
 from __future__ import annotations
@@ -44,7 +46,8 @@ EXP_BOOSTS = (100, 150, 170)  # BattleScript_GetExpTask, battle_script.c:9757-97
 
 
 def _exp_fields(entry: dict) -> dict:
-    """``exp``, ``exp_boost``, ``pokerus`` and ``friend_bonus`` (module docstring)."""
+    """``exp``, ``exp_boost``, ``pokerus``, ``friend_bonus``, ``egg_location`` and ``pp_ups``
+    (module docstring)."""
     out: dict = {}
     if "exp" in entry:
         out["exp"] = int(entry["exp"])
@@ -60,6 +63,13 @@ def _exp_fields(entry: dict) -> dict:
         out[key] = int(entry.get(key, 0))
         if out[key] not in (0, 1):
             raise ValueError(f"{entry['species']}: {key} must be 0 or 1, got {out[key]}")
+    out["egg_location"] = int(entry.get("egg_location", 0))
+    if not 0 <= out["egg_location"] <= 0xFFFF:
+        raise ValueError(f"{entry['species']}: egg_location must be 0-65535")
+    ups = tuple(int(v) for v in entry.get("pp_ups", (0, 0, 0, 0)))
+    if len(ups) != 4 or any(not 0 <= v <= 3 for v in ups):
+        raise ValueError(f"{entry['species']}: pp_ups needs 4 values 0-3, got {list(ups)}")
+    out["pp_ups"] = ups
     return out
 
 

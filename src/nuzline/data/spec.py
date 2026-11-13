@@ -25,6 +25,12 @@ class PokemonSpec:
     the user's own, so 100 is the default. ``pokerus`` is 1 when the Pokerus byte is
     nonzero (``Pokemon_HasPokerus``, pokemon.c:4184-4199); ``friend_bonus`` is 1 for a
     Pokemon caught in a Luxury Ball (``Pokemon_UpdateFriendship``, pokemon.c:2664-2666).
+
+    Coverage inputs (K3d-exp T7; ``engine.coverage.exp_refusals``): ``egg_location`` is
+    ``MON_DATA_EGG_LOCATION`` (pokemon.c:1159-1166), whose match with the battle map adds 1
+    to a level-up's friendship (pokemon.c:2668-2670); ``pp_ups`` are the PP Ups per move
+    slot (``MON_DATA_MOVE1_PP_UPS``), which a move learned into that slot inherits
+    (``BoxPokemon_SetMoveSlot``, pokemon.c:3925-3933). A hand-typed party has 0 for both.
     """
 
     species: int
@@ -47,3 +53,5 @@ class PokemonSpec:
     exp_boost: int = 100
     pokerus: int = 0
     friend_bonus: int = 0
+    egg_location: int = 0
+    pp_ups: tuple[int, int, int, int] = (0, 0, 0, 0)

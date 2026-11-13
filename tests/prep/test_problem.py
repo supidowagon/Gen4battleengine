@@ -404,3 +404,57 @@ def test_opponent_explosion_leaves_a_low_defense_candidate_out(tmp_path, tables,
     assert len(q.candidates) == 2 and not any("Defense" in ln for ln in lines)
     fainted = [replace(boomer[0], current_hp=0), *roark[1:]]
     assert check_pool(tables, names, cands, fainted).missing == []
+
+
+# --- K3d-exp T7: moves learnable by levelling up in the fight ---------------------------
+
+STARLY_L17 = 3120  # exp_table[3][17]; Roark's Geodude L12 bounds a payout at 188
+
+
+def _starly_near_17(names, **changes):
+    """Starly L16 that Roark's Geodude can level to 17, where it learns Endeavor (an
+    unsupported effect); ``coverage.reachable_learn_moves``."""
+    spec = replace(sample_party(names)[3], level=16, **{"exp": STARLY_L17 - 188, **changes})
+    return candidate(names, spec, 3)
+
+
+def test_a_learnable_unsupported_move_leaves_the_candidate_out(tables, names):
+    geodude = roark_party(names)[:1]
+    near = _starly_near_17(names)
+    pool, lines = usable_pool(tables, names, [near], geodude)
+    assert pool == []
+    assert lines == [
+        "party slot 3 STARLY: left out: Endeavor (level-up in battle, move effect not implemented)"
+    ]
+    far = _starly_near_17(names, exp=STARLY_L17 - 189)
+    assert usable_pool(tables, names, [far], geodude) == ([far], [])
+
+
+def test_check_pool_grades_learnable_moves(tables, names):
+    from nuzline.engine.coverage import Support
+    from nuzline.prep.pool import check_pool
+
+    geodude = roark_party(names)[:1]
+    report = check_pool(tables, names, [_starly_near_17(names)], geodude)
+    assert report.level == Support.NONE
+    assert report.missing == [
+        "party slot 3 STARLY: Endeavor (level-up in battle, move effect UNSUPPORTED)"
+    ]
+    far = _starly_near_17(names, exp=STARLY_L17 - 189)
+    assert check_pool(tables, names, [far], geodude).missing == []
+
+
+def test_usable_pool_applies_the_exp_refusals(tables, names):
+    """``coverage.exp_refusals`` per candidate: junk PP Ups in an empty slot (§4.6)."""
+    base = sample_party(names)[0]
+    junk = candidate(
+        names, replace(base, moves=(*base.moves[:3], 0), pp=None, pp_ups=(0, 0, 0, 1)), 0
+    )
+    pool, lines = usable_pool(tables, names, [junk], roark_party(names))
+    assert pool == []
+    assert lines == [
+        (
+            "party slot 0 MONFERNO: left out: empty move slot 3 has 1 PP Ups, which a move learned "
+            "there inherits"
+        )
+    ]

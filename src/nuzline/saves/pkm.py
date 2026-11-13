@@ -98,7 +98,8 @@ class SaveMon:
         without it ``exp_boost`` is 0, unresolved, which coverage refuses for a Pokemon
         that can gain exp. ``exp`` is the stored experience, ``pokerus`` 1 for a nonzero
         Pokerus byte (``Pokemon_HasPokerus``, src/pokemon.c:4184-4199) and
-        ``friend_bonus`` 1 for a Luxury Ball (src/pokemon.c:2664-2666)."""
+        ``friend_bonus`` 1 for a Luxury Ball (src/pokemon.c:2664-2666). ``egg_location`` and
+        ``pp_ups`` are copied for coverage (``PokemonSpec``)."""
         label = location_label(self.location)
         if self.is_egg:
             raise RecordError(f"{label}: is an egg")
@@ -150,6 +151,8 @@ class SaveMon:
             exp_boost=0 if trainer is None else self.exp_boost(trainer),
             pokerus=int(self.pokerus != 0),
             friend_bonus=int(self.pokeball == ITEM_LUXURY_BALL),
+            egg_location=self.egg_location,
+            pp_ups=self.pp_ups,
         )
 
     def is_ot(self, trainer) -> bool:
