@@ -428,16 +428,18 @@ def _holds_quick_claw(tables: Tables, state: BattleState, side: int, mon: int) -
     return int(tables.item_effect[int(state.item[side, mon])]) == ItemId.QUICK_CLAW
 
 
-def _mismatches(result: BattleState, after: dict[str, np.ndarray]) -> np.ndarray:
+def _mismatches(
+    result: BattleState, after: dict[str, np.ndarray], open_learns: bool = False
+) -> np.ndarray:
     """``bool[N, len(COMPARED_FIELDS)]``: where each replayed row differs from ``after``.
-    The moves and PP of a player slot with learnset work left (a prompt no answer was
-    replayed for: the per-turn fit replays none, ``_fit_learns`` then fits them) are not
+    With ``open_learns`` (the per-turn fit, which replays no learn answer; ``_fit_learns``
+    then fits them), the moves and PP of a player slot with learnset work left are not
     compared."""
     wrong = np.zeros((len(result.hp), len(COMPARED_FIELDS)), bool)
     pending = np.asarray(result.learn_level) > 0  # [N, SLOTS]
     for f, name in enumerate(COMPARED_FIELDS):
         got = np.asarray(getattr(result, name))
-        if name in ("moves", "pp") and pending.any():
+        if open_learns and name in ("moves", "pp") and pending.any():
             open_ = np.zeros(got.shape, bool)
             open_[:, 0] = pending[:, :, None]
             got = np.where(open_, after[name][None], got)
@@ -840,7 +842,8 @@ class _Turn:
             result, need, _ = _replay(
                 self.tables, self.state, qcs, actions, outcomes, *slots, _NO_LEARNS
             )
-            yield start, chunk, result, np.asarray(need), _mismatches(result, self.after)
+            wrong = _mismatches(result, self.after, open_learns=True)
+            yield start, chunk, result, np.asarray(need), wrong
 
     def _fit(self, start, chunk, result, need, wrong, k) -> _Fit:
         qc, pair, outcome = chunk[k]
