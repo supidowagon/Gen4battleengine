@@ -227,6 +227,14 @@ def test_from_equal_to_via(tmp_path, names, player, opp):
     _bad(tmp_path, names, player, opp, body, r"rule 1 \(against Onix\): from is the same .*via")
 
 
+def test_from_equal_to_use(tmp_path, names, player, opp):
+    body = (
+        '[[rule]]\nagainst = "Onix"\nuse = "Prinplup"\nmove = "Bubble"\n'
+        'via = "Grotle"\nfrom = "Prinplup"\n'
+    )
+    _bad(tmp_path, names, player, opp, body, r"rule 1 \(against Onix\): from is the same .*use")
+
+
 def test_wait_wrong_type(tmp_path, names, player, opp):
     body = '[[rule]]\nagainst = "Onix"\nuse = "Prinplup"\nmove = "Bubble"\nwait = 1\n'
     _bad(tmp_path, names, player, opp, body, r"rule 1 \(against Onix\): wait must be true")

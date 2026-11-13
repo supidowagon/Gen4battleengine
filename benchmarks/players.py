@@ -23,7 +23,9 @@ Rules:
   are left out and counted; a row prints that count when it is above 0. An entry whose
   playouts are all refused gets no row, one line naming the mechanic, and the run goes on.
 - Printed per fight, one row per entry: win % and win with at most k deaths for k = 0..3, each
-  with its 95 % Wilson interval, the default player's share of turns. Written:
+  with its 95 % Wilson interval, the default player's share of turns. A bad ``fights.toml`` or
+  line file, or a found file whose ``[[team]]`` differs, is one ``error:`` line and exit 1.
+  Written:
   ``benchmarks/results/players_<time>.json`` (git-ignored).
 
 ``nuzline.cli`` and this module import no JAX at import time (``--devices`` must be set
@@ -329,7 +331,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.n < 1 or args.devices < 1:
         parser.error("--n and --devices must be at least 1")
     cli.configure_cpu_devices(args.devices)  # before jax is imported (run imports it)
-    return run(args)
+    try:
+        return run(args)
+    except ValueError as e:  # a bad fights.toml or line file, a [[team]] mismatch
+        say(f"error: {e}")
+        return 1
 
 
 if __name__ == "__main__":

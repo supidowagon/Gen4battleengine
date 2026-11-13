@@ -162,17 +162,20 @@ never calls a fight "solved".
 Both take `--game`, `--trainer`/`--trainer-id`, `--deaths K`, `--protect`, `--seed`, `--devices`,
 and the team from either `--party P.toml` (a complete party file, as `rank` takes) or `--save S`
 with the line file's `[[team]]` table. Both run `require_coverage` first and exit 2 on a refused
-fight or playout.
+fight, or when every playout is refused; otherwise refused playouts (§4) are left out of the odds
+and their count and mechanic are printed after the ladder.
 
     nuzline line odds --game kaizo --save S --trainer-id 246 --line roark.toml --deaths 3 [--n 2000]
     nuzline line find --game kaizo --save S --trainer-id 246 --line team.toml --deaths 1 \
-        [--out found.toml] [--budget SECONDS] [--restarts N] [--final-n 2000]
+        [--out found.toml] [--budget SECONDS] [--restarts N] [--final-n 2000] [--pick-n 4000] \
+        [--sweeps 12]
 
 `odds` prints the team, the line, then the ladder: one row per rung 0..3 and one for any win, each
 with its 95 % interval, plus the death distribution, mean turns and the fallback share. `find`
 prints its progress per sweep to stderr, then the found line as TOML and the same ladder from the
 hold-out sample, and writes the line (with the team it was given) to `--out`. With `find`, rules
-already in the file are the search's first start.
+already in the file are the search's first start. `--pick-n` is the keys comparing the kept lines
+(§5), `--sweeps` the most sweeps per start.
 
 The line file (TOML):
 
@@ -191,7 +194,8 @@ The line file (TOML):
     wait = false             # optional, not with via
 
 Every name is checked when the file is read; an unknown or ambiguous name, a move the Pokemon does
-not know, `from` without `via`, `wait` with `via`, or two rules for one foe is a one-line error and
+not know, `from` without `via`, `from` equal to `via` or `use`, `wait` with `via`, `via` equal to
+`use`, or two rules for one foe is a one-line error and
 exit 1. A `moves` or `item` override is the user's claim that the TM or item is available: the tool
 does not check the bag here (prep does). `src/nuzline/search/line_text.py` reads and writes this
 format.

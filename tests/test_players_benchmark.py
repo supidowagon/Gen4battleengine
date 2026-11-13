@@ -111,5 +111,40 @@ def test_found_deaths(tmp_path):
     assert players.found_deaths(path) is None
 
 
+@pytest.mark.parametrize(
+    "text",
+    ["[[fight]]\nname = 'x'\n", "[[fight]\n", "not toml at all = = 1\n"],
+)
+def test_bad_fights_file_is_one_line_exit_1(tmp_path, monkeypatch, capsys, text):
+    bad = tmp_path / "fights.toml"
+    bad.write_text(text, encoding="utf-8")
+    read = players.read_fights
+    monkeypatch.setattr(players, "read_fights", lambda: read(bad))
+    monkeypatch.setattr(players.cli, "configure_cpu_devices", lambda n: None)
+    assert players.main(["--devices", "1"]) == 1
+    out = capsys.readouterr().out.splitlines()
+    assert len(out) == 1 and out[0].startswith("error: ")
+
+
+def test_team_mismatch_is_one_line_exit_1(tmp_path, monkeypatch, capsys):
+    # The found file's [[team]] differs from the team file's: one line, exit 1.
+    found = tmp_path / "found.toml"
+    found.write_text("[[team]]\npokemon = 'Other'\n", encoding="utf-8")
+    fight = players.Fight(
+        name="f", game="kaizo", save="s", trainer_id=1, team="t.toml", deaths=0, found=str(found)
+    )
+    ctx = players.FightContext(fight, SimpleNamespace(file=SimpleNamespace(team=())))
+
+    def run(args):
+        players._found_line(ctx)
+        return 0
+
+    monkeypatch.setattr(players, "run", run)
+    monkeypatch.setattr(players.cli, "configure_cpu_devices", lambda n: None)
+    assert players.main(["--devices", "1"]) == 1
+    out = capsys.readouterr().out.splitlines()
+    assert out == [f"error: {found}: [[team]] differs from t.toml's"]
+
+
 def test_entries_alias():
     assert [e.label for e in players.ENTRIES] == [e.label for e in players.entries()]

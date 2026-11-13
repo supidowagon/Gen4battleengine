@@ -36,6 +36,10 @@ def test_greedy_equals_playout(tables, names):
         assert int(got.player_faints) == int(want.player_faints)
         assert int(got.turns) == int(want.turns)
         assert np.array_equal(np.asarray(got.deaths), np.asarray(want.deaths))
+        assert int(got.refused) == int(want.refused)
+        assert int(got.ended) == int(want.ended)
+        assert float(got.hp_left) == float(want.hp_left)
+        assert float(got.pp_left) == float(want.pp_left)
 
 
 def _first_move(tables, state, params, key, layout):

@@ -13,7 +13,8 @@ which a species the opponent has twice needs; ``use``, ``via`` and ``from`` name
 member by species, by its ``[[team]]`` ``pokemon`` string, or ``slot:N`` (0-based), the
 latter needed for a name matching two members; ``move`` and ``first`` are moves ``use``
 knows. ``from`` needs ``via``, ``wait`` excludes ``via``, ``via`` differs from ``use``,
-``from`` differs from ``via``, and a foe has at most one rule.
+``from`` differs from ``via`` and ``use`` (the via could never fire), and a foe has at
+most one rule.
 
 Every failure is a ``ValueError`` naming the table (``rule 3 (against Gible): ...``).
 This module does not import jax: ``Line`` is imported inside the two functions that build
@@ -279,6 +280,8 @@ def _resolve_rule(
         raise ValueError("via is the same Pokemon as use")
     if via_from >= 0 and via_from == via:
         raise ValueError("from is the same Pokemon as via")
+    if via_from >= 0 and via_from == use:
+        raise ValueError("from is the same Pokemon as use (the via can never fire)")
     return Rule(against, use, move, first, via, via_from, wait)
 
 

@@ -164,6 +164,19 @@ def test_line_find_out_needs_its_directory(tmp_path, capsys, monkeypatch):
     assert captured.out == ""
 
 
+def test_line_find_out_must_not_be_the_line_file(tmp_path, capsys, monkeypatch):
+    # The same file through another spelling of its path: refused before any work.
+    _no_playouts(monkeypatch)
+    line = _file(tmp_path)
+    (tmp_path / "sub").mkdir()
+    other = str(tmp_path / "sub" / ".." / "line.toml")
+    assert main(["line", "find", *BASE, "--line", line, "--out", other]) == 1
+    captured = capsys.readouterr()
+    assert "--out" in captured.err and "is the --line file" in captured.err
+    assert captured.out == ""
+    assert (tmp_path / "line.toml").read_text(encoding="utf-8") == RULES
+
+
 def test_line_find_writes_out(tmp_path, tables, names, capsys, monkeypatch):
     from nuzline.data.party import load_party
     from nuzline.search import line_search
@@ -197,6 +210,8 @@ def test_line_find_writes_out(tmp_path, tables, names, capsys, monkeypatch):
         "win, any": "40.0",
     }
     assert '[[rule]]\nagainst = "geodude"' in out.lower()  # vanilla names are upper case
+    assert any(r.startswith("deaths: 0: ") for r in out.splitlines())
+    assert "deaths under the leader" not in out
     ((settings, start),) = seen
     assert (settings.restarts, settings.final_n, settings.max_sweeps) == (0, 100, 2)
     assert settings.pick_n == 500
@@ -355,7 +370,7 @@ def test_line_find_names_refused_playouts_and_skipped_rules(
     assert main(["line", "find", *BASE, "--line", _file(tmp_path)]) == 0
     out = capsys.readouterr().out
     assert f"2 of 102 {LEFT_OUT}{REASON}" in out.splitlines()
-    skipped = "skipped 4 candidate rules that met unmodelled mechanics in more than 1 % of playouts"
+    skipped = "skipped 4 candidate lines that met unmodelled mechanics in more than 1 % of playouts"
     assert skipped in out.splitlines()
     ((_, params, _, max_turns),) = asked
     assert np.array_equal(params.use, result.line.use)  # the found line is replayed

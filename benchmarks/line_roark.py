@@ -24,7 +24,8 @@ the team of ``benchmarks/lines/kaizo_roark_user.toml`` from the pre-Roark save (
    playouts. Written: ``benchmarks/results/line_roark_<time>.json`` (git-ignored; with the
    commit and whether tracked files were dirty) and
    ``benchmarks/lines/kaizo_roark_found_k<K>_s<seed>.toml`` (a ``#`` comment with the command,
-   seed, deaths and commit, then the user file's team and the found rules).
+   seed, deaths, commit and dirty flag, then the user file's team and the found rules). The
+   command is built from the arguments ``main`` was given.
 
 When the search or the shared scoring raises ``UnsupportedAi`` (a line refused in every
 playout), the benchmark prints ``refused:``,
@@ -101,6 +102,15 @@ def _difference_lines(user, found) -> list[str]:
     return out
 
 
+def _command(argv: list[str]) -> str:
+    return " ".join(["python -m benchmarks.line_roark", *argv])
+
+
+def _header(command: str, seed: int, deaths: int, commit: str, dirty: bool) -> str:
+    """The found file's ``#`` line (``players.found_deaths`` reads its ``deaths N``)."""
+    return f"{command}; seed {seed}, deaths {deaths}, commit {commit}, dirty {dirty}"
+
+
 def run(args) -> int:
     import jax
 
@@ -141,12 +151,12 @@ def run(args) -> int:
         max_sweeps=args.sweeps, budget_seconds=args.budget, final_n=args.n
     )
     key = jax.random.PRNGKey(args.seed)
-    commit = _commit()
-    command = "python -m benchmarks.line_roark " + " ".join(sys.argv[1:])
+    commit, dirty = _commit(), _dirty()
+    command = _command(args.argv)
     record = {
         "timestamp": datetime.now().isoformat(timespec="seconds"),
         "commit": commit,
-        "dirty": _dirty(),
+        "dirty": dirty,
         "command": command,
         "game": GAME,
         "trainer_id": ROARK_ID,
@@ -257,7 +267,7 @@ def run(args) -> int:
     _say(f"total: {total_s:.1f} s, {playouts} playouts, {jax.device_count()} devices")
 
     found_path = LINES / f"kaizo_roark_found_k{args.deaths}_s{args.seed}.toml"
-    header = f"{command}; seed {args.seed}, deaths {args.deaths}, commit {commit}"
+    header = _header(command, args.seed, args.deaths, commit, dirty)
     write_line_file(found_path, setup.file, toml, header=header)
     _say(f"wrote {found_path}")
     record["search"]["hold_out_matches_shared"] = same
@@ -298,6 +308,7 @@ def main(argv: list[str] | None = None) -> int:
         help="search seconds after which no race starts (default: no limit)",
     )
     args = parser.parse_args(argv)
+    args.argv = list(sys.argv[1:] if argv is None else argv)  # for the record's command
     if args.n < 1 or args.devices < 1 or args.sweeps < 1:
         parser.error("--n, --devices and --sweeps must be at least 1")
     if args.budget is not None and args.budget < 0:

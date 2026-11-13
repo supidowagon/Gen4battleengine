@@ -51,3 +51,21 @@ def test_defaults_run_without_a_time_limit(monkeypatch):
     assert line_roark.main(["--sweeps", "3", "--budget", "60"]) == 0
     assert (seen[0].budget, seen[0].sweeps) == (None, 8)
     assert (seen[1].budget, seen[1].sweeps) == (60, 3)
+
+
+def test_command_is_the_argv_main_was_given(monkeypatch, tmp_path):
+    from benchmarks import line_roark, players
+
+    seen = []
+    monkeypatch.setattr(cli, "configure_cpu_devices", lambda n: None)
+    monkeypatch.setattr(line_roark, "run", lambda args: seen.append(args) or 0)
+    monkeypatch.setattr("sys.argv", ["pytest", "-q", "unrelated"])
+    assert line_roark.main(["--seed", "3"]) == 0
+    command = line_roark._command(seen[0].argv)
+    assert command == "python -m benchmarks.line_roark --seed 3"
+    # The found file's header carries the dirty flag; the scoreboard still reads its deaths.
+    header = line_roark._header(command, 3, 1, "abc", True)
+    assert header.endswith("; seed 3, deaths 1, commit abc, dirty True")
+    found = tmp_path / "found.toml"
+    found.write_text(f"# {header}\n", encoding="utf-8")
+    assert players.found_deaths(found) == 1

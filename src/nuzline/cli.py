@@ -54,11 +54,13 @@
   (``search.line_search``; ``--pick-n`` the keys comparing its kept lines; the file's
   rules, if any, are its first start), progress as ``[line]`` lines on stderr,
   then the found line with the same block from ``--final-n`` hold-out playouts and its
-  ``[[rule]]`` TOML; ``--out`` gets the file's ``[[team]]`` and the found rules. A
+  ``[[rule]]`` TOML (ASCII-folded like all output); ``--out`` gets the file's ``[[team]]``
+  and the found rules with the exact names, and must not be the ``--line`` file. Ctrl-C
+  stops the search like ``--budget`` and still prints the best line kept so far. A
   heuristic: a good line, not a proven best. Both ``line`` commands leave refused
   playouts (a mechanic the engine does not model) out of the odds and print after the
   ladder how many and which mechanic (``player.refusal_reason`` on the first); ``find``
-  also prints how many candidate rules it skipped for being refused in more than 1 % of
+  also prints how many candidate lines it skipped for being refused in more than 1 % of
   their playouts. Both exit 1 on a bad file, name or flag and 2 when the fight is refused
   or every playout is.
 * ``nuzline trainers [--save SAVE [--allow-corrupt]]``: every trainer's id, label (else
@@ -446,7 +448,12 @@ def _parser() -> argparse.ArgumentParser:
         cmd.add_argument("--seed", type=int, default=0, help="PRNG seed of the playouts")
         cmd.add_argument("--devices", type=int, default=os.cpu_count(), help="host CPU devices")
     odds.add_argument("--n", type=int, default=2000, help="playouts")
-    find.add_argument("--out", type=Path, default=None, help="write the team and found line")
+    find.add_argument(
+        "--out",
+        type=Path,
+        default=None,
+        help="write the team and found line (exact names; the printed TOML is ASCII-folded)",
+    )
     find.add_argument(
         "--budget", type=float, default=None, help="seconds after which no new race starts"
     )
@@ -1135,7 +1142,7 @@ def line_report_lines(setup: LineSetup, rules, odds, seed: int, deaths: int) -> 
         low, high = odds.interval(k)
         # Width 16: "win, <=3 deaths" (15) keeps a space before "100.0 %".
         out.append(f"  {label:<16} {_pct(p)} [{100 * low:4.1f}, {100 * high:4.1f}]")
-    out.append(distribution_line(odds.distribution))
+    out.append(distribution_line(odds.distribution, "deaths"))
     out.append(
         f"mean turns {odds.mean_turns:.1f}; default player decided "
         f"{100 * odds.fallback_share:.0f} % of turns"
@@ -1246,6 +1253,8 @@ def _line_find(args) -> int:
         raise ValueError("--budget must not be negative")
     if args.out is not None and not args.out.parent.is_dir():
         raise ValueError(f"--out {args.out}: no directory {args.out.parent}")
+    if args.out is not None and args.out.resolve() == args.line.resolve():
+        raise ValueError(f"--out {args.out} is the --line file: it would be overwritten")
 
     def run(setup: LineSetup) -> None:
         import jax
@@ -1288,7 +1297,7 @@ def _line_find(args) -> int:
             _say(line)
         if result.refused_candidates:
             _say(
-                f"skipped {result.refused_candidates} candidate rules that met unmodelled "
+                f"skipped {result.refused_candidates} candidate lines that met unmodelled "
                 "mechanics in more than 1 % of playouts"
             )
         toml = render_rules(rules, setup.names, setup.player, setup.opp)

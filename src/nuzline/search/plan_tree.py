@@ -512,9 +512,9 @@ def _pct(p: float) -> str:
     return f"{100 * p:5.1f} %"
 
 
-def distribution_line(dist) -> str:
-    """``deaths under the leader: 0: a %  1: b % ...`` from a ``DeathDistribution`` (3 and
-    4+ deaths folded into ``3+``)."""
+def distribution_line(dist, label: str = "deaths under the leader") -> str:
+    """``<label>: 0: a %  1: b % ...`` from a ``DeathDistribution`` (3 and 4+ deaths
+    folded into ``3+``); Stage A/B keep the default label."""
     p = dist.probs
     cells = (
         ("0", p[0]),
@@ -525,7 +525,7 @@ def distribution_line(dist) -> str:
         ("unfinished", p[7]),
         ("protected lost", p[5]),
     )
-    return "deaths under the leader: " + "  ".join(f"{n}: {100 * v:.1f} %" for n, v in cells)
+    return f"{label}: " + "  ".join(f"{n}: {100 * v:.1f} %" for n, v in cells)
 
 
 def _precision_line(result: SolveResult) -> str:

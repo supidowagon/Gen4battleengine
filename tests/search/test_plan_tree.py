@@ -12,9 +12,9 @@ import numpy as np
 import pytest
 
 from nuzline.search import stage_b
-from nuzline.search.deaths import BUCKETS
+from nuzline.search.deaths import BUCKETS, DeathDistribution
 from nuzline.search.leaves import LeafValue
-from nuzline.search.plan_tree import label, render, to_json
+from nuzline.search.plan_tree import distribution_line, label, render, to_json
 from nuzline.search.stage_a import ActionResult, Ranking
 from nuzline.search.stage_b import PlanNode, SolveSettings, solve
 from tests.engine.helpers import roark_state
@@ -348,3 +348,10 @@ def test_json_has_replacement_and_distribution(sacrifice, names):
         for kids in node["children"].values():
             stack.extend(kids)
     assert any(replacements)
+
+
+def test_distribution_line_label():
+    # Stage A/B keep "deaths under the leader"; the line commands pass their own label.
+    dist = DeathDistribution.from_counts([1] + [0] * (len(BUCKETS) - 1))
+    assert distribution_line(dist).startswith("deaths under the leader: 0: 100.0 %  1: 0.0 %")
+    assert distribution_line(dist, "deaths").startswith("deaths: 0: 100.0 %  1: 0.0 %")
