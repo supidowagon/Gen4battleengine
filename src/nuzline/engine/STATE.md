@@ -208,7 +208,10 @@ three structs has a row.
   - The search masks some learn-move options (ruling D2, and `learn_pin`, ruling U1):
     replacing an AI-seen slot, the active learner's disabled, locked or choice-locked move,
     or the slot pinned by `learn_pin`. They are legal game choices the search skips, so plan
-    values at learn nodes are achievable lower bounds.
+    values at learn nodes are achievable lower bounds (`levelup.learn_options`; the playout
+    always gives the move up, ruling D3). The scan, auto-learns and prompts run after `step`,
+    before any faint replacement (`levelup.advance_learns` / `learn`,
+    `search.learn.resolve_learns`); prompts pending when the battle ends stay (ruling D8).
 - **Not from a struct field.** `pursuit_target` and `wish_hp` are
   `BattleState`'s own bookkeeping: the decomp derives Pursuit's pre-switch hit
   from per-turn scratch (the opposing battler's selected move when a switch is

@@ -19,6 +19,9 @@ Entry points:
   damage rolls, like ``engine.damage.damage_table``.
 * ``ref_grant_exp(tables, state, slot, pending, selected) -> RefState``: the exp payout for
   the opponent's party ``slot`` fainting, like ``engine.levelup.pay_exp``.
+* ``ref_advance_learns(tables, state)``, ``ref_learn_options(tables, state)`` and
+  ``ref_learn(tables, state, option)``: the deferred learnset scan, like
+  ``engine.levelup.advance_learns`` / ``learn_options`` / ``learn``.
 
 ``tables`` is ``data.tables.to_numpy(tables)``; ``outcome`` is
 ``engine.outcome.outcome_to_py(outcome)``. Every random event comes from
@@ -919,6 +922,140 @@ def _effort_values(tables, mon: RefPokemon, foe: RefPokemon, pokerus: int) -> No
             tmp -= mon.evs[stat] + tmp - MAX_EVS_SINGLE_STAT
         mon.evs[stat] += tmp
         total += tmp
+
+
+# --------------------------------------------------------------------------- learning a move
+
+LEARNED_MOVES_MAX = 4  # include/constants/moves.h:8
+LEARN_GIVE_UP = LEARNED_MOVES_MAX  # the learn option that gives the move up
+# include/struct_defs/species.h:11-14.
+LEARNSET_NO_MOVE_TO_LEARN = 0
+LEARNSET_MOVE_ALREADY_KNOWN = 0xFFFE
+LEARNSET_ALL_SLOTS_FILLED = 0xFFFF
+LEARNSET_SENTINEL_ENTRY = 0xFFFF
+
+
+def _learnset(tables, mon: RefPokemon) -> list[int]:
+    """``Pokemon_LoadLevelUpMovesOf`` (src/pokemon.c:3943): the u16 entries ``move | level << 9``
+    of the Pokemon's species and form, in source order, then the terminator."""
+    row = _t(tables, "species_form_row", mon.species, mon.form)
+    entries = []
+    for i in range(tables.learnset_level.shape[1]):
+        level = _t(tables, "learnset_level", row, i)
+        if level == 0:  # the tables' end marker (a real entry has level 1..100)
+            break
+        entries.append(_t(tables, "learnset_move", row, i) | level << 9)
+    return [*entries, LEARNSET_SENTINEL_ENTRY]
+
+
+def _add_move(tables, mon: RefPokemon, move: int) -> int:
+    """``BoxPokemon_AddMove`` (src/pokemon.c:3852-3873): the first empty slot learns the move
+    (``BoxPokemon_SetMoveSlot`` :3925-3933, ``MoveTable_CalcMaxPP`` with that slot's PP Ups,
+    src/move_table.c:25-35; an empty slot's PP Ups are 0, coverage refuses others), a slot
+    already holding it stops the walk."""
+    for i in range(LEARNED_MOVES_MAX):
+        if mon.moves[i] == 0:
+            mon.moves[i] = move
+            mon.pp[i] = _t(tables, "move_pp", move)
+            return move
+        if mon.moves[i] == move:
+            return LEARNSET_MOVE_ALREADY_KNOWN
+    return LEARNSET_ALL_SLOTS_FILLED
+
+
+def _level_up_move(tables, mon: RefPokemon, level: int, index: int) -> tuple[int, int, int]:
+    """``Pokemon_LevelUpMove`` (src/pokemon.c:3935-3966) with the Pokemon at ``level``:
+    ``(result, move, index)``. It walks the whole list from ``index`` to the terminator,
+    skipping entries of other levels, and moves the index past a match."""
+    entries = _learnset(tables, mon)
+    if entries[index] == LEARNSET_SENTINEL_ENTRY:
+        return LEARNSET_NO_MOVE_TO_LEARN, 0, index
+    while (entries[index] & 0xFE00) != level << 9:
+        index += 1
+        if entries[index] == LEARNSET_SENTINEL_ENTRY:
+            return LEARNSET_NO_MOVE_TO_LEARN, 0, index
+    move = entries[index] & 0x1FF
+    index += 1
+    return _add_move(tables, mon, move), move, index
+
+
+def _scan_learnsets(tables, s: RefState) -> None:
+    """``SEQ_GET_EXP_CHECK_LEARN_MOVE`` (script.c:10003-10038) for every slot's deferred
+    levels, slots ascending, until a prompt (``LEARNSET_ALL_SLOTS_FILLED``, :10016-10018):
+    the cursor is left on the prompted entry. "Already known" goes to the next entry
+    (:10008-10010), a learned move too (via ``SEQ_GET_EXP_LEARNED_MOVE_WAIT``, :10183-10187);
+    no move left (:10012-10013) ends the level, and the next level's scan restarts at index 0
+    (``GET_EXP_LEARNSET_INDEX = 0``, :9882)."""
+    for slot, mon in enumerate(s.sides[0].party):
+        while s.learn_level[slot]:
+            result, _, index = _level_up_move(
+                tables, mon, s.learn_level[slot], s.learn_cursor[slot]
+            )
+            if result == LEARNSET_ALL_SLOTS_FILLED:
+                s.learn_cursor[slot] = index - 1
+                return
+            if result == LEARNSET_NO_MOVE_TO_LEARN:
+                if s.learn_level[slot] == mon.level:
+                    s.learn_level[slot] = s.learn_cursor[slot] = 0
+                else:
+                    s.learn_level[slot] += 1
+                    s.learn_cursor[slot] = 0
+            else:
+                s.learn_cursor[slot] = index
+
+
+def ref_advance_learns(tables, state: RefState) -> RefState:
+    """``engine.levelup.advance_learns``' contract: the deferred scans up to the first
+    prompt; the input state is not modified."""
+    s = copy.deepcopy(state)
+    _scan_learnsets(tables, s)
+    return s
+
+
+def _prompted(s: RefState) -> int | None:
+    return next((i for i, level in enumerate(s.learn_level) if level), None)
+
+
+def ref_learn_options(tables, state: RefState) -> list[bool]:
+    """``engine.levelup.learn_options``: replacing a slot whose move is an HM is not allowed
+    (``CheckSelectedMoveIsHM``, src/battle_sub_menus/battle_party.c:1724-1735;
+    ``Item_IsHMMove``, src/item.c:306-315); the search also skips an AI-seen slot and, for the
+    active learner, the disabled, locked and choice-locked moves (ruling D2) and the slot
+    pinned by ``learn_pin`` (ruling U1). Giving up is always allowed."""
+    slot = _prompted(state)
+    if slot is None:
+        slot = 0
+    side = state.sides[0]
+    mon = side.party[slot]
+    options = []
+    for k in range(LEARNED_MOVES_MAX):
+        move = mon.moves[k]
+        ok = not _t(tables, "move_is_hm", move) and not state.ai_seen_moves[slot][k]
+        if slot == side.active and (
+            move in (side.disabled_move, side.locked_move, side.choice_lock)
+            or state.learn_pin == k + 1
+        ):
+            ok = False
+        options.append(ok)
+    return [*options, True]
+
+
+def ref_learn(tables, state: RefState, option: int) -> RefState:
+    """``engine.levelup.learn``: the answer to the pending prompt. Replacing slot ``k``
+    (``SEQ_GET_EXP_LEARNED_MOVE``, script.c:10162-10181): PP Ups 0, then
+    ``Pokemon_SetMoveSlot`` (src/pokemon.c:3920-3933) gives the base PP; giving up
+    (:10132-10135) changes nothing. The scan then goes on from the next entry."""
+    s = copy.deepcopy(state)
+    slot = _prompted(s)
+    mon = s.sides[0].party[slot]
+    index = s.learn_cursor[slot]
+    move = _learnset(tables, mon)[index] & 0x1FF
+    if option != LEARN_GIVE_UP:
+        mon.moves[option] = move
+        mon.pp[option] = _t(tables, "move_pp", move)  # MoveTable_CalcMaxPP(move, 0)
+    s.learn_cursor[slot] = index + 1
+    _scan_learnsets(tables, s)
+    return s
 
 
 # --------------------------------------------------------------------------- items, switch-in
@@ -2368,8 +2505,10 @@ def ref_replace(tables, state: RefState, side: int, slot: int) -> RefState:
     # turn: the decomp's totalTurns + 1 is s.turn here.
     turn = _Turn(tables, None, entry_turn=s.turn)
     _enter(turn, s, side, slot)
-    _send_out_exp(s, side)  # subscript_show_party_list.s:18
-    _stealth_rock_damage(turn, s, side)  # :22
+    # subscript_show_party_list.s:18 / :22, and subscript_replace_fainted.s:58 / :62 in shift
+    # style (the same order): the exp flag at the send-out, then the hazards.
+    _send_out_exp(s, side)
+    _stealth_rock_damage(turn, s, side)
     _faint_check(turn, s)
     # TurnEnd's AnyExpPayout (bcp.c:1846) for a newcomer the hazards fainted. Learn work it
     # leaves inside the opponent's replacement loop is refused (window (c), design §3.3).

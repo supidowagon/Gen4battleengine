@@ -1,4 +1,6 @@
-"""Experience payout and level-up (K3d-exp, design §1.1-1.4, §3.1): ``pay_exp``.
+"""Experience payout and level-up (K3d-exp, design §1.1-1.4, §3.1): ``pay_exp``; the
+learnset resolve after ``step`` (design §1.5, §3.2-3.3): ``advance_learns``, ``needs_learn``,
+``learn_options``, ``learn``.
 
 Paths are relative to ``external/pokeplatinum``; ``bs.c`` is ``src/battle/battle_script.c``,
 ``bcp.c`` ``src/battle/battle_controller_player.c``.
@@ -24,15 +26,34 @@ Not modelled here, and refused elsewhere (design §4): the egg-location friendsh
 (src/pokemon.c:2668-2670, read only by the friendship-power moves, §4.4) and a battle item
 that differs from the party item (§4.2). The learnset scan of the levels gained is deferred
 to the post-step resolve (``learn_level`` / ``learn_cursor``, design §3.2-3.3).
+
+The resolve (``advance_learns``, ``learn``) runs after ``step`` and before any faint
+replacement: the decomp's ``TurnEnd`` payout and its prompts (bcp.c:1846) come before
+``ReplaceFainted`` (:1848). It is never inlined into ``step``. Only the learnset work is
+deferred: auto-learn fills only an empty slot (src/pokemon.c:3857-3862), and the readers of a
+slot that holds a move, between a mid-turn payout and the resolve, are exact under the
+``learn_options`` masks or refused (design §3.3):
+
+* the player's pending move after the opponent fainted first: the decomp stores the slot at
+  selection (bcp.c:525-527) and re-reads ``moves[moveSlot]`` when the move runs
+  (bcp.c:1885-1895; the PP slot by ``Battler_SlotForMove``, bcp.c:2272-2283), so only a
+  prompt that replaces the selected slot differs: ``learn_pin`` masks that option;
+* the end-of-turn Disable check reads only whether ``disabledMove`` is still known
+  (bcp.c:1565-1586): masked with the disabled move (ruling D2);
+* a newcomer the hazards faint inside the opponent's replacement loop: refused
+  (``exp_refused``, window (c)).
+
+Prompts still pending when the battle ends stay in the state (ruling D8).
 """
 
 from __future__ import annotations
 
+import jax
 import jax.numpy as jnp
 
 from nuzline.data.tables import Tables
 from nuzline.engine.ids import Stat
-from nuzline.engine.state import SLOTS, BattleState
+from nuzline.engine.state import MOVES, SLOTS, BattleState
 from nuzline.engine.stats import SPECIES_SHEDINJA, calc_stats_jnp
 
 _I32 = jnp.int32
@@ -238,3 +259,146 @@ def pay_exp_leveled(
         ),
     )
     return out, leveled
+
+
+# --- the learnset resolve (design §1.5, §3.2) ---------------------------------------------------
+
+GIVE_UP = MOVES  # learn option 4 gives the move up; options 0-3 replace that move slot
+LEARN_OPTIONS = MOVES + 1
+
+
+def needs_learn(state: BattleState) -> jnp.ndarray:
+    """``bool``: a learn-move prompt is pending. Valid after ``advance_learns``, which leaves
+    learnset work only at a prompt; the lowest such player slot holds it (``GetExpTask``
+    visits the slots in ascending order, bs.c:9703-9712)."""
+    return jnp.any(state.learn_level > 0)
+
+
+def _learner(state: BattleState) -> jnp.ndarray:
+    """The lowest player slot with learnset work."""
+    return jnp.argmax(state.learn_level > 0)
+
+
+def _row(tables: Tables, state: BattleState, slot) -> jnp.ndarray:
+    """The learnset's personal row, by species and form (``Pokemon_LoadLevelUpMovesOf``,
+    src/pokemon.c:3943)."""
+    return tables.species_form_row[state.species[0, slot], state.form[0, slot]]
+
+
+def _advance_once(tables: Tables, state: BattleState) -> tuple[BattleState, jnp.ndarray]:
+    """``(state, prompt)``: one step of the lowest pending slot's learnset scan.
+
+    ``Pokemon_LevelUpMove`` (src/pokemon.c:3935-3966) walks the whole list from the index,
+    skipping every entry whose level is not exactly the scanned level, up to the terminator
+    (:3945-3956): it does not stop at a higher level, and a list need not be sorted (vanilla
+    row 354). On a match it moves the index past it (:3958-3961) and calls
+    ``BoxPokemon_AddMove`` (:3852-3873), which walks the move slots in order: the first
+    empty slot learns the move (``SetMoveSlot``, :3859-3862, with the slot's PP Ups,
+    ``MoveTable_CalcMaxPP``, :3925-3933 and src/move_table.c:25-35: the base PP, since
+    coverage refuses PP Ups on an empty slot), a slot holding the move first makes it
+    "already known" (:3864-3866; skipped, bs.c:10008-10010), and with neither the player is
+    prompted (bs.c:10016-10018): the cursor stays on that entry. No match left
+    (``LEARNSET_NO_MOVE_TO_LEARN`` -> ``SEQ_GET_EXP_GAUGE``, bs.c:10012-10013): the work is done
+    at the Pokemon's level, else the next level's scan restarts at index 0 (bs.c:9882)."""
+    slot = _learner(state)
+    level = state.learn_level[slot].astype(_I32)
+    cursor = state.learn_cursor[slot].astype(_I32)
+    row = _row(tables, state, slot)
+    levels = tables.learnset_level[row].astype(_I32)
+    hit = (levels == level) & (jnp.arange(levels.shape[0]) >= cursor)
+    found = jnp.any(hit)
+    at = jnp.argmax(hit)
+    move = tables.learnset_move[row, at]
+    moves = state.moves[0, slot]
+    stop = (moves == 0) | (moves == move)
+    k = jnp.argmax(stop)
+    learned = found & jnp.any(stop) & (moves[k] == 0)
+    prompt = found & ~jnp.any(stop)
+    done = level >= state.level[0, slot].astype(_I32)
+    new_level = jnp.where(found, level, jnp.where(done, 0, level + 1))
+    new_cursor = jnp.where(found, jnp.where(prompt, at, at + 1), 0)
+    pp = jnp.where(learned, tables.move_pp[move], state.pp[0, slot, k])
+    out = state._replace(
+        moves=state.moves.at[0, slot, k].set(jnp.where(learned, move, moves[k])),
+        pp=state.pp.at[0, slot, k].set(pp.astype(state.pp.dtype)),
+        learn_level=state.learn_level.at[slot].set(new_level.astype(state.learn_level.dtype)),
+        learn_cursor=state.learn_cursor.at[slot].set(new_cursor.astype(state.learn_cursor.dtype)),
+    )
+    return out, prompt
+
+
+def advance_learns(tables: Tables, state: BattleState) -> BattleState:
+    """The pending learnset scans, slots ascending, up to the first prompt (``needs_learn``)
+    or to the end (every ``learn_level`` 0): auto-learns and "already known" entries are
+    applied, a prompt stops the scan (``_advance_once``). Deterministic, and a no-op at a
+    prompt. One ``lax.while_loop``, run after ``step``, never inside it."""
+    width = tables.learnset_level.shape[1]
+    # Each step uses up an entry (at most ``width`` per slot over all levels), moves to the
+    # next level (fewer than MAX_LEVEL per slot) or stops at a prompt: never reached.
+    bound = SLOTS * (width + MAX_LEVEL) + 1
+
+    def cond(carry):
+        s, prompt, n = carry
+        return ~prompt & needs_learn(s) & (n < bound)
+
+    def body(carry):
+        s, _, n = carry
+        s, prompt = _advance_once(tables, s)
+        return s, prompt, n + 1
+
+    state, _, _ = jax.lax.while_loop(cond, body, (state, jnp.bool_(False), jnp.int32(0)))
+    return state
+
+
+def learn_options(tables: Tables, state: BattleState) -> jnp.ndarray:
+    """``bool[5]``: the search's answers to the pending prompt (``needs_learn``, after
+    ``advance_learns``). Option ``k < 4`` replaces move slot ``k``; option 4 (``GIVE_UP``)
+    gives the move up and is always legal (a "No" to "Make it forget another move?" leads to
+    the give-up prompt, bs.c:10076-10077, :10104-10135).
+
+    Replacing slot ``k`` is offered only if all of these hold:
+
+    * its move is not an HM (``CheckSelectedMoveIsHM``, src/battle_sub_menus/battle_party.c:
+      1724-1735; ``Item_IsHMMove``, src/item.c:306-315): a game rule;
+    * the AI has not seen it (``ai_seen_moves``; ruling D2);
+    * for the player's active learner: it is not the disabled, locked or choice-locked move
+      (ruling D2), and not the slot the player selected this turn (``learn_pin``, window (a),
+      ruling U1).
+
+    The D2 and pin masks drop legal game choices, so plan values at learn nodes are
+    achievable lower bounds (``STATE.md``)."""
+    slot = _learner(state)
+    moves = state.moves[0, slot]
+    ok = (tables.move_is_hm[moves] == 0) & (state.ai_seen_moves[slot] == 0)
+    held = (
+        (moves == state.disabled_move[0])
+        | (moves == state.locked_move[0])
+        | (moves == state.choice_lock[0])
+        | (jnp.arange(MOVES) + 1 == state.learn_pin)
+    )
+    ok = ok & ~((slot == state.active[0]) & held)
+    return jnp.concatenate([ok, jnp.ones(1, bool)])
+
+
+def learn(tables: Tables, state: BattleState, option) -> BattleState:
+    """The answer ``option`` (``learn_options``' indexing) to the pending prompt, then
+    ``advance_learns``. Replacing slot ``k`` (``SEQ_GET_EXP_LEARNED_MOVE``,
+    bs.c:10162-10181) sets its PP Ups to 0 and ``SetMoveSlot`` gives the new move's base PP
+    (src/pokemon.c:3925-3933); giving up changes nothing. Either way the scan goes on at the
+    same level from the next entry (``SEQ_GET_EXP_LEARNED_MOVE_WAIT`` and
+    ``SEQ_GET_EXP_GIVE_UP_LEARNING_WAIT`` -> ``SEQ_GET_EXP_CHECK_LEARN_MOVE``,
+    bs.c:10132-10135, :10183-10187). Every option is applied as given: ``learn_options`` is
+    the search's mask, not a game rule here (the converter fits all non-HM options)."""
+    slot = _learner(state)
+    cursor = state.learn_cursor[slot]
+    move = tables.learnset_move[_row(tables, state, slot), cursor]
+    option = jnp.asarray(option, _I32)
+    replaced = option < MOVES
+    k = jnp.minimum(option, MOVES - 1)
+    pp = jnp.where(replaced, tables.move_pp[move], state.pp[0, slot, k])
+    out = state._replace(
+        moves=state.moves.at[0, slot, k].set(jnp.where(replaced, move, state.moves[0, slot, k])),
+        pp=state.pp.at[0, slot, k].set(pp.astype(state.pp.dtype)),
+        learn_cursor=state.learn_cursor.at[slot].set((cursor + 1).astype(cursor.dtype)),
+    )
+    return advance_learns(tables, out)
