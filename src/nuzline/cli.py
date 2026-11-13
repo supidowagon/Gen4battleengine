@@ -546,7 +546,7 @@ def _fight(args):
         trainers, name=args.trainer, trainer_id=args.trainer_id, player_starter=_starter(save)
     )
     if save is None:
-        player = load_party(args.party, names)
+        player = load_party(args.party, names, tables)
     inter = IntermediateData(game.intermediate_dir)
     _check_buildable(tables, names, trainer, inter)
     opp = build_trainer_party(trainer, inter)

@@ -904,7 +904,8 @@ def _enter(turn: _Turn, s: RefState, side: int, slot: int) -> None:
     ``BattleSystem_UpdateAfterSwitch`` (lib.c:2094) sets ``fakeOutTurnNumber =
     totalTurns + 1`` (lib.c:2117), clears ``moveHit`` (lib.c:2121) and ends what the outgoing
     battler is the source of (the Bind on the foe, the foe's infatuation, lib.c:2088-2098).
-    Then the entry hazards."""
+    The caller then runs ``PokemonSendOut`` (``_send_out_exp``) and the entry hazards
+    (``_stealth_rock_damage``), in that order."""
     sd = s.sides[side]
     _restore_types(turn.tables, s, side)  # the outgoing battler's Camouflage ends
     sd.active = slot
@@ -916,7 +917,20 @@ def _enter(turn: _Turn, s: RefState, side: int, slot: int) -> None:
         s.ai_seen_moves[slot] = [0] * len(s.ai_seen_moves[slot])
         s.ai_ability_known[slot] = 0
     _source_leaves(s, side)
-    _stealth_rock_damage(turn, s, side)
+
+
+def _send_out_exp(s: RefState, side: int) -> None:
+    """``BtlCmd_PokemonSendOut`` (script.c:543-635) for ``side``'s newcomer: a player
+    send-out flags the enemy (:571-572, :592-593, :607-608, :622-623), an enemy send-out
+    clears the mask, then flags (:580-581, :595-596, :610-611, :625-626).
+    ``BattleSystem_ClearSideExpGain`` (lib.c:1456-1459) sets ``sideGetExpMask`` to 0;
+    ``BattleSystem_FlagBattlerExpGain`` (lib.c:1461-1479) ORs in
+    ``selectedPartySlot[PLAYER_1]``'s bit when the enemy's ``curHP`` is nonzero (``PLAYER_2``
+    and ``ENEMY_2`` are in ``battlersSwitchingMask`` in singles, lib.c:2031-2033)."""
+    if side == 1:
+        s.exp_mask = 0
+    if _active(s, 1).hp:
+        s.exp_mask |= 1 << s.sides[0].active
 
 
 # --------------------------------------------------------------------------- the move
@@ -1675,6 +1689,8 @@ def _roar(turn: _Turn, s: RefState, side: int) -> bool:
     if out.status == Status.TOXIC:
         out.status_counter = 0
     _enter(turn, s, foe, slot)
+    _send_out_exp(s, foe)  # PokemonSendOut BTLSCR_DEFENDER (:22)
+    _stealth_rock_damage(turn, s, foe)  # BATTLE_SUBSCRIPT_HAZARDS_CHECK (:31)
     _switch_in_effects(turn, s, foe)
     turn.done[foe] = True
     return True
@@ -1735,6 +1751,8 @@ def _switch(turn: _Turn, s: RefState, side: int, slot: int, actions, choices) ->
     if mon.status == Status.TOXIC:
         mon.status_counter = 0
     _enter(turn, s, side, slot)
+    _send_out_exp(s, side)  # subscript_switch_pokemon.s:39
+    _stealth_rock_damage(turn, s, side)  # :43
     _switch_in_effects(turn, s, side)
 
 
@@ -2120,6 +2138,8 @@ def ref_replace(tables, state: RefState, side: int, slot: int) -> RefState:
     # turn: the decomp's totalTurns + 1 is s.turn here.
     turn = _Turn(tables, None, entry_turn=s.turn)
     _enter(turn, s, side, slot)
+    _send_out_exp(s, side)  # subscript_show_party_list.s:18
+    _stealth_rock_damage(turn, s, side)  # :22
     _faint_check(turn, s)
     if not s.over:
         _switch_in_effects(turn, s, side)

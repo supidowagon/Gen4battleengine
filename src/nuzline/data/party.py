@@ -13,8 +13,8 @@ needs ``status = "sleep"``), ``pp`` (current PP, one value per listed move, padd
 to four slots; omitted means the table PP) and ``stats`` (six stored stats, max HP first,
 in the ``ivs`` order; omitted means computed from level, IVs, EVs and nature).
 
-Experience (``PokemonSpec``): ``exp`` (total experience; omitted means the base of the
-level), ``exp_boost`` (100, 150 or 170: the exp multiplier in percent; omitted means 100,
+Experience (``PokemonSpec``): ``exp`` (total experience, of the Pokemon's ``level``;
+omitted means the base of the level), ``exp_boost`` (100, 150 or 170: the exp multiplier in percent; omitted means 100,
 the user's own Pokemon), ``pokerus`` and ``friend_bonus`` (0 or 1; omitted means 0).
 """
 
@@ -24,7 +24,7 @@ import tomllib
 from pathlib import Path
 
 from nuzline.data.spec import PokemonSpec
-from nuzline.data.tables import Names
+from nuzline.data.tables import Names, Tables
 from nuzline.engine.ids import Status
 
 GENDERS = {"male": 0, "female": 1, "none": 2}
@@ -148,9 +148,21 @@ def _spec(entry: dict, names: Names) -> PokemonSpec:
     )
 
 
-def load_party(path: Path, names: Names) -> list[PokemonSpec]:
+def load_party(path: Path, names: Names, tables: Tables | None = None) -> list[PokemonSpec]:
+    """The party in ``path``. With ``tables``, an ``exp`` that is not of the Pokemon's
+    ``level`` is refused (``ValueError``, ``engine.state.spec_exp``); without them
+    ``make_state`` refuses it."""
     with open(path, "rb") as f:
         entries = tomllib.load(f)["pokemon"]
     if not 1 <= len(entries) <= 6:
         raise ValueError(f"{path}: a party has 1-6 Pokemon, got {len(entries)}")
-    return [_spec(e, names) for e in entries]
+    specs = [_spec(e, names) for e in entries]
+    if tables is not None:
+        from nuzline.engine.state import spec_exp  # the engine imports jax
+
+        for entry, spec in zip(entries, specs, strict=True):
+            try:
+                spec_exp(tables, spec)
+            except ValueError as e:
+                raise ValueError(f"{entry['species']}: {e}") from None
+    return specs

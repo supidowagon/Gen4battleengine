@@ -1,8 +1,10 @@
 """The battle state pytree and its construction from two parties.
 
 ``BattleState`` is unbatched: side axis 0 is the player, 1 the opponent; slot axis
-is party order. Every field is ``int8``/``int16`` storage (spec §4.2). The field
-list is ticked off against the decomp's battle structs in ``STATE.md``.
+is party order. Every field is ``int8``/``int16`` storage (spec §4.2), except ``exp``:
+``int32``, because the level-100 experience of most growth rates exceeds ``int16`` (K3d-exp
+ruling D1). The field list is ticked off against the decomp's battle structs in
+``STATE.md``.
 
 Encodings:
 
@@ -55,6 +57,14 @@ Encodings:
   side's replacement can send one in); else 0. Hidden from the player. At a root it is a
   chance node (``step.root_belief``, ``step.sample_root``), as the battle-start draw
   (``BattleContext_InitCounters``, battle_lib.c:2024) is.
+* Experience (K3d-exp; ``STATE.md`` "Experience"): ``exp`` is the player party's
+  ``MON_DATA_EXPERIENCE``; ``evs`` (``ids.Stat`` order, like ``ivs``) and ``nature`` feed the
+  level-up stat recompute; ``exp_boost``, ``pokerus`` and ``friend_bonus`` are the
+  ``PokemonSpec`` fields of the player's slots. ``exp_mask`` is ``sideGetExpMask[0]`` as a
+  bitmask over the player's party slots: ``1 << lead`` at the start, then written by every
+  send-out (``step._switch_in``). ``learn_level`` / ``learn_cursor`` (the pending learnset
+  scan), ``learn_pin`` and ``exp_refused`` are 0 until the payout and the learn resolve set
+  them (later K3d-exp tasks).
 """
 
 from __future__ import annotations
@@ -167,6 +177,18 @@ class BattleState(NamedTuple):
     # AI knowledge of the player
     ai_seen_moves: jnp.ndarray  # int8[6,4], player slot x move slot
     ai_ability_known: jnp.ndarray  # int8[6]
+    # experience (K3d-exp, design §2.1; see the module docstring)
+    exp: jnp.ndarray  # int32[6], player party MON_DATA_EXPERIENCE
+    evs: jnp.ndarray  # int16[2,6,6], ids.Stat order
+    nature: jnp.ndarray  # int8[2,6]
+    exp_mask: jnp.ndarray  # int8, sideGetExpMask[0]: bit = player party slot
+    exp_boost: jnp.ndarray  # int16[6], 100 / 150 / 170 percent, 0 = unresolved
+    pokerus: jnp.ndarray  # int8[6], 1 = the Pokerus byte is nonzero
+    friend_bonus: jnp.ndarray  # int8[6], 1 = caught in a Luxury Ball
+    learn_level: jnp.ndarray  # int8[6], 0 = no learnset work, else the level to scan
+    learn_cursor: jnp.ndarray  # int8[6], index into that level's learnset scan
+    learn_pin: jnp.ndarray  # int8, 0 none, else 1 + the move slot the player selected
+    exp_refused: jnp.ndarray  # int8, sticky refusal code (0 none, 2 = window (c))
     # faint budget (search data; the engine only records deaths and never reads k)
     deaths: jnp.ndarray  # int8[6], 1 where the player's party slot fainted this battle
     faint_budget: jnp.ndarray  # int8, k: the deaths the search allows
@@ -300,6 +322,17 @@ LAYOUT: dict[str, tuple[tuple[int, ...], type]] = {
     "player_faints": (_FIELD, np.int8),
     "ai_seen_moves": ((SLOTS, MOVES), np.int8),
     "ai_ability_known": ((SLOTS,), np.int8),
+    "exp": ((SLOTS,), np.int32),
+    "evs": ((*_SLOT, 6), np.int16),
+    "nature": (_SLOT, np.int8),
+    "exp_mask": (_FIELD, np.int8),
+    "exp_boost": ((SLOTS,), np.int16),
+    "pokerus": ((SLOTS,), np.int8),
+    "friend_bonus": ((SLOTS,), np.int8),
+    "learn_level": ((SLOTS,), np.int8),
+    "learn_cursor": ((SLOTS,), np.int8),
+    "learn_pin": (_FIELD, np.int8),
+    "exp_refused": (_FIELD, np.int8),
     "deaths": ((SLOTS,), np.int8),
     "faint_budget": (_FIELD, np.int8),
     "protected": ((SLOTS,), np.int8),
@@ -325,6 +358,27 @@ def spec_stats(tables: Tables, mon: PokemonSpec) -> np.ndarray:
         np.asarray(tables.nature_mods[mon.nature]),
         species=mon.species,
     )
+
+
+def spec_exp(tables: Tables, mon: PokemonSpec) -> int:
+    """``mon``'s experience as ``make_state`` stores it: its ``exp``, else the base of its
+    level (``exp_table[rate][level]``, the rate by species as ``Pokemon_GetSpeciesBaseExpAt``
+    reads it, pokemon.c:2327-2330). ``ValueError`` when ``exp`` is not of ``mon``'s level:
+    the level of ``x`` is the last ``L`` in 1..100 with ``table[L] <= x``
+    (``SpeciesData_GetLevelAt``, pokemon.c:2379-2392), so ``exp`` must lie in
+    ``[table[level], table[level + 1])``, or be at least ``table[100]`` at level 100."""
+    rate = int(np.asarray(tables.species_exp_rate)[mon.species])
+    table = np.asarray(tables.exp_table)[rate]
+    if mon.exp is None:
+        return int(table[mon.level])
+    top = len(table) - 1
+    high = None if mon.level >= top else int(table[mon.level + 1])
+    if mon.exp < table[mon.level] or (high is not None and mon.exp >= high):
+        span = f"[{int(table[mon.level])}, {high})" if high is not None else f">= {int(table[top])}"
+        raise ValueError(
+            f"species {mon.species}: exp {mon.exp} is not of level {mon.level} (needs {span})"
+        )
+    return int(mon.exp)
 
 
 def _fill_slot(a: dict[str, np.ndarray], tables: Tables, side: int, slot: int, mon: PokemonSpec):
@@ -353,6 +407,14 @@ def _fill_slot(a: dict[str, np.ndarray], tables: Tables, side: int, slot: int, m
     a["gender"][side, slot] = mon.gender
     a["friendship"][side, slot] = mon.friendship
     a["ivs"][side, slot] = mon.ivs
+    a["evs"][side, slot] = mon.evs
+    a["nature"][side, slot] = mon.nature
+    exp = spec_exp(tables, mon)  # ValueError: exp not of the level
+    if side == 0:  # the opponent's exp is never read (its Pokemon gain none)
+        a["exp"][slot] = exp
+        a["exp_boost"][slot] = mon.exp_boost
+        a["pokerus"][slot] = mon.pokerus
+        a["friend_bonus"][slot] = mon.friend_bonus
 
 
 def initial_arrays(
@@ -379,7 +441,15 @@ def initial_arrays(
     ``trainer_item_count[1]``; the player's bag stays empty. The leads'
     ``fake_out_turn`` is 0: the battle-start send-out does not run
     ``BattleSystem_UpdateAfterSwitch``, and ``BattleContext`` starts zeroed
-    (battle_controller_player.c:180-184)."""
+    (battle_controller_player.c:180-184).
+
+    Experience: ``exp`` is ``spec_exp`` (``ValueError`` when a spec's ``exp`` is not of its
+    level), the player's ``exp_boost`` / ``pokerus`` / ``friend_bonus`` come from its specs,
+    ``evs`` and ``nature`` from both sides', and ``exp_mask = 1 << leads[0]``: the
+    battle-start ``PokemonSlideIn`` of the enemy (clear, then flag) and of the player (flag)
+    (subscript_start_encounter.s:84, :91; ``BtlCmd_PokemonSlideIn``, battle_script.c:465-466,
+    :474-475) leave the player lead's bit (``BattleSystem_FlagBattlerExpGain``,
+    battle_lib.c:1461-1479). The learn fields and ``exp_refused`` start at 0."""
     a = {name: np.zeros(shape, dtype) for name, (shape, dtype) in LAYOUT.items()}
     for side, party in enumerate((player, opp)):
         if not 1 <= len(party) <= SLOTS:
@@ -390,6 +460,7 @@ def initial_arrays(
         if not 0 <= lead < len(party):
             raise ValueError(f"side {side}: lead slot {lead} is not in a party of {len(party)}")
         a["active"][side] = lead
+    a["exp_mask"][...] = 1 << leads[0]
     bag = [item for item in opp_items if item]
     if len(bag) > BAG_SLOTS:
         raise ValueError(f"a trainer's bag holds at most {BAG_SLOTS} items, got {len(bag)}")

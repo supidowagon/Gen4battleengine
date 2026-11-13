@@ -338,13 +338,32 @@ def _switch_in(tables: Tables, state: BattleState, side, slot, entry_turn) -> Ba
     (``_restore_types``), stages and volatiles reset, the effects the
     outgoing Pokemon is the source of end (``_source_leaves``: the Bind it put on the other
     side, the other side's infatuation), ``fake_out_turn`` becomes ``entry_turn`` and the AI
-    forgets the newcomer (``_forget``; ``BattleSystem_UpdateAfterSwitch``, battle_lib.c:2094)."""
+    forgets the newcomer (``_forget``; ``BattleSystem_UpdateAfterSwitch``, battle_lib.c:2094).
+    Then the send-out updates the participation mask (``_flag_exp``)."""
     state = _restore_types(tables, state, side, True)
     state = _reset_battler(state, side, True)
     state = _forget(state, side, slot)
     state = _entered(state, side, entry_turn, True)
     state = state._replace(active=state.active.at[side].set(jnp.asarray(slot).astype(jnp.int8)))
-    return _source_leaves(state, side, True)
+    return _flag_exp(_source_leaves(state, side, True), side)
+
+
+def _flag_exp(state: BattleState, side) -> BattleState:
+    """``exp_mask`` (``sideGetExpMask[0]``) after ``side`` sent its newcomer out
+    (``BtlCmd_PokemonSendOut``, battle_script.c:543-635, which every switch, drag and
+    replacement subscript runs before its hazards check, e.g. subscript_show_party_list.s:18,
+    :22). A player send-out flags the enemy (:571-572, :592-593, :607-608, :622-623); an
+    enemy send-out clears the mask first (:580-581, :595-596, :610-611, :625-626).
+    ``BattleSystem_FlagBattlerExpGain`` (battle_lib.c:1461-1479) ORs in the player's active
+    slot (``selectedPartySlot``) when the enemy's ``curHP`` is nonzero; in singles only
+    ``PLAYER_1`` against ``ENEMY_1`` counts (``PLAYER_2`` / ``ENEMY_2`` are in
+    ``battlersSwitchingMask`` from the start, battle_lib.c:2031-2033). The player's own HP is
+    not read."""
+    bit = jnp.left_shift(jnp.int32(1), state.active[0].astype(jnp.int32))
+    foe_has_hp = state.hp[1, state.active[1]] > 0
+    kept = jnp.where(side == 0, state.exp_mask.astype(jnp.int32), 0)  # ClearSideExpGain
+    mask = kept | jnp.where(foe_has_hp, bit, 0)
+    return state._replace(exp_mask=mask.astype(state.exp_mask.dtype))
 
 
 def _send_out(tables: Tables, state: BattleState, side, slot) -> BattleState:
