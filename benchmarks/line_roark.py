@@ -38,12 +38,14 @@ import argparse
 import dataclasses
 import json
 import os
-import subprocess
 import sys
 import time
 from datetime import datetime
 from pathlib import Path
 
+from benchmarks._common import commit as _commit
+from benchmarks._common import dirty as _dirty
+from benchmarks._common import say as _say
 from nuzline import cli
 from nuzline.text import ascii_text
 
@@ -52,35 +54,6 @@ LINES = Path(__file__).resolve().parent / "lines"
 USER_LINE = LINES / "kaizo_roark_user.toml"
 RESULTS = Path(__file__).resolve().parent / "results"
 GAME, ROARK_ID = "kaizo", 246  # Kaizo Leader Roark
-
-
-def _say(text: str) -> None:
-    print(ascii_text(text), flush=True)
-
-
-def _commit() -> str:
-    try:
-        out = subprocess.run(
-            ["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True, text=True, check=True
-        )
-    except (OSError, subprocess.CalledProcessError):
-        return "unknown"
-    return out.stdout.strip()
-
-
-def _dirty() -> bool | None:
-    """Whether tracked files differ from the commit (``None``: git failed)."""
-    try:
-        out = subprocess.run(
-            ["git", "status", "--porcelain", "--untracked-files=no"],
-            cwd=ROOT,
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-    except (OSError, subprocess.CalledProcessError):
-        return None
-    return bool(out.stdout.strip())
 
 
 def _write_record(record: dict) -> Path:

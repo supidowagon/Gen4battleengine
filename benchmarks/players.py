@@ -12,20 +12,22 @@ Rules:
   ``team`` file's ``[[team]]`` from the save, the trainer, ``deaths`` as the death budget.
 - An ``Entry`` is one row: a ``Player`` and ``params(ctx)``, its params pytree for the fight
   (``FightContext``), or ``None`` when it does not apply there (the row is left out). Adding a
-  later player is one ``Entry`` in ``_entries``. Registered: ``greedy`` (``GREEDY``, ``()``),
+  later player is one ``Entry`` in ``entries()``. Registered: ``greedy`` (``GREEDY``, ``()``),
   ``user line`` (``LINE``, the team file's rules) and ``found line`` (``LINE``, the rules of the
   fight's ``found`` file, which must hold the same ``[[team]]``; ``None`` while the file does
-  not exist).
+  not exist). A found file whose ``#`` header names a search ``deaths N`` other than the
+  fight's ``deaths`` is scored with a warning line (it was searched for another budget).
 - Every entry of a fight plays ``evaluate_players(..., refused="exclude")`` on the same ``n``
   keys, ``line_keys(jax.random.PRNGKey(seed), n)`` (common random numbers), at most
   ``cli.LINE_ODDS_MAX_TURNS`` turns. Refused playouts (a mechanic the engine does not model)
-  are left out and counted; a row prints that count when it is above 0.
+  are left out and counted; a row prints that count when it is above 0. An entry whose
+  playouts are all refused gets no row, one line naming the mechanic, and the run goes on.
 - Printed per fight, one row per entry: win % and win with at most k deaths for k = 0..3, each
   with its 95 % Wilson interval, the default player's share of turns. Written:
   ``benchmarks/results/players_<time>.json`` (git-ignored).
 
 ``nuzline.cli`` and this module import no JAX at import time (``--devices`` must be set
-first), so ``ENTRIES`` is built on first access.
+first), so ``ENTRIES`` (``entries()``) is built on first access.
 """
 
 from __future__ import annotations
@@ -34,6 +36,7 @@ import argparse
 import dataclasses
 import json
 import os
+import re
 import sys
 import time
 import tomllib
@@ -43,8 +46,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from benchmarks._common import commit, dirty, say
 from nuzline import cli
-from nuzline.text import ascii_text
 
 if TYPE_CHECKING:
     from nuzline.search.player import Player
@@ -53,10 +56,6 @@ BENCH = Path(__file__).resolve().parent
 FIGHTS = BENCH / "fights.toml"
 RESULTS = BENCH / "results"
 _FIGHT_KEYS = ("name", "game", "save", "trainer_id", "team", "deaths", "found")
-
-
-def _say(text: str) -> None:
-    print(ascii_text(text), flush=True)
 
 
 @dataclass(frozen=True)
@@ -123,7 +122,18 @@ def _found_line(ctx: FightContext):
     return rules_to_line(resolve_rules(file, s.names, s.player, s.opp))
 
 
-def _entries() -> list[Entry]:
+def found_deaths(path: Path) -> int | None:
+    """The ``deaths N`` its first ``#`` line names (``line_roark``'s header); ``None``
+    without one."""
+    for text in Path(path).read_text(encoding="utf-8").splitlines():
+        if text.startswith("#"):
+            match = re.search(r"\bdeaths (\d+)\b", text)
+            return int(match.group(1)) if match else None
+    return None
+
+
+def entries() -> list[Entry]:
+    """The registered players, one ``Entry`` each (module docstring)."""
     from nuzline.search.line import LINE
     from nuzline.search.player import GREEDY
 
@@ -136,37 +146,52 @@ def _entries() -> list[Entry]:
 
 def __getattr__(name: str):
     if name == "ENTRIES":  # built on first access: importing the players imports JAX
-        globals()["ENTRIES"] = entries = _entries()
-        return entries
+        globals()["ENTRIES"] = registered = entries()
+        return registered
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def scoreboard(
-    fights: Sequence[FightContext], entries: Sequence[Entry], n: int, seed: int
+    fights: Sequence[FightContext],
+    entries: Sequence[Entry],
+    n: int,
+    seed: int,
+    report: Callable[[str], None] = say,
 ) -> list[dict]:
     """One row per fight and applicable entry: ``fight``, ``label`` and the ``PlayerOdds``
-    fields but ``refused_key``; every entry on ``line_keys(PRNGKey(seed), n)``."""
+    fields but ``refused_key``; every entry on ``line_keys(PRNGKey(seed), n)``. An entry
+    whose playouts are all refused gets no row and one ``report`` line instead."""
     import jax
 
-    from nuzline.search import player_eval
+    from nuzline.ai.policy import UnsupportedAi
+    from nuzline.search import player, player_eval
 
     key = jax.random.PRNGKey(seed)
     rows = []
     for ctx in fights:
+        s = ctx.setup
         for entry in entries:
             params = entry.params(ctx)
             if params is None:
                 continue
-            (odds,) = player_eval.evaluate_players(
-                ctx.setup.tables,
-                ctx.setup.state,
-                entry.player,
-                [params],
-                n,
-                key,
-                cli.LINE_ODDS_MAX_TURNS,
-                refused="exclude",
-            )
+            try:
+                (odds,) = player_eval.evaluate_players(
+                    s.tables,
+                    s.state,
+                    entry.player,
+                    [params],
+                    n,
+                    key,
+                    cli.LINE_ODDS_MAX_TURNS,
+                    refused="exclude",
+                )
+            except UnsupportedAi as e:
+                first = player_eval.line_keys(key, n)[0]
+                reason = player.refusal_reason(
+                    s.tables, s.state, entry.player, params, first, cli.LINE_ODDS_MAX_TURNS
+                )
+                report(f"{entry.label}: all playouts refused: {reason or e}")
+                continue
             fields = {
                 f.name: getattr(odds, f.name)
                 for f in dataclasses.fields(odds)
@@ -176,23 +201,24 @@ def scoreboard(
     return rows
 
 
+CELL = 19  # "100.0 [100.0,100.0]"
+
+
 def _cell(wins: int, n: int) -> str:
     from nuzline.search.stage_a import wilson
 
     low, high = wilson(wins, n)
-    return f"{100 * wins / n:5.1f} [{100 * low:4.1f},{100 * high:5.1f}]"
+    return f"{100 * wins / n:5.1f} [{100 * low:4.1f},{100 * high:4.1f}]"
 
 
 def _table(rows: Sequence[dict]) -> list[str]:
     """The rows of one fight: label, win any, win with <=k deaths (k = 0..3), each with its
     95 % Wilson interval, the default player's share of turns, refused playouts if any."""
-    head = f"{'player':<12} {'win, any':<20}" + "".join(
-        f" {'<=' + str(k) + ' deaths':<20}" for k in range(cli.MAX_DEATHS + 1)
-    )
-    out = [head + " default"]
+    titles = ["win, any"] + [f"<={k} deaths" for k in range(cli.MAX_DEATHS + 1)]
+    out = [f"{'player':<10} " + " ".join(f"{t:<{CELL}}" for t in titles) + " default"]
     for r in rows:
         cells = [_cell(r["wins_any"], r["n"])] + [_cell(w, r["n"]) for w in r["wins"]]
-        text = f"{r['label']:<12} " + " ".join(f"{c:<20}" for c in cells)
+        text = f"{r['label']:<10} " + " ".join(f"{c:<{CELL}}" for c in cells)
         text += f" {100 * r['fallback_share']:5.1f} %"
         if r["refused"]:
             text += f"  ({r['refused']} refused playouts left out of {r['n'] + r['refused']})"
@@ -210,7 +236,6 @@ def _row_json(row: dict) -> dict:
 def run(args) -> int:
     import jax
 
-    from benchmarks.line_roark import _commit
     from benchmarks.rank_timing import machine
     from nuzline.data.games import get_game
     from nuzline.engine.coverage import UnsupportedMechanics
@@ -221,19 +246,19 @@ def run(args) -> int:
     if args.fight is not None:
         fights = [f for f in fights if f.name == args.fight]
         if not fights:
-            _say(f"no fight named {args.fight!r} in {FIGHTS}")
+            say(f"no fight named {args.fight!r} in {FIGHTS}")
             return 1
     try:
         inputs = load_inputs()
     except RomInputError:
         inputs = None
-    entries = _entries()
+    registered = entries()
     started = time.perf_counter()
     rows, ran = [], []
     for fight in fights:
         save = getattr(inputs, fight.save, None)
         if save is None or not save.exists():
-            _say(f"{fight.name}: skipped, save {fight.save!r} is not configured (data/local.toml)")
+            say(f"{fight.name}: skipped, save {fight.save!r} is not configured (data/local.toml)")
             continue
         enable_compile_cache(
             table_version(get_game(fight.game).tables_dir) + code_version(), fight.game
@@ -241,34 +266,41 @@ def run(args) -> int:
         try:
             ctx = fight_context(fight, save)
         except (cli.FightRefused, UnsupportedMechanics) as e:
-            _say(f"{fight.name}: refused: {e}")
+            say(f"{fight.name}: refused: {e}")
             continue
-        _say("")
-        _say(f"== {fight.name}: {cli._trainer_line(ctx.setup.trainer)}, <={fight.deaths} deaths")
-        for line in cli._team_lines(ctx.setup):
-            _say(line)
-        if fight.found is not None and not (BENCH / fight.found).exists():
-            _say(f"found line: {fight.found} does not exist yet; left out")
+        say("")
+        say(f"== {fight.name}: {cli.trainer_line(ctx.setup.trainer)}, <={fight.deaths} deaths")
+        for line in cli.team_lines(ctx.setup):
+            say(line)
+        found = None if fight.found is None else BENCH / fight.found
+        if found is not None and not found.exists():
+            say(f"found line: {fight.found} does not exist yet; left out")
+        elif found is not None and found_deaths(found) not in (None, fight.deaths):
+            say(
+                f"warning: {fight.found} was searched with deaths {found_deaths(found)}, "
+                f"this fight allows {fight.deaths}"
+            )
         fight_start = time.perf_counter()
-        fight_rows = scoreboard([ctx], entries, args.n, args.seed)
-        _say(
+        fight_rows = scoreboard([ctx], registered, args.n, args.seed)
+        say(
             f"{args.n} playouts per player, seed {args.seed} (the same keys for every player); "
             f"{time.perf_counter() - fight_start:.1f} s"
         )
         for line in _table(fight_rows):
-            _say(line)
+            say(line)
         rows += fight_rows
         ran.append(dataclasses.asdict(fight))
     total_s = time.perf_counter() - started
-    _say("")
-    _say(f"total: {total_s:.1f} s, {jax.device_count()} devices")
+    say("")
+    say(f"total: {total_s:.1f} s, {jax.device_count()} devices")
     if not rows:
         return 1
     RESULTS.mkdir(exist_ok=True)
     now = datetime.now()
     record = {
         "timestamp": now.isoformat(timespec="seconds"),
-        "commit": _commit(),
+        "commit": commit(),
+        "dirty": dirty(),
         "command": "python -m benchmarks.players " + " ".join(sys.argv[1:]),
         "n": args.n,
         "seed": args.seed,
@@ -281,12 +313,14 @@ def run(args) -> int:
     }
     out = RESULTS / f"players_{now:%Y%m%d_%H%M%S}.json"
     out.write_text(json.dumps(record, indent=2), encoding="utf-8")
-    _say(f"wrote {out}")
+    say(f"wrote {out}")
     return 0
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    parser = argparse.ArgumentParser(
+        description="Score every registered player on the fights of benchmarks/fights.toml."
+    )
     parser.add_argument("--n", type=int, default=2000, help="playouts per player and fight")
     parser.add_argument("--seed", type=int, default=0, help="PRNG seed")
     parser.add_argument("--devices", type=int, default=os.cpu_count(), help="host CPU devices")

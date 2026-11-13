@@ -13,10 +13,10 @@
 #               "found line"); left out of the board while the file does not exist
 
 [[fight]]
-name = "kaizo-roark-user-five"
+name = "kaizo-roark-user-five-k1"
 game = "kaizo"
 save = "kaizo_save_pre_roark"
 trainer_id = 246
 team = "lines/kaizo_roark_user.toml"
-deaths = 3
+deaths = 1
 found = "lines/kaizo_roark_found_k1_s0.toml"
