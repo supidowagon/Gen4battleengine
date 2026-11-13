@@ -285,16 +285,61 @@ Heart Scale and HM06.
 # Milestone L1: the line player on Kaizo Roark
 
 Spec: `docs/superpowers/specs/2026-11-12-l1-line-player-design.md`. Kaizo Roark (trainer 246) from
-the user's pre-Roark save (`kaizo_save_pre_roark` in `data/local.toml`; never committed), the
-user's five Pokemon in order: Prinplup (Quick Claw), Wormadam (Leech Life, Nature Power,
-Camouflage, Toxic), Rhyhorn, Delibird, Sandshrew (Oran Berry); all level 16. Death budget 1 (the
-target is "win with at most one death"). Mid-fight level-ups are not modelled (K3d). 13th Gen
-Intel(R) Core(TM) i5-13600K, 20 host devices, Windows 11, jax 0.12, measured 2026-11-12 while a full
-test suite shared the CPUs (wall times are therefore high).
+the user's pre-Roark save (`kaizo_save_pre_roark` in `data/local.toml`; never committed). Death
+budget 1 (the target is "win with at most one death"). Mid-fight level-ups are not modelled (K3d).
+13th Gen Intel(R) Core(TM) i5-13600K, 20 host devices, Windows 11, jax 0.12, measured 2026-11-12.
 
-## The search finds a line at least as good as the user's
+## Main result: the user's six-member party
 
-    uv run python -m benchmarks.line_roark --deaths 1 --seed 0 --n 4000
+The user's real party, as at turn 0 of the winning recording (`traces/kaizo_roark_02.jsonl` of the
+K3 worktree), all level 16, in order: Prinplup (Quick Claw), Wormadam (Leech Life, Nature Power,
+Camouflage, Toxic; Oran Berry), Rhyhorn (Oran Berry), Delibird, Sandshrew (Oran Berry), Luvdisc.
+The user's line has no rule that uses Luvdisc. Both runs below shared the CPU with a full test
+suite and another session's jobs, so their wall times are high; the counts do not depend on load
+(the search stops on convergence or a sweep count, not on time).
+
+    uv run python -m benchmarks.line_roark --line benchmarks/lines/kaizo_roark_user6.toml --deaths 1 --seed 0 --n 4000
+
+Search from the empty line; it converged after 12 sweeps in all (one kick included). The three
+lines are scored together on 4000 hold-out keys the search never used. Code at commit `b66cf40`.
+
+| line | win, 0 deaths | win, <=1 death | win, <=2 | win, <=3 | win, any | default player decided |
+|------|---------------|----------------|----------|----------|----------|------------------------|
+| found by search | 2.7 [2.3, 3.3] | **60.2 [58.6, 61.7]** | 77.8 [76.5, 79.1] | 82.8 [81.5, 83.9] | **85.3 [84.1, 86.3]** | 19 % of turns |
+| the user's line | 2.8 [2.3, 3.3] | 59.2 [57.6, 60.7] | 77.3 [76.0, 78.6] | 82.1 [80.9, 83.3] | 85.0 [83.8, 86.0] | 13 % |
+| the default player (empty line) | 0.3 [0.2, 0.6] | 2.9 [2.4, 3.4] | 8.3 [7.5, 9.2] | 13.6 [12.5, 14.7] | 18.3 [17.2, 19.6] | 100 % |
+
+No playout met a refused mechanic. Found minus user on shared keys: +1.0 point at <=1 death, +0.3
+at any win; the intervals overlap, so the two lines are about equally good on this team. Search:
+1,176,576 playouts, 3608 s; scoring 12,000 playouts, 33 s. The found line is
+`benchmarks/lines/kaizo_roark_found_kaizo_roark_user6_k1_s0.toml`.
+
+The found line keeps the user's plan for Gible (Delibird's Powder Snow through Rhyhorn), Shuckle and
+Cranidos, drops the Bonsly rule, and uses Luvdisc as a pivot: Wormadam comes in against Lileep
+through Luvdisc (after Delibird) and against Corsola through Luvdisc.
+
+    uv run python -m benchmarks.players --n 2000 --fight kaizo-roark-user-six-k1
+
+| player | win, any | <=0 deaths | <=1 death | <=2 | <=3 | default player decided |
+|--------|----------|------------|-----------|-----|-----|------------------------|
+| greedy (`playout_policy`) | 18.0 [16.4, 19.7] | 0.3 [0.2, 0.7] | 3.2 [2.6, 4.1] | 8.5 [7.4, 9.8] | 13.3 [11.9, 14.9] | 100 % |
+| user's line | 83.5 [81.8, 85.1] | 2.8 [2.2, 3.6] | 56.5 [54.3, 58.6] | 75.0 [73.0, 76.8] | 79.9 [78.1, 81.6] | 13.5 % |
+| found line | 84.7 [83.0, 86.2] | 2.8 [2.2, 3.6] | 59.0 [56.9, 61.2] | 77.2 [75.3, 78.9] | 81.7 [79.9, 83.3] | 18.9 % |
+
+Fight `kaizo-roark-user-six-k1`, seed 0 (the same keys for every player), 37 s.
+
+Luvdisc alone lifts every player: the default player's any-win rate goes from 7.6 % (five members)
+to 18.3 %, and the user's line at <=1 death from 46.3 % to 59.2 %.
+
+## Earlier measurement: five members (Luvdisc left out)
+
+This was measured before the user confirmed that Luvdisc was the sixth member. The team was the
+first five above, with Oran Berry on Sandshrew only; the runs also shared the CPUs with a full
+test suite.
+
+### The search finds a line at least as good as the user's
+
+    uv run python -m benchmarks.line_roark --line benchmarks/lines/kaizo_roark_user.toml --deaths 1 --seed 0 --n 4000
 
 The search starts from the empty line (the default player decides every turn), runs 8 sweeps then
 one kick (it converged after 10 sweeps), and the three lines are then scored together on 4000
@@ -331,9 +376,9 @@ Earlier measurements on the way there (same fight, budget 1):
   now uses 4000 keys (`pick_n`), and the recorded run stops on a sweep count, not a time budget, so it
   is reproducible under any machine load.
 
-## Player scoreboard
+### Player scoreboard
 
-    uv run python -m benchmarks.players --n 2000
+    uv run python -m benchmarks.players --n 2000 --fight kaizo-roark-user-five-k1
 
 Every registered player on `benchmarks/fights.toml`, 2000 playouts each on the same keys (seed 0).
 Adding a player is one `Entry` in `benchmarks/players.py`.
