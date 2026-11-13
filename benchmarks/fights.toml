@@ -1,0 +1,22 @@
+# The player scoreboard's fights (`uv run python -m benchmarks.players`; L1 spec
+# docs/superpowers/specs/2026-11-12-l1-line-player-design.md section 7a). One [[fight]] per
+# fight; every registered player plays each on the same keys.
+#   name        the row label, also `--fight NAME`
+#   game        a game id (`nuzline.data.games`)
+#   save        a key of data/local.toml (tools.rom.inputs), never a path: the save is
+#               never copied or committed; a fight whose save is not configured is skipped
+#   trainer_id  the opponent
+#   team        a line file under benchmarks/: its [[team]] is the setup, its [[rule]]s
+#               are the "user line"
+#   deaths      the death budget, 0..3
+#   found       optional: the line file the line search wrote for this fight (the
+#               "found line"); left out of the board while the file does not exist
+
+[[fight]]
+name = "kaizo-roark-user-five"
+game = "kaizo"
+save = "kaizo_save_pre_roark"
+trainer_id = 246
+team = "lines/kaizo_roark_user.toml"
+deaths = 3
+found = "lines/kaizo_roark_found_k1_s0.toml"
