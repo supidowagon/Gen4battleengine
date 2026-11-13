@@ -1,11 +1,13 @@
 """Kaizo Roark line benchmark (L1 spec docs/superpowers/specs/2026-11-12-l1-line-player-design.md
 section 7): the user's line, the line the search finds and the empty line, scored together.
 
-    uv run python -m benchmarks.line_roark [--n 4000] [--deaths 1] [--seed 0] [--devices N]
-        [--sweeps 8] [--budget SECONDS]
+    uv run python -m benchmarks.line_roark [--line PATH] [--n 4000] [--deaths 1] [--seed 0]
+        [--devices N] [--sweeps 8] [--budget SECONDS]
 
 The fight is ``nuzline line``'s (``cli.line_setup``): Kaizo Leader Roark (trainer id 246),
-the team of ``benchmarks/lines/kaizo_roark_user.toml`` from the pre-Roark save (its path from
+the team of the user's line file ``--line`` (default ``benchmarks/lines/kaizo_roark_user6.toml``,
+the user's real six-member party; ``kaizo_roark_user.toml`` is the earlier five-member one) from
+the pre-Roark save (its path from
 ``tools.rom.inputs``, ``kaizo_save_pre_roark``; the save is never copied; exit 1 without it),
 ``--deaths K``. Then:
 
@@ -22,10 +24,12 @@ the team of ``benchmarks/lines/kaizo_roark_user.toml`` from the pre-Roark save (
    user at each rung and any win (``evaluate_lines`` returns no per-key results, so the two
    intervals are shown and no paired interval); the found rules as TOML; wall times and
    playouts. Written: ``benchmarks/results/line_roark_<time>.json`` (git-ignored; with the
-   commit and whether tracked files were dirty) and
-   ``benchmarks/lines/kaizo_roark_found_k<K>_s<seed>.toml`` (a ``#`` comment with the command,
-   seed, deaths, commit and dirty flag, then the user file's team and the found rules). The
-   command is built from the arguments ``main`` was given.
+   commit, whether tracked files were dirty and the line file's path) and
+   ``benchmarks/lines/kaizo_roark_found_<stem>_k<K>_s<seed>.toml``, ``<stem>`` the line file's
+   stem (a ``#`` comment with the command, seed, deaths, commit and dirty flag, then the user
+   file's team and the found rules). The command is built from the arguments ``main`` was
+   given. The earlier five-member run's ``kaizo_roark_found_k1_s0.toml`` predates the stem and
+   is kept as is.
 
 When the search or the shared scoring raises ``UnsupportedAi`` (a line refused in every
 playout), the benchmark prints ``refused:``,
@@ -55,7 +59,7 @@ from nuzline.text import ascii_text
 
 ROOT = Path(__file__).resolve().parent.parent
 LINES = Path(__file__).resolve().parent / "lines"
-USER_LINE = LINES / "kaizo_roark_user.toml"
+USER_LINE = LINES / "kaizo_roark_user6.toml"  # the default --line
 RESULTS = Path(__file__).resolve().parent / "results"
 GAME, ROARK_ID = "kaizo", 246  # Kaizo Leader Roark
 
@@ -102,6 +106,16 @@ def _difference_lines(user, found) -> list[str]:
     return out
 
 
+def found_path(line: Path, deaths: int, seed: int) -> Path:
+    """The found line's file: the line file's stem in it, so runs on other teams never collide."""
+    return LINES / f"kaizo_roark_found_{Path(line).stem}_k{deaths}_s{seed}.toml"
+
+
+def _display(path: Path) -> str:
+    path = Path(path).resolve()
+    return path.relative_to(ROOT).as_posix() if path.is_relative_to(ROOT) else str(path)
+
+
 def _command(argv: list[str]) -> str:
     return " ".join(["python -m benchmarks.line_roark", *argv])
 
@@ -138,7 +152,7 @@ def run(args) -> int:
     enable_compile_cache(tables_version + code_version(), GAME)
     started = time.perf_counter()
     try:
-        setup = cli.line_setup(GAME, ROARK_ID, USER_LINE, save_path=save, deaths=args.deaths)
+        setup = cli.line_setup(GAME, ROARK_ID, args.line, save_path=save, deaths=args.deaths)
     except (cli.FightRefused, UnsupportedMechanics) as e:
         _say(f"refused: {e}")
         cli.print_report(e.report)
@@ -160,6 +174,7 @@ def run(args) -> int:
         "command": command,
         "game": GAME,
         "trainer_id": ROARK_ID,
+        "line": _display(args.line),
         "table_version": tables_version,
         "deaths": args.deaths,
         "seed": args.seed,
@@ -266,17 +281,17 @@ def run(args) -> int:
     _say(f"shared scoring: {eval_s:.1f} s, {len(lines) * args.n} playouts")
     _say(f"total: {total_s:.1f} s, {playouts} playouts, {jax.device_count()} devices")
 
-    found_path = LINES / f"kaizo_roark_found_k{args.deaths}_s{args.seed}.toml"
+    out = found_path(args.line, args.deaths, args.seed)
     header = _header(command, args.seed, args.deaths, commit, dirty)
-    write_line_file(found_path, setup.file, toml, header=header)
-    _say(f"wrote {found_path}")
+    write_line_file(out, setup.file, toml, header=header)
+    _say(f"wrote {out}")
     record["search"]["hold_out_matches_shared"] = same
     record.update(
         {
             "shared_scoring_s": round(eval_s, 2),
             "total_s": round(total_s, 2),
             "playouts": playouts,
-            "found_file": found_path.relative_to(ROOT).as_posix(),
+            "found_file": _display(out),
             "lines": {
                 "user": {
                     "rules": [dataclasses.asdict(r) for r in setup.rules],
@@ -296,6 +311,9 @@ def run(args) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    parser.add_argument(
+        "--line", type=Path, default=USER_LINE, help="the user's line file (team and rules)"
+    )
     parser.add_argument("--n", type=int, default=4000, help="shared hold-out playouts")
     parser.add_argument("--deaths", type=int, default=1, help="player faints allowed, 0..3")
     parser.add_argument("--seed", type=int, default=0, help="PRNG seed")

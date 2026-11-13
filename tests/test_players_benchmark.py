@@ -14,6 +14,7 @@ from nuzline.search.player_eval import PlayerOdds
 from tools.rom.inputs import RomInputs
 
 ROARK = "kaizo-roark-user-five-k1"
+ROARK_SIX = "kaizo-roark-user-six-k1"
 
 
 def test_fights_file_parses():
@@ -24,14 +25,19 @@ def test_fights_file_parses():
     for f in fights:
         assert (players.BENCH / f.team).is_file(), f.team
         if f.found is not None:
-            # The found-line file may not exist yet (the entry is then left out), but it
-            # must name a line file under benchmarks/.
+            # The found-line file may not exist yet (the entry is then left out; the six-member
+            # fight's until its run), but it must name a line file under benchmarks/.
             assert f.found.endswith(".toml") and not f.found.startswith(("/", "\\")), f.found
             assert (players.BENCH / f.found).parent.is_dir(), f.found
         assert f.save in known, f.save
         assert "/" not in f.save and "\\" not in f.save and "." not in f.save, f.save
         assert 0 <= f.deaths <= 3
-    assert ROARK in {f.name for f in fights}
+    by_name = {f.name: f for f in fights}
+    assert [f.name for f in fights][:2] == [ROARK_SIX, ROARK]
+    assert by_name[ROARK_SIX].team == "lines/kaizo_roark_user6.toml"
+    assert by_name[ROARK_SIX].found == "lines/kaizo_roark_found_kaizo_roark_user6_k1_s0.toml"
+    # The five-member fight's found line was run and committed: it must exist.
+    assert (players.BENCH / by_name[ROARK].found).is_file(), by_name[ROARK].found
 
 
 def _odds(n: int) -> PlayerOdds:

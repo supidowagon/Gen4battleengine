@@ -69,3 +69,32 @@ def test_command_is_the_argv_main_was_given(monkeypatch, tmp_path):
     found = tmp_path / "found.toml"
     found.write_text(f"# {header}\n", encoding="utf-8")
     assert players.found_deaths(found) == 1
+
+
+def test_line_default_and_found_file_name(monkeypatch):
+    # The six-member file is the main fight; the found file carries the line file's stem, so
+    # the earlier five-member kaizo_roark_found_k1_s0.toml is never overwritten.
+    from benchmarks import line_roark
+
+    seen = []
+    monkeypatch.setattr(cli, "configure_cpu_devices", lambda n: None)
+    monkeypatch.setattr(line_roark, "run", lambda args: seen.append(args) or 0)
+    assert line_roark.main([]) == 0
+    assert line_roark.main(["--line", "benchmarks/lines/kaizo_roark_user.toml"]) == 0
+    assert seen[0].line == line_roark.LINES / "kaizo_roark_user6.toml"
+    six = line_roark.found_path(seen[0].line, 1, 0)
+    five = line_roark.found_path(seen[1].line, 1, 0)
+    assert six.name == "kaizo_roark_found_kaizo_roark_user6_k1_s0.toml"
+    assert five.name == "kaizo_roark_found_kaizo_roark_user_k1_s0.toml"
+    assert six.parent == five.parent == line_roark.LINES
+    assert line_roark._display(seen[0].line) == "benchmarks/lines/kaizo_roark_user6.toml"
+
+
+def test_six_member_line_file_parses():
+    from benchmarks import line_roark
+    from nuzline.search.line_text import read_line_file
+
+    file = read_line_file(line_roark.USER_LINE)
+    assert len(file.team) == 6 and len(file.rules) == 6
+    assert file.team[5]["pokemon"] == "Luvdisc"
+    assert sum(t.get("item") == "Oran Berry" for t in file.team) == 3

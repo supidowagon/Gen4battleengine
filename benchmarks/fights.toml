@@ -13,6 +13,17 @@
 #               "found line"); left out of the board while the file does not exist
 
 [[fight]]
+name = "kaizo-roark-user-six-k1"
+game = "kaizo"
+save = "kaizo_save_pre_roark"
+trainer_id = 246
+team = "lines/kaizo_roark_user6.toml"
+deaths = 1
+found = "lines/kaizo_roark_found_kaizo_roark_user6_k1_s0.toml"
+
+# The earlier five-member measurement: its brief had left out Luvdisc and two of the three
+# Oran Berries. Kept for comparison; the six-member fight above is the user's real party.
+[[fight]]
 name = "kaizo-roark-user-five-k1"
 game = "kaizo"
 save = "kaizo_save_pre_roark"
