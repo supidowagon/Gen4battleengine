@@ -31,7 +31,7 @@ import pytest
 from nuzline.data.spec import PokemonSpec
 from nuzline.data.tables import to_numpy
 from nuzline.engine import levelup, stats
-from nuzline.engine.ids import Stat, Weather
+from nuzline.engine.ids import Stat, Status, Weather
 from nuzline.engine.levelup import pay_exp
 from nuzline.engine.order import MOVE_ACTIONS
 from nuzline.engine.outcome import empty_outcome
@@ -404,6 +404,25 @@ def test_turn_1_sandstorm_chips_from_the_new_max(tables, names):
     assert int(out.hp[1, 0]) == 0 and int(out.level[0, 0]) == 17
     assert (int(out.hp[0, 0]), int(out.max_hp[0, 0])) == (44, 49)
     assert int(out.over) == 0
+
+
+def test_the_end_of_turn_payout_comes_after_the_fainted_battlers_checks(tables, names):
+    # CheckMonConditions pays at its loop head (bcp.c:1295-1299), before the next battler's
+    # checks. Geodude (1 HP, burned) and Prinplup (poisoned, 44/46, one short of L17) both
+    # miss. Geodude first in the end-of-turn order: it faints to its burn, the payout levels
+    # Prinplup (44 + 3 = 47/49), then the poison chip is 49 / 8 = 6 (bcp.c:1393-1402):
+    # 41/49. Prinplup first: the chip is 46 / 8 = 5 (39/46), then the payout: 39 + 3 = 42/49.
+    # Paying once after both battlers would give 42/49 in the first case too.
+    opp = [_mon(names, "Geodude", 12), _mon(names, "Bonsly", 15)]
+    s = _prinplup_state(tables, names, opp=opp).replace_hp(1, 0, 1)
+    status = s.status.at[1, 0].set(int(Status.BURN)).at[0, 0].set(int(Status.POISON))
+    s = s._replace(status=status)
+    fast = int(s.stats[0, 0, _SPE])
+    for opp_speed, hp in ((fast + 5, 41), (1, 42)):
+        state = s._replace(stats=s.stats.at[1, 0, _SPE].set(opp_speed))
+        out = assert_matches_reference(tables, state, A("Tackle", "Tackle", state, names), MISS)
+        assert int(out.hp[1, 0]) == 0 and int(out.level[0, 0]) == 17
+        assert (int(out.hp[0, 0]), int(out.max_hp[0, 0])) == (hp, 49)
 
 
 def test_the_final_ko_pays(tables, names):

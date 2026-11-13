@@ -43,8 +43,8 @@ Encodings:
   row 354 is unsorted. ``LEARNSET_SLOTS`` = 21 columns: ``SpeciesLearnset.entries`` is
   ``MAX_LEARNSET_ENTRIES + 1`` = 21 u16 *including* the terminator (``include/struct_defs/
   species.h:10, 73-75``), but ``ALIGN_4`` (``include/pch/global_pch.h:27``) rounds its size to
-  44 bytes = 22 u16, so 21 entries plus the terminator fit (Kaizo row 359 has 21). Both are 0 after the last entry; a real entry
-  has level 1..100, so level 0 marks the end.
+  44 bytes = 22 u16, so 21 entries plus the terminator fit (Kaizo row 359 has 21). Both are
+  0 after the last entry; a real entry has level 1..100, so level 0 marks the end.
 * ``move_is_hm[move]``: 1 for the moves of HM01-HM08, ``tm_moves[92:100]``
   (``Item_IsHMMove``, ``src/item.c:306-315``: ``sTMHMMoves[NUM_TMS + i]``).
 * ``move_ai_effect[move]``: the decomp battle effect id as stored (``MoveTable.effect``),

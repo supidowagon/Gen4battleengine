@@ -328,7 +328,10 @@ def test_no_flinch_without_proc(tables, names):
 
 def _no_exp(s):
     """No participant: a KO pays no exp, so no level-up changes the HP these tests read
-    (K3d-exp: the payout at MoveEnd, after the drain)."""
+    (K3d-exp: the payout at MoveEnd, after the drain). The game never reaches this state (its
+    active facing a living foe is always flagged, design §1.2); these tests read only the
+    drain, which comes before the payout (bcp.c:3965-3969), so it is the drain alone that is
+    checked, and the payout's own HP rule is tested in test_levelup.py."""
     return s._replace(exp_mask=s.exp_mask * 0)
 
 

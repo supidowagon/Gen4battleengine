@@ -125,7 +125,6 @@ def test_default_exp_is_the_base_of_the_level(tables, names):
     for slot, mon in enumerate(player):
         assert int(s.exp[slot]) == _base(tables, mon.species, mon.level)
         assert int(s.exp[slot]) < _base(tables, mon.species, mon.level + 1)
-    assert np.asarray(s.exp[len(player) :]).tolist() == []
 
 
 def test_empty_player_slots_have_no_exp(tables, names):

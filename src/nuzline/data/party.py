@@ -14,8 +14,9 @@ to four slots; omitted means the table PP) and ``stats`` (six stored stats, max 
 in the ``ivs`` order; omitted means computed from level, IVs, EVs and nature).
 
 Experience (``PokemonSpec``): ``exp`` (total experience, of the Pokemon's ``level``;
-omitted means the base of the level), ``exp_boost`` (100, 150 or 170: the exp multiplier in percent; omitted means 100,
-the user's own Pokemon), ``pokerus`` and ``friend_bonus`` (0 or 1; omitted means 0).
+omitted means the base of the level), ``exp_boost`` (100, 150 or 170: the exp multiplier in
+percent; omitted means 100, the user's own Pokemon), ``pokerus`` and ``friend_bonus`` (0 or 1;
+omitted means 0).
 """
 
 from __future__ import annotations

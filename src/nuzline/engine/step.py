@@ -1420,9 +1420,11 @@ def end_of_turn(
         # exception: a seeded Liquid Ooze holder damages the SEEDER during the seeded battler's
         # check (subscript_leech_seed_effect.s:_096), which can faint the opponent during the
         # player's checks, whose later checks read the max HP the payout changes. Liquid Ooze
-        # is unsupported and refused (effects.py:212), so it cannot happen here; whoever adds
-        # Liquid Ooze must pay after every check again. The reference engine pays after every
-        # check, as the decomp does; the differential tests compare the two.
+        # has no AbilityId member, so coverage refuses it (IMPLEMENTED_ABILITIES,
+        # coverage.py:164-166, covers every AbilityId but UNSUPPORTED; effects.py:212 lists
+        # it), and it cannot happen here; whoever adds Liquid Ooze must pay after every check
+        # again. The reference engine pays after every check, as the decomp does; the
+        # differential tests compare the two.
         state = pay_exp(tables, start, state)
     return state._replace(flinched=jnp.zeros_like(state.flinched))
 
