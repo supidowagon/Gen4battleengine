@@ -328,7 +328,10 @@ def _one_visit(tables, names, monkeypatch, fake, seed: int):
     return _rule(find_line(tables, names, s, jax.random.PRNGKey(seed), settings).line)
 
 
-def test_planted_best_is_found(tables, names, monkeypatch):
+# Sanity check of the race plumbing, not a statistical power check: the fake evaluator
+# gives every line the same random draw per key (rho = 1.0). Real per-visit power is
+# modest (20-45 % in simulation); see spec §8, "The search's power per visit is modest".
+def test_planted_best_found_with_shared_draws(tables, names, monkeypatch):
     # Common random numbers only (``rho=1``): every line's playout ``j`` reads the same
     # draw, so the planted rule wins every key the others win. With weaker coupling the
     # 64-key first round often drops it (measured in the Task 4c report).
