@@ -326,8 +326,14 @@ def test_no_flinch_without_proc(tables, names):
 # --- drain and recoil ----------------------------------------------------------
 
 
+def _no_exp(s):
+    """No participant: a KO pays no exp, so no level-up changes the HP these tests read
+    (K3d-exp: the payout at MoveEnd, after the drain)."""
+    return s._replace(exp_mask=s.exp_mask * 0)
+
+
 def test_absorb_heals_half_damage_dealt(tables, names):
-    s = roark_state(tables, names, player_species="Budew").replace_hp(0, 0, 5)
+    s = _no_exp(roark_state(tables, names, player_species="Budew").replace_hp(0, 0, 5))
     out = step(tables, s, A("Absorb", "Leer", s, names), empty_outcome())
     hit = dealt(s, out)
     assert hit > 0 and int(out.hp[0, 0]) == min(int(s.max_hp[0, 0]), 5 + max(1, hit // 2))
@@ -336,6 +342,7 @@ def test_absorb_heals_half_damage_dealt(tables, names):
 def test_drain_uses_damage_capped_at_target_hp(tables, names):
     # BtlCmd_UpdateHealthBarValue caps hitDamage at the target's HP (battle_script.c:1701).
     s = roark_state(tables, names, player_species="Budew").replace_hp(0, 0, 5).replace_hp(1, 0, 3)
+    s = _no_exp(s)
     out = step(tables, s, A("Absorb", "Leer", s, names), empty_outcome())
     assert int(out.hp[1, 0]) == 0 and int(out.hp[0, 0]) == 5 + 1  # 3 // 2
 

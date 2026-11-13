@@ -565,9 +565,11 @@ def _equations(jaxpr) -> int:
     return total
 
 
-# Fixed at implementation (T5): pay_exp measured PAY_EXP_EQUATIONS equations; the step jaxpr
-# grew by about 26 inline copies of it (task-5-report.md).
-PAY_EXP_CEILING = 400
+# Fixed at implementation (T5): pay_exp measured 762 equations. step inlines it 6 times
+# (Pursuit, the act body, the field pass, once per battler of the end of turn, replace):
+# 46913 -> 50734 step equations, compile 14.7 s -> 16.9 s (task-5-report.md). One copy per
+# end-of-turn check (22) made step take over an hour to compile.
+PAY_EXP_CEILING = 800
 
 
 def test_pay_exp_stays_small(tables, names):

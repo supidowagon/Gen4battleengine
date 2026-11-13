@@ -10,8 +10,12 @@ pinned at 1 (``src/pokemon.c:598`` and ``:634``).
 
 from __future__ import annotations
 
-import jax.numpy as jnp
+from typing import TYPE_CHECKING
+
 import numpy as np
+
+if TYPE_CHECKING:
+    import jax.numpy as jnp
 
 SPECIES_SHEDINJA = 292
 
@@ -43,6 +47,8 @@ def calc_stats_jnp(base, ivs, evs, level, nature_mods, species) -> jnp.ndarray:
     max HP ``(2B + IV + EV/4) * L / 100 + L + 10``, 1 for Shedinja (:597-601); every other
     stat ``(2B + IV + EV/4) * L / 100 + 5`` (:605-628), then ``Pokemon_GetNatureStatValue``
     (:2593-2615): ``* 110 / 100`` raised, ``* 90 / 100`` lowered."""
+    import jax.numpy as jnp  # local: nuzline.saves imports this module and must not load jax
+
     i32 = jnp.int32
     base, ivs, evs, mods = (jnp.asarray(a).astype(i32) for a in (base, ivs, evs, nature_mods))
     level = jnp.asarray(level).astype(i32)[..., None]

@@ -116,6 +116,8 @@ def _exp_party(draw, tables, names, s, *, near_level: bool):
 jit_pay = jax.jit(pay_exp)
 
 
+# The lazy strategy's repr carries the tables (72 kB); Hypothesis warns when it builds it.
+@pytest.mark.filterwarnings("ignore:Generating overly large repr")
 @pytest.mark.slow
 @settings(
     max_examples=400,

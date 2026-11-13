@@ -1404,13 +1404,26 @@ def end_of_turn(
     Flinch lasts only for the turn it is set in."""
     for position in (0, 1):
         side = sides[position]
+        start = state
         for name, check in END_OF_TURN_ORDER:
             before = state
             args = (outcome,) if name == "ability" else ()
             after = check(tables, state, side, *args)
             state = _faint_check(tables, before, _where(state.over == 0, after, state))
-            # CheckMonConditions' head (bcp.c:1295-1299): AnyFainted, then AnyExpPayout.
-            state = pay_exp(tables, before, state)
+        # The payout of CheckMonConditions' head (AnyFainted, then AnyExpPayout, bcp.c:
+        # 1295-1299) runs after the faint check of the check that fainted the opponent. It is
+        # paid once per battler here, after its last check (one inline copy per battler instead
+        # of one per check: 22 copies made the step program too slow to compile). Exact only
+        # while the opponent can faint in its own checks alone: once it has fainted its later
+        # checks do nothing, and they only heal the player, so nothing in between reads what
+        # the payout writes or changes the player's living set it reads. The decomp has one
+        # exception: a seeded Liquid Ooze holder damages the SEEDER during the seeded battler's
+        # check (subscript_leech_seed_effect.s:_096), which can faint the opponent during the
+        # player's checks, whose later checks read the max HP the payout changes. Liquid Ooze
+        # is unsupported and refused (effects.py:212), so it cannot happen here; whoever adds
+        # Liquid Ooze must pay after every check again. The reference engine pays after every
+        # check, as the decomp does; the differential tests compare the two.
+        state = pay_exp(tables, start, state)
     return state._replace(flinched=jnp.zeros_like(state.flinched))
 
 

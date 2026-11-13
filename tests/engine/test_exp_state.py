@@ -203,11 +203,15 @@ def test_an_opponent_replacement_resets_the_mask(tables, names):
 
 def test_the_flag_reads_the_newcomer_before_the_hazards(tables, names):
     # PokemonSendOut (show_party_list.s:18) precedes the hazards check (:22): a newcomer that
-    # Stealth Rock faints was still flagged with HP.
+    # Stealth Rock faints was still flagged with HP, so the mask was {player active} when
+    # TurnEnd's payout (bcp.c:1846, K3d-exp T5) paid for it: slot 0 alone gains exp (not the
+    # old participants 1 and 2), and the payout leaves the mask 0 (battle_script.c:10190-10193).
     s = roark_state(tables, names).replace_hp(1, 0, 0).replace_hp(1, 1, 1)
     s = _with_mask(s._replace(stealth_rock=s.stealth_rock.at[1].set(1)), 0b110)
     out = _replace_both(tables, s, 1, 1)
-    assert int(out.hp[1, 1]) == 0 and _mask(out) == 1
+    assert int(out.hp[1, 1]) == 0 and _mask(out) == 0
+    gained = (np.asarray(out.exp) - np.asarray(s.exp)).tolist()
+    assert gained[0] > 0 and gained[1:3] == [0, 0]
 
 
 def test_a_player_replacement_adds_the_newcomer(tables, names):
