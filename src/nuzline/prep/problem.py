@@ -27,8 +27,8 @@ from nuzline.engine.coverage import (
     halved_by_line,
     halved_defense_line,
     halving_moves,
+    learnable_moves,
     low_defense,
-    reachable_learn_moves,
     reachable_level,
     rom_change_line,
     rom_change_refusals,
@@ -181,7 +181,8 @@ def usable_pool(
     knows such a move (``coverage.halved_by_line``).
 
     Experience (K3d-exp design §4): a move the candidate can learn by levelling up in the
-    fight (``coverage.reachable_learn_moves``) is a move it may have to take (an auto-learn
+    fight (``coverage.learnable_moves``: ruling D10 masks a
+    prompt-only unsupported one) is a move it may have to take (an auto-learn
     fills an empty slot, battle_script.c:10021-10027), so a refused one leaves the candidate
     out (``"<move> (level-up in battle, <reason>)"``), as does a ``coverage.exp_refusals``
     line, judged with the held item the candidate keeps."""
@@ -213,7 +214,7 @@ def usable_pool(
         for move in spec.moves:
             if move and (r := move_refusal(move, spec)) is not None:
                 why.append(f"{names.move_names[move]} ({r})")
-        learnable = reachable_learn_moves(tables, spec, opp)
+        learnable = learnable_moves(tables, spec, opp)
         for move in learnable:
             if move not in spec.moves and (r := move_refusal(move, spec)) is not None:
                 why.append(f"{names.move_names[move]} (level-up in battle, {r})")

@@ -456,6 +456,55 @@ def reachable_learn_moves(
     return out
 
 
+def forced_learn_moves(tables: Tables, spec: PokemonSpec, opp: Sequence[PokemonSpec]) -> list[int]:
+    """The learnable moves (``reachable_learn_moves``) a level-up could put into one of
+    ``spec``'s empty move slots without asking: ``BoxPokemon_AddMove`` (pokemon.c:3852-3873)
+    takes the first empty slot (an auto-learn, battle_script.c:10021-10027) and prompts only
+    once all four are full (:10016-10018); no battle path empties a slot. So with ``e`` empty
+    slots these are at most the first ``e`` moves not already known, in scan order (levels
+    ascending, bs.c:9882; within a level, list order, pokemon.c:3945-3956). A gap before a
+    known move (AddMove learns it again) only fills slots sooner, so this is a superset."""
+    empty = sum(1 for m in spec.moves if not m)
+    top = reachable_level(tables, spec, opp)
+    if not empty or top <= spec.level:
+        return []
+    row = personal_row(tables, spec.species, spec.form)
+    levels = np.asarray(tables.learnset_level)[row].tolist()
+    moves = np.asarray(tables.learnset_move)[row].tolist()
+    order = sorted(
+        (level, i) for i, level in enumerate(levels) if spec.level < level <= top and moves[i]
+    )
+    out: list[int] = []
+    for _, i in order:
+        move = int(moves[i])
+        if move not in spec.moves and move not in out:
+            out.append(move)
+        if len(out) == empty:
+            break
+    return out
+
+
+def learn_masked(tables: Tables, move: int) -> bool:
+    """``levelup.learn_options`` (and its reference mirror) never offers to learn ``move``:
+    its effect is ``UNSUPPORTED`` (ruling D10). The player can always give it up."""
+    return int(np.asarray(tables.move_effect)[move]) == EffectId.UNSUPPORTED
+
+
+def learnable_moves(tables: Tables, spec: PokemonSpec, opp: Sequence[PokemonSpec]) -> list[int]:
+    """The ``reachable_learn_moves`` coverage must grade (ruling D10): every one but the
+    prompt-only moves the learn options mask (``learn_masked`` and not in
+    ``forced_learn_moves``), which the player never takes in the engine. A masked move is
+    then a legal game choice the search skips: plan values stay achievable lower bounds,
+    like ruling D2. Moves refused for any other reason (the AI, terrain, a ROM change, a
+    halved Defense, a Ghost's Curse) are not masked and stay graded (refused)."""
+    forced = forced_learn_moves(tables, spec, opp)
+    return [
+        m
+        for m in reachable_learn_moves(tables, spec, opp)
+        if m in forced or m in spec.moves or not learn_masked(tables, m)
+    ]
+
+
 def _effect_moves(tables: Tables, moves: Sequence[int], effects: Sequence[int]) -> list[int]:
     effect = np.asarray(tables.move_ai_effect)
     return sorted({int(m) for m in moves if m and int(effect[m]) in effects})
@@ -855,7 +904,8 @@ def check_coverage(
     trainer's own ``start_condition`` is checked too) with the active party slots
     ``leads`` (``make_state``), whose turn-0 state the AI's refusals are run on.
 
-    Experience (K3d-exp design §4): each player Pokemon's ``reachable_learn_moves`` go
+    Experience (K3d-exp design §4): each player Pokemon's ``learnable_moves`` (its
+    ``reachable_learn_moves`` but the prompt-only ones the learn options mask, ruling D10) go
     through every check its current moves go through (``move_effect_line`` as a "level-up in
     battle" move, the AI's ``player_move_refusal``, ``halved_defense_line``,
     ``terrain_refusal`` and the Kaizo ``rom_change_refusals``), and ``exp_refusals`` adds its
@@ -867,7 +917,7 @@ def check_coverage(
 
     c = _Collector()
     _check_party(c, tables, names, "Player", player)
-    learnable = [reachable_learn_moves(tables, mon, opp) for mon in player]
+    learnable = [learnable_moves(tables, mon, opp) for mon in player]
     extra = sorted({m for moves in learnable for m in moves})
     theirs = check_opponent(tables, names, trainer, opp, start_condition, player, extra)
     c.report.missing.extend(theirs.missing)

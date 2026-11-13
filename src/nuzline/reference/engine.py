@@ -1021,16 +1021,23 @@ def ref_learn_options(tables, state: RefState) -> list[bool]:
     (``CheckSelectedMoveIsHM``, src/battle_sub_menus/battle_party.c:1724-1735;
     ``Item_IsHMMove``, src/item.c:306-315); the search also skips an AI-seen slot and, for the
     active learner, the disabled, locked and choice-locked moves (ruling D2) and the slot
-    pinned by ``learn_pin`` (ruling U1). Giving up is always allowed."""
-    slot = _prompted(state)
-    if slot is None:
-        slot = 0
+    pinned by ``learn_pin`` (ruling U1), and every replacement when the offered move's effect
+    is unsupported (ruling D10). Giving up is always allowed."""
+    prompted = _prompted(state)
+    slot = 0 if prompted is None else prompted
     side = state.sides[0]
     mon = side.party[slot]
+    supported = True
+    if prompted is not None:
+        entries = _learnset(tables, mon)
+        index = state.learn_cursor[slot]
+        entry = entries[index] if index < len(entries) else LEARNSET_SENTINEL_ENTRY
+        offered = 0 if entry == LEARNSET_SENTINEL_ENTRY else entry & 0x1FF
+        supported = _t(tables, "move_effect", offered) != EffectId.UNSUPPORTED
     options = []
     for k in range(LEARNED_MOVES_MAX):
         move = mon.moves[k]
-        ok = not _t(tables, "move_is_hm", move) and not state.ai_seen_moves[slot][k]
+        ok = supported and not _t(tables, "move_is_hm", move) and not state.ai_seen_moves[slot][k]
         if slot == side.active and (
             move in (side.disabled_move, side.locked_move, side.choice_lock)
             or state.learn_pin == k + 1

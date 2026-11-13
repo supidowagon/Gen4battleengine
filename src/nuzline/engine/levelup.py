@@ -52,7 +52,7 @@ import jax
 import jax.numpy as jnp
 
 from nuzline.data.tables import Tables
-from nuzline.engine.ids import Stat
+from nuzline.engine.ids import EffectId, Stat
 from nuzline.engine.state import MOVES, SLOTS, BattleState
 from nuzline.engine.stats import SPECIES_SHEDINJA, calc_stats_jnp
 
@@ -363,13 +363,24 @@ def learn_options(tables: Tables, state: BattleState) -> jnp.ndarray:
     * the AI has not seen it (``ai_seen_moves``; ruling D2);
     * for the player's active learner: it is not the disabled, locked or choice-locked move
       (ruling D2), and not the slot the player selected this turn (``learn_pin``, window (a),
-      ruling U1).
+      ruling U1);
+    * the offered move is one the engine supports (its effect is not ``UNSUPPORTED``; ruling
+      D10). Coverage refuses an unsupported move only where it could be learned without a
+      prompt, into an empty slot (``BoxPokemon_AddMove``, src/pokemon.c:3852-3873;
+      battle_script.c:10007-10027); as a prompt the player may always give it up.
 
-    The D2 and pin masks drop legal game choices, so plan values at learn nodes are
+    The D2, pin and D10 masks drop legal game choices, so plan values at learn nodes are
     achievable lower bounds (``STATE.md``)."""
     slot = _learner(state)
     moves = state.moves[0, slot]
-    ok = (tables.move_is_hm[moves] == 0) & (state.ai_seen_moves[slot] == 0)
+    width = tables.learnset_level.shape[1]
+    row = _row(tables, state, slot)
+    cursor = state.learn_cursor[slot].astype(_I32)
+    col = jnp.minimum(cursor, width - 1)
+    real = (cursor < width) & (tables.learnset_level[row, col] > 0)
+    offered = jnp.where(real, tables.learnset_move[row, col], 0)
+    supported = (tables.move_effect[offered] != EffectId.UNSUPPORTED) | ~needs_learn(state)
+    ok = (tables.move_is_hm[moves] == 0) & (state.ai_seen_moves[slot] == 0) & supported
     held = (
         (moves == state.disabled_move[0])
         | (moves == state.locked_move[0])

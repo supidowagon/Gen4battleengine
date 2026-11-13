@@ -90,6 +90,19 @@ def _prompted_move(tables, names, s, slot: int) -> str:
 # --- the scan and AddMove ----------------------------------------------------------------------
 
 
+def test_an_unsupported_offered_move_is_masked(tables, names):
+    """Ruling D10: Starly (four moves) prompted for Endeavor at 17, an UNSUPPORTED effect:
+    every replacement is masked, giving up stays (coverage's ``learnable_moves`` relies on
+    it). Prompted for Double Team at 13 (supported), the replacements are open."""
+    starly = _mon(names, "Starly", 17, moves=("Tackle", "Growl", "Quick Attack", "Wing Attack"))
+    s = _advance(tables, _mark(_state(tables, names, starly), 0, 17))
+    assert bool(needs_learn(s)) and _prompted_move(tables, names, s, 0) == "Endeavor"
+    assert _options(tables, s) == [False, False, False, False, True]
+    s = _advance(tables, _mark(_state(tables, names, starly), 0, 13))
+    assert _prompted_move(tables, names, s, 0) == "Double Team"
+    assert _options(tables, s) == [True, True, True, True, True]
+
+
 def test_auto_learn_takes_the_first_empty_slot_in_slot_order(tables, names):
     # Magikarp: Splash 1, Tackle 15, Flail 30. At L15 Tackle goes into the first empty slot,
     # slot 1 (the gap), with Tackle's base PP 35.
@@ -253,3 +266,4 @@ def test_moves_that_read_the_whole_move_list_are_unsupported(request, game, move
     tables = request.getfixturevalue(game)
     names = request.getfixturevalue("names" if game == "tables" else "kaizo_names")
     assert int(tables.move_effect[names.move(move)]) == EffectId.UNSUPPORTED
+

@@ -25,9 +25,9 @@ from nuzline.engine.coverage import (
     halved_by_line,
     halved_defense_line,
     halving_moves,
+    learnable_moves,
     low_defense,
     move_effect_line,
-    reachable_learn_moves,
     reachable_level,
     rom_change_line,
     rom_change_refusals,
@@ -130,7 +130,8 @@ def check_pool(
     Defense is that low is refused when a foe knows such a move (``coverage.halved_by_line``).
 
     Experience (K3d-exp design §4.1): the moves a candidate can learn by levelling up in the
-    fight against ``opp`` (``coverage.reachable_learn_moves``) are graded like its other
+    fight against ``opp`` (``coverage.learnable_moves``: ruling D10 masks a
+    prompt-only unsupported one) are graded like its other
     moves, as kind ``level-up in battle``, and ``coverage.exp_refusals`` adds its exp lines
     (kind ``experience``)."""
     from nuzline.ai.policy import player_ability_refusal, player_move_refusal
@@ -176,7 +177,7 @@ def check_pool(
             f"{cand.label}: {names.item_names[spec.item]}",
             "held item",
         )
-        learnable = reachable_learn_moves(tables, spec, opp)
+        learnable = learnable_moves(tables, spec, opp)
         could_know = [*spec.moves, *cand.relearner, *(move for _, move in cand.tms), *learnable]
         fight_moves = [*could_know, *(m for foe in opp for m in foe.moves)]
         levels_up = reachable_level(tables, spec, opp) > spec.level

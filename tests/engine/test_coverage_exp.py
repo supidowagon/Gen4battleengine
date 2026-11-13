@@ -23,6 +23,8 @@ from nuzline.engine.coverage import (
     RELOAD_STATE_EFFECTS,
     Support,
     check_coverage,
+    forced_learn_moves,
+    learnable_moves,
     reachable_learn_moves,
     reachable_level,
 )
@@ -114,13 +116,38 @@ def test_reachable_learn_moves_reads_the_form_row_levels(tables, names):
     assert names.move("Double Team") in reachable_learn_moves(tables, young, roark_party(names))
 
 
+def _gap(names):
+    """Starly's moves with its last slot empty: a level-up move goes there unasked."""
+    return (names.move("Tackle"), names.move("Growl"), names.move("Quick Attack"), 0)
+
+
 def test_a_learnable_unsupported_move_is_refused(tables, names):
-    """Endeavor (UNSUPPORTED) is reached only through the level-up in battle."""
+    """Endeavor (UNSUPPORTED) is reached only through the level-up in battle, and with an
+    empty slot it is learned without a prompt (pokemon.c:3852-3873, ruling D10)."""
     geodude = _geodude(names)
     assert names.move("Endeavor") not in sample_party(names)[STARLY_SLOT].moves
     line = "Player STARLY (slot 3): Endeavor (level-up in battle move effect UNSUPPORTED)"
-    assert line in _missing(tables, names, _starly(names, exp=L17 - GEODUDE_BOUND), geodude)
-    assert _missing(tables, names, _starly(names, exp=L17 - GEODUDE_BOUND - 1), geodude) == []
+    gap = _gap(names)
+    near = _starly(names, exp=L17 - GEODUDE_BOUND, moves=gap)
+    assert line in _missing(tables, names, near, geodude)
+    assert forced_learn_moves(tables, near[STARLY_SLOT], geodude) == [names.move("Endeavor")]
+    far = _starly(names, exp=L17 - GEODUDE_BOUND - 1, moves=gap)
+    assert _missing(tables, names, far, geodude) == []
+
+
+def test_a_prompt_only_unsupported_learnable_is_masked_not_refused(tables, names):
+    """Ruling D10 (the user's Kaizo Roark fight: Luvdisc, Lucky Chant at L17, four moves):
+    with every slot full Endeavor is only a prompt (battle_script.c:10016-10018), which the
+    learn options mask (``levelup.learn_options``) and the player can give up, so the fight
+    stays covered."""
+    geodude = _geodude(names)
+    full = _starly(names, exp=L17 - GEODUDE_BOUND)
+    starly = full[STARLY_SLOT]
+    assert all(starly.moves)
+    assert reachable_learn_moves(tables, starly, geodude) == [names.move("Endeavor")]
+    assert forced_learn_moves(tables, starly, geodude) == []
+    assert learnable_moves(tables, starly, geodude) == []
+    assert _missing(tables, names, full, geodude) == []
 
 
 def test_the_sample_party_against_roark_learns_only_supported_moves(tables, names):
@@ -280,7 +307,8 @@ def test_out_of_scope_formats_are_refused(tables, names):
 def test_kaizo_names_keep_the_learnable_scan(tables, vanilla_manifest, names):
     """The scan runs on the tables, whatever the game's names (no game gate)."""
     kaizo = Names({**vanilla_manifest, "game": KAIZO, "unclassified_rom_changes": 0})
-    missing = _missing(tables, kaizo, _starly(names, exp=L17 - GEODUDE_BOUND), _geodude(names))
+    near = _starly(names, exp=L17 - GEODUDE_BOUND, moves=_gap(names))
+    missing = _missing(tables, kaizo, near, _geodude(names))
     assert any("Endeavor (level-up in battle move effect UNSUPPORTED)" in m for m in missing)
 
 

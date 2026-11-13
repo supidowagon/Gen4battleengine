@@ -207,7 +207,9 @@ three structs has a row.
     resolve set them.
   - The search masks some learn-move options (ruling D2, and `learn_pin`, ruling U1):
     replacing an AI-seen slot, the active learner's disabled, locked or choice-locked move,
-    or the slot pinned by `learn_pin`. They are legal game choices the search skips, so plan
+    or the slot pinned by `learn_pin`, and every replacement when the offered move's effect is
+    unsupported (ruling D10; coverage then refuses it only where it could auto-learn into an
+    empty slot, `coverage.learnable_moves`). They are legal game choices the search skips, so plan
     values at learn nodes are achievable lower bounds (`levelup.learn_options`; the playout
     always gives the move up, ruling D3). The scan, auto-learns and prompts run after `step`,
     before any faint replacement (`levelup.advance_learns` / `learn`,

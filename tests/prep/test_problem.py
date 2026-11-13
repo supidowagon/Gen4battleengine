@@ -413,8 +413,11 @@ STARLY_L17 = 3120  # exp_table[3][17]; Roark's Geodude L12 bounds a payout at 18
 
 def _starly_near_17(names, **changes):
     """Starly L16 that Roark's Geodude can level to 17, where it learns Endeavor (an
-    unsupported effect); ``coverage.reachable_learn_moves``."""
-    spec = replace(sample_party(names)[3], level=16, **{"exp": STARLY_L17 - 188, **changes})
+    unsupported effect) into its empty last slot; ``coverage.learnable_moves``."""
+    gap = (names.move("Tackle"), names.move("Growl"), names.move("Quick Attack"), 0)
+    spec = replace(
+        sample_party(names)[3], level=16, **{"exp": STARLY_L17 - 188, "moves": gap, **changes}
+    )
     return candidate(names, spec, 3)
 
 
@@ -428,6 +431,9 @@ def test_a_learnable_unsupported_move_leaves_the_candidate_out(tables, names):
     ]
     far = _starly_near_17(names, exp=STARLY_L17 - 189)
     assert usable_pool(tables, names, [far], geodude) == ([far], [])
+    # Four moves: Endeavor is only a prompt, masked in the learn options (ruling D10).
+    full = _starly_near_17(names, moves=sample_party(names)[3].moves)
+    assert usable_pool(tables, names, [full], geodude) == ([full], [])
 
 
 def test_check_pool_grades_learnable_moves(tables, names):
@@ -442,6 +448,8 @@ def test_check_pool_grades_learnable_moves(tables, names):
     ]
     far = _starly_near_17(names, exp=STARLY_L17 - 189)
     assert check_pool(tables, names, [far], geodude).missing == []
+    full = _starly_near_17(names, moves=sample_party(names)[3].moves)
+    assert check_pool(tables, names, [full], geodude).level == Support.EXACT
 
 
 def test_usable_pool_applies_the_exp_refusals(tables, names):
