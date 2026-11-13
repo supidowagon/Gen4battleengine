@@ -23,7 +23,7 @@ DEFAULT = Path(__file__).resolve().parents[3] / "data" / "gen4_platinum"
 
 # The version ``tools/build_tables.py`` writes into ``manifest.json``. Bump it with any change
 # to the packed arrays or manifest keys; every loader refuses tables of another version.
-MANIFEST_VERSION = 28
+MANIFEST_VERSION = 29
 
 
 def check_manifest(manifest: dict, dir: Path) -> None:
@@ -68,8 +68,13 @@ class Tables(NamedTuple):
     species_friendship: jnp.ndarray  # int16[S] (140 does not fit int8)
     species_exp_rate: jnp.ndarray  # int8[S], 0 medium fast .. 5 slow (exp_rates.txt order)
     species_exp_yield: jnp.ndarray  # int16[S], SpeciesData.baseExpReward
+    species_ev_yield: jnp.ndarray  # int8[S,6], SpeciesData.evYields (0-3), index = ids.Stat
     species_form_row: jnp.ndarray  # int16[496,28], [species, form] -> personal row, -1 none
     exp_table: jnp.ndarray  # int32[8,101], [rate, level] -> experience
+    # [S,21]: the personal row's level-up learnset in source order (never sorted), the
+    # move and its level per entry; 0 in both after the last entry.
+    learnset_move: jnp.ndarray  # int16[S,21]
+    learnset_level: jnp.ndarray  # int8[S,21]
     move_power: jnp.ndarray  # int16[M]
     move_type: jnp.ndarray  # int8[M]
     move_category: jnp.ndarray  # int8[M], 0 physical, 1 special, 2 status
@@ -82,6 +87,7 @@ class Tables(NamedTuple):
     move_ai_effect: jnp.ndarray  # int16[M], the decomp battle effect id the AI scripts read
     move_param: jnp.ndarray  # int16[M,3]
     move_flags: jnp.ndarray  # int16[M], ids.MoveFlag bits
+    move_is_hm: jnp.ndarray  # int8[M], 1 = taught by HM01-HM08 (Item_IsHMMove)
     type_chart: jnp.ndarray  # int8[T,T], tenths
     type_chart_order: jnp.ndarray  # int16[T,T], decomp chart row index, -1 unlisted
     type_chart_foresight: jnp.ndarray  # int8[T,T], 1 = row after the 0xFE separator

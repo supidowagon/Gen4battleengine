@@ -263,13 +263,13 @@ def test_names_form_checks_the_species_range(names):
         names.form(479, 6)
 
 
-def test_manifest_version_is_28(
+def test_manifest_version_is_29(
     names,
 ):  # the committed manifest; `names` skips when tables are absent
     assert (
         json.loads((TABLES / "manifest.json").read_text("utf-8"))["version"]
         == MANIFEST_VERSION
-        == 28
+        == 29
     )
 
 
@@ -318,3 +318,99 @@ def test_item_hold_effect_matches_decomp(tables, names):
         ("Honey", 0),
     ):
         assert int(tables.item_hold_effect[names.item(item)]) == effect, item
+
+
+# --- K3d-exp T2: EV yields, learnsets, HM flags ---------------------------------------------
+
+DECOMP = Path(__file__).resolve().parents[2] / "external" / "pokeplatinum"
+STAT_KEYS = ("hp", "attack", "defense", "special_attack", "special_defense", "speed")  # ids.Stat
+
+
+def _ev(hp=0, atk=0, df=0, spa=0, spd=0, spe=0):
+    return [hp, atk, df, spa, spd, spe]
+
+
+def test_ev_yield_spot_rows(tables, names):
+    # res/pokemon/<species>[/forms/<form>]/data.json ev_yields, by personal row (per form).
+    wormadam = names.species("Wormadam")
+    for row, want in (
+        (names.species("Bonsly"), _ev(df=1)),
+        (names.species("Geodude"), _ev(df=1)),
+        (names.form_row(wormadam, 0), _ev(spd=2)),  # Plant: the species row
+        (names.form_row(wormadam, names.form(wormadam, "Sandy")), _ev(df=2)),
+        (names.form_row(wormadam, names.form(wormadam, "Trash")), _ev(df=1, spd=1)),
+    ):
+        assert np.asarray(tables.species_ev_yield[row]).tolist() == want, row
+    assert tables.species_ev_yield.dtype == jnp.int8 and tables.species_ev_yield.shape == (508, 6)
+
+
+@pytest.mark.skipif(not DECOMP.exists(), reason="decomp not cloned")
+def test_ev_yield_equals_the_decomp_for_every_row(tables):
+    from tools.extract_decomp import _personal_rows
+
+    got = np.asarray(tables.species_ev_yield).tolist()
+    rows = 0
+    for row, label, d in _personal_rows(DECOMP):
+        assert got[row] == [d["ev_yields"][k] for k in STAT_KEYS], label
+        rows += 1
+    assert rows == len(got) == 508
+
+
+def _packed_learnset(t, row):
+    lv = np.asarray(t.learnset_level[row]).tolist()
+    mv = np.asarray(t.learnset_move[row]).tolist()
+    n = lv.index(0) if 0 in lv else len(lv)
+    assert lv[n:] == [0] * (len(lv) - n) and mv[n:] == [0] * (len(mv) - n), row
+    return tuple(zip(lv[:n], mv[:n], strict=True))
+
+
+def _check_learnsets(t, learnsets, form_rows):
+    assert t.learnset_move.shape == t.learnset_level.shape == (508, 21)
+    assert t.learnset_move.dtype == jnp.int16 and t.learnset_level.dtype == jnp.int8
+    seen = set()
+    for species, row_forms in enumerate(form_rows):
+        for form, row in enumerate(row_forms):
+            if row < 0 or row in seen:
+                continue
+            seen.add(row)
+            # Source order, never sorted: Pokemon_LevelUpMove scans the whole list for each
+            # level (src/pokemon.c:3945-3956).
+            assert _packed_learnset(t, row) == learnsets.level_up(species, form), row
+    assert seen == set(range(508))
+
+
+def test_learnsets_packed_in_source_order(tables, learnsets, vanilla_manifest):
+    _check_learnsets(tables, learnsets, vanilla_manifest["species_form_row"])
+    # Vanilla row 354 is unsorted (level 8 at index 4 before level 5 at index 5) and stays so.
+    levels = [lv for lv, _ in _packed_learnset(tables, 354)]
+    assert levels[4:6] == [8, 5] and levels != sorted(levels)
+    assert max(len(_packed_learnset(tables, r)) for r in range(508)) == 20
+
+
+def test_kaizo_learnsets_packed_in_source_order(
+    kaizo_tables, kaizo_learnsets, kaizo_manifest, kaizo_names
+):
+    _check_learnsets(kaizo_tables, kaizo_learnsets, kaizo_manifest["species_form_row"])
+    assert len(_packed_learnset(kaizo_tables, 359)) == 21  # the one full row
+    slash = kaizo_names.move("Slash")
+    assert slash == 163
+    assert (17, slash) in _packed_learnset(kaizo_tables, kaizo_names.species("Sandshrew"))
+
+
+HMS = ("Cut", "Fly", "Surf", "Strength", "Defog", "Rock Smash", "Waterfall", "Rock Climb")
+
+
+def test_move_is_hm(tables, names, vanilla_manifest):
+    # Item_IsHMMove (src/item.c:306-315) tests sTMHMMoves[NUM_TMS + i] for i < NUM_HMS.
+    hm = np.asarray(tables.move_is_hm)
+    assert hm.dtype == np.int8 and hm.shape == (len(names.move_names),)
+    assert set(np.flatnonzero(hm).tolist()) == {names.move(m) for m in HMS}
+    assert set(np.flatnonzero(hm).tolist()) == set(vanilla_manifest["tm_moves"][92:100])
+
+
+def test_kaizo_move_is_hm(kaizo_tables, kaizo_manifest, tables):
+    # Kaizo's sTMHMMoves keeps the HMs (rom_diff.md: only TMs changed), so the flags are
+    # vanilla's.
+    hm = np.asarray(kaizo_tables.move_is_hm)
+    assert set(np.flatnonzero(hm).tolist()) == set(kaizo_manifest["tm_moves"][92:100])
+    assert np.array_equal(hm, np.asarray(tables.move_is_hm))

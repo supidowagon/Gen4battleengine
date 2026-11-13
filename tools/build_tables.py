@@ -30,6 +30,18 @@ Encodings:
   fast, 1 erratic, 2 fluctuating, 3 medium slow, 4 fast, 5 slow); ``exp_table[rate, level]``
   is the experience for ``level`` 0..100 (``exp_tables.csv``, same rate order).
 * ``species_exp_yield[species]``: ``SpeciesData.baseExpReward`` (int16).
+* ``species_ev_yield[row, stat]``: ``SpeciesData.evYields`` (2-bit fields,
+  ``include/struct_defs/species.h:25-32, 44``), per personal row (so per form), ``ids.Stat``
+  order.
+* ``learnset_move[row, i]`` / ``learnset_level[row, i]``: entry ``i`` of the personal row's
+  level-up learnset (``learnsets.json``) in source order, never sorted: the game scans the
+  whole list for each level (``Pokemon_LevelUpMove``, ``src/pokemon.c:3935-3966``), and vanilla
+  row 354 is unsorted. ``LEARNSET_SLOTS`` = 21 columns, the entries a ``SpeciesLearnset``
+  holds beside its terminator (``MAX_LEARNSET_ENTRIES + 1``, ``include/struct_defs/
+  species.h:10, 73-75``; Kaizo row 359 has 21). Both are 0 after the last entry; a real entry
+  has level 1..100, so level 0 marks the end.
+* ``move_is_hm[move]``: 1 for the moves of HM01-HM08, ``tm_moves[92:100]``
+  (``Item_IsHMMove``, ``src/item.c:306-315``: ``sTMHMMoves[NUM_TMS + i]``).
 * ``move_ai_effect[move]``: the decomp battle effect id as stored (``MoveTable.effect``),
   unmapped, which is what the AI scripts read; ``move_effect`` is the engine's mapped id.
 * A ``SECONDARY_*`` move that is not in ``CERTAIN_SECONDARY_EFFECTS`` and has
@@ -95,6 +107,8 @@ from tools.effect_map import (
 
 NUM_TMS = 92
 NUM_HMS = 8
+LEARNSET_SLOTS = 21  # MAX_LEARNSET_ENTRIES + 1, include/struct_defs/species.h:10, 73-75
+MAX_LEVEL = 100
 CLONE_SCRIPT = Path(__file__).with_name("clone_decomp.sh")
 ROM_DIFF = Path(__file__).resolve().parents[1] / "data" / "kaizo" / "rom_diff.toml"
 BE_SEQ = "battle/skill/be_seq.narc"  # member index = battle effect id (Ruling 13)
@@ -224,6 +238,28 @@ def _personal_rows(
             if not (row == -1 or row == sid or len(species) <= row < len(rows)):
                 raise BuildError(f"form_rows.json [{sid}][{form}] = {row} is no personal row")
     return rows
+
+
+def _learnset_grid(learnsets: dict[str, list[list[int]]], n_rows: int) -> tuple[list, list]:
+    """``(moves, levels)``, each ``n_rows`` lists of ``LEARNSET_SLOTS``: row ``r``'s entries in
+    source order, then zeros. A missing row, a row longer than ``LEARNSET_SLOTS`` or a level
+    outside ``1..MAX_LEVEL`` (0 is the end marker) is a ``BuildError``."""
+    if sorted(learnsets, key=int) != [str(r) for r in range(n_rows)]:
+        raise BuildError(f"learnsets.json rows are not 0..{n_rows - 1}")
+    moves, levels = [], []
+    for r in range(n_rows):
+        entries = learnsets[str(r)]
+        if len(entries) > LEARNSET_SLOTS:
+            raise BuildError(
+                f"learnsets.json row {r}: {len(entries)} entries, more than {LEARNSET_SLOTS}"
+            )
+        for level, _ in entries:
+            if not 1 <= level <= MAX_LEVEL:
+                raise BuildError(f"learnsets.json row {r}: level {level} is outside 1..100")
+        pad = [0] * (LEARNSET_SLOTS - len(entries))
+        moves.append([m for _, m in entries] + pad)
+        levels.append([lv for lv, _ in entries] + pad)
+    return moves, levels
 
 
 def _form_names(species: list[dict], forms: list[dict]) -> dict[str, list[str]]:
@@ -473,6 +509,8 @@ def build_arrays(inter: Path, game: str = "platinum_us") -> tuple[dict[str, np.n
             nature_mods[i, n["up"]] += 1
             nature_mods[i, n["down"]] -= 1
 
+    learnset_moves, learnset_levels = _learnset_grid(level_learnsets, len(species))
+    hm_moves = set(tm_moves[NUM_TMS:])
     effects = [_move_effect(m, changed_effects) for m in moves]
     item_ids, trainer_item_ids = _item_maps(items, vanilla_items)
     supported_item = [e not in (ItemId.UNSUPPORTED, ItemId.NONE) for e in item_ids]
@@ -495,8 +533,11 @@ def build_arrays(inter: Path, game: str = "platinum_us") -> tuple[dict[str, np.n
         "species_friendship": _arr([s["base_friendship"] for s in species], np.int16, "friendship"),
         "species_exp_rate": _arr([s["exp_rate"] for s in species], np.int8, "exp rate"),
         "species_exp_yield": _arr([s["exp_yield"] for s in species], np.int16, "exp yield"),
+        "species_ev_yield": _arr([s["ev_yield"] for s in species], np.int8, "ev yield"),
         "species_form_row": _arr(form_rows, np.int16, "form rows"),
         "exp_table": _arr(exp_tables, np.int32, "exp table"),
+        "learnset_move": _arr(learnset_moves, np.int16, "learnset move"),
+        "learnset_level": _arr(learnset_levels, np.int8, "learnset level"),
         "move_power": _arr([m["power"] for m in moves], np.int16, "power"),
         "move_type": _arr([m["type"] for m in moves], np.int8, "move type"),
         "move_category": _arr([m["category"] for m in moves], np.int8, "category"),
@@ -511,6 +552,7 @@ def build_arrays(inter: Path, game: str = "platinum_us") -> tuple[dict[str, np.n
         "move_flags": _arr(
             [_move_flags(m, i, move_lists) for i, m in enumerate(moves)], np.int16, "move flags"
         ),
+        "move_is_hm": _arr([int(i in hm_moves) for i in range(len(moves))], np.int8, "move is hm"),
         "type_chart": _arr(chart, np.int8, "type chart"),
         "type_chart_order": _arr(chart_order, np.int16, "type chart order"),
         "type_chart_foresight": _arr(chart_foresight, np.int8, "type chart foresight"),

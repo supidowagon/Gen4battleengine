@@ -34,6 +34,19 @@ _STAT_OFFSET = {
     "special_attack": 4,
     "special_defense": 5,
 }
+EV_YIELD_OFFSET = 10  # evYields, a u16 after baseExpReward (include/struct_defs/species.h:43-44)
+# Bit position of each 2-bit field of ``SpeciesEVYields`` (include/struct_defs/species.h:25-32:
+# hp, attack, defense, speed, spAttack, spDefense from bit 0; the packer fills them in that
+# order, tools/dataproc/src/speciesproc.c:352-359). Bits 12-15 are unused.
+_EV_SHIFT = {
+    "hp": 0,
+    "attack": 2,
+    "defense": 4,
+    "speed": 6,
+    "special_attack": 8,
+    "special_defense": 10,
+}
+_EV_BITS = 12
 
 
 def read_exp_tables(rom: RomFiles) -> list[list[int]]:
@@ -66,11 +79,22 @@ def _personal_members(rom: RomFiles) -> list[bytes]:
     return members
 
 
+def _ev_yield(m: bytes, row: int) -> list[int]:
+    """The 2-bit EV yields of personal member ``m`` in ``STAT_KEYS`` order (ids.Stat)."""
+    (word,) = struct.unpack_from("<H", m, EV_YIELD_OFFSET)
+    if word >> _EV_BITS:
+        raise ReaderError(
+            f"{PERSONAL_NARC} member {row} offset {EV_YIELD_OFFSET}: EV yield bits above "
+            f"{_EV_BITS - 1} are set"
+        )
+    return [word >> _EV_SHIFT[k] & 3 for k in STAT_KEYS]
+
+
 def _row_reader(decomp: Path):
     """A function ``(members, row) -> dict`` of member ``row``'s ``SpeciesData`` fields
     (``include/struct_defs/species.h:39-58``): stats 0-5, types 6-7, catch rate 8, base exp
-    reward 9, gender ratio 16, base friendship 18, exp rate 19, abilities 22-23. No name or
-    weight."""
+    reward 9, EV yields 10-11, gender ratio 16, base friendship 18, exp rate 19, abilities
+    22-23. No name or weight."""
     n_types = len(_constants(decomp, "pokemon_types", "TYPE_"))
     n_abilities = len(_constants(decomp, "abilities", "ABILITY_"))
 
@@ -94,6 +118,7 @@ def _row_reader(decomp: Path):
             "exp_rate": check(row, "exp rate", m[19], EXP_RATES, 19),
             "exp_yield": m[9],  # baseExpReward, include/struct_defs/species.h:43
             "catch_rate": m[8],  # catchRate, include/struct_defs/species.h:42
+            "ev_yield": _ev_yield(m, row),
         }
 
     return read
@@ -126,6 +151,7 @@ def read_species(rom: RomFiles, decomp: Path, charmap: dict[int, str]) -> list[d
                 "exp_rate": row["exp_rate"],
                 "exp_yield": row["exp_yield"],
                 "catch_rate": row["catch_rate"],
+                "ev_yield": row["ev_yield"],
             }
         )
     return out

@@ -1,7 +1,9 @@
 """Species, experience tables and learnsets read from the ROM."""
 
 import json
+import struct
 
+import numpy as np
 import pytest
 
 from tools.extract_decomp import (
@@ -90,3 +92,52 @@ def test_personal_narcs_have_508_members(vanilla_files):
 def test_rom_forms_match_decomp(vanilla_files, decomp, charmap, decomp_inter):
     want = json.loads((decomp_inter / "forms.json").read_text("utf-8"))
     assert read_forms(vanilla_files, decomp, charmap) == want  # row fields read from the NARC
+
+
+# --- K3d-exp T2: EV yields, learnsets and growth tables of the Kaizo build ------------------
+
+
+def test_ev_yield_bit_layout():
+    # SpeciesEVYields (include/struct_defs/species.h:25-32): 2-bit hp, attack, defense, speed,
+    # spAttack, spDefense from bit 0 of the u16 at byte 10 (species.h:43-44).
+    from tools.rom.readers.personal import _ev_yield
+
+    word = 1 | 2 << 2 | 3 << 4 | 0 << 6 | 1 << 8 | 2 << 10
+    member = bytes(10) + struct.pack("<H", word) + bytes(32)
+    assert _ev_yield(member, 0) == [1, 2, 3, 1, 2, 0]  # ids.Stat: HP, Atk, Def, SpA, SpD, Spe
+    with pytest.raises(ReaderError, match="member 7 offset 10: EV yield bits above 11"):
+        _ev_yield(bytes(10) + struct.pack("<H", 1 << 12) + bytes(32), 7)
+
+
+def _raw_ev_yield(member: bytes) -> list[int]:
+    """An independent decode of species.h:25-32 into ids.Stat order."""
+    (w,) = struct.unpack_from("<H", member, 10)
+    hp, atk, df, spe, spa, spd = (w >> s & 3 for s in range(0, 12, 2))
+    return [hp, atk, df, spa, spd, spe]
+
+
+def test_kaizo_ev_yield_equals_the_rom_decode(kaizo_files, kaizo_tables, kaizo_names):
+    members = kaizo_files.narc("poketool/personal/pl_personal.narc")
+    want = [_raw_ev_yield(m) for m in members]
+    assert np.asarray(kaizo_tables.species_ev_yield).tolist() == want
+    wormadam = kaizo_names.species("Wormadam")
+    for row in (
+        kaizo_names.species("Bonsly"),
+        kaizo_names.species("Geodude"),
+        *(kaizo_names.form_row(wormadam, f) for f in range(3)),  # Plant, Sandy, Trash
+    ):
+        assert want[row] == [0] * 6, row  # Kaizo zeroes every EV yield (measured, K3d-exp T2)
+
+
+def test_kaizo_learnsets_equal_the_rom(kaizo_files, decomp, kaizo_tables):
+    rom = read_learnsets(kaizo_files, decomp)
+    for row in range(508):
+        lv = np.asarray(kaizo_tables.learnset_level[row]).tolist()
+        mv = np.asarray(kaizo_tables.learnset_move[row]).tolist()
+        n = len(rom[str(row)])
+        assert [list(p) for p in zip(lv[:n], mv[:n], strict=True)] == rom[str(row)], row
+        assert lv[n:] == mv[n:] == [0] * (21 - n), row
+
+
+def test_kaizo_exp_tables_equal_the_rom(kaizo_files, kaizo_tables):
+    assert read_exp_tables(kaizo_files) == np.asarray(kaizo_tables.exp_table).tolist()
