@@ -180,6 +180,7 @@ def rank_actions(
 ) -> Ranking:
     """Rank the player's legal actions at ``state`` by ``n`` shared playouts each
     (module docstring). Raises ``UnsupportedAi`` when any playout is refused."""
+    assert not np.any(np.asarray(state.learn_level)), "a Stage A root carries no learn work"
     legal = np.flatnonzero(np.asarray(decision_actions(tables, state)))
     k = int(state.faint_budget)
     protected = np.asarray(state.protected)
