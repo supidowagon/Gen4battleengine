@@ -1,6 +1,14 @@
 """Records the ``k = 0`` Stage A / Stage B numbers on ``roark_real_state`` before the faint
 budget (plan 4b) changes anything: ``uv run python -m tests.search.k0_baseline`` writes
-``tests/fixtures/k0_baseline.json``, which ``test_k0_regression`` compares against."""
+``tests/fixtures/k0_baseline.json``, which ``test_k0_regression`` compares against.
+
+Re-recorded at the K3d close (K3d-exp), because the exp payout and level-ups change the
+``k = 0`` numbers: each KO of a Roark Pokemon now pays exp and can level the player's
+Pokemon mid-fight (Stage A action 1: 1215 -> 1455 wins out of 2000; Stage B action 0:
+0.611 -> 0.730). Evidence that exp is the shift: with ``step.pay_exp`` and
+``pay_exp_leveled`` patched to no-ops (fresh compile cache), Stage A reproduced the old
+baseline exactly (every action's wins equal) and every Stage B estimate stayed within the
+test's bound (largest gap 0.029 against a bound of 0.123)."""
 
 import json
 import subprocess

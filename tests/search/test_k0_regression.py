@@ -1,6 +1,8 @@
 """The ``k = 0`` numbers of Stage A and Stage B at the Roark root stay statistically
 unchanged by the faint-budget work (spec section 4); ``tests/search/k0_baseline.py``
-recorded them before it."""
+recorded them before it. Re-recorded at the K3d close: the exp payout and level-ups
+change the ``k = 0`` numbers, and with the payout disabled the old baseline was
+reproduced (``k0_baseline`` module docstring)."""
 
 import json
 from math import sqrt
