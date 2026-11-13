@@ -66,6 +66,20 @@ def test_round_trip(tmp_path, names, player, opp):
     assert resolve_rules(file, names, player, opp) == rules
 
 
+def test_header_is_a_comment_that_reads_back(tmp_path):
+    team = ({"pokemon": "Prinplup", "item": "Quick Claw"},)
+    rule = '[[rule]]\nagainst = "Bonsly"\nuse = "Prinplup"\nmove = "Aqua Cutter"'
+    path = tmp_path / "found.toml"
+    header = "python -m benchmarks.line_roark --n 4000; seed 0, deaths 1, commit abc\nsecond"
+    write_line_file(path, LineFile(team=team, rules=()), [rule], header=header)
+    text = path.read_text(encoding="utf-8")
+    assert text.startswith("# python -m benchmarks.line_roark --n 4000; seed 0, deaths 1")
+    assert "\n# second\n" in text
+    file = read_line_file(path)
+    assert file.team == team
+    assert file.rules == ({"against": "Bonsly", "use": "Prinplup", "move": "Aqua Cutter"},)
+
+
 def test_render_uses_slot_for_a_shared_species(names, player, opp):
     twins = [opp[0], opp[1], opp[0]]
     text = render_rules([Rule(against=2, use=0, move=0)], names, player, twins)

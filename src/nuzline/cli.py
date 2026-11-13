@@ -483,11 +483,11 @@ def _say(text: str) -> None:
     print(ascii_text(text))
 
 
-def _trainer_line(t: Trainer) -> str:
+def trainer_line(t: Trainer) -> str:
     return ascii_text(f"{t.label or t.name} ({class_text(t.trainer_class)}, id {t.id})")
 
 
-def _print_report(report) -> None:
+def print_report(report) -> None:
     print(f"Support: {report.level.name}")
     for title, lines in (("Missing", report.missing), ("Sampling only", report.sampling_only)):
         if not lines:
@@ -496,6 +496,10 @@ def _print_report(report) -> None:
         print(f"{title} ({len(lines)}):")
         for line in lines:
             _say(f"  {line}")
+
+
+# The earlier private names, kept for existing importers (benchmarks).
+_trainer_line, _print_report = trainer_line, print_report
 
 
 def _game(args):
@@ -1083,7 +1087,7 @@ def _mon_name(party: Sequence, slot: int, names) -> str:
     return f"{name} (slot {slot})" if sum(p.species == species for p in party) > 1 else name
 
 
-def _team_lines(setup: LineSetup) -> list[str]:
+def team_lines(setup: LineSetup) -> list[str]:
     names = setup.names
     out = ["team (the first leads):"]
     for spec in setup.player:
@@ -1109,7 +1113,7 @@ def _rule_text(setup: LineSetup, rule) -> str:
     return text
 
 
-def _line_block(setup: LineSetup, rules, odds, seed: int, deaths: int) -> list[str]:
+def line_report_lines(setup: LineSetup, rules, odds, seed: int, deaths: int) -> list[str]:
     """The line per opposing Pokemon, then ``odds``: the ladder, any win, the death
     distribution, mean turns and the default player's share."""
     from nuzline.search.plan_tree import distribution_line
@@ -1138,7 +1142,7 @@ def _line_block(setup: LineSetup, rules, odds, seed: int, deaths: int) -> list[s
 LINE_ODDS_MAX_TURNS = 100  # ``line odds``: the playouts' turn cap, also for the replay
 
 
-def _left_out_lines(setup: LineSetup, line, odds, max_turns: int) -> list[str]:
+def left_out_lines(setup: LineSetup, line, odds, max_turns: int) -> list[str]:
     """The refused playouts ``odds`` left out (spec §4), the mechanic named by replaying
     the first (``player.refusal_reason``); nothing when none was."""
     if not odds.refused:
@@ -1154,6 +1158,10 @@ def _left_out_lines(setup: LineSetup, line, odds, max_turns: int) -> list[str]:
     total = odds.n + odds.refused
     text = "playouts stopped at a mechanic the engine does not model and are left out"
     return [f"{odds.refused} of {total} {text}: {reason}"]
+
+
+# The earlier private names, kept for existing importers (benchmarks).
+_team_lines, _line_block, _left_out_lines = team_lines, line_report_lines, left_out_lines
 
 
 def _line_command(args, run) -> int:

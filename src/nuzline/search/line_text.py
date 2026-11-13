@@ -402,11 +402,15 @@ def render_rules(
     return out
 
 
-def write_line_file(path: Path, file: LineFile, rules_toml: Sequence[str]) -> None:
-    """Write ``file``'s ``[[team]]`` tables, then the ``rules_toml`` tables, to ``path``.
+def write_line_file(
+    path: Path, file: LineFile, rules_toml: Sequence[str], header: str | None = None
+) -> None:
+    """Write ``file``'s ``[[team]]`` tables, then the ``rules_toml`` tables, to ``path``,
+    after ``header`` (each of its lines written as a ``# `` comment) when given.
     ``ValueError`` (nothing written) for a team key the reader would refuse."""
     for i, entry in enumerate(file.team, 1):
         _check_keys(f"team {i} ({entry.get('pokemon')})", entry, TEAM_KEYS)
     team = [_table("team", list(entry.items())) for entry in file.team]
-    text = "\n\n".join([*team, *rules_toml])
+    comment = [] if header is None else ["\n".join(f"# {t}" for t in header.splitlines())]
+    text = "\n\n".join([*comment, *team, *rules_toml])
     Path(path).write_text(text + "\n" if text else "", encoding="utf-8", newline="\n")

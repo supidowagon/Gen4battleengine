@@ -19,9 +19,15 @@ the team of ``benchmarks/lines/kaizo_roark_user.toml`` from the pre-Roark save (
 3. Printed: each line with its ladder, 95 % Wilson intervals and refused playouts; found minus
    user at each rung and any win (``evaluate_lines`` returns no per-key results, so the two
    intervals are shown and no paired interval); the found rules as TOML; wall times and
-   playouts. Written: ``benchmarks/results/line_roark_<time>.json`` (git-ignored) and
-   ``benchmarks/lines/kaizo_roark_found_k<K>_s<seed>.toml`` (the user file's team, the found
-   rules).
+   playouts. Written: ``benchmarks/results/line_roark_<time>.json`` (git-ignored; with the
+   commit and whether tracked files were dirty) and
+   ``benchmarks/lines/kaizo_roark_found_k<K>_s<seed>.toml`` (a ``#`` comment with the command,
+   seed, deaths and commit, then the user file's team and the found rules).
+
+When the search or the shared scoring raises ``UnsupportedAi`` (a line refused in every
+playout), the benchmark prints ``refused:``,
+writes the JSON with what is known so far (the search's result if it finished) and exits 2.
+The defaults (``--n 4000``, ``--deaths 1``, ``--budget 1800``) are the controller's choice.
 
 A heuristic search: the found line is a good line, not a proven best.
 """
@@ -62,6 +68,29 @@ def _commit() -> str:
     return out.stdout.strip()
 
 
+def _dirty() -> bool | None:
+    """Whether tracked files differ from the commit (``None``: git failed)."""
+    try:
+        out = subprocess.run(
+            ["git", "status", "--porcelain", "--untracked-files=no"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    return bool(out.stdout.strip())
+
+
+def _write_record(record: dict) -> Path:
+    RESULTS.mkdir(exist_ok=True)
+    out = RESULTS / f"line_roark_{datetime.now():%Y%m%d_%H%M%S}.json"
+    out.write_text(json.dumps(record, indent=2), encoding="utf-8")
+    _say(f"wrote {out}")
+    return out
+
+
 def _odds_json(odds) -> dict:
     rungs = {
         f"<={k}": {"p": odds.rung(k), "ci95": list(odds.interval(k))}
@@ -100,6 +129,7 @@ def run(args) -> int:
     import jax
 
     from benchmarks.rank_timing import machine
+    from nuzline.ai.policy import UnsupportedAi
     from nuzline.data.games import get_game
     from nuzline.engine.coverage import UnsupportedMechanics
     from nuzline.jaxcache import code_version, enable_compile_cache, table_version
@@ -125,34 +155,80 @@ def run(args) -> int:
         setup = cli.line_setup(GAME, ROARK_ID, USER_LINE, save_path=save, deaths=args.deaths)
     except (cli.FightRefused, UnsupportedMechanics) as e:
         _say(f"refused: {e}")
-        cli._print_report(e.report)
+        cli.print_report(e.report)
         return 2
-    _say(cli._trainer_line(setup.trainer))
-    for line in cli._team_lines(setup):
+    _say(cli.trainer_line(setup.trainer))
+    for line in cli.team_lines(setup):
         _say(line)
 
     settings = line_search.LineSearchSettings(budget_seconds=args.budget, final_n=args.n)
     key = jax.random.PRNGKey(args.seed)
+    commit = _commit()
+    command = "python -m benchmarks.line_roark " + " ".join(sys.argv[1:])
+    record = {
+        "timestamp": datetime.now().isoformat(timespec="seconds"),
+        "commit": commit,
+        "dirty": _dirty(),
+        "command": command,
+        "game": GAME,
+        "trainer_id": ROARK_ID,
+        "table_version": tables_version,
+        "deaths": args.deaths,
+        "seed": args.seed,
+        "n": args.n,
+        "devices": jax.device_count(),
+        "settings": dataclasses.asdict(settings),
+        "machine": machine(),
+    }
+
+    def refused(e: UnsupportedAi) -> int:
+        _say(f"refused: {e}")
+        record["refused"] = str(e)
+        record["total_s"] = round(time.perf_counter() - started, 2)
+        _write_record(record)
+        return 2
 
     def progress(text: str) -> None:
         print(ascii_text(f"[line] {text}"), file=sys.stderr, flush=True)
 
     search_start = time.perf_counter()
-    result = line_search.find_line(
-        setup.tables, setup.names, setup.state, key, settings, start=None, progress=progress
-    )
+    try:
+        result = line_search.find_line(
+            setup.tables, setup.names, setup.state, key, settings, start=None, progress=progress
+        )
+    except UnsupportedAi as e:
+        return refused(e)
     search_s = time.perf_counter() - search_start
     progress(
         f"stopped: {result.stopped} after {result.sweeps} sweep(s), {result.evaluations} playouts"
     )
-
     found_rules = line_to_rules(result.line)
+    toml = render_rules(found_rules, setup.names, setup.player, setup.opp)
+    record["search"] = {
+        "wall_s": round(search_s, 2),
+        "playouts": result.evaluations,
+        "sweeps": result.sweeps,
+        "stopped": result.stopped,
+        "refused_candidates": result.refused_candidates,
+        "hold_out": _odds_json(result.odds),
+    }
+    record["found_toml"] = toml
+
     lines = [setup.line, result.line, empty_line()]
     hold_out = jax.random.fold_in(key, line_search.HOLD_OUT_SALT)
     eval_start = time.perf_counter()
-    user, found, empty = evaluate_lines(
-        setup.tables, setup.state, lines, args.n, hold_out, settings.max_turns, refused="exclude"
-    )
+    try:
+        user, found, empty = evaluate_lines(
+            setup.tables,
+            setup.state,
+            lines,
+            args.n,
+            hold_out,
+            settings.max_turns,
+            refused="exclude",
+        )
+    except UnsupportedAi as e:
+        return refused(e)
     eval_s = time.perf_counter() - eval_start
     total_s = time.perf_counter() - started
 
@@ -163,17 +239,17 @@ def run(args) -> int:
             "found by search (a heuristic: a good line, not a proven best)",
             found_rules,
             found,
-            lines[1],
+            result.line,
         ),
         ("the empty line (the default player decides every turn)", [], empty, lines[2]),
     )
     for title, rules, odds, line in blocks:
         _say("")
         _say(f"== {title}; {shared}")
-        for text in cli._line_block(setup, rules, odds, args.seed, args.deaths):
+        for text in cli.line_report_lines(setup, rules, odds, args.seed, args.deaths):
             _say(text)
-        refused = cli._left_out_lines(setup, line, odds, settings.max_turns)
-        for text in refused or [f"refused playouts left out: {odds.refused}"]:
+        left_out = cli.left_out_lines(setup, line, odds, settings.max_turns)
+        for text in left_out or [f"refused playouts left out: {odds.refused}"]:
             _say(text)
     _say("")
     for text in _difference_lines(user, found):
@@ -190,7 +266,6 @@ def run(args) -> int:
             "than 1 % of their playouts"
         )
 
-    toml = render_rules(found_rules, setup.names, setup.player, setup.opp)
     _say("")
     _say("found line (TOML):")
     _say("\n\n".join(toml) if toml else "# no rules: the default player decides every turn")
@@ -204,45 +279,30 @@ def run(args) -> int:
     _say(f"total: {total_s:.1f} s, {playouts} playouts, {jax.device_count()} devices")
 
     found_path = LINES / f"kaizo_roark_found_k{args.deaths}_s{args.seed}.toml"
-    write_line_file(found_path, setup.file, toml)
+    header = f"{command}; seed {args.seed}, deaths {args.deaths}, commit {commit}"
+    write_line_file(found_path, setup.file, toml, header=header)
     _say(f"wrote {found_path}")
-    RESULTS.mkdir(exist_ok=True)
-    now = datetime.now()
-    record = {
-        "timestamp": now.isoformat(timespec="seconds"),
-        "commit": _commit(),
-        "command": "python -m benchmarks.line_roark " + " ".join(sys.argv[1:]),
-        "game": GAME,
-        "trainer_id": ROARK_ID,
-        "table_version": tables_version,
-        "deaths": args.deaths,
-        "seed": args.seed,
-        "n": args.n,
-        "devices": jax.device_count(),
-        "settings": dataclasses.asdict(settings),
-        "search": {
-            "wall_s": round(search_s, 2),
-            "playouts": result.evaluations,
-            "sweeps": result.sweeps,
-            "stopped": result.stopped,
-            "refused_candidates": result.refused_candidates,
-            "hold_out_matches_shared": same,
-        },
-        "shared_scoring_s": round(eval_s, 2),
-        "total_s": round(total_s, 2),
-        "playouts": playouts,
-        "found_toml": toml,
-        "found_file": str(found_path.relative_to(ROOT)),
-        "lines": {
-            "user": {"rules": [dataclasses.asdict(r) for r in setup.rules], **_odds_json(user)},
-            "found": {"rules": [dataclasses.asdict(r) for r in found_rules], **_odds_json(found)},
-            "empty": {"rules": [], **_odds_json(empty)},
-        },
-        "machine": machine(),
-    }
-    out = RESULTS / f"line_roark_{now:%Y%m%d_%H%M%S}.json"
-    out.write_text(json.dumps(record, indent=2), encoding="utf-8")
-    _say(f"wrote {out}")
+    record["search"]["hold_out_matches_shared"] = same
+    record.update(
+        {
+            "shared_scoring_s": round(eval_s, 2),
+            "total_s": round(total_s, 2),
+            "playouts": playouts,
+            "found_file": found_path.relative_to(ROOT).as_posix(),
+            "lines": {
+                "user": {
+                    "rules": [dataclasses.asdict(r) for r in setup.rules],
+                    **_odds_json(user),
+                },
+                "found": {
+                    "rules": [dataclasses.asdict(r) for r in found_rules],
+                    **_odds_json(found),
+                },
+                "empty": {"rules": [], **_odds_json(empty)},
+            },
+        }
+    )
+    _write_record(record)
     return 0
 
 
