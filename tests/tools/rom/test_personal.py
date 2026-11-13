@@ -102,9 +102,9 @@ def test_ev_yield_bit_layout():
     # spAttack, spDefense from bit 0 of the u16 at byte 10 (species.h:43-44).
     from tools.rom.readers.personal import _ev_yield
 
-    word = 1 | 2 << 2 | 3 << 4 | 0 << 6 | 1 << 8 | 2 << 10
+    word = 1 | 2 << 2 | 3 << 4 | 3 << 6 | 1 << 8 | 2 << 10
     member = bytes(10) + struct.pack("<H", word) + bytes(32)
-    assert _ev_yield(member, 0) == [1, 2, 3, 1, 2, 0]  # ids.Stat: HP, Atk, Def, SpA, SpD, Spe
+    assert _ev_yield(member, 0) == [1, 2, 3, 1, 2, 3]  # ids.Stat: HP, Atk, Def, SpA, SpD, Spe
     with pytest.raises(ReaderError, match="member 7 offset 10: EV yield bits above 11"):
         _ev_yield(bytes(10) + struct.pack("<H", 1 << 12) + bytes(32), 7)
 

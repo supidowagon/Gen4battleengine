@@ -263,13 +263,13 @@ def test_names_form_checks_the_species_range(names):
         names.form(479, 6)
 
 
-def test_manifest_version_is_29(
+def test_manifest_version_is_30(
     names,
 ):  # the committed manifest; `names` skips when tables are absent
     assert (
         json.loads((TABLES / "manifest.json").read_text("utf-8"))["version"]
         == MANIFEST_VERSION
-        == 29
+        == 30
     )
 
 
@@ -318,6 +318,30 @@ def test_item_hold_effect_matches_decomp(tables, names):
         ("Honey", 0),
     ):
         assert int(tables.item_hold_effect[names.item(item)]) == effect, item
+
+
+def test_item_hold_param_matches_decomp(tables, names):
+    # K3d-exp T5: ItemData.effectParam as stored (res/items/data/*.json "effectParam"), whether
+    # or not the engine models the item; BattleScript_CalcEffortValues reads a Power item's
+    # (src/battle/battle_script.c:10228).
+    for item, param in (
+        ("Power Bracer", 4),
+        ("Power Weight", 4),
+        ("Exp. Share", 0),
+        ("Quick Claw", 20),
+        ("Oran Berry", 10),
+    ):
+        assert int(tables.item_hold_param[names.item(item)]) == param, item
+
+
+def test_kaizo_power_items_are_macho_braces(kaizo_tables, kaizo_names):
+    # data/intermediate_kaizo/items.json: Kaizo gives the six Power items Macho Brace's hold
+    # effect (HOLD_EFFECT_EVS_UP_SPEED_DOWN, generated/item_hold_effects.txt:51) and param 0,
+    # so the EV gain must read each game's own item data, never a hard-coded 4.
+    for item in ("Power Bracer", "Power Belt", "Power Lens", "Power Band", "Power Anklet"):
+        i = kaizo_names.item(item)
+        assert int(kaizo_tables.item_hold_effect[i]) == 50, item
+        assert int(kaizo_tables.item_hold_param[i]) == 0, item
 
 
 # --- K3d-exp T2: EV yields, learnsets, HM flags ---------------------------------------------

@@ -24,6 +24,10 @@ Encodings:
 * ``item_param[item]``: ``(decomp hold param, 0)`` for supported items, else zeros; a
   ``RESIST_BERRY``'s column 1 is the type its hold effect resists
   (``effect_map.RESIST_BERRY_HOLD_EFFECTS``).
+* ``item_hold_param[item]``: the decomp hold param as stored (``ItemData.effectParam``, which
+  ``Item_LoadParam(item, ITEM_PARAM_EFFECT_PARAM)`` returns, ``src/item.c:160-161``), whether or
+  not the engine supports the item. The level-up EV gain reads it as a Power item's
+  ``itemPower`` (``BattleScript_CalcEffortValues``, ``src/battle/battle_script.c:10226-10228``).
 * ``trainer_item_effect[item]``: ``ids.TrainerItemId`` of the item used from a trainer's
   bag (``DECOMP_TRAINER_ITEM_TO_ID``).
 * ``species_exp_rate[species]``: growth rate id (``generated/exp_rates.txt`` order: 0 medium
@@ -36,9 +40,10 @@ Encodings:
 * ``learnset_move[row, i]`` / ``learnset_level[row, i]``: entry ``i`` of the personal row's
   level-up learnset (``learnsets.json``) in source order, never sorted: the game scans the
   whole list for each level (``Pokemon_LevelUpMove``, ``src/pokemon.c:3935-3966``), and vanilla
-  row 354 is unsorted. ``LEARNSET_SLOTS`` = 21 columns, the entries a ``SpeciesLearnset``
-  holds beside its terminator (``MAX_LEARNSET_ENTRIES + 1``, ``include/struct_defs/
-  species.h:10, 73-75``; Kaizo row 359 has 21). Both are 0 after the last entry; a real entry
+  row 354 is unsorted. ``LEARNSET_SLOTS`` = 21 columns: ``SpeciesLearnset.entries`` is
+  ``MAX_LEARNSET_ENTRIES + 1`` = 21 u16 *including* the terminator (``include/struct_defs/
+  species.h:10, 73-75``), but ``ALIGN_4`` (``include/pch/global_pch.h:27``) rounds its size to
+  44 bytes = 22 u16, so 21 entries plus the terminator fit (Kaizo row 359 has 21). Both are 0 after the last entry; a real entry
   has level 1..100, so level 0 marks the end.
 * ``move_is_hm[move]``: 1 for the moves of HM01-HM08, ``tm_moves[92:100]``
   (``Item_IsHMMove``, ``src/item.c:306-315``: ``sTMHMMoves[NUM_TMS + i]``).
@@ -107,7 +112,9 @@ from tools.effect_map import (
 
 NUM_TMS = 92
 NUM_HMS = 8
-LEARNSET_SLOTS = 21  # MAX_LEARNSET_ENTRIES + 1, include/struct_defs/species.h:10, 73-75
+# 21 entries + the terminator fit the ALIGN_4-rounded 44-byte buffer (species.h:10, 73-75;
+# global_pch.h:27): see the module docstring.
+LEARNSET_SLOTS = 21
 MAX_LEVEL = 100
 CLONE_SCRIPT = Path(__file__).with_name("clone_decomp.sh")
 ROM_DIFF = Path(__file__).resolve().parents[1] / "data" / "kaizo" / "rom_diff.toml"
@@ -279,7 +286,9 @@ def _resisted_type(item: dict, item_id: int) -> int:
     if item_id != ItemId.RESIST_BERRY:
         return 0
     if item["hold_effect"] not in RESIST_BERRY_HOLD_EFFECTS:
-        raise BuildError(f"item {item['name']!r}: hold effect {item['hold_effect']} resists no type")
+        raise BuildError(
+            f"item {item['name']!r}: hold effect {item['hold_effect']} resists no type"
+        )
     return int(RESIST_BERRY_HOLD_EFFECTS[item["hold_effect"]][1])
 
 
@@ -561,6 +570,7 @@ def build_arrays(inter: Path, game: str = "platinum_us") -> tuple[dict[str, np.n
         "item_param": _arr(item_params, np.int16, "item param"),
         "trainer_item_effect": _arr(trainer_item_ids, np.int8, "trainer item effect"),
         "item_hold_effect": _arr([i["hold_effect"] for i in items], np.int16, "item hold effect"),
+        "item_hold_param": _arr([i["hold_param"] for i in items], np.int16, "item hold param"),
         "ai_policy": _arr(_ai_policy(game), np.int8, "ai policy"),
     }
     manifest = {

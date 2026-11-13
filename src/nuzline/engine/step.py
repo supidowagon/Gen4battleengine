@@ -107,6 +107,7 @@ from nuzline.engine.ids import (
     Type,
     Weather,
 )
+from nuzline.engine.levelup import pay_exp, pay_exp_leveled
 from nuzline.engine.order import (
     MOVE_ACTIONS,
     action_order,
@@ -131,6 +132,9 @@ _unlock = unlock_move  # Battler_UnlockMoveChoice (battle_lib.c:1834): (state, s
 WINNER_OPPONENT, WINNER_PLAYER = 1, 2
 PURSUIT_POWER_MUL = 20  # BtlCmd_TryPursuit (battle_script.c:6884): powerMul = 20
 NORMAL_POWER_MUL = 10  # BattleContext_Init (battle_lib.c:1980): powerMul = 10
+# BattleState.exp_refused: a payout inside the opponent's replacement loop left learn work
+# (design §3.3(c)).
+EXP_REFUSED_WINDOW_C = 2
 # MON_CONDITION_TOXIC_COUNTER is 4 bits (include/constants/battle/condition.h:23).
 TOXIC_COUNTER_MAX = 15
 
@@ -1073,6 +1077,9 @@ def _execute_actions(
     target_events = {"contact_ability": seen["contact"], "thawed_by_hit": seen["thaw"]}
     events = _put(events, first, target_events, pursued)
     state = _faint_check(tables, before, _where(pursued, hit, state))
+    # subscript_pursuit.s:106-108: Pursuit's own payout (no pending move: the pursuer's
+    # action is over and a switcher's action reads no move list).
+    state = pay_exp(tables, before, state)
 
     # Both actors through one loop body (a loop, not unrolled: one copy of ``_act``).
     def act(position, carry):
@@ -1099,7 +1106,12 @@ def _execute_actions(
             name: jnp.where(v != 0, v, events[name][foe]) for name, v in foe_events.items()
         }
         events = _put(events, foe, foe_events, ~skip)
-        return _move_end(_faint_check(tables, before, acted), acted, side, ran), events
+        state = _move_end(_faint_check(tables, before, acted), acted, side, ran)
+        # MoveEnd's AnyExpPayout, after RecoverStatusByAbility and before CheckBattleOver
+        # (bcp.c:3965-3969). The player's move is still to run when the opponent acted
+        # first and the player chose a move (design §3.3(a), ``learn_pin``).
+        pending = (position == 0) & (side == 1) & (actions[0] < MOVE_ACTIONS)
+        return pay_exp(tables, before, state, pending, actions[0]), events
 
     state, events = jax.lax.fori_loop(0, 2, act, (state, events))
     return state, {**events, "pursuit": pursued.astype(_I32)}
@@ -1374,6 +1386,8 @@ def field_conditions(tables: Tables, state: BattleState, sides) -> BattleState:
         side = sides[position]
         state = _where(effects, _weather_effect(state, side, ability), state)
     state = _faint_check(tables, before, state)
+    # The loop head's AnyExpPayout (bcp.c:938-944) pays for the chip's faint.
+    state = pay_exp(tables, before, state)
 
     gravity = _count_down(state.gravity)
     return state._replace(gravity=jnp.where(state.over == 0, gravity, state.gravity))
@@ -1395,6 +1409,8 @@ def end_of_turn(
             args = (outcome,) if name == "ability" else ()
             after = check(tables, state, side, *args)
             state = _faint_check(tables, before, _where(state.over == 0, after, state))
+            # CheckMonConditions' head (bcp.c:1295-1299): AnyFainted, then AnyExpPayout.
+            state = pay_exp(tables, before, state)
     return state._replace(flinched=jnp.zeros_like(state.flinched))
 
 
@@ -1424,7 +1440,9 @@ def _quick_claw_shown(tables: Tables, state: BattleState, actions, order) -> jnp
 def _action_phase(
     tables: Tables, state: BattleState, actions, outcome: Outcome
 ) -> tuple[BattleState, dict, jnp.ndarray]:
-    """Phases 2-3 with the turn's events: ``(state, events, order)``."""
+    """Phases 2-3 with the turn's events: ``(state, events, order)``. ``learn_pin`` is the
+    turn's own (design §3.3(a)): it starts each turn at 0."""
+    state = state._replace(learn_pin=jnp.zeros_like(state.learn_pin))
     s = _record_last_move(tables, state, actions)
     order = action_order(tables, s, actions, outcome)
     claw = _quick_claw_shown(tables, s, actions, order)
@@ -1550,6 +1568,16 @@ def replace(tables: Tables, state: BattleState, side, slot) -> BattleState:
     newcomer's ``fake_out_turn`` and for a faint on entry."""
     entered = _switch_in(tables, state, side, slot, state.turn)
     out = _faint_check(tables, entered, on_switch_in(tables, entered, side), entry_turn=state.turn)
+    # TurnEnd's AnyExpPayout (bcp.c:1846) pays for a newcomer the hazards fainted. Learn work
+    # it leaves inside the opponent's replacement loop would be read by the next replacement
+    # pick before the learn resolve: refused as window (c) (design §3.3(c)).
+    out, leveled = pay_exp_leveled(tables, entered, out)
+    window_c = (jnp.asarray(side) == 1) & jnp.any(leveled) & (out.over == 0)
+    out = out._replace(
+        exp_refused=jnp.where(window_c, EXP_REFUSED_WINDOW_C, out.exp_refused).astype(
+            out.exp_refused.dtype
+        )
+    )
     # The slot's speedRand stays; it is unread unless the newcomer (or, after an entry
     # faint, the next replacement) can be a Quick Claw holder (qc_kept).
     return _keep_quick_claw(tables, out, out.qc_roll)

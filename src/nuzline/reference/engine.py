@@ -17,6 +17,8 @@ Entry points:
   like ``engine.step.replace``.
 * ``ref_damage_table(tables, state, atk_side, move, crit) -> list[int]``: the 16
   damage rolls, like ``engine.damage.damage_table``.
+* ``ref_grant_exp(tables, state, slot, pending, selected) -> RefState``: the exp payout for
+  the opponent's party ``slot`` fainting, like ``engine.levelup.pay_exp``.
 
 ``tables`` is ``data.tables.to_numpy(tables)``; ``outcome`` is
 ``engine.outcome.outcome_to_py(outcome)``. Every random event comes from
@@ -125,6 +127,8 @@ class _Turn:
     # SYSCTL_ATTACK_MESSAGE_SHOWN of the current action (script.c:1432), for
     # UpdateMoveBuffers' moveProtect (bcp.c:3936-3942).
     attack_message: bool = False
+    # SYSCTL_PAYOUT_EXP (script.c:1800): the opponent party slots whose faint is still to pay.
+    payout: list[int] = field(default_factory=list)
 
 
 def _active(s: RefState, side: int) -> RefPokemon:
@@ -687,6 +691,8 @@ def _faint_check(turn: _Turn, s: RefState) -> None:
     player_fainted = 0
     for side, slot in turn.fainted:
         turn.done[side] = True  # script.c:1801, battlerActions = MOVE_END
+        if side == 1:  # script.c:1800 flags the payout; CalcExpGain pays a SOLO_ENEMY only
+            turn.payout.append(slot)
         if s.sides[side].active == slot:
             _cleanup_fainted(turn, s, side)
         if side == 0:
@@ -698,6 +704,221 @@ def _faint_check(turn: _Turn, s: RefState) -> None:
         s.over, s.winner = 1, WINNER_OPPONENT
     elif all(m.species == 0 or m.hp == 0 for m in s.sides[1].party):
         s.over, s.winner = 1, WINNER_PLAYER
+
+
+# --------------------------------------------------------------------------- experience
+
+# Decomp hold effects (generated/item_hold_effects.txt, line N is id N - 1).
+HOLD_EFFECT_EVS_UP_SPEED_DOWN = 50  # Macho Brace
+HOLD_EFFECT_EXP_SHARE = 51
+HOLD_EFFECT_FRIENDSHIP_UP = 53  # Soothe Bell
+HOLD_EFFECT_EXP_UP = 66  # Lucky Egg
+# The Power item of each stat (HOLD_EFFECT_LVLUP_*_EV_UP, item_hold_effects.txt:118-123).
+POWER_ITEM_HOLD_EFFECTS = {
+    Stat.ATK: 117,
+    Stat.DEF: 118,
+    Stat.SPA: 119,
+    Stat.SPD: 120,
+    Stat.SPE: 121,
+    Stat.HP: 122,
+}
+# STAT_HP, STAT_ATTACK, STAT_DEFENSE, STAT_SPEED, STAT_SPECIAL_ATTACK, STAT_SPECIAL_DEFENSE
+# (generated/pokemon_stats.txt:1-6) as ids.Stat.
+DECOMP_STATS = (Stat.HP, Stat.ATK, Stat.DEF, Stat.SPE, Stat.SPA, Stat.SPD)
+SPECIES_SHEDINJA = 292  # Pokemon_CalcStats (src/pokemon.c:598, :634)
+MAX_POKEMON_LEVEL = 100  # include/constants/pokemon.h:22
+MAX_EVS_SINGLE_STAT, MAX_EVS_ALL_STATS = 255, 510  # include/constants/pokemon.h:15-16
+MAX_FRIENDSHIP_VALUE = 255  # include/constants/pokemon.h:28
+LOW_FRIENDSHIP_LIMIT, MED_FRIENDSHIP_LIMIT = 100, 200  # include/constants/pokemon.h:29-30
+# sFriendshipChangeTable[FRIENDSHIP_EVENT_LEVEL_UP] (src/pokemon.c:2623).
+LEVEL_UP_FRIENDSHIP = (5, 3, 2)
+
+
+def _hold_effect(tables, mon: RefPokemon) -> int:
+    """``Item_LoadParam(MON_DATA_HELD_ITEM, ITEM_PARAM_HOLD_EFFECT)``: the party item's."""
+    return _t(tables, "item_hold_effect", mon.item)
+
+
+def _pay_exp(turn: _Turn, s: RefState, pending: bool = False, selected: int = 0) -> bool:
+    """``BattleControllerPlayer_AnyExpPayout`` (bcp.c:4449-4469), re-entered until no payout
+    flag is left: ``subscript_grant_exp.s`` for the lowest flagged battler each time. Returns
+    whether a player Pokemon gained a level."""
+    leveled = False
+    while turn.payout:
+        slot = min(turn.payout)
+        turn.payout.remove(slot)
+        leveled |= _grant_exp(turn.tables, s, slot, pending, selected)
+    return leveled
+
+
+def ref_grant_exp(
+    tables, state: RefState, slot: int, pending: bool = False, selected: int = 0
+) -> RefState:
+    """The payout for the opponent's party ``slot`` fainting (``engine.levelup.pay_exp``'s
+    contract); the input state is not modified."""
+    s = copy.deepcopy(state)
+    _grant_exp(tables, s, slot, pending, selected)
+    return s
+
+
+def _grant_exp(tables, s: RefState, fainted: int, pending: bool, selected: int) -> bool:
+    """``subscript_grant_exp.s``: ``BtlCmd_CalcExpGain`` (script.c:2187-2245), then
+    ``BattleScript_GetExpTask`` (script.c:9700-10193) for every party slot in turn. The engine
+    plays trainer singles only: the fainted battler is a ``SOLO_ENEMY`` (script.c:2196), the
+    battle is a trainer battle (:9753-9755) and the payout goes to party 0 (:9716-9720).
+    Returns whether a slot gained a level."""
+    party = s.sides[0].party
+    foe = s.sides[1].party[fainted]
+    # CalcExpGain (script.c:2201-2212): the party Pokemon with a species and HP.
+    gaining = with_share = 0
+    for i, mon in enumerate(party):
+        if mon.species and mon.hp:
+            if s.exp_mask & (1 << i):
+                gaining += 1
+            if _hold_effect(tables, mon) == HOLD_EFFECT_EXP_SHARE:
+                with_share += 1
+    # script.c:2216-2217: the yield by species (SpeciesData_GetSpeciesValue), a u16.
+    exp = (_t(tables, "species_exp_yield", foe.species) * foe.level // 7) & 0xFFFF
+    # script.c:2219-2238. With no participant left (gaining == 0) the divide is made safe and
+    # gainedExp reaches nobody (:9740-9743 pays it only to mask slots with HP), ruling D4.
+    if with_share:
+        gained = max((exp // 2) // gaining, 1) if gaining else 1
+        shared = max((exp // 2) // with_share, 1)
+    else:
+        gained = max(exp // gaining, 1) if gaining else 1
+        shared = 0
+    leveled = False
+    for slot, mon in enumerate(party):
+        effect = _hold_effect(tables, mon)
+        # script.c:9703-9712: the next slot in the mask or holding an Exp. Share.
+        if not (effect == HOLD_EFFECT_EXP_SHARE or s.exp_mask & (1 << slot)):
+            continue
+        total = 0
+        if mon.hp and mon.level != MAX_POKEMON_LEVEL:  # script.c:9740
+            if s.exp_mask & (1 << slot):
+                total = gained  # :9741-9743
+            if effect == HOLD_EFFECT_EXP_SHARE:
+                total += shared  # :9745-9747
+            if effect == HOLD_EFFECT_EXP_UP:
+                total = total * 150 // 100  # :9749-9751
+            total = total * 150 // 100  # BATTLE_TYPE_TRAINER, :9753-9755
+            # BattleSystem_PokemonIsOT / MON_DATA_LANGUAGE vs gGameLanguage (:9757-9763),
+            # resolved by the host into exp_boost: 100 (OT), 150 or 170.
+            if s.exp_boost[slot] != 100:
+                total = total * s.exp_boost[slot] // 100
+            s.exp[slot] += total  # :9767-9775
+            _effort_values(tables, mon, foe, s.pokerus[slot])  # :9776-9779
+        if total:  # :9782-9791; SEQ_GET_EXP_CHECK_LEVEL_UP, :9824-9836, once per level
+            while _should_level_up(tables, s, slot):
+                leveled = True
+                # SEQ_GET_EXP_WAIT_LEVEL_UP_EFFECT (:9838-9877): friendship, CalcStats, and
+                # ReloadPokemon for the active battler (lib.c:169-194; here party and battler
+                # are one object).
+                _level_up_friendship(tables, mon, s.friend_bonus[slot])
+                _calc_stats(tables, mon)
+                # The level's learnset scan (:9879-9883) is deferred to the learn resolve:
+                # the first pending level is marked (design §3.2).
+                if s.learn_level[slot] == 0:
+                    s.learn_level[slot] = mon.level
+                    s.learn_cursor[slot] = 0
+                if pending and slot == s.sides[0].active:
+                    s.learn_pin = selected + 1
+        s.exp_mask &= ~(1 << slot)  # SEQ_GET_EXP_CHECK_DONE, :10190-10193
+    return leveled
+
+
+def _should_level_up(tables, s: RefState, slot: int) -> bool:
+    """``Pokemon_ShouldLevelUp`` (src/pokemon.c:3501-3526): the growth rate by species
+    (:3506); exp is clamped to the level-100 base and written back (:3507-3512); one level
+    up when exp reaches the next level's base (:3518-3523)."""
+    mon = s.sides[0].party[slot]
+    rate = _t(tables, "species_exp_rate", mon.species)
+    max_exp = _t(tables, "exp_table", rate, MAX_POKEMON_LEVEL)
+    s.exp[slot] = min(s.exp[slot], max_exp)
+    next_level = mon.level + 1
+    if next_level > MAX_POKEMON_LEVEL:
+        return False
+    if s.exp[slot] >= _t(tables, "exp_table", rate, next_level):
+        mon.level = next_level
+        return True
+    return False
+
+
+def _level_up_friendship(tables, mon: RefPokemon, luxury_ball: int) -> None:
+    """``Pokemon_UpdateFriendship(mon, FRIENDSHIP_EVENT_LEVEL_UP)`` (src/pokemon.c:
+    2635-2689): the tier of the current value (:2651-2662), +1 for a Luxury Ball
+    (:2664-2666), ``* 150 / 100`` with Soothe Bell (:2672-2676), clamped (:2680-2686). The
+    egg-location +1 (:2668-2670) is not modelled (refused where read, design §4.4)."""
+    tier = 0
+    if mon.friendship >= LOW_FRIENDSHIP_LIMIT:
+        tier += 1
+    if mon.friendship >= MED_FRIENDSHIP_LIMIT:
+        tier += 1
+    change = LEVEL_UP_FRIENDSHIP[tier]
+    if change > 0 and luxury_ball:
+        change += 1
+    if change > 0 and _hold_effect(tables, mon) == HOLD_EFFECT_FRIENDSHIP_UP:
+        change = change * 150 // 100
+    mon.friendship = min(max(mon.friendship + change, 0), MAX_FRIENDSHIP_VALUE)
+
+
+def _calc_stats(tables, mon: RefPokemon) -> None:
+    """``Pokemon_CalcStats`` (src/pokemon.c:564-648) at the Pokemon's level: base stats of its
+    form (:591-595), max HP (1 for Shedinja, :597-601), the other stats with the nature
+    (:607-628, ``Pokemon_GetNatureStatValue`` :2593-2615); a nonzero current HP gains the
+    max HP's change (Shedinja: 1, :633-645)."""
+    row = _t(tables, "species_form_row", mon.species, mon.form)
+    level = mon.level
+
+    def core(stat: int) -> int:
+        base = _t(tables, "species_base_stats", row, stat)
+        return (2 * base + mon.ivs[stat] + mon.evs[stat] // 4) * level // 100
+
+    old_max = mon.max_hp
+    new_max = 1 if mon.species == SPECIES_SHEDINJA else core(Stat.HP) + level + 10
+    stats = []
+    for stat in (Stat.ATK, Stat.DEF, Stat.SPA, Stat.SPD, Stat.SPE):
+        value = core(stat) + 5
+        affinity = _t(tables, "nature_mods", mon.nature, stat)
+        if affinity == 1:
+            value = value * 110 // 100
+        elif affinity == -1:
+            value = value * 90 // 100
+        stats.append(value)
+    mon.max_hp = new_max
+    mon.stats = stats
+    if mon.hp != 0 or old_max == 0:
+        if mon.species == SPECIES_SHEDINJA:
+            mon.hp = 1
+        elif mon.hp == 0:
+            mon.hp = new_max
+        else:
+            mon.hp += new_max - old_max
+
+
+def _effort_values(tables, mon: RefPokemon, foe: RefPokemon, pokerus: int) -> None:
+    """``BattleScript_CalcEffortValues`` (script.c:10214-10306) for ``mon`` beating ``foe``:
+    the yields of the foe's form (:10224), the receiver's party item (:10226-10228)."""
+    row = _t(tables, "species_form_row", foe.species, foe.form)
+    effect = _hold_effect(tables, mon)
+    power = _t(tables, "item_hold_param", mon.item)
+    total = sum(mon.evs)
+    for stat in DECOMP_STATS:
+        if total >= MAX_EVS_ALL_STATS:  # :10237-10239
+            break
+        tmp = _t(tables, "species_ev_yield", row, stat)
+        if effect == POWER_ITEM_HOLD_EFFECTS[stat]:  # :10244-10282
+            tmp += power
+        if pokerus:  # Pokemon_HasPokerus, :10285-10287
+            tmp *= 2
+        if effect == HOLD_EFFECT_EVS_UP_SPEED_DOWN:  # :10289-10291
+            tmp *= 2
+        if total + tmp > MAX_EVS_ALL_STATS:  # :10294-10296
+            tmp -= total + tmp - MAX_EVS_ALL_STATS
+        if mon.evs[stat] + tmp > MAX_EVS_SINGLE_STAT:  # :10299-10301
+            tmp -= mon.evs[stat] + tmp - MAX_EVS_SINGLE_STAT
+        mon.evs[stat] += tmp
+        total += tmp
 
 
 # --------------------------------------------------------------------------- items, switch-in
@@ -1744,6 +1965,7 @@ def _switch(turn: _Turn, s: RefState, side: int, slot: int, actions, choices) ->
     # :11 Pursuit, then its own faint check (the battle may end here).
     _pursuit(turn, s, side, actions, choices)
     _faint_check(turn, s)
+    _pay_exp(turn, s)  # subscript_pursuit.s:106-108: Pursuit's own payout
     if s.over:
         return
     # The outgoing Pokemon goes back to the party: battle_controller.c:1482 writes its
@@ -1850,6 +2072,7 @@ def _field_conditions(turn: _Turn, s: RefState, order: list[int]) -> None:
             for side in order:
                 _weather_effect(turn, s, side)
         _faint_check(turn, s)
+        _pay_exp(turn, s)  # the loop head's AnyExpPayout, :938-944
         if s.over:
             return
     # GRAVITY (:1227-1238).
@@ -1880,6 +2103,7 @@ def _end_of_turn(turn: _Turn, s: RefState, order: list[int]) -> None:
                 return
             check(turn, s, battler)
             _faint_check(turn, s)
+            _pay_exp(turn, s)  # CheckMonConditions' head: AnyFainted, AnyExpPayout (:1295-1299)
 
 
 def _aqua_ring_check(turn: _Turn, s: RefState, side: int) -> None:
@@ -2004,6 +2228,7 @@ def ref_step(tables, state: RefState, actions: tuple[int, int], outcome) -> RefS
     s = copy.deepcopy(state)
     if s.over:
         return s
+    s.learn_pin = 0  # the turn's own pin (design §3.3(a))
     turn = _Turn(tables, outcome, entry_turn=s.turn + 1)
     actions = (int(actions[0]), int(actions[1]))
     choices = [_choose(tables, s, side, actions[side]) for side in (0, 1)]
@@ -2086,6 +2311,11 @@ def ref_step(tables, state: RefState, actions: tuple[int, int], outcome) -> RefS
             # defender (bcp.c:3965-3967).
             _recover_status_by_ability(s, side)
             _recover_status_by_ability(s, 1 - side)
+        # MoveEnd's AnyExpPayout, after the status recovery and before CheckBattleOver
+        # (bcp.c:3965-3969): a KO that ends the battle pays too. The player's move is still to
+        # run when the opponent acted first and the player chose a move (learn_pin).
+        pending = position == 0 and side == 1 and commands[0] == FIGHT
+        _pay_exp(turn, s, pending, actions[0])
 
     order = _speed_order(tables, s, outcome)  # BattleSystem_SortMonSpeedOrder, bcp.c:887
     _field_conditions(turn, s, order)
@@ -2141,6 +2371,10 @@ def ref_replace(tables, state: RefState, side: int, slot: int) -> RefState:
     _send_out_exp(s, side)  # subscript_show_party_list.s:18
     _stealth_rock_damage(turn, s, side)  # :22
     _faint_check(turn, s)
+    # TurnEnd's AnyExpPayout (bcp.c:1846) for a newcomer the hazards fainted. Learn work it
+    # leaves inside the opponent's replacement loop is refused (window (c), design §3.3).
+    if _pay_exp(turn, s) and side == 1 and not s.over:
+        s.exp_refused = 2
     if not s.over:
         _switch_in_effects(turn, s, side)
     _keep_qc(tables, s, _qc_rolls(s))  # the slot's speedRand stays while it can be read

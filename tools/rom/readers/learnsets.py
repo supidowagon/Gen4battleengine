@@ -44,9 +44,13 @@ def read_learnsets(rom: RomFiles, decomp: Path) -> dict[str, list[list[int]]]:
     The buffer bound is ``MAX_LEARNSET_ENTRIES + 1`` entries: ``sizeof(SpeciesLearnset)`` is
     44 bytes (21 u16 slots aligned to 4), so 21 entries and the terminator fit. Vanilla
     never exceeds ``MAX_LEARNSET_ENTRIES`` (20; pinned by the tests). Kaizo (K1 final fix
-    wave, measured) has one 21-entry species (member 359, 46 bytes with its padding) and 48
-    members whose length is 2 mod 4, so neither "at most 20 entries" nor "a multiple of 4
-    bytes" holds there; K2b must confirm how the patched game loads member 359.
+    wave, measured) has one 21-entry species (member 359) and 48 members whose length is 2
+    mod 4, so neither "at most 20 entries" nor "a multiple of 4 bytes" holds there. Member
+    359 is 46 bytes with its padding: its 21 entries and terminator fill the 44-byte buffer,
+    and ``NARC_ReadWholeMemberByIndexPair`` (``src/pokemon.c:4588``) also copies the 2
+    padding bytes past its end. ``Pokemon_LevelUpMove`` stops at the terminator (u16 index
+    21) and never reads them, so the overrun does not change any learnset scan
+    (K3d-exp design §2.2).
     """
     members = rom.narc(WOTBL_NARC)
     if len(members) != ROW_COUNT:
