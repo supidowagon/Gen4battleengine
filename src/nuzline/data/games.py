@@ -31,8 +31,9 @@ LANGUAGE_ENGLISH = 2
 class Game:
     """``rom_language`` is the ROM's ``gGameLanguage`` (src/game_version.c:4), a build
     constant: ``-DGAME_LANGUAGE=LANGUAGE_ENGLISH`` (meson.build:74) for the US ROM, game
-    code ``CPUE`` (platinum.us/rom_rev1.ini:4). Kaizo is a ``CPUE`` hack whose ROM diff
-    has no entry for it (docs/kaizo/rom_diff.md), so it is English too (design §8, U2).
+    code ``CPUE`` (platinum.us/rom_rev1.ini:4). Kaizo (game code ``JAK7``,
+    docs/kaizo/rom_diff.md:19) stores ``LANGUAGE_ENGLISH`` in its ``gGameLanguage`` byte
+    (tests/tools/rom/test_game_language.py); its ROM diff has no entry for it.
     The exp boost compares a Pokemon's language with it (battle_script.c:9758), never
     with the save's trainer-language byte."""
 
