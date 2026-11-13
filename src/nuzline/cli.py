@@ -447,9 +447,11 @@ def _parser() -> argparse.ArgumentParser:
     odds.add_argument("--n", type=int, default=2000, help="playouts")
     find.add_argument("--out", type=Path, default=None, help="write the team and found line")
     find.add_argument(
-        "--budget", type=float, default=None, help="seconds after which no new stage starts"
+        "--budget", type=float, default=None, help="seconds after which no new race starts"
     )
-    find.add_argument("--restarts", type=int, default=None, help="kicks from the best line (default 1)")
+    find.add_argument(
+        "--restarts", type=int, default=None, help="kicks from the best line (default 1)"
+    )
     find.add_argument(
         "--final-n", type=int, default=None, help="hold-out playouts of the found line (2000)"
     )

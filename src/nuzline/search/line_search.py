@@ -321,7 +321,9 @@ class _Run:
             base = merged(base, odds[0])
             for i, o in zip(alive, odds[1:], strict=True):
                 totals[i] = merged(totals[i], o)
-            alive = [alive[j] for j in self.kept([others[i] for i in alive], [totals[i] for i in alive])]
+            alive = [
+                alive[j] for j in self.kept([others[i] for i in alive], [totals[i] for i in alive])
+            ]
             if not alive:
                 return incumbent, None, []
         order = sorted(alive, key=lambda i: totals[i].score(self.k), reverse=True)
@@ -329,9 +331,9 @@ class _Run:
         best = order[0]
         held, tried = self.evaluate([incumbent, others[best]], self.settings.accept_n)
         base = merged(base, held)
-        if self.kept([others[best]], [merged(totals[best], tried)]):
-            if tried.score(self.k) > held.score(self.k) or _too_refused(base):
-                return others[best], tried, top
+        fine = self.kept([others[best]], [merged(totals[best], tried)])
+        if fine and (tried.score(self.k) > held.score(self.k) or _too_refused(base)):
+            return others[best], tried, top
         return incumbent, held, top
 
 
