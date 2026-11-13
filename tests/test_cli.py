@@ -401,7 +401,7 @@ def test_save_export_round_trips(save_path, tmp_path, tables, names, capsys):
     out = tmp_path / "party.toml"
     assert main(["save", "export", str(save_path), "-o", str(out)]) == 0
     save = load_save(save_path, tables=tables, names=names)
-    assert load_party(out, names) == [m.to_spec(tables) for m in save.party]
+    assert load_party(out, names) == [m.to_spec(tables, save.trainer) for m in save.party]
     with pytest.raises(SystemExit) as e:  # -o is required
         main(["save", "export", str(save_path)])
     assert e.value.code == 2
@@ -1253,7 +1253,7 @@ def test_kaizo_save_export_checks_kaizo_tables(which, tmp_path, request, kaizo_t
     out = tmp_path / "party.toml"
     assert main(["save", "export", "--game", "kaizo", str(path), "-o", str(out)]) == 0
     save = load_save(path, tables=kaizo_tables, names=kaizo_names, game=_KAIZO)
-    want = [m.to_spec(kaizo_tables) for m in save.party if not m.is_egg]
+    want = [m.to_spec(kaizo_tables, save.trainer) for m in save.party if not m.is_egg]
     assert load_party(out, kaizo_names) == want
 
 
