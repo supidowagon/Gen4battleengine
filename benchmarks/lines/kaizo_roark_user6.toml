@@ -3,7 +3,8 @@
 # (traces/kaizo_roark_02.jsonl of the K3 worktree): Wormadam, Rhyhorn and Sandshrew each hold an
 # Oran Berry, Luvdisc is the sixth member (not used by the line). Moves keep the save's PP. Names
 # only: nothing here is read from or copied out of the save. Same rules as kaizo_roark_user.toml.
-#   nuzline line odds --game kaizo --save PRE_ROARK.sav --trainer-id 246 #       --line benchmarks/lines/kaizo_roark_user6.toml --deaths 1
+#   nuzline line odds --game kaizo --save PRE_ROARK.sav --trainer-id 246 \
+#       --line benchmarks/lines/kaizo_roark_user6.toml --deaths 1
 
 [[team]]
 pokemon = "Prinplup"
