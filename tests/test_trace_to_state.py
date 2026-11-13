@@ -1284,6 +1284,60 @@ def test_a_learn_move_answer_the_engine_cannot_replay_is_refused(
     assert [t.learn_choices for t in convert(path, unsupported, names)][1] == (GIVE_UP,)
 
 
+def _two_learns_party(tables, names, tmp_path: Path) -> Path:
+    """The golden party with Monferno (slot 0) at 15 holding an Exp. Share, 1 exp short of
+    16 (Fury Swipes), and Prinplup (slot 1) 1 exp short of 15 (Peck)."""
+
+    def short_of(species: str, level: int) -> int:
+        rate = int(tables.species_exp_rate[names.species(species)])
+        return int(tables.exp_table[rate, level]) - 1
+
+    text = PARTY.read_text(encoding="utf-8")
+    edits = [
+        (
+            'species = "Monferno"\nlevel = 14\n',
+            f'species = "Monferno"\nlevel = 15\nexp = {short_of("Monferno", 16)}\n',
+        ),
+        (
+            '"Scratch", "Leer", "Ember", "Mach Punch"]\nitem = ""',
+            '"Scratch", "Leer", "Ember", "Mach Punch"]\nitem = "Exp. Share"',
+        ),
+        (
+            'species = "Prinplup"\nlevel = 14\n',
+            f'species = "Prinplup"\nlevel = 14\nexp = {short_of("Prinplup", PECK_LEVEL)}\n',
+        ),
+    ]
+    for old, new in edits:
+        assert old in text
+        text = text.replace(old, new, 1)
+    path = tmp_path / "two_learns_party.toml"
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("choices", [(2, 3), (GIVE_UP, 3), (2, GIVE_UP), (GIVE_UP, GIVE_UP)])
+def test_two_learn_move_prompts_in_one_turn_are_inferred(tables, names, tmp_path, choices):
+    # Design §5.4: Prinplup's Bubble knocks out Geodude (5 HP); Prinplup (a participant)
+    # and Monferno (Exp. Share, bs.c:9703-9712) both level and are prompted, in party slot
+    # order (levelup._learner). The answers are fitted per prompt, in that order.
+    party = _two_learns_party(tables, names, tmp_path)
+    script = [
+        ((GROWL_SLOT, ROCK_THROW), _outcome(o_roll=0)),
+        ((BUBBLE_SLOT, ROCK_THROW), _outcome(p_roll=0), (), choices),
+        ((POUND, ROCK_THROW), _outcome(o_roll=3, p_roll=0)),
+    ]
+    records, states = _engine_trace(
+        tables, names, script, leads=(1, 0), party=party, start=_hp(1, 0, 5)
+    )
+    assert np.asarray(states[2].level[0, :2]).tolist() == [16, PECK_LEVEL]
+    path = _bundle(tmp_path, names, records, party)
+    turns = convert(path, tables, names)
+    _same_states(turns, states)
+    assert [t.learn_choices for t in turns] == [(), choices, (), ()]
+    assert replay_mismatches(tables, trace_to_states(path, tables, names)) == []
+
+
 def test_cli_writes_a_bundle_that_converts(tables, names, engine_trace, tmp_path):
     raw = _write_raw(tmp_path / "raw.jsonl", engine_trace[0])
     out = tmp_path / "golden.json"

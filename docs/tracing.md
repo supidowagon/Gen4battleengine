@@ -77,7 +77,9 @@ player guide is `docs/tracing_kaizo.md`.
   difference it finds. A wrong IV or EV usually shows up there as a max-HP difference.
   Other stat errors only show up later, as damage that fits no roll.
 - **Fight rules for a usable trace:**
-  - Lead with slot 0. Fight until Roark's last Pokemon faints.
+  - Lead with slot 0. Whether you win or lose does not matter: the recording ends where
+    the battle ends, and the converter replays every turn up to there
+    (`trace_to_state`, which stops only at `state.over`).
   - A player Pokemon may faint: the engine treats a player faint as a death, not the end
     of the battle (`_faint_check`, `needs_replacement`), and the converter replays the
     player's replacement into the slot the next record shows (`apply_turn`). Two

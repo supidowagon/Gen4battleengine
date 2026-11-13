@@ -66,8 +66,8 @@ x outcome probability; player choices are excluded. Child kinds:
   ``CheckMonConditions`` (battle_controller_player.c:3968, :941, :1296), before a later draw
   of the turn such as Shed Skin's (battle_lib.c:3567-3570, from
   battle_controller_player.c:1354-1355). The answer is then chosen knowing that draw, so in
-  that rare case the node's value is an upper bound, not an achievable lower bound
-  (``STATE.md``, "Experience").
+  that rare case the node's value is possibly optimistic: it may exceed what the player
+  can achieve (``STATE.md``, "Experience").
 
 A node classifies in this order: refused, terminal, failed, pruned, learn decision,
 replacement decision, leaf, decision. Learn work at a finished battle is no prompt (ruling

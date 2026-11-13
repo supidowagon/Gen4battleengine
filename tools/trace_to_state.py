@@ -942,10 +942,10 @@ def convert_bundle(bundle: dict, tables: Tables, names: Names) -> list[Turn]:
     leads = (int(first["active"][0]), int(first["active"][1]))
     try:
         state = initial_state(tables, player, trainer, leads, game, bundle.get("terrain"))
-    except ValueError as err:  # make_state: an exp not of its level (state.spec_exp)
+    except ValueError as err:  # make_state or the opponent's party build (e.g. a bad exp)
         if isinstance(err, TraceError):
             raise
-        raise TraceError(f"the bundle's party: {err}") from None
+        raise TraceError(f"the turn-0 state (the bundle's party or the trainer's): {err}") from None
     _check_start(state, first)
     state = _overlay(state, first)
     turns: list[Turn] = []
@@ -1062,10 +1062,11 @@ def _fit_learns(tables: Tables, inference: _Turn, fit: _Fit) -> _Fit:
 
     search(())
     _, choices, final, need = best[0]
-    _check_learned(tables, inference, final, choices)
-    for n in range(len(choices)):
-        _learn_refusal(tables, inference, run(choices[:n])[2], choices[n])
     wrong = _mismatches(jax.tree.map(lambda x: x[None], final), after)[0]
+    if not wrong.any():  # refuse only a path that reproduces the record; else report it
+        _check_learned(tables, inference, final, choices)
+        for n in range(len(choices)):
+            _learn_refusal(tables, inference, run(choices[:n])[2], choices[n])
     return dataclasses.replace(
         fit,
         state=final,

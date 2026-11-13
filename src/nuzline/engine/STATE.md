@@ -221,9 +221,9 @@ three structs has a row.
     (`BattleSystem_RandNext(battleSys) % 10 < 3`, battle_lib.c:3567-3570, run from
     `MON_COND_CHECK_STATE_ABILITY`, battle_controller_player.c:1354-1355). The search then
     picks the answer knowing that draw, which the player cannot, so in that case the learn
-    node's value is an upper bound, not an achievable lower bound. It needs a chance event
-    after a mid-turn payout in the same turn; the replayed state stays exact, only the
-    choice is better informed than the player's.
+    node's value is possibly optimistic: it may exceed what the player can achieve. It
+    needs a chance event after a mid-turn payout in the same turn; the replayed state
+    stays exact, only the choice is better informed than the player's.
 - **Not from a struct field.** `pursuit_target` and `wish_hp` are
   `BattleState`'s own bookkeeping: the decomp derives Pursuit's pre-switch hit
   from per-turn scratch (the opposing battler's selected move when a switch is
