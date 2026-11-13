@@ -236,6 +236,14 @@ No new search method comes with this.
   not a small wiring job.
 - **The search space is the rule table of §3.** No counted setup moves, no rule keyed on HP or on
   what the opponent just did, no lead choice.
+- **The search's power per visit is modest, and it rarely "converges".** In simulation a rule 4
+  points better than about 97 others is kept and accepted in one foe visit only 20-45 % of the
+  time, depending on how strongly the rules' outcomes share their random draws; repeating the
+  visit every sweep is what finds it. A challenger no better than the incumbent is accepted about
+  half the time, so a sweep with no change is rare and real runs stop at the time budget or the
+  sweep cap. The best line seen is kept, so the drift costs time, not the answer. An accept margin
+  or a stop on "no improvement for N sweeps" is the first thing to try if a later fight needs a
+  faster search.
 - **A player has no memory between turns.** `act` sees the state, its params and a key. A
   recurrent learned player, or a search that reuses its tree from turn to turn, needs the loop to
   carry a player state; that is added when the first such player is built.
