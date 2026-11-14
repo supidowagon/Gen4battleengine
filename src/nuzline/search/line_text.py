@@ -156,8 +156,8 @@ def _lookup(fn, name, what: str) -> int:
         raise ValueError(e.args[0]) from None
 
 
-def _team_spec(entry: dict, mon, tables, names: Names) -> PokemonSpec:
-    spec = mon.to_spec(tables)
+def _team_spec(entry: dict, mon, tables, names: Names, trainer) -> PokemonSpec:
+    spec = mon.to_spec(tables, trainer)
     if "moves" in entry:
         moves = entry["moves"]
         if not isinstance(moves, list) or not 1 <= len(moves) <= 4:
@@ -165,7 +165,10 @@ def _team_spec(entry: dict, mon, tables, names: Names) -> PokemonSpec:
         ids = [_lookup(names.move, m, "a move") for m in moves]
         if 0 in ids or len(set(ids)) != len(ids):
             raise ValueError(f"moves {moves!r}: empty or repeated move")
-        spec = dataclasses.replace(spec, moves=tuple(ids + [0] * (4 - len(ids))), pp=None)
+        # New moves at full PP carry no PP Ups (an empty slot with PP Ups is refused).
+        spec = dataclasses.replace(
+            spec, moves=tuple(ids + [0] * (4 - len(ids))), pp=None, pp_ups=(0, 0, 0, 0)
+        )
     if "item" in entry:
         spec = dataclasses.replace(spec, item=_lookup(names.item, entry["item"], "item"))
     return spec
@@ -190,7 +193,7 @@ def team_from_save(file: LineFile, save, tables, names: Names) -> list[PokemonSp
             if mon.location in seen:
                 raise ValueError(f"{_where(mon)} is listed twice (also team {seen[mon.location]})")
             seen[mon.location] = i
-            team.append(_team_spec(entry, mon, tables, names))
+            team.append(_team_spec(entry, mon, tables, names, save.trainer))
         except ValueError as e:
             raise _named(where, e) from None
     return team

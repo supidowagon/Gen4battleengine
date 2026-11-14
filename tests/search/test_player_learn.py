@@ -10,14 +10,14 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from nuzline.engine.ids import Status
+from nuzline.engine.ids import Stat
 from nuzline.engine.state import make_state
 from nuzline.search.line import LINE, empty_line
-from nuzline.search.player import GREEDY, Player, player_playout, refusal_reason
+from nuzline.search.player import GREEDY, Player, _player_run, player_playout, refusal_reason
 from nuzline.search.playout import playout, playout_from_action, replacement_policy, root_state
 from tests.engine.helpers import roark_real_state
-from tests.engine.test_levelup import _base, _mask, _with
-from tests.search.test_learn import GEODUDE, ONIX, CRANIDOS, _mon, _window_c, _with_prompt
+from tests.engine.test_levelup import _base, _mon, _with
+from tests.search.test_learn import CRANIDOS, GEODUDE, ONIX, _window_c, _with_prompt
 
 
 def _fixed_act(tables, state, params, key, layout):
@@ -31,20 +31,26 @@ def _policy_replace(tables, state, params, key, layout):
 FIXED = Player("fixed", _fixed_act, _policy_replace)
 
 
-def _learn_then_replace(tables, names):
-    # test_learn.py::test_the_player_replacement_reads_the_moves_after_the_learn: Machop KOs
-    # Magikarp and faints to poison; the bench Magikarp in slot 2 learns Tackle on the way.
-    machop = _mon(names, "Machop", 20, current_hp=1, status=int(Status.POISON))
-    karp = _mon(names, "Magikarp", 14, moves=("Splash",))
-    opp = [_mon(names, "Magikarp", 5, moves=("Splash",))] * 2
-    s = make_state(tables, [machop, karp, karp], opp).replace_hp(1, 0, 1)
-    return _mask(_with(s, exp={2: _base(tables, names, "Magikarp", 15) - 1}), 0, 2)
+def _level_up_turn(tables, names):
+    # test_learn.py::test_finish_turn_gives_up_before_the_opponent_replacement: Bulbasaur (one
+    # short of L13, moves full) KOs Geodude (1 HP) with Tackle; L13 prompts PoisonPowder and
+    # Sleep Powder, both given up, then the AI sends Bonsly in.
+    bulbasaur = _mon(names, "Bulbasaur", 12, moves=("Tackle", "Growl", "Leech Seed", "Vine Whip"))
+    opp = [_mon(names, "Geodude", 12), _mon(names, "Bonsly", 15)]
+    s = make_state(tables, [bulbasaur], opp).replace_hp(1, 0, 1)
+    return _with(s, exp={0: _base(tables, names, "Bulbasaur", 13) - 1})
 
 
-def _pending_learn_root(tables, names):
-    # test_learn.py::test_a_pending_learn_settles_the_opponent_replacement_with_the_carried_mul
+def _pending_learn_root(tables, names, mul=0):
+    # test_learn.py::test_a_pending_learn_settles_the_opponent_replacement_with_the_carried_mul:
+    # at Geodude Atk 400 the AI sends Cranidos at powerMul 10 and Onix at the carried 20.
     s = roark_real_state(tables, names, player_species="Machop").replace_hp(1, GEODUDE, 0)
-    return _with_prompt(tables, names, s)[0]
+    s = s._replace(stats=s.stats.at[1, GEODUDE, Stat.ATK - 1].set(jnp.int16(400)))
+    return _with_prompt(tables, names, s)[0]._replace(replace_mul=jnp.int8(mul))
+
+
+def _pending_learn_root_pursuit(tables, names):
+    return _pending_learn_root(tables, names, 20)
 
 
 def _window_c_root(tables, names):
@@ -63,13 +69,38 @@ def _same(got, want):
     assert np.array_equal(np.asarray(got.deaths), np.asarray(want.deaths))
 
 
-@pytest.mark.parametrize("build", [_learn_then_replace, _pending_learn_root, _window_c_root])
+@pytest.mark.parametrize(
+    "build", [_level_up_turn, _pending_learn_root, _pending_learn_root_pursuit, _window_c_root]
+)
 def test_greedy_and_the_empty_line_equal_playout_through_learns(tables, names, build):
     s = build(tables, names)
     for k in jax.random.split(jax.random.PRNGKey(5), 4):
         want = playout(tables, root_state(tables, s, k), k, 8)
         _same(player_playout(tables, s, GREEDY, (), k, 8), want)
         _same(player_playout(tables, s, LINE, empty_line(), k, 8), want)
+
+
+def test_a_turn_resolves_its_learns(tables, names):
+    # The final state of a one-turn run: Bulbasaur reached L13 and its prompts were answered
+    # (learn_level 0, the moves kept) before Bonsly came in.
+    s = _level_up_turn(tables, names)
+    tackle = names.move_slot(s, 0, "Tackle")
+    levelled = 0
+    for k in jax.random.split(jax.random.PRNGKey(2), 6):
+        out = _player_run(tables, s, FIXED, tackle, k, 1)[1]
+        if int(out.level[0, 0]) != 13:
+            continue
+        levelled += 1
+        assert int(out.learn_level[0]) == 0 and int(out.active[1]) == 1
+        np.testing.assert_array_equal(np.asarray(out.moves[0, 0]), np.asarray(s.moves[0, 0]))
+    assert levelled, "no key levelled Bulbasaur"
+
+
+@pytest.mark.parametrize("mul, newcomer", [(0, CRANIDOS), (20, ONIX)])
+def test_a_pending_learn_root_sends_with_the_carried_mul(tables, names, mul, newcomer):
+    s = _pending_learn_root(tables, names, mul)
+    out = _player_run(tables, s, GREEDY, (), jax.random.PRNGKey(0), 0)[1]
+    assert int(out.active[1]) == newcomer and int(out.learn_level[0]) == 0
 
 
 def test_a_pending_learn_root_window_c_is_refused_and_named(tables, names):

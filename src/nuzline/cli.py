@@ -1052,7 +1052,7 @@ def line_setup(
             raise ValueError(
                 f"{line_path}: [[team]] needs --save; with --party the party file is the team"
             )
-        player = load_party(party_path, names)
+        player = load_party(party_path, names, tables)
     trainer = resolve_trainer(trainers, trainer_id=trainer_id)
     inter = IntermediateData(game.intermediate_dir)
     _check_buildable(tables, names, trainer, inter)

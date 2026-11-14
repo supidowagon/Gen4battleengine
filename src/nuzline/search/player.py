@@ -49,6 +49,7 @@ from nuzline.ai.policy import ai_path_refusals, ai_refusals
 from nuzline.data.tables import Tables
 from nuzline.engine.state import SLOTS, BattleState
 from nuzline.engine.step import WINNER_PLAYER, needs_replacement
+from nuzline.search.learn import learn_reason, resolve_learns, settle_learns, settle_reason
 from nuzline.search.playout import (
     REFUSED_WON,
     _carried_mul,
@@ -64,7 +65,6 @@ from nuzline.search.playout import (
     root_state,
     send_replacements,
 )
-from nuzline.search.learn import learn_reason, resolve_learns, settle_learns, settle_reason
 
 __all__ = ["GREEDY", "Player", "PlayerResult", "player_playout", "refusal_reason"]
 
@@ -278,6 +278,10 @@ def _replay(
             return reason or "the opponent's AI is refused", state, turns
         played = _resolve_jit(tables, played)
         sent, sent_refused = send_replacements(tables, played, ai_switched, power_mul)
+        # Refused learn work first, as playout.refusal_reason (a window (c) set by the send).
+        reason = learn_reason(sent)
+        if reason:
+            return reason, state, turns
         if bool(sent_refused):
             reason = _send_reason(tables, played, ai_switched, power_mul)[0]
             return reason or "the opponent's replacement is refused", state, turns

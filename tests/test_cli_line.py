@@ -424,3 +424,16 @@ def test_line_commands_set_devices(tmp_path, monkeypatch):
     monkeypatch.delenv("XLA_FLAGS")
     assert main(["line", "find", *args]) == 0
     assert os.environ["XLA_FLAGS"] == "--xla_force_host_platform_device_count=3"
+
+
+def test_line_setup_from_a_save_resolves_the_exp_multiplier(tmp_path, tables, names):
+    # K3d: a save's Pokemon carry exp_boost from the save's trainer (SaveMon.to_spec); without
+    # it coverage refuses every Pokemon below level 100 ("exp multiplier unresolved").
+    from nuzline.cli import line_setup
+    from tests.saves.synthetic import write_save
+
+    save = write_save(tmp_path, tables, names)
+    text = '[[team]]\npokemon = "Monferno"\nmoves = ["Ember"]\n'
+    setup = line_setup("vanilla", 246, _file(tmp_path, text), save_path=save, deaths=1)
+    assert all(spec.exp_boost != 0 for spec in setup.player)
+    assert setup.player[0].pp_ups == (0, 0, 0, 0)  # a moves override carries no PP Ups
