@@ -85,6 +85,7 @@ from nuzline.engine.actions import (
 )
 from nuzline.engine.damage import damage_table
 from nuzline.engine.hooks import intimidate
+from nuzline.engine.ids import AbilityId
 from nuzline.engine.order import action_order, is_switch, used_move
 from nuzline.engine.outcome import empty_outcome, hit_threshold, sample_outcome
 from nuzline.engine.state import SLOTS, BattleState
@@ -299,13 +300,16 @@ def replacement_pass(tables: Tables, state: BattleState, slot) -> tuple[BattleSt
     (battle_controller_player.c:256, ``SWITCH_IN_CHECK_STATE_INTIMIDATE``,
     battle_lib.c:3795-3808) fires it later against the living opposing newcomer. So it
     fires once the opponent's side is settled (the two Intimidates touch different
-    battlers, so their speed order does not matter)."""
+    battlers, so their speed order does not matter). A Trace newcomer that only copies
+    Intimidate when the opponent's newcomer enters fires it there (``hooks.on_switch_in``):
+    the deferred one is the newcomer's own Intimidate at its entry."""
     mul = _carried_mul(state)
     opp_needs = needs_replacement(state)[1] == 1
     opp_slot = post_ko_switch_in(tables, state, mul)
     bad = opp_needs & (opp_slot < 0)
-    unannounced = state.hp[1, state.active[1]] == 0
     entered = replace(tables, state, 0, slot)
+    own = entered.ability[0, entered.active[0]] == AbilityId.INTIMIDATE
+    unannounced = (state.hp[1, state.active[1]] == 0) & own
     both = replace(tables, entered, 1, jnp.maximum(opp_slot, 0))
     entered = _select((needs_replacement(entered)[1] == 1) & ~bad, both, entered)
     entered = entered._replace(replace_mul=jnp.zeros_like(entered.replace_mul))

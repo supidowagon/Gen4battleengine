@@ -219,10 +219,13 @@ many are real). Decomp sources:
   (and after Pursuit's hit); its end-of-turn damage is in ``step``.
 
 Unreachable branches are not modelled: Substitute, Mist, Safeguard and Uproar
-come from unsupported moves; Shield Dust, Clear Body, Hyper Cutter, Immunity,
-Leaf Guard, Liquid Ooze, Magic Guard, Reckless, Serene Grace,
-Skill Link, Own Tempo, Levitate, Normalize and Color Change are unsupported
-abilities; Grip Claw is an unsupported item.
+come from unsupported moves; Clear Body, Hyper Cutter, Immunity, Leaf Guard, Liquid Ooze,
+Magic Guard, Skill Link, Own Tempo, Normalize and Color Change are unsupported abilities;
+Grip Claw is an unsupported item. Shield Dust (``_shield_dust``) and the weather moves
+(``_weather``) are E2 batch 3's; Serene Grace acts on the secondary chance
+(``outcome.secondary_chance``), Reckless on the damage (``damage.script_power_mul``),
+Levitate and Scrappy on the type chart (``damage.levitated``, ``damage.identified``) and
+Dry Skin's Water absorb in ``step._use_move``.
 """
 
 from __future__ import annotations
@@ -239,6 +242,9 @@ from nuzline.engine.damage import (
     decomp_abilities,
     divide,
     effectiveness,
+    identified,
+    ignorable,
+    levitated,
     move_type_of,
     weather_suppressed,
 )
@@ -250,6 +256,7 @@ from nuzline.engine.ids import (
     TERRAIN_TYPES,
     TRI_ATTACK_STATUSES,
     WEATHER_ABILITY_IDS,
+    WEATHER_TURNS,
     AbilityId,
     EffectId,
     ItemId,
@@ -338,9 +345,21 @@ def _secondary_stat_self(tables, state, h: _Hit) -> BattleState:
     return change_stage(state, h.side, h.param[0], h.param[1], cond)
 
 
+def _shield_dust(h: _Hit) -> jnp.ndarray:
+    """The target's Shield Dust as the attacker sees it (``Battler_IgnorableAbility``) stops
+    every ``SIDE_EFFECT_TYPE_INDIRECT`` effect on it, a damaging move's secondary effect
+    (``ON_HIT`` or rolled), silently: the stat drop of ``BtlCmd_ChangeStatStage``
+    (battle_script.c:2918-2921, ``jumpBlocked``), and the checks of subscript_paralyze.s:13,
+    subscript_burn.s:27, subscript_freeze.s:11, subscript_poison.s:20,
+    subscript_badly_poison.s:38, subscript_fall_asleep.s:31, subscript_confuse.s:15 and
+    subscript_flinch_mon.s:9 (King's Rock's flinch included, bcp.c:4646)."""
+    return h.target_ignorable == AbilityId.SHIELD_DUST
+
+
 def _secondary_stat_foe(tables, state, h: _Hit) -> BattleState:
     recipient_ok = h.certain | _alive(state, h.target_side, h.target)
     cond = (h.effect == _E.SECONDARY_STAT_FOE) & h.effective & h.proc & recipient_ok
+    cond = cond & ~_shield_dust(h)
     return _foe_stage(state, h, cond)
 
 
@@ -385,7 +404,9 @@ def _inflict(
 
     state = reveal_ability(state, h.target_side, h.target, SLEEP_BLOCKED, blocked)
     state = reveal_ability(state, h.target_side, h.target, PARALYSIS_BLOCKED, limber & direct)
-    blocked = blocked | limber
+    # Shield Dust, after Insomnia / Limber (Leaf Guard, Water Veil and the like in between are
+    # unsupported), for an indirect effect only.
+    blocked = blocked | limber | (cond & ~jnp.asarray(direct, bool) & _shield_dust(h))
     cond = cond & ~blocked & can_have_status(tables, state, h.target_side, h.target, status)
     counter = jnp.where(status == Status.SLEEP, outcome.duration[h.side], 0)
     old_status = state.status[h.target_side, h.target]
@@ -456,7 +477,8 @@ def _flinch(tables, state, h: _Hit) -> BattleState:
 
     shown = reached & inner_focus & (h.move == MOVE_FAKE_OUT)
     state = reveal_ability(state, h.target_side, h.target, FLINCH_BLOCKED, shown)
-    cond = reached & ~inner_focus
+    # :8-9: both flinch effects are indirect, so Shield Dust stops them after Inner Focus.
+    cond = reached & ~inner_focus & ~_shield_dust(h)
     old = state.flinched[h.target_side]
     return state._replace(
         flinched=state.flinched.at[h.target_side].set(jnp.where(cond, 1, old).astype(old.dtype))
@@ -477,6 +499,7 @@ def _fang(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
         & _alive(state, h.target_side, h.target)
         & ~h.target_moved
         & (h.target_ignorable != AbilityId.INNER_FOCUS)
+        & ~_shield_dust(h)
     )
     old = state.flinched[h.target_side]
     return state._replace(
@@ -731,6 +754,7 @@ def _secondary_confuse(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
         & h.proc
         & _alive(state, h.target_side, h.target)
         & (state.confusion[h.target_side] == 0)
+        & ~_shield_dust(h)
     )
     return _set(state, "confusion", h.target_side, outcome.duration[h.side], cond)
 
@@ -769,6 +793,44 @@ def _brick_break(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     cond = (h.effect == _E.BRICK_BREAK) & h.landed
     state = _set(state, "reflect", h.target_side, 0, cond)
     return _set(state, "light_screen", h.target_side, 0, cond)
+
+
+def _weather(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    """Sandstorm, Rain Dance, Sunny Day, Hail (``WEATHER``; effect_script_0115.s, _0136.s,
+    _0137.s, _0164.s, run before ``TryMove``, which cannot stop this accuracy-0
+    ``RANGE_FIELD`` move): ``MOVE_STATUS_FAILED`` when its weather is up already, either kind
+    (``move_param[m, 1] == 1``) or, for Hail, only a temporary one (``weather_timer != 0``);
+    else ``FIELD_CONDITION_WEATHER`` is cleared and the temporary weather set with
+    ``WEATHER_TURNS`` turns plus the param of the user's matching weather rock
+    (``CheckItemHoldEffect`` / ``GetItemEffectParam`` on the attacker). The failure skips
+    ``AfterMoveEffects`` (``step._use_move``)."""
+    weather = h.param[0]
+    item = state.item[h.side, h.user]
+    rock = (tables.item_effect[item] == ItemId.WEATHER_ROCK) & (
+        tables.item_param[item, 1].astype(_I32) == weather
+    )
+    turns = WEATHER_TURNS + jnp.where(rock, tables.item_param[item, 0].astype(_I32), 0)
+    cond = (h.effect == _E.WEATHER) & h.landed & ~weather_fails(state, h.param)
+    return state._replace(
+        weather=jnp.where(cond, weather, state.weather).astype(state.weather.dtype),
+        weather_timer=jnp.where(cond, turns, state.weather_timer).astype(state.weather_timer.dtype),
+    )
+
+
+def weather_fails(state: BattleState, param) -> jnp.ndarray:
+    """``bool``: a ``WEATHER`` move with ``param`` (``move_param[m]``) fails on this field
+    (``_weather``)."""
+    up = state.weather == param[0]
+    temporary = state.weather_timer != 0
+    return up & ((param[1] == 1) | temporary)
+
+
+def armored(state: BattleState, side, target_side) -> jnp.ndarray:
+    """``bool``: ``target_side``'s active battler has Battle Armor or Shell Armor as
+    ``side``'s sees it (``Battler_IgnorableAbility``): ``BattleSystem_CalcCriticalMulti``
+    (battle_lib.c:7135-7136) never crits it, whatever the roll (``Outcome.crit``)."""
+    seen = ignorable(state, side, target_side)
+    return (seen == AbilityId.SHELL_ARMOR) | (seen == AbilityId.BATTLE_ARMOR)
 
 
 def _eat_berry(
@@ -902,8 +964,8 @@ def _kings_rock(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     ``RandNext() % 100 < param`` (``outcome.flinch_item``), the move has
     ``MOVE_FLAG_TRIGGERS_KINGS_ROCK`` and the defender has HP left. ``subscript_flinch_mon.s``
     then flinches a target that has not moved (:5), unless its Inner Focus (as the attacker
-    sees it, :7; a silent block: not Fake Out, not a direct effect). Shield Dust (:9) is an
-    unsupported ability, Substitute (:6) an unsupported move."""
+    sees it, :7; a silent block: not Fake Out, not a direct effect) or its Shield Dust (:9,
+    ``_shield_dust``). Substitute (:6) is an unsupported move."""
     item = state.item[h.side, h.user]
     flag = (tables.move_flags[h.move] & MoveFlag.KINGS_ROCK) != 0
     cond = (
@@ -915,6 +977,7 @@ def _kings_rock(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
         & _alive(state, h.target_side, h.target)
         & ~h.target_moved
         & (h.target_ignorable != AbilityId.INNER_FOCUS)
+        & ~_shield_dust(h)  # CheckExtraFlinch's side effect is INDIRECT (bcp.c:4646)
     )
     old = state.flinched[h.target_side]
     return state._replace(
@@ -1209,7 +1272,7 @@ def play_hit(
         state,
         side,
         move,
-        outcome.crit[side, hit_index] != 0,
+        (outcome.crit[side, hit_index] != 0) & ~armored(state, side, target_side),
         outcome.roll[side, hit_index],
         power_mul,
         outcome.magnitude[side].astype(_I32),
@@ -1241,7 +1304,7 @@ def play_hit(
                 tables,
                 move_type,
                 state.types[target_side, target],
-                state.foresight[target_side] != 0,
+                identified(state, side, target_side),
             )
             > 100
         )
@@ -1273,13 +1336,11 @@ def play_hit(
             tables,
             move_type,
             state.types[target_side, target],
-            state.foresight[target_side] != 0,
+            identified(state, side, target_side),
         )
         > 0
-    )
+    ) & ~levitated(state, side, target_side, move_type)
     passes = jnp.where(is_status, (effect != _E.STATUS_FOE) | type_ok, damage > 0)
-    a_ability = state.ability[side, user]
-    d_ability = state.ability[target_side, target]
     chance = tables.move_effect_chance[move]
     h = _Hit(
         side=side,
@@ -1295,7 +1356,7 @@ def play_hit(
         dealt=dealt,
         target_moved=jnp.asarray(target_moved, jnp.bool_),
         move=move,
-        target_ignorable=jnp.where(a_ability == AbilityId.MOLD_BREAKER, AbilityId.NONE, d_ability),
+        target_ignorable=ignorable(state, side, target_side),
         contact_proc=outcome.contact_proc[target_side, hit_index] != 0,
         update_hp=update_hp,
         hit_index=jnp.asarray(hit_index, _I32),
@@ -1336,6 +1397,7 @@ def play_hit(
         _attract,
         _bide,
         _rollout,
+        _weather,
     ):
         state = fn(tables, state, h, outcome)
     state, pluck_flag = _eat_berry(tables, state, h, outcome, foe_custap)

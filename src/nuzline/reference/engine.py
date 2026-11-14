@@ -36,9 +36,11 @@ import copy
 from dataclasses import dataclass, field
 
 from nuzline.engine.ids import (
+    ABILITY_DECOMP_IDS,
     ABILITY_MULTITYPE,
     CHOICE_ITEMS,
     ITEM_ABILITY_IDS,
+    ITEM_GRISEOUS_ORB,
     MOVE_FAKE_OUT,
     MOVE_STRUGGLE,
     POTION_HP_RESTORED,
@@ -58,7 +60,10 @@ from nuzline.engine.ids import (
     TERRAIN_SPECIAL,
     TERRAIN_TYPES,
     TRI_ATTACK_STATUSES,
+    UNTRACEABLE_ABILITIES,
+    WEATHER_ABILITIES,
     WEATHER_ABILITY_IDS,
+    WEATHER_TURNS,
     AbilityId,
     EffectId,
     ItemId,
@@ -189,6 +194,41 @@ def _restore_types(tables, s: RefState, side: int) -> None:
     mon.types = [_t(tables, "species_types", row, i) for i in range(len(mon.types))]
 
 
+def _restore_ability(tables, s: RefState, side: int) -> None:
+    """The leaving battler's ability goes back to its personal row's: Trace writes only the
+    battler's ``BattleMon.ability``, which ``BattleSystem_InitBattleMon`` re-reads from the
+    party (lib.c:124)."""
+    mon = _active(s, side)
+    row = _t(tables, "species_form_row", mon.species, mon.form)
+    mon.ability = _t(tables, "species_abilities", row, mon.ability_slot)
+
+
+def _armored(s: RefState, attacker: int, defender: int) -> bool:
+    """``BattleSystem_CalcCriticalMulti`` (lib.c:7135-7136): no crit against Battle Armor or
+    Shell Armor (``Battler_IgnorableAbility``)."""
+    return _ignorable(s, attacker, defender) in (AbilityId.SHELL_ARMOR, AbilityId.BATTLE_ARMOR)
+
+
+def _levitated(tables, s: RefState, attacker: int, defender: int, move_type: int) -> bool:
+    """``ApplyTypeChart``'s ``MOVE_STATUS_LEVITATED`` (lib.c:2600-2603): a Ground move against
+    Levitate as the attacker sees it; part of ``MOVE_STATUS_IMMUNE``."""
+    return move_type == Type.GROUND and _ignorable(s, attacker, defender) == AbilityId.LEVITATE
+
+
+def _identified(s: RefState, attacker: int, defender: int) -> bool:
+    """``ApplyTypeChart`` (lib.c:2611-2615) skips the Ghost immunities for Foresight or the
+    attacker's Scrappy."""
+    return bool(s.sides[defender].foresight) or _active(s, attacker).ability == AbilityId.SCRAPPY
+
+
+def _truant_loafs(s: RefState, side: int) -> bool:
+    """``Battler_CheckTruant`` (lib.c:3304-3313): Truant and ``truant != totalTurns & 1``, the
+    flag being ``(totalTurns + 1) & 1`` from the entry (lib.c:2119, :2197): ``fake_out_turn``'s
+    parity (0 for a lead)."""
+    sd = s.sides[side]
+    return _active(s, side).ability == AbilityId.TRUANT and (sd.fake_out_turn & 1) != (s.turn & 1)
+
+
 def _hidden_power(ivs: list[int]) -> tuple[int, int]:
     """``(type, power)`` of Hidden Power (``BtlCmd_CalcHiddenPowerParams``,
     script.c:6007-6033; ``ivs`` in ``ids.Stat`` order, the decomp's bit order is HP,
@@ -258,7 +298,9 @@ def _fixed_damage(tables, s: RefState, attacker: int, move: int) -> int:
         return 2 * sd.bide_damage if sd.locked_move and sd.bide_turns == 0 else 0
     foe = _active(s, 1 - attacker)
     kind = _move_type(tables, s, attacker, move)
-    if _matchup_x40(tables, kind, foe.types, bool(s.sides[1 - attacker].foresight)) == 0:
+    if _matchup_x40(tables, kind, foe.types, _identified(s, attacker, 1 - attacker)) == 0:
+        return 0
+    if _levitated(tables, s, attacker, 1 - attacker, kind):
         return 0
     return _active(s, attacker).level
 
@@ -354,7 +396,10 @@ def _effective_speed(tables, s: RefState, side: int) -> int:
     # lib.c:1248: Choice Scarf (the speed-halving items before it are unsupported).
     if _item_effect(tables, mon) == ItemId.CHOICE_SCARF:
         speed = speed * 15 // 10
-    if mon.status == Status.PARALYSIS:  # lib.c:1260 (Quick Feet is unsupported)
+    # lib.c:1257-1261: Quick Feet with any status x15/10, else paralysis quarters it.
+    if mon.ability == AbilityId.QUICK_FEET and mon.status != Status.NONE:
+        speed = speed * 15 // 10
+    elif mon.status == Status.PARALYSIS:
         speed //= 4
     if s.sides[side].tailwind:  # lib.c:1274
         speed *= 2
@@ -469,6 +514,9 @@ def _calc_move_damage(
         power *= _rollout_multiplier(s, attacker)
     move_type = _move_type(tables, s, attacker, move)  # lib.c:6680 (Normalize is unsupported)
     power = power * power_mul // 10  # lib.c:6688
+    # lib.c:6698-6702 Technician: movePower <= 60, not Struggle.
+    if a_ability == AbilityId.TECHNICIAN and move != MOVE_STRUGGLE and power <= 60:
+        power = power * 15 // 10
     move_class = _t(tables, "move_category", move)
 
     # lib.c:6716-6783: the held items (BattleSystem_GetItemData of Battler_HeldItem,
@@ -513,6 +561,9 @@ def _calc_move_damage(
     ):
         power = power * (100 + a_power) // 100
 
+    # lib.c:6785-6788 Thick Fat (ignorable): Fire and Ice power halved.
+    if d_ability == AbilityId.THICK_FAT and move_type in (Type.FIRE, Type.ICE):
+        power //= 2
     # lib.c:6793 Guts.
     if a_ability == AbilityId.GUTS and atk.status != Status.NONE:
         attack = attack * 150 // 100
@@ -529,6 +580,9 @@ def _calc_move_damage(
         power = power * 150 // 100
     if move_type == Type.WATER and a_ability == AbilityId.TORRENT and pinch:
         power = power * 150 // 100
+    # lib.c:6845-6848 Dry Skin (ignorable): Fire power x125/100.
+    if d_ability == AbilityId.DRY_SKIN and move_type == Type.FIRE:
+        power = power * 125 // 100
     # lib.c:6850 Simple attacker; :6868 Simple defender (ignorable).
     if a_ability == AbilityId.SIMPLE:
         attack_stage, sp_attack_stage = _simple(attack_stage), _simple(sp_attack_stage)
@@ -549,6 +603,9 @@ def _calc_move_damage(
     weather = s.weather
     if not field_conditions or _weather_suppressed(tables, s):
         weather = Weather.NONE
+    # lib.c:6922-6924 Solar Power in sun.
+    if weather == Weather.SUN and a_ability == AbilityId.SOLAR_POWER:
+        sp_attack = sp_attack * 15 // 10
     # lib.c:6926 sandstorm boosts a Rock-type defender's SpD.
     if weather == Weather.SANDSTORM and Type.ROCK in dfn.types:
         sp_defense = sp_defense * 15 // 10
@@ -625,7 +682,7 @@ def _apply_type_chart(tables, s: RefState, attacker: int, defender: int, move: i
             damage *= 2
         else:
             damage = damage * 15 // 10
-    identified = bool(s.sides[defender].foresight)  # lib.c:2615
+    identified = _identified(s, attacker, defender)  # lib.c:2611-2615 (Scrappy too)
     update = _t(tables, "move_power", move) != 0  # ApplyTypeMultiplier's `update`
     # flags: MOVE_STATUS_SUPER_EFFECTIVE / _NOT_VERY_EFFECTIVE
     for defending, mul in _chart_rows(tables, move_type, identified):  # lib.c:2611-2646
@@ -640,6 +697,12 @@ def _apply_type_chart(tables, s: RefState, attacker: int, defender: int, move: i
     atk = _active(s, attacker)
     if "super" in flags and update and _item_effect(tables, atk) == ItemId.EXPERT_BELT:
         damage = damage * (100 + _t(tables, "item_param", atk.item, 0)) // 100
+    # lib.c:2668-2672: Tinted Lens on a not-very-effective hit.
+    if "not_very" in flags and update and atk.ability == AbilityId.TINTED_LENS:
+        damage *= 2
+    # lib.c:2600-2603: Levitate takes the move instead of the chart (MOVE_STATUS_LEVITATED).
+    if _levitated(tables, s, attacker, defender, move_type):
+        return 0
     return damage
 
 
@@ -675,6 +738,12 @@ def _move_damage(
     defender = 1 - attacker
     if _t(tables, "move_effect", move) in (EffectId.LEVEL_DAMAGE, EffectId.BIDE):
         return _fixed_damage(tables, s, attacker, move)
+    # effect_script_0048.s, _0269.s: a Reckless user's RECOIL move sets powerMul to 12.
+    if (
+        _t(tables, "move_effect", move) == EffectId.RECOIL
+        and _active(s, attacker).ability == AbilityId.RECKLESS
+    ):
+        power_mul = 12
     damage = _calc_move_damage(
         tables,
         s,
@@ -1366,19 +1435,59 @@ def _switch_in_effects(turn: _Turn, s: RefState, side: int) -> None:
     touches that battler, so the order does not matter. (At a double KO the player's
     newcomer enters against a fainted foe and announces nothing here;
     ``playout.replacement_pass`` fires its Intimidate once the opponent's newcomer is in.)"""
-    mon, foe = _active(s, side), _active(s, 1 - side)
+    tables = turn.tables
+    other = 1 - side
+    mon, foe = _active(s, side), _active(s, other)
+    # SWITCH_IN_CHECK_STATE_TRACE (lib.c:3718-3737): the newcomer, then the battler facing it,
+    # whose Trace stayed armed while its foe was down; no two Trace holders copy each other.
+    _trace(tables, s, side, other)
+    traced = _trace(tables, s, other, side)
+    # SWITCH_IN_CHECK_STATE_WEATHER_ABILITIES (lib.c:3740-3790).
+    for battler in (side, other) if traced else (side,):
+        weather = WEATHER_ABILITIES.get(_active(s, battler).ability)
+        if weather is not None and _active(s, battler).hp:
+            if not (s.weather == weather and s.weather_timer == 0) and battler == 0:
+                s.ai_ability_known[s.sides[0].active] = 1  # subscript_drought.s etc.
+            s.weather, s.weather_timer = weather, 0
     # subscript_intimidate.s: ATTACK_DOWN_1_STAGE on a living foe (Clear Body, Hyper
     # Cutter, White Smoke, Mist and Substitute are unsupported). Its "cuts" message is
     # built in C (BtlCmd_ChangeStatStage, script.c:2956): the AI learns nothing.
     if mon.hp and mon.ability == AbilityId.INTIMIDATE and foe.hp:
-        _change_stage(s, 1 - side, Stat.ATK, -1)
+        _change_stage(s, other, Stat.ATK, -1)
+    if traced and foe.hp and foe.ability == AbilityId.INTIMIDATE and mon.hp:
+        _change_stage(s, side, Stat.ATK, -1)
     # SWITCH_IN_CHECK_STATE_MOLD_BREAKER (lib.c:4075): subscript_mold_breaker.s tags the
     # living newcomer's ability, BattleAI_SetAbility (script.c:11806).
     if side == 0 and mon.hp and mon.ability == AbilityId.MOLD_BREAKER:
         s.ai_ability_known[s.sides[0].active] = 1
+    if traced and other == 0 and foe.ability == AbilityId.MOLD_BREAKER:
+        s.ai_ability_known[s.sides[0].active] = 1
     _recover_status_by_ability(s, side)
+    if traced:
+        _recover_status_by_ability(s, other)
     for battler in (0, 1):
         _held_item_hp(turn, s, battler)
+
+
+def _trace(tables, s: RefState, side: int, foe: int) -> bool:
+    """``SWITCH_IN_CHECK_STATE_TRACE`` for ``side``'s battler (lib.c:3718-3737, ``ChooseTraceTarget``
+    :7750-7775): with HP, Trace, no Griseous Orb, a living foe whose ability is not Forecast,
+    Trace or Multitype; ``subscript_trace.s`` copies the foe's ability to the battler and the
+    AI learns both (script.c:3403, :11806)."""
+    mon, target = _active(s, side), _active(s, foe)
+    if not (
+        mon.hp
+        and mon.ability == AbilityId.TRACE
+        and mon.item != ITEM_GRISEOUS_ORB
+        and target.hp
+        and _decomp_ability(tables, target) not in UNTRACEABLE_ABILITIES
+    ):
+        return False
+    mon.ability = target.ability
+    for battler in (side, foe):
+        if battler == 0:
+            s.ai_ability_known[s.sides[0].active] = 1
+    return True
 
 
 def _enter(turn: _Turn, s: RefState, side: int, slot: int) -> None:
@@ -1391,6 +1500,7 @@ def _enter(turn: _Turn, s: RefState, side: int, slot: int) -> None:
     (``_stealth_rock_damage``), in that order."""
     sd = s.sides[side]
     _restore_types(turn.tables, s, side)  # the outgoing battler's Camouflage ends
+    _restore_ability(turn.tables, s, side)  # and its traced ability
     sd.active = slot
     _reset_battler(sd)
     sd.fake_out_turn = turn.entry_turn
@@ -1490,6 +1600,10 @@ def _inflict(turn: _Turn, s: RefState, side: int, target: int, status: int,
     if mon.hp and status == Status.PARALYSIS and _ignorable(s, side, target) == AbilityId.LIMBER:
         if target == 0 and direct:
             s.ai_ability_known[s.sides[0].active] = 1
+        return
+    # Shield Dust (ignorable) stops an indirect effect silently (subscript_paralyze.s:13,
+    # subscript_burn.s:27, subscript_freeze.s:11, subscript_poison.s:20, ...).
+    if not direct and _ignorable(s, side, target) == AbilityId.SHIELD_DUST:
         return
     if mon.hp and _can_have_status(turn.tables, s, target, status):
         mon.status = status
@@ -1621,7 +1735,8 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
             _change_stage(s, side, p0, p1)
     elif effect == EffectId.SECONDARY_STAT_FOE and effective and proc:
         keen_eye = seen == AbilityId.KEEN_EYE and p0 == Stat.ACC and p1 < 0
-        if (certain or target_alive) and not keen_eye:
+        # BtlCmd_ChangeStatStage (script.c:2918-2921): Shield Dust stops an indirect drop.
+        if (certain or target_alive) and not keen_eye and seen != AbilityId.SHIELD_DUST:
             _change_stage(s, target, p0, p1)
     elif effect in (EffectId.STATUS_FOE, EffectId.SECONDARY_STATUS) and effective:
         if effect == EffectId.STATUS_FOE or proc:
@@ -1647,16 +1762,18 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
         if proc:
             _inflict(turn, s, side, target, p0, False)
         alive = _active(s, target).hp > 0
-        if o.fang_flinch[side] and alive and not target_moved and seen != AbilityId.INNER_FOCUS:
+        blocked = seen in (AbilityId.INNER_FOCUS, AbilityId.SHIELD_DUST)  # flinch_mon.s:7, :9
+        if o.fang_flinch[side] and alive and not target_moved and not blocked:
             s.sides[target].flinched = 1
     elif effect in (EffectId.FLINCH, EffectId.FAKE_OUT) and effective and proc:
         # subscript_flinch_mon.s: a living target that has not moved yet; Inner Focus,
         # whose message (:18-23, TAG_NICKNAME_ABILITY) is shown for Fake Out only.
         if target_alive and not target_moved:
-            if seen != AbilityId.INNER_FOCUS:
+            if seen == AbilityId.INNER_FOCUS:
+                if move == MOVE_FAKE_OUT and target == 0:
+                    s.ai_ability_known[s.sides[0].active] = 1
+            elif seen != AbilityId.SHIELD_DUST:  # subscript_flinch_mon.s:8-9, indirect
                 s.sides[target].flinched = 1
-            elif move == MOVE_FAKE_OUT and target == 0:
-                s.ai_ability_known[s.sides[0].active] = 1
     elif effect == EffectId.RAISE_ALL_STATS_HIT and effective and proc:
         # effect_script_0140.s: indirect TO_ATTACKER at the move's chance; the recipient,
         # the user, must have HP (lib.c:1570-1586). subscript_boost_all_stats.s.
@@ -1724,8 +1841,9 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
             s.sides[target].confusion = o.duration[side]
     elif effect == EffectId.SECONDARY_CONFUSE and effective and proc:
         # effect_script_0076.s: a probabilistic effect, cleared for a fainted target
-        # (lib.c:1556); subscript_confuse.s fails on a confused target; Random 3, 2 turns.
-        if target_alive and not s.sides[target].confusion:
+        # (lib.c:1556); subscript_confuse.s fails on a confused target (Shield Dust stops it,
+        # :15); Random 3, 2 turns.
+        if target_alive and not s.sides[target].confusion and seen != AbilityId.SHIELD_DUST:
             s.sides[target].confusion = o.duration[side]
     elif effect == EffectId.MUD_SPORT and landed and not s.sides[side].mud_sport:
         # effect_script_0201.s: fails when the user already has it.
@@ -1767,6 +1885,18 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
         s.sides[side].locked_move = move
         s.sides[side].bide_turns = 2
         s.sides[side].bide_damage = 0
+    elif effect == EffectId.WEATHER and landed:
+        # effect_script_0115.s, _0136.s, _0137.s, _0164.s: fails on its weather (Hail only on
+        # a temporary one); else that weather for 5 turns plus the user's matching rock.
+        if not _weather_fails(s, p0, p1):
+            user = _active(s, side)
+            extra = 0
+            if (
+                _item_effect(tables, user) == ItemId.WEATHER_ROCK
+                and _t(tables, "item_param", user.item, 1) == p0
+            ):
+                extra = _t(tables, "item_param", user.item, 0)
+            s.weather, s.weather_timer = p0, WEATHER_TURNS + extra
     elif effect == EffectId.ROLLOUT and landed:
         # BtlCmd_CalcRolloutPower (script.c:5661): rolloutCount starts at 5 on a first use,
         # every use decrements it, the lock ends at 0; a hit that dealt nothing (an
@@ -1777,6 +1907,12 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
             sd.locked_move, sd.rollout_count = move, left
         else:
             sd.locked_move = sd.rollout_count = 0
+
+
+def _weather_fails(s: RefState, weather: int, permanent_too: int) -> bool:
+    """A weather move fails: its weather is up, either kind (``permanent_too``) or only a
+    temporary one (Hail, effect_script_0164.s)."""
+    return s.weather == weather and (permanent_too == 1 or s.weather_timer != 0)
 
 
 def _attractable(s: RefState, side: int, source: int) -> bool:
@@ -1943,7 +2079,7 @@ def _hit(turn: _Turn, s: RefState, side: int, move: int, hit: int, struggling: b
         s,
         side,
         move,
-        o.crit[side][hit] != 0,
+        o.crit[side][hit] != 0 and not _armored(s, side, target),
         o.roll[side][hit],
         magnitude=o.magnitude[side],
         present=o.present[side],
@@ -1981,15 +2117,10 @@ def _hit(turn: _Turn, s: RefState, side: int, move: int, hit: int, struggling: b
         passes = True
         if effect == EffectId.STATUS_FOE and type_checked:
             # Thunder Wave goes through ApplyTypeChart (bcp.c:2350), which reads Foresight.
-            passes = (
-                _matchup_x40(
-                    tables,
-                    _move_type(tables, s, side, move),
-                    target_mon.types,
-                    bool(s.sides[target].foresight),
-                )
-                > 0
-            )
+            kind = _move_type(tables, s, side, move)
+            passes = _matchup_x40(
+                tables, kind, target_mon.types, _identified(s, side, target)
+            ) > 0 and not _levitated(tables, s, side, target, kind)
     else:
         passes = damage > 0
     effective = landed and passes
@@ -2011,7 +2142,7 @@ def _hit(turn: _Turn, s: RefState, side: int, move: int, hit: int, struggling: b
         and _t(tables, "move_flags", move) & MoveFlag.KINGS_ROCK
         and _active(s, target).hp > 0
         and not target_moved
-        and _ignorable(s, side, target) != AbilityId.INNER_FOCUS
+        and _ignorable(s, side, target) not in (AbilityId.INNER_FOCUS, AbilityId.SHIELD_DUST)
     ):
         s.sides[target].flinched = 1
     return dealt, update_hp
@@ -2046,6 +2177,10 @@ def _status_disrupted(turn: _Turn, s: RefState, side: int, move: int) -> int:
             return DISRUPTED
         else:
             still_frozen = True
+    # CHECK_STATUS_STATE_TRUANT (bcp.c:2502-2510): subscript_loafing_around.s unlocks.
+    if _truant_loafs(s, side):
+        _unlock(sd)
+        return DISRUPTED
     # CHECK_STATUS_STATE_FLINCH (bcp.c:2529): subscript_flinched.s raises Steadfast's Speed.
     if sd.flinched:
         sd.flinched = 0
@@ -2149,6 +2284,9 @@ def _hit_rate(tables, s: RefState, attacker: int, move: int, target_moved: bool 
             rate = rate * 80 // 100
         if s.weather == Weather.FOG:  # :2935
             rate = rate * 6 // 10
+    # :2944-2947 Tangled Feet (ignorable) on a confused target.
+    if seen == AbilityId.TANGLED_FEET and s.sides[defender].confusion:
+        rate = rate * 50 // 100
     # :2949-2965: the defender's BrightPowder / Lax Incense, the attacker's Wide Lens and, after
     # the target moved, Zoom Lens.
     foe = _active(s, defender)
@@ -2159,6 +2297,9 @@ def _hit_rate(tables, s: RefState, attacker: int, move: int, target_moved: bool 
         rate = rate * (100 + _t(tables, "item_param", atk.item, 0)) // 100
     if s.gravity:  # FIELD_CONDITION_GRAVITY, :2972
         rate = rate * 10 // 6
+    # CheckMoveHitOverrides (bcp.c:3016-3021): either battler's No Guard clears the miss.
+    if AbilityId.NO_GUARD in (atk.ability, _active(s, defender).ability):
+        return 100
     return rate
 
 
@@ -2276,6 +2417,31 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
     # attacker and the new defender.
     if effect == EffectId.ROAR and not _roar(turn, s, side):
         return record
+    # A failed weather move: MOVE_STATUS_FAILED, subscript_missed.s, no AfterMoveEffects.
+    if effect == EffectId.WEATHER and _weather_fails(
+        s, _t(tables, "move_param", move, 0), _t(tables, "move_param", move, 1)
+    ):
+        return record
+    # TRY_MOVE_STATE_TRIGGER_IMMUNITY_ABILITIES (bcp.c:3281-3286): the foe's Dry Skin
+    # (ignorable) takes a Water move with power that hit (lib.c:3538-3544):
+    # subscript_ability_restores_hp.s heals Divide(maxHP, 4) below full HP and tags the
+    # ability; MOVE_STATUS_NO_MORE_WORK: no hit, no AfterMoveEffects.
+    foe_side = 1 - side
+    kind = _move_type(tables, s, side, move)
+    if (
+        record is not None
+        and _ignorable(s, side, foe_side) == AbilityId.DRY_SKIN
+        and kind == Type.WATER
+        and _t(tables, "move_power", move) != 0
+        and _matchup_x40(tables, kind, _active(s, foe_side).types, _identified(s, side, foe_side))
+        > 0
+    ):
+        foe = _active(s, foe_side)
+        if foe.hp != foe.max_hp:
+            _gain_hp(s, foe_side, _divide(foe.max_hp, 4))
+        if foe_side == 0:
+            s.ai_ability_known[s.sides[0].active] = 1
+        return record
     # BtlCmd_SetMultiHit (script.c:2634): SetMultiHit 2 (effect_script_0044.s) is fixed,
     # SetMultiHit 0 draws 2-5.
     hits = 1
@@ -2375,6 +2541,8 @@ def _pursuit(turn: _Turn, s: RefState, side: int, actions, choices) -> None:
         return
     if mon.hp == 0 or mon.status in (Status.SLEEP, Status.FREEZE):
         return
+    if _truant_loafs(s, pursuer):  # script.c:6903
+        return
     slot = actions[pursuer]
     if mon.pp[slot] == 0:
         return
@@ -2386,7 +2554,8 @@ def _pursuit(turn: _Turn, s: RefState, side: int, actions, choices) -> None:
     if _holds_choice(tables, s, pursuer):
         s.sides[pursuer].choice_lock = move
     o = turn.outcome
-    damage = _move_damage(tables, s, pursuer, move, o.crit[pursuer][0] != 0, o.roll[pursuer][0],
+    crit = o.crit[pursuer][0] != 0 and not _armored(s, pursuer, side)
+    damage = _move_damage(tables, s, pursuer, move, crit, o.roll[pursuer][0],
                           PURSUIT_POWER_MUL)  # fmt: skip
     # subscript_pursuit.s: CheckHoldOnWith1HP on the target (script.c:9098-9124).
     armed = _sash_at_full_hp(turn, s, side)
@@ -2459,6 +2628,9 @@ def _decomp_ability(tables, mon: RefPokemon) -> int:
     """``Battler_Ability``: the decomp ability id at the Pokemon's personal row and
     ability slot."""
     row = _t(tables, "species_form_row", mon.species, mon.form)
+    traced = _t(tables, "species_abilities", row, mon.ability_slot) == AbilityId.TRACE
+    if traced and mon.ability != AbilityId.TRACE:
+        return ABILITY_DECOMP_IDS[AbilityId(mon.ability)]  # a traced ability
     return _t(tables, "species_abilities_decomp", row, mon.ability_slot)
 
 
@@ -2486,16 +2658,28 @@ def _weather_effect(turn: _Turn, s: RefState, side: int) -> None:
         immune = {Type.ROCK, Type.STEEL, Type.GROUND} & set(mon.types)
         if not immune and mon.ability != AbilityId.SAND_VEIL:
             hp_calc = -_divide(mon.max_hp, 16)
+    # script.c:5585-5596: sun hurts Dry Skin and Solar Power by Divide(maxHP, 8).
+    if s.weather == Weather.SUN and mon.ability in (AbilityId.DRY_SKIN, AbilityId.SOLAR_POWER):
+        hp_calc = -_divide(mon.max_hp, 8)
     if s.weather == Weather.HAIL:  # the hail branch
         if ability == WEATHER_ABILITY_IDS["Ice Body"]:
             if mon.hp < mon.max_hp:
                 hp_calc = _divide(mon.max_hp, 16)
         elif Type.ICE not in mon.types and mon.ability != AbilityId.SNOW_CLOAK:
             hp_calc = -_divide(mon.max_hp, 16)
+    # script.c:5620-5625: rain heals Dry Skin below full HP by Divide(maxHP, 8).
+    if s.weather == Weather.RAIN and mon.ability == AbilityId.DRY_SKIN and mon.hp < mon.max_hp:
+        hp_calc = _divide(mon.max_hp, 8)
+    sun = s.weather == Weather.SUN and mon.ability in (AbilityId.DRY_SKIN, AbilityId.SOLAR_POWER)
+    rain = s.weather == Weather.RAIN and mon.ability == AbilityId.DRY_SKIN and hp_calc > 0
+    magic_guard = ability == WEATHER_ABILITY_IDS["Magic Guard"]
     if hp_calc > 0:  # subscript_weather_continues.s _076
         _gain_hp(s, side, hp_calc)
-    elif hp_calc < 0 and ability != WEATHER_ABILITY_IDS["Magic Guard"]:
+    elif hp_calc < 0 and not magic_guard:
         _lose_hp(turn, s, side, -hp_calc)
+    # :_045, :_057, :_076 tag the battler's ability (after the Magic Guard skip).
+    if side == 0 and ((sun and not magic_guard) or rain):
+        s.ai_ability_known[s.sides[0].active] = 1
 
 
 def _field_conditions(turn: _Turn, s: RefState, order: list[int]) -> None:

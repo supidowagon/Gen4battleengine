@@ -276,6 +276,79 @@ CONSTANTS: tuple[Constant, ...] = (
             "Air Slash": 403,
         },
     ),
+    # E2 batch 3: the decomp id of every supported AbilityId (damage.decomp_abilities of a
+    # battler that traced), compared by value (its keys are engine ids).
+    *_table(
+        "nuzline.engine.ids.ABILITY_DECOMP_IDS",
+        "ability",
+        _E,
+        {
+            "-": 0,
+            "Sturdy": 5,
+            "Rock Head": 69,
+            "Mold Breaker": 104,
+            "Blaze": 66,
+            "Torrent": 67,
+            "Overgrow": 65,
+            "Intimidate": 22,
+            "Rivalry": 79,
+            "Keen Eye": 51,
+            "Simple": 86,
+            "Unaware": 109,
+            "Natural Cure": 30,
+            "Poison Point": 38,
+            "Inner Focus": 39,
+            "Static": 9,
+            "Guts": 62,
+            "Steadfast": 80,
+            "Insomnia": 15,
+            "Cloud Nine": 13,
+            "Compoundeyes": 14,
+            "Shed Skin": 61,
+            "Sand Veil": 8,
+            "Snow Cloak": 81,
+            "Swift Swim": 33,
+            "Rough Skin": 24,
+            "Flame Body": 49,
+            "Limber": 7,
+            "Adaptability": 91,
+            "Solid Rock": 116,
+            "Cute Charm": 56,
+            "Gluttony": 82,
+            "Reckless": 120,
+            "Technician": 101,
+            "Truant": 54,
+            "Dry Skin": 87,
+            "Lightningrod": 31,
+            "No Guard": 99,
+            "Serene Grace": 32,
+            "Drought": 70,
+            "Honey Gather": 118,
+            "Levitate": 26,
+            "Quick Feet": 95,
+            "Scrappy": 113,
+            "Shell Armor": 75,
+            "Battle Armor": 4,
+            "Shield Dust": 19,
+            "Solar Power": 94,
+            "Super Luck": 105,
+            "Tangled Feet": 77,
+            "Thick Fat": 47,
+            "Tinted Lens": 110,
+            "Trace": 36,
+            "Drizzle": 2,
+            "Sand Stream": 45,
+            "Snow Warning": 117,
+        },
+    ),
+    # ChooseTraceTarget's untraceable abilities (battle_lib.c:7750-7775) and its Forecast.
+    *_table(
+        "nuzline.engine.ids.UNTRACEABLE_ABILITIES",
+        "ability",
+        _E,
+        {"Forecast": 59, "Trace": 36, "Multitype": 121},
+    ),
+    Constant("nuzline.engine.ids.ABILITY_FORECAST", "ability", 59, "Forecast", _E),
     # The weather code's decomp abilities (generated/abilities.txt line N is id N-1).
     *_table(
         "nuzline.engine.ids.WEATHER_ABILITY_IDS",
@@ -327,6 +400,8 @@ CONSTANTS: tuple[Constant, ...] = (
     # Items (generated/items.txt, line N is id N-1); prep looks Heart Scale up by name.
     Constant("nuzline.prep.problem.HEART_SCALE", "item", 93, "Heart Scale", _E),
     Constant("nuzline.engine.coverage.ITEM_GRISEOUS_ORB", "item", 112, "Griseous Orb", _E),
+    # Trace never fires for a Griseous Orb holder (battle_lib.c:3728).
+    Constant("nuzline.engine.ids.ITEM_GRISEOUS_ORB", "item", 112, "Griseous Orb", _E),
     # saves/pkm.py: the Luxury Ball friendship bonus (PokemonSpec.friend_bonus).
     Constant("nuzline.saves.pkm.ITEM_LUXURY_BALL", "item", 11, "Luxury Ball", _E),
     # Hold effects (generated/item_hold_effects.txt, line N is id N-1):
@@ -525,6 +600,11 @@ EXEMPT: dict[str, str] = {
         "keyed by decomp hold effect id, read off BattleSystem_TriggerHeldItem's stat pinch "
         "berries (battle_lib.c:4773-4836): each game's items carry their own hold effect "
         "(build_tables looks theirs up here), and a game's code changes are rom_diff.toml entries"
+    ),
+    "tools.effect_map.WEATHER_ROCK_HOLD_EFFECTS": (
+        "keyed by decomp hold effect id, read off the weather moves' scripts (effect_script_0115.s, "
+        "_0136.s, _0137.s, _0164.s): each game's items carry their own hold effect (build_tables "
+        "looks theirs up here), and a game's script changes are rom_diff.toml entries"
     ),
     "tools.effect_map.HOLD_EFFECT_TO_ID": (
         "keyed by decomp hold effect id: engine semantics of the vanilla item code; each "

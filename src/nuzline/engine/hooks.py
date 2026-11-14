@@ -5,9 +5,10 @@
   (``subscript_hazards_check.s``; Stealth Rock is the only M1 hazard), and the
   controller then runs ``BattleSystem_TriggerEffectOnSwitch`` (battle_lib.c:3649,
   from ``BattleControllerPlayer_MoveEnd``, battle_controller_player.c:3973; at the
-  start of the battle from ``ShowBattleMon``, :256). Of its states M1 reaches
-  ``SWITCH_IN_CHECK_STATE_INTIMIDATE`` (:3795) and
-  ``SWITCH_IN_CHECK_STATE_HELD_ITEM_STATUS`` (:4151).
+  start of the battle from ``ShowBattleMon``, :256). Of its states the engine reaches
+  ``SWITCH_IN_CHECK_STATE_TRACE`` (:3718, ``trace``), ``_WEATHER_ABILITIES`` (:3740,
+  ``weather_ability``), ``_INTIMIDATE`` (:3795), ``_FORBIDDEN_STATUS`` (:4135) and
+  ``_HELD_ITEM_STATUS`` (:4151).
 * ``held_item_check`` / ``after_damage_items``: ``BattleSystem_TriggerHeldItem``
   (battle_lib.c:4576) and ``BattleSystem_TriggerHeldItemOnStatus`` (:4967), which
   are the same for every implemented item (HP berries, Berry Juice, the status berries,
@@ -56,7 +57,14 @@ Swim in ``order.py``; Sand Veil and Snow Cloak also in the end-of-turn weather c
 decomp ability id, with Air Lock) gates the weather modifiers of the damage formula, the
 accuracy check, Swift Swim, the end-of-turn chip and the sun's freeze immunity
 (``effects.can_have_status``: ``CheckIgnoreWeather``, subscript_freeze.s:6). Sturdy only blocks OHKO moves in Gen
-4, and none is in M1, so it has no hook.
+4, and none is in M1, so it has no hook. E2 batch 3: Technician, Thick Fat, Dry Skin, Solar
+Power, Reckless, Tinted Lens, Levitate and Scrappy in ``damage.py``; Shield Dust and the
+armors in ``effects.py``; Super Luck, Serene Grace, No Guard and Tangled Feet in
+``outcome.py``; Quick Feet and Truant in ``order.py`` / ``step.py``; Dry Skin's absorb and the
+weather abilities' turn-end HP in ``step.py``; Trace and the weather abilities here.
+Lightningrod redirects only to a battler other than the defender (battle_lib.c:1756-1772),
+which singles never has, and Honey Gather acts after the battle (battle_script.c:7825):
+neither has a hook.
 """
 
 from __future__ import annotations
@@ -64,8 +72,9 @@ from __future__ import annotations
 import jax.numpy as jnp
 
 from nuzline.data.tables import Tables
+from nuzline.engine.damage import ability_weather, trace_copy
 from nuzline.engine.effects import change_stage, stealth_rock_damage
-from nuzline.engine.ids import AbilityId, ItemId, Stat, Status
+from nuzline.engine.ids import AbilityId, ItemId, Stat, Status, Weather
 from nuzline.engine.order import pinch_divisor
 from nuzline.engine.state import STAGE_MAX, BattleState
 
@@ -76,6 +85,7 @@ SWITCH_IN, CONTACT_STATUS = "switch_in", "contact_status"
 SLEEP_BLOCKED, STATUS_CURE = "sleep_blocked", "status_cure"
 FLINCH_BLOCKED = "flinch_blocked"
 CONTACT_DAMAGE, PARALYSIS_BLOCKED = "contact_damage", "paralysis_blocked"
+WEATHER_SET, ABSORB, WEATHER_HP = "weather_set", "absorb", "weather_hp"
 # Ability -> the phases at which it shows a message tagging it, for the implemented
 # abilities that ever do:
 # * Mold Breaker: SWITCH_IN_CHECK_STATE_MOLD_BREAKER (battle_lib.c:4075), a living
@@ -105,8 +115,20 @@ CONTACT_DAMAGE, PARALYSIS_BLOCKED = "contact_damage", "paralysis_blocked"
 # * Inner Focus: a Fake Out flinch it blocks (``effects._flinch``): subscript_flinch_mon.s:18-23
 #   prints "won't flinch because of its {1}" with ``TAG_NICKNAME_ABILITY`` for
 #   ``MOVE_FAKE_OUT`` (or a direct flinch effect, which no supported move has).
+# * Drizzle, Sand Stream, Drought, Snow Warning: when the switch-in sets the weather
+#   (``weather_ability``): subscript_drizzle.s etc. print ``TAG_NICKNAME_ABILITY, BTLSCR_MSG_TEMP,
+#   BTLSCR_MSG_BATTLER_TEMP`` (the holder); the decomp skips the script when its permanent
+#   weather is up already, so nothing is shown then.
+# * Dry Skin: a Water move it absorbs (subscript_ability_restores_hp.s tags BTLSCR_DEFENDER
+#   either way, ``step._use_move``) and its turn-end HP change in sun or rain
+#   (subscript_weather_continues.s :_045, :_076 tag ``BTLSCR_MSG_BATTLER_TEMP``, the battler);
+#   Solar Power's turn-end loss in sun (:_057).
+# * Trace's own message names the copied ability through the target (``trace``).
 # The others never reveal: Intimidate's "cuts" message and Keen Eye's "prevents"
 # message are built in C (``BtlCmd_ChangeStatStage``, battle_script.c:2956, :2900);
+# Shield Dust blocks silently (an indirect side effect); Truant's "loafing around"
+# (subscript_loafing_around.s) tags only the nickname; the damage, accuracy, crit, speed and
+# chance abilities print nothing;
 # Blaze, Torrent, Overgrow, Rivalry, Guts, Simple, Unaware, Rock Head, Natural Cure,
 # Steadfast, Sturdy, Cloud Nine, Compoundeyes, Sand Veil, Snow Cloak, Swift Swim,
 # Adaptability and Solid Rock show no ability message in M1 (``ApplyTypeChart`` prints
@@ -122,6 +144,12 @@ REVEALS_ON: dict[int, frozenset[str]] = {
     AbilityId.LIMBER: frozenset({PARALYSIS_BLOCKED, STATUS_CURE}),
     AbilityId.SHED_SKIN: frozenset({STATUS_CURE}),
     AbilityId.INNER_FOCUS: frozenset({FLINCH_BLOCKED}),
+    AbilityId.DRIZZLE: frozenset({WEATHER_SET}),
+    AbilityId.SAND_STREAM: frozenset({WEATHER_SET}),
+    AbilityId.DROUGHT: frozenset({WEATHER_SET}),
+    AbilityId.SNOW_WARNING: frozenset({WEATHER_SET}),
+    AbilityId.DRY_SKIN: frozenset({ABSORB, WEATHER_HP}),
+    AbilityId.SOLAR_POWER: frozenset({WEATHER_HP}),
 }
 
 
@@ -134,6 +162,53 @@ def reveal_ability(state: BattleState, side, slot, phase: str, cond=True) -> Bat
     on = cond & (side == 0) & jnp.isin(state.ability[side, slot], abilities)
     known = jnp.where(on, 1, state.ai_ability_known[slot]).astype(state.ai_ability_known.dtype)
     return state._replace(ai_ability_known=state.ai_ability_known.at[slot].set(known))
+
+
+def _know(state: BattleState, side, slot, cond) -> BattleState:
+    """``ai_ability_known[slot] = 1`` where ``cond`` and ``side`` is the player: a script
+    wrote or tagged the battler's ability (``BattleAI_SetAbility``, battle_script.c:3074,
+    :3403, :11806), whatever the ability."""
+    on = jnp.asarray(cond) & (jnp.asarray(side, _I32) == 0)
+    known = jnp.where(on, 1, state.ai_ability_known[slot]).astype(state.ai_ability_known.dtype)
+    return state._replace(ai_ability_known=state.ai_ability_known.at[slot].set(known))
+
+
+def trace(
+    tables: Tables, state: BattleState, side, foe, cond=True
+) -> tuple[BattleState, jnp.ndarray]:
+    """``(state, traced)``: ``SWITCH_IN_CHECK_STATE_TRACE`` (battle_lib.c:3718-3737) for
+    ``side``'s active battler against ``foe``'s, where ``cond`` and ``damage.trace_copy``
+    passes: ``subscript_trace.s`` sets its ``BATTLEMON_ABILITY`` to the foe's (the battler's,
+    not the party's: ``BattleMon_CopyToParty`` writes an ability only for a form change,
+    battle_controller.c:1495-1500, so it ends when the battler leaves,
+    ``step._restore_ability``). The write is ``BattleAI_SetAbility`` of the tracer
+    (battle_script.c:3403) and the message tags the target's ability (``BTLSCR_MSG_DEFENDER``,
+    :11806): the AI knows both (``_know``). Abilities the engine does not model are refused by
+    coverage before they can be copied (the target holds them)."""
+    mon, target = state.active[side], state.active[foe]
+    traced = jnp.asarray(cond) & trace_copy(tables, state, side, foe)
+    new = jnp.where(traced, state.ability[foe, target], state.ability[side, mon])
+    state = state._replace(ability=state.ability.at[side, mon].set(new.astype(state.ability.dtype)))
+    state = _know(state, side, mon, traced)
+    return _know(state, foe, target, traced), traced
+
+
+def weather_ability(state: BattleState, side, cond=True) -> BattleState:
+    """``SWITCH_IN_CHECK_STATE_WEATHER_ABILITIES`` (battle_lib.c:3740-3790) for ``side``'s
+    active battler where ``cond`` (it has not announced: it entered, or it just traced): with
+    HP left and Drizzle, Sand Stream, Drought or Snow Warning (``Battler_Ability``), the weather
+    becomes that one, permanently (``weather_timer`` 0; subscript_drizzle.s etc.:
+    ``FIELD_CONDITION_WEATHER`` off, then the ``*_PERM`` bit), unless that permanent weather is
+    up already (no script then, the field is the same). Cloud Nine does not stop it."""
+    mon = state.active[side]
+    weather = ability_weather(state.ability[side, mon])
+    on = jnp.asarray(cond) & (weather != Weather.NONE) & (state.hp[side, mon] > 0)
+    already = (state.weather == weather) & (state.weather_timer == 0)
+    state = reveal_ability(state, side, mon, WEATHER_SET, on & ~already)
+    return state._replace(
+        weather=jnp.where(on, weather, state.weather).astype(state.weather.dtype),
+        weather_timer=jnp.where(on, 0, state.weather_timer).astype(state.weather_timer.dtype),
+    )
 
 
 def recover_status_by_ability(state: BattleState, side, cond=True) -> BattleState:
@@ -366,12 +441,13 @@ def pluck_berry(
     return state, on & ~healed & ~cured & ~raised
 
 
-def intimidate(state: BattleState, side, cond=True) -> BattleState:
+def intimidate(state: BattleState, side, cond=True, foe=None) -> BattleState:
     """Where ``cond``, ``side``'s active Pokemon, alive with Intimidate, lowers the living
-    foe's Attack by 1 (clamped at -6). ``on_switch_in`` runs it for a newcomer;
+    ``foe``'s Attack by 1 (clamped at -6; by default the other side). ``on_switch_in`` runs it
+    for a newcomer and for a battler that just traced Intimidate;
     ``playout.replacement_pass`` runs it again for a player newcomer that entered while the
     opponent's active was down (its Intimidate is still unannounced, battle_lib.c:3795)."""
-    foe = 1 - side
+    foe = 1 - side if foe is None else foe
     mon, target = state.active[side], state.active[foe]
     on = (
         jnp.asarray(cond)
@@ -383,16 +459,31 @@ def intimidate(state: BattleState, side, cond=True) -> BattleState:
 
 
 def on_switch_in(tables: Tables, state: BattleState, side) -> BattleState:
-    """``side``'s active Pokemon has just entered: Stealth Rock, Intimidate, a living
-    newcomer's switch-in announcement (``reveal_ability``, ``SWITCH_IN``), the
-    forbidden-status check (``recover_status_by_ability``, battle_lib.c:4135), then the
-    held-item check of both active Pokemon (``SWITCH_IN_CHECK_STATE_HELD_ITEM_STATUS``
-    loops over every battler)."""
+    """``side``'s active Pokemon has just entered: Stealth Rock, then the switch-in checks
+    in their state order (``BattleSystem_TriggerEffectOnSwitch``): Trace (``trace``) for the
+    newcomer and for the other battler, whose Trace stayed armed while its foe was down (a
+    double KO's replacements: the player's newcomer enters first, ``playout``); the weather
+    abilities (``weather_ability``) and Intimidate of the newcomer and of a battler that just
+    traced one; a living newcomer's switch-in announcement (``reveal_ability``,
+    ``SWITCH_IN``) and a traced Mold Breaker's; the forbidden-status check
+    (``recover_status_by_ability``, battle_lib.c:4135); then the held-item check of both
+    active Pokemon (``SWITCH_IN_CHECK_STATE_HELD_ITEM_STATUS`` loops over every battler). Each
+    state loops over ``monSpeedOrder``; in singles the order changes nothing here: two Trace
+    holders cannot copy each other, a traced ability is the other battler's own, and coverage
+    refuses two different weather abilities on the two sides (``coverage.weather_war``)."""
     side = jnp.asarray(side, _I32)
+    foe = 1 - side  # the entry point: the battler facing the newcomer in singles
     state = stealth_rock_damage(tables, state, side)
-    state = intimidate(state, side)
-    mon = state.active[side]
+    state, _ = trace(tables, state, side, foe)
+    state, traced = trace(tables, state, foe, side)
+    state = weather_ability(state, side)
+    state = weather_ability(state, foe, traced)
+    state = intimidate(state, side, foe=foe)
+    state = intimidate(state, foe, traced, foe=side)
+    mon, other = state.active[side], state.active[foe]
     state = reveal_ability(state, side, mon, SWITCH_IN, state.hp[side, mon] > 0)
+    state = reveal_ability(state, foe, other, SWITCH_IN, traced)
     state = recover_status_by_ability(state, side)
+    state = recover_status_by_ability(state, foe, traced)
     state = after_damage_items(tables, state, side)
-    return after_damage_items(tables, state, 1 - side)
+    return after_damage_items(tables, state, foe)

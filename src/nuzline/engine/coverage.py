@@ -37,10 +37,9 @@ items) and plan 1b (Task 2b: trainer items; Task 3: Roark's AI flags) implement:
   branch (Attract, Cute Charm) and the infatuation cures (Oblivious, Mental Herb) and Destiny
   Knot: Oblivious, Mental Herb and Destiny Knot are unsupported, so a holder on either side
   is refused (pool and prep too). Reflect and Light Screen are modelled
-  (``EffectId.REFLECT``, ``EffectId.LIGHT_SCREEN``, ``effects._screen``). Moves the
-  tables map to ``UNSUPPORTED`` include every move that sets weather, Tailwind or Trick
-  Room: the engines' ``CheckFieldConditions`` pass (``step.field_conditions``) counts
-  weather down, but those moves are not modelled yet (plan ruling);
+  (``EffectId.REFLECT``, ``EffectId.LIGHT_SCREEN``, ``effects._screen``), and so are the
+  four weather moves (``EffectId.WEATHER``, ``effects._weather``). Moves the tables map to
+  ``UNSUPPORTED`` include Tailwind and Trick Room;
 * abilities, held items, trainer items: every member but ``UNSUPPORTED``. Held items are
   mapped by name or by decomp hold effect (``tools.effect_map.held_item_ids``), so an item with
   no hold effect is ``ItemId.NONE`` (or ``NO_EFFECT_BERRY``) and supported;
@@ -51,11 +50,29 @@ items) and plan 1b (Task 2b: trainer items; Task 3: Roark's AI flags) implement:
   Ruling R2), so a Kaizo trainer needs only every set flag implemented. The Kaizo layout's ability
   guess is one coin per guessing read, as the decomp draws it (E1 Ruling R1,
   docs/ai/kaizo_roark.md 8.4), so it needs no per-trainer check;
-* weather: ``Weather.NONE`` and ``Weather.SANDSTORM``. Sandstorm's every effect on the
-  implemented set is modelled: the Rock-type SpD boost (``damage.py``), the end-of-turn
-  chip (``step.field_conditions``), Sand Veil's accuracy (``outcome.hit_threshold``), all
-  gated on Cloud Nine / Air Lock (``damage.weather_suppressed``). Rain, sun, hail and fog
-  are refused until every weather effect they touch is modelled (plan ruling);
+* weather: ``Weather.NONE``, ``SANDSTORM``, ``SUN``, ``RAIN`` and ``HAIL`` (E2 batch 3). Every
+  effect of each on the implemented set is modelled, all gated on Cloud Nine / Air Lock
+  (``damage.weather_suppressed``): the damage modifiers (rain and sun on Fire / Water, the
+  sandstorm Rock-type SpD boost, Solar Power), the accuracy abilities (Sand Veil, Snow Cloak),
+  Swift Swim, the sun's freeze immunity (``effects.can_have_status``), the end-of-turn chip
+  and the weather abilities' HP (``step._weather_effect``: sand and hail, Ice Body, Dry Skin,
+  Solar Power), the status orbs' Leaf Guard test, the weather moves with their rocks and the
+  switch-in weather abilities (Drizzle, Sand Stream, Drought, Snow Warning). The other
+  decomp readers of a weather belong to unsupported moves (Thunder, Blizzard, SolarBeam,
+  Weather Ball, Moonlight, Kaizo's Hurricane) or abilities (Chlorophyll, Leaf Guard, Rain
+  Dish, Hydration, Forecast, Flower Gift), so they are refused with their holder. Deep fog
+  stays refused (``Weather.FOG``);
+* two weather abilities that set different weathers, one in each party
+  (``weather_war_line``): ``SWITCH_IN_CHECK_STATE_WEATHER_ABILITIES`` runs over
+  ``monSpeedOrder`` (battle_lib.c:3740-3790), so when both enter together (the battle start,
+  a double KO's replacements) the slower one's weather stays, and the order of an exact speed
+  tie is a ``RandNext() & 1`` (battle_lib.c:1445) the engine does not draw there; refused
+  (ruling B3-15);
+* Trace in both parties (``trace_standoff_line``): a Trace holder cannot copy Trace
+  (``ChooseTraceTarget``, battle_lib.c:7750-7775), so it stays armed and copies the next
+  Pokemon the other side sends in at that switch, in the middle of a turn whose chance laws
+  (``enumerate``, ``outcome.sample_outcome``) read the holder's ability at the turn start;
+  refused (ruling B3-14);
 * in-battle form changes (plan K2a Ruling 8), on either side: Giratina-Origin without the
   Griseous Orb reverts to Altered Forme at battle start (``battle_lib.c:6412-6417``,
   ``subscript_form_change``) and Shaymin-Sky reverts to Land Forme when frozen
@@ -127,6 +144,7 @@ from nuzline.engine.damage import PHYSICAL
 from nuzline.engine.ids import (
     TERRAIN_MOVES,
     TERRAIN_SPECIAL,
+    WEATHER_ABILITIES,
     AbilityId,
     EffectId,
     ItemId,
@@ -209,10 +227,10 @@ IMPLEMENTED_AI_FLAGS: dict[str, dict[int, Support]] = {
 POLICY_AI_FLAGS = {"vanilla": 0b111}
 IMPLEMENTED_WEATHER: dict[Weather, Support] = {
     Weather.NONE: Support.EXACT,
-    Weather.SUN: Support.NONE,
-    Weather.RAIN: Support.NONE,
+    Weather.SUN: Support.EXACT,
+    Weather.RAIN: Support.EXACT,
     Weather.SANDSTORM: Support.EXACT,
-    Weather.HAIL: Support.NONE,
+    Weather.HAIL: Support.EXACT,
     Weather.FOG: Support.NONE,
 }
 # Trainer.format (trainers.json: TrainerHeader.battleType, then the field scripts).
@@ -579,6 +597,49 @@ def exp_refusals(
     return out
 
 
+def _party_abilities(tables: Tables, party: Sequence[PokemonSpec]) -> set[int]:
+    """The ``AbilityId`` of every Pokemon of ``party`` (its personal row and ability slot)."""
+    abilities = np.asarray(tables.species_abilities)
+    return {
+        int(abilities[personal_row(tables, m.species, m.form), m.ability_slot])
+        for m in party
+        if m.species
+    }
+
+
+def weather_war_line(
+    tables: Tables, player: Sequence[PokemonSpec], opp: Sequence[PokemonSpec]
+) -> str | None:
+    """Why the two parties' weather abilities cannot be ordered (``coverage`` docstring,
+    ruling B3-15): one side's sets a weather the other side's does not, else None. A Trace
+    holder copies its foe's ability, which is in the other party already."""
+    mine = {
+        WEATHER_ABILITIES[a] for a in _party_abilities(tables, player) if a in WEATHER_ABILITIES
+    }
+    theirs = {WEATHER_ABILITIES[a] for a in _party_abilities(tables, opp) if a in WEATHER_ABILITIES}
+    if any(a != b for a in mine for b in theirs):
+        names = sorted(w.name.title() for w in mine | theirs)
+        return (
+            f"weather abilities of both sides set different weathers ({', '.join(names)}): "
+            "entering together, the slower one's stays, by an order the engine does not draw"
+        )
+    return None
+
+
+def trace_standoff_line(
+    tables: Tables, player: Sequence[PokemonSpec], opp: Sequence[PokemonSpec]
+) -> str | None:
+    """Why Trace on both sides is refused (``coverage`` docstring, ruling B3-14), else None."""
+    if AbilityId.TRACE in _party_abilities(tables, player) and AbilityId.TRACE in (
+        _party_abilities(tables, opp)
+    ):
+        return (
+            "Trace on both sides: a Trace facing Trace copies the next Pokemon sent in, in the "
+            "middle of a turn (battle_lib.c:3718-3737)"
+        )
+    return None
+
+
 def _check_party(
     c: _Collector,
     tables: Tables,
@@ -904,6 +965,9 @@ def check_coverage(
 
     c = _Collector()
     _check_party(c, tables, names, "Player", player)
+    for line in (weather_war_line(tables, player, opp), trace_standoff_line(tables, player, opp)):
+        if line is not None:
+            c.add(Support.NONE, f"{display_name(trainer)}: {line}", "ability")
     learnable = [learnable_moves(tables, mon, opp) for mon in player]
     extra = sorted({m for moves in learnable for m in moves})
     theirs = check_opponent(tables, names, trainer, opp, start_condition, player, extra)

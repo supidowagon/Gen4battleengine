@@ -41,8 +41,9 @@ Status families reviewed against their decomp subscripts
 the only type checks there are the target-type immunities poison vs
 Poison/Steel, burn vs Fire and freeze vs Ice (and no freezing in sun), which
 ``engine/effects.py`` applies. Paralysis and sleep have none in Gen 4. Their ability immunities
-are Insomnia and Limber (implemented in ``engine/effects.py``) and Vital Spirit, Immunity,
-Water Veil, Magma Armor, Leaf Guard and Shield Dust (``AbilityId.UNSUPPORTED``), and
+are Insomnia and Limber (implemented in ``engine/effects.py``), Shield Dust against a
+damaging move's secondary status (``effects._inflict``), and Vital Spirit, Immunity, Water
+Veil, Magma Armor and Leaf Guard (``AbilityId.UNSUPPORTED``), and
 Safeguard, Substitute and Uproar are unsupported moves, so none of those branches can be
 reached silently.
 """
@@ -58,6 +59,7 @@ from nuzline.engine.ids import (
     Status,
     TrainerItemId,
     Type,
+    Weather,
 )
 
 _E = EffectId
@@ -232,6 +234,15 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     # -> BtlCmd_TryWhirlwind (battle_script.c:5241-5320), BattleSystem_CanWhirlwind
     # (battle_lib.c:3072-3086) (engine/step.py ``_use_move``; Outcome.roar_level, roar_target).
     28: ("BATTLE_EFFECT_FORCE_SWITCH", _E.ROAR, (0, 0, 0)),
+    # Sandstorm, Rain Dance, Sunny Day, Hail: (Weather, blocked by the permanent weather too,
+    # 0). effect_script_0115.s, _0136.s, _0137.s fail on FIELD_CONDITION_SANDSTORM / _RAINING /
+    # _SUNNY (temporary or permanent, include/constants/battle/condition.h:127-130);
+    # effect_script_0164.s fails only on FIELD_CONDITION_HAILING_TEMP, so Hail replaces a
+    # permanent hail with a 5-turn one (engine/effects.py ``_weather``).
+    115: ("BATTLE_EFFECT_WEATHER_SANDSTORM", _E.WEATHER, (Weather.SANDSTORM, 1, 0)),
+    136: ("BATTLE_EFFECT_WEATHER_RAIN", _E.WEATHER, (Weather.RAIN, 1, 0)),
+    137: ("BATTLE_EFFECT_WEATHER_SUN", _E.WEATHER, (Weather.SUN, 1, 0)),
+    164: ("BATTLE_EFFECT_WEATHER_HAIL", _E.WEATHER, (Weather.HAIL, 0, 0)),
 }
 
 DECOMP_EFFECT_NAMES: dict[int, str] = {k: v[0] for k, v in _EFFECTS.items()}
@@ -295,6 +306,31 @@ DECOMP_ABILITY_TO_ID: dict[str, AbilityId] = {
     # Halves the pinch berries' and Custap Berry's param (battle_lib.c:4774-4776, :1289-1291):
     # the only decomp reads of ABILITY_GLUTTONY.
     "Gluttony": AbilityId.GLUTTONY,
+    # E2 batch 3 (engine/ids.py AbilityId, rulings B3-n).
+    "Reckless": AbilityId.RECKLESS,
+    "Technician": AbilityId.TECHNICIAN,
+    "Truant": AbilityId.TRUANT,
+    "Dry Skin": AbilityId.DRY_SKIN,
+    "Lightningrod": AbilityId.LIGHTNINGROD,
+    "No Guard": AbilityId.NO_GUARD,
+    "Serene Grace": AbilityId.SERENE_GRACE,
+    "Drought": AbilityId.DROUGHT,
+    "Honey Gather": AbilityId.HONEY_GATHER,
+    "Levitate": AbilityId.LEVITATE,
+    "Quick Feet": AbilityId.QUICK_FEET,
+    "Scrappy": AbilityId.SCRAPPY,
+    "Shell Armor": AbilityId.SHELL_ARMOR,
+    "Battle Armor": AbilityId.BATTLE_ARMOR,
+    "Shield Dust": AbilityId.SHIELD_DUST,
+    "Solar Power": AbilityId.SOLAR_POWER,
+    "Super Luck": AbilityId.SUPER_LUCK,
+    "Tangled Feet": AbilityId.TANGLED_FEET,
+    "Thick Fat": AbilityId.THICK_FAT,
+    "Tinted Lens": AbilityId.TINTED_LENS,
+    "Trace": AbilityId.TRACE,
+    "Drizzle": AbilityId.DRIZZLE,
+    "Sand Stream": AbilityId.SAND_STREAM,
+    "Snow Warning": AbilityId.SNOW_WARNING,
 }
 
 DECOMP_ITEM_TO_ID: dict[str, ItemId] = {
@@ -452,6 +488,19 @@ HOLD_EFFECT_TO_ID: dict[int, tuple[str, ItemId]] = {
     109: ("HOLD_EFFECT_HP_RESTORE_PSN_TYPE", ItemId.BLACK_SLUDGE),
     116: ("HOLD_EFFECT_DMG_USER_CONTACT_XFR", ItemId.STICKY_BARB),
 }
+
+# The weather rocks (effect_script_0115.s, _0136.s, _0137.s, _0164.s: the attacker's
+# HOLD_EFFECT_EXTEND_* adds its param to BTLVAR_WEATHER_TURNS): decomp hold effect -> (name, the
+# Weather its move must set). build_tables fills a WEATHER_ROCK item's item_param[i, 1] from here.
+WEATHER_ROCK_HOLD_EFFECTS: dict[int, tuple[str, int]] = {
+    110: ("HOLD_EFFECT_EXTEND_HAIL", Weather.HAIL),
+    111: ("HOLD_EFFECT_EXTEND_SANDSTORM", Weather.SANDSTORM),
+    112: ("HOLD_EFFECT_EXTEND_SUN", Weather.SUN),
+    113: ("HOLD_EFFECT_EXTEND_RAIN", Weather.RAIN),
+}
+HOLD_EFFECT_TO_ID.update(
+    {h: (name, ItemId.WEATHER_ROCK) for h, (name, _) in WEATHER_ROCK_HOLD_EFFECTS.items()}
+)
 
 # HOLD_EFFECT_NONE. An item without a hold effect is NONE (no implemented path reads it by
 # id), except a berry: Item_IsBerry (src/item.c:357-365) reads sBerryItemIDs, the items

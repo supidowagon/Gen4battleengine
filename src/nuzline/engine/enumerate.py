@@ -197,6 +197,7 @@ from nuzline.engine.ids import (
     Stat,
     Status,
     Type,
+    Weather,
 )
 from nuzline.engine.order import (
     MOVE_ACTIONS,
@@ -206,6 +207,7 @@ from nuzline.engine.order import (
     is_item,
     is_switch,
     selected_move,
+    truant_loafs,
 )
 from nuzline.engine.outcome import (
     MAX_HITS,
@@ -214,11 +216,13 @@ from nuzline.engine.outcome import (
     PROTECT_RATES,
     ROAR_LEVEL_VALUES,
     Outcome,
+    armored,
     crit_odds,
     empty_outcome,
     hit_thresholds,
     roar_inputs,
     roar_levels,
+    secondary_chance,
 )
 from nuzline.engine.outcome import (
     kings_rock_chance as outcome_kings_rock_chance,
@@ -345,7 +349,15 @@ def _holds_item(tables: Tables, state: BattleState, actions, items) -> jnp.ndarr
 
 
 def _end_speeds(
-    tables: Tables, state: BattleState, actions, side, stage_free, para_free, dragged, lock_free
+    tables: Tables,
+    state: BattleState,
+    actions,
+    side,
+    stage_free,
+    para_free,
+    dragged,
+    lock_free,
+    weather_free=False,
 ):
     """``(int32[3 * (27 + 4 * SLOTS)], bool[...])``: the effective speeds ``side`` can have
     after the actions (``step.end_of_turn_order`` on the post-action state, step.py:1251-1261)
@@ -362,13 +374,25 @@ def _end_speeds(
     turn, so the lock of the turn's end can differ from the one of the turn start, which
     the plain grid point reads from the other side's turn-start battler).
     ``BattleSystem_CompareBattlerSpeed`` doubles Swift Swim in rain only
-    ``if (NO_CLOUD_NINE)`` (battle_lib.c:1228-1237; include/battle/common.h:63-64)."""
+    ``if (NO_CLOUD_NINE)`` (battle_lib.c:1228-1237; include/battle/common.h:63-64). Where
+    ``weather_free`` (a weather move, a switch-in weather ability or a drag can change the
+    weather this turn), each grid point is also taken in rain without the lock and with no
+    rain (the lock-on point's speed).
+
+    Quick Feet (:1257-1261) reads any status: for a holder the grid's paralyzed points stand
+    for every status (x15/10, no quartering), and the caller frees them
+    (``para_free``)."""
     switching = is_switch(actions[side])
     mon = jnp.where(switching, actions[side] - MOVE_ACTIONS, state.active[side]).astype(
         state.active.dtype
     )
     stage0 = jnp.where(switching, 0, state.stages[side, Stat.SPE].astype(_I32))
-    para0 = state.status[side, mon] == Status.PARALYSIS
+    quick_feet = state.ability[side, mon] == AbilityId.QUICK_FEET
+    para0 = jnp.where(
+        quick_feet,
+        state.status[side, mon] != Status.NONE,
+        state.status[side, mon] == Status.PARALYSIS,
+    )
     stages = jnp.repeat(jnp.arange(STAGE_MIN, STAGE_MAX + 1, dtype=_I32), 2)
     paras = jnp.tile(jnp.array([False, True]), STAGE_MAX - STAGE_MIN + 1)
     stages = jnp.concatenate([stages, jnp.zeros((1,), _I32)])
@@ -397,12 +421,20 @@ def _end_speeds(
             jnp.asarray(dragged) & jnp.repeat(living & salac, 2),
         ]
     )
-    # The weather lock: 0 = as on the field of the grid point, 1 = on, 2 = off.
+    # The weather lock: 0 = as on the field of the grid point, 1 = on, 2 = off, 3 = off in rain.
     n = stages.shape[0]
-    locks = jnp.repeat(jnp.arange(3), n)
-    mons, stages, paras = jnp.tile(mons, 3), jnp.tile(stages, 3), jnp.tile(paras, 3)
+    locks = jnp.repeat(jnp.arange(4), n)
+    mons, stages, paras = jnp.tile(mons, 4), jnp.tile(stages, 4), jnp.tile(paras, 4)
     lock_free = jnp.asarray(lock_free, bool)
-    possible = jnp.concatenate([possible, possible & lock_free, possible & lock_free])
+    weather_free = jnp.asarray(weather_free, bool)
+    possible = jnp.concatenate(
+        [
+            possible,
+            possible & (lock_free | weather_free),
+            possible & lock_free,
+            possible & weather_free,
+        ]
+    )
 
     def speed(mon, stage, para, lock):
         s = state._replace(
@@ -413,7 +445,8 @@ def _end_speeds(
             ),
         )
         suppressed = jnp.where(lock == 0, weather_suppressed(tables, s), lock == 1)
-        return effective_speed(tables, s, side, suppressed)
+        weather = jnp.where(lock == 3, Weather.RAIN, s.weather).astype(s.weather.dtype)
+        return effective_speed(tables, s, side, suppressed, weather)
 
     return jax.vmap(speed)(mons, stages, paras, locks), possible
 
@@ -550,6 +583,9 @@ INPUT_CLAUSE_EFFECTS = (
     # the defending one of the side's later hit: the pluck clause. Taking any other berry
     # changes no input of the side's hit, and only removes a later cure.
     _E.EAT_BERRY,
+    # The weather (rain / sun on Fire and Water, the sandstorm Sp. Def boost, Solar Power):
+    # the weather clause.
+    _E.WEATHER,
 )
 INPUT_NEUTRAL_ABILITIES = (
     AbilityId.NONE,
@@ -578,6 +614,30 @@ INPUT_NEUTRAL_ABILITIES = (
     AbilityId.CUTE_CHARM,
     # Halves a pinch berry's param: the berry's trigger is its own item clause.
     AbilityId.GLUTTONY,
+    # Fixed damage factors of the hit's own battlers, moves and types (damage._pre_random,
+    # _finish); Solar Power reads the weather, whose changes have their clauses (the weather
+    # clause, the switch clause).
+    AbilityId.TECHNICIAN,
+    AbilityId.RECKLESS,
+    AbilityId.THICK_FAT,
+    AbilityId.DRY_SKIN,  # its Fire factor; its Water absorb removes the hit
+    AbilityId.SOLAR_POWER,
+    AbilityId.TINTED_LENS,
+    AbilityId.LEVITATE,
+    AbilityId.SCRAPPY,
+    # The crit odds and blocks, accuracy, speed, secondary chance and secondary blocks: no
+    # damage input; a crit is the hit's own draw.
+    AbilityId.SUPER_LUCK,
+    AbilityId.SHELL_ARMOR,
+    AbilityId.BATTLE_ARMOR,
+    AbilityId.NO_GUARD,
+    AbilityId.TANGLED_FEET,
+    AbilityId.QUICK_FEET,
+    AbilityId.SERENE_GRACE,
+    AbilityId.SHIELD_DUST,
+    AbilityId.TRUANT,  # removes its holder's hit
+    AbilityId.LIGHTNINGROD,  # no effect in singles
+    AbilityId.HONEY_GATHER,  # after the battle
 )
 INPUT_CLAUSE_ABILITIES = (
     AbilityId.GUTS,  # status clause
@@ -589,6 +649,12 @@ INPUT_CLAUSE_ABILITIES = (
     AbilityId.POISON_POINT,
     AbilityId.ROUGH_SKIN,  # the attacker's HP: HP clause
     AbilityId.INTIMIDATE,  # on switch-in: switch clause
+    # On switch-in (the switch clause): the weather, or the copied ability.
+    AbilityId.TRACE,
+    AbilityId.DRIZZLE,
+    AbilityId.SAND_STREAM,
+    AbilityId.DROUGHT,
+    AbilityId.SNOW_WARNING,
 )
 INPUT_NEUTRAL_ITEMS = (
     ItemId.NONE,
@@ -648,6 +714,8 @@ INPUT_NEUTRAL_ITEMS = (
     ItemId.KINGS_ROCK,
     # Only the screen's duration (effects._screen); the screen itself is its move's clause.
     ItemId.LIGHT_CLAY,
+    # Only the weather's duration (effects._weather); the weather is its move's clause.
+    ItemId.WEATHER_ROCK,
 )
 INPUT_CLAUSE_ITEMS = (
     ItemId.ORAN_BERRY,  # the attacker's HP: HP clause
@@ -732,6 +800,7 @@ NON_TABLE_DAMAGE_EFFECTS = (
     _E.ATTRACT,  # a status move: no damage
     _E.CAMOUFLAGE,  # a status move: no damage
     _E.ROAR,  # a status move: no damage
+    _E.WEATHER,  # a status move: no damage
     # Its table power is 0: its damage is the called move's. outcome_laws reads the called
     # move (order.called_move), whose own effect decides (Tri Attack's is a table hit), so
     # this entry only keeps an unresolved Nature Power (unknown terrain) uncompressed.
@@ -750,6 +819,8 @@ def damage_inputs_can_change(tables: Tables, state: BattleState, actions, foe_fi
 
     * **switch / item**: the foe switches (a new target, Intimidate, entry hazards,
       weather abilities) or uses a trainer item, before the side's move;
+    * **weather**: an earlier foe weather move (``EffectId.WEATHER``) changes the weather
+      every hit reads (the switch clause covers the weather abilities and Trace);
     * **foe move**: an earlier foe move with an unclassified effect (not in
       ``INPUT_NEUTRAL_EFFECTS`` / ``INPUT_CLAUSE_EFFECTS``), or one that changes: the
       side's attacking stat stage (``STAT_FOE``), the foe's defending stage
@@ -842,6 +913,7 @@ def damage_inputs_can_change(tables: Tables, state: BattleState, actions, foe_fi
         | ((foe_effect == _E.WATER_SPORT) & (move_type == Type.FIRE))
         | (foe_effect == _E.CAMOUFLAGE)
         | (foe_effect == _E.ROAR)
+        | (foe_effect == _E.WEATHER)
         | ((foe_effect == _E.EAT_BERRY) & pinch & (pinch_stat == defense_stat))
         | hp_sensitive
     )
@@ -1099,6 +1171,8 @@ def outcome_laws(
         | (uses_move & damaging & contact & static[::-1])
         | lum
         | plucks
+        # Quick Feet reads any status (order.effective_speed): free for a holder.
+        | _holds(state, actions, (AbilityId.QUICK_FEET,))
     )
     # Roar / Whirlwind (step._use_move): BtlCmd_TryWhirlwind draws nothing with no eligible
     # bench Pokemon, BattleSystem_CanWhirlwind nothing for a user of at least the target's
@@ -1129,6 +1203,24 @@ def outcome_laws(
         abilities == WEATHER_ABILITY_IDS["Air Lock"]
     )
     lock_free = jnp.any(lock_holder & (state.species != 0) & (state.hp > 0))
+    # The weather can change before the turn's end: a weather move (effects._weather), or a
+    # newcomer with a weather ability or Trace (which can copy one; hooks.on_switch_in): the one
+    # a side switches in, or any living Pokemon of a side a foe's Roar can drag.
+    setters = (
+        AbilityId.DRIZZLE,
+        AbilityId.SAND_STREAM,
+        AbilityId.DROUGHT,
+        AbilityId.SNOW_WARNING,
+        AbilityId.TRACE,
+    )
+    incoming = jnp.clip(actions - MOVE_ACTIONS, 0, state.ability.shape[1] - 1)
+    switch_setter = switch & _any_of(state.ability[sides, incoming], setters)
+    alive_setter = jnp.any(
+        _any_of(state.ability, setters) & (state.species != 0) & (state.hp > 0), axis=1
+    )
+    weather_free = live & jnp.any(
+        (uses_move & (effect == _E.WEATHER)) | switch_setter | (dragged & alive_setter)
+    )
     speeds = [
         _end_speeds(
             tables,
@@ -1139,6 +1231,7 @@ def outcome_laws(
             para_free[side],
             dragged[side],
             lock_free,
+            weather_free,
         )
         for side in (0, 1)
     ]
@@ -1146,6 +1239,13 @@ def outcome_laws(
     end_speed_tie = live & jnp.any(
         ok0[:, None] & ok1[None, :] & (speed0[:, None] == speed1[None, :])
     )
+    # A Trace holder on the field at the turn's end (the active or incoming one, or one a drag
+    # brings in) may have copied a speed ability (Swift Swim, Quick Feet) the grid does not
+    # follow, or Shed Skin: both reads are kept (over-approximate).
+    living_now = (state.species != 0) & (state.hp > 0)
+    trace_party = jnp.any(living_now & (state.ability == AbilityId.TRACE), axis=1)
+    tracer = _holds(state, actions, (AbilityId.TRACE,)) | (dragged & trace_party)
+    end_speed_tie = end_speed_tie | (live & jnp.any(tracer))
     if loose:
         # The brute force: the end-of-turn tie roll whenever the battle goes on, with no
         # speed gate (one binary element: at most x2).
@@ -1154,7 +1254,9 @@ def outcome_laws(
     # any living one a foe's Roar can drag in.
     living = (state.species != 0) & (state.hp > 0)
     shed_party = jnp.any(living & (state.ability == AbilityId.SHED_SKIN), axis=1)
-    shed_skin = live & (_holds(state, actions, (AbilityId.SHED_SKIN,)) | (dragged & shed_party))
+    shed_skin = live & (
+        _holds(state, actions, (AbilityId.SHED_SKIN,)) | (dragged & shed_party) | tracer
+    )
     if loose:
         shed_skin = shed_skin | (live & jnp.any(roar) & jnp.any(shed_party))
 
@@ -1211,8 +1313,10 @@ def outcome_laws(
     # Focus as the attacker sees it (effects._flinch, effects._fang). Fake Out also needs its
     # first turn (effect_script_0158.s). Thunder Fang's roll is fang_flinch (``Reads.fang``).
     clean = ~_any_of(status, (Status.SLEEP, Status.FREEZE, Status.PARALYSIS))
+    loafing = jnp.stack([truant_loafs(state, side) for side in (0, 1)])
     reach = (
         uses_move
+        & ~loafing  # CHECK_STATUS_STATE_TRUANT
         & (state.hp[sides, mons] > 0)
         & clean
         & (state.confusion == 0)
@@ -1228,11 +1332,17 @@ def outcome_laws(
         state.fake_out_turn.astype(_I32) == state.turn.astype(_I32)
     )
     fang = effect == _E.FANG_PARALYZE_FLINCH
+    # Dry Skin takes a Water move whole (step._use_move: no hit, no flinch).
+    absorbs = (ignorable == AbilityId.DRY_SKIN) & (
+        jnp.stack([move_type_of(tables, state, side, moves[side]) for side in (0, 1)]) == Type.WATER
+    )
     flinch_sure = (
         ((effect == _E.FLINCH) | fake_out_ok | fang)
         & reach
         & deals
         & (ignorable != AbilityId.INNER_FOCUS)
+        & (ignorable != AbilityId.SHIELD_DUST)  # effects._shield_dust
+        & ~absorbs
         & foe_moves
         & (chance != 0)
         & single
@@ -1295,8 +1405,9 @@ def outcome_laws(
         hit_thresholds=thresholds,
         hit_possible=possible,
         crit_odds=crit_odds(tables, state, actions),
-        no_crit=state.lucky_chant[::-1] != 0,
-        secondary_chance=chance,
+        # Lucky Chant, or the target's Battle Armor / Shell Armor (outcome.armored).
+        no_crit=(state.lucky_chant[::-1] != 0) | armored(state, actions),
+        secondary_chance=secondary_chance(tables, state, moves),
         duration_kind=kind.astype(_I32),
         relevant=relevant,
         branch_relevant=per_branch,

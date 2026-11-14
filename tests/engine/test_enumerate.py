@@ -377,16 +377,30 @@ def decomp_law(tables, state, actions, name: str, index: tuple) -> dict[int, Fra
         return {(min(us) if any(key) else 0): Fraction(len(us), 100) for key, us in groups.items()}
     if name == "crit":
         lucky = int(state.lucky_chant[1 - side]) != 0
+        # battle_lib.c:7135-7136: the target's Battle Armor / Shell Armor
+        # (Battler_IgnorableAbility): the foe's active Pokemon, or the one it switches in.
+        foe = 1 - side
+        mon = int(actions[foe]) - 4 if 4 <= int(actions[foe]) < 10 else int(state.active[foe])
+        mold = int(state.ability[side, int(state.active[side])]) == AbilityId.MOLD_BREAKER
+        armor = not mold and int(state.ability[foe, mon]) in (
+            AbilityId.SHELL_ARMOR,
+            AbilityId.BATTLE_ARMOR,
+        )
         return coin(
-            Fraction(0) if lucky else Fraction(1, int(crit_odds(tables, state, actions)[side]))
+            Fraction(0)
+            if lucky or armor
+            else Fraction(1, int(crit_odds(tables, state, actions)[side]))
         )
     if name == "roll":
         return {r: Fraction(1, 16) for r in range(16)}
+    # Serene Grace doubles effectChance (battle_lib.c:1552-1556, :1571-1575; battle_script.c:
+    # 8369-8373), then RandNext() % 100 < chance.
+    grace = int(state.ability[side, int(state.active[side])]) == AbilityId.SERENE_GRACE
+    chance = int(tables.move_effect_chance[move]) * (2 if grace else 1)
     if name == "secondary":
-        chance = int(tables.move_effect_chance[move])
-        return coin(Fraction(1) if chance == 0 else Fraction(chance, 100))
+        return coin(Fraction(1) if chance == 0 else Fraction(min(chance, 100), 100))
     if name == "fang_flinch":  # the second CheckEffectActivation (battle_script.c:8377)
-        return coin(Fraction(int(tables.move_effect_chance[move]), 100))
+        return coin(Fraction(min(chance, 100), 100))
     if name == "contact_proc":
         return coin(Fraction(3, 10))
     if name == "present":  # BtlCmd_Present (battle_script.c:5793-5803): RandNext() & 0xFF

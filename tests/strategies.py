@@ -85,6 +85,30 @@ M1_SPECIES = (
     "Glameow",
     "Eevee",
     "Camerupt",
+    # E2 batch 3: a holder of each batch-3 ability (the other slot empty, unsupported or
+    # supported), weather setters and Trace holders included.
+    "Meowth",
+    "Hitmonlee",
+    "Slakoth",
+    "Croagunk",
+    "Electrike",
+    "Machop",
+    "Chansey",
+    "Groudon",
+    "Combee",
+    "Bronzor",
+    "Teddiursa",
+    "Miltank",
+    "Krabby",
+    "Kabuto",
+    "Wurmple",
+    "Sunkern",
+    "Murkrow",
+    "Pidgey",
+    "Ralts",
+    "Kyogre",
+    "Hippopotas",
+    "Snover",
 )
 M1_ITEMS = (
     "",
@@ -217,7 +241,46 @@ BATCH2_ITEMS = (
     "Shell Bell",
     "Light Clay",
 )
-ITEM_GROUPS = (TYPE_BOOST_ITEMS, DAMAGE_ITEMS, RESIST_BERRIES, NO_EFFECT_ITEMS, BATCH2_ITEMS)
+# E2 batch 3: the weather rocks (their holder's weather move lasts longer).
+WEATHER_ROCKS = ("Damp Rock", "Heat Rock", "Smooth Rock", "Icy Rock")
+ITEM_GROUPS = (
+    TYPE_BOOST_ITEMS,
+    DAMAGE_ITEMS,
+    RESIST_BERRIES,
+    NO_EFFECT_ITEMS,
+    BATCH2_ITEMS,
+    WEATHER_ROCKS,
+)
+# E2 batch 3: abilities ``_draw_batch3`` puts on an active Pokemon (the battler's ability; a
+# switch-out restores its own) and the switch-in ones it puts on a bench Pokemon.
+BATCH3_ABILITIES = (
+    AbilityId.RECKLESS,
+    AbilityId.TECHNICIAN,
+    AbilityId.TRUANT,
+    AbilityId.DRY_SKIN,
+    AbilityId.LIGHTNINGROD,
+    AbilityId.NO_GUARD,
+    AbilityId.SERENE_GRACE,
+    AbilityId.HONEY_GATHER,
+    AbilityId.LEVITATE,
+    AbilityId.QUICK_FEET,
+    AbilityId.SCRAPPY,
+    AbilityId.SHELL_ARMOR,
+    AbilityId.BATTLE_ARMOR,
+    AbilityId.SHIELD_DUST,
+    AbilityId.SOLAR_POWER,
+    AbilityId.SUPER_LUCK,
+    AbilityId.TANGLED_FEET,
+    AbilityId.THICK_FAT,
+    AbilityId.TINTED_LENS,
+)
+SWITCH_IN_ABILITIES = (
+    AbilityId.TRACE,
+    AbilityId.DROUGHT,
+    AbilityId.DRIZZLE,
+    AbilityId.SAND_STREAM,
+    AbilityId.SNOW_WARNING,
+)
 # The species items' holders (BattleSystem_CalcMoveDamage, battle_lib.c:6730-6774), none of
 # them an M1 species: ``_draw_species_item`` makes an active Pokemon one of them, holding the
 # item, with the rest of its data (stats, types, ability) kept, which both engines read alike.
@@ -319,6 +382,11 @@ SHARED_MOVES = (
     # K3b2 Task 11: Roar and Whirlwind (status moves: the damaging pools are unchanged).
     "Roar",
     "Whirlwind",
+    # E2 batch 3: the weather moves (status moves: the damaging pools are unchanged).
+    "Sunny Day",
+    "Rain Dance",
+    "Sandstorm",
+    "Hail",
 )
 
 
@@ -561,6 +629,73 @@ def _draw_batch2_item(draw, tables: Tables, a: dict, side: int, active: int, nam
         give(1 - side, foe, "Tackle")
 
 
+def _draw_batch3(draw, tables: Tables, a: dict, side: int, active: int, names: Names) -> None:
+    """Maybe (1 in 2) put a ``BATCH3_ABILITIES`` ability on the active Pokemon, picked uniformly,
+    with what makes it act most of the time: a recoil move for Reckless, a low-power hit for
+    Technician and Serene Grace's secondary, a Water and a Fire move on the foe for Dry Skin, a
+    Fire / Ice move on the foe for Thick Fat, a Ground move on the foe for Levitate, a hit for
+    Tinted Lens, a Ghost type on the foe for Scrappy (unless it knows Curse), sun and a special
+    move for Solar Power, confusion for Tangled Feet, a secondary-effect move on the foe for
+    Shield Dust. And maybe (1 in 3) a ``SWITCH_IN_ABILITIES`` ability on a bench Pokemon."""
+    rnd = draw(st.randoms(use_true_random=False))
+    foe = 1 - side
+    foe_mon = int(a["active"][foe])
+
+    def give(who: int, mon: int, move_name: str) -> None:
+        move = names.move(move_name)
+        k = rnd.randint(0, 3)
+        a["moves"][who, mon, k] = move
+        a["pp"][who, mon, k] = int(tables.move_pp[move])
+
+    if draw(st.booleans()):
+        ability = rnd.choice(BATCH3_ABILITIES)
+        a["ability"][side, active] = ability
+        enable = rnd.random() < 0.75
+        if enable and ability == AbilityId.RECKLESS:
+            give(side, active, rnd.choice(("Take Down", "Head Smash")))
+        if enable and ability in (AbilityId.TECHNICIAN, AbilityId.TINTED_LENS):
+            give(side, active, rnd.choice(("Tackle", "Water Gun", "Ember")))
+        if enable and ability == AbilityId.SERENE_GRACE:
+            give(side, active, rnd.choice(("Headbutt", "Ember", "Confusion", "Mud-Slap")))
+        if enable and ability == AbilityId.DRY_SKIN:
+            give(foe, foe_mon, rnd.choice(("Water Gun", "Ember")))
+        if enable and ability == AbilityId.THICK_FAT:
+            give(foe, foe_mon, rnd.choice(("Ember", "Ice Ball")))
+        if enable and ability == AbilityId.LEVITATE:
+            give(foe, foe_mon, rnd.choice(("Mud-Slap", "Magnitude")))
+        if enable and ability == AbilityId.SHIELD_DUST:
+            give(foe, foe_mon, rnd.choice(("Headbutt", "Ember", "Confusion", "Thunder Fang")))
+        if enable and ability == AbilityId.SCRAPPY:
+            give(side, active, "Tackle")
+            if names.move("Curse") not in a["moves"][foe, foe_mon]:
+                a["types"][foe, foe_mon, 0] = Type.GHOST
+        if enable and ability == AbilityId.SOLAR_POWER:
+            give(side, active, "Ember")
+            a["weather"][...] = Weather.SUN
+        if enable and ability == AbilityId.TRUANT:  # a loafing turn (order.truant_loafs)
+            a["fake_out_turn"][side] = (int(a["turn"][()]) + 1) % 2
+        if enable and ability == AbilityId.TANGLED_FEET:
+            a["confusion"][side] = rnd.randint(1, _CONFUSION_MAX)
+    if draw(st.integers(0, 5)) == 0:  # a weather rock with its own weather move
+        rock, move = rnd.choice(
+            (
+                ("Damp Rock", "Rain Dance"),
+                ("Heat Rock", "Sunny Day"),
+                ("Smooth Rock", "Sandstorm"),
+                ("Icy Rock", "Hail"),
+            )
+        )
+        a["item"][side, active] = names.item(rock)
+        give(side, active, move)
+    bench = [
+        slot
+        for slot in range(a["species"].shape[1])
+        if slot != active and a["species"][side, slot] and a["hp"][side, slot]
+    ]
+    if bench and draw(st.integers(0, 2)) == 0:
+        a["ability"][side, rnd.choice(bench)] = rnd.choice(SWITCH_IN_ABILITIES)
+
+
 def _draw_choice_lock(draw, a: dict, side: int, active: int) -> None:
     """``choice_lock``: none or one of the active Pokemon's moves, whatever its item (a lock
     without a Choice item is what a lost item would leave; ``UpdateMoveBuffers`` clears it)."""
@@ -616,6 +751,7 @@ def supported_state(draw, tables: Tables, names: Names) -> BattleState:
     trap_moves = np.flatnonzero(np.asarray(tables.move_effect) == EffectId.TRAP)
     move_pp = np.asarray(tables.move_pp)
     turn = draw(st.integers(0, 50))
+    a["turn"][...] = turn  # read by _draw_batch3 (Truant)
     for side, (party, active) in enumerate(parties):
         a["active"][side] = active
         for slot in range(len(party)):
@@ -657,12 +793,17 @@ def supported_state(draw, tables: Tables, names: Names) -> BattleState:
         _draw_battle_item(draw, tables, a, side, active, names)
         _draw_species_item(draw, tables, a, side, active, names)
         _draw_batch2_item(draw, tables, a, side, active, names)
+        _draw_batch3(draw, tables, a, side, active, names)
         _draw_choice_lock(draw, a, side, active)
     count = draw(st.integers(0, BAG_SLOTS))
     bag = draw(st.lists(st.sampled_from(M1_BAG_ITEMS), min_size=count, max_size=count))
     a["trainer_items"][1] = [names.item(i) for i in bag] + [0] * (BAG_SLOTS - count)
     a["trainer_item_count"][1] = count
-    a["weather"][...] = draw(st.sampled_from(list(Weather)))  # permanent: timer 0
+    weather = a["weather"][()] if a["weather"][()] else draw(st.sampled_from(list(Weather)))
+    a["weather"][...] = weather
+    # A temporary weather (a weather move's: 1-8 turns left) or a permanent one (0).
+    timed = weather not in (Weather.NONE, Weather.FOG)
+    a["weather_timer"][...] = draw(st.integers(0, 8)) if timed else 0
     _draw_terrain(draw, tables, a)
     a["trick_room"][...] = draw(st.integers(0, _TIMER_MAX))
     a["turn"][...] = turn
@@ -740,8 +881,39 @@ def legal_action_pair(draw, tables: Tables, state: BattleState) -> jnp.ndarray:
         held = np.asarray(tables.item_effect)[
             np.asarray(state.item)[np.arange(2), np.asarray(state.active)]
         ]
+        weather_moves = effect == EffectId.WEATHER
+        # E2 batch 3: a move the foe's ability acts on (Dry Skin: Water or Fire; Thick Fat:
+        # Fire or Ice; Levitate: Ground; Shield Dust: a secondary effect), or one the side's own
+        # acts on (Serene Grace: a secondary effect; Reckless: a recoil move; Technician: power
+        # 60 or less), is used one draw in two, like the items' moves below.
+        kinds = np.asarray(tables.move_type)[moves]
+        chance = np.asarray(tables.move_effect_chance)[moves]
+        abilities = np.asarray(state.ability)[np.arange(2), np.asarray(state.active)]
+        aimed = {
+            AbilityId.DRY_SKIN: (Type.WATER, Type.FIRE),
+            AbilityId.THICK_FAT: (Type.FIRE, Type.ICE),
+            AbilityId.LEVITATE: (Type.GROUND,),
+        }
+        power = np.asarray(tables.move_power)[moves]
         for side in (0, 1):
-            if held[side] == ItemId.LIGHT_CLAY:
+            foe_ability, own = int(abilities[1 - side]), int(abilities[side])
+            if foe_ability in aimed:
+                wanted = damaging[side] & np.isin(kinds[side], aimed[foe_ability])
+            elif foe_ability == AbilityId.SHIELD_DUST or own == AbilityId.SERENE_GRACE:
+                wanted = damaging[side] & (chance[side] > 0)
+            elif own == AbilityId.RECKLESS:
+                wanted = effect[side] == EffectId.RECOIL
+            elif own == AbilityId.TECHNICIAN:
+                wanted = damaging[side] & (power[side] <= 60)
+            else:
+                continue
+            slots = [k for k in range(4) if wanted[k] and masks[side][k]]
+            if slots and draw(st.booleans()):
+                acts[side] = draw(st.sampled_from(slots))
+        for side in (0, 1):
+            if held[side] == ItemId.WEATHER_ROCK:
+                wanted = weather_moves[side]
+            elif held[side] == ItemId.LIGHT_CLAY:
                 wanted = screens[side]
             elif held[side] in HITTER_ITEMS:
                 wanted = damaging[side]
@@ -840,6 +1012,8 @@ LAW_MOVES = (
     "Nature Power",
     "Camouflage",
     "Roar",
+    "Rain Dance",
+    "Sunny Day",
 )
 # Abilities the outcome relevance reads (contact procs, Steadfast, Simple's and Swift
 # Swim's Speed) or the hit odds read (Compoundeyes, Sand Veil, Snow Cloak), and Rough Skin
@@ -858,6 +1032,21 @@ LAW_ABILITIES = (
     AbilityId.SAND_VEIL,
     AbilityId.SNOW_CLOAK,
     AbilityId.SWIFT_SWIM,
+    # E2 batch 3: the chance laws (Serene Grace, Super Luck, the armors), the hit odds (No
+    # Guard, Tangled Feet), the end speeds (Quick Feet), the flinch and secondary blocks (Shield
+    # Dust, Dry Skin's absorb), Truant's lost turn and Trace.
+    AbilityId.SERENE_GRACE,
+    AbilityId.SUPER_LUCK,
+    AbilityId.SHELL_ARMOR,
+    AbilityId.BATTLE_ARMOR,
+    AbilityId.NO_GUARD,
+    AbilityId.TANGLED_FEET,
+    AbilityId.QUICK_FEET,
+    AbilityId.SHIELD_DUST,
+    AbilityId.DRY_SKIN,
+    AbilityId.TRUANT,
+    AbilityId.LEVITATE,
+    AbilityId.TRACE,
 )
 
 

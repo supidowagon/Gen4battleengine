@@ -44,7 +44,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from nuzline.data.tables import Tables
-from nuzline.engine.damage import PRESENT_HEAL, weather_suppressed
+from nuzline.engine.damage import PRESENT_HEAL, entry_weather, weather_suppressed
 from nuzline.engine.ids import QUICK_CLAW_MODULUS, AbilityId, EffectId, ItemId, Stat, Weather
 from nuzline.engine.order import MOVE_ACTIONS, action_order, is_item, is_switch, used_move
 from nuzline.engine.state import STAGE_MAX, STAGE_MIN, BattleState
@@ -145,12 +145,19 @@ def _rate(
     acc,
     eva_stage,
     target_moved=False,
+    weather=None,
+    target_confused=None,
 ) -> jnp.ndarray:
     """``hitRate`` of ``side``'s ``move`` against the other side's ``target_mon`` with the
     attacker's accuracy stage ``acc`` and the target's evasion stage ``eva_stage``
     (``target_switches``: it comes in this turn, fresh); ``target_moved``: the target's action
     is over (``Battler_MovedThisTurn``, battle_lib.c:5365-5368: in singles, the attacker acts
-    second), for Zoom Lens."""
+    second), for Zoom Lens; ``weather`` (default ``state.weather``) and ``target_confused``
+    (default: the target's confusion counter is nonzero, a newcomer never) as at the check.
+    100 when No Guard makes the move hit (``CheckMoveHitOverrides``, bcp.c:3016-3021)."""
+    weather = state.weather if weather is None else weather
+    if target_confused is None:
+        target_confused = ~target_switches & (state.confusion[1 - side] > 0)
     accuracy = tables.move_accuracy[move].astype(_I32)
     target = 1 - side
     a_ability = state.ability[side, state.active[side]]
@@ -183,13 +190,17 @@ def _rate(
     exploded = tables.move_effect[move] == EffectId.SELF_DESTRUCT
     hp = state.hp.at[side, user].set(jnp.where(exploded, 0, state.hp[side, user]))
     suppressed = weather_suppressed(tables, state._replace(hp=hp), on_field)
-    weather = jnp.where(suppressed, Weather.NONE, state.weather)
+    weather = jnp.where(suppressed, Weather.NONE, weather)
     veiled = ((weather == Weather.SANDSTORM) & (d_ability == AbilityId.SAND_VEIL)) | (
         (weather == Weather.HAIL) & (d_ability == AbilityId.SNOW_CLOAK)
     )
     rate = jnp.where(veiled, rate * 80 // 100, rate)
     rate = jnp.where(weather == Weather.FOG, rate * 6 // 10, rate)  # deep fog
-    # The held items (:2949-2965), after Hustle and Tangled Feet (unsupported abilities) and
+    # :2944-2947 Tangled Feet (Battler_IgnorableAbility) on a confused target: x50/100 (Hustle,
+    # just before it, is unsupported).
+    tangled = (d_ability == AbilityId.TANGLED_FEET) & jnp.asarray(target_confused, bool)
+    rate = jnp.where(tangled, rate * 50 // 100, rate)
+    # The held items (:2949-2965), after Hustle (an unsupported ability) and Tangled Feet and
     # before the Micle Berry flag (an unsupported item) and Gravity: the defender's
     # HOLD_EFFECT_ACC_REDUCE (BrightPowder, Lax Incense) * (100 - param) / 100, then the
     # attacker's HOLD_EFFECT_ACCURACY_UP (Wide Lens) and, against a target that has moved,
@@ -207,8 +218,13 @@ def _rate(
     )
     rate = jnp.where(lens, rate * (100 + a_power) // 100, rate)
     rate = jnp.where(state.gravity != 0, rate * 10 // 6, rate)
+    # CheckMoveHitOverrides (bcp.c:3016-3021), after the roll: the attacker's or the target's
+    # No Guard (Battler_Ability, the target's own: not ignorable) clears MOVE_STATUS_MISSED.
+    no_guard = (a_ability == AbilityId.NO_GUARD) | (
+        state.ability[target, target_mon] == AbilityId.NO_GUARD
+    )
     # Accuracy 0 never misses (the check returns before rolling).
-    return jnp.where(accuracy == 0, 100, rate)
+    return jnp.where((accuracy == 0) | no_guard, 100, rate)
 
 
 def live_hit_threshold(
@@ -224,17 +240,43 @@ def live_hit_threshold(
 
 
 def _hit_threshold(
-    tables: Tables, state: BattleState, actions, side, acc=None, eva=None, target_moved=False
+    tables: Tables,
+    state: BattleState,
+    actions,
+    side,
+    acc=None,
+    eva=None,
+    target_moved=False,
+    weather=None,
+    target_confused=None,
 ):
     """The turn-start threshold of ``side``'s move, or with these stages (and, for Zoom Lens,
-    a target that has moved) instead. Nature Power's accuracy check is its called move's
+    a target that has moved; the weather and the target's confusion at the check) instead.
+    The default weather is the one after the target's switch-in, which goes first
+    (``damage.entry_weather``). Nature Power's accuracy check is its called move's
     (``order.called_move``)."""
     move = used_move(tables, state, side, actions[side])
     target, target_switches, target_mon = _target_mon(state, actions, side)
     acc = state.stages[side, Stat.ACC] if acc is None else acc
     if eva is None:
         eva = jnp.where(target_switches, 0, state.stages[target, Stat.EVA])
-    rate = _rate(tables, state, side, move, target_mon, target_switches, acc, eva, target_moved)
+    if weather is None:
+        weather = jnp.where(
+            target_switches, entry_weather(tables, state, target, target_mon, side), state.weather
+        )
+    rate = _rate(
+        tables,
+        state,
+        side,
+        move,
+        target_mon,
+        target_switches,
+        acc,
+        eva,
+        target_moved,
+        weather,
+        target_confused,
+    )
     # A switch or an item use runs no move, so it has no roll.
     no_move = is_switch(actions[side]) | is_item(actions[side])
     return jnp.where(no_move, 100, rate)
@@ -250,9 +292,12 @@ def hit_threshold(tables: Tables, state: BattleState, actions) -> jnp.ndarray:
 
 # Per stage: the start value, the one change an earlier action can make, the White Herb's
 # reset to 0, and the change after that reset; hit_thresholds' second axis is the
-# accuracy x evasion grid, once with the target not moved yet and once moved (Zoom Lens).
+# accuracy x evasion grid, once with the target not moved yet and once moved (Zoom Lens),
+# each with the weather at the start or after the foe's weather move, and the target confused
+# as at the start or not (Tangled Feet).
 _STAGE_VARIANTS = 4
-HIT_VARIANTS = 2 * _STAGE_VARIANTS**2
+_FIELD_VARIANTS = 4  # weather (start, the foe's move's) x target confusion (start, cleared)
+HIT_VARIANTS = 2 * _STAGE_VARIANTS**2 * _FIELD_VARIANTS
 
 
 def _can_go_first(tables: Tables, state: BattleState, actions) -> jnp.ndarray:
@@ -297,15 +342,22 @@ def hit_thresholds(tables: Tables, state: BattleState, actions) -> tuple[jnp.nda
     * the order: a Zoom Lens (``HOLD_EFFECT_ACCURACY_UP_SLOWER``) raises the rate against a
       target that has moved, i.e. when the side acts second (the second half of the grid,
       possible for a holder that can act second; the first half stays possible, so column 0,
-      the turn-start threshold, always is).
+      the turn-start threshold, always is);
+    * the weather (Sand Veil, Snow Cloak): the foe's weather move (``EffectId.WEATHER``,
+      ``effects._weather``) sets its weather first; a switch-in weather ability is in the
+      turn-start threshold (``damage.entry_weather``);
+    * the target's confusion (Tangled Feet): a confused foe moving first can snap out of it
+      or be cured by its Persim / Lum Berry (over-approximate: whenever it is confused and can
+      go first).
 
     Each applies once: a move has one effect, and the only repeated hits are
     ``MULTI_HIT``'s, which change no stage (a future multi-hit stat effect must add
     its repeats here).
 
     Switches (which go first) are in the turn-start threshold already. No implemented
-    move changes the weather, Gravity, an ability or Foresight's flag on the target
-    before the target's foe moves, and a faint of either battler leaves no check. The
+    move changes Gravity, an ability or Foresight's flag on the target before the target's
+    foe moves (Trace copies mid-turn only facing another Trace holder, which coverage
+    refuses), and a faint of either battler leaves no check. The
     variants over-approximate (Keen Eye, misses and the chance of a secondary only remove
     changes): an extra threshold splits a class, never merges two."""
     actions = jnp.asarray(actions, _I32)
@@ -338,7 +390,9 @@ def hit_thresholds(tables: Tables, state: BattleState, actions) -> tuple[jnp.nda
         [(firsts[0] != side) | (firsts[1] != side) for side in (0, 1)]
     )
     zoom = uses_move & (held == ItemId.ZOOM_LENS) & target_may_have_moved
+    weather_move = changes & (effect == EffectId.WEATHER)
     thresholds, possible = [], []
+    n_stage = _STAGE_VARIANTS**2
     for side in (0, 1):
         foe = 1 - side
         foe_switches = is_switch(actions[foe])
@@ -346,15 +400,34 @@ def hit_thresholds(tables: Tables, state: BattleState, actions) -> tuple[jnp.nda
         eva0 = jnp.where(foe_switches, 0, state.stages[foe, Stat.EVA])
         accs, acc_ok = _stage_variants(acc0, delta[foe], on_foe_acc[foe], herb[side])
         evas, eva_ok = _stage_variants(eva0, delta[foe], on_own_eva[foe], herb[foe] & ~foe_switches)
-        acc_grid = jnp.tile(jnp.repeat(accs, _STAGE_VARIANTS), 2)
-        eva_grid = jnp.tile(evas, 2 * _STAGE_VARIANTS)
-        moved_grid = jnp.repeat(jnp.array([False, True]), _STAGE_VARIANTS**2)
+        _, _, target_mon = _target_mon(state, actions, side)
+        weather0 = jnp.where(
+            foe_switches, entry_weather(tables, state, foe, target_mon, side), state.weather
+        )
+        # The foe's move's weather, only for a weather move (another move's param 0 is no
+        # weather): else the start weather again, which adds no threshold.
+        moved_weather = jnp.where(effect[foe] == EffectId.WEATHER, stat[foe], weather0)
+        weathers = jnp.stack([weather0, moved_weather.astype(weather0.dtype)])
+        weather_ok = jnp.stack([jnp.asarray(True), weather_move[foe]])
+        confused0 = ~foe_switches & (state.confusion[foe] > 0)
+        confuseds = jnp.stack([confused0, jnp.asarray(False)])
+        confused_ok = jnp.stack([jnp.asarray(True), confused0 & changes[foe]])
+        # Grid order: moved (2) x weather (2) x confusion (2) x accuracy (4) x evasion (4).
+        acc_grid = jnp.tile(jnp.repeat(accs, _STAGE_VARIANTS), 8)
+        eva_grid = jnp.tile(evas, 8 * _STAGE_VARIANTS)
+        conf_grid = jnp.tile(jnp.repeat(confuseds, n_stage), 4)
+        weather_grid = jnp.tile(jnp.repeat(weathers, 2 * n_stage), 2)
+        moved_grid = jnp.repeat(jnp.array([False, True]), 4 * n_stage)
         thresholds.append(
             jax.vmap(
-                lambda a, e, m, side=side: _hit_threshold(tables, state, actions, side, a, e, m)
-            )(acc_grid, eva_grid, moved_grid)
+                lambda a, e, m, w, c, side=side: _hit_threshold(
+                    tables, state, actions, side, a, e, m, w, c
+                )
+            )(acc_grid, eva_grid, moved_grid, weather_grid, conf_grid)
         )
-        grid_ok = jnp.repeat(acc_ok, _STAGE_VARIANTS) & jnp.tile(eva_ok, _STAGE_VARIANTS)
+        stage_ok = jnp.repeat(acc_ok, _STAGE_VARIANTS) & jnp.tile(eva_ok, _STAGE_VARIANTS)
+        field_ok = jnp.repeat(weather_ok, 2) & jnp.tile(confused_ok, 2)
+        grid_ok = (field_ok[:, None] & stage_ok[None, :]).reshape(-1)
         possible.append(jnp.concatenate([grid_ok, grid_ok & zoom[side]]))
     return jnp.stack(thresholds).astype(_I32), jnp.stack(possible)
 
@@ -374,14 +447,42 @@ def hit_class(u, thresholds, possible) -> jnp.ndarray:
 
 def crit_odds(tables: Tables, state: BattleState, actions) -> jnp.ndarray:
     """``int32[2]``: each side's move crits 1 in N (``BattleSystem_CalcCriticalMulti``,
-    battle_lib.c:7105). Only ``HIGH_CRIT`` (+1) raises the stage: Focus Energy, Super
-    Luck, Scope Lens and the species items are not implemented. Lucky Chant on the
-    defending side is applied by ``sample_outcome``. Nature Power's are its called move's
+    battle_lib.c:7105). ``HIGH_CRIT`` (+1) and the attacker's Super Luck (+1, :7126) raise
+    the stage: Focus Energy, Scope Lens and the species items are not implemented. Lucky
+    Chant on the defending side and the target's Battle Armor / Shell Armor (``armored``)
+    are applied by ``sample_outcome``. Nature Power's are its called move's
     (``CalcCrit`` runs in the called move's script)."""
     actions = jnp.asarray(actions, _I32)
     moves = jnp.stack([used_move(tables, state, side, actions[side]) for side in (0, 1)])
     stage = (tables.move_effect[moves] == EffectId.HIGH_CRIT).astype(_I32)
+    # battle_lib.c:7126: + (attackerAbility == ABILITY_SUPER_LUCK), the battler's own ability.
+    super_luck = state.ability[jnp.arange(2), state.active] == AbilityId.SUPER_LUCK
+    stage = stage + super_luck.astype(_I32)
     return _CRIT_ODDS[jnp.minimum(stage, 4)]
+
+
+def armored(state: BattleState, actions) -> jnp.ndarray:
+    """``bool[2]``: each side's move meets a Battle Armor or Shell Armor holder as it sees it
+    (``Battler_IgnorableAbility``, battle_lib.c:7135-7136): the foe's active Pokemon or the one
+    it switches in, which goes first. No crit then (``BattleSystem_CalcCriticalMulti``)."""
+    actions = jnp.asarray(actions, _I32)
+    out = []
+    for side in (0, 1):
+        target, _, target_mon = _target_mon(state, actions, side)
+        mold = state.ability[side, state.active[side]] == AbilityId.MOLD_BREAKER
+        own = state.ability[target, target_mon]
+        out.append(~mold & ((own == AbilityId.SHELL_ARMOR) | (own == AbilityId.BATTLE_ARMOR)))
+    return jnp.stack(out)
+
+
+def secondary_chance(tables: Tables, state: BattleState, moves) -> jnp.ndarray:
+    """``int32[2]``: each side's ``effectChance`` (``tables.move_effect_chance``), doubled for
+    a Serene Grace attacker (``Battler_Ability``): ``BattleSystem_TriggerSecondaryEffect``
+    (battle_lib.c:1552-1556, :1571-1575) and ``BtlCmd_CheckEffectActivation`` (battle_script.c:
+    8369-8373); 0 (an ``ON_HIT`` effect) stays 0. A roll ``RandNext() % 100 < chance``."""
+    chance = tables.move_effect_chance[moves].astype(_I32)
+    grace = state.ability[jnp.arange(2), state.active] == AbilityId.SERENE_GRACE
+    return jnp.where(grace, chance * 2, chance)
 
 
 def _magnitude_level(rand) -> jnp.ndarray:
@@ -504,12 +605,13 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions) -> Outcome:
     # The roll u = RandNext() % 100 + 1 (battle_controller_player.c:2976), as its class.
     thresholds, possible = hit_thresholds(tables, state, actions)
     hit = hit_class(draw(0, per_hit, 100) + 1, thresholds[:, None, :], possible[:, None, :])
-    # Lucky Chant on the defending side blocks crits (battle_lib.c:7137).
-    no_crit = (state.lucky_chant[::-1] != 0)[:, None]
+    # Lucky Chant on the defending side blocks crits (battle_lib.c:7137), as does the target's
+    # Battle Armor / Shell Armor (:7135-7136).
+    no_crit = ((state.lucky_chant[::-1] != 0) | armored(state, actions))[:, None]
     crit = (draw(1, per_hit, crit_odds(tables, state, actions)[:, None]) == 0) & ~no_crit
-    # BtlCmd_CheckEffectActivation (battle_script.c:8377): RandNext() % 100 < chance;
-    # chance 0 means the effect applies on every hit (ids.EffectId).
-    chance = tables.move_effect_chance[moves].astype(_I32)[:, None]
+    # BtlCmd_CheckEffectActivation (battle_script.c:8377): RandNext() % 100 < chance (Serene
+    # Grace doubled); chance 0 means the effect applies on every hit (ids.EffectId).
+    chance = secondary_chance(tables, state, moves)[:, None]
     secondary = (draw(2, per_hit, 100) < chance) | (chance == 0)
     # BtlCmd_SetMultiHit (battle_script.c:2645): & 3 below 2 gives 2-3, else (& 3) + 2.
     first, second = draw(3, per_side, 4), draw(4, per_side, 4)

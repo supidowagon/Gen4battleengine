@@ -96,6 +96,18 @@ three structs has a row.
   activation is `qc_roll` (below; the per-turn flag only shows its animation, a
   `step` event), and none of Thief, Covet, Gyro Ball or Sketch is in M1. M6's
   coverage work must add these fields before the mechanics that read them.
+- **Trace, the weather abilities and Truant (E2 batch 3).** `BattleMon.ability` is per
+  battler: Trace (`hooks.trace`, battle_lib.c:3718-3737) writes the active battler's
+  `ability`, `step._restore_ability` puts the party's back when it leaves (as
+  `BattleSystem_InitBattleMon` re-reads it, battle_lib.c:124), and `damage.decomp_abilities`
+  gives a Trace holder that traced the copied ability's decomp id (`ids.ABILITY_DECOMP_IDS`).
+  `traceAnnounced` and `weatherAbilityAnnounced` stay without a field: of the implemented
+  mechanics only Trace gains an ability mid-battle, a battler that traced no longer has
+  Trace (so `ability == TRACE` is the unannounced state), and `hooks.on_switch_in` runs the
+  weather ability of the newcomer and of a battler that just traced; Skill Swap and Role
+  Play, which would need the flags, are unsupported. `MoveEffectsData.truant` is
+  `(totalTurns + 1) & 1` at the same writes as `fakeOutTurnNumber` (battle_lib.c:2117-2119,
+  :2195-2197; 0 for a lead), so it is `fake_out_turn`'s parity (`order.truant_loafs`).
 - **moveProtect -> `protect_count`** (K3b2 Task 6; docs/kaizo/k3b2-rules.md §2(a),
   §12): `BattleContext.moveProtect`, the move whose attack message the battler last
   showed (`UpdateMoveBuffers`, `src/battle/battle_controller_player.c:3936-3942`),
@@ -307,7 +319,7 @@ three structs has a row.
 | `MoveEffectsData.stockpileCount` | — | later (M6) |
 | `MoveEffectsData.stockpileDefBoosts` | — | later (M6) |
 | `MoveEffectsData.stockpileSpDefBoosts` | — | later (M6) |
-| `MoveEffectsData.truant` | — | later (M6) |
+| `MoveEffectsData.truant` | `fake_out_turn` | mapped |
 | `MoveEffectsData.flashFire` | — | later (M6) |
 | `MoveEffectsData.lockOnTarget` | — | later (M6) |
 | `MoveEffectsData.mimickedMoveSlot` | — | later (M6) |

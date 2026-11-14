@@ -408,6 +408,9 @@ _NO_ACC_EVA_WRITE = (frozenset(EffectId(i) for i in range(40)) - _STAT_KINDS) | 
     EffectId.NATURE_POWER,
     EffectId.TRI_ATTACK,
     EffectId.ROAR,
+    # E2 batch 3: writes the weather, not a stage; hit_thresholds follows it (Sand Veil, Snow
+    # Cloak) as its weather variant.
+    EffectId.WEATHER,
 }
 # (effect, stat) pairs hit_thresholds follows: they change a later foe move's threshold.
 _SEEN = {

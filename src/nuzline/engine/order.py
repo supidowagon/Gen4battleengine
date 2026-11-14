@@ -12,7 +12,8 @@ and a switch are different kinds, so the player's switch precedes the opponent's
 Speed modifiers of the implemented set only: stages (Simple doubled, ``:1222``),
 Swift Swim ``x 2`` in rain unless Cloud Nine / Air Lock (``:1228-1238``), Choice Scarf
 ``* 15 / 10`` (``:1248``, ``:1314``), paralysis ``/ 4`` (``:1260``), Tailwind ``x 2``
-(``:1274``) and Trick Room's reversal (``:1432``). Quick Feet, Chlorophyll, Slow Start,
+(``:1274``) and Trick Room's reversal (``:1432``), and Quick Feet ``* 15 / 10`` with any
+status instead of the paralysis quartering (``:1257-1261``). Chlorophyll, Slow Start,
 Unburden, Quick Powder and the speed-halving items belong to unsupported abilities and
 items (``UNSUPPORTED`` ids), so they never apply.
 
@@ -123,13 +124,16 @@ def used_move(tables: Tables, state: BattleState, side, action) -> jnp.ndarray:
     return called_move(tables, state, selected_move(tables, state, side, action)[0])
 
 
-def effective_speed(tables: Tables, state: BattleState, side, suppressed=None) -> jnp.ndarray:
+def effective_speed(
+    tables: Tables, state: BattleState, side, suppressed=None, weather=None
+) -> jnp.ndarray:
     """``int32`` speed as ``BattleSystem_CompareBattlerSpeed`` computes it. ``suppressed``
     (``bool``, default ``damage.weather_suppressed`` of ``state``) overrides the weather
-    lock (``NO_CLOUD_NINE``), for a lock that can change before the speed is read
-    (``enumerate._end_speeds``)."""
+    lock (``NO_CLOUD_NINE``) and ``weather`` (default ``state.weather``) the weather, for a
+    lock or a weather that can change before the speed is read (``enumerate._end_speeds``)."""
     if suppressed is None:
         suppressed = weather_suppressed(tables, state)
+    weather = state.weather if weather is None else weather
     mon = state.active[side]
     ability = state.ability[side, mon]
     stage = state.stages[side, Stat.SPE].astype(_I32)
@@ -138,7 +142,7 @@ def effective_speed(tables: Tables, state: BattleState, side, suppressed=None) -
     # :1228-1238 Swift Swim (Battler_Ability) in rain, inside NO_CLOUD_NINE.
     swim = (
         (ability == AbilityId.SWIFT_SWIM)
-        & (state.weather == Weather.RAIN)
+        & (weather == Weather.RAIN)
         & ~jnp.asarray(suppressed, bool)
     )
     speed = jnp.where(swim, speed * 2, speed)
@@ -146,7 +150,15 @@ def effective_speed(tables: Tables, state: BattleState, side, suppressed=None) -
     # unsupported) and before paralysis.
     scarf = tables.item_effect[state.item[side, mon]] == ItemId.CHOICE_SCARF
     speed = jnp.where(scarf, speed * 15 // 10, speed)
-    speed = jnp.where(state.status[side, mon] == Status.PARALYSIS, speed // 4, speed)
+    # :1257-1261 Quick Feet (Battler_Ability) with any status (MON_CONDITION_ANY): x15/10,
+    # and then no paralysis quartering; else paralysis quarters it.
+    status = state.status[side, mon]
+    quick_feet = (ability == AbilityId.QUICK_FEET) & (status != Status.NONE)
+    speed = jnp.where(
+        quick_feet,
+        speed * 15 // 10,
+        jnp.where(status == Status.PARALYSIS, speed // 4, speed),
+    )
     return jnp.where(state.tailwind[side] != 0, speed * 2, speed)
 
 
@@ -279,3 +291,15 @@ def action_order(tables: Tables, state: BattleState, actions, outcome) -> jnp.nd
     player_second_ = jnp.where(same_kind, player_second_, early[1] & ~early[0])
     first = player_second_.astype(jnp.int8)
     return jnp.stack([first, 1 - first]).astype(jnp.int8)
+
+
+def truant_loafs(state: BattleState, side) -> jnp.ndarray:
+    """``bool``: ``Battler_CheckTruant`` (battle_lib.c:3304-3313): ``side``'s battler has Truant
+    (``Battler_Ability``) and ``moveEffectsData.truant != (totalTurns & 1)``. ``truant`` is
+    ``(totalTurns + 1) & 1`` from the switch-in or faint that brought the battler in
+    (battle_lib.c:2119, :2197), i.e. ``fake_out_turn & 1``, and 0 for a lead (the zeroed
+    context, as ``fake_out_turn``); Transform's write (battle_script.c:5359) is unsupported.
+    So a Truant battler loafs on every other turn from its entry, whatever it did."""
+    mon = state.active[side]
+    parity = (state.fake_out_turn[side].astype(_I32) & 1) != (state.turn.astype(_I32) & 1)
+    return (state.ability[side, mon] == AbilityId.TRUANT) & parity

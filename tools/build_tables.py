@@ -116,6 +116,7 @@ from tools.effect_map import (
     TYPE_BOOST_HOLD_EFFECTS,
     TYPE_CHART_STATUS_MOVES,
     UNSUPPORTED_MOVES,
+    WEATHER_ROCK_HOLD_EFFECTS,
     held_item_ids,
 )
 
@@ -294,12 +295,14 @@ def _form_names(species: list[dict], forms: list[dict]) -> dict[str, list[str]]:
 def _item_type(item: dict, item_id: int) -> int:
     """``item_param[i, 1]``: the type a ``RESIST_BERRY`` resists
     (``subscript_type_resist_berry.s``) or a ``TYPE_BOOST`` boosts (``sTypeBoostingItems``,
-    battle_lib.c:6514), or the ``Stat`` a ``PINCH_BERRY`` raises (battle_lib.c:4773-4836), by
-    its own hold effect, else 0."""
+    battle_lib.c:6514), the ``Stat`` a ``PINCH_BERRY`` raises (battle_lib.c:4773-4836) or the
+    ``Weather`` a ``WEATHER_ROCK`` extends (effect_script_0136.s etc.), by its own hold effect,
+    else 0."""
     tables = {
         ItemId.RESIST_BERRY: (RESIST_BERRY_HOLD_EFFECTS, "resists"),
         ItemId.TYPE_BOOST: (TYPE_BOOST_HOLD_EFFECTS, "boosts"),
         ItemId.PINCH_BERRY: (PINCH_STAT_HOLD_EFFECTS, "raises"),
+        ItemId.WEATHER_ROCK: (WEATHER_ROCK_HOLD_EFFECTS, "extends"),
     }
     if item_id not in tables:
         return 0

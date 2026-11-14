@@ -75,12 +75,17 @@ from nuzline.engine.damage import (
     PRESENT_HEAL,
     confusion_damage,
     decomp_abilities,
+    effectiveness,
+    identified,
+    ignorable,
+    move_type_of,
     weather_suppressed,
 )
 from nuzline.engine.damage import (
     STATUS as STATUS_CATEGORY,
 )
 from nuzline.engine.effects import (
+    armored,
     big_root,
     can_have_status,
     change_stage,
@@ -100,9 +105,12 @@ from nuzline.engine.effects import (
     sticky_barb_transfer,
     thaw_target,
     unlock_move,
+    weather_fails,
 )
 from nuzline.engine.hooks import (
+    ABSORB,
     STATUS_CURE,
+    WEATHER_HP,
     after_damage_items,
     held_item_check,
     on_switch_in,
@@ -138,6 +146,7 @@ from nuzline.engine.order import (
     player_second,
     quick_claw_active,
     selected_move,
+    truant_loafs,
 )
 from nuzline.engine.outcome import (
     MAX_HITS,
@@ -391,6 +400,21 @@ def _restore_types(tables: Tables, state: BattleState, side, cond) -> BattleStat
     return state._replace(types=state.types.at[side, mon].set(value))
 
 
+def _restore_ability(tables: Tables, state: BattleState, side, cond) -> BattleState:
+    """``side``'s active battler leaves the field where ``cond``: its ``ability`` goes back to
+    its personal row's (``tables.species_abilities`` at its ability slot). Only Trace
+    (``hooks.trace``) writes it, to the battler's ``BattleMon.ability``;
+    ``BattleSystem_InitBattleMon`` re-reads the party Pokemon's on the next switch-in
+    (battle_lib.c:124). Run when the battler is switched or dragged out, and when a
+    replacement takes a fainted one's place (``_switch_in``): a fainted battler keeps the
+    copied ability until then, as its ``BattleMon`` does, and no Pokemon comes back from 0 HP."""
+    mon = state.active[side]
+    row = tables.species_form_row[state.species[side, mon], state.form[side, mon]]
+    party = tables.species_abilities[row, state.ability_slot[side, mon]]
+    value = jnp.where(cond, party, state.ability[side, mon]).astype(state.ability.dtype)
+    return state._replace(ability=state.ability.at[side, mon].set(value))
+
+
 def _switch_in(tables: Tables, state: BattleState, side, slot, entry_turn) -> BattleState:
     """``side`` sends out party ``slot``: the outgoing battler's types are restored
     (``_restore_types``), stages and volatiles reset, the effects the
@@ -399,6 +423,7 @@ def _switch_in(tables: Tables, state: BattleState, side, slot, entry_turn) -> Ba
     forgets the newcomer (``_forget``; ``BattleSystem_UpdateAfterSwitch``, battle_lib.c:2094).
     Then the send-out updates the participation mask (``_flag_exp``)."""
     state = _restore_types(tables, state, side, True)
+    state = _restore_ability(tables, state, side, True)
     state = _reset_battler(state, side, True)
     state = _forget(state, side, slot)
     state = _entered(state, side, entry_turn, True)
@@ -550,6 +575,11 @@ def _use_move(
     still_frozen = frozen & ~thawed
     state = _set_mon(state, "status", side, user, Status.NONE, thawed)
     go = ready & ~sleeping & ~(still_frozen & ~thaw_move)
+    # CHECK_STATUS_STATE_TRUANT (:2502-2510): a loafing Truant battler's move is disrupted;
+    # subscript_loafing_around.s unlocks it (its message tags only the nickname).
+    loafing = go & truant_loafs(state, side)
+    state = _unlock(state, side, loafing)
+    go = go & ~loafing
     # CHECK_STATUS_STATE_FLINCH (:2529); subscript_flinched.s:10-14 gives Steadfast +1 Speed.
     flinched = go & (state.flinched[side] != 0)
     steadfast = flinched & (state.ability[side, user] == AbilityId.STEADFAST)
@@ -757,6 +787,38 @@ def _use_move(
     # skips the move's AfterMoveEffects (effects.recovers_at_full_hp), so no item check runs in
     # any loop pass below (the passes after the hit would otherwise repeat it).
     no_more_work = connected & recovers_at_full_hp(tables, state, side, used, outcome)
+    # TRY_MOVE_STATE_TRIGGER_IMMUNITY_ABILITIES (bcp.c:3281-3286, :2782-2810): a move that hit
+    # (no MOVE_STATUS_DID_NOT_HIT: missed, protected, immune) meets the defender's Dry Skin
+    # (BattleSystem_TriggerImmunityAbility, battle_lib.c:3538-3544: Battler_IgnorableAbility, a
+    # Water move by CalcMoveType, Hidden Power's included, with table power, not a charge turn):
+    # subscript_ability_restores_hp.s heals Divide(maxHP, 4) through UPDATE_HP (capped), or
+    # says the move was useless at full HP, and tags the holder's ability either way; then
+    # MOVE_STATUS_NO_MORE_WORK skips the hits and AfterMoveEffects (LOOP_SPREAD_MOVES).
+    move_type = move_type_of(tables, state, side, used)
+    chart = effectiveness(
+        tables, move_type, state.types[target_side, target], identified(state, side, target_side)
+    )
+    absorbed = (
+        connected
+        & ~self_defender(tables, used)
+        & (ignorable(state, side, target_side) == AbilityId.DRY_SKIN)
+        & (move_type == Type.WATER)
+        & (tables.move_power[used] != 0)
+        & (chart > 0)
+    )
+    target_hp = state.hp[target_side, target].astype(_I32)
+    target_max = state.max_hp[target_side, target].astype(_I32)
+    healed = jnp.minimum(target_hp + jnp.maximum(target_max // 4, 1), target_max)
+    state = _set_mon(state, "hp", target_side, target, healed, absorbed & (target_hp != target_max))
+    state = reveal_ability(state, target_side, target, ABSORB, absorbed)
+    no_more_work = no_more_work | absorbed
+    # A weather move that failed (effects.weather_fails, on the field before its script):
+    # MOVE_STATUS_FAILED, subscript_missed.s, no AfterMoveEffects.
+    weather_failed = (
+        connected
+        & (tables.move_effect[used] == EffectId.WEATHER)
+        & weather_fails(state, tables.move_param[used].astype(_I32))
+    )
 
     # A loop, not unrolled: one copy of the effect code in the program, not MAX_HITS
     # (unrolled, it dominated trace and compile time). It also counts the hits that
@@ -766,7 +828,7 @@ def _use_move(
         # BattleControllerPlayer_LoopMultiHit (bcp.c:3780) stops once a battler fainted
         # (faintedMon): the target, or the attacker by Rough Skin (Selfdestruct's user is
         # at 0 HP before its only hit, so the first hit is exempt).
-        going = connected & ((hit_index == 0) | (state.hp[side, user] > 0))
+        going = connected & ~absorbed & ((hit_index == 0) | (state.hp[side, user] > 0))
         landed = (
             going
             & (hit_index < n_hits)
@@ -787,8 +849,10 @@ def _use_move(
         )
         # A LEVEL_DAMAGE move never runs CalcCrit (effect_script_0087.s): no crit message.
         # (nor does Bide's unleash: its script has no CalcCrit).
-        crit = (outcome.crit[side, hit_index] != 0) & (
-            (tables.move_effect[used] != EffectId.LEVEL_DAMAGE)
+        crit = (
+            (outcome.crit[side, hit_index] != 0)
+            & ~armored(state, side, target_side)
+            & (tables.move_effect[used] != EffectId.LEVEL_DAMAGE)
             & (tables.move_effect[used] != EffectId.BIDE)
         )
         seen = _hit_events(state, hit_state, side, landed, crit)
@@ -812,7 +876,7 @@ def _use_move(
         # (effects.sticky_barb_transfer) on a hit that happened, once the defender took damage
         # this action (struck), and the thaw of a frozen defender a Fire hit damaged
         # (effects.thaw_target; an Aspear / Lum Berry it holds has cured the freeze first).
-        items = connected & ~no_more_work & ~protect_failed & ~roar_failed
+        items = connected & ~no_more_work & ~protect_failed & ~roar_failed & ~weather_failed
         state, item_used = held_item_check(tables, hit_state, side, items, info.pluck_flag)
         state = after_damage_items(tables, state, 1 - side, items)
         struck = struck | info.update_hp
@@ -999,13 +1063,15 @@ def pursuit_fires(tables: Tables, state: BattleState, side, actions, choices) ->
     """``side`` switches and the other side, which has not acted yet, chose Pursuit:
     ``BtlCmd_TryPursuit`` (battle_script.c:6884, called from
     ``subscript_switch_pokemon.s:11`` before the switch) needs the pursuer alive, not
-    asleep or frozen, and PP left in the move (Truant is not implemented)."""
+    asleep or frozen, not loafing (``truant_loafs``, battle_script.c:6903), and PP left in the
+    move."""
     pursuer = 1 - side
     move, struggling = choices[0][pursuer], choices[1][pursuer]
     mon = state.active[pursuer]
     status = state.status[pursuer, mon]
     return (
-        (state.over == 0)
+        ~truant_loafs(state, pursuer)
+        & (state.over == 0)
         & is_switch(actions[side])
         & ~is_switch(actions[pursuer])
         & ~is_item(actions[pursuer])
@@ -1167,7 +1233,8 @@ def _execute_actions(
     before = state
     pursuer = 1 - first
     hit = _pursuit_hit(tables, state, pursuer, actions, choices, outcome)
-    seen = _hit_events(before, hit, pursuer, True, outcome.crit[pursuer, 0] != 0)
+    crit = (outcome.crit[pursuer, 0] != 0) & ~armored(state, pursuer, first)
+    seen = _hit_events(before, hit, pursuer, True, crit)
     events = _empty_events()
     pursuer_events = {
         "act_kind": ACT_MOVE,
@@ -1500,11 +1567,13 @@ def _weather_effect(state: BattleState, side, ability) -> BattleState:
     ability is Sand Veil (:5573-5583). Hail: Ice Body heals ``Divide(maxHP, 16)`` below full
     HP, else the same chip unless a type is Ice or the ability is Snow Cloak. The script
     skips a chip (not a heal) for Magic Guard (``CheckAbility ... ABILITY_MAGIC_GUARD``).
-    Sand Veil and Snow Cloak are ``AbilityId`` members (``state.ability``); Ice Body and
-    Magic Guard, which no table maps, are read from ``ability``
-    (``damage.decomp_abilities``). The caller applies ``NO_CLOUD_NINE``.
-    Rain and sun act only through abilities no table maps (Dry Skin, Solar Power, Rain
-    Dish, Hydration: ``AbilityId.UNSUPPORTED``, refused by coverage), so nothing here.
+    Sun (:5585-5596): a Dry Skin or Solar Power holder loses ``Divide(maxHP, 8)``
+    (``subscript_weather_continues.s`` :_045 / :_057, after its Magic Guard skip, tag the
+    ability). Rain (:5613-5625): a Dry Skin holder below full HP regains ``Divide(maxHP, 8)``
+    (:_076 tags it); Rain Dish and Hydration are unsupported abilities.
+    Sand Veil, Snow Cloak, Dry Skin and Solar Power are ``AbilityId`` members
+    (``state.ability``); Ice Body and Magic Guard, which no table maps, are read from
+    ``ability`` (``damage.decomp_abilities``). The caller applies ``NO_CLOUD_NINE``.
     ``MOVE_EFFECT_NO_WEATHER_DAMAGE`` (Dig / Dive) cannot be set: no charge move is
     supported."""
     mon = state.active[side]
@@ -1527,10 +1596,20 @@ def _weather_effect(state: BattleState, side, ability) -> BattleState:
     hail = state.weather == Weather.HAIL
     ice_body = hail & (ab == WEATHER_ABILITY_IDS["Ice Body"])
     hail_chip = hail & ~ice_body & ~has(Type.ICE) & (own != AbilityId.SNOW_CLOAK)
-    chip = (sand | hail_chip) & (ab != WEATHER_ABILITY_IDS["Magic Guard"])
+    eighth = jnp.maximum(max_hp // 8, 1)
+    sun = (state.weather == Weather.SUN) & (
+        (own == AbilityId.DRY_SKIN) | (own == AbilityId.SOLAR_POWER)
+    )
+    rain = (state.weather == Weather.RAIN) & (own == AbilityId.DRY_SKIN) & (hp < max_hp)
+    magic_guard = ab == WEATHER_ABILITY_IDS["Magic Guard"]
+    chip = (sand | hail_chip) & ~magic_guard
+    sun_chip = sun & ~magic_guard
     heal = ice_body & (hp < max_hp)
     delta = jnp.where(chip, -sixteenth, jnp.where(heal, sixteenth, 0))
-    return _hp_change(state, side, mon, jnp.where(hp > 0, delta, 0))
+    delta = jnp.where(sun_chip, -eighth, jnp.where(rain, eighth, delta))
+    alive = hp > 0
+    state = reveal_ability(state, side, mon, WEATHER_HP, alive & (sun_chip | rain))
+    return _hp_change(state, side, mon, jnp.where(alive, delta, 0))
 
 
 def field_conditions(tables: Tables, state: BattleState, sides) -> BattleState:

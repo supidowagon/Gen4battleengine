@@ -33,8 +33,10 @@ steps 1, 4 and then 3: ``ai_damage_for_roll`` (crit multiplier 1, variance last)
 
 Only mechanics of the implemented set are modelled. Abilities, items and moves
 outside it are ``UNSUPPORTED`` ids and never reach the branches here; the decomp
-modifiers they would trigger (Technician, Thick Fat, Flash
-Fire, ...) are therefore omitted, not approximated. Cloud Nine and Air Lock gate the
+modifiers they would trigger (Hustle, Flash Fire, Heatproof, ...) are therefore omitted, not
+approximated. E2 batch 3 adds Technician, Thick Fat, Dry Skin's Fire boost, Solar Power and
+Reckless's powerMul (``script_power_mul``) to the formula and Scrappy, Tinted Lens and
+Levitate to the type chart (``_finish``). Cloud Nine and Air Lock gate the
 weather modifiers (``weather_suppressed``). Doubles-only
 spread and screen rules do not apply (singles).
 """
@@ -45,6 +47,8 @@ import jax.numpy as jnp
 
 from nuzline.data.tables import Tables
 from nuzline.engine.ids import (
+    ABILITY_DECOMP_IDS,
+    ITEM_GRISEOUS_ORB,
     MOVE_STRUGGLE,
     SPECIES_CLAMPERL,
     SPECIES_CUBONE,
@@ -56,6 +60,8 @@ from nuzline.engine.ids import (
     SPECIES_MAROWAK,
     SPECIES_PALKIA,
     SPECIES_PIKACHU,
+    UNTRACEABLE_ABILITIES,
+    WEATHER_ABILITIES,
     WEATHER_ABILITY_IDS,
     AbilityId,
     EffectId,
@@ -115,11 +121,113 @@ def _i32(x) -> jnp.ndarray:
     return jnp.asarray(x).astype(_I32)
 
 
+# ABILITY_DECOMP_IDS as an array indexed by AbilityId (-1 for UNSUPPORTED, never traced).
+_ABILITY_DECOMP = jnp.array([ABILITY_DECOMP_IDS.get(a, -1) for a in AbilityId], jnp.int32)
+
+
 def decomp_abilities(tables: Tables, state: BattleState) -> jnp.ndarray:
     """``int32[2, SLOTS]``: every slot's decomp ability id (``Battler_Ability``), from
-    ``tables.species_abilities_decomp`` at the Pokemon's personal row and ability slot."""
-    row = tables.species_form_row[_i32(state.species), _i32(state.form)]
-    return _i32(tables.species_abilities_decomp[_i32(row), _i32(state.ability_slot)])
+    ``tables.species_abilities_decomp`` at the Pokemon's personal row and ability slot; for
+    a Trace holder whose ``ability`` is no longer Trace (it traced, ``hooks.trace``), the
+    copied ability's (``ids.ABILITY_DECOMP_IDS``)."""
+    row = _i32(tables.species_form_row[_i32(state.species), _i32(state.form)])
+    slot = _i32(state.ability_slot)
+    own = _i32(tables.species_abilities_decomp[row, slot])
+    trace = ABILITY_DECOMP_IDS[AbilityId.TRACE]
+    traced = (own == trace) & (_i32(state.ability) != AbilityId.TRACE)
+    return jnp.where(traced, _ABILITY_DECOMP[_i32(state.ability)], own)
+
+
+def ignorable(state: BattleState, atk_side, def_side, slot=None) -> jnp.ndarray:
+    """``int32``: ``def_side``'s ability (its active battler's, or party ``slot``'s) as
+    ``atk_side``'s active battler sees it: ``Battler_IgnorableAbility`` (battle_lib.c:
+    3108-3121) hides it behind the attacker's Mold Breaker."""
+    slot = state.active[def_side] if slot is None else slot
+    attacker = _i32(state.ability[atk_side, state.active[atk_side]])
+    return jnp.where(
+        attacker == AbilityId.MOLD_BREAKER, AbilityId.NONE, _i32(state.ability[def_side, slot])
+    )
+
+
+def levitated(state: BattleState, atk_side, def_side, move_type) -> jnp.ndarray:
+    """``bool``: ``BattleSystem_ApplyTypeChart`` sets ``MOVE_STATUS_LEVITATED`` (battle_lib.c:
+    2600-2603) for a Ground-type move against a Levitate holder as the attacker sees it
+    (``Battler_IgnorableAbility``; the Iron Ball, Gravity and Ingrain exceptions are
+    unsupported). The flag is part of ``MOVE_STATUS_IMMUNE``: no damage (``_finish``)."""
+    seen = ignorable(state, atk_side, def_side)
+    return (seen == AbilityId.LEVITATE) & (_i32(move_type) == Type.GROUND)
+
+
+def identified(state: BattleState, atk_side, def_side) -> jnp.ndarray:
+    """``bool``: ``BattleSystem_ApplyTypeChart`` stops at the 0xFE separator, skipping the
+    Ghost immunities (battle_lib.c:2611-2615), for a Foresight-identified defender or an
+    attacker with Scrappy (``Battler_Ability``)."""
+    scrappy = state.ability[atk_side, state.active[atk_side]] == AbilityId.SCRAPPY
+    return (state.foresight[def_side] != 0) | scrappy
+
+
+def trace_copy(tables: Tables, state: BattleState, side, foe, slot=None) -> jnp.ndarray:
+    """``bool``: ``SWITCH_IN_CHECK_STATE_TRACE`` (battle_lib.c:3720-3735) copies ``foe``'s
+    active battler's ability to ``side``'s battler (its active one, or party ``slot`` as it
+    enters): that battler has HP, holds no Griseous Orb and has Trace (``Battler_Ability``;
+    one that traced has another ability now, so ``traceAnnounced`` is never read apart from
+    that), and ``ChooseTraceTarget`` (:7750-7775) finds the foe: alive, its
+    ``BattleMon.ability`` not Forecast, Trace or Multitype (decomp ids). In singles both of
+    the target's slots name the one foe. ``subscript_trace.s`` then writes the foe's ability
+    (``hooks.trace``)."""
+    slot = state.active[side] if slot is None else slot
+    target = state.active[foe]
+    foe_decomp = decomp_abilities(tables, state)[foe, target]
+    traceable = ~jnp.isin(foe_decomp, jnp.asarray(UNTRACEABLE_ABILITIES, foe_decomp.dtype))
+    return (
+        (state.ability[side, slot] == AbilityId.TRACE)
+        & (state.hp[side, slot] > 0)
+        & (state.item[side, slot] != ITEM_GRISEOUS_ORB)
+        & (state.hp[foe, target] > 0)
+        & traceable
+    )
+
+
+def ability_weather(ability) -> jnp.ndarray:
+    """``int32``: the ``Weather`` a switch-in weather ability sets (``ids.WEATHER_ABILITIES``),
+    else ``Weather.NONE``."""
+    out = jnp.asarray(Weather.NONE, _I32)
+    for setter, weather in WEATHER_ABILITIES.items():
+        out = jnp.where(_i32(ability) == setter, weather, out)
+    return out
+
+
+def entry_weather(tables: Tables, state: BattleState, side, slot, foe) -> jnp.ndarray:
+    """``int32``: the weather once ``side``'s party ``slot`` has switched in
+    (``hooks.on_switch_in``): its Stealth Rock damage (``effects.stealth_rock_damage``) leaves
+    it HP, and its weather ability, its own or the one it traces from the foe's active
+    battler (``trace_copy``; ``foe``: the other side), sets that weather for good; else
+    ``state.weather``. For the turn-start laws of the foe's move (``outcome``): a switch goes
+    first."""
+    hp = _i32(state.hp[side, slot])
+    eff = effectiveness(tables, Type.ROCK, state.types[side, slot])
+    rock = jnp.where(eff > 0, jnp.maximum(_i32(state.max_hp[side, slot]) * eff // 800, 1), 0)
+    alive = hp - jnp.where(state.stealth_rock[side] != 0, rock, 0) > 0
+    traced = trace_copy(tables, state, side, foe, slot)
+    ability = jnp.where(traced, state.ability[foe, state.active[foe]], state.ability[side, slot])
+    weather = ability_weather(ability)
+    return jnp.where(alive & (weather != Weather.NONE), weather, _i32(state.weather))
+
+
+# effect_script_0048.s, _0269.s (RECOIL: Take Down, Double-Edge, ...): a Reckless attacker
+# (CheckAbility, Battler_Ability) sets BTLVAR_POWER_MULTI to 12 before CalcCrit / CalcDamage;
+# the other Reckless scripts (0045, 0198, 0253, 0262) are unsupported effects.
+RECKLESS_POWER_MUL = 12
+
+
+def script_power_mul(tables: Tables, state: BattleState, atk_side, move, power_mul) -> jnp.ndarray:
+    """``int32``: ``battleCtx->powerMul`` when ``atk_side``'s move script runs ``CalcDamage``:
+    ``RECKLESS_POWER_MUL`` for a Reckless user's ``RECOIL`` move, else ``power_mul``. The
+    trainer AI's estimate and the confusion self-hit run no move script."""
+    atk_side = _i32(atk_side)
+    reckless = state.ability[atk_side, state.active[atk_side]] == AbilityId.RECKLESS
+    recoil = tables.move_effect[_i32(move)] == EffectId.RECOIL
+    return jnp.where(reckless & recoil, RECKLESS_POWER_MUL, _i32(power_mul))
 
 
 def weather_suppressed(tables: Tables, state: BattleState, active=None) -> jnp.ndarray:
@@ -187,8 +295,9 @@ def fixed_damage(
     level = _i32(state.level[atk_side, state.active[atk_side]])
     kind = move_type_of(tables, state, atk_side, move)
     d_types = state.types[def_side, state.active[def_side]]
-    identified = state.foresight[def_side] != 0
-    immune = effectiveness(tables, kind, d_types, identified) == 0
+    seen = identified(state, atk_side, def_side)
+    immune = effectiveness(tables, kind, d_types, seen) == 0
+    immune = immune | levitated(state, atk_side, def_side, kind)
     unleash = (state.bide_turns[atk_side] == 0) & (state.locked_move[atk_side] != 0)
     stored = jnp.where(unleash, 2 * _i32(state.bide_damage[atk_side]), 0)
     return is_level | is_bide, jnp.where(is_bide, stored, jnp.where(immune, 0, level))
@@ -397,6 +506,11 @@ def _pre_random(
     power = jnp.where(drawn, PRESENT_POWER[jnp.clip(present, 0, PRESENT_HEAL - 1)], power)
     power = jnp.asarray(CONFUSION_POWER, _I32) if self_hit else power
     power = power * _i32(power_mul) // 10  # :6688 movePower * powerMul / 10
+    # :6698-6702 Technician (attackerParams.ability): movePower <= 60 after powerMul (Charge
+    # and Helping Hand, between them, are unsupported), never Struggle (the self-hit's move).
+    technician = (_i32(s.ability[atk_side, a_slot]) == AbilityId.TECHNICIAN) & (power <= 60)
+    technician = technician & (move != MOVE_STRUGGLE)
+    power = jnp.where(technician, power * 15 // 10, power)
     # :6682 moveType = MOVE_DATA(move).type, or Hidden Power's IV type (battle_script.c:6028)
     move_type = move_type_of(tables, s, atk_side, move)
     category = _i32(tables.move_category[move])  # :6704 moveClass
@@ -423,6 +537,12 @@ def _pre_random(
         (attack, sp_attack, defense, sp_defense),
     )  # fmt: skip
 
+    # :6785-6788 Thick Fat (Battler_IgnorableAbility): a Fire or Ice move's power halved.
+    thick_fat = (d_ability_eff == AbilityId.THICK_FAT) & (
+        (move_type == Type.FIRE) | (move_type == Type.ICE)
+    )
+    power = jnp.where(thick_fat, power // 2, power)
+
     # :6793 Guts: Atk x1.5 when statused.
     attack = jnp.where(
         (a_ability == AbilityId.GUTS) & (a_status != Status.NONE), attack * 150 // 100, attack
@@ -439,6 +559,10 @@ def _pre_random(
         | ((move_type == Type.WATER) & (a_ability == AbilityId.TORRENT))
     ) & (a_hp <= a_max_hp // 3)
     power = jnp.where(pinch, power * 150 // 100, power)
+    # :6845-6848 Dry Skin (Battler_IgnorableAbility): a Fire move's power x125/100 (Heatproof,
+    # just before it, is unsupported).
+    dry_skin = (d_ability_eff == AbilityId.DRY_SKIN) & (move_type == Type.FIRE)
+    power = jnp.where(dry_skin, power * 125 // 100, power)
 
     # :6850 attacker Simple doubles its offensive stages.
     a_simple = a_ability == AbilityId.SIMPLE
@@ -465,6 +589,10 @@ def _pre_random(
     # :6921 NO_CLOUD_NINE gates the weather modifiers here and at :7046 (the self-hit
     # passes no field conditions).
     weather = jnp.where(weather_suppressed(tables, s), Weather.NONE, s.weather)
+    # :6922-6924 Solar Power (attackerParams.ability) in sun: Sp. Atk x15/10 (the self-hit
+    # passes no field conditions).
+    solar = (weather == Weather.SUN) & (a_ability == AbilityId.SOLAR_POWER) & (not self_hit)
+    sp_attack = jnp.where(solar, sp_attack * 15 // 10, sp_attack)
     # :6926 sandstorm: a Rock-type defender's SpD x1.5.
     rock = jnp.any(d_types == Type.ROCK)
     sand = (weather == Weather.SANDSTORM) & rock & (not self_hit)
@@ -537,9 +665,8 @@ def _finish(
     a_types = _i32(s.types[atk_side, s.active[atk_side]])
     d_types = _i32(s.types[def_side, s.active[def_side]])
     a_ability = _i32(s.ability[atk_side, s.active[atk_side]])
-    d_ability = _i32(s.ability[def_side, s.active[def_side]])
     # Battler_IgnorableAbility (:3108): Mold Breaker ignores the defender's ability.
-    d_ability = jnp.where(a_ability == AbilityId.MOLD_BREAKER, AbilityId.NONE, d_ability)
+    d_ability = ignorable(s, atk_side, def_side)
     variance = 85 + _i32(roll)
 
     if not variance_last:
@@ -554,9 +681,10 @@ def _finish(
     # row order; type 2 is skipped when it equals type 1 (:2635). Unlisted pairs
     # are neutral (x10/10 leaves damage unchanged), so their order is irrelevant.
     t1, t2 = d_types[0], d_types[1]
-    identified = s.foresight[def_side] != 0  # :2615 the Foresight batch break
-    e1 = chart_entry(tables, move_type, t1, identified)
-    e2 = jnp.where(t2 != t1, chart_entry(tables, move_type, t2, identified), 10)
+    # :2611-2615 the 0xFE batch break: Foresight, or the attacker's Scrappy.
+    seen = identified(s, atk_side, def_side)
+    e1 = chart_entry(tables, move_type, t1, seen)
+    e2 = jnp.where(t2 != t1, chart_entry(tables, move_type, t2, seen), 10)
     t2_first = tables.type_chart_order[move_type, t2] < tables.type_chart_order[move_type, t1]
     first, second = jnp.where(t2_first, e2, e1), jnp.where(t2_first, e1, e2)
     damage = divide(divide(damage * first, 10) * second, 10)
@@ -572,6 +700,15 @@ def _finish(
     a_item = _i32(s.item[atk_side, s.active[atk_side]])
     belt = super_effective & (tables.item_effect[a_item] == ItemId.EXPERT_BELT)
     damage = jnp.where(belt, damage * (100 + _i32(tables.item_param[a_item, 0])) // 100, damage)
+    # :2668-2672 Tinted Lens (Battler_Ability) doubles a MOVE_STATUS_NOT_VERY_EFFECTIVE hit,
+    # which ApplyTypeMultiplier sets, like the super-effective flag above, exactly when the
+    # product is below neutral (an immunity leaves 0).
+    not_very = first * second < 100
+    damage = jnp.where(not_very & (a_ability == AbilityId.TINTED_LENS), damage * 2, damage)
+    # :2600-2603 Levitate: MOVE_STATUS_LEVITATED instead of the chart walk, part of
+    # MOVE_STATUS_IMMUNE: no damage (its DID_NOT_HIT ends the move, bcp.c:3325; the AI's
+    # estimate zeroes an immune hit, trainer_ai.c:3106).
+    damage = jnp.where(levitated(s, atk_side, def_side, move_type), 0, damage)
     damage = jnp.where(typeless, unchanged, damage)
     if variance_last:
         # trainer_ai.c:3109; an immunity is already 0 (:3106).
@@ -588,7 +725,10 @@ def damage_table(tables: Tables, state: BattleState, atk_side, move, crit) -> jn
     (its weakest hit; the playout heuristic's documented under-estimate); Bide's unleash
     stays 0 (it is a forced locked action, never a chosen attack). Present keeps its table
     power (no draw: ``PRESENT_TABLE``)."""
-    damage, move_type, category, power = _pre_random(tables, state, atk_side, move, crit)
+    power_mul = script_power_mul(tables, state, atk_side, move, 10)  # Reckless
+    damage, move_type, category, power = _pre_random(
+        tables, state, atk_side, move, crit, power_mul=power_mul
+    )
     damage = life_orb(tables, state, atk_side, damage)  # battle_script.c:1346
     rolls = jnp.arange(ROLLS, dtype=_I32)
     table = _finish(tables, state, atk_side, move, damage, move_type, category, power, rolls)
@@ -627,7 +767,7 @@ def damage_for_roll(
         atk_side,
         move,
         crit,
-        power_mul=power_mul,
+        power_mul=script_power_mul(tables, state, atk_side, move, power_mul),  # Reckless
         magnitude=magnitude,
         present=present,
     )

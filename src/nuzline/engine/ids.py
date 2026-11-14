@@ -132,6 +132,11 @@ class EffectId(IntEnum):
     NATURE_POWER = 45
     TRI_ATTACK = 46
     ROAR = 47
+    # Sandstorm, Rain Dance, Sunny Day, Hail (effect_script_0115.s, _0136.s, _0137.s,
+    # _0164.s): ``(Weather, 0, 0)``. It fails when that weather is already up (either kind);
+    # else every weather bit is cleared and the weather is set for 5 turns, plus the param of
+    # the user's matching ``ItemId.WEATHER_ROCK`` (``effects._weather``).
+    WEATHER = 48
 
 
 class AbilityId(IntEnum):
@@ -171,6 +176,114 @@ class AbilityId(IntEnum):
     # (battle_lib.c:4774-4776 and its siblings), BattleSystem_CompareBattlerSpeed Custap's
     # (:1289-1291, :1355-1357); no other decomp code reads ABILITY_GLUTTONY.
     GLUTTONY = 32
+    # E2 batch 3 (rulings B3-n, docs/kaizo/e2-mechanics-ledger.md). Damage formula
+    # (damage.py): Technician, Thick Fat, Dry Skin's Fire boost, Solar Power, Reckless (its
+    # recoil scripts' powerMul), Tinted Lens, Levitate, Scrappy; crit (outcome.crit_odds,
+    # effects.play_hit): Super Luck, Shell Armor, Battle Armor; accuracy (outcome._rate): No
+    # Guard, Tangled Feet; order (order.effective_speed): Quick Feet; secondary chance
+    # (outcome.secondary_chance): Serene Grace; effects.py: Shield Dust, Dry Skin's Water
+    # absorb (step._use_move); step.py: Truant, the weather abilities' turn-end HP (Dry Skin,
+    # Solar Power); hooks.on_switch_in: Trace, Drought, Drizzle, Sand Stream, Snow Warning.
+    # Lightningrod (BattleSystem_TriggerRedirectionAbilities, battle_lib.c:1756-1772) only
+    # redirects to a battler other than the defender, which singles never has; Honey Gather
+    # acts only after the battle (battle_script.c:7825).
+    RECKLESS = 33
+    TECHNICIAN = 34
+    TRUANT = 35
+    DRY_SKIN = 36
+    LIGHTNINGROD = 37
+    NO_GUARD = 38
+    SERENE_GRACE = 39
+    DROUGHT = 40
+    HONEY_GATHER = 41
+    LEVITATE = 42
+    QUICK_FEET = 43
+    SCRAPPY = 44
+    SHELL_ARMOR = 45
+    BATTLE_ARMOR = 46
+    SHIELD_DUST = 47
+    SOLAR_POWER = 48
+    SUPER_LUCK = 49
+    TANGLED_FEET = 50
+    THICK_FAT = 51
+    TINTED_LENS = 52
+    TRACE = 53
+    DRIZZLE = 54
+    SAND_STREAM = 55
+    SNOW_WARNING = 56
+
+
+# The decomp ability id of every supported ``AbilityId`` (generated/abilities.txt line N is id
+# N - 1; tests/engine/test_ids.py reads them back through effect_map.DECOMP_ABILITY_TO_ID and
+# both games' abilities.json). ``damage.decomp_abilities`` reads it for a battler whose
+# ``BattleMon.ability`` Trace rewrote (battle_lib.c:3720-3735, subscript_trace.s), which the
+# species table no longer gives.
+ABILITY_DECOMP_IDS = {
+    AbilityId.NONE: 0,
+    AbilityId.STURDY: 5,
+    AbilityId.ROCK_HEAD: 69,
+    AbilityId.MOLD_BREAKER: 104,
+    AbilityId.BLAZE: 66,
+    AbilityId.TORRENT: 67,
+    AbilityId.OVERGROW: 65,
+    AbilityId.INTIMIDATE: 22,
+    AbilityId.RIVALRY: 79,
+    AbilityId.KEEN_EYE: 51,
+    AbilityId.SIMPLE: 86,
+    AbilityId.UNAWARE: 109,
+    AbilityId.NATURAL_CURE: 30,
+    AbilityId.POISON_POINT: 38,
+    AbilityId.INNER_FOCUS: 39,
+    AbilityId.STATIC: 9,
+    AbilityId.GUTS: 62,
+    AbilityId.STEADFAST: 80,
+    AbilityId.INSOMNIA: 15,
+    AbilityId.CLOUD_NINE: 13,
+    AbilityId.COMPOUNDEYES: 14,
+    AbilityId.SHED_SKIN: 61,
+    AbilityId.SAND_VEIL: 8,
+    AbilityId.SNOW_CLOAK: 81,
+    AbilityId.SWIFT_SWIM: 33,
+    AbilityId.ROUGH_SKIN: 24,
+    AbilityId.FLAME_BODY: 49,
+    AbilityId.LIMBER: 7,
+    AbilityId.ADAPTABILITY: 91,
+    AbilityId.SOLID_ROCK: 116,
+    AbilityId.CUTE_CHARM: 56,
+    AbilityId.GLUTTONY: 82,
+    AbilityId.RECKLESS: 120,
+    AbilityId.TECHNICIAN: 101,
+    AbilityId.TRUANT: 54,
+    AbilityId.DRY_SKIN: 87,
+    AbilityId.LIGHTNINGROD: 31,
+    AbilityId.NO_GUARD: 99,
+    AbilityId.SERENE_GRACE: 32,
+    AbilityId.DROUGHT: 70,
+    AbilityId.HONEY_GATHER: 118,
+    AbilityId.LEVITATE: 26,
+    AbilityId.QUICK_FEET: 95,
+    AbilityId.SCRAPPY: 113,
+    AbilityId.SHELL_ARMOR: 75,
+    AbilityId.BATTLE_ARMOR: 4,
+    AbilityId.SHIELD_DUST: 19,
+    AbilityId.SOLAR_POWER: 94,
+    AbilityId.SUPER_LUCK: 105,
+    AbilityId.TANGLED_FEET: 77,
+    AbilityId.THICK_FAT: 47,
+    AbilityId.TINTED_LENS: 110,
+    AbilityId.TRACE: 36,
+    AbilityId.DRIZZLE: 2,
+    AbilityId.SAND_STREAM: 45,
+    AbilityId.SNOW_WARNING: 117,
+}
+
+# ChooseTraceTarget (battle_lib.c:7750-7775) never picks a battler whose ``BattleMon.ability``
+# is Forecast, Trace or Multitype (decomp ids, generated/abilities.txt).
+ABILITY_FORECAST = 59
+UNTRACEABLE_ABILITIES = (ABILITY_FORECAST, 36, 121)  # Forecast, Trace, Multitype
+# ITEM_GRISEOUS_ORB (generated/items.txt): a Trace holder holding it never traces
+# (battle_lib.c:3728).
+ITEM_GRISEOUS_ORB = 112
 
 
 class ItemId(IntEnum):
@@ -311,6 +424,11 @@ class ItemId(IntEnum):
     KINGS_ROCK = 46
     SHELL_BELL = 47
     LIGHT_CLAY = 48
+    # Icy Rock, Smooth Rock, Heat Rock, Damp Rock (HOLD_EFFECT_EXTEND_HAIL / _SANDSTORM / _SUN
+    # / _RAIN): ``item_param[i, 1]`` is the ``Weather`` it extends; the user's weather move of
+    # that weather lasts ``5 + param`` turns (effect_script_0115.s, _0136.s, _0137.s, _0164.s:
+    # CheckItemHoldEffect / GetItemEffectParam on the attacker; ``effects._weather``).
+    WEATHER_ROCK = 49
 
 
 # The three Choice items: ``BattleSystem_CheckInvalidMoves`` (battle_lib.c:2307-2315) and
@@ -421,6 +539,22 @@ class Weather(IntEnum):
     SANDSTORM = 3
     HAIL = 4
     FOG = 5
+
+
+# The switch-in weather abilities (SWITCH_IN_CHECK_STATE_WEATHER_ABILITIES, battle_lib.c:
+# 3740-3790): each sets its weather permanently (subscript_drizzle.s, subscript_sand_stream.s,
+# subscript_drought.s, subscript_snow_warning.s: FIELD_CONDITION_WEATHER off, then the
+# ``*_PERM`` bit; the decomp skips the script when that permanent weather is already up, which
+# leaves the same field), ``hooks.on_switch_in``.
+WEATHER_ABILITIES = {
+    AbilityId.DRIZZLE: Weather.RAIN,
+    AbilityId.SAND_STREAM: Weather.SANDSTORM,
+    AbilityId.DROUGHT: Weather.SUN,
+    AbilityId.SNOW_WARNING: Weather.HAIL,
+}
+# Weather moves: NUM_WEATHER_TURNS (effect_script_0136.s etc. ``UpdateVar OPCODE_SET,
+# BTLVAR_WEATHER_TURNS, 5``).
+WEATHER_TURNS = 5
 
 
 class Type(IntEnum):

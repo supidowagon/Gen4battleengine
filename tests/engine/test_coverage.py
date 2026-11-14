@@ -62,19 +62,20 @@ def test_all_missing_reported_at_once(tables, names):
     assert e.value.report.level == Support.NONE
 
 
-def test_only_no_weather_and_sandstorm_are_supported():
-    supported = (Weather.NONE, Weather.SANDSTORM)
+def test_every_weather_but_fog_is_supported():
+    # E2 batch 3: sun, rain and hail join sandstorm (coverage docstring); deep fog stays out.
     for w in Weather:
-        assert IMPLEMENTED_WEATHER[w] == (Support.EXACT if w in supported else Support.NONE)
+        assert IMPLEMENTED_WEATHER[w] == (Support.NONE if w == Weather.FOG else Support.EXACT)
 
 
-def test_hail_route_trainer_is_refused(tables, names):
+def test_hail_route_trainer_weather_is_supported(tables, names):
     hail = next(t for t in load_trainers(INTERMEDIATE) if t.start_condition == "hail")
     assert start_weather(hail) == Weather.HAIL
     opp = build_trainer_party(hail, _inter())
-    with pytest.raises(UnsupportedMechanics) as e:
-        require_coverage(tables, names, sample_party(names), hail, opp, Weather.HAIL)
-    assert "Hail" in str(e.value)
+    r = check_coverage(tables, names, sample_party(names), hail, opp, Weather.HAIL)
+    assert not any("Battle start: Hail" in m for m in r.missing)
+    r = check_coverage(tables, names, sample_party(names), hail, opp, Weather.FOG)
+    assert "Battle start: Fog (weather UNSUPPORTED)" in r.missing
 
 
 def test_double_battle_trainer_is_refused(tables, names):
@@ -136,9 +137,9 @@ def test_partner_trainer_is_not_refused_for_its_format(tables, names):
 
 def test_start_condition_argument_is_checked(tables, names):
     r = check_coverage(
-        tables, names, sample_party(names), roark_trainer(), roark_party(names), Weather.RAIN
+        tables, names, sample_party(names), roark_trainer(), roark_party(names), Weather.FOG
     )
-    assert any("Rain" in m for m in r.missing)
+    assert any("Fog" in m for m in r.missing)
 
 
 def test_unsupported_trainer_item_and_mixed_bag(tables, names):
@@ -244,8 +245,17 @@ def test_in_battle_form_changes_are_refused(tables, names, species, form, item, 
 def test_coverage_reads_the_form_row_ability(tables, names):
     origin = replace(sample_party(names)[0], species=487, form=1, item=names.item("Griseous Orb"))
     r = check_coverage(tables, names, [origin], roark_trainer(), roark_party(names), 0)
-    assert any(m.endswith("GIRATINA (slot 0): Levitate (ability UNSUPPORTED)") for m in r.missing)
-    assert not any("Pressure" in m for m in r.missing)  # Altered Forme's ability
+    # Origin Forme's row has Levitate (supported since E2 batch 3), Altered Forme's Pressure.
+    assert (
+        any(m.endswith("GIRATINA (slot 0): Pressure (ability UNSUPPORTED)") for m in r.missing)
+        is False
+    )
+    assert not any(
+        "Levitate (ability UNSUPPORTED)" in m for m in r.missing
+    )  # the AI's refusals stay
+    altered = replace(origin, form=0)
+    r = check_coverage(tables, names, [altered], roark_trainer(), roark_party(names), 0)
+    assert any(m.endswith("GIRATINA (slot 0): Pressure (ability UNSUPPORTED)") for m in r.missing)
     with pytest.raises(ValueError, match="species 479 has no form 6"):
         check_coverage(
             tables,
@@ -457,16 +467,14 @@ def test_unknown_start_condition_refused_not_read_as_weather(tables, names):
     assert line in check_opponent(tables, names, area_only, roark_party(names), 0).missing
 
 
-def test_area_weather_keeps_the_weather_refusal(tables, names):
-    for cond, line in (
-        ("hail", "Battle start: Hail (weather UNSUPPORTED)"),
-        ("sun", "Battle start: Sun (weather UNSUPPORTED)"),
-        ("fog", "Battle start: Fog (weather UNSUPPORTED)"),
-    ):
+def test_area_weather_keeps_the_fog_refusal(tables, names):
+    t = replace(roark_trainer(), start_condition="fog")
+    assert "Battle start: Fog (weather UNSUPPORTED)" in (
+        check_opponent(tables, names, t, roark_party(names), 0).missing
+    )
+    for cond in ("sandstorm", "hail", "sun", "rain"):  # E2 batch 3: modelled
         t = replace(roark_trainer(), start_condition=cond)
-        assert line in check_opponent(tables, names, t, roark_party(names), 0).missing
-    sand = replace(roark_trainer(), start_condition="sandstorm")
-    assert not check_opponent(tables, names, sand, roark_party(names), 0).missing
+        assert not check_opponent(tables, names, t, roark_party(names), 0).missing
 
 
 def test_ability_override_without_set_data_refused(tables, names):  # review I1
@@ -648,3 +656,31 @@ def test_make_state_takes_the_trainers_terrain(tables, names):
     assert int(make_state(tables, sample_party(names), roark_party(names)).terrain) == -1
     with pytest.raises(ValueError, match="terrain 25"):
         make_state(tables, sample_party(names), roark_party(names), terrain=25)
+
+
+def test_weather_war_and_trace_standoff_are_refused(tables, names):
+    """Rulings B3-14, B3-15 (coverage docstring): two different weather abilities on the two
+    sides, and Trace on both sides, are refused; one side alone is not."""
+    from nuzline.data.spec import PokemonSpec
+    from nuzline.engine.coverage import trace_standoff_line, weather_war_line
+
+    def mon(species: str) -> PokemonSpec:
+        sid = names.species(species)
+        return PokemonSpec(
+            species=sid,
+            level=10,
+            nature=0,
+            ivs=(0,) * 6,
+            evs=(0,) * 6,
+            moves=(names.move("Tackle"), 0, 0, 0),
+            item=0,
+            ability_slot=0,
+            gender=0,
+            friendship=0,
+        )
+
+    assert weather_war_line(tables, [mon("Groudon")], [mon("Kyogre")]) is not None
+    assert weather_war_line(tables, [mon("Groudon")], [mon("Groudon"), mon("Geodude")]) is None
+    assert weather_war_line(tables, [mon("Kyogre"), mon("Groudon")], [mon("Geodude")]) is None
+    assert trace_standoff_line(tables, [mon("Porygon")], [mon("Porygon")]) is not None
+    assert trace_standoff_line(tables, [mon("Porygon")], [mon("Geodude")]) is None

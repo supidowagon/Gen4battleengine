@@ -5,8 +5,13 @@
 - Closed: batch 1 and batch 2 (reviewed; follow-ups in c61c768 and the merge-check commit),
   committed on this branch. The merged fast tier passed 2715 / 8 skipped (log
   `_scratch/e2/b2/fast_tier_merge_377037d.log` on G:).
-- In progress: batch 3 (abilities, and sun / rain / hail as one family); see the Owed list
-  below for what it can close (King's Rock vs Shield Dust).
+- Batch 3 (abilities, and sun / rain / hail as one family): committed, awaiting its review.
+  Checks: differential (jax_matches_reference, payouts) green; focused engine, data and tools
+  tests green; cold `jit(step)` 45.3 s and `jit(vmap(step))` 35.0 s against 39.5 / 32.2 s for
+  a0033f9 measured in the same session (+15 % / +9 %; this machine gave 20.7 / 15.6 s for batch
+  2 earlier, so compare the pairs); Roark split 104 -> 81 distinct groups, its move effect
+  + held item + ability + terrain entries 47 -> 24. The AI's own refusals of the new abilities
+  (Levitate, Shield Dust, ...) and the weather moves (#136, #164) stay for E1.
 - Standing: the doubles conventions below apply to all new code; one review per batch.
 
 Session E2 builds the battle mechanics the Roark split's trainers need (held items,
@@ -51,8 +56,8 @@ the `step` turn skeleton and `enumerate.py`'s branch structure stay as they are.
 
 Rules left out because another mechanic is missing; each closes with the mechanic named.
 
-- King's Rock's flinch vs Shield Dust and Substitute (effects.py `_kings_rock`;
-  subscript_flinch_mon.s:6, :9): Shield Dust (E2 batch 3), Substitute.
+- King's Rock's flinch vs Substitute (effects.py `_kings_rock`; subscript_flinch_mon.s:6):
+  Substitute. (Its Shield Dust test, :9, is modelled by E2 batch 3, B3-9.)
 - The Sticky Barb transfer vs Knock Off, the knocked-off mask, U-turn and the substitute test
   (effects.py `sticky_barb_transfer`; battle_lib.c:5378, :5390-5393): those moves.
 - Shell Bell and Life Orb vs `SYSCTL_UTURN_ACTIVE` (bcp.c:4739, :4761): U-turn.
@@ -183,3 +188,77 @@ Rules left out because another mechanic is missing; each closes with the mechani
 - B2-16 Kaizo changes item params only, read from each game's table: BrightPowder, Lax Incense and
   King's Rock have param 11 (vanilla 10); its Berserk Gene is a renamed Shoal Salt slot with
   hold effect 36 and param 0, so it stays unsupported (renamed slot, and B2-3).
+- B3-1 Technician (`attackerParams.ability`) raises `movePower <= 60` by x15/10 after powerMul (Charge
+  and Helping Hand, between them, are unsupported) and before the held items, never for Struggle
+  (so not the confusion self-hit); it reads the input power (Hidden Power's, Magnitude's, Flail's,
+  Rollout's) and is in the AI's estimate (battle_lib.c:6688-6702; trainer_ai.c:3078).
+- B3-2 Reckless is only the recoil scripts' `BTLVAR_POWER_MULTI = 12` (effect_script_0048.s,
+  _0269.s: the supported RECOIL moves; 0045, 0198, 0253, 0262 are unsupported effects): no AI
+  estimate, no self-hit, and Pursuit is no recoil move (`damage.script_power_mul`).
+- B3-3 Thick Fat (ignorable) halves Fire / Ice power right after the items (battle_lib.c:6785-6788);
+  Dry Skin (ignorable) raises Fire power x125/100 after Overgrow / Blaze / Torrent (:6845-6848);
+  Solar Power raises Sp. Atk x15/10 in sun inside `NO_CLOUD_NINE` (:6922-6924; the self-hit passes
+  no field conditions).
+- B3-4 In `BattleSystem_ApplyTypeChart`: Levitate (ignorable) sets `MOVE_STATUS_LEVITATED` for a
+  Ground move (:2600-2603), part of `MOVE_STATUS_IMMUNE` and `DID_NOT_HIT`, so no damage, no
+  AfterMoveEffects and a zero in the AI estimate (trainer_ai.c:3106); Scrappy breaks the walk at
+  0xFE like Foresight (:2611-2615) for every chart reader (damage, Thunder Wave, the resist-berry
+  flag, Night Shade's immunity); Tinted Lens doubles a not-very-effective hit after Expert Belt
+  (:2668-2672). Status moves other than Thunder Wave skip the chart (bcp.c:2350-2358).
+- B3-5 Battle Armor and Shell Armor (the same ignorable test, battle_lib.c:7135-7136) stop every
+  crit; Super Luck adds 1 to the crit stage from the battler's own ability (:7126). Both engines
+  gate the drawn crit with the armor at the hit; the laws draw none (`outcome.armored`).
+- B3-6 No Guard of either battler (`Battler_Ability`, not ignorable) clears `MOVE_STATUS_MISSED` after
+  the roll (bcp.c:3016-3021): threshold 100. Tangled Feet (ignorable) halves the rate against a
+  confused target after fog and before the items (bcp.c:2944-2947).
+- B3-7 Quick Feet with any status (`MON_CONDITION_ANY`) raises Speed x15/10 instead of the paralysis
+  quartering (battle_lib.c:1257-1261, :1323-1327).
+- B3-8 Serene Grace doubles `effectChance` (a u16, then `% 100 <`) in
+  `BattleSystem_TriggerSecondaryEffect` and `BtlCmd_CheckEffectActivation` (battle_lib.c:1552-1556,
+  :1571-1575; battle_script.c:8369-8373): every probabilistic secondary, Fake Out's flinch and both
+  Thunder Fang rolls; not the contact abilities' or King's Rock's rolls.
+- B3-9 Shield Dust (ignorable) silently stops every `SIDE_EFFECT_TYPE_INDIRECT` effect on its holder:
+  a secondary status, confusion, flinch (King's Rock's too) or stat drop (battle_script.c:2918-2921;
+  subscript_paralyze.s:13, _burn.s:27, _freeze.s:11, _poison.s:20, _badly_poison.s:38,
+  _fall_asleep.s:31, _confuse.s:15, _flinch_mon.s:9), after Insomnia / Limber / Inner Focus; Bind's
+  start (no check) and the contact abilities are not stopped.
+- B3-10 Truant: `Battler_CheckTruant` loafs when `truant != (totalTurns & 1)`, `truant` being
+  `(totalTurns + 1) & 1` from the entry (battle_lib.c:2119, :2197, :3304-3313): `fake_out_turn`'s
+  parity, 0 for a lead, whatever the battler did. Checked after sleep and freeze, before the flinch
+  (bcp.c:2502-2510); subscript_loafing_around.s unlocks and tags no ability; a loafing pursuer does
+  not hit a switcher (battle_script.c:6903).
+- B3-11 Dry Skin takes a damaging Water move that hit (Hidden Power's type too;
+  `TRY_MOVE_STATE_TRIGGER_IMMUNITY_ABILITIES`, bcp.c:3281-3286, :2782-2810, battle_lib.c:3538-3544):
+  `Divide(maxHP, 4)` below full HP, its ability tagged either way, then `MOVE_STATUS_NO_MORE_WORK`
+  (no hit, no secondary, no AfterMoveEffects; the attack message showed). At the turn's end sun
+  takes `Divide(maxHP, 8)` from Dry Skin and Solar Power (Magic Guard skips it) and rain gives it to
+  Dry Skin below full HP (battle_script.c:5585-5625), each tagging the ability.
+- B3-12 The weather moves fail on their own weather, temporary or permanent, except Hail, which
+  fails only on a temporary hail (effect_script_0164.s checks `FIELD_CONDITION_HAILING_TEMP`): it
+  turns a permanent hail into a 5-turn one. Success clears every weather bit and sets 5 turns plus
+  the user's matching rock param (Damp / Heat / Smooth / Icy Rock); a failure is
+  `MOVE_STATUS_FAILED` (no AfterMoveEffects). They are `RANGE_FIELD`, accuracy 0.
+- B3-13 Drizzle, Sand Stream, Drought, Snow Warning set their weather permanently at their holder's
+  switch-in check when it has HP (after Stealth Rock), whatever weather was up; the script (and
+  its ability message) is skipped only under that same permanent weather (battle_lib.c:3740-3790);
+  Cloud Nine does not stop it.
+- B3-14 Trace (battle_lib.c:3718-3737, `ChooseTraceTarget` :7750-7775): a holder with HP and no
+  Griseous Orb copies a living foe's `BattleMon.ability` unless it is Forecast, Trace or Multitype;
+  only the battler's (no form change: no party write), so it ends when it leaves; the AI learns the
+  tracer's and the target's abilities (battle_script.c:3403, :11806). A Trace facing Trace stays
+  armed and copies the next newcomer mid-turn, which the turn-start chance laws do not follow:
+  Trace in both parties is refused (`coverage.trace_standoff_line`). A player Trace newcomer that
+  entered against a fainted foe traces when the foe's replacement enters (`hooks.on_switch_in`
+  runs Trace for the other battler too; `playout.replacement_pass` defers only the newcomer's own
+  Intimidate).
+- B3-15 Two weather abilities that set different weathers, one in each party, are refused
+  (`coverage.weather_war_line`): entering together (battle start, a double KO's replacements) the
+  `monSpeedOrder` loop (battle_lib.c:3740-3790, sorted by `CompareBattlerSpeed` at
+  bcp.c:251, :263) leaves the slower one's weather, with an exact tie a `RandNext() & 1` the engine
+  does not draw there.
+- B3-16 Lightningrod redirects only to a battler other than the attacker and defender
+  (battle_lib.c:1756-1772), which singles never has; Honey Gather acts only after the battle
+  (battle_script.c:7825): both supported with no in-battle effect.
+- B3-17 Kaizo changes none of these: its accuracy changes add effect 141 (Hurricane, unsupported) to
+  Thunder's sun and rain branches (docs/kaizo/rom_diff.md, CheckMoveHitAccuracy /
+  CheckMoveHitOverrides), and TriggerEffectOnSwitch only its field-weather switch.
