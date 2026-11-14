@@ -42,15 +42,18 @@ def test_layout_per_flag_set(tables, kaizo_tables):
     from nuzline.data.tables import AI_FLAGS_UNSET
 
     assert layout_of(kaizo_tables) is kaizo_layout(0b10111) == KAIZO
-    sets = (0x1, 0x5, 0x7, 0x17, 0xD, 0xF, 0x1F, 0x207, 0x20F)
+    from nuzline.ai.outcome import kaizo_slot_reads
+
+    sets = (0x1, 0x5, 0x7, 0x17, 0xD, 0xF, 0x1F, 0x207, 0x20F, 0x27, 0x10F)
     for flags in sets:
         layout = layout_of(kaizo_tables._replace(ai_flags=jnp.int32(flags)))
-        assert layout == KAIZO._replace(flags=flags) and layout.key == f"kaizo-{flags:#x}"
+        assert layout == KAIZO._replace(flags=flags, slot_reads=kaizo_slot_reads(flags))
+        assert layout.key == f"kaizo-{flags:#x}"
+    # E1 Ruling R5: the read bound is per set, Roark's 7 unchanged.
+    assert [kaizo_layout(f).slot_reads for f in (0x7, 0x17, 0xF, 0x27, 0x10F)] == [6, 7, 7, 7, 9]
     assert len({kaizo_layout(f).key for f in sets} | {VANILLA.key}) == len(sets) + 1
     with pytest.raises(ValueError, match="not set"):
         layout_of(kaizo_tables._replace(ai_flags=AI_FLAGS_UNSET))
-    with pytest.raises(ValueError, match="transcribes only"):
-        kaizo_layout(0x27)  # PRIORITIZE_EXTREMES, not transcribed yet
     assert layout_of(tables._replace(ai_flags=jnp.int32(0x17))) is VANILLA
 
 

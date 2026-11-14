@@ -120,7 +120,9 @@ def test_hp_why_names_each_percent_check(tables, names):
     off = "at most {} % keeps the trainer AI's high-HP check off"
     assert _hp_why(prob, names, Member(1, hp=40), tables) == off.format(70)
     assert _hp_why(prob, names, Member(1, hp=29), tables) != off.format(50)
-    kaizo = tables._replace(ai_policy=np.asarray(AI_POLICIES.index("kaizo")))
+    kaizo = tables._replace(
+        ai_policy=np.asarray(AI_POLICIES.index("kaizo")), ai_flags=np.int32(0x17)
+    )
     assert _hp_why(prob, names, Member(1, hp=29), kaizo) == off.format(50)
 
 

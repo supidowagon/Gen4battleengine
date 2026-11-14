@@ -107,11 +107,27 @@ class Tables(NamedTuple):
     ai_flags: jnp.ndarray = AI_FLAGS_UNSET
 
 
+# The Tables fields tables.npz carries: all but those a fight sets (Tables.ai_flags).
+NPZ_FIELDS = tuple(f for f in Tables._fields if f != "ai_flags")
+
+
+def tables_from_npz(z, dir: Path, convert=np.asarray) -> Tables:
+    """``Tables`` from the opened ``tables.npz`` ``z`` (each field through ``convert``), its
+    fight-set fields at their defaults. ``ValueError`` naming the npz fields that are missing."""
+    missing = [f for f in NPZ_FIELDS if f not in z.files]
+    if missing:
+        raise ValueError(
+            f"{Path(dir) / 'tables.npz'} lacks {', '.join(missing)}: re-run "
+            "tools/extract_decomp.py and tools/build_tables.py"
+        )
+    return Tables(**{f: convert(z[f]) for f in NPZ_FIELDS})
+
+
 def load_tables(dir: Path = DEFAULT) -> Tables:
     _read_manifest(dir)
     with np.load(Path(dir) / "tables.npz") as z:
         check_npz(z, dir)
-        return Tables(**{f: jnp.asarray(z[f]) for f in Tables._fields if f in z.files})
+        return tables_from_npz(z, dir, jnp.asarray)
 
 
 def to_numpy(tables: Tables) -> Tables:

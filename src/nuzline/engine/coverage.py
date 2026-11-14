@@ -199,6 +199,8 @@ IMPLEMENTED_AI_FLAGS: dict[str, dict[int, Support]] = {
         2: Support.EXACT,
         3: Support.EXACT,
         4: Support.EXACT,
+        5: Support.EXACT,
+        8: Support.EXACT,
         9: Support.EXACT,
     },
 }

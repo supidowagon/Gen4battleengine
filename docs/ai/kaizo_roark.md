@@ -32,15 +32,18 @@ The sections keep roark.md's numbers, so a rule can be compared section by secti
   `cli`, and `check_coverage` for its `ai_refusals`); `layout_of` refuses Kaizo tables whose
   flags are unset. The search's program caches key on `AiLayout.key` (policy and flag set:
   `expand.ai_rows`, `leaves`, `stage_a`). Implemented sets: every set of BASIC, EVAL_ATTACK,
-  EXPERT, SETUP_FIRST_TURN, RISKY and WEATHER (`layout.KAIZO_FLAG_BITS`; the last two since
-  E1 batch 2b, 5.5-5.6), among them 0x1, 0x5, 0x7, Roark's 0x17, 0xd, 0xf, 0x1f, 0x207 and
-  0x20f.
+  EXPERT, SETUP_FIRST_TURN, RISKY, PRIORITIZE_EXTREMES, CHECK_HP and WEATHER
+  (`layout.KAIZO_FLAG_BITS`; SETUP_FIRST_TURN and WEATHER since E1 batch 2b, 5.5-5.6,
+  PRIORITIZE_EXTREMES and CHECK_HP since 2c, 5.7-5.8), among them 0x1, 0x5, 0x7, Roark's
+  0x17, 0xd, 0xf, 0x1f, 0x27, 0x10f, 0x207 and 0x20f: every singles set of the Roark split
+  and all Gardenia singles but Cheryl's 0x58b (TAG_STRATEGY, HARRASSMENT).
   `KAIZO` is Roark's set and stays bit-identical. Width does not depend on the set: reads are
   keyed by path order (8.2), so a set's reads cost only the moves that make them.
 - Coverage (`engine/coverage.py`) registers the flags per policy: `IMPLEMENTED_AI_FLAGS` is
-  `{0, 1, 2}` for vanilla and `{0, 1, 2, 3, 4, 9}` for Kaizo. A Kaizo trainer is refused exactly by
-  its unimplemented flags, one "AI_FLAG_..." line each (`tests/engine/test_coverage.py
-  test_kaizo_flag_set_needs_every_flag`). Vanilla keeps its one set: a vanilla trainer
+  `{0, 1, 2}` for vanilla and `{0, 1, 2, 3, 4, 5, 8, 9}` for Kaizo. A Kaizo trainer is
+  refused exactly by its unimplemented flags, one "AI_FLAG_..." line each; every singles set of
+  the Roark and Gardenia splits gives none (`tests/engine/test_coverage.py
+  test_kaizo_flag_set_has_no_flag_line`). Vanilla keeps its one set: a vanilla trainer
   without all of BASIC, EVAL_ATTACK and EXPERT is refused (`POLICY_AI_FLAGS`), and one with
   RISKY by that flag. Kaizo Roark's flag lines are all EXACT.
 
@@ -444,6 +447,35 @@ No roll. The +5 is uniform over the non-weather moves but not a no-op: a later f
 unmodelled engine effects (refused by move effect), and a runnable fight's weather is none or
 sandstorm (`coverage.IMPLEMENTED_WEATHER`); the transcription covers all four labels anyway.
 
+### 5.7 PRIORITIZE_EXTREMES (`PrioritizeExtremes_Main`, `script.s:6499-6519`; E1 batch 2c)
+
+Bit 5 (Barry's 0x27). `FlagMoveDamageScore USE_MAX_DAMAGE` then `IfLoadedNotEqualTo
+AI_NO_COMPARISON_MADE` (`:6511-6512`): only a move the damage compare skips continues, that is
+one not in `sAltPowerMoveEffects` with power at most 1 or a `sNoDamageCalcMoveEffects` effect
+(`trainer_ai.c:1012-1063`). Despite the comment at `:6503-6509`, alt-power moves are compared,
+so they never reach the roll; they are refused anyway (`_refused.alt_power`). The 100 roll
+(`:6515`) gives **+2** when it does not jump (156/256). Of the transcribed effects it reaches
+every status move (Stealth Rock, Toxic, Recover, Light Screen, Rock Polish, Curse, Leer,
+Screech) and the no-calc Selfdestruct and Head Smash.
+
+### 5.8 CHECK_HP (`CheckHP_Main`, `script.s:7696-7746`; E1 batch 2c)
+
+Bit 8 (Sebastian's 0x10f). Its `IfTargetIsPartner` goes to `TagStrategy_Partner` (`:7697`),
+never taken in singles. Two rounds, each with one roll:
+
+1. The attacker's HP percent (`IfHPPercentGreaterThan` 70, then 30, `:7700-7701`; integer
+   `curHP * 100 / maxHP`, `trainer_ai.c:603`) picks `CheckHP_DiscourageAtHighHP` (> 70),
+   `..AtMediumHP` (31-70) or `..AtLowHP` (30 and below). `LoadCurrentMoveEffect` and the new
+   command `IfLoadedInTable` (`trainer_ai.c:858-874`) jump to `CheckHP_TryScoreMinus2` for a
+   listed effect, which gives **-2** unless the 50 roll (`:7718`) jumps; every path then goes on
+   to the target's round.
+2. The same with the player's true HP (`:7724-7725`) and the `CheckHP_Target_Discourage*`
+   tables, roll `:7742`. `CheckHP_Target_DiscourageAtHighHP` is empty (`:7866-7867`).
+
+The six tables are `commands.CHECK_HP_TABLES` (212 entries, by label). The player-HP reads
+> 70 and > 30 are prep cuts for a CHECK_HP fight (`prep/variants.AI_FLAG_DEFENDER_HP_CHECKS`,
+added to the policy's checks by `ai_defender_hp_checks` when the set has bit 8).
+
 ## 6. Where the AI reads the true battle state
 
 roark.md 6 holds: the damage estimate, the kill check and the effectiveness class read the
@@ -596,15 +628,20 @@ reads cost nothing to a move that does not make them.
 
 - `KAIZO.transcribed` is `outcome.KAIZO_TRANSCRIBED` (Kaizo Roark's 24 effects); its comments
   name each effect's Expert label and rolls (5.3).
-- **The bound.** `KAIZO.slot_reads` = 7 (`outcome.KAIZO_SLOT_READS`), the most random reads
-  one path makes, found from the data (`tests/ai/test_kaizo_outcome.py
-  test_slot_reads_fit_every_transcribed_effect`: every transcribed Kaizo move in slot 0 over
-  random players, HP, stages and turn, under every implemented flag at once, the loose
-  oracle's longest path). Selfdestruct reaches it
-  against a guessed two-ability player with evasion +4, Bonsly at 30 % HP or less: `:117` and
-  `:304` (guesses), `:6374`, `:1859`, `:1870`, `:1875`, `:6530`. Next come Toxic (5: three
-  guesses, `:2690`, `:2695`), and under SETUP_FIRST_TURN on the first turn Curse and Light Screen (5,
-with SETUP's `:6429`; 5.5). A path that makes more is a path refusal (8.3), a
+- **The bound (E1 Ruling R5: per flag set).** `AiLayout.slot_reads` is
+  `outcome.kaizo_slot_reads(flags)`: `KAIZO_BASE_READS` = 6, the most random reads BASIC,
+  EVAL_ATTACK and EXPERT make on one path, found from the data, plus each other set flag's
+  most, read off its script (`KAIZO_FLAG_READS`: SETUP_FIRST_TURN 1, `:6429`; RISKY 1, `:6530`;
+  PRIORITIZE_EXTREMES 1, `:6515`; CHECK_HP 2, `:7718` and `:7742`; WEATHER 0). No flag's path
+  depends on another's (the scripts read the state, never the scores), so the sum bounds every
+  path. Roark's 0x17 is 7, as before; 0x7 is 6; 0x10f is 9; every transcribed flag at once is
+  11, which `policy._check_width` checks against `WIDTH_CAP`. The data test
+  (`tests/ai/test_kaizo_outcome.py test_slot_reads_fit_every_transcribed_effect`: every
+  transcribed Kaizo move in slot 0 over random players, HP, stages and turn) checks the base
+  and that adding each flag adds at most its count to the same state's longest path.
+  Selfdestruct reaches the base against a guessed two-ability player with evasion +4, Bonsly at
+  30 % HP or less: `:117` and `:304` (guesses), `:6374`, `:1859`, `:1870`, `:1875`; Roark's
+  RISKY adds `:6530`. A path that makes more than its set's bound is a path refusal (8.3), a
   layout bound, never a reused draw.
 - **Enumeration.** `policy` enumerates the reads as bit patterns: bit 0 / 1 of read k stands
   for the draw `outcome.READ_DRAWS` = (254, 1), which split every read (254 is below no

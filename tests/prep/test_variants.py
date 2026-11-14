@@ -6,6 +6,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import jax
+import numpy as np
 import pytest
 
 from nuzline.ai import commands
@@ -17,6 +18,7 @@ from nuzline.engine.state import make_state
 from nuzline.prep.problem import Resources
 from nuzline.prep.variants import (
     AI_DEFENDER_HP_CHECKS,
+    AI_FLAG_DEFENDER_HP_CHECKS,
     AI_HP_READERS,
     DEFAULT_WEIGHTS,
     LEVEL_UP,
@@ -63,9 +65,11 @@ def test_hp_regions(tables, names):
 
 
 def _as_kaizo_policy(tables):
-    """``tables`` read under the Kaizo AI policy (``Tables.ai_policy``)."""
+    """``tables`` read under the Kaizo AI policy (``Tables.ai_policy``), with Kaizo Roark's
+    flag set 0x17 as the fight's (``Tables.ai_flags``, E1 Ruling R2)."""
     return tables._replace(
-        ai_policy=jax.numpy.asarray(AI_POLICIES.index("kaizo"), tables.ai_policy.dtype)
+        ai_policy=jax.numpy.asarray(AI_POLICIES.index("kaizo"), tables.ai_policy.dtype),
+        ai_flags=np.int32(0x17),
     )
 
 
@@ -78,6 +82,9 @@ def test_hp_regions_per_policy(tables, names, kaizo_tables, kaizo_roark_party):
     Chesto Berry): 31 and 22 in the Kaizo tables."""
     assert ai_defender_hp_checks(tables) == (("greater", 70),)
     assert ai_defender_hp_checks(kaizo_tables) == (("greater", 70), ("greater", 50))
+    # CHECK_HP (bit 8) adds the target band's > 30 (script.s:7724-7725; E1 batch 2c).
+    check_hp = kaizo_tables._replace(ai_flags=np.int32(0x10F))
+    assert ai_defender_hp_checks(check_hp) == (("greater", 70), ("greater", 50), ("greater", 30))
     kaizo = _as_kaizo_policy(tables)
     monferno = sample_party(names)[0]
     assert hp_regions(kaizo, monferno, 48) == (48, 34, 24, 16)
@@ -166,7 +173,9 @@ def test_ai_hp_checks_pinned():
             rf"if_hp_percent_({commands_re})\(ctx, _D, (\d+)\)", text
         ):
             found.add((_HP_PERCENT_COMMANDS[suffix], int(percent)))
-    assert found == set().union(*AI_DEFENDER_HP_CHECKS.values())
+    assert found == set().union(
+        *AI_DEFENDER_HP_CHECKS.values(), *AI_FLAG_DEFENDER_HP_CHECKS.values()
+    )
     readers = set()
     kill_calls = []
     for text in sources.values():
@@ -191,14 +200,21 @@ def test_ai_hp_checks_pinned():
 def test_ai_hp_checks_per_policy(monkeypatch, tables, names, kaizo_tables, kaizo_roark_party):
     """``AI_DEFENDER_HP_CHECKS`` per policy is the set of player-HP percent checks (all four
     comparisons) that policy's flag scripts call (K3c Task 6 review m2), recorded while they
-    trace: vanilla {> 70} (script.s:2332), Kaizo {> 70, > 50} (:2332, :2694)."""
-    from nuzline.ai.layout import KAIZO, VANILLA
+    trace: vanilla {> 70} (script.s:2332), Kaizo {> 70, > 50} (:2332, :2694), and under
+    CHECK_HP (Kaizo set 0x10f) also > 30 (:7724-7725; ``ai_defender_hp_checks``)."""
+    from nuzline.ai.layout import KAIZO, VANILLA, kaizo_layout
 
     vanilla = make_state(tables, sample_party(names)[:1], roark_party(names))
     kaizo = make_state(kaizo_tables, [kaizo_roark_party[2]], list(kaizo_roark_party))
-    for layout, t, s in ((VANILLA, tables, vanilla), (KAIZO, kaizo_tables, kaizo)):
+    check_hp = kaizo_tables._replace(ai_flags=np.int32(0x10F))
+    cases = (
+        (VANILLA, tables, vanilla),
+        (KAIZO, kaizo_tables, kaizo),
+        (kaizo_layout(0x10F), check_hp, kaizo),
+    )
+    for layout, t, s in cases:
         calls = _defender_hp_calls(monkeypatch, t, s, layout)
-        assert calls == set(AI_DEFENDER_HP_CHECKS[layout.name]), layout.name
+        assert calls == set(ai_defender_hp_checks(t)), layout.key
 
 
 def test_move_changes(names):

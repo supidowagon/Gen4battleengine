@@ -62,8 +62,10 @@ from nuzline.ai import switching
 from nuzline.ai.commands import AiContext, BattleEffect, Battler, LoadType, TypeMulti
 from nuzline.ai.layout import (
     BASIC,
+    CHECK_HP,
     EVAL_ATTACK,
     EXPERT,
+    PRIORITIZE_EXTREMES,
     RISKY,
     SETUP_FIRST_TURN,
     VANILLA,
@@ -839,11 +841,57 @@ def _weather(ctx: AiContext) -> AiContext:
     return c.pop_or_end(c.add_to_move_score(ctx, 5))
 
 
+def _prioritize_extremes(ctx: AiContext) -> AiContext:
+    """``PrioritizeExtremes_Main`` (script.s:6499-6519): a move ``FlagMoveDamageScore
+    USE_MAX_DAMAGE`` makes no comparison for (``AI_NO_COMPARISON_MADE``, :6511-6512; a status
+    move or a no-calc effect, trainer_ai.c:1012-1063; alt-power moves are refused,
+    ``_refused.alt_power``) gets +2 unless the 100 roll (:6515) jumps."""
+    ctx = _terminate(ctx)
+    ctx = c.flag_move_damage_score(ctx, c.USE_MAX_DAMAGE)
+    ctx, _ = _split(c.if_loaded_not_equal_to(ctx, c.AI_NO_COMPARISON_MADE))
+    ctx, _ = _split(c.if_random_less_than(ctx, 100, 6515))
+    return c.pop_or_end(c.add_to_move_score(ctx, 2))
+
+
+def _check_hp_round(ctx: AiContext, high, medium, prefix: str, line: int) -> AiContext:
+    """One round of ``CheckHP_Main`` after its two ``IfHPPercentGreaterThan`` (70 to the high
+    band's label in ``high``, 30 to the medium band's in ``medium``, the rest low): each band
+    loads the move's effect and jumps to the round's TryScoreMinus2 when it is in the band's
+    table (``c.CHECK_HP_TABLES``; IfLoadedInTable), else goes to the round's end; TryScoreMinus2
+    gives -2 unless the 50 roll at ``line`` jumps, and falls into the round's end."""
+    minus2 = end = jnp.zeros_like(ctx.live)
+    for reached, band in ((ctx.live, "Low"), (high, "High"), (medium, "Medium")):
+        ctx = c.load_current_move_effect(_at(ctx, reached))
+        table = c.CHECK_HP_TABLES[f"{prefix}DiscourageAt{band}HP"]
+        ctx, t = _split(c.if_loaded_in_table(ctx, table))
+        minus2, end = minus2 | t, end | ctx.live  # the rest GoTo the round's end
+    ctx = _at(ctx, minus2)
+    ctx, rolled = _split(c.if_random_less_than(ctx, 50, line))
+    ctx = c.add_to_move_score(ctx, -2)
+    return _at(ctx, end | rolled | ctx.live)
+
+
+def _check_hp(ctx: AiContext) -> AiContext:
+    """``CheckHP_Main`` (script.s:7696-7746): ``IfTargetIsPartner`` (to TagStrategy_Partner,
+    never taken in singles), then the attacker's round (bands at :7700-7701, CheckHP_Discourage*
+    tables, roll :7718) and the target's round (:7724-7725, CheckHP_Target_Discourage*, roll
+    :7742), each -2 for a discouraged effect unless its roll jumps."""
+    ctx = _terminate(ctx)
+    ctx, high = _split(c.if_hp_percent_greater_than(ctx, _A, 70))
+    ctx, medium = _split(c.if_hp_percent_greater_than(ctx, _A, 30))
+    ctx = _check_hp_round(ctx, high, medium, "CheckHP_", 7718)
+    ctx, high = _split(c.if_hp_percent_greater_than(ctx, _D, 70))
+    ctx, medium = _split(c.if_hp_percent_greater_than(ctx, _D, 30))
+    ctx = _check_hp_round(ctx, high, medium, "CheckHP_Target_", 7742)
+    return c.pop_or_end(ctx)
+
+
 def _flags(layout: AiLayout) -> tuple:
     """The flag scripts the policy runs: those of ``layout.flags``' set bits, in bit order
     (``TrainerAI_MainSingles`` runs a flag's script only when its bit is set, low bit first,
     trainer_ai.c:297-308; ``FlagTable``, script.s:18-30): BASIC (bit 0), EVAL_ATTACK (1),
-    EXPERT (2), SETUP_FIRST_TURN (3), RISKY (4), WEATHER (9). Vanilla runs 7 (roark.md 1);
+    EXPERT (2), SETUP_FIRST_TURN (3), RISKY (4), PRIORITIZE_EXTREMES (5), CHECK_HP (8), WEATHER
+    (9). Vanilla runs 7 (roark.md 1);
     Kaizo the trainer's set (E1 Ruling
     R2), Roark's 23. A bit without a transcribed script raises (``layout.kaizo_layout``
     builds no such layout; coverage refuses the trainer)."""
@@ -853,6 +901,8 @@ def _flags(layout: AiLayout) -> tuple:
         EXPERT: partial(_expert, layout=layout),
         SETUP_FIRST_TURN: _setup_first_turn,
         RISKY: _risky,
+        PRIORITIZE_EXTREMES: _prioritize_extremes,
+        CHECK_HP: _check_hp,
         WEATHER: _weather,
     }
     out = []
@@ -1721,10 +1771,12 @@ def ai_flat_width(tables: Tables, state: BattleState) -> int:
 
 def _check_width() -> None:
     """The largest ``ai_width`` of each layout, every slot at ``2**slot_reads`` paths, is
-    within ``WIDTH_CAP`` (a design-time invariant, like ``outcome.ENUMERATION_WIDTH``)."""
-    from nuzline.ai.layout import LAYOUTS
+    within ``WIDTH_CAP`` (a design-time invariant, like ``outcome.ENUMERATION_WIDTH``); for
+    Kaizo, under the set of every transcribed flag, the widest (E1 Ruling R5)."""
+    from nuzline.ai.layout import KAIZO_FLAG_BITS, LAYOUTS, kaizo_layout
 
-    for layout in LAYOUTS:
+    widest = kaizo_layout(sum(1 << bit for bit in KAIZO_FLAG_BITS))
+    for layout in (*LAYOUTS, widest):
         if layout.per_slot_sites:
             most = layout.switch_sites + 1 + MOVES * 2**layout.slot_reads
         else:

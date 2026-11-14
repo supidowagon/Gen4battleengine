@@ -48,7 +48,7 @@ from nuzline.engine.step import step
 from tests.ai.fixtures import GEODUDE, outcome, versus
 from tests.engine.helpers import A, roark_state
 
-DECOMP = Path("external/pokeplatinum")
+DECOMP = Path(__file__).resolve().parents[2] / "external/pokeplatinum"
 _D, _A = Battler.DEFENDER, Battler.ATTACKER
 _SPE = Stat.SPE - 1  # stats[..., 0..4] are Atk..Spe
 _step = jax.jit(step)

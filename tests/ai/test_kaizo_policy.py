@@ -1266,6 +1266,8 @@ def test_exact_equals_loose_at_equal_speed(kaizo_tables, kaizo_names, kaizo_roar
         (0x1F, ["_basic", "_eval_attack", "_expert", "_setup_first_turn", "_risky"]),
         (0x207, ["_basic", "_eval_attack", "_expert", "_weather"]),
         (0x20F, ["_basic", "_eval_attack", "_expert", "_setup_first_turn", "_weather"]),
+        (0x27, ["_basic", "_eval_attack", "_expert", "_prioritize_extremes"]),
+        (0x10F, ["_basic", "_eval_attack", "_expert", "_setup_first_turn", "_check_hp"]),
     ],
 )
 def test_flag_set_runs_its_scripts(kaizo_tables, kaizo_roark_party, flags, scripts):
@@ -1442,4 +1444,103 @@ def test_exact_equals_loose_with_setup_and_weather(kaizo_tables, kaizo_roark_par
     for player in (GIBLE_SPECIES, 72):
         s = _state(t, kaizo_roark_party, BONSLY, moves, hp=200)
         s = _turn(_with_player(t, s, player), turn)
+        _assert_exact_equals_loose(t, s, kaizo_layout(flags))
+
+
+# --- PRIORITIZE_EXTREMES and CHECK_HP (E1 batch 2c) ------------------------------------------
+
+
+@pytest.mark.parametrize("jump", [0, 1])
+def test_prioritize_extremes(kaizo_tables, kaizo_roark_party, jump):
+    """PrioritizeExtremes_Main (script.s:6499-6519), against set 0x7 (-> 0x27): a move
+    FlagMoveDamageScore makes no comparison for (AI_NO_COMPARISON_MADE, :6511-6512;
+    trainer_ai.c:1012-1063: power <= 1 or a no-calc effect) gets +2 unless the 100 roll (:6515)
+    jumps; a damaging move makes no read. Stealth Rock (status) and Selfdestruct
+    (HALVE_DEFENSE, no-calc) roll; Brick Break and Accelerock do not."""
+    from nuzline.ai.layout import kaizo_layout
+
+    t = kaizo_tables
+    s = _state(t, kaizo_roark_party, BONSLY, (STEALTH_ROCK, SELFDESTRUCT, BRICK_BREAK, ACCELEROCK))
+    jumps = ((0, 6515), (1, 6515)) if jump else ()
+    plus = 0 if jump else 2
+    assert _delta(t, s, 0x7, 0x27, jumps) == [plus, plus, 0, 0]
+    rolls = [6515 in lines for lines in _path_lines(t, s, kaizo_layout(0x27))]
+    assert rolls == [True, True, False, False]
+    _assert_exact_equals_loose(t, s, kaizo_layout(0x27))
+
+
+def test_check_hp_tables_are_the_decomps():
+    """``commands.CHECK_HP_TABLES`` is CheckHP_Main's six tables (script.s:7748-7977), label by
+    label and entry by entry, through generated/move_battle_effects.txt (line n + 1 is id n);
+    CheckHP_Target_DiscourageAtHighHP is empty."""
+    script = DECOMP / "src/battle/trainer_ai/script.s"
+    ids = DECOMP / "generated/move_battle_effects.txt"
+    if not script.exists() or not ids.exists():
+        pytest.skip("decomp not present")
+    names = ids.read_text(encoding="utf-8").split()
+    tables, label = {}, None
+    for line in script.read_text(encoding="utf-8").splitlines()[7747:7977]:
+        words = line.split()
+        if line.endswith(":"):
+            label = line[:-1]
+            tables[label] = []
+        elif words and words[0] == "TableEntry" and words[1] != "TABLE_END":
+            tables[label].append(names.index(words[1]))
+    assert {k: tuple(v) for k, v in tables.items()} == c.CHECK_HP_TABLES
+    assert c.CHECK_HP_TABLES["CheckHP_Target_DiscourageAtHighHP"] == ()
+
+
+def _hp(s, side: int, hp: int):
+    """``s`` with side ``side``'s active at ``hp``/100 HP."""
+    return s._replace(hp=s.hp.at[side, 0].set(hp), max_hp=s.max_hp.at[side, 0].set(100))
+
+
+# The CheckHP bands (script.s:7700-7701, :7724-7725): IfHPPercentGreaterThan 70, then 30, on
+# curHP * 100 / maxHP (trainer_ai.c:603), so 71 is high, 70 and 31 medium, 30 low.
+# Slots: Selfdestruct (HALVE_DEFENSE 7), Rock Polish (SPEED_UP_2 52), Recover (RESTORE_HALF_HP
+# 32), Accelerock (HIT 0). Their -2s, from the tables (:7748-7977):
+_ATTACKER_BAND = {  # CheckHP_DiscourageAt{High,Medium,Low}HP
+    71: [-2, 0, -2, 0],  # High: 7, 32
+    70: [-2, -2, 0, 0],  # Medium: 7, 52
+    31: [-2, -2, 0, 0],
+    30: [0, -2, 0, 0],  # Low: 52
+}
+_TARGET_BAND = {  # CheckHP_Target_DiscourageAt{High,Medium,Low}HP
+    71: [0, 0, 0, 0],  # High: empty
+    70: [0, -2, 0, 0],  # Medium: 52
+    30: [-2, -2, 0, 0],  # Low: 7, 52
+}
+
+
+@pytest.mark.parametrize("attacker", sorted(_ATTACKER_BAND))
+@pytest.mark.parametrize("target", sorted(_TARGET_BAND))
+def test_check_hp(kaizo_tables, kaizo_roark_party, attacker, target):
+    """CheckHP_Main (script.s:7696-7746), against set 0x7 (-> 0x107): the attacker's HP band
+    picks its table, a listed effect -2 unless :7718 jumps; then the target's (the player's
+    true HP) band, -2 unless :7742 jumps. With both rolls jumping, no change."""
+    t = kaizo_tables
+    moves = (SELFDESTRUCT, ROCK_POLISH, RECOVER, ACCELEROCK)
+    s = _hp(_hp(_state(t, kaizo_roark_party, BONSLY, moves), 1, attacker), 0, target)
+    expected = [a + b for a, b in zip(_ATTACKER_BAND[attacker], _TARGET_BAND[target], strict=True)]
+    assert _delta(t, s, 0x7, 0x107) == expected
+    jumps = tuple((slot, line) for slot in range(MOVES) for line in (7718, 7742))
+    assert _delta(t, s, 0x7, 0x107, jumps) == [0] * MOVES
+
+
+@pytest.mark.parametrize("flags", [0x27, 0x10F, 0x107])
+@pytest.mark.parametrize(("attacker", "target"), [(100, 100), (50, 20), (20, 60)])
+def test_exact_equals_loose_with_extremes_and_check_hp(
+    kaizo_tables, kaizo_roark_party, flags, attacker, target
+):
+    """Exact == loose under the 2c flag sets, across the CheckHP bands of both sides: Rock
+    Polish, Curse, Selfdestruct and Recover against a guessed Gible and Tentacool, on the first
+    turn (0x10f also runs SETUP_FIRST_TURN)."""
+    from nuzline.ai.layout import kaizo_layout
+    from tests.ai.test_kaizo_outcome import GIBLE as GIBLE_SPECIES
+
+    t = kaizo_tables
+    moves = (ROCK_POLISH, CURSE, SELFDESTRUCT, RECOVER)
+    for player in (GIBLE_SPECIES, 72):
+        s = _state(t, kaizo_roark_party, BONSLY, moves)
+        s = _hp(_hp(_with_player(t, s, player), 1, attacker), 0, target)
         _assert_exact_equals_loose(t, s, kaizo_layout(flags))

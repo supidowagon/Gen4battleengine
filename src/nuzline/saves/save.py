@@ -229,7 +229,13 @@ def default_tables_and_names(tables, names, dir=None, game=None):
     built for another game (``GameDataError``); ``dir`` overrides the directory."""
     import numpy as np
 
-    from nuzline.data.tables import DEFAULT, Tables, _read_manifest, check_npz, load_names
+    from nuzline.data.tables import (
+        DEFAULT,
+        _read_manifest,
+        check_npz,
+        load_names,
+        tables_from_npz,
+    )
 
     expected = None if game is None else get_game(game)
     if dir is None:
@@ -241,7 +247,7 @@ def default_tables_and_names(tables, names, dir=None, game=None):
     if tables is None:
         with np.load(dir / "tables.npz") as z:
             check_npz(z, dir)
-            tables = Tables(**{f: z[f] for f in Tables._fields if f in z.files})
+            tables = tables_from_npz(z, dir, lambda a: a)
     if names is None:
         names = load_names(dir)
     return tables, names

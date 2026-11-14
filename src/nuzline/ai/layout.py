@@ -23,13 +23,13 @@ The fields:
 * ``name``: the policy, ``game_constants.POLICY``'s value for the game.
 * ``flags``: the trainer AI flags the policy runs (``policy._flags``), in bit order
   (``generated/ai_flags.txt``: bit 0 BASIC, 1 EVAL_ATTACK, 2 EXPERT, 3 SETUP_FIRST_TURN,
-  4 RISKY, 9 WEATHER).
+  4 RISKY, 5 PRIORITIZE_EXTREMES, 8 CHECK_HP, 9 WEATHER).
 * ``per_slot_sites``: the random reads are keyed by move slot (K3c Task 3) and by their
   order on the slot's path (E1 Ruling R4; ``outcome`` docstring).
 * ``max_script_rolls``: the flat ``AiOutcome.script_rolls`` width (vanilla).
 * ``slot_reads``: the draws of one move slot (per-slot layouts): the most random reads
   (``IfRandomLessThan`` and guessing ``LoadBattlerAbility DEFENDER``) one move's scoring path
-  makes (``outcome.KAIZO_SLOT_READS``). A path that makes more is refused
+  makes, per flag set (``outcome.kaizo_slot_reads``, E1 Ruling R5). A path that makes more is refused
   (``AiContext.missing_read``). 0 for the flat layout.
 * ``switch_sites``: the voluntary-switch draw sites ``AiOutcome.switch_stop`` encodes:
   ``switching.SWITCH_SITES`` (9) for vanilla Roark's three Pokemon,
@@ -64,6 +64,7 @@ from nuzline.ai.outcome import (
     KAIZO_SLOT_READS,
     KAIZO_TRANSCRIBED,
     MAX_SCRIPT_ROLLS,
+    kaizo_slot_reads,
 )
 from nuzline.ai.switching import KAIZO_SWITCH_SITES, SWITCH_SITES
 from nuzline.data.game_constants import AI_POLICIES
@@ -80,10 +81,13 @@ __all__ = [
 ]
 
 # AI flag bits (generated/ai_flags.txt, line n + 2 is bit n; FlagTable, script.s:18-30).
-BASIC, EVAL_ATTACK, EXPERT, SETUP_FIRST_TURN, RISKY, WEATHER = 0, 1, 2, 3, 4, 9
+BASIC, EVAL_ATTACK, EXPERT, SETUP_FIRST_TURN, RISKY = 0, 1, 2, 3, 4
+PRIORITIZE_EXTREMES, CHECK_HP, WEATHER = 5, 8, 9
 # The flag bits whose scripts the Kaizo policy transcribes (policy._flags):
 # engine/coverage.py IMPLEMENTED_AI_FLAGS["kaizo"] lists the same bits.
-KAIZO_FLAG_BITS = frozenset({BASIC, EVAL_ATTACK, EXPERT, SETUP_FIRST_TURN, RISKY, WEATHER})
+KAIZO_FLAG_BITS = frozenset(
+    {BASIC, EVAL_ATTACK, EXPERT, SETUP_FIRST_TURN, RISKY, PRIORITIZE_EXTREMES, CHECK_HP, WEATHER}
+)
 
 
 class AiLayout(NamedTuple):
@@ -157,7 +161,9 @@ def _with_flags(layout: AiLayout, flags: int) -> AiLayout:
             f"AI flags {flags:#x}: the Kaizo policy transcribes only the flag bits "
             f"{sorted(KAIZO_FLAG_BITS)} (engine/coverage.py refuses the trainer)"
         )
-    return layout if flags == layout.flags else layout._replace(flags=flags)
+    if flags == layout.flags:
+        return layout
+    return layout._replace(flags=flags, slot_reads=kaizo_slot_reads(flags))
 
 
 def layout_of(tables: Tables) -> AiLayout:

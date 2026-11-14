@@ -109,8 +109,10 @@ __all__ = [
     "ABILITY_GUESSES",
     "AI_SITE_MOVES",
     "ENUMERATION_WIDTH",
+    "KAIZO_BASE_READS",
     "KAIZO_EXPERT_LABELS",
     "KAIZO_EXPERT_TRANSCRIBED",
+    "KAIZO_FLAG_READS",
     "KAIZO_SLOT_READS",
     "KAIZO_TRANSCRIBED",
     "MAX_ENUMERATED",
@@ -127,6 +129,7 @@ __all__ = [
     "AiOutcome",
     "SwitchSite",
     "enumerate_ai_outcomes",
+    "kaizo_slot_reads",
     "line_sites",
     "sample_ai_outcome",
     "script_roll_count",
@@ -202,6 +205,10 @@ SITE_N: dict[int, int] = {
     6530: 128,  # Risky_Main (+2 when it does NOT jump)
     # E1 batch 2b: SetupFirstTurn_Main, turn 0 only, an effect of its table.
     6429: 80,  # SetupFirstTurn_Main (+2 when it does NOT jump)
+    # E1 batch 2c: PrioritizeExtremes_Main and CheckHP_Main.
+    6515: 100,  # PrioritizeExtremes_Main (+2 when it does NOT jump)
+    7718: 50,  # CheckHP_TryScoreMinus2 (-2 when it does NOT jump)
+    7742: 50,  # CheckHP_Target_TryScoreMinus2 (-2 when it does NOT jump)
 }
 SITE_LINES = tuple(SITE_N)
 # The flat (vanilla) layout's column of script_roll_sites that each line reads: column 0 is
@@ -298,14 +305,30 @@ KAIZO_EXPERT_TRANSCRIBED: frozenset[int] = frozenset(
 assert set(KAIZO_EXPERT_LABELS) <= KAIZO_TRANSCRIBED
 assert KAIZO_EXPERT_TRANSCRIBED <= set(KAIZO_EXPERT_LABELS)
 
-# The most random reads (IfRandomLessThan and guessing LoadBattlerAbility DEFENDER) one move
-# slot's scoring path makes in the Kaizo transcription, every implemented flag set (E1 Ruling
-# R4): the per-slot layout's slot_reads. Found from the data by
-# tests/ai/test_kaizo_outcome.py test_slot_reads_fit_every_transcribed_effect: Selfdestruct
-# (HALVE_DEFENSE, a no-calc effect) against a guessed player with evasion +4 and Bonsly at
-# 30 % HP or less reads :117 and :304 (two guesses), :6374, :1859, :1870, :1875 and Risky's
-# :6530. A path with more reads is refused.
-KAIZO_SLOT_READS = 7
+# The read bound of a per-slot layout (E1 Ruling R5, per flag set): a slot's path makes the
+# reads of each flag script that runs, and no flag's path depends on another flag's (scripts
+# read the state, not the scores), so the most reads one path makes under a flag set is at
+# most the sum of each flag's most. KAIZO_BASE_READS: the most random reads (IfRandomLessThan
+# and guessing LoadBattlerAbility DEFENDER) BASIC, EVAL_ATTACK and EXPERT together make on one
+# path, found from the data by tests/ai/test_kaizo_outcome.py
+# test_slot_reads_fit_every_transcribed_effect: Selfdestruct (HALVE_DEFENSE, a no-calc effect)
+# against a guessed player with evasion +4 and Bonsly at 30 % HP or less reads :117 and :304
+# (two guesses), :6374, :1859, :1870 and :1875. Any subset of the three makes no more.
+KAIZO_BASE_READS = 6
+# The most random reads each other transcribed flag's script makes on one path, from the
+# script itself: SETUP_FIRST_TURN :6429; RISKY :6530; PRIORITIZE_EXTREMES :6515; CHECK_HP the
+# attacker band's :7718, then the target band's :7742; WEATHER none. By flag bit.
+KAIZO_FLAG_READS: dict[int, int] = {3: 1, 4: 1, 5: 1, 8: 2, 9: 0}
+
+
+def kaizo_slot_reads(flags: int) -> int:
+    """The per-slot read bound (``AiLayout.slot_reads``) of the Kaizo flag set ``flags``:
+    ``KAIZO_BASE_READS`` plus each set bit's ``KAIZO_FLAG_READS`` (Roark's 0x17: 7). A path
+    that makes more is refused (``AiContext.missing_read``)."""
+    return KAIZO_BASE_READS + sum(n for bit, n in KAIZO_FLAG_READS.items() if flags >> bit & 1)
+
+
+KAIZO_SLOT_READS = kaizo_slot_reads(0b10111)  # Kaizo Roark's set (layout.KAIZO)
 
 # Values each field takes, in enumeration order (roark.md 14 "AiOutcome width").
 # ABILITY_GUESSES: AiOutcome.ability_guess is 0 or 1, 1/2 each.

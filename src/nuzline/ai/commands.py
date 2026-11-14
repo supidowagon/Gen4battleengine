@@ -323,6 +323,238 @@ SETUP_FIRST_TURN_EFFECTS = (
     258,  # REMOVE_HAZARDS_SCREENS_EVA_DOWN
     261,  # WHIRLPOOL (:6496)
 )
+# CheckHP_Main's six tables (script.s:7748-7977), by label: the effects it discourages at the
+# attacker's (CheckHP_Discourage*) and the target's (CheckHP_Target_Discourage*) high (> 70 %),
+# medium (31-70 %) and low HP (IfLoadedInTable, :7703-7737; trainer_ai.c:858-874).
+# BATTLE_EFFECT_* ids, line - 1 of generated/move_battle_effects.txt, in each table's order,
+# repeats included. CheckHP_Target_DiscourageAtHighHP is empty (:7866-7867).
+CHECK_HP_TABLES: dict[str, tuple[int, ...]] = {
+    "CheckHP_DiscourageAtHighHP": (  # script.s:7748
+        7,  # HALVE_DEFENSE
+        32,  # RESTORE_HALF_HP
+        37,  # REST
+        98,  # KO_MON_THAT_DEFEATED_USER
+        99,  # INCREASE_POWER_WITH_LESS_HP
+        116,  # SURVIVE_WITH_1_HP
+        132,  # HEAL_HALF_MORE_IN_SUN
+        168,  # FAINT_AND_ATK_SP_ATK_DOWN_2
+        194,  # REMOVE_ALL_PP_ON_DEFEAT
+        214,  # HEAL_HALF_REMOVE_FLYING_TYPE
+        220,  # FAINT_AND_FULL_HEAL_NEXT_MON
+        270,  # FAINT_FULL_RESTORE_NEXT_MON
+    ),
+    "CheckHP_DiscourageAtMediumHP": (  # script.s:7763
+        7,  # HALVE_DEFENSE
+        10,  # ATK_UP
+        11,  # DEF_UP
+        12,  # SPEED_UP
+        13,  # SP_ATK_UP
+        14,  # SP_DEF_UP
+        15,  # ACC_UP
+        16,  # EVA_UP
+        18,  # ATK_DOWN
+        19,  # DEF_DOWN
+        20,  # SPEED_DOWN
+        21,  # SP_ATK_DOWN
+        22,  # SP_DEF_DOWN
+        23,  # ACC_DOWN
+        24,  # EVA_DOWN
+        26,  # BIDE
+        30,  # CONVERSION
+        35,  # SET_LIGHT_SCREEN
+        46,  # PREVENT_STAT_REDUCTION
+        47,  # CRIT_UP_2
+        50,  # ATK_UP_2
+        51,  # DEF_UP_2
+        52,  # SPEED_UP_2
+        53,  # SP_ATK_UP_2
+        54,  # SP_DEF_UP_2
+        55,  # ACC_UP_2
+        56,  # EVA_UP_2
+        58,  # ATK_DOWN_2
+        59,  # DEF_DOWN_2
+        60,  # SPEED_DOWN_2
+        61,  # SP_ATK_DOWN_2
+        62,  # SP_DEF_DOWN_2
+        63,  # EVA_DOWN_2
+        64,  # ACC_DOWN_2
+        93,  # CONVERSION2
+        124,  # PREVENT_STATUS
+        142,  # MAX_ATK_LOSE_HALF_MAX_HP
+        205,  # ATK_DEF_DOWN
+        206,  # DEF_SPD_UP
+        208,  # ATK_DEF_UP
+        211,  # SP_ATK_SP_DEF_UP
+        212,  # ATK_SPD_UP
+        240,  # PREVENT_CRITS
+        243,  # SWAP_ATK_SP_ATK_STAT_CHANGES
+        244,  # SWAP_DEF_SP_DEF_STAT_CHANGES
+        265,  # SP_ATK_DOWN_2_OPPOSITE_GENDER
+    ),
+    "CheckHP_DiscourageAtLowHP": (  # script.s:7812
+        10,  # ATK_UP
+        11,  # DEF_UP
+        12,  # SPEED_UP
+        13,  # SP_ATK_UP
+        14,  # SP_DEF_UP
+        15,  # ACC_UP
+        16,  # EVA_UP
+        18,  # ATK_DOWN
+        19,  # DEF_DOWN
+        20,  # SPEED_DOWN
+        21,  # SP_ATK_DOWN
+        22,  # SP_DEF_DOWN
+        23,  # ACC_DOWN
+        24,  # EVA_DOWN
+        26,  # BIDE
+        30,  # CONVERSION
+        35,  # SET_LIGHT_SCREEN
+        46,  # PREVENT_STAT_REDUCTION
+        47,  # CRIT_UP_2
+        50,  # ATK_UP_2
+        51,  # DEF_UP_2
+        52,  # SPEED_UP_2
+        53,  # SP_ATK_UP_2
+        54,  # SP_DEF_UP_2
+        55,  # ACC_UP_2
+        56,  # EVA_UP_2
+        58,  # ATK_DOWN_2
+        59,  # DEF_DOWN_2
+        60,  # SPEED_DOWN_2
+        61,  # SP_ATK_DOWN_2
+        62,  # SP_DEF_DOWN_2
+        63,  # EVA_DOWN_2
+        64,  # ACC_DOWN_2
+        81,  # RAISE_ATK_WHEN_HIT
+        93,  # CONVERSION2
+        94,  # NEXT_ATTACK_ALWAYS_HITS
+        124,  # PREVENT_STATUS
+        142,  # MAX_ATK_LOSE_HALF_MAX_HP
+        143,  # COPY_STAT_CHANGES
+        144,  # MIRROR_COAT
+        190,  # DECREASE_POWER_WITH_LESS_USER_HP
+        205,  # ATK_DEF_DOWN
+        206,  # DEF_SPD_UP
+        208,  # ATK_DEF_UP
+        211,  # SP_ATK_SP_DEF_UP
+        212,  # ATK_SPD_UP
+        201,  # HALVE_ELECTRIC_DAMAGE
+        210,  # HALVE_FIRE_DAMAGE
+        226,  # RANDOM_STAT_UP_2
+        227,  # METAL_BURST
+        265,  # SP_ATK_DOWN_2_OPPOSITE_GENDER
+    ),
+    "CheckHP_Target_DiscourageAtHighHP": (  # script.s:7866
+    ),
+    "CheckHP_Target_DiscourageAtMediumHP": (  # script.s:7869
+        10,  # ATK_UP
+        11,  # DEF_UP
+        12,  # SPEED_UP
+        13,  # SP_ATK_UP
+        14,  # SP_DEF_UP
+        15,  # ACC_UP
+        16,  # EVA_UP
+        18,  # ATK_DOWN
+        19,  # DEF_DOWN
+        20,  # SPEED_DOWN
+        21,  # SP_ATK_DOWN
+        22,  # SP_DEF_DOWN
+        23,  # ACC_DOWN
+        24,  # EVA_DOWN
+        46,  # PREVENT_STAT_REDUCTION
+        47,  # CRIT_UP_2
+        50,  # ATK_UP_2
+        51,  # DEF_UP_2
+        52,  # SPEED_UP_2
+        53,  # SP_ATK_UP_2
+        54,  # SP_DEF_UP_2
+        55,  # ACC_UP_2
+        56,  # EVA_UP_2
+        58,  # ATK_DOWN_2
+        59,  # DEF_DOWN_2
+        60,  # SPEED_DOWN_2
+        61,  # SP_ATK_DOWN_2
+        62,  # SP_DEF_DOWN_2
+        63,  # EVA_DOWN_2
+        64,  # ACC_DOWN_2
+        66,  # STATUS_POISON
+        91,  # AVERAGE_HP
+        114,  # ALL_FAINT_3_TURNS
+        124,  # PREVENT_STATUS
+        205,  # ATK_DEF_DOWN
+        206,  # DEF_SPD_UP
+        208,  # ATK_DEF_UP
+        211,  # SP_ATK_SP_DEF_UP
+        212,  # ATK_SPD_UP
+        226,  # RANDOM_STAT_UP_2
+        237,  # INCREASE_POWER_WITH_MORE_HP
+        265,  # SP_ATK_DOWN_2_OPPOSITE_GENDER
+    ),
+    "CheckHP_Target_DiscourageAtLowHP": (  # script.s:7914
+        1,  # STATUS_SLEEP
+        7,  # HALVE_DEFENSE
+        10,  # ATK_UP
+        11,  # DEF_UP
+        12,  # SPEED_UP
+        13,  # SP_ATK_UP
+        14,  # SP_DEF_UP
+        15,  # ACC_UP
+        16,  # EVA_UP
+        18,  # ATK_DOWN
+        19,  # DEF_DOWN
+        20,  # SPEED_DOWN
+        21,  # SP_ATK_DOWN
+        22,  # SP_DEF_DOWN
+        23,  # ACC_DOWN
+        24,  # EVA_DOWN
+        26,  # BIDE
+        30,  # CONVERSION
+        33,  # STATUS_BADLY_POISON
+        35,  # SET_LIGHT_SCREEN
+        38,  # ONE_HIT_KO
+        40,  # HALVE_HP
+        40,  # HALVE_HP
+        46,  # PREVENT_STAT_REDUCTION
+        47,  # CRIT_UP_2
+        49,  # STATUS_CONFUSE
+        50,  # ATK_UP_2
+        51,  # DEF_UP_2
+        52,  # SPEED_UP_2
+        53,  # SP_ATK_UP_2
+        54,  # SP_DEF_UP_2
+        55,  # ACC_UP_2
+        56,  # EVA_UP_2
+        58,  # ATK_DOWN_2
+        59,  # DEF_DOWN_2
+        60,  # SPEED_DOWN_2
+        61,  # SP_ATK_DOWN_2
+        62,  # SP_DEF_DOWN_2
+        63,  # EVA_DOWN_2
+        64,  # ACC_DOWN_2
+        66,  # STATUS_POISON
+        67,  # STATUS_PARALYZE
+        91,  # AVERAGE_HP
+        93,  # CONVERSION2
+        94,  # NEXT_ATTACK_ALWAYS_HITS
+        100,  # DECREASE_LAST_MOVE_PP
+        114,  # ALL_FAINT_3_TURNS
+        118,  # ATK_UP_2_STATUS_CONFUSION
+        119,  # DOUBLE_POWER_EACH_TURN
+        120,  # INFATUATE
+        124,  # PREVENT_STATUS
+        143,  # COPY_STAT_CHANGES
+        144,  # MIRROR_COAT
+        167,  # STATUS_BURN
+        205,  # ATK_DEF_DOWN
+        206,  # DEF_SPD_UP
+        208,  # ATK_DEF_UP
+        211,  # SP_ATK_SP_DEF_UP
+        212,  # ATK_SPD_UP
+        226,  # RANDOM_STAT_UP_2
+        237,  # INCREASE_POWER_WITH_MORE_HP
+        265,  # SP_ATK_DOWN_2_OPPOSITE_GENDER
+    ),
+}
 # A move's class (MoveTable.class, generated/move_classes.txt: line n + 1 is id n), as
 # LoadDefenderLastUsedMoveClass loads it (Expert_LightScreen, script.s:2723).
 CLASS_SPECIAL = 1
@@ -1146,6 +1378,14 @@ def load_turn_count(ctx: AiContext) -> AiContext:
 def load_current_move_effect(ctx: AiContext) -> AiContext:
     """``LoadCurrentMoveEffect`` (trainer_ai.c:1164): ``MOVE_DATA(move).effect``."""
     return ctx._replace(calc_temp=move_effect(ctx.tables, ctx.move))
+
+
+def if_loaded_in_table(ctx: AiContext, table: tuple[int, ...]) -> AiContext:
+    """``IfLoadedInTable`` (trainer_ai.c:858-874): ``calcTemp`` equals one of ``table``'s
+    values (the script's list up to its 0xFFFFFFFF end); an empty table never jumps."""
+    if not table:
+        return _jump(ctx, False)
+    return _jump(ctx, jnp.isin(ctx.calc_temp, jnp.asarray(table, _I32)))
 
 
 def if_loaded_not_in_table(ctx: AiContext, table: tuple[int, ...]) -> AiContext:
