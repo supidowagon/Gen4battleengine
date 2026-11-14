@@ -7,8 +7,13 @@ Branch `claude/engine-e3-remeasure-632cbe`, worktree `strange-feistel-a35c9f`. E
 ## RESUME
 
 - Batch 1 (whole-game opponent numbers): done, committed; report sent.
-- Batch 2 (player side): plan to be sent; wait for the managing session's go before building.
-- Batch 3 (prep starting HP and status): read-only report, not started.
+- Batch 2 (player side): plan sent 2026-11-14 (A: upper bound from existing data, per split
+  by cap; B: real availability from ROM encounters, items, tutors, a later task). Waiting
+  for the managing session's go; build nothing before it.
+- Batch 3 (prep starting HP and status): report sent 2026-11-14. Engine and line --party
+  support any HP and status, sleep turns included; prep picks HP regions itself, prestatus is
+  poison, burn or paralysis only, drops the save's HP and status (leveling.py), and cannot
+  pin a chosen state; line [[team]] has no hp or status keys.
 - Regenerate the backlog: `uv run python tools/kaizo/backlog.py docs/kaizo/mechanics_backlog.md`
   (about 4 s). Test: `uv run pytest tests/tools/test_backlog.py -q`.
 - This worktree's `data/` is current (trainers.json with terrain, 2026-11-13). The main
