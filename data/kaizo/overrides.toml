@@ -13,7 +13,9 @@
 # Cynthia) and sheet-only Trick Room stay here. A trainer claimed by two areas is never
 # settled by guess: its claim stays commented out with every citation. The ten start
 # conditions left "unknown" by ruling (318 325 343 509 559 610 649 676 746 747) are settled
-# here only by the user's answers (2026-11-07; 676 stays unknown). A ROM Trick Room trainer
+# here only by the user's answers (2026-11-07). 318 and 676 left that list on 2026-11-14 (E3
+# batch 5): the shared-script join gives each one ROM condition (676's inherited through the
+# vanilla rematch table from 583, and probably unreachable). A ROM Trick Room trainer
 # also placed on a map without Trick Room (tools.kaizo.resolve.two_placement_trick_room;
 # K2b Task 15 fix round 1) gets an [area_exception] citing both placements, and its start
 # condition is refused as "unknown" (a user call), until the user's answer replaces it with
@@ -585,6 +587,435 @@ id = 409
 source = "rom:only Saturn on a Trick Room map (rom_field_effects.json, map header 494)"
 
 
+# --- Sheet headers no party signature settles (E3 batch 4, 2026-11-14) -------------------
+# Each header names the ROM trainer and lists its Pokemon in the ROM's order; only the
+# levels differ (the sheet predates the final levels), or a form or one slot as noted. The
+# ROM id is the only trainer of that name with that species order, or the one placed where
+# the sheet's section is; PKCalc's label for it, where it has one, names the same trainer.
+
+# Roark Split:59 'Clown Ronald' (Jubilife City): ROM 252 Ronald [Mime Jr., Snubbull,
+# Cleffa]; JUBILIFE_CITY, ROUTE_202; PKCalc 'Clown Ronald'
+# 255 has the same party but is placed on Route 202 only and has no PKCalc label; 252 is
+# also placed on Jubilife City, the sheet's section.
+[trainer_ids."Roark Split:59"]
+id = 252
+source = "rom:trainer 252 Ronald, same species order as the sheet header (JUBILIFE_CITY, ROUTE_202)"
+
+# Roark Split:71 'School Kid Harrison' (Trainer School): ROM 342 Harrison [Vulpix];
+# TRAINERS_SCHOOL; PKCalc no PKCalc label
+# 501 has the same party but is placed in the Eterna City Pokemon Center; 342 is placed in
+# the Trainers' School, the sheet's section.
+[trainer_ids."Roark Split:71"]
+id = 342
+source = "rom:trainer 342 Harrison, same species order as the sheet header (TRAINERS_SCHOOL)"
+
+# Roark Split:81 'School KidfChristine' (Trainer School): ROM 345 Christine [Sandshrew];
+# TRAINERS_SCHOOL, ETERNA_CITY_POKECENTER_1F; PKCalc no PKCalc label
+[trainer_ids."Roark Split:81"]
+id = 345
+source = "rom:trainer 345 Christine, same species order as the sheet header (TRAINERS_SCHOOL, ETERNA_CITY_POKECENTER_1F)"
+
+# Fantina Split:184 'Pokefan Martha' (Route 207): ROM 51 Martha [Bonsly, Clefairy,
+# Wailmer, Smoochum]; ROUTE_207; PKCalc 'Pokéfan Martha'
+# 59 has the same party but no map placement and no PKCalc label.
+[trainer_ids."Fantina Split:184"]
+id = 51
+source = "rom:trainer 51 Martha, same species order as the sheet header (ROUTE_207)"
+
+# Wake Split:47 'Collector Ripper' (Route 214): ROM 272 Ripper [Umbreon, Espeon, Vaporeon,
+# Glaceon, Jolteon, Leafeon]; ROUTE_214; PKCalc 'Collector Ripper'
+[trainer_ids."Wake Split:47"]
+id = 272
+source = "rom:trainer 272 Ripper, same species order as the sheet header (ROUTE_214)"
+
+# Byron Split:19 'Policeman Bobby' (Pokemon Mansion): ROM 88 Bobby [Grumpig];
+# ROUTE_212_NORTH; PKCalc 'Policeman Bobby'
+[trainer_ids."Byron Split:19"]
+id = 88
+source = "rom:trainer 88 Bobby, same species order as the sheet header (ROUTE_212_NORTH)"
+
+# Byron Split:99 'Lady Celeste' (Pokemon Mansion): ROM 893 Celeste [Jumpluff];
+# ROUTE_212_NORTH, POKEMON_MANSION; PKCalc 'Lady Celeste'
+[trainer_ids."Byron Split:99"]
+id = 893
+source = "rom:trainer 893 Celeste, same species order as the sheet header (ROUTE_212_NORTH, POKEMON_MANSION)"
+
+# Byron Split:149 'Waiter Doppio' (Pokemon Mansion): ROM 897 Doppio [Bronzor];
+# POKEMON_MANSION; PKCalc 'Waiter Doppio'
+[trainer_ids."Byron Split:149"]
+id = 897
+source = "rom:trainer 897 Doppio, same species order as the sheet header (POKEMON_MANSION)"
+
+# Byron Split:169 'Maid Mocha' (Pokemon Mansion): ROM 898 Mocha [Mismagius];
+# POKEMON_MANSION; PKCalc 'Maid Mocha'
+[trainer_ids."Byron Split:169"]
+id = 898
+source = "rom:trainer 898 Mocha, same species order as the sheet header (POKEMON_MANSION)"
+
+# Byron Split:236 'GalacticF Luna' (Clamberclaw Cliffs): ROM 66 Luna [Nidoking, Umbreon,
+# Clefable, Azumarill, Ursaring, Lunatone]; ROUTE_210_NORTH; PKCalc 'Galactic Luna #3'
+[trainer_ids."Byron Split:236"]
+id = 66
+source = "rom:trainer 66 Luna, same species order as the sheet header (ROUTE_210_NORTH)"
+
+# Byron Split:418 'Leader Cyrus' (Celestic Town): ROM 913 Cyrus [Deoxys, Metagross, Rotom,
+# Suicune, Salamence, Weavile]; CELESTIC_TOWN_CAVE; PKCalc 'Galactic Boss Cyrus #1'
+[trainer_ids."Byron Split:418"]
+id = 913
+source = "rom:trainer 913 Cyrus, same species order as the sheet header (CELESTIC_TOWN_CAVE)"
+
+# Byron Split:444 'Worker Dillan' (Fuego Ironworks): ROM 844 Dillan [Skarmory, Machamp,
+# Charizard, Aggron, Camerupt]; FUEGO_IRONWORKS_BUILDING; PKCalc 'Worker Dillan'
+[trainer_ids."Byron Split:444"]
+id = 844
+source = "rom:trainer 844 Dillan, same species order as the sheet header (FUEGO_IRONWORKS_BUILDING)"
+
+# Byron Split:464 'Worker Conrad' (Fuego Ironworks): ROM 846 Conrad [Houndoom, Rotom,
+# Blastoise, Toxicroak, Lucario]; FUEGO_IRONWORKS_BUILDING; PKCalc 'Worker Conrad'
+[trainer_ids."Byron Split:464"]
+id = 846
+source = "rom:trainer 846 Conrad, same species order as the sheet header (FUEGO_IRONWORKS_BUILDING)"
+
+# Byron Split:552 'GalacticF Galatea' (Iron Island): ROM 505 Galatea [Clefable, Gardevoir,
+# Togekiss, Miltank]; IRON_ISLAND_B2F_LEFT_ROOM; PKCalc 'Galactic Galatea'
+[trainer_ids."Byron Split:552"]
+id = 505
+source = "rom:trainer 505 Galatea, same species order as the sheet header (IRON_ISLAND_B2F_LEFT_ROOM)"
+
+# Byron Split:562 'Galactic Hippocamp' (Iron Island): ROM 457 Hippocamp [Hippowdon,
+# Cradily, Kingdra, Starmie]; IRON_ISLAND_B2F_LEFT_ROOM; PKCalc 'Galactic Hippocamp #1'
+[trainer_ids."Byron Split:562"]
+id = 457
+source = "rom:trainer 457 Hippocamp, same species order as the sheet header (IRON_ISLAND_B2F_LEFT_ROOM)"
+
+# Byron Split:572 'Galactic Psamanthe' (Iron Island): ROM 506 Psamanthe [Probopass,
+# Cacturne, Garchomp, Corsola]; IRON_ISLAND_B2F_LEFT_ROOM; PKCalc 'Galactic Psamanthe'
+[trainer_ids."Byron Split:572"]
+id = 506
+source = "rom:trainer 506 Psamanthe, same species order as the sheet header (IRON_ISLAND_B2F_LEFT_ROOM)"
+
+# Byron Split:582 'Galactic Sao' (Iron Island): ROM 305 Sao [Tropius, Cherrim, Rapidash,
+# Girafarig]; IRON_ISLAND_B2F_LEFT_ROOM; PKCalc 'Galactic Sao'
+[trainer_ids."Byron Split:582"]
+id = 305
+source = "rom:trainer 305 Sao, same species order as the sheet header (IRON_ISLAND_B2F_LEFT_ROOM)"
+
+# Byron Split:592 'Galactic Neso' (Iron Island): ROM 289 Neso [Camerupt, Exeggutor,
+# Solrock, Castform]; IRON_ISLAND_B2F_LEFT_ROOM; PKCalc 'Galactic Neso #1'
+[trainer_ids."Byron Split:592"]
+id = 289
+source = "rom:trainer 289 Neso, same species order as the sheet header (IRON_ISLAND_B2F_LEFT_ROOM)"
+
+# Byron Split:602 'GalacticF Halimede' (Iron Island): ROM 446 Halimede [Vespiquen,
+# Rampardos, Slowking, Dusknoir]; IRON_ISLAND_B2F_LEFT_ROOM; PKCalc 'Galactic Halimede #1'
+[trainer_ids."Byron Split:602"]
+id = 446
+source = "rom:trainer 446 Halimede, same species order as the sheet header (IRON_ISLAND_B2F_LEFT_ROOM)"
+
+# Byron Split:622 'Galactic Naid' (Iron Island): ROM 379 Naid [Dragonair, Ludicolo,
+# Surskit, Whiscash]; IRON_ISLAND_B2F_LEFT_ROOM; PKCalc 'Galactic Naid'
+[trainer_ids."Byron Split:622"]
+id = 379
+source = "rom:trainer 379 Naid, same species order as the sheet header (IRON_ISLAND_B2F_LEFT_ROOM)"
+
+# Byron Split:632 'GalacticF Nereid' (Iron Island): ROM 378 Nereid [Qwilfish, Dewgong,
+# Huntail, Gorebyss]; IRON_ISLAND_B2F_LEFT_ROOM; PKCalc 'Galactic Nereid'
+[trainer_ids."Byron Split:632"]
+id = 378
+source = "rom:trainer 378 Nereid, same species order as the sheet header (IRON_ISLAND_B2F_LEFT_ROOM)"
+
+# Byron Split:662 'Galactic Triton' (Iron Island): ROM 835 Triton [Seaking, Kingdra,
+# Kingler, Empoleon]; IRON_ISLAND_B2F_LEFT_ROOM; PKCalc 'Galactic Triton #2'
+[trainer_ids."Byron Split:662"]
+id = 835
+source = "rom:trainer 835 Triton, same species order as the sheet header (IRON_ISLAND_B2F_LEFT_ROOM)"
+
+# Byron Split:672 'Galactic Neptune' (Iron Island): ROM 836 Neptune [Starmie, Lapras,
+# Swampert, Relicanth]; IRON_ISLAND_B2F_LEFT_ROOM; PKCalc 'Galactic Neptune #2'
+[trainer_ids."Byron Split:672"]
+id = 836
+source = "rom:trainer 836 Neptune, same species order as the sheet header (IRON_ISLAND_B2F_LEFT_ROOM)"
+
+# Candice Split:324 'Ace Trainer Blake' (Route 216): ROM 132 Blake [Ambipom, Porygon2,
+# Kecleon, Snorlax]; ROUTE_216; PKCalc 'Ace Trainer Blake'
+# The sheet's second Pokemon is Porygon, the ROM's Porygon2 (the ROM is used).
+[trainer_ids."Candice Split:324"]
+id = 132
+source = "rom:trainer 132 Blake, same species order as the sheet header (ROUTE_216)"
+
+# Candice Split:459 'Ace Trainer Tenzing' (Snowpoint Gym): ROM 828 Tenzing [Glalie,
+# Walrein, Alakazam, Rotom, Tyranitar]; SNOWPOINT_CITY_GYM; PKCalc 'Ace Trainer Tenzing'
+[trainer_ids."Candice Split:459"]
+id = 828
+source = "rom:trainer 828 Tenzing, same species order as the sheet header (SNOWPOINT_CITY_GYM)"
+
+# Galactic Split:40 'SwimmerF Wang' (Route 220): ROM 193 Wang [Kingdra, Vaporeon, Surskit,
+# Dewgong]; ROUTE_220; PKCalc 'Swimmer Wang [A]'
+# Four ROM Wangs (164 [D], 165 [C], 193 [A], 194 [B]) are placed on Route 220; 165 maps to
+# Galactic Split:60 by its exact party. The three identical headers :40, :50, :70 take the
+# three
+# identical-party ids in PKCalc label order: which header is which is not evidenced and
+# changes
+# nothing (same party, AI flags, map and sheet tags).
+[trainer_ids."Galactic Split:40"]
+id = 193
+source = "rom:trainer 193 Wang, same species order as the sheet header (ROUTE_220)"
+
+# Galactic Split:50 'SwimmerF Wang' (Route 220): ROM 194 Wang [Kingdra, Vaporeon, Surskit,
+# Dewgong]; ROUTE_220; PKCalc 'Swimmer Wang [B]'
+# See Galactic Split:40.
+[trainer_ids."Galactic Split:50"]
+id = 194
+source = "rom:trainer 194 Wang, same species order as the sheet header (ROUTE_220)"
+
+# Galactic Split:70 'SwimmerF Wang' (Route 220): ROM 164 Wang [Kingdra, Vaporeon, Surskit,
+# Dewgong]; ROUTE_220; PKCalc 'Swimmer Wang [D]'
+# See Galactic Split:40.
+[trainer_ids."Galactic Split:70"]
+id = 164
+source = "rom:trainer 164 Wang, same species order as the sheet header (ROUTE_220)"
+
+# Galactic Split:789 'GalacticfSquad Deimos' (Mount Coronet - Room 1): ROM 533 Deimos
+# [Smeargle, Hypno, Houndoom, Spiritomb, Vileplume, Dugtrio]; MT_CORONET_3F; PKCalc
+# 'Galactic Squad Deimos #3'
+[trainer_ids."Galactic Split:789"]
+id = 533
+source = "rom:trainer 533 Deimos, same species order as the sheet header (MT_CORONET_3F)"
+
+# Galactic Split:912 'Galactic Oberon' (CORONET HIGHLANDS OUTSIDE 1): ROM 582 Oberon
+# [Slaking, Tyranitar, Walrein, Breloom, Lucario, Raichu]; MT_CORONET_OUTSIDE_SOUTH,
+# STARK_MOUNTAIN_ROOM_2; PKCalc 'Galactic Oberon #2'
+# The battle sits in scr_seq member 401 (scripts_empty, the file of 136 map headers); the
+# ROM places it where an event runs its entry: entry 9, coord event of header 211
+# MT_CORONET_OUTSIDE_SOUTH. The join used to list all 136 headers (fixed 2026-11-14,
+# tools/rom/readers/maps.py trainer_maps).
+[trainer_ids."Galactic Split:912"]
+id = 582
+source = "rom:trainer 582 Oberon, same species order as the sheet header (MT_CORONET_OUTSIDE_SOUTH, STARK_MOUNTAIN_ROOM_2)"
+
+# Galactic Split:922 'GalacticF Titania' (CORONET HIGHLANDS OUTSIDE 1): ROM 583 Titania
+# [Togekiss, Altaria, Xatu, Jumpluff, Celebi, Yanmega]; MT_CORONET_OUTSIDE_SOUTH; PKCalc
+# 'Galactic Titania'
+# The battle sits in scr_seq member 401 (scripts_empty, the file of 136 map headers); the
+# ROM places it where an event runs its entry: entry 9, coord event of header 211
+# MT_CORONET_OUTSIDE_SOUTH. The join used to list all 136 headers (fixed 2026-11-14,
+# tools/rom/readers/maps.py trainer_maps).
+[trainer_ids."Galactic Split:922"]
+id = 583
+source = "rom:trainer 583 Titania, same species order as the sheet header (MT_CORONET_OUTSIDE_SOUTH)"
+
+# Galactic Split:945 'GalacticF Laomedeia' (CORONET HIGHLANDS ROOM 1): ROM 516 Laomedeia
+# [Lapras, Rapidash, Dragonite, Dugtrio]; MT_CORONET_4F_ROOMS_1_AND_2; PKCalc 'Galactic
+# Laomedeia #2'
+# The sheet lists the first three of the ROM's four Pokemon (Dugtrio missing).
+[trainer_ids."Galactic Split:945"]
+id = 516
+source = "rom:trainer 516 Laomedeia, same species order as the sheet header (MT_CORONET_4F_ROOMS_1_AND_2)"
+
+# Galactic Split:975 'GalacticF Terra' (CORONET HIGHLANDS ROOM 1): ROM 562 Terra
+# [Blastoise, Dunsparce, Blaziken, Torterra, Luxray, Metagross];
+# MT_CORONET_4F_ROOMS_1_AND_2, UNKNOWN_250, STARK_MOUNTAIN_ROOM_2; PKCalc 'Galactic Terra
+# #5'
+# The battle sits in scr_seq member 401 (scripts_empty, the file of 136 map headers); the
+# ROM places it where an event runs its entry: entry 10, coord events of header 212
+# MT_CORONET_4F_ROOMS_1_AND_2 and header 250. The join used to list all 136 headers (fixed
+# 2026-11-14, tools/rom/readers/maps.py trainer_maps).
+[trainer_ids."Galactic Split:975"]
+id = 562
+source = "rom:trainer 562 Terra, same species order as the sheet header (MT_CORONET_4F_ROOMS_1_AND_2, UNKNOWN_250, STARK_MOUNTAIN_ROOM_2)"
+
+# Galactic Split:985 'Galactic Luna' (CORONET HIGHLANDS ROOM 1): ROM 572 Luna [Ninjask,
+# Drifblim, Crobat, Skarmory, Salamence, Lunatone]; MT_CORONET_4F_ROOMS_1_AND_2,
+# UNKNOWN_250, STARK_MOUNTAIN_ROOM_2; PKCalc 'Galactic Luna #5'
+# The battle sits in scr_seq member 401 (scripts_empty, the file of 136 map headers); the
+# ROM places it where an event runs its entry: entry 10, coord events of header 212
+# MT_CORONET_4F_ROOMS_1_AND_2 and header 250. The join used to list all 136 headers (fixed
+# 2026-11-14, tools/rom/readers/maps.py trainer_maps).
+[trainer_ids."Galactic Split:985"]
+id = 572
+source = "rom:trainer 572 Luna, same species order as the sheet header (MT_CORONET_4F_ROOMS_1_AND_2, UNKNOWN_250, STARK_MOUNTAIN_ROOM_2)"
+
+# Galactic Split:1017 'Galactic Prospero' (CORONET HIGHLANDS OUTSIDE 2): ROM 526 Prospero
+# [Clefable, Alakazam, Dunsparce, Sceptile, Castform, Ninetales];
+# MT_CORONET_OUTSIDE_NORTH; PKCalc 'Galactic Prospero #3'
+[trainer_ids."Galactic Split:1017"]
+id = 526
+source = "rom:trainer 526 Prospero, same species order as the sheet header (MT_CORONET_OUTSIDE_NORTH)"
+
+# Galactic Split:1111 'Galactic Neptune' (CORONET HIGHLANDS ROOM 3): ROM 581 Neptune
+# [Empoleon, Swampert, Feraligatr, Metagross, Lapras, Wailord]; MT_CORONET_5F,
+# STARK_MOUNTAIN_ROOM_2; PKCalc 'Galactic Neptune #3'
+# The battle sits in scr_seq member 401 (scripts_empty, the file of 136 map headers); the
+# ROM places it where an event runs its entry: entry 11, coord event of header 214
+# MT_CORONET_5F. The join used to list all 136 headers (fixed 2026-11-14,
+# tools/rom/readers/maps.py trainer_maps).
+[trainer_ids."Galactic Split:1111"]
+id = 581
+source = "rom:trainer 581 Neptune, same species order as the sheet header (MT_CORONET_5F, STARK_MOUNTAIN_ROOM_2)"
+
+# Galactic Split:1121 'Galactic Triton' (CORONET HIGHLANDS ROOM 3): ROM 606 Triton
+# [Zapdos, Dragonite, Magneton, Rotom, Mantine, Gyarados]; MT_CORONET_5F,
+# STARK_MOUNTAIN_ROOM_2; PKCalc 'Galactic Triton #3'
+# The battle sits in scr_seq member 401 (scripts_empty, the file of 136 map headers); the
+# ROM places it where an event runs its entry: entry 11, coord event of header 214
+# MT_CORONET_5F. The join used to list all 136 headers (fixed 2026-11-14,
+# tools/rom/readers/maps.py trainer_maps).
+[trainer_ids."Galactic Split:1121"]
+id = 606
+source = "rom:trainer 606 Triton, same species order as the sheet header (MT_CORONET_5F, STARK_MOUNTAIN_ROOM_2)"
+
+# Galactic Split:1195 'Commander Mars' (SPEAR PILLAR): ROM 528 Mars [Garchomp, Aerodactyl,
+# Swampert, Jirachi, Ninetales, Latias]; SPEAR_PILLAR; PKCalc 'Commander Mars #3'
+[trainer_ids."Galactic Split:1195"]
+id = 528
+source = "rom:trainer 528 Mars, same species order as the sheet header (SPEAR_PILLAR)"
+
+# Galactic Split:1205 'Commander Jupiter' (SPEAR PILLAR): ROM 407 Jupiter [Gyarados,
+# Tangrowth, Magnezone, Tyranitar, Regirock, Latios]; SPEAR_PILLAR; PKCalc 'Commander
+# Jupiter #3'
+[trainer_ids."Galactic Split:1205"]
+id = 407
+source = "rom:trainer 407 Jupiter, same species order as the sheet header (SPEAR_PILLAR)"
+
+# Galactic Split:1217 'Cyrus' (DISTORTION WORLD): ROM 404 Cyrus [Palkia, Dialga, Deoxys,
+# Weavile, Heatran, Regigigas]; DISTORTION_WORLD_B7F, DISTORTION_WORLD_GIRATINA_ROOM;
+# PKCalc 'Galactic Boss Cyrus #3'
+[trainer_ids."Galactic Split:1217"]
+id = 404
+source = "rom:trainer 404 Cyrus, same species order as the sheet header (DISTORTION_WORLD_B7F, DISTORTION_WORLD_GIRATINA_ROOM)"
+
+# Elite Four Split:91 'Roughneck Wyatt' (Victory Road): ROM 234 Wyatt [Mamoswine,
+# Salamence, Kingdra, Electivire, Infernape, Umbreon]; VICTORY_ROAD_1F; PKCalc 'Roughneck
+# Wyatt'
+[trainer_ids."Elite Four Split:91"]
+id = 234
+source = "rom:trainer 234 Wyatt, same species order as the sheet header (VICTORY_ROAD_1F)"
+
+# Elite Four Split:101 'Blackbelt Roku' (Victory Road): ROM 226 Roku [Sableye, Claydol,
+# Honchkrow, Houndoom, Tyranitar, Feraligatr]; VICTORY_ROAD_1F; PKCalc 'Black Belt Roku'
+[trainer_ids."Elite Four Split:101"]
+id = 226
+source = "rom:trainer 226 Roku, same species order as the sheet header (VICTORY_ROAD_1F)"
+
+# Elite Four Split:111 'Beauty Jasmine ❤' (Victory Road): ROM 222 Jasmine [Metagross,
+# Ninetales, Snorlax, Lanturn, Donphan, Mismagius]; VICTORY_ROAD_2F; PKCalc 'Beauty
+# Jasmine #2'
+[trainer_ids."Elite Four Split:111"]
+id = 222
+source = "rom:trainer 222 Jasmine, same species order as the sheet header (VICTORY_ROAD_2F)"
+
+# Elite Four Split:151 'Hiker J.J Ahern' (Victory Road): ROM 237 J.J Ahern [Raichu,
+# Snorlax, Gengar, Aerodactyl, Blastoise, Charizard]; VICTORY_ROAD_1F; PKCalc 'Hiker J.J
+# Ahern'
+[trainer_ids."Elite Four Split:151"]
+id = 237
+source = "rom:trainer 237 J.J Ahern, same species order as the sheet header (VICTORY_ROAD_1F)"
+
+# Elite Four Split:161 'Bug Catcher Ford' (Victory Road): ROM 235 Ford [Jolteon, Snorlax,
+# Starmie, Slowbro, Dugtrio, Aerodactyl]; VICTORY_ROAD_B1F; PKCalc 'Bug Catcher Ford'
+[trainer_ids."Elite Four Split:161"]
+id = 235
+source = "rom:trainer 235 Ford, same species order as the sheet header (VICTORY_ROAD_B1F)"
+
+# Elite Four Split:171 'Ruin Maniac Greg' (Victory Road): ROM 230 Greg [Hippowdon,
+# Tangrowth, Spiritomb, Slowking, Wobbuffet, Gliscor]; VICTORY_ROAD_B1F; PKCalc 'Ruin
+# Maniac Greg'
+[trainer_ids."Elite Four Split:171"]
+id = 230
+source = "rom:trainer 230 Greg, same species order as the sheet header (VICTORY_ROAD_B1F)"
+
+# Elite Four Split:181 'Idol Zoe, the best trainer in the game, best idol, and the hardest
+# trainer you will ever face.' (Victory Road): ROM 236 Zoe [Piloswine, Yanma, Girafarig,
+# Unown, Misdreavus, Buneary]; VICTORY_ROAD_1F; PKCalc 'Idol Zoe'
+[trainer_ids."Elite Four Split:181"]
+id = 236
+source = "rom:trainer 236 Zoe, same species order as the sheet header (VICTORY_ROAD_1F)"
+
+# Elite Four Split:191 'Dragon Tamer Clinton' (Victory Road): ROM 231 Clinton [Salamence,
+# Espeon, Muk, Dragonite, Jynx, Tropius]; VICTORY_ROAD_1F; PKCalc 'Dragon Tamer Clinton'
+[trainer_ids."Elite Four Split:191"]
+id = 231
+source = "rom:trainer 231 Clinton, same species order as the sheet header (VICTORY_ROAD_1F)"
+
+# Elite Four Split:272 'Elite Four Flint' (Pokémon League): ROM 868 Flint [Groudon, Uxie,
+# Exeggutor, Houndoom, Charizard, Magmortar]; POKEMON_LEAGUE_FLINT_ROOM; PKCalc 'Elite
+# Four Flint'
+# 874 has the same party: Cameraman Tevin's first battle, Kaizo's Lv 100 copy of Flint's
+# team (see area.874); 868 is placed in Flint's room.
+[trainer_ids."Elite Four Split:272"]
+id = 868
+source = "rom:trainer 868 Flint, same species order as the sheet header (POKEMON_LEAGUE_FLINT_ROOM)"
+
+# --- Sheet headers that map to no trainer id on purpose (E3 batch 4, 2026-11-14) ---------
+# Allies: the player's tag partner, listed in the sheet as a header but never an opponent.
+# Their teams are trainers.json rows the multis name as `partner` (Lucas/Dawn 613-618 at
+# Jubilife, 621-626 at Veilstone, 800/801 at Lake Verity); mapping them would count the ally
+# as a battle of its own.
+[sheet_unmapped."Gardenia Split:7"]
+kind = "ally"
+reason = "tag partner Dawn/Lucas at Jubilife City with Grotle (player starter Chimchar): ROM 613/616, PKCalc tag partner of Venus #1 + Luna #1"
+source = "Gardenia Split:7"
+
+[sheet_unmapped."Gardenia Split:17"]
+kind = "ally"
+reason = "tag partner Dawn/Lucas at Jubilife City with Monferno (player starter Piplup): ROM 614/617"
+source = "Gardenia Split:17"
+
+[sheet_unmapped."Gardenia Split:27"]
+kind = "ally"
+reason = "tag partner Dawn/Lucas at Jubilife City with Prinplup (player starter Turtwig): ROM 615/618"
+source = "Gardenia Split:27"
+
+[sheet_unmapped."Maylene Split:301"]
+kind = "ally"
+reason = "tag partner Dawn/Lucas at Veilstone City with Torterra (player starter Chimchar): ROM 622/625, PKCalc tag partner of Uranus #2 + Cupid #1"
+source = "Maylene Split:301"
+
+[sheet_unmapped."Maylene Split:311"]
+kind = "ally"
+reason = "tag partner Dawn/Lucas at Veilstone City with Infernape (player starter Piplup): ROM 623/626"
+source = "Maylene Split:311"
+
+[sheet_unmapped."Maylene Split:321"]
+kind = "ally"
+reason = "tag partner Dawn/Lucas at Veilstone City with Empoleon (player starter Turtwig): ROM 621/624"
+source = "Maylene Split:321"
+
+[sheet_unmapped."Candice Split:182"]
+kind = "ally"
+reason = "tag partner Dawn/Lucas at Lake Verity: ROM 800/801, PKCalc tag partner of the four Lake Verity multis"
+source = "Candice Split:182"
+
+# Duplicates: the Route 212 Pokemon Rangers are listed in the Byron split at Lv 95-98 and in
+# the Galactic split at Lv 100. The ROM has one trainer each (96 Allison, 95 Jeffrey, 94
+# Taylor, all placed on ROUTE_212_SOUTH, Lv 100); the Galactic headers map by their exact
+# party, so the battles are counted once, in the Galactic split. Which split the user fights
+# them in is on the user list.
+[sheet_unmapped."Byron Split:202"]
+kind = "duplicate"
+of = 96
+reason = "Pokemon Ranger Allison: the same ROM trainer as Galactic Split:7 (one Primeape, Lv 100 in the ROM)"
+source = "Byron Split:202"
+
+[sheet_unmapped."Byron Split:212"]
+kind = "duplicate"
+of = 95
+reason = "Pokemon Ranger Jeffrey: the same ROM trainer as Galactic Split:17 (one Arcanine, Lv 100 in the ROM)"
+source = "Byron Split:212"
+
+[sheet_unmapped."Byron Split:222"]
+kind = "duplicate"
+of = 94
+reason = "Pokemon Ranger Taylor: the same ROM trainer as Galactic Split:27 (one Swampert, Lv 100 in the ROM)"
+source = "Byron Split:222"
+
+# User call: no ROM trainer has this party.
+[sheet_unmapped."Gardenia Split:111"]
+kind = "user_call"
+reason = "Maid Yoki on Route 204 North with six Pokemon at Lv 67 (Jigglypuff, Munchlax, Bulbasaur, Kirlia, Grimer, Weedle): no ROM trainer has that party; the ROM's only Yoki (823) has one Jigglypuff Lv 67 and is placed in a Floaroma Meadow house. Is this a real fight, and where?"
+source = "Gardenia Split:111"
+
+
 # --- Battle format corrections (K2b Task 15) ---------------------------------------------
 # The ROM fights these trainers in two battle structures on two maps, which one trainers.json
 # format cannot hold (format "unknown" refused them). The user answered each (2026-11-07):
@@ -815,7 +1246,12 @@ source = "user, 2026-11-07"
 weather = "none"
 source = "user, 2026-11-07"
 
-# 676 Corbin: unreachable (no object and no battle command uses 676): left unknown, refused.
+# 676 Corbin: no object and no battle command uses 676. Its placement (header 211
+# MT_CORONET_OUTSIDE_SOUTH, hail) is inherited through the vanilla rematch table
+# (gVsSeekerRematchData) from 583 Titania, placed there since the shared-script join fix
+# (E3 batch 5, 2026-11-14). No object carries 583's trainer script and the Vs. Seeker only
+# rematches trainer objects (overlay005/vs_seeker.c:500-540, :692-694), so the rematch is
+# probably unreachable; 676 is in no split.
 
 # Pokemon Center daily trainers (Pokemon Center 1F interiors; scr_seq member 400
 # pokemon_center_daily_trainers, whose 10401/10402 NPCs the map join misses): the first

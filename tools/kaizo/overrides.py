@@ -19,6 +19,12 @@ Tables (keys are ROM trainer ids unless said otherwise):
 - ``[[gauntlet]]``: ``name``, ``trainers`` (ids, fight order), ``rules`` (only
   ``heal_between`` / ``change_team``, bool; empty until play reaches the group, spec 12.4).
 - ``[trainer_ids."<label or sheet cite>"]``: ``id``, read by ``trainer_map``.
+- ``[sheet_unmapped."<sheet cite>"]``: ``kind`` and ``reason`` for a split-sheet header that
+  maps to no trainer id on purpose (``SHEET_UNMAPPED_KINDS``): ``ally`` (the player's tag
+  partner, not an opponent), ``duplicate`` (``of``: the id an earlier header already maps;
+  the same battle listed twice) or ``user_call`` (the evidence does not settle it; the
+  question is in ``reason``). Every unmapped header must have one and every entry must be
+  an unmapped header (``check_sheet_unmapped``), so no battle drops out of the splits.
 - ``[fields.<id>]``: corrections to derived fields: ``split``, ``optional``, ``left_side``,
   ``player_starter``, and ``format``: ``"unknown"`` for a trainer the ROM fights in two
   battle structures, e.g. a scripted pair on one map and placed alone on another, which
@@ -92,6 +98,7 @@ _SOURCE = re.compile(
 )
 _SHEET = re.compile(r"(?!pkcalc:|rom:|user, )[^:]+:\d+")
 _CLAIM_NAMES = {"trick_room": "Trick Room", "gravity": "Gravity"}
+SHEET_UNMAPPED_KINDS = ("ally", "duplicate", "user_call")
 
 
 class OverridesError(ValueError):
@@ -119,6 +126,14 @@ class AreaException:
 
 
 @dataclass(frozen=True)
+class SheetUnmapped:
+    kind: str  # one of SHEET_UNMAPPED_KINDS
+    reason: str
+    source: str
+    of: int | None = None  # duplicate: the trainer id the battle is already mapped to
+
+
+@dataclass(frozen=True)
 class Gauntlet:
     name: str
     trainers: tuple[int, ...]
@@ -138,6 +153,7 @@ class Overrides:
     fields: dict[int, dict[str, object]] = field(default_factory=dict)
     move_lists: dict[str, list[int]] = field(default_factory=dict)
     area_exceptions: dict[int, AreaException] = field(default_factory=dict)
+    sheet_unmapped: dict[str, SheetUnmapped] = field(default_factory=dict)
     sources: dict[str, str] = field(default_factory=dict)
 
 
@@ -249,7 +265,15 @@ def load_overrides(path: Path = DEFAULT_PATH) -> Overrides:
         raw = tomllib.loads(path.read_text(encoding="utf-8"))
     except tomllib.TOMLDecodeError as e:
         raise OverridesError(f"{path}: {e}") from e
-    tables = ("area", "area_exception", "gauntlet", "trainer_ids", "fields", "move_lists")
+    tables = (
+        "area",
+        "area_exception",
+        "gauntlet",
+        "trainer_ids",
+        "sheet_unmapped",
+        "fields",
+        "move_lists",
+    )
     bad = sorted(k for k in raw if k not in tables)
     if bad:
         raise OverridesError(f"{path.name}: unknown table {', '.join(map(repr, bad))}")
@@ -277,6 +301,22 @@ def load_overrides(path: Path = DEFAULT_PATH) -> Overrides:
         if not isinstance(tid, int) or isinstance(tid, bool):
             raise OverridesError(f"{entry}: id must be an integer")
         trainer_ids[label] = tid
+
+    sheet_unmapped = {}
+    for cite, t in raw.get("sheet_unmapped", {}).items():
+        entry = f"sheet_unmapped.{cite}"
+        src = _source(entry, t)
+        _keys(entry, t, ("kind", "reason", "of"))
+        kind, reason, of = t.get("kind"), t.get("reason"), t.get("of")
+        if kind not in SHEET_UNMAPPED_KINDS:
+            raise OverridesError(f"{entry}: kind must be one of {SHEET_UNMAPPED_KINDS}")
+        if not isinstance(reason, str) or not reason:
+            raise OverridesError(f"{entry}: reason must be a non-empty string")
+        if (kind == "duplicate") != (of is not None):
+            raise OverridesError(f"{entry}: 'of' is required for a duplicate and only there")
+        if of is not None and (not isinstance(of, int) or isinstance(of, bool)):
+            raise OverridesError(f"{entry}: of must be an integer")
+        sheet_unmapped[cite] = SheetUnmapped(kind, reason, src, of)
 
     fields_ = {}
     for key, t in raw.get("fields", {}).items():
@@ -322,8 +362,34 @@ def load_overrides(path: Path = DEFAULT_PATH) -> Overrides:
         fields=fields_,
         move_lists=move_lists,
         area_exceptions=exceptions,
+        sheet_unmapped=sheet_unmapped,
         sources=sources,
     )
+
+
+def check_sheet_unmapped(overrides: Overrides, sheet_maps: Iterable[Mapping]) -> list[str]:
+    """Problems: a split-sheet header that maps to no trainer id without a
+    ``[sheet_unmapped]`` entry (a battle would drop out of its split), an entry for a header
+    that maps, or a duplicate whose ``of`` no other header maps to."""
+    sheet_maps = list(sheet_maps)
+    unmapped = {m.label for m in sheet_maps if m.id is None}
+    mapped_ids = {m.id for m in sheet_maps if m.id is not None}
+    settled = overrides.sheet_unmapped
+    out = [
+        f"sheet header {c} maps to no trainer id: map it ([trainer_ids]) or settle it "
+        "([sheet_unmapped])"
+        for c in sorted(unmapped - set(settled))
+    ]
+    out += [
+        f"sheet_unmapped.{c}: the header maps to a trainer id"
+        for c in sorted(set(settled) - unmapped)
+    ]
+    out += [
+        f"sheet_unmapped.{c}: duplicate of {e.of}, which no sheet header maps to"
+        for c, e in sorted(settled.items())
+        if e.kind == "duplicate" and e.of not in mapped_ids
+    ]
+    return out
 
 
 # --- sheet rows -------------------------------------------------------------------------
@@ -475,23 +541,16 @@ def check_rom_trick_room(overrides: Overrides, field_effects: Iterable[dict]) ->
     return out
 
 
-# Trainers the ROM trainer -> map join places on 136-137 map headers each, through scripts
-# that many map headers share (rom_trainer_maps.json; tools/rom/readers/maps.py
-# trainer_maps). Their header lists are no placement evidence, so the two-placement Trick
-# Room rule skips them.
-NOISY_MAP_JOIN = frozenset({562, 572, 581, 582, 583, 606, 676, 861, 863, 865})
-
-
 def two_placement_trick_room(
     field_effects: Iterable[dict], trainer_maps: MappingABC[int, list[int]]
 ) -> dict[int, tuple[list[int], list[int]]]:
     """Trainer id -> (its Trick Room headers, its other headers) for every ROM Trick Room
     trainer (map weather 18) the trainer -> map join also places on a header without Trick
-    Room, ``NOISY_MAP_JOIN`` excepted. Which fight is meant is a user call (the
+    Room. Which fight is meant is a user call (the
     Rosalind/Puck/Kari precedent): ``check_two_placement``."""
     out = {}
     for r in field_effects:
-        if r["effect"] != "trick_room" or r["id"] in NOISY_MAP_JOIN:
+        if r["effect"] != "trick_room":
             continue
         other = sorted(set(trainer_maps.get(r["id"], ())) - set(r["map_headers"]))
         if other:
@@ -632,9 +691,9 @@ HEADER = """\
 # battle weather switch, Task 8), so every trainer in rom_field_effects.json gets a
 # trick_room entry citing the ROM, or an [area_exception] saying why not. Gravity (Champion
 # Cynthia) and sheet-only Trick Room stay here. A trainer claimed by two areas is never
-# settled by guess: its claim stays commented out with every citation. The ten start
-# conditions left "unknown" by ruling (318 325 343 509 559 610 649 676 746 747) are not
-# settled here.
+# settled by guess: its claim stays commented out with every citation. The start conditions
+# left "unknown" by ruling (325 343 509 559 610 649 746 747; 318 and 676 left that list on
+# 2026-11-14 when the shared-script join gave each one ROM condition) are not settled here.
 #
 # Ruling 9 (split, optional, left side): derived from the sheet at every build, with a
 # per-field citation; [fields.<id>] only corrects them. Gauntlet groups are drafted from the
@@ -958,6 +1017,7 @@ def main(argv: list[str] | None = None) -> int:
         + check_two_placement(o, effects, {int(k): v for k, v in where.items()})
         + check_gauntlet_members(o, docs, m.sheet)
         + check_trainer_ids(o, {t["id"] for t in rom_trainers})
+        + check_sheet_unmapped(o, m.sheet)
     )
     for p in problems:
         print(_ascii(p))
