@@ -228,6 +228,12 @@ SITE_N: dict[int, int] = {
     2858: 128,  # Expert_Flatter (+1 when it does NOT jump)
     2864: 128,  # Expert_StatusConfuse (-1 when it does NOT jump)
     2950: 20,  # Expert_StatusParalyze_TryScorePlus3 (+3 when it does NOT jump)
+    # E1 batch 7: the Expert-only hits.
+    2271: 100,  # Expert_BypassAccuracyMove_TryScorePlus1 (+1 when it does NOT jump)
+    2362: 70,  # Expert_StatusSpeedDown_TryScorePlus2 (+2 when it does NOT jump)
+    2836: 128,  # Expert_HighCritical (neutral: on to TryScorePlus1 when it does NOT jump)
+    2839: 128,  # Expert_HighCritical_TryScorePlus1 (+1 when it does NOT jump)
+    4882: 128,  # Expert_Brine (+1 more when it does NOT jump)
 }
 SITE_LINES = tuple(SITE_N)
 # The flat (vanilla) layout's column of script_roll_sites that each line reads: column 0 is
@@ -329,6 +335,16 @@ KAIZO_TRANSCRIBED: frozenset[int] = frozenset(
         118,  # ATK_UP_2_STATUS_CONFUSION: Basic_CheckCannotConfuse (:201); Expert_Swagger (:1680)
         120,  # INFATUATE: Basic_CheckCannotAttract (:202); no Expert_Main entry
         167,  # STATUS_BURN: Basic_CheckCannotBurn (:231); no Expert_Main entry
+        # E1 batch 7: hits whose only label is in Expert_Main (docs/ai/kaizo_roark.md 5.12).
+        17,  # BYPASS_ACCURACY: Expert_BypassAccuracyMove (:1640), :2271
+        43,  # HIGH_CRITICAL: Expert_HighCritical (:1660), :2836, :2839; Risky :6530
+        48,  # RECOIL_QUARTER: Expert_RecoilMove (:1661), no roll
+        70,  # LOWER_SPEED_HIT: Expert_SpeedDownOnHit (:1681) -> Expert_StatusSpeedDown, :2362
+        169,  # DOUBLE_POWER_WHEN_STATUSED (Facade): Expert_Facade (:1729), no roll
+        171,  # DOUBLE_POWER_AND_CURE_PARALYSIS (SmellingSalt): Expert_SmellingSalts (:1731)
+        198,  # RECOIL_THIRD: Expert_RecoilMove (:1747), no roll
+        221,  # DOUBLE_POWER_WHEN_BELOW_HALF (Brine): Expert_Brine (:1765), :4882
+        262,  # RECOIL_PARALYZE_HIT: Expert_RecoilMove (:1802), no roll
     }
 )
 # The transcribed effects (KAIZO_TRANSCRIBED) whose Expert_Main entry goes to a label added
@@ -365,6 +381,16 @@ KAIZO_EXPERT_LABELS: dict[int, tuple[str, int]] = {
     67: ("Expert_StatusParalyze", 1679),
     84: ("Expert_ToxicLeechSeed", 1686),
     118: ("Expert_Swagger", 1680),
+    # E1 batch 7: the Expert-only hits.
+    17: ("Expert_BypassAccuracyMove", 1640),
+    43: ("Expert_HighCritical", 1660),
+    48: ("Expert_RecoilMove", 1661),
+    70: ("Expert_SpeedDownOnHit", 1681),
+    169: ("Expert_Facade", 1729),
+    171: ("Expert_SmellingSalts", 1731),
+    198: ("Expert_RecoilMove", 1747),
+    221: ("Expert_Brine", 1765),
+    262: ("Expert_RecoilMove", 1802),
 }
 # Of KAIZO_EXPERT_LABELS, the effects whose Expert label policy._expert transcribes
 # (layout.KAIZO expert_transcribed), written out: it is not derived from the table, so an
@@ -394,6 +420,15 @@ KAIZO_EXPERT_TRANSCRIBED: frozenset[int] = frozenset(
         67,  # STATUS_PARALYZE: Expert_StatusParalyze
         84,  # STATUS_LEECH_SEED: Expert_ToxicLeechSeed
         118,  # ATK_UP_2_STATUS_CONFUSION: Expert_Swagger
+        17,  # BYPASS_ACCURACY: Expert_BypassAccuracyMove
+        43,  # HIGH_CRITICAL: Expert_HighCritical
+        48,  # RECOIL_QUARTER: Expert_RecoilMove
+        70,  # LOWER_SPEED_HIT: Expert_SpeedDownOnHit
+        169,  # DOUBLE_POWER_WHEN_STATUSED: Expert_Facade
+        171,  # DOUBLE_POWER_AND_CURE_PARALYSIS: Expert_SmellingSalts
+        198,  # RECOIL_THIRD: Expert_RecoilMove
+        221,  # DOUBLE_POWER_WHEN_BELOW_HALF: Expert_Brine
+        262,  # RECOIL_PARALYZE_HIT: Expert_RecoilMove
     }
 )
 assert set(KAIZO_EXPERT_LABELS) <= KAIZO_TRANSCRIBED

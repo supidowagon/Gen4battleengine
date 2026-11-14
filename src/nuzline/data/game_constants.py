@@ -123,6 +123,9 @@ _ANY_SIDE_ABILITIES = {"Levitate": 26, "Wonder Guard": 25, "Scrappy": 113, "Norm
 _AI_MOVE_IDS = {
     "Thunder Wave": 86,  # Basic_CheckCannotParalyze (script.s:620)
     "Psych Up": 244,  # Expert_Swagger (script.s:2852)
+    "Icy Wind": 196,  # Expert_SpeedDownOnHit (script.s:2345-2347)
+    "Rock Tomb": 317,
+    "Mud Shot": 341,
     "Fissure": 90,
     "Horn Drill": 32,
     "U-turn": 369,

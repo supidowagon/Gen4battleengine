@@ -297,7 +297,7 @@ def _layout(tables: Tables, state: BattleState, sites: int) -> _Layout:
     gravity = state.gravity
     d_types = state.types[0, d]
     species = state.species.astype(_I32)
-    ability = decomp_abilities(tables, state)  # current abilities (Trace's copy and so on)
+    ability = decomp_abilities(tables, state)  # the engine's current abilities
     d_ability = ability[0, d]
     present = species > 0
 

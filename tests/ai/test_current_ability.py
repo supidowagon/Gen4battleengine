@@ -68,18 +68,17 @@ def test_refusals_read_the_current_ability(monkeypatch, kaizo_tables, kaizo_name
 
 
 def test_switching_reads_the_current_ability(monkeypatch, kaizo_tables, state):
-    """The switch logic's abilities are the current ones too (``switching._layout``)."""
+    """The switch logic refuses on the current ability too (``switching._layout`` and its
+    message, ``_refusals``): a player's Pokemon whose current ability is Levitate
+    (``_ANY_SIDE_ABILITIES``) is refused, though its species has none (batch 6 review M4)."""
     import jax
 
-    from nuzline.engine.damage import decomp_abilities
-
-    seen = []
-
-    def record(tables, s):
-        seen.append(True)
-        return decomp_abilities(tables, s)
-
-    monkeypatch.setattr(switching, "decomp_abilities", record)
+    sites = 44
+    assert not switching._refusals(
+        switching._layout(kaizo_tables, state, sites), state, kaizo_tables, sites
+    )
+    _changed(monkeypatch, 0, LEVITATE)
     with jax.disable_jit():
-        switching._layout(kaizo_tables, state, 44)
-    assert seen
+        lay = switching._layout(kaizo_tables, state, sites)
+        lines = switching._refusals(lay, state, kaizo_tables, sites)
+    assert any("Levitate" in line for line in lines), lines

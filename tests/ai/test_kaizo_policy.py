@@ -1836,3 +1836,225 @@ def test_status_moves_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_
                 layout = layout_for(t, flags, s)
                 assert policy.ai_refusals(t, s, n, layout) == []
                 _assert_exact_equals_loose(t, s, layout)
+
+
+# --- Expert-only hits (E1 batch 7) -----------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("eva", "jumps", "expected"),
+    [
+        # Expert_BypassAccuracyMove (script.s:2256-2275), Aerial Ace, the player's evasion:
+        (0, (), 0),  # neither threshold: nothing
+        (3, (), 1),  # above decomp 8: +1 unless :2271 jumps
+        (3, (2271,), 0),
+        (5, (), 2),  # above decomp 10: +1, then the roll's +1
+        (5, (2271,), 1),
+    ],
+)
+def test_bypass_accuracy(kaizo_tables, kaizo_names, kaizo_roark_party, eva, jumps, expected):
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Aerial Ace", "Accelerock", "", ""))
+    s = s._replace(stages=s.stages.at[0, Stat.EVA].set(eva))
+    assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expected
+
+
+@pytest.mark.parametrize(
+    ("player", "jumps", "expected"),
+    [
+        # Expert_HighCritical (script.s:2827-2843), Cross Chop (Fighting):
+        ("Tentacool", (), 0),  # Water/Poison: Fighting is resisted: nothing
+        ("Geodude", (), 1),  # Rock/Ground: super effective: +1 unless :2839 jumps
+        ("Geodude", (2839,), 0),
+        ("Gible", (), 1),  # Dragon/Ground: neutral: :2836, then :2839
+        ("Gible", (2836,), 0),
+    ],
+)
+def test_high_critical(kaizo_tables, kaizo_names, kaizo_roark_party, player, jumps, expected):
+    from tests.ai.test_kaizo_outcome import _with_player
+
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Cross Chop", "Accelerock", "", ""))
+    s = _with_player(t, s, n.species_names.index(player), 0, known=True)
+    assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expected
+
+
+@pytest.mark.parametrize(
+    ("move", "status", "hp", "expected"),
+    [
+        ("Facade", Status.BURN, 100, 1),  # Expert_Facade (:4120-4127): the player's status
+        ("Facade", Status.SLEEP, 100, 0),
+        ("SmellingSalt", Status.PARALYSIS, 100, 1),  # Expert_SmellingSalts (:4165-4174)
+        ("SmellingSalt", Status.POISON, 100, 0),
+        ("Brine", Status.NONE, 51, 0),  # Expert_Brine (:4873-4890): above 50 %, nothing
+        ("Brine", Status.NONE, 50, 2),  # +1 and +1 unless :4882 jumps
+    ],
+)
+def test_status_and_hp_boosts(
+    kaizo_tables, kaizo_names, kaizo_roark_party, move, status, hp, expected
+):
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, move, "Accelerock", "", ""))
+    s = _hp(s._replace(status=s.status.at[0, 0].set(status)), 0, hp)
+    assert _delta(t, s, 0x3, 0x7)[0] == expected
+
+
+@pytest.mark.parametrize(
+    ("move", "slower", "expected"),
+    [
+        # Expert_SpeedDownOnHit (script.s:2338-2350) -> Expert_StatusSpeedDown (:2353-2366):
+        ("Icy Wind", True, 2),  # slower: +2 unless :2362 jumps
+        ("Icy Wind", False, -3),
+        ("BubbleBeam", True, 0),  # LOWER_SPEED_HIT but not one of the three: nothing
+    ],
+)
+def test_speed_down_on_hit(kaizo_tables, kaizo_names, kaizo_roark_party, move, slower, expected):
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, move, "Accelerock", "", ""))
+    s = _speeds(s, player=500 if slower else 1, opp=100)
+    assert _delta(t, s, 0x3, 0x7)[0] == expected
+
+
+@pytest.mark.parametrize("flags", [0x17, 0x10F])
+def test_expert_only_hits_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, flags):
+    """Exact == loose for one Kaizo move of each batch 7 effect, against a guessed Gible and
+    Tentacool, at full and low HP, with the player's evasion up."""
+    from tests.ai.test_kaizo_outcome import GIBLE as GIBLE_SPECIES
+
+    t, n = kaizo_tables, kaizo_names
+    effect = np.asarray(t.move_ai_effect)
+    pool = {}
+    for m in range(1, effect.shape[0]):
+        pool.setdefault(int(effect[m]), m)
+    groups = ((17, 43, 48, 70), (169, 171, 198, 221), (262, 0, 0, 0))
+    for moves in groups:
+        ids = tuple(pool[e] if e else 0 for e in moves)
+        for player in (GIBLE_SPECIES, 72):
+            for hp in (100, 40):
+                s = _state(t, kaizo_roark_party, BONSLY, ids)
+                s = _hp(_with_player(t, s, player), 0, hp)
+                s = s._replace(stages=s.stages.at[0, Stat.EVA].set(3))
+                layout = layout_for(t, flags, s)
+                assert policy.ai_refusals(t, s, n, layout) == []
+                _assert_exact_equals_loose(t, s, layout)
+
+
+# Batch 6 review M1: the branches the first status tests left open.
+
+
+@pytest.mark.parametrize(
+    ("move", "attacker", "expected"),
+    [
+        ("Thunder Wave", None, -10),  # Volt Absorb known: -10 (:623-626)
+        ("Glare", None, 0),  # only Thunder Wave reads Motor Drive / Volt Absorb (:620)
+        ("Thunder Wave", "Mold Breaker", 0),  # Mold Breaker skips them (:619)
+    ],
+)
+def test_paralyze_absorb_branches(
+    kaizo_tables, kaizo_names, kaizo_roark_party, move, attacker, expected
+):
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, move, "Accelerock", "", ""))
+    volt = _species_with(t, c.ABILITY_IDS["Volt Absorb"])
+    assert int(np.asarray(t.species_types)[volt][0]) != 4  # not Ground: no type immunity
+    s = _with_player(t, s, volt, 0, known=True)
+    if attacker:
+        species = _species_with(t, c.ABILITY_IDS[attacker])
+        s = s._replace(
+            species=s.species.at[1, 0].set(species), ability_slot=s.ability_slot.at[1, 0].set(0)
+        )
+    assert _delta(t, s, 0x2, 0x3)[0] == expected
+
+
+@pytest.mark.parametrize(
+    ("move", "case", "expected"),
+    [
+        ("Hypnosis", "statused", -10),  # Basic_CheckCannotSleep (:288-295)
+        ("Hypnosis", "safeguard", -10),
+        ("Hypnosis", "Insomnia", -10),
+        ("Leech Seed", "seeded", -10),  # Basic_CheckCannotLeechSeed (:639-648)
+        ("Leech Seed", "grass", -10),
+        ("Leech Seed", "plain", 0),
+        ("Will-O-Wisp", "fire", -10),  # Basic_CheckCannotBurn (:879-890)
+        # (Water Veil, :882, is no Kaizo species' ability)
+        ("Will-O-Wisp", "plain", 0),
+        ("Confuse Ray", "Own Tempo", -10),  # Basic_CheckCannotConfuse (:597-605)
+        ("Confuse Ray", "safeguard", -10),
+        ("Attract", "attracted", -10),  # :733, IfVolatileStatus ATTRACT
+    ],
+)
+def test_basic_cannot_status(kaizo_tables, kaizo_names, kaizo_roark_party, move, case, expected):
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, move, "Accelerock", "", ""))
+    s = _with_player(t, s, 72, 0, known=True)  # Tentacool: Water/Poison
+    s = s._replace(gender=s.gender.at[1, 0].set(c.Gender.MALE).at[0, 0].set(c.Gender.FEMALE))
+    if case == "statused":
+        s = s._replace(status=s.status.at[0, 0].set(Status.BURN))
+    elif case == "safeguard":
+        s = s._replace(safeguard=s.safeguard.at[0].set(5))
+    elif case == "seeded":
+        s = s._replace(leech_seed=s.leech_seed.at[0].set(1))
+    elif case == "attracted":
+        s = s._replace(infatuated=s.infatuated.at[0].set(1))
+    elif case in ("grass", "fire"):
+        kind = c.TYPE_IDS["Grass" if case == "grass" else "Fire"]
+        s = s._replace(types=s.types.at[0, 0].set(jnp.asarray([kind, kind], s.types.dtype)))
+    elif case != "plain":  # a species with the ability in either slot
+        abilities = np.asarray(t.species_abilities_decomp)
+        rows = np.asarray(t.species_form_row)[:, 0]
+        species, slot = next(
+            (sp, k)
+            for sp in range(1, rows.shape[0])
+            for k in (0, 1)
+            if abilities[rows[sp], k] == c.ABILITY_IDS[case]
+        )
+        s = _with_player(t, s, species, slot, known=True)
+    assert _delta(t, s, 0x2, 0x3)[0] == expected
+
+
+@pytest.mark.parametrize(
+    ("hp", "jumps", "expected"),
+    [
+        # Swagger without Psych Up: Expert_Flatter's +1 unless :2858 jumps, then
+        # Expert_StatusConfuse on the player's HP (:2854-2877).
+        (100, (), 1),
+        (100, (2858,), 0),
+        (40, (), -1),  # +1, -1 (:2864 does not jump), -1 at 50 % or less
+    ],
+)
+def test_swagger_without_psych_up(
+    kaizo_tables, kaizo_names, kaizo_roark_party, hp, jumps, expected
+):
+    t, n = kaizo_tables, kaizo_names
+    s = _hp(_state(t, kaizo_roark_party, BONSLY, _ids(n, "Swagger", "Accelerock", "", "")), 0, hp)
+    assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expected
+
+
+@pytest.mark.parametrize(("known", "jumps", "expected"), [(1, (), 1), (1, (1821,), 0), (0, (), 0)])
+def test_expert_status_sleep(kaizo_tables, kaizo_names, kaizo_roark_party, known, jumps, expected):
+    """Expert_StatusSleep (script.s:1813-1825): +1 unless :1821 jumps when the attacker knows
+    Dream Eater's effect (IfMoveEffectKnown RECOVER_DAMAGE_SLEEP, :1816)."""
+    t, n = kaizo_tables, kaizo_names
+    third = "Dream Eater" if known else "Accelerock"
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Hypnosis", "Accelerock", third, ""))
+    assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expected
+
+
+@pytest.mark.parametrize(
+    ("slower", "own_hp", "jumps", "expected"),
+    [
+        # Expert_StatusParalyze (script.s:2940-2954):
+        (True, 100, (), 3),  # slower: +3 unless :2950 jumps
+        (True, 100, (2950,), 0),
+        (False, 100, (), 0),  # not slower, own HP above 70 %: nothing
+        (False, 70, (), -1),  # own HP 70 % or less: -1 (:2945, the attacker's)
+    ],
+)
+def test_expert_status_paralyze(
+    kaizo_tables, kaizo_names, kaizo_roark_party, slower, own_hp, jumps, expected
+):
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Thunder Wave", "Accelerock", "", ""))
+    s = _with_player(t, s, 72, 0, known=True)
+    s = _hp(_speeds(s, player=500 if slower else 1, opp=100), 1, own_hp)
+    assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expected

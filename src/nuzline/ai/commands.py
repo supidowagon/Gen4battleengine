@@ -112,6 +112,9 @@ class MonCondition(IntEnum):
     PARALYSIS = 1 << 6
     TOXIC = 1 << 7  # its counter (bits 8-11) is refused in a mask: _condition_statuses
     ANY = 0xFF  # MON_CONDITION_ANY: every group above
+    # MON_CONDITION_FACADE_BOOST (include/constants/battle/condition.h:29): toxic, poison,
+    # burn, paralysis
+    FACADE_BOOST = (1 << 7) | (1 << 3) | (1 << 4) | (1 << 6)
 
 
 class FieldCondition(IntEnum):
@@ -197,6 +200,9 @@ class BattleEffect(IntEnum):
     RESTORE_HALF_HP = 32  # Recover
     STATUS_BADLY_POISON = 33  # Toxic
     SET_LIGHT_SCREEN = 35  # Light Screen
+    BYPASS_ACCURACY = 17
+    HIGH_CRITICAL = 43
+    RECOIL_QUARTER = 48
     STATUS_CONFUSE = 49
     ATK_UP_2 = 50
     DEF_UP_2 = 51
@@ -205,6 +211,7 @@ class BattleEffect(IntEnum):
     SP_DEF_UP_2 = 54
     DEF_DOWN_2 = 59
     STATUS_PARALYZE = 67
+    LOWER_SPEED_HIT = 70
     STATUS_LEECH_SEED = 84
     PRIORITY_1 = 103  # EvalAttack_ApplyKillBonuses' +2 (script.s:6400); no Roark move has it
     STATUS_NIGHTMARE = 107  # Nightmare (Expert_StatusSleep's IfMoveEffectKnown, :1817)
@@ -219,8 +226,13 @@ class BattleEffect(IntEnum):
     RAISE_ALL_STATS_HIT = 140  # AncientPower (Risky_RiskyEffects, script.s:6550)
     WEATHER_HAIL = 164  # Weather_Main (script.s:7990)
     STATUS_BURN = 167  # Will-O-Wisp
+    DOUBLE_POWER_WHEN_STATUSED = 169  # Facade
+    DOUBLE_POWER_AND_CURE_PARALYSIS = 171  # SmellingSalt
     REMOVE_SCREENS = 186  # Brick Break
     STEAL_STATUS_MOVE = 195  # Snatch (Expert_Recovery_CheckForSnatch, script.s:2670)
+    RECOIL_THIRD = 198
+    DOUBLE_POWER_WHEN_BELOW_HALF = 221  # Brine
+    RECOIL_PARALYZE_HIT = 262
     STEALTH_ROCK = 266
     RECOIL_HALF = 269  # Head Smash
 
@@ -660,6 +672,10 @@ ABILITY_IDS = {
 MOVE_IDS = {
     "Thunder Wave": 86,  # Basic_CheckCannotParalyze (script.s:620)
     "Psych Up": 244,  # Expert_Swagger (script.s:2852)
+    # Expert_SpeedDownOnHit (script.s:2345-2347)
+    "Icy Wind": 196,
+    "Rock Tomb": 317,
+    "Mud Shot": 341,
     "Fissure": 90,
     "Horn Drill": 32,
     "U-turn": 369,
@@ -852,15 +868,16 @@ def effectiveness_class(tables: Tables, state: BattleState, move) -> jnp.ndarray
 
 def attacker_ability(tables: Tables, state: BattleState) -> jnp.ndarray:
     """``int32``: the AI's active Pokemon's current ability (decomp id): ``battleMons[battler]
-    .ability`` (trainer_ai.c:1205), after any change in battle such as Trace's copy
-    (``damage.decomp_abilities``)."""
+    .ability`` (trainer_ai.c:1205): ``damage.decomp_abilities``, the engine's current ability
+    (a change in battle such as Trace's copy follows it once the engine models the change)."""
     return decomp_abilities(tables, state)[1, state.active[1].astype(_I32)]
 
 
 def _defender_abilities(tables: Tables, state: BattleState):
     """``(true, known, base)`` of the player's active Pokemon: its true ability, the current
     one (``battleMons[battler].ability``, trainer_ai.c:1184-1186; ``damage.decomp_abilities``:
-    the form's, or Trace's copy, which the AI also learns, ``BattleAI_SetAbility``,
+    the form's, or a copy the engine models, such as Trace's, which the AI also learns,
+    ``BattleAI_SetAbility``,
     battle_script.c:3401-3403, :12106-12109),
     whether ``LoadBattlerAbility DEFENDER`` returns it without a guess (learned, or Shadow
     Tag, Magnet Pull or Arena Trap, trainer_ai.c:1181-1188), and the base species' two
@@ -1315,6 +1332,12 @@ def if_status(ctx: AiContext, battler: Battler, mask: int) -> AiContext:
     side = _side(battler)
     status = ctx.state.status[side, ctx.state.active[side]].astype(_I32)
     return _jump(ctx, jnp.isin(status, jnp.asarray(_condition_statuses(mask), _I32)))
+
+
+def if_not_status(ctx: AiContext, battler: Battler, mask: int) -> AiContext:
+    """``IfNotStatus`` (trainer_ai.c:662-674): the negation of ``IfStatus``."""
+    ctx = if_status(ctx, battler, mask)
+    return ctx._replace(jump=~ctx.jump)
 
 
 def if_stat_stage_less_than(ctx: AiContext, battler: Battler, stat: Stat, value: int) -> AiContext:

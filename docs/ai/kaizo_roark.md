@@ -559,11 +559,34 @@ STATUS_SLEEP, STATUS_CONFUSE, STATUS_PARALYZE, STATUS_LEECH_SEED, ATK_UP_2_STATU
   unless the 128 roll (`:2864`) jumps, -1 at 50 % or less, -1 more at 30 % or less (prep cuts
   the player's HP at 70, 50 and 30, `prep/variants.AI_DEFENDER_HP_CHECKS`).
   `Expert_StatusParalyze` (`:2940-2954`): slower than the player, +3 unless the 20 roll
-  (`:2950`) jumps; else -1 at 70 % HP or less. `Expert_Swagger` (`:2845-2891`): with Psych Up
+  (`:2950`) jumps; else -1 when the attacker's own HP is 70 % or less (`:2945`). `Expert_Swagger` (`:2845-2891`): with Psych Up
   known, -5 when the player's Attack stage is above decomp 3, else +3, +2 more on the first
   turn; without it, `Expert_Flatter`'s +1 unless the 128 roll (`:2858`) jumps, then
   `Expert_StatusConfuse`. Leech Seed takes Roark's `Expert_ToxicLeechSeed` (5.3); Attract and
   Will-O-Wisp have no `Expert_Main` entry.
+
+### 5.12 Hits scored only by an Expert label (E1 batch 7)
+
+None of these has a `Basic_ScoreMoveEffect` entry.
+- `Expert_BypassAccuracyMove` (`:1640`; `:2256-2275`): the player's evasion above decomp 10 or
+  the attacker's accuracy below 2, +1 and +1 more unless the 100 roll (`:2271`) jumps; above 8
+  or below 4, only the roll's +1.
+- `Expert_HighCritical` (`:1660`; `:2827-2843`): resisted, nothing; super effective, +1 unless
+  the 128 roll (`:2839`) jumps; neutral, a first 128 roll (`:2836`) ends it when it jumps,
+  else the same. RISKY's table holds HIGH_CRITICAL too (`:6530`).
+- `Expert_SpeedDownOnHit` (`:1681`; `:2338-2350`): resisted, nothing; Icy Wind, Rock Tomb and
+  Mud Shot go to `Expert_StatusSpeedDown` (`:2353-2366`: not slower -3; slower +2 unless the 70
+  roll, `:2362`, jumps); any other LOWER_SPEED_HIT move ends.
+- `Expert_Facade` (`:1729`; `:4120-4127`): +1 when the *player* is poisoned, burned or
+  paralyzed (the decomp tests the defender: `IfNotStatus AI_BATTLER_DEFENDER`).
+- `Expert_SmellingSalts` (`:1731`; `:4165-4174`): +1 when the player is paralyzed.
+- `Expert_Brine` (`:1765`; `:4873-4890`): resisted -1; else at the player's 50 % HP or less +1,
+  and +1 more unless the 128 roll (`:4882`) jumps.
+- RECOIL_QUARTER, RECOIL_THIRD and RECOIL_PARALYZE_HIT (`:1661`, `:1747`, `:1802`) share
+  Head Smash's `Expert_RecoilMove` (5.3).
+- U-turn and Payback (`Expert_UTurn`, `Expert_Payback`) wait: they compare speed for
+  `COMPARE_SPEED_FASTER`, where an equal-speed tie decides (plan K3c Ruling 3 draws no tie),
+  and U-turn reads two party-damage commands.
 
 ## 6. Where the AI reads the true battle state
 

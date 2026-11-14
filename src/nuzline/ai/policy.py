@@ -892,6 +892,88 @@ def _expert_status_paralyze(ctx: AiContext, mask) -> AiContext:
     return c.pop_or_end(c.add_to_move_score(ctx, 3))
 
 
+def _expert_bypass_accuracy(ctx: AiContext, mask) -> AiContext:
+    """``Expert_BypassAccuracyMove`` (script.s:2256-2275): +1, and +1 more unless the 100 roll
+    (:2271) jumps, when the player's evasion is above decomp 10 or the attacker's accuracy
+    below 2; only the roll's +1 when evasion is above 8 or accuracy below 4."""
+    ctx = _at(ctx, mask)
+    ctx, plus1 = _split(c.if_stat_stage_greater_than(ctx, _D, Stat.EVA, 10))
+    ctx, t = _split(c.if_stat_stage_less_than(ctx, _A, Stat.ACC, 2))
+    plus1 = plus1 | t
+    ctx, roll = _split(c.if_stat_stage_greater_than(ctx, _D, Stat.EVA, 8))
+    ctx, t = _split(c.if_stat_stage_less_than(ctx, _A, Stat.ACC, 4))
+    roll = roll | t
+    ctx, _ = _split(c.go_to(ctx))  # -> _End
+    # Expert_BypassAccuracyMove_ScorePlus1 (:2267), falling into _TryScorePlus1 (:2270)
+    ctx = c.add_to_move_score(_at(ctx, plus1), 1)
+    ctx, _ = _split(c.if_random_less_than(_at(ctx, roll | ctx.live), 100, 2271))
+    return c.pop_or_end(c.add_to_move_score(ctx, 1))
+
+
+def _expert_high_critical(ctx: AiContext, mask) -> AiContext:
+    """``Expert_HighCritical`` (script.s:2827-2843): resisted, nothing; super effective, +1
+    unless the 128 roll (:2839) jumps; neutral, the same after a first 128 roll (:2836) that
+    ends it when it jumps."""
+    ctx, _ = _not_resisted(_at(ctx, mask))  # -> _End
+    ctx, plus1 = _split(c.if_move_effectiveness_equals(ctx, TypeMulti.DOUBLE))
+    ctx, t = _split(c.if_move_effectiveness_equals(ctx, TypeMulti.QUADRUPLE))
+    ctx, _ = _split(c.if_random_less_than(ctx, 128, 2836))  # -> _End
+    # Expert_HighCritical_TryScorePlus1 (:2838)
+    ctx, _ = _split(c.if_random_less_than(_at(ctx, plus1 | t | ctx.live), 128, 2839))
+    return c.pop_or_end(c.add_to_move_score(ctx, 1))
+
+
+def _expert_speed_down_on_hit(ctx: AiContext, mask) -> AiContext:
+    """``Expert_SpeedDownOnHit`` (script.s:2338-2350): resisted, nothing; Icy Wind, Rock Tomb
+    and Mud Shot go to ``Expert_StatusSpeedDown`` (:2353-2366: not slower than the player -3;
+    slower, +2 unless the 70 roll, :2362, jumps); any other move ends."""
+    ctx, _ = _not_resisted(_at(ctx, mask))  # -> _End
+    down = jnp.zeros_like(ctx.live)
+    for name in ("Icy Wind", "Rock Tomb", "Mud Shot"):
+        ctx, t = _split(c.if_move_equal_to(ctx, _MOVE[name]))
+        down = down | t
+    ctx = c.pop_or_end(ctx)
+    # Expert_StatusSpeedDown (:2353)
+    ctx, plus2 = _split(c.if_speed_compare_equal_to(_at(ctx, down), COMPARE_SPEED_SLOWER))
+    ctx = c.add_to_move_score(ctx, -3)
+    ctx, _ = _split(c.go_to(ctx))  # -> _End
+    ctx, _ = _split(c.if_random_less_than(_at(ctx, plus2), 70, 2362))
+    return c.pop_or_end(c.add_to_move_score(ctx, 2))
+
+
+def _expert_facade(ctx: AiContext, mask) -> AiContext:
+    """``Expert_Facade`` (script.s:4120-4127): +1 when the player (the defender, as the
+    decomp has it) is poisoned, badly poisoned, burned or paralyzed (FACADE_BOOST)."""
+    ctx = _at(ctx, mask)
+    ctx, _ = _split(c.if_not_status(ctx, _D, c.MonCondition.FACADE_BOOST))  # -> _End
+    return c.pop_or_end(c.add_to_move_score(ctx, 1))
+
+
+def _expert_smelling_salts(ctx: AiContext, mask) -> AiContext:
+    """``Expert_SmellingSalts`` (script.s:4165-4174): +1 when the player is paralyzed."""
+    ctx = _at(ctx, mask)
+    ctx, plus1 = _split(c.if_status(ctx, _D, c.MonCondition.PARALYSIS))
+    ctx, _ = _split(c.go_to(ctx))  # -> _End
+    return c.pop_or_end(c.add_to_move_score(_at(ctx, plus1), 1))
+
+
+def _expert_brine(ctx: AiContext, mask) -> AiContext:
+    """``Expert_Brine`` (script.s:4873-4890): resisted (immune, half, quarter) -1; else, with
+    the player at 50 % HP or less, +1 and +1 more unless the 128 roll (:4882) jumps."""
+    ctx = _at(ctx, mask)
+    ctx, minus1 = _split(c.if_move_effectiveness_equals(ctx, TypeMulti.IMMUNE))
+    for cls in (TypeMulti.HALF, TypeMulti.QUARTER):
+        ctx, t = _split(c.if_move_effectiveness_equals(ctx, cls))
+        minus1 = minus1 | t
+    ctx, _ = _split(c.if_hp_percent_greater_than(ctx, _D, 50))  # -> _End
+    ctx = c.add_to_move_score(ctx, 1)
+    ctx, _ = _split(c.if_random_less_than(ctx, 128, 4882))  # -> _End
+    ctx = c.add_to_move_score(ctx, 1)
+    ctx, _ = _split(c.go_to(ctx))  # -> _End
+    # Expert_Brine_ScoreMinus1 (:4886)
+    return c.pop_or_end(c.add_to_move_score(_at(ctx, minus1), -1))
+
+
 def _expert_curse(ctx: AiContext, mask) -> AiContext:
     """``Expert_Curse`` (script.s:3452-3500)."""
     # Expert_Curse (:3452). A Ghost-type attacker jumps to Expert_Curse_GhostCheckHP
@@ -1083,10 +1165,13 @@ _EXPERT_LABELS = (
     (BattleEffect.ATK_UP, _expert_status_atk_up),  # :1633
     (BattleEffect.DEF_UP, _expert_status_def_up),  # :1634
     (BattleEffect.SP_ATK_UP, _expert_status_spa_up),  # :1636
+    (BattleEffect.BYPASS_ACCURACY, _expert_bypass_accuracy),  # :1640
     (BattleEffect.DEF_DOWN, _expert_status_defense_down),  # :1642
     (BattleEffect.RESTORE_HALF_HP, _expert_recovery),  # :1652
     (BattleEffect.STATUS_BADLY_POISON, _expert_toxic_leech_seed),  # :1653
     (BattleEffect.SET_LIGHT_SCREEN, _expert_light_screen),  # :1654
+    (BattleEffect.HIGH_CRITICAL, _expert_high_critical),  # :1660
+    (BattleEffect.RECOIL_QUARTER, _expert_recoil_move),  # :1661
     (BattleEffect.STATUS_CONFUSE, _expert_status_confuse),  # :1662
     (BattleEffect.ATK_UP_2, _expert_status_atk_up),  # :1663
     (BattleEffect.DEF_UP_2, _expert_status_def_up),  # :1664
@@ -1096,10 +1181,16 @@ _EXPERT_LABELS = (
     (BattleEffect.DEF_DOWN_2, _expert_status_defense_down),  # :1671
     (BattleEffect.STATUS_PARALYZE, _expert_status_paralyze),  # :1679
     (BattleEffect.ATK_UP_2_STATUS_CONFUSION, _expert_swagger),  # :1680
+    (BattleEffect.LOWER_SPEED_HIT, _expert_speed_down_on_hit),  # :1681
     (BattleEffect.STATUS_LEECH_SEED, _expert_toxic_leech_seed),  # :1686
     (BattleEffect.CURSE, _expert_curse),  # :1700
     (BattleEffect.HIT_BEFORE_SWITCH, _expert_pursuit),  # :1706
+    (BattleEffect.DOUBLE_POWER_WHEN_STATUSED, _expert_facade),  # :1729
+    (BattleEffect.DOUBLE_POWER_AND_CURE_PARALYSIS, _expert_smelling_salts),  # :1731
     (BattleEffect.REMOVE_SCREENS, _expert_brick_break),  # :1739
+    (BattleEffect.RECOIL_THIRD, _expert_recoil_move),  # :1747
+    (BattleEffect.DOUBLE_POWER_WHEN_BELOW_HALF, _expert_brine),  # :1765
+    (BattleEffect.RECOIL_PARALYZE_HIT, _expert_recoil_move),  # :1802
     (BattleEffect.STEALTH_ROCK, _expert_stealth_rock),  # :1805
     (BattleEffect.RECOIL_HALF, _expert_recoil_move),  # :1806
 )
