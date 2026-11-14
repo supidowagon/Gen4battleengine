@@ -37,11 +37,22 @@ from dataclasses import dataclass, field
 
 from nuzline.engine.ids import (
     ABILITY_MULTITYPE,
+    CHOICE_ITEMS,
     MOVE_FAKE_OUT,
     MOVE_STRUGGLE,
     POTION_HP_RESTORED,
     PROTECT_CHAIN_MOVES,
     RESIST_ANY_NORMAL,
+    SPECIES_CLAMPERL,
+    SPECIES_CUBONE,
+    SPECIES_DIALGA,
+    SPECIES_DITTO,
+    SPECIES_GIRATINA,
+    SPECIES_LATIAS,
+    SPECIES_LATIOS,
+    SPECIES_MAROWAK,
+    SPECIES_PALKIA,
+    SPECIES_PIKACHU,
     TERRAIN_MOVES,
     TERRAIN_SPECIAL,
     TERRAIN_TYPES,
@@ -132,6 +143,10 @@ class _Turn:
     attack_message: bool = False
     # SYSCTL_PAYOUT_EXP (script.c:1800): the opponent party slots whose faint is still to pay.
     payout: list[int] = field(default_factory=list)
+    # SYSCTL_MOVE_HIT of the current action: a hit's UpdateHP ran (bcp.c:3340, :3441).
+    move_hit: bool = False
+    # moveCur of the current action (Nature Power's called move), for Life Orb's class test.
+    move_cur: int = 0
 
 
 def _active(s: RefState, side: int) -> RefPokemon:
@@ -331,6 +346,9 @@ def _effective_speed(tables, s: RefState, side: int) -> int:
         and not _weather_suppressed(tables, s)
     ):
         speed *= 2
+    # lib.c:1248: Choice Scarf (the speed-halving items before it are unsupported).
+    if _item_effect(tables, mon) == ItemId.CHOICE_SCARF:
+        speed = speed * 15 // 10
     if mon.status == Status.PARALYSIS:  # lib.c:1260 (Quick Feet is unsupported)
         speed //= 4
     if s.sides[side].tailwind:  # lib.c:1274
@@ -430,6 +448,48 @@ def _calc_move_damage(
     move_type = _move_type(tables, s, attacker, move)  # lib.c:6680 (Normalize is unsupported)
     power = power * power_mul // 10  # lib.c:6688
     move_class = _t(tables, "move_category", move)
+
+    # lib.c:6716-6783: the held items (BattleSystem_GetItemData of Battler_HeldItem,
+    # lib.c:6662-6668), the attacker's and the defender's; movePower and the stats are u16,
+    # which no value here reaches.
+    a_item, d_item = _item_effect(tables, atk), _item_effect(tables, dfn)
+    a_power = _t(tables, "item_param", atk.item, 0)
+    # lib.c:6716-6722: sTypeBoostingItems.
+    if a_item == ItemId.TYPE_BOOST and move_type == _t(tables, "item_param", atk.item, 1):
+        power = power * (100 + a_power) // 100
+    if a_item == ItemId.CHOICE_BAND:  # lib.c:6724
+        attack = attack * 150 // 100
+    if a_item == ItemId.CHOICE_SPECS:  # lib.c:6727
+        sp_attack = sp_attack * 150 // 100
+    # lib.c:6730-6739: Soul Dew (not a Battle Frontier battle).
+    if a_item == ItemId.SOUL_DEW and atk.species in (SPECIES_LATIOS, SPECIES_LATIAS):
+        sp_attack = sp_attack * 150 // 100
+    if d_item == ItemId.SOUL_DEW and dfn.species in (SPECIES_LATIOS, SPECIES_LATIAS):
+        sp_defense = sp_defense * 150 // 100
+    if a_item == ItemId.DEEP_SEA_TOOTH and atk.species == SPECIES_CLAMPERL:  # lib.c:6740
+        sp_attack *= 2
+    if d_item == ItemId.DEEP_SEA_SCALE and dfn.species == SPECIES_CLAMPERL:  # lib.c:6744
+        sp_defense *= 2
+    if a_item == ItemId.LIGHT_BALL and atk.species == SPECIES_PIKACHU:  # lib.c:6748
+        power *= 2
+    if d_item == ItemId.METAL_POWDER and dfn.species == SPECIES_DITTO:  # lib.c:6752
+        defense *= 2
+    if a_item == ItemId.THICK_CLUB and atk.species in (SPECIES_CUBONE, SPECIES_MAROWAK):
+        attack *= 2  # lib.c:6756
+    # lib.c:6760-6775: the orbs (Giratina's Transform test: Transform is unsupported).
+    orbs = {
+        ItemId.ADAMANT_ORB: (SPECIES_DIALGA, Type.STEEL),
+        ItemId.LUSTROUS_ORB: (SPECIES_PALKIA, Type.WATER),
+        ItemId.GRISEOUS_ORB: (SPECIES_GIRATINA, Type.GHOST),
+    }
+    orb = orbs.get(a_item)
+    if orb and atk.species == orb[0] and move_type in (Type.DRAGON, orb[1]):
+        power = power * (100 + a_power) // 100
+    # lib.c:6776-6783: Muscle Band (physical), Wise Glasses (special).
+    if (a_item == ItemId.MUSCLE_BAND and move_class == PHYSICAL) or (
+        a_item == ItemId.WISE_GLASSES and move_class == SPECIAL
+    ):
+        power = power * (100 + a_power) // 100
 
     # lib.c:6793 Guts.
     if a_ability == AbilityId.GUTS and atk.status != Status.NONE:
@@ -554,6 +614,10 @@ def _apply_type_chart(tables, s: RefState, attacker: int, defender: int, move: i
     # lib.c:2657-2660: Solid Rock (ignorable) on a super-effective hit.
     if "super" in flags and update and _ignorable(s, attacker, defender) == AbilityId.SOLID_ROCK:
         damage = _divide(damage * 3, 4)
+    # lib.c:2663-2665: then the attacker's Expert Belt.
+    atk = _active(s, attacker)
+    if "super" in flags and update and _item_effect(tables, atk) == ItemId.EXPERT_BELT:
+        damage = damage * (100 + _t(tables, "item_param", atk.item, 0)) // 100
     return damage
 
 
@@ -600,6 +664,10 @@ def _move_damage(
         magnitude=magnitude,
         present=present,
     )
+    # script.c:1346-1348: Life Orb, after criticalMul.
+    atk = _active(s, attacker)
+    if _item_effect(tables, atk) == ItemId.LIFE_ORB:
+        damage = damage * (100 + _t(tables, "item_param", atk.item, 0)) // 100
     damage = _variance(damage, roll)
     return _apply_type_chart(tables, s, attacker, defender, move, damage)
 
@@ -1152,8 +1220,9 @@ def _resist_berry(
 ) -> bool:
     """``subscript_type_resist_berry.s`` (``subscript_update_hp.s:9``) on ``side``'s active
     Pokemon, the battler whose HP changes: a Chilan Berry (``HOLD_EFFECT_WEAKEN_NORMAL``,
-    ``RESIST_ANY_NORMAL``) halves any hit whose type (``calcTemp``) is Normal (:_128), a
-    Rindo Berry a super-effective Grass hit (:_156); the berry is then removed. Returns
+    ``RESIST_ANY_NORMAL``) halves any hit whose type (``calcTemp``) is Normal (:_128), every
+    other resist berry a super-effective hit of its type (:_135-_240); the berry is then
+    removed. Returns
     whether it triggered (the caller halves ``hpCalcTemp``)."""
     mon = _active(s, side)
     if _item_effect(turn.tables, mon) != ItemId.RESIST_BERRY:
@@ -1382,13 +1451,45 @@ def _inflict(turn: _Turn, s: RefState, side: int, target: int, status: int,
             _unlock(s.sides[target])
 
 
+def _life_orb_recoil(turn: _Turn, s: RefState, side: int) -> None:
+    """Life Orb (``HOLD_EFFECT_HP_DRAIN_ON_ATK``) after a move whose hit dealt damage
+    (bcp.c:4758-4772; Pursuit's hit: lib.c:7357-7366): a living holder without Magic Guard
+    (decomp ability id; unsupported) loses ``Divide(maxHP, 10)`` through
+    ``subscript_lose_hp_from_item.s`` (no resist berry, no Bide memory)."""
+    mon = _active(s, side)
+    if _item_effect(turn.tables, mon) != ItemId.LIFE_ORB or mon.hp == 0:
+        return
+    if _decomp_ability(turn.tables, mon) == WEATHER_ABILITY_IDS["Magic Guard"]:
+        return
+    _lose_hp(turn, s, side, _divide(mon.max_hp, 10))
+
+
+def _holds_choice(tables, s: RefState, side: int) -> bool:
+    return _item_effect(tables, _active(s, side)) in CHOICE_ITEMS
+
+
+def _update_choice_lock(turn: _Turn, s: RefState, side: int, move: int, foe_defender: bool):
+    """``UpdateFlagsWhenHit`` (bcp.c:4489-4496) then ``UpdateMoveBuffers`` (bcp.c:3921-3934),
+    when the attack message was shown: the defending foe's lock is cleared unless it holds a
+    Choice item; the user is locked into ``moveTemp`` (``move``; not Struggle; U-turn and
+    Baton Pass are unsupported) while it holds one, else its lock is cleared."""
+    if not turn.attack_message:
+        return
+    if foe_defender and not _holds_choice(turn.tables, s, 1 - side):
+        s.sides[1 - side].choice_lock = 0
+    if not _holds_choice(turn.tables, s, side):
+        s.sides[side].choice_lock = 0
+    elif move != MOVE_STRUGGLE:
+        s.sides[side].choice_lock = move
+
+
 def _pluck_berry(turn: _Turn, s: RefState, side: int) -> None:
     """``BtlCmd_TryPluck`` (script.c:8116) -> ``BattleSystem_PluckBerry`` (lib.c:5539), by
     the item's pluck effect (res/items/data/*.json): the user eats the foe's Oran
     (``PLUCK_EFFECT_HP_RESTORE``) / Sitrus (``_HP_PCT_RESTORE``) Berry, healing (capped)
     unless at full HP, or its Chesto / Pecha / Lum (``_SLP_RESTORE`` / ``_PSN_RESTORE`` /
-    ``_ALL_RESTORE``), curing as the held berry would, or its Rindo / Chilan
-    (``PLUCK_EFFECT_NONE`` berries, no effect); the berry is removed
+    ``_ALL_RESTORE``), curing as the held berry would, or a resist berry or a berry with no
+    hold effect (``PLUCK_EFFECT_NONE`` berries, no effect); the berry is removed
     (``RemoveItem BTLSCR_DEFENDER``) even when the foe fainted. Berry Juice and the other
     implemented items have ``PLUCK_EFFECT_NONE`` and are no berries (lib.c:5833): they
     stay. ``SELF_TURN_FLAG_PLUCK_BERRY`` (lib.c:5848) stays set when the berry did
@@ -1401,8 +1502,15 @@ def _pluck_berry(turn: _Turn, s: RefState, side: int) -> None:
         heal = power
     elif effect == ItemId.SITRUS_BERRY:
         heal = _divide(user.max_hp * power, 100)
-    # Rindo, Chilan (RESIST_BERRY): PLUCK_EFFECT_NONE berries, eaten with no effect (:5833).
-    elif effect in (ItemId.CHESTO_BERRY, ItemId.PECHA_BERRY, ItemId.LUM_BERRY, ItemId.RESIST_BERRY):
+    # The resist berries and the berries with no hold effect: PLUCK_EFFECT_NONE berries,
+    # eaten with no effect (Item_IsBerry, :5833).
+    elif effect in (
+        ItemId.CHESTO_BERRY,
+        ItemId.PECHA_BERRY,
+        ItemId.LUM_BERRY,
+        ItemId.RESIST_BERRY,
+        ItemId.NO_EFFECT_BERRY,
+    ):
         heal = 0
     else:
         return
@@ -1694,6 +1802,8 @@ def _hit(turn: _Turn, s: RefState, side: int, move: int, hit: int, struggling: b
         present=o.present[side],
     )
     dealt = stored = 0
+    if landed and hits_foe and damage > 0:
+        turn.move_hit = True  # BattleControllerPlayer_UpdateHP: SYSCTL_MOVE_HIT (bcp.c:3441)
     if landed and hits_foe:
         # BattleControllerPlayer_UpdateHP (bcp.c:3346-3404) runs for a non-zero damage:
         # a Focus Sash at full HP sets focusItemActivated, which lasts the whole action.
@@ -1934,6 +2044,7 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
         # which unlocks; UpdateFlagsWhenHit then writes no moveHit). With a defender the foe's
         # moveHit becomes moveCur.
         move = _called_move(tables, s, move)
+        turn.move_cur = move
         if not _defender_always(tables, move) and _active(s, 1 - side).hp == 0:
             _unlock(s.sides[side])
             return None
@@ -2083,8 +2194,11 @@ def _pursuit(turn: _Turn, s: RefState, side: int, actions, choices) -> None:
         return
     mon.pp[slot] -= 1
     turn.done[pursuer] = True
-    # script.c:6930: movePrevByBattler[pursuer] = Pursuit.
+    # script.c:6930: movePrevByBattler[pursuer] = Pursuit; :6943-6950: a Choice holder's
+    # choiceLockedMove = Pursuit.
     s.sides[pursuer].last_move = move
+    if _holds_choice(tables, s, pursuer):
+        s.sides[pursuer].choice_lock = move
     o = turn.outcome
     damage = _move_damage(tables, s, pursuer, move, o.crit[pursuer][0] != 0, o.roll[pursuer][0],
                           PURSUIT_POWER_MUL)  # fmt: skip
@@ -2096,6 +2210,11 @@ def _pursuit(turn: _Turn, s: RefState, side: int, actions, choices) -> None:
         taken = _divide(taken, 2)
     dealt = _lose_hp(turn, s, side, taken)
     _contact_ability(turn, s, pursuer, move, 0, damage > 0, dealt)
+    # subscript_pursuit.s:48-49 (:94-95 after a KO): SYSCTL_MOVE_HIT, then
+    # TriggerHeldItemOnPivotMove: Life Orb (lib.c:7357-7366), skipped when the hit did not
+    # hit (:17, MOVE_STATUS_DID_NOT_HIT: damage 0).
+    if damage > 0:
+        _life_orb_recoil(turn, s, pursuer)
 
 
 def _switch(turn: _Turn, s: RefState, side: int, slot: int, actions, choices) -> None:
@@ -2331,14 +2450,22 @@ def _taunt_check(turn: _Turn, s: RefState, side: int) -> None:
 
 def _usable(tables, s: RefState, side: int) -> list[bool]:
     """``BattleSystem_CheckInvalidMoves`` (lib.c:2255), implemented checks: a move, PP
-    left, not the disabled move, not power 0 while taunted."""
+    left, not the disabled move, not power 0 while taunted, and the Choice lock
+    (lib.c:2307-2315: a Choice holder locked into a move it knows can use only that one; a
+    lock it does not know is cleared there, which reads as no lock)."""
     mon, taunted = _active(s, side), s.sides[side].taunt > 0
     disabled = s.sides[side].disabled_move
     lock = _locked_slot(s, side)
     if lock >= 0:  # Battler_CanPickCommand is FALSE (lib.c:6224): only the locked move
         return [k == lock for k in range(MOVE_ACTIONS)]
+    choice = s.sides[side].choice_lock
+    choice_locked = _holds_choice(tables, s, side) and choice != 0 and choice in mon.moves
     return [
-        m > 0 and pp > 0 and m != disabled and not (taunted and _t(tables, "move_power", m) == 0)
+        m > 0
+        and pp > 0
+        and m != disabled
+        and not (taunted and _t(tables, "move_power", m) == 0)
+        and not (choice_locked and m != choice)
         for m, pp in zip(mon.moves, mon.pp)
     ]
 
@@ -2432,10 +2559,18 @@ def ref_step(tables, state: RefState, actions: tuple[int, int], outcome) -> RefS
             _switch(turn, s, side, actions[side] - MOVE_ACTIONS, actions, choices)
         else:
             move, struggling, locked = choices[side]
-            turn.attack_message = False
+            turn.attack_message = turn.move_hit = False
+            turn.move_cur = move
             record = _fight(
                 turn, s, side, actions[side], move, struggling, locked, target_moved=position == 1
             )
+            # TRIGGER_AFTER_HIT_EFFECTS (bcp.c:3897-3915): Life Orb's recoil needs
+            # SYSCTL_MOVE_HIT and a non-status moveCur (bcp.c:4758-4772).
+            if turn.move_hit and _t(tables, "move_category", turn.move_cur) != STATUS_CLASS:
+                _life_orb_recoil(turn, s, side)
+            # UpdateFlagsWhenHit / UpdateMoveBuffers: the Choice lock (the foe is the defender
+            # exactly when _fight returns its moveHit record).
+            _update_choice_lock(turn, s, side, move, record is not None)
             # UpdateMoveBuffers (bcp.c:3936-3942): moveProtect = the move if its attack
             # message showed, else MOVE_NONE; the next TryProtection keeps the chain only for
             # Protect, Detect or Endure (script.c:5154-5158). Folded into protect_count here.

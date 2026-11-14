@@ -103,7 +103,10 @@ many are real). Decomp sources:
   (``outcome.n_hits``); ``SetMultiHit 2`` (``effect_script_0044.s``) is two hits
   (``move_param[m, 0]``). Focus Sash activates only on a hit taken at full HP
   (bcp.c:3386-3404) and then stays active for the rest of the move (``play_hit``).
-* Rindo / Chilan Berry (``RESIST_BERRY``): ``subscript_update_hp.s:9`` calls
+* Life Orb (``LIFE_ORB``): ``life_orb_recoil``, run by ``step`` once per move after its
+  hits (``AFTER_MOVE_HIT_STATE_LIFE_ORB``) and after Pursuit's pre-switch hit; its damage
+  multiplier is in ``damage.life_orb``.
+* Resist berries (``RESIST_BERRY``): ``subscript_update_hp.s:9`` calls
   ``subscript_type_resist_berry.s`` on every move hit taken during an action (``play_hit``,
   Pursuit's hit through it, and the confusion self-hit in ``step``): ``resist_berry``,
   ``resist_berry_damage``.
@@ -238,6 +241,7 @@ from nuzline.engine.ids import (
     RESIST_ANY_NORMAL,
     TERRAIN_TYPES,
     TRI_ATTACK_STATUSES,
+    WEATHER_ABILITY_IDS,
     AbilityId,
     EffectId,
     ItemId,
@@ -907,6 +911,9 @@ class MoveHit(NamedTuple):
     # ATTACKER_SELF_TURN_FLAGS SELF_TURN_FLAG_PLUCK_BERRY left set by a Pluck / Bug Bite
     # whose berry did nothing for the eater (hooks.pluck_berry).
     pluck_flag: jnp.ndarray
+    # BattleControllerPlayer_UpdateHP ran for this hit (battleCtx->damage != 0, bcp.c:3340):
+    # it sets SYSCTL_MOVE_HIT (:3441), which Life Orb's recoil reads (life_orb_recoil).
+    update_hp: jnp.ndarray
 
 
 def focus_sash_damage(state: BattleState, side, damage, armed) -> tuple:
@@ -933,7 +940,7 @@ IGNORES_TYPE_CHECKS = (_E.LEVEL_DAMAGE, _E.FORESIGHT)
 def resist_berry(
     tables: Tables, state: BattleState, side, move_type, super_effective
 ) -> jnp.ndarray:
-    """``side``'s active Pokemon holds a Rindo or Chilan Berry that halves the hit it takes
+    """``side``'s active Pokemon holds a resist berry that halves the hit it takes
     (``subscript_type_resist_berry.s``, from ``subscript_update_hp.s:9``, which runs it for
     every damaging hit while a battler still has an action, ``waitingBattlers != 0``, and
     no ``SYSCTL_SKIP_SPRITE_BLINK``: never for recoil, Rough Skin or the end of turn).
@@ -941,7 +948,7 @@ def resist_berry(
     type) when it is not Normal, else ``CURRENT_MOVE_DATA.type`` (:_020-_031; Normalize,
     which would make it Normal, is unsupported). ``super_effective`` is
     ``MOVE_STATUS_SUPER_EFFECTIVE``. Chilan (``RESIST_ANY_NORMAL``) needs a Normal type
-    only (:_128); Rindo a super-effective hit of its type (:_156). The caller skips
+    only (:_128); every other one a super-effective hit of its type (:_135-_240). The caller skips
     ``IGNORES_TYPE_CHECKS`` effects (:5; OHKO moves, :6, are unsupported)."""
     item = state.item[side, state.active[side]]
     resisted = tables.item_param[item, 1].astype(_I32)
@@ -962,6 +969,26 @@ def resist_berry_damage(state: BattleState, side, damage, resisted, dealt) -> jn
     else ``dealt``. The berry is then removed (``RemoveItem BTLSCR_MSG_TEMP``)."""
     hp = state.hp[side, state.active[side]].astype(_I32)
     return jnp.where(resisted, jnp.minimum(divide(damage, 2), hp), dealt)
+
+
+def life_orb_recoil(tables: Tables, state: BattleState, side, cond) -> BattleState:
+    """Life Orb's recoil on ``side``'s active Pokemon where ``cond`` (``SYSCTL_MOVE_HIT``: a
+    hit of the move dealt damage, and the move, ``CURRENT_MOVE_DATA``, is not a status move):
+    ``AFTER_MOVE_HIT_STATE_LIFE_ORB`` (battle_controller_player.c:4758-4772) after a move,
+    ``BattleSystem_TriggerHeldItemOnPivotMove`` (battle_lib.c:7357-7366) after Pursuit's
+    pre-switch hit. A living holder (``curHP``) without Magic Guard (read by decomp ability
+    id; Magic Guard itself is unsupported) and with no U-turn switch pending (U-turn is
+    unsupported) loses ``BattleSystem_Divide(maxHP, 10)`` through
+    ``subscript_lose_hp_from_item.s``: ``BATTLE_SUBSCRIPT_UPDATE_HP`` with
+    ``SYSCTL_SKIP_SPRITE_BLINK`` (no resist berry), capped at its HP; no Bide memory (only the
+    controller's ``UpdateHP`` stores damage). It may faint."""
+    side = jnp.asarray(side, _I32)
+    mon = state.active[side]
+    hp = state.hp[side, mon].astype(_I32)
+    magic_guard = decomp_abilities(tables, state)[side, mon] == WEATHER_ABILITY_IDS["Magic Guard"]
+    on = jnp.asarray(cond) & holds(tables, state, side, ItemId.LIFE_ORB) & (hp > 0) & ~magic_guard
+    loss = divide(state.max_hp[side, mon].astype(_I32), 10)
+    return _set(state, "hp", (side, mon), jnp.maximum(hp - loss, 0), on)
 
 
 def holds(tables: Tables, state: BattleState, side, item: ItemId) -> jnp.ndarray:
@@ -1191,4 +1218,4 @@ def play_hit(
     state = _struggle_recoil(state, h, jnp.asarray(struggling, jnp.bool_))
     for fn in (_contact_ability, _thaw_target):
         state = fn(tables, state, h, outcome)
-    return state, MoveHit(focus_armed=armed, pluck_flag=pluck_flag)
+    return state, MoveHit(focus_armed=armed, pluck_flag=pluck_flag, update_hp=update_hp)

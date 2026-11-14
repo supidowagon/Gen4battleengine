@@ -261,16 +261,19 @@ def after_damage_items(tables: Tables, state: BattleState, side, cond=True) -> B
 
 # Item effects with a pluck effect (res/items/data/*.json ``pluckEffect``): Oran
 # PLUCK_EFFECT_HP_RESTORE, Sitrus _HP_PCT_RESTORE, Chesto _SLP_RESTORE, Pecha _PSN_RESTORE,
-# Lum _ALL_RESTORE. Berry Juice, Focus Sash, White Herb, Big Root and Lagging Tail have
-# PLUCK_EFFECT_NONE and are no berries (Item_IsBerry, battle_lib.c:5833): not eaten.
+# Lum _ALL_RESTORE. Every other implemented item has PLUCK_EFFECT_NONE; of those only the
+# berries (Item_IsBerry, battle_lib.c:5833) are eaten, with no effect. Berry Juice and every
+# non-berry item (``NONE`` included: Nugget, a Poke Ball) are not eaten.
 PLUCKABLE = (
     ItemId.ORAN_BERRY,
     ItemId.SITRUS_BERRY,
     ItemId.CHESTO_BERRY,
     ItemId.PECHA_BERRY,
     ItemId.LUM_BERRY,
-    # Rindo, Chilan: PLUCK_EFFECT_NONE berries, eaten with no effect (Item_IsBerry, :5833).
+    # The resist berries and the berries with no hold effect (Razz, Nanab, ...):
+    # PLUCK_EFFECT_NONE berries, eaten with no effect (Item_IsBerry, :5833).
     ItemId.RESIST_BERRY,
+    ItemId.NO_EFFECT_BERRY,
 )
 
 
@@ -283,8 +286,9 @@ def pluck_berry(
     (``RemoveItem BTLSCR_DEFENDER``, kept in ``item_consumed``) even if the foe fainted,
     and its pluck effect acts on the eater: Oran heals its param, Sitrus
     ``Divide(maxHP * param, 100)``, each only below full HP (capped); Chesto, Pecha and Lum
-    cure as the held berry would (``_restore``: the same restore subscripts); Rindo and
-    Chilan (``PLUCK_EFFECT_NONE`` berries) are eaten with no effect. Anything else stays
+    cure as the held berry would (``_restore``: the same restore subscripts); the resist
+    berries and the berries with no hold effect (``PLUCK_EFFECT_NONE`` berries) are eaten
+    with no effect. Anything else stays
     (:5833). ``SELF_TURN_FLAG_PLUCK_BERRY`` is set for every eaten berry
     (:5848) and cleared by the restore subscript's ``PLUCK_CHECK``, so it is left set
     (``pluck_flag``) when the berry did nothing for the eater (``nextSeq == 0``). The

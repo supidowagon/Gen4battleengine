@@ -27,6 +27,11 @@ its locked move and spends no PP (battle_controller_player.c:335); every script 
 disrupts a move unlocks it (``_unlock``), and a sleeping battler is unlocked when the
 next turn is set up (``_unlock_sleepers``, battle_lib.c:2240).
 
+The Choice lock (``choice_lock``, ``moveEffectsData.choiceLockedMove``): ``_choice_lock``
+sets and clears it where ``UpdateMoveBuffers`` and ``UpdateFlagsWhenHit`` do, and
+``_pursuit_hit`` where ``BtlCmd_TryPursuit`` does; ``actions.usable_moves`` reads it.
+Life Orb's recoil follows the move's hits (``effects.life_orb_recoil``).
+
 Implemented so far: the opponent's bag items (Potion, ``_use_trainer_item``, with the
 decomp's multi-slot consumption, ``_consume_trainer_items``), the AI inputs
 ``fake_out_turn`` (``_entered``) and ``move_hit`` (``_use_move``, ``_move_end``), the
@@ -67,8 +72,10 @@ from nuzline.engine.damage import (
     decomp_abilities,
     weather_suppressed,
 )
+from nuzline.engine.damage import (
+    STATUS as STATUS_CATEGORY,
+)
 from nuzline.engine.effects import (
-    apply_move_effect,
     big_root,
     change_stage,
     consume_item,
@@ -76,6 +83,7 @@ from nuzline.engine.effects import (
     focus_sash_damage,
     hit_count,
     holds,
+    life_orb_recoil,
     play_hit,
     protect_blocks,
     recovers_at_full_hp,
@@ -93,6 +101,8 @@ from nuzline.engine.hooks import (
     reveal_ability,
 )
 from nuzline.engine.ids import (
+    CHOICE_ITEMS,
+    MOVE_STRUGGLE,
     POTION_HP_RESTORED,
     PROTECT_CHAIN_MOVES,
     QUICK_CLAW_MODULUS,
@@ -280,6 +290,35 @@ def _entered(state: BattleState, side, entry_turn, cond) -> BattleState:
     value = jnp.where(cond, entry_turn, state.fake_out_turn[side])
     fake_out_turn = state.fake_out_turn.at[side].set(value.astype(state.fake_out_turn.dtype))
     return state._replace(fake_out_turn=fake_out_turn)
+
+
+def _holds_choice(tables: Tables, state: BattleState, side) -> jnp.ndarray:
+    """``side``'s active Pokemon holds a Choice item (``HOLD_EFFECT_CHOICE_ATK``, ``_SPEED``,
+    ``_SPATK``: ``Battler_HeldItemEffect``)."""
+    item = tables.item_effect[state.item[side, state.active[side]]]
+    return jnp.isin(item, jnp.asarray(CHOICE_ITEMS, item.dtype))
+
+
+def _set_choice_lock(state: BattleState, side, move, cond) -> BattleState:
+    lock = jnp.where(cond, move, state.choice_lock[side]).astype(state.choice_lock.dtype)
+    return state._replace(choice_lock=state.choice_lock.at[side].set(lock))
+
+
+def _choice_lock(tables: Tables, state: BattleState, side, move, shown, record) -> BattleState:
+    """The Choice lock after ``side``'s move, where its attack message was ``shown``
+    (``SYSCTL_ATTACK_MESSAGE_SHOWN``; ``SYSCTL_FIRST_OF_MULTI_TURN`` comes only from the
+    charge-turn scripts, unsupported moves). ``UpdateFlagsWhenHit``
+    (battle_controller_player.c:4489-4496) first clears the defender's lock unless it holds
+    a Choice item, where ``record`` (the foe is the defender, the same test as its
+    ``moveHit``); then ``UpdateMoveBuffers`` (:3921-3934) locks a Choice holder into
+    ``moveTemp`` (``move``: the chosen move, Nature Power itself), except Struggle (U-turn and
+    Baton Pass, its other exceptions, are unsupported moves), and clears a non-holder's."""
+    foe = 1 - side
+    state = _set_choice_lock(state, foe, 0, record & shown & ~_holds_choice(tables, state, foe))
+    holder = _holds_choice(tables, state, side)
+    move = jnp.asarray(move, _I32)
+    state = _set_choice_lock(state, side, move, shown & holder & (move != MOVE_STRUGGLE))
+    return _set_choice_lock(state, side, 0, shown & ~holder)
 
 
 def _set_last_move(state: BattleState, side, move, cond) -> BattleState:
@@ -704,7 +743,7 @@ def _use_move(
     # (unrolled, it dominated trace and compile time). It also counts the hits that
     # landed ("Hit N times", battle_controller_player.c:3777-3812) and their crits.
     def one_hit(hit_index, carry):
-        state, hits, crits, contact, thaw, dealt, armed = carry
+        state, hits, crits, contact, thaw, dealt, armed, struck = carry
         # BattleControllerPlayer_LoopMultiHit (bcp.c:3780) stops once a battler fainted
         # (faintedMon): the target, or the attacker by Rough Skin (Selfdestruct's user is
         # at 0 HP before its only hit, so the first hit is exempt).
@@ -758,6 +797,7 @@ def _use_move(
             thaw | seen["thaw"],
             dealt | seen["dealt"],
             info.focus_armed,
+            struck | info.update_hp,
         )
 
     init = (
@@ -768,8 +808,11 @@ def _use_move(
         jnp.bool_(False),
         jnp.bool_(False),
         jnp.bool_(False),
+        jnp.bool_(False),
     )
-    state, hits, crits, contact, thaw, dealt, _ = jax.lax.fori_loop(0, MAX_HITS, one_hit, init)
+    state, hits, crits, contact, thaw, dealt, _, struck = jax.lax.fori_loop(
+        0, MAX_HITS, one_hit, init
+    )
     # The unleash script clears the lock (the Bide counter is spent); the move above still
     # saw it locked, so effect_script_0026.s did not restart Bide.
     state = _unlock(state, side, bide_ends)
@@ -786,10 +829,18 @@ def _use_move(
     # first or its call found no target: the defender is the user or BATTLER_NONE).
     record = ready & ~self_hit & (foe_defender | (bide_ends & can_act))
     record = jnp.where(nature_power, can_act & has_target, record)
-    move_hit = jnp.where(record, jnp.where(can_act, used, 0), state.move_hit[target_side])
+    hit_record = jnp.where(record, jnp.where(can_act, used, 0), state.move_hit[target_side])
     state = state._replace(
-        move_hit=state.move_hit.at[target_side].set(move_hit.astype(state.move_hit.dtype))
+        move_hit=state.move_hit.at[target_side].set(hit_record.astype(state.move_hit.dtype))
     )
+    # TRIGGER_AFTER_HIT_EFFECTS (bcp.c:3897-3915, after LOOP_SPREAD_MOVES and
+    # FAINT_AFTER_SELFDESTRUCT): AFTER_MOVE_HIT_STATE_LIFE_ORB (:4758-4772) needs
+    # SYSCTL_MOVE_HIT (a hit's UpdateHP, :3441; never the confusion self-hit) and a
+    # non-status moveCur (``used``).
+    life_orb = struck & (tables.move_category[used] != STATUS_CATEGORY)
+    state = life_orb_recoil(tables, state, side, life_orb)
+    # UPDATE_MOVE_BUFFERS (:3917) after it: the Choice lock.
+    state = _choice_lock(tables, state, side, move, ready & can_act, record)
     own = {
         "act_kind": jnp.where(
             can_act,
@@ -948,14 +999,19 @@ def _pursuit_hit(
     """The pursuer hits the outgoing Pokemon: ``BtlCmd_TryPursuit`` spends the PP and
     sets ``powerMul = 20``; ``subscript_pursuit.s`` then runs crit, damage and the type
     chart with no accuracy check. The pursuer's own action is over; it wrote
-    ``movePrevByBattler[pursuer] = move`` (battle_script.c:6930, ``last_move``)."""
+    ``movePrevByBattler[pursuer] = move`` (battle_script.c:6930, ``last_move``) and, holding a
+    Choice item, ``choiceLockedMove = move`` (:6943-6950). After the hit and the contact
+    ability, the script sets ``SYSCTL_MOVE_HIT`` and runs ``TriggerHeldItemOnPivotMove``
+    (subscript_pursuit.s:48-49, :94-95 when the target fainted; skipped for a hit that did
+    not hit, :17): Life Orb's recoil (``effects.life_orb_recoil``)."""
     action = actions[pursuer]
     slot = jnp.clip(action, 0, MOVE_ACTIONS - 1)
     mon = state.active[pursuer]
     state = state._replace(pp=state.pp.at[pursuer, mon, slot].add(jnp.int8(-1)))
     move = choices[0][pursuer]
     state = _set_last_move(state, pursuer, move, True)
-    return apply_move_effect(
+    state = _set_choice_lock(state, pursuer, move, _holds_choice(tables, state, pursuer))
+    state, info = play_hit(
         tables,
         state,
         pursuer,
@@ -966,6 +1022,7 @@ def _pursuit_hit(
         target_moved=False,
         power_mul=PURSUIT_POWER_MUL,
     )
+    return life_orb_recoil(tables, state, pursuer, info.update_hp)
 
 
 def _faint_check(

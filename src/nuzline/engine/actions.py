@@ -15,11 +15,14 @@ is not modelled.
 Move legality follows ``BattleSystem_CheckInvalidMoves`` (battle_lib.c:2255) for the
 checks M1 has state for: an empty slot (``CHECK_INVALID_NO_MOVE``), no PP
 (``CHECK_INVALID_NO_PP``), Disable (``CHECK_INVALID_DISABLED``: the slot holding
-``disabled_move``) and Taunt (``CHECK_INVALID_TAUNTED``: a taunted battler
-cannot pick a move whose power is 0). Torment, Imprison, Gravity and Heal
-Block come with their mechanics. When every slot is invalid the decomp sets
-``struggling`` instead of letting the player pick a move
-(battle_controller_player.c:433); here action 0 stays legal and means Struggle
+``disabled_move``), Taunt (``CHECK_INVALID_TAUNTED``: a taunted battler
+cannot pick a move whose power is 0) and the Choice lock (``CHECK_INVALID_CHOICE_ITEM``,
+:2307-2315: a holder of a Choice item whose ``choice_lock`` is a move it knows can pick
+only that move; a lock it does not know is cleared there, which the engine reads as no
+lock). Torment, Imprison, Gravity, Heal Block and Encore come with their mechanics. The
+trainer AI scores the same mask (``TrainerAI_Init``, trainer_ai.c:234,
+``CHECK_INVALID_ALL``). When every slot is invalid the decomp sets ``struggling`` instead
+of letting the player pick a move (battle_controller_player.c:433); here action 0 stays legal and means Struggle
 (``order.selected_move`` makes the same call from ``usable_moves``).
 
 Switches are legal to a non-active, non-empty, non-fainted slot, and never while the
@@ -36,7 +39,7 @@ from __future__ import annotations
 import jax.numpy as jnp
 
 from nuzline.data.tables import Tables
-from nuzline.engine.ids import TrainerItemId
+from nuzline.engine.ids import CHOICE_ITEMS, TrainerItemId
 from nuzline.engine.state import BAG_SLOTS, SLOTS, BattleState
 
 MOVE_ACTIONS = 4  # actions 0-3 use a move slot; 4-9 switch
@@ -53,16 +56,26 @@ def locked_slot(state: BattleState, side) -> jnp.ndarray:
     return jnp.where(jnp.any(held), jnp.argmax(held), -1).astype(jnp.int32)
 
 
+def choice_locked(tables: Tables, state: BattleState, side) -> jnp.ndarray:
+    """``bool``: ``side``'s active Pokemon holds a Choice item and its ``choice_lock`` is a
+    move it knows (``CHECK_INVALID_CHOICE_ITEM``, battle_lib.c:2307-2315)."""
+    mon = state.active[side]
+    lock = state.choice_lock[side]
+    held = jnp.isin(tables.item_effect[state.item[side, mon]], jnp.asarray(CHOICE_ITEMS))
+    return held & (lock != 0) & jnp.any(state.moves[side, mon] == lock)
+
+
 def usable_moves(tables: Tables, state: BattleState, side) -> jnp.ndarray:
     """``bool[4]``: the active Pokemon's move slots that pass the checks above (a
-    move, PP left, not the disabled move, not power 0 while taunted). None usable means
-    Struggle. A locked battler's only usable slot is the locked one (``locked_slot``):
-    it never Struggles, even with no PP left."""
+    move, PP left, not the disabled move, not power 0 while taunted, the Choice-locked move
+    when locked). None usable means Struggle. A locked battler's only usable slot is the
+    locked one (``locked_slot``): it never Struggles, even with no PP left."""
     mon = state.active[side]
     moves = state.moves[side, mon]
     usable = (moves > 0) & (state.pp[side, mon] > 0) & (moves != state.disabled_move[side])
     taunted = state.taunt[side] > 0
     usable = usable & ~(taunted & (tables.move_power[moves] == 0))
+    usable = usable & (~choice_locked(tables, state, side) | (moves == state.choice_lock[side]))
     lock = locked_slot(state, side)
     return jnp.where(lock >= 0, jnp.arange(MOVE_ACTIONS) == lock, usable)
 

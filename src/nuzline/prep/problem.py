@@ -88,7 +88,10 @@ def bag_resources(
                     tms[item] = tms.get(item, 0) + qty
             elif pocket in HELD_POCKETS:
                 kind = ItemId(int(effect[item]))
-                if kind in IMPLEMENTED_ITEMS and kind != ItemId.NONE:
+                # A berry with no hold effect is never offered: its only read is Pluck / Bug
+                # Bite eating it, which helps only the foe (hooks.pluck_berry's pluck flag
+                # keeps the foe's own item), so it never beats holding nothing.
+                if kind in IMPLEMENTED_ITEMS and kind not in (ItemId.NONE, ItemId.NO_EFFECT_BERRY):
                     held[item] = held.get(item, 0) + qty
                 elif int(hold_effect[item]) != 0:
                     line = f"{names.item_names[item]}: not offered (hold effect not supported)"

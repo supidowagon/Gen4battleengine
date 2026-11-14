@@ -297,6 +297,22 @@ CONSTANTS: tuple[Constant, ...] = (
     Constant("nuzline.engine.stats.SPECIES_SHEDINJA", "species", 292, "Shedinja", _E),
     Constant("nuzline.engine.coverage.SPECIES_GIRATINA", "species", 487, "Giratina", _E),
     Constant("nuzline.engine.coverage.SPECIES_SHAYMIN", "species", 492, "Shaymin", _E),
+    # The species of BattleSystem_CalcMoveDamage's item block (battle_lib.c:6730-6774).
+    *(
+        Constant(f"nuzline.engine.ids.SPECIES_{name.upper()}", "species", i, name, _E)
+        for name, i in (
+            ("Pikachu", 25),
+            ("Cubone", 104),
+            ("Marowak", 105),
+            ("Ditto", 132),
+            ("Clamperl", 366),
+            ("Latias", 380),
+            ("Latios", 381),
+            ("Dialga", 483),
+            ("Palkia", 484),
+            ("Giratina", 487),
+        )
+    ),
     # Items (generated/items.txt, line N is id N-1); prep looks Heart Scale up by name.
     Constant("nuzline.prep.problem.HEART_SCALE", "item", 93, "Heart Scale", _E),
     Constant("nuzline.engine.coverage.ITEM_GRISEOUS_ORB", "item", 112, "Griseous Orb", _E),
@@ -482,6 +498,16 @@ EXEMPT: dict[str, str] = {
         "keyed by decomp hold effect id, read off the vanilla subscript_type_resist_berry.s: "
         "each game's items carry their own hold effect (build_tables looks theirs up here), "
         "and a game's script changes are rom_diff.toml entries (Ruling 13)"
+    ),
+    "tools.effect_map.TYPE_BOOST_HOLD_EFFECTS": (
+        "keyed by decomp hold effect id, read off the vanilla sTypeBoostingItems "
+        "(battle_lib.c:6514): each game's items carry their own hold effect (build_tables "
+        "looks theirs up here), and a game's code changes are rom_diff.toml entries"
+    ),
+    "tools.effect_map.HOLD_EFFECT_TO_ID": (
+        "keyed by decomp hold effect id: engine semantics of the vanilla item code; each "
+        "game's items carry their own hold effect (build_tables looks theirs up here), and a "
+        "game's code changes are rom_diff.toml entries (Ruling 13)"
     ),
     "tools.effect_map.DECOMP_ABILITY_TO_ID": (
         "keyed by ability name: engine semantics of the vanilla ability handling; a game's "

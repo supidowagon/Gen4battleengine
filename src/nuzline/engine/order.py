@@ -10,11 +10,11 @@ player's side does not go first (priority only between two moves, ``:1401``). An
 and a switch are different kinds, so the player's switch precedes the opponent's item.
 
 Speed modifiers of the implemented set only: stages (Simple doubled, ``:1222``),
-Swift Swim ``x 2`` in rain unless Cloud Nine / Air Lock (``:1228-1238``), paralysis
-``/ 4`` (``:1260``), Tailwind ``x 2`` (``:1274``) and Trick Room's reversal
-(``:1432``). Quick Feet, Chlorophyll, Slow Start, Unburden, Choice Scarf and the
-speed-halving items belong to unsupported abilities and items (``UNSUPPORTED`` ids), so
-they never apply.
+Swift Swim ``x 2`` in rain unless Cloud Nine / Air Lock (``:1228-1238``), Choice Scarf
+``* 15 / 10`` (``:1248``, ``:1314``), paralysis ``/ 4`` (``:1260``), Tailwind ``x 2``
+(``:1274``) and Trick Room's reversal (``:1432``). Quick Feet, Chlorophyll, Slow Start,
+Unburden, Quick Powder and the speed-halving items belong to unsupported abilities and
+items (``UNSUPPORTED`` ids), so they never apply.
 
 Within equal priority (``player_second``, ``:1401-1440``) the decomp decides in this
 order: Quick Claw / Custap Berry (``HOLD_EFFECT_SOMETIMES_PRIORITY`` /
@@ -142,6 +142,10 @@ def effective_speed(tables: Tables, state: BattleState, side, suppressed=None) -
         & ~jnp.asarray(suppressed, bool)
     )
     speed = jnp.where(swim, speed * 2, speed)
+    # :1248 Choice Scarf (Battler_HeldItemEffect), after the speed-halving items (:1240-1246,
+    # unsupported) and before paralysis.
+    scarf = tables.item_effect[state.item[side, mon]] == ItemId.CHOICE_SCARF
+    speed = jnp.where(scarf, speed * 15 // 10, speed)
     speed = jnp.where(state.status[side, mon] == Status.PARALYSIS, speed // 4, speed)
     return jnp.where(state.tailwind[side] != 0, speed * 2, speed)
 

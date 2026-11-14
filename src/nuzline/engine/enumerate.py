@@ -566,6 +566,33 @@ INPUT_NEUTRAL_ITEMS = (
     # Changes only the order: the turn's is fixed at its start (action_order, qc_roll) and the
     # end-of-turn order (outcome.quick_claw) runs after every hit.
     ItemId.QUICK_CLAW,
+    ItemId.NO_EFFECT_BERRY,  # no effect (Pluck eats it, after that hit's damage)
+    # Damage inputs that stay fixed through the turn: never consumed (no implemented path
+    # removes them), read with the species, move type and class (damage._item_modifiers),
+    # or with the type chart (Expert Belt), whose own inputs have their clauses.
+    ItemId.TYPE_BOOST,
+    ItemId.LIGHT_BALL,
+    ItemId.THICK_CLUB,
+    ItemId.METAL_POWDER,
+    ItemId.DEEP_SEA_TOOTH,
+    ItemId.DEEP_SEA_SCALE,
+    ItemId.SOUL_DEW,
+    ItemId.ADAMANT_ORB,
+    ItemId.LUSTROUS_ORB,
+    ItemId.GRISEOUS_ORB,
+    ItemId.MUSCLE_BAND,
+    ItemId.WISE_GLASSES,
+    ItemId.EXPERT_BELT,
+    # The Choice lock changes only which move a later turn may choose; Band / Specs are a
+    # fixed stat factor, Scarf a speed factor of the order fixed at the turn's start (the
+    # end-of-turn order reads it after every hit).
+    ItemId.CHOICE_BAND,
+    ItemId.CHOICE_SPECS,
+    ItemId.CHOICE_SCARF,
+    # A fixed damage factor; its recoil (after the holder's last hit) lowers only the
+    # holder's HP, which no later hit of the turn reads as a damage input but the holder's
+    # own (Flail, the pinch abilities: the HP clause), and the holder has acted.
+    ItemId.LIFE_ORB,
 )
 INPUT_CLAUSE_ITEMS = (
     ItemId.ORAN_BERRY,  # the attacker's HP: HP clause

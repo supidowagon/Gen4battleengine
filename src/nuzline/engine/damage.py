@@ -5,7 +5,8 @@ Mirrors the decomp's pipeline for one hit of a damaging move:
 1. ``BattleSystem_CalcMoveDamage`` (``src/battle/battle_lib.c:6601``): power and
    stat modifiers, stages, ``A * power * level_factor / D / 50``, burn, screens,
    weather, ``+ 2``.
-2. ``BattleScript_CalcMoveDamage`` (``src/battle/battle_script.c:1344``): ``* criticalMul``.
+2. ``BattleScript_CalcMoveDamage`` (``src/battle/battle_script.c:1344``): ``* criticalMul``, then
+   Life Orb (``:1346``, ``life_orb``).
 3. ``BattleSystem_CalcDamageVariance`` (``battle_lib.c:7081``): ``* (100 - rand % 16) / 100``,
    at least 1. Our ``roll`` is ``15 - rand % 16``, so roll ``r`` multiplies by
    ``85 + r`` and ``damage_table`` is ascending.
@@ -15,14 +16,24 @@ Mirrors the decomp's pipeline for one hit of a damaging move:
    (``:3599``, a non-zero result never truncates to 0), in the order their rows appear
    in ``sTypeMatchupMultipliers`` (``:2399``, walked at ``:2611-2646``), which is not
    always type 1 then type 2 (``tables.type_chart_order``), then Solid Rock on a
-   super-effective hit (``Divide(damage * 3, 4)``, ``:2657-2660``).
+   super-effective hit (``Divide(damage * 3, 4)``, ``:2657-2660``) and the attacker's
+   Expert Belt (``:2663-2665``).
+
+Held items: the item block of ``BattleSystem_CalcMoveDamage`` (``:6716-6783``: the
+type-boosting items, Choice Band / Specs, the species items, Muscle Band, Wise Glasses;
+``_item_modifiers``) reads the attacker's and the defender's items, so it is in the trainer
+AI's estimate and the confusion self-hit too. Life Orb's ``* (100 + param) / 100`` is the move
+script's (``BattleScript_CalcMoveDamage``, battle_script.c:1346-1348, after the crit): only
+``damage_table`` and ``damage_for_roll`` apply it (``life_orb``), never the AI's estimate, the
+self-hit (``CALC_SELF_HIT`` calls ``BattleSystem_CalcMoveDamage`` directly) or a fixed-damage
+move (no ``CalcDamage`` in its script).
 
 The trainer AI's estimate (``TrainerAI_CalcDamage``, ``trainer_ai.c:2868``) runs
 steps 1, 4 and then 3: ``ai_damage_for_roll`` (crit multiplier 1, variance last).
 
 Only mechanics of the implemented set are modelled. Abilities, items and moves
 outside it are ``UNSUPPORTED`` ids and never reach the branches here; the decomp
-modifiers they would trigger (Technician, type-boosting items, Thick Fat, Flash
+modifiers they would trigger (Technician, Thick Fat, Flash
 Fire, ...) are therefore omitted, not approximated. Cloud Nine and Air Lock gate the
 weather modifiers (``weather_suppressed``). Doubles-only
 spread and screen rules do not apply (singles).
@@ -35,9 +46,20 @@ import jax.numpy as jnp
 from nuzline.data.tables import Tables
 from nuzline.engine.ids import (
     MOVE_STRUGGLE,
+    SPECIES_CLAMPERL,
+    SPECIES_CUBONE,
+    SPECIES_DIALGA,
+    SPECIES_DITTO,
+    SPECIES_GIRATINA,
+    SPECIES_LATIAS,
+    SPECIES_LATIOS,
+    SPECIES_MAROWAK,
+    SPECIES_PALKIA,
+    SPECIES_PIKACHU,
     WEATHER_ABILITY_IDS,
     AbilityId,
     EffectId,
+    ItemId,
     Stat,
     Status,
     Type,
@@ -222,6 +244,97 @@ def effectiveness(tables: Tables, move_type, def_types, identified=False) -> jnp
     return e1 * e2
 
 
+def _item_modifiers(
+    tables: Tables, s: BattleState, atk_side, def_side, move_type, category, power, stats
+):
+    """``(power, (attack, sp_attack, defense, sp_defense))`` after the held-item block of
+    ``BattleSystem_CalcMoveDamage`` (battle_lib.c:6716-6783), in its order. The items are
+    ``BattleSystem_GetItemData`` of ``Battler_HeldItem`` (:6662-6668; Klutz and Embargo,
+    which hide it, are unsupported), the attacker's and the defender's (the attacker's own
+    for the confusion self-hit). ``movePower`` and the stats are ``u16`` there; no value the
+    engine reaches comes near 65536, so the stores never truncate. Soul Dew's Battle Frontier
+    test (:6731, :6736) never holds for a trainer battle; the Griseous Orb's Transform test
+    (:6770) never holds while Transform is an unsupported move."""
+    attack, sp_attack, defense, sp_defense = stats
+    a_slot, d_slot = s.active[atk_side], s.active[def_side]
+    a_item, d_item = _i32(s.item[atk_side, a_slot]), _i32(s.item[def_side, d_slot])
+    a_effect, d_effect = _i32(tables.item_effect[a_item]), _i32(tables.item_effect[d_item])
+    a_param = _i32(tables.item_param[a_item, 0])  # attackerParams.heldItemPower (:6664)
+    a_species, d_species = _i32(s.species[atk_side, a_slot]), _i32(s.species[def_side, d_slot])
+
+    def boost(x):  # movePower * (100 + heldItemPower) / 100
+        return x * (100 + a_param) // 100
+
+    # :6716-6722 sTypeBoostingItems: the item's type (item_param[i, 1]) is the move's.
+    boosted = (a_effect == ItemId.TYPE_BOOST) & (move_type == _i32(tables.item_param[a_item, 1]))
+    power = jnp.where(boosted, boost(power), power)
+    # :6724-6729 Choice Band / Choice Specs.
+    attack = jnp.where(a_effect == ItemId.CHOICE_BAND, attack * 150 // 100, attack)
+    sp_attack = jnp.where(a_effect == ItemId.CHOICE_SPECS, sp_attack * 150 // 100, sp_attack)
+    # :6730-6739 Soul Dew: a Latias / Latios attacker's Sp. Atk, defender's Sp. Def.
+    a_lati = (a_species == SPECIES_LATIOS) | (a_species == SPECIES_LATIAS)
+    d_lati = (d_species == SPECIES_LATIOS) | (d_species == SPECIES_LATIAS)
+    sp_attack = jnp.where((a_effect == ItemId.SOUL_DEW) & a_lati, sp_attack * 150 // 100, sp_attack)
+    sp_defense = jnp.where(
+        (d_effect == ItemId.SOUL_DEW) & d_lati, sp_defense * 150 // 100, sp_defense
+    )
+    # :6740-6747 DeepSeaTooth / DeepSeaScale (Clamperl).
+    a_clamperl, d_clamperl = a_species == SPECIES_CLAMPERL, d_species == SPECIES_CLAMPERL
+    sp_attack = jnp.where(
+        (a_effect == ItemId.DEEP_SEA_TOOTH) & a_clamperl, sp_attack * 2, sp_attack
+    )
+    sp_defense = jnp.where(
+        (d_effect == ItemId.DEEP_SEA_SCALE) & d_clamperl, sp_defense * 2, sp_defense
+    )
+    # :6748-6751 Light Ball (Pikachu): movePower * 2, whatever the move's class.
+    power = jnp.where(
+        (a_effect == ItemId.LIGHT_BALL) & (a_species == SPECIES_PIKACHU), power * 2, power
+    )
+    # :6752-6755 Metal Powder (a defending Ditto).
+    defense = jnp.where(
+        (d_effect == ItemId.METAL_POWDER) & (d_species == SPECIES_DITTO), defense * 2, defense
+    )
+    # :6756-6759 Thick Club (Cubone, Marowak).
+    cubone = (a_species == SPECIES_CUBONE) | (a_species == SPECIES_MAROWAK)
+    attack = jnp.where((a_effect == ItemId.THICK_CLUB) & cubone, attack * 2, attack)
+    # :6760-6775 the orbs: Dragon or the species' own second type.
+    dragon = move_type == Type.DRAGON
+    orb = (
+        (
+            (a_effect == ItemId.ADAMANT_ORB)
+            & (dragon | (move_type == Type.STEEL))
+            & (a_species == SPECIES_DIALGA)
+        )
+        | (
+            (a_effect == ItemId.LUSTROUS_ORB)
+            & (dragon | (move_type == Type.WATER))
+            & (a_species == SPECIES_PALKIA)
+        )
+        | (
+            (a_effect == ItemId.GRISEOUS_ORB)
+            & (dragon | (move_type == Type.GHOST))
+            & (a_species == SPECIES_GIRATINA)
+        )
+    )
+    power = jnp.where(orb, boost(power), power)
+    # :6776-6783 Muscle Band (physical) / Wise Glasses (special): MOVE_DATA(move).class.
+    band = ((a_effect == ItemId.MUSCLE_BAND) & (category == PHYSICAL)) | (
+        (a_effect == ItemId.WISE_GLASSES) & (category == SPECIAL)
+    )
+    power = jnp.where(band, boost(power), power)
+    return power, (attack, sp_attack, defense, sp_defense)
+
+
+def life_orb(tables: Tables, s: BattleState, atk_side, damage) -> jnp.ndarray:
+    """``int32``: ``damage`` (after the crit multiplier) through the attacker's Life Orb,
+    ``BattleScript_CalcMoveDamage`` (battle_script.c:1346-1348): ``damage * (100 + param) /
+    100`` for ``HOLD_EFFECT_HP_DRAIN_ON_ATK`` (``Battler_HeldItemPower``, Life Orb's 30)."""
+    atk_side = _i32(atk_side)
+    item = _i32(s.item[atk_side, s.active[atk_side]])
+    orb = tables.item_effect[item] == ItemId.LIFE_ORB
+    return jnp.where(orb, damage * (100 + _i32(tables.item_param[item, 0])) // 100, damage)
+
+
 def _pre_random(
     tables: Tables,
     s: BattleState,
@@ -303,6 +416,12 @@ def _pre_random(
     a_stages, d_stages = _i32(s.stages[atk_side]), _i32(s.stages[def_side])
     attack_stage, sp_attack_stage = a_stages[Stat.ATK], a_stages[Stat.SPA]  # :6639, :6641
     defense_stage, sp_defense_stage = d_stages[Stat.DEF], d_stages[Stat.SPD]  # :6640, :6642
+
+    # :6716-6783 the held items, before every ability modifier below.
+    power, (attack, sp_attack, defense, sp_defense) = _item_modifiers(
+        tables, s, atk_side, def_side, move_type, category, power,
+        (attack, sp_attack, defense, sp_defense),
+    )  # fmt: skip
 
     # :6793 Guts: Atk x1.5 when statused.
     attack = jnp.where(
@@ -448,6 +567,11 @@ def _finish(
     super_effective = first * second > 100
     solid_rock = super_effective & (d_ability == AbilityId.SOLID_ROCK)
     damage = jnp.where(solid_rock, divide(damage * 3, 4), damage)
+    # :2663-2665 then the attacker's Expert Belt (Battler_HeldItemEffect): damage *
+    # (100 + param) / 100 on the same super-effective hit (attackerItemPower, :2578).
+    a_item = _i32(s.item[atk_side, s.active[atk_side]])
+    belt = super_effective & (tables.item_effect[a_item] == ItemId.EXPERT_BELT)
+    damage = jnp.where(belt, damage * (100 + _i32(tables.item_param[a_item, 0])) // 100, damage)
     damage = jnp.where(typeless, unchanged, damage)
     if variance_last:
         # trainer_ai.c:3109; an immunity is already 0 (:3106).
@@ -465,6 +589,7 @@ def damage_table(tables: Tables, state: BattleState, atk_side, move, crit) -> jn
     stays 0 (it is a forced locked action, never a chosen attack). Present keeps its table
     power (no draw: ``PRESENT_TABLE``)."""
     damage, move_type, category, power = _pre_random(tables, state, atk_side, move, crit)
+    damage = life_orb(tables, state, atk_side, damage)  # battle_script.c:1346
     rolls = jnp.arange(ROLLS, dtype=_I32)
     table = _finish(tables, state, atk_side, move, damage, move_type, category, power, rolls)
     fixed, amount = fixed_damage(tables, state, atk_side, move)
@@ -506,6 +631,7 @@ def damage_for_roll(
         magnitude=magnitude,
         present=present,
     )
+    damage = life_orb(tables, state, atk_side, damage)  # battle_script.c:1346
     rolled = _finish(tables, state, atk_side, move, damage, move_type, category, power, _i32(roll))
     fixed, amount = fixed_damage(tables, state, atk_side, move)
     # The only place Present's heal path deals 0: ``_pre_random`` above still ran at the
@@ -522,7 +648,8 @@ def calc_move_damage(
 ) -> jnp.ndarray:
     """``int32``: ``BattleSystem_CalcMoveDamage`` (battle_lib.c:6601) alone, with
     ``criticalMul`` 1: step 1 above, ending with the ``+ 2`` (so a power-0 move gives 2).
-    No variance, STAB or type chart. ``power_mul`` is ``battleCtx->powerMul`` in tenths."""
+    No variance, STAB, type chart or Life Orb. ``power_mul`` is ``battleCtx->powerMul`` in
+    tenths."""
     return _pre_random(tables, state, atk_side, move, False, power_mul=power_mul)[0]
 
 

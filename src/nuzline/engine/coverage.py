@@ -41,7 +41,9 @@ items) and plan 1b (Task 2b: trainer items; Task 3: Roark's AI flags) implement:
   tables map to ``UNSUPPORTED`` include every move that sets weather, Tailwind or Trick
   Room: the engines' ``CheckFieldConditions`` pass (``step.field_conditions``) counts
   weather down, but those moves are not modelled yet (plan ruling);
-* abilities, held items, trainer items: every member but ``UNSUPPORTED``;
+* abilities, held items, trainer items: every member but ``UNSUPPORTED``. Held items are
+  mapped by name or by decomp hold effect (``tools.effect_map.held_item_ids``), so an item with
+  no hold effect is ``ItemId.NONE`` (or ``NO_EFFECT_BERRY``) and supported;
 * AI flags, per AI policy (``IMPLEMENTED_AI_FLAGS``): vanilla bits 0-2 (``AI_FLAG_BASIC``,
   ``AI_FLAG_EVAL_ATTACK``, ``AI_FLAG_EXPERT``), Kaizo those and bit 4 (``AI_FLAG_RISKY``).
   ``ai.policy`` always runs the policy's scripts together (``policy._flags``), so a vanilla

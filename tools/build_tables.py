@@ -23,7 +23,10 @@ Encodings:
   whether or not the engine supports it (``item_effect`` is the mapped engine id).
 * ``item_param[item]``: ``(decomp hold param, 0)`` for supported items, else zeros; a
   ``RESIST_BERRY``'s column 1 is the type its hold effect resists
-  (``effect_map.RESIST_BERRY_HOLD_EFFECTS``).
+  (``effect_map.RESIST_BERRY_HOLD_EFFECTS``), a ``TYPE_BOOST``'s the type its hold effect
+  boosts (``effect_map.TYPE_BOOST_HOLD_EFFECTS``).
+* ``item_effect[item]``: the ``ids.ItemId`` (``effect_map.held_item_ids``: by name, else by
+  hold effect, else ``NONE`` / ``NO_EFFECT_BERRY`` for an item with no hold effect).
 * ``item_hold_param[item]``: the decomp hold param as stored (``ItemData.effectParam``, which
   ``Item_LoadParam(item, ITEM_PARAM_EFFECT_PARAM)`` returns, ``src/item.c:160-161``), whether or
   not the engine supports the item. The level-up EV gain reads it as a Power item's
@@ -106,8 +109,10 @@ from tools.effect_map import (
     DECOMP_ITEM_TO_ID,
     DECOMP_TRAINER_ITEM_TO_ID,
     RESIST_BERRY_HOLD_EFFECTS,
+    TYPE_BOOST_HOLD_EFFECTS,
     TYPE_CHART_STATUS_MOVES,
     UNSUPPORTED_MOVES,
+    held_item_ids,
 )
 
 NUM_TMS = 92
@@ -280,25 +285,30 @@ def _form_names(species: list[dict], forms: list[dict]) -> dict[str, list[str]]:
     return out
 
 
-def _resisted_type(item: dict, item_id: int) -> int:
-    """``item_param[i, 1]``: the type a ``RESIST_BERRY`` resists, by its own hold effect
-    (``subscript_type_resist_berry.s``), else 0."""
-    if item_id != ItemId.RESIST_BERRY:
+def _item_type(item: dict, item_id: int) -> int:
+    """``item_param[i, 1]``: the type a ``RESIST_BERRY`` resists
+    (``subscript_type_resist_berry.s``) or a ``TYPE_BOOST`` boosts (``sTypeBoostingItems``,
+    battle_lib.c:6514), by its own hold effect, else 0."""
+    tables = {
+        ItemId.RESIST_BERRY: (RESIST_BERRY_HOLD_EFFECTS, "resists"),
+        ItemId.TYPE_BOOST: (TYPE_BOOST_HOLD_EFFECTS, "boosts"),
+    }
+    if item_id not in tables:
         return 0
-    if item["hold_effect"] not in RESIST_BERRY_HOLD_EFFECTS:
-        raise BuildError(
-            f"item {item['name']!r}: hold effect {item['hold_effect']} resists no type"
-        )
-    return int(RESIST_BERRY_HOLD_EFFECTS[item["hold_effect"]][1])
+    table, verb = tables[ItemId(item_id)]
+    if item["hold_effect"] not in table:
+        raise BuildError(f"item {item['name']!r}: hold effect {item['hold_effect']} {verb} no type")
+    return int(table[item["hold_effect"]][1])
 
 
 def _item_maps(items: list[dict], vanilla: list[dict] | None) -> tuple[list[int], list[int]]:
-    """``(ItemId, TrainerItemId)`` per item. Vanilla: by name. Kaizo (``vanilla`` given):
-    by the slot's vanilla name, only when the slot keeps that name (up to spelling) and
-    vanilla's hold effect (and, for the bag item, vanilla's ``hp_restored``); a renamed or
-    re-purposed item is ``UNSUPPORTED``."""
+    """``(ItemId, TrainerItemId)`` per item. Vanilla: the held item by
+    ``effect_map.held_item_ids``, the bag item by name. Kaizo (``vanilla`` given): vanilla's
+    ids of the slot, only when the slot keeps vanilla's name (up to spelling) and hold effect
+    (and, for the bag item, vanilla's ``hp_restored``); a renamed or re-purposed item is
+    ``UNSUPPORTED``. The hold param is the game's own (``item_param``)."""
     if vanilla is None:
-        hold = [int(DECOMP_ITEM_TO_ID.get(i["name"], ItemId.UNSUPPORTED)) for i in items]
+        hold = [int(i) for i in held_item_ids(items)]
         bag = [
             int(DECOMP_TRAINER_ITEM_TO_ID.get(i["name"], TrainerItemId.UNSUPPORTED)) for i in items
         ]
@@ -308,12 +318,12 @@ def _item_maps(items: list[dict], vanilla: list[dict] | None) -> tuple[list[int]
     if len(vanilla) != len(items):
         raise BuildError(f"items: {len(items)} rows, vanilla has {len(vanilla)}")
     hold, bag = [], []
-    for item, van in zip(items, vanilla, strict=True):
+    vanilla_held = held_item_ids(vanilla)
+    for item, van, held in zip(items, vanilla, vanilla_held, strict=True):
         same_name = spelling(item["name"]) == spelling(van["name"])
         same_hold = same_name and item["hold_effect"] == van["hold_effect"]
         # A bag item's effect also rests on its restore amount (Potion's 20, ids.py).
         same_bag = same_hold and item.get("hp_restored") == van.get("hp_restored")
-        held = DECOMP_ITEM_TO_ID.get(van["name"], ItemId.UNSUPPORTED)
         used = DECOMP_TRAINER_ITEM_TO_ID.get(van["name"], TrainerItemId.UNSUPPORTED)
         hold.append(int(held if same_hold else ItemId.UNSUPPORTED))
         bag.append(int(used if same_bag else TrainerItemId.UNSUPPORTED))
@@ -524,7 +534,7 @@ def build_arrays(inter: Path, game: str = "platinum_us") -> tuple[dict[str, np.n
     item_ids, trainer_item_ids = _item_maps(items, vanilla_items)
     supported_item = [e not in (ItemId.UNSUPPORTED, ItemId.NONE) for e in item_ids]
     item_params = [
-        [i["hold_param"] if ok else 0, _resisted_type(i, e)]
+        [i["hold_param"] if ok else 0, _item_type(i, e)]
         for i, ok, e in zip(items, supported_item, item_ids, strict=True)
     ]
 

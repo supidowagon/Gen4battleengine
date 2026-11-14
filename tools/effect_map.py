@@ -307,16 +307,129 @@ DECOMP_ITEM_TO_ID: dict[str, ItemId] = {
     "White Herb": ItemId.WHITE_HERB,  # HOLD_EFFECT_STATDOWN_RESTORE
     "Lagging Tail": ItemId.LAGGING_TAIL,  # HOLD_EFFECT_PRIORITY_DOWN
     "Quick Claw": ItemId.QUICK_CLAW,  # HOLD_EFFECT_SOMETIMES_PRIORITY, param 20
+    # The resist berries (subscript_type_resist_berry.s), each name's hold effect read off
+    # data/intermediate/items.json (tests/tools/test_effect_map.py re-checks them).
+    "Occa Berry": ItemId.RESIST_BERRY,  # HOLD_EFFECT_WEAKEN_SE_FIRE (19)
+    "Passho Berry": ItemId.RESIST_BERRY,  # HOLD_EFFECT_WEAKEN_SE_WATER (20)
+    "Wacan Berry": ItemId.RESIST_BERRY,  # HOLD_EFFECT_WEAKEN_SE_ELECTRIC (21)
     "Rindo Berry": ItemId.RESIST_BERRY,  # HOLD_EFFECT_WEAKEN_SE_GRASS (22)
+    "Yache Berry": ItemId.RESIST_BERRY,  # HOLD_EFFECT_WEAKEN_SE_ICE (23)
+    "Chople Berry": ItemId.RESIST_BERRY,  # HOLD_EFFECT_WEAKEN_SE_FIGHT (24)
+    "Kebia Berry": ItemId.RESIST_BERRY,  # HOLD_EFFECT_WEAKEN_SE_POISON (25)
+    "Shuca Berry": ItemId.RESIST_BERRY,  # HOLD_EFFECT_WEAKEN_SE_GROUND (26)
+    "Coba Berry": ItemId.RESIST_BERRY,  # HOLD_EFFECT_WEAKEN_SE_FLYING (27)
+    "Payapa Berry": ItemId.RESIST_BERRY,  # HOLD_EFFECT_WEAKEN_SE_PSYCHIC (28)
+    "Tanga Berry": ItemId.RESIST_BERRY,  # HOLD_EFFECT_WEAKEN_SE_BUG (29)
+    "Charti Berry": ItemId.RESIST_BERRY,  # HOLD_EFFECT_WEAKEN_SE_ROCK (30)
+    "Kasib Berry": ItemId.RESIST_BERRY,  # HOLD_EFFECT_WEAKEN_SE_GHOST (31)
+    "Haban Berry": ItemId.RESIST_BERRY,  # HOLD_EFFECT_WEAKEN_SE_DRAGON (32)
+    "Colbur Berry": ItemId.RESIST_BERRY,  # HOLD_EFFECT_WEAKEN_SE_DARK (33)
+    "Babiri Berry": ItemId.RESIST_BERRY,  # HOLD_EFFECT_WEAKEN_SE_STEEL (34)
     "Chilan Berry": ItemId.RESIST_BERRY,  # HOLD_EFFECT_WEAKEN_NORMAL (35)
 }
+
+# sTypeBoostingItems (src/battle/battle_lib.c:6514-6549), applied at :6716-6722: decomp hold
+# effect (generated/item_hold_effects.txt line N+1 is id N) -> (name, the type it boosts).
+# build_tables fills a TYPE_BOOST item's item_param[i, 1] from here.
+# tests/tools/test_effect_map.py reads the table back from the decomp.
+TYPE_BOOST_HOLD_EFFECTS: dict[int, tuple[str, int]] = {
+    57: ("HOLD_EFFECT_STRENGTHEN_BUG", Type.BUG),
+    68: ("HOLD_EFFECT_STRENGTHEN_STEEL", Type.STEEL),
+    72: ("HOLD_EFFECT_STRENGTHEN_GROUND", Type.GROUND),
+    73: ("HOLD_EFFECT_STRENGTHEN_ROCK", Type.ROCK),
+    74: ("HOLD_EFFECT_STRENGTHEN_GRASS", Type.GRASS),
+    75: ("HOLD_EFFECT_STRENGTHEN_DARK", Type.DARK),
+    76: ("HOLD_EFFECT_STRENGTHEN_FIGHT", Type.FIGHTING),
+    77: ("HOLD_EFFECT_STRENGTHEN_ELECTRIC", Type.ELECTRIC),
+    78: ("HOLD_EFFECT_STRENGTHEN_WATER", Type.WATER),
+    79: ("HOLD_EFFECT_STRENGTHEN_FLYING", Type.FLYING),
+    80: ("HOLD_EFFECT_STRENGTHEN_POISON", Type.POISON),
+    81: ("HOLD_EFFECT_STRENGTHEN_ICE", Type.ICE),
+    82: ("HOLD_EFFECT_STRENGTHEN_GHOST", Type.GHOST),
+    83: ("HOLD_EFFECT_STRENGTHEN_PSYCHIC", Type.PSYCHIC),
+    84: ("HOLD_EFFECT_STRENGTHEN_FIRE", Type.FIRE),
+    85: ("HOLD_EFFECT_STRENGTHEN_DRAGON", Type.DRAGON),
+    86: ("HOLD_EFFECT_STRENGTHEN_NORMAL", Type.NORMAL),
+    126: ("HOLD_EFFECT_ARCEUS_FIRE", Type.FIRE),
+    127: ("HOLD_EFFECT_ARCEUS_WATER", Type.WATER),
+    128: ("HOLD_EFFECT_ARCEUS_ELECTRIC", Type.ELECTRIC),
+    129: ("HOLD_EFFECT_ARCEUS_GRASS", Type.GRASS),
+    130: ("HOLD_EFFECT_ARCEUS_ICE", Type.ICE),
+    131: ("HOLD_EFFECT_ARCEUS_FIGHTING", Type.FIGHTING),
+    132: ("HOLD_EFFECT_ARCEUS_POISON", Type.POISON),
+    133: ("HOLD_EFFECT_ARCEUS_GROUND", Type.GROUND),
+    134: ("HOLD_EFFECT_ARCEUS_FLYING", Type.FLYING),
+    135: ("HOLD_EFFECT_ARCEUS_PSYCHIC", Type.PSYCHIC),
+    136: ("HOLD_EFFECT_ARCEUS_BUG", Type.BUG),
+    137: ("HOLD_EFFECT_ARCEUS_ROCK", Type.ROCK),
+    138: ("HOLD_EFFECT_ARCEUS_GHOST", Type.GHOST),
+    139: ("HOLD_EFFECT_ARCEUS_DRAGON", Type.DRAGON),
+    140: ("HOLD_EFFECT_ARCEUS_DARK", Type.DARK),
+    141: ("HOLD_EFFECT_ARCEUS_STEEL", Type.STEEL),
+}
+
+# Held items mapped by their decomp hold effect, for every item DECOMP_ITEM_TO_ID does not
+# name: the effect is the hold effect's, with each item's own hold param (item_param[i, 0]).
+# The item block of BattleSystem_CalcMoveDamage (battle_lib.c:6716-6783), Choice Scarf's
+# Speed (BattleSystem_CompareBattlerSpeed, :1248), Expert Belt (BattleSystem_ApplyTypeChart,
+# :2663) and Life Orb (BattleScript_CalcMoveDamage, battle_script.c:1346; recoil
+# battle_controller_player.c:4758). tests/tools/test_effect_map.py checks the names.
+HOLD_EFFECT_TO_ID: dict[int, tuple[str, ItemId]] = {
+    **{h: (name, ItemId.TYPE_BOOST) for h, (name, _) in TYPE_BOOST_HOLD_EFFECTS.items()},
+    2: ("HOLD_EFFECT_GIRATINA_BOOST", ItemId.GRISEOUS_ORB),
+    3: ("HOLD_EFFECT_DIALGA_BOOST", ItemId.ADAMANT_ORB),
+    4: ("HOLD_EFFECT_PALKIA_BOOST", ItemId.LUSTROUS_ORB),
+    55: ("HOLD_EFFECT_CHOICE_ATK", ItemId.CHOICE_BAND),
+    60: ("HOLD_EFFECT_LATI_SPECIAL", ItemId.SOUL_DEW),
+    61: ("HOLD_EFFECT_CLAMPERL_SPATK", ItemId.DEEP_SEA_TOOTH),
+    62: ("HOLD_EFFECT_CLAMPERL_SPDEF", ItemId.DEEP_SEA_SCALE),
+    71: ("HOLD_EFFECT_PIKA_SPATK_UP", ItemId.LIGHT_BALL),
+    90: ("HOLD_EFFECT_DITTO_DEF_UP", ItemId.METAL_POWDER),
+    91: ("HOLD_EFFECT_CUBONE_ATK_UP", ItemId.THICK_CLUB),
+    94: ("HOLD_EFFECT_POWER_UP_PHYS", ItemId.MUSCLE_BAND),
+    95: ("HOLD_EFFECT_POWER_UP_SPEC", ItemId.WISE_GLASSES),
+    96: ("HOLD_EFFECT_POWER_UP_SE", ItemId.EXPERT_BELT),
+    98: ("HOLD_EFFECT_HP_DRAIN_ON_ATK", ItemId.LIFE_ORB),
+    115: ("HOLD_EFFECT_CHOICE_SPEED", ItemId.CHOICE_SCARF),
+    125: ("HOLD_EFFECT_CHOICE_SPATK", ItemId.CHOICE_SPECS),
+}
+
+# HOLD_EFFECT_NONE. An item without a hold effect is NONE (no implemented path reads it by
+# id), except a berry: Item_IsBerry (src/item.c:357-365) reads sBerryItemIDs, the items
+# FIRST_BERRY_IDX..LAST_BERRY_IDX (include/constants/items.h:56-58: Cheri Berry to Rowap
+# Berry, every item with berryData, tools/dataproc/src/itemproc.c:272), and Pluck / Bug Bite
+# eat such a berry with no effect (BattleSystem_PluckBerry, battle_lib.c:5832-5835):
+# NO_EFFECT_BERRY.
+HOLD_EFFECT_NONE = 0
+FIRST_BERRY, LAST_BERRY = "Cheri Berry", "Rowap Berry"
+
+
+def held_item_ids(items: list[dict]) -> list[ItemId]:
+    """The ``ItemId`` of every item (``data/intermediate/items.json`` rows, in id order): by
+    name (``DECOMP_ITEM_TO_ID``), else by hold effect (``HOLD_EFFECT_TO_ID``), else
+    ``NONE`` / ``NO_EFFECT_BERRY`` for no hold effect, else ``UNSUPPORTED``."""
+    index = {item["name"]: n for n, item in enumerate(items)}
+    first, last = index[FIRST_BERRY], index[LAST_BERRY]
+    out = []
+    for n, item in enumerate(items):
+        hold = item["hold_effect"]
+        if item["name"] in DECOMP_ITEM_TO_ID:
+            out.append(DECOMP_ITEM_TO_ID[item["name"]])
+        elif hold in HOLD_EFFECT_TO_ID:
+            out.append(HOLD_EFFECT_TO_ID[hold][1])
+        elif hold == HOLD_EFFECT_NONE:
+            out.append(ItemId.NO_EFFECT_BERRY if first <= n <= last else ItemId.NONE)
+        else:
+            out.append(ItemId.UNSUPPORTED)
+    return out
+
 
 # The hold effects subscript_type_resist_berry.s reads (decomp hold effect id, i.e. line
 # id + 1 of generated/item_hold_effects.txt -> (name, the type it resists)): each of 19-34
 # halves a super-effective hit of its type (_135-_240); 35 (Chilan) halves any Normal-type
 # hit (_128, before the super-effective test). build_tables fills a RESIST_BERRY item's
-# item_param[i, 1] from here; only the items DECOMP_ITEM_TO_ID names are supported, the
-# others stay UNSUPPORTED. tests/tools/test_effect_map.py reads both against the decomp.
+# item_param[i, 1] from here; DECOMP_ITEM_TO_ID names every berry with one of these hold
+# effects. tests/tools/test_effect_map.py reads both against the decomp.
 RESIST_BERRY_HOLD_EFFECTS: dict[int, tuple[str, int]] = {
     19: ("HOLD_EFFECT_WEAKEN_SE_FIRE", Type.FIRE),
     20: ("HOLD_EFFECT_WEAKEN_SE_WATER", Type.WATER),

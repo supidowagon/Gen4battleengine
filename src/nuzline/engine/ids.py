@@ -170,10 +170,21 @@ class AbilityId(IntEnum):
 
 
 class ItemId(IntEnum):
-    """Held-item effect. ``tables.item_param[i, 0]`` is the decomp's hold param
+    """Held-item effect. ``tables.item_param[i, 0]`` is the decomp hold param
     (Oran Berry, Berry Juice: HP restored; Sitrus Berry: percent of max HP; Big Root: the
-    percent added to a drain, 30); column 1 is a resist berry's type (below), else 0.
+    percent added to a drain, 30; the power items below: the percent they add); column 1 is
+    a resist berry's or a type-boosting item's type (below), else 0. Most ids are mapped by
+    the decomp hold effect (``tools/effect_map.HOLD_EFFECT_TO_ID``), so every item sharing a
+    hold effect behaves alike with its own param.
 
+    * ``NONE``: no item, and every item with no hold effect (``HOLD_EFFECT_NONE``, 0) that is
+      no berry (Nugget, Blue Scarf, a Poke Ball, ...): no implemented path reads such an item
+      by its id (``Item_IsBerry`` for Pluck is the only id read, below).
+    * ``NO_EFFECT_BERRY``: a berry with no hold effect (Razz, Nanab, Pomeg, ...: ids
+      ``FIRST_BERRY_IDX..LAST_BERRY_IDX``, include/constants/items.h:56-58, the
+      ``sBerryItemIDs`` list ``Item_IsBerry`` reads, src/item.c:357-365). Nothing triggers it;
+      Pluck / Bug Bite eat it with no effect (``PLUCK_EFFECT_NONE``, battle_lib.c:5832-5835,
+      ``hooks.pluck_berry``).
     * ``ORAN_BERRY``, ``BERRY_JUICE`` (both ``HOLD_EFFECT_HP_RESTORE``), ``SITRUS_BERRY``,
       ``CHESTO_BERRY`` (``SLP_RESTORE``), ``PECHA_BERRY`` (``PSN_RESTORE``, toxic too),
       ``LUM_BERRY`` (``STATUS_RESTORE``, confusion too), ``WHITE_HERB``
@@ -188,10 +199,35 @@ class ItemId(IntEnum):
     * ``QUICK_CLAW`` (``HOLD_EFFECT_SOMETIMES_PRIORITY``, param ``QUICK_CLAW_PARAM``):
       ``order.player_second`` with the holder's ``speedRand`` draw (``BattleState.qc_roll``
       for the turn order, ``Outcome.quick_claw`` for the end-of-turn order).
-    * ``RESIST_BERRY`` (Rindo ``HOLD_EFFECT_WEAKEN_SE_GRASS``, Chilan ``..._WEAKEN_NORMAL``):
-      ``tables.item_param[i, 1]`` is the type the berry resists, ``RESIST_ANY_NORMAL`` for
-      Chilan (any Normal-type hit, no super-effective test); ``effects.resist_berry``
-      (``subscript_type_resist_berry.s``).
+    * ``RESIST_BERRY`` (every ``HOLD_EFFECT_WEAKEN_SE_*`` berry, Occa to Babiri, and Chilan,
+      ``HOLD_EFFECT_WEAKEN_NORMAL``): ``tables.item_param[i, 1]`` is the type the berry
+      resists, ``RESIST_ANY_NORMAL`` for Chilan (any Normal-type hit, no super-effective
+      test); ``effects.resist_berry`` (``subscript_type_resist_berry.s``).
+    * ``TYPE_BOOST`` (every hold effect of ``sTypeBoostingItems``, battle_lib.c:6514-6549:
+      the ``HOLD_EFFECT_STRENGTHEN_*`` items, incenses and plates): ``item_param[i, 1]`` is
+      the boosted type; a move of that type gets ``power * (100 + param) / 100``
+      (``damage._item_modifiers``, battle_lib.c:6716-6722).
+    * ``CHOICE_BAND`` / ``CHOICE_SPECS`` (``HOLD_EFFECT_CHOICE_ATK`` / ``_SPATK``): Attack /
+      Sp. Atk ``* 150 / 100`` in the damage formula (battle_lib.c:6724-6729);
+      ``CHOICE_SCARF`` (``HOLD_EFFECT_CHOICE_SPEED``): Speed ``* 15 / 10``
+      (``order.effective_speed``, battle_lib.c:1248, :1314). All three lock the holder into
+      the move it used (``BattleState.choice_lock``: ``actions.usable_moves``,
+      ``step._use_move``, ``step._pursuit_hit``).
+    * The species items of ``BattleSystem_CalcMoveDamage`` (battle_lib.c:6730-6774,
+      ``damage._item_modifiers``): ``LIGHT_BALL`` (Pikachu: power x2),
+      ``THICK_CLUB`` (Cubone, Marowak: Attack x2), ``METAL_POWDER`` (a defending Ditto:
+      Defense x2), ``DEEP_SEA_TOOTH`` / ``DEEP_SEA_SCALE`` (Clamperl: Sp. Atk / a defending
+      Clamperl's Sp. Def x2), ``SOUL_DEW`` (Latias, Latios: Sp. Atk and a defending one's
+      Sp. Def x1.5), ``ADAMANT_ORB`` / ``LUSTROUS_ORB`` / ``GRISEOUS_ORB`` (Dialga / Palkia /
+      Giratina: Dragon and Steel / Water / Ghost power ``* (100 + param) / 100``).
+    * ``MUSCLE_BAND`` / ``WISE_GLASSES`` (``HOLD_EFFECT_POWER_UP_PHYS`` / ``_SPEC``): a
+      physical / special move's power ``* (100 + param) / 100`` (battle_lib.c:6776-6783).
+    * ``EXPERT_BELT`` (``HOLD_EFFECT_POWER_UP_SE``): a super-effective hit
+      ``* (100 + param) / 100`` after Solid Rock (``damage._finish``, battle_lib.c:2663).
+    * ``LIFE_ORB`` (``HOLD_EFFECT_HP_DRAIN_ON_ATK``): the move script's damage
+      ``* (100 + param) / 100`` after the crit (``damage.life_orb``, battle_script.c:1346),
+      and ``maxHP / 10`` recoil after a move that dealt damage (``effects.life_orb_recoil``,
+      battle_controller_player.c:4758-4772; Pursuit's hit: battle_lib.c:7357-7366).
     """
 
     UNSUPPORTED = 0
@@ -208,6 +244,43 @@ class ItemId(IntEnum):
     LAGGING_TAIL = 11
     RESIST_BERRY = 12
     QUICK_CLAW = 13
+    NO_EFFECT_BERRY = 14
+    TYPE_BOOST = 15
+    CHOICE_BAND = 16
+    CHOICE_SPECS = 17
+    CHOICE_SCARF = 18
+    LIGHT_BALL = 19
+    THICK_CLUB = 20
+    METAL_POWDER = 21
+    DEEP_SEA_TOOTH = 22
+    DEEP_SEA_SCALE = 23
+    SOUL_DEW = 24
+    ADAMANT_ORB = 25
+    LUSTROUS_ORB = 26
+    GRISEOUS_ORB = 27
+    MUSCLE_BAND = 28
+    WISE_GLASSES = 29
+    EXPERT_BELT = 30
+    LIFE_ORB = 31
+
+
+# The three Choice items: ``BattleSystem_CheckInvalidMoves`` (battle_lib.c:2307-2315) and
+# ``UpdateMoveBuffers`` (battle_controller_player.c:3923-3933) test exactly these hold
+# effects.
+CHOICE_ITEMS = (ItemId.CHOICE_BAND, ItemId.CHOICE_SPECS, ItemId.CHOICE_SCARF)
+
+# Decomp species ids the item code of ``BattleSystem_CalcMoveDamage`` names
+# (battle_lib.c:6730-6774; generated/species.txt line N is id N-1).
+SPECIES_PIKACHU = 25
+SPECIES_CUBONE = 104
+SPECIES_MAROWAK = 105
+SPECIES_DITTO = 132
+SPECIES_CLAMPERL = 366
+SPECIES_LATIAS = 380
+SPECIES_LATIOS = 381
+SPECIES_DIALGA = 483
+SPECIES_PALKIA = 484
+SPECIES_GIRATINA = 487
 
 
 # ``item_param[i, 1]`` of Chilan Berry (``HOLD_EFFECT_WEAKEN_NORMAL``): the berry halves any
