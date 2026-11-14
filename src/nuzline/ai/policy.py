@@ -876,7 +876,9 @@ def _check_hp(ctx: AiContext) -> AiContext:
     never taken in singles), then the attacker's round (bands at :7700-7701, CheckHP_Discourage*
     tables, roll :7718) and the target's round (:7724-7725, CheckHP_Target_Discourage*, roll
     :7742), each -2 for a discouraged effect unless its roll jumps."""
-    ctx = _terminate(ctx)
+    # IfTargetIsPartner TagStrategy_Partner (:7697), not Terminate: never taken in singles,
+    # and the doubles work must send its path to TagStrategy_Partner.
+    ctx, _ = _split(c.if_target_is_partner(ctx))
     ctx, high = _split(c.if_hp_percent_greater_than(ctx, _A, 70))
     ctx, medium = _split(c.if_hp_percent_greater_than(ctx, _A, 30))
     ctx = _check_hp_round(ctx, high, medium, "CheckHP_", 7718)

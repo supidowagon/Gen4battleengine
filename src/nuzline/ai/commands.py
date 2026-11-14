@@ -660,7 +660,8 @@ class ReadKind(IntEnum):
 
 
 # LooseDraws columns: at least the reads one slot's scripts make. Every read counts, on the
-# slot's path or not (the scripts are straight-line): 35 after K3c Task 6.
+# slot's path or not (the scripts are straight-line): 35 after K3c Task 6, about 39 under every
+# flag E1 batch 2c transcribes (2c review); more raises (policy._loose_reads).
 LOOSE_READS = 48
 
 

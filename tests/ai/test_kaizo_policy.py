@@ -1508,6 +1508,7 @@ _ATTACKER_BAND = {  # CheckHP_DiscourageAt{High,Medium,Low}HP
 _TARGET_BAND = {  # CheckHP_Target_DiscourageAt{High,Medium,Low}HP
     71: [0, 0, 0, 0],  # High: empty
     70: [0, -2, 0, 0],  # Medium: 52
+    31: [0, -2, 0, 0],
     30: [-2, -2, 0, 0],  # Low: 7, 52
 }
 

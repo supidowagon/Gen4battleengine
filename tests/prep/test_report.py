@@ -102,7 +102,7 @@ def test_prep_steps_text(tables, names):
         "KRICKETOT learns Bug Bite at Lv16 while levelling.",
         "Move Relearner (1 Heart Scale): FURRET forgets Foresight, learns Fury Swipes.",
         "TM10 (Hidden Power) on FURRET: forgets Defense Curl.",
-        "Bring FURRET to 40/57 HP (at most 70 % keeps the trainer AI's high-HP check off).",
+        "Bring FURRET to 40/57 HP (at most 70 % keeps the trainer AI's above-70 % HP check off).",
         "Bring MONFERNO to 16/48 HP (at most 1/3: Blaze active).",
         "Party order: KRICKETOT first, then FURRET, MONFERNO.",
     ]
@@ -112,18 +112,21 @@ def test_hp_why_names_each_percent_check(tables, names):
     """Each cut of the policy's ``AI_DEFENDER_HP_CHECKS`` is explained as its check: Furret
     (57 HP) at 40 keeps HP% (trainer_ai.c:626) at most 70 (script.s:2332, both policies); at
     29, at most 50 (script.s:2694, Expert_ToxicLeechSeed) under the Kaizo policy only (K3c
-    Task 6 review m2)."""
+    Task 6 review m2); at 17, at most 30 (script.s:7725, CheckHP_Target) under CHECK_HP
+    (E1 batch 2c review M5: a band read, not a high-HP check)."""
     from nuzline.data.game_constants import AI_POLICIES
     from nuzline.prep.report import _hp_why
 
     prob, _ = fixture(tables, names)
-    off = "at most {} % keeps the trainer AI's high-HP check off"
+    off = "at most {0} % keeps the trainer AI's above-{0} % HP check off"
     assert _hp_why(prob, names, Member(1, hp=40), tables) == off.format(70)
     assert _hp_why(prob, names, Member(1, hp=29), tables) != off.format(50)
     kaizo = tables._replace(
         ai_policy=np.asarray(AI_POLICIES.index("kaizo")), ai_flags=np.int32(0x17)
     )
     assert _hp_why(prob, names, Member(1, hp=29), kaizo) == off.format(50)
+    check_hp = kaizo._replace(ai_flags=np.int32(0x10F))
+    assert _hp_why(prob, names, Member(1, hp=17), check_hp) == off.format(30)
 
 
 def test_prep_steps_items_status_and_alone(tables, names):

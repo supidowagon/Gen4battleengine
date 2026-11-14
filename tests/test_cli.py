@@ -1276,7 +1276,7 @@ def test_kaizo_prep_refusal_exits_2_before_the_cap(
     args = ["prep", "--game", "kaizo", "--save", path, "--trainer-id", "51", "--devices", "1"]
     assert main(args) == 2
     out = capsys.readouterr().out
-    assert "Support: NONE" in out and "Martha: AI_FLAG_CHECK_HP (AI flag UNSUPPORTED)" in out
+    assert "Support: NONE" in out  # her CHECK_HP flag is transcribed since E1 batch 2c
     assert not (tmp_path / "runs").exists()
 
 

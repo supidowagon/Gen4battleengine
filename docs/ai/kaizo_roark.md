@@ -37,8 +37,9 @@ The sections keep roark.md's numbers, so a rule can be compared section by secti
   PRIORITIZE_EXTREMES and CHECK_HP since 2c, 5.7-5.8), among them 0x1, 0x5, 0x7, Roark's
   0x17, 0xd, 0xf, 0x1f, 0x27, 0x10f, 0x207 and 0x20f: every singles set of the Roark split
   and all Gardenia singles but Cheryl's 0x58b (TAG_STRATEGY, HARRASSMENT).
-  `KAIZO` is Roark's set and stays bit-identical. Width does not depend on the set: reads are
-  keyed by path order (8.2), so a set's reads cost only the moves that make them.
+  `KAIZO` is Roark's set and stays bit-identical. The scoring's cost follows the set's read
+  bound (8.3, E1 Ruling R5): `2^slot_reads` scorings per decision, 2^6 for 0x7, 2^7 for Roark's
+  0x17, 0xf and 0x27, 2^9 for 0x10f.
 - Coverage (`engine/coverage.py`) registers the flags per policy: `IMPLEMENTED_AI_FLAGS` is
   `{0, 1, 2}` for vanilla and `{0, 1, 2, 3, 4, 5, 8, 9}` for Kaizo. A Kaizo trainer is
   refused exactly by its unimplemented flags, one "AI_FLAG_..." line each; every singles set of
@@ -472,7 +473,8 @@ never taken in singles. Two rounds, each with one roll:
 2. The same with the player's true HP (`:7724-7725`) and the `CheckHP_Target_Discourage*`
    tables, roll `:7742`. `CheckHP_Target_DiscourageAtHighHP` is empty (`:7866-7867`).
 
-The six tables are `commands.CHECK_HP_TABLES` (212 entries, by label). The player-HP reads
+The six tables are `commands.CHECK_HP_TABLES` (213 entries, by label, the
+repeated HALVE_HP of `:7935-7936` included). The player-HP reads
 > 70 and > 30 are prep cuts for a CHECK_HP fight (`prep/variants.AI_FLAG_DEFENDER_HP_CHECKS`,
 added to the policy's checks by `ai_defender_hp_checks` when the set has bit 8).
 
@@ -654,7 +656,8 @@ reads cost nothing to a move that does not make them.
   Slot m's score reads only its own draws. `FlagMoveDamageScore` compares the damage
   estimates of all four moves, but those are deterministic (`trainer_ai.c:1012-1062`), not
   draws.
-- So the scoring runs once per local bit pattern p (2^7 = 128 patterns, the same p in every
+- So the scoring runs once per local bit pattern p (`2^slot_reads` patterns, 2^7 = 128 under
+  Roark's set; the same p in every
   slot), and slot m's score and path weight with its reads p are read off. Each slot's
   histogram over score values 0-255 adds the path weight of p, the product of the
   probabilities of the reads the path made (0 for a non-canonical pattern, 8.2).
@@ -710,9 +713,10 @@ read of the decision (`commands.ability_guessed`); which reads are made depends 
 combinations the factored distribution merges: the switch stops plus each slot's distinct
 scoring paths (`policy._path_counts`: the canonical patterns), which
 `tests/ai/test_kaizo_outcome.py test_kaizo_width_under_cap` and the Roark audit check against
-the loose oracle's own count of paths. It is at most 45 + 4 x 2^7 = 557 for any state (checked
-at import, `policy._check_width`), against `WIDTH_CAP` 131072; the program always evaluates
-2^7 = 128 scorings. `policy.ai_flat_width` reports the flat product, `prod_slots (paths) x 12 x
+the loose oracle's own count of paths. It is at most `45 + 4 x 2^slot_reads` for any state:
+557 under Roark's set, 2093 under 0x10f, 8237 under every transcribed flag at once (checked at
+import for the widest set, `policy._check_width`), against `WIDTH_CAP` 131072; the program
+always evaluates `2^slot_reads` scorings. `policy.ai_flat_width` reports the flat product, `prod_slots (paths) x 12 x
 45`, which is not used. Section 14 has the measured numbers.
 
 **8.6 The loose oracle** (tests only; `policy.ai_action_distribution_loose`). Every
