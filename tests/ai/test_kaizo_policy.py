@@ -1281,3 +1281,25 @@ def test_flag_set_runs_its_scripts(kaizo_tables, kaizo_roark_party, flags, scrip
         assert [int(x) for x in ctx.scores] == [
             int(x) for x in _flag_scores(t, s, o, prefix[flags])
         ]
+
+
+def test_opponent_move_refusals_are_refused(kaizo_tables, kaizo_roark_party):
+    """``policy.opponent_move_refusals`` (the backlog's per-move AI lines) agrees with
+    ``_refused`` for every Kaizo move in an opponent slot: a move has a kind exactly when
+    ``_refused`` refuses it by move."""
+    t = kaizo_tables
+    base = _state(t, kaizo_roark_party, BONSLY, (STEALTH_ROCK, 0, 0, 0))
+    n_moves = int(t.move_ai_effect.shape[0])
+    refused = jax.jit(
+        lambda m: policy._refused(
+            t, base._replace(moves=base.moves.at[1, 0, 1].set(m.astype(base.moves.dtype))), KAIZO
+        )
+    )
+    for move in range(1, n_moves):
+        r = refused(jnp.int32(move))
+        by_move = any(
+            bool(np.asarray(f)[0, 1])
+            for f in (r.move, r.ghost_curse, r.expert, r.alt_power, r.calc_damage, r.move_type)
+        )
+        kinds = policy.opponent_move_refusals(t, move, KAIZO)
+        assert bool(kinds) == by_move, (move, kinds)

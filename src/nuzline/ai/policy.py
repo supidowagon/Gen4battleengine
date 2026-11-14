@@ -935,6 +935,38 @@ def _refused(tables: Tables, state: BattleState, layout: AiLayout = VANILLA) -> 
     )
 
 
+def opponent_move_refusals(
+    tables: Tables, move: int, layout: AiLayout, ghost: bool = False
+) -> list[str]:
+    """The per-move refusals of ``_refused`` for an opponent move (decomp id) under ``layout``,
+    whatever the player's party (``tools/kaizo/backlog.py`` lists them per fight), as kinds:
+    ``"not transcribed"`` (its script paths, ``layout.transcribed``), ``"ghost curse"`` (Curse
+    by a Ghost type, ``ghost``), ``"expert label"`` (its Expert_Main label is not transcribed
+    yet, when the layout runs EXPERT), ``"alternative power"`` (sAltPowerMoveEffects,
+    trainer_ai.c:48-61), ``"calc damage"`` and ``"move type"`` (TrainerAI_CalcDamage and
+    TrainerAI_MoveType move-id cases). Pinned against ``_refused`` by
+    tests/ai/test_kaizo_policy.py test_opponent_move_refusals_are_refused."""
+    if move == 0:
+        return []
+    effect = int(np.asarray(tables.move_ai_effect)[move])
+    key = effect if layout.per_slot_sites else move
+    if key not in layout.transcribed:
+        return ["not transcribed"]
+    out = []
+    if ghost and effect == BattleEffect.CURSE:
+        out.append("ghost curse")
+    pending = set(KAIZO_EXPERT_LABELS) - layout.expert_transcribed
+    if layout.per_slot_sites and layout.runs(EXPERT) and effect in pending and not out:
+        out.append("expert label")
+    if effect in c.ALT_POWER_EFFECTS:
+        out.append("alternative power")
+    if move in c.CALC_DAMAGE_MOVES:
+        out.append("calc damage")
+    if move in c.MOVE_TYPE_MOVES:
+        out.append("move type")
+    return out
+
+
 @lru_cache(maxsize=len(AI_POLICIES))
 def _policy_names(policy: int):
     """The ``Names`` of the game whose AI policy is ``AI_POLICIES[policy]``
