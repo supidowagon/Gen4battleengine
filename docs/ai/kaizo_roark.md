@@ -599,10 +599,12 @@ reads cost nothing to a move that does not make them.
 - **The bound.** `KAIZO.slot_reads` = 7 (`outcome.KAIZO_SLOT_READS`), the most random reads
   one path makes, found from the data (`tests/ai/test_kaizo_outcome.py
   test_slot_reads_fit_every_transcribed_effect`: every transcribed Kaizo move in slot 0 over
-  random players, HP and stages, the loose oracle's longest path). Selfdestruct reaches it
+  random players, HP, stages and turn, under every implemented flag at once, the loose
+  oracle's longest path). Selfdestruct reaches it
   against a guessed two-ability player with evasion +4, Bonsly at 30 % HP or less: `:117` and
   `:304` (guesses), `:6374`, `:1859`, `:1870`, `:1875`, `:6530`. Next come Toxic (5: three
-  guesses, `:2690`, `:2695`) and Curse (4). A path that makes more is a path refusal (8.3), a
+  guesses, `:2690`, `:2695`), and under SETUP_FIRST_TURN on the first turn Curse and Light Screen (5,
+with SETUP's `:6429`; 5.5). A path that makes more is a path refusal (8.3), a
   layout bound, never a reused draw.
 - **Enumeration.** `policy` enumerates the reads as bit patterns: bit 0 / 1 of read k stands
   for the draw `outcome.READ_DRAWS` = (254, 1), which split every read (254 is below no
