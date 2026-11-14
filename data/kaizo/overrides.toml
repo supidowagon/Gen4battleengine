@@ -13,7 +13,9 @@
 # Cynthia) and sheet-only Trick Room stay here. A trainer claimed by two areas is never
 # settled by guess: its claim stays commented out with every citation. The ten start
 # conditions left "unknown" by ruling (318 325 343 509 559 610 649 676 746 747) are settled
-# here only by the user's answers (2026-11-07; 676 stays unknown). A ROM Trick Room trainer
+# here only by the user's answers (2026-11-07). 318 and 676 left that list on 2026-11-14 (E3
+# batch 5): the shared-script join gives each one ROM condition (676's inherited through the
+# vanilla rematch table from 583, and probably unreachable). A ROM Trick Room trainer
 # also placed on a map without Trick Room (tools.kaizo.resolve.two_placement_trick_room;
 # K2b Task 15 fix round 1) gets an [area_exception] citing both placements, and its start
 # condition is refused as "unknown" (a user call), until the user's answer replaces it with
@@ -1244,10 +1246,12 @@ source = "user, 2026-11-07"
 weather = "none"
 source = "user, 2026-11-07"
 
-# 676 Corbin: no object and no battle command uses 676, but it is the Vs. Seeker rematch of
-# 583 Titania (gVsSeekerRematchData). Since the shared-script join fix (E3 batch 5,
-# 2026-11-14) 583 is placed only on header 211 MT_CORONET_OUTSIDE_SOUTH, so 676 inherits
-# that placement and its hail; it is no longer refused as unknown.
+# 676 Corbin: no object and no battle command uses 676. Its placement (header 211
+# MT_CORONET_OUTSIDE_SOUTH, hail) is inherited through the vanilla rematch table
+# (gVsSeekerRematchData) from 583 Titania, placed there since the shared-script join fix
+# (E3 batch 5, 2026-11-14). No object carries 583's trainer script and the Vs. Seeker only
+# rematches trainer objects (overlay005/vs_seeker.c:500-540, :692-694), so the rematch is
+# probably unreachable; 676 is in no split.
 
 # Pokemon Center daily trainers (Pokemon Center 1F interiors; scr_seq member 400
 # pokemon_center_daily_trainers, whose 10401/10402 NPCs the map join misses): the first
