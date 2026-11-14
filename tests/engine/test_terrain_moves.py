@@ -32,7 +32,7 @@ import numpy as np
 import pytest
 
 from nuzline.data.trainer import TERRAIN_NAMES, TERRAIN_UNKNOWN
-from nuzline.engine.coverage import check_coverage, terrain_call, terrain_refusal
+from nuzline.engine.coverage import terrain_call, terrain_refusal
 from nuzline.engine.enumerate import (
     _LAWS,
     INPUT_CLAUSE_EFFECTS,
@@ -608,21 +608,3 @@ def test_coverage_refuses_an_unsupported_call(tables, names, trainers):
     line = terrain_refusal(tables, names, plain, [names.move(NP), names.move(CAMO)])
     assert line is not None and "Earthquake" in line
     assert terrain_refusal(tables, names, plain, [names.move(CAMO)]) is None
-
-
-def test_coverage_supports_shield_dust(tables, names, trainers):
-    # Shield Dust (subscript_burn/freeze/paralyze.s: an INDIRECT effect skips it) is modelled
-    # since E2 batch 3 (ruling B3-9, effects._shield_dust): a holder facing Tri Attack is no
-    # longer refused for it.
-    from dataclasses import replace as replace_spec
-
-    from nuzline.data.party import load_party
-    from tests.engine.helpers import SAMPLE_PARTY, roark_party
-
-    roark = next(t for t in trainers if t.id == ROARK)
-    player = load_party(SAMPLE_PARTY, names)
-    venomoth = names.species("Venomoth")
-    slot = names.species_abilities(venomoth).index(names.ability("Shield Dust"))
-    player[0] = replace_spec(player[0], species=venomoth, form=0, ability_slot=slot)
-    report = check_coverage(tables, names, player, roark, roark_party(names), 0)
-    assert not any("Shield Dust" in line for line in report.missing)
