@@ -22,7 +22,9 @@ Baseline (main e139cd1): 79 such entries (32 held item, 25 move effect, 21 abili
 
 (One line each, with the decomp citation.)
 
-- B1-1 Item order: the held-item block runs before every ability modifier and in the decomp's
+- B1-1 Item order: the held-item block runs after powerMul, Charge, Helping Hand, Technician,
+  Huge Power / Pure Power and Slow Start (battle_lib.c:6688-6714), before every ability
+  modifier from :6785 on (Thick Fat, Hustle, Guts, ...), and in the decomp's
   order (type item, Choice Band/Specs, Soul Dew, DeepSeaTooth/Scale, Light Ball, Metal Powder,
   Thick Club, orbs, Muscle Band/Wise Glasses), so e.g. Thick Club x2 truncates before Guts x1.5;
   the u16 stores never truncate in reach (battle_lib.c:6716-6783 before :6793).
