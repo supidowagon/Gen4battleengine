@@ -261,6 +261,37 @@ KAIZO_TRANSCRIBED: frozenset[int] = frozenset(
         266,  # STEALTH_ROCK: Expert_StealthRock (:1805 -> :6268), :6274
         269,  # RECOIL_HALF (Head Smash): Expert_RecoilMove (:1806 -> :6289), no roll
         275,  # FLINCH_PARALYZE_HIT (Thunder Fang): no Expert_Main entry
+        # E1 batch 3: the effects with no Basic_ScoreMoveEffect (:133-286) or Expert_Main
+        # (:1628-1808) entry (docs/ai/kaizo_roark.md 5.9). Every flag script treats them
+        # generically: FlagMoveDamageScore, IfCurrentMoveKills and the damage estimates read only
+        # the no-calc and alt-power lists (trainer_ai.c:1012-1063, :1525-1560, :2800-2830), and
+        # the other mentions in script.s are tables the generic code already reads.
+        5,  # FREEZE_HIT
+        29,  # MULTI_HIT
+        36,  # TRI_ATTACK
+        44,  # HIT_TWICE
+        45,  # CRASH_ON_MISS
+        73,  # LOWER_ACCURACY_HIT
+        83,  # CALL_RANDOM_MOVE; Risky_RiskyEffects :6543
+        101,  # LEAVE_WITH_1_HP
+        103,  # PRIORITY_1; EvalAttack_ApplyKillBonuses :6400
+        125,  # THAW_AND_BURN_HIT
+        138,  # RAISE_DEF_HIT
+        139,  # RAISE_ATTACK_HIT
+        147,  # DOUBLE_DAMAGE_DIG
+        149,  # DOUBLE_DAMAGE_FLY_OR_BOUNCE
+        150,  # FLINCH_MINIMIZE_DOUBLE_HIT
+        152,  # THUNDER; Expert_Main tests SKIP_CHARGE_TURN_IN_SUN for Expert_Thunder, :1718
+        159,  # UPROAR
+        172,  # MAKE_GLOBAL_TARGET
+        180,  # USE_RANDOM_ALLY_MOVE
+        197,  # SECRET_POWER; Harrassment table :8062
+        202,  # BADLY_POISON_HIT
+        257,  # DOUBLE_DAMAGE_DIVE
+        271,  # LOWER_SP_DEF_2_HIT
+        273,  # FLINCH_BURN_HIT
+        274,  # FLINCH_FREEZE_HIT
+        276,  # RAISE_SP_ATK_HIT
     }
 )
 # The transcribed effects (KAIZO_TRANSCRIBED) whose Expert_Main entry goes to a label added

@@ -478,6 +478,33 @@ repeated HALVE_HP of `:7935-7936` included). The player-HP reads
 > 70 and > 30 are prep cuts for a CHECK_HP fight (`prep/variants.AI_FLAG_DEFENDER_HP_CHECKS`,
 added to the policy's checks by `ai_defender_hp_checks` when the set has bit 8).
 
+### 5.9 Effects with no Basic or Expert label (E1 batch 3)
+
+26 battle effects have no entry in `Basic_ScoreMoveEffect` (`script.s:133-286`) or
+`Expert_Main` (`:1628-1808`): FREEZE_HIT, MULTI_HIT, TRI_ATTACK, HIT_TWICE, CRASH_ON_MISS,
+LOWER_ACCURACY_HIT, CALL_RANDOM_MOVE, LEAVE_WITH_1_HP, PRIORITY_1, THAW_AND_BURN_HIT,
+RAISE_DEF_HIT, RAISE_ATTACK_HIT, DOUBLE_DAMAGE_DIG, DOUBLE_DAMAGE_FLY_OR_BOUNCE,
+FLINCH_MINIMIZE_DOUBLE_HIT, THUNDER, UPROAR, MAKE_GLOBAL_TARGET, USE_RANDOM_ALLY_MOVE,
+SECRET_POWER, BADLY_POISON_HIT, DOUBLE_DAMAGE_DIVE, LOWER_SP_DEF_2_HIT, FLINCH_BURN_HIT,
+FLINCH_FREEZE_HIT and RAISE_SP_ATK_HIT. Every transcribed flag treats them generically, so
+they only join `outcome.KAIZO_TRANSCRIBED`:
+
+- The C code reads a move's effect only against `sNoDamageCalcMoveEffects` and
+  `sAltPowerMoveEffects` (`FlagMoveDamageScore`, `trainer_ai.c:1012-1063`; `IfCurrentMoveKills`,
+  `:1525-1560`; the damage estimates, `:2800-2830`), and none of the 26 is in either.
+- Their other mentions in `script.s` are generic tables or other moves' paths: PRIORITY_1 in
+  EvalAttack's kill bonus (`:6400`, 5.2); CALL_RANDOM_MOVE in `Risky_RiskyEffects` (`:6543`);
+  MAKE_GLOBAL_TARGET in `Expert_Encore_EncouragedMoveEffects` (`:3249`), which Encore reads for
+  the player's last move; SECRET_POWER in HARRASSMENT's table (`:8062`; not a transcribed
+  flag). THUNDER has no `Expert_Thunder` path: `Expert_Main` tests
+  SKIP_CHARGE_TURN_IN_SUN for it (`:1718`, the decomp's own BUG comment), transcribed as the
+  game has it.
+- `test_expert_label_table_is_the_dispatch` and `test_basic_label_table_is_the_dispatch` fail
+  for any transcribed effect with an entry whose label is not transcribed.
+
+Many of these moves are still refused by the engine's move-effect coverage (Metronome, Follow
+Me, Assist, Uproar, Secret Power's terrain, ...); the AI side no longer adds a line for them.
+
 ## 6. Where the AI reads the true battle state
 
 roark.md 6 holds: the damage estimate, the kill check and the effectiveness class read the

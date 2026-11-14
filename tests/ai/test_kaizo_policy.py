@@ -1545,3 +1545,37 @@ def test_exact_equals_loose_with_extremes_and_check_hp(
         s = _state(t, kaizo_roark_party, BONSLY, moves)
         s = _hp(_hp(_with_player(t, s, player), 1, attacker), 0, target)
         _assert_exact_equals_loose(t, s, kaizo_layout(flags))
+
+
+# --- Effects with no Basic or Expert label (E1 batch 3) --------------------------------------
+
+
+@pytest.mark.parametrize("flags", [0x17, 0x27, 0x10F])
+@pytest.mark.parametrize(
+    "moves",
+    [
+        # DOUBLE_DAMAGE_DIG, PRIORITY_1 (EvalAttack's kill bonus, :6400), CALL_RANDOM_MOVE
+        # (Risky_RiskyEffects, :6543; a status move), MAKE_GLOBAL_TARGET (status)
+        ("Earthquake", "Quick Attack", "Metronome", "Follow Me"),
+        # MULTI_HIT, HIT_TWICE, THUNDER (no Expert_Thunder: :1718 tests another effect),
+        # LOWER_ACCURACY_HIT
+        ("Rock Blast", "Double Kick", "Thunder", "Mud-Slap"),
+    ],
+)
+def test_unlabelled_effects_exact_equals_loose(
+    kaizo_tables, kaizo_names, kaizo_roark_party, flags, moves
+):
+    """The effects with no Basic_ScoreMoveEffect or Expert_Main entry (outcome.KAIZO_TRANSCRIBED,
+    batch 3) are scored, not refused, and exact == loose under Roark's set, PRIORITIZE_EXTREMES
+    and CHECK_HP, against a guessed Gible and Tentacool, Bonsly at 25 % HP (CheckHP's low band)."""
+    from nuzline.ai.layout import kaizo_layout
+    from tests.ai.test_kaizo_outcome import GIBLE as GIBLE_SPECIES
+
+    t, n = kaizo_tables, kaizo_names
+    ids = tuple(n.move_names.index(m) for m in moves)
+    layout = kaizo_layout(flags)
+    for player in (GIBLE_SPECIES, 72):
+        s = _state(t, kaizo_roark_party, BONSLY, ids)
+        s = _hp(_with_player(t, s, player), 1, 25)
+        assert policy.ai_refusals(t, s, n, layout) == []
+        _assert_exact_equals_loose(t, s, layout)
