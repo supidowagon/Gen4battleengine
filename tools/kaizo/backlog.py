@@ -78,8 +78,8 @@ def label(k):
 L = [
     "# Kaizo mechanics backlog",
     "",
-    "Generated from the opponent-side coverage check (`check_opponent`) on main after the K3",
-    "merge (exp and level-ups). It counts only what the trainers' teams, bags, AI and battle conditions need.",
+    "Generated from the opponent-side coverage check (`check_opponent`) after E1 batch 1",
+    "(per-slot ability guesses). It counts only what the trainers' teams, bags, AI and battle conditions need.",
     "Your own Pokemon's moves, abilities and items are not counted.",
     "Moves are grouped by the game's move-effect number and held items by hold-effect number,",
     "since one implementation covers the whole group.",
