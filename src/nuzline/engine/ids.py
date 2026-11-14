@@ -137,6 +137,81 @@ class EffectId(IntEnum):
     # else every weather bit is cleared and the weather is set for 5 turns, plus the param of
     # the user's matching ``ItemId.WEATHER_ROCK`` (``effects._weather``).
     WEATHER = 48
+    # E2 batch 4 (rulings B4-n, docs/kaizo/e2-mechanics-ledger.md).
+    # SmellingSalt (effect_script_0171.s), Facade (_0169.s), Brine (_0221.s; Kaizo's Wring Out):
+    # ``(condition, cures, 0)``: the script sets BTLVAR_POWER_MULTI 20 before CalcDamage when
+    # ``condition`` holds (``damage.script_power_mul``): ``POWER_IF_TARGET_PARALYZED`` (and
+    # ``cures``: an ON_HIT indirect subscript_heal_target_paralysis.s, ``effects._cure_paralysis``),
+    # ``POWER_IF_USER_STATUSED`` (MON_CONDITION_FACADE_BOOST: poison, toxic, burn, paralysis),
+    # ``POWER_IF_TARGET_HALF_HP`` (curHP <= maxHP / 2, a plain ``/``).
+    DOUBLE_POWER = 49
+    # Wring Out, Crush Grip (vanilla effect 237, BtlCmd_CalcCrushGripPower, battle_script.c:7265):
+    # movePower = 1 + 120 * curHP / maxHP of the defender (``damage._pre_random``).
+    HP_POWER = 50
+    # Grass Knot, Low Kick (effect_script_0196.s, BtlCmd_CalcWeightBasedPower, battle_script.c:
+    # 6808-6826): the power from the defender's weight (``tables.species_weight``,
+    # include/data/battle/weight_to_power.h; ``damage.weight_power``).
+    WEIGHT_POWER = 51
+    # Super Fang (effect_script_0040.s): SYSCTL_IGNORE_TYPE_CHECKS, damage = Divide(curHP, 2)
+    # of the defender, no crit or roll; a type immunity still deals 0 (``damage.fixed_damage``).
+    HALVE_HP = 52
+    # Fissure, Guillotine, Horn Drill (effect_script_0038.s, BtlCmd_TryOHKOMove, battle_script.c:
+    # 4334-4386): its own hit test (``outcome._rate``), Sturdy, and the defender's max HP as
+    # damage (``damage.fixed_damage``, bcp.c:3343-3345).
+    OHKO = 53
+    # False Swipe (BATTLE_EFFECT_LEAVE_WITH_1_HP, bcp.c:3381-3384): a hit that would KO leaves
+    # the defender at 1 HP, before the Focus Sash (``effects.play_hit``).
+    FALSE_SWIPE = 54
+    # Swagger (effect_script_0118.s, subscript_swagger.s): Attack +2 then confusion
+    # (``effects._swagger``).
+    SWAGGER = 55
+    # Dragon Dance (effect_script_0212.s, subscript_user_atk_and_speed_up_1_stage.s): Attack +1
+    # and Speed +1 on the user; both at +6 is MOVE_STATUS_NO_MORE_WORK (``effects._dragon_dance``).
+    DRAGON_DANCE = 56
+    # Roost (effect_script_0214.s, subscript_roost.s): heals Divide(maxHP, 2) through
+    # subscript_recover_hp.s and sets turnFlags.roosting, which skips the defender's Flying rows
+    # of the type chart for the rest of the turn (battle_lib.c:2540-2543; ``damage.chart_types``).
+    ROOST = 57
+    # Tailwind (subscript_tailwind_start.s): the user's side gets ``TAILWIND_TURNS``, fails when up.
+    TAILWIND = 58
+    # Spikes / Toxic Spikes (``BtlCmd_TrySpikes`` / ``TryToxicSpikes``, battle_script.c:5388-5403,
+    # :7592-7605): a layer on the defender's side up to ``SPIKES_MAX`` / ``TOXIC_SPIKES_MAX``; the
+    # switch-in effects are ``effects.entry_hazards`` (subscript_hazards_check.s).
+    SPIKES = 59
+    TOXIC_SPIKES = 60
+    # Destiny Bond (effect_script_0098.s, subscript_destiny_bond.s): ``BattleState.destiny_bond``;
+    # ``step._use_move`` takes the attacker down (subscript_faint_check_destiny_bond.s).
+    DESTINY_BOND = 61
+    # Secret Power (effect_script_0197.s, BtlCmd_GetTerrainSecondaryEffect, battle_script.c:8063-8075):
+    # a hit whose secondary effect is the terrain's (``SECRET_POWER_EFFECTS``,
+    # ``order.move_effects``).
+    SECRET_POWER = 62
+
+
+# Snore (effect_script_0092.s) is ``FLINCH`` with ``move_param[m, 2] == SNORE_PARAM``: the
+# script fails unless its user is asleep (:5, :15-17), and a sleeping user uses it
+# (bcp.c:2455: ``moveCur == MOVE_SNORE``).
+SNORE_PARAM = 1
+# subscript_tailwind_start.s:11 sets both SIDE_CONDITION_TAILWIND bits: a 2-bit counter at 3.
+TAILWIND_TURNS = 3
+SPIKES_MAX = 3  # battle_script.c:5394
+TOXIC_SPIKES_MAX = 2  # battle_script.c:7598
+
+# ``EffectId.DOUBLE_POWER``'s condition (``move_param[m, 0]``).
+POWER_IF_TARGET_PARALYZED = 1  # effect_script_0171.s:6 (SmellingSalt)
+POWER_IF_USER_STATUSED = 2  # effect_script_0169.s:5 (Facade, MON_CONDITION_FACADE_BOOST)
+POWER_IF_TARGET_HALF_HP = 3  # effect_script_0221.s:5-8 (Brine)
+
+
+# Effects whose script runs no CalcCrit / CalcDamage: no crit and no damage roll is read
+# (``damage.fixed_damage``): Night Shade's level (effect_script_0087.s), Bide's unleash,
+# Super Fang (effect_script_0040.s), the OHKO moves (effect_script_0038.s).
+UNROLLED_EFFECTS = (
+    EffectId.LEVEL_DAMAGE,
+    EffectId.BIDE,
+    EffectId.HALVE_HP,
+    EffectId.OHKO,
+)
 
 
 class AbilityId(IntEnum):
@@ -211,6 +286,12 @@ class AbilityId(IntEnum):
     DRIZZLE = 54
     SAND_STREAM = 55
     SNOW_WARNING = 56
+    # E2 batch 4. Filter (battle_lib.c:2658-2661, ``damage._finish``); Magic Guard (every reader
+    # is Battler_Ability or CheckAbility: the residual damage, the recoil, full paralysis and
+    # the entry hazards, ruling B4 list in the ledger); Sniper (battle_lib.c:7142-7144).
+    FILTER = 57
+    MAGIC_GUARD = 58
+    SNIPER = 59
 
 
 # The decomp ability id of every supported ``AbilityId`` (generated/abilities.txt line N is id
@@ -275,6 +356,9 @@ ABILITY_DECOMP_IDS = {
     AbilityId.DRIZZLE: 2,
     AbilityId.SAND_STREAM: 45,
     AbilityId.SNOW_WARNING: 117,
+    AbilityId.FILTER: 111,
+    AbilityId.MAGIC_GUARD: 98,
+    AbilityId.SNIPER: 97,
 }
 
 # ChooseTraceTarget (battle_lib.c:7750-7775) never picks a battler whose ``BattleMon.ability``
@@ -429,6 +513,11 @@ class ItemId(IntEnum):
     # that weather lasts ``5 + param`` turns (effect_script_0115.s, _0136.s, _0137.s, _0164.s:
     # CheckItemHoldEffect / GetItemEffectParam on the attacker; ``effects._weather``).
     WEATHER_ROCK = 49
+    # Scope Lens, Razor Claw (HOLD_EFFECT_CRITRATE_UP), Lucky Punch (HOLD_EFFECT_CHANSEY_CRITRATE_UP)
+    # and Stick (HOLD_EFFECT_FARFETCHD_CRITRATE_UP): ``item_param[i, 1]`` is the species the
+    # item needs (0: any holder). ``BattleSystem_CalcCriticalMulti`` adds 1 stage for the first,
+    # 2 for a species item on its species (battle_lib.c:7123-7128; ``outcome.crit_odds``).
+    CRIT_ITEM = 50
 
 
 # The three Choice items: ``BattleSystem_CheckInvalidMoves`` (battle_lib.c:2307-2315) and
@@ -439,6 +528,8 @@ CHOICE_ITEMS = (ItemId.CHOICE_BAND, ItemId.CHOICE_SPECS, ItemId.CHOICE_SCARF)
 # Decomp species ids the item code of ``BattleSystem_CalcMoveDamage`` names
 # (battle_lib.c:6730-6774; generated/species.txt line N is id N-1).
 SPECIES_PIKACHU = 25
+SPECIES_FARFETCHD = 83  # BattleSystem_CalcCriticalMulti (battle_lib.c:7128)
+SPECIES_CHANSEY = 113  # :7127
 SPECIES_CUBONE = 104
 SPECIES_MAROWAK = 105
 SPECIES_DITTO = 132
@@ -584,6 +675,10 @@ class Type(IntEnum):
 # Decomp move id the engine names directly (``generated/moves.txt`` line 166, 0-based
 # from MOVE_NONE): Struggle replaces the chosen move when it has no PP left.
 MOVE_STRUGGLE = 165
+# Snore and Sleep Talk (``generated/moves.txt`` lines 174, 215): the sleep check lets a sleeping
+# battler use them (bcp.c:2455).
+MOVE_SNORE = 173
+MOVE_SLEEP_TALK = 214
 # Fake Out (``generated/moves.txt`` line 253): ``subscript_flinch_mon.s:18`` shows Inner
 # Focus's message, which names the ability, only for ``BTLVAR_CURRENT_MOVE == MOVE_FAKE_OUT``
 # (or a direct flinch effect, which no supported move has).
@@ -654,6 +749,24 @@ TERRAIN_TYPES = (
     Type.GROUND,  # TERRAIN_GREAT_MARSH
     Type.FLYING,  # TERRAIN_BRIDGE
     Type.NORMAL,  # TERRAIN_SPECIAL
+)
+# ``sTerrainSideEffect`` (include/data/terrain/to_secondary_effect.h), indexed like
+# ``TERRAIN_MOVES``: Secret Power's indirect TO_DEFENDER effect at the move's chance, as the
+# engine's ``(EffectId, move_param)`` (``order.move_effects``).
+SECRET_POWER_EFFECTS = (
+    (EffectId.SECONDARY_STAT_FOE, (Stat.ACC, -1, 0)),  # TERRAIN_PLAIN: ACCURACY_DOWN_1_STAGE
+    (EffectId.SECONDARY_STAT_FOE, (Stat.ACC, -1, 0)),  # TERRAIN_SAND
+    (EffectId.SECONDARY_STATUS, (Status.SLEEP, 0, 0)),  # TERRAIN_GRASS: SLEEP
+    (EffectId.SECONDARY_STATUS, (Status.SLEEP, 0, 0)),  # TERRAIN_PUDDLE
+    (EffectId.FLINCH, (0, 0, 0)),  # TERRAIN_MOUNTAIN: FLINCH
+    (EffectId.FLINCH, (0, 0, 0)),  # TERRAIN_CAVE
+    (EffectId.SECONDARY_STATUS, (Status.FREEZE, 0, 0)),  # TERRAIN_SNOW: FREEZE
+    (EffectId.SECONDARY_STAT_FOE, (Stat.ATK, -1, 0)),  # TERRAIN_WATER: ATTACK_DOWN_1_STAGE
+    (EffectId.SECONDARY_STATUS, (Status.FREEZE, 0, 0)),  # TERRAIN_ICE
+    (EffectId.SECONDARY_STATUS, (Status.PARALYSIS, 0, 0)),  # TERRAIN_BUILDING: PARALYZE
+    (EffectId.SECONDARY_STAT_FOE, (Stat.SPE, -1, 0)),  # TERRAIN_GREAT_MARSH: SPEED_DOWN
+    (EffectId.SECONDARY_STAT_FOE, (Stat.EVA, -1, 0)),  # TERRAIN_BRIDGE: EVASION_DOWN
+    (EffectId.SECONDARY_STATUS, (Status.PARALYSIS, 0, 0)),  # TERRAIN_SPECIAL: PARALYZE
 )
 # effect_script_0036.s: ``Random 2, 3`` (``BtlCmd_Random``, battle_script.c:3200-3210:
 # ``RandNext() % 3 + 3``) picks MOVE_SUBSCRIPT_PTR_BURN, _FREEZE or _PARALYZE (3, 4, 5:

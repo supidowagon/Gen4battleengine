@@ -106,6 +106,7 @@ from nuzline.data.tables import MANIFEST_VERSION
 from nuzline.engine.ids import AbilityId, EffectId, ItemId, MoveFlag, MoveTarget, TrainerItemId
 from tools.effect_map import (
     CERTAIN_SECONDARY_EFFECTS,
+    CRIT_HOLD_EFFECTS,
     DECOMP_ABILITY_TO_ID,
     DECOMP_EFFECT_TO_ID,
     DECOMP_ITEM_TO_ID,
@@ -303,6 +304,7 @@ def _item_type(item: dict, item_id: int) -> int:
         ItemId.TYPE_BOOST: (TYPE_BOOST_HOLD_EFFECTS, "boosts"),
         ItemId.PINCH_BERRY: (PINCH_STAT_HOLD_EFFECTS, "raises"),
         ItemId.WEATHER_ROCK: (WEATHER_ROCK_HOLD_EFFECTS, "extends"),
+        ItemId.CRIT_ITEM: (CRIT_HOLD_EFFECTS, "needs"),
     }
     if item_id not in tables:
         return 0

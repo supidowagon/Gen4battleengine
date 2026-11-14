@@ -48,9 +48,11 @@ three structs has a row.
   `flinched`, bind turns -> `trapped`, recharging -> `recharge`, Foresight ->
   `foresight`, Bide turns -> `bide_turns`, Defense Curl -> `curled`,
   `VOLATILE_CONDITION_MOVE_LOCKED` -> `locked_move` (with `moveLockedInto`), the
-  ATTRACT bits -> `infatuated` (below). The
+  ATTRACT bits -> `infatuated` (below), Destiny Bond -> `destiny_bond` (E2 batch 4:
+  per battler, set by subscript_destiny_bond.s:9, cleared at the holder's next
+  `CHECK_STATUS_START`, bcp.c:2425, and with the volatiles). The
   other bits (Uproar, Thrash, Focus Energy, Transform, Rage, Substitute
-  flag, Destiny Bond, Mean Look, Nightmare, Curse, Torment) are later (M6); the Substitute flag is implied by `substitute_hp > 0`.
+  flag, Mean Look, Nightmare, Curse, Torment) are later (M6); the Substitute flag is implied by `substitute_hp > 0`.
 - **moveEffectsMask** bits mapped: Leech Seed -> `leech_seed`, Water Sport ->
   `water_sport`, Mud Sport -> `mud_sport`, Aqua Ring -> `aqua_ring` (per battler, cleared on switch-out; the
   Electric power halving reads every active battler, `battle_lib.c:6812`). The rest
@@ -291,7 +293,7 @@ three structs has a row.
 | `BattleMon.exp` | `exp` | mapped |
 | `BattleMon.personality` | — | not needed because its battle uses (nature, ability slot, gender) are resolved into `PokemonSpec` before `make_state` |
 | `BattleMon.status` | `status`, `status_counter` | mapped |
-| `BattleMon.statusVolatile` | `confusion`, `flinched`, `trapped`, `recharge`, `foresight`, `bide_turns`, `curled`, `locked_move`, `infatuated` | mapped |
+| `BattleMon.statusVolatile` | `confusion`, `flinched`, `trapped`, `recharge`, `foresight`, `bide_turns`, `curled`, `locked_move`, `infatuated`, `destiny_bond` | mapped |
 | `BattleMon.OTId` | — | not needed because only obedience and the traded-Pokemon exp bonus read it; the tool assumes an obedient party and resolves the exp bonus into `exp_boost` before `make_state` |
 | `BattleMon.heldItem` | `item` | mapped |
 | `BattleMon.padding007A` | — | not needed because it is padding |
@@ -460,7 +462,7 @@ three structs has a row.
 | `BattleContext.fieldConditions` | `weather_timer`, `future_timer`, `future_damage`, `wish_timer` | mapped |
 | `BattleContext.sideConditionsMask` | `stealth_rock`, `tailwind`, `lucky_chant` | mapped |
 | `BattleContext.sideConditions` | `reflect`, `light_screen`, `mist`, `safeguard`, `spikes`, `toxic_spikes` | mapped |
-| `BattleContext.turnFlags` | — | not needed because it is reset every turn and `step` resolves a whole turn (`protecting`: the first actor's `protect_ok` event, read by the second actor in `step._execute_actions`) |
+| `BattleContext.turnFlags` | — | not needed because it is reset every turn and `step` resolves a whole turn (`protecting`: the first actor's `protect_ok` event, read by the second actor in `step._execute_actions`; `roosting`: the first actor's `roosted` event, E2 batch 4) |
 | `BattleContext.selfTurnFlags` | — | not needed because it is reset at every action's end (`BattleContext_Init`, bcp.c:3998) and `step` resolves a whole action; `focusItemActivated` and `SELF_TURN_FLAG_PLUCK_BERRY` live in `_use_move`'s hit loop (`effects.MoveHit`) |
 | `BattleContext.moveFailFlags` | — | not needed because it is reset every turn and `step` resolves a whole turn |
 | `BattleContext.aiContext` | `ai_seen_moves`, `ai_ability_known`, `trainer_items`, `trainer_item_count` | mapped |

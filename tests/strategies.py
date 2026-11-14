@@ -274,6 +274,32 @@ BATCH3_ABILITIES = (
     AbilityId.THICK_FAT,
     AbilityId.TINTED_LENS,
 )
+# E2 batch 4: the moves ``_draw_batch4`` gives the active Pokemon (vanilla effects: SmellingSalt
+# 171, Facade 169, Brine 221, Wring Out / Crush Grip 237, Grass Knot / Low Kick 196, Super Fang
+# 40, the OHKO moves 38, False Swipe 101, Swagger 118, Dragon Dance 212, Poison Fang 202,
+# Earthquake 147), its abilities and the crit items.
+BATCH4_MOVES = (
+    "SmellingSalt",
+    "Facade",
+    "Brine",
+    "Wring Out",
+    "Crush Grip",
+    "Grass Knot",
+    "Low Kick",
+    "Super Fang",
+    "Horn Drill",
+    "Guillotine",
+    "Fissure",
+    "False Swipe",
+    "Swagger",
+    "Dragon Dance",
+    "Poison Fang",
+    "Earthquake",
+    "Snore",
+    "Secret Power",
+)
+BATCH4_ABILITIES = (AbilityId.FILTER, AbilityId.MAGIC_GUARD, AbilityId.SNIPER)
+CRIT_ITEMS = ("Scope Lens", "Razor Claw", "Lucky Punch", "Stick")
 SWITCH_IN_ABILITIES = (
     AbilityId.TRACE,
     AbilityId.DROUGHT,
@@ -387,6 +413,12 @@ SHARED_MOVES = (
     "Rain Dance",
     "Sandstorm",
     "Hail",
+    # E2 batch 4: status moves (the damaging pools are unchanged).
+    "Roost",
+    "Tailwind",
+    "Spikes",
+    "Toxic Spikes",
+    "Destiny Bond",
 )
 
 
@@ -509,7 +541,8 @@ def _draw_terrain(draw, tables: Tables, a: dict) -> None:
     Camouflage), so that both engines play those moves on a known terrain too; otherwise the
     state keeps ``make_state``'s ``TERRAIN_UNKNOWN`` (nothing reads it)."""
     effect = np.asarray(tables.move_effect)[a["moves"]]
-    if np.isin(effect, (EffectId.NATURE_POWER, EffectId.CAMOUFLAGE)).any():
+    readers = (EffectId.NATURE_POWER, EffectId.CAMOUFLAGE, EffectId.SECRET_POWER)
+    if np.isin(effect, readers).any():
         a["terrain"][...] = draw(st.sampled_from(TERRAINS))
 
 
@@ -696,6 +729,96 @@ def _draw_batch3(draw, tables: Tables, a: dict, side: int, active: int, names: N
         a["ability"][side, rnd.choice(bench)] = rnd.choice(SWITCH_IN_ABILITIES)
 
 
+def _draw_batch4(draw, tables: Tables, a: dict, side: int, active: int, names: Names) -> None:
+    """Maybe (1 in 2) give the active Pokemon a ``BATCH4_MOVES`` move, with what makes it act
+    most of the time: a paralyzed foe for SmellingSalt, a status for Facade, a foe at low HP for
+    Brine and False Swipe, a confused foe at +6 Attack for Swagger's failure, +6 stages for
+    Dragon Dance's, No Guard or a lower foe for the OHKO moves, Sturdy on the foe. Maybe (1 in
+    3) a ``BATCH4_ABILITIES`` ability on it, Magic Guard with a residual to skip (a status,
+    Leech Seed, Bind, Life Orb, a recoil move, Rough Skin on the foe) or on a bench Pokemon
+    facing Stealth Rock; maybe (1 in 4) a crit item (Lucky Punch on a Chansey)."""
+    rnd = draw(st.randoms(use_true_random=False))
+    foe = 1 - side
+    foe_mon = int(a["active"][foe])
+
+    def give(who: int, mon: int, move_name: str) -> None:
+        move = names.move(move_name)
+        k = rnd.randint(0, 3)
+        a["moves"][who, mon, k] = move
+        a["pp"][who, mon, k] = int(tables.move_pp[move])
+
+    foe_alive = a["hp"][foe, foe_mon] > 0
+    if draw(st.booleans()):
+        name = rnd.choice(BATCH4_MOVES)
+        give(side, active, name)
+        enable = rnd.random() < 0.6
+        if enable and name == "SmellingSalt" and foe_alive:
+            a["status"][foe, foe_mon] = Status.PARALYSIS
+        if enable and name == "Facade" and a["hp"][side, active] > 0:
+            a["status"][side, active] = rnd.choice((Status.BURN, Status.POISON, Status.PARALYSIS))
+            a["status_counter"][side, active] = 0
+        if enable and name in ("Brine", "False Swipe", "Super Fang") and foe_alive:
+            a["hp"][foe, foe_mon] = rnd.randint(1, max(1, int(a["max_hp"][foe, foe_mon]) // 2))
+        if enable and name == "Swagger":
+            a["stages"][foe, Stat.ATK] = STAGE_MAX if rnd.random() < 0.5 else 4
+            a["confusion"][foe] = rnd.randint(0, 2)
+        if enable and name == "Snore" and a["hp"][side, active] > 0:
+            a["status"][side, active] = Status.SLEEP
+            a["status_counter"][side, active] = rnd.randint(1, 4)
+        if enable and name == "Dragon Dance":
+            a["stages"][side, Stat.ATK] = STAGE_MAX
+            a["stages"][side, Stat.SPE] = rnd.choice((STAGE_MAX, 5))
+        if enable and name in ("Horn Drill", "Guillotine", "Fissure"):
+            choice = rnd.randint(0, 2)
+            if choice == 0:
+                a["ability"][side, active] = AbilityId.NO_GUARD
+            elif choice == 1:
+                a["level"][foe, foe_mon] = int(a["level"][side, active]) + 1
+            else:
+                a["ability"][foe, foe_mon] = AbilityId.STURDY
+    if draw(st.integers(0, 2)) == 0:
+        ability = rnd.choice(BATCH4_ABILITIES)
+        a["ability"][side, active] = ability
+        if ability == AbilityId.MAGIC_GUARD and rnd.random() < 0.75:
+            kind = rnd.randint(0, 5)
+            if kind == 0 and a["hp"][side, active] > 0:
+                a["status"][side, active] = rnd.choice(
+                    (Status.POISON, Status.TOXIC, Status.BURN, Status.PARALYSIS)
+                )
+                a["status_counter"][side, active] = 0
+            elif kind == 1:
+                a["leech_seed"][side] = 1
+            elif kind == 2:
+                a["trapped"][side] = rnd.randint(2, _BIND_MAX)
+                a["trap_move"][side] = names.move("Bind")
+            elif kind == 3:
+                a["item"][side, active] = names.item("Life Orb")
+            elif kind == 4:
+                give(side, active, "Take Down")
+            else:
+                a["ability"][foe, foe_mon] = AbilityId.ROUGH_SKIN
+                give(side, active, "Tackle")
+    bench = [
+        slot
+        for slot in range(a["species"].shape[1])
+        if slot != active and a["species"][side, slot] and a["hp"][side, slot]
+    ]
+    # The side conditions and Destiny Bond (any layers, a bond from an earlier turn), and a
+    # Flying-type foe for a Roost user's chart.
+    a["spikes"][side] = draw(st.integers(0, 3))
+    a["toxic_spikes"][side] = draw(st.integers(0, 2))
+    a["destiny_bond"][side] = draw(st.integers(0, 1))
+    if draw(st.integers(0, 4)) == 0:
+        a["types"][side, active, 1] = Type.FLYING
+    if bench and draw(st.integers(0, 3)) == 0:  # a Magic Guard newcomer facing Stealth Rock
+        a["ability"][side, rnd.choice(bench)] = AbilityId.MAGIC_GUARD
+        a["stealth_rock"][side] = 1
+    if draw(st.integers(0, 3)) == 0:
+        chansey = int(a["species"][side, active]) == names.species("Chansey")
+        item = "Lucky Punch" if chansey and rnd.random() < 0.7 else rnd.choice(CRIT_ITEMS)
+        a["item"][side, active] = names.item(item)
+
+
 def _draw_choice_lock(draw, a: dict, side: int, active: int) -> None:
     """``choice_lock``: none or one of the active Pokemon's moves, whatever its item (a lock
     without a Choice item is what a lost item would leave; ``UpdateMoveBuffers`` clears it)."""
@@ -794,6 +917,7 @@ def supported_state(draw, tables: Tables, names: Names) -> BattleState:
         _draw_species_item(draw, tables, a, side, active, names)
         _draw_batch2_item(draw, tables, a, side, active, names)
         _draw_batch3(draw, tables, a, side, active, names)
+        _draw_batch4(draw, tables, a, side, active, names)
         _draw_choice_lock(draw, a, side, active)
     count = draw(st.integers(0, BAG_SLOTS))
     bag = draw(st.lists(st.sampled_from(M1_BAG_ITEMS), min_size=count, max_size=count))
@@ -1014,6 +1138,18 @@ LAW_MOVES = (
     "Roar",
     "Rain Dance",
     "Sunny Day",
+    # E2 batch 4: Swagger's confusion draw, Dragon Dance's Speed, the OHKO hit test, Super Fang
+    # (no crit, no roll), Poison Fang's secondary.
+    "Swagger",
+    "Dragon Dance",
+    "Horn Drill",
+    "Super Fang",
+    "Poison Fang",
+    "Tailwind",
+    "Roost",
+    "Snore",
+    "Secret Power",
+    "Spikes",
 )
 # Abilities the outcome relevance reads (contact procs, Steadfast, Simple's and Swift
 # Swim's Speed) or the hit odds read (Compoundeyes, Sand Veil, Snow Cloak), and Rough Skin
@@ -1047,6 +1183,9 @@ LAW_ABILITIES = (
     AbilityId.TRUANT,
     AbilityId.LEVITATE,
     AbilityId.TRACE,
+    # E2 batch 4: full paralysis (Magic Guard), the OHKO block (Sturdy).
+    AbilityId.MAGIC_GUARD,
+    AbilityId.STURDY,
 )
 
 

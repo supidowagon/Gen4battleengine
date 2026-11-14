@@ -40,6 +40,9 @@ Encodings:
   love with the other side's active battler (in singles the only possible source,
   ``BtlCmd_TryAttract``, battle_script.c:5738). It is a volatile (cleared when the battler
   leaves) and is also cleared when its source leaves (``step._source_leaves``).
+* ``destiny_bond`` is the active battler's ``VOLATILE_CONDITION_DESTINY_BOND``
+  (subscript_destiny_bond.s:9): cleared when its next move attempt starts
+  (``CHECK_STATUS_START``, bcp.c:2425) and with the other volatiles (``step._VOLATILE``).
 * ``trainer_item_count`` is ``aiContext.trainerItemCounts``: the bag's size at battle
   start, never decremented.
 * ``terrain`` is ``BattleSystem.terrain``: the battle terrain, a decomp ``TERRAIN_*`` id
@@ -147,6 +150,7 @@ class BattleState(NamedTuple):
     mud_sport: jnp.ndarray  # int8, MOVE_EFFECT_MUD_SPORT in moveEffectsMask
     aqua_ring: jnp.ndarray  # int8, MOVE_EFFECT_AQUA_RING in moveEffectsMask
     infatuated: jnp.ndarray  # int8, VOLATILE_CONDITION_ATTRACT (source: the foe's active)
+    destiny_bond: jnp.ndarray  # int8, VOLATILE_CONDITION_DESTINY_BOND
     # per side [2]
     spikes: jnp.ndarray  # int8, layers
     toxic_spikes: jnp.ndarray  # int8, layers
@@ -295,6 +299,7 @@ LAYOUT: dict[str, tuple[tuple[int, ...], type]] = {
     "mud_sport": (_SIDE, np.int8),
     "aqua_ring": (_SIDE, np.int8),
     "infatuated": (_SIDE, np.int8),
+    "destiny_bond": (_SIDE, np.int8),
     "spikes": (_SIDE, np.int8),
     "toxic_spikes": (_SIDE, np.int8),
     "stealth_rock": (_SIDE, np.int8),

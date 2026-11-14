@@ -73,7 +73,7 @@ import jax.numpy as jnp
 
 from nuzline.data.tables import Tables
 from nuzline.engine.damage import ability_weather, trace_copy
-from nuzline.engine.effects import change_stage, stealth_rock_damage
+from nuzline.engine.effects import change_stage, entry_hazards
 from nuzline.engine.ids import AbilityId, ItemId, Stat, Status, Weather
 from nuzline.engine.order import pinch_divisor
 from nuzline.engine.state import STAGE_MAX, BattleState
@@ -459,7 +459,8 @@ def intimidate(state: BattleState, side, cond=True, foe=None) -> BattleState:
 
 
 def on_switch_in(tables: Tables, state: BattleState, side) -> BattleState:
-    """``side``'s active Pokemon has just entered: Stealth Rock, then the switch-in checks
+    """``side``'s active Pokemon has just entered: the entry hazards
+    (``effects.entry_hazards``: Toxic Spikes, Spikes, Stealth Rock), then the switch-in checks
     in their state order (``BattleSystem_TriggerEffectOnSwitch``): Trace (``trace``) for the
     newcomer and for the other battler, whose Trace stayed armed while its foe was down (a
     double KO's replacements: the player's newcomer enters first, ``playout``); the weather
@@ -473,7 +474,7 @@ def on_switch_in(tables: Tables, state: BattleState, side) -> BattleState:
     refuses two different weather abilities on the two sides (``coverage.weather_war``)."""
     side = jnp.asarray(side, _I32)
     foe = 1 - side  # the entry point: the battler facing the newcomer in singles
-    state = stealth_rock_damage(tables, state, side)
+    state = entry_hazards(tables, state, side)
     state, _ = trace(tables, state, side, foe)
     state, traced = trace(tables, state, foe, side)
     state = weather_ability(state, side)

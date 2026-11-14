@@ -43,6 +43,7 @@ from nuzline.engine.actions import FIRST_ITEM_ACTION, MOVE_ACTIONS, locked_slot,
 from nuzline.engine.damage import apply_stage, simple_stage, weather_suppressed
 from nuzline.engine.ids import (
     MOVE_STRUGGLE,
+    SECRET_POWER_EFFECTS,
     TERRAIN_MOVES,
     TERRAIN_SPECIAL,
     AbilityId,
@@ -116,6 +117,27 @@ def called_move(tables: Tables, state: BattleState, move) -> jnp.ndarray:
     terrain_move = jnp.where(terrain_known(state), terrain_move, 0)
     nature_power = tables.move_effect[move] == EffectId.NATURE_POWER
     return jnp.where(nature_power, terrain_move, move)
+
+
+def move_effects(tables: Tables, state: BattleState, move) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """``(effect, param)``: ``tables.move_effect[move]`` and ``tables.move_param[move]`` (``int32``,
+    ``int32[..., 3]``), with Secret Power's resolved to the terrain's secondary effect
+    (``ids.SECRET_POWER_EFFECTS``; effect_script_0197.s ``GetTerrainSecondaryEffect``,
+    battle_script.c:8063-8075: ``min(terrain, TERRAIN_SPECIAL)``), the effect every hit and law
+    reads. An unknown terrain (coverage refuses it) resolves to ``PLAIN``. ``move`` may be
+    batched."""
+    move = jnp.asarray(move, _I32)
+    effect = tables.move_effect[move].astype(_I32)
+    param = tables.move_param[move].astype(_I32)
+    row = terrain_index(state)
+    sp_effect = jnp.asarray([e for e, _ in SECRET_POWER_EFFECTS], _I32)[row]
+    sp_param = jnp.asarray([p for _, p in SECRET_POWER_EFFECTS], _I32)[row]
+    sp_effect = jnp.where(terrain_known(state), sp_effect, EffectId.PLAIN)
+    secret = effect == EffectId.SECRET_POWER
+    return (
+        jnp.where(secret, sp_effect, effect),
+        jnp.where(secret[..., None], sp_param, param),
+    )
 
 
 def used_move(tables: Tables, state: BattleState, side, action) -> jnp.ndarray:

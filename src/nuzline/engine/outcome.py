@@ -46,7 +46,14 @@ import numpy as np
 from nuzline.data.tables import Tables
 from nuzline.engine.damage import PRESENT_HEAL, entry_ability, entry_weather, weather_suppressed
 from nuzline.engine.ids import QUICK_CLAW_MODULUS, AbilityId, EffectId, ItemId, Stat, Weather
-from nuzline.engine.order import MOVE_ACTIONS, action_order, is_item, is_switch, used_move
+from nuzline.engine.order import (
+    MOVE_ACTIONS,
+    action_order,
+    is_item,
+    is_switch,
+    move_effects,
+    used_move,
+)
 from nuzline.engine.state import STAGE_MAX, STAGE_MIN, BattleState
 
 MAX_HITS = 5
@@ -227,8 +234,21 @@ def _rate(
     # CheckMoveHitOverrides (bcp.c:3016-3021), after the roll: the attacker's or the target's
     # No Guard (Battler_Ability, the target's own: not ignorable) clears MOVE_STATUS_MISSED.
     no_guard = (a_ability == AbilityId.NO_GUARD) | (own == AbilityId.NO_GUARD)
+    # An OHKO move (BtlCmd_TryOHKOMove, battle_script.c:4334-4386) sets
+    # SYSCTL_NONSTANDARD_ACC_CHECK (:4338), so none of the above applies (bcp.c:2911-2913, :3016):
+    # it hits when RandNext() % 100 < accuracy + (attacker level - defender level) and the
+    # attacker's level is not lower (:4347-4353); with No Guard on either side it always hits
+    # at a level that is not lower (:4357-4363). Sturdy is its damage's (damage.fixed_damage).
+    user_level = state.level[side, state.active[side]].astype(_I32)
+    target_level = state.level[target, target_mon].astype(_I32)
+    ohko_rate = jnp.where(
+        user_level >= target_level,
+        jnp.where(no_guard, 100, accuracy + user_level - target_level),
+        0,
+    )
+    ohko = tables.move_effect[move] == EffectId.OHKO
     # Accuracy 0 never misses (the check returns before rolling).
-    return jnp.where((accuracy == 0) | no_guard, 100, rate)
+    return jnp.where(ohko, ohko_rate, jnp.where((accuracy == 0) | no_guard, 100, rate))
 
 
 def live_hit_threshold(
@@ -374,9 +394,9 @@ def hit_thresholds(tables: Tables, state: BattleState, actions) -> tuple[jnp.nda
     live = state.over == 0
     uses_move = live & ~is_switch(actions) & ~is_item(actions)
     moves = jnp.stack([used_move(tables, state, side, actions[side]) for side in (0, 1)])
-    effect = tables.move_effect[moves]
-    stat = tables.move_param[moves, 0]
-    delta = tables.move_param[moves, 1].astype(_I32)
+    effect, params = move_effects(tables, state, moves)  # Secret Power's terrain effect
+    stat = params[:, 0]
+    delta = params[:, 1]
     changes = uses_move & _can_go_first(tables, state, actions)
     on_foe_acc = (
         changes
@@ -458,7 +478,7 @@ def hit_class(u, thresholds, possible) -> jnp.ndarray:
 def crit_odds(tables: Tables, state: BattleState, actions) -> jnp.ndarray:
     """``int32[2]``: each side's move crits 1 in N (``BattleSystem_CalcCriticalMulti``,
     battle_lib.c:7105). ``HIGH_CRIT`` (+1) and the attacker's Super Luck (+1, :7126) raise
-    the stage: Focus Energy, Scope Lens and the species items are not implemented. Lucky
+    the stage, and so do the crit items (``ItemId.CRIT_ITEM``); Focus Energy is not implemented. Lucky
     Chant on the defending side and the target's Battle Armor / Shell Armor (``armored``)
     are applied by ``sample_outcome``. Nature Power's are its called move's
     (``CalcCrit`` runs in the called move's script)."""
@@ -468,6 +488,15 @@ def crit_odds(tables: Tables, state: BattleState, actions) -> jnp.ndarray:
     # battle_lib.c:7126: + (attackerAbility == ABILITY_SUPER_LUCK), the battler's own ability.
     super_luck = state.ability[jnp.arange(2), state.active] == AbilityId.SUPER_LUCK
     stage = stage + super_luck.astype(_I32)
+    # :7123-7128: + 1 for HOLD_EFFECT_CRITRATE_UP (Scope Lens, Razor Claw), + 2 for Lucky Punch on
+    # Chansey and Stick on Farfetch'd (Battler_HeldItem; ids.ItemId.CRIT_ITEM).
+    item = state.item[jnp.arange(2), state.active]
+    species = state.species[jnp.arange(2), state.active].astype(_I32)
+    needs = tables.item_param[item, 1].astype(_I32)
+    held = tables.item_effect[item] == ItemId.CRIT_ITEM
+    stage = (
+        stage + jnp.where(held & (needs == 0), 1, 0) + jnp.where(held & (needs == species), 2, 0)
+    )
     return _CRIT_ODDS[jnp.minimum(stage, 4)]
 
 

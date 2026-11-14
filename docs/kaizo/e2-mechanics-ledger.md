@@ -1,17 +1,18 @@
 # E2 mechanics ledger (Kaizo Roark split)
 
-## RESUME (updated 2026-11-14)
+## RESUME (updated 2026-11-14, batch 4 in progress)
 
-- Closed: batch 1 and batch 2 (reviewed; follow-ups in c61c768 and the merge-check commit),
-  committed on this branch. The merged fast tier passed 2715 / 8 skipped (log
-  `_scratch/e2/b2/fast_tier_merge_377037d.log` on G:).
-- Batch 3 (abilities, and sun / rain / hail as one family): committed, awaiting its review.
-  Checks: differential (jax_matches_reference, payouts) green; focused engine, data and tools
-  tests green; cold `jit(step)` 45.3 s and `jit(vmap(step))` 35.0 s against 39.5 / 32.2 s for
-  a0033f9 measured in the same session (+15 % / +9 %; this machine gave 20.7 / 15.6 s for batch
-  2 earlier, so compare the pairs); Roark split 104 -> 81 distinct groups, its move effect
-  + held item + ability + terrain entries 47 -> 24. The AI's own refusals of the new abilities
-  (Levitate, Shield Dust, ...) and the weather moves (#136, #164) stay for E1.
+- Batch 3 review follow-ups: 51ab3ae (B3-18..B3-22), stale Shield Dust test dropped (a169085,
+  06f357e). Batches 1-3 closed.
+- Batch 4 (move effects, terrain): committed in parts on this branch: the terrain narrowing
+  (d4e3d99, B4-1), then the simple effects, abilities and crit items (B4-3..B4-11) and the side
+  conditions, Roost, Destiny Bond, Snore, Secret Power (B4-12..B4-17); Counter / Mirror Coat /
+  Metal Burst next (B4-18). Still open in batch 4 (each listed under Owed): Sleep Talk, Copycat,
+  U-turn, Uproar, Future Sight / Doom Desire; Metronome is refused (B4-2); Lass Kaitlin's
+  terrain waits on a user decision (B4-1).
+- Checks per part: differential (jax_matches_reference) green; focused engine / prep / data /
+  tools fast tier run per part (logs in `_scratch/e2/b4/` on G:). Compile time at the start of
+  batch 4: `jit(step)` 49.8 s, `jit(vmap(step))` 36.4 s (`_scratch/e2/b4/compile_start.log`).
 - Standing: the doubles conventions below apply to all new code; one review per batch.
 
 Session E2 builds the battle mechanics the Roark split's trainers need (held items,
@@ -58,9 +59,9 @@ Rules left out because another mechanic is missing; each closes with the mechani
 
 - King's Rock's flinch vs Substitute (effects.py `_kings_rock`; subscript_flinch_mon.s:6):
   Substitute. (Its Shield Dust test, :9, is modelled by E2 batch 3, B3-9.)
-- The Sticky Barb transfer vs Knock Off, the knocked-off mask, U-turn and the substitute test
-  (effects.py `sticky_barb_transfer`; battle_lib.c:5378, :5390-5393): those moves.
-- Shell Bell and Life Orb vs `SYSCTL_UTURN_ACTIVE` (bcp.c:4739, :4761): U-turn.
+- The Sticky Barb transfer vs Knock Off, the knocked-off mask and the substitute test
+  (effects.py `sticky_barb_transfer`; battle_lib.c:5378, :5390-5393): those moves (U-turn's
+  gates: the U-turn line below). Magic Guard's readers are reached since B4-11.
 - The Trace refusal (`coverage.trace_ai_line`, B3-21): the AI must read the battler's ability
   (`state.ability`, the traced copy, through `damage.decomp_abilities`) instead of
   `tables.species_abilities_decomp` by species in ai/commands.py (~558-580), ai/policy.py (~950)
@@ -72,6 +73,27 @@ Rules left out because another mechanic is missing; each closes with the mechani
   `Move_FailsInHighGravity` under `CHECK_INVALID_GRAVITY` in `BattleSystem_CheckInvalidMoves`
   (battle_lib.c:2292, :2348), which the AI also reads (trainer_ai.c:234); `actions.usable_moves`
   ignores Gravity: Gravity.
+- Sleep Talk (#97, 10 Roark fights): `BtlCmd_TrySleepTalk` (battle_script.c:4907-4937) draws a
+  slot uniformly over the eligible ones (`RandNext() % 4` rejection), and the called move's own
+  draws (hit, crit, roll, secondary) follow that draw: `enumerate.outcome_laws` reads one move per
+  side, so the laws must branch on the draw first (like `speed_tie`). Needs that enumerator
+  extension; the engine side is `order.called_move` with an `Outcome` draw.
+- Copycat (#242): `movePrev` (battle-wide, `UpdateMoveBuffers` / `UpdateFlagsWhenHit`,
+  bcp.c:3936-3943, :4499-4508) as a field; the called move depends on the first mover's attack
+  message this turn, so the same enumerator branching as Sleep Talk.
+- U-turn (#228, 3 fights): the switch is a decision inside the turn (subscript_attack_then_switch_out.s
+  :6-71; the AI side is `BattleAI_PostKOSwitchIn`, battle_display.c:4543-4546, with
+  `aiSwitchedPartySlot` always 6 after a move choice). `step` resolves a whole turn and the search
+  only decides between turns or at faint replacements, so it needs a mid-turn decision point
+  (step stops at the switch, the search decides, the turn resumes with the rest of its draws).
+  Also owed with it: Shell Bell / Life Orb / the contact abilities / Sticky Barb vs
+  `SYSCTL_UTURN_ACTIVE` (bcp.c:4739, :4761; battle_lib.c:4219-4362, :5393) and the pivot items
+  (battle_lib.c:7336-7386), and the Pursuit it triggers (:51-54).
+- Uproar (#159): a 3-6 turn lock (`Random 3, 3`), sleep prevention and wake-ups
+  (bcp.c:1505-1541, :2431-2439; subscript_fall_asleep.s:15-16), early end on `moveFailFlags`.
+- Future Sight / Doom Desire (#148): use-time damage (CalcMoveDamage + variance, no crit, STAB or
+  chart), a per-slot counter, and the hit as the first side-condition check after
+  `CheckMonConditions` (bcp.c:1739, :1758-1783) with its own accuracy roll (a new draw).
 - The status orbs vs Safeguard (subscript_badly_poison.s, subscript_burn.s): Safeguard.
 - `outcome.kings_rock_chance` reads the turn-start item (outcome.py), which breaks once a move
   can move items mid-turn: Trick, Thief, Fling.
@@ -293,3 +315,81 @@ Rules left out because another mechanic is missing; each closes with the mechani
 - B3-22 Stealth Rock's damage has one formula (`damage.stealth_rock_loss`), read by the switch-in
   (`effects.stealth_rock_damage`) and by the turn-start weather of a newcomer
   (`damage.entry_weather`).
+- B4-1 A trainer battle's terrain is `CalcTerrain` of the tile the player stands on
+  (field_battle_data_transfer.c:467-505): `tools/terrain.py` narrows each trainer to its
+  sight-line and talk tiles (trainer_encounter.c:165-343, unk_0203C954.c:62-97) or its coord-event
+  rectangle (:208-225) when nothing before the battle can move the player, else the whole header.
+  Roark split: Barry #2 (247-249) is TERRAIN_PLAIN; Lass Kaitlin (323) stays mixed: her first
+  battle is GRASS, a Vs. Seeker rematch of the same id (vs_seeker.c:252, :659-773) spins her and
+  can start on PLAIN tiles (user decision pending).
+- B4-2 Metronome stays unsupported: `BtlCmd_Metronome` (battle_script.c:4535-4562) draws from
+  move ids 1-467 minus the user's moves and `sCannotMetronomeMoves` (battle_lib.c:7152-7178): 442
+  candidates in both games, of which 145 (Kaizo) / 174 (vanilla) have unsupported effects; no
+  partial set is sampled.
+- B4-3 SmellingSalt, Facade, Brine (and Kaizo's Wring Out, effect 221) set `powerMul` 20 before
+  CalcDamage (effect_script_0171.s:6, _0169.s:5, _0221.s:5-8: a paralyzed defender, a user with
+  `MON_CONDITION_FACADE_BOOST`, `curHP <= maxHP / 2` with a plain `/`), else 10
+  (`damage.script_power_mul`); a burned Facade user is still halved (battle_lib.c:6978).
+  SmellingSalt's cure is an ON_HIT indirect effect on a defender with HP left
+  (subscript_heal_target_paralysis.s:5-6).
+- B4-4 Vanilla Wring Out / Crush Grip (effect 237): `1 + 120 * curHP / maxHP` of the defender
+  (battle_script.c:7265); Grass Knot / Low Kick: `sWeightToPower` on the defender's species
+  weight (battle_script.c:6808-6826, battle_lib.c:150). The trainer AI's estimate keeps the
+  table power for both (no case in the engine's `TrainerAI_CalcDamage` path).
+- B4-5 Super Fang deals `Divide(curHP, 2)` under `SYSCTL_IGNORE_TYPE_CHECKS` (effect_script_0040.s):
+  no crit, roll, STAB or Life Orb boost, the immunity still applies (battle_lib.c:7544-7552), the
+  resist berry is skipped (subscript_type_resist_berry.s:5).
+- B4-6 The OHKO moves (`BtlCmd_TryOHKOMove`, battle_script.c:4334-4386): no stage, ability, item or
+  weather accuracy factor; they hit when `RandNext() % 100 < accuracy + (Lu - Ld)` at `Lu >= Ld`,
+  always at `Lu >= Ld` with No Guard on either side; an ignorable Sturdy blocks them; the damage is
+  the defender's max HP (bcp.c:3343-3345), a full-HP Focus Sash endures it; no crit; the resist
+  berry is skipped (subscript_type_resist_berry.s:6); the type chart's immunities apply.
+- B4-7 False Swipe caps a KO at 1 HP inside UpdateHP before the endure checks (bcp.c:3381-3384);
+  at 1 HP it deals 0 with UpdateHP run (SYSCTL_MOVE_HIT: Life Orb, Shell Bell), while the damage
+  taken it records is 0, so no Sticky Barb transfer and no King's Rock flinch.
+- B4-8 Earthquake's x2 against a digging target (effect_script_0147.s) is never met (Dig is
+  unsupported): a plain hit. Poison Fang is a badly-poison secondary at the move's chance
+  (effect_script_0202.s, subscript_badly_poison.s).
+- B4-9 Swagger (subscript_swagger.s): Attack +2 below +6, then confusion (Random 3, 2) unless
+  confused; at +6 and confused it fails (MOVE_STATUS_FAILED, no AfterMoveEffects). Dragon Dance:
+  Attack +1 and Speed +1, each skipped at +6; both at +6 is MOVE_STATUS_NO_MORE_WORK.
+- B4-10 Filter shares Solid Rock's `Divide(damage * 3, 4)` (battle_lib.c:2657-2661, ignorable);
+  Sniper makes the crit x3 (:7142-7144, Battler_Ability); the crit items add 1 stage (Scope Lens,
+  Razor Claw) or 2 on their species (Lucky Punch on Chansey, Stick on Farfetch'd) (:7123-7128).
+- B4-11 Magic Guard (Battler_Ability / CheckAbility, never ignorable) skips: Leech Seed's drain
+  (bcp.c:1381), full paralysis before its draw (:2652-2654), poison, toxic (the counter still
+  rises, :1405-1415) and burn damage (subscript_poison_damage.s:5, _burn_damage.s:5), Bind
+  (subscript_bind_effect.s:5), recoil (subscript_recoil_1_2.s, _1_4.s:6; Struggle's is not
+  skipped), Rough Skin on its holder (battle_lib.c:4259), Life Orb, Black Sludge, Sticky Barb and
+  the weather chip (already read), and every entry hazard (subscript_hazards_check.s:5).
+- B4-12 Roost (subscript_roost.s): `Divide(maxHP, 2)` through subscript_recover_hp.s ("HP is
+  full!" is NO_MORE_WORK: no flag, no AfterMoveEffects), then `turnFlags.roosting`, which only
+  `BattleSystem_ApplyTypeChart` reads (`BasicTypeMulApplies`, battle_lib.c:2540-2543: every row
+  whose defending type is Flying is skipped, read as the never-listed Mystery type,
+  `damage.chart_types`) for the rest of the turn; STAB, grounding and hazards still see Flying.
+  turnFlags live within `step`'s turn (the first actor's `roosted` event), as `protecting` does.
+- B4-13 Tailwind (subscript_tailwind_start.s): both TAILWIND bits, a counter of 3 counted down by
+  the field pass (bcp.c:1039-1058), x2 Speed (battle_lib.c:1274-1276); up already is
+  MOVE_STATUS_FAILED (no AfterMoveEffects). The end-of-turn order reads it (the turn's own order
+  was fixed before).
+- B4-14 Spikes (max 3) and Toxic Spikes (max 2) add a layer to the defender's side, else fail
+  (battle_script.c:5394, :7598). subscript_hazards_check.s on every switch-in (switch, drag,
+  replacement): nothing for Magic Guard (:5); a grounded newcomer (Gravity, or no Levitate
+  (CheckAbility) and no Flying type, :6-11) meets Toxic Spikes (a Poison type absorbs them;
+  one layer poisons, two badly poison, stopped by its own Immunity, Leaf Guard in sun, a status,
+  Poison / Steel) then Spikes (`Divide(maxHP, (5 - layers) * 2)` with HP left); then Stealth
+  Rock on any newcomer with HP (`effects.entry_hazards`).
+- B4-15 Destiny Bond (`destiny_bond`, a volatile): set by subscript_destiny_bond.s:9 (no failure
+  on repeats), cleared at the holder's next `CHECK_STATUS_START` (bcp.c:2425) whatever the
+  checks find; a defender that fainted in the attacker's action with the flag takes a living
+  attacker of the other side down after the hits (LOOP_FAINTED, bcp.c:3820-3823;
+  subscript_faint_check_destiny_bond.s:5-7), before Shell Bell / Life Orb; Pursuit's hit on a
+  switcher too (subscript_pursuit.s:85). Residual faints never trigger it.
+- B4-16 Snore: a sleeping user goes ahead (bcp.c:2455, `moveCur == MOVE_SNORE` or `moveTemp ==
+  MOVE_SLEEP_TALK`); the script fails (MOVE_STATUS_FAILED) unless the user is still asleep
+  (effect_script_0092.s:5), so a user that woke this turn fails; else a 30 % indirect flinch.
+- B4-17 Secret Power: a plain hit whose indirect TO_DEFENDER effect at the move's chance is
+  `sTerrainSideEffect[min(terrain, TERRAIN_SPECIAL)]` (battle_script.c:8063-8075,
+  to_secondary_effect.h): accuracy -1 (plain, sand), sleep (grass, puddle), flinch (mountain,
+  cave), freeze (snow, ice), Attack -1 (water), paralysis (building, special), Speed -1 (great
+  marsh), evasion -1 (bridge) (`ids.SECRET_POWER_EFFECTS`, `order.move_effects`).

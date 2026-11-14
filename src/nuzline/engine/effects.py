@@ -242,10 +242,12 @@ from nuzline.engine.damage import (
     decomp_abilities,
     divide,
     effectiveness,
+    grounded,
     identified,
     ignorable,
     levitated,
     move_type_of,
+    spikes_loss,
     stealth_rock_loss,
     weather_suppressed,
 )
@@ -254,7 +256,10 @@ from nuzline.engine.ids import (
     MOVE_FAKE_OUT,
     MOVE_STRUGGLE,
     RESIST_ANY_NORMAL,
+    SPIKES_MAX,
+    TAILWIND_TURNS,
     TERRAIN_TYPES,
+    TOXIC_SPIKES_MAX,
     TRI_ATTACK_STATUSES,
     WEATHER_ABILITY_IDS,
     WEATHER_TURNS,
@@ -268,7 +273,7 @@ from nuzline.engine.ids import (
     Type,
     Weather,
 )
-from nuzline.engine.order import terrain_index, terrain_known
+from nuzline.engine.order import move_effects, terrain_index, terrain_known
 from nuzline.engine.outcome import Outcome
 from nuzline.engine.state import STAGE_MAX, STAGE_MIN, BattleState
 
@@ -296,7 +301,9 @@ class _Hit(NamedTuple):
     move: jnp.ndarray  # the move's id
     target_ignorable: jnp.ndarray  # target's ability as the attacker sees it (Mold Breaker)
     contact_proc: jnp.ndarray  # the target's contact-ability roll for this hit
-    update_hp: jnp.ndarray  # BattleControllerPlayer_UpdateHP ran for this hit (MoveHit)
+    # BattleControllerPlayer_UpdateHP ran for this hit with a nonzero damage: the defender's
+    # physical / specialDamageTaken (bcp.c:3411-3424), which King's Rock reads (MoveHit.damaged).
+    update_hp: jnp.ndarray
     hit_index: jnp.ndarray  # the hit's index (per-hit outcome fields)
 
 
@@ -543,7 +550,9 @@ def recovers_at_full_hp(tables, state: BattleState, side, move, outcome: Outcome
     user_full = state.hp[side, user] == state.max_hp[side, user]
     target_full = state.hp[1 - side, target] == state.max_hp[1 - side, target]
     heal = (effect == _E.PRESENT) & (outcome.present[side] == PRESENT_HEAL)
-    return ((effect == _E.RECOVER) & user_full) | (heal & target_full)
+    # Roost runs the same subscript (subscript_roost.s:10).
+    recovers = (effect == _E.RECOVER) | (effect == _E.ROOST)
+    return (recovers & user_full) | (heal & target_full)
 
 
 # subscript_boost_all_stats.s and subscript_curse_normal.s, in script order.
@@ -592,8 +601,12 @@ def _drain(tables, state, h: _Hit) -> BattleState:
 
 
 def _recoil(tables, state, h: _Hit) -> BattleState:
+    # Rock Head; Magic Guard skips the subscript (subscript_recoil_1_2.s, _1_4.s:6, CheckAbility).
     rock_head = state.ability[h.side, h.user] == AbilityId.ROCK_HEAD
-    cost = jnp.where((h.effect == _E.RECOIL) & h.effective & ~rock_head, _percent_of_dealt(h), 0)
+    magic_guard = state.ability[h.side, h.user] == AbilityId.MAGIC_GUARD
+    cost = jnp.where(
+        (h.effect == _E.RECOIL) & h.effective & ~rock_head & ~magic_guard, _percent_of_dealt(h), 0
+    )
     hp = jnp.maximum(state.hp[h.side, h.user].astype(_I32) - cost, 0)
     return state._replace(hp=state.hp.at[h.side, h.user].set(hp.astype(state.hp.dtype)))
 
@@ -692,6 +705,123 @@ def _rollout(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     cond = (h.effect == _E.ROLLOUT) & h.landed
     state = _set(state, "locked_move", h.side, jnp.where(keep, h.move, 0), cond)
     return _set(state, "rollout_count", h.side, jnp.where(keep, left, 0), cond)
+
+
+def _cure_paralysis(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    """SmellingSalt (effect_script_0171.s:12): against a defender paralyzed when the script ran,
+    an ON_HIT indirect effect (``BattleSystem_TriggerSecondaryEffect``, battle_lib.c:1524-1529:
+    not ``MOVE_STATUS_NO_EFFECTS``) runs subscript_heal_target_paralysis.s, which cures a
+    defender with HP left (:5-6). The hit leaves the status alone, so it is still paralysis."""
+    cond = (
+        (h.effect == _E.DOUBLE_POWER)
+        & (h.param[1] == 1)
+        & h.effective
+        & _alive(state, h.target_side, h.target)
+        & (state.status[h.target_side, h.target] == Status.PARALYSIS)
+    )
+    return _set_status(state, h.target_side, h.target, Status.NONE, cond)
+
+
+# subscript_swagger.s:6: Attack +2 below +6 (the stage 12 test).
+SWAGGER_STAGES = 2
+
+
+def swagger_fails(state: BattleState, target_side) -> jnp.ndarray:
+    """``bool``: subscript_swagger.s:7-8 fails Swagger (``MOVE_STATUS_FAILED``) on a defender
+    at +6 Attack that is already confused."""
+    return (state.stages[target_side, Stat.ATK] >= STAGE_MAX) & (state.confusion[target_side] > 0)
+
+
+def _swagger(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    """Swagger (effect_script_0118.s, a direct ON_HIT effect; subscript_swagger.s): Attack +2
+    below +6 (``UPDATE_STAT_STAGE``), then subscript_confuse.s unless the defender is confused
+    (:13, no message): ``Random 3, 2`` turns (``outcome.duration``). Substitute (:5), Own Tempo
+    and Safeguard (subscript_confuse.s:12, :26) come from unsupported moves and abilities; the
+    failure (``swagger_fails``) skips AfterMoveEffects (``step``)."""
+    cond = (h.effect == _E.SWAGGER) & h.landed & _alive(state, h.target_side, h.target)
+    below = state.stages[h.target_side, Stat.ATK] < STAGE_MAX
+    state = change_stage(state, h.target_side, Stat.ATK, SWAGGER_STAGES, cond & below)
+    confuse = cond & (state.confusion[h.target_side] == 0)
+    return _set(state, "confusion", h.target_side, outcome.duration[h.side], confuse)
+
+
+DRAGON_DANCE_STAGES = ((Stat.ATK, 1), (Stat.SPE, 1))  # subscript_user_atk_and_speed_up_1_stage.s
+
+
+def dragon_dance_fails(state: BattleState, side) -> jnp.ndarray:
+    """``bool``: both of the user's stages are at +6: the subscript prints "won't go higher"
+    and sets ``MOVE_STATUS_NO_MORE_WORK`` (:5-6, :21-29), which skips AfterMoveEffects."""
+    return (state.stages[side, Stat.ATK] >= STAGE_MAX) & (state.stages[side, Stat.SPE] >= STAGE_MAX)
+
+
+def _dragon_dance(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    """Dragon Dance (effect_script_0212.s: direct TO_ATTACKER, the user has HP,
+    battle_lib.c:1492-1504): Attack +1 and Speed +1, each skipped on its own at +6 (:13-16,
+    ``ChangeStatStage``'s ``jumpNoChange``)."""
+    cond = (h.effect == _E.DRAGON_DANCE) & h.landed & _alive(state, h.side, h.user)
+    for stat, delta in DRAGON_DANCE_STAGES:
+        state = change_stage(state, h.side, stat, delta, cond)
+    return state
+
+
+def _roost(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    """Roost (subscript_roost.s, a direct ON_HIT TO_ATTACKER effect): ``Divide(maxHP, 2)``
+    through subscript_recover_hp.s (``recovers_at_full_hp``: "HP is full!" at full HP); the
+    roosting flag is ``step``'s (``roosted``)."""
+    hp = state.hp[h.side, h.user].astype(_I32)
+    max_hp = state.max_hp[h.side, h.user].astype(_I32)
+    cond = (h.effect == _E.ROOST) & h.landed & (hp != max_hp)
+    healed = jnp.minimum(hp + divide(max_hp, 2), max_hp)
+    return _set(state, "hp", (h.side, h.user), healed, cond)
+
+
+def _side_layers(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    """Tailwind (subscript_tailwind_start.s:11) on the user's side; Spikes / Toxic Spikes
+    (``BtlCmd_TrySpikes`` / ``TryToxicSpikes``) one layer on the defender's side; each fails when
+    full (``primary_effect_fails``)."""
+    state = _set(
+        state,
+        "tailwind",
+        h.side,
+        TAILWIND_TURNS,
+        (h.effect == _E.TAILWIND) & h.landed & (state.tailwind[h.side] == 0),
+    )
+    for effect, field, cap in (
+        (_E.SPIKES, "spikes", SPIKES_MAX),
+        (_E.TOXIC_SPIKES, "toxic_spikes", TOXIC_SPIKES_MAX),
+    ):
+        layers = getattr(state, field)[h.target_side].astype(_I32)
+        state = _set(
+            state,
+            field,
+            h.target_side,
+            layers + 1,
+            (h.effect == effect) & h.landed & (layers < cap),
+        )
+    return state
+
+
+def _destiny_bond(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    """Destiny Bond (effect_script_0098.s: an ON_HIT indirect effect): subscript_destiny_bond.s:9
+    sets the user's flag; there is no failure on a repeated use."""
+    return _set(state, "destiny_bond", h.side, 1, (h.effect == _E.DESTINY_BOND) & h.landed)
+
+
+def primary_effect_fails(tables, state: BattleState, side, target_side, move) -> jnp.ndarray:
+    """``bool``: ``side``'s ``move``, if it lands, has a direct effect that ends it with
+    ``MOVE_STATUS_FAILED`` or ``_NO_MORE_WORK``, which ``BattleControllerPlayer_CheckMoveFailure``
+    (bcp.c:3312-3331) sends past AfterMoveEffects: Swagger (``swagger_fails``), Dragon Dance
+    (``dragon_dance_fails``). ``target_side``: the defender's side."""
+    effect = tables.move_effect[jnp.asarray(move, _I32)]
+    return (
+        ((effect == _E.SWAGGER) & swagger_fails(state, target_side))
+        | ((effect == _E.DRAGON_DANCE) & dragon_dance_fails(state, side))
+        # subscript_tailwind_start.s:5, :18 and the effect scripts' TrySpikes / TryToxicSpikes
+        # jumps (effect_script_0112.s, _0249.s): MOVE_STATUS_FAILED.
+        | ((effect == _E.TAILWIND) & (state.tailwind[side] != 0))
+        | ((effect == _E.SPIKES) & (state.spikes[target_side] >= SPIKES_MAX))
+        | ((effect == _E.TOXIC_SPIKES) & (state.toxic_spikes[target_side] >= TOXIC_SPIKES_MAX))
+    )
 
 
 def _stealth_rock(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
@@ -931,7 +1061,12 @@ def _contact_ability(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     )
     # Rough Skin (battle_lib.c:4257-4271): no roll; subscript_rough_skin.s takes
     # BattleSystem_Divide(maxHP, 8) from the attacker (it may faint).
-    rough = (ability == AbilityId.ROUGH_SKIN) & hit
+    # battle_lib.c:4259: not on a Magic Guard attacker (Battler_Ability).
+    rough = (
+        (ability == AbilityId.ROUGH_SKIN)
+        & hit
+        & (state.ability[h.side, h.user] != AbilityId.MAGIC_GUARD)
+    )
     max_hp = state.max_hp[h.side, h.user].astype(_I32)
     hp = state.hp[h.side, h.user].astype(_I32)
     hurt = jnp.where(rough, jnp.maximum(hp - jnp.maximum(max_hp // 8, 1), 0), hp)
@@ -1054,14 +1189,48 @@ def shell_bell_heal(tables: Tables, state: BattleState, side, dealt, cond) -> Ba
     return _set(state, "hp", (side, mon), jnp.minimum(hp + heal, max_hp), on)
 
 
-def stealth_rock_damage(tables: Tables, state: BattleState, side) -> BattleState:
-    """Stealth Rock on ``side``'s active Pokemon as it switches in
-    (``damage.stealth_rock_loss``), with HP left, capped at its HP."""
+def entry_hazards(tables: Tables, state: BattleState, side) -> BattleState:
+    """subscript_hazards_check.s on ``side``'s active Pokemon as it switches in, skipped whole
+    for a Magic Guard holder (:5, CheckAbility):
+
+    * Toxic Spikes (:14-28, ``BtlCmd_CheckToxicSpikes``, battle_script.c:7629-7651) on a
+      ``damage.grounded`` newcomer: a Poison type absorbs them (the side's layers go to 0);
+      else one layer poisons, two badly poison (counter 0) through subscript_poison.s /
+      subscript_badly_poison.s's Toxic Spikes branch (:5-10): not for its own Immunity, Leaf Guard
+      in sun without a weather lock, a status or a Poison / Steel type (``can_have_status``;
+      Safeguard is an unsupported move).
+    * Spikes (:31, ``damage.spikes_loss``) on a grounded newcomer with HP, then Stealth Rock
+      (:41, ``damage.stealth_rock_loss``) on one with HP, whatever its grounding; each capped at
+      its HP."""
+    from nuzline.engine.ids import ITEM_ABILITY_IDS
+
     side = jnp.asarray(side, _I32)
     mon = state.active[side]
+    guarded = state.ability[side, mon] == AbilityId.MAGIC_GUARD
+    down = grounded(state, side, mon) & ~guarded
+    layers = state.toxic_spikes[side].astype(_I32)
+    poison_type = jnp.any(state.types[side, mon] == Type.POISON)
+    absorbed = down & (layers > 0) & poison_type
+    state = _set(state, "toxic_spikes", side, 0, absorbed)
+    ability = decomp_abilities(tables, state)[side, mon]
+    sun = (state.weather == Weather.SUN) & ~weather_suppressed(tables, state)
+    status = jnp.where(layers >= 2, Status.TOXIC, Status.POISON)
+    poisoned = (
+        down
+        & (layers > 0)
+        & ~poison_type
+        & (ability != ITEM_ABILITY_IDS["Immunity"])
+        & ~(sun & (ability == ITEM_ABILITY_IDS["Leaf Guard"]))
+        & can_have_status(tables, state, side, mon, status)
+    )
+    state = _set_status(state, side, mon, status, poisoned)
     hp = state.hp[side, mon].astype(_I32)
-    damage = jnp.where(hp > 0, jnp.minimum(stealth_rock_loss(tables, state, side, mon), hp), 0)
-    return state._replace(hp=state.hp.at[side, mon].set((hp - damage).astype(state.hp.dtype)))
+    spikes = jnp.where((hp > 0) & ~guarded, jnp.minimum(spikes_loss(state, side, mon), hp), 0)
+    hp = hp - spikes
+    rock = jnp.where(
+        (hp > 0) & ~guarded, jnp.minimum(stealth_rock_loss(tables, state, side, mon), hp), 0
+    )
+    return state._replace(hp=state.hp.at[side, mon].set((hp - rock).astype(state.hp.dtype)))
 
 
 class MoveHit(NamedTuple):
@@ -1081,6 +1250,9 @@ class MoveHit(NamedTuple):
     update_hp: jnp.ndarray
     # The HP the target lost on this hit (thaw_target).
     dealt: jnp.ndarray
+    # UpdateHP left the defender's physical / specialDamageTaken nonzero (bcp.c:3411-3424): the
+    # damage after False Swipe's cap is not 0 (the Sticky Barb transfer reads it).
+    damaged: jnp.ndarray
     # UpdateHP's ATTACKER_SELF_TURN_FLAGS.shellBellDamageDealt of this hit (bcp.c:3427-3431):
     # battleCtx->damage after the endure cap, capped at the target's HP (shell_bell_heal).
     shell_bell: jnp.ndarray
@@ -1107,7 +1279,9 @@ def focus_sash_damage(state: BattleState, side, damage, armed) -> tuple:
 # and Seismic Toss (effect_script_0087.s:5), Foresight (effect_script_0113.s:6, no damage).
 # subscript_type_resist_berry.s:5 skips the berry for such a hit. tests/tools/
 # test_effect_map.py checks the list against every mapped effect script.
-IGNORES_TYPE_CHECKS = (_E.LEVEL_DAMAGE, _E.FORESIGHT)
+IGNORES_TYPE_CHECKS = (_E.LEVEL_DAMAGE, _E.FORESIGHT, _E.HALVE_HP)
+# subscript_type_resist_berry.s:6 also skips a MOVE_STATUS_ONE_HIT_KO hit.
+RESIST_BERRY_SKIPS = (*IGNORES_TYPE_CHECKS, _E.OHKO)
 
 
 def resist_berry(
@@ -1274,16 +1448,22 @@ def play_hit(
         outcome.present[side].astype(_I32),
     )
     target_hp = state.hp[target_side, target].astype(_I32)
+    # False Swipe (bcp.c:3381-3384, inside UpdateHP before the endure checks): a hit that would
+    # KO leaves 1 HP; against 1 HP it deals 0, but UpdateHP has run (SYSCTL_MOVE_HIT).
+    swipe = (tables.move_effect[move] == _E.FALSE_SWIPE) & (damage > 0) & (damage >= target_hp)
+    raw = damage
+    damage = jnp.where(swipe, target_hp - 1, damage)
     # Bide is a RANGE_USER move whose unleash hits the foe (bcp.c:2702-2713).
     hits_foe = ~targets_user(tables, move) | (tables.move_effect[move] == _E.BIDE)
-    update_hp = landed & hits_foe & (damage > 0)  # BattleControllerPlayer_UpdateHP runs
+    update_hp = landed & hits_foe & (raw > 0)  # BattleControllerPlayer_UpdateHP runs
     sash = holds(tables, state, target_side, ItemId.FOCUS_SASH)
     full = target_hp == state.max_hp[target_side, target].astype(_I32)
     armed = jnp.asarray(focus_armed) | (update_hp & sash & full)
     capped, endured = focus_sash_damage(state, target_side, damage, armed & update_hp)
     # battleCtx->damage after the endure cap: what subscript_update_hp.s receives.
     taken = jnp.where(endured, target_hp - 1, damage)
-    effect = tables.move_effect[move].astype(_I32)
+    # Secret Power's secondary effect is the terrain's (order.move_effects).
+    effect, param = move_effects(tables, state, move)
     move_type = move_type_of(tables, state, side, move)
     # MOVE_STATUS_SUPER_EFFECTIVE: BattleControllerPlayer_CheckTypeChart (bcp.c:2350-2358)
     # applies the chart to a move with power that is not RANGE_USER (Bide); its
@@ -1306,7 +1486,7 @@ def play_hit(
     )
     resisted = (
         update_hp
-        & ~jnp.isin(effect, jnp.asarray(IGNORES_TYPE_CHECKS, effect.dtype))
+        & ~jnp.isin(effect, jnp.asarray(RESIST_BERRY_SKIPS, effect.dtype))
         & resist_berry(tables, state, target_side, move_type, super_effective)
     )
     dealt = jnp.where(landed & hits_foe, capped, 0)
@@ -1323,7 +1503,6 @@ def play_hit(
     stored = jnp.where(resisted, taken, dealt)
     state = _set(state, "bide_damage", target_side, state.bide_damage[target_side] + stored, biding)
 
-    param = tables.move_param[move].astype(_I32)
     is_status = tables.move_category[move] == STATUS
     # A type-checked status move (Thunder Wave) fails on a 0x matchup.
     type_ok = (param[1] == 0) | (
@@ -1353,7 +1532,7 @@ def play_hit(
         move=move,
         target_ignorable=ignorable(state, side, target_side),
         contact_proc=outcome.contact_proc[target_side, hit_index] != 0,
-        update_hp=update_hp,
+        update_hp=update_hp & (taken != 0),
         hit_index=jnp.asarray(hit_index, _I32),
     )
     for fn in (
@@ -1393,6 +1572,12 @@ def play_hit(
         _bide,
         _rollout,
         _weather,
+        _cure_paralysis,
+        _swagger,
+        _dragon_dance,
+        _roost,
+        _side_layers,
+        _destiny_bond,
     ):
         state = fn(tables, state, h, outcome)
     state, pluck_flag = _eat_berry(tables, state, h, outcome, foe_custap)
@@ -1408,6 +1593,7 @@ def play_hit(
         pluck_flag=pluck_flag,
         update_hp=update_hp,
         dealt=dealt,
+        damaged=update_hp & (taken != 0),
         shell_bell=shell,
         pursuit_shell_bell=pursuit_shell,
     )

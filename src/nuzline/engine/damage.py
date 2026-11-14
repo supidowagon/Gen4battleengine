@@ -50,6 +50,9 @@ from nuzline.engine.ids import (
     ABILITY_DECOMP_IDS,
     ITEM_GRISEOUS_ORB,
     MOVE_STRUGGLE,
+    POWER_IF_TARGET_HALF_HP,
+    POWER_IF_TARGET_PARALYZED,
+    POWER_IF_USER_STATUSED,
     SPECIES_CLAMPERL,
     SPECIES_CUBONE,
     SPECIES_DIALGA,
@@ -74,7 +77,15 @@ from nuzline.engine.ids import (
 from nuzline.engine.state import BattleState
 
 PHYSICAL, SPECIAL, STATUS = 0, 1, 2  # tables.move_category
-CRIT_MUL = 2  # BattleSystem_CalcCriticalMulti (battle_lib.c:7105); x3 Sniper is not implemented
+CRIT_MUL = 2  # BattleSystem_CalcCriticalMulti (battle_lib.c:7105-7144)
+SNIPER_CRIT_MUL = 3  # :7142-7144: x3 for the attacker's Sniper (Battler_Ability)
+# sWeightToPower (include/data/battle/weight_to_power.h): the first bound >= the defender's
+# weight (hectograms) gives the power, else 120 (BtlCmd_CalcWeightBasedPower,
+# battle_script.c:6808-6826).
+WEIGHT_BOUNDS = (100, 250, 500, 1000, 2000)
+WEIGHT_POWER = (20, 40, 60, 80, 100, 120)
+# MON_CONDITION_FACADE_BOOST (include/constants/battle/condition.h:29).
+FACADE_STATUSES = (Status.POISON, Status.TOXIC, Status.BURN, Status.PARALYSIS)
 ROLLS = 16
 CONFUSION_POWER = 40  # CALC_SELF_HIT(MOVE_STRUGGLE, 40), battle_controller_player.c:2633
 
@@ -209,6 +220,45 @@ def stealth_rock_loss(tables: Tables, state: BattleState, side, slot) -> jnp.nda
     return jnp.where(state.stealth_rock[side] != 0, rock, 0)
 
 
+def grounded(state: BattleState, side, slot) -> jnp.ndarray:
+    """``bool``: subscript_hazards_check.s:6-11 lets the entry spikes reach ``side``'s party
+    ``slot``: Gravity grounds it (:6; Iron Ball, :7, is an unsupported item), else its own
+    Levitate (``CheckAbility``) or a Flying type (``BATTLEMON_TYPE_1`` / ``_2``) keeps it off (Magnet
+    Rise, :11, is an unsupported move)."""
+    airborne = (state.ability[side, slot] == AbilityId.LEVITATE) | jnp.any(
+        state.types[side, slot] == Type.FLYING
+    )
+    return (state.gravity != 0) | ~airborne
+
+
+def spikes_loss(state: BattleState, side, slot) -> jnp.ndarray:
+    """``int32``: what Spikes takes from ``side``'s party ``slot`` as it switches in
+    (``BtlCmd_CheckSpikes``, battle_script.c:5434-5436): ``Divide(maxHP, (5 - layers) * 2)``, 1/8,
+    1/6, 1/4, for a grounded newcomer (``grounded``); 0 without layers. Not capped."""
+    layers = _i32(state.spikes[side])
+    divisor = jnp.maximum((5 - layers) * 2, 1)
+    loss = jnp.maximum(_i32(state.max_hp[side, slot]) // divisor, 1)
+    return jnp.where((layers > 0) & grounded(state, side, slot), loss, 0)
+
+
+def hazards_loss(tables: Tables, state: BattleState, side, slot) -> jnp.ndarray:
+    """``int32``: Spikes and Stealth Rock together on ``side``'s newcomer ``slot``
+    (subscript_hazards_check.s:31, :41), 0 for a Magic Guard holder (:5); not capped (the
+    newcomer survives when this is below its HP: Stealth Rock needs HP left, :41)."""
+    loss = spikes_loss(state, side, slot) + stealth_rock_loss(tables, state, side, slot)
+    return jnp.where(state.ability[side, slot] == AbilityId.MAGIC_GUARD, 0, loss)
+
+
+def chart_types(state: BattleState, side, slot, roosting) -> jnp.ndarray:
+    """``int32[2]``: ``side``'s party ``slot``'s types as ``BattleSystem_ApplyTypeChart`` walks them:
+    while the battler is ``roosting`` (``turnFlags.roosting``, Roost), ``BasicTypeMulApplies``
+    skips every chart row whose defending type is Flying (battle_lib.c:2540-2543), which is the
+    chart of ``Type.MYSTERY`` (no row names it): Flying reads as Mystery. Only the chart reads
+    this; STAB, grounding and the hazards see Flying (``Battler_MonType``, :367-369, :7618)."""
+    types = _i32(state.types[side, slot])
+    return jnp.where(jnp.asarray(roosting, bool) & (types == Type.FLYING), Type.MYSTERY, types)
+
+
 def entry_ability(tables: Tables, state: BattleState, side, slot, foe) -> jnp.ndarray:
     """The ``AbilityId`` ``side``'s party ``slot`` holds once it has switched in: the foe's
     active battler's when it traces it (``trace_copy``, ``hooks.trace``; ``foe``: the other
@@ -221,12 +271,12 @@ def entry_ability(tables: Tables, state: BattleState, side, slot, foe) -> jnp.nd
 
 def entry_weather(tables: Tables, state: BattleState, side, slot, foe) -> jnp.ndarray:
     """``int32``: the weather once ``side``'s party ``slot`` has switched in
-    (``hooks.on_switch_in``): its Stealth Rock damage (``stealth_rock_loss``) leaves
+    (``hooks.on_switch_in``): its entry hazards (``hazards_loss``) leave
     it HP, and its weather ability, its own or the one it traces from the foe's active
     battler (``entry_ability``; ``foe``: the other side), sets that weather for good; else
     ``state.weather``. For the turn-start laws of the foe's move (``outcome``): a switch goes
     first."""
-    alive = _i32(state.hp[side, slot]) - stealth_rock_loss(tables, state, side, slot) > 0
+    alive = _i32(state.hp[side, slot]) - hazards_loss(tables, state, side, slot) > 0
     weather = ability_weather(entry_ability(tables, state, side, slot, foe))
     return jnp.where(alive & (weather != Weather.NONE), weather, _i32(state.weather))
 
@@ -237,14 +287,62 @@ def entry_weather(tables: Tables, state: BattleState, side, slot, foe) -> jnp.nd
 RECKLESS_POWER_MUL = 12
 
 
+# BTLVAR_POWER_MULTI 20 (effect_script_0169.s, _0171.s, _0221.s).
+DOUBLE_POWER_MUL = 20
+
+
+def double_power(tables: Tables, state: BattleState, atk_side, def_side, move) -> jnp.ndarray:
+    """``bool``: ``atk_side``'s ``DOUBLE_POWER`` move doubles against ``def_side``'s active
+    battler: SmellingSalt against a paralyzed defender (effect_script_0171.s:6), Facade for a
+    user with ``MON_CONDITION_FACADE_BOOST`` (effect_script_0169.s:5), Brine against
+    ``curHP <= maxHP / 2`` (effect_script_0221.s:5-8; ``OPCODE_DIV`` is a plain ``/``,
+    battle_script.c:2711-2712). SmellingSalt's ``CheckSubstitute`` meets no substitute:
+    Substitute is an unsupported move."""
+    move = _i32(move)
+    cond = _i32(tables.move_param[move, 0])
+    user, target = state.active[atk_side], state.active[def_side]
+    paralyzed = state.status[def_side, target] == Status.PARALYSIS
+    statused = jnp.isin(state.status[atk_side, user], jnp.asarray(FACADE_STATUSES, jnp.int8))
+    half = _i32(state.hp[def_side, target]) <= _i32(state.max_hp[def_side, target]) // 2
+    holds = jnp.where(
+        cond == POWER_IF_TARGET_PARALYZED,
+        paralyzed,
+        jnp.where(
+            cond == POWER_IF_USER_STATUSED, statused, half & (cond == POWER_IF_TARGET_HALF_HP)
+        ),
+    )
+    return (tables.move_effect[move] == EffectId.DOUBLE_POWER) & holds
+
+
 def script_power_mul(tables: Tables, state: BattleState, atk_side, move, power_mul) -> jnp.ndarray:
     """``int32``: ``battleCtx->powerMul`` when ``atk_side``'s move script runs ``CalcDamage``:
-    ``RECKLESS_POWER_MUL`` for a Reckless user's ``RECOIL`` move, else ``power_mul``. The
-    trainer AI's estimate and the confusion self-hit run no move script."""
+    ``RECKLESS_POWER_MUL`` for a Reckless user's ``RECOIL`` move, ``DOUBLE_POWER_MUL`` for a
+    ``DOUBLE_POWER`` move whose condition holds (``double_power``; those scripts set 10
+    otherwise), else ``power_mul``. The trainer AI's estimate and the confusion self-hit run no
+    move script."""
     atk_side = _i32(atk_side)
     reckless = state.ability[atk_side, state.active[atk_side]] == AbilityId.RECKLESS
     recoil = tables.move_effect[_i32(move)] == EffectId.RECOIL
-    return jnp.where(reckless & recoil, RECKLESS_POWER_MUL, _i32(power_mul))
+    doubled = double_power(tables, state, atk_side, 1 - atk_side, move)
+    out = jnp.where(reckless & recoil, RECKLESS_POWER_MUL, _i32(power_mul))
+    return jnp.where(doubled, DOUBLE_POWER_MUL, out)
+
+
+def weight_power(tables: Tables, state: BattleState, def_side) -> jnp.ndarray:
+    """``int32``: Grass Knot's / Low Kick's power against ``def_side``'s active battler
+    (``WEIGHT_BOUNDS``): ``BattleMon.weight`` is the species' Pokedex weight
+    (``Pokedex_HeightWeightData_Weight``, battle_lib.c:150), ``tables.species_weight``."""
+    weight = _i32(tables.species_weight[state.species[def_side, state.active[def_side]]])
+    index = jnp.sum(weight > jnp.asarray(WEIGHT_BOUNDS, _I32))
+    return jnp.asarray(WEIGHT_POWER, _I32)[index]
+
+
+def hp_power(state: BattleState, def_side) -> jnp.ndarray:
+    """``int32``: Wring Out's / Crush Grip's power, ``1 + 120 * curHP / maxHP`` of
+    ``def_side``'s active battler (``BtlCmd_CalcWringOutPower``, battle_script.c:7265)."""
+    mon = state.active[def_side]
+    max_hp = jnp.maximum(_i32(state.max_hp[def_side, mon]), 1)
+    return 1 + 120 * _i32(state.hp[def_side, mon]) // max_hp
 
 
 def weather_suppressed(tables: Tables, state: BattleState, active=None) -> jnp.ndarray:
@@ -300,6 +398,9 @@ def fixed_damage(
     chart's immunity bit is still set (:7551), so a type immunity (Foresight-aware) deals
     0.
 
+    Super Fang deals ``Divide(curHP, 2)`` of the defender and an OHKO move its max HP (0
+    against an ignorable Sturdy), both through the immunity like Night Shade.
+
     Bide is fixed too: on its unleash turn (locked with no turns left) it deals
     ``2 * storedDamage`` (``CHECK_STATUS_STATE_BIDE``, battle_controller_player.c:2702); a
     ``RANGE_USER`` move skips the type chart (:2350-2358), so no immunity applies. Any
@@ -317,7 +418,22 @@ def fixed_damage(
     immune = immune | levitated(state, atk_side, def_side, kind)
     unleash = (state.bide_turns[atk_side] == 0) & (state.locked_move[atk_side] != 0)
     stored = jnp.where(unleash, 2 * _i32(state.bide_damage[atk_side]), 0)
-    return is_level | is_bide, jnp.where(is_bide, stored, jnp.where(immune, 0, level))
+    # Super Fang (effect_script_0040.s): Divide(curHP, 2) of the defender under
+    # SYSCTL_IGNORE_TYPE_CHECKS; ApplyTypeMultiplier still flags an immunity (battle_lib.c:
+    # 7544-7552), so a Ghost takes 0.
+    target = state.active[def_side]
+    is_halve = effect == EffectId.HALVE_HP
+    halved = divide(_i32(state.hp[def_side, target]), 2)
+    # Fissure / Guillotine / Horn Drill: BtlCmd_TryOHKOMove (battle_script.c:4334-4386) sets
+    # MOVE_STATUS_ONE_HIT_KO and UpdateHP deals the defender's maxHP (bcp.c:3343-3345); the
+    # chart (power 1, bcp.c:2352-2367: Ghost, Flying, Levitate) and an ignorable Sturdy
+    # (MOVE_STATUS_STURDY, :4340-4341) stop it. Its hit test is outcome._rate's.
+    is_ohko = effect == EffectId.OHKO
+    sturdy = ignorable(state, atk_side, def_side) == AbilityId.STURDY
+    ohko = jnp.where(sturdy, 0, _i32(state.max_hp[def_side, target]))
+    amount = jnp.where(is_ohko, ohko, jnp.where(is_halve, halved, level))
+    fixed = is_level | is_bide | is_halve | is_ohko
+    return fixed, jnp.where(is_bide, stored, jnp.where(immune, 0, amount))
 
 
 def rollout_multiplier(state: BattleState, atk_side) -> jnp.ndarray:
@@ -497,6 +613,11 @@ def _pre_random(
     # CalcRolloutPower (:5661) doubles movePower per use, and again when curled.
     # CalcFlailPower (:4958) reads the attacker's current and max HP.
     rollout_mul = 1 if ai else rollout_multiplier(s, atk_side)
+    # CalcWringOutPower (battle_script.c:7265) and CalcWeightBasedPower (:6808-6826) set
+    # movePower from the defender; the AI's estimate keeps the table power (no case here).
+    defender_power = jnp.where(
+        effect == EffectId.HP_POWER, hp_power(s, def_side), weight_power(tables, s, def_side)
+    )
     variable = jnp.where(
         effect == EffectId.HIDDEN_POWER,
         hidden_power(s.ivs[atk_side, a_slot])[1],
@@ -517,6 +638,8 @@ def _pre_random(
         | ((effect == EffectId.FLAIL) & (not ai))
     )
     power = jnp.where(has_variable, variable, base_power)
+    by_defender = ((effect == EffectId.HP_POWER) | (effect == EffectId.WEIGHT_POWER)) & (not ai)
+    power = jnp.where(by_defender, defender_power, power)
     # BtlCmd_Present (battle_script.c:5795-5800) sets movePower before CalcDamage.
     present = _i32(present)
     drawn = (effect == EffectId.PRESENT) & (present >= 0) & (present < PRESENT_HEAL) & (not ai)
@@ -653,7 +776,9 @@ def _pre_random(
     damage = jnp.where(sun & water, damage // 2, damage)
 
     damage = damage + 2  # :7078
-    damage = jnp.where(crit, damage * CRIT_MUL, damage)  # battle_script.c:1344
+    # battle_script.c:1344, x3 for the attacker's Sniper (battle_lib.c:7142-7144).
+    crit_mul = jnp.where(a_ability == AbilityId.SNIPER, SNIPER_CRIT_MUL, CRIT_MUL)
+    damage = jnp.where(crit, damage * crit_mul, damage)
     return damage, move_type, category, base_power
 
 
@@ -710,7 +835,10 @@ def _finish(
     # x2 entry unless NOT_VERY_EFFECTIVE was set, which it clears instead (and the other way
     # round), so it stands exactly when the product is above neutral; an immunity leaves 0.
     super_effective = first * second > 100
-    solid_rock = super_effective & (d_ability == AbilityId.SOLID_ROCK)
+    # Filter shares Solid Rock's line (:2657-2661, Battler_IgnorableAbility).
+    solid_rock = super_effective & (
+        (d_ability == AbilityId.SOLID_ROCK) | (d_ability == AbilityId.FILTER)
+    )
     damage = jnp.where(solid_rock, divide(damage * 3, 4), damage)
     # :2663-2665 then the attacker's Expert Belt (Battler_HeldItemEffect): damage *
     # (100 + param) / 100 on the same super-effective hit (attackerItemPower, :2578).

@@ -42,10 +42,17 @@ from nuzline.engine.ids import (
     ITEM_ABILITY_IDS,
     ITEM_GRISEOUS_ORB,
     MOVE_FAKE_OUT,
+    MOVE_SLEEP_TALK,
+    MOVE_SNORE,
     MOVE_STRUGGLE,
     POTION_HP_RESTORED,
+    POWER_IF_TARGET_HALF_HP,
+    POWER_IF_TARGET_PARALYZED,
+    POWER_IF_USER_STATUSED,
     PROTECT_CHAIN_MOVES,
     RESIST_ANY_NORMAL,
+    SECRET_POWER_EFFECTS,
+    SNORE_PARAM,
     SPECIES_CLAMPERL,
     SPECIES_CUBONE,
     SPECIES_DIALGA,
@@ -56,10 +63,14 @@ from nuzline.engine.ids import (
     SPECIES_MAROWAK,
     SPECIES_PALKIA,
     SPECIES_PIKACHU,
+    SPIKES_MAX,
+    TAILWIND_TURNS,
     TERRAIN_MOVES,
     TERRAIN_SPECIAL,
     TERRAIN_TYPES,
+    TOXIC_SPIKES_MAX,
     TRI_ATTACK_STATUSES,
+    UNROLLED_EFFECTS,
     UNTRACEABLE_ABILITIES,
     WEATHER_ABILITIES,
     WEATHER_ABILITY_IDS,
@@ -144,6 +155,9 @@ class _Turn:
     pluck_flag: bool = False
     # turnFlags.protecting (cleared at the turn end, lib.c:2231): TryProtection succeeded.
     protecting: list[bool] = field(default_factory=lambda: [False, False])
+    # turnFlags.roosting (subscript_roost.s:11-12, cleared at the turn end): the battler's chart
+    # skips its Flying rows (lib.c:2540-2543) for the rest of the turn.
+    roosting: list[bool] = field(default_factory=lambda: [False, False])
     # SYSCTL_ATTACK_MESSAGE_SHOWN of the current action (script.c:1432), for
     # UpdateMoveBuffers' moveProtect (bcp.c:3936-3942).
     attack_message: bool = False
@@ -151,6 +165,9 @@ class _Turn:
     payout: list[int] = field(default_factory=list)
     # SYSCTL_MOVE_HIT of the current action: a hit's UpdateHP ran (bcp.c:3340, :3441).
     move_hit: bool = False
+    # The defender's physical / specialDamageTaken this action is nonzero (bcp.c:3411-3424):
+    # the Sticky Barb transfer (lib.c:5386-5398) and King's Rock read it.
+    damaged: bool = False
     # moveCur of the current action (Nature Power's called move), for Life Orb's class test.
     move_cur: int = 0
     # ATTACKER_SELF_TURN_FLAGS.shellBellDamageDealt of the current action (bcp.c:3427-3431).
@@ -294,7 +311,8 @@ def _fixed_damage(tables, s: RefState, attacker: int, move: int) -> int:
     unleash is ``2 * storedDamage`` (bcp.c:2702) and ignores the chart (``RANGE_USER``,
     bcp.c:2350-2358); on any other Bide turn nothing is dealt."""
     sd = s.sides[attacker]
-    if _t(tables, "move_effect", move) == EffectId.BIDE:
+    effect = _t(tables, "move_effect", move)
+    if effect == EffectId.BIDE:
         return 2 * sd.bide_damage if sd.locked_move and sd.bide_turns == 0 else 0
     foe = _active(s, 1 - attacker)
     kind = _move_type(tables, s, attacker, move)
@@ -302,6 +320,14 @@ def _fixed_damage(tables, s: RefState, attacker: int, move: int) -> int:
         return 0
     if _levitated(tables, s, attacker, 1 - attacker, kind):
         return 0
+    if effect == EffectId.HALVE_HP:  # effect_script_0040.s: Divide(curHP, 2)
+        return _divide(foe.hp, 2)
+    if effect == EffectId.OHKO:
+        # BtlCmd_TryOHKOMove (script.c:4340-4341): an ignorable Sturdy, MOVE_STATUS_STURDY;
+        # else UpdateHP deals maxHP (bcp.c:3343-3345).
+        if _ignorable(s, attacker, 1 - attacker) == AbilityId.STURDY:
+            return 0
+        return foe.max_hp
     return _active(s, attacker).level
 
 
@@ -512,6 +538,10 @@ def _calc_move_damage(
         power = _flail_power(atk.hp, atk.max_hp)
     elif not in_power and effect == EffectId.ROLLOUT:  # script.c:5661
         power *= _rollout_multiplier(s, attacker)
+    elif not in_power and effect == EffectId.HP_POWER:  # script.c:7265
+        power = 1 + (120 * dfn.hp) // dfn.max_hp
+    elif not in_power and effect == EffectId.WEIGHT_POWER:  # script.c:6808-6826
+        power = _weight_power(tables, dfn)
     move_type = _move_type(tables, s, attacker, move)  # lib.c:6680 (Normalize is unsupported)
     power = power * power_mul // 10  # lib.c:6688
     # lib.c:6698-6702 Technician: movePower <= 60, not Struggle.
@@ -652,8 +682,42 @@ def _calc_move_damage(
             damage //= 2
     damage += 2  # lib.c:7078
     if crit:
-        damage *= 2  # script.c:1344, criticalMul (Sniper is unsupported)
+        # script.c:1344, criticalMul: x3 for Sniper (Battler_Ability, lib.c:7142-7144).
+        damage *= 3 if a_ability == AbilityId.SNIPER else 2
     return damage
+
+
+def _double_power(tables, s: RefState, attacker: int, defender: int, move: int) -> bool:
+    """SmellingSalt against a paralyzed defender (effect_script_0171.s:6), Facade for a user
+    with MON_CONDITION_FACADE_BOOST (effect_script_0169.s:5), Brine against
+    ``curHP <= maxHP / 2`` (effect_script_0221.s:5-8)."""
+    if _t(tables, "move_effect", move) != EffectId.DOUBLE_POWER:
+        return False
+    cond = _t(tables, "move_param", move, 0)
+    foe = _active(s, defender)
+    if cond == POWER_IF_TARGET_PARALYZED:
+        return foe.status == Status.PARALYSIS
+    if cond == POWER_IF_USER_STATUSED:
+        return _active(s, attacker).status in (
+            Status.POISON,
+            Status.TOXIC,
+            Status.BURN,
+            Status.PARALYSIS,
+        )
+    return cond == POWER_IF_TARGET_HALF_HP and foe.hp <= foe.max_hp // 2
+
+
+WEIGHT_TO_POWER = ((100, 20), (250, 40), (500, 60), (1000, 80), (2000, 100))
+
+
+def _weight_power(tables, mon: RefPokemon) -> int:
+    """``BtlCmd_CalcWeightBasedPower`` (script.c:6808-6826, weight_to_power.h): the first
+    bound at least the weight gives the power, else 120."""
+    weight = _t(tables, "species_weight", mon.species)
+    for bound, power in WEIGHT_TO_POWER:
+        if bound >= weight:
+            return power
+    return 120
 
 
 def _variance(damage: int, roll: int) -> int:
@@ -691,7 +755,11 @@ def _apply_type_chart(tables, s: RefState, attacker: int, defender: int, move: i
         if defending == def_types[1] and def_types[0] != def_types[1]:
             damage = _apply_type_multiplier(damage, mul, update, flags)
     # lib.c:2657-2660: Solid Rock (ignorable) on a super-effective hit.
-    if "super" in flags and update and _ignorable(s, attacker, defender) == AbilityId.SOLID_ROCK:
+    if (
+        "super" in flags
+        and update
+        and _ignorable(s, attacker, defender) in (AbilityId.SOLID_ROCK, AbilityId.FILTER)
+    ):
         damage = _divide(damage * 3, 4)
     # lib.c:2663-2665: then the attacker's Expert Belt.
     atk = _active(s, attacker)
@@ -736,7 +804,7 @@ def _move_damage(
     if _t(tables, "move_effect", move) == EffectId.PRESENT and present == PRESENT_HEAL:
         return 0
     defender = 1 - attacker
-    if _t(tables, "move_effect", move) in (EffectId.LEVEL_DAMAGE, EffectId.BIDE):
+    if _t(tables, "move_effect", move) in UNROLLED_EFFECTS:
         return _fixed_damage(tables, s, attacker, move)
     # effect_script_0048.s, _0269.s: a Reckless user's RECOIL move sets powerMul to 12.
     if (
@@ -744,6 +812,9 @@ def _move_damage(
         and _active(s, attacker).ability == AbilityId.RECKLESS
     ):
         power_mul = 12
+    # effect_script_0169.s, _0171.s, _0221.s: powerMul 20 when the condition holds.
+    if _double_power(tables, s, attacker, defender, move):
+        power_mul = 20
     damage = _calc_move_damage(
         tables,
         s,
@@ -813,6 +884,7 @@ def _reset_battler(sd: RefSide) -> None:
         "mud_sport",
         "aqua_ring",
         "infatuated",
+        "destiny_bond",
     ):
         setattr(sd, name, 0)
 
@@ -1365,7 +1437,8 @@ def _hit_resist_berry(turn: _Turn, s: RefState, attacker: int, move: int) -> boo
     power-0 moves."""
     tables = turn.tables
     effect = _t(tables, "move_effect", move)
-    if effect in (EffectId.LEVEL_DAMAGE, EffectId.FORESIGHT):
+    # :5 SYSCTL_IGNORE_TYPE_CHECKS (Night Shade, Foresight, Super Fang), :6 an OHKO hit.
+    if effect in (EffectId.LEVEL_DAMAGE, EffectId.FORESIGHT, EffectId.HALVE_HP, EffectId.OHKO):
         return False
     flags: set[str] = set()
     if effect != EffectId.BIDE and _t(tables, "move_power", move) != 0:
@@ -1384,10 +1457,45 @@ def _big_root(turn: _Turn, s: RefState, side: int, heal: int) -> int:
     return heal * (_t(turn.tables, "item_param", mon.item, 0) + 100) // 100
 
 
+def _entry_hazards(turn: _Turn, s: RefState, side: int) -> None:
+    """``subscript_hazards_check.s``: nothing for Magic Guard (:5); a grounded newcomer (Gravity,
+    or neither Levitate nor a Flying type, :6-11) meets Toxic Spikes (a Poison type absorbs them,
+    one layer poisons, two badly poison: Immunity, Leaf Guard in sun, a status, Poison / Steel
+    stop it; script.c:7629-7651, subscript_poison.s / _badly_poison.s:5-10) and Spikes
+    (``Divide(maxHP, (5 - layers) * 2)`` with HP left, script.c:5434-5436); then Stealth Rock."""
+    tables = turn.tables
+    mon, sd = _active(s, side), s.sides[side]
+    if mon.ability == AbilityId.MAGIC_GUARD:
+        return
+    airborne = mon.ability == AbilityId.LEVITATE or Type.FLYING in mon.types
+    if s.gravity or not airborne:
+        if sd.toxic_spikes:
+            if Type.POISON in mon.types:
+                sd.toxic_spikes = 0
+            else:
+                status = Status.TOXIC if sd.toxic_spikes >= 2 else Status.POISON
+                ability = _decomp_ability(tables, mon)
+                leaf = (
+                    ability == ITEM_ABILITY_IDS["Leaf Guard"]
+                    and s.weather == Weather.SUN
+                    and not _weather_suppressed(tables, s)
+                )
+                if (
+                    ability != ITEM_ABILITY_IDS["Immunity"]
+                    and not leaf
+                    and _can_have_status(tables, s, side, status)
+                ):
+                    mon.status, mon.status_counter = status, 0
+        if sd.spikes and mon.hp:
+            _lose_hp(turn, s, side, _divide(mon.max_hp, (5 - sd.spikes) * 2))
+    _stealth_rock_damage(turn, s, side)
+
+
 def _stealth_rock_damage(turn: _Turn, s: RefState, side: int) -> None:
     """``subscript_hazards_check.s`` -> ``BtlCmd_CheckStealthRock`` (script.c:8302)."""
     mon = _active(s, side)
-    if not s.sides[side].stealth_rock or mon.hp == 0:
+    # subscript_hazards_check.s:5: a Magic Guard newcomer skips every hazard.
+    if not s.sides[side].stealth_rock or mon.hp == 0 or mon.ability == AbilityId.MAGIC_GUARD:
         return
     mul = _matchup_x40(turn.tables, Type.ROCK, mon.types)
     if mul == 0:  # TYPE_MULTI_IMMUNE
@@ -1717,6 +1825,13 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
     target = 1 - side
     effect = _t(tables, "move_effect", move)
     p0, p1 = _t(tables, "move_param", move, 0), _t(tables, "move_param", move, 1)
+    if effect == EffectId.SECRET_POWER:
+        # effect_script_0197.s GetTerrainSecondaryEffect (script.c:8063-8075).
+        row = _terrain_row(s)
+        if row is None:
+            effect = EffectId.PLAIN
+        else:
+            effect, (p0, p1, _) = SECRET_POWER_EFFECTS[row]
     chance = _t(tables, "move_effect_chance", move)
     certain = chance == 0
     proc = certain or o.secondary[side][hit] != 0
@@ -1811,7 +1926,8 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
         _gain_hp(s, side, _big_root(turn, s, side, _divide(dealt * p0, 100)))
     elif effect == EffectId.RECOIL and effective and dealt > 0:
         # subscript_recoil_1_{2,4}.s; Rock Head prevents it.
-        if _active(s, side).ability != AbilityId.ROCK_HEAD:
+        # Magic Guard: subscript_recoil_1_2.s / _1_4.s:6.
+        if _active(s, side).ability not in (AbilityId.ROCK_HEAD, AbilityId.MAGIC_GUARD):
             _lose_hp(turn, s, side, _divide(dealt * p0, 100))
     elif effect == EffectId.STEALTH_ROCK and landed:
         # effect_script_0266.s: fails when the foe's side already has it.
@@ -1897,6 +2013,38 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
             ):
                 extra = _t(tables, "item_param", user.item, 0)
             s.weather, s.weather_timer = p0, WEATHER_TURNS + extra
+    elif effect == EffectId.DOUBLE_POWER and effective and p1 == 1:
+        # effect_script_0171.s:12: an ON_HIT indirect subscript_heal_target_paralysis.s
+        # against a defender paralyzed when the script ran: cured when it has HP left (:5-6).
+        foe = _active(s, target)
+        if foe.hp and foe.status == Status.PARALYSIS:
+            foe.status, foe.status_counter = Status.NONE, 0
+    elif effect == EffectId.SWAGGER and landed and target_alive:
+        # subscript_swagger.s: Attack +2 below +6 (:6), then subscript_confuse.s unless
+        # confused (:13; Random 3, 2 turns).
+        if s.sides[target].stages[Stat.ATK] < 6:
+            _change_stage(s, target, Stat.ATK, 2)
+        if not s.sides[target].confusion:
+            s.sides[target].confusion = o.duration[side]
+    elif effect == EffectId.ROOST and landed:
+        # subscript_roost.s: Divide(maxHP, 2) unless at full HP, then turnFlags.roosting.
+        user = _active(s, side)
+        if user.hp != user.max_hp:
+            _gain_hp(s, side, _divide(user.max_hp, 2))
+            turn.roosting[side] = True
+    elif effect == EffectId.TAILWIND and landed and not s.sides[side].tailwind:
+        s.sides[side].tailwind = TAILWIND_TURNS  # subscript_tailwind_start.s:11
+    elif effect == EffectId.SPIKES and landed and s.sides[target].spikes < SPIKES_MAX:
+        s.sides[target].spikes += 1  # BtlCmd_TrySpikes (script.c:5388-5403)
+    elif effect == EffectId.TOXIC_SPIKES and landed:
+        if s.sides[target].toxic_spikes < TOXIC_SPIKES_MAX:  # script.c:7592-7605
+            s.sides[target].toxic_spikes += 1
+    elif effect == EffectId.DESTINY_BOND and landed:
+        s.sides[side].destiny_bond = 1  # subscript_destiny_bond.s:9
+    elif effect == EffectId.DRAGON_DANCE and landed and _active(s, side).hp > 0:
+        # subscript_user_atk_and_speed_up_1_stage.s:13-16: Attack +1, Speed +1.
+        _change_stage(s, side, Stat.ATK, 1)
+        _change_stage(s, side, Stat.SPE, 1)
     elif effect == EffectId.ROLLOUT and landed:
         # BtlCmd_CalcRolloutPower (script.c:5661): rolloutCount starts at 5 on a first use,
         # every use decrements it, the lock ends at 0; a hit that dealt nothing (an
@@ -1940,9 +2088,11 @@ def _contact_ability(turn: _Turn, s: RefState, side: int, move: int, hit: int, e
     if not (contact and effective and dealt > 0 and attacker.hp > 0):
         return
     if ability == AbilityId.ROUGH_SKIN:
-        _lose_hp(turn, s, side, _divide(attacker.max_hp, 8))
-        if target == 0:
-            s.ai_ability_known[s.sides[0].active] = 1
+        # lib.c:4259: no subscript (and no ability tag) for a Magic Guard attacker.
+        if attacker.ability != AbilityId.MAGIC_GUARD:
+            _lose_hp(turn, s, side, _divide(attacker.max_hp, 8))
+            if target == 0:
+                s.ai_ability_known[s.sides[0].active] = 1
         return
     if ability == AbilityId.CUTE_CHARM:
         # lib.c:4339-4355: an attacker not in love, a living defender, then the roll;
@@ -2088,16 +2238,25 @@ def _hit(turn: _Turn, s: RefState, side: int, move: int, hit: int, struggling: b
     update_hp = landed and hits_foe and damage > 0
     if update_hp:
         turn.move_hit = True  # BattleControllerPlayer_UpdateHP: SYSCTL_MOVE_HIT (bcp.c:3441)
+    taken = 0
     if landed and hits_foe:
         # BattleControllerPlayer_UpdateHP (bcp.c:3346-3404) runs for a non-zero damage:
         # a Focus Sash at full HP sets focusItemActivated, which lasts the whole action.
         if damage > 0 and _sash_at_full_hp(turn, s, target):
             turn.focus_armed = True
+        # bcp.c:3381-3384, before the endure checks: False Swipe leaves 1 HP.
+        swipe = _t(tables, "move_effect", move) == EffectId.FALSE_SWIPE
+        if swipe and damage > 0 and damage >= target_mon.hp:
+            damage = target_mon.hp - 1
         taken = _focus_sash(turn, s, target, damage, turn.focus_armed)  # battleCtx->damage
         if update_hp:  # shellBellDamageDealt (bcp.c:3427-3431): capped at the target's HP
             turn.shell_dealt += min(taken, target_mon.hp)
+        # physical / specialDamageTaken (bcp.c:3411-3424): nonzero damage after the caps,
+        # read by the Sticky Barb transfer and King's Rock.
+        if update_hp and taken:
+            turn.damaged = True
         # subscript_update_hp.s: the resist berry halves hpCalcTemp (BattleSystem_Divide).
-        if damage > 0 and _hit_resist_berry(turn, s, side, move):
+        if taken > 0 and _hit_resist_berry(turn, s, side, move):
             dealt = _lose_hp(turn, s, target, _divide(taken, 2))
             stored = taken
         else:
@@ -2137,6 +2296,7 @@ def _hit(turn: _Turn, s: RefState, side: int, move: int, hit: int, struggling: b
     # no Inner Focus as the attacker sees it.
     if (
         update_hp
+        and taken
         and _item_effect(tables, _active(s, side)) == ItemId.KINGS_ROCK
         and o.flinch_item[side][hit]
         and _t(tables, "move_flags", move) & MoveFlag.KINGS_ROCK
@@ -2164,9 +2324,12 @@ def _status_disrupted(turn: _Turn, s: RefState, side: int, move: int) -> int:
             mon.status = Status.NONE
         else:
             mon.status_counter -= 1
+            # bcp.c:2455: a sleeping battler still uses Snore or Sleep Talk.
             if mon.status_counter > 0:
-                return DISRUPTED
-            mon.status = Status.NONE
+                if move not in (MOVE_SNORE, MOVE_SLEEP_TALK):
+                    return DISRUPTED
+            else:
+                mon.status = Status.NONE
     # CHECK_STATUS_STATE_FREEZE (bcp.c:2478): RandNext() % 5 == 0 thaws; otherwise the
     # move stops unless it is a thawing move (it thaws at SELF_THAW below).
     still_frozen = False
@@ -2228,7 +2391,12 @@ def _status_disrupted(turn: _Turn, s: RefState, side: int, move: int) -> int:
             return HURT_ITSELF
     # CHECK_STATUS_STATE_PARALYSIS (bcp.c:2652): RandNext() % 4 == 0 (Magic Guard is
     # unsupported).
-    if mon.status == Status.PARALYSIS and o.full_para[side]:
+    # Magic Guard (Battler_Ability) skips the check before the draw (bcp.c:2652-2654).
+    if (
+        mon.status == Status.PARALYSIS
+        and mon.ability != AbilityId.MAGIC_GUARD
+        and o.full_para[side]
+    ):
         _unlock(sd)  # subscript_fully_paralyzed.s
         return DISRUPTED
     # CHECK_STATUS_STATE_ATTRACT (bcp.c:2669-2692): in love, RandNext() & 1 == 0 immobilizes
@@ -2297,8 +2465,16 @@ def _hit_rate(tables, s: RefState, attacker: int, move: int, target_moved: bool 
         rate = rate * (100 + _t(tables, "item_param", atk.item, 0)) // 100
     if s.gravity:  # FIELD_CONDITION_GRAVITY, :2972
         rate = rate * 10 // 6
+    no_guard = AbilityId.NO_GUARD in (atk.ability, _active(s, defender).ability)
+    if _t(tables, "move_effect", move) == EffectId.OHKO:
+        # BtlCmd_TryOHKOMove (script.c:4334-4386): its own test, nothing above (the
+        # nonstandard check): accuracy + level difference at a level not lower, No Guard 100.
+        diff = atk.level - foe.level
+        if diff < 0:
+            return 0
+        return 100 if no_guard else _t(tables, "move_accuracy", move) + diff
     # CheckMoveHitOverrides (bcp.c:3016-3021): either battler's No Guard clears the miss.
-    if AbilityId.NO_GUARD in (atk.ability, _active(s, defender).ability):
+    if no_guard:
         return 100
     return rate
 
@@ -2324,6 +2500,7 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
     if turn.custap[side]:
         turn.custap[side] = False
         mon.item_consumed, mon.item = mon.item, 0
+    s.sides[side].destiny_bond = 0  # CHECK_STATUS_START (bcp.c:2425)
     # UpdateMoveBuffers (bcp.c:3945-3949), reached on every path of a battler that acts:
     # movePrevByBattler is MOVE_NONE unless the move succeeded (below).
     s.sides[side].last_move = 0
@@ -2374,6 +2551,11 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
     effect = _t(tables, "move_effect", move)
     if effect == EffectId.FAKE_OUT and s.sides[side].fake_out_turn != s.turn:
         _unlock(s.sides[side])  # subscript_missed.s
+        return record
+    # Snore (effect_script_0092.s:5): MOVE_STATUS_FAILED unless the user is asleep.
+    snore = effect == EffectId.FLINCH and _t(tables, "move_param", move, 2) == SNORE_PARAM
+    if snore and mon.status != Status.SLEEP:
+        _unlock(s.sides[side])
         return record
     # effect_script_0007.s (Selfdestruct, Explosion): Damp (unsupported) aside, the script
     # sets the user's HP to 0 here, before the accuracy check and the type chart. It faints
@@ -2447,7 +2629,9 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
     hits = 1
     if effect == EffectId.MULTI_HIT:
         hits = _t(tables, "move_param", move, 0) or o.n_hits[side]
-    turn.focus_armed = turn.pluck_flag = False  # BattleContext_Init ended the last action
+    foe_mon0 = _active(s, 1 - side)
+    foe_hp0 = foe_mon0.hp
+    turn.focus_armed = turn.pluck_flag = turn.damaged = False  # BattleContext_Init
     for hit in range(hits):
         # BattleControllerPlayer_LoopMultiHit (bcp.c:3780) stops once a battler fainted
         # (faintedMon): the target, or the attacker by Rough Skin.
@@ -2461,6 +2645,22 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
         full = (effect == EffectId.RECOVER and user.hp == user.max_hp) or (
             heal and foe.hp == foe.max_hp > 0
         )
+        # subscript_swagger.s:7-8 (MOVE_STATUS_FAILED), and Dragon Dance with both stages at +6
+        # (MOVE_STATUS_NO_MORE_WORK): CheckMoveFailure skips AfterMoveEffects (bcp.c:3312-3331).
+        own, theirs = s.sides[side].stages, s.sides[1 - side].stages
+        full = full or (
+            effect == EffectId.SWAGGER and theirs[Stat.ATK] >= 6 and s.sides[1 - side].confusion
+        )
+        full = full or (
+            effect == EffectId.DRAGON_DANCE and own[Stat.ATK] >= 6 and own[Stat.SPE] >= 6
+        )
+        # Roost at full HP (subscript_recover_hp.s), Tailwind up, full Spikes / Toxic Spikes.
+        full = full or (effect == EffectId.ROOST and user.hp == user.max_hp)
+        full = full or (effect == EffectId.TAILWIND and s.sides[side].tailwind != 0)
+        full = full or (effect == EffectId.SPIKES and s.sides[1 - side].spikes >= SPIKES_MAX)
+        full = full or (
+            effect == EffectId.TOXIC_SPIKES and s.sides[1 - side].toxic_spikes >= TOXIC_SPIKES_MAX
+        )
         dealt, _ = _hit(turn, s, side, move, hit, struggling, target_moved)
         if full:
             continue
@@ -2473,12 +2673,23 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
         for battler in (side, 1 - side):
             if _held_item(turn, s, battler, keep=turn.pluck_flag):
                 turn.pluck_flag = False
-        if turn.move_hit:
+        if turn.damaged:
             _sticky_barb_transfer(turn, s, side, 1 - side, move)
         _thaw_target(turn, s, side, move, dealt)
         for battler in (side, 1 - side):
             if _held_item(turn, s, battler, keep=turn.pluck_flag):
                 turn.pluck_flag = False
+    # LOOP_FAINTED (bcp.c:3820-3823): subscript_faint_check_destiny_bond.s takes a living
+    # attacker down with a defender that fainted holding Destiny Bond.
+    foe_now = _active(s, 1 - side)
+    if (
+        foe_hp0 > 0
+        and foe_now is foe_mon0
+        and foe_now.hp == 0
+        and s.sides[1 - side].destiny_bond
+        and mon.hp > 0
+    ):
+        _lose_hp(turn, s, side, mon.hp)
     if unleash:  # the unleash script spent the Bide counter (bcp.c:2702, subscript_bide_end.s)
         _unlock(s.sides[side])
         record = move
@@ -2518,7 +2729,7 @@ def _roar(turn: _Turn, s: RefState, side: int) -> bool:
         out.status_counter = 0
     _enter(turn, s, foe, slot)
     _send_out_exp(s, foe)  # PokemonSendOut BTLSCR_DEFENDER (:22)
-    _stealth_rock_damage(turn, s, foe)  # BATTLE_SUBSCRIPT_HAZARDS_CHECK (:31)
+    _entry_hazards(turn, s, foe)  # BATTLE_SUBSCRIPT_HAZARDS_CHECK (:31)
     _switch_in_effects(turn, s, foe)
     turn.done[foe] = True
     return True
@@ -2566,6 +2777,10 @@ def _pursuit(turn: _Turn, s: RefState, side: int, actions, choices) -> None:
     target_hp = _active(s, side).hp
     dealt = _lose_hp(turn, s, side, taken)
     _contact_ability(turn, s, pursuer, move, 0, damage > 0, dealt)
+    # subscript_pursuit.s:85: a switcher that fainted holding Destiny Bond takes the living
+    # pursuer down (subscript_faint_check_destiny_bond.s), before the items (:90, :94-95).
+    if target_hp > 0 and _active(s, side).hp == 0 and s.sides[side].destiny_bond and mon.hp > 0:
+        _lose_hp(turn, s, pursuer, mon.hp)
     # subscript_pursuit.s:44 / :90: TriggerHeldItemOnHit (the Sticky Barb); then :48-49
     # (:94-95 after a KO): SYSCTL_MOVE_HIT, TriggerHeldItemOnPivotMove: Shell Bell on the
     # script's shellBellDamageDealt (:21-29: the damage before CheckHoldOnWith1HP, capped at
@@ -2597,7 +2812,7 @@ def _switch(turn: _Turn, s: RefState, side: int, slot: int, actions, choices) ->
         mon.status_counter = 0
     _enter(turn, s, side, slot)
     _send_out_exp(s, side)  # subscript_switch_pokemon.s:39
-    _stealth_rock_damage(turn, s, side)  # :43
+    _entry_hazards(turn, s, side)  # :43
     _switch_in_effects(turn, s, side)
 
 
@@ -2762,7 +2977,7 @@ def _leech_seed_check(turn: _Turn, s: RefState, side: int) -> None:
     if not s.sides[side].leech_seed:
         return
     mon, recipient = _active(s, side), _active(s, 1 - side)
-    if mon.hp and recipient.hp:
+    if mon.hp and recipient.hp and mon.ability != AbilityId.MAGIC_GUARD:  # bcp.c:1381
         lost = _lose_hp(turn, s, side, max(mon.max_hp // 8, 1))
         # subscript_leech_seed_effect.s: the recipient gains hitDamage, Big Root applied.
         _gain_hp(s, 1 - side, _big_root(turn, s, 1 - side, lost))
@@ -2770,7 +2985,8 @@ def _leech_seed_check(turn: _Turn, s: RefState, side: int) -> None:
 
 def _poison_check(turn: _Turn, s: RefState, side: int) -> None:
     mon = _active(s, side)
-    if mon.status == Status.POISON and mon.hp:
+    # subscript_poison_damage.s:5: not for Magic Guard.
+    if mon.status == Status.POISON and mon.hp and mon.ability != AbilityId.MAGIC_GUARD:
         _lose_hp(turn, s, side, _divide(mon.max_hp, 8))
 
 
@@ -2780,13 +2996,15 @@ def _toxic_check(turn: _Turn, s: RefState, side: int) -> None:
     if mon.status == Status.TOXIC and mon.hp:
         if mon.status_counter < TOXIC_COUNTER_MAX:
             mon.status_counter += 1
-        _lose_hp(turn, s, side, _divide(mon.max_hp, 16) * mon.status_counter)
+        if mon.ability != AbilityId.MAGIC_GUARD:  # subscript_poison_damage.s:5
+            _lose_hp(turn, s, side, _divide(mon.max_hp, 16) * mon.status_counter)
 
 
 def _burn_check(turn: _Turn, s: RefState, side: int) -> None:
     """``subscript_burn_damage.s``: ``DivideVarByValue`` maxHP by 8."""
     mon = _active(s, side)
-    if mon.status == Status.BURN and mon.hp:
+    # subscript_burn_damage.s:5: not for Magic Guard.
+    if mon.status == Status.BURN and mon.hp and mon.ability != AbilityId.MAGIC_GUARD:
         _lose_hp(turn, s, side, _divide(mon.max_hp, 8))
 
 
@@ -2797,7 +3015,8 @@ def _bind_check(turn: _Turn, s: RefState, side: int) -> None:
     if sd.trapped and mon.hp:
         sd.trapped -= 1
         if sd.trapped:
-            _lose_hp(turn, s, side, _divide(mon.max_hp, 16))
+            if mon.ability != AbilityId.MAGIC_GUARD:  # subscript_bind_effect.s:5
+                _lose_hp(turn, s, side, _divide(mon.max_hp, 16))
         else:
             sd.trap_move = 0
 
@@ -2940,12 +3159,20 @@ def ref_step(tables, state: RefState, actions: tuple[int, int], outcome) -> RefS
             _switch(turn, s, side, actions[side] - MOVE_ACTIONS, actions, choices)
         else:
             move, struggling, locked = choices[side]
-            turn.attack_message = turn.move_hit = False
+            turn.attack_message = turn.move_hit = turn.damaged = False
             turn.move_cur = move
             turn.shell_dealt = 0
+            # A foe that roosted this turn: the move's chart skips its Flying rows
+            # (lib.c:2540-2543); only the chart reads the target's types for Flying.
+            foe = _active(s, 1 - side)
+            saved = list(foe.types)
+            if turn.roosting[1 - side]:
+                foe.types = [Type.MYSTERY if t == Type.FLYING else t for t in foe.types]
             record = _fight(
                 turn, s, side, actions[side], move, struggling, locked, target_moved=position == 1
             )
+            if _active(s, 1 - side) is foe:
+                foe.types = saved
             # TRIGGER_AFTER_HIT_EFFECTS (bcp.c:3897-3915): Shell Bell (:4736-4752), then Life
             # Orb's recoil, which needs SYSCTL_MOVE_HIT and a non-status moveCur (:4758-4772).
             if turn.move_hit:
@@ -3035,7 +3262,7 @@ def ref_replace(tables, state: RefState, side: int, slot: int) -> RefState:
     # subscript_show_party_list.s:18 / :22, and subscript_replace_fainted.s:58 / :62 in shift
     # style (the same order): the exp flag at the send-out, then the hazards.
     _send_out_exp(s, side)
-    _stealth_rock_damage(turn, s, side)
+    _entry_hazards(turn, s, side)
     _faint_check(turn, s)
     # TurnEnd's AnyExpPayout (bcp.c:1846) for a newcomer the hazards fainted. Learn work it
     # leaves inside the opponent's replacement loop is refused (window (c), design §3.3).

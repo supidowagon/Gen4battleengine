@@ -602,9 +602,15 @@ def test_kaizo_nature_power_on_roarks_terrain(kaizo_tables, kaizo_names, kaizo_r
 
 
 def test_coverage_refuses_an_unsupported_call(tables, names, trainers):
+    """Nature Power is refused where its terrain's call has an unsupported effect. Earthquake
+    (TERRAIN_PLAIN's call) is supported since E2 batch 4 (B4-8), so the branch is shown with its
+    effect made unsupported."""
     roark = next(t for t in trainers if t.id == ROARK)
     assert terrain_refusal(tables, names, roark, [names.move(NP)]) is None
     plain = roark.__class__(**{**roark.__dict__, "terrain": TERRAIN_NAMES.index("TERRAIN_PLAIN")})
-    line = terrain_refusal(tables, names, plain, [names.move(NP), names.move(CAMO)])
+    assert terrain_refusal(tables, names, plain, [names.move(NP), names.move(CAMO)]) is None
+    quake = names.move("Earthquake")
+    gone = tables._replace(move_effect=tables.move_effect.at[quake].set(EffectId.UNSUPPORTED))
+    line = terrain_refusal(gone, names, plain, [names.move(NP), names.move(CAMO)])
     assert line is not None and "Earthquake" in line
-    assert terrain_refusal(tables, names, plain, [names.move(CAMO)]) is None
+    assert terrain_refusal(gone, names, plain, [names.move(CAMO)]) is None

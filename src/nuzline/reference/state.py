@@ -76,6 +76,7 @@ class RefSide:
     mud_sport: int
     aqua_ring: int
     infatuated: int
+    destiny_bond: int
     spikes: int
     toxic_spikes: int
     stealth_rock: int

@@ -314,6 +314,14 @@ INPUT_MOVES = (
     "Absorb",
     "Take Down",
     "Brick Break",
+    # E2 batch 4: the clause effects (Swagger's Attack, SmellingSalt's cure) and the defender's
+    # power moves.
+    "Swagger",
+    "SmellingSalt",
+    "Grass Knot",
+    "False Swipe",
+    "Brine",
+    "Facade",
 )
 INPUT_ABILITIES = (
     AbilityId.GUTS,

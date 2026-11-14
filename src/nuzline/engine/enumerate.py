@@ -189,7 +189,9 @@ from nuzline.engine.damage import (
 from nuzline.engine.effects import can_have_status, protect_blocks
 from nuzline.engine.ids import (
     QUICK_CLAW_MODULUS,
+    TAILWIND_TURNS,
     TRI_ATTACK_STATUSES,
+    UNROLLED_EFFECTS,
     WEATHER_ABILITY_IDS,
     AbilityId,
     EffectId,
@@ -207,6 +209,7 @@ from nuzline.engine.order import (
     effective_speed,
     is_item,
     is_switch,
+    move_effects,
     selected_move,
     truant_loafs,
 )
@@ -320,14 +323,15 @@ def _any_of(x, values) -> jnp.ndarray:
     return out
 
 
-def _inflicts(tables: Tables, moves, status) -> jnp.ndarray:
+def _inflicts(tables: Tables, state: BattleState, moves, status) -> jnp.ndarray:
     """The move can inflict ``status`` on the foe (``STATUS_FOE`` / ``SECONDARY_STATUS`` /
     ``FANG_PARALYZE_FLINCH`` with ``move_param[m, 0]``, effects._inflict, effects._fang; and
-    ``TRI_ATTACK`` any of ``TRI_ATTACK_STATUSES``, effects._tri_attack)."""
-    effect = tables.move_effect[moves]
+    ``TRI_ATTACK`` any of ``TRI_ATTACK_STATUSES``, effects._tri_attack), Secret Power by its
+    terrain's effect (``order.move_effects``)."""
+    effect, params = move_effects(tables, state, moves)
     status_effect = _any_of(effect, (_E.STATUS_FOE, _E.SECONDARY_STATUS, _E.FANG_PARALYZE_FLINCH))
     tri = (effect == _E.TRI_ATTACK) & (status in TRI_ATTACK_STATUSES)
-    return (status_effect & (tables.move_param[moves, 0] == status)) | tri
+    return (status_effect & (params[..., 0] == status)) | tri
 
 
 def _entry_abilities(tables: Tables, state: BattleState, actions) -> jnp.ndarray:
@@ -372,6 +376,7 @@ def _end_speeds(
     dragged,
     lock_free,
     weather_free=False,
+    tailwind_free=False,
 ):
     """``(int32[3 * (27 + 4 * SLOTS)], bool[...])``: the effective speeds ``side`` can have
     after the actions (``step.end_of_turn_order`` on the post-action state, step.py:1251-1261)
@@ -395,7 +400,8 @@ def _end_speeds(
 
     Quick Feet (:1257-1261) reads any status: for a holder the grid's paralyzed points stand
     for every status (x15/10, no quartering), and the caller frees them
-    (``para_free``)."""
+    (``para_free``). Where ``tailwind_free`` (the side's own Tailwind can blow this turn,
+    effects._side_layers), every point is also taken with Tailwind's x2 (battle_lib.c:1274-1276)."""
     switching = is_switch(actions[side])
     mon = jnp.where(switching, actions[side] - MOVE_ACTIONS, state.active[side]).astype(
         state.active.dtype
@@ -450,11 +456,24 @@ def _end_speeds(
         ]
     )
 
-    def speed(mon, stage, para, lock):
+    # Tailwind: 0 = as on the field, 1 = blowing (its own move this turn).
+    n = stages.shape[0]
+    winds = jnp.repeat(jnp.arange(2), n)
+    mons, stages, paras, locks = (jnp.tile(x, 2) for x in (mons, stages, paras, locks))
+    possible = jnp.concatenate([possible, possible & jnp.asarray(tailwind_free, bool)])
+
+    def speed(mon, stage, para, lock, wind):
         s = state._replace(
+            tailwind=state.tailwind.at[side].set(
+                jnp.where(wind == 1, TAILWIND_TURNS, state.tailwind[side]).astype(
+                    state.tailwind.dtype
+                )
+            ),
+        )
+        s = s._replace(
             active=state.active.at[side].set(mon),
-            stages=state.stages.at[side, Stat.SPE].set(stage.astype(state.stages.dtype)),
-            status=state.status.at[side, mon].set(
+            stages=s.stages.at[side, Stat.SPE].set(stage.astype(s.stages.dtype)),
+            status=s.status.at[side, mon].set(
                 jnp.where(para, Status.PARALYSIS, Status.NONE).astype(state.status.dtype)
             ),
         )
@@ -462,7 +481,7 @@ def _end_speeds(
         weather = jnp.where(lock == 3, Weather.RAIN, s.weather).astype(s.weather.dtype)
         return effective_speed(tables, s, side, suppressed, weather)
 
-    return jax.vmap(speed)(mons, stages, paras, locks), possible
+    return jax.vmap(speed)(mons, stages, paras, locks, winds), possible
 
 
 def _branch_masks(foe_first, first_self, base: dict) -> dict:
@@ -562,6 +581,22 @@ INPUT_NEUTRAL_EFFECTS = (
     # Sets the foe's infatuated, read only by its attract check, which comes before its move
     # and removes the hit altogether (step._use_move), like a flinch: no damage input.
     _E.ATTRACT,
+    # E2 batch 4. The defender's HP or the attacker's power only (the HP clause covers HP).
+    _E.HP_POWER,
+    _E.WEIGHT_POWER,
+    _E.HALVE_HP,
+    _E.OHKO,
+    _E.FALSE_SWIPE,
+    # The user's Attack and Speed: no input of the foe's hit (it reads the user's Defense).
+    _E.DRAGON_DANCE,
+    # The side conditions of Tailwind (speed), Spikes and Toxic Spikes (a newcomer: the switch /
+    # roar clauses), and Destiny Bond (a faint: no hit follows).
+    _E.TAILWIND,
+    _E.SPIKES,
+    _E.TOXIC_SPIKES,
+    _E.DESTINY_BOND,
+    # Never read here: order.move_effects resolves it to its terrain's secondary effect.
+    _E.SECRET_POWER,
     # Never the effect read here: the predicate reads the move each action runs
     # (order.called_move), Nature Power's call; an unresolved one (unknown terrain, refused
     # by coverage) calls MOVE_NONE and does nothing.
@@ -600,6 +635,13 @@ INPUT_CLAUSE_EFFECTS = (
     # The weather (rain / sun on Fire and Water, the sandstorm Sp. Def boost, Solar Power):
     # the weather clause.
     _E.WEATHER,
+    # SmellingSalt cures the side's paralysis (effects._cure_paralysis): the status clause
+    # under Guts.
+    _E.DOUBLE_POWER,
+    # Raises the side's Attack (effects._swagger): the stat clause on a physical hit.
+    _E.SWAGGER,
+    # The roosting foe's chart (damage.chart_types): the roost clause.
+    _E.ROOST,
 )
 INPUT_NEUTRAL_ABILITIES = (
     AbilityId.NONE,
@@ -652,6 +694,11 @@ INPUT_NEUTRAL_ABILITIES = (
     AbilityId.TRUANT,  # removes its holder's hit
     AbilityId.LIGHTNINGROD,  # no effect in singles
     AbilityId.HONEY_GATHER,  # after the battle
+    # E2 batch 4: fixed damage factors of the hit's own battlers (damage._pre_random,
+    # _finish); Magic Guard only spares its holder HP losses (the HP clause).
+    AbilityId.FILTER,
+    AbilityId.SNIPER,
+    AbilityId.MAGIC_GUARD,
 )
 INPUT_CLAUSE_ABILITIES = (
     AbilityId.GUTS,  # status clause
@@ -730,6 +777,8 @@ INPUT_NEUTRAL_ITEMS = (
     ItemId.LIGHT_CLAY,
     # Only the weather's duration (effects._weather); the weather is its move's clause.
     ItemId.WEATHER_ROCK,
+    # The crit odds (outcome.crit_odds): a crit is the hit's own draw.
+    ItemId.CRIT_ITEM,
 )
 INPUT_CLAUSE_ITEMS = (
     ItemId.ORAN_BERRY,  # the attacker's HP: HP clause
@@ -787,6 +836,12 @@ TABLE_DAMAGE_EFFECTS = (
     _E.FLAIL,
     _E.FANG_PARALYZE_FLINCH,
     _E.TRI_ATTACK,  # a plain hit at its table power; the status is after the damage
+    # The defender's weight, fixed per species: a new defender is the switch clause.
+    _E.WEIGHT_POWER,
+    # A table hit whose secondary effect is the terrain's (never read: resolved).
+    _E.SECRET_POWER,
+    # Its table damage, capped after the roll (effects.play_hit) by the target's HP alone.
+    _E.FALSE_SWIPE,
 )
 NON_TABLE_DAMAGE_EFFECTS = (
     _E.STAT_SELF,
@@ -815,6 +870,19 @@ NON_TABLE_DAMAGE_EFFECTS = (
     _E.CAMOUFLAGE,  # a status move: no damage
     _E.ROAR,  # a status move: no damage
     _E.WEATHER,  # a status move: no damage
+    # Power from the defender's HP or status, or the user's status, at the hit: not the
+    # turn-start table's when either changes first (effects, the foe's own move or items).
+    _E.DOUBLE_POWER,
+    _E.HP_POWER,
+    _E.HALVE_HP,  # no roll (damage.fixed_damage)
+    _E.OHKO,  # no roll
+    _E.SWAGGER,  # status moves: no damage
+    _E.DRAGON_DANCE,
+    _E.ROOST,
+    _E.TAILWIND,
+    _E.SPIKES,
+    _E.TOXIC_SPIKES,
+    _E.DESTINY_BOND,
     # Its table power is 0: its damage is the called move's. outcome_laws reads the called
     # move (order.called_move), whose own effect decides (Tri Attack's is a table hit), so
     # this entry only keeps an unresolved Nature Power (unknown terrain) uncompressed.
@@ -879,8 +947,8 @@ def damage_inputs_can_change(tables: Tables, state: BattleState, actions, foe_fi
     chosen = jnp.stack([selected_move(tables, state, side, actions[side])[0] for side in (0, 1)])
     moves = jnp.stack([called_move(tables, state, chosen[side]) for side in (0, 1)])
     uses_move = live & ~is_switch(actions) & ~is_item(actions)
-    effect = tables.move_effect[moves]
-    param0 = tables.move_param[moves, 0]
+    effect, params = move_effects(tables, state, moves)  # Secret Power's terrain effect
+    param0 = params[:, 0]
     category = tables.move_category[moves]
     move_type = jnp.stack([move_type_of(tables, state, side, moves[side]) for side in (0, 1)])
     ability = state.ability[sides, mons]
@@ -910,7 +978,7 @@ def damage_inputs_can_change(tables: Tables, state: BattleState, actions, foe_fi
         foe_effect,
         (_E.STATUS_FOE, _E.SECONDARY_STATUS, _E.FANG_PARALYZE_FLINCH, _E.TRI_ATTACK),
     )
-    foe_burns = _inflicts(tables, moves[::-1], Status.BURN)
+    foe_burns = _inflicts(tables, state, moves[::-1], Status.BURN)
     foe_move = uses_move[::-1] & (
         unclassified
         | (_any_of(foe_effect, (_E.STAT_FOE, _E.SECONDARY_STAT_FOE)) & (foe_param0 == attack_stat))
@@ -920,6 +988,9 @@ def damage_inputs_can_change(tables: Tables, state: BattleState, actions, foe_fi
         )
         | (foe_effect == _E.RAISE_ALL_STATS_HIT)
         | ((foe_effect == _E.CURSE) & physical)
+        | ((foe_effect == _E.SWAGGER) & physical)
+        | (foe_effect == _E.ROOST)
+        | ((foe_effect == _E.DOUBLE_POWER) & guts)
         | (status_hit & (guts | (burnable & foe_burns)))
         | ((foe_effect == _E.REFLECT) & physical)
         | ((foe_effect == _E.LIGHT_SCREEN) & special)
@@ -1004,15 +1075,16 @@ def outcome_laws(
     switch, item = is_switch(actions), is_item(actions)
     uses_move = live & ~switch & ~item  # bool[2]
     foe_moves = uses_move[::-1]  # the other side uses a move
-    effect = tables.move_effect[moves]
+    effect, params = move_effects(tables, state, moves)  # Secret Power's terrain effect
     foe_move = moves[::-1]
     chance = tables.move_effect_chance[moves].astype(_I32)
     damaging = (tables.move_category[moves] != STATUS) & (tables.move_power[moves] != 0)
-    # LEVEL_DAMAGE and Bide's unleash: no crit, no roll (damage.fixed_damage)
-    rolled = damaging & (effect != _E.LEVEL_DAMAGE) & (effect != _E.BIDE)
+    # No crit, no roll for a script without CalcCrit / CalcDamage (ids.UNROLLED_EFFECTS:
+    # Night Shade, Bide's unleash, Super Fang, the OHKO moves; damage.fixed_damage)
+    rolled = damaging & ~_any_of(effect, UNROLLED_EFFECTS)
     contact = (tables.move_flags[moves] & MoveFlag.CONTACT) != 0
     multi = effect == _E.MULTI_HIT
-    fixed_hits = tables.move_param[moves, 0].astype(_I32)
+    fixed_hits = params[:, 0]
     drawn_hits = multi & (fixed_hits == 0)  # the 2-5 law
     max_hits = jnp.where(multi, jnp.where(drawn_hits, MAX_HITS, fixed_hits), 1)
     mons = state.active
@@ -1050,8 +1122,11 @@ def outcome_laws(
     holders = holders | charm
     contact_proc = (lands & (damaging & contact & holders[::-1])[:, None])[::-1]
     duration = uses_move & (
-        _any_of(effect, (_E.TAUNT, _E.TRAP, _E.DISABLE, _E.CONFUSE_FOE, _E.SECONDARY_CONFUSE))
-        | _inflicts(tables, moves, Status.SLEEP)
+        _any_of(
+            effect,
+            (_E.TAUNT, _E.TRAP, _E.DISABLE, _E.CONFUSE_FOE, _E.SECONDARY_CONFUSE, _E.SWAGGER),
+        )
+        | _inflicts(tables, state, moves, Status.SLEEP)
     )
 
     # Status eligibility of the foe's active Pokemon, the target when the user moves
@@ -1060,7 +1135,7 @@ def outcome_laws(
     # (subscript_confuse.s fails on a confused target). One hit only (an earlier hit's
     # berry could cure the target). Insomnia is never a block: its "stayed awake" reveal
     # (ai_ability_known) runs on a proc; Limber's runs only for a direct status move.
-    param0 = tables.move_param[moves, 0]
+    param0 = params[:, 0]
     attacker_ability = state.ability[sides, mons]
     ignorable = jnp.where(
         attacker_ability == AbilityId.MOLD_BREAKER, AbilityId.NONE, attacker_ability[::-1]
@@ -1092,7 +1167,7 @@ def outcome_laws(
     flinch_blocked = ignorable == AbilityId.INNER_FOCUS
     if loose:
         status_blocked = confused_blocked = flinch_blocked = jnp.zeros((2,), bool)
-    confuses = _any_of(effect, (_E.CONFUSE_FOE, _E.SECONDARY_CONFUSE))
+    confuses = _any_of(effect, (_E.CONFUSE_FOE, _E.SECONDARY_CONFUSE, _E.SWAGGER))
     # Attract on the foe's active Pokemon (effects._attract); in love at the start, read
     # unless the source switches out first (step._source_leaves).
     foe_calm = state.infatuated[::-1] == 0
@@ -1121,8 +1196,12 @@ def outcome_laws(
         "para_own": uses_move & (status == Status.PARALYSIS),
         "freeze_own": uses_move & (status == Status.FREEZE),
         "confused_own": uses_move & (state.confusion >= 2),
-        "para_inflict": uses_move & _inflicts(tables, moves, Status.PARALYSIS) & ~status_blocked,
-        "freeze_inflict": uses_move & _inflicts(tables, moves, Status.FREEZE) & ~status_blocked,
+        "para_inflict": uses_move
+        & _inflicts(tables, state, moves, Status.PARALYSIS)
+        & ~status_blocked,
+        "freeze_inflict": uses_move
+        & _inflicts(tables, state, moves, Status.FREEZE)
+        & ~status_blocked,
         "confuse_inflict": uses_move & confuses & ~confused_blocked,
         "infatuated_own": infatuated_own,
         "attract_inflict": attract,
@@ -1153,14 +1232,14 @@ def outcome_laws(
         branches = [_branch_masks(firsts[t] == 1 - sides, firsts[t] == sides, base) for t in (0, 1)]
 
     own_speed = (_any_of(effect, (_E.STAT_SELF, _E.SECONDARY_STAT_SELF)) & (param0 == Stat.SPE)) | (
-        _any_of(effect, (_E.RAISE_ALL_STATS_HIT, _E.CURSE))
+        _any_of(effect, (_E.RAISE_ALL_STATS_HIT, _E.CURSE, _E.DRAGON_DANCE))
     )
     foe_speed = _any_of(effect, (_E.STAT_FOE, _E.SECONDARY_STAT_FOE)) & (param0 == Stat.SPE)
     # subscript_flinched.s:10-14: a flinched Steadfast Pokemon gains +1 Speed (its foe's
     # flinch move, or its King's Rock on a flagged damaging move).
     steadfast = _holds(tables, state, actions, (AbilityId.STEADFAST,)) & foe_moves
     kings = (kings_rock > 0) & damaging & kings_move
-    flinches = _any_of(tables.move_effect[foe_move], _FLINCH_EFFECTS) | kings[::-1]
+    flinches = _any_of(effect[::-1], _FLINCH_EFFECTS) | kings[::-1]
     steadfast = steadfast & flinches
     # A White Herb restores a lowered Speed stage (hooks.held_item_check); a Salac Berry
     # raises it, held or plucked (hooks.pluck_berry: any Pluck / Bug Bite user, over-approx).
@@ -1180,7 +1259,7 @@ def outcome_laws(
     # pluck_berry).
     lum = _holds_item(tables, state, actions, (ItemId.LUM_BERRY, ItemId.CHERI_BERRY))
     para_free = (
-        (foe_moves & _inflicts(tables, foe_move, Status.PARALYSIS))
+        (foe_moves & _inflicts(tables, state, foe_move, Status.PARALYSIS))
         | (uses_move & damaging & contact & static[::-1])
         | lum
         | plucks
@@ -1245,6 +1324,8 @@ def outcome_laws(
             dragged[side],
             lock_free,
             weather_free,
+            # The side's own Tailwind when none blows yet (effects._side_layers).
+            uses_move[side] & (effect[side] == _E.TAILWIND) & (state.tailwind[side] == 0),
         )
         for side in (0, 1)
     ]

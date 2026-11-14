@@ -26,8 +26,6 @@ Deliberately unsupported although close to a supported family:
 
 * ``BATTLE_EFFECT_RECOIL_THIRD`` (198): the decomp divides damage by 3
   (``subscript_recoil_1_3.s``), which a ``RECOIL`` percent cannot express exactly.
-* ``BATTLE_EFFECT_STATUS_BADLY_POISON`` / ``BADLY_POISON_HIT`` (33, 202): Toxic
-  infliction is not in M1.
 * ``SPEED_UP``, ``ACC_UP``, ``SP_DEF_UP``, ``SP_ATK_DOWN``, ``SP_DEF_DOWN``,
   ``ACC_UP_2``, ``EVA_UP_2``, ``SP_ATK_DOWN_2``, ``EVA_DOWN_2``, ``ACC_DOWN_2``,
   ``LOWER_EVASION_HIT`` (12, 14, 15, 21, 22, 55, 56, 61, 63, 64, 74): no move uses
@@ -51,7 +49,13 @@ reached silently.
 from __future__ import annotations
 
 from nuzline.engine.ids import (
+    POWER_IF_TARGET_HALF_HP,
+    POWER_IF_TARGET_PARALYZED,
+    POWER_IF_USER_STATUSED,
     RESIST_ANY_NORMAL,
+    SNORE_PARAM,
+    SPECIES_CHANSEY,
+    SPECIES_FARFETCHD,
     AbilityId,
     EffectId,
     ItemId,
@@ -243,6 +247,47 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     136: ("BATTLE_EFFECT_WEATHER_RAIN", _E.WEATHER, (Weather.RAIN, 1, 0)),
     137: ("BATTLE_EFFECT_WEATHER_SUN", _E.WEATHER, (Weather.SUN, 1, 0)),
     164: ("BATTLE_EFFECT_WEATHER_HAIL", _E.WEATHER, (Weather.HAIL, 0, 0)),
+    # E2 batch 4 (engine/ids.py EffectId, rulings B4-n).
+    # SmellingSalt: effect_script_0171.s, x2 and an ON_HIT cure against a paralyzed defender
+    # (CheckSubstitute first: Substitute is an unsupported move).
+    171: (
+        "BATTLE_EFFECT_DOUBLE_POWER_AND_CURE_PARALYSIS",
+        _E.DOUBLE_POWER,
+        (POWER_IF_TARGET_PARALYZED, 1, 0),
+    ),
+    169: (
+        "BATTLE_EFFECT_DOUBLE_POWER_WHEN_STATUSED",
+        _E.DOUBLE_POWER,
+        (POWER_IF_USER_STATUSED, 0, 0),
+    ),
+    221: (
+        "BATTLE_EFFECT_DOUBLE_POWER_WHEN_BELOW_HALF",
+        _E.DOUBLE_POWER,
+        (POWER_IF_TARGET_HALF_HP, 0, 0),
+    ),
+    237: ("BATTLE_EFFECT_INCREASE_POWER_WITH_MORE_HP", _E.HP_POWER, (0, 0, 0)),
+    196: ("BATTLE_EFFECT_INCREASE_POWER_WITH_WEIGHT", _E.WEIGHT_POWER, (0, 0, 0)),
+    40: ("BATTLE_EFFECT_HALVE_HP", _E.HALVE_HP, (0, 0, 0)),
+    38: ("BATTLE_EFFECT_ONE_HIT_KO", _E.OHKO, (0, 0, 0)),
+    101: ("BATTLE_EFFECT_LEAVE_WITH_1_HP", _E.FALSE_SWIPE, (0, 0, 0)),
+    # Earthquake: effect_script_0147.s doubles the power against MOVE_EFFECT_UNDERGROUND (Dig),
+    # which no supported move sets, like Gust (149); SYSCTL_HIT_DURING_DIG only matters against
+    # a digging target.
+    147: ("BATTLE_EFFECT_DOUBLE_DAMAGE_DIG", _E.PLAIN, (0, 0, 0)),
+    # Poison Fang: effect_script_0202.s, an indirect TO_DEFENDER badly-poison at the move's
+    # chance (subscript_badly_poison.s).
+    202: ("BATTLE_EFFECT_BADLY_POISON_HIT", _E.SECONDARY_STATUS, (Status.TOXIC, 0, 0)),
+    118: ("BATTLE_EFFECT_ATK_UP_2_STATUS_CONFUSION", _E.SWAGGER, (0, 0, 0)),
+    # Snore: effect_script_0092.s, an indirect TO_DEFENDER flinch at the move's chance, failing
+    # unless the user is asleep (move_param[m, 2] = SNORE_PARAM).
+    92: ("BATTLE_EFFECT_DAMAGE_WHILE_ASLEEP", _E.FLINCH, (0, 0, SNORE_PARAM)),
+    214: ("BATTLE_EFFECT_HEAL_HALF_REMOVE_FLYING_TYPE", _E.ROOST, (0, 0, 0)),
+    225: ("BATTLE_EFFECT_DOUBLE_SPEED_3_TURNS", _E.TAILWIND, (0, 0, 0)),
+    112: ("BATTLE_EFFECT_SET_SPIKES", _E.SPIKES, (0, 0, 0)),
+    249: ("BATTLE_EFFECT_TOXIC_SPIKES", _E.TOXIC_SPIKES, (0, 0, 0)),
+    98: ("BATTLE_EFFECT_KO_MON_THAT_DEFEATED_USER", _E.DESTINY_BOND, (0, 0, 0)),
+    197: ("BATTLE_EFFECT_SECRET_POWER", _E.SECRET_POWER, (0, 0, 0)),
+    212: ("BATTLE_EFFECT_ATK_SPD_UP", _E.DRAGON_DANCE, (0, 0, 0)),
 }
 
 DECOMP_EFFECT_NAMES: dict[int, str] = {k: v[0] for k, v in _EFFECTS.items()}
@@ -331,6 +376,10 @@ DECOMP_ABILITY_TO_ID: dict[str, AbilityId] = {
     "Drizzle": AbilityId.DRIZZLE,
     "Sand Stream": AbilityId.SAND_STREAM,
     "Snow Warning": AbilityId.SNOW_WARNING,
+    # E2 batch 4.
+    "Filter": AbilityId.FILTER,
+    "Magic Guard": AbilityId.MAGIC_GUARD,
+    "Sniper": AbilityId.SNIPER,
 }
 
 DECOMP_ITEM_TO_ID: dict[str, ItemId] = {
@@ -500,6 +549,18 @@ WEATHER_ROCK_HOLD_EFFECTS: dict[int, tuple[str, int]] = {
 }
 HOLD_EFFECT_TO_ID.update(
     {h: (name, ItemId.WEATHER_ROCK) for h, (name, _) in WEATHER_ROCK_HOLD_EFFECTS.items()}
+)
+
+# The crit-stage items of BattleSystem_CalcCriticalMulti (battle_lib.c:7123-7128): decomp hold
+# effect -> (name, the species the item needs, 0 for any holder). build_tables fills a CRIT_ITEM
+# item's item_param[i, 1] from here (E2 batch 4).
+CRIT_HOLD_EFFECTS: dict[int, tuple[str, int]] = {
+    67: ("HOLD_EFFECT_CRITRATE_UP", 0),
+    89: ("HOLD_EFFECT_CHANSEY_CRITRATE_UP", SPECIES_CHANSEY),
+    92: ("HOLD_EFFECT_FARFETCHD_CRITRATE_UP", SPECIES_FARFETCHD),
+}
+HOLD_EFFECT_TO_ID.update(
+    {h: (name, ItemId.CRIT_ITEM) for h, (name, _) in CRIT_HOLD_EFFECTS.items()}
 )
 
 # HOLD_EFFECT_NONE. An item without a hold effect is NONE (no implemented path reads it by
