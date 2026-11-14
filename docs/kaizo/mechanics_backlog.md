@@ -25,16 +25,16 @@ New groups: needed in this split and in no earlier one.
 | Split | Rows | Battles | Singles | Doubles | Two-trainer | Multi (no known partner) | Runnable battles | Distinct missing groups | New groups |
 |---|---|---|---|---|---|---|---|---|---|
 | Roark Split | 23 | 23 | 23 | 0 | 0 | 0 (0) | 1 | 136 | 136 |
-| Gardenia Split | 43 | 36 | 20 | 5 | 0 | 11 (1) | 0 | 234 | 145 |
+| Gardenia Split | 43 | 36 | 20 | 5 | 0 | 11 (0) | 0 | 234 | 145 |
 | Fantina Split | 41 | 39 | 37 | 0 | 2 | 0 (0) | 0 | 276 | 87 |
-| Maylene Split | 34 | 33 | 27 | 5 | 0 | 1 (1) | 0 | 270 | 32 |
+| Maylene Split | 34 | 33 | 27 | 5 | 0 | 1 (0) | 0 | 270 | 32 |
 | Wake Split | 37 | 32 | 25 | 2 | 5 | 0 (0) | 0 | 225 | 19 |
 | Byron Split | 49 | 47 | 36 | 7 | 0 | 4 (0) | 0 | 266 | 18 |
-| Candice Split | 47 | 35 | 23 | 0 | 0 | 12 (4) | 0 | 239 | 15 |
-| Galactic Split | 102 | 76 | 40 | 10 | 19 | 7 (1) | 0 | 364 | 53 |
+| Candice Split | 47 | 35 | 23 | 0 | 0 | 12 (0) | 0 | 239 | 15 |
+| Galactic Split | 102 | 76 | 40 | 10 | 19 | 7 (0) | 0 | 364 | 53 |
 | Volkner Split | 25 | 19 | 9 | 4 | 6 | 0 (0) | 0 | 184 | 0 |
 | Elite Four Split | 19 | 19 | 18 | 1 | 0 | 0 (0) | 0 | 206 | 4 |
-| **Whole game** | 420 | 359 | 258 | 34 | 32 | 35 (7) | 1 | 509 | 509 |
+| **Whole game** | 420 | 359 | 258 | 34 | 32 | 35 (0) | 1 | 509 | 509 |
 
 ## Whole game
 
@@ -297,7 +297,7 @@ include/battle, res/battle) names it elsewhere; the tool re-checks both on every
 
 ## AI partners in multi battles
 
-11 partner trainer rows (608, 609, 610, 612, 613, 614, 615, 616, 617, 618, 864), checked like opponents: 100 missing groups, 0 not needed by any opposing trainer, 0 also not on your side.
+19 partner trainer rows (608, 609, 610, 612, 613, 614, 615, 616, 617, 618, 621, 622, 623, 624, 625, 626, 800, 801, 864), checked like opponents: 122 missing groups, 0 not needed by any opposing trainer, 0 also not on your side.
 
 ## Roark split
 

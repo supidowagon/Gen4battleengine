@@ -45,7 +45,28 @@ Branch `claude/engine-e3-remeasure-632cbe`, worktree `strange-feistel-a35c9f`. E
   backlog.py, re-checked against the decomp on every run. Kept as battle-relevant: Exp.
   Share, Lucky Egg (experience is modelled), Soothe Bell (battle_system.c:746), Smoke Ball
   (Battler_IsTrappedMsg, read by Teleport, battle_script.c:6150).
-- AI partners (11 rows): 100 missing groups, none outside the opponent union.
+- AI partners: after the partner fix, 19 rows, 122 missing groups, none outside the opponent
+  union.
+
+## Batch 2 add-on: partner teams (2026-11-14)
+
+- Partner teams were never missing: every partner is a ROM trainer row (Cheryl 608, Riley
+  609, Marley 610, Mira 612/864, Lucas/Dawn 613-626 and 800/801, Barry 607/619/620, the
+  Coronet Highlands three 861/863/865). What was missing is the link: the ROM script reader
+  leaves `partner` null when the partner variable is not set right before the battle
+  (`battle_structures`' unknown_partner), and the cross-check compared only
+  `partner_present`, so PKCalc's partner (flags.js `battleType.tag`, already in
+  `pkcalc.json` `formats.tag`) was never used.
+- Fix: `tools/kaizo/resolve.py` `fill_pk_partners` fills a null partner from PKCalc's tag
+  triple, expanding `{RIVAL2_NAME}` / starter placeholders into variants (gender from the
+  ROM-evaluated rival-2 variants, starter from each partner row). 23 rows filled (14 split
+  rows = the 7 battles, plus 9 rows with no split). No ROM-evaluated partner disagrees with
+  PKCalc. Test: tests/kaizo/test_pkcalc_partner.py. Rebuild:
+  `uv run --group rom python -m tools.build_tables --game kaizo` (about 2 s).
+- Found, not fixed (a recorded non-blocking ruling): 60 sheet headers map to no trainer id,
+  so battles such as Spear Pillar Mars #3 + Jupiter #3 (528/407, beside Barry) and the
+  Coronet Highlands multis (562/572, 581/606, 582/583) and Iron Island 835/836 have no split
+  and are not in the 359 battles.
 
 ## Parked: option B, real per-split player availability
 
