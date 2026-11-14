@@ -5,9 +5,9 @@ A path through a flag script is a walk of ``src/battle/trainer_ai/script.s`` fro
 ``FlagTable`` entry (script.s:18-50) to its ``PopOrEnd``. The script has no calls and no
 loops, so the most reads over every walk is a depth-first maximum. A read is a draw the exact
 per-slot layout keys by path order (E1 Ruling R4): ``IfRandomLessThan`` (trainer_ai.c:528-538)
-and ``LoadBattlerAbility`` / ``CheckBattlerAbility`` on the defender, which flips a coin when
-the AI does not know the player's ability (trainer_ai.c:1170-1209; counted always, an upper
-bound). ``IfSpeedCompareEqualTo``'s tie is not a read of the exact layout (plan K3c Ruling 3).
+and ``LoadBattlerAbility`` on the defender, which flips a coin when the AI does not know the
+player's ability (trainer_ai.c:1170-1209; counted always, an upper bound).
+``CheckBattlerAbility`` draws nothing (:1212-1265). ``IfSpeedCompareEqualTo``'s tie is not a read of the exact layout (plan K3c Ruling 3).
 
 Branches whose outcome is fixed by the move are decided, so the bound follows the move:
 
@@ -122,7 +122,7 @@ def flag_reads(script: Script, bit: int, effect: int, damaging: bool, can_quad: 
             reads = 0
             if cmd == "IfRandomLessThan":
                 reads = 1
-            elif cmd in ("LoadBattlerAbility", "CheckBattlerAbility"):
+            elif cmd == "LoadBattlerAbility":
                 reads = int(args[0] == "AI_BATTLER_DEFENDER")
             target = args[-1] if args and args[-1] in script.labels else None
             if cmd == "GoTo":

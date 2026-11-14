@@ -874,7 +874,28 @@ def check_opponent(
     if not unknown_start(trainer):
         weathers.append(start_weather(trainer))
     _check_weather(c, weathers)
+    _, error = _fight_ai_tables(tables, names, trainer, opp)
+    if error is not None:
+        c.add(Support.NONE, f"{display_name(trainer)}: {error}", "trainer AI")
     return c.report
+
+
+def _fight_ai_tables(tables, names, trainer, opp):
+    """``(tables, error)``: the fight's tables (``ai.layout.fight_tables``) under the trainer's
+    transcribed flags (a set with others is refused by its flag lines, ``_check_ai_flags``),
+    and the reason its AI layout cannot be built, or None: a read bound past ``WIDTH_CAP``
+    (E1 Ruling R6)."""
+    from nuzline.ai.layout import KAIZO_FLAG_BITS, fight_tables, layout_of
+
+    flags = int(trainer.ai_flags)
+    if POLICY.get(names.game) == "kaizo":
+        flags &= sum(1 << bit for bit in KAIZO_FLAG_BITS)
+    fight = fight_tables(tables, trainer, opp, flags)
+    try:
+        layout_of(fight)
+    except ValueError as err:
+        return fight, str(err)
+    return fight, None
 
 
 def check_coverage(
@@ -945,16 +966,8 @@ def check_coverage(
     # The trainer's flag set (E1 Ruling R2). A set with a flag the AI does not transcribe is
     # refused by its flag lines (_check_ai_flags); its other AI lines are listed under the
     # flags it has that the AI does transcribe.
-    from nuzline.ai.layout import KAIZO_FLAG_BITS, fight_tables, layout_of
-
-    flags = int(trainer.ai_flags)
-    if POLICY.get(names.game) == "kaizo":
-        flags &= sum(1 << bit for bit in KAIZO_FLAG_BITS)
-    fight = fight_tables(tables, trainer, opp, flags)
-    try:
-        layout_of(fight)
-    except ValueError as err:  # a read bound past WIDTH_CAP (E1 Ruling R6)
-        c.add(Support.NONE, f"{display_name(trainer)}: {err}", "trainer AI")
+    fight, error = _fight_ai_tables(tables, names, trainer, opp)
+    if error is not None:  # listed by check_opponent
         return c.report
     for reason in ai_refusals(fight, state, names):
         c.add(Support.NONE, f"{display_name(trainer)}: {reason}", "trainer AI")

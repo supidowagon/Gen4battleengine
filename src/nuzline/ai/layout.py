@@ -207,7 +207,9 @@ def move_read_rows(tables: Tables, moves) -> np.ndarray:
         e = int(effect[move])
         damaging = bool(power[move] > 1) and e not in NO_DAMAGE_CALC_EFFECTS
         # FlagMoveDamageScore's test (trainer_ai.c:1035-1036); QUADRUPLE needs two distinct
-        # defender types each taking the move super effectively (battle_lib.c:2611-2646).
+        # defender types each taking the move super effectively (battle_lib.c:2611-2646), while
+        # an AI Adaptability Pokemon stays refused (its STAB of 2, :2592-2594, makes one
+        # super-effective type QUADRUPLE: then this must allow one).
         can_quad = int((chart[int(move_type[move])] == 20).sum()) >= 2
         reads = READ_BOUNDS.get((e, damaging, can_quad))
         if reads is not None:

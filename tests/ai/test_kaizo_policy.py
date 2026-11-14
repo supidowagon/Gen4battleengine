@@ -1713,3 +1713,126 @@ def test_basic_high_stat_stage(
             species=s.species.at[1, 0].set(species), ability_slot=s.ability_slot.at[1, 0].set(0)
         )
     assert _delta(t, s, 0x2, 0x3)[0] == expected
+
+
+# --- Status moves (E1 batch 6) ---------------------------------------------------------------
+
+
+def _species_with(t, ability: int) -> int:
+    """A species whose ability slot 0 is ``ability`` (decomp id) in the Kaizo tables."""
+    abilities = np.asarray(t.species_abilities_decomp)
+    rows = np.asarray(t.species_form_row)[:, 0]
+    return next(sp for sp in range(1, rows.shape[0]) if abilities[rows[sp], 0] == ability)
+
+
+@pytest.mark.parametrize(
+    ("case", "expected"),
+    [
+        ("plain", 0),
+        ("statused", -10),  # :629 IfStatus MON_CONDITION_ANY
+        ("safeguard", -10),  # :630
+        ("volt_absorb", -10),  # Thunder Wave only: :623-626, the player's ability known
+    ],
+)
+def test_basic_check_cannot_paralyze(kaizo_tables, kaizo_names, kaizo_roark_party, case, expected):
+    """BASIC's score for Thunder Wave (Basic_CheckCannotParalyze, script.s:612-631; set
+    0x2 -> 0x3), against a Tentacool whose ability the AI knows."""
+
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Thunder Wave", "Accelerock", "", ""))
+    s = _with_player(t, s, 72, 0, known=True)  # Tentacool: not Ground, so not immune (:614)
+    if case == "statused":
+        s = s._replace(status=s.status.at[0, 0].set(Status.POISON))
+    elif case == "safeguard":
+        s = s._replace(safeguard=s.safeguard.at[0].set(5))
+    elif case == "volt_absorb":
+        s = _with_player(t, s, _species_with(t, c.ABILITY_IDS["Volt Absorb"]), 0, known=True)
+    assert _delta(t, s, 0x2, 0x3)[0] == expected
+
+
+@pytest.mark.parametrize(
+    ("attacker", "defender", "expected"),
+    [
+        (c.Gender.MALE, c.Gender.FEMALE, 0),
+        (c.Gender.FEMALE, c.Gender.MALE, 0),
+        (c.Gender.MALE, c.Gender.MALE, -10),
+        (c.Gender.FEMALE, c.Gender.FEMALE, -10),
+        (c.Gender.NONE, c.Gender.FEMALE, -10),  # :739 GoTo ScoreMinus10
+        (c.Gender.MALE, c.Gender.NONE, -10),
+    ],
+)
+def test_basic_check_cannot_attract(
+    kaizo_tables, kaizo_names, kaizo_roark_party, attacker, defender, expected
+):
+    """BASIC's score for Attract (Basic_CheckCannotAttract, script.s:731-752; LoadGender,
+    trainer_ai.c:2470-2477)."""
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Attract", "Accelerock", "", ""))
+    s = s._replace(gender=s.gender.at[1, 0].set(attacker).at[0, 0].set(defender))
+    assert _delta(t, s, 0x2, 0x3)[0] == expected
+
+
+def test_basic_check_cannot_confuse(kaizo_tables, kaizo_names, kaizo_roark_party):
+    """Already confused: -5 (script.s:599, IfVolatileStatus CONFUSION); not: 0."""
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Confuse Ray", "Accelerock", "", ""))
+    assert _delta(t, s, 0x2, 0x3)[0] == 0
+    s = s._replace(confusion=s.confusion.at[0].set(2))
+    assert _delta(t, s, 0x2, 0x3)[0] == -5
+
+
+@pytest.mark.parametrize(
+    ("hp", "jumps", "expected"),
+    [
+        # Expert_StatusConfuse (script.s:2861-2877), the player's HP:
+        (71, (), 0),  # above 70 %: nothing
+        (60, (), -1),  # -1 unless :2864 jumps
+        (60, (2864,), 0),
+        (50, (), -2),  # and -1 at 50 % or less
+        (30, (), -3),  # and -1 more at 30 % or less
+        (30, (2864,), -2),
+    ],
+)
+def test_status_confuse(kaizo_tables, kaizo_names, kaizo_roark_party, hp, jumps, expected):
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Confuse Ray", "Accelerock", "", ""))
+    s = _hp(s, 0, hp)
+    assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expected
+
+
+@pytest.mark.parametrize(
+    ("atk", "turn", "expected"),
+    [
+        # Expert_Swagger_PsychUp (script.s:2879-2891): Psych Up known.
+        (-2, 1, -5),  # the player's Attack above decomp 3 (engine -3): -5
+        (-3, 1, 3),  # else +3
+        (-3, 0, 5),  # and +2 on the battle's first turn
+    ],
+)
+def test_swagger_with_psych_up(kaizo_tables, kaizo_names, kaizo_roark_party, atk, turn, expected):
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Swagger", "Psych Up", "", ""))
+    s = _turn(s._replace(stages=s.stages.at[0, Stat.ATK].set(atk)), turn)
+    assert _delta(t, s, 0x3, 0x7)[0] == expected
+
+
+@pytest.mark.parametrize("flags", [0x17, 0x10F])
+def test_status_moves_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, flags):
+    """Exact == loose for the batch 6 status moves, against a guessed Gible and Tentacool, at
+    two HP levels, the player confused or not."""
+    from tests.ai.test_kaizo_outcome import GIBLE as GIBLE_SPECIES
+
+    t, n = kaizo_tables, kaizo_names
+    groups = (
+        ("Thunder Wave", "Hypnosis", "Confuse Ray", "Leech Seed"),
+        ("Swagger", "Attract", "Will-O-Wisp", "Accelerock"),
+    )
+    for moves in groups:
+        for player in (GIBLE_SPECIES, 72):
+            for hp, confused in ((100, 0), (35, 2)):
+                s = _state(t, kaizo_roark_party, BONSLY, _ids(n, *moves))
+                s = _hp(_with_player(t, s, player), 0, hp)
+                s = s._replace(confusion=s.confusion.at[0].set(confused))
+                layout = layout_for(t, flags, s)
+                assert policy.ai_refusals(t, s, n, layout) == []
+                _assert_exact_equals_loose(t, s, layout)

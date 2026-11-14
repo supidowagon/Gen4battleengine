@@ -121,6 +121,40 @@ class FieldCondition(IntEnum):
     TRICK_ROOM = (1 << 16) | (1 << 17) | (1 << 18)  # BattleState.trick_room
 
 
+class VolatileCondition(IntEnum):
+    """``IfVolatileStatus`` masks the transcribed scripts test (``VOLATILE_CONDITION_*``,
+    include/constants/battle/condition.h), each read from its ``BattleState`` field
+    (``if_volatile_status``)."""
+
+    CONFUSION = (1 << 0) | (1 << 1) | (1 << 2)  # :32-34, :65; BattleState.confusion
+    ATTRACT = (1 << 16) | (1 << 17) | (1 << 18) | (1 << 19)  # :48-51, :70; .infatuated
+
+
+_VOLATILE_FIELDS = {
+    VolatileCondition.CONFUSION: "confusion",
+    VolatileCondition.ATTRACT: "infatuated",
+}
+
+
+class MoveEffectMask(IntEnum):
+    """``IfMoveEffect`` masks the transcribed scripts test (``MOVE_EFFECT_*``,
+    include/constants/battle/moves.h)."""
+
+    LEECH_SEED = 1 << 2  # :10; BattleState.leech_seed (the seeded battler's side)
+
+
+_MOVE_EFFECT_FIELDS = {MoveEffectMask.LEECH_SEED: "leech_seed"}
+
+
+class Gender(IntEnum):
+    """``LoadGender`` values (line n + 1 of generated/genders.txt is n), as
+    ``BattleState.gender`` holds them."""
+
+    MALE = 0
+    FEMALE = 1
+    NONE = 2
+
+
 class AiWeather(IntEnum):
     """``LoadCurrentWeather`` values (``AI_WEATHER_*``: line n + 1 of
     generated/ai_weather_types.txt is n)."""
@@ -151,7 +185,9 @@ class BattleEffect(IntEnum):
 
     HIT = 0
     RECOVER_HALF_DAMAGE_DEALT = 3  # Giga Drain
+    STATUS_SLEEP = 1
     HALVE_DEFENSE = 7  # Selfdestruct, Explosion
+    RECOVER_DAMAGE_SLEEP = 8  # Dream Eater (Expert_StatusSleep's IfMoveEffectKnown, :1816)
     ATK_UP = 10
     DEF_UP = 11
     SP_ATK_UP = 13
@@ -161,21 +197,28 @@ class BattleEffect(IntEnum):
     RESTORE_HALF_HP = 32  # Recover
     STATUS_BADLY_POISON = 33  # Toxic
     SET_LIGHT_SCREEN = 35  # Light Screen
+    STATUS_CONFUSE = 49
     ATK_UP_2 = 50
     DEF_UP_2 = 51
     SPEED_UP_2 = 52  # Rock Polish
     SP_ATK_UP_2 = 53
     SP_DEF_UP_2 = 54
     DEF_DOWN_2 = 59
+    STATUS_PARALYZE = 67
+    STATUS_LEECH_SEED = 84
     PRIORITY_1 = 103  # EvalAttack_ApplyKillBonuses' +2 (script.s:6400); no Roark move has it
+    STATUS_NIGHTMARE = 107  # Nightmare (Expert_StatusSleep's IfMoveEffectKnown, :1817)
     CURSE = 109
     PROTECT = 111  # Expert_ToxicLeechSeed's IfMoveEffectKnown (script.s:2700)
     WEATHER_SANDSTORM = 115  # Weather_Main (script.s:7989)
+    ATK_UP_2_STATUS_CONFUSION = 118  # Swagger
+    INFATUATE = 120  # Attract
     HIT_BEFORE_SWITCH = 128
     WEATHER_RAIN = 136  # Weather_Main (script.s:7988)
     WEATHER_SUN = 137  # Weather_Main (script.s:7987)
     RAISE_ALL_STATS_HIT = 140  # AncientPower (Risky_RiskyEffects, script.s:6550)
     WEATHER_HAIL = 164  # Weather_Main (script.s:7990)
+    STATUS_BURN = 167  # Will-O-Wisp
     REMOVE_SCREENS = 186  # Brick Break
     STEAL_STATUS_MOVE = 195  # Snatch (Expert_Recovery_CheckForSnatch, script.s:2670)
     STEALTH_ROCK = 266
@@ -605,8 +648,18 @@ ABILITY_IDS = {
     "Hydration": 93,
     # Expert_RecoilMove (script.s:6297-6298; Magic Guard above).
     "Rock Head": 69,
+    # E1 batch 6: Basic_CheckCannotSleep / _Confuse / _Paralyze / _Attract / _Burn
+    # (script.s:293-294, :603, :616, :625-626 with Volt Absorb above, :735, :882).
+    "Insomnia": 15,
+    "Vital Spirit": 72,
+    "Own Tempo": 20,
+    "Limber": 7,
+    "Oblivious": 12,
+    "Water Veil": 41,
 }
 MOVE_IDS = {
+    "Thunder Wave": 86,  # Basic_CheckCannotParalyze (script.s:620)
+    "Psych Up": 244,  # Expert_Swagger (script.s:2852)
     "Fissure": 90,
     "Horn Drill": 32,
     "U-turn": 369,
@@ -649,6 +702,7 @@ TYPE_IDS = {
     "Ghost": 7,
     "Steel": 8,
     "Fire": 10,
+    "Grass": 12,  # Basic_CheckCannotLeechSeed (script.s:643-645)
     "Water": 11,
     "Electric": 13,
     "Psychic": 14,
@@ -1377,6 +1431,28 @@ def load_power_of_loaded_move(ctx: AiContext) -> AiContext:
     """``LoadPowerOfLoadedMove`` (trainer_ai.c:2526-2530): ``calcTemp =
     MOVE_DATA(calcTemp).power``."""
     return ctx._replace(calc_temp=ctx.tables.move_power[ctx.calc_temp].astype(_I32))
+
+
+def if_volatile_status(ctx: AiContext, battler: Battler, mask: int) -> AiContext:
+    """``IfVolatileStatus`` (trainer_ai.c:676-686): ``statusVolatile & mask``. ``mask`` must
+    be one ``VolatileCondition`` (refused at trace time otherwise), read from its field."""
+    field = _VOLATILE_FIELDS[VolatileCondition(int(mask))]
+    return _jump(ctx, getattr(ctx.state, field)[_side(battler)] > 0)
+
+
+def if_move_effect(ctx: AiContext, battler: Battler, mask: int) -> AiContext:
+    """``IfMoveEffect`` (trainer_ai.c:704-714): ``moveEffectsMask & mask``. ``mask`` must be
+    one ``MoveEffectMask`` (refused at trace time otherwise), read from its field."""
+    field = _MOVE_EFFECT_FIELDS[MoveEffectMask(int(mask))]
+    return _jump(ctx, getattr(ctx.state, field)[_side(battler)] > 0)
+
+
+def load_gender(ctx: AiContext, battler: Battler) -> AiContext:
+    """``LoadGender`` (trainer_ai.c:2470-2477): ``battleMons[battler].gender``
+    (``BattleState.gender`` of the side's active Pokemon; ``Gender``)."""
+    side = _side(battler)
+    state = ctx.state
+    return ctx._replace(calc_temp=state.gender[side, state.active[side]].astype(_I32))
 
 
 def load_defender_last_used_move_class(ctx: AiContext) -> AiContext:

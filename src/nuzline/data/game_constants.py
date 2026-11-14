@@ -121,6 +121,8 @@ _ANY_SIDE_ABILITIES = {"Levitate": 26, "Wonder Guard": 25, "Scrappy": 113, "Norm
 # Ball and Trick Room (:3472-3473, read from K3c Task 6), and the Basic_CheckSoundproof list
 # (:121-131).
 _AI_MOVE_IDS = {
+    "Thunder Wave": 86,  # Basic_CheckCannotParalyze (script.s:620)
+    "Psych Up": 244,  # Expert_Swagger (script.s:2852)
     "Fissure": 90,
     "Horn Drill": 32,
     "U-turn": 369,
@@ -215,6 +217,12 @@ CONSTANTS: tuple[Constant, ...] = (
             "Leaf Guard": 102,
             "Hydration": 93,
             "Rock Head": 69,
+            "Insomnia": 15,
+            "Vital Spirit": 72,
+            "Own Tempo": 20,
+            "Limber": 7,
+            "Oblivious": 12,
+            "Water Veil": 41,
         },
     ),
     *_table(
@@ -239,7 +247,17 @@ CONSTANTS: tuple[Constant, ...] = (
         _E,
         {
             k: _TYPES[k]
-            for k in ("Poison", "Ground", "Ghost", "Steel", "Fire", "Water", "Electric", "Psychic")
+            for k in (
+                "Poison",
+                "Ground",
+                "Ghost",
+                "Steel",
+                "Fire",
+                "Grass",
+                "Water",
+                "Electric",
+                "Psychic",
+            )
         },
     ),
     Constant("nuzline.ai.switching._TYPE_FLYING", "type", 2, "Flying", _E),
@@ -424,6 +442,11 @@ EXEMPT: dict[str, str] = {
     "nuzline.ai.commands.MonCondition": _AI_ENCODING + " (MON_CONDITION_*, condition.h:7-25)",
     "nuzline.ai.commands.FieldCondition": _AI_ENCODING + " (FIELD_CONDITION_*, condition.h:144)",
     "nuzline.ai.commands.AiWeather": _AI_ENCODING + " (AI_WEATHER_*, trainer_ai.c:1414-1439)",
+    "nuzline.ai.commands.VolatileCondition": _AI_ENCODING
+    + " (VOLATILE_CONDITION_* masks, include/constants/battle/condition.h)",
+    "nuzline.ai.commands.MoveEffectMask": _AI_ENCODING
+    + " (MOVE_EFFECT_* masks, include/constants/battle/moves.h)",
+    "nuzline.ai.commands.Gender": _AI_ENCODING + " (GENDER_*, generated/genders.txt)",
     "nuzline.ai.commands.TypeMulti": _AI_ENCODING + " (TYPE_MULTI_*, battle.h:144-153)",
     "nuzline.ai.commands.BattleEffect": (
         "decomp battle effect ids (BATTLE_EFFECT_*, generated/move_battle_effects.txt) that the "

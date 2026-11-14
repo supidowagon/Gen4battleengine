@@ -40,6 +40,7 @@ from hypothesis import strategies as st
 from scipy.stats import chisquare
 
 from nuzline.ai import commands, policy
+from nuzline.ai.commands import ReadKind
 from nuzline.ai.layout import KAIZO, VANILLA, layout_of
 from nuzline.ai.outcome import (
     ENUMERATION_WIDTH,
@@ -736,7 +737,9 @@ def test_slot_reads_fit_every_transcribed_effect(kaizo_tables, kaizo_roark_party
         layout = layout_for(t, every, states[0])
         reads, _, _ = policy._loose_reads(t, batch, layout)
         _, lo = policy._loose_batch(t, batch, jnp.asarray(policy._loose_patterns(reads)), layout)
-        longest = np.asarray(lo.live)[:, :, 0].sum(axis=2).max(axis=1)  # per state
+        # the exact layout draws no speed tie (plan K3c Ruling 3), so it is not a read here
+        counted = np.asarray(lo.live) & (np.asarray(lo.kind) != ReadKind.SPEED_TIE)
+        longest = counted[:, :, 0].sum(axis=2).max(axis=1)  # per state
         for s, n in zip(states, longest, strict=True):
             bound = fight_slot_reads(move_read_rows(t, np.asarray(s.moves[1]).ravel()), every)
             assert n <= bound, (move, int(n), bound)

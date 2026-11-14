@@ -78,19 +78,21 @@ def test_hp_regions_per_policy(tables, names, kaizo_tables, kaizo_roark_party):
     """K3c Task 6 review m2: the percent cuts are the policy's. HP% = hp * 100 // max_hp
     (trainer_ai.c:626); above 70 (script.s:2332, both policies) is off up to
     (71 * max_hp - 1) // 100, above 50 (script.s:2694, Kaizo only) up to
-    (51 * max_hp - 1) // 100. Under the Kaizo policy, Monferno 48 gains 24 and Furret 57
-    gains 29; vanilla keeps neither (test_hp_regions). Kaizo Roark's Gible (44 HP, Sand Veil,
-    Chesto Berry): 31 and 22 in the Kaizo tables."""
+    (51 * max_hp - 1) // 100, above 30 (script.s:2873, Expert_StatusConfuse, Kaizo only since
+    E1 batch 6) up to (31 * max_hp - 1) // 100. Under the Kaizo policy, Monferno 48 gains 24
+    and 14 and Furret 57 gains 29 and 17; vanilla keeps none (test_hp_regions). Kaizo Roark's
+    Gible (44 HP, Sand Veil, Chesto Berry): 31, 22 and 13 in the Kaizo tables."""
     assert ai_defender_hp_checks(tables) == (("greater", 70),)
-    assert ai_defender_hp_checks(kaizo_tables) == (("greater", 70), ("greater", 50))
-    # CHECK_HP (bit 8) adds the target band's > 30 (script.s:7724-7725; E1 batch 2c).
+    kaizo_checks = (("greater", 70), ("greater", 50), ("greater", 30))
+    assert ai_defender_hp_checks(kaizo_tables) == kaizo_checks
+    # CHECK_HP (bit 8) reads > 70 and > 30 too (script.s:7724-7725; E1 batch 2c): no new cut.
     check_hp = kaizo_tables._replace(ai_flags=np.int32(0x10F))
-    assert ai_defender_hp_checks(check_hp) == (("greater", 70), ("greater", 50), ("greater", 30))
+    assert ai_defender_hp_checks(check_hp) == kaizo_checks
     kaizo = _as_kaizo_policy(tables)
     monferno = sample_party(names)[0]
-    assert hp_regions(kaizo, monferno, 48) == (48, 34, 24, 16)
-    assert hp_regions(kaizo, _furret(names), 57) == (57, 40, 29)
-    assert hp_regions(kaizo_tables, kaizo_roark_party[2], 44) == (44, 31, 22)
+    assert hp_regions(kaizo, monferno, 48) == (48, 34, 24, 16, 14)
+    assert hp_regions(kaizo, _furret(names), 57) == (57, 40, 29, 17)
+    assert hp_regions(kaizo_tables, kaizo_roark_party[2], 44) == (44, 31, 22, 13)
 
 
 @pytest.mark.slow

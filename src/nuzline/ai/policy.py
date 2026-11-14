@@ -359,6 +359,118 @@ _basic_check_high_spa = _high_stat_stage("Basic_CheckHighStatStage_SpAttack", St
 _basic_check_high_spd = _high_stat_stage("Basic_CheckHighStatStage_SpDefense", Stat.SPD, 384)
 
 
+def _basic_check_cannot_sleep(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckCannotSleep`` (script.s:288-295)."""
+    ctx = _at(ctx, mask)
+    ctx, t = _split(c.if_status(ctx, _D, c.MonCondition.ANY))
+    ctx = _score(ctx, t, -10)
+    ctx, t = _split(c.if_side_condition(ctx, _D, c.SideCondition.SAFEGUARD))
+    ctx = _score(ctx, t, -10)
+    ctx = c.load_battler_ability(ctx, _D)
+    for name in ("Insomnia", "Vital Spirit"):
+        ctx, t = _split(c.if_loaded_equal_to(ctx, _ABILITY[name]))
+        ctx = _score(ctx, t, -10)
+    return c.pop_or_end(ctx)
+
+
+def _basic_check_cannot_confuse(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckCannotConfuse`` (script.s:597-605): already confused -5 (:599)."""
+    ctx = _at(ctx, mask)
+    ctx, t = _split(c.if_volatile_status(ctx, _D, c.VolatileCondition.CONFUSION))
+    ctx = _score(ctx, t, -5)
+    ctx = c.load_battler_ability(ctx, _D)
+    ctx, t = _split(c.if_loaded_equal_to(ctx, _ABILITY["Own Tempo"]))
+    ctx = _score(ctx, t, -10)
+    ctx, t = _split(c.if_side_condition(ctx, _D, c.SideCondition.SAFEGUARD))
+    ctx = _score(ctx, t, -10)
+    return c.pop_or_end(ctx)
+
+
+def _basic_check_cannot_paralyze(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckCannotParalyze`` (script.s:612-631)."""
+    ctx = _at(ctx, mask)
+    ctx, t = _split(c.if_move_effectiveness_equals(ctx, TypeMulti.IMMUNE))
+    ctx = _score(ctx, t, -10)
+    ctx = c.load_battler_ability(ctx, _D)
+    for name in ("Limber", "Magic Guard"):
+        ctx, t = _split(c.if_loaded_equal_to(ctx, _ABILITY[name]))
+        ctx = _score(ctx, t, -10)
+    ctx = c.load_battler_ability(ctx, _A)
+    ctx, status = _split(c.if_loaded_equal_to(ctx, _ABILITY["Mold Breaker"]))
+    ctx, wave = _split(c.if_move_equal_to(ctx, _MOVE["Thunder Wave"]))
+    ctx, t = _split(c.go_to(ctx))
+    status = status | t
+    # Basic_CheckCannotParalyze_ThunderWave (:623), falling into _ImmuneToStatus.
+    ctx = c.load_battler_ability(_at(ctx, wave), _D)
+    for name in ("Motor Drive", "Volt Absorb"):
+        ctx, t = _split(c.if_loaded_equal_to(ctx, _ABILITY[name]))
+        ctx = _score(ctx, t, -10)
+    # Basic_CheckCannotParalyze_ImmuneToStatus (:628)
+    ctx = _at(ctx, status | ctx.live)
+    ctx, t = _split(c.if_status(ctx, _D, c.MonCondition.ANY))
+    ctx = _score(ctx, t, -10)
+    ctx, t = _split(c.if_side_condition(ctx, _D, c.SideCondition.SAFEGUARD))
+    ctx = _score(ctx, t, -10)
+    return c.pop_or_end(ctx)
+
+
+def _basic_check_cannot_leech_seed(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckCannotLeechSeed`` (script.s:639-648)."""
+    ctx = _at(ctx, mask)
+    ctx, t = _split(c.if_move_effect(ctx, _D, c.MoveEffectMask.LEECH_SEED))
+    ctx = _score(ctx, t, -10)
+    for target in (LoadType.DEFENDER_TYPE_1, LoadType.DEFENDER_TYPE_2):
+        ctx = c.load_type_from(ctx, target)
+        ctx, t = _split(c.if_loaded_equal_to(ctx, _TYPE["Grass"]))
+        ctx = _score(ctx, t, -10)
+    ctx = c.load_battler_ability(ctx, _D)
+    ctx, t = _split(c.if_loaded_equal_to(ctx, _ABILITY["Magic Guard"]))
+    ctx = _score(ctx, t, -10)
+    return c.pop_or_end(ctx)
+
+
+def _basic_check_cannot_attract(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckCannotAttract`` (script.s:731-752): -10 unless the two are of opposite
+    genders (a genderless one on either side is -10)."""
+    ctx = _at(ctx, mask)
+    ctx, t = _split(c.if_volatile_status(ctx, _D, c.VolatileCondition.ATTRACT))
+    ctx = _score(ctx, t, -10)
+    ctx = c.load_battler_ability(ctx, _D)
+    ctx, t = _split(c.if_loaded_equal_to(ctx, _ABILITY["Oblivious"]))
+    ctx = _score(ctx, t, -10)
+    ctx = c.load_gender(ctx, _A)
+    ctx, male = _split(c.if_loaded_equal_to(ctx, c.Gender.MALE))
+    ctx, female = _split(c.if_loaded_equal_to(ctx, c.Gender.FEMALE))
+    ctx, t = _split(c.go_to(ctx))
+    minus10 = t
+    # Basic_CheckCannotAttract_BothMale (:741) / _BothFemale (:746)
+    for reached, other in ((male, c.Gender.FEMALE), (female, c.Gender.MALE)):
+        ctx = c.load_gender(_at(ctx, reached), _D)
+        ctx, _ = _split(c.if_loaded_equal_to(ctx, other))  # -> _Terminate
+        ctx, t = _split(c.go_to(ctx))
+        minus10 = minus10 | t
+    ctx = _score(_at(ctx, jnp.zeros_like(minus10)), minus10, -10)
+    return c.pop_or_end(ctx)
+
+
+def _basic_check_cannot_burn(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckCannotBurn`` (script.s:879-890)."""
+    ctx = _at(ctx, mask)
+    ctx = c.load_battler_ability(ctx, _D)
+    for name in ("Water Veil", "Magic Guard"):
+        ctx, t = _split(c.if_loaded_equal_to(ctx, _ABILITY[name]))
+        ctx = _score(ctx, t, -10)
+    ctx, t = _split(c.if_status(ctx, _D, c.MonCondition.ANY))
+    ctx = _score(ctx, t, -10)
+    for target in (LoadType.DEFENDER_TYPE_1, LoadType.DEFENDER_TYPE_2):
+        ctx = c.load_type_from(ctx, target)
+        ctx, t = _split(c.if_loaded_equal_to(ctx, _TYPE["Fire"]))
+        ctx = _score(ctx, t, -10)
+    ctx, t = _split(c.if_side_condition(ctx, _D, c.SideCondition.SAFEGUARD))
+    ctx = _score(ctx, t, -10)
+    return c.pop_or_end(ctx)
+
+
 def _basic_check_curse(ctx: AiContext, mask) -> AiContext:
     """``Basic_CheckCurse`` (script.s:679-698)."""
     # Basic_CheckCurse (:679). A Ghost-type attacker jumps to Basic_CheckCurse_GhostType
@@ -713,6 +825,73 @@ _expert_status_spd_up = _status_defense_up(
 )
 
 
+def _expert_status_sleep(ctx: AiContext, mask) -> AiContext:
+    """``Expert_StatusSleep`` (script.s:1813-1825): +1 unless the 128 roll (:1821) jumps when
+    the attacker knows Dream Eater's or Nightmare's effect."""
+    ctx = _at(ctx, mask)
+    ctx, plus1 = _split(c.if_move_effect_known(ctx, _A, BattleEffect.RECOVER_DAMAGE_SLEEP))
+    ctx, t = _split(c.if_move_effect_known(ctx, _A, BattleEffect.STATUS_NIGHTMARE))
+    ctx, _ = _split(c.go_to(ctx))  # -> _End
+    ctx, _ = _split(c.if_random_less_than(_at(ctx, plus1 | t), 128, 1821))
+    return c.pop_or_end(c.add_to_move_score(ctx, 1))
+
+
+def _status_confuse(ctx: AiContext) -> AiContext:
+    """``Expert_StatusConfuse`` (script.s:2861-2877) from the live paths: the player above
+    70 % HP, nothing; else -1 unless the 128 roll (:2864) jumps, then -1 at 50 % or less and
+    -1 more at 30 % or less."""
+    ctx, _ = _split(c.if_hp_percent_greater_than(ctx, _D, 70))  # -> _End
+    ctx, t = _split(c.if_random_less_than(ctx, 128, 2864))
+    ctx = c.add_to_move_score(ctx, -1)
+    # Expert_StatusConfuse_CheckHP (:2867)
+    ctx = _at(ctx, t | ctx.live)
+    ctx, _ = _split(c.if_hp_percent_greater_than(ctx, _D, 50))
+    ctx = c.add_to_move_score(ctx, -1)
+    ctx, _ = _split(c.if_hp_percent_greater_than(ctx, _D, 30))
+    return c.pop_or_end(c.add_to_move_score(ctx, -1))
+
+
+def _expert_status_confuse(ctx: AiContext, mask) -> AiContext:
+    """``Expert_StatusConfuse`` (script.s:2861-2877)."""
+    return _status_confuse(_at(ctx, mask))
+
+
+def _expert_swagger(ctx: AiContext, mask) -> AiContext:
+    """``Expert_Swagger`` (script.s:2845-2891): with Psych Up known, -5 when the player's
+    Attack stage is above decomp 3, else +3 and +2 more on the battle's first turn
+    (``Expert_Swagger_PsychUp``, :2879-2891); otherwise it falls into ``Expert_Flatter``
+    (:2854): +1 unless the 128 roll (:2858) jumps, then ``Expert_StatusConfuse``."""
+    ctx = _at(ctx, mask)
+    ctx, psych_up = _split(c.if_move_known(ctx, _A, _MOVE["Psych Up"]))
+    # Expert_Flatter (:2854)
+    ctx, t = _split(c.if_random_less_than(ctx, 128, 2858))
+    ctx = c.add_to_move_score(ctx, 1)
+    ctx = _status_confuse(_at(ctx, t | ctx.live))
+    # Expert_Swagger_PsychUp (:2879)
+    ctx = _at(ctx, psych_up)
+    ctx, minus5 = _split(c.if_stat_stage_greater_than(ctx, _D, Stat.ATK, 3))
+    ctx = c.add_to_move_score(ctx, 3)
+    ctx = c.load_turn_count(ctx)
+    ctx, _ = _split(c.if_loaded_not_equal_to(ctx, 0))  # -> _End
+    ctx = c.add_to_move_score(ctx, 2)
+    ctx, _ = _split(c.go_to(ctx))  # -> _End
+    # Expert_Swagger_ScoreMinus5 (:2887), falling into _End
+    ctx = c.add_to_move_score(_at(ctx, minus5), -5)
+    return c.pop_or_end(ctx)
+
+
+def _expert_status_paralyze(ctx: AiContext, mask) -> AiContext:
+    """``Expert_StatusParalyze`` (script.s:2940-2954): slower than the player, +3 unless the
+    20 roll (:2950) jumps; otherwise -1 at 70 % HP or less."""
+    ctx = _at(ctx, mask)
+    ctx, plus3 = _split(c.if_speed_compare_equal_to(ctx, COMPARE_SPEED_SLOWER))
+    ctx, _ = _split(c.if_hp_percent_greater_than(ctx, _A, 70))  # -> _End
+    ctx = c.add_to_move_score(ctx, -1)
+    ctx, _ = _split(c.go_to(ctx))  # -> _End
+    ctx, _ = _split(c.if_random_less_than(_at(ctx, plus3), 20, 2950))
+    return c.pop_or_end(c.add_to_move_score(ctx, 3))
+
+
 def _expert_curse(ctx: AiContext, mask) -> AiContext:
     """``Expert_Curse`` (script.s:3452-3500)."""
     # Expert_Curse (:3452). A Ghost-type attacker jumps to Expert_Curse_GhostCheckHP
@@ -871,6 +1050,7 @@ def _dispatch(ctx: AiContext, labels, layout: AiLayout) -> AiContext:
 # Basic_ScoreMoveEffect's entries (script.s:134-285) of the transcribed effects, in line
 # order. The other effects of the transcribed moves have no entry and end at :286.
 _BASIC_LABELS = (
+    (BattleEffect.STATUS_SLEEP, _basic_check_cannot_sleep),  # :134
     (BattleEffect.HALVE_DEFENSE, _basic_check_cannot_explode),  # :135
     (BattleEffect.ATK_UP, _basic_check_high_atk),  # :137
     (BattleEffect.DEF_UP, _basic_check_high_def),  # :138
@@ -879,18 +1059,25 @@ _BASIC_LABELS = (
     (BattleEffect.RESTORE_HALF_HP, _basic_check_can_recover_hp),  # :154
     (BattleEffect.STATUS_BADLY_POISON, _basic_check_cannot_poison),  # :155
     (BattleEffect.SET_LIGHT_SCREEN, _basic_check_light_screen),  # :156
+    (BattleEffect.STATUS_CONFUSE, _basic_check_cannot_confuse),  # :163
     (BattleEffect.ATK_UP_2, _basic_check_high_atk),  # :164
     (BattleEffect.DEF_UP_2, _basic_check_high_def),  # :165
     (BattleEffect.SPEED_UP_2, _basic_check_speed),  # :166
     (BattleEffect.SP_ATK_UP_2, _basic_check_high_spa),  # :167
     (BattleEffect.SP_DEF_UP_2, _basic_check_high_spd),  # :168
     (BattleEffect.DEF_DOWN_2, _basic_check_defense),  # :172
+    (BattleEffect.STATUS_PARALYZE, _basic_check_cannot_paralyze),  # :180
+    (BattleEffect.STATUS_LEECH_SEED, _basic_check_cannot_leech_seed),  # :183
     (BattleEffect.CURSE, _basic_check_curse),  # :196
+    (BattleEffect.ATK_UP_2_STATUS_CONFUSION, _basic_check_cannot_confuse),  # :201
+    (BattleEffect.INFATUATE, _basic_check_cannot_attract),  # :202
+    (BattleEffect.STATUS_BURN, _basic_check_cannot_burn),  # :231
     (BattleEffect.STEALTH_ROCK, _basic_check_stealth_rock),  # :284
 )
 # Expert_Main's entries (script.s:1628-1808) of the transcribed effects, in line order. The
 # other effects of the transcribed moves have no entry and end at :1811.
 _EXPERT_LABELS = (
+    (BattleEffect.STATUS_SLEEP, _expert_status_sleep),  # :1628
     (BattleEffect.RECOVER_HALF_DAMAGE_DEALT, _expert_drain_move),  # :1629
     (BattleEffect.HALVE_DEFENSE, _expert_explosion),  # :1630
     (BattleEffect.ATK_UP, _expert_status_atk_up),  # :1633
@@ -900,12 +1087,16 @@ _EXPERT_LABELS = (
     (BattleEffect.RESTORE_HALF_HP, _expert_recovery),  # :1652
     (BattleEffect.STATUS_BADLY_POISON, _expert_toxic_leech_seed),  # :1653
     (BattleEffect.SET_LIGHT_SCREEN, _expert_light_screen),  # :1654
+    (BattleEffect.STATUS_CONFUSE, _expert_status_confuse),  # :1662
     (BattleEffect.ATK_UP_2, _expert_status_atk_up),  # :1663
     (BattleEffect.DEF_UP_2, _expert_status_def_up),  # :1664
     (BattleEffect.SPEED_UP_2, _expert_status_speed_up),  # :1665
     (BattleEffect.SP_ATK_UP_2, _expert_status_spa_up),  # :1666
     (BattleEffect.SP_DEF_UP_2, _expert_status_spd_up),  # :1667
     (BattleEffect.DEF_DOWN_2, _expert_status_defense_down),  # :1671
+    (BattleEffect.STATUS_PARALYZE, _expert_status_paralyze),  # :1679
+    (BattleEffect.ATK_UP_2_STATUS_CONFUSION, _expert_swagger),  # :1680
+    (BattleEffect.STATUS_LEECH_SEED, _expert_toxic_leech_seed),  # :1686
     (BattleEffect.CURSE, _expert_curse),  # :1700
     (BattleEffect.HIT_BEFORE_SWITCH, _expert_pursuit),  # :1706
     (BattleEffect.REMOVE_SCREENS, _expert_brick_break),  # :1739

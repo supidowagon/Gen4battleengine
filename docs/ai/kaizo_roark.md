@@ -538,6 +538,33 @@ read bound: `Expert_StatusEvasionUp` alone can make 7 random reads on one path (
   - The `PreSplitPhysicalTypes` tables after the defense labels (`:2054`, `:2157`) are not
     read.
 
+### 5.11 Status moves (E1 batch 6)
+
+STATUS_SLEEP, STATUS_CONFUSE, STATUS_PARALYZE, STATUS_LEECH_SEED, ATK_UP_2_STATUS_CONFUSION
+(Swagger), INFATUATE (Attract) and STATUS_BURN (Will-O-Wisp).
+
+- BASIC (dispatch `:134`, `:163`, `:180`, `:183`, `:201`, `:202`, `:231`): -10 when the move
+  cannot work. `Basic_CheckCannotSleep` (`:288-295`): any status, Safeguard, Insomnia or Vital
+  Spirit. `Basic_CheckCannotConfuse` (`:597-605`, Swagger too): already confused -5, then Own
+  Tempo or Safeguard -10. `Basic_CheckCannotParalyze` (`:612-631`): immune by type, Limber or
+  Magic Guard; unless the attacker has Mold Breaker, Thunder Wave also against Motor Drive or
+  Volt Absorb; then any status or Safeguard. `Basic_CheckCannotLeechSeed` (`:639-648`): seeded
+  already, a Grass type, Magic Guard. `Basic_CheckCannotAttract` (`:731-752`): attracted
+  already, Oblivious, or not of opposite genders (genderless on either side included).
+  `Basic_CheckCannotBurn` (`:879-890`): Water Veil, Magic Guard, any status, a Fire type,
+  Safeguard. Every ability is the defender's guessed or known one (section 9).
+- EXPERT (`:1628`, `:1662`, `:1679`, `:1680`, `:1686`): `Expert_StatusSleep` (`:1813-1825`):
+  +1 unless the 128 roll (`:1821`) jumps, when the attacker knows a Dream Eater or Nightmare
+  effect. `Expert_StatusConfuse` (`:2861-2877`): nothing above 70 % of the player's HP; else -1
+  unless the 128 roll (`:2864`) jumps, -1 at 50 % or less, -1 more at 30 % or less (prep cuts
+  the player's HP at 70, 50 and 30, `prep/variants.AI_DEFENDER_HP_CHECKS`).
+  `Expert_StatusParalyze` (`:2940-2954`): slower than the player, +3 unless the 20 roll
+  (`:2950`) jumps; else -1 at 70 % HP or less. `Expert_Swagger` (`:2845-2891`): with Psych Up
+  known, -5 when the player's Attack stage is above decomp 3, else +3, +2 more on the first
+  turn; without it, `Expert_Flatter`'s +1 unless the 128 roll (`:2858`) jumps, then
+  `Expert_StatusConfuse`. Leech Seed takes Roark's `Expert_ToxicLeechSeed` (5.3); Attract and
+  Will-O-Wisp have no `Expert_Main` entry.
+
 ## 6. Where the AI reads the true battle state
 
 roark.md 6 holds: the damage estimate, the kill check and the effectiveness class read the
@@ -707,8 +734,11 @@ reads cost nothing to a move that does not make them.
   and `:304` guesses, `:6374`, `:1859`, `:1870`, `:1875`, Risky's `:6530`), as before. A
   bound whose scoring width (`switch_sites + 1 + 4 x 2^slot_reads`) passes `WIDTH_CAP` is
   refused (`layout.kaizo_layout`; a coverage line). Replaces Ruling R5's per-set bound, a base
-  measured by a random sweep, which every fight paid for the heaviest effect transcribed
-  (the evasion raises and accuracy drops make up to 12 reads). A path that makes more than
+  measured by a random sweep, which every fight would have paid for the heaviest effect
+  (the walker gives the evasion raises 11 reads under Roark's flags and 14-15 under every
+  flag). The walk assumes singles (`IfTargetIsPartner` never jumps; 24 rows, one party) and
+  that an AI Adaptability Pokemon stays refused (with Adaptability one super-effective type
+  makes a quadruple class, `battle_lib.c:2592-2594`); both change with their milestones. A path that makes more than
   the bound is still a path refusal (8.3), a layout bound, never a reused draw.
 - **Enumeration.** `policy` enumerates the reads as bit patterns: bit 0 / 1 of read k stands
   for the draw `outcome.READ_DRAWS` = (254, 1), which split every read (254 is below no

@@ -74,11 +74,12 @@ DEFAULT_WEIGHTS: dict[str, float] = {
 # defender is the player's active) in Expert_StatusDefenseDown_CheckTargetHP (script.s:2332,
 # 70), whose effects both policies transcribe, and, since K3c Task 6, in
 # Expert_ToxicLeechSeed_CheckTargetHP (script.s:2694, 50), which only the Kaizo policy's
-# jump table reaches (policy._dispatch). tests/prep/test_variants.py
+# jump table reaches (policy._dispatch), and since E1 batch 6 Expert_StatusConfuse
+# (script.s:2863, :2871, :2873: 70, 50, 30). tests/prep/test_variants.py
 # test_ai_hp_checks_pinned records the calls each policy's flag scripts make.
 AI_DEFENDER_HP_CHECKS: dict[str, tuple[tuple[str, int], ...]] = {
     "vanilla": (("greater", 70),),
-    "kaizo": (("greater", 70), ("greater", 50)),
+    "kaizo": (("greater", 70), ("greater", 50), ("greater", 30)),
 }
 # The checks a Kaizo trainer AI flag adds when its bit is set (E1 batch 2c): CHECK_HP (bit 8)
 # reads the player's HP band, > 70 and > 30 (CheckHP_Target, script.s:7724-7725).

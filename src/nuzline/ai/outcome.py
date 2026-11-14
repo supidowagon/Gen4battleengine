@@ -223,6 +223,11 @@ SITE_N: dict[int, int] = {
     2137: 200,  # Expert_StatusSpDefenseUp_CheckUserHighHP
     2146: 60,  # Expert_StatusSpDefenseUp_CheckUserMediumHP
     2149: 60,  # Expert_StatusSpDefenseUp_UserAtLowHP
+    # E1 batch 6: the status moves' Expert labels.
+    1821: 128,  # Expert_StatusSleep_TryScorePlus1 (+1 when it does NOT jump)
+    2858: 128,  # Expert_Flatter (+1 when it does NOT jump)
+    2864: 128,  # Expert_StatusConfuse (-1 when it does NOT jump)
+    2950: 20,  # Expert_StatusParalyze_TryScorePlus3 (+3 when it does NOT jump)
 }
 SITE_LINES = tuple(SITE_N)
 # The flat (vanilla) layout's column of script_roll_sites that each line reads: column 0 is
@@ -316,6 +321,14 @@ KAIZO_TRANSCRIBED: frozenset[int] = frozenset(
         51,  # DEF_UP_2: Expert_StatusDefenseUp (:1664)
         53,  # SP_ATK_UP_2: Expert_StatusSpAttackUp (:1666)
         54,  # SP_DEF_UP_2: Expert_StatusSpDefenseUp (:1667)
+        # E1 batch 6: the status moves (docs/ai/kaizo_roark.md 5.11).
+        1,  # STATUS_SLEEP: Basic_CheckCannotSleep (:134); Expert_StatusSleep (:1628), :1821
+        49,  # STATUS_CONFUSE: Basic_CheckCannotConfuse (:163); Expert_StatusConfuse (:1662), :2864
+        67,  # STATUS_PARALYZE: Basic_CheckCannotParalyze (:180); Expert_StatusParalyze (:1679), :2950
+        84,  # STATUS_LEECH_SEED: Basic_CheckCannotLeechSeed (:183); Expert_ToxicLeechSeed (:1686)
+        118,  # ATK_UP_2_STATUS_CONFUSION: Basic_CheckCannotConfuse (:201); Expert_Swagger (:1680)
+        120,  # INFATUATE: Basic_CheckCannotAttract (:202); no Expert_Main entry
+        167,  # STATUS_BURN: Basic_CheckCannotBurn (:231); no Expert_Main entry
     }
 )
 # The transcribed effects (KAIZO_TRANSCRIBED) whose Expert_Main entry goes to a label added
@@ -346,6 +359,12 @@ KAIZO_EXPERT_LABELS: dict[int, tuple[str, int]] = {
     51: ("Expert_StatusDefenseUp", 1664),
     53: ("Expert_StatusSpAttackUp", 1666),
     54: ("Expert_StatusSpDefenseUp", 1667),
+    # E1 batch 6: the status moves.
+    1: ("Expert_StatusSleep", 1628),
+    49: ("Expert_StatusConfuse", 1662),
+    67: ("Expert_StatusParalyze", 1679),
+    84: ("Expert_ToxicLeechSeed", 1686),
+    118: ("Expert_Swagger", 1680),
 }
 # Of KAIZO_EXPERT_LABELS, the effects whose Expert label policy._expert transcribes
 # (layout.KAIZO expert_transcribed), written out: it is not derived from the table, so an
@@ -370,6 +389,11 @@ KAIZO_EXPERT_TRANSCRIBED: frozenset[int] = frozenset(
         51,  # DEF_UP_2: Expert_StatusDefenseUp
         53,  # SP_ATK_UP_2: Expert_StatusSpAttackUp
         54,  # SP_DEF_UP_2: Expert_StatusSpDefenseUp
+        1,  # STATUS_SLEEP: Expert_StatusSleep
+        49,  # STATUS_CONFUSE: Expert_StatusConfuse
+        67,  # STATUS_PARALYZE: Expert_StatusParalyze
+        84,  # STATUS_LEECH_SEED: Expert_ToxicLeechSeed
+        118,  # ATK_UP_2_STATUS_CONFUSION: Expert_Swagger
     }
 )
 assert set(KAIZO_EXPERT_LABELS) <= KAIZO_TRANSCRIBED
