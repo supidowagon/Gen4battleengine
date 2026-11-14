@@ -22,15 +22,25 @@ The sections keep roark.md's numbers, so a rule can be compared section by secti
 - `FlagTable` (`script.s:18-23`) maps bit 4 to `Risky_Main` (`script.s:6521`).
 - `TrainerAI_MainSingles` runs the flags in bit order (`trainer_ai.c:297-310`): BASIC,
   EVAL_ATTACK, EXPERT, then RISKY.
-- The Kaizo policy runs exactly these four scripts (plan K3c Ruling 10; `policy._flags`,
-  `AiLayout.risky`). Gating RISKY per trainer would need a `BattleState` field.
-- Coverage (`engine/coverage.py`) registers the flags per policy since K3c Task 6:
-  `IMPLEMENTED_AI_FLAGS` is `{0, 1, 2}` for vanilla and `{0, 1, 2, 4}` for Kaizo. A vanilla
-  trainer with RISKY stays refused by that flag. A Kaizo trainer whose `ai_flags` is not
-  exactly `0b10111` is refused by the line "AI flags ... are not exactly BASIC,
-  EVAL_ATTACK, EXPERT and RISKY, which the Kaizo AI policy always runs together (plan K3c
-  Ruling 10)" (`POLICY_AI_FLAGS`; `tests/engine/test_coverage.py
-  test_kaizo_flag_set_must_be_exact`). Kaizo Roark's flag lines are all EXACT.
+- **Per-trainer flag sets (E1 Ruling R2; replaces plan K3c Ruling 10).** `TrainerAI_Init`
+  copies the trainer's `aiMask` (`trainer_ai.c:249`), and `TrainerAI_MainSingles` runs a
+  flag's script only when its bit is set, low bit first, each over all four slots
+  (`:297-308`). The Kaizo policy has one `AiLayout` per flag set (`layout.kaizo_layout`;
+  `AiLayout.flags`, a static jit argument, so a fight traces only its own flags' scripts):
+  `policy._flags` runs the set bits in bit order. The fight's trainer reaches the layout
+  through `Tables.ai_flags`, which the fight's entry points set (`layout.fight_tables`:
+  `cli`, and `check_coverage` for its `ai_refusals`); `layout_of` refuses Kaizo tables whose
+  flags are unset. The search's program caches key on `AiLayout.key` (policy and flag set:
+  `expand.ai_rows`, `leaves`, `stage_a`). Implemented sets: every set of BASIC, EVAL_ATTACK,
+  EXPERT and RISKY (`layout.KAIZO_FLAG_BITS`), among them 0x1, 0x5, 0x7 and Roark's 0x17.
+  `KAIZO` is Roark's set and stays bit-identical. Width does not depend on the set: reads are
+  keyed by path order (8.2), so a set's reads cost only the moves that make them.
+- Coverage (`engine/coverage.py`) registers the flags per policy: `IMPLEMENTED_AI_FLAGS` is
+  `{0, 1, 2}` for vanilla and `{0, 1, 2, 4}` for Kaizo. A Kaizo trainer is refused exactly by
+  its unimplemented flags, one "AI_FLAG_..." line each (`tests/engine/test_coverage.py
+  test_kaizo_flag_set_needs_every_flag`). Vanilla keeps its one set: a vanilla trainer
+  without all of BASIC, EVAL_ATTACK and EXPERT is refused (`POLICY_AI_FLAGS`), and one with
+  RISKY by that flag. Kaizo Roark's flag lines are all EXACT.
 
 ## 2. Differences from vanilla
 
@@ -396,12 +406,11 @@ roll (`:6530`), **+2**. Of Roark's effects the table lists HALVE_DEFENSE (`:6538
 Selfdestruct) and RAISE_ALL_STATS_HIT (`:6550`, AncientPower). RISKY runs after EXPERT, in
 bit order (`FlagTable`, `script.s:18-30`; `TrainerAI_MainSingles`, `trainer_ai.c:297-310`).
 
-RISKY is part of the Kaizo policy itself (`policy._flags` runs `_risky` when
-`AiLayout.risky`), not only of coverage. So a caller of `ai_refusals` and `ai_scores` alone
-never scores Selfdestruct or AncientPower without the roll (Task 5 review m2;
-`test_risky_is_part_of_the_policy`). `layout.py` checks at import that every transcribed
-effect of the table has the `:6530` site and that its layout runs RISKY; the vanilla
-transcription has none of those effects.
+RISKY is part of the Kaizo policy itself (`policy._flags` runs `_risky` when the layout's
+flag set has bit 4, E1 Ruling R2), not only of coverage. So a caller of `ai_refusals` and
+`ai_scores` alone never scores Selfdestruct or AncientPower without the roll under Roark's set
+(Task 5 review m2; `test_risky_is_part_of_the_policy`), and never adds it under a set without
+RISKY (`test_flag_set_runs_its_scripts`).
 
 ## 6. Where the AI reads the true battle state
 

@@ -44,9 +44,9 @@ items) and plan 1b (Task 2b: trainer items; Task 3: Roark's AI flags) implement:
 * abilities, held items, trainer items: every member but ``UNSUPPORTED``;
 * AI flags, per AI policy (``IMPLEMENTED_AI_FLAGS``): vanilla bits 0-2 (``AI_FLAG_BASIC``,
   ``AI_FLAG_EVAL_ATTACK``, ``AI_FLAG_EXPERT``), Kaizo those and bit 4 (``AI_FLAG_RISKY``).
-  ``ai.policy`` always runs the policy's scripts together (``policy._flags``), so a vanilla
-  trainer must have all three, and a Kaizo trainer exactly ``0b10111`` (plan K3c Ruling 10:
-  gating RISKY per trainer would need a ``BattleState`` field). The Kaizo layout's ability
+  The vanilla policy runs its three scripts together, so a vanilla trainer must have all
+  three; the Kaizo policy runs each trainer's own flag set (``ai.layout.kaizo_layout``, E1
+  Ruling R2), so a Kaizo trainer needs only every set flag implemented. The Kaizo layout's ability
   guess is one coin per guessing read, as the decomp draws it (E1 Ruling R1,
   docs/ai/kaizo_roark.md 8.4), so it needs no per-trainer check;
 * weather: ``Weather.NONE`` and ``Weather.SANDSTORM``. Sandstorm's every effect on the
@@ -195,9 +195,9 @@ IMPLEMENTED_AI_FLAGS: dict[str, dict[int, Support]] = {
     "vanilla": {0: Support.EXACT, 1: Support.EXACT, 2: Support.EXACT},
     "kaizo": {0: Support.EXACT, 1: Support.EXACT, 2: Support.EXACT, 4: Support.EXACT},
 }
-# ai.policy runs these scripts together, so a trainer must have them all (vanilla), or
-# exactly them (Kaizo, plan K3c Ruling 10).
-POLICY_AI_FLAGS = {"vanilla": 0b111, "kaizo": 0b10111}
+# The vanilla policy runs these scripts together, so a vanilla trainer must have them all. The
+# Kaizo policy runs each trainer's own set (E1 Ruling R2): every set flag must be implemented.
+POLICY_AI_FLAGS = {"vanilla": 0b111}
 IMPLEMENTED_WEATHER: dict[Weather, Support] = {
     Weather.NONE: Support.EXACT,
     Weather.SUN: Support.NONE,
@@ -776,9 +776,10 @@ def _check_trainer(
 
 
 def _check_ai_flags(c: _Collector, policy: str | None, trainer: Trainer) -> None:
-    """Each flag bit of ``trainer`` against ``policy``'s ``IMPLEMENTED_AI_FLAGS``, and the
-    flag set against ``POLICY_AI_FLAGS``. A game without a policy is refused already, by
-    its own line."""
+    """Each flag bit of ``trainer`` against ``policy``'s ``IMPLEMENTED_AI_FLAGS``, and, for
+    vanilla, the flag set against ``POLICY_AI_FLAGS``. The Kaizo policy runs the trainer's own
+    set (``ai.layout.kaizo_layout``, E1 Ruling R2), so every set flag implemented is the rule.
+    A game without a policy is refused already, by its own line."""
     if policy is None:
         return
     flags = int(trainer.ai_flags)
@@ -788,20 +789,11 @@ def _check_ai_flags(c: _Collector, policy: str | None, trainer: Trainer) -> None
             name = AI_FLAG_NAMES[bit] if bit < len(AI_FLAG_NAMES) else f"UNUSED_{bit}"
             support = implemented.get(bit, Support.NONE)
             c.add(support, f"{display_name(trainer)}: AI_FLAG_{name}", "AI flag")
-    required = POLICY_AI_FLAGS[policy]
-    if policy == "vanilla" and flags & required != required:
+    if policy == "vanilla" and flags & POLICY_AI_FLAGS[policy] != POLICY_AI_FLAGS[policy]:
         c.add(
             Support.NONE,
             f"{display_name(trainer)}: AI flags {flags:#x} without all of BASIC, EVAL_ATTACK and "
             "EXPERT, which the AI policy always runs together",
-            "AI flag set",
-        )
-    elif policy == "kaizo" and flags != required:
-        c.add(
-            Support.NONE,
-            f"{display_name(trainer)}: AI flags {flags:#x} are not exactly BASIC, EVAL_ATTACK, "
-            "EXPERT and RISKY, which the Kaizo AI policy always runs together (plan K3c "
-            "Ruling 10)",
             "AI flag set",
         )
 
@@ -941,7 +933,8 @@ def check_coverage(
         leads=leads,
         terrain=trainer.terrain,
     )
-    for reason in ai_refusals(tables, state, names):
+    fight = tables._replace(ai_flags=np.int32(trainer.ai_flags))  # the trainer's flag set
+    for reason in ai_refusals(fight, state, names):
         c.add(Support.NONE, f"{display_name(trainer)}: {reason}", "trainer AI")
     return c.report
 

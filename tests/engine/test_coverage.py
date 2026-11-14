@@ -23,7 +23,6 @@ from nuzline.engine.coverage import (
     IMPLEMENTED_ITEMS,
     IMPLEMENTED_TRAINER_ITEMS,
     IMPLEMENTED_WEATHER,
-    POLICY_AI_FLAGS,
     Support,
     UnsupportedMechanics,
     check_coverage,
@@ -323,12 +322,42 @@ def test_kaizo_roark_ai_flags_exact(kaizo_tables, kaizo_names, kaizo_roark, kaiz
     # trainer by its label (Task 18 fix round 1).
     report = check_opponent(kaizo_tables, kaizo_names, kaizo_roark, kaizo_roark_party, Weather.NONE)
     assert kaizo_roark.label == "Leader Roark" and f"Leader {NO_POLICY}" not in report.missing
-    assert kaizo_roark.ai_flags == 0b10111 == POLICY_AI_FLAGS["kaizo"]
+    assert kaizo_roark.ai_flags == 0b10111
     assert set(IMPLEMENTED_AI_FLAGS["kaizo"]) == {0, 1, 2, 4}
     assert not any("AI flag" in m for m in report.missing), report.missing
     player = [kaizo_roark_party[2]]  # Roark's Gible
     full = check_coverage(kaizo_tables, kaizo_names, player, kaizo_roark, kaizo_roark_party, 0)
     assert not any("trainer AI" in m or "AI flag" in m for m in full.missing), full.missing
+
+
+@pytest.mark.parametrize(
+    ("flags", "refused"),
+    [
+        (0x1, []),
+        (0x5, []),
+        (0x7, []),
+        (0x17, []),
+        (0xF, ["SETUP_FIRST_TURN"]),
+        (0x27, ["PRIORITIZE_EXTREMES"]),
+        (0x10F, ["SETUP_FIRST_TURN", "CHECK_HP"]),
+    ],
+)
+def test_kaizo_flag_set_needs_every_flag(
+    kaizo_tables, kaizo_names, kaizo_roark, kaizo_roark_party, flags, refused
+):
+    # E1 Ruling R2 (replaces plan K3c Ruling 10's exact set): the Kaizo policy runs each
+    # trainer's own flag set, so a set is refused exactly by its unimplemented flags, one line
+    # each, and an implemented set (0x1, 0x5, 0x7, Roark's 0x17) is not.
+    from nuzline.ai.layout import KAIZO_FLAG_BITS
+
+    assert set(IMPLEMENTED_AI_FLAGS["kaizo"]) == KAIZO_FLAG_BITS
+    trainer = replace(kaizo_roark, ai_flags=flags)
+    report = check_opponent(kaizo_tables, kaizo_names, trainer, kaizo_roark_party, Weather.NONE)
+    flag_lines = [m for m in report.missing if "AI flag" in m]
+    assert flag_lines == [f"Leader Roark: AI_FLAG_{x} (AI flag UNSUPPORTED)" for x in refused]
+
+
+# --- Kaizo trainer fields (K2b Task 14) ----------------------------------------------
 
 
 def with_area(trainer, **fields):

@@ -638,6 +638,43 @@ def test_exact_equals_loose_on_roark_split_pokemon(
         _assert_exact_equals_loose(t, s)
 
 
+@pytest.mark.parametrize(
+    ("trainer_id", "index", "species", "moves"),
+    [
+        (2, 2, "Wurmple", ["Poison Sting", "Tackle"]),  # Bug Catcher Logan, flags 0x1
+        (3, 0, "Sunkern", ["Toxic", "Mega Drain"]),  # Lass Natalie, flags 0x5
+        (4, 1, "Torchic", ["Pound", "Ember", "Rock Smash"]),  # Youngster Michael, flags 0x7
+        (246, 0, "Bonsly", ["Stealth Rock", "Selfdestruct", "Brick Break", "Accelerock"]),
+    ],
+)
+def test_exact_equals_loose_per_flag_set(
+    kaizo_tables, kaizo_names, kaizo_trainers, kaizo_roark_party, trainer_id, index, species, moves
+):
+    """E1 Ruling R2: each Roark-split trainer runs its own flag set (0x1 BASIC; 0x5 BASIC and
+    EXPERT; 0x7 BASIC, EVAL_ATTACK and EXPERT; Roark's 0x17 with RISKY; trainer_ai.c:297-308),
+    and exact == loose under each, on a Pokemon of the trainer with the moves the AI
+    transcribes (the others, e.g. Bug Bite, Leech Seed, Protect, Pluck, are not yet), Roark's
+    Cranidos behind it, against two guessed players (Gible, Tentacool)."""
+    from nuzline.ai.layout import kaizo_layout
+    from nuzline.data.trainer import IntermediateData, build_trainer_party
+    from tests.conftest import KAIZO_INTERMEDIATE
+
+    t, n = kaizo_tables, kaizo_names
+    trainer = next(x for x in kaizo_trainers if x.id == trainer_id)
+    layout = kaizo_layout(trainer.ai_flags)
+    mon = build_trainer_party(trainer, IntermediateData(KAIZO_INTERMEDIATE))[index]
+    assert n.species_names[mon.species] == species
+    kept = [m for m in mon.moves if n.move_names[m] in moves]
+    assert [n.move_names[m] for m in kept] == moves
+    mon = dataclasses.replace(mon, moves=tuple(kept + [0] * (4 - len(kept))), pp=None)
+    bench = dataclasses.replace(kaizo_roark_party[5], moves=(ACCELEROCK, HEADBUTT, 0, 0), pp=None)
+    base = make_state(t, [kaizo_roark_party[2]], [mon, bench])
+    for player in (GIBLE, 72):
+        s = _bulky(_with_player(t, base, player), 200)
+        assert policy.ai_refusals(t, s, n, layout) == []
+        _assert_exact_equals_loose(t, s, layout)
+
+
 def test_slot_reads_fit_every_transcribed_effect(kaizo_tables, kaizo_roark_party):
     """``KAIZO.slot_reads`` is the most random reads one move's scoring path makes, from the
     data: for every transcribed Kaizo move in slot 0 (the rest drawn from the transcribed
@@ -773,6 +810,7 @@ assert jax.device_count() == DEVICES, jax.device_count()
 d = GAMES[KAIZO]
 t = load_tables(d.tables_dir)
 roark = next(x for x in load_trainers(d.intermediate_dir) if x.name == "Roark")
+t = t._replace(ai_flags=np.int32(roark.ai_flags))
 party = build_trainer_party(roark, IntermediateData(d.intermediate_dir))
 rows = _random_kaizo_rows(t, party, 40, seed=5)
 empty = ai_rows(t, take(rows, np.arange(0)))  # K3c final review: no rows, any device count

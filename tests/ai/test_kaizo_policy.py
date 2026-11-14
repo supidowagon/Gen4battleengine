@@ -1250,3 +1250,34 @@ def test_exact_equals_loose_at_equal_speed(kaizo_tables, kaizo_names, kaizo_roar
     reads, _, kind = policy._loose_reads(t, batch, KAIZO)
     assert any(kind[slot, r] == c.ReadKind.SPEED_TIE for r in reads[slot]) == tied
     _assert_exact_equals_loose(t, s, KAIZO)
+
+
+# --- Flag sets (E1 Ruling R2) ----------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("flags", "scripts"),
+    [
+        (0x1, ["_basic"]),
+        (0x5, ["_basic", "_expert"]),
+        (0x7, ["_basic", "_eval_attack", "_expert"]),
+        (0x17, ["_basic", "_eval_attack", "_expert", "_risky"]),
+    ],
+)
+def test_flag_set_runs_its_scripts(kaizo_tables, kaizo_roark_party, flags, scripts):
+    """TrainerAI_MainSingles runs a flag's script only when its bit is set, in bit order
+    (trainer_ai.c:297-308; FlagTable, script.s:18-30). Under set 0x7 Selfdestruct and
+    AncientPower get no Risky +2 (:6530), and their scores are the three flags' scores."""
+    from nuzline.ai.layout import kaizo_layout
+
+    layout = kaizo_layout(flags)
+    assert [getattr(f, "func", f).__name__ for f in policy._flags(layout)] == scripts
+    t = kaizo_tables
+    s = _state(t, kaizo_roark_party, BONSLY, (SELFDESTRUCT, BRICK_BREAK, 0, 0))
+    o = _outcome(t, s)
+    ctx = policy._run_flags(c.new_context(t, s, o), layout)
+    prefix = {0x1: 1, 0x7: 3, 0x17: 4}
+    if flags in prefix:
+        assert [int(x) for x in ctx.scores] == [
+            int(x) for x in _flag_scores(t, s, o, prefix[flags])
+        ]

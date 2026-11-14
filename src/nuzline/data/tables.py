@@ -57,6 +57,9 @@ def _read_manifest(dir: Path) -> dict:
     return manifest
 
 
+AI_FLAGS_UNSET = np.int32(-1)  # Tables.ai_flags before a fight sets its trainer's
+
+
 class Tables(NamedTuple):
     # S = 508 personal rows: species 0-495, then the data forms (Ruling 6).
     species_base_stats: jnp.ndarray  # int16[S,6], index = ids.Stat
@@ -98,13 +101,17 @@ class Tables(NamedTuple):
     item_hold_effect: jnp.ndarray  # int16[I], the decomp hold effect id (0 = none)
     item_hold_param: jnp.ndarray  # int16[I], the decomp hold param (ItemData.effectParam)
     ai_policy: jnp.ndarray  # int8[], the trainer-AI policy (game_constants.AI_POLICIES index)
+    # int32[]: the fight's trainer AI flags (TrainerHeader.aiMask, trainer_ai.c:249), which the
+    # fight's entry point sets (Trainer.ai_flags); not in tables.npz. AI_FLAGS_UNSET until then:
+    # ai.layout.layout_of refuses it for a per-flag-set policy (E1 Ruling R2).
+    ai_flags: jnp.ndarray = AI_FLAGS_UNSET
 
 
 def load_tables(dir: Path = DEFAULT) -> Tables:
     _read_manifest(dir)
     with np.load(Path(dir) / "tables.npz") as z:
         check_npz(z, dir)
-        return Tables(**{f: jnp.asarray(z[f]) for f in Tables._fields})
+        return Tables(**{f: jnp.asarray(z[f]) for f in Tables._fields if f in z.files})
 
 
 def to_numpy(tables: Tables) -> Tables:

@@ -4,8 +4,8 @@
 (roark.md 2): ``TrainerAI_ShouldSwitch`` (``maybe_switch``), then
 ``TrainerAI_ShouldUseItem`` (``maybe_use_item``), then ``TrainerAI_Main``: base scores,
 the BASIC, EVAL_ATTACK and EXPERT flag scripts over move slots 0-3 (``ai_scores``), and
-the highest score with ties broken by ``AiOutcome.tiebreak``. The Kaizo policy also runs
-RISKY after EXPERT (``layout.risky``; docs/ai/kaizo_roark.md 1). Every random draw is a
+the highest score with ties broken by ``AiOutcome.tiebreak``. The Kaizo policy runs the
+flags of the trainer's set (``layout.flags``; E1 Ruling R2, docs/ai/kaizo_roark.md 1). Every random draw is a
 field of the ``AiOutcome`` input; nothing here draws randomness.
 
 The scripts are transcribed label by label from ``src/battle/trainer_ai/script.s``
@@ -60,7 +60,7 @@ import numpy as np
 from nuzline.ai import commands as c
 from nuzline.ai import switching
 from nuzline.ai.commands import AiContext, BattleEffect, Battler, LoadType, TypeMulti
-from nuzline.ai.layout import VANILLA, AiLayout, layout_of
+from nuzline.ai.layout import BASIC, EVAL_ATTACK, EXPERT, RISKY, VANILLA, AiLayout, layout_of
 from nuzline.ai.outcome import (
     ABILITY_GUESSES,
     ENUMERATION_WIDTH,
@@ -783,13 +783,25 @@ def _risky(ctx: AiContext) -> AiContext:
 
 
 def _flags(layout: AiLayout) -> tuple:
-    """The flag scripts the policy runs, in bit order (``TrainerAI_MainSingles``,
-    trainer_ai.c:297-310; ``FlagTable``, script.s:18-30): BASIC, EVAL_ATTACK, EXPERT
-    (vanilla Roark's ai_flags = 7, roark.md 1), then RISKY when ``layout.risky`` (Kaizo
-    Roark's are 23, docs/ai/kaizo_roark.md 1). The policy always runs exactly these; coverage
-    refuses a trainer with any other flag set (``engine/coverage.py``, plan K3c Ruling 10)."""
-    flags = (partial(_basic, layout=layout), _eval_attack, partial(_expert, layout=layout))
-    return (*flags, _risky) if layout.risky else flags
+    """The flag scripts the policy runs: those of ``layout.flags``' set bits, in bit order
+    (``TrainerAI_MainSingles`` runs a flag's script only when its bit is set, low bit first,
+    trainer_ai.c:297-308; ``FlagTable``, script.s:18-30): BASIC (bit 0), EVAL_ATTACK (1),
+    EXPERT (2), RISKY (4). Vanilla runs 7 (roark.md 1); Kaizo the trainer's set (E1 Ruling
+    R2), Roark's 23. A bit without a transcribed script raises (``layout.kaizo_layout``
+    builds no such layout; coverage refuses the trainer)."""
+    scripts = {
+        BASIC: partial(_basic, layout=layout),
+        EVAL_ATTACK: _eval_attack,
+        EXPERT: partial(_expert, layout=layout),
+        RISKY: _risky,
+    }
+    out = []
+    for bit in range(layout.flags.bit_length()):
+        if layout.runs(bit):
+            if bit not in scripts:
+                raise ValueError(f"AI flag bit {bit} of {layout.flags:#x} is not transcribed")
+            out.append(scripts[bit])
+    return tuple(out)
 
 
 # --- Refusals ----------------------------------------------------------------------
@@ -861,7 +873,7 @@ def _refused(tables: Tables, state: BattleState, layout: AiLayout = VANILLA) -> 
     # transcribed yet (outcome.KAIZO_EXPERT_LABELS, layout.expert_transcribed): refused.
     pending = sorted(set(KAIZO_EXPERT_LABELS) - layout.expert_transcribed)
     expert = present[1][:, None] & (moves[1] != 0) & ~move & ~ghost_curse
-    if layout.per_slot_sites and pending:
+    if layout.per_slot_sites and pending and layout.runs(EXPERT):
         expert = expert & jnp.isin(effects, jnp.array(pending, _I32))
     else:
         expert = jnp.zeros_like(expert)

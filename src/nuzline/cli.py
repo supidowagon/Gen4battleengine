@@ -550,6 +550,9 @@ def _fight(args):
     inter = IntermediateData(game.intermediate_dir)
     _check_buildable(tables, names, trainer, inter)
     opp = build_trainer_party(trainer, inter)
+    from nuzline.ai.layout import fight_tables
+
+    tables = fight_tables(tables, trainer)
     if 0 <= args.lead < len(player) and player[args.lead].current_hp == 0:
         raise ValueError(f"--lead {args.lead}: that Pokemon has fainted")
     return game, tables, names, trainer, player, opp, start_weather(trainer), save
@@ -824,6 +827,9 @@ def _prep(args) -> int:
     inter = IntermediateData(game.intermediate_dir)
     _check_buildable(tables, names, trainer, inter)
     opp = build_trainer_party(trainer, inter)
+    from nuzline.ai.layout import fight_tables
+
+    tables = fight_tables(tables, trainer)
     weather = start_weather(trainer)
     # A refused fight exits 2 before the cap, the pool or the team space can fail it. No
     # player party here: the team is not chosen yet, so build_problem's usable_pool checks
