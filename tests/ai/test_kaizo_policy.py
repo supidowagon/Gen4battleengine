@@ -1394,21 +1394,36 @@ def test_setup_first_turn(kaizo_tables, kaizo_roark_party, turn, jump):
         # The fall-through (E1 Ruling R3): a non-weather move runs Weather_Sun and ends.
         (Weather.SUN, 0, [0, 0, 0, 5]),
         (Weather.RAIN, 0, [5, 5, 5, 0]),
+        (Weather.HAIL, 0, [5, 5, 5, 5]),
         (Weather.NONE, 1, [0, 0, 0, 0]),
     ],
 )
-def test_weather(kaizo_tables, kaizo_names, kaizo_roark_party, weather, turn, expected):
+@pytest.mark.parametrize("own", [False, True])
+def test_weather(kaizo_tables, kaizo_names, kaizo_roark_party, weather, turn, expected, own):
     """Weather_Main (script.s:7979-8019), against set 0x7 (-> 0x207): on totalTurns 0 a
     weather move ends when its own weather is up (Weather_Sun/Rain, :7992-8000) and every other
     move falls through into Weather_Sun (no GoTo after :7990), so it ends under sun; otherwise
     Weather_ScorePlus5 gives +5 (the lead's LoadIsFirstTurnInBattle is TRUE, :8014-8016).
     Slots: Stealth Rock, Rock Polish, Sunny Day (WEATHER_SUN), Rain Dance (WEATHER_RAIN);
-    refusals are not applied (the weather moves are unmodelled)."""
+    refusals are not applied (the weather moves are unmodelled). With ``own``, Sandstorm
+    (WEATHER_SANDSTORM) and Hail (WEATHER_HAIL) take slots 2 and 3, each ending under its own
+    weather (Weather_Sand, Weather_Hail, :8002-8010)."""
     t, n = kaizo_tables, kaizo_names
-    sunny, rain = n.move_names.index("Sunny Day"), n.move_names.index("Rain Dance")
+    names = ("Sandstorm", "Hail") if own else ("Sunny Day", "Rain Dance")
+    effects = (
+        (BattleEffect.WEATHER_SANDSTORM, BattleEffect.WEATHER_HAIL)
+        if own
+        else (BattleEffect.WEATHER_SUN, BattleEffect.WEATHER_RAIN)
+    )
+    first, second = (n.move_names.index(x) for x in names)
     effect = np.asarray(t.move_ai_effect)
-    assert (effect[sunny], effect[rain]) == (BattleEffect.WEATHER_SUN, BattleEffect.WEATHER_RAIN)
-    s = _state(t, kaizo_roark_party, BONSLY, (STEALTH_ROCK, ROCK_POLISH, sunny, rain))
+    assert (effect[first], effect[second]) == effects
+    if own:  # own weather of each slot: sand for slot 2, hail for slot 3
+        own_weather = {Weather.SANDSTORM: 2, Weather.HAIL: 3}
+        expected = [0] * 4 if turn else [0 if weather == Weather.SUN else 5] * 2 + [5, 5]
+        if weather in own_weather:
+            expected[own_weather[weather]] = 0
+    s = _state(t, kaizo_roark_party, BONSLY, (STEALTH_ROCK, ROCK_POLISH, first, second))
     s = _turn(s, turn)._replace(weather=jnp.asarray(weather, s.weather.dtype))
     assert _delta(t, s, 0x7, 0x207) == expected
 

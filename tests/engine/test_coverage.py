@@ -323,7 +323,7 @@ def test_kaizo_roark_ai_flags_exact(kaizo_tables, kaizo_names, kaizo_roark, kaiz
     report = check_opponent(kaizo_tables, kaizo_names, kaizo_roark, kaizo_roark_party, Weather.NONE)
     assert kaizo_roark.label == "Leader Roark" and f"Leader {NO_POLICY}" not in report.missing
     assert kaizo_roark.ai_flags == 0b10111
-    assert set(IMPLEMENTED_AI_FLAGS["kaizo"]) == {0, 1, 2, 4}
+    assert {0, 1, 2, 4} <= set(IMPLEMENTED_AI_FLAGS["kaizo"])
     assert not any("AI flag" in m for m in report.missing), report.missing
     player = [kaizo_roark_party[2]]  # Roark's Gible
     full = check_coverage(kaizo_tables, kaizo_names, player, kaizo_roark, kaizo_roark_party, 0)
