@@ -288,6 +288,17 @@ CONSTANTS: tuple[Constant, ...] = (
             "Ice Body": 115,
         },
     ),
+    # The status orbs' decomp abilities (subscript_badly_poison.s:14, subscript_burn.s:6, :9).
+    *_table(
+        "nuzline.engine.ids.ITEM_ABILITY_IDS",
+        "ability",
+        _E,
+        {
+            "Immunity": 17,
+            "Water Veil": 41,
+            "Leaf Guard": 102,
+        },
+    ),
     Constant("nuzline.ai.switching.MOVE_STRUGGLE", "move", 165, "Struggle", _E),
     # Thunder Wave: BattleControllerPlayer_CheckTypeChart's MOVE_THUNDER_WAVE
     # (src/battle/battle_controller_player.c:2357).
@@ -503,6 +514,11 @@ EXEMPT: dict[str, str] = {
         "keyed by decomp hold effect id, read off the vanilla sTypeBoostingItems "
         "(battle_lib.c:6514): each game's items carry their own hold effect (build_tables "
         "looks theirs up here), and a game's code changes are rom_diff.toml entries"
+    ),
+    "tools.effect_map.PINCH_STAT_HOLD_EFFECTS": (
+        "keyed by decomp hold effect id, read off BattleSystem_TriggerHeldItem's stat pinch "
+        "berries (battle_lib.c:4773-4836): each game's items carry their own hold effect "
+        "(build_tables looks theirs up here), and a game's code changes are rom_diff.toml entries"
     ),
     "tools.effect_map.HOLD_EFFECT_TO_ID": (
         "keyed by decomp hold effect id: engine semantics of the vanilla item code; each "

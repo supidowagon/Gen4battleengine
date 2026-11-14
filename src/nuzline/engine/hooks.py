@@ -10,8 +10,8 @@
   ``SWITCH_IN_CHECK_STATE_HELD_ITEM_STATUS`` (:4151).
 * ``held_item_check`` / ``after_damage_items``: ``BattleSystem_TriggerHeldItem``
   (battle_lib.c:4576) and ``BattleSystem_TriggerHeldItemOnStatus`` (:4967), which
-  are the same for every implemented item (HP berries, Berry Juice, Chesto, Pecha,
-  Lum, White Herb). ``step`` runs it after every hit of a
+  are the same for every implemented item (HP berries, Berry Juice, the status berries,
+  Lum, White Herb, the stat pinch berries). ``step`` runs it after every hit of a
   move (``AFTER_MOVE_EFFECT_ATTACKER_ITEM`` / ``_DEFENDER_ITEM``,
   battle_controller_player.c:3684, :3691, then ``_HELD_ITEM_STATUS`` for both, :3730;
   the after-move effects run per hit before
@@ -34,7 +34,8 @@ Sitrus Berry (``HOLD_EFFECT_HP_PCT_RESTORE``) ``BattleSystem_Divide(maxHP * item
 ``subscript_held_item_hp_restore.s`` heals through ``BATTLE_SUBSCRIPT_UPDATE_HP``
 (capped at max HP) and ``BATTLE_SUBSCRIPT_PLUCK_CHECK`` removes the item
 (``BtlCmd_RemoveItem``, battle_script.c:8972, which keeps it in ``recycleItem``:
-``item_consumed`` here). Klutz, Embargo and Gluttony are unsupported.
+``item_consumed`` here). Klutz and Embargo are unsupported; Gluttony halves only the pinch
+berries' param (``order.pinch_divisor``).
 
 What the AI learns (``REVEALS_ON``, ``reveal_ability``): the AI knows the player's
 ability (``BattleState.ai_ability_known``) once ``BattleAI_SetAbility``
@@ -65,7 +66,8 @@ import jax.numpy as jnp
 from nuzline.data.tables import Tables
 from nuzline.engine.effects import change_stage, stealth_rock_damage
 from nuzline.engine.ids import AbilityId, ItemId, Stat, Status
-from nuzline.engine.state import BattleState
+from nuzline.engine.order import pinch_divisor
+from nuzline.engine.state import STAGE_MAX, BattleState
 
 _I32 = jnp.int32
 
@@ -166,28 +168,42 @@ def recover_status_by_ability(state: BattleState, side, cond=True) -> BattleStat
     return reveal_ability(state, side, mon, STATUS_CURE, woke)
 
 
+# The status berries: the statuses each one cures (``BattleSystem_TriggerHeldItem``,
+# battle_lib.c:4601-4634; ``BattleSystem_PluckBerry``, :5569-5607). Pecha also cures toxic
+# (``MON_CONDITION_ANY_POISON``, :4616).
+_STATUS_BERRIES = (
+    (ItemId.CHERI_BERRY, (Status.PARALYSIS,)),  # HOLD_EFFECT_PRZ_RESTORE, :4601
+    (ItemId.CHESTO_BERRY, (Status.SLEEP,)),  # _SLP_RESTORE, :4608
+    (ItemId.PECHA_BERRY, (Status.POISON, Status.TOXIC)),  # _PSN_RESTORE, :4615
+    (ItemId.RAWST_BERRY, (Status.BURN,)),  # _BRN_RESTORE, :4622
+    (ItemId.ASPEAR_BERRY, (Status.FREEZE,)),  # _FRZ_RESTORE, :4629
+)
+
+
 def _restore(state: BattleState, side, mon, effect, cond):
     """``(state, triggered)``: the cure half of a status or stat item ``effect`` on
     ``side``'s party ``mon`` (its active battler), where ``cond`` and it has something to
-    cure. Chesto: sleep (``subscript_held_item_slp_restore.s``); Pecha: poison or toxic
-    (``MON_CONDITION_ANY_POISON``, ``..._psn_restore.s``); Lum: any status and confusion
-    (``..._prz/slp/psn/brn/frz/cnf/multi_restore.s``: the status, then the confusion);
-    White Herb: every stage below neutral back to neutral (battle_lib.c:4875-4887, done in
-    C before ``..._statdown_restore.s``). A cured status takes its counter with it (sleep
-    turns and the toxic counter are bits of ``status``)."""
+    cure. Cheri: paralysis (``subscript_held_item_prz_restore.s``); Chesto: sleep
+    (``..._slp_restore.s``); Pecha: poison or toxic (``MON_CONDITION_ANY_POISON``,
+    ``..._psn_restore.s``); Rawst: burn (``..._brn_restore.s``); Aspear: freeze
+    (``..._frz_restore.s``); Persim: confusion (``..._cnf_restore.s``, battle_lib.c:4655-4660);
+    Lum: any status and confusion (``..._prz/slp/psn/brn/frz/cnf/multi_restore.s``: the
+    status, then the confusion); White Herb: every stage below neutral back to neutral
+    (battle_lib.c:4875-4887, done in C before ``..._statdown_restore.s``). A cured status
+    takes its counter with it (sleep turns and the toxic counter are bits of ``status``)."""
     status = state.status[side, mon]
-    asleep = status == Status.SLEEP
-    poisoned = (status == Status.POISON) | (status == Status.TOXIC)
     any_status = status != Status.NONE
     confused = state.confusion[side] > 0
     lowered = state.stages[side] < 0
     lum = effect == ItemId.LUM_BERRY
-    cure_status = cond & (
-        ((effect == ItemId.CHESTO_BERRY) & asleep)
-        | ((effect == ItemId.PECHA_BERRY) & poisoned)
-        | (lum & any_status)
-    )
-    cure_confusion = cond & lum & confused
+    berry = jnp.zeros((), bool)
+    for item, statuses in _STATUS_BERRIES:
+        cures = jnp.zeros((), bool)
+        for cured in statuses:
+            cures = cures | (status == cured)
+        berry = berry | ((effect == item) & cures)
+    cure_status = cond & (berry | (lum & any_status))
+    cure_confusion = cond & (lum | (effect == ItemId.PERSIM_BERRY)) & confused
     herb = cond & (effect == ItemId.WHITE_HERB) & jnp.any(lowered)
     state = state._replace(
         status=state.status.at[side, mon].set(
@@ -208,6 +224,19 @@ def _restore(state: BattleState, side, mon, effect, cond):
     return state, cure_status | cure_confusion | herb
 
 
+def _raise_stat(tables: Tables, state: BattleState, side, item, cond):
+    """``(state, raised)``: a ``PINCH_BERRY`` ``item`` raises ``side``'s stat
+    ``item_param[item, 1]`` by 1 where ``cond`` and that stage is below +6
+    (``statBoosts[stat] < MAX_STAT_STAGE``, battle_lib.c:4779 and :5754):
+    ``subscript_held_item_raise_stat.s`` runs ``BtlCmd_ChangeStatStage`` with
+    ``SIDE_EFFECT_TYPE_HELD_ITEM`` (battle_script.c:2841-2873; Simple applies where the stage
+    is read, ``damage.simple_stage``)."""
+    stat = tables.item_param[item, 1].astype(_I32)
+    on = jnp.asarray(cond) & (tables.item_effect[item] == ItemId.PINCH_BERRY)
+    on = on & (state.stages[side, stat] < STAGE_MAX)
+    return change_stage(state, side, stat, 1, on), on
+
+
 def _hp_restore(effect, power, max_hp) -> jnp.ndarray:
     """HP an HP berry restores: Oran Berry and Berry Juice (``HOLD_EFFECT_HP_RESTORE``) its
     param, Sitrus Berry (``HOLD_EFFECT_HP_PCT_RESTORE``) ``BattleSystem_Divide(maxHP *
@@ -225,10 +254,12 @@ def held_item_check(
     on ``side``'s active Pokemon where ``cond`` and it has HP left: an HP berry
     (``_hp_restore``) at ``curHP <= maxHP / 2`` (``hp * 2 <= max_hp``) heals, capped
     (``subscript_held_item_hp_restore.s``); a status berry or White Herb cures
-    (``_restore``). Every one of those subscripts ends in ``BATTLE_SUBSCRIPT_PLUCK_CHECK``,
-    which removes the item (``BtlCmd_RemoveItem``, battle_script.c:8972, which keeps it in
-    ``item_consumed``) unless the attacker's ``SELF_TURN_FLAG_PLUCK_BERRY`` is set
-    (``keep``, ``effects.MoveHit.pluck_flag``), and clears that flag."""
+    (``_restore``); a stat pinch berry at ``curHP <= maxHP / pinch_divisor`` raises its stat
+    (``_raise_stat``, battle_lib.c:4773-4836; ``order.pinch_divisor``). Every one of those subscripts ends in
+    ``BATTLE_SUBSCRIPT_PLUCK_CHECK``, which removes the item (``BtlCmd_RemoveItem``,
+    battle_script.c:8972, which keeps it in ``item_consumed``) unless the attacker's
+    ``SELF_TURN_FLAG_PLUCK_BERRY`` is set (``keep``, ``effects.MoveHit.pluck_flag``), and
+    clears that flag."""
     side = jnp.asarray(side, _I32)
     mon = state.active[side]
     item = state.item[side, mon]
@@ -242,7 +273,9 @@ def held_item_check(
     new_hp = jnp.where(healed, jnp.minimum(hp + heal, max_hp), hp)
     state = state._replace(hp=state.hp.at[side, mon].set(new_hp.astype(state.hp.dtype)))
     state, cured = _restore(state, side, mon, effect, live)
-    on = healed | cured
+    pinch = live & (hp <= max_hp // pinch_divisor(tables, state, side, mon, item))
+    state, raised = _raise_stat(tables, state, side, item, pinch)
+    on = healed | cured | raised
     spent = on & ~jnp.asarray(keep)
     state = state._replace(
         item=state.item.at[side, mon].set(jnp.where(spent, 0, item).astype(state.item.dtype)),
@@ -260,40 +293,53 @@ def after_damage_items(tables: Tables, state: BattleState, side, cond=True) -> B
 
 
 # Item effects with a pluck effect (res/items/data/*.json ``pluckEffect``): Oran
-# PLUCK_EFFECT_HP_RESTORE, Sitrus _HP_PCT_RESTORE, Chesto _SLP_RESTORE, Pecha _PSN_RESTORE,
-# Lum _ALL_RESTORE. Every other implemented item has PLUCK_EFFECT_NONE; of those only the
-# berries (Item_IsBerry, battle_lib.c:5833) are eaten, with no effect. Berry Juice and every
-# non-berry item (``NONE`` included: Nugget, a Poke Ball) are not eaten.
+# PLUCK_EFFECT_HP_RESTORE, Sitrus _HP_PCT_RESTORE, Cheri _PRZ_RESTORE, Chesto _SLP_RESTORE,
+# Pecha _PSN_RESTORE, Rawst _BRN_RESTORE, Aspear _FRZ_RESTORE, Persim _CNF_RESTORE, Lum
+# _ALL_RESTORE, the stat pinch berries _ATK_UP .. _SPDEF_UP. Every other implemented item has
+# PLUCK_EFFECT_NONE; of those only the berries (Item_IsBerry, battle_lib.c:5833) are eaten,
+# with no effect. Berry Juice and every non-berry item (``NONE`` included: Nugget, a Poke
+# Ball) are not eaten.
 PLUCKABLE = (
     ItemId.ORAN_BERRY,
     ItemId.SITRUS_BERRY,
+    ItemId.CHERI_BERRY,
     ItemId.CHESTO_BERRY,
     ItemId.PECHA_BERRY,
+    ItemId.RAWST_BERRY,
+    ItemId.ASPEAR_BERRY,
+    ItemId.PERSIM_BERRY,
     ItemId.LUM_BERRY,
-    # The resist berries and the berries with no hold effect (Razz, Nanab, ...):
-    # PLUCK_EFFECT_NONE berries, eaten with no effect (Item_IsBerry, :5833).
+    ItemId.PINCH_BERRY,
+    # The resist berries, Custap Berry and the berries with no hold effect (Razz, Nanab,
+    # ...): PLUCK_EFFECT_NONE berries, eaten with no effect (Item_IsBerry, :5833).
     ItemId.RESIST_BERRY,
+    ItemId.CUSTAP_BERRY,
     ItemId.NO_EFFECT_BERRY,
 )
 
 
 def pluck_berry(
-    tables: Tables, state: BattleState, side, cond=True
+    tables: Tables, state: BattleState, side, cond=True, foe_custap=False
 ) -> tuple[BattleState, jnp.ndarray]:
     """``(state, pluck_flag)``: ``side``'s active Pokemon eats the foe's berry where
     ``cond`` (``subscript_pluck.s``): ``BtlCmd_TryPluck`` (battle_script.c:8116) ->
-    ``BattleSystem_PluckBerry`` (battle_lib.c:5539). A ``PLUCKABLE`` berry is removed
+    ``BattleSystem_PluckBerry`` (battle_lib.c:5539). ``foe_custap``: the foe's
+    ``moveEffectsData.custapBerry`` is set (``order.custap_flags``: the turn order activated
+    its Custap Berry, eaten when its move starts), and then ``TryPluck`` does nothing while the
+    foe holds an item (battle_script.c:8125-8127). A ``PLUCKABLE`` berry is removed
     (``RemoveItem BTLSCR_DEFENDER``, kept in ``item_consumed``) even if the foe fainted,
     and its pluck effect acts on the eater: Oran heals its param, Sitrus
-    ``Divide(maxHP * param, 100)``, each only below full HP (capped); Chesto, Pecha and Lum
-    cure as the held berry would (``_restore``: the same restore subscripts); the resist
-    berries and the berries with no hold effect (``PLUCK_EFFECT_NONE`` berries) are eaten
-    with no effect. Anything else stays
+    ``Divide(maxHP * param, 100)``, each only below full HP (capped); Cheri, Chesto, Pecha,
+    Rawst, Aspear, Persim and Lum cure as the held berry would (``_restore``: the same restore
+    subscripts); a stat pinch berry raises the eater's stat by 1 below +6 whatever its HP
+    (``_raise_stat``, :5753-5796: ``subscript_pluck.s`` sets ``msgBattlerTemp`` to the
+    attacker); the resist berries, Custap and the berries with no hold effect
+    (``PLUCK_EFFECT_NONE`` berries) are eaten with no effect. Anything else stays
     (:5833). ``SELF_TURN_FLAG_PLUCK_BERRY`` is set for every eaten berry
     (:5848) and cleared by the restore subscript's ``PLUCK_CHECK``, so it is left set
     (``pluck_flag``) when the berry did nothing for the eater (``nextSeq == 0``). The
-    eater's own item is never touched here. Sticky Hold, Custap Berry, Klutz and Embargo
-    are unsupported."""
+    eater's own item is never touched here. Sticky Hold, Klutz and Embargo are
+    unsupported."""
     side = jnp.asarray(side, _I32)
     foe = 1 - side
     user, target = state.active[side], state.active[foe]
@@ -302,19 +348,21 @@ def pluck_berry(
     power = tables.item_param[item, 0].astype(_I32)
     hp = state.hp[side, user].astype(_I32)
     max_hp = state.max_hp[side, user].astype(_I32)
-    on = jnp.asarray(cond) & jnp.isin(effect, jnp.asarray(PLUCKABLE, effect.dtype))
+    blocked = jnp.asarray(foe_custap) & (item != 0)
+    on = jnp.asarray(cond) & ~blocked & jnp.isin(effect, jnp.asarray(PLUCKABLE, effect.dtype))
     heal = _hp_restore(effect, power, max_hp)
     healed = on & (heal > 0) & (hp != max_hp)
     new_hp = jnp.where(healed, jnp.minimum(hp + heal, max_hp), hp)
     state = state._replace(hp=state.hp.at[side, user].set(new_hp.astype(state.hp.dtype)))
     state, cured = _restore(state, side, user, effect, on)
+    state, raised = _raise_stat(tables, state, side, item, on)
     state = state._replace(
         item=state.item.at[foe, target].set(jnp.where(on, 0, item).astype(state.item.dtype)),
         item_consumed=state.item_consumed.at[foe, target].set(
             jnp.where(on, item, state.item_consumed[foe, target]).astype(state.item_consumed.dtype)
         ),
     )
-    return state, on & ~healed & ~cured
+    return state, on & ~healed & ~cured & ~raised
 
 
 def intimidate(state: BattleState, side, cond=True) -> BattleState:

@@ -138,8 +138,8 @@ many are real). Decomp sources:
 * Water Sport: ``effect_script_0210.s`` sets the user's flag (fails if set);
   ``damage.py`` halves Fire power while any active battler has it.
 * Light Screen, Reflect: ``effect_script_0035.s`` / ``_0065.s`` (``BtlCmd_TryLightScreen``,
-  script.c:4214): fail when the user's side has it, else 5 turns (``_screen``); the damage
-  halving is in ``damage.py``, the countdown in ``step``.
+  script.c:4214): fail when the user's side has it, else 5 turns, more with Light Clay
+  (``_screen``); the damage halving is in ``damage.py``, the countdown in ``step``.
 * Brick Break: ``effect_script_0186.s``, a direct ``BREAK_SCREENS`` effect after the hit,
   even on an immune target (``_brick_break``); its own damage ignores the screens.
 * Night Shade, Seismic Toss (``LEVEL_DAMAGE``), Hidden Power, Magnitude: damage and type
@@ -207,8 +207,16 @@ many are real). Decomp sources:
   inflicts nothing (subscript_fall_asleep.s:_055, :_202), whatever the target's other
   status; the "stayed awake" message (:_221) reveals the ability to the AI.
 * Thaw on a Fire hit: ``AFTER_MOVE_EFFECT_THAW_DEFENDER`` (battle_controller_player.c:
-  3710), after the contact ability: a frozen defender that is alive and took damage
-  from a Fire-type move thaws. The user's own thaw (Flame Wheel) is in ``step``.
+  3710), after the held-item checks and the Sticky Barb transfer of ``AfterMoveEffects``
+  (``thaw_target``, run by ``step``): a frozen defender that is alive and took damage from a
+  Fire-type move thaws (an Aspear or Lum Berry it holds cures the freeze first). The user's
+  own thaw (Flame Wheel) is in ``step``.
+* King's Rock, Razor Fang (``KINGS_ROCK``): ``_kings_rock``, per hit after the contact
+  ability (``CheckExtraFlinch``).
+* Light Clay (``LIGHT_CLAY``): ``_screen``. Shell Bell (``SHELL_BELL``): ``shell_bell_heal``,
+  run by ``step`` after the move's hits (and after Pursuit's hit). Sticky Barb
+  (``STICKY_BARB``): ``sticky_barb_transfer``, run by ``step`` after every hit's item checks
+  (and after Pursuit's hit); its end-of-turn damage is in ``step``.
 
 Unreachable branches are not modelled: Substitute, Mist, Safeguard and Uproar
 come from unsupported moves; Shield Dust, Clear Body, Hyper Cutter, Immunity,
@@ -280,6 +288,8 @@ class _Hit(NamedTuple):
     move: jnp.ndarray  # the move's id
     target_ignorable: jnp.ndarray  # target's ability as the attacker sees it (Mold Breaker)
     contact_proc: jnp.ndarray  # the target's contact-ability roll for this hit
+    update_hp: jnp.ndarray  # BattleControllerPlayer_UpdateHP ran for this hit (MoveHit)
+    hit_index: jnp.ndarray  # the hit's index (per-hit outcome fields)
 
 
 def hit_count(tables: Tables, move, outcome: Outcome, side) -> jnp.ndarray:
@@ -740,11 +750,15 @@ SCREEN_TURNS = 5  # NUM_SCREEN_TURNS (include/constants/battle.h:142)
 
 def _screen(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     """Light Screen, Reflect: ``BtlCmd_TryLightScreen`` / ``TryReflect`` (script.c:4214,
-    :4257) fail when the user's side has it, else set it for ``NUM_SCREEN_TURNS``. Light
-    Clay (``HOLD_EFFECT_EXTEND_SCREENS``) is an unmapped item, so coverage refuses it."""
+    :4257) fail when the user's side has it, else set it for ``NUM_SCREEN_TURNS``, plus the
+    hold param of the user's Light Clay (``HOLD_EFFECT_EXTEND_SCREENS``, script.c:4229, :4272:
+    ``Battler_HeldItemEffect`` / ``Battler_HeldItemPower`` of the attacker)."""
+    item = state.item[h.side, h.user]
+    clay = tables.item_effect[item] == ItemId.LIGHT_CLAY
+    turns = SCREEN_TURNS + jnp.where(clay, tables.item_param[item, 0].astype(_I32), 0)
     for effect, field in ((_E.LIGHT_SCREEN, "light_screen"), (_E.REFLECT, "reflect")):
         cond = (h.effect == effect) & h.landed & (getattr(state, field)[h.side] == 0)
-        state = _set(state, field, h.side, SCREEN_TURNS, cond)
+        state = _set(state, field, h.side, turns, cond)
     return state
 
 
@@ -757,12 +771,15 @@ def _brick_break(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     return _set(state, "light_screen", h.target_side, 0, cond)
 
 
-def _eat_berry(tables, state, h: _Hit, outcome: Outcome) -> tuple[BattleState, jnp.ndarray]:
+def _eat_berry(
+    tables, state, h: _Hit, outcome: Outcome, foe_custap
+) -> tuple[BattleState, jnp.ndarray]:
     """``(state, pluck_flag)`` (``hooks.pluck_berry``)."""
     # Local import: hooks imports this module.
     from nuzline.engine.hooks import pluck_berry
 
-    return pluck_berry(tables, state, h.side, (h.effect == _E.EAT_BERRY) & h.effective)
+    cond = (h.effect == _E.EAT_BERRY) & h.effective
+    return pluck_berry(tables, state, h.side, cond, foe_custap)
 
 
 def _leech_seed(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
@@ -875,14 +892,102 @@ def _contact_ability(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     return _set_status(state, h.side, h.user, status, cond)
 
 
-def _thaw_target(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+def _kings_rock(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    """``BattleControllerPlayer_CheckExtraFlinch`` (battle_controller_player.c:4630-4653), the
+    last step of ``AfterMoveMessage`` (``ONE_HIT_EXTRA_FLINCH`` / ``MULTI_HIT_EXTRA_FLINCH``,
+    :3524, :3590), after the contact ability, for every hit: the attacker holds a
+    ``HOLD_EFFECT_SOMETIMES_FLINCH`` item (King's Rock, Razor Fang), the hit was not
+    ``MOVE_STATUS_NO_EFFECTS`` and the defender took damage this action (``update_hp``: its
+    ``physicalDamageTaken`` / ``specialDamageTaken``, set by ``UpdateHP``, bcp.c:3411-3424),
+    ``RandNext() % 100 < param`` (``outcome.flinch_item``), the move has
+    ``MOVE_FLAG_TRIGGERS_KINGS_ROCK`` and the defender has HP left. ``subscript_flinch_mon.s``
+    then flinches a target that has not moved (:5), unless its Inner Focus (as the attacker
+    sees it, :7; a silent block: not Fake Out, not a direct effect). Shield Dust (:9) is an
+    unsupported ability, Substitute (:6) an unsupported move."""
+    item = state.item[h.side, h.user]
+    flag = (tables.move_flags[h.move] & MoveFlag.KINGS_ROCK) != 0
     cond = (
-        (state.status[h.target_side, h.target] == Status.FREEZE)
-        & (move_type_of(tables, state, h.side, h.move) == Type.FIRE)
-        & (h.dealt > 0)
+        (tables.item_effect[item] == ItemId.KINGS_ROCK)
+        & h.landed
+        & h.update_hp
+        & (outcome.flinch_item[h.side, h.hit_index] != 0)
+        & flag
         & _alive(state, h.target_side, h.target)
+        & ~h.target_moved
+        & (h.target_ignorable != AbilityId.INNER_FOCUS)
     )
-    return _set_status(state, h.target_side, h.target, Status.NONE, cond)
+    old = state.flinched[h.target_side]
+    return state._replace(
+        flinched=state.flinched.at[h.target_side].set(jnp.where(cond, 1, old).astype(old.dtype))
+    )
+
+
+def thaw_target(tables: Tables, state: BattleState, side, target_side, move, dealt, cond) -> tuple:
+    """``(state, thawed)``: ``AFTER_MOVE_EFFECT_THAW_DEFENDER`` (battle_controller_player.c:
+    3708-3727), after the held-item checks and the Sticky Barb transfer of the hit
+    (``step._use_move``): a frozen defender with HP left that took damage from a Fire-type
+    ``move`` of ``side`` (``dealt``: its HP drop on this hit) thaws, where ``cond`` (the
+    move's ``AfterMoveEffects`` run). ``target_side``: the defender's side."""
+    target = state.active[target_side]
+    thawed = (
+        jnp.asarray(cond)
+        & (state.status[target_side, target] == Status.FREEZE)
+        & (move_type_of(tables, state, side, move) == Type.FIRE)
+        & (jnp.asarray(dealt) > 0)
+        & _alive(state, target_side, target)
+    )
+    return _set_status(state, target_side, target, Status.NONE, thawed), thawed
+
+
+def sticky_barb_transfer(tables: Tables, state: BattleState, side, foe, move, cond) -> BattleState:
+    """``side``'s attacker takes the defender's Sticky Barb where ``cond`` (the defender took
+    damage this action: ``physicalDamageTaken`` / ``specialDamageTaken``):
+    ``BattleSystem_TriggerHeldItemOnHit`` (battle_lib.c:5386-5398;
+    ``AFTER_MOVE_EFFECT_TRIGGER_ITEMS_ON_HIT``, battle_controller_player.c:3698-3706, and
+    ``subscript_pursuit.s:44``, :90) needs a defender holding a
+    ``HOLD_EFFECT_DMG_USER_CONTACT_XFR`` item (alive or not), a living attacker whose
+    ``heldItem`` is ``ITEM_NONE`` and a move with ``MOVE_FLAG_MAKES_CONTACT``; Knock Off,
+    U-turn and the knocked-off mask come from unsupported moves.
+    ``subscript_transfer_sticky_barb.s`` moves the item: the attacker holds it, the defender
+    nothing (no ``RemoveItem``: ``item_consumed`` is untouched). ``foe``: the defender's side."""
+    user, target = state.active[side], state.active[foe]
+    barb = state.item[foe, target]
+    contact = (tables.move_flags[move] & MoveFlag.CONTACT) != 0
+    on = (
+        jnp.asarray(cond)
+        & (tables.item_effect[barb] == ItemId.STICKY_BARB)
+        & _alive(state, side, user)
+        & (state.item[side, user] == 0)
+        & contact
+    )
+    state = _set(state, "item", (side, user), barb, on)
+    return _set(state, "item", (foe, target), 0, on)
+
+
+def shell_bell_heal(tables: Tables, state: BattleState, side, dealt, cond) -> BattleState:
+    """Shell Bell (``HOLD_EFFECT_HP_RESTORE_ON_DMG``) where ``cond`` (``SYSCTL_MOVE_HIT``):
+    ``AFTER_MOVE_HIT_STATE_SHELL_BELL`` (battle_controller_player.c:4736-4752), before Life
+    Orb's state, and ``TriggerHeldItemOnPivotMove`` after Pursuit's hit (battle_lib.c:
+    7345-7355): ``dealt`` (``shellBellDamageDealt``, the move's damage to the foe, each hit
+    capped at its HP) is nonzero and the holder is alive below full HP; it regains
+    ``BattleSystem_Divide(dealt, param)`` through ``subscript_restore_a_little_hp.s``
+    (``BATTLE_SUBSCRIPT_UPDATE_HP``, capped at max HP). The defender is the foe whenever
+    ``dealt`` is nonzero (attacker != defender); U-turn is unsupported."""
+    side = jnp.asarray(side, _I32)
+    mon = state.active[side]
+    item = state.item[side, mon]
+    hp = state.hp[side, mon].astype(_I32)
+    max_hp = state.max_hp[side, mon].astype(_I32)
+    dealt = jnp.asarray(dealt, _I32)
+    on = (
+        jnp.asarray(cond)
+        & (tables.item_effect[item] == ItemId.SHELL_BELL)
+        & (dealt != 0)
+        & (hp > 0)
+        & (hp < max_hp)
+    )
+    heal = divide(dealt, tables.item_param[item, 0].astype(_I32))
+    return _set(state, "hp", (side, mon), jnp.minimum(hp + heal, max_hp), on)
 
 
 def stealth_rock_damage(tables: Tables, state: BattleState, side) -> BattleState:
@@ -912,8 +1017,18 @@ class MoveHit(NamedTuple):
     # whose berry did nothing for the eater (hooks.pluck_berry).
     pluck_flag: jnp.ndarray
     # BattleControllerPlayer_UpdateHP ran for this hit (battleCtx->damage != 0, bcp.c:3340):
-    # it sets SYSCTL_MOVE_HIT (:3441), which Life Orb's recoil reads (life_orb_recoil).
+    # it sets SYSCTL_MOVE_HIT (:3441), which Life Orb's recoil and Shell Bell read, and the
+    # defender's physical / specialDamageTaken (:3411-3424), which the Sticky Barb transfer
+    # and the thaw read.
     update_hp: jnp.ndarray
+    # The HP the target lost on this hit (thaw_target).
+    dealt: jnp.ndarray
+    # UpdateHP's ATTACKER_SELF_TURN_FLAGS.shellBellDamageDealt of this hit (bcp.c:3427-3431):
+    # battleCtx->damage after the endure cap, capped at the target's HP (shell_bell_heal).
+    shell_bell: jnp.ndarray
+    # subscript_pursuit.s:21-29's shellBellDamageDealt for Pursuit's pre-switch hit: the
+    # damage before CheckHoldOnWith1HP, capped at the target's HP.
+    pursuit_shell_bell: jnp.ndarray
 
 
 def focus_sash_damage(state: BattleState, side, damage, armed) -> tuple:
@@ -1046,6 +1161,7 @@ def play_hit(
     power_mul=10,
     struggling=False,
     focus_armed=False,
+    foe_custap=False,
 ) -> tuple[BattleState, MoveHit]:
     """Hit ``hit_index`` (0-4, an int or a traced int32) of ``move`` by ``side``'s active Pokemon: damage with
     this hit's crit and roll, then the move's effect.
@@ -1055,10 +1171,13 @@ def play_hit(
     the target acted earlier this turn (no flinch). ``power_mul``: power scale in
     tenths (Pursuit on a switch: 20). ``struggling``: the move is Struggle, whose
     recoil is its secondary effect. ``focus_armed``: an earlier hit of this action
-    activated the defender's Focus Sash (``MoveHit``). A hit beyond ``hit_count`` or after
+    activated the defender's Focus Sash (``MoveHit``). ``foe_custap``: the target's turn order
+    activated its Custap Berry (``hooks.pluck_berry``). A hit beyond ``hit_count`` or after
     the target fainted does nothing. The order is ``BattleControllerPlayer_AfterMoveMessage``'s
     (battle_controller_player.c:3467): the move's own effect (``*_TRIGGER_SECONDARY``)
-    before the contact ability (``*_TRIGGER_ABILITY``), then the defender's thaw.
+    before the contact ability (``*_TRIGGER_ABILITY``), then King's Rock (``*_EXTRA_FLINCH``).
+    ``AfterMoveEffects`` (the held items, the Sticky Barb transfer, the defender's thaw) is
+    the caller's (``step._use_move``).
 
     Focus Sash (``HOLD_EFFECT_ENDURE``): ``BattleControllerPlayer_UpdateHP`` runs for every
     damaging hit (``battleCtx->damage != 0``) and sets ``focusItemActivated`` when the
@@ -1175,6 +1294,8 @@ def play_hit(
         move=move,
         target_ignorable=jnp.where(a_ability == AbilityId.MOLD_BREAKER, AbilityId.NONE, d_ability),
         contact_proc=outcome.contact_proc[target_side, hit_index] != 0,
+        update_hp=update_hp,
+        hit_index=jnp.asarray(hit_index, _I32),
     )
     for fn in (
         _stat_self,
@@ -1214,8 +1335,18 @@ def play_hit(
         _rollout,
     ):
         state = fn(tables, state, h, outcome)
-    state, pluck_flag = _eat_berry(tables, state, h, outcome)
+    state, pluck_flag = _eat_berry(tables, state, h, outcome, foe_custap)
     state = _struggle_recoil(state, h, jnp.asarray(struggling, jnp.bool_))
-    for fn in (_contact_ability, _thaw_target):
+    for fn in (_contact_ability, _kings_rock):
         state = fn(tables, state, h, outcome)
-    return state, MoveHit(focus_armed=armed, pluck_flag=pluck_flag, update_hp=update_hp)
+    # UpdateHP's shellBellDamageDealt (bcp.c:3427-3431) and subscript_pursuit.s's (:21-29).
+    shell = jnp.where(update_hp, jnp.minimum(taken, target_hp), 0)
+    pursuit_shell = jnp.where(update_hp, jnp.minimum(damage, target_hp), 0)
+    return state, MoveHit(
+        focus_armed=armed,
+        pluck_flag=pluck_flag,
+        update_hp=update_hp,
+        dealt=dealt,
+        shell_bell=shell,
+        pursuit_shell_bell=pursuit_shell,
+    )

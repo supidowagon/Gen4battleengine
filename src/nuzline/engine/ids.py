@@ -167,6 +167,10 @@ class AbilityId(IntEnum):
     ADAPTABILITY = 29
     SOLID_ROCK = 30
     CUTE_CHARM = 31
+    # BattleSystem_TriggerHeldItem / ..._OnStatus halve a pinch berry's param
+    # (battle_lib.c:4774-4776 and its siblings), BattleSystem_CompareBattlerSpeed Custap's
+    # (:1289-1291, :1355-1357); no other decomp code reads ABILITY_GLUTTONY.
+    GLUTTONY = 32
 
 
 class ItemId(IntEnum):
@@ -228,6 +232,34 @@ class ItemId(IntEnum):
       ``* (100 + param) / 100`` after the crit (``damage.life_orb``, battle_script.c:1346),
       and ``maxHP / 10`` recoil after a move that dealt damage (``effects.life_orb_recoil``,
       battle_controller_player.c:4758-4772; Pursuit's hit: battle_lib.c:7357-7366).
+    * ``CHERI_BERRY`` (``PRZ_RESTORE``), ``RAWST_BERRY`` (``BRN_RESTORE``), ``ASPEAR_BERRY``
+      (``FRZ_RESTORE``), ``PERSIM_BERRY`` (``CONFUSE_RESTORE``): ``hooks.held_item_check``
+      (battle_lib.c:4601-4634, :4655-4660), and Pluck's ``PLUCK_EFFECT_*_RESTORE``.
+    * ``PINCH_BERRY`` (``HOLD_EFFECT_PINCH_ATK_UP`` .. ``_SPDEF_UP``: Liechi, Ganlon, Salac,
+      Petaya, Apicot): ``item_param[i, 1]`` is the ``Stat`` it raises; +1 stage when ``curHP
+      <= maxHP / param`` (param halved for Gluttony) and the stage is below +6
+      (``hooks.held_item_check``, battle_lib.c:4773-4836); Pluck raises the eater's stat with
+      no HP test (``PLUCK_EFFECT_*_UP``, :5753-5796).
+    * ``CUSTAP_BERRY`` (``HOLD_EFFECT_PINCH_PRIORITY``): moves first within its priority when
+      ``curHP <= maxHP / param`` (``order.custap_active``, battle_lib.c:1288-1300), and is eaten
+      at the start of the holder's move when the turn order activated it
+      (``subscript_check_quick_claw.s``, ``step._use_move``).
+    * ``LEFTOVERS`` (``HOLD_EFFECT_HP_RESTORE_GRADUAL``), ``BLACK_SLUDGE``
+      (``HOLD_EFFECT_HP_RESTORE_PSN_TYPE``): ``BattleSystem_TriggerLeftovers``
+      (battle_lib.c:4922-4965, ``step._leftovers_check``).
+    * ``TOXIC_ORB`` (``HOLD_EFFECT_PSN_USER``), ``FLAME_ORB`` (``HOLD_EFFECT_BRN_USER``),
+      ``STICKY_BARB`` (``HOLD_EFFECT_DMG_USER_CONTACT_XFR``): ``BattleSystem_TriggerDetrimentalHeldItem``
+      (battle_lib.c:5307-5350, ``step._detrimental_item_check``); the barb moves to an
+      item-less contact attacker (``effects.sticky_barb_transfer``, :5387-5398, :7377-7384).
+    * ``BRIGHT_POWDER`` (``HOLD_EFFECT_ACC_REDUCE``: BrightPowder, Lax Incense), ``WIDE_LENS``
+      (``HOLD_EFFECT_ACCURACY_UP``), ``ZOOM_LENS`` (``HOLD_EFFECT_ACCURACY_UP_SLOWER``): the
+      accuracy check (``outcome._rate``, battle_controller_player.c:2949-2965).
+    * ``KINGS_ROCK`` (``HOLD_EFFECT_SOMETIMES_FLINCH``: King's Rock, Razor Fang): a flinch
+      roll per hit (``Outcome.flinch_item``, ``effects._kings_rock``, bcp.c:4630-4653).
+    * ``SHELL_BELL`` (``HOLD_EFFECT_HP_RESTORE_ON_DMG``): heals ``dealt / param`` after the
+      move (``effects.shell_bell_heal``, bcp.c:4736-4752; Pursuit's hit: battle_lib.c:7345-7355).
+    * ``LIGHT_CLAY`` (``HOLD_EFFECT_EXTEND_SCREENS``): Reflect / Light Screen last
+      ``5 + param`` turns (``effects._screen``, battle_script.c:4229, :4272).
     """
 
     UNSUPPORTED = 0
@@ -262,6 +294,23 @@ class ItemId(IntEnum):
     WISE_GLASSES = 29
     EXPERT_BELT = 30
     LIFE_ORB = 31
+    CHERI_BERRY = 32
+    RAWST_BERRY = 33
+    ASPEAR_BERRY = 34
+    PERSIM_BERRY = 35
+    PINCH_BERRY = 36
+    CUSTAP_BERRY = 37
+    LEFTOVERS = 38
+    BLACK_SLUDGE = 39
+    TOXIC_ORB = 40
+    FLAME_ORB = 41
+    STICKY_BARB = 42
+    BRIGHT_POWDER = 43
+    WIDE_LENS = 44
+    ZOOM_LENS = 45
+    KINGS_ROCK = 46
+    SHELL_BELL = 47
+    LIGHT_CLAY = 48
 
 
 # The three Choice items: ``BattleSystem_CheckInvalidMoves`` (battle_lib.c:2307-2315) and
@@ -342,6 +391,7 @@ class MoveFlag(IntFlag):
     PROTECT = 2
     SOUND = 4
     PUNCH = 8
+    KINGS_ROCK = 16  # MOVE_FLAG_TRIGGERS_KINGS_ROCK (BattleControllerPlayer_CheckExtraFlinch)
 
 
 class MoveTarget(IntEnum):
@@ -443,6 +493,16 @@ WEATHER_ABILITY_IDS = {
     "Air Lock": 76,
     "Magic Guard": 98,
     "Ice Body": 115,
+}
+
+# Decomp ability ids the held-item code names directly, read like ``WEATHER_ABILITY_IDS``
+# (no table maps them): the status orbs' subscripts skip an Immunity holder (Toxic Orb,
+# subscript_badly_poison.s:14), a Water Veil holder (Flame Orb, subscript_burn.s:6) and a Leaf
+# Guard holder in sun (both, :15-17 / :7-9), each the holder's own ability (``CheckAbility``).
+ITEM_ABILITY_IDS = {
+    "Immunity": 17,
+    "Water Veil": 41,
+    "Leaf Guard": 102,
 }
 
 # ``sTerrainCamouflageType`` (include/data/terrain/to_type.h), indexed like ``TERRAIN_MOVES``.

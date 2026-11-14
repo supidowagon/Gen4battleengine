@@ -38,6 +38,7 @@ from dataclasses import dataclass, field
 from nuzline.engine.ids import (
     ABILITY_MULTITYPE,
     CHOICE_ITEMS,
+    ITEM_ABILITY_IDS,
     MOVE_FAKE_OUT,
     MOVE_STRUGGLE,
     POTION_HP_RESTORED,
@@ -147,6 +148,10 @@ class _Turn:
     move_hit: bool = False
     # moveCur of the current action (Nature Power's called move), for Life Orb's class test.
     move_cur: int = 0
+    # ATTACKER_SELF_TURN_FLAGS.shellBellDamageDealt of the current action (bcp.c:3427-3431).
+    shell_dealt: int = 0
+    # moveEffectsData.custapBerry per side, written by CalcTurnOrder (lib.c:1296, :1362).
+    custap: list[bool] = field(default_factory=lambda: [False, False])
 
 
 def _active(s: RefState, side: int) -> RefPokemon:
@@ -360,6 +365,21 @@ def _item_effect(tables, mon: RefPokemon) -> int:
     return _t(tables, "item_effect", mon.item)
 
 
+def _pinch_divisor(tables, mon: RefPokemon) -> int:
+    """A pinch berry's (or Custap Berry's) param, halved for its holder's own Gluttony
+    (``itemPower /= 2``, lib.c:4774-4776, :1289-1291)."""
+    power = _t(tables, "item_param", mon.item, 0)
+    return power // 2 if mon.ability == AbilityId.GLUTTONY else power
+
+
+def _custap_active(tables, s: RefState, side: int) -> bool:
+    """The active battler holds a Custap Berry at ``curHP <= maxHP / param`` (lib.c:1288-1300)."""
+    mon = _active(s, side)
+    if _item_effect(tables, mon) != ItemId.CUSTAP_BERRY:
+        return False
+    return mon.hp <= mon.max_hp // _pinch_divisor(tables, mon)
+
+
 def _player_second(
     tables, s: RefState, priority: tuple[int, int], tie_roll: int, qc: list[int]
 ) -> bool:
@@ -374,9 +394,11 @@ def _player_second(
     if priority[0] != priority[1]:
         return priority[0] < priority[1]
     speed0, speed1 = _effective_speed(tables, s, 0), _effective_speed(tables, s, 1)
-    # Quick Claw (HOLD_EFFECT_SOMETIMES_PRIORITY, lib.c:1278-1286); Custap is unsupported.
+    # Quick Claw (HOLD_EFFECT_SOMETIMES_PRIORITY, lib.c:1278-1286) or a Custap Berry in its
+    # pinch (HOLD_EFFECT_PINCH_PRIORITY, lib.c:1288-1300): one flag.
     claw = [
-        _item_effect(tables, _active(s, side)) == ItemId.QUICK_CLAW and qc[side] != 0
+        (_item_effect(tables, _active(s, side)) == ItemId.QUICK_CLAW and qc[side] != 0)
+        or _custap_active(tables, s, side)
         for side in (0, 1)
     ]
     if claw[0] and claw[1]:  # lib.c:1402-1407: plain speed, no Trick Room, no Lagging Tail
@@ -1143,11 +1165,20 @@ def _cure(s: RefState, side: int, effect: int) -> bool:
     runs (``subscript_held_item_{slp,psn,cnf,multi,...}_restore.s``). Returns whether it
     did anything."""
     mon, sd = _active(s, side), s.sides[side]
+    # The status each status berry cures (lib.c:4601-4634; Pecha: MON_CONDITION_ANY_POISON).
+    cures = {
+        ItemId.CHERI_BERRY: (Status.PARALYSIS,),
+        ItemId.CHESTO_BERRY: (Status.SLEEP,),
+        ItemId.PECHA_BERRY: (Status.POISON, Status.TOXIC),
+        ItemId.RAWST_BERRY: (Status.BURN,),
+        ItemId.ASPEAR_BERRY: (Status.FREEZE,),
+    }
     cured = False
-    if effect == ItemId.CHESTO_BERRY and mon.status == Status.SLEEP:
+    if mon.status in cures.get(effect, ()):
         cured = True
-    elif effect == ItemId.PECHA_BERRY and mon.status in (Status.POISON, Status.TOXIC):
-        cured = True  # MON_CONDITION_ANY_POISON
+    elif effect == ItemId.PERSIM_BERRY and sd.confusion:  # lib.c:4655: confusion only
+        sd.confusion = 0
+        return True
     elif effect == ItemId.LUM_BERRY and (mon.status != Status.NONE or sd.confusion):
         cured = True
         sd.confusion = 0
@@ -1162,13 +1193,25 @@ def _cure(s: RefState, side: int, effect: int) -> bool:
     return False
 
 
+def _raise_pinch_stat(turn: _Turn, s: RefState, side: int, item: int) -> bool:
+    """A stat pinch berry's ``subscript_held_item_raise_stat.s`` on ``side``'s battler: its
+    stat (``item_param[item, 1]``) +1 when below +6 (lib.c:4779, :5754; script.c:2841-2873).
+    Returns whether it rose."""
+    stat = _t(turn.tables, "item_param", item, 1)
+    if s.sides[side].stages[stat] >= STAGE_MAX:
+        return False
+    _change_stage(s, side, stat, 1)
+    return True
+
+
 def _held_item(turn: _Turn, s: RefState, side: int, keep: bool = False) -> bool:
     """``BattleSystem_TriggerHeldItem`` (lib.c:4576) / ``..._OnStatus`` (lib.c:4967) for
     ``side``'s active Pokemon with HP left. Oran Berry and Berry Juice
     (``HOLD_EFFECT_HP_RESTORE``) heal their power, Sitrus Berry (``HP_PCT_RESTORE``)
     ``Divide(maxHP * power, 100)``, when ``curHP <= maxHP / 2``
-    (``subscript_held_item_hp_restore.s``, capped); Chesto, Pecha, Lum and White Herb cure
-    (``_cure``). Every subscript ends in ``BATTLE_SUBSCRIPT_PLUCK_CHECK``, which removes
+    (``subscript_held_item_hp_restore.s``, capped); the status berries, Lum and White Herb
+    cure (``_cure``); a stat pinch berry raises its stat at ``curHP <= maxHP / param``
+    (``_raise_pinch_stat``). Every subscript ends in ``BATTLE_SUBSCRIPT_PLUCK_CHECK``, which removes
     the item (``BtlCmd_RemoveItem`` keeps it as the recycle item) unless the attacker's
     pluck flag is set (``keep``). Returns whether the item triggered."""
     tables = turn.tables
@@ -1182,6 +1225,12 @@ def _held_item(turn: _Turn, s: RefState, side: int, keep: bool = False) -> bool:
             return False
         flat = effect != ItemId.SITRUS_BERRY
         _gain_hp(s, side, power if flat else _divide(mon.max_hp * power, 100))
+    elif effect == ItemId.PINCH_BERRY:
+        # HOLD_EFFECT_PINCH_*_UP (lib.c:4773-4836): curHP <= maxHP / param (Gluttony halves it).
+        if mon.hp > mon.max_hp // _pinch_divisor(tables, mon):
+            return False
+        if not _raise_pinch_stat(turn, s, side, mon.item):
+            return False
     elif not _cure(s, side, effect):
         return False
     if not keep:
@@ -1496,30 +1545,44 @@ def _pluck_berry(turn: _Turn, s: RefState, side: int) -> None:
     nothing for the eater (no restore subscript ran its PLUCK_CHECK)."""
     tables = turn.tables
     user, foe = _active(s, side), _active(s, 1 - side)
+    # BtlCmd_TryPluck (script.c:8125-8127): nothing while the foe holds an item and its Custap
+    # Berry flag (set by this turn's order) is up.
+    if foe.item and turn.custap[1 - side]:
+        return
     effect = _item_effect(tables, foe)
     power = _t(tables, "item_param", foe.item, 0)
     if effect == ItemId.ORAN_BERRY:
         heal = power
     elif effect == ItemId.SITRUS_BERRY:
         heal = _divide(user.max_hp * power, 100)
-    # The resist berries and the berries with no hold effect: PLUCK_EFFECT_NONE berries,
-    # eaten with no effect (Item_IsBerry, :5833).
+    # The resist berries, Custap and the berries with no hold effect: PLUCK_EFFECT_NONE
+    # berries, eaten with no effect (Item_IsBerry, :5833). The status berries cure, a stat
+    # pinch berry raises the eater's stat (PLUCK_EFFECT_*_UP, lib.c:5753-5796; no HP test).
     elif effect in (
+        ItemId.CHERI_BERRY,
         ItemId.CHESTO_BERRY,
         ItemId.PECHA_BERRY,
+        ItemId.RAWST_BERRY,
+        ItemId.ASPEAR_BERRY,
+        ItemId.PERSIM_BERRY,
         ItemId.LUM_BERRY,
+        ItemId.PINCH_BERRY,
         ItemId.RESIST_BERRY,
+        ItemId.CUSTAP_BERRY,
         ItemId.NO_EFFECT_BERRY,
     ):
         heal = 0
     else:
         return
+    item = foe.item
     foe.item_consumed = foe.item
     foe.item = 0
     if heal:
         did = user.hp != user.max_hp
         if did:
             _gain_hp(s, side, heal)
+    elif effect == ItemId.PINCH_BERRY:
+        did = _raise_pinch_stat(turn, s, side, item)
     else:
         did = _cure(s, side, effect)
     turn.pluck_flag = not did
@@ -1668,10 +1731,14 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
         s.sides[side].aqua_ring = 1
     elif effect in (EffectId.LIGHT_SCREEN, EffectId.REFLECT) and landed:
         # BtlCmd_TryLightScreen / TryReflect (script.c:4214, :4257): fail when already up,
-        # else NUM_SCREEN_TURNS (Light Clay is unmapped, so coverage refuses it).
+        # else NUM_SCREEN_TURNS, plus the user's Light Clay param (script.c:4229, :4272).
         name = "light_screen" if effect == EffectId.LIGHT_SCREEN else "reflect"
         if not getattr(s.sides[side], name):
-            setattr(s.sides[side], name, 5)
+            user = _active(s, side)
+            extra = 0
+            if _item_effect(tables, user) == ItemId.LIGHT_CLAY:
+                extra = _t(tables, "item_param", user.item, 0)
+            setattr(s.sides[side], name, 5 + extra)
     elif effect == EffectId.BRICK_BREAK and landed:
         # lib.c:1481-1510: applies on an immune target, not on a miss; script.c:6550.
         s.sides[target].reflect = s.sides[target].light_screen = 0
@@ -1767,8 +1834,8 @@ def _contact_ability(turn: _Turn, s: RefState, side: int, move: int, hit: int, e
 
 
 def _thaw_target(turn: _Turn, s: RefState, side: int, move: int, dealt: int) -> None:
-    """``AFTER_MOVE_EFFECT_THAW_DEFENDER`` (bcp.c:3710): a living frozen defender hit
-    for damage by a Fire-type move thaws."""
+    """``AFTER_MOVE_EFFECT_THAW_DEFENDER`` (bcp.c:3708-3727), after the hit's item checks and
+    Sticky Barb transfer: a living frozen defender hit for damage by a Fire-type move thaws."""
     mon = _active(s, 1 - side)
     fire = _move_type(turn.tables, s, side, move) == Type.FIRE
     if mon.status == Status.FREEZE and mon.hp and dealt > 0 and fire:
@@ -1776,12 +1843,88 @@ def _thaw_target(turn: _Turn, s: RefState, side: int, move: int, dealt: int) -> 
         mon.status_counter = 0
 
 
+def _sticky_barb_transfer(turn: _Turn, s: RefState, side: int, foe: int, move: int) -> None:
+    """``BattleSystem_TriggerHeldItemOnHit`` (lib.c:5386-5398) after a hit of ``side``'s move
+    once the defender took damage this action (the caller checks it): a defender holding a
+    ``HOLD_EFFECT_DMG_USER_CONTACT_XFR`` item gives it to a living attacker holding nothing,
+    on a contact move (``subscript_transfer_sticky_barb.s``; no RemoveItem)."""
+    tables = turn.tables
+    user, holder = _active(s, side), _active(s, foe)
+    if _item_effect(tables, holder) != ItemId.STICKY_BARB:
+        return
+    if user.hp and user.item == 0 and _t(tables, "move_flags", move) & MoveFlag.CONTACT:
+        user.item, holder.item = holder.item, 0
+
+
+def _shell_bell(turn: _Turn, s: RefState, side: int, dealt: int) -> None:
+    """Shell Bell (``HOLD_EFFECT_HP_RESTORE_ON_DMG``) after a move that set
+    ``SYSCTL_MOVE_HIT`` (bcp.c:4736-4752; Pursuit: lib.c:7345-7355): with ``dealt``
+    (``shellBellDamageDealt``) nonzero, a living holder below full HP regains
+    ``Divide(dealt, param)`` (``subscript_restore_a_little_hp.s``, capped)."""
+    mon = _active(s, side)
+    if _item_effect(turn.tables, mon) != ItemId.SHELL_BELL or not dealt:
+        return
+    if mon.hp and mon.hp < mon.max_hp:
+        _gain_hp(s, side, _divide(dealt, _t(turn.tables, "item_param", mon.item, 0)))
+
+
+def _leftovers_check(turn: _Turn, s: RefState, side: int) -> None:
+    """``MON_COND_CHECK_STATE_LEFTOVERS`` (bcp.c:1369) -> ``BattleSystem_TriggerLeftovers``
+    (lib.c:4922-4965): Leftovers, or Black Sludge on a Poison type, restore
+    ``Divide(maxHP, 16)`` below full HP; Black Sludge on any other type hurts
+    ``Divide(maxHP, 8)`` unless Magic Guard (decomp id). HP left needed."""
+    tables = turn.tables
+    mon = _active(s, side)
+    if not mon.hp:
+        return
+    effect = _item_effect(tables, mon)
+    if effect == ItemId.LEFTOVERS or (effect == ItemId.BLACK_SLUDGE and Type.POISON in mon.types):
+        if mon.hp < mon.max_hp:
+            _gain_hp(s, side, _divide(mon.max_hp, 16))
+    elif (
+        effect == ItemId.BLACK_SLUDGE
+        and _decomp_ability(tables, mon) != WEATHER_ABILITY_IDS["Magic Guard"]
+    ):
+        _lose_hp(turn, s, side, _divide(mon.max_hp, 8))
+
+
+def _detrimental_item_check(turn: _Turn, s: RefState, side: int) -> None:
+    """``MON_COND_CHECK_STATE_ITEM_DETRIMENTAL_EFFECT`` (bcp.c:1710) ->
+    ``BattleSystem_TriggerDetrimentalHeldItem`` (lib.c:5307-5350) on a holder with HP left:
+    Toxic Orb runs ``subscript_badly_poison.s``, Flame Orb ``subscript_burn.s``, as held-item
+    side effects (skipped for Immunity / Water Veil, Leaf Guard in sun without a weather lock,
+    any status, a Poison or Steel / a Fire type); Sticky Barb takes ``Divide(maxHP, param)``
+    unless Magic Guard."""
+    tables = turn.tables
+    mon = _active(s, side)
+    if not mon.hp:
+        return
+    effect = _item_effect(tables, mon)
+    ability = _decomp_ability(tables, mon)
+    sun = s.weather == Weather.SUN and not _weather_suppressed(tables, s)
+    leaf_guard = sun and ability == ITEM_ABILITY_IDS["Leaf Guard"]
+    if effect == ItemId.TOXIC_ORB:
+        if ability == ITEM_ABILITY_IDS["Immunity"] or leaf_guard:
+            return
+        if _can_have_status(tables, s, side, Status.TOXIC):
+            mon.status, mon.status_counter = Status.TOXIC, 0
+    elif effect == ItemId.FLAME_ORB:
+        if ability == ITEM_ABILITY_IDS["Water Veil"] or leaf_guard:
+            return
+        if _can_have_status(tables, s, side, Status.BURN):
+            mon.status, mon.status_counter = Status.BURN, 0
+    elif effect == ItemId.STICKY_BARB:
+        if ability != WEATHER_ABILITY_IDS["Magic Guard"]:
+            _lose_hp(turn, s, side, _divide(mon.max_hp, _t(tables, "item_param", mon.item, 0)))
+
+
 def _hit(turn: _Turn, s: RefState, side: int, move: int, hit: int, struggling: bool,
-         target_moved: bool) -> None:  # fmt: skip
+         target_moved: bool) -> tuple[int, bool]:  # fmt: skip
     """One hit: the move script (damage, ``BATTLE_SUBSCRIPT_UPDATE_HP``), then
     ``BattleControllerPlayer_AfterMoveMessage`` (bcp.c:3467): the secondary effect
     (``ONE_HIT_TRIGGER_SECONDARY`` / ``MULTI_HIT_TRIGGER_SECONDARY``), then the
-    contact ability (``*_TRIGGER_ABILITY``), then the defender's thaw."""
+    contact ability (``*_TRIGGER_ABILITY``), then King's Rock (``*_EXTRA_FLINCH``). Returns
+    ``(dealt, update_hp)``: the HP the target lost, and whether ``UpdateHP`` ran."""
     tables, o = turn.tables, turn.outcome
     target = 1 - side
     target_mon = _active(s, target)
@@ -1802,7 +1945,8 @@ def _hit(turn: _Turn, s: RefState, side: int, move: int, hit: int, struggling: b
         present=o.present[side],
     )
     dealt = stored = 0
-    if landed and hits_foe and damage > 0:
+    update_hp = landed and hits_foe and damage > 0
+    if update_hp:
         turn.move_hit = True  # BattleControllerPlayer_UpdateHP: SYSCTL_MOVE_HIT (bcp.c:3441)
     if landed and hits_foe:
         # BattleControllerPlayer_UpdateHP (bcp.c:3346-3404) runs for a non-zero damage:
@@ -1810,6 +1954,8 @@ def _hit(turn: _Turn, s: RefState, side: int, move: int, hit: int, struggling: b
         if damage > 0 and _sash_at_full_hp(turn, s, target):
             turn.focus_armed = True
         taken = _focus_sash(turn, s, target, damage, turn.focus_armed)  # battleCtx->damage
+        if update_hp:  # shellBellDamageDealt (bcp.c:3427-3431): capped at the target's HP
+            turn.shell_dealt += min(taken, target_mon.hp)
         # subscript_update_hp.s: the resist berry halves hpCalcTemp (BattleSystem_Divide).
         if damage > 0 and _hit_resist_berry(turn, s, side, move):
             dealt = _lose_hp(turn, s, target, _divide(taken, 2))
@@ -1850,7 +1996,21 @@ def _hit(turn: _Turn, s: RefState, side: int, move: int, hit: int, struggling: b
         # secondary effect: Divide(maxHP, 4) recoil, before the contact ability.
         _lose_hp(turn, s, side, _divide(_active(s, side).max_hp, 4))
     _contact_ability(turn, s, side, move, hit, effective, dealt)
-    _thaw_target(turn, s, side, move, dealt)
+    # BattleControllerPlayer_CheckExtraFlinch (bcp.c:4630-4653): King's Rock / Razor Fang on a
+    # hit that damaged a living target, RandNext() % 100 < param (outcome.flinch_item), a
+    # MOVE_FLAG_TRIGGERS_KINGS_ROCK move; subscript_flinch_mon.s: a target that has not moved,
+    # no Inner Focus as the attacker sees it.
+    if (
+        update_hp
+        and _item_effect(tables, _active(s, side)) == ItemId.KINGS_ROCK
+        and o.flinch_item[side][hit]
+        and _t(tables, "move_flags", move) & MoveFlag.KINGS_ROCK
+        and _active(s, target).hp > 0
+        and not target_moved
+        and _ignorable(s, side, target) != AbilityId.INNER_FOCUS
+    ):
+        s.sides[target].flinched = 1
+    return dealt, update_hp
 
 
 def _status_disrupted(turn: _Turn, s: RefState, side: int, move: int) -> int:
@@ -1952,10 +2112,11 @@ def _status_disrupted(turn: _Turn, s: RefState, side: int, move: int) -> int:
     return GOES_AHEAD
 
 
-def _hit_rate(tables, s: RefState, attacker: int, move: int) -> int:
+def _hit_rate(tables, s: RefState, attacker: int, move: int, target_moved: bool = False) -> int:
     """``hitRate`` of ``BattleControllerPlayer_CheckMoveHitAccuracy`` (bcp.c:2865-2979) for
-    ``attacker``'s ``move`` against the foe's active Pokemon, from the state as it is now.
-    Thunder in sun, Hustle, Tangled Feet and the accuracy items are unsupported."""
+    ``attacker``'s ``move`` against the foe's active Pokemon, from the state as it is now;
+    ``target_moved``: the foe acted earlier this turn (Zoom Lens). Thunder in sun, Hustle,
+    Tangled Feet and the Micle Berry are unsupported."""
     defender = 1 - attacker
     atk = _active(s, attacker)
     seen = _ignorable(s, attacker, defender)  # Battler_IgnorableAbility
@@ -1984,6 +2145,14 @@ def _hit_rate(tables, s: RefState, attacker: int, move: int) -> int:
             rate = rate * 80 // 100
         if s.weather == Weather.FOG:  # :2935
             rate = rate * 6 // 10
+    # :2949-2965: the defender's BrightPowder / Lax Incense, the attacker's Wide Lens and, after
+    # the target moved, Zoom Lens.
+    foe = _active(s, defender)
+    if _item_effect(tables, foe) == ItemId.BRIGHT_POWDER:
+        rate = rate * (100 - _t(tables, "item_param", foe.item, 0)) // 100
+    lens = _item_effect(tables, atk)
+    if lens == ItemId.WIDE_LENS or (lens == ItemId.ZOOM_LENS and target_moved):
+        rate = rate * (100 + _t(tables, "item_param", atk.item, 0)) // 100
     if s.gravity:  # FIELD_CONDITION_GRAVITY, :2972
         rate = rate * 10 // 6
     return rate
@@ -2005,6 +2174,11 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
         and not _curse_on_user(tables, move)
         and (_active(s, 1 - side).hp > 0 or target_range == MoveTarget.RANGE_OPPONENT_SIDE)
     )
+    # BEFORE_MOVE_STATE_QUICK_CLAW (bcp.c:3140-3143): subscript_check_quick_claw.s:26-28 eats
+    # an activated Custap Berry (RemoveItem: the recycle item) before the status checks.
+    if turn.custap[side]:
+        turn.custap[side] = False
+        mon.item_consumed, mon.item = mon.item, 0
     # UpdateMoveBuffers (bcp.c:3945-3949), reached on every path of a battler that acts:
     # movePrevByBattler is MOVE_NONE unless the move succeeded (below).
     s.sides[side].last_move = 0
@@ -2069,7 +2243,7 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
     # RandNext() % 100 + 1 (engine/outcome.py), which misses when it is 0 or above it.
     roll = o.hit[side][0]
     missed = _t(tables, "move_accuracy", move) != 0 and not 0 < roll <= _hit_rate(
-        tables, s, side, move
+        tables, s, side, move, target_moved
     )
     # CheckMoveHitOverrides (bcp.c:3001-3014) after the accuracy roll: a protecting foe
     # stops the move, Battler_UnlockMoveChoice; subscript_missed.s unlocks too.
@@ -2117,14 +2291,22 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
         full = (effect == EffectId.RECOVER and user.hp == user.max_hp) or (
             heal and foe.hp == foe.max_hp > 0
         )
-        _hit(turn, s, side, move, hit, struggling, target_moved)
+        dealt, _ = _hit(turn, s, side, move, hit, struggling, target_moved)
         if full:
             continue
         # BattleControllerPlayer_AfterMoveEffects (bcp.c:3638), after every hit:
         # AFTER_MOVE_EFFECT_ATTACKER_ITEM (bcp.c:3684), then _DEFENDER_ITEM (:3691), then
-        # _HELD_ITEM_STATUS (:3730) for every battler. A restore subscript's PLUCK_CHECK
-        # keeps the item while the pluck flag is set, and clears the flag.
-        for battler in (side, 1 - side, side, 1 - side):
+        # _TRIGGER_ITEMS_ON_HIT (:3698, the Sticky Barb once the defender took damage this
+        # action: SYSCTL_MOVE_HIT), _THAW_DEFENDER (:3708) and _HELD_ITEM_STATUS (:3730) for
+        # every battler. A restore subscript's PLUCK_CHECK keeps the item while the pluck flag
+        # is set, and clears the flag.
+        for battler in (side, 1 - side):
+            if _held_item(turn, s, battler, keep=turn.pluck_flag):
+                turn.pluck_flag = False
+        if turn.move_hit:
+            _sticky_barb_transfer(turn, s, side, 1 - side, move)
+        _thaw_target(turn, s, side, move, dealt)
+        for battler in (side, 1 - side):
             if _held_item(turn, s, battler, keep=turn.pluck_flag):
                 turn.pluck_flag = False
     if unleash:  # the unleash script spent the Bide counter (bcp.c:2702, subscript_bide_end.s)
@@ -2208,12 +2390,17 @@ def _pursuit(turn: _Turn, s: RefState, side: int, actions, choices) -> None:
     # Its UPDATE_HP runs the resist-berry check on the target (subscript_update_hp.s:9).
     if damage > 0 and _hit_resist_berry(turn, s, pursuer, move):
         taken = _divide(taken, 2)
+    target_hp = _active(s, side).hp
     dealt = _lose_hp(turn, s, side, taken)
     _contact_ability(turn, s, pursuer, move, 0, damage > 0, dealt)
-    # subscript_pursuit.s:48-49 (:94-95 after a KO): SYSCTL_MOVE_HIT, then
-    # TriggerHeldItemOnPivotMove: Life Orb (lib.c:7357-7366), skipped when the hit did not
-    # hit (:17, MOVE_STATUS_DID_NOT_HIT: damage 0).
+    # subscript_pursuit.s:44 / :90: TriggerHeldItemOnHit (the Sticky Barb); then :48-49
+    # (:94-95 after a KO): SYSCTL_MOVE_HIT, TriggerHeldItemOnPivotMove: Shell Bell on the
+    # script's shellBellDamageDealt (:21-29: the damage before CheckHoldOnWith1HP, capped at
+    # the target's HP) or Life Orb (lib.c:7345-7366); all skipped when the hit did not hit
+    # (:17, MOVE_STATUS_DID_NOT_HIT: damage 0).
     if damage > 0:
+        _sticky_barb_transfer(turn, s, pursuer, side, move)
+        _shell_bell(turn, s, pursuer, min(damage, target_hp))
         _life_orb_recoil(turn, s, pursuer)
 
 
@@ -2353,6 +2540,7 @@ def _end_of_turn(turn: _Turn, s: RefState, order: list[int]) -> None:
             _aqua_ring_check,  # MON_COND_CHECK_STATE_AQUA_RING, bcp.c:1332
             _turn_end_ability,  # MON_COND_CHECK_STATE_ABILITY, bcp.c:1355
             _held_item_hp,  # MON_COND_CHECK_STATE_USE_ITEM, bcp.c:1362
+            _leftovers_check,  # MON_COND_CHECK_STATE_LEFTOVERS, bcp.c:1369
             _leech_seed_check,  # MON_COND_CHECK_STATE_LEECH_SEED, bcp.c:1378
             _poison_check,  # MON_COND_CHECK_STATE_POISON, bcp.c:1393
             _toxic_check,  # MON_COND_CHECK_STATE_TOXIC, bcp.c:1405
@@ -2361,6 +2549,7 @@ def _end_of_turn(turn: _Turn, s: RefState, order: list[int]) -> None:
             _disable_check,  # MON_COND_CHECK_STATE_DISABLE, bcp.c:1565
             _taunt_check,  # MON_COND_CHECK_STATE_TAUNT, bcp.c:1635
             _held_item_hp,  # MON_COND_CHECK_STATE_ITEM_CONDITION, bcp.c:1699
+            _detrimental_item_check,  # MON_COND_CHECK_STATE_ITEM_DETRIMENTAL_EFFECT, :1710
         ):
             if s.over:
                 return
@@ -2546,6 +2735,10 @@ def ref_step(tables, state: RefState, actions: tuple[int, int], outcome) -> RefS
         # drawn after CalcTurnOrder (bcp.c:853-857).
         second = _player_second(tables, s, priority, outcome.speed_tie, _qc_rolls(s))
         order = [1, 0] if second else [0, 1]
+        # Two FIGHT commands are compared with ignoreQuickClaw = FALSE (bcp.c:772-786): each
+        # activated Custap Berry sets its holder's custapBerry flag (lib.c:1296, :1362).
+        if not early[0]:
+            turn.custap = [_custap_active(tables, s, side) for side in (0, 1)]
 
     for position, side in enumerate(order):
         if s.over:
@@ -2561,11 +2754,14 @@ def ref_step(tables, state: RefState, actions: tuple[int, int], outcome) -> RefS
             move, struggling, locked = choices[side]
             turn.attack_message = turn.move_hit = False
             turn.move_cur = move
+            turn.shell_dealt = 0
             record = _fight(
                 turn, s, side, actions[side], move, struggling, locked, target_moved=position == 1
             )
-            # TRIGGER_AFTER_HIT_EFFECTS (bcp.c:3897-3915): Life Orb's recoil needs
-            # SYSCTL_MOVE_HIT and a non-status moveCur (bcp.c:4758-4772).
+            # TRIGGER_AFTER_HIT_EFFECTS (bcp.c:3897-3915): Shell Bell (:4736-4752), then Life
+            # Orb's recoil, which needs SYSCTL_MOVE_HIT and a non-status moveCur (:4758-4772).
+            if turn.move_hit:
+                _shell_bell(turn, s, side, turn.shell_dealt)
             if turn.move_hit and _t(tables, "move_category", turn.move_cur) != STATUS_CLASS:
                 _life_orb_recoil(turn, s, side)
             # UpdateFlagsWhenHit / UpdateMoveBuffers: the Choice lock (the foe is the defender

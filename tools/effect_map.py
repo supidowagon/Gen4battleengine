@@ -292,6 +292,9 @@ DECOMP_ABILITY_TO_ID: dict[str, AbilityId] = {
     # BattleSystem_TriggerAbilityOnHit (battle_lib.c:4339-4355); Oblivious, which would block
     # it (subscript_infatuate.s:5), stays unsupported (coverage refuses it).
     "Cute Charm": AbilityId.CUTE_CHARM,
+    # Halves the pinch berries' and Custap Berry's param (battle_lib.c:4774-4776, :1289-1291):
+    # the only decomp reads of ABILITY_GLUTTONY.
+    "Gluttony": AbilityId.GLUTTONY,
 }
 
 DECOMP_ITEM_TO_ID: dict[str, ItemId] = {
@@ -326,7 +329,37 @@ DECOMP_ITEM_TO_ID: dict[str, ItemId] = {
     "Colbur Berry": ItemId.RESIST_BERRY,  # HOLD_EFFECT_WEAKEN_SE_DARK (33)
     "Babiri Berry": ItemId.RESIST_BERRY,  # HOLD_EFFECT_WEAKEN_SE_STEEL (34)
     "Chilan Berry": ItemId.RESIST_BERRY,  # HOLD_EFFECT_WEAKEN_NORMAL (35)
+    # Berries are mapped by name: Pluck / Bug Bite read an item's pluck effect
+    # (res/items/data/*.json ``pluckEffect``) and Item_IsBerry, not its hold effect.
+    "Cheri Berry": ItemId.CHERI_BERRY,  # HOLD_EFFECT_PRZ_RESTORE (5), PLUCK_EFFECT_PRZ_RESTORE
+    "Rawst Berry": ItemId.RAWST_BERRY,  # HOLD_EFFECT_BRN_RESTORE (8), PLUCK_EFFECT_BRN_RESTORE
+    "Aspear Berry": ItemId.ASPEAR_BERRY,  # HOLD_EFFECT_FRZ_RESTORE (9), PLUCK_EFFECT_FRZ_RESTORE
+    "Persim Berry": ItemId.PERSIM_BERRY,  # HOLD_EFFECT_CONFUSE_RESTORE (11), _CNF_RESTORE
+    # The stat pinch berries (PINCH_STAT_HOLD_EFFECTS), PLUCK_EFFECT_ATK_UP .. _SPDEF_UP.
+    "Liechi Berry": ItemId.PINCH_BERRY,  # HOLD_EFFECT_PINCH_ATK_UP (36), param 4
+    "Ganlon Berry": ItemId.PINCH_BERRY,  # HOLD_EFFECT_PINCH_DEF_UP (37), param 4
+    "Salac Berry": ItemId.PINCH_BERRY,  # HOLD_EFFECT_PINCH_SPEED_UP (38), param 4
+    "Petaya Berry": ItemId.PINCH_BERRY,  # HOLD_EFFECT_PINCH_SPATK_UP (39), param 4
+    "Apicot Berry": ItemId.PINCH_BERRY,  # HOLD_EFFECT_PINCH_SPDEF_UP (40), param 4
+    "Custap Berry": ItemId.CUSTAP_BERRY,  # HOLD_EFFECT_PINCH_PRIORITY (45), PLUCK_EFFECT_NONE
 }
+
+# The stat pinch berries' hold effects (BattleSystem_TriggerHeldItem, battle_lib.c:4773-4836,
+# and ..._OnStatus, :5196-5259): decomp hold effect -> (name, the Stat it raises by 1).
+# build_tables fills a PINCH_BERRY item's item_param[i, 1] from here; the same stats are
+# BtlCmd_TryPluck's PLUCK_EFFECT_ATK_UP .. _SPDEF_UP (:5753-5796).
+PINCH_STAT_HOLD_EFFECTS: dict[int, tuple[str, int]] = {
+    36: ("HOLD_EFFECT_PINCH_ATK_UP", Stat.ATK),
+    37: ("HOLD_EFFECT_PINCH_DEF_UP", Stat.DEF),
+    38: ("HOLD_EFFECT_PINCH_SPEED_UP", Stat.SPE),
+    39: ("HOLD_EFFECT_PINCH_SPATK_UP", Stat.SPA),
+    40: ("HOLD_EFFECT_PINCH_SPDEF_UP", Stat.SPD),
+}
+# The berries whose trigger divides maxHP by their param (the stat pinch berries, Custap): a
+# param below 2 divides by zero (param 0, or 1 halved by Gluttony; battle_lib.c:4778, :1294),
+# whose result is the ROM's division routine's, not the decomp's: build_tables maps such an
+# item to UNSUPPORTED (Kaizo's Ganlon and Apicot Berries have param 0).
+PINCH_DIVISOR_ITEMS = (ItemId.PINCH_BERRY, ItemId.CUSTAP_BERRY)
 
 # sTypeBoostingItems (src/battle/battle_lib.c:6514-6549), applied at :6716-6722: decomp hold
 # effect (generated/item_hold_effects.txt line N+1 is id N) -> (name, the type it boosts).
@@ -392,6 +425,22 @@ HOLD_EFFECT_TO_ID: dict[int, tuple[str, ItemId]] = {
     98: ("HOLD_EFFECT_HP_DRAIN_ON_ATK", ItemId.LIFE_ORB),
     115: ("HOLD_EFFECT_CHOICE_SPEED", ItemId.CHOICE_SCARF),
     125: ("HOLD_EFFECT_CHOICE_SPATK", ItemId.CHOICE_SPECS),
+    # E2 batch 2 (no berries: those are named in DECOMP_ITEM_TO_ID). BattleSystem_TriggerLeftovers
+    # (battle_lib.c:4922-4965), BattleSystem_TriggerDetrimentalHeldItem (:5307-5350) and
+    # TriggerHeldItemOnHit's transfer (:5387-5398), the accuracy check
+    # (battle_controller_player.c:2949-2965), CheckExtraFlinch (:4630-4653), Shell Bell
+    # (:4736-4752), BtlCmd_TryLightScreen / TryReflect (battle_script.c:4229, :4272).
+    48: ("HOLD_EFFECT_ACC_REDUCE", ItemId.BRIGHT_POWDER),
+    56: ("HOLD_EFFECT_SOMETIMES_FLINCH", ItemId.KINGS_ROCK),
+    69: ("HOLD_EFFECT_HP_RESTORE_GRADUAL", ItemId.LEFTOVERS),
+    88: ("HOLD_EFFECT_HP_RESTORE_ON_DMG", ItemId.SHELL_BELL),
+    93: ("HOLD_EFFECT_ACCURACY_UP", ItemId.WIDE_LENS),
+    97: ("HOLD_EFFECT_EXTEND_SCREENS", ItemId.LIGHT_CLAY),
+    100: ("HOLD_EFFECT_PSN_USER", ItemId.TOXIC_ORB),
+    101: ("HOLD_EFFECT_BRN_USER", ItemId.FLAME_ORB),
+    104: ("HOLD_EFFECT_ACCURACY_UP_SLOWER", ItemId.ZOOM_LENS),
+    109: ("HOLD_EFFECT_HP_RESTORE_PSN_TYPE", ItemId.BLACK_SLUDGE),
+    116: ("HOLD_EFFECT_DMG_USER_CONTACT_XFR", ItemId.STICKY_BARB),
 }
 
 # HOLD_EFFECT_NONE. An item without a hold effect is NONE (no implemented path reads it by

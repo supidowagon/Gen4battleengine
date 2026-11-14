@@ -73,7 +73,7 @@ class Outcome(NamedTuple):
         jnp.ndarray
     )  # int8[2], sleep/confusion/Bind/Taunt/Disable counter rolled at infliction
     thaw: jnp.ndarray  # int8[2]
-    flinch_item: jnp.ndarray  # int8[2], reserved: King's Rock / Razor Fang (unsupported items)
+    flinch_item: jnp.ndarray  # int8[2,5], King's Rock / Razor Fang's flinch roll per hit
     quick_claw: jnp.ndarray  # int8[2], this turn's speedRand % 5 == 0 (Quick Claw)
     end_speed_tie: jnp.ndarray  # int8[], 0 = player first in the end-of-turn order on equal speed
     magnitude: jnp.ndarray  # int8[2], Magnitude's level 4-10 of each side's move
@@ -102,7 +102,7 @@ def empty_outcome() -> Outcome:
         confusion_hit=sides,
         duration=sides + 2,
         thaw=sides,
-        flinch_item=sides,
+        flinch_item=hits,
         quick_claw=sides,
         end_speed_tie=jnp.zeros((), _I8),
         magnitude=sides + 4,
@@ -136,11 +136,21 @@ def _target_mon(state: BattleState, actions, side):
 
 
 def _rate(
-    tables: Tables, state: BattleState, side, move, target_mon, target_switches, acc, eva_stage
+    tables: Tables,
+    state: BattleState,
+    side,
+    move,
+    target_mon,
+    target_switches,
+    acc,
+    eva_stage,
+    target_moved=False,
 ) -> jnp.ndarray:
     """``hitRate`` of ``side``'s ``move`` against the other side's ``target_mon`` with the
     attacker's accuracy stage ``acc`` and the target's evasion stage ``eva_stage``
-    (``target_switches``: it comes in this turn, fresh)."""
+    (``target_switches``: it comes in this turn, fresh); ``target_moved``: the target's action
+    is over (``Battler_MovedThisTurn``, battle_lib.c:5365-5368: in singles, the attacker acts
+    second), for Zoom Lens."""
     accuracy = tables.move_accuracy[move].astype(_I32)
     target = 1 - side
     a_ability = state.ability[side, state.active[side]]
@@ -179,30 +189,52 @@ def _rate(
     )
     rate = jnp.where(veiled, rate * 80 // 100, rate)
     rate = jnp.where(weather == Weather.FOG, rate * 6 // 10, rate)  # deep fog
+    # The held items (:2949-2965), after Hustle and Tangled Feet (unsupported abilities) and
+    # before the Micle Berry flag (an unsupported item) and Gravity: the defender's
+    # HOLD_EFFECT_ACC_REDUCE (BrightPowder, Lax Incense) * (100 - param) / 100, then the
+    # attacker's HOLD_EFFECT_ACCURACY_UP (Wide Lens) and, against a target that has moved,
+    # HOLD_EFFECT_ACCURACY_UP_SLOWER (Zoom Lens), each * (100 + param) / 100
+    # (Battler_HeldItemEffect / Battler_HeldItemPower: Klutz and Embargo are unsupported).
+    d_item = state.item[target, target_mon]
+    d_power = tables.item_param[d_item, 0].astype(_I32)
+    reduce = tables.item_effect[d_item] == ItemId.BRIGHT_POWDER
+    rate = jnp.where(reduce, rate * (100 - d_power) // 100, rate)
+    a_item = state.item[side, state.active[side]]
+    a_effect = tables.item_effect[a_item]
+    a_power = tables.item_param[a_item, 0].astype(_I32)
+    lens = (a_effect == ItemId.WIDE_LENS) | (
+        (a_effect == ItemId.ZOOM_LENS) & jnp.asarray(target_moved, bool)
+    )
+    rate = jnp.where(lens, rate * (100 + a_power) // 100, rate)
     rate = jnp.where(state.gravity != 0, rate * 10 // 6, rate)
     # Accuracy 0 never misses (the check returns before rolling).
     return jnp.where(accuracy == 0, 100, rate)
 
 
-def live_hit_threshold(tables: Tables, state: BattleState, side, move) -> jnp.ndarray:
+def live_hit_threshold(
+    tables: Tables, state: BattleState, side, move, target_moved=False
+) -> jnp.ndarray:
     """``int32``: the threshold of ``side``'s ``move`` at its accuracy check, read from
-    ``state`` as it is at that moment (``step``): the stages, abilities, weather and HP
-    of the two active battlers then."""
+    ``state`` as it is at that moment (``step``): the stages, abilities, items, weather and
+    HP of the two active battlers then; ``target_moved``: the target has acted this turn."""
     target_mon = state.active[1 - side]
     eva = state.stages[1 - side, Stat.EVA]
     acc = state.stages[side, Stat.ACC]
-    return _rate(tables, state, side, move, target_mon, jnp.asarray(False), acc, eva)
+    return _rate(tables, state, side, move, target_mon, jnp.asarray(False), acc, eva, target_moved)
 
 
-def _hit_threshold(tables: Tables, state: BattleState, actions, side, acc=None, eva=None):
-    """The turn-start threshold of ``side``'s move, or with these stages instead. Nature
-    Power's accuracy check is its called move's (``order.called_move``)."""
+def _hit_threshold(
+    tables: Tables, state: BattleState, actions, side, acc=None, eva=None, target_moved=False
+):
+    """The turn-start threshold of ``side``'s move, or with these stages (and, for Zoom Lens,
+    a target that has moved) instead. Nature Power's accuracy check is its called move's
+    (``order.called_move``)."""
     move = used_move(tables, state, side, actions[side])
     target, target_switches, target_mon = _target_mon(state, actions, side)
     acc = state.stages[side, Stat.ACC] if acc is None else acc
     if eva is None:
         eva = jnp.where(target_switches, 0, state.stages[target, Stat.EVA])
-    rate = _rate(tables, state, side, move, target_mon, target_switches, acc, eva)
+    rate = _rate(tables, state, side, move, target_mon, target_switches, acc, eva, target_moved)
     # A switch or an item use runs no move, so it has no roll.
     no_move = is_switch(actions[side]) | is_item(actions[side])
     return jnp.where(no_move, 100, rate)
@@ -218,9 +250,9 @@ def hit_threshold(tables: Tables, state: BattleState, actions) -> jnp.ndarray:
 
 # Per stage: the start value, the one change an earlier action can make, the White Herb's
 # reset to 0, and the change after that reset; hit_thresholds' second axis is the
-# accuracy x evasion grid.
+# accuracy x evasion grid, once with the target not moved yet and once moved (Zoom Lens).
 _STAGE_VARIANTS = 4
-HIT_VARIANTS = _STAGE_VARIANTS**2
+HIT_VARIANTS = 2 * _STAGE_VARIANTS**2
 
 
 def _can_go_first(tables: Tables, state: BattleState, actions) -> jnp.ndarray:
@@ -261,7 +293,11 @@ def hit_thresholds(tables: Tables, state: BattleState, actions) -> tuple[jnp.nda
       ``Stat.ACC`` (Sand-Attack, Mud-Slap; effects.py ``_foe_stage``);
     * the target's evasion stage: a ``STAT_SELF`` / ``SECONDARY_STAT_SELF`` move on
       ``Stat.EVA`` (Double Team; ``_stat_self``);
-    * a White Herb on either battler, which resets a lowered stage to 0.
+    * a White Herb on either battler, which resets a lowered stage to 0;
+    * the order: a Zoom Lens (``HOLD_EFFECT_ACCURACY_UP_SLOWER``) raises the rate against a
+      target that has moved, i.e. when the side acts second (the second half of the grid,
+      possible for a holder that can act second; the first half stays possible, so column 0,
+      the turn-start threshold, always is).
 
     Each applies once: a move has one effect, and the only repeated hits are
     ``MULTI_HIT``'s, which change no stage (a future multi-hit stat effect must add
@@ -290,7 +326,14 @@ def hit_thresholds(tables: Tables, state: BattleState, actions) -> tuple[jnp.nda
         & ((effect == EffectId.STAT_SELF) | (effect == EffectId.SECONDARY_STAT_SELF))
         & (stat == Stat.EVA)
     )
-    herb = tables.item_effect[state.item[jnp.arange(2), state.active]] == ItemId.WHITE_HERB
+    held = tables.item_effect[state.item[jnp.arange(2), state.active]]
+    herb = held == ItemId.WHITE_HERB
+    firsts = [
+        action_order(tables, state, actions, empty_outcome()._replace(speed_tie=jnp.int8(t)))[0]
+        for t in (0, 1)
+    ]
+    can_second = jnp.stack([(firsts[0] != side) | (firsts[1] != side) for side in (0, 1)])
+    zoom = uses_move & (held == ItemId.ZOOM_LENS) & can_second
     thresholds, possible = [], []
     for side in (0, 1):
         foe = 1 - side
@@ -299,14 +342,16 @@ def hit_thresholds(tables: Tables, state: BattleState, actions) -> tuple[jnp.nda
         eva0 = jnp.where(foe_switches, 0, state.stages[foe, Stat.EVA])
         accs, acc_ok = _stage_variants(acc0, delta[foe], on_foe_acc[foe], herb[side])
         evas, eva_ok = _stage_variants(eva0, delta[foe], on_own_eva[foe], herb[foe] & ~foe_switches)
-        acc_grid = jnp.repeat(accs, _STAGE_VARIANTS)
-        eva_grid = jnp.tile(evas, _STAGE_VARIANTS)
+        acc_grid = jnp.tile(jnp.repeat(accs, _STAGE_VARIANTS), 2)
+        eva_grid = jnp.tile(evas, 2 * _STAGE_VARIANTS)
+        moved_grid = jnp.repeat(jnp.array([False, True]), _STAGE_VARIANTS**2)
         thresholds.append(
-            jax.vmap(lambda a, e, side=side: _hit_threshold(tables, state, actions, side, a, e))(
-                acc_grid, eva_grid
-            )
+            jax.vmap(
+                lambda a, e, m, side=side: _hit_threshold(tables, state, actions, side, a, e, m)
+            )(acc_grid, eva_grid, moved_grid)
         )
-        possible.append(jnp.repeat(acc_ok, _STAGE_VARIANTS) & jnp.tile(eva_ok, _STAGE_VARIANTS))
+        grid_ok = jnp.repeat(acc_ok, _STAGE_VARIANTS) & jnp.tile(eva_ok, _STAGE_VARIANTS)
+        possible.append(jnp.concatenate([grid_ok, grid_ok & zoom[side]]))
     return jnp.stack(thresholds).astype(_I32), jnp.stack(possible)
 
 
@@ -427,6 +472,16 @@ def roar_inputs(state: BattleState, actions) -> tuple[jnp.ndarray, jnp.ndarray]:
     return roar_level_weight(la, ld), jnp.stack(counts)
 
 
+def kings_rock_chance(tables: Tables, state: BattleState) -> jnp.ndarray:
+    """``int32[2]``: the hold param of each side's active King's Rock / Razor Fang
+    (``HOLD_EFFECT_SOMETIMES_FLINCH``, ``Battler_HeldItemPower(attacker, 0)``,
+    battle_controller_player.c:4633), else 0. The attacker's item cannot become one during the
+    turn (no implemented path gives a King's Rock)."""
+    item = state.item[jnp.arange(2), state.active]
+    holder = tables.item_effect[item] == ItemId.KINGS_ROCK
+    return jnp.where(holder, tables.item_param[item, 0].astype(_I32), 0)
+
+
 def sample_outcome(key, tables: Tables, state: BattleState, actions) -> Outcome:
     """Draw every field from its Gen 4 probability for this state and these actions."""
     actions = jnp.asarray(actions, _I32)
@@ -478,8 +533,11 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions) -> Outcome:
         confusion_hit=draw(9, per_side, 2) == 1,  # battle_controller_player.c:2621
         duration=duration,
         thaw=draw(11, per_side, 5) == 0,  # battle_controller_player.c:2478, % 5 != 0 stays
-        # King's Rock / Razor Fang are not implemented items (ItemId).
-        flinch_item=jnp.zeros(per_side, _I32),
+        # BattleControllerPlayer_CheckExtraFlinch (battle_controller_player.c:4639):
+        # RandNext() % 100 < the attacker's King's Rock / Razor Fang param, per hit. From a
+        # fold_in key: every field above keeps its samples.
+        flinch_item=jax.random.randint(jax.random.fold_in(key, 24), per_hit, 0, 100, dtype=_I32)
+        < kings_rock_chance(tables, state)[:, None],
         # The turn's speedRand (bcp.c:853-857, after the order is fixed), Quick Claw's
         # % (100 / param) == 0 (battle_lib.c:1278-1286): uniform 1/5 by the project's % n
         # convention (exact 13108/65536). Read by the end-of-turn order, stored for the next

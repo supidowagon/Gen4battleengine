@@ -18,8 +18,8 @@ items (``UNSUPPORTED`` ids), so they never apply.
 
 Within equal priority (``player_second``, ``:1401-1440``) the decomp decides in this
 order: Quick Claw / Custap Berry (``HOLD_EFFECT_SOMETIMES_PRIORITY`` /
-``PINCH_PRIORITY``), Lagging Tail (``HOLD_EFFECT_PRIORITY_DOWN``), Stall, then Trick Room
-or speed. Custap and Stall are unsupported. ``SortMonSpeedOrder`` (``end_of_turn_order``)
+``PINCH_PRIORITY``, one flag: ``custap_active``), Lagging Tail (``HOLD_EFFECT_PRIORITY_DOWN``),
+Stall, then Trick Room or speed. Stall is unsupported. ``SortMonSpeedOrder`` (``end_of_turn_order``)
 uses the same comparison with ``ignoreQuickClaw = TRUE`` (priorities 0; the Quick Claw
 flag is still evaluated, only its ``moveEffectsData`` write is skipped, :1278-1300).
 
@@ -154,6 +154,45 @@ def _holds(tables: Tables, state: BattleState, side, item) -> jnp.ndarray:
     return tables.item_effect[state.item[side, state.active[side]]] == item
 
 
+def pinch_divisor(tables: Tables, state: BattleState, side, mon, item) -> jnp.ndarray:
+    """``int32``: the hold param of a pinch berry or Custap Berry ``item`` held by ``side``'s
+    party ``mon``, halved (``itemPower /= 2``) when the holder's own ability is Gluttony
+    (``Battler_Ability``: battle_lib.c:4774-4776, :1289-1291). The berry triggers at
+    ``curHP <= maxHP / divisor`` (C integer division); build_tables keeps the divisor >= 1
+    (``tools.effect_map.PINCH_DIVISOR_ITEMS``)."""
+    power = tables.item_param[item, 0].astype(_I32)
+    gluttony = state.ability[side, mon] == AbilityId.GLUTTONY
+    return jnp.where(gluttony, power // 2, power)
+
+
+def custap_active(tables: Tables, state: BattleState) -> jnp.ndarray:
+    """``bool[2]``: each side's active battler holds a Custap Berry
+    (``HOLD_EFFECT_PINCH_PRIORITY``) at ``curHP <= maxHP / pinch_divisor``: the decomp's
+    ``battlerNQuickClaw`` flag (battle_lib.c:1288-1300, :1354-1366), whatever
+    ``ignoreQuickClaw``."""
+    out = []
+    for side in (0, 1):
+        mon = state.active[side]
+        item = state.item[side, mon]
+        hp = state.hp[side, mon].astype(_I32)
+        max_hp = state.max_hp[side, mon].astype(_I32)
+        low = hp <= max_hp // pinch_divisor(tables, state, side, mon, item)
+        out.append((tables.item_effect[item] == ItemId.CUSTAP_BERRY) & low)
+    return jnp.stack(out)
+
+
+def custap_flags(tables: Tables, state: BattleState, actions) -> jnp.ndarray:
+    """``bool[2]``: ``moveEffectsData.custapBerry`` after the turn order: ``CalcTurnOrder``
+    compares two FIGHT commands with ``ignoreQuickClaw = FALSE`` (bcp.c:772-786), which writes
+    the flag of each activated holder (``custap_active`` on the turn-start ``state``,
+    battle_lib.c:1296-1298, :1362-1364). The holder eats the berry when its move starts
+    (``subscript_check_quick_claw.s:26-28``, ``step._use_move``); until then Pluck cannot take
+    it (``hooks.pluck_berry``)."""
+    actions = jnp.asarray(actions, _I32)
+    fight = ~is_switch(actions) & ~is_item(actions)
+    return custap_active(tables, state) & fight[0] & fight[1]
+
+
 def quick_claw_active(tables: Tables, state: BattleState, qc) -> jnp.ndarray:
     """``bool[2]``: each side's active battler holds a Quick Claw and its ``speedRand``
     draw ``qc`` (``int[2]``, 1 = ``speedRand % 5 == 0``) activates it (lib.c:1278-1286)."""
@@ -179,10 +218,11 @@ def compare_speed(tables: Tables, state: BattleState, battler1: int, tie_roll, q
     of these branches gives TIE when ``tie_roll`` (``RandNext() & 1``) is 1, else FASTER,
     never SLOWER; the decomp draws that bit only there. The dead-battler short-circuit
     (:1205-1211) is not part of this function, as it was not of ``player_second``; the
-    trainer AI compares at its decision, with both actives alive."""
+    trainer AI compares at its decision, with both actives alive. A Custap Berry in its pinch
+    (``custap_active``) sets the same flag as an activated Quick Claw (:1288-1300)."""
     other = 1 - battler1
     speed = (effective_speed(tables, state, 0), effective_speed(tables, state, 1))
-    claw = quick_claw_active(tables, state, qc)
+    claw = quick_claw_active(tables, state, qc) | custap_active(tables, state)
     lag = tuple(_holds(tables, state, side, ItemId.LAGGING_TAIL) for side in (0, 1))
     speed1, speed2 = speed[battler1], speed[other]
     claw1, claw2 = claw[battler1], claw[other]

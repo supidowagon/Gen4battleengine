@@ -71,8 +71,10 @@ of the turn:
   stage change is possible this turn (a Speed stat effect, AncientPower, Curse, a
   flinched Steadfast), paralysis when it can be inflicted, and the
   neutral speed of a fainted battler (``_faint_check`` resets stages and status). A
-  White Herb holder may lose a lowered stage and a Lum Berry holder or a Pluck / Bug Bite
-  user its paralysis (over-approximate). The weather lock: Swift Swim doubles in rain only
+  White Herb holder may lose a lowered stage, a Salac Berry holder or a Pluck / Bug Bite user
+  gain one, a flinched Steadfast gain one (its foe's flinch move or King's Rock), and a Lum or
+  Cheri Berry holder or a Pluck / Bug Bite user lose its paralysis (over-approximate); a
+  Salac holder a foe's Roar drags in may enter at +1 (it triggers on the switch-in). The weather lock: Swift Swim doubles in rain only
   ``if (NO_CLOUD_NINE)`` (battle_lib.c:1228-1237), which counts the battlers on the field
   at the turn's end with Cloud Nine / Air Lock and HP left (include/battle/common.h:63-64,
   ``COUNT_ALIVE_BATTLERS``, battle_lib.c:2951-2957); a holder can switch in or out, be
@@ -121,7 +123,11 @@ of the turn:
   (sound, not tight: the replacement needs the active to faint this turn, which is not
   judged here). The turn's own order reads ``BattleState.qc_roll`` (``action_order``), so
   every order-conditioned read above already sees Quick Claw through ``Reads.first``.
-* ``flinch_item``: never read.
+* ``flinch_item[s, i]``: King's Rock / Razor Fang's roll on hit ``i`` of ``s``'s damaging
+  move with ``MOVE_FLAG_TRIGGERS_KINGS_ROCK`` while ``s``'s active Pokemon holds one
+  (``effects._kings_rock``; its law is the holder's param, ``outcome.kings_rock_chance``),
+  only when ``s`` acts first in the branch (``subscript_flinch_mon.s``'s ``IfMovedThisTurn``)
+  and the target has no Inner Focus as ``s`` sees it, as ``fang_flinch``.
 * Nothing is relevant once the battle is over (``step`` returns the state,
   ``step.step_events``, step.py:1439).
 
@@ -214,6 +220,9 @@ from nuzline.engine.outcome import (
     roar_inputs,
     roar_levels,
 )
+from nuzline.engine.outcome import (
+    kings_rock_chance as outcome_kings_rock_chance,
+)
 from nuzline.engine.state import STAGE_MAX, STAGE_MIN, BattleState
 
 _I32 = jnp.int32
@@ -288,6 +297,7 @@ class OutcomeLaws(NamedTuple):
     roar_level_weight: jnp.ndarray  # int32[2]: of ROAR_LEVEL_VALUES, how many pass (roar_level)
     roar_bench: jnp.ndarray  # int32[2]: the eligible bench Pokemon Roar picks from (roar_target)
     compress: jnp.ndarray  # bool[2, 2, MAX_HITS]: [branch, side, hit] uses damage classes
+    flinch_item_chance: jnp.ndarray  # int32[2]: the King's Rock param (outcome.kings_rock_chance)
 
 
 class SamplingOnly(Exception):
@@ -337,14 +347,15 @@ def _holds_item(tables: Tables, state: BattleState, actions, items) -> jnp.ndarr
 def _end_speeds(
     tables: Tables, state: BattleState, actions, side, stage_free, para_free, dragged, lock_free
 ):
-    """``(int32[3 * (39 + 2 * SLOTS)], bool[...])``: the effective speeds ``side`` can have
+    """``(int32[3 * (27 + 4 * SLOTS)], bool[...])``: the effective speeds ``side`` can have
     after the actions (``step.end_of_turn_order`` on the post-action state, step.py:1251-1261)
     and which of them are possible. Grid: Speed stage -6..6 x paralyzed or not of the
     Pokemon active after the actions, plus its neutral speed (a faint resets stages and
     status, ``step._faint_check``, step.py:948-992). A stage other than the start one needs ``stage_free``, a
     paralysis state other than the start one ``para_free``. Where ``dragged`` (the foe
     can Roar this side), every living party member at stage 0, paralyzed or not: the
-    Pokemon the drag brings in (``InitBattleMon`` resets its stages).
+    Pokemon the drag brings in (``InitBattleMon`` resets its stages), and a Salac Berry holder
+    at +1 too (its switch-in item check can raise its Speed).
 
     The weather lock: every grid point is also evaluated with the lock on and with it off
     where ``lock_free`` (a Cloud Nine / Air Lock holder can enter, leave or faint this
@@ -365,13 +376,27 @@ def _end_speeds(
     possible = (stage_free | (stages == stage0)) & (para_free | (paras == para0))
     possible = possible | (jnp.arange(stages.shape[0]) == stages.shape[0] - 1)  # fainted
     mons = jnp.full(stages.shape, mon, state.active.dtype)
-    # A foe's Roar: any living party member, at stage 0, paralyzed or not.
+    # A foe's Roar: any living party member, at stage 0, paralyzed or not; a Salac Berry
+    # holder also at +1 (its switch-in item check, hooks.on_switch_in, may raise its Speed).
     slots = jnp.arange(state.hp.shape[1])
     living = (state.species[side] != 0) & (state.hp[side] > 0)
-    mons = jnp.concatenate([mons, jnp.repeat(slots, 2).astype(state.active.dtype)])
-    stages = jnp.concatenate([stages, jnp.zeros((2 * slots.shape[0],), _I32)])
-    paras = jnp.concatenate([paras, jnp.tile(jnp.array([False, True]), slots.shape[0])])
-    possible = jnp.concatenate([possible, jnp.asarray(dragged) & jnp.repeat(living, 2)])
+    held = state.item[side]
+    salac = (tables.item_effect[held] == ItemId.PINCH_BERRY) & (
+        tables.item_param[held, 1] == Stat.SPE
+    )
+    n_slots = slots.shape[0]
+    mons = jnp.concatenate([mons, jnp.tile(jnp.repeat(slots, 2), 2).astype(state.active.dtype)])
+    stages = jnp.concatenate(
+        [stages, jnp.zeros((2 * n_slots,), _I32), jnp.ones((2 * n_slots,), _I32)]
+    )
+    paras = jnp.concatenate([paras, jnp.tile(jnp.array([False, True]), 2 * n_slots)])
+    possible = jnp.concatenate(
+        [
+            possible,
+            jnp.asarray(dragged) & jnp.repeat(living, 2),
+            jnp.asarray(dragged) & jnp.repeat(living & salac, 2),
+        ]
+    )
     # The weather lock: 0 = as on the field of the grid point, 1 = on, 2 = off.
     n = stages.shape[0]
     locks = jnp.repeat(jnp.arange(3), n)
@@ -425,6 +450,8 @@ def _branch_masks(foe_first, first_self, base: dict) -> dict:
         "tri_attack": b["tri_attack"] & ~blocked & (secondary[:, 0] | b["certain"]),
         # Thunder Fang's flinch roll: the same order gate, and Inner Focus (effects._fang).
         "fang_flinch": b["fang_flinch"] & first_self & ~b["flinch_blocked"],
+        # King's Rock / Razor Fang (effects._kings_rock): the same gates, per hit.
+        "flinch_item": b["flinch_item"] & (first_self & ~b["flinch_blocked"])[:, None],
         # The battler acting last fails Protect whatever its roll (waitingBattlers == 1).
         "protect": b["protect"] & first_self,
         "full_para": b["para_own"] | para_by_foe,
@@ -469,7 +496,6 @@ INPUT_NEUTRAL_EFFECTS = (
     _E.HIDDEN_POWER,
     _E.MAGNITUDE,
     _E.SECONDARY_CONFUSE,
-    _E.EAT_BERRY,  # takes the attacker's berry: no input, and no later cure
     _E.DISABLE,
     _E.BIDE,
     _E.ROLLOUT,
@@ -520,6 +546,10 @@ INPUT_CLAUSE_EFFECTS = (
     # The foe's own types (effects._camouflage): the type chart of the side's later hit
     # (damage._finish) and the Rock Sp. Def boost in sand: the camouflage clause.
     _E.CAMOUFLAGE,
+    # Takes the side's berry: a stat pinch berry raises the eater's stat (hooks.pluck_berry),
+    # the defending one of the side's later hit: the pluck clause. Taking any other berry
+    # changes no input of the side's hit, and only removes a later cure.
+    _E.EAT_BERRY,
 )
 INPUT_NEUTRAL_ABILITIES = (
     AbilityId.NONE,
@@ -546,6 +576,8 @@ INPUT_NEUTRAL_ABILITIES = (
     # Infatuates the attacker after its hit: read at its next attract check, not a damage
     # input of a later hit of the move (effects._contact_ability).
     AbilityId.CUTE_CHARM,
+    # Halves a pinch berry's param: the berry's trigger is its own item clause.
+    AbilityId.GLUTTONY,
 )
 INPUT_CLAUSE_ABILITIES = (
     AbilityId.GUTS,  # status clause
@@ -593,6 +625,29 @@ INPUT_NEUTRAL_ITEMS = (
     # holder's HP, which no later hit of the turn reads as a damage input but the holder's
     # own (Flail, the pinch abilities: the HP clause), and the holder has acted.
     ItemId.LIFE_ORB,
+    # Like Life Orb: Shell Bell heals its holder after its last hit (effects.shell_bell_heal).
+    ItemId.SHELL_BELL,
+    # Confusion is no damage input (effects.play_hit), so its cure changes none.
+    ItemId.PERSIM_BERRY,
+    # Eaten when its holder's move starts (step._use_move): it changes only the order, fixed
+    # at the turn's start, and the end-of-turn order, read after every hit.
+    ItemId.CUSTAP_BERRY,
+    # The end of the turn, after every hit (step.END_OF_TURN_ORDER).
+    ItemId.LEFTOVERS,
+    ItemId.BLACK_SLUDGE,
+    ItemId.TOXIC_ORB,
+    ItemId.FLAME_ORB,
+    # Its contact transfer (effects.sticky_barb_transfer) only moves an item with no damage
+    # effect; its damage is at the turn's end.
+    ItemId.STICKY_BARB,
+    # The accuracy check (outcome._rate) and the flinch roll (effects._kings_rock): a hit
+    # that happens is not changed, a flinch removes the hit altogether.
+    ItemId.BRIGHT_POWDER,
+    ItemId.WIDE_LENS,
+    ItemId.ZOOM_LENS,
+    ItemId.KINGS_ROCK,
+    # Only the screen's duration (effects._screen); the screen itself is its move's clause.
+    ItemId.LIGHT_CLAY,
 )
 INPUT_CLAUSE_ITEMS = (
     ItemId.ORAN_BERRY,  # the attacker's HP: HP clause
@@ -602,9 +657,21 @@ INPUT_CLAUSE_ITEMS = (
     ItemId.CHESTO_BERRY,  # item clause (status cure)
     ItemId.PECHA_BERRY,
     ItemId.LUM_BERRY,
+    ItemId.CHERI_BERRY,
+    ItemId.RAWST_BERRY,  # item clause (a burn cure, or any cure under Guts)
+    ItemId.ASPEAR_BERRY,
     ItemId.WHITE_HERB,  # item clause (a lowered stage restored)
+    ItemId.PINCH_BERRY,  # item clause (a stage raised in a pinch); pluck clause
 )
-_STATUS_CURES = (ItemId.CHESTO_BERRY, ItemId.PECHA_BERRY, ItemId.LUM_BERRY)
+_STATUS_CURES = (
+    ItemId.CHERI_BERRY,
+    ItemId.CHESTO_BERRY,
+    ItemId.PECHA_BERRY,
+    ItemId.RAWST_BERRY,
+    ItemId.ASPEAR_BERRY,
+    ItemId.LUM_BERRY,
+)
+_BURN_CURES = (ItemId.RAWST_BERRY, ItemId.LUM_BERRY)
 
 # The attacker's own move effect, for ``OutcomeLaws.compress``: a hit of a
 # ``TABLE_DAMAGE_EFFECTS`` move deals exactly ``hit_damage_table``'s entry for its
@@ -700,7 +767,10 @@ def damage_inputs_can_change(tables: Tables, state: BattleState, actions, foe_fi
     * **items** (``hooks.held_item_check`` after every hit): a status cure on the side's
       Pokemon when the status matters, a White Herb on the attacker or the defender whose
       stage the hit reads can be lowered (below 0 at the start, or a stat move on that stat
-      or a switch this turn);
+      or a switch this turn), a stat pinch berry of the side on its attacking stat or of the
+      foe on its defending stat;
+    * **pluck**: the foe's earlier Pluck / Bug Bite eats the side's stat pinch berry of the
+      foe's defending stat (``hooks.pluck_berry`` raises the eater's stage);
     * **own move**: a later hit of a move other than ``MULTI_HIT`` (none has several hits
       today), a Guts user that wakes or thaws first (its status goes to none), and
       Selfdestruct (its user's HP goes to 0 before the hit).
@@ -746,6 +816,9 @@ def damage_inputs_can_change(tables: Tables, state: BattleState, actions, foe_fi
     )
     hp_sensitive = (effect == _E.FLAIL) | pinch
 
+    held = state.item[sides, mons]
+    pinch_stat = tables.item_param[held, 1]
+    pinch = item == ItemId.PINCH_BERRY
     foe_effect, foe_param0 = effect[::-1], param0[::-1]
     unclassified = ~_any_of(foe_effect, INPUT_NEUTRAL_EFFECTS + INPUT_CLAUSE_EFFECTS)
     status_hit = _any_of(
@@ -769,6 +842,7 @@ def damage_inputs_can_change(tables: Tables, state: BattleState, actions, foe_fi
         | ((foe_effect == _E.WATER_SPORT) & (move_type == Type.FIRE))
         | (foe_effect == _E.CAMOUFLAGE)
         | (foe_effect == _E.ROAR)
+        | ((foe_effect == _E.EAT_BERRY) & pinch & (pinch_stat == defense_stat))
         | hp_sensitive
     )
     foe_action = live & (is_switch(actions)[::-1] | is_item(actions)[::-1] | foe_move)
@@ -799,10 +873,17 @@ def damage_inputs_can_change(tables: Tables, state: BattleState, actions, foe_fi
     herb_inputs = (herb & (attack_stage | lowerable(attack_stat))) | (
         herb[::-1] & (defense_stage | lowerable(defense_stat))
     )
+    # A stat pinch berry (hooks.held_item_check) raises its holder's stage after a hit or a
+    # residual: the side's own on the stage its hit reads (Attack / Sp. Atk), or the foe's
+    # on its defending one (Defense / Sp. Def).
+    pinch_inputs = (pinch & (pinch_stat == attack_stat)) | (
+        pinch[::-1] & (pinch_stat[::-1] == defense_stat)
+    )
     items = (
         herb_inputs
+        | pinch_inputs
         | (guts & _any_of(item, _STATUS_CURES))
-        | (burnable & (item == ItemId.LUM_BERRY))
+        | (burnable & _any_of(item, _BURN_CURES))
     )
 
     foe_ability = ability[::-1]
@@ -935,6 +1016,9 @@ def outcome_laws(
     if not loose:
         attract = attract & lovers(gender[sides, mons], gender[sides, mons][::-1]) & foe_calm
         infatuated_own = infatuated_own & ~switch[::-1]
+    # King's Rock / Razor Fang (effects._kings_rock): the attacker's item, fixed through the turn.
+    kings_rock = outcome_kings_rock_chance(tables, state)
+    kings_move = (tables.move_flags[moves] & MoveFlag.KINGS_ROCK) != 0
     base = {
         "uses_move": uses_move,
         "effect": effect,
@@ -945,6 +1029,7 @@ def outcome_laws(
         "confused_blocked": confused_blocked,
         "fang_flinch": lands[:, 0] & (effect == _E.FANG_PARALYZE_FLINCH) & (chance != 0),
         "tri_attack": lands[:, 0] & (effect == _E.TRI_ATTACK),
+        "flinch_item": lands & (damaging & kings_move & (kings_rock > 0))[:, None],
         "certain": chance == 0,
         "flinch_blocked": flinch_blocked,
         "protect": uses_move & (effect == _E.PROTECT) & (state.protect_count > 0),
@@ -986,16 +1071,29 @@ def outcome_laws(
         _any_of(effect, (_E.RAISE_ALL_STATS_HIT, _E.CURSE))
     )
     foe_speed = _any_of(effect, (_E.STAT_FOE, _E.SECONDARY_STAT_FOE)) & (param0 == Stat.SPE)
-    # subscript_flinched.s:10-14: a flinched Steadfast Pokemon gains +1 Speed.
+    # subscript_flinched.s:10-14: a flinched Steadfast Pokemon gains +1 Speed (its foe's
+    # flinch move, or its King's Rock on a flagged damaging move).
     steadfast = _holds(state, actions, (AbilityId.STEADFAST,)) & foe_moves
-    steadfast = steadfast & _any_of(tables.move_effect[foe_move], _FLINCH_EFFECTS)
-    # A White Herb restores a lowered Speed stage (hooks.held_item_check).
+    kings = (kings_rock > 0) & damaging & kings_move
+    flinches = _any_of(tables.move_effect[foe_move], _FLINCH_EFFECTS) | kings[::-1]
+    steadfast = steadfast & flinches
+    # A White Herb restores a lowered Speed stage (hooks.held_item_check); a Salac Berry
+    # raises it, held or plucked (hooks.pluck_berry: any Pluck / Bug Bite user, over-approx).
     herb = _holds_item(tables, state, actions, (ItemId.WHITE_HERB,))
-    stage_free = (uses_move & own_speed) | (foe_moves & foe_speed[::-1]) | steadfast | herb
-    static = _holds(state, actions, (AbilityId.STATIC,))
-    # A Lum Berry cures paralysis, held or plucked (hooks.held_item_check, pluck_berry).
-    lum = _holds_item(tables, state, actions, (ItemId.LUM_BERRY,))
+    pinch_held = _holds_item(tables, state, actions, (ItemId.PINCH_BERRY,))
     plucks = uses_move & (effect == _E.EAT_BERRY)
+    stage_free = (
+        (uses_move & own_speed)
+        | (foe_moves & foe_speed[::-1])
+        | steadfast
+        | herb
+        | pinch_held
+        | plucks
+    )
+    static = _holds(state, actions, (AbilityId.STATIC,))
+    # A Lum or Cheri Berry cures paralysis, held or plucked (hooks.held_item_check,
+    # pluck_berry).
+    lum = _holds_item(tables, state, actions, (ItemId.LUM_BERRY, ItemId.CHERI_BERRY))
     para_free = (
         (foe_moves & _inflicts(tables, foe_move, Status.PARALYSIS))
         | (uses_move & damaging & contact & static[::-1])
@@ -1060,7 +1158,6 @@ def outcome_laws(
     if loose:
         shed_skin = shed_skin | (live & jnp.any(roar) & jnp.any(shed_party))
 
-    never = jnp.zeros((2,), bool)
     # Quick Claw (step.qc_kept, end_of_turn_order): a living holder anywhere in the party.
     claw = tables.item_effect[state.item] == ItemId.QUICK_CLAW
     quick_claw = live & jnp.any(claw & (state.species != 0) & (state.hp > 0), axis=1)
@@ -1084,7 +1181,7 @@ def outcome_laws(
             confusion_hit=m["confusion_hit"],
             duration=duration,
             thaw=m["thaw"],
-            flinch_item=never,
+            flinch_item=m["flinch_item"],
             quick_claw=quick_claw,
             end_speed_tie=end_speed_tie,
             magnitude=uses_move & (effect == _E.MAGNITUDE),
@@ -1209,6 +1306,7 @@ def outcome_laws(
         protect_count=state.protect_count.astype(_I32),
         roar_level_weight=roar_weight,
         roar_bench=roar_bench,
+        flinch_item_chance=kings_rock,
     )
 
 
@@ -1334,8 +1432,11 @@ def _roar_target(laws: OutcomeLaws, side: int) -> _Law:
     return list(range(n)), [1] * n, n
 
 
-def _zero(laws: OutcomeLaws, side: int) -> _Law:
-    return [0], [1], 1
+def _flinch_item(laws: OutcomeLaws, side: int) -> _Law:
+    # BattleControllerPlayer_CheckExtraFlinch (battle_controller_player.c:4639):
+    # RandNext() % 100 < param, uniform by the % n convention.
+    chance = min(max(int(laws.flinch_item_chance[side]), 0), 100)
+    return [0, 1], [100 - chance, chance], 100
 
 
 _LAWS = {
@@ -1350,7 +1451,7 @@ _LAWS = {
     "confusion_hit": _coin,
     "duration": _duration,
     "thaw": _thaw,
-    "flinch_item": _zero,
+    "flinch_item": _flinch_item,
     "quick_claw": _quick_claw,
     "end_speed_tie": _coin,
     "magnitude": _magnitude,
@@ -1558,7 +1659,12 @@ def _move_reads(laws: OutcomeLaws, branch: Branch, plan: ReadPlan) -> None:
         foe = 1 - s
         hits = move_conds(s)
         for i in range(MAX_HITS):
-            for elem in (("crit", (s, i)), ("secondary", (s, i)), ("contact_proc", (foe, i))):
+            for elem in (
+                ("crit", (s, i)),
+                ("secondary", (s, i)),
+                ("contact_proc", (foe, i)),
+                ("flinch_item", (s, i)),
+            ):
                 plan.path(elem, "move", *hits)
             if i > 0 or bool(rel.crit[s, 0]):  # roll[s, 0]: damage, or a self-hit below
                 plan.path(("roll", (s, i)), "move", *hits)
@@ -1616,6 +1722,7 @@ def _move_reads(laws: OutcomeLaws, branch: Branch, plan: ReadPlan) -> None:
                 ("roll", (q, i)),
                 ("secondary", (q, i)),
                 ("contact_proc", (first, i)),
+                ("flinch_item", (q, i)),
             ):
                 plan.gate(elem, cond)
         for name in (
@@ -1696,6 +1803,7 @@ def _protect_reads(laws: OutcomeLaws, branch: Branch, plan: ReadPlan) -> None:
             ("roll", (q, i)),
             ("secondary", (q, i)),
             ("contact_proc", (first, i)),
+            ("flinch_item", (q, i)),
         ):
             optional = e == ("roll", (q, 0)) and ("crit", (q, 0)) not in plan
             plan.restrict(e, "move", cond, required=not optional)

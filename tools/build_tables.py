@@ -24,9 +24,11 @@ Encodings:
 * ``item_param[item]``: ``(decomp hold param, 0)`` for supported items, else zeros; a
   ``RESIST_BERRY``'s column 1 is the type its hold effect resists
   (``effect_map.RESIST_BERRY_HOLD_EFFECTS``), a ``TYPE_BOOST``'s the type its hold effect
-  boosts (``effect_map.TYPE_BOOST_HOLD_EFFECTS``).
+  boosts (``effect_map.TYPE_BOOST_HOLD_EFFECTS``), a ``PINCH_BERRY``'s the ``Stat`` its hold
+  effect raises (``effect_map.PINCH_STAT_HOLD_EFFECTS``).
 * ``item_effect[item]``: the ``ids.ItemId`` (``effect_map.held_item_ids``: by name, else by
-  hold effect, else ``NONE`` / ``NO_EFFECT_BERRY`` for an item with no hold effect).
+  hold effect, else ``NONE`` / ``NO_EFFECT_BERRY`` for an item with no hold effect);
+  ``UNSUPPORTED`` for a pinch-divisor berry with a param below 2 (``_pinch_divisor_ok``).
 * ``item_hold_param[item]``: the decomp hold param as stored (``ItemData.effectParam``, which
   ``Item_LoadParam(item, ITEM_PARAM_EFFECT_PARAM)`` returns, ``src/item.c:160-161``), whether or
   not the engine supports the item. The level-up EV gain reads it as a Power item's
@@ -108,6 +110,8 @@ from tools.effect_map import (
     DECOMP_EFFECT_TO_ID,
     DECOMP_ITEM_TO_ID,
     DECOMP_TRAINER_ITEM_TO_ID,
+    PINCH_DIVISOR_ITEMS,
+    PINCH_STAT_HOLD_EFFECTS,
     RESIST_BERRY_HOLD_EFFECTS,
     TYPE_BOOST_HOLD_EFFECTS,
     TYPE_CHART_STATUS_MOVES,
@@ -132,6 +136,8 @@ MOVE_TARGETS = tuple(t.name for t in MoveTarget)
 DECOMP_FLAG_BITS = {
     "MOVE_FLAG_MAKES_CONTACT": MoveFlag.CONTACT,
     "MOVE_FLAG_CAN_PROTECT": MoveFlag.PROTECT,
+    # BattleControllerPlayer_CheckExtraFlinch (battle_controller_player.c:4642).
+    "MOVE_FLAG_TRIGGERS_KINGS_ROCK": MoveFlag.KINGS_ROCK,
 }
 SECONDARY = (
     EffectId.SECONDARY_STAT_SELF,
@@ -288,10 +294,12 @@ def _form_names(species: list[dict], forms: list[dict]) -> dict[str, list[str]]:
 def _item_type(item: dict, item_id: int) -> int:
     """``item_param[i, 1]``: the type a ``RESIST_BERRY`` resists
     (``subscript_type_resist_berry.s``) or a ``TYPE_BOOST`` boosts (``sTypeBoostingItems``,
-    battle_lib.c:6514), by its own hold effect, else 0."""
+    battle_lib.c:6514), or the ``Stat`` a ``PINCH_BERRY`` raises (battle_lib.c:4773-4836), by
+    its own hold effect, else 0."""
     tables = {
         ItemId.RESIST_BERRY: (RESIST_BERRY_HOLD_EFFECTS, "resists"),
         ItemId.TYPE_BOOST: (TYPE_BOOST_HOLD_EFFECTS, "boosts"),
+        ItemId.PINCH_BERRY: (PINCH_STAT_HOLD_EFFECTS, "raises"),
     }
     if item_id not in tables:
         return 0
@@ -299,6 +307,17 @@ def _item_type(item: dict, item_id: int) -> int:
     if item["hold_effect"] not in table:
         raise BuildError(f"item {item['name']!r}: hold effect {item['hold_effect']} {verb} no type")
     return int(table[item["hold_effect"]][1])
+
+
+def _pinch_divisor_ok(items: list[dict], ids: list[int]) -> list[int]:
+    """``ids`` with every ``effect_map.PINCH_DIVISOR_ITEMS`` item whose hold param is below 2
+    made ``UNSUPPORTED``: its trigger divides maxHP by the param, halved by Gluttony
+    (battle_lib.c:4774-4778, :1289-1294), so such a param divides by zero, which the decomp
+    does not define (the ROM's division routine decides)."""
+    return [
+        int(ItemId.UNSUPPORTED) if e in PINCH_DIVISOR_ITEMS and i["hold_param"] < 2 else e
+        for i, e in zip(items, ids, strict=True)
+    ]
 
 
 def _item_maps(items: list[dict], vanilla: list[dict] | None) -> tuple[list[int], list[int]]:
@@ -532,6 +551,7 @@ def build_arrays(inter: Path, game: str = "platinum_us") -> tuple[dict[str, np.n
     hm_moves = set(tm_moves[NUM_TMS:])
     effects = [_move_effect(m, changed_effects) for m in moves]
     item_ids, trainer_item_ids = _item_maps(items, vanilla_items)
+    item_ids = _pinch_divisor_ok(items, item_ids)
     supported_item = [e not in (ItemId.UNSUPPORTED, ItemId.NONE) for e in item_ids]
     item_params = [
         [i["hold_param"] if ok else 0, _item_type(i, e)]

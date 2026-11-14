@@ -30,7 +30,12 @@ next turn is set up (``_unlock_sleepers``, battle_lib.c:2240).
 The Choice lock (``choice_lock``, ``moveEffectsData.choiceLockedMove``): ``_choice_lock``
 sets and clears it where ``UpdateMoveBuffers`` and ``UpdateFlagsWhenHit`` do, and
 ``_pursuit_hit`` where ``BtlCmd_TryPursuit`` does; ``actions.usable_moves`` reads it.
-Life Orb's recoil follows the move's hits (``effects.life_orb_recoil``).
+Shell Bell's heal and Life Orb's recoil follow the move's hits (``effects.shell_bell_heal``,
+``effects.life_orb_recoil``); after every hit, ``AfterMoveEffects`` checks the held items,
+moves a Sticky Barb and thaws the defender, in that order (``_use_move``). A Custap Berry the
+turn order activated (``order.custap_flags``) is eaten when its holder's move starts. The
+end of the turn runs Leftovers / Black Sludge and the status orbs / Sticky Barb in their
+``MonCondCheckState`` slots (``END_OF_TURN_ORDER``).
 
 Implemented so far: the opponent's bag items (Potion, ``_use_trainer_item``, with the
 decomp's multi-slot consumption, ``_consume_trainer_items``), the AI inputs
@@ -43,7 +48,7 @@ switching (with Natural Cure; Roar's drag takes the same path, ``_use_move``) an
 accuracy check, PP, Struggle, the move effects of ``effects.py``, the berry check
 after every hit (``hooks.after_damage_items``), Pursuit's pre-switch hit, the sleep,
 freeze, flinch, Taunt, confusion, paralysis and attract checks before a move, the
-held-item, Leech Seed, poison, toxic, burn, Bind and Taunt end-of-turn checks, the field-condition
+held-item, Leftovers, Leech Seed, poison, toxic, burn, Bind, Taunt and detrimental-item end-of-turn checks, the field-condition
 pass (``field_conditions``), faints and the end of the battle. A player faint is a death, not the end (spec §4): the battle ends
 when a side has no Pokemon with HP left. A state that is already over is returned unchanged.
 
@@ -77,6 +82,7 @@ from nuzline.engine.damage import (
 )
 from nuzline.engine.effects import (
     big_root,
+    can_have_status,
     change_stage,
     consume_item,
     defender_always,
@@ -90,6 +96,9 @@ from nuzline.engine.effects import (
     resist_berry,
     resist_berry_damage,
     self_defender,
+    shell_bell_heal,
+    sticky_barb_transfer,
+    thaw_target,
     unlock_move,
 )
 from nuzline.engine.hooks import (
@@ -102,6 +111,7 @@ from nuzline.engine.hooks import (
 )
 from nuzline.engine.ids import (
     CHOICE_ITEMS,
+    ITEM_ABILITY_IDS,
     MOVE_STRUGGLE,
     POTION_HP_RESTORED,
     PROTECT_CHAIN_MOVES,
@@ -122,6 +132,7 @@ from nuzline.engine.order import (
     MOVE_ACTIONS,
     action_order,
     called_move,
+    custap_flags,
     is_item,
     is_switch,
     player_second,
@@ -452,20 +463,16 @@ def _hit_events(before: BattleState, after: BattleState, side, landed, crit) -> 
     effects.py:441-444; a crit into a substitute is not seen, a documented coarsening in
     ``observe``'s docstring), the defender's contact ability (the only change of the
     attacker's own status, and Cute Charm the only change of its ``infatuated``, inside a
-    hit: effects._contact_ability) and a Fire hit's thaw (the only FREEZE -> NONE change of
-    the target, effects._thaw_target)."""
+    hit: effects._contact_ability). A Fire hit's thaw comes later, with the held items
+    (``effects.thaw_target`` in ``_use_move``; Pursuit's hit has none)."""
     foe = 1 - side
     user, target = before.active[side], before.active[foe]
     dealt = before.hp[foe, target] > after.hp[foe, target]
     contact = (before.status[side, user] == Status.NONE) & (after.status[side, user] != Status.NONE)
     contact = contact | ((before.infatuated[side] == 0) & (after.infatuated[side] != 0))
-    thaw = (before.status[foe, target] == Status.FREEZE) & (
-        after.status[foe, target] == Status.NONE
-    )
     return {
         "crit": landed & dealt & crit,
         "contact": contact,
-        "thaw": thaw,
         "dealt": landed & dealt,
     }
 
@@ -479,6 +486,7 @@ def _use_move(
     outcome: Outcome,
     target_moved,
     foe_protecting=False,
+    custap=(False, False),
 ) -> tuple[BattleState, dict, dict]:
     """``side``'s active Pokemon uses the move in slot ``action`` (or Struggle).
     ``choice``: its ``(move, struggling, locked)`` from ``selected_move`` and
@@ -488,7 +496,9 @@ def _use_move(
     (``ppDecremented`` is set at command selection, :335).
     ``target_moved``: the other side has already acted this turn. ``foe_protecting``: its
     Protect succeeded earlier this turn (the decomp's ``turnFlags.protecting``, a per-turn
-    flag cleared at the turn end, battle_lib.c:2231, and on a faint, :2190-2193).
+    flag cleared at the turn end, battle_lib.c:2231, and on a faint, :2190-2193). ``custap``
+    (``bool[2]``): each side's ``moveEffectsData.custapBerry`` from the turn order
+    (``order.custap_flags``).
 
     Returns ``(state, own, foe)``: the state after the move, the user's events (each
     status check's result, effect-gated: set only when the check was reached and had an
@@ -508,6 +518,11 @@ def _use_move(
     foe_defender = ~self_defender(tables, move) & (
         (state.hp[target_side, target] > 0) | (move_range == MoveTarget.RANGE_OPPONENT_SIDE)
     )
+    custap = jnp.asarray(custap, bool)
+    # BEFORE_MOVE_STATE_QUICK_CLAW (bcp.c:3140-3143), before the status checks:
+    # subscript_check_quick_claw.s:26-28 clears an activated Custap flag and removes the item
+    # (RemoveItem BTLSCR_ATTACKER, kept in item_consumed), whether or not the battler acts last.
+    state = consume_item(state, side, ready & custap[side])
 
     # BattleControllerPlayer_CheckStatusDisruption (battle_controller_player.c:2417) runs
     # before the PP decrement; the first check that disrupts the move stops the rest.
@@ -659,7 +674,7 @@ def _use_move(
     # 2873-2874): a faster Sand-Attack or Double Team this turn counts. outcome.hit[side, 0]
     # is the roll's class (outcome.py): it hits when 0 < class <= threshold (:2976).
     roll = outcome.hit[side, 0].astype(_I32)
-    threshold = live_hit_threshold(tables, state, side, used)
+    threshold = live_hit_threshold(tables, state, side, used, target_moved)
     hit = never_misses | ((roll > 0) & (roll <= threshold))
     # CheckMoveHitOverrides (bcp.c:3001-3014) runs after the accuracy roll, hit or miss: a
     # protecting foe stops the move (effects.protect_blocks), MOVE_STATUS_PROTECTED, and
@@ -743,7 +758,7 @@ def _use_move(
     # (unrolled, it dominated trace and compile time). It also counts the hits that
     # landed ("Hit N times", battle_controller_player.c:3777-3812) and their crits.
     def one_hit(hit_index, carry):
-        state, hits, crits, contact, thaw, dealt, armed, struck = carry
+        state, hits, crits, contact, thaw, dealt, armed, struck, shell = carry
         # BattleControllerPlayer_LoopMultiHit (bcp.c:3780) stops once a battler fainted
         # (faintedMon): the target, or the attacker by Rough Skin (Selfdestruct's user is
         # at 0 HP before its only hit, so the first hit is exempt).
@@ -764,6 +779,7 @@ def _use_move(
             target_moved=target_moved,
             struggling=struggling,
             focus_armed=armed,
+            foe_custap=custap[target_side],
         )
         # A LEVEL_DAMAGE move never runs CalcCrit (effect_script_0087.s): no crit message.
         # (nor does Bide's unleash: its script has no CalcCrit).
@@ -785,19 +801,30 @@ def _use_move(
         # later hit that did not happen changes no HP, so its check finds what the
         # previous one found.
         # A failed Protect or Roar: subscript_missed.s, no AfterMoveEffects.
+        # AFTER_MOVE_EFFECT_TRIGGER_ITEMS_ON_HIT (:3698) then _THAW_DEFENDER (:3708) come
+        # between the defender's item and _HELD_ITEM_STATUS: the Sticky Barb transfer
+        # (effects.sticky_barb_transfer) on a hit that happened, once the defender took damage
+        # this action (struck), and the thaw of a frozen defender a Fire hit damaged
+        # (effects.thaw_target; an Aspear / Lum Berry it holds has cured the freeze first).
         items = connected & ~no_more_work & ~protect_failed & ~roar_failed
         state, item_used = held_item_check(tables, hit_state, side, items, info.pluck_flag)
         state = after_damage_items(tables, state, 1 - side, items)
+        struck = struck | info.update_hp
+        state = sticky_barb_transfer(
+            tables, state, side, target_side, used, items & landed & struck
+        )
+        state, thawed = thaw_target(tables, state, side, target_side, used, info.dealt, items)
         state = after_damage_items(tables, state, side, items & item_used & info.pluck_flag)
         return (
             state,
             hits + landed.astype(_I32),
             crits.at[hit_index].set(seen["crit"]),
             contact | seen["contact"],
-            thaw | seen["thaw"],
+            thaw | thawed,
             dealt | seen["dealt"],
             info.focus_armed,
-            struck | info.update_hp,
+            struck,
+            shell + info.shell_bell,
         )
 
     init = (
@@ -809,8 +836,9 @@ def _use_move(
         jnp.bool_(False),
         jnp.bool_(False),
         jnp.bool_(False),
+        _I32(0),
     )
-    state, hits, crits, contact, thaw, dealt, _, struck = jax.lax.fori_loop(
+    state, hits, crits, contact, thaw, dealt, _, struck, shell = jax.lax.fori_loop(
         0, MAX_HITS, one_hit, init
     )
     # The unleash script clears the lock (the Bide counter is spent); the move above still
@@ -834,9 +862,10 @@ def _use_move(
         move_hit=state.move_hit.at[target_side].set(hit_record.astype(state.move_hit.dtype))
     )
     # TRIGGER_AFTER_HIT_EFFECTS (bcp.c:3897-3915, after LOOP_SPREAD_MOVES and
-    # FAINT_AFTER_SELFDESTRUCT): AFTER_MOVE_HIT_STATE_LIFE_ORB (:4758-4772) needs
-    # SYSCTL_MOVE_HIT (a hit's UpdateHP, :3441; never the confusion self-hit) and a
-    # non-status moveCur (``used``).
+    # FAINT_AFTER_SELFDESTRUCT): AFTER_MOVE_HIT_STATE_SHELL_BELL (:4736-4752) and
+    # AFTER_MOVE_HIT_STATE_LIFE_ORB (:4758-4772) need SYSCTL_MOVE_HIT (a hit's UpdateHP,
+    # :3441; never the confusion self-hit); Life Orb also a non-status moveCur (``used``).
+    state = shell_bell_heal(tables, state, side, shell, struck)
     life_orb = struck & (tables.move_category[used] != STATUS_CATEGORY)
     state = life_orb_recoil(tables, state, side, life_orb)
     # UPDATE_MOVE_BUFFERS (:3917) after it: the Choice lock.
@@ -937,6 +966,7 @@ def _act(
     outcome: Outcome,
     target_moved,
     foe_protecting,
+    custap,
 ) -> tuple[BattleState, dict, dict]:
     """``side``'s action: ``(state, own, foe)`` with the events of ``_use_move``. A
     switch shows the party slot (``ACT_SWITCH``), an item its item id (``ACT_ITEM``)."""
@@ -945,7 +975,7 @@ def _act(
     used = _use_trainer_item(tables, state, side, items[side])
     choice = (choices[0][side], choices[1][side], choices[2][side])
     moved, own, foe = _use_move(
-        tables, state, side, action, choice, outcome, target_moved, foe_protecting
+        tables, state, side, action, choice, outcome, target_moved, foe_protecting, custap
     )
     live = state.over == 0
     switch, item = is_switch(action) & live, is_item(action) & live
@@ -1003,7 +1033,11 @@ def _pursuit_hit(
     Choice item, ``choiceLockedMove = move`` (:6943-6950). After the hit and the contact
     ability, the script sets ``SYSCTL_MOVE_HIT`` and runs ``TriggerHeldItemOnPivotMove``
     (subscript_pursuit.s:48-49, :94-95 when the target fainted; skipped for a hit that did
-    not hit, :17): Life Orb's recoil (``effects.life_orb_recoil``)."""
+    not hit, :17), after ``TriggerHeldItemOnHit`` (:44, :90: the Sticky Barb transfer,
+    ``effects.sticky_barb_transfer``, the defender's physicalDamageTaken being the script's
+    damage, :33): Shell Bell's heal of the script's ``shellBellDamageDealt`` (:21-29,
+    ``effects.shell_bell_heal``) or Life Orb's recoil (``effects.life_orb_recoil``; one
+    holder holds one of them). The switching side chose no FIGHT, so no Custap flag is set."""
     action = actions[pursuer]
     slot = jnp.clip(action, 0, MOVE_ACTIONS - 1)
     mon = state.active[pursuer]
@@ -1022,6 +1056,8 @@ def _pursuit_hit(
         target_moved=False,
         power_mul=PURSUIT_POWER_MUL,
     )
+    state = sticky_barb_transfer(tables, state, pursuer, 1 - pursuer, move, info.update_hp)
+    state = shell_bell_heal(tables, state, pursuer, info.pursuit_shell_bell, info.update_hp)
     return life_orb_recoil(tables, state, pursuer, info.update_hp)
 
 
@@ -1114,6 +1150,8 @@ def _execute_actions(
     items = jnp.stack(
         [state.trainer_items[side, _bag_slot(actions[side])] for side in (0, 1)]
     ).astype(_I32)
+    # CalcTurnOrder's moveEffectsData.custapBerry, from the state the order was fixed in.
+    custap = custap_flags(tables, state, actions)
     state = _consume_trainer_items(state, actions)
     pursued = pursuit_fires(tables, state, first, actions, choices)
     state = _where(
@@ -1131,7 +1169,7 @@ def _execute_actions(
         "crit": jnp.zeros((MAX_HITS,), _I32).at[0].set(seen["crit"]),
     }
     events = _put(events, pursuer, pursuer_events, pursued)
-    target_events = {"contact_ability": seen["contact"], "thawed_by_hit": seen["thaw"]}
+    target_events = {"contact_ability": seen["contact"]}
     events = _put(events, first, target_events, pursued)
     state = _faint_check(tables, before, _where(pursued, hit, state))
     # subscript_pursuit.s:106-108: Pursuit's own payout (no pending move: the pursuer's
@@ -1147,7 +1185,7 @@ def _execute_actions(
         # The foe's Protect this turn (turnFlags.protecting): only a first actor's succeeds.
         foe_protecting = events["protect_ok"][1 - side] != 0
         acted, own, foe_events = _act(
-            tables, state, side, actions, choices, items, outcome, second, foe_protecting
+            tables, state, side, actions, choices, items, outcome, second, foe_protecting, custap
         )
         ran = (state.over == 0) & (state.hp[side, state.active[side]] > 0)
         # The pursuer does not act again; a Pokemon the first actor's Roar dragged in does not
@@ -1282,6 +1320,91 @@ def _taunt_check(tables: Tables, state: BattleState, side) -> BattleState:
     return state._replace(taunt=state.taunt.at[side].set(taunt))
 
 
+def _leftovers_check(tables: Tables, state: BattleState, side) -> BattleState:
+    """``MON_COND_CHECK_STATE_LEFTOVERS`` (battle_controller_player.c:1369):
+    ``BattleSystem_TriggerLeftovers`` (battle_lib.c:4922-4965) on a holder with HP left.
+    Leftovers (``HOLD_EFFECT_HP_RESTORE_GRADUAL``), and Black Sludge
+    (``HOLD_EFFECT_HP_RESTORE_PSN_TYPE``) on a Poison-type holder (``MON_HAS_TYPE``: the
+    battler's types), restore ``BattleSystem_Divide(maxHP, 16)`` below full HP
+    (``subscript_restore_a_little_hp.s``, capped); Black Sludge on any other holder without
+    Magic Guard (read by decomp ability id) takes ``BattleSystem_Divide(maxHP * -1, 8)``
+    (``subscript_lose_hp_from_item_with_message.s``: ``SYSCTL_SKIP_SPRITE_BLINK``, capped at
+    its HP; it may faint). Neither item is used up."""
+    mon = state.active[side]
+    item = state.item[side, mon]
+    effect = tables.item_effect[item]
+    hp, max_hp = state.hp[side, mon].astype(_I32), state.max_hp[side, mon].astype(_I32)
+    poison = jnp.any(state.types[side, mon] == Type.POISON)
+    magic_guard = decomp_abilities(tables, state)[side, mon] == WEATHER_ABILITY_IDS["Magic Guard"]
+    sludge = effect == ItemId.BLACK_SLUDGE
+    heal = ((effect == ItemId.LEFTOVERS) | (sludge & poison)) & (hp < max_hp)
+    hurt = sludge & ~poison & ~magic_guard
+    delta = jnp.where(heal, jnp.maximum(max_hp // 16, 1), 0) - jnp.where(
+        hurt, jnp.maximum(max_hp // 8, 1), 0
+    )
+    return _hp_change(state, side, mon, jnp.where(hp > 0, delta, 0))
+
+
+def _detrimental_item_check(tables: Tables, state: BattleState, side) -> BattleState:
+    """``MON_COND_CHECK_STATE_ITEM_DETRIMENTAL_EFFECT`` (battle_controller_player.c:1710), the
+    last check: ``BattleSystem_TriggerDetrimentalHeldItem`` (battle_lib.c:5307-5350) on a
+    holder with HP left.
+
+    * Toxic Orb (``HOLD_EFFECT_PSN_USER``): ``subscript_badly_poison.s`` as a held-item side
+      effect (:13-28): nothing for an Immunity holder (its own ability, :14), a Leaf Guard
+      holder in sun unless a weather lock (``CheckIgnoreWeather``, :15-17), a holder with any
+      status, or a Poison or Steel type (the battler's types, :20-26); else it is badly
+      poisoned (counter 0). Safeguard (:27) comes from an unsupported move.
+    * Flame Orb (``HOLD_EFFECT_BRN_USER``): ``subscript_burn.s`` (:5-17): the same with Water
+      Veil for Immunity and Fire for Poison / Steel; else it is burned.
+    * Sticky Barb (``HOLD_EFFECT_DMG_USER_CONTACT_XFR``): a holder without Magic Guard takes
+      ``BattleSystem_Divide(maxHP * -1, param)``
+      (``subscript_lose_hp_from_item_with_message.s``, capped at its HP; it may faint).
+
+    Immunity, Water Veil, Leaf Guard and Magic Guard are read by decomp ability id
+    (``ids.ITEM_ABILITY_IDS``, ``WEATHER_ABILITY_IDS``)."""
+    mon = state.active[side]
+    item = state.item[side, mon]
+    effect = tables.item_effect[item]
+    hp, max_hp = state.hp[side, mon].astype(_I32), state.max_hp[side, mon].astype(_I32)
+    alive = hp > 0
+    ability = decomp_abilities(tables, state)[side, mon]
+    sun = (state.weather == Weather.SUN) & ~weather_suppressed(tables, state)
+    leaf_guard = sun & (ability == ITEM_ABILITY_IDS["Leaf Guard"])
+    toxic = (
+        alive
+        & (effect == ItemId.TOXIC_ORB)
+        & (ability != ITEM_ABILITY_IDS["Immunity"])
+        & ~leaf_guard
+        & can_have_status(tables, state, side, mon, Status.TOXIC)
+    )
+    burn = (
+        alive
+        & (effect == ItemId.FLAME_ORB)
+        & (ability != ITEM_ABILITY_IDS["Water Veil"])
+        & ~leaf_guard
+        & can_have_status(tables, state, side, mon, Status.BURN)
+    )
+    status = jnp.where(toxic, Status.TOXIC, Status.BURN)
+    state = _set_mon(state, "status", side, mon, status, toxic | burn)
+    state = _set_mon(state, "status_counter", side, mon, 0, toxic | burn)
+    magic_guard = ability == WEATHER_ABILITY_IDS["Magic Guard"]
+    barb = alive & (effect == ItemId.STICKY_BARB) & ~magic_guard
+    loss = jnp.maximum(max_hp // tables.item_param[item, 0].astype(_I32), 1)
+    return _hp_change(state, side, mon, jnp.where(barb, -loss, 0))
+
+
+# Two consecutive checks share one faint check where the first can only heal or cure (a held
+# item's trigger, ``hooks.held_item_check``): the decomp's faint check between them finds
+# nothing new, so one copy of ``_faint_check`` per pair (each copy adds to step's compile time).
+def _use_item_then_leftovers(tables: Tables, state: BattleState, side) -> BattleState:
+    return _leftovers_check(tables, after_damage_items(tables, state, side), side)
+
+
+def _item_condition_then_detrimental(tables: Tables, state: BattleState, side) -> BattleState:
+    return _detrimental_item_check(tables, after_damage_items(tables, state, side), side)
+
+
 def _turn_end_ability(tables: Tables, state: BattleState, side, outcome: Outcome) -> BattleState:
     """``MON_COND_CHECK_STATE_ABILITY`` (battle_controller_player.c:1355), the first
     end-of-turn check: Shed Skin (``BattleSystem_TriggerAbilityOnTurnEnd``, battle_lib.c:
@@ -1314,8 +1437,9 @@ END_OF_TURN_ORDER = (
     # MON_COND_CHECK_STATE_ABILITY, battle_controller_player.c:1355 (the only check that
     # reads the turn's ``Outcome``, see ``end_of_turn``)
     ("ability", _turn_end_ability),
-    # MON_COND_CHECK_STATE_USE_ITEM, battle_controller_player.c:1362
-    ("use_item", after_damage_items),
+    # MON_COND_CHECK_STATE_USE_ITEM, battle_controller_player.c:1362, then
+    # MON_COND_CHECK_STATE_LEFTOVERS, :1369 (``_use_item_then_leftovers``)
+    ("use_item", _use_item_then_leftovers),
     # MON_COND_CHECK_STATE_LEECH_SEED, battle_controller_player.c:1378
     ("leech_seed", _leech_seed_check),
     # MON_COND_CHECK_STATE_POISON, battle_controller_player.c:1393
@@ -1331,8 +1455,9 @@ END_OF_TURN_ORDER = (
     # MON_COND_CHECK_STATE_TAUNT, battle_controller_player.c:1635
     ("taunt", _taunt_check),
     # MON_COND_CHECK_STATE_ITEM_CONDITION, battle_controller_player.c:1699: the same berry
-    # check, after the residual damage above.
-    ("item_condition", after_damage_items),
+    # check, after the residual damage above; then MON_COND_CHECK_STATE_ITEM_DETRIMENTAL_EFFECT,
+    # :1710 (``_item_condition_then_detrimental``)
+    ("item_condition", _item_condition_then_detrimental),
 )
 
 
