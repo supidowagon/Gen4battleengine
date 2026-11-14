@@ -1158,14 +1158,27 @@ def _rematches(rom: RomFiles, symbols: SymbolMap, n_trainers: int) -> list[tuple
 # Local script ids (entries of the current map's own file, script_manager.c:243-246) that
 # game code starts directly, not through a map event: Pal Park's last ball (3,
 # encounter.c:637), the start menu's retire (4, start_menu.c:1457), the Union Room (5,
-# overlay005/field_control.c:450) and the Distortion World's teleports, platform and
-# boulders (2 and 4, overlay009/ov9_02249960.c:99,106; 6, :5411; 5-7, :7732-7756; the
-# event-command rows' 2, 3, 4, 7 and 8, :8765 and :11050-12709). A shared file's header is
+# overlay005/field_control.c:450) and the Distortion World's teleports and boulders (2 and
+# 4, overlay009/ov9_02249960.c:99,106; 5-7, :7732-7756; the event-command rows' 2, 3, 4, 7
+# and 8, :8765 and :11050-12709). Its elevator platform assigns script 6 to an object
+# (MapObject_SetScript, :5411), which the player then talks to. A shared file's header is
 # taken to run each of them that its file has.
 C_STARTED_SCRIPTS = (2, 3, 4, 5, 6, 7, 8)
-# ScrCmd_Unused_013 starts a script by an id read from the script itself
-# (src/scrcmd.c:960-971): a header whose run entries reach it may run any entry.
+# Commands that start a script by an id read from the script itself, with no range check:
+# ScrCmd_Unused_013 (src/scrcmd.c:960-971), any id, and ScrCmd_CallCommonScript (:973-985)
+# with a local id (1..COMMON_SCRIPTS - 1; ScriptContext_CreateAndStart runs it through
+# ScriptContext_LoadAndOffsetID, script_manager.c:228-254). A header whose run entries reach
+# one may run any entry of its file.
 STARTS_SCRIPT_BY_ID = "SCRCMD_UNUSED_013"
+CALLS_COMMON_SCRIPT = "SCRCMD_CALLCOMMONSCRIPT"
+
+
+def starts_local_script(table: CommandTable, opcode: int, operands: Sequence[int]) -> bool:
+    """Whether one decoded command may start an entry of its own map's file by id
+    (``STARTS_SCRIPT_BY_ID``, or ``CALLS_COMMON_SCRIPT`` with a local id)."""
+    if opcode == table.opcode[STARTS_SCRIPT_BY_ID]:
+        return True
+    return opcode == table.opcode[CALLS_COMMON_SCRIPT] and 1 <= operands[0] < COMMON_SCRIPTS
 
 
 def header_battles(
@@ -1180,8 +1193,8 @@ def header_battles(
     entries the file has. The whole file's battles instead when the header carries a clone
     object (script ``NO_SCRIPT``: it takes another header's object and script across a
     header change, map_object.c:2322-2337), names an entry past the file's table (the game
-    indexes without a bound, script_manager.c:412-416), or runs an entry that reaches
-    ``STARTS_SCRIPT_BY_ID``."""
+    indexes without a bound, script_manager.c:412-416), or runs an entry (``C_STARTED_SCRIPTS``
+    included) that reaches a command starting a local script by id (``starts_local_script``)."""
     n = len(per_entry)
     ids = set(run)
     if has_clone or any(not 1 <= s <= n for s in ids):
@@ -1209,7 +1222,6 @@ def join_trainer_maps(
     by_entry: dict[int, tuple[list[set[int]], list[bool]]] = {}
     users = Counter(script_id for script_id, _, _ in rows)
     where: dict[int, set[int]] = {}
-    by_id = table.opcode[STARTS_SCRIPT_BY_ID]
 
     def place(trainer: int, header: int, source: str) -> None:
         if not 0 < trainer < n_trainers:
@@ -1237,7 +1249,10 @@ def join_trainer_maps(
                 ]
                 by_entry[script_id] = (
                     [w[1] for w in walks],
-                    [any(op == by_id for op, _, _ in w[0].values()) for w in walks],
+                    [
+                        any(starts_local_script(table, op, args) for op, args, _ in w[0].values())
+                        for w in walks
+                    ],
                 )
             per_entry, starts_by_id = by_entry[script_id]
             init = inits[header]
@@ -1275,7 +1290,9 @@ def trainer_maps(
     header runs: its bg, object and coord events' local script ids (``map_script_ids``),
     its init scripts' (``init_script_ids``) and the ids game code starts directly
     (``C_STARTED_SCRIPTS``), with the whole file instead for a clone object, an id past the
-    table or ``STARTS_SCRIPT_BY_ID`` (``header_battles``); then Vs. Seeker rematches inherit
+    table, or a run entry reaching ``STARTS_SCRIPT_BY_ID`` or a local-id
+    ``CALLS_COMMON_SCRIPT`` (``starts_local_script``, ``header_battles``); then Vs. Seeker
+    rematches inherit
     their base trainer's headers. Not read: which runtime state reaches an entry (flags,
     vars, story order), common-script ranges (ids of 2000 and up), and a shared file's
     entries that only another file's script or C code outside ``C_STARTED_SCRIPTS`` starts.

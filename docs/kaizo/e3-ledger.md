@@ -140,3 +140,13 @@ by each split, replacing option A's upper bound.
   trainer objects (vs_seeker.c:500-540, :692-694), so probably unreachable. 583 Titania's
   start_conditions entry left (one placement now). Stale 676/318 text fixed in
   overrides.toml, overrides.py and start_conditions.json.
+
+## Batch 7: CallCommonScript (2026-11-14)
+
+- `starts_local_script`: a run entry reaching ScrCmd_CallCommonScript with a local id
+  (1-1999; scrcmd.c:973-985 has no range check) now falls back to the whole file, as
+  Unused_013 does. Tests pin it, the common-id case, and Unused_013 reached only through a
+  C-started entry. The ov9_02249960.c:5411 comment now says it assigns a script.
+- Survey: no Kaizo (605 calls) or vanilla (573) script calls CallCommonScript with a local
+  id, and none uses Unused_013. Real extraction: rom_trainer_maps.json byte-identical.
+- E3 is finished; the worktree stays as it is.

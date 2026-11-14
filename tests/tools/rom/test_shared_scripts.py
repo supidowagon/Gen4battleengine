@@ -147,3 +147,36 @@ def test_header_battles_rules():
     by_id = [False] * 8 + [True]
     assert header_battles([9], per, by_id, whole, False) == whole  # ScrCmd_Unused_013
     assert header_battles([1], [{1}], [False], {1, 5}, False) == {1}  # no C id in a 1-entry file
+
+
+def _shared_with(table, extra):
+    """A shared file: entry 1 battles 10, entries 2-8 (C-started) empty unless ``extra``
+    puts a body there, entry 9 battles 20, entry 10 runs ``extra[10]`` if given."""
+    bodies = [battle(table, 10), *[b""] * 7, battle(table, 20), b""]
+    for i, body in extra.items():
+        bodies[i - 1] = body
+    return script_file(table, *bodies)
+
+
+def _join_two(table, shared):
+    """Header 0 runs entry 10 by a coord event; header 1 runs nothing; both share ``shared``."""
+    rows = [(0, 0, 0), (0, 1, 0)]
+    events = [events_member(coords=[10]), events_member()]
+    return join_trainer_maps(rows, [1, 1], [shared, b"\0"], events, table, 100)
+
+
+def test_call_common_script_with_a_local_id_falls_back(table):
+    local = _shared_with(table, {10: _cmd(table, "CallCommonScript", 1)})
+    where = _join_two(table, local)
+    assert where[10] == where[20] == {0}  # header 0: the whole file; header 1: nothing
+
+
+def test_call_common_script_with_a_common_id_does_not(table):
+    common = _shared_with(table, {10: _cmd(table, "CallCommonScript", 2000)})
+    assert set().union(*_join_two(table, common).values()) == set()
+
+
+def test_unused_013_reached_only_through_a_c_started_entry(table):
+    via_c = _shared_with(table, {3: _cmd(table, "ScrCmd_Unused_013", 1)})
+    where = _join_two(table, via_c)
+    assert where[10] == where[20] == {0, 1}  # every header runs entry 3: both fall back
