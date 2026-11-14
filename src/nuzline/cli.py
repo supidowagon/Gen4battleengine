@@ -1060,6 +1060,10 @@ def line_setup(
             )
         player = load_party(party_path, names, tables)
     trainer = resolve_trainer(trainers, trainer_id=trainer_id)
+    from nuzline.ai.layout import fight_tables
+
+    # The trainer's AI flag set picks its AI layout (E1 Ruling R2; ai.layout.layout_of).
+    tables = fight_tables(tables, trainer)
     inter = IntermediateData(game.intermediate_dir)
     _check_buildable(tables, names, trainer, inter)
     opp = build_trainer_party(trainer, inter)

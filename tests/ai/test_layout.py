@@ -185,3 +185,18 @@ def test_traced_tables_without_a_layout_refuse_another_policy(tables, names):
     traced = jax.jit(lambda t: ai_policy(t, s, outcome()))
     assert int(traced(tables)) == 0
     assert int(traced(kaizo_like)) == REFUSED_ACTION
+
+
+def test_program_caches_key_on_the_flag_set():
+    # Two Kaizo flag sets share layout.name; a program cache keyed on it would serve one
+    # set's compiled AI to the other (E1 batch 2a review I1). Keys use layout.key.
+    from pathlib import Path
+
+    src = Path(__file__).resolve().parents[2] / "src" / "nuzline"
+    bad = [
+        f"{p.relative_to(src)}:{i}"
+        for p in src.rglob("*.py")
+        for i, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1)
+        if '"layout": layout.name' in line
+    ]
+    assert not bad, bad
