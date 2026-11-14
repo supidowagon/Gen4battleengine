@@ -44,7 +44,7 @@ from nuzline.ai.outcome import SITE_LINES, SITE_N, AiOutcome, line_sites
 from nuzline.ai.switching import INEFFECTIVE, apply_type_chart, type_chart_flags
 from nuzline.data.tables import Tables
 from nuzline.engine.actions import usable_moves
-from nuzline.engine.damage import ai_damage_for_roll
+from nuzline.engine.damage import ai_damage_for_roll, decomp_abilities
 from nuzline.engine.ids import Stat, Status, Weather
 from nuzline.engine.order import (
     COMPARE_SPEED_SLOWER,
@@ -797,24 +797,23 @@ def effectiveness_class(tables: Tables, state: BattleState, move) -> jnp.ndarray
 
 
 def attacker_ability(tables: Tables, state: BattleState) -> jnp.ndarray:
-    """``int32``: the AI's active Pokemon's true ability (decomp id)."""
-    a = state.active[1].astype(_I32)
-    row = tables.species_form_row[state.species[1, a].astype(_I32), state.form[1, a].astype(_I32)]
-    return tables.species_abilities_decomp[
-        row.astype(_I32), state.ability_slot[1, a].astype(_I32)
-    ].astype(_I32)
+    """``int32``: the AI's active Pokemon's current ability (decomp id): ``battleMons[battler]
+    .ability`` (trainer_ai.c:1205), after any change in battle such as Trace's copy
+    (``damage.decomp_abilities``)."""
+    return decomp_abilities(tables, state)[1, state.active[1].astype(_I32)]
 
 
 def _defender_abilities(tables: Tables, state: BattleState):
-    """``(true, known, base)`` of the player's active Pokemon: its true ability (the form's),
+    """``(true, known, base)`` of the player's active Pokemon: its true ability, the current
+    one (``battleMons[battler].ability``, trainer_ai.c:1184-1186; ``damage.decomp_abilities``:
+    the form's, or Trace's copy, which the AI also learns, ``BattleAI_SetAbility``,
+    battle_script.c:3401-3403, :12106-12109),
     whether ``LoadBattlerAbility DEFENDER`` returns it without a guess (learned, or Shadow
     Tag, Magnet Pull or Arena Trap, trainer_ai.c:1181-1188), and the base species' two
     abilities ``int32[2]`` (``defender_ability``)."""
     d = state.active[0].astype(_I32)
     species = state.species[0, d].astype(_I32)
-    row = tables.species_form_row[species, state.form[0, d].astype(_I32)]
-    true = tables.species_abilities_decomp[row.astype(_I32), state.ability_slot[0, d].astype(_I32)]
-    true = true.astype(_I32)
+    true = decomp_abilities(tables, state)[0, d]
     known = (state.ai_ability_known[d] > 0) | jnp.isin(true, _TRAPPING)
     base = tables.species_abilities_decomp[species].astype(_I32)
     return true, known, base

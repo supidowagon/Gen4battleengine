@@ -99,6 +99,7 @@ from nuzline.ai.switching import (
 from nuzline.data.game_constants import AI_POLICIES
 from nuzline.data.tables import Tables
 from nuzline.engine.actions import FIRST_ITEM_ACTION, NUM_OPP_ACTIONS, locked_slot, usable_moves
+from nuzline.engine.damage import decomp_abilities
 from nuzline.engine.enumerate import WIDTH_CAP
 from nuzline.engine.ids import POTION_HP_RESTORED, Stat, TrainerItemId
 from nuzline.engine.order import COMPARE_SPEED_SLOWER
@@ -1132,8 +1133,7 @@ def _refused(tables: Tables, state: BattleState, layout: AiLayout = VANILLA) -> 
         sites = jnp.zeros_like(present[1])
     else:
         sites = present[1] & (jax.vmap(script_roll_count)(moves[1]) > MAX_SCRIPT_ROLLS)
-    row = tables.species_form_row[state.species.astype(_I32), state.form.astype(_I32)]
-    ability = tables.species_abilities_decomp[row.astype(_I32), state.ability_slot.astype(_I32)]
+    ability = decomp_abilities(tables, state)  # current abilities (trainer_ai.c:1205)
     side_abilities = (_DEFENDER_ABILITIES, _ATTACKER_ABILITIES)
     ability_bad = jnp.stack(
         [
@@ -1303,12 +1303,7 @@ def _scoring_refusals(
             f"ai scoring: opponent slot {s}: its moveset has more IfRandomLessThan sites "
             f"than the {MAX_SCRIPT_ROLLS} AiOutcome.script_rolls encodes"
         )
-    row = np.asarray(tables.species_form_row)[
-        np.asarray(state.species).astype(np.int64), np.asarray(state.form).astype(np.int64)
-    ].astype(np.int64)
-    ability = np.asarray(tables.species_abilities_decomp)[
-        row, np.asarray(state.ability_slot).astype(np.int64)
-    ]
+    ability = np.asarray(decomp_abilities(tables, state))
     ability_names = {v: k for k, v in _ABILITY.items()}
     for side, s in zip(*np.nonzero(np.asarray(r.ability)), strict=True):
         out.append(
