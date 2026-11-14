@@ -40,6 +40,29 @@
   nickname, ``party:N`` or ``box:B:S`` (the labels of ``save show``). Exit code 2 when the
   opponent is unsupported or every setup is refused; an interrupted or budget-stopped run
   exits 0 with its best answer.
+* ``nuzline line odds (--party P | --save S [--allow-corrupt]) (--trainer NAME |
+  --trainer-id N) --line FILE [--deaths K] [--protect NAME ...] [--n 2000] [--seed 0]
+  [--devices N]``: the odds of the line in FILE (L1 spec §4, §6;
+  ``search.line_text`` reads it): the trainer, the team (with ``--save`` the file's
+  ``[[team]]``, which ``--party`` forbids; team slot 0 leads, the opponent's slot 0
+  leads), the line per opposing Pokemon, then from ``--n`` playouts the ladder P(win with
+  at most k deaths) for k = 0..3 and P(win) with 95 % intervals, the death distribution,
+  the mean turns and the share of turns the default player decided. ``--protect`` names a
+  team member by species or 0-based team index.
+* ``nuzline line find`` (the same flags without ``--n``) ``[--out FILE] [--budget SECONDS]
+  [--restarts N] [--final-n N] [--pick-n N] [--sweeps N]``: the line search
+  (``search.line_search``; ``--pick-n`` the keys comparing its kept lines; the file's
+  rules, if any, are its first start), progress as ``[line]`` lines on stderr,
+  then the found line with the same block from ``--final-n`` hold-out playouts and its
+  ``[[rule]]`` TOML (ASCII-folded like all output); ``--out`` gets the file's ``[[team]]``
+  and the found rules with the exact names, and must not be the ``--line`` file. Ctrl-C
+  stops the search like ``--budget`` and still prints the best line kept so far. A
+  heuristic: a good line, not a proven best. Both ``line`` commands leave refused
+  playouts (a mechanic the engine does not model) out of the odds and print after the
+  ladder how many and which mechanic (``player.refusal_reason`` on the first); ``find``
+  also prints how many candidate lines it skipped for being refused in more than 1 % of
+  their playouts. Both exit 1 on a bad file, name or flag and 2 when the fight is refused
+  or every playout is.
 * ``nuzline trainers [--save SAVE [--allow-corrupt]]``: every trainer's id, label (else
   name) and class, marked ``[optional]``, ``[gauntlet GROUP #P]`` and with its format when
   it is not a single battle; with ``--save`` only the rival variants of the save's starter.
@@ -79,6 +102,7 @@ import json
 import os
 import sys
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
@@ -103,11 +127,14 @@ def all_zero_footer(k: int) -> str:
     return f"all lines 0 %: no line within {k} deaths found at this depth"
 
 
-def protected_slots(player: Sequence, names, values: Sequence[str]) -> tuple[int, ...]:
+def protected_slots(
+    player: Sequence, names, values: Sequence[str], member: str = "party"
+) -> tuple[int, ...]:
     """The 0-based party indices ``--protect`` names (sorted, deduplicated): a species name
     (case-insensitive; two party members of it are ambiguous) or digits, a 0-based index
     into ``player`` like ``--lead``. Raises ``ValueError`` naming the flag and the value
-    for an unknown or ambiguous name, an index outside the party or a fainted Pokemon."""
+    for an unknown or ambiguous name, an index outside the party or a fainted Pokemon;
+    ``member`` is what the messages call ``player`` (``"team"`` for ``nuzline line``)."""
     out: set[int] = set()
     for value in values:
         text = value.strip()
@@ -115,7 +142,7 @@ def protected_slots(player: Sequence, names, values: Sequence[str]) -> tuple[int
             slot = int(text)
             if slot >= len(player):
                 raise ValueError(
-                    f"--protect {value}: no party index {slot} (the party has {len(player)})"
+                    f"--protect {value}: no {member} index {slot} (the {member} has {len(player)})"
                 )
         else:
             matches = [
@@ -124,10 +151,10 @@ def protected_slots(player: Sequence, names, values: Sequence[str]) -> tuple[int
                 if names.species_names[spec.species].lower() == text.lower()
             ]
             if not matches:
-                raise ValueError(f"--protect {value}: no such Pokemon in the party")
+                raise ValueError(f"--protect {value}: no such Pokemon in the {member}")
             if len(matches) > 1:
                 raise ValueError(
-                    f"--protect {value}: ambiguous, party indices {matches} are all {value}"
+                    f"--protect {value}: ambiguous, {member} indices {matches} are all {value}"
                 )
             slot = matches[0]
         if player[slot].current_hp == 0:
@@ -151,6 +178,9 @@ class _Refused(Exception):
     def __init__(self, trainer: Trainer, report) -> None:
         super().__init__(f"{trainer.id}: refused")
         self.trainer, self.report = trainer, report
+
+
+FightRefused = _Refused  # the public name, for callers of ``line_setup`` (benchmarks)
 
 
 def _fight_name(t: Trainer) -> str:
@@ -276,21 +306,18 @@ def _parser() -> argparse.ArgumentParser:
     fight(coverage)
     coverage.add_argument("--cap", type=int, default=None, help="with --save: the pool's level cap")
 
-    def budget(cmd: argparse.ArgumentParser) -> None:
+    def budget(
+        cmd: argparse.ArgumentParser,
+        protect: str = "a Pokemon that must not faint: species name or 0-based party index "
+        "(like --lead); repeatable",
+    ) -> None:
         cmd.add_argument(
             "--deaths",
             type=int,
             default=0,
             help="player faints allowed, 0..3 (default 0): maximise P(win with at most K deaths)",
         )
-        cmd.add_argument(
-            "--protect",
-            action="append",
-            default=[],
-            metavar="NAME",
-            help="a Pokemon that must not faint: species name or 0-based party index "
-            "(like --lead); repeatable",
-        )
+        cmd.add_argument("--protect", action="append", default=[], metavar="NAME", help=protect)
 
     rank = sub.add_parser("rank", help="rank the player's actions at the fight's start")
     fight(rank)
@@ -396,6 +423,50 @@ def _parser() -> argparse.ArgumentParser:
     prep.add_argument("--devices", type=int, default=os.cpu_count(), help="host CPU devices")
     prep.add_argument("--tree", type=Path, default=None, help="write the plan tree as JSON")
     prep.add_argument("--show-depth", type=int, default=1, help="plan levels printed")
+    line = sub.add_parser("line", help="score or search a line (one answer per foe)")
+    line_sub = line.add_subparsers(dest="line_command", required=True)
+    odds = line_sub.add_parser("odds", help="the odds of the line in a line file")
+    find = line_sub.add_parser("find", help="search for a line for the team")
+    for cmd in (odds, find):
+        game(cmd)
+        source = cmd.add_mutually_exclusive_group(required=True)
+        source.add_argument("--party", type=Path, help="the team as a party TOML")
+        source.add_argument(
+            "--save", type=Path, help="a Platinum .sav/.dsv: the line file's [[team]] is from it"
+        )
+        cmd.add_argument(
+            "--allow-corrupt", action="store_true", help="with --save: load a corrupt save anyway"
+        )
+        who = cmd.add_mutually_exclusive_group(required=True)
+        who.add_argument("--trainer", help="trainer name (a Leader is preferred)")
+        who.add_argument("--trainer-id", type=int, help="exact trainer id")
+        cmd.add_argument("--line", type=Path, required=True, help="the line file (TOML)")
+        budget(
+            cmd,
+            "a team member that must not faint: species or 0-based team index; repeatable",
+        )
+        cmd.add_argument("--seed", type=int, default=0, help="PRNG seed of the playouts")
+        cmd.add_argument("--devices", type=int, default=os.cpu_count(), help="host CPU devices")
+    odds.add_argument("--n", type=int, default=2000, help="playouts")
+    find.add_argument(
+        "--out",
+        type=Path,
+        default=None,
+        help="write the team and found line (exact names; the printed TOML is ASCII-folded)",
+    )
+    find.add_argument(
+        "--budget", type=float, default=None, help="seconds after which no new race starts"
+    )
+    find.add_argument(
+        "--restarts", type=int, default=None, help="kicks from the best line (default 1)"
+    )
+    find.add_argument(
+        "--final-n", type=int, default=None, help="hold-out playouts of the found line (2000)"
+    )
+    find.add_argument(
+        "--pick-n", type=int, default=None, help="playouts comparing the kept lines (4000)"
+    )
+    find.add_argument("--sweeps", type=int, default=None, help="most sweeps per start (12)")
     trainers = sub.add_parser("trainers", help="list trainer ids, names and classes")
     game(trainers)
     trainers.add_argument(
@@ -423,11 +494,11 @@ def _say(text: str) -> None:
     print(ascii_text(text))
 
 
-def _trainer_line(t: Trainer) -> str:
+def trainer_line(t: Trainer) -> str:
     return ascii_text(f"{t.label or t.name} ({class_text(t.trainer_class)}, id {t.id})")
 
 
-def _print_report(report) -> None:
+def print_report(report) -> None:
     print(f"Support: {report.level.name}")
     for title, lines in (("Missing", report.missing), ("Sampling only", report.sampling_only)):
         if not lines:
@@ -436,6 +507,10 @@ def _print_report(report) -> None:
         print(f"{title} ({len(lines)}):")
         for line in lines:
             _say(f"  {line}")
+
+
+# The earlier private names, kept for existing importers (benchmarks).
+_trainer_line, _print_report = trainer_line, print_report
 
 
 def _game(args):
@@ -920,6 +995,326 @@ def _prep(args) -> int:
     return EXIT_OK
 
 
+@dataclass(frozen=True)
+class LineSetup:
+    """A ``line`` fight ready to play (``line_setup``)."""
+
+    tables: object
+    names: object
+    trainer: Trainer
+    player: list  # PokemonSpec, team slot 0 leads
+    opp: list  # PokemonSpec, slot 0 leads
+    state: object  # BattleState with the death budget and protected slots
+    file: object  # search.line_text.LineFile as read
+    rules: list  # search.line_text.Rule, the file's
+    line: object  # search.line.Line holding ``rules``
+
+
+def line_setup(
+    game_id: str,
+    trainer_id: int,
+    line_path: Path,
+    *,
+    save_path: Path | None = None,
+    party_path: Path | None = None,
+    deaths: int = 0,
+    protect: Sequence[str] = (),
+    allow_corrupt: bool = False,
+) -> LineSetup:
+    """The fight of ``nuzline line`` (module docstring) without argparse: the team from
+    ``party_path``, or from ``save_path`` with the line file's ``[[team]]``; the trainer's
+    built party; the file's rules resolved; ``require_coverage`` with both slot-0 leads
+    (raising ``UnsupportedMechanics``); the turn-0 state with ``deaths`` and the
+    ``protect``ed team members. ``ValueError`` for a bad file, name or value;
+    ``FightRefused`` (with ``trainer`` and the coverage ``report``) for a fight that cannot
+    be built (``_check_buildable``)."""
+    from nuzline.data.games import get_game, load_game
+    from nuzline.data.party import load_party
+    from nuzline.data.trainer import IntermediateData, build_trainer_party
+    from nuzline.engine.coverage import require_coverage, start_weather
+    from nuzline.engine.state import make_state
+    from nuzline.search.line_text import (
+        read_line_file,
+        resolve_rules,
+        rules_to_line,
+        team_from_save,
+    )
+
+    if (save_path is None) == (party_path is None):
+        raise ValueError("give the team as exactly one of a party file or a save")
+    if not 0 <= deaths <= MAX_DEATHS:
+        raise ValueError(f"--deaths {deaths}: must be between 0 and {MAX_DEATHS}")
+    game = get_game(game_id)
+    tables, names = load_game(game)
+    trainers = _load_trainers(game)
+    file = read_line_file(line_path)
+    if save_path is not None:
+        if not file.team:
+            raise ValueError(f"{line_path}: --save needs the line file's [[team]] (who to bring)")
+        save = _load_save(save_path, allow_corrupt, game, tables, names)
+        player = team_from_save(file, save, tables, names)
+    else:
+        if file.team:
+            raise ValueError(
+                f"{line_path}: [[team]] needs --save; with --party the party file is the team"
+            )
+        player = load_party(party_path, names, tables)
+    trainer = resolve_trainer(trainers, trainer_id=trainer_id)
+    inter = IntermediateData(game.intermediate_dir)
+    _check_buildable(tables, names, trainer, inter)
+    opp = build_trainer_party(trainer, inter)
+    if player[0].current_hp == 0:
+        raise ValueError("the lead (team slot 0) has fainted")
+    rules = resolve_rules(file, names, player, opp)
+    slots = protected_slots(player, names, protect, member="team")
+    weather = start_weather(trainer)
+    require_coverage(tables, names, player, trainer, opp, weather, (0, 0))
+    state = make_state(
+        tables, player, opp, weather, opp_items=trainer.items, terrain=trainer.terrain
+    ).with_budget(deaths, slots)
+    return LineSetup(tables, names, trainer, player, opp, state, file, rules, rules_to_line(rules))
+
+
+def _line_trainer(args) -> Trainer:
+    """The trainer ``--trainer-id`` or ``--trainer`` names (``resolve_trainer``; with
+    ``--save`` its starter drops another starter's rival variants)."""
+    game = _game(args)
+    starter = None
+    if args.trainer_id is None and args.save is not None:
+        from nuzline.data.games import load_game
+        from nuzline.saves import load_save
+
+        tables, names = load_game(game)
+        save = load_save(
+            args.save, allow_corrupt=args.allow_corrupt, tables=tables, names=names, game=game.id
+        )
+        starter = _starter(save)
+    return resolve_trainer(
+        _load_trainers(game),
+        name=args.trainer,
+        trainer_id=args.trainer_id,
+        player_starter=starter,
+    )
+
+
+def _mon_name(party: Sequence, slot: int, names) -> str:
+    """The species, with ``(slot N)`` when the party has it twice."""
+    species = party[slot].species
+    name = names.species_names[species]
+    return f"{name} (slot {slot})" if sum(p.species == species for p in party) > 1 else name
+
+
+def team_lines(setup: LineSetup) -> list[str]:
+    names = setup.names
+    out = ["team (the first leads):"]
+    for spec in setup.player:
+        item = names.item_names[spec.item] if spec.item else "no item"
+        moves = ", ".join(names.move_names[m] for m in spec.moves if m) or "no moves"
+        out.append(f"  {names.species_names[spec.species]} Lv{spec.level}, {item}: {moves}")
+    return out
+
+
+def _rule_text(setup: LineSetup, rule) -> str:
+    names, player = setup.names, setup.player
+    moves = player[rule.use].moves
+    text = f"{_mon_name(player, rule.use, names)}, "
+    if rule.first >= 0:
+        text += f"{names.move_names[moves[rule.first]]} then "
+    text += names.move_names[moves[rule.move]]
+    if rule.via >= 0:
+        text += f", via {_mon_name(player, rule.via, names)}"
+        if rule.via_from >= 0:
+            text += f" from {_mon_name(player, rule.via_from, names)}"
+    if rule.wait:
+        text += ", wait (enters on a free switch)"
+    return text
+
+
+def line_report_lines(setup: LineSetup, rules, odds, seed: int, deaths: int) -> list[str]:
+    """The line per opposing Pokemon, then ``odds``: the ladder, any win, the death
+    distribution, mean turns and the default player's share."""
+    from nuzline.search.plan_tree import distribution_line
+
+    by_slot = {r.against: r for r in rules}
+    out = ["line:"]
+    for slot in range(len(setup.opp)):
+        rule = by_slot.get(slot)
+        text = _rule_text(setup, rule) if rule else "(no rule: default player)"
+        out.append(f"  vs {_mon_name(setup.opp, slot, setup.names)}: {text}")
+    out.append(f"{odds.n} playouts, seed {seed}, budget <={deaths} deaths")
+    for k in (*range(MAX_DEATHS + 1), None):
+        label = "win, any" if k is None else "win, 0 deaths" if k == 0 else f"win, <={k} deaths"
+        p = odds.wins_any / odds.n if k is None else odds.rung(k)
+        low, high = odds.interval(k)
+        # Width 16: "win, <=3 deaths" (15) keeps a space before "100.0 %".
+        out.append(f"  {label:<16} {_pct(p)} [{100 * low:4.1f}, {100 * high:4.1f}]")
+    out.append(distribution_line(odds.distribution, "deaths"))
+    out.append(
+        f"mean turns {odds.mean_turns:.1f}; default player decided "
+        f"{100 * odds.fallback_share:.0f} % of turns"
+    )
+    return out
+
+
+LINE_ODDS_MAX_TURNS = 100  # ``line odds``: the playouts' turn cap, also for the replay
+
+
+def left_out_lines(setup: LineSetup, line, odds, max_turns: int) -> list[str]:
+    """The refused playouts ``odds`` left out (spec §4), the mechanic named by replaying
+    the first (``player.refusal_reason``); nothing when none was."""
+    if not odds.refused:
+        return []
+    from nuzline.search import player
+    from nuzline.search.line import LINE
+
+    reason = player.refusal_reason(
+        setup.tables, setup.state, LINE, line, odds.refused_key, max_turns
+    )
+    if reason is None:
+        reason = "unnamed (the replay was not refused)"
+    total = odds.n + odds.refused
+    text = "playouts stopped at a mechanic the engine does not model and are left out"
+    return [f"{odds.refused} of {total} {text}: {reason}"]
+
+
+# The earlier private names, kept for existing importers (benchmarks).
+_team_lines, _line_block, _left_out_lines = team_lines, line_report_lines, left_out_lines
+
+
+def _line_command(args, run) -> int:
+    """The shared part of ``line odds`` and ``line find``: set up the fight, print the
+    trainer and team, then ``run(setup)``; exit 2 on a refused fight or playout."""
+    from nuzline.ai.policy import UnsupportedAi
+    from nuzline.engine.coverage import UnsupportedMechanics
+    from nuzline.jaxcache import code_version, enable_compile_cache
+
+    _check_deaths(args)
+    game = _game(args)
+    # Before anything compiles: JAX opens the persistent cache at the first compile.
+    enable_compile_cache(_table_version(game) + code_version(), game.id)
+    trainer = _line_trainer(args)
+    try:
+        setup = line_setup(
+            args.game,
+            trainer.id,
+            args.line,
+            save_path=args.save,
+            party_path=args.party,
+            deaths=args.deaths,
+            protect=args.protect,
+            allow_corrupt=args.allow_corrupt,
+        )
+    except UnsupportedMechanics as e:
+        print(_trainer_line(trainer))
+        _print_report(e.report)
+        return EXIT_REFUSED
+    print(_trainer_line(setup.trainer))
+    for line in _team_lines(setup):
+        _say(line)
+    try:
+        run(setup)
+    except UnsupportedAi as e:
+        _say(f"refused: {e}")
+        return EXIT_REFUSED
+    return EXIT_OK
+
+
+def _line_odds(args) -> int:
+    if args.n < 1:
+        raise ValueError("--n must be at least 1")
+
+    def run(setup: LineSetup) -> None:
+        import jax
+
+        from nuzline.search import player_eval
+
+        key = jax.random.PRNGKey(args.seed)
+        (odds,) = player_eval.evaluate_lines(
+            setup.tables,
+            setup.state,
+            [setup.line],
+            args.n,
+            key,
+            LINE_ODDS_MAX_TURNS,
+            refused="exclude",
+        )
+        for line in _line_block(setup, setup.rules, odds, args.seed, args.deaths):
+            _say(line)
+        for line in _left_out_lines(setup, setup.line, odds, LINE_ODDS_MAX_TURNS):
+            _say(line)
+
+    return _line_command(args, run)
+
+
+def _line_find(args) -> int:
+    for flag, value, least in (
+        ("--restarts", args.restarts, 0),
+        ("--final-n", args.final_n, 1),
+        ("--pick-n", args.pick_n, 1),
+        ("--sweeps", args.sweeps, 1),
+    ):
+        if value is not None and value < least:
+            raise ValueError(f"{flag} must be at least {least}")
+    if args.budget is not None and args.budget < 0:
+        raise ValueError("--budget must not be negative")
+    if args.out is not None and not args.out.parent.is_dir():
+        raise ValueError(f"--out {args.out}: no directory {args.out.parent}")
+    if args.out is not None and args.out.resolve() == args.line.resolve():
+        raise ValueError(f"--out {args.out} is the --line file: it would be overwritten")
+
+    def run(setup: LineSetup) -> None:
+        import jax
+
+        from nuzline.search import line_search
+        from nuzline.search.line_text import line_to_rules, render_rules, write_line_file
+
+        given = {
+            "restarts": args.restarts,
+            "final_n": args.final_n,
+            "pick_n": args.pick_n,
+            "max_sweeps": args.sweeps,
+            "budget_seconds": args.budget,
+        }
+        settings = line_search.LineSearchSettings(
+            **{k: v for k, v in given.items() if v is not None}
+        )
+
+        def progress(text: str) -> None:
+            print(ascii_text(f"[line] {text}"), file=sys.stderr, flush=True)
+
+        result = line_search.find_line(
+            setup.tables,
+            setup.names,
+            setup.state,
+            jax.random.PRNGKey(args.seed),
+            settings,
+            start=setup.line if setup.rules else None,
+            progress=progress,
+        )
+        progress(
+            f"stopped: {result.stopped} after {result.sweeps} sweep(s), "
+            f"{result.evaluations} playouts"
+        )
+        rules = line_to_rules(result.line)
+        print("found by search (a heuristic: a good line, not a proven best)")
+        for line in _line_block(setup, rules, result.odds, args.seed, args.deaths):
+            _say(line)
+        for line in _left_out_lines(setup, result.line, result.odds, settings.max_turns):
+            _say(line)
+        if result.refused_candidates:
+            _say(
+                f"skipped {result.refused_candidates} candidate lines that met unmodelled "
+                "mechanics in more than 1 % of playouts"
+            )
+        toml = render_rules(rules, setup.names, setup.player, setup.opp)
+        _say("\n\n".join(toml) if toml else "# no rules: the default player decides every turn")
+        if args.out is not None:
+            write_line_file(args.out, setup.file, toml)
+            print(f"wrote {args.out}")
+
+    return _line_command(args, run)
+
+
 def _source_hash(args) -> dict:
     """The run record's hash of the player's party source: ``party_sha256`` of the TOML,
     or ``save_sha256`` of the save file."""
@@ -1009,7 +1404,7 @@ def _save_export(args) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
-    if args.command in ("rank", "solve", "prep"):
+    if args.command in ("rank", "solve", "prep", "line"):
         if args.devices is not None and args.devices < 1:
             print("nuzline: error: --devices must be at least 1", file=sys.stderr)
             return EXIT_ERROR
@@ -1019,6 +1414,7 @@ def main(argv: list[str] | None = None) -> int:
         "rank": _rank,
         "solve": _solve,
         "prep": _prep,
+        "line": lambda a: {"odds": _line_odds, "find": _line_find}[a.line_command](a),
         "trainers": _trainers,
         "save": lambda a: {"show": _save_show, "export": _save_export}[a.save_command](a),
     }[args.command]

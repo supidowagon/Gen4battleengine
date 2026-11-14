@@ -1,0 +1,55 @@
+# python -m benchmarks.line_roark --line benchmarks/lines/kaizo_roark_user6.toml --deaths 1 --seed 0 --n 4000; seed 0, deaths 1, commit b66cf400a46c1daee6c7157d773a8d49326b02d1, dirty False
+
+[[team]]
+pokemon = "Prinplup"
+item = "Quick Claw"
+
+[[team]]
+pokemon = "Wormadam"
+moves = ["Leech Life", "Nature Power", "Camouflage", "Toxic"]
+item = "Oran Berry"
+
+[[team]]
+pokemon = "Rhyhorn"
+item = "Oran Berry"
+
+[[team]]
+pokemon = "Delibird"
+
+[[team]]
+pokemon = "Sandshrew"
+item = "Oran Berry"
+
+[[team]]
+pokemon = "Luvdisc"
+
+[[rule]]
+against = "Lileep"
+use = "Wormadam"
+move = "Leech Life"
+via = "Luvdisc"
+from = "Delibird"
+
+[[rule]]
+against = "Gible"
+use = "Delibird"
+move = "Powder Snow"
+via = "Rhyhorn"
+
+[[rule]]
+against = "Corsola"
+use = "Wormadam"
+move = "Leech Life"
+first = "Toxic"
+via = "Luvdisc"
+
+[[rule]]
+against = "Shuckle"
+use = "Wormadam"
+move = "Leech Life"
+first = "Toxic"
+
+[[rule]]
+against = "Cranidos"
+use = "Sandshrew"
+move = "Dig"
