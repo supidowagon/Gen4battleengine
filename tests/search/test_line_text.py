@@ -181,10 +181,11 @@ def test_team_from_save(tmp_path, tables, names):
     )
     team = team_from_save(file, save, tables, names)
     assert team[0] == dataclasses.replace(
-        save.party[0].to_spec(tables), item=names.item("Oran Berry")
+        save.party[0].to_spec(tables, save.trainer), item=names.item("Oran Berry")
     )
+    assert team[0].exp_boost != 0  # resolved from the save's trainer (K3d)
     assert team[1].moves == (names.move("Razor Leaf"), names.move("Tackle"), 0, 0)
-    assert team[1].pp is None
+    assert team[1].pp is None and team[1].pp_ups == (0, 0, 0, 0)
     bad = LineFile(team=({"pokemon": "party:1", "moves": ["Not A Move"]},), rules=())
     with pytest.raises(ValueError, match=r"team 1 \(party:1\): .*Not A Move"):
         team_from_save(bad, save, tables, names)
