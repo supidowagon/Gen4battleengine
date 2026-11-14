@@ -1517,15 +1517,18 @@ def _holds_choice(tables, s: RefState, side: int) -> bool:
     return _item_effect(tables, _active(s, side)) in CHOICE_ITEMS
 
 
-def _update_choice_lock(turn: _Turn, s: RefState, side: int, move: int, foe_defender: bool):
+def _update_choice_lock(
+    turn: _Turn, s: RefState, side: int, defender: int | None, move: int
+) -> None:
     """``UpdateFlagsWhenHit`` (bcp.c:4489-4496) then ``UpdateMoveBuffers`` (bcp.c:3921-3934),
     when the attack message was shown: the defending foe's lock is cleared unless it holds a
     Choice item; the user is locked into ``moveTemp`` (``move``; not Struggle; U-turn and
-    Baton Pass are unsupported) while it holds one, else its lock is cleared."""
+    Baton Pass are unsupported) while it holds one, else its lock is cleared. ``defender``:
+    the defending side (``DEFENDING_MON``, bcp.c:4488-4496), None when the foe is not it."""
     if not turn.attack_message:
         return
-    if foe_defender and not _holds_choice(turn.tables, s, 1 - side):
-        s.sides[1 - side].choice_lock = 0
+    if defender is not None and not _holds_choice(turn.tables, s, defender):
+        s.sides[defender].choice_lock = 0
     if not _holds_choice(turn.tables, s, side):
         s.sides[side].choice_lock = 0
     elif move != MOVE_STRUGGLE:
@@ -2767,7 +2770,8 @@ def ref_step(tables, state: RefState, actions: tuple[int, int], outcome) -> RefS
                 _life_orb_recoil(turn, s, side)
             # UpdateFlagsWhenHit / UpdateMoveBuffers: the Choice lock (the foe is the defender
             # exactly when _fight returns its moveHit record).
-            _update_choice_lock(turn, s, side, move, record is not None)
+            defender = 1 - side if record is not None else None
+            _update_choice_lock(turn, s, side, defender, move)
             # UpdateMoveBuffers (bcp.c:3936-3942): moveProtect = the move if its attack
             # message showed, else MOVE_NONE; the next TryProtection keeps the chain only for
             # Protect, Detect or Endure (script.c:5154-5158). Folded into protect_count here.

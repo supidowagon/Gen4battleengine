@@ -39,7 +39,6 @@ def test_expert_belt_boosts_only_super_effective_hits(tables, names):
         assert (belt == (plain * 120 // 100 if boosted else plain)).all(), move
 
 
-@pytest.mark.slow
 @pytest.mark.parametrize("item", ["Choice Band", "Life Orb"])
 def test_pursuit_on_a_switch_locks_and_recoils(tables, names, item):
     s = _item(roark_state(tables, names, opp_moves=["Pursuit"]), 1, item, names)

@@ -315,7 +315,9 @@ def _set_choice_lock(state: BattleState, side, move, cond) -> BattleState:
     return state._replace(choice_lock=state.choice_lock.at[side].set(lock))
 
 
-def _choice_lock(tables: Tables, state: BattleState, side, move, shown, record) -> BattleState:
+def _choice_lock(
+    tables: Tables, state: BattleState, side, defender, move, shown, record
+) -> BattleState:
     """The Choice lock after ``side``'s move, where its attack message was ``shown``
     (``SYSCTL_ATTACK_MESSAGE_SHOWN``; ``SYSCTL_FIRST_OF_MULTI_TURN`` comes only from the
     charge-turn scripts, unsupported moves). ``UpdateFlagsWhenHit``
@@ -323,9 +325,11 @@ def _choice_lock(tables: Tables, state: BattleState, side, move, shown, record) 
     a Choice item, where ``record`` (the foe is the defender, the same test as its
     ``moveHit``); then ``UpdateMoveBuffers`` (:3921-3934) locks a Choice holder into
     ``moveTemp`` (``move``: the chosen move, Nature Power itself), except Struggle (U-turn and
-    Baton Pass, its other exceptions, are unsupported moves), and clears a non-holder's."""
-    foe = 1 - side
-    state = _set_choice_lock(state, foe, 0, record & shown & ~_holds_choice(tables, state, foe))
+    Baton Pass, its other exceptions, are unsupported moves), and clears a non-holder's.
+    ``defender``: the defender's side (``DEFENDING_MON``, bcp.c:4488-4496)."""
+    state = _set_choice_lock(
+        state, defender, 0, record & shown & ~_holds_choice(tables, state, defender)
+    )
     holder = _holds_choice(tables, state, side)
     move = jnp.asarray(move, _I32)
     state = _set_choice_lock(state, side, move, shown & holder & (move != MOVE_STRUGGLE))
@@ -871,7 +875,7 @@ def _use_move(
     life_orb = struck & (tables.move_category[used] != STATUS_CATEGORY)
     state = life_orb_recoil(tables, state, side, life_orb)
     # UPDATE_MOVE_BUFFERS (:3917) after it: the Choice lock.
-    state = _choice_lock(tables, state, side, move, ready & can_act, record)
+    state = _choice_lock(tables, state, side, target_side, move, ready & can_act, record)
     own = {
         "act_kind": jnp.where(
             can_act,

@@ -535,6 +535,11 @@ EXEMPT: dict[str, str] = {
         "keyed by ability name: engine semantics of the vanilla ability handling; a game's "
         "changes to it are rom_diff.toml entries (Ruling 13)"
     ),
+    "tools.effect_map.DIVISOR_PARAM_MIN": (
+        "keyed by engine ItemId, whose ints are the smallest hold params each item may divide "
+        "by (battle_lib.c:4778, :1294, :5330-5336; bcp.c:4736-4752), not game ids; each "
+        "game's own params are compared with them at table build"
+    ),
     "tools.effect_map.UNSUPPORTED_MOVES": _KEYED_BY_NAME,
     "tools.effect_map.DECOMP_ITEM_TO_ID": (
         _KEYED_BY_NAME + "; Task 15 also requires the game's hold effect to equal vanilla's"

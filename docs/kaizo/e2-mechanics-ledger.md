@@ -2,15 +2,11 @@
 
 ## RESUME (updated 2026-11-14)
 
-- Closed: batch 1 (attacker damage items) and batch 2 (orbs, Leftovers / Black Sludge,
-  status-cure and stat pinch berries + Gluttony, Custap, BrightPowder / Lax Incense, Wide / Zoom
-  Lens, King's Rock / Razor Fang, Sticky Barb, Shell Bell, Light Clay; rulings B2-1..B2-16),
-  committed on this branch. Batch 2 awaits its one review (also against the conventions below).
-- Batch 2 checks: differential tests (jax_matches_reference, payouts) and the full fast tier
-  green (2665 passed, log `_scratch/e2/b2/fast_tier.log` on G:); `jit(step)` cold 20.7 s,
-  `jit(vmap(step))` 15.6 s. Roark split: 62 distinct missing groups (was 76); held item
-  effects 14 -> 1 (Damp Rock, batch 4), abilities 21 -> 20 (Gluttony).
-- Next step: review of batch 2, then batch 3 (abilities).
+- Closed: batch 1 and batch 2 (reviewed; follow-ups in c61c768 and the merge-check commit),
+  committed on this branch. The merged fast tier passed 2715 / 8 skipped (log
+  `_scratch/e2/b2/fast_tier_merge_377037d.log` on G:).
+- In progress: batch 3 (abilities, and sun / rain / hail as one family); see the Owed list
+  below for what it can close (King's Rock vs Shield Dust).
 - Standing: the doubles conventions below apply to all new code; one review per batch.
 
 Session E2 builds the battle mechanics the Roark split's trainers need (held items,
@@ -50,6 +46,27 @@ the `step` turn skeleton and `enumerate.py`'s branch structure stay as they are.
 2. Status orbs and the other berries and held items.
 3. Abilities.
 4. Move effects and Secret Power's terrain.
+
+## Owed
+
+Rules left out because another mechanic is missing; each closes with the mechanic named.
+
+- King's Rock's flinch vs Shield Dust and Substitute (effects.py `_kings_rock`;
+  subscript_flinch_mon.s:6, :9): Shield Dust (E2 batch 3), Substitute.
+- The Sticky Barb transfer vs Knock Off, the knocked-off mask, U-turn and the substitute test
+  (effects.py `sticky_barb_transfer`; battle_lib.c:5378, :5390-5393): those moves.
+- Shell Bell and Life Orb vs `SYSCTL_UTURN_ACTIVE` (bcp.c:4739, :4761): U-turn.
+- The status orbs vs Safeguard (subscript_badly_poison.s, subscript_burn.s): Safeguard.
+- `outcome.kings_rock_chance` reads the turn-start item (outcome.py), which breaks once a move
+  can move items mid-turn: Trick, Thief, Fling.
+- Kaizo's Ganlon and Apicot Berries (param 0) are refused by the divisor guard
+  (`effect_map.DIVISOR_PARAM_MIN`, B2-3). Finding: `curHP <= maxHP / itemPower`
+  (battle_lib.c:4778, :1294) is a C `/` on ints, which the compiler emits as a call to the
+  Metrowerks / NitroSDK runtime's signed divide helper; that helper is linked from the SDK
+  libraries (subprojects/NitroSDK, not in the decomp's own sources, and not fetched here), so
+  the decomp does not say what a zero divisor returns. Closing it needs the helper's code read
+  from the ROM's arm9 (its divide-by-zero branch), then the berries modelled with that result
+  instead of refused.
 
 ## Rulings
 

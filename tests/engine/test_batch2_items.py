@@ -41,7 +41,6 @@ def _outcome(**cells):
     return o
 
 
-@pytest.mark.slow
 def test_kings_rock_flinches_a_target_that_has_not_moved(tables, names):
     s = _item(roark_state(tables, names), 0, "King’s Rock", names)  # Monferno is faster
     acts = A("Scratch", "Tackle", s, names)
@@ -60,7 +59,6 @@ def test_kings_rock_flinches_a_target_that_has_not_moved(tables, names):
         np.testing.assert_array_equal(np.asarray(x), np.asarray(y))
 
 
-@pytest.mark.slow
 def test_zoom_lens_raises_accuracy_against_a_target_that_moved(tables, names):
     for opp_faster in (True, False):
         s = roark_state(tables, names, player_moves=["Tackle"], opp_faster=opp_faster)
@@ -76,14 +74,12 @@ def test_zoom_lens_raises_accuracy_against_a_target_that_moved(tables, names):
         )
 
 
-@pytest.mark.slow
 def test_light_clay_extends_reflect(tables, names):
     s = _item(roark_state(tables, names, player_moves=["Reflect"]), 0, "Light Clay", names)
     out = assert_matches_reference(tables, s, A("Reflect", "Leer", s, names), empty_outcome())
     assert int(out.reflect[0]) == 5 + 3 - 1  # counted down once at the turn's end
 
 
-@pytest.mark.slow
 def test_sticky_barb_moves_to_a_contact_attacker(tables, names):
     s = _item(_item(roark_state(tables, names), 1, "Sticky Barb", names), 0, "", names)
     out = assert_matches_reference(tables, s, A("Scratch", "Leer", s, names), empty_outcome())
@@ -95,7 +91,6 @@ def test_sticky_barb_moves_to_a_contact_attacker(tables, names):
     assert int(out.item[1, 0]) == names.item("Sticky Barb")
 
 
-@pytest.mark.slow
 def test_pursuit_takes_the_barb_and_rings_the_shell_bell(tables, names):
     s = roark_state(tables, names, opp_moves=["Pursuit"])
     barb = _item(_item(s, 0, "Sticky Barb", names), 1, "", names)
@@ -107,7 +102,6 @@ def test_pursuit_takes_the_barb_and_rings_the_shell_bell(tables, names):
     assert dealt > 0 and int(out.hp[1, 0]) == 5 + max(dealt // 8, 1)
 
 
-@pytest.mark.slow
 def test_activated_custap_berry_cannot_be_plucked(tables, names):
     s = roark_state(tables, names, player_moves=["Roar"], opp_moves=["Bug Bite"])
     s = _item(_item(s, 0, "Custap Berry", names), 1, "Sitrus Berry", names)
@@ -127,7 +121,6 @@ def test_activated_custap_berry_cannot_be_plucked(tables, names):
         assert int(out.item_consumed[1, 0]) == (sitrus if low else 0)
 
 
-@pytest.mark.slow
 @pytest.mark.parametrize("berry", ["Aspear Berry", "Lum Berry"])
 def test_freeze_berry_acts_before_a_fire_hit_thaws(tables, names, berry):
     s = _item(roark_state(tables, names), 1, berry, names)
@@ -137,7 +130,6 @@ def test_freeze_berry_acts_before_a_fire_hit_thaws(tables, names, berry):
     assert int(out.item_consumed[1, 0]) == names.item(berry) and int(out.item[1, 0]) == 0
 
 
-@pytest.mark.slow
 def test_shell_bell_heals_after_the_move(tables, names):
     s = _hp(_item(roark_state(tables, names), 0, "Shell Bell", names), 0, 5)
     out = assert_matches_reference(tables, s, A("Scratch", "Leer", s, names), empty_outcome())
