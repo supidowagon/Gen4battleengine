@@ -1,18 +1,19 @@
 # E2 mechanics ledger (Kaizo Roark split)
 
-## RESUME (updated 2026-11-14, batch 4 in progress)
+## RESUME (updated 2026-11-14, batch 4 partly done, awaiting review)
 
-- Batch 3 review follow-ups: 51ab3ae (B3-18..B3-22), stale Shield Dust test dropped (a169085,
-  06f357e). Batches 1-3 closed.
-- Batch 4 (move effects, terrain): committed in parts on this branch: the terrain narrowing
-  (d4e3d99, B4-1), then the simple effects, abilities and crit items (B4-3..B4-11) and the side
-  conditions, Roost, Destiny Bond, Snore, Secret Power (B4-12..B4-17); Counter / Mirror Coat /
-  Metal Burst next (B4-18). Still open in batch 4 (each listed under Owed): Sleep Talk, Copycat,
-  U-turn, Uproar, Future Sight / Doom Desire; Metronome is refused (B4-2); Lass Kaitlin's
-  terrain waits on a user decision (B4-1).
-- Checks per part: differential (jax_matches_reference) green; focused engine / prep / data /
-  tools fast tier run per part (logs in `_scratch/e2/b4/` on G:). Compile time at the start of
-  batch 4: `jit(step)` 49.8 s, `jit(vmap(step))` 36.4 s (`_scratch/e2/b4/compile_start.log`).
+- Batch 3 review follow-ups: 51ab3ae (B3-18..B3-22); the stale Shield Dust test dropped (06f357e).
+- Batch 4 committed: terrain narrowing d4e3d99 (B4-1), effects / abilities / items 4980309
+  (B4-2..B4-17), Counter family 4ba2753 (B4-18). Roark split move effect + held item + ability +
+  terrain entries 29 -> 8: left are Sleep Talk (10 fights), U-turn (3), Metronome (3, refused by
+  B4-2), Future Sight / Doom Desire, Uproar, Copycat (1 each), all under Owed with what they need,
+  and Lass Kaitlin's terrain (1, B4-1: user decision).
+- Checks on 4ba2753: differential jax_matches_reference and payouts green; engine / prep / data /
+  tools fast tier 1588 passed, 1 failed (test_kaizo_field_effects_and_unknown_starts, the stale E3
+  test another session fixes). Compile: `jit(step)` 49.8 -> 50.7 s, `jit(vmap(step))` 36.4 ->
+  36.9 s (start / end of batch 4, same session; logs in `_scratch/e2/b4/` on G:).
+- Next: the review of batch 4; then the owed mechanics (Sleep Talk and Copycat need the
+  enumerator to branch on the called move; U-turn a mid-turn decision point).
 - Standing: the doubles conventions below apply to all new code; one review per batch.
 
 Session E2 builds the battle mechanics the Roark split's trainers need (held items,
