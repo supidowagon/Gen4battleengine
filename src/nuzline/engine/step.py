@@ -72,6 +72,9 @@ import jax.numpy as jnp
 from nuzline.data.tables import Tables
 from nuzline.engine.actions import FIRST_ITEM_ACTION, locked_slot
 from nuzline.engine.damage import (
+    PHYSICAL as PHYSICAL_CATEGORY,
+)
+from nuzline.engine.damage import (
     PRESENT_HEAL,
     chart_types,
     confusion_damage,
@@ -81,6 +84,9 @@ from nuzline.engine.damage import (
     ignorable,
     move_type_of,
     weather_suppressed,
+)
+from nuzline.engine.damage import (
+    SPECIAL as SPECIAL_CATEGORY,
 )
 from nuzline.engine.damage import (
     STATUS as STATUS_CATEGORY,
@@ -121,6 +127,8 @@ from nuzline.engine.hooks import (
 )
 from nuzline.engine.ids import (
     CHOICE_ITEMS,
+    COUNTER_PHYSICAL,
+    COUNTER_SPECIAL,
     ITEM_ABILITY_IDS,
     MOVE_SLEEP_TALK,
     MOVE_SNORE,
@@ -477,6 +485,9 @@ def _empty_events() -> dict:
             "called",
             "dragged",
             "roosted",
+            "phys_taken",
+            "spec_taken",
+            "last_taken",
             *EVENT_FLAGS,
         )
     }
@@ -525,6 +536,7 @@ def _use_move(
     foe_protecting=False,
     custap=(False, False),
     foe_roosting=False,
+    foe_taken=(0, 0, 0),
 ) -> tuple[BattleState, dict, dict]:
     """``side``'s active Pokemon uses the move in slot ``action`` (or Struggle).
     ``choice``: its ``(move, struggling, locked)`` from ``selected_move`` and
@@ -538,7 +550,10 @@ def _use_move(
     (``bool[2]``): each side's ``moveEffectsData.custapBerry`` from the turn order
     (``order.custap_flags``). ``foe_roosting``: the foe's Roost succeeded earlier this turn
     (``turnFlags.roosting``, cleared at the turn end, battle_lib.c:2231): the type chart of the
-    move skips its Flying rows (``damage.chart_types``).
+    move skips its Flying rows (``damage.chart_types``). ``foe_taken``: the
+    physical, special and last damage the user took from the foe this turn (its ``turnFlags``,
+    bcp.c:3413-3434: the foe's ``phys_taken`` / ``spec_taken`` / ``last_taken`` events), which
+    Counter, Mirror Coat and Metal Burst read.
 
     Returns ``(state, own, foe)``: the state after the move, the user's events (each
     status check's result, effect-gated: set only when the check was reached and had an
@@ -704,6 +719,23 @@ def _use_move(
     # to subscript_no_target without one: ``has_target`` is the called move's.
     never_misses = tables.move_accuracy[used] == 0
     has_target = (state.hp[target_side, target] > 0) | defender_always(tables, used)
+    # Counter, Mirror Coat, Metal Burst (battle_script.c:4615-4705, :7153-7184): the command
+    # reads the user's turnFlags damage from the foe (its last attacker in singles) and fails
+    # (MOVE_STATUS_FAILED) on 0 taken or a fainted attacker; a RANGE_SINGLE_TARGET_SPECIAL one is
+    # its own defender until then (battle_lib.c:1665-1669), so it passes the no-target check and
+    # the command re-picks the foe.
+    counter = tables.move_effect[used] == EffectId.COUNTER
+    source = tables.move_param[used, 0].astype(_I32)
+    foe_taken = jnp.asarray(foe_taken, _I32)
+    taken_by = jnp.where(
+        source == COUNTER_PHYSICAL,
+        foe_taken[0],
+        jnp.where(source == COUNTER_SPECIAL, foe_taken[1], foe_taken[2]),
+    )
+    counter_damage = taken_by * tables.move_param[used, 1].astype(_I32) // 10
+    counter_ok = (taken_by != 0) & (state.hp[target_side, target] > 0)
+    special_counter = counter & self_defender(tables, used)
+    has_target = has_target | special_counter
     # SYSCTL_MOVE_SUCCEEDED (battle_controller_player.c:3212) once the move got past the
     # status checks, the PP decrement and the no-target check, before the accuracy check
     # (a miss counts): UpdateMoveBuffers (:3945-3949) writes the move (Struggle's own id
@@ -724,6 +756,7 @@ def _use_move(
         tables.move_param[used, 2] == SNORE_PARAM
     )
     failed = failed | (snore & (state.status[side, user] != Status.SLEEP))
+    failed = failed | (counter & ~counter_ok)
     # Selfdestruct / Explosion (effect_script_0007.s): the script sets the user's HP to 0
     # before TryMove, so the user faints on a miss or into a Ghost too, and its own Cloud
     # Nine no longer counts for the hit (COUNT_ALIVE_BATTLERS). The faint itself is
@@ -865,7 +898,7 @@ def _use_move(
     # (unrolled, it dominated trace and compile time). It also counts the hits that
     # landed ("Hit N times", battle_controller_player.c:3777-3812) and their crits.
     def one_hit(hit_index, carry):
-        state, hits, crits, contact, thaw, dealt, armed, struck, shell, barbed = carry
+        state, hits, crits, contact, thaw, dealt, armed, struck, shell, barbed, record = carry
         # BattleControllerPlayer_LoopMultiHit (bcp.c:3780) stops once a battler fainted
         # (faintedMon): the target, or the attacker by Rough Skin (Selfdestruct's user is
         # at 0 HP before its only hit, so the first hit is exempt).
@@ -887,6 +920,7 @@ def _use_move(
             struggling=struggling,
             focus_armed=armed,
             foe_custap=custap[target_side],
+            counter_damage=counter_damage,
         )
         # A move whose script runs no CalcCrit (ids.UNROLLED_EFFECTS): no crit message.
         unrolled = jnp.isin(tables.move_effect[used], jnp.asarray(UNROLLED_EFFECTS, _I32))
@@ -934,6 +968,19 @@ def _use_move(
             struck,
             shell + info.shell_bell,
             barbed,
+            # The defender's turnFlags (bcp.c:3413-3434): each UpdateHP assigns the damage to the
+            # move class's field and to lastDamageTaken.
+            jnp.where(
+                info.update_hp,
+                jnp.stack(
+                    [
+                        jnp.where(category == PHYSICAL_CATEGORY, info.taken, record[0]),
+                        jnp.where(category == SPECIAL_CATEGORY, info.taken, record[1]),
+                        info.taken,
+                    ]
+                ),
+                record,
+            ),
         )
 
     init = (
@@ -947,9 +994,11 @@ def _use_move(
         jnp.bool_(False),
         _I32(0),
         jnp.bool_(False),
+        jnp.zeros((3,), _I32),
     )
+    category = tables.move_category[used]  # CURRENT_MOVE_DATA.class (moveCur)
     target_hp0 = state.hp[target_side, target]
-    state, hits, crits, contact, thaw, dealt, _, struck, shell, _ = jax.lax.fori_loop(
+    state, hits, crits, contact, thaw, dealt, _, struck, shell, _, damage_taken = jax.lax.fori_loop(
         0, MAX_HITS, one_hit, init
     )
     # The roosting chart ends with the move: the target's own types again (if it is still the
@@ -980,6 +1029,8 @@ def _use_move(
     # first or its call found no target: the defender is the user or BATTLER_NONE).
     record = ready & ~self_hit & (foe_defender | (bide_ends & can_act))
     record = jnp.where(nature_power, can_act & has_target, record)
+    # A special-range Counter's defender is the foe only once its command succeeded.
+    record = jnp.where(special_counter, can_act & counter_ok, record)
     hit_record = jnp.where(record, jnp.where(can_act, used, 0), state.move_hit[target_side])
     state = state._replace(
         move_hit=state.move_hit.at[target_side].set(hit_record.astype(state.move_hit.dtype))
@@ -1037,6 +1088,9 @@ def _use_move(
         "thawed_by_hit": thaw,
         # subscript_force_target_to_switch_or_flee.s: "{0} was dragged out!"
         "dragged": jnp.where(dragged, drag_slot + 1, 0),
+        "phys_taken": damage_taken[0],
+        "spec_taken": damage_taken[1],
+        "last_taken": damage_taken[2],
     }
     # turnFlags.roosting (subscript_roost.s:11-12): set unless "HP is full!" (NO_MORE_WORK).
     own["roosted"] = connected & (tables.move_effect[used] == EffectId.ROOST) & ~no_more_work
@@ -1093,6 +1147,7 @@ def _act(
     foe_protecting,
     custap,
     foe_roosting=False,
+    taken=(0, 0, 0),
 ) -> tuple[BattleState, dict, dict]:
     """``side``'s action: ``(state, own, foe)`` with the events of ``_use_move``. A
     switch shows the party slot (``ACT_SWITCH``), an item its item id (``ACT_ITEM``)."""
@@ -1111,6 +1166,7 @@ def _act(
         foe_protecting,
         custap,
         foe_roosting,
+        taken,
     )
     live = state.over == 0
     switch, item = is_switch(action) & live, is_item(action) & live
@@ -1331,6 +1387,8 @@ def _execute_actions(
         # The foe's Protect this turn (turnFlags.protecting): only a first actor's succeeds.
         foe_protecting = events["protect_ok"][1 - side] != 0
         foe_roosting = events["roosted"][1 - side] != 0  # turnFlags.roosting
+        # The side's turnFlags damage taken from the first actor (Counter, Metal Burst).
+        taken = jnp.stack([events[n][side] for n in ("phys_taken", "spec_taken", "last_taken")])
         acted, own, foe_events = _act(
             tables,
             state,
@@ -1343,6 +1401,7 @@ def _execute_actions(
             foe_protecting,
             custap,
             foe_roosting,
+            taken,
         )
         ran = (state.over == 0) & (state.hp[side, state.active[side]] > 0)
         # The pursuer does not act again; a Pokemon the first actor's Roar dragged in does not

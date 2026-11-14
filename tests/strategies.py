@@ -297,6 +297,9 @@ BATCH4_MOVES = (
     "Earthquake",
     "Snore",
     "Secret Power",
+    "Counter",
+    "Mirror Coat",
+    "Metal Burst",
 )
 BATCH4_ABILITIES = (AbilityId.FILTER, AbilityId.MAGIC_GUARD, AbilityId.SNIPER)
 CRIT_ITEMS = ("Scope Lens", "Razor Claw", "Lucky Punch", "Stick")
@@ -1150,6 +1153,7 @@ LAW_MOVES = (
     "Snore",
     "Secret Power",
     "Spikes",
+    "Counter",
 )
 # Abilities the outcome relevance reads (contact procs, Steadfast, Simple's and Swift
 # Swim's Speed) or the hit odds read (Compoundeyes, Sand Veil, Snow Cloak), and Rough Skin

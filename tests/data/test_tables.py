@@ -163,7 +163,8 @@ def test_ability_and_item_mapping(tables, names):
     assert int(t.species_abilities[n.species("Cranidos"), 1]) == AbilityId.NONE
     assert int(t.item_effect[n.item("Oran Berry")]) == ItemId.ORAN_BERRY
     assert int(t.item_effect[n.item("Sitrus Berry")]) == ItemId.SITRUS_BERRY
-    assert int(t.item_effect[n.item("Scope Lens")]) == ItemId.UNSUPPORTED
+    assert int(t.item_effect[n.item("Scope Lens")]) == ItemId.CRIT_ITEM  # E2 batch 4 (B4-10)
+    assert int(t.item_effect[n.item("Iron Ball")]) == ItemId.UNSUPPORTED
     assert int(t.item_effect[n.item("")]) == ItemId.NONE
     assert tuple(int(x) for x in t.item_param[n.item("Oran Berry")]) == (10, 0)
     assert tuple(int(x) for x in t.item_param[n.item("Sitrus Berry")]) == (25, 0)

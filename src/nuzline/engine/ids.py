@@ -186,7 +186,17 @@ class EffectId(IntEnum):
     # a hit whose secondary effect is the terrain's (``SECRET_POWER_EFFECTS``,
     # ``order.move_effects``).
     SECRET_POWER = 62
+    # Counter, Mirror Coat (effect_script_0089.s, _0144.s: BtlCmd_Counter / MirrorCoat,
+    # battle_script.c:4615-4705) and Metal Burst (effect_script_0227.s, BtlCmd_TryMetalBurst,
+    # :7153-7184; Kaizo's Bide): ``(source, multiplier numerator, 0)``: the damage the user took
+    # this turn from the foe (``turnFlags``: ``COUNTER_PHYSICAL`` / ``_SPECIAL`` / ``_ANY``, its
+    # last one, bcp.c:3413-3434) times ``numerator / 10`` (``step._use_move``,
+    # ``effects.play_hit``), under SYSCTL_IGNORE_TYPE_CHECKS; 0 taken fails the move.
+    COUNTER = 63
 
+
+# ``EffectId.COUNTER``'s source (``move_param[m, 0]``).
+COUNTER_PHYSICAL, COUNTER_SPECIAL, COUNTER_ANY = 1, 2, 3
 
 # Snore (effect_script_0092.s) is ``FLINCH`` with ``move_param[m, 2] == SNORE_PARAM``: the
 # script fails unless its user is asleep (:5, :15-17), and a sleeping user uses it
@@ -211,6 +221,7 @@ UNROLLED_EFFECTS = (
     EffectId.BIDE,
     EffectId.HALVE_HP,
     EffectId.OHKO,
+    EffectId.COUNTER,
 )
 
 

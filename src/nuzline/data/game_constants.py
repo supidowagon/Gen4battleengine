@@ -249,6 +249,10 @@ CONSTANTS: tuple[Constant, ...] = (
     Constant("nuzline.engine.ids.MOVE_STRUGGLE", "move", 165, "Struggle", _E),
     # MOVE_FAKE_OUT (generated/moves.txt line 253): subscript_flinch_mon.s:18.
     Constant("nuzline.engine.ids.MOVE_FAKE_OUT", "move", 252, "Fake Out", _E),
+    # MOVE_SNORE, MOVE_SLEEP_TALK (generated/moves.txt lines 174, 215): the sleep check's
+    # exceptions (battle_controller_player.c:2455), E2 batch 4.
+    Constant("nuzline.engine.ids.MOVE_SNORE", "move", 173, "Snore", _E),
+    Constant("nuzline.engine.ids.MOVE_SLEEP_TALK", "move", 214, "Sleep Talk", _E),
     # MOVE_PROTECT, MOVE_DETECT, MOVE_ENDURE (generated/moves.txt lines 183, 198, 204):
     # BtlCmd_TryProtection's chain check (battle_script.c:5154-5156).
     Constant("nuzline.engine.ids.MOVE_PROTECT", "move", 182, "Protect", _E),
@@ -339,6 +343,9 @@ CONSTANTS: tuple[Constant, ...] = (
             "Drizzle": 2,
             "Sand Stream": 45,
             "Snow Warning": 117,
+            "Filter": 111,
+            "Magic Guard": 98,
+            "Sniper": 97,
         },
     ),
     # ChooseTraceTarget's untraceable abilities (battle_lib.c:7750-7775) and its Forecast.
@@ -381,6 +388,9 @@ CONSTANTS: tuple[Constant, ...] = (
     Constant("nuzline.engine.stats.SPECIES_SHEDINJA", "species", 292, "Shedinja", _E),
     Constant("nuzline.engine.coverage.SPECIES_GIRATINA", "species", 487, "Giratina", _E),
     Constant("nuzline.engine.coverage.SPECIES_SHAYMIN", "species", 492, "Shaymin", _E),
+    # The crit species items' species (BattleSystem_CalcCriticalMulti, battle_lib.c:7127-7128).
+    Constant("nuzline.engine.ids.SPECIES_CHANSEY", "species", 113, "Chansey", _E),
+    Constant("nuzline.engine.ids.SPECIES_FARFETCHD", "species", 83, "Farfetch’d", _E),
     # The species of BattleSystem_CalcMoveDamage's item block (battle_lib.c:6730-6774).
     *(
         Constant(f"nuzline.engine.ids.SPECIES_{name.upper()}", "species", i, name, _E)
@@ -513,6 +523,10 @@ EXEMPT: dict[str, str] = {
         + _ENGINE_ENCODING
     ),
     "nuzline.engine.ids.EffectId": _ENGINE_ENCODING,
+    "nuzline.engine.ids.SECRET_POWER_EFFECTS": (
+        "sTerrainSideEffect (include/data/terrain/to_secondary_effect.h) as engine EffectId / "
+        "Stat / Status members, indexed by the decomp TERRAIN_* id; " + _ENGINE_ENCODING
+    ),
     "nuzline.engine.ids.Status": _ENGINE_ENCODING,
     "nuzline.engine.ids.Stat": "engine index order of every stat vector; " + _ENGINE_ENCODING,
     "nuzline.engine.ids.MoveFlag": _ENGINE_ENCODING,
@@ -605,6 +619,12 @@ EXEMPT: dict[str, str] = {
         "keyed by decomp hold effect id, read off the weather moves' scripts (effect_script_0115.s, "
         "_0136.s, _0137.s, _0164.s): each game's items carry their own hold effect (build_tables "
         "looks theirs up here), and a game's script changes are rom_diff.toml entries"
+    ),
+    "tools.effect_map.CRIT_HOLD_EFFECTS": (
+        "keyed by decomp hold effect id, read off BattleSystem_CalcCriticalMulti "
+        "(battle_lib.c:7123-7128); its species values are ids.SPECIES_CHANSEY / _FARFETCHD, "
+        "checked by name: each game's items carry their own hold effect (build_tables looks "
+        "theirs up here), and a game's code changes are rom_diff.toml entries"
     ),
     "tools.effect_map.HOLD_EFFECT_TO_ID": (
         "keyed by decomp hold effect id: engine semantics of the vanilla item code; each "

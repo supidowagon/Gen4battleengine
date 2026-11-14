@@ -393,3 +393,12 @@ Rules left out because another mechanic is missing; each closes with the mechani
   to_secondary_effect.h): accuracy -1 (plain, sand), sleep (grass, puddle), flinch (mountain,
   cave), freeze (snow, ice), Attack -1 (water), paralysis (building, special), Speed -1 (great
   marsh), evasion -1 (bridge) (`ids.SECRET_POWER_EFFECTS`, `order.move_effects`).
+- B4-18 Counter, Mirror Coat and Metal Burst (Kaizo's Bide is effect 227: Metal Burst, Dark,
+  single target) read the user's `turnFlags` damage taken this turn (bcp.c:3413-3434: each UpdateHP
+  assigns battleCtx->damage after the endure caps, by moveCur's class and to lastDamageTaken; a
+  multi-hit leaves its last hit; Pursuit's subscript records none) as the first actor's events:
+  2x physical / 2x special / `last * 15 / 10` (battle_script.c:4627, :4680, :7166); 0 taken or a
+  fainted attacker is MOVE_STATUS_FAILED; SYSCTL_IGNORE_TYPE_CHECKS (no STAB or multiplier, the
+  immunity stays, none for a RANGE_USER move), no crit or roll, no resist berry. A
+  RANGE_SINGLE_TARGET_SPECIAL one is its own defender until its command, so it never meets the
+  no-target check and writes the foe's moveHit only on success.

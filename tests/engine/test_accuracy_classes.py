@@ -411,6 +411,24 @@ _NO_ACC_EVA_WRITE = (frozenset(EffectId(i) for i in range(40)) - _STAT_KINDS) | 
     # E2 batch 3: writes the weather, not a stage; hit_thresholds follows it (Sand Veil, Snow
     # Cloak) as its weather variant.
     EffectId.WEATHER,
+    # E2 batch 4: no accuracy or evasion stage. Secret Power's terrain effect can lower accuracy
+    # (or evasion), but hit_thresholds reads it resolved (order.move_effects): as
+    # SECONDARY_STAT_FOE, a _SEEN pair.
+    EffectId.DOUBLE_POWER,
+    EffectId.HP_POWER,
+    EffectId.WEIGHT_POWER,
+    EffectId.HALVE_HP,
+    EffectId.OHKO,
+    EffectId.FALSE_SWIPE,
+    EffectId.SWAGGER,
+    EffectId.DRAGON_DANCE,
+    EffectId.ROOST,
+    EffectId.TAILWIND,
+    EffectId.SPIKES,
+    EffectId.TOXIC_SPIKES,
+    EffectId.DESTINY_BOND,
+    EffectId.SECRET_POWER,
+    EffectId.COUNTER,
 }
 # (effect, stat) pairs hit_thresholds follows: they change a later foe move's threshold.
 _SEEN = {

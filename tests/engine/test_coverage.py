@@ -53,12 +53,12 @@ def test_all_missing_reported_at_once(tables, names):
     party = sample_party(
         names,
         override_moves={0: ["Metronome", "Scratch", "Leer", "Ember"]},
-        override_item={1: "Scope Lens"},
+        override_item={1: "Iron Ball"},
     )
     with pytest.raises(UnsupportedMechanics) as e:
         require_coverage(tables, names, party, roark_trainer(), roark_party(names), 0)
     msg = str(e.value)
-    assert "Metronome" in msg and "Scope Lens" in msg
+    assert "Metronome" in msg and "Iron Ball" in msg
     assert e.value.report.level == Support.NONE
 
 

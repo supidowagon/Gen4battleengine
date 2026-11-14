@@ -158,6 +158,10 @@ class _Turn:
     # turnFlags.roosting (subscript_roost.s:11-12, cleared at the turn end): the battler's chart
     # skips its Flying rows (lib.c:2540-2543) for the rest of the turn.
     roosting: list[bool] = field(default_factory=lambda: [False, False])
+    # turnFlags damage taken per side this turn, [physical, special, last] (bcp.c:3413-3434),
+    # and the current Counter / Mirror Coat / Metal Burst damage (battleCtx->damage).
+    taken: list[list[int]] = field(default_factory=lambda: [[0, 0, 0], [0, 0, 0]])
+    counter_damage: int = 0
     # SYSCTL_ATTACK_MESSAGE_SHOWN of the current action (script.c:1432), for
     # UpdateMoveBuffers' moveProtect (bcp.c:3936-3942).
     attack_message: bool = False
@@ -2222,18 +2226,32 @@ def _hit(turn: _Turn, s: RefState, side: int, move: int, hit: int, struggling: b
     # defender a DEFENDER_ALWAYS move always has; a TARGETS_USER move hits its user.
     landed = target_mon.hp > 0 or _defender_always(tables, move)
     # Bide is a RANGE_USER move whose unleash hits the foe (bcp.c:2702-2713).
-    hits_foe = not _targets_user(tables, move) or _t(tables, "move_effect", move) == EffectId.BIDE
-
-    damage = _move_damage(
-        tables,
-        s,
-        side,
-        move,
-        o.crit[side][hit] != 0 and not _armored(s, side, target),
-        o.roll[side][hit],
-        magnitude=o.magnitude[side],
-        present=o.present[side],
+    counter = _t(tables, "move_effect", move) == EffectId.COUNTER
+    hits_foe = (
+        not _targets_user(tables, move)
+        or _t(tables, "move_effect", move) == EffectId.BIDE
+        or counter
     )
+
+    if counter:
+        # The command's battleCtx->damage under SYSCTL_IGNORE_TYPE_CHECKS: an immunity still
+        # flags (lib.c:7550-7551), unless a RANGE_USER move skips the chart (bcp.c:2352).
+        kind = _move_type(tables, s, side, move)
+        immune = _matchup_x40(
+            tables, kind, target_mon.types, _identified(s, side, target)
+        ) == 0 or _levitated(tables, s, side, target, kind)
+        damage = 0 if immune and not _targets_user(tables, move) else turn.counter_damage
+    else:
+        damage = _move_damage(
+            tables,
+            s,
+            side,
+            move,
+            o.crit[side][hit] != 0 and not _armored(s, side, target),
+            o.roll[side][hit],
+            magnitude=o.magnitude[side],
+            present=o.present[side],
+        )
     dealt = stored = 0
     update_hp = landed and hits_foe and damage > 0
     if update_hp:
@@ -2255,6 +2273,14 @@ def _hit(turn: _Turn, s: RefState, side: int, move: int, hit: int, struggling: b
         # read by the Sticky Barb transfer and King's Rock.
         if update_hp and taken:
             turn.damaged = True
+        if update_hp:  # the defender's turnFlags (bcp.c:3413-3434), by moveCur's class
+            record = turn.taken[target]
+            klass = _t(tables, "move_category", move)
+            if klass == PHYSICAL:
+                record[0] = taken
+            elif klass == SPECIAL:
+                record[1] = taken
+            record[2] = taken
         # subscript_update_hp.s: the resist berry halves hpCalcTemp (BattleSystem_Divide).
         if taken > 0 and _hit_resist_berry(turn, s, side, move):
             dealt = _lose_hp(turn, s, target, _divide(taken, 2))
@@ -2526,7 +2552,15 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
     # living foe for a move aimed at it. Nature Power's defender is its user
     # (RANGE_SINGLE_TARGET_SPECIAL, lib.c:1665-1669): it never fails here.
     nature_power = _t(tables, "move_effect", move) == EffectId.NATURE_POWER
-    if not nature_power and not _defender_always(tables, move) and _active(s, 1 - side).hp == 0:
+    # A special-range Counter / Mirror Coat / Metal Burst is its own defender until its command.
+    counter = _t(tables, "move_effect", move) == EffectId.COUNTER
+    special_counter = counter and _move_target(tables, move) in SELF_DEFENDER
+    if (
+        not nature_power
+        and not special_counter
+        and not _defender_always(tables, move)
+        and _active(s, 1 - side).hp == 0
+    ):
         _unlock(s.sides[side])  # subscript_no_target.s
         return record
     # SYSCTL_MOVE_SUCCEEDED (bcp.c:3212): UpdateMoveBuffers (bcp.c:3945) keeps the move
@@ -2553,6 +2587,17 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
         _unlock(s.sides[side])  # subscript_missed.s
         return record
     # Snore (effect_script_0092.s:5): MOVE_STATUS_FAILED unless the user is asleep.
+    if counter:
+        # BtlCmd_Counter / MirrorCoat / TryMetalBurst (script.c:4615-4705, :7153-7184): the
+        # user's turnFlags damage from the foe, 0 or a fainted foe fails (MOVE_STATUS_FAILED).
+        source = _t(tables, "move_param", move, 0)
+        taken = turn.taken[side][source - 1]
+        if not taken or _active(s, 1 - side).hp == 0:
+            _unlock(s.sides[side])
+            return None if special_counter else record
+        turn.counter_damage = taken * _t(tables, "move_param", move, 1) // 10
+        if special_counter:
+            record = move
     snore = effect == EffectId.FLINCH and _t(tables, "move_param", move, 2) == SNORE_PARAM
     if snore and mon.status != Status.SLEEP:
         _unlock(s.sides[side])

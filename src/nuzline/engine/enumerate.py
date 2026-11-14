@@ -597,6 +597,8 @@ INPUT_NEUTRAL_EFFECTS = (
     _E.DESTINY_BOND,
     # Never read here: order.move_effects resolves it to its terrain's secondary effect.
     _E.SECRET_POWER,
+    # Damages the side: its HP (the HP clause).
+    _E.COUNTER,
     # Never the effect read here: the predicate reads the move each action runs
     # (order.called_move), Nature Power's call; an unresolved one (unknown terrain, refused
     # by coverage) calls MOVE_NONE and does nothing.
@@ -883,6 +885,7 @@ NON_TABLE_DAMAGE_EFFECTS = (
     _E.SPIKES,
     _E.TOXIC_SPIKES,
     _E.DESTINY_BOND,
+    _E.COUNTER,  # the damage taken this turn, no roll
     # Its table power is 0: its damage is the called move's. outcome_laws reads the called
     # move (order.called_move), whose own effect decides (Tri Attack's is a table hit), so
     # this entry only keeps an unresolved Nature Power (unknown terrain) uncompressed.

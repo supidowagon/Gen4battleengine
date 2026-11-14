@@ -65,12 +65,12 @@ def test_resources_from_bag(tables, names, learnsets):
 
 
 def test_bag_resources_warns_on_unsupported_item(tables, names, learnsets):
-    # Razor Claw is unsupported (Quick Claw was, until K3b2 Task 8).
-    rock, honey = names.item("Razor Claw"), names.item("Honey")
+    # Iron Ball is unsupported (Razor Claw was, until E2 batch 4).
+    rock, honey = names.item("Iron Ball"), names.item("Honey")
     bag = {"items": [(rock, 1), (honey, 1)], "berries": [(names.item("Oran Berry"), 1)]}
     resources, warnings = bag_resources(bag, tables, names, learnsets, ())
     assert rock not in dict(resources.held)
-    assert warnings == ["Razor Claw: not offered (hold effect not supported)"]
+    assert warnings == ["Iron Ball: not offered (hold effect not supported)"]
 
 
 def test_usable_pool_excludes_and_trims(tables, names):
@@ -97,10 +97,10 @@ def test_usable_pool_excludes_and_trims(tables, names):
 
 
 def test_unsupported_item_is_taken_off(tables, names):
-    spec = replace(sample_party(names)[0], item=names.item("Scope Lens"))
+    spec = replace(sample_party(names)[0], item=names.item("Iron Ball"))
     pool, lines = usable_pool(tables, names, [candidate(names, spec, 0)], ())
     assert pool[0].spec.item == 0
-    assert len(lines) == 1 and "Scope Lens taken off" in lines[0]
+    assert len(lines) == 1 and "Iron Ball taken off" in lines[0]
 
 
 def test_pick_ambiguous_and_locations(names):

@@ -1259,6 +1259,9 @@ class MoveHit(NamedTuple):
     # subscript_pursuit.s:21-29's shellBellDamageDealt for Pursuit's pre-switch hit: the
     # damage before CheckHoldOnWith1HP, capped at the target's HP.
     pursuit_shell_bell: jnp.ndarray
+    # battleCtx->damage after the endure caps where UpdateHP ran (the defender's turnFlags
+    # damage taken, bcp.c:3413-3434: Counter, Mirror Coat, Metal Burst), else 0.
+    taken: jnp.ndarray
 
 
 def focus_sash_damage(state: BattleState, side, damage, armed) -> tuple:
@@ -1279,7 +1282,7 @@ def focus_sash_damage(state: BattleState, side, damage, armed) -> tuple:
 # and Seismic Toss (effect_script_0087.s:5), Foresight (effect_script_0113.s:6, no damage).
 # subscript_type_resist_berry.s:5 skips the berry for such a hit. tests/tools/
 # test_effect_map.py checks the list against every mapped effect script.
-IGNORES_TYPE_CHECKS = (_E.LEVEL_DAMAGE, _E.FORESIGHT, _E.HALVE_HP)
+IGNORES_TYPE_CHECKS = (_E.LEVEL_DAMAGE, _E.FORESIGHT, _E.HALVE_HP, _E.COUNTER)
 # subscript_type_resist_berry.s:6 also skips a MOVE_STATUS_ONE_HIT_KO hit.
 RESIST_BERRY_SKIPS = (*IGNORES_TYPE_CHECKS, _E.OHKO)
 
@@ -1395,6 +1398,7 @@ def play_hit(
     focus_armed=False,
     foe_custap=False,
     extra_flinch: bool = True,
+    counter_damage=0,
 ) -> tuple[BattleState, MoveHit]:
     """Hit ``hit_index`` (0-4, an int or a traced int32) of ``move`` by ``side``'s active Pokemon: damage with
     this hit's crit and roll, then the move's effect.
@@ -1447,6 +1451,23 @@ def play_hit(
         outcome.magnitude[side].astype(_I32),
         outcome.present[side].astype(_I32),
     )
+    # Counter / Mirror Coat / Metal Burst (``counter_damage``: the amount step._use_move read
+    # off the turn): battleCtx->damage, under SYSCTL_IGNORE_TYPE_CHECKS; the chart still flags an
+    # immunity (battle_lib.c:7550-7551), except for a RANGE_USER move, whose chart CheckTypeChart
+    # skips (bcp.c:2352).
+    is_counter = tables.move_effect[move] == _E.COUNTER
+    counter_type = move_type_of(tables, state, side, move)
+    immune = (
+        effectiveness(
+            tables,
+            counter_type,
+            state.types[target_side, target],
+            identified(state, side, target_side),
+        )
+        == 0
+    ) | levitated(state, side, target_side, counter_type)
+    immune = immune & ~targets_user(tables, move)
+    damage = jnp.where(is_counter, jnp.where(immune, 0, jnp.asarray(counter_damage, _I32)), damage)
     target_hp = state.hp[target_side, target].astype(_I32)
     # False Swipe (bcp.c:3381-3384, inside UpdateHP before the endure checks): a hit that would
     # KO leaves 1 HP; against 1 HP it deals 0, but UpdateHP has run (SYSCTL_MOVE_HIT).
@@ -1454,7 +1475,7 @@ def play_hit(
     raw = damage
     damage = jnp.where(swipe, target_hp - 1, damage)
     # Bide is a RANGE_USER move whose unleash hits the foe (bcp.c:2702-2713).
-    hits_foe = ~targets_user(tables, move) | (tables.move_effect[move] == _E.BIDE)
+    hits_foe = ~targets_user(tables, move) | (tables.move_effect[move] == _E.BIDE) | is_counter
     update_hp = landed & hits_foe & (raw > 0)  # BattleControllerPlayer_UpdateHP runs
     sash = holds(tables, state, target_side, ItemId.FOCUS_SASH)
     full = target_hp == state.max_hp[target_side, target].astype(_I32)
@@ -1596,4 +1617,5 @@ def play_hit(
         damaged=update_hp & (taken != 0),
         shell_bell=shell,
         pursuit_shell_bell=pursuit_shell,
+        taken=jnp.where(update_hp, taken, 0),
     )

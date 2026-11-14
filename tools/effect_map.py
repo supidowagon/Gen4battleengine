@@ -49,6 +49,9 @@ reached silently.
 from __future__ import annotations
 
 from nuzline.engine.ids import (
+    COUNTER_ANY,
+    COUNTER_PHYSICAL,
+    COUNTER_SPECIAL,
     POWER_IF_TARGET_HALF_HP,
     POWER_IF_TARGET_PARALYZED,
     POWER_IF_USER_STATUSED,
@@ -287,6 +290,12 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     249: ("BATTLE_EFFECT_TOXIC_SPIKES", _E.TOXIC_SPIKES, (0, 0, 0)),
     98: ("BATTLE_EFFECT_KO_MON_THAT_DEFEATED_USER", _E.DESTINY_BOND, (0, 0, 0)),
     197: ("BATTLE_EFFECT_SECRET_POWER", _E.SECRET_POWER, (0, 0, 0)),
+    # Counter, Mirror Coat: 2x the physical / special damage taken this turn
+    # (battle_script.c:4627, :4680); Metal Burst (Kaizo's Bide too): 15 / 10 of the last
+    # damage taken (:7166).
+    89: ("BATTLE_EFFECT_COUNTER", _E.COUNTER, (COUNTER_PHYSICAL, 20, 0)),
+    144: ("BATTLE_EFFECT_MIRROR_COAT", _E.COUNTER, (COUNTER_SPECIAL, 20, 0)),
+    227: ("BATTLE_EFFECT_METAL_BURST", _E.COUNTER, (COUNTER_ANY, 15, 0)),
     212: ("BATTLE_EFFECT_ATK_SPD_UP", _E.DRAGON_DANCE, (0, 0, 0)),
 }
 
