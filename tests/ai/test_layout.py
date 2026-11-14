@@ -10,7 +10,7 @@ import jax.numpy as jnp
 import pytest
 
 from nuzline.ai import commands, policy
-from nuzline.ai.layout import KAIZO, VANILLA, AiLayout, layout_of
+from nuzline.ai.layout import KAIZO, VANILLA, AiLayout, kaizo_layout, layout_of
 from nuzline.ai.policy import ai_policy, ai_refusals
 from nuzline.ai.switching import REFUSED_ACTION
 from nuzline.engine.state import make_state
@@ -35,6 +35,25 @@ def test_layout_of_reads_tables(tables, kaizo_tables):
         jax.jit(lambda t: layout_of(t).water2_ability)(tables)
 
 
+def test_layout_per_flag_set(tables, kaizo_tables):
+    """E1 Ruling R2: the Kaizo layout is the fight's trainer's flag set (``Tables.ai_flags``),
+    refused while unset; vanilla keeps its one set whatever the flags. Each set is its own
+    static layout with its own program-cache key."""
+    from nuzline.data.tables import AI_FLAGS_UNSET
+
+    assert layout_of(kaizo_tables) is kaizo_layout(0b10111) == KAIZO
+    sets = (0x1, 0x5, 0x7, 0x17, 0xD, 0xF, 0x1F, 0x207, 0x20F)
+    for flags in sets:
+        layout = layout_of(kaizo_tables._replace(ai_flags=jnp.int32(flags)))
+        assert layout == KAIZO._replace(flags=flags) and layout.key == f"kaizo-{flags:#x}"
+    assert len({kaizo_layout(f).key for f in sets} | {VANILLA.key}) == len(sets) + 1
+    with pytest.raises(ValueError, match="not set"):
+        layout_of(kaizo_tables._replace(ai_flags=AI_FLAGS_UNSET))
+    with pytest.raises(ValueError, match="transcribes only"):
+        kaizo_layout(0x27)  # PRIORITIZE_EXTREMES, not transcribed yet
+    assert layout_of(tables._replace(ai_flags=jnp.int32(0x17))) is VANILLA
+
+
 def test_layout_values():
     # script.s:78 compares Levitate (26) in vanilla, Dry Skin (87) in Kaizo (overlay14 word
     # 0x022249CC, data/kaizo/rom_diff.toml).
@@ -43,7 +62,7 @@ def test_layout_values():
     # Kaizo transcribes the vanilla-transcribed moves' effects and, from K3c Task 5, those of
     # Kaizo Roark's moves (tests/ai/test_kaizo_policy.py test_roark_moves_and_effects).
     assert frozenset(int(e) for e in commands.MOVE_EFFECTS.values()) < KAIZO.transcribed
-    assert not VANILLA.risky and KAIZO.risky  # Kaizo Roark's ai_flags 23 (Ruling 10)
+    assert (VANILLA.flags, KAIZO.flags) == (0b111, 0b10111)  # Roark's ai_flags 7 and 23
 
 
 def test_is_damaging_excludes_no_calc_effects(kaizo_tables, kaizo_names, kaizo_roark_party):
@@ -156,10 +175,29 @@ def test_traced_tables_without_a_layout_refuse_another_policy(tables, names):
     """Under a trace ``layout_of`` cannot read ``tables``: a caller that passes no layout
     gets the vanilla one, and a game of another policy is refused, not misread."""
     s = trace_a(tables, names)
-    kaizo_like = tables._replace(ai_policy=jnp.asarray(1, tables.ai_policy.dtype))
+    kaizo_like = tables._replace(
+        ai_policy=jnp.asarray(1, tables.ai_policy.dtype), ai_flags=jnp.int32(KAIZO.flags)
+    )
     # Concrete tables resolve their own layout: the Kaizo policy's outcome is per slot.
-    per_slot = outcome()._replace(script_rolls=jnp.zeros((4, KAIZO.slot_sites), jnp.int8))
+    per_slot = outcome()._replace(
+        script_rolls=jnp.full((4, KAIZO.slot_reads), 254, jnp.uint8),
+    )
     assert int(jax.jit(lambda st: ai_policy(kaizo_like, st, per_slot))(s)) == 0
     traced = jax.jit(lambda t: ai_policy(t, s, outcome()))
     assert int(traced(tables)) == 0
     assert int(traced(kaizo_like)) == REFUSED_ACTION
+
+
+def test_program_caches_key_on_the_flag_set():
+    # Two Kaizo flag sets share layout.name; a program cache keyed on it would serve one
+    # set's compiled AI to the other (E1 batch 2a review I1). Keys use layout.key.
+    from pathlib import Path
+
+    src = Path(__file__).resolve().parents[2] / "src" / "nuzline"
+    bad = [
+        f"{p.relative_to(src)}:{i}"
+        for p in src.rglob("*.py")
+        for i, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1)
+        if '"layout": layout.name' in line
+    ]
+    assert not bad, bad

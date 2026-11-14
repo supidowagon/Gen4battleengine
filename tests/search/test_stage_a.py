@@ -225,6 +225,7 @@ _KAIZO_MULTI_DEVICE_SCRIPT = """
 import json, jax
 from dataclasses import astuple
 from nuzline.data.games import GAMES, KAIZO
+from nuzline.ai.layout import fight_tables
 from nuzline.data.tables import load_names, load_tables
 from nuzline.data.trainer import IntermediateData, build_trainer_party, load_trainers
 from nuzline.engine.coverage import start_weather
@@ -235,6 +236,7 @@ assert jax.device_count() == DEVICES, jax.device_count()
 d = GAMES[KAIZO]
 tables, names = load_tables(d.tables_dir), load_names(d.tables_dir)
 roark = next(x for x in load_trainers(d.intermediate_dir) if x.name == "Roark")
+tables = fight_tables(tables, roark)  # his AI flag set (E1 Ruling R2)
 party = list(build_trainer_party(roark, IntermediateData(d.intermediate_dir)))
 player = [party[2], party[5]]  # Roark's own Gible and Cranidos, as the coverage tests use
 state = make_state(

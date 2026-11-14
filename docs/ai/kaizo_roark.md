@@ -22,15 +22,27 @@ The sections keep roark.md's numbers, so a rule can be compared section by secti
 - `FlagTable` (`script.s:18-23`) maps bit 4 to `Risky_Main` (`script.s:6521`).
 - `TrainerAI_MainSingles` runs the flags in bit order (`trainer_ai.c:297-310`): BASIC,
   EVAL_ATTACK, EXPERT, then RISKY.
-- The Kaizo policy runs exactly these four scripts (plan K3c Ruling 10; `policy._flags`,
-  `AiLayout.risky`). Gating RISKY per trainer would need a `BattleState` field.
-- Coverage (`engine/coverage.py`) registers the flags per policy since K3c Task 6:
-  `IMPLEMENTED_AI_FLAGS` is `{0, 1, 2}` for vanilla and `{0, 1, 2, 4}` for Kaizo. A vanilla
-  trainer with RISKY stays refused by that flag. A Kaizo trainer whose `ai_flags` is not
-  exactly `0b10111` is refused by the line "AI flags ... are not exactly BASIC,
-  EVAL_ATTACK, EXPERT and RISKY, which the Kaizo AI policy always runs together (plan K3c
-  Ruling 10)" (`POLICY_AI_FLAGS`; `tests/engine/test_coverage.py
-  test_kaizo_flag_set_must_be_exact`). Kaizo Roark's flag lines are all EXACT.
+- **Per-trainer flag sets (E1 Ruling R2; replaces plan K3c Ruling 10).** `TrainerAI_Init`
+  copies the trainer's `aiMask` (`trainer_ai.c:249`), and `TrainerAI_MainSingles` runs a
+  flag's script only when its bit is set, low bit first, each over all four slots
+  (`:297-308`). The Kaizo policy has one `AiLayout` per flag set (`layout.kaizo_layout`;
+  `AiLayout.flags`, a static jit argument, so a fight traces only its own flags' scripts):
+  `policy._flags` runs the set bits in bit order. The fight's trainer reaches the layout
+  through `Tables.ai_flags`, which the fight's entry points set (`layout.fight_tables`:
+  `cli`, and `check_coverage` for its `ai_refusals`); `layout_of` refuses Kaizo tables whose
+  flags are unset. The search's program caches key on `AiLayout.key` (policy and flag set:
+  `expand.ai_rows`, `leaves`, `stage_a`). Implemented sets: every set of BASIC, EVAL_ATTACK,
+  EXPERT, SETUP_FIRST_TURN, RISKY and WEATHER (`layout.KAIZO_FLAG_BITS`; the last two since
+  E1 batch 2b, 5.5-5.6), among them 0x1, 0x5, 0x7, Roark's 0x17, 0xd, 0xf, 0x1f, 0x207 and
+  0x20f.
+  `KAIZO` is Roark's set and stays bit-identical. Width does not depend on the set: reads are
+  keyed by path order (8.2), so a set's reads cost only the moves that make them.
+- Coverage (`engine/coverage.py`) registers the flags per policy: `IMPLEMENTED_AI_FLAGS` is
+  `{0, 1, 2}` for vanilla and `{0, 1, 2, 3, 4, 9}` for Kaizo. A Kaizo trainer is refused exactly by
+  its unimplemented flags, one "AI_FLAG_..." line each (`tests/engine/test_coverage.py
+  test_kaizo_flag_set_needs_every_flag`). Vanilla keeps its one set: a vanilla trainer
+  without all of BASIC, EVAL_ATTACK and EXPERT is refused (`POLICY_AI_FLAGS`), and one with
+  RISKY by that flag. Kaizo Roark's flag lines are all EXACT.
 
 ## 2. Differences from vanilla
 
@@ -123,7 +135,7 @@ script word changed; the C code only relocated).
   - the 11 Soundproof ids (`script.s:121-131`);
   - Gyro Ball 360 and Trick Room 433 (`script.s:3472-3473`);
   - the switching move ids;
-  - the site table's ids;
+  - the flat layout's site table's ids;
   - Dry Skin 87.
 - A Kaizo-renamed slot on one of these lists fails `load_game`.
 - The id cases of 2.4 are compared by id whatever a game names the slot. They are checked
@@ -396,12 +408,41 @@ roll (`:6530`), **+2**. Of Roark's effects the table lists HALVE_DEFENSE (`:6538
 Selfdestruct) and RAISE_ALL_STATS_HIT (`:6550`, AncientPower). RISKY runs after EXPERT, in
 bit order (`FlagTable`, `script.s:18-30`; `TrainerAI_MainSingles`, `trainer_ai.c:297-310`).
 
-RISKY is part of the Kaizo policy itself (`policy._flags` runs `_risky` when
-`AiLayout.risky`), not only of coverage. So a caller of `ai_refusals` and `ai_scores` alone
-never scores Selfdestruct or AncientPower without the roll (Task 5 review m2;
-`test_risky_is_part_of_the_policy`). `layout.py` checks at import that every transcribed
-effect of the table has the `:6530` site and that its layout runs RISKY; the vanilla
-transcription has none of those effects.
+RISKY is part of the Kaizo policy itself (`policy._flags` runs `_risky` when the layout's
+flag set has bit 4, E1 Ruling R2), not only of coverage. So a caller of `ai_refusals` and
+`ai_scores` alone never scores Selfdestruct or AncientPower without the roll under Roark's set
+(Task 5 review m2; `test_risky_is_part_of_the_policy`), and never adds it under a set without
+RISKY (`test_flag_set_runs_its_scripts`).
+
+### 5.5 SETUP_FIRST_TURN (`SetupFirstTurn_Main`, `script.s:6417-6433`; E1 batch 2b)
+
+Not one of Roark's flags (bit 3; sets 0xd, 0xf, 0x1f, 0x10f, 0x20f of the Roark and Gardenia
+splits). `LoadTurnCount` (`trainer_ai.c:931-935`, `totalTurns`, `BattleState.turn`) not 0
+ends it (`:6421-6422`): it scores only on the battle's first turn. Then `LoadCurrentMoveEffect`
+and `IfLoadedNotInTable SetupFirstTurn_SetupEffects` (`:6425-6426`; the table is
+`:6435-6497`, 61 entries and 59 effects, SP_DEF_UP_2 and CAMOUFLAGE listed twice:
+`commands.SETUP_FIRST_TURN_EFFECTS`). A listed effect takes the 80 roll (`:6429`), **+2** when
+it does not jump (probability 176/256). Of the transcribed effects the table lists DEF_DOWN,
+SET_LIGHT_SCREEN, SPEED_UP_2, DEF_DOWN_2, CURSE and WHIRLPOOL. The roll is one more read on
+the slot's path (8.2); the read bound (8.3) holds under every implemented set
+(`test_slot_reads_fit_every_transcribed_effect` runs them all at once, on the first turn and
+after it).
+
+### 5.6 WEATHER (`Weather_Main`, `script.s:7979-8019`; E1 batch 2b)
+
+Bit 9 (sets 0x207, 0x20f). It too ends unless `LoadTurnCount` is 0 (`:7983-7984`). The four
+`IfCurrentMoveEffectEqualTo` (`:7987-7990`: WEATHER_SUN, _RAIN, _SANDSTORM, _HAIL) send a
+weather move to its weather's label, and **no `GoTo` follows them: every other move falls
+through into `Weather_Sun`** (`:7992`; E1 Ruling R3, transcribed as the game has it). Each
+label loads `LoadCurrentWeather` (`trainer_ai.c:1414-1439`) and ends when it is the label's
+own weather (`:7993-7994` and so on), else goes to `Weather_ScorePlus5` (`:8012-8016`):
+**+5** when the attacker's `LoadIsFirstTurnInBattle` is TRUE (`:2480`; on the first turn the
+lead's `fakeOutTurnNumber` is 0, so always). So on the first turn every non-weather move gets
++5 unless the weather is sun, and a weather move gets +5 unless its weather is already up.
+No roll. The +5 is uniform over the non-weather moves but not a no-op: a later flag's
+`AddToMoveScore` clamps at 0 (`trainer_ai.c:576`). The weather moves themselves are
+unmodelled engine effects (refused by move effect), and a runnable fight's weather is none or
+sandstorm (`coverage.IMPLEMENTED_WEATHER`); the transcription covers all four labels anyway.
 
 ## 6. Where the AI reads the true battle state
 
@@ -524,142 +565,135 @@ out (`nuzline.ai.outcome`; `AiLayout.per_slot_sites`).
 **8.1 Fields.**
 - `sim_roll`: fixed at 100, as roark.md 8.1. Every damage read on the transcribed paths
   passes `USE_MAX_DAMAGE`.
-- `ability_guess`: one scalar for the whole decision (8.4).
-- `script_rolls: int8[MOVES, KAIZO.slot_sites]`. Column k of slot m is the k-th
-  `IfRandomLessThan` site of the slot's move, in script order (flag order BASIC,
-  EVAL_ATTACK, EXPERT, then RISKY, `trainer_ai.c:297-310`; then line order). 1 means the
-  jump is taken.
+- `script_rolls: uint8[MOVES, KAIZO.slot_reads]` (E1 Ruling R4, 8.2). Entry k of slot m is the
+  k-th random read on the slot's scoring path (flag order, `trainer_ai.c:297-310`, then line
+  order), as `RandNext() % 256`: an `IfRandomLessThan N` jumps when it is below N, a guessing
+  `LoadBattlerAbility DEFENDER` takes ability 1 when its low bit is set (`:1195`), else
+  ability 2.
+- `ability_guess`: 0 and unread (the flat layout's scalar guess; every per-slot guess is a
+  read of `script_rolls`).
 - `tiebreak`: `RandNext % 12`, as roark.md 8.4.
 - `switch_stop`: as roark.md 8.5, over `KAIZO.switch_sites` = 44 sites, every switch draw
   of a party of six (section 11); 44 means no site stops.
 
-**8.2 The site table, keyed by battle effect.** A move reaches a site through
-`IfCurrentMoveEffectEqualTo` (`trainer_ai.c:1441`), so the table is keyed by the move's
-effect (`outcome.EFFECT_SITE_LINES`, carried as `KAIZO.effect_sites`), not its id. Each
-site is named by its `script.s` line, and `outcome.SITE_N` gives its N:
+**8.2 Reads keyed by order on the path (E1 Ruling R4; replaces K3c's per-effect site table and
+batch 1's guess columns).** Every random read of a slot's scoring is one
+`BattleSystem_RandNext`:
+- `IfRandomLessThan N` (`AICmd_IfRandomLessThan`, `trainer_ai.c:528-538`): `RandNext() % 256 <
+  N`, probability N/256;
+- a guessing `LoadBattlerAbility DEFENDER` (8.4): `RandNext() & 1` (`:1195`), probability 1/2.
 
-| Effect | Sites (line: N) |
-|---|---|
-| HIT (0) | `:6383`: 80 |
-| RECOVER_HALF_DAMAGE_DEALT (3) | `:6383`: 80, `:1835`: 50 |
-| HALVE_DEFENSE (7) | `:6374`: 51, `:6383`: 80, `:1859`: 128, `:1865`: 50, `:1870`: 128, `:1875`: 50, `:1880`: 50, `:6530`: 128 |
-| DEF_DOWN (19) | `:6383`: 80, `:2328`: 50 |
-| FLINCH_HIT (31) | `:6383`: 80 |
-| RESTORE_HALF_HP (32) | `:6383`: 80, `:2665`: 30, `:2671`: 100, `:2674`: 20 |
-| STATUS_BADLY_POISON (33) | `:6383`: 80, `:2690`: 50, `:2695`: 50, `:2704`: 60 |
-| SET_LIGHT_SCREEN (35) | `:6383`: 80, `:2718`: 128, `:2724`: 64 |
-| SPEED_UP_2 (52) | `:6383`: 80, `:2075`: 70 |
-| DEF_DOWN_2 (59) | `:6383`: 80, `:2328`: 50 |
-| CURSE (109) | `:6383`: 80, `:3477`: 32, `:3481`: 128, `:3486`: 128, `:3491`: 128 |
-| HIT_BEFORE_SWITCH (128) | `:6383`: 80, `:3726`: 128, `:3731`: 128 |
-| RAISE_ALL_STATS_HIT (140) | `:6383`: 80, `:6530`: 128 |
-| STEALTH_ROCK (266) | `:6383`: 80, `:6274`: 128 |
-| the other effects of section 5 (2, 4, 6, 69, 72, 76, 186, 261, 269, 275) | `:6383`: 80 |
+The k-th read on slot m's path takes `script_rolls[m, k]` (`commands._slot_read`, counting in
+`AiContext.reads`; a read off the path, or of an empty slot, draws nothing), and its
+probability comes from the read itself (`AiContext.weight` multiplies it in). This is exact:
+each read is a fresh independent draw, which read is the k-th is decided by the draws before
+it on the same path, and `TrainerAI_EvalMoves` scores slot by slot (`:483-525`), so no read is
+shared between slots. The reads are named by their `script.s` line (`outcome.SITE_N`, checked
+against the script by `test_site_lines_are_the_scripts_rolls`, and at every call of
+`commands.if_random_less_than`), but no table says which effect reaches which line: the
+script itself does. So a forgotten site cannot be read as never jumping, and a flag set's
+reads cost nothing to a move that does not make them.
 
-- `:6383` is `EvalAttack_TryScorePlus2`. It is reached by any move whose
-  `IfMoveEffectivenessEquals` is QUADRUPLE (`script.s:6379`) and that neither kills
-  (`:6358`) nor is out-damaged (`:6361-6362`), whatever its effect, so every effect has it. The vanilla table left it out of the Normal-type moves, but a table keyed
-  by effect cannot know the type. An extra site that is never reached only costs width.
-- The Expert sites follow `Expert_Main`'s dispatch (`script.s:1623-1811`): DEF_DOWN `:1642`
-  and DEF_DOWN_2 `:1671` go to `Expert_StatusDefenseDown` (`:2318`, roll `:2328`);
-  HIT_BEFORE_SWITCH `:1706` to `Expert_Pursuit` (`:3706`, rolls `:3726`, `:3731`);
-  STEALTH_ROCK `:1805` to `Expert_StealthRock` (`:6268`, roll `:6274`); the nine labels of
-  5.3 have the rolls listed there. REMOVE_SCREENS and RECOIL_HALF go to labels without a
-  roll. The effects without an entry end at `:1811`.
-- `:6530` is `Risky_Main`'s roll, for the effects of `Risky_RiskyEffects` (5.4).
-- `:2671` (`Expert_Recovery_CheckForSnatch`) is never reached in Kaizo data (5.3); it is a
-  column that is never read.
-- `KAIZO.transcribed` is exactly the table's effects, so the effect check that refuses an
-  untranscribed move also guarantees the move has its row.
-- `KAIZO.slot_sites` is 8, the most sites one Kaizo Roark move reaches: Selfdestruct
-  (HALVE_DEFENSE), with EvalAttack `:6374` and `:6383`, Expert_Explosion `:1859`, `:1865`,
-  `:1870`, `:1875` and `:1880`, and Risky `:6530`.
+- `KAIZO.transcribed` is `outcome.KAIZO_TRANSCRIBED` (Kaizo Roark's 24 effects); its comments
+  name each effect's Expert label and rolls (5.3).
+- **The bound.** `KAIZO.slot_reads` = 7 (`outcome.KAIZO_SLOT_READS`), the most random reads
+  one path makes, found from the data (`tests/ai/test_kaizo_outcome.py
+  test_slot_reads_fit_every_transcribed_effect`: every transcribed Kaizo move in slot 0 over
+  random players, HP, stages and turn, under every implemented flag at once, the loose
+  oracle's longest path). Selfdestruct reaches it
+  against a guessed two-ability player with evasion +4, Bonsly at 30 % HP or less: `:117` and
+  `:304` (guesses), `:6374`, `:1859`, `:1870`, `:1875`, `:6530`. Next come Toxic (5: three
+  guesses, `:2690`, `:2695`), and under SETUP_FIRST_TURN on the first turn Curse and Light Screen (5,
+with SETUP's `:6429`; 5.5). A path that makes more is a path refusal (8.3), a
+  layout bound, never a reused draw.
+- **Enumeration.** `policy` enumerates the reads as bit patterns: bit 0 / 1 of read k stands
+  for the draw `outcome.READ_DRAWS` = (254, 1), which split every read (254 is below no
+  `SITE_N` N and even, 1 below every one and odd). A pattern whose bits past a slot's reads
+  are not all 0 repeats a shorter pattern and gets weight 0 (`policy._canonical`), so each
+  path is counted once.
 
 **8.3 The exact distribution, factored per slot** (`policy._slot_move_distribution`).
 - `TrainerAI_EvalMoves` scores the move slots one by one (`trainer_ai.c:483-525`).
-  Slot m's score reads only its own script rolls and the guess. `FlagMoveDamageScore`
-  compares the damage estimates of all four moves, but those are deterministic
-  (`trainer_ai.c:1012-1062`), not draws.
-- So, for each guess: `_scores` runs once per local bit pattern p (2^8 = 256 patterns,
-  the same p in every slot's columns), and slot m's score with its bits p is read off.
-  Each slot's histogram over score values 0-255 weights p by its probability in that slot,
-  `prod_k` of N_k/256 where bit k is 1, else 1 - N_k/256.
+  Slot m's score reads only its own draws. `FlagMoveDamageScore` compares the damage
+  estimates of all four moves, but those are deterministic (`trainer_ai.c:1012-1062`), not
+  draws.
+- So the scoring runs once per local bit pattern p (2^7 = 128 patterns, the same p in every
+  slot), and slot m's score and path weight with its reads p are read off. Each slot's
+  histogram over score values 0-255 adds the path weight of p, the product of the
+  probabilities of the reads the path made (0 for a non-canonical pattern, 8.2).
 - The pick (`trainer_ai.c:315-338`): slot m with value v is picked when every other
   candidate ties at v or is below it. For each subset T of the other candidates that ties,
   m's share is `P(RandNext % (|T| + 1) == m's place in the tied list)`.
-- The two guesses are averaged. The switch comes first and the item next, as
-  `_distribution` does (roark.md 2). Struggle and the locked slot are unchanged.
-- **Path refusals (K3c final review).** Two things the static refusals (`_refused`) cannot
+- The switch comes first and the item next, as `_distribution` does (roark.md 2).
+  Struggle and the locked slot are unchanged.
+- **Path refusals (K3c final review; E1).** Two things the static refusals (`_refused`) cannot
   see are refused on the scoring path, so the per-slot layout never ranks a score it
   cannot vouch for:
   - `moveScore` is `s8` (`include/battle/ai_context.h:14`), and `AddToMoveScore` adds then
     clamps a negative result to 0 (`trainer_ai.c:581-585`), so a sum past 127 wraps
     negative and ends at 0. `commands.add_to_move_score` models the wrap; a score outside
     0-127 makes the distribution NaN. Kaizo Roark's largest score is about 108.
-  - An `IfRandomLessThan` reached on a move's path whose line has no column in that
-    effect's site row (8.2) would read an out-of-range index, an N/256 jump taken as never.
-    `commands.if_random_less_than` records it (`AiContext.missing_site`), and `_scores`
-    gives -1, so the distribution is NaN and `_policy` refuses. The flat (vanilla) layout
-    is not checked: its unused column is on no path, and vanilla stays bit-identical.
+  - A read past the slot's `slot_reads` draws (8.2) is recorded by `commands._slot_read`
+    (`AiContext.missing_read`), and `_scores` gives -1, so the distribution is NaN and
+    `_policy` refuses.
   - On a concrete state `ai_scores`, `ai_policy` and `ai_action_distribution` raise
-    `UnsupportedAi` for either. `policy.ai_path_refusals` names a missing site's slot, move
-    and `script.s` line (else `policy._PATH_REFUSAL`), and Stage A's `refusal_reason` and
-    Stage B's root refusal use it after `ai_refusals`. A caller's `SWITCH_REFUSED` stop
-    still gives `REFUSED_ACTION`, not this error. Tests: `tests/ai/test_kaizo_commands.py
+    `UnsupportedAi` for either. `policy.ai_path_refusals` names the slot and move past the
+    bound (else `policy._PATH_REFUSAL`), and Stage A's `refusal_reason` and Stage B's root
+    refusal use it after `ai_refusals`. A caller's `SWITCH_REFUSED` stop still gives
+    `REFUSED_ACTION`, not this error. Tests: `tests/ai/test_kaizo_commands.py
     test_add_to_move_score_wraps_the_s8`, `test_a_score_past_the_s8_is_refused`;
-    `tests/ai/test_kaizo_policy.py test_a_reached_roll_without_a_site_column_is_refused`.
+    `tests/ai/test_kaizo_outcome.py test_a_read_past_the_bound_is_refused`.
 
-**8.4 The one-scalar guess (plan K3c Ruling 6).** The decomp draws a fresh coin at every
-`LoadBattlerAbility DEFENDER` (`trainer_ai.c:1191-1198`). One scalar is exact when at most
-one such read in a decision can change a score. On the transcribed paths the reads are
-`script.s:71` (`Basic_CheckForImmunity`), `:117` (`Basic_CheckSoundproof`), `:470`
-(`Basic_CheckClearBodyEffect`), and from Task 5 `:304` (`Basic_CheckCannotExplode`, Damp) and
-`:529` and `:539` (`Basic_CheckCannotPoison`: Immunity, Magic Guard, Poison Heal, Leaf Guard in
-sun; Hydration in rain). Task 6 adds no `LoadBattlerAbility DEFENDER` read
-(`Expert_RecoilMove` loads the attacker's ability, `:6296`). The two Toxic reads are two coin
-flips in the decomp and one guess here. Both can change Toxic's score only for a species with Hydration and one of the `:529`
-abilities, and no Kaizo species has that pair (`species.json`;
-`tests/ai/test_kaizo_policy.py test_no_species_splits_the_toxic_reads`, which checks it in
-any weather, where the data test below uses the state's). `tests/ai/test_kaizo_outcome.py
-test_one_scalar_guess_is_exact_for_roark` checks this as data: for every species with two
-abilities, against each of Roark's Pokemon (Kaizo's six, vanilla's three), the loose
-oracle (8.6) finds at most one read whose coin changes a score, in four states per species
-(permanent sandstorm, clear, sun and rain, with the AI's HP at 100/69/49/29% and the player's
-from full to 1 HP; K3c Task 8). Its docstring cites why no HP or other state can add a
-sensitive read. It re-runs with every read a later task adds.
-- This holds for Roark's movesets, not for every moveset. A Pokemon with both Leer and
-  Screech against Tentacool (Kaizo abilities 44 / Clear Body) has two `:470` reads that
-  each change a score; the scalar moves them together and the decomp does not. Such a
-  moveset is not on Roark's team. A later trainer's must pass the same data test.
-- Coverage enforces this (K3c final review I-4): `engine/coverage.ONE_SCALAR_GUESS_CHECKED`
-  lists the Kaizo trainer ids whose data test has run, today Roark's (246) only. Any other
-  Kaizo trainer's AI is refused, not approximated, by the line "the one-scalar ability
-  guess is not checked against this trainer's movesets (plan K3c Ruling 6; ...)" (`AI
-  ability guess`; `tests/engine/test_coverage.py
-  test_kaizo_ai_needs_the_ruling_6_data_test`). The gate is Kaizo-only, as the final
-  review scoped it; vanilla's one scalar keeps roark.md 8.2's argument for vanilla Roark. A
-  later split adds its trainer's id together with its data test.
+**8.4 The ability guesses (E1 Ruling R1; replaces plan K3c Ruling 6).**
+`AICmd_LoadBattlerAbility` (`trainer_ai.c:1170-1209`) draws a fresh coin,
+`BattleSystem_RandNext(battleSys) & 1` (`:1194-1198`), at every `LoadBattlerAbility DEFENDER`
+read of a decision when the ability is not suppressed (`:1177`), the AI does not know it
+(`:1181`), it is not Shadow Tag, Magnet Pull or Arena Trap (`:1185-1188`), and both species
+abilities are nonzero (`:1191-1194`). Whether a read guesses is therefore the same for every
+read of the decision (`commands.ability_guessed`); which reads are made depends on the path.
+- **The rule.** Each guessing read is the slot's next random read (8.2): a fair coin,
+  independent of every other, ability 1 (the species' slot 0) when the draw's low bit is set.
+- **The reads.** On the transcribed paths they are all in BASIC: `script.s:71`
+  (`Basic_CheckForImmunity`), `:117` (`Basic_CheckSoundproof`), `:470`
+  (`Basic_CheckClearBodyEffect`, DEF_DOWN and DEF_DOWN_2 only: `:145`, `:172`), `:304`
+  (`Basic_CheckCannotExplode`, Damp), and `:529` and `:539` (`Basic_CheckCannotPoison`:
+  Immunity, Magic Guard, Poison Heal, Leaf Guard in sun; Hydration in rain). EVAL_ATTACK,
+  EXPERT and RISKY load no defender ability on them (`Expert_RecoilMove` loads the
+  attacker's, `:6296`).
+- **Examples one scalar guess got wrong.** Leer and Screech in two slots against Tentacool
+  (Kaizo abilities 44 / Clear Body): each `:470` read changes its slot's score, and the slots
+  guess apart (5/24 each, where one scalar gave 1/6; `test_each_slot_guesses_on_its_own`).
+  Screech against a species with Soundproof and Clear Body (made up): the `:117` and `:470`
+  reads of one slot are two coins, and Screech keeps 100 one time in four
+  (`test_two_guesses_in_one_slot`). Both equal the loose oracle (8.6).
+- The flat (vanilla) layout keeps its one scalar (roark.md 8.2), bit-identical.
+- Coverage has no ability-guess gate: the rule is the decomp's for every trainer.
 
-**8.5 Width** (plan K3c Ruling 12). `policy.ai_width` counts the combinations the factored
-distribution merges: the switch stops plus, per guess, `sum_slots 2^(sites of the slot)`.
-For Kaizo Roark's six it is at most 45 + 2 x 4 x 2^8 = 2093 for any state (checked at
-import, `policy._check_width`), against `WIDTH_CAP` 131072. `policy.ai_flat_width` reports
-the flat product, `2 x 2^(sum of sites) x 12 x 45`, which is not used. Section 14 has the
-measured numbers.
+**8.5 Width** (plan K3c Ruling 12; E1 Rulings R1, R4). `policy.ai_width` counts the
+combinations the factored distribution merges: the switch stops plus each slot's distinct
+scoring paths (`policy._path_counts`: the canonical patterns), which
+`tests/ai/test_kaizo_outcome.py test_kaizo_width_under_cap` and the Roark audit check against
+the loose oracle's own count of paths. It is at most 45 + 4 x 2^7 = 557 for any state (checked
+at import, `policy._check_width`), against `WIDTH_CAP` 131072; the program always evaluates
+2^7 = 128 scorings. `policy.ai_flat_width` reports the flat product, `prod_slots (paths) x 12 x
+45`, which is not used. Section 14 has the measured numbers.
 
 **8.6 The loose oracle** (tests only; `policy.ai_action_distribution_loose`). Every
 `RandNext` read of the scoring is its own independent draw, as in the decomp: each
 `IfRandomLessThan` with its own N (the literal at its call), each `LoadBattlerAbility
-DEFENDER` its own coin, the tie-break `RandNext % n` over a `u16`. It reads neither the site
-table nor the scalar guess. It finds every read on every path by enumerating the reads
-found so far until no new one appears, then enumerates the slots jointly when they have at
-most 18 reads in all, and per slot otherwise (exact in loose, where no two slots share a
-draw). The gates of the exact layout are each checked against it, with a test that fails
-when the gate is removed (`tests/ai/test_kaizo_outcome.py` docstring):
-- per-slot factoring and the tie subsets, against a joint enumeration of every slot's bits
-  and the 12 tiebreaks;
-- the path-only sites (a move has only its effect's sites);
-- the one-scalar guess (8.4).
+DEFENDER` its own coin, the tie-break `RandNext % n` over a `u16`. Its reads are indexed in the
+static order of the straight-line scripts, not by order on the path, and are not bounded. It
+finds every read on every path by enumerating the reads found so far until no new one
+appears, then enumerates the slots jointly when they have at most 18 reads in all, and per
+slot otherwise (exact in loose, where no two slots share a draw). The gates of the exact
+layout are each checked against it (`tests/ai/test_kaizo_outcome.py` docstring):
+- per-slot factoring and the tie subsets, against a joint enumeration of every slot's reads
+  and the 12 tiebreaks (`test_factored_equals_joint_bruteforce`);
+- the read order with each read's own probability (8.2, 8.4): `test_exact_equals_loose` on
+  random states, `test_each_slot_guesses_on_its_own`, `test_two_guesses_in_one_slot`, the
+  traced states of section 13, two Pokemon of other Roark-split trainers, and the Roark audit
+  (section 14); and the count of distinct paths per slot (8.5);
+- the read bound (8.2): `test_slot_reads_fit_every_transcribed_effect`.
 
 The fourth gate is the dropped speed-tie draw (plan K3c Ruling 3; 7.1). At equal speed
 `BattleSystem_CompareBattlerSpeed` returns FASTER or TIE, never SLOWER
@@ -753,15 +787,14 @@ so a replay that tracks the RNG must count them.
      - `:539` (Toxic), unless the type tests, the `:529` guess being Immunity, Magic Guard or
        Poison Heal (`:530-532`), or Leaf Guard in sun (`:534-536`) ended the slot. Whether
        `:539` is drawn therefore depends on the `:529` coin.
-   The exact layout has one guess for all of them (8.4): *merged* in the sense that the
-   decomp's two to five coin flips of a decision are one field, the RNG count is the number
-   of reads reached.
+   The exact layout gives each guessing read its own draw, slot by slot in path order
+   (8.2), so the RNG count of these steps is the number of guessing reads reached.
 5. **EVAL_ATTACK**, slots 0-3: `:6374` (Selfdestruct, 51), then `:6383` (80) only for a
    QUADRUPLE move that neither kills (`:6358`) nor is out-damaged (`:6361-6362`), as
    reached (5.2). Selfdestruct never kills and never takes the -1 (5.2 items 1-2), so it
    always reaches `:6374`.
-6. **EXPERT**, slots 0-3: the label's `IfRandomLessThan` sites in line order of the path taken
-   (5.3; the site table, 8.2), and, where the label's `IfSpeedCompareEqualTo` (`:1864`,
+6. **EXPERT**, slots 0-3: the label's `IfRandomLessThan` reads in line order of the path taken
+   (5.3, 8.2), and, where the label's `IfSpeedCompareEqualTo` (`:1864`,
    `:2070`, `:2650`) meets equal speeds in a branch that draws, *merged:* the tie's
    `RandNext() & 1` (`battle_lib.c:1405`, `:1415`, `:1425`, `:1437`, `:1445`; Ruling 3, 7.1).
    The compare comes before the label's next roll: Explosion `:1864` before `:1865`,
@@ -787,7 +820,7 @@ Kaizo Roark's paths read from them:
   HIT_BEFORE_SWITCH.
 - **Ability.** Every `LoadBattlerAbility DEFENDER` resolves as roark.md 9.2: suppressed, then
   known (the true ability), then Shadow Tag, Magnet Pull or Arena Trap (true), then the guess
-  (`trainer_ai.c:1170-1209`). The reads on Roark's paths and the one-scalar guess are 8.4.
+  (`trainer_ai.c:1170-1209`). The reads on Roark's paths and their draws are 8.4.
 - **Not knowledge.** `IfMoveEffectKnown AI_BATTLER_ATTACKER` and `IfMoveKnown ATTACKER` read
   the AI's own true moves (`trainer_ai.c:1750-1760`), and `LoadDefenderLastUsedMoveClass`
   reads the battle's `movePrevByBattler`, not the AI's records (section 6, 7.4).
@@ -922,8 +955,10 @@ never uses one, and `ai_refusals` has no item line.
   (Task 6) after all four flags, BASIC, EVAL_ATTACK, EXPERT and RISKY. Both start from 100
   (`TrainerAI_Init`, `trainer_ai.c:223`), with refusals not applied; an empty slot scores 0
   (`trainer_ai.c:499-501`).
-- Rolls are named by line: "`:6374` jumps" sets that site's bit; every other bit is 0 (the
-  jump is not taken). `g` is the ability guess (0 or 1).
+- Rolls are named by line: "`:6374` jumps" makes that read's draw a jump; every other roll
+  does not jump. `g` is the ability guess (0 or 1), taken by every guessing read. The tests
+  place each at its order on the path (8.2) with the loose oracle's static read list
+  (`tests/ai/test_kaizo_policy.py _outcome`).
 - Each test first asserts its inputs: the effectiveness class (`IfMoveEffectivenessEquals`,
   `trainer_ai.c:1311-1340`; type chart `battle_lib.c:2399-2515`, a second type counted only
   when it differs, `:2634-2635`), which slot's damage estimate is highest, and who dies.
@@ -1159,7 +1194,30 @@ with Reflect on the player's side. At equal speed (`test_exact_equals_loose_at_e
 E1a with the player at Speed 12 (`:1864`), E6a at 28 (`:2070`) and E2c at 15 (`:2650`), each
 with the loose tie read on the slot's path; and E1e (Quick Claw), with no tie read.
 
-## 14. Width and cost, measured (K3c Tasks 3, 6, 7 and 8)
+## 14. Width and cost, measured (K3c Tasks 3, 6, 7 and 8; E1 batches 1 and 2a)
+
+### E1 batch 2a: reads keyed by order on the path (8.2)
+
+- `ai_width` is 45 + each slot's distinct scoring paths (8.5), checked equal to the loose
+  oracle's count on all 144 audit decisions; the bound for any state is 45 + 4 x 2^7 = 557.
+- Same state and script as batch 1 (`_scratch/e1/b2a/measure.py`): `_policy` 17448 -> 17755
+  jaxpr equations, compile 5.9 -> 5.7 s, one call 0.23 -> 0.18 ms; `_distribution` 19030 ->
+  19528 equations, compile 6.6 -> 6.4 s, one call 1.80 -> 0.37 ms (2^7 = 128 scorings instead
+  of 2^11 = 2048). Single runs on a shared machine (about +-0.5 s compile).
+
+### E1 batch 1: per-slot guess columns (8.4)
+
+- `ai_width` is now 45 + `sum_slots 2^(sites + guess columns)`: per Roark active, 45 +
+  8 x S when the AI guesses the candidate's ability and 45 + S when it does not, with S =
+  `sum_slots 2^(sites)` = Bonsly 264, Lileep 26, Gible 8, Corsola 28, Shuckle 52, Cranidos
+  10 (`tests/kaizo/test_roark_ai_audit.py SITE_SUMS`). The largest is Bonsly's 2157; the
+  bound for any state is 8237 (8.5), against `WIDTH_CAP` 131072. The audit still finds
+  exact == loose on all 144 decisions of both pools.
+- One Kaizo Roark state (Gible against the six), warm, 20-CPU machine, measured before and
+  after (`measure.py` in the batch scratch): `_policy` 16976 -> 17448 jaxpr equations
+  (+2.8%), compile 5.2 -> 5.9 s, one call 0.22 -> 0.23 ms; `_distribution` 18531 -> 19030
+  equations (+2.7%), compile 5.7 -> 6.6 s, one call 0.58 -> 1.80 ms (2^11 = 2048 scorings
+  instead of 2 x 2^8 = 512).
 
 ### Final, at K3c close (Task 8)
 
@@ -1181,7 +1239,7 @@ Roark's six as the active at turn 0; 72 decisions per save, 12 candidates x 6 ac
 
 - The values are the same for every candidate and for both saves (`kaizo_save_pre_roark`,
   `kaizo_save_probe`); the test pins them (`WIDTHS`).
-- No decision is refused. The maximum is 573; the bound for any state is 2093 (8.5);
+- No decision is refused. The maximum is 573; the bound for any state was 2093 (8.5 before E1);
   `WIDTH_CAP` is 131072.
 - Every decision has at most 12 loose reads, so all 144 are checked exact against the
   joint loose enumeration (at most 2^18), each slot's score distribution too. That check

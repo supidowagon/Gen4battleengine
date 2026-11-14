@@ -153,7 +153,7 @@ def _play_rows(tables, state, player: Player, params, keys, line_of, max_turns: 
                 "act": player.act.__qualname__,
                 "replace": player.replace.__qualname__,
                 "max_turns": max_turns,
-                "layout": layout.name,
+                "layout": layout.key,
             },
             version=code_version(),
         )
