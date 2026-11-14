@@ -29,7 +29,8 @@ The fields:
 * ``max_script_rolls``: the flat ``AiOutcome.script_rolls`` width (vanilla).
 * ``slot_reads``: the draws of one move slot (per-slot layouts): the most random reads
   (``IfRandomLessThan`` and guessing ``LoadBattlerAbility DEFENDER``) one move's scoring path
-  makes, per flag set (``outcome.kaizo_slot_reads``, E1 Ruling R5). A path that makes more is refused
+  makes for the fight's moves under its flags (``fight_slot_reads``, E1 Ruling R6). A path that
+  makes more is refused
   (``AiContext.missing_read``). 0 for the flat layout.
 * ``switch_sites``: the voluntary-switch draw sites ``AiOutcome.switch_stop`` encodes:
   ``switching.SWITCH_SITES`` (9) for vanilla Roark's three Pokemon,
@@ -64,20 +65,28 @@ from nuzline.ai.outcome import (
     KAIZO_SLOT_READS,
     KAIZO_TRANSCRIBED,
     MAX_SCRIPT_ROLLS,
-    kaizo_slot_reads,
 )
+from nuzline.ai.read_bounds import READ_BOUND_BITS, READ_BOUNDS
 from nuzline.ai.switching import KAIZO_SWITCH_SITES, SWITCH_SITES
 from nuzline.data.game_constants import AI_POLICIES
-from nuzline.data.tables import AI_FLAGS_UNSET, Tables
+from nuzline.data.tables import (
+    AI_FLAGS_UNSET,
+    AI_MOVE_READ_COLUMNS,
+    AI_MOVE_READ_ROWS,
+    Tables,
+)
+from nuzline.engine.enumerate import WIDTH_CAP
 
 __all__ = [
     "KAIZO",
     "KAIZO_FLAG_BITS",
     "VANILLA",
     "AiLayout",
+    "fight_slot_reads",
     "fight_tables",
     "kaizo_layout",
     "layout_of",
+    "move_read_rows",
 ]
 
 # AI flag bits (generated/ai_flags.txt, line n + 2 is bit n; FlagTable, script.s:18-30).
@@ -88,6 +97,7 @@ PRIORITIZE_EXTREMES, CHECK_HP, WEATHER = 5, 8, 9
 KAIZO_FLAG_BITS = frozenset(
     {BASIC, EVAL_ATTACK, EXPERT, SETUP_FIRST_TURN, RISKY, PRIORITIZE_EXTREMES, CHECK_HP, WEATHER}
 )
+assert set(READ_BOUND_BITS) == KAIZO_FLAG_BITS and len(READ_BOUND_BITS) == AI_MOVE_READ_COLUMNS
 
 
 class AiLayout(NamedTuple):
@@ -107,7 +117,10 @@ class AiLayout(NamedTuple):
 
     @property
     def key(self) -> str:
-        """The layout's name in a program cache key: the policy and the flag set."""
+        """The layout's name in a program cache key: the policy, the flag set and, for a
+        per-slot layout, the read bound (its draws' shape)."""
+        if self.per_slot_sites:
+            return f"{self.name}-{self.flags:#x}-r{self.slot_reads}"
         return f"{self.name}-{self.flags:#x}"
 
 
@@ -146,35 +159,86 @@ LAYOUTS = (VANILLA, KAIZO)  # by Tables.ai_policy (KAIZO: Roark's flag set)
 assert tuple(layout.name for layout in LAYOUTS) == AI_POLICIES
 
 
-def kaizo_layout(flags: int) -> AiLayout:
-    """The Kaizo layout that runs the trainer AI flags ``flags`` (E1 Ruling R2): ``KAIZO`` with
-    its flag set replaced. ``ValueError`` for a set with a bit outside ``KAIZO_FLAG_BITS``."""
-    return _with_flags(KAIZO, int(flags))
+def kaizo_layout(flags: int, slot_reads: int) -> AiLayout:
+    """The Kaizo layout that runs the trainer AI flags ``flags`` (E1 Ruling R2) with the read
+    bound ``slot_reads`` (E1 Ruling R6; ``fight_slot_reads``): ``KAIZO`` with both replaced.
+    ``ValueError`` for a set with a bit outside ``KAIZO_FLAG_BITS``, or a bound whose scoring
+    width (``switch_sites + 1 + 4 * 2**slot_reads``, ``policy.ai_width``) passes
+    ``WIDTH_CAP``."""
+    return _with(KAIZO, int(flags), int(slot_reads))
 
 
 @cache
-def _with_flags(layout: AiLayout, flags: int) -> AiLayout:
-    """``layout`` (a per-slot policy's) running the flag set ``flags`` (``kaizo_layout``)."""
+def _with(layout: AiLayout, flags: int, slot_reads: int) -> AiLayout:
+    """``layout`` (a per-slot policy's) running ``flags`` with ``slot_reads`` reads a slot."""
     bits = {b for b in range(max(flags.bit_length(), 1)) if flags >> b & 1}
     if flags < 0 or bits - KAIZO_FLAG_BITS:
         raise ValueError(
             f"AI flags {flags:#x}: the Kaizo policy transcribes only the flag bits "
             f"{sorted(KAIZO_FLAG_BITS)} (engine/coverage.py refuses the trainer)"
         )
-    if flags == layout.flags:
+    if layout.switch_sites + 1 + 4 * 2**slot_reads > WIDTH_CAP:
+        raise ValueError(
+            f"AI read bound {slot_reads}: {4 * 2**slot_reads} scorings per decision pass "
+            f"WIDTH_CAP {WIDTH_CAP} (E1 Ruling R6)"
+        )
+    if (flags, slot_reads) == (layout.flags, layout.slot_reads):
         return layout
-    return layout._replace(flags=flags, slot_reads=kaizo_slot_reads(flags))
+    return layout._replace(flags=flags, slot_reads=slot_reads)
+
+
+def move_read_rows(tables: Tables, moves) -> np.ndarray:
+    """``int8[24, 8]``: per move of ``moves`` (move ids, 0 for none; at most 24), the most
+    random reads each transcribed flag script makes on its path (``read_bounds.READ_BOUNDS``,
+    by its battle effect, whether it is damaging, and whether its type can be quadruple
+    effective; E1 Ruling R6). A move whose effect is not transcribed is refused
+    (``policy._refused``), and its row is 0. ``Tables.ai_move_reads`` holds them for a fight."""
+    effect = np.asarray(tables.move_ai_effect)
+    power = np.asarray(tables.move_power)
+    move_type = np.asarray(tables.move_type)
+    chart = np.asarray(tables.type_chart)
+    from nuzline.ai.commands import NO_DAMAGE_CALC_EFFECTS
+
+    rows = np.zeros((AI_MOVE_READ_ROWS, AI_MOVE_READ_COLUMNS), np.int8)
+    moves = [int(m) for m in np.asarray(moves).ravel() if int(m) > 0]
+    if len(moves) > AI_MOVE_READ_ROWS:
+        raise ValueError(f"{len(moves)} opponent moves: more than {AI_MOVE_READ_ROWS}")
+    for i, move in enumerate(moves):
+        e = int(effect[move])
+        damaging = bool(power[move] > 1) and e not in NO_DAMAGE_CALC_EFFECTS
+        # FlagMoveDamageScore's test (trainer_ai.c:1035-1036); QUADRUPLE needs two distinct
+        # defender types each taking the move super effectively (battle_lib.c:2611-2646).
+        can_quad = int((chart[int(move_type[move])] == 20).sum()) >= 2
+        reads = READ_BOUNDS.get((e, damaging, can_quad))
+        if reads is not None:
+            rows[i] = reads
+    return rows
+
+
+def fight_slot_reads(rows, flags: int) -> int:
+    """The read bound of a fight (E1 Ruling R6): the most, over its opponents' moves
+    (``move_read_rows``), of the reads the flag scripts of ``flags`` make on one path; at
+    least 1."""
+    rows = np.asarray(rows, np.int32)
+    if (rows < 0).any():
+        raise ValueError(
+            "the fight's opponent moves are not set on the tables: ai.layout.fight_tables "
+            "(E1 Ruling R6)"
+        )
+    columns = [i for i, bit in enumerate(READ_BOUND_BITS) if flags >> bit & 1]
+    return max(1, int(rows[:, columns].sum(axis=1).max()))
 
 
 def layout_of(tables: Tables) -> AiLayout:
     """The ``AiLayout`` of ``tables``' game (``tables.ai_policy``) and, for Kaizo, of the
-    fight's trainer AI flags (``tables.ai_flags``, ``kaizo_layout``; ``ValueError`` while they
-    are ``AI_FLAGS_UNSET``: the fight's entry point sets them,
-    ``tables._replace(ai_flags=trainer.ai_flags)``). Concrete tables only: under a trace
-    (jit, vmap) the policy is not known, and this raises ``TypeError`` naming the caller,
-    which must resolve the layout before tracing and pass it down."""
-    if isinstance(tables.ai_policy, jax.core.Tracer) or isinstance(
-        tables.ai_flags, jax.core.Tracer
+    fight: its trainer AI flags (``tables.ai_flags``) and the read bound of its opponents'
+    moves (``tables.ai_move_reads``, ``fight_slot_reads``). ``ValueError`` while they are
+    unset: the fight's entry point sets them (``fight_tables``). Concrete tables only: under a
+    trace (jit, vmap) the policy is not known, and this raises ``TypeError`` naming the
+    caller, which must resolve the layout before tracing and pass it as a static argument."""
+    if any(
+        isinstance(x, jax.core.Tracer)
+        for x in (tables.ai_policy, tables.ai_flags, tables.ai_move_reads)
     ):
         caller = sys._getframe(1).f_code.co_qualname
         raise TypeError(
@@ -187,14 +251,20 @@ def layout_of(tables: Tables) -> AiLayout:
     flags = int(tables.ai_flags)
     if flags == int(AI_FLAGS_UNSET):
         raise ValueError(
-            "the fight's trainer AI flags are not set on the tables: "
-            "tables._replace(ai_flags=trainer.ai_flags) (E1 Ruling R2)"
+            "the fight's trainer AI flags are not set on the tables: ai.layout.fight_tables "
+            "(E1 Ruling R2)"
         )
-    return _with_flags(layout, flags)
+    return _with(layout, flags, fight_slot_reads(tables.ai_move_reads, flags))
 
 
-def fight_tables(tables: Tables, trainer) -> Tables:
-    """``tables`` for a fight against ``trainer`` (a ``data.trainer.Trainer``): its AI flags
-    set (``Tables.ai_flags``), so ``layout_of`` gives its flag set's layout (E1 Ruling R2).
-    The fight's entry points call it once (``cli``)."""
-    return tables._replace(ai_flags=np.int32(trainer.ai_flags))
+def fight_tables(tables: Tables, trainer, party, flags: int | None = None) -> Tables:
+    """``tables`` for a fight against ``trainer`` (a ``data.trainer.Trainer``) with its
+    ``party`` (``PokemonSpec``s): its AI flags (``Tables.ai_flags``; ``flags`` overrides
+    them) and its moves' read rows (``Tables.ai_move_reads``, ``move_read_rows``), so
+    ``layout_of`` gives the fight's layout (E1 Rulings R2, R6). The fight's entry points call
+    it once (``cli``, ``engine.coverage.check_coverage``)."""
+    moves = [m for spec in party for m in spec.moves]
+    return tables._replace(
+        ai_flags=np.int32(trainer.ai_flags if flags is None else flags),
+        ai_move_reads=move_read_rows(tables, moves),
+    )

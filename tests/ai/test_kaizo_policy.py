@@ -43,7 +43,12 @@ from nuzline.engine.order import (
     effective_speed,
 )
 from nuzline.engine.state import MOVES, make_state
-from tests.ai.test_kaizo_outcome import _assert_exact_equals_loose, _bulky, _with_player
+from tests.ai.test_kaizo_outcome import (
+    _assert_exact_equals_loose,
+    _bulky,
+    _with_player,
+    layout_for,
+)
 
 DECOMP = Path(__file__).resolve().parents[2] / "external/pokeplatinum"
 
@@ -1274,12 +1279,10 @@ def test_flag_set_runs_its_scripts(kaizo_tables, kaizo_roark_party, flags, scrip
     """TrainerAI_MainSingles runs a flag's script only when its bit is set, in bit order
     (trainer_ai.c:297-308; FlagTable, script.s:18-30). Under set 0x7 Selfdestruct and
     AncientPower get no Risky +2 (:6530), and their scores are the three flags' scores."""
-    from nuzline.ai.layout import kaizo_layout
-
-    layout = kaizo_layout(flags)
-    assert [getattr(f, "func", f).__name__ for f in policy._flags(layout)] == scripts
     t = kaizo_tables
     s = _state(t, kaizo_roark_party, BONSLY, (SELFDESTRUCT, BRICK_BREAK, 0, 0))
+    layout = layout_for(t, flags, s)
+    assert [getattr(f, "func", f).__name__ for f in policy._flags(layout)] == scripts
     o = _outcome(t, s)
     ctx = policy._run_flags(c.new_context(t, s, o), layout)
     prefix = {0x1: 1, 0x7: 3, 0x17: 4}
@@ -1322,9 +1325,7 @@ def _layout_scores(t, s, o, layout):
 def _delta(t, s, base: int, flags: int, jumps=()) -> list[int]:
     """Per slot, the score under the flag set ``flags`` minus the score under ``base`` (its
     first flags), with the ``(slot, line)`` rolls of ``jumps`` jumping and no other."""
-    from nuzline.ai.layout import kaizo_layout
-
-    lo, hi = kaizo_layout(base), kaizo_layout(flags)
+    lo, hi = layout_for(t, base, s), layout_for(t, flags, s)
     before = _layout_scores(t, s, _outcome(t, s, layout=lo), lo)
     after = _layout_scores(t, s, _outcome(t, s, jumps=jumps, layout=hi), hi)
     return [int(b) - int(a) for a, b in zip(before, after, strict=True)]
@@ -1376,16 +1377,15 @@ def test_setup_first_turn(kaizo_tables, kaizo_roark_party, turn, jump):
     trainer_ai.c:931-935) a move whose effect is in the table gets +2 unless the 80 roll
     (:6429) jumps; on a later turn, and for another effect, no roll and no score. Against
     BASIC, EVAL_ATTACK and EXPERT (set 0x7 -> 0xf)."""
-    from nuzline.ai.layout import kaizo_layout
 
     t = kaizo_tables
     s = _turn(_state(t, kaizo_roark_party, BONSLY, _SETUP_MOVES), turn)
     jumps = tuple((slot, 6429) for slot in range(3)) if jump else ()
     plus = 2 if turn == 0 and not jump else 0
     assert _delta(t, s, 0x7, 0xF, jumps) == [plus, plus, plus, 0]
-    rolls = [6429 in lines for lines in _path_lines(t, s, kaizo_layout(0xF))]
+    rolls = [6429 in lines for lines in _path_lines(t, s, layout_for(t, 0xF, s))]
     assert rolls == [turn == 0] * 3 + [False]
-    _assert_exact_equals_loose(t, s, kaizo_layout(0xF))
+    _assert_exact_equals_loose(t, s, layout_for(t, 0xF, s))
 
 
 @pytest.mark.parametrize(
@@ -1436,7 +1436,6 @@ def test_exact_equals_loose_with_setup_and_weather(kaizo_tables, kaizo_roark_par
     """Exact == loose under the 2b flag sets, on the first turn and after it: Rock Polish,
     Curse, Selfdestruct and Light Screen (three in SetupFirstTurn_SetupEffects, Selfdestruct
     with the longest path, kaizo_roark.md 8.3) against a guessed Gible and Tentacool."""
-    from nuzline.ai.layout import kaizo_layout
     from tests.ai.test_kaizo_outcome import GIBLE as GIBLE_SPECIES
 
     t = kaizo_tables
@@ -1444,7 +1443,7 @@ def test_exact_equals_loose_with_setup_and_weather(kaizo_tables, kaizo_roark_par
     for player in (GIBLE_SPECIES, 72):
         s = _state(t, kaizo_roark_party, BONSLY, moves, hp=200)
         s = _turn(_with_player(t, s, player), turn)
-        _assert_exact_equals_loose(t, s, kaizo_layout(flags))
+        _assert_exact_equals_loose(t, s, layout_for(t, flags, s))
 
 
 # --- PRIORITIZE_EXTREMES and CHECK_HP (E1 batch 2c) ------------------------------------------
@@ -1457,16 +1456,15 @@ def test_prioritize_extremes(kaizo_tables, kaizo_roark_party, jump):
     trainer_ai.c:1012-1063: power <= 1 or a no-calc effect) gets +2 unless the 100 roll (:6515)
     jumps; a damaging move makes no read. Stealth Rock (status) and Selfdestruct
     (HALVE_DEFENSE, no-calc) roll; Brick Break and Accelerock do not."""
-    from nuzline.ai.layout import kaizo_layout
 
     t = kaizo_tables
     s = _state(t, kaizo_roark_party, BONSLY, (STEALTH_ROCK, SELFDESTRUCT, BRICK_BREAK, ACCELEROCK))
     jumps = ((0, 6515), (1, 6515)) if jump else ()
     plus = 0 if jump else 2
     assert _delta(t, s, 0x7, 0x27, jumps) == [plus, plus, 0, 0]
-    rolls = [6515 in lines for lines in _path_lines(t, s, kaizo_layout(0x27))]
+    rolls = [6515 in lines for lines in _path_lines(t, s, layout_for(t, 0x27, s))]
     assert rolls == [True, True, False, False]
-    _assert_exact_equals_loose(t, s, kaizo_layout(0x27))
+    _assert_exact_equals_loose(t, s, layout_for(t, 0x27, s))
 
 
 def test_check_hp_tables_are_the_decomps():
@@ -1536,7 +1534,6 @@ def test_exact_equals_loose_with_extremes_and_check_hp(
     """Exact == loose under the 2c flag sets, across the CheckHP bands of both sides: Rock
     Polish, Curse, Selfdestruct and Recover against a guessed Gible and Tentacool, on the first
     turn (0x10f also runs SETUP_FIRST_TURN)."""
-    from nuzline.ai.layout import kaizo_layout
     from tests.ai.test_kaizo_outcome import GIBLE as GIBLE_SPECIES
 
     t = kaizo_tables
@@ -1544,7 +1541,7 @@ def test_exact_equals_loose_with_extremes_and_check_hp(
     for player in (GIBLE_SPECIES, 72):
         s = _state(t, kaizo_roark_party, BONSLY, moves)
         s = _hp(_hp(_with_player(t, s, player), 1, attacker), 0, target)
-        _assert_exact_equals_loose(t, s, kaizo_layout(flags))
+        _assert_exact_equals_loose(t, s, layout_for(t, flags, s))
 
 
 # --- Effects with no Basic or Expert label (E1 batch 3) --------------------------------------
@@ -1571,14 +1568,13 @@ def test_unlabelled_effects_exact_equals_loose(
     CHECK_HP and SETUP_FIRST_TURN with WEATHER, against a guessed Gible and Tentacool, Bonsly at
     25 % HP (CheckHP's low band). Uproar's move-id read in Basic's Soundproof check (:127) has
     no Kaizo case: no Kaizo species has Soundproof."""
-    from nuzline.ai.layout import kaizo_layout
     from tests.ai.test_kaizo_outcome import GIBLE as GIBLE_SPECIES
 
     t, n = kaizo_tables, kaizo_names
     ids = tuple(n.move_names.index(m) for m in moves)
-    layout = kaizo_layout(flags)
     for player in (GIBLE_SPECIES, 72):
         s = _state(t, kaizo_roark_party, BONSLY, ids)
+        layout = layout_for(t, flags, s)
         s = _hp(_with_player(t, s, player), 1, 25)
         assert policy.ai_refusals(t, s, n, layout) == []
         _assert_exact_equals_loose(t, s, layout)
@@ -1625,6 +1621,7 @@ def test_status_attack_up(kaizo_tables, kaizo_names, kaizo_roark_party, stage, h
         (50, "Tackle", (2043,), 0),
         (50, "Tackle", (2046,), 0),
         (50, "Leer", (2046,), 0),  # power 0: straight to :2046
+        (50, "Leer", (2043,), -2),  # power 0 never reads :2043 (2c review M1)
         (30, "Tackle", (), -2),  # below 40 %: -2, no roll
     ],
 )
@@ -1645,7 +1642,6 @@ def test_stat_raises_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_p
     """Exact == loose for the batch 4 raises, the first Kaizo move of each effect (ATK_UP,
     DEF_UP, SP_ATK_UP, ATK_UP_2; DEF_UP_2, SP_ATK_UP_2, SP_DEF_UP_2), at several stages and
     HP, against a guessed Gible."""
-    from nuzline.ai.layout import kaizo_layout
     from tests.ai.test_kaizo_outcome import GIBLE as GIBLE_SPECIES
 
     t, n = kaizo_tables, kaizo_names
@@ -1654,12 +1650,66 @@ def test_stat_raises_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_p
     for m in range(1, effect.shape[0]):
         pool.setdefault(int(effect[m]), m)
     groups = ((10, 11, 13, 50), (51, 53, 54, 0))
-    layout = kaizo_layout(flags)
     for moves in groups:
         ids = tuple(pool[e] if e else 0 for e in moves)
         for hp, stage in ((100, 0), (55, 3), (35, 6)):
             s = _state(t, kaizo_roark_party, BONSLY, ids)
+            layout = layout_for(t, flags, s)
             s = _hp(_with_player(t, s, GIBLE_SPECIES), 1, hp)
             s = s._replace(stages=s.stages.at[1, 1:].set(stage))
             assert policy.ai_refusals(t, s, n, layout) == []
             _assert_exact_equals_loose(t, s, layout)
+
+
+@pytest.mark.parametrize(
+    ("last", "jumps", "expected"),
+    [
+        # Expert_StatusSpDefenseUp (script.s:2112-2155), Amnesia (SP_DEF_UP_2, :1667), stage 0,
+        # 50 % HP: the player's physical move -> -2 with no roll (:2145); a special one rolls
+        # :2146 and falls into :2149.
+        ("Tackle", (2146, 2149), -2),
+        ("Flamethrower", (), -2),
+        ("Flamethrower", (2146,), 0),
+        ("Flamethrower", (2149,), 0),
+    ],
+)
+def test_status_sp_defense_up(kaizo_tables, kaizo_names, kaizo_roark_party, last, jumps, expected):
+    """EXPERT's score for Amnesia: the Sp. Def label sends a physical previous move to -2
+    (batch 4 review M2)."""
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Amnesia", "Accelerock", "", ""))
+    s = _hp(s, 1, 50)._replace(last_move=s.last_move.at[0].set(n.move_names.index(last)))
+    got = _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))
+    assert got == [expected, 0, 0, 0]
+
+
+@pytest.mark.parametrize(
+    ("stage", "simple", "expected"),
+    [
+        # Basic_CheckHighStatStage_SpAttack (script.s:374-382), Nasty Plot (SP_ATK_UP_2):
+        (6, False, -10),  # +6 (decomp 12): -10
+        (5, False, 0),
+        (3, True, -10),  # Simple: above decomp 8, -10
+        (2, True, 0),
+    ],
+)
+def test_basic_high_stat_stage(
+    kaizo_tables, kaizo_names, kaizo_roark_party, stage, simple, expected
+):
+    """BASIC's score for a stat raise at the top of its stage (set 0x2 -> 0x3; batch 4 review
+    M2)."""
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Nasty Plot", "Accelerock", "", ""))
+    s = s._replace(stages=s.stages.at[1, Stat.SPA].set(stage))
+    if simple:  # a species whose ability slot 0 is Simple (the AI reads the species')
+        abilities = np.asarray(t.species_abilities_decomp)
+        rows = np.asarray(t.species_form_row)[:, 0]
+        species = next(
+            sp
+            for sp in range(1, rows.shape[0])
+            if abilities[rows[sp], 0] == c.ABILITY_IDS["Simple"]
+        )
+        s = s._replace(
+            species=s.species.at[1, 0].set(species), ability_slot=s.ability_slot.at[1, 0].set(0)
+        )
+    assert _delta(t, s, 0x2, 0x3)[0] == expected

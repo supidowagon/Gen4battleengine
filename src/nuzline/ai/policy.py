@@ -1906,13 +1906,12 @@ def ai_flat_width(tables: Tables, state: BattleState) -> int:
 
 
 def _check_width() -> None:
-    """The largest ``ai_width`` of each layout, every slot at ``2**slot_reads`` paths, is
-    within ``WIDTH_CAP`` (a design-time invariant, like ``outcome.ENUMERATION_WIDTH``); for
-    Kaizo, under the set of every transcribed flag, the widest (E1 Ruling R5)."""
-    from nuzline.ai.layout import KAIZO_FLAG_BITS, LAYOUTS, kaizo_layout
+    """The largest ``ai_width`` of each base layout, every slot at ``2**slot_reads`` paths,
+    is within ``WIDTH_CAP`` (a design-time invariant, like ``outcome.ENUMERATION_WIDTH``); a
+    fight's Kaizo layout is checked when it is built (``layout.kaizo_layout``, E1 Ruling R6)."""
+    from nuzline.ai.layout import LAYOUTS
 
-    widest = kaizo_layout(sum(1 << bit for bit in KAIZO_FLAG_BITS))
-    for layout in (*LAYOUTS, widest):
+    for layout in LAYOUTS:
         if layout.per_slot_sites:
             most = layout.switch_sites + 1 + MOVES * 2**layout.slot_reads
         else:

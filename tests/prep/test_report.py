@@ -122,7 +122,9 @@ def test_hp_why_names_each_percent_check(tables, names):
     assert _hp_why(prob, names, Member(1, hp=40), tables) == off.format(70)
     assert _hp_why(prob, names, Member(1, hp=29), tables) != off.format(50)
     kaizo = tables._replace(
-        ai_policy=np.asarray(AI_POLICIES.index("kaizo")), ai_flags=np.int32(0x17)
+        ai_policy=np.asarray(AI_POLICIES.index("kaizo")),
+        ai_flags=np.int32(0x17),
+        ai_move_reads=np.zeros((24, 8), np.int8),  # no opponent move (E1 Ruling R6)
     )
     assert _hp_why(prob, names, Member(1, hp=29), kaizo) == off.format(50)
     check_hp = kaizo._replace(ai_flags=np.int32(0x10F))

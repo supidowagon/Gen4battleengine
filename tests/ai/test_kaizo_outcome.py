@@ -113,6 +113,15 @@ def _kaizo_state(t, party, moves, bench=((ACCELEROCK, HEADBUTT, 0, 0),)) -> Batt
     return make_state(t, [party[2]], opp)
 
 
+def layout_for(t, flags: int, s: BattleState):
+    """The Kaizo layout of flag set ``flags`` for ``s``'s opponent party: the read bound of its
+    moves (E1 Ruling R6), as ``ai.layout.fight_tables`` gives a fight."""
+    from nuzline.ai.layout import fight_slot_reads, kaizo_layout, move_read_rows
+
+    rows = move_read_rows(t, np.asarray(s.moves[1]).ravel())
+    return kaizo_layout(flags, fight_slot_reads(rows, flags))
+
+
 def _bulky(s: BattleState, hp: int = 400) -> BattleState:
     """The player's active at ``hp``/``hp``: no transcribed move kills it."""
     return s._replace(hp=s.hp.at[0, 0].set(hp), max_hp=s.max_hp.at[0, 0].set(hp))
@@ -666,13 +675,11 @@ def test_exact_equals_loose_per_flag_set(
     and exact == loose under each, on a Pokemon of the trainer with the moves the AI
     transcribes (the others, e.g. Bug Bite, Leech Seed, Protect, Pluck, are not yet), Roark's
     Cranidos behind it, against two guessed players (Gible, Tentacool)."""
-    from nuzline.ai.layout import kaizo_layout
     from nuzline.data.trainer import IntermediateData, build_trainer_party
     from tests.conftest import KAIZO_INTERMEDIATE
 
     t, n = kaizo_tables, kaizo_names
     trainer = next(x for x in kaizo_trainers if x.id == trainer_id)
-    layout = kaizo_layout(trainer.ai_flags)
     mon = build_trainer_party(trainer, IntermediateData(KAIZO_INTERMEDIATE))[index]
     assert n.species_names[mon.species] == species
     kept = [m for m in mon.moves if n.move_names[m] in moves]
@@ -680,6 +687,7 @@ def test_exact_equals_loose_per_flag_set(
     mon = dataclasses.replace(mon, moves=tuple(kept + [0] * (4 - len(kept))), pp=None)
     bench = dataclasses.replace(kaizo_roark_party[5], moves=(ACCELEROCK, HEADBUTT, 0, 0), pp=None)
     base = make_state(t, [kaizo_roark_party[2]], [mon, bench])
+    layout = layout_for(t, trainer.ai_flags, base)
     for player in (GIBLE, 72):
         s = _bulky(_with_player(t, base, player), 200)
         assert policy.ai_refusals(t, s, n, layout) == []
@@ -687,28 +695,23 @@ def test_exact_equals_loose_per_flag_set(
 
 
 def test_slot_reads_fit_every_transcribed_effect(kaizo_tables, kaizo_roark_party):
-    """The per-set read bound (E1 Ruling R5, ``outcome.kaizo_slot_reads``) from the data: for
-    every transcribed Kaizo move in slot 0 (the rest drawn from the transcribed pool), over
-    random players (any species with two abilities, any types, guessed or known), random HP,
-    Defense and evasion stages on both sides and the first turn or a later one, the loose
-    oracle's longest path (``LooseDraws.live``) under BASIC, EVAL_ATTACK and EXPERT (0x7) makes
-    at most ``KAIZO_BASE_READS``, and adding any other transcribed flag adds at most its
-    ``KAIZO_FLAG_READS`` to the same state's longest path, so every set stays within its
-    bound. Selfdestruct reaches the base by hand: :117 and :304 (two guesses), :6374, :1859
-    (evasion +4 or more), :1870 and :1875 (HP at most 30 %) (script.s:6365-6374,
-    :1841-1884), and Roark's 7 with Risky :6530 (:6521-6534)."""
-    from nuzline.ai.layout import kaizo_layout
-    from nuzline.ai.outcome import KAIZO_BASE_READS, KAIZO_FLAG_READS
+    """E1 Ruling R6 against the data: for every transcribed Kaizo move in slot 0 (the rest drawn
+    from the transcribed pool), over random players (any species with two abilities, any
+    types, guessed or known), random HP, Defense and evasion stages on both sides and the
+    first turn or a later one, the loose oracle's longest path (``LooseDraws.live``) under
+    every transcribed flag at once makes at most the fight's bound for those moves
+    (``layout.fight_slot_reads``). Selfdestruct reaches Roark's bound by hand: :117 and :304
+    (two guesses), :6374, :1859 (evasion +4 or more), :1870 and :1875 (HP at most 30 %)
+    (script.s:6365-6374, :1841-1884), and Risky :6530 (:6521-6534)."""
+    from nuzline.ai.layout import KAIZO_FLAG_BITS, fight_slot_reads, move_read_rows
 
     t = kaizo_tables
-    base = kaizo_layout(0x7)
-    assert base.slot_reads == KAIZO_BASE_READS and KAIZO.slot_reads == KAIZO_BASE_READS + 1
+    every = sum(1 << b for b in KAIZO_FLAG_BITS)
     effect = np.asarray(t.move_ai_effect)
     pool = _move_pool(t)
     assert {int(effect[m]) for m in pool} == KAIZO.transcribed
     rng = np.random.default_rng(11)
     species = _two_ability_species(t)
-    most: dict[int, int] = {}
     for move in pool:
         states = []
         for _ in range(4):
@@ -730,21 +733,16 @@ def test_slot_reads_fit_every_transcribed_effect(kaizo_tables, kaizo_roark_party
             s = s._replace(stages=stages.at[1, Stat.DEF].set(int(rng.integers(-6, 7))))
             states.append(s._replace(turn=jnp.asarray(int(rng.integers(2)), s.turn.dtype)))
         batch = jax.tree.map(lambda *xs: jnp.stack(xs), *states)
-
-        def longest(layout, batch=batch):
-            reads, _, _ = policy._loose_reads(t, batch, layout)
-            patterns = jnp.asarray(policy._loose_patterns(reads))
-            _, lo = policy._loose_batch(t, batch, patterns, layout)
-            return np.asarray(lo.live)[:, :, 0].sum(axis=2).max(axis=1)  # per state
-
-        lo = longest(base)
-        for bit, extra in KAIZO_FLAG_READS.items():
-            assert (longest(kaizo_layout(0x7 | 1 << bit)) <= lo + extra).all(), (move, bit)
-        e = int(effect[move])
-        most[e] = max(most.get(e, 0), int(lo.max()))
-    assert max(most.values()) <= KAIZO_BASE_READS, most
-    # The longest path, by hand: Selfdestruct, a guessed two-ability player, evasion +4
-    # (decomp stage 10, script.s:1857), Bonsly at 10 % HP.
+        layout = layout_for(t, every, states[0])
+        reads, _, _ = policy._loose_reads(t, batch, layout)
+        _, lo = policy._loose_batch(t, batch, jnp.asarray(policy._loose_patterns(reads)), layout)
+        longest = np.asarray(lo.live)[:, :, 0].sum(axis=2).max(axis=1)  # per state
+        for s, n in zip(states, longest, strict=True):
+            bound = fight_slot_reads(move_read_rows(t, np.asarray(s.moves[1]).ravel()), every)
+            assert n <= bound, (move, int(n), bound)
+    # Roark's bound by hand: Selfdestruct, a guessed two-ability player, evasion +4 (decomp
+    # stage 10, script.s:1857), Bonsly at 10 % HP.
+    assert fight_slot_reads(t.ai_move_reads, KAIZO.flags) == KAIZO.slot_reads == 7
     s = _kaizo_state(t, kaizo_roark_party, (SELFDESTRUCT, 0, 0, 0))
     s = _bulky(_with_player(t, s, GIBLE), 400)
     s = s._replace(
@@ -758,9 +756,6 @@ def test_slot_reads_fit_every_transcribed_effect(kaizo_tables, kaizo_roark_party
     lines = np.asarray(lo.line)[0, longest, 0][live[longest]].tolist()
     assert lines == [0, 0, 6374, 1859, 1870, 1875, 6530] and len(lines) == KAIZO.slot_reads
     _assert_exact_equals_loose(t, s)
-    reads, _, _ = policy._loose_reads(t, batch, base)
-    _, lo = policy._loose_batch(t, batch, jnp.asarray(policy._loose_patterns(reads)), base)
-    assert int(np.asarray(lo.live)[0, :, 0].sum(axis=1).max()) == KAIZO_BASE_READS
 
 
 def test_a_read_past_the_bound_is_refused(kaizo_tables, kaizo_names, kaizo_roark_party):
@@ -830,6 +825,7 @@ _DEVICES_SCRIPT = """
 import hashlib, jax, numpy as np
 from nuzline.data.games import GAMES, KAIZO
 from nuzline.data.tables import load_tables
+from nuzline.ai.layout import fight_tables
 from nuzline.data.trainer import IntermediateData, build_trainer_party, load_trainers
 from nuzline.engine.actions import NUM_OPP_ACTIONS
 from nuzline.search.expand import ai_rows
@@ -840,8 +836,8 @@ assert jax.device_count() == DEVICES, jax.device_count()
 d = GAMES[KAIZO]
 t = load_tables(d.tables_dir)
 roark = next(x for x in load_trainers(d.intermediate_dir) if x.name == "Roark")
-t = t._replace(ai_flags=np.int32(roark.ai_flags))
 party = build_trainer_party(roark, IntermediateData(d.intermediate_dir))
+t = fight_tables(t, roark, party)
 rows = _random_kaizo_rows(t, party, 40, seed=5)
 empty = ai_rows(t, take(rows, np.arange(0)))  # K3c final review: no rows, any device count
 assert empty.shape == (0, NUM_OPP_ACTIONS) and empty.dtype == np.float32, empty

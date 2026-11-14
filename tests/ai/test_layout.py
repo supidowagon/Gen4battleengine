@@ -7,6 +7,7 @@ Decomp paths are relative to ``external/pokeplatinum``: ``trainer_ai.c`` is
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 import pytest
 
 from nuzline.ai import commands, policy
@@ -36,24 +37,29 @@ def test_layout_of_reads_tables(tables, kaizo_tables):
 
 
 def test_layout_per_flag_set(tables, kaizo_tables):
-    """E1 Ruling R2: the Kaizo layout is the fight's trainer's flag set (``Tables.ai_flags``),
-    refused while unset; vanilla keeps its one set whatever the flags. Each set is its own
-    static layout with its own program-cache key."""
-    from nuzline.data.tables import AI_FLAGS_UNSET
+    """E1 Rulings R2 and R6: the Kaizo layout is the fight's trainer's flag set
+    (``Tables.ai_flags``) with the read bound of its party's moves under that set
+    (``Tables.ai_move_reads``, ``fight_slot_reads``), refused while either is unset; vanilla
+    keeps its one set whatever the flags. Each (set, bound) is its own static layout with its
+    own program-cache key."""
+    from nuzline.ai.layout import fight_slot_reads
+    from nuzline.data.tables import AI_FLAGS_UNSET, AI_MOVE_READS_UNSET
 
-    assert layout_of(kaizo_tables) is kaizo_layout(0b10111) == KAIZO
-    from nuzline.ai.outcome import kaizo_slot_reads
-
+    assert layout_of(kaizo_tables) is kaizo_layout(0b10111, 7) == KAIZO
     sets = (0x1, 0x5, 0x7, 0x17, 0xD, 0xF, 0x1F, 0x207, 0x20F, 0x27, 0x10F)
     for flags in sets:
         layout = layout_of(kaizo_tables._replace(ai_flags=jnp.int32(flags)))
-        assert layout == KAIZO._replace(flags=flags, slot_reads=kaizo_slot_reads(flags))
-        assert layout.key == f"kaizo-{flags:#x}"
-    # E1 Ruling R5: the read bound is per set, Roark's 7 unchanged.
-    assert [kaizo_layout(f).slot_reads for f in (0x7, 0x17, 0xF, 0x27, 0x10F)] == [6, 7, 7, 7, 9]
-    assert len({kaizo_layout(f).key for f in sets} | {VANILLA.key}) == len(sets) + 1
+        reads = fight_slot_reads(kaizo_tables.ai_move_reads, flags)
+        assert layout == KAIZO._replace(flags=flags, slot_reads=reads)
+        assert layout.key == f"kaizo-{flags:#x}-r{reads}"
+    assert len({kaizo_layout(f, 7).key for f in sets} | {VANILLA.key}) == len(sets) + 1
+    assert kaizo_layout(0x17, 6).key != KAIZO.key
     with pytest.raises(ValueError, match="not set"):
         layout_of(kaizo_tables._replace(ai_flags=AI_FLAGS_UNSET))
+    with pytest.raises(ValueError, match="not set"):
+        layout_of(kaizo_tables._replace(ai_move_reads=AI_MOVE_READS_UNSET))
+    with pytest.raises(ValueError, match="WIDTH_CAP"):
+        kaizo_layout(0x17, 15)
     assert layout_of(tables._replace(ai_flags=jnp.int32(0x17))) is VANILLA
 
 
@@ -179,7 +185,10 @@ def test_traced_tables_without_a_layout_refuse_another_policy(tables, names):
     gets the vanilla one, and a game of another policy is refused, not misread."""
     s = trace_a(tables, names)
     kaizo_like = tables._replace(
-        ai_policy=jnp.asarray(1, tables.ai_policy.dtype), ai_flags=jnp.int32(KAIZO.flags)
+        ai_policy=jnp.asarray(1, tables.ai_policy.dtype),
+        ai_flags=jnp.int32(KAIZO.flags),
+        # one move whose BASIC path makes KAIZO.slot_reads reads (E1 Ruling R6)
+        ai_move_reads=np.array([[KAIZO.slot_reads] + [0] * 7] + [[0] * 8] * 23, np.int8),
     )
     # Concrete tables resolve their own layout: the Kaizo policy's outcome is per slot.
     per_slot = outcome()._replace(

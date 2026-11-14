@@ -58,6 +58,10 @@ def _read_manifest(dir: Path) -> dict:
 
 
 AI_FLAGS_UNSET = np.int32(-1)  # Tables.ai_flags before a fight sets its trainer's
+# Tables.ai_move_reads: one row per move of the fight's opponent party (6 Pokemon x 4 moves),
+# one column per bit of ai.read_bounds.READ_BOUND_BITS; all -1 until a fight sets them.
+AI_MOVE_READ_ROWS, AI_MOVE_READ_COLUMNS = 24, 8
+AI_MOVE_READS_UNSET = np.full((AI_MOVE_READ_ROWS, AI_MOVE_READ_COLUMNS), -1, np.int8)
 
 
 class Tables(NamedTuple):
@@ -105,10 +109,16 @@ class Tables(NamedTuple):
     # fight's entry point sets (Trainer.ai_flags); not in tables.npz. AI_FLAGS_UNSET until then:
     # ai.layout.layout_of refuses it for a per-flag-set policy (E1 Ruling R2).
     ai_flags: jnp.ndarray = AI_FLAGS_UNSET
+    # int8[24, 8]: per move of the fight's opponent party, the most random reads each
+    # transcribed AI flag script makes on its path (ai.read_bounds; E1 Ruling R6), which the
+    # fight's entry point sets with ai_flags (ai.layout.fight_tables); not in tables.npz.
+    ai_move_reads: jnp.ndarray = AI_MOVE_READS_UNSET
 
 
-# The Tables fields tables.npz carries: all but those a fight sets (Tables.ai_flags).
-NPZ_FIELDS = tuple(f for f in Tables._fields if f != "ai_flags")
+# The Tables fields a fight sets (ai.layout.fight_tables), not in tables.npz.
+FIGHT_FIELDS = ("ai_flags", "ai_move_reads")
+# The Tables fields tables.npz carries.
+NPZ_FIELDS = tuple(f for f in Tables._fields if f not in FIGHT_FIELDS)
 
 
 def tables_from_npz(z, dir: Path, convert=np.asarray) -> Tables:

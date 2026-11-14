@@ -945,12 +945,17 @@ def check_coverage(
     # The trainer's flag set (E1 Ruling R2). A set with a flag the AI does not transcribe is
     # refused by its flag lines (_check_ai_flags); its other AI lines are listed under the
     # flags it has that the AI does transcribe.
-    from nuzline.ai.layout import KAIZO_FLAG_BITS
+    from nuzline.ai.layout import KAIZO_FLAG_BITS, fight_tables, layout_of
 
     flags = int(trainer.ai_flags)
     if POLICY.get(names.game) == "kaizo":
         flags &= sum(1 << bit for bit in KAIZO_FLAG_BITS)
-    fight = tables._replace(ai_flags=np.int32(flags))
+    fight = fight_tables(tables, trainer, opp, flags)
+    try:
+        layout_of(fight)
+    except ValueError as err:  # a read bound past WIDTH_CAP (E1 Ruling R6)
+        c.add(Support.NONE, f"{display_name(trainer)}: {err}", "trainer AI")
+        return c.report
     for reason in ai_refusals(fight, state, names):
         c.add(Support.NONE, f"{display_name(trainer)}: {reason}", "trainer AI")
     return c.report

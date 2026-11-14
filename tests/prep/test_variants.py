@@ -70,6 +70,7 @@ def _as_kaizo_policy(tables):
     return tables._replace(
         ai_policy=jax.numpy.asarray(AI_POLICIES.index("kaizo"), tables.ai_policy.dtype),
         ai_flags=np.int32(0x17),
+        ai_move_reads=np.zeros((24, 8), np.int8),  # no opponent move (E1 Ruling R6)
     )
 
 
@@ -202,7 +203,8 @@ def test_ai_hp_checks_per_policy(monkeypatch, tables, names, kaizo_tables, kaizo
     comparisons) that policy's flag scripts call (K3c Task 6 review m2), recorded while they
     trace: vanilla {> 70} (script.s:2332), Kaizo {> 70, > 50} (:2332, :2694), and under
     CHECK_HP (Kaizo set 0x10f) also > 30 (:7724-7725; ``ai_defender_hp_checks``)."""
-    from nuzline.ai.layout import KAIZO, VANILLA, kaizo_layout
+    from nuzline.ai.layout import KAIZO, VANILLA
+    from tests.ai.test_kaizo_outcome import layout_for
 
     vanilla = make_state(tables, sample_party(names)[:1], roark_party(names))
     kaizo = make_state(kaizo_tables, [kaizo_roark_party[2]], list(kaizo_roark_party))
@@ -210,7 +212,7 @@ def test_ai_hp_checks_per_policy(monkeypatch, tables, names, kaizo_tables, kaizo
     cases = (
         (VANILLA, tables, vanilla),
         (KAIZO, kaizo_tables, kaizo),
-        (kaizo_layout(0x10F), check_hp, kaizo),
+        (layout_for(kaizo_tables, 0x10F, kaizo), check_hp, kaizo),
     )
     for layout, t, s in cases:
         calls = _defender_hp_calls(monkeypatch, t, s, layout)
