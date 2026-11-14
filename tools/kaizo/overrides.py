@@ -541,23 +541,16 @@ def check_rom_trick_room(overrides: Overrides, field_effects: Iterable[dict]) ->
     return out
 
 
-# Trainers the ROM trainer -> map join places on 136-137 map headers each, through scripts
-# that many map headers share (rom_trainer_maps.json; tools/rom/readers/maps.py
-# trainer_maps). Their header lists are no placement evidence, so the two-placement Trick
-# Room rule skips them.
-NOISY_MAP_JOIN = frozenset({562, 572, 581, 582, 583, 606, 676, 861, 863, 865})
-
-
 def two_placement_trick_room(
     field_effects: Iterable[dict], trainer_maps: MappingABC[int, list[int]]
 ) -> dict[int, tuple[list[int], list[int]]]:
     """Trainer id -> (its Trick Room headers, its other headers) for every ROM Trick Room
     trainer (map weather 18) the trainer -> map join also places on a header without Trick
-    Room, ``NOISY_MAP_JOIN`` excepted. Which fight is meant is a user call (the
+    Room. Which fight is meant is a user call (the
     Rosalind/Puck/Kari precedent): ``check_two_placement``."""
     out = {}
     for r in field_effects:
-        if r["effect"] != "trick_room" or r["id"] in NOISY_MAP_JOIN:
+        if r["effect"] != "trick_room":
             continue
         other = sorted(set(trainer_maps.get(r["id"], ())) - set(r["map_headers"]))
         if other:

@@ -7,7 +7,6 @@ import re
 import pytest
 
 from nuzline.data.trainer import TERRAIN_NAMES, TERRAIN_UNKNOWN
-from tools.kaizo.resolve import NOISY_MAP_JOIN
 from tools.terrain import (
     Matrix,
     TerrainError,
@@ -298,9 +297,11 @@ def test_mixed_trainers_per_game(game, rom_rows):
         if r["terrain"] != TERRAIN_UNKNOWN:
             assert r["terrains"] == [r["terrain"]]
     # A header none of its matrix's cells names gives TERRAIN_UNKNOWN (headers 1, 206, 222,
-    # ...; Kaizo adds 615-617): only the ten noisy Kaizo joins reach one (NOISY_MAP_JOIN).
+    # ...; Kaizo adds 615-617). No trainer is placed on one: the ten Kaizo trainers whose
+    # battles sit in the shared scripts_empty file are placed only where an event runs them
+    # (tools/rom/readers/maps.py trainer_maps), not on its 136 headers.
     unreadable = {t for t, r in enumerate(rows) if TERRAIN_UNKNOWN in r["terrains"]}
-    assert unreadable == (set(NOISY_MAP_JOIN) if game == "JAK7" else set())
+    assert unreadable == set()
 
 
 def test_vanilla_rom_inputs_equal_the_decomp(vanilla_files, decomp, symbols):

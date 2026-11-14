@@ -603,8 +603,9 @@ def test_area_section_marks_pkcalc_only_starters():
 def test_mapping_section_lists_unmapped_headers():
     _, maps, *_ = synthetic()
     maps = Mappings(maps.pkcalc, (Mapping("S Split:7", None, "unmapped", ()),), {}, ())
-    want = "unmapped sheet headers (non-blocking, sheet_only by controller ruling): 1: S Split:7"
-    assert want in mapping_section(maps)
+    lines = mapping_section(maps)
+    assert "unmapped sheet headers (each settled in overrides.toml [sheet_unmapped]): 1" in lines
+    assert "- S Split:7: not settled" in lines
 
 
 def test_area_section_trick_room_sheet_only():  # the Hooded Figure shape: sheet yes, ROM no
@@ -701,7 +702,9 @@ def test_real_area_section(real_sections):
     lines = real_sections["area"]
     i = lines.index("refused: unknown (user call)")
     refused = " ".join(lines[i:])
-    for tid in (318, 325, 343, 509, 559, 610, 649, 676, 746, 747, 521, 527):
+    # 318 Fantina and 676 Corbin left this list in E3 batch 5: the shared-script join fix
+    # gives each one ROM condition (none; hail).
+    for tid in (325, 343, 509, 559, 610, 649, 746, 747, 521, 527):
         assert f"{tid} " in refused
     assert any(ln.startswith("trick_room: 666 ") and "ROM -" in ln for ln in lines)
     assert any("Maid Yoki" in ln for ln in lines) and any("Skier Isaiah" in ln for ln in lines)

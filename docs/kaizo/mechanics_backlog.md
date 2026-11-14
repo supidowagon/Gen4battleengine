@@ -32,14 +32,14 @@ New groups: needed in this split and in no earlier one.
 | Wake Split | 38 | 33 | 26 | 2 | 5 | 0 (0) | 0 | 233 | 19 |
 | Byron Split | 66 | 58 | 42 | 8 | 0 | 8 (0) | 0 | 284 | 20 |
 | Candice Split | 48 | 36 | 24 | 0 | 0 | 12 (0) | 0 | 238 | 17 |
-| Galactic Split | 109 | 79 | 37 | 12 | 19 | 11 (0) | 0 | 359 | 51 |
+| Galactic Split | 109 | 79 | 37 | 12 | 19 | 11 (0) | 0 | 358 | 50 |
 | Volkner Split | 25 | 19 | 9 | 4 | 6 | 0 (0) | 0 | 184 | 2 |
 | Elite Four Split | 28 | 28 | 27 | 1 | 0 | 0 (0) | 0 | 263 | 7 |
-| **Whole game** | 458 | 387 | 275 | 37 | 32 | 43 (0) | 1 | 521 | 521 |
+| **Whole game** | 458 | 387 | 275 | 37 | 32 | 43 (0) | 1 | 520 | 520 |
 
 ## Whole game
 
-521 distinct missing groups across all ten splits (387 battles,
+520 distinct missing groups across all ten splits (387 battles,
 458 opposing trainer rows). Kinds: AI flags are flag lines the
 policy lacks; AI move effects are the AI's per-move script paths (untranscribed
 effects, refused effects, move-id cases of its damage and type helpers); battle
@@ -60,10 +60,10 @@ Groups first needed in that split (needed by no earlier split). The whole-game r
 | Wake Split | 0 | 3 | 2 | 5 | 1 | 5 | 3 | 19 |
 | Byron Split | 0 | 8 | 5 | 6 | 0 | 1 | 0 | 20 |
 | Candice Split | 0 | 6 | 4 | 1 | 0 | 6 | 0 | 17 |
-| Galactic Split | 0 | 14 | 13 | 6 | 1 | 17 | 0 | 51 |
+| Galactic Split | 0 | 14 | 13 | 6 | 1 | 16 | 0 | 50 |
 | Volkner Split | 0 | 1 | 1 | 0 | 0 | 0 | 0 | 2 |
 | Elite Four Split | 0 | 2 | 1 | 1 | 1 | 1 | 1 | 7 |
-| **Whole game** | **5** | **168** | **117** | **99** | **62** | **56** | **14** | **521** |
+| **Whole game** | **5** | **168** | **117** | **99** | **62** | **55** | **14** | **520** |
 
 ### Groups needed in each split, by kind
 
@@ -78,10 +78,10 @@ Every group the split's battles need, whether or not an earlier split needs it t
 | Wake Split | 5 | 80 | 50 | 44 | 36 | 8 | 10 | 233 |
 | Byron Split | 5 | 96 | 65 | 57 | 46 | 4 | 11 | 284 |
 | Candice Split | 4 | 86 | 55 | 39 | 39 | 8 | 7 | 238 |
-| Galactic Split | 5 | 123 | 88 | 56 | 50 | 26 | 11 | 359 |
+| Galactic Split | 5 | 123 | 88 | 56 | 50 | 25 | 11 | 358 |
 | Volkner Split | 5 | 65 | 41 | 28 | 33 | 3 | 9 | 184 |
 | Elite Four Split | 5 | 102 | 65 | 34 | 41 | 4 | 12 | 263 |
-| **Whole game** | **5** | **168** | **117** | **99** | **62** | **56** | **14** | **521** |
+| **Whole game** | **5** | **168** | **117** | **99** | **62** | **55** | **14** | **520** |
 
 ### Battle conditions and other groups
 
@@ -138,9 +138,8 @@ Every group the split's battles need, whether or not an earlier split needs it t
 | battle conditions | battle format: gauntlet Wayward Cave (position 8; rules not recorded) | Galactic Split |
 | battle conditions | battle format: gauntlet Wayward Cave (position 9; rules not recorded) | Galactic Split |
 | battle conditions | battle terrain: the battle terrain varies over its maps (TERRAIN_GRASS, TERRAIN_CAVE, TERRAIN_SNOW), and Nature Power would read it | Galactic Split |
+| battle conditions | battle terrain: the battle terrain varies over its maps (TERRAIN_GRASS, TERRAIN_CAVE, TERRAIN_SNOW), and Secret Power would read it | Galactic Split |
 | battle conditions | battle terrain: the battle terrain varies over its maps (TERRAIN_GRASS, TERRAIN_SNOW, TERRAIN_BUILDING), and Nature Power, Secret Power would read it | Galactic Split |
-| battle conditions | battle terrain: the battle terrain varies over its maps (TERRAIN_PLAIN, TERRAIN_SAND, TERRAIN_GRASS, TERRAIN_CAVE, TERRAIN_SNOW, TERRAIN_WATER, TERRAIN_ICE, TERRAIN_BUILDING, TERRAIN_GREAT_MARSH, TERRAIN_DISTORTION_WORLD, TERRAIN_MAX and a map whose tiles cannot be read), and Nature Power, Secret Power would read it | Galactic Split |
-| battle conditions | battle terrain: the battle terrain varies over its maps (TERRAIN_PLAIN, TERRAIN_SAND, TERRAIN_GRASS, TERRAIN_CAVE, TERRAIN_SNOW, TERRAIN_WATER, TERRAIN_ICE, TERRAIN_BUILDING, TERRAIN_GREAT_MARSH, TERRAIN_DISTORTION_WORLD, TERRAIN_MAX and a map whose tiles cannot be read), and Secret Power would read it | Galactic Split |
 | battle conditions | field condition: permanent Trick Room | Galactic Split |
 | battle conditions | field condition: permanent Gravity | Elite Four Split |
 | other | trainer item: Poké Ball | Roark Split |
@@ -794,12 +793,10 @@ Groups by kind: AI 102, move effect 60, held item effect 52, ability 49, battle 
 | 52 | field condition: permanent Trick Room |
 | 52 | move effect #228: U-turn |
 | 51 | AI move effect #198 RECOIL_THIRD not transcribed (Expert_RecoilMove): Double-Edge, Wood Hammer |
-| 51 | ROM change: arm9 gFieldScriptCommands is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) |
 | 51 | ability: Chlorophyll |
 | 51 | move effect #198: Double-Edge, Wood Hammer |
 | 50 | AI move effect #67 STATUS_PARALYZE not transcribed (Basic_CheckCannotParalyze / Expert_StatusParalyze): Glare, Stun Spore, Thunder Wave |
 | 49 | AI move effect #152 THUNDER not transcribed (no Basic or Expert label): Thunder |
-| 49 | ROM change: arm9 MapHeader_GetMapType is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) |
 | 49 | move effect #152: Thunder |
 | 48 | AI move effect #79 SET_SUBSTITUTE not transcribed (Basic_CheckCannotSubstitute / Expert_Substitute): Substitute |
 | 48 | move effect #79: Substitute |
@@ -807,13 +804,15 @@ Groups by kind: AI 102, move effect 60, held item effect 52, ability 49, battle 
 | 47 | ROM change: battle/skill/be_seq.narc#182 is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) |
 | 47 | move effect #182: Brave Bird, Close Combat, Take Down |
 | 45 | AI move effect #29 MULTI_HIT not transcribed (no Basic or Expert label): Bone Rush, Bullet Seed, Fury Swipes, Icicle Spear, Pin Missile, Rock Blast, +1 more |
+| 45 | ROM change: arm9 gFieldScriptCommands is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) |
 | 45 | ability: Technician |
 | 44 | ability: Serene Grace |
 | 43 | AI move effect #98 KO_MON_THAT_DEFEATED_USER not transcribed (Expert_DestinyBond): Destiny Bond |
+| 43 | ROM change: arm9 MapHeader_GetMapType is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) |
 | 43 | ability: Filter |
 | 43 | move effect #98: Destiny Bond |
 
-Groups by kind: AI 173, move effect 117, held item effect 99, ability 62, battle format 36, battle terrain 14, ROM change 11, weather 4, field condition 2, form 1, trainer item 1, form change 1
+Groups by kind: AI 173, move effect 117, held item effect 99, ability 62, battle format 36, battle terrain 13, ROM change 11, weather 4, field condition 2, form 1, trainer item 1, form change 1
 
 ## Build order for the first two splits
 

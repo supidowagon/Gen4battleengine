@@ -316,9 +316,8 @@ def test_two_placement_trick_room_rule():
     effects = [
         {"id": 1, "effect": "trick_room", "map_headers": [306]},
         {"id": 2, "effect": "trick_room", "map_headers": [306]},
-        {"id": 562, "effect": "trick_room", "map_headers": [306]},  # noisy map join
     ]
-    maps = {1: [306, 347], 2: [306], 562: [306, 1, 2, 3]}
+    maps = {1: [306, 347], 2: [306]}
     assert two_placement_trick_room(effects, maps) == {1: ([306], [347])}
 
 
@@ -523,9 +522,10 @@ def test_two_structure_trainers_take_the_users_format(resolved_trainers):
 
 
 def test_user_call_start_conditions(resolved_trainers):
-    corbin = resolved_trainers[676]  # unreachable: stays unknown
-    assert corbin["start_condition"] == "unknown"
-    assert corbin["area_condition"]["weather"] == "unknown"
+    # 676 Corbin is the Vs. Seeker rematch of 583 Titania (gVsSeekerRematchData), placed on
+    # header 211 MT_CORONET_OUTSIDE_SOUTH only (E3 batch 5 shared-script join): hail.
+    corbin = resolved_trainers[676]
+    assert corbin["start_condition"] == "hail"
     answers = {318: "none", 325: "fog", 343: "none", 610: "rain", 746: "none", 747: "none",
                103: "rain", 491: "rain", 291: "fog", 874: "none", 896: "none"}  # fmt: skip
     for tid, start in answers.items():
@@ -607,15 +607,13 @@ def test_report_lists_user_calls():
     calls = text[text.index("## User calls") :].split("\n## ", 1)[0]
     lines = [ln for ln in calls.splitlines() if ln.startswith("- ")]
     assert [ln.split(":", 1)[0] for ln in lines] == [
-        "- start condition unknown",
         "- no map placement found",
         # Iron Island (E3 batch 4 mapped Byron Split:662): sheet and PKCalc say rain, the
         # ROM map header none; the ROM is used and the user is asked.
         "- area weather 835 Galactic Triton #2",
         f"- {_unclassified()} ROM changes unclassified in data/kaizo/rom_diff.toml",
     ]
-    assert lines[0].startswith("- start condition unknown: 676 Corbin")
-    unplaced = {int(i) for i in lines[1].rsplit(": ", 1)[1].split(", ")}
+    unplaced = {int(i) for i in lines[0].rsplit(": ", 1)[1].split(", ")}
     assert len(unplaced) == 278 and {906, 920, 468} <= unplaced
     assert not unplaced & {*range(874, 892), 894, 895, 896}
 

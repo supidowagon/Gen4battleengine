@@ -55,7 +55,6 @@ from tools.kaizo.overrides import (
     DEFAULT_PATH as DEFAULT_OVERRIDES,
 )
 from tools.kaizo.overrides import (
-    NOISY_MAP_JOIN,  # noqa: F401  (re-exported: callers and tests name it here)
     UNKNOWN_FORMAT,
     Mappings,
     Overrides,
