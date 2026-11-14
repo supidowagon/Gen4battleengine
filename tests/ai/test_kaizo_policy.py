@@ -721,7 +721,7 @@ def test_accelerock_kill_bonus_is_plus_4(kaizo_tables, kaizo_roark_party):
 
 def test_priority_1_kill_bonus_is_plus_6(kaizo_tables, kaizo_roark_party):
     """The :6400 branch itself: a move whose effect is PRIORITY_1 (synthetic: Accelerock
-    given effect 103, which is not transcribed, so only the two-flag scores are read) that
+    given effect 103; only the two-flag scores are read) that
     kills takes EvalAttack_ScorePlus2 (:6408), which falls into ScorePlus4: +6."""
     t = kaizo_tables
     t103 = t._replace(move_ai_effect=t.move_ai_effect.at[ACCELEROCK].set(BattleEffect.PRIORITY_1))
@@ -1550,11 +1550,12 @@ def test_exact_equals_loose_with_extremes_and_check_hp(
 # --- Effects with no Basic or Expert label (E1 batch 3) --------------------------------------
 
 
-@pytest.mark.parametrize("flags", [0x17, 0x27, 0x10F])
+@pytest.mark.parametrize("flags", [0x17, 0x27, 0x10F, 0x20F])
 @pytest.mark.parametrize(
     "moves",
     [
-        # DOUBLE_DAMAGE_DIG, PRIORITY_1 (EvalAttack's kill bonus, :6400), CALL_RANDOM_MOVE
+        # DOUBLE_DAMAGE_DIG, PRIORITY_1 (nothing kills here: its :6400 bonus is
+        # test_priority_1_kill_bonus_is_plus_6), CALL_RANDOM_MOVE
         # (Risky_RiskyEffects, :6543; a status move), MAKE_GLOBAL_TARGET (status)
         ("Earthquake", "Quick Attack", "Metronome", "Follow Me"),
         # MULTI_HIT, HIT_TWICE, THUNDER (no Expert_Thunder: :1718 tests another effect),
@@ -1566,8 +1567,10 @@ def test_unlabelled_effects_exact_equals_loose(
     kaizo_tables, kaizo_names, kaizo_roark_party, flags, moves
 ):
     """The effects with no Basic_ScoreMoveEffect or Expert_Main entry (outcome.KAIZO_TRANSCRIBED,
-    batch 3) are scored, not refused, and exact == loose under Roark's set, PRIORITIZE_EXTREMES
-    and CHECK_HP, against a guessed Gible and Tentacool, Bonsly at 25 % HP (CheckHP's low band)."""
+    batch 3) are scored, not refused, and exact == loose under Roark's set, PRIORITIZE_EXTREMES,
+    CHECK_HP and SETUP_FIRST_TURN with WEATHER, against a guessed Gible and Tentacool, Bonsly at
+    25 % HP (CheckHP's low band). Uproar's move-id read in Basic's Soundproof check (:127) has
+    no Kaizo case: no Kaizo species has Soundproof."""
     from nuzline.ai.layout import kaizo_layout
     from tests.ai.test_kaizo_outcome import GIBLE as GIBLE_SPECIES
 
@@ -1579,3 +1582,84 @@ def test_unlabelled_effects_exact_equals_loose(
         s = _hp(_with_player(t, s, player), 1, 25)
         assert policy.ai_refusals(t, s, n, layout) == []
         _assert_exact_equals_loose(t, s, layout)
+
+
+# --- Stat raises (E1 batch 4) ----------------------------------------------------------------
+
+
+def _ids(n, *names):
+    return tuple(n.move_names.index(m) if m else 0 for m in names)
+
+
+@pytest.mark.parametrize(
+    ("stage", "hp", "jumps", "expected"),
+    [
+        # Expert_StatusAttackUp (script.s:1978-2007), Swords Dance (ATK_UP_2, :1663):
+        (3, 100, (), -1),  # +3 (decomp 9): -1 unless :1989 jumps; above 70 % nothing more
+        (3, 100, (1989,), 0),
+        (0, 100, (), 2),  # 100 % HP: +2 unless :1995 jumps
+        (0, 100, (1995,), 0),
+        (0, 70, (), -2),  # 40-70 %: -2 unless :2001 (N 40) jumps
+        (0, 70, (2001,), 0),
+        (0, 39, (2001,), -2),  # below 40 %: -2, no roll
+        (3, 50, (), -3),  # both
+    ],
+)
+def test_status_attack_up(kaizo_tables, kaizo_names, kaizo_roark_party, stage, hp, jumps, expected):
+    """EXPERT's score for Swords Dance (BASIC and EVAL_ATTACK first: set 0x3 -> 0x7)."""
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Swords Dance", "Accelerock", "", ""))
+    s = _hp(s, 1, hp)._replace(stages=s.stages.at[1, Stat.ATK].set(stage))
+    got = _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))
+    assert got == [expected, 0, 0, 0]
+
+
+@pytest.mark.parametrize(
+    ("hp", "last", "jumps", "expected"),
+    [
+        # Expert_StatusDefenseUp (script.s:2009-2052), Iron Defense (DEF_UP_2, :1664), stage 0:
+        (100, "", (), 0),  # +2 (:2029); then :2034 falls through; no move (power 0): -2 (:2046)
+        (100, "", (2034,), 2),  # :2034 jumps: nothing more
+        (50, "Flamethrower", (), -2),  # the player's special move: -2, no roll
+        (50, "Tackle", (), -2),  # physical: :2043, then falls into :2046
+        (50, "Tackle", (2043,), 0),
+        (50, "Tackle", (2046,), 0),
+        (50, "Leer", (2046,), 0),  # power 0: straight to :2046
+        (30, "Tackle", (), -2),  # below 40 %: -2, no roll
+    ],
+)
+def test_status_defense_up(kaizo_tables, kaizo_names, kaizo_roark_party, hp, last, jumps, expected):
+    """EXPERT's score for Iron Defense against the player's previous move
+    (LoadBattlerPreviousMove, trainer_ai.c:1068-1076; LoadPowerOfLoadedMove, :2526-2530;
+    LoadDefenderLastUsedMoveClass, :2050-2054)."""
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Iron Defense", "Accelerock", "", ""))
+    move = n.move_names.index(last) if last else 0
+    s = _hp(s, 1, hp)._replace(last_move=s.last_move.at[0].set(move))
+    got = _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))
+    assert got == [expected, 0, 0, 0]
+
+
+@pytest.mark.parametrize("flags", [0x17, 0x10F])
+def test_stat_raises_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, flags):
+    """Exact == loose for the batch 4 raises, the first Kaizo move of each effect (ATK_UP,
+    DEF_UP, SP_ATK_UP, ATK_UP_2; DEF_UP_2, SP_ATK_UP_2, SP_DEF_UP_2), at several stages and
+    HP, against a guessed Gible."""
+    from nuzline.ai.layout import kaizo_layout
+    from tests.ai.test_kaizo_outcome import GIBLE as GIBLE_SPECIES
+
+    t, n = kaizo_tables, kaizo_names
+    effect = np.asarray(t.move_ai_effect)
+    pool = {}
+    for m in range(1, effect.shape[0]):
+        pool.setdefault(int(effect[m]), m)
+    groups = ((10, 11, 13, 50), (51, 53, 54, 0))
+    layout = kaizo_layout(flags)
+    for moves in groups:
+        ids = tuple(pool[e] if e else 0 for e in moves)
+        for hp, stage in ((100, 0), (55, 3), (35, 6)):
+            s = _state(t, kaizo_roark_party, BONSLY, ids)
+            s = _hp(_with_player(t, s, GIBLE_SPECIES), 1, hp)
+            s = s._replace(stages=s.stages.at[1, 1:].set(stage))
+            assert policy.ai_refusals(t, s, n, layout) == []
+            _assert_exact_equals_loose(t, s, layout)

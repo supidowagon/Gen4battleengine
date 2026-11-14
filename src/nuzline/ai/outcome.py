@@ -209,6 +209,23 @@ SITE_N: dict[int, int] = {
     6515: 100,  # PrioritizeExtremes_Main (+2 when it does NOT jump)
     7718: 50,  # CheckHP_TryScoreMinus2 (-2 when it does NOT jump)
     7742: 50,  # CheckHP_Target_TryScoreMinus2 (-2 when it does NOT jump)
+    # E1 batch 4: the stat-raise Expert labels (script.s:1978-2155).
+    1989: 100,  # Expert_StatusAttackUp (+3 or more: -1 when it does NOT jump)
+    1995: 128,  # Expert_StatusAttackUp_CheckUserAtMaxHP (+2 when it does NOT jump)
+    2001: 40,  # Expert_StatusAttackUp_CheckUserHPRange (-2 when it does NOT jump)
+    2023: 100,  # Expert_StatusDefenseUp
+    2029: 128,  # Expert_StatusDefenseUp_CheckUserAtMaxHP
+    2034: 200,  # Expert_StatusDefenseUp_CheckUserHighHP (jump: no further change)
+    2043: 60,  # Expert_StatusDefenseUp_CheckUserMediumHP
+    2046: 60,  # Expert_StatusDefenseUp_UserAtLowHP
+    2092: 100,  # Expert_StatusSpAttackUp
+    2098: 128,  # Expert_StatusSpAttackUp_CheckUserAtMaxHP
+    2104: 70,  # Expert_StatusSpAttackUp_CheckUserHPRange
+    2126: 100,  # Expert_StatusSpDefenseUp
+    2132: 128,  # Expert_StatusSpDefenseUp_CheckUserAtMaxHP
+    2137: 200,  # Expert_StatusSpDefenseUp_CheckUserHighHP
+    2146: 60,  # Expert_StatusSpDefenseUp_CheckUserMediumHP
+    2149: 60,  # Expert_StatusSpDefenseUp_UserAtLowHP
 }
 SITE_LINES = tuple(SITE_N)
 # The flat (vanilla) layout's column of script_roll_sites that each line reads: column 0 is
@@ -261,7 +278,7 @@ KAIZO_TRANSCRIBED: frozenset[int] = frozenset(
         266,  # STEALTH_ROCK: Expert_StealthRock (:1805 -> :6268), :6274
         269,  # RECOIL_HALF (Head Smash): Expert_RecoilMove (:1806 -> :6289), no roll
         275,  # FLINCH_PARALYZE_HIT (Thunder Fang): no Expert_Main entry
-        # E1 batch 3: the effects with no Basic_ScoreMoveEffect (:133-286) or Expert_Main
+        # E1 batch 3: the 26 trainer-used effects with no Basic_ScoreMoveEffect (:133-286) or Expert_Main
         # (:1628-1808) entry (docs/ai/kaizo_roark.md 5.9). Every flag script treats them
         # generically: FlagMoveDamageScore, IfCurrentMoveKills and the damage estimates read only
         # the no-calc and alt-power lists (trainer_ai.c:1012-1063, :1525-1560, :2800-2830), and
@@ -292,6 +309,16 @@ KAIZO_TRANSCRIBED: frozenset[int] = frozenset(
         273,  # FLINCH_BURN_HIT
         274,  # FLINCH_FREEZE_HIT
         276,  # RAISE_SP_ATK_HIT
+        # E1 batch 4: the stat raises (Basic_CheckHighStatStage_*, script.s:343-418;
+        # Expert_Status*Up, :1978-2155) of the Kaizo moves, but evasion
+        # (docs/ai/kaizo_roark.md 5.10).
+        10,  # ATK_UP: Expert_StatusAttackUp (:1633), :1989, :1995, :2001
+        11,  # DEF_UP: Expert_StatusDefenseUp (:1634), :2023, :2029, :2034, :2043, :2046
+        13,  # SP_ATK_UP: Expert_StatusSpAttackUp (:1636), :2092, :2098, :2104
+        50,  # ATK_UP_2: Expert_StatusAttackUp (:1663)
+        51,  # DEF_UP_2: Expert_StatusDefenseUp (:1664)
+        53,  # SP_ATK_UP_2: Expert_StatusSpAttackUp (:1666)
+        54,  # SP_DEF_UP_2: Expert_StatusSpDefenseUp (:1667)
     }
 )
 # The transcribed effects (KAIZO_TRANSCRIBED) whose Expert_Main entry goes to a label added
@@ -314,6 +341,14 @@ KAIZO_EXPERT_LABELS: dict[int, tuple[str, int]] = {
     109: ("Expert_Curse", 1700),  # CURSE (Curse)
     186: ("Expert_BrickBreak", 1739),  # REMOVE_SCREENS (Brick Break)
     269: ("Expert_RecoilMove", 1806),  # RECOIL_HALF (Head Smash)
+    # E1 batch 4: the stat raises (SPEED_UP_2's Expert_StatusSpeedUp is above).
+    10: ("Expert_StatusAttackUp", 1633),
+    11: ("Expert_StatusDefenseUp", 1634),
+    13: ("Expert_StatusSpAttackUp", 1636),
+    50: ("Expert_StatusAttackUp", 1663),
+    51: ("Expert_StatusDefenseUp", 1664),
+    53: ("Expert_StatusSpAttackUp", 1666),
+    54: ("Expert_StatusSpDefenseUp", 1667),
 }
 # Of KAIZO_EXPERT_LABELS, the effects whose Expert label policy._expert transcribes
 # (layout.KAIZO expert_transcribed), written out: it is not derived from the table, so an
@@ -331,6 +366,13 @@ KAIZO_EXPERT_TRANSCRIBED: frozenset[int] = frozenset(
         109,  # CURSE: Expert_Curse
         186,  # REMOVE_SCREENS: Expert_BrickBreak
         269,  # RECOIL_HALF: Expert_RecoilMove
+        10,  # ATK_UP: Expert_StatusAttackUp
+        11,  # DEF_UP: Expert_StatusDefenseUp
+        13,  # SP_ATK_UP: Expert_StatusSpAttackUp
+        50,  # ATK_UP_2: Expert_StatusAttackUp
+        51,  # DEF_UP_2: Expert_StatusDefenseUp
+        53,  # SP_ATK_UP_2: Expert_StatusSpAttackUp
+        54,  # SP_DEF_UP_2: Expert_StatusSpDefenseUp
     }
 )
 assert set(KAIZO_EXPERT_LABELS) <= KAIZO_TRANSCRIBED

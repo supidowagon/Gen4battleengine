@@ -480,8 +480,9 @@ added to the policy's checks by `ai_defender_hp_checks` when the set has bit 8).
 
 ### 5.9 Effects with no Basic or Expert label (E1 batch 3)
 
-26 battle effects have no entry in `Basic_ScoreMoveEffect` (`script.s:133-286`) or
-`Expert_Main` (`:1628-1808`): FREEZE_HIT, MULTI_HIT, TRI_ATTACK, HIT_TWICE, CRASH_ON_MISS,
+The 26 effects of trainers' moves (the backlog's) that have no entry in
+`Basic_ScoreMoveEffect` (`script.s:133-286`) or `Expert_Main` (`:1628-1808`); about 20 more
+effects of Kaizo moves have none either and stay refused until a trainer uses them: FREEZE_HIT, MULTI_HIT, TRI_ATTACK, HIT_TWICE, CRASH_ON_MISS,
 LOWER_ACCURACY_HIT, CALL_RANDOM_MOVE, LEAVE_WITH_1_HP, PRIORITY_1, THAW_AND_BURN_HIT,
 RAISE_DEF_HIT, RAISE_ATTACK_HIT, DOUBLE_DAMAGE_DIG, DOUBLE_DAMAGE_FLY_OR_BOUNCE,
 FLINCH_MINIMIZE_DOUBLE_HIT, THUNDER, UPROAR, MAKE_GLOBAL_TARGET, USE_RANDOM_ALLY_MOVE,
@@ -490,13 +491,19 @@ FLINCH_FREEZE_HIT and RAISE_SP_ATK_HIT. Every transcribed flag treats them gener
 they only join `outcome.KAIZO_TRANSCRIBED`:
 
 - The C code reads a move's effect only against `sNoDamageCalcMoveEffects` and
-  `sAltPowerMoveEffects` (`FlagMoveDamageScore`, `trainer_ai.c:1012-1063`; `IfCurrentMoveKills`,
-  `:1525-1560`; the damage estimates, `:2800-2830`), and none of the 26 is in either.
+  `sAltPowerMoveEffects` (`FlagMoveDamageScore`, `trainer_ai.c:1012-1063`; `IfCurrentMoveKills`
+  and `IfCurrentMoveDoesNotKill`, `:1525-1610`; `CheckIfHighestDamageWithPartner`, `:2382-2388`;
+  the damage estimates, `:2800-2830`), and none of the 26 is in either. `TrainerAI_CalcDamage`
+  has no case for their moves, and the Dig/Fly/Dive/Minimize doublings are a move script's
+  power multiplier, reset each turn (`battle_controller_player.c:1855`), so the AI never sees
+  them.
 - Their other mentions in `script.s` are generic tables or other moves' paths: PRIORITY_1 in
   EvalAttack's kill bonus (`:6400`, 5.2); CALL_RANDOM_MOVE in `Risky_RiskyEffects` (`:6543`);
   MAKE_GLOBAL_TARGET in `Expert_Encore_EncouragedMoveEffects` (`:3249`), which Encore reads for
   the player's last move; SECRET_POWER in HARRASSMENT's table (`:8062`; not a transcribed
-  flag). THUNDER has no `Expert_Thunder` path: `Expert_Main` tests
+  flag); TAG_STRATEGY names several of them (`:6691`, `:6736`, `:6746`, `:7270`, `:7280`,
+  `:7495`), to check when that flag is transcribed (it runs on 15 singles fights). Uproar is in
+  Basic's Soundproof list by move id (`:127`, `commands.SOUND_MOVES`). THUNDER has no `Expert_Thunder` path: `Expert_Main` tests
   SKIP_CHARGE_TURN_IN_SUN for it (`:1718`, the decomp's own BUG comment), transcribed as the
   game has it.
 - `test_expert_label_table_is_the_dispatch` and `test_basic_label_table_is_the_dispatch` fail
@@ -504,6 +511,33 @@ they only join `outcome.KAIZO_TRANSCRIBED`:
 
 Many of these moves are still refused by the engine's move-effect coverage (Metronome, Follow
 Me, Assist, Uproar, Secret Power's terrain, ...); the AI side no longer adds a line for them.
+
+### 5.10 Stat raises (E1 batch 4)
+
+The stat raises Kaizo moves carry: ATK_UP, DEF_UP, SP_ATK_UP, ATK_UP_2, DEF_UP_2, SP_ATK_UP_2
+and SP_DEF_UP_2 (SPEED_UP_2 was Roark's). No Kaizo move has SPEED_UP, SP_DEF_UP, ACC_UP,
+ACC_UP_2 or DEF_UP_DOUBLE_ROLLOUT_POWER, so their paths (the accuracy labels among them) are
+not transcribed. The evasion raises (EVA_UP, EVA_UP_2, EVA_UP_2_MINIMIZE) wait for a per-fight
+read bound: `Expert_StatusEvasionUp` alone can make 8 random reads on one path (8.3).
+
+- BASIC: `Basic_CheckHighStatStage_<stat>` (`script.s:343-392`; dispatch `:137-141`,
+  `:164-168`): -10 when the attacker is already at the top, above +2 under Simple
+  (`IfStatStageGreaterThan` 8) or at +6 otherwise (`IfStatStageEqualTo` 12).
+- EXPERT (`:1633-1637`, `:1663-1667`):
+  - `Expert_StatusAttackUp` / `_SpAttackUp` (`:1978-2007`, `:2081-2110`): at +3 or more, -1
+    unless the 100 roll jumps (`:1989`, `:2092`); otherwise at exactly 100 % HP, +2 unless
+    the 128 roll jumps (`:1995`, `:2098`). Then above 70 % HP nothing more, below 40 % -2,
+    otherwise -2 unless the 40 (Attack, `:2001`) or 70 (Sp. Atk, `:2104`) roll jumps.
+  - `Expert_StatusDefenseUp` / `_SpDefenseUp` (`:2009-2052`, `:2112-2155`): the same first two
+    steps (`:2023`, `:2029`; `:2126`, `:2132`); then at 70 % HP or more nothing more if the 200
+    roll jumps (`:2034`, `:2137`), else on. Below 40 % -2. Otherwise the player's previous move
+    (`LoadBattlerPreviousMove`, `trainer_ai.c:1068-1076`, and the new
+    `LoadPowerOfLoadedMove`, `:2526-2530`): power 0 goes to the second 60 roll; a special
+    move (Defense) or a physical one (Sp. Def; `LoadDefenderLastUsedMoveClass`) to -2; any
+    other to the first 60 roll, which falls into the second when it does not jump (`:2043`,
+    `:2046`; `:2146`, `:2149`). -2 unless a 60 roll jumps.
+  - The `PreSplitPhysicalTypes` tables after the defense labels (`:2054`, `:2157`) are not
+    read.
 
 ## 6. Where the AI reads the true battle state
 

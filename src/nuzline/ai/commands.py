@@ -152,13 +152,20 @@ class BattleEffect(IntEnum):
     HIT = 0
     RECOVER_HALF_DAMAGE_DEALT = 3  # Giga Drain
     HALVE_DEFENSE = 7  # Selfdestruct, Explosion
+    ATK_UP = 10
+    DEF_UP = 11
+    SP_ATK_UP = 13
     SP_DEF_UP = 14  # Expert_ToxicLeechSeed's IfMoveEffectKnown (script.s:2699)
     DEF_DOWN = 19
     FLINCH_HIT = 31
     RESTORE_HALF_HP = 32  # Recover
     STATUS_BADLY_POISON = 33  # Toxic
     SET_LIGHT_SCREEN = 35  # Light Screen
+    ATK_UP_2 = 50
+    DEF_UP_2 = 51
     SPEED_UP_2 = 52  # Rock Polish
+    SP_ATK_UP_2 = 53
+    SP_DEF_UP_2 = 54
     DEF_DOWN_2 = 59
     PRIORITY_1 = 103  # EvalAttack_ApplyKillBonuses' +2 (script.s:6400); no Roark move has it
     CURSE = 109
@@ -557,7 +564,7 @@ CHECK_HP_TABLES: dict[str, tuple[int, ...]] = {
 }
 # A move's class (MoveTable.class, generated/move_classes.txt: line n + 1 is id n), as
 # LoadDefenderLastUsedMoveClass loads it (Expert_LightScreen, script.s:2723).
-CLASS_SPECIAL = 1
+CLASS_PHYSICAL, CLASS_SPECIAL = 0, 1
 # TrainerAI_CalcDamage's move-id cases (trainer_ai.c:2885-3056): power, type or damage of
 # these moves come from the case, not the move table, whatever the move's effect (Kaizo's
 # Return and Frustration have effect 0 and still take theirs, :3018-3026). Decomp move ids.
@@ -660,9 +667,10 @@ class ReadKind(IntEnum):
 
 
 # LooseDraws columns: at least the reads one slot's scripts make. Every read counts, on the
-# slot's path or not (the scripts are straight-line): 35 after K3c Task 6, about 39 under every
-# flag E1 batch 2c transcribes (2c review); more raises (policy._loose_reads).
-LOOSE_READS = 48
+# slot's path or not (the scripts are straight-line): 35 after K3c Task 6, 53 after E1 batch 4
+# (the stat-raise Expert labels). More raises (policy._loose_reads); the loose oracle is tests
+# only, so the headroom costs nothing in a fight.
+LOOSE_READS = 128
 
 
 class LooseDraws(NamedTuple):
@@ -1357,6 +1365,19 @@ def if_attacker_has_no_damaging_moves(ctx: AiContext) -> AiContext:
     moves = state.moves[1, state.active[1]].astype(_I32)
     damaging = (moves != 0) & (ctx.tables.move_power[moves] != 0)
     return _jump(ctx, ~jnp.any(damaging))
+
+
+def load_battler_previous_move(ctx: AiContext, battler: Battler) -> AiContext:
+    """``LoadBattlerPreviousMove`` (trainer_ai.c:1068-1076): ``calcTemp =
+    movePrevByBattler[battler]`` (``BattleState.last_move`` of the battler's side; the
+    selected move on success, else ``MOVE_NONE``, battle_controller_player.c:3944-3949)."""
+    return ctx._replace(calc_temp=ctx.state.last_move[_side(battler)].astype(_I32))
+
+
+def load_power_of_loaded_move(ctx: AiContext) -> AiContext:
+    """``LoadPowerOfLoadedMove`` (trainer_ai.c:2526-2530): ``calcTemp =
+    MOVE_DATA(calcTemp).power``."""
+    return ctx._replace(calc_temp=ctx.tables.move_power[ctx.calc_temp].astype(_I32))
 
 
 def load_defender_last_used_move_class(ctx: AiContext) -> AiContext:

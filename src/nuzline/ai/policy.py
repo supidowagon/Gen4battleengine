@@ -333,6 +333,31 @@ def _basic_check_speed(ctx: AiContext, mask) -> AiContext:
     return ctx
 
 
+def _high_stat_stage(label: str, stat: Stat, line: int):
+    """A ``Basic_CheckHighStatStage_<stat>`` label (script.s:343-392, at ``line``) of Attack,
+    Defense, Sp. Atk or Sp. Def: -10 when the attacker's stage is already at the top (above +2
+    with Simple, which doubles its changes; +6 otherwise)."""
+
+    def check(ctx: AiContext, mask) -> AiContext:
+        ctx = c.load_battler_ability(_at(ctx, mask), _A)
+        ctx, no_simple = _split(c.if_loaded_not_equal_to(ctx, _ABILITY["Simple"]))
+        ctx, t = _split(c.if_stat_stage_greater_than(ctx, _A, stat, 8))
+        ctx = c.pop_or_end(_score(ctx, t, -10))
+        # <label>_NoSimple
+        ctx, t = _split(c.if_stat_stage_equal_to(_at(ctx, no_simple), _A, stat, 12))
+        return c.pop_or_end(_score(ctx, t, -10))
+
+    check.__name__ = check.__qualname__ = f"_basic_check_high_{stat.name.lower()}"
+    check.__doc__ = f"``{label}`` (script.s:{line})."
+    return check
+
+
+_basic_check_high_atk = _high_stat_stage("Basic_CheckHighStatStage_Attack", Stat.ATK, 343)
+_basic_check_high_def = _high_stat_stage("Basic_CheckHighStatStage_Defense", Stat.DEF, 353)
+_basic_check_high_spa = _high_stat_stage("Basic_CheckHighStatStage_SpAttack", Stat.SPA, 374)
+_basic_check_high_spd = _high_stat_stage("Basic_CheckHighStatStage_SpDefense", Stat.SPD, 384)
+
+
 def _basic_check_curse(ctx: AiContext, mask) -> AiContext:
     """``Basic_CheckCurse`` (script.s:679-698)."""
     # Basic_CheckCurse (:679). A Ghost-type attacker jumps to Basic_CheckCurse_GhostType
@@ -592,6 +617,101 @@ def _expert_status_speed_up(ctx: AiContext, mask) -> AiContext:
     return ctx
 
 
+def _status_attack_up(label: str, stat: Stat, lines: tuple[int, int, int, int], n_end: int):
+    """``Expert_StatusAttackUp`` (script.s:1978-2007) / ``Expert_StatusSpAttackUp``
+    (:2081-2110), at ``lines`` (label, its 100, 128 and last rolls): at +3 or more (decomp
+    stage 9) -1 unless the 100 roll jumps; else at exactly 100 % HP +2 unless the 128 roll
+    jumps; then above 70 % HP nothing more, below 40 % -2, otherwise -2 unless the ``n_end``
+    roll jumps."""
+    start, r100, r128, r_end = lines
+
+    def check(ctx: AiContext, mask) -> AiContext:
+        ctx = _at(ctx, mask)
+        ctx, max_hp = _split(c.if_stat_stage_less_than(ctx, _A, stat, 9))
+        ctx, t = _split(c.if_random_less_than(ctx, 100, r100))
+        ctx = c.add_to_move_score(ctx, -1)
+        ctx, g = _split(c.go_to(ctx))
+        hp_range = t | g
+        # <label>_CheckUserAtMaxHP
+        ctx, t = _split(c.if_hp_percent_not_equal_to(_at(ctx, max_hp), _A, 100))
+        hp_range = hp_range | t
+        ctx, t = _split(c.if_random_less_than(ctx, 128, r128))
+        ctx = c.add_to_move_score(ctx, 2)
+        # <label>_CheckUserHPRange
+        ctx = _at(ctx, hp_range | t | ctx.live)
+        ctx, _ = _split(c.if_hp_percent_greater_than(ctx, _A, 70))  # -> _End
+        ctx, minus2 = _split(c.if_hp_percent_less_than(ctx, _A, 40))
+        ctx, _ = _split(c.if_random_less_than(ctx, n_end, r_end))  # -> _End
+        # <label>_ScoreMinus2, then _End
+        ctx = c.add_to_move_score(_at(ctx, minus2 | ctx.live), -2)
+        return c.pop_or_end(ctx)
+
+    check.__name__ = check.__qualname__ = f"_expert_status_{stat.name.lower()}_up"
+    check.__doc__ = f"``{label}`` (script.s:{start})."
+    return check
+
+
+def _status_defense_up(label: str, stat: Stat, lines: tuple[int, ...], minus2_class: int):
+    """``Expert_StatusDefenseUp`` (script.s:2009-2052) / ``Expert_StatusSpDefenseUp``
+    (:2112-2155), at ``lines`` (label, its 100, 128, 200, first 60 and second 60 rolls): the
+    +3-or-more -1 and the 100 %-HP +2 as in Expert_StatusAttackUp; then at 70 % HP or more
+    nothing more when the 200 roll jumps; below 40 % -2; else the player's previous move
+    (``LoadBattlerPreviousMove``) with power 0 goes to the second 60 roll, one of class
+    ``minus2_class`` (special for Defense, physical for Sp. Def) to -2, any other to the
+    first 60 roll, which falls into the second when it does not jump; -2 unless a 60 roll
+    jumps."""
+    start, r100, r128, r200, r60a, r60b = lines
+
+    def check(ctx: AiContext, mask) -> AiContext:
+        ctx = _at(ctx, mask)
+        ctx, max_hp = _split(c.if_stat_stage_less_than(ctx, _A, stat, 9))
+        ctx, t = _split(c.if_random_less_than(ctx, 100, r100))
+        ctx = c.add_to_move_score(ctx, -1)
+        ctx, g = _split(c.go_to(ctx))
+        high_hp = t | g
+        # <label>_CheckUserAtMaxHP
+        ctx, t = _split(c.if_hp_percent_not_equal_to(_at(ctx, max_hp), _A, 100))
+        high_hp = high_hp | t
+        ctx, t = _split(c.if_random_less_than(ctx, 128, r128))
+        ctx = c.add_to_move_score(ctx, 2)
+        # <label>_CheckUserHighHP
+        ctx = _at(ctx, high_hp | t | ctx.live)
+        ctx, medium = _split(c.if_hp_percent_less_than(ctx, _A, 70))
+        ctx, _ = _split(c.if_random_less_than(ctx, 200, r200))  # -> _End
+        # <label>_CheckUserMediumHP
+        ctx = _at(ctx, medium | ctx.live)
+        ctx, minus2 = _split(c.if_hp_percent_less_than(ctx, _A, 40))
+        ctx = c.load_power_of_loaded_move(c.load_battler_previous_move(ctx, _D))
+        ctx, low_hp = _split(c.if_loaded_equal_to(ctx, 0))
+        ctx = c.load_defender_last_used_move_class(ctx)
+        ctx, t = _split(c.if_loaded_equal_to(ctx, minus2_class))
+        minus2 = minus2 | t
+        ctx, _ = _split(c.if_random_less_than(ctx, 60, r60a))  # -> _End
+        # <label>_UserAtLowHP
+        ctx, _ = _split(c.if_random_less_than(_at(ctx, low_hp | ctx.live), 60, r60b))
+        # <label>_ScoreMinus2 (_TryScoreMinus2 for Sp. Def), then _End
+        ctx = c.add_to_move_score(_at(ctx, minus2 | ctx.live), -2)
+        return c.pop_or_end(ctx)
+
+    check.__name__ = check.__qualname__ = f"_expert_status_{stat.name.lower()}_up"
+    check.__doc__ = f"``{label}`` (script.s:{start})."
+    return check
+
+
+_expert_status_atk_up = _status_attack_up(
+    "Expert_StatusAttackUp", Stat.ATK, (1978, 1989, 1995, 2001), 40
+)
+_expert_status_spa_up = _status_attack_up(
+    "Expert_StatusSpAttackUp", Stat.SPA, (2081, 2092, 2098, 2104), 70
+)
+_expert_status_def_up = _status_defense_up(
+    "Expert_StatusDefenseUp", Stat.DEF, (2009, 2023, 2029, 2034, 2043, 2046), c.CLASS_SPECIAL
+)
+_expert_status_spd_up = _status_defense_up(
+    "Expert_StatusSpDefenseUp", Stat.SPD, (2112, 2126, 2132, 2137, 2146, 2149), c.CLASS_PHYSICAL
+)
+
+
 def _expert_curse(ctx: AiContext, mask) -> AiContext:
     """``Expert_Curse`` (script.s:3452-3500)."""
     # Expert_Curse (:3452). A Ghost-type attacker jumps to Expert_Curse_GhostCheckHP
@@ -751,11 +871,18 @@ def _dispatch(ctx: AiContext, labels, layout: AiLayout) -> AiContext:
 # order. The other effects of the transcribed moves have no entry and end at :286.
 _BASIC_LABELS = (
     (BattleEffect.HALVE_DEFENSE, _basic_check_cannot_explode),  # :135
+    (BattleEffect.ATK_UP, _basic_check_high_atk),  # :137
+    (BattleEffect.DEF_UP, _basic_check_high_def),  # :138
+    (BattleEffect.SP_ATK_UP, _basic_check_high_spa),  # :140
     (BattleEffect.DEF_DOWN, _basic_check_defense),  # :145
     (BattleEffect.RESTORE_HALF_HP, _basic_check_can_recover_hp),  # :154
     (BattleEffect.STATUS_BADLY_POISON, _basic_check_cannot_poison),  # :155
     (BattleEffect.SET_LIGHT_SCREEN, _basic_check_light_screen),  # :156
+    (BattleEffect.ATK_UP_2, _basic_check_high_atk),  # :164
+    (BattleEffect.DEF_UP_2, _basic_check_high_def),  # :165
     (BattleEffect.SPEED_UP_2, _basic_check_speed),  # :166
+    (BattleEffect.SP_ATK_UP_2, _basic_check_high_spa),  # :167
+    (BattleEffect.SP_DEF_UP_2, _basic_check_high_spd),  # :168
     (BattleEffect.DEF_DOWN_2, _basic_check_defense),  # :172
     (BattleEffect.CURSE, _basic_check_curse),  # :196
     (BattleEffect.STEALTH_ROCK, _basic_check_stealth_rock),  # :284
@@ -765,11 +892,18 @@ _BASIC_LABELS = (
 _EXPERT_LABELS = (
     (BattleEffect.RECOVER_HALF_DAMAGE_DEALT, _expert_drain_move),  # :1629
     (BattleEffect.HALVE_DEFENSE, _expert_explosion),  # :1630
+    (BattleEffect.ATK_UP, _expert_status_atk_up),  # :1633
+    (BattleEffect.DEF_UP, _expert_status_def_up),  # :1634
+    (BattleEffect.SP_ATK_UP, _expert_status_spa_up),  # :1636
     (BattleEffect.DEF_DOWN, _expert_status_defense_down),  # :1642
     (BattleEffect.RESTORE_HALF_HP, _expert_recovery),  # :1652
     (BattleEffect.STATUS_BADLY_POISON, _expert_toxic_leech_seed),  # :1653
     (BattleEffect.SET_LIGHT_SCREEN, _expert_light_screen),  # :1654
+    (BattleEffect.ATK_UP_2, _expert_status_atk_up),  # :1663
+    (BattleEffect.DEF_UP_2, _expert_status_def_up),  # :1664
     (BattleEffect.SPEED_UP_2, _expert_status_speed_up),  # :1665
+    (BattleEffect.SP_ATK_UP_2, _expert_status_spa_up),  # :1666
+    (BattleEffect.SP_DEF_UP_2, _expert_status_spd_up),  # :1667
     (BattleEffect.DEF_DOWN_2, _expert_status_defense_down),  # :1671
     (BattleEffect.CURSE, _expert_curse),  # :1700
     (BattleEffect.HIT_BEFORE_SWITCH, _expert_pursuit),  # :1706

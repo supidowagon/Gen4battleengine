@@ -63,7 +63,9 @@ test in `tests/ai/test_kaizo_commands.py`, which also checks this table against 
 | `LoadCurrentMoveEffect` | none | Sets `calcTemp` to the effect of the move being scored (`MOVE_DATA(move).effect`, `:1164`). RISKY uses it (`script.s:6521-6531`). | no | `load_current_move_effect` |
 | `IfLoadedInTable` | table, `jump` | Jumps when `calcTemp` equals one of the table's values (the list up to its `0xFFFFFFFF` end, `:858-874`); an empty table never jumps. CHECK_HP uses it with its six tables (`script.s:7748-7977`, `commands.CHECK_HP_TABLES`; `CheckHP_Target_DiscourageAtHighHP` is empty). | no | `if_loaded_in_table` |
 | `IfLoadedNotInTable` | table, `jump` | Jumps when `calcTemp` equals none of the table's values (the list up to its `0xFFFFFFFF` end, `:876-891`). RISKY uses it with `Risky_RiskyEffects` (`script.s:6536-6561`), SETUP_FIRST_TURN with `SetupFirstTurn_SetupEffects` (`script.s:6435-6497`, `commands.SETUP_FIRST_TURN_EFFECTS`). | no | `if_loaded_not_in_table` |
+| `LoadBattlerPreviousMove` | battler | Sets `calcTemp` to `movePrevByBattler[battler]` (`:1068-1076`), `BattleState.last_move` of the battler's side: the selected move on success, else `MOVE_NONE` (`battle_controller_player.c:3944-3949`). `Expert_StatusDefenseUp` / `_SpDefenseUp` read the defender's (`script.s:2038`, `:2141`). | no | `load_battler_previous_move` |
+| `LoadPowerOfLoadedMove` | none | Sets `calcTemp` to `MOVE_DATA(calcTemp).power` (`:2526-2530`). | no | `load_power_of_loaded_move` |
 | `LoadTurnCount` | none | Sets `calcTemp` to `totalTurns` (`:931-935`), `BattleState.turn` at a decision: 0 on the battle's first turn (the battle increments it once a turn ends, `battle_controller_player.c:1852`). SETUP_FIRST_TURN (`script.s:6421`) and WEATHER (`:7983`) use it. | no | `load_turn_count` |
 
-**Count check.** `grep -c '^|' docs/ai/script_commands.md` gives 41: 39 command rows
+**Count check.** `grep -c '^|' docs/ai/script_commands.md` gives 43: 41 command rows
 plus the header and separator lines (`test_script_commands_table_matches_the_module`).
