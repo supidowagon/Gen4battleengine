@@ -35,7 +35,7 @@ from __future__ import annotations
 import re
 import struct
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
 
@@ -125,7 +125,8 @@ VISIBLE_ITEM_SCRIPTS = 7000  # the next range (script_manager.h:95)
 # Script ids below the first range (SCRIPT_ID_OFFSET_COMMON_SCRIPTS, script_manager.h:90) run
 # an entry of the map's own script file.
 COMMON_SCRIPTS = 2000
-# Event kind -> offset of its u16 script id (bg, object, coord; event.py:25-35, 28-40, 85-96).
+# Event kind -> offset of its u16 script id (tools/jsoncnv/event.py: bg :25-46, script :29;
+# object :52-75, script :64; coord :109-131, script :113).
 EVENT_SCRIPT_FIELDS = {0: 0, OBJECT_EVENTS: OBJECT_SCRIPT, 3: 0}
 
 # The script file header (asm/macros/scrcmd.inc:5105-5116): ScriptEntry is
@@ -619,8 +620,8 @@ def _events_object_scripts(member: bytes, index: int) -> list[int]:
 
 def map_script_ids(member: bytes, index: int) -> list[int]:
     """The script ids of one ``zone_event.narc`` member's bg, object and coord events
-    (event.py:25-35 bg script u16 at +0, :28-40 object script u16 at +10, :85-96 coord script
-    u16 at +0) that run an entry of the map's own script file: ``1 <= id <
+    (tools/jsoncnv/event.py: bg :25-46, script u16 at +0 :29; object :52-75, script u16 at
+    +10 :64; coord :109-131, script u16 at +0 :113) that run an entry of the map's own script file: ``1 <= id <
     SCRIPT_ID_OFFSET_COMMON_SCRIPTS``, entry ``id - 1`` (``ScriptContext_LoadAndOffsetID``,
     src/script_manager.c:243-246; ``ScriptContext_JumpToOffsetID``, :412-416)."""
     return [s for s in _event_records(member, index)[2] if 1 <= s < COMMON_SCRIPTS]
@@ -1154,6 +1155,121 @@ def _rematches(rom: RomFiles, symbols: SymbolMap, n_trainers: int) -> list[tuple
     return out
 
 
+# Local script ids (entries of the current map's own file, script_manager.c:243-246) that
+# game code starts directly, not through a map event: Pal Park's last ball (3,
+# encounter.c:637), the start menu's retire (4, start_menu.c:1457), the Union Room (5,
+# overlay005/field_control.c:450) and the Distortion World's teleports and boulders (2 and
+# 4, overlay009/ov9_02249960.c:99,106; 5-7, :7732-7756; the event-command rows' 2, 3, 4, 7
+# and 8, :8765 and :11050-12709). Its elevator platform assigns script 6 to an object
+# (MapObject_SetScript, :5411), which the player then talks to. A shared file's header is
+# taken to run each of them that its file has.
+C_STARTED_SCRIPTS = (2, 3, 4, 5, 6, 7, 8)
+# Commands that start a script by an id read from the script itself, with no range check:
+# ScrCmd_Unused_013 (src/scrcmd.c:960-971), any id, and ScrCmd_CallCommonScript (:973-985)
+# with a local id (1..COMMON_SCRIPTS - 1; ScriptContext_CreateAndStart runs it through
+# ScriptContext_LoadAndOffsetID, script_manager.c:228-254). A header whose run entries reach
+# one may run any entry of its file.
+STARTS_SCRIPT_BY_ID = "SCRCMD_UNUSED_013"
+CALLS_COMMON_SCRIPT = "SCRCMD_CALLCOMMONSCRIPT"
+
+
+def starts_local_script(table: CommandTable, opcode: int, operands: Sequence[int]) -> bool:
+    """Whether one decoded command may start an entry of its own map's file by id
+    (``STARTS_SCRIPT_BY_ID``, or ``CALLS_COMMON_SCRIPT`` with a local id)."""
+    if opcode == table.opcode[STARTS_SCRIPT_BY_ID]:
+        return True
+    return opcode == table.opcode[CALLS_COMMON_SCRIPT] and 1 <= operands[0] < COMMON_SCRIPTS
+
+
+def header_battles(
+    run: Iterable[int],
+    per_entry: Sequence[set[int]],
+    starts_by_id: Sequence[bool],
+    whole_file: set[int],
+    has_clone: bool,
+) -> set[int]:
+    """The battles one header of a shared script file starts: those of the entries it runs
+    (``run``: its events' and init scripts' local ids, 1-based) plus the ``C_STARTED_SCRIPTS``
+    entries the file has. The whole file's battles instead when the header carries a clone
+    object (script ``NO_SCRIPT``: it takes another header's object and script across a
+    header change, map_object.c:2322-2337), names an entry past the file's table (the game
+    indexes without a bound, script_manager.c:412-416), or runs an entry (``C_STARTED_SCRIPTS``
+    included) that reaches a command starting a local script by id (``starts_local_script``)."""
+    n = len(per_entry)
+    ids = set(run)
+    if has_clone or any(not 1 <= s <= n for s in ids):
+        return set(whole_file)
+    ids |= {s for s in C_STARTED_SCRIPTS if s <= n}
+    if any(starts_by_id[s - 1] for s in ids):
+        return set(whole_file)
+    return set().union(*(per_entry[s - 1] for s in ids))
+
+
+def join_trainer_maps(
+    rows: Sequence[tuple[int, int, int]],
+    inits: Sequence[int],
+    scripts: Sequence[bytes],
+    events: Sequence[bytes],
+    table: CommandTable,
+    n_trainers: int,
+    found: list[UnresolvedOperand] | None = None,
+) -> dict[int, set[int]]:
+    """Trainer id -> map headers, before rematches (``trainer_maps``): each header's object
+    event trainers, plus its script file's battles: the whole-file walk (Ruling 12) for a
+    file one header uses, ``header_battles`` for a file several headers share. Unresolved
+    battle operands of each file's whole walk go to ``found``."""
+    whole: dict[int, set[int]] = {}
+    by_entry: dict[int, tuple[list[set[int]], list[bool]]] = {}
+    users = Counter(script_id for script_id, _, _ in rows)
+    where: dict[int, set[int]] = {}
+
+    def place(trainer: int, header: int, source: str) -> None:
+        if not 0 < trainer < n_trainers:
+            raise ReaderError(f"map header {header}: {source} names unknown trainer {trainer}")
+        where.setdefault(trainer, set()).add(header)
+
+    for header, (script_id, events_id, _) in enumerate(rows):
+        if events_id >= len(events) or script_id >= len(scripts):
+            raise ReaderError(f"map header {header}: events {events_id} / scripts {script_id}")
+        for t in _object_trainers(events[events_id], events_id):
+            place(t, header, f"{EVENTS_NARC} {events_id}")
+        name = f"{SCRIPTS_NARC} member {script_id}"
+        if script_id not in whole:
+            sites: list[tuple[int, int, int]] = []
+            whole[script_id] = script_battles(scripts[script_id], table, name, sites)
+            if found is not None:
+                found.extend(UnresolvedOperand(script_id, *site) for site in sites)
+        if users[script_id] == 1:
+            got = whole[script_id]
+        else:
+            if script_id not in by_entry:
+                walks = [
+                    _walk(scripts[script_id], table, name, [e])
+                    for e in script_entries(scripts[script_id], name)
+                ]
+                by_entry[script_id] = (
+                    [w[1] for w in walks],
+                    [
+                        any(starts_local_script(table, op, args) for op, args, _ in w[0].values())
+                        for w in walks
+                    ],
+                )
+            per_entry, starts_by_id = by_entry[script_id]
+            init = inits[header]
+            if init >= len(scripts):
+                raise ReaderError(f"map header {header}: init scripts {init}")
+            run = map_script_ids(events[events_id], events_id) + [
+                s for s in init_script_ids(scripts[init], init) if 1 <= s < COMMON_SCRIPTS
+            ]
+            clone = any(
+                sc == NO_SCRIPT for _, _, sc in _object_records(events[events_id], events_id)
+            )
+            got = header_battles(run, per_entry, starts_by_id, whole[script_id], clone)
+        for t in got:
+            place(t, header, name)
+    return where
+
+
 def trainer_maps(
     rom: RomFiles,
     decomp: Path,
@@ -1167,73 +1283,37 @@ def trainer_maps(
     Each battle operand variable no constant reaches is appended to ``unresolved`` (when
     given), once per script file, in script member order.
 
-    A script file that several map headers share (Kaizo writes the Coronet Highlands tag
-    battles into ``scripts_empty``, member 401, the file of 136 headers) places a battle
-    only on the headers that run an entry reaching it: an entry named by the header's own
-    bg, object or coord events (``map_script_ids``) or by its init scripts
-    (``init_script_ids``); the whole-file walk would place it on every sharing header. A
-    header naming an entry past the file's table (the game indexes without a bound,
-    script_manager.c:412-416) keeps the whole-file walk, as does a file of one header
-    (Ruling 12): no placement is dropped on a guess.
+    What is read (``join_trainer_maps``): each header's object-event trainers; its script
+    file's battles, by the whole-file walk for a file only that header uses; for a file
+    several headers share (Kaizo writes the Coronet Highlands tag battles into
+    ``scripts_empty``, member 401, the file of 136 headers), the battles of the entries the
+    header runs: its bg, object and coord events' local script ids (``map_script_ids``),
+    its init scripts' (``init_script_ids``) and the ids game code starts directly
+    (``C_STARTED_SCRIPTS``), with the whole file instead for a clone object, an id past the
+    table, or a run entry reaching ``STARTS_SCRIPT_BY_ID`` or a local-id
+    ``CALLS_COMMON_SCRIPT`` (``starts_local_script``, ``header_battles``); then Vs. Seeker
+    rematches inherit
+    their base trainer's headers. Not read: which runtime state reaches an entry (flags,
+    vars, story order), common-script ranges (ids of 2000 and up), and a shared file's
+    entries that only another file's script or C code outside ``C_STARTED_SCRIPTS`` starts.
     """
     rows = map_header_rows(rom, symbols)
-    inits = map_init_scripts(rom, symbols)
-    scripts = rom.narc(SCRIPTS_NARC)
-    events = rom.narc(EVENTS_NARC)
-    table = command_table(decomp)
-    battles: dict[int, set[int]] = {}
-    by_entry: dict[int, list[set[int]]] = {}  # shared script file -> battles per entry
-    users = Counter(script_id for script_id, _, _ in rows)
-    where: dict[int, set[int]] = {}
-    weathers = []
     found: list[UnresolvedOperand] = []
-
-    def place(trainer: int, header: int, source: str) -> None:
-        if not 0 < trainer < n_trainers:
-            raise ReaderError(f"map header {header}: {source} names unknown trainer {trainer}")
-        where.setdefault(trainer, set()).add(header)
-
-    for header, (script_id, events_id, weather) in enumerate(rows):
-        weathers.append(weather)
-        if events_id >= len(events) or script_id >= len(scripts):
-            raise ReaderError(f"map header {header}: events {events_id} / scripts {script_id}")
-        for t in _object_trainers(events[events_id], events_id):
-            place(t, header, f"{EVENTS_NARC} {events_id}")
-        if script_id not in battles:
-            sites: list[tuple[int, int, int]] = []
-            battles[script_id] = script_battles(
-                scripts[script_id], table, f"{SCRIPTS_NARC} member {script_id}", sites
-            )
-            found.extend(UnresolvedOperand(script_id, *site) for site in sites)
-        if users[script_id] == 1:
-            for t in battles[script_id]:
-                place(t, header, f"{SCRIPTS_NARC} {script_id}")
-            continue
-        if script_id not in by_entry:
-            name = f"{SCRIPTS_NARC} member {script_id}"
-            by_entry[script_id] = [
-                script_battles(scripts[script_id], table, name, entries=[e])
-                for e in script_entries(scripts[script_id], name)
-            ]
-        entries = by_entry[script_id]
-        init = inits[header]
-        if init >= len(scripts):
-            raise ReaderError(f"map header {header}: init scripts {init}")
-        run = map_script_ids(events[events_id], events_id) + [
-            s for s in init_script_ids(scripts[init], init) if 1 <= s < COMMON_SCRIPTS
-        ]
-        if any(s > len(entries) for s in run):  # past the table: no entry to read
-            run = range(1, len(entries) + 1)
-        for s in sorted(set(run)):
-            for t in entries[s - 1]:
-                place(t, header, f"{SCRIPTS_NARC} {script_id} entry {s}")
-
+    where = join_trainer_maps(
+        rows,
+        map_init_scripts(rom, symbols),
+        rom.narc(SCRIPTS_NARC),
+        rom.narc(EVENTS_NARC),
+        command_table(decomp),
+        n_trainers,
+        found,
+    )
     for base, rematches in _rematches(rom, symbols, n_trainers):
         for t in rematches:
             where.setdefault(t, set()).update(where.get(base, set()))
     if unresolved is not None:
         unresolved.extend(sorted(found))
-    return where, weathers
+    return where, [weather for _, _, weather in rows]
 
 
 def _rom_trainer_names(rom: RomFiles, decomp: Path, n_trainers: int) -> list[str]:
