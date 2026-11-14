@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import re
 import struct
+from collections import Counter
 from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
@@ -72,6 +73,7 @@ EVENTS_NARC = "fielddata/eventdata/zone_event.narc"  # platinum.us/filesys.csv:2
 MAP_HEADER_SYMBOL = "sMapHeaders"
 MAP_HEADER_SIZE = 24
 HEADER_MATRIX, HEADER_SCRIPTS, HEADER_EVENTS, HEADER_WEATHER = 2, 4, 16, 20
+HEADER_INIT_SCRIPTS = 6  # u16 initScriptsArchiveID after scriptsArchiveID (map_header.h:14-15)
 HEADER_FLAGS, BATTLE_BG_SHIFT, BATTLE_BG_BITS = 22, 7, 5
 MATRIX_NARC = "fielddata/mapmatrix/map_matrix.narc"  # platinum.us/filesys.csv:265
 LAND_DATA_NARC = "fielddata/land_data/land_data.narc"  # platinum.us/filesys.csv:271
@@ -120,6 +122,11 @@ NO_SCRIPT = 0xFFFF
 SINGLE_BATTLE_SCRIPTS = 3000
 DOUBLE_BATTLE_SCRIPTS = 5000
 VISIBLE_ITEM_SCRIPTS = 7000  # the next range (script_manager.h:95)
+# Script ids below the first range (SCRIPT_ID_OFFSET_COMMON_SCRIPTS, script_manager.h:90) run
+# an entry of the map's own script file.
+COMMON_SCRIPTS = 2000
+# Event kind -> offset of its u16 script id (bg, object, coord; event.py:25-35, 28-40, 85-96).
+EVENT_SCRIPT_FIELDS = {0: 0, OBJECT_EVENTS: OBJECT_SCRIPT, 3: 0}
 
 # The script file header (asm/macros/scrcmd.inc:5105-5116): ScriptEntry is
 # ``.long label-.-4`` and ScriptEntryEnd ``.short 0xFD13``.
@@ -426,8 +433,9 @@ NOT_CONSTANT = -1
 _UNSET = frozenset({NOT_CONSTANT})
 
 
-def _walk(script: bytes, table: CommandTable, name: str):
-    """K1's control-flow walk from every header entry (``script_battles``): the decoded
+def _walk(script: bytes, table: CommandTable, name: str, entries: list[int] | None = None):
+    """K1's control-flow walk from every header entry, or from ``entries`` (absolute offsets)
+    when given (``script_battles``): the decoded
     commands it reaches (offset -> (opcode, operands, end)), the trainers it places, and
     each battle operand variable's values ((offset, variable) -> values)."""
     oc = table.opcode
@@ -445,7 +453,7 @@ def _walk(script: bytes, table: CommandTable, name: str):
     out: set[int] = set()
     operands: dict[tuple[int, int], set[int]] = {}  # (battle offset, variable) -> values
     work: list[tuple[int, tuple[int, ...], _Env]] = [
-        (e, (), {}) for e in script_entries(script, name)
+        (e, (), {}) for e in (script_entries(script, name) if entries is None else entries)
     ]
     while work:
         pos, stack, env = work.pop()
@@ -497,9 +505,11 @@ def script_battles(
     table: CommandTable,
     name: str = "script",
     unresolved: list[tuple[int, int, int]] | None = None,
+    entries: list[int] | None = None,
 ) -> set[int]:
     """Trainer ids placed on the map by the script, walking by control flow from every
-    header entry.
+    header entry, or only from ``entries`` (absolute offsets, ``script_entries``) when
+    given (``trainer_maps`` for a script file several map headers share).
 
     * Every operand of a reached ``StartTrainerBattle``, ``StartTagBattle`` or
       ``StartFirstBattle`` counts (Ruling 12). 0 is no trainer.
@@ -527,7 +537,7 @@ def script_battles(
       trainer battles (``src/scrcmd_trainer.c:133-134``) and wild battles
       (``src/overlay006/wild_encounters.c:344,531,661``).
     """
-    _, out, operands = _walk(script, table, name)
+    _, out, operands = _walk(script, table, name, entries)
     if unresolved is not None:
         unresolved.extend(
             sorted(
@@ -607,6 +617,48 @@ def _events_object_scripts(member: bytes, index: int) -> list[int]:
     return [script for _, _, script in _object_records(member, index)]
 
 
+def map_script_ids(member: bytes, index: int) -> list[int]:
+    """The script ids of one ``zone_event.narc`` member's bg, object and coord events
+    (event.py:25-35 bg script u16 at +0, :28-40 object script u16 at +10, :85-96 coord script
+    u16 at +0) that run an entry of the map's own script file: ``1 <= id <
+    SCRIPT_ID_OFFSET_COMMON_SCRIPTS``, entry ``id - 1`` (``ScriptContext_LoadAndOffsetID``,
+    src/script_manager.c:243-246; ``ScriptContext_JumpToOffsetID``, :412-416)."""
+    return [s for s in _event_records(member, index)[2] if 1 <= s < COMMON_SCRIPTS]
+
+
+# Init script types (include/constants/init_script_types.h:18): the frame table's entry holds
+# a u32 offset to (var u16, compare u16, script u16) rows; every other type a u16 script id.
+INIT_SCRIPT_ON_FRAME_TABLE = 1
+
+
+def init_script_ids(member: bytes, index: int) -> list[int]:
+    """Every script id one init-scripts member (``initScriptsArchiveID``) can run, as
+    ``FieldSystem_GetFixedInitScriptID`` and ``FieldSystem_GetFrameTableInitScriptID`` read
+    it (src/script_manager.c:738-806): 5-byte entries (type u8, then a u16 id or the frame
+    table's u32 offset from the end of that field) until a 0 type; the frame table's rows
+    end at a 0 first byte or a 0 var."""
+    out, pos = [], 0
+
+    def u16(at: int) -> int:
+        if at + 2 > len(member):
+            raise ReaderError(f"{SCRIPTS_NARC} init member {index}: truncated at {at}")
+        return struct.unpack_from("<H", member, at)[0]
+
+    while pos < len(member) and member[pos] != 0:
+        if member[pos] == INIT_SCRIPT_ON_FRAME_TABLE:
+            if pos + 5 > len(member):
+                raise ReaderError(f"{SCRIPTS_NARC} init member {index}: truncated at {pos}")
+            offset = struct.unpack_from("<I", member, pos + 1)[0]
+            row = pos + 5 + offset
+            while offset and row < len(member) and member[row] != 0 and u16(row) != 0:
+                out.append(u16(row + 4))
+                row += 6
+        else:
+            out.append(u16(pos + 1))
+        pos += 5
+    return out
+
+
 def _object_records(member: bytes, index: int) -> list[tuple[int, int, int]]:
     """(local id, hidden flag, script) of one ``zone_event.narc`` member's object events."""
     return _event_records(member, index)[0]
@@ -619,8 +671,9 @@ def _warp_tiles(member: bytes, index: int) -> list[tuple[int, int]]:
 
 
 def _event_records(member: bytes, index: int):
-    """(object records, warp tiles) of one ``zone_event.narc`` member."""
-    pos, records, warps = 0, [], []
+    """(object records, warp tiles, bg/object/coord script ids) of one ``zone_event.narc``
+    member."""
+    pos, records, warps, scripts = 0, [], [], []
     for kind, size in enumerate(EVENT_RECORD_SIZES):
         if pos + 4 > len(member):
             raise ReaderError(f"{EVENTS_NARC} member {index} offset {pos}: truncated count")
@@ -641,12 +694,15 @@ def _event_records(member: bytes, index: int):
             ]
         elif kind == WARP_EVENTS:
             warps = [struct.unpack_from("<2H", member, pos + i * size) for i in range(n)]
+        if kind in EVENT_SCRIPT_FIELDS:
+            at = EVENT_SCRIPT_FIELDS[kind]
+            scripts += [struct.unpack_from("<H", member, pos + i * size + at)[0] for i in range(n)]
         pos += n * size
     if pos != len(member):
         raise ReaderError(
             f"{EVENTS_NARC} member {index} offset {pos}: {len(member) - pos} trailing bytes"
         )
-    return records, warps
+    return records, warps, scripts
 
 
 def require_vanilla_map_headers(rom: RomFiles) -> None:
@@ -1030,6 +1086,16 @@ def map_header_battle_fields(rom: RomFiles, symbols: SymbolMap) -> list[tuple[in
     ]
 
 
+def map_init_scripts(rom: RomFiles, symbols: SymbolMap) -> list[int]:
+    """Each map header's ``initScriptsArchiveID`` (``scr_seq.narc`` member), by header id,
+    from the same header bytes ``map_header_rows`` reads."""
+    raw = _map_header_bytes(rom, symbols)
+    return [
+        struct.unpack_from("<H", raw, base + HEADER_INIT_SCRIPTS)[0]
+        for base in range(0, len(raw), MAP_HEADER_SIZE)
+    ]
+
+
 def map_header_rows(rom: RomFiles, symbols: SymbolMap) -> list[tuple[int, int, int]]:
     """(scripts archive id, events archive id, weather) of each map header, by header id.
 
@@ -1101,16 +1167,23 @@ def trainer_maps(
     Each battle operand variable no constant reaches is appended to ``unresolved`` (when
     given), once per script file, in script member order.
 
-    Limitation (``rom_trainer_maps.json`` on Kaizo): ten trainers (562, 572, 581, 582, 583,
-    606, 676, 861, 863, 865) each join to 136-137 headers, through scripts that many map
-    headers share. The join cannot say where they are fought, so their header lists are no
-    placement evidence (``tools.kaizo.resolve.NOISY_MAP_JOIN``).
+    A script file that several map headers share (Kaizo writes the Coronet Highlands tag
+    battles into ``scripts_empty``, member 401, the file of 136 headers) places a battle
+    only on the headers that run an entry reaching it: an entry named by the header's own
+    bg, object or coord events (``map_script_ids``) or by its init scripts
+    (``init_script_ids``); the whole-file walk would place it on every sharing header. A
+    header naming an entry past the file's table (the game indexes without a bound,
+    script_manager.c:412-416) keeps the whole-file walk, as does a file of one header
+    (Ruling 12): no placement is dropped on a guess.
     """
     rows = map_header_rows(rom, symbols)
+    inits = map_init_scripts(rom, symbols)
     scripts = rom.narc(SCRIPTS_NARC)
     events = rom.narc(EVENTS_NARC)
     table = command_table(decomp)
     battles: dict[int, set[int]] = {}
+    by_entry: dict[int, list[set[int]]] = {}  # shared script file -> battles per entry
+    users = Counter(script_id for script_id, _, _ in rows)
     where: dict[int, set[int]] = {}
     weathers = []
     found: list[UnresolvedOperand] = []
@@ -1132,8 +1205,28 @@ def trainer_maps(
                 scripts[script_id], table, f"{SCRIPTS_NARC} member {script_id}", sites
             )
             found.extend(UnresolvedOperand(script_id, *site) for site in sites)
-        for t in battles[script_id]:
-            place(t, header, f"{SCRIPTS_NARC} {script_id}")
+        if users[script_id] == 1:
+            for t in battles[script_id]:
+                place(t, header, f"{SCRIPTS_NARC} {script_id}")
+            continue
+        if script_id not in by_entry:
+            name = f"{SCRIPTS_NARC} member {script_id}"
+            by_entry[script_id] = [
+                script_battles(scripts[script_id], table, name, entries=[e])
+                for e in script_entries(scripts[script_id], name)
+            ]
+        entries = by_entry[script_id]
+        init = inits[header]
+        if init >= len(scripts):
+            raise ReaderError(f"map header {header}: init scripts {init}")
+        run = map_script_ids(events[events_id], events_id) + [
+            s for s in init_script_ids(scripts[init], init) if 1 <= s < COMMON_SCRIPTS
+        ]
+        if any(s > len(entries) for s in run):  # past the table: no entry to read
+            run = range(1, len(entries) + 1)
+        for s in sorted(set(run)):
+            for t in entries[s - 1]:
+                place(t, header, f"{SCRIPTS_NARC} {script_id} entry {s}")
 
     for base, rematches in _rematches(rom, symbols, n_trainers):
         for t in rematches:

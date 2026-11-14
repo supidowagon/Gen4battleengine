@@ -2,6 +2,9 @@
 that maps to no trainer id is settled as an ally, a duplicate or a user call, so no battle
 drops out of its split (``check_sheet_unmapped``). Pure; temporary files only."""
 
+import json
+import re
+
 import pytest
 
 from tools.kaizo.overrides import OverridesError, check_sheet_unmapped, load_overrides
@@ -88,3 +91,39 @@ def test_check_stale_entry_and_dangling_duplicate(tmp_path):
         "sheet_unmapped.Gardenia Split:7: the header maps to a trainer id",
         "sheet_unmapped.Byron Split:202: duplicate of 96, which no sheet header maps to",
     ]
+
+
+ALLY_REASON = re.compile(
+    r"with (?P<rival>[\w.' -]+) \(player starter (?P<starter>\w+)\): ROM (?P<ids>\d+(?:/\d+)*)"
+)
+
+
+def test_ally_reasons_name_the_partner_rows_starter(kaizo_intermediate):
+    """Each committed ally entry that names a player starter names it right: the ROM partner
+    rows it cites carry the rival's Pokemon in their label and the player starter in
+    ``player_starter``, and the sheet header lists that Pokemon."""
+    rows = {
+        t["id"]: t for t in json.loads((kaizo_intermediate / "trainers.json").read_text("utf-8"))
+    }
+    species = json.loads((kaizo_intermediate / "species.json").read_text("utf-8"))
+    docs = json.loads((kaizo_intermediate / "docs" / "docs.json").read_text("utf-8"))
+    headers = {
+        h["cite"]: h
+        for sv in docs["splits"].values()
+        for sec in sv["sections"]
+        for h in sec["trainers"]
+    }
+    checked = 0
+    for cite, e in load_overrides().sheet_unmapped.items():
+        if e.kind != "ally" or "player starter" not in e.reason:
+            continue
+        m = ALLY_REASON.search(e.reason)
+        assert m, (cite, e.reason)
+        for tid in map(int, m["ids"].split("/")):
+            row = rows[tid]
+            assert row["label"].endswith(f"[{m['rival']}]"), (cite, tid, row["label"])
+            assert species[row["player_starter"]]["name"] == m["starter"], (cite, tid)
+        party = [p["species"].split(" ")[0] for p in headers[cite]["party"]]
+        assert m["rival"] in party, (cite, party)
+        checked += 1
+    assert checked == 6

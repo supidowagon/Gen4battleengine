@@ -10,7 +10,8 @@ Branch `claude/engine-e3-remeasure-632cbe`, worktree `strange-feistel-a35c9f`. E
 - Batch 2 (player side): option A done (go from the managing session, 2026-11-14): the
   "Your side (upper bound)" and "AI partners" sections of the backlog. Option B is PARKED
   (see below); do not start it without a new go.
-- Batch 4 (every sheet battle in a split): done 2026-11-14, see below. Stop after the report.
+- Batch 4 (every sheet battle in a split): done 2026-11-14, merged into main (5612764).
+- Batch 5 (merge-check follow-ups): done 2026-11-14, see below. Stop after the report.
 - Batch 3 (prep starting HP and status): report sent 2026-11-14 (read-only, nothing built). Engine and line --party
   support any HP and status, sleep turns included; prep picks HP regions itself, prestatus is
   poison, burn or paralysis only, drops the save's HP and status (leveling.py), and cannot
@@ -98,3 +99,24 @@ by each split, replacing option A's upper bound.
   (needed only by allies: Marvel Scale, hold effects #17, #66; still on the partners line).
 - New user calls: Maid Yoki; Route 212 Rangers' split; Iron Island Triton #2 / Neptune #2
   weather (sheet and PKCalc rain, ROM none; report "area weather 835").
+
+## Batch 5: merge-check follow-ups (2026-11-14)
+
+- Ally reasons now name the rival's Pokemon and the right player starter; the test
+  `test_ally_reasons_name_the_partner_rows_starter` derives both from the ROM partner rows.
+- Shared script files: `trainer_maps` (tools/rom/readers/maps.py) places a battle in a file
+  several headers share only on headers whose bg/object/coord events or init scripts run
+  the entry that reaches it (`map_script_ids`, `init_script_ids`; script_manager.c:243-246,
+  :412-416, :738-806). Kaizo's Coronet Highlands tag battles live in scr_seq 401
+  (scripts_empty, 136 headers): entry 9 -> MT_CORONET_OUTSIDE_SOUTH (Cheryl, 582/583),
+  entry 10 -> MT_CORONET_4F_ROOMS_1_AND_2 + header 250 (Riley, 562/572), entry 11 ->
+  MT_CORONET_5F (Marley, 581/606). They also sit on STARK_MOUNTAIN_ROOM_2 (a second,
+  postgame placement the noise hid). NOISY_MAP_JOIN removed. Side effects: 318 Fantina's
+  start condition is now none (header 89 drops out), 676 Corbin (rematch of 583) hail; both
+  removed from data/kaizo/start_conditions.json.
+- The four Gardenia Eterna Forest rows (202, 203, 411, 413): no source pairs them (ROM sight
+  pairing only runs on a calc/sheet claim; calc singles; sheet solo spots). They stay four
+  battles. Open rule question for the managing session: encounter.c:730-740 gives a lone
+  enemy beside a walking partner BATTLE_TYPE_TRAINER (not a tag battle), while K2a Ruling 3
+  makes every enemy on a partner map `multi`.
+- Totals: 387 battles (275 singles, 37 doubles, 32 two-trainer, 43 multi); union 520.
