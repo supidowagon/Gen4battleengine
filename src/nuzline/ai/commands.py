@@ -25,9 +25,11 @@ as in the decomp. Each ``IfRandomLessThan`` (trainer_ai.c:528-538), each
 ``LoadBattlerAbility DEFENDER`` coin flip (:1191-1198) and each ``IfSpeedCompareEqualTo``
 tie (battle_lib.c:1401-1447) takes the next bit of its slot's ``LooseDraws.bits``, in the
 static order the straight-line scripts make the reads, and records the bit's probability:
-the read's own N/256, or 1/2. It reads neither ``AiContext.sites`` nor
-``AiOutcome.ability_guess``, and it compares the speed compare's three-valued result, so it
-shares no gate with the exact layout: no site table, no guess columns, no dropped tie.
+the read's own N/256, or 1/2. Its index counts every read of the straight-line scripts, on
+the path or not; the exact per-slot layout counts only the reads on the path (E1 Ruling R4).
+It reads neither ``AiContext.sites`` nor ``AiOutcome``'s draws, and it compares the speed
+compare's three-valued result, so it shares no gate with the exact layout: no read order, no
+read bound, no dropped tie.
 """
 
 from __future__ import annotations
@@ -38,7 +40,7 @@ from typing import NamedTuple
 import jax
 import jax.numpy as jnp
 
-from nuzline.ai.outcome import SITE_LINES, AiOutcome, line_sites
+from nuzline.ai.outcome import SITE_LINES, SITE_N, AiOutcome, line_sites
 from nuzline.ai.switching import INEFFECTIVE, apply_type_chart, type_chart_flags
 from nuzline.data.tables import Tables
 from nuzline.engine.actions import usable_moves
@@ -368,6 +370,7 @@ class LooseDraws(NamedTuple):
     p: jnp.ndarray  # float32[MOVES, LOOSE_READS]: P(bit = 1) of each read
     kind: jnp.ndarray  # int8[MOVES, LOOSE_READS]: the ReadKind of each read
     live: jnp.ndarray  # bool[MOVES, LOOSE_READS]: the read is on the slot's path
+    line: jnp.ndarray  # int32[MOVES, LOOSE_READS]: an IfRandomLessThan's script.s line, else 0
 
 
 def loose_draws(bits) -> LooseDraws:
@@ -379,6 +382,7 @@ def loose_draws(bits) -> LooseDraws:
         p=jnp.zeros(shape, jnp.float32),
         kind=jnp.zeros(shape, jnp.int8),
         live=jnp.zeros(shape, bool),
+        line=jnp.zeros(shape, _I32),
     )
 
 
@@ -398,21 +402,20 @@ class AiContext(NamedTuple):
     seen_moves: jnp.ndarray  # int32[4]: the player's active's moves the AI has seen, else 0
     player_ability: jnp.ndarray  # int32: LoadBattlerAbility DEFENDER (decomp id)
     damage: jnp.ndarray  # int32[4]: ai_damage of the AI's move slots, USE_MAX_DAMAGE
-    sites: jnp.ndarray  # int32[4, len(SITE_LINES)]: script_rolls index of each line
-    # int32: 0, or 1 + slot * len(SITE_LINES) + SITE_LINES index of the first exact
-    # IfRandomLessThan reached on the path at a line the slot's site row has no column for
-    # (if_random_less_than); the per-slot layout refuses the decision
-    missing_site: jnp.ndarray
+    # int32[4, len(SITE_LINES)]: the flat layout's script_rolls index of each line; an
+    # unused int32[] in a per-slot layout, whose reads go by order (per_slot)
+    sites: jnp.ndarray
     # int32[2]: LoadBattlerAbility DEFENDER under guess 0 and guess 1 (defender_ability);
     # bool: its reads draw a coin this decision (ability_guessed). Per-slot layout.
     guess_abilities: jnp.ndarray
     guessing: jnp.ndarray
-    # int32[MOVES]: per slot, the guessing LoadBattlerAbility DEFENDER reads made so far on
-    # its path (per-slot layout: the next one takes ability_guess[slot, guesses[slot]])
-    guesses: jnp.ndarray
-    # int32: 0, or 1 + slot of the first guessing read on a path past the slot's
-    # ability_guess columns (load_battler_ability); the per-slot layout refuses the decision
-    missing_guess: jnp.ndarray
+    # Per-slot layout (E1 Ruling R4), per slot: the random reads made so far on its path (the
+    # next one takes script_rolls[slot, reads[slot]]) and the product of their probabilities
+    reads: jnp.ndarray  # int32[MOVES]
+    weight: jnp.ndarray  # float32[MOVES]
+    # int32: 0, or 1 + slot of the first read on a path past the slot's slot_reads draws
+    # (_slot_read); the per-slot layout refuses the decision
+    missing_read: jnp.ndarray
     loose: LooseDraws | None = None  # the loose oracle's draws (tests only), else None
 
 
@@ -546,13 +549,14 @@ def new_context(
     100, then 0 for the slots ``BattleSystem_CheckInvalidMoves`` flags (the engine's
     ``usable_moves``: empty, no PP, Disabled, Taunt on a power-0 move).
 
-    ``sites`` is the ``script_rolls`` index of each ``SITE_LINES`` line per slot: the flat
-    layout's ``outcome.line_sites`` by default, ``outcome.slot_roll_sites`` for a per-slot
-    layout. ``loose``: the loose oracle's draws (module docstring), else None.
+    A per-slot outcome (``script_rolls`` of rank 2, ``per_slot``) keys its reads by order on
+    the path (E1 Ruling R4); a flat one reads the ``script_rolls`` index of each ``SITE_LINES``
+    line per slot, ``sites`` (default ``outcome.line_sites``). ``loose``: the loose oracle's
+    draws (module docstring), else None.
 
     ``player_ability`` is the flat layout's one resolution for the decision (its scalar
-    ``ability_guess``); a per-slot ``ability_guess`` (``int8[MOVES, slot_guesses]``) is
-    resolved at each read instead (``load_battler_ability``), and ``player_ability`` is -1.
+    ``ability_guess``); a per-slot layout resolves each guessing read from its own draw
+    (``load_battler_ability``), and ``player_ability`` is -1.
 
     The seen moves are the stored ``ai_seen_moves`` plus the player's pending
     ``last_move``: ``TrainerAI_MainSingles`` runs ``TrainerAI_RecordLastMove`` (:295)
@@ -565,6 +569,11 @@ def new_context(
     seen = jnp.where(known, moves, 0).astype(_I32)
     scores = jnp.where(usable_moves(tables, state, 1), 100, 0).astype(_I32)
     false = jnp.asarray(False)
+    slotted = jnp.ndim(outcome.script_rolls) == 2
+    if slotted:
+        sites = jnp.zeros((), _I32)
+    elif sites is None:
+        sites = line_sites(state)
     return AiContext(
         tables=tables,
         state=state,
@@ -577,17 +586,17 @@ def new_context(
         calc_temp=jnp.asarray(0, _I32),
         seen_moves=seen,
         player_ability=(
-            defender_ability(tables, state, outcome.ability_guess)
-            if jnp.ndim(outcome.ability_guess) == 0
-            else jnp.asarray(-1, _I32)
+            jnp.asarray(-1, _I32)
+            if slotted
+            else defender_ability(tables, state, outcome.ability_guess)
         ),
         damage=_slot_damage(tables, state, jnp.full((MOVES,), SIM_ROLL_MAX, _I32)),
-        sites=line_sites(state) if sites is None else jnp.asarray(sites, _I32),
-        missing_site=jnp.asarray(0, _I32),
+        sites=jnp.asarray(sites, _I32),
         guess_abilities=jnp.stack([defender_ability(tables, state, g) for g in (0, 1)]),
         guessing=ability_guessed(tables, state),
-        guesses=jnp.zeros(MOVES, _I32),
-        missing_guess=jnp.asarray(0, _I32),
+        reads=jnp.zeros(MOVES, _I32),
+        weight=jnp.ones(MOVES, jnp.float32),
+        missing_read=jnp.asarray(0, _I32),
         loose=loose,
     )
 
@@ -612,7 +621,7 @@ def _jump(ctx: AiContext, cond) -> AiContext:
 
 
 def _loose_read(
-    ctx: AiContext, p: float, kind: ReadKind, live=None
+    ctx: AiContext, p: float, kind: ReadKind, live=None, line: int = 0
 ) -> tuple[AiContext, jnp.ndarray]:
     """The loose oracle's next draw of the current slot (module docstring): ``(ctx, bit)``,
     with the read's probability ``p`` of a 1, its kind and whether it is on the path
@@ -627,8 +636,41 @@ def _loose_read(
         p=lo.p.at[slot, i].set(p, mode="drop"),
         kind=lo.kind.at[slot, i].set(int(kind), mode="drop"),
         live=lo.live.at[slot, i].set(live, mode="drop"),
+        line=lo.line.at[slot, i].set(line, mode="drop"),
     )
     return ctx._replace(loose=lo), bit
+
+
+def per_slot(ctx: AiContext) -> bool:
+    """The outcome is a per-slot layout's (``script_rolls`` of rank 2): its reads are keyed by
+    order on the slot's path (``_slot_read``). Static."""
+    return jnp.ndim(ctx.outcome.script_rolls) == 2
+
+
+def _slot_read(ctx: AiContext, takes) -> tuple[AiContext, jnp.ndarray]:
+    """The per-slot layout's next random read on the current slot's path (E1 Ruling R4;
+    ``outcome`` docstring): ``(ctx, r)``, ``r`` the draw ``script_rolls[slot, reads[slot]]``
+    (``RandNext() % 256``). ``takes(r)`` gives ``(p, drawn)``: the probability of the result
+    ``r`` gives, and whether the decomp draws here at all (a read off the path, or of a
+    ``MOVE_NONE`` slot, draws nothing). A drawn read counts in ``reads`` and multiplies its
+    probability into ``weight``; one past the slot's draws is recorded in ``missing_read``,
+    so the decision is refused (``policy._scores``) instead of reusing a draw."""
+    draws = ctx.outcome.script_rolls[ctx.slot]  # uint8[slot_reads]
+    k = ctx.reads[ctx.slot]
+    r = jnp.take(draws, k, mode="fill", fill_value=0).astype(_I32)
+    p, drawn = takes(r)
+    drawn = drawn & ctx.live & (ctx.move != 0)
+    missing = drawn & (k >= draws.shape[0])
+    code = jnp.asarray(ctx.slot, _I32) + 1
+    factor = jnp.where(drawn, p, 1.0).astype(jnp.float32)
+    ctx = ctx._replace(
+        reads=ctx.reads.at[ctx.slot].add(drawn.astype(_I32)),
+        weight=ctx.weight.at[ctx.slot].multiply(factor),
+        missing_read=jnp.where(missing & (ctx.missing_read == 0), code, ctx.missing_read).astype(
+            _I32
+        ),
+    )
+    return ctx, r
 
 
 # --- The command functions, one per row of docs/ai/script_commands.md -------------
@@ -675,33 +717,21 @@ def load_battler_ability(ctx: AiContext, battler: Battler) -> AiContext:
     (``ability_guessed``):
     - flat layout (scalar ``AiOutcome.ability_guess``): one guess for the decision,
       ``AiContext.player_ability`` (roark.md 8.2);
-    - per-slot layout (E1 Ruling R1; docs/ai/kaizo_roark.md 8.4): the k-th guessing read on
-      the slot's path takes ``ability_guess[slot, k]`` (``AiContext.guesses`` counts them; a
-      read off the path, or of a ``MOVE_NONE`` slot, draws nothing). A guessing read past
-      the slot's columns resolves with guess 0 and is recorded in ``missing_guess``, so the
-      decision is refused (``policy._scores``) instead of reusing a coin;
+    - per-slot layout (E1 Rulings R1, R4; docs/ai/kaizo_roark.md 8.4): a guessing read is
+      the slot's next random read (``_slot_read``): ability 1 when the draw's low bit is set,
+      else ability 2 (:1195-1199), probability 1/2;
     - loose: its own draw."""
     if battler == Battler.ATTACKER:
         value = attacker_ability(ctx.tables, ctx.state)
     elif ctx.loose is not None:  # its own coin flip (trainer_ai.c:1191-1198)
         ctx, bit = _loose_read(ctx, 0.5, ReadKind.ABILITY)
         value = defender_ability(ctx.tables, ctx.state, bit)
-    elif jnp.ndim(ctx.outcome.ability_guess) == 0:
+    elif not per_slot(ctx):
         value = ctx.player_ability
     else:
-        columns = ctx.outcome.ability_guess[ctx.slot]  # int8[slot_guesses]
-        k = ctx.guesses[ctx.slot]
-        bit = jnp.take(columns, k, mode="fill", fill_value=0)
-        value = ctx.guess_abilities[jnp.clip(bit.astype(_I32), 0, 1)]
-        draws = ctx.live & (ctx.move != 0) & ctx.guessing
-        missing = draws & (k >= columns.shape[0])
-        code = jnp.asarray(ctx.slot, _I32) + 1
-        ctx = ctx._replace(
-            guesses=ctx.guesses.at[ctx.slot].add(draws.astype(_I32)),
-            missing_guess=jnp.where(
-                missing & (ctx.missing_guess == 0), code, ctx.missing_guess
-            ).astype(_I32),
-        )
+        ctx, r = _slot_read(ctx, lambda r: (0.5, ctx.guessing))
+        # RandNext() & 1 set: SPECIES_DATA_ABILITY_1, the species' slot 0 (:1191-1197).
+        value = ctx.guess_abilities[jnp.where((r & 1) == 1, 0, 1)]
     return ctx._replace(calc_temp=jnp.asarray(value, _I32))
 
 
@@ -803,25 +833,25 @@ def if_current_move_kills(ctx: AiContext, use_damage_roll: int) -> AiContext:
 
 
 def if_random_less_than(ctx: AiContext, n: int, line: int) -> AiContext:
-    """``IfRandomLessThan`` (trainer_ai.c:528): ``RandNext() % 256 < n``, which is
-    ``AiOutcome.script_rolls[site] == 1`` (probability n/256, roark.md 8.3). ``line`` is the
-    read's ``script.s`` line (``outcome.SITE_N``); ``AiContext.sites`` gives its index into
-    the flattened ``script_rolls``, and the layout's site table carries its probability.
-    A line with no column in the slot's row reads index ``script_rolls.size`` (out of
-    range), which never rolls 1; when that read is on the path of a move (``live``, not
-    ``MOVE_NONE``) the first such read is also recorded in ``missing_site`` (its slot and
-    line), so a per-slot layout refuses the
-    decision (``policy._scores``) instead of taking an N/256 jump as never.
-    Loose (module docstring): the read's own draw, with probability ``n``/256."""
+    """``IfRandomLessThan`` (trainer_ai.c:528-538): ``RandNext() % 256 < n``. ``line`` is the
+    read's ``script.s`` line (``outcome.SITE_N``, checked).
+    - flat layout: ``AiOutcome.script_rolls[site] == 1`` (probability n/256, roark.md 8.3),
+      ``AiContext.sites`` giving the line's index (a line no vanilla move reaches reads an
+      out-of-range index, which never rolls 1, and is never on a vanilla path);
+    - per-slot layout (E1 Ruling R4): the slot's next random read (``_slot_read``) jumps when
+      its draw is below ``n``, probability n/256; drawn on the path only;
+    - loose (module docstring): the read's own draw, with probability ``n``/256."""
+    assert SITE_N.get(int(line)) == int(n), f"IfRandomLessThan {n} at script.s:{line}"
     if ctx.loose is not None:
-        ctx, bit = _loose_read(ctx, n / 256, ReadKind.ROLL)
+        ctx, bit = _loose_read(ctx, n / 256, ReadKind.ROLL, line=int(line))
         return _jump(ctx, bit == 1)
+    if per_slot(ctx):
+        p = n / 256
+        ctx, r = _slot_read(ctx, lambda r: (jnp.where(r < n, p, 1 - p), jnp.asarray(True)))
+        return _jump(ctx, r < n)
     site = ctx.sites[ctx.slot, SITE_LINES.index(line)]
     roll = jnp.take(ctx.outcome.script_rolls, site, mode="fill", fill_value=0)
-    missing = ctx.live & (ctx.move != 0) & (site >= ctx.outcome.script_rolls.size)
-    code = jnp.asarray(ctx.slot, _I32) * len(SITE_LINES) + SITE_LINES.index(line) + 1
-    first = jnp.where(missing & (ctx.missing_site == 0), code, ctx.missing_site)
-    return _jump(ctx._replace(missing_site=first), roll == 1)
+    return _jump(ctx, roll == 1)
 
 
 def _knows(ctx: AiContext, battler: Battler, move: int) -> jnp.ndarray:

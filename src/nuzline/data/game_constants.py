@@ -366,8 +366,8 @@ CONSTANTS: tuple[Constant, ...] = (
     # --- vanilla_policy: the transcribed vanilla AI scripts --------------------------
     *_table("nuzline.ai.commands.MOVE_EFFECTS", "move", _P, _TRANSCRIBED_MOVES),
     *_policy_tables(_P),
-    # The flat layout's script-roll sites, by move id (the per-slot layout keys them by battle
-    # effect, ai/outcome.py EFFECT_SITE_LINES).
+    # The flat layout's script-roll sites, by move id (the per-slot layout keys its reads by
+    # order on the path, ai/outcome.py).
     *_table("nuzline.ai.outcome._SITES", "move", _P, _TRANSCRIBED_MOVES),
     # The decomp's C id cases: both policies compare these by id, whatever a game names the
     # slot (Kaizo's 149 is Triple Axel and still takes MOVE_PSYWAVE's case), so they are
@@ -447,9 +447,9 @@ EXEMPT: dict[str, str] = {
         "with MoveTable.effect by the AI's C code, which Kaizo did not change "
         "(docs/ai/kaizo_roark.md 2); each game's moves carry their own effect"
     ),
-    "nuzline.ai.outcome.EFFECT_SITE_LINES": (
-        "decomp battle effect ids (keys) and script.s line numbers (values): the per-slot AI "
-        "layout's script-roll sites, read through MoveTable.effect by IfCurrentMoveEffectEqualTo "
+    "nuzline.ai.outcome.KAIZO_TRANSCRIBED": (
+        "decomp battle effect ids: the effects whose AI script paths the per-slot layout "
+        "transcribes, read through MoveTable.effect by IfCurrentMoveEffectEqualTo "
         "(trainer_ai.c:1441), whose script Kaizo did not change apart from one word "
         "(docs/ai/kaizo_roark.md 2); each game's moves carry their own effect"
     ),

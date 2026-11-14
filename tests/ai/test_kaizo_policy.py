@@ -29,13 +29,11 @@ from nuzline.ai.layout import KAIZO
 from nuzline.ai.outcome import (
     KAIZO_EXPERT_LABELS,
     KAIZO_EXPERT_TRANSCRIBED,
+    READ_DRAWS,
     SIM_ROLL_MAX,
     SWITCH_NONE,
     AiOutcome,
-    slot_roll_sites,
-    slot_site_table,
 )
-from nuzline.ai.switching import SWITCH_REFUSED
 from nuzline.engine.damage import ai_damage_for_roll
 from nuzline.engine.ids import Stat, Status, Weather
 from nuzline.engine.order import (
@@ -102,17 +100,34 @@ def _state(t, party, mon: int, moves, bench=(CRANIDOS,), players: int = 2, hp: i
 
 
 def _outcome(t, s, guess: int = 0, jumps=()) -> AiOutcome:
-    """The per-slot outcome where the ``(slot, line)`` sites of ``jumps`` jump and no other
-    does; ``guess`` is every guess column's ability slot (each guessing read takes it)."""
-    rolls = np.zeros((MOVES, KAIZO.slot_sites), np.int8)
-    moves = np.asarray(s.moves[1, s.active[1]])
-    for slot, line in jumps:
-        _, lines = slot_site_table(t, KAIZO, int(moves[slot]))
-        (k,) = np.flatnonzero(np.asarray(lines) == line)
-        rolls[slot, k] = 1
+    """The per-slot outcome where the ``(slot, line)`` ``IfRandomLessThan`` reads of ``jumps``
+    jump and no other does, and every guessing read takes ability slot ``guess``. The reads'
+    order on each slot's path (E1 Ruling R4) is the loose oracle's (``LooseDraws``: every read
+    in static order, its kind and line) restricted to the reads on the path; the speed tie,
+    which the exact layout does not draw (Ruling 3), takes 0 in both, and so does a defender
+    ability read that does not guess."""
+    batch = jax.tree.map(lambda a: jnp.asarray(a)[None], s)
+    bits = np.zeros((1, MOVES, c.LOOSE_READS), np.int8)
+    _, lo = policy._loose_batch(t, batch, jnp.asarray(bits), KAIZO)
+    kind, line = np.asarray(lo.kind)[0, 0], np.asarray(lo.line)[0, 0]  # static order
+    roll = kind == c.ReadKind.ROLL
+    # A LoadBattlerAbility DEFENDER draws only when the decision guesses (trainer_ai.c:1191-1198).
+    ability = (kind == c.ReadKind.ABILITY) & bool(c.ability_guessed(t, s))
+    for slot, at in jumps:
+        bits[0, slot] |= (roll[slot] & (line[slot] == at)).astype(np.int8)
+    bits[0] |= (ability * guess).astype(np.int8)
+    _, lo = policy._loose_batch(t, batch, jnp.asarray(bits), KAIZO)
+    live = np.asarray(lo.live)[0, 0]
+    rolls = np.full((MOVES, KAIZO.slot_reads), READ_DRAWS[0], np.uint8)
+    for slot in range(MOVES):
+        on_path = np.flatnonzero(live[slot] & (roll[slot] | ability[slot]))
+        for k, i in enumerate(on_path):
+            # A jump draws below N; ability slot 0 is RandNext() & 1 set (trainer_ai.c:1195).
+            taken = bits[0, slot, i] == 1 if roll[slot, i] else guess == 0
+            rolls[slot, k] = READ_DRAWS[int(taken)]
     return AiOutcome(
         sim_roll=jnp.full((MOVES,), SIM_ROLL_MAX, jnp.int8),
-        ability_guess=jnp.full((MOVES, KAIZO.slot_guesses), guess, jnp.int8),
+        ability_guess=jnp.asarray(0, jnp.int8),
         script_rolls=jnp.asarray(rolls),
         tiebreak=jnp.asarray(0, jnp.int8),
         switch_stop=jnp.asarray(SWITCH_NONE, jnp.int8),
@@ -121,7 +136,7 @@ def _outcome(t, s, guess: int = 0, jumps=()) -> AiOutcome:
 
 @partial(jax.jit, static_argnames="flags")
 def _flag_scores(t, s, o, flags: int = 2):
-    ctx = c.new_context(t, s, o, slot_roll_sites(t, s, KAIZO))
+    ctx = c.new_context(t, s, o)
     return policy._run_flags(ctx, KAIZO, policy._flags(KAIZO)[:flags]).scores
 
 
@@ -246,7 +261,7 @@ def _dispatched(t, s, flag, layout) -> set[int]:
         seen.add(int(effect))
         return original(ctx, effect)
 
-    ctx = c.at_slot(c.new_context(t, s, _outcome(t, s), slot_roll_sites(t, s, KAIZO)), 0)
+    ctx = c.at_slot(c.new_context(t, s, _outcome(t, s)), 0)
     c.if_current_move_effect_equal_to = record
     try:
         flag(ctx, layout)
@@ -384,60 +399,6 @@ def test_battle_effect_ids_are_the_decomps():
         assert lines[member.value] == f"BATTLE_EFFECT_{member.name}", member
 
 
-def test_a_reached_roll_without_a_site_column_is_refused(
-    kaizo_tables, kaizo_names, kaizo_roark_party
-):
-    """K3c final review: an ``IfRandomLessThan`` on a move's path whose line has no column
-    in the effect's site row reads an out-of-range index, which never rolls 1. The exact
-    path must refuse that (NaN distribution, ``REFUSED_ACTION``) rather than take an N/256
-    jump as never. Selfdestruct always reaches EvalAttack_MaybeDeprioritize's :6374 (it
-    never kills or takes the -1, kaizo_roark.md 5.2), so a row without :6374 is caught."""
-    t = kaizo_tables
-    s = _state(t, kaizo_roark_party, BONSLY, [STEALTH_ROCK, SELFDESTRUCT, BRICK_BREAK, ACCELEROCK])
-    row = dict(KAIZO.effect_sites)[7]
-    bad = KAIZO._replace(  # the same policy (name), one site row short
-        effect_sites=tuple(
-            (e, tuple(x for x in sites if x[0] != 6374) if e == 7 else sites)
-            for e, sites in KAIZO.effect_sites
-        ),
-    )
-    assert (6374, 51) in row and len(dict(bad.effect_sites)[7]) == len(row) - 1
-    good = np.asarray(policy._slot_move_distribution(t, s, KAIZO))
-    assert not np.isnan(good).any() and np.isclose(good.sum(), 1)
-    assert np.isnan(np.asarray(policy._slot_move_distribution(t, s, bad))).all()
-    o = _outcome(t, s)
-    assert int(policy._policy(t, s, o, KAIZO)) != policy.REFUSED_ACTION
-    assert int(policy._policy(t, s, o, bad)) == policy.REFUSED_ACTION
-    # Named, on every concrete API and in Stage A's explainer (K3c re-review).
-    line = (
-        "ai scoring: opponent slot 1: move Selfdestruct reaches IfRandomLessThan at "
-        "script.s:6374, which its effect's site row has no column for "
-        "(docs/ai/kaizo_roark.md 8.2, 8.3)"
-    )
-    assert policy.ai_path_refusals(t, s, kaizo_names, KAIZO) == []
-    assert policy.ai_path_refusals(t, s, kaizo_names, bad) == [line]
-    assert policy.ai_path_refusals(t, s, layout=bad) == [line]  # the tables' own names
-    for call in (
-        lambda: policy.ai_scores(t, s, o, bad),
-        lambda: policy.ai_policy(t, s, o, bad),
-        lambda: policy.ai_action_distribution(t, s, bad),
-    ):
-        with pytest.raises(policy.UnsupportedAi) as e:
-            call()
-        assert str(e.value) == line
-    assert min(np.asarray(policy.ai_scores(t, s, o, KAIZO))) >= 0
-    from nuzline.search.playout import refusal_reason
-
-    reason = refusal_reason(t, s, 0, jax.random.PRNGKey(0), max_turns=1, layout=bad)
-    assert reason == line
-    # A caller's refused switch stop is not reported as a path refusal.
-    stop = o._replace(switch_stop=jnp.asarray(SWITCH_REFUSED, jnp.int8))
-    assert int(policy.ai_policy(t, s, stop, KAIZO)) == policy.REFUSED_ACTION
-    # Without Selfdestruct no reached roll lacks a column, so the bad row refuses nothing.
-    s = _state(t, kaizo_roark_party, BONSLY, [STEALTH_ROCK, BRICK_BREAK, ACCELEROCK, 0])
-    assert not np.isnan(np.asarray(policy._slot_move_distribution(t, s, bad))).any()
-
-
 def test_kaizo_refusals_use_the_kaizo_names(names, kaizo_tables, kaizo_names, kaizo_roark_party):
     """K3c final review: a refusal message without the caller's names names the move in
     the tables' own game, never in the shipped vanilla tables (Kaizo renames ids)."""
@@ -451,41 +412,6 @@ def test_kaizo_refusals_use_the_kaizo_names(names, kaizo_tables, kaizo_names, ka
     assert any("Hurricane" in r for r in reasons) and not any("Barrage" in r for r in reasons)
     with pytest.raises(policy.UnsupportedAi, match="Hurricane"):
         policy.ai_action_distribution(t, s)
-
-
-def test_site_rows_of_roark_effects():
-    """The per-slot site table (outcome.EFFECT_SITE_LINES): every effect reaches EvalAttack's
-    quad roll (script.s:6383); HALVE_DEFENSE first reaches EvalAttack_MaybeDeprioritize's 51
-    roll (:6365 -> :6374). No BASIC label of these effects reads IfRandomLessThan (script.s
-    133-286 and the labels of 5.1). Then each effect's Expert label's rolls in line order
-    (kaizo_roark.md 5.3) and Risky_Main's (:6530) for the effects of Risky_RiskyEffects
-    (:6538, :6550). The rows' teeth are the exact-against-loose cases below."""
-    rows = {e: tuple(line for line, _ in sites) for e, sites in KAIZO.effect_sites}
-    expected = {
-        0: (6383,),
-        2: (6383,),
-        3: (6383, 1835),  # Expert_DrainMove :1827-1839
-        4: (6383,),
-        6: (6383,),
-        7: (6374, 6383, 1859, 1865, 1870, 1875, 1880, 6530),  # Expert_Explosion :1841-1884
-        31: (6383,),
-        32: (6383, 2665, 2671, 2674),  # Expert_Recovery :2640-2678
-        33: (6383, 2690, 2695, 2704),  # Expert_ToxicLeechSeed :2680-2708
-        35: (6383, 2718, 2724),  # Expert_LightScreen :2710-2732
-        52: (6383, 2075),  # Expert_StatusSpeedUp :2066-2079
-        69: (6383,),
-        72: (6383,),
-        76: (6383,),
-        109: (6383, 3477, 3481, 3486, 3491),  # Expert_Curse :3452-3500
-        140: (6383, 6530),
-        186: (6383,),  # Expert_BrickBreak :4559-4569, no roll
-        261: (6383,),
-        266: (6383, 6274),
-        269: (6383,),  # Expert_RecoilMove :6289-6305, no roll
-        275: (6383,),
-    }
-    for _, eff in ROARK_MOVES.values():
-        assert rows[eff] == expected[eff], eff
 
 
 # --- BASIC: Basic_CheckCannotExplode (script.s:297-319) ----------------------------------
@@ -1277,9 +1203,9 @@ _LOOSE_CASES = [
 @pytest.mark.slow
 @pytest.mark.parametrize("case", _LOOSE_CASES)
 def test_new_paths_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, case):
-    """On the traced states, the exact distribution (per-slot sites, one guess) equals the
+    """On the traced states, the exact distribution (per-slot reads in path order) equals the
     loose oracle (every IfRandomLessThan and LoadBattlerAbility DEFENDER its own draw), and
-    so does each slot's score distribution: the sites of Tasks 5 (:6374) and 6 (the Expert
+    so does each slot's score distribution: the rolls of Tasks 5 (:6374) and 6 (the Expert
     labels' and :6530) and the reads (:305, :529, :539) are read where the decomp reads
     them. The real KAIZO layout accepts every state."""
     t = kaizo_tables
