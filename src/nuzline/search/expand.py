@@ -184,14 +184,14 @@ def ai_rows(tables: Tables, states: BattleState, per_call: int | None = None) ->
     """``float32[N, NUM_OPP_ACTIONS]``: the AI's exact action distribution of each of
     ``N`` states (``policy._distribution``, the batched form of
     ``ai_action_distribution``) under the concrete ``tables``' AI layout (``layout_of``,
-    a static key of the cached program); a NaN row is a refused state. The calls have
+    whose ``key``, the policy and the trainer's flag set, keys the cached program); a NaN row is a refused state. The calls have
     ``bucket_rows(N)`` rows (``per_call`` overrides it, for tests): a lone state does not
     pay for ``CHUNK`` rows."""
     layout = layout_of(tables)
     fn = partial(_ai, layout=layout)
     n = len(states.hp)
     per_call = bucket_rows(n) if per_call is None else per_call
-    return _run(fn, "expand_ai", tables, (states,), n, {"layout": layout.name}, per_call)
+    return _run(fn, "expand_ai", tables, (states,), n, {"layout": layout.key}, per_call)
 
 
 def _laws(tables: Tables, states: BattleState, actions) -> OutcomeLaws:

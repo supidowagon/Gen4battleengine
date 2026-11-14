@@ -6,6 +6,7 @@ import json
 import sys
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from nuzline.data.games import GAMES, KAIZO, VANILLA
@@ -223,8 +224,10 @@ def _require_kaizo_tables() -> None:
 
 @pytest.fixture(scope="session")
 def kaizo_tables():
+    """The Kaizo tables of Kaizo Roark's fight: his trainer AI flags 23 set (``Tables.ai_flags``,
+    E1 Ruling R2; ``ai.layout.layout_of`` refuses unset flags), as most Kaizo tests are his."""
     _require_kaizo_tables()
-    return load_tables(KAIZO_TABLES_DIR)
+    return load_tables(KAIZO_TABLES_DIR)._replace(ai_flags=np.int32(0b10111))
 
 
 @pytest.fixture(scope="session")

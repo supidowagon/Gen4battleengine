@@ -11,6 +11,8 @@ import re
 import sys
 
 from nuzline import cli
+from nuzline.ai.layout import KAIZO, kaizo_layout
+from nuzline.ai.policy import opponent_move_refusals
 from nuzline.data.games import load_game
 from nuzline.data.trainer import IntermediateData, build_trainer_party
 from nuzline.engine.coverage import check_opponent, start_weather
@@ -26,6 +28,54 @@ items = json.loads((d / "items.json").read_text(encoding="utf-8"))
 mv = {m["name"].lower(): m["ai_effect"] for m in moves if m.get("name")}
 it = {i["name"].lower(): i["hold_effect"] for i in items if i.get("name")}
 
+# The AI script labels of each battle effect: Basic_ScoreMoveEffect's and Expert_Main's jump
+# tables (script.s:134-285, :1628-1808), by effect name (generated/move_battle_effects.txt,
+# line n + 1 is effect n).
+decomp = pathlib.Path(__file__).resolve().parents[2] / "external/pokeplatinum"
+effect_names = [
+    e.removeprefix("BATTLE_EFFECT_")
+    for e in (decomp / "generated/move_battle_effects.txt").read_text().split()
+]
+script = (decomp / "src/battle/trainer_ai/script.s").read_text(encoding="utf-8").splitlines()
+ai_labels = collections.defaultdict(list)
+for lo, hi in ((134, 285), (1628, 1808)):
+    for line in script[lo - 1 : hi]:
+        hit = re.match(r"\s*IfCurrentMoveEffectEqualTo BATTLE_EFFECT_(\w+), (\w+)", line)
+        if hit and hit.group(2) not in ai_labels[hit.group(1)]:
+            ai_labels[hit.group(1)].append(hit.group(2))
+
+
+def ai_move_groups(trainer, party):
+    """The AI's per-move refusals of the trainer's moves (``policy.opponent_move_refusals``
+    under the trainer's flag set): ``check_opponent`` runs no ``ai_refusals`` (they need the
+    player's party), so the opponent's untranscribed AI move paths are listed here, keyed by
+    battle effect."""
+    try:
+        layout = kaizo_layout(trainer.ai_flags)
+    except ValueError:  # a flag the policy lacks: its own flag line; the moves under Roark's set
+        layout = KAIZO
+    effect = tables.move_ai_effect
+    out = set()
+    for mon in party:
+        ghost = 7 in [int(x) for x in tables.species_types[mon.species]]  # TYPE_GHOST
+        for move in mon.moves:
+            e = int(effect[move]) if move else 0
+            name = effect_names[e] if move else ""
+            for kind in opponent_move_refusals(tables, move, layout, ghost):
+                if kind == "not transcribed":
+                    labels = " / ".join(ai_labels.get(name, ())) or "no Basic or Expert label"
+                    k = ("AI", f"move effect #{e} {name} not transcribed ({labels})")
+                elif kind in ("calc damage", "move type"):
+                    k = (
+                        "AI",
+                        f"move-id case of TrainerAI_{'CalcDamage' if kind == 'calc damage' else 'MoveType'}",
+                    )
+                else:
+                    k = ("AI", f"move effect #{e} {name}: {kind}")
+                out.add(k)
+                members[k].add(names.move_names[move])
+    return out
+
 
 def key(s):
     body, kind = s.rsplit(" (", 1)
@@ -35,10 +85,6 @@ def key(s):
         return ("move effect", f"#{mv[name.lower()]}"), name
     if kind == "held item" and name.lower() in it:
         return ("held item effect", f"#{it[name.lower()]}"), name
-    if kind == "AI flag set":
-        return ("AI", "flag set " + re.search(r"0x[0-9a-fA-F]+", name).group(0)), None
-    if kind == "AI ability guess":
-        return ("AI", "ability-guess check for this trainer"), None
     if kind == "AI flag":
         return ("AI", name), None
     return (kind, name), None
@@ -53,8 +99,9 @@ for t in trainers:
     splits.setdefault(t.split, t.split_order[0])
     try:
         cli._check_buildable(tables, names, t, inter)
-        r = check_opponent(tables, names, t, build_trainer_party(t, inter), start_weather(t))
-        ks = set()
+        party = build_trainer_party(t, inter)
+        r = check_opponent(tables, names, t, party, start_weather(t))
+        ks = ai_move_groups(t, party)
         for m in r.missing:
             k, member = key(str(m))
             ks.add(k)
@@ -80,8 +127,11 @@ def label(k):
 L = [
     "# Kaizo mechanics backlog",
     "",
-    "Generated from the opponent-side coverage check (`check_opponent`) on main after the K3",
-    "merge (exp and level-ups). It counts only what the trainers' teams, bags, AI and battle conditions need.",
+    "Generated from the opponent-side coverage check (`check_opponent`) after E1 batch 2a",
+    "(reads by path order, per-trainer AI flag sets), plus the AI's per-move refusals of the",
+    "trainers' moves (`policy.opponent_move_refusals`: AI move effects whose Basic/Expert",
+    "script paths are not transcribed, keyed by battle effect), which `check_opponent` skips.",
+    "It counts only what the trainers' teams, bags, AI and battle conditions need.",
     "Your own Pokemon's moves, abilities and items are not counted.",
     "Moves are grouped by the game's move-effect number and held items by hold-effect number,",
     "since one implementation covers the whole group.",

@@ -279,12 +279,8 @@ exp_refusals`, `learnable_moves`). None is reached by the Roark fight on either 
   choice-locked or selected move), and a party file whose exp is not of its level.
 
 What the Kaizo AI still refuses (reached by no Roark fight; a later split's milestone):
-- a Kaizo trainer whose `ai_flags` is not exactly BASIC, EVAL_ATTACK, EXPERT and RISKY
-  (`0b10111`), including every TagStrategy (flag 7) trainer (plan K3c Ruling 10);
-- every Kaizo trainer but Roark (id 246): the AI's one ability guess per decision is exact
-  only for movesets whose data test has run (plan K3c Ruling 6, kaizo_roark.md 8.4), so
-  coverage refuses any trainer outside `coverage.ONE_SCALAR_GUESS_CHECKED` by the line
-  "the one-scalar ability guess is not checked against this trainer's movesets";
+- a Kaizo trainer with an AI flag the policy does not transcribe (anything but BASIC,
+  EVAL_ATTACK, EXPERT and RISKY; E1 Ruling R2), including every TagStrategy (flag 7) trainer;
 - an opponent move whose battle effect has no transcribed path, or whose Expert label is not
   transcribed (`KAIZO.transcribed`, `KAIZO.expert_transcribed`);
 - an opponent move the AI's damage estimate takes by case or by alternative power (Triple

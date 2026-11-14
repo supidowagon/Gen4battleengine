@@ -241,7 +241,7 @@ def default_tables_and_names(tables, names, dir=None, game=None):
     if tables is None:
         with np.load(dir / "tables.npz") as z:
             check_npz(z, dir)
-            tables = Tables(**{f: z[f] for f in Tables._fields})
+            tables = Tables(**{f: z[f] for f in Tables._fields if f in z.files})
     if names is None:
         names = load_names(dir)
     return tables, names

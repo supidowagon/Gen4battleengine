@@ -4,8 +4,8 @@
 (roark.md 2): ``TrainerAI_ShouldSwitch`` (``maybe_switch``), then
 ``TrainerAI_ShouldUseItem`` (``maybe_use_item``), then ``TrainerAI_Main``: base scores,
 the BASIC, EVAL_ATTACK and EXPERT flag scripts over move slots 0-3 (``ai_scores``), and
-the highest score with ties broken by ``AiOutcome.tiebreak``. The Kaizo policy also runs
-RISKY after EXPERT (``layout.risky``; docs/ai/kaizo_roark.md 1). Every random draw is a
+the highest score with ties broken by ``AiOutcome.tiebreak``. The Kaizo policy runs the
+flags of the trainer's set (``layout.flags``; E1 Ruling R2, docs/ai/kaizo_roark.md 1). Every random draw is a
 field of the ``AiOutcome`` input; nothing here draws randomness.
 
 The scripts are transcribed label by label from ``src/battle/trainer_ai/script.s``
@@ -21,8 +21,9 @@ The game's policy (``nuzline.ai.layout``): every public function takes an option
 ``layout``; without one it reads ``layout_of(tables)`` when ``tables`` are concrete, and
 takes ``layout.VANILLA`` when they are traced, refusing tables of another policy
 (``_Refused.policy``). The traced internals take the layout as a static argument. A
-per-slot layout (Kaizo) keys the script rolls by move slot and battle effect, and its exact
-distribution is factored per slot (``_slot_move_distribution``; docs/ai/kaizo_roark.md 8);
+per-slot layout (Kaizo) keys every random read of the scoring by move slot and by its order
+on the slot's path (E1 Ruling R4; ``outcome`` docstring), and its exact distribution is
+factored per slot (``_slot_move_distribution``; docs/ai/kaizo_roark.md 8);
 ``ai_action_distribution_loose`` is its test oracle, with every decomp draw its own.
 
 Refusals (``ai_refusals``): an opponent move whose script paths are not transcribed
@@ -30,8 +31,9 @@ Refusals (``ai_refusals``): an opponent move whose script paths are not transcri
 or, in a per-slot layout, a move whose effect's Expert_Main label is not transcribed
 (``outcome.KAIZO_EXPERT_LABELS`` less ``layout.expert_transcribed``; none for Kaizo
 Roark since K3c Task 6), an opponent move the AI's damage estimate or move type takes
-by an alternative power or a move-id case, a moveset with more script-roll sites than
-``AiOutcome`` encodes, the abilities, items and moves that change
+by an alternative power or a move-id case, a vanilla moveset with more script-roll sites than
+``AiOutcome`` encodes, a per-slot path with more random reads than ``layout.slot_reads``
+(``ai_path_refusals``), the abilities, items and moves that change
 ``effectiveness_class``, a bag item other than a Potion, and every refusal of the
 voluntary-switch rule (``switching.switching_refusals``). On concrete inputs the public
 functions raise ``UnsupportedAi``; traced (jit, vmap) they cannot raise, so
@@ -58,12 +60,23 @@ import numpy as np
 from nuzline.ai import commands as c
 from nuzline.ai import switching
 from nuzline.ai.commands import AiContext, BattleEffect, Battler, LoadType, TypeMulti
-from nuzline.ai.layout import VANILLA, AiLayout, layout_of
+from nuzline.ai.layout import (
+    BASIC,
+    EVAL_ATTACK,
+    EXPERT,
+    RISKY,
+    SETUP_FIRST_TURN,
+    VANILLA,
+    WEATHER,
+    AiLayout,
+    layout_of,
+)
 from nuzline.ai.outcome import (
     ABILITY_GUESSES,
     ENUMERATION_WIDTH,
     KAIZO_EXPERT_LABELS,
     MAX_SCRIPT_ROLLS,
+    READ_DRAWS,
     SIM_ROLL_MAX,
     SWITCH_NONE,
     TIEBREAK_MOD,
@@ -72,9 +85,6 @@ from nuzline.ai.outcome import (
     enumerate_ai_outcomes,
     script_roll_count,
     script_roll_probs,
-    slot_roll_sites,
-    slot_roll_thresholds,
-    slot_site_counts,
     switch_stop_probs,
 )
 from nuzline.ai.switching import (
@@ -782,14 +792,76 @@ def _risky(ctx: AiContext) -> AiContext:
     return c.pop_or_end(c.add_to_move_score(ctx, 2))
 
 
+def _setup_first_turn(ctx: AiContext) -> AiContext:
+    """``SetupFirstTurn_Main`` (script.s:6417-6433): on the battle's first turn
+    (``LoadTurnCount`` 0, :6421-6422), a move whose effect is in
+    ``SetupFirstTurn_SetupEffects`` (``commands.SETUP_FIRST_TURN_EFFECTS``, :6425-6426) gets
+    +2 unless the 80 roll (:6429) jumps."""
+    ctx = _terminate(ctx)
+    ctx = c.load_turn_count(ctx)
+    ctx, _ = _split(c.if_loaded_not_equal_to(ctx, 0))  # -> SetupFirstTurn_Terminate
+    ctx = c.load_current_move_effect(ctx)
+    ctx, _ = _split(c.if_loaded_not_in_table(ctx, c.SETUP_FIRST_TURN_EFFECTS))
+    ctx, _ = _split(c.if_random_less_than(ctx, 80, 6429))
+    return c.pop_or_end(c.add_to_move_score(ctx, 2))
+
+
+def _weather(ctx: AiContext) -> AiContext:
+    """``Weather_Main`` (script.s:7979-8019): on the battle's first turn (``LoadTurnCount`` 0,
+    :7983-7984), a weather move goes to its weather's label (:7987-7990) and every other move
+    falls through into ``Weather_Sun`` (no ``GoTo`` after :7990; E1 Ruling R3, transcribed as
+    the game has it). A label ends unless the current weather (``LoadCurrentWeather``) is
+    another than its own (:7992-8010); then ``Weather_ScorePlus5`` gives +5 while the
+    attacker's ``LoadIsFirstTurnInBattle`` is TRUE (:8012-8016)."""
+    ctx = _terminate(ctx)
+    ctx = c.load_turn_count(ctx)
+    ctx, _ = _split(c.if_loaded_not_equal_to(ctx, 0))  # -> Weather_Terminate
+    ctx, sun = _split(c.if_current_move_effect_equal_to(ctx, BattleEffect.WEATHER_SUN))
+    ctx, rain = _split(c.if_current_move_effect_equal_to(ctx, BattleEffect.WEATHER_RAIN))
+    ctx, sand = _split(c.if_current_move_effect_equal_to(ctx, BattleEffect.WEATHER_SANDSTORM))
+    ctx, hail = _split(c.if_current_move_effect_equal_to(ctx, BattleEffect.WEATHER_HAIL))
+    sun = sun | ctx.live  # the fall-through into Weather_Sun (:7992)
+    plus5 = jnp.zeros_like(ctx.live)
+    for reached, weather in (
+        (sun, c.AiWeather.SUNNY),  # Weather_Sun (:7992)
+        (rain, c.AiWeather.RAINING),  # Weather_Rain (:7997)
+        (sand, c.AiWeather.SANDSTORM),  # Weather_Sand (:8002)
+        (hail, c.AiWeather.HAILING),  # Weather_Hail (:8007)
+    ):
+        ctx = c.load_current_weather(_at(ctx, reached))
+        ctx, _ = _split(c.if_loaded_equal_to(ctx, int(weather)))  # -> Weather_Terminate
+        ctx, t = _split(c.go_to(ctx))
+        plus5 = plus5 | t
+
+    # Weather_ScorePlus5 (:8012)
+    ctx = c.load_is_first_turn_in_battle(_at(ctx, plus5), _A)
+    ctx, _ = _split(c.if_loaded_equal_to(ctx, 0))  # FALSE -> Weather_Terminate
+    return c.pop_or_end(c.add_to_move_score(ctx, 5))
+
+
 def _flags(layout: AiLayout) -> tuple:
-    """The flag scripts the policy runs, in bit order (``TrainerAI_MainSingles``,
-    trainer_ai.c:297-310; ``FlagTable``, script.s:18-30): BASIC, EVAL_ATTACK, EXPERT
-    (vanilla Roark's ai_flags = 7, roark.md 1), then RISKY when ``layout.risky`` (Kaizo
-    Roark's are 23, docs/ai/kaizo_roark.md 1). The policy always runs exactly these; coverage
-    refuses a trainer with any other flag set (``engine/coverage.py``, plan K3c Ruling 10)."""
-    flags = (partial(_basic, layout=layout), _eval_attack, partial(_expert, layout=layout))
-    return (*flags, _risky) if layout.risky else flags
+    """The flag scripts the policy runs: those of ``layout.flags``' set bits, in bit order
+    (``TrainerAI_MainSingles`` runs a flag's script only when its bit is set, low bit first,
+    trainer_ai.c:297-308; ``FlagTable``, script.s:18-30): BASIC (bit 0), EVAL_ATTACK (1),
+    EXPERT (2), SETUP_FIRST_TURN (3), RISKY (4), WEATHER (9). Vanilla runs 7 (roark.md 1);
+    Kaizo the trainer's set (E1 Ruling
+    R2), Roark's 23. A bit without a transcribed script raises (``layout.kaizo_layout``
+    builds no such layout; coverage refuses the trainer)."""
+    scripts = {
+        BASIC: partial(_basic, layout=layout),
+        EVAL_ATTACK: _eval_attack,
+        EXPERT: partial(_expert, layout=layout),
+        SETUP_FIRST_TURN: _setup_first_turn,
+        RISKY: _risky,
+        WEATHER: _weather,
+    }
+    out = []
+    for bit in range(layout.flags.bit_length()):
+        if layout.runs(bit):
+            if bit not in scripts:
+                raise ValueError(f"AI flag bit {bit} of {layout.flags:#x} is not transcribed")
+            out.append(scripts[bit])
+    return tuple(out)
 
 
 # --- Refusals ----------------------------------------------------------------------
@@ -848,7 +920,7 @@ def _refused(tables: Tables, state: BattleState, layout: AiLayout = VANILLA) -> 
     effects = c.move_effect(tables, moves[1])
     if layout.name == VANILLA.name:  # by move id (MOVE_EFFECTS)
         transcribed = jnp.isin(moves[1], jnp.array(sorted(layout.transcribed), _I32))
-    else:  # by battle effect, whose row of layout.effect_sites holds the move's sites
+    else:  # by battle effect (outcome.KAIZO_TRANSCRIBED)
         transcribed = jnp.isin(effects, jnp.array(sorted(layout.transcribed), _I32))
     move = present[1][:, None] & ~(transcribed | (moves[1] == 0))
     # Curse by a Ghost type takes Basic_CheckCurse_GhostType (script.s:681-684 -> :700, which
@@ -861,7 +933,7 @@ def _refused(tables: Tables, state: BattleState, layout: AiLayout = VANILLA) -> 
     # transcribed yet (outcome.KAIZO_EXPERT_LABELS, layout.expert_transcribed): refused.
     pending = sorted(set(KAIZO_EXPERT_LABELS) - layout.expert_transcribed)
     expert = present[1][:, None] & (moves[1] != 0) & ~move & ~ghost_curse
-    if layout.per_slot_sites and pending:
+    if layout.per_slot_sites and pending and layout.runs(EXPERT):
         expert = expert & jnp.isin(effects, jnp.array(pending, _I32))
     else:
         expert = jnp.zeros_like(expert)
@@ -870,7 +942,7 @@ def _refused(tables: Tables, state: BattleState, layout: AiLayout = VANILLA) -> 
     calc_damage = known & jnp.isin(moves[1], jnp.array(c.CALC_DAMAGE_MOVES, _I32))
     move_type = known & jnp.isin(moves[1], jnp.array(c.MOVE_TYPE_MOVES, _I32))
     policy = tables.ai_policy != AI_POLICIES.index(layout.name)
-    if layout.per_slot_sites:  # every transcribed effect's sites fit layout.slot_sites
+    if layout.per_slot_sites:  # reads by order, bounded per path (missing_read)
         sites = jnp.zeros_like(present[1])
     else:
         sites = present[1] & (jax.vmap(script_roll_count)(moves[1]) > MAX_SCRIPT_ROLLS)
@@ -921,6 +993,38 @@ def _refused(tables: Tables, state: BattleState, layout: AiLayout = VANILLA) -> 
         scoring,
         scoring | jnp.any(bag),
     )
+
+
+def opponent_move_refusals(
+    tables: Tables, move: int, layout: AiLayout, ghost: bool = False
+) -> list[str]:
+    """The per-move refusals of ``_refused`` for an opponent move (decomp id) under ``layout``,
+    whatever the player's party (``tools/kaizo/backlog.py`` lists them per fight), as kinds:
+    ``"not transcribed"`` (its script paths, ``layout.transcribed``), ``"ghost curse"`` (Curse
+    by a Ghost type, ``ghost``), ``"expert label"`` (its Expert_Main label is not transcribed
+    yet, when the layout runs EXPERT), ``"alternative power"`` (sAltPowerMoveEffects,
+    trainer_ai.c:48-61), ``"calc damage"`` and ``"move type"`` (TrainerAI_CalcDamage and
+    TrainerAI_MoveType move-id cases). Pinned against ``_refused`` by
+    tests/ai/test_kaizo_policy.py test_opponent_move_refusals_are_refused."""
+    if move == 0:
+        return []
+    effect = int(np.asarray(tables.move_ai_effect)[move])
+    key = effect if layout.per_slot_sites else move
+    if key not in layout.transcribed:
+        return ["not transcribed"]
+    out = []
+    if ghost and effect == BattleEffect.CURSE:
+        out.append("ghost curse")
+    pending = set(KAIZO_EXPERT_LABELS) - layout.expert_transcribed
+    if layout.per_slot_sites and layout.runs(EXPERT) and effect in pending and not out:
+        out.append("expert label")
+    if effect in c.ALT_POWER_EFFECTS:
+        out.append("alternative power")
+    if move in c.CALC_DAMAGE_MOVES:
+        out.append("calc damage")
+    if move in c.MOVE_TYPE_MOVES:
+        out.append("move type")
+    return out
 
 
 @lru_cache(maxsize=len(AI_POLICIES))
@@ -1080,12 +1184,12 @@ def ai_refusals(
 
 
 # The per-slot layout's refusals found only on a scoring path (``_scores``), after the
-# static ``_refused`` checks pass: a reached IfRandomLessThan with no column in the slot's
-# site row (named by ``ai_path_refusals``), or a score outside the s8 moveScore's 0-127
-# (_slot_move_distribution); the generic message when no missing site is found.
+# static ``_refused`` checks pass: a path with more random reads than the layout's slot_reads
+# (named by ``ai_path_refusals``), or a score outside the s8 moveScore's 0-127
+# (_slot_move_distribution); the generic message when no read is past the bound.
 _PATH_REFUSAL = (
-    "the scoring path reaches an IfRandomLessThan the move's site row lacks, or a score "
-    "outside the s8 moveScore's 0-127 (docs/ai/kaizo_roark.md 8.2, 8.3)"
+    "the scoring path makes more random reads than the layout's slot_reads, or a score "
+    "outside the s8 moveScore's 0-127 (docs/ai/kaizo_roark.md 8.2-8.4)"
 )
 
 
@@ -1110,7 +1214,9 @@ def resolve_player_ability(
     ``ai_ability_known`` is set for the player's active Pokemon (or it is Shadow Tag,
     Magnet Pull or Arena Trap), else the species' ability in slot
     ``ai_outcome.ability_guess``, or its single ability when it has one
-    (``commands.defender_ability``, which ``ai_scores`` uses for every such read)."""
+    (``commands.defender_ability``, which ``ai_scores`` uses for every such read). A per-slot
+    outcome reads each guess from its own draw (``commands.load_battler_ability``); this gives
+    the ability of guess ``ai_outcome.ability_guess``."""
     return c.defender_ability(tables, state, ai_outcome.ability_guess)
 
 
@@ -1132,31 +1238,41 @@ def _run_flags(ctx: AiContext, layout: AiLayout, flags: tuple | None = None) -> 
     return ctx
 
 
-def _sites(tables: Tables, state: BattleState, ai_outcome: AiOutcome, layout: AiLayout):
-    """``AiContext.sites`` of ``layout`` (None: the flat layout's default), after checking
-    that ``ai_outcome.script_rolls`` has the layout's shape (static, so also when traced)."""
-    shape = (MOVES, layout.slot_sites) if layout.per_slot_sites else (MAX_SCRIPT_ROLLS,)
-    if tuple(ai_outcome.script_rolls.shape) != shape:
-        raise ValueError(
-            f"AiOutcome.script_rolls has shape {tuple(ai_outcome.script_rolls.shape)}; the "
-            f"{layout.name} layout's is {shape}"
-        )
-    return slot_roll_sites(tables, state, layout) if layout.per_slot_sites else None
+def _check_outcome(ai_outcome: AiOutcome, layout: AiLayout) -> None:
+    """Check that ``ai_outcome.script_rolls`` and ``ability_guess`` have ``layout``'s shapes
+    (static, so also when traced)."""
+    if layout.per_slot_sites:
+        shapes = {"script_rolls": (MOVES, layout.slot_reads), "ability_guess": ()}
+    else:
+        shapes = {"script_rolls": (MAX_SCRIPT_ROLLS,), "ability_guess": ()}
+    for field, shape in shapes.items():
+        got = tuple(jnp.shape(getattr(ai_outcome, field)))
+        if got != shape:
+            raise ValueError(
+                f"AiOutcome.{field} has shape {got}; the {layout.name} layout's is {shape}"
+            )
+
+
+def _score_context(
+    tables: Tables, state: BattleState, ai_outcome: AiOutcome, layout: AiLayout
+) -> AiContext:
+    """The ``AiContext`` after the policy's flag scripts (refusals not applied)."""
+    _check_outcome(ai_outcome, layout)
+    return _run_flags(c.new_context(tables, state, ai_outcome), layout)
 
 
 def _scores(
     tables: Tables, state: BattleState, ai_outcome: AiOutcome, layout: AiLayout = VANILLA
 ) -> jnp.ndarray:
     """``int32[4]``: the scores, -1 per slot on a refused state. A per-slot layout also
-    gives -1 when an ``IfRandomLessThan`` on the path has no column in the slot's site row
-    (``AiContext.missing_site``): ``_slot_move_distribution`` is then NaN and ``_policy``
+    gives -1 when a path makes more random reads than ``layout.slot_reads``
+    (``AiContext.missing_read``): ``_slot_move_distribution`` is then NaN and ``_policy``
     refuses. The flat (vanilla) layout's unused column is never on a path (outcome.py
     ``_VANILLA_COLUMN``), so it is not checked and vanilla is unchanged."""
-    sites = _sites(tables, state, ai_outcome, layout)
-    ctx = _run_flags(c.new_context(tables, state, ai_outcome, sites), layout)
+    ctx = _score_context(tables, state, ai_outcome, layout)
     refused = _refused(tables, state, layout).scoring
     if layout.per_slot_sites:
-        refused = refused | (ctx.missing_site > 0)
+        refused = refused | (ctx.missing_read > 0)
     return jnp.where(refused, -1, ctx.scores).astype(_I32)
 
 
@@ -1244,7 +1360,7 @@ def _policy(
     lock = locked_slot(state, 1)
     action = jnp.where(lock >= 0, lock, action)
     refused = _refused(tables, state, layout).any
-    if layout.per_slot_sites:  # a missing site column (_scores); no score is otherwise < 0
+    if layout.per_slot_sites:  # a read past slot_reads (_scores); else no score < 0
         refused = refused | jnp.any(scores < 0)
     return jnp.where(refused, REFUSED_ACTION, action).astype(_I32)
 
@@ -1281,12 +1397,43 @@ def ai_action_distribution_enumerated(
     raises: a refused state gives NaN. The terms are summed pairwise (``_pairwise_sum``):
     a sequential float32 sum of 3840 terms drifts by about 2e-6.
 
-    A per-slot ``layout`` enumerates the used sites jointly (``enumerate_ai_outcomes``:
-    concrete inputs, at most ``outcome.MAX_JOINT_SITES`` sites)."""
+    A per-slot ``layout`` (concrete inputs): every joint pattern of the four slots' reads (as
+    many bits per slot as its longest path reads, ``_path_records``; at most
+    ``MAX_JOINT_READS`` in all), every switch stop and every tiebreak, each weighted by the
+    product of its slots' path weights (``AiContext.weight``: a read's probability comes from
+    the read, ``outcome`` docstring), 0 for a pattern with a bit set past a slot's reads."""
     layout = _layout(tables, layout)
     if not layout.per_slot_sites:
         return _enumerated_flat(tables, state, layout)
-    outcomes, probs = enumerate_ai_outcomes(tables, state, layout)
+    _, reads = _path_records(tables, state, layout)
+    columns = np.minimum(np.asarray(reads).max(axis=0), layout.slot_reads)
+    bits = [(m, k) for m in range(MOVES) for k in range(int(columns[m]))]
+    if len(bits) > MAX_JOINT_READS:
+        raise ValueError(f"{len(bits)} reads: more than the {MAX_JOINT_READS} enumerated")
+    patterns, switch, tiebreak = (
+        a.reshape(-1)
+        for a in np.meshgrid(
+            np.arange(2 ** len(bits)),
+            np.arange(layout.switch_sites + 1),
+            np.arange(TIEBREAK_MOD),
+            indexing="ij",
+        )
+    )
+    on = (patterns[:, None] >> np.arange(len(bits))) & 1  # [K, B]
+    rolls = np.full((len(patterns), MOVES, layout.slot_reads), READ_DRAWS[0], np.uint8)
+    for i, (m, k) in enumerate(bits):
+        rolls[:, m, k] = np.asarray(READ_DRAWS, np.uint8)[on[:, i]]
+    p_switch = np.asarray(
+        switch_stop_probs(switch_sites(tables, state, layout.switch_sites)), np.float64
+    )
+    outcomes = AiOutcome(
+        sim_roll=jnp.full((len(patterns), MOVES), SIM_ROLL_MAX, jnp.int8),
+        ability_guess=jnp.zeros(len(patterns), jnp.int8),
+        script_rolls=jnp.asarray(rolls),
+        tiebreak=jnp.asarray(tiebreak, jnp.int8),
+        switch_stop=jnp.asarray(switch, jnp.int8),
+    )
+    probs = jnp.asarray(p_switch[switch] * TIEBREAK_P[tiebreak], jnp.float32)
     return _enumerated(tables, state, outcomes, probs, layout)
 
 
@@ -1296,9 +1443,21 @@ def _enumerated_flat(tables: Tables, state: BattleState, layout: AiLayout) -> jn
     return _enumerated(tables, state, outcomes, probs, layout)
 
 
+def _path_weight(tables, state, outcome, layout: AiLayout) -> jnp.ndarray:
+    """``float32``: the probability of a per-slot outcome's reads, the product over the slots
+    of their path weights, 0 when a slot's draws past its reads are not ``READ_DRAWS[0]``
+    (a repeat of a shorter pattern, ``_canonical``); 1 for the flat layout."""
+    if not layout.per_slot_sites:
+        return jnp.float32(1)
+    ctx = _score_context(tables, state, outcome, layout)
+    keep = _canonical(outcome.script_rolls, ctx.reads)
+    return jnp.prod(jnp.where(keep, ctx.weight, 0.0))
+
+
 @partial(jax.jit, static_argnames="layout")
 def _enumerated(tables, state, outcomes, probs, layout: AiLayout) -> jnp.ndarray:
     actions = jax.vmap(lambda o: _policy(tables, state, o, layout))(outcomes)
+    probs = probs * jax.vmap(lambda o: _path_weight(tables, state, o, layout))(outcomes)
     terms = jnp.where(actions[:, None] == jnp.arange(NUM_OPP_ACTIONS), probs[:, None], 0)
     dist = _pairwise_sum(terms.astype(jnp.float32))
     return jnp.where(jnp.any(actions < 0), jnp.nan, dist)  # refused (traced only)
@@ -1356,71 +1515,84 @@ def _slot_move_distribution(tables: Tables, state: BattleState, layout: AiLayout
     (docs/ai/kaizo_roark.md 8).
 
     ``TrainerAI_EvalMoves`` scores slot by slot (trainer_ai.c:483-525): slot m's score reads
-    only its own ``script_rolls[m]`` columns and the one ``ability_guess``, and
+    only its own ``script_rolls[m]`` and ``ability_guess[m]`` columns (each guessing read is
+    its own coin, :1194-1198, so no draw is shared between slots), and
     ``FlagMoveDamageScore``'s comparison reads only the deterministic damage estimates
-    (:1012-1062). So, for each guess:
+    (:1012-1062). So:
 
-    1. ``_scores`` runs once per local bit pattern p (``2**layout.slot_sites``, the same p in
-       every slot's columns): ``scores[g, p, m]`` is slot m's score with its bits p.
+    1. The scoring runs once per local bit pattern p (``2**slot_reads``, bit k standing for
+       the draw ``READ_DRAWS[bit]`` of the k-th read on the path, the same p in every slot):
+       ``scores[p, m]`` is slot m's score with its reads p.
     2. Each slot's histogram over score values (0-255) weights pattern p by its probability
-       in that slot, ``prod_k`` of N_k/256 where bit k is 1, else 1 - N_k/256
-       (``slot_roll_thresholds``; a bit past the slot's sites has weight 0).
+       in that slot, the product of the probabilities of the reads its path made
+       (``AiContext.weight``: N/256 or 1 - N/256 for an ``IfRandomLessThan``, 1/2 for a
+       guess), 0 when a bit past the path's reads is set (``_canonical``: it repeats the
+       pattern with that bit clear).
     3. The pick (``_pick``, trainer_ai.c:315-338): slot m with value v wins when every
        other candidate slot ties at v or is below it; over each subset T of the other
        candidates that ties, m gets ``_TIE_SHARE[|T| + 1, rank of m in T + m]``.
 
-    The guesses are then averaged (1/2 each). NaN when a score is outside the s8
-    ``moveScore``'s clamped range 0-127 (include/battle/ai_context.h:14)."""
+    NaN when a score is outside the s8 ``moveScore``'s clamped range 0-127
+    (include/battle/ai_context.h:14)."""
     scores, hist = _slot_histograms(tables, state, layout)
     has = (state.moves[1, state.active[1]] != 0).at[0].set(True)  # the pick's candidates
-    equal = jnp.where(has[None, :, None], hist, 0.0)
-    below = jnp.where(has[None, :, None], jnp.cumsum(hist, axis=2) - hist, 1.0)
+    equal = jnp.where(has[:, None], hist, 0.0)
+    below = jnp.where(has[:, None], jnp.cumsum(hist, axis=1) - hist, 1.0)
     picked = []
     for slot in range(MOVES):
         others = [j for j in range(MOVES) if j != slot]
-        win = jnp.zeros((ABILITY_GUESSES, _SCORE_VALUES), jnp.float32)
+        win = jnp.zeros(_SCORE_VALUES, jnp.float32)
         for subset in range(2 ** len(others)):
             tied = [j for k, j in enumerate(others) if subset >> k & 1]
-            term = jnp.ones((ABILITY_GUESSES, _SCORE_VALUES), jnp.float32)
+            term = jnp.ones(_SCORE_VALUES, jnp.float32)
             for j in others:
-                term = term * (equal[:, j] if j in tied else below[:, j])
+                term = term * (equal[j] if j in tied else below[j])
             rank = sum(j < slot for j in tied)
             win = win + term * _TIE_SHARE[len(tied) + 1, rank]
-        picked.append(jnp.sum(equal[:, slot] * win, axis=1))  # [G]
-    dist = jnp.mean(jnp.stack(picked, axis=1), axis=0)  # the guesses, 1/2 each
+        picked.append(jnp.sum(equal[slot] * win))
+    dist = jnp.stack(picked)
     dist = jnp.where(jnp.any(usable_moves(tables, state, 1)), dist, jax.nn.one_hot(0, MOVES))
     out_of_range = jnp.any((scores < 0) | (scores > _SCORE_MAX))
     return jnp.where(out_of_range, jnp.nan, dist)
 
 
 def _pattern_outcomes(layout: AiLayout) -> tuple[np.ndarray, AiOutcome]:
-    """``(bits int[P, S], outcomes)``: the ``AiOutcome`` of each (guess, local bit pattern
-    p) of a per-slot layout, guess-major, the same p in every slot's columns
-    (``_slot_histograms``)."""
-    width = layout.slot_sites
+    """``(bits int[P, R], outcomes)``: the ``AiOutcome`` of each local bit pattern p of a
+    per-slot layout, ``P = 2**R`` with ``R = slot_reads``: read k of every slot draws
+    ``READ_DRAWS[bit k of p]`` (``_slot_histograms``)."""
+    width = layout.slot_reads
     patterns = 2**width
-    bits = (np.arange(patterns)[:, None] >> np.arange(width)) & 1  # [P, S]
-    rolls = np.broadcast_to(bits[:, None, :], (patterns, MOVES, width)).astype(np.int8)
-    n = ABILITY_GUESSES * patterns
+    bits = (np.arange(patterns)[:, None] >> np.arange(width)) & 1  # [P, R]
+    draws = np.asarray(READ_DRAWS, np.uint8)[bits]
+    rolls = np.broadcast_to(draws[:, None, :], (patterns, MOVES, width))
     outcomes = AiOutcome(
-        sim_roll=jnp.full((n, MOVES), SIM_ROLL_MAX, jnp.int8),
-        ability_guess=jnp.repeat(jnp.arange(ABILITY_GUESSES, dtype=jnp.int8), patterns),
-        script_rolls=jnp.asarray(np.tile(rolls, (ABILITY_GUESSES, 1, 1))),
-        tiebreak=jnp.zeros(n, jnp.int8),  # _scores does not read it
-        switch_stop=jnp.full(n, SWITCH_NONE, jnp.int8),  # nor this
+        sim_roll=jnp.full((patterns, MOVES), SIM_ROLL_MAX, jnp.int8),
+        ability_guess=jnp.zeros(patterns, jnp.int8),  # unread
+        script_rolls=jnp.asarray(rolls),
+        tiebreak=jnp.zeros(patterns, jnp.int8),  # _scores does not read it
+        switch_stop=jnp.full(patterns, SWITCH_NONE, jnp.int8),  # nor this
     )
     return bits, outcomes
 
 
+def _canonical(rolls, reads) -> jnp.ndarray:
+    """``bool[MOVES]``: each slot's draws past its ``reads`` path reads (``rolls``,
+    ``uint8[MOVES, slot_reads]``) are all ``READ_DRAWS[0]``, so the pattern is the one
+    representative of its path."""
+    unread = jnp.arange(rolls.shape[1]) >= jnp.asarray(reads)[:, None]
+    return jnp.all(~unread | (rolls == READ_DRAWS[0]), axis=1)
+
+
 @partial(jax.jit, static_argnames="layout")
-def _missing_sites(tables: Tables, state: BattleState, layout: AiLayout) -> jnp.ndarray:
-    """``int32[G * P]``: ``AiContext.missing_site`` of every scoring ``_slot_histograms``
-    runs (0: none)."""
+def _path_records(tables: Tables, state: BattleState, layout: AiLayout):
+    """``(missing_read int32[P], reads int32[P, MOVES])``: the path records (``AiContext``) of
+    every scoring ``_slot_histograms`` runs: a read past ``slot_reads`` (0: none), and each
+    slot's random reads."""
     _, outcomes = _pattern_outcomes(layout)
 
     def one(o):
-        sites = _sites(tables, state, o, layout)
-        return _run_flags(c.new_context(tables, state, o, sites), layout).missing_site
+        ctx = _score_context(tables, state, o, layout)
+        return ctx.missing_read, ctx.reads
 
     return jax.vmap(one)(outcomes)
 
@@ -1429,25 +1601,21 @@ def ai_path_refusals(
     tables: Tables, state: BattleState, names=None, layout: AiLayout | None = None
 ) -> list[str]:
     """The refusals of a concrete per-slot state found only on a scoring path, after
-    ``ai_refusals`` is empty: each ``IfRandomLessThan`` a move's path reaches whose
-    ``script.s`` line has no column in its effect's site row (``AiContext.missing_site``;
-    kaizo_roark.md 8.3), naming the slot, the move and the line. Empty for the flat
-    layout, which has no such refusal."""
+    ``ai_refusals`` is empty: each slot whose path makes more random reads than
+    ``layout.slot_reads`` (``AiContext.missing_read``; kaizo_roark.md 8.3), naming the slot
+    and the move. Empty for the flat layout, which has no such refusal."""
     layout = _layout(tables, layout)
     if not layout.per_slot_sites:
         return []
     names = _names_for(tables, names)
     moves = np.asarray(state.moves[1, state.active[1]])
-    codes = sorted({int(x) for x in np.asarray(_missing_sites(tables, state, layout)) if x})
-    out = []
-    for code in codes:
-        slot, k = divmod(code - 1, len(c.SITE_LINES))
-        out.append(
-            f"ai scoring: opponent slot {slot}: move {_move_name(int(moves[slot]), names)} "
-            f"reaches IfRandomLessThan at script.s:{c.SITE_LINES[k]}, which its effect's "
-            "site row has no column for (docs/ai/kaizo_roark.md 8.2, 8.3)"
-        )
-    return out
+    missing, _ = _path_records(tables, state, layout)
+    return [
+        f"ai scoring: opponent slot {slot}: move {_move_name(int(moves[slot]), names)} makes "
+        f"more than {layout.slot_reads} random reads on one path, the layout's slot_reads "
+        "(docs/ai/kaizo_roark.md 8.3)"
+        for slot in sorted({int(x) - 1 for x in np.asarray(missing) if x})
+    ]
 
 
 def _raise_path_refusal(tables: Tables, state: BattleState, layout: AiLayout) -> None:
@@ -1458,25 +1626,24 @@ def _raise_path_refusal(tables: Tables, state: BattleState, layout: AiLayout) ->
 def _slot_histograms(
     tables: Tables, state: BattleState, layout: AiLayout
 ) -> tuple[jnp.ndarray, jnp.ndarray]:
-    """Steps 1 and 2 of ``_slot_move_distribution``: ``(scores int32[G, P, MOVES],
-    hist float32[G, MOVES, 256])``, ``hist[g, m, v]`` the probability that slot m scores v
-    under guess g (refusals not applied)."""
-    width = layout.slot_sites
-    patterns = 2**width
-    bits, outcomes = _pattern_outcomes(layout)
-    scores = jax.vmap(lambda o: _scores(tables, state, o, layout))(outcomes)
-    scores = scores.reshape(ABILITY_GUESSES, patterns, MOVES)
-    p_jump = slot_roll_thresholds(tables, state, layout).astype(jnp.float32) / 256  # [M, S]
-    weight = jnp.prod(jnp.where(bits[:, None, :] == 1, p_jump, 1 - p_jump), axis=2)  # [P, M]
-    g, _, m = np.meshgrid(
-        np.arange(ABILITY_GUESSES), np.arange(patterns), np.arange(MOVES), indexing="ij"
-    )
+    """Steps 1 and 2 of ``_slot_move_distribution``: ``(scores int32[P, MOVES],
+    hist float32[MOVES, 256])``, ``hist[m, v]`` the probability that slot m scores v
+    (refusals not applied)."""
+    _, outcomes = _pattern_outcomes(layout)
+    refused = _refused(tables, state, layout).scoring
+
+    def one(o):
+        ctx = _score_context(tables, state, o, layout)
+        scores = jnp.where(refused | (ctx.missing_read > 0), -1, ctx.scores).astype(_I32)
+        keep = _canonical(o.script_rolls, ctx.reads)
+        return scores, jnp.where(keep, ctx.weight, 0.0)
+
+    scores, weight = jax.vmap(one)(outcomes)  # [P, MOVES] each
+    m = np.broadcast_to(np.arange(MOVES), scores.shape)
     values = jnp.clip(scores, 0, _SCORE_VALUES - 1)
     hist = (
-        jnp.zeros((ABILITY_GUESSES, MOVES, _SCORE_VALUES), jnp.float32)
-        .at[g, m, values]
-        .add(jnp.broadcast_to(weight, scores.shape))
-    )  # [G, M, V]: P(slot m scores v | guess)
+        jnp.zeros((MOVES, _SCORE_VALUES), jnp.float32).at[m, values].add(weight)
+    )  # [M, V]: P(slot m scores v)
     return scores, hist
 
 
@@ -1489,7 +1656,8 @@ def _distribution(tables: Tables, state: BattleState, layout: AiLayout = VANILLA
     trainer_ai.c:315-338). The switch reads only ``switch_stop``, the item no draw, the
     move pick only ``ability_guess``, ``script_rolls`` and ``tiebreak``, so the 3840
     outcomes of ``ai_action_distribution_enumerated`` reduce to 10 switch stops and 32
-    scorings (a per-slot layout: ``_slot_move_distribution``). NaN exactly where the
+    scorings (a per-slot layout: ``_slot_move_distribution``, 2**slot_reads
+    scorings). NaN exactly where the
     enumeration gives NaN: a refused state, or a refused switch layout (``switch_action``
     gives ``REFUSED_ACTION`` for any stop). The switch stops are the layout's
     ``switch_sites + 1`` (10 vanilla, 45 Kaizo)."""
@@ -1515,42 +1683,50 @@ def _distribution(tables: Tables, state: BattleState, layout: AiLayout = VANILLA
     return jnp.where(refused, jnp.nan, dist)
 
 
+def _path_counts(tables: Tables, state: BattleState, layout: AiLayout) -> np.ndarray:
+    """``int[MOVES]``: per slot of a per-slot layout, its distinct scoring paths in this
+    (concrete) state: the patterns ``_canonical`` keeps, one per path."""
+    _, outcomes = _pattern_outcomes(layout)
+    _, reads = _path_records(tables, state, layout)
+    keep = jax.vmap(_canonical)(outcomes.script_rolls, reads)  # [P, MOVES]
+    return np.asarray(keep).sum(axis=0)
+
+
 def ai_width(tables: Tables, state: BattleState) -> int:
-    """The draw combinations of nonzero weight that ``ai_action_distribution`` merges for
-    this (concrete) state: the switch stops plus, per guess, the script-roll patterns of the
-    scoring. Flat layout: ``SWITCH_SITES + 1 + ABILITY_GUESSES * 2**MAX_SCRIPT_ROLLS`` (42).
-    Per-slot layout: ``switch_sites + 1 + ABILITY_GUESSES * sum_slots 2**(sites of the
-    slot)``, the slots being factored (45 switch stops for Kaizo). The program itself
-    always evaluates ``ABILITY_GUESSES * 2**slot_sites`` scorings (512 for Kaizo), each
-    giving every slot's score, whatever the sites (``_slot_move_distribution``); ``_check_width`` bounds both
-    against ``WIDTH_CAP`` for every state (plan K3c Ruling 12)."""
+    """The draw combinations that ``ai_action_distribution`` merges for this (concrete)
+    state: the switch stops plus the patterns of the scoring. Flat layout: ``SWITCH_SITES
+    + 1 + ABILITY_GUESSES * 2**MAX_SCRIPT_ROLLS`` (42). Per-slot layout: ``switch_sites + 1 +
+    sum_slots (the slot's distinct scoring paths)``, the slots being factored (45 switch stops
+    for Kaizo; ``_path_counts``). The program itself always evaluates ``2**slot_reads``
+    scorings, each giving every slot's score (``_slot_move_distribution``); ``_check_width``
+    bounds that against ``WIDTH_CAP`` for every state (plan K3c Ruling 12; E1 Ruling R4)."""
     layout = layout_of(tables)
     stops = layout.switch_sites + 1
     if not layout.per_slot_sites:
         return stops + ABILITY_GUESSES * 2**MAX_SCRIPT_ROLLS
-    counts = np.asarray(slot_site_counts(tables, state, layout)).astype(np.int64)
-    return stops + ABILITY_GUESSES * int(np.sum(2**counts))
+    return stops + int(np.sum(_path_counts(tables, state, layout)))
 
 
 def ai_flat_width(tables: Tables, state: BattleState) -> int:
     """The flat product of the same draws, reported next to ``ai_width`` and not used:
-    ``ABILITY_GUESSES * 2**(script-roll sites) * TIEBREAK_MOD * (switch stops)``
-    (``ENUMERATION_WIDTH``, 3840, for the flat layout)."""
+    ``2**(guess bits) * 2**(script-roll sites) * TIEBREAK_MOD * (switch stops)``, one guess
+    bit for the flat layout (``ENUMERATION_WIDTH``, 3840); for a per-slot one,
+    ``prod_slots (the slot's distinct paths) * TIEBREAK_MOD * (switch stops)``."""
     layout = layout_of(tables)
     if not layout.per_slot_sites:
         return ENUMERATION_WIDTH
-    sites = int(np.sum(np.asarray(slot_site_counts(tables, state, layout))))
-    return ABILITY_GUESSES * 2**sites * TIEBREAK_MOD * (layout.switch_sites + 1)
+    paths = int(np.prod(_path_counts(tables, state, layout)))
+    return paths * TIEBREAK_MOD * (layout.switch_sites + 1)
 
 
 def _check_width() -> None:
-    """The largest ``ai_width`` of each layout, every slot at ``slot_sites`` sites, is
+    """The largest ``ai_width`` of each layout, every slot at ``2**slot_reads`` paths, is
     within ``WIDTH_CAP`` (a design-time invariant, like ``outcome.ENUMERATION_WIDTH``)."""
     from nuzline.ai.layout import LAYOUTS
 
     for layout in LAYOUTS:
         if layout.per_slot_sites:
-            most = layout.switch_sites + 1 + ABILITY_GUESSES * MOVES * 2**layout.slot_sites
+            most = layout.switch_sites + 1 + MOVES * 2**layout.slot_reads
         else:
             most = layout.switch_sites + 1 + ABILITY_GUESSES * 2**MAX_SCRIPT_ROLLS
         if most > WIDTH_CAP:
@@ -1565,7 +1741,8 @@ def ai_action_distribution(
 ) -> jnp.ndarray:
     """``float32[NUM_OPP_ACTIONS]``: the exact probability of each opponent action over
     every ``AiOutcome``, computed factored (``_distribution``: 32 scorings instead of
-    the 3840 outcomes of ``ai_action_distribution_enumerated``, which it equals).
+    the 3840 outcomes of ``ai_action_distribution_enumerated``, which it equals; a per-slot
+    layout's ``2**slot_reads``).
     Raises ``UnsupportedAi`` on a refused concrete state; NaN when traced."""
     layout = _layout(tables, layout)
     _check(tables, state, layout, _all_refusals)
@@ -1579,6 +1756,7 @@ def ai_action_distribution(
 # --- The loose oracle (tests only) ---------------------------------------------------
 
 LOOSE_JOINT_BITS = 18  # the loose oracle enumerates the slots jointly up to this many reads
+MAX_JOINT_READS = 10  # ai_action_distribution_enumerated's per-slot joint enumeration
 
 
 def _loose_run(tables: Tables, state: BattleState, bits, layout: AiLayout):
@@ -1734,9 +1912,9 @@ def ai_action_distribution_loose(
     ``RandNext`` read of the scoring its own independent draw (tests only; the
     ``commands`` docstring): each ``IfRandomLessThan`` with its own N/256 (trainer_ai.c:528-538),
     each ``LoadBattlerAbility DEFENDER`` its own coin flip (:1191-1198), the tie-break
-    ``RandNext() % n`` over a u16 (:338). It reads no site table and no shared guess, so it
-    checks the gates of the exact layout: path-only sites, the one-scalar guess, per-slot
-    factoring. The switch, the item and the locked slot are combined as ``_distribution``
+    ``RandNext() % n`` over a u16 (:338). Its reads are indexed in the static order of the
+    straight-line scripts, not by order on the path, and not bounded, so it checks the gates
+    of the exact layout: read order (E1 Ruling R4), the read bound, per-slot factoring. The switch, the item and the locked slot are combined as ``_distribution``
     does (roark.md 2). NaN on every state ``_distribution`` refuses: the scoring and item
     refusals (``_refused``) and the voluntary-switch ones (``switching_refusals``, where
     ``switch_sites`` would raise ``UnsupportedSwitching``). Concrete only."""

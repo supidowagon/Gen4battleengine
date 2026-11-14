@@ -209,7 +209,7 @@ def rank_actions(
         partial(_playouts, max_turns=max_turns, layout=layout),
         args,
         name="playouts",
-        static={"max_turns": max_turns, "layout": layout.name},
+        static={"max_turns": max_turns, "layout": layout.key},
         version=code_version(),
     )
     out = jax.device_get(playouts(*args))

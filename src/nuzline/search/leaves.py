@@ -236,7 +236,7 @@ def _run(fn, name: str, max_turns: int, tables: Tables, rows: tuple, row_of, key
             program,
             args,
             name=name,
-            static={"max_turns": max_turns, "layout": layout.name},
+            static={"max_turns": max_turns, "layout": layout.key},
             version=code_version(),
         )
         out = jax.device_get(exported(*args))

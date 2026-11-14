@@ -10,8 +10,10 @@ probability. Ranges and encodings are those of ``docs/ai/roark.md`` section 8:
   (85-100 %). Roark's scripts only pass ``USE_MAX_DAMAGE``, so it is fixed at 15
   (100 %) and never enumerated (8.1).
 * ``ability_guess``: 0 = the player's ability slot 0, 1 = slot 1, each 1/2
-  (``LoadBattlerAbility DEFENDER``, ``trainer_ai.c:1170``; 8.2). One scalar is exact
-  for Roark; it is ignored when no guess is made.
+  (``LoadBattlerAbility DEFENDER``, ``trainer_ai.c:1170``; 8.2). The flat layout has one
+  scalar for the decision, exact for vanilla Roark (roark.md 8.2); a per-slot layout reads
+  every guess from ``script_rolls`` (below) and leaves this field 0, unread. It is ignored
+  when no guess is made.
 * ``script_rolls[k]``: 1 when the k-th ``IfRandomLessThan N`` site in script order
   jumps (``RandNext % 256 < N``), probability N/256 (8.3). The site layout follows
   the opponent active's moveset: ``script_roll_thresholds``.
@@ -43,22 +45,42 @@ whose enumeration is too wide"): a trainer whose draws do not fit this layout ne
 new layout, and the sampling-only grade is unimplemented end to end (see the
 ``nuzline.engine.coverage`` docstring).
 
-**Per-slot layouts** (``AiLayout.per_slot_sites``, Kaizo; docs/ai/kaizo_roark.md 8). The
-flat layout above is the vanilla one and does not change. A per-slot layout keys the
-script rolls by move slot: ``script_rolls`` is ``int8[MOVES, layout.slot_sites]``, and
-column k of slot m is the k-th ``IfRandomLessThan`` site of the slot's move in script
-order (``slot_site_table``: the battle effect of the move picks its row of
-``layout.effect_sites``). Every slot reads only its own columns (``TrainerAI_EvalMoves``
-scores slot by slot, trainer_ai.c:483-525), which is what lets ``policy`` factor the
-exact distribution per slot. The other fields are as above. A per-slot layout's
-enumeration is not a constant: ``enumerate_ai_outcomes`` lists the used sites only, on
-concrete inputs (it is a test oracle; ``policy`` never enumerates the flat product).
+**Per-slot layouts** (``AiLayout.per_slot_sites``, Kaizo; docs/ai/kaizo_roark.md 8; E1
+Rulings R1 and R4). The flat layout above is the vanilla one and does not change. A per-slot
+layout keys every random read of the scoring by move slot and by its order on the slot's
+path: ``script_rolls`` is ``uint8[MOVES, layout.slot_reads]``, and entry k of slot m is the
+k-th random read on slot m's scoring path (flag order, trainer_ai.c:297-310, then line
+order), as ``RandNext() % 256``, whatever the read is:
+
+* an ``IfRandomLessThan N`` (``AICmd_IfRandomLessThan``, trainer_ai.c:528-538) jumps when the
+  draw is below N, probability N/256;
+* a guessing ``LoadBattlerAbility DEFENDER`` (``AICmd_LoadBattlerAbility``,
+  trainer_ai.c:1170-1209: the AI does not know the player's ability, it is not Shadow Tag,
+  Magnet Pull or Arena Trap, and the species has two nonzero abilities) takes ability 1 when
+  the draw's low bit is set (``BattleSystem_RandNext() & 1``, :1195), else ability 2,
+  probability 1/2 each.
+
+Each read is its own ``RandNext``, so the k-th read on a path is one fresh independent draw
+whose probability comes from the read itself, and which read is the k-th is decided by the
+earlier draws of the path: keying by read order is exact. No read is shared between slots,
+since ``TrainerAI_EvalMoves`` scores slot by slot (:483-525), which is what lets ``policy``
+factor the exact distribution per slot. A path that makes more random reads than
+``slot_reads`` is refused (``AiContext.missing_read``), never given a reused draw. The read
+order replaces K3c's per-effect site columns and batch 1's guess columns: no site table is
+needed, so a forgotten site cannot be read as never jumping, and a flag set's reads do not
+multiply the width.
+
+``policy`` enumerates a per-slot layout's reads as bit patterns: bit 0 / 1 of read k stands
+for the draw ``READ_DRAWS[bit]`` (254 / 1), which split every read in two (254 is below no
+``SITE_N`` N, 1 below every one; their low bits differ), and the scoring path records each
+read's probability (``AiContext.weight``) and the number of reads it made
+(``AiContext.reads``). A pattern whose bits past a slot's reads are not all 0 repeats a
+shorter one and is given weight 0.
 
 Sites are named by their ``script.s`` line (``SITE_N``): every ``IfRandomLessThan`` the
-transcription reads passes its line to ``commands.if_random_less_than``, which finds the
-draw's index in ``AiContext.sites`` (one column per ``SITE_LINES`` entry): the flat
-layout's index for vanilla (``line_sites``), the slot's column for a per-slot layout
-(``slot_roll_sites``).
+transcription reads passes its N and its line to ``commands.if_random_less_than``. The flat
+layout finds the draw's index in ``AiContext.sites`` (one column per ``SITE_LINES`` entry,
+``line_sites``); the per-slot layout takes the slot's next read.
 """
 
 from __future__ import annotations
@@ -86,15 +108,15 @@ if TYPE_CHECKING:
 __all__ = [
     "ABILITY_GUESSES",
     "AI_SITE_MOVES",
-    "EFFECT_SITE_LINES",
     "ENUMERATION_WIDTH",
     "KAIZO_EXPERT_LABELS",
     "KAIZO_EXPERT_TRANSCRIBED",
-    "KAIZO_SLOT_SITES",
+    "KAIZO_SLOT_READS",
+    "KAIZO_TRANSCRIBED",
     "MAX_ENUMERATED",
     "MAX_EXPERT_SITES",
-    "MAX_JOINT_SITES",
     "MAX_SCRIPT_ROLLS",
+    "READ_DRAWS",
     "SITE_LINES",
     "SITE_N",
     "SWITCH_NONE",
@@ -111,10 +133,6 @@ __all__ = [
     "script_roll_probs",
     "script_roll_sites",
     "script_roll_thresholds",
-    "slot_roll_sites",
-    "slot_roll_thresholds",
-    "slot_site_counts",
-    "slot_site_table",
     "switch_stop_probs",
 ]
 
@@ -182,6 +200,8 @@ SITE_N: dict[int, int] = {
     3486: 128,  # Expert_Curse_CheckDefenseStage
     3491: 128,  # Expert_Curse_CheckDefenseStageAnyBoosts
     6530: 128,  # Risky_Main (+2 when it does NOT jump)
+    # E1 batch 2b: SetupFirstTurn_Main, turn 0 only, an effect of its table.
+    6429: 80,  # SetupFirstTurn_Main (+2 when it does NOT jump)
 }
 SITE_LINES = tuple(SITE_N)
 # The flat (vanilla) layout's column of script_roll_sites that each line reads: column 0 is
@@ -194,65 +214,55 @@ _VANILLA_COLUMN = {6383: 0, 2328: 1, 3726: 1, 3731: 2, 6274: 1} | {
 }
 assert set(_VANILLA_COLUMN) == set(SITE_N)
 
-# The per-slot (Kaizo) site table, keyed by decomp battle effect (BATTLE_EFFECT_*, line - 1
-# of generated/move_battle_effects.txt): the script.s lines of the sites a move with that
-# effect can reach, in script order (flag order BASIC, EVAL_ATTACK, EXPERT, trainer_ai.c
-# :297-310, then line order). EVAL_ATTACK's quad roll (:6383) is reached by every move whose
-# IfMoveEffectivenessEquals is QUADRUPLE (:6378), whatever its effect, so every effect
-# has it. No BASIC label of a transcribed effect reads IfRandomLessThan. layout.KAIZO's
-# transcribed set is this table's keys.
-#
-# K3c Task 5 added the effects of Kaizo Roark's moves (data/intermediate_kaizo/moves.json)
-# with their EVAL_ATTACK sites; Task 6 appends the sites of their Expert_Main labels
-# (:1623-1811) and of Risky_Main (:6530, for the effects of Risky_RiskyEffects,
-# :6536-6562: HALVE_DEFENSE :6538 and RAISE_ALL_STATS_HIT :6550; layout.KAIZO checks that
-# every transcribed effect of commands.RISKY_EFFECTS has it). A site that is transcribed but
-# never reached in Kaizo data only costs width (:2671, below).
-EFFECT_SITE_LINES: dict[int, tuple[int, ...]] = {
-    0: (6383,),  # HIT: no Expert_Main entry (script.s:1623-1811)
-    2: (6383,),  # POISON_HIT (Sludge Bomb): no Expert_Main entry
-    # RECOVER_HALF_DAMAGE_DEALT (Giga Drain): Expert_DrainMove (:1629 -> :1827), roll :1835.
-    3: (6383, 1835),
-    4: (6383,),  # BURN_HIT (Flamethrower): no Expert_Main entry
-    6: (6383,),  # PARALYZE_HIT (DragonBreath): no Expert_Main entry
-    # HALVE_DEFENSE (Selfdestruct): EvalAttack_MaybeDeprioritize (:6365 -> :6374) before the
-    # quad roll; Expert_Explosion (:1630 -> :1841), rolls :1859, :1865, :1870, :1875, :1880;
-    # Risky :6530.
-    7: (6374, 6383, 1859, 1865, 1870, 1875, 1880, 6530),
-    19: (6383, 2328),  # DEF_DOWN: Expert_StatusDefenseDown (:1642 -> :2318)
-    31: (6383,),  # FLINCH_HIT (Zen Headbutt): no Expert_Main entry
-    # RESTORE_HALF_HP (Recover): Expert_Recovery (:1652 -> :2640), rolls :2665, :2671, :2674.
-    # :2671 needs the player seen with a STEAL_STATUS_MOVE move (:2670), which no Kaizo move
-    # is; Expert_Recovery_Unused's :2657 follows a GoTo (:2652) and no jump targets it.
-    32: (6383, 2665, 2671, 2674),
-    # STATUS_BADLY_POISON (Toxic): Expert_ToxicLeechSeed (:1653 -> :2680), rolls :2690,
-    # :2695, :2704.
-    33: (6383, 2690, 2695, 2704),
-    # SET_LIGHT_SCREEN (Light Screen): Expert_LightScreen (:1654 -> :2710), rolls :2718, :2724.
-    35: (6383, 2718, 2724),
-    52: (6383, 2075),  # SPEED_UP_2 (Rock Polish): Expert_StatusSpeedUp (:1665 -> :2066)
-    59: (6383, 2328),  # DEF_DOWN_2: Expert_StatusDefenseDown (:1671 -> :2318)
-    69: (6383,),  # LOWER_DEFENSE_HIT (Crunch): no Expert_Main entry
-    72: (6383,),  # LOWER_SP_DEF_HIT (Earth Power): no Expert_Main entry
-    76: (6383,),  # CONFUSE_HIT (Water Pulse): no Expert_Main entry
-    # CURSE (Curse): Expert_Curse (:1700 -> :3452), rolls :3477, :3481, :3486, :3491.
-    109: (6383, 3477, 3481, 3486, 3491),
-    128: (6383, 3726, 3731),  # HIT_BEFORE_SWITCH: Expert_Pursuit (:1706 -> :3706)
-    # RAISE_ALL_STATS_HIT (AncientPower): no Expert_Main entry; Risky :6530.
-    140: (6383, 6530),
-    186: (6383,),  # REMOVE_SCREENS (Brick Break): Expert_BrickBreak (:1739 -> :4559), no roll
-    261: (6383,),  # WHIRLPOOL (Sand Tomb): no Expert_Main entry (plan K3c Ruling 5)
-    266: (6383, 6274),  # STEALTH_ROCK: Expert_StealthRock (:1805 -> :6268)
-    269: (6383,),  # RECOIL_HALF (Head Smash): Expert_RecoilMove (:1806 -> :6289), no roll
-    275: (6383,),  # FLINCH_PARALYZE_HIT (Thunder Fang): no Expert_Main entry
-}
-# The transcribed effects (EFFECT_SITE_LINES) whose Expert_Main entry goes to a label added
+# The battle effects (BATTLE_EFFECT_*, line - 1 of generated/move_battle_effects.txt) whose
+# script paths the per-slot (Kaizo) layout transcribes: layout.KAIZO's transcribed set. K3c
+# Task 5 added the effects of Kaizo Roark's moves (data/intermediate_kaizo/moves.json) with
+# their BASIC and EVAL_ATTACK paths, Task 6 their Expert_Main labels (:1623-1811) and
+# Risky_Main (:6521-6534). The random reads on their paths are keyed by read order (module
+# docstring), so the effects carry no site table (E1 Ruling R4); the comments name each
+# effect's Expert_Main label and its IfRandomLessThan lines. Every effect can reach
+# EVAL_ATTACK's quad roll (:6383), behind IfMoveEffectivenessEquals QUADRUPLE (:6378).
+KAIZO_TRANSCRIBED: frozenset[int] = frozenset(
+    {
+        0,  # HIT: no Expert_Main entry (script.s:1623-1811)
+        2,  # POISON_HIT (Sludge Bomb): no Expert_Main entry
+        3,  # RECOVER_HALF_DAMAGE_DEALT (Giga Drain): Expert_DrainMove (:1629), :1835
+        4,  # BURN_HIT (Flamethrower): no Expert_Main entry
+        6,  # PARALYZE_HIT (DragonBreath): no Expert_Main entry
+        # HALVE_DEFENSE (Selfdestruct): EvalAttack_MaybeDeprioritize (:6365 -> :6374);
+        # Expert_Explosion (:1630 -> :1841), :1859, :1865, :1870, :1875, :1880; Risky :6530.
+        7,
+        19,  # DEF_DOWN: Expert_StatusDefenseDown (:1642 -> :2318), :2328
+        31,  # FLINCH_HIT (Zen Headbutt): no Expert_Main entry
+        # RESTORE_HALF_HP (Recover): Expert_Recovery (:1652 -> :2640), :2665, :2671, :2674.
+        # Expert_Recovery_Unused's :2657 follows a GoTo (:2652) and no jump targets it.
+        32,
+        # STATUS_BADLY_POISON (Toxic): Expert_ToxicLeechSeed (:1653 -> :2680), :2690, :2695,
+        # :2704.
+        33,
+        35,  # SET_LIGHT_SCREEN: Expert_LightScreen (:1654 -> :2710), :2718, :2724
+        52,  # SPEED_UP_2 (Rock Polish): Expert_StatusSpeedUp (:1665 -> :2066), :2075
+        59,  # DEF_DOWN_2: Expert_StatusDefenseDown (:1671 -> :2318), :2328
+        69,  # LOWER_DEFENSE_HIT (Crunch): no Expert_Main entry
+        72,  # LOWER_SP_DEF_HIT (Earth Power): no Expert_Main entry
+        76,  # CONFUSE_HIT (Water Pulse): no Expert_Main entry
+        109,  # CURSE: Expert_Curse (:1700 -> :3452), :3477, :3481, :3486, :3491
+        128,  # HIT_BEFORE_SWITCH (Pursuit): Expert_Pursuit (:1706 -> :3706), :3726, :3731
+        140,  # RAISE_ALL_STATS_HIT (AncientPower): no Expert_Main entry; Risky :6530
+        186,  # REMOVE_SCREENS (Brick Break): Expert_BrickBreak (:1739 -> :4559), no roll
+        261,  # WHIRLPOOL (Sand Tomb): no Expert_Main entry (plan K3c Ruling 5)
+        266,  # STEALTH_ROCK: Expert_StealthRock (:1805 -> :6268), :6274
+        269,  # RECOIL_HALF (Head Smash): Expert_RecoilMove (:1806 -> :6289), no roll
+        275,  # FLINCH_PARALYZE_HIT (Thunder Fang): no Expert_Main entry
+    }
+)
+# The transcribed effects (KAIZO_TRANSCRIBED) whose Expert_Main entry goes to a label added
 # after the vanilla transcription: effect -> (label, the script.s line of its entry in
 # Expert_Main's dispatch table, :1628-1808). The other transcribed effects either have no
 # entry (they end at :1811) or go to a vanilla-transcribed label (DEF_DOWN :1642, DEF_DOWN_2
 # :1671, HIT_BEFORE_SWITCH :1706, STEALTH_ROCK :1805). A per-slot layout refuses a move whose
 # effect is here but not in its expert_transcribed set. The workflow for a future effect with
-# an Expert_Main entry: add it here first (with its EFFECT_SITE_LINES row). It is then
+# an Expert_Main entry: add it here first (and to KAIZO_TRANSCRIBED). It is then
 # pending: in the table, not dispatched by policy._expert, not in KAIZO_EXPERT_TRANSCRIBED,
 # and every move with it is refused; the tests allow this state. Then transcribe its label
 # (an _EXPERT_LABELS row) and add the effect to KAIZO_EXPERT_TRANSCRIBED by hand.
@@ -285,13 +295,17 @@ KAIZO_EXPERT_TRANSCRIBED: frozenset[int] = frozenset(
         269,  # RECOIL_HALF: Expert_RecoilMove
     }
 )
-assert set(KAIZO_EXPERT_LABELS) <= set(EFFECT_SITE_LINES)
+assert set(KAIZO_EXPERT_LABELS) <= KAIZO_TRANSCRIBED
 assert KAIZO_EXPERT_TRANSCRIBED <= set(KAIZO_EXPERT_LABELS)
 
-# The most sites one move slot can reach in the Kaizo transcription: Selfdestruct
-# (HALVE_DEFENSE): EvalAttack :6374 and :6383, Expert_Explosion :1859, :1865, :1870, :1875
-# and :1880, Risky :6530 (layout.KAIZO asserts every row fits).
-KAIZO_SLOT_SITES = 8
+# The most random reads (IfRandomLessThan and guessing LoadBattlerAbility DEFENDER) one move
+# slot's scoring path makes in the Kaizo transcription, every implemented flag set (E1 Ruling
+# R4): the per-slot layout's slot_reads. Found from the data by
+# tests/ai/test_kaizo_outcome.py test_slot_reads_fit_every_transcribed_effect: Selfdestruct
+# (HALVE_DEFENSE, a no-calc effect) against a guessed player with evasion +4 and Bonsly at
+# 30 % HP or less reads :117 and :304 (two guesses), :6374, :1859, :1870, :1875 and Risky's
+# :6530. A path with more reads is refused.
+KAIZO_SLOT_READS = 7
 
 # Values each field takes, in enumeration order (roark.md 14 "AiOutcome width").
 # ABILITY_GUESSES: AiOutcome.ability_guess is 0 or 1, 1/2 each.
@@ -306,16 +320,20 @@ if ENUMERATION_WIDTH > MAX_ENUMERATED:
     raise RuntimeError(f"{ENUMERATION_WIDTH} AI outcome combinations > {MAX_ENUMERATED}")
 # P(tiebreak = t), t = 0..11: RandNext % 12 over a uniform u16, 65536 = 12 * 5461 + 4.
 TIEBREAK_P = np.array([5462] * 4 + [5461] * 8, np.float64) / 65536
-# A per-slot layout's joint enumeration (enumerate_ai_outcomes, a test oracle) lists at most
-# 2**MAX_JOINT_SITES script-roll patterns.
-MAX_JOINT_SITES = 10
+# The u8 draw (RandNext() % 256) a per-slot pattern's bit 0 / 1 stands for: 254 is below no
+# IfRandomLessThan N (and even: ability 2), 1 below every one (and odd: ability 1), so the two
+# split every read (module docstring).
+READ_DRAWS = (254, 1)
+assert all(READ_DRAWS[1] < n <= READ_DRAWS[0] for n in SITE_N.values())
 
 
 class AiOutcome(NamedTuple):
     sim_roll: jnp.ndarray  # int8[4], roll index 0-15 per opponent move slot
-    ability_guess: jnp.ndarray  # int8[], player ability slot 0/1
-    # int8[MAX_SCRIPT_ROLLS] (flat layout) or int8[MOVES, slot_sites] (per-slot layout):
-    # 1 = the site's jump is taken
+    # int8[]: player ability slot 0/1 (flat layout); 0 and unread in a per-slot layout
+    ability_guess: jnp.ndarray
+    # int8[MAX_SCRIPT_ROLLS] (flat layout): 1 = the site's jump is taken; or
+    # uint8[MOVES, slot_reads] (per-slot layout): entry k of slot m is the k-th random read on
+    # slot m's path, as RandNext() % 256 (module docstring)
     script_rolls: jnp.ndarray
     tiebreak: jnp.ndarray  # int8[], RandNext % 12
     # int8[]: the first stopping switch draw, 0..sites - 1; sites (layout.switch_sites: 9
@@ -379,63 +397,6 @@ def line_sites(state: BattleState) -> jnp.ndarray:
     return k[:, jnp.array(columns)]
 
 
-def _effect_rows(layout: AiLayout) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """``layout.effect_sites`` as arrays: the effects ``int32[E]``, and per effect the N and
-    the line of each column, ``int32[E, slot_sites]`` (0 where the effect has no site)."""
-    effects = np.array([e for e, _ in layout.effect_sites] or [-1], np.int32)
-    n = np.zeros((len(effects), layout.slot_sites), np.int32)
-    lines = np.zeros((len(effects), layout.slot_sites), np.int32)
-    for i, (_, sites) in enumerate(layout.effect_sites):
-        for k, (line, threshold) in enumerate(sites):
-            n[i, k], lines[i, k] = threshold, line
-    return effects, n, lines
-
-
-def slot_site_table(tables: Tables, layout: AiLayout, move) -> tuple[jnp.ndarray, jnp.ndarray]:
-    """``(n, lines)``, both ``int32[layout.slot_sites]``: the N and the ``script.s`` line of
-    each script-roll site of ``move`` (decomp id) in a per-slot layout, the row of
-    ``layout.effect_sites`` of the move's battle effect (``tables.move_ai_effect``, as
-    ``IfCurrentMoveEffectEqualTo`` reads it, trainer_ai.c:1441); zeros past its last site,
-    for ``MOVE_NONE`` and for an effect without a row (an untranscribed move, refused)."""
-    move = jnp.asarray(move, _I32)
-    effects, n, lines = _effect_rows(layout)
-    effect = tables.move_ai_effect[move].astype(_I32)
-    match = ((effect == effects) & (move != 0)).astype(_I32)  # [E]
-    return match @ jnp.asarray(n), match @ jnp.asarray(lines)
-
-
-def _slot_tables(tables: Tables, state: BattleState, layout: AiLayout):
-    moves = state.moves[1, state.active[1]].astype(_I32)
-    return jax.vmap(lambda m: slot_site_table(tables, layout, m))(moves)  # 2 x [MOVES, S]
-
-
-def slot_roll_thresholds(tables: Tables, state: BattleState, layout: AiLayout) -> jnp.ndarray:
-    """``int32[MOVES, layout.slot_sites]``: the N of each site of each move slot of the
-    opponent's active Pokemon (``slot_site_table``); 0 marks an unused column, which never
-    rolls 1."""
-    return _slot_tables(tables, state, layout)[0]
-
-
-def slot_site_counts(tables: Tables, state: BattleState, layout: AiLayout) -> jnp.ndarray:
-    """``int32[MOVES]``: the number of script-roll sites of each move slot of the opponent's
-    active Pokemon in a per-slot layout."""
-    return jnp.sum((slot_roll_thresholds(tables, state, layout) > 0).astype(_I32), axis=1)
-
-
-def slot_roll_sites(tables: Tables, state: BattleState, layout: AiLayout) -> jnp.ndarray:
-    """``int32[MOVES, len(SITE_LINES)]``: ``AiContext.sites`` of a per-slot layout: for slot
-    m and line L, the index ``m * slot_sites + k`` into the flattened ``script_rolls`` when L
-    is the slot's k-th site, else ``MOVES * slot_sites`` (out of range: never rolls 1)."""
-    n, lines = _slot_tables(tables, state, layout)
-    width = layout.slot_sites
-    columns = []
-    for line in SITE_LINES:
-        here = (lines == line) & (n > 0)  # [MOVES, S]
-        flat = jnp.arange(MOVES) * width + jnp.argmax(here, axis=1)
-        columns.append(jnp.where(jnp.any(here, axis=1), flat, MOVES * width))
-    return jnp.stack(columns, axis=1).astype(_I32)
-
-
 def _roll_weights(state: BattleState, rolls) -> jnp.ndarray:
     """``float32[R]``: the exact probability of each ``script_rolls`` row of ``rolls``
     (int[R, MAX_SCRIPT_ROLLS], 1 = jump) for this state, ``prod_k`` of N_k/256 where
@@ -481,21 +442,24 @@ def sample_ai_outcome(
 ) -> AiOutcome:
     """Draw every field from its decomp probability for this state (the switch draws
     over ``switch_sites(tables, state, layout.switch_sites)``). ``layout``: a per-slot layout
-    draws ``script_rolls`` as ``int8[MOVES, layout.slot_sites]`` (``slot_roll_thresholds``);
-    the default, and any flat layout, is the vanilla layout."""
+    draws ``script_rolls`` as ``uint8[MOVES, layout.slot_reads]``, each entry a uniform
+    ``RandNext() % 256`` (each read compares its own draw: module docstring), and leaves
+    ``ability_guess`` 0; the default, and any flat layout, is the vanilla layout."""
     sites = SWITCH_SITES if layout is None else layout.switch_sites
     layout_sites = switch_sites(tables, state, sites)
     k = jax.random.split(key, 4)
-    if layout is not None and layout.per_slot_sites:
-        shape, thresholds = (MOVES, layout.slot_sites), slot_roll_thresholds(tables, state, layout)
-    else:
-        shape, thresholds = (MAX_SCRIPT_ROLLS,), script_roll_thresholds(state)
-    rolls = jax.random.randint(k[1], shape, 0, 256, dtype=_I32)
     draws = jax.random.randint(k[3], (sites,), 0, 65536, dtype=_I32)
+    if layout is not None and layout.per_slot_sites:
+        rolls = jax.random.randint(k[1], (MOVES, layout.slot_reads), 0, 256, dtype=_I32)
+        script_rolls, guess = rolls.astype(jnp.uint8), jnp.zeros((), _I8)
+    else:
+        rolls = jax.random.randint(k[1], (MAX_SCRIPT_ROLLS,), 0, 256, dtype=_I32)
+        script_rolls = (rolls < script_roll_thresholds(state)).astype(_I8)
+        guess = jax.random.randint(k[0], (), 0, 2, dtype=_I32).astype(_I8)
     return AiOutcome(
         sim_roll=jnp.full((MOVES,), SIM_ROLL_MAX, _I8),
-        ability_guess=jax.random.randint(k[0], (), 0, 2, dtype=_I32).astype(_I8),
-        script_rolls=(rolls < thresholds).astype(_I8),
+        ability_guess=guess,
+        script_rolls=script_rolls,
         tiebreak=(jax.random.randint(k[2], (), 0, 65536, dtype=_I32) % TIEBREAK_MOD).astype(_I8),
         switch_stop=_first_stop(draws, layout_sites).astype(_I8),
     )
@@ -515,55 +479,15 @@ def _grid() -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     return ability.reshape(-1), rolls, switch.reshape(-1), tiebreak.reshape(-1)
 
 
-def enumerate_ai_outcomes(
-    tables: Tables, state: BattleState, layout: AiLayout | None = None
-) -> tuple[AiOutcome, jnp.ndarray]:
-    """Every outcome combination (a batched ``AiOutcome`` with leading axis K) and its
-    exact probability ``float32[K]``. Flat layout (the default): K is
-    ``ENUMERATION_WIDTH`` (3840) for every state; combinations with an unused script-roll
-    site set to 1, or a ``switch_stop`` at a ``SwitchSite.NONE`` entry, have probability
-    0. The switch draws are over ``switch_sites(tables, state)``.
-
-    A per-slot ``layout`` (a test oracle, concrete inputs only): every combination of the
-    used sites of the four slots, ``K = ABILITY_GUESSES * 2**sum(slot_site_counts) *
-    (layout.switch_sites + 1) * TIEBREAK_MOD``; ``ValueError`` when the sites number more
-    than ``MAX_JOINT_SITES``."""
-    if layout is None or not layout.per_slot_sites:
-        return _enumerate_flat(tables, state)
-    thresholds = np.asarray(slot_roll_thresholds(tables, state, layout))
-    used = np.argwhere(thresholds > 0)  # [U, 2] (slot, column), script order per slot
-    if len(used) > MAX_JOINT_SITES:
-        raise ValueError(
-            f"{len(used)} script-roll sites: more than the {MAX_JOINT_SITES} a joint "
-            "enumeration lists"
-        )
-    ability, bits, switch, tiebreak = (
-        a.reshape(-1)
-        for a in np.meshgrid(
-            np.arange(ABILITY_GUESSES),
-            np.arange(2 ** len(used)),
-            np.arange(layout.switch_sites + 1),
-            np.arange(_TIEBREAK_VALUES),
-            indexing="ij",
-        )
-    )
-    on = (bits[:, None] >> np.arange(len(used))) & 1  # [K, U]
-    rolls = np.zeros((len(bits), MOVES, layout.slot_sites), np.int8)
-    rolls[:, used[:, 0], used[:, 1]] = on
-    p_jump = thresholds[used[:, 0], used[:, 1]].astype(np.float64) / 256
-    p_rolls = np.prod(np.where(on == 1, p_jump, 1 - p_jump), axis=1)
-    p_switch = np.asarray(
-        switch_stop_probs(switch_sites(tables, state, layout.switch_sites)), np.float64
-    )
-    probs = p_rolls * p_switch[switch] * TIEBREAK_P[tiebreak] / ABILITY_GUESSES
-    outs = AiOutcome(
-        sim_roll=jnp.full((len(bits), MOVES), SIM_ROLL_MAX, _I8),
-        ability_guess=jnp.asarray(ability, _I8),
-        script_rolls=jnp.asarray(rolls),
-        tiebreak=jnp.asarray(tiebreak, _I8),
-        switch_stop=jnp.asarray(switch, _I8),
-    )
-    return outs, jnp.asarray(probs, _F32)
+def enumerate_ai_outcomes(tables: Tables, state: BattleState) -> tuple[AiOutcome, jnp.ndarray]:
+    """Every outcome combination of the flat layout (a batched ``AiOutcome`` with leading
+    axis K) and its exact probability ``float32[K]``: K is ``ENUMERATION_WIDTH`` (3840) for
+    every state; combinations with an unused script-roll site set to 1, or a ``switch_stop``
+    at a ``SwitchSite.NONE`` entry, have probability 0. The switch draws are over
+    ``switch_sites(tables, state)``. A per-slot layout's reads take their probabilities from
+    the path (module docstring), so its joint enumeration runs the scoring
+    (``policy.ai_action_distribution_enumerated``)."""
+    return _enumerate_flat(tables, state)
 
 
 def _enumerate_flat(tables: Tables, state: BattleState) -> tuple[AiOutcome, jnp.ndarray]:
