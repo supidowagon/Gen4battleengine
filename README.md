@@ -36,6 +36,15 @@ uv run nuzline prep --save path/to/platinum.sav --trainer roark --resume roark.c
 
 The output has the `Setup:` card, the `Prep steps:` (Rare Candies, Heart Scale relearns, TMs, items, deposits and withdrawals, in order), the `Cost:` line (every resource spent), the `Odds ladder` for 0-3 deaths (the requested rung is planned by Stage B, the others are labelled "screen"), the Stage B `Plan:` and a `Search:` summary. Progress lines (`[prep] ...`) go to stderr. A run record is written to `runs/prep_<time>.json` (with the save's `save_sha256`) and a checkpoint to `runs/prep_<time>.ckpt.json` after every unit of work. `--budget SECONDS` stops starting new work after that time and prints the best answer so far ("screen only, no plan" when no solve finished), as does Ctrl-C; the exit code is 0. `--resume FILE` continues from a checkpoint and gives the same answer as an uninterrupted run; it needs the same save, trainer, settings, seed and program version (otherwise one line says what differs, exit 1) and cannot be combined with `--checkpoint`. If a run crashes (an intermittent Windows access violation has been seen in long runs, see `benchmarks/README.md`), continue it with `--resume runs/prep_<time>.ckpt.json` (its path is the `[prep] checkpoint:` line printed to stderr at the start) rather than starting over. Exit codes: 0 ok, 1 error, 2 the opponent is unsupported or every setup is refused.
 
+Score a line (one answer per opposing Pokemon, written in a line file), or search for one (spec: `docs/superpowers/specs/2026-11-12-l1-line-player-design.md` §3, §6):
+
+```
+uv run nuzline line odds --game kaizo --save path/to/kaizo.sav --trainer-id 246 --line roark.toml --deaths 3
+uv run nuzline line find --game kaizo --save path/to/kaizo.sav --trainer-id 246 --line team.toml --deaths 1 --out found.toml
+```
+
+The line file has the team (`[[team]]`, with `--save`) and the rules (`[[rule]]`: `against`, `use`, `move`, optional `first`, `via`, `from`, `wait`); `--party P.toml` gives the team instead. `odds` prints the line and, from `--n` playouts (default 2000), the ladder P(win with at most k deaths) for k = 0..3 and P(win) with 95 % intervals, the death distribution, mean turns and the default player's share. `find` starts from the file's rules (if any), prints `[line]` progress to stderr, then the found line, the same block from `--final-n` hold-out playouts and its `[[rule]]` TOML; `--out` writes the team and the found line (it must not be the `--line` file). Search size: `--budget SECONDS`, `--restarts`, `--sweeps`, `--pick-n`; Ctrl-C stops the search and prints the best line kept so far. A heuristic: a good line, not a proven best. Playouts that meet a mechanic the engine does not model are left out and named. Exit codes: 0 ok, 1 a bad file, name or flag, 2 the fight is refused or every playout is.
+
 Read a Platinum save (see `docs/saves.md`), or use it in place of `--party` with `--save`:
 
 ```

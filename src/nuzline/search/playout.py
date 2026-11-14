@@ -210,8 +210,13 @@ def _pair_value(tables: Tables, state: BattleState, a, b) -> jnp.ndarray:
 
 
 @jax.jit
-def _choose(tables: Tables, state: BattleState, q, key) -> jnp.ndarray:
+def _choose(tables: Tables, state: BattleState, q, key, allowed=None) -> jnp.ndarray:
+    """``int32``: the best legal action against ``q``; ``allowed`` (``bool[NUM_ACTIONS]``,
+    ``None`` = all) narrows the legal actions, and is ignored when it leaves none."""
     legal = legal_actions(tables, state, 0)
+    if allowed is not None:
+        narrowed = legal & allowed
+        legal = jnp.where(jnp.any(narrowed), narrowed, legal)
     mine, theirs = jnp.arange(NUM_ACTIONS), jnp.arange(NUM_OPP_ACTIONS)
     row = jax.vmap(lambda a, b: _pair_value(tables, state, a, b), in_axes=(None, 0))
     values = jax.vmap(lambda a: row(a, theirs))(mine)  # [NUM_ACTIONS, NUM_OPP_ACTIONS]
@@ -221,14 +226,15 @@ def _choose(tables: Tables, state: BattleState, q, key) -> jnp.ndarray:
 
 
 def _policy(
-    tables: Tables, state: BattleState, key, layout: AiLayout = VANILLA
+    tables: Tables, state: BattleState, key, layout: AiLayout = VANILLA, allowed=None
 ) -> tuple[jnp.ndarray, jnp.ndarray]:
     """``(action, refused)``: ``playout_policy``'s action, and whether the opponent's
     distribution it was chosen against is refused (traced, a refused distribution is
-    NaN; the action is then meaningless and the caller must refuse the playout)."""
+    NaN; the action is then meaningless and the caller must refuse the playout).
+    ``allowed`` narrows the player's actions as in ``_choose`` (``None`` = all)."""
     q = ai_action_distribution(tables, state, layout)
     refused = jnp.any(jnp.isnan(q))
-    return _choose(tables, state, jnp.where(refused, 0.0, q), key), refused
+    return _choose(tables, state, jnp.where(refused, 0.0, q), key, allowed), refused
 
 
 def playout_policy(

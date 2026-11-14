@@ -1,0 +1,64 @@
+# The user's line against Kaizo Leader Roark (trainer id 246) with the user's real six-member
+# party: order, moves and held items as at turn 0 of the user's winning recording
+# (traces/kaizo_roark_02.jsonl of the K3 worktree): Wormadam, Rhyhorn and Sandshrew each hold an
+# Oran Berry, Luvdisc is the sixth member (not used by the line). Moves keep the save's PP. Names
+# only: nothing here is read from or copied out of the save. Same rules as kaizo_roark_user.toml.
+#   nuzline line odds --game kaizo --save PRE_ROARK.sav --trainer-id 246 \
+#       --line benchmarks/lines/kaizo_roark_user6.toml --deaths 1
+
+[[team]]
+pokemon = "Prinplup"
+item = "Quick Claw"
+
+[[team]]
+pokemon = "Wormadam"
+moves = ["Leech Life", "Nature Power", "Camouflage", "Toxic"]
+item = "Oran Berry"
+
+[[team]]
+pokemon = "Rhyhorn"
+item = "Oran Berry"
+
+[[team]]
+pokemon = "Delibird"
+
+[[team]]
+pokemon = "Sandshrew"
+item = "Oran Berry"
+
+[[team]]
+pokemon = "Luvdisc"
+
+[[rule]]
+against = "Bonsly"
+use = "Prinplup"
+move = "Aqua Cutter"
+
+[[rule]]
+against = "Lileep"
+use = "Wormadam"
+move = "Leech Life"
+
+[[rule]]
+against = "Gible"
+use = "Delibird"
+move = "Powder Snow"
+via = "Rhyhorn"
+from = "Wormadam"
+
+[[rule]]
+against = "Cranidos"
+use = "Sandshrew"
+move = "Dig"
+
+[[rule]]
+against = "Corsola"
+use = "Wormadam"
+move = "Leech Life"
+first = "Toxic"
+
+[[rule]]
+against = "Shuckle"
+use = "Wormadam"
+move = "Leech Life"
+first = "Toxic"

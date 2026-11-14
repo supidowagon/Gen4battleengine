@@ -1,0 +1,57 @@
+# The user's line against Kaizo Leader Roark (trainer id 246) from the pre-Roark save
+# (docs/superpowers/specs/2026-11-12-l1-line-player-design.md section 7). Names only:
+# nothing here is read from or copied out of the save.
+#   nuzline line odds --game kaizo --save PRE_ROARK.sav --trainer-id 246 \
+#       --line benchmarks/lines/kaizo_roark_user.toml --deaths 3
+
+[[team]]
+pokemon = "Prinplup"
+item = "Quick Claw"
+
+[[team]]
+pokemon = "Wormadam"
+moves = ["Leech Life", "Nature Power", "Camouflage", "Toxic"]
+
+[[team]]
+pokemon = "Rhyhorn"
+
+[[team]]
+pokemon = "Delibird"
+
+[[team]]
+pokemon = "Sandshrew"
+item = "Oran Berry"
+
+[[rule]]
+against = "Bonsly"
+use = "Prinplup"
+move = "Aqua Cutter"
+
+[[rule]]
+against = "Lileep"
+use = "Wormadam"
+move = "Leech Life"
+
+[[rule]]
+against = "Gible"
+use = "Delibird"
+move = "Powder Snow"
+via = "Rhyhorn"
+from = "Wormadam"
+
+[[rule]]
+against = "Cranidos"
+use = "Sandshrew"
+move = "Dig"
+
+[[rule]]
+against = "Corsola"
+use = "Wormadam"
+move = "Leech Life"
+first = "Toxic"
+
+[[rule]]
+against = "Shuckle"
+use = "Wormadam"
+move = "Leech Life"
+first = "Toxic"
