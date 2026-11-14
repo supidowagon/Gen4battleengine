@@ -609,6 +609,9 @@ def test_report_lists_user_calls():
     assert [ln.split(":", 1)[0] for ln in lines] == [
         "- start condition unknown",
         "- no map placement found",
+        # Iron Island (E3 batch 4 mapped Byron Split:662): sheet and PKCalc say rain, the
+        # ROM map header none; the ROM is used and the user is asked.
+        "- area weather 835 Galactic Triton #2",
         f"- {_unclassified()} ROM changes unclassified in data/kaizo/rom_diff.toml",
     ]
     assert lines[0].startswith("- start condition unknown: 676 Corbin")

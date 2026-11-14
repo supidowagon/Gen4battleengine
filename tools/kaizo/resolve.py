@@ -64,6 +64,7 @@ from tools.kaizo.overrides import (
     check_citations,
     check_gauntlet_members,
     check_rom_trick_room,
+    check_sheet_unmapped,
     check_trainer_ids,
     check_two_placement,
     load_overrides,
@@ -75,6 +76,7 @@ from tools.kaizo.rows_trainers import (
     SIGHT_CITE,
     _joined,
     _partner_starters,
+    _pk_formats,
     _pk_starter,
     _sheet_by_id,
     _starter,
@@ -263,6 +265,7 @@ def cross_check(
         overrides.trainer_ids,
     )
     problems += check_gauntlet_members(overrides, src.docs, maps.sheet)
+    problems += check_sheet_unmapped(overrides, maps.sheet)
     if problems:
         raise ResolveError("overrides.toml fails its checks:\n" + "\n".join(problems))
     rows = table_rows(src.rom, src.pkcalc, src.docs) + trainer_rows(
@@ -270,7 +273,7 @@ def cross_check(
     )
     check = compare(rows, load_resolutions(resolutions_path))
     sections = {
-        "trainer mappings": mapping_section(maps),
+        "trainer mappings": mapping_section(maps, overrides.sheet_unmapped),
         "PID cross-check (Ruling 19; recorded, not asserted)": pid_section(
             trainers, maps, src.pkcalc, src.rom
         ),
@@ -628,6 +631,93 @@ def _cell_text(v: object) -> str:
     return "-" if v is None else str(v).lower()
 
 
+_PK_TEMPLATE = re.compile(r"\{(RIVAL2_NAME|RIVAL2_STARTER_\d|RIVAL_STARTER_\d)\}")
+PK_PARTNER_SOURCE = (
+    "pkcalc: flags.js battleType.tag partner {label!r} (the ROM partner is not evaluated: "
+    "battle_structures' unknown_partner)"
+)
+
+
+def rival2_genders(records: list[dict]) -> dict[str, int]:
+    """The player gender each rival-2 name (the first word after "Pokémon Trainer" in a
+    PKCalc label) partners, from the ROM-evaluated partner variants of ``records``
+    (``battle_scripts.partner_variants`` runs the scripts for both genders). Disagreeing
+    variants raise."""
+    labels = {t["id"]: t.get("label") or "" for t in records}
+    out: dict[str, int] = {}
+    for t in records:
+        for p in t.get("partner") or []:
+            if p.get("player_gender") is None:
+                continue
+            name = labels.get(p["trainer"], "").removeprefix("Pokémon Trainer ").split(" ")[0]
+            if out.setdefault(name, p["player_gender"]) != p["player_gender"]:
+                raise ResolveError(f"rival-2 {name!r} partners both player genders")
+    return out
+
+
+def pk_partner_variants(
+    partner_label: str,
+    labels: Mapping[int, str],
+    starters: Mapping[int, int | None],
+    genders: Mapping[str, int],
+) -> list[dict]:
+    """The ``partner`` variants PKCalc's tag ``partner_label`` names: the trainer whose label
+    it is, or, for a label with ``{RIVAL2_NAME}`` / ``{RIVAL2_STARTER_n}`` /
+    ``{RIVAL_STARTER_n}`` placeholders, every trainer whose label fills them (a rival-2 name
+    from ``genders``, any bracketed starter line). A filled name gives the variant's player
+    gender (``genders``), a filled starter its player starter (``starters``, the partner
+    row's own ``player_starter``). No match, or a starter placeholder whose row has no
+    player starter, raises."""
+    parts = _PK_TEMPLATE.split(partner_label)
+    rx, has_name, has_starter = "", False, False
+    for i, part in enumerate(parts):
+        if i % 2 == 0:
+            rx += re.escape(part)
+        elif part == "RIVAL2_NAME":
+            rx += "(?P<name>" + "|".join(map(re.escape, sorted(genders))) + ")"
+            has_name = True
+        else:
+            rx += r"[^\[\]{}]+"
+            has_starter = True
+    out = []
+    for tid, label in sorted(labels.items()):
+        m = re.fullmatch(rx, label or "")
+        if m is None:
+            continue
+        starter = starters.get(tid) if has_starter else None
+        if has_starter and starter is None:
+            raise ResolveError(f"tag partner {partner_label!r}: {tid} {label} has no starter")
+        gender = genders[m["name"]] if has_name else None
+        out.append({"trainer": tid, "starter": starter, "player_gender": gender})
+    if not out:
+        raise ResolveError(f"tag partner {partner_label!r} matches no trainer label")
+    keys = [(p["player_gender"], p["starter"]) for p in out]
+    if len(set(keys)) != len(keys):
+        raise ResolveError(f"tag partner {partner_label!r}: two rows for one variant: {out}")
+    return sorted(out, key=lambda p: (p["player_gender"] or 0, p["starter"] or 0))
+
+
+def fill_pk_partners(records: list[dict], pkcalc: dict) -> list[int]:
+    """Fill ``partner`` of each multi whose ROM partner is not evaluated (``None``) from
+    PKCalc's tag triple for its label (``_pk_formats``); return the filled ids. A partner
+    the ROM evaluated, or a user ``fields`` answer, is never replaced."""
+    by_label, _ = _pk_formats(pkcalc)
+    labels = {t["id"]: t.get("label") for t in records}
+    starters = {t["id"]: t.get("player_starter") for t in records}
+    genders = rival2_genders(records)
+    filled = []
+    for t in records:
+        if t["format"] != "multi" or t.get("partner") is not None:
+            continue
+        pk = by_label.get(t.get("label") or "")
+        if pk is None or pk[0] != "multi" or pk[2] is None:
+            continue
+        t["partner"] = pk_partner_variants(pk[2], labels, starters, genders)
+        t["sources"]["partner"] = PK_PARTNER_SOURCE.format(label=pk[2])
+        filled.append(t["id"])
+    return filled
+
+
 def resolve_trainers(
     src: Sources, trainers: list[dict], check: CrossCheck, maps: Mappings, overrides: Overrides
 ) -> tuple[list[dict], list[str]]:
@@ -640,6 +730,7 @@ def resolve_trainers(
     out = [
         trainer_record(t, ctx, overrides, src, sheet, partner_starts, split_rows) for t in trainers
     ]
+    filled = fill_pk_partners(out, src.pkcalc)
     sight = [t for t in out if t["sources"]["format"].startswith("rom: map header")]
     n_double = sum(1 for t in sight if t["format"] == "double_two_trainer")
     lines = [
@@ -656,6 +747,8 @@ def resolve_trainers(
             if t["start_condition"] == "unknown" and t["id"] not in no_map
         ),
         f"start condition unknown, no map placement found (one user call): {len(no_map)}",
+        f"multi partners filled from PKCalc's tag triples (ROM partner not evaluated): "
+        f"{len(filled)}" + (": " + ", ".join(map(str, filled)) if filled else ""),
     ]
     lines += [
         f"sheet headers disagree on {k}: {t['id']} {t['name']}: {t['sources'][k]}"
