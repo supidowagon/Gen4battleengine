@@ -38,6 +38,7 @@ LISTED = [
     "nuzline.engine.ids.Type",
     "nuzline.engine.ids.MOVE_STRUGGLE",
     "nuzline.engine.ids.WEATHER_ABILITY_IDS",
+    "nuzline.engine.ids.ITEM_ABILITY_IDS",
     "nuzline.engine.ids.ABILITY_MULTITYPE",
     "nuzline.engine.ids.TERRAIN_MOVES",
     "nuzline.engine.stats.SPECIES_SHEDINJA",

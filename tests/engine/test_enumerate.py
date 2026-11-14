@@ -27,7 +27,7 @@ from nuzline.engine.enumerate import (
     enumerate_outcomes,
     outcome_laws,
 )
-from nuzline.engine.ids import AbilityId, EffectId, Stat, Status
+from nuzline.engine.ids import AbilityId, EffectId, ItemId, Stat, Status
 from nuzline.engine.observe import observation
 from nuzline.engine.order import used_move
 from nuzline.engine.outcome import (
@@ -436,7 +436,15 @@ def decomp_law(tables, state, actions, name: str, index: tuple) -> dict[int, Fra
     if name == "magnitude":  # BtlCmd_CalcMagnitude (battle_script.c:5820-5852)
         return dict(zip(range(4, 11), (Fraction(n, 100) for n in (5, 10, 20, 30, 20, 10, 5)),
                         strict=True))  # fmt: skip
-    return {0: Fraction(1)}  # flinch_item
+    if name == "flinch_item":
+        # BattleControllerPlayer_CheckExtraFlinch (bcp.c:4633, :4639): RandNext() % 100 <
+        # the attacker's King's Rock / Razor Fang param.
+        mon = int(state.active[side])
+        item = int(state.item[side, mon])
+        chance = int(tables.item_param[item, 0])
+        assert int(tables.item_effect[item]) == ItemId.KINGS_ROCK
+        return coin(Fraction(chance, 100))
+    raise AssertionError(name)
 
 
 @pytest.mark.slow

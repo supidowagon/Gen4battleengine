@@ -1,5 +1,18 @@
 # E2 mechanics ledger (Kaizo Roark split)
 
+## RESUME (updated 2026-11-14)
+
+- Closed: batch 1 (attacker damage items) and batch 2 (orbs, Leftovers / Black Sludge,
+  status-cure and stat pinch berries + Gluttony, Custap, BrightPowder / Lax Incense, Wide / Zoom
+  Lens, King's Rock / Razor Fang, Sticky Barb, Shell Bell, Light Clay; rulings B2-1..B2-16),
+  committed on this branch. Batch 2 awaits its one review (also against the conventions below).
+- Batch 2 checks: differential tests (jax_matches_reference, payouts) and the full fast tier
+  green (2665 passed, log `_scratch/e2/b2/fast_tier.log` on G:); `jit(step)` cold 20.7 s,
+  `jit(vmap(step))` 15.6 s. Roark split: 62 distinct missing groups (was 76); held item
+  effects 14 -> 1 (Damp Rock, batch 4), abilities 21 -> 20 (Gluttony).
+- Next step: review of batch 2, then batch 3 (abilities).
+- Standing: the doubles conventions below apply to all new code; one review per batch.
+
 Session E2 builds the battle mechanics the Roark split's trainers need (held items,
 abilities, move effects, battle terrain), batch by family. The AI side belongs to E1.
 Goal: no Roark-split fight blocked by a "move effect", "held item effect", "ability" or
@@ -8,6 +21,26 @@ Goal: no Roark-split fight blocked by a "move effect", "held item effect", "abil
 Baseline (main e139cd1): 79 such entries (32 held item, 25 move effect, 21 ability,
 1 terrain). Cold compile of `jit(step)` on vanilla Roark: 18.7 s (`jit(vmap(step))`, batch
 64: 14.6 s), measured with `_scratch/e2/compile_time.py` on G:.
+
+## Conventions for new code (user-approved 2026-11-13)
+
+From section 5 of the doubles design (`docs/doubles-state-design.md` in the main checkout), so
+singles mechanics need no rework when four-battler fights arrive. New code only; existing code,
+the `step` turn skeleton and `enumerate.py`'s branch structure stay as they are.
+
+1. Pass the other Pokemon in; never compute `1 - side` inside a mechanic (`hooks.pluck_berry`'s
+   `foe = 1 - side` is the pattern not to copy; `effects._Hit` carries side and target).
+2. Keep per-battler state (`BattleMon`, `turnFlags`, `[MAX_BATTLERS]` arrays) and per-side state
+   (`SideConditions`) apart, as the decomp struct has it; say which in `STATE.md`; index side
+   fields by the battler's side.
+3. A field that names another Pokemon stores the battler (`1 + battler`), not a yes/no
+   (Lock-On, Mean Look, Counter, Mirror Coat).
+4. "Every Pokemon on the field" is a loop over battlers; "an ally has X" is a count over the
+   battler's side.
+5. State turn-order facts about a named battler ("the target has moved", "the target is
+   protecting"), never "I am the second actor" (Payback, Avalanche, Sucker Punch).
+6. Read a move's range only through `targets_user`, `self_defender`, `defender_always`; new
+   chance fields are indexed by the acting battler, never a scalar meaning player vs opponent.
 
 ## Batches
 
@@ -72,3 +105,62 @@ Baseline (main e139cd1): 79 such entries (32 held item, 25 move effect, 21 abili
 - B1-15 Items with no hold effect do nothing, except that a berry among them (`Item_IsBerry`,
   src/item.c:357-365) is eaten by Pluck / Bug Bite with no effect, leaving the pluck flag set
   (battle_lib.c:5832-5835, :5848); the prep never offers such a berry (it can only help the foe).
+- B2-1 Cheri, Rawst, Aspear and Persim Berries cure paralysis, burn, freeze and confusion at every
+  held-item site (after each hit, on switch-in, `USE_ITEM` and `ITEM_CONDITION` at the turn's end),
+  and a Pluck / Bug Bite that eats one cures the eater the same way (battle_lib.c:4601-4660,
+  :4991-5050, :5569-5641).
+- B2-2 A stat pinch berry (Liechi, Ganlon, Salac, Petaya, Apicot) raises its stat by one stage at
+  `curHP <= maxHP / param` (C division; the holder's own Gluttony halves the param), only below
+  +6, at the same sites; one eaten by Pluck / Bug Bite raises the eater's stat with no HP test
+  (battle_lib.c:4773-4836, :5196-5259, :5753-5796).
+- B2-3 A pinch berry or Custap Berry whose param is below 2 is unsupported: its trigger divides by
+  zero (with Gluttony's halving), which the decomp leaves to the ROM's division routine
+  (battle_lib.c:4778, :1294); Kaizo's Ganlon and Apicot Berries have param 0.
+- B2-4 Custap Berry in its pinch sets the Quick Claw flag in every `CompareBattlerSpeed`: the turn
+  order, the end-of-turn order and the AI's speed compares (battle_lib.c:1288-1300); its
+  `custapBerry` flag is written only by `CalcTurnOrder`'s FIGHT-against-FIGHT compare
+  (bcp.c:772-786), and the holder eats the berry when its move starts, before the status
+  checks, first or last (subscript_check_quick_claw.s:26-28, bcp.c:3140-3143).
+- B2-5 While that flag is up, a foe's Pluck / Bug Bite does nothing to the holder: no berry eaten,
+  no pluck flag (battle_script.c:8125-8127).
+- B2-6 Leftovers and Black Sludge act at `MON_COND_CHECK_STATE_LEFTOVERS`, right after `USE_ITEM`
+  and before Leech Seed (bcp.c:1369): `Divide(maxHP, 16)` below full HP, for Black Sludge only on a
+  Poison-type battler (its current types); any other Black Sludge holder loses `Divide(maxHP, 8)`
+  unless Magic Guard; neither item is used up (battle_lib.c:4922-4965).
+- B2-7 Toxic Orb, Flame Orb and Sticky Barb act at `MON_COND_CHECK_STATE_ITEM_DETRIMENTAL_EFFECT`, the
+  last check (bcp.c:1710): an orb's held-item side effect skips its holder's own Immunity / Water
+  Veil, Leaf Guard in sun without a weather lock, any status and a Poison or Steel / Fire type, else
+  it badly poisons (counter 0) or burns (subscript_badly_poison.s:13-28, subscript_burn.s:5-17);
+  Safeguard comes from an unsupported move and is not read.
+- B2-8 Sticky Barb's holder loses `Divide(maxHP, param)` (param 8) at that check unless Magic Guard;
+  it may faint (battle_lib.c:5330-5336).
+- B2-9 Sticky Barb moves to the attacker after a hit of a contact move once the defender took damage
+  this action, when the attacker lives and holds nothing (an eaten berry leaves nothing); the
+  defender may have fainted, and the move is not a `RemoveItem` (no recycle item)
+  (`AFTER_MOVE_EFFECT_TRIGGER_ITEMS_ON_HIT`, battle_lib.c:5386-5398,
+  subscript_transfer_sticky_barb.s); Pursuit's pre-switch hit moves it too (subscript_pursuit.s:44,
+  :90).
+- B2-10 After every hit the order is the attacker's item, the defender's item, the Sticky Barb, the
+  defender's thaw, then the held-item-status pass (bcp.c:3684-3730): a frozen defender's Aspear or
+  Lum Berry cures the freeze before a Fire hit thaws it, and is used up (this also settles Lum,
+  which the engines thawed first before batch 2).
+- B2-11 Accuracy items come after the abilities and deep fog, before Gravity: the defender's
+  BrightPowder / Lax Incense `* (100 - param) / 100`, then the attacker's Wide Lens and, against a
+  target that has moved, Zoom Lens, each `* (100 + param) / 100` (bcp.c:2949-2965); "moved" is
+  `Battler_MovedThisTurn` (battle_lib.c:5365-5368): in singles, the attacker acts second (a foe
+  that switched in this turn has moved).
+- B2-12 King's Rock / Razor Fang roll per hit after the contact ability (`*_EXTRA_FLINCH`) when the
+  hit's `UpdateHP` ran, `RandNext() % 100 < param`, the move has `MOVE_FLAG_TRIGGERS_KINGS_ROCK` and
+  the defender lives; the flinch needs a target that has not moved and no Inner Focus as the
+  attacker sees it (bcp.c:4630-4653, subscript_flinch_mon.s:5-9): `Outcome.flinch_item[2, 5]`.
+- B2-13 Shell Bell heals `Divide(dealt, param)` after the move, before Life Orb, where `dealt` sums each
+  hit's `battleCtx->damage` after the endure cap, capped at the target's HP and not halved by a
+  resist berry (bcp.c:3427-3431, :4736-4752); after Pursuit's hit `dealt` is the script's damage
+  before the Focus Sash cap, capped at the HP (subscript_pursuit.s:21-29, battle_lib.c:7345-7355).
+- B2-14 Light Clay makes its holder's Reflect / Light Screen last 5 + param (3) turns
+  (battle_script.c:4229, :4272).
+- B2-15 Gluttony is supported: the pinch berries and Custap are its only decomp readers
+  (battle_lib.c:1289, :1355, :4774-4851, :5197-5275).
+- B2-16 Kaizo changes item params only, read from each game's table: BrightPowder, Lax Incense and
+  King's Rock have param 11 (vanilla 10); its Berserk Gene is a renamed Shoal Salt slot with
+  hold effect 36 and param 0, so it stays unsupported (renamed slot, and B2-3).

@@ -29,7 +29,18 @@ from nuzline.data.tables import Names, Tables
 from nuzline.data.trainer import TERRAIN_NAMES, TERRAIN_UNKNOWN, IntermediateData
 from nuzline.engine.actions import legal_actions, legal_opponent_actions
 from nuzline.engine.coverage import halved_defense_line, low_defense
-from nuzline.engine.ids import MOVE_STRUGGLE, AbilityId, EffectId, Stat, Status, Type, Weather
+from nuzline.engine.damage import STATUS as STATUS_CATEGORY
+from nuzline.engine.ids import (
+    MOVE_STRUGGLE,
+    AbilityId,
+    EffectId,
+    ItemId,
+    MoveFlag,
+    Stat,
+    Status,
+    Type,
+    Weather,
+)
 from nuzline.engine.outcome import MAX_HITS, Outcome
 from nuzline.engine.state import (
     BAG_SLOTS,
@@ -174,7 +185,39 @@ RESIST_BERRIES = (
     "Chilan Berry",
 )
 NO_EFFECT_ITEMS = ("Razz Berry", "Nanab Berry", "Belue Berry", "Nugget", "Blue Scarf", "Bicycle")
-ITEM_GROUPS = (TYPE_BOOST_ITEMS, DAMAGE_ITEMS, RESIST_BERRIES, NO_EFFECT_ITEMS)
+# E2 batch 2: the status berries, the stat pinch berries and Custap, the residual items
+# (Leftovers, Black Sludge, the status orbs, Sticky Barb), the accuracy items, King's Rock /
+# Razor Fang, Shell Bell and Light Clay. ``_draw_batch2_item`` also gives one to an active
+# Pokemon on purpose, with what makes it act.
+PINCH_BERRIES = (
+    "Liechi Berry",
+    "Ganlon Berry",
+    "Salac Berry",
+    "Petaya Berry",
+    "Apicot Berry",
+    "Custap Berry",
+)
+BATCH2_ITEMS = (
+    "Cheri Berry",
+    "Rawst Berry",
+    "Aspear Berry",
+    "Persim Berry",
+    *PINCH_BERRIES,
+    "Leftovers",
+    "Black Sludge",
+    "Toxic Orb",
+    "Flame Orb",
+    "Sticky Barb",
+    "BrightPowder",
+    "Lax Incense",
+    "Wide Lens",
+    "Zoom Lens",
+    "King’s Rock",
+    "Razor Fang",
+    "Shell Bell",
+    "Light Clay",
+)
+ITEM_GROUPS = (TYPE_BOOST_ITEMS, DAMAGE_ITEMS, RESIST_BERRIES, NO_EFFECT_ITEMS, BATCH2_ITEMS)
 # The species items' holders (BattleSystem_CalcMoveDamage, battle_lib.c:6730-6774), none of
 # them an M1 species: ``_draw_species_item`` makes an active Pokemon one of them, holding the
 # item, with the rest of its data (stats, types, ability) kept, which both engines read alike.
@@ -204,6 +247,8 @@ BATTLE_ITEMS = (
     "Wise Glasses",
 )
 M1_BAG_ITEMS = ("", "Potion")  # the opponent's bag (ids.TrainerItemId)
+# Items that act on their holder's own damaging move (``legal_action_pair`` favours one).
+HITTER_ITEMS = (ItemId.KINGS_ROCK, ItemId.SHELL_BELL, ItemId.ZOOM_LENS, ItemId.WIDE_LENS)
 
 # decomp gender ratios (``tables.species_gender``) with a single possible gender
 GENDERLESS, MALE_ONLY, FEMALE_ONLY = 255, 0, 254
@@ -420,12 +465,26 @@ def _draw_battle_item(draw, tables: Tables, a: dict, side: int, active: int, nam
 def _draw_species_item(draw, tables: Tables, a: dict, side: int, active: int, names: Names) -> None:
     """Maybe (1 in 4) make the active Pokemon a ``SPECIES_ITEMS`` species holding its item
     (the species items only work for their species), an orb's holder with a move its orb
-    boosts in slot 0 (full PP)."""
+    boosts in slot 0 (full PP). Its stats and max HP are the new species' (``calc_stats`` with
+    its IVs, EVs, level and nature: an exp payout's level-up recomputes them from the species,
+    so a stale max HP could fall), its HP capped at the new max."""
     if draw(st.integers(0, 3)) != 0:
         return
     species, item, moves = draw(st.sampled_from(SPECIES_ITEMS))
-    a["species"][side, active] = names.species(species)
+    sid = names.species(species)
+    a["species"][side, active] = sid
     a["item"][side, active] = names.item(item)
+    stats = calc_stats(
+        np.asarray(tables.species_base_stats[sid]),
+        a["ivs"][side, active],
+        a["evs"][side, active],
+        int(a["level"][side, active]),
+        np.asarray(tables.nature_mods[int(a["nature"][side, active])]),
+        sid,
+    )
+    a["max_hp"][side, active] = stats[Stat.HP]
+    a["stats"][side, active] = stats[Stat.ATK :]
+    a["hp"][side, active] = min(int(a["hp"][side, active]), int(stats[Stat.HP]))
     if moves:
         move = names.move(draw(st.sampled_from(moves)))
         a["moves"][side, active, 0] = move
@@ -441,6 +500,65 @@ def _draw_pursuit(draw, tables: Tables, a: dict, side: int, active: int, names: 
     k = draw(st.integers(0, 3))
     a["moves"][side, active, k] = pursuit
     a["pp"][side, active, k] = int(tables.move_pp[pursuit])
+
+
+def _draw_batch2_item(draw, tables: Tables, a: dict, side: int, active: int, names: Names) -> None:
+    """Maybe (1 in 2) give the active Pokemon a ``BATCH2_ITEMS`` item, picked uniformly
+    (``st.randoms``: ``sampled_from`` favours its first entries), with what makes it act, each
+    most of the time: a stat pinch berry or Custap Berry at or below its trigger (``maxHP /
+    4``, or ``maxHP / 2`` under Gluttony, which it has half the time: ``hooks.held_item_check``,
+    ``order.custap_active``), a status berry with the status it cures (Persim: confusion), a
+    status orb on a Pokemon with no status, Leftovers, Black Sludge or Shell Bell below full HP,
+    Light Clay with Reflect or Light Screen in a slot (full PP; no screen up, no Taunt), Tackle (95 % accurate, contact,
+    ``MOVE_FLAG_TRIGGERS_KINGS_ROCK``) in a slot of a King's Rock, Razor Fang, lens or Shell
+    Bell holder and of the foe of a Sticky Barb holder (whose item is cleared: the transfer
+    needs an attacker holding nothing), and a Poison type for a Black Sludge holder."""
+    if not draw(st.booleans()):
+        return
+    rnd = draw(st.randoms(use_true_random=False))
+    name = rnd.choice(BATCH2_ITEMS)
+    a["item"][side, active] = names.item(name)
+    max_hp = int(a["max_hp"][side, active])
+    if name in PINCH_BERRIES:
+        if rnd.random() < 0.5:
+            a["ability"][side, active] = AbilityId.GLUTTONY
+        divisor = 4 // (2 if a["ability"][side, active] == AbilityId.GLUTTONY else 1)
+        if rnd.random() < 0.75:
+            a["hp"][side, active] = rnd.randint(1, max(max_hp // divisor, 1))
+    cures = {
+        "Cheri Berry": Status.PARALYSIS,
+        "Rawst Berry": Status.BURN,
+        "Aspear Berry": Status.FREEZE,
+    }
+    if name in cures and rnd.random() < 0.75:
+        a["status"][side, active] = cures[name]
+        a["status_counter"][side, active] = 0
+    if name == "Persim Berry" and rnd.random() < 0.75:
+        a["confusion"][side] = rnd.randint(1, _CONFUSION_MAX)
+    if name in ("Toxic Orb", "Flame Orb") and rnd.random() < 0.75:
+        a["status"][side, active] = Status.NONE
+        a["status_counter"][side, active] = 0
+    if name in ("Leftovers", "Black Sludge", "Shell Bell") and rnd.random() < 0.75 and max_hp > 1:
+        a["hp"][side, active] = rnd.randint(1, max_hp - 1)
+    if name == "Black Sludge" and rnd.random() < 0.5:
+        a["types"][side, active, 1] = Type.POISON
+
+    def give(who: int, mon: int, move_name: str) -> None:
+        move = names.move(move_name)
+        k = rnd.randint(0, 3)
+        a["moves"][who, mon, k] = move
+        a["pp"][who, mon, k] = int(tables.move_pp[move])
+
+    if name == "Light Clay":
+        give(side, active, rnd.choice(("Reflect", "Light Screen")))
+        a["reflect"][side] = a["light_screen"][side] = a["taunt"][side] = 0
+    hitters = ("King’s Rock", "Razor Fang", "Wide Lens", "Zoom Lens", "Shell Bell")
+    if name in hitters and rnd.random() < 0.75:
+        give(side, active, "Tackle")
+    if name == "Sticky Barb" and rnd.random() < 0.75:
+        foe = int(a["active"][1 - side])
+        a["item"][1 - side, foe] = 0
+        give(1 - side, foe, "Tackle")
 
 
 def _draw_choice_lock(draw, a: dict, side: int, active: int) -> None:
@@ -475,7 +593,8 @@ def supported_state(draw, tables: Tables, names: Names) -> BattleState:
     """A mid-battle state: 1-6 Pokemon per side (``supported_pokemon``), any active
     slot, random PP, status counters, stat stages, confusion, Taunt, Bind, Leech Seed, Disable (a move of the active and its turns), Defense Curl, a Bide / Rollout lock (``_draw_lock``),
     Pursuit in a slot (``_draw_pursuit``), a Choice item, Life Orb or other battle item
-    (``_draw_battle_item``), a species item's holder (``_draw_species_item``), a Choice lock
+    (``_draw_battle_item``), a species item's holder (``_draw_species_item``), a batch-2 item
+    with what makes it act (``_draw_batch2_item``), a Choice lock
     (``_draw_choice_lock``),
     Water Sport, Foresight, Stealth Rock, screens, Tailwind, Trick Room, Mud Sport, weather,
     the turn, each active's ``fake_out_turn`` (0 to ``turn + 1``), ``move_hit`` (none or
@@ -537,6 +656,7 @@ def supported_state(draw, tables: Tables, names: Names) -> BattleState:
         _draw_lock(draw, a, side, active, names)
         _draw_battle_item(draw, tables, a, side, active, names)
         _draw_species_item(draw, tables, a, side, active, names)
+        _draw_batch2_item(draw, tables, a, side, active, names)
         _draw_choice_lock(draw, a, side, active)
     count = draw(st.integers(0, BAG_SLOTS))
     bag = draw(st.lists(st.sampled_from(M1_BAG_ITEMS), min_size=count, max_size=count))
@@ -586,7 +706,8 @@ def legal_action_pair(draw, tables: Tables, state: BattleState) -> jnp.ndarray:
     ``engine.actions.legal_actions``, the opponent's (moves, switches and bag items) from
     ``legal_opponent_actions``. One draw in four, when a side can use Pursuit and the other
     can switch, picks that pair: the Pursuit hit on a switching Pokemon (``step._pursuit_hit``)
-    is rare under uniform draws."""
+    is rare under uniform draws. Otherwise a side whose batch-2 item acts on its own move
+    (``HITTER_ITEMS``, Light Clay) or faces a Sticky Barb uses such a move one draw in two."""
     masks = [
         np.asarray(legal_actions(tables, state, 0)),
         np.asarray(legal_opponent_actions(tables, state)),
@@ -607,6 +728,30 @@ def legal_action_pair(draw, tables: Tables, state: BattleState) -> jnp.ndarray:
         acts = [k, j] if side == 0 else [j, k]
     else:
         acts = [draw(st.sampled_from(options)) for options in legal]
+        # E2 batch 2: an item that acts on its holder's own move (King's Rock / Razor Fang,
+        # Shell Bell, the lenses: a damaging move; Light Clay: Reflect or Light Screen), or a
+        # Sticky Barb on the foe (a damaging contact move), is used one draw in two.
+        effect = np.asarray(tables.move_effect)[moves]
+        damaging = (np.asarray(tables.move_category)[moves] != STATUS_CATEGORY) & (
+            np.asarray(tables.move_power)[moves] > 0
+        )
+        contact = (np.asarray(tables.move_flags)[moves] & MoveFlag.CONTACT) != 0
+        screens = np.isin(effect, (EffectId.REFLECT, EffectId.LIGHT_SCREEN))
+        held = np.asarray(tables.item_effect)[
+            np.asarray(state.item)[np.arange(2), np.asarray(state.active)]
+        ]
+        for side in (0, 1):
+            if held[side] == ItemId.LIGHT_CLAY:
+                wanted = screens[side]
+            elif held[side] in HITTER_ITEMS:
+                wanted = damaging[side]
+            elif held[1 - side] == ItemId.STICKY_BARB:
+                wanted = damaging[side] & contact[side]
+            else:
+                continue
+            slots = [k for k in range(4) if wanted[k] and masks[side][k]]
+            if slots and draw(st.booleans()):
+                acts[side] = draw(st.sampled_from(slots))
     return jnp.asarray(acts, jnp.int32)
 
 
@@ -639,7 +784,7 @@ def any_outcome() -> st.SearchStrategy[Outcome]:
         confusion_hit=_flag(sides),
         duration=_ints(*_DURATION, sides),
         thaw=_flag(sides),
-        flinch_item=_flag(sides),
+        flinch_item=_flag(hits),
         quick_claw=_flag(sides),
         end_speed_tie=_flag(()),
         magnitude=_ints(4, 10, sides),

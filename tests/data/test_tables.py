@@ -148,7 +148,8 @@ def test_move_flags(tables, names):
     def flags(m):
         return int(t.move_flags[n.move(m)])
 
-    assert flags("Tackle") == MoveFlag.CONTACT | MoveFlag.PROTECT
+    assert flags("Tackle") == MoveFlag.CONTACT | MoveFlag.PROTECT | MoveFlag.KINGS_ROCK
+    assert not flags("Growl") & MoveFlag.KINGS_ROCK  # MOVE_FLAG_TRIGGERS_KINGS_ROCK
     assert flags("Mach Punch") & MoveFlag.PUNCH and flags("Hammer Arm") & MoveFlag.PUNCH
     assert flags("Growl") & MoveFlag.SOUND and flags("Supersonic") & MoveFlag.SOUND
     assert not flags("Ember") & MoveFlag.CONTACT
@@ -162,7 +163,7 @@ def test_ability_and_item_mapping(tables, names):
     assert int(t.species_abilities[n.species("Cranidos"), 1]) == AbilityId.NONE
     assert int(t.item_effect[n.item("Oran Berry")]) == ItemId.ORAN_BERRY
     assert int(t.item_effect[n.item("Sitrus Berry")]) == ItemId.SITRUS_BERRY
-    assert int(t.item_effect[n.item("Leftovers")]) == ItemId.UNSUPPORTED
+    assert int(t.item_effect[n.item("Scope Lens")]) == ItemId.UNSUPPORTED
     assert int(t.item_effect[n.item("")]) == ItemId.NONE
     assert tuple(int(x) for x in t.item_param[n.item("Oran Berry")]) == (10, 0)
     assert tuple(int(x) for x in t.item_param[n.item("Sitrus Berry")]) == (25, 0)

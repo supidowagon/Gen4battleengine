@@ -10,16 +10,16 @@ since one implementation covers the whole group.
 
 | Split | Fights | Runnable now | Singles | Distinct missing groups |
 |---|---|---|---|---|
-| Roark Split | 23 | 1 | 23 | 76 |
-| Gardenia Split | 43 | 0 | 20 | 157 |
-| Fantina Split | 41 | 0 | 37 | 175 |
-| Maylene Split | 34 | 0 | 27 | 163 |
-| Wake Split | 37 | 0 | 25 | 144 |
-| Byron Split | 49 | 0 | 36 | 171 |
-| Candice Split | 47 | 0 | 23 | 158 |
-| Galactic Split | 102 | 0 | 40 | 259 |
-| Volkner Split | 25 | 0 | 9 | 122 |
-| Elite Four Split | 19 | 0 | 18 | 124 |
+| Roark Split | 23 | 1 | 23 | 62 |
+| Gardenia Split | 43 | 0 | 20 | 146 |
+| Fantina Split | 41 | 0 | 37 | 160 |
+| Maylene Split | 34 | 0 | 27 | 149 |
+| Wake Split | 37 | 0 | 25 | 131 |
+| Byron Split | 49 | 0 | 36 | 156 |
+| Candice Split | 47 | 0 | 23 | 145 |
+| Galactic Split | 102 | 0 | 40 | 245 |
+| Volkner Split | 25 | 0 | 9 | 115 |
+| Elite Four Split | 19 | 0 | 18 | 118 |
 
 ## Roark split
 
@@ -33,7 +33,6 @@ since one implementation covers the whole group.
 | 6 | AI: AI_FLAG_SETUP_FIRST_TURN |
 | 6 | move effect #197: Secret Power |
 | 4 | battle terrain: the battle terrain varies over its maps (TERRAIN_PLAIN, TERRAIN_GRASS, TERRAIN_WATER), and Secret Power would read it |
-| 4 | held item effect #101: Flame Orb |
 | 4 | move effect #92: Snore |
 | 3 | AI: AI_FLAG_PRIORITIZE_EXTREMES |
 | 3 | AI: flag set 0x27 |
@@ -44,12 +43,9 @@ since one implementation covers the whole group.
 | 3 | move effect #171: SmellingSalt |
 | 3 | move effect #228: U-turn |
 | 2 | ability: Dry Skin |
-| 2 | ability: Gluttony |
 | 2 | ability: Lightningrod |
 | 2 | ability: No Guard |
 | 2 | ability: Serene Grace |
-| 2 | held item effect #100: Toxic Orb |
-| 2 | held item effect #69: Leftovers |
 | 2 | move effect #196: Grass Knot, Low Kick |
 | 2 | move effect #214: Roost |
 | 2 | move effect #227: Bide, Metal Burst |
@@ -76,17 +72,7 @@ since one implementation covers the whole group.
 | 1 | ability: Trace |
 | 1 | battle format: gauntlet Oreburgh Mine (position 1; rules not recorded) |
 | 1 | battle format: gauntlet Oreburgh Mine (position 2; rules not recorded) |
-| 1 | held item effect #104: Zoom Lens |
 | 1 | held item effect #113: Damp Rock |
-| 1 | held item effect #116: Sticky Barb |
-| 1 | held item effect #36: Berserk Gene, Liechi Berry |
-| 1 | held item effect #38: Salac Berry |
-| 1 | held item effect #45: Custap Berry |
-| 1 | held item effect #48: BrightPowder, Lax Incense |
-| 1 | held item effect #5: Cheri Berry |
-| 1 | held item effect #56: King's Rock, Razor Fang |
-| 1 | held item effect #88: Shell Bell |
-| 1 | held item effect #97: Light Clay |
 | 1 | move effect #112: Spikes |
 | 1 | move effect #118: Swagger |
 | 1 | move effect #136: Rain Dance |
@@ -104,7 +90,7 @@ since one implementation covers the whole group.
 | 1 | move effect #38: Fissure, Guillotine, Horn Drill |
 | 1 | move effect #98: Destiny Bond |
 
-Groups by kind: move effect 25, ability 21, held item effect 14, AI 13, battle format 2, battle terrain 1
+Groups by kind: move effect 25, ability 20, AI 13, battle format 2, held item effect 1, battle terrain 1
 
 ## Roark and Gardenia splits (up to the second gym)
 
@@ -122,18 +108,14 @@ Groups by kind: move effect 25, ability 21, held item effect 14, AI 13, battle f
 | 11 | AI: AI_FLAG_PRIORITIZE_EXTREMES |
 | 9 | AI: AI_FLAG_HARRASSMENT |
 | 9 | ability: Magic Guard |
-| 9 | held item effect #69: Leftovers |
 | 9 | move effect #228: U-turn |
 | 8 | AI: flag set 0xf |
 | 8 | ability: Chlorophyll |
-| 8 | held item effect #101: Flame Orb |
-| 8 | held item effect #56: King's Rock, Razor Fang |
 | 8 | move effect #197: Secret Power |
 | 7 | AI: AI_FLAG_CHECK_HP |
 | 7 | move effect #198: Double-Edge, Wood Hammer |
 | 7 | move effect #221: Brine, Wring Out |
 | 6 | AI: flag set 0x27 |
-| 6 | ability: Gluttony |
 | 6 | move effect #147: Earthquake |
 | 6 | move effect #202: Poison Fang |
 | 5 | ability: Aftermath |
@@ -141,8 +123,6 @@ Groups by kind: move effect 25, ability 21, held item effect 14, AI 13, battle f
 | 5 | ability: Technician |
 | 5 | ability: Thick Fat |
 | 5 | battle format: a double battle |
-| 5 | held item effect #48: BrightPowder, Lax Incense |
-| 5 | held item effect #97: Light Clay |
 | 5 | move effect #169: Facade |
 | 5 | move effect #196: Grass Knot, Low Kick |
 | 5 | move effect #212: Dragon Dance |
@@ -172,9 +152,7 @@ Groups by kind: move effect 25, ability 21, held item effect 14, AI 13, battle f
 | 3 | ability: Tinted Lens |
 | 3 | ability: Truant |
 | 3 | form: trainer Pokemon in a data form: this game's party builder applies the form before computing its stats, which the engine's trainer party build does not model |
-| 3 | held item effect #45: Custap Berry |
 | 3 | held item effect #65: Focus Band |
-| 3 | held item effect #93: Wide Lens |
 | 3 | move effect #150: Stomp |
 | 3 | move effect #171: SmellingSalt |
 | 3 | move effect #214: Roost |
@@ -198,9 +176,7 @@ Groups by kind: move effect 25, ability 21, held item effect 14, AI 13, battle f
 | 2 | ability: Tangled Feet |
 | 2 | ability: Unburden |
 | 2 | ability: Volt Absorb |
-| 2 | held item effect #100: Toxic Orb |
 | 2 | held item effect #112: Heat Rock |
-| 2 | held item effect #36: Berserk Gene, Liechi Berry |
 | 2 | move effect #106: Block, Mean Look, Spider Web |
 | 2 | move effect #112: Spikes |
 | 2 | move effect #142: Belly Drum |
@@ -266,15 +242,8 @@ Groups by kind: move effect 25, ability 21, held item effect 14, AI 13, battle f
 | 1 | battle terrain: the battle terrain varies over its maps (TERRAIN_GRASS, TERRAIN_MOUNTAIN, TERRAIN_WATER), and Secret Power would read it |
 | 1 | battle terrain: the battle terrain varies over its maps (TERRAIN_PLAIN, TERRAIN_GRASS, TERRAIN_BUILDING), and Secret Power would read it |
 | 1 | held item effect #10: Leppa Berry |
-| 1 | held item effect #104: Zoom Lens |
-| 1 | held item effect #109: Black Sludge |
-| 1 | held item effect #116: Sticky Barb |
 | 1 | held item effect #15: Wiki Berry |
-| 1 | held item effect #38: Salac Berry |
-| 1 | held item effect #39: Petaya Berry |
-| 1 | held item effect #5: Cheri Berry |
 | 1 | held item effect #66: Lucky Egg |
-| 1 | held item effect #88: Shell Bell |
 | 1 | held item effect #89: Lucky Punch |
 | 1 | move effect #108: Minimize |
 | 1 | move effect #118: Swagger |
@@ -299,7 +268,7 @@ Groups by kind: move effect 25, ability 21, held item effect 14, AI 13, battle f
 | 1 | move effect #90: Encore |
 | 1 | move effect #91: Pain Split |
 
-Groups by kind: move effect 58, ability 50, AI 36, held item effect 23, battle format 12, battle terrain 3, ROM change 2, form 1, weather 1
+Groups by kind: move effect 58, ability 49, AI 36, battle format 12, held item effect 7, battle terrain 3, ROM change 2, form 1, weather 1
 
 ## All ten splits (top 60)
 
@@ -310,7 +279,6 @@ Groups by kind: move effect 58, ability 50, AI 36, held item effect 23, battle f
 | 419 | AI: ability-guess check for this trainer |
 | 154 | AI: AI_FLAG_SETUP_FIRST_TURN |
 | 137 | move effect #147: Earthquake |
-| 128 | held item effect #69: Leftovers |
 | 121 | AI: AI_FLAG_TAG_STRATEGY |
 | 109 | ROM change: battle/skill/be_seq.narc#48 is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) |
 | 109 | move effect #48: Draco Meteor, Giga Impact, Hydro Cannon, Hyper Beam, Outrage, Superpower |
@@ -329,13 +297,11 @@ Groups by kind: move effect 58, ability 50, AI 36, held item effect 23, battle f
 | 57 | ROM change: battle/skill/sub_seq.narc#251 is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) |
 | 52 | field condition: permanent Trick Room |
 | 52 | move effect #198: Double-Edge, Wood Hammer |
-| 50 | held item effect #48: BrightPowder, Lax Incense |
 | 49 | ROM change: battle/skill/be_seq.narc#182 is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) |
 | 49 | ability: Thick Fat |
 | 49 | move effect #182: Brave Bird, Close Combat, Take Down |
 | 49 | move effect #228: U-turn |
 | 49 | move effect #262: Frenzy Plant, Sky Attack, Thrash, Volt Tackle, Wild Charge |
-| 47 | held item effect #56: King's Rock, Razor Fang |
 | 46 | ROM change: arm9 MapHeader_GetMapType is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) |
 | 46 | ability: Chlorophyll |
 | 45 | ability: Technician |
@@ -357,18 +323,21 @@ Groups by kind: move effect 58, ability 50, AI 36, held item effect 23, battle f
 | 32 | move effect #197: Secret Power |
 | 31 | ability: Aftermath |
 | 31 | ability: Tinted Lens |
-| 31 | held item effect #93: Wide Lens |
 | 31 | move effect #253: Blast Burn, Eruption, Flare Blitz, Overheat |
 | 30 | move effect #211: Calm Mind |
 | 30 | weather: Fog |
 | 28 | ability: Shadow Tag |
 | 27 | ability: Pressure |
-| 27 | held item effect #45: Custap Berry |
 | 26 | AI: AI_FLAG_BATON_PASS |
 | 26 | ability: Clear Body |
 | 26 | ability: Super Luck |
+| 25 | ability: Dry Skin |
+| 25 | ability: Lightningrod |
+| 25 | move effect #225: Tailwind |
+| 24 | ROM change: battle/skill/be_seq.narc#141 is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) |
+| 24 | ROM change: overlay16 BattleControllerPlayer_CheckMoveHitAccuracy is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) |
 
-Groups by kind: move effect 114, AI 86, ability 63, held item effect 44, battle format 36, ROM change 11, battle terrain 11, weather 4, field condition 2, form 1, form change 1
+Groups by kind: move effect 114, AI 86, ability 62, battle format 36, held item effect 28, ROM change 11, battle terrain 11, weather 4, field condition 2, form 1, form change 1
 
 ## Build order for the first two splits
 
@@ -382,183 +351,166 @@ Greedy: each step is the group that brings the most fights closest to runnable.
 | 4 | AI: AI_FLAG_SETUP_FIRST_TURN | 1 of 66 |
 | 5 | battle format: a multi battle | 1 of 66 |
 | 6 | AI: AI_FLAG_TAG_STRATEGY | 1 of 66 |
-| 7 | ability: Dry Skin | 2 of 66 |
-| 8 | move effect #196: Grass Knot, Low Kick | 3 of 66 |
-| 9 | ability: Levitate | 3 of 66 |
-| 10 | ability: Gluttony | 3 of 66 |
-| 11 | AI: AI_FLAG_PRIORITIZE_EXTREMES | 3 of 66 |
-| 12 | held item effect #69: Leftovers | 3 of 66 |
-| 13 | held item effect #101: Flame Orb | 3 of 66 |
-| 14 | AI: AI_FLAG_CHECK_HP | 3 of 66 |
-| 15 | AI: AI_FLAG_HARRASSMENT | 3 of 66 |
-| 16 | move effect #228: U-turn | 3 of 66 |
-| 17 | ability: Chlorophyll | 3 of 66 |
-| 18 | ability: Magic Guard | 3 of 66 |
-| 19 | AI: flag set 0xf | 3 of 66 |
-| 20 | move effect #197: Secret Power | 3 of 66 |
-| 21 | held item effect #56: King's Rock, Razor Fang | 3 of 66 |
-| 22 | move effect #198: Double-Edge, Wood Hammer | 3 of 66 |
-| 23 | ability: Thick Fat | 3 of 66 |
-| 24 | move effect #202: Poison Fang | 3 of 66 |
-| 25 | move effect #169: Facade | 3 of 66 |
-| 26 | AI: flag set 0x27 | 3 of 66 |
-| 27 | ability: Super Luck | 4 of 66 |
-| 28 | move effect #221: Brine, Wring Out | 4 of 66 |
-| 29 | ability: Aftermath | 4 of 66 |
-| 30 | ability: Tangled Feet | 5 of 66 |
-| 31 | move effect #147: Earthquake | 5 of 66 |
-| 32 | move effect #249: Toxic Spikes | 5 of 66 |
-| 33 | move effect #212: Dragon Dance | 5 of 66 |
-| 34 | move effect #92: Snore | 5 of 66 |
-| 35 | ability: Reckless | 5 of 66 |
-| 36 | ability: Technician | 5 of 66 |
-| 37 | battle terrain: the battle terrain varies over its maps (TERRAIN_PLAIN, TERRAIN_GRASS, TERRAIN_WATER), and Secret Power would read it | 5 of 66 |
-| 38 | ability: Truant | 8 of 66 |
-| 39 | ability: Huge Power | 9 of 66 |
-| 40 | AI: flag set 0x10f | 10 of 66 |
-| 41 | ability: Lightningrod | 10 of 66 |
-| 42 | move effect #260: Blizzard, Ice Ball, Sheer Cold | 10 of 66 |
-| 43 | held item effect #97: Light Clay | 10 of 66 |
-| 44 | move effect #273: Fire Fang | 10 of 66 |
-| 45 | move effect #152: Thunder | 10 of 66 |
-| 46 | move effect #171: SmellingSalt | 10 of 66 |
-| 47 | move effect #242: Copycat | 11 of 66 |
-| 48 | move effect #150: Stomp | 11 of 66 |
-| 49 | move effect #257: Surf | 12 of 66 |
-| 50 | weather: Rain | 12 of 66 |
-| 51 | ability: Drought | 12 of 66 |
-| 52 | ability: Scrappy | 12 of 66 |
-| 53 | ability: Filter | 12 of 66 |
-| 54 | form: trainer Pokemon in a data form: this game's party builder applies the form before computing its stats, which the engine's trainer party build does not model | 13 of 66 |
-| 55 | move effect #159: Uproar | 14 of 66 |
-| 56 | held item effect #48: BrightPowder, Lax Incense | 14 of 66 |
-| 57 | battle format: a double battle | 14 of 66 |
-| 58 | AI: flag set 0x8f | 14 of 66 |
-| 59 | held item effect #65: Focus Band | 15 of 66 |
-| 60 | ability: Trace | 15 of 66 |
-| 61 | ability: Solar Power | 15 of 66 |
-| 62 | move effect #106: Block, Mean Look, Spider Web | 16 of 66 |
-| 63 | move effect #214: Roost | 16 of 66 |
-| 64 | battle format: gauntlet Eterna Gym gym trainers (position 3; rules not recorded) | 17 of 66 |
-| 65 | move effect #41: Dragon Rage | 17 of 66 |
-| 66 | AI: AI_FLAG_WEATHER | 17 of 66 |
-| 67 | move effect #136: Rain Dance | 17 of 66 |
-| 68 | held item effect #113: Damp Rock | 17 of 66 |
-| 69 | AI: flag set 0x20f | 18 of 66 |
-| 70 | held item effect #45: Custap Berry | 18 of 66 |
-| 71 | move effect #98: Destiny Bond | 18 of 66 |
-| 72 | held item effect #104: Zoom Lens | 19 of 66 |
-| 73 | ability: Clear Body | 19 of 66 |
-| 74 | AI: flag set 0x11f | 20 of 66 |
-| 75 | held item effect #93: Wide Lens | 20 of 66 |
-| 76 | move effect #83: Metronome | 20 of 66 |
-| 77 | move effect #225: Tailwind | 20 of 66 |
-| 78 | held item effect #36: Berserk Gene, Liechi Berry | 20 of 66 |
-| 79 | held item effect #100: Toxic Orb | 20 of 66 |
-| 80 | move effect #227: Bide, Metal Burst | 21 of 66 |
-| 81 | move effect #148: Doom Desire, Future Sight | 22 of 66 |
-| 82 | AI: flag set 0x207 | 23 of 66 |
-| 83 | ability: Volt Absorb | 23 of 66 |
-| 84 | ability: Sniper | 23 of 66 |
-| 85 | ability: Arena Trap | 24 of 66 |
-| 86 | ability: Hyper Cutter | 25 of 66 |
-| 87 | AI: flag set 0x197 | 26 of 66 |
-| 88 | ability: Unburden | 26 of 66 |
-| 89 | AI: flag set 0x87 | 27 of 66 |
-| 90 | move effect #172: Follow Me | 27 of 66 |
-| 91 | ability: Tinted Lens | 27 of 66 |
-| 92 | ability: Swarm | 27 of 66 |
-| 93 | AI: flag set 0x43f | 28 of 66 |
-| 94 | ability: Snow Warning | 28 of 66 |
-| 95 | ability: Download | 29 of 66 |
-| 96 | AI: AI_FLAG_BATON_PASS | 29 of 66 |
-| 97 | AI: flag set 0xe7 | 30 of 66 |
-| 98 | AI: flag set 0x417 | 30 of 66 |
-| 99 | move effect #262: Frenzy Plant, Sky Attack, Thrash, Volt Tackle, Wild Charge | 31 of 66 |
-| 100 | move effect #274: Avalanche, Ice Fang | 31 of 66 |
-| 101 | battle terrain: the battle terrain varies over its maps (TERRAIN_GRASS, TERRAIN_MOUNTAIN, TERRAIN_WATER), and Secret Power would read it | 32 of 66 |
-| 102 | move effect #142: Belly Drum | 32 of 66 |
-| 103 | move effect #208: Bulk Up | 33 of 66 |
-| 104 | move effect #188: Knock Off | 33 of 66 |
-| 105 | battle format: gauntlet Route 204 North (position 2; rules not recorded) | 34 of 66 |
-| 106 | ability: Rain Dish | 34 of 66 |
-| 107 | ability: Water Absorb | 35 of 66 |
-| 108 | ability: Bad Dreams | 35 of 66 |
-| 109 | battle format: gauntlet Route 204 North B2B (position 2; rules not recorded) | 36 of 66 |
-| 110 | AI: flag set 0x41f | 36 of 66 |
-| 111 | move effect #8: Dream Eater | 37 of 66 |
-| 112 | held item effect #112: Heat Rock | 37 of 66 |
-| 113 | AI: flag set 0x21f | 38 of 66 |
-| 114 | ability: Serene Grace | 38 of 66 |
-| 115 | held item effect #38: Salac Berry | 39 of 66 |
-| 116 | move effect #45: Hi Jump Kick, Jump Kick | 39 of 66 |
-| 117 | ability: Pure Power | 40 of 66 |
-| 118 | move effect #192: Imprison | 40 of 66 |
-| 119 | move effect #144: Mirror Coat | 40 of 66 |
-| 120 | ability: Shell Armor | 41 of 66 |
-| 121 | move effect #91: Pain Split | 41 of 66 |
-| 122 | AI: flag set 0x437 | 42 of 66 |
-| 123 | move effect #79: Substitute | 42 of 66 |
-| 124 | AI: flag set 0xd | 43 of 66 |
-| 125 | move effect #230: Payback, Revenge | 43 of 66 |
-| 126 | held item effect #109: Black Sludge | 44 of 66 |
-| 127 | move effect #180: Assist | 44 of 66 |
-| 128 | move effect #151: SolarBeam | 45 of 66 |
-| 129 | move effect #164: Hail | 45 of 66 |
-| 130 | AI: flag set 0x1f | 46 of 66 |
-| 131 | move effect #112: Spikes | 46 of 66 |
-| 132 | ability: No Guard | 46 of 66 |
-| 133 | move effect #137: Sunny Day | 46 of 66 |
-| 134 | battle format: gauntlet Route 204 North (position 3; rules not recorded) | 47 of 66 |
-| 135 | held item effect #5: Cheri Berry | 47 of 66 |
-| 136 | battle format: gauntlet Oreburgh Mine (position 2; rules not recorded) | 48 of 66 |
-| 137 | battle format: gauntlet Oreburgh Mine (position 1; rules not recorded) | 48 of 66 |
-| 138 | ability: Honey Gather | 49 of 66 |
-| 139 | battle format: gauntlet Eterna Gym gym trainers (position 2; rules not recorded) | 49 of 66 |
-| 140 | ability: Flower Gift | 50 of 66 |
-| 141 | battle format: gauntlet Eterna Gym gym trainers (position 1; rules not recorded) | 50 of 66 |
-| 142 | ability: Leaf Guard | 51 of 66 |
-| 143 | ability: Wonder Guard | 51 of 66 |
-| 144 | AI: flag set 0xaf | 52 of 66 |
-| 145 | ability: Shield Dust | 52 of 66 |
-| 146 | AI: flag set 0x1 | 53 of 66 |
-| 147 | ability: Sand Stream | 53 of 66 |
-| 148 | AI: flag set 0xef | 54 of 66 |
-| 149 | ability: Quick Feet | 54 of 66 |
-| 150 | AI: flag set 0x5 | 55 of 66 |
-| 151 | ability: Pressure | 55 of 66 |
-| 152 | AI: flag set 0x597 | 56 of 66 |
-| 153 | ability: Magnet Pull | 56 of 66 |
-| 154 | AI: flag set 0x117 | 57 of 66 |
-| 155 | ability: Drizzle | 57 of 66 |
-| 156 | AI: flag set 0x587 | 58 of 66 |
-| 157 | move effect #182: Brave Bird, Close Combat, Take Down | 58 of 66 |
-| 158 | ROM change: battle/skill/be_seq.narc#182 is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) | 58 of 66 |
-| 159 | move effect #189: Endeavor | 58 of 66 |
-| 160 | held item effect #15: Wiki Berry | 59 of 66 |
-| 161 | move effect #89: Counter | 59 of 66 |
-| 162 | move effect #48: Draco Meteor, Giga Impact, Hydro Cannon, Hyper Beam, Outrage, Superpower | 59 of 66 |
-| 163 | ROM change: battle/skill/be_seq.narc#48 is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) | 59 of 66 |
-| 164 | AI: flag set 0x97 | 60 of 66 |
-| 165 | move effect #176: Helping Hand | 60 of 66 |
-| 166 | held item effect #39: Petaya Berry | 60 of 66 |
-| 167 | ability: Synchronize | 61 of 66 |
-| 168 | move effect #170: Focus Punch | 61 of 66 |
-| 169 | battle format: gauntlet Route 204 North (position 1; rules not recorded) | 61 of 66 |
-| 170 | ability: Poison Heal | 62 of 66 |
-| 171 | move effect #124: Safeguard | 62 of 66 |
-| 172 | battle terrain: the battle terrain varies over its maps (TERRAIN_PLAIN, TERRAIN_GRASS, TERRAIN_BUILDING), and Secret Power would read it | 62 of 66 |
-| 173 | AI: flag set 0xc7 | 63 of 66 |
-| 174 | move effect #90: Encore | 63 of 66 |
-| 175 | move effect #108: Minimize | 63 of 66 |
-| 176 | battle format: gauntlet Route 204 North B2B (position 1; rules not recorded) | 63 of 66 |
-| 177 | ability: Shadow Tag | 64 of 66 |
-| 178 | move effect #38: Fissure, Guillotine, Horn Drill | 64 of 66 |
-| 179 | move effect #118: Swagger | 64 of 66 |
-| 180 | held item effect #88: Shell Bell | 64 of 66 |
-| 181 | held item effect #116: Sticky Barb | 65 of 66 |
-| 182 | held item effect #89: Lucky Punch | 65 of 66 |
-| 183 | held item effect #66: Lucky Egg | 65 of 66 |
-| 184 | held item effect #10: Leppa Berry | 65 of 66 |
-| 185 | ability: Battle Armor | 65 of 66 |
-| 186 | AI: flag set 0x58b | 66 of 66 |
+| 7 | ability: Levitate | 1 of 66 |
+| 8 | ability: Dry Skin | 2 of 66 |
+| 9 | AI: AI_FLAG_PRIORITIZE_EXTREMES | 2 of 66 |
+| 10 | move effect #196: Grass Knot, Low Kick | 3 of 66 |
+| 11 | move effect #169: Facade | 3 of 66 |
+| 12 | AI: AI_FLAG_CHECK_HP | 3 of 66 |
+| 13 | AI: AI_FLAG_HARRASSMENT | 3 of 66 |
+| 14 | ability: Magic Guard | 3 of 66 |
+| 15 | move effect #228: U-turn | 3 of 66 |
+| 16 | ability: Chlorophyll | 3 of 66 |
+| 17 | AI: flag set 0xf | 3 of 66 |
+| 18 | move effect #197: Secret Power | 3 of 66 |
+| 19 | AI: flag set 0x27 | 3 of 66 |
+| 20 | move effect #198: Double-Edge, Wood Hammer | 3 of 66 |
+| 21 | ability: Thick Fat | 3 of 66 |
+| 22 | move effect #202: Poison Fang | 3 of 66 |
+| 23 | move effect #92: Snore | 3 of 66 |
+| 24 | move effect #227: Bide, Metal Burst | 4 of 66 |
+| 25 | move effect #221: Brine, Wring Out | 4 of 66 |
+| 26 | ability: Aftermath | 4 of 66 |
+| 27 | move effect #249: Toxic Spikes | 4 of 66 |
+| 28 | move effect #147: Earthquake | 4 of 66 |
+| 29 | move effect #212: Dragon Dance | 4 of 66 |
+| 30 | ability: Super Luck | 5 of 66 |
+| 31 | ability: Tangled Feet | 6 of 66 |
+| 32 | ability: Lightningrod | 6 of 66 |
+| 33 | battle terrain: the battle terrain varies over its maps (TERRAIN_PLAIN, TERRAIN_GRASS, TERRAIN_WATER), and Secret Power would read it | 6 of 66 |
+| 34 | ability: Reckless | 6 of 66 |
+| 35 | ability: Technician | 6 of 66 |
+| 36 | ability: Truant | 9 of 66 |
+| 37 | move effect #260: Blizzard, Ice Ball, Sheer Cold | 9 of 66 |
+| 38 | ability: Trace | 9 of 66 |
+| 39 | move effect #98: Destiny Bond | 10 of 66 |
+| 40 | move effect #171: SmellingSalt | 10 of 66 |
+| 41 | move effect #273: Fire Fang | 10 of 66 |
+| 42 | move effect #242: Copycat | 11 of 66 |
+| 43 | move effect #230: Payback, Revenge | 12 of 66 |
+| 44 | move effect #214: Roost | 12 of 66 |
+| 45 | move effect #148: Doom Desire, Future Sight | 13 of 66 |
+| 46 | ability: Huge Power | 14 of 66 |
+| 47 | AI: flag set 0x10f | 15 of 66 |
+| 48 | weather: Rain | 15 of 66 |
+| 49 | move effect #150: Stomp | 15 of 66 |
+| 50 | move effect #257: Surf | 16 of 66 |
+| 51 | ability: Solar Power | 16 of 66 |
+| 52 | ability: Drought | 16 of 66 |
+| 53 | AI: flag set 0x8f | 16 of 66 |
+| 54 | held item effect #65: Focus Band | 17 of 66 |
+| 55 | battle format: a double battle | 17 of 66 |
+| 56 | move effect #106: Block, Mean Look, Spider Web | 18 of 66 |
+| 57 | move effect #152: Thunder | 18 of 66 |
+| 58 | ability: Filter | 18 of 66 |
+| 59 | ability: Scrappy | 18 of 66 |
+| 60 | form: trainer Pokemon in a data form: this game's party builder applies the form before computing its stats, which the engine's trainer party build does not model | 19 of 66 |
+| 61 | move effect #159: Uproar | 20 of 66 |
+| 62 | battle format: gauntlet Eterna Gym gym trainers (position 3; rules not recorded) | 21 of 66 |
+| 63 | move effect #83: Metronome | 21 of 66 |
+| 64 | ability: Serene Grace | 22 of 66 |
+| 65 | move effect #41: Dragon Rage | 22 of 66 |
+| 66 | AI: AI_FLAG_WEATHER | 22 of 66 |
+| 67 | move effect #136: Rain Dance | 22 of 66 |
+| 68 | held item effect #113: Damp Rock | 22 of 66 |
+| 69 | AI: flag set 0x20f | 23 of 66 |
+| 70 | AI: flag set 0x207 | 24 of 66 |
+| 71 | ability: Clear Body | 24 of 66 |
+| 72 | AI: flag set 0x11f | 25 of 66 |
+| 73 | move effect #225: Tailwind | 25 of 66 |
+| 74 | ability: Volt Absorb | 25 of 66 |
+| 75 | ability: Sniper | 25 of 66 |
+| 76 | ability: Arena Trap | 26 of 66 |
+| 77 | ability: Hyper Cutter | 27 of 66 |
+| 78 | AI: flag set 0x197 | 28 of 66 |
+| 79 | ability: Unburden | 28 of 66 |
+| 80 | AI: flag set 0x87 | 29 of 66 |
+| 81 | move effect #172: Follow Me | 29 of 66 |
+| 82 | ability: Tinted Lens | 29 of 66 |
+| 83 | ability: Swarm | 29 of 66 |
+| 84 | AI: flag set 0x43f | 30 of 66 |
+| 85 | ability: Snow Warning | 30 of 66 |
+| 86 | ability: Download | 31 of 66 |
+| 87 | AI: AI_FLAG_BATON_PASS | 31 of 66 |
+| 88 | AI: flag set 0xe7 | 32 of 66 |
+| 89 | AI: flag set 0x417 | 32 of 66 |
+| 90 | move effect #262: Frenzy Plant, Sky Attack, Thrash, Volt Tackle, Wild Charge | 33 of 66 |
+| 91 | move effect #274: Avalanche, Ice Fang | 33 of 66 |
+| 92 | battle terrain: the battle terrain varies over its maps (TERRAIN_GRASS, TERRAIN_MOUNTAIN, TERRAIN_WATER), and Secret Power would read it | 34 of 66 |
+| 93 | move effect #142: Belly Drum | 34 of 66 |
+| 94 | move effect #208: Bulk Up | 35 of 66 |
+| 95 | move effect #188: Knock Off | 35 of 66 |
+| 96 | battle format: gauntlet Route 204 North (position 2; rules not recorded) | 36 of 66 |
+| 97 | ability: Rain Dish | 36 of 66 |
+| 98 | ability: Water Absorb | 37 of 66 |
+| 99 | ability: Bad Dreams | 37 of 66 |
+| 100 | battle format: gauntlet Route 204 North B2B (position 2; rules not recorded) | 38 of 66 |
+| 101 | AI: flag set 0x41f | 38 of 66 |
+| 102 | move effect #8: Dream Eater | 39 of 66 |
+| 103 | held item effect #112: Heat Rock | 39 of 66 |
+| 104 | AI: flag set 0x21f | 40 of 66 |
+| 105 | ability: No Guard | 40 of 66 |
+| 106 | battle format: gauntlet Oreburgh Mine (position 2; rules not recorded) | 41 of 66 |
+| 107 | move effect #45: Hi Jump Kick, Jump Kick | 41 of 66 |
+| 108 | ability: Pure Power | 42 of 66 |
+| 109 | move effect #192: Imprison | 42 of 66 |
+| 110 | move effect #144: Mirror Coat | 42 of 66 |
+| 111 | ability: Shell Armor | 43 of 66 |
+| 112 | move effect #112: Spikes | 43 of 66 |
+| 113 | move effect #91: Pain Split | 43 of 66 |
+| 114 | AI: flag set 0x437 | 44 of 66 |
+| 115 | move effect #79: Substitute | 44 of 66 |
+| 116 | AI: flag set 0xd | 45 of 66 |
+| 117 | move effect #38: Fissure, Guillotine, Horn Drill | 45 of 66 |
+| 118 | move effect #118: Swagger | 46 of 66 |
+| 119 | move effect #180: Assist | 46 of 66 |
+| 120 | move effect #151: SolarBeam | 47 of 66 |
+| 121 | move effect #176: Helping Hand | 47 of 66 |
+| 122 | ability: Synchronize | 48 of 66 |
+| 123 | move effect #164: Hail | 48 of 66 |
+| 124 | AI: flag set 0x1f | 49 of 66 |
+| 125 | move effect #137: Sunny Day | 49 of 66 |
+| 126 | battle format: gauntlet Route 204 North (position 3; rules not recorded) | 50 of 66 |
+| 127 | battle format: gauntlet Oreburgh Mine (position 1; rules not recorded) | 50 of 66 |
+| 128 | ability: Honey Gather | 51 of 66 |
+| 129 | battle format: gauntlet Eterna Gym gym trainers (position 2; rules not recorded) | 51 of 66 |
+| 130 | ability: Flower Gift | 52 of 66 |
+| 131 | battle format: gauntlet Eterna Gym gym trainers (position 1; rules not recorded) | 52 of 66 |
+| 132 | ability: Leaf Guard | 53 of 66 |
+| 133 | ability: Wonder Guard | 53 of 66 |
+| 134 | AI: flag set 0xaf | 54 of 66 |
+| 135 | ability: Shield Dust | 54 of 66 |
+| 136 | AI: flag set 0x1 | 55 of 66 |
+| 137 | ability: Sand Stream | 55 of 66 |
+| 138 | AI: flag set 0xef | 56 of 66 |
+| 139 | ability: Quick Feet | 56 of 66 |
+| 140 | AI: flag set 0x5 | 57 of 66 |
+| 141 | ability: Pressure | 57 of 66 |
+| 142 | AI: flag set 0x597 | 58 of 66 |
+| 143 | ability: Magnet Pull | 58 of 66 |
+| 144 | AI: flag set 0x117 | 59 of 66 |
+| 145 | ability: Drizzle | 59 of 66 |
+| 146 | AI: flag set 0x587 | 60 of 66 |
+| 147 | move effect #182: Brave Bird, Close Combat, Take Down | 60 of 66 |
+| 148 | ROM change: battle/skill/be_seq.narc#182 is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) | 60 of 66 |
+| 149 | move effect #189: Endeavor | 60 of 66 |
+| 150 | held item effect #15: Wiki Berry | 61 of 66 |
+| 151 | move effect #89: Counter | 61 of 66 |
+| 152 | move effect #48: Draco Meteor, Giga Impact, Hydro Cannon, Hyper Beam, Outrage, Superpower | 61 of 66 |
+| 153 | ROM change: battle/skill/be_seq.narc#48 is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) | 61 of 66 |
+| 154 | AI: flag set 0x97 | 62 of 66 |
+| 155 | move effect #170: Focus Punch | 62 of 66 |
+| 156 | battle format: gauntlet Route 204 North (position 1; rules not recorded) | 62 of 66 |
+| 157 | ability: Poison Heal | 63 of 66 |
+| 158 | move effect #124: Safeguard | 63 of 66 |
+| 159 | battle terrain: the battle terrain varies over its maps (TERRAIN_PLAIN, TERRAIN_GRASS, TERRAIN_BUILDING), and Secret Power would read it | 63 of 66 |
+| 160 | AI: flag set 0xc7 | 64 of 66 |
+| 161 | move effect #90: Encore | 64 of 66 |
+| 162 | move effect #108: Minimize | 64 of 66 |
+| 163 | battle format: gauntlet Route 204 North B2B (position 1; rules not recorded) | 64 of 66 |
+| 164 | ability: Shadow Tag | 65 of 66 |
+| 165 | held item effect #89: Lucky Punch | 65 of 66 |
+| 166 | held item effect #66: Lucky Egg | 65 of 66 |
+| 167 | held item effect #10: Leppa Berry | 65 of 66 |
+| 168 | ability: Battle Armor | 65 of 66 |
+| 169 | AI: flag set 0x58b | 66 of 66 |

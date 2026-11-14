@@ -409,3 +409,73 @@ def test_held_item_ids_follow_the_data():
     plain = {d["name"] for d in data if "berryData" in d and d["holdEffect"] == "HOLD_EFFECT_NONE"}
     ids = held_item_ids(items)
     assert {i["name"] for i, e in zip(items, ids) if e == ItemId.NO_EFFECT_BERRY} == plain
+
+
+def test_batch2_berries_follow_their_item_data():
+    """The berries E2 batch 2 names (DECOMP_ITEM_TO_ID: Pluck reads an item's pluck effect, not
+    its hold effect) carry the hold and pluck effects the engine gives them
+    (res/items/data/*.json), and PINCH_STAT_HOLD_EFFECTS names its hold effects
+    (generated/item_hold_effects.txt) with the stat BattleSystem_TriggerHeldItem raises
+    (battle_lib.c:4773-4836: msgTemp = BATTLE_STAT_*)."""
+    from nuzline.engine.ids import ItemId, Stat
+    from tools.effect_map import DECOMP_ITEM_TO_ID, PINCH_STAT_HOLD_EFFECTS
+
+    want = {
+        ItemId.CHERI_BERRY: ("HOLD_EFFECT_PRZ_RESTORE", "PLUCK_EFFECT_PRZ_RESTORE"),
+        ItemId.RAWST_BERRY: ("HOLD_EFFECT_BRN_RESTORE", "PLUCK_EFFECT_BRN_RESTORE"),
+        ItemId.ASPEAR_BERRY: ("HOLD_EFFECT_FRZ_RESTORE", "PLUCK_EFFECT_FRZ_RESTORE"),
+        ItemId.PERSIM_BERRY: ("HOLD_EFFECT_CONFUSE_RESTORE", "PLUCK_EFFECT_CNF_RESTORE"),
+        ItemId.CUSTAP_BERRY: ("HOLD_EFFECT_PINCH_PRIORITY", "PLUCK_EFFECT_NONE"),
+    }
+    pluck_up = {
+        Stat.ATK: "ATK",
+        Stat.DEF: "DEF",
+        Stat.SPE: "SPEED",
+        Stat.SPA: "SPATK",
+        Stat.SPD: "SPDEF",
+    }
+    holds = (DECOMP / "generated/item_hold_effects.txt").read_text().split()
+    data = {
+        d["name"]: d
+        for d in (
+            json.loads(f.read_text(encoding="utf-8"))
+            for f in sorted((DECOMP / "res/items/data").glob("*.json"))
+        )
+    }
+    pinch = 0
+    for name, eid in DECOMP_ITEM_TO_ID.items():
+        if eid == ItemId.PINCH_BERRY:
+            pinch += 1
+            hold = holds.index(data[name]["holdEffect"])
+            stat = PINCH_STAT_HOLD_EFFECTS[hold][1]
+            assert data[name]["pluckEffect"] == f"PLUCK_EFFECT_{pluck_up[stat]}_UP", name
+            assert "berryData" in data[name], name
+        elif eid in want:
+            assert (data[name]["holdEffect"], data[name]["pluckEffect"]) == want[eid], name
+            assert "berryData" in data[name], name
+    assert pinch == len(PINCH_STAT_HOLD_EFFECTS) == 5
+    lib = (DECOMP / "src/battle/battle_lib.c").read_text(encoding="utf-8")
+    trigger = lib[lib.index("BOOL BattleSystem_TriggerHeldItem(") :]
+    stat_names = {Stat.ATK: "ATTACK", Stat.DEF: "DEFENSE", Stat.SPE: "SPEED"}
+    stat_names |= {Stat.SPA: "SP_ATTACK", Stat.SPD: "SP_DEFENSE"}
+    for hold, (name, stat) in PINCH_STAT_HOLD_EFFECTS.items():
+        assert holds[hold] == name
+        case = trigger[trigger.index(f"case {name}:") :]
+        assert f"msgTemp = BATTLE_STAT_{stat_names[stat]};" in case[: case.index("break;")]
+
+
+def test_pinch_berries_need_a_param_to_divide_by(tables, names, kaizo_tables, kaizo_names):
+    """A stat pinch berry or Custap Berry with a param below 2 divides maxHP by zero
+    (battle_lib.c:4778, :1294; Gluttony halves the param): UNSUPPORTED (build_tables'
+    _pinch_divisor_ok). Kaizo sets Ganlon's and Apicot's param to 0."""
+    from nuzline.engine.ids import ItemId
+
+    for berry in ("Liechi Berry", "Ganlon Berry", "Salac Berry", "Petaya Berry", "Apicot Berry"):
+        assert int(tables.item_effect[names.item(berry)]) == ItemId.PINCH_BERRY, berry
+    assert int(tables.item_effect[names.item("Custap Berry")]) == ItemId.CUSTAP_BERRY
+    for berry in ("Ganlon Berry", "Apicot Berry"):
+        i = kaizo_names.item(berry)
+        assert int(kaizo_tables.item_hold_param[i]) == 0
+        assert int(kaizo_tables.item_effect[i]) == ItemId.UNSUPPORTED, berry
+    i = kaizo_names.item("Liechi Berry")
+    assert int(kaizo_tables.item_effect[i]) == ItemId.PINCH_BERRY

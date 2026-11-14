@@ -169,11 +169,11 @@ def test_pool_lists_holdable_bag_items(tables, names):
     from nuzline.engine.coverage import Support
 
     # Razor Claw is unsupported (Quick Claw was, until K3b2 Task 8).
-    bag = [(names.item(n), 1) for n in ("Razor Claw", "Leftovers", "Oran Berry", "Honey")]
+    bag = [(names.item(n), 1) for n in ("Razor Claw", "Scope Lens", "Oran Berry", "Honey")]
     report = check_pool(tables, names, [], (), bag=bag)
     assert sorted(report.missing) == [
-        "bag: Leftovers (held item UNSUPPORTED)",
         "bag: Razor Claw (held item UNSUPPORTED)",
+        "bag: Scope Lens (held item UNSUPPORTED)",
     ]
     assert not any("Honey" in line for line in report.missing)
     assert report.level == Support.NONE

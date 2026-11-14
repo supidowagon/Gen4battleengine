@@ -97,10 +97,10 @@ def test_usable_pool_excludes_and_trims(tables, names):
 
 
 def test_unsupported_item_is_taken_off(tables, names):
-    spec = replace(sample_party(names)[0], item=names.item("Leftovers"))
+    spec = replace(sample_party(names)[0], item=names.item("Scope Lens"))
     pool, lines = usable_pool(tables, names, [candidate(names, spec, 0)], ())
     assert pool[0].spec.item == 0
-    assert len(lines) == 1 and "Leftovers taken off" in lines[0]
+    assert len(lines) == 1 and "Scope Lens taken off" in lines[0]
 
 
 def test_pick_ambiguous_and_locations(names):
