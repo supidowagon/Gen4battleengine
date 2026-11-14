@@ -363,3 +363,49 @@ def test_ignore_type_checks_effects_match_decomp():
         ignores = eid in IGNORES_TYPE_CHECKS or eid in heal_path_only
         assert sets == ignores, DECOMP_EFFECT_NAMES[effect]
         assert not (eid in heal_path_only and eid in IGNORES_TYPE_CHECKS)
+
+
+def test_type_boost_hold_effects_match_decomp():
+    """TYPE_BOOST_HOLD_EFFECTS is sTypeBoostingItems (battle_lib.c:6514-6549), hold effects by
+    generated/item_hold_effects.txt and types by generated/pokemon_types.txt."""
+    from tools.effect_map import TYPE_BOOST_HOLD_EFFECTS
+
+    holds = (DECOMP / "generated/item_hold_effects.txt").read_text().split()
+    types = (DECOMP / "generated/pokemon_types.txt").read_text().split()
+    lib = (DECOMP / "src/battle/battle_lib.c").read_text(encoding="utf-8")
+    table = lib[
+        lib.index("sTypeBoostingItems[] = {") : lib.index("};", lib.index("sTypeBoostingItems"))
+    ]
+    pairs = re.findall(r"\{ (HOLD_EFFECT_\w+), (TYPE_\w+) \}", table)
+    assert len(pairs) == 33
+    want = {holds.index(h): (h, types.index(t)) for h, t in pairs}
+    assert {h: (n, int(t)) for h, (n, t) in TYPE_BOOST_HOLD_EFFECTS.items()} == want
+
+
+def test_hold_effect_ids_name_their_hold_effects():
+    from tools.effect_map import HOLD_EFFECT_TO_ID
+
+    holds = (DECOMP / "generated/item_hold_effects.txt").read_text().split()
+    for effect, (name, _) in HOLD_EFFECT_TO_ID.items():
+        assert holds[effect] == name
+
+
+def test_held_item_ids_follow_the_data():
+    """Every resist berry DECOMP_ITEM_TO_ID names has a resist hold effect, and every resist
+    hold effect has its berry; the berries with no hold effect (NO_EFFECT_BERRY) are exactly
+    the items with berryData (sBerryItemIDs, tools/dataproc/src/itemproc.c:272) and no hold
+    effect."""
+    from nuzline.engine.ids import ItemId
+    from tools.effect_map import DECOMP_ITEM_TO_ID, RESIST_BERRY_HOLD_EFFECTS, held_item_ids
+
+    items = json.loads(Path("data/intermediate/items.json").read_text(encoding="utf-8"))
+    by_name = {i["name"]: i for i in items}
+    resist = {n for n, e in DECOMP_ITEM_TO_ID.items() if e == ItemId.RESIST_BERRY}
+    assert sorted(by_name[n]["hold_effect"] for n in resist) == sorted(RESIST_BERRY_HOLD_EFFECTS)
+    data = [
+        json.loads(f.read_text(encoding="utf-8"))
+        for f in sorted((DECOMP / "res/items/data").glob("*.json"))
+    ]
+    plain = {d["name"] for d in data if "berryData" in d and d["holdEffect"] == "HOLD_EFFECT_NONE"}
+    ids = held_item_ids(items)
+    assert {i["name"] for i, e in zip(items, ids) if e == ItemId.NO_EFFECT_BERRY} == plain

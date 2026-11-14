@@ -86,6 +86,9 @@ def test_kaizo_item_maps_need_the_vanilla_name_and_hold_effect():
     vanilla += [_item("Potion", 0), _item("Potion", 0)]
     kaizo = [_item("ORAN BERRY", 3), _item("Sitrus Berry", 9), _item("Lum Clone", 3)]
     kaizo += [_item("Potion", 0), _item("Elixir", 0)]
+    # held_item_ids reads the berry range (Cheri..Rowap, effect_map.FIRST_BERRY / LAST_BERRY).
+    berries = [_item("Cheri Berry", 5), _item("Rowap Berry", 47)]
+    vanilla, kaizo = vanilla + berries, kaizo + berries
     hold, bag = build_tables._item_maps(kaizo, vanilla)
     assert hold[0] == int(ItemId.ORAN_BERRY)  # the same name up to spelling, same hold effect
     assert hold[1] == hold[2] == int(ItemId.UNSUPPORTED)  # re-purposed (hold effect), renamed
@@ -94,10 +97,11 @@ def test_kaizo_item_maps_need_the_vanilla_name_and_hold_effect():
 
 
 def test_kaizo_bag_item_needs_vanilla_restore_amount():
-    vanilla = [{"name": "Potion", "hold_effect": 0, "hp_restored": 20}]
-    kaizo = [{"name": "Potion", "hold_effect": 0, "hp_restored": 30}]
-    assert build_tables._item_maps(kaizo, vanilla)[1] == [int(TrainerItemId.UNSUPPORTED)]
-    assert build_tables._item_maps(vanilla, vanilla)[1] == [int(TrainerItemId.POTION)]
+    berries = [{"name": n, "hold_effect": h} for n, h in (("Cheri Berry", 5), ("Rowap Berry", 47))]
+    vanilla = [{"name": "Potion", "hold_effect": 0, "hp_restored": 20}, *berries]
+    kaizo = [{"name": "Potion", "hold_effect": 0, "hp_restored": 30}, *berries]
+    assert build_tables._item_maps(kaizo, vanilla)[1][0] == int(TrainerItemId.UNSUPPORTED)
+    assert build_tables._item_maps(vanilla, vanilla)[1][0] == int(TrainerItemId.POTION)
 
 
 # --- the Kaizo ROM-change gate counts against the diff, not the entries (final review I1) --

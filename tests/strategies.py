@@ -4,7 +4,7 @@ actions and chance outcomes.
 Everything stays inside the M1 implemented set: species from ``M1_SPECIES``, moves
 from their level-up learnsets with a supported effect (``move_effect !=
 UNSUPPORTED``), their own abilities (all implemented), an implemented held item
-(``M1_ITEMS``) or none;
+(``M1_ITEMS`` and ``ITEM_GROUPS``) or none;
 the opponent's bag holds Potions or nothing in each slot.
 State fields that no M1 mechanic can set are left at 0, except those the engines
 read (screens, Tailwind, Trick Room, Mud Sport, weather), which are drawn so the
@@ -90,6 +90,118 @@ M1_ITEMS = (
     "Quick Claw",
     "Rindo Berry",
     "Chilan Berry",
+)
+# E2 batch 1 (held items by hold effect): drawn as groups next to M1_ITEMS
+# (``_held_item``), so that the older items keep their share. Every type-boosting hold effect
+# (sTypeBoostingItems: the plates and incenses too), the other damage items of
+# BattleSystem_CalcMoveDamage, the Choice items, Expert Belt, Life Orb, every resist berry and
+# items with no hold effect (berries, which Pluck eats, and others).
+TYPE_BOOST_ITEMS = (
+    "Silk Scarf",
+    "Black Belt",
+    "Sharp Beak",
+    "Poison Barb",
+    "Soft Sand",
+    "Hard Stone",
+    "SilverPowder",
+    "Spell Tag",
+    "Metal Coat",
+    "Charcoal",
+    "Mystic Water",
+    "Miracle Seed",
+    "Magnet",
+    "TwistedSpoon",
+    "NeverMeltIce",
+    "Dragon Fang",
+    "BlackGlasses",
+    "Sea Incense",
+    "Wave Incense",
+    "Rock Incense",
+    "Rose Incense",
+    "Odd Incense",
+    "Flame Plate",
+    "Splash Plate",
+    "Zap Plate",
+    "Meadow Plate",
+    "Icicle Plate",
+    "Fist Plate",
+    "Toxic Plate",
+    "Earth Plate",
+    "Sky Plate",
+    "Mind Plate",
+    "Insect Plate",
+    "Stone Plate",
+    "Spooky Plate",
+    "Draco Plate",
+    "Dread Plate",
+    "Iron Plate",
+)
+DAMAGE_ITEMS = (
+    "Choice Band",
+    "Choice Specs",
+    "Choice Scarf",
+    "Muscle Band",
+    "Wise Glasses",
+    "Expert Belt",
+    "Life Orb",
+    "Light Ball",
+    "Thick Club",
+    "Metal Powder",
+    "DeepSeaTooth",
+    "DeepSeaScale",
+    "Soul Dew",
+    "Adamant Orb",
+    "Lustrous Orb",
+    "Griseous Orb",
+)
+RESIST_BERRIES = (
+    "Occa Berry",
+    "Passho Berry",
+    "Wacan Berry",
+    "Rindo Berry",
+    "Yache Berry",
+    "Chople Berry",
+    "Kebia Berry",
+    "Shuca Berry",
+    "Coba Berry",
+    "Payapa Berry",
+    "Tanga Berry",
+    "Charti Berry",
+    "Kasib Berry",
+    "Haban Berry",
+    "Colbur Berry",
+    "Babiri Berry",
+    "Chilan Berry",
+)
+NO_EFFECT_ITEMS = ("Razz Berry", "Nanab Berry", "Belue Berry", "Nugget", "Blue Scarf", "Bicycle")
+ITEM_GROUPS = (TYPE_BOOST_ITEMS, DAMAGE_ITEMS, RESIST_BERRIES, NO_EFFECT_ITEMS)
+# The species items' holders (BattleSystem_CalcMoveDamage, battle_lib.c:6730-6774), none of
+# them an M1 species: ``_draw_species_item`` makes an active Pokemon one of them, holding the
+# item, with the rest of its data (stats, types, ability) kept, which both engines read alike.
+# Each orb's holder also gets a move of a type its orb boosts in slot 0.
+SPECIES_ITEMS = (
+    ("Pikachu", "Light Ball", ()),
+    ("Cubone", "Thick Club", ()),
+    ("Marowak", "Thick Club", ()),
+    ("Ditto", "Metal Powder", ()),
+    ("Clamperl", "DeepSeaTooth", ()),
+    ("Clamperl", "DeepSeaScale", ()),
+    ("Latias", "Soul Dew", ()),
+    ("Latios", "Soul Dew", ()),
+    ("Dialga", "Adamant Orb", ("Dragon Claw", "Metal Claw")),
+    ("Palkia", "Lustrous Orb", ("DragonBreath", "Water Gun")),
+    ("Giratina", "Griseous Orb", ("Dragon Claw", "Shadow Ball")),
+)
+# Items whose effect needs their holder to act (the Choice lock and Scarf, Life Orb's recoil,
+# Expert Belt): ``_draw_battle_item`` gives them to an active Pokemon on purpose.
+BATTLE_ITEMS = (
+    "Life Orb",
+    "Choice Band",
+    "Choice Specs",
+    "Choice Scarf",
+    "Expert Belt",
+    "Muscle Band",
+    "Wise Glasses",
 )
 M1_BAG_ITEMS = ("", "Potion")  # the opponent's bag (ids.TrainerItemId)
 
@@ -208,6 +320,12 @@ def possible_genders(ratio: int) -> tuple[int, ...]:
     return (0, 1)
 
 
+def _held_item() -> st.SearchStrategy[str]:
+    """Half the time an ``M1_ITEMS`` name, else one of an ``ITEM_GROUPS`` group."""
+    groups = st.sampled_from(ITEM_GROUPS).flatmap(st.sampled_from)
+    return st.one_of(st.sampled_from(M1_ITEMS), groups)
+
+
 @st.composite
 def supported_pokemon(draw, tables: Tables, names: Names) -> PokemonSpec:
     """A random M1 Pokemon: level 5-20, random nature, IVs, EVs (at most 510 in all),
@@ -225,7 +343,7 @@ def supported_pokemon(draw, tables: Tables, names: Names) -> PokemonSpec:
     # a slot whose ability is not implemented (Run Away, Damp, ...) is never drawn
     supported = np.asarray(tables.species_abilities[species]) != AbilityId.UNSUPPORTED
     ability_slot = draw(st.sampled_from([i for i, a in enumerate(abilities) if a and supported[i]]))
-    item = names.item(draw(st.sampled_from(M1_ITEMS)))
+    item = names.item(draw(_held_item()))
     gender = draw(st.sampled_from(possible_genders(int(tables.species_gender[species]))))
     max_hp = _max_hp(tables, species, ivs, evs, level, nature)
     hp = draw(st.one_of(st.just(max_hp), st.integers(0, max_hp)))
@@ -282,6 +400,56 @@ def _draw_terrain(draw, tables: Tables, a: dict) -> None:
         a["terrain"][...] = draw(st.sampled_from(TERRAINS))
 
 
+def _draw_battle_item(draw, tables: Tables, a: dict, side: int, active: int, names: Names) -> None:
+    """Maybe (1 in 2) give the active Pokemon one of ``BATTLE_ITEMS``, or a
+    ``TYPE_BOOST_ITEMS`` item of the type of one of its moves (so the boost applies)."""
+    if draw(st.booleans()):
+        return
+    # Expert Belt weighs three: it acts only on a super-effective hit.
+    choice = draw(st.sampled_from((*BATTLE_ITEMS, "Expert Belt", "Expert Belt", "type")))
+    if choice == "type":
+        move = int(draw(st.sampled_from([int(m) for m in a["moves"][side, active] if m])))
+        kind = int(tables.move_type[move])
+        fits = [n for n in TYPE_BOOST_ITEMS if int(tables.item_param[names.item(n), 1]) == kind]
+        if not fits:  # a type no item boosts (the ??? type)
+            return
+        choice = draw(st.sampled_from(fits))
+    a["item"][side, active] = names.item(choice)
+
+
+def _draw_species_item(draw, tables: Tables, a: dict, side: int, active: int, names: Names) -> None:
+    """Maybe (1 in 4) make the active Pokemon a ``SPECIES_ITEMS`` species holding its item
+    (the species items only work for their species), an orb's holder with a move its orb
+    boosts in slot 0 (full PP)."""
+    if draw(st.integers(0, 3)) != 0:
+        return
+    species, item, moves = draw(st.sampled_from(SPECIES_ITEMS))
+    a["species"][side, active] = names.species(species)
+    a["item"][side, active] = names.item(item)
+    if moves:
+        move = names.move(draw(st.sampled_from(moves)))
+        a["moves"][side, active, 0] = move
+        a["pp"][side, active, 0] = int(tables.move_pp[move])
+
+
+def _draw_pursuit(draw, tables: Tables, a: dict, side: int, active: int, names: Names) -> None:
+    """Maybe (1 in 6) put Pursuit (full PP) in a move slot of the active Pokemon, so that
+    ``legal_action_pair``'s Pursuit-against-a-switch draw has a pursuer."""
+    if draw(st.integers(0, 5)) != 0:
+        return
+    pursuit = names.move("Pursuit")
+    k = draw(st.integers(0, 3))
+    a["moves"][side, active, k] = pursuit
+    a["pp"][side, active, k] = int(tables.move_pp[pursuit])
+
+
+def _draw_choice_lock(draw, a: dict, side: int, active: int) -> None:
+    """``choice_lock``: none or one of the active Pokemon's moves, whatever its item (a lock
+    without a Choice item is what a lost item would leave; ``UpdateMoveBuffers`` clears it)."""
+    moves = [int(m) for m in a["moves"][side, active] if m]
+    a["choice_lock"][side] = draw(st.sampled_from([0, 0, *moves]))
+
+
 def _draw_lock(draw, a: dict, side: int, active: int, names: Names) -> None:
     """Maybe lock the active Pokemon into a Bide or Rollout / Ice Ball it knows (not while
     it sleeps: ``step`` unlocks a sleeper), with the matching hidden counters: Bide's
@@ -306,6 +474,9 @@ def _draw_lock(draw, a: dict, side: int, active: int, names: Names) -> None:
 def supported_state(draw, tables: Tables, names: Names) -> BattleState:
     """A mid-battle state: 1-6 Pokemon per side (``supported_pokemon``), any active
     slot, random PP, status counters, stat stages, confusion, Taunt, Bind, Leech Seed, Disable (a move of the active and its turns), Defense Curl, a Bide / Rollout lock (``_draw_lock``),
+    Pursuit in a slot (``_draw_pursuit``), a Choice item, Life Orb or other battle item
+    (``_draw_battle_item``), a species item's holder (``_draw_species_item``), a Choice lock
+    (``_draw_choice_lock``),
     Water Sport, Foresight, Stealth Rock, screens, Tailwind, Trick Room, Mud Sport, weather,
     the turn, each active's ``fake_out_turn`` (0 to ``turn + 1``), ``move_hit`` (none or
     one of the foe's active's moves) and ``last_move`` (none, one of its own moves or
@@ -362,7 +533,11 @@ def supported_state(draw, tables: Tables, names: Names) -> BattleState:
         a["disabled_move"][side] = disabled
         turns = draw(st.integers(0, _DISABLE_MAX))
         a["disable_turns"][side] = turns if disabled else 0
+        _draw_pursuit(draw, tables, a, side, active, names)
         _draw_lock(draw, a, side, active, names)
+        _draw_battle_item(draw, tables, a, side, active, names)
+        _draw_species_item(draw, tables, a, side, active, names)
+        _draw_choice_lock(draw, a, side, active)
     count = draw(st.integers(0, BAG_SLOTS))
     bag = draw(st.lists(st.sampled_from(M1_BAG_ITEMS), min_size=count, max_size=count))
     a["trainer_items"][1] = [names.item(i) for i in bag] + [0] * (BAG_SLOTS - count)
@@ -409,11 +584,29 @@ def _draw_exp(draw, tables: Tables, a: dict) -> None:
 def legal_action_pair(draw, tables: Tables, state: BattleState) -> jnp.ndarray:
     """``int32[2]``: a legal action for each side: the player's from
     ``engine.actions.legal_actions``, the opponent's (moves, switches and bag items) from
-    ``legal_opponent_actions``."""
-    acts = []
-    for mask in (legal_actions(tables, state, 0), legal_opponent_actions(tables, state)):
-        legal = np.flatnonzero(np.asarray(mask))
-        acts.append(draw(st.sampled_from(legal.tolist())))
+    ``legal_opponent_actions``. One draw in four, when a side can use Pursuit and the other
+    can switch, picks that pair: the Pursuit hit on a switching Pokemon (``step._pursuit_hit``)
+    is rare under uniform draws."""
+    masks = [
+        np.asarray(legal_actions(tables, state, 0)),
+        np.asarray(legal_opponent_actions(tables, state)),
+    ]
+    legal = [np.flatnonzero(m).tolist() for m in masks]
+    moves = np.asarray(state.moves)[np.arange(2), np.asarray(state.active)]
+    pursuit = np.asarray(tables.move_effect)[moves] == EffectId.PURSUIT
+    pairs = [
+        (k, j, side)
+        for side in (0, 1)
+        for k in range(4)
+        if pursuit[side, k] and masks[side][k]
+        for j in range(4, 10)
+        if masks[1 - side][j]
+    ]
+    if pairs and draw(st.integers(0, 3)) == 0:
+        k, j, side = draw(st.sampled_from(pairs))
+        acts = [k, j] if side == 0 else [j, k]
+    else:
+        acts = [draw(st.sampled_from(options)) for options in legal]
     return jnp.asarray(acts, jnp.int32)
 
 

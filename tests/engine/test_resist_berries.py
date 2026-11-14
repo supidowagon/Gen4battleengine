@@ -55,13 +55,16 @@ def _kept(out, side, item, names):
     return int(out.item[side, 0]) == names.item(item) and int(out.item_consumed[side, 0]) == 0
 
 
-def test_tables_map_rindo_and_chilan_in_both_games(tables, names, kaizo_tables, kaizo_names):
+def test_tables_map_the_resist_berries_in_both_games(tables, names, kaizo_tables, kaizo_names):
     for t, n in ((tables, names), (kaizo_tables, kaizo_names)):
-        for item, resisted in (("Rindo Berry", Type.GRASS), ("Chilan Berry", RESIST_ANY_NORMAL)):
+        for item, resisted in (
+            ("Rindo Berry", Type.GRASS),
+            ("Chilan Berry", RESIST_ANY_NORMAL),
+            ("Occa Berry", Type.FIRE),
+            ("Babiri Berry", Type.STEEL),
+        ):
             assert int(t.item_effect[n.item(item)]) == ItemId.RESIST_BERRY, item
             assert int(t.item_param[n.item(item), 1]) == resisted, item
-        # Only the berries whose code is implemented are supported.
-        assert int(t.item_effect[n.item("Occa Berry")]) == ItemId.UNSUPPORTED
 
 
 @pytest.mark.slow
