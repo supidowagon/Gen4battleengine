@@ -7,13 +7,17 @@ import pytest
 
 from tools.kaizo.backlog import (
     KINDS,
+    ancestors,
     battle_format,
     battle_split,
     battles,
+    evolution_parents,
     group_kind,
     kind_counts,
+    levelup_moves,
     new_by_split,
     partner_unknown,
+    reachable_species,
 )
 
 
@@ -125,3 +129,47 @@ def test_kind_counts_cover_every_kind():
     assert list(c) == list(KINDS)
     assert c["AI flags"] == 1 and c["AI move effects"] == 1 and c["abilities"] == 1
     assert sum(c.values()) == 3
+
+
+METHODS = ["none", "level_happiness", "level", "trade", "use_item"]
+# 1 -> 2 at level 16 -> 3 at level 36; 4 -> 5 by friendship; 6 -> 7 by trade, 7 -> 8 at 20;
+# 9 -> 10 at 30 or by item (either path).
+EVOS = {
+    "1": [[2, 16, 2]],
+    "2": [[2, 36, 3]],
+    "3": [],
+    "4": [[1, 0, 5]],
+    "6": [[3, 0, 7]],
+    "7": [[2, 20, 8]],
+    "9": [[2, 30, 10], [4, 99, 10]],
+}
+
+
+def test_evolution_parents():
+    parents = evolution_parents(EVOS, METHODS)
+    assert parents[2] == [(1, "level", 16)]
+    assert parents[5] == [(4, "level_happiness", 0)]
+    assert sorted(parents[10]) == [(9, "level", 30), (9, "use_item", 99)]
+    assert 1 not in parents
+
+
+def test_reachable_species_by_cap():
+    parents = evolution_parents(EVOS, METHODS)
+    all_ = list(range(1, 11))
+    at15 = reachable_species(all_, parents, 15)
+    assert 2 not in at15 and 3 not in at15
+    assert at15[1] is False  # no pre-evolution: plain
+    assert at15[5] is True  # friendship: assumed at any level
+    assert at15[7] is True and 8 not in at15  # trade assumed; then a level step above cap
+    assert at15[10] is True  # only the item path fits
+    at36 = reachable_species(all_, parents, 36)
+    assert at36[2] is False and at36[3] is False
+    assert at36[8] is True  # trade step anywhere on the path keeps it assumed
+    assert at36[10] is False  # the level path fits: preferred over the assumed one
+
+
+def test_ancestors_and_levelup_moves():
+    parents = evolution_parents(EVOS, METHODS)
+    assert sorted(ancestors(3, parents)) == [1, 2, 3]
+    assert ancestors(1, parents) == [1]
+    assert levelup_moves([[1, 33], [16, 55], [17, 66], [0, 77]], 16) == {33, 55, 77}

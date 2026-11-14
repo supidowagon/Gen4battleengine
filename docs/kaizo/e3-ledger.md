@@ -7,10 +7,10 @@ Branch `claude/engine-e3-remeasure-632cbe`, worktree `strange-feistel-a35c9f`. E
 ## RESUME
 
 - Batch 1 (whole-game opponent numbers): done, committed; report sent.
-- Batch 2 (player side): plan sent 2026-11-14 (A: upper bound from existing data, per split
-  by cap; B: real availability from ROM encounters, items, tutors, a later task). Waiting
-  for the managing session's go; build nothing before it.
-- Batch 3 (prep starting HP and status): report sent 2026-11-14. Engine and line --party
+- Batch 2 (player side): option A done (go from the managing session, 2026-11-14): the
+  "Your side (upper bound)" and "AI partners" sections of the backlog. Option B is PARKED
+  (see below); do not start it without a new go.
+- Batch 3 (prep starting HP and status): report sent 2026-11-14 (read-only, nothing built). Engine and line --party
   support any HP and status, sleep turns included; prep picks HP regions itself, prestatus is
   poison, burn or paralysis only, drops the save's HP and status (leveling.py), and cannot
   pin a chosen state; line [[team]] has no hp or status keys.
@@ -34,3 +34,29 @@ Branch `claude/engine-e3-remeasure-632cbe`, worktree `strange-feistel-a35c9f`. E
 - AI move-effect groups are counted for every row of every split (needed per split:
   53, 80, 92, 98, 78, 91, 85, 128, 65, 79).
 - Not counted: the player's side, and AI partner teams in multi battles.
+
+## Batch 2 facts (option A)
+
+- Player side, upper bound: 333 groups, 268 shared with the opponent union, 65 player-only
+  (AI reads of your moves/abilities 13, move effects 22, held items 25, abilities 5); 63 of
+  them from Roark on, 2 (Judgment) from Galactic (cap 100).
+- Hold effects with no battle effect (not counted): Amulet Coin/Luck Incense, Cleanse Tag/
+  Pure Incense, Everstone and the seven trade-evolution items; `NO_BATTLE_EFFECT` in
+  backlog.py, re-checked against the decomp on every run. Kept as battle-relevant: Exp.
+  Share, Lucky Egg (experience is modelled), Soothe Bell (battle_system.c:746), Smoke Ball
+  (Battler_IsTrappedMsg, read by Teleport, battle_script.c:6150).
+- AI partners (11 rows): 100 missing groups, none outside the opponent union.
+
+## Parked: option B, real per-split player availability
+
+Not started; the managing session will raise it with the user (matters for prep and
+training). Scope: which species, TMs, held items and tutor moves the player can really have
+by each split, replacing option A's upper bound.
+- Wild encounters from the patched ROM's encounter archive (tools/rom), cross-checked
+  against the spreadsheet's Encounters / RAW Field Enc / RAW Water Enc sheets.
+- Gifts, trades, statics, honey trees, Great Marsh: the sheet's Non-Wild Encounters,
+  Universal Encounters and Great Marsh Encounters (free text: hand-curated, cited).
+- Field items, hidden items, marts, TM locations and shard tutors (tutor_moves.json has
+  location stems) from ROM field scripts and mart data.
+- Area -> split from the split sheets' section names (first split an area appears in).
+- Encounter limits and Nuzlocke rules are the user's run rules: not in any data; ask.

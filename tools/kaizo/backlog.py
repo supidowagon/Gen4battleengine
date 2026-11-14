@@ -123,6 +123,389 @@ def kind_counts(groups):
     return {k: c[k] for k in KINDS}
 
 
+# Evolution methods (evolution_methods.json names) whose parameter is the level the evolution
+# needs. Every other method (friendship, trade, items, known move, location) is taken as
+# reachable at any level: the player-side bound assumes it.
+LEVEL_METHODS = frozenset(
+    {
+        "level",
+        "level_atk_gt_def",
+        "level_atk_eq_def",
+        "level_atk_lt_def",
+        "level_pid_low",
+        "level_pid_high",
+        "level_ninjask",
+        "level_shedinja",
+        "level_male",
+        "level_female",
+    }
+)
+
+
+def evolution_parents(evolutions, methods):
+    """``{child species: [(parent species, method name, param), ...]}`` from
+    ``evolutions.json`` (species -> ``[[method, param, target], ...]``) and the method names."""
+    out = collections.defaultdict(list)
+    for parent, evos in evolutions.items():
+        for method, param, target in evos:
+            if target:
+                out[target].append((int(parent), methods[method], param))
+    return dict(out)
+
+
+def reachable_species(species, parents, cap):
+    """``{species: assumed}`` for each of ``species`` the player can have at level ``cap``,
+    upper bound: a species with no pre-evolution is reachable; an evolved one when a parent
+    is and the step's level (a ``LEVEL_METHODS`` step) is at most ``cap``. ``assumed`` is True
+    when every path needs a non-level step (friendship, trade, item, ...), which the bound
+    takes as possible at any level."""
+    memo = {}
+
+    def reach(s, stack=()):
+        if s in memo:
+            return memo[s]
+        if s in stack:  # no evolution cycles in the data; refuse rather than loop
+            raise ValueError(f"evolution cycle through species {s}")
+        best = None
+        for parent, method, param in parents.get(s, ()):
+            r = reach(parent, (*stack, s))
+            if r is None:
+                continue
+            if method in LEVEL_METHODS:
+                if param > cap:
+                    continue
+                step = r
+            else:
+                step = True
+            best = step if best is None else best and step
+        memo[s] = False if s not in parents else best
+        return memo[s]
+
+    return {s: r for s in species if (r := reach(s)) is not None}
+
+
+def ancestors(s, parents):
+    """``s`` and every species it evolves from."""
+    out, todo = [], [s]
+    while todo:
+        x = todo.pop()
+        if x not in out:
+            out.append(x)
+            todo.extend(p for p, _, _ in parents.get(x, ()))
+    return out
+
+
+def levelup_moves(learnset, cap):
+    """The moves of a ``[[level, move], ...]`` learnset learned at level ``cap`` or lower."""
+    return {move for level, move in learnset if level <= cap}
+
+
+# Hold effects with no effect on the fight (generated/item_hold_effects.txt names): why, and
+# the decomp line that uses the effect (file, line, a token that line or the next two hold).
+# ``player_section`` re-checks every citation and that no battle code (src/battle,
+# include/battle, res/battle) names the effect except at the cited line.
+_TRADE_EVO = ("held for a trade evolution, outside the battle", "src/pokemon.c", 3735, "EVO_TRADE")
+NO_BATTLE_EFFECT = {
+    "HOLD_EFFECT_MONEY_UP": (
+        "doubles the prize money (prizeMoneyMul) and nothing else",
+        "src/battle/battle_lib.c",
+        4127,
+        "prizeMoneyMul",
+    ),
+    "HOLD_EFFECT_ENCOUNTERS_DOWN": (
+        "read by item id in the field's wild-encounter code only",
+        "src/overlay006/wild_encounters.c",
+        925,
+        "ITEM_CLEANSE_TAG",
+    ),
+    "HOLD_EFFECT_NO_EVOLVE": (
+        "read by the evolution check only",
+        "src/pokemon.c",
+        3544,
+        "HOLD_EFFECT_NO_EVOLVE",
+    ),
+    "HOLD_EFFECT_EVOLVE_SEADRA": _TRADE_EVO,
+    "HOLD_EFFECT_EVOLVE_PORYGON": _TRADE_EVO,
+    "HOLD_EFFECT_EVOLVE_RHYDON": _TRADE_EVO,
+    "HOLD_EFFECT_EVOLVE_ELECTABUZZ": _TRADE_EVO,
+    "HOLD_EFFECT_EVOLVE_MAGMAR": _TRADE_EVO,
+    "HOLD_EFFECT_EVOLVE_PORYGON2": _TRADE_EVO,
+    "HOLD_EFFECT_EVOLVE_DUSCLOPS": _TRADE_EVO,
+}
+
+
+def _check_no_battle_effect(decomp):
+    """Verify ``NO_BATTLE_EFFECT`` against the decomp; ``ValueError`` on a stale citation."""
+    battle = [
+        p
+        for sub in ("src/battle", "include/battle", "res/battle")
+        for p in (decomp / sub).rglob("*")
+        if p.suffix in (".c", ".h", ".s")
+    ]
+    text = {p: p.read_text(encoding="utf-8", errors="replace").splitlines() for p in battle}
+    for name, (_, path, line, token) in NO_BATTLE_EFFECT.items():
+        lines = (decomp / path).read_text(encoding="utf-8", errors="replace").splitlines()
+        if not any(token in x for x in lines[line - 1 : line + 2]):
+            raise ValueError(f"{name}: {path}:{line} no longer holds {token!r}")
+        for p, ls in text.items():
+            for i, x in enumerate(ls, 1):
+                cited = p == decomp / path and i == line
+                if re.search(rf"\b{name}\b", x) and not cited:
+                    raise ValueError(f"{name} is read by battle code at {p}:{i}")
+
+
+def player_section(
+    L, order, whole, by_id, split_rows, extra, check, key, tables, names, d, items, decomp
+):
+    """Append the player-side upper bound and the AI partners' line to ``L`` (see the
+    section's own text for the assumptions)."""
+    import json
+    import tomllib
+
+    import numpy as np
+
+    from nuzline.ai.policy import player_ability_refusal, player_move_refusal
+    from nuzline.engine.coverage import (
+        IMPLEMENTED_ABILITIES,
+        IMPLEMENTED_ITEMS,
+        Support,
+        move_effect_line,
+    )
+    from nuzline.engine.ids import AbilityId, ItemId
+
+    def load(name):
+        return json.loads((d / name).read_text(encoding="utf-8"))
+
+    learn, tm_learn = load("learnsets.json"), load("tm_learnsets.json")
+    tutor_learn, egg = load("tutor_learnsets.json"), load("egg_moves.json")
+    tutor_moves, form_rows = load("tutor_moves.json"), load("form_rows.json")
+    tm_moves = [i["teaches_move"] for i in items if i.get("teaches_move")]
+    parents = evolution_parents(load("evolutions.json"), load("evolution_methods.json"))
+    root = pathlib.Path(__file__).resolve().parents[2]
+    caps = tomllib.loads((root / "data/kaizo/level_caps.toml").read_text(encoding="utf-8"))
+    cap_of = {s: caps["splits"][s.removesuffix(" Split")] for s in order}
+    # Species ids 1..n-1, n the Egg's id; the ids from the Egg on are not Pokemon.
+    species = list(range(1, names.species_names.index("Egg")))
+    rows_of = {s: [r for r in form_rows[s] if r >= 0] for s in species}
+
+    pmembers = collections.defaultdict(set)
+    move_cache = {}
+
+    def move_groups(move, row):
+        if (move, row) not in move_cache:
+            out = set()
+            support, name = move_effect_line(tables, names, move, row)
+            if support == Support.NONE:
+                k, member = key(f"you: {name} (move effect UNSUPPORTED)")
+                out.add(k)
+                pmembers[k].add(member or name)
+            if (reason := player_move_refusal(move)) is not None:
+                k = ("AI", f"reads your move: {reason}")
+                out.add(k)
+                pmembers[k].add(names.move_names[move])
+            move_cache[move, row] = out
+        return move_cache[move, row]
+
+    sa = np.asarray(tables.species_abilities)
+    sad = np.asarray(tables.species_abilities_decomp)
+
+    def row_groups(row, s):
+        """Groups of personal ``row`` (species ``s``) at any level: its abilities, TM/HM and
+        tutor moves, and the egg moves of its family's root."""
+        out = set()
+        for slot in (0, 1):
+            dec = int(sad[row, slot])
+            aname = names.ability_names[dec]
+            if IMPLEMENTED_ABILITIES.get(AbilityId(int(sa[row, slot])), Support.NONE) == (
+                Support.NONE
+            ):
+                out.add(("ability", aname))
+            if (reason := player_ability_refusal(dec)) is not None:
+                k = ("AI", f"reads your ability: {reason}")
+                out.add(k)
+                pmembers[k].add(aname)
+        moves = {tm_moves[i] for i in tm_learn.get(str(row), ())}
+        moves |= {tutor_moves[i]["move"] for i in tutor_learn.get(str(row), ())}
+        for a in ancestors(s, parents):
+            moves |= set(egg.get(str(a), ()))
+        for m in moves:
+            out |= move_groups(m, row)
+        return out
+
+    fixed = {(s, r): row_groups(r, s) for s in species for r in rows_of[s]}
+
+    _check_no_battle_effect(decomp)
+    hold_names = (decomp / "generated/item_hold_effects.txt").read_text().split()
+    ie, hold = np.asarray(tables.item_effect), np.asarray(tables.item_hold_effect)
+    held, inert = set(), collections.defaultdict(list)
+    for i in range(1, len(hold)):
+        h = int(hold[i])
+        if not h or IMPLEMENTED_ITEMS.get(ItemId(int(ie[i])), Support.NONE) != Support.NONE:
+            continue
+        if hold_names[h] in NO_BATTLE_EFFECT:
+            inert[h].append(names.item_names[i])
+            continue
+        k = ("held item effect", f"#{h}")
+        held.add(k)
+        pmembers[k].add(names.item_names[i])
+
+    needs, reach_n, assumed_n = {}, {}, {}
+    for s_name in order:
+        cap = cap_of[s_name]
+        reach = reachable_species(species, parents, cap)
+        reach_n[s_name], assumed_n[s_name] = len(reach), sum(reach.values())
+        groups = set(held)
+        for s in reach:
+            lv = set()
+            for a in ancestors(s, parents):
+                for r in rows_of.get(a, ()):
+                    lv |= levelup_moves(learn.get(str(r), ()), cap)
+            for r in rows_of[s]:
+                groups |= fixed[s, r]
+                for m in lv:
+                    groups |= move_groups(m, r)
+        needs[s_name] = groups
+    pwhole = set().union(*needs.values())
+    only = {s: needs[s] - whole for s in order}
+    only_new = new_by_split(order, only)
+    pw_only = pwhole - whole
+
+    def plabel(k):
+        kind, name = k
+        m = sorted(pmembers.get(k, ()))
+        if m:
+            shown = ", ".join(m[:6]) + (f", +{len(m) - 6} more" if len(m) > 6 else "")
+            return f"{kind} {name}: {shown}"
+        return f"{kind}: {name}"
+
+    L.extend(
+        [
+            "",
+            "## Your side (upper bound)",
+            "",
+            "What your own Pokemon could bring that the engine does not model, counted apart",
+            "from the opponent side. The headline is **player-only**: groups no opposing",
+            "trainer in any split needs (the opponent whole-game union above). It is an upper",
+            "bound under these assumptions:",
+            "",
+            "- Every species without a pre-evolution can be obtained in every split. An evolved",
+            "  species counts from the split whose cap reaches its evolution level; evolutions",
+            "  by friendship, trade, item, known move or place are taken as reachable at any",
+            "  level (the bracketed count). Evolved species met in the wild or as gifts before",
+            "  their evolution level are not seen, nor any encounter limit or Nuzlocke rule.",
+            "- Moves: level-up moves at or below the split's cap (data/kaizo/level_caps.toml)",
+            "  of the species and its pre-evolutions, plus every TM/HM and tutor move it is",
+            "  compatible with and its family's egg moves, in every split.",
+            "- Abilities: both of the species' abilities. Held items: every item with a hold",
+            "  effect, in every split (so held items all count from the first split).",
+            "- Also counted: the AI's refusals when your Pokemon knows a move or has an ability",
+            "  its scripts read but the engine does not carry (`player_move_refusal`,",
+            "  `player_ability_refusal`).",
+            "- Not counted: hold effects with no battle effect (listed below, from the decomp).",
+            "",
+            (
+                "| Split | Cap | Species reachable (via a non-level step) | Your groups "
+                "| Player-only | New player-only |"
+            ),
+            "|---|---|---|---|---|---|",
+        ]
+    )
+    for s in order:
+        L.append(
+            f"| {s} | {cap_of[s]} | {reach_n[s]} ({assumed_n[s]}) | {len(needs[s])} | "
+            f"{len(only[s])} | {len(only_new[s])} |"
+        )
+    L.append(f"| **Whole game** | | | {len(pwhole)} | {len(pw_only)} | {len(pw_only)} |")
+    L.extend(
+        [
+            "",
+            (
+                f"Of your {len(pwhole)} groups, {len(pwhole & whole)} are also needed by opposing"
+                f" trainers and {len(pw_only)} are player-only."
+            ),
+            "",
+            "### New player-only groups per split, by kind",
+            "",
+            "| Split | " + " | ".join(KINDS) + " | All |",
+            "|---|" + "---|" * (len(KINDS) + 1),
+        ]
+    )
+    for s in order:
+        c = kind_counts(only_new[s])
+        L.append(f"| {s} | " + " | ".join(str(c[k]) for k in KINDS) + f" | {len(only_new[s])} |")
+    c = kind_counts(pw_only)
+    L.append(
+        "| **Whole game** | "
+        + " | ".join(f"**{c[k]}**" for k in KINDS)
+        + f" | **{len(pw_only)}** |"
+    )
+    first = {k: s for s in order for k in only_new[s]}
+    L.extend(
+        [
+            "",
+            "### Player-only groups",
+            "",
+            "| Kind | Group | First split |",
+            "|---|---|---|",
+        ]
+        + [
+            f"| {group_kind(k)} | {plabel(k)} | {first[k]} |"
+            for k in sorted(
+                pw_only, key=lambda k: (KINDS.index(group_kind(k)), order.index(first[k]), k)
+            )
+        ]
+    )
+    L.extend(
+        [
+            "",
+            "### Hold effects with no battle effect (not counted)",
+            "",
+            "Each is cited where the decomp reads it, and no battle code (src/battle,",
+            "include/battle, res/battle) names it elsewhere; the tool re-checks both on every run.",
+            "",
+            "| Hold effect | Items | Why | Decomp |",
+            "|---|---|---|---|",
+        ]
+        + [
+            f"| #{h} {hold_names[h]} | {', '.join(sorted(inert[h]))} | "
+            f"{NO_BATTLE_EFFECT[hold_names[h]][0]} | "
+            f"{NO_BATTLE_EFFECT[hold_names[h]][1]}:{NO_BATTLE_EFFECT[hold_names[h]][2]} |"
+            for h in sorted(inert)
+        ]
+    )
+
+    # AI partners beside the player in multi battles: their own line, not in either count.
+    pids = sorted(
+        {
+            p.trainer
+            for t in [*split_rows, *(by_id[i] for i in extra)]
+            if t.format == "multi" and t.partner
+            for p in t.partner
+        }
+    )
+    pmem, perrs = collections.defaultdict(set), []
+    partner = set().union(*(check(by_id[i], pmem, perrs) for i in pids)) if pids else set()
+    c = kind_counts(partner - whole)
+    L.extend(
+        [
+            "",
+            "## AI partners in multi battles",
+            "",
+            f"{len(pids)} partner trainer rows ({', '.join(str(i) for i in pids)}), checked like"
+            f" opponents: {len(partner)} missing groups, {len(partner - whole)} not needed by"
+            f" any opposing trainer, {len(partner - whole - pwhole)} also not on your side."
+            + (
+                " Not needed by opponents, by kind: "
+                + ", ".join(f"{k} {c[k]}" for k in KINDS if c[k])
+                + "."
+                if partner - whole
+                else ""
+            )
+            + (f" Refused before the check: {len(perrs)}." if perrs else ""),
+        ]
+    )
+
+
 def main(out_path):
     import argparse
     import json
@@ -162,7 +545,7 @@ def main(out_path):
 
     members = collections.defaultdict(set)
 
-    def ai_move_groups(trainer, party):
+    def ai_move_groups(trainer, party, mem):
         """The AI's per-move refusals of the trainer's moves (``policy.opponent_move_refusals``
         under the trainer's flag set): ``check_opponent`` runs no ``ai_refusals`` (they need
         the player's party), so the opponent's untranscribed AI move paths are listed here,
@@ -188,7 +571,7 @@ def main(out_path):
                     else:
                         k = ("AI", f"move effect #{e} {name}: {kind}")
                     out.add(k)
-                    members[k].add(names.move_names[move])
+                    mem[k].add(names.move_names[move])
         return out
 
     def key(s):
@@ -205,21 +588,21 @@ def main(out_path):
 
     errors = []
 
-    def check(t):
+    def check(t, mem=members, errs=errors):
         """The missing groups of trainer row ``t`` (its team, bag, AI and battle conditions)."""
         try:
             cli._check_buildable(tables, names, t, inter)
             party = build_trainer_party(t, inter)
             r = check_opponent(tables, names, t, party, start_weather(t))
-            ks = ai_move_groups(t, party)
+            ks = ai_move_groups(t, party, mem)
             for m in r.missing:
                 k, member = key(str(m))
                 ks.add(k)
                 if member:
-                    members[k].add(member)
+                    mem[k].add(member)
         except Exception as e:  # noqa: BLE001  refused before the check
             ks = {("setup", str(e).split(":")[-1].strip()[:60])}
-            errors.append((t.id, t.label, str(e)[:120]))
+            errs.append((t.id, t.label, str(e)[:120]))
         return ks
 
     by_id = {t.id: t for t in trainers}
@@ -354,6 +737,9 @@ def main(out_path):
             "|---|---|---|",
         ]
         + [f"| {group_kind(k)} | {label(k)} | {first[k]} |" for k in odd]
+    )
+    player_section(
+        L, order, whole, by_id, split_rows, extra, check, key, tables, names, d, items, decomp
     )
 
     def table(title, sel, top=None):

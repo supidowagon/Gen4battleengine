@@ -153,6 +153,152 @@ Every group the split's battles need, whether or not an earlier split needs it t
 | other | ROM change: battle/skill/sub_seq.narc#251 is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) | Wake Split |
 | other | form change: Sky Forme reverts when frozen | Elite Four Split |
 
+## Your side (upper bound)
+
+What your own Pokemon could bring that the engine does not model, counted apart
+from the opponent side. The headline is **player-only**: groups no opposing
+trainer in any split needs (the opponent whole-game union above). It is an upper
+bound under these assumptions:
+
+- Every species without a pre-evolution can be obtained in every split. An evolved
+  species counts from the split whose cap reaches its evolution level; evolutions
+  by friendship, trade, item, known move or place are taken as reachable at any
+  level (the bracketed count). Evolved species met in the wild or as gifts before
+  their evolution level are not seen, nor any encounter limit or Nuzlocke rule.
+- Moves: level-up moves at or below the split's cap (data/kaizo/level_caps.toml)
+  of the species and its pre-evolutions, plus every TM/HM and tutor move it is
+  compatible with and its family's egg moves, in every split.
+- Abilities: both of the species' abilities. Held items: every item with a hold
+  effect, in every split (so held items all count from the first split).
+- Also counted: the AI's refusals when your Pokemon knows a move or has an ability
+  its scripts read but the engine does not carry (`player_move_refusal`,
+  `player_ability_refusal`).
+- Not counted: hold effects with no battle effect (listed below, from the decomp).
+
+| Split | Cap | Species reachable (via a non-level step) | Your groups | Player-only | New player-only |
+|---|---|---|---|---|---|
+| Roark Split | 16 | 358 (64) | 325 | 63 | 63 |
+| Gardenia Split | 28 | 410 (65) | 326 | 63 | 0 |
+| Fantina Split | 38 | 463 (69) | 328 | 63 | 0 |
+| Maylene Split | 47 | 480 (73) | 329 | 63 | 0 |
+| Wake Split | 54 | 482 (71) | 330 | 63 | 0 |
+| Byron Split | 65 | 486 (72) | 330 | 63 | 0 |
+| Candice Split | 74 | 486 (72) | 330 | 63 | 0 |
+| Galactic Split | 100 | 493 (73) | 333 | 65 | 2 |
+| Volkner Split | 84 | 487 (73) | 331 | 63 | 0 |
+| Elite Four Split | 100 | 493 (73) | 333 | 65 | 0 |
+| **Whole game** | | | 333 | 65 | 65 |
+
+Of your 333 groups, 268 are also needed by opposing trainers and 65 are player-only.
+
+### New player-only groups per split, by kind
+
+| Split | AI flags | AI move effects | move effects | held items | abilities | battle conditions | other | All |
+|---|---|---|---|---|---|---|---|---|
+| Roark Split | 0 | 12 | 21 | 25 | 5 | 0 | 0 | 63 |
+| Gardenia Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| Fantina Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| Maylene Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| Wake Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| Byron Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| Candice Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| Galactic Split | 0 | 1 | 1 | 0 | 0 | 0 | 0 | 2 |
+| Volkner Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| Elite Four Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| **Whole game** | **0** | **13** | **22** | **25** | **5** | **0** | **0** | **65** |
+
+### Player-only groups
+
+| Kind | Group | First split |
+|---|---|---|
+| AI move effects | AI reads your ability: AI scoring: ability Filter changes IfMoveEffectivenessEquals and is not implemented: Filter | Roark Split |
+| AI move effects | AI reads your ability: AI scoring: ability Solid Rock changes IfMoveEffectivenessEquals and is not implemented: Solid Rock | Roark Split |
+| AI move effects | AI reads your ability: AI switching: ability Levitate (LEVITATED / INEFFECTIVE in ApplyTypeChart and CalcEffectiveness) is not implemented: Levitate | Roark Split |
+| AI move effects | AI reads your ability: AI switching: ability Scrappy (skips the Ghost immunities) is not implemented: Scrappy | Roark Split |
+| AI move effects | AI reads your ability: AI switching: ability Wonder Guard (WONDER_GUARD / INEFFECTIVE, and AI_CannotDamageWonderGuard) is not implemented: Wonder Guard | Roark Split |
+| AI move effects | AI reads your move: AI switching: move Ingrain (grounds the defender and blocks the switch) is not implemented: Ingrain | Roark Split |
+| AI move effects | AI reads your move: AI switching: move Magnet Rise (MAGNET_RISE in ApplyTypeChart) is not implemented: Magnet Rise | Roark Split |
+| AI move effects | AI reads your move: AI switching: move Miracle Eye (lifts the Dark immunity) is not implemented: Miracle Eye | Roark Split |
+| AI move effects | AI reads your move: AI switching: move Natural Gift (variable type (TrainerAI_MoveType)) is not implemented: Natural Gift | Roark Split |
+| AI move effects | AI reads your move: AI switching: move Perish Song (AI_PerishSongKO) is not implemented: Perish Song | Roark Split |
+| AI move effects | AI reads your move: AI switching: move Roost (roosting drops the Flying type) is not implemented: Roost | Roark Split |
+| AI move effects | AI reads your move: AI switching: move Weather Ball (variable type (TrainerAI_MoveType)) is not implemented: Weather Ball | Roark Split |
+| AI move effects | AI reads your move: AI switching: move Judgment (variable type (TrainerAI_MoveType)) is not implemented: Judgment | Galactic Split |
+| move effects | move effect #100: Spite | Roark Split |
+| move effects | move effect #101: False Swipe | Roark Split |
+| move effects | move effect #115: Sandstorm | Roark Split |
+| move effects | move effect #130: SonicBoom | Roark Split |
+| move effects | move effect #155: Fly | Roark Split |
+| move effects | move effect #174: Charge | Roark Split |
+| move effects | move effect #181: Ingrain | Roark Split |
+| move effects | move effect #194: Grudge | Roark Split |
+| move effects | move effect #216: Miracle Eye | Roark Split |
+| move effects | move effect #222: Natural Gift | Roark Split |
+| move effects | move effect #223: Feint | Roark Split |
+| move effects | move effect #234: Psycho Shift | Roark Split |
+| move effects | move effect #243: Power Swap | Roark Split |
+| move effects | move effect #245: Punishment | Roark Split |
+| move effects | move effect #246: Last Resort | Roark Split |
+| move effects | move effect #25: Haze | Roark Split |
+| move effects | move effect #258: Defog | Roark Split |
+| move effects | move effect #265: Captivate | Roark Split |
+| move effects | move effect #39: Razor Wind | Roark Split |
+| move effects | move effect #46: Mist | Roark Split |
+| move effects | move effect #95: Sketch | Roark Split |
+| move effects | move effect #268: Judgment | Galactic Split |
+| held items | held item effect #102: Quick Powder | Roark Split |
+| held items | held item effect #107: Full Incense | Roark Split |
+| held items | held item effect #108: Destiny Knot | Roark Split |
+| held items | held item effect #110: Icy Rock | Roark Split |
+| held items | held item effect #111: Smooth Rock | Roark Split |
+| held items | held item effect #123: Shed Shell | Roark Split |
+| held items | held item effect #131: Fist Plate | Roark Split |
+| held items | held item effect #132: Toxic Plate | Roark Split |
+| held items | held item effect #133: Earth Plate | Roark Split |
+| held items | held item effect #135: Mind Plate | Roark Split |
+| held items | held item effect #139: Draco Plate | Roark Split |
+| held items | held item effect #14: Figy Berry | Roark Split |
+| held items | held item effect #25: Kebia Berry | Roark Split |
+| held items | held item effect #3: Adamant Orb | Roark Split |
+| held items | held item effect #32: Haban Berry | Roark Split |
+| held items | held item effect #4: Lustrous Orb | Roark Split |
+| held items | held item effect #51: Exp. Share | Roark Split |
+| held items | held item effect #53: Soothe Bell | Roark Split |
+| held items | held item effect #54: Mental Herb | Roark Split |
+| held items | held item effect #63: Smoke Ball | Roark Split |
+| held items | held item effect #68: Metal Coat | Roark Split |
+| held items | held item effect #8: Rawst Berry | Roark Split |
+| held items | held item effect #85: Dragon Fang | Roark Split |
+| held items | held item effect #9: Aspear Berry | Roark Split |
+| held items | held item effect #99: Power Herb | Roark Split |
+| abilities | ability: Air Lock | Roark Split |
+| abilities | ability: Color Change | Roark Split |
+| abilities | ability: Immunity | Roark Split |
+| abilities | ability: Own Tempo | Roark Split |
+| abilities | ability: Soundproof | Roark Split |
+
+### Hold effects with no battle effect (not counted)
+
+Each is cited where the decomp reads it, and no battle code (src/battle,
+include/battle, res/battle) names it elsewhere; the tool re-checks both on every run.
+
+| Hold effect | Items | Why | Decomp |
+|---|---|---|---|
+| #58 HOLD_EFFECT_MONEY_UP | Amulet Coin, Luck Incense | doubles the prize money (prizeMoneyMul) and nothing else | src/battle/battle_lib.c:4127 |
+| #59 HOLD_EFFECT_ENCOUNTERS_DOWN | Cleanse Tag, Pure Incense | read by item id in the field's wild-encounter code only | src/overlay006/wild_encounters.c:925 |
+| #64 HOLD_EFFECT_NO_EVOLVE | Everstone | read by the evolution check only | src/pokemon.c:3544 |
+| #70 HOLD_EFFECT_EVOLVE_SEADRA | Dragon Scale | held for a trade evolution, outside the battle | src/pokemon.c:3735 |
+| #87 HOLD_EFFECT_EVOLVE_PORYGON | Up-Grade | held for a trade evolution, outside the battle | src/pokemon.c:3735 |
+| #142 HOLD_EFFECT_EVOLVE_RHYDON | Protector | held for a trade evolution, outside the battle | src/pokemon.c:3735 |
+| #143 HOLD_EFFECT_EVOLVE_ELECTABUZZ | Electirizer | held for a trade evolution, outside the battle | src/pokemon.c:3735 |
+| #144 HOLD_EFFECT_EVOLVE_MAGMAR | Magmarizer | held for a trade evolution, outside the battle | src/pokemon.c:3735 |
+| #145 HOLD_EFFECT_EVOLVE_PORYGON2 | Dubious Disc | held for a trade evolution, outside the battle | src/pokemon.c:3735 |
+| #146 HOLD_EFFECT_EVOLVE_DUSCLOPS | Reaper Cloth | held for a trade evolution, outside the battle | src/pokemon.c:3735 |
+
+## AI partners in multi battles
+
+11 partner trainer rows (608, 609, 610, 612, 613, 614, 615, 616, 617, 618, 864), checked like opponents: 100 missing groups, 0 not needed by any opposing trainer, 0 also not on your side.
+
 ## Roark split
 
 23 fights (trainer rows). A group's count is the number of rows it blocks.
