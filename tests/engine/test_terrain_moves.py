@@ -610,9 +610,10 @@ def test_coverage_refuses_an_unsupported_call(tables, names, trainers):
     assert terrain_refusal(tables, names, plain, [names.move(CAMO)]) is None
 
 
-def test_coverage_refuses_shield_dust(tables, names, trainers):
-    # Shield Dust (subscript_burn/freeze/paralyze.s: an INDIRECT effect skips it) is an
-    # unsupported ability: a holder facing Tri Attack is refused, never approximated.
+def test_coverage_supports_shield_dust(tables, names, trainers):
+    # Shield Dust (subscript_burn/freeze/paralyze.s: an INDIRECT effect skips it) is modelled
+    # since E2 batch 3 (ruling B3-9, effects._shield_dust): a holder facing Tri Attack is no
+    # longer refused for it.
     from dataclasses import replace as replace_spec
 
     from nuzline.data.party import load_party
@@ -624,4 +625,4 @@ def test_coverage_refuses_shield_dust(tables, names, trainers):
     slot = names.species_abilities(venomoth).index(names.ability("Shield Dust"))
     player[0] = replace_spec(player[0], species=venomoth, form=0, ability_slot=slot)
     report = check_coverage(tables, names, player, roark, roark_party(names), 0)
-    assert any("Shield Dust" in line for line in report.missing)
+    assert not any("Shield Dust" in line for line in report.missing)
