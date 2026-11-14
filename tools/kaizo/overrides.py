@@ -691,9 +691,9 @@ HEADER = """\
 # battle weather switch, Task 8), so every trainer in rom_field_effects.json gets a
 # trick_room entry citing the ROM, or an [area_exception] saying why not. Gravity (Champion
 # Cynthia) and sheet-only Trick Room stay here. A trainer claimed by two areas is never
-# settled by guess: its claim stays commented out with every citation. The ten start
-# conditions left "unknown" by ruling (318 325 343 509 559 610 649 676 746 747) are not
-# settled here.
+# settled by guess: its claim stays commented out with every citation. The start conditions
+# left "unknown" by ruling (325 343 509 559 610 649 746 747; 318 and 676 left that list on
+# 2026-11-14 when the shared-script join gave each one ROM condition) are not settled here.
 #
 # Ruling 9 (split, optional, left side): derived from the sheet at every build, with a
 # per-field citation; [fields.<id>] only corrects them. Gauntlet groups are drafted from the

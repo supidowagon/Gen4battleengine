@@ -11,7 +11,8 @@ Branch `claude/engine-e3-remeasure-632cbe`, worktree `strange-feistel-a35c9f`. E
   "Your side (upper bound)" and "AI partners" sections of the backlog. Option B is PARKED
   (see below); do not start it without a new go.
 - Batch 4 (every sheet battle in a split): done 2026-11-14, merged into main (5612764).
-- Batch 5 (merge-check follow-ups): done 2026-11-14, see below. Stop after the report.
+- Batch 5 (merge-check follow-ups): done 2026-11-14, merged (37711e1).
+- Batch 6 (join safety, tests, wording): done 2026-11-14, see below. Stop after the report.
 - Batch 3 (prep starting HP and status): report sent 2026-11-14 (read-only, nothing built). Engine and line --party
   support any HP and status, sleep turns included; prep picks HP regions itself, prestatus is
   poison, burn or paralysis only, drops the save's HP and status (leveling.py), and cannot
@@ -120,3 +121,22 @@ by each split, replacing option A's upper bound.
   enemy beside a walking partner BATTLE_TYPE_TRAINER (not a tag battle), while K2a Ruling 3
   makes every enemy on a partner map `multi`.
 - Totals: 387 battles (275 singles, 37 doubles, 32 two-trainer, 43 multi); union 520.
+
+## Batch 6: join safety and wording (2026-11-14)
+
+- `join_trainer_maps` / `header_battles` (tools/rom/readers/maps.py): a shared-file header
+  also runs the local ids game code starts directly (`C_STARTED_SCRIPTS` 2-8, cites
+  verified: encounter.c:637, start_menu.c:1457, overlay005/field_control.c:450,
+  overlay009/ov9_02249960.c:99,106,5411,7732-7756,8765 with rows :11050-12709), and falls
+  back to the whole file for a clone object (script 0xFFFF), an id past the table, or a run
+  entry that reaches ScrCmd_Unused_013 (scrcmd.c:960-971). Kaizo placements unchanged.
+  The docstring lists what is and is not read. Synthetic tests in
+  tests/tools/rom/test_shared_scripts.py cover every branch.
+- Unannounced in batch 5, same rule: 342 Harrison and 345 Christine lost Kaizo header 609,
+  which shares the Trainers' School script file (31) but runs none of its entries; they
+  stay on TRAINERS_SCHOOL (345 also ETERNA_CITY_POKECENTER_1F).
+- 676 Corbin: inherited through the vanilla rematch table from 583; no object carries 583's
+  trainer script (checked: no object script 3582/5582), and the Vs. Seeker rematches only
+  trainer objects (vs_seeker.c:500-540, :692-694), so probably unreachable. 583 Titania's
+  start_conditions entry left (one placement now). Stale 676/318 text fixed in
+  overrides.toml, overrides.py and start_conditions.json.
