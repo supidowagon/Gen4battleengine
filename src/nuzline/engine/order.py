@@ -187,7 +187,10 @@ def custap_flags(tables: Tables, state: BattleState, actions) -> jnp.ndarray:
     the flag of each activated holder (``custap_active`` on the turn-start ``state``,
     battle_lib.c:1296-1298, :1362-1364). The holder eats the berry when its move starts
     (``subscript_check_quick_claw.s:26-28``, ``step._use_move``); until then Pluck cannot take
-    it (``hooks.pluck_berry``)."""
+    it (``hooks.pluck_berry``). ``BattleSystem_SortMonActionOrder`` (battle_lib.c:7276-7300)
+    writes it too, through the same compare with ``ignoreQuickClaw = FALSE``, when a Trick
+    Room activation re-sorts the turn (bcp.c:3990-3993); Trick Room is unsupported, and
+    whoever adds it must re-set the flag there."""
     actions = jnp.asarray(actions, _I32)
     fight = ~is_switch(actions) & ~is_item(actions)
     return custap_active(tables, state) & fight[0] & fight[1]

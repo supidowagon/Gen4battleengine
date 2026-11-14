@@ -360,6 +360,16 @@ PINCH_STAT_HOLD_EFFECTS: dict[int, tuple[str, int]] = {
 # whose result is the ROM's division routine's, not the decomp's: build_tables maps such an
 # item to UNSUPPORTED (Kaizo's Ganlon and Apicot Berries have param 0).
 PINCH_DIVISOR_ITEMS = (ItemId.PINCH_BERRY, ItemId.CUSTAP_BERRY)
+# Every item that divides by its hold param, and the smallest param that never divides by
+# zero: the pinch-divisor berries above (2: Gluttony halves the param), Sticky Barb's
+# end-of-turn ``Divide(maxHP, param)`` (battle_lib.c:5330-5336) and Shell Bell's
+# ``Divide(dealt, param)`` (bcp.c:4736-4752, battle_lib.c:7345-7355) (1). build_tables maps an
+# item below its minimum to UNSUPPORTED.
+DIVISOR_PARAM_MIN: dict[ItemId, int] = {
+    **{item: 2 for item in PINCH_DIVISOR_ITEMS},
+    ItemId.STICKY_BARB: 1,
+    ItemId.SHELL_BELL: 1,
+}
 
 # sTypeBoostingItems (src/battle/battle_lib.c:6514-6549), applied at :6716-6722: decomp hold
 # effect (generated/item_hold_effects.txt line N+1 is id N) -> (name, the type it boosts).

@@ -1532,7 +1532,7 @@ def _update_choice_lock(turn: _Turn, s: RefState, side: int, move: int, foe_defe
         s.sides[side].choice_lock = move
 
 
-def _pluck_berry(turn: _Turn, s: RefState, side: int) -> None:
+def _pluck_berry(turn: _Turn, s: RefState, side: int, target: int) -> None:
     """``BtlCmd_TryPluck`` (script.c:8116) -> ``BattleSystem_PluckBerry`` (lib.c:5539), by
     the item's pluck effect (res/items/data/*.json): the user eats the foe's Oran
     (``PLUCK_EFFECT_HP_RESTORE``) / Sitrus (``_HP_PCT_RESTORE``) Berry, healing (capped)
@@ -1542,12 +1542,13 @@ def _pluck_berry(turn: _Turn, s: RefState, side: int) -> None:
     (``RemoveItem BTLSCR_DEFENDER``) even when the foe fainted. Berry Juice and the other
     implemented items have ``PLUCK_EFFECT_NONE`` and are no berries (lib.c:5833): they
     stay. ``SELF_TURN_FLAG_PLUCK_BERRY`` (lib.c:5848) stays set when the berry did
-    nothing for the eater (no restore subscript ran its PLUCK_CHECK)."""
+    nothing for the eater (no restore subscript ran its PLUCK_CHECK). ``target``: the
+    defender's side, whose berry is eaten."""
     tables = turn.tables
-    user, foe = _active(s, side), _active(s, 1 - side)
+    user, foe = _active(s, side), _active(s, target)
     # BtlCmd_TryPluck (script.c:8125-8127): nothing while the foe holds an item and its Custap
     # Berry flag (set by this turn's order) is up.
-    if foe.item and turn.custap[1 - side]:
+    if foe.item and turn.custap[target]:
         return
     effect = _item_effect(tables, foe)
     power = _t(tables, "item_param", foe.item, 0)
@@ -1744,7 +1745,7 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
         s.sides[target].reflect = s.sides[target].light_screen = 0
     elif effect == EffectId.EAT_BERRY and effective:
         # effect_script_0224.s / subscript_pluck.s: an ON_HIT effect, no HP check.
-        _pluck_berry(turn, s, side)
+        _pluck_berry(turn, s, side, target)
     elif effect == EffectId.LEECH_SEED and effective:
         # subscript_leech_seed_start.s: Grass types and seeded targets are immune.
         grass = Type.GRASS in _active(s, target).types

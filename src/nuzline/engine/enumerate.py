@@ -809,12 +809,12 @@ def damage_inputs_can_change(tables: Tables, state: BattleState, actions, foe_fi
     burnable = physical & (ability != AbilityId.GUTS)  # a burn halves it (:6978)
     attack_stat = jnp.where(physical, Stat.ATK, Stat.SPA)
     defense_stat = jnp.where(physical, Stat.DEF, Stat.SPD)
-    pinch = (
+    pinch_ability = (
         ((move_type == Type.GRASS) & (ability == AbilityId.OVERGROW))
         | ((move_type == Type.FIRE) & (ability == AbilityId.BLAZE))
         | ((move_type == Type.WATER) & (ability == AbilityId.TORRENT))
     )
-    hp_sensitive = (effect == _E.FLAIL) | pinch
+    hp_sensitive = (effect == _E.FLAIL) | pinch_ability
 
     held = state.item[sides, mons]
     pinch_stat = tables.item_param[held, 1]

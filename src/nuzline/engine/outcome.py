@@ -332,8 +332,12 @@ def hit_thresholds(tables: Tables, state: BattleState, actions) -> tuple[jnp.nda
         action_order(tables, state, actions, empty_outcome()._replace(speed_tie=jnp.int8(t)))[0]
         for t in (0, 1)
     ]
-    can_second = jnp.stack([(firsts[0] != side) | (firsts[1] != side) for side in (0, 1)])
-    zoom = uses_move & (held == ItemId.ZOOM_LENS) & can_second
+    # Battler_MovedThisTurn(defender) (battle_lib.c:5365-5368): the side's target can have
+    # moved before the side's check in some order (in singles, when the target acts first).
+    target_may_have_moved = jnp.stack(
+        [(firsts[0] != side) | (firsts[1] != side) for side in (0, 1)]
+    )
+    zoom = uses_move & (held == ItemId.ZOOM_LENS) & target_may_have_moved
     thresholds, possible = [], []
     for side in (0, 1):
         foe = 1 - side

@@ -479,3 +479,20 @@ def test_pinch_berries_need_a_param_to_divide_by(tables, names, kaizo_tables, ka
         assert int(kaizo_tables.item_effect[i]) == ItemId.UNSUPPORTED, berry
     i = kaizo_names.item("Liechi Berry")
     assert int(kaizo_tables.item_effect[i]) == ItemId.PINCH_BERRY
+
+
+def test_divisor_items_need_a_param_to_divide_by():
+    """Sticky Barb (``Divide(maxHP, param)``, battle_lib.c:5330-5336) and Shell Bell
+    (``Divide(dealt, param)``, bcp.c:4736-4752) with param 0, and a pinch berry below 2, are
+    UNSUPPORTED (build_tables._pinch_divisor_ok, effect_map.DIVISOR_PARAM_MIN)."""
+    from nuzline.engine.ids import ItemId
+    from tools.build_tables import _pinch_divisor_ok
+
+    ids = [ItemId.STICKY_BARB, ItemId.SHELL_BELL, ItemId.STICKY_BARB, ItemId.PINCH_BERRY]
+    items = [{"hold_param": p} for p in (0, 0, 8, 1)]
+    assert _pinch_divisor_ok(items, [int(i) for i in ids]) == [
+        ItemId.UNSUPPORTED,
+        ItemId.UNSUPPORTED,
+        ItemId.STICKY_BARB,
+        ItemId.UNSUPPORTED,
+    ]

@@ -779,7 +779,7 @@ def _eat_berry(
     from nuzline.engine.hooks import pluck_berry
 
     cond = (h.effect == _E.EAT_BERRY) & h.effective
-    return pluck_berry(tables, state, h.side, cond, foe_custap)
+    return pluck_berry(tables, state, h.side, h.target_side, cond, foe_custap)
 
 
 def _leech_seed(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
@@ -1162,6 +1162,7 @@ def play_hit(
     struggling=False,
     focus_armed=False,
     foe_custap=False,
+    extra_flinch: bool = True,
 ) -> tuple[BattleState, MoveHit]:
     """Hit ``hit_index`` (0-4, an int or a traced int32) of ``move`` by ``side``'s active Pokemon: damage with
     this hit's crit and roll, then the move's effect.
@@ -1172,7 +1173,9 @@ def play_hit(
     tenths (Pursuit on a switch: 20). ``struggling``: the move is Struggle, whose
     recoil is its secondary effect. ``focus_armed``: an earlier hit of this action
     activated the defender's Focus Sash (``MoveHit``). ``foe_custap``: the target's turn order
-    activated its Custap Berry (``hooks.pluck_berry``). A hit beyond ``hit_count`` or after
+    activated its Custap Berry (``hooks.pluck_berry``). ``extra_flinch`` (static): the hit
+    reaches ``AfterMoveMessage``'s King's Rock check; Pursuit's pre-switch hit does not
+    (``subscript_pursuit.s`` never runs ``CheckExtraFlinch``, bcp.c:3527, :3593). A hit beyond ``hit_count`` or after
     the target fainted does nothing. The order is ``BattleControllerPlayer_AfterMoveMessage``'s
     (battle_controller_player.c:3467): the move's own effect (``*_TRIGGER_SECONDARY``)
     before the contact ability (``*_TRIGGER_ABILITY``), then King's Rock (``*_EXTRA_FLINCH``).
@@ -1337,8 +1340,9 @@ def play_hit(
         state = fn(tables, state, h, outcome)
     state, pluck_flag = _eat_berry(tables, state, h, outcome, foe_custap)
     state = _struggle_recoil(state, h, jnp.asarray(struggling, jnp.bool_))
-    for fn in (_contact_ability, _kings_rock):
-        state = fn(tables, state, h, outcome)
+    state = _contact_ability(tables, state, h, outcome)
+    if extra_flinch:
+        state = _kings_rock(tables, state, h, outcome)
     # UpdateHP's shellBellDamageDealt (bcp.c:3427-3431) and subscript_pursuit.s's (:21-29).
     shell = jnp.where(update_hp, jnp.minimum(taken, target_hp), 0)
     pursuit_shell = jnp.where(update_hp, jnp.minimum(damage, target_hp), 0)

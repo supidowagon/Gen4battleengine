@@ -28,7 +28,7 @@ Encodings:
   effect raises (``effect_map.PINCH_STAT_HOLD_EFFECTS``).
 * ``item_effect[item]``: the ``ids.ItemId`` (``effect_map.held_item_ids``: by name, else by
   hold effect, else ``NONE`` / ``NO_EFFECT_BERRY`` for an item with no hold effect);
-  ``UNSUPPORTED`` for a pinch-divisor berry with a param below 2 (``_pinch_divisor_ok``).
+  ``UNSUPPORTED`` for an item dividing by a param below its minimum (``_pinch_divisor_ok``).
 * ``item_hold_param[item]``: the decomp hold param as stored (``ItemData.effectParam``, which
   ``Item_LoadParam(item, ITEM_PARAM_EFFECT_PARAM)`` returns, ``src/item.c:160-161``), whether or
   not the engine supports the item. The level-up EV gain reads it as a Power item's
@@ -110,7 +110,7 @@ from tools.effect_map import (
     DECOMP_EFFECT_TO_ID,
     DECOMP_ITEM_TO_ID,
     DECOMP_TRAINER_ITEM_TO_ID,
-    PINCH_DIVISOR_ITEMS,
+    DIVISOR_PARAM_MIN,
     PINCH_STAT_HOLD_EFFECTS,
     RESIST_BERRY_HOLD_EFFECTS,
     TYPE_BOOST_HOLD_EFFECTS,
@@ -310,12 +310,15 @@ def _item_type(item: dict, item_id: int) -> int:
 
 
 def _pinch_divisor_ok(items: list[dict], ids: list[int]) -> list[int]:
-    """``ids`` with every ``effect_map.PINCH_DIVISOR_ITEMS`` item whose hold param is below 2
-    made ``UNSUPPORTED``: its trigger divides maxHP by the param, halved by Gluttony
-    (battle_lib.c:4774-4778, :1289-1294), so such a param divides by zero, which the decomp
-    does not define (the ROM's division routine decides)."""
+    """``ids`` with every ``effect_map.DIVISOR_PARAM_MIN`` item whose hold param is below its
+    minimum made ``UNSUPPORTED``: a pinch berry's trigger divides maxHP by the param, halved by
+    Gluttony (battle_lib.c:4774-4778, :1289-1294), Sticky Barb divides maxHP and Shell Bell the
+    damage dealt by it (battle_lib.c:5330-5336, bcp.c:4736-4752), so such a param divides by
+    zero, which the decomp does not define (the ROM's division routine decides)."""
     return [
-        int(ItemId.UNSUPPORTED) if e in PINCH_DIVISOR_ITEMS and i["hold_param"] < 2 else e
+        int(ItemId.UNSUPPORTED)
+        if e in DIVISOR_PARAM_MIN and i["hold_param"] < DIVISOR_PARAM_MIN[ItemId(e)]
+        else e
         for i, e in zip(items, ids, strict=True)
     ]
 

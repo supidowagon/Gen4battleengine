@@ -795,9 +795,11 @@ def _use_move(
         # Pluck / Bug Bite that left SELF_TURN_FLAG_PLUCK_BERRY set (info.pluck_flag) keeps
         # the next item that triggers (its PLUCK_CHECK clears the flag instead of removing
         # the item): the attacker's, as the defender's berry is the one just eaten. Then
-        # AFTER_MOVE_EFFECT_HELD_ITEM_STATUS (:3730) re-checks both battlers. Nothing in
-        # between changes either (the defender's thaw cures no item's condition), so only
-        # an attacker's item kept above can trigger again, and is removed this time. A
+        # AFTER_MOVE_EFFECT_HELD_ITEM_STATUS (:3730) re-checks both battlers. What runs in
+        # between (the Sticky Barb transfer and the defender's thaw, below) changes no item's
+        # trigger: the barb moves only to an attacker holding nothing, and
+        # TriggerHeldItemOnStatus has no case for it; the thaw cures no item's condition. So
+        # only an attacker's item kept above can trigger again, and is removed this time. A
         # later hit that did not happen changes no HP, so its check finds what the
         # previous one found.
         # A failed Protect or Roar: subscript_missed.s, no AfterMoveEffects.
@@ -1055,6 +1057,7 @@ def _pursuit_hit(
         connected=True,
         target_moved=False,
         power_mul=PURSUIT_POWER_MUL,
+        extra_flinch=False,  # subscript_pursuit.s has no CheckExtraFlinch (bcp.c:3527, :3593)
     )
     state = sticky_barb_transfer(tables, state, pursuer, 1 - pursuer, move, info.update_hp)
     state = shell_bell_heal(tables, state, pursuer, info.pursuit_shell_bell, info.update_hp)

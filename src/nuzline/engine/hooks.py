@@ -319,9 +319,10 @@ PLUCKABLE = (
 
 
 def pluck_berry(
-    tables: Tables, state: BattleState, side, cond=True, foe_custap=False
+    tables: Tables, state: BattleState, side, foe, cond=True, foe_custap=False
 ) -> tuple[BattleState, jnp.ndarray]:
-    """``(state, pluck_flag)``: ``side``'s active Pokemon eats the foe's berry where
+    """``(state, pluck_flag)``: ``side``'s active Pokemon eats the berry of ``foe``'s (the
+    defender's side) active Pokemon where
     ``cond`` (``subscript_pluck.s``): ``BtlCmd_TryPluck`` (battle_script.c:8116) ->
     ``BattleSystem_PluckBerry`` (battle_lib.c:5539). ``foe_custap``: the foe's
     ``moveEffectsData.custapBerry`` is set (``order.custap_flags``: the turn order activated
@@ -341,7 +342,7 @@ def pluck_berry(
     eater's own item is never touched here. Sticky Hold, Klutz and Embargo are
     unsupported."""
     side = jnp.asarray(side, _I32)
-    foe = 1 - side
+    foe = jnp.asarray(foe, _I32)
     user, target = state.active[side], state.active[foe]
     item = state.item[foe, target]
     effect = tables.item_effect[item]

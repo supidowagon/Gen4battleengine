@@ -118,8 +118,10 @@ the `step` turn skeleton and `enumerate.py`'s branch structure stay as they are.
   (battle_lib.c:4778, :1294); Kaizo's Ganlon and Apicot Berries have param 0.
 - B2-4 Custap Berry in its pinch sets the Quick Claw flag in every `CompareBattlerSpeed`: the turn
   order, the end-of-turn order and the AI's speed compares (battle_lib.c:1288-1300); its
-  `custapBerry` flag is written only by `CalcTurnOrder`'s FIGHT-against-FIGHT compare
-  (bcp.c:772-786), and the holder eats the berry when its move starts, before the status
+  `custapBerry` flag is written by `CalcTurnOrder`'s FIGHT-against-FIGHT compare
+  (bcp.c:772-786) and by `BattleSystem_SortMonActionOrder` (battle_lib.c:7276-7300, the same
+  compare with `ignoreQuickClaw = FALSE`, :1296, :1362) after a Trick Room activation
+  (bcp.c:3990-3993; Trick Room is unsupported: adding it must re-set the flag there), and the holder eats the berry when its move starts, before the status
   checks, first or last (subscript_check_quick_claw.s:26-28, bcp.c:3140-3143).
 - B2-5 While that flag is up, a foe's Pluck / Bug Bite does nothing to the holder: no berry eaten,
   no pluck flag (battle_script.c:8125-8127).
