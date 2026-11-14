@@ -10,6 +10,7 @@ Branch `claude/engine-e3-remeasure-632cbe`, worktree `strange-feistel-a35c9f`. E
 - Batch 2 (player side): option A done (go from the managing session, 2026-11-14): the
   "Your side (upper bound)" and "AI partners" sections of the backlog. Option B is PARKED
   (see below); do not start it without a new go.
+- Batch 4 (every sheet battle in a split): done 2026-11-14, see below. Stop after the report.
 - Batch 3 (prep starting HP and status): report sent 2026-11-14 (read-only, nothing built). Engine and line --party
   support any HP and status, sleep turns included; prep picks HP regions itself, prestatus is
   poison, burn or paralysis only, drops the save's HP and status (leveling.py), and cannot
@@ -81,3 +82,19 @@ by each split, replacing option A's upper bound.
   location stems) from ROM field scripts and mart data.
 - Area -> split from the split sheets' section names (first split an area appears in).
 - Encounter limits and Nuzlocke rules are the user's run rules: not in any data; ask.
+
+## Batch 4: the 60 unmapped sheet headers (2026-11-14)
+
+- 49 mapped by `[trainer_ids]` in data/kaizo/overrides.toml, each with the ROM row, map
+  placement and PKCalc label in its comment (name + same species order; sheet levels are
+  older). 11 settled in the new `[sheet_unmapped]` table: 7 `ally` (Dawn/Lucas tag-partner
+  headers), 3 `duplicate` (Route 212 Rangers 96/95/94, listed in Byron and Galactic; counted
+  in Galactic), 1 `user_call` (Maid Yoki, Gardenia Split:111). `check_sheet_unmapped` now
+  refuses any unsettled unmapped header (resolve and `overrides check`).
+- Backlog: tag partners (every partner variant id; each checked against its sheet header's
+  `tag_partner` tag) are no longer counted as battles; 11 had been counted as singles.
+- Battles 359 -> 387 (singles 258 -> 275, doubles 34 -> 37, two-trainer 32, multi 35 -> 43);
+  39 new battles, 11 ally rows out. Union 509 -> 521: 15 groups new to the union, 3 left
+  (needed only by allies: Marvel Scale, hold effects #17, #66; still on the partners line).
+- New user calls: Maid Yoki; Route 212 Rangers' split; Iron Island Triton #2 / Neptune #2
+  weather (sheet and PKCalc rain, ROM none; report "area weather 835").

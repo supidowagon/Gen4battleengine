@@ -64,6 +64,7 @@ from tools.kaizo.overrides import (
     check_citations,
     check_gauntlet_members,
     check_rom_trick_room,
+    check_sheet_unmapped,
     check_trainer_ids,
     check_two_placement,
     load_overrides,
@@ -264,6 +265,7 @@ def cross_check(
         overrides.trainer_ids,
     )
     problems += check_gauntlet_members(overrides, src.docs, maps.sheet)
+    problems += check_sheet_unmapped(overrides, maps.sheet)
     if problems:
         raise ResolveError("overrides.toml fails its checks:\n" + "\n".join(problems))
     rows = table_rows(src.rom, src.pkcalc, src.docs) + trainer_rows(
@@ -271,7 +273,7 @@ def cross_check(
     )
     check = compare(rows, load_resolutions(resolutions_path))
     sections = {
-        "trainer mappings": mapping_section(maps),
+        "trainer mappings": mapping_section(maps, overrides.sheet_unmapped),
         "PID cross-check (Ruling 19; recorded, not asserted)": pid_section(
             trainers, maps, src.pkcalc, src.rom
         ),

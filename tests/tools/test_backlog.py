@@ -7,6 +7,7 @@ import pytest
 
 from tools.kaizo.backlog import (
     KINDS,
+    ally_ids,
     ancestors,
     battle_format,
     battle_split,
@@ -18,6 +19,7 @@ from tools.kaizo.backlog import (
     new_by_split,
     partner_unknown,
     reachable_species,
+    sheet_cites,
 )
 
 
@@ -173,3 +175,18 @@ def test_ancestors_and_levelup_moves():
     assert sorted(ancestors(3, parents)) == [1, 2, 3]
     assert ancestors(1, parents) == [1]
     assert levelup_moves([[1, 33], [16, 55], [17, 66], [0, 77]], 16) == {33, 55, 77}
+
+
+def test_ally_ids_are_every_partner_variant():
+    P = SimpleNamespace
+    a = row(1, format="multi", opponent_2=2, partner=[P(trainer=608), P(trainer=609)])
+    b = row(2, format="multi", opponent_2=1, partner=None)
+    c = row(3, partner=())
+    assert ally_ids([a, b, c]) == {608, 609}
+
+
+def test_sheet_cites():
+    t = SimpleNamespace(sources={"split": "sheet Galactic Split:1165, Galactic Split:1175"})
+    assert sheet_cites(t) == ["Galactic Split:1165", "Galactic Split:1175"]
+    assert sheet_cites(SimpleNamespace(sources={})) == []
+    assert sheet_cites(SimpleNamespace(sources={"split": "overrides fields.5"})) == []

@@ -87,6 +87,21 @@ def battles(rows, by_id):
     return sorted(out)
 
 
+def ally_ids(trainers):
+    """The trainer ids that fight beside the player: every partner variant of a multi row.
+    A split row among them is the player's tag partner (the sheet lists it as a header), not
+    an opponent, so it is no battle of its own."""
+    return {p.trainer for t in trainers for p in (t.partner or ())}
+
+
+def sheet_cites(t):
+    """The split-sheet cites of trainer ``t`` (its ``sources["split"]``, ``sheet <cite>, ...``)."""
+    src = t.sources.get("split", "")
+    return (
+        [c for c in src.removeprefix("sheet ").split(", ") if c] if src.startswith("sheet ") else []
+    )
+
+
 def battle_split(ids, by_id):
     """The split of the battle ``ids`` (the split of its split rows)."""
     return next(by_id[i].split for i in ids if by_id[i].split)
@@ -606,7 +621,21 @@ def main(out_path):
         return ks
 
     by_id = {t.id: t for t in trainers}
-    split_rows = [t for t in trainers if t.split and t.split_order]
+    # Tag partners are allies, not battles: each must be a sheet header tagged as one.
+    docs = json.loads((d / "docs/docs.json").read_text(encoding="utf-8"))
+    tags = {
+        h["cite"]: h["tags"]
+        for sv in docs["splits"].values()
+        for sec in sv["sections"]
+        for h in sec["trainers"]
+    }
+    allies = ally_ids(trainers)
+    for t in trainers:
+        if t.id in allies and t.split:
+            untagged = [c for c in sheet_cites(t) if not tags.get(c, {}).get("tag_partner")]
+            if untagged or not sheet_cites(t):
+                raise ValueError(f"partner {t.id} {t.label}: sheet header not a tag partner")
+    split_rows = [t for t in trainers if t.split and t.split_order and t.id not in allies]
     splits = {}
     for t in split_rows:
         splits.setdefault(t.split, t.split_order[0])
@@ -645,7 +674,8 @@ def main(out_path):
         "",
         "## By split",
         "",
-        "A row is one trainer; a battle is a row joined with its second opponent (`opponent_2`),",
+        "A row is one opposing trainer (tag partners beside you are not counted); a battle is a",
+        "row joined with its second opponent (`opponent_2`),",
         "so a two-trainer or multi battle against two trainers is one battle. A second opponent",
         "with no split of its own is checked with its battle:",
         ", ".join(f"{i} {by_id[i].label}" for i in extra) or "none",

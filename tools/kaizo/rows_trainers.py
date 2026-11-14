@@ -540,7 +540,7 @@ def _ids(ids: Iterable[int]) -> str:
     return "[" + ", ".join(map(str, ids)) + "]"
 
 
-def mapping_section(mappings: Mappings) -> list[str]:
+def mapping_section(mappings: Mappings, settled: dict | None = None) -> list[str]:
     """Every non-``exact`` mapping and every unmapped label or header with its candidates;
     ids several sheet headers share."""
     names = {i: t["name"] for i, t in mappings.rom_trainers.items()}
@@ -564,10 +564,17 @@ def mapping_section(mappings: Mappings) -> list[str]:
                 text += f"; lost id {m.lost_to} to an override"
             lines.append(text)
     unmapped = [m.label for m in mappings.sheet if m.id is None]
+    settled = settled or {}
     lines.append(
-        f"unmapped sheet headers (non-blocking, sheet_only by controller ruling): {len(unmapped)}"
-        + (": " + ", ".join(unmapped) if unmapped else "")
+        f"unmapped sheet headers (each settled in overrides.toml [sheet_unmapped]): {len(unmapped)}"
     )
+    for c in unmapped:
+        e = settled.get(c)
+        if e is None:
+            lines.append(f"- {c}: not settled")
+            continue
+        of = f" of {e.of}" if e.of is not None else ""
+        lines.append(f"- {c}: {e.kind}{of}: {e.reason} ({e.source})")
     shared: dict[int, list[str]] = defaultdict(list)
     for m in mappings.sheet:
         if m.id is not None:
