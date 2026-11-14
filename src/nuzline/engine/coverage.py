@@ -193,7 +193,14 @@ AI_FLAG_NAMES = (
 # Per AI policy (game_constants.POLICY): the flag bits ai.policy runs (policy._flags).
 IMPLEMENTED_AI_FLAGS: dict[str, dict[int, Support]] = {
     "vanilla": {0: Support.EXACT, 1: Support.EXACT, 2: Support.EXACT},
-    "kaizo": {0: Support.EXACT, 1: Support.EXACT, 2: Support.EXACT, 4: Support.EXACT},
+    "kaizo": {
+        0: Support.EXACT,
+        1: Support.EXACT,
+        2: Support.EXACT,
+        3: Support.EXACT,
+        4: Support.EXACT,
+        9: Support.EXACT,
+    },
 }
 # The vanilla policy runs these scripts together, so a vanilla trainer must have them all. The
 # Kaizo policy runs each trainer's own set (E1 Ruling R2): every set flag must be implemented.

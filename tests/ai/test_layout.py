@@ -42,14 +42,15 @@ def test_layout_per_flag_set(tables, kaizo_tables):
     from nuzline.data.tables import AI_FLAGS_UNSET
 
     assert layout_of(kaizo_tables) is kaizo_layout(0b10111) == KAIZO
-    for flags in (0x1, 0x5, 0x7, 0x17):
+    sets = (0x1, 0x5, 0x7, 0x17, 0xD, 0xF, 0x1F, 0x207, 0x20F)
+    for flags in sets:
         layout = layout_of(kaizo_tables._replace(ai_flags=jnp.int32(flags)))
         assert layout == KAIZO._replace(flags=flags) and layout.key == f"kaizo-{flags:#x}"
-    assert len({kaizo_layout(f).key for f in (0x1, 0x5, 0x7, 0x17)} | {VANILLA.key}) == 5
+    assert len({kaizo_layout(f).key for f in sets} | {VANILLA.key}) == len(sets) + 1
     with pytest.raises(ValueError, match="not set"):
         layout_of(kaizo_tables._replace(ai_flags=AI_FLAGS_UNSET))
     with pytest.raises(ValueError, match="transcribes only"):
-        kaizo_layout(0xF)  # SETUP_FIRST_TURN, not transcribed yet
+        kaizo_layout(0x27)  # PRIORITIZE_EXTREMES, not transcribed yet
     assert layout_of(tables._replace(ai_flags=jnp.int32(0x17))) is VANILLA
 
 

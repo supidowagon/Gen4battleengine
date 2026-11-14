@@ -337,9 +337,13 @@ def test_kaizo_roark_ai_flags_exact(kaizo_tables, kaizo_names, kaizo_roark, kaiz
         (0x5, []),
         (0x7, []),
         (0x17, []),
-        (0xF, ["SETUP_FIRST_TURN"]),
+        (0xD, []),
+        (0xF, []),
+        (0x1F, []),
+        (0x207, []),
+        (0x20F, []),
         (0x27, ["PRIORITIZE_EXTREMES"]),
-        (0x10F, ["SETUP_FIRST_TURN", "CHECK_HP"]),
+        (0x10F, ["CHECK_HP"]),
     ],
 )
 def test_kaizo_flag_set_needs_every_flag(
@@ -347,7 +351,8 @@ def test_kaizo_flag_set_needs_every_flag(
 ):
     # E1 Ruling R2 (replaces plan K3c Ruling 10's exact set): the Kaizo policy runs each
     # trainer's own flag set, so a set is refused exactly by its unimplemented flags, one line
-    # each, and an implemented set (0x1, 0x5, 0x7, Roark's 0x17) is not.
+    # each, and an implemented set (0x1, 0x5, 0x7, Roark's 0x17; with SETUP_FIRST_TURN and
+    # WEATHER since E1 batch 2b) is not.
     from nuzline.ai.layout import KAIZO_FLAG_BITS
 
     assert set(IMPLEMENTED_AI_FLAGS["kaizo"]) == KAIZO_FLAG_BITS

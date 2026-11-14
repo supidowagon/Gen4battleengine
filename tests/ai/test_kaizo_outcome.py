@@ -645,13 +645,20 @@ def test_exact_equals_loose_on_roark_split_pokemon(
         (3, 0, "Sunkern", ["Toxic", "Mega Drain"]),  # Lass Natalie, flags 0x5
         (4, 1, "Torchic", ["Pound", "Ember", "Rock Smash"]),  # Youngster Michael, flags 0x7
         (246, 0, "Bonsly", ["Stealth Rock", "Selfdestruct", "Brick Break", "Accelerock"]),
+        # E1 batch 2b: SETUP_FIRST_TURN and WEATHER, on the first turn.
+        (195, 1, "Rhyhorn", ["Rock Slide", "Rock Polish"]),  # Colin, flags 0xf
+        (196, 3, "Bidoof", ["Curse", "Accelerock"]),  # Mason, flags 0xf
+        (10, 2, "Psyduck", ["Water Gun", "Confusion"]),  # Youngster Tyler, flags 0x20f
+        (14, 4, "Bellsprout", ["Vine Whip", "Poison Jab", "Wrap"]),  # Taylor, flags 0x20f
     ],
 )
 def test_exact_equals_loose_per_flag_set(
     kaizo_tables, kaizo_names, kaizo_trainers, kaizo_roark_party, trainer_id, index, species, moves
 ):
     """E1 Ruling R2: each Roark-split trainer runs its own flag set (0x1 BASIC; 0x5 BASIC and
-    EXPERT; 0x7 BASIC, EVAL_ATTACK and EXPERT; Roark's 0x17 with RISKY; trainer_ai.c:297-308),
+    EXPERT; 0x7 BASIC, EVAL_ATTACK and EXPERT; Roark's 0x17 with RISKY; 0xf with
+    SETUP_FIRST_TURN; 0x20f with SETUP_FIRST_TURN and WEATHER; trainer_ai.c:297-308; the
+    states are the battle's first turn, where SETUP_FIRST_TURN and WEATHER score),
     and exact == loose under each, on a Pokemon of the trainer with the moves the AI
     transcribes (the others, e.g. Bug Bite, Leech Seed, Protect, Pluck, are not yet), Roark's
     Cranidos behind it, against two guessed players (Gible, Tentacool)."""
@@ -678,12 +685,17 @@ def test_exact_equals_loose_per_flag_set(
 def test_slot_reads_fit_every_transcribed_effect(kaizo_tables, kaizo_roark_party):
     """``KAIZO.slot_reads`` is the most random reads one move's scoring path makes, from the
     data: for every transcribed Kaizo move in slot 0 (the rest drawn from the transcribed
-    pool), over random players (any species with two abilities, any types, guessed or known)
-    and random HP, Defense and evasion stages on both sides, the loose oracle's longest path
+    pool), under every implemented flag at once (0x21f: SETUP_FIRST_TURN's :6429 adds a read
+    on the first turn; WEATHER reads none), over random players (any species with two
+    abilities, any types, guessed or known), random HP, Defense and evasion stages on both
+    sides and the first turn or a later one, the loose oracle's longest path
     (``LooseDraws.live``) makes at most ``slot_reads`` reads, and Selfdestruct's reaches it:
     :117 and :304 (two guesses), :6374, :1859 (evasion +4 or more), :1870 and :1875 (HP at
     most 30 %) and Risky :6530 (script.s:6365-6374, :1841-1884, :6521-6534)."""
+    from nuzline.ai.layout import KAIZO_FLAG_BITS, kaizo_layout
+
     t = kaizo_tables
+    widest = kaizo_layout(sum(1 << b for b in KAIZO_FLAG_BITS))
     effect = np.asarray(t.move_ai_effect)
     pool = _move_pool(t)
     assert {int(effect[m]) for m in pool} == KAIZO.transcribed
@@ -709,10 +721,10 @@ def test_slot_reads_fit_every_transcribed_effect(kaizo_tables, kaizo_roark_party
             stages = s.stages.at[0, Stat.DEF].set(int(rng.integers(-6, 7)))
             stages = stages.at[0, Stat.EVA].set(int(rng.integers(0, 7)))
             s = s._replace(stages=stages.at[1, Stat.DEF].set(int(rng.integers(-6, 7))))
-            states.append(s)
+            states.append(s._replace(turn=jnp.asarray(int(rng.integers(2)), s.turn.dtype)))
         batch = jax.tree.map(lambda *xs: jnp.stack(xs), *states)
-        reads, _, _ = policy._loose_reads(t, batch, KAIZO)
-        _, lo = policy._loose_batch(t, batch, jnp.asarray(policy._loose_patterns(reads)), KAIZO)
+        reads, _, _ = policy._loose_reads(t, batch, widest)
+        _, lo = policy._loose_batch(t, batch, jnp.asarray(policy._loose_patterns(reads)), widest)
         e = int(effect[move])
         most[e] = max(most.get(e, 0), int(np.asarray(lo.live)[:, :, 0].sum(axis=2).max()))
     assert max(most.values()) <= KAIZO.slot_reads, most

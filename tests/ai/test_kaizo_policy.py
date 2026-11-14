@@ -99,7 +99,7 @@ def _state(t, party, mon: int, moves, bench=(CRANIDOS,), players: int = 2, hp: i
     return _bulky(s, hp)
 
 
-def _outcome(t, s, guess: int = 0, jumps=()) -> AiOutcome:
+def _outcome(t, s, guess: int = 0, jumps=(), layout=KAIZO) -> AiOutcome:
     """The per-slot outcome where the ``(slot, line)`` ``IfRandomLessThan`` reads of ``jumps``
     jump and no other does, and every guessing read takes ability slot ``guess``. The reads'
     order on each slot's path (E1 Ruling R4) is the loose oracle's (``LooseDraws``: every read
@@ -108,7 +108,7 @@ def _outcome(t, s, guess: int = 0, jumps=()) -> AiOutcome:
     ability read that does not guess."""
     batch = jax.tree.map(lambda a: jnp.asarray(a)[None], s)
     bits = np.zeros((1, MOVES, c.LOOSE_READS), np.int8)
-    _, lo = policy._loose_batch(t, batch, jnp.asarray(bits), KAIZO)
+    _, lo = policy._loose_batch(t, batch, jnp.asarray(bits), layout)
     kind, line = np.asarray(lo.kind)[0, 0], np.asarray(lo.line)[0, 0]  # static order
     roll = kind == c.ReadKind.ROLL
     # A LoadBattlerAbility DEFENDER draws only when the decision guesses (trainer_ai.c:1191-1198).
@@ -116,9 +116,9 @@ def _outcome(t, s, guess: int = 0, jumps=()) -> AiOutcome:
     for slot, at in jumps:
         bits[0, slot] |= (roll[slot] & (line[slot] == at)).astype(np.int8)
     bits[0] |= (ability * guess).astype(np.int8)
-    _, lo = policy._loose_batch(t, batch, jnp.asarray(bits), KAIZO)
+    _, lo = policy._loose_batch(t, batch, jnp.asarray(bits), layout)
     live = np.asarray(lo.live)[0, 0]
-    rolls = np.full((MOVES, KAIZO.slot_reads), READ_DRAWS[0], np.uint8)
+    rolls = np.full((MOVES, layout.slot_reads), READ_DRAWS[0], np.uint8)
     for slot in range(MOVES):
         on_path = np.flatnonzero(live[slot] & (roll[slot] | ability[slot]))
         for k, i in enumerate(on_path):
@@ -1262,6 +1262,10 @@ def test_exact_equals_loose_at_equal_speed(kaizo_tables, kaizo_names, kaizo_roar
         (0x5, ["_basic", "_expert"]),
         (0x7, ["_basic", "_eval_attack", "_expert"]),
         (0x17, ["_basic", "_eval_attack", "_expert", "_risky"]),
+        (0xD, ["_basic", "_expert", "_setup_first_turn"]),
+        (0x1F, ["_basic", "_eval_attack", "_expert", "_setup_first_turn", "_risky"]),
+        (0x207, ["_basic", "_eval_attack", "_expert", "_weather"]),
+        (0x20F, ["_basic", "_eval_attack", "_expert", "_setup_first_turn", "_weather"]),
     ],
 )
 def test_flag_set_runs_its_scripts(kaizo_tables, kaizo_roark_party, flags, scripts):
@@ -1303,3 +1307,124 @@ def test_opponent_move_refusals_are_refused(kaizo_tables, kaizo_roark_party):
         )
         kinds = policy.opponent_move_refusals(t, move, KAIZO)
         assert bool(kinds) == by_move, (move, kinds)
+
+
+# --- SETUP_FIRST_TURN and WEATHER (E1 batch 2b) ----------------------------------------------
+
+
+@partial(jax.jit, static_argnames="layout")
+def _layout_scores(t, s, o, layout):
+    return policy._run_flags(c.new_context(t, s, o), layout).scores
+
+
+def _delta(t, s, base: int, flags: int, jumps=()) -> list[int]:
+    """Per slot, the score under the flag set ``flags`` minus the score under ``base`` (its
+    first flags), with the ``(slot, line)`` rolls of ``jumps`` jumping and no other."""
+    from nuzline.ai.layout import kaizo_layout
+
+    lo, hi = kaizo_layout(base), kaizo_layout(flags)
+    before = _layout_scores(t, s, _outcome(t, s, layout=lo), lo)
+    after = _layout_scores(t, s, _outcome(t, s, jumps=jumps, layout=hi), hi)
+    return [int(b) - int(a) for a, b in zip(before, after, strict=True)]
+
+
+def _path_lines(t, s, layout) -> list[set[int]]:
+    """Per slot, the script.s lines of the random reads on the path where no read jumps."""
+    batch = jax.tree.map(lambda a: jnp.asarray(a)[None], s)
+    bits = np.zeros((1, MOVES, c.LOOSE_READS), np.int8)
+    _, lo = policy._loose_batch(t, batch, jnp.asarray(bits), layout)
+    live, line = np.asarray(lo.live)[0, 0], np.asarray(lo.line)[0, 0]
+    return [set(line[m][live[m]].tolist()) for m in range(MOVES)]
+
+
+def _turn(s, turn: int):
+    return s._replace(turn=jnp.asarray(turn, s.turn.dtype))
+
+
+# Rock Polish (SPEED_UP_2, script.s:6457), Light Screen (SET_LIGHT_SCREEN, :6451) and Curse
+# (:6475) are in SetupFirstTurn_SetupEffects; Stealth Rock's effect is not.
+_SETUP_MOVES = (ROCK_POLISH, LIGHT_SCREEN, CURSE, STEALTH_ROCK)
+
+
+def test_setup_first_turn_effects_are_the_decomps():
+    """``commands.SETUP_FIRST_TURN_EFFECTS`` is SetupFirstTurn_SetupEffects (script.s:6435-6497)
+    entry by entry, through generated/move_battle_effects.txt (line n + 1 is id n)."""
+    script, ids = (
+        DECOMP / "src/battle/trainer_ai/script.s",
+        DECOMP / "generated/move_battle_effects.txt",
+    )
+    if not script.exists() or not ids.exists():
+        pytest.skip("decomp not present")
+    names = ids.read_text(encoding="utf-8").split()
+    lines = script.read_text(encoding="utf-8").splitlines()
+    assert lines[6434] == "SetupFirstTurn_SetupEffects:"
+    entries = []
+    for line in lines[6435:]:
+        name = line.split()[1]
+        if name == "TABLE_END":
+            break
+        entries.append(names.index(name))
+    assert tuple(entries) == c.SETUP_FIRST_TURN_EFFECTS
+
+
+@pytest.mark.parametrize("turn", [0, 1])
+@pytest.mark.parametrize("jump", [0, 1])
+def test_setup_first_turn(kaizo_tables, kaizo_roark_party, turn, jump):
+    """SetupFirstTurn_Main (script.s:6417-6433): on totalTurns 0 (LoadTurnCount,
+    trainer_ai.c:931-935) a move whose effect is in the table gets +2 unless the 80 roll
+    (:6429) jumps; on a later turn, and for another effect, no roll and no score. Against
+    BASIC, EVAL_ATTACK and EXPERT (set 0x7 -> 0xf)."""
+    from nuzline.ai.layout import kaizo_layout
+
+    t = kaizo_tables
+    s = _turn(_state(t, kaizo_roark_party, BONSLY, _SETUP_MOVES), turn)
+    jumps = tuple((slot, 6429) for slot in range(3)) if jump else ()
+    plus = 2 if turn == 0 and not jump else 0
+    assert _delta(t, s, 0x7, 0xF, jumps) == [plus, plus, plus, 0]
+    rolls = [6429 in lines for lines in _path_lines(t, s, kaizo_layout(0xF))]
+    assert rolls == [turn == 0] * 3 + [False]
+    _assert_exact_equals_loose(t, s, kaizo_layout(0xF))
+
+
+@pytest.mark.parametrize(
+    ("weather", "turn", "expected"),
+    [
+        (Weather.NONE, 0, [5, 5, 5, 5]),
+        (Weather.SANDSTORM, 0, [5, 5, 5, 5]),
+        # The fall-through (E1 Ruling R3): a non-weather move runs Weather_Sun and ends.
+        (Weather.SUN, 0, [0, 0, 0, 5]),
+        (Weather.RAIN, 0, [5, 5, 5, 0]),
+        (Weather.NONE, 1, [0, 0, 0, 0]),
+    ],
+)
+def test_weather(kaizo_tables, kaizo_names, kaizo_roark_party, weather, turn, expected):
+    """Weather_Main (script.s:7979-8019), against set 0x7 (-> 0x207): on totalTurns 0 a
+    weather move ends when its own weather is up (Weather_Sun/Rain, :7992-8000) and every other
+    move falls through into Weather_Sun (no GoTo after :7990), so it ends under sun; otherwise
+    Weather_ScorePlus5 gives +5 (the lead's LoadIsFirstTurnInBattle is TRUE, :8014-8016).
+    Slots: Stealth Rock, Rock Polish, Sunny Day (WEATHER_SUN), Rain Dance (WEATHER_RAIN);
+    refusals are not applied (the weather moves are unmodelled)."""
+    t, n = kaizo_tables, kaizo_names
+    sunny, rain = n.move_names.index("Sunny Day"), n.move_names.index("Rain Dance")
+    effect = np.asarray(t.move_ai_effect)
+    assert (effect[sunny], effect[rain]) == (BattleEffect.WEATHER_SUN, BattleEffect.WEATHER_RAIN)
+    s = _state(t, kaizo_roark_party, BONSLY, (STEALTH_ROCK, ROCK_POLISH, sunny, rain))
+    s = _turn(s, turn)._replace(weather=jnp.asarray(weather, s.weather.dtype))
+    assert _delta(t, s, 0x7, 0x207) == expected
+
+
+@pytest.mark.parametrize("flags", [0xD, 0xF, 0x1F, 0x207, 0x20F])
+@pytest.mark.parametrize("turn", [0, 1])
+def test_exact_equals_loose_with_setup_and_weather(kaizo_tables, kaizo_roark_party, flags, turn):
+    """Exact == loose under the 2b flag sets, on the first turn and after it: Rock Polish,
+    Curse, Selfdestruct and Light Screen (three in SetupFirstTurn_SetupEffects, Selfdestruct
+    with the longest path, kaizo_roark.md 8.3) against a guessed Gible and Tentacool."""
+    from nuzline.ai.layout import kaizo_layout
+    from tests.ai.test_kaizo_outcome import GIBLE as GIBLE_SPECIES
+
+    t = kaizo_tables
+    moves = (ROCK_POLISH, CURSE, SELFDESTRUCT, LIGHT_SCREEN)
+    for player in (GIBLE_SPECIES, 72):
+        s = _state(t, kaizo_roark_party, BONSLY, moves, hp=200)
+        s = _turn(_with_player(t, s, player), turn)
+        _assert_exact_equals_loose(t, s, kaizo_layout(flags))

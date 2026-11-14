@@ -163,8 +163,12 @@ class BattleEffect(IntEnum):
     PRIORITY_1 = 103  # EvalAttack_ApplyKillBonuses' +2 (script.s:6400); no Roark move has it
     CURSE = 109
     PROTECT = 111  # Expert_ToxicLeechSeed's IfMoveEffectKnown (script.s:2700)
+    WEATHER_SANDSTORM = 115  # Weather_Main (script.s:7989)
     HIT_BEFORE_SWITCH = 128
+    WEATHER_RAIN = 136  # Weather_Main (script.s:7988)
+    WEATHER_SUN = 137  # Weather_Main (script.s:7987)
     RAISE_ALL_STATS_HIT = 140  # AncientPower (Risky_RiskyEffects, script.s:6550)
+    WEATHER_HAIL = 164  # Weather_Main (script.s:7990)
     REMOVE_SCREENS = 186  # Brick Break
     STEAL_STATUS_MOVE = 195  # Snatch (Expert_Recovery_CheckForSnatch, script.s:2670)
     STEALTH_ROCK = 266
@@ -251,6 +255,73 @@ RISKY_EFFECTS = (
     230,  # DOUBLE_POWER_IF_MOVING_SECOND
     241,  # USE_MOVE_FIRST
     248,  # HIT_FIRST_IF_TARGET_ATTACKING
+)
+# SetupFirstTurn_SetupEffects (script.s:6435-6497): the effects SetupFirstTurn_Main scores on
+# turn 0 (IfLoadedNotInTable, :6426; trainer_ai.c:876-891). BATTLE_EFFECT_* ids, line - 1 of
+# generated/move_battle_effects.txt, in the table's order, its two repeats included (61
+# entries, 59 effects).
+SETUP_FIRST_TURN_EFFECTS = (
+    10,  # ATK_UP (:6436)
+    11,  # DEF_UP
+    12,  # SPEED_UP
+    13,  # SP_ATK_UP
+    14,  # SP_DEF_UP
+    15,  # ACC_UP
+    16,  # EVA_UP
+    18,  # ATK_DOWN
+    19,  # DEF_DOWN
+    20,  # SPEED_DOWN
+    21,  # SP_ATK_DOWN
+    22,  # SP_DEF_DOWN
+    23,  # ACC_DOWN
+    24,  # EVA_DOWN
+    30,  # CONVERSION
+    35,  # SET_LIGHT_SCREEN
+    54,  # SP_DEF_UP_2 (:6452, again at :6459)
+    47,  # CRIT_UP_2
+    49,  # STATUS_CONFUSE
+    50,  # ATK_UP_2
+    51,  # DEF_UP_2
+    52,  # SPEED_UP_2
+    53,  # SP_ATK_UP_2
+    54,  # SP_DEF_UP_2
+    55,  # ACC_UP_2
+    56,  # EVA_UP_2
+    58,  # ATK_DOWN_2
+    59,  # DEF_DOWN_2
+    60,  # SPEED_DOWN_2
+    61,  # SP_ATK_DOWN_2
+    62,  # SP_DEF_DOWN_2
+    63,  # EVA_DOWN_2
+    64,  # ACC_DOWN_2
+    65,  # SET_REFLECT
+    66,  # STATUS_POISON
+    67,  # STATUS_PARALYZE
+    79,  # SET_SUBSTITUTE
+    84,  # STATUS_LEECH_SEED
+    108,  # EVA_UP_2_MINIMIZE
+    109,  # CURSE
+    118,  # ATK_UP_2_STATUS_CONFUSION
+    213,  # CAMOUFLAGE (:6477, again at :6490)
+    187,  # STATUS_SLEEP_NEXT_TURN
+    156,  # DEF_UP_DOUBLE_ROLLOUT_POWER
+    165,  # TORMENT
+    166,  # SP_ATK_UP_CAUSE_CONFUSION
+    167,  # STATUS_BURN
+    181,  # GROUND_TRAP_USER_CONTINUOUS_HEAL
+    192,  # MAKE_SHARED_MOVES_UNUSEABLE
+    199,  # CONFUSE_ALL
+    205,  # ATK_DEF_DOWN
+    206,  # DEF_SPD_UP
+    208,  # ATK_DEF_UP
+    211,  # SP_ATK_SP_DEF_UP
+    213,  # CAMOUFLAGE
+    225,  # DOUBLE_SPEED_3_TURNS
+    226,  # RANDOM_STAT_UP_2
+    240,  # PREVENT_CRITS
+    252,  # GIVE_GROUND_IMMUNITY
+    258,  # REMOVE_HAZARDS_SCREENS_EVA_DOWN
+    261,  # WHIRLPOOL (:6496)
 )
 # A move's class (MoveTable.class, generated/move_classes.txt: line n + 1 is id n), as
 # LoadDefenderLastUsedMoveClass loads it (Expert_LightScreen, script.s:2723).
@@ -1063,6 +1134,13 @@ def load_defender_last_used_move_class(ctx: AiContext) -> AiContext:
     (res/moves/none/data.json); for Nature Power it is Nature Power."""
     move = ctx.state.last_move[0].astype(_I32)
     return ctx._replace(calc_temp=ctx.tables.move_category[move].astype(_I32))
+
+
+def load_turn_count(ctx: AiContext) -> AiContext:
+    """``LoadTurnCount`` (trainer_ai.c:931-935): ``calcTemp = totalTurns``
+    (``BattleState.turn`` at a decision, engine/state.py; the battle increments it once a
+    turn ends, battle_controller_player.c:1852), 0 on the battle's first turn."""
+    return ctx._replace(calc_temp=ctx.state.turn.astype(_I32))
 
 
 def load_current_move_effect(ctx: AiContext) -> AiContext:

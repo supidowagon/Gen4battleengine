@@ -200,6 +200,8 @@ SITE_N: dict[int, int] = {
     3486: 128,  # Expert_Curse_CheckDefenseStage
     3491: 128,  # Expert_Curse_CheckDefenseStageAnyBoosts
     6530: 128,  # Risky_Main (+2 when it does NOT jump)
+    # E1 batch 2b: SetupFirstTurn_Main, turn 0 only, an effect of its table.
+    6429: 80,  # SetupFirstTurn_Main (+2 when it does NOT jump)
 }
 SITE_LINES = tuple(SITE_N)
 # The flat (vanilla) layout's column of script_roll_sites that each line reads: column 0 is

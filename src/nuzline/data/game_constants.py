@@ -442,6 +442,12 @@ EXEMPT: dict[str, str] = {
         "change apart from one word (docs/ai/kaizo_roark.md 2); each game's moves carry their "
         "own effect"
     ),
+    "nuzline.ai.commands.SETUP_FIRST_TURN_EFFECTS": (
+        "decomp battle effect ids of script.s's SetupFirstTurn_SetupEffects (:6435-6497), "
+        "compared with MoveTable.effect (IfLoadedNotInTable, trainer_ai.c:876-891) by a script "
+        "Kaizo did not change apart from one word (docs/ai/kaizo_roark.md 2); each game's moves "
+        "carry their own effect"
+    ),
     "nuzline.ai.commands.ALT_POWER_EFFECTS": (
         "decomp battle effect ids of trainer_ai.c's sAltPowerMoveEffects (:48-61), compared "
         "with MoveTable.effect by the AI's C code, which Kaizo did not change "

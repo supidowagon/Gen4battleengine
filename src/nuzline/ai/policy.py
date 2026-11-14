@@ -60,7 +60,17 @@ import numpy as np
 from nuzline.ai import commands as c
 from nuzline.ai import switching
 from nuzline.ai.commands import AiContext, BattleEffect, Battler, LoadType, TypeMulti
-from nuzline.ai.layout import BASIC, EVAL_ATTACK, EXPERT, RISKY, VANILLA, AiLayout, layout_of
+from nuzline.ai.layout import (
+    BASIC,
+    EVAL_ATTACK,
+    EXPERT,
+    RISKY,
+    SETUP_FIRST_TURN,
+    VANILLA,
+    WEATHER,
+    AiLayout,
+    layout_of,
+)
 from nuzline.ai.outcome import (
     ABILITY_GUESSES,
     ENUMERATION_WIDTH,
@@ -782,18 +792,68 @@ def _risky(ctx: AiContext) -> AiContext:
     return c.pop_or_end(c.add_to_move_score(ctx, 2))
 
 
+def _setup_first_turn(ctx: AiContext) -> AiContext:
+    """``SetupFirstTurn_Main`` (script.s:6417-6433): on the battle's first turn
+    (``LoadTurnCount`` 0, :6421-6422), a move whose effect is in
+    ``SetupFirstTurn_SetupEffects`` (``commands.SETUP_FIRST_TURN_EFFECTS``, :6425-6426) gets
+    +2 unless the 80 roll (:6429) jumps."""
+    ctx = _terminate(ctx)
+    ctx = c.load_turn_count(ctx)
+    ctx, _ = _split(c.if_loaded_not_equal_to(ctx, 0))  # -> SetupFirstTurn_Terminate
+    ctx = c.load_current_move_effect(ctx)
+    ctx, _ = _split(c.if_loaded_not_in_table(ctx, c.SETUP_FIRST_TURN_EFFECTS))
+    ctx, _ = _split(c.if_random_less_than(ctx, 80, 6429))
+    return c.pop_or_end(c.add_to_move_score(ctx, 2))
+
+
+def _weather(ctx: AiContext) -> AiContext:
+    """``Weather_Main`` (script.s:7979-8019): on the battle's first turn (``LoadTurnCount`` 0,
+    :7983-7984), a weather move goes to its weather's label (:7987-7990) and every other move
+    falls through into ``Weather_Sun`` (no ``GoTo`` after :7990; E1 Ruling R3, transcribed as
+    the game has it). A label ends unless the current weather (``LoadCurrentWeather``) is
+    another than its own (:7992-8010); then ``Weather_ScorePlus5`` gives +5 while the
+    attacker's ``LoadIsFirstTurnInBattle`` is TRUE (:8012-8016)."""
+    ctx = _terminate(ctx)
+    ctx = c.load_turn_count(ctx)
+    ctx, _ = _split(c.if_loaded_not_equal_to(ctx, 0))  # -> Weather_Terminate
+    ctx, sun = _split(c.if_current_move_effect_equal_to(ctx, BattleEffect.WEATHER_SUN))
+    ctx, rain = _split(c.if_current_move_effect_equal_to(ctx, BattleEffect.WEATHER_RAIN))
+    ctx, sand = _split(c.if_current_move_effect_equal_to(ctx, BattleEffect.WEATHER_SANDSTORM))
+    ctx, hail = _split(c.if_current_move_effect_equal_to(ctx, BattleEffect.WEATHER_HAIL))
+    sun = sun | ctx.live  # the fall-through into Weather_Sun (:7992)
+    plus5 = jnp.zeros_like(ctx.live)
+    for reached, weather in (
+        (sun, c.AiWeather.SUNNY),  # Weather_Sun (:7992)
+        (rain, c.AiWeather.RAINING),  # Weather_Rain (:7997)
+        (sand, c.AiWeather.SANDSTORM),  # Weather_Sand (:8002)
+        (hail, c.AiWeather.HAILING),  # Weather_Hail (:8007)
+    ):
+        ctx = c.load_current_weather(_at(ctx, reached))
+        ctx, _ = _split(c.if_loaded_equal_to(ctx, int(weather)))  # -> Weather_Terminate
+        ctx, t = _split(c.go_to(ctx))
+        plus5 = plus5 | t
+
+    # Weather_ScorePlus5 (:8012)
+    ctx = c.load_is_first_turn_in_battle(_at(ctx, plus5), _A)
+    ctx, _ = _split(c.if_loaded_equal_to(ctx, 0))  # FALSE -> Weather_Terminate
+    return c.pop_or_end(c.add_to_move_score(ctx, 5))
+
+
 def _flags(layout: AiLayout) -> tuple:
     """The flag scripts the policy runs: those of ``layout.flags``' set bits, in bit order
     (``TrainerAI_MainSingles`` runs a flag's script only when its bit is set, low bit first,
     trainer_ai.c:297-308; ``FlagTable``, script.s:18-30): BASIC (bit 0), EVAL_ATTACK (1),
-    EXPERT (2), RISKY (4). Vanilla runs 7 (roark.md 1); Kaizo the trainer's set (E1 Ruling
+    EXPERT (2), SETUP_FIRST_TURN (3), RISKY (4), WEATHER (9). Vanilla runs 7 (roark.md 1);
+    Kaizo the trainer's set (E1 Ruling
     R2), Roark's 23. A bit without a transcribed script raises (``layout.kaizo_layout``
     builds no such layout; coverage refuses the trainer)."""
     scripts = {
         BASIC: partial(_basic, layout=layout),
         EVAL_ATTACK: _eval_attack,
         EXPERT: partial(_expert, layout=layout),
+        SETUP_FIRST_TURN: _setup_first_turn,
         RISKY: _risky,
+        WEATHER: _weather,
     }
     out = []
     for bit in range(layout.flags.bit_length()):

@@ -32,11 +32,13 @@ The sections keep roark.md's numbers, so a rule can be compared section by secti
   `cli`, and `check_coverage` for its `ai_refusals`); `layout_of` refuses Kaizo tables whose
   flags are unset. The search's program caches key on `AiLayout.key` (policy and flag set:
   `expand.ai_rows`, `leaves`, `stage_a`). Implemented sets: every set of BASIC, EVAL_ATTACK,
-  EXPERT and RISKY (`layout.KAIZO_FLAG_BITS`), among them 0x1, 0x5, 0x7 and Roark's 0x17.
+  EXPERT, SETUP_FIRST_TURN, RISKY and WEATHER (`layout.KAIZO_FLAG_BITS`; the last two since
+  E1 batch 2b, 5.5-5.6), among them 0x1, 0x5, 0x7, Roark's 0x17, 0xd, 0xf, 0x1f, 0x207 and
+  0x20f.
   `KAIZO` is Roark's set and stays bit-identical. Width does not depend on the set: reads are
   keyed by path order (8.2), so a set's reads cost only the moves that make them.
 - Coverage (`engine/coverage.py`) registers the flags per policy: `IMPLEMENTED_AI_FLAGS` is
-  `{0, 1, 2}` for vanilla and `{0, 1, 2, 4}` for Kaizo. A Kaizo trainer is refused exactly by
+  `{0, 1, 2}` for vanilla and `{0, 1, 2, 3, 4, 9}` for Kaizo. A Kaizo trainer is refused exactly by
   its unimplemented flags, one "AI_FLAG_..." line each (`tests/engine/test_coverage.py
   test_kaizo_flag_set_needs_every_flag`). Vanilla keeps its one set: a vanilla trainer
   without all of BASIC, EVAL_ATTACK and EXPERT is refused (`POLICY_AI_FLAGS`), and one with
@@ -411,6 +413,36 @@ flag set has bit 4, E1 Ruling R2), not only of coverage. So a caller of `ai_refu
 `ai_scores` alone never scores Selfdestruct or AncientPower without the roll under Roark's set
 (Task 5 review m2; `test_risky_is_part_of_the_policy`), and never adds it under a set without
 RISKY (`test_flag_set_runs_its_scripts`).
+
+### 5.5 SETUP_FIRST_TURN (`SetupFirstTurn_Main`, `script.s:6417-6433`; E1 batch 2b)
+
+Not one of Roark's flags (bit 3; sets 0xd, 0xf, 0x1f, 0x10f, 0x20f of the Roark and Gardenia
+splits). `LoadTurnCount` (`trainer_ai.c:931-935`, `totalTurns`, `BattleState.turn`) not 0
+ends it (`:6421-6422`): it scores only on the battle's first turn. Then `LoadCurrentMoveEffect`
+and `IfLoadedNotInTable SetupFirstTurn_SetupEffects` (`:6425-6426`; the table is
+`:6435-6497`, 61 entries and 59 effects, SP_DEF_UP_2 and CAMOUFLAGE listed twice:
+`commands.SETUP_FIRST_TURN_EFFECTS`). A listed effect takes the 80 roll (`:6429`), **+2** when
+it does not jump (probability 176/256). Of the transcribed effects the table lists DEF_DOWN,
+SET_LIGHT_SCREEN, SPEED_UP_2, DEF_DOWN_2, CURSE and WHIRLPOOL. The roll is one more read on
+the slot's path (8.2); the read bound (8.3) holds under every implemented set
+(`test_slot_reads_fit_every_transcribed_effect` runs them all at once, on the first turn and
+after it).
+
+### 5.6 WEATHER (`Weather_Main`, `script.s:7979-8019`; E1 batch 2b)
+
+Bit 9 (sets 0x207, 0x20f). It too ends unless `LoadTurnCount` is 0 (`:7983-7984`). The four
+`IfCurrentMoveEffectEqualTo` (`:7987-7990`: WEATHER_SUN, _RAIN, _SANDSTORM, _HAIL) send a
+weather move to its weather's label, and **no `GoTo` follows them: every other move falls
+through into `Weather_Sun`** (`:7992`; E1 Ruling R3, transcribed as the game has it). Each
+label loads `LoadCurrentWeather` (`trainer_ai.c:1414-1439`) and ends when it is the label's
+own weather (`:7993-7994` and so on), else goes to `Weather_ScorePlus5` (`:8012-8016`):
+**+5** when the attacker's `LoadIsFirstTurnInBattle` is TRUE (`:2480`; on the first turn the
+lead's `fakeOutTurnNumber` is 0, so always). So on the first turn every non-weather move gets
++5 unless the weather is sun, and a weather move gets +5 unless its weather is already up.
+No roll. The +5 is uniform over the non-weather moves but not a no-op: a later flag's
+`AddToMoveScore` clamps at 0 (`trainer_ai.c:576`). The weather moves themselves are
+unmodelled engine effects (refused by move effect), and a runnable fight's weather is none or
+sandstorm (`coverage.IMPLEMENTED_WEATHER`); the transcription covers all four labels anyway.
 
 ## 6. Where the AI reads the true battle state
 
