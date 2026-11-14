@@ -487,3 +487,31 @@ def on_switch_in(tables: Tables, state: BattleState, side) -> BattleState:
     state = recover_status_by_ability(state, foe, traced)
     state = after_damage_items(tables, state, side)
     return after_damage_items(tables, state, foe)
+
+
+def battle_start(tables: Tables, state: BattleState) -> BattleState:
+    """The leads' switch-in checks at the start of the battle: ``ShowBattleMon``
+    (battle_controller_player.c:256) runs ``BattleSystem_TriggerEffectOnSwitch`` once, a state
+    machine whose every state loops over all battlers (``monSpeedOrder``) before the next
+    state runs (battle_lib.c:3649-4168): Trace (:3718-3737) for each lead, then the weather
+    abilities (:3740-3790), then Intimidate (:3795-3808, once per battler: its
+    ``intimidateAnnounced``), then the switch-in announcements, the forbidden-status check
+    (:4135) and the held-item check (:4151). So a lead that traced Intimidate fires it once,
+    in the Intimidate state, like any Intimidate lead (ruling B3-18). No entry hazard is up at
+    the start. A loop over battlers per state (the doubles conventions); in singles the order
+    within a state changes nothing (``on_switch_in``'s docstring)."""
+    sides = (0, 1)
+    for side in sides:
+        state, _ = trace(tables, state, side, 1 - side)
+    for side in sides:
+        state = weather_ability(state, side)
+    for side in sides:
+        state = intimidate(state, side, foe=1 - side)
+    for side in sides:
+        mon = state.active[side]
+        state = reveal_ability(state, side, mon, SWITCH_IN, state.hp[side, mon] > 0)
+    for side in sides:
+        state = recover_status_by_ability(state, side)
+    for side in sides:
+        state = after_damage_items(tables, state, side)
+    return state

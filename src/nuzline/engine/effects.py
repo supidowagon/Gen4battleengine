@@ -246,6 +246,7 @@ from nuzline.engine.damage import (
     ignorable,
     levitated,
     move_type_of,
+    stealth_rock_loss,
     weather_suppressed,
 )
 from nuzline.engine.ids import (
@@ -1055,17 +1056,11 @@ def shell_bell_heal(tables: Tables, state: BattleState, side, dealt, cond) -> Ba
 
 def stealth_rock_damage(tables: Tables, state: BattleState, side) -> BattleState:
     """Stealth Rock on ``side``'s active Pokemon as it switches in
-    (``subscript_hazards_check.s`` -> ``BtlCmd_CheckStealthRock``, battle_script.c:8302):
-    with the flag set and HP left, ``BattleSystem_Divide(maxHP, 32/16/8/4/2)`` by the
-    Rock matchup (``BattleSystem_TypeMatchupMultiplier``), i.e. ``maxHP * eff // 800``
-    in ``effectiveness``'s x100 encoding, at least 1; nothing when immune."""
+    (``damage.stealth_rock_loss``), with HP left, capped at its HP."""
     side = jnp.asarray(side, _I32)
     mon = state.active[side]
-    eff = effectiveness(tables, Type.ROCK, state.types[side, mon])
-    max_hp = state.max_hp[side, mon].astype(_I32)
     hp = state.hp[side, mon].astype(_I32)
-    damage = jnp.where(eff > 0, jnp.maximum(max_hp * eff // 800, 1), 0)
-    damage = jnp.where((state.stealth_rock[side] != 0) & (hp > 0), jnp.minimum(damage, hp), 0)
+    damage = jnp.where(hp > 0, jnp.minimum(stealth_rock_loss(tables, state, side, mon), hp), 0)
     return state._replace(hp=state.hp.at[side, mon].set((hp - damage).astype(state.hp.dtype)))
 
 

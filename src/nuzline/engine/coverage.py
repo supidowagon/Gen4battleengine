@@ -72,7 +72,8 @@ items) and plan 1b (Task 2b: trainer items; Task 3: Roark's AI flags) implement:
   (``ChooseTraceTarget``, battle_lib.c:7750-7775), so it stays armed and copies the next
   Pokemon the other side sends in at that switch, in the middle of a turn whose chance laws
   (``enumerate``, ``outcome.sample_outcome``) read the holder's ability at the turn start;
-  refused (ruling B3-14);
+  refused (ruling B3-14); and, until the AI reads the battler's ability, a Trace holder on
+  either side or in the pool, as an AI gap (``trace_ai_line``, ruling B3-21);
 * in-battle form changes (plan K2a Ruling 8), on either side: Giratina-Origin without the
   Griseous Orb reverts to Altered Forme at battle start (``battle_lib.c:6412-6417``,
   ``subscript_form_change``) and Shaymin-Sky reverts to Land Forme when frozen
@@ -640,6 +641,22 @@ def trace_standoff_line(
     return None
 
 
+# Ruling B3-21: the AI reads ``tables.species_abilities_decomp`` by species (ai/commands.py,
+# ai/policy.py, ai/switching.py), so it sees Trace where the decomp's LoadBattlerAbility
+# (trainer_ai.c:1170-1198) returns the copy that subscript_trace.s wrote with
+# BattleAI_SetAbility (battle_script.c:3401-3403). Until the AI reads the battler's ability, a
+# Trace holder on either side is refused as an AI gap (ledger, Owed).
+TRACE_AI_REASON = (
+    "Trace: the AI reads the species' ability, not the one Trace copied into the battler "
+    "(LoadBattlerAbility, trainer_ai.c:1170-1198; battle_script.c:3401-3403)"
+)
+
+
+def trace_ai_line(tables: Tables, party: Sequence[PokemonSpec]) -> str | None:
+    """``TRACE_AI_REASON`` when a Pokemon of ``party`` has Trace (ruling B3-21), else None."""
+    return TRACE_AI_REASON if AbilityId.TRACE in _party_abilities(tables, party) else None
+
+
 def _check_party(
     c: _Collector,
     tables: Tables,
@@ -929,6 +946,8 @@ def check_opponent(
     them per setup."""
     c = _Collector()
     _check_party(c, tables, names, display_name(trainer), opp, trainer_side=True)
+    if (line := trace_ai_line(tables, opp)) is not None:
+        c.add(Support.NONE, f"{display_name(trainer)}: {line}", "trainer AI")
     _check_trainer(c, tables, names, trainer, [*player, *opp], extra_moves)
     # An "unknown" start condition is refused by _check_trainer, never read as a weather.
     weathers = [start_condition]
@@ -968,6 +987,8 @@ def check_coverage(
     for line in (weather_war_line(tables, player, opp), trace_standoff_line(tables, player, opp)):
         if line is not None:
             c.add(Support.NONE, f"{display_name(trainer)}: {line}", "ability")
+    if (line := trace_ai_line(tables, player)) is not None:
+        c.add(Support.NONE, f"Player: {line}", "trainer AI")
     learnable = [learnable_moves(tables, mon, opp) for mon in player]
     extra = sorted({m for moves in learnable for m in moves})
     theirs = check_opponent(tables, names, trainer, opp, start_condition, player, extra)

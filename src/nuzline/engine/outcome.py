@@ -44,7 +44,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from nuzline.data.tables import Tables
-from nuzline.engine.damage import PRESENT_HEAL, entry_weather, weather_suppressed
+from nuzline.engine.damage import PRESENT_HEAL, entry_ability, entry_weather, weather_suppressed
 from nuzline.engine.ids import QUICK_CLAW_MODULUS, AbilityId, EffectId, ItemId, Stat, Weather
 from nuzline.engine.order import MOVE_ACTIONS, action_order, is_item, is_switch, used_move
 from nuzline.engine.state import STAGE_MAX, STAGE_MIN, BattleState
@@ -140,6 +140,7 @@ def _rate(
     state: BattleState,
     side,
     move,
+    target,
     target_mon,
     target_switches,
     acc,
@@ -148,21 +149,26 @@ def _rate(
     weather=None,
     target_confused=None,
 ) -> jnp.ndarray:
-    """``hitRate`` of ``side``'s ``move`` against the other side's ``target_mon`` with the
+    """``hitRate`` of ``side``'s ``move`` against side ``target``'s ``target_mon`` with the
     attacker's accuracy stage ``acc`` and the target's evasion stage ``eva_stage``
     (``target_switches``: it comes in this turn, fresh); ``target_moved``: the target's action
     is over (``Battler_MovedThisTurn``, battle_lib.c:5365-5368: in singles, the attacker acts
     second), for Zoom Lens; ``weather`` (default ``state.weather``) and ``target_confused``
     (default: the target's confusion counter is nonzero, a newcomer never) as at the check.
-    100 when No Guard makes the move hit (``CheckMoveHitOverrides``, bcp.c:3016-3021)."""
+    100 when No Guard makes the move hit (``CheckMoveHitOverrides``, bcp.c:3016-3021). A
+    target that switches in holds its entry ability (``damage.entry_ability``: the copy when it
+    traces), since its switch-in checks run before the move (ruling B3-19)."""
     weather = state.weather if weather is None else weather
     if target_confused is None:
-        target_confused = ~target_switches & (state.confusion[1 - side] > 0)
+        target_confused = ~target_switches & (state.confusion[target] > 0)
     accuracy = tables.move_accuracy[move].astype(_I32)
-    target = 1 - side
     a_ability = state.ability[side, state.active[side]]
-    d_ability = state.ability[target, target_mon]
-    d_ability = jnp.where(a_ability == AbilityId.MOLD_BREAKER, AbilityId.NONE, d_ability)
+    own = jnp.where(
+        jnp.asarray(target_switches, bool),
+        entry_ability(tables, state, target, target_mon, side),
+        state.ability[target, target_mon],
+    )
+    d_ability = jnp.where(a_ability == AbilityId.MOLD_BREAKER, AbilityId.NONE, own)
 
     # BattleControllerPlayer_CheckMoveHitAccuracy (battle_controller_player.c:2865).
     acc = jnp.asarray(acc, _I32)
@@ -220,9 +226,7 @@ def _rate(
     rate = jnp.where(state.gravity != 0, rate * 10 // 6, rate)
     # CheckMoveHitOverrides (bcp.c:3016-3021), after the roll: the attacker's or the target's
     # No Guard (Battler_Ability, the target's own: not ignorable) clears MOVE_STATUS_MISSED.
-    no_guard = (a_ability == AbilityId.NO_GUARD) | (
-        state.ability[target, target_mon] == AbilityId.NO_GUARD
-    )
+    no_guard = (a_ability == AbilityId.NO_GUARD) | (own == AbilityId.NO_GUARD)
     # Accuracy 0 never misses (the check returns before rolling).
     return jnp.where((accuracy == 0) | no_guard, 100, rate)
 
@@ -236,7 +240,9 @@ def live_hit_threshold(
     target_mon = state.active[1 - side]
     eva = state.stages[1 - side, Stat.EVA]
     acc = state.stages[side, Stat.ACC]
-    return _rate(tables, state, side, move, target_mon, jnp.asarray(False), acc, eva, target_moved)
+    return _rate(
+        tables, state, side, move, 1 - side, target_mon, jnp.asarray(False), acc, eva, target_moved
+    )
 
 
 def _hit_threshold(
@@ -269,6 +275,7 @@ def _hit_threshold(
         state,
         side,
         move,
+        target,
         target_mon,
         target_switches,
         acc,
@@ -354,10 +361,13 @@ def hit_thresholds(tables: Tables, state: BattleState, actions) -> tuple[jnp.nda
     ``MULTI_HIT``'s, which change no stage (a future multi-hit stat effect must add
     its repeats here).
 
-    Switches (which go first) are in the turn-start threshold already. No implemented
-    move changes Gravity, an ability or Foresight's flag on the target before the target's
-    foe moves (Trace copies mid-turn only facing another Trace holder, which coverage
-    refuses), and a faint of either battler leaves no check. The
+    Switches (which go first) are in the turn-start threshold already, with the
+    newcomer's switch-in checks: the weather its ability sets and the ability it traces
+    (``damage.entry_weather``, ``damage.entry_ability``: a Trace newcomer facing a Sand Veil
+    attacker in sand holds Sand Veil at the check). No implemented move changes Gravity, an
+    ability or Foresight's flag on the target before the target's foe moves (Trace copies
+    mid-turn only facing another Trace holder, which coverage refuses), and a faint of either
+    battler leaves no check. The
     variants over-approximate (Keen Eye, misses and the chance of a secondary only remove
     changes): an extra threshold splits a class, never merges two."""
     actions = jnp.asarray(actions, _I32)
@@ -461,16 +471,21 @@ def crit_odds(tables: Tables, state: BattleState, actions) -> jnp.ndarray:
     return _CRIT_ODDS[jnp.minimum(stage, 4)]
 
 
-def armored(state: BattleState, actions) -> jnp.ndarray:
+def armored(tables: Tables, state: BattleState, actions) -> jnp.ndarray:
     """``bool[2]``: each side's move meets a Battle Armor or Shell Armor holder as it sees it
     (``Battler_IgnorableAbility``, battle_lib.c:7135-7136): the foe's active Pokemon or the one
     it switches in, which goes first. No crit then (``BattleSystem_CalcCriticalMulti``)."""
     actions = jnp.asarray(actions, _I32)
     out = []
     for side in (0, 1):
-        target, _, target_mon = _target_mon(state, actions, side)
+        target, switches, target_mon = _target_mon(state, actions, side)
         mold = state.ability[side, state.active[side]] == AbilityId.MOLD_BREAKER
-        own = state.ability[target, target_mon]
+        # A newcomer holds its entry ability, the traced copy included (ruling B3-19).
+        own = jnp.where(
+            switches,
+            entry_ability(tables, state, target, target_mon, side),
+            state.ability[target, target_mon],
+        )
         out.append(~mold & ((own == AbilityId.SHELL_ARMOR) | (own == AbilityId.BATTLE_ARMOR)))
     return jnp.stack(out)
 
@@ -607,7 +622,7 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions) -> Outcome:
     hit = hit_class(draw(0, per_hit, 100) + 1, thresholds[:, None, :], possible[:, None, :])
     # Lucky Chant on the defending side blocks crits (battle_lib.c:7137), as does the target's
     # Battle Armor / Shell Armor (:7135-7136).
-    no_crit = ((state.lucky_chant[::-1] != 0) | armored(state, actions))[:, None]
+    no_crit = ((state.lucky_chant[::-1] != 0) | armored(tables, state, actions))[:, None]
     crit = (draw(1, per_hit, crit_odds(tables, state, actions)[:, None]) == 0) & ~no_crit
     # BtlCmd_CheckEffectActivation (battle_script.c:8377): RandNext() % 100 < chance (Serene
     # Grace doubled); chance 0 means the effect applies on every hit (ids.EffectId).

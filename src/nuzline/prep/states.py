@@ -1,7 +1,7 @@
 """Batched turn-0 states for the prep search (plan 4c Task 2).
 
 ``make_states`` builds the numpy arrays of every team on the host (``initial_arrays``,
-with ``make_state``'s validation), then runs both sides' ``on_switch_in`` for a whole
+with ``make_state``'s validation), then runs the leads' switch-in checks (``hooks.battle_start``) for a whole
 chunk in one exported program (``"make_states"``): the host loop of ``make_state`` calls
 costs a dispatch per team, the program one per ``STATE_CHUNK`` teams. Chunks have one
 padded shape (copies of row 0, dropped from the output) and are sharded over the host
@@ -19,7 +19,7 @@ import nuzline.search.stage_a  # noqa: F401 - registers Tables/BattleState for j
 from nuzline.data.spec import PokemonSpec
 from nuzline.data.tables import Tables
 from nuzline.data.trainer import TERRAIN_UNKNOWN
-from nuzline.engine.hooks import on_switch_in
+from nuzline.engine.hooks import battle_start
 from nuzline.engine.ids import Weather
 from nuzline.engine.state import LAYOUT, BattleState, initial_arrays, protected_mask
 from nuzline.jaxcache import cached_export, code_version
@@ -31,12 +31,7 @@ STATE_CHUNK = 512  # teams per program call, before padding to the device count
 
 
 def _switch_in(tables: Tables, states: BattleState) -> BattleState:
-    def one(state: BattleState) -> BattleState:
-        for side in (0, 1):
-            state = on_switch_in(tables, state, side)
-        return state
-
-    return jax.vmap(one)(states)
+    return jax.vmap(lambda state: battle_start(tables, state))(states)
 
 
 def make_states(

@@ -427,13 +427,13 @@ def initial_arrays(
     terrain: int = TERRAIN_UNKNOWN,
 ) -> dict[str, np.ndarray]:
     """Every ``LAYOUT`` field of the turn-0 state, before the switch-in hooks, as numpy
-    (``make_state`` is this plus the two ``on_switch_in`` calls): stats via ``calc_stats``, empty slots all zero
+    (``make_state`` is this plus ``hooks.battle_start``): stats via ``calc_stats``, empty slots all zero
     (``species = 0, hp = 0``), the leads in party slots ``leads`` (player, opponent),
     no volatiles, hazards or screens, and
     ``weather = start_condition`` with a permanent timer (0), and ``terrain`` (a decomp
     ``TERRAIN_*`` id, ``Trainer.terrain``; ``TERRAIN_UNKNOWN`` by default). The leads'
-    switch-in effects then run (``hooks.on_switch_in``, player first; the decomp's
-    ``monSpeedOrder`` gives the same result in singles, see ``hooks``).
+    switch-in effects then run (``hooks.battle_start``: each switch-in state over both
+    leads, as ``BattleSystem_TriggerEffectOnSwitch`` runs them).
 
     ``opp_items`` is the trainer's bag (``Trainer.items``, decomp item ids). As
     ``BattleControllerPlayer_InitAI`` (battle_controller_player.c:4796) does, its
@@ -483,12 +483,9 @@ def make_state(
     terrain: int = TERRAIN_UNKNOWN,
 ) -> BattleState:
     """Build the turn-0 state (``initial_arrays``), then run the leads' switch-in
-    effects (``hooks.on_switch_in``, player first; the decomp's ``monSpeedOrder`` gives
-    the same result in singles, see ``hooks``)."""
-    from nuzline.engine.hooks import on_switch_in  # hooks imports this module
+    effects (``hooks.battle_start``)."""
+    from nuzline.engine.hooks import battle_start  # hooks imports this module
 
     a = initial_arrays(tables, player, opp, start_condition, opp_items, leads, terrain)
     state = BattleState(**{name: jnp.asarray(a[name]) for name in BattleState._fields})
-    for side in (0, 1):
-        state = on_switch_in(tables, state, side)
-    return state
+    return battle_start(tables, state)

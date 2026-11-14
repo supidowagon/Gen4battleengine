@@ -181,6 +181,7 @@ from nuzline.engine.damage import (
     SPECIAL,
     STATUS,
     decomp_abilities,
+    entry_ability,
     hit_damage_table,
     move_type_of,
     weather_suppressed,
@@ -329,14 +330,27 @@ def _inflicts(tables: Tables, moves, status) -> jnp.ndarray:
     return (status_effect & (tables.move_param[moves, 0] == status)) | tri
 
 
-def _holds(state: BattleState, actions, abilities) -> jnp.ndarray:
-    """``bool[2]``: side ``d``'s active Pokemon, or the one it switches in this turn,
-    has one of ``abilities``."""
+def _entry_abilities(tables: Tables, state: BattleState, actions) -> jnp.ndarray:
+    """``int[2]``: the ability the Pokemon side ``d`` switches in this turn holds once its
+    switch-in checks ran, the traced copy included (``damage.entry_ability``; the switch goes
+    first, ruling B3-19); meaningful only where ``d`` switches."""
+    incoming = jnp.clip(actions - MOVE_ACTIONS, 0, state.ability.shape[1] - 1)
+    return jnp.stack(
+        [entry_ability(tables, state, side, incoming[side], 1 - side) for side in (0, 1)]
+    )
+
+
+def _holds(tables: Tables, state: BattleState, actions, abilities) -> jnp.ndarray:
+    """``bool[2]``: side ``d``'s active Pokemon, or the one it switches in this turn, has one
+    of ``abilities``: the incoming one by its own ability or the one it traces on entry
+    (``_entry_abilities``; both, so a Trace newcomer counts as Trace too)."""
     incoming = jnp.clip(actions - MOVE_ACTIONS, 0, state.ability.shape[1] - 1)
     sides = jnp.arange(2)
     now = _any_of(state.ability[sides, state.active], abilities)
-    later = _any_of(state.ability[sides, incoming], abilities) & is_switch(actions)
-    return now | later
+    entry = _any_of(state.ability[sides, incoming], abilities) | _any_of(
+        _entry_abilities(tables, state, actions), abilities
+    )
+    return now | (entry & is_switch(actions))
 
 
 def _holds_item(tables: Tables, state: BattleState, actions, items) -> jnp.ndarray:
@@ -1010,7 +1024,7 @@ def outcome_laws(
     crit = lands & rolled[:, None]
     secondary = lands & ((chance != 0) & _any_of(effect, _PROC_EFFECTS))[:, None]
     holders = _holds(
-        state, actions, (AbilityId.STATIC, AbilityId.POISON_POINT, AbilityId.FLAME_BODY)
+        tables, state, actions, (AbilityId.STATIC, AbilityId.POISON_POINT, AbilityId.FLAME_BODY)
     )
     # BtlCmd_TryAttract (effects._attractable): different genders, neither genderless.
     gender = state.gender.astype(_I32)
@@ -1026,14 +1040,13 @@ def outcome_laws(
     charm_now = (state.ability[sides, mons] == AbilityId.CUTE_CHARM) & lovers(
         gender[sides, mons], attacker_gender
     )
-    charm_later = (
-        switch
-        & (state.ability[sides, incoming] == AbilityId.CUTE_CHARM)
-        & lovers(gender[sides, incoming], attacker_gender)
+    entering = (state.ability[sides, incoming] == AbilityId.CUTE_CHARM) | (
+        _entry_abilities(tables, state, actions) == AbilityId.CUTE_CHARM
     )
+    charm_later = switch & entering & lovers(gender[sides, incoming], attacker_gender)
     charm = (charm_now | charm_later) & calm
     if loose:
-        charm = _holds(state, actions, (AbilityId.CUTE_CHARM,))
+        charm = _holds(tables, state, actions, (AbilityId.CUTE_CHARM,))
     holders = holders | charm
     contact_proc = (lands & (damaging & contact & holders[::-1])[:, None])[::-1]
     duration = uses_move & (
@@ -1145,7 +1158,7 @@ def outcome_laws(
     foe_speed = _any_of(effect, (_E.STAT_FOE, _E.SECONDARY_STAT_FOE)) & (param0 == Stat.SPE)
     # subscript_flinched.s:10-14: a flinched Steadfast Pokemon gains +1 Speed (its foe's
     # flinch move, or its King's Rock on a flagged damaging move).
-    steadfast = _holds(state, actions, (AbilityId.STEADFAST,)) & foe_moves
+    steadfast = _holds(tables, state, actions, (AbilityId.STEADFAST,)) & foe_moves
     kings = (kings_rock > 0) & damaging & kings_move
     flinches = _any_of(tables.move_effect[foe_move], _FLINCH_EFFECTS) | kings[::-1]
     steadfast = steadfast & flinches
@@ -1162,7 +1175,7 @@ def outcome_laws(
         | pinch_held
         | plucks
     )
-    static = _holds(state, actions, (AbilityId.STATIC,))
+    static = _holds(tables, state, actions, (AbilityId.STATIC,))
     # A Lum or Cheri Berry cures paralysis, held or plucked (hooks.held_item_check,
     # pluck_berry).
     lum = _holds_item(tables, state, actions, (ItemId.LUM_BERRY, ItemId.CHERI_BERRY))
@@ -1172,7 +1185,7 @@ def outcome_laws(
         | lum
         | plucks
         # Quick Feet reads any status (order.effective_speed): free for a holder.
-        | _holds(state, actions, (AbilityId.QUICK_FEET,))
+        | _holds(tables, state, actions, (AbilityId.QUICK_FEET,))
     )
     # Roar / Whirlwind (step._use_move): BtlCmd_TryWhirlwind draws nothing with no eligible
     # bench Pokemon, BattleSystem_CanWhirlwind nothing for a user of at least the target's
@@ -1244,7 +1257,7 @@ def outcome_laws(
     # follow, or Shed Skin: both reads are kept (over-approximate).
     living_now = (state.species != 0) & (state.hp > 0)
     trace_party = jnp.any(living_now & (state.ability == AbilityId.TRACE), axis=1)
-    tracer = _holds(state, actions, (AbilityId.TRACE,)) | (dragged & trace_party)
+    tracer = _holds(tables, state, actions, (AbilityId.TRACE,)) | (dragged & trace_party)
     end_speed_tie = end_speed_tie | (live & jnp.any(tracer))
     if loose:
         # The brute force: the end-of-turn tie roll whenever the battle goes on, with no
@@ -1255,7 +1268,7 @@ def outcome_laws(
     living = (state.species != 0) & (state.hp > 0)
     shed_party = jnp.any(living & (state.ability == AbilityId.SHED_SKIN), axis=1)
     shed_skin = live & (
-        _holds(state, actions, (AbilityId.SHED_SKIN,)) | (dragged & shed_party) | tracer
+        _holds(tables, state, actions, (AbilityId.SHED_SKIN,)) | (dragged & shed_party) | tracer
     )
     if loose:
         shed_skin = shed_skin | (live & jnp.any(roar) & jnp.any(shed_party))
@@ -1406,7 +1419,7 @@ def outcome_laws(
         hit_possible=possible,
         crit_odds=crit_odds(tables, state, actions),
         # Lucky Chant, or the target's Battle Armor / Shell Armor (outcome.armored).
-        no_crit=(state.lucky_chant[::-1] != 0) | armored(state, actions),
+        no_crit=(state.lucky_chant[::-1] != 0) | armored(tables, state, actions),
         secondary_chance=secondary_chance(tables, state, moves),
         duration_kind=kind.astype(_I32),
         relevant=relevant,

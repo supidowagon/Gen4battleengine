@@ -197,20 +197,37 @@ def ability_weather(ability) -> jnp.ndarray:
     return out
 
 
-def entry_weather(tables: Tables, state: BattleState, side, slot, foe) -> jnp.ndarray:
-    """``int32``: the weather once ``side``'s party ``slot`` has switched in
-    (``hooks.on_switch_in``): its Stealth Rock damage (``effects.stealth_rock_damage``) leaves
-    it HP, and its weather ability, its own or the one it traces from the foe's active
-    battler (``trace_copy``; ``foe``: the other side), sets that weather for good; else
-    ``state.weather``. For the turn-start laws of the foe's move (``outcome``): a switch goes
-    first."""
-    hp = _i32(state.hp[side, slot])
+def stealth_rock_loss(tables: Tables, state: BattleState, side, slot) -> jnp.ndarray:
+    """``int32``: what Stealth Rock takes from ``side``'s party ``slot`` as it switches in
+    (``subscript_hazards_check.s`` -> ``BtlCmd_CheckStealthRock``, battle_script.c:8302): with
+    the side's flag set, ``BattleSystem_Divide(maxHP, 32/16/8/4/2)`` by the Rock matchup
+    (``BattleSystem_TypeMatchupMultiplier``), i.e. ``maxHP * eff // 800`` in ``effectiveness``'s
+    x100 encoding, at least 1; 0 when immune or without rocks. Not capped at the HP
+    (``effects.stealth_rock_damage`` caps it)."""
     eff = effectiveness(tables, Type.ROCK, state.types[side, slot])
     rock = jnp.where(eff > 0, jnp.maximum(_i32(state.max_hp[side, slot]) * eff // 800, 1), 0)
-    alive = hp - jnp.where(state.stealth_rock[side] != 0, rock, 0) > 0
+    return jnp.where(state.stealth_rock[side] != 0, rock, 0)
+
+
+def entry_ability(tables: Tables, state: BattleState, side, slot, foe) -> jnp.ndarray:
+    """The ``AbilityId`` ``side``'s party ``slot`` holds once it has switched in: the foe's
+    active battler's when it traces it (``trace_copy``, ``hooks.trace``; ``foe``: the other
+    side), else its own. For the turn-start laws of the foe's move (``outcome``,
+    ``enumerate``): a switch goes first, and ``SWITCH_IN_CHECK_STATE_TRACE`` runs before the
+    foe moves (ruling B3-19)."""
     traced = trace_copy(tables, state, side, foe, slot)
-    ability = jnp.where(traced, state.ability[foe, state.active[foe]], state.ability[side, slot])
-    weather = ability_weather(ability)
+    return jnp.where(traced, state.ability[foe, state.active[foe]], state.ability[side, slot])
+
+
+def entry_weather(tables: Tables, state: BattleState, side, slot, foe) -> jnp.ndarray:
+    """``int32``: the weather once ``side``'s party ``slot`` has switched in
+    (``hooks.on_switch_in``): its Stealth Rock damage (``stealth_rock_loss``) leaves
+    it HP, and its weather ability, its own or the one it traces from the foe's active
+    battler (``entry_ability``; ``foe``: the other side), sets that weather for good; else
+    ``state.weather``. For the turn-start laws of the foe's move (``outcome``): a switch goes
+    first."""
+    alive = _i32(state.hp[side, slot]) - stealth_rock_loss(tables, state, side, slot) > 0
+    weather = ability_weather(entry_ability(tables, state, side, slot, foe))
     return jnp.where(alive & (weather != Weather.NONE), weather, _i32(state.weather))
 
 

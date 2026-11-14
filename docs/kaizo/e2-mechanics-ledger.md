@@ -61,6 +61,17 @@ Rules left out because another mechanic is missing; each closes with the mechani
 - The Sticky Barb transfer vs Knock Off, the knocked-off mask, U-turn and the substitute test
   (effects.py `sticky_barb_transfer`; battle_lib.c:5378, :5390-5393): those moves.
 - Shell Bell and Life Orb vs `SYSCTL_UTURN_ACTIVE` (bcp.c:4739, :4761): U-turn.
+- The Trace refusal (`coverage.trace_ai_line`, B3-21): the AI must read the battler's ability
+  (`state.ability`, the traced copy, through `damage.decomp_abilities`) instead of
+  `tables.species_abilities_decomp` by species in ai/commands.py (~558-580), ai/policy.py (~950)
+  and ai/switching.py (~301), as `LoadBattlerAbility` does (trainer_ai.c:1170-1198); the AI owner's
+  fix lifts it.
+- Fire Fang (`BATTLE_EFFECT_FLINCH_BURN_HIT`) always bypasses Wonder Guard (the decomp's bug note,
+  battle_lib.c:7600): Fire Fang / Wonder Guard.
+- Gravity makes the moves that fail in high gravity (Jump Kick, Hi Jump Kick, ...) invalid:
+  `Move_FailsInHighGravity` under `CHECK_INVALID_GRAVITY` in `BattleSystem_CheckInvalidMoves`
+  (battle_lib.c:2292, :2348), which the AI also reads (trainer_ai.c:234); `actions.usable_moves`
+  ignores Gravity: Gravity.
 - The status orbs vs Safeguard (subscript_badly_poison.s, subscript_burn.s): Safeguard.
 - `outcome.kings_rock_chance` reads the turn-start item (outcome.py), which breaks once a move
   can move items mid-turn: Trick, Thief, Fling.
@@ -262,3 +273,23 @@ Rules left out because another mechanic is missing; each closes with the mechani
 - B3-17 Kaizo changes none of these: its accuracy changes add effect 141 (Hurricane, unsupported) to
   Thunder's sun and rain branches (docs/kaizo/rom_diff.md, CheckMoveHitAccuracy /
   CheckMoveHitOverrides), and TriggerEffectOnSwitch only its field-weather switch.
+- B3-18 The leads' switch-in checks run as one `BattleSystem_TriggerEffectOnSwitch` pass over both
+  battlers, state by state (battle_lib.c:3649-4168; Trace :3718-3737 for every lead before
+  Intimidate :3795-3808, each Intimidate announced once): a lead that traced Intimidate lowers the
+  foe once, like any Intimidate lead (`hooks.battle_start`, from `make_state` and prep's
+  `make_states`).
+- B3-19 The turn-start laws read a switching-in target's entry ability, the copy when it traces
+  (`damage.entry_ability`): its switch-in checks run before the foe moves, so a Trace newcomer
+  facing a Sand Veil attacker in sand is hit at x80/100 (bcp.c:2927-2928), one facing a Static
+  contact attacker rolls Static, and one that copies Battle Armor / Shell Armor is never crit
+  (`outcome._rate`, `outcome.armored`, `enumerate._holds`, Cute Charm's `charm_later`).
+- B3-20 Prep applies the party-pair refusals per candidate against the trainer's party
+  (`weather_war_line`, `trace_standoff_line`): `prep.problem.usable_pool` leaves the candidate
+  out and `prep.pool.check_pool` refuses it.
+- B3-21 A Trace holder on either side (and in the pool) is refused as an AI gap
+  (`coverage.trace_ai_line`): the AI reads `species_abilities_decomp` by species, where the
+  decomp's `LoadBattlerAbility` (trainer_ai.c:1170-1198) returns the copy `subscript_trace.s`
+  wrote through `BattleAI_SetAbility` (battle_script.c:3401-3403).
+- B3-22 Stealth Rock's damage has one formula (`damage.stealth_rock_loss`), read by the switch-in
+  (`effects.stealth_rock_damage`) and by the turn-start weather of a newcomer
+  (`damage.entry_weather`).
