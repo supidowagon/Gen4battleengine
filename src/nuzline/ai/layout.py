@@ -141,18 +141,22 @@ LAYOUTS = (VANILLA, KAIZO)  # by Tables.ai_policy (KAIZO: Roark's flag set)
 assert tuple(layout.name for layout in LAYOUTS) == AI_POLICIES
 
 
-@cache
 def kaizo_layout(flags: int) -> AiLayout:
     """The Kaizo layout that runs the trainer AI flags ``flags`` (E1 Ruling R2): ``KAIZO`` with
     its flag set replaced. ``ValueError`` for a set with a bit outside ``KAIZO_FLAG_BITS``."""
-    flags = int(flags)
+    return _with_flags(KAIZO, int(flags))
+
+
+@cache
+def _with_flags(layout: AiLayout, flags: int) -> AiLayout:
+    """``layout`` (a per-slot policy's) running the flag set ``flags`` (``kaizo_layout``)."""
     bits = {b for b in range(max(flags.bit_length(), 1)) if flags >> b & 1}
     if flags < 0 or bits - KAIZO_FLAG_BITS:
         raise ValueError(
             f"AI flags {flags:#x}: the Kaizo policy transcribes only the flag bits "
             f"{sorted(KAIZO_FLAG_BITS)} (engine/coverage.py refuses the trainer)"
         )
-    return KAIZO if flags == KAIZO.flags else KAIZO._replace(flags=flags)
+    return layout if flags == layout.flags else layout._replace(flags=flags)
 
 
 def layout_of(tables: Tables) -> AiLayout:
@@ -179,7 +183,7 @@ def layout_of(tables: Tables) -> AiLayout:
             "the fight's trainer AI flags are not set on the tables: "
             "tables._replace(ai_flags=trainer.ai_flags) (E1 Ruling R2)"
         )
-    return kaizo_layout(flags)
+    return _with_flags(layout, flags)
 
 
 def fight_tables(tables: Tables, trainer) -> Tables:
