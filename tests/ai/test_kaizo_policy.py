@@ -103,7 +103,7 @@ def _state(t, party, mon: int, moves, bench=(CRANIDOS,), players: int = 2, hp: i
 
 def _outcome(t, s, guess: int = 0, jumps=()) -> AiOutcome:
     """The per-slot outcome where the ``(slot, line)`` sites of ``jumps`` jump and no other
-    does; ``guess`` is the ability guess."""
+    does; ``guess`` is every guess column's ability slot (each guessing read takes it)."""
     rolls = np.zeros((MOVES, KAIZO.slot_sites), np.int8)
     moves = np.asarray(s.moves[1, s.active[1]])
     for slot, line in jumps:
@@ -112,7 +112,7 @@ def _outcome(t, s, guess: int = 0, jumps=()) -> AiOutcome:
         rolls[slot, k] = 1
     return AiOutcome(
         sim_roll=jnp.full((MOVES,), SIM_ROLL_MAX, jnp.int8),
-        ability_guess=jnp.asarray(guess, jnp.int8),
+        ability_guess=jnp.full((MOVES, KAIZO.slot_guesses), guess, jnp.int8),
         script_rolls=jnp.asarray(rolls),
         tiebreak=jnp.asarray(0, jnp.int8),
         switch_stop=jnp.asarray(SWITCH_NONE, jnp.int8),
@@ -382,20 +382,6 @@ def test_battle_effect_ids_are_the_decomps():
     lines = path.read_text(encoding="utf-8").split()
     for member in BattleEffect:
         assert lines[member.value] == f"BATTLE_EFFECT_{member.name}", member
-
-
-def test_no_species_splits_the_toxic_reads(tables, kaizo_tables):
-    """Basic_CheckCannotPoison reads the defender's ability twice (script.s:529, :539), two
-    coin flips in the decomp (trainer_ai.c:1191-1198) and one guess in the exact layout
-    (Ruling 6). Both reads can change Toxic's score only for a species whose two abilities
-    are Hydration (:540, in rain) and one of Immunity, Magic Guard, Poison Heal or Leaf Guard
-    (:530-534, Leaf Guard in sun). No species of either game has such a pair, in any
-    weather (test_one_scalar_guess_is_exact_for_roark checks the state's weather only)."""
-    first = {c.ABILITY_IDS[a] for a in ("Immunity", "Magic Guard", "Poison Heal", "Leaf Guard")}
-    hydration = c.ABILITY_IDS["Hydration"]
-    for t in (tables, kaizo_tables):
-        for row in np.asarray(t.species_abilities_decomp).tolist():
-            assert not (hydration in row and first & set(row)), row
 
 
 def test_a_reached_roll_without_a_site_column_is_refused(

@@ -10,8 +10,9 @@ probability. Ranges and encodings are those of ``docs/ai/roark.md`` section 8:
   (85-100 %). Roark's scripts only pass ``USE_MAX_DAMAGE``, so it is fixed at 15
   (100 %) and never enumerated (8.1).
 * ``ability_guess``: 0 = the player's ability slot 0, 1 = slot 1, each 1/2
-  (``LoadBattlerAbility DEFENDER``, ``trainer_ai.c:1170``; 8.2). One scalar is exact
-  for Roark; it is ignored when no guess is made.
+  (``LoadBattlerAbility DEFENDER``, ``trainer_ai.c:1170``; 8.2). The flat layout has one
+  scalar for the decision, exact for vanilla Roark (roark.md 8.2); a per-slot layout has
+  one bit per guessing read (below). It is ignored when no guess is made.
 * ``script_rolls[k]``: 1 when the k-th ``IfRandomLessThan N`` site in script order
   jumps (``RandNext % 256 < N``), probability N/256 (8.3). The site layout follows
   the opponent active's moveset: ``script_roll_thresholds``.
@@ -50,9 +51,22 @@ column k of slot m is the k-th ``IfRandomLessThan`` site of the slot's move in s
 order (``slot_site_table``: the battle effect of the move picks its row of
 ``layout.effect_sites``). Every slot reads only its own columns (``TrainerAI_EvalMoves``
 scores slot by slot, trainer_ai.c:483-525), which is what lets ``policy`` factor the
-exact distribution per slot. The other fields are as above. A per-slot layout's
+exact distribution per slot.
+
+The guess is per read in a per-slot layout too (E1 Ruling R1; docs/ai/kaizo_roark.md 8.4).
+``AICmd_LoadBattlerAbility`` (trainer_ai.c:1170-1209) draws a fresh coin,
+``BattleSystem_RandNext() & 1`` (:1194-1198), at every ``LoadBattlerAbility DEFENDER`` read
+of a decision when the AI does not know the player's ability, it is not Shadow Tag, Magnet
+Pull or Arena Trap, and the species has two nonzero abilities. So ``ability_guess`` is
+``int8[MOVES, layout.slot_guesses]``: the k-th guessing read on slot m's scoring path, in
+path order (flag order, then line order), takes column k of slot m. Each column is a fair
+coin, independent of every other, as each read is its own ``RandNext``; no read is shared
+between slots, since ``TrainerAI_EvalMoves`` scores slot by slot (:483-525). A path that
+reaches more guessing reads than ``slot_guesses`` is refused (``AiContext.missing_guess``),
+as a missing site column is. The other fields are as above. A per-slot layout's
 enumeration is not a constant: ``enumerate_ai_outcomes`` lists the used sites only, on
 concrete inputs (it is a test oracle; ``policy`` never enumerates the flat product).
+Its guess columns are the ones the caller says the paths reach (``guess_columns``).
 
 Sites are named by their ``script.s`` line (``SITE_N``): every ``IfRandomLessThan`` the
 transcription reads passes its line to ``commands.if_random_less_than``, which finds the
@@ -90,6 +104,7 @@ __all__ = [
     "ENUMERATION_WIDTH",
     "KAIZO_EXPERT_LABELS",
     "KAIZO_EXPERT_TRANSCRIBED",
+    "KAIZO_SLOT_GUESSES",
     "KAIZO_SLOT_SITES",
     "MAX_ENUMERATED",
     "MAX_EXPERT_SITES",
@@ -293,6 +308,18 @@ assert KAIZO_EXPERT_TRANSCRIBED <= set(KAIZO_EXPERT_LABELS)
 # and :1880, Risky :6530 (layout.KAIZO asserts every row fits).
 KAIZO_SLOT_SITES = 8
 
+# The most guessing LoadBattlerAbility DEFENDER reads (trainer_ai.c:1170-1209) one move
+# slot's path reaches in the Kaizo transcription (E1 Ruling R1), all in Basic_Main: Toxic
+# (STATUS_BADLY_POISON) is not damaging, so FlagMoveDamageScore's no-comparison jump
+# (script.s:62-63) skips Basic_CheckForImmunity's :71; it reads Basic_CheckSoundproof's :117
+# and Basic_CheckCannotPoison's :529 and :539. A damaging move reads :71 and :117 and, at
+# most, one label read (:470 for a Defense drop); Selfdestruct is a no-calc effect
+# (sNoDamageCalcMoveEffects, trainer_ai.c:31-46) and reads :117 and :304. EVAL_ATTACK,
+# EXPERT and RISKY load no defender ability on the transcribed paths (Expert_RecoilMove
+# loads the attacker's, :6296). tests/ai/test_kaizo_outcome.py
+# test_slot_guesses_fit_every_transcribed_effect finds it from the data.
+KAIZO_SLOT_GUESSES = 3
+
 # Values each field takes, in enumeration order (roark.md 14 "AiOutcome width").
 # ABILITY_GUESSES: AiOutcome.ability_guess is 0 or 1, 1/2 each.
 _SIM_ROLL_VALUES, ABILITY_GUESSES, _TIEBREAK_VALUES = 1, 2, TIEBREAK_MOD
@@ -307,13 +334,15 @@ if ENUMERATION_WIDTH > MAX_ENUMERATED:
 # P(tiebreak = t), t = 0..11: RandNext % 12 over a uniform u16, 65536 = 12 * 5461 + 4.
 TIEBREAK_P = np.array([5462] * 4 + [5461] * 8, np.float64) / 65536
 # A per-slot layout's joint enumeration (enumerate_ai_outcomes, a test oracle) lists at most
-# 2**MAX_JOINT_SITES script-roll patterns.
+# 2**MAX_JOINT_SITES patterns of script-roll sites and guess columns.
 MAX_JOINT_SITES = 10
 
 
 class AiOutcome(NamedTuple):
     sim_roll: jnp.ndarray  # int8[4], roll index 0-15 per opponent move slot
-    ability_guess: jnp.ndarray  # int8[], player ability slot 0/1
+    # int8[] (flat layout) or int8[MOVES, slot_guesses] (per-slot layout, column k of slot m
+    # = the slot's k-th guessing read): player ability slot 0/1
+    ability_guess: jnp.ndarray
     # int8[MAX_SCRIPT_ROLLS] (flat layout) or int8[MOVES, slot_sites] (per-slot layout):
     # 1 = the site's jump is taken
     script_rolls: jnp.ndarray
@@ -481,20 +510,23 @@ def sample_ai_outcome(
 ) -> AiOutcome:
     """Draw every field from its decomp probability for this state (the switch draws
     over ``switch_sites(tables, state, layout.switch_sites)``). ``layout``: a per-slot layout
-    draws ``script_rolls`` as ``int8[MOVES, layout.slot_sites]`` (``slot_roll_thresholds``);
+    draws ``script_rolls`` as ``int8[MOVES, layout.slot_sites]`` (``slot_roll_thresholds``)
+    and ``ability_guess`` as ``int8[MOVES, layout.slot_guesses]``, every column a fair coin;
     the default, and any flat layout, is the vanilla layout."""
     sites = SWITCH_SITES if layout is None else layout.switch_sites
     layout_sites = switch_sites(tables, state, sites)
     k = jax.random.split(key, 4)
     if layout is not None and layout.per_slot_sites:
         shape, thresholds = (MOVES, layout.slot_sites), slot_roll_thresholds(tables, state, layout)
+        guess_shape = (MOVES, layout.slot_guesses)
     else:
         shape, thresholds = (MAX_SCRIPT_ROLLS,), script_roll_thresholds(state)
+        guess_shape = ()
     rolls = jax.random.randint(k[1], shape, 0, 256, dtype=_I32)
     draws = jax.random.randint(k[3], (sites,), 0, 65536, dtype=_I32)
     return AiOutcome(
         sim_roll=jnp.full((MOVES,), SIM_ROLL_MAX, _I8),
-        ability_guess=jax.random.randint(k[0], (), 0, 2, dtype=_I32).astype(_I8),
+        ability_guess=jax.random.randint(k[0], guess_shape, 0, 2, dtype=_I32).astype(_I8),
         script_rolls=(rolls < thresholds).astype(_I8),
         tiebreak=(jax.random.randint(k[2], (), 0, 65536, dtype=_I32) % TIEBREAK_MOD).astype(_I8),
         switch_stop=_first_stop(draws, layout_sites).astype(_I8),
@@ -516,7 +548,7 @@ def _grid() -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
 
 
 def enumerate_ai_outcomes(
-    tables: Tables, state: BattleState, layout: AiLayout | None = None
+    tables: Tables, state: BattleState, layout: AiLayout | None = None, guess_columns=None
 ) -> tuple[AiOutcome, jnp.ndarray]:
     """Every outcome combination (a batched ``AiOutcome`` with leading axis K) and its
     exact probability ``float32[K]``. Flat layout (the default): K is
@@ -525,40 +557,51 @@ def enumerate_ai_outcomes(
     0. The switch draws are over ``switch_sites(tables, state)``.
 
     A per-slot ``layout`` (a test oracle, concrete inputs only): every combination of the
-    used sites of the four slots, ``K = ABILITY_GUESSES * 2**sum(slot_site_counts) *
-    (layout.switch_sites + 1) * TIEBREAK_MOD``; ``ValueError`` when the sites number more
+    used sites of the four slots and of the first ``guess_columns[m]`` guess columns of each
+    slot m (``int[MOVES]``, required: the guessing reads the slot's paths reach, which
+    ``policy.ai_action_distribution_enumerated`` finds; a column no path reads would only
+    repeat every outcome), ``K = 2**(sum(slot_site_counts) + sum(guess_columns)) *
+    (layout.switch_sites + 1) * TIEBREAK_MOD``; ``ValueError`` when the bits number more
     than ``MAX_JOINT_SITES``."""
     if layout is None or not layout.per_slot_sites:
         return _enumerate_flat(tables, state)
+    if guess_columns is None:
+        raise ValueError("a per-slot enumeration needs guess_columns (int[MOVES])")
+    guess_columns = np.clip(np.asarray(guess_columns, np.int64), 0, layout.slot_guesses)
     thresholds = np.asarray(slot_roll_thresholds(tables, state, layout))
     used = np.argwhere(thresholds > 0)  # [U, 2] (slot, column), script order per slot
-    if len(used) > MAX_JOINT_SITES:
+    guessed = np.array(
+        [(m, k) for m in range(MOVES) for k in range(int(guess_columns[m]))], np.int64
+    ).reshape(-1, 2)  # [G, 2] (slot, guess column), path order per slot
+    n_bits = len(used) + len(guessed)
+    if n_bits > MAX_JOINT_SITES:
         raise ValueError(
-            f"{len(used)} script-roll sites: more than the {MAX_JOINT_SITES} a joint "
-            "enumeration lists"
+            f"{len(used)} script-roll sites and {len(guessed)} guess columns: more than the "
+            f"{MAX_JOINT_SITES} bits a joint enumeration lists"
         )
-    ability, bits, switch, tiebreak = (
+    bits, switch, tiebreak = (
         a.reshape(-1)
         for a in np.meshgrid(
-            np.arange(ABILITY_GUESSES),
-            np.arange(2 ** len(used)),
+            np.arange(2**n_bits),
             np.arange(layout.switch_sites + 1),
             np.arange(_TIEBREAK_VALUES),
             indexing="ij",
         )
     )
-    on = (bits[:, None] >> np.arange(len(used))) & 1  # [K, U]
+    on = (bits[:, None] >> np.arange(n_bits)) & 1  # [K, U + G]
     rolls = np.zeros((len(bits), MOVES, layout.slot_sites), np.int8)
-    rolls[:, used[:, 0], used[:, 1]] = on
+    rolls[:, used[:, 0], used[:, 1]] = on[:, : len(used)]
+    guesses = np.zeros((len(bits), MOVES, layout.slot_guesses), np.int8)
+    guesses[:, guessed[:, 0], guessed[:, 1]] = on[:, len(used) :]
     p_jump = thresholds[used[:, 0], used[:, 1]].astype(np.float64) / 256
-    p_rolls = np.prod(np.where(on == 1, p_jump, 1 - p_jump), axis=1)
+    p_rolls = np.prod(np.where(on[:, : len(used)] == 1, p_jump, 1 - p_jump), axis=1)
     p_switch = np.asarray(
         switch_stop_probs(switch_sites(tables, state, layout.switch_sites)), np.float64
     )
-    probs = p_rolls * p_switch[switch] * TIEBREAK_P[tiebreak] / ABILITY_GUESSES
+    probs = p_rolls * p_switch[switch] * TIEBREAK_P[tiebreak] * 0.5 ** len(guessed)
     outs = AiOutcome(
         sim_roll=jnp.full((len(bits), MOVES), SIM_ROLL_MAX, _I8),
-        ability_guess=jnp.asarray(ability, _I8),
+        ability_guess=jnp.asarray(guesses),
         script_rolls=jnp.asarray(rolls),
         tiebreak=jnp.asarray(tiebreak, _I8),
         switch_stop=jnp.asarray(switch, _I8),

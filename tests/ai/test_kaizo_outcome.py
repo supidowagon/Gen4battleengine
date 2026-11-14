@@ -11,10 +11,12 @@ oracle that does not use it, and each has a test that fails when the gate is rem
 - path-only script-roll sites (a move's sites come from its effect's row of the site
   table): exact against loose, where every ``IfRandomLessThan`` read is its own draw
   (``test_exact_equals_loose``, ``test_loose_catches_a_missing_site``);
-- the one-scalar ability guess (Ruling 6): exact against loose, where every
-  ``LoadBattlerAbility DEFENDER`` read is its own coin flip, on the states where at most
-  one read can change a score; and the data test that this holds for Roark
-  (``test_one_scalar_guess_is_exact_for_roark``, ``test_loose_catches_a_split_guess``).
+- the per-slot guess columns in path order (E1 Ruling R1): exact against loose, where
+  every ``LoadBattlerAbility DEFENDER`` read is its own coin flip, on every state, two
+  score-changing guesses in two slots and in one slot included
+  (``test_exact_equals_loose``, ``test_each_slot_guesses_on_its_own``,
+  ``test_two_guesses_in_one_slot``); a path past the layout's guess columns is refused
+  (``test_a_guess_past_the_columns_is_refused``).
 The fourth gate, the dropped speed-tie draw (Ruling 3), is checked in
 ``tests/ai/test_kaizo_commands.py`` (``test_speed_tie_never_slower``): ``IfSpeedCompareEqualTo``
 gives the tie its own loose read (``commands.ReadKind.SPEED_TIE``). Since K3c Task 6 its three
@@ -58,14 +60,15 @@ from nuzline.ai.outcome import (
 )
 from nuzline.engine.actions import NUM_OPP_ACTIONS
 from nuzline.engine.enumerate import WIDTH_CAP
-from nuzline.engine.ids import Stat, Weather
+from nuzline.engine.ids import Stat
 from nuzline.engine.state import MOVES, BattleState, make_state
 from nuzline.search.rows import take
 from tests.ai.fixtures import GEODUDE, outcome, versus
 
 # Kaizo move ids (data/gen4_platinum_kaizo names; effects checked in test_slot_site_table).
 ROCK_THROW, PURSUIT, LEER, SCREECH, HEADBUTT, TACKLE = 88, 228, 43, 103, 29, 33
-STEALTH_ROCK, ACCELEROCK, WATER_GUN, U_TURN = 446, 205, 55, 369
+STEALTH_ROCK, ACCELEROCK, WATER_GUN, U_TURN, TOXIC = 446, 205, 55, 369, 92
+GIBLE = 443  # species: Sand Veil / Rough Skin, Dragon/Ground
 SOUNDPROOF, CLEAR_BODY = 43, 29  # decomp ability ids (commands.ABILITY_IDS)
 _SETTINGS = settings(
     deadline=None,
@@ -188,35 +191,48 @@ def site_layouts(draw):
 # --- Oracles -------------------------------------------------------------------------------
 
 
+def _joint_columns(t, s, layout) -> tuple[np.ndarray, np.ndarray]:
+    """``(used [U, 2], guessed [G, 2])``: the (slot, column) of every used script-roll site
+    and of every guess column a path of the slot reaches (``policy._path_records``)."""
+    used = np.argwhere(np.asarray(slot_roll_thresholds(t, s, layout)) > 0)
+    _, _, reached = policy._path_records(t, s, layout)
+    columns = np.minimum(np.asarray(reached).max(axis=0), layout.slot_guesses)
+    guessed = [(m, k) for m in range(MOVES) for k in range(int(columns[m]))]
+    return used, np.array(guessed, np.int64).reshape(-1, 2)
+
+
 def _joint_moves(t, s, layout) -> np.ndarray:
     """``float64[MOVES]``: the move pick by a joint enumeration of every slot's used sites,
-    both guesses and the 12 tiebreaks, through ``_scores`` and ``_pick`` (no factoring).
-    NaN when a scoring is refused (-1): a synthetic row that lacks a roll the path reaches
-    is refused, not read as never jumping (``commands.if_random_less_than``)."""
+    every guess column its paths reach (``policy._path_records``) and the 12 tiebreaks,
+    through ``_scores`` and ``_pick`` (no factoring). NaN when a scoring is refused (-1): a
+    synthetic row that lacks a roll the path reaches is refused, not read as never jumping
+    (``commands.if_random_less_than``)."""
+    used, guessed = _joint_columns(t, s, layout)
     thresholds = np.asarray(slot_roll_thresholds(t, s, layout))
-    used = np.argwhere(thresholds > 0)
-    bits = (np.arange(2 ** len(used))[:, None] >> np.arange(len(used))) & 1
+    n_bits = len(used) + len(guessed)
+    bits = (np.arange(2**n_bits)[:, None] >> np.arange(n_bits)) & 1
     rolls = np.zeros((len(bits), MOVES, layout.slot_sites), np.int8)
-    rolls[:, used[:, 0], used[:, 1]] = bits
+    rolls[:, used[:, 0], used[:, 1]] = bits[:, : len(used)]
+    guesses = np.zeros((len(bits), MOVES, layout.slot_guesses), np.int8)
+    guesses[:, guessed[:, 0], guessed[:, 1]] = bits[:, len(used) :]
     p = thresholds[used[:, 0], used[:, 1]] / 256
-    weight = np.prod(np.where(bits == 1, p, 1 - p), axis=1)
-    dist = np.zeros(MOVES)
+    weight = np.prod(np.where(bits[:, : len(used)] == 1, p, 1 - p), axis=1) / 2 ** len(guessed)
     k = len(bits)
-    for guess in range(2):
-        outs = AiOutcome(
-            sim_roll=jnp.full((k, MOVES), SIM_ROLL_MAX, jnp.int8),
-            ability_guess=jnp.full(k, guess, jnp.int8),
-            script_rolls=jnp.asarray(rolls),
-            tiebreak=jnp.zeros(k, jnp.int8),
-            switch_stop=jnp.full(k, SWITCH_NONE, jnp.int8),
-        )
-        scores = _scores_batch(t, s, outs, layout)
-        if np.any(np.asarray(scores) < 0):  # a reached roll the synthetic row lacks
-            return np.full(MOVES, np.nan)  # (policy._scores refuses it; K3c final review)
-        picks = np.asarray(_pick_batch(t, s, scores, jnp.arange(TIEBREAK_MOD, dtype=jnp.int8)))
-        share = weight[:, None] * TIEBREAK_P[None, :] / 2
-        for m in range(MOVES):
-            dist[m] += share[picks == m].sum()
+    outs = AiOutcome(
+        sim_roll=jnp.full((k, MOVES), SIM_ROLL_MAX, jnp.int8),
+        ability_guess=jnp.asarray(guesses),
+        script_rolls=jnp.asarray(rolls),
+        tiebreak=jnp.zeros(k, jnp.int8),
+        switch_stop=jnp.full(k, SWITCH_NONE, jnp.int8),
+    )
+    scores = _scores_batch(t, s, outs, layout)
+    if np.any(np.asarray(scores) < 0):  # a reached roll the synthetic row lacks
+        return np.full(MOVES, np.nan)  # (policy._scores refuses it; K3c final review)
+    picks = np.asarray(_pick_batch(t, s, scores, jnp.arange(TIEBREAK_MOD, dtype=jnp.int8)))
+    share = weight[:, None] * TIEBREAK_P[None, :]
+    dist = np.zeros(MOVES)
+    for m in range(MOVES):
+        dist[m] += share[picks == m].sum()
     return dist
 
 
@@ -280,8 +296,11 @@ def test_kaizo_layout_shapes(kaizo_tables, kaizo_roark_party):
     s = _kaizo_state(t, kaizo_roark_party, (ROCK_THROW, PURSUIT, LEER, STEALTH_ROCK))
     o = sample_ai_outcome(jax.random.PRNGKey(0), t, s, KAIZO)
     assert o.script_rolls.shape == (MOVES, KAIZO.slot_sites)
+    assert o.ability_guess.shape == (MOVES, KAIZO.slot_guesses) == (MOVES, 3)
     with pytest.raises(ValueError, match="script_rolls has shape"):
         policy.ai_scores(t, s, outcome())  # a flat outcome under the per-slot layout
+    with pytest.raises(ValueError, match="ability_guess has shape"):
+        policy.ai_scores(t, s, o._replace(ability_guess=jnp.int8(0)))  # a scalar guess
 
 
 def test_site_lines_are_the_scripts_rolls():
@@ -377,18 +396,24 @@ def test_kaizo_effect_check_refuses_an_untranscribed_effect(kaizo_tables, kaizo_
 
 def test_kaizo_width_under_cap(kaizo_tables, kaizo_roark_party):
     """``ai_width`` (the combinations the factored distribution enumerates, Ruling 12) is
-    within ``WIDTH_CAP`` for each of Kaizo Roark's six as the active, and so is its largest
-    value for any state; the flat product is reported, not used."""
+    within ``WIDTH_CAP`` for each of Kaizo Roark's six as the active, against a player the
+    AI guesses (Roark's Gible, Sand Veil / Rough Skin) and one whose ability it knows, and so
+    is its largest value for any state; the flat product is reported, not used."""
     t, party = kaizo_tables, kaizo_roark_party
+    stops = KAIZO.switch_sites + 1  # 45: the six-party switch stops (K3c Task 7)
     for j in range(len(party)):
         s = make_state(t, [party[2]], [party[j], *(m for k, m in enumerate(party) if k != j)])
-        width = policy.ai_width(t, s)
-        stops = KAIZO.switch_sites + 1  # 45: the six-party switch stops (K3c Task 7)
-        assert stops + 2 * MOVES <= width <= WIDTH_CAP, j
+        known = s._replace(ai_ability_known=s.ai_ability_known.at[0].set(1))
         counts = np.asarray(slot_roll_thresholds(t, s, KAIZO) > 0).sum(axis=1)
-        assert width == stops + 2 * int(np.sum(2**counts))
-        assert policy.ai_flat_width(t, s) == 2 * 2 ** int(counts.sum()) * 12 * stops
-    assert KAIZO.switch_sites + 1 + 2 * MOVES * 2**KAIZO.slot_sites <= WIDTH_CAP
+        for state, guesses in ((s, KAIZO.slot_guesses), (known, 0)):
+            assert bool(commands.ability_guessed(t, state)) == (guesses > 0)
+            width = policy.ai_width(t, state)
+            assert stops + MOVES <= width <= WIDTH_CAP, j
+            assert width == stops + int(np.sum(2 ** (counts + guesses)))
+            bits = int(counts.sum()) + MOVES * guesses
+            assert policy.ai_flat_width(t, state) == 2**bits * 12 * stops
+    most = KAIZO.switch_sites + 1 + MOVES * 2 ** (KAIZO.slot_sites + KAIZO.slot_guesses)
+    assert most == 8237 <= WIDTH_CAP
 
 
 # --- Sampling ------------------------------------------------------------------------------
@@ -417,32 +442,37 @@ def test_kaizo_sampled_frequencies_match(kaizo_tables, kaizo_roark_party):
 # --- Factoring -----------------------------------------------------------------------------
 
 
-def test_shared_guess_couples_slots(kaizo_tables, kaizo_names, kaizo_roark_party):
-    """One guess for the whole decision (the exact layout): against Tentacool (ability 44 /
-    Clear Body), Leer and Screech both lose 10 on the Clear Body guess
-    (Basic_CheckClearBodyEffect, script.s:469-472), so they move together. Factoring the
-    slots with the guess marginalised per slot would split them."""
+def test_each_slot_guesses_on_its_own(kaizo_tables, kaizo_names, kaizo_roark_party):
+    """E1 Ruling R1, two slots: against Tentacool (Kaizo abilities 44 / Clear Body), Leer and
+    Screech each lose 10 on a Clear Body guess (Basic_CheckClearBodyEffect, script.s:469-472).
+    Each read is its own coin (trainer_ai.c:1194-1198), so the two slots guess independently:
+    the factored pick equals the joint enumeration of both slots' guess columns and the loose
+    oracle. (One guess for the decision moved them together: 1/6 each where the decomp gives
+    5/24.)"""
     t = kaizo_tables
     assert np.asarray(t.species_abilities_decomp)[72].tolist() == [44, CLEAR_BODY]
     s = _kaizo_state(t, kaizo_roark_party, (LEER, SCREECH, TACKLE, 0))
     s = _bulky(_with_player(t, s, 72))
     s = s._replace(stages=s.stages.at[0, Stat.DEF].set(-1))
+    assert _sensitive_reads(t, _one(s), KAIZO)[0] == 2
     joint = _joint_moves(t, s, KAIZO)
     np.testing.assert_allclose(np.asarray(_factored(t, s, KAIZO)), joint, atol=1e-6)
-    assert joint[0] > 0 and joint[1] > 0  # Leer and Screech tie on the other guess
+    np.testing.assert_allclose(joint, [5 / 24, 5 / 24, 14 / 24, 0], atol=1e-4)
+    _assert_exact_equals_loose(t, s)
 
 
 def test_factored_full_distribution_matches_enumerated(kaizo_tables, kaizo_roark_party):
     """``_distribution`` (switch, item, factored moves) equals ``ai_policy`` over every
     joint outcome (``enumerate_ai_outcomes`` with the per-slot layout)."""
     t = kaizo_tables
-    for moves, player in (
-        ((ROCK_THROW, LEER, SCREECH, PURSUIT), 72),
-        ((ACCELEROCK, STEALTH_ROCK, TACKLE, 0), 146),
-        ((PURSUIT, HEADBUTT, 0, 0), 72),
+    for moves, player, known in (
+        ((ROCK_THROW, LEER, SCREECH, PURSUIT), 72, True),
+        ((ACCELEROCK, STEALTH_ROCK, TACKLE, 0), 146, True),
+        ((PURSUIT, HEADBUTT, 0, 0), 72, True),
+        ((LEER, SCREECH, 0, 0), 72, False),  # 4 sites and 4 guess columns reached
     ):
         s = _kaizo_state(t, kaizo_roark_party, moves)
-        s = _bulky(_with_player(t, s, player))
+        s = _bulky(_with_player(t, s, player, known=known))
         s = s._replace(stages=s.stages.at[0, Stat.DEF].set(-1))
         exact = np.asarray(_distribution(t, s, KAIZO))
         enumerated = np.asarray(policy.ai_action_distribution_enumerated(t, s, KAIZO))
@@ -454,8 +484,9 @@ def test_factored_full_distribution_matches_enumerated(kaizo_tables, kaizo_roark
 @given(data=st.data())
 def test_factored_equals_joint_bruteforce(kaizo_tables, kaizo_roark_party, data):
     """On random Kaizo decisions and synthetic site tables (superset rows, so no draw is
-    refused), the factored move pick equals a joint enumeration over all slots' bits, both
-    guesses and the 12 tiebreaks, when the moveset has at most 14 sites. The claim needs
+    refused), the factored move pick equals a joint enumeration over all slots' site bits,
+    the guess columns their paths reach and the 12 tiebreaks, when those number at most 16
+    bits. The claim needs
     slots whose score depends on a roll, ideally several: ``target`` steers the search to
     more of them, and ``test_factored_equals_joint_with_two_random_slots`` is the fixed
     floor of two."""
@@ -474,7 +505,8 @@ def test_factored_equals_joint_bruteforce(kaizo_tables, kaizo_roark_party, data)
         )
     layout = data.draw(site_layouts())
     assume(not bool(policy._refused(t, s, layout).scoring))
-    assume(int(np.sum(np.asarray(slot_roll_thresholds(t, s, layout)) > 0)) <= 14)
+    used, guessed = _joint_columns(t, s, layout)
+    assume(len(used) + len(guessed) <= 16)
     factored = np.asarray(_factored(t, s, layout))
     assert not np.isnan(factored).any(), "a superset site row was refused"
     random_slots = _random_slots(t, s, layout)
@@ -485,7 +517,7 @@ def test_factored_equals_joint_bruteforce(kaizo_tables, kaizo_roark_party, data)
 def _random_slots(t, s, layout) -> int:
     """The move slots whose exact score distribution has more than one value."""
     _, hist = _slot_histograms(t, s, layout)
-    return int(np.sum(np.sum(np.asarray(hist).mean(axis=0) > 0, axis=1) > 1))
+    return int(np.sum(np.sum(np.asarray(hist) > 0, axis=1) > 1))
 
 
 @pytest.mark.slow
@@ -522,10 +554,10 @@ _slot_histograms = jax.jit(policy._slot_histograms, static_argnames="layout")
 
 
 def _exact_slot_scores(t, s, layout) -> np.ndarray:
-    """``float64[MOVES, 256]``: each slot's exact score distribution, the guesses averaged
+    """``float64[MOVES, 256]``: each slot's exact score distribution
     (``policy._slot_histograms``)."""
     _, hist = _slot_histograms(t, s, layout)
-    return np.asarray(hist, np.float64).mean(axis=0)
+    return np.asarray(hist, np.float64)
 
 
 def _loose_slot_scores(t, s, layout) -> np.ndarray:
@@ -557,14 +589,13 @@ def _assert_exact_equals_loose(t, s, layout=KAIZO) -> None:
 @settings(_SETTINGS, max_examples=20)
 @given(data=st.data())
 def test_exact_equals_loose(kaizo_tables, kaizo_roark_party, data):
-    """On random Kaizo decisions where at most one ability read can change a score (the
-    condition Ruling 6 needs, pinned for Roark by test_one_scalar_guess_is_exact_for_roark),
-    the exact distribution and each slot's score distribution equal the loose ones, where
-    every ``IfRandomLessThan`` and every ``LoadBattlerAbility DEFENDER`` is its own draw.
-    Both are NaN on the same refused states, the voluntary-switch refusals included."""
+    """On random Kaizo decisions the exact distribution and each slot's score distribution
+    equal the loose ones, where every ``IfRandomLessThan`` and every ``LoadBattlerAbility
+    DEFENDER`` is its own draw (E1 Ruling R1: no condition on how many ability reads can
+    change a score). Both are NaN on the same refused states, the voluntary-switch
+    refusals included."""
     t = kaizo_tables
     s = data.draw(kaizo_states(t, kaizo_roark_party))
-    assume(_sensitive_reads(t, _one(s), KAIZO)[0] <= 1)
     _assert_exact_equals_loose(t, s, KAIZO)
 
 
@@ -661,11 +692,12 @@ def test_refused_states_are_nan_on_both_sides(kaizo_tables, kaizo_names, kaizo_r
     assert not np.isnan(np.asarray(_distribution(t, corsola, KAIZO))).any()
 
 
-def test_loose_catches_a_split_guess(kaizo_tables, kaizo_roark_party):
-    """The one-scalar guess gate has teeth: a species with Soundproof and Clear Body (made
-    up) against Screech has two reads that change its score, Basic_CheckSoundproof's
-    (script.s:117) and Basic_CheckClearBodyEffect's (:470). One guess scores Screech 90 on
-    either ability; the decomp's two draws leave it at 100 one time in four."""
+def test_two_guesses_in_one_slot(kaizo_tables, kaizo_roark_party):
+    """E1 Ruling R1, one slot: a species with Soundproof and Clear Body (made up) against
+    Screech has two reads that change its score, Basic_CheckSoundproof's (script.s:117) and
+    Basic_CheckClearBodyEffect's (:470), each its own coin (trainer_ai.c:1194-1198). Screech
+    keeps 100 one time in four (Clear Body at :117, Soundproof at :470), as loose has it; one
+    guess for the decision scored it 90 on either ability."""
     t = kaizo_tables
     species = 72
     abilities = t.species_abilities_decomp.at[species].set(
@@ -676,93 +708,94 @@ def test_loose_catches_a_split_guess(kaizo_tables, kaizo_roark_party):
     s = _bulky(_with_player(t2, s, species))
     s = s._replace(stages=s.stages.at[0, Stat.DEF].set(-1))
     assert _sensitive_reads(t2, _one(s), KAIZO)[0] == 2
-    exact = np.asarray(_distribution(t2, s, KAIZO))
-    loose = policy.ai_action_distribution_loose(t2, s, KAIZO)
-    assert not np.allclose(exact, loose, atol=1e-3)
+    _assert_exact_equals_loose(t2, s)
+    scores = _exact_slot_scores(t2, s, KAIZO)[0]
+    np.testing.assert_allclose(scores[[90, 100]], [0.75, 0.25], atol=1e-6)
 
 
-@pytest.mark.slow
-@pytest.mark.parametrize("game", ["vanilla", "kaizo"])
-def test_one_scalar_guess_is_exact_for_roark(game, tables, names, kaizo_tables, kaizo_roark_party):
-    """Ruling 6 as data: for every species of the game's table with two abilities, against
-    each of Roark's Pokemon as the active (Kaizo's six, vanilla's three), at most one
-    ``LoadBattlerAbility DEFENDER`` read of a decision changes a score. Re-run whenever a
-    task adds reads: the loose oracle finds every read on every path.
-
-    Each species is checked in the four states of ``_GUESS_VARIANTS`` (Task 3 review m3).
-    What can decide whether a read is reached, or whether its coin changes a score, is read
-    from the state at these places only (script.s, the reads at :71, :117, :304, :470, :529,
-    :539):
-    - the compares after each read test the move's type or id (:72-78, :121-131), the
-      ability alone (:305, :471-472, :530-532), or the weather (:535-536 Leaf Guard in sun,
-      :541-542 Hydration in rain; ``LoadCurrentWeather``, trainer_ai.c:1414-1439): hence the
-      four weathers, permanent sandstorm (Roark's) and clear among them;
-    - before a read: ``FlagMoveDamageScore``'s no-comparison test (:62-63, :112-113), which
-      reads only the move's power and effect (trainer_ai.c:1035-1036); the immunity class
-      (:68, :299: types, Levitate, Wonder Guard, Magnet Rise); the attacker's Mold Breaker
-      (:69-70, :302-303); the defender's Defense stage (:435, before :470); the defender's
-      types (:521-526, before :529);
-    - after the Toxic reads, the status and Safeguard tests (:545-546) give -10 for either
-      coin, so they can only remove a read's effect;
-    - ``AddToMoveScore`` clamps at 0 (trainer_ai.c:576-586), which can only remove one;
-    - the guess is read by BASIC only: EVAL_ATTACK, EXPERT and RISKY load no DEFENDER
-      ability on Roark's paths (kaizo_roark.md 8.4), so the later flags add the same amount
-      for either coin.
-    No HP is read on the way to a read or by its compares. The HP bands of the variants
-    (the attacker at 100/69/49/29%, the 70/50/30% cuts of Expert, and the player from full
-    to 1 HP, a kill) are checked all the same."""
-    if game == "kaizo":
-        t, party = kaizo_tables, kaizo_roark_party
-        bases = [
-            make_state(t, [party[2]], [party[j], *(m for k, m in enumerate(party) if k != j)])
-            for j in range(len(party))
-        ]
-        layout = KAIZO
-    else:
-        t, layout = tables, VANILLA
-        bases = [versus(t, names, j) for j in range(3)]
-    species = _two_ability_species(t)
-    for j, base in enumerate(bases):
-        for v, variant in enumerate(_GUESS_VARIANTS):
-            states = jax.tree.map(
-                lambda *xs: jnp.stack(xs),
-                *(
-                    _guess_variant(
-                        _bulky(_with_player(t, base, sp), int(base.max_hp[0, 0])), *variant
-                    )
-                    for sp in species
-                ),
-            )
-            count = _sensitive_reads(t, states, layout)
-            bad = [int(species[i]) for i in np.flatnonzero(count > 1)]
-            assert not bad, (game, j, variant, bad)
-
-
-# (weather, the AI's active's HP %, the player's HP as a fraction of its max): Roark's
-# permanent sandstorm and clear, sun and rain (the Leaf Guard and Hydration compares,
-# script.s:535-536, :541-542); the attacker's HP across Expert's 70/50/30% cuts, the
-# player's from full to 1 HP.
-_GUESS_VARIANTS = (
-    (Weather.SANDSTORM, 100, 1.0),
-    (Weather.NONE, 69, 0.5),
-    (Weather.SUN, 49, 0.3),
-    (Weather.RAIN, 29, 0.0),
+@pytest.mark.parametrize(
+    ("trainer_id", "index", "species", "moves"),
+    [
+        (196, 2, "Geodude", ["Selfdestruct", "Rock Throw", "Rock Smash"]),  # Worker Mason
+        (245, 0, "Shieldon", ["Toxic"]),  # Ruin Maniac Darius
+    ],
 )
+def test_exact_equals_loose_on_roark_split_pokemon(
+    kaizo_tables, kaizo_names, kaizo_trainers, kaizo_roark_party, trainer_id, index, species, moves
+):
+    """Exact == loose beyond Roark's team (E1 batch 1): two Pokemon of other Roark-split
+    trainers, with the moves the AI transcribes (Geodude's Sleep Talk and Shieldon's Metal
+    Burst and Sleep Talk are not yet), Roark's Cranidos behind them, against two guessed
+    players: Gible (Sand Veil / Rough Skin) and Tentacool (Rain Dish / Clear Body).
+    Selfdestruct reads :117 and :304, Rock Throw and Rock Smash :71 and :117, Toxic :117,
+    :529 and :539, each its own coin."""
+    from nuzline.data.trainer import IntermediateData, build_trainer_party
+    from tests.conftest import KAIZO_INTERMEDIATE
+
+    t, n = kaizo_tables, kaizo_names
+    trainer = next(x for x in kaizo_trainers if x.id == trainer_id)
+    mon = build_trainer_party(trainer, IntermediateData(KAIZO_INTERMEDIATE))[index]
+    assert n.species_names[mon.species] == species
+    kept = [m for m in mon.moves if n.move_names[m] in moves]
+    assert [n.move_names[m] for m in kept] == moves
+    mon = dataclasses.replace(mon, moves=tuple(kept + [0] * (4 - len(kept))), pp=None)
+    bench = dataclasses.replace(kaizo_roark_party[5], moves=(ACCELEROCK, HEADBUTT, 0, 0), pp=None)
+    base = make_state(t, [kaizo_roark_party[2]], [mon, bench])
+    for player in (GIBLE, 72):
+        s = _bulky(_with_player(t, base, player), 200)
+        assert policy.ai_refusals(t, s, n) == [] and bool(commands.ability_guessed(t, s))
+        _assert_exact_equals_loose(t, s)
 
 
-def _guess_variant(s: BattleState, weather: int, ai_pct: int, player_frac: float):
-    """``s`` with ``weather`` (permanent), the AI's active at ``ai_pct``% of its max HP (at
-    least 1) and the player's active at ``player_frac`` of its max (at least 1)."""
-    a = int(s.active[1])
-    ai_max, player_max = int(s.max_hp[1, a]), int(s.max_hp[0, 0])
-    return s._replace(
-        weather=jnp.asarray(weather, s.weather.dtype),
-        weather_timer=jnp.asarray(0, s.weather_timer.dtype),
-        hp=s.hp.at[1, a]
-        .set(max(1, ai_max * ai_pct // 100))
-        .at[0, 0]
-        .set(max(1, int(player_max * player_frac))),
+def test_slot_guesses_fit_every_transcribed_effect(kaizo_tables, kaizo_roark_party):
+    """``KAIZO.slot_guesses`` (3) is the most guessing reads one move's path reaches, from the
+    data: for a move of every transcribed effect in slot 0, against every species the AI
+    guesses between (trainer_ai.c:1191-1198), the loose oracle finds every
+    ``LoadBattlerAbility DEFENDER`` read on some path of the slot, and their number is at
+    most ``slot_guesses``; Toxic (:117, :529, :539) reaches it."""
+    t = kaizo_tables
+    effect = np.asarray(t.move_ai_effect)
+    pool = _move_pool(t)
+    by_effect = {int(effect[m]): m for m in reversed(pool)}  # the lowest id per effect
+    assert set(by_effect) == KAIZO.transcribed, sorted(KAIZO.transcribed - set(by_effect))
+    species = _two_ability_species(t)
+    most = {}
+    for e, move in sorted(by_effect.items()):
+        base = _kaizo_state(t, kaizo_roark_party, (move, 0, 0, 0))
+        states = jax.tree.map(
+            lambda *xs: jnp.stack(xs),
+            *(_bulky(_with_player(t, base, sp), 400) for sp in species),
+        )
+        reads, _, kind = policy._loose_reads(t, states, KAIZO)
+        most[e] = sum(kind[0, r] == commands.ReadKind.ABILITY for r in reads[0])
+    assert max(most.values()) == KAIZO.slot_guesses, most
+    # STATUS_BADLY_POISON (Toxic) alone reaches it.
+    assert {e for e, k in most.items() if k == KAIZO.slot_guesses} == {33}, most
+
+
+def test_a_guess_past_the_columns_is_refused(kaizo_tables, kaizo_names, kaizo_roark_party):
+    """A layout bound like ``slot_sites``: a path that reaches more guessing reads than
+    ``slot_guesses`` is refused, never given a reused coin (``AiContext.missing_guess``).
+    Toxic against a guessed Gible (Sand Veil / Rough Skin) reads :117, :529 and :539; under
+    a layout with two guess columns the exact distribution is NaN, ``ai_scores`` raises
+    naming the slot, and with the ability known (no read guesses) it is accepted."""
+    t, n = kaizo_tables, kaizo_names
+    s = _kaizo_state(t, kaizo_roark_party, (TOXIC, TACKLE, 0, 0))
+    s = _bulky(_with_player(t, s, GIBLE))
+    narrow = KAIZO._replace(slot_guesses=2)
+    _assert_exact_equals_loose(t, s, KAIZO)
+    assert np.isnan(np.asarray(_distribution(t, s, narrow))).any()
+    line = (
+        "ai scoring: opponent slot 0: move Toxic reaches more than 2 guessing "
+        "LoadBattlerAbility DEFENDER reads, the layout's slot_guesses "
+        "(docs/ai/kaizo_roark.md 8.4)"
     )
+    assert policy.ai_path_refusals(t, s, n, narrow) == [line]
+    o = sample_ai_outcome(jax.random.PRNGKey(0), t, s, narrow)
+    with pytest.raises(policy.UnsupportedAi, match="more than 2 guessing"):
+        policy.ai_scores(t, s, o, narrow)
+    known = s._replace(ai_ability_known=s.ai_ability_known.at[0].set(1))
+    assert not np.isnan(np.asarray(_distribution(t, known, narrow))).any()
 
 
 def _random_kaizo_rows(t, party, n: int, seed: int) -> BattleState:

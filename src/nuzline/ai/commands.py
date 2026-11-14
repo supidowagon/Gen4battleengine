@@ -27,7 +27,7 @@ tie (battle_lib.c:1401-1447) takes the next bit of its slot's ``LooseDraws.bits`
 static order the straight-line scripts make the reads, and records the bit's probability:
 the read's own N/256, or 1/2. It reads neither ``AiContext.sites`` nor
 ``AiOutcome.ability_guess``, and it compares the speed compare's three-valued result, so it
-shares no gate with the exact layout: no site table, no one-scalar guess, no dropped tie.
+shares no gate with the exact layout: no site table, no guess columns, no dropped tie.
 """
 
 from __future__ import annotations
@@ -403,6 +403,16 @@ class AiContext(NamedTuple):
     # IfRandomLessThan reached on the path at a line the slot's site row has no column for
     # (if_random_less_than); the per-slot layout refuses the decision
     missing_site: jnp.ndarray
+    # int32[2]: LoadBattlerAbility DEFENDER under guess 0 and guess 1 (defender_ability);
+    # bool: its reads draw a coin this decision (ability_guessed). Per-slot layout.
+    guess_abilities: jnp.ndarray
+    guessing: jnp.ndarray
+    # int32[MOVES]: per slot, the guessing LoadBattlerAbility DEFENDER reads made so far on
+    # its path (per-slot layout: the next one takes ability_guess[slot, guesses[slot]])
+    guesses: jnp.ndarray
+    # int32: 0, or 1 + slot of the first guessing read on a path past the slot's
+    # ability_guess columns (load_battler_ability); the per-slot layout refuses the decision
+    missing_guess: jnp.ndarray
     loose: LooseDraws | None = None  # the loose oracle's draws (tests only), else None
 
 
@@ -480,6 +490,31 @@ def attacker_ability(tables: Tables, state: BattleState) -> jnp.ndarray:
     ].astype(_I32)
 
 
+def _defender_abilities(tables: Tables, state: BattleState):
+    """``(true, known, base)`` of the player's active Pokemon: its true ability (the form's),
+    whether ``LoadBattlerAbility DEFENDER`` returns it without a guess (learned, or Shadow
+    Tag, Magnet Pull or Arena Trap, trainer_ai.c:1181-1188), and the base species' two
+    abilities ``int32[2]`` (``defender_ability``)."""
+    d = state.active[0].astype(_I32)
+    species = state.species[0, d].astype(_I32)
+    row = tables.species_form_row[species, state.form[0, d].astype(_I32)]
+    true = tables.species_abilities_decomp[row.astype(_I32), state.ability_slot[0, d].astype(_I32)]
+    true = true.astype(_I32)
+    known = (state.ai_ability_known[d] > 0) | jnp.isin(true, _TRAPPING)
+    base = tables.species_abilities_decomp[species].astype(_I32)
+    return true, known, base
+
+
+def ability_guessed(tables: Tables, state: BattleState) -> jnp.ndarray:
+    """``bool``: a ``LoadBattlerAbility DEFENDER`` read of this decision draws its coin,
+    ``BattleSystem_RandNext() & 1`` (trainer_ai.c:1194-1198): the AI does not know the
+    player's ability, it is not Shadow Tag, Magnet Pull or Arena Trap (:1181-1188), and the
+    base species has two nonzero abilities (:1191-1194; even when they are the same
+    ability). It is the same for every read of the decision."""
+    _, known, base = _defender_abilities(tables, state)
+    return ~known & (base[0] != 0) & (base[1] != 0)
+
+
 def defender_ability(tables: Tables, state: BattleState, ability_guess) -> jnp.ndarray:
     """``int32``: ``LoadBattlerAbility DEFENDER`` (trainer_ai.c:1170; roark.md 9.2): the
     true ability when the AI has learned it or when it is Shadow Tag, Magnet Pull or
@@ -493,13 +528,7 @@ def defender_ability(tables: Tables, state: BattleState, ability_guess) -> jnp.n
     ``SpeciesData_GetSpeciesValue(species, SPECIES_DATA_ABILITY_1/2)``
     (``trainer_ai.c:1191-1192``; ``AICmd_CheckBattlerAbility`` likewise, ``:1236-1237``),
     which loads the personal data of the species id (``src/pokemon.c:2283``)."""
-    d = state.active[0].astype(_I32)
-    species = state.species[0, d].astype(_I32)
-    row = tables.species_form_row[species, state.form[0, d].astype(_I32)]
-    true = tables.species_abilities_decomp[row.astype(_I32), state.ability_slot[0, d].astype(_I32)]
-    true = true.astype(_I32)
-    known = (state.ai_ability_known[d] > 0) | jnp.isin(true, _TRAPPING)
-    base = tables.species_abilities_decomp[species].astype(_I32)
+    true, known, base = _defender_abilities(tables, state)
     guess = base[jnp.clip(jnp.asarray(ability_guess, _I32), 0, 1)]
     only = jnp.where(base[0] != 0, base[0], base[1])
     resolved = jnp.where((base[0] != 0) & (base[1] != 0), guess, only)
@@ -520,6 +549,10 @@ def new_context(
     ``sites`` is the ``script_rolls`` index of each ``SITE_LINES`` line per slot: the flat
     layout's ``outcome.line_sites`` by default, ``outcome.slot_roll_sites`` for a per-slot
     layout. ``loose``: the loose oracle's draws (module docstring), else None.
+
+    ``player_ability`` is the flat layout's one resolution for the decision (its scalar
+    ``ability_guess``); a per-slot ``ability_guess`` (``int8[MOVES, slot_guesses]``) is
+    resolved at each read instead (``load_battler_ability``), and ``player_ability`` is -1.
 
     The seen moves are the stored ``ai_seen_moves`` plus the player's pending
     ``last_move``: ``TrainerAI_MainSingles`` runs ``TrainerAI_RecordLastMove`` (:295)
@@ -543,10 +576,18 @@ def new_context(
         jump=false,
         calc_temp=jnp.asarray(0, _I32),
         seen_moves=seen,
-        player_ability=defender_ability(tables, state, outcome.ability_guess),
+        player_ability=(
+            defender_ability(tables, state, outcome.ability_guess)
+            if jnp.ndim(outcome.ability_guess) == 0
+            else jnp.asarray(-1, _I32)
+        ),
         damage=_slot_damage(tables, state, jnp.full((MOVES,), SIM_ROLL_MAX, _I32)),
         sites=line_sites(state) if sites is None else jnp.asarray(sites, _I32),
         missing_site=jnp.asarray(0, _I32),
+        guess_abilities=jnp.stack([defender_ability(tables, state, g) for g in (0, 1)]),
+        guessing=ability_guessed(tables, state),
+        guesses=jnp.zeros(MOVES, _I32),
+        missing_guess=jnp.asarray(0, _I32),
         loose=loose,
     )
 
@@ -629,15 +670,38 @@ def if_move_effectiveness_equals(ctx: AiContext, cls: TypeMulti) -> AiContext:
 
 def load_battler_ability(ctx: AiContext, battler: Battler) -> AiContext:
     """``LoadBattlerAbility`` (trainer_ai.c:1170): the attacker's true ability, or the
-    defender's ability as the AI resolves it (``AiContext.player_ability``; its coin
-    flip is ``AiOutcome.ability_guess``, one per decision, roark.md 8.2)."""
+    defender's ability as the AI resolves it (``defender_ability``). Its coin flip,
+    ``RandNext() & 1`` (:1194-1198), is fresh at every read that guesses
+    (``ability_guessed``):
+    - flat layout (scalar ``AiOutcome.ability_guess``): one guess for the decision,
+      ``AiContext.player_ability`` (roark.md 8.2);
+    - per-slot layout (E1 Ruling R1; docs/ai/kaizo_roark.md 8.4): the k-th guessing read on
+      the slot's path takes ``ability_guess[slot, k]`` (``AiContext.guesses`` counts them; a
+      read off the path, or of a ``MOVE_NONE`` slot, draws nothing). A guessing read past
+      the slot's columns resolves with guess 0 and is recorded in ``missing_guess``, so the
+      decision is refused (``policy._scores``) instead of reusing a coin;
+    - loose: its own draw."""
     if battler == Battler.ATTACKER:
         value = attacker_ability(ctx.tables, ctx.state)
     elif ctx.loose is not None:  # its own coin flip (trainer_ai.c:1191-1198)
         ctx, bit = _loose_read(ctx, 0.5, ReadKind.ABILITY)
         value = defender_ability(ctx.tables, ctx.state, bit)
-    else:
+    elif jnp.ndim(ctx.outcome.ability_guess) == 0:
         value = ctx.player_ability
+    else:
+        columns = ctx.outcome.ability_guess[ctx.slot]  # int8[slot_guesses]
+        k = ctx.guesses[ctx.slot]
+        bit = jnp.take(columns, k, mode="fill", fill_value=0)
+        value = ctx.guess_abilities[jnp.clip(bit.astype(_I32), 0, 1)]
+        draws = ctx.live & (ctx.move != 0) & ctx.guessing
+        missing = draws & (k >= columns.shape[0])
+        code = jnp.asarray(ctx.slot, _I32) + 1
+        ctx = ctx._replace(
+            guesses=ctx.guesses.at[ctx.slot].add(draws.astype(_I32)),
+            missing_guess=jnp.where(
+                missing & (ctx.missing_guess == 0), code, ctx.missing_guess
+            ).astype(_I32),
+        )
     return ctx._replace(calc_temp=jnp.asarray(value, _I32))
 
 

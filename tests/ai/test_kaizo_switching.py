@@ -153,7 +153,8 @@ def test_six_bench_layout_fits(kaizo_tables, kaizo_names, kaizo_roark_party):
         mine = [i for i, a in enumerate(bench * 2) if a == MOVE_ACTIONS + j]
         want = sum(expected[4 + i] for i in mine)
         np.testing.assert_allclose(dist[MOVE_ACTIONS + j], want, rtol=2e-5, atol=0)
-    assert policy.ai_width(t, s) <= 2 * MOVES * 2**KAIZO.slot_sites + KAIZO.switch_sites + 1
+    bits = KAIZO.slot_sites + KAIZO.slot_guesses
+    assert policy.ai_width(t, s) <= MOVES * 2**bits + KAIZO.switch_sites + 1
 
 
 def test_six_bench_sampled_stops(kaizo_tables, kaizo_names, kaizo_roark_party):

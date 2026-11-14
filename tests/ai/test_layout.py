@@ -158,7 +158,10 @@ def test_traced_tables_without_a_layout_refuse_another_policy(tables, names):
     s = trace_a(tables, names)
     kaizo_like = tables._replace(ai_policy=jnp.asarray(1, tables.ai_policy.dtype))
     # Concrete tables resolve their own layout: the Kaizo policy's outcome is per slot.
-    per_slot = outcome()._replace(script_rolls=jnp.zeros((4, KAIZO.slot_sites), jnp.int8))
+    per_slot = outcome()._replace(
+        script_rolls=jnp.zeros((4, KAIZO.slot_sites), jnp.int8),
+        ability_guess=jnp.zeros((4, KAIZO.slot_guesses), jnp.int8),
+    )
     assert int(jax.jit(lambda st: ai_policy(kaizo_like, st, per_slot))(s)) == 0
     traced = jax.jit(lambda t: ai_policy(t, s, outcome()))
     assert int(traced(tables)) == 0

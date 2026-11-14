@@ -14,6 +14,10 @@ The fields:
 * ``max_script_rolls``: the flat ``AiOutcome.script_rolls`` width (vanilla).
 * ``slot_sites``: the script-roll columns of one move slot (per-slot layouts), the most
   sites any transcribed effect reaches.
+* ``slot_guesses``: the ``AiOutcome.ability_guess`` columns of one move slot (per-slot
+  layouts; E1 Ruling R1): the most guessing ``LoadBattlerAbility DEFENDER`` reads one move's
+  path reaches (``outcome.KAIZO_SLOT_GUESSES``). A path that reaches more is refused
+  (``AiContext.missing_guess``). 0 for the flat layout, whose guess is one scalar.
 * ``switch_sites``: the voluntary-switch draw sites ``AiOutcome.switch_stop`` encodes:
   ``switching.SWITCH_SITES`` (9) for vanilla Roark's three Pokemon,
   ``switching.KAIZO_SWITCH_SITES`` (44, every candidate draw of a party of six) for Kaizo.
@@ -51,6 +55,7 @@ from nuzline.ai.commands import MOVE_EFFECTS, RISKY_EFFECTS
 from nuzline.ai.outcome import (
     EFFECT_SITE_LINES,
     KAIZO_EXPERT_TRANSCRIBED,
+    KAIZO_SLOT_GUESSES,
     KAIZO_SLOT_SITES,
     MAX_SCRIPT_ROLLS,
     SITE_N,
@@ -73,6 +78,7 @@ class AiLayout(NamedTuple):
     transcribed: frozenset[int]
     effect_sites: tuple[tuple[int, tuple[tuple[int, int], ...]], ...] = ()
     expert_transcribed: frozenset[int] = frozenset()
+    slot_guesses: int = 0
 
 
 VANILLA = AiLayout(
@@ -108,6 +114,7 @@ KAIZO = AiLayout(
         for effect, lines in sorted(EFFECT_SITE_LINES.items())
     ),
     expert_transcribed=KAIZO_EXPERT_TRANSCRIBED,
+    slot_guesses=KAIZO_SLOT_GUESSES,
 )
 assert max(len(sites) for _, sites in KAIZO.effect_sites) <= KAIZO.slot_sites
 

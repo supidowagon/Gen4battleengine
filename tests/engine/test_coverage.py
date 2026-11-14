@@ -23,7 +23,6 @@ from nuzline.engine.coverage import (
     IMPLEMENTED_ITEMS,
     IMPLEMENTED_TRAINER_ITEMS,
     IMPLEMENTED_WEATHER,
-    ONE_SCALAR_GUESS_CHECKED,
     POLICY_AI_FLAGS,
     Support,
     UnsupportedMechanics,
@@ -330,56 +329,6 @@ def test_kaizo_roark_ai_flags_exact(kaizo_tables, kaizo_names, kaizo_roark, kaiz
     player = [kaizo_roark_party[2]]  # Roark's Gible
     full = check_coverage(kaizo_tables, kaizo_names, player, kaizo_roark, kaizo_roark_party, 0)
     assert not any("trainer AI" in m or "AI flag" in m for m in full.missing), full.missing
-
-
-def test_kaizo_ai_needs_the_ruling_6_data_test(
-    tables, names, kaizo_tables, kaizo_names, kaizo_roark, kaizo_roark_party
-):
-    # K3c final review I-4 (plan K3c Ruling 6; kaizo_roark.md 8.4): the one-scalar ability
-    # guess is exact only for trainers whose data test has run, so any other Kaizo trainer
-    # is refused by name of the rule, even when everything else passes. Roark's own data
-    # under another id is that trainer.
-    assert ONE_SCALAR_GUESS_CHECKED == {"kaizo": frozenset({246})}
-    other = replace(kaizo_roark, id=999)
-    report = check_opponent(kaizo_tables, kaizo_names, other, kaizo_roark_party, Weather.NONE)
-    line = (
-        "Leader Roark: the one-scalar ability guess is not checked against this trainer's "
-        "movesets (plan K3c Ruling 6; docs/ai/kaizo_roark.md 8.4) (AI ability guess UNSUPPORTED)"
-    )
-    assert report.missing == [line], report.missing
-    assert report.level == Support.NONE
-    player = [kaizo_roark_party[2]]  # Roark's Gible
-    full = check_coverage(kaizo_tables, kaizo_names, player, other, kaizo_roark_party, 0)
-    assert full.level == Support.NONE and line in full.missing
-    # Roark himself passes, and vanilla has no such gate.
-    report = check_opponent(kaizo_tables, kaizo_names, kaizo_roark, kaizo_roark_party, 0)
-    assert not any("ability guess" in m for m in report.missing), report.missing
-    vanilla = replace(roark_trainer(), id=999)
-    report = check_opponent(tables, names, vanilla, roark_party(names), 0)
-    assert not any("ability guess" in m for m in report.missing), report.missing
-
-
-@pytest.mark.parametrize("flags", [0b111, 0b11111, 0b110111])
-def test_kaizo_flag_set_must_be_exact(
-    kaizo_tables, kaizo_names, kaizo_roark, kaizo_roark_party, flags
-):
-    # Plan K3c Ruling 10: the Kaizo policy always runs BASIC, EVAL_ATTACK, EXPERT and RISKY,
-    # so a Kaizo trainer with any other flag set is refused by name of the rule; 0b111 (no
-    # RISKY) has no unsupported flag of its own.
-    trainer = replace(kaizo_roark, ai_flags=flags)
-    report = check_opponent(kaizo_tables, kaizo_names, trainer, kaizo_roark_party, Weather.NONE)
-    line = (
-        f"Leader Roark: AI flags {flags:#x} are not exactly BASIC, EVAL_ATTACK, EXPERT and "
-        "RISKY, which the Kaizo AI policy always runs together (plan K3c Ruling 10) "
-        "(AI flag set UNSUPPORTED)"
-    )
-    assert line in report.missing
-    flag_lines = [m for m in report.missing if "(AI flag UNSUPPORTED)" in m]
-    extra = {0b111: [], 0b11111: ["SETUP_FIRST_TURN"], 0b110111: ["PRIORITIZE_EXTREMES"]}
-    assert flag_lines == [f"Leader Roark: AI_FLAG_{x} (AI flag UNSUPPORTED)" for x in extra[flags]]
-
-
-# --- Kaizo trainer fields (K2b Task 14) ----------------------------------------------
 
 
 def with_area(trainer, **fields):

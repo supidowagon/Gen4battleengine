@@ -37,8 +37,6 @@ def key(s):
         return ("held item effect", f"#{it[name.lower()]}"), name
     if kind == "AI flag set":
         return ("AI", "flag set " + re.search(r"0x[0-9a-fA-F]+", name).group(0)), None
-    if kind == "AI ability guess":
-        return ("AI", "ability-guess check for this trainer"), None
     if kind == "AI flag":
         return ("AI", name), None
     return (kind, name), None
