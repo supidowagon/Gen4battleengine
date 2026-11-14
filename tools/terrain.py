@@ -52,11 +52,12 @@ So a battle in header ``h`` starts on a tile of a cell labelled ``h`` (in any ma
 header loads; every cell of ``h``'s own matrix when it has no header section) or on the
 tile of one of ``h``'s warp events, and its terrain is ``CalcTerrain`` of that tile's behaviour with ``h``'s
 ``battleBG`` (or ``BACKGROUND_WATER`` on a tile a surfing player can stand on). A trainer's
-terrain is the union over its map headers (``tools.rom.readers.maps.trainer_maps``): one
-value is the terrain, several are "mixed" and no header (no map places the trainer) is
-"unknown"; both of the last two store ``TERRAIN_UNKNOWN``. The sight line and the tile next
-to a talk-to trainer are not used to narrow the set (rules §9.3 step 2): that would only
-turn some mixed trainers into known ones.
+terrain is the union over its map headers (``tools.rom.readers.maps.trainer_maps``) of the
+terrains of the tiles its battle can start on there: the sight-line and talk tiles of its
+object, or the rectangle of the coord event whose script starts it, when the decomp fixes
+them (``narrowed_terrains``, rules §9.3 step 2), else the header's whole set. One value is
+the terrain, several are "mixed" and no header (no map places the trainer) is "unknown";
+both of the last two store ``TERRAIN_UNKNOWN``.
 """
 
 from __future__ import annotations
@@ -138,7 +139,10 @@ class TerrainRules(NamedTuple):
     behaviours a surfing player can stand on; ``patches``: ``(matrix, x, z, land data
     id)`` story-flag rewrites; ``attributes``: (offset, count) of the land data's
     terrain attributes; ``mask``: the behaviour mask; ``invalid_land``:
-    ``INVALID_LAND_DATA_ID``; ``tiles_x``: ``MAP_TILES_COUNT_X`` (tiles per cell row)."""
+    ``INVALID_LAND_DATA_ID``; ``tiles_x``: ``MAP_TILES_COUNT_X`` (tiles per cell row);
+    ``collision``: ``TERRAIN_ATTRIBUTES_COLLISION_MASK`` (the attribute's collision bit,
+    src/terrain_collision_manager.c:212-227); ``table``: the behaviours
+    ``TileBehavior_IsTable`` accepts (a talk reaches across one, src/unk_0203C954.c:62-84)."""
 
     names: tuple[str, ...]
     backgrounds: tuple[str, ...]
@@ -151,6 +155,8 @@ class TerrainRules(NamedTuple):
     mask: int
     invalid_land: int
     tiles_x: int
+    collision: int
+    table: frozenset[int]
 
 
 def battle_constants(decomp: Path, name: str, prefix: str) -> list[str]:
@@ -371,6 +377,7 @@ def terrain_rules(
             "INVALID_LAND_DATA_ID",
             "MAP_TILES_COUNT_X",
             "MAP_TILES_COUNT_Z",
+            "TERRAIN_ATTRIBUTES_COLLISION_MASK",
         ),
     )
     count = defs["TERRAIN_ATTRIBUTES_SIZE"] // 2  # TERRAIN_ATTRIBUTES_COUNT, sizeof(u16)
@@ -388,6 +395,8 @@ def terrain_rules(
         mask=defs["TERRAIN_ATTRIBUTES_TILE_BEHAVIOR_MASK"],
         invalid_land=defs["INVALID_LAND_DATA_ID"],
         tiles_x=defs["MAP_TILES_COUNT_X"],
+        collision=defs["TERRAIN_ATTRIBUTES_COLLISION_MASK"],
+        table=_predicate(decomp, "TileBehavior_IsTable", flags_table),
     )
 
 
@@ -427,13 +436,19 @@ def land_behaviours(rules: TerrainRules, member: bytes, index: int) -> frozenset
     return frozenset(a & rules.mask for a in struct.unpack_from(f"<{count}H", member, offset))
 
 
-def land_tiles(rules: TerrainRules, member: bytes, index: int) -> tuple[int, ...]:
-    """Each tile's behaviour of a ``land_data.narc`` member, by tile index
-    ``z * MAP_TILES_COUNT_X + x`` (``GetTileAttributes``, src/terrain_collision_manager.c:
-    176-178), after ``land_behaviours``' checks."""
+def land_attributes(rules: TerrainRules, member: bytes, index: int) -> tuple[int, ...]:
+    """Each tile's terrain attribute u16 of a ``land_data.narc`` member (behaviour and
+    collision bit), by tile index ``z * MAP_TILES_COUNT_X + x`` (``GetTileAttributes``,
+    src/terrain_collision_manager.c:176-178), after ``land_behaviours``' checks."""
     offset, count = rules.attributes
     land_behaviours(rules, member, index)
-    return tuple(a & rules.mask for a in struct.unpack_from(f"<{count}H", member, offset))
+    return struct.unpack_from(f"<{count}H", member, offset)
+
+
+def land_tiles(rules: TerrainRules, member: bytes, index: int) -> tuple[int, ...]:
+    """Each tile's behaviour of a ``land_data.narc`` member, by tile index (``land_attributes``
+    masked by the behaviour mask)."""
+    return tuple(a & rules.mask for a in land_attributes(rules, member, index))
 
 
 def calc_terrain(rules: TerrainRules, behaviour: int, background: int) -> int:
@@ -538,14 +553,19 @@ def trainer_terrains(
     n_trainers: int,
     where: Mapping[int, Iterable[int]],
     by_header: Mapping[int, frozenset[int]],
+    narrowed: Mapping[tuple[int, int], frozenset[int]] | None = None,
 ) -> list[tuple[int, list[int]]]:
     """Per trainer id: ``(terrain, possible terrains)``. The possible terrains are the union
-    over the trainer's map headers ``where[id]`` (``by_header``); one value is the terrain,
-    none or several give ``TERRAIN_UNKNOWN``. ``TERRAIN_UNKNOWN`` in the list means a header
-    whose cells cannot be read."""
+    over the trainer's map headers ``where[id]`` of ``narrowed[(id, header)]`` when given
+    (``narrowed_terrains``: the tiles its battle can start on there), else ``by_header``;
+    one value is the terrain, none or several give ``TERRAIN_UNKNOWN``. ``TERRAIN_UNKNOWN``
+    in the list means a header whose cells cannot be read."""
+    narrowed = narrowed or {}
     out = []
     for tid in range(n_trainers):
-        terrains = sorted(frozenset().union(*(by_header[h] for h in where.get(tid, ()))))
+        terrains = sorted(
+            frozenset().union(*(narrowed.get((tid, h), by_header[h]) for h in where.get(tid, ())))
+        )
         known = len(terrains) == 1 and terrains[0] != TERRAIN_UNKNOWN
         out.append((terrains[0] if known else TERRAIN_UNKNOWN, terrains))
     return out
@@ -556,6 +576,640 @@ def terrain_fields(terrain: int, terrains: list[int]) -> dict:
     for mixed or unknown) and ``terrains`` (every terrain the trainer's maps can give,
     sorted; empty when no map places it)."""
     return {"terrain": terrain, "terrains": terrains}
+
+
+# --- Narrowing: the tiles a trainer's battle can start on (rules §9.3 step 2) ----------
+#
+# The whole-header set above is what any battle in a header can start with. For most
+# trainers the decomp fixes far fewer tiles, and ``narrowed_terrains`` reads those (both
+# extractors hand it the same events and script graphs):
+#
+# * An object trainer (an object event whose script is a trainer's battle script, 3000 +
+#   id - 1 or 5000 + id - 1, ``Script_GetTrainerID``) starts its battle when it spots the
+#   player or when the player talks to it. Spotting (``GetTrainerDistToPlayer``,
+#   src/trainer_encounter.c:182-226): a ``TRAINER_TYPE_NORMAL`` trainer (and the FACE_* /
+#   SPIN_* types ``GetTrainerType`` maps to it, :165-180) looks along its current facing, a
+#   ``TRAINER_TYPE_VIEW_ALL_DIRECTIONS`` one along all four, any other type not at all; the
+#   player must be 1..``data[0]`` tiles away in that line (``GetDistance*``, :243-305), and
+#   ``IsPathInterrupted`` (:310-343) refuses a line whose tiles in between, or the player's
+#   own tile, carry the tile collision bit (``sub_02063E18``, src/map_object_move.c:575-604,
+#   through ``TerrainCollisionManager_WillMapObjectCollide``,
+#   src/terrain_collision_manager.c:285-302, which reads the static bit); only the trainer
+#   then walks (:646-662). So a facing's sight tiles run outwards from the object up to its
+#   range and stop at the first collision tile. Talking (``sub_0203C9D4`` /
+#   ``sub_0203CA40``, src/unk_0203C954.c:62-97, from src/overlay005/field_control.c:262-273):
+#   the player faces the object from any of its four neighbours, or from two tiles away
+#   across a ``TileBehavior_IsTable`` tile. The battle script (``Battles_Trainer``,
+#   res/field/scripts/scripts_battles.s) moves no one before ``StartTrainerBattle``.
+# * The facings an object can have come from its movement type (``FACINGS``) plus its
+#   event's initial facing, which it keeps until the type first turns it. A trainer of a Vs.
+#   Seeker rematch row (the base and its rematches) can also be fought after the Vs. Seeker
+#   spins it (``MOVEMENT_TYPE_VS_SEEKER_SPIN``, src/overlay005/vs_seeker.c:659-690, then
+#   ``MOVEMENT_TYPE_LOOK_AROUND`` :599-614 or a ``LOOK_*`` type :780-810; the base's own id
+#   comes back at rematch level 0, :692-773): all four facings for the trainer types it
+#   spins (:536-542).
+# * A battle a coord event's script starts (``Field_CheckCoordEvent`` / ``sub_0203CC14``,
+#   src/overlay005/field_control.c:768-775, src/unk_0203C954.c:208-225) starts on a tile of
+#   the event's rectangle when every command before the battle leaves the player where it
+#   is (``ScriptFacts.safe``) and nothing else starts that script in the header.
+#
+# Not read, so the set is never smaller than the decomp's: elevation (the height checks of
+# ``IsPathInterrupted`` and ``sub_0203C9B0``), objects standing in a sight line,
+# ``sub_02064004``'s directional blocks, and whether the player can reach a tile (each only
+# removes tiles). Object moves are read from the header's own script file, not from common
+# scripts (scripts_common addresses objects of whatever map is current). On a talk
+# or coord tile the player can stand on a collision tile only under map features that
+# override collision (``TerrainCollisionManager_WillPlayerCollide``,
+# src/terrain_collision_manager.c:305-335; ``sCheckCollisionFuncs``,
+# src/dynamic_map_features.c:48-60), which only an ``InitPersistedMapFeaturesFor*`` command
+# turns on (src/scrcmd.c:4700-4785) and a warp turns off (src/field_map_change.c:267-269):
+# those tiles count only when a header the player can walk in from runs one. A trainer whose
+# start is not one of these (a movement type ``FACINGS`` does not list, which includes every
+# type that moves the object; a script command that moves or turns its object; a script
+# battle not started only by a coord event of the header; a command before the battle that
+# is not known to leave the player in place) keeps the whole-header set for that header.
+
+# DIR_NORTH, DIR_SOUTH, DIR_WEST, DIR_EAST (include/constants/map_object.h:5-8) as (dx, dz)
+# (sMapObjectDxDir / sMapObjectDzDir, src/map_object_move.c:818-845).
+DIRECTIONS = ((0, -1), (0, 1), (-1, 0), (1, 0))
+ALL_FACINGS = frozenset(range(len(DIRECTIONS)))
+_N, _S, _W, _E = range(4)
+# Movement types that never move their object -> the facings they turn it to. A type's
+# functions are Unk_020EE3A8[type] (src/unk_020EDBAC.c:559-628): NONE's do nothing
+# (sub_020633E0..sub_020633EC, src/map_object.c:2487-2505); LOOK_NORTH .. LOOK_EAST face one
+# way once (sub_0206493C..sub_02064960 and sub_02064918, src/unk_0206450C.c:444-486); the
+# other LOOK_* types turn among one list of Unk_020EEB08 (sub_0206453C..sub_020645B4 pick it,
+# :170-223; sub_020645C0, :225-245, and sub_02065448, :1337-1420, turn only to a listed
+# facing; the lists, :1490-1560, :1758-1799). Any other type leaves the header unnarrowed.
+FACINGS = {
+    "MOVEMENT_TYPE_NONE": (),
+    "MOVEMENT_TYPE_LOOK_AROUND": (_N, _S, _W, _E),
+    "MOVEMENT_TYPE_LOOK_NORTH_AND_WEST": (_N, _W),
+    "MOVEMENT_TYPE_LOOK_NORTH_AND_EAST": (_N, _E),
+    "MOVEMENT_TYPE_LOOK_SOUTH_AND_WEST": (_S, _W),
+    "MOVEMENT_TYPE_LOOK_SOUTH_AND_EAST": (_S, _E),
+    "MOVEMENT_TYPE_LOOK_NORTH_SOUTH_AND_WEST": (_N, _S, _W),
+    "MOVEMENT_TYPE_LOOK_NORTH_SOUTH_AND_EAST": (_N, _S, _E),
+    "MOVEMENT_TYPE_LOOK_NORTH_WEST_AND_EAST": (_N, _W, _E),
+    "MOVEMENT_TYPE_LOOK_SOUTH_WEST_AND_EAST": (_S, _W, _E),
+    "MOVEMENT_TYPE_LOOK_NORTH": (_N,),
+    "MOVEMENT_TYPE_LOOK_SOUTH": (_S,),
+    "MOVEMENT_TYPE_LOOK_WEST": (_W,),
+    "MOVEMENT_TYPE_LOOK_EAST": (_E,),
+    "MOVEMENT_TYPE_LOOK_NORTH_AND_SOUTH": (_N, _S),
+    "MOVEMENT_TYPE_LOOK_WEST_AND_EAST": (_W, _E),
+}
+# GetTrainerType (src/trainer_encounter.c:165-180) and GetTrainerDistToPlayer (:182-226).
+SEES_FACING = (
+    "TRAINER_TYPE_NORMAL",
+    "TRAINER_TYPE_FACE_SIDES",
+    "TRAINER_TYPE_FACE_COUNTERCLOCKWISE",
+    "TRAINER_TYPE_FACE_CLOCKWISE",
+    "TRAINER_TYPE_SPIN_COUNTERCLOCKWISE",
+    "TRAINER_TYPE_SPIN_CLOCKWISE",
+)
+SEES_ALL = ("TRAINER_TYPE_VIEW_ALL_DIRECTIONS",)
+VS_SEEKER_TYPES = SEES_FACING + SEES_ALL  # VsSeekerSystem_CollectViableNPCs (vs_seeker.c:536-542)
+# Script commands that leave the player where it is: their handlers (src/scrcmd.c) only read
+# or write variables, flags and trainer flags, show text, play sound, wait, lock or release
+# objects, or turn the talked-to object (FacePlayer). ApplyMovement of another object and
+# CallCommonScript of a common script made of these are safe too (ScriptFacts.safe).
+SAFE_COMMANDS = frozenset(
+    f"SCRCMD_{c}"
+    for c in [
+        "END",
+        "RETURN",
+        "GOTO",
+        "CALL",
+        "GOTOIF",
+        "CALLIF",
+        "RETURNCOMMONSCRIPT",
+        "COMPAREVARTOVALUE",
+        "COMPAREVARTOVAR",
+        "SETVARFROMVALUE",
+        "SETVARFROMVAR",
+        "SETFLAG",
+        "CLEARFLAG",
+        "CHECKFLAG",
+        "SETTRAINERFLAG",
+        "CLEARTRAINERFLAG",
+        "CHECKTRAINERFLAG",
+        "MESSAGE",
+        "MESSAGEINSTANT",
+        "MESSAGENOSKIP",
+        "OPENMESSAGE",
+        "CLOSEMESSAGE",
+        "CLOSEMESSAGEWITHOUTERASING",
+        "WAITBUTTON",
+        "PLAYSE",
+        "WAITSE",
+        "PLAYFANFARE",
+        "WAITFANFARE",
+        "PLAYMUSIC",
+        "STOPMUSIC",
+        "PLAYDEFAULTMUSIC",
+        "FADEOUTBGM",
+        "FADEINBGM",
+        "SETBGM",
+        "WAITTIME",
+        "WAITMOVEMENT",
+        "LOCKALL",
+        "RELEASEALL",
+        "LOCKOBJECT",
+        "RELEASEOBJECT",
+        "FACEPLAYER",
+        "GETPLAYERMAPPOS",
+        "GETPLAYERGENDER",
+        "GETPLAYERSTARTERSPECIES",
+        "BUFFERPLAYERNAME",
+        "BUFFERRIVALNAME",
+        "BUFFERPLAYERSTARTERSPECIESNAME",
+        "BUFFERRIVALSTARTERSPECIESNAME",
+    ]
+)
+APPLY_MOVEMENT = "SCRCMD_APPLYMOVEMENT"  # localID, movement (src/scrcmd.c:2029-2044)
+CALL_COMMON = "SCRCMD_CALLCOMMONSCRIPT"  # scriptID (src/scrcmd.c:973-987)
+STARTS_BY_ID = "SCRCMD_UNUSED_013"  # any script id (src/scrcmd.c:960-971)
+BATTLE_COMMANDS = frozenset(
+    {"SCRCMD_STARTTRAINERBATTLE", "SCRCMD_STARTTAGBATTLE", "SCRCMD_STARTFIRSTBATTLE"}
+)
+SET_VAR = "SCRCMD_SETVARFROMVALUE"
+# Commands that move or turn an object given by local id, their first operand (src/scrcmd.c:
+# ScrCmd_ApplyMovement, _SetMovementType, _SetObjectEventPos, _SetPosition,
+# _SetObjectEventMovementType, _SetObjectEventDir, _18C).
+MOVES_OBJECT = frozenset(
+    {
+        APPLY_MOVEMENT,
+        "SCRCMD_SETMOVEMENTTYPE",
+        "SCRCMD_SETOBJECTEVENTPOS",
+        "SCRCMD_SETPOSITION",
+        "SCRCMD_SETOBJECTEVENTMOVEMENTTYPE",
+        "SCRCMD_SETOBJECTEVENTDIR",
+        "SCRCMD_18C",
+    }
+)
+FEATURES_PREFIX = "SCRCMD_INITPERSISTEDMAPFEATURESFOR"
+DISTORTION_FEATURES = "SCRCMD_INITPERSISTEDMAPFEATURESFORDISTORTIONWORLD"
+# Local script ids game code starts (tools.rom.readers.maps.C_STARTED_SCRIPTS cites each
+# site). 2, 6, 7 and 8 come only from overlay 9 (src/overlay009/ov9_02249960.c), loaded only
+# while the Distortion World's map features are on (src/overlay005/fieldmap.c:170-182,
+# :369-380), which only InitPersistedMapFeaturesForDistortionWorld sets (src/scrcmd.c:4780-4785).
+C_STARTED_SCRIPTS = (2, 3, 4, 5, 6, 7, 8)
+OVERLAY9_ONLY_SCRIPTS = (2, 6, 7, 8)
+VARS_START = 0x4000  # operands at or above it are variables (src/script_manager.c:428-452)
+# SCRIPT_ID_OFFSET_COMMON_SCRIPTS up to SCRIPT_ID_OFFSET_BG_EVENTS (include/script_manager.h:
+# 90-91) run scripts_common (src/script_manager.c:62, :228-254).
+COMMON_SCRIPTS = (2000, 2500)
+SCRIPT_STACK_SIZE = 20  # ScriptContext.stack (include/field_script_context.h:20)
+UNKNOWN_TRAINER = -1  # a battle operand or partner value no constant gives
+LOCALID_H = Path("include") / "constants" / "scrcmd.h"
+
+
+class ObjectEvent(NamedTuple):
+    """An object event as ``MapObject`` reads it (tools/jsoncnv/event.py:52-69): ``trainer``
+    is the trainer id its battle script names (0: not a trainer object)."""
+
+    local: int
+    movement: int
+    trainer_type: int
+    direction: int
+    sight: int  # data[0]
+    x: int
+    z: int
+    trainer: int
+
+
+class CoordEvent(NamedTuple):
+    """A coord event (event.py:109-131): its local script id and rectangle."""
+
+    script: int
+    x: int
+    z: int
+    width: int
+    length: int
+
+
+class HeaderSites(NamedTuple):
+    """One map header's events as the narrowing reads them: ``other_scripts`` are the local
+    script ids its bg and object events and its init scripts run; ``file`` keys its script
+    file in ``narrowed_terrains``' ``scripts``."""
+
+    objects: tuple[ObjectEvent, ...]
+    coords: tuple[CoordEvent, ...]
+    other_scripts: frozenset[int]
+    file: object
+
+
+class Cmd(NamedTuple):
+    """One script command: its ``SCRCMD_*`` constant (``"?<macro>"`` for a decomp macro the
+    reader cannot expand), its operands (None: a value the reader does not resolve; a branch
+    command's offset is ``target`` instead), and the command after it (``next``)."""
+
+    const: str
+    args: tuple
+    target: object
+    next: object
+
+
+class FieldRules(NamedTuple):
+    """``FACINGS`` and the trainer types by id (generated/movement_types.txt,
+    generated/trainer_types.txt) and ``LOCALID_PLAYER`` (include/constants/scrcmd.h:15)."""
+
+    facings: Mapping[int, frozenset[int]]
+    sees_facing: frozenset[int]
+    sees_all: frozenset[int]
+    vs_seeker: frozenset[int]
+    localid_player: int
+
+
+def field_rules(decomp: Path) -> FieldRules:
+    decomp = Path(decomp)
+    movements = _constants(decomp, "movement_types", "MOVEMENT_TYPE_")
+    types = _constants(decomp, "trainer_types", "TRAINER_TYPE_")
+    missing = [n for n in [*FACINGS, *VS_SEEKER_TYPES] if n not in movements + types]
+    if missing:
+        raise TerrainError(f"generated movement/trainer types lack {missing}")
+    player = _defines(_read(decomp, LOCALID_H), LOCALID_H, ("LOCALID_PLAYER",))
+    return FieldRules(
+        facings={movements.index(n): frozenset(f) for n, f in FACINGS.items()},
+        sees_facing=frozenset(types.index(n) for n in SEES_FACING),
+        sees_all=frozenset(types.index(n) for n in SEES_ALL),
+        vs_seeker=frozenset(types.index(n) for n in VS_SEEKER_TYPES),
+        localid_player=player["LOCALID_PLAYER"],
+    )
+
+
+def _is_var(v) -> bool:
+    return v is None or v >= VARS_START
+
+
+def explore(script, starts, step) -> None:
+    """Walk ``script`` (``.cmd(node) -> Cmd``) from ``starts`` ((node, state)) by control
+    flow, as ``tools.rom.readers.maps._walk`` does: ``Call``/``CallIf`` push the command
+    after them, ``Return`` pops (an empty stack ends the path), ``End`` ends and ``GoTo``
+    jumps, any other branch command may jump or fall through. ``step(cmd, state)`` gives the
+    state after a command, or None to end the path there."""
+    seen = set()
+    work = [(node, (), state) for node, state in starts]
+    while work:
+        node, stack, state = work.pop()
+        if node is None or (node, stack, state) in seen:
+            continue
+        seen.add((node, stack, state))
+        cmd = script.cmd(node)
+        state = step(cmd, state)
+        if state is None:
+            continue
+        c = cmd.const
+        if c == "SCRCMD_END":
+            continue
+        if c == "SCRCMD_RETURN":
+            if stack:
+                work.append((stack[-1], stack[:-1], state))
+            continue
+        if c in ("SCRCMD_CALL", "SCRCMD_CALLIF"):
+            if len(stack) + 1 >= SCRIPT_STACK_SIZE:
+                raise TerrainError(f"script call stack overflow at {node!r}")
+            work.append((cmd.target, (*stack, cmd.next), state))
+            if c == "SCRCMD_CALL":
+                continue
+        elif c == "SCRCMD_GOTO":
+            work.append((cmd.target, stack, state))
+            continue
+        elif cmd.target is not None:
+            work.append((cmd.target, stack, state))
+        work.append((cmd.next, stack, state))
+
+
+class ScriptFacts:
+    """What the narrowing reads from one script file (``script``: ``.entries``, the nodes of
+    its local ids 1.., ``.cmd(node)`` and ``.partner_var``) and the common scripts it calls
+    (``common``, the same shape): per local id, the trainers its battles and partner variable
+    can name (``placed``) and the trainers it starts with the player still where the script
+    began (``started``); over the whole file, the constants it reaches (``consts``), the
+    local ids it moves objects by (``moved``) and whether it can start any of its own entries
+    by id (``any_entry``)."""
+
+    def __init__(self, script, common, fr: FieldRules):
+        self.script, self.common, self.fr = script, common, fr
+        self._placed: dict[int, frozenset[int]] = {}
+        self._started: dict[int, tuple[frozenset[int], frozenset[int]]] = {}
+        self._common_safe: dict[int, bool] = {}
+        reached: list[Cmd] = []
+
+        def keep(cmd, state):
+            reached.append(cmd)
+            return state
+
+        explore(script, [(e, 0) for e in script.entries], keep)
+        self.consts = frozenset(c.const for c in reached)
+        self.moved = frozenset(
+            UNKNOWN_TRAINER if _is_var(c.args[0] if c.args else None) else c.args[0]
+            for c in reached
+            if c.const in MOVES_OBJECT
+        )
+        self.any_entry = any(
+            c.const == STARTS_BY_ID
+            or c.const.startswith("?")
+            or (
+                c.const == CALL_COMMON
+                and (not c.args or _is_var(c.args[0]) or c.args[0] < COMMON_SCRIPTS[0])
+            )
+            for c in reached
+        )
+
+    def _entry(self, local: int) -> list:
+        if not 1 <= local <= len(self.script.entries):
+            return []
+        return [(self.script.entries[local - 1], False)]
+
+    def placed(self, local: int) -> frozenset[int]:
+        """Every trainer a battle command reached from entry ``local`` names and every
+        constant it gives the partner variable (``maps.script_battles``); ``UNKNOWN_TRAINER``
+        for a variable operand or a command the reader cannot expand."""
+        if local not in self._placed:
+            out: set[int] = set()
+
+            def step(cmd, state):
+                if cmd.const in BATTLE_COMMANDS:
+                    out.update(UNKNOWN_TRAINER if _is_var(a) else a for a in cmd.args)
+                elif cmd.const == SET_VAR and cmd.args[0] in (self.script.partner_var, None):
+                    out.add(UNKNOWN_TRAINER if cmd.args[1] is None else cmd.args[1])
+                elif cmd.const.startswith("?"):
+                    out.add(UNKNOWN_TRAINER)
+                return state
+
+            explore(self.script, self._entry(local), step)
+            out.discard(0)
+            self._placed[local] = frozenset(out)
+        return self._placed[local]
+
+    def started(self, local: int) -> tuple[frozenset[int], frozenset[int]]:
+        """(the trainers a battle reached from entry ``local`` starts while every command
+        before it is ``safe``, the trainers of every other battle and partner value)."""
+        if local not in self._started:
+            safe: set[int] = set()
+            other: set[int] = set()
+
+            def step(cmd, moved):
+                if cmd.const in BATTLE_COMMANDS:
+                    for a in cmd.args:
+                        if _is_var(a):
+                            other.add(UNKNOWN_TRAINER)
+                        elif a:
+                            (other if moved else safe).add(a)
+                    return moved
+                if cmd.const == SET_VAR and cmd.args[0] in (self.script.partner_var, None):
+                    other.add(UNKNOWN_TRAINER if cmd.args[1] is None else cmd.args[1])
+                return moved or not self.safe(cmd)
+
+            explore(self.script, self._entry(local), step)
+            self._started[local] = (frozenset(safe), frozenset(other))
+        return self._started[local]
+
+    def safe(self, cmd: Cmd) -> bool:
+        """Whether ``cmd`` leaves the player where it is (``SAFE_COMMANDS``)."""
+        if cmd.const in SAFE_COMMANDS:
+            return True
+        if cmd.const == APPLY_MOVEMENT:
+            local = cmd.args[0] if cmd.args else None
+            return not _is_var(local) and local != self.fr.localid_player
+        if cmd.const == CALL_COMMON and cmd.args and not _is_var(cmd.args[0]):
+            return self._common_is_safe(cmd.args[0])
+        return False
+
+    def _common_is_safe(self, script_id: int) -> bool:
+        """Whether common script ``script_id`` (its own context, run until it ends,
+        src/scrcmd.c:973-1002) is made of ``safe`` commands and starts no battle."""
+        lo, hi = COMMON_SCRIPTS
+        if self.common is None or not lo <= script_id < hi:
+            return False
+        if not 0 <= script_id - lo < len(self.common.entries):
+            return False
+        if script_id not in self._common_safe:
+            self._common_safe[script_id] = False  # a call cycle back into it is not safe
+            ok = [True]
+
+            def step(cmd, state):
+                if cmd.const in BATTLE_COMMANDS or not self.safe(cmd):
+                    ok[0] = False
+                    return None
+                return state
+
+            explore(self.common, [(self.common.entries[script_id - lo], 0)], step)
+            self._common_safe[script_id] = ok[0]
+        return self._common_safe[script_id]
+
+
+class _HeaderTiles:
+    """The terrain attribute u16s tile ``(x, z)`` can have while header ``h`` is current
+    (``header_terrains``' tiles): on every matrix some header loads, a tile whose cell is
+    labelled ``h`` (any cell of ``h``'s own matrix when it has no header section), under
+    each land data id the cell can hold, or one of ``h``'s warp arrivals in its own matrix.
+    ``unread`` marks an arrival outside that matrix."""
+
+    def __init__(self, rules, headers, matrices, lands, h, arrivals, cache):
+        self.rules, self.matrices, self.lands, self.h, self.cache = (
+            rules,
+            matrices,
+            lands,
+            h,
+            cache,
+        )
+        self.own, self.background = headers[h]
+        self.loadable = sorted({matrix for matrix, _ in headers})
+        self.arrivals = set(arrivals.get(h, ()))
+
+    def _attrs(self, land: int) -> tuple[int, ...]:
+        if not 0 <= land < len(self.lands):
+            raise TerrainError(f"land data {land} is not a member")
+        if land not in self.cache:
+            self.cache[land] = land_attributes(self.rules, self.lands[land], land)
+        return self.cache[land]
+
+    def at(self, x: int, z: int) -> tuple[set[int], bool]:
+        side, out = self.rules.tiles_x, set()
+        if x < 0 or z < 0:
+            return out, False
+        for matrix in self.loadable:
+            m = self.matrices[matrix]
+            if m.headers is None and matrix != self.own:
+                continue
+            if not (x // side < m.width and z // side < m.height):
+                continue
+            cell = x // side + m.width * (z // side)
+            arrival = matrix == self.own and (x, z) in self.arrivals
+            if m.headers is not None and m.headers[cell] != self.h and not arrival:
+                continue
+            for land in _land_ids(m, matrix, self.rules, [cell]) - {self.rules.invalid_land}:
+                out.add(self._attrs(land)[(z % side) * side + x % side])
+        own = self.matrices[self.own]
+        unread = (x, z) in self.arrivals and not (x // side < own.width and z // side < own.height)
+        return out, unread
+
+
+def _sight_tiles(tiles: _HeaderTiles, obj: ObjectEvent, facings: Iterable[int]) -> set:
+    """The tiles a trainer facing one of ``facings`` can spot the player on: 1..``sight``
+    tiles out, up to the first tile whose every variant carries the collision bit."""
+    out = set()
+    for d in facings:
+        dx, dz = DIRECTIONS[d]
+        for k in range(1, obj.sight + 1):
+            x, z = obj.x + k * dx, obj.z + k * dz
+            attrs, _ = tiles.at(x, z)
+            if attrs and all(a & tiles.rules.collision for a in attrs):
+                break  # IsPathInterrupted
+            out.add((x, z))
+    return out
+
+
+def _talk_tiles(tiles: _HeaderTiles, obj: ObjectEvent) -> set:
+    """The tiles the player can talk to ``obj`` from (``sub_0203C9D4``): a neighbour when
+    the object's own tile can be other than a table, the tile beyond a neighbour that can
+    be one."""
+    rules = tiles.rules
+    out = set()
+    own, _ = tiles.at(obj.x, obj.z)
+    for dx, dz in DIRECTIONS:
+        if not own or any((a & rules.mask) not in rules.table for a in own):
+            out.add((obj.x + dx, obj.z + dz))
+        between, _ = tiles.at(obj.x + dx, obj.z + dz)
+        if any((a & rules.mask) in rules.table for a in between):
+            out.add((obj.x + 2 * dx, obj.z + 2 * dz))
+    return out
+
+
+def _tile_terrains(tiles: _HeaderTiles, spots: Iterable, keep_collision: bool) -> set[int]:
+    """``CalcTerrain`` over ``spots`` with the header's background, and the water background
+    on a tile a surfing player stands on; ``TERRAIN_UNKNOWN`` for an unread arrival. A tile
+    variant with the collision bit counts only when ``keep_collision``."""
+    rules = tiles.rules
+    out: set[int] = set()
+    for x, z in spots:
+        attrs, unread = tiles.at(x, z)
+        if unread:
+            out.add(TERRAIN_UNKNOWN)
+        for a in attrs:
+            if a & rules.collision and not keep_collision:
+                continue
+            b = a & rules.mask
+            out.add(calc_terrain(rules, b, tiles.background))
+            if b in rules.on_water:
+                out.add(calc_terrain(rules, b, rules.water))
+    return out
+
+
+def narrowed_terrains(
+    rules: TerrainRules,
+    fr: FieldRules,
+    headers: Sequence[tuple[int, int]],
+    matrices: Sequence[Matrix],
+    lands: Sequence[bytes],
+    where: Mapping[int, Iterable[int]],
+    arrivals: Mapping[int, Iterable[tuple[int, int]]],
+    sites: Mapping[int, HeaderSites],
+    scripts: Mapping[object, ScriptFacts],
+    rematch_rows: Iterable[tuple[int, Iterable[int]]],
+) -> dict[tuple[int, int], frozenset[int]]:
+    """``(trainer, header) -> terrains`` for each pair of ``where`` (trainer -> headers)
+    whose battle the notes above narrow to known tiles; the other pairs are left out, so
+    ``trainer_terrains`` keeps the whole-header set for them. ``sites[h]``: header ``h``'s
+    events; ``scripts[file]``: its script file's facts; ``rematch_rows``: ``(base,
+    rematches)`` of ``gVsSeekerRematchData`` (a rematch is fought at its base's objects)."""
+    bases: dict[int, set[int]] = {}
+    spins: set[int] = set()
+    for base, rematches in rematch_rows:
+        spins.add(base)
+        for t in rematches:
+            spins.add(t)
+            bases.setdefault(t, set()).add(base)
+    cache: dict[int, tuple[int, ...]] = {}
+    tiles_of: dict[int, _HeaderTiles] = {}
+    features: dict[int, bool] = {}
+    loadable = sorted({matrix for matrix, _ in headers})
+
+    def keeps_collision(h: int) -> bool:
+        """Whether ``h`` or a header the player can walk into it from (another label of a
+        matrix with a cell labelled ``h``, ``FieldMap_ChangeZone``) turns map features on."""
+        if h not in features:
+            near = {h}
+            for matrix in loadable:
+                labels = matrices[matrix].headers
+                if labels is not None and h in labels:
+                    near |= set(labels)
+            features[h] = any(
+                c.startswith(FEATURES_PREFIX)
+                for g in near
+                if g in sites
+                for c in scripts[sites[g].file].consts
+            )
+        return features[h]
+
+    out: dict[tuple[int, int], frozenset[int]] = {}
+    for t in sorted(where):
+        ids = {t} | bases.get(t, set())
+        for h in sorted(set(where[t])):
+            if h not in sites:
+                continue
+            site = sites[h]
+            facts = scripts[site.file]
+            if h not in tiles_of:
+                tiles_of[h] = _HeaderTiles(rules, headers, matrices, lands, h, arrivals, cache)
+            tiles = tiles_of[h]
+            sight: set = set()
+            stand: set = set()
+            ok = True
+            objects = [o for o in site.objects if o.trainer in ids]
+            for o in objects:
+                if (
+                    o.movement not in fr.facings
+                    or o.local in facts.moved
+                    or (UNKNOWN_TRAINER in facts.moved)
+                ):
+                    ok = False
+                    break
+                facings = fr.facings[o.movement] | {o.direction}
+                if t in spins and o.trainer_type in fr.vs_seeker:
+                    facings = ALL_FACINGS
+                if o.trainer_type in fr.sees_all:
+                    facings = ALL_FACINGS
+                elif o.trainer_type not in fr.sees_facing:
+                    facings = frozenset()
+                sight |= _sight_tiles(tiles, o, facings)
+                stand |= _talk_tiles(tiles, o)
+            entries = [
+                e
+                for e in range(1, len(facts.script.entries) + 1)
+                if facts.placed(e) & (ids | {UNKNOWN_TRAINER})
+            ]
+            coord_scripts = {c.script for c in site.coords}
+            for e in entries if ok else ():
+                safe, other = facts.started(e)
+                c_started = e in C_STARTED_SCRIPTS and (
+                    e not in OVERLAY9_ONLY_SCRIPTS or DISTORTION_FEATURES in facts.consts
+                )
+                if (
+                    facts.any_entry
+                    or e not in coord_scripts
+                    or e in site.other_scripts
+                    or c_started
+                    or other & (ids | {UNKNOWN_TRAINER})
+                    or not safe & ids
+                ):
+                    ok = False
+                    break
+                for c in site.coords:
+                    if c.script == e:
+                        stand |= {
+                            (c.x + i, c.z + j) for i in range(c.width) for j in range(c.length)
+                        }
+            if not ok or not (objects or entries):
+                continue
+            terrains = _tile_terrains(tiles, sight, False)
+            terrains |= _tile_terrains(tiles, stand, keeps_collision(h))
+            if terrains:
+                out[(t, h)] = frozenset(terrains)
+    return out
 
 
 # --- The decomp's sources of the same data (vanilla; tools.extract_decomp) -------------
@@ -700,3 +1354,406 @@ def decomp_check_trainer_objects(decomp: Path, headers: Mapping[str, Mapping[str
                     f"{header}: makes object {local} persistent while the header has trainer "
                     "objects; the battle could start in another header"
                 )
+
+
+# --- The narrowing's inputs from the decomp's sources (vanilla; tools.extract_decomp) ----
+
+SCRIPTS_DIR = Path("res") / "field" / "scripts"
+SCRIPTS_ORDER = SCRIPTS_DIR / "scripts.order"  # scr_seq.narc member order
+COMMON_FILE = "scripts_common"
+SCRCMD_INC = Path("asm") / "macros" / "scrcmd.inc"
+# The branch commands, whose last operand is an offset (tools.rom.readers.maps._BRANCHES).
+BRANCH_COMMANDS = frozenset(
+    {
+        "SCRCMD_GOTO",
+        "SCRCMD_CALL",
+        "SCRCMD_GOTOIF",
+        "SCRCMD_CALLIF",
+        "SCRCMD_GOTOIFTARGETTRAINERDEFEATED",
+        "SCRCMD_UNUSED_017",
+        "SCRCMD_UNUSED_018",
+        "SCRCMD_UNUSED_019",
+    }
+)
+_VAR_TEST = re.compile(
+    r"\.if \(\(\\(\w+) >= VARS_START && \\\1 <= VARS_END\) \|\| "
+    r"\(\\\1 >= SCRIPT_LOCAL_VARS_START && \\\1 <= SCRIPT_LOCAL_VARS_END\)\)"
+)
+
+
+def _macros(decomp: Path) -> dict[str, tuple[list[tuple[str, str | None]], list[str]]]:
+    """``asm/macros/scrcmd.inc``: macro -> (parameters with defaults, body lines)."""
+    src = re.sub(r"/\*.*?\*/", "", _read(decomp, SCRCMD_INC), flags=re.DOTALL)
+    out = {}
+    for m in re.finditer(
+        r"^[ \t]*\.macro[ \t]+(\w+)([^\n]*)\n(.*?)^[ \t]*\.endm\b", src, re.MULTILINE | re.DOTALL
+    ):
+        params = []
+        for p in (s.strip() for s in m.group(2).split(",")):
+            if p:
+                name, _, default = p.partition("=")
+                params.append((name.strip(), default.strip() or None))
+        body = [re.split(r"//", s, maxsplit=1)[0].strip() for s in m.group(3).splitlines()]
+        out[m.group(1)] = (params, [s for s in body if s])
+    return out
+
+
+class DecompScript:
+    """A ``res/field/scripts/<file>.s`` file as commands: each line's macro expanded through
+    ``scrcmd.inc`` down to its ``.short SCRCMD_*`` commands, as the assembler does (a
+    ``.if`` other than ``SetVar``/``CompareVar``'s variable test leaves the line one
+    ``"?<macro>"`` command). Nodes are command indices; ``entries`` are the ``ScriptEntry``
+    labels' nodes."""
+
+    def __init__(self, decomp: Path, file: str, macros, symbols: Mapping[str, int], partner_var):
+        from tools.battle_scripts import is_var
+
+        self.partner_var = partner_var
+        path = Path(decomp) / SCRIPTS_DIR / f"{file}.s"
+        text = re.sub(r"/\*.*?\*/", "", path.read_text(encoding="utf-8"), flags=re.DOTALL)
+        defines: dict[str, str] = {}
+        local: dict[str, int] = {}
+        m = re.search(r'#include "res/field/events/(\w+)\.h"', text)
+        if m:
+            events = json.loads(_read(decomp, EVENTS / f"{m.group(1)}.json"))
+            local = {
+                o["id"]: o.get("clone_id", i)
+                for i, o in enumerate(events["object_events"])
+                if "id" in o
+            }
+
+        def value(token: str, depth: int = 0):
+            """A constant, a name the file defines or ``symbols`` holds, or an expression of
+            those with ``+ - * < > == !=`` (the assembler's); None when a name is unknown."""
+            token = token.strip()
+            if re.fullmatch(r"-?(\d+|0[xX][0-9a-fA-F]+)", token):
+                return int(token, 0)
+            if token in defines and depth < 8:
+                return value(defines[token], depth + 1)
+            if token in local:
+                return local[token]
+            if token in symbols:
+                return symbols[token]
+            parts = re.split(r"(\w+)", token)
+            operators = "".join(parts[::2])
+            if depth < 8 and operators.strip() and re.fullmatch(r"[\s()+\-*<>=!]*", operators):
+                names = [value(n, depth + 1) if not n.isdigit() else int(n) for n in parts[1::2]]
+                if None in names:
+                    return None
+                expr = "".join(p if i % 2 == 0 else str(names[i // 2]) for i, p in enumerate(parts))
+                return int(eval(expr, {"__builtins__": {}}))  # digits and operators only
+            return None
+
+        def split_args(text: str) -> list[str]:
+            """Macro arguments: separated by commas, or by blanks between plain words (the
+            assembler accepts both, e.g. ``ShowArrowSign``'s body)."""
+            out = []
+            for piece in (a.strip() for a in text.split(",")) if text.strip() else ():
+                if re.fullmatch(r"[\w.\\]+(\s+[\w.\\]+)+", piece):
+                    out.extend(piece.split())
+                else:
+                    out.append(piece)
+            return out
+
+        def expand(name: str, args: list[str], depth: int = 0) -> list:
+            if name not in macros or depth > 16:
+                return [("?" + name, (), None)]
+            params, body = macros[name]
+            bind = {}
+            for i, (p, default) in enumerate(params):
+                bind[p] = args[i] if i < len(args) and args[i] != "" else (default or "")
+            out: list = []
+            live = [True]
+            for line in body:
+                if line.startswith(".if"):
+                    if not all(live):
+                        live.append(False)
+                        continue
+                    t = _VAR_TEST.fullmatch(line)
+                    blank = re.fullmatch(r"\.if(n?)b\s+\\(\w+)", line)
+                    if t:
+                        # SetVar / CompareVar (scrcmd.inc:178-184, :309-315): a name the
+                        # variable list does not hold is a value, not a variable.
+                        v = value(bind.get(t.group(1), ""))
+                        live.append(v is not None and is_var(v))
+                    elif blank:
+                        empty = not bind.get(blank.group(2), "").strip()
+                        live.append(empty != (blank.group(1) == "n"))
+                    else:
+                        cond = re.sub(
+                            r"\\(\w+)", lambda g: bind.get(g.group(1), g.group(0)), line[3:]
+                        )
+                        v = value(cond)
+                        if v is None:
+                            return [("?" + name, (), None)]
+                        live.append(bool(v))
+                    continue
+                if line == ".else":
+                    live[-1] = not live[-1]
+                    continue
+                if line == ".endif":
+                    live.pop()
+                    continue
+                if not all(live):
+                    continue
+                line = re.sub(r"\\(\w+)", lambda g: bind.get(g.group(1), g.group(0)), line)
+                d = re.fullmatch(r"\.(byte|short|long)\s+(.+)", line)
+                if d:
+                    for operand in (s.strip() for s in d.group(2).split(",")):
+                        if d.group(1) == "short" and operand.upper().startswith("SCRCMD_"):
+                            out.append([operand, [], None])
+                        elif not out:
+                            return [("?" + name, (), None)]
+                        elif re.fullmatch(r"\w+-\.-4", operand):
+                            label = operand[: -len("-.-4")]
+                            if out[-1][0] in BRANCH_COMMANDS:
+                                out[-1][2] = label
+                            else:
+                                out[-1][1].append(None)
+                        else:
+                            out[-1][1].append(value(operand))
+                    continue
+                if line.startswith((".error", ".set")):
+                    continue
+                inner = re.fullmatch(r"(\w+)\s*(.*)", line)
+                if not inner:
+                    return [("?" + name, (), None)]
+                sub = split_args(inner.group(2))
+                out.extend(list(c) for c in expand(inner.group(1), sub, depth + 1))
+            return [(c, tuple(a), t) for c, a, t in out]
+
+        cmds: list = []
+        labels: dict[str, int] = {}
+        entries: list[str] = []
+        accept = True
+        for raw in text.splitlines():
+            line = re.split(r"//|@", raw, maxsplit=1)[0].strip()
+            if not line:
+                continue
+            if line.startswith("#"):
+                d = re.fullmatch(r"#define\s+(\w+)\s+(.+)", line)
+                if d:
+                    defines[d.group(1)] = d.group(2).strip()
+                continue
+            lab = re.fullmatch(r"(\w+):", line)
+            if lab:
+                labels[lab.group(1)] = len(cmds)
+                continue
+            if line.startswith("."):
+                continue  # .balign and data directives
+            name, rest = re.fullmatch(r"(\S+)\s*(.*)", line).groups()
+            if name == "ScriptEntry" and accept:
+                entries.append(rest.strip())
+                continue
+            if name == "ScriptEntryEnd":
+                accept = False
+                continue
+            cmds.extend(expand(name, split_args(rest)))
+        missing = [e for e in entries if e not in labels]
+        if missing:
+            raise TerrainError(f"{path}: ScriptEntry labels {missing} not defined")
+        self.cmds = [
+            Cmd(
+                c, a, labels.get(t) if t is not None else None, i + 1 if i + 1 < len(cmds) else None
+            )
+            for i, (c, a, t) in enumerate(cmds)
+        ]
+        self.entries = [labels[e] for e in entries]
+
+    def cmd(self, node: int) -> Cmd:
+        return self.cmds[node]
+
+
+def _decomp_init_ids(decomp: Path, file: str) -> list[int]:
+    """The script ids an init scripts file (``InitScriptEntry_*``,
+    ``InitScriptGoToIfEqual``, scrcmd.inc:5121-5165) runs."""
+    text = _read(decomp, SCRIPTS_DIR / f"{file}.s")
+    ids = re.findall(
+        r"^\s*InitScriptEntry_(?:OnTransition|OnResume|OnLoad|Fixed\s+\w+,)\s*(\w+)",
+        text,
+        re.MULTILINE,
+    )
+    ids += re.findall(r"^\s*InitScriptGoToIfEqual\s+[^,]+,\s*[^,]+,\s*(\w+)", text, re.MULTILINE)
+    return [int(i, 0) for i in ids if re.fullmatch(r"\d+|0[xX][0-9a-fA-F]+", i)]
+
+
+def decomp_narrowing_inputs(decomp: Path, trainers: Sequence[str]):
+    """(``sites``, ``scripts``, ``rematch_rows``, ``FieldRules``) for ``narrowed_terrains``
+    from the decomp's map headers (include/data/map_headers.h), events JSON and script
+    sources; ``trainers`` is the ``TRAINER_*`` list (id = index)."""
+    from tools.battle_scripts import var_ids
+    from tools.extract_decomp import _rematches
+
+    decomp = Path(decomp)
+    fr = field_rules(decomp)
+    movements = _constants(decomp, "movement_types", "MOVEMENT_TYPE_")
+    types = _constants(decomp, "trainer_types", "TRAINER_TYPE_")
+    trainer_id = {n: i for i, n in enumerate(trainers)}
+    vars_ = var_ids(decomp)
+    symbols = {"TRUE": 1, "FALSE": 0, **vars_, **trainer_id}
+    symbols.update({n: i for i, n in enumerate(_constants(decomp, "time_of_day", "TIMEOFDAY_"))})
+    symbols.update(
+        _defines(
+            _read(decomp, LOCALID_H),
+            LOCALID_H,
+            ("LOCALID_PLAYER", "LOCALID_CAMERA", "LOCALID_FOLLOWER"),
+        )
+    )
+    partner = vars_["VAR_PARTNER_TRAINER_ID"]
+    macros = _macros(decomp)
+    names = header_names(decomp)
+    src = _read(decomp, MAP_HEADERS_H)
+    fields = {
+        name: dict(re.findall(r"\.(\w+) = ([^,\n]+),", body))
+        for name, body in re.findall(
+            r"\n    \[(MAP_HEADER_\w+)\] = \{\n(.*?)\n    \},", src, re.DOTALL
+        )
+    }
+    files: dict[str, DecompScript] = {}
+    common = DecompScript(decomp, COMMON_FILE, macros, symbols, partner)
+
+    def script_trainer(script) -> int:
+        if isinstance(script, str):
+            if script.startswith("TRAINER_"):
+                return trainer_id[script]
+            script = int(script, 0) if re.fullmatch(r"\d+", script) else 0
+        return _battle_script_trainer(script)
+
+    sites = {}
+    for h, name in enumerate(names):
+        f = fields[name]
+        events = json.loads(_read(decomp, EVENTS / f"{f['eventsArchiveID']}.json"))
+        objects = tuple(
+            ObjectEvent(
+                o.get("clone_id", i),
+                movements.index(o["movement_type"]),
+                types.index(o["trainer_type"]),
+                int(o["initial_dir"]),
+                int(o["data"][0]) if o["data"] else 0,
+                int(o["x"]),
+                int(o["z"]),
+                script_trainer(o["script"]),
+            )
+            for i, o in enumerate(events["object_events"])
+        )
+        coords = tuple(
+            CoordEvent(
+                int(c["script"]), int(c["x"]), int(c["z"]), int(c["width"]), int(c["length"])
+            )
+            for c in events["coord_events"]
+        )
+        other = {int(b["script"]) for b in events["bg_events"]}
+        other |= {o["script"] for o in events["object_events"] if isinstance(o["script"], int)}
+        other |= set(_decomp_init_ids(decomp, f["initScriptsArchiveID"]))
+        file = f["scriptsArchiveID"]
+        if file not in files:
+            files[file] = DecompScript(decomp, file, macros, symbols, partner)
+        sites[h] = HeaderSites(objects, coords, frozenset(other), file)
+    scripts = {k: ScriptFacts(v, common, fr) for k, v in files.items()}
+    rows = [(trainer_id[b], [trainer_id[t] for t in ts]) for b, ts in _rematches(decomp).items()]
+    # NoUniqueRematches(id) is the row {id, id, END...} (src/overlay005/vs_seeker.c:53): the
+    # Vs. Seeker rematches the trainer as itself, so it can be fought spun too.
+    vs_seeker = _read(decomp, Path("src") / "overlay005" / "vs_seeker.c")
+    rows += [
+        (trainer_id[t], [trainer_id[t]])
+        for t in re.findall(r"^\s*NoUniqueRematches\((TRAINER_\w+)\),", vs_seeker, re.MULTILINE)
+    ]
+    return sites, scripts, rows, fr
+
+
+def _battle_script_trainer(script: int) -> int:
+    """The trainer a single (3000 + id - 1) or double (5000 + id - 1) battle script names
+    (include/script_manager.h:93-95), else 0."""
+    if 3000 <= script < 5000:
+        return script - 3000 + 1
+    if 5000 <= script < 7000:
+        return script - 5000 + 1
+    return 0
+
+
+# --- The narrowing's inputs from a ROM (either game; tools.rom.readers.maps) ------------
+
+
+class RomScript:
+    """A ``scr_seq.narc`` member as commands (``tools.rom.readers.maps._decode``): nodes are
+    offsets, ``entries`` the header's entry offsets."""
+
+    def __init__(self, script: bytes, table, name: str):
+        from tools.rom.readers.maps import script_entries
+
+        self.script, self.table, self.name = script, table, name
+        self.entries = script_entries(script, name)
+        self.partner_var = table.partner_var
+        self._cmds: dict[int, Cmd] = {}
+
+    def cmd(self, pos: int) -> Cmd:
+        from tools.rom.readers.maps import _decode
+
+        if pos not in self._cmds:
+            op, values, end = _decode(self.script, self.table, self.name, pos)
+            const = self.table.constants[op]
+            if const in BRANCH_COMMANDS:
+                self._cmds[pos] = Cmd(const, tuple(values[:-1]), end + values[-1], end)
+            else:
+                self._cmds[pos] = Cmd(const, tuple(values), None, end)
+        return self._cmds[pos]
+
+
+def rom_narrowing_inputs(rom, symbols, decomp: Path, n_trainers: int):
+    """(``sites``, ``scripts``, ``rematch_rows``, ``FieldRules``) for ``narrowed_terrains``
+    from a ROM: each header's ``zone_event.narc`` member (bg events: script u16 at +0, 20
+    bytes; objects: local id, graphics, movement type, trainer type, flag, script, facing
+    u16s, ``data[0]`` at +14, x and z at +24, 32 bytes; coord events: script, x, z, width,
+    length u16s, 16 bytes; tools/jsoncnv/event.py), its ``scr_seq.narc`` script file and
+    init scripts, ``scripts_common`` (``SCRIPTS_ORDER``) and ``gVsSeekerRematchData``."""
+    from tools.rom.readers.maps import (
+        EVENT_RECORD_SIZES,
+        EVENTS_NARC,
+        SCRIPTS_NARC,
+        _rematches,
+        command_table,
+        init_script_ids,
+        map_header_rows,
+        map_init_scripts,
+    )
+
+    decomp = Path(decomp)
+    fr = field_rules(decomp)
+    table = command_table(decomp)
+    rows = map_header_rows(rom, symbols)
+    inits = map_init_scripts(rom, symbols)
+    events = rom.narc(EVENTS_NARC)
+    narc = rom.narc(SCRIPTS_NARC)
+    common_id = _order(decomp, SCRIPTS_ORDER).index(COMMON_FILE)
+    common = RomScript(narc[common_id], table, f"{SCRIPTS_NARC} member {common_id}")
+    files: dict[int, ScriptFacts] = {}
+    sites = {}
+    for h, (script_id, events_id, _) in enumerate(rows):
+        member = events[events_id]
+        pos, records = 0, []
+        for size in EVENT_RECORD_SIZES:
+            n = struct.unpack_from("<I", member, pos)[0]
+            records.append(
+                [member[pos + 4 + i * size : pos + 4 + (i + 1) * size] for i in range(n)]
+            )
+            pos += 4 + n * size
+        bg, objs, _, coord = records
+        objects = []
+        other = {struct.unpack_from("<H", r, 0)[0] for r in bg}
+        for r in objs:
+            local, _, movement, ttype, _, script, direction = struct.unpack_from("<7H", r, 0)
+            sight = struct.unpack_from("<H", r, 14)[0]
+            x, z = struct.unpack_from("<2H", r, 24)
+            objects.append(
+                ObjectEvent(
+                    local, movement, ttype, direction, sight, x, z, _battle_script_trainer(script)
+                )
+            )
+            other.add(script)
+        coords = tuple(CoordEvent(*struct.unpack_from("<5H", r, 0)) for r in coord)
+        other |= set(init_script_ids(narc[inits[h]], inits[h]))
+        if script_id not in files:
+            script = RomScript(narc[script_id], table, f"{SCRIPTS_NARC} member {script_id}")
+            files[script_id] = ScriptFacts(script, common, fr)
+        sites[h] = HeaderSites(tuple(objects), coords, frozenset(other), script_id)
+    return sites, files, _rematches(rom, symbols, n_trainers), fr

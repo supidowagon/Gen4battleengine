@@ -19,9 +19,9 @@ from tools.terrain import (
 
 ROARK = 246
 BUILDING = TERRAIN_NAMES.index("TERRAIN_BUILDING")
-# Mixed trainers (several terrains over their maps) per game; the whole-map rule of
-# tools/terrain.py, no sight-line narrowing (rules §9.3 step 2).
-MIXED = {"CPUE": 415, "JAK7": 371}
+# Mixed trainers (several terrains over the tiles their battles can start on) per game,
+# after the per-trainer narrowing of rules §9.3 step 2 (415 and 371 over whole headers).
+MIXED = {"CPUE": 217, "JAK7": 242}
 
 
 def _t(name: str) -> int:
