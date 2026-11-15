@@ -81,9 +81,12 @@ Encodings:
 * E2 batch 7, the state the trainer AI reads (rulings B7-n). ``ingrain`` is the active battler's
   ``MOVE_EFFECT_INGRAIN`` (moves.h:18), 0/1. ``mean_look`` is its ``VOLATILE_CONDITION_MEAN_LOOK``
   (condition.h:58), 0/1, and ``mean_look_target`` its ``MoveEffectsData.meanLookTarget``
-  (battle_mon.h:26) as ``1 + battler`` of the battler that trapped it, 0 while ``mean_look`` is 0
-  (the decomp leaves a stale value nothing reads). Both are cleared when the trapper leaves by a
-  switch that is not a Baton Pass (battle_lib.c:2055-2061) or faints (:2168-2173).
+  (battle_mon.h:26) as ``1 + raw`` (0 for a zeroed field): subscript_mean_look.s:10 ORs the
+  attacker's battler into it and nothing clears it but the trapped battler's own switch-in or faint
+  (its moveEffectsData zeroed; Baton Pass keeps it, battle_lib.c:2111), so a stale value outlives
+  the Mean Look and enters the next OR (B7-15); the leave tests read it with the bit
+  (:2058-2059). ``mean_look`` ends when the trapper leaves by a switch that is not a Baton Pass
+  (battle_lib.c:2055-2061) or faints (:2168-2173).
   ``imprison`` is ``MOVE_EFFECT_IMPRISON`` (moves.h:21) on Imprison's user, ``imprisoned``
   ``MOVE_EFFECT_IMPRISONED`` (:38) on its foes, set whenever the user's Imprison script runs,
   success or not (battle_script.c:6686-6690), and only cleared when that battler leaves. All five

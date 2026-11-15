@@ -20,7 +20,9 @@ from nuzline.engine.coverage import metronome_calls
 from nuzline.engine.enumerate import (
     CALL_DISABLED,
     CALL_KEEP,
+    CALL_SEALED,
     SamplingOnly,
+    _split_events,
     call_laws,
     call_variants,
     enumerate_outcomes,
@@ -199,8 +201,8 @@ def _raw_brute(tables, state, actions) -> dict[bytes, float]:
     ``call_variants`` and ``branch_ok``: for each raw ``speed_tie`` value, the order ``step``
     plays (``action_order``) fixes Copycat's movePrev (its foe used a move before it, or the
     turn-start one); each Sleep Talk value weighs 1/12, played under both set assumptions
-    (``CALL_KEEP``, ``CALL_DISABLED``) with each row kept where the turn's own
-    ``disabled_at_move`` event agrees; the loose laws with every branch allowed, cut to the rows
+    (``CALL_KEEP``, ``CALL_DISABLED``, ``CALL_SEALED``) with each row kept where the turn's own
+    ``disabled_at_move`` / ``sealed_at_move`` events agree; the loose laws with every branch allowed, cut to the rows
     of that ``speed_tie``. Metronome is left to the hand cases."""
     effect = np.asarray(tables.move_effect)
     acts = np.asarray(actions)
@@ -217,7 +219,7 @@ def _raw_brute(tables, state, actions) -> dict[bytes, float]:
         per_side = []
         for sd in (0, 1):
             if kinds[sd] == EffectId.SLEEP_TALK:
-                offsets = (CALL_KEEP, CALL_DISABLED)
+                offsets = (CALL_KEEP, CALL_DISABLED, CALL_SEALED)
                 per_side.append([(u + off, Fraction(1, 12)) for u in range(12) for off in offsets])
             elif kinds[sd] == EffectId.COPYCAT:
                 foe = 1 - sd
@@ -234,10 +236,13 @@ def _raw_brute(tables, state, actions) -> dict[bytes, float]:
                 if len(ties) == 2:
                     keep &= np.asarray(o.speed_tie) == tie
                 events = _turn_events(tables, state, jnp.asarray(actions, jnp.int32), o)
-                seen = np.asarray(events["disabled_at_move"]) != 0
+                disabled, sealed = _split_events(state, events)
+                disabled, sealed = np.asarray(disabled), np.asarray(sealed)
                 for sd, call in ((0, a), (1, b)):
                     if kinds[sd] == EffectId.SLEEP_TALK:
-                        keep &= seen[:, sd] == (call >= CALL_DISABLED)
+                        want = 2 if call >= CALL_SEALED else 1 if call >= CALL_DISABLED else 0
+                        seen = np.where(sealed[:, sd], 2, np.where(disabled[:, sd], 1, 0))
+                        keep &= seen == want
                 if not keep.any():
                     continue
                 rows = jax.tree.map(lambda f, keep=keep: np.asarray(f)[keep], o)
@@ -267,7 +272,15 @@ def _children(tables, state, actions, outcomes, probs):
 
 
 @pytest.mark.parametrize(
-    "case", ["sleep_talk", "sleep_talk_disable", "copycat_tie", "copycat_fast", "copycat_switch"]
+    "case",
+    [
+        "sleep_talk",
+        "sleep_talk_disable",
+        "sleep_talk_imprison",
+        "copycat_tie",
+        "copycat_fast",
+        "copycat_switch",
+    ],
 )
 def test_enumeration_equals_the_raw_call_brute_force(tables, names, case):
     """``enumerate_turn`` against the raw brute force (``_raw_brute``): the same merged children.
@@ -287,6 +300,13 @@ def test_enumeration_equals_the_raw_call_brute_force(tables, names, case):
             [_mon(n, "Gastly", ["Disable"], level=40)],
         ).with_status(0, 0, Status.SLEEP, 2)
         s = s._replace(last_move=s.last_move.at[0].set(n.move("Tackle")))
+    elif case == "sleep_talk_imprison":
+        # B7-13: a faster foe's Imprison seals the shared Tackle before the Sleep Talk.
+        s = make_state(
+            t,
+            [_mon(n, "Snorlax", ["Sleep Talk", "Tackle", "Ember"])],
+            [_mon(n, "Gastly", ["Imprison", "Tackle"], level=40)],
+        ).with_status(0, 0, Status.SLEEP, 2)
     else:
         level = 30 if case in ("copycat_tie", "copycat_switch") else 50
         foe = [_mon(n, "Snorlax", ["Tackle"], level=level)]
@@ -301,6 +321,8 @@ def test_enumeration_equals_the_raw_call_brute_force(tables, names, case):
     brute = _raw_brute(t, s, acts)
     if case == "sleep_talk_disable":  # both sets are played
         assert np.any(np.asarray(outcomes.call)[:, 0] >= CALL_DISABLED)
+    if case == "sleep_talk_imprison":  # the sealed set is played: no Tackle from it
+        assert np.any(np.asarray(outcomes.call)[:, 0] >= CALL_SEALED)
     assert set(exact) == set(brute)
     for key, p in brute.items():
         assert abs(exact[key] - p) < 1e-12

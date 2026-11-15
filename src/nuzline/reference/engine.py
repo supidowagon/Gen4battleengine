@@ -1030,7 +1030,7 @@ def _source_leaves(s: RefState, side: int, baton: bool = False) -> None:
     if not baton:
         for sd in s.sides:
             if sd.mean_look and sd.mean_look_target == 1 + side:
-                sd.mean_look = sd.mean_look_target = 0
+                sd.mean_look = 0  # meanLookTarget stays (B7-15)
 
 
 def _faint_check(turn: _Turn, s: RefState, decide: bool = True) -> None:
@@ -1598,7 +1598,10 @@ def _entry_hazards(turn: _Turn, s: RefState, side: int) -> None:
     mon, sd = _active(s, side), s.sides[side]
     if mon.ability == AbilityId.MAGIC_GUARD:
         return
-    airborne = mon.ability == AbilityId.LEVITATE or Type.FLYING in mon.types
+    # CheckAbility reads Battler_Ability: an ingrained Levitate is none (lib.c:3100-3103); a
+    # Baton Pass newcomer keeps the Ingrain (lib.c:2079).
+    levitate = mon.ability == AbilityId.LEVITATE and not s.sides[side].ingrain
+    airborne = levitate or Type.FLYING in mon.types
     if s.gravity or not airborne:
         if sd.toxic_spikes:
             if Type.POISON in mon.types:
@@ -2121,7 +2124,8 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
         foe_sd = s.sides[target]
         if _active(s, target).hp and not foe_sd.mean_look and not foe_sd.substitute_hp:
             foe_sd.mean_look = 1
-            foe_sd.mean_look_target = 1 + side
+            # :10 ORs the attacker into the never-cleared 2-bit field (B7-15).
+            foe_sd.mean_look_target = 1 + (max(foe_sd.mean_look_target - 1, 0) | side)
     elif effect in (EffectId.LIGHT_SCREEN, EffectId.REFLECT) and landed:
         # BtlCmd_TryLightScreen / TryReflect (script.c:4214, :4257): fail when already up,
         # else NUM_SCREEN_TURNS, plus the user's Light Clay param (script.c:4229, :4272).

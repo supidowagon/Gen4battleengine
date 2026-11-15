@@ -44,6 +44,7 @@ from nuzline.engine.actions import (
     MOVE_ACTIONS,
     choice_locked,
     locked_slot,
+    move_imprisoned,
     usable_moves,
 )
 from nuzline.engine.damage import apply_stage, simple_stage, weather_suppressed
@@ -158,15 +159,17 @@ def sleep_talk_slots(tables: Tables, state: BattleState, side) -> jnp.ndarray:
     (Move_IsInvoker, which holds an empty slot's MOVE_NONE, Focus Punch, Uproar, Chatter,
     Move_IsMultiTurn: :4918-4925), and not flagged by ``BattleSystem_CheckInvalidMoves`` with every
     check but NO_PP (:4929; battle_lib.c:2255-2316): the disabled move, a power-0 move while
-    taunted, and a Choice holder's moves other than its lock (``actions.choice_locked``: a lock
-    it does not know is cleared there and restricts nothing). Torment, Imprison, Heal Block and
-    Encore come from unsupported moves; Gravity (``Move_FailsInHighGravity``) is owed with
-    Gravity (ledger)."""
+    taunted, a Choice holder's moves other than its lock (``actions.choice_locked``: a lock
+    it does not know is cleared there and restricts nothing) and a move a foe's Imprison seals
+    (``actions.move_imprisoned``, CHECK_INVALID_IMPRISONED, battle_lib.c:2287-2290; ruling
+    B7-13). Torment, Heal Block and Encore come from unsupported moves; Gravity
+    (``Move_FailsInHighGravity``) is owed with Gravity (ledger)."""
     mon = state.active[side]
     moves = state.moves[side, mon].astype(_I32)
     ok = (moves > 0) & ((tables.move_flags[moves] & MoveFlag.NO_SLEEP_TALK) == 0)
     ok = ok & (moves != state.disabled_move[side])
     ok = ok & ~((state.taunt[side] > 0) & (tables.move_power[moves] == 0))
+    ok = ok & ~move_imprisoned(state, side, moves)
     lock = state.choice_lock[side].astype(_I32)
     return ok & (~choice_locked(tables, state, side) | (moves == lock))
 

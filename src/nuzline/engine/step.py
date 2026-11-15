@@ -79,7 +79,12 @@ import jax
 import jax.numpy as jnp
 
 from nuzline.data.tables import Tables
-from nuzline.engine.actions import FIRST_ITEM_ACTION, locked_slot, move_imprisoned
+from nuzline.engine.actions import (
+    FIRST_ITEM_ACTION,
+    imprisoning_foe,
+    locked_slot,
+    move_imprisoned,
+)
 from nuzline.engine.damage import (
     PHYSICAL as PHYSICAL_CATEGORY,
 )
@@ -294,7 +299,6 @@ def _source_leaves(state: BattleState, side, cond, baton=False) -> BattleState:
             clear & (state.mean_look[battler] != 0) & (state.mean_look_target[battler] == 1 + side)
         )
         state = _set_side(state, "mean_look", battler, 0, ends)
-        state = _set_side(state, "mean_look_target", battler, 0, ends)
     return state
 
 
@@ -571,6 +575,7 @@ def _empty_events() -> dict:
             "last_from",
             "move_failed",
             "disabled_at_move",
+            "sealed_at_move",
             *EVENT_FLAGS,
         )
     }
@@ -673,6 +678,9 @@ def _use_move(
     # A move of the battler is disabled when its action starts (a faster foe's Disable this turn
     # included): the event the Sleep Talk call variants split on (enumerate.call_consistent).
     disabled_at_move = ready & (state.disabled_move[side] != 0)
+    # Likewise a battler of the other side imprisoning (the Sleep Talk set's other change within
+    # the turn, ruling B7-13).
+    sealed_at_move = ready & imprisoning_foe(state, side)
     # BattleControllerPlayer_FightCommand (battle_controller_player.c:1900) fixes the
     # defender before the status checks: the foe when it is alive (any HP for
     # RANGE_OPPONENT_SIDE: BattleSystem_RandomOpponent), the user for a self-defender range
@@ -1487,6 +1495,7 @@ def _use_move(
         "immobilized": immobilized,
         "move_failed": move_failed,
         "disabled_at_move": disabled_at_move,
+        "sealed_at_move": sealed_at_move,
     }
     foe = {
         "contact_ability": contact,

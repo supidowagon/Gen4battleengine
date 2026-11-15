@@ -86,6 +86,15 @@ def move_imprisoned(state: BattleState, side, move) -> jnp.ndarray:
     return out
 
 
+def imprisoning_foe(state: BattleState, side) -> jnp.ndarray:
+    """``bool``: a battler of the other side has ``MOVE_EFFECT_IMPRISON`` (the first test of
+    ``Move_Imprisoned``, battle_lib.c:3325-3326)."""
+    out = jnp.bool_(False)
+    for battler in range(state.active.shape[0]):
+        out = out | ((jnp.asarray(side) != battler) & (state.imprison[battler] != 0))
+    return out
+
+
 def usable_moves(tables: Tables, state: BattleState, side) -> jnp.ndarray:
     """``bool[4]``: the active Pokemon's move slots that pass the checks above (a
     move, PP left, not the disabled move, not power 0 while taunted, the Choice-locked move

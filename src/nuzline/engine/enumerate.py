@@ -175,6 +175,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from nuzline.data.tables import Tables
+from nuzline.engine.actions import imprisoning_foe
 from nuzline.engine.damage import (
     PHYSICAL,
     ROLLS,
@@ -186,7 +187,7 @@ from nuzline.engine.damage import (
     move_type_of,
     weather_suppressed,
 )
-from nuzline.engine.effects import can_have_status, protect_blocks
+from nuzline.engine.effects import can_have_status, ingrain_anchors, protect_blocks
 from nuzline.engine.ids import (
     METRONOME_DRAW,
     QUICK_CLAW_MODULUS,
@@ -1166,14 +1167,20 @@ def outcome_laws(
     else:
         call = jnp.asarray(call, _I32)
         # A Sleep Talk variant that assumes a faster foe's Disable lands (CALL_DISABLED, ruling
-        # B5-13) calls from the set with the user's last move disabled.
-        disabled = (kinds == CALL_SLEEP_TALK) & (call >= CALL_DISABLED)
-        hyp = _disabled_state(state, disabled)
+        # B5-13) calls from the set with the user's last move disabled; one that assumes a faster
+        # foe's Imprison (CALL_SEALED, ruling B7-13) from the set without the moves it seals.
+        talking = kinds == CALL_SLEEP_TALK
+        disabled = talking & (call >= CALL_DISABLED) & (call < CALL_SEALED)
+        sealed = talking & (call >= CALL_SEALED)
         after_foe = copycat & (call == 1)
         moves = jnp.where(
             disabled,
-            used_moves(tables, hyp, actions, call, after_foe),
-            used_moves(tables, state, actions, call, after_foe),
+            used_moves(tables, _disabled_state(state, disabled), actions, call, after_foe),
+            jnp.where(
+                sealed,
+                used_moves(tables, _sealed_state(state, sealed), actions, call, after_foe),
+                used_moves(tables, state, actions, call, after_foe),
+            ),
         )
         call_pending = jnp.asarray(False)
     foe_moves = uses_move[::-1]  # the other side uses a move
@@ -1396,6 +1403,14 @@ def outcome_laws(
     roar = uses_move & (effect == _E.ROAR)
     roar_weight, roar_bench = roar_inputs(state, actions)
     user_level, target_level = roar_levels(state, actions)
+    # An anchored target (subscript_force_target_to_switch_or_flee.s:7, effects.ingrain_anchors)
+    # stops Roar before TryWhirlwind draws (B7-16): anchored at the turn start and still so when
+    # Roar runs, i.e. the target side neither switches nor uses a move that can add a bit of its
+    # moveEffectsMask (Aqua Ring, the sports, Imprison, Camouflage, or an invoker's call).
+    setters = (_E.AQUA_RING, _E.MUD_SPORT, _E.WATER_SPORT, _E.IMPRISON, _E.CAMOUFLAGE)
+    target_steady = ~switch & ~(uses_move & (_any_of(effect, setters) | (kinds != CALL_NONE)))
+    anchored = jnp.stack([ingrain_anchors(tables, state, 1 - side) for side in (0, 1)])
+    roar = roar & ~(anchored & target_steady[::-1])
     roar_level = roar & (user_level < target_level) & (roar_bench >= 1)
     roar_target = roar & (roar_bench >= 2)
     # The foe can drag this side's Pokemon out: its Roar with an eligible bench Pokemon here
@@ -2453,14 +2468,17 @@ def enumerate_outcomes(laws: OutcomeLaws) -> tuple[Outcome, np.ndarray]:
 # Call values per side: Sleep Talk's 0..SLEEP_TALK_VALUES - 1, Metronome's candidate ranks (at
 # most METRONOME_DRAW), Copycat's two orders.
 CALL_VALUES = METRONOME_DRAW
-# Sleep Talk's call variants when a faster foe's Disable can shrink its set within the turn
-# (ruling B5-13): a value ``u`` in 0..SLEEP_TALK_VALUES - 1 is unsplit; ``u + CALL_KEEP`` assumes
-# the turn-start set (no Disable landed before the move) and ``u + CALL_DISABLED`` the set with the
-# user's last move disabled. ``order.invoked_move`` takes ``call % count`` with ``count`` 1-4, a
-# divisor of both offsets, so ``step`` plays every encoding of ``u`` alike, on the live set;
-# ``call_consistent`` keeps each row in the one variant whose assumption its turn met.
+# Sleep Talk's call variants when a faster foe's Disable (ruling B5-13) or Imprison (B7-13) can
+# shrink its set within the turn: a value ``u`` in 0..SLEEP_TALK_VALUES - 1 is unsplit;
+# ``u + CALL_KEEP`` assumes the turn-start set (nothing landed before the move), ``u +
+# CALL_DISABLED`` the set with the user's last move disabled and ``u + CALL_SEALED`` the set
+# without the moves the foe's Imprison seals. ``order.invoked_move`` takes ``call % count`` with
+# ``count`` 1-4, a divisor of every offset, so ``step`` plays every encoding of ``u`` alike, on
+# the live set; ``call_consistent`` keeps each row in the one variant whose assumption its turn
+# met (one foe move a turn: never both).
 CALL_KEEP = SLEEP_TALK_VALUES
 CALL_DISABLED = 2 * SLEEP_TALK_VALUES
+CALL_SEALED = 3 * SLEEP_TALK_VALUES
 
 
 def _paused_rock(tables: Tables, state: BattleState) -> jnp.ndarray:
@@ -2486,12 +2504,33 @@ def _disabled_state(state: BattleState, sides) -> BattleState:
     return state._replace(disabled_move=value.astype(state.disabled_move.dtype))
 
 
+def _sealed_state(state: BattleState, sides) -> BattleState:
+    """``state`` with ``MOVE_EFFECT_IMPRISON`` on every battler of the other side of ``sides``
+    (``bool[2]``): a faster foe's Imprison this turn (``BtlCmd_TryImprison``, battle_script.c:
+    6724), which then seals its moves for the Sleep Talk user (battle_script.c:4929; battle
+    b on side b in singles)."""
+    foe_of = jnp.asarray(sides)[::-1]
+    value = jnp.where(foe_of, 1, state.imprison)
+    return state._replace(imprison=value.astype(state.imprison.dtype))
+
+
+def _split_events(state: BattleState, events) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """``(disabled, sealed)`` ``bool[2]``: the Sleep Talk set changed before the side's action
+    by a Disable (a move disabled at its start, none at the turn start) or an Imprison (a foe
+    imprisoning at its start, none at the turn start)."""
+    start_sealed = jnp.stack([imprisoning_foe(state, side) for side in (0, 1)])
+    disabled = (jnp.asarray(events["disabled_at_move"]) != 0) & (state.disabled_move == 0)
+    sealed = (jnp.asarray(events["sealed_at_move"]) != 0) & ~start_sealed
+    return disabled, sealed
+
+
 def call_consistent(
     tables: Tables, state: BattleState, actions, outcome: Outcome, events
 ) -> jnp.ndarray:
     """``bool``: an outcome row of a call variant keeps its weight (ruling B5-13): for each Sleep
-    Talk side whose call is a split variant (``CALL_KEEP`` / ``CALL_DISABLED``), whether a move of
-    it was disabled when its action started (the ``disabled_at_move`` event of ``step_events``
+    Talk side whose call is a split variant (``CALL_KEEP`` / ``CALL_DISABLED`` / ``CALL_SEALED``),
+    whether a Disable or an Imprison changed its set before its action (``_split_events``) matches
+    the variant: before, whether a move of it was disabled when its action started (the ``disabled_at_move`` event of ``step_events``
     on ``state``, ``actions``, ``outcome``) matches the variant. Unsplit rows always keep."""
     actions = jnp.asarray(actions, _I32)
     chosen = jnp.stack([selected_move(tables, state, side, actions[side])[0] for side in (0, 1)])
@@ -2499,8 +2538,11 @@ def call_consistent(
     talk = talk & (call_kind(tables, chosen) == CALL_SLEEP_TALK)
     call = jnp.asarray(outcome.call, _I32)
     split = talk & (call >= CALL_KEEP)
-    want = call >= CALL_DISABLED
-    seen = jnp.asarray(events["disabled_at_move"]) != 0
+    disabled, sealed = _split_events(state, events)
+    seen = jnp.where(sealed, CALL_SEALED, jnp.where(disabled, CALL_DISABLED, CALL_KEEP))
+    want = jnp.where(
+        call >= CALL_SEALED, CALL_SEALED, jnp.where(call >= CALL_DISABLED, CALL_DISABLED, CALL_KEEP)
+    )
     return jnp.all(~split | (seen == want))
 
 
@@ -2514,6 +2556,12 @@ class CallLaws(NamedTuple):
     # int32[2, CALL_VALUES]: Sleep Talk's call of each value from the set a faster foe's Disable
     # can leave (``_disabled_state``, ruling B5-13); ``called`` where no such set can arise.
     alt: jnp.ndarray
+    # int32[2, CALL_VALUES]: likewise from the set a faster foe's Imprison can leave
+    # (``_sealed_state``, ruling B7-13); ``called`` where no such set can arise.
+    sealed: jnp.ndarray
+    # bool[2]: a faster foe's Disable / Imprison can change the side's Sleep Talk set this turn.
+    can_disable: jnp.ndarray
+    can_seal: jnp.ndarray
 
 
 def call_laws(tables: Tables, state: BattleState, actions) -> CallLaws:
@@ -2552,7 +2600,13 @@ def call_laws(tables: Tables, state: BattleState, actions) -> CallLaws:
         & (state.last_move != 0)
         & uses_move[::-1]
     )
-    weights, called, alts = [], [], []
+    # A foe's Imprison can land before the move while no battler of the other side imprisons yet.
+    can_seal = (
+        (kinds == CALL_SLEEP_TALK)
+        & ~jnp.stack([imprisoning_foe(state, side) for side in (0, 1)])
+        & uses_move[::-1]
+    )
+    weights, called, alts, seals = [], [], [], []
     for side in (0, 1):
         foe = 1 - side
         talk_w = (values < SLEEP_TALK_VALUES).astype(_I32)
@@ -2562,6 +2616,10 @@ def call_laws(tables: Tables, state: BattleState, actions) -> CallLaws:
         hyp = _disabled_state(state, jnp.arange(2) == side)
         alt = jax.vmap(
             lambda v, side=side, hyp=hyp: invoked_move(tables, hyp, side, chosen[side], v)
+        )(values)
+        shut = _sealed_state(state, jnp.arange(2) == side)
+        seal = jax.vmap(
+            lambda v, side=side, shut=shut: invoked_move(tables, shut, side, chosen[side], v)
         )(values)
         metro_all = metronome_weights(tables, state, side)
         cands = metro_all > 0
@@ -2605,11 +2663,15 @@ def call_laws(tables: Tables, state: BattleState, actions) -> CallLaws:
             )
         )
         alts.append(jnp.where(can_split[side], alt, called[-1]))
+        seals.append(jnp.where(can_seal[side], seal, called[-1]))
     return CallLaws(
         kind=kinds.astype(_I32),
         weight=jnp.stack(weights),
         called=jnp.stack(called),
         alt=jnp.stack(alts),
+        sealed=jnp.stack(seals),
+        can_disable=can_split,
+        can_seal=can_seal,
     )
 
 
@@ -2618,7 +2680,8 @@ def call_variants(laws: CallLaws) -> list[tuple[np.ndarray, int, int]]:
     ``call_laws``: the product of each side's values grouped by the move they call (one
     representative value per move, the smallest, with the group's summed weight). A Sleep Talk
     group whose values call another move from the Disable-shrunk set (``CallLaws.alt``) is two
-    variants of the same weight, ``CALL_KEEP`` and ``CALL_DISABLED`` (ruling B5-13): their rows
+    variants of the same weight, ``CALL_KEEP`` and ``CALL_DISABLED`` (ruling B5-13), and one more,
+    ``CALL_SEALED``, where a faster foe's Imprison can land (B7-13): their rows
     are kept only where the turn met the variant's assumption (``call_consistent``). Copycat's
     orders are not a chance: each has weight 1 / 1 and its laws keep only the branches that
     agree with it, so the variants' rows still sum to 1."""
@@ -2626,19 +2689,24 @@ def call_variants(laws: CallLaws) -> list[tuple[np.ndarray, int, int]]:
     per_side = []
     for side in (0, 1):
         weight, called, kind = laws.weight[side], laws.called[side], int(laws.kind[side])
-        alt = laws.alt[side]
+        alt, sealed = laws.alt[side], laws.sealed[side]
+        offsets = [CALL_KEEP]
+        offsets += [CALL_DISABLED] if bool(laws.can_disable[side]) else []
+        offsets += [CALL_SEALED] if bool(laws.can_seal[side]) else []
         if kind in (CALL_SLEEP_TALK, CALL_METRONOME):
-            groups: dict[tuple[int, int], list[int]] = {}
+            groups: dict[tuple[int, int, int], list[int]] = {}
             for v in np.flatnonzero(weight):
-                key = (int(called[v]), int(alt[v]))
+                key = (int(called[v]), int(alt[v]), int(sealed[v]))
                 groups.setdefault(key, [int(v), 0])[1] += int(weight[v])
             den = int(weight.sum())
             out = []
-            for (move, other), (v, w) in groups.items():
-                if move == other:
+            for (move, other, shut), (v, w) in groups.items():
+                if move == other == shut:
                     out.append((v, w, den))
                 else:
-                    out += [(v + CALL_KEEP, w, den), (v + CALL_DISABLED, w, den)]
+                    # One variant per set the turn can leave, each kept only where the turn met
+                    # its assumption (``call_consistent``).
+                    out += [(v + off, w, den) for off in offsets]
             per_side.append(out)
         elif kind == CALL_COPYCAT:
             per_side.append([(int(v), 1, 1) for v in np.flatnonzero(weight)])

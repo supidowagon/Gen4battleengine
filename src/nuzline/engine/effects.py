@@ -939,10 +939,11 @@ def _mean_look(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     """Mean Look, Block, Spider Web (effect_script_0106.s: a direct ``CHECK_HP | TO_DEFENDER``
     subscript_mean_look.s, run for a defender with HP, battle_lib.c:1491-1504, on a move that
     connected: accuracy 0, so only Protect stops it): the defender's
-    ``VOLATILE_CONDITION_MEAN_LOOK`` and its ``meanLookTarget``, the attacker (:9-10; the script
-    ORs the attacker's battler into the 2-bit field, which in singles always holds the one foe
-    battler, ruling B7-n) as ``1 + battler``. A failure (``mean_look_fails``) skips
-    AfterMoveEffects (``primary_effect_fails``)."""
+    ``VOLATILE_CONDITION_MEAN_LOOK`` and its ``meanLookTarget`` (:9-10): the script ORs the
+    attacker's battler into the 2-bit field (``OPCODE_FLAG_ON``), whose old value nothing clears
+    but a switch-in or a faint of the trapped battler (ruling B7-15); kept as ``1 + raw``, 0 for a
+    zeroed field. A failure (``mean_look_fails``) skips AfterMoveEffects
+    (``primary_effect_fails``)."""
     cond = (
         (h.effect == _E.MEAN_LOOK)
         & h.landed
@@ -950,7 +951,9 @@ def _mean_look(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
         & ~mean_look_fails(state, h.target_side)
     )
     state = _set(state, "mean_look", h.target_side, 1, cond)
-    return _set(state, "mean_look_target", h.target_side, 1 + jnp.asarray(h.side, _I32), cond)
+    raw = jnp.maximum(state.mean_look_target[h.target_side].astype(_I32) - 1, 0)
+    value = 1 + (raw | jnp.asarray(h.side, _I32))  # battler b is on side b in singles
+    return _set(state, "mean_look_target", h.target_side, value, cond)
 
 
 def _imprison(tables, state, h: _Hit, outcome: Outcome) -> BattleState:

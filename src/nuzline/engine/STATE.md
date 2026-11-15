@@ -54,9 +54,10 @@ three structs has a row.
   `uproar` (E2 batch 5, per battler: `Random 3, 3` turns from subscript_uproar.s:6-8, counted
   down by the end-of-turn check, bcp.c:1505-1541, cleared with the volatiles), Mean Look ->
   `mean_look` (E2 batch 7, per battler, with `MoveEffectsData.meanLookTarget` ->
-  `mean_look_target` as `1 + battler`, 0 while `mean_look` is 0: subscript_mean_look.s:9-10;
-  cleared with the volatiles, and when the trapper leaves by a switch that is not a Baton Pass,
-  battle_lib.c:2055-2061, or faints, :2170-2172; Baton Pass keeps both, :2078, :2111), Curse ->
+  `mean_look_target` as `1 + raw`, the attacker ORed in by subscript_mean_look.s:10 and never
+  cleared but with the trapped battler's volatiles, so a stale value stays (B7-15); `mean_look`
+  ends when the trapper leaves by a switch that is not a Baton Pass, battle_lib.c:2055-2061, or
+  faints, :2170-2172; Baton Pass keeps both, :2078, :2111), Curse ->
   `curse` (below). The other bits (Thrash, Focus Energy, Transform, Rage, Substitute flag,
   Nightmare, Torment) are later (M6); the Substitute flag is implied by `substitute_hp > 0`.
 - **moveEffectsMask** bits mapped: Leech Seed -> `leech_seed`, Water Sport ->

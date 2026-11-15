@@ -985,8 +985,29 @@ def _draw_batch7(draw, tables: Tables, a: dict, side: int, active: int, names: N
     if draw(st.integers(0, 3)) == 0:
         a["mean_look"][side] = 1
         a["mean_look_target"][side] = 1 + foe
+    elif draw(st.integers(0, 3)) == 0:  # a stale meanLookTarget (B7-15)
+        a["mean_look_target"][side] = 1 + foe
     a["imprison"][side] = int(draw(st.integers(0, 5)) == 0)
     a["imprisoned"][side] = int(draw(st.integers(0, 5)) == 0)
+
+
+def _share_with_sleep_talk(draw, tables: Tables, a: dict, names: Names) -> None:
+    """Maybe (1 in 2) copy a move the other active's Sleep Talk can call into a free slot of an
+    active that knows Imprison (``_draw_batch7``, B7-13)."""
+    imprison, talk = names.move("Imprison"), names.move("Sleep Talk")
+    for side in (0, 1):
+        foe = 1 - side
+        own = a["moves"][side, a["active"][side]]
+        theirs = a["moves"][foe, a["active"][foe]]
+        if imprison not in own or talk not in theirs or not draw(st.booleans()):
+            continue
+        callable_ = [int(m) for m in theirs if m and m != talk and m not in own]
+        free = [k for k in range(4) if own[k] not in (imprison, a["locked_move"][side])]
+        if callable_ and free:
+            k = draw(st.sampled_from(free))
+            move = draw(st.sampled_from(callable_))
+            a["moves"][side, a["active"][side], k] = move
+            a["pp"][side, a["active"][side], k] = int(tables.move_pp[move])
 
 
 def _draw_choice_lock(draw, a: dict, side: int, active: int) -> None:
@@ -1095,6 +1116,9 @@ def supported_state(draw, tables: Tables, names: Names, invokers: bool = True) -
         _draw_pivot(draw, tables, a, side, active, names)
         _draw_batch7(draw, tables, a, side, active, names)
         _draw_choice_lock(draw, a, side, active)
+    # B7-13: an Imprison user sharing a move with a Sleep Talk user, so a faster Imprison (or one
+    # already up) can shrink the Sleep Talk set.
+    _share_with_sleep_talk(draw, tables, a, names)
     # No battler on the field sleeps at a turn start during an uproar (B5-7: the turn end woke
     # it): the other side's draws above may have put one to sleep after the uproar was drawn.
     if np.any(a["uproar"] > 0):

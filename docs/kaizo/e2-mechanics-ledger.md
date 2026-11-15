@@ -214,16 +214,13 @@ Rules left out because another mechanic is missing; each closes with the mechani
   `switching.chart_multipliers` does neither (the "Ingrain" and "Roost" refusals there can now be
   lifted on these fields). Scripts still untranscribed: #106 (Basic_CheckMeanLook /
   Expert_BindingMove), #192 (Basic_CheckCanImprison / Expert_Imprison), #181 Ingrain's.
-- Ingrain passed by Baton Pass to a Levitate holder: `Battler_Ability` reads its Levitate as none
-  (battle_lib.c:3100-3103), so the entry Spikes reach it (subscript_hazards_check.s,
-  `damage.grounded`) and a party-slot `damage.ignorable` read (the laws) should hide it; both
-  read the slot's own ability today (B7-7): Baton Pass with Ingrain on a Levitate newcomer.
 - The Iron Ball and Gravity clauses of `BasicTypeMulApplies` / `Battler_Ability`
   (battle_lib.c:2534, :2545-2549, :3095-3098) beside Ingrain's (`damage.identified`): Gravity,
   Iron Ball.
-- Doubles: subscript_mean_look.s:10 ORs the attacker's battler into the 2-bit `meanLookTarget`
-  and never clears it; in singles the OR always gives the one foe battler (B7-6), in doubles a
-  stale value can name a third battler: the doubles milestone.
+- Doubles: `ai_item_known` is kept per player party slot, which is exact in singles only:
+  `AICmd_LoadHeldItemEffect` (trainer_ai.c:1907-1910) reads `battlerHeldItems` for any battler
+  but the AI's own, so in doubles it also reads the AI partner's record (and `IfHeldItemEqualTo`,
+  :1924-1928, the other side's). The doubles milestone keeps it per battler on both sides.
 - E1's per-battler int8 fields (merged from main at 23e10f0; zero at battle
   start, no behaviour yet; the AI reads them, `ai.commands._VOLATILE_FIELDS` /
   `_MOVE_EFFECT_FIELDS`): `curse` (VOLATILE_CONDITION_CURSE,
@@ -965,3 +962,32 @@ Rules left out because another mechanic is missing; each closes with the mechani
   picked command (`battlerActions[...][BATTLE_ACTION_PICK_COMMAND]`, bcp.c:893): a switch or a
   bag item runs no move script, so only a move or a resumed action can stop. The reference was
   right. Test: tests/engine/test_batch7_review.py (fails at f22b818).
+- B7-13 (batch 7 review) Sleep Talk's slots drop a move a foe's Imprison seals:
+  `BtlCmd_TrySleepTalk` runs CheckInvalidMoves with `~CHECK_INVALID_NO_PP` (battle_script.c:4929),
+  which includes CHECK_INVALID_IMPRISONED (battle_lib.c:2287-2290); JAX's `order.sleep_talk_slots`
+  missed it (the reference had it). A faster foe's Imprison this turn is the set's second change
+  within a turn: a third call variant `CALL_SEALED` beside B5-13's KEEP / DISABLED
+  (`enumerate._sealed_state`, `CallLaws.sealed`, `can_disable` / `can_seal`), each row kept by
+  the turn's own `disabled_at_move` / `sealed_at_move` events relative to the turn start
+  (`_split_events`; one foe move a turn, so never both). Tests: test_batch7_review.py, the
+  `sleep_talk_imprison` brute-force case (test_invokers.py); the generator gives an Imprison user a
+  move a Sleep Talk user can call (`strategies._share_with_sleep_talk`).
+- B7-14 (review) A Baton Pass newcomer keeps Ingrain before its hazards (battle_lib.c:2079); the
+  hazards' `CheckAbility` (subscript_hazards_check.s:8; battle_script.c:3159-3172) reads
+  `Battler_Ability`, which hides an ingrained Levitate (battle_lib.c:3100-3103): the Spikes and
+  Toxic Spikes reach it (`damage.grounded(..., ingrained)`, both engines). A switch action's
+  newcomer, which the laws read before it switches, has none (`entry_weather`). The Owed line is
+  closed.
+- B7-15 (review) `meanLookTarget` is ORed (`OPCODE_FLAG_ON`, subscript_mean_look.s:10) and nothing
+  clears it but the trapped battler's own switch-in or faint (battle_lib.c:2056-2061, :2170-2172
+  clear only the volatile bit): `mean_look_target` keeps `1 + raw` with its stale bits (replaces
+  B7-6's "1 + attacker, 0 without the bit").
+- B7-16 (review) A Roar whose target is anchored at the turn start and stays so (no switch, no
+  move of the target side that adds a mask bit: Aqua Ring, the sports, Imprison, Camouflage, an
+  invoker) stops before TryWhirlwind (subscript_force_target_to_switch_or_flee.s:7, :86): its
+  `roar_level` / `roar_target` draws are not relevant (enumerate.py).
+- B7-17 (review, settled) Imprison is `RANGE_USER` (res/moves/imprison/data.json), its own
+  defender (`targets_user`), so its script runs with the foe fainted mid-turn and marks it
+  imprisoned, as `TryImprison` loops the battlers whatever their HP (battle_script.c:6697-6716).
+  `TrainerAI_CalcDamage` calls `BattleSystem_CalcMoveDamage` (trainer_ai.c:3082), whose Technician
+  (battle_lib.c:6698) the AI estimate therefore applies: the merged `damage.py` is exact there.

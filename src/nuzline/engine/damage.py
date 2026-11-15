@@ -159,8 +159,8 @@ def ignorable(state: BattleState, atk_side, def_side, slot=None) -> jnp.ndarray:
     ability = _i32(state.ability[def_side, slot])
     if active:
         # Battler_Ability (battle_lib.c:3100-3103): an ingrained battler's Levitate is
-        # ABILITY_NONE. Only the active battler's: a party slot being read is a newcomer, whose
-        # Ingrain would only come by Baton Pass (owed, ledger).
+        # ABILITY_NONE. Only the active battler's: a party slot being read is a switch action's
+        # newcomer (the laws), which carries no Ingrain (only Baton Pass keeps it).
         rooted = (state.ingrain[def_side] != 0) & (ability == AbilityId.LEVITATE)
         ability = jnp.where(rooted, AbilityId.NONE, ability)
     return jnp.where(attacker == AbilityId.MOLD_BREAKER, AbilityId.NONE, ability)
@@ -236,32 +236,36 @@ def stealth_rock_loss(tables: Tables, state: BattleState, side, slot) -> jnp.nda
     return jnp.where(state.stealth_rock[side] != 0, rock, 0)
 
 
-def grounded(state: BattleState, side, slot) -> jnp.ndarray:
+def grounded(state: BattleState, side, slot, ingrained=None) -> jnp.ndarray:
     """``bool``: subscript_hazards_check.s:6-11 lets the entry spikes reach ``side``'s party
     ``slot``: Gravity grounds it (:6; Iron Ball, :7, is an unsupported item), else its own
-    Levitate (``CheckAbility``) or a Flying type (``BATTLEMON_TYPE_1`` / ``_2``) keeps it off (Magnet
-    Rise, :11, is an unsupported move)."""
-    airborne = (state.ability[side, slot] == AbilityId.LEVITATE) | jnp.any(
-        state.types[side, slot] == Type.FLYING
-    )
+    Levitate (``CheckAbility``, battle_script.c:3159-3172, through ``Battler_Ability``, which
+    reads an ingrained holder's as none, battle_lib.c:3100-3103) or a Flying type
+    (``BATTLEMON_TYPE_1`` / ``_2``) keeps it off (Magnet Rise, :11, is an unsupported move).
+    ``ingrained``: the newcomer's ``MOVE_EFFECT_INGRAIN`` at the check, by default the side's
+    battler's (``ingrain``: after the switch, where only a Baton Pass keeps it, battle_lib.c:2079;
+    ruling B7-14); a switch action's newcomer, read before it switches, has none."""
+    ingrained = state.ingrain[side] != 0 if ingrained is None else jnp.asarray(ingrained)
+    levitate = (state.ability[side, slot] == AbilityId.LEVITATE) & ~ingrained
+    airborne = levitate | jnp.any(state.types[side, slot] == Type.FLYING)
     return (state.gravity != 0) | ~airborne
 
 
-def spikes_loss(state: BattleState, side, slot) -> jnp.ndarray:
+def spikes_loss(state: BattleState, side, slot, ingrained=None) -> jnp.ndarray:
     """``int32``: what Spikes takes from ``side``'s party ``slot`` as it switches in
     (``BtlCmd_CheckSpikes``, battle_script.c:5434-5436): ``Divide(maxHP, (5 - layers) * 2)``, 1/8,
     1/6, 1/4, for a grounded newcomer (``grounded``); 0 without layers. Not capped."""
     layers = _i32(state.spikes[side])
     divisor = jnp.maximum((5 - layers) * 2, 1)
     loss = jnp.maximum(_i32(state.max_hp[side, slot]) // divisor, 1)
-    return jnp.where((layers > 0) & grounded(state, side, slot), loss, 0)
+    return jnp.where((layers > 0) & grounded(state, side, slot, ingrained), loss, 0)
 
 
-def hazards_loss(tables: Tables, state: BattleState, side, slot) -> jnp.ndarray:
+def hazards_loss(tables: Tables, state: BattleState, side, slot, ingrained=None) -> jnp.ndarray:
     """``int32``: Spikes and Stealth Rock together on ``side``'s newcomer ``slot``
     (subscript_hazards_check.s:31, :41), 0 for a Magic Guard holder (:5); not capped (the
     newcomer survives when this is below its HP: Stealth Rock needs HP left, :41)."""
-    loss = spikes_loss(state, side, slot) + stealth_rock_loss(tables, state, side, slot)
+    loss = spikes_loss(state, side, slot, ingrained) + stealth_rock_loss(tables, state, side, slot)
     return jnp.where(state.ability[side, slot] == AbilityId.MAGIC_GUARD, 0, loss)
 
 
@@ -292,7 +296,8 @@ def entry_weather(tables: Tables, state: BattleState, side, slot, foe) -> jnp.nd
     battler (``entry_ability``; ``foe``: the other side), sets that weather for good; else
     ``state.weather``. For the turn-start laws of the foe's move (``outcome``): a switch goes
     first."""
-    alive = _i32(state.hp[side, slot]) - hazards_loss(tables, state, side, slot) > 0
+    # A switch action's newcomer: no Ingrain (only Baton Pass keeps it).
+    alive = _i32(state.hp[side, slot]) - hazards_loss(tables, state, side, slot, False) > 0
     weather = ability_weather(entry_ability(tables, state, side, slot, foe))
     return jnp.where(alive & (weather != Weather.NONE), weather, _i32(state.weather))
 
