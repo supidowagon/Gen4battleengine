@@ -1,13 +1,72 @@
 # E2 mechanics ledger (Kaizo Roark split)
 
-## RESUME (updated 2026-11-15, batch 9 done at the commits below, its review next)
+## RESUME (updated 2026-11-15: batch 9 and its follow-ups done; batch 10 family 1 set aside)
+
+- **Tip and merges.** Tip: this RESUME commit on 253afaf ("fix(e2): batch 9 review follow-ups",
+  B9-13..B9-15). It holds batches 3-9 with their review follow-ups (batch 9's at 253afaf, batch
+  8's at 0936d40) and main bdb51d8 (merged at d6c3bab, backlog regenerated at 697a626). It is the
+  merge-check tip: no batch 10 code is committed.
+- **Batch 10.** The plan is committed at e2f0d73 ("Batch 10" below: ten families). Family 1
+  (recoil and crash) is written but uncommitted, saved as
+  `G:/Farry/Claude Workspace/_scratch/e2/b10/wip_family1.patch` with `test_batch10.py` beside it
+  (re-apply with `git apply --3way` on the patch, then copy the test to `tests/engine/`). It
+  covers: `EffectId.RECOIL_STATUS` (80) for Volt Tackle's family 262 (paralysis) and Flare
+  Blitz's 253 (burn, thaws its frozen user; bcp.c:2481, :2730): recoil Divide(hitDamage, 3), then
+  the PROBABILISTIC status (battle_lib.c:1551-1567); `EffectId.CRASH` (81) for Jump Kick / Hi
+  Jump Kick 45: on a miss or a Protect the user loses min(Divide(damage, 2), Divide(defender
+  maxHP, 2)) of hit 0's crit and roll damage (subscript_crash_on_miss.s), Magic Guard excepted;
+  Reckless for 45 / 253 / 262 (`damage.RECKLESS_EFFECTS`); both engines, the laws
+  (`Reads.crash`: crit / roll[s, 0] read on a miss; the status lists, TABLE_DAMAGE_EFFECTS, the
+  input classification), build_tables (chance 0 refused for RECOIL_STATUS), the generator
+  (`strategies._draw_batch10`) and three hand tests. State reached: hand tests 3 passed,
+  test_damage_classes 46 passed, differential 150 (seed 1) clean; a second seed was stopped
+  unfinished. Not done: rulings B10-1 / B10-2 in the ledger, the commit, the backlog
+  regeneration, notes for E1 (new EffectIds RECOIL_STATUS, CRASH: the AI's #253 / #262 / #45
+  scripts are E1's). The patch also carries an older copy of the B9-13 hunk in enumerate.py,
+  now committed at 253afaf: expect that hunk to conflict and keep the committed version.
+  The tables (`data/*/tables.npz`, untracked) were rebuilt for the clean tip; rebuild both after
+  re-applying (`uv run python -m tools.build_tables`; `uv run --group rom python -m
+  tools.build_tables --game kaizo`).
+- **Batch 9 follow-ups.** test_stage_b's six failing nodes are fixed (the exhaustive solver's
+  unpack, B9-15) and confirmed: 6 passed (test_terminal_win_after_a_death_scores_zero_at_k0,
+  test_win_after_a_new_death_scores_zero_at_k0, test_result_dict_round_trip,
+  test_root_chance_node_for_the_battle_start_quick_claw, test_matches_exhaustive_on_endgames,
+  test_no_peeking). Engine guards, test_stage_b_learn, test_batch9: 159 passed; tests/data +
+  tests/tools 596 passed before the build_tables gate fix, then test_build_tables_game 14
+  passed. tests/prep/test_exhaustive.py was stopped unfinished (slow). The four cross-area
+  guards on 253afaf were stopped unfinished at the session clear (2026-11-15 ~08:50); the
+  manager reruns them in the merge check.
+- **Next.** Batch 10 families 1-10 in the plan order (re-apply family 1 first), then the next
+  splits (Fantina onward, backlog order).
+- **Open rulings and items.** Compile re-time pending on a quiet machine (batch 9's 76.5 s was
+  load-skewed). `tests/search/test_leaves.py` and `tests/search/test_player_learn.py` owe a
+  restructuring (each past 8 GB). The slow search run peaked at 17 GB. A one-process focused
+  run over tests/prep and the engine guards grew past 16 GB here and was stopped: run such sets
+  per file. Sampling note: `outcome.sample_outcome` uses `fold_in(key, 26)` for both Metronome's
+  side-0 rank and `yawn_sleep` (correlated draws; marginals exact).
+- **Test worktree.** `G:\Farry\Claude Workspace\_scratch\e2\testwt` (detached; tables rebuilt per
+  tip; JAX cache under its `.cache/jax-tests`); `compile_time.py` at `_scratch\e2\`; batch 10
+  scratch at `_scratch\e2\b10\` (`diff.py N SEED`: the reduced differential).
+- **Process rules (user-approved).**
+  - Per batch: the batch's focused tests plus the four cross-area guards
+    (`tests/prep/test_variants.py`, `tests/data/test_game_constants.py`,
+    `tests/tools/test_backlog.py`, `tests/test_cli.py`) and one review. No fast tier per batch.
+  - The fast tier runs once per merge into main, on the merge-check tip, under the lock.
+  - Never start a third batch while two are unmerged: send a merge-check tip instead.
+  - The session is cleared at every batch boundary: keep this RESUME current at each one.
+- **Lock rules.** The fast-tier lock (`_scratch/fast_tier.lock`) names the launched pytest's pid,
+  written only after that process is confirmed alive; a lock whose pid is dead may be deleted.
+  At most 8 GB per test file. Every background launch gets a liveness check within two minutes.
+  No 90 minutes without a commit (else tell the coordinator in two lines what it waits on).
+
+## History
 
 - Batch 9, the Gardenia split (plan and rulings B9-1..B9-12 below; batch 8 review follow-ups
   B8-6..B8-8 at 0936d40). Commits: 2acd05f (plan), 9370721 (speed / damage abilities, Thunder /
   Blizzard, Fire / Ice Fang), 8705722 (recoil divisors, Kaizo be_seq 48 / 182 modelled, Follow
   Me, Helping Hand, Surf), then the absorb / Rain Dish / Clear Body / Hyper Cutter / Aftermath /
   Poison Heal / Bad Dreams / Dragon Rage / SonicBoom / stat moves / trapping abilities / Dream
-  Eater / Payback commit (db0b6d7), and this ledger commit (backlog regenerated: the Gardenia
+  Eater / Payback commit (db0b6d7), and the ledger commit e57e767 (backlog regenerated: the Gardenia
   split's missing groups 78 -> 42, runnable battles 0 -> 9; Metronome's unmodelled callable moves
   115 -> 87). New state: `can_unburden`, `minimized`. Guard tests fixed at f7b2ae1 ("fix(e2):
   guard tests after batches 6-9"); the focused set (tests/data, tests/tools, tests/prep,
