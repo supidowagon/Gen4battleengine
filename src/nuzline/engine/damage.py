@@ -305,8 +305,9 @@ def entry_weather(tables: Tables, state: BattleState, side, slot, foe) -> jnp.nd
 
 # effect_script_0048.s, _0269.s (RECOIL: Take Down, Double-Edge, ...): a Reckless attacker
 # (CheckAbility, Battler_Ability) sets BTLVAR_POWER_MULTI to 12 before CalcCrit / CalcDamage;
-# the other Reckless scripts (0045, 0198, 0253, 0262) are unsupported effects.
+# effect_script_0045.s (CRASH), _0253.s and _0262.s (RECOIL_STATUS) check it the same way.
 RECKLESS_POWER_MUL = 12
+RECKLESS_EFFECTS = (EffectId.RECOIL, EffectId.RECOIL_STATUS, EffectId.CRASH)
 
 
 # BTLVAR_POWER_MULTI 20 (effect_script_0169.s, _0171.s, _0221.s).
@@ -347,7 +348,8 @@ def script_power_mul(
     move script."""
     atk_side = _i32(atk_side)
     reckless = state.ability[atk_side, state.active[atk_side]] == AbilityId.RECKLESS
-    recoil = tables.move_effect[_i32(move)] == EffectId.RECOIL
+    # effect_script_0045.s, _0253.s, _0262.s set it too (E2 batch 10, B10-1, B10-2).
+    recoil = jnp.isin(tables.move_effect[_i32(move)], jnp.asarray(RECKLESS_EFFECTS, jnp.int32))
     doubled = double_power(tables, state, atk_side, def_side, move)
     # Stomp (effect_script_0150.s:6-8): powerMul 10, or 20 against MOVE_EFFECT_MINIMIZE (B9-10).
     stomp = (tables.move_effect[_i32(move)] == EffectId.FLINCH) & (

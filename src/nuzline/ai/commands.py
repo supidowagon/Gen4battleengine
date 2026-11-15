@@ -307,6 +307,7 @@ class BattleEffect(IntEnum):
     STATUS_POISON = 66  # Poison Powder (Expert_Substitute's last-move table, script.s:3019)
 
     TOXIC_SPIKES = 249
+    RECOIL_BURN_HIT = 253  # Flare Blitz
     RECOIL_PARALYZE_HIT = 262
     STEALTH_ROCK = 266
     RECOIL_HALF = 269  # Head Smash

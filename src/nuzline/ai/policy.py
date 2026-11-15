@@ -2231,6 +2231,7 @@ _EXPERT_LABELS = (
     (BattleEffect.SWITCH_HIT, _expert_u_turn),  # :1771
     (BattleEffect.DOUBLE_POWER_IF_MOVING_SECOND, _expert_payback),  # :1773
     (BattleEffect.TOXIC_SPIKES, _expert_toxic_spikes),  # :1792
+    (BattleEffect.RECOIL_BURN_HIT, _expert_recoil_move),  # :1796
     (BattleEffect.BLIZZARD, _expert_blizzard),  # :1801
     (BattleEffect.RECOIL_PARALYZE_HIT, _expert_recoil_move),  # :1802
     (BattleEffect.STEALTH_ROCK, _expert_stealth_rock),  # :1805

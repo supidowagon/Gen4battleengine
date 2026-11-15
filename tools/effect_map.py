@@ -177,8 +177,8 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     103: ("BATTLE_EFFECT_PRIORITY_1", _E.PLAIN, (0, 0, 0)),
     # Flame Wheel, Sacred Fire: effect_script_0125.s is BURN_HIT's script; the effect id
     # itself lets a frozen user move and thaw (battle_controller_player.c:2481, :2728),
-    # flagged by move_param[m, 2] = 1. RECOIL_BURN_HIT (Flare Blitz, 254) also has a
-    # third recoil and stays unsupported.
+    # flagged by move_param[m, 2] = 1. RECOIL_BURN_HIT (Flare Blitz, 253) adds a third
+    # recoil: RECOIL_STATUS (E2 batch 10, below).
     # Foresight, Odor Sleuth: effect_script_0113.s, an on-hit indirect effect
     # (subscript_foresight.s sets VOLATILE_CONDITION_FORESIGHT on the defender).
     # Confusion, Psybeam, Dizzy Punch, ...: effect_script_0076.s, a probabilistic indirect
@@ -235,6 +235,15 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     # Double-Edge, Wood Hammer: effect_script_0198.s (Reckless x1.2, ON_HIT
     # subscript_recoil_1_3.s: DivideVarByValue(hitDamage, 3)) (B9-4).
     198: ("BATTLE_EFFECT_RECOIL_THIRD", _E.RECOIL, (3, 0, 0)),
+    # E2 batch 10, B10-1: effect_script_0262.s / _0253.s (Reckless x1.2, then an indirect
+    # PROBABILISTIC TO_DEFENDER subscript_recoil_1_3_chance_to_{paralyze,burn}.s): recoil 1/3,
+    # then the status at the move's chance; 253 lets a frozen user move and thaws it
+    # (battle_controller_player.c:2481, :2730).
+    262: ("BATTLE_EFFECT_RECOIL_PARALYZE_HIT", _E.RECOIL_STATUS, (Status.PARALYSIS, 3, 0)),
+    253: ("BATTLE_EFFECT_RECOIL_BURN_HIT", _E.RECOIL_STATUS, (Status.BURN, 3, 1)),
+    # Jump Kick, Hi Jump Kick (B10-2): effect_script_0045.s (Reckless x1.2, SYSCTL_CRASH_DAMAGE,
+    # CalcCrit, CalcDamage); subscript_crash_on_miss.s from subscript_missed.s:98.
+    45: ("BATTLE_EFFECT_CRASH_ON_MISS", _E.CRASH, (0, 0, 0)),
     271: ("BATTLE_EFFECT_LOWER_SP_DEF_2_HIT", _E.SECONDARY_STAT_FOE, (_SPD, -2, 0)),
     # effect_script_0275.s -> subscript_paralyze_or_flinch.s: a paralysis roll, then a flinch
     # roll (engine/effects.py ``_fang``).

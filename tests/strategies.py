@@ -886,6 +886,45 @@ def _draw_batch9(draw, tables: Tables, a: dict, side: int, active: int, names: N
             a["can_unburden"][side] = 1
 
 
+def _draw_batch10(draw, tables: Tables, a: dict, side: int, active: int, names: Names) -> None:
+    """Maybe (1 in 3) give the active Pokemon a batch-10 move with what makes it act: Volt
+    Tackle / Flare Blitz (recoil and status; a frozen user for Flare Blitz's thaw, Rock Head or
+    Reckless), Jump Kick / Hi Jump Kick (a crash on a miss: a Protect or a Ghost foe, Magic
+    Guard, a foe at low max HP for the cap)."""
+    if draw(st.integers(0, 2)) != 0:
+        return
+    rnd = draw(st.randoms(use_true_random=False))
+    foe = 1 - side
+    foe_mon = int(a["active"][foe])
+
+    def give(move_name: str, who: int = side, mon: int = active) -> None:
+        move = names.move(move_name)
+        k = rnd.randint(0, 3)
+        a["moves"][who, mon, k] = move
+        a["pp"][who, mon, k] = int(tables.move_pp[move])
+
+    move = rnd.choice(("Volt Tackle", "Flare Blitz", "Jump Kick", "Hi Jump Kick"))
+    give(move)
+    if rnd.random() < 0.3:
+        a["ability"][side, active] = rnd.choice(
+            (AbilityId.RECKLESS, AbilityId.ROCK_HEAD, AbilityId.MAGIC_GUARD)
+        )
+    if move == "Flare Blitz" and rnd.random() < 0.4:
+        a["status"][side, active] = Status.FREEZE
+        a["status_counter"][side, active] = 0
+    if move in ("Jump Kick", "Hi Jump Kick"):
+        roll = rnd.random()
+        if roll < 0.3:
+            give(rnd.choice(("Protect", "Detect")), foe, foe_mon)
+        elif roll < 0.5:
+            a["types"][foe, foe_mon] = (Type.GHOST, Type.GHOST)
+        if rnd.random() < 0.3:  # a small foe: the crash's cap
+            a["max_hp"][foe, foe_mon] = rnd.randint(10, 40)
+            a["hp"][foe, foe_mon] = min(int(a["hp"][foe, foe_mon]), int(a["max_hp"][foe, foe_mon]))
+    if rnd.random() < 0.3:  # a low user: the recoil or crash can faint it
+        a["hp"][side, active] = max(1, int(a["max_hp"][side, active]) // 8)
+
+
 def _draw_batch4(draw, tables: Tables, a: dict, side: int, active: int, names: Names) -> None:
     """Maybe (1 in 2) give the active Pokemon a ``BATCH4_MOVES`` move, with what makes it act
     most of the time: a paralyzed foe for SmellingSalt, a status for Facade, a foe at low HP for
@@ -1260,6 +1299,7 @@ def supported_state(draw, tables: Tables, names: Names, invokers: bool = True) -
         _draw_pivot(draw, tables, a, side, active, names)
         _draw_batch7(draw, tables, a, side, active, names)
         _draw_batch9(draw, tables, a, side, active, names)
+        _draw_batch10(draw, tables, a, side, active, names)
         _draw_choice_lock(draw, a, side, active)
     # B7-13: an Imprison user sharing a move with a Sleep Talk user, so a faster Imprison (or one
     # already up) can shrink the Sleep Talk set.

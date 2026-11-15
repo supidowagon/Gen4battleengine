@@ -263,6 +263,18 @@ class EffectId(IntEnum):
     # Belly Drum (subscript_belly_drum.s, B9-10): fails at Attack +6 or curHP <= Divide(maxHP, 2)
     # (:3-6, MOVE_STATUS_FAILED); else Attack +6 and Divide(maxHP, 2) lost through UPDATE_HP.
     BELLY_DRUM = 79
+    # E2 batch 10, B10-1. Volt Tackle's family (262, BATTLE_EFFECT_RECOIL_PARALYZE_HIT) and Flare
+    # Blitz's (253, _RECOIL_BURN_HIT): ``(Status, divisor, thaws_user)``. The script's indirect
+    # MOVE_SIDE_EFFECT_PROBABILISTIC subscript (subscript_recoil_1_3_chance_to_{paralyze,burn}.s)
+    # runs on every hit that hit: recoil Divide(hitDamage, divisor) (Rock Head, Magic Guard skip
+    # it), then the status as a secondary one when the roll passed and the defender had HP
+    # (battle_lib.c:1551-1567). Flare Blitz's family thaws its frozen user (bcp.c:2481, :2730).
+    RECOIL_STATUS = 80
+    # Jump Kick / Hi Jump Kick (45, BATTLE_EFFECT_CRASH_ON_MISS): zeros. A plain hit whose
+    # SYSCTL_CRASH_DAMAGE makes subscript_missed.s run subscript_crash_on_miss.s: the user loses
+    # min(Divide(damage, 2), Divide(defender maxHP, 2)) of the damage the script computed
+    # (crit and roll included, then the type chart), Magic Guard excepted (B10-2).
+    CRASH = 81
 
 
 # ``EffectId.COUNTER``'s source (``move_param[m, 0]``).

@@ -452,7 +452,11 @@ def _status_foe(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
 
 
 def _secondary_status(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
-    cond = (h.effect == _E.SECONDARY_STATUS) & h.effective & h.proc
+    # RECOIL_STATUS: after its recoil (``_recoil``), the subscript's BATTLE_SUBSCRIPT_PARALYZE /
+    # _BURN under SYSCTL_APPLY_SECONDARY_EFFECT: the roll passed and the defender had HP
+    # (battle_lib.c:1560-1565), an indirect effect (B10-1).
+    status_effect = (h.effect == _E.SECONDARY_STATUS) | (h.effect == _E.RECOIL_STATUS)
+    cond = status_effect & h.effective & h.proc
     return _inflict(tables, state, h, outcome, cond, False)
 
 
@@ -635,9 +639,14 @@ def _recoil(tables, state, h: _Hit) -> BattleState:
     rock_head = state.ability[h.side, h.user] == AbilityId.ROCK_HEAD
     magic_guard = state.ability[h.side, h.user] == AbilityId.MAGIC_GUARD
     # subscript_recoil_1_{2,3,4}.s: DivideVarByValue(hitDamage, 2 / 3 / 4), at least 1 (B9-4).
-    third = jnp.maximum(h.dealt // jnp.maximum(h.param[0], 1), 1)
+    # RECOIL_STATUS keeps its divisor in param 1 (subscript_recoil_1_3_chance_to_*.s:5 calls
+    # BATTLE_SUBSCRIPT_RECOIL_1_3 first, on every hit that hit, B10-1).
+    status_recoil = h.effect == _E.RECOIL_STATUS
+    divisor = jnp.where(status_recoil, h.param[1], h.param[0])
+    third = jnp.maximum(h.dealt // jnp.maximum(divisor, 1), 1)
+    recoils = (h.effect == _E.RECOIL) | status_recoil
     cost = jnp.where(
-        (h.effect == _E.RECOIL) & h.effective & ~rock_head & ~magic_guard & (h.dealt > 0),
+        recoils & h.effective & ~rock_head & ~magic_guard & (h.dealt > 0),
         third,
         0,
     )

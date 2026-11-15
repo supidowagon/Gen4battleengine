@@ -247,6 +247,10 @@ def _move_effect(
         # subscript_paralyze_or_flinch.s rolls through BtlCmd_CheckEffectActivation, which
         # asserts effectChance != 0 (battle_script.c:8375).
         raise BuildError(f"move {move['name']!r}: fang effect {move['effect']} with chance 0")
+    if eid == EffectId.RECOIL_STATUS and move["effect_chance"] == 0:
+        # The PROBABILISTIC branch asserts effectChance != 0 (battle_lib.c:1557), while the
+        # engine would read chance 0 as a certain status (B10-1).
+        raise BuildError(f"move {move['name']!r}: recoil-status effect {move['effect']} with chance 0")
     if eid == EffectId.FAKE_OUT and move["effect_chance"] == 0:
         # effect_script_0158.s rolls RandNext() % 100 < chance: chance 0 never flinches, but
         # the engine reads chance 0 as an ON_HIT effect, and PLAIN would drop the failure.

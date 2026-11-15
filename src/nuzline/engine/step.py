@@ -93,7 +93,9 @@ from nuzline.engine.damage import (
     calc_move_damage,
     chart_types,
     confusion_damage,
+    damage_for_roll,
     decomp_abilities,
+    divide,
     effectiveness,
     identified,
     ignorable,
@@ -735,9 +737,11 @@ def _use_move(
     # CHECK_STATUS_STATE_FREEZE (:2478): RandNext() % 5 == 0 (outcome.thaw) thaws and the
     # move goes on; otherwise the move is disrupted unless it is a thawing move (Flame
     # Wheel, :2481), whose user thaws at CHECK_STATUS_STATE_SELF_THAW (:2728) below.
-    thaw_move = (tables.move_effect[move] == EffectId.SECONDARY_STATUS) & (
-        tables.move_param[move, 2] == 1
-    )
+    # Flare Blitz's family (RECOIL_STATUS with thaws_user, B10-1) is the other effect tested.
+    thaw_move = (
+        (tables.move_effect[move] == EffectId.SECONDARY_STATUS)
+        | (tables.move_effect[move] == EffectId.RECOIL_STATUS)
+    ) & (tables.move_param[move, 2] == 1)
     frozen = ready & (status == Status.FREEZE)
     thawed = frozen & (outcome.thaw[side] != 0)
     still_frozen = frozen & ~thawed
@@ -1144,6 +1148,24 @@ def _use_move(
     state = _set_mon(state, "hp", target_side, target, healed, absorbed & (target_hp != target_max))
     state = reveal_ability(state, target_side, target, ABSORB, absorbed)
     no_more_work = no_more_work | absorbed
+    # Jump Kick / Hi Jump Kick (EffectId.CRASH, B10-2): effect_script_0045.s set
+    # SYSCTL_CRASH_DAMAGE before CalcCrit / CalcDamage, so a move that ran its script and did
+    # not connect (missed, protected) ends in subscript_missed.s, whose last call (:98) is
+    # subscript_crash_on_miss.s: without Magic Guard (CheckAbility) the user loses through
+    # UPDATE_HP (SYSCTL_SKIP_SPRITE_BLINK: no resist berry) Divide(damage, 2), capped at
+    # Divide(the defender's maxHP, 2) (:11-19; battleCtx->damage is negative there, so the cap
+    # is a lower bound). battleCtx->damage is CalcDamage's with hit 0's crit and roll, through
+    # the type chart of TRY_MOVE_STATE_CHECK_TYPE_CHART (run hit or miss, bcp.c:3271-3277: an
+    # immune target gives 0, which loses nothing). An immune target that connected deals 0
+    # damage and crashes for 0 too.
+    crash = can_act & has_target & ~connected & (tables.move_effect[used] == EffectId.CRASH)
+    crash = crash & (state.ability[side, user] != AbilityId.MAGIC_GUARD)
+    crash_crit = (outcome.crit[side, 0] != 0) & ~armored(state, side, target_side)
+    would = damage_for_roll(tables, state, side, used, crash_crit, outcome.roll[side, 0])
+    cap = divide(state.max_hp[target_side, target].astype(_I32), 2)
+    crash_loss = jnp.where(would > 0, jnp.minimum(divide(would, 2), cap), 0)
+    user_hp_now = state.hp[side, user].astype(_I32)
+    state = _set_mon(state, "hp", side, user, jnp.maximum(user_hp_now - crash_loss, 0), crash)
     # A direct sleep (a STATUS_FOE sleep move) on a living target that is not asleep, has no
     # Insomnia as the attacker sees it and meets FIELD_CONDITION_UPROAR: subscript_fall_asleep.s
     # :43-45 -> :_292 prints "...kept awake" and sets MOVE_STATUS_NO_MORE_WORK (:_330): no

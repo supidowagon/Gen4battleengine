@@ -267,6 +267,7 @@ _PROC_EFFECTS = (
     _E.SECONDARY_STAT_SELF,
     _E.SECONDARY_STAT_FOE,
     _E.SECONDARY_STATUS,
+    _E.RECOIL_STATUS,  # its status roll (effects._secondary_status, B10-1)
     _E.FLINCH,
     _E.FAKE_OUT,
     _E.RAISE_ALL_STATS_HIT,
@@ -303,6 +304,7 @@ class Reads(NamedTuple):
     infatuated_own: jnp.ndarray  # it moves in love at the start (its source stays)
     infatuated_by_foe: jnp.ndarray  # bool[2, 2]: it moves after a foe Attract that can work
     future_roll: jnp.ndarray  # its Future Sight can be set: TryFutureSight's roll[s, 0]
+    crash: jnp.ndarray  # its move crashes on a miss (EffectId.CRASH): crit / roll[s, 0] then too
 
 
 class OutcomeLaws(NamedTuple):
@@ -355,7 +357,10 @@ def _inflicts(tables: Tables, state: BattleState, moves, status) -> jnp.ndarray:
     ``TRI_ATTACK`` any of ``TRI_ATTACK_STATUSES``, effects._tri_attack), Secret Power by its
     terrain's effect (``order.move_effects``)."""
     effect, params = move_effects(tables, state, moves)
-    status_effect = _any_of(effect, (_E.STATUS_FOE, _E.SECONDARY_STATUS, _E.FANG_PARALYZE_FLINCH))
+    status_effect = _any_of(
+        effect,
+        (_E.STATUS_FOE, _E.SECONDARY_STATUS, _E.RECOIL_STATUS, _E.FANG_PARALYZE_FLINCH),
+    )
     tri = (effect == _E.TRI_ATTACK) & (status in TRI_ATTACK_STATUSES)
     return (status_effect & (params[..., 0] == status)) | tri
 
@@ -549,7 +554,8 @@ def _branch_masks(foe_first, first_self, base: dict) -> dict:
     # that cannot take it changes nothing (status eligibility), judged on the turn-start
     # state, which is the state of the hit when the user moves first with one hit.
     status_effect = _any_of(
-        b["effect"], (_E.SECONDARY_STATUS, _E.FANG_PARALYZE_FLINCH, _E.TRI_ATTACK)
+        b["effect"],
+        (_E.SECONDARY_STATUS, _E.RECOIL_STATUS, _E.FANG_PARALYZE_FLINCH, _E.TRI_ATTACK),
     )
     blocked = first_self & (
         (status_effect & b["status_blocked"])
@@ -677,6 +683,8 @@ INPUT_NEUTRAL_EFFECTS = (
     # The user's Attack and HP only (the foe's later hit reads the user's Defense and HP: the HP
     # clause covers HP).
     _E.BELLY_DRUM,
+    # B10-2: a hit, and on a miss its crash hurts the foe (the HP clause).
+    _E.CRASH,
 )
 INPUT_CLAUSE_EFFECTS = (
     _E.STAT_SELF,  # the foe's Defense / Sp. Def; Minimize's flag (Stomp's power)
@@ -689,6 +697,9 @@ INPUT_CLAUSE_EFFECTS = (
     _E.CURSE,  # the foe's Defense
     _E.STATUS_FOE,  # the attacker's burn, or any status under Guts
     _E.SECONDARY_STATUS,
+    # B10-1: its status like SECONDARY_STATUS's (the status clause); its recoil hurts the foe
+    # (the HP clause).
+    _E.RECOIL_STATUS,
     _E.REFLECT,  # the defender's side's screens
     _E.LIGHT_SCREEN,
     _E.MUD_SPORT,  # any side's sport (damage.py :6811, :6815)
@@ -957,6 +968,10 @@ TABLE_DAMAGE_EFFECTS = (
     _E.FALSE_SWIPE,
     # A plain hit (effect_script_0159.s: CalcCrit, CalcDamage); the uproar comes after it.
     _E.UPROAR,
+    # B10-1, B10-2: plain hits (CalcCrit, CalcDamage; Reckless is the attacker's fixed ability);
+    # the recoil and status come after the damage, and a crash reads the same table entry.
+    _E.RECOIL_STATUS,
+    _E.CRASH,
 )
 NON_TABLE_DAMAGE_EFFECTS = (
     _E.STAT_SELF,
@@ -1110,7 +1125,13 @@ def damage_inputs_can_change(
     unclassified = ~_any_of(foe_effect, INPUT_NEUTRAL_EFFECTS + INPUT_CLAUSE_EFFECTS)
     status_hit = _any_of(
         foe_effect,
-        (_E.STATUS_FOE, _E.SECONDARY_STATUS, _E.FANG_PARALYZE_FLINCH, _E.TRI_ATTACK),
+        (
+            _E.STATUS_FOE,
+            _E.SECONDARY_STATUS,
+            _E.RECOIL_STATUS,
+            _E.FANG_PARALYZE_FLINCH,
+            _E.TRI_ATTACK,
+        ),
     )
     foe_burns = _inflicts(tables, state, moves[::-1], Status.BURN)
     foe_move = uses_move[::-1] & (
@@ -1667,6 +1688,7 @@ def outcome_laws(
     )
     proc_effects = (
         _E.SECONDARY_STATUS,
+        _E.RECOIL_STATUS,
         _E.SECONDARY_CONFUSE,
         _E.TRAP,
         _E.FANG_PARALYZE_FLINCH,
@@ -1693,6 +1715,8 @@ def outcome_laws(
         infatuated_own=base["infatuated_own"],
         infatuated_by_foe=jnp.stack([m["infatuated_by_foe"] for m in branches]),
         future_roll=future_roll,
+        # B10-2: a miss or a Protect still reads hit 0's crit and roll (step._use_move's crash).
+        crash=off if loose else uses_move & (effect == _E.CRASH),
     )
     kind = jnp.where(
         effect == _E.TAUNT,
@@ -2128,6 +2152,11 @@ def _move_reads(laws: OutcomeLaws, branch: Branch, plan: ReadPlan) -> None:
             # roll[s, 0]: damage, Future Sight's stored damage, or a self-hit below.
             if i > 0 or bool(rel.crit[s, 0]) or bool(reads.future_roll[s]):
                 plan.path(("roll", (s, i)), "move", *hits)
+        # A crash move (B10-2) reads hit 0's crit and roll whether or not it hits (its crash on
+        # a miss or a Protect): a path of its own, unconditional (the flinch gate still applies).
+        if bool(reads.crash[s]):
+            plan.path(("crit", (s, 0)), "crash")
+            plan.path(("roll", (s, 0)), "crash")
         for name in (
             "n_hits",
             "magnitude",

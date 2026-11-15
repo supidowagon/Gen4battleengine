@@ -412,6 +412,8 @@ KAIZO_TRANSCRIBED: frozenset[int] = frozenset(
         198,  # RECOIL_THIRD: Expert_RecoilMove (:1747), no roll
         221,  # DOUBLE_POWER_WHEN_BELOW_HALF (Brine): Expert_Brine (:1765), :4882
         262,  # RECOIL_PARALYZE_HIT: Expert_RecoilMove (:1802), no roll
+        # E2 batch 10 (B10-1).
+        253,  # RECOIL_BURN_HIT (Flare Blitz): Expert_RecoilMove (:1796), no roll
         # E1 batch 9 (docs/ai/kaizo_roark.md 5.13).
         98,  # KO_MON_THAT_DEFEATED_USER: Expert_DestinyBond (:1694), :3346, :3351, :3356
         112,  # SET_SPIKES: Basic_CheckSpikes (:197); Expert_Spikes (:1702), :3595, :3602
@@ -519,6 +521,7 @@ KAIZO_EXPERT_LABELS: dict[int, tuple[str, int]] = {
     198: ("Expert_RecoilMove", 1747),
     221: ("Expert_Brine", 1765),
     262: ("Expert_RecoilMove", 1802),
+    253: ("Expert_RecoilMove", 1796),  # E2 batch 10: RECOIL_BURN_HIT (Flare Blitz)
     # E1 batch 9.
     98: ("Expert_DestinyBond", 1694),
     112: ("Expert_Spikes", 1702),
@@ -600,6 +603,7 @@ KAIZO_EXPERT_TRANSCRIBED: frozenset[int] = frozenset(
         198,  # RECOIL_THIRD: Expert_RecoilMove
         221,  # DOUBLE_POWER_WHEN_BELOW_HALF: Expert_Brine
         262,  # RECOIL_PARALYZE_HIT: Expert_RecoilMove
+        253,  # RECOIL_BURN_HIT: Expert_RecoilMove (E2 batch 10)
         98,  # KO_MON_THAT_DEFEATED_USER: Expert_DestinyBond
         112,  # SET_SPIKES: Expert_Spikes
         208,  # ATK_DEF_UP: Expert_StatusDefenseUp

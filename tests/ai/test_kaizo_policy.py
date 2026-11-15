@@ -1974,6 +1974,38 @@ def test_brine_resisted(kaizo_tables, kaizo_names, kaizo_roark_party):
     assert _delta(t, s, 0x3, 0x7)[0] == -1
 
 
+@pytest.mark.parametrize(
+    ("attacker", "player", "expected"),
+    [
+        (None, "Pikachu", 1),  # Bonsly's Rock Head, not resisted: +1 (:6289-6298)
+        (("Kadabra", 0, "Magic Guard"), "Pikachu", 1),  # :6297
+        (("Cranidos", 1, "Mold Breaker"), "Pikachu", 0),  # neither ability: nothing
+        (None, "Gible", 0),  # resisted (Fire into Dragon): nothing
+    ],
+)
+def test_flare_blitz_recoil_move(
+    kaizo_tables, kaizo_names, kaizo_roark_party, attacker, player, expected
+):
+    """E2 batch 10 (B10-1): RECOIL_BURN_HIT goes to Expert_RecoilMove (script.s:1796), the
+    label RECOIL_PARALYZE_HIT reaches (:1802). [Flare Blitz, Accelerock]."""
+    t, n = kaizo_tables, kaizo_names
+    abilities = np.asarray(t.species_abilities_decomp)
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Flare Blitz", "Accelerock", "", ""))
+    s = _with_player(t, s, n.species(player), 0, known=True)
+    if attacker:
+        name, slot, ability = attacker
+        species = n.species(name)
+        assert int(abilities[species, slot]) == c.ABILITY_IDS[ability]
+        s = s._replace(
+            species=s.species.at[1, 0].set(species),
+            ability_slot=s.ability_slot.at[1, 0].set(slot),
+        )
+    else:
+        bonsly = kaizo_roark_party[BONSLY]
+        assert int(abilities[bonsly.species, bonsly.ability_slot]) == ROCK_HEAD
+    assert _delta(t, s, 0x3, 0x7)[:2] == [expected, 0]
+
+
 @pytest.mark.parametrize("flags", SWEEP_FLAGS)
 def test_expert_only_hits_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, flags):
     """Exact == loose for one Kaizo move of each batch 7 effect, against a guessed Gible and
@@ -1986,7 +2018,7 @@ def test_expert_only_hits_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_ro
     for m in range(1, effect.shape[0]):
         pool.setdefault(int(effect[m]), m)
     pool[70] = n.move_names.index("Icy Wind")  # one that reaches Expert_StatusSpeedDown
-    groups = ((17, 43, 48, 70), (169, 171, 198, 221), (262, 0, 0, 0))
+    groups = ((17, 43, 48, 70), (169, 171, 198, 221), (262, 253, 0, 0))
     for moves in groups:
         ids = tuple(pool[e] if e else 0 for e in moves)
         for player in (GIBLE_SPECIES, 72):

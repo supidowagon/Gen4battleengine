@@ -7,26 +7,12 @@
   8's at 0936d40) and main bdb51d8 (merged at d6c3bab, backlog regenerated at 697a626). It is the
   merge-check tip: no batch 10 code is committed.
 - **Batch 10.** The plan is committed at e2f0d73 ("Batch 10" below: ten families). Family 1
-  (recoil and crash) is written but uncommitted, saved as
-  `G:/Farry/Claude Workspace/_scratch/e2/b10/wip_family1.patch` with `test_batch10.py` beside it
-  (re-apply with `git apply --3way` on the patch, then copy the test to `tests/engine/`). It
-  covers: `EffectId.RECOIL_STATUS` (80) for Volt Tackle's family 262 (paralysis) and Flare
-  Blitz's 253 (burn, thaws its frozen user; bcp.c:2481, :2730): recoil Divide(hitDamage, 3), then
-  the PROBABILISTIC status (battle_lib.c:1551-1567); `EffectId.CRASH` (81) for Jump Kick / Hi
-  Jump Kick 45: on a miss or a Protect the user loses min(Divide(damage, 2), Divide(defender
-  maxHP, 2)) of hit 0's crit and roll damage (subscript_crash_on_miss.s), Magic Guard excepted;
-  Reckless for 45 / 253 / 262 (`damage.RECKLESS_EFFECTS`); both engines, the laws
-  (`Reads.crash`: crit / roll[s, 0] read on a miss; the status lists, TABLE_DAMAGE_EFFECTS, the
-  input classification), build_tables (chance 0 refused for RECOIL_STATUS), the generator
-  (`strategies._draw_batch10`) and three hand tests. State reached: hand tests 3 passed,
-  test_damage_classes 46 passed, differential 150 (seed 1) clean; a second seed was stopped
-  unfinished. Not done: rulings B10-1 / B10-2 in the ledger, the commit, the backlog
-  regeneration, notes for E1 (new EffectIds RECOIL_STATUS, CRASH: the AI's #253 / #262 / #45
-  scripts are E1's). The patch also carries an older copy of the B9-13 hunk in enumerate.py,
-  now committed at 253afaf: expect that hunk to conflict and keep the committed version.
-  The tables (`data/*/tables.npz`, untracked) were rebuilt for the clean tip; rebuild both after
-  re-applying (`uv run python -m tools.build_tables`; `uv run --group rom python -m
-  tools.build_tables --game kaizo`).
+  (recoil and crash, B10-1 / B10-2) is committed with its AI scoring (Flare Blitz #253 into
+  Expert_RecoilMove; #262 and #45 were already transcribed by E1). Ownership (2026-11-15): E2
+  owns each move-effect family end to end, its AI scoring and tests in the same batch; E1's
+  branch claude/e1-prep-on-e2 holds the AI for Metal Burst, Future Sight, ACC_DOWN, Minimize,
+  Mean Look, Knock Off, Imprison, Copycat, Ingrain, Baton Pass, Helping Hand, SolarBeam: do not
+  redo those. Batches 3-9 await merge; batch 10 is the only batch allowed until then.
 - **Batch 9 follow-ups.** test_stage_b's six failing nodes are fixed (the exhaustive solver's
   unpack, B9-15) and confirmed: 6 passed (test_terminal_win_after_a_death_scores_zero_at_k0,
   test_win_after_a_new_death_scores_zero_at_k0, test_result_dict_round_trip,
@@ -1367,3 +1353,20 @@ Rules left out because another mechanic is missing; each closes with the mechani
   Dish, Aftermath, Hyper Cutter vs Intimidate, SonicBoom, the Kaizo recoil divisors, and the
   trapping abilities (`actions.trapped`: Shadow Tag vs Shadow Tag, Arena Trap vs Flying /
   Levitate / Gravity, Magnet Pull on Steel only, a fainted trapper).
+- B10-1 (batch 10, family 1) Volt Tackle's #262 and Flare Blitz's #253 are one effect,
+  `EffectId.RECOIL_STATUS` (80): params (status, recoil divisor 3, thaws_user). The scripts
+  (effect_script_0262.s, _0253.s) set the status under SYSCTL_APPLY_SECONDARY_EFFECT through the
+  PROBABILISTIC branch (battle_lib.c:1551-1567), then subscript_recoil_1_3.s takes
+  Divide(hitDamage, 3) from the user unless Rock Head or Magic Guard. Flare Blitz also thaws its
+  frozen user (bcp.c:2481 lets it act, :2730 thaws), as THAW_AND_BURN_HIT does. Chance 0 is
+  refused by build_tables. Reckless powers both (powerMul 12, as RECOIL). AI: both go to
+  Expert_RecoilMove (script.s:1796, :1802 -> :6289-6305); #253 added to the Kaizo transcribed
+  sets and the dispatch (#262 was E1's batch 7).
+- B10-2 (batch 10, family 1) Jump Kick / Hi Jump Kick #45 are `EffectId.CRASH` (81): a plain hit;
+  effect_script_0045.s sets SYSCTL_CRASH_DAMAGE before CalcCrit / CalcDamage, so a use that ran
+  its script and did not connect (missed or protected) ends in subscript_missed.s, whose
+  subscript_crash_on_miss.s (:11-19) takes min(Divide(damage, 2), Divide(defender maxHP, 2))
+  from the user, Magic Guard excepted. The damage is hit 0's crit and roll through the type
+  chart run hit or miss (bcp.c:3271-3277): an immune target gives 0. The laws read crit and
+  roll[s, 0] on a miss (`Reads.crash`). Reckless powers it. AI: #45 has no Expert_Main entry
+  (E1 batch 3 transcribed it generically).

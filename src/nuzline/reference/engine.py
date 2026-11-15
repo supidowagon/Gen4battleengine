@@ -937,9 +937,11 @@ def _move_damage(
     defender = 1 - attacker
     if _t(tables, "move_effect", move) in UNROLLED_EFFECTS:
         return _fixed_damage(tables, s, attacker, move)
-    # effect_script_0048.s, _0269.s: a Reckless user's RECOIL move sets powerMul to 12.
+    # effect_script_0048.s, _0269.s: a Reckless user's RECOIL move sets powerMul to 12; so do
+    # effect_script_0045.s (Jump Kick), _0253.s and _0262.s (B10-1, B10-2).
     if (
-        _t(tables, "move_effect", move) == EffectId.RECOIL
+        _t(tables, "move_effect", move)
+        in (EffectId.RECOIL, EffectId.RECOIL_STATUS, EffectId.CRASH)
         and _active(s, attacker).ability == AbilityId.RECKLESS
     ):
         power_mul = 12
@@ -2181,6 +2183,18 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
         # skip it (:5-6).
         if _active(s, side).ability not in (AbilityId.ROCK_HEAD, AbilityId.MAGIC_GUARD):
             _lose_hp(turn, s, side, _divide(dealt, p0))
+    elif effect == EffectId.RECOIL_STATUS and effective:
+        # effect_script_0262.s / _0253.s: the PROBABILISTIC branch (lib.c:1551-1567) rolls, keeps
+        # the roll only for a defender with HP, and always runs the subscript on a hit that hit:
+        # subscript_recoil_1_3.s (Rock Head, Magic Guard skip it), then the indirect paralysis /
+        # burn under SYSCTL_APPLY_SECONDARY_EFFECT (B10-1).
+        if dealt > 0 and _active(s, side).ability not in (
+            AbilityId.ROCK_HEAD,
+            AbilityId.MAGIC_GUARD,
+        ):
+            _lose_hp(turn, s, side, _divide(dealt, p1))
+        if proc and target_alive:
+            _inflict(turn, s, side, target, p0, False)
     elif effect == EffectId.STEALTH_ROCK and landed:
         # effect_script_0266.s: fails when the foe's side already has it.
         if not s.sides[target].stealth_rock:
@@ -2725,7 +2739,11 @@ def _status_disrupted(turn: _Turn, s: RefState, side: int, move: int) -> int:
     tables, o = turn.tables, turn.outcome
     sd, mon = s.sides[side], _active(s, side)
     effect = _t(tables, "move_effect", move)
-    thaw_move = effect == EffectId.SECONDARY_STATUS and _t(tables, "move_param", move, 2) == 1
+    # bcp.c:2481, :2730: THAW_AND_BURN_HIT and RECOIL_BURN_HIT (B10-1).
+    thaw_move = (
+        effect in (EffectId.SECONDARY_STATUS, EffectId.RECOIL_STATUS)
+        and _t(tables, "move_param", move, 2) == 1
+    )
 
     # CHECK_STATUS_STATE_SLEEP (bcp.c:2430): the counter drops by 1 (Early Bird is
     # unsupported); still asleep stops the move, waking up lets the checks go on. In an uproar
@@ -3122,6 +3140,16 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
     # stops the move, Battler_UnlockMoveChoice; subscript_missed.s unlocks too.
     if missed or _protected(turn, s, side, move, unleash):
         _unlock(s.sides[side])  # subscript_missed.s
+        if effect == EffectId.CRASH and mon.ability != AbilityId.MAGIC_GUARD:
+            # subscript_missed.s:98 -> subscript_crash_on_miss.s (SYSCTL_CRASH_DAMAGE from
+            # effect_script_0045.s): min(Divide(damage, 2), Divide(defender maxHP, 2)) of the
+            # script's damage (hit 0's crit and roll, the type chart run hit or miss), B10-2.
+            would = _move_damage(
+                tables, s, side, move, o.crit[side][0] != 0 and not _armored(s, side, 1 - side),
+                o.roll[side][0],
+            )  # fmt: skip
+            cap = _divide(_active(s, 1 - side).max_hp, 2)
+            _lose_hp(turn, s, side, min(_divide(would, 2), cap))
         # Bide's unleash defender is the last hitter (bcp.c:2702-2706): its moveHit.
         return move if unleash else record
     # effect_script_0111.s (Protect, Detect) -> subscript_protect.s -> BtlCmd_TryProtection
