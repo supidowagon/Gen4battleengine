@@ -2553,3 +2553,197 @@ def test_speed_faster_exact_equals_loose(
         layout = layout_for(t, flags, s2)
         assert policy.ai_refusals(t, s2, n, layout) == []
         _assert_exact_equals_loose(t, s2, layout)
+
+
+# --- E1 batch 12: sleep moves, Fake Out, Pluck, fixed-damage and counter moves, weather ------
+
+
+def _asleep(s, side: int):
+    return s._replace(status=s.status.at[side, 0].set(Status.SLEEP))
+
+
+@pytest.mark.parametrize(
+    ("move", "asleep", "basic", "expert"),
+    [
+        # Basic_CheckAttackerAsleep (script.s:660-663); Expert_SleepTalk (:3327-3333),
+        # Expert_Nightmare (:3314-3316)
+        ("Sleep Talk", False, -8, -5),
+        ("Sleep Talk", True, 0, 10),
+        ("Snore", False, -8, 2),
+        ("Snore", True, 0, 2),
+    ],
+)
+def test_sleep_moves(kaizo_tables, kaizo_names, kaizo_roark_party, move, asleep, basic, expert):
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, move, "Accelerock", "", ""))
+    if asleep:
+        s = _asleep(s, 1)
+    assert _delta(t, s, 0x2, 0x3)[0] == basic
+    assert _delta(t, s, 0x3, 0x7)[0] == expert
+
+
+@pytest.mark.parametrize(("first", "basic"), [(True, 0), (False, -10)])
+def test_fake_out(kaizo_tables, kaizo_names, kaizo_roark_party, first, basic):
+    """Basic_CheckFirstTurnInBattle (script.s:829-833); Expert_FakeOut (:4074-4076) +2."""
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Fake Out", "Accelerock", "", ""))
+    if not first:
+        s = _turn(s, 3)
+    assert _delta(t, s, 0x2, 0x3)[0] == basic
+    assert _delta(t, s, 0x3, 0x7)[0] == 2
+
+
+@pytest.mark.parametrize(
+    ("player_hp", "expected"),
+    [(100, 0), (51, 0), (50, -1)],  # Expert_SuperFang (script.s:2800-2806)
+)
+def test_expert_super_fang(kaizo_tables, kaizo_names, kaizo_roark_party, player_hp, expected):
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Super Fang", "Accelerock", "", ""))
+    assert _delta(t, _hp(s, 0, player_hp), 0x3, 0x7)[0] == expected
+
+
+def test_basic_non_standard_damage_immune(kaizo_tables, kaizo_names, kaizo_roark_party):
+    """Basic_CheckNonStandardDamageOrChargeTurn (script.s:575): Super Fang (Normal) against a
+    Ghost is immune, -10; against Gible, nothing."""
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Super Fang", "Accelerock", "", ""))
+    assert _delta(t, s, 0x2, 0x3)[0] == 0
+    ghost = _with_player(t, s, n.species_names.index("Gastly"), 0, known=True)
+    assert _delta(t, ghost, 0x2, 0x3)[0] == -10
+
+
+@pytest.mark.parametrize(
+    ("speed", "hp", "jumps", "expected"),
+    [
+        # Expert_Reversal (script.s:3362-3395); the AI at Speed 100
+        ("faster", 100, (), -1),  # above 33 %: -1
+        ("faster", 25, (), 0),  # 21-33 %: nothing
+        ("faster", 10, (), 1),  # 8-20 %: +1 unless :3388 jumps
+        ("faster", 10, (3388,), 0),
+        ("faster", 5, (), 2),  # below 8 %: +1, then the try
+        ("slower", 70, (), -1),  # above 60 %: -1
+        ("slower", 50, (), 0),  # 41-60 %: nothing
+        ("slower", 30, (), 1),  # 40 % or less: the try
+    ],
+)
+def test_expert_reversal(kaizo_tables, kaizo_names, kaizo_roark_party, speed, hp, jumps, expected):
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Reversal", "Accelerock", "", ""))
+    s = _hp(_speeds(s, player=1 if speed == "faster" else 500, opp=100), 1, hp)
+    assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expected
+
+
+@pytest.mark.parametrize(
+    ("speed", "hp", "stage", "expected"),
+    [
+        # Expert_Superpower (script.s:4467-4488), Fighting against Gible (neutral)
+        ("faster", 100, 0, -1),  # faster above 40 %: -1
+        ("faster", 40, 0, 0),
+        ("slower", 100, 0, -1),  # slower at 60 % or more: -1
+        ("slower", 59, 0, 0),
+        ("faster", 40, -1, -1),  # Attack below +0: -1
+    ],
+)
+def test_expert_superpower(
+    kaizo_tables, kaizo_names, kaizo_roark_party, speed, hp, stage, expected
+):
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Superpower", "Accelerock", "", ""))
+    s = _hp(_speeds(s, player=1 if speed == "faster" else 500, opp=100), 1, hp)
+    s = s._replace(stages=s.stages.at[1, Stat.ATK].set(stage))
+    assert _delta(t, s, 0x3, 0x7)[0] == expected
+
+
+@pytest.mark.parametrize(
+    ("turn", "jumps", "expected"),
+    [
+        # Expert_Pluck (script.s:4957-4980), Flying against Gible (neutral)
+        (0, (), 2),  # first turn: +1 unless :4968 jumps, then +1 unless :4972 jumps
+        (0, (4968,), 1),
+        (0, (4968, 4972), 0),
+        (3, (), 1),  # a later turn: only the :4972 try
+    ],
+)
+def test_expert_pluck(kaizo_tables, kaizo_names, kaizo_roark_party, turn, jumps, expected):
+    t, n = kaizo_tables, kaizo_names
+    s = _turn(_state(t, kaizo_roark_party, BONSLY, _ids(n, "Pluck", "Accelerock", "", "")), turn)
+    assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expected
+
+
+@pytest.mark.parametrize(
+    ("move", "last", "case", "jumps", "expected"),
+    [
+        # Expert_Counter (script.s:3095-3163) / Expert_MirrorCoat (:3852-3920), the AI at
+        # 100 % HP unless "low hp"
+        ("Counter", "", "asleep", (), -1),
+        ("Counter", "Tackle", "", (), 1),  # not taunted: no :3130 try; physical +1 unless :3136
+        ("Counter", "Tackle", "", (3136,), 0),
+        ("Counter", "Tackle", "taunted", (), 2),  # the :3130 +1 too
+        ("Counter", "Water Gun", "", (), -1),  # a special last move: -1
+        ("Counter", "", "", (), 0),  # no last move; Gible is Ground, a physical type: nothing
+        ("Counter", "", "Psyduck", (), 4),  # a Water player: the +4 try (:3150, :3153)
+        ("Counter", "", "Psyduck", (3150,), 0),
+        ("Counter", "", "low hp", (), -2),  # 20 % HP: :3116 and :3121 each -1
+        ("Mirror Coat", "Water Gun", "", (), 1),
+        ("Mirror Coat", "Tackle", "", (), -1),
+        ("Mirror Coat", "", "", (), 4),  # Gible has no special type: the +4 try
+    ],
+)
+def test_expert_counter_mirror_coat(
+    kaizo_tables, kaizo_names, kaizo_roark_party, move, last, case, jumps, expected
+):
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, move, "Accelerock", "", ""))
+    s = _hp(s, 1, 20 if case == "low hp" else 100)
+    if case == "asleep":
+        s = _asleep(s, 0)
+    if last:
+        s = s._replace(last_move=s.last_move.at[0].set(n.move_names.index(last)))
+    if case == "taunted":
+        s = s._replace(taunt=s.taunt.at[0].set(3))
+    if case == "Psyduck":
+        s = _with_player(t, s, n.species_names.index("Psyduck"), 0, known=True)
+    assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expected
+
+
+@pytest.mark.parametrize(
+    ("move", "weather", "hp", "basic", "expert"),
+    [
+        # Basic_CheckRainDance (script.s:786-801) / Expert_RainDance (:3737-3771), the AI
+        # faster (no Swift Swim read); Basic_CheckHail (:853-871) / Expert_Hail (:4089-4119)
+        ("Rain Dance", Weather.NONE, 100, 0, 0),
+        ("Rain Dance", Weather.SUN, 100, 0, 1),
+        ("Rain Dance", Weather.RAIN, 100, -8, 0),
+        ("Rain Dance", Weather.NONE, 30, 0, -1),
+        ("Hail", Weather.NONE, 100, 0, 0),
+        ("Hail", Weather.SUN, 100, 0, 1),
+        ("Hail", Weather.HAIL, 100, -8, 0),
+        ("Hail", Weather.NONE, 30, 0, -1),
+    ],
+)
+def test_weather_moves(
+    kaizo_tables, kaizo_names, kaizo_roark_party, move, weather, hp, basic, expert
+):
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, move, "Accelerock", "", ""))
+    s = _hp(_speeds(s, player=1, opp=100), 1, hp)
+    s = s._replace(weather=jnp.asarray(weather, s.weather.dtype))
+    assert _delta(t, s, 0x2, 0x3)[0] == basic
+    assert _delta(t, s, 0x3, 0x7)[0] == expert
+
+
+@pytest.mark.parametrize("flags", [0x17, 0x10F])
+def test_batch12_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, flags):
+    """Exact == loose on a fight of batch 12's rolling labels (Counter, Mirror Coat, Pluck,
+    Reversal), at equal speed and not, with the player's last move physical, special or
+    none."""
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Counter", "Mirror Coat", "Pluck", "Reversal"))
+    for player_speed, last, hp in ((100, "Tackle", 25), (1, "Water Gun", 100), (500, "", 60)):
+        s2 = _hp(_speeds(s, player=player_speed, opp=100), 1, hp)
+        move = n.move_names.index(last) if last else 0
+        s2 = s2._replace(last_move=s2.last_move.at[0].set(move))
+        layout = layout_for(t, flags, s2)
+        assert policy.ai_refusals(t, s2, n, layout) == []
+        _assert_exact_equals_loose(t, s2, layout)

@@ -642,6 +642,35 @@ Both Expert labels compare for `COMPARE_SPEED_FASTER`, so the equal-speed tie de
 - `Expert_Payback` (`:1773`; `:5169-5187`): resisted -1; else faster than the player or below
   30 % HP, nothing; else +1 unless the 64 roll (`:5179`) jumps.
 
+### 5.16 Sleep moves, Fake Out, Pluck, counters and weather moves (E1 batch 12)
+
+USE_RANDOM_LEARNED_MOVE_SLEEP (97), DAMAGE_WHILE_ASLEEP (92), ALWAYS_FLINCH_FIRST_TURN_ONLY
+(158), EAT_BERRY (224), HALVE_HP (40), INCREASE_POWER_WITH_LESS_HP (99), COUNTER (89),
+MIRROR_COAT (144), LOWER_OWN_ATK_AND_DEF (182), WEATHER_RAIN (136), WEATHER_HAIL (164).
+- BASIC: `Basic_CheckAttackerAsleep` (`:660-663`; dispatch `:189`, `:191`): the attacker not
+  asleep -8. `Basic_CheckFirstTurnInBattle` (`:829-833`; `:224`): not its first turn -10.
+  `Basic_CheckNonStandardDamageOrChargeTurn` (`:572-585`; `:159`, `:187`, `:192`, `:218`,
+  `:237`): immune -10; against Wonder Guard (a guessing read) unless Mold Breaker or super
+  effective -10. `Basic_CheckRainDance` (`:786-801`; `:214`): without Swift Swim or Hydration,
+  against a statused Hydration player -8; in rain -8. `Basic_CheckHail` (`:853-871`; `:228`):
+  in hail -8; against Ice Body -8, +8 back with the AI's own Ice Body.
+- EXPERT: `Expert_SleepTalk` (`:3327-3333`): asleep +10, else -5. `Expert_Nightmare` (Snore,
+  `:3314-3316`) and `Expert_FakeOut` (`:4074-4076`): +2. `Expert_SuperFang` (`:2800-2806`):
+  the player at 50 % HP or less -1. `Expert_Reversal` (`:3362-3395`): HP bands by the SLOWER
+  compare, then +1 unless the 100 roll (`:3388`) jumps. `Expert_Counter` / `_MirrorCoat`
+  (`:3095-3163`, `:3852-3920`, one shape, `policy._counter_like`): seven rolls each (10 and
+  100 at low HP, 100 per try, 50 before the +4 try); the type tables are
+  `commands.COUNTER_PHYSICAL_TYPES` / `MIRROR_COAT_SPECIAL_TYPES` (`:3165-3175`, `:3922-3931`);
+  the new command `IfTargetIsNotTaunted` (`trainer_ai.c:2620-2628`). `Expert_Superpower`
+  (`:4467-4488`), `Expert_RainDance` (`:3737-3771`, a FASTER compare, Ruling R8),
+  `Expert_Hail` (`:4089-4119`), `Expert_Pluck` (`:4957-4980`, rolls `:4968`, `:4972`).
+- Waiting: Protect (`Expert_Protect`, `:3502-3586`) reads Curse, Perish Song, Yawn and Lock-On,
+  which `BattleState` does not hold; Metal Burst (`Basic_CheckMetalBurst`, `:1160-1182`) reads
+  the AI's record of the player's held item (`aiContext.battlerHeldItems`,
+  `battle_script.c:12121`), which `BattleState` does not hold either. Both wait for the
+  managing session's decision. The fixed- and alternative-power moves of
+  `sAltPowerMoveEffects` (`trainer_ai.c:48-61`) stay refused in the AI damage estimate.
+
 ## 6. Where the AI reads the true battle state
 
 roark.md 6 holds: the damage estimate, the kill check and the effectiveness class read the

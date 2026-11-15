@@ -255,6 +255,25 @@ SITE_N: dict[int, int] = {
     4992: 64,  # Expert_Tailwind (jump: nothing)
     4996: 64,  # Expert_Tailwind, 31-75 % HP (+1 when it does NOT jump)
     5179: 64,  # Expert_Payback (+1 when it does NOT jump)
+    # E1 batch 12.
+    3388: 100,  # Expert_Reversal_TryScorePlus1 (+1 when it does NOT jump)
+    4968: 64,  # Expert_Pluck, first turn (+1 when it does NOT jump)
+    4972: 128,  # Expert_Pluck_TryScorePlus1 (+1 when it does NOT jump)
+    # Expert_Counter (:3116-3153) and Expert_MirrorCoat (:3873-3910), in line order
+    3116: 10,
+    3121: 100,
+    3130: 100,
+    3136: 100,
+    3142: 100,
+    3150: 50,
+    3153: 100,
+    3873: 10,
+    3878: 100,
+    3887: 100,
+    3893: 100,
+    3899: 100,
+    3907: 50,
+    3910: 100,
 }
 SITE_LINES = tuple(SITE_N)
 # The flat (vanilla) layout's column of script_roll_sites that each line reads: column 0 is
@@ -386,6 +405,18 @@ KAIZO_TRANSCRIBED: frozenset[int] = frozenset(
         # COMPARE_SPEED_FASTER, whose tie is a read (E1 Ruling R8).
         225,  # DOUBLE_SPEED_3_TURNS: Basic_CheckTailwind (:259); Expert_Tailwind (:1768), :4992, :4996
         230,  # DOUBLE_POWER_IF_MOVING_SECOND: Expert_Payback (:1773), :5179
+        # E1 batch 12 (docs/ai/kaizo_roark.md 5.16).
+        40,  # HALVE_HP: Basic_CheckNonStandardDamageOrChargeTurn (:159); Expert_SuperFang (:1658)
+        89,  # COUNTER: Basic_CheckNonStandard... (:187); Expert_Counter (:1688)
+        92,  # DAMAGE_WHILE_ASLEEP: Basic_CheckAttackerAsleep (:189); Expert_Nightmare (:1691)
+        97,  # USE_RANDOM_LEARNED_MOVE_SLEEP: Basic_CheckAttackerAsleep (:191); Expert_SleepTalk
+        99,  # INCREASE_POWER_WITH_LESS_HP: Basic_CheckNonStandard... (:192); Expert_Reversal
+        136,  # WEATHER_RAIN: Basic_CheckRainDance (:214); Expert_RainDance (:1710)
+        144,  # MIRROR_COAT: Basic_CheckNonStandard... (:218); Expert_MirrorCoat (:1714)
+        158,  # ALWAYS_FLINCH_FIRST_TURN_ONLY: Basic_CheckFirstTurnInBattle (:224); Expert_FakeOut
+        164,  # WEATHER_HAIL: Basic_CheckHail (:228); Expert_Hail (:1726)
+        182,  # LOWER_OWN_ATK_AND_DEF: Basic_CheckNonStandard... (:237); Expert_Superpower
+        224,  # EAT_BERRY: Expert_Pluck (:1767)
     }
 )
 # The transcribed effects (KAIZO_TRANSCRIBED) whose Expert_Main entry goes to a label added
@@ -450,6 +481,18 @@ KAIZO_EXPERT_LABELS: dict[int, tuple[str, int]] = {
     # E1 batch 11.
     225: ("Expert_Tailwind", 1768),
     230: ("Expert_Payback", 1773),
+    # E1 batch 12.
+    40: ("Expert_SuperFang", 1658),
+    89: ("Expert_Counter", 1688),
+    92: ("Expert_Nightmare", 1691),
+    97: ("Expert_SleepTalk", 1693),
+    99: ("Expert_Reversal", 1695),
+    136: ("Expert_RainDance", 1710),
+    144: ("Expert_MirrorCoat", 1714),
+    158: ("Expert_FakeOut", 1723),
+    164: ("Expert_Hail", 1726),
+    182: ("Expert_Superpower", 1735),
+    224: ("Expert_Pluck", 1767),
 }
 # Of KAIZO_EXPERT_LABELS, the effects whose Expert label policy._expert transcribes
 # (layout.KAIZO expert_transcribed), written out: it is not derived from the table, so an
@@ -503,6 +546,17 @@ KAIZO_EXPERT_TRANSCRIBED: frozenset[int] = frozenset(
         65,  # SET_REFLECT: Expert_Reflect
         225,  # DOUBLE_SPEED_3_TURNS: Expert_Tailwind
         230,  # DOUBLE_POWER_IF_MOVING_SECOND: Expert_Payback
+        40,  # HALVE_HP: Expert_SuperFang
+        89,  # COUNTER: Expert_Counter
+        92,  # DAMAGE_WHILE_ASLEEP: Expert_Nightmare
+        97,  # USE_RANDOM_LEARNED_MOVE_SLEEP: Expert_SleepTalk
+        99,  # INCREASE_POWER_WITH_LESS_HP: Expert_Reversal
+        136,  # WEATHER_RAIN: Expert_RainDance
+        144,  # MIRROR_COAT: Expert_MirrorCoat
+        158,  # ALWAYS_FLINCH_FIRST_TURN_ONLY: Expert_FakeOut
+        164,  # WEATHER_HAIL: Expert_Hail
+        182,  # LOWER_OWN_ATK_AND_DEF: Expert_Superpower
+        224,  # EAT_BERRY: Expert_Pluck
     }
 )
 assert set(KAIZO_EXPERT_LABELS) <= KAIZO_TRANSCRIBED

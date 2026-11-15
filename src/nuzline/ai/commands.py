@@ -253,6 +253,15 @@ class BattleEffect(IntEnum):
     DOUBLE_POWER_WHEN_BELOW_HALF = 221  # Brine
     DOUBLE_SPEED_3_TURNS = 225  # Tailwind
     DOUBLE_POWER_IF_MOVING_SECOND = 230  # Payback, Revenge
+    HALVE_HP = 40  # Super Fang
+    COUNTER = 89  # Counter
+    DAMAGE_WHILE_ASLEEP = 92  # Snore
+    USE_RANDOM_LEARNED_MOVE_SLEEP = 97  # Sleep Talk
+    INCREASE_POWER_WITH_LESS_HP = 99  # Flail, Reversal
+    MIRROR_COAT = 144  # Mirror Coat
+    ALWAYS_FLINCH_FIRST_TURN_ONLY = 158  # Fake Out
+    LOWER_OWN_ATK_AND_DEF = 182  # Superpower, Close Combat
+    EAT_BERRY = 224  # Pluck, Bug Bite
     TOXIC_SPIKES = 249
     RECOIL_PARALYZE_HIT = 262
     STEALTH_ROCK = 266
@@ -680,6 +689,11 @@ ABILITY_IDS = {
     "Poison Heal": 90,
     "Leaf Guard": 102,
     "Hydration": 93,
+    # Basic_CheckRainDance / Expert_RainDance (script.s:789, :3749, :3758), Basic_CheckHail /
+    # Expert_Hail (:860, :868, :4110); generated/abilities.txt.
+    "Swift Swim": 33,
+    "Rain Dish": 44,
+    "Ice Body": 115,
     # Expert_RecoilMove (script.s:6297-6298; Magic Guard above).
     "Rock Head": 69,
     # E1 batch 6: Basic_CheckCannotSleep / _Confuse / _Paralyze / _Attract / _Burn
@@ -722,6 +736,10 @@ MOVE_IDS = {
     "GrassWhistle": 320,
     "Bug Buzz": 405,
     "Chatter": 448,
+    # Expert_Counter / Expert_MirrorCoat (script.s:3125, :3882), Expert_Hail (:4105).
+    "Counter": 68,
+    "Mirror Coat": 243,
+    "Blizzard": 59,
 }
 SOUND_MOVES = tuple(
     MOVE_IDS[n]
@@ -749,7 +767,24 @@ TYPE_IDS = {
     "Water": 11,
     "Electric": 13,
     "Psychic": 14,
+    # Expert_Counter_PhysicalTypes / Expert_MirrorCoat_SpecialTypes (script.s:3165-3175,
+    # :3922-3931); generated/pokemon_types.txt (line n + 1 is n).
+    "Normal": 0,
+    "Fighting": 1,
+    "Flying": 2,
+    "Rock": 5,
+    "Bug": 6,
+    "Ice": 15,
+    "Dragon": 16,
+    "Dark": 17,
 }
+COUNTER_PHYSICAL_TYPES = tuple(
+    TYPE_IDS[n]
+    for n in ("Normal", "Fighting", "Flying", "Poison", "Ground", "Rock", "Bug", "Ghost", "Steel")
+)
+MIRROR_COAT_SPECIAL_TYPES = tuple(
+    TYPE_IDS[n] for n in ("Fire", "Water", "Grass", "Electric", "Psychic", "Ice", "Dragon", "Dark")
+)
 ITEM_EXPERT_BELT = 268  # HOLD_EFFECT_POWER_UP_SE
 _TRAPPING = jnp.array([ABILITY_IDS[n] for n in ("Shadow Tag", "Magnet Pull", "Arena Trap")], _I32)
 
@@ -1085,6 +1120,12 @@ def _slot_read(ctx: AiContext, takes) -> tuple[AiContext, jnp.ndarray]:
 
 
 # --- The command functions, one per row of docs/ai/script_commands.md -------------
+
+
+def if_target_is_not_taunted(ctx: AiContext) -> AiContext:
+    """``IfTargetIsNotTaunted`` (trainer_ai.c:2620-2628): jumps when the defender's
+    ``moveEffectsData.tauntedTurns`` is 0 (``BattleState.taunt``, turns left)."""
+    return _jump(ctx, ctx.state.taunt[_side(Battler.DEFENDER)] == 0)
 
 
 def if_target_is_partner(ctx: AiContext) -> AiContext:

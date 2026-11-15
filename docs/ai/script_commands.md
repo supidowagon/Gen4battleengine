@@ -71,7 +71,8 @@ test in `tests/ai/test_kaizo_commands.py`, which also checks this table against 
 | `IfVolatileStatus` | battler, `VOLATILE_CONDITION_*` mask, `jump` | Jumps when `statusVolatile & mask` (`:676-686`). Only `VOLATILE_CONDITION_CONFUSION` (`BattleState.confusion`) and `VOLATILE_CONDITION_ATTRACT` (`.infatuated`) are supported (`commands.VolatileCondition`; `include/constants/battle/condition.h:32-34`, `:48-51`, `:65`, `:70`); any other mask is refused at trace time. | no | `if_volatile_status` |
 | `IfMoveEffect` | battler, `MOVE_EFFECT_*` mask, `jump` | Jumps when `moveEffectsMask & mask` (`:704-714`). Only `MOVE_EFFECT_LEECH_SEED` (`BattleState.leech_seed` of the seeded battler's side; `include/constants/battle/moves.h:10`) is supported; any other mask is refused at trace time. | no | `if_move_effect` |
 | `LoadGender` | battler | Sets `calcTemp` to `battleMons[battler].gender` (`:2470-2477`): `BattleState.gender` of the side's active Pokemon, 0 male, 1 female, 2 none (`generated/genders.txt`). | no | `load_gender` |
+| `IfTargetIsNotTaunted` | `jump` | Jumps when the defender's `moveEffectsData.tauntedTurns` is 0 (`:2620-2628`): `BattleState.taunt` of side `_side(DEFENDER)`, turns left. | no | `if_target_is_not_taunted` |
 | `LoadTurnCount` | none | Sets `calcTemp` to `totalTurns` (`:931-935`), `BattleState.turn` at a decision: 0 on the battle's first turn (the battle increments it once a turn ends, `battle_controller_player.c:1852`). SETUP_FIRST_TURN (`script.s:6421`) and WEATHER (`:7983`) use it. | no | `load_turn_count` |
 
-**Count check.** `grep -c '^|' docs/ai/script_commands.md` gives 49: 47 command rows
+**Count check.** `grep -c '^|' docs/ai/script_commands.md` gives 50: 48 command rows
 plus the header and separator lines (`test_script_commands_table_matches_the_module`).

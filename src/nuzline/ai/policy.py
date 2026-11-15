@@ -633,6 +633,69 @@ def _basic_check_tailwind(ctx: AiContext, mask) -> AiContext:
     return c.pop_or_end(_score(ctx, t, -10))
 
 
+def _basic_check_non_standard_damage(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckNonStandardDamageOrChargeTurn`` (script.s:572-585): immune -10; against
+    Wonder Guard (a guessing read), unless the attacker has Mold Breaker or the move is
+    super effective, -10."""
+    ctx = _at(ctx, mask)
+    ctx, t = _split(c.if_move_effectiveness_equals(ctx, TypeMulti.IMMUNE))
+    ctx = _score(ctx, t, -10)
+    ctx = c.load_battler_ability(ctx, _D)
+    ctx, _ = _split(c.if_loaded_not_equal_to(ctx, _ABILITY["Wonder Guard"]))  # -> _Terminate
+    ctx = c.load_battler_ability(ctx, _A)
+    ctx, _ = _split(c.if_loaded_equal_to(ctx, _ABILITY["Mold Breaker"]))
+    ctx, _ = _split(c.if_move_effectiveness_equals(ctx, TypeMulti.DOUBLE))
+    ctx, _ = _split(c.if_move_effectiveness_equals(ctx, TypeMulti.QUADRUPLE))
+    ctx, t = _split(c.go_to(ctx))  # -> ScoreMinus10
+    return _score(ctx, t, -10)
+
+
+def _basic_check_attacker_asleep(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckAttackerAsleep`` (script.s:660-663): the attacker not asleep, -8."""
+    ctx, t = _split(c.if_not_status(_at(ctx, mask), _A, c.MonCondition.SLEEP))
+    return c.pop_or_end(_score(ctx, t, -8))
+
+
+def _basic_check_first_turn(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckFirstTurnInBattle`` (script.s:829-833): not the attacker's first turn in
+    battle, -10."""
+    ctx = c.load_is_first_turn_in_battle(_at(ctx, mask), _A)
+    ctx, t = _split(c.if_loaded_equal_to(ctx, 0))
+    return c.pop_or_end(_score(ctx, t, -10))
+
+
+def _basic_check_rain_dance(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckRainDance`` (script.s:786-801): unless the attacker has Swift Swim or
+    Hydration, against a statused Hydration player (a guessing read) -8; then in rain -8."""
+    ctx = c.load_battler_ability(_at(ctx, mask), _A)
+    ctx, rain = _split(c.if_loaded_equal_to(ctx, _ABILITY["Swift Swim"]))
+    ctx, t = _split(c.if_loaded_equal_to(ctx, _ABILITY["Hydration"]))
+    rain = rain | t
+    ctx = c.load_battler_ability(ctx, _D)
+    ctx, t = _split(c.if_loaded_not_equal_to(ctx, _ABILITY["Hydration"]))
+    rain = rain | t
+    ctx, t = _split(c.if_status(ctx, _D, c.MonCondition.ANY))
+    ctx = _score(ctx, t, -8)
+    # Basic_CheckCurrentWeatherIsRain (:797)
+    ctx = c.load_current_weather(_at(ctx, rain | ctx.live))
+    ctx, t = _split(c.if_loaded_equal_to(ctx, int(c.AiWeather.RAINING)))
+    return c.pop_or_end(_score(ctx, t, -8))
+
+
+def _basic_check_hail(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckHail`` (script.s:853-871): in hail -8; else against an Ice Body player (a
+    guessing read) -8, and +8 back when the attacker has Ice Body too."""
+    ctx = c.load_current_weather(_at(ctx, mask))
+    ctx, t = _split(c.if_loaded_equal_to(ctx, int(c.AiWeather.HAILING)))
+    ctx = _score(ctx, t, -8)
+    ctx = c.load_battler_ability(ctx, _D)
+    ctx, _ = _split(c.if_loaded_not_equal_to(ctx, _ABILITY["Ice Body"]))  # -> _Terminate
+    ctx = c.add_to_move_score(ctx, -8)
+    ctx = c.load_battler_ability(ctx, _A)
+    ctx, _ = _split(c.if_loaded_not_equal_to(ctx, _ABILITY["Ice Body"]))  # -> _Terminate
+    return c.pop_or_end(c.add_to_move_score(ctx, 8))
+
+
 def _basic_check_defense(ctx: AiContext, mask) -> AiContext:
     """``Basic_CheckLowStatStage_Defense`` (script.s:434-473)."""
     # Basic_CheckLowStatStage_Defense (:434)
@@ -1284,6 +1347,217 @@ def _expert_payback(ctx: AiContext, mask) -> AiContext:
     return c.pop_or_end(c.add_to_move_score(_at(ctx, minus1), -1))
 
 
+def _expert_plus(value: int):
+    """``Expert_Nightmare`` (script.s:3314-3316) and ``Expert_FakeOut`` (:4074-4076):
+    ``AddToMoveScore value``."""
+
+    def label(ctx: AiContext, mask) -> AiContext:
+        return c.pop_or_end(c.add_to_move_score(_at(ctx, mask), value))
+
+    return label
+
+
+def _expert_sleep_talk(ctx: AiContext, mask) -> AiContext:
+    """``Expert_SleepTalk`` (script.s:3327-3333): asleep +10, else -5."""
+    ctx, t = _split(c.if_status(_at(ctx, mask), _A, c.MonCondition.SLEEP))
+    ctx = _score(ctx, t, 10)
+    return c.pop_or_end(c.add_to_move_score(ctx, -5))
+
+
+def _expert_super_fang(ctx: AiContext, mask) -> AiContext:
+    """``Expert_SuperFang`` (script.s:2800-2806): the player at 50 % HP or less, -1."""
+    ctx, _ = _split(c.if_hp_percent_greater_than(_at(ctx, mask), _D, 50))  # -> _End
+    return c.pop_or_end(c.add_to_move_score(ctx, -1))
+
+
+def _expert_reversal(ctx: AiContext, mask) -> AiContext:
+    """``Expert_Reversal`` (script.s:3362-3395): faster or tied, above 33 % HP -1, above 20 %
+    nothing, below 8 % +1; slower, above 60 % -1, above 40 % nothing; then +1 unless the 100
+    roll (:3388) jumps."""
+    ctx = _at(ctx, mask)
+    ctx, slower = _split(c.if_speed_compare_equal_to(ctx, COMPARE_SPEED_SLOWER))
+    ctx, minus1 = _split(c.if_hp_percent_greater_than(ctx, _A, 33))
+    ctx, _ = _split(c.if_hp_percent_greater_than(ctx, _A, 20))  # -> _End
+    ctx, plus1 = _split(c.if_hp_percent_less_than(ctx, _A, 8))
+    ctx, try_plus1 = _split(c.go_to(ctx))
+    # Expert_Reversal_SlowerCheckHP (:3379)
+    ctx = _at(ctx, slower)
+    ctx, t = _split(c.if_hp_percent_greater_than(ctx, _A, 60))
+    minus1 = minus1 | t
+    ctx, _ = _split(c.if_hp_percent_greater_than(ctx, _A, 40))  # -> _End
+    ctx, t = _split(c.go_to(ctx))
+    try_plus1 = try_plus1 | t
+    # Expert_Reversal_ScorePlus1 (:3384), falling into _TryScorePlus1 (:3387)
+    ctx = c.add_to_move_score(_at(ctx, plus1), 1)
+    ctx = _at(ctx, try_plus1 | ctx.live)
+    ctx, _ = _split(c.if_random_less_than(ctx, 100, 3388))  # -> _End
+    ctx = c.add_to_move_score(ctx, 1)
+    ctx, _ = _split(c.go_to(ctx))  # -> _End
+    # Expert_Reversal_ScoreMinus1 (:3392)
+    return c.pop_or_end(c.add_to_move_score(_at(ctx, minus1), -1))
+
+
+def _counter_like(label: str, other: str, cls: int, types: tuple[int, ...], lines):
+    """``Expert_Counter`` (script.s:3095-3163) and ``Expert_MirrorCoat`` (:3852-3920), the same
+    shape: the player asleep, infatuated or confused -1; at 30 % HP or less -1 unless the 10
+    roll jumps; at 50 % or less -1 unless the 100 roll jumps; knowing the other move, +4
+    unless its 100 roll jumps; else with the player's last move a damaging one, +1 unless
+    not taunted or its roll jumps, then its class not ``cls`` -1, else +1 unless its roll
+    jumps; with no damaging last move, +1 unless not taunted or its roll jumps, then a player
+    of a type in ``types`` nothing, else unless the 50 roll jumps, the +4 try. ``lines`` are
+    the rolls in line order."""
+    low, half, last, cls_roll, no_last, types_roll, plus4_line = lines
+
+    def run(ctx: AiContext, mask) -> AiContext:
+        ctx = _at(ctx, mask)
+        ctx, minus1 = _split(c.if_status(ctx, _D, c.MonCondition.SLEEP))
+        for cond in (c.VolatileCondition.ATTRACT, c.VolatileCondition.CONFUSION):
+            ctx, t = _split(c.if_volatile_status(ctx, _D, cond))
+            minus1 = minus1 | t
+        ctx, above = _split(c.if_hp_percent_greater_than(ctx, _A, 30))
+        ctx, t = _split(c.if_random_less_than(ctx, 10, low))
+        ctx = c.add_to_move_score(ctx, -1)
+        # _CheckAboveHalfHP
+        ctx = _at(ctx, above | t | ctx.live)
+        ctx, check_last = _split(c.if_hp_percent_greater_than(ctx, _A, 50))
+        ctx, t = _split(c.if_random_less_than(ctx, 100, half))
+        ctx = c.add_to_move_score(ctx, -1)
+        # _CheckLastUsedMove
+        ctx = _at(ctx, check_last | t | ctx.live)
+        ctx, plus4 = _split(c.if_move_known(ctx, _A, _MOVE[other]))
+        ctx = c.load_power_of_loaded_move(c.load_battler_previous_move(ctx, _D))
+        ctx, try_plus1 = _split(c.if_loaded_equal_to(ctx, 0))
+        ctx, check_class = _split(c.if_target_is_not_taunted(ctx))
+        ctx, t = _split(c.if_random_less_than(ctx, 100, last))
+        ctx = c.add_to_move_score(ctx, 1)
+        # _CheckPhysicalMove / _CheckSpecialMove
+        ctx = c.load_defender_last_used_move_class(_at(ctx, check_class | t | ctx.live))
+        ctx, t = _split(c.if_loaded_not_equal_to(ctx, cls))
+        minus1 = minus1 | t
+        ctx, _ = _split(c.if_random_less_than(ctx, 100, cls_roll))  # -> _End2
+        ctx = c.add_to_move_score(ctx, 1)
+        ctx, _ = _split(c.go_to(ctx))  # -> _End2
+        # _TryScorePlus1
+        ctx = _at(ctx, try_plus1)
+        ctx, check_types = _split(c.if_target_is_not_taunted(ctx))
+        ctx, t = _split(c.if_random_less_than(ctx, 100, no_last))
+        ctx = c.add_to_move_score(ctx, 1)
+        # _CheckOpponentTypes, falling into _TryScorePlus4
+        ctx = _at(ctx, check_types | t | ctx.live)
+        for target in (LoadType.DEFENDER_TYPE_1, LoadType.DEFENDER_TYPE_2):
+            ctx = c.load_type_from(ctx, target)
+            ctx, _ = _split(c.if_loaded_in_table(ctx, types))  # -> _End2
+        ctx, _ = _split(c.if_random_less_than(ctx, 50, types_roll))  # -> _End2
+        # _TryScorePlus4
+        ctx = _at(ctx, plus4 | ctx.live)
+        ctx, _ = _split(c.if_random_less_than(ctx, 100, plus4_line))  # -> _End
+        ctx = c.pop_or_end(c.add_to_move_score(ctx, 4))
+        # _ScoreMinus1, falling into _End2
+        return c.pop_or_end(c.add_to_move_score(_at(ctx, minus1), -1))
+
+    run.__name__ = run.__qualname__ = label
+    run.__doc__ = f"``{label}`` (script.s; see ``_counter_like``)."
+    return run
+
+
+_expert_counter = _counter_like(
+    "Expert_Counter",
+    "Mirror Coat",
+    c.CLASS_PHYSICAL,
+    c.COUNTER_PHYSICAL_TYPES,
+    (3116, 3121, 3130, 3136, 3142, 3150, 3153),
+)
+_expert_mirror_coat = _counter_like(
+    "Expert_MirrorCoat",
+    "Counter",
+    c.CLASS_SPECIAL,
+    c.MIRROR_COAT_SPECIAL_TYPES,
+    (3873, 3878, 3887, 3893, 3899, 3907, 3910),
+)
+
+
+def _expert_superpower(ctx: AiContext, mask) -> AiContext:
+    """``Expert_Superpower`` (script.s:4467-4488): resisted, or the attacker's Attack below +0,
+    -1; faster or tied above 40 % HP -1; slower at 60 % HP or more -1."""
+    ctx, minus1 = _not_resisted(_at(ctx, mask))
+    ctx, t = _split(c.if_stat_stage_less_than(ctx, _A, Stat.ATK, 6))
+    minus1 = minus1 | t
+    ctx, slower = _split(c.if_speed_compare_equal_to(ctx, COMPARE_SPEED_SLOWER))
+    ctx, t = _split(c.if_hp_percent_greater_than(ctx, _A, 40))
+    minus1 = minus1 | t
+    ctx, _ = _split(c.go_to(ctx))  # -> _End
+    # Expert_Superpower_CheckUserHP (:4483), falling into _ScoreMinus1
+    ctx, _ = _split(c.if_hp_percent_less_than(_at(ctx, slower), _A, 60))  # -> _End
+    return c.pop_or_end(c.add_to_move_score(_at(ctx, minus1 | ctx.live), -1))
+
+
+def _expert_rain_dance(ctx: AiContext, mask) -> AiContext:
+    """``Expert_RainDance`` (script.s:3737-3771): slower or tied (FASTER's tie a read, E1
+    Ruling R8) with Swift Swim +1; else below 40 % HP -1; in hail, sun or sand +1; with Rain
+    Dish +1; with Hydration and a status +1."""
+    ctx = _at(ctx, mask)
+    ctx, other = _split(c.if_speed_compare_equal_to(ctx, c.COMPARE_SPEED_FASTER))
+    ctx = c.load_battler_ability(ctx, _A)
+    ctx, plus1 = _split(c.if_loaded_equal_to(ctx, _ABILITY["Swift Swim"]))
+    # Expert_RainDance_OtherChecks (:3751)
+    ctx = _at(ctx, other | ctx.live)
+    ctx, minus1 = _split(c.if_hp_percent_less_than(ctx, _A, 40))
+    ctx = c.load_current_weather(ctx)
+    for weather in (c.AiWeather.HAILING, c.AiWeather.SUNNY, c.AiWeather.SANDSTORM):
+        ctx, t = _split(c.if_loaded_equal_to(ctx, int(weather)))
+        plus1 = plus1 | t
+    ctx = c.load_battler_ability(ctx, _A)
+    ctx, t = _split(c.if_loaded_equal_to(ctx, _ABILITY["Rain Dish"]))
+    plus1 = plus1 | t
+    ctx, _ = _split(c.if_loaded_not_equal_to(ctx, _ABILITY["Hydration"]))  # -> _End
+    ctx, t = _split(c.if_status(ctx, _A, c.MonCondition.ANY))
+    plus1 = plus1 | t
+    ctx, _ = _split(c.go_to(ctx))  # -> _End
+    # Expert_RainDance_ScorePlus1 (:3763)
+    ctx = c.pop_or_end(c.add_to_move_score(_at(ctx, plus1), 1))
+    # Expert_RainDance_ScoreMinus1 (:3767)
+    return c.pop_or_end(c.add_to_move_score(_at(ctx, minus1), -1))
+
+
+def _expert_hail(ctx: AiContext, mask) -> AiContext:
+    """``Expert_Hail`` (script.s:4089-4119): below 40 % HP -1; in sun, rain or sand +1, +2 more
+    knowing Blizzard, +2 more with Ice Body."""
+    ctx = _at(ctx, mask)
+    ctx, minus1 = _split(c.if_hp_percent_less_than(ctx, _A, 40))
+    ctx = c.load_current_weather(ctx)
+    plus1 = jnp.zeros_like(ctx.live)
+    for weather in (c.AiWeather.SUNNY, c.AiWeather.RAINING, c.AiWeather.SANDSTORM):
+        ctx, t = _split(c.if_loaded_equal_to(ctx, int(weather)))
+        plus1 = plus1 | t
+    ctx, _ = _split(c.go_to(ctx))  # -> _End
+    # Expert_Hail_ScorePlus1AndCheckBlizzard (:4103)
+    ctx = c.add_to_move_score(_at(ctx, plus1), 1)
+    ctx, ice_body = _split(c.if_move_not_known(ctx, _A, _MOVE["Blizzard"]))
+    ctx = c.add_to_move_score(ctx, 2)
+    # Expert_Hail_CheckIceBody (:4108)
+    ctx = c.load_battler_ability(_at(ctx, ice_body | ctx.live), _A)
+    ctx, _ = _split(c.if_loaded_not_equal_to(ctx, _ABILITY["Ice Body"]))  # -> _End
+    ctx = c.pop_or_end(c.add_to_move_score(ctx, 2))
+    # Expert_Hail_ScoreMinus1 (:4114)
+    return c.pop_or_end(c.add_to_move_score(_at(ctx, minus1), -1))
+
+
+def _expert_pluck(ctx: AiContext, mask) -> AiContext:
+    """``Expert_Pluck`` (script.s:4957-4980): resisted -1; on the attacker's first turn in
+    battle +1 unless the 64 roll (:4968) jumps; then +1 unless the 128 roll (:4972) jumps."""
+    ctx, minus1 = _not_resisted(_at(ctx, mask))
+    ctx = c.load_is_first_turn_in_battle(ctx, _A)
+    ctx, try_plus1 = _split(c.if_loaded_equal_to(ctx, 0))
+    ctx, t = _split(c.if_random_less_than(ctx, 64, 4968))
+    ctx = c.add_to_move_score(ctx, 1)
+    # Expert_Pluck_TryScorePlus1 (:4971)
+    ctx = _at(ctx, try_plus1 | t | ctx.live)
+    ctx, _ = _split(c.if_random_less_than(ctx, 128, 4972))  # -> _End
+    ctx = c.pop_or_end(c.add_to_move_score(ctx, 1))
+    # Expert_Pluck_ScoreMinus1 (:4976)
+    return c.pop_or_end(c.add_to_move_score(_at(ctx, minus1), -1))
+
+
 def _expert_curse(ctx: AiContext, mask) -> AiContext:
     """``Expert_Curse`` (script.s:3452-3500)."""
     # Expert_Curse (:3452). A Ghost-type attacker jumps to Expert_Curse_GhostCheckHP
@@ -1454,6 +1728,7 @@ _BASIC_LABELS = (
     (BattleEffect.RESTORE_HALF_HP, _basic_check_can_recover_hp),  # :154
     (BattleEffect.STATUS_BADLY_POISON, _basic_check_cannot_poison),  # :155
     (BattleEffect.SET_LIGHT_SCREEN, _basic_check_light_screen),  # :156
+    (BattleEffect.HALVE_HP, _basic_check_non_standard_damage),  # :159
     (BattleEffect.STATUS_CONFUSE, _basic_check_cannot_confuse),  # :163
     (BattleEffect.ATK_UP_2, _basic_check_high_atk),  # :164
     (BattleEffect.DEF_UP_2, _basic_check_high_def),  # :165
@@ -1467,11 +1742,20 @@ _BASIC_LABELS = (
     (BattleEffect.SET_REFLECT, _basic_check_reflect),  # :178
     (BattleEffect.STATUS_PARALYZE, _basic_check_cannot_paralyze),  # :180
     (BattleEffect.STATUS_LEECH_SEED, _basic_check_cannot_leech_seed),  # :183
+    (BattleEffect.COUNTER, _basic_check_non_standard_damage),  # :187
+    (BattleEffect.DAMAGE_WHILE_ASLEEP, _basic_check_attacker_asleep),  # :189
+    (BattleEffect.USE_RANDOM_LEARNED_MOVE_SLEEP, _basic_check_attacker_asleep),  # :191
+    (BattleEffect.INCREASE_POWER_WITH_LESS_HP, _basic_check_non_standard_damage),  # :192
     (BattleEffect.CURSE, _basic_check_curse),  # :196
     (BattleEffect.SET_SPIKES, _basic_check_spikes),  # :197
     (BattleEffect.ATK_UP_2_STATUS_CONFUSION, _basic_check_cannot_confuse),  # :201
     (BattleEffect.INFATUATE, _basic_check_cannot_attract),  # :202
+    (BattleEffect.WEATHER_RAIN, _basic_check_rain_dance),  # :214
+    (BattleEffect.MIRROR_COAT, _basic_check_non_standard_damage),  # :218
+    (BattleEffect.ALWAYS_FLINCH_FIRST_TURN_ONLY, _basic_check_first_turn),  # :224
+    (BattleEffect.WEATHER_HAIL, _basic_check_hail),  # :228
     (BattleEffect.STATUS_BURN, _basic_check_cannot_burn),  # :231
+    (BattleEffect.LOWER_OWN_ATK_AND_DEF, _basic_check_non_standard_damage),  # :237
     (BattleEffect.ATK_DEF_UP, _basic_check_bulk_up),  # :248
     (BattleEffect.SP_ATK_SP_DEF_UP, _basic_check_calm_mind),  # :250
     (BattleEffect.ATK_SPD_UP, _basic_check_dragon_dance),  # :251
@@ -1496,6 +1780,7 @@ _EXPERT_LABELS = (
     (BattleEffect.RESTORE_HALF_HP, _expert_recovery),  # :1652
     (BattleEffect.STATUS_BADLY_POISON, _expert_toxic_leech_seed),  # :1653
     (BattleEffect.SET_LIGHT_SCREEN, _expert_light_screen),  # :1654
+    (BattleEffect.HALVE_HP, _expert_super_fang),  # :1658
     (BattleEffect.HIGH_CRITICAL, _expert_high_critical),  # :1660
     (BattleEffect.RECOIL_QUARTER, _expert_recoil_move),  # :1661
     (BattleEffect.STATUS_CONFUSE, _expert_status_confuse),  # :1662
@@ -1513,18 +1798,28 @@ _EXPERT_LABELS = (
     (BattleEffect.ATK_UP_2_STATUS_CONFUSION, _expert_swagger),  # :1680
     (BattleEffect.LOWER_SPEED_HIT, _expert_speed_down_on_hit),  # :1681
     (BattleEffect.STATUS_LEECH_SEED, _expert_toxic_leech_seed),  # :1686
+    (BattleEffect.COUNTER, _expert_counter),  # :1688
+    (BattleEffect.DAMAGE_WHILE_ASLEEP, _expert_plus(2)),  # :1691 Expert_Nightmare
+    (BattleEffect.USE_RANDOM_LEARNED_MOVE_SLEEP, _expert_sleep_talk),  # :1693
     (BattleEffect.KO_MON_THAT_DEFEATED_USER, _expert_destiny_bond),  # :1694
+    (BattleEffect.INCREASE_POWER_WITH_LESS_HP, _expert_reversal),  # :1695
     (BattleEffect.CURSE, _expert_curse),  # :1700
     (BattleEffect.SET_SPIKES, _expert_spikes),  # :1702
     (BattleEffect.HIT_BEFORE_SWITCH, _expert_pursuit),  # :1706
+    (BattleEffect.WEATHER_RAIN, _expert_rain_dance),  # :1710
+    (BattleEffect.MIRROR_COAT, _expert_mirror_coat),  # :1714
+    (BattleEffect.ALWAYS_FLINCH_FIRST_TURN_ONLY, _expert_plus(2)),  # :1723 Expert_FakeOut
+    (BattleEffect.WEATHER_HAIL, _expert_hail),  # :1726
     (BattleEffect.DOUBLE_POWER_WHEN_STATUSED, _expert_facade),  # :1729
     (BattleEffect.DOUBLE_POWER_AND_CURE_PARALYSIS, _expert_smelling_salts),  # :1731
+    (BattleEffect.LOWER_OWN_ATK_AND_DEF, _expert_superpower),  # :1735
     (BattleEffect.REMOVE_SCREENS, _expert_brick_break),  # :1739
     (BattleEffect.RECOIL_THIRD, _expert_recoil_move),  # :1747
     (BattleEffect.ATK_DEF_UP, _expert_status_def_up),  # :1753
     (BattleEffect.SP_ATK_SP_DEF_UP, _expert_status_spd_up),  # :1756
     (BattleEffect.ATK_SPD_UP, _expert_dragon_dance),  # :1757
     (BattleEffect.DOUBLE_POWER_WHEN_BELOW_HALF, _expert_brine),  # :1765
+    (BattleEffect.EAT_BERRY, _expert_pluck),  # :1767
     (BattleEffect.DOUBLE_SPEED_3_TURNS, _expert_tailwind),  # :1768
     (BattleEffect.DOUBLE_POWER_IF_MOVING_SECOND, _expert_payback),  # :1773
     (BattleEffect.TOXIC_SPIKES, _expert_toxic_spikes),  # :1792
