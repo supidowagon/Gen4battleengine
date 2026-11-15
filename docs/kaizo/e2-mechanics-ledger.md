@@ -91,6 +91,36 @@ the `step` turn skeleton and `enumerate.py`'s branch structure stay as they are.
    `roosting` (B7-n).
 8. The moves behind the AI's six fields: Lock-On / Mind Reader, Perish Song, Yawn, Curse by a
    Ghost user (B8-n); the opponent-legality test invariant.
+9. Gardenia split (B9-n): the plan below.
+
+## Batch 9: Gardenia split
+
+Entries of the backlog at 697a626 ("Roark and Gardenia splits" table) that block a Gardenia-split
+fight, of kind move effect, held item effect, ability or battle terrain; counts are fights
+blocked. Out of scope: AI entries (E1), double / multi formats, gauntlet entries. Player-only
+groups of the same families are added where they share the code. Order: largest family first.
+
+1. Abilities, stat and speed modifiers (16): Chlorophyll 8, Pure Power 2, Huge Power 1, Swarm 2,
+   Unburden 2, Flower Gift 1.
+2. Weather accuracy and the fangs (15): Thunder #152 4, Blizzard #260 4, Fire Fang #273 4,
+   Ice Fang / Avalanche #274 2, SolarBeam #151 1 (a charge turn).
+3. Other moves (15): Follow Me #172 4, Surf #257 2, Knock Off #188 2, Payback / Revenge #230 1,
+   Focus Punch #170 1, Safeguard #124 1, Substitute #79 1, Encore #90 1, Helping Hand #176 1,
+   Assist #180 1.
+4. Abilities on hit, stat drops and switch-in (14): Aftermath 5, Clear Body 3, Hyper Cutter 1,
+   Leaf Guard 1, Synchronize 1, Wonder Guard 1, Pressure 1, Download 1.
+5. Recoil and crash (12 + 3 ROM): Double-Edge / Wood Hammer #198 6, Volt Tackle family #262 1,
+   Hi Jump Kick / Jump Kick #45 2, Kaizo #182 (1/4 recoil) 2 and its ROM entry 2, Kaizo #48
+   (1/2 recoil) 1 and its ROM entry 1; vanilla #182 Superpower beside it.
+6. Turn-end and absorb abilities (8): Rain Dish 2, Bad Dreams 2, Volt Absorb 2, Water Absorb 1,
+   Poison Heal 1.
+7. Fixed damage and HP moves (7): Dragon Rage #41 4, Endeavor #189 1, Pain Split #91 1,
+   Dream Eater #8 1; player-only SonicBoom #130.
+8. Stat moves (7): Stomp #150 3, Belly Drum #142 2, Bulk Up #208 1, Minimize #108 1.
+9. Trapping abilities (4): Arena Trap 2, Shadow Tag 1, Magnet Pull 1.
+10. Held items (4): Focus Band #65 3, Wiki Berry #15 1; player-only Figy #14 / Aguav #17.
+11. Battle terrain (1 + Roark's 2): Secret Power / Nature Power / Camouflage on a trainer whose
+    maps give several terrains.
 
 ## Batch 6 design: mid-turn switch decision (U-turn, Baton Pass)
 
