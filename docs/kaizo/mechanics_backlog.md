@@ -25,21 +25,21 @@ New groups: needed in this split and in no earlier one.
 
 | Split | Rows | Battles | Singles | Doubles | Two-trainer | Multi (no known partner) | Runnable battles | Distinct missing groups | New groups |
 |---|---|---|---|---|---|---|---|---|---|
-| Roark Split | 26 | 26 | 26 | 0 | 0 | 0 (0) | 2 | 116 | 116 |
-| Gardenia Split | 42 | 35 | 19 | 5 | 0 | 11 (0) | 0 | 187 | 120 |
-| Fantina Split | 42 | 40 | 38 | 0 | 2 | 0 (0) | 0 | 248 | 88 |
-| Maylene Split | 34 | 33 | 27 | 5 | 0 | 1 (0) | 0 | 227 | 32 |
-| Wake Split | 38 | 33 | 26 | 2 | 5 | 0 (0) | 0 | 195 | 19 |
-| Byron Split | 66 | 58 | 42 | 8 | 0 | 8 (0) | 1 | 250 | 19 |
-| Candice Split | 48 | 36 | 24 | 0 | 0 | 12 (0) | 0 | 202 | 17 |
-| Galactic Split | 109 | 79 | 37 | 12 | 19 | 11 (0) | 0 | 319 | 50 |
-| Volkner Split | 25 | 19 | 9 | 4 | 6 | 0 (0) | 0 | 154 | 2 |
-| Elite Four Split | 28 | 28 | 27 | 1 | 0 | 0 (0) | 0 | 226 | 7 |
-| **Whole game** | 458 | 387 | 275 | 37 | 32 | 43 (0) | 3 | 470 | 470 |
+| Roark Split | 26 | 26 | 26 | 0 | 0 | 0 (0) | 2 | 99 | 99 |
+| Gardenia Split | 42 | 35 | 19 | 5 | 0 | 11 (0) | 0 | 171 | 115 |
+| Fantina Split | 42 | 40 | 38 | 0 | 2 | 0 (0) | 0 | 229 | 87 |
+| Maylene Split | 34 | 33 | 27 | 5 | 0 | 1 (0) | 0 | 209 | 31 |
+| Wake Split | 38 | 33 | 26 | 2 | 5 | 0 (0) | 0 | 178 | 19 |
+| Byron Split | 66 | 58 | 42 | 8 | 0 | 8 (0) | 1 | 232 | 18 |
+| Candice Split | 48 | 36 | 24 | 0 | 0 | 12 (0) | 0 | 187 | 17 |
+| Galactic Split | 109 | 79 | 37 | 12 | 19 | 11 (0) | 0 | 300 | 50 |
+| Volkner Split | 25 | 19 | 9 | 4 | 6 | 0 (0) | 0 | 142 | 2 |
+| Elite Four Split | 28 | 28 | 27 | 1 | 0 | 0 (0) | 0 | 207 | 7 |
+| **Whole game** | 458 | 387 | 275 | 37 | 32 | 43 (0) | 3 | 445 | 445 |
 
 ## Whole game
 
-470 distinct missing groups across all ten splits (387 battles,
+445 distinct missing groups across all ten splits (387 battles,
 458 opposing trainer rows). Kinds: AI flags are flag lines the
 policy lacks; AI move effects are the AI's per-move script paths (untranscribed
 effects, refused effects, move-id cases of its damage and type helpers); battle
@@ -53,17 +53,17 @@ Groups first needed in that split (needed by no earlier split). The whole-game r
 
 | Split | AI flags | AI move effects | move effects | held items | abilities | battle conditions | other | All |
 |---|---|---|---|---|---|---|---|---|
-| Roark Split | 0 | 29 | 27 | 33 | 23 | 3 | 1 | 116 |
-| Gardenia Split | 3 | 23 | 33 | 19 | 26 | 13 | 3 | 120 |
-| Fantina Split | 0 | 26 | 24 | 15 | 8 | 10 | 5 | 88 |
-| Maylene Split | 0 | 9 | 7 | 13 | 2 | 0 | 1 | 32 |
+| Roark Split | 0 | 12 | 27 | 33 | 23 | 3 | 1 | 99 |
+| Gardenia Split | 3 | 18 | 33 | 19 | 26 | 13 | 3 | 115 |
+| Fantina Split | 0 | 25 | 24 | 15 | 8 | 10 | 5 | 87 |
+| Maylene Split | 0 | 8 | 7 | 13 | 2 | 0 | 1 | 31 |
 | Wake Split | 0 | 3 | 2 | 5 | 1 | 5 | 3 | 19 |
-| Byron Split | 0 | 7 | 5 | 6 | 0 | 1 | 0 | 19 |
+| Byron Split | 0 | 6 | 5 | 6 | 0 | 1 | 0 | 18 |
 | Candice Split | 0 | 6 | 4 | 1 | 0 | 6 | 0 | 17 |
 | Galactic Split | 0 | 14 | 13 | 6 | 1 | 16 | 0 | 50 |
 | Volkner Split | 0 | 1 | 1 | 0 | 0 | 0 | 0 | 2 |
 | Elite Four Split | 0 | 2 | 1 | 1 | 1 | 1 | 1 | 7 |
-| **Whole game** | **3** | **120** | **117** | **99** | **62** | **55** | **14** | **470** |
+| **Whole game** | **3** | **95** | **117** | **99** | **62** | **55** | **14** | **445** |
 
 ### Groups needed in each split, by kind
 
@@ -71,17 +71,17 @@ Every group the split's battles need, whether or not an earlier split needs it t
 
 | Split | AI flags | AI move effects | move effects | held items | abilities | battle conditions | other | All |
 |---|---|---|---|---|---|---|---|---|
-| Roark Split | 0 | 29 | 27 | 33 | 23 | 3 | 1 | 116 |
-| Gardenia Split | 3 | 39 | 49 | 38 | 42 | 13 | 3 | 187 |
-| Fantina Split | 2 | 62 | 66 | 53 | 47 | 10 | 8 | 248 |
-| Maylene Split | 3 | 57 | 66 | 52 | 37 | 3 | 9 | 227 |
-| Wake Split | 3 | 44 | 50 | 44 | 36 | 8 | 10 | 195 |
-| Byron Split | 3 | 64 | 65 | 57 | 46 | 4 | 11 | 250 |
-| Candice Split | 2 | 52 | 55 | 39 | 39 | 8 | 7 | 202 |
-| Galactic Split | 3 | 86 | 88 | 56 | 50 | 25 | 11 | 319 |
-| Volkner Split | 3 | 37 | 41 | 28 | 33 | 3 | 9 | 154 |
-| Elite Four Split | 3 | 67 | 65 | 34 | 41 | 4 | 12 | 226 |
-| **Whole game** | **3** | **120** | **117** | **99** | **62** | **55** | **14** | **470** |
+| Roark Split | 0 | 12 | 27 | 33 | 23 | 3 | 1 | 99 |
+| Gardenia Split | 3 | 23 | 49 | 38 | 42 | 13 | 3 | 171 |
+| Fantina Split | 2 | 43 | 66 | 53 | 47 | 10 | 8 | 229 |
+| Maylene Split | 3 | 39 | 66 | 52 | 37 | 3 | 9 | 209 |
+| Wake Split | 3 | 27 | 50 | 44 | 36 | 8 | 10 | 178 |
+| Byron Split | 3 | 46 | 65 | 57 | 46 | 4 | 11 | 232 |
+| Candice Split | 2 | 37 | 55 | 39 | 39 | 8 | 7 | 187 |
+| Galactic Split | 3 | 67 | 88 | 56 | 50 | 25 | 11 | 300 |
+| Volkner Split | 3 | 25 | 41 | 28 | 33 | 3 | 9 | 142 |
+| Elite Four Split | 3 | 48 | 65 | 34 | 41 | 4 | 12 | 207 |
+| **Whole game** | **3** | **95** | **117** | **99** | **62** | **55** | **14** | **445** |
 
 ### Battle conditions and other groups
 
@@ -297,7 +297,7 @@ include/battle, res/battle) names it elsewhere; the tool re-checks both on every
 
 ## AI partners in multi battles
 
-25 partner trainer rows (607, 608, 609, 610, 612, 613, 614, 615, 616, 617, 618, 619, 620, 621, 622, 623, 624, 625, 626, 800, 801, 861, 863, 864, 865), checked like opponents: 136 missing groups, 3 not needed by any opposing trainer, 0 also not on your side. Not needed by opponents, by kind: held items 2, abilities 1.
+25 partner trainer rows (607, 608, 609, 610, 612, 613, 614, 615, 616, 617, 618, 619, 620, 621, 622, 623, 624, 625, 626, 800, 801, 861, 863, 864, 865), checked like opponents: 127 missing groups, 3 not needed by any opposing trainer, 0 also not on your side. Not needed by opponents, by kind: held items 2, abilities 1.
 
 ## Roark split
 
@@ -305,21 +305,14 @@ include/battle, res/battle) names it elsewhere; the tool re-checks both on every
 
 | Fights blocked | Group |
 |---|---|
-| 10 | AI move effect #97 USE_RANDOM_LEARNED_MOVE_SLEEP not transcribed (Basic_CheckAttackerAsleep / Expert_SleepTalk): Sleep Talk |
 | 10 | move effect #97: Sleep Talk |
 | 8 | held item effect #86: Silk Scarf |
-| 7 | AI move effect #111 PROTECT not transcribed (Expert_Protect): Detect, Protect |
-| 7 | AI move effect #158 ALWAYS_FLINCH_FIRST_TURN_ONLY not transcribed (Basic_CheckFirstTurnInBattle / Expert_FakeOut): Fake Out |
-| 7 | AI move effect #224 EAT_BERRY not transcribed (Expert_Pluck): Bug Bite, Pluck |
 | 6 | move effect #197: Secret Power |
-| 4 | AI move effect #92 DAMAGE_WHILE_ASLEEP not transcribed (Basic_CheckAttackerAsleep / Expert_Nightmare): Snore |
-| 4 | AI move-id case of TrainerAI_CalcDamage: Bulldoze, Frustration, Return |
 | 4 | battle terrain: the battle terrain varies over its maps (TERRAIN_PLAIN, TERRAIN_GRASS, TERRAIN_WATER), and Secret Power would read it |
 | 4 | held item effect #101: Flame Orb |
 | 4 | held item effect #96: Expert Belt |
 | 4 | move effect #92: Snore |
 | 3 | AI move effect #228 SWITCH_HIT not transcribed (Expert_UTurn): U-turn |
-| 3 | AI move effect #65 SET_REFLECT not transcribed (Basic_CheckAlreadyUnderReflect / Expert_Reflect): Reflect |
 | 3 | ability: Reckless |
 | 3 | ability: Technician |
 | 3 | ability: Truant |
@@ -332,7 +325,6 @@ include/battle, res/battle) names it elsewhere; the tool re-checks both on every
 | 2 | AI move effect #196 INCREASE_POWER_WITH_WEIGHT not transcribed (Basic_CheckNonStandardDamageOrChargeTurn): Grass Knot, Low Kick |
 | 2 | AI move effect #214 HEAL_HALF_REMOVE_FLYING_TYPE not transcribed (Basic_CheckCanRecoverHP / Expert_Recovery): Roost |
 | 2 | AI move effect #227 METAL_BURST not transcribed (Basic_CheckMetalBurst / Expert_MetalBurst): Bide, Metal Burst |
-| 2 | AI move effect #58 ATK_DOWN_2 not transcribed (Basic_CheckLowStatStage_Attack / Expert_StatusAttackDown): Charm, FeatherDance |
 | 2 | ability: Dry Skin |
 | 2 | ability: Gluttony |
 | 2 | ability: Lightningrod |
@@ -348,23 +340,14 @@ include/battle, res/battle) names it elsewhere; the tool re-checks both on every
 | 2 | move effect #196: Grass Knot, Low Kick |
 | 2 | move effect #214: Roost |
 | 2 | move effect #227: Bide, Metal Burst |
-| 1 | AI move effect #112 SET_SPIKES not transcribed (Basic_CheckSpikes / Expert_Spikes): Spikes |
 | 1 | AI move effect #122 RANDOM_POWER_MAYBE_HEAL not transcribed (Basic_CheckNonStandardDamageOrChargeTurn): Present |
 | 1 | AI move effect #135 RANDOM_POWER_BASED_ON_IVS not transcribed (Basic_CheckNonStandardDamageOrChargeTurn): Hidden Power |
-| 1 | AI move effect #136 WEATHER_RAIN not transcribed (Basic_CheckRainDance / Expert_RainDance): Rain Dance |
-| 1 | AI move effect #144 MIRROR_COAT not transcribed (Basic_CheckNonStandardDamageOrChargeTurn / Expert_MirrorCoat): Mirror Coat |
 | 1 | AI move effect #148 HIT_IN_3_TURNS not transcribed (Basic_CheckFutureSight): Doom Desire, Future Sight |
-| 1 | AI move effect #164 WEATHER_HAIL not transcribed (Basic_CheckHail / Expert_Hail): Hail |
-| 1 | AI move effect #20 SPEED_DOWN not transcribed (Basic_CheckLowStatStage_Speed / Expert_StatusSpeedDown): String Shot |
-| 1 | AI move effect #212 ATK_SPD_UP not transcribed (Basic_CheckDragonDance / Expert_DragonDance): Dragon Dance |
-| 1 | AI move effect #225 DOUBLE_SPEED_3_TURNS not transcribed (Basic_CheckTailwind / Expert_Tailwind): Tailwind |
 | 1 | AI move effect #23 ACC_DOWN not transcribed (Basic_CheckLowStatStage_Accuracy / Expert_StatusAccuracyDown): Flash, Sand-Attack, SmokeScreen |
 | 1 | AI move effect #242 USE_LAST_USED_MOVE not transcribed (Basic_CheckCopycat / Expert_Copycat): Copycat |
 | 1 | AI move effect #38 ONE_HIT_KO not transcribed (Basic_CheckOHKOWouldFail / Expert_OHKOMove): Fissure, Guillotine, Horn Drill |
-| 1 | AI move effect #40 HALVE_HP not transcribed (Basic_CheckNonStandardDamageOrChargeTurn / Expert_SuperFang): Super Fang |
 | 1 | AI move effect #87 LEVEL_DAMAGE_FLAT not transcribed (Basic_CheckNonStandardDamageOrChargeTurn): Night Shade, Seismic Toss |
-| 1 | AI move effect #98 KO_MON_THAT_DEFEATED_USER not transcribed (Expert_DestinyBond): Destiny Bond |
-| 1 | AI move effect #99 INCREASE_POWER_WITH_LESS_HP not transcribed (Basic_CheckNonStandardDamageOrChargeTurn / Expert_Reversal): Flail, Reversal |
+| 1 | AI move-id case of TrainerAI_CalcDamage: Bulldoze |
 | 1 | ability: Drought |
 | 1 | ability: Filter |
 | 1 | ability: Honey Gather |
@@ -422,7 +405,7 @@ include/battle, res/battle) names it elsewhere; the tool re-checks both on every
 | 1 | move effect #98: Destiny Bond |
 | 1 | trainer item: Poké Ball |
 
-Groups by kind: held item effect 33, AI 29, move effect 27, ability 23, battle format 2, battle terrain 1, trainer item 1
+Groups by kind: held item effect 33, move effect 27, ability 23, AI 12, battle format 2, battle terrain 1, trainer item 1
 
 ## Roark and Gardenia splits (up to the second gym)
 
@@ -430,27 +413,21 @@ Groups by kind: held item effect 33, AI 29, move effect 27, ability 23, battle f
 
 | Fights blocked | Group |
 |---|---|
-| 23 | AI move effect #97 USE_RANDOM_LEARNED_MOVE_SLEEP not transcribed (Basic_CheckAttackerAsleep / Expert_SleepTalk): Sleep Talk |
 | 23 | move effect #97: Sleep Talk |
 | 18 | battle format: a multi battle |
-| 15 | AI move effect #224 EAT_BERRY not transcribed (Expert_Pluck): Bug Bite, Pluck |
 | 14 | held item effect #98: Life Orb |
 | 13 | AI: AI_FLAG_TAG_STRATEGY |
 | 13 | held item effect #86: Silk Scarf |
-| 12 | AI move effect #111 PROTECT not transcribed (Expert_Protect): Detect, Protect |
-| 12 | AI move effect #158 ALWAYS_FLINCH_FIRST_TURN_ONLY not transcribed (Basic_CheckFirstTurnInBattle / Expert_FakeOut): Fake Out |
 | 11 | ability: Levitate |
 | 9 | AI move effect #228 SWITCH_HIT not transcribed (Expert_UTurn): U-turn |
 | 9 | ability: Magic Guard |
 | 9 | held item effect #69: Leftovers |
 | 9 | move effect #228: U-turn |
 | 8 | AI: AI_FLAG_HARRASSMENT |
-| 8 | AI move effect #65 SET_REFLECT not transcribed (Basic_CheckAlreadyUnderReflect / Expert_Reflect): Reflect |
 | 8 | ability: Chlorophyll |
 | 8 | held item effect #101: Flame Orb |
 | 8 | held item effect #56: King's Rock, Razor Fang |
 | 8 | move effect #197: Secret Power |
-| 7 | AI move-id case of TrainerAI_CalcDamage: Bulldoze, Frustration, Return |
 | 7 | held item effect #94: Muscle Band |
 | 7 | move effect #221: Brine, Wring Out |
 | 6 | ability: Gluttony |
@@ -461,8 +438,6 @@ Groups by kind: held item effect 33, AI 29, move effect 27, ability 23, battle f
 | 6 | move effect #198: Double-Edge, Wood Hammer |
 | 6 | move effect #202: Poison Fang |
 | 5 | AI move effect #196 INCREASE_POWER_WITH_WEIGHT not transcribed (Basic_CheckNonStandardDamageOrChargeTurn): Grass Knot, Low Kick |
-| 5 | AI move effect #212 ATK_SPD_UP not transcribed (Basic_CheckDragonDance / Expert_DragonDance): Dragon Dance |
-| 5 | AI move effect #249 TOXIC_SPIKES not transcribed (Basic_CheckToxicSpikes / Expert_ToxicSpikes): Toxic Spikes |
 | 5 | AI move effect #87 LEVEL_DAMAGE_FLAT not transcribed (Basic_CheckNonStandardDamageOrChargeTurn): Night Shade, Seismic Toss |
 | 5 | ability: Aftermath |
 | 5 | ability: Dry Skin |
@@ -474,11 +449,8 @@ Groups by kind: held item effect 33, AI 29, move effect 27, ability 23, battle f
 | 5 | move effect #196: Grass Knot, Low Kick |
 | 5 | move effect #212: Dragon Dance |
 | 5 | move effect #249: Toxic Spikes |
-| 4 | AI move effect #136 WEATHER_RAIN not transcribed (Basic_CheckRainDance / Expert_RainDance): Rain Dance |
 | 4 | AI move effect #260 BLIZZARD not transcribed (Expert_Blizzard): Blizzard, Ice Ball, Sheer Cold |
 | 4 | AI move effect #41 40_DAMAGE_FLAT not transcribed (Basic_CheckNonStandardDamageOrChargeTurn): Dragon Rage |
-| 4 | AI move effect #92 DAMAGE_WHILE_ASLEEP not transcribed (Basic_CheckAttackerAsleep / Expert_Nightmare): Snore |
-| 4 | AI move effect #98 KO_MON_THAT_DEFEATED_USER not transcribed (Expert_DestinyBond): Destiny Bond |
 | 4 | ability: Drought |
 | 4 | ability: Filter |
 | 4 | ability: Lightningrod |
@@ -499,7 +471,7 @@ Groups by kind: held item effect 33, AI 29, move effect 27, ability 23, battle f
 | 4 | weather: Rain |
 | 3 | AI: AI_FLAG_BATON_PASS |
 | 3 | AI move effect #214 HEAL_HALF_REMOVE_FLYING_TYPE not transcribed (Basic_CheckCanRecoverHP / Expert_Recovery): Roost |
-| 3 | AI move effect #225 DOUBLE_SPEED_3_TURNS not transcribed (Basic_CheckTailwind / Expert_Tailwind): Tailwind |
+| 3 | AI move-id case of TrainerAI_CalcDamage: Bulldoze |
 | 3 | ability: Clear Body |
 | 3 | ability: Scrappy |
 | 3 | ability: Solar Power |
@@ -520,14 +492,10 @@ Groups by kind: held item effect 33, AI 29, move effect 27, ability 23, battle f
 | 3 | move effect #214: Roost |
 | 3 | move effect #225: Tailwind |
 | 2 | AI move effect #106 PREVENT_ESCAPE not transcribed (Basic_CheckMeanLook / Expert_BindingMove): Block, Mean Look, Spider Web |
-| 2 | AI move effect #112 SET_SPIKES not transcribed (Basic_CheckSpikes / Expert_Spikes): Spikes |
 | 2 | AI move effect #142 MAX_ATK_LOSE_HALF_MAX_HP not transcribed (Basic_CheckBellyDrum / Expert_BellyDrum): Belly Drum |
-| 2 | AI move effect #144 MIRROR_COAT not transcribed (Basic_CheckNonStandardDamageOrChargeTurn / Expert_MirrorCoat): Mirror Coat |
-| 2 | AI move effect #182 LOWER_OWN_ATK_AND_DEF not transcribed (Basic_CheckNonStandardDamageOrChargeTurn / Expert_Superpower): Brave Bird, Close Combat, Take Down |
 | 2 | AI move effect #188 REMOVE_HELD_ITEM not transcribed (Basic_CheckCanRemoveItem / Expert_KnockOff): Knock Off |
 | 2 | AI move effect #192 MAKE_SHARED_MOVES_UNUSEABLE not transcribed (Basic_CheckCanImprison / Expert_Imprison): Imprison |
 | 2 | AI move effect #227 METAL_BURST not transcribed (Basic_CheckMetalBurst / Expert_MetalBurst): Bide, Metal Burst |
-| 2 | AI move effect #58 ATK_DOWN_2 not transcribed (Basic_CheckLowStatStage_Attack / Expert_StatusAttackDown): Charm, FeatherDance |
 | 2 | ROM change: battle/skill/be_seq.narc#182 is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) |
 | 2 | ability: Arena Trap |
 | 2 | ability: Bad Dreams |
@@ -568,24 +536,17 @@ Groups by kind: held item effect 33, AI 29, move effect 27, ability 23, battle f
 | 1 | AI move effect #137 WEATHER_SUN not transcribed (Basic_CheckSunnyDay / Expert_SunnyDay): Sunny Day |
 | 1 | AI move effect #148 HIT_IN_3_TURNS not transcribed (Basic_CheckFutureSight): Doom Desire, Future Sight |
 | 1 | AI move effect #151 SKIP_CHARGE_TURN_IN_SUN not transcribed (Expert_ChargeTurnNoInvuln / Expert_Thunder): SolarBeam |
-| 1 | AI move effect #164 WEATHER_HAIL not transcribed (Basic_CheckHail / Expert_Hail): Hail |
 | 1 | AI move effect #170 HIT_LAST_WHIFF_IF_HIT not transcribed (Basic_CheckNonStandardDamageOrChargeTurn / Expert_FocusPunch): Focus Punch |
 | 1 | AI move effect #176 BOOST_ALLY_POWER_BY_50_PERCENT not transcribed (Basic_CheckHelpingHand): Helping Hand |
 | 1 | AI move effect #189 SET_HP_EQUAL_TO_USER not transcribed (Basic_CheckNonStandardDamageOrChargeTurn / Expert_Endeavor): Endeavor |
-| 1 | AI move effect #20 SPEED_DOWN not transcribed (Basic_CheckLowStatStage_Speed / Expert_StatusSpeedDown): String Shot |
-| 1 | AI move effect #208 ATK_DEF_UP not transcribed (Basic_CheckBulkUp / Expert_StatusDefenseUp): Bulk Up |
 | 1 | AI move effect #23 ACC_DOWN not transcribed (Basic_CheckLowStatStage_Accuracy / Expert_StatusAccuracyDown): Flash, Sand-Attack, SmokeScreen |
-| 1 | AI move effect #230 DOUBLE_POWER_IF_MOVING_SECOND not transcribed (Expert_Payback): Payback, Revenge |
 | 1 | AI move effect #242 USE_LAST_USED_MOVE not transcribed (Basic_CheckCopycat / Expert_Copycat): Copycat |
 | 1 | AI move effect #28 FORCE_SWITCH not transcribed (Basic_CheckCanForceSwitch / Expert_ForceSwitch): Roar, Whirlwind |
 | 1 | AI move effect #38 ONE_HIT_KO not transcribed (Basic_CheckOHKOWouldFail / Expert_OHKOMove): Fissure, Guillotine, Horn Drill |
-| 1 | AI move effect #40 HALVE_HP not transcribed (Basic_CheckNonStandardDamageOrChargeTurn / Expert_SuperFang): Super Fang |
 | 1 | AI move effect #79 SET_SUBSTITUTE not transcribed (Basic_CheckCannotSubstitute / Expert_Substitute): Substitute |
 | 1 | AI move effect #8 RECOVER_DAMAGE_SLEEP not transcribed (Basic_CheckDreamEater / Expert_DreamEater): Dream Eater |
-| 1 | AI move effect #89 COUNTER not transcribed (Basic_CheckNonStandardDamageOrChargeTurn / Expert_Counter): Counter |
 | 1 | AI move effect #90 ENCORE not transcribed (Basic_CheckCannotEncore / Expert_Encore): Encore |
 | 1 | AI move effect #91 AVERAGE_HP not transcribed (Expert_PainSplit): Pain Split |
-| 1 | AI move effect #99 INCREASE_POWER_WITH_LESS_HP not transcribed (Basic_CheckNonStandardDamageOrChargeTurn / Expert_Reversal): Flail, Reversal |
 | 1 | ROM change: battle/skill/be_seq.narc#48 is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) |
 | 1 | ability: Download |
 | 1 | ability: Drizzle |
@@ -667,7 +628,7 @@ Groups by kind: held item effect 33, AI 29, move effect 27, ability 23, battle f
 | 1 | move effect #91: Pain Split |
 | 1 | trainer item: Poké Ball |
 
-Groups by kind: move effect 60, AI 55, held item effect 52, ability 49, battle format 12, battle terrain 3, ROM change 2, form 1, weather 1, trainer item 1
+Groups by kind: move effect 60, held item effect 52, ability 49, AI 33, battle format 12, battle terrain 3, ROM change 2, form 1, weather 1, trainer item 1
 
 ## All ten splits (top 60)
 
@@ -683,10 +644,8 @@ Groups by kind: move effect 60, AI 55, held item effect 52, ability 49, battle f
 | 124 | move effect #48: Draco Meteor, Giga Impact, Hydro Cannon, Hyper Beam, Outrage, Superpower |
 | 105 | AI: AI_FLAG_HARRASSMENT |
 | 96 | ability: Levitate |
-| 83 | AI move effect #158 ALWAYS_FLINCH_FIRST_TURN_ONLY not transcribed (Basic_CheckFirstTurnInBattle / Expert_FakeOut): Fake Out |
 | 82 | battle format: a multi battle |
 | 77 | ability: Magic Guard |
-| 72 | AI move effect #97 USE_RANDOM_LEARNED_MOVE_SLEEP not transcribed (Basic_CheckAttackerAsleep / Expert_SleepTalk): Sleep Talk |
 | 72 | move effect #274: Avalanche, Ice Fang |
 | 72 | move effect #97: Sleep Talk |
 | 70 | AI move effect #260 BLIZZARD not transcribed (Expert_Blizzard): Blizzard, Ice Ball, Sheer Cold |
@@ -697,7 +656,6 @@ Groups by kind: move effect 60, AI 55, held item effect 52, ability 49, battle f
 | 58 | ROM change: battle/skill/sub_seq.narc#251 is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) |
 | 58 | move effect #262: Frenzy Plant, Roar of Time, Sky Attack, Thrash, Volt Tackle, Wild Charge |
 | 57 | ability: Thick Fat |
-| 56 | AI move effect #111 PROTECT not transcribed (Expert_Protect): Detect, Protect |
 | 55 | held item effect #56: King's Rock, Razor Fang |
 | 53 | held item effect #65: Focus Band |
 | 52 | AI move effect #228 SWITCH_HIT not transcribed (Expert_UTurn): U-turn |
@@ -708,17 +666,14 @@ Groups by kind: move effect 60, AI 55, held item effect 52, ability 49, battle f
 | 49 | move effect #152: Thunder |
 | 48 | AI move effect #79 SET_SUBSTITUTE not transcribed (Basic_CheckCannotSubstitute / Expert_Substitute): Substitute |
 | 48 | move effect #79: Substitute |
-| 47 | AI move effect #182 LOWER_OWN_ATK_AND_DEF not transcribed (Basic_CheckNonStandardDamageOrChargeTurn / Expert_Superpower): Brave Bird, Close Combat, Take Down |
 | 47 | ROM change: battle/skill/be_seq.narc#182 is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) |
 | 47 | move effect #182: Brave Bird, Close Combat, Take Down |
 | 45 | ROM change: arm9 gFieldScriptCommands is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) |
 | 45 | ability: Technician |
 | 44 | ability: Serene Grace |
-| 43 | AI move effect #98 KO_MON_THAT_DEFEATED_USER not transcribed (Expert_DestinyBond): Destiny Bond |
 | 43 | ROM change: arm9 MapHeader_GetMapType is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) |
 | 43 | ability: Filter |
 | 43 | move effect #98: Destiny Bond |
-| 42 | AI move effect #112 SET_SPIKES not transcribed (Basic_CheckSpikes / Expert_Spikes): Spikes |
 | 42 | move effect #112: Spikes |
 | 42 | weather: Hail |
 | 40 | ability: Reckless |
@@ -730,13 +685,19 @@ Groups by kind: move effect 60, AI 55, held item effect 52, ability 49, battle f
 | 36 | held item effect #93: Wide Lens |
 | 36 | move effect #196: Grass Knot, Low Kick |
 | 36 | move effect #197: Secret Power |
-| 35 | AI move effect #211 SP_ATK_SP_DEF_UP not transcribed (Basic_CheckCalmMind / Expert_StatusSpDefenseUp): Calm Mind |
 | 35 | ability: Scrappy |
 | 35 | move effect #211: Calm Mind |
-| 34 | AI move effect #249 TOXIC_SPIKES not transcribed (Basic_CheckToxicSpikes / Expert_ToxicSpikes): Toxic Spikes |
 | 34 | held item effect #86: Silk Scarf |
+| 34 | move effect #249: Toxic Spikes |
+| 34 | weather: Fog |
+| 33 | ability: Pressure |
+| 32 | ability: Aftermath |
+| 32 | ability: Clear Body |
+| 32 | ability: Tinted Lens |
+| 29 | AI: AI_FLAG_BATON_PASS |
+| 29 | AI move effect #127 PASS_STATS_AND_STATUS not transcribed (Basic_CheckBatonPass / Expert_BatonPass): Baton Pass |
 
-Groups by kind: AI 123, move effect 117, held item effect 99, ability 62, battle format 36, battle terrain 13, ROM change 11, weather 4, field condition 2, form 1, trainer item 1, form change 1
+Groups by kind: move effect 117, held item effect 99, AI 98, ability 62, battle format 36, battle terrain 13, ROM change 11, weather 4, field condition 2, form 1, trainer item 1, form change 1
 
 ## Build order for the first two splits
 
@@ -745,238 +706,216 @@ Greedy: each step is the group that brings the most fights closest to runnable.
 | Step | Group | Fights runnable after |
 |---|---|---|
 | 1 | move effect #97: Sleep Talk | 2 of 68 |
-| 2 | AI move effect #97 USE_RANDOM_LEARNED_MOVE_SLEEP not transcribed (Basic_CheckAttackerAsleep / Expert_SleepTalk): Sleep Talk | 2 of 68 |
-| 3 | battle format: a multi battle | 2 of 68 |
-| 4 | held item effect #86: Silk Scarf | 2 of 68 |
-| 5 | AI move effect #158 ALWAYS_FLINCH_FIRST_TURN_ONLY not transcribed (Basic_CheckFirstTurnInBattle / Expert_FakeOut): Fake Out | 2 of 68 |
-| 6 | AI move effect #224 EAT_BERRY not transcribed (Expert_Pluck): Bug Bite, Pluck | 2 of 68 |
-| 7 | held item effect #98: Life Orb | 2 of 68 |
-| 8 | AI: AI_FLAG_TAG_STRATEGY | 2 of 68 |
-| 9 | AI move effect #111 PROTECT not transcribed (Expert_Protect): Detect, Protect | 2 of 68 |
-| 10 | ability: Levitate | 2 of 68 |
-| 11 | ability: Super Luck | 3 of 68 |
-| 12 | ability: Magic Guard | 3 of 68 |
-| 13 | held item effect #101: Flame Orb | 3 of 68 |
-| 14 | AI move effect #65 SET_REFLECT not transcribed (Basic_CheckAlreadyUnderReflect / Expert_Reflect): Reflect | 3 of 68 |
-| 15 | ability: Chlorophyll | 3 of 68 |
-| 16 | held item effect #69: Leftovers | 3 of 68 |
-| 17 | AI: AI_FLAG_HARRASSMENT | 3 of 68 |
-| 18 | ability: Aftermath | 3 of 68 |
-| 19 | move effect #169: Facade | 3 of 68 |
-| 20 | ability: Unburden | 4 of 68 |
-| 21 | ability: Gluttony | 4 of 68 |
-| 22 | held item effect #94: Muscle Band | 4 of 68 |
-| 23 | move effect #221: Brine, Wring Out | 4 of 68 |
-| 24 | held item effect #56: King's Rock, Razor Fang | 4 of 68 |
-| 25 | ability: Pressure | 5 of 68 |
-| 26 | move effect #228: U-turn | 5 of 68 |
-| 27 | AI move effect #228 SWITCH_HIT not transcribed (Expert_UTurn): U-turn | 5 of 68 |
-| 28 | move effect #83: Metronome | 5 of 68 |
-| 29 | held item effect #97: Light Clay | 5 of 68 |
-| 30 | ability: Filter | 5 of 68 |
-| 31 | held item effect #67: Razor Claw, Scope Lens | 6 of 68 |
-| 32 | AI move effect #87 LEVEL_DAMAGE_FLAT not transcribed (Basic_CheckNonStandardDamageOrChargeTurn): Night Shade, Seismic Toss | 6 of 68 |
-| 33 | move effect #147: Earthquake | 6 of 68 |
-| 34 | move effect #249: Toxic Spikes | 6 of 68 |
-| 35 | AI move effect #249 TOXIC_SPIKES not transcribed (Basic_CheckToxicSpikes / Expert_ToxicSpikes): Toxic Spikes | 6 of 68 |
-| 36 | move effect #198: Double-Edge, Wood Hammer | 6 of 68 |
-| 37 | move effect #152: Thunder | 6 of 68 |
-| 38 | ability: Volt Absorb | 7 of 68 |
-| 39 | move effect #260: Blizzard, Ice Ball, Sheer Cold | 7 of 68 |
-| 40 | AI move effect #260 BLIZZARD not transcribed (Expert_Blizzard): Blizzard, Ice Ball, Sheer Cold | 7 of 68 |
-| 41 | held item effect #65: Focus Band | 8 of 68 |
-| 42 | held item effect #19: Occa Berry | 8 of 68 |
-| 43 | move effect #262: Frenzy Plant, Roar of Time, Sky Attack, Thrash, Volt Tackle, Wild Charge | 9 of 68 |
-| 44 | held item effect #48: BrightPowder, Lax Incense | 9 of 68 |
-| 45 | ability: Dry Skin | 9 of 68 |
-| 46 | held item effect #20: Passho Berry | 10 of 68 |
-| 47 | AI move-id case of TrainerAI_CalcDamage: Bulldoze, Frustration, Return | 10 of 68 |
-| 48 | move effect #197: Secret Power | 10 of 68 |
-| 49 | held item effect #96: Expert Belt | 10 of 68 |
-| 50 | ability: Thick Fat | 10 of 68 |
-| 51 | ability: Reckless | 10 of 68 |
-| 52 | ability: Technician | 10 of 68 |
-| 53 | battle terrain: the battle terrain varies over its maps (TERRAIN_PLAIN, TERRAIN_GRASS, TERRAIN_WATER), and Secret Power would read it | 10 of 68 |
-| 54 | held item effect #55: Choice Band | 10 of 68 |
-| 55 | ability: Truant | 13 of 68 |
-| 56 | move effect #150: Stomp | 13 of 68 |
-| 57 | move effect #257: Surf | 14 of 68 |
-| 58 | held item effect #78: Mystic Water | 14 of 68 |
-| 59 | move effect #202: Poison Fang | 14 of 68 |
-| 60 | move effect #212: Dragon Dance | 14 of 68 |
-| 61 | AI move effect #212 ATK_SPD_UP not transcribed (Basic_CheckDragonDance / Expert_DragonDance): Dragon Dance | 14 of 68 |
-| 62 | move effect #273: Fire Fang | 14 of 68 |
-| 63 | ability: Swarm | 15 of 68 |
-| 64 | ability: Clear Body | 15 of 68 |
-| 65 | held item effect #45: Custap Berry | 16 of 68 |
-| 66 | ability: Drought | 16 of 68 |
-| 67 | held item effect #93: Wide Lens | 16 of 68 |
-| 68 | held item effect #112: Heat Rock | 17 of 68 |
-| 69 | weather: Rain | 17 of 68 |
-| 70 | form: trainer Pokemon in a data form: this game's party builder applies the form before computing its stats, which the engine's trainer party build does not model | 17 of 68 |
-| 71 | move effect #196: Grass Knot, Low Kick | 17 of 68 |
-| 72 | AI move effect #196 INCREASE_POWER_WITH_WEIGHT not transcribed (Basic_CheckNonStandardDamageOrChargeTurn): Grass Knot, Low Kick | 17 of 68 |
-| 73 | held item effect #74: Miracle Seed, Rose Incense | 17 of 68 |
-| 74 | held item effect #84: Charcoal | 17 of 68 |
-| 75 | held item effect #77: Magnet | 18 of 68 |
-| 76 | ability: Scrappy | 18 of 68 |
-| 77 | held item effect #95: Wise Glasses | 18 of 68 |
-| 78 | AI move effect #28 FORCE_SWITCH not transcribed (Basic_CheckCanForceSwitch / Expert_ForceSwitch): Roar, Whirlwind | 19 of 68 |
-| 79 | move effect #41: Dragon Rage | 19 of 68 |
-| 80 | AI move effect #41 40_DAMAGE_FLAT not transcribed (Basic_CheckNonStandardDamageOrChargeTurn): Dragon Rage | 19 of 68 |
-| 81 | ability: Drizzle | 20 of 68 |
-| 82 | move effect #136: Rain Dance | 20 of 68 |
-| 83 | held item effect #113: Damp Rock | 20 of 68 |
-| 84 | AI move effect #136 WEATHER_RAIN not transcribed (Basic_CheckRainDance / Expert_RainDance): Rain Dance | 20 of 68 |
-| 85 | held item effect #36: Berserk Gene, Liechi Berry | 21 of 68 |
-| 86 | AI move effect #99 INCREASE_POWER_WITH_LESS_HP not transcribed (Basic_CheckNonStandardDamageOrChargeTurn / Expert_Reversal): Flail, Reversal | 22 of 68 |
-| 87 | ability: Sniper | 22 of 68 |
-| 88 | ability: Hyper Cutter | 23 of 68 |
-| 89 | battle format: a double battle | 23 of 68 |
-| 90 | AI: AI_FLAG_BATON_PASS | 23 of 68 |
-| 91 | ability: Snow Warning | 24 of 68 |
-| 92 | move effect #225: Tailwind | 24 of 68 |
-| 93 | AI move effect #225 DOUBLE_SPEED_3_TURNS not transcribed (Basic_CheckTailwind / Expert_Tailwind): Tailwind | 24 of 68 |
-| 94 | ability: Download | 25 of 68 |
-| 95 | AI move effect #58 ATK_DOWN_2 not transcribed (Basic_CheckLowStatStage_Attack / Expert_StatusAttackDown): Charm, FeatherDance | 25 of 68 |
-| 96 | move effect #159: Uproar | 26 of 68 |
-| 97 | ability: Lightningrod | 26 of 68 |
-| 98 | move effect #92: Snore | 26 of 68 |
-| 99 | AI move effect #92 DAMAGE_WHILE_ASLEEP not transcribed (Basic_CheckAttackerAsleep / Expert_Nightmare): Snore | 26 of 68 |
-| 100 | AI move effect #135 RANDOM_POWER_BASED_ON_IVS not transcribed (Basic_CheckNonStandardDamageOrChargeTurn): Hidden Power | 27 of 68 |
-| 101 | ability: Trace | 27 of 68 |
-| 102 | ability: Solar Power | 27 of 68 |
-| 103 | move effect #214: Roost | 27 of 68 |
-| 104 | AI move effect #214 HEAL_HALF_REMOVE_FLYING_TYPE not transcribed (Basic_CheckCanRecoverHP / Expert_Recovery): Roost | 27 of 68 |
-| 105 | battle format: gauntlet Eterna Gym gym trainers (position 3; rules not recorded) | 28 of 68 |
-| 106 | ability: Quick Feet | 29 of 68 |
-| 107 | held item effect #79: Sharp Beak | 29 of 68 |
-| 108 | move effect #172: Follow Me | 29 of 68 |
-| 109 | ability: Tinted Lens | 29 of 68 |
-| 110 | held item effect #80: Poison Barb | 29 of 68 |
-| 111 | held item effect #81: NeverMeltIce | 29 of 68 |
-| 112 | ability: Huge Power | 30 of 68 |
-| 113 | move effect #98: Destiny Bond | 30 of 68 |
-| 114 | AI move effect #98 KO_MON_THAT_DEFEATED_USER not transcribed (Expert_DestinyBond): Destiny Bond | 30 of 68 |
-| 115 | ability: Serene Grace | 30 of 68 |
-| 116 | held item effect #38: Salac Berry | 31 of 68 |
-| 117 | ability: Arena Trap | 31 of 68 |
-| 118 | held item effect #73: Hard Stone | 32 of 68 |
-| 119 | move effect #274: Avalanche, Ice Fang | 32 of 68 |
-| 120 | battle terrain: the battle terrain varies over its maps (TERRAIN_GRASS, TERRAIN_MOUNTAIN, TERRAIN_WATER), and Secret Power would read it | 33 of 68 |
-| 121 | move effect #171: SmellingSalt | 33 of 68 |
-| 122 | move effect #45: Hi Jump Kick, Jump Kick | 33 of 68 |
-| 123 | ability: Pure Power | 34 of 68 |
-| 124 | ability: Tangled Feet | 34 of 68 |
-| 125 | AI move effect #23 ACC_DOWN not transcribed (Basic_CheckLowStatStage_Accuracy / Expert_StatusAccuracyDown): Flash, Sand-Attack, SmokeScreen | 35 of 68 |
-| 126 | move effect #227: Bide, Metal Burst | 35 of 68 |
-| 127 | AI move effect #227 METAL_BURST not transcribed (Basic_CheckMetalBurst / Expert_MetalBurst): Bide, Metal Burst | 35 of 68 |
-| 128 | held item effect #100: Toxic Orb | 36 of 68 |
-| 129 | move effect #192: Imprison | 36 of 68 |
-| 130 | AI move effect #192 MAKE_SHARED_MOVES_UNUSEABLE not transcribed (Basic_CheckCanImprison / Expert_Imprison): Imprison | 36 of 68 |
-| 131 | ability: Wonder Guard | 37 of 68 |
-| 132 | held item effect #82: Spell Tag | 37 of 68 |
-| 133 | move effect #188: Knock Off | 37 of 68 |
-| 134 | AI move effect #188 REMOVE_HELD_ITEM not transcribed (Basic_CheckCanRemoveItem / Expert_KnockOff): Knock Off | 37 of 68 |
-| 135 | battle format: gauntlet Route 204 North (position 2; rules not recorded) | 38 of 68 |
-| 136 | ability: Bad Dreams | 38 of 68 |
-| 137 | ability: Rain Dish | 38 of 68 |
-| 138 | battle format: gauntlet Route 204 North B2B (position 2; rules not recorded) | 39 of 68 |
-| 139 | move effect #91: Pain Split | 39 of 68 |
-| 140 | AI move effect #91 AVERAGE_HP not transcribed (Expert_PainSplit): Pain Split | 40 of 68 |
-| 141 | move effect #8: Dream Eater | 40 of 68 |
-| 142 | AI move effect #8 RECOVER_DAMAGE_SLEEP not transcribed (Basic_CheckDreamEater / Expert_DreamEater): Dream Eater | 41 of 68 |
-| 143 | move effect #48: Draco Meteor, Giga Impact, Hydro Cannon, Hyper Beam, Outrage, Superpower | 41 of 68 |
-| 144 | ROM change: battle/skill/be_seq.narc#48 is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) | 42 of 68 |
-| 145 | move effect #164: Hail | 42 of 68 |
-| 146 | AI move effect #164 WEATHER_HAIL not transcribed (Basic_CheckHail / Expert_Hail): Hail | 43 of 68 |
-| 147 | move effect #106: Block, Mean Look, Spider Web | 43 of 68 |
-| 148 | AI move effect #106 PREVENT_ESCAPE not transcribed (Basic_CheckMeanLook / Expert_BindingMove): Block, Mean Look, Spider Web | 43 of 68 |
-| 149 | held item effect #115: Choice Scarf | 44 of 68 |
-| 150 | held item effect #83: Odd Incense, TwistedSpoon | 44 of 68 |
-| 151 | held item effect #104: Zoom Lens | 45 of 68 |
-| 152 | held item effect #23: Yache Berry | 45 of 68 |
-| 153 | ability: Sand Stream | 46 of 68 |
-| 154 | held item effect #141: Iron Plate | 46 of 68 |
-| 155 | ability: Magnet Pull | 47 of 68 |
-| 156 | battle format: gauntlet Eterna Gym gym trainers (position 2; rules not recorded) | 47 of 68 |
-| 157 | ability: Flower Gift | 48 of 68 |
-| 158 | battle format: gauntlet Eterna Gym gym trainers (position 1; rules not recorded) | 48 of 68 |
-| 159 | ability: Leaf Guard | 49 of 68 |
-| 160 | ability: Shield Dust | 49 of 68 |
-| 161 | AI move effect #20 SPEED_DOWN not transcribed (Basic_CheckLowStatStage_Speed / Expert_StatusSpeedDown): String Shot | 50 of 68 |
-| 162 | ability: No Guard | 50 of 68 |
-| 163 | held item effect #5: Cheri Berry | 50 of 68 |
-| 164 | battle format: gauntlet Oreburgh Mine (position 2; rules not recorded) | 51 of 68 |
-| 165 | held item effect #0: Bicycle, Big Nugget, Big Pearl, Blue Scarf, Cherish Ball, Nanab Berry, +3 more | 51 of 68 |
-| 166 | move effect #142: Belly Drum | 51 of 68 |
-| 167 | AI move effect #142 MAX_ATK_LOSE_HALF_MAX_HP not transcribed (Basic_CheckBellyDrum / Expert_BellyDrum): Belly Drum | 51 of 68 |
-| 168 | move effect #208: Bulk Up | 51 of 68 |
-| 169 | AI move effect #208 ATK_DEF_UP not transcribed (Basic_CheckBulkUp / Expert_StatusDefenseUp): Bulk Up | 52 of 68 |
-| 170 | move effect #144: Mirror Coat | 52 of 68 |
-| 171 | AI move effect #144 MIRROR_COAT not transcribed (Basic_CheckNonStandardDamageOrChargeTurn / Expert_MirrorCoat): Mirror Coat | 52 of 68 |
-| 172 | ability: Shell Armor | 53 of 68 |
-| 173 | move effect #112: Spikes | 53 of 68 |
-| 174 | AI move effect #112 SET_SPIKES not transcribed (Basic_CheckSpikes / Expert_Spikes): Spikes | 53 of 68 |
-| 175 | move effect #79: Substitute | 53 of 68 |
-| 176 | held item effect #30: Charti Berry | 53 of 68 |
-| 177 | AI move effect #79 SET_SUBSTITUTE not transcribed (Basic_CheckCannotSubstitute / Expert_Substitute): Substitute | 54 of 68 |
-| 178 | move effect #242: Copycat | 54 of 68 |
-| 179 | AI move effect #242 USE_LAST_USED_MOVE not transcribed (Basic_CheckCopycat / Expert_Copycat): Copycat | 54 of 68 |
-| 180 | AI move effect #122 RANDOM_POWER_MAYBE_HEAL not transcribed (Basic_CheckNonStandardDamageOrChargeTurn): Present | 55 of 68 |
-| 181 | move effect #182: Brave Bird, Close Combat, Take Down | 55 of 68 |
-| 182 | ROM change: battle/skill/be_seq.narc#182 is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) | 55 of 68 |
-| 183 | AI move effect #182 LOWER_OWN_ATK_AND_DEF not transcribed (Basic_CheckNonStandardDamageOrChargeTurn / Expert_Superpower): Brave Bird, Close Combat, Take Down | 55 of 68 |
-| 184 | move effect #189: Endeavor | 55 of 68 |
-| 185 | held item effect #15: Wiki Berry | 55 of 68 |
-| 186 | AI move effect #189 SET_HP_EQUAL_TO_USER not transcribed (Basic_CheckNonStandardDamageOrChargeTurn / Expert_Endeavor): Endeavor | 56 of 68 |
-| 187 | move effect #137: Sunny Day | 56 of 68 |
-| 188 | battle format: gauntlet Route 204 North (position 3; rules not recorded) | 56 of 68 |
-| 189 | AI move effect #137 WEATHER_SUN not transcribed (Basic_CheckSunnyDay / Expert_SunnyDay): Sunny Day | 57 of 68 |
-| 190 | move effect #124: Safeguard | 57 of 68 |
-| 191 | battle terrain: the battle terrain varies over its maps (TERRAIN_PLAIN, TERRAIN_GRASS, TERRAIN_BUILDING), and Secret Power would read it | 57 of 68 |
-| 192 | AI move effect #124 PREVENT_STATUS not transcribed (Basic_CheckAlreadyUnderSafeguard): Safeguard | 58 of 68 |
-| 193 | held item effect #75: BlackGlasses | 58 of 68 |
-| 194 | held item effect #26: Shuca Berry | 58 of 68 |
-| 195 | ability: Water Absorb | 59 of 68 |
-| 196 | held item effect #57: SilverPowder | 59 of 68 |
-| 197 | battle format: gauntlet Oreburgh Mine (position 1; rules not recorded) | 59 of 68 |
-| 198 | ability: Honey Gather | 60 of 68 |
-| 199 | trainer item: Poké Ball | 60 of 68 |
-| 200 | move effect #40: Super Fang | 60 of 68 |
-| 201 | move effect #101: False Swipe | 60 of 68 |
-| 202 | AI move effect #40 HALVE_HP not transcribed (Basic_CheckNonStandardDamageOrChargeTurn / Expert_SuperFang): Super Fang | 61 of 68 |
-| 203 | move effect #230: Payback, Revenge | 61 of 68 |
-| 204 | held item effect #91: Thick Club | 61 of 68 |
-| 205 | held item effect #109: Black Sludge | 61 of 68 |
-| 206 | AI move effect #230 DOUBLE_POWER_IF_MOVING_SECOND not transcribed (Expert_Payback): Payback, Revenge | 62 of 68 |
-| 207 | move effect #180: Assist | 62 of 68 |
-| 208 | move effect #151: SolarBeam | 62 of 68 |
-| 209 | held item effect #29: Tanga Berry | 62 of 68 |
-| 210 | AI move effect #151 SKIP_CHARGE_TURN_IN_SUN not transcribed (Expert_ChargeTurnNoInvuln / Expert_Thunder): SolarBeam | 63 of 68 |
-| 211 | move effect #176: Helping Hand | 63 of 68 |
-| 212 | held item effect #39: Petaya Berry | 63 of 68 |
-| 213 | ability: Synchronize | 63 of 68 |
-| 214 | AI move effect #176 BOOST_ALLY_POWER_BY_50_PERCENT not transcribed (Basic_CheckHelpingHand): Helping Hand | 64 of 68 |
-| 215 | move effect #148: Doom Desire, Future Sight | 64 of 68 |
-| 216 | held item effect #72: Soft Sand | 64 of 68 |
-| 217 | held item effect #21: Wacan Berry | 64 of 68 |
-| 218 | AI move effect #148 HIT_IN_3_TURNS not transcribed (Basic_CheckFutureSight): Doom Desire, Future Sight | 65 of 68 |
-| 219 | move effect #38: Fissure, Guillotine, Horn Drill | 65 of 68 |
-| 220 | move effect #118: Swagger | 65 of 68 |
-| 221 | held item effect #88: Shell Bell | 65 of 68 |
-| 222 | held item effect #116: Sticky Barb | 65 of 68 |
-| 223 | AI move effect #38 ONE_HIT_KO not transcribed (Basic_CheckOHKOWouldFail / Expert_OHKOMove): Fissure, Guillotine, Horn Drill | 66 of 68 |
-| 224 | move effect #170: Focus Punch | 66 of 68 |
-| 225 | held item effect #28: Payapa Berry | 66 of 68 |
-| 226 | battle format: gauntlet Route 204 North (position 1; rules not recorded) | 66 of 68 |
-| 227 | ability: Poison Heal | 66 of 68 |
-| 228 | AI move effect #170 HIT_LAST_WHIFF_IF_HIT not transcribed (Basic_CheckNonStandardDamageOrChargeTurn / Expert_FocusPunch): Focus Punch | 67 of 68 |
-| 229 | move effect #90: Encore | 67 of 68 |
-| 230 | move effect #89: Counter | 67 of 68 |
-| 231 | move effect #108: Minimize | 67 of 68 |
-| 232 | battle format: gauntlet Route 204 North B2B (position 1; rules not recorded) | 67 of 68 |
-| 233 | ability: Shadow Tag | 67 of 68 |
-| 234 | AI move effect #90 ENCORE not transcribed (Basic_CheckCannotEncore / Expert_Encore): Encore | 67 of 68 |
-| 235 | AI move effect #89 COUNTER not transcribed (Basic_CheckNonStandardDamageOrChargeTurn / Expert_Counter): Counter | 67 of 68 |
-| 236 | AI move effect #108 EVA_UP_2_MINIMIZE not transcribed (Basic_CheckHighStatStage_Evasion / Expert_StatusEvasionUp): Minimize | 68 of 68 |
+| 2 | battle format: a multi battle | 2 of 68 |
+| 3 | held item effect #86: Silk Scarf | 2 of 68 |
+| 4 | held item effect #98: Life Orb | 2 of 68 |
+| 5 | AI: AI_FLAG_TAG_STRATEGY | 2 of 68 |
+| 6 | ability: Levitate | 2 of 68 |
+| 7 | ability: Magic Guard | 2 of 68 |
+| 8 | held item effect #101: Flame Orb | 2 of 68 |
+| 9 | move effect #83: Metronome | 2 of 68 |
+| 10 | ability: Super Luck | 3 of 68 |
+| 11 | ability: Chlorophyll | 3 of 68 |
+| 12 | held item effect #69: Leftovers | 3 of 68 |
+| 13 | AI: AI_FLAG_HARRASSMENT | 3 of 68 |
+| 14 | held item effect #56: King's Rock, Razor Fang | 3 of 68 |
+| 15 | ability: Aftermath | 3 of 68 |
+| 16 | move effect #169: Facade | 3 of 68 |
+| 17 | ability: Unburden | 4 of 68 |
+| 18 | ability: Gluttony | 4 of 68 |
+| 19 | move effect #221: Brine, Wring Out | 4 of 68 |
+| 20 | held item effect #94: Muscle Band | 4 of 68 |
+| 21 | move effect #228: U-turn | 4 of 68 |
+| 22 | AI move effect #228 SWITCH_HIT not transcribed (Expert_UTurn): U-turn | 4 of 68 |
+| 23 | move effect #249: Toxic Spikes | 4 of 68 |
+| 24 | held item effect #97: Light Clay | 4 of 68 |
+| 25 | move effect #198: Double-Edge, Wood Hammer | 4 of 68 |
+| 26 | move effect #152: Thunder | 4 of 68 |
+| 27 | ability: Volt Absorb | 5 of 68 |
+| 28 | move effect #164: Hail | 6 of 68 |
+| 29 | ability: Pressure | 7 of 68 |
+| 30 | move effect #197: Secret Power | 7 of 68 |
+| 31 | held item effect #96: Expert Belt | 7 of 68 |
+| 32 | move effect #147: Earthquake | 7 of 68 |
+| 33 | move effect #92: Snore | 7 of 68 |
+| 34 | AI move effect #135 RANDOM_POWER_BASED_ON_IVS not transcribed (Basic_CheckNonStandardDamageOrChargeTurn): Hidden Power | 8 of 68 |
+| 35 | ability: Filter | 8 of 68 |
+| 36 | held item effect #67: Razor Claw, Scope Lens | 9 of 68 |
+| 37 | move effect #212: Dragon Dance | 9 of 68 |
+| 38 | held item effect #78: Mystic Water | 9 of 68 |
+| 39 | move effect #136: Rain Dance | 9 of 68 |
+| 40 | held item effect #113: Damp Rock | 10 of 68 |
+| 41 | held item effect #45: Custap Berry | 10 of 68 |
+| 42 | ability: Clear Body | 11 of 68 |
+| 43 | AI move effect #87 LEVEL_DAMAGE_FLAT not transcribed (Basic_CheckNonStandardDamageOrChargeTurn): Night Shade, Seismic Toss | 11 of 68 |
+| 44 | held item effect #48: BrightPowder, Lax Incense | 11 of 68 |
+| 45 | move effect #273: Fire Fang | 11 of 68 |
+| 46 | ability: Swarm | 12 of 68 |
+| 47 | move effect #202: Poison Fang | 12 of 68 |
+| 48 | ability: Thick Fat | 12 of 68 |
+| 49 | ability: Reckless | 12 of 68 |
+| 50 | ability: Technician | 12 of 68 |
+| 51 | battle terrain: the battle terrain varies over its maps (TERRAIN_PLAIN, TERRAIN_GRASS, TERRAIN_WATER), and Secret Power would read it | 12 of 68 |
+| 52 | held item effect #55: Choice Band | 12 of 68 |
+| 53 | ability: Truant | 15 of 68 |
+| 54 | move effect #260: Blizzard, Ice Ball, Sheer Cold | 15 of 68 |
+| 55 | AI move effect #260 BLIZZARD not transcribed (Expert_Blizzard): Blizzard, Ice Ball, Sheer Cold | 15 of 68 |
+| 56 | held item effect #65: Focus Band | 16 of 68 |
+| 57 | held item effect #19: Occa Berry | 16 of 68 |
+| 58 | ability: Dry Skin | 16 of 68 |
+| 59 | held item effect #20: Passho Berry | 17 of 68 |
+| 60 | move effect #262: Frenzy Plant, Roar of Time, Sky Attack, Thrash, Volt Tackle, Wild Charge | 18 of 68 |
+| 61 | move effect #41: Dragon Rage | 18 of 68 |
+| 62 | AI move effect #41 40_DAMAGE_FLAT not transcribed (Basic_CheckNonStandardDamageOrChargeTurn): Dragon Rage | 18 of 68 |
+| 63 | ability: Drizzle | 19 of 68 |
+| 64 | held item effect #95: Wise Glasses | 19 of 68 |
+| 65 | held item effect #36: Berserk Gene, Liechi Berry | 20 of 68 |
+| 66 | battle format: a double battle | 20 of 68 |
+| 67 | ability: Sniper | 20 of 68 |
+| 68 | ability: Hyper Cutter | 21 of 68 |
+| 69 | move effect #150: Stomp | 21 of 68 |
+| 70 | move effect #257: Surf | 22 of 68 |
+| 71 | ability: Drought | 22 of 68 |
+| 72 | held item effect #93: Wide Lens | 22 of 68 |
+| 73 | held item effect #112: Heat Rock | 23 of 68 |
+| 74 | weather: Rain | 23 of 68 |
+| 75 | form: trainer Pokemon in a data form: this game's party builder applies the form before computing its stats, which the engine's trainer party build does not model | 23 of 68 |
+| 76 | AI: AI_FLAG_BATON_PASS | 23 of 68 |
+| 77 | ability: Snow Warning | 24 of 68 |
+| 78 | move effect #225: Tailwind | 24 of 68 |
+| 79 | ability: Download | 25 of 68 |
+| 80 | ability: Trace | 25 of 68 |
+| 81 | move effect #98: Destiny Bond | 25 of 68 |
+| 82 | held item effect #79: Sharp Beak | 25 of 68 |
+| 83 | move effect #196: Grass Knot, Low Kick | 25 of 68 |
+| 84 | AI move effect #196 INCREASE_POWER_WITH_WEIGHT not transcribed (Basic_CheckNonStandardDamageOrChargeTurn): Grass Knot, Low Kick | 25 of 68 |
+| 85 | held item effect #84: Charcoal | 25 of 68 |
+| 86 | held item effect #74: Miracle Seed, Rose Incense | 25 of 68 |
+| 87 | held item effect #77: Magnet | 26 of 68 |
+| 88 | ability: Scrappy | 26 of 68 |
+| 89 | move effect #159: Uproar | 27 of 68 |
+| 90 | AI move-id case of TrainerAI_CalcDamage: Bulldoze | 27 of 68 |
+| 91 | AI move effect #28 FORCE_SWITCH not transcribed (Basic_CheckCanForceSwitch / Expert_ForceSwitch): Roar, Whirlwind | 28 of 68 |
+| 92 | ability: Lightningrod | 28 of 68 |
+| 93 | move effect #172: Follow Me | 28 of 68 |
+| 94 | ability: Tinted Lens | 28 of 68 |
+| 95 | ability: Solar Power | 28 of 68 |
+| 96 | move effect #214: Roost | 28 of 68 |
+| 97 | AI move effect #214 HEAL_HALF_REMOVE_FLYING_TYPE not transcribed (Basic_CheckCanRecoverHP / Expert_Recovery): Roost | 28 of 68 |
+| 98 | battle format: gauntlet Eterna Gym gym trainers (position 3; rules not recorded) | 29 of 68 |
+| 99 | ability: Quick Feet | 30 of 68 |
+| 100 | held item effect #80: Poison Barb | 30 of 68 |
+| 101 | held item effect #81: NeverMeltIce | 30 of 68 |
+| 102 | ability: Huge Power | 31 of 68 |
+| 103 | ability: Serene Grace | 31 of 68 |
+| 104 | held item effect #38: Salac Berry | 32 of 68 |
+| 105 | move effect #227: Bide, Metal Burst | 32 of 68 |
+| 106 | AI move effect #227 METAL_BURST not transcribed (Basic_CheckMetalBurst / Expert_MetalBurst): Bide, Metal Burst | 32 of 68 |
+| 107 | held item effect #100: Toxic Orb | 33 of 68 |
+| 108 | ability: Shield Dust | 34 of 68 |
+| 109 | ability: Arena Trap | 34 of 68 |
+| 110 | held item effect #73: Hard Stone | 35 of 68 |
+| 111 | move effect #171: SmellingSalt | 35 of 68 |
+| 112 | move effect #274: Avalanche, Ice Fang | 35 of 68 |
+| 113 | battle terrain: the battle terrain varies over its maps (TERRAIN_GRASS, TERRAIN_MOUNTAIN, TERRAIN_WATER), and Secret Power would read it | 36 of 68 |
+| 114 | move effect #45: Hi Jump Kick, Jump Kick | 36 of 68 |
+| 115 | ability: Pure Power | 37 of 68 |
+| 116 | ability: Tangled Feet | 37 of 68 |
+| 117 | AI move effect #23 ACC_DOWN not transcribed (Basic_CheckLowStatStage_Accuracy / Expert_StatusAccuracyDown): Flash, Sand-Attack, SmokeScreen | 38 of 68 |
+| 118 | move effect #144: Mirror Coat | 38 of 68 |
+| 119 | ability: Shell Armor | 39 of 68 |
+| 120 | move effect #192: Imprison | 39 of 68 |
+| 121 | AI move effect #192 MAKE_SHARED_MOVES_UNUSEABLE not transcribed (Basic_CheckCanImprison / Expert_Imprison): Imprison | 39 of 68 |
+| 122 | ability: Wonder Guard | 40 of 68 |
+| 123 | held item effect #82: Spell Tag | 40 of 68 |
+| 124 | move effect #188: Knock Off | 40 of 68 |
+| 125 | AI move effect #188 REMOVE_HELD_ITEM not transcribed (Basic_CheckCanRemoveItem / Expert_KnockOff): Knock Off | 40 of 68 |
+| 126 | battle format: gauntlet Route 204 North (position 2; rules not recorded) | 41 of 68 |
+| 127 | ability: Bad Dreams | 41 of 68 |
+| 128 | ability: Rain Dish | 41 of 68 |
+| 129 | battle format: gauntlet Route 204 North B2B (position 2; rules not recorded) | 42 of 68 |
+| 130 | move effect #91: Pain Split | 42 of 68 |
+| 131 | AI move effect #91 AVERAGE_HP not transcribed (Expert_PainSplit): Pain Split | 43 of 68 |
+| 132 | move effect #8: Dream Eater | 43 of 68 |
+| 133 | AI move effect #8 RECOVER_DAMAGE_SLEEP not transcribed (Basic_CheckDreamEater / Expert_DreamEater): Dream Eater | 44 of 68 |
+| 134 | move effect #48: Draco Meteor, Giga Impact, Hydro Cannon, Hyper Beam, Outrage, Superpower | 44 of 68 |
+| 135 | ROM change: battle/skill/be_seq.narc#48 is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) | 45 of 68 |
+| 136 | move effect #106: Block, Mean Look, Spider Web | 45 of 68 |
+| 137 | AI move effect #106 PREVENT_ESCAPE not transcribed (Basic_CheckMeanLook / Expert_BindingMove): Block, Mean Look, Spider Web | 45 of 68 |
+| 138 | held item effect #115: Choice Scarf | 46 of 68 |
+| 139 | held item effect #83: Odd Incense, TwistedSpoon | 46 of 68 |
+| 140 | held item effect #104: Zoom Lens | 47 of 68 |
+| 141 | held item effect #23: Yache Berry | 47 of 68 |
+| 142 | ability: Sand Stream | 48 of 68 |
+| 143 | held item effect #141: Iron Plate | 48 of 68 |
+| 144 | ability: Magnet Pull | 49 of 68 |
+| 145 | held item effect #0: Bicycle, Big Nugget, Big Pearl, Blue Scarf, Cherish Ball, Nanab Berry, +3 more | 49 of 68 |
+| 146 | move effect #142: Belly Drum | 49 of 68 |
+| 147 | AI move effect #142 MAX_ATK_LOSE_HALF_MAX_HP not transcribed (Basic_CheckBellyDrum / Expert_BellyDrum): Belly Drum | 49 of 68 |
+| 148 | move effect #208: Bulk Up | 50 of 68 |
+| 149 | battle format: gauntlet Eterna Gym gym trainers (position 2; rules not recorded) | 50 of 68 |
+| 150 | ability: Flower Gift | 51 of 68 |
+| 151 | battle format: gauntlet Eterna Gym gym trainers (position 1; rules not recorded) | 51 of 68 |
+| 152 | ability: Leaf Guard | 52 of 68 |
+| 153 | ability: No Guard | 52 of 68 |
+| 154 | held item effect #5: Cheri Berry | 52 of 68 |
+| 155 | battle format: gauntlet Oreburgh Mine (position 2; rules not recorded) | 53 of 68 |
+| 156 | move effect #112: Spikes | 53 of 68 |
+| 157 | move effect #182: Brave Bird, Close Combat, Take Down | 53 of 68 |
+| 158 | ROM change: battle/skill/be_seq.narc#182 is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) | 53 of 68 |
+| 159 | trainer item: Poké Ball | 53 of 68 |
+| 160 | move effect #40: Super Fang | 53 of 68 |
+| 161 | move effect #101: False Swipe | 54 of 68 |
+| 162 | move effect #79: Substitute | 54 of 68 |
+| 163 | held item effect #30: Charti Berry | 54 of 68 |
+| 164 | AI move effect #79 SET_SUBSTITUTE not transcribed (Basic_CheckCannotSubstitute / Expert_Substitute): Substitute | 55 of 68 |
+| 165 | move effect #242: Copycat | 55 of 68 |
+| 166 | AI move effect #242 USE_LAST_USED_MOVE not transcribed (Basic_CheckCopycat / Expert_Copycat): Copycat | 55 of 68 |
+| 167 | AI move effect #122 RANDOM_POWER_MAYBE_HEAL not transcribed (Basic_CheckNonStandardDamageOrChargeTurn): Present | 56 of 68 |
+| 168 | move effect #230: Payback, Revenge | 56 of 68 |
+| 169 | held item effect #91: Thick Club | 56 of 68 |
+| 170 | held item effect #109: Black Sludge | 57 of 68 |
+| 171 | move effect #189: Endeavor | 57 of 68 |
+| 172 | held item effect #15: Wiki Berry | 57 of 68 |
+| 173 | AI move effect #189 SET_HP_EQUAL_TO_USER not transcribed (Basic_CheckNonStandardDamageOrChargeTurn / Expert_Endeavor): Endeavor | 58 of 68 |
+| 174 | move effect #137: Sunny Day | 58 of 68 |
+| 175 | battle format: gauntlet Route 204 North (position 3; rules not recorded) | 58 of 68 |
+| 176 | AI move effect #137 WEATHER_SUN not transcribed (Basic_CheckSunnyDay / Expert_SunnyDay): Sunny Day | 59 of 68 |
+| 177 | move effect #124: Safeguard | 59 of 68 |
+| 178 | battle terrain: the battle terrain varies over its maps (TERRAIN_PLAIN, TERRAIN_GRASS, TERRAIN_BUILDING), and Secret Power would read it | 59 of 68 |
+| 179 | AI move effect #124 PREVENT_STATUS not transcribed (Basic_CheckAlreadyUnderSafeguard): Safeguard | 60 of 68 |
+| 180 | held item effect #75: BlackGlasses | 60 of 68 |
+| 181 | held item effect #26: Shuca Berry | 60 of 68 |
+| 182 | ability: Water Absorb | 61 of 68 |
+| 183 | held item effect #57: SilverPowder | 61 of 68 |
+| 184 | battle format: gauntlet Oreburgh Mine (position 1; rules not recorded) | 61 of 68 |
+| 185 | ability: Honey Gather | 62 of 68 |
+| 186 | move effect #180: Assist | 62 of 68 |
+| 187 | move effect #151: SolarBeam | 62 of 68 |
+| 188 | held item effect #29: Tanga Berry | 62 of 68 |
+| 189 | AI move effect #151 SKIP_CHARGE_TURN_IN_SUN not transcribed (Expert_ChargeTurnNoInvuln / Expert_Thunder): SolarBeam | 63 of 68 |
+| 190 | move effect #176: Helping Hand | 63 of 68 |
+| 191 | held item effect #39: Petaya Berry | 63 of 68 |
+| 192 | ability: Synchronize | 63 of 68 |
+| 193 | AI move effect #176 BOOST_ALLY_POWER_BY_50_PERCENT not transcribed (Basic_CheckHelpingHand): Helping Hand | 64 of 68 |
+| 194 | move effect #148: Doom Desire, Future Sight | 64 of 68 |
+| 195 | held item effect #72: Soft Sand | 64 of 68 |
+| 196 | held item effect #21: Wacan Berry | 64 of 68 |
+| 197 | AI move effect #148 HIT_IN_3_TURNS not transcribed (Basic_CheckFutureSight): Doom Desire, Future Sight | 65 of 68 |
+| 198 | move effect #38: Fissure, Guillotine, Horn Drill | 65 of 68 |
+| 199 | move effect #118: Swagger | 65 of 68 |
+| 200 | held item effect #88: Shell Bell | 65 of 68 |
+| 201 | held item effect #116: Sticky Barb | 65 of 68 |
+| 202 | AI move effect #38 ONE_HIT_KO not transcribed (Basic_CheckOHKOWouldFail / Expert_OHKOMove): Fissure, Guillotine, Horn Drill | 66 of 68 |
+| 203 | move effect #170: Focus Punch | 66 of 68 |
+| 204 | held item effect #28: Payapa Berry | 66 of 68 |
+| 205 | battle format: gauntlet Route 204 North (position 1; rules not recorded) | 66 of 68 |
+| 206 | ability: Poison Heal | 66 of 68 |
+| 207 | AI move effect #170 HIT_LAST_WHIFF_IF_HIT not transcribed (Basic_CheckNonStandardDamageOrChargeTurn / Expert_FocusPunch): Focus Punch | 67 of 68 |
+| 208 | move effect #90: Encore | 67 of 68 |
+| 209 | move effect #89: Counter | 67 of 68 |
+| 210 | move effect #108: Minimize | 67 of 68 |
+| 211 | battle format: gauntlet Route 204 North B2B (position 1; rules not recorded) | 67 of 68 |
+| 212 | ability: Shadow Tag | 67 of 68 |
+| 213 | AI move effect #90 ENCORE not transcribed (Basic_CheckCannotEncore / Expert_Encore): Encore | 67 of 68 |
+| 214 | AI move effect #108 EVA_UP_2_MINIMIZE not transcribed (Basic_CheckHighStatStage_Evasion / Expert_StatusEvasionUp): Minimize | 68 of 68 |
