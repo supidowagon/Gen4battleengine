@@ -1609,7 +1609,17 @@ def _act(
     own = {name: jnp.where(is_move, value, 0) for name, value in own.items()}
     own.update(act_kind=kind, act_id=act_id, shown=switch | item | (own["shown"] != 0))
     foe_events = {name: jnp.where(is_move, value, 0) for name, value in foe_events.items()}
-    ctl = {**ctl, "fbase": jnp.where(resumed, _alive_mask(listed), base)}
+    # The move branch is evaluated for every action; only a move (or a resumed one) can stop at a
+    # party list or a Pursuit. A switch or a bag item never runs a move script (the turn branches on
+    # the command picked, bcp.c:893), so the move its slot would hold (action 4+ clipped to slot 3: a Baton Pass or
+    # U-turn there) must not pause it: that replayed the switch on the newcomer (ruling B7-12).
+    runs_move = (is_move & live) | resumed
+    ctl = {
+        **ctl,
+        "pause": ctl["pause"] & runs_move,
+        "pursue": ctl["pursue"] & runs_move,
+        "fbase": jnp.where(resumed, _alive_mask(listed), base),
+    }
     return acted, own, foe_events, ctl
 
 

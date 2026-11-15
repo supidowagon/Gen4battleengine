@@ -14,13 +14,8 @@
   test follow-ups: U-turn / Baton Pass damage classes, the turn-end order test's
   `uproar_disable`), and this ledger commit. The second family (E1's six fields with Curse
   (Ghost), Perish Song, Yawn, Lock-On, Mind Reader) was not started: Owed.
-- Found, not fixed (pre-existing at f22b818, reproduced there): a differential divergence on a
-  generated state where the opponent switches into a bench Carvanha holding a drawn Magic Guard
-  (strategies `_draw_batch4`'s "Magic Guard newcomer facing Stealth Rock") while the player's
-  Pikachu uses Tackle: JAX ends with the newcomer fainted before the Tackle (no_target) and its
-  ability back to Rough Skin, the reference with it alive until the Tackle KO. Repro:
-  `_scratch/e2/b7/repro.py _scratch/e2/b7/diff2.log 2` on G: (the case is the log's third
-  "Failing test case"). Needs its own look before the next full differential run.
+- Fixed after batch 7 (B7-12): the differential divergence found at f22b818 (a switch replaying
+  on the newcomer), from 470fbef (batch 6's pause loop); the JAX engine was wrong.
   Also pre-existing at f22b818: tests/prep/test_variants.py `test_ai_hp_checks_pinned` /
   `_per_policy` expect no `if_party_member_deals_more_damage` among the AI's HP checks (E1's
   merged batch 15 added it): E1's or the prep owner's.
@@ -963,3 +958,10 @@ Rules left out because another mechanic is missing; each closes with the mechani
   shared move for Imprison, the five fields drawn; Roar against an ingrained foe with and
   without other mask bits; `ai_item_known` none or the held item) reach every branch; no hand
   test was needed beyond the updated order and observation tests.
+- B7-12 (fix, from 470fbef) `_act` evaluates the move branch for every action, and a switch
+  action (4 + slot) clips to move slot 3: a Baton Pass or U-turn there set `ctl["pause"]` /
+  `["pursue"]`, so `_execute_actions` replayed the switch from the newcomer (its traced or other
+  ability restored to the personal one, the hazards a second time). The turn branches on the
+  picked command (`battlerActions[...][BATTLE_ACTION_PICK_COMMAND]`, bcp.c:893): a switch or a
+  bag item runs no move script, so only a move or a resumed action can stop. The reference was
+  right. Test: tests/engine/test_batch7_review.py (fails at f22b818).
