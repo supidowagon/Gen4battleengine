@@ -3150,3 +3150,102 @@ def test_batch16_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party
         layout = layout_for(t, flags, s2)
         assert policy.ai_refusals(t, s2, n, layout) == []
         _assert_exact_equals_loose(t, s2, layout)
+
+
+# --- E1 batch 17: Roar / Whirlwind, Substitute, Dream Eater ---------------------------------
+
+
+@pytest.mark.parametrize(
+    ("case", "jumps", "basic", "expert"),
+    [
+        # Basic_CheckCanForceSwitch (script.s:499-509) / Expert_ForceSwitch (:2574-2611)
+        ("fresh", (), 0, -3),  # in 0 turns, no hazard, no stage above +2: -3
+        ("long", (), 0, 4),  # in more than 3 turns: +2 (:2603), +2 (:2607)
+        ("long", (2603,), 0, 2),
+        ("spikes", (), 0, 2),  # Spikes on the player's side: the second try only
+        ("spikes", (2607,), 0, 0),
+        ("boosted", (), 0, 2),  # the player's Attack above +2 (decomp 8)
+        ("alone", (), -10, -3),  # no other living Pokemon on the player's side
+    ],
+)
+def test_force_switch(kaizo_tables, kaizo_names, kaizo_roark_party, case, jumps, basic, expert):
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Roar", "Accelerock", "", ""))
+    if case == "long":
+        s = _turn(s, 5)
+    elif case == "spikes":
+        s = s._replace(spikes=s.spikes.at[0].set(1))
+    elif case == "boosted":
+        s = s._replace(stages=s.stages.at[0, Stat.ATK].set(3))
+    elif case == "alone":
+        s = s._replace(hp=s.hp.at[0, 1].set(0))
+    assert _delta(t, s, 0x2, 0x3)[0] == basic
+    assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expert
+
+
+@pytest.mark.parametrize(
+    ("own", "speed", "last", "jumps", "basic", "expert"),
+    [
+        # Basic_CheckCannotSubstitute (script.s:633-637) / Expert_Substitute (:2976-3042)
+        (100, "faster", "", (), 0, 0),  # above 90 %: straight to the last move: none
+        (100, "faster", "Toxic", (), 0, 1),  # a status move, the player unstatused
+        (100, "faster", "Toxic", (3038,), 0, 0),
+        (100, "slower", "Toxic", (), 0, 0),  # slower: nothing (:3014)
+        (80, "faster", "", (), 0, -1),  # above 70 %: one try (:3010)
+        (60, "faster", "", (), 0, -2),  # above 50 %: two (:3006, :3010)
+        (40, "faster", "", (), 0, -3),  # three (:3002, :3006, :3010)
+        (20, "faster", "", (), -10, -3),  # below 26 %: Basic -10
+    ],
+)
+def test_substitute(
+    kaizo_tables, kaizo_names, kaizo_roark_party, own, speed, last, jumps, basic, expert
+):
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Substitute", "Accelerock", "", ""))
+    s = _hp(_speeds(s, player=1 if speed == "faster" else 500, opp=100), 1, own)
+    if last:
+        s = s._replace(last_move=s.last_move.at[0].set(n.move_names.index(last)))
+    assert _delta(t, s, 0x2, 0x3)[0] == basic
+    assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expert
+
+
+def test_basic_substitute_already_behind_one(kaizo_tables, kaizo_names, kaizo_roark_party):
+    """Basic_CheckCannotSubstitute (script.s:635): behind a Substitute already, -8."""
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Substitute", "Accelerock", "", ""))
+    s = s._replace(substitute_hp=s.substitute_hp.at[1].set(10))
+    assert _delta(t, s, 0x2, 0x3)[0] == -8
+
+
+@pytest.mark.parametrize(
+    ("asleep", "jumps", "basic", "expert"),
+    [
+        # Basic_CheckDreamEater (script.s:329-333) / Expert_DreamEater (:1886-1905), Kaizo
+        # Dream Eater (Psychic) against Gible (neutral)
+        (False, (), -8, 0),
+        (True, (), 0, 3),  # +3 unless the 51 roll (:1897) jumps
+        (True, (1897,), 0, 0),
+    ],
+)
+def test_dream_eater(kaizo_tables, kaizo_names, kaizo_roark_party, asleep, jumps, basic, expert):
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Dream Eater", "Accelerock", "", ""))
+    if asleep:
+        s = s._replace(status=s.status.at[0, 0].set(Status.SLEEP))
+    assert _delta(t, s, 0x2, 0x3)[0] == basic
+    assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expert
+
+
+@pytest.mark.parametrize("flags", [0x17, 0x10F])
+def test_batch17_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, flags):
+    t, n = kaizo_tables, kaizo_names
+    s = _state(
+        t, kaizo_roark_party, BONSLY, _ids(n, "Roar", "Substitute", "Dream Eater", "Accelerock")
+    )
+    for hp, turn, last in ((100, 5, "Toxic"), (40, 0, "")):
+        s2 = _turn(_hp(s, 1, hp), turn)
+        if last:
+            s2 = s2._replace(last_move=s2.last_move.at[0].set(n.move_names.index(last)))
+        layout = layout_for(t, flags, s2)
+        assert policy.ai_refusals(t, s2, n, layout) == []
+        _assert_exact_equals_loose(t, s2, layout)

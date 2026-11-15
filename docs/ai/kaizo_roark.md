@@ -734,6 +734,24 @@ R8) with `:5139`.
 - BLIZZARD (260, Kaizo Blizzard, Ice Ball and Sheer Cold): `Expert_Blizzard` (`:1801`; `:6216-6234`),
   resisted -3 unless the 50 roll (`:6229`) jumps, else in hail +1.
 
+### 5.20 Roar and Whirlwind, Substitute, Dream Eater (E1 batch 17)
+
+- FORCE_SWITCH (28): `Basic_CheckCanForceSwitch` (`:499-509`; `:153`), the player with no
+  other living Pokemon -10, else unless Mold Breaker against Suction Cups (a guessing read)
+  -10; `Expert_ForceSwitch` (`:1650`; `:2574-2611`): the player in more than 3 turns (the
+  new command `LoadBattlerTurnCount`, `totalTurns - fakeOutTurnNumber`) +2 unless `:2603`
+  jumps then +2 unless `:2607` jumps; hazards on its side (`IfSideCondition` now reads
+  Spikes and Toxic Spikes from their layer counts) or a stat above +2, the second try only;
+  else -3.
+- SET_SUBSTITUTE (79): `Basic_CheckCannotSubstitute` (`:633-637`; `:181`);
+  `Expert_Substitute` (`:1684`; `:2976-3042`), with the new command `LoadEffectOfLoadedMove`
+  on the player's last move and `IfNotVolatileStatus`.
+- RECOVER_DAMAGE_SLEEP (8): `Basic_CheckDreamEater` (`:329-333`; `:136`); `Expert_DreamEater`
+  (`:1631`; `:1886-1905`), the player asleep +3 unless the 51 roll (`:1897`) jumps.
+- Waiting on state the engine does not hold: Knock Off (the AI's record of the player's held
+  item, `LoadHeldItem`), Imprison (`MOVE_EFFECT_IMPRISON` / `_IMPRISONED`), Mean Look
+  (`VOLATILE_CONDITION_MEAN_LOOK`), Minimize (`Expert_StatusEvasionUp` reads Ingrain).
+
 ## 6. Where the AI reads the true battle state
 
 roark.md 6 holds: the damage estimate, the kill check and the effectiveness class read the

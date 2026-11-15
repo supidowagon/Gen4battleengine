@@ -685,6 +685,38 @@ def _basic_check_belly_drum(ctx: AiContext, mask) -> AiContext:
     return _basic_check_high_atk(ctx, ctx.live)
 
 
+def _basic_check_force_switch(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckCanForceSwitch`` (script.s:499-509): the player with no other living
+    Pokemon -10; else, unless the attacker has Mold Breaker, against Suction Cups (a guessing
+    read) -10."""
+    ctx = c.count_alive_party_battlers(_at(ctx, mask), _D)
+    ctx, t = _split(c.if_loaded_equal_to(ctx, 0))
+    ctx = _score(ctx, t, -10)
+    ctx = c.load_battler_ability(ctx, _A)
+    ctx, _ = _split(c.if_loaded_equal_to(ctx, _ABILITY["Mold Breaker"]))  # -> _Terminate
+    ctx = c.load_battler_ability(ctx, _D)
+    ctx, t = _split(c.if_loaded_equal_to(ctx, _ABILITY["Suction Cups"]))
+    return c.pop_or_end(_score(ctx, t, -10))
+
+
+def _basic_check_substitute(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckCannotSubstitute`` (script.s:633-637): behind a Substitute already -8;
+    below 26 % HP -10."""
+    ctx = _at(ctx, mask)
+    ctx, t = _split(c.if_volatile_status(ctx, _A, c.VolatileCondition.SUBSTITUTE))
+    ctx = _score(ctx, t, -8)
+    ctx, t = _split(c.if_hp_percent_less_than(ctx, _A, 26))
+    return c.pop_or_end(_score(ctx, t, -10))
+
+
+def _basic_check_dream_eater(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckDreamEater`` (script.s:329-333): the player not asleep -8; immune -10."""
+    ctx, t = _split(c.if_not_status(_at(ctx, mask), _D, c.MonCondition.SLEEP))
+    ctx = _score(ctx, t, -8)
+    ctx, t = _split(c.if_move_effectiveness_equals(ctx, TypeMulti.IMMUNE))
+    return c.pop_or_end(_score(ctx, t, -10))
+
+
 def _basic_check_ohko(ctx: AiContext, mask) -> AiContext:
     """``Basic_CheckOHKOWouldFail`` (script.s:554-564): immune -10; against Sturdy (a guessing
     read) -10 unless the attacker has Mold Breaker; the attacker's level below the
@@ -1814,6 +1846,102 @@ def _expert_blizzard(ctx: AiContext, mask) -> AiContext:
     return c.pop_or_end(c.add_to_move_score(ctx, -3))
 
 
+def _expert_force_switch(ctx: AiContext, mask) -> AiContext:
+    """``Expert_ForceSwitch`` (script.s:2574-2611): the player in more than 3 turns, +2
+    unless the 64 roll (:2603) jumps and then +2 unless the 128 roll (:2607) jumps; hazards
+    on its side or a stat above +2 (Attack, Defense, Sp. Atk, Sp. Def, evasion), the second
+    try only; else -3."""
+    ctx = c.load_battler_turn_count(_at(ctx, mask), _D)
+    ctx, plus75 = _split(c.if_loaded_greater_than(ctx, 3))
+    plus50 = jnp.zeros_like(ctx.live)
+    for condition in (
+        c.SideCondition.SPIKES,
+        c.SideCondition.STEALTH_ROCK,
+        c.SideCondition.TOXIC_SPIKES,
+    ):
+        ctx, t = _split(c.if_side_condition(ctx, _D, condition))
+        plus50 = plus50 | t
+    for stat in (Stat.ATK, Stat.DEF, Stat.SPA, Stat.SPD, Stat.EVA):
+        ctx, t = _split(c.if_stat_stage_greater_than(ctx, _D, stat, 8))
+        plus50 = plus50 | t
+    ctx = c.add_to_move_score(ctx, -3)
+    ctx, _ = _split(c.go_to(ctx))  # -> _End
+    # Expert_ForceSwitch_75PercentScorePlus2 (:2602), falling into _50PercentScorePlus2
+    ctx, t = _split(c.if_random_less_than(_at(ctx, plus75), 64, 2603))
+    ctx = c.add_to_move_score(ctx, 2)
+    ctx = _at(ctx, plus50 | t | ctx.live)
+    ctx, _ = _split(c.if_random_less_than(ctx, 128, 2607))  # -> _End
+    return c.pop_or_end(c.add_to_move_score(ctx, 2))
+
+
+def _expert_substitute(ctx: AiContext, mask) -> AiContext:
+    """``Expert_Substitute`` (script.s:2976-3042): knowing Focus Punch, +1 unless the 96 roll
+    (:2995) jumps; HP above 90 % to the last-move check, above 70 % one -1 try (:3010),
+    above 50 % two (:3006, :3010), else three (:3002, :3006, :3010), each unless its 100 roll
+    jumps; then, not slower, by the player's last move: a status move (sleep, poison,
+    paralysis, burn) and the player unstatused, a confusing move and the player unconfused,
+    or Leech Seed and the player unseeded, +1 unless the 100 roll (:3038) jumps."""
+    ctx = _at(ctx, mask)
+    ctx, check_hp = _split(c.if_move_not_known(ctx, _A, _MOVE["Focus Punch"]))
+    ctx, t = _split(c.if_random_less_than(ctx, 96, 2995))
+    ctx = c.add_to_move_score(ctx, 1)
+    # Expert_Substitute_CheckUserHP (:2998)
+    ctx = _at(ctx, check_hp | t | ctx.live)
+    ctx, last_move = _split(c.if_hp_percent_greater_than(ctx, _A, 90))
+    ctx, final = _split(c.if_hp_percent_greater_than(ctx, _A, 70))
+    ctx, second = _split(c.if_hp_percent_greater_than(ctx, _A, 50))
+    ctx, t = _split(c.if_random_less_than(ctx, 100, 3002))
+    second = second | t
+    ctx = c.add_to_move_score(ctx, -1)
+    # _TryScoreMinus1_SecondRound (:3005)
+    ctx = _at(ctx, second | ctx.live)
+    ctx, t = _split(c.if_random_less_than(ctx, 100, 3006))
+    final = final | t
+    ctx = c.add_to_move_score(ctx, -1)
+    # _TryScoreMinus1_FinalRound (:3009)
+    ctx = _at(ctx, final | ctx.live)
+    ctx, t = _split(c.if_random_less_than(ctx, 100, 3010))
+    last_move = last_move | t
+    ctx = c.add_to_move_score(ctx, -1)
+    # _CheckTargetLastMove (:3013)
+    ctx = _at(ctx, last_move | ctx.live)
+    ctx, _ = _split(c.if_speed_compare_equal_to(ctx, COMPARE_SPEED_SLOWER))  # -> _End
+    ctx = c.load_effect_of_loaded_move(c.load_battler_previous_move(ctx, _D))
+    status = jnp.zeros_like(ctx.live)
+    for effect in (
+        BattleEffect.STATUS_SLEEP,
+        BattleEffect.STATUS_BADLY_POISON,
+        BattleEffect.STATUS_POISON,
+        BattleEffect.STATUS_PARALYZE,
+        BattleEffect.STATUS_BURN,
+    ):
+        ctx, t = _split(c.if_loaded_equal_to(ctx, int(effect)))
+        status = status | t
+    ctx, confused = _split(c.if_loaded_equal_to(ctx, int(BattleEffect.STATUS_CONFUSE)))
+    ctx, seeded = _split(c.if_loaded_equal_to(ctx, int(BattleEffect.STATUS_LEECH_SEED)))
+    ctx, _ = _split(c.go_to(ctx))  # -> _End
+    # _CheckTargetStatus (:3026), _CheckTargetConfused (:3030), _CheckTargetSeeded (:3034)
+    ctx, plus1 = _split(c.if_not_status(_at(ctx, status), _D, c.MonCondition.ANY))
+    ctx, t = _split(c.if_not_volatile_status(_at(ctx, confused), _D, c.VolatileCondition.CONFUSION))
+    plus1 = plus1 | t
+    ctx, _ = _split(c.if_move_effect(_at(ctx, seeded), _D, c.MoveEffectMask.LEECH_SEED))
+    plus1 = plus1 | ctx.live  # an unseeded player falls into _TryScorePlus1 (:3037)
+    # _TryScorePlus1 (:3037)
+    ctx, _ = _split(c.if_random_less_than(_at(ctx, plus1), 100, 3038))  # -> _End
+    return c.pop_or_end(c.add_to_move_score(ctx, 1))
+
+
+def _expert_dream_eater(ctx: AiContext, mask) -> AiContext:
+    """``Expert_DreamEater`` (script.s:1886-1905): resisted -1; the player asleep +3 unless
+    the 51 roll (:1897) jumps."""
+    ctx, minus1 = _not_resisted(_at(ctx, mask))
+    ctx, plus3 = _split(c.if_status(ctx, _D, c.MonCondition.SLEEP))
+    ctx, _ = _split(c.go_to(ctx))  # -> _End
+    ctx, _ = _split(c.if_random_less_than(_at(ctx, plus3), 51, 1897))  # -> _End
+    ctx = c.pop_or_end(c.add_to_move_score(ctx, 3))
+    return c.pop_or_end(c.add_to_move_score(_at(ctx, minus1), -1))
+
+
 def _expert_curse(ctx: AiContext, mask) -> AiContext:
     """``Expert_Curse`` (script.s:3452-3500)."""
     # Expert_Curse (:3452). A Ghost-type attacker jumps to Expert_Curse_GhostCheckHP
@@ -1974,6 +2102,7 @@ def _dispatch(ctx: AiContext, labels, layout: AiLayout) -> AiContext:
 _BASIC_LABELS = (
     (BattleEffect.STATUS_SLEEP, _basic_check_cannot_sleep),  # :134
     (BattleEffect.HALVE_DEFENSE, _basic_check_cannot_explode),  # :135
+    (BattleEffect.RECOVER_DAMAGE_SLEEP, _basic_check_dream_eater),  # :136
     (BattleEffect.ATK_UP, _basic_check_high_atk),  # :137
     (BattleEffect.DEF_UP, _basic_check_high_def),  # :138
     (BattleEffect.SP_ATK_UP, _basic_check_high_spa),  # :140
@@ -1981,6 +2110,7 @@ _BASIC_LABELS = (
     (BattleEffect.DEF_DOWN, _basic_check_defense),  # :145
     (BattleEffect.SPEED_DOWN, _basic_check_low_speed),  # :146
     (BattleEffect.EVA_DOWN, _basic_check_low_evasion),  # :150
+    (BattleEffect.FORCE_SWITCH, _basic_check_force_switch),  # :153
     (BattleEffect.RESTORE_HALF_HP, _basic_check_can_recover_hp),  # :154
     (BattleEffect.STATUS_BADLY_POISON, _basic_check_cannot_poison),  # :155
     (BattleEffect.SET_LIGHT_SCREEN, _basic_check_light_screen),  # :156
@@ -1999,6 +2129,7 @@ _BASIC_LABELS = (
     (BattleEffect.SP_DEF_DOWN_2, _basic_check_low_spd),  # :175
     (BattleEffect.SET_REFLECT, _basic_check_reflect),  # :178
     (BattleEffect.STATUS_PARALYZE, _basic_check_cannot_paralyze),  # :180
+    (BattleEffect.SET_SUBSTITUTE, _basic_check_substitute),  # :181
     (BattleEffect.STATUS_LEECH_SEED, _basic_check_cannot_leech_seed),  # :183
     (BattleEffect.LEVEL_DAMAGE_FLAT, _basic_check_non_standard_damage),  # :185
     (BattleEffect.RANDOM_DAMAGE_1_TO_150_LEVEL, _basic_check_non_standard_damage),  # :186
@@ -2040,6 +2171,7 @@ _EXPERT_LABELS = (
     (BattleEffect.STATUS_SLEEP, _expert_status_sleep),  # :1628
     (BattleEffect.RECOVER_HALF_DAMAGE_DEALT, _expert_drain_move),  # :1629
     (BattleEffect.HALVE_DEFENSE, _expert_explosion),  # :1630
+    (BattleEffect.RECOVER_DAMAGE_SLEEP, _expert_dream_eater),  # :1631
     (BattleEffect.ATK_UP, _expert_status_atk_up),  # :1633
     (BattleEffect.DEF_UP, _expert_status_def_up),  # :1634
     (BattleEffect.SP_ATK_UP, _expert_status_spa_up),  # :1636
@@ -2048,6 +2180,7 @@ _EXPERT_LABELS = (
     (BattleEffect.DEF_DOWN, _expert_status_defense_down),  # :1642
     (BattleEffect.SPEED_DOWN, _expert_status_speed_down),  # :1643
     (BattleEffect.EVA_DOWN, _expert_status_eva_down),  # :1647
+    (BattleEffect.FORCE_SWITCH, _expert_force_switch),  # :1650
     (BattleEffect.RESTORE_HALF_HP, _expert_recovery),  # :1652
     (BattleEffect.STATUS_BADLY_POISON, _expert_toxic_leech_seed),  # :1653
     (BattleEffect.SET_LIGHT_SCREEN, _expert_light_screen),  # :1654
@@ -2069,6 +2202,7 @@ _EXPERT_LABELS = (
     (BattleEffect.STATUS_PARALYZE, _expert_status_paralyze),  # :1679
     (BattleEffect.ATK_UP_2_STATUS_CONFUSION, _expert_swagger),  # :1680
     (BattleEffect.LOWER_SPEED_HIT, _expert_speed_down_on_hit),  # :1681
+    (BattleEffect.SET_SUBSTITUTE, _expert_substitute),  # :1684
     (BattleEffect.STATUS_LEECH_SEED, _expert_toxic_leech_seed),  # :1686
     (BattleEffect.COUNTER, _expert_counter),  # :1688
     (BattleEffect.AVERAGE_HP, _expert_pain_split),  # :1690

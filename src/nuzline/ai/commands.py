@@ -111,6 +111,8 @@ _SIDE_CONDITION_FIELDS = {
     SideCondition.SAFEGUARD: "safeguard",
     SideCondition.STEALTH_ROCK: "stealth_rock",
     SideCondition.TAILWIND: "tailwind",
+    SideCondition.SPIKES: "spikes",  # layers; on while above 0 (Expert_ForceSwitch, :2591)
+    SideCondition.TOXIC_SPIKES: "toxic_spikes",
 }
 
 
@@ -299,6 +301,9 @@ class BattleEffect(IntEnum):
     HIT_LAST_WHIFF_IF_HIT = 170  # Focus Punch
     SET_HP_EQUAL_TO_USER = 189  # Endeavor
     BLIZZARD = 260  # Kaizo Blizzard, Ice Ball, Sheer Cold
+    FORCE_SWITCH = 28  # Roar, Whirlwind
+    SET_SUBSTITUTE = 79  # Substitute
+    STATUS_POISON = 66  # Poison Powder (Expert_Substitute's last-move table, script.s:3019)
 
     TOXIC_SPIKES = 249
     RECOIL_PARALYZE_HIT = 262
@@ -747,6 +752,8 @@ ABILITY_IDS = {
     "Ice Body": 115,
     # Basic_CheckSunnyDay / Expert_SunnyDay (script.s:807-809, :3788).
     "Flower Gift": 122,
+    # Basic_CheckCanForceSwitch (script.s:506).
+    "Suction Cups": 21,
     "Solar Power": 94,
     # Expert_RecoilMove (script.s:6297-6298; Magic Guard above).
     "Rock Head": 69,
@@ -796,6 +803,8 @@ MOVE_IDS = {
     "Blizzard": 59,
     # Expert_Protect (script.s:3536-3537).
     "Feint": 364,
+    # Expert_Substitute (script.s:2994).
+    "Focus Punch": 264,
     "Shadow Force": 467,
 }
 SOUND_MOVES = tuple(
@@ -1342,6 +1351,20 @@ def if_level(ctx: AiContext, op: int) -> AiContext:
     return _jump(ctx, jump)
 
 
+def load_battler_turn_count(ctx: AiContext, battler: Battler) -> AiContext:
+    """``LoadBattlerTurnCount`` (trainer_ai.c): ``totalTurns - fakeOutTurnNumber`` of the
+    battler, its turns since it came in (``BattleState.turn``, ``.fake_out_turn``)."""
+    state, side = ctx.state, _side(battler)
+    turns = state.turn.astype(_I32) - state.fake_out_turn[side].astype(_I32)
+    return ctx._replace(calc_temp=turns)
+
+
+def load_effect_of_loaded_move(ctx: AiContext) -> AiContext:
+    """``LoadEffectOfLoadedMove`` (trainer_ai.c): ``calcTemp = MOVE_DATA(calcTemp).effect``
+    (``Tables.move_ai_effect``)."""
+    return ctx._replace(calc_temp=ctx.tables.move_ai_effect[ctx.calc_temp].astype(_I32))
+
+
 def if_loaded_greater_than(ctx: AiContext, value: int) -> AiContext:
     """``IfLoadedGreaterThan`` (trainer_ai.c:774-784): ``calcTemp > value``."""
     return _jump(ctx, ctx.calc_temp > value)
@@ -1592,6 +1615,12 @@ def if_status(ctx: AiContext, battler: Battler, mask: int) -> AiContext:
     side = _side(battler)
     status = ctx.state.status[side, ctx.state.active[side]].astype(_I32)
     return _jump(ctx, jnp.isin(status, jnp.asarray(_condition_statuses(mask), _I32)))
+
+
+def if_not_volatile_status(ctx: AiContext, battler: Battler, mask: int) -> AiContext:
+    """``IfNotVolatileStatus`` (trainer_ai.c): the negation of ``IfVolatileStatus``."""
+    ctx = if_volatile_status(ctx, battler, mask)
+    return ctx._replace(jump=~ctx.jump)
 
 
 def if_not_status(ctx: AiContext, battler: Battler, mask: int) -> AiContext:

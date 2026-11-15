@@ -142,6 +142,7 @@ _AI_MOVE_IDS = {
     "Blizzard": 59,
     "Feint": 364,
     "Shadow Force": 467,
+    "Focus Punch": 264,
     **{k: v for k, v in _SOUND_MOVES.items() if k != "Roar"},
 }
 # ai/commands.py CALC_DAMAGE_MOVES: TrainerAI_CalcDamage's id cases the AI damage does not
@@ -235,6 +236,7 @@ CONSTANTS: tuple[Constant, ...] = (
             "Sturdy": 5,
             "Flower Gift": 122,
             "Solar Power": 94,
+            "Suction Cups": 21,
         },
     ),
     *_table(
