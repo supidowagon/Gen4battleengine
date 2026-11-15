@@ -336,5 +336,6 @@ def test_source_edit_changes_the_trace_cache_key(export_dir, monkeypatch, fresh_
     jaxcache._LOADED.clear()  # a new process
     cached_export(partial(fn, scale=1.0), _args(), name="f", static={}, version=after)
     assert fn.calls == 2  # traced again: the first program was not loaded
-    assert {p.name for p in (root / "export").iterdir()} >= {before, after}
+    # the new version's directory holds it (the old one is pruned, prune_other_versions)
+    assert (root / "export" / after).is_dir() and after != before
     assert jaxcache.jax_version() not in {before, after}
