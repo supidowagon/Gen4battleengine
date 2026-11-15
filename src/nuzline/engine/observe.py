@@ -191,7 +191,7 @@ _NONZERO_SIDE = (
     "lock_on",
     # "{0} made {1} drowsy!" (subscript_yawn.s:24) until it falls asleep.
     "yawn",
-    # "{0} cut its own HP and laid a curse on {1}!" (subscript_curse_ghost.s:14).
+    # "{0} cut its own HP and laid a curse on {1}!" (subscript_curse_ghost.s:17).
     "curse",
     # E2 batch 9: Minimize's own message (it used the move).
     "minimized",

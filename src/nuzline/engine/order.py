@@ -158,7 +158,7 @@ def sleep_talk_slots(tables: Tables, state: BattleState, side) -> jnp.ndarray:
     ``side``'s active battler, as the battler is now: not ``MoveFlag.NO_SLEEP_TALK``
     (Move_IsInvoker, which holds an empty slot's MOVE_NONE, Focus Punch, Uproar, Chatter,
     Move_IsMultiTurn: :4918-4925), and not flagged by ``BattleSystem_CheckInvalidMoves`` with every
-    check but NO_PP (:4929; battle_lib.c:2255-2316): the disabled move, a power-0 move while
+    check but NO_PP (:4927; battle_lib.c:2255-2316): the disabled move, a power-0 move while
     taunted, a Choice holder's moves other than its lock (``actions.choice_locked``: a lock
     it does not know is cleared there and restricts nothing) and a move a foe's Imprison seals
     (``actions.move_imprisoned``, CHECK_INVALID_IMPRISONED, battle_lib.c:2287-2290; ruling

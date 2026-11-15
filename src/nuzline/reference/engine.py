@@ -2143,8 +2143,8 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
                 _change_stage(s, side, stat, 1)
     elif effect == EffectId.CURSE and landed and _ghost(s, side):
         # effect_script_0109.s:9-17 (a Ghost user) -> subscript_curse_ghost.s on the foe: fails
-        # behind a substitute or on a cursed foe (:3-4); else the foe's curse, and the user loses
-        # Divide(maxHP, 2) through UPDATE_HP (:6-12).
+        # behind a substitute or on a cursed foe (:6-7); else the foe's curse, and the user loses
+        # Divide(maxHP, 2) through UPDATE_HP (:9-15).
         foe_sd = s.sides[target]
         if not foe_sd.substitute_hp and not foe_sd.curse:
             foe_sd.curse = 1
@@ -3263,7 +3263,7 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
             effect == EffectId.CURSE
             and _ghost(s, side)
             and bool(foe_sd.substitute_hp or foe_sd.curse)
-        )  # subscript_curse_ghost.s:3-4, :18-20
+        )  # subscript_curse_ghost.s:6-7, :22-24
         full = full or (
             effect == EffectId.PERISH_SONG
             and not any(not x.perish_song and _active(s, k).hp for k, x in enumerate(s.sides))

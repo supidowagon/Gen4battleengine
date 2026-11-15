@@ -102,9 +102,10 @@ Encodings:
   (``Battler_Ability``) holding an item (battle_lib.c:4433-4437), at every move end for the
   attacker and the defender (bcp.c:3965-3967) and in the switch-in checks for every battler
   (battle_lib.c:4135-4145); ``BattleSystem_InitBattleMon`` sets it for any holder of an item
-  (:160-166), which matters only at the battle start (a switch's UpdateAfterSwitch zeroes the
-  whole MoveEffectsData after it, :2097-2101, Baton Pass included), where the switch-in check
-  sets it for the Unburden holders it can concern. Nothing clears it but a switch (a volatile).
+  (:161-166), which matters only at the battle start (a switch's UpdateAfterSwitch zeroes the
+  whole MoveEffectsData after it, :2100-2104, Baton Pass included): ``hooks.battle_start`` sets
+  it for every lead holding an item, whatever its ability (a lead that gains Unburden later
+  keeps it). Nothing clears it but a switch (a volatile).
   ``order.effective_speed`` doubles an Unburden holder with it and no item (:1268-1272).
 * ``minimized`` is the active battler's ``MOVE_EFFECT_MINIMIZE`` (moves.h:16; E2 batch 9): set by
   Minimize (subscript_minimize.s:5), read by Stomp (effect_script_0150.s:7); a volatile Baton Pass

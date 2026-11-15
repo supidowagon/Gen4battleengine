@@ -11,7 +11,7 @@ from nuzline.engine.ids import Status, Type
 from nuzline.engine.outcome import empty_outcome
 from nuzline.engine.state import make_state
 from tests.engine.helpers import assert_matches_reference
-from tests.engine.test_pivot import _mon
+from tests.engine.test_pivot import _mon, _resume
 
 O = empty_outcome()
 
@@ -64,3 +64,46 @@ def test_jump_kick_crashes_on_a_miss(tables, names):
     ghost = s._replace(types=s.types.at[1, 0].set(jnp.asarray([Type.GHOST, Type.GHOST], jnp.int8)))
     out = assert_matches_reference(tables, ghost, (0, 0), _roll(100))
     assert int(out.hp[0, 0]) == int(s.hp[0, 0])
+
+
+def test_baton_pass_keeps_mean_look_lock_on_perish_song_and_curse(tables, names):
+    """Batch 3-9 merge check: UpdateAfterSwitch keeps, under SYSCTL_BATON_PASS, the substitute
+    HP, lockOnTarget and perishSongTurns (battle_lib.c:2107-2115), with the moveEffectsMask bits
+    (Lock-On, Perish Song) and the volatile bits (Mean Look, Curse) the switch keeps
+    (:2073-2085). The newcomer still carries all four after the turn's end, in both engines."""
+    n = names
+    s = make_state(
+        tables,
+        [_mon(n, "Ninjask", ["Baton Pass"], 40), _mon(n, "Geodude", ["Tackle"], 30)],
+        [_mon(n, "Bulbasaur", ["Growl"], 20)],
+    )
+    s = s._replace(
+        mean_look=s.mean_look.at[0].set(1),
+        mean_look_target=s.mean_look_target.at[0].set(2),
+        lock_on=s.lock_on.at[0].set(2),  # the foe locked onto the passer
+        lock_on_target=s.lock_on_target.at[0].set(2),
+        perish_song=s.perish_song.at[0].set(1),
+        perish_song_turns=s.perish_song_turns.at[0].set(3),
+        curse=s.curse.at[0].set(1),
+    )
+    paused = assert_matches_reference(tables, s, (0, 0), O)
+    assert int(paused.pivot_battler) == 1
+    after = _resume(tables, paused, 1)
+    assert int(after.active[0]) == 1
+    assert int(after.mean_look[0]) == 1 and int(after.mean_look_target[0]) == 2
+    assert int(after.perish_song[0]) == 1 and int(after.perish_song_turns[0]) == 2
+    assert int(after.curse[0]) == 1
+    assert int(after.hp[0, 1]) < int(after.max_hp[0, 1])  # the curse's turn-end damage
+    assert int(after.lock_on[0]) != 0 and int(after.lock_on_target[0]) == 2
+
+
+def test_any_item_holder_lead_arms_unburden(tables, names):
+    """InitBattleMon arms canUnburden for any lead holding an item (battle_lib.c:161-166),
+    whatever its ability; a lead with no item has it clear."""
+    n = names
+    s = make_state(
+        tables,
+        [_mon(n, "Pikachu", ["Growl"], 30, "Oran Berry")],
+        [_mon(n, "Bidoof", ["Growl"], 30)],
+    )
+    assert int(s.can_unburden[0]) == 1 and int(s.can_unburden[1]) == 0

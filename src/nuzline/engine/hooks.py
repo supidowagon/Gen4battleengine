@@ -556,6 +556,13 @@ def battle_start(tables: Tables, state: BattleState) -> BattleState:
     the start. A loop over battlers per state (the doubles conventions); in singles the order
     within a state changes nothing (``on_switch_in``'s docstring)."""
     sides = (0, 1)
+    # Before ShowBattleMon, BattleSystem_InitBattleMon (bcp.c:227) arms canUnburden for every
+    # lead holding an item, whatever its ability (battle_lib.c:161-166; no item is knocked off
+    # yet): a lead that gains Unburden later (Trace) still has it.
+    for side in sides:
+        held = state.item[side, state.active[side]] != 0
+        value = jnp.where(held, 1, state.can_unburden[side]).astype(state.can_unburden.dtype)
+        state = state._replace(can_unburden=state.can_unburden.at[side].set(value))
     for side in sides:
         state, _ = trace(tables, state, side, 1 - side)
     for side in sides:

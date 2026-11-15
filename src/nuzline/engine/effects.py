@@ -596,7 +596,7 @@ def _curse(tables, state, h: _Hit) -> BattleState:
         state = change_stage(state, h.side, stat, delta, cond)
     # The Ghost branch (:9-17): a direct ON_HIT subscript_curse_ghost.s on the foe, unless it
     # fails (``curse_fails``): the foe's VOLATILE_CONDITION_CURSE, then the user loses
-    # Divide(maxHP, 2) through UPDATE_HP (:6-12; it can faint).
+    # Divide(maxHP, 2) through UPDATE_HP (:9-15; it can faint).
     hexed = (h.effect == _E.CURSE) & h.landed & ghost & ~curse_fails(state, h.target_side)
     state = _set(state, "curse", h.target_side, 1, hexed)
     hp = state.hp[h.side, h.user].astype(_I32)
@@ -605,8 +605,8 @@ def _curse(tables, state, h: _Hit) -> BattleState:
 
 
 def curse_fails(state: BattleState, target_side) -> jnp.ndarray:
-    """``bool``: subscript_curse_ghost.s fails (MOVE_STATUS_FAILED, :18-20) on a defender behind
-    a substitute (:3) or already cursed (:4); its semi-invulnerable test (:2) cannot hold."""
+    """``bool``: subscript_curse_ghost.s fails (MOVE_STATUS_FAILED, :22-24) on a defender behind
+    a substitute (:6) or already cursed (:7); its semi-invulnerable test (:5) cannot hold."""
     return (state.substitute_hp[target_side] != 0) | (state.curse[target_side] != 0)
 
 
@@ -928,7 +928,7 @@ def primary_effect_fails(tables, state: BattleState, side, target_side, move) ->
         | ((effect == _E.LOCK_ON) & lock_on_fails(state, target_side))
         # BtlCmd_TryPerishSong (battle_script.c:5482-5484): no battler eligible.
         | ((effect == _E.PERISH_SONG) & ~jnp.any(perish_song_eligible(state)))
-        # subscript_curse_ghost.s:18-20 (a Ghost user's Curse).
+        # subscript_curse_ghost.s:22-24 (a Ghost user's Curse).
         | ((effect == _E.CURSE) & ghost_user(state, side) & curse_fails(state, target_side))
         # subscript_yawn.s's failures (``yawn_blocks``).
         | ((effect == _E.YAWN) & yawn_blocks(tables, state, side, target_side)[0])

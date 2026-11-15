@@ -363,7 +363,7 @@ Rules left out because another mechanic is missing; each closes with the mechani
 - Gravity makes the moves that fail in high gravity (Jump Kick, Hi Jump Kick, ...) invalid:
   `Move_FailsInHighGravity` under `CHECK_INVALID_GRAVITY` in `BattleSystem_CheckInvalidMoves`
   (battle_lib.c:2292, :2348), which the AI also reads (trainer_ai.c:234); `actions.usable_moves`
-  ignores Gravity, and so do Sleep Talk's slots (`order.sleep_talk_slots`, battle_script.c:4929)
+  ignores Gravity, and so do Sleep Talk's slots (`order.sleep_talk_slots`, battle_script.c:4927)
   and `Move_CanBeMetronomed` (battle_lib.c:7204-7207: `order.metronome_candidates`,
   `order.copycat_call`, `coverage.metronome_calls`); its Heal Block test is an unsupported move's:
   Gravity.
@@ -796,7 +796,7 @@ Rules left out because another mechanic is missing; each closes with the mechani
   slots not `MoveFlag.NO_SLEEP_TALK` (Move_IsInvoker, Focus Punch, Uproar, Chatter, and
   Move_IsMultiTurn by the move's decomp effect, :4918-4925; battle_lib.c:2975-2992, :3032-3045)
   and not flagged by CheckInvalidMoves without NO_PP (disabled, power 0 while taunted, a Choice
-  holder's other moves; :4929); none fails the move. `Outcome.call` holds u in 0..11 and the
+  holder's other moves; :4927); none fails the move. `Outcome.call` holds u in 0..11 and the
   call is allowed slot `u % count` of the set the move sees when it runs (12 is a multiple of
   every count 1-4). Copycat (BtlCmd_TryCopycat :7328-7341) reads `BattleState.move_prev`
   (battle-wide `movePrev`) at its turn and fails on MOVE_NONE or a move of sCannotMetronomeMoves
@@ -1107,7 +1107,7 @@ Rules left out because another mechanic is missing; each closes with the mechani
   with that battler's volatiles; the script fails a user already imprisoning or sharing no move
   with a battler of the other side, whatever its HP (:6692-6722). A sealed move
   (`Move_Imprisoned`, battle_lib.c:3316-3338) is invalid at selection (CHECK_INVALID_IMPRISONED,
-  :2287-2290; Sleep Talk's slots too, battle_script.c:4929) and, chosen before a faster foe's
+  :2287-2290; Sleep Talk's slots too, battle_script.c:4927) and, chosen before a faster foe's
   Imprison, fails at `CHECK_STATUS_STATE_IMPRISON` after Taunt (bcp.c:2572-2583): unlock, no
   PP, `moveFailFlags.imprisoned` (the Uproar check, battle_lib.c:2812), event `ACT_IMPRISONED`.
 - B7-8 `roosting` (turnFlags.roosting, battle_context.h:64) replaces `ts_roosted`: a Roost that
@@ -1135,7 +1135,7 @@ Rules left out because another mechanic is missing; each closes with the mechani
   bag item runs no move script, so only a move or a resumed action can stop. The reference was
   right. Test: tests/engine/test_batch7_review.py (fails at f22b818).
 - B7-13 (batch 7 review) Sleep Talk's slots drop a move a foe's Imprison seals:
-  `BtlCmd_TrySleepTalk` runs CheckInvalidMoves with `~CHECK_INVALID_NO_PP` (battle_script.c:4929),
+  `BtlCmd_TrySleepTalk` runs CheckInvalidMoves with `~CHECK_INVALID_NO_PP` (battle_script.c:4927),
   which includes CHECK_INVALID_IMPRISONED (battle_lib.c:2287-2290); JAX's `order.sleep_talk_slots`
   missed it (the reference had it). A faster foe's Imprison this turn is the set's second change
   within a turn: a third call variant `CALL_SEALED` beside B5-13's KEEP / DISABLED
@@ -1221,8 +1221,8 @@ Rules left out because another mechanic is missing; each closes with the mechani
 - B8-5 Curse by a Ghost user (effect 109's Ghost branch, effect_script_0109.s:9-17): its
   defender is the foe (`effects.ghost_user` through `targets_user` / `self_defender` /
   `defender_always`, both engines); subscript_curse_ghost.s fails behind a substitute or on a
-  cursed foe (:3-4, :18-20), else curses the foe and costs the user Divide(maxHP, 2) through
-  UPDATE_HP (:6-12; it can faint). Curse has no MOVE_FLAG_CAN_PROTECT (res/moves/curse/
+  cursed foe (:6-7, :22-24), else curses the foe and costs the user Divide(maxHP, 2) through
+  UPDATE_HP (:9-15; it can faint). Curse has no MOVE_FLAG_CAN_PROTECT (res/moves/curse/
   data.json): Protect never stops it. `MON_COND_CHECK_STATE_CURSE` (bcp.c:1451-1459, after Burn):
   Divide(maxHP, 4) unless Magic Guard (subscript_curse_damage.s). Volatile, kept by Baton Pass
   (condition.h:72-76). The coverage / prep refusal (`coverage.ghost_curse`) is removed.
@@ -1370,3 +1370,14 @@ Rules left out because another mechanic is missing; each closes with the mechani
   chart run hit or miss (bcp.c:3271-3277): an immune target gives 0. The laws read crit and
   roll[s, 0] on a miss (`Reads.crash`). Reckless powers it. AI: #45 has no Expert_Main entry
   (E1 batch 3 transcribed it generically).
+- B10-3 (batches 3-9 merge check, follow-ups) `BattleSystem_InitBattleMon` (bcp.c:227 at the
+  battle start) arms canUnburden for every lead holding an item, whatever its ability
+  (battle_lib.c:161-166): `hooks.battle_start` now does so before the switch-in states, so a lead
+  that gains Unburden later (Trace) keeps it (test_any_item_holder_lead_arms_unburden). What Baton
+  Pass keeps (Mean Look, Lock-On, Perish Song, Curse; battle_lib.c:2073-2115) gets a fast hand test
+  (test_baton_pass_keeps_mean_look_lock_on_perish_song_and_curse), which fails under a JAX-only
+  mutation dropping the four from `_BATON_PASSED` (checked 2026-11-15) and passes without it.
+  Citations fixed: Sleep Talk's CheckInvalidMoves is battle_script.c:4927; subscript_curse_ghost.s
+  is :5-7 (tests), :9-15 (curse and HP), :17 (message), :22-24 (failure); InitBattleMon's arm is
+  :161-166 and UpdateAfterSwitch's clear :2100-2104. tests/ai_legality.py says in its first line
+  that it checks host-side picks only.
