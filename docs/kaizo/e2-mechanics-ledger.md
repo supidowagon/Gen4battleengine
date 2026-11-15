@@ -24,6 +24,13 @@
   framework of Sleep Talk / Metronome / Copycat, with the party's moves). Still owed from the manager: tests/search/
   test_pivot_search.py under 8 GB (fight-sized roots, shared programs) once the fast tier's figure
   for it is in. Tell the manager: B10-6's stale ai_item_known after Knock Off (E1's area).
+  AI convention (manager, 2026-11-15, from E1's ALLIN branch claude/e1-allin-ai 4fa42e4): gate
+  a flag only through policy._flags / _run_flags (never layout.runs / layout.flags in traced
+  scoring); every random read through commands._slot_read with its bound in
+  read_bounds.READ_BOUNDS; concrete code uses layout.fight_flags / fight_effects. Batch 10's AI
+  so far (Flare Blitz #253 into the existing _expert_recoil_move, three table rows and one
+  dispatch row) adds no flag gate and no random read: no site to switch. Encore's AI, when
+  written, follows it.
 - **Fast tier.** The batches 3-9 merge fast tier runs on c961e18 in `_scratch/e2/testwt`
   (launcher `_scratch/e2/run_fast_tier.ps1`, log `_scratch/e2/ft_c961e18.log`, started 09:20,
   pid 15236 in the lock). Report passed / failed, wall time, peak and the ten slowest to the
