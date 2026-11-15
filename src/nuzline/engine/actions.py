@@ -136,5 +136,8 @@ def decision_actions(tables: Tables, state: BattleState) -> jnp.ndarray:
     forced = jnp.concatenate([jnp.zeros(MOVE_ACTIONS, bool), legal_replacements(state, 0)])
     wait = jnp.zeros(NUM_ACTIONS, bool).at[0].set(True)
     out = jnp.where(replacing, forced, legal_actions(tables, state, 0))
-    out = jnp.where(state.pivot_battler == 2, wait, out)
-    return jnp.where(state.pivot_battler == 1, forced, out)
+    # The pivoting battler (1 + battler) and its side: in singles battler b is side b.
+    paused = state.pivot_battler != 0
+    pivot_side = state.pivot_battler.astype(jnp.int32) - 1
+    out = jnp.where(paused & (pivot_side != 0), wait, out)
+    return jnp.where(paused & (pivot_side == 0), forced, out)

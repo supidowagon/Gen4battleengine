@@ -631,6 +631,20 @@ def _draw_pivot(draw, tables: Tables, a: dict, side: int, active: int, names: Na
     k = draw(st.sampled_from(free))
     a["moves"][side, active, k] = move
     a["pp"][side, active, k] = int(tables.move_pp[move])
+    # Some of the time make the pivot reachable: a living bench (a fainted slot revived to full
+    # HP, unless it is a recorded death) and a user that can act (no sleep, freeze, confusion
+    # or love).
+    if draw(st.booleans()):
+        bench = [j for j in range(6) if j != active and a["species"][side, j]]
+        alive = [j for j in bench if a["hp"][side, j] > 0]
+        dead = [j for j in bench if a["hp"][side, j] == 0 and not (side == 0 and a["deaths"][j])]
+        if not alive and dead:
+            j = draw(st.sampled_from(dead))
+            a["hp"][side, j] = a["max_hp"][side, j]
+        if a["status"][side, active] in (Status.SLEEP, Status.FREEZE):
+            a["status"][side, active] = Status.NONE
+            a["status_counter"][side, active] = 0
+        a["confusion"][side] = a["infatuated"][side] = 0
 
 
 def _draw_batch2_item(draw, tables: Tables, a: dict, side: int, active: int, names: Names) -> None:

@@ -806,7 +806,7 @@ Rules left out because another mechanic is missing; each closes with the mechani
   through `expand` (a chance node), the opponent's pick made in the row program
   (`playout.turn_inputs`: `post_ko_switch_in` with `ts_pick_mul`, refused as a replacement's;
   `aiSwitchedPartySlot` is 6 there, `Task_TrainerShowPartyMenu` battle_display.c:4543-4556) and
-  the turn's powerMul and AI switch read from `ts_power_mul` / `ts_ai_switched`. A paused child
+  the turn's powerMul and AI switch read from `ts_power_mul` / `ts_switched`. A paused child
   runs no learnset scan and no replacement. A playout from a paused root resumes it first
   (`playout._play`'s `pick`), not counted as a turn; `leaves`' forced turns go through
   `turn_inputs` and `step_through` too.
@@ -820,3 +820,30 @@ Rules left out because another mechanic is missing; each closes with the mechani
   `MODE_PURSUIT` / `MODE_RESUME` drop the head's state at the boundary before the hit loop and
   read the paused inputs (`ts_used`, `ts_damaged`, `ts_dealt`) from the scratch; Roar's drag and
   the resume share one `hooks.switch_in_effects` site.
+- B6-10 (batch 6 review) The resumed half's laws read the newcomer as the switch leaves it:
+  `outcome.pivot_view` applies the pivot's switch to the viewed state (its stat stages and
+  `state.VOLATILE_FIELDS` reset, a Baton Pass keeping the stages and `BATON_PASSED_FIELDS`:
+  InitBattleMon battle_lib.c:97-101, UpdateAfterSwitch :2078-2079, :2107), and
+  `outcome.fresh_switch` tells the thresholds (`_hit_threshold`, `hit_thresholds`, `_rate`'s
+  confusion for Tangled Feet and Foresight) that this switch's battler is not fresh: its evasion is
+  the view's, as `step`'s live check reads it (bcp.c:2873-2874). `future_thresholds` reads the
+  view's stages too. Before, a Baton Pass's +2 evasion was read as 0 (a foe Tackle's law offered
+  95 where `step` reads 57). Test: tests/engine/test_pivot_review.py (every enumerated row stepped
+  against `live_hit_threshold`).
+- B6-11 (batch 6 review) Stage B groups children by `(observation, refused, paused)`: the
+  observation does not carry `pivot_battler`, so a group must not mix a paused state with a
+  finished one (`_paused`).
+- B6-12 (batch 6 review, the doubles conventions) `ts_acted` (per battler, Battler_MovedThisTurn
+  battle_lib.c:5365-5368: the actions before the paused one, MoveEnd bcp.c:3989) replaces
+  "`ts_cursor` is 0" as "the target has not moved" in `pivot_view` and `enumerate._paused_rock`;
+  `ts_switched` is per battler (was `ts_ai_switched`, side 1 only); `decision_actions` reads the
+  pivot's side (1 + battler, battler b on side b in singles), not "2 means the opponent"; `_act`
+  takes the battler U-turn's Pursuit reads (`foe`) from its caller.
+- B6-13 (batch 6 review) Hand tests of both engines (tests/engine/test_pivot_review.py): Destiny
+  Bond on U-turn (subscript :15-34), Rough Skin KO-ing the user (:48, `rock_now`), a U-turn KO with
+  the list's faint check and the MoveEnd payout, hazards KO-ing the newcomer, two pauses in one
+  turn, Pursuit KO-ing the user, Sleep Talk calling U-turn with a Choice newcomer (B6-5), Baton
+  Pass without a bench, Natural Cure at the list, Shell Bell and Sticky Barb at the pivot item
+  (battle_lib.c:7336-7386), Roar's drag: its hazards (subscript_force_target_to_switch_or_flee.s:31), then its
+  switch-in effects at AfterMoveEffects (bcp.c:3672-3682), the site the resume shares. The generator: a drawn pivot half the time
+  gets a living bench and a user free of sleep, freeze, confusion and love.

@@ -272,7 +272,7 @@ three structs has a row.
   (`ts_move_failed`), the paused action's `moveCur` and its defender's damage taken (`ts_used`,
   `ts_damaged`, `ts_dealt`), the per-side bitmask of the faints handled (`ts_alive`), `powerMul`
   at the list (`ts_pick_mul`) and the search's turn-start reads (`ts_power_mul`,
-  `ts_ai_switched`). All are 0 between turns (`engine.state` docstring): `turnOrderCounter`,
+  `ts_switched`). All are 0 between turns (`engine.state` docstring): `turnOrderCounter`,
   `battlerActionOrder` and `battlerActions` (the actions as chosen, and the MOVE_END writes of a
   Pursuit, `ts_pursued`, and of UpdateAfterSwitch for a Pokemon Roar drags in, `ts_dragged`, which
   skip their actions in `step._execute_actions`) are kept only at such a pause.

@@ -3707,6 +3707,7 @@ def _write_scratch(turn: _Turn, s: RefState) -> None:
     assert not turn.payout, "the payouts before a list are paid"
     s.pivot_battler = side + 1
     s.ts_cursor = turn.position
+    s.ts_acted = [int(b in turn.order[: turn.position]) for b in (0, 1)]
     s.ts_order = list(turn.order)
     s.ts_actions = list(turn.actions)
     s.ts_move = [c[0] for c in turn.choices]
@@ -3729,19 +3730,19 @@ def _write_scratch(turn: _Turn, s: RefState) -> None:
         for k, sd in enumerate(s.sides)
     ]
     s.ts_power_mul = turn.power_mul
-    s.ts_ai_switched = int(turn.commands[1] == SWITCH)
+    s.ts_switched = [int(c == SWITCH) for c in turn.commands]
     s.ts_pick_mul = turn.pick_mul
     for sd in s.sides:  # read by the order, next read at the next turn
         sd.qc_roll = 0
 
 
 _SCRATCH_ZERO = {
-    "pivot_battler": 0, "ts_cursor": 0, "ts_order": [0, 0], "ts_actions": [0, 0],
+    "pivot_battler": 0, "ts_cursor": 0, "ts_acted": [0, 0], "ts_order": [0, 0], "ts_actions": [0, 0],
     "ts_move": [0, 0], "ts_struggling": [0, 0], "ts_locked": [0, 0], "ts_item": [0, 0],
     "ts_custap": [0, 0], "ts_pursued": 0, "ts_protect_ok": [0, 0], "ts_roosted": [0, 0],
     "ts_taken": [[0] * 6, [0] * 6], "ts_dragged": [0, 0], "ts_move_failed": [0, 0],
     "ts_used": 0, "ts_damaged": 0, "ts_dealt": 0, "ts_alive": [0, 0], "ts_power_mul": 0,
-    "ts_ai_switched": 0, "ts_pick_mul": 0,
+    "ts_switched": [0, 0], "ts_pick_mul": 0,
 }  # fmt: skip
 
 

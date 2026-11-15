@@ -1127,7 +1127,7 @@ def outcome_laws(
     (``flinch_item[pivot, 0]``, the newcomer's item, ``step._use_move``) is relevant when its hit
     damaged a target that has not moved."""
     paused_rock = _paused_rock(tables, state)
-    state, actions = pivot_view(state, actions)
+    state, actions = pivot_view(tables, state, actions)
     live = state.over == 0
     sides = jnp.arange(2)
     switch, item = is_switch(actions), is_item(actions)
@@ -2445,12 +2445,14 @@ CALL_DISABLED = 2 * SLEEP_TALK_VALUES
 def _paused_rock(tables: Tables, state: BattleState) -> jnp.ndarray:
     """``bool[2]``: the paused action's King's Rock read (``flinch_item[pivot, 0]``) is possible:
     a paused U-turn whose hit damaged its target (``ts_damaged``), with
-    ``MOVE_FLAG_TRIGGERS_KINGS_ROCK``, before the target moved (``ts_cursor`` 0); whether the
+    ``MOVE_FLAG_TRIGGERS_KINGS_ROCK``, before its target moved (``ts_acted``); whether the
     newcomer holds one is the law's (``flinch_item_chance``, its item through ``pivot_view``)."""
     pivot = jnp.clip(state.pivot_battler.astype(_I32) - 1, 0, 1)
     flag = (tables.move_flags[state.ts_used] & MoveFlag.KINGS_ROCK) != 0
-    on = (state.pivot_battler != 0) & (state.ts_damaged != 0) & flag & (state.ts_cursor == 0)
-    return on & (jnp.arange(2) == pivot)
+    on = (state.pivot_battler != 0) & (state.ts_damaged != 0) & flag
+    # The target: the other battler (singles), not yet acted.
+    target_free = state.ts_acted[::-1] == 0
+    return on & (jnp.arange(2) == pivot) & target_free
 
 
 def _disabled_state(state: BattleState, sides) -> BattleState:
@@ -2510,7 +2512,7 @@ def call_laws(tables: Tables, state: BattleState, actions) -> CallLaws:
     * Copycat: no draw; its two orders (``outcome_laws``' ``call``) each weigh 1 and keep their
       consistent ``speed_tie`` branches (``branch_ok``), the second only when its foe uses a
       move."""
-    state, actions = pivot_view(state, actions)
+    state, actions = pivot_view(tables, state, actions)
     live = state.over == 0
     uses_move = live & ~is_switch(actions) & ~is_item(actions)
     chosen = jnp.stack([selected_move(tables, state, side, actions[side])[0] for side in (0, 1)])

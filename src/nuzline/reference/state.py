@@ -131,6 +131,7 @@ class RefState:
     # E2 batch 6: the mid-turn switch decision (engine.state docstring): 0 between turns.
     pivot_battler: int
     ts_cursor: int
+    ts_acted: list[int]
     ts_order: list[int]
     ts_actions: list[int]
     ts_move: list[int]
@@ -149,7 +150,7 @@ class RefState:
     ts_dealt: int
     ts_alive: list[int]
     ts_power_mul: int
-    ts_ai_switched: int
+    ts_switched: list[int]
     ts_pick_mul: int
 
 

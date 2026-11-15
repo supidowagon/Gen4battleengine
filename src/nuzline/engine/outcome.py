@@ -68,7 +68,13 @@ from nuzline.engine.order import (
     used_move,
     used_moves,
 )
-from nuzline.engine.state import STAGE_MAX, STAGE_MIN, BattleState
+from nuzline.engine.state import (
+    BATON_PASSED_FIELDS,
+    STAGE_MAX,
+    STAGE_MIN,
+    VOLATILE_FIELDS,
+    BattleState,
+)
 
 MAX_HITS = 5
 _I8, _I32 = jnp.int8, jnp.int32
@@ -191,8 +197,10 @@ def _rate(
     clamped stage sum to use instead of the one ``acc`` and ``eva_stage`` give (0-12,
     ``future_thresholds``' grid); with it the weather is taken as given, unsuppressed."""
     weather = state.weather if weather is None else weather
+    # A pivot's newcomer (``pivot_view``) is not fresh: its view holds its own stages / volatiles.
+    fresh = jnp.asarray(target_switches, bool) & (state.pivot_battler != target + 1)
     if target_confused is None:
-        target_confused = ~target_switches & (state.confusion[target] > 0)
+        target_confused = ~fresh & (state.confusion[target] > 0)
     accuracy = tables.move_accuracy[move].astype(_I32)
     a_ability = state.ability[side, state.active[side]]
     own = jnp.where(
@@ -212,7 +220,7 @@ def _rate(
     # MON_IS_IDENTIFIED(defender) && evaStages < 0 (:2888): a Foresight-identified
     # defender's positive evasion is ignored (evaStages = 6 - boost, so eva = -boost).
     # A defender that switches in this turn is the fresh Pokemon, not identified.
-    identified = ~target_switches & (state.foresight[target] != 0)
+    identified = ~fresh & (state.foresight[target] != 0)
     eva = jnp.where(identified & (eva < 0), 0, eva)
     grid = total is not None  # future_thresholds' grid point
     total = (
@@ -455,7 +463,7 @@ def _hit_threshold(
     target, target_switches, target_mon = _target_mon(state, actions, side)
     acc = state.stages[side, Stat.ACC] if acc is None else acc
     if eva is None:
-        eva = jnp.where(target_switches, 0, state.stages[target, Stat.EVA])
+        eva = jnp.where(fresh_switch(state, actions, target), 0, state.stages[target, Stat.EVA])
     if weather is None:
         weather = jnp.where(
             target_switches, entry_weather(tables, state, target, target_mon, side), state.weather
@@ -600,10 +608,11 @@ def hit_thresholds(
     for side in (0, 1):
         foe = 1 - side
         foe_switches = is_switch(actions[foe])
+        foe_fresh = fresh_switch(state, actions, foe)
         acc0 = state.stages[side, Stat.ACC]
-        eva0 = jnp.where(foe_switches, 0, state.stages[foe, Stat.EVA])
+        eva0 = jnp.where(foe_fresh, 0, state.stages[foe, Stat.EVA])
         accs, acc_ok = _stage_variants(acc0, delta[foe], on_foe_acc[foe], herb[side])
-        evas, eva_ok = _stage_variants(eva0, delta[foe], on_own_eva[foe], herb[foe] & ~foe_switches)
+        evas, eva_ok = _stage_variants(eva0, delta[foe], on_own_eva[foe], herb[foe] & ~foe_fresh)
         _, _, target_mon = _target_mon(state, actions, side)
         weather0 = jnp.where(
             foe_switches, entry_weather(tables, state, foe, target_mon, side), state.weather
@@ -613,7 +622,7 @@ def hit_thresholds(
         moved_weather = jnp.where(effect[foe] == EffectId.WEATHER, stat[foe], weather0)
         weathers = jnp.stack([weather0, moved_weather.astype(weather0.dtype)])
         weather_ok = jnp.stack([jnp.asarray(True), weather_move[foe]])
-        confused0 = ~foe_switches & (state.confusion[foe] > 0)
+        confused0 = ~foe_fresh & (state.confusion[foe] > 0)
         confuseds = jnp.stack([confused0, jnp.asarray(False)])
         confused_ok = jnp.stack([jnp.asarray(True), confused0 & changes[foe]])
         # Grid order: moved (2) x weather (2) x confusion (2) x accuracy (4) x evasion (4).
@@ -796,32 +805,51 @@ def roar_inputs(state: BattleState, actions) -> tuple[jnp.ndarray, jnp.ndarray]:
     return roar_level_weight(la, ld), jnp.stack(counts)
 
 
-def pivot_view(state: BattleState, actions) -> tuple[BattleState, jnp.ndarray]:
+def pivot_view(tables: Tables, state: BattleState, actions) -> tuple[BattleState, jnp.ndarray]:
     """``(state, actions)`` the laws and the sampler read (E2 batch 6, rulings B6-n). A state
     paused at a U-turn's or Baton Pass's party list (``pivot_battler``) resumes with
     ``actions[pivot]`` the switch to the picked slot: its draws are those of a turn in which the
-    pivoting side switches to it first (the switch-in effects of the newcomer are a switch's), with
-    the newcomer already on the field (its item gives the King's Rock law, ``kings_rock_chance``),
-    the battle's movePrev the paused move's moveTemp (the tail's UpdateMoveBuffers writes it before
-    a later actor's Copycat reads it, bcp.c:3936-3942) and the other side's action as chosen
-    (``ts_actions``) while it is still to act (``ts_cursor`` 0), else a switch to its own active
-    Pokemon (no move: it has acted). The paused action's own King's Rock read is
-    ``enumerate.outcome_laws``'. Any other state: unchanged."""
+    pivoting side switches to it first, with the switch already applied to the battler (the
+    newcomer on the field, its stat stages and ``VOLATILE_FIELDS`` reset as UpdateAfterSwitch and
+    InitBattleMon do, a Baton Pass keeping the stages and ``BATON_PASSED_FIELDS``, battle_lib.c:
+    97-101, :2078-2079, :2107; ruling B6-10), the battle's movePrev the paused move's moveTemp
+    (the tail's UpdateMoveBuffers writes it before a later actor's Copycat reads it, bcp.c:
+    3936-3942) and the other side's action as chosen (``ts_actions``) while it has not acted
+    (``ts_acted``), else a switch to its own active Pokemon (no move). Its switch-in effects
+    (weather, Trace, Intimidate) are still a switch's: ``fresh_switch`` tells the laws that its
+    stages and volatiles are the view's, not a fresh battler's. The paused action's own King's
+    Rock read is ``enumerate.outcome_laws``'. Any other state: unchanged."""
     actions = jnp.asarray(actions, _I32)
     paused = state.pivot_battler != 0
     pivot = jnp.clip(state.pivot_battler.astype(_I32) - 1, 0, 1)
     sides = jnp.arange(2)
-    still = state.ts_cursor == 0
+    acted = state.ts_acted != 0
     other = jnp.where(
-        still, state.ts_actions.astype(_I32), MOVE_ACTIONS + state.active.astype(_I32)
+        acted, MOVE_ACTIONS + state.active.astype(_I32), state.ts_actions.astype(_I32)
     )
     viewed = jnp.where(sides == pivot, actions, other)
     slot = jnp.clip(actions[pivot] - MOVE_ACTIONS, 0, state.hp.shape[1] - 1)
-    active = state.active.at[pivot].set(slot.astype(state.active.dtype))
-    prev = state.ts_move[pivot].astype(state.move_prev.dtype)
-    seen = state._replace(active=active, move_prev=prev)
+    baton = tables.move_effect[state.ts_used] == EffectId.BATON_PASS
+
+    def reset(name):
+        arr = getattr(state, name)
+        clear = ~baton if name in (*BATON_PASSED_FIELDS, "stages") else True
+        return arr.at[pivot].set(jnp.where(clear, jnp.zeros_like(arr[pivot]), arr[pivot]))
+
+    seen = state._replace(
+        active=state.active.at[pivot].set(slot.astype(state.active.dtype)),
+        move_prev=state.ts_move[pivot].astype(state.move_prev.dtype),
+        **{name: reset(name) for name in (*VOLATILE_FIELDS, "stages")},
+    )
     view = jax.tree.map(lambda a, b: jnp.where(paused, a, b), seen, state)
     return view, jnp.where(paused, viewed, actions)
+
+
+def fresh_switch(state: BattleState, actions, side) -> jnp.ndarray:
+    """``bool``: ``side`` switches this turn to a fresh battler (stat stages, evasion,
+    confusion and Foresight reset at its switch-in). A paused pivot's switch (``pivot_view``)
+    already holds the newcomer's state, a Baton Pass's carried stages included (ruling B6-10)."""
+    return is_switch(jnp.asarray(actions)[side]) & (state.pivot_battler != side + 1)
 
 
 def kings_rock_chance(tables: Tables, state: BattleState) -> jnp.ndarray:
@@ -837,7 +865,7 @@ def kings_rock_chance(tables: Tables, state: BattleState) -> jnp.ndarray:
 def sample_outcome(key, tables: Tables, state: BattleState, actions) -> Outcome:
     """Draw every field from its Gen 4 probability for this state and these actions (a paused
     state: ``pivot_view``'s)."""
-    state, actions = pivot_view(state, actions)
+    state, actions = pivot_view(tables, state, actions)
     k = jax.random.split(key, 14)
     per_hit, per_side = (2, MAX_HITS), (2,)
 

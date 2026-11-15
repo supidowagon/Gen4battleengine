@@ -565,7 +565,7 @@ class _Solver:
         for node in nodes:
             for a in node.legal:
                 kids: list[_Node] = []
-                groups: dict[tuple[bytes, bool], dict[int, float]] = {}
+                groups: dict[tuple[bytes, bool, bool], dict[int, float]] = {}
                 for s, w in node.states.items():
                     if w < eps:
                         kids.append(_Node("pruned", None, w, forced=(s, a, 0)))
@@ -575,7 +575,7 @@ class _Solver:
                         kids.append(_Node("sampled", None, w, forced=(s, a, 0)))
                         continue
                     for child, obs, p, refused in expansion:
-                        members = groups.setdefault((obs, refused), {})
+                        members = groups.setdefault((obs, refused, self._paused(child)), {})
                         members[child] = members.get(child, 0.0) + w * p
                 kids += self._group_nodes(groups, played, self._depth)
                 node.branches[a] = kids
@@ -611,10 +611,10 @@ class _Solver:
             for node in todo:
                 answers = self.answers[node.decision]
                 for a in node.legal:
-                    groups: dict[tuple[bytes, bool], dict[int, float]] = {}
+                    groups: dict[tuple[bytes, bool, bool], dict[int, float]] = {}
                     for s, w in node.states.items():
                         child, obs, p, refused = answers[(s, a)]
-                        members = groups.setdefault((obs, refused), {})
+                        members = groups.setdefault((obs, refused, self._paused(child)), {})
                         members[child] = members.get(child, 0.0) + w * p
                     kids = self._group_nodes(groups, played, depth)
                     node.branches[a] = kids
@@ -742,7 +742,7 @@ class _Solver:
     def _children(self, node: _Node, a: int, k: int, depth: int) -> list[_Node]:
         eps = self.settings.epsilon
         kids: list[_Node] = []
-        groups: dict[tuple[bytes, bool], dict[int, float]] = {}
+        groups: dict[tuple[bytes, bool, bool], dict[int, float]] = {}
         for s, w in node.states.items():
             q = self.ai[s]
             if q is None:
@@ -758,12 +758,18 @@ class _Solver:
                     kids.append(_Node("sampled", None, reach, forced=(s, a, o)))
                     continue
                 for child, obs, p, refused in expansion:
-                    members = groups.setdefault((obs, refused), {})
+                    members = groups.setdefault((obs, refused, self._paused(child)), {})
                     members[child] = members.get(child, 0.0) + reach * p
         return kids + self._group_nodes(groups, k + 1, depth)
 
+    def _paused(self, sid: int) -> bool:
+        """The state waits at a party list (E2 batch 6): part of a group's key, since the
+        observation does not carry ``pivot_battler`` and a group must not mix a paused state with
+        a finished one."""
+        return self.store.pending[sid] == "pivot"
+
     def _group_nodes(
-        self, groups: dict[tuple[bytes, bool], dict[int, float]], played: int, depth: int
+        self, groups: dict[tuple[bytes, bool, bool], dict[int, float]], played: int, depth: int
     ) -> list[_Node]:
         """The child nodes of ``groups`` (``played`` turns played), classified in this
         order: refused, terminal, failed (ruling 3), pruned, learn decision, replacement
@@ -772,7 +778,7 @@ class _Solver:
         group's."""
         eps = self.settings.epsilon
         kids = []
-        for (obs, refused), members in groups.items():
+        for (obs, refused, _), members in groups.items():
             prob = math.fsum(members.values())
             first = next(iter(members))
             decision = "turn"

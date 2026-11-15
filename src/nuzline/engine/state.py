@@ -231,6 +231,7 @@ class BattleState(NamedTuple):
     # E2 batch 6: the mid-turn switch decision (U-turn, Baton Pass; see the docstring).
     pivot_battler: jnp.ndarray  # int8, 1 + the battler owing the party pick, 0 = none
     ts_cursor: jnp.ndarray  # int8, turnOrderCounter: the paused action's position
+    ts_acted: jnp.ndarray  # int8[2], the battler's action is over (Battler_MovedThisTurn)
     ts_order: jnp.ndarray  # int8[2], battlerActionOrder
     ts_actions: jnp.ndarray  # int8[2], the turn's actions as chosen
     ts_move: jnp.ndarray  # int16[2], each side's move fixed at selection (selected_move)
@@ -249,7 +250,7 @@ class BattleState(NamedTuple):
     ts_dealt: jnp.ndarray  # int16, its hit's HP drop (the thaw)
     ts_alive: jnp.ndarray  # int8[2], per side the party bitmask of HP > 0 at the last faint check
     ts_power_mul: jnp.ndarray  # int8, the search's turn powerMul (replacement_power_mul)
-    ts_ai_switched: jnp.ndarray  # int8, the opponent chose a switch this turn
+    ts_switched: jnp.ndarray  # int8[2], the battler chose a switch this turn
     ts_pick_mul: jnp.ndarray  # int8, powerMul at the party list (20 after U-turn's Pursuit)
 
     def replace_hp(self, side: int, slot: int, hp: int) -> BattleState:
@@ -300,6 +301,58 @@ def protected_mask(species, hp, k: int, protected: Sequence[int]) -> np.ndarray:
             raise ValueError(f"protected slot {slot} has already fainted")
         mask[slot] = 1
     return mask
+
+
+# Per-side fields of the active Pokemon that leave with it: the incoming battler is
+# rebuilt from its party mon by ``BattleSystem_InitBattleMon`` (battle_lib.c:70), stat
+# stages reset to neutral (:97-101; a Baton Pass keeps them and ``BATON_PASSED_FIELDS``). Hazards and screens are per side
+# and stay. ``move_hit`` is cleared by ``BattleSystem_UpdateAfterSwitch`` (battle_lib.c:
+# 2121) and ``BattleSystem_CleanupFaintedMon`` (:2199); ``fake_out_turn`` is set there
+# instead (``step._entered``).
+VOLATILE_FIELDS = (
+    "confusion",
+    "leech_seed",
+    "substitute_hp",
+    "taunt",
+    "trapped",
+    "trap_move",
+    "flinched",
+    "choice_lock",
+    "last_move",
+    "protect_count",
+    "rollout_count",
+    "charge_turn",
+    "recharge",
+    "pursuit_target",
+    "water_sport",
+    "move_hit",
+    "foresight",
+    "disabled_move",
+    "disable_turns",
+    "locked_move",
+    "bide_turns",
+    "bide_damage",
+    "curled",
+    "mud_sport",
+    "aqua_ring",
+    "infatuated",
+    "destiny_bond",
+    "uproar",
+)
+# Baton Pass keeps these of ``VOLATILE_FIELDS`` (and the stat stages): BattleSystem_UpdateAfterSwitch
+# keeps statusVolatile & VOLATILE_CONDITION_BATON_PASSED (battle_lib.c:2078; condition.h:72-76:
+# confusion; Focus Energy, Mean Look, Curse and Substitute's bit come from unsupported moves),
+# moveEffectsMask & MOVE_EFFECT_BATON_PASSED (:2079; moves.h:46-48: the Leech Seed recipient, Mud
+# and Water Sport, Aqua Ring; the rest from unsupported moves) and the substitute HP
+# (:2107); BattleSystem_InitBattleMon keeps the stat stages (:97-101). Ruling B6-3.
+BATON_PASSED_FIELDS = (
+    "confusion",
+    "leech_seed",
+    "substitute_hp",
+    "water_sport",
+    "mud_sport",
+    "aqua_ring",
+)
 
 
 # Shape and storage dtype of every field, in BattleState order.
@@ -402,6 +455,7 @@ LAYOUT: dict[str, tuple[tuple[int, ...], type]] = {
     "replace_mul": (_FIELD, np.int8),
     "pivot_battler": (_FIELD, np.int8),
     "ts_cursor": (_FIELD, np.int8),
+    "ts_acted": (_SIDE, np.int8),
     "ts_order": (_SIDE, np.int8),
     "ts_actions": (_SIDE, np.int8),
     "ts_move": (_SIDE, np.int16),
@@ -420,7 +474,7 @@ LAYOUT: dict[str, tuple[tuple[int, ...], type]] = {
     "ts_dealt": (_FIELD, np.int16),
     "ts_alive": (_SIDE, np.int8),
     "ts_power_mul": (_FIELD, np.int8),
-    "ts_ai_switched": (_FIELD, np.int8),
+    "ts_switched": (_SIDE, np.int8),
     "ts_pick_mul": (_FIELD, np.int8),
 }
 # The turn scratch (``ts_*``, design rev. 2 section 1): 0 everywhere unless ``pivot_battler``.

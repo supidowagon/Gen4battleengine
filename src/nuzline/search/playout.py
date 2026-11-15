@@ -393,13 +393,13 @@ def pivot_pick(tables: Tables, state: BattleState) -> tuple[jnp.ndarray, jnp.nda
 def turn_muls(tables: Tables, state: BattleState, actions) -> tuple[jnp.ndarray, jnp.ndarray]:
     """``(power_mul, ai_switched)`` of a turn from ``state``: ``replacement_power_mul`` and the
     opponent's switch; at a pause (E2 batch 6) the turn start's (``ts_power_mul``,
-    ``ts_ai_switched``): the resume's actions are switch-shaped."""
+    ``ts_switched[1]``): the resume's actions are switch-shaped."""
     actions = jnp.asarray(actions, _I32)
     paused = state.pivot_battler != 0
     power_mul = jnp.where(
         paused, state.ts_power_mul.astype(_I32), replacement_power_mul(tables, state, actions)
     )
-    ai_switched = jnp.where(paused, state.ts_ai_switched != 0, is_switch(actions[1]))
+    ai_switched = jnp.where(paused, state.ts_switched[1] != 0, is_switch(actions[1]))
     return power_mul, ai_switched
 
 

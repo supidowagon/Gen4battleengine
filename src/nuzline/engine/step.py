@@ -195,7 +195,13 @@ from nuzline.engine.outcome import (
     roar_bench,
     roar_slot,
 )
-from nuzline.engine.state import BAG_SLOTS, TURN_SCRATCH, BattleState
+from nuzline.engine.state import (
+    BAG_SLOTS,
+    BATON_PASSED_FIELDS,
+    TURN_SCRATCH,
+    VOLATILE_FIELDS,
+    BattleState,
+)
 
 _I32 = jnp.int32
 _unlock = unlock_move  # Battler_UnlockMoveChoice (battle_lib.c:1834): (state, side, cond)
@@ -210,56 +216,9 @@ EXP_REFUSED_WINDOW_C = 2
 # MON_CONDITION_TOXIC_COUNTER is 4 bits (include/constants/battle/condition.h:23).
 TOXIC_COUNTER_MAX = 15
 
-# Per-side fields of the active Pokemon that leave with it: the incoming battler is
-# rebuilt from its party mon by ``BattleSystem_InitBattleMon`` (battle_lib.c:70), stat
-# stages reset to neutral (:97, no Baton Pass in M1). Hazards and screens are per side
-# and stay. ``move_hit`` is cleared by ``BattleSystem_UpdateAfterSwitch`` (battle_lib.c:
-# 2121) and ``BattleSystem_CleanupFaintedMon`` (:2199); ``fake_out_turn`` is set there
-# instead (``_entered``).
-_VOLATILE = (
-    "confusion",
-    "leech_seed",
-    "substitute_hp",
-    "taunt",
-    "trapped",
-    "trap_move",
-    "flinched",
-    "choice_lock",
-    "last_move",
-    "protect_count",
-    "rollout_count",
-    "charge_turn",
-    "recharge",
-    "pursuit_target",
-    "water_sport",
-    "move_hit",
-    "foresight",
-    "disabled_move",
-    "disable_turns",
-    "locked_move",
-    "bide_turns",
-    "bide_damage",
-    "curled",
-    "mud_sport",
-    "aqua_ring",
-    "infatuated",
-    "destiny_bond",
-    "uproar",
-)
-# Baton Pass keeps these of ``_VOLATILE`` (and the stat stages): BattleSystem_UpdateAfterSwitch
-# keeps statusVolatile & VOLATILE_CONDITION_BATON_PASSED (battle_lib.c:2078; condition.h:72-76:
-# confusion; Focus Energy, Mean Look, Curse and Substitute's bit come from unsupported moves),
-# moveEffectsMask & MOVE_EFFECT_BATON_PASSED (:2079; moves.h:46-48: the Leech Seed recipient, Mud
-# and Water Sport, Aqua Ring; the rest from unsupported moves) and the substitute HP
-# (:2107); BattleSystem_InitBattleMon keeps the stat stages (:97-101). Ruling B6-3.
-_BATON_PASSED = (
-    "confusion",
-    "leech_seed",
-    "substitute_hp",
-    "water_sport",
-    "mud_sport",
-    "aqua_ring",
-)
+# The per-battler fields a switch resets (``_VOLATILE``) and what Baton Pass keeps of them
+# (``_BATON_PASSED``) live in ``engine.state`` (the laws' ``outcome.pivot_view`` reads them too).
+_VOLATILE, _BATON_PASSED = VOLATILE_FIELDS, BATON_PASSED_FIELDS
 # ``_use_move``'s ``mode`` (E2 batch 6): the action from its start; its tail after the U-turn
 # user survived the Pursuit of subscript_attack_then_switch_out.s:54 (or died to it); the tail
 # after the party list, on the newcomer (``step``'s resume).
@@ -1548,6 +1507,7 @@ def _act(
     taken=(0, 0, 0, 0, 0, 0),
     mode=MODE_FULL,
     base=None,
+    foe=None,
 ) -> tuple[BattleState, dict, dict, dict]:
     """``side``'s action: ``(state, own, foe, ctl)`` with the events of ``_use_move``. A
     switch shows the party slot (``ACT_SWITCH``), an item its item id (``ACT_ITEM``).
@@ -1570,7 +1530,7 @@ def _act(
     listed = _faint_check(tables, _with_alive(state, base), switched)
     used = _use_trainer_item(tables, state, side, items[side])
     choice = (choices[0][side], choices[1][side], choices[2][side])
-    foe = 1 - side
+    # U-turn's Pursuit reads the battler it hits (convention 1: passed in by the caller).
     pursuit = (actions[foe], choices[0][foe], choices[1][foe])
     moved, own, foe_events, ctl = _use_move(
         tables,
@@ -1886,6 +1846,7 @@ def _execute_actions(
             taken,
             phase,
             base,
+            pursuer,
         )
         # The action ran: its battler was alive at its start (a resumed or pursued one was).
         ran = (state.over == 0) & ((state.hp[side, state.active[side]] > 0) | ~start)
@@ -1938,6 +1899,9 @@ def _execute_actions(
     stopped = state.pivot_battler != 0
     scratch = {
         "ts_cursor": position,
+        # Battler_MovedThisTurn (battle_lib.c:5365-5368) of each battler: the actions before the
+        # paused one are over (MoveEnd, bcp.c:3989).
+        "ts_acted": jnp.stack([jnp.any((order == b) & (jnp.arange(2) < position)) for b in (0, 1)]),
         "ts_order": order,
         "ts_actions": real,
         "ts_move": choices[0],
@@ -1958,7 +1922,7 @@ def _execute_actions(
         "ts_dealt": state.ts_dealt,
         "ts_alive": base,
         "ts_power_mul": jnp.where(paused, state.ts_power_mul, power_mul),
-        "ts_ai_switched": is_switch(real[1]),
+        "ts_switched": is_switch(real),
         "ts_pick_mul": pick_mul,
     }
     if set(scratch) != set(TURN_SCRATCH):
