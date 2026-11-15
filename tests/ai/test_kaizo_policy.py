@@ -2212,6 +2212,25 @@ def test_expert_spikes(kaizo_tables, kaizo_names, kaizo_roark_party, roar, jumps
 
 
 @pytest.mark.parametrize(
+    ("second", "jumps", "expected"),
+    [
+        # Expert_StealthRock (:6268-6285), the hazard labels' shape: +1 unless :6274 jumps;
+        # with Roar or Whirlwind known (transcribed since E1 batch 17) +1 more unless :6281
+        # jumps (merge check on ff97cd0)
+        ("Accelerock", (), 1),
+        ("Roar", (), 2),
+        ("Roar", (6281,), 1),
+        ("Whirlwind", (), 2),
+        ("Roar", (6274,), 0),
+    ],
+)
+def test_expert_stealth_rock(kaizo_tables, kaizo_names, kaizo_roark_party, second, jumps, expected):
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Stealth Rock", second, "", ""))
+    assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expected
+
+
+@pytest.mark.parametrize(
     ("slower", "hp", "jumps", "expected"),
     [
         # Expert_DragonDance (:4765-4780)

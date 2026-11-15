@@ -77,6 +77,7 @@ from nuzline.ai.outcome import (
     ABILITY_GUESSES,
     ENUMERATION_WIDTH,
     KAIZO_EXPERT_LABELS,
+    KAIZO_TRANSCRIBED,
     MAX_SCRIPT_ROLLS,
     READ_DRAWS,
     SIM_ROLL_MAX,
@@ -1659,8 +1660,9 @@ def _expert_protect(ctx: AiContext, mask) -> AiContext:
     """``Expert_Protect`` (script.s:3502-3589): a player knowing Feint or Shadow Force, -2
     unless the 128 roll (:3541) jumps; a chain above 1, -2; the AI badly poisoned, cursed,
     perishing, infatuated, seeded or drowsy, or the player knowing a half-HP recovery or
-    Defense Curl, -2 unless the AI has used Lock-On; the player under one of those six, in a
-    doubles battle, the AI's Lock-On, or the 85 roll (:3564), +2; then -1 unless the 128 roll
+    Defense Curl, -2 unless the AI is locked onto (Lock-On's bit is on its target,
+    subscript_lock_on.s); the player under one of those six, in a doubles battle, the AI
+    locked onto, or the 85 roll (:3564), +2; then -1 unless the 128 roll
     (:3571) jumps; then with a chain, -1 and -1 more unless :3578 jumps."""
     ctx = _at(ctx, mask)
     ctx, try_minus2 = _split(c.if_move_known(ctx, _D, _MOVE["Feint"]))
@@ -2053,18 +2055,9 @@ def _expert_pursuit(ctx: AiContext, mask) -> AiContext:
     return ctx
 
 
-def _expert_stealth_rock(ctx: AiContext, mask) -> AiContext:
-    """``Expert_StealthRock`` (script.s:6268-6285)."""
-    # Expert_StealthRock (:6268). Expert_StealthRock_TryScorePlus1 (:6280, a 64 roll) is
-    # reached only when the attacker knows Roar or Whirlwind, which are not transcribed
-    # moves (ai_refusals), so the jumps below are never taken.
-    ctx = _at(ctx, mask)
-    ctx, _ = _split(c.if_random_less_than(ctx, 128, 6274))
-    ctx = c.add_to_move_score(ctx, 1)
-    ctx, _ = _split(c.if_move_known(ctx, _A, _MOVE["Roar"]))
-    ctx, _ = _split(c.if_move_known(ctx, _A, _MOVE["Whirlwind"]))
-    ctx, _ = _split(c.go_to(ctx))
-    return ctx
+# Expert_StealthRock (script.s:6268-6285) has the hazard labels' shape: since E1 batch 17
+# transcribes Roar and Whirlwind, its 64 roll (:6281) is reached.
+_expert_stealth_rock = _hazard_expert("Expert_StealthRock", (6268, 6274, 6281))
 
 
 # --- The jump tables -----------------------------------------------------------------
@@ -2511,7 +2504,9 @@ def opponent_move_refusals(
 ) -> list[str]:
     """The per-move refusals of ``_refused`` for an opponent move (decomp id) under ``layout``,
     whatever the player's party (``tools/kaizo/backlog.py`` lists them per fight), as kinds:
-    ``"not transcribed"`` (its script paths, ``layout.transcribed``), ``"ghost curse"`` (Curse
+    ``"not transcribed"`` (its script paths, ``layout.transcribed``), ``"not in the fight's
+    layout"`` (transcribed, but not one of the fight's own move effects, E1 Ruling R7),
+    ``"ghost curse"`` (Curse
     by a Ghost type, ``ghost``), ``"expert label"`` (its Expert_Main label is not transcribed
     yet, when the layout runs EXPERT), ``"calc damage"`` and ``"move type"`` (TrainerAI_CalcDamage and
     TrainerAI_MoveType move-id cases). Pinned against ``_refused`` by
@@ -2521,7 +2516,8 @@ def opponent_move_refusals(
     effect = int(np.asarray(tables.move_ai_effect)[move])
     key = effect if layout.per_slot_sites else move
     if key not in layout.transcribed:
-        return ["not transcribed"]
+        outside = layout.per_slot_sites and effect in KAIZO_TRANSCRIBED
+        return ["not in the fight's layout" if outside else "not transcribed"]
     out = []
     if ghost and effect == BattleEffect.CURSE:
         out.append("ghost curse")
@@ -2582,9 +2578,19 @@ def _scoring_refusals(
         policy = AI_POLICIES[int(tables.ai_policy)]
         out.append(f"ai: the tables' AI policy is {policy}, the layout's {layout.name}")
     for s, k in zip(*np.nonzero(np.asarray(r.move)), strict=True):
+        move = int(moves[1, s, k])
+        effect = int(np.asarray(tables.move_ai_effect)[move])
+        if layout.per_slot_sites and effect in KAIZO_TRANSCRIBED:
+            # transcribed, but outside this fight's layout (its own moves' effects, E1 R7)
+            out.append(
+                f"ai scoring: opponent slot {s}: move {_move_name(move, names)} is transcribed "
+                "but not in this fight's layout, which holds the effects of the fight's own "
+                "moves (E1 Ruling R7; ai.layout.fight_tables)"
+            )
+            continue
         out.append(
             f"ai scoring: opponent slot {s}: the script paths of move "
-            f"{_move_name(int(moves[1, s, k]), names)} are not transcribed (docs/ai/roark.md 5)"
+            f"{_move_name(move, names)} are not transcribed (docs/ai/roark.md 5)"
         )
     for s, k in zip(*np.nonzero(np.asarray(r.ghost_curse)), strict=True):
         out.append(

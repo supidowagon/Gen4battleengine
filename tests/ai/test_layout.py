@@ -19,7 +19,7 @@ from tests.ai.fixtures import GEODUDE, outcome, trace_a, versus
 from tests.conftest import K3C_EFFECTS
 
 SELFDESTRUCT, HEAD_SMASH, CRUNCH = 120, 457, 242
-TRIPLE_AXEL, RETURN = 149, 216  # Kaizo names of the decomp's MOVE_PSYWAVE and MOVE_RETURN
+RETURN = 216  # Kaizo name of the decomp's MOVE_RETURN
 WATER_GUN = 55
 
 
@@ -163,31 +163,39 @@ def test_dry_skin_compare_per_policy(tables, names):
     assert scores == {"vanilla": 0, "kaizo": -12}
 
 
-def test_kaizo_refuses_unmodelled_id_cases(kaizo_tables, kaizo_names, kaizo_roark_party):
-    """Kaizo Triple Axel (149) has effect 88, in sAltPowerMoveEffects (trainer_ai.c:48-61),
-    and its id is MOVE_PSYWAVE's, a TrainerAI_CalcDamage id case that draws (:3014): refused.
-    Kaizo Return (216) has effect 0 but still hits the MOVE_RETURN case (:3018), which the AI
-    damage models (E1 batch 13): not refused for it."""
+def test_kaizo_refuses_an_unmodelled_id_case(
+    kaizo_tables, kaizo_names, kaizo_roark_party, monkeypatch
+):
+    """A TrainerAI_CalcDamage move-id case (trainer_ai.c:2885-3071) the AI damage does not
+    model is refused by name, whatever the move's effect. Synthetic, so the test does not
+    depend on which cases are modelled: Tackle's id added to ``commands.CALC_DAMAGE_MOVES``.
+    Kaizo Return (216, effect 0) takes the modelled MOVE_RETURN case (:3018): not refused."""
     t, n = kaizo_tables, kaizo_names
     cranidos = _kaizo_mon(kaizo_roark_party, "Cranidos", n)
     gible = _kaizo_mon(kaizo_roark_party, "Gible", n)
     s = make_state(t, [gible], [cranidos])
-    axel = s._replace(moves=s.moves.at[1, 0, 3].set(TRIPLE_AXEL))
-    reasons = ai_refusals(t, axel, n)
-    assert any("Triple Axel" in r and "TrainerAI_CalcDamage" in r for r in reasons), reasons
-    ret = s._replace(moves=s.moves.at[1, 0, 3].set(RETURN))
-    assert int(t.move_ai_effect[RETURN]) == 0
-    reasons = ai_refusals(t, ret, n)
+    tackle = n.move_names.index("Tackle")
+    monkeypatch.setattr(commands, "CALC_DAMAGE_MOVES", (*commands.CALC_DAMAGE_MOVES, tackle))
+    with jax.disable_jit():  # _refused reads the tuple at trace time
+        reasons = ai_refusals(t, s._replace(moves=s.moves.at[1, 0, 3].set(tackle)), n)
+        assert any("Tackle" in r and "TrainerAI_CalcDamage" in r for r in reasons), reasons
+        ret = s._replace(moves=s.moves.at[1, 0, 3].set(RETURN))
+        assert int(t.move_ai_effect[RETURN]) == 0
+        reasons = ai_refusals(t, ret, n)
     assert not any("Return" in r and "TrainerAI_CalcDamage" in r for r in reasons), reasons
 
 
-def test_move_type_id_case_refused(tables, names):
-    """TrainerAI_MoveType's id cases (trainer_ai.c:3132-3222): Weather Ball's AI type is not
-    its table type."""
+def test_move_type_id_case_refused(tables, names, monkeypatch):
+    """A TrainerAI_MoveType move-id case (trainer_ai.c:3132-3222) the AI does not model is
+    refused by name. Synthetic (Tackle's id added to ``commands.MOVE_TYPE_MOVES``), so the
+    test does not depend on which cases are modelled."""
     s = trace_a(tables, names)
-    s = s._replace(moves=s.moves.at[1, GEODUDE, 2].set(names.move("Weather Ball")))
-    reasons = ai_refusals(tables, s)
-    assert any("Weather Ball" in r and "TrainerAI_MoveType" in r for r in reasons), reasons
+    tackle = names.move("Tackle")
+    monkeypatch.setattr(commands, "MOVE_TYPE_MOVES", (*commands.MOVE_TYPE_MOVES, tackle))
+    s = s._replace(moves=s.moves.at[1, GEODUDE, 2].set(tackle))
+    with jax.disable_jit():
+        reasons = ai_refusals(tables, s)
+    assert any("Tackle" in r and "TrainerAI_MoveType" in r for r in reasons), reasons
 
 
 def test_traced_tables_without_a_layout_refuse_another_policy(tables, names):

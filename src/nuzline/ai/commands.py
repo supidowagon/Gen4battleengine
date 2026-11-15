@@ -1471,16 +1471,15 @@ def count_alive_party_battlers(ctx: AiContext, battler: Battler) -> AiContext:
 def add_to_move_score(ctx: AiContext, value: int) -> AiContext:
     """``AddToMoveScore`` (trainer_ai.c:576-586): ``moveScore[slot] += val``, then a
     negative score becomes 0. ``moveScore`` is ``s8`` (include/battle/ai_context.h:14), so
-    the sum wraps to -128..127 before the clamp: 127 + 2 is -127, then 0. No Roark path
-    comes near it (his largest score is about 108); the wrap keeps a later one exact."""
+    the sum wraps to -128..127 before the clamp: 127 + 2 is -127, then 0."""
     current = ctx.scores[ctx.slot]
     new = jnp.maximum((current + value + 128) % 256 - 128, 0)
     return ctx._replace(scores=ctx.scores.at[ctx.slot].set(jnp.where(ctx.live, new, current)))
 
 
 def pop_or_end(ctx: AiContext) -> AiContext:
-    """``PopOrEnd`` (trainer_ai.c:2568): Roark's scripts never push, so this ends the
-    slot for this flag."""
+    """``PopOrEnd`` (trainer_ai.c:2568): nothing pushes (``PushAndGoTo``, :2554, appears
+    nowhere in script.s), so this ends the slot for this flag."""
     return ctx._replace(live=jnp.asarray(False))
 
 

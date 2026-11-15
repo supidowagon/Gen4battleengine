@@ -128,9 +128,10 @@ three structs has a row.
   a counter still live at 0 (`battle_controller_player.c:1801`). `yawn` is the two-bit
   `MOVE_EFFECT_YAWN` counter (`moves.h:19-20`, `:42`, `:53`; decremented at
   `battle_controller_player.c:1684-1687`), 0 = none. `lock_on` is the two-bit
-  `MOVE_EFFECT_LOCK_ON` counter (`moves.h:11-12`, `:41`), 0 = none, and `lock_on_target` is
-  `MoveEffectsData.lockOnTarget` (`battle_mon.h:23`) as `1 + battler`, 0 = none (doubles
-  convention 3). Their clearing is for the moves' work, not modelled yet: a switch-out or
+  `MOVE_EFFECT_LOCK_ON` counter (`moves.h:11-12`, `:41`), 0 = none, on the battler locked
+  onto (Lock-On sets it on its target, `subscript_lock_on.s`), and `lock_on_target` is that
+  battler's `MoveEffectsData.lockOnTarget` (`battle_mon.h:23`), the battler that locked on,
+  as `1 + battler`, 0 = none (doubles convention 3). Their clearing is for the moves' work, not modelled yet: a switch-out or
   faint clears the battler's volatiles and move-effect bits except what Baton Pass keeps
   (`MOVE_EFFECT_BATON_PASSED` keeps Lock-On and Perish Song, `moves.h:44-46`), and another
   battler's Lock-On that targets the leaving battler (`battle_lib.c:2063-2083`).

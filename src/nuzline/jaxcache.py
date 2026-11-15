@@ -33,8 +33,10 @@ from nuzline.data.games import VANILLA
 __all__ = [
     "cache_root",
     "cached_export",
+    "cap_directory",
     "code_version",
     "enable_compile_cache",
+    "jax_version",
     "prune_other_versions",
     "set_compile_cache_dir",
     "table_version",

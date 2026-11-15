@@ -300,6 +300,7 @@ SITE_N: dict[int, int] = {
     3010: 100,
     3038: 100,  # Expert_Substitute_TryScorePlus1
     1897: 51,  # Expert_DreamEater_TryScorePlus3
+    6281: 64,  # Expert_StealthRock_TryScorePlus1: with Roar or Whirlwind (since batch 17)
 }
 SITE_LINES = tuple(SITE_N)
 # The flat (vanilla) layout's column of script_roll_sites that each line reads: column 0 is
@@ -349,7 +350,7 @@ KAIZO_TRANSCRIBED: frozenset[int] = frozenset(
         140,  # RAISE_ALL_STATS_HIT (AncientPower): no Expert_Main entry; Risky :6530
         186,  # REMOVE_SCREENS (Brick Break): Expert_BrickBreak (:1739 -> :4559), no roll
         261,  # WHIRLPOOL (Sand Tomb): no Expert_Main entry (plan K3c Ruling 5)
-        266,  # STEALTH_ROCK: Expert_StealthRock (:1805 -> :6268), :6274
+        266,  # STEALTH_ROCK: Expert_StealthRock (:1805 -> :6268), :6274, :6281
         269,  # RECOIL_HALF (Head Smash): Expert_RecoilMove (:1806 -> :6289), no roll
         275,  # FLINCH_PARALYZE_HIT (Thunder Fang): no Expert_Main entry
         # E1 batch 3: the 26 trainer-used effects with no Basic_ScoreMoveEffect (:133-286) or Expert_Main

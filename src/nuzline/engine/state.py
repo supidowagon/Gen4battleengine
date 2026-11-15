@@ -50,8 +50,10 @@ Encodings:
   counter that is still live at 0 (the battler faints at the turn end that finds it 0,
   battle_controller_player.c:1801); ``yawn`` is the two-bit ``MOVE_EFFECT_YAWN`` counter in
   ``moveEffectsMask`` (moves.h:19-20, :42, :53), 0 = none; ``lock_on`` is the two-bit
-  ``MOVE_EFFECT_LOCK_ON`` counter (moves.h:11-12, :41), 0 = none, and ``lock_on_target``
-  is ``MoveEffectsData.lockOnTarget`` (battle_mon.h:23) stored as ``1 + battler``, 0 = none
+  ``MOVE_EFFECT_LOCK_ON`` counter (moves.h:11-12, :41), 0 = none, on the battler **locked
+  onto** (Lock-On sets it on its target, subscript_lock_on.s), and ``lock_on_target`` is that
+  battler's ``MoveEffectsData.lockOnTarget`` (battle_mon.h:23), the battler that locked on,
+  stored as ``1 + battler``, 0 = none
   (doubles convention 3, docs/doubles-state-design.md section 5).
 * ``trainer_item_count`` is ``aiContext.trainerItemCounts``: the bag's size at battle
   start, never decremented.
