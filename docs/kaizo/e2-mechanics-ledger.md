@@ -11,9 +11,19 @@
   reachable Disable (B5-3). Roark split entries closed: Sleep Talk (10 fights), Copycat (1).
 - Batch 5 part 2: Uproar (B5-4..B5-7) and Future Sight / Doom Desire (B5-8..B5-12) modelled
   and supported in both engines, the sampler and the laws; both Roark split entries closed
-  (commits: Uproar e0b708e, then Future Sight). Next: the batch 5 review.
+  (commits: Uproar e0b708e, Future Sight ef29448). Next: the batch 5 review.
+- Compile (batch 5 start / end, same machine, a fast tier running): `jit(step)` 60.4 -> 60.1 s,
+  `jit(vmap(step))` 42.8 -> 43.8 s (logs in `_scratch/e2/b5/` on G:).
 - Left after batch 5: U-turn (3 fights, the batch 6 design below), Metronome (3, B5-2).
 - Standing: the doubles conventions below apply to all new code; one review per batch.
+- Standing (process, coordinator 2026-11-14): (1) the fast-tier lock
+  (`_scratch/fast_tier.lock`) names the running pytest's pid (`pid=<id>`); write it only after
+  that process has started and is confirmed alive, never before launching and never from a
+  wrapper that could outlive a failed launch; a lock whose pid is dead, or with no pid while no
+  pytest runs, may be deleted by anyone. (2) Every background launch (test run, agent) gets a
+  liveness check within two minutes: the process exists and its log grows; one not confirmed
+  alive is not running. (3) A batch with no commit for 90 minutes tells the coordinator in two
+  lines what it waits on; during a long run keep implementing, never wait silently.
 
 Session E2 builds the battle mechanics the Roark split's trainers need (held items,
 abilities, move effects, battle terrain), batch by family. The AI side belongs to E1.
@@ -143,6 +153,14 @@ Rules left out because another mechanic is missing; each closes with the mechani
   and `Move_CanBeMetronomed` (battle_lib.c:7204-7207: `order.metronome_candidates`,
   `order.copycat_call`, `coverage.metronome_calls`); its Heal Block test is an unsupported move's:
   Gravity.
+- E1's per-battler int8 fields (da1d60f on `claude/engine-e1-ai`, here when main is next
+  merged; zero at battle start, no behaviour yet): `curse` (VOLATILE_CONDITION_CURSE,
+  condition.h:60), `perish_song` (MOVE_EFFECT_PERISH_SONG, moves.h:13), `perish_song_turns`
+  (perishSongTurns, battle_mon.h:14; the battler faints at the turn end that finds it at 0,
+  bcp.c:1801), `yawn` (two-bit counter, moves.h:19-20), `lock_on` (two-bit counter, moves.h:11-12),
+  `lock_on_target` (lockOnTarget, battle_mon.h:23, as 1 + battler). Owed here when those moves are
+  modelled: setting the fields, their end-of-turn behaviour and the clear-on-switch rules
+  (battle_lib.c:2063-2080), on E1's fields (no fields of our own; citations to verify then).
 - AI owner (E1): the AI move-effect scripts of Sleep Talk (#97: Basic_CheckAttackerAsleep /
   Expert_SleepTalk), Copycat (#242: Basic_CheckCopycat / Expert_Copycat) and Metronome (#83) are
   untranscribed (the backlog's AI entries); the engine side is B5-1..B5-3. The battle's movePrev is
