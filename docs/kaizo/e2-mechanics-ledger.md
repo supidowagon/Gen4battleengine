@@ -991,3 +991,27 @@ Rules left out because another mechanic is missing; each closes with the mechani
   imprisoned, as `TryImprison` loops the battlers whatever their HP (battle_script.c:6697-6716).
   `TrainerAI_CalcDamage` calls `BattleSystem_CalcMoveDamage` (trainer_ai.c:3082), whose Technician
   (battle_lib.c:6698) the AI estimate therefore applies: the merged `damage.py` is exact there.
+- B7-18 (AI-side fix by E2 with the manager's go) `TrainerAI_ShouldSwitch`'s gate
+  (trainer_ai.c:3906-3907) refuses a switch for `VOLATILE_CONDITION_TRAPPED` (Bind and Mean Look,
+  condition.h:77-78) and `MOVE_EFFECT_INGRAIN`; `ai/switching._layout` gated on `trapped` only and
+  now reads `mean_look` and `ingrain` too. The rest of the gate (:3908-3911: Shadow Tag and Arena
+  Trap on the player's side, Magnet Pull on a Steel AI battler) was already there; the comment at
+  :3902-3904 (the AI ignores its own Shadow Tag, a Flying type vs Arena Trap, Shed Shell) is the
+  decomp's own naivety, mirrored. Tests: tests/ai/test_switching.py `test_gates`, the brute force
+  of tests/ai/test_kaizo_switching.py.
+- Opponent-action legality (by design): neither `step` nor `legal_actions` checks the
+  opponent's action; the search feeds `step` what the AI picks, and the AI is trusted to pick
+  legally because it mirrors the decomp's own gates. The gates that trust rests on: the switch
+  gate (`ai/switching._layout`, trainer_ai.c:3906-3913) and its living-bench test (:3924-3938);
+  the move scores' usable mask (`TrainerAI_Init`'s CHECK_INVALID_ALL, trainer_ai.c:234:
+  `actions.usable_moves` in `ai.commands` / `ai.policy`: no move, no PP, Disable, Taunt, the
+  Choice lock, Imprison) with Struggle when none (ai/policy.py:2850, :3057); the locked battler's
+  forced move (`actions.locked_slot`); the bag pick (`TrainerAI_ShouldUseItem`,
+  `actions.usable_trainer_items`); the replacement pick (`ai.replacement`, a
+  `legal_replacements` slot) and the pivot pick at its own list (`post_ko_switch_in`). Where
+  `step` would accept an illegal opponent action silently: a switch to an empty, fainted or
+  active slot (`_send_out` sends it; no check), a switch while trapped or locked (played as a
+  switch), and a move slot the mask forbids: an empty slot runs move 0, a slot with no PP spends
+  to -1 (`spend`), a Choice-locked holder's other move runs; Disable, Taunt and Imprison are
+  still caught at their status checks (bcp.c:2543-2583), as for a faster foe's this turn. The
+  player's actions are checked by the search (`legal_actions`, `decision_actions`).
