@@ -121,8 +121,15 @@ def _gap(names):
     return (names.move("Tackle"), names.move("Growl"), names.move("Quick Attack"), 0)
 
 
-def test_a_learnable_unsupported_move_is_refused(tables, names):
-    """Endeavor (UNSUPPORTED) is reached only through the level-up in battle, and with an
+@pytest.fixture
+def endeavor_unsupported(monkeypatch):
+    """These tests need an unsupported move Starly learns at L17: Endeavor was one until E2
+    batch 10 (B10-5) modelled it, so the registry entry is turned off for them."""
+    monkeypatch.setitem(IMPLEMENTED_EFFECTS, EffectId.ENDEAVOR, Support.NONE)
+
+
+def test_a_learnable_unsupported_move_is_refused(tables, names, endeavor_unsupported):
+    """Endeavor (UNSUPPORTED here) is reached only through the level-up in battle, and with an
     empty slot it is learned without a prompt (pokemon.c:3852-3873, ruling D10)."""
     geodude = _geodude(names)
     assert names.move("Endeavor") not in sample_party(names)[STARLY_SLOT].moves
@@ -135,16 +142,23 @@ def test_a_learnable_unsupported_move_is_refused(tables, names):
     assert _missing(tables, names, far, geodude) == []
 
 
-def test_a_prompt_only_unsupported_learnable_is_masked_not_refused(tables, names):
+def test_a_prompt_only_unsupported_learnable_is_masked_not_refused(
+    tables, names, endeavor_unsupported
+):
     """Ruling D10 (the user's Kaizo Roark fight: Luvdisc, Lucky Chant at L17, four moves):
     with every slot full Endeavor is only a prompt (battle_script.c:10016-10018), which the
     learn options mask (``levelup.learn_options``) and the player can give up, so the fight
-    stays covered."""
+    stays covered. Endeavor's effect is set UNSUPPORTED in these tables (B10-5 modelled it; the
+    learn options mask by the table's effect, ``coverage.learn_masked``)."""
+    endeavor = names.move("Endeavor")
+    tables = tables._replace(
+        move_effect=jnp.asarray(tables.move_effect).at[endeavor].set(int(EffectId.UNSUPPORTED))
+    )
     geodude = _geodude(names)
     full = _starly(names, exp=L17 - GEODUDE_BOUND)
     starly = full[STARLY_SLOT]
     assert all(starly.moves)
-    assert reachable_learn_moves(tables, starly, geodude) == [names.move("Endeavor")]
+    assert reachable_learn_moves(tables, starly, geodude) == [endeavor]
     assert forced_learn_moves(tables, starly, geodude) == []
     assert learnable_moves(tables, starly, geodude) == []
     assert _missing(tables, names, full, geodude) == []
@@ -200,12 +214,17 @@ def test_the_effect_ids_are_the_decomp_moves(tables, names):
 
 @pytest.mark.parametrize("game", ["tables", "kaizo_tables"])
 def test_the_exp_sensitive_moves_are_unsupported(request, game):
-    """Today every move of §4.2, §4.4 and §4.5 is an UNSUPPORTED effect in both games, so
-    a Pokemon that knows one is refused on that line already; the exp lines are the guard
-    for when one is implemented."""
+    """Every move of §4.2, §4.4 and §4.5 is an UNSUPPORTED effect in both games but Knock Off
+    (188, E2 batch 10, B10-6), so a Pokemon that knows one is refused on that line already; the
+    exp lines are the guard for an implemented one (Knock Off's: exp_refusals' §4.2 line, its own
+    test below)."""
     tables = request.getfixturevalue(game)
     effect, ai_effect = np.asarray(tables.move_effect), np.asarray(tables.move_ai_effect)
-    eids = (*ITEM_MOVING_EFFECTS, *FRIENDSHIP_POWER_EFFECTS, *RELOAD_STATE_EFFECTS)
+    eids = (
+        *(e for e in ITEM_MOVING_EFFECTS if e != 188),
+        *FRIENDSHIP_POWER_EFFECTS,
+        *RELOAD_STATE_EFFECTS,
+    )
     for move in np.flatnonzero(np.isin(ai_effect, eids)):
         engine = EffectId(int(effect[move]))
         assert IMPLEMENTED_EFFECTS.get(engine, Support.NONE) == Support.NONE, int(move)
@@ -304,7 +323,7 @@ def test_out_of_scope_formats_are_refused(tables, names):
         assert any("(battle format UNSUPPORTED)" in line for line in missing), fmt
 
 
-def test_kaizo_names_keep_the_learnable_scan(tables, vanilla_manifest, names):
+def test_kaizo_names_keep_the_learnable_scan(tables, vanilla_manifest, names, endeavor_unsupported):
     """The scan runs on the tables, whatever the game's names (no game gate)."""
     kaizo = Names({**vanilla_manifest, "game": KAIZO, "unclassified_rom_changes": 0})
     near = _starly(names, exp=L17 - GEODUDE_BOUND, moves=_gap(names))
@@ -320,3 +339,14 @@ def test_make_state_takes_the_new_spec_fields(tables, names):
     other = make_state(tables, marked, roark_party(names))
     for a, b in zip(plain, other, strict=True):
         assert bool(jnp.all(a == b))
+
+
+def test_knock_off_meets_the_exp_item_line(tables, names):
+    """§4.2 (ruling D9) for Knock Off (B10-6): an exp-item holder in a fight where Knock Off can be
+    used is refused, as the payout reads the party item (a knocked-off item stays on the party,
+    battle_io_command.c:590-592) while the battle copy holds nothing."""
+    from nuzline.engine.coverage import exp_refusals
+
+    starly = replace(sample_party(names)[STARLY_SLOT], item=names.item("Lucky Egg"))
+    lines = exp_refusals(tables, names, starly, [], [names.move("Knock Off")], False)
+    assert any("Knock Off can move held items in battle" in line for line in lines), lines

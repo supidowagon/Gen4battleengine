@@ -303,6 +303,9 @@ class EffectId(IntEnum):
     # Encore (90, BATTLE_EFFECT_ENCORE): zeros. A direct ON_HIT subscript_encore_start.s ->
     # BtlCmd_TryEncore (battle_script.c:4725-4748), ``effects._encore``, B10-9.
     ENCORE = 88
+    # Assist (180, BATTLE_EFFECT_USE_RANDOM_ALLY_MOVE): zeros. effect_script_0180.s: BtlCmd_TryAssist
+    # (battle_script.c:6405-6444) then GoToMoveScript: an invoker (``order.CALL_ASSIST``), B10-11.
+    ASSIST = 89
 
 
 # ``EffectId.COUNTER``'s source (``move_param[m, 0]``).
@@ -895,6 +898,9 @@ MOVE_KNOCK_OFF = 282
 # (MOVE_DATA(move).effect, :7225) with the last move's: Transform, Mimic, Sketch, Mirror Move,
 # Encore, Struggle (generated/moves.txt), B10-9.
 CANNOT_ENCORE_MOVES = (144, 102, 166, 119, 227, 165)
+# Move_IsInvoker (battle_lib.c:3032-3045): MOVE_NONE, Sleep Talk, Copycat, Assist, Me First,
+# Mirror Move, Metronome (generated/moves.txt), B10-11.
+INVOKER_MOVES = (0, 214, 383, 274, 382, 119, 118)
 # Protect, Detect, Endure (``generated/moves.txt`` lines 183, 198, 204): ``BtlCmd_TryProtection``
 # (battle_script.c:5154-5158) keeps the chain only when ``moveProtect`` is one of them, and
 # ``AICmd_LoadProtectChain`` (trainer_ai.c:2546-2552) reads it the same way. The engine folds

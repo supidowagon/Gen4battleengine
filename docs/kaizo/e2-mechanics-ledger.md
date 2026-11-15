@@ -1622,6 +1622,10 @@ Rules left out because another mechanic is missing; each closes with the mechani
   lacked the three encore fields; its usable-move check (`_usable`) ignored Encore (Struggle and
   the forced slot); both fixed. Sleep Talk's callable slots drop every move but the encored one
   (CheckInvalidMoves at battle_script.c:4927; `order.sleep_talk_slots`, both engines).
+  Manager ruling 2026-11-15: batch 10 ships Encore refused by coverage for both sides
+  (`coverage.IMPLEMENTED_EFFECTS[ENCORE] = NONE`, reason `ENCORE_REFUSAL` naming the takeover
+  task; Metronome is refused with it, as it can call Encore), the engine code kept; batch 11 builds
+  the takeover (design below) and then lifts the refusal and adds Encore's AI.
   Owed (decision asked of the manager 2026-11-15): the same-turn takeover (FightCommand,
   bcp.c:1869-1873) is exact in both engines but not in `outcome_laws` (reads are planned from the
   chosen move: a hand case gives 1 child against 33 sampled outcomes) nor in `sample_outcome`

@@ -210,12 +210,14 @@ from nuzline.engine.ids import (
     Weather,
 )
 from nuzline.engine.order import (
+    CALL_ASSIST,
     CALL_COPYCAT,
     CALL_METRONOME,
     CALL_NONE,
     CALL_SLEEP_TALK,
     MOVE_ACTIONS,
     action_order,
+    assist_candidates,
     call_kind,
     called_move,
     copycat_call,
@@ -664,6 +666,7 @@ INPUT_NEUTRAL_EFFECTS = (
     _E.SLEEP_TALK,
     _E.METRONOME,
     _E.COPYCAT,
+    _E.ASSIST,  # B10-11: an invoker like them
     # E2 batch 5. Uproar starts an uproar on its user, which wakes a sleeper at its own status
     # check: the side's own status change, which ``own_pre_move`` covers for a Guts user.
     _E.UPROAR,
@@ -1044,6 +1047,7 @@ NON_TABLE_DAMAGE_EFFECTS = (
     _E.SLEEP_TALK,
     _E.METRONOME,
     _E.COPYCAT,
+    _E.ASSIST,  # B10-11: an invoker like them
     # No damage at its use (its roll is TryFutureSight's stored damage, damage.fixed_damage).
     _E.FUTURE_SIGHT,
     _E.INGRAIN,  # status moves: no damage
@@ -2785,6 +2789,17 @@ def call_laws(tables: Tables, state: BattleState, actions) -> CallLaws:
         )
         metro_w = jnp.where(values < n, metro_all[by_rank], 0)
         copy_w = ((values == 0) | ((values == 1) & uses_move[foe])).astype(_I32)
+        # Assist (B10-11): every list position weighs 1 (RandNext() % numMoves), the list fixed for
+        # the turn; position v calls the v-th valid entry.
+        listed, valid = assist_candidates(tables, state, side)
+        n_listed = jnp.sum(valid.astype(_I32))
+        assist_w = (values < n_listed).astype(_I32)
+        listed_rank = jnp.cumsum(valid.astype(_I32)) - 1
+        assist_called = (
+            jnp.zeros((CALL_VALUES,), _I32)
+            .at[jnp.where(valid, listed_rank, CALL_VALUES)]
+            .set(listed, mode="drop")
+        )
         copy_called = jnp.where(
             values == 0,
             copycat_call(tables, state.move_prev),
@@ -2798,7 +2813,11 @@ def call_laws(tables: Tables, state: BattleState, actions) -> CallLaws:
                 jnp.where(
                     kind == CALL_METRONOME,
                     metro_w,
-                    jnp.where(kind == CALL_COPYCAT, copy_w, (values == 0).astype(_I32)),
+                    jnp.where(
+                        kind == CALL_COPYCAT,
+                        copy_w,
+                        jnp.where(kind == CALL_ASSIST, assist_w, (values == 0).astype(_I32)),
+                    ),
                 ),
             )
         )
@@ -2809,7 +2828,11 @@ def call_laws(tables: Tables, state: BattleState, actions) -> CallLaws:
                 jnp.where(
                     kind == CALL_METRONOME,
                     by_rank,
-                    jnp.where(kind == CALL_COPYCAT, copy_called, 0),
+                    jnp.where(
+                        kind == CALL_COPYCAT,
+                        copy_called,
+                        jnp.where(kind == CALL_ASSIST, assist_called, 0),
+                    ),
                 ),
             )
         )
@@ -2844,7 +2867,7 @@ def call_variants(laws: CallLaws) -> list[tuple[np.ndarray, int, int]]:
         offsets = [CALL_KEEP]
         offsets += [CALL_DISABLED] if bool(laws.can_disable[side]) else []
         offsets += [CALL_SEALED] if bool(laws.can_seal[side]) else []
-        if kind in (CALL_SLEEP_TALK, CALL_METRONOME):
+        if kind in (CALL_SLEEP_TALK, CALL_METRONOME, CALL_ASSIST):
             groups: dict[tuple[int, int, int], list[int]] = {}
             for v in np.flatnonzero(weight):
                 key = (int(called[v]), int(alt[v]), int(sealed[v]))

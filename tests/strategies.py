@@ -309,7 +309,7 @@ BATCH4_MOVES = (
 BATCH4_ABILITIES = (AbilityId.FILTER, AbilityId.MAGIC_GUARD, AbilityId.SNIPER)
 # E2 batch 5: the invokers, and moves for them to call or copy (a sleep move, Protect, a
 # multi-hit move, Disable, a Choice item's lock).
-INVOKERS = ("Sleep Talk", "Sleep Talk", "Copycat", "Metronome")
+INVOKERS = ("Sleep Talk", "Sleep Talk", "Copycat", "Metronome", "Assist")  # Assist: B10-11
 CALLED_MOVES = ("Tackle", "Spore", "Protect", "Fury Swipes", "Disable", "Counter", "Ember", "Bide")
 CRIT_ITEMS = ("Scope Lens", "Razor Claw", "Lucky Punch", "Stick")
 SWITCH_IN_ABILITIES = (
@@ -1742,7 +1742,8 @@ def outcome_law_state(draw, tables: Tables, names: Names) -> BattleState:
     move_pp = np.asarray(tables.move_pp)
     effect = np.asarray(tables.move_effect)
     invoker = np.isin(
-        effect[a["moves"]], (EffectId.SLEEP_TALK, EffectId.METRONOME, EffectId.COPYCAT)
+        effect[a["moves"]],
+        (EffectId.SLEEP_TALK, EffectId.METRONOME, EffectId.COPYCAT, EffectId.ASSIST),
     )
     a["moves"][invoker] = names.move("Tackle")  # a learnset's own invoker too
     for side in (0, 1):

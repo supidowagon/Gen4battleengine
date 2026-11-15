@@ -41,6 +41,7 @@ from nuzline.engine.ids import (
     CANNOT_ENCORE_MOVES,
     CHOICE_ITEMS,
     FUTURE_SIGHT_TURNS,
+    INVOKER_MOVES,
     ITEM_ABILITY_IDS,
     ITEM_GRISEOUS_ORB,
     METRONOME_DRAW,
@@ -307,6 +308,17 @@ def _invoked_move(tables, s: RefState, side: int, move: int, call: int) -> int:
         prev = s.move_prev
         ok = prev != 0 and not _t(tables, "move_flags", prev) & MoveFlag.NO_METRONOME
         return prev if ok else 0
+    if effect == EffectId.ASSIST:
+        # BtlCmd_TryAssist (script.c:6405-6444, B10-11): every move of every other party slot
+        # with a Pokemon, not an invoker, Metronome-able; RandNext() % numMoves.
+        listed = [
+            m
+            for k, mate in enumerate(sd.party)
+            if k != sd.active and mate.species
+            for m in mate.moves
+            if m not in INVOKER_MOVES and not _t(tables, "move_flags", m) & MoveFlag.NO_METRONOME
+        ]
+        return listed[call % len(listed)] if listed else 0
     return move
 
 
@@ -3160,6 +3172,7 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
         EffectId.SLEEP_TALK,
         EffectId.METRONOME,
         EffectId.COPYCAT,
+        EffectId.ASSIST,  # B10-11
     ):
         # The invokers (B5-1..): the script picks the move now (Copycat reads the battle's
         # movePrev as the faster foe left it), then GoToMoveScript (script.c:2111-2134) runs it

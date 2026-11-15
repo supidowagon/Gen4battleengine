@@ -453,3 +453,31 @@ def test_knock_off_leaves_the_ai_record_until_the_next_copy_to_party(tables, nam
         out = assert_matches_reference(tables, s, (0, 0), O)
         assert int(out.item[0, 0]) == 0 and int(out.knocked_off[0, 0]) == 1
         assert (int(out.ai_item_known[0]) == n.item("Leftovers")) == kept, species
+
+
+def test_assist_calls_a_party_mates_move(tables, names):
+    """B10-11: BtlCmd_TryAssist (battle_script.c:6405-6444): the moves of the other party slots
+    (a fainted mate's too), invokers and Metronome-banned moves left out, RandNext() % numMoves
+    (``Outcome.call``); with no mate it fails."""
+    n = names
+    s = make_state(
+        tables,
+        [_mon(n, "Skitty", ["Assist"], 30), _mon(n, "Machop", ["Growl", "Tackle"], 30)],
+        [_mon(n, "Snorlax", ["Splash"], 30)],
+    )
+    growl = assert_matches_reference(
+        tables, s, (0, 0), O._replace(call=jnp.asarray([0, 0], O.call.dtype))
+    )
+    assert int(growl.stages[1, Stat.ATK]) == -1
+    tackle = assert_matches_reference(
+        tables, s, (0, 0), O._replace(call=jnp.asarray([1, 0], O.call.dtype))
+    )
+    assert int(tackle.hp[1, 0]) < int(s.hp[1, 0]) and int(tackle.stages[1, Stat.ATK]) == 0
+    fainted = s._replace(hp=s.hp.at[0, 1].set(0))
+    still = assert_matches_reference(tables, fainted, (0, 0), O)
+    assert int(still.stages[1, Stat.ATK]) == -1  # the fainted mate's Growl
+    alone = make_state(
+        tables, [_mon(n, "Skitty", ["Assist"], 30)], [_mon(n, "Snorlax", ["Splash"], 30)]
+    )
+    out = assert_matches_reference(tables, alone, (0, 0), O)
+    assert int(out.stages[1, Stat.ATK]) == 0 and int(out.hp[1, 0]) == int(alone.hp[1, 0])
