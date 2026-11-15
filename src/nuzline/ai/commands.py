@@ -42,6 +42,7 @@ import jax.numpy as jnp
 
 from nuzline.ai.outcome import SITE_LINES, SITE_N, AiOutcome, line_sites
 from nuzline.ai.switching import INEFFECTIVE, apply_type_chart, type_chart_flags
+from nuzline.data.tables import BATTLE_TYPE_DOUBLES as _BATTLE_TYPE_DOUBLES
 from nuzline.data.tables import Tables
 from nuzline.engine.actions import usable_moves
 from nuzline.engine.damage import ai_damage_for_roll, decomp_abilities
@@ -164,7 +165,7 @@ _MOVE_EFFECT_FIELDS = {
     MoveEffectMask.PERISH_SONG: "perish_song",
     MoveEffectMask.YAWN: "yawn",
 }
-BATTLE_TYPE_DOUBLES = 1 << 1  # include/constants/battle.h:27
+BATTLE_TYPE_DOUBLES = int(_BATTLE_TYPE_DOUBLES)  # include/constants/battle.h:27
 
 
 class Gender(IntEnum):

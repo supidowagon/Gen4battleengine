@@ -212,14 +212,18 @@ def move_read_rows(tables: Tables, moves) -> np.ndarray:
     power = np.asarray(tables.move_power)
     move_type = np.asarray(tables.move_type)
     chart = np.asarray(tables.type_chart)
-    from nuzline.ai.commands import NO_DAMAGE_CALC_EFFECTS
+    from nuzline.ai.commands import ALT_POWER_EFFECTS, NO_DAMAGE_CALC_EFFECTS
 
     moves = [int(m) for m in np.asarray(moves).ravel() if int(m) > 0]
     rows = np.zeros((max(len(moves), 1), len(READ_BOUND_BITS)), np.int8)
     for i, move in enumerate(moves):
         e = int(effect[move])
-        damaging = bool(power[move] > 1) and e not in NO_DAMAGE_CALC_EFFECTS
-        # FlagMoveDamageScore's test (trainer_ai.c:1035-1036); QUADRUPLE needs two distinct
+        # FlagMoveDamageScore's test (trainer_ai.c:1035-1036), as commands.is_damaging:
+        # an alt-power effect whatever its power, else power above 1 and a calc effect.
+        damaging = e in ALT_POWER_EFFECTS or (
+            bool(power[move] > 1) and e not in NO_DAMAGE_CALC_EFFECTS
+        )
+        # QUADRUPLE needs two distinct
         # defender types each taking the move super effectively (battle_lib.c:2611-2646), while
         # an AI Adaptability Pokemon stays refused (its STAB of 2, :2592-2594, makes one
         # super-effective type QUADRUPLE: then this must allow one).

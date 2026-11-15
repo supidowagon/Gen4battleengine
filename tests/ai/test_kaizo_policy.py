@@ -2604,10 +2604,10 @@ def test_expert_super_fang(kaizo_tables, kaizo_names, kaizo_roark_party, player_
 
 
 def test_basic_non_standard_damage_immune(kaizo_tables, kaizo_names, kaizo_roark_party):
-    """Basic_CheckNonStandardDamageOrChargeTurn (script.s:575): Super Fang (Normal) against a
-    Ghost is immune, -10; against Gible, nothing."""
+    """Basic_CheckNonStandardDamageOrChargeTurn (script.s:575): Counter (Fighting in Kaizo's
+    move table) against a Ghost is immune, -10; against Gible, nothing."""
     t, n = kaizo_tables, kaizo_names
-    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Super Fang", "Accelerock", "", ""))
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Counter", "Accelerock", "", ""))
     assert _delta(t, s, 0x2, 0x3)[0] == 0
     ghost = _with_player(t, s, n.species_names.index("Gastly"), 0, known=True)
     assert _delta(t, ghost, 0x2, 0x3)[0] == -10
@@ -2637,7 +2637,8 @@ def test_expert_reversal(kaizo_tables, kaizo_names, kaizo_roark_party, speed, hp
 @pytest.mark.parametrize(
     ("speed", "hp", "stage", "expected"),
     [
-        # Expert_Superpower (script.s:4467-4488), Fighting against Gible (neutral)
+        # Expert_Superpower (script.s:4467-4488): Kaizo's Close Combat (effect 182, Fighting,
+        # neutral on Gible; Kaizo's Superpower has effect 48)
         ("faster", 100, 0, -1),  # faster above 40 %: -1
         ("faster", 40, 0, 0),
         ("slower", 100, 0, -1),  # slower at 60 % or more: -1
@@ -2649,7 +2650,7 @@ def test_expert_superpower(
     kaizo_tables, kaizo_names, kaizo_roark_party, speed, hp, stage, expected
 ):
     t, n = kaizo_tables, kaizo_names
-    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Superpower", "Accelerock", "", ""))
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Close Combat", "Accelerock", "", ""))
     s = _hp(_speeds(s, player=1 if speed == "faster" else 500, opp=100), 1, hp)
     s = s._replace(stages=s.stages.at[1, Stat.ATK].set(stage))
     assert _delta(t, s, 0x3, 0x7)[0] == expected
@@ -2687,7 +2688,8 @@ def test_expert_pluck(kaizo_tables, kaizo_names, kaizo_roark_party, turn, jumps,
         ("Counter", "", "low hp", (), -2),  # 20 % HP: :3116 and :3121 each -1
         ("Mirror Coat", "Water Gun", "", (), 1),
         ("Mirror Coat", "Tackle", "", (), -1),
-        ("Mirror Coat", "", "", (), 4),  # Gible has no special type: the +4 try
+        ("Mirror Coat", "", "", (), 0),  # Gible is Dragon, a special type (:3929): nothing
+        ("Mirror Coat", "", "Gastly", (), 4),  # Ghost/Poison, neither special: the +4 try
     ],
 )
 def test_expert_counter_mirror_coat(
@@ -2702,8 +2704,8 @@ def test_expert_counter_mirror_coat(
         s = s._replace(last_move=s.last_move.at[0].set(n.move_names.index(last)))
     if case == "taunted":
         s = s._replace(taunt=s.taunt.at[0].set(3))
-    if case == "Psyduck":
-        s = _with_player(t, s, n.species_names.index("Psyduck"), 0, known=True)
+    if case in ("Psyduck", "Gastly"):
+        s = _with_player(t, s, n.species_names.index(case), 0, known=True)
     assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expected
 
 

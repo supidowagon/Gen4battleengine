@@ -1569,13 +1569,13 @@ def _expert_protect(ctx: AiContext, mask) -> AiContext:
     ctx, try_minus2 = _split(c.if_move_known(ctx, _D, _MOVE["Feint"]))
     ctx, t = _split(c.if_move_known(ctx, _D, _MOVE["Shadow Force"]))
     try_minus2 = try_minus2 | t
-    ctx, check = _split(c.go_to(ctx))
+    ctx, check_status = _split(c.go_to(ctx))
     # Expert_Protect_TryScoreMinus2 (:3540)
     ctx = _at(ctx, try_minus2)
     ctx, t = _split(c.if_random_less_than(ctx, 128, 3541))
     ctx = c.add_to_move_score(ctx, -2)
     # Expert_Protect_CheckStatusConditions (:3544); the first GoTo's paths join here
-    ctx = _at(ctx, check | t | ctx.live)
+    ctx = _at(ctx, check_status | t | ctx.live)
     ctx = c.load_protect_chain(ctx, _A)
     ctx, minus2 = _split(c.if_loaded_greater_than(ctx, 1))
     locked = jnp.zeros_like(ctx.live)

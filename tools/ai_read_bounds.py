@@ -16,8 +16,8 @@ Branches whose outcome is fixed by the move are decided, so the bound follows th
   that follow (``IfLoadedEqualTo``/``NotEqualTo``, ``IfLoadedInTable``/``NotInTable``,
   :776-891) are decided until another command loads ``calcTemp``;
 * ``FlagMoveDamageScore`` (:1012-1063) makes a damage comparison exactly when the move is
-  damaging (power above 1 and not a ``sNoDamageCalcMoveEffects`` effect; alt-power moves are
-  refused, ``policy._refused``), so a following ``IfLoaded(Not)EqualTo AI_NO_COMPARISON_MADE``
+  damaging (an ``sAltPowerMoveEffects`` effect whatever its power, else power above 1 and not
+  a ``sNoDamageCalcMoveEffects`` effect; ``commands.is_damaging``), so a following ``IfLoaded(Not)EqualTo AI_NO_COMPARISON_MADE``
   is decided; ``IfCurrentMoveKills`` (:1525-1560) never jumps for a non-damaging move;
 * ``IfMoveEffectivenessEquals TYPE_MULTI_QUADRUPLE_DAMAGE`` (:1311) never jumps when no two
   distinct types take the move's type super effectively (the second defender type is skipped
