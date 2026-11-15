@@ -84,12 +84,16 @@ from nuzline.engine.enumerate import (
 )
 from nuzline.engine.levelup import advance_learns, learn, needs_learn
 from nuzline.engine.observe import observation, replacement_observation
-from nuzline.engine.order import is_switch
 from nuzline.engine.outcome import Outcome
 from nuzline.engine.state import BattleState
-from nuzline.engine.step import needs_replacement, replacement_power_mul, step_events
+from nuzline.engine.step import needs_replacement, step_events
 from nuzline.jaxcache import cached_export, code_version
-from nuzline.search.playout import _carried_mul, replacement_pass, send_replacements
+from nuzline.search.playout import (
+    _carried_mul,
+    replacement_pass,
+    send_replacements,
+    turn_inputs,
+)
 from nuzline.search.rows import concat, row_bytes, take
 
 __all__ = [
@@ -221,6 +225,11 @@ def calls_rows(tables: Tables, states: BattleState, actions) -> CallLaws:
     return _run(_calls, "expand_calls", tables, (states, actions), len(actions))
 
 
+@jax.jit
+def _picks(tables: Tables, states: BattleState, actions) -> jnp.ndarray:
+    return jax.vmap(lambda s, a: turn_inputs(tables, s, a)[0])(states, actions)
+
+
 def _select(cond, a, b):
     return jax.tree.map(lambda x, y: jnp.where(cond, x, y), a, b)
 
@@ -233,9 +242,14 @@ def _turn(tables: Tables, before: BattleState, actions, outcome: Outcome):
     else the opponent's replacement follows as in the playout (``finish_turn``). The fourth
     result is ``enumerate.call_consistent``: a row of a split Sleep Talk variant whose turn did
     not meet the variant's assumption is dropped (ruling B5-13)."""
-    power_mul = replacement_power_mul(tables, before, actions)
-    ai_switched = is_switch(actions[1])
+    # E2 batch 6: a state paused at a party list resumes. Its opponent's pick at its own list is
+    # made here (``playout.pivot_pick``, refused as a replacement's); the turn's powerMul and AI
+    # switch are the turn start's, kept in the scratch (the resume's actions are switch-shaped).
+    actions, pick_refused, power_mul, ai_switched = turn_inputs(tables, before, actions)
     stepped, events = step_events(tables, before, actions, outcome)
+    # A turn that pauses stops here: the child is the decision at the list (stage_b's "pivot").
+    halted = stepped.pivot_battler != 0
+    paused_child = stepped
     stepped = advance_learns(tables, stepped)
     prompt = needs_learn(stepped) & (stepped.over == 0)  # D8: no prompt once it is over
     # The learn stop: the turn's powerMul waits in replace_mul for the opponent's
@@ -249,6 +263,8 @@ def _turn(tables: Tables, before: BattleState, actions, outcome: Outcome):
     sent, sent_refused = send_replacements(tables, stepped, ai_switched, power_mul)
     after = _select(prompt, held, sent)
     refused = jnp.where(prompt, held_refused, sent_refused) | (after.exp_refused != 0)
+    after = _select(halted, paused_child, after)
+    refused = jnp.where(halted, False, refused) | pick_refused
     keep = call_consistent(tables, before, actions, outcome, events)
     return after, refused, observation(events, after), keep
 
@@ -318,6 +334,13 @@ def expand(
     states = jax.tree.map(np.asarray, states)
     index = np.asarray([p[0] for p in pairs], np.int64).reshape(-1)
     actions = np.asarray([p[1:] for p in pairs], np.int32).reshape(-1, 2)
+    # E2 batch 6: at the opponent's own party list its pick is the resume's switch, which the
+    # laws read (``outcome.pivot_view``): made here as in the row program (``turn_inputs``).
+    opp_list = np.asarray(states.pivot_battler)[index] == 2
+    if opp_list.any():
+        rows = np.flatnonzero(opp_list)
+        picked = _picks(tables, take(states, index[rows]), jnp.asarray(actions[rows]))
+        actions[rows] = np.asarray(picked, np.int32)
     # The invokers' calls (enumerate.call_variants): one laws row per (request, call variant).
     cl = calls_rows(tables, take(states, index), actions)
     variants = [call_variants(take(cl, r)) for r in range(len(pairs))]

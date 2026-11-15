@@ -376,7 +376,10 @@ def _pending(part: BattleState) -> list[str]:
     over = np.asarray(part.over) != 0
     learn = np.asarray(_learn_jit(part)) & ~over
     replacement = np.asarray(_pending_jit(part))[:, 0] == 1
-    return np.where(learn, "learn", np.where(replacement, "replacement", "")).tolist()
+    # E2 batch 6: a turn paused at a party list first (mid-turn: no prompt or replacement yet).
+    pivot = np.asarray(part.pivot_battler) != 0
+    kinds = np.where(learn, "learn", np.where(replacement, "replacement", ""))
+    return np.where(pivot, "pivot", kinds).tolist()
 
 
 _legal_jit = jax.jit(lambda tables, state: decision_actions(tables, state))
@@ -540,6 +543,48 @@ class _Solver:
                 kids = [(ids[c.state_row], c.obs, c.prob, c.refused) for c in kids]
             self.expansions[request] = kids
 
+    def _expand_pivots(self, nodes: list[_Node], played: int) -> list[_Node]:
+        """Expand the pivot decisions ``nodes`` (E2 batch 6: a turn paused at a party list): each
+        legal answer (the player's slot at its own list, ``decision_actions``; the placeholder 0
+        at the opponent's, whose pick ``expand`` makes) of each state resumes the turn through
+        ``expand``, a chance node of its own: the children are grouped by ``(observation,
+        refused)`` and classified as a turn's, its playouts and the forced evaluations as for a
+        turn request ``(state, answer, 0)``. An answer completes the turn already counted.
+        Returns the children that are pending decisions themselves."""
+        eps = self.settings.epsilon
+        requests = {}
+        for node in nodes:
+            node.legal = self._node_legal(node)
+            for a in node.legal:
+                for s in node.states:
+                    if (s, a, 0) not in self.expansions:
+                        requests[(s, a, 0)] = None
+        if requests:
+            self._expand(list(requests))
+        chained = []
+        for node in nodes:
+            for a in node.legal:
+                kids: list[_Node] = []
+                groups: dict[tuple[bytes, bool], dict[int, float]] = {}
+                for s, w in node.states.items():
+                    if w < eps:
+                        kids.append(_Node("pruned", None, w, forced=(s, a, 0)))
+                        continue
+                    expansion = self.expansions[(s, a, 0)]
+                    if isinstance(expansion, SamplingOnly):
+                        kids.append(_Node("sampled", None, w, forced=(s, a, 0)))
+                        continue
+                    for child, obs, p, refused in expansion:
+                        members = groups.setdefault((obs, refused), {})
+                        members[child] = members.get(child, 0.0) + w * p
+                kids += self._group_nodes(groups, played, self._depth)
+                node.branches[a] = kids
+                for kid in kids:
+                    kid.root_action = a if node is self._root else node.root_action
+                    if kid.decision != "turn":
+                        chained.append(kid)
+        return chained
+
     def _expand_pending(self, nodes: list[_Node], played: int, depth: int) -> None:
         """Expand the pending decisions ``nodes`` (replacements and learn-move prompts;
         ``played`` turns played at their children): each legal answer of each state, the
@@ -547,8 +592,12 @@ class _Solver:
         for the children that are pending decisions themselves (another prompt, a
         replacement after the answer, an entry faint). An answer is not a turn. The
         children of the pending root's answer ``a`` carry ``root_action = a``."""
+        self._depth = depth
         todo = nodes
         while todo:
+            pivots = [node for node in todo if node.decision == "pivot"]
+            chained = self._expand_pivots(pivots, played) if pivots else []
+            todo = [node for node in todo if node.decision != "pivot"]
             requests: dict[str, dict[tuple[int, int], None]] = {"replacement": {}, "learn": {}}
             for node in todo:
                 node.legal = self._node_legal(node)
@@ -559,7 +608,6 @@ class _Solver:
             for kind, pending in requests.items():
                 if pending:
                     self._expand_answer_rows(kind, list(pending))
-            chained = []
             for node in todo:
                 answers = self.answers[node.decision]
                 for a in node.legal:

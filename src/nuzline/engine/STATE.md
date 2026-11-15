@@ -272,7 +272,10 @@ three structs has a row.
   (`ts_move_failed`), the paused action's `moveCur` and its defender's damage taken (`ts_used`,
   `ts_damaged`, `ts_dealt`), the per-side bitmask of the faints handled (`ts_alive`), `powerMul`
   at the list (`ts_pick_mul`) and the search's turn-start reads (`ts_power_mul`,
-  `ts_ai_switched`). All are 0 between turns (`engine.state` docstring).
+  `ts_ai_switched`). All are 0 between turns (`engine.state` docstring): `turnOrderCounter`,
+  `battlerActionOrder` and `battlerActions` (the actions as chosen, and the MOVE_END writes of a
+  Pursuit, `ts_pursued`, and of UpdateAfterSwitch for a Pokemon Roar drags in, `ts_dragged`, which
+  skip their actions in `step._execute_actions`) are kept only at such a pause.
 
 ## BattleMon (`include/battle/battle_mon.h`)
 
@@ -469,7 +472,7 @@ three structs has a row.
 | `BattleContext.scriptStackNarc` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |
 | `BattleContext.scriptStackFile` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |
 | `BattleContext.scriptStackCursor` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |
-| `BattleContext.turnOrderCounter` | `ts_cursor` | mapped (E2 batch 6: kept only at a pause at a party list, `pivot_battler`; else 0) |
+| `BattleContext.turnOrderCounter` | `ts_cursor` | mapped |
 | `BattleContext.waitCounter` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |
 | `BattleContext.msgBuffer` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |
 | `BattleContext.msgBattlerTemp` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |
@@ -526,8 +529,8 @@ three structs has a row.
 | `BattleContext.selectedPartySlot` | — | not needed because the switch target comes from the action and is written to `active` inside `step` |
 | `BattleContext.switchedPartySlot` | — | not needed because the switch target comes from the action (or, for Roar's drag, from `Outcome.roar_target` inside `step._use_move`) and is written to `active` inside `step` |
 | `BattleContext.aiSwitchedPartySlot` | — | not needed because the switch target comes from the action and is written to `active` inside `step` |
-| `BattleContext.battlerActions` | `ts_actions`, `ts_pursued`, `ts_dragged` | mapped at a pause (E2 batch 6): the actions as chosen, and the MOVE_END writes of a Pursuit (its pursuer) and of UpdateAfterSwitch for a Pokemon Roar drags in (the turn's `dragged` event, which skips its action in `step._execute_actions`); else reset every turn |
-| `BattleContext.battlerActionOrder` | `ts_order` | mapped at a pause (E2 batch 6); else reset every turn |
+| `BattleContext.battlerActions` | `ts_actions`, `ts_pursued`, `ts_dragged` | mapped |
+| `BattleContext.battlerActionOrder` | `ts_order` | mapped |
 | `BattleContext.monSpeedOrder` | — | not needed because it is reset every turn and `step` resolves a whole turn |
 | `BattleContext.monSpeedValues` | — | later (M6) |
 | `BattleContext.ioQueue` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |
