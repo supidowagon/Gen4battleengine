@@ -189,6 +189,7 @@ def rollout_multiplier(state: BattleState, atk_side) -> jnp.ndarray:
 # decomp move ids (line - 1 of generated/moves.txt). The others (Natural Gift, Judgment, Hidden
 # Power, Gyro Ball, Psywave, Magnitude) are refused (ai.commands.CALC_DAMAGE_MOVES).
 AI_RETURN, AI_FRUSTRATION, AI_LOW_KICK, AI_GRASS_KNOT = 216, 218, 67, 447
+AI_HIDDEN_POWER = 237
 AI_DRAGON_RAGE, AI_SONIC_BOOM, AI_SEISMIC_TOSS, AI_NIGHT_SHADE = 82, 49, 69, 101
 # sWeightToPower (include/data/battle/weight_to_power.h): the first row whose weight
 # (hectograms) is at least the defender's gives the power, else 120 (trainer_ai.c:3055-3071).
@@ -202,22 +203,38 @@ def ai_case_power(tables: Tables, s: BattleState, atk_side, move) -> jnp.ndarray
     ``friendship * 10 / 25`` and Frustration ``(255 - friendship) * 10 / 25``
     (trainer_ai.c:3018-3026; ``battleMons[attacker].friendship``), Low Kick and Grass Knot by
     the defender's weight (:3055-3071; ``battleMons[defender].weight``, its species' Pokedex
-    weight, battle_lib.c:150). A computed 0 is the table's power too."""
+    weight, battle_lib.c:150), Hidden Power its IV power (:2973-2993, ``hidden_power``). A
+    computed 0 is the table's power too."""
     atk_side = _i32(atk_side)
     def_side = 1 - atk_side
     move = _i32(move)
     friendship = _i32(s.friendship[atk_side, s.active[atk_side]])
     weight = _i32(tables.species_weight[s.species[def_side, s.active[def_side]]])
     by_weight = _WEIGHT_POWERS[jnp.sum(_WEIGHT_LIMITS < weight)]
+    hidden = hidden_power(s.ivs[atk_side, s.active[atk_side]])[1]
     return jnp.select(
         [
             move == AI_RETURN,
             move == AI_FRUSTRATION,
             (move == AI_LOW_KICK) | (move == AI_GRASS_KNOT),
+            move == AI_HIDDEN_POWER,
         ],
-        [friendship * 10 // 25, (255 - friendship) * 10 // 25, by_weight],
+        [friendship * 10 // 25, (255 - friendship) * 10 // 25, by_weight, hidden],
         0,
     )
+
+
+def ai_move_type(tables: Tables, s: BattleState, side, move) -> jnp.ndarray:
+    """``int32``: ``TrainerAI_MoveType`` (trainer_ai.c:3127-3222) of ``move`` used by
+    ``side``'s active Pokemon: Hidden Power (by id, :3208-3220) its IV type
+    (``hidden_power``), any other move its table type (the function's TYPE_NORMAL, which
+    ``ApplyTypeChart`` and ``CalcMoveDamage`` read as the table's, battle_lib.c:2588-2590,
+    :6681-6684). Natural Gift, Judgment and Weather Ball are refused
+    (``ai.commands.MOVE_TYPE_MOVES``)."""
+    side = _i32(side)
+    move = _i32(move)
+    iv_type = hidden_power(s.ivs[side, s.active[side]])[0]
+    return jnp.where(move == AI_HIDDEN_POWER, iv_type, _i32(tables.move_type[move]))
 
 
 def ai_case_fixed(s: BattleState, atk_side, move) -> tuple[jnp.ndarray, jnp.ndarray]:
@@ -346,8 +363,11 @@ def _pre_random(
     power = jnp.asarray(CONFUSION_POWER, _I32) if self_hit else power
     power = power * _i32(power_mul) // 10  # :6688 movePower * powerMul / 10
     # :6682 moveType = MOVE_DATA(move).type, or Hidden Power's IV type (battle_script.c:6028);
-    # the AI passes type 0 (the table's) for every case it models (trainer_ai.c:2881).
-    move_type = _i32(tables.move_type[move]) if ai else move_type_of(tables, s, atk_side, move)
+    # the AI passes type 0 (the table's) for every case it models (trainer_ai.c:2881) but
+    # Hidden Power's IV type (:2973-2993; ai_move_type).
+    move_type = (
+        ai_move_type(tables, s, atk_side, move) if ai else move_type_of(tables, s, atk_side, move)
+    )
     category = _i32(tables.move_category[move])  # :6704 moveClass
     level = _i32(s.level[atk_side, a_slot])
     a_ability = _i32(s.ability[atk_side, a_slot])

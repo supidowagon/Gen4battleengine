@@ -33,6 +33,7 @@ from nuzline.ai.outcome import (
     SWITCH_NONE,
     AiOutcome,
 )
+from nuzline.engine import damage
 from nuzline.engine.damage import ai_damage_for_roll
 from nuzline.engine.ids import Stat, Status, Weather
 from nuzline.engine.order import (
@@ -411,7 +412,8 @@ def test_battle_effect_ids_are_the_decomps():
         pytest.skip("decomp not present")
     lines = path.read_text(encoding="utf-8").split()
     for member in BattleEffect:
-        assert lines[member.value] == f"BATTLE_EFFECT_{member.name}", member
+        name = c.BATTLE_EFFECT_DECOMP_NAMES.get(member, member.name)
+        assert lines[member.value] == f"BATTLE_EFFECT_{name}", member
 
 
 def test_kaizo_refusals_use_the_kaizo_names(names, kaizo_tables, kaizo_names, kaizo_roark_party):
@@ -2810,3 +2812,100 @@ def test_protect_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party
         layout = layout_for(t, flags, s2)
         assert policy.ai_refusals(t, s2, n, layout) == []
         _assert_exact_equals_loose(t, s2, layout)
+
+
+# --- E1 batch 14: Basic-only alt-power effects ----------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("move", "player", "expected"),
+    [
+        # Basic_CheckNonStandardDamageOrChargeTurn (script.s:572-585), Kaizo move types
+        ("Seismic Toss", "Shuppet", -10),  # Fighting against a Ghost: immune
+        ("Seismic Toss", "Gible", 0),
+        ("Night Shade", "Bidoof", -10),  # Ghost against a Normal: immune
+        ("Grass Knot", "Gible", 0),
+        ("Dragon Rage", "Gible", 0),
+        ("SonicBoom", "Shuppet", -10),  # Normal against a Ghost
+        ("Fury Cutter", "Gible", 0),
+    ],
+)
+def test_basic_alt_power_effects(
+    kaizo_tables, kaizo_names, kaizo_roark_party, move, player, expected
+):
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, move, "Accelerock", "", ""))
+    if player != "Gible":
+        s = _with_player(t, s, n.species_names.index(player), 0, known=True)
+    assert policy.ai_refusals(t, s, n, layout_for(t, 0x17, s)) == []
+    assert _delta(t, s, 0x2, 0x3)[0] == expected
+
+
+@pytest.mark.parametrize("flags", [0x17, 0x10F])
+def test_batch14_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, flags):
+    """Exact == loose on a fight of the batch 14 effects, whose damage the AI estimates
+    through TrainerAI_CalcDamage's cases (engine.damage.ai_case_power / ai_case_fixed) or its
+    default, at full HP and low HP."""
+    t, n = kaizo_tables, kaizo_names
+    moves = _ids(n, "Grass Knot", "Seismic Toss", "Dragon Rage", "Fury Cutter")
+    s = _state(t, kaizo_roark_party, BONSLY, moves)
+    for hp in (400, 30):
+        s2 = s._replace(hp=s.hp.at[0, 0].set(hp))
+        layout = layout_for(t, flags, s2)
+        assert policy.ai_refusals(t, s2, n, layout) == []
+        _assert_exact_equals_loose(t, s2, layout)
+
+
+def _all_ivs(s, side: int, iv: int):
+    return s._replace(ivs=s.ivs.at[side, 0].set(jnp.full(6, iv, s.ivs.dtype)))
+
+
+def test_hidden_power_ai_type_and_power(kaizo_tables, kaizo_names, kaizo_roark_party):
+    """TrainerAI_MoveType's and TrainerAI_CalcDamage's MOVE_HIDDEN_POWER cases
+    (trainer_ai.c:3208-3220, :2973-2993): with every IV 31, type bits 63 give
+    63 * 15 / 63 + 1 = 16, one more from TYPE_MYSTERY up: 17, Dark; power bits 63 give
+    63 * 40 / 63 + 30 = 70. Dark is super effective on Shuppet (Ghost), so the
+    effectiveness class is DOUBLE, where the table type (Normal) would be immune."""
+    t, n = kaizo_tables, kaizo_names
+    hp = n.move_names.index("Hidden Power")
+    s = _all_ivs(_state(t, kaizo_roark_party, BONSLY, (hp, ACCELEROCK, 0, 0)), 1, 31)
+    s = _with_player(t, s, n.species_names.index("Shuppet"), 0, known=True)
+    assert int(damage.ai_move_type(t, s, 1, hp)) == c.TYPE_IDS["Dark"]
+    assert int(damage.ai_move_type(t, s, 1, ACCELEROCK)) == int(t.move_type[ACCELEROCK])
+    assert int(damage.ai_case_power(t, s, 1, hp)) == 70
+    assert int(c.effectiveness_class(t, s, hp)) == TypeMulti.DOUBLE
+    assert policy.ai_refusals(t, s, n, layout_for(t, 0x17, s)) == []
+    _assert_exact_equals_loose(t, s, layout_for(t, 0x17, s))
+
+
+@pytest.mark.parametrize(
+    ("case", "basic"),
+    [
+        # Basic_CheckOHKOWouldFail (script.s:554-564), Kaizo Guillotine (Normal)
+        ("same level", 0),
+        ("player higher", -10),  # IfLevel CHECK_LOWER_THAN_TARGET (:563)
+        ("ghost", -10),  # immune (:556)
+        ("sturdy", -10),  # a known Sturdy player (:559-560)
+    ],
+)
+def test_basic_ohko(kaizo_tables, kaizo_names, kaizo_roark_party, case, basic):
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Guillotine", "Accelerock", "", ""))
+    s = s._replace(level=s.level.at[0, 0].set(s.level[1, 0]))
+    if case == "player higher":
+        s = s._replace(level=s.level.at[0, 0].set(s.level[1, 0] + 1))
+    elif case == "ghost":
+        s = _with_player(t, s, n.species_names.index("Shuppet"), 0, known=True)
+    elif case == "sturdy":  # Kaizo has no Sturdy species: a synthetic row for Gible
+        sturdy = c.ABILITY_IDS["Sturdy"]
+        t = _with_abilities(t, int(s.species[0, 0]), [sturdy, sturdy])
+        s = s._replace(ai_ability_known=s.ai_ability_known.at[0].set(1))
+    assert _delta(t, s, 0x2, 0x3)[0] == basic
+
+
+@pytest.mark.parametrize(("jumps", "expected"), [((), 1), ((2794,), 0)])
+def test_expert_ohko(kaizo_tables, kaizo_names, kaizo_roark_party, jumps, expected):
+    """Expert_OHKOMove (script.s:2792-2798): +1 unless the 192 roll (:2794) jumps."""
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Guillotine", "Accelerock", "", ""))
+    assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expected

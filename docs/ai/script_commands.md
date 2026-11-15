@@ -72,11 +72,12 @@ test in `tests/ai/test_kaizo_commands.py`, which also checks this table against 
 | `IfMoveEffect` | battler, `MOVE_EFFECT_*` mask, `jump` | Jumps when `moveEffectsMask & mask` (`:704-714`). Only `MOVE_EFFECT_LEECH_SEED` (`BattleState.leech_seed` of the seeded battler's side; `include/constants/battle/moves.h:10`), `MOVE_EFFECT_LOCK_ON` (`.lock_on`, `:11-12`), `MOVE_EFFECT_PERISH_SONG` (`.perish_song`, `:13`) and `MOVE_EFFECT_YAWN` (`.yawn`, `:19-20`) are supported; any other mask is refused at trace time. | no | `if_move_effect` |
 | `LoadGender` | battler | Sets `calcTemp` to `battleMons[battler].gender` (`:2470-2477`): `BattleState.gender` of the side's active Pokemon, 0 male, 1 female, 2 none (`generated/genders.txt`). | no | `load_gender` |
 | `IfTargetIsNotTaunted` | `jump` | Jumps when the defender's `moveEffectsData.tauntedTurns` is 0 (`:2620-2628`): `BattleState.taunt` of side `_side(DEFENDER)`, turns left. | no | `if_target_is_not_taunted` |
+| `IfLevel` | `CHECK_*_TARGET`, `jump` | Jumps when the attacker's level is higher than, lower than or equal to the defender's (`:2579-2608`; `include/constants/battle/trainer_ai.h:51-53`); any other operation never jumps. | no | `if_level` |
 | `IfLoadedGreaterThan` | `value`, `jump` | Jumps when `calcTemp > value` (`:774-784`). | no | `if_loaded_greater_than` |
 | `IfLoadedMask` | `mask`, `jump` | Jumps when `calcTemp & mask` (`:810-820`). | no | `if_loaded_mask` |
 | `LoadBattleType` | none | Sets `calcTemp` to `battleSys->battleType` (`:2504-2508`): `Tables.battle_type`, set per fight from `Trainer.format` as `Encounter_NewVsTrainer` sets it (`encounter.c:724-740`; `data.tables.BATTLE_TYPES`). | no | `load_battle_type` |
 | `LoadProtectChain` | battler | Sets `calcTemp` to `protectSuccessTurns`, or 0 when `moveProtect` is not Protect, Detect or Endure (`:2538-2552`): `BattleState.protect_count`, which folds that reset in (engine/STATE.md). | no | `load_protect_chain` |
 | `LoadTurnCount` | none | Sets `calcTemp` to `totalTurns` (`:931-935`), `BattleState.turn` at a decision: 0 on the battle's first turn (the battle increments it once a turn ends, `battle_controller_player.c:1852`). SETUP_FIRST_TURN (`script.s:6421`) and WEATHER (`:7983`) use it. | no | `load_turn_count` |
 
-**Count check.** `grep -c '^|' docs/ai/script_commands.md` gives 54: 52 command rows
+**Count check.** `grep -c '^|' docs/ai/script_commands.md` gives 55: 53 command rows
 plus the header and separator lines (`test_script_commands_table_matches_the_module`).

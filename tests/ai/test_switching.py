@@ -197,7 +197,7 @@ def test_too_many_sites_are_refused(tables, names):
     ("change", "missing"),
     [
         ("player_move", "Miracle Eye"),
-        ("opp_move", "Hidden Power"),
+        ("opp_move", "Weather Ball"),
         ("item", "Iron Ball"),
         ("ability", "Levitate"),
         ("absorb", "Water Absorb"),
@@ -208,7 +208,7 @@ def test_unimplemented_modifiers_are_refused(tables, names, change, missing):
     if change == "player_move":
         s = s._replace(moves=s.moves.at[0, 3, 1].set(names.move(missing)))
     elif change == "opp_move":
-        s = s._replace(moves=s.moves.at[1, 2, 3].set(names.move("Hidden Power")))
+        s = s._replace(moves=s.moves.at[1, 2, 3].set(names.move(missing)))
     elif change == "item":
         s = s._replace(item=s.item.at[0, 2].set(names.item("Iron Ball")))
     elif change == "ability":  # Gastly's only ability is Levitate
@@ -237,9 +237,10 @@ def test_hidden_power_move_hit_type(tables, names):
     layout = switch_sites(tables, hidden).tolist()
     assert layout == switch_sites(tables, with_hit("Water Gun")).tolist()
     assert layout != switch_sites(tables, with_hit("Tackle")).tolist()
-    # Hidden Power is still refused on the opponent's own side.
+    # The AI's own Hidden Power is typed too (E1 batch 14): its active's by TrainerAI_MoveType,
+    # a bench member's by Move_CalcVariableType from its own IVs (battle_lib.c:8162-8175).
     own = hidden._replace(moves=hidden.moves.at[1, 2, 3].set(names.move("Hidden Power")))
-    assert any("Hidden Power" in r for r in switching_refusals(tables, own))
+    assert switching_refusals(tables, own) == []
 
 
 def test_only_ineffective_moves_is_refused(tables, names):

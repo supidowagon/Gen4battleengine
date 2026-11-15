@@ -650,6 +650,29 @@ def _basic_check_non_standard_damage(ctx: AiContext, mask) -> AiContext:
     return _score(ctx, t, -10)
 
 
+def _basic_check_ohko(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckOHKOWouldFail`` (script.s:554-564): immune -10; against Sturdy (a guessing
+    read) -10 unless the attacker has Mold Breaker; the attacker's level below the
+    player's -10."""
+    ctx = _at(ctx, mask)
+    ctx, t = _split(c.if_move_effectiveness_equals(ctx, TypeMulti.IMMUNE))
+    ctx = _score(ctx, t, -10)
+    ctx = c.load_battler_ability(ctx, _A)
+    ctx, levels = _split(c.if_loaded_equal_to(ctx, _ABILITY["Mold Breaker"]))
+    ctx = c.load_battler_ability(ctx, _D)
+    ctx, t = _split(c.if_loaded_equal_to(ctx, _ABILITY["Sturdy"]))
+    ctx = _score(ctx, t, -10)
+    # Basic_CheckOHKOWouldFail_Levels (:562)
+    ctx, t = _split(c.if_level(_at(ctx, levels | ctx.live), c.CHECK_LOWER_THAN_TARGET))
+    return c.pop_or_end(_score(ctx, t, -10))
+
+
+def _expert_ohko(ctx: AiContext, mask) -> AiContext:
+    """``Expert_OHKOMove`` (script.s:2792-2798): +1 unless the 192 roll (:2794) jumps."""
+    ctx, _ = _split(c.if_random_less_than(_at(ctx, mask), 192, 2794))  # -> _End
+    return c.pop_or_end(c.add_to_move_score(ctx, 1))
+
+
 def _basic_check_attacker_asleep(ctx: AiContext, mask) -> AiContext:
     """``Basic_CheckAttackerAsleep`` (script.s:660-663): the attacker not asleep, -8."""
     ctx, t = _split(c.if_not_status(_at(ctx, mask), _A, c.MonCondition.SLEEP))
@@ -1797,7 +1820,9 @@ _BASIC_LABELS = (
     (BattleEffect.RESTORE_HALF_HP, _basic_check_can_recover_hp),  # :154
     (BattleEffect.STATUS_BADLY_POISON, _basic_check_cannot_poison),  # :155
     (BattleEffect.SET_LIGHT_SCREEN, _basic_check_light_screen),  # :156
+    (BattleEffect.ONE_HIT_KO, _basic_check_ohko),  # :157
     (BattleEffect.HALVE_HP, _basic_check_non_standard_damage),  # :159
+    (BattleEffect.DAMAGE_FLAT_40, _basic_check_non_standard_damage),  # :160
     (BattleEffect.STATUS_CONFUSE, _basic_check_cannot_confuse),  # :163
     (BattleEffect.ATK_UP_2, _basic_check_high_atk),  # :164
     (BattleEffect.DEF_UP_2, _basic_check_high_def),  # :165
@@ -1811,6 +1836,8 @@ _BASIC_LABELS = (
     (BattleEffect.SET_REFLECT, _basic_check_reflect),  # :178
     (BattleEffect.STATUS_PARALYZE, _basic_check_cannot_paralyze),  # :180
     (BattleEffect.STATUS_LEECH_SEED, _basic_check_cannot_leech_seed),  # :183
+    (BattleEffect.LEVEL_DAMAGE_FLAT, _basic_check_non_standard_damage),  # :185
+    (BattleEffect.RANDOM_DAMAGE_1_TO_150_LEVEL, _basic_check_non_standard_damage),  # :186
     (BattleEffect.COUNTER, _basic_check_non_standard_damage),  # :187
     (BattleEffect.DAMAGE_WHILE_ASLEEP, _basic_check_attacker_asleep),  # :189
     (BattleEffect.USE_RANDOM_LEARNED_MOVE_SLEEP, _basic_check_attacker_asleep),  # :191
@@ -1819,12 +1846,18 @@ _BASIC_LABELS = (
     (BattleEffect.SET_SPIKES, _basic_check_spikes),  # :197
     (BattleEffect.ATK_UP_2_STATUS_CONFUSION, _basic_check_cannot_confuse),  # :201
     (BattleEffect.INFATUATE, _basic_check_cannot_attract),  # :202
+    (BattleEffect.POWER_BASED_ON_FRIENDSHIP, _basic_check_non_standard_damage),  # :203
+    (BattleEffect.RANDOM_POWER_MAYBE_HEAL, _basic_check_non_standard_damage),  # :204
+    (BattleEffect.POWER_BASED_ON_LOW_FRIENDSHIP, _basic_check_non_standard_damage),  # :205
+    (BattleEffect.DAMAGE_FLAT_20, _basic_check_non_standard_damage),  # :209
+    (BattleEffect.RANDOM_POWER_BASED_ON_IVS, _basic_check_non_standard_damage),  # :213
     (BattleEffect.WEATHER_RAIN, _basic_check_rain_dance),  # :214
     (BattleEffect.MIRROR_COAT, _basic_check_non_standard_damage),  # :218
     (BattleEffect.ALWAYS_FLINCH_FIRST_TURN_ONLY, _basic_check_first_turn),  # :224
     (BattleEffect.WEATHER_HAIL, _basic_check_hail),  # :228
     (BattleEffect.STATUS_BURN, _basic_check_cannot_burn),  # :231
     (BattleEffect.LOWER_OWN_ATK_AND_DEF, _basic_check_non_standard_damage),  # :237
+    (BattleEffect.INCREASE_POWER_WITH_WEIGHT, _basic_check_non_standard_damage),  # :244
     (BattleEffect.ATK_DEF_UP, _basic_check_bulk_up),  # :248
     (BattleEffect.SP_ATK_SP_DEF_UP, _basic_check_calm_mind),  # :250
     (BattleEffect.ATK_SPD_UP, _basic_check_dragon_dance),  # :251
@@ -1849,6 +1882,7 @@ _EXPERT_LABELS = (
     (BattleEffect.RESTORE_HALF_HP, _expert_recovery),  # :1652
     (BattleEffect.STATUS_BADLY_POISON, _expert_toxic_leech_seed),  # :1653
     (BattleEffect.SET_LIGHT_SCREEN, _expert_light_screen),  # :1654
+    (BattleEffect.ONE_HIT_KO, _expert_ohko),  # :1656
     (BattleEffect.HALVE_HP, _expert_super_fang),  # :1658
     (BattleEffect.HIGH_CRITICAL, _expert_high_critical),  # :1660
     (BattleEffect.RECOIL_QUARTER, _expert_recoil_move),  # :1661

@@ -45,7 +45,7 @@ from nuzline.ai.switching import INEFFECTIVE, apply_type_chart, type_chart_flags
 from nuzline.data.tables import BATTLE_TYPE_DOUBLES as _BATTLE_TYPE_DOUBLES
 from nuzline.data.tables import Tables
 from nuzline.engine.actions import usable_moves
-from nuzline.engine.damage import ai_damage_for_roll, decomp_abilities
+from nuzline.engine.damage import ai_damage_for_roll, ai_move_type, decomp_abilities
 from nuzline.engine.ids import Stat, Status, Weather
 from nuzline.engine.order import (
     COMPARE_SPEED_FASTER,
@@ -275,10 +275,29 @@ class BattleEffect(IntEnum):
     ALWAYS_FLINCH_FIRST_TURN_ONLY = 158  # Fake Out
     LOWER_OWN_ATK_AND_DEF = 182  # Superpower, Close Combat
     EAT_BERRY = 224  # Pluck, Bug Bite
+    DAMAGE_FLAT_40 = 41  # 40_DAMAGE_FLAT: Dragon Rage
+    LEVEL_DAMAGE_FLAT = 87  # Seismic Toss, Night Shade
+    RANDOM_DAMAGE_1_TO_150_LEVEL = 88  # Psywave; Kaizo Triple Axel, Fury Cutter
+    POWER_BASED_ON_FRIENDSHIP = 121  # Return
+    RANDOM_POWER_MAYBE_HEAL = 122  # Present
+    POWER_BASED_ON_LOW_FRIENDSHIP = 123  # Frustration
+    DAMAGE_FLAT_20 = 130  # 20_DAMAGE_FLAT: SonicBoom
+    INCREASE_POWER_WITH_WEIGHT = 196  # Low Kick, Grass Knot
+    RANDOM_POWER_BASED_ON_IVS = 135  # Hidden Power
+    ONE_HIT_KO = 38  # Fissure, Guillotine, Horn Drill, Sheer Cold
+
     TOXIC_SPIKES = 249
     RECOIL_PARALYZE_HIT = 262
     STEALTH_ROCK = 266
     RECOIL_HALF = 269  # Head Smash
+
+
+# BattleEffect members whose decomp name (BATTLE_EFFECT_<name>) starts with a digit, which a
+# Python name cannot.
+BATTLE_EFFECT_DECOMP_NAMES = {
+    BattleEffect.DAMAGE_FLAT_40: "40_DAMAGE_FLAT",
+    BattleEffect.DAMAGE_FLAT_20: "20_DAMAGE_FLAT",
+}
 
 
 # Decomp move id -> battle effect for every move whose script paths are transcribed
@@ -665,15 +684,15 @@ CHECK_HP_TABLES: dict[str, tuple[int, ...]] = {
 # LoadDefenderLastUsedMoveClass loads it (Expert_LightScreen, script.s:2723).
 CLASS_PHYSICAL, CLASS_SPECIAL = 0, 1
 # TrainerAI_CalcDamage's move-id cases (trainer_ai.c:2885-3071) the AI damage does not model,
-# refused: Natural Gift and Judgment (item data), Hidden Power (its AI type,
-# TrainerAI_MoveType, is not modelled either), Gyro Ball (monSpeedValues, the last speed
+# refused: Natural Gift and Judgment (item data), Gyro Ball (monSpeedValues, the last speed
 # compare's, battle_lib.c:1372), Psywave and Magnitude (a RandNext draw in the damage, :3015,
-# :3030). Return, Frustration, Low Kick, Grass Knot and the fixed-damage cases are modelled
+# :3030). Return, Frustration, Low Kick, Grass Knot, Hidden Power and the fixed-damage cases
+# are modelled
 # (engine.damage.ai_case_power, ai_case_fixed; E1 batch 13). Decomp move ids.
-CALC_DAMAGE_MOVES = (363, 449, 237, 360, 149, 222)
+CALC_DAMAGE_MOVES = (363, 449, 360, 149, 222)
 # TrainerAI_MoveType's move-id cases (trainer_ai.c:3132-3222): the type the AI gives
 # these moves is not their table type. Decomp move ids.
-MOVE_TYPE_MOVES = (363, 449, 237, 311)
+MOVE_TYPE_MOVES = (363, 449, 311)  # Hidden Power's is modelled (damage.ai_move_type)
 
 # Decomp ids, checked against the manifest by tests/ai/test_policy.py.
 ABILITY_IDS = {
@@ -705,6 +724,8 @@ ABILITY_IDS = {
     "Poison Heal": 90,
     "Leaf Guard": 102,
     "Hydration": 93,
+    # Basic_CheckOHKOWouldFail (script.s:560).
+    "Sturdy": 5,
     # Basic_CheckRainDance / Expert_RainDance (script.s:789, :3749, :3758), Basic_CheckHail /
     # Expert_Hail (:860, :868, :4110); generated/abilities.txt.
     "Swift Swim": 33,
@@ -945,7 +966,14 @@ def effectiveness_class(tables: Tables, state: BattleState, move) -> jnp.ndarray
         [TypeMulti.DOUBLE, TypeMulti.QUADRUPLE, TypeMulti.HALF, TypeMulti.QUARTER],
         value,
     )
-    flags = type_chart_flags(tables, move, d_types, state.gravity, state.foresight[0] != 0)
+    flags = type_chart_flags(
+        tables,
+        move,
+        d_types,
+        state.gravity,
+        state.foresight[0] != 0,
+        move_type=ai_move_type(tables, state, 1, move),  # TrainerAI_MoveType (:1323)
+    )
     immune = (flags & INEFFECTIVE) != 0
     # Struggle: ApplyTypeChart returns 40 unchanged and sets no bit (battle_lib.c:2573).
     return jnp.where(immune, TypeMulti.IMMUNE, mapped).astype(_I32)
@@ -1229,6 +1257,26 @@ def if_temp_equal_to(ctx: AiContext, value: int) -> AiContext:
 def go_to(ctx: AiContext) -> AiContext:
     """``GoTo`` (trainer_ai.c:2561): an unconditional jump."""
     return _jump(ctx, True)
+
+
+# IfLevel's operations (include/constants/battle/trainer_ai.h:51-53).
+CHECK_HIGHER_THAN_TARGET, CHECK_LOWER_THAN_TARGET, CHECK_EQUAL_TO_TARGET = 0, 1, 2
+
+
+def if_level(ctx: AiContext, op: int) -> AiContext:
+    """``IfLevel`` (trainer_ai.c:2579-2608): the attacker's level compared with the
+    defender's (``battleMons[...].level``): higher, lower or equal by ``op``; any other
+    ``op`` never jumps."""
+    state = ctx.state
+    a, d = _side(Battler.ATTACKER), _side(Battler.DEFENDER)
+    mine = state.level[a, state.active[a]].astype(_I32)
+    theirs = state.level[d, state.active[d]].astype(_I32)
+    jump = {
+        CHECK_HIGHER_THAN_TARGET: mine > theirs,
+        CHECK_LOWER_THAN_TARGET: mine < theirs,
+        CHECK_EQUAL_TO_TARGET: mine == theirs,
+    }.get(int(op), jnp.asarray(False))
+    return _jump(ctx, jump)
 
 
 def if_loaded_greater_than(ctx: AiContext, value: int) -> AiContext:

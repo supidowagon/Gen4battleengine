@@ -127,12 +127,15 @@ uses the table's power for 0 and the table's type for TYPE_NORMAL, `battle_lib.c
   (`:3005-3012`, `:3051-3053`), which skip `CalcMoveDamage` and take the chart with
   `SYSCTL_IGNORE_TYPE_CHECKS` (no STAB or multiplier, an immunity 0), then the variance;
   every other alt-power move takes the default (Kaizo Fury Cutter, 210, with effect 88);
-- refused (`commands.CALC_DAMAGE_MOVES`): Natural Gift and Judgment (item data), Hidden
-  Power (its AI type, below), Gyro Ball (`monSpeedValues`, left by the last speed compare,
+- Hidden Power (E1 batch 14): its IV power and type (`:2973-2993`), and its AI type
+  everywhere the AI types a move (`TrainerAI_MoveType`, `:3208-3220`;
+  `engine.damage.ai_move_type`: the effectiveness class, the switch's chart, `moveHit`), a
+  bench member's from its own IVs (`Move_CalcVariableType`, `battle_lib.c:8162-8175`);
+- refused (`commands.CALC_DAMAGE_MOVES`): Natural Gift and Judgment (item data), Gyro Ball (`monSpeedValues`, left by the last speed compare,
   `battle_lib.c:1372`), Psywave and Magnitude (a `RandNext` in the estimate, `:3015`,
   `:3030`). Kaizo Triple Axel sits on MOVE_PSYWAVE's id (`:3014`);
 - a move id that `TrainerAI_MoveType` takes by case (`trainer_ai.c:3132-3222`;
-  `commands.MOVE_TYPE_MOVES`): Natural Gift, Judgment, Hidden Power, Weather Ball.
+  `commands.MOVE_TYPE_MOVES`): Natural Gift, Judgment, Weather Ball.
 
 In vanilla every such move is already refused as untranscribed, so the vanilla refused set
 is unchanged.
@@ -682,6 +685,20 @@ MIRROR_COAT (144), LOWER_OWN_ATK_AND_DEF (182), WEATHER_RAIN (136), WEATHER_HAIL
   `battle_script.c:12121`), which `BattleState` does not hold either. Both wait for the
   managing session's decision. The alternative-power moves' AI damage came in batch 13
   (2.4).
+
+### 5.17 Alt-power effects, Hidden Power and OHKO (E1 batch 14)
+
+- 40_DAMAGE_FLAT (41), LEVEL_DAMAGE_FLAT (87), RANDOM_DAMAGE_1_TO_150_LEVEL (88),
+  POWER_BASED_ON_FRIENDSHIP (121), RANDOM_POWER_MAYBE_HEAL (122), POWER_BASED_ON_LOW_FRIENDSHIP
+  (123), 20_DAMAGE_FLAT (130), RANDOM_POWER_BASED_ON_IVS (135), INCREASE_POWER_WITH_WEIGHT
+  (196): `Basic_CheckNonStandardDamageOrChargeTurn` only (`:160`-`:244`, 5.16), no Expert_Main
+  entry; their AI damage is 2.4's. Psywave's id (Kaizo Triple Axel) stays refused by id.
+- ONE_HIT_KO (38): `Basic_CheckOHKOWouldFail` (`:554-564`; dispatch `:157`): immune -10,
+  against Sturdy (a guessing read) -10 unless Mold Breaker, the attacker's level below the
+  player's -10 (the new command `IfLevel`, `trainer_ai.c:2579-2608`). `Expert_OHKOMove`
+  (`:1656`; `:2792-2798`): +1 unless the 192 roll (`:2794`) jumps.
+- ACC_DOWN waits: `Expert_StatusAccuracyDown` reads the AI's Ingrain (`:2472`,
+  `MOVE_EFFECT_INGRAIN`), which `BattleState` does not hold.
 
 ## 6. Where the AI reads the true battle state
 

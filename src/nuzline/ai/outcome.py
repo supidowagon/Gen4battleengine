@@ -279,6 +279,7 @@ SITE_N: dict[int, int] = {
     3564: 85,  # +2 when it jumps
     3571: 128,  # -1 when it does NOT jump
     3578: 128,  # -1 more when it does NOT jump
+    2794: 192,  # Expert_OHKOMove (+1 when it does NOT jump; E1 batch 14)
 }
 SITE_LINES = tuple(SITE_N)
 # The flat (vanilla) layout's column of script_roll_sites that each line reads: column 0 is
@@ -423,6 +424,18 @@ KAIZO_TRANSCRIBED: frozenset[int] = frozenset(
         182,  # LOWER_OWN_ATK_AND_DEF: Basic_CheckNonStandard... (:237); Expert_Superpower
         224,  # EAT_BERRY: Expert_Pluck (:1767)
         111,  # PROTECT: Expert_Protect (:1701), on the da1d60f state fields
+        # E1 batch 14: Basic_CheckNonStandardDamageOrChargeTurn only (no Expert_Main entry);
+        # their AI damage: engine.damage.ai_case_power / ai_case_fixed or the default.
+        41,  # 40_DAMAGE_FLAT (:160)
+        87,  # LEVEL_DAMAGE_FLAT (:185)
+        88,  # RANDOM_DAMAGE_1_TO_150_LEVEL (:186; Psywave's id itself stays refused)
+        121,  # POWER_BASED_ON_FRIENDSHIP (:203)
+        122,  # RANDOM_POWER_MAYBE_HEAL (:204)
+        123,  # POWER_BASED_ON_LOW_FRIENDSHIP (:205)
+        130,  # 20_DAMAGE_FLAT (:209)
+        135,  # RANDOM_POWER_BASED_ON_IVS (:213): Hidden Power, its AI type ai_move_type
+        196,  # INCREASE_POWER_WITH_WEIGHT (:244)
+        38,  # ONE_HIT_KO: Basic_CheckOHKOWouldFail (:157); Expert_OHKOMove (:1656), :2794
     }
 )
 # The transcribed effects (KAIZO_TRANSCRIBED) whose Expert_Main entry goes to a label added
@@ -500,6 +513,7 @@ KAIZO_EXPERT_LABELS: dict[int, tuple[str, int]] = {
     182: ("Expert_Superpower", 1735),
     224: ("Expert_Pluck", 1767),
     111: ("Expert_Protect", 1701),
+    38: ("Expert_OHKOMove", 1656),
 }
 # Of KAIZO_EXPERT_LABELS, the effects whose Expert label policy._expert transcribes
 # (layout.KAIZO expert_transcribed), written out: it is not derived from the table, so an
@@ -565,6 +579,7 @@ KAIZO_EXPERT_TRANSCRIBED: frozenset[int] = frozenset(
         182,  # LOWER_OWN_ATK_AND_DEF: Expert_Superpower
         224,  # EAT_BERRY: Expert_Pluck
         111,  # PROTECT: Expert_Protect
+        38,  # ONE_HIT_KO: Expert_OHKOMove
     }
 )
 assert set(KAIZO_EXPERT_LABELS) <= KAIZO_TRANSCRIBED

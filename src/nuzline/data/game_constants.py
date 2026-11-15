@@ -102,7 +102,8 @@ _SOUND_MOVES = {
     "Bug Buzz": 405,
     "Chatter": 448,
 }
-# ai/switching.py _MOVES: moves whose decomp handling the switch check does not model.
+# ai/switching.py MOVE_IDS; _MOVES is these less Hidden Power (_SWITCH_REFUSED): moves whose
+# decomp handling the switch check does not model.
 _SWITCH_MOVES = {
     "Magnet Rise": 393,
     "Roost": 355,
@@ -114,6 +115,7 @@ _SWITCH_MOVES = {
     "Natural Gift": 363,
     "Judgment": 449,
 }
+_SWITCH_REFUSED = {k: v for k, v in _SWITCH_MOVES.items() if k != "Hidden Power"}
 # ai/switching.py _ANY_SIDE_ABILITIES (ApplyTypeChart / CalcEffectiveness, trainer_ai.c).
 _ANY_SIDE_ABILITIES = {"Levitate": 26, "Wonder Guard": 25, "Scrappy": 113, "Normalize": 96}
 # ai/commands.py MOVE_IDS: Basic_Main's OHKO checks (script.s:57-58), Expert_Pursuit's
@@ -145,17 +147,17 @@ _AI_MOVE_IDS = {
 # ai/commands.py CALC_DAMAGE_MOVES: TrainerAI_CalcDamage's id cases the AI damage does not
 # model, refused (trainer_ai.c:2885-3071; MOVE_* of generated/moves.txt, line N is id N-1).
 # Return, Frustration, Low Kick, Grass Knot, Dragon Rage, SonicBoom, Seismic Toss and Night
-# Shade are modelled since E1 batch 13 (engine.damage.ai_case_power, ai_case_fixed).
+# Shade are modelled since E1 batch 13, Hidden Power since batch 14 (engine.damage).
 _CALC_DAMAGE_MOVES = {
     "Natural Gift": 363,
     "Judgment": 449,
-    "Hidden Power": 237,
     "Gyro Ball": 360,
     "Psywave": 149,
     "Magnitude": 222,
 }
 # ai/commands.py MOVE_TYPE_MOVES: TrainerAI_MoveType's id cases (trainer_ai.c:3132-3222).
-_MOVE_TYPE_MOVES = {"Natural Gift": 363, "Judgment": 449, "Hidden Power": 237, "Weather Ball": 311}
+# Hidden Power's is modelled (engine.damage.ai_move_type, E1 batch 14).
+_MOVE_TYPE_MOVES = {"Natural Gift": 363, "Judgment": 449, "Weather Ball": 311}
 
 
 def _policy_tables(scope: str) -> tuple[Constant, ...]:
@@ -166,13 +168,10 @@ def _policy_tables(scope: str) -> tuple[Constant, ...]:
         *_table("nuzline.ai.commands.MOVE_IDS", "move", scope, _AI_MOVE_IDS),
         *_table("nuzline.ai.commands.SOUND_MOVES", "move", scope, _SOUND_MOVES),
         *_table("nuzline.ai.switching.MOVE_IDS", "move", scope, _SWITCH_MOVES),
-        *_table("nuzline.ai.switching._MOVES", "move", scope, _SWITCH_MOVES),
-        *_table(
-            "nuzline.ai.switching.PLAYER_MOVE_REFUSALS",
-            "move",
-            scope,
-            {k: v for k, v in _SWITCH_MOVES.items() if k != "Hidden Power"},
-        ),
+        # Hidden Power's AI type is modelled on both sides since E1 batch 14: in MOVE_IDS
+        # (the bench's IV type), refused in neither.
+        *_table("nuzline.ai.switching._MOVES", "move", scope, _SWITCH_REFUSED),
+        *_table("nuzline.ai.switching.PLAYER_MOVE_REFUSALS", "move", scope, _SWITCH_REFUSED),
         *_table(
             "nuzline.ai.switching.PLAYER_ABILITY_REFUSALS", "ability", scope, _ANY_SIDE_ABILITIES
         ),
@@ -233,6 +232,7 @@ CONSTANTS: tuple[Constant, ...] = (
             "Swift Swim": 33,
             "Rain Dish": 44,
             "Ice Body": 115,
+            "Sturdy": 5,
         },
     ),
     *_table(
