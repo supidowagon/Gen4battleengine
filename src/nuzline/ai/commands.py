@@ -47,6 +47,7 @@ from nuzline.ai.switching import (
     apply_type_chart,
     defender_chart_flags,
     type_chart_flags,
+    wonder_guard_bit,
 )
 from nuzline.data.tables import BATTLE_TYPE_DOUBLES as _BATTLE_TYPE_DOUBLES
 from nuzline.data.tables import Tables
@@ -1109,8 +1110,9 @@ def effectiveness_class(tables: Tables, state: BattleState, move) -> jnp.ndarray
     the player's (``IfMoveEffectivenessEquals``, trainer_ai.c:1311; roark.md 7.2): 40
     through ``BattleSystem_ApplyTypeChart`` (STAB x15/10, then each chart entry with
     ``BattleSystem_Divide``), mapped 120 -> 80, 240 -> 160, 30 -> 20, 15 -> 10, and 0 when
-    the status mask has an immunity bit. Normalize, Adaptability, Scrappy, Tinted Lens,
-    Expert Belt, Levitate, Wonder Guard, Filter, Solid Rock, Iron Ball, Miracle Eye and
+    the status mask has an immunity bit (``MOVE_STATUS_IMMUNE``: ``INEFFECTIVE`` or Wonder
+    Guard's bit, ``switching.wonder_guard_bit``, ruling G-23). Normalize, Adaptability,
+    Scrappy, Tinted Lens, Expert Belt, Levitate, Filter, Solid Rock, Iron Ball, Miracle Eye and
     Magnet Rise change this value and are refused (``policy.ai_refusals``); the player's
     Foresight, Ingrain and roosting flags are read (``switching.defender_chart_flags``)."""
     move = jnp.asarray(move, _I32)
@@ -1138,7 +1140,7 @@ def effectiveness_class(tables: Tables, state: BattleState, move) -> jnp.ndarray
         grounded,
         roosting,
     )
-    immune = (flags & INEFFECTIVE) != 0
+    immune = ((flags & INEFFECTIVE) != 0) | wonder_guard_bit(tables, state, 1, move, flags)
     # Struggle: ApplyTypeChart returns 40 unchanged and sets no bit (battle_lib.c:2573).
     return jnp.where(immune, TypeMulti.IMMUNE, mapped).astype(_I32)
 

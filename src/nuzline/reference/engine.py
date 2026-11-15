@@ -361,6 +361,34 @@ def _levitated(tables, s: RefState, attacker: int, defender: int, move_type: int
     return move_type == Type.GROUND and _ignorable(s, attacker, defender) == AbilityId.LEVITATE
 
 
+# MoveIsOnDamagingTurn (lib.c:7588-7604): decomp battle effects on their damaging turn only under
+# SYSCTL_LAST_OF_MULTI_TURN, which no supported move sets (Fire Fang, 273, never; ruling G-18).
+_MULTI_TURN_EFFECTS = (26, 39, 75, 145, 151, 155, 255, 256, 263, 273)
+
+
+def _wonder_guarded(
+    tables, s: RefState, attacker: int, defender: int, move: int, kind: int
+) -> bool:
+    """``ApplyTypeChart``'s ``MOVE_STATUS_WONDER_GUARD`` (lib.c:2649-2654, ruling G-18): the
+    defender's Wonder Guard as the attacker sees it, a move on its damaging turn
+    (``MoveIsOnDamagingTurn``: not Fire Fang), with table power, not Struggle (:2573), whose
+    chart walk left ``MOVE_STATUS_SUPER_EFFECTIVE`` clear (``_apply_type_multiplier``'s flags)."""
+    if move == MOVE_STRUGGLE or _t(tables, "move_power", move) == 0:
+        return False
+    if _ignorable(s, attacker, defender) != AbilityId.WONDER_GUARD:
+        return False
+    if _t(tables, "move_ai_effect", move) in _MULTI_TURN_EFFECTS:
+        return False
+    flags: set[str] = set()
+    def_types = _active(s, defender).types
+    for defending, mul in _chart_rows(tables, kind, _identified(s, attacker, defender)):
+        if defending == def_types[0]:
+            _apply_type_multiplier(0, mul, True, flags)
+        if defending == def_types[1] and def_types[0] != def_types[1]:
+            _apply_type_multiplier(0, mul, True, flags)
+    return "super" not in flags
+
+
 def _identified(s: RefState, attacker: int, defender: int) -> int:
     """``ApplyTypeChart``'s walk flags (``_chart_rows``): 1 when it skips the Ghost immunities
     (lib.c:2611-2615) for Foresight or the attacker's Scrappy, 2 when ``BasicTypeMulApplies``
@@ -436,7 +464,7 @@ def _rollout_multiplier(s: RefState, attacker: int) -> int:
     return power * 2 if sd.curled else power
 
 
-def _fixed_damage(tables, s: RefState, attacker: int, move: int) -> int:
+def _fixed_damage(tables, s: RefState, attacker: int, move: int, wonder_guard: bool = True) -> int:
     """``effect_script_0087.s``: the attacker's level, with ``SYSCTL_IGNORE_TYPE_CHECKS``
     (lib.c:7544): no multiplier, but the chart's immunity still fails the move. Bide's
     unleash is ``2 * storedDamage`` (bcp.c:2702) and ignores the chart (``RANGE_USER``,
@@ -453,6 +481,8 @@ def _fixed_damage(tables, s: RefState, attacker: int, move: int) -> int:
         return 0
     if _levitated(tables, s, attacker, 1 - attacker, kind):
         return 0
+    if wonder_guard and _wonder_guarded(tables, s, attacker, 1 - attacker, move, kind):
+        return 0  # power 1: MOVE_STATUS_WONDER_GUARD stops it (G-18)
     if effect == EffectId.HALVE_HP:  # effect_script_0040.s: Divide(curHP, 2)
         return _divide(foe.hp, 2)
     if effect == EffectId.ENDEAVOR:  # effect_script_0189.s:5-9 (B10-5; <= 0 fails the move)
@@ -956,19 +986,21 @@ def _apply_type_multiplier(damage: int, mul: int, update: bool, flags: set[str])
 
 def _move_damage(
     tables, s: RefState, attacker: int, move: int, crit: bool, roll: int, power_mul=10,
-    magnitude: int = 4, present: int = -1,
+    magnitude: int = 4, present: int = -1, wonder_guard: bool = True,
 ):  # fmt: skip
     """One hit's damage: the move script's ``CalcDamage`` and variance, then the
     controller's type chart (``TRY_MOVE_STATE_CHECK_TYPE_CHART``, bcp.c:3272). A
     status move never calculates damage; ``CheckTypeChart`` needs base power
-    (bcp.c:2354). Present's heal path jumps past ``CalcDamage`` (effect_script_0122.s)."""
+    (bcp.c:2354). Present's heal path jumps past ``CalcDamage`` (effect_script_0122.s).
+    Wonder Guard's flag (``_wonder_guarded``) gives 0 where ``wonder_guard``; without it the
+    damage is ``battleCtx->damage`` as the chart leaves it (Jump Kick's crash, G-19)."""
     if _t(tables, "move_category", move) == STATUS_CLASS or _t(tables, "move_power", move) == 0:
         return 0
     if _t(tables, "move_effect", move) == EffectId.PRESENT and present == PRESENT_HEAL:
         return 0
     defender = 1 - attacker
     if _t(tables, "move_effect", move) in UNROLLED_EFFECTS:
-        return _fixed_damage(tables, s, attacker, move)
+        return _fixed_damage(tables, s, attacker, move, wonder_guard)
     # effect_script_0048.s, _0269.s: a Reckless user's RECOIL move sets powerMul to 12; so do
     # effect_script_0045.s (Jump Kick), _0253.s and _0262.s (B10-1, B10-2).
     if (
@@ -1002,6 +1034,9 @@ def _move_damage(
     if _item_effect(tables, atk) == ItemId.LIFE_ORB:
         damage = damage * (100 + _t(tables, "item_param", atk.item, 0)) // 100
     damage = _variance(damage, roll)
+    kind = _move_type(tables, s, attacker, move)
+    if wonder_guard and _wonder_guarded(tables, s, attacker, defender, move, kind):
+        return 0  # lib.c:2649-2654: MOVE_STATUS_WONDER_GUARD, no damage (G-18)
     return _apply_type_chart(tables, s, attacker, defender, move, damage)
 
 
@@ -1850,6 +1885,23 @@ def _turn_end_ability(turn: _Turn, s: RefState, side: int) -> None:
             s.ai_ability_known[s.sides[0].active] = 1
 
 
+def _download(s: RefState, side: int) -> None:
+    """``SWITCH_IN_CHECK_STATE_DOWNLOAD`` (lib.c:3814-3851, G-21) for ``side``'s battler: with
+    HP and Download, the foe's Defense and Sp. Def through their stages (a foe with HP and no
+    substitute; else 0); a nonzero sum raises Sp. Atk when Defense >= Sp. Def, else Attack, by 1
+    (``BtlCmd_ChangeStatStage``: +6 stays). Its message is built in C: no AI reveal."""
+    mon = _active(s, side)
+    if not mon.hp or mon.ability != AbilityId.DOWNLOAD:
+        return
+    foe, foe_sd = _active(s, 1 - side), s.sides[1 - side]
+    sum_def = sum_spd = 0
+    if foe.hp and not foe_sd.substitute_hp:
+        sum_def = _apply_stage(foe.stats[Stat.DEF - 1], foe_sd.stages[Stat.DEF])
+        sum_spd = _apply_stage(foe.stats[Stat.SPD - 1], foe_sd.stages[Stat.SPD])
+    if sum_def + sum_spd:
+        _change_stage(s, side, Stat.SPA if sum_def >= sum_spd else Stat.ATK, 1)
+
+
 def _switch_in_effects(turn: _Turn, s: RefState, side: int) -> None:
     """``BattleSystem_TriggerEffectOnSwitch`` (lib.c:3649) after ``side``'s battler
     entered: ``SWITCH_IN_CHECK_STATE_INTIMIDATE`` (lib.c:3795; only the newcomer has
@@ -1893,6 +1945,11 @@ def _switch_in_effects(turn: _Turn, s: RefState, side: int) -> None:
         and mon.ability not in blockers
     ):
         _change_stage(s, side, Stat.ATK, -1)
+    # SWITCH_IN_CHECK_STATE_DOWNLOAD (lib.c:3814-3851, G-21): the newcomer, then a battler that
+    # just traced Download.
+    _download(s, side)
+    if traced:
+        _download(s, other)
     # SWITCH_IN_CHECK_STATE_MOLD_BREAKER (lib.c:4075): subscript_mold_breaker.s tags the
     # living newcomer's ability, BattleAI_SetAbility (script.c:11806).
     # SWITCH_IN_CHECK_STATE_PRESSURE (lib.c:4096-4110) likewise: subscript_pressure.s (G-10).
@@ -2829,6 +2886,8 @@ def _hit(turn: _Turn, s: RefState, side: int, move: int, hit: int, struggling: b
         immune = _matchup_x40(
             tables, kind, target_mon.types, _identified(s, side, target)
         ) == 0 or _levitated(tables, s, side, target, kind)
+        # Wonder Guard flags them too (power 1; ruling G-18).
+        immune = immune or _wonder_guarded(tables, s, side, target, move, kind)
         damage = 0 if immune else turn.counter_damage
     else:
         damage = _move_damage(
@@ -3473,6 +3532,16 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
             _levitated(tables, s, side, 1 - side, kind)
         ):
             s.ai_ability_known[s.sides[0].active] = 1
+    # TRY_MOVE_STATE_CHECK_TYPE_CHART (bcp.c:2350-2370, hit, miss or Protect alike): Wonder
+    # Guard's MOVE_STATUS_WONDER_GUARD (G-18). subscript_missed.s:107-110 tags the defender's
+    # ability unless it was protected first (:18); a miss reaches it (G-20).
+    guarded = (
+        not _targets_user(tables, move, _ghost(s, side))
+        and effect != EffectId.FUTURE_SIGHT  # SYSCTL_IGNORE_IMMUNITIES
+        and _wonder_guarded(tables, s, side, 1 - side, move, _move_type(tables, s, side, move))
+    )
+    if guarded and 1 - side == 0 and not _protected(turn, s, side, move, unleash):
+        s.ai_ability_known[s.sides[0].active] = 1
     roll = o.hit[side][0]
     missed = (
         _t(tables, "move_accuracy", move) != 0
@@ -3481,18 +3550,22 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
     )
     # CheckMoveHitOverrides (bcp.c:3001-3014) after the accuracy roll: a protecting foe
     # stops the move, Battler_UnlockMoveChoice; subscript_missed.s unlocks too.
-    if missed or _protected(turn, s, side, move, unleash):
+    # A Wonder Guard block ends in subscript_missed.s too (bcp.c:3324-3327), its hits dealing
+    # nothing; ``battleCtx->damage`` keeps the chart's value for the crash (G-19).
+    blocked = missed or _protected(turn, s, side, move, unleash)
+    crash = effect == EffectId.CRASH and mon.ability != AbilityId.MAGIC_GUARD
+    if (blocked or guarded) and crash:
+        # subscript_missed.s:98 -> subscript_crash_on_miss.s (SYSCTL_CRASH_DAMAGE from
+        # effect_script_0045.s): min(Divide(damage, 2), Divide(defender maxHP, 2)) of the
+        # script's damage (hit 0's crit and roll, the type chart run hit or miss), B10-2.
+        would = _move_damage(
+            tables, s, side, move, o.crit[side][0] != 0 and not _armored(s, side, 1 - side),
+            o.roll[side][0], wonder_guard=False,
+        )  # fmt: skip
+        cap = _divide(_active(s, 1 - side).max_hp, 2)
+        _lose_hp(turn, s, side, min(_divide(would, 2), cap))
+    if blocked:
         _unlock(s.sides[side])  # subscript_missed.s
-        if effect == EffectId.CRASH and mon.ability != AbilityId.MAGIC_GUARD:
-            # subscript_missed.s:98 -> subscript_crash_on_miss.s (SYSCTL_CRASH_DAMAGE from
-            # effect_script_0045.s): min(Divide(damage, 2), Divide(defender maxHP, 2)) of the
-            # script's damage (hit 0's crit and roll, the type chart run hit or miss), B10-2.
-            would = _move_damage(
-                tables, s, side, move, o.crit[side][0] != 0 and not _armored(s, side, 1 - side),
-                o.roll[side][0],
-            )  # fmt: skip
-            cap = _divide(_active(s, 1 - side).max_hp, 2)
-            _lose_hp(turn, s, side, min(_divide(would, 2), cap))
         # Bide's unleash defender is the last hitter (bcp.c:2702-2706): its moveHit.
         return move if unleash else record
     # effect_script_0111.s (Protect, Detect) -> subscript_protect.s -> BtlCmd_TryProtection
@@ -3638,7 +3711,8 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
             and _uproar_on(s)
         )
         dealt, _ = _hit(turn, s, side, move, hit, struggling, target_moved)
-        if full:
+        # A Wonder Guard block's subscript_missed.s skips AfterMoveEffects (bcp.c:3324-3327).
+        if full or guarded:
             continue
         # AFTER_MOVE_EFFECT_SYNCHRONIZE_STATUS (bcp.c:3665-3670), before the item checks; a
         # Roar's ran at its drag (``_roar``). The defender is the user for a self-defender move.
@@ -3759,6 +3833,11 @@ def _pursuit(turn: _Turn, s: RefState, side: int, actions, choices) -> None:
     if _holds_choice(tables, s, pursuer):
         s.sides[pursuer].choice_lock = move
     o = turn.outcome
+    # subscript_pursuit.s:11, :17, :154: a Wonder Guard block goes to subscript_missed.s, whose
+    # :107-110 tags the switcher's ability (G-20); the hit deals nothing (_move_damage).
+    kind = _move_type(tables, s, pursuer, move)
+    if side == 0 and _wonder_guarded(tables, s, pursuer, side, move, kind):
+        s.ai_ability_known[s.sides[0].active] = 1
     crit = o.crit[pursuer][0] != 0 and not _armored(s, pursuer, side)
     damage = _move_damage(tables, s, pursuer, move, crit, o.roll[pursuer][0],
                           PURSUIT_POWER_MUL)  # fmt: skip

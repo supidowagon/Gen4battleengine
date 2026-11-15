@@ -120,7 +120,7 @@ _SWITCH_REFUSED = {
     k: v for k, v in _SWITCH_MOVES.items() if k not in ("Hidden Power", "Roost", "Ingrain")
 }
 # ai/switching.py _ANY_SIDE_ABILITIES (ApplyTypeChart / CalcEffectiveness, trainer_ai.c).
-_ANY_SIDE_ABILITIES = {"Levitate": 26, "Wonder Guard": 25, "Scrappy": 113, "Normalize": 96}
+_ANY_SIDE_ABILITIES = {"Levitate": 26, "Scrappy": 113, "Normalize": 96}
 # ai/commands.py MOVE_IDS: Basic_Main's OHKO checks (script.s:57-58), Expert_Pursuit's
 # U-turn (:3730), Expert_StealthRock's Roar and Whirlwind (:6276-6277), Expert_Curse's Gyro
 # Ball and Trick Room (:3472-3473, read from K3c Task 6), and the Basic_CheckSoundproof list
@@ -273,6 +273,8 @@ CONSTANTS: tuple[Constant, ...] = (
         _E,
         {
             **_ANY_SIDE_ABILITIES,
+            "Wonder Guard": 25,
+            "Mold Breaker": 104,
             "Shadow Tag": 23,
             "Arena Trap": 71,
             "Magnet Pull": 42,
@@ -438,6 +440,8 @@ CONSTANTS: tuple[Constant, ...] = (
             "Pressure": 46,
             "Leaf Guard": 102,
             "Synchronize": 28,
+            "Wonder Guard": 25,
+            "Download": 88,
         },
     ),
     # ChooseTraceTarget's untraceable abilities (battle_lib.c:7750-7775) and its Forecast.

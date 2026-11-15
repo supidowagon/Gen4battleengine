@@ -557,6 +557,8 @@ DECOMP_ABILITY_TO_ID: dict[str, AbilityId] = {
     "Pressure": AbilityId.PRESSURE,
     "Leaf Guard": AbilityId.LEAF_GUARD,
     "Synchronize": AbilityId.SYNCHRONIZE,
+    "Wonder Guard": AbilityId.WONDER_GUARD,
+    "Download": AbilityId.DOWNLOAD,
 }
 
 DECOMP_ITEM_TO_ID: dict[str, ItemId] = {

@@ -466,6 +466,11 @@ class AbilityId(IntEnum):
     # FIELD_CONDITION_SUNNY / ABILITY_LEAF_GUARD tests; effects._inflict, _contact_ability).
     LEAF_GUARD = 78
     SYNCHRONIZE = 79
+    # E1 Gardenia batch, rulings G-18..G-23: Wonder Guard (BattleSystem_ApplyTypeChart's
+    # MOVE_STATUS_WONDER_GUARD, battle_lib.c:2649-2654; damage.wonder_guarded) and Download
+    # (SWITCH_IN_CHECK_STATE_DOWNLOAD, battle_lib.c:3814-3851; hooks.download).
+    WONDER_GUARD = 80
+    DOWNLOAD = 81
 
 
 # The decomp ability id of every supported ``AbilityId`` (generated/abilities.txt line N is id
@@ -553,6 +558,8 @@ ABILITY_DECOMP_IDS = {
     AbilityId.PRESSURE: 46,
     AbilityId.LEAF_GUARD: 102,
     AbilityId.SYNCHRONIZE: 28,
+    AbilityId.WONDER_GUARD: 25,
+    AbilityId.DOWNLOAD: 88,
 }
 
 # ChooseTraceTarget (battle_lib.c:7750-7775) never picks a battler whose ``BattleMon.ability``

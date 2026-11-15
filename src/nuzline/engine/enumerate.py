@@ -864,6 +864,9 @@ INPUT_NEUTRAL_ABILITIES = (
     AbilityId.PRESSURE,
     # G-14: it only stops statuses (fewer input changes than the clauses already allow).
     AbilityId.LEAF_GUARD,
+    # G-18: a fixed factor of the hit's own battlers and move through the type chart, whose
+    # inputs have their clauses (the roost, ingrain, camouflage and switch clauses).
+    AbilityId.WONDER_GUARD,
 )
 INPUT_CLAUSE_ABILITIES = (
     AbilityId.GUTS,  # status clause
@@ -880,6 +883,7 @@ INPUT_CLAUSE_ABILITIES = (
     AbilityId.ROUGH_SKIN,  # the attacker's HP: HP clause
     AbilityId.AFTERMATH,  # likewise, on its holder's faint (no later hit on it)
     AbilityId.INTIMIDATE,  # on switch-in: switch clause
+    AbilityId.DOWNLOAD,  # on switch-in (G-21): switch clause (a Trace copy too), pivot clause
     # On switch-in (the switch clause): the weather, or the copied ability.
     AbilityId.TRACE,
     AbilityId.DRIZZLE,
@@ -1788,7 +1792,15 @@ def outcome_laws(
         & (state.infatuated == 0)
         & (state.bide_turns == 0)
     )
-    damage = jnp.stack([hit_damage_table(tables, state, side, moves[side]) for side in (0, 1)])
+    # A crash move's classes key on the damage before Wonder Guard's zero: a guarded Jump Kick
+    # deals nothing but crashes for half the chart's damage (step._use_move, ruling G-19), a
+    # refinement of the hit's own classes (it deals 0 at every roll).
+    damage = jnp.stack(
+        [
+            hit_damage_table(tables, state, side, moves[side], effect[side] != _E.CRASH)
+            for side in (0, 1)
+        ]
+    )
     deals = jnp.all(damage > 0, axis=(1, 2))
     fake_out_ok = (effect == _E.FAKE_OUT) & (
         state.fake_out_turn.astype(_I32) == state.turn.astype(_I32)

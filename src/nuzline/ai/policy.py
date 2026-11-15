@@ -2945,7 +2945,8 @@ def _flag_scripts(layout: AiLayout) -> tuple:
 # --- Refusals ----------------------------------------------------------------------
 
 _ATTACKER_ABILITIES = ("Normalize", "Adaptability", "Scrappy", "Tinted Lens")
-_DEFENDER_ABILITIES = ("Levitate", "Wonder Guard", "Filter", "Solid Rock")
+# Wonder Guard is modelled since the E1 Gardenia batch (switching.wonder_guard_bit, G-23).
+_DEFENDER_ABILITIES = ("Levitate", "Filter", "Solid Rock")
 # Ingrain and Roost are read since E1 prep batch P2 (switching.defender_chart_flags).
 _STATE_MOVE_IDS = {n: switching.MOVE_IDS[n] for n in ("Miracle Eye", "Magnet Rise")}
 

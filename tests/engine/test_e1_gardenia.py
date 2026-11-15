@@ -4,7 +4,8 @@ against the reference engine (``assert_matches_reference``).
 Family A: held items that draw. Focus Band (``HOLD_EFFECT_MAYBE_ENDURE``, G-1 .. G-3) and the
 flavor berries Figy, Wiki, Mago, Aguav, Iapapa (``HOLD_EFFECT_HP_RESTORE_SPICY`` .. ``_SOUR``,
 G-4 .. G-6). Family B: the ability Pressure (G-8 .. G-11). Family C: the status guards
-Synchronize and Leaf Guard (G-12 .. G-17).
+Synchronize and Leaf Guard (G-12 .. G-17). Family D: Wonder Guard and Download, with the AI's
+reads of Wonder Guard (G-18 .. G-23).
 """
 
 from __future__ import annotations
@@ -27,6 +28,7 @@ from nuzline.engine.ids import (
     AbilityId,
     Flavor,
     ItemId,
+    Stat,
     Status,
     Weather,
 )
@@ -691,3 +693,297 @@ def test_leaf_guard_in_sun_stops_static_on_its_attacker(tables, names):
     assert int(out.status[0, 0]) == Status.NONE
     out = assert_matches_reference(tables, s, acts, o)
     assert int(out.status[0, 0]) == Status.PARALYSIS
+
+
+# --- Wonder Guard and Download (G-18 .. G-23) ----------------------------------------------
+
+
+def _guard_duel(tables, names, foe_moves, foe="Rattata", player="Squirtle"):
+    """The player's level-30 ``player`` (Squirtle: Water) given Wonder Guard (its
+    ``BattleMon.ability``), Tackle and Growl, against a level-30 ``foe`` knowing ``foe_moves``."""
+    n = names
+    s = make_state(
+        tables,
+        [_spec(n, player, ["Tackle", "Growl"], 30)],
+        [_spec(n, foe, list(foe_moves), 30)],
+    )
+    return _ability(s, 0, AbilityId.WONDER_GUARD)
+
+
+def test_tables_map_wonder_guard_and_download_in_both_games(
+    tables, names, kaizo_tables, kaizo_names
+):
+    """G-18, G-21: every species slot with the decomp's ABILITY_WONDER_GUARD (25) /
+    ABILITY_DOWNLOAD (88) carries the engine id in both games' tables, and no other does;
+    Fire Fang is the only BATTLE_EFFECT_FLINCH_BURN_HIT (273) move."""
+    for t, n in ((tables, names), (kaizo_tables, kaizo_names)):
+        for name, ability in (
+            ("Wonder Guard", AbilityId.WONDER_GUARD),
+            ("Download", AbilityId.DOWNLOAD),
+        ):
+            decomp = np.asarray(t.species_abilities_decomp) == n.ability(name)
+            engine = np.asarray(t.species_abilities) == ability
+            assert decomp.any() and (decomp == engine).all(), name
+        fangs = np.flatnonzero(np.asarray(t.move_ai_effect) == 273).tolist()
+        assert fangs == [n.move("Fire Fang")]
+
+
+@pytest.mark.parametrize(
+    ("move", "guarded"),
+    [
+        ("Water Gun", True),  # Water on Water: resisted
+        ("Tackle", True),  # neutral
+        ("Bubble", True),  # resisted, its secondary effect never runs
+        ("ThunderShock", False),  # super effective: MOVE_STATUS_SUPER_EFFECTIVE set
+        ("Fire Fang", False),  # resisted, but never on its damaging turn (lib.c:7600)
+        ("Ice Fang", True),  # resisted: BATTLE_EFFECT_FLINCH_FREEZE_HIT is not listed
+        ("Night Shade", True),  # fixed damage, power 1: Ghost on Water is neutral
+        ("Seismic Toss", True),
+        ("Thunder Wave", False),  # power 0: never guarded (lib.c:2654)
+        ("Growl", False),
+    ],
+)
+def test_wonder_guard_blocks_what_is_not_super_effective(tables, names, move, guarded):
+    """G-18: ApplyTypeChart's MOVE_STATUS_WONDER_GUARD (battle_lib.c:2649-2654) stops a damaging
+    move that is not super effective: no damage, no secondary effect; the message of
+    subscript_missed.s:107-110 tags the holder (G-20). A super-effective hit, Fire Fang and the
+    status moves are untouched."""
+    s = _guard_duel(tables, names, [move, "Growl"])
+    acts = A("Growl", move, s, names)
+    o = _proc(O, "secondary", 1)._replace(fang_flinch=jnp.ones((2,), jnp.int8))
+    out = assert_matches_reference(tables, s, acts, o)
+    hp, after = int(s.hp[0, 0]), int(out.hp[0, 0])
+    if guarded:
+        assert after == hp and int(out.status[0, 0]) == Status.NONE
+        assert int(out.stages[0, Stat.SPE]) == 0  # Bubble's Speed drop never ran
+        assert int(out.ai_ability_known[0]) == 1
+    else:
+        assert int(out.ai_ability_known[0]) == 0
+        if move == "Thunder Wave":
+            assert int(out.status[0, 0]) == Status.PARALYSIS
+        elif move == "Growl":
+            assert int(out.stages[0, Stat.ATK]) == -1
+        else:
+            assert after < hp
+
+
+def test_wonder_guard_mold_breaker_and_the_miss(tables, names):
+    """G-18, G-20: an attacker's Mold Breaker hides the ability (Battler_IgnorableAbility):
+    the hit lands and nothing is revealed. A miss still reaches subscript_missed.s:107 (the
+    plain-miss message is :157): the AI learns the ability."""
+    s = _guard_duel(tables, names, ["Tackle", "Growl"])
+    acts = A("Growl", "Tackle", s, names)
+    out = assert_matches_reference(tables, _ability(s, 1, AbilityId.MOLD_BREAKER), acts, O)
+    assert int(out.hp[0, 0]) < int(s.hp[0, 0]) and int(out.ai_ability_known[0]) == 0
+    missed = O._replace(hit=O.hit.at[1, 0].set(0))
+    out = assert_matches_reference(tables, s, acts, missed)
+    assert int(out.hp[0, 0]) == int(s.hp[0, 0]) and int(out.ai_ability_known[0]) == 1
+
+
+def test_wonder_guard_jump_kick_crashes_on_the_charts_damage(tables, names):
+    """G-19: a guarded Jump Kick ends in subscript_missed.s, whose crash
+    (subscript_crash_on_miss.s) reads battleCtx->damage as ApplyTypeChart left it, not 0: the
+    user loses min(Divide(damage, 2), Divide(defender maxHP, 2)); the holder takes nothing."""
+    s = _guard_duel(tables, names, ["Jump Kick", "Growl"], foe="Hitmonlee")
+    acts = A("Growl", "Jump Kick", s, names)
+    out = assert_matches_reference(tables, s, acts, O)
+    kick = names.move("Jump Kick")
+    raw = int(damage_table(tables, s, 1, kick, False, wonder_guard=False)[15])
+    assert raw > 0 and int(damage_table(tables, s, 1, kick, False)[15]) == 0
+    loss = min(max(raw // 2, 1), max(int(s.max_hp[0, 0]) // 2, 1))
+    assert int(out.hp[0, 0]) == int(s.hp[0, 0])
+    assert int(s.hp[1, 0]) - int(out.hp[1, 0]) == loss
+
+
+def test_wonder_guard_skips_the_after_move_items(tables, names):
+    """G-19: a guarded move skips AfterMoveEffects (CheckMoveFailure, bcp.c:3324-3327); both
+    engines agree on the crashing attacker holding a Sitrus Berry."""
+    n = names
+    s = make_state(
+        tables,
+        [_spec(n, "Squirtle", ["Tackle", "Growl"], 30)],
+        [_spec(n, "Hitmonlee", ["Jump Kick", "Growl"], 30, "Sitrus Berry")],
+    )
+    s = _ability(s, 0, AbilityId.WONDER_GUARD)
+    s = s.replace_hp(1, 0, int(s.max_hp[1, 0]) // 2 + 2)
+    out = assert_matches_reference(tables, s, A("Growl", "Jump Kick", s, n), O)
+    assert int(out.hp[1, 0]) != int(s.hp[1, 0])
+
+
+def test_wonder_guard_shedinja_reveals_and_falls_to_a_super_effective_hit(tables, names):
+    """G-18: Shedinja (Bug / Ghost, 1 HP) shrugs off a neutral Water Gun and a Ghost-immune
+    Tackle (both bits: subscript_missed.s tests WONDER_GUARD first, :107, so the ability shows),
+    and faints to Ember (Fire on Bug, super effective)."""
+    n = names
+    s = make_state(
+        tables,
+        [_spec(n, "Shedinja", ["Growl"], 30), _spec(n, "Squirtle", ["Growl"], 30)],
+        [_spec(n, "Rattata", ["Water Gun", "Tackle", "Ember"], 30)],
+    )
+    assert int(s.ability[0, 0]) == AbilityId.WONDER_GUARD
+    for move in ("Water Gun", "Tackle"):
+        out = assert_matches_reference(tables, s, A("Growl", move, s, n), O)
+        assert int(out.hp[0, 0]) == 1 and int(out.ai_ability_known[0]) == 1
+    out = assert_matches_reference(tables, s, A("Growl", "Ember", s, n), O)
+    assert int(out.hp[0, 0]) == 0
+
+
+def _download_lead(tables, names, foe, slot=1):
+    """Porygon (Trace / Download: ``slot`` 1 is Download) leading against ``foe``."""
+    n = names
+    return make_state(
+        tables, [_spec(n, "Porygon", ["Tackle"], 30, slot=slot)], [_spec(n, foe, ["Tackle"], 30)]
+    )
+
+
+def test_download_at_the_battle_start(tables, names):
+    """G-21: SWITCH_IN_CHECK_STATE_DOWNLOAD (battle_lib.c:3814-3851) at ShowBattleMon: the foe's
+    Defense against its Sp. Def (each through its stage): Defense >= Sp. Def raises Sp. Attack,
+    else Attack, by one; no AI reveal (the message is built in C, battle_script.c:2854)."""
+    for foe in ("Geodude", "Tentacool"):
+        s = _download_lead(tables, names, foe)
+        assert int(s.ability[0, 0]) == AbilityId.DOWNLOAD
+        defense, sp_def = int(s.stats[1, 0, Stat.DEF - 1]), int(s.stats[1, 0, Stat.SPD - 1])
+        assert defense != sp_def
+        raised = Stat.SPA if defense >= sp_def else Stat.ATK
+        other = Stat.ATK if raised == Stat.SPA else Stat.SPA
+        assert int(s.stages[0, raised]) == 1 and int(s.stages[0, other]) == 0, foe
+        assert int(s.ai_ability_known[0]) == 0
+    # Trace copies a foe's Download first (SWITCH_IN_CHECK_STATE_TRACE, :3718), then it fires.
+    n = names
+    s = make_state(
+        tables,
+        [_spec(n, "Porygon", ["Tackle"], 30, slot=0)],
+        [_spec(n, "Porygon", ["Tackle"], 30, slot=1)],
+    )
+    assert int(s.ability[0, 0]) == AbilityId.DOWNLOAD
+    assert int(s.stages[0, Stat.SPA]) + int(s.stages[0, Stat.ATK]) == 1
+    assert int(s.stages[1, Stat.SPA]) + int(s.stages[1, Stat.ATK]) == 1
+
+
+def test_download_on_a_switch_in_reads_the_stages_and_the_substitute(tables, names):
+    """G-21: a switched-in Download holder reads the foe's staged Defense and Sp. Def (a -6
+    Defense turns Geodude's ratio round: Attack); a foe behind a substitute counts 0, so
+    nothing rises."""
+    n = names
+    s = make_state(
+        tables,
+        [_spec(n, "Squirtle", ["Tackle"], 30), _spec(n, "Porygon", ["Tackle"], 30, slot=1)],
+        [_spec(n, "Geodude", ["Tackle"], 30)],
+    )
+    acts = (SWITCH_TO_1, 0)
+    out = assert_matches_reference(tables, s, acts, O)
+    assert int(out.stages[0, Stat.SPA]) == 1 and int(out.stages[0, Stat.ATK]) == 0
+    low = s._replace(stages=s.stages.at[1, Stat.DEF].set(-6))
+    out = assert_matches_reference(tables, low, acts, O)
+    assert int(out.stages[0, Stat.ATK]) == 1 and int(out.stages[0, Stat.SPA]) == 0
+    behind = s._replace(substitute_hp=s.substitute_hp.at[1].set(10))
+    out = assert_matches_reference(tables, behind, acts, O)
+    assert int(out.stages[0, Stat.ATK]) == 0 and int(out.stages[0, Stat.SPA]) == 0
+
+
+def test_download_after_a_double_ko_fires_on_the_opposing_newcomer(tables, names):
+    """G-22: the player's Download newcomer enters against a fainted foe (no sum, no raise);
+    ``replacement_pass`` fires it once the opponent's newcomer is in. At a single replacement it
+    fires on entry, once."""
+    from nuzline.search.playout import replacement_pass
+    from tests.search.fixtures import at_replacement
+
+    s = at_replacement(roark_state(tables, names), opp_down=True)
+    s = _ability(s, 0, AbilityId.DOWNLOAD, slot=4)
+    after, refused = replacement_pass(tables, s, 4)
+    assert not bool(refused)
+    foe = int(after.active[1])
+    assert int(after.hp[1, foe]) > 0
+    defense = int(after.stats[1, foe, Stat.DEF - 1])
+    sp_def = int(after.stats[1, foe, Stat.SPD - 1])
+    raised = Stat.SPA if defense >= sp_def else Stat.ATK
+    assert int(after.stages[0, raised]) == 1
+    assert int(after.stages[0, Stat.SPA]) + int(after.stages[0, Stat.ATK]) == 1
+    single = _ability(at_replacement(roark_state(tables, names)), 0, AbilityId.DOWNLOAD, slot=4)
+    after, refused = replacement_pass(tables, single, 4)
+    assert not bool(refused)
+    assert int(after.stages[0, Stat.SPA]) + int(after.stages[0, Stat.ATK]) == 1
+
+
+def test_ai_reads_wonder_guard(tables, names):
+    """G-23: IfMoveEffectivenessEquals and TrainerAI_CalcDamage see MOVE_STATUS_IMMUNE for a
+    guarded move (the true ability; trainer_ai.c:1339, :3106), not for a super-effective one;
+    the AI no longer refuses a Wonder Guard player."""
+    from nuzline.ai import commands, policy
+
+    n = names
+    s = make_state(
+        tables,
+        [_spec(n, "Shedinja", ["Growl"], 30)],
+        [_spec(n, "Geodude", ["Tackle", "Rock Throw", "Leer"], 12)],
+    )
+    tackle, rock = n.move("Tackle"), n.move("Rock Throw")
+    assert int(commands.effectiveness_class(tables, s, rock)) == commands.TypeMulti.DOUBLE
+    assert int(commands.ai_damage(tables, s, rock, 15)) > 0
+    water = jnp.asarray([n.type("Water")] * 2, s.types.dtype)
+    s_water = s._replace(types=s.types.at[0, 0].set(water))
+    assert int(commands.effectiveness_class(tables, s_water, tackle)) == commands.TypeMulti.IMMUNE
+    assert int(commands.ai_damage(tables, s_water, tackle, 15)) == 0
+    assert not any("Wonder Guard" in r for r in policy.ai_refusals(tables, s, n))
+
+
+def test_ai_switches_against_wonder_guard(tables, names):
+    """G-23: AI_CannotDamageWonderGuard (trainer_ai.c:3286-3348): the player's Shedinja, no
+    super-effective move on the AI's active: each bench Pokemon's super-effective move draws
+    ``RandNext() % 3 < 2`` (43691 of 65536), the first success switching to it. With a
+    super-effective move on the active there is no such draw (its keep draw instead)."""
+    from nuzline.ai.outcome import switch_stop_probs
+    from nuzline.ai.switching import NO_SWITCH, SwitchSite, switch_action, switch_sites
+
+    n = names
+    s = make_state(
+        tables,
+        [_spec(n, "Shedinja", ["Growl"], 30)],
+        [
+            _spec(n, "Geodude", ["Tackle", "Leer"], 12),
+            _spec(n, "Onix", ["Tackle", "Rock Throw"], 12),
+            _spec(n, "Cranidos", ["Headbutt"], 14),
+        ],
+    )
+    sites = switch_sites(tables, s).tolist()
+    assert sites == [SwitchSite.WONDER_GUARD] + [SwitchSite.NONE] * 8
+    assert int(switch_action(tables, s, jnp.int8(0))) == MOVE_ACTIONS + 1
+    assert int(switch_action(tables, s, jnp.int8(9))) == NO_SWITCH
+    p = np.asarray(switch_stop_probs(switch_sites(tables, s)), np.float64)
+    assert abs(p[0] - 43691 / 65536) < 1e-6 and abs(p[-1] - 21845 / 65536) < 1e-6
+    keep = s._replace(moves=s.moves.at[1, 0, 1].set(n.move("Rock Throw")))
+    assert switch_sites(tables, keep).tolist() == [SwitchSite.KEEP] + [SwitchSite.NONE] * 8
+
+
+def test_ai_bench_wonder_guard_is_immune_to_the_last_hit(tables, names):
+    """G-23: the passes' first CalcEffectiveness has the AI's bench Pokemon as the defender
+    (trainer_ai.c:3769-3777): a bench Shedinja is INEFFECTIVE against a neutral moveHit (Water
+    Gun) through Wonder Guard, so its super-effective move is a pass-1 draw; against a Mold
+    Breaker hitter (Battler_Ability of moveHitBattler) it is not."""
+    from nuzline.ai.switching import SwitchSite, switch_sites
+
+    n = names
+    for slot, expected in ((0, SwitchSite.PASS_INEFFECTIVE), (1, SwitchSite.NONE)):
+        s = make_state(
+            tables,
+            [_spec(n, "Pinsir", ["Water Gun"], 30, slot=slot)],
+            [_spec(n, "Geodude", ["Tackle"], 12), _spec(n, "Shedinja", ["Aerial Ace"], 30)],
+        )
+        s = s._replace(move_hit=s.move_hit.at[1].set(n.move("Water Gun")))
+        assert switch_sites(tables, s).tolist()[0] == expected, slot
+
+
+def test_wonder_guard_pursuit_on_a_switching_holder(tables, names):
+    """G-20: Pursuit's hit on a switching Wonder Guard holder (subscript_pursuit.s:11, :17,
+    :154) ends in subscript_missed.s: no damage, and its :107-110 message tags the ability."""
+    n = names
+    s = make_state(
+        tables,
+        [_spec(n, "Squirtle", ["Tackle"], 30), _spec(n, "Abra", ["Tackle"], 30)],
+        [_spec(n, "Rattata", ["Pursuit"], 30)],
+    )
+    s = _ability(s, 0, AbilityId.WONDER_GUARD)
+    out = assert_matches_reference(tables, s, A(SWITCH_TO_1, "Pursuit", s, n), O)
+    assert int(out.active[0]) == 1
+    assert int(out.hp[0, 0]) == int(s.hp[0, 0]) and int(out.ai_ability_known[0]) == 1

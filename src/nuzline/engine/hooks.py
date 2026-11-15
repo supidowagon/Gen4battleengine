@@ -7,8 +7,8 @@
   from ``BattleControllerPlayer_MoveEnd``, battle_controller_player.c:3973; at the
   start of the battle from ``ShowBattleMon``, :256). Of its states the engine reaches
   ``SWITCH_IN_CHECK_STATE_TRACE`` (:3718, ``trace``), ``_WEATHER_ABILITIES`` (:3740,
-  ``weather_ability``), ``_INTIMIDATE`` (:3795), ``_FORBIDDEN_STATUS`` (:4135) and
-  ``_HELD_ITEM_STATUS`` (:4151).
+  ``weather_ability``), ``_INTIMIDATE`` (:3795), ``_DOWNLOAD`` (:3814, ``download``),
+  ``_FORBIDDEN_STATUS`` (:4135) and ``_HELD_ITEM_STATUS`` (:4151).
 * ``held_item_check`` / ``after_damage_items``: ``BattleSystem_TriggerHeldItem``
   (battle_lib.c:4576) and ``BattleSystem_TriggerHeldItemOnStatus`` (:4967), which
   are the same for every implemented item (HP berries, Berry Juice, the status berries,
@@ -72,7 +72,13 @@ from __future__ import annotations
 import jax.numpy as jnp
 
 from nuzline.data.tables import Tables
-from nuzline.engine.damage import ability_weather, decomp_abilities, divide, trace_copy
+from nuzline.engine.damage import (
+    ability_weather,
+    apply_stage,
+    decomp_abilities,
+    divide,
+    trace_copy,
+)
 from nuzline.engine.effects import change_stage, entry_hazards, forget_item
 from nuzline.engine.ids import (
     CONFUSION_PENDING,
@@ -97,6 +103,7 @@ WEATHER_SET, ABSORB, WEATHER_HP = "weather_set", "absorb", "weather_hp"
 OHKO_BLOCKED = "ohko_blocked"
 STATUS_HP, TORMENT = "status_hp", "torment"
 STATUS_BLOCKED, SYNCHRONIZED = "status_blocked", "synchronized"
+DAMAGE_AVOIDED = "damage_avoided"
 # Ability -> the phases at which it shows a message tagging it, for the implemented
 # abilities that ever do:
 # * Mold Breaker: SWITCH_IN_CHECK_STATE_MOLD_BREAKER (battle_lib.c:4075), a living
@@ -133,6 +140,11 @@ STATUS_BLOCKED, SYNCHRONIZED = "status_blocked", "synchronized"
 # * Synchronize: a status it passes on (``effects.synchronize``; ruling G-13): subscript_poison.s
 #   :57 / _burn.s:68 / _paralyze.s:44 tag ``BTLSCR_MSG_BATTLER_TEMP``, the holder; a pass the
 #   receiver blocks is silent.
+# * Wonder Guard: a move it guards (MOVE_STATUS_WONDER_GUARD, ``damage.wonder_guarded``; ruling
+#   G-20): subscript_missed.s:107-110 prints "{0} avoided damage by using {1}!" with
+#   ``TAG_NICKNAME_ABILITY``, BTLSCR_DEFENDER, unless an earlier flag of subscript_missed.s prints
+#   first: lost focus (:5), protected (:18), failed (:97) (``step._use_move``). A miss still
+#   reaches it (the plain-miss message is :157, after it).
 # * Shed Skin: subscript_ability_restore_status.s:8 tags the holder
 #   (``TAG_NICKNAME_ABILITY_STATUS``).
 # * Inner Focus: a Fake Out flinch it blocks (``effects._flinch``): subscript_flinch_mon.s:18-23
@@ -151,7 +163,8 @@ STATUS_BLOCKED, SYNCHRONIZED = "status_blocked", "synchronized"
 #   battle_script.c:4340-4341; subscript_missed.s:67-69 prints "{0} was protected by {1}!"
 #   with ``TAG_NICKNAME_ABILITY``, BTLSCR_DEFENDER) unless an earlier flag of subscript_missed.s
 #   prints first: protected (:18), Levitate (:34), ineffective (:59) (``step._use_move``).
-# The others never reveal: Intimidate's "cuts" message and Keen Eye's "prevents"
+# The others never reveal: Intimidate's "cuts" message, Download's "raised its" message
+# (``SetupNicknameAbilityStatMsg``, :2854) and Keen Eye's "prevents"
 # message are built in C (``BtlCmd_ChangeStatStage``, battle_script.c:2956, :2900);
 # Shield Dust blocks silently (an indirect side effect); Truant's "loafing around"
 # (subscript_loafing_around.s) tags only the nickname; the damage, accuracy, crit, speed and
@@ -190,7 +203,43 @@ REVEALS_ON: dict[int, frozenset[str]] = {
     AbilityId.STURDY: frozenset({OHKO_BLOCKED}),
     AbilityId.LEAF_GUARD: frozenset({STATUS_BLOCKED}),
     AbilityId.SYNCHRONIZE: frozenset({SYNCHRONIZED}),
+    AbilityId.WONDER_GUARD: frozenset({DAMAGE_AVOIDED}),
 }
+
+
+def download(state: BattleState, side, foes, cond=True, staged=True) -> BattleState:
+    """``SWITCH_IN_CHECK_STATE_DOWNLOAD`` (battle_lib.c:3814-3851) for ``side``'s active battler
+    where ``cond`` (its ``downloadAnnounced`` is clear: it entered, or it just traced Download),
+    ruling G-21: with HP left and Download (``Battler_Ability``), it sums over the opposing
+    battlers ``foes`` (sides; the singles foe) that have HP and are not behind a substitute
+    (``VOLATILE_CONDITION_SUBSTITUTE``: its bit) their Defense and their Sp. Def, each through
+    its stage (``stats * sStatStageBoosts[stage]``, ``damage.apply_stage``; the raw stage, no
+    Simple). ``downloadAnnounced`` is set whatever the sums (:3836); when they are not both 0
+    the larger-or-equal Defense raises Sp. Attack, a larger Sp. Def raises Attack, by 1 through
+    ``subscript_update_stat_stage.s`` as an ability side effect (``BtlCmd_ChangeStatStage``,
+    battle_script.c:2841-2873: at +6 it ends silently). Its "raised its" message is built in C
+    (``SetupNicknameAbilityStatMsg``, :2854): the AI learns nothing. ``staged=False`` reads every
+    foe's stages as 0 (``search.playout.replacement_pass``, a fresh newcomer)."""
+    side = jnp.asarray(side, _I32)
+    mon = state.active[side]
+    sum_def, sum_spd = jnp.int32(0), jnp.int32(0)
+    for foe in foes:  # the opposing battlers (doubles: both)
+        target = state.active[foe]
+        counts = (state.hp[foe, target] > 0) & (state.substitute_hp[foe] == 0)
+        stats = state.stats[foe, target].astype(_I32)
+        stages = state.stages[foe].astype(_I32) * int(bool(staged))
+        defense = apply_stage(stats[Stat.DEF - 1], stages[Stat.DEF])
+        sp_def = apply_stage(stats[Stat.SPD - 1], stages[Stat.SPD])
+        sum_def = sum_def + jnp.where(counts, defense, 0)
+        sum_spd = sum_spd + jnp.where(counts, sp_def, 0)
+    on = (
+        jnp.asarray(cond)
+        & (state.ability[side, mon] == AbilityId.DOWNLOAD)
+        & (state.hp[side, mon] > 0)
+        & (sum_def + sum_spd != 0)
+    )
+    state = change_stage(state, side, Stat.SPA, 1, on & (sum_def >= sum_spd))
+    return change_stage(state, side, Stat.ATK, 1, on & (sum_def < sum_spd))
 
 
 def reveal_ability(state: BattleState, side, slot, phase: str, cond=True) -> BattleState:
@@ -567,8 +616,8 @@ def on_switch_in(tables: Tables, state: BattleState, side) -> BattleState:
     in their state order (``BattleSystem_TriggerEffectOnSwitch``): Trace (``trace``) for the
     newcomer and for the other battler, whose Trace stayed armed while its foe was down (a
     double KO's replacements: the player's newcomer enters first, ``playout``); the weather
-    abilities (``weather_ability``) and Intimidate of the newcomer and of a battler that just
-    traced one; a living newcomer's switch-in announcement (``reveal_ability``,
+    abilities (``weather_ability``), Intimidate and Download (``download``) of the newcomer and
+    of a battler that just traced one; a living newcomer's switch-in announcement (``reveal_ability``,
     ``SWITCH_IN``: Mold Breaker, Pressure) and a traced one's; the forbidden-status check
     (``recover_status_by_ability``, battle_lib.c:4135); then the held-item check of both
     active Pokemon (``SWITCH_IN_CHECK_STATE_HELD_ITEM_STATUS`` loops over every battler). Each
@@ -592,6 +641,8 @@ def switch_in_effects(tables: Tables, state: BattleState, side) -> BattleState:
     state = weather_ability(state, foe, traced)
     state = intimidate(state, side, foe=foe)
     state = intimidate(state, foe, traced, foe=side)
+    state = download(state, side, (foe,))
+    state = download(state, foe, (side,), traced)
     mon, other = state.active[side], state.active[foe]
     state = reveal_ability(state, side, mon, SWITCH_IN, state.hp[side, mon] > 0)
     state = reveal_ability(state, foe, other, SWITCH_IN, traced)
@@ -610,7 +661,8 @@ def battle_start(tables: Tables, state: BattleState) -> BattleState:
     machine whose every state loops over all battlers (``monSpeedOrder``) before the next
     state runs (battle_lib.c:3649-4168): Trace (:3718-3737) for each lead, then the weather
     abilities (:3740-3790), then Intimidate (:3795-3808, once per battler: its
-    ``intimidateAnnounced``), then the switch-in announcements, the forbidden-status check
+    ``intimidateAnnounced``), then Download (:3814-3851, its ``downloadAnnounced``; it reads the
+    foe's Defense and Sp. Def, which no earlier state changes), then the switch-in announcements, the forbidden-status check
     (:4135) and the held-item check (:4151). So a lead that traced Intimidate fires it once,
     in the Intimidate state, like any Intimidate lead (ruling B3-18). No entry hazard is up at
     the start. A loop over battlers per state (the doubles conventions); in singles the order
@@ -629,6 +681,8 @@ def battle_start(tables: Tables, state: BattleState) -> BattleState:
         state = weather_ability(state, side)
     for side in sides:
         state = intimidate(state, side, foe=1 - side)
+    for side in sides:  # SWITCH_IN_CHECK_STATE_DOWNLOAD (:3814-3851), after every Intimidate
+        state = download(state, side, (1 - side,))
     for side in sides:
         mon = state.active[side]
         state = reveal_ability(state, side, mon, SWITCH_IN, state.hp[side, mon] > 0)

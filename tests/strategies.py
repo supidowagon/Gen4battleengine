@@ -920,6 +920,61 @@ def _draw_status_guard(
         a["toxic_spikes"][side] = rnd.randint(1, 2)
 
 
+# E1 Gardenia batch (G-18 .. G-22): moves ``_draw_guard_download`` gives the foe of a Wonder Guard
+# holder: neutral, resisted and super-effective hits, Fire Fang's bypass and Ice Fang's block, the
+# fixed-damage and Counter families (power 1), Jump Kick's crash, a status move, and Pursuit.
+WONDER_GUARD_MOVES = (
+    "Tackle",
+    "Water Gun",
+    "ThunderShock",
+    "Ember",
+    "Fire Fang",
+    "Ice Fang",
+    "Thunder Fang",
+    "Night Shade",
+    "Seismic Toss",
+    "Mirror Coat",
+    "Jump Kick",
+    "Double Kick",
+    "Thunder Wave",
+    "Pursuit",
+    "Brick Break",
+)
+
+
+def _draw_guard_download(
+    draw, tables: Tables, a: dict, side: int, active: int, names: Names
+) -> None:
+    """Maybe (1 in 4) give the active Pokemon Wonder Guard (G-18), its foe a
+    ``WONDER_GUARD_MOVES`` move (kept only when supported) and a third of the time Mold Breaker;
+    and maybe (1 in 3) a bench Pokemon of either side Download (G-21), with the active foe at a
+    random Defense / Sp. Def stage, so a switch-in, a U-turn, Baton Pass or Roar newcomer and a
+    replacement reach it."""
+    rnd = draw(st.randoms(use_true_random=False))
+    foe = 1 - side
+    foe_mon = int(a["active"][foe])
+    if draw(st.integers(0, 3)) == 0:
+        a["ability"][side, active] = AbilityId.WONDER_GUARD
+        move = names.move(rnd.choice(WONDER_GUARD_MOVES))
+        if tables.move_effect[move] != EffectId.UNSUPPORTED:
+            k = rnd.randint(0, 3)
+            a["moves"][foe, foe_mon, k] = move
+            a["pp"][foe, foe_mon, k] = int(tables.move_pp[move])
+        if rnd.random() < 1 / 3:
+            a["ability"][foe, foe_mon] = AbilityId.MOLD_BREAKER
+    if draw(st.integers(0, 2)) == 0:
+        owner = rnd.choice((side, foe))
+        mon = int(a["active"][owner])
+        bench = [
+            i for i in range(SLOTS) if i != mon and a["species"][owner, i] and a["hp"][owner, i] > 0
+        ]
+        if bench:
+            a["ability"][owner, rnd.choice(bench)] = AbilityId.DOWNLOAD
+            other = 1 - owner
+            a["stages"][other, Stat.DEF] = rnd.randint(-6, 6)
+            a["stages"][other, Stat.SPD] = rnd.randint(-6, 6)
+
+
 # E2 batch 9: abilities ``_draw_batch9`` puts on the active Pokemon.
 BATCH9_ABILITIES = (
     AbilityId.CHLOROPHYLL,
@@ -1536,6 +1591,7 @@ def supported_state(draw, tables: Tables, names: Names, invokers: bool = True) -
         _draw_substitute(draw, tables, a, side, active, names)
         _draw_pressure(draw, tables, a, side, active, names)
         _draw_status_guard(draw, tables, a, side, active, names)
+        _draw_guard_download(draw, tables, a, side, active, names)
         _draw_choice_lock(draw, a, side, active)
     # B7-13: an Imprison user sharing a move with a Sleep Talk user, so a faster Imprison (or one
     # already up) can shrink the Sleep Talk set.

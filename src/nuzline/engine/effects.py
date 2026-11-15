@@ -254,6 +254,7 @@ from nuzline.engine.damage import (
     spikes_loss,
     stealth_rock_loss,
     weather_suppressed,
+    wonder_guarded,
 )
 from nuzline.engine.ids import (
     ABILITY_MULTITYPE,
@@ -2277,6 +2278,8 @@ def play_hit(
         )
         == 0
     ) | levitated(state, side, target_side, counter_type)
+    # Wonder Guard flags them too (power 1; MOVE_STATUS_WONDER_GUARD, ruling G-18).
+    immune = immune | wonder_guarded(tables, state, side, move, counter_type)
     damage = jnp.where(is_counter, jnp.where(immune, 0, jnp.asarray(counter_damage, _I32)), damage)
     target_hp = state.hp[target_side, target].astype(_I32)
     # False Swipe (bcp.c:3381-3384, inside UpdateHP before the endure checks): a hit that would

@@ -84,8 +84,8 @@ from nuzline.engine.actions import (
     legal_replacements,
 )
 from nuzline.engine.damage import damage_table
-from nuzline.engine.hooks import intimidate
-from nuzline.engine.ids import AbilityId
+from nuzline.engine.hooks import download, intimidate
+from nuzline.engine.ids import AbilityId, Stat
 from nuzline.engine.order import action_order, is_switch, used_move
 from nuzline.engine.outcome import empty_outcome, hit_threshold, sample_outcome
 from nuzline.engine.state import SLOTS, BattleState
@@ -302,19 +302,37 @@ def replacement_pass(tables: Tables, state: BattleState, slot) -> tuple[BattleSt
     fires once the opponent's side is settled (the two Intimidates touch different
     battlers, so their speed order does not matter). A Trace newcomer that only copies
     Intimidate when the opponent's newcomer enters fires it there (``hooks.on_switch_in``):
-    the deferred one is the newcomer's own Intimidate at its entry."""
+    the deferred one is the newcomer's own Intimidate at its entry.
+
+    Download (``hooks.download``, ``SWITCH_IN_CHECK_STATE_DOWNLOAD``, battle_lib.c:3814-3851,
+    after the Intimidate state and before the held-item state, ruling G-22) likewise: the
+    player newcomer's fires once the opponent's side is settled, reading the opposing newcomer's
+    Defense and Sp. Def at stage 0 (a fresh battler; only its own held-item check, a later
+    state, can have raised them since). Each opposing newcomer's Download, run at its entry,
+    reads the player newcomer's two stats at stage 0 too: their stages are set aside for the
+    opponent's entries (nothing an opposing switch-in does touches them) and put back after."""
     mul = _carried_mul(state)
     opp_needs = needs_replacement(state)[1] == 1
     opp_slot = post_ko_switch_in(tables, state, mul)
     bad = opp_needs & (opp_slot < 0)
     entered = replace(tables, state, 0, slot)
-    own = entered.ability[0, entered.active[0]] == AbilityId.INTIMIDATE
-    unannounced = (state.hp[1, state.active[1]] == 0) & own
+    opp_down = state.hp[1, state.active[1]] == 0
+    own = entered.ability[0, entered.active[0]]
+    unannounced = opp_down & (own == AbilityId.INTIMIDATE)
+    download_unannounced = opp_down & (own == AbilityId.DOWNLOAD)
+    kept = entered.stages[0]
+    fresh = entered.stages.at[0, Stat.DEF].set(0).at[0, Stat.SPD].set(0)
+    entered = entered._replace(stages=jnp.where(opp_down, fresh, entered.stages))
     both = replace(tables, entered, 1, jnp.maximum(opp_slot, 0))
     entered = _select((needs_replacement(entered)[1] == 1) & ~bad, both, entered)
     entered = entered._replace(replace_mul=jnp.zeros_like(entered.replace_mul))
     settled, refused = send_replacements(tables, entered, False, mul)
+    put_back = (
+        settled.stages.at[0, Stat.DEF].set(kept[Stat.DEF]).at[0, Stat.SPD].set(kept[Stat.SPD])
+    )
+    settled = settled._replace(stages=jnp.where(opp_down, put_back, settled.stages))
     settled = intimidate(settled, 0, unannounced & (settled.over == 0))
+    settled = download(settled, 0, (1,), download_unannounced & (settled.over == 0), staged=False)
     return settled, refused | bad
 
 

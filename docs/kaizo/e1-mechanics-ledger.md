@@ -206,3 +206,94 @@ names the decomp sites, what the engine does, and where. E2's rulings are in
   Flame Body before the side's hit, and the side's later hits once its move can status a foe
   holder, where the passed status matters (a burn on a physical non-Guts hit, any under Guts).
   Leaf Guard is input-neutral (it only stops statuses).
+- G-18 Wonder Guard (`AbilityId.WONDER_GUARD`, decomp 25: Shedinja; Kaizo also Unown). Battle:
+  `BattleSystem_ApplyTypeChart` (battle_lib.c:2649-2654), run by `CheckTypeChart` (bcp.c:
+  2350-2370: a move with power that is not RANGE_USER / RANGE_USER_SIDE, not under
+  SYSCTL_IGNORE_IMMUNITIES (Future Sight), hit, miss or Protect alike, bcp.c:3271-3277), sets
+  `MOVE_STATUS_WONDER_GUARD` when `Battler_IgnorableAbility` finds Wonder Guard (an attacker's
+  Mold Breaker hides it), `MoveIsOnDamagingTurn` holds, the walk left
+  `MOVE_STATUS_SUPER_EFFECTIVE` clear (the two effectiveness bits never stand together, so the
+  BASIC_EFFECTIVENESS clause never applies) and the move has table power; Struggle returns
+  first (:2573). So neutral, resisted and immune hits are guarded, the fixed-damage moves
+  (power 1: Night Shade, Seismic Toss, Dragon Rage, SonicBoom, Super Fang, Endeavor, the OHKO
+  moves) and the Counter family too, status moves (Thunder Wave included: power 0) never, Bide
+  never (RANGE_USER: no chart), Future Sight never (no chart at the use, and its later hit runs
+  no chart). The flag is in `MOVE_STATUS_DID_NOT_HIT` / `_NO_EFFECTS` / `_DID_NOT_AFFECT` /
+  `_IMMUNE` (moves.h:81-88): the move ends in subscript_missed.s (bcp.c:3324-3327), so no damage
+  and no secondary effect, as an immunity (Brick Break's screens still break: DID_NOT_AFFECT,
+  battle_lib.c:1499-1500); it is not `MOVE_STATUS_INEFFECTIVE`, so `moveFailFlags.noEffect`
+  stays clear (bcp.c:2368). `MoveIsOnDamagingTurn` (battle_lib.c:7588-7604) lists Bide, the
+  charge moves and BATTLE_EFFECT_FLINCH_BURN_HIT (Fire Fang, the decomp's bug note :7600):
+  they are on their damaging turn only under SYSCTL_LAST_OF_MULTI_TURN, which only
+  subscript_charge_move_cleanup.s:7 and subscript_bide_end.s:12 set and BattleContext_Init
+  clears (SYSCTL_INIT_P1, system_control.h:31-34): Fire Fang is never guarded. Ice Fang (274)
+  and Thunder Fang (275) are not listed. Engine: `damage.wonder_guarded` (by the decomp effect,
+  `tables.move_ai_effect`; `on_damaging_turn`, `super_effective_flag`, `chart_walk`), zeroing
+  the hit in `_finish`, `fixed_damage`, the Counter family in `effects.play_hit`; the reference's
+  `_wonder_guarded`, `_move_damage`, `_fixed_damage`, the counter branch.
+- G-19 What the guarded move still does: subscript_missed.s unlocks the attacker
+  (`Battler_UnlockMoveChoice`; a Rollout / Uproar lock ends as on an immunity, through
+  `_Hit.effective`) and runs subscript_crash_on_miss.s (:98): a guarded Jump Kick crashes for
+  min(Divide(battleCtx->damage, 2), Divide(defender maxHP, 2)), where `battleCtx->damage` is
+  CalcDamage's through the chart walk, which Wonder Guard does not zero (only an immune entry
+  does): `step._use_move` (`guarded`, `damage_for_roll(..., wonder_guard=False)`), the
+  reference's crash branch. CheckMoveFailure's DID_NOT_HIT path skips AfterMoveEffects
+  (`items_full`; the reference's `continue`). PP, `movePrevByBattler`, `moveHit` and the Choice
+  lock are written as for any move that showed its attack message (UpdateMoveBuffers,
+  UpdateFlagsWhenHit). The enumeration keys a crash move's damage classes on the unzeroed table
+  (`enumerate.outcome_laws`, `hit_damage_table(..., wonder_guard=False)` for `EffectId.CRASH`).
+  Wonder Guard is input-neutral (a fixed factor through the chart, whose inputs have clauses);
+  Download is a switch-in clause ability.
+- G-20 The AI learns the holder's ability: subscript_missed.s:107-110 prints "{0} avoided
+  damage by using {1}!" (`TAG_NICKNAME_ABILITY`, BTLSCR_DEFENDER: `BattleMessage_AbilityTag`,
+  battle_script.c:11798-11806, `BattleAI_SetAbility`) unless an earlier flag prints first:
+  lost focus (:5), protected (:18), failed (:97). A plain miss reaches it (the miss message is
+  :157, after it), and an immune Tackle on Shedinja too (WONDER_GUARD is tested before
+  INEFFECTIVE, :119). `hooks.DAMAGE_AVOIDED` (`step._use_move`, `step._pursuit_hit`: Pursuit's
+  hit on a switching holder goes to subscript_missed.s through subscript_pursuit.s:17, :154);
+  the reference's `guarded` reveal.
+- G-21 Download (`AbilityId.DOWNLOAD`, decomp 88: Porygon, Porygon2, Porygon-Z).
+  `SWITCH_IN_CHECK_STATE_DOWNLOAD` (battle_lib.c:3814-3851), after the Intimidate state: a
+  living holder (`Battler_Ability`) whose `downloadAnnounced` is clear sums over the opposing
+  battlers with HP and no `VOLATILE_CONDITION_SUBSTITUTE` their Defense and Sp. Def, each
+  `stat * sStatStageBoosts[stage]` (the raw stage, no Simple); the flag is set whatever the
+  sums (:3836); a nonzero total raises Sp. Attack when Defense >= Sp. Def, else Attack, by one
+  through subscript_update_stat_stage.s as an ABILITY side effect (`BtlCmd_ChangeStatStage`,
+  battle_script.c:2841-2873: at +6 it jumps silently). The "raised its" message is C-built
+  (`SetupNicknameAbilityStatMsg`, :2769-2776, :2854): no AI reveal. `hooks.download` from
+  `switch_in_effects` (the newcomer, and a battler that just traced Download) and
+  `battle_start` (its own loop over the battlers, after Intimidate's); the reference's
+  `_download`. No `downloadAnnounced` field (STATE.md): the hook runs exactly when it is clear.
+- G-22 Download at a double KO: as Intimidate (playout.replacement_pass), the player's newcomer
+  meets a fainted foe at its entry (no sum: nothing rises; the decomp's flag is only set at
+  the later ShowBattleMon check, when both newcomers are in), and fires once the opponent's
+  side is settled, reading the opposing newcomer at stage 0 (`download(..., staged=False)`:
+  a fresh battler, whose only possible Defense / Sp. Def change by then is its own pinch
+  berry at the held-item state, which comes after the Download state). The opposing
+  newcomers' own Downloads read the player's newcomer with its Defense / Sp. Def stages set
+  aside to 0 for their entries and put back after (nothing an opposing switch-in does touches
+  them).
+- G-23 AI (`ai/switching.py`, `ai/commands.py`, `ai/replacement.py`; the refusals
+  "AI switching: ability Wonder Guard" and "AI scoring: ability Wonder Guard changes
+  IfMoveEffectivenessEquals" are lifted). Every AI `ApplyTypeChart` call sees the true
+  ability (Battler_IgnorableAbility of battleMons; the AI's knowledge is not read) and runs at
+  command selection or at the replacement, after BattleContext_Init: Fire Fang and the listed
+  effects are never on their damaging turn there. `switching.wonder_guard_bit` adds the bit to
+  `MOVE_STATUS_IMMUNE`: `IfMoveEffectivenessEquals` (trainer_ai.c:1339; script.s:68
+  Basic_CheckForImmunity's -10 and Basic_CheckWonderGuard's -12 at :76/:96-99, both already
+  transcribed, then take their decomp paths; :577 Basic_CheckNonStandardDamageOrChargeTurn
+  likewise), `TrainerAI_CalcDamage` (:3106, `damage._finish` / `ai_damage_for_roll`'s fixed
+  cases) and `BattleAI_PostKOSwitchIn` stage 2 (battle_lib.c:8075). `TrainerAI_ShouldSwitch`
+  step 4, `AI_CannotDamageWonderGuard` (trainer_ai.c:3286-3348, called at :3943): singles, the
+  player's `battleMons[].ability` Wonder Guard (no Mold Breaker test), no move of the AI's active
+  super effective through ApplyTypeChart; then each bench Pokemon's moves in party order through
+  CalcEffectiveness, and each super-effective one draws `RandNext() % 3 < 2` (43691 / 65536),
+  the first success switching to it: `SwitchSite.WONDER_GUARD` sites before the keep draws
+  (`outcome._SWITCH_*`: residues 0-1 of 3), mapped to the switch by `switch_action`. Wonder
+  Guard never clears the super-effective bit, so the keep draws and the passes' second calls
+  are unchanged; the passes' first call has the AI's bench Pokemon as the defender
+  (trainer_ai.c:3769-3777), where a bench Wonder Guard makes a non-super-effective moveHit
+  INEFFECTIVE (battle_lib.c:2734-2739) unless the player's active has Mold Breaker. The sites
+  stay within `KAIZO_SWITCH_SITES` (module docstring). `Expert_ChangeUserAbility`'s table
+  (script.s:4441) belongs to Role Play / Skill Swap, unsupported moves (refused with their
+  user).

@@ -143,11 +143,13 @@ TIEBREAK_MOD = 12
 _I8, _I32, _F32 = jnp.int8, jnp.int32, jnp.float32
 
 # RandNext() % m over a uniform u16 per SwitchSite (NONE, KEEP, PASS_INEFFECTIVE,
-# PASS_NOT_VERY_EFFECTIVE, REFUSED): (modulus, stops when the residue is 0) -> stop
-# probability, NaN for REFUSED. 65536 = 10 * 6553 + 6 = 3 * 21845 + 1.
-_SWITCH_MOD = jnp.array([1, 10, 2, 3, 1], _I32)
-_SWITCH_STOPS_ON_ZERO = jnp.array([False, False, True, True, False])
-_SWITCH_P = jnp.array([0, 58982, 32768, 21846, jnp.nan], _F32) / 65536
+# PASS_NOT_VERY_EFFECTIVE, REFUSED, WONDER_GUARD): (modulus, the residues lo <= r < hi that
+# stop) -> stop probability, NaN for REFUSED. 65536 = 10 * 6553 + 6 = 3 * 21845 + 1, so the
+# residues 0 and 1 of 3 have 21846 and 21845 values (WONDER_GUARD's % 3 < 2: 43691).
+_SWITCH_MOD = jnp.array([1, 10, 2, 3, 1, 3], _I32)
+_SWITCH_LO = jnp.array([0, 1, 0, 0, 0, 0], _I32)
+_SWITCH_HI = jnp.array([0, 10, 1, 1, 0, 2], _I32)
+_SWITCH_P = jnp.array([0, 58982, 32768, 21846, jnp.nan, 43691], _F32) / 65536
 
 # IfRandomLessThan sites per move (decomp move id), transcribed from roark.md 5.2-5.3
 # and 8.3: the N of the move's EVAL_ATTACK site (EvalAttack_TryScorePlus2,
@@ -849,8 +851,8 @@ def _first_stop(draws, switch_sites) -> jnp.ndarray:
     """The first site whose u16 ``draws[i]`` stops the check, else the number of sites
     (``SWITCH_NONE`` for the flat layout); ``SWITCH_REFUSED`` for a refused layout."""
     kind = jnp.asarray(switch_sites, _I32)
-    zero = draws % _SWITCH_MOD[kind] == 0
-    stops = (kind != SwitchSite.NONE) & (zero == _SWITCH_STOPS_ON_ZERO[kind])
+    residue = draws % _SWITCH_MOD[kind]
+    stops = (residue >= _SWITCH_LO[kind]) & (residue < _SWITCH_HI[kind])
     first = jnp.where(jnp.any(stops), jnp.argmax(stops), kind.shape[0])
     return jnp.where(jnp.any(kind == SwitchSite.REFUSED), SWITCH_REFUSED, first)
 

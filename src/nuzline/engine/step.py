@@ -102,6 +102,7 @@ from nuzline.engine.damage import (
     levitated,
     move_type_of,
     weather_suppressed,
+    wonder_guarded,
 )
 from nuzline.engine.damage import (
     SPECIAL as SPECIAL_CATEGORY,
@@ -152,6 +153,7 @@ from nuzline.engine.effects import (
 )
 from nuzline.engine.hooks import (
     ABSORB,
+    DAMAGE_AVOIDED,
     OHKO_BLOCKED,
     STATUS_CURE,
     STATUS_HP,
@@ -1200,6 +1202,29 @@ def _use_move(
     chart = effectiveness(
         tables, move_type, state.types[target_side, target], identified(state, side, target_side)
     )
+    # TRY_MOVE_STATE_CHECK_TYPE_CHART (bcp.c:2350-2370, run hit, miss or Protect alike once the
+    # move passed the no-target check, for a move with power that is not RANGE_USER /
+    # RANGE_USER_SIDE and not under SYSCTL_IGNORE_IMMUNITIES): Wonder Guard's
+    # MOVE_STATUS_WONDER_GUARD (damage.wonder_guarded, ruling G-18). ``guard_tested``: the chart
+    # ran; ``guarded``: on a move that connected, the hits deal nothing (damage_for_roll) and the
+    # move ends in subscript_missed.s (bcp.c:3324-3327): no AfterMoveEffects (``items_full``),
+    # Jump Kick crashes (below). It is not MOVE_STATUS_INEFFECTIVE: no noEffect (below).
+    guard_tested = (
+        can_act
+        & has_target
+        & ~(invoker & call_failed)
+        & ~targets_user(tables, used, ghost_user(state, side))
+        & (tables.move_effect[used] != EffectId.FUTURE_SIGHT)  # SYSCTL_IGNORE_IMMUNITIES
+        & wonder_guarded(tables, state, side, used, move_type)
+    )
+    guarded = connected & guard_tested
+    # subscript_missed.s:107-110 "{0} avoided damage by using {1}!" (TAG_NICKNAME_ABILITY,
+    # BTLSCR_DEFENDER: BattleAI_SetAbility, battle_script.c:11798-11806) unless a flag it tests
+    # first holds: lost focus (:5), protected (:18) or failed (:97) (``failed`` carries the
+    # first and the script failures); a miss reaches it (ruling G-20).
+    state = reveal_ability(
+        state, target_side, target, DAMAGE_AVOIDED, guard_tested & ~blocked & ~failed
+    )
     # Water Absorb (:3507-3512) is Dry Skin's test; Volt Absorb (:3500-3505) takes an Electric
     # move whatever its power (Thunder Wave too), attacker != defender (B9-6).
     seen = ignorable(state, side, target_side)
@@ -1231,10 +1256,15 @@ def _use_move(
     # the type chart of TRY_MOVE_STATE_CHECK_TYPE_CHART (run hit or miss, bcp.c:3271-3277: an
     # immune target gives 0, which loses nothing). An immune target that connected deals 0
     # damage and crashes for 0 too.
-    crash = can_act & has_target & ~connected & (tables.move_effect[used] == EffectId.CRASH)
+    # A Wonder Guard block ends there too (MOVE_STATUS_WONDER_GUARD), with battleCtx->damage as
+    # ApplyTypeChart leaves it: the chart applied, not zeroed (ruling G-19).
+    crash = can_act & has_target & (~connected | guarded)
+    crash = crash & (tables.move_effect[used] == EffectId.CRASH)
     crash = crash & (state.ability[side, user] != AbilityId.MAGIC_GUARD)
     crash_crit = (outcome.crit[side, 0] != 0) & ~armored(state, side, target_side)
-    would = damage_for_roll(tables, state, side, used, crash_crit, outcome.roll[side, 0])
+    would = damage_for_roll(
+        tables, state, side, used, crash_crit, outcome.roll[side, 0], wonder_guard=False
+    )
     cap = divide(state.max_hp[target_side, target].astype(_I32), 2)
     crash_loss = jnp.where(would > 0, jnp.minimum(divide(would, 2), cap), 0)
     user_hp_now = state.hp[side, user].astype(_I32)
@@ -1306,7 +1336,7 @@ def _use_move(
     rock = resumed & (state_in.ts_damaged != 0) & (outcome.flinch_item[side, 0] != 0)
     state = kings_rock_flinch(tables, state, side, target_side, used_t, rock & ~target_moved)
     items_full = connected & ~no_more_work & ~protect_failed & ~roar_failed & ~weather_failed
-    items_full = items_full & ~baton_failed
+    items_full = items_full & ~baton_failed & ~guarded
     # AFTER_MOVE_EFFECT_SYNCHRONIZE_STATUS (bcp.c:3665-3670) comes before the switch-in effects
     # (:3672): a Roar's AfterMoveEffects, or the resumed tail's. The Synchronize flag is the
     # newcomer's Toxic Spikes poison (the U-turn subscript cleared it before the list,
@@ -1935,6 +1965,13 @@ def _pursuit_hit(
     state = _set_last_move(state, pursuer, move, True)
     state = _set_choice_lock(state, pursuer, move, _holds_choice(tables, state, pursuer))
     before_hp = state.hp[1 - pursuer, state.active[1 - pursuer]]
+    # subscript_pursuit.s:11 ApplyTypeEffectiveness: a Wonder Guard block
+    # (MOVE_STATUS_WONDER_GUARD, damage.wonder_guarded) goes to subscript_missed.s (:17, :154), whose :107-110 tags the
+    # switcher's ability (ruling G-20); the hit then deals nothing (play_hit).
+    guarded = wonder_guarded(
+        tables, state, pursuer, move, move_type_of(tables, state, pursuer, move)
+    )
+    state = reveal_ability(state, switcher, state.active[switcher], DAMAGE_AVOIDED, guarded)
     state, info = play_hit(
         tables,
         state,

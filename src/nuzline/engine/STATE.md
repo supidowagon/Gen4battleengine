@@ -138,7 +138,12 @@ three structs has a row.
   mechanics only Trace gains an ability mid-battle, a battler that traced no longer has
   Trace (so `ability == TRACE` is the unannounced state), and `hooks.on_switch_in` runs the
   weather ability of the newcomer and of a battler that just traced; Skill Swap and Role
-  Play, which would need the flags, are unsupported. `MoveEffectsData.truant` is
+  Play, which would need the flags, are unsupported. `downloadAnnounced` (E1 Gardenia batch,
+  ruling G-21) likewise stays without a field: `hooks.download` runs for the newcomer and for
+  a battler that just traced Download, the only times the flag is clear, and the one
+  newcomer that meets no living foe (the player's at a double KO) has it fired by
+  `search.playout.replacement_pass` once the opposing newcomer is in (G-22); the row stays
+  `later (M6)` for Skill Swap and Role Play. `MoveEffectsData.truant` is
   `(totalTurns + 1) & 1` at the same writes as `fakeOutTurnNumber` (battle_lib.c:2117-2119,
   :2195-2197; 0 for a lead), so it is `fake_out_turn`'s parity (`order.truant_loafs`).
 - **moveProtect -> `protect_count`** (K3b2 Task 6; docs/kaizo/k3b2-rules.md §2(a),

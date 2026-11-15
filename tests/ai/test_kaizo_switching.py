@@ -69,6 +69,10 @@ P_KEEP = np.count_nonzero(_U16 % 10 != 0) / 65536  # :3588, keep (stop: no switc
 P_PASS_1 = np.count_nonzero(_U16 % 2 == 0) / 65536  # :3796 with rand 2 (:3975)
 P_PASS_2 = np.count_nonzero(_U16 % 3 == 0) / 65536  # :3796 with rand 3 (:3981)
 P_ABSORB = np.count_nonzero(_U16 % 3 != 0) / 65536  # :3651
+P_GUARD = np.count_nonzero(_U16 % 3 < 2) / 65536  # :3338, AI_CannotDamageWonderGuard (G-23)
+# MoveIsOnDamagingTurn's listed battle effects (battle_lib.c:7588-7604); none is on its damaging
+# turn at the AI's reads (SYSCTL_LAST_OF_MULTI_TURN cleared by BattleContext_Init).
+_MULTI_TURN = (26, 39, 75, 145, 151, 155, 255, 256, 263, 273)
 
 _SETTINGS = settings(
     deadline=None,
@@ -249,9 +253,9 @@ def _loose_reads(t, s: BattleState) -> list[tuple[float, int]]:
     bench = [j for j in range(SLOTS) if j != a and species[1, j] > 0 and hp[1, j] > 0]
     if not bench:
         return reads
-    # :3941-3959. Perish Song, Wonder Guard, AI_OnlyIneffectiveMoves, the absorbing abilities
-    # on the bench and Natural Cure are refused (the caller assumes no refusal), so these
-    # return FALSE; AI_HasAbsorbAbilityInParty still reads RandNext() % 3 (:3651) when the
+    # :3941-3959. Perish Song, AI_OnlyIneffectiveMoves, the absorbing abilities on the bench and
+    # Natural Cure are refused (the caller assumes no refusal), so these return FALSE (Wonder
+    # Guard's check is below); AI_HasAbsorbAbilityInParty still reads RandNext() % 3 (:3651) when the
     # active has a super-effective move (flag TRUE: no draw inside, :3586-3587).
     a_moves = [int(m) for m in np.asarray(s.moves[1, a])]
     identified = int(s.foresight[0]) != 0
@@ -261,6 +265,15 @@ def _loose_reads(t, s: BattleState) -> list[tuple[float, int]]:
             m != 0 and int(type_chart_flags(t, m, d_types, gravity, identified)) & SUPER_EFFECTIVE
         )
 
+    # :3943, AI_CannotDamageWonderGuard (:3286-3348): the player's battleMons[].ability (:3298)
+    # is Wonder Guard and no move of the active is super effective (ApplyTypeChart, :3306); then
+    # each bench Pokemon's super-effective moves (CalcEffectiveness, :3328) in party order draw
+    # RandNext() % 3 < 2 (:3338), a success switching to it.
+    if int(ability[0, d]) == ABILITY_IDS["Wonder Guard"] and not any(keep_se(m) for m in a_moves):
+        for j in bench:
+            for m in (int(x) for x in np.asarray(s.moves[1, j])):
+                if m and int(calc_effectiveness_flags(t, m, d_types, gravity)) & SUPER_EFFECTIVE:
+                    reads.append((P_GUARD, MOVE_ACTIONS + j))
     if any(keep_se(m) for m in a_moves):
         # :3651: % 3 != 0 returns FALSE (:3652); otherwise :3656-3713 return FALSE as well, with
         # no absorbing bench ability. Either way the check goes on: "stop" here is never one.
@@ -280,6 +293,15 @@ def _loose_reads(t, s: BattleState) -> list[tuple[float, int]]:
     for mask, p in ((INEFFECTIVE, P_PASS_1), (NOT_VERY_EFFECTIVE, P_PASS_2)):
         for j in bench:
             eff = int(calc_effectiveness_flags(t, hit, s.types[1, j], gravity, hit_type))
+            # CalcEffectiveness (battle_lib.c:2734-2739): the bench Pokemon's Wonder Guard
+            # (MON_DATA_ABILITY) against a hitter (moveHitBattler) without Mold Breaker.
+            if (
+                int(ability[1, j]) == ABILITY_IDS["Wonder Guard"]
+                and int(ability[0, d]) != ABILITY_IDS["Mold Breaker"]
+                and int(t.move_ai_effect[hit]) not in _MULTI_TURN
+                and not eff & SUPER_EFFECTIVE
+            ):
+                eff |= INEFFECTIVE
             if not eff & mask:
                 continue
             for m in (int(x) for x in np.asarray(s.moves[1, j])):
@@ -335,7 +357,17 @@ def _switch_states(draw, t, n, party):
             b1, b2 = draw(pair)
             s = s._replace(types=s.types.at[1, j].set(_types(n, b1, b2)))
     hits = ("Earthquake", "Tackle", "Ember", "Water Gun", "Wing Attack", "Karate Chop",
-            "ThunderShock", "Psybeam", "Bite", "Shadow Ball", "Leer")  # fmt: skip
+            "ThunderShock", "Psybeam", "Bite", "Shadow Ball", "Leer", "Fire Fang")  # fmt: skip
+    # G-23: Shedinja (Wonder Guard) as the player's active or on the AI's bench (its types stay
+    # the drawn ones: only its ability matters here).
+    shedinja = n.species("Shedinja")
+    if draw(st.integers(0, 3)) == 0:
+        s = s._replace(species=s.species.at[0, 0].set(shedinja))
+        s = s._replace(ability_slot=s.ability_slot.at[0, 0].set(0), form=s.form.at[0, 0].set(0))
+    if draw(st.integers(0, 3)) == 0:
+        j = draw(st.sampled_from(bench))
+        s = s._replace(species=s.species.at[1, j].set(shedinja))
+        s = s._replace(ability_slot=s.ability_slot.at[1, j].set(0), form=s.form.at[1, j].set(0))
     return s._replace(
         hp=hp,
         move_hit=s.move_hit.at[1].set(n.move(draw(st.sampled_from(hits)))),
@@ -404,6 +436,23 @@ def test_small_six_bench_layouts_match_loose(
     t, n = kaizo_tables, kaizo_names
     s = _small_six_bench(t, n, kaizo_roark_party, alive, moves)
     assert len(_loose_reads(t, s)) == reads
+    assert policy.ai_refusals(t, s, n) == []
+    _assert_switch_equals_loose(t, s)
+
+
+@pytest.mark.parametrize("alive", [1, 2])
+def test_wonder_guard_layout_matches_loose(kaizo_tables, kaizo_names, kaizo_roark_party, alive):
+    """G-23: the player's active is Shedinja (Wonder Guard) and the AI's active knows only
+    Tackle: AI_CannotDamageWonderGuard draws once per super-effective bench move (four Rock
+    moves each), before the passes; exact against loose."""
+    t, n = kaizo_tables, kaizo_names
+    s = _small_six_bench(t, n, kaizo_roark_party, alive)
+    s = s._replace(species=s.species.at[0, 0].set(n.species("Shedinja")))
+    s = s._replace(ability_slot=s.ability_slot.at[0, 0].set(0), form=s.form.at[0, 0].set(0))
+    reads = _loose_reads(t, s)
+    assert [p for p, _ in reads[: 4 * alive]] == [P_GUARD] * (4 * alive)
+    sites = switch_sites(t, s, KAIZO.switch_sites).tolist()
+    assert sites[: 4 * alive] == [K.WONDER_GUARD] * (4 * alive)
     assert policy.ai_refusals(t, s, n) == []
     _assert_switch_equals_loose(t, s)
 
