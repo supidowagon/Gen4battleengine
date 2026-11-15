@@ -235,19 +235,21 @@ def test_confusion_self_hit_is_40_power_typeless_physical_with_the_roll(tables, 
 
 
 def test_end_of_turn_order_lists_the_implemented_checks_in_decomp_order():
-    # enum MonCondCheckState (battle_controller_player.c:1259-1284): AQUA_RING, then ABILITY,
-    # USE_ITEM before LEECH_SEED, DISABLE between BIND and TAUNT, ITEM_CONDITION after TAUNT.
+    # enum MonCondCheckState (battle_controller_player.c:1259-1284): INGRAIN and AQUA_RING (one
+    # faint check for the two heals), then ABILITY,
+    # USE_ITEM before LEECH_SEED, UPROAR and DISABLE (one faint check) between BIND and TAUNT,
+    # ITEM_CONDITION after TAUNT.
     assert [name for name, _ in END_OF_TURN_ORDER] == [
-        "aqua_ring",
+        "ingrain_aqua_ring",
         "ability",
         "use_item",
         "leech_seed",
         "poison",
         "toxic",
-        "burn",
+        "burn_curse",
         "bind",
-        "disable",
-        "taunt",
+        "uproar_disable",
+        "taunt_yawn",
         "item_condition",
     ]
 

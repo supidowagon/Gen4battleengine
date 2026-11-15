@@ -40,11 +40,28 @@ Encodings:
   love with the other side's active battler (in singles the only possible source,
   ``BtlCmd_TryAttract``, battle_script.c:5738). It is a volatile (cleared when the battler
   leaves) and is also cleared when its source leaves (``step._source_leaves``).
+* ``destiny_bond`` is the active battler's ``VOLATILE_CONDITION_DESTINY_BOND``
+  (subscript_destiny_bond.s:9): cleared when its next move attempt starts
+  (``CHECK_STATUS_START``, bcp.c:2425) and with the other volatiles (``step._VOLATILE``).
+* ``uproar`` is the active battler's ``VOLATILE_CONDITION_UPROAR`` count (subscript_uproar.s:
+  ``Random 3, 3``, 3-6; condition.h:66, :81), decremented by the end-of-turn check
+  (``step._uproar_check``, bcp.c:1505-1541) and cleared with the other volatiles. The battler's
+  ``FIELD_CONDITION_UPROAR`` bit (condition.h:118, :147) is set and cleared with it
+  (subscript_uproar.s:9-11, bcp.c:1527-1534, battle_lib.c:2135, :2213), so it is
+  ``uproar != 0``. While it is up, ``locked_move`` holds the move (``moveLockedInto``,
+  subscript_uproar.s:5): ``Battler_CanPickCommand`` is FALSE (battle_lib.c:6224-6235).
+* Future Sight / Doom Desire (E2 batch 5): ``future_timer``, ``future_damage``, ``future_move``
+  and ``future_attacker`` are ``FieldConditions.futureSight*[battler]`` of the battler the move
+  aims at (battle_script.c:6070-6090): the turns left, the HP the hit will take (the decomp keeps
+  it negative, ``* -1``), the move and the attacker's battler as ``1 + battler`` (convention 3),
+  0 when none; they stay when the battler leaves (field state). ``future_sight`` is the side's
+  ``SIDE_CONDITION_FUTURE_SIGHT`` bit: set with them, cleared only when the hit fires on a
+  battler with HP (bcp.c:1767-1770), so it can outlive the timer (the AI reads it).
 * ``curse``, ``perish_song``/``perish_song_turns``, ``yawn`` and ``lock_on``/
-  ``lock_on_target`` are the active battler's decomp state, defined now so the trainer AI
-  reads them (``Expert_Protect``, script.s:3544-3586); nothing sets them yet (the moves are
-  refused by coverage until E2 models Curse, Perish Song, Yawn and Lock-On / Mind Reader on
-  these fields). ``curse`` is ``VOLATILE_CONDITION_CURSE`` (condition.h:60), 0/1;
+  ``lock_on_target`` are the active battler's decomp state, which the trainer AI reads
+  (``Expert_Protect``, script.s:3544-3586) and E2 batch 8 sets with Curse by a Ghost user,
+  Perish Song, Yawn and Lock-On / Mind Reader (rulings B8-1..B8-5); all are volatiles, Baton
+  Pass keeping ``curse``, the Perish Song pair and the Lock-On pair. ``curse`` is ``VOLATILE_CONDITION_CURSE`` (condition.h:60), 0/1;
   ``perish_song`` is ``MOVE_EFFECT_PERISH_SONG`` (moves.h:13), 0/1, and
   ``perish_song_turns`` is ``MoveEffectsData.perishSongTurns`` (battle_mon.h:14), the
   counter that is still live at 0 (the battler faints at the turn end that finds it 0,
@@ -55,6 +72,43 @@ Encodings:
   battler's ``MoveEffectsData.lockOnTarget`` (battle_mon.h:23), the battler that locked on,
   stored as ``1 + battler``, 0 = none
   (doubles convention 3, docs/doubles-state-design.md section 5).
+* ``ai_item_known`` is ``aiContext.battlerHeldItems`` of the player's party slot: the held item
+  a battle message named (``BattleAI_SetHeldItem``, battle_script.c:11726-11745, :12119-12122;
+  ``effects.reveal_item``), 0 when none. It is cleared when the Pokemon loses its item (every
+  removal runs ``BattleMon_CopyToParty``, battle_lib.c:1819-1823; ``effects.forget_item``) and
+  when it enters (``BattleSystem_UpdateAfterSwitch``, :2153; ``step._forget``). The AI reads it
+  for the other side's battlers only (trainer_ai.c:1901-1934), so the opponent's is not kept.
+* E2 batch 7, the state the trainer AI reads (rulings B7-n). ``ingrain`` is the active battler's
+  ``MOVE_EFFECT_INGRAIN`` (moves.h:18), 0/1. ``mean_look`` is its ``VOLATILE_CONDITION_MEAN_LOOK``
+  (condition.h:58), 0/1, and ``mean_look_target`` its ``MoveEffectsData.meanLookTarget``
+  (battle_mon.h:26) as ``1 + raw`` (0 for a zeroed field): subscript_mean_look.s:10 ORs the
+  attacker's battler into it and nothing clears it but the trapped battler's own switch-in or faint
+  (its moveEffectsData zeroed; Baton Pass keeps it, battle_lib.c:2111), so a stale value outlives
+  the Mean Look and enters the next OR (B7-15); the leave tests read it with the bit
+  (:2058-2059). ``mean_look`` ends when the trapper leaves by a switch that is not a Baton Pass
+  (battle_lib.c:2055-2061) or faints (:2168-2173).
+  ``imprison`` is ``MOVE_EFFECT_IMPRISON`` (moves.h:21) on Imprison's user, ``imprisoned``
+  ``MOVE_EFFECT_IMPRISONED`` (:38) on its foes, set whenever the user's Imprison script runs,
+  success or not (battle_script.c:6686-6690), and only cleared when that battler leaves. All five
+  are volatiles; Baton Pass keeps ``ingrain``, ``mean_look`` and ``mean_look_target``.
+  ``roosting`` is ``turnFlags.roosting`` (battle_context.h:64): a Roost that healed sets it for the
+  rest of the turn (subscript_roost.s:11-12); a faint clears it (battle_lib.c:2189-2192) and so
+  does ``BattleSystem_SetupNextTurn`` (:2229-2231), which runs after the faint replacements
+  (bcp.c:1843-1856). It is kept where it can still be read: at a pause at a party list and while
+  a replacement is pending (the AI's ``BattleAI_PostKOSwitchIn`` walks the type chart, whose
+  ``BasicTypeMulApplies`` reads it, battle_lib.c:2540); else 0.
+* ``can_unburden`` is the active battler's ``MoveEffectsData.canUnburden`` (battle_mon.h:31,
+  E2 batch 9): ``BattleSystem_RecoverStatusByAbility`` sets it for an Unburden holder
+  (``Battler_Ability``) holding an item (battle_lib.c:4433-4437), at every move end for the
+  attacker and the defender (bcp.c:3965-3967) and in the switch-in checks for every battler
+  (battle_lib.c:4135-4145); ``BattleSystem_InitBattleMon`` sets it for any holder of an item
+  (:160-166), which matters only at the battle start (a switch's UpdateAfterSwitch zeroes the
+  whole MoveEffectsData after it, :2097-2101, Baton Pass included), where the switch-in check
+  sets it for the Unburden holders it can concern. Nothing clears it but a switch (a volatile).
+  ``order.effective_speed`` doubles an Unburden holder with it and no item (:1268-1272).
+* ``minimized`` is the active battler's ``MOVE_EFFECT_MINIMIZE`` (moves.h:16; E2 batch 9): set by
+  Minimize (subscript_minimize.s:5), read by Stomp (effect_script_0150.s:7); a volatile Baton Pass
+  does not keep (moves.h:46-48).
 * ``trainer_item_count`` is ``aiContext.trainerItemCounts``: the bag's size at battle
   start, never decremented.
 * ``terrain`` is ``BattleSystem.terrain``: the battle terrain, a decomp ``TERRAIN_*`` id
@@ -80,6 +134,17 @@ Encodings:
   send-out (``step._switch_in``). ``learn_level`` / ``learn_cursor`` (the pending learnset
   scan), ``learn_pin`` and ``exp_refused`` are 0 until the payout and the learn resolve set
   them (later K3d-exp tasks).
+* The mid-turn switch decision (E2 batch 6, U-turn and Baton Pass; docs/kaizo/
+  e2-mechanics-ledger.md "Batch 6 design"): a turn can pause at the party list of
+  subscript_attack_then_switch_out.s:71 / subscript_baton_pass.s:17, inside one action.
+  ``pivot_battler`` is ``1 + battler`` of the battler owing the pick (one at a time: each list is
+  inside one action and its flag clears at the switch, battle_script.c:2511, or the faint,
+  battle_lib.c:2222), else 0. While it is set, the ``ts_*`` fields hold the turn's scratch
+  (``BattleContext``: the order and its counter, the picks of command selection, the turn flags
+  later actors read, the paused action's own inputs, and the search's ``powerMul`` reads), which
+  ``step`` resumes from (``step.step``'s docstring); otherwise every ``ts_*`` is 0, so states
+  between turns merge. ``qc_roll`` is 0 at a pause: the order read it, and the next read is the
+  next turn's, from the resumed half's draw.
 """
 
 from __future__ import annotations
@@ -162,12 +227,22 @@ class BattleState(NamedTuple):
     mud_sport: jnp.ndarray  # int8, MOVE_EFFECT_MUD_SPORT in moveEffectsMask
     aqua_ring: jnp.ndarray  # int8, MOVE_EFFECT_AQUA_RING in moveEffectsMask
     infatuated: jnp.ndarray  # int8, VOLATILE_CONDITION_ATTRACT (source: the foe's active)
+    destiny_bond: jnp.ndarray  # int8, VOLATILE_CONDITION_DESTINY_BOND
+    uproar: jnp.ndarray  # int8, VOLATILE_CONDITION_UPROAR turns left (its FIELD_CONDITION bit)
     curse: jnp.ndarray  # int8, VOLATILE_CONDITION_CURSE
     perish_song: jnp.ndarray  # int8, MOVE_EFFECT_PERISH_SONG in moveEffectsMask
     perish_song_turns: jnp.ndarray  # int8, MoveEffectsData.perishSongTurns (live at 0)
     yawn: jnp.ndarray  # int8, MOVE_EFFECT_YAWN counter in moveEffectsMask, 0 = none
     lock_on: jnp.ndarray  # int8, MOVE_EFFECT_LOCK_ON counter in moveEffectsMask, 0 = none
     lock_on_target: jnp.ndarray  # int8, MoveEffectsData.lockOnTarget as 1 + battler, 0 = none
+    ingrain: jnp.ndarray  # int8, MOVE_EFFECT_INGRAIN in moveEffectsMask
+    mean_look: jnp.ndarray  # int8, VOLATILE_CONDITION_MEAN_LOOK
+    mean_look_target: jnp.ndarray  # int8, MoveEffectsData.meanLookTarget as 1 + battler, 0 = none
+    imprison: jnp.ndarray  # int8, MOVE_EFFECT_IMPRISON (the user of Imprison)
+    imprisoned: jnp.ndarray  # int8, MOVE_EFFECT_IMPRISONED (a foe of an Imprison user)
+    roosting: jnp.ndarray  # int8, turnFlags.roosting, kept only while it can be read
+    can_unburden: jnp.ndarray  # int8, MoveEffectsData.canUnburden
+    minimized: jnp.ndarray  # int8, MOVE_EFFECT_MINIMIZE in moveEffectsMask
     # per side [2]
     spikes: jnp.ndarray  # int8, layers
     toxic_spikes: jnp.ndarray  # int8, layers
@@ -180,8 +255,11 @@ class BattleState(NamedTuple):
     tailwind: jnp.ndarray  # int8
     wish_timer: jnp.ndarray  # int8
     wish_hp: jnp.ndarray  # int16
-    future_timer: jnp.ndarray  # int8
-    future_damage: jnp.ndarray  # int16
+    future_timer: jnp.ndarray  # int8, futureSightTurns (per battler)
+    future_damage: jnp.ndarray  # int16, -futureSightDamage: the HP the hit takes (per battler)
+    future_move: jnp.ndarray  # int16, futureSightMove (per battler)
+    future_attacker: jnp.ndarray  # int8, 1 + futureSightAttacker (per battler), 0 = none
+    future_sight: jnp.ndarray  # int8, SIDE_CONDITION_FUTURE_SIGHT (per side)
     trainer_items: jnp.ndarray  # int16[2,4], bag item ids (aiContext.trainerItems)
     trainer_item_count: jnp.ndarray  # int8, bag size at battle start (trainerItemCounts)
     qc_roll: jnp.ndarray  # int8, speedRand % 5 == 0 (Quick Claw), hidden, see the docstring
@@ -190,6 +268,7 @@ class BattleState(NamedTuple):
     weather_timer: jnp.ndarray  # int8, 0 = permanent
     trick_room: jnp.ndarray  # int8
     gravity: jnp.ndarray  # int8
+    move_prev: jnp.ndarray  # int16, BattleContext.movePrev: the last move used in the battle
     terrain: jnp.ndarray  # int8, decomp TERRAIN_* id, -1 unknown (constant per battle)
     turn: jnp.ndarray  # int16
     over: jnp.ndarray  # int8
@@ -197,6 +276,7 @@ class BattleState(NamedTuple):
     player_faints: jnp.ndarray  # int8
     # AI knowledge of the player
     ai_seen_moves: jnp.ndarray  # int8[6,4], player slot x move slot
+    ai_item_known: jnp.ndarray  # int16[6], battlerHeldItems: the item id a message named, 0 none
     ai_ability_known: jnp.ndarray  # int8[6]
     # experience (K3d-exp, design §2.1; see the module docstring)
     exp: jnp.ndarray  # int32[6], player party MON_DATA_EXPERIENCE
@@ -215,6 +295,29 @@ class BattleState(NamedTuple):
     faint_budget: jnp.ndarray  # int8, k: the deaths the search allows
     protected: jnp.ndarray  # int8[6], 1 where the player's slot must not faint
     replace_mul: jnp.ndarray  # int8, the turn's powerMul while a player replacement is pending
+    # E2 batch 6: the mid-turn switch decision (U-turn, Baton Pass; see the docstring).
+    pivot_battler: jnp.ndarray  # int8, 1 + the battler owing the party pick, 0 = none
+    ts_cursor: jnp.ndarray  # int8, turnOrderCounter: the paused action's position
+    ts_acted: jnp.ndarray  # int8[2], the battler's action is over (Battler_MovedThisTurn)
+    ts_order: jnp.ndarray  # int8[2], battlerActionOrder
+    ts_actions: jnp.ndarray  # int8[2], the turn's actions as chosen
+    ts_move: jnp.ndarray  # int16[2], each side's move fixed at selection (selected_move)
+    ts_struggling: jnp.ndarray  # int8[2]
+    ts_locked: jnp.ndarray  # int8[2], locked at selection (no PP)
+    ts_item: jnp.ndarray  # int16[2], the bag item picked
+    ts_custap: jnp.ndarray  # int8[2], moveEffectsData.custapBerry from the turn order
+    ts_pursued: jnp.ndarray  # int8, 1 + the battler whose action a Pursuit ended, 0 = none
+    ts_protect_ok: jnp.ndarray  # int8[2], turnFlags.protecting
+    ts_taken: jnp.ndarray  # int16[2,6], turnFlags damage taken and attackers (step._use_move)
+    ts_dragged: jnp.ndarray  # int8[2], 1 + the slot a Roar dragged in this turn
+    ts_move_failed: jnp.ndarray  # int8[2], moveFailFlags (the turn end's Uproar check)
+    ts_used: jnp.ndarray  # int16, the paused action's moveCur
+    ts_damaged: jnp.ndarray  # int8, its defender's physical / specialDamageTaken != 0
+    ts_dealt: jnp.ndarray  # int16, its hit's HP drop (the thaw)
+    ts_alive: jnp.ndarray  # int8[2], per side the party bitmask of HP > 0 at the last faint check
+    ts_power_mul: jnp.ndarray  # int8, the search's turn powerMul (replacement_power_mul)
+    ts_switched: jnp.ndarray  # int8[2], the battler chose a switch this turn
+    ts_pick_mul: jnp.ndarray  # int8, powerMul at the party list (20 after U-turn's Pursuit)
 
     def replace_hp(self, side: int, slot: int, hp: int) -> BattleState:
         return self._replace(hp=self.hp.at[side, slot].set(hp))
@@ -264,6 +367,80 @@ def protected_mask(species, hp, k: int, protected: Sequence[int]) -> np.ndarray:
             raise ValueError(f"protected slot {slot} has already fainted")
         mask[slot] = 1
     return mask
+
+
+# Per-side fields of the active Pokemon that leave with it: the incoming battler is
+# rebuilt from its party mon by ``BattleSystem_InitBattleMon`` (battle_lib.c:70), stat
+# stages reset to neutral (:97-101; a Baton Pass keeps them and ``BATON_PASSED_FIELDS``). Hazards and screens are per side
+# and stay. ``move_hit`` is cleared by ``BattleSystem_UpdateAfterSwitch`` (battle_lib.c:
+# 2121) and ``BattleSystem_CleanupFaintedMon`` (:2199); ``fake_out_turn`` is set there
+# instead (``step._entered``).
+VOLATILE_FIELDS = (
+    "confusion",
+    "leech_seed",
+    "substitute_hp",
+    "taunt",
+    "trapped",
+    "trap_move",
+    "flinched",
+    "choice_lock",
+    "last_move",
+    "protect_count",
+    "rollout_count",
+    "charge_turn",
+    "recharge",
+    "pursuit_target",
+    "water_sport",
+    "move_hit",
+    "foresight",
+    "disabled_move",
+    "disable_turns",
+    "locked_move",
+    "bide_turns",
+    "bide_damage",
+    "curled",
+    "mud_sport",
+    "aqua_ring",
+    "infatuated",
+    "destiny_bond",
+    "uproar",
+    "ingrain",
+    "mean_look",
+    "mean_look_target",
+    "imprison",
+    "imprisoned",
+    "lock_on",
+    "lock_on_target",
+    "perish_song",
+    "perish_song_turns",
+    "yawn",
+    "curse",
+    "can_unburden",
+    "minimized",
+)
+# Baton Pass keeps these of ``VOLATILE_FIELDS`` (and the stat stages): BattleSystem_UpdateAfterSwitch
+# keeps statusVolatile & VOLATILE_CONDITION_BATON_PASSED (battle_lib.c:2078; condition.h:72-76:
+# confusion, Mean Look; Focus Energy, Curse and Substitute's bit come from unsupported moves),
+# moveEffectsMask & MOVE_EFFECT_BATON_PASSED (:2079; moves.h:46-48: the Leech Seed recipient, Mud
+# and Water Sport, Aqua Ring, Ingrain; the rest from unsupported moves), the substitute HP and the
+# meanLookTarget (:2107, :2111); BattleSystem_InitBattleMon keeps the stat stages (:97-101).
+# Rulings B6-3, B7-n.
+BATON_PASSED_FIELDS = (
+    "confusion",
+    "leech_seed",
+    "substitute_hp",
+    "water_sport",
+    "mud_sport",
+    "aqua_ring",
+    "ingrain",
+    "mean_look",
+    "mean_look_target",
+    "lock_on",
+    "lock_on_target",
+    "perish_song",
+    "perish_song_turns",
+    "curse",
+)
 
 
 # Shape and storage dtype of every field, in BattleState order.
@@ -316,12 +493,22 @@ LAYOUT: dict[str, tuple[tuple[int, ...], type]] = {
     "mud_sport": (_SIDE, np.int8),
     "aqua_ring": (_SIDE, np.int8),
     "infatuated": (_SIDE, np.int8),
+    "destiny_bond": (_SIDE, np.int8),
+    "uproar": (_SIDE, np.int8),
     "curse": (_SIDE, np.int8),
     "perish_song": (_SIDE, np.int8),
     "perish_song_turns": (_SIDE, np.int8),
     "yawn": (_SIDE, np.int8),
     "lock_on": (_SIDE, np.int8),
     "lock_on_target": (_SIDE, np.int8),
+    "ingrain": (_SIDE, np.int8),
+    "mean_look": (_SIDE, np.int8),
+    "mean_look_target": (_SIDE, np.int8),
+    "imprison": (_SIDE, np.int8),
+    "imprisoned": (_SIDE, np.int8),
+    "roosting": (_SIDE, np.int8),
+    "can_unburden": (_SIDE, np.int8),
+    "minimized": (_SIDE, np.int8),
     "spikes": (_SIDE, np.int8),
     "toxic_spikes": (_SIDE, np.int8),
     "stealth_rock": (_SIDE, np.int8),
@@ -335,6 +522,9 @@ LAYOUT: dict[str, tuple[tuple[int, ...], type]] = {
     "wish_hp": (_SIDE, np.int16),
     "future_timer": (_SIDE, np.int8),
     "future_damage": (_SIDE, np.int16),
+    "future_move": (_SIDE, np.int16),
+    "future_attacker": (_SIDE, np.int8),
+    "future_sight": (_SIDE, np.int8),
     "trainer_items": ((SIDES, BAG_SLOTS), np.int16),
     "trainer_item_count": (_SIDE, np.int8),
     "qc_roll": (_SIDE, np.int8),
@@ -342,12 +532,14 @@ LAYOUT: dict[str, tuple[tuple[int, ...], type]] = {
     "weather_timer": (_FIELD, np.int8),
     "trick_room": (_FIELD, np.int8),
     "gravity": (_FIELD, np.int8),
+    "move_prev": (_FIELD, np.int16),
     "terrain": (_FIELD, np.int8),
     "turn": (_FIELD, np.int16),
     "over": (_FIELD, np.int8),
     "winner": (_FIELD, np.int8),
     "player_faints": (_FIELD, np.int8),
     "ai_seen_moves": ((SLOTS, MOVES), np.int8),
+    "ai_item_known": ((SLOTS,), np.int16),
     "ai_ability_known": ((SLOTS,), np.int8),
     "exp": ((SLOTS,), np.int32),
     "evs": ((*_SLOT, 6), np.int16),
@@ -364,7 +556,31 @@ LAYOUT: dict[str, tuple[tuple[int, ...], type]] = {
     "faint_budget": (_FIELD, np.int8),
     "protected": ((SLOTS,), np.int8),
     "replace_mul": (_FIELD, np.int8),
+    "pivot_battler": (_FIELD, np.int8),
+    "ts_cursor": (_FIELD, np.int8),
+    "ts_acted": (_SIDE, np.int8),
+    "ts_order": (_SIDE, np.int8),
+    "ts_actions": (_SIDE, np.int8),
+    "ts_move": (_SIDE, np.int16),
+    "ts_struggling": (_SIDE, np.int8),
+    "ts_locked": (_SIDE, np.int8),
+    "ts_item": (_SIDE, np.int16),
+    "ts_custap": (_SIDE, np.int8),
+    "ts_pursued": (_FIELD, np.int8),
+    "ts_protect_ok": (_SIDE, np.int8),
+    "ts_taken": ((SIDES, 6), np.int16),
+    "ts_dragged": (_SIDE, np.int8),
+    "ts_move_failed": (_SIDE, np.int8),
+    "ts_used": (_FIELD, np.int16),
+    "ts_damaged": (_FIELD, np.int8),
+    "ts_dealt": (_FIELD, np.int16),
+    "ts_alive": (_SIDE, np.int8),
+    "ts_power_mul": (_FIELD, np.int8),
+    "ts_switched": (_SIDE, np.int8),
+    "ts_pick_mul": (_FIELD, np.int8),
 }
+# The turn scratch (``ts_*``, design rev. 2 section 1): 0 everywhere unless ``pivot_battler``.
+TURN_SCRATCH = tuple(name for name in LAYOUT if name.startswith("ts_"))
 if tuple(LAYOUT) != BattleState._fields:
     raise RuntimeError("LAYOUT must list every BattleState field, in order")
 
@@ -454,13 +670,13 @@ def initial_arrays(
     terrain: int = TERRAIN_UNKNOWN,
 ) -> dict[str, np.ndarray]:
     """Every ``LAYOUT`` field of the turn-0 state, before the switch-in hooks, as numpy
-    (``make_state`` is this plus the two ``on_switch_in`` calls): stats via ``calc_stats``, empty slots all zero
+    (``make_state`` is this plus ``hooks.battle_start``): stats via ``calc_stats``, empty slots all zero
     (``species = 0, hp = 0``), the leads in party slots ``leads`` (player, opponent),
     no volatiles, hazards or screens, and
     ``weather = start_condition`` with a permanent timer (0), and ``terrain`` (a decomp
     ``TERRAIN_*`` id, ``Trainer.terrain``; ``TERRAIN_UNKNOWN`` by default). The leads'
-    switch-in effects then run (``hooks.on_switch_in``, player first; the decomp's
-    ``monSpeedOrder`` gives the same result in singles, see ``hooks``).
+    switch-in effects then run (``hooks.battle_start``: each switch-in state over both
+    leads, as ``BattleSystem_TriggerEffectOnSwitch`` runs them).
 
     ``opp_items`` is the trainer's bag (``Trainer.items``, decomp item ids). As
     ``BattleControllerPlayer_InitAI`` (battle_controller_player.c:4796) does, its
@@ -510,12 +726,9 @@ def make_state(
     terrain: int = TERRAIN_UNKNOWN,
 ) -> BattleState:
     """Build the turn-0 state (``initial_arrays``), then run the leads' switch-in
-    effects (``hooks.on_switch_in``, player first; the decomp's ``monSpeedOrder`` gives
-    the same result in singles, see ``hooks``)."""
-    from nuzline.engine.hooks import on_switch_in  # hooks imports this module
+    effects (``hooks.battle_start``)."""
+    from nuzline.engine.hooks import battle_start  # hooks imports this module
 
     a = initial_arrays(tables, player, opp, start_condition, opp_items, leads, terrain)
     state = BattleState(**{name: jnp.asarray(a[name]) for name in BattleState._fields})
-    for side in (0, 1):
-        state = on_switch_in(tables, state, side)
-    return state
+    return battle_start(tables, state)

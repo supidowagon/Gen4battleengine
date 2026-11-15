@@ -32,6 +32,9 @@ from nuzline.engine.coverage import (
     rom_change_line,
     rom_change_refusals,
     terrain_refusal,
+    trace_copy_line,
+    trace_standoff_line,
+    weather_war_line,
 )
 from nuzline.engine.ids import AbilityId, ItemId
 from nuzline.prep.leveling import candies_to_cap, level_to_cap
@@ -167,6 +170,14 @@ def check_pool(
         c.add(support, f"{cand.label}: {ability_name}", "ability")
         if (low := halved_by_line(tables, names, spec, foe_halving)) is not None:
             c.add(Support.NONE, f"{cand.label}: {low}", "opponent move effect")
+        # The party-pair refusals, per candidate against the trainer's party (B3-20, B3-21).
+        for line, kind in (
+            (weather_war_line(tables, [spec], opp), "ability"),
+            (trace_standoff_line(tables, [spec], opp), "ability"),
+            (trace_copy_line(tables, names, trainer, spec, opp), "trainer AI"),
+        ):
+            if line is not None:
+                c.add(Support.NONE, f"{cand.label}: {line}", kind)
         if support != Support.NONE and (
             reason := player_ability_refusal(int(decomp_abilities[row][slot]))
         ):

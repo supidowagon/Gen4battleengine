@@ -110,8 +110,15 @@ def test_keep_draw_then_both_passes(tables, names):
 def test_gates(tables, names):
     s = _trace_f(tables, names)
     none = [K.NONE] * SWITCH_SITES
-    # Step 1: trapped.
+    # Step 1: trapped (:3906 VOLATILE_CONDITION_TRAPPED: Bind and Mean Look / Block / Spider Web)
+    # or ingrained (:3907); an untrapped opponent's check still fires.
     assert switch_sites(tables, s._replace(trapped=s.trapped.at[1].set(2))).tolist() == none
+    assert switch_sites(tables, s._replace(mean_look=s.mean_look.at[1].set(1))).tolist() == none
+    assert switch_sites(tables, s._replace(ingrain=s.ingrain.at[1].set(1))).tolist() == none
+    assert switch_sites(tables, s).tolist() != none
+    # The player's side's trap or Ingrain gates nothing.
+    free = s._replace(mean_look=s.mean_look.at[0].set(1), ingrain=s.ingrain.at[0].set(1))
+    assert switch_sites(tables, free).tolist() == switch_sites(tables, s).tolist()
     # Step 2: no other living party member.
     assert switch_sites(tables, s._replace(hp=s.hp.at[1, :2].set(0))).tolist() == none
     # Steps 10-11 need a damaging moveHit.

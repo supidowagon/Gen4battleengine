@@ -408,6 +408,54 @@ _NO_ACC_EVA_WRITE = (frozenset(EffectId(i) for i in range(40)) - _STAT_KINDS) | 
     EffectId.NATURE_POWER,
     EffectId.TRI_ATTACK,
     EffectId.ROAR,
+    # E2 batch 3: writes the weather, not a stage; hit_thresholds follows it (Sand Veil, Snow
+    # Cloak) as its weather variant.
+    EffectId.WEATHER,
+    # E2 batch 4: no accuracy or evasion stage. Secret Power's terrain effect can lower accuracy
+    # (or evasion), but hit_thresholds reads it resolved (order.move_effects): as
+    # SECONDARY_STAT_FOE, a _SEEN pair.
+    EffectId.DOUBLE_POWER,
+    EffectId.HP_POWER,
+    EffectId.WEIGHT_POWER,
+    EffectId.HALVE_HP,
+    EffectId.OHKO,
+    EffectId.FALSE_SWIPE,
+    EffectId.SWAGGER,
+    EffectId.DRAGON_DANCE,
+    EffectId.ROOST,
+    EffectId.TAILWIND,
+    EffectId.SPIKES,
+    EffectId.TOXIC_SPIKES,
+    EffectId.DESTINY_BOND,
+    EffectId.SECRET_POWER,
+    EffectId.COUNTER,
+    # E2 batch 5: the invokers write none themselves; hit_thresholds reads the move they call
+    # (outcome_laws' and sample_outcome's ``moves``, order.used_moves).
+    EffectId.SLEEP_TALK,
+    EffectId.METRONOME,
+    EffectId.COPYCAT,
+    # Uproar (a lock and a field bit) and Future Sight (a stored hit) write no stage.
+    EffectId.UPROAR,
+    EffectId.FUTURE_SIGHT,
+    # E2 batch 6: U-turn and Baton Pass write no stage on the field mid-law: a Baton Pass
+    # newcomer's passed stages arrive at the pause, whose resumed half draws its own laws from the
+    # paused state (B6-6, B6-10).
+    EffectId.U_TURN,
+    EffectId.BATON_PASS,
+    # E2 batches 7-8: traps, seals, a lock, counts; Lock-On sets no stage (it makes the locker's
+    # next move skip the roll, outcome._rate), and its user has used its move this turn.
+    EffectId.INGRAIN,
+    EffectId.MEAN_LOOK,
+    EffectId.IMPRISON,
+    EffectId.LOCK_ON,
+    EffectId.PERISH_SONG,
+    EffectId.YAWN,
+    # E2 batch 9: Follow Me and Helping Hand change nothing in singles; Belly Drum writes Attack
+    # only (subscript_belly_drum.s). Bulk Up is DRAGON_DANCE (Attack and Defense); Minimize is
+    # STAT_SELF on Stat.EVA, a _SEEN pair.
+    EffectId.FOLLOW_ME,
+    EffectId.HELPING_HAND,
+    EffectId.BELLY_DRUM,
 }
 # (effect, stat) pairs hit_thresholds follows: they change a later foe move's threshold.
 _SEEN = {

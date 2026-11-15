@@ -26,8 +26,9 @@ Events, per side (``[side]``; 0 = player):
   id, Struggle's when struggling; the PP delta of critic.md B.2 names the same slot), a
   switch (``ACT_SWITCH``, the party slot), a bag item (``ACT_ITEM``, its item id), a
   move refused by Taunt (``ACT_TAUNTED``, the move: "can't use MOVE after the taunt",
-  step.py:352-353), or by Disable (``ACT_DISABLED``, the move: "MOVE is disabled!",
-  ``subscript_move_is_disabled.s``; no PP spent). A move that never ran (the battler fainted first, slept, froze,
+  step.py:352-353), by Disable (``ACT_DISABLED``, the move: "MOVE is disabled!",
+  ``subscript_move_is_disabled.s``; no PP spent), or by a foe's Imprison (``ACT_IMPRISONED``, the
+  move: "can't use the sealed MOVE!", ``subscript_move_is_imprisoned.s``; no PP spent). A move that never ran (the battler fainted first, slept, froze,
   flinched, was fully paralyzed or hurt itself) is not shown (``ACT_NONE``, id 0).
 * ``order``: the side that acted first when both showed a message at their turn
   (``action_order``, order.py:67-85), else -1; ``pursuit``: Pursuit hit the switching
@@ -49,8 +50,10 @@ Events, per side (``[side]``; 0 = player):
   (``subscript_recover_hp.s``), else 0. Its damage path's power is never printed (only the
   HP change shows it).
 * ``called``: the move Nature Power turned into ("Nature Power turned into MOVE!",
-  effect_script_0173.s), once its script ran, else 0. ``act_id`` stays Nature Power; the
-  called move's hits, misses and crits are the side's.
+  effect_script_0173.s), once its script ran, else 0; likewise the move Sleep Talk,
+  Metronome or Copycat called (its own attack message after the invoker's, GoToMoveScript),
+  0 when the call failed. ``act_id`` stays the chosen move; the called move's hits, misses and
+  crits are the side's.
 * ``dragged``: the party slot + 1 the foe's Roar / Whirlwind dragged in on this side ("{0} was
   dragged out!", subscript_force_target_to_switch_or_flee.s), else 0: a drag told apart from
   a switch. The newcomer runs no action this turn. A Roar that fails shows only its
@@ -84,8 +87,9 @@ The visible projection of ``after``: both actives and their current types (Camou
 held/consumed item (a Rindo / Chilan Berry's "weakened" message,
 ``subscript_type_resist_berry.s:_245``, is always followed by its ``RemoveItem``, so
 ``item_consumed`` shows it); the non-zero-ness of ``confusion``, ``taunt``, ``trapped``,
-``leech_seed`` and ``substitute_hp`` (their counters are hidden) and of ``infatuated`` ("fell in
-love", subscript_infatuate.s); stat stages, Water
+``leech_seed`` and ``substitute_hp`` (their counters are hidden), of ``infatuated`` ("fell in
+love", subscript_infatuate.s) and of ``uproar`` ("caused an uproar!", subscript_uproar.s); stat
+stages, Water
 Sport, hazards (Stealth Rock, Spikes layers), screens and the other side conditions
 (non-zero), weather and the field conditions; the player's exact HP and PP per party
 slot (the player's healthbox and move menu); the opponent's HP as HP-bar pixels per
@@ -118,6 +122,7 @@ from nuzline.engine.outcome import MAX_HITS, Outcome
 from nuzline.engine.state import MOVES, SIDES, SLOTS, BattleState
 from nuzline.engine.step import (
     ACT_DISABLED,
+    ACT_IMPRISONED,
     ACT_ITEM,
     ACT_MOVE,
     ACT_NONE,
@@ -130,6 +135,7 @@ from nuzline.engine.step import (
 
 __all__ = [
     "ACT_DISABLED",
+    "ACT_IMPRISONED",
     "ACT_ITEM",
     "ACT_MOVE",
     "ACT_NONE",
@@ -169,6 +175,26 @@ _NONZERO_SIDE = (
     "mud_sport",
     "aqua_ring",
     "infatuated",
+    # "{0} caused an uproar!" / "{0} calmed down." (subscript_uproar.s, subscript_uproar_end.s).
+    "uproar",
+    # "{0} foresaw an attack!" (subscript_future_sight_start.s) until the hit's message.
+    "future_timer",
+    # E2 batch 7: "{0} planted its roots!" (effect_script_0181.s:8), "{0} can no longer escape!"
+    # (subscript_mean_look.s:12), "{0} sealed the opponent's move(s)!" (effect_script_0192.s:7),
+    # and a Roost that healed this turn ("regained health", subscript_recover_hp.s; the flag is
+    # kept only at a pause or a pending replacement).
+    "ingrain",
+    "mean_look",
+    "imprison",
+    "roosting",
+    # E2 batch 8: "{0} took aim at {1}!" (subscript_lock_on.s:11) until its count runs out.
+    "lock_on",
+    # "{0} made {1} drowsy!" (subscript_yawn.s:24) until it falls asleep.
+    "yawn",
+    # "{0} cut its own HP and laid a curse on {1}!" (subscript_curse_ghost.s:14).
+    "curse",
+    # E2 batch 9: Minimize's own message (it used the move).
+    "minimized",
 )
 _NONZERO_FIELD = ("trick_room", "gravity")
 
@@ -205,6 +231,7 @@ _LAYOUT: tuple[tuple[str, tuple[int, ...]], ...] = (
     *((name, _SIDE) for name in _NONZERO_SIDE),
     ("spikes", _SIDE),
     ("toxic_spikes", _SIDE),
+    ("perish_count", _SIDE),
     ("weather", ()),
     *((name, ()) for name in _NONZERO_FIELD),
     ("over", ()),
@@ -286,6 +313,9 @@ def observation(events: dict, after: BattleState) -> jnp.ndarray:
         **{name: _nonzero(getattr(after, name)) for name in _NONZERO_SIDE},
         "spikes": after.spikes,
         "toxic_spikes": after.toxic_spikes,
+        # "{0}'s perish count fell to {1}!" (subscript_continue_perish_song.s:3): 1 + the count
+        # while the effect is up, else 0.
+        "perish_count": jnp.where(after.perish_song != 0, 1 + after.perish_song_turns, 0),
         "weather": after.weather,
         **{name: _nonzero(getattr(after, name)) for name in _NONZERO_FIELD},
         "over": after.over,

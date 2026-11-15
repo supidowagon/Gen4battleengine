@@ -587,9 +587,8 @@ note = "decoded: the table's 105 bytes are unchanged; it moved +0x20 (0x02270B20
 [[member]]
 narc = "battle/skill/be_seq.narc"
 index = 48
-status = "not_reached"
-note = "decoded: the 1/4-recoil script's side effect MOVE_SUBSCRIPT_PTR_QUARTER_RECOIL (14) -> MOVE_SUBSCRIPT_PTR_RECOIL_1_2 (138); the Reckless x1.2 power check, CalcCrit and CalcDamage are unchanged, so effect 48 is 1/2 recoil with Reckless; res/battle/scripts/effects/effect_script_0048.s:9; Kaizo users: Hyper Beam, Outrage, Superpower, Hydro Cannon, Giga Impact, Draco Meteor (moves 63, 200, 276, 308, 416, 434); reached only through a move with effect 48"
-when = { move_effect = [48] }
+status = "modelled"
+note = "decoded: the 1/4-recoil script's side effect MOVE_SUBSCRIPT_PTR_QUARTER_RECOIL (14) -> MOVE_SUBSCRIPT_PTR_RECOIL_1_2 (138); the Reckless x1.2 power check, CalcCrit and CalcDamage are unchanged, so effect 48 is 1/2 recoil with Reckless; res/battle/scripts/effects/effect_script_0048.s:9; Kaizo users: Hyper Beam, Outrage, Superpower, Hydro Cannon, Giga Impact, Draco Meteor (moves 63, 200, 276, 308, 416, 434); reached only through a move with effect 48; modelled by E2 batch 9 (B9-4): tools/effect_map.py KAIZO_EFFECTS, RECOIL with divisor 2"
 
 [[member]]
 narc = "battle/skill/be_seq.narc"
@@ -615,9 +614,8 @@ when = { move_effect = [141] }
 [[member]]
 narc = "battle/skill/be_seq.narc"
 index = 182
-status = "not_reached"
-note = "decoded: the Superpower script (user Atk and Def -1 after the hit, MOVE_SUBSCRIPT_PTR_USER_ATK_AND_DEF_DOWN_1_STAGE) -> byte-identical to the vanilla effect 48 script: x1.2 power with Reckless and 1/4 recoil (MOVE_SUBSCRIPT_PTR_QUARTER_RECOIL); res/battle/scripts/effects/effect_script_0182.s:5; res/battle/scripts/effects/effect_script_0048.s:5; Kaizo users: Take Down (move 36), Close Combat (370), Brave Bird (413); reached only through a move with effect 182"
-when = { move_effect = [182] }
+status = "modelled"
+note = "decoded: the Superpower script (user Atk and Def -1 after the hit, MOVE_SUBSCRIPT_PTR_USER_ATK_AND_DEF_DOWN_1_STAGE) -> byte-identical to the vanilla effect 48 script: x1.2 power with Reckless and 1/4 recoil (MOVE_SUBSCRIPT_PTR_QUARTER_RECOIL); res/battle/scripts/effects/effect_script_0182.s:5; res/battle/scripts/effects/effect_script_0048.s:5; Kaizo users: Take Down (move 36), Close Combat (370), Brave Bird (413); reached only through a move with effect 182; modelled by E2 batch 9 (B9-4): tools/effect_map.py KAIZO_EFFECTS, RECOIL with divisor 4"
 
 [[member]]
 narc = "battle/skill/sub_seq.narc"

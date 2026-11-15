@@ -168,12 +168,12 @@ def test_pool_ignores_fight_level_conditions(tables, names, vanilla_manifest, co
 def test_pool_lists_holdable_bag_items(tables, names):
     from nuzline.engine.coverage import Support
 
-    # Razor Claw is unsupported (Quick Claw was, until K3b2 Task 8).
-    bag = [(names.item(n), 1) for n in ("Razor Claw", "Occa Berry", "Oran Berry", "Honey")]
+    # Iron Ball and Mental Herb are unsupported (Razor Claw and Scope Lens were, until E2 batch 4).
+    bag = [(names.item(n), 1) for n in ("Iron Ball", "Mental Herb", "Oran Berry", "Honey")]
     report = check_pool(tables, names, [], (), bag=bag)
     assert sorted(report.missing) == [
-        "bag: Occa Berry (held item UNSUPPORTED)",
-        "bag: Razor Claw (held item UNSUPPORTED)",
+        "bag: Iron Ball (held item UNSUPPORTED)",
+        "bag: Mental Herb (held item UNSUPPORTED)",
     ]
     assert not any("Honey" in line for line in report.missing)
     assert report.level == Support.NONE

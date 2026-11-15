@@ -318,10 +318,13 @@ def _layout(tables: Tables, state: BattleState, sites: int) -> _Layout:
     d_ability = ability[0, d]
     present = species > 0
 
-    # Step 1 (:3906-3913) and step 2 (:3915-3940).
+    # Step 1 (:3906-3913) and step 2 (:3915-3940). VOLATILE_CONDITION_TRAPPED is Bind's
+    # ``trapped`` and Mean Look's ``mean_look`` (condition.h:77-78); :3907 MOVE_EFFECT_INGRAIN.
     steel = jnp.any(state.types[1, a] == _TYPE_STEEL)
     gate = (
         (state.trapped[1] > 0)
+        | (state.mean_look[1] != 0)
+        | (state.ingrain[1] != 0)
         | (d_ability == ABILITY_IDS["Shadow Tag"])
         | (d_ability == ABILITY_IDS["Arena Trap"])
         | ((d_ability == ABILITY_IDS["Magnet Pull"]) & steel)

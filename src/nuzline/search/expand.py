@@ -71,20 +71,29 @@ from nuzline.ai.policy import _distribution
 from nuzline.data.tables import Tables
 from nuzline.engine.actions import MOVE_ACTIONS
 from nuzline.engine.enumerate import (
+    CallLaws,
     OutcomeLaws,
     Reads,
     SamplingOnly,
+    call_consistent,
+    call_laws,
+    call_variants,
+    combine_variants,
     enumerate_outcomes,
     outcome_laws,
 )
 from nuzline.engine.levelup import advance_learns, learn, needs_learn
 from nuzline.engine.observe import observation, replacement_observation
-from nuzline.engine.order import is_switch
 from nuzline.engine.outcome import Outcome
 from nuzline.engine.state import BattleState
-from nuzline.engine.step import needs_replacement, replacement_power_mul, step_events
+from nuzline.engine.step import needs_replacement, step_events
 from nuzline.jaxcache import cached_export, code_version
-from nuzline.search.playout import _carried_mul, replacement_pass, send_replacements
+from nuzline.search.playout import (
+    _carried_mul,
+    replacement_pass,
+    send_replacements,
+    turn_inputs,
+)
 from nuzline.search.rows import concat, row_bytes, take
 
 __all__ = [
@@ -106,7 +115,7 @@ AI_MIN_ROWS = 256  # ai_rows' smallest call (bucket_rows)
 
 # The pytrees of the programs' arguments and results, for ``jax.export`` serialization
 # (``Tables`` and ``BattleState`` are registered by ``stage_a``).
-for _cls in (Outcome, OutcomeLaws, Reads):
+for _cls in (Outcome, OutcomeLaws, Reads, CallLaws):
     jax.export.register_namedtuple_serialization(_cls, serialized_name=f"nuzline.{_cls.__name__}")
 
 
@@ -194,14 +203,31 @@ def ai_rows(tables: Tables, states: BattleState, per_call: int | None = None) ->
     return _run(fn, "expand_ai", tables, (states,), n, {"layout": layout.key}, per_call)
 
 
-def _laws(tables: Tables, states: BattleState, actions) -> OutcomeLaws:
-    return jax.vmap(outcome_laws, in_axes=(None, 0, 0))(tables, states, actions)
+def _laws(tables: Tables, states: BattleState, actions, calls) -> OutcomeLaws:
+    return jax.vmap(outcome_laws, in_axes=(None, 0, 0, 0))(tables, states, actions, calls)
 
 
-def laws_rows(tables: Tables, states: BattleState, actions) -> OutcomeLaws:
-    """``outcome_laws`` of each of ``N`` (state, ``int32[2]`` actions) rows, numpy."""
+def laws_rows(tables: Tables, states: BattleState, actions, calls) -> OutcomeLaws:
+    """``outcome_laws`` of each of ``N`` (state, ``int32[2]`` actions, ``int32[2]`` call)
+    rows, numpy (``enumerate.call_variants`` gives the calls)."""
     actions = np.asarray(actions, np.int32)
-    return _run(_laws, "expand_laws", tables, (states, actions), len(actions))
+    calls = np.asarray(calls, np.int32)
+    return _run(_laws, "expand_laws", tables, (states, actions, calls), len(actions))
+
+
+def _calls(tables: Tables, states: BattleState, actions) -> CallLaws:
+    return jax.vmap(call_laws, in_axes=(None, 0, 0))(tables, states, actions)
+
+
+def calls_rows(tables: Tables, states: BattleState, actions) -> CallLaws:
+    """``call_laws`` of each of ``N`` (state, ``int32[2]`` actions) rows, numpy."""
+    actions = np.asarray(actions, np.int32)
+    return _run(_calls, "expand_calls", tables, (states, actions), len(actions))
+
+
+@jax.jit
+def _picks(tables: Tables, states: BattleState, actions) -> jnp.ndarray:
+    return jax.vmap(lambda s, a: turn_inputs(tables, s, a)[0])(states, actions)
 
 
 def _select(cond, a, b):
@@ -213,10 +239,17 @@ def _turn(tables: Tables, before: BattleState, actions, outcome: Outcome):
     refused, observation)``. The learnset scans run first (``advance_learns``: the
     ``TurnEnd`` payout's prompts come before ``ReplaceFainted``, bcp.c:1846-1848); a prompt
     in a battle that goes on stops the child at the learn decision (module docstring),
-    else the opponent's replacement follows as in the playout (``finish_turn``)."""
-    power_mul = replacement_power_mul(tables, before, actions)
-    ai_switched = is_switch(actions[1])
+    else the opponent's replacement follows as in the playout (``finish_turn``). The fourth
+    result is ``enumerate.call_consistent``: a row of a split Sleep Talk variant whose turn did
+    not meet the variant's assumption is dropped (ruling B5-13)."""
+    # E2 batch 6: a state paused at a party list resumes. Its opponent's pick at its own list is
+    # made here (``playout.pivot_pick``, refused as a replacement's); the turn's powerMul and AI
+    # switch are the turn start's, kept in the scratch (the resume's actions are switch-shaped).
+    actions, pick_refused, power_mul, ai_switched = turn_inputs(tables, before, actions)
     stepped, events = step_events(tables, before, actions, outcome)
+    # A turn that pauses stops here: the child is the decision at the list (stage_b's "pivot").
+    halted = stepped.pivot_battler != 0
+    paused_child = stepped
     stepped = advance_learns(tables, stepped)
     prompt = needs_learn(stepped) & (stepped.over == 0)  # D8: no prompt once it is over
     # The learn stop: the turn's powerMul waits in replace_mul for the opponent's
@@ -230,7 +263,10 @@ def _turn(tables: Tables, before: BattleState, actions, outcome: Outcome):
     sent, sent_refused = send_replacements(tables, stepped, ai_switched, power_mul)
     after = _select(prompt, held, sent)
     refused = jnp.where(prompt, held_refused, sent_refused) | (after.exp_refused != 0)
-    return after, refused, observation(events, after)
+    after = _select(halted, paused_child, after)
+    refused = jnp.where(halted, False, refused) | pick_refused
+    keep = call_consistent(tables, before, actions, outcome, events)
+    return after, refused, observation(events, after), keep
 
 
 def _turns(tables: Tables, states: BattleState, actions, outcomes: Outcome):
@@ -239,15 +275,15 @@ def _turns(tables: Tables, states: BattleState, actions, outcomes: Outcome):
 
 def step_rows(
     tables: Tables, states: BattleState, actions, outcomes: Outcome
-) -> tuple[BattleState, np.ndarray, np.ndarray]:
-    """``(after, refused bool[N], observation int32[N, OBS_SIZE])`` of ``N`` rows of
-    (state, ``int32[2]`` actions, outcome): ``step``, the opponent's replacement and the
-    observation, in one cached program (module docstring)."""
+) -> tuple[BattleState, np.ndarray, np.ndarray, np.ndarray]:
+    """``(after, refused bool[N], observation int32[N, OBS_SIZE], keep bool[N])`` of ``N``
+    rows of (state, ``int32[2]`` actions, outcome): ``step``, the opponent's replacement, the
+    observation and ``enumerate.call_consistent``, in one cached program (module docstring)."""
     actions = np.asarray(actions, np.int32)
-    after, refused, obs = _run(
+    after, refused, obs, keep = _run(
         _turns, "expand_step", tables, (states, actions, outcomes), len(actions)
     )
-    return after, np.asarray(refused, bool), np.asarray(obs, np.int32)
+    return after, np.asarray(refused, bool), np.asarray(obs, np.int32), np.asarray(keep, bool)
 
 
 class _Merger:
@@ -261,11 +297,13 @@ class _Merger:
         self.parts: list[BattleState] = []  # new store rows, per chunk
 
     def add(self, request, states, actions, outcomes, probs) -> None:
-        after, refused, obs = step_rows(self.tables, states, actions, outcomes)
+        after, refused, obs, keep = step_rows(self.tables, states, actions, outcomes)
         n = len(request)
         state_bytes, obs_bytes = row_bytes(after, n), row_bytes(obs, n)
         new = []
         for i in range(n):
+            if not keep[i]:
+                continue
             sk, ok = state_bytes[i].tobytes(), obs_bytes[i].tobytes()
             row = self.rows.get(sk)
             if row is None:
@@ -296,7 +334,20 @@ def expand(
     states = jax.tree.map(np.asarray, states)
     index = np.asarray([p[0] for p in pairs], np.int64).reshape(-1)
     actions = np.asarray([p[1:] for p in pairs], np.int32).reshape(-1, 2)
-    laws = laws_rows(tables, take(states, index), actions)
+    # E2 batch 6: at the opponent's own party list its pick is the resume's switch, which the
+    # laws read (``outcome.pivot_view``): made here as in the row program (``turn_inputs``).
+    opp_list = np.asarray(states.pivot_battler)[index] == 2
+    if opp_list.any():
+        rows = np.flatnonzero(opp_list)
+        picked = _picks(tables, take(states, index[rows]), jnp.asarray(actions[rows]))
+        actions[rows] = np.asarray(picked, np.int32)
+    # The invokers' calls (enumerate.call_variants): one laws row per (request, call variant).
+    cl = calls_rows(tables, take(states, index), actions)
+    variants = [call_variants(take(cl, r)) for r in range(len(pairs))]
+    v_req = np.asarray([r for r, vs in enumerate(variants) for _ in vs], np.int64)
+    v_call = np.asarray([v[0] for vs in variants for v in vs], np.int32).reshape(-1, 2)
+    laws = laws_rows(tables, take(states, index[v_req]), actions[v_req], v_call)
+    first_row = np.concatenate([[0], np.cumsum([len(vs) for vs in variants])])
     merger = _Merger(tables, len(pairs))
     out: dict[int, list[Child] | SamplingOnly] = {}
     buffer: list[tuple] = []  # (request ids, outcomes, probs) segments of the next chunk
@@ -312,7 +363,11 @@ def expand(
 
     for r in range(len(pairs)):
         try:
-            outcomes, probs = enumerate_outcomes(take(laws, r))
+            parts = []
+            for i, (_, num, den) in enumerate(variants[r]):
+                outcomes, probs = enumerate_outcomes(take(laws, int(first_row[r]) + i))
+                parts.append((outcomes, probs, num, den))
+            outcomes, probs = combine_variants(parts)
         except SamplingOnly as e:
             out[r] = e
             continue

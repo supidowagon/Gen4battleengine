@@ -35,11 +35,11 @@ from nuzline.engine.actions import (
     legal_opponent_actions,
 )
 from nuzline.engine.coverage import start_weather
-from nuzline.engine.enumerate import WIDTH_CAP, SamplingOnly, enumerate_outcomes
+from nuzline.engine.enumerate import WIDTH_CAP, SamplingOnly, call_variants, enumerate_outcomes
 from nuzline.prep.pool import pool_candidates
 from nuzline.prep.problem import HELD_POCKETS
 from nuzline.prep.states import make_states
-from nuzline.search.expand import laws_rows
+from nuzline.search.expand import calls_rows, laws_rows
 from nuzline.search.rows import concat, take
 from tests.conftest import KAIZO_INTERMEDIATE
 
@@ -125,17 +125,31 @@ def roark_widths(save_path, tables, names, learnsets, roark):
                 acts.append((a, b))
     index = np.asarray(index)
     acts = np.asarray(acts, np.int32)
-    laws = laws_rows(tables, take(states, index), acts)
-    keys = _law_keys(laws)
+    # One laws row per call variant of each pair (E2 batch 5: an invoker's calls,
+    # enumerate.call_variants); a pair's width is the sum over its variants.
+    cl = calls_rows(tables, take(states, index), acts)
+    variants = [call_variants(take(cl, r)) for r in range(len(acts))]
+    v_pair = np.asarray([r for r, vs in enumerate(variants) for _ in vs])
+    v_call = np.asarray([v[0] for vs in variants for v in vs], np.int32).reshape(-1, 2)
+    laws = laws_rows(tables, take(states, index[v_pair]), acts[v_pair], v_call)
+    v_keys = _law_keys(laws)
     laws = jax.tree.map(np.asarray, laws)
-    widths: dict[bytes, int | None] = {}
-    for r, key in enumerate(keys):
-        if key in widths:
+    v_width: dict[bytes, int | None] = {}
+    for r, key in enumerate(v_keys):
+        if key in v_width:
             continue
         try:
-            widths[key] = len(enumerate_outcomes(jax.tree.map(lambda a, r=r: a[r], laws))[1])
+            v_width[key] = len(enumerate_outcomes(jax.tree.map(lambda a, r=r: a[r], laws))[1])
         except SamplingOnly:
-            widths[key] = None
+            v_width[key] = None
+    keys, widths = [], {}
+    for r in range(len(acts)):
+        mine = [v_keys[i] for i in np.flatnonzero(v_pair == r)]
+        key = hashlib.blake2b(b"".join(mine), digest_size=16).digest()
+        ws = [v_width[k] for k in mine]
+        total = None if None in ws else sum(ws)
+        widths[key] = None if total is None or total > WIDTH_CAP else total
+        keys.append(key)
 
     def action_name(moves, party_, a) -> str:
         if a >= FIRST_ITEM_ACTION:

@@ -23,16 +23,19 @@ from nuzline.engine.coverage import (
     IMPLEMENTED_ITEMS,
     Support,
     exp_refusals,
-    ghost_curse,
     halved_by_line,
     halved_defense_line,
     halving_moves,
     learnable_moves,
     low_defense,
+    metronome_calls,
     reachable_level,
     rom_change_line,
     rom_change_refusals,
     terrain_refusal,
+    trace_copy_line,
+    trace_standoff_line,
+    weather_war_line,
 )
 from nuzline.engine.ids import AbilityId, EffectId, ItemId, Status
 from nuzline.engine.state import MAX_DEATH_BUDGET
@@ -88,7 +91,10 @@ def bag_resources(
                     tms[item] = tms.get(item, 0) + qty
             elif pocket in HELD_POCKETS:
                 kind = ItemId(int(effect[item]))
-                if kind in IMPLEMENTED_ITEMS and kind != ItemId.NONE:
+                # A berry with no hold effect is never offered: its only read is Pluck / Bug
+                # Bite eating it, which helps only the foe (hooks.pluck_berry's pluck flag
+                # keeps the foe's own item), so it never beats holding nothing.
+                if kind in IMPLEMENTED_ITEMS and kind not in (ItemId.NONE, ItemId.NO_EFFECT_BERRY):
                     held[item] = held.get(item, 0) + qty
                 elif int(hold_effect[item]) != 0:
                     line = f"{names.item_names[item]}: not offered (hold effect not supported)"
@@ -100,26 +106,25 @@ def bag_resources(
     return resources, warnings
 
 
-GHOST_CURSE_REFUSAL = "Ghost-type user: move effect not implemented"
-
-
 def _move_refusal(
     tables: Tables, move: int, spec: PokemonSpec, foe_defense: int | None = None
 ) -> str | None:
     """Why ``spec``'s Pokemon cannot use ``move`` (engine effect, as ``coverage``'s
-    ``move_effect_line`` grades it for that Pokemon: a Ghost-type user's Curse is refused,
-    ``coverage.ghost_curse``; a Selfdestruct-family move against a foe's Defense
+    ``move_effect_line`` grades it for that Pokemon: a Selfdestruct-family move against a foe's Defense
     ``foe_defense`` below ``coverage.HALVED_DEFENSE_MIN``, ``coverage.halved_defense_line``;
     or the AI), or None."""
     from nuzline.ai.policy import player_move_refusal
 
-    if ghost_curse(tables, move, personal_row(tables, spec.species, spec.form)):
-        return GHOST_CURSE_REFUSAL
     if (low := halved_defense_line(tables, move, foe_defense)) is not None:
         return f"{low.strip()}: zero damage divisor at -6 Defense, not implemented"
     effect = EffectId(int(np.asarray(tables.move_effect)[move]))
     if IMPLEMENTED_EFFECTS.get(effect, Support.NONE) == Support.NONE:
         return "move effect not implemented"
+    if effect == EffectId.METRONOME and any(
+        _move_refusal(tables, m, spec, foe_defense) is not None
+        for m in metronome_calls(tables, spec)
+    ):
+        return "Metronome can call a move not implemented (ruling B5-2)"
     return player_move_refusal(move)
 
 
@@ -178,7 +183,10 @@ def usable_pool(
     terrain of a trainer whose terrain is unknown (``coverage.terrain_refusal``). Against the
     trainer's party ``opp``, a Selfdestruct-family move is refused against a low Defense
     (``_move_refusal``), and a candidate whose own Defense is that low is left out when a foe
-    knows such a move (``coverage.halved_by_line``).
+    knows such a move (``coverage.halved_by_line``). The party-pair refusals apply per
+    candidate against ``opp``: a weather ability at war with the opponent's
+    (``coverage.weather_war_line``), Trace on both sides (``coverage.trace_standoff_line``) and
+    a Trace copy the AI refuses (``coverage.trace_copy_line``; rulings B3-20, B3-21).
 
     Experience (K3d-exp design §4): a move the candidate can learn by levelling up in the
     fight (``coverage.learnable_moves``: ruling D10 masks a
@@ -211,6 +219,14 @@ def usable_pool(
             why.append(f"{ability} ({r})")
         if (low := halved_by_line(tables, names, spec, foe_halving)) is not None:
             why.append(f"{low} (zero damage divisor at -6 Defense, not implemented)")
+        # The party-pair refusals, per candidate against the trainer's party (B3-20, B3-21).
+        for line in (
+            weather_war_line(tables, [spec], opp),
+            trace_standoff_line(tables, [spec], opp),
+            trace_copy_line(tables, names, trainer, spec, opp),
+        ):
+            if line is not None:
+                why.append(line)
         for move in spec.moves:
             if move and (r := move_refusal(move, spec)) is not None:
                 why.append(f"{names.move_names[move]} ({r})")

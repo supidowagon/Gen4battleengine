@@ -1316,15 +1316,18 @@ def _trainer_terrains(
     where: dict[str, set[str]],
 ) -> list[dict]:
     """Each trainer's ``terrain`` and ``terrains`` (``tools.terrain``) from its maps
-    (``_trainer_maps``) and the decomp's map headers, matrices and land data."""
+    (``_trainer_maps``) and the decomp's map headers, matrices and land data, narrowed per
+    trainer to the tiles its battle can start on (``tools.terrain.narrowed_terrains``)."""
     from tools.terrain import (
         decomp_check_trainer_objects,
         decomp_header_battle_fields,
         decomp_land_data,
         decomp_matrices,
+        decomp_narrowing_inputs,
         decomp_warp_tiles,
         header_names,
         header_terrains,
+        narrowed_terrains,
         terrain_fields,
         terrain_rules,
         trainer_terrains,
@@ -1337,15 +1340,18 @@ def _trainer_terrains(
     arrivals = {
         header_id(n): decomp_warp_tiles(decomp, h["eventsArchiveID"]) for n, h in headers.items()
     }
+    rules = terrain_rules(decomp)
+    fields = decomp_header_battle_fields(decomp)
+    matrices = decomp_matrices(decomp)
+    lands = decomp_land_data(decomp)
     by_header = header_terrains(
-        terrain_rules(decomp),
-        decomp_header_battle_fields(decomp),
-        decomp_matrices(decomp),
-        decomp_land_data(decomp),
-        {h for hs in ids.values() for h in hs},
-        arrivals,
+        rules, fields, matrices, lands, {h for hs in ids.values() for h in hs}, arrivals
     )
-    return [terrain_fields(*t) for t in trainer_terrains(len(trainers), ids, by_header)]
+    sites, scripts, rematch_rows, fr = decomp_narrowing_inputs(decomp, trainers)
+    narrowed = narrowed_terrains(
+        rules, fr, fields, matrices, lands, ids, arrivals, sites, scripts, rematch_rows
+    )
+    return [terrain_fields(*t) for t in trainer_terrains(len(trainers), ids, by_header, narrowed)]
 
 
 def _write(path: Path, data) -> None:
