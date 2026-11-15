@@ -114,6 +114,7 @@ the `step` turn skeleton and `enumerate.py`'s branch structure stay as they are.
 8. The moves behind the AI's six fields: Lock-On / Mind Reader, Perish Song, Yawn, Curse by a
    Ghost user (B8-n); the opponent-legality test invariant.
 9. Gardenia split (B9-n): the plan below.
+10. The rest of the Gardenia split (B10-n): the plan below.
 
 ## Batch 9: Gardenia split
 
@@ -143,6 +144,34 @@ groups of the same families are added where they share the code. Order: largest 
 10. Held items (4): Focus Band #65 3, Wiki Berry #15 1; player-only Figy #14 / Aguav #17.
 11. Battle terrain (1 + Roark's 2): Secret Power / Nature Power / Camouflage on a trainer whose
     maps give several terrains.
+
+## Batch 10: the rest of the Gardenia split
+
+What batch 9 left (Owed: "Batch 9 left"), grouped by family, with the player-only groups of the
+same families. Counts are fights blocked over the whole game (backlog at 3835f68, "All ten
+splits"); the Gardenia split's own count in brackets. Order: the largest unlock first, each
+family committed on its own, rulings B10-n.
+
+1. Recoil and crash (58 + 2): Volt Tackle's family #262 (recoil 1/3 plus a PROBABILISTIC
+   paralysis, battle_lib.c:1551-1567) 58 [1], with Flare Blitz's #253 (37, the same shape with a
+   burn) where the decomp shows no other difference; Jump Kick / Hi Jump Kick #45 crash on a miss
+   (the miss reads the crit and roll) 2 [2].
+2. Held items that draw (53 + 1): Focus Band #65 (a per-hit roll at its three sites, a new Outcome
+   field and law) 53 [3]; Wiki Berry #15 (the dislike confusion's duration draw) 1 [1] with the
+   player-only Figy #14 / Aguav #17 and the rest of the flavor-berry family.
+3. Substitute #79 (48 [1]): the substitute's HP, the hits it takes, and every effect's
+   substitute test; with it the Owed King's Rock vs Substitute and Ghost Curse's test.
+4. Pressure (33 [1]): PP cost by range, its switch-in message.
+5. HP moves: Endeavor #189 (18 [1]), Pain Split #91 (14 [1]).
+6. Knock Off #188 (18 [2]): knockedOffItemsMask, Unburden, the Owed Sticky Barb test.
+7. The charge turn (16 [1] + player-only): SolarBeam #151, and the two-turn mechanism for every
+   charge move the decomp has (Razor Wind #39, Fly #155 and the semi-invulnerable family, Skull
+   Bash, Sky Attack where vanilla), with Power Herb #99.
+8. Status guards: Synchronize (15 [1]), Safeguard #124 (12 [1]), Leaf Guard (1 [1]).
+9. Wonder Guard (with Fire Fang's bypass) and Download (1 [1] each).
+10. Encore #90, Focus Punch #170, Assist #180 (1 [1] each).
+
+Out of scope: AI entries (E1), double / multi formats, gauntlets, the terrain entries (data).
 
 ## Batch 6 design: mid-turn switch decision (U-turn, Baton Pass)
 
