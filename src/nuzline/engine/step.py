@@ -338,13 +338,14 @@ def _set_side(state: BattleState, field: str, side, value, cond) -> BattleState:
     return state._replace(**{field: arr.at[side].set(new)})
 
 
-def _natural_cure(state: BattleState, side) -> BattleState:
+def _natural_cure(state: BattleState, side, cond=True) -> BattleState:
     """``BtlCmd_TryRestoreStatusOnSwitch`` (battle_script.c:9139) clears the status of a
     switching battler with HP left and Natural Cure. ``subscript_switch_pokemon.s:5-6``
     runs it before Pursuit hits (:11), so ``execute_actions`` applies it before the
     Pursuit hit; repeating it in ``_send_out`` changes nothing."""
     mon = state.active[side]
     cure = (state.ability[side, mon] == AbilityId.NATURAL_CURE) & (state.hp[side, mon] > 0)
+    cure = cure & jnp.asarray(cond)
     state = _set_mon(state, "status", side, mon, Status.NONE, cure)
     return _set_mon(state, "status_counter", side, mon, 0, cure)
 
@@ -1149,7 +1150,7 @@ def _use_move(
     # action goes on without a switch.
     pursuit_pause = after_pursuit & (state_in.hp[side, user] > 0) & (state_in.over == 0)
     stops = baton_go | pursuit_pause
-    state = _where(stops, _natural_cure(state, side), state)
+    state = _natural_cure(state, side, stops)
     # MODE_RESUME: the rest of AfterMoveMessage on the newcomer (bcp.c:3497-3530): King's Rock with
     # its item (CheckExtraFlinch, bcp.c:4630-4650, no U-turn guard; U-turn has
     # MOVE_FLAG_TRIGGERS_KINGS_ROCK, res/moves/u_turn/data.json:25; flinch_item[side, 0]), then
@@ -1217,19 +1218,15 @@ def _use_move(
             & ~_blacked_out(hit_state, target_side)
             & _has_bench(hit_state, side)
         )
-        hit_state = _where(
-            tries,
-            pivot_item(
-                tables,
-                hit_state,
-                side,
-                target_side,
-                used,
-                info.shell_bell,
-                info.update_hp,
-                info.damaged,
-            ),
+        hit_state = pivot_item(
+            tables,
             hit_state,
+            side,
+            target_side,
+            used,
+            info.shell_bell,
+            tries & info.update_hp,
+            tries & info.damaged,
         )
         fell = (state.hp[target_side, target] > 0) & (hit_state.hp[target_side, target] == 0)
         bonded = (
@@ -1248,7 +1245,7 @@ def _use_move(
             & _pursuer_ready(tables, hit_state, foe, foe_action, foe_move, foe_struggling)
         )
         lists = goes & ~chases
-        hit_state = _where(lists, _natural_cure(hit_state, side), hit_state)
+        hit_state = _natural_cure(hit_state, side, lists)
         # A U-turn that does not switch makes its King's Rock check after the secondary effect
         # (ONE_HIT_EXTRA_FLINCH, bcp.c:3524).
         rock_now = going & first & is_uturn & ~goes & landed & info.damaged
@@ -1814,7 +1811,8 @@ def _execute_actions(
     items = jnp.where(paused, state.ts_item, items).astype(_I32)
     # CalcTurnOrder's moveEffectsData.custapBerry, from the state the order was fixed in.
     custap = jnp.where(paused, state.ts_custap != 0, custap_flags(tables, state, real))
-    state = _where(paused, state, _consume_trainer_items(state, real))
+    consumed = _consume_trainer_items(state, real).trainer_items
+    state = state._replace(trainer_items=jnp.where(paused, state.trainer_items, consumed))
     state = state._replace(pivot_battler=jnp.zeros_like(state.pivot_battler))
     read = _empty_events()
     for name, field in (("protect_ok", "ts_protect_ok"), ("roosted", "ts_roosted")):
@@ -1841,7 +1839,7 @@ def _execute_actions(
         # subscript_switch_pokemon.s:5-6: a first actor's switch gets its Natural Cure before
         # the Pursuit (:11).
         first_switch = start & (position == 0) & is_switch(acts[side]) & (state.over == 0)
-        state = _where(first_switch, _natural_cure(state, side), state)
+        state = _natural_cure(state, side, first_switch)
         # The one Pursuit site: the hit before a first actor's switch, or the one U-turn's
         # head stopped for (``ap``); the pursuer has not acted yet, so it is the second actor.
         pursuer = 1 - side

@@ -1,20 +1,21 @@
 # E2 mechanics ledger (Kaizo Roark split)
 
-## RESUME (updated 2026-11-14, batch 5 in progress)
+## RESUME (updated 2026-11-14, batch 6 done, its review next)
 
-- Batch 4 review follow-ups landed: dd5a9c4 (B4-19..B4-24; Lass Kaitlin GRASS, the Roark terrain
-  entry closed; the batch 6 design section below).
-- Batch 5, the random called-move family (B5-1..B5-3): Sleep Talk and Copycat modelled and
-  supported in both engines, the sampler and the enumerator (call variants, `enumerate_turn`;
-  `search.expand` enumerates every variant); Metronome modelled but refused while any move it
-  can call is unmodelled (150 vanilla / 128 Kaizo of 442). New refusal: Sleep Talk facing a
-  reachable Disable (B5-3). Roark split entries closed: Sleep Talk (10 fights), Copycat (1).
-- Batch 5 part 2: Uproar (B5-4..B5-7) and Future Sight / Doom Desire (B5-8..B5-12) modelled
-  and supported in both engines, the sampler and the laws; both Roark split entries closed
-  (commits: Uproar e0b708e, Future Sight ef29448). Next: the batch 5 review.
-- Compile (batch 5 start / end, same machine, a fast tier running): `jit(step)` 60.4 -> 60.1 s,
-  `jit(vmap(step))` 42.8 -> 43.8 s (logs in `_scratch/e2/b5/` on G:).
-- Left after batch 5: U-turn (3 fights, the batch 6 design below), Metronome (3, B5-2).
+- Batch 5 review follow-ups landed: 48e278c (B5-13..B5-15: Sleep Talk vs a faster Disable
+  modelled, the B5-3 refusal removed; the invoker brute force made independent; Zoom Lens on
+  the Future Sight hit verified; the uproar generator fix; the performance section).
+- Batch 6, the mid-turn switch decision (B6-1..B6-9): U-turn and Baton Pass in both engines
+  (`step` pauses at the party list, `pivot_battler` and the `ts_*` scratch; the resume), the laws
+  and the sampler of a paused state (`outcome.pivot_view`), the search (`"pivot"` decisions in
+  Stage B, `expand` and the playouts through `playout.turn_inputs` / `step_through`), the
+  differential generator (`strategies._draw_pivot`, `pivot_actions`) and hand tests
+  (tests/engine/test_pivot.py, tests/search/test_pivot_search.py). Roark split entry closed:
+  U-turn (3 fights). Commits: 470fbef (engine, reference, laws, generator), af6b010 (search), and the closing commit (ledger, the pivot item and Natural Cure without whole-state selects).
+- Compile, both with the fast-tier lock held (E1's run, pid 14524): `jit(step)` 35.0 -> 52.5 s, `jit(vmap(step))` 24.2 -> 25.6 s (the end run also beside this batch's slow search tests, so the step figure is load-skewed: logs in `_scratch/e2/b6/` on G:). Load-free size: the step jaxpr 73,192 -> 80,110 equations (+9.5%, `_scratch/e2/b6/eqns.py`, a synthetic state): the 22 `ts_*` / `pivot_battler` leaves widen every whole-state `_where` and reset, plus the list's faint check in `_act`, the scratch writes and the pivot logic. To re-time with the lock free (standing rule).
+- Left in the Roark split: Metronome (3 fights, B5-2: 123 of 442 callable moves unmodelled) and
+  the terrain entry (2: Nature Power / Secret Power / Camouflage over several maps); the AI's
+  U-turn and Baton Pass scripts are E1's (Owed).
 - Standing: the doubles conventions below apply to all new code; one review per batch.
 - Standing: record `jit(step)` and `vmap` compile time once per batch, measured with the
   fast-tier lock free.
@@ -161,7 +162,7 @@ Rules left out because another mechanic is missing; each closes with the mechani
   Substitute. (Its Shield Dust test, :9, is modelled by E2 batch 3, B3-9.)
 - The Sticky Barb transfer vs Knock Off, the knocked-off mask and the substitute test
   (effects.py `sticky_barb_transfer`; battle_lib.c:5378, :5390-5393): those moves (U-turn's
-  gates: the U-turn line below). Magic Guard's readers are reached since B4-11.
+  guard is modelled since B6-4). Magic Guard's readers are reached since B4-11.
 - The Trace refusal (`coverage.trace_ai_line`, B3-21): the AI must read the battler's ability
   (`state.ability`, the traced copy, through `damage.decomp_abilities`) instead of
   `tables.species_abilities_decomp` by species in ai/commands.py (~558-580), ai/policy.py (~950)
@@ -190,14 +191,23 @@ Rules left out because another mechanic is missing; each closes with the mechani
   `BattleState.move_prev`; trainer_ai.c reads only movePrevByBattler (`last_move`).
 - Metronome (#83, 3 fights) stays refused by B5-2 until every move it can call is modelled
   (150 vanilla / 128 Kaizo of its 442 candidates have unsupported effects).
-- U-turn (#228, 3 fights): the switch is a decision inside the turn (subscript_attack_then_switch_out.s
-  :6-71; the AI side is `BattleAI_PostKOSwitchIn`, battle_display.c:4543-4546, with
-  `aiSwitchedPartySlot` always 6 after a move choice). `step` resolves a whole turn and the search
-  only decides between turns or at faint replacements, so it needs a mid-turn decision point
-  (step stops at the switch, the search decides, the turn resumes with the rest of its draws).
-  Also owed with it: Shell Bell / Life Orb / the contact abilities / Sticky Barb vs
-  `SYSCTL_UTURN_ACTIVE` (bcp.c:4739, :4761; battle_lib.c:4219-4362, :5393) and the pivot items
-  (battle_lib.c:7336-7386), and the Pursuit it triggers (:51-54).
+- Around the pivots (E2 batch 6, B6-2..B6-4), each with its mechanic: the defender's Jaboca Berry
+  (HOLD_EFFECT_RECOIL_PHYSICAL) in `effects.pivot_item` (battle_lib.c:7368-7375; an unsupported
+  item, refused); the knocked-off mask of its Sticky Barb test (:7381; Knock Off); Grudge
+  (subscript_attack_then_switch_out.s:40), Rage and Shaymin's form check after a switch
+  (bcp.c:3497-3530); what Baton Pass keeps of Focus Energy, Mean Look, Curse, Substitute,
+  Lock-On, Perish Song, Ingrain, Power Trick, Embargo, Heal Block, Magnet Rise and Gastro Acid
+  (battle_lib.c:2056-2086, :2105-2115, :2136-2140; E1's per-battler fields too); Pressure on U-turn's
+  Pursuit (battle_script.c:6919-6922); doubles: `BattleAI_PostKOSwitchIn`'s
+  `BattleSystem_RandomOpponent` draw (battle_lib.c:4183-4187) at the opponent's list.
+- AI owner (E1): U-turn's and Baton Pass's AI side is untranscribed (the backlog's "AI move effect
+  #228" entry, Expert_UTurn; `AI_FLAG_BATON_PASS`). The engine side is B6-1..B6-9; the AI is never
+  asked at a paused state (the opponent's pick at its own list is `post_ko_switch_in` with
+  `ts_pick_mul`, `playout.turn_inputs`). After a switch the newcomer's `last_move` is the paused
+  move's moveTemp (UpdateMoveBuffers, bcp.c:3944), which the next turn's
+  `TrainerAI_RecordLastMove` reads.
+- Tests: `tests/search/exhaustive.py` (the reference solver) plays no pause; its endgames have no
+  U-turn or Baton Pass.
 - Rest and Yawn (unsupported moves) read `FIELD_CONDITION_UPROAR` too (subscript_rest.s,
   subscript_yawn.s): whoever adds them must test `effects.uproar_on` there (B5-6).
 - AI owner (E1): Uproar's AI side is untranscribed (the backlog's "AI move effect #159" entry; the
@@ -719,3 +729,76 @@ Rules left out because another mechanic is missing; each closes with the mechani
   (`tests/engine/test_batch5_review.py`).
 - B5-15 Generator (`tests/strategies.py`): with an uproar under way no active Pokemon sleeps at
   the turn start (B5-7's turn-end wake-up), also after the other side's draws.
+- B6-1 (departure from the design's form) The turn scratch is flat `BattleState` fields
+  `ts_*` (`state.TURN_SCRATCH`), not a nested `TurnScratch` field: `LAYOUT`, the reference state
+  and the converters stay flat. One field more than the design lists: `ts_move_failed`
+  (moveFailFlags, BattleContext_MoveFailed battle_lib.c:2808-2820), which the turn end's Uproar
+  check reads (bcp.c:1525) after the resume. `ts_custap` keeps only a later actor's flag (an
+  earlier one ate its berry, subscript_check_quick_claw.s:26-28); `ts_item` is 0 for a non-item
+  action.
+- B6-2 U-turn (`EffectId.U_TURN`, effect 228 in both games): its ON_HIT secondary effect runs at
+  ONE_HIT_TRIGGER_SECONDARY (bcp.c:3484-3494) for a hit without MOVE_STATUS_NO_EFFECTS
+  (battle_lib.c:1524-1529; the engine's `MoveHit.effective`). subscript_attack_then_switch_out.s:
+  the defender side not blacked out (:5, BtlCmd_CheckBlackOut battle_script.c:8846) and a
+  replacement for the user (:6, battle_lib.c:3125); the contact ability (:7, the hit's own:
+  every TriggerAbilityOnHit case is guarded by SYSCTL_UTURN_ACTIVE, battle_lib.c:4219-4362, and
+  the later call needs a living attacker when no switch happened, so it runs once); the pivot
+  item (:11, `effects.pivot_item`); Destiny Bond (:15-34); a fainted user switches nothing
+  (:48) and the action goes on, King's Rock included (CheckExtraFlinch has no attacker HP test,
+  bcp.c:4630-4650); the foe's Pursuit (:54, BtlCmd_TryPursuit battle_script.c:6884-6955, the
+  pursuer not yet acted: `_pursuer_ready`) with its faint check and payout
+  (subscript_pursuit.s:106-108); a user alive after it (:55) gets its Natural Cure (:56-57) and
+  the list (:71). A battle the Pursuit's faint check ends opens no list (the engine ends a
+  battle at the faint check that finds a side out, `step._faint_check`).
+- B6-3 Baton Pass (`EffectId.BATON_PASS`, effect 127): a direct ON_HIT effect at
+  BATTLE_CONTROL_PRIMARY_EFFECT (bcp.c:3298-3308); subscript_baton_pass.s: no replacement fails
+  (:5, :19-20: MOVE_STATUS_FAILED, subscript_missed.s, no AfterMoveEffects), else Natural Cure
+  (:7-8) and the list (:17); no Pursuit. The switch (UpdateAfterSwitch under SYSCTL_BATON_PASS,
+  battle_lib.c:2056-2086, :2105-2115; InitBattleMon :97-101) keeps of the engine's fields the stat
+  stages, `confusion` (condition.h:72), `leech_seed`, `mud_sport`, `water_sport`, `aqua_ring`
+  (moves.h:46-48) and `substitute_hp` (:2107) (`step._BATON_PASSED`); Focus Energy, Mean Look,
+  Curse, Lock-On, Perish Song, Ingrain, Power Trick, Embargo, Heal Block, Magnet Rise and Gastro
+  Acid come from unsupported moves (owed with them).
+- B6-4 The resume (`step(paused, actions)`, `actions[pivot]` the switch to the pick): the list's
+  SwitchAndUpdateMon, PokemonSendOut, the hazards and the faint check (subscript_show_party_list.s:
+  9-24): that check plays the faint of a defender the U-turn KO'd (its SYSCTL_MON_FAINTED bit is
+  set at UpdateHP, BtlCmd_TryFaintMon battle_script.c:1763-1777) before the tail; its exp is paid
+  at MoveEnd (AnyExpPayout, bcp.c:3968). `ts_alive` is the party bitmask of the faints handled
+  so far (the action's start, or after U-turn's Pursuit), the `before` of the list's faint check
+  and of the MoveEnd payout. Then the tail on the newcomer: King's Rock with its item, the
+  switch-in effects at TRIGGER_SWITCH_IN_EFFECTS (bcp.c:3672-3682), the item checks and the thaw
+  (the guarded Sticky Barb, battle_lib.c:5393, Shell Bell bcp.c:4739 and Life Orb :4761
+  skipped), UpdateMoveBuffers on the newcomer (bcp.c:3917-3944: movePrevByBattler, movePrev and
+  moveProtect written after UpdateAfterSwitch cleared them, battle_lib.c:2119-2123), MoveEnd.
+- B6-5 The Choice lock (bcp.c:3921-3934) tests `moveTemp`: U-turn under SYSCTL_UTURN_ACTIVE (set
+  at :68, so only a resumed U-turn) and Baton Pass under SYSCTL_MOVE_SUCCEEDED (a Baton Pass whose
+  attack message showed, a failed one included) never lock; a Sleep Talk that calls U-turn locks
+  the newcomer into Sleep Talk when it holds a Choice item.
+- B6-6 (departure) The resumed half reads its own draws in the sampler too: `sample_outcome` and
+  the laws read a paused state through `outcome.pivot_view` (the pivoting side switches to its
+  pick first, the newcomer on the field, movePrev the paused move's moveTemp, the other side's
+  action as chosen while it is still to act), and the paused action's King's Rock
+  (`flinch_item[pivot, 0]`, with the newcomer's item param) is added by `outcome_laws`. The
+  design's "playout loops `step` with the same Outcome" would draw the newcomer's King's Rock
+  with the outgoing battler's param (`kings_rock_chance` reads the active's item):
+  `playout.step_through` draws a fresh outcome of the paused state for each resume.
+- B6-7 The search: `stage_b`'s pending kind `"pivot"` (before learn and replacement: a pause is
+  mid-turn); `decision_actions` offers the player's `legal_replacements` at its own list and the
+  placeholder action 0 at the opponent's; an answer is the turn request `(state, answer, 0)`
+  through `expand` (a chance node), the opponent's pick made in the row program
+  (`playout.turn_inputs`: `post_ko_switch_in` with `ts_pick_mul`, refused as a replacement's;
+  `aiSwitchedPartySlot` is 6 there, `Task_TrainerShowPartyMenu` battle_display.c:4543-4556) and
+  the turn's powerMul and AI switch read from `ts_power_mul` / `ts_ai_switched`. A paused child
+  runs no learnset scan and no replacement. A playout from a paused root resumes it first
+  (`playout._play`'s `pick`), not counted as a turn; `leaves`' forced turns go through
+  `turn_inputs` and `step_through` too.
+- B6-8 A locked battler never Struggles (it picks no command, bcp.c:335, so the STRUGGLING_ALL
+  test of :433 is not reached): `step` now masks `selected_move`'s struggling with the lock, as the
+  reference engine's `_choose` already did (a value the scratch keeps).
+- B6-9 `step._execute_actions` is a `while_loop` over (position, phase): a U-turn that reaches its
+  foe's Pursuit stops after its head, the next pass plays the Pursuit at the one Pursuit site (a
+  switch's pre-switch hit shares it), then the action's tail (`_use_move`'s `MODE_PURSUIT`); a
+  list ends the loop with the scratch written. `_use_move` and `_act` stay one trace each:
+  `MODE_PURSUIT` / `MODE_RESUME` drop the head's state at the boundary before the hit loop and
+  read the paused inputs (`ts_used`, `ts_damaged`, `ts_dealt`) from the scratch; Roar's drag and
+  the resume share one `hooks.switch_in_effects` site.
