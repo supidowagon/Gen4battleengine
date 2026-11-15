@@ -206,6 +206,16 @@ Rules left out because another mechanic is missing; each closes with the mechani
   `ts_pick_mul`, `playout.turn_inputs`). After a switch the newcomer's `last_move` is the paused
   move's moveTemp (UpdateMoveBuffers, bcp.c:3944), which the next turn's
   `TrainerAI_RecordLastMove` reads.
+- Program size after batch 6 (trace-only, a synthetic 2v2 state; `_scratch/e2/b6/prog_count.py`):
+  `step` 73,169 -> 80,110 jaxpr equations, one playout 236,143 -> 310,620 (+32%), `leaves._forced_turn`
+  127,788 -> 183,980 (+44%): `playout.step_through` traces `step`'s pause loop with a second
+  `sample_outcome` and `pivot_pick` (`post_ko_switch_in`, `replacement_policy`) in it. Chance-node
+  width unchanged (4,616 rows over the Roark start pairs at full and 10 HP, both trees). Peak memory
+  of one node, `test_leaves.py::test_wins_count_successes`: 7.4 GB at ffcdc54, over 7.9 GB at the
+  tip (stopped at the cap). Proposed bound, awaiting the coordinator: a static per-fight flag (a
+  U-turn, Baton Pass or Metronome among both parties' moves and learnable moves) that traces the
+  pause paths only when set, and the turn's first `sample_outcome` folded into `step_through`'s
+  loop (one trace).
 - Tests: `tests/search/exhaustive.py` (the reference solver) plays no pause; its endgames have no
   U-turn or Baton Pass.
 - Rest and Yawn (unsupported moves) read `FIELD_CONDITION_UPROAR` too (subscript_rest.s,
