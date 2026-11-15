@@ -16,6 +16,7 @@ from nuzline.ai.policy import ai_policy, ai_refusals
 from nuzline.ai.switching import REFUSED_ACTION
 from nuzline.engine.state import make_state
 from tests.ai.fixtures import GEODUDE, outcome, trace_a, versus
+from tests.conftest import K3C_EFFECTS
 
 SELFDESTRUCT, HEAD_SMASH, CRUNCH = 120, 457, 242
 TRIPLE_AXEL, RETURN = 149, 216  # Kaizo names of the decomp's MOVE_PSYWAVE and MOVE_RETURN
@@ -30,34 +31,44 @@ def _kaizo_mon(party, species: str, names):
 def test_layout_of_reads_tables(tables, kaizo_tables):
     assert isinstance(VANILLA, AiLayout) and isinstance(KAIZO, AiLayout)
     assert layout_of(tables) is VANILLA
-    assert layout_of(kaizo_tables) is KAIZO
+    # the kaizo_tables fight transcribes the K3c effects only (E1 Ruling R7)
+    assert layout_of(kaizo_tables) == KAIZO._replace(
+        transcribed=KAIZO.transcribed & K3C_EFFECTS,
+        expert_transcribed=KAIZO.expert_transcribed & K3C_EFFECTS,
+    )
     assert int(tables.ai_policy) == 0 and int(kaizo_tables.ai_policy) == 1
     with pytest.raises(TypeError, match="layout_of"):
         jax.jit(lambda t: layout_of(t).water2_ability)(tables)
 
 
 def test_layout_per_flag_set(tables, kaizo_tables):
-    """E1 Rulings R2 and R6: the Kaizo layout is the fight's trainer's flag set
-    (``Tables.ai_flags``) with the read bound of its party's moves under that set
-    (``Tables.ai_move_reads``, ``fight_slot_reads``), refused while either is unset; vanilla
-    keeps its one set whatever the flags. Each (set, bound) is its own static layout with its
-    own program-cache key."""
-    from nuzline.ai.layout import fight_slot_reads
-    from nuzline.data.tables import AI_FLAGS_UNSET, AI_MOVE_READS_UNSET
+    """E1 Rulings R2, R6 and R7: the Kaizo layout is the fight's: its trainer's flag set
+    (``Tables.ai_flags``), and its opponents' moves (``Tables.ai_moves``): their read bound
+    under that set (``fight_slot_reads``) and their transcribed effects only; refused while
+    either is unset; vanilla keeps its one set whatever the flags. Each layout is its own
+    static argument with its own program-cache key."""
+    from nuzline.ai.layout import fight_effects, fight_layout, fight_slot_reads, move_read_rows
+    from nuzline.data.tables import AI_FLAGS_UNSET, AI_MOVES_UNSET
 
-    assert layout_of(kaizo_tables) is kaizo_layout(0b10111, 7) == KAIZO
+    t = kaizo_tables
+    roark = layout_of(t)
+    assert roark == fight_layout(t, KAIZO.flags, t.ai_moves)
+    assert roark.slot_reads == KAIZO.slot_reads == 7 and roark.flags == KAIZO.flags
+    assert roark.transcribed == KAIZO.transcribed & fight_effects(t, t.ai_moves)
+    assert roark.transcribed < KAIZO.transcribed and roark.key.startswith("kaizo-0x17-r7-e")
+    rows = move_read_rows(t, t.ai_moves)
     sets = (0x1, 0x5, 0x7, 0x17, 0xD, 0xF, 0x1F, 0x207, 0x20F, 0x27, 0x10F)
     for flags in sets:
-        layout = layout_of(kaizo_tables._replace(ai_flags=jnp.int32(flags)))
-        reads = fight_slot_reads(kaizo_tables.ai_move_reads, flags)
-        assert layout == KAIZO._replace(flags=flags, slot_reads=reads)
-        assert layout.key == f"kaizo-{flags:#x}-r{reads}"
+        layout = layout_of(t._replace(ai_flags=jnp.int32(flags)))
+        reads = fight_slot_reads(rows, flags)
+        assert layout == roark._replace(flags=flags, slot_reads=reads)
+        assert layout.key.startswith(f"kaizo-{flags:#x}-r{reads}-e")
     assert len({kaizo_layout(f, 7).key for f in sets} | {VANILLA.key}) == len(sets) + 1
-    assert kaizo_layout(0x17, 6).key != KAIZO.key
+    assert kaizo_layout(0x17, 7) is KAIZO and kaizo_layout(0x17, 6).key != KAIZO.key
     with pytest.raises(ValueError, match="not set"):
-        layout_of(kaizo_tables._replace(ai_flags=AI_FLAGS_UNSET))
+        layout_of(t._replace(ai_flags=AI_FLAGS_UNSET))
     with pytest.raises(ValueError, match="not set"):
-        layout_of(kaizo_tables._replace(ai_move_reads=AI_MOVE_READS_UNSET))
+        layout_of(t._replace(ai_moves=AI_MOVES_UNSET))
     with pytest.raises(ValueError, match="WIDTH_CAP"):
         kaizo_layout(0x17, 15)
     assert layout_of(tables._replace(ai_flags=jnp.int32(0x17))) is VANILLA
@@ -187,13 +198,12 @@ def test_traced_tables_without_a_layout_refuse_another_policy(tables, names):
     kaizo_like = tables._replace(
         ai_policy=jnp.asarray(1, tables.ai_policy.dtype),
         ai_flags=jnp.int32(KAIZO.flags),
-        # one move whose BASIC path makes KAIZO.slot_reads reads (E1 Ruling R6)
-        ai_move_reads=np.array([[KAIZO.slot_reads] + [0] * 7] + [[0] * 8] * 23, np.int8),
+        # the fight's moves: the trace state's opponents' (E1 Rulings R6, R7)
+        ai_moves=np.asarray(s.moves[1]).ravel().astype(np.int16),
     )
     # Concrete tables resolve their own layout: the Kaizo policy's outcome is per slot.
-    per_slot = outcome()._replace(
-        script_rolls=jnp.full((4, KAIZO.slot_reads), 254, jnp.uint8),
-    )
+    reads = layout_of(kaizo_like).slot_reads
+    per_slot = outcome()._replace(script_rolls=jnp.full((4, reads), 254, jnp.uint8))
     assert int(jax.jit(lambda st: ai_policy(kaizo_like, st, per_slot))(s)) == 0
     traced = jax.jit(lambda t: ai_policy(t, s, outcome()))
     assert int(traced(tables)) == 0

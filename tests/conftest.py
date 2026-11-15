@@ -6,6 +6,7 @@ import json
 import sys
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from nuzline.data.games import GAMES, KAIZO, VANILLA
@@ -22,13 +23,61 @@ prune_other_versions(_COMPILE_CACHE)
 set_compile_cache_dir(_COMPILE_CACHE)
 
 
+def _resident_bytes() -> int:
+    """This process's resident memory (working set on Windows), 0 when unknown."""
+    try:
+        if sys.platform == "win32":
+            import ctypes
+            from ctypes import wintypes
+
+            class Counters(ctypes.Structure):
+                _fields_ = [
+                    ("cb", wintypes.DWORD),
+                    ("PageFaultCount", wintypes.DWORD),
+                    ("PeakWorkingSetSize", ctypes.c_size_t),
+                    ("WorkingSetSize", ctypes.c_size_t),
+                    ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+                    ("PagefileUsage", ctypes.c_size_t),
+                    ("PeakPagefileUsage", ctypes.c_size_t),
+                ]
+
+            c = Counters()
+            c.cb = ctypes.sizeof(c)
+            kernel32 = ctypes.WinDLL("kernel32")
+            kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+            info = kernel32.K32GetProcessMemoryInfo
+            info.argtypes = [wintypes.HANDLE, ctypes.POINTER(Counters), wintypes.DWORD]
+            info.restype = wintypes.BOOL
+            if info(kernel32.GetCurrentProcess(), ctypes.byref(c), c.cb):
+                return int(c.WorkingSetSize)
+            return 0
+        with open("/proc/self/statm") as f:
+            import os
+
+            return int(f.read().split()[1]) * os.sysconf("SC_PAGE_SIZE")
+    except (OSError, AttributeError, ValueError):
+        return 0
+
+
+# Above this resident size, JAX's in-memory programs are dropped after the current test.
+_CLEAR_ABOVE = 6 * 2**30
+
+
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_protocol(item, nextitem):
-    """Drop JAX's in-memory compiled programs after each test module. One process
-    running the whole suite otherwise keeps every module's executables and reached
-    38 GB of commit (29 GB for tests/engine alone; 6 GB peak with this)."""
+    """Drop JAX's in-memory compiled programs after each test module, and after any test that
+    leaves the process above 6 GB resident. One process running the whole suite otherwise
+    keeps every module's executables and reached 38 GB of commit (29 GB for tests/engine
+    alone; 6 GB peak with this). The trainer-AI modules compile a program per layout (flag
+    set, read bound and a fight's effects, E1 Rulings R2, R6, R7) and one of them alone passed
+    20 GB (E1 batch 8); clearing after every test there made them re-trace every program, so
+    the clear follows memory instead. The persistent compile cache keeps recompiles cheap."""
     yield
-    if (nextitem is None or nextitem.module is not item.module) and "jax" in sys.modules:
+    next_module = nextitem is None or nextitem.module is not item.module
+    if "jax" in sys.modules and (next_module or _resident_bytes() > _CLEAR_ABOVE):
         sys.modules["jax"].clear_caches()
         gc.collect()
 
@@ -221,16 +270,50 @@ def _require_kaizo_tables() -> None:
         pytest.skip("Kaizo tables not built (run python -m tools.build_tables --game kaizo)")
 
 
-@pytest.fixture(scope="session")
-def kaizo_tables(kaizo_roark, kaizo_roark_party):
-    """The Kaizo tables of Kaizo Roark's fight (``ai.layout.fight_tables``): his trainer AI
-    flags 23 (``Tables.ai_flags``, E1 Ruling R2) and his party's read rows
-    (``Tables.ai_move_reads``, E1 Ruling R6; ``ai.layout.layout_of`` refuses either unset), as
-    most Kaizo tests are his."""
-    from nuzline.ai.layout import fight_tables
+# The battle effects of the K3c Kaizo transcription: Kaizo Roark's party's, and the moves the
+# K3c tests put in it (Leer, Screech, Pursuit, Tackle). The Kaizo tests run on this fight.
+K3C_EFFECTS = frozenset(
+    {
+        0,
+        2,
+        3,
+        4,
+        6,
+        7,
+        19,
+        31,
+        32,
+        33,
+        35,
+        52,
+        59,
+        69,
+        72,
+        76,
+        109,
+        128,
+        140,
+        186,
+        261,
+        266,
+        269,
+        275,
+    }
+)
 
+
+@pytest.fixture(scope="session")
+def kaizo_tables():
+    """The Kaizo tables of a fight under Kaizo Roark's trainer AI flags 23 (``Tables.ai_flags``,
+    E1 Ruling R2) against opponents with one Kaizo move of each ``K3C_EFFECTS`` effect
+    (``Tables.ai_moves``, E1 Rulings R6, R7; ``ai.layout.layout_of`` refuses either unset), so
+    the layout transcribes the effects the K3c tests use and no more: a program no wider than
+    a real fight's (E1 batch 8)."""
     _require_kaizo_tables()
-    return fight_tables(load_tables(KAIZO_TABLES_DIR), kaizo_roark, kaizo_roark_party)
+    tables = load_tables(KAIZO_TABLES_DIR)
+    effect = np.asarray(tables.move_ai_effect)
+    moves = [1 + int(np.flatnonzero(effect[1:] == e)[0]) for e in sorted(K3C_EFFECTS)]
+    return tables._replace(ai_flags=np.int32(0b10111), ai_moves=np.asarray(moves, np.int16))
 
 
 @pytest.fixture(scope="session")

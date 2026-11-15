@@ -25,7 +25,6 @@ import pytest
 from nuzline.ai import commands as c
 from nuzline.ai import policy
 from nuzline.ai.commands import BattleEffect, TypeMulti
-from nuzline.ai.layout import KAIZO
 from nuzline.ai.outcome import (
     KAIZO_EXPERT_LABELS,
     KAIZO_EXPERT_TRANSCRIBED,
@@ -44,6 +43,7 @@ from nuzline.engine.order import (
 )
 from nuzline.engine.state import MOVES, make_state
 from tests.ai.test_kaizo_outcome import (
+    KAIZO,
     _assert_exact_equals_loose,
     _bulky,
     _with_player,
@@ -1850,12 +1850,19 @@ def test_status_moves_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_
         (3, (2271,), 0),
         (5, (), 2),  # above decomp 10: +1, then the roll's +1
         (5, (2271,), 1),
+        # the attacker's accuracy (:2262, :2264): below decomp 4 (engine -3) the roll's +1,
+        # below 2 (engine -5) +1 and the roll's +1
+        ("acc-3", (), 1),
+        ("acc-5", (), 2),
     ],
 )
 def test_bypass_accuracy(kaizo_tables, kaizo_names, kaizo_roark_party, eva, jumps, expected):
     t, n = kaizo_tables, kaizo_names
     s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Aerial Ace", "Accelerock", "", ""))
-    s = s._replace(stages=s.stages.at[0, Stat.EVA].set(eva))
+    if isinstance(eva, str):
+        s = s._replace(stages=s.stages.at[1, Stat.ACC].set(int(eva.removeprefix("acc"))))
+    else:
+        s = s._replace(stages=s.stages.at[0, Stat.EVA].set(eva))
     assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expected
 
 
@@ -1868,6 +1875,7 @@ def test_bypass_accuracy(kaizo_tables, kaizo_names, kaizo_roark_party, eva, jump
         ("Geodude", (2839,), 0),
         ("Gible", (), 1),  # Dragon/Ground: neutral: :2836, then :2839
         ("Gible", (2836,), 0),
+        ("Geodude", (2836,), 1),  # super effective skips :2836 (:2834-2835; review m1)
     ],
 )
 def test_high_critical(kaizo_tables, kaizo_names, kaizo_roark_party, player, jumps, expected):
@@ -1905,14 +1913,34 @@ def test_status_and_hp_boosts(
         # Expert_SpeedDownOnHit (script.s:2338-2350) -> Expert_StatusSpeedDown (:2353-2366):
         ("Icy Wind", True, 2),  # slower: +2 unless :2362 jumps
         ("Icy Wind", False, -3),
+        ("Rock Tomb", True, 2),
+        ("Mud Shot", False, -3),
         ("BubbleBeam", True, 0),  # LOWER_SPEED_HIT but not one of the three: nothing
+        ("Icy Wind:2362", True, 0),  # the 70 roll jumps
     ],
 )
 def test_speed_down_on_hit(kaizo_tables, kaizo_names, kaizo_roark_party, move, slower, expected):
+    from tests.ai.test_kaizo_outcome import GIBLE as GIBLE_SPECIES
+
     t, n = kaizo_tables, kaizo_names
+    move, _, line = move.partition(":")
     s = _state(t, kaizo_roark_party, BONSLY, _ids(n, move, "Accelerock", "", ""))
+    # a player none of them is resisted by: Gible for Icy Wind and Mud Shot, Tentacool for
+    # Rock Tomb and BubbleBeam
+    target = GIBLE_SPECIES if move in ("Icy Wind", "Mud Shot") else 72
+    s = _with_player(t, s, target, 0, known=True)
     s = _speeds(s, player=500 if slower else 1, opp=100)
-    assert _delta(t, s, 0x3, 0x7)[0] == expected
+    jumps = ((0, int(line)),) if line else ()
+    assert _delta(t, s, 0x3, 0x7, jumps)[0] == expected
+
+
+def test_brine_resisted(kaizo_tables, kaizo_names, kaizo_roark_party):
+    """Expert_Brine (script.s:4877-4887): resisted (Water into a Water/Poison Tentacool), -1
+    whatever the HP (review m1)."""
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Brine", "Accelerock", "", ""))
+    s = _hp(_with_player(t, s, 72, 0, known=True), 0, 30)
+    assert _delta(t, s, 0x3, 0x7)[0] == -1
 
 
 @pytest.mark.parametrize("flags", [0x17, 0x10F])
@@ -1926,6 +1954,7 @@ def test_expert_only_hits_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_ro
     pool = {}
     for m in range(1, effect.shape[0]):
         pool.setdefault(int(effect[m]), m)
+    pool[70] = n.move_names.index("Icy Wind")  # one that reaches Expert_StatusSpeedDown
     groups = ((17, 43, 48, 70), (169, 171, 198, 221), (262, 0, 0, 0))
     for moves in groups:
         ids = tuple(pool[e] if e else 0 for e in moves)

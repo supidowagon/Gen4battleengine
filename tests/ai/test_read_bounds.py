@@ -55,5 +55,3 @@ def test_fight_slot_reads(kaizo_tables, kaizo_roark_party):
     assert fight_slot_reads(rows, KAIZO.flags) == KAIZO.slot_reads == 7
     assert fight_slot_reads(rows, 0x7) == 6  # without RISKY's :6530
     assert fight_slot_reads(move_read_rows(t, []), 0x17) == 1
-    with pytest.raises(ValueError, match="more than 24"):
-        move_read_rows(t, list(range(1, 26)))

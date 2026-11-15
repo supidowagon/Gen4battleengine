@@ -111,7 +111,7 @@ def test_a_score_past_the_s8_is_refused(monkeypatch, kaizo_tables, kaizo_roark_p
     # A score above 127 cannot come out of the wrapped AddToMoveScore; if one ever did, the
     # factored distribution is NaN instead of ranking it (policy._slot_move_distribution).
     from nuzline.ai import policy
-    from nuzline.ai.layout import KAIZO
+    from tests.ai.test_kaizo_outcome import KAIZO  # Roark's fight (E1 batch 8)
 
     s = make_state(kaizo_tables, [kaizo_roark_party[2]], list(kaizo_roark_party))
     real = policy._slot_histograms

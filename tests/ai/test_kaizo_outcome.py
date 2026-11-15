@@ -25,8 +25,10 @@ compares are on transcribed paths (Expert_Explosion, Expert_StatusSpeedUp and Ex
 script.s:1864, :2070, :2650), and ``tests/ai/test_kaizo_policy.py
 test_exact_equals_loose_at_equal_speed`` checks exact against loose at equal speed on each.
 
-The tests run on the real ``KAIZO`` layout: since K3c Task 6 every Expert label of Kaizo
-Roark's effects is transcribed, so no test-only layout is needed.
+The tests run on ``KAIZO`` restricted to the K3c transcription's 24 effects (``ROARK_EFFECTS``:
+Kaizo Roark's party's and the K3c test moves'), the ``kaizo_tables`` fight's (E1 Ruling R7: a fight's programs trace its own moves' labels only), so no
+test compiles a program wider than a real fight's (E1 batch 8: a program of every transcribed
+effect reached 20 GB in one test module).
 """
 
 import dataclasses
@@ -41,7 +43,8 @@ from scipy.stats import chisquare
 
 from nuzline.ai import commands, policy
 from nuzline.ai.commands import ReadKind
-from nuzline.ai.layout import KAIZO, VANILLA, layout_of
+from nuzline.ai.layout import KAIZO as KAIZO_ALL
+from nuzline.ai.layout import VANILLA, kaizo_layout, layout_of
 from nuzline.ai.outcome import (
     ENUMERATION_WIDTH,
     KAIZO_EXPERT_LABELS,
@@ -64,11 +67,17 @@ from nuzline.engine.ids import Stat
 from nuzline.engine.state import MOVES, BattleState, make_state
 from nuzline.search.rows import take
 from tests.ai.fixtures import GEODUDE, outcome, versus
+from tests.conftest import K3C_EFFECTS
 
 # Kaizo move ids (data/gen4_platinum_kaizo names).
 ROCK_THROW, PURSUIT, LEER, SCREECH, HEADBUTT, TACKLE = 88, 228, 43, 103, 29, 33
 STEALTH_ROCK, ACCELEROCK, WATER_GUN, U_TURN, TOXIC = 446, 205, 55, 369, 92
 SELFDESTRUCT = 120
+# The K3c transcription's effects (tests/conftest.py K3C_EFFECTS): the layout these tests
+# ran on, the kaizo_tables fight's (test_kaizo_layout_shapes).
+ROARK_EFFECTS = K3C_EFFECTS
+KAIZO = kaizo_layout(KAIZO_ALL.flags, KAIZO_ALL.slot_reads, ROARK_EFFECTS)
+
 GIBLE = 443  # species: Sand Veil / Rough Skin, Dragon/Ground
 SOUNDPROOF, CLEAR_BODY = 43, 29  # decomp ability ids (commands.ABILITY_IDS)
 _SETTINGS = settings(
@@ -115,12 +124,12 @@ def _kaizo_state(t, party, moves, bench=((ACCELEROCK, HEADBUTT, 0, 0),)) -> Batt
 
 
 def layout_for(t, flags: int, s: BattleState):
-    """The Kaizo layout of flag set ``flags`` for ``s``'s opponent party: the read bound of its
-    moves (E1 Ruling R6), as ``ai.layout.fight_tables`` gives a fight."""
-    from nuzline.ai.layout import fight_slot_reads, kaizo_layout, move_read_rows
+    """The Kaizo layout of flag set ``flags`` for ``s``'s opponent party: the read bound and the
+    transcribed effects of its moves (E1 Rulings R6, R7), as ``ai.layout.fight_tables`` gives
+    a fight."""
+    from nuzline.ai.layout import fight_layout
 
-    rows = move_read_rows(t, np.asarray(s.moves[1]).ravel())
-    return kaizo_layout(flags, fight_slot_reads(rows, flags))
+    return fight_layout(t, flags, np.asarray(s.moves[1]).ravel())
 
 
 def _bulky(s: BattleState, hp: int = 400) -> BattleState:
@@ -297,8 +306,9 @@ def test_vanilla_layout_frozen(tables, names):
 
 def test_kaizo_layout_shapes(kaizo_tables, kaizo_roark_party):
     t = kaizo_tables
+    # Roark's fight layout is the tests' (E1 Ruling R7): his party's effects only
     assert layout_of(t) is KAIZO and KAIZO.per_slot_sites
-    assert KAIZO.transcribed == KAIZO_TRANSCRIBED
+    assert KAIZO.transcribed == ROARK_EFFECTS < KAIZO_TRANSCRIBED
     s = _kaizo_state(t, kaizo_roark_party, (ROCK_THROW, PURSUIT, LEER, STEALTH_ROCK))
     o = sample_ai_outcome(jax.random.PRNGKey(0), t, s, KAIZO)
     assert o.script_rolls.shape == (MOVES, KAIZO.slot_reads) and o.script_rolls.dtype == jnp.uint8
@@ -696,27 +706,41 @@ def test_exact_equals_loose_per_flag_set(
 
 
 def test_slot_reads_fit_every_transcribed_effect(kaizo_tables, kaizo_roark_party):
-    """E1 Ruling R6 against the data: for every transcribed Kaizo move in slot 0 (the rest drawn
-    from the transcribed pool), over random players (any species with two abilities, any
-    types, guessed or known), random HP, Defense and evasion stages on both sides and the
-    first turn or a later one, the loose oracle's longest path (``LooseDraws.live``) under
-    every transcribed flag at once makes at most the fight's bound for those moves
-    (``layout.fight_slot_reads``). Selfdestruct reaches Roark's bound by hand: :117 and :304
-    (two guesses), :6374, :1859 (evasion +4 or more), :1870 and :1875 (HP at most 30 %)
-    (script.s:6365-6374, :1841-1884), and Risky :6530 (:6521-6534)."""
-    from nuzline.ai.layout import KAIZO_FLAG_BITS, fight_slot_reads, move_read_rows
+    """E1 Ruling R6 against the data, in small pieces (E1 batch 8). The proof that no path makes
+    more reads than its fight's bound is the walk of script.s (tests/ai/test_read_bounds.py
+    regenerates its table); this checks it on the transcription. For the eight transcribed
+    effects whose walked bound under every flag is largest, and Selfdestruct's, a fight of one
+    such move with Roark's Accelerock and Headbutt, over random players (any species with two
+    abilities, any types, guessed or known), random HP, Defense and evasion stages and the
+    first turn or a later one: the loose oracle's longest path, under every transcribed flag,
+    makes at most the fight's bound (``layout.fight_slot_reads``; speed ties are no read of
+    the exact layout). Each piece is a fight-sized program, and JAX's caches are cleared
+    between pieces. Selfdestruct reaches Roark's bound by hand: :117 and :304 (two guesses),
+    :6374, :1859 (evasion +4 or more), :1870 and :1875 (HP at most 30 %) (script.s:6365-6374,
+    :1841-1884), and Risky :6530 (:6521-6534)."""
+    from nuzline.ai.layout import KAIZO_FLAG_BITS, fight_layout, fight_slot_reads, move_read_rows
+    from nuzline.ai.read_bounds import READ_BOUND_BITS, READ_BOUNDS
 
     t = kaizo_tables
     every = sum(1 << b for b in KAIZO_FLAG_BITS)
     effect = np.asarray(t.move_ai_effect)
-    pool = _move_pool(t)
-    assert {int(effect[m]) for m in pool} == KAIZO.transcribed
+    first = {}
+    for move in _move_pool(t, KAIZO_ALL):
+        first.setdefault(int(effect[move]), move)
+    assert set(first) == KAIZO_ALL.transcribed
+
+    def walked(e):
+        return max(sum(READ_BOUNDS[(e, d, q)]) for d in (False, True) for q in (False, True))
+
+    sample = sorted(first, key=lambda e: (-walked(e), e))[:8]
+    sample = [*sample, *([7] if 7 not in sample else [])]  # HALVE_DEFENSE: Selfdestruct
+    assert len(READ_BOUND_BITS) == 8
     rng = np.random.default_rng(11)
     species = _two_ability_species(t)
-    for move in pool:
+    for e in sample:
+        moves = [first[e], ACCELEROCK, HEADBUTT, 0]
         states = []
         for _ in range(4):
-            moves = [move] + [int(rng.choice((0, *pool))) for _ in range(3)]
             s = _kaizo_state(t, kaizo_roark_party, moves)
             s = _with_player(t, s, int(rng.choice(species)), int(rng.integers(2)))
             s = s._replace(ai_ability_known=s.ai_ability_known.at[0].set(int(rng.integers(4) == 0)))
@@ -734,18 +758,18 @@ def test_slot_reads_fit_every_transcribed_effect(kaizo_tables, kaizo_roark_party
             s = s._replace(stages=stages.at[1, Stat.DEF].set(int(rng.integers(-6, 7))))
             states.append(s._replace(turn=jnp.asarray(int(rng.integers(2)), s.turn.dtype)))
         batch = jax.tree.map(lambda *xs: jnp.stack(xs), *states)
-        layout = layout_for(t, every, states[0])
+        party = np.asarray(states[0].moves[1]).ravel()
+        layout = fight_layout(t, every, party)
         reads, _, _ = policy._loose_reads(t, batch, layout)
         _, lo = policy._loose_batch(t, batch, jnp.asarray(policy._loose_patterns(reads)), layout)
-        # the exact layout draws no speed tie (plan K3c Ruling 3), so it is not a read here
         counted = np.asarray(lo.live) & (np.asarray(lo.kind) != ReadKind.SPEED_TIE)
-        longest = counted[:, :, 0].sum(axis=2).max(axis=1)  # per state
-        for s, n in zip(states, longest, strict=True):
-            bound = fight_slot_reads(move_read_rows(t, np.asarray(s.moves[1]).ravel()), every)
-            assert n <= bound, (move, int(n), bound)
+        longest = int(counted[:, :, 0].sum(axis=2).max())
+        bound = fight_slot_reads(move_read_rows(t, party), every)
+        assert longest <= bound, (e, longest, bound)
+        jax.clear_caches()
     # Roark's bound by hand: Selfdestruct, a guessed two-ability player, evasion +4 (decomp
     # stage 10, script.s:1857), Bonsly at 10 % HP.
-    assert fight_slot_reads(t.ai_move_reads, KAIZO.flags) == KAIZO.slot_reads == 7
+    assert fight_slot_reads(move_read_rows(t, t.ai_moves), KAIZO.flags) == KAIZO.slot_reads == 7
     s = _kaizo_state(t, kaizo_roark_party, (SELFDESTRUCT, 0, 0, 0))
     s = _bulky(_with_player(t, s, GIBLE), 400)
     s = s._replace(

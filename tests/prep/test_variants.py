@@ -70,7 +70,7 @@ def _as_kaizo_policy(tables):
     return tables._replace(
         ai_policy=jax.numpy.asarray(AI_POLICIES.index("kaizo"), tables.ai_policy.dtype),
         ai_flags=np.int32(0x17),
-        ai_move_reads=np.zeros((24, 8), np.int8),  # no opponent move (E1 Ruling R6)
+        ai_moves=np.zeros(24, np.int16),  # no opponent move (E1 Rulings R6, R7)
     )
 
 
