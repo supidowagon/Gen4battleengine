@@ -787,13 +787,17 @@ def sample_ai_outcome(
     over ``switch_sites(tables, state, layout.switch_sites)``). ``layout``: a per-slot layout
     draws ``script_rolls`` as ``uint8[MOVES, layout.slot_reads]``, each entry a uniform
     ``RandNext() % 256`` (each read compares its own draw: module docstring), and leaves
-    ``ability_guess`` 0; the default, and any flat layout, is the vanilla layout."""
+    ``ability_guess`` 0; the default, and any flat layout, is the vanilla layout. Read column
+    i is drawn from its own key (``fold_in(key, i)``), so a key gives the same reads whatever
+    the layout's bound: the fight's own layout and ``layout.ALLIN`` see the same draws."""
     sites = SWITCH_SITES if layout is None else layout.switch_sites
     layout_sites = switch_sites(tables, state, sites)
     k = jax.random.split(key, 4)
     draws = jax.random.randint(k[3], (sites,), 0, 65536, dtype=_I32)
     if layout is not None and layout.per_slot_sites:
-        rolls = jax.random.randint(k[1], (MOVES, layout.slot_reads), 0, 256, dtype=_I32)
+        rolls = jax.vmap(
+            lambda i: jax.random.randint(jax.random.fold_in(k[1], i), (MOVES,), 0, 256, dtype=_I32)
+        )(jnp.arange(layout.slot_reads)).T
         script_rolls, guess = rolls.astype(jnp.uint8), jnp.zeros((), _I8)
     else:
         rolls = jax.random.randint(k[1], (MAX_SCRIPT_ROLLS,), 0, 256, dtype=_I32)

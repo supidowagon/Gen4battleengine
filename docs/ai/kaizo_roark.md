@@ -1131,6 +1131,26 @@ so a replay that tracks the RNG must count them.
 
 A post-KO replacement (`BattleAI_PostKOSwitchIn`, `battle_lib.c:7923-8089`) draws nothing.
 
+### 8.6 Two shapes: the fight's own layout and `ALLIN` (E1 batch AI-1, 2026-11-15)
+
+The user chose one transcription in two program shapes (`ai.layout` module docstring).
+
+- **The exact distribution stays per fight.** The search and the exact == loose checks use the fight's own layout: its flags, own effects (R7) and read bound (R6), all static.
+  - Its `2**slot_reads` scorings stay under `WIDTH_CAP`.
+  - The exact entry points refuse `ALLIN` with a `ValueError`.
+- **The sampled AI can run `ALLIN`, one program for every Kaizo fight.** `ALLIN` is used by `sample_ai_outcome` and `ai_policy`.
+  - It carries every transcribed flag bit and effect, and the bound `ALLIN_READS`: the largest row sum of `read_bounds.READ_BOUNDS`, which no fight's path under any of its flags passes.
+  - The trainer's flags are read at run time from `tables.ai_flags`. `_run_flags` runs each flag script and keeps its result only when the bit is set (`trainer_ai.c:297-308` runs a set bit's script only).
+  - Otherwise it restores every context field the script could write, `reads`, `weight` and `missing_read` among them. So a masked script consumes no random read, and the next script's reads take the same `script_rolls[slot, k]` as in the fight's own layout (8.2).
+- **Draws do not depend on the read bound.** `sample_ai_outcome` draws read column `i` from `fold_in(key, i)`, so one key gives both shapes the same reads.
+- **Refusals under `ALLIN`.**
+  - Unset flags, or flags with a bit the policy does not transcribe, are refused as a policy refusal.
+  - The Expert-label refusal follows the fight's own EXPERT bit.
+- **Tests:** `tests/ai/test_allin.py`.
+  - The same action as the fight's own layout for every key, over a cover of the real flag sets in the fast tier and over all of them in the slow tier.
+  - The same read counts, path weights and scores.
+  - The masked scripts would have read.
+
 ## 9. What the AI knows about the player
 
 The records are roark.md 9's, kept the same way by the engine (`BattleState.ai_seen_moves`,
