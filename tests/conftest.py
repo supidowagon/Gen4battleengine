@@ -11,14 +11,16 @@ import pytest
 
 from nuzline.data.games import GAMES, KAIZO, VANILLA
 from nuzline.data.tables import load_names, load_tables
-from nuzline.jaxcache import cache_root, code_version, prune_other_versions, set_compile_cache_dir
+from nuzline.jaxcache import cache_root, jax_version, prune_other_versions, set_compile_cache_dir
 
 TABLES_DIR = Path(__file__).resolve().parents[1] / "data" / "gen4_platinum"
 
 # Reruns of the suite skip XLA compilation (only the compilation cache: the
 # serialized-trace cache is left as ``rank_actions`` uses it). Set at import, before
-# any test compiles. Earlier versions' directories are deleted.
-_COMPILE_CACHE = cache_root() / "jax-tests" / code_version()
+# any test compiles. Keyed by the jax and jaxlib versions only (``jax_version``): JAX keys
+# each entry by the compiled program, so a commit keeps every program it leaves unchanged.
+# Other versions' directories are deleted.
+_COMPILE_CACHE = cache_root() / "jax-tests" / jax_version()
 prune_other_versions(_COMPILE_CACHE)
 set_compile_cache_dir(_COMPILE_CACHE)
 
