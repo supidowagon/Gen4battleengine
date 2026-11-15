@@ -875,6 +875,22 @@ def _substitute(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     return _set(state, "hp", (h.side, h.user), hp, cond)
 
 
+def _pain_split(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    """Pain Split (effect_script_0091.s, a direct ON_HIT subscript_pain_split.s): avg = (the
+    attacker's curHP + the defender's) / 2 (:7-10, OPCODE_DIV), then each battler's HP changes
+    by avg - its curHP through UPDATE_HP (:12-22, capped at its max HP; SKIP_SPRITE_BLINK, a
+    status move: no resist berry), B10-5. A substitute fails it first (:5, ``h.shielded``;
+    ``primary_effect_fails``)."""
+    cond = (h.effect == _E.PAIN_SPLIT) & h.landed & ~h.shielded
+    mine = state.hp[h.side, h.user].astype(_I32)
+    theirs = state.hp[h.target_side, h.target].astype(_I32)
+    avg = (mine + theirs) // 2
+    mine_new = jnp.minimum(avg, state.max_hp[h.side, h.user].astype(_I32))
+    theirs_new = jnp.minimum(avg, state.max_hp[h.target_side, h.target].astype(_I32))
+    state = _set(state, "hp", (h.side, h.user), mine_new, cond)
+    return _set(state, "hp", (h.target_side, h.target), theirs_new, cond)
+
+
 def _belly_drum(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     """Belly Drum (effect_script_0142.s, a direct ON_HIT subscript_belly_drum.s; the user, a
     RANGE_USER defender, has HP): Attack set to +6, then Divide(maxHP, 2) through UPDATE_HP (:8-12).
@@ -970,6 +986,8 @@ def primary_effect_fails(tables, state: BattleState, side, target_side, move) ->
         | ((effect == _E.BELLY_DRUM) & belly_drum_fails(state, side))
         # subscript_try_substitute.s:7-8 (MOVE_STATUS_NO_MORE_WORK), B10-4.
         | ((effect == _E.SUBSTITUTE) & substitute_fails(state, side))
+        # subscript_pain_split.s:5, :50-52 (MOVE_STATUS_FAILED), B10-5.
+        | ((effect == _E.PAIN_SPLIT) & (state.substitute_hp[target_side] != 0))
         # subscript_tailwind_start.s:5, :18 and the effect scripts' TrySpikes / TryToxicSpikes
         # jumps (effect_script_0112.s, _0249.s): MOVE_STATUS_FAILED.
         | ((effect == _E.TAILWIND) & (state.tailwind[side] != 0))
@@ -1770,7 +1788,14 @@ def focus_sash_damage(state: BattleState, side, damage, armed) -> tuple:
 # Sight (effect_script_0148.s:7, no damage at its use).
 # subscript_type_resist_berry.s:5 skips the berry for such a hit. tests/tools/
 # test_effect_map.py checks the list against every mapped effect script.
-IGNORES_TYPE_CHECKS = (_E.LEVEL_DAMAGE, _E.FORESIGHT, _E.HALVE_HP, _E.COUNTER, _E.FUTURE_SIGHT)
+IGNORES_TYPE_CHECKS = (
+    _E.LEVEL_DAMAGE,
+    _E.FORESIGHT,
+    _E.HALVE_HP,
+    _E.COUNTER,
+    _E.FUTURE_SIGHT,
+    _E.ENDEAVOR,  # effect_script_0189.s:10 (B10-5)
+)
 # subscript_type_resist_berry.s:6 also skips a MOVE_STATUS_ONE_HIT_KO hit.
 RESIST_BERRY_SKIPS = (*IGNORES_TYPE_CHECKS, _E.OHKO)
 
@@ -2162,6 +2187,7 @@ def play_hit(
         _dragon_dance,
         _belly_drum,
         _substitute,
+        _pain_split,
         _roost,
         _side_layers,
         _destiny_bond,

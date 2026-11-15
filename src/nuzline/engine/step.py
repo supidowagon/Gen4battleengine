@@ -946,6 +946,12 @@ def _use_move(
     dream = (effect_used == EffectId.DRAIN) & (tables.move_param[used, 1] == 1)
     awake = state.status[target_side, state.active[target_side]] != Status.SLEEP
     failed = failed | (dream & (awake | (state.substitute_hp[target_side] != 0)))
+    # Endeavor (effect_script_0189.s:5-7, :13-14): MOVE_STATUS_FAILED unless the defender's curHP
+    # exceeds the user's (B10-5).
+    gap = state.hp[target_side, state.active[target_side]].astype(_I32) - state.hp[
+        side, state.active[side]
+    ].astype(_I32)
+    failed = failed | ((effect_used == EffectId.ENDEAVOR) & (gap <= 0))
     # Imprison (effect_script_0192.s): BtlCmd_TryImprison first sets MOVE_EFFECT_IMPRISONED on
     # the user's foes (battle_script.c:6686-6690: both enemy slots, which in singles name the
     # one foe battler, whatever its HP), then fails (:10) a user already imprisoning or sharing

@@ -688,6 +688,9 @@ INPUT_NEUTRAL_EFFECTS = (
     # B10-4: the user's HP (the HP clause) and its substitute, which no table-damage input reads
     # (SmellingSalt's x2 is DOUBLE_POWER's, never compressed: NON_TABLE_DAMAGE_EFFECTS).
     _E.SUBSTITUTE,
+    # B10-5: both battlers' HP only (the HP clause).
+    _E.ENDEAVOR,
+    _E.PAIN_SPLIT,
 )
 INPUT_CLAUSE_EFFECTS = (
     _E.STAT_SELF,  # the foe's Defense / Sp. Def; Minimize's flag (Stomp's power)
@@ -1038,6 +1041,8 @@ NON_TABLE_DAMAGE_EFFECTS = (
     _E.HELPING_HAND,
     _E.BELLY_DRUM,
     _E.SUBSTITUTE,  # a status move: no damage (B10-4)
+    _E.ENDEAVOR,  # no roll (damage.fixed_damage), B10-5
+    _E.PAIN_SPLIT,  # a status move: no damage
 )
 
 

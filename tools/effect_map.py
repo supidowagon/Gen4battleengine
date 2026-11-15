@@ -356,6 +356,9 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     142: ("BATTLE_EFFECT_MAX_ATK_LOSE_HALF_MAX_HP", _E.BELLY_DRUM, (0, 0, 0)),
     # Substitute (B10-4): effect_script_0079.s, a direct ON_HIT subscript_try_substitute.s.
     79: ("BATTLE_EFFECT_SET_SUBSTITUTE", _E.SUBSTITUTE, (0, 0, 0)),
+    # Endeavor, Pain Split (B10-5): effect_script_0189.s, effect_script_0091.s.
+    189: ("BATTLE_EFFECT_SET_HP_EQUAL_TO_USER", _E.ENDEAVOR, (0, 0, 0)),
+    91: ("BATTLE_EFFECT_AVERAGE_HP", _E.PAIN_SPLIT, (0, 0, 0)),
     # Minimize: effect_script_0108.s, a direct TO_ATTACKER subscript_minimize.s: the user's
     # MOVE_EFFECT_MINIMIZE, then Evasion +1 (STAT_SELF with move_param[m, 2] = MINIMIZE_PARAM).
     108: ("BATTLE_EFFECT_EVA_UP_2_MINIMIZE", _E.STAT_SELF, (_EVA, 1, MINIMIZE_PARAM)),

@@ -279,6 +279,15 @@ class EffectId(IntEnum):
     # behind one or at curHP <= Divide(maxHP, 4); else ``substitute_hp`` = Divide(maxHP, 4), the
     # user's bind cleared and the HP lost (``effects._substitute``, B10-4).
     SUBSTITUTE = 82
+    # Endeavor (189, BATTLE_EFFECT_SET_HP_EQUAL_TO_USER): zeros. effect_script_0189.s: fails
+    # (MOVE_STATUS_FAILED, :7, :13-14) unless the defender's curHP exceeds the attacker's; else
+    # battleCtx->damage = their difference under SYSCTL_IGNORE_TYPE_CHECKS (no CalcCrit /
+    # CalcDamage; an immunity still flags), B10-5.
+    ENDEAVOR = 83
+    # Pain Split (91, BATTLE_EFFECT_AVERAGE_HP): zeros. A direct ON_HIT subscript_pain_split.s:
+    # fails behind a substitute (:5, :50-52); else both battlers' HP become (a + d) / 2 through
+    # UPDATE_HP (:7-19), B10-5.
+    PAIN_SPLIT = 84
 
 
 # ``EffectId.COUNTER``'s source (``move_param[m, 0]``).
@@ -319,6 +328,7 @@ UNROLLED_EFFECTS = (
     EffectId.OHKO,
     EffectId.COUNTER,
     EffectId.FUTURE_SIGHT,
+    EffectId.ENDEAVOR,  # effect_script_0189.s: the HP difference (B10-5)
 )
 # BtlCmd_TryFutureSight (battle_script.c:6074): futureSightTurns = 3.
 FUTURE_SIGHT_TURNS = 3

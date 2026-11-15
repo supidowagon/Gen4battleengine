@@ -428,6 +428,8 @@ def _fixed_damage(tables, s: RefState, attacker: int, move: int) -> int:
         return 0
     if effect == EffectId.HALVE_HP:  # effect_script_0040.s: Divide(curHP, 2)
         return _divide(foe.hp, 2)
+    if effect == EffectId.ENDEAVOR:  # effect_script_0189.s:5-9 (B10-5; <= 0 fails the move)
+        return max(foe.hp - _active(s, attacker).hp, 0)
     if effect == EffectId.OHKO:
         # BtlCmd_TryOHKOMove (script.c:4340-4341): an ignorable Sturdy, MOVE_STATUS_STURDY;
         # else UpdateHP deals maxHP (bcp.c:3343-3345).
@@ -1632,7 +1634,13 @@ def _hit_resist_berry(turn: _Turn, s: RefState, attacker: int, move: int) -> boo
     tables = turn.tables
     effect = _t(tables, "move_effect", move)
     # :5 SYSCTL_IGNORE_TYPE_CHECKS (Night Shade, Foresight, Super Fang), :6 an OHKO hit.
-    if effect in (EffectId.LEVEL_DAMAGE, EffectId.FORESIGHT, EffectId.HALVE_HP, EffectId.OHKO):
+    if effect in (
+        EffectId.LEVEL_DAMAGE,
+        EffectId.FORESIGHT,
+        EffectId.HALVE_HP,
+        EffectId.OHKO,
+        EffectId.ENDEAVOR,  # effect_script_0189.s:10 (B10-5)
+    ):
         return False
     flags: set[str] = set()
     if effect != EffectId.BIDE and _t(tables, "move_power", move) != 0:
@@ -2404,6 +2412,12 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
             sd.substitute_hp = quarter
             sd.trapped = sd.trap_move = 0
             _lose_hp(turn, s, side, quarter)
+    elif effect == EffectId.PAIN_SPLIT and landed and not _shielded(turn, s, target):
+        # subscript_pain_split.s (B10-5): avg = (a + d) / 2 (:7-10), each battler's HP to it through
+        # UPDATE_HP, capped at its max HP (:12-22). A substitute fails it (:5).
+        user, foe = _active(s, side), _active(s, target)
+        avg = (user.hp + foe.hp) // 2
+        user.hp, foe.hp = min(avg, user.max_hp), min(avg, foe.max_hp)
     elif effect == EffectId.ROLLOUT and landed:
         # BtlCmd_CalcRolloutPower (script.c:5661): rolloutCount starts at 5 on a first use,
         # every use decrements it, the lock ends at 0; a hit that dealt nothing (an
@@ -3312,6 +3326,8 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
                 or (theirs[Stat.ATK] >= 6 and bool(s.sides[1 - side].confusion))
             )
         )
+        # subscript_pain_split.s:5 (MOVE_STATUS_FAILED), B10-5.
+        full = full or (effect == EffectId.PAIN_SPLIT and bool(s.sides[1 - side].substitute_hp))
         # subscript_try_substitute.s:7-8 (MOVE_STATUS_NO_MORE_WORK), B10-4.
         full = full or (
             effect == EffectId.SUBSTITUTE
@@ -4017,6 +4033,8 @@ def _script_fails(s: RefState, side: int, effect: int, move_param1: int = 0) -> 
         # CheckSubstitute (:5; no hit of the action yet) then the sleep test (:6), B10-4.
         foe_sd = s.sides[1 - side]
         return bool(foe_sd.substitute_hp) or _active(s, 1 - side).status != Status.SLEEP
+    if effect == EffectId.ENDEAVOR:  # effect_script_0189.s:5-7, :13-14 (B10-5)
+        return _active(s, 1 - side).hp <= _active(s, side).hp
     if effect == EffectId.IMPRISON:
         own = [m for m in _active(s, side).moves if m]
         shared = any(m in _active(s, b).moves for b in (0, 1) if b != side for m in own)

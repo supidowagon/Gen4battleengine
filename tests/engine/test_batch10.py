@@ -225,3 +225,38 @@ def test_ghost_curse_fails_on_a_substitute_without_its_cost(tables, names):
     s = make_state(tables, [_mon(n, "Gastly", ["Curse"], 40)], [_mon(n, "Bidoof", ["Growl"], 30)])
     out = assert_matches_reference(tables, _subbed(s, 1, 30), (0, 0), O)
     assert int(out.curse[1]) == 0 and int(out.hp[0, 0]) == int(s.hp[0, 0])
+
+
+def test_endeavor_cuts_to_the_users_hp_or_fails(tables, names):
+    """B10-5: effect_script_0189.s: damage = the defender's curHP - the attacker's; fails when it
+    is <= 0; a Ghost is immune (SYSCTL_IGNORE_TYPE_CHECKS still flags it)."""
+    n = names
+    s = make_state(
+        tables, [_mon(n, "Rattata", ["Endeavor"], 40)], [_mon(n, "Snorlax", ["Growl"], 40)]
+    )
+    s = s._replace(hp=s.hp.at[0, 0].set(7))
+    out = assert_matches_reference(tables, s, (0, 0), O)
+    assert int(out.hp[1, 0]) == 7
+    even = s._replace(hp=s.hp.at[1, 0].set(7))
+    assert int(assert_matches_reference(tables, even, (0, 0), O).hp[1, 0]) == 7
+    ghost = make_state(
+        tables, [_mon(n, "Rattata", ["Endeavor"], 40)], [_mon(n, "Gastly", ["Growl"], 40)]
+    )
+    ghost = ghost._replace(hp=ghost.hp.at[0, 0].set(7))
+    assert int(assert_matches_reference(tables, ghost, (0, 0), O).hp[1, 0]) == int(ghost.hp[1, 0])
+
+
+def test_pain_split_averages_and_fails_on_a_substitute(tables, names):
+    """B10-5: subscript_pain_split.s: both HP to (a + d) / 2, capped at max HP; a substitute fails
+    it (:5)."""
+    n = names
+    s = make_state(
+        tables, [_mon(n, "Misdreavus", ["Pain Split"], 40)], [_mon(n, "Snorlax", ["Growl"], 40)]
+    )
+    s = s._replace(hp=s.hp.at[0, 0].set(10))
+    out = assert_matches_reference(tables, s, (0, 0), O)
+    avg = (10 + int(s.hp[1, 0])) // 2
+    assert int(out.hp[0, 0]) == min(avg, int(s.max_hp[0, 0]))
+    assert int(out.hp[1, 0]) == avg
+    sub = assert_matches_reference(tables, _subbed(s, 1, 30), (0, 0), O)
+    assert int(sub.hp[0, 0]) == 10 and int(sub.hp[1, 0]) == int(s.hp[1, 0])

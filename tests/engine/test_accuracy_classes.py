@@ -461,6 +461,9 @@ _NO_ACC_EVA_WRITE = (frozenset(EffectId(i) for i in range(40)) - _STAT_KINDS) | 
     EffectId.RECOIL_STATUS,
     EffectId.CRASH,
     EffectId.SUBSTITUTE,
+    # Endeavor and Pain Split write HP only (B10-5).
+    EffectId.ENDEAVOR,
+    EffectId.PAIN_SPLIT,
 }
 # (effect, stat) pairs hit_thresholds follows: they change a later foe move's threshold.
 _SEEN = {

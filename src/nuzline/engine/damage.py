@@ -469,10 +469,15 @@ def fixed_damage(
     flat = _i32(tables.move_param[_i32(move), 0])
     level = jnp.where(is_level & (flat > 0), flat, level)
     amount = jnp.where(is_ohko, ohko, jnp.where(is_halve, halved, level))
+    # Endeavor (effect_script_0189.s:5-9): the defender's curHP minus the attacker's under
+    # SYSCTL_IGNORE_TYPE_CHECKS; a difference <= 0 fails the move (step._use_move), B10-5.
+    is_endeavor = effect == EffectId.ENDEAVOR
+    gap = _i32(state.hp[def_side, target]) - _i32(state.hp[atk_side, state.active[atk_side]])
+    amount = jnp.where(is_endeavor, jnp.maximum(gap, 0), amount)
     # Future Sight / Doom Desire (effect_script_0148.s): no CalcDamage at the use, so no damage;
     # the stored hit is step._future_sight's.
     is_future = effect == EffectId.FUTURE_SIGHT
-    fixed = is_level | is_bide | is_halve | is_ohko | is_future
+    fixed = is_level | is_bide | is_halve | is_ohko | is_future | is_endeavor
     amount = jnp.where(is_future, 0, amount)
     return fixed, jnp.where(is_bide, stored, jnp.where(immune, 0, amount))
 

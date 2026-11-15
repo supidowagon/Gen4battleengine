@@ -1441,3 +1441,16 @@ Rules left out because another mechanic is missing; each closes with the mechani
   family 1 left RECOIL_STATUS / CRASH unclassified in test_accuracy_classes and Flare Blitz's thaw
   unflagged in test_effect_map's thaw test; batch 7 (4a06792) left its four observation cases out
   of test_observe.VISIBLE_CLASSES (a slow test): all three fixed with this commit.
+- B10-5 (batch 10, family 5) Endeavor (`EffectId.ENDEAVOR`, 83, decomp 189) and Pain Split
+  (`EffectId.PAIN_SPLIT`, 84, decomp 91), both engines. Endeavor (effect_script_0189.s): fails
+  (MOVE_STATUS_FAILED, :7, :13-14; `step._use_move`'s `failed`, the reference's `_script_fails`)
+  unless the defender's curHP exceeds the attacker's; else battleCtx->damage is the difference
+  under SYSCTL_IGNORE_TYPE_CHECKS (:10: no multiplier, an immunity still gives 0; no CalcCrit /
+  CalcDamage: `UNROLLED_EFFECTS`, `damage.fixed_damage`; the resist berry skips it,
+  `IGNORES_TYPE_CHECKS`); a substitute takes it like any hit (B10-4). Pain Split
+  (subscript_pain_split.s): fails behind a substitute (:5, :50-52: `primary_effect_fails`); else
+  avg = (a + d) / 2 (OPCODE_DIV) and each battler's HP goes to it through UPDATE_HP, capped at its
+  max HP (`effects._pain_split`). Both input-neutral and non-table (HP only). The AI's
+  Expert_Endeavor / Expert_PainSplit were E1's. Hand tests in test_batch10.py; the generator draws
+  both in `_draw_batch10` with a low user.
+  Differential seed 4, 150: clean. Backlog: missing groups 240 -> 238, runnable battles 57 -> 58.

@@ -890,7 +890,7 @@ def _draw_batch10(draw, tables: Tables, a: dict, side: int, active: int, names: 
     """Maybe (1 in 3) give the active Pokemon a batch-10 move with what makes it act: Volt
     Tackle / Flare Blitz (recoil and status; a frozen user for Flare Blitz's thaw, Rock Head or
     Reckless), Jump Kick / Hi Jump Kick (a crash on a miss: a Protect or a Ghost foe, Magic
-    Guard, a foe at low max HP for the cap)."""
+    Guard, a foe at low max HP for the cap), Endeavor / Pain Split (B10-5; a low user)."""
     if draw(st.integers(0, 2)) != 0:
         return
     rnd = draw(st.randoms(use_true_random=False))
@@ -903,8 +903,12 @@ def _draw_batch10(draw, tables: Tables, a: dict, side: int, active: int, names: 
         a["moves"][who, mon, k] = move
         a["pp"][who, mon, k] = int(tables.move_pp[move])
 
-    move = rnd.choice(("Volt Tackle", "Flare Blitz", "Jump Kick", "Hi Jump Kick"))
+    move = rnd.choice(
+        ("Volt Tackle", "Flare Blitz", "Jump Kick", "Hi Jump Kick", "Endeavor", "Pain Split")
+    )
     give(move)
+    if move in ("Endeavor", "Pain Split") and rnd.random() < 0.6:  # a low user: Endeavor works
+        a["hp"][side, active] = rnd.randint(1, max(1, int(a["max_hp"][side, active]) // 3))
     if rnd.random() < 0.3:
         a["ability"][side, active] = rnd.choice(
             (AbilityId.RECKLESS, AbilityId.ROCK_HEAD, AbilityId.MAGIC_GUARD)
