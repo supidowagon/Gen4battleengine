@@ -70,7 +70,13 @@ from nuzline.ai.outcome import (
 from nuzline.ai.read_bounds import READ_BOUND_BITS, READ_BOUNDS
 from nuzline.ai.switching import KAIZO_SWITCH_SITES, SWITCH_SITES
 from nuzline.data.game_constants import AI_POLICIES
-from nuzline.data.tables import AI_FLAGS_UNSET, AI_MOVES_ROWS, Tables
+from nuzline.data.tables import (
+    AI_FLAGS_UNSET,
+    AI_MOVES_ROWS,
+    BATTLE_TYPE_TRAINER,
+    BATTLE_TYPES,
+    Tables,
+)
 from nuzline.engine.enumerate import WIDTH_CAP
 
 __all__ = [
@@ -290,5 +296,7 @@ def fight_tables(tables: Tables, trainer, party, flags: int | None = None) -> Ta
     padded = np.zeros(AI_MOVES_ROWS, np.int16)
     padded[: len(moves)] = moves
     return tables._replace(
-        ai_flags=np.int32(trainer.ai_flags if flags is None else flags), ai_moves=padded
+        ai_flags=np.int32(trainer.ai_flags if flags is None else flags),
+        ai_moves=padded,
+        battle_type=BATTLE_TYPES.get(trainer.format, BATTLE_TYPE_TRAINER),
     )

@@ -2747,3 +2747,64 @@ def test_batch12_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party
         layout = layout_for(t, flags, s2)
         assert policy.ai_refusals(t, s2, n, layout) == []
         _assert_exact_equals_loose(t, s2, layout)
+
+
+@pytest.mark.parametrize(
+    ("case", "jumps", "expected"),
+    [
+        # Expert_Protect (script.s:3502-3589), the AI's Bonsly with Protect against Gible
+        ("plain", (), -1),  # no +2 (the 85 roll :3564 does not jump), -1 (:3571)
+        ("plain", (3564,), 1),  # +2, -1
+        ("plain", (3571,), 0),
+        ("chain 1", (), -3),  # -1, then with a chain -1 and -1 more unless :3578 jumps
+        ("chain 1", (3578,), -2),
+        ("chain 2", (), -2),  # a chain above 1: -2 and end
+        ("ai toxic", (), -2),  # badly poisoned, no Lock-On: -2 and end
+        ("ai toxic lock on", (), 0),  # with the AI's Lock-On: end
+        ("ai curse", (), -2),
+        ("ai yawn", (), -2),
+        ("player toxic", (), 1),  # +2, -1
+        ("player curse", (), 1),
+        ("player perish", (), 1),
+        ("player yawn", (), 1),
+        ("doubles", (), 1),  # LoadBattleType & BATTLE_TYPE_DOUBLES (:3561-3562)
+        ("ai lock on", (), 1),  # :3563
+    ],
+)
+def test_expert_protect(kaizo_tables, kaizo_names, kaizo_roark_party, case, jumps, expected):
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Protect", "Accelerock", "", ""))
+    side = 1 if case.startswith("ai") else 0
+    if case.startswith("chain"):
+        s = s._replace(protect_count=s.protect_count.at[1].set(int(case[-1])))
+    if "toxic" in case:
+        s = s._replace(status=s.status.at[side, 0].set(Status.TOXIC))
+    if "curse" in case:
+        s = s._replace(curse=s.curse.at[side].set(1))
+    if "perish" in case:
+        s = s._replace(
+            perish_song=s.perish_song.at[side].set(1),
+            perish_song_turns=s.perish_song_turns.at[side].set(2),
+        )
+    if "yawn" in case:
+        s = s._replace(yawn=s.yawn.at[side].set(1))
+    if "lock on" in case:
+        s = s._replace(lock_on=s.lock_on.at[1].set(2), lock_on_target=s.lock_on_target.at[1].set(1))
+    if case == "doubles":
+        t = t._replace(battle_type=np.int32(3))
+    assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expected
+
+
+@pytest.mark.parametrize("flags", [0x17, 0x10F])
+def test_protect_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, flags):
+    """Exact == loose for Protect with no chain, a chain of 1, and the player badly
+    poisoned."""
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Protect", "Accelerock", "Headbutt", ""))
+    for chain, toxic in ((0, False), (1, False), (1, True)):
+        s2 = s._replace(protect_count=s.protect_count.at[1].set(chain))
+        if toxic:
+            s2 = s2._replace(status=s2.status.at[0, 0].set(Status.TOXIC))
+        layout = layout_for(t, flags, s2)
+        assert policy.ai_refusals(t, s2, n, layout) == []
+        _assert_exact_equals_loose(t, s2, layout)

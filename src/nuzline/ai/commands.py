@@ -138,11 +138,13 @@ class VolatileCondition(IntEnum):
 
     CONFUSION = (1 << 0) | (1 << 1) | (1 << 2)  # :32-34, :65; BattleState.confusion
     ATTRACT = (1 << 16) | (1 << 17) | (1 << 18) | (1 << 19)  # :48-51, :70; .infatuated
+    CURSE = 1 << 28  # :60; BattleState.curse
 
 
 _VOLATILE_FIELDS = {
     VolatileCondition.CONFUSION: "confusion",
     VolatileCondition.ATTRACT: "infatuated",
+    VolatileCondition.CURSE: "curse",
 }
 
 
@@ -151,9 +153,18 @@ class MoveEffectMask(IntEnum):
     include/constants/battle/moves.h)."""
 
     LEECH_SEED = 1 << 2  # :10; BattleState.leech_seed (the seeded battler's side)
+    LOCK_ON = (1 << 3) | (1 << 4)  # :11-12, :41; BattleState.lock_on (turns)
+    PERISH_SONG = 1 << 5  # :13; BattleState.perish_song
+    YAWN = (1 << 11) | (1 << 12)  # :19-20, :42; BattleState.yawn (turns)
 
 
-_MOVE_EFFECT_FIELDS = {MoveEffectMask.LEECH_SEED: "leech_seed"}
+_MOVE_EFFECT_FIELDS = {
+    MoveEffectMask.LEECH_SEED: "leech_seed",
+    MoveEffectMask.LOCK_ON: "lock_on",
+    MoveEffectMask.PERISH_SONG: "perish_song",
+    MoveEffectMask.YAWN: "yawn",
+}
+BATTLE_TYPE_DOUBLES = 1 << 1  # include/constants/battle.h:27
 
 
 class Gender(IntEnum):
@@ -231,7 +242,8 @@ class BattleEffect(IntEnum):
     PRIORITY_1 = 103  # EvalAttack_ApplyKillBonuses' +2 (script.s:6400); no Roark move has it
     STATUS_NIGHTMARE = 107  # Nightmare (Expert_StatusSleep's IfMoveEffectKnown, :1817)
     CURSE = 109
-    PROTECT = 111  # Expert_ToxicLeechSeed's IfMoveEffectKnown (script.s:2700)
+    PROTECT = 111  # Expert_ToxicLeechSeed's IfMoveEffectKnown (script.s:2700); Protect, Detect
+    DEF_UP_DOUBLE_ROLLOUT_POWER = 156  # Defense Curl (Expert_Protect, script.s:3554)
     SET_SPIKES = 112
     WEATHER_SANDSTORM = 115  # Weather_Main (script.s:7989)
     ATK_UP_2_STATUS_CONFUSION = 118  # Swagger
@@ -740,6 +752,9 @@ MOVE_IDS = {
     "Counter": 68,
     "Mirror Coat": 243,
     "Blizzard": 59,
+    # Expert_Protect (script.s:3536-3537).
+    "Feint": 364,
+    "Shadow Force": 467,
 }
 SOUND_MOVES = tuple(
     MOVE_IDS[n]
@@ -1208,6 +1223,29 @@ def if_temp_equal_to(ctx: AiContext, value: int) -> AiContext:
 def go_to(ctx: AiContext) -> AiContext:
     """``GoTo`` (trainer_ai.c:2561): an unconditional jump."""
     return _jump(ctx, True)
+
+
+def if_loaded_greater_than(ctx: AiContext, value: int) -> AiContext:
+    """``IfLoadedGreaterThan`` (trainer_ai.c:774-784): ``calcTemp > value``."""
+    return _jump(ctx, ctx.calc_temp > value)
+
+
+def if_loaded_mask(ctx: AiContext, mask: int) -> AiContext:
+    """``IfLoadedMask`` (trainer_ai.c:810-820): ``calcTemp & mask``."""
+    return _jump(ctx, (ctx.calc_temp & mask) != 0)
+
+
+def load_battle_type(ctx: AiContext) -> AiContext:
+    """``LoadBattleType`` (trainer_ai.c:2504-2508): ``battleSys->battleType``
+    (``Tables.battle_type``, the fight's, ``ai.layout.fight_tables``)."""
+    return ctx._replace(calc_temp=jnp.asarray(ctx.tables.battle_type, _I32))
+
+
+def load_protect_chain(ctx: AiContext, battler: Battler) -> AiContext:
+    """``LoadProtectChain`` (trainer_ai.c:2538-2552): ``protectSuccessTurns``, or 0 when the
+    battler's ``moveProtect`` is not Protect, Detect or Endure; ``BattleState.protect_count``
+    folds that reset in (engine/STATE.md, moveProtect)."""
+    return ctx._replace(calc_temp=ctx.state.protect_count[_side(battler)].astype(_I32))
 
 
 def if_loaded_not_equal_to(ctx: AiContext, value: int) -> AiContext:

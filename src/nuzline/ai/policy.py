@@ -1558,6 +1558,71 @@ def _expert_pluck(ctx: AiContext, mask) -> AiContext:
     return c.pop_or_end(c.add_to_move_score(_at(ctx, minus1), -1))
 
 
+def _expert_protect(ctx: AiContext, mask) -> AiContext:
+    """``Expert_Protect`` (script.s:3502-3589): a player knowing Feint or Shadow Force, -2
+    unless the 128 roll (:3541) jumps; a chain above 1, -2; the AI badly poisoned, cursed,
+    perishing, infatuated, seeded or drowsy, or the player knowing a half-HP recovery or
+    Defense Curl, -2 unless the AI has used Lock-On; the player under one of those six, in a
+    doubles battle, the AI's Lock-On, or the 85 roll (:3564), +2; then -1 unless the 128 roll
+    (:3571) jumps; then with a chain, -1 and -1 more unless :3578 jumps."""
+    ctx = _at(ctx, mask)
+    ctx, try_minus2 = _split(c.if_move_known(ctx, _D, _MOVE["Feint"]))
+    ctx, t = _split(c.if_move_known(ctx, _D, _MOVE["Shadow Force"]))
+    try_minus2 = try_minus2 | t
+    ctx, check = _split(c.go_to(ctx))
+    # Expert_Protect_TryScoreMinus2 (:3540)
+    ctx = _at(ctx, try_minus2)
+    ctx, t = _split(c.if_random_less_than(ctx, 128, 3541))
+    ctx = c.add_to_move_score(ctx, -2)
+    # Expert_Protect_CheckStatusConditions (:3544); the first GoTo's paths join here
+    ctx = _at(ctx, check | t | ctx.live)
+    ctx = c.load_protect_chain(ctx, _A)
+    ctx, minus2 = _split(c.if_loaded_greater_than(ctx, 1))
+    locked = jnp.zeros_like(ctx.live)
+    for check in (
+        lambda x: c.if_status(x, _A, c.MonCondition.TOXIC),
+        lambda x: c.if_volatile_status(x, _A, c.VolatileCondition.CURSE),
+        lambda x: c.if_move_effect(x, _A, c.MoveEffectMask.PERISH_SONG),
+        lambda x: c.if_volatile_status(x, _A, c.VolatileCondition.ATTRACT),
+        lambda x: c.if_move_effect(x, _A, c.MoveEffectMask.LEECH_SEED),
+        lambda x: c.if_move_effect(x, _A, c.MoveEffectMask.YAWN),
+        lambda x: c.if_move_effect_known(x, _D, BattleEffect.RESTORE_HALF_HP),
+        lambda x: c.if_move_effect_known(x, _D, BattleEffect.DEF_UP_DOUBLE_ROLLOUT_POWER),
+    ):
+        ctx, t = _split(check(ctx))
+        locked = locked | t
+    plus2 = jnp.zeros_like(ctx.live)
+    for check in (
+        lambda x: c.if_status(x, _D, c.MonCondition.TOXIC),
+        lambda x: c.if_volatile_status(x, _D, c.VolatileCondition.CURSE),
+        lambda x: c.if_move_effect(x, _D, c.MoveEffectMask.PERISH_SONG),
+        lambda x: c.if_volatile_status(x, _D, c.VolatileCondition.ATTRACT),
+        lambda x: c.if_move_effect(x, _D, c.MoveEffectMask.LEECH_SEED),
+        lambda x: c.if_move_effect(x, _D, c.MoveEffectMask.YAWN),
+        lambda x: c.if_loaded_mask(c.load_battle_type(x), c.BATTLE_TYPE_DOUBLES),
+        lambda x: c.if_move_effect(x, _A, c.MoveEffectMask.LOCK_ON),
+        lambda x: c.if_random_less_than(x, 85, 3564),
+    ):
+        ctx, t = _split(check(ctx))
+        plus2 = plus2 | t
+    ctx, try_minus1 = _split(c.go_to(ctx))
+    # Expert_Protect_ScorePlus2 (:3567), falling into _TryScoreMinus1 (:3570)
+    ctx = c.add_to_move_score(_at(ctx, plus2), 2)
+    ctx = _at(ctx, try_minus1 | ctx.live)
+    ctx, t = _split(c.if_random_less_than(ctx, 128, 3571))
+    ctx = c.add_to_move_score(ctx, -1)
+    # Expert_Protect_CheckEmptyChain (:3574)
+    ctx = c.load_protect_chain(_at(ctx, t | ctx.live), _A)
+    ctx, _ = _split(c.if_loaded_equal_to(ctx, 0))  # -> _End
+    ctx = c.add_to_move_score(ctx, -1)
+    ctx, _ = _split(c.if_random_less_than(ctx, 128, 3578))  # -> _End
+    ctx = c.add_to_move_score(ctx, -1)
+    ctx, _ = _split(c.go_to(ctx))  # -> _End
+    # Expert_Protect_CheckAttackerLockedOnto (:3582), falling into _ScoreMinus2 (:3585)
+    ctx, _ = _split(c.if_move_effect(_at(ctx, locked), _A, c.MoveEffectMask.LOCK_ON))
+    return c.pop_or_end(c.add_to_move_score(_at(ctx, minus2 | ctx.live), -2))
+
+
 def _expert_curse(ctx: AiContext, mask) -> AiContext:
     """``Expert_Curse`` (script.s:3452-3500)."""
     # Expert_Curse (:3452). A Ghost-type attacker jumps to Expert_Curse_GhostCheckHP
@@ -1804,6 +1869,7 @@ _EXPERT_LABELS = (
     (BattleEffect.KO_MON_THAT_DEFEATED_USER, _expert_destiny_bond),  # :1694
     (BattleEffect.INCREASE_POWER_WITH_LESS_HP, _expert_reversal),  # :1695
     (BattleEffect.CURSE, _expert_curse),  # :1700
+    (BattleEffect.PROTECT, _expert_protect),  # :1701
     (BattleEffect.SET_SPIKES, _expert_spikes),  # :1702
     (BattleEffect.HIT_BEFORE_SWITCH, _expert_pursuit),  # :1706
     (BattleEffect.WEATHER_RAIN, _expert_rain_dance),  # :1710

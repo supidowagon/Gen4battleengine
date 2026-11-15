@@ -62,6 +62,16 @@ AI_FLAGS_UNSET = np.int32(-1)  # Tables.ai_flags before a fight sets its trainer
 # none); all -1 until a fight sets them.
 AI_MOVES_ROWS = 24
 AI_MOVES_UNSET = np.full(AI_MOVES_ROWS, -1, np.int16)
+# Tables.battle_type: BattleSystem.battleType (include/constants/battle.h:20-47) as
+# Encounter_NewVsTrainer sets it from the trainers of the fight (encounter.c:724-740).
+BATTLE_TYPE_TRAINER = np.int32(1 << 0)
+BATTLE_TYPE_DOUBLES = np.int32(1 << 1)
+BATTLE_TYPES = {
+    "single": BATTLE_TYPE_TRAINER,  # :738
+    "double": BATTLE_TYPE_TRAINER | BATTLE_TYPE_DOUBLES,  # TRAINER_DOUBLES, :736
+    "double_two_trainer": np.int32(0x13),  # TAG_DOUBLES (TAG | TRAINER_DOUBLES), :731
+    "multi": np.int32(0x4B),  # TRAINER_WITH_AI_PARTNER (TRAINER | DOUBLES | 2vs2 | AI), :733
+}
 
 
 class Tables(NamedTuple):
@@ -114,10 +124,14 @@ class Tables(NamedTuple):
     # the fight's entry point sets them with ai_flags (ai.layout.fight_tables); not in
     # tables.npz.
     ai_moves: jnp.ndarray = AI_MOVES_UNSET
+    # int32[]: the fight's BattleSystem.battleType (BATTLE_TYPES by Trainer.format), which
+    # LoadBattleType reads (trainer_ai.c:2504-2508); the fight's entry point sets it with
+    # ai_flags. A trainer singles battle until then (no other fight runs the AI).
+    battle_type: jnp.ndarray = BATTLE_TYPE_TRAINER
 
 
 # The Tables fields a fight sets (ai.layout.fight_tables), not in tables.npz.
-FIGHT_FIELDS = ("ai_flags", "ai_moves")
+FIGHT_FIELDS = ("ai_flags", "ai_moves", "battle_type")
 # The Tables fields tables.npz carries.
 NPZ_FIELDS = tuple(f for f in Tables._fields if f not in FIGHT_FIELDS)
 

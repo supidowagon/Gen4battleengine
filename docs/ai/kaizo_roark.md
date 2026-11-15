@@ -664,8 +664,13 @@ MIRROR_COAT (144), LOWER_OWN_ATK_AND_DEF (182), WEATHER_RAIN (136), WEATHER_HAIL
   the new command `IfTargetIsNotTaunted` (`trainer_ai.c:2620-2628`). `Expert_Superpower`
   (`:4467-4488`), `Expert_RainDance` (`:3737-3771`, a FASTER compare, Ruling R8),
   `Expert_Hail` (`:4089-4119`), `Expert_Pluck` (`:4957-4980`, rolls `:4968`, `:4972`).
-- Waiting: Protect (`Expert_Protect`, `:3502-3586`) reads Curse, Perish Song, Yawn and Lock-On,
-  which `BattleState` does not hold; Metal Burst (`Basic_CheckMetalBurst`, `:1160-1182`) reads
+- PROTECT (111): `Expert_Protect` (`:3502-3589`; dispatch `:1701`; no Basic entry) reads
+  Curse, Perish Song, Yawn and Lock-On from the per-battler fields of da1d60f (engine/STATE.md;
+  nothing sets them until E2 models those moves), the chain through the new command
+  `LoadProtectChain` (`BattleState.protect_count`), and the battle type through
+  `LoadBattleType` (`Tables.battle_type`, per fight from `Trainer.format`,
+  `encounter.c:724-740`). Rolls `:3541` (128), `:3564` (85), `:3571` (128), `:3578` (128).
+- Waiting: Metal Burst (`Basic_CheckMetalBurst`, `:1160-1182`) reads
   the AI's record of the player's held item (`aiContext.battlerHeldItems`,
   `battle_script.c:12121`), which `BattleState` does not hold either. Both wait for the
   managing session's decision. The fixed- and alternative-power moves of
