@@ -87,6 +87,11 @@ def test_greedy_and_the_empty_line_equal_playout_through_learns(tables, names):
             _same(player_playout(tables, s, LINE, empty_line(), k, 8), want)
 
 
+# Slow: the one-turn FIXED player loop is a program of its own that grows the process by
+# about 9.6 GB from a cold cache. The fast tier keeps the property through
+# test_greedy_and_the_empty_line_equal_playout_through_learns, whose _level_up_turn root
+# requires player_playout to equal playout through this same turn, learns resolved.
+@pytest.mark.slow
 def test_a_turn_resolves_its_learns(tables, names):
     # The final state of a one-turn run: Bulbasaur reached L13 and its prompts were answered
     # (learn_level 0, the moves kept) before Bonsly came in.
