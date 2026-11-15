@@ -316,7 +316,7 @@ BATCH4_MOVES = (
 BATCH4_ABILITIES = (AbilityId.FILTER, AbilityId.MAGIC_GUARD, AbilityId.SNIPER)
 # E2 batch 5: the invokers, and moves for them to call or copy (a sleep move, Protect, a
 # multi-hit move, Disable, a Choice item's lock).
-INVOKERS = ("Sleep Talk", "Sleep Talk", "Copycat", "Metronome")
+INVOKERS = ("Sleep Talk", "Sleep Talk", "Copycat", "Metronome", "Assist")  # Assist: B10-11
 CALLED_MOVES = ("Tackle", "Spore", "Protect", "Fury Swipes", "Disable", "Counter", "Ember", "Bide")
 CRIT_ITEMS = ("Scope Lens", "Razor Claw", "Lucky Punch", "Stick")
 SWITCH_IN_ABILITIES = (
@@ -1171,9 +1171,24 @@ def _draw_batch10(draw, tables: Tables, a: dict, side: int, active: int, names: 
             "Knock Off",
             "Safeguard",
             "Focus Punch",
+            "Encore",
         )
     )
     give(move)
+    if move == "Encore":  # B10-9: the foe's last move one of its own (or none)
+        foe_moves = [int(m) for m in a["moves"][foe, foe_mon] if m]
+        a["last_move"][foe] = rnd.choice(foe_moves + [0]) if foe_moves else 0
+    if rnd.random() < 0.15:  # B10-9: an encore already on either side, on a move it knows
+        who = rnd.choice((side, foe))
+        mon = active if who == side else foe_mon
+        slots = [k for k in range(4) if a["moves"][who, mon, k]]
+        if slots:
+            k = rnd.choice(slots)
+            a["encore_move"][who] = a["moves"][who, mon, k]
+            a["encore_slot"][who] = k
+            a["encore_turns"][who] = rnd.randint(0, 7)
+            if rnd.random() < 0.2:
+                a["pp"][who, mon, k] = 0
     if rnd.random() < 0.15:  # B10-7: a Safeguard up on either side, against the status moves
         a["safeguard"][rnd.choice((side, foe))] = rnd.randint(1, 5)
         give(rnd.choice(("Thunder Wave", "Toxic", "Supersonic", "Swagger", "Ember")), foe, foe_mon)
@@ -1989,7 +2004,8 @@ def outcome_law_state(draw, tables: Tables, names: Names) -> BattleState:
     move_pp = np.asarray(tables.move_pp)
     effect = np.asarray(tables.move_effect)
     invoker = np.isin(
-        effect[a["moves"]], (EffectId.SLEEP_TALK, EffectId.METRONOME, EffectId.COPYCAT)
+        effect[a["moves"]],
+        (EffectId.SLEEP_TALK, EffectId.METRONOME, EffectId.COPYCAT, EffectId.ASSIST),
     )
     a["moves"][invoker] = names.move("Tackle")  # a learnset's own invoker too
     for side in (0, 1):

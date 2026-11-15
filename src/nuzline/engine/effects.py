@@ -258,12 +258,13 @@ from nuzline.engine.damage import (
 )
 from nuzline.engine.ids import (
     ABILITY_MULTITYPE,
+    CANNOT_ENCORE_MOVES,
     ITEM_ABILITY_IDS,
     ITEM_GRISEOUS_ORB,
+    MINIMIZE_PARAM,
     MOVE_FAKE_OUT,
     MOVE_IMPRISON,
     MOVE_KNOCK_OFF,
-    MINIMIZE_PARAM,
     MOVE_STRUGGLE,
     POWER_IF_TARGET_MOVED,
     RESIST_ANY_NORMAL,
@@ -987,6 +988,41 @@ def _pain_split(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     return _set(state, "hp", (h.target_side, h.target), theirs_new, cond)
 
 
+def encore_slot_of(tables: Tables, state: BattleState, target_side) -> tuple:
+    """``(fails, slot)``: BtlCmd_TryEncore (battle_script.c:4725-4748) on ``target_side``'s
+    battler: the slot of its movePrevByBattler (``last_move``; Battler_SlotForMove), and the
+    failure (MOVE_STATUS_FAILED): it is encored already, its last move is none, not in its slots,
+    one Move_CanBeEncored refuses (the battle effect of a ``CANNOT_ENCORE_MOVES`` move,
+    battle_lib.c:7221-7231) or out of PP."""
+    mon = state.active[target_side]
+    last = state.last_move[target_side].astype(_I32)
+    moves = state.moves[target_side, mon].astype(_I32)
+    held = (moves == last) & (last != 0)
+    slot = jnp.argmax(held).astype(_I32)
+    banned = tables.move_ai_effect[jnp.asarray(CANNOT_ENCORE_MOVES, _I32)]
+    refused = jnp.any(tables.move_ai_effect[last] == banned)
+    fails = (
+        (state.encore_move[target_side] != 0)
+        | (last == 0)
+        | ~jnp.any(held)
+        | refused
+        | (state.pp[target_side, mon, slot] == 0)
+    )
+    return fails, slot
+
+
+def _encore(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    """Encore (effect_script_0090.s, a direct ON_HIT subscript_encore_start.s): unless
+    ``encore_slot_of`` fails it, encoredMove = the target's last move, encoredMoveSlot its slot,
+    encoredTurns = RandNext() % 5 + 3 (battle_script.c:4740-4742; ``outcome.duration`` of the
+    user's side, ``DURATION_ENCORE``), B10-9."""
+    fails, slot = encore_slot_of(tables, state, h.target_side)
+    cond = (h.effect == _E.ENCORE) & h.landed & _alive(state, h.target_side, h.target) & ~fails
+    state = _set(state, "encore_move", h.target_side, state.last_move[h.target_side], cond)
+    state = _set(state, "encore_slot", h.target_side, slot, cond)
+    return _set(state, "encore_turns", h.target_side, outcome.duration[h.side], cond)
+
+
 def _safeguard(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     """Safeguard (BtlCmd_TrySafeguard, battle_script.c:5754-5772): safeguardTurns = 5 on the
     user's side (the field-condition pass counts it down, ``step.FIELD_SIDE_TIMERS``); with it up
@@ -1094,6 +1130,8 @@ def primary_effect_fails(tables, state: BattleState, side, target_side, move) ->
         | ((effect == _E.PAIN_SPLIT) & (state.substitute_hp[target_side] != 0))
         # BtlCmd_TrySafeguard (battle_script.c:5760-5762, MOVE_STATUS_FAILED), B10-7.
         | ((effect == _E.SAFEGUARD) & (state.safeguard[side] != 0))
+        # BtlCmd_TryEncore's failure (MOVE_STATUS_FAILED), B10-9.
+        | ((effect == _E.ENCORE) & encore_slot_of(tables, state, target_side)[0])
         # subscript_tailwind_start.s:5, :18 and the effect scripts' TrySpikes / TryToxicSpikes
         # jumps (effect_script_0112.s, _0249.s): MOVE_STATUS_FAILED.
         | ((effect == _E.TAILWIND) & (state.tailwind[side] != 0))
@@ -2448,6 +2486,7 @@ def play_hit(
         _substitute,
         _pain_split,
         _safeguard,
+        _encore,
         _roost,
         _side_layers,
         _destiny_bond,

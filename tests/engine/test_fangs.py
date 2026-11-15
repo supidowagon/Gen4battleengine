@@ -99,9 +99,10 @@ def _flinched(tables, s, acts, o) -> list[int]:
 
 def test_effect_275_maps_in_both_games(tables, names, kaizo_tables, kaizo_names):
     assert DECOMP_EFFECT_TO_ID[275] == (EffectId.FANG_PARALYZE_FLINCH, (Status.PARALYSIS, 0, 0))
-    # Fire Fang (273) and Ice Fang (274) stay unmapped until their scripts are read
-    # (rules §11 item 7); 276 is Charge Beam's RAISE_SP_ATK_HIT.
-    assert 273 not in DECOMP_EFFECT_TO_ID and 274 not in DECOMP_EFFECT_TO_ID
+    # Fire Fang (273) and Ice Fang (274) are the same shape with a burn / freeze (E2 batch 9,
+    # effect_script_0273.s, _0274.s); 276 is Charge Beam's RAISE_SP_ATK_HIT.
+    assert DECOMP_EFFECT_TO_ID[273] == (EffectId.FANG_PARALYZE_FLINCH, (Status.BURN, 0, 0))
+    assert DECOMP_EFFECT_TO_ID[274] == (EffectId.FANG_PARALYZE_FLINCH, (Status.FREEZE, 0, 0))
     for t, n, power, accuracy in ((tables, names, 65, 95), (kaizo_tables, kaizo_names, 90, 100)):
         move = n.move(FANG)
         assert int(t.move_effect[move]) == EffectId.FANG_PARALYZE_FLINCH
@@ -109,7 +110,7 @@ def test_effect_275_maps_in_both_games(tables, names, kaizo_tables, kaizo_names)
         assert int(t.move_effect_chance[move]) == 10
         assert (int(t.move_power[move]), int(t.move_accuracy[move])) == (power, accuracy)
         for other in ("Fire Fang", "Ice Fang"):
-            assert int(t.move_effect[n.move(other)]) == EffectId.UNSUPPORTED, other
+            assert int(t.move_effect[n.move(other)]) == EffectId.FANG_PARALYZE_FLINCH, other
 
 
 def test_fang_with_chance_zero_is_a_build_error():

@@ -50,10 +50,10 @@ def test_lock_on_ends_with_its_lockers_switch_or_replacement(tables, names):
     fainted = assert_matches_reference(tables, s.replace_hp(0, 0, 1), (0, 0), O)
     assert int(fainted.hp[0, 0]) == 0
     assert int(fainted.lock_on[1]) == 1 and int(fainted.lock_on_target[1]) == 1
+    from nuzline.data.tables import to_numpy
     from nuzline.engine.step import replace
     from nuzline.reference.convert import from_ref, to_ref
     from nuzline.reference.engine import ref_replace
-    from nuzline.data.tables import to_numpy
 
     sent = replace(tables, fainted, 0, 1)
     assert int(sent.lock_on[1]) == 0 and int(sent.lock_on_target[1]) == 0
@@ -146,7 +146,9 @@ def test_future_sight_law_reads_the_lock_after_the_countdown(tables, names):
         lock_on=s.lock_on.at[1].set(1),
         lock_on_target=s.lock_on_target.at[1].set(1),
     )
-    at_hit = s._replace(lock_on=s.lock_on.at[1].set(0), lock_on_target=s.lock_on_target.at[1].set(0))
+    at_hit = s._replace(
+        lock_on=s.lock_on.at[1].set(0), lock_on_target=s.lock_on_target.at[1].set(0)
+    )
     live = int(future_threshold(tables, at_hit, 1))
     assert live < 100
     laws = outcome_laws(tables, s, jnp.asarray([0, 0]))

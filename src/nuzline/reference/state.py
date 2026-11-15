@@ -70,6 +70,9 @@ class RefSide:
     foresight: int
     disabled_move: int
     disable_turns: int
+    encore_move: int  # B10-9
+    encore_slot: int
+    encore_turns: int
     locked_move: int
     bide_turns: int
     bide_damage: int

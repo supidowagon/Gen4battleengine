@@ -121,6 +121,7 @@ from nuzline.engine.effects import (
     defender_always,
     entry_hazards,
     focus_sash_damage,
+    forget_item,
     ghost_user,
     hit_count,
     holds,
@@ -714,6 +715,17 @@ def _use_move(
     move, struggling, locked = choice
     slot = jnp.clip(action, 0, MOVE_ACTIONS - 1)
     user = state.active[side]
+    # BattleControllerPlayer_FightCommand (bcp.c:1866-1883), B10-9: after Struggle, an encored
+    # battler whose encored slot holds the encored move uses it (and that slot's PP: the no-PP
+    # failure below), whatever it chose (a foe's faster Encore this turn); a slot that no longer
+    # holds it ends the encore (below).
+    encore_slot = state.encore_slot[side].astype(_I32)
+    encore_holds = (state.encore_move[side] != 0) & (
+        state.moves[side, user, encore_slot] == state.encore_move[side]
+    )
+    encored_now = encore_holds & ~jnp.asarray(struggling, bool)
+    move = jnp.where(encored_now, state.encore_move[side].astype(_I32), move)
+    slot = jnp.where(encored_now, encore_slot, slot)
     target_side = 1 - side
     target = state.active[target_side]
     ready = (state.over == 0) & (state.hp[side, user] > 0)
@@ -736,6 +748,14 @@ def _use_move(
     # subscript_check_quick_claw.s:26-28 clears an activated Custap flag and removes the item
     # (RemoveItem BTLSCR_ATTACKER, kept in item_consumed), whether or not the battler acts last.
     state = consume_item(state, side, ready & custap[side])
+    # BattleControllerPlayer_FightCommand (bcp.c:1874-1883), B10-9: an encored battler whose
+    # encored slot no longer holds the encored move uses the slot's move and its encore ends
+    # (move, slot and count to 0); Struggle comes first (:1866-1868).
+    slot_move = state.moves[side, user, state.encore_slot[side].astype(_I32)]
+    unheld = ready & ~jnp.asarray(choice[1], bool) & (state.encore_move[side] != 0)
+    unheld = unheld & (slot_move != state.encore_move[side])
+    for name in ("encore_move", "encore_slot", "encore_turns"):
+        state = _set_side(state, name, side, 0, unheld)
     # CHECK_STATUS_START (bcp.c:2425): the move attempt clears the user's Destiny Bond, whatever
     # the checks below find.
     bond = jnp.where(ready, 0, state.destiny_bond[side]).astype(state.destiny_bond.dtype)
@@ -885,6 +905,11 @@ def _use_move(
     # moveTemp (``move``, an invoker's own range) against the fight command's defender
     # (effects.pressure_pp_cost), at most the PP left (:2276-2280), ruling G-8.
     spend = can_act & ~struggling & ~locked
+    # No PP left in the slot (bcp.c:2275-2285): MOVE_STATUS_NO_PP, the move fails after its attack
+    # message. Only an encored move taken over this turn can reach it (B10-9; the selection
+    # offers no 0-PP slot).
+    no_pp = spend & (state.pp[side, user, slot] == 0)
+    spend = spend & ~no_pp
     defender = jnp.where(
         foe_defender,
         target_side,
@@ -1012,6 +1037,7 @@ def _use_move(
         side, state.active[side]
     ].astype(_I32)
     failed = failed | ((effect_used == EffectId.ENDEAVOR) & (gap <= 0))
+    failed = failed | no_pp  # B10-9: the encored move had no PP
     # Focus Punch (effect_script_0170.s:5-6, :12-16): MOVE_STATUS_LOST_FOCUS, a DID_NOT_HIT status
     # (subscript_missed.s), when the user's physical / specialDamageAttackerMask is set: a hit on
     # its HP this turn (``foe_taken``'s attackers; a substitute hit sets none), B10-8.
@@ -2262,6 +2288,9 @@ def _execute_actions(
         skip = second & start & ((pursued == 1 + side) | (read["dragged"][side] != 0))
         acted = _where(skip, state, acted)
         ran = ran & ~skip
+        # B10-6: the player's FIGHT attempt or an HP update clears a knocked item's record.
+        fight = ~is_switch(acts[side]) & ~is_item(acts[side])
+        acted = _stale_known_item(state, acted, (side == 0) & ran & fight)
         # The events of an action are its start's (a U-turn's head) or its resume's; the pass
         # after the Pursuit adds none of its own.
         keep = ~skip & ~ap
@@ -2557,12 +2586,47 @@ def _lock_on_check(state: BattleState, side) -> BattleState:
     return _set_side(state, "lock_on", side, state.lock_on[side] - 1, on)
 
 
+def _stale_known_item(before: BattleState, after: BattleState, fought) -> BattleState:
+    """B10-6: Knock Off's BtlCmd_TryKnockOff runs no CopyToParty, so the AI's record of the
+    player's knocked item (``ai_item_known``) stays until the battler's next
+    ``BattleMon_CopyToParty`` (battle_lib.c:1819-1823), which clears it for a battler holding
+    nothing: its next HP-bar update (BtlCmd_UpdateHealthBarValue, battle_script.c:1720) or its
+    next move attempt's status checks (bcp.c:2748). A knocked-off slot never holds an item again
+    (the mask stops the Sticky Barb, and Thief / Trick are unsupported), so clearing at the end of
+    the segment (an action, the end of the turn) in which such an event came is exact for the
+    AI, which reads the record only at its next choice. ``before``: the segment's start; the slot
+    must have been knocked off by then (the knock-off's own hit updates the HP first). ``fought``:
+    the player's battler made a FIGHT attempt in the segment."""
+    mon = before.active[0]
+    stale = (before.knocked_off[0, mon] != 0) & (after.item[0, mon] == 0)
+    event = (after.hp[0, mon] != before.hp[0, mon]) | jnp.asarray(fought, bool)
+    return forget_item(after, 0, mon, stale & event)
+
+
+def _encore_check(state: BattleState, side) -> BattleState:
+    """``MON_COND_CHECK_STATE_ENCORE`` (bcp.c:1591-1612), B10-9: an encored battler whose moves no
+    longer hold the encored move, or whose PP for it is 0, has its count set to 0; a count above 0
+    drops by 1, and at 0 the encore ends (encoredMove = 0; subscript_encore_end.s). The slot and
+    the count are left as they are (only encoredMove is cleared)."""
+    mon = state.active[side]
+    move = state.encore_move[side]
+    on = move != 0
+    held = state.moves[side, mon] == move
+    spent = ~jnp.any(held) | jnp.any(held & (state.pp[side, mon] == 0))
+    turns = jnp.where(on & spent, 0, state.encore_turns[side]).astype(_I32)
+    ends = on & (turns == 0)
+    state = _set_side(
+        state, "encore_turns", side, jnp.where(on & (turns > 0), turns - 1, turns), on
+    )
+    return _set_side(state, "encore_move", side, 0, ends)
+
+
 def _uproar_then_disable(tables: Tables, state: BattleState, side, failed) -> BattleState:
     """``MON_COND_CHECK_STATE_UPROAR``, then (``_THRASH``, unsupported, between)
-    ``MON_COND_CHECK_STATE_DISABLE``, then (``_ENCORE``, unsupported) ``_LOCK_ON``: none changes
-    HP, so they share one faint check."""
+    ``MON_COND_CHECK_STATE_DISABLE``, ``_ENCORE`` (B10-9) and ``_LOCK_ON``: none changes HP, so
+    they share one faint check."""
     state = _disable_check(tables, _uproar_check(tables, state, side, failed), side)
-    return _lock_on_check(state, side)
+    return _lock_on_check(_encore_check(state, side), side)
 
 
 def _taunt_check(tables: Tables, state: BattleState, side) -> BattleState:
@@ -3088,6 +3152,7 @@ def step_events(
     e = field_conditions(tables, s, sides)
     e = end_of_turn(tables, e, actions, outcome, order, sides, read["move_failed"])
     e = _future_sight(tables, e, sides, outcome, read["protect_ok"])
+    e = _stale_known_item(s, e, False)  # B10-6: the end of the turn's HP updates
     e = _unlock_sleepers(e)
     e = e._replace(turn=(e.turn + 1).astype(e.turn.dtype))
     e = _turn_start_items(tables, e)

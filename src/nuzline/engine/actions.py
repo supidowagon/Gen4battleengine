@@ -107,6 +107,14 @@ def usable_moves(tables: Tables, state: BattleState, side) -> jnp.ndarray:
     usable = usable & ~(taunted & (tables.move_power[moves] == 0))
     usable = usable & (~choice_locked(tables, state, side) | (moves == state.choice_lock[side]))
     usable = usable & ~move_imprisoned(state, side, moves)  # CHECK_INVALID_IMPRISONED, :2287
+    # Encore (B10-9): every move but the encored one is invalid (battle_lib.c:2302-2304, any
+    # opMask); with one valid move left the selection is skipped and the encored slot taken
+    # (bcp.c:443-446): the only legal FIGHT action. None valid: Struggle (bcp.c:432-441 first).
+    encore = state.encore_move[side]
+    encored = encore != 0
+    usable = usable & (~encored | (moves == encore))
+    forced = jnp.arange(MOVE_ACTIONS) == state.encore_slot[side].astype(jnp.int32)
+    usable = jnp.where(encored & jnp.any(usable), forced, usable)
     lock = locked_slot(state, side)
     return jnp.where(lock >= 0, jnp.arange(MOVE_ACTIONS) == lock, usable)
 
@@ -130,9 +138,7 @@ def trapped(state: BattleState, side) -> jnp.ndarray:
     mon = state.active[side]
     own = state.ability[side, mon]
     types = state.types[side, mon]
-    grounded = (
-        (own != AbilityId.LEVITATE) & ~jnp.any(types == Type.FLYING)
-    ) | (state.gravity != 0)
+    grounded = ((own != AbilityId.LEVITATE) & ~jnp.any(types == Type.FLYING)) | (state.gravity != 0)
     steel = jnp.any(types == Type.STEEL)
     trapped_by = jnp.asarray(False)
     for foe in range(state.active.shape[0]):

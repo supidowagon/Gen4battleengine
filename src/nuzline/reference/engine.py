@@ -38,14 +38,15 @@ from dataclasses import dataclass, field
 from nuzline.engine.ids import (
     ABILITY_DECOMP_IDS,
     ABILITY_MULTITYPE,
+    CANNOT_ENCORE_MOVES,
     CHOICE_ITEMS,
     CONFUSION_PENDING,
     FUTURE_SIGHT_TURNS,
+    INVOKER_MOVES,
     ITEM_ABILITY_IDS,
     ITEM_GRISEOUS_ORB,
     METRONOME_DRAW,
     MINIMIZE_PARAM,
-    POWER_IF_TARGET_MOVED,
     MOVE_BATON_PASS,
     MOVE_FAKE_OUT,
     MOVE_IMPRISON,
@@ -57,6 +58,7 @@ from nuzline.engine.ids import (
     NATURE_DISLIKED_FLAVOR,
     POTION_HP_RESTORED,
     POWER_IF_TARGET_HALF_HP,
+    POWER_IF_TARGET_MOVED,
     POWER_IF_TARGET_PARALYZED,
     POWER_IF_USER_STATUSED,
     PROTECT_CHAIN_MOVES,
@@ -319,6 +321,7 @@ def _invoked_move(tables, s: RefState, side: int, move: int, call: int) -> int:
             and not (sd.taunt > 0 and _t(tables, "move_power", m) == 0)
             and not (locked and m != lock)
             and not _move_imprisoned(s, side, m)
+            and not (sd.encore_move and m != sd.encore_move)  # lib.c:2302-2304 (B10-9)
         ]
         return allowed[call % len(allowed)] if allowed else 0
     if effect == EffectId.METRONOME:
@@ -332,6 +335,17 @@ def _invoked_move(tables, s: RefState, side: int, move: int, call: int) -> int:
         prev = s.move_prev
         ok = prev != 0 and not _t(tables, "move_flags", prev) & MoveFlag.NO_METRONOME
         return prev if ok else 0
+    if effect == EffectId.ASSIST:
+        # BtlCmd_TryAssist (script.c:6405-6444, B10-11): every move of every other party slot
+        # with a Pokemon, not an invoker, Metronome-able; RandNext() % numMoves.
+        listed = [
+            m
+            for k, mate in enumerate(sd.party)
+            if k != sd.active and mate.species
+            for m in mate.moves
+            if m not in INVOKER_MOVES and not _t(tables, "move_flags", m) & MoveFlag.NO_METRONOME
+        ]
+        return listed[call % len(listed)] if listed else 0
     return move
 
 
@@ -1098,6 +1112,9 @@ def _reset_battler(sd: RefSide, baton: bool = False) -> None:
         "foresight",
         "disabled_move",
         "disable_turns",
+        "encore_move",  # MoveEffectsData (B10-9)
+        "encore_slot",
+        "encore_turns",
         "locked_move",
         "bide_turns",
         "bide_damage",
@@ -2671,6 +2688,16 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
             sd.substitute_hp = quarter
             sd.trapped = sd.trap_move = 0
             _lose_hp(turn, s, side, quarter)
+    elif effect == EffectId.ENCORE and landed and target_alive:
+        # subscript_encore_start.s -> BtlCmd_TryEncore (script.c:4725-4748), B10-9.
+        fails, slot = _encore_fails(tables, s, target)
+        if not fails:
+            fsd = s.sides[target]
+            fsd.encore_move, fsd.encore_slot, fsd.encore_turns = (
+                fsd.last_move,
+                slot,
+                o.duration[side],
+            )
     elif effect == EffectId.SAFEGUARD and landed and not s.sides[side].safeguard:
         # BtlCmd_TrySafeguard (script.c:5754-5772): 5 turns on the user's side (B10-7).
         s.sides[side].safeguard = 5
@@ -3415,6 +3442,7 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
         EffectId.SLEEP_TALK,
         EffectId.METRONOME,
         EffectId.COPYCAT,
+        EffectId.ASSIST,  # B10-11
     ):
         # The invokers (B5-1..): the script picks the move now (Copycat reads the battle's
         # movePrev as the faster foe left it), then GoToMoveScript (script.c:2111-2134) runs it
@@ -3668,6 +3696,8 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
                 or (theirs[Stat.ATK] >= 6 and bool(s.sides[1 - side].confusion))
             )
         )
+        # BtlCmd_TryEncore's failure (MOVE_STATUS_FAILED), B10-9.
+        full = full or (effect == EffectId.ENCORE and _encore_fails(tables, s, 1 - side)[0])
         # BtlCmd_TrySafeguard (script.c:5760-5762, MOVE_STATUS_FAILED), B10-7.
         full = full or (effect == EffectId.SAFEGUARD and bool(s.sides[side].safeguard))
         # subscript_pain_split.s:5 (MOVE_STATUS_FAILED), B10-5.
@@ -4051,6 +4081,7 @@ def _end_of_turn(turn: _Turn, s: RefState, order: list[int]) -> None:
             _bad_dreams_check,  # MON_COND_CHECK_STATE_BAD_DREAMS, bcp.c:1484
             _uproar_check,  # MON_COND_CHECK_STATE_UPROAR, bcp.c:1505
             _disable_check,  # MON_COND_CHECK_STATE_DISABLE, bcp.c:1565
+            _encore_check,  # MON_COND_CHECK_STATE_ENCORE, bcp.c:1591 (B10-9)
             _lock_on_check,  # MON_COND_CHECK_STATE_LOCK_ON, bcp.c:1618
             _taunt_check,  # MON_COND_CHECK_STATE_TAUNT, bcp.c:1635
             _yawn_check,  # MON_COND_CHECK_STATE_YAWN, bcp.c:1684
@@ -4352,6 +4383,36 @@ def _disable_check(turn: _Turn, s: RefState, side: int) -> None:
         sd.disabled_move = 0
 
 
+def _encore_check(turn: _Turn, s: RefState, side: int) -> None:
+    """bcp.c:1591-1612 (B10-9): an encored move the Pokemon no longer knows, or with no PP,
+    zeroes the count; the count drops while non-zero, else the encore ends (encoredMove only)."""
+    sd, mon = s.sides[side], _active(s, side)
+    if not sd.encore_move:
+        return
+    if sd.encore_move not in mon.moves or mon.pp[mon.moves.index(sd.encore_move)] == 0:
+        sd.encore_turns = 0
+    if sd.encore_turns:
+        sd.encore_turns -= 1
+    else:
+        sd.encore_move = 0
+
+
+def _encore_fails(tables, s: RefState, target: int) -> tuple[bool, int]:
+    """BtlCmd_TryEncore (script.c:4725-4748): (fails, slot of the target's last move)."""
+    sd, mon = s.sides[target], _active(s, target)
+    last = sd.last_move
+    slot = mon.moves.index(last) if last and last in mon.moves else -1
+    banned = {_t(tables, "move_ai_effect", m) for m in CANNOT_ENCORE_MOVES}
+    fails = (
+        bool(sd.encore_move)
+        or not last
+        or slot < 0
+        or _t(tables, "move_ai_effect", last) in banned
+        or mon.pp[slot] == 0
+    )
+    return fails, max(slot, 0)
+
+
 def _taunt_check(turn: _Turn, s: RefState, side: int) -> None:
     sd = s.sides[side]
     if sd.taunt:
@@ -4373,15 +4434,21 @@ def _usable(tables, s: RefState, side: int) -> list[bool]:
         return [k == lock for k in range(MOVE_ACTIONS)]
     choice = s.sides[side].choice_lock
     choice_locked = _holds_choice(tables, s, side) and choice != 0 and choice in mon.moves
-    return [
+    encore = s.sides[side].encore_move
+    usable = [
         m > 0
         and pp > 0
         and m != disabled
         and not (taunted and _t(tables, "move_power", m) == 0)
         and not (choice_locked and m != choice)
         and not _move_imprisoned(s, side, m)  # CHECK_INVALID_IMPRISONED (lib.c:2287)
+        and not (encore and m != encore)  # Encore (lib.c:2302-2304), B10-9
         for m, pp in zip(mon.moves, mon.pp)
     ]
+    # With the encored move valid, the selection takes the encored slot (bcp.c:443-446).
+    if encore and any(usable):
+        return [k == s.sides[side].encore_slot for k in range(MOVE_ACTIONS)]
+    return usable
 
 
 def _move_imprisoned(s: RefState, side: int, move: int) -> bool:
@@ -4564,6 +4631,7 @@ def _actions(turn: _Turn, s: RefState, start: int) -> None:
         turn.position = position
         if s.over:
             break
+        stale = _stale_snapshot(s)
         if turn.done[side] or _active(s, side).hp == 0:
             continue
         record = None
@@ -4577,6 +4645,16 @@ def _actions(turn: _Turn, s: RefState, start: int) -> None:
         else:
             move, struggling, locked = choices[side]
             turn.attack_message = turn.move_hit = turn.damaged = turn.sub_hit = False
+            # FightCommand (bcp.c:1866-1883, B10-9): after Struggle, an encored battler uses the
+            # encored move (its slot's PP and no-PP failure) when the slot holds it, whatever it
+            # chose; else its encore ends and the slot's move (its forced choice) runs.
+            action_slot = actions[side]
+            esd, emon = s.sides[side], _active(s, side)
+            if not struggling and esd.encore_move and emon.hp and not s.over:
+                if emon.moves[esd.encore_slot] == esd.encore_move:
+                    move, action_slot = esd.encore_move, esd.encore_slot
+                else:
+                    esd.encore_move = esd.encore_slot = esd.encore_turns = 0
             turn.move_cur = move
             turn.shell_dealt = 0
             # A foe that roosted this turn: the move's chart skips its Flying rows
@@ -4587,7 +4665,7 @@ def _actions(turn: _Turn, s: RefState, start: int) -> None:
                 foe.types = [Type.MYSTERY if t == Type.FLYING else t for t in foe.types]
             try:
                 record = _fight(
-                    turn, s, side, actions[side], move, struggling, locked,
+                    turn, s, side, action_slot, move, struggling, locked,
                     target_moved=position == 1,
                 )  # fmt: skip
             finally:
@@ -4613,6 +4691,8 @@ def _actions(turn: _Turn, s: RefState, start: int) -> None:
             # Protect, Detect or Endure (script.c:5154-5158). Folded into protect_count here.
             if not (turn.attack_message and turn.move_cur in PROTECT_CHAIN_MOVES):
                 s.sides[side].protect_count = 0
+        # B10-6: the player's FIGHT attempt or an HP update clears a knocked item's record.
+        _stale_known_item(s, stale, side == 0 and commands[side] not in (ITEM, SWITCH))
         _finish_action(turn, s, side, position, record)
 
 
@@ -4639,13 +4719,32 @@ def _finish_action(turn: _Turn, s: RefState, side: int, position: int, record) -
     _pay_exp(turn, s, pending, turn.actions[0])
 
 
+def _stale_snapshot(s: RefState) -> tuple[int, bool, int]:
+    """(the player's active slot, knocked off then, its HP) at a segment's start (B10-6)."""
+    slot = s.sides[0].active
+    mon = s.sides[0].party[slot]
+    return slot, bool(mon.knocked_off), mon.hp
+
+
+def _stale_known_item(s: RefState, snap: tuple[int, bool, int], fought: bool) -> None:
+    """B10-6 (``step._stale_known_item``): a slot knocked off before the segment, holding
+    nothing, whose HP changed or that made a FIGHT attempt in it, has the AI's record of its
+    item cleared (its CopyToParty: battle_script.c:1720, bcp.c:2748; lib.c:1819-1823)."""
+    slot, knocked, hp = snap
+    mon = s.sides[0].party[slot]
+    if knocked and mon.item == 0 and (mon.hp != hp or fought):
+        s.ai_item_known[slot] = 0
+
+
 def _end_turn(turn: _Turn, s: RefState) -> RefState:
     """The end of the turn after the actions."""
     tables, outcome = turn.tables, turn.outcome
     order = _speed_order(tables, s, outcome)  # BattleSystem_SortMonSpeedOrder, bcp.c:887
+    snap = _stale_snapshot(s)
     _field_conditions(turn, s, order)
     _end_of_turn(turn, s, order)
     _future_sight(turn, s, order)
+    _stale_known_item(s, snap, False)  # B10-6
     # BattleSystem_SetupNextTurn (lib.c:2234) clears every flinch and unlocks a sleeping
     # battler (lib.c:2240-2243).
     for sd in s.sides:

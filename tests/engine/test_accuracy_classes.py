@@ -434,6 +434,7 @@ _NO_ACC_EVA_WRITE = (frozenset(EffectId(i) for i in range(40)) - _STAT_KINDS) | 
     EffectId.SLEEP_TALK,
     EffectId.METRONOME,
     EffectId.COPYCAT,
+    EffectId.ASSIST,  # an invoker (B10-11)
     # Uproar (a lock and a field bit) and Future Sight (a stored hit) write no stage.
     EffectId.UPROAR,
     EffectId.FUTURE_SIGHT,
@@ -468,6 +469,7 @@ _NO_ACC_EVA_WRITE = (frozenset(EffectId(i) for i in range(40)) - _STAT_KINDS) | 
     EffectId.KNOCK_OFF,
     EffectId.SAFEGUARD,  # a side condition (B10-7)
     EffectId.FOCUS_PUNCH,  # a plain hit (B10-8)
+    EffectId.ENCORE,  # sets the encore only (B10-9)
 }
 # (effect, stat) pairs hit_thresholds follows: they change a later foe move's threshold.
 _SEEN = {

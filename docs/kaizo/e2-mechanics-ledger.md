@@ -1,71 +1,51 @@
 # E2 mechanics ledger (Kaizo Roark split)
 
-## RESUME (updated 2026-11-15: batch 9 and its follow-ups done; batch 10 family 1 set aside)
+## RESUME (updated 2026-11-15 evening: batch 10 open; session cleared at the Assist commit)
 
-- **Tip and merges.** Tip: this RESUME commit on 253afaf ("fix(e2): batch 9 review follow-ups",
-  B9-13..B9-15). It holds batches 3-9 with their review follow-ups (batch 9's at 253afaf, batch
-  8's at 0936d40) and main bdb51d8 (merged at d6c3bab, backlog regenerated at 697a626). It is the
-  merge-check tip: no batch 10 code is committed.
-- **Batch 10.** The plan is committed at e2f0d73 ("Batch 10" below: ten families). Family 1
-  (recoil and crash, B10-1 / B10-2) is committed with its AI scoring (Flare Blitz #253 into
-  Expert_RecoilMove; #262 and #45 were already transcribed by E1). Ownership (2026-11-15): E2
-  owns each move-effect family end to end, its AI scoring and tests in the same batch; E1's
-  branch claude/e1-prep-on-e2 holds the AI for Metal Burst, Future Sight, ACC_DOWN, Minimize,
-  Mean Look, Knock Off, Imprison, Copycat, Ingrain, Baton Pass, Helping Hand, SolarBeam: do not
-  redo those. Batches 3-9 await merge; batch 10 is the only batch allowed until then.
-  Done on this branch (batch 10, unmerged): family 1 recoil / crash (597ad95, B10-1/2), the 3-9
-  merge-check follow-ups (ff4490b, B10-3), family 3 Substitute (939bd45, B10-4), family 5
-  Endeavor / Pain Split (a9806c2, B10-5), family 6 Knock Off (b051b45, B10-6), family 8
-  Safeguard with two Substitute follow-ups (683e5dd, B10-7), family 10's Focus Punch (5efc1e9,
-  B10-8). Backlog now 235 missing groups, 58 runnable battles. E1 owns families 2 (Focus Band, Wiki Berry), 4 (Pressure)
-  and the abilities of 8-9. E2 left: family 7 the charge turn (SolarBeam #151, Razor Wind, Fly /
-  Dig / Dive / Bounce / Shadow Force, Skull Bash, Sky Attack, Power Herb), family 10's Encore
-  (new state: the encored move and its turns; it forces the selection) and Assist (the invoker
-  framework of Sleep Talk / Metronome / Copycat, with the party's moves). Still owed from the manager: tests/search/
-  test_pivot_search.py under 8 GB (fight-sized roots, shared programs) once the fast tier's figure
-  for it is in. Tell the manager: B10-6's stale ai_item_known after Knock Off (E1's area).
-  AI convention (manager, 2026-11-15, from E1's ALLIN branch claude/e1-allin-ai 4fa42e4): gate
-  a flag only through policy._flags / _run_flags (never layout.runs / layout.flags in traced
-  scoring); every random read through commands._slot_read with its bound in
-  read_bounds.READ_BOUNDS; concrete code uses layout.fight_flags / fight_effects. Batch 10's AI
-  so far (Flare Blitz #253 into the existing _expert_recoil_move, three table rows and one
-  dispatch row) adds no flag gate and no random read: no site to switch. Encore's AI, when
-  written, follows it.
-- **Fast tier.** The batches 3-9 merge fast tier runs on c961e18 in `_scratch/e2/testwt`
-  (launcher `_scratch/e2/run_fast_tier.ps1`, log `_scratch/e2/ft_c961e18.log`, started 09:20,
-  pid 15236 in the lock). Report passed / failed, wall time, peak and the ten slowest to the
-  manager when it ends.
-- **Batch 9 follow-ups.** test_stage_b's six failing nodes are fixed (the exhaustive solver's
-  unpack, B9-15) and confirmed: 6 passed (test_terminal_win_after_a_death_scores_zero_at_k0,
-  test_win_after_a_new_death_scores_zero_at_k0, test_result_dict_round_trip,
-  test_root_chance_node_for_the_battle_start_quick_claw, test_matches_exhaustive_on_endgames,
-  test_no_peeking). Engine guards, test_stage_b_learn, test_batch9: 159 passed; tests/data +
-  tests/tools 596 passed before the build_tables gate fix, then test_build_tables_game 14
-  passed. tests/prep/test_exhaustive.py was stopped unfinished (slow). The four cross-area
-  guards on 253afaf were stopped unfinished at the session clear (2026-11-15 ~08:50); the
-  manager reruns them in the merge check.
-- **Next.** Batch 10 families 1-10 in the plan order (re-apply family 1 first), then the next
-  splits (Fantina onward, backlog order).
-- **Open rulings and items.** Compile re-time pending on a quiet machine (batch 9's 76.5 s was
-  load-skewed). `tests/search/test_leaves.py` and `tests/search/test_player_learn.py` owe a
-  restructuring (each past 8 GB). The slow search run peaked at 17 GB. A one-process focused
-  run over tests/prep and the engine guards grew past 16 GB here and was stopped: run such sets
-  per file. Sampling note: `outcome.sample_outcome` uses `fold_in(key, 26)` for both Metronome's
-  side-0 rank and `yawn_sleep` (correlated draws; marginals exact).
-- **Test worktree.** `G:\Farry\Claude Workspace\_scratch\e2\testwt` (detached; tables rebuilt per
-  tip; JAX cache under its `.cache/jax-tests`); `compile_time.py` at `_scratch\e2\`; batch 10
-  scratch at `_scratch\e2\b10\` (`diff.py N SEED`: the reduced differential).
-- **Process rules (user-approved).**
-  - Per batch: the batch's focused tests plus the four cross-area guards
-    (`tests/prep/test_variants.py`, `tests/data/test_game_constants.py`,
-    `tests/tools/test_backlog.py`, `tests/test_cli.py`) and one review. No fast tier per batch.
-  - The fast tier runs once per merge into main, on the merge-check tip, under the lock.
-  - Never start a third batch while two are unmerged: send a merge-check tip instead.
-  - The session is cleared at every batch boundary: keep this RESUME current at each one.
-- **Lock rules.** The fast-tier lock (`_scratch/fast_tier.lock`) names the launched pytest's pid,
-  written only after that process is confirmed alive; a lock whose pid is dead may be deleted.
-  At most 8 GB per test file. Every background launch gets a liveness check within two minutes.
-  No 90 minutes without a commit (else tell the coordinator in two lines what it waits on).
+- **Main.** Batches 3-9 are in local main d420167 (merge 4fb3548 of c961e18 + c6c4df0). Never push.
+- **Batch 10 on this branch (unmerged), all committed; tip = this RESUME commit on 8df2d38.**
+  597ad95 recoil/crash (B10-1/2, Flare Blitz AI); ff4490b merge-check follow-ups (B10-3: Baton
+  Pass keeps-test, Unburden lead arming, citations); 939bd45 Substitute (B10-4); a9806c2 Endeavor
+  / Pain Split (B10-5); b051b45 Knock Off (B10-6); 683e5dd Safeguard + two Substitute fixes
+  (B10-7); 5efc1e9 Focus Punch (B10-8); 5e9b960 Encore engine side (B10-9), the stale AI known
+  item after Knock Off modelled (B10-6), Snore law fix (B10-10); 8df2d38 Assist (B10-11) and
+  Encore refused by coverage for both sides (Metronome with it). Backlog at 234 missing groups.
+- **Assist status.** Differential seeds 12-14 clean, test_invokers 16 passed, test_batch10 25,
+  test_enumerate 39, test_accuracy_classes 30, test_effect_map 23, coverage 91. NOT rerun after
+  the last generator change: test_damage_classes (its earlier failure was Assist leaking into
+  invoker-free law states, fixed in tests/strategies.py). Rerun it first.
+- **Left in batch 10 (manager, 2026-11-15):** family 7 the charge turn (SolarBeam #151, Razor
+  Wind, Fly / Dig / Dive / Bounce / Shadow Force, Skull Bash, Sky Attack, Power Herb; mechanic +
+  AI + tests); tests/search/test_pivot_search.py under 8 GB per test with per-test memory shown
+  (after E1's fast tier and its search-test rework are in main); then merge main, focused tests
+  + the four guards + one review, and send the tip to the manager. No Encore AI in batch 10.
+- **Batch 11 (start once the batch 10 tip is with the manager):** the takeover mechanism exactly
+  as designed at 88fb6c5 (ledger "Design: a chosen move replaced mid-turn": one event for every
+  replaced move, TAKEN law variant from a hypothetical encored state with its tag outside `call`,
+  a second sampled outcome returned where the event fired, Outcome shape unchanged), including
+  the Sleep Talk + Disable / Imprison sampler fix with a frequency test that fails today, Encore
+  into Metronome / Assist / Sleep Talk / Copycat; then lift both Encore refusals and add Encore's
+  AI (Basic_CheckCannotEncore, Expert_Encore) under the ALLIN convention.
+- **ALLIN AI convention (from E1's merge):** gate a flag only through policy._flags /
+  _run_flags; every random read through commands._slot_read with its bound in
+  read_bounds.READ_BOUNDS; concrete code uses layout.fight_flags / fight_effects.
+- **Process rules.** Per batch: focused tests + the four guards (tests/prep/test_variants.py,
+  tests/data/test_game_constants.py, tests/tools/test_backlog.py, tests/test_cli.py) + one
+  review; the fast tier once per merge, on the merge-check tip, under
+  G:/Farry/Claude Workspace/_scratch/fast_tier.lock (launcher _scratch/e2/run_fast_tier.ps1;
+  E1's merge takes the lock first). No third batch while two are unmerged. Report in a few lines
+  to the manager (SendMessage local_a4231f03-556b-4b7f-bc82-38b27d410c76); a two-line note after
+  90 minutes without a commit. E2 owns move-effect families end to end (mechanic, AI scoring,
+  tests); E1 owns abilities, held items, battle conditions, AI flags. Keep commits small (E1
+  builds on this branch: claude/e1-gardenia-on-e2). Context: do not read whole large files or
+  full test logs (grep / tail), delegate file-heavy work to subagents. Runs narrow (one process,
+  under 6 GB) while another fast tier holds the lock.
+- **Scratch.** _scratch/e2/b10: diff.py N SEED (reduced differential, dumps fail_SEED.pkl),
+  replay.py / replay3.py (replay a dump in both engines), edit.py (scripted edits), the decomp
+  Substitute inventory. Test worktree _scratch/e2/testwt (now at d420167). Rebuild tables after
+  an effect-map change (uv run python -m tools.build_tables; uv run --group rom python -m
+  tools.build_tables --game kaizo); regenerate the backlog per family (uv run --group rom python
+  -m tools.kaizo.backlog docs/kaizo/mechanics_backlog.md).
 
 ## History
 
@@ -286,6 +266,49 @@ Out of scope: AI entries (E1), double / multi formats, gauntlets, the terrain en
   MoveEffectsData on a switch; it outlives a turn whose holder did not FIGHT. Check how the engine
   keeps the Custap flag (step `custap`, `ts_custap`) and whether it needs the same persistence.
 - Knock Off leaves canUnburden as it was: an armed Unburden holder doubles its speed after it.
+
+### Design: a chosen move replaced mid-turn (Encore's takeover; manager decision (a), 2026-11-15)
+
+Problem. FightCommand (bcp.c:1866-1873) runs an encored battler's encored move whatever it chose, so
+a faster Encore this turn replaces the move the turn-start laws and sampler assumed. The same
+gap already exists, unflagged, for Sleep Talk's split variants (B5-13 Disable, B7-13 Imprison):
+`call_laws` / `call_variants` / `call_consistent` enumerate the alternative called move exactly,
+but `sample_outcome` draws every move-dependent field from the turn-start prediction
+(`used_moves`), so a split variant whose called move differs in crit stage, effect chance or
+duration law is sampled at the wrong rates. One mechanism covers both.
+
+Revised after review (approve-with-changes, 2026-11-15): the first draft listed `hit` as
+rate-free (it is the roll's class over the move's thresholds, outcome.py:967-968), missed `call`
+(Encore can lock a battler into Metronome / Assist / Sleep Talk / Copycat: Encore is not
+NO_METRONOME, and sCannotEncoreMoves leaves them), `fang_flinch` and `future_hit`, chose the copy by
+a test that can disagree with the laws, and encoded the variant in `call` (which Metronome's and
+Assist's `call % count` would corrupt). The plan now:
+
+1. One event, shared by laws, engine and sampler: `encore_taken[battler]` = its encore_move was 0
+   at the turn start and is set and held (moves[encore_slot] == encore_move) when its action
+   starts, not struggling (bcp.c:1866-1873); a new `step_events` flag. With the existing
+   `disabled_at_move` / `sealed_at_move` (`_split_events`) it decides every replaced-move variant.
+2. Laws (no new Outcome fields): a TAKEN variant per battler whose foe can make it happen (a foe
+   using Encore, or an invoker that can call it: over-approximate; `call_consistent` drops the
+   rows that did not happen), computed wholly from a hypothetical state with the encore set (as
+   `_disabled_state` does for Disable): moves, effects, crit odds, damage classes, thresholds and
+   the battler's own call law when the encored move is an invoker. The variant tag is a field
+   beside `call` (not an offset of it). Possible only when the target is not encored at the turn
+   start, its last move is encorable, held, has PP and differs from the chosen one.
+3. Sampler only: draw Outcome A as today; draw B = A with the move-dependent fields of each
+   possibly-replaced battler (`hit`, `crit`, `secondary`, `fang_flinch`, `duration`, `call`,
+   `future_hit`) redrawn for its alternative move; run the turn's events on A and return B for a
+   battler whose event fired. Exact: the event is fixed before that battler's action starts, and
+   the redrawn fields are read only after it. The same pass closes the Sleep Talk Disable /
+   Imprison split's sampler gap (today drawn from the turn-start prediction).
+4. Engine: unchanged (it already runs the replaced move; it only emits the event).
+5. Doubles: a short list of alternatives per battler, each keyed by its event (two foes can Disable
+   and Encore one battler in a turn); singles needs one per kind.
+6. Tests: the hand case (1 child vs 33) as a law test and a frequency test; a Sleep Talk + faster
+   Disable frequency test with calls of different accuracy (fails today); Encore into Metronome or
+   Assist; each shown failing without its part.
+7. Size: about two days (the reviewer's estimate for the first draft was 2-3; this route is
+   smaller). Playout cost: a second event pass on turns where a replacement is possible.
 
 ### Family 10 rest: Encore and Assist (next; decomp sites, not yet modelled)
 
@@ -1514,10 +1537,14 @@ Rules left out because another mechanic is missing; each closes with the mechani
   then reaches its move start or faints). The Sticky Barb transfer skips a knocked-off attacker
   and Knock Off itself (battle_lib.c:5390-5391; pivot :7380). Laws: a table-damage effect and an
   input clause (the foe's later hit when it holds an item). The AI's Knock Off is E1's (branch
-  claude/e1-prep-on-e2). Owed (AI knowledge, E1's area): TryKnockOff runs no CopyToParty, so
-  `ai_item_known` keeps the knocked item until the battler's next CopyToParty (an HP-bar update,
-  battle_script.c:1720, or the other sites of battle_lib.c:1819); the engine leaves it as it is
-  at the knock-off, and no later site clears it yet. Thief, Covet, Trick and Fling, which also
+  claude/e1-prep-on-e2). The AI's record (E2's under the end-to-end rule, manager 2026-11-15):
+  TryKnockOff runs no CopyToParty, so `ai_item_known` keeps the knocked item until the
+  battler's next CopyToParty (battle_lib.c:1819-1823): its next HP-bar update
+  (battle_script.c:1720) or move attempt (bcp.c:2748). Modelled per segment (an action, the end
+  of the turn) in both engines (`step._stale_known_item`, the reference's twin): exact, as a
+  knocked-off slot never holds an item again and the AI reads the record only at its next
+  choice; test_knock_off_leaves_the_ai_record_until_the_next_copy_to_party. Thief, Covet, Trick
+  and Fling, which also
   read the mask, are unsupported.
   STATE.md maps quickClaw (`ts_claw`) and knockedOffItemsMask (`knocked_off`); test_state's
   audit list no longer pins quickClaw as later. Differential seed 5, 150: clean.
@@ -1548,3 +1575,51 @@ Rules left out because another mechanic is missing; each closes with the mechani
   focus" message (bcp.c:811-834, PRE_MOVE_ACTION_STATE_TIGHTEN_FOCUS) changes no state; the
   observation shows the move and the miss (coarser: "lost its focus" and a miss share a set).
   The AI's Expert_FocusPunch was E1's. Encore and Assist (the rest of family 10) are not done.
+- B10-9 (batch 10, family 10) Encore (`EffectId.ENCORE`, 88, decomp 90), both engines; its AI
+  (Basic_CheckCannotEncore script.s:655-657, Expert_Encore :3177-3240) is still to transcribe
+  (the AI refuses the move until then). New volatile state `encore_move`, `encore_slot`,
+  `encore_turns` (MoveEffectsData, cleared on a switch, not Baton-passed). BtlCmd_TryEncore
+  (battle_script.c:4725-4748; `effects.encore_slot_of`, `_encore`): fails (MOVE_STATUS_FAILED) for
+  an encored target, no last move, a last move not in its slots, one of sCannotEncoreMoves'
+  battle effects (battle_lib.c:7212-7231, `ids.CANNOT_ENCORE_MOVES` through `move_ai_effect`) or
+  no PP; else the move, its slot and RandNext() % 5 + 3 turns (`DURATION_ENCORE`, 3-7). The
+  selection (`actions.usable_moves`): CheckInvalidMoves leaves only the encored move
+  (battle_lib.c:2302-2304), and with it valid the encored slot is the one FIGHT action
+  (bcp.c:443-446), else Struggle. The action (FightCommand, bcp.c:1866-1883): after Struggle, the
+  encored move runs whatever was chosen (a faster Encore this turn takes over), from its slot's PP
+  (no PP: MOVE_STATUS_NO_PP, now modelled in the JAX engine too); a slot that no longer holds it
+  ends the encore. The turn end (`step._encore_check`, bcp.c:1591-1612, between Disable and
+  Lock-On): unknown or 0-PP move zeroes the count; the count drops, at 0 the encore ends. The
+  observation shows that an encore is on (the count is hidden).
+  Owed (this batch, after E1's ALLIN merge lands in main): Encore's AI. Basic_CheckCannotEncore
+  and Expert_Encore need AICmd_IfBattlerUnderEffect (CHECK_ENCORE, CHECK_DISABLE), not on this
+  base, and Expert_Encore's IfRandomLessThan 30 (script.s:3192) goes through ALLIN's
+  commands._slot_read with a read_bounds.READ_BOUNDS entry. Until then coverage refuses Encore
+  for the trainer AI. Found by the differential (seeds 9, 10): the reference's volatile reset list
+  lacked the three encore fields; its usable-move check (`_usable`) ignored Encore (Struggle and
+  the forced slot); both fixed. Sleep Talk's callable slots drop every move but the encored one
+  (CheckInvalidMoves at battle_script.c:4927; `order.sleep_talk_slots`, both engines).
+  Manager ruling 2026-11-15: batch 10 ships Encore refused by coverage for both sides
+  (`coverage.IMPLEMENTED_EFFECTS[ENCORE] = NONE`, reason `ENCORE_REFUSAL` naming the takeover
+  task; Metronome is refused with it, as it can call Encore), the engine code kept; batch 11 builds
+  the takeover (design below) and then lifts the refusal and adds Encore's AI.
+  Owed (decision asked of the manager 2026-11-15): the same-turn takeover (FightCommand,
+  bcp.c:1869-1873) is exact in both engines but not in `outcome_laws` (reads are planned from the
+  chosen move: a hand case gives 1 child against 33 sampled outcomes) nor in `sample_outcome`
+  (crit and secondary drawn with the chosen move's rates). Proposed: the encored move as a second
+  candidate move for that side, reads unioned and crit / secondary drawn per candidate.
+- B10-10 (law) `Reads.flinch_sure` counted Snore (FLINCH with SNORE_PARAM), whose flinch fails
+  with its move unless the user is asleep when it acts (effect_script_0092.s:5): an awake Snore
+  user moving first let the laws drop the foe's reads (test_matches_sampled_frequencies_random's
+  derandomized case, Snore vs Future Sight; on main d420167 too, reached now by the batch 10
+  generator draws). Snore is left out of `flinch_sure` (its foe's reads stay planned).
+- B10-11 (batch 10, family 10) Assist (`EffectId.ASSIST`, 89, decomp 180), an invoker
+  (`order.CALL_ASSIST`), both engines. BtlCmd_TryAssist (battle_script.c:6405-6444;
+  `order.assist_candidates`): in party order, every move of every other party slot holding a
+  Pokemon (a fainted mate's too), not Move_IsInvoker (`ids.INVOKER_MOVES`, battle_lib.c:
+  3032-3045) and Metronome-able (NO_METRONOME; Gravity and Heal Block owed with those moves);
+  duplicates count; the call is RandNext() % numMoves (`sample_outcome`: a uniform draw over the
+  list, fold_in 30 + side; `call_laws`: each position weighs 1, grouped by the move it calls in
+  `call_variants`); none listed fails it (MOVE_STATUS_FAILED). Then GoToMoveScript like the other
+  invokers (step's generic invoker path; RANGE_SINGLE_TARGET_SPECIAL: its own defender is the
+  user). Its AI entry was transcribed generically by E1 (batch 3).
