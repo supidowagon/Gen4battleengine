@@ -557,6 +557,72 @@ def _basic_check_curse(ctx: AiContext, mask) -> AiContext:
     return ctx
 
 
+def _clear_body(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckClearBodyEffect`` (script.s:469-473): -10 against Clear Body or White
+    Smoke (the player's ability, guessed or known)."""
+    ctx = c.load_battler_ability(_at(ctx, mask), _D)
+    for name in ("Clear Body", "White Smoke"):
+        ctx, t = _split(c.if_loaded_equal_to(ctx, _ABILITY[name]))
+        ctx = _score(ctx, t, -10)
+    return c.pop_or_end(ctx)
+
+
+def _basic_check_low_attack(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckLowStatStage_Attack`` (script.s:428-432, then :469)."""
+    ctx = _at(ctx, mask)
+    ctx, t = _split(c.if_stat_stage_equal_to(ctx, _D, Stat.ATK, 0))
+    ctx = _score(ctx, t, -10)
+    ctx = c.load_battler_ability(ctx, _D)
+    ctx, t = _split(c.if_loaded_equal_to(ctx, _ABILITY["Hyper Cutter"]))
+    ctx = _score(ctx, t, -10)
+    ctx, clear_body = _split(c.go_to(ctx))
+    return _clear_body(ctx, clear_body)
+
+
+def _basic_check_low_speed(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckLowStatStage_Speed`` (script.s:438-443, then :469): Trick Room, the
+    player at -6, or Speed Boost as ``CheckBattlerAbility`` sees it, -10."""
+    ctx = _at(ctx, mask)
+    ctx, t = _split(c.if_field_conditions_mask(ctx, c.FieldCondition.TRICK_ROOM))
+    ctx = _score(ctx, t, -10)
+    ctx, t = _split(c.if_stat_stage_equal_to(ctx, _D, Stat.SPE, 0))
+    ctx = _score(ctx, t, -10)
+    ctx = c.check_battler_ability(ctx, _D, _ABILITY["Speed Boost"])
+    ctx, t = _split(c.if_loaded_equal_to(ctx, c.AI_HAVE))
+    ctx = _score(ctx, t, -10)
+    ctx, clear_body = _split(c.go_to(ctx))
+    return _clear_body(ctx, clear_body)
+
+
+def _basic_check_low_spd(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckLowStatStage_SpDefense`` (script.s:449-451, then :469)."""
+    ctx = _at(ctx, mask)
+    ctx, t = _split(c.if_stat_stage_equal_to(ctx, _D, Stat.SPD, 0))
+    ctx = _score(ctx, t, -10)
+    ctx, clear_body = _split(c.go_to(ctx))
+    return _clear_body(ctx, clear_body)
+
+
+def _basic_check_low_evasion(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckLowStatStage_Evasion`` (script.s:462-467, falling into :469): the player
+    at -6, or No Guard on either side, -10."""
+    ctx = _at(ctx, mask)
+    ctx, t = _split(c.if_stat_stage_equal_to(ctx, _D, Stat.EVA, 0))
+    ctx = _score(ctx, t, -10)
+    for battler in (_A, _D):
+        ctx = c.load_battler_ability(ctx, battler)
+        ctx, t = _split(c.if_loaded_equal_to(ctx, _ABILITY["No Guard"]))
+        ctx = _score(ctx, t, -10)
+    return _clear_body(ctx, ctx.live)
+
+
+def _basic_check_reflect(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckAlreadyUnderReflect`` (script.s:607-610): -8 under the AI's own Reflect."""
+    ctx = _at(ctx, mask)
+    ctx, t = _split(c.if_side_condition(ctx, _A, c.SideCondition.REFLECT))
+    return c.pop_or_end(_score(ctx, t, -8))
+
+
 def _basic_check_defense(ctx: AiContext, mask) -> AiContext:
     """``Basic_CheckLowStatStage_Defense`` (script.s:434-473)."""
     # Basic_CheckLowStatStage_Defense (:434)
@@ -994,12 +1060,7 @@ def _expert_speed_down_on_hit(ctx: AiContext, mask) -> AiContext:
         ctx, t = _split(c.if_move_equal_to(ctx, _MOVE[name]))
         down = down | t
     ctx = c.pop_or_end(ctx)
-    # Expert_StatusSpeedDown (:2353)
-    ctx, plus2 = _split(c.if_speed_compare_equal_to(_at(ctx, down), COMPARE_SPEED_SLOWER))
-    ctx = c.add_to_move_score(ctx, -3)
-    ctx, _ = _split(c.go_to(ctx))  # -> _End
-    ctx, _ = _split(c.if_random_less_than(_at(ctx, plus2), 70, 2362))
-    return c.pop_or_end(c.add_to_move_score(ctx, 2))
+    return _status_speed_down(_at(ctx, down))  # Expert_StatusSpeedDown (:2353)
 
 
 def _expert_facade(ctx: AiContext, mask) -> AiContext:
@@ -1090,6 +1151,96 @@ def _expert_dragon_dance(ctx: AiContext, mask) -> AiContext:
     ctx, _ = _split(c.go_to(ctx))  # -> _End
     ctx, _ = _split(c.if_random_less_than(_at(ctx, plus1), 128, 4776))
     return c.pop_or_end(c.add_to_move_score(ctx, 1))
+
+
+def _status_speed_down(ctx: AiContext) -> AiContext:
+    """``Expert_StatusSpeedDown`` (script.s:2353-2366) from the live paths: not slower than
+    the player, -3; slower, +2 unless the 70 roll (:2362) jumps."""
+    ctx, plus2 = _split(c.if_speed_compare_equal_to(ctx, COMPARE_SPEED_SLOWER))
+    ctx = c.add_to_move_score(ctx, -3)
+    ctx, _ = _split(c.go_to(ctx))  # -> _End
+    ctx, _ = _split(c.if_random_less_than(_at(ctx, plus2), 70, 2362))
+    return c.pop_or_end(c.add_to_move_score(ctx, 2))
+
+
+def _expert_status_speed_down(ctx: AiContext, mask) -> AiContext:
+    """``Expert_StatusSpeedDown`` (script.s:2353-2366)."""
+    return _status_speed_down(_at(ctx, mask))
+
+
+def _expert_status_attack_down(ctx: AiContext, mask) -> AiContext:
+    """``Expert_StatusAttackDown`` (script.s:2277-2307): the player not at +0 Attack: -1, -1
+    more at 90 % HP or less, then -2 unless the 50 roll (:2293) jumps when the player's
+    Attack is at decomp 3 or less; then -2 at the player's 70 % HP or less; then, when the
+    player's last move was special, -2 unless the 128 roll (:2303) jumps."""
+    ctx = _at(ctx, mask)
+    ctx, target_hp = _split(c.if_stat_stage_equal_to(ctx, _D, Stat.ATK, 6))
+    ctx = c.add_to_move_score(ctx, -1)
+    ctx, stage = _split(c.if_hp_percent_greater_than(ctx, _A, 90))
+    ctx = c.add_to_move_score(ctx, -1)
+    # Expert_StatusAttackDown_CheckTargetStatStage (:2291)
+    ctx = _at(ctx, stage | ctx.live)
+    ctx, t = _split(c.if_stat_stage_greater_than(ctx, _D, Stat.ATK, 3))
+    target_hp = target_hp | t
+    ctx, t = _split(c.if_random_less_than(ctx, 50, 2293))
+    ctx = c.add_to_move_score(ctx, -2)
+    # Expert_StatusAttackDown_CheckTargetHP (:2296)
+    ctx = _at(ctx, target_hp | t | ctx.live)
+    ctx, last = _split(c.if_hp_percent_greater_than(ctx, _D, 70))
+    ctx = c.add_to_move_score(ctx, -2)
+    # Expert_StatusAttackDown_CheckLastUsedMove (:2300)
+    ctx = c.load_defender_last_used_move_class(_at(ctx, last | ctx.live))
+    ctx, _ = _split(c.if_loaded_not_equal_to(ctx, c.CLASS_SPECIAL))  # -> _End
+    ctx, _ = _split(c.if_random_less_than(ctx, 128, 2303))  # -> _End
+    return c.pop_or_end(c.add_to_move_score(ctx, -2))
+
+
+def _status_down_hp(label: str, stat: Stat, lines: tuple[int, int]):
+    """``Expert_StatusSpDefenseDown`` (script.s:2411-2429) / ``Expert_StatusEvasionDown``
+    (:2500-2518), at ``lines`` (label, its 50 roll): at 70 % HP or more and the player's stage
+    above decomp 3, straight to the target's HP; else -2 unless the 50 roll jumps; then -2 at
+    the player's 70 % HP or less (Roark's Expert_StatusDefenseDown's shape)."""
+    start, r50 = lines
+
+    def check(ctx: AiContext, mask) -> AiContext:
+        ctx = _at(ctx, mask)
+        ctx, roll = _split(c.if_hp_percent_less_than(ctx, _A, 70))
+        ctx, target_hp = _split(c.if_stat_stage_greater_than(ctx, _D, stat, 3))
+        # <label>_TryScoreMinus2
+        ctx = _at(ctx, roll | ctx.live)
+        ctx, t = _split(c.if_random_less_than(ctx, 50, r50))
+        ctx = c.add_to_move_score(ctx, -2)
+        # <label>_CheckTargetHP
+        ctx = _at(ctx, target_hp | t | ctx.live)
+        ctx, _ = _split(c.if_hp_percent_greater_than(ctx, _D, 70))
+        return c.pop_or_end(c.add_to_move_score(ctx, -2))
+
+    check.__name__ = check.__qualname__ = f"_expert_status_{stat.name.lower()}_down"
+    check.__doc__ = f"``{label}`` (script.s:{start})."
+    return check
+
+
+_expert_status_spd_down = _status_down_hp("Expert_StatusSpDefenseDown", Stat.SPD, (2411, 2421))
+_expert_status_eva_down = _status_down_hp("Expert_StatusEvasionDown", Stat.EVA, (2500, 2510))
+
+
+def _expert_reflect(ctx: AiContext, mask) -> AiContext:
+    """``Expert_Reflect`` (script.s:2893-2915): below 50 % HP -2; else at 90 % HP or more +1
+    unless the 128 roll (:2901) jumps; then, when the player's last move was physical, +1
+    unless the 64 roll (:2907) jumps."""
+    ctx = _at(ctx, mask)
+    ctx, minus2 = _split(c.if_hp_percent_less_than(ctx, _A, 50))
+    ctx, last = _split(c.if_hp_percent_less_than(ctx, _A, 90))
+    ctx, t = _split(c.if_random_less_than(ctx, 128, 2901))
+    ctx = c.add_to_move_score(ctx, 1)
+    # Expert_Reflect_CheckLastUsedMove (:2904)
+    ctx = c.load_defender_last_used_move_class(_at(ctx, last | t | ctx.live))
+    ctx, _ = _split(c.if_loaded_not_equal_to(ctx, c.CLASS_PHYSICAL))  # -> _End
+    ctx, _ = _split(c.if_random_less_than(ctx, 64, 2907))  # -> _End
+    ctx = c.add_to_move_score(ctx, 1)
+    ctx, _ = _split(c.go_to(ctx))  # -> _End
+    # Expert_Reflect_ScoreMinus2 (:2911)
+    return c.pop_or_end(c.add_to_move_score(_at(ctx, minus2), -2))
 
 
 def _expert_curse(ctx: AiContext, mask) -> AiContext:
@@ -1255,7 +1406,10 @@ _BASIC_LABELS = (
     (BattleEffect.ATK_UP, _basic_check_high_atk),  # :137
     (BattleEffect.DEF_UP, _basic_check_high_def),  # :138
     (BattleEffect.SP_ATK_UP, _basic_check_high_spa),  # :140
+    (BattleEffect.ATK_DOWN, _basic_check_low_attack),  # :144
     (BattleEffect.DEF_DOWN, _basic_check_defense),  # :145
+    (BattleEffect.SPEED_DOWN, _basic_check_low_speed),  # :146
+    (BattleEffect.EVA_DOWN, _basic_check_low_evasion),  # :150
     (BattleEffect.RESTORE_HALF_HP, _basic_check_can_recover_hp),  # :154
     (BattleEffect.STATUS_BADLY_POISON, _basic_check_cannot_poison),  # :155
     (BattleEffect.SET_LIGHT_SCREEN, _basic_check_light_screen),  # :156
@@ -1265,7 +1419,11 @@ _BASIC_LABELS = (
     (BattleEffect.SPEED_UP_2, _basic_check_speed),  # :166
     (BattleEffect.SP_ATK_UP_2, _basic_check_high_spa),  # :167
     (BattleEffect.SP_DEF_UP_2, _basic_check_high_spd),  # :168
+    (BattleEffect.ATK_DOWN_2, _basic_check_low_attack),  # :171
     (BattleEffect.DEF_DOWN_2, _basic_check_defense),  # :172
+    (BattleEffect.SPEED_DOWN_2, _basic_check_low_speed),  # :173
+    (BattleEffect.SP_DEF_DOWN_2, _basic_check_low_spd),  # :175
+    (BattleEffect.SET_REFLECT, _basic_check_reflect),  # :178
     (BattleEffect.STATUS_PARALYZE, _basic_check_cannot_paralyze),  # :180
     (BattleEffect.STATUS_LEECH_SEED, _basic_check_cannot_leech_seed),  # :183
     (BattleEffect.CURSE, _basic_check_curse),  # :196
@@ -1289,7 +1447,10 @@ _EXPERT_LABELS = (
     (BattleEffect.DEF_UP, _expert_status_def_up),  # :1634
     (BattleEffect.SP_ATK_UP, _expert_status_spa_up),  # :1636
     (BattleEffect.BYPASS_ACCURACY, _expert_bypass_accuracy),  # :1640
+    (BattleEffect.ATK_DOWN, _expert_status_attack_down),  # :1641
     (BattleEffect.DEF_DOWN, _expert_status_defense_down),  # :1642
+    (BattleEffect.SPEED_DOWN, _expert_status_speed_down),  # :1643
+    (BattleEffect.EVA_DOWN, _expert_status_eva_down),  # :1647
     (BattleEffect.RESTORE_HALF_HP, _expert_recovery),  # :1652
     (BattleEffect.STATUS_BADLY_POISON, _expert_toxic_leech_seed),  # :1653
     (BattleEffect.SET_LIGHT_SCREEN, _expert_light_screen),  # :1654
@@ -1301,7 +1462,11 @@ _EXPERT_LABELS = (
     (BattleEffect.SPEED_UP_2, _expert_status_speed_up),  # :1665
     (BattleEffect.SP_ATK_UP_2, _expert_status_spa_up),  # :1666
     (BattleEffect.SP_DEF_UP_2, _expert_status_spd_up),  # :1667
+    (BattleEffect.ATK_DOWN_2, _expert_status_attack_down),  # :1670
     (BattleEffect.DEF_DOWN_2, _expert_status_defense_down),  # :1671
+    (BattleEffect.SPEED_DOWN_2, _expert_status_speed_down),  # :1672
+    (BattleEffect.SP_DEF_DOWN_2, _expert_status_spd_down),  # :1674
+    (BattleEffect.SET_REFLECT, _expert_reflect),  # :1677
     (BattleEffect.STATUS_PARALYZE, _expert_status_paralyze),  # :1679
     (BattleEffect.ATK_UP_2_STATUS_CONFUSION, _expert_swagger),  # :1680
     (BattleEffect.LOWER_SPEED_HIT, _expert_speed_down_on_hit),  # :1681

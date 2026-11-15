@@ -610,6 +610,27 @@ None of these has a `Basic_ScoreMoveEffect` entry.
   U-turn and Payback; Roost's labels exist (Recover's) but the AI's type chart does not yet
   model the roosting state.
 
+### 5.14 Stat drops and Reflect (E1 batch 10)
+
+ATK_DOWN, SPEED_DOWN, EVA_DOWN, ATK_DOWN_2, SPEED_DOWN_2, SP_DEF_DOWN_2 (DEF_DOWN and
+DEF_DOWN_2 were Roark's) and SET_REFLECT. ACC_DOWN waits: `Expert_StatusAccuracyDown`
+(`:2431-2498`) reads Ingrain and Curse states the engine does not model yet.
+- BASIC (`:144`, `:146`, `:150`, `:171`, `:173`, `:175`): `Basic_CheckLowStatStage_<stat>`
+  (`:428-467`), -10 at -6 already, Attack also against Hyper Cutter, Speed also under Trick
+  Room or against Speed Boost as the new command `CheckBattlerAbility` sees it (`:441`; for an
+  unknown player of two abilities, one of them Speed Boost, it answers unknown, so no -10),
+  evasion also against No Guard on either side; then `Basic_CheckClearBodyEffect`
+  (`:469-473`), -10 against Clear Body or White Smoke. `Basic_CheckAlreadyUnderReflect`
+  (`:607-610`): -8 under the AI's own Reflect.
+- EXPERT: `Expert_StatusAttackDown` (`:2277-2307`): with the player's Attack not at +0, -1,
+  -1 more at 90 % HP or less, and -2 unless the 50 roll (`:2293`) jumps when it is at decomp
+  3 or less; then -2 at the player's 70 % HP or less; then -2 unless the 128 roll (`:2303`)
+  jumps when its last move was special. `Expert_StatusSpeedDown` (`:2353-2366`, shared with
+  5.12). `Expert_StatusSpDefenseDown` / `_EvasionDown` (`:2411-2429`, `:2500-2518`): Roark's
+  `Expert_StatusDefenseDown` shape with rolls `:2421`, `:2510`. `Expert_Reflect`
+  (`:2893-2915`): below 50 % HP -2; at 90 % or more +1 unless the 128 roll (`:2901`) jumps;
+  then +1 unless the 64 roll (`:2907`) jumps when the player's last move was physical.
+
 ## 6. Where the AI reads the true battle state
 
 roark.md 6 holds: the damage estimate, the kill check and the effectiveness class read the

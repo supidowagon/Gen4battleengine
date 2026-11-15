@@ -226,6 +226,9 @@ CONSTANTS: tuple[Constant, ...] = (
             "Limber": 7,
             "Oblivious": 12,
             "Water Veil": 41,
+            "Hyper Cutter": 52,
+            "Speed Boost": 3,
+            "No Guard": 99,
         },
     ),
     *_table(

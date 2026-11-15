@@ -2224,3 +2224,166 @@ def test_batch9_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party,
                 layout = layout_for(t, flags, s)
                 assert policy.ai_refusals(t, s, n, layout) == []
                 _assert_exact_equals_loose(t, s, layout)
+
+
+# --- Stat drops and Reflect (E1 batch 10) ----------------------------------------------------
+
+
+def _move_of(t, effect: int) -> int:
+    """The first Kaizo move with battle effect ``effect``."""
+    return 1 + int(np.flatnonzero(np.asarray(t.move_ai_effect)[1:] == effect)[0])
+
+
+def _known_ability(t, s, ability: int):
+    """``s`` with the player's active a species with ``ability`` in either slot, known."""
+    abilities = np.asarray(t.species_abilities_decomp)
+    rows = np.asarray(t.species_form_row)[:, 0]
+    species, slot = next(
+        (sp, k)
+        for sp in range(1, rows.shape[0])
+        for k in (0, 1)
+        if abilities[rows[sp], k] == ability
+    )
+    return _with_player(t, s, species, slot, known=True)
+
+
+@pytest.mark.parametrize(
+    ("effect", "case", "expected"),
+    [
+        # Basic_CheckLowStatStage_Attack (:428-432) then Basic_CheckClearBodyEffect (:469-473)
+        (18, "plain", 0),
+        (18, "stage", -10),  # the player's Attack at -6
+        (18, "Hyper Cutter", -10),
+        (18, "Clear Body", -10),
+        # Basic_CheckLowStatStage_Speed (:438-443): Trick Room, -6, Speed Boost
+        (20, "trick_room", -10),
+        (20, "Speed Boost", -10),
+        (20, "plain", 0),
+        # Basic_CheckLowStatStage_Evasion (:462-467): No Guard on either side
+        (24, "No Guard", -10),
+        (24, "plain", 0),
+        # Basic_CheckLowStatStage_SpDefense (:449-451)
+        (62, "White Smoke", -10),
+        # Basic_CheckAlreadyUnderReflect (:607-610)
+        (65, "reflect", -8),
+        (65, "plain", 0),
+    ],
+)
+def test_basic_drops_and_reflect(kaizo_tables, kaizo_roark_party, effect, case, expected):
+    t = kaizo_tables
+    s = _state(t, kaizo_roark_party, BONSLY, (_move_of(t, effect), ACCELEROCK, 0, 0))
+    s = _with_player(t, s, 72, 0, known=True)  # Tentacool, its abilities not in play
+    stat = {18: Stat.ATK, 20: Stat.SPE, 24: Stat.EVA, 62: Stat.SPD}.get(effect)
+    if case == "stage":
+        s = s._replace(stages=s.stages.at[0, stat].set(-6))
+    elif case == "trick_room":
+        s = s._replace(trick_room=jnp.asarray(3, s.trick_room.dtype))
+    elif case == "reflect":
+        s = s._replace(reflect=s.reflect.at[1].set(5))
+    elif case != "plain":
+        s = _known_ability(t, s, c.ABILITY_IDS[case])
+    assert _delta(t, s, 0x2, 0x3)[0] == expected
+
+
+def test_check_battler_ability_unknown(kaizo_tables, kaizo_roark_party):
+    """CheckBattlerAbility (trainer_ai.c:1236-1246): a player of two abilities whose ability
+    the AI has not learned, one of them Speed Boost, is AI_UNKNOWN, so
+    Basic_CheckLowStatStage_Speed gives no -10 for it (:441-442); known, it does."""
+    t = kaizo_tables
+    abilities = np.asarray(t.species_abilities_decomp)
+    rows = np.asarray(t.species_form_row)[:, 0]
+    boost = c.ABILITY_IDS["Speed Boost"]
+    species, slot = next(
+        (sp, k)
+        for sp in range(1, rows.shape[0])
+        for k in (0, 1)
+        if abilities[rows[sp], k] == boost and abilities[rows[sp], 1 - k] not in (0, boost)
+    )
+    s = _state(t, kaizo_roark_party, BONSLY, (_move_of(t, 20), ACCELEROCK, 0, 0))
+    unknown = _with_player(t, s, species, slot, known=False)
+    known = _with_player(t, s, species, slot, known=True)
+    assert _delta(t, unknown, 0x2, 0x3)[0] == 0
+    assert _delta(t, known, 0x2, 0x3)[0] == -10
+
+
+@pytest.mark.parametrize(
+    ("own_hp", "player_hp", "stage", "last", "jumps", "expected"),
+    [
+        # Expert_StatusAttackDown (script.s:2277-2307)
+        (100, 100, 0, "", (), 0),  # the player's Attack at +0: straight to its HP, above 70 %
+        (100, 100, -1, "", (), -1),  # -1; decomp 5 is above 3: no roll
+        (80, 100, -1, "", (), -2),  # and -1 more at 90 % or less
+        (100, 100, -4, "", (), -3),  # decomp 2: the 50 roll's -2 (:2293)
+        (100, 100, -4, "", (2293,), -1),
+        (100, 60, 0, "", (), -2),  # the player at 70 % or less: -2
+        (100, 100, 0, "Flamethrower", (), -2),  # its last move special: -2 unless :2303 jumps
+        (100, 100, 0, "Flamethrower", (2303,), 0),
+    ],
+)
+def test_expert_status_attack_down(
+    kaizo_tables, kaizo_roark_party, own_hp, player_hp, stage, last, jumps, expected, kaizo_names
+):
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, (_move_of(t, 18), ACCELEROCK, 0, 0))
+    s = _hp(_hp(s, 1, own_hp), 0, player_hp)
+    s = s._replace(stages=s.stages.at[0, Stat.ATK].set(stage))
+    if last:
+        s = s._replace(last_move=s.last_move.at[0].set(n.move_names.index(last)))
+    assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expected
+
+
+@pytest.mark.parametrize(
+    ("effect", "own_hp", "player_hp", "jumps", "expected"),
+    [
+        # Expert_StatusSpDefenseDown (:2411-2429) / _EvasionDown (:2500-2518)
+        (62, 100, 100, (), 0),  # 70 % or more and the player's stage above decomp 3: its HP
+        (62, 50, 100, (), -2),  # below 70 %: -2 unless the 50 roll jumps
+        (62, 50, 100, (2421,), 0),
+        (62, 50, 50, (), -4),  # and -2 at the player's 70 % or less
+        (24, 50, 50, (2510,), -2),
+    ],
+)
+def test_expert_status_down_hp(
+    kaizo_tables, kaizo_roark_party, effect, own_hp, player_hp, jumps, expected
+):
+    t = kaizo_tables
+    s = _state(t, kaizo_roark_party, BONSLY, (_move_of(t, effect), ACCELEROCK, 0, 0))
+    s = _hp(_hp(s, 1, own_hp), 0, player_hp)
+    assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expected
+
+
+@pytest.mark.parametrize(
+    ("hp", "last", "jumps", "expected"),
+    [
+        # Expert_Reflect (script.s:2893-2915)
+        (40, "Tackle", (), -2),  # below 50 %: -2
+        (100, "Tackle", (), 2),  # 90 % or more: +1 unless :2901 jumps; physical: +1 unless :2907
+        (100, "Tackle", (2901, 2907), 0),
+        (70, "Flamethrower", (), 0),  # 50-89 %, special: nothing
+        (70, "Tackle", (), 1),
+    ],
+)
+def test_expert_reflect(kaizo_tables, kaizo_names, kaizo_roark_party, hp, last, jumps, expected):
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, (_move_of(t, 65), ACCELEROCK, 0, 0))
+    s = _hp(s, 1, hp)._replace(last_move=s.last_move.at[0].set(n.move_names.index(last)))
+    assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expected
+
+
+@pytest.mark.parametrize("flags", [0x17, 0x10F])
+def test_batch10_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, flags):
+    """Exact == loose for the batch 10 effects, against a guessed Gible and Tentacool, at two
+    HP levels, the player's Attack down one stage."""
+    from tests.ai.test_kaizo_outcome import GIBLE as GIBLE_SPECIES
+
+    t, n = kaizo_tables, kaizo_names
+    for effects in ((18, 20, 24, 58), (60, 62, 65, 0)):
+        ids = tuple(_move_of(t, e) if e else 0 for e in effects)
+        for player in (GIBLE_SPECIES, 72):
+            for hp in (100, 40):
+                s = _state(t, kaizo_roark_party, BONSLY, ids)
+                s = _hp(_with_player(t, s, player), 1, hp)
+                s = s._replace(stages=s.stages.at[0, Stat.ATK].set(-1))
+                layout = layout_for(t, flags, s)
+                assert policy.ai_refusals(t, s, n, layout) == []
+                _assert_exact_equals_loose(t, s, layout)

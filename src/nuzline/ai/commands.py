@@ -58,6 +58,8 @@ _I32 = jnp.int32
 
 # FlagMoveDamageScore / IfCurrentMoveKills argument (include/constants/battle/trainer_ai.h:45).
 USE_MAX_DAMAGE, ROLL_FOR_DAMAGE = 0, 1
+# CheckBattlerAbility results in calcTemp (trainer_ai.h:39-41).
+AI_NOT_HAVE, AI_HAVE, AI_UNKNOWN = 0, 1, 2
 # FlagMoveDamageScore results in calcTemp (trainer_ai.h:35-37).
 AI_NO_COMPARISON_MADE, AI_NOT_HIGHEST_DAMAGE, AI_MOVE_IS_HIGHEST_DAMAGE = 0, 1, 2
 SIM_ROLL_MAX = 15  # engine roll index of variance 100 (USE_MAX_DAMAGE)
@@ -197,7 +199,10 @@ class BattleEffect(IntEnum):
     DEF_UP = 11
     SP_ATK_UP = 13
     SP_DEF_UP = 14  # Expert_ToxicLeechSeed's IfMoveEffectKnown (script.s:2699)
+    ATK_DOWN = 18
     DEF_DOWN = 19
+    SPEED_DOWN = 20
+    EVA_DOWN = 24
     FLINCH_HIT = 31
     RESTORE_HALF_HP = 32  # Recover
     STATUS_BADLY_POISON = 33  # Toxic
@@ -211,7 +216,11 @@ class BattleEffect(IntEnum):
     SPEED_UP_2 = 52  # Rock Polish
     SP_ATK_UP_2 = 53
     SP_DEF_UP_2 = 54
+    ATK_DOWN_2 = 58
     DEF_DOWN_2 = 59
+    SPEED_DOWN_2 = 60
+    SP_DEF_DOWN_2 = 62
+    SET_REFLECT = 65
     STATUS_PARALYZE = 67
     LOWER_SPEED_HIT = 70
     STATUS_LEECH_SEED = 84
@@ -676,6 +685,11 @@ ABILITY_IDS = {
     "Limber": 7,
     "Oblivious": 12,
     "Water Veil": 41,
+    # E1 batch 10: Basic_CheckLowStatStage_Attack / _Speed / _Evasion (script.s:431, :441,
+    # :465-467).
+    "Hyper Cutter": 52,
+    "Speed Boost": 3,
+    "No Guard": 99,
 }
 MOVE_IDS = {
     "Thunder Wave": 86,  # Basic_CheckCannotParalyze (script.s:620)
@@ -1182,6 +1196,29 @@ def if_side_condition(ctx: AiContext, battler: Battler, mask: int) -> AiContext:
         if mask & member:
             on = on | (getattr(ctx.state, field)[side] > 0)
     return _jump(ctx, on)
+
+
+def check_battler_ability(ctx: AiContext, battler: Battler, expected: int) -> AiContext:
+    """``CheckBattlerAbility`` (trainer_ai.c:1212-1265): ``AI_HAVE`` when the battler's
+    ability as the AI sees it is ``expected``, ``AI_NOT_HAVE`` when it is another, and
+    ``AI_UNKNOWN`` when the AI does not know it. The AI's own Pokemon: its current ability.
+    The player's: the one the AI knows (learned, or a trapping ability, :1224-1233); else, for
+    a species of two abilities, ability 1 when neither is ``expected`` and unknown when one
+    is (:1238-1246), for a species of one, that one (:1247-1251). No draw."""
+    if battler == Battler.ATTACKER:
+        ability = attacker_ability(ctx.tables, ctx.state)
+    else:
+        true, known, base = _defender_abilities(ctx.tables, ctx.state)
+        two = (base[0] != 0) & (base[1] != 0)
+        neither = (base[0] != expected) & (base[1] != expected)
+        guess = jnp.where(
+            two, jnp.where(neither, base[0], 0), jnp.where(base[0] != 0, base[0], base[1])
+        )
+        ability = jnp.where(known, true, guess)
+    value = jnp.where(
+        ability == 0, AI_UNKNOWN, jnp.where(ability == expected, AI_HAVE, AI_NOT_HAVE)
+    )
+    return ctx._replace(calc_temp=jnp.asarray(value, _I32))
 
 
 def load_spikes_layers(ctx: AiContext, battler: Battler, condition: SideCondition) -> AiContext:

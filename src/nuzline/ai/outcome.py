@@ -244,6 +244,13 @@ SITE_N: dict[int, int] = {
     4776: 128,  # Expert_DragonDance_TryScorePlus1 (+1 when it does NOT jump)
     6018: 128,  # Expert_ToxicSpikes (+1 when it does NOT jump)
     6025: 64,  # Expert_ToxicSpikes_TryScorePlus1 (+1 when it does NOT jump)
+    # E1 batch 10: the stat drops and Reflect.
+    2293: 50,  # Expert_StatusAttackDown_CheckTargetStatStage (-2 when it does NOT jump)
+    2303: 128,  # Expert_StatusAttackDown_CheckLastUsedMove (-2 when it does NOT jump)
+    2421: 50,  # Expert_StatusSpDefenseDown_TryScoreMinus2 (-2 when it does NOT jump)
+    2510: 50,  # Expert_StatusEvasionDown_TryScoreMinus2 (-2 when it does NOT jump)
+    2901: 128,  # Expert_Reflect (+1 when it does NOT jump)
+    2907: 64,  # Expert_Reflect_CheckLastUsedMove (+1 when it does NOT jump)
 }
 SITE_LINES = tuple(SITE_N)
 # The flat (vanilla) layout's column of script_roll_sites that each line reads: column 0 is
@@ -362,6 +369,15 @@ KAIZO_TRANSCRIBED: frozenset[int] = frozenset(
         211,  # SP_ATK_SP_DEF_UP: Basic_CheckCalmMind (:250); Expert_StatusSpDefenseUp (:1756)
         212,  # ATK_SPD_UP: Basic_CheckDragonDance (:251); Expert_DragonDance (:1757), :4771, :4776
         249,  # TOXIC_SPIKES: Basic_CheckToxicSpikes (:277); Expert_ToxicSpikes (:1792), :6018, :6025
+        # E1 batch 10: the stat drops Kaizo moves carry but accuracy's (docs/ai/kaizo_roark.md
+        # 5.14), and Reflect.
+        18,  # ATK_DOWN: Basic_CheckLowStatStage_Attack (:144); Expert_StatusAttackDown (:1641)
+        20,  # SPEED_DOWN: Basic_CheckLowStatStage_Speed (:146); Expert_StatusSpeedDown (:1643)
+        24,  # EVA_DOWN: Basic_CheckLowStatStage_Evasion (:150); Expert_StatusEvasionDown (:1647)
+        58,  # ATK_DOWN_2: :171; Expert_StatusAttackDown (:1670)
+        60,  # SPEED_DOWN_2: :173; Expert_StatusSpeedDown (:1672)
+        62,  # SP_DEF_DOWN_2: Basic_CheckLowStatStage_SpDefense (:175); Expert_StatusSpDefenseDown (:1674)
+        65,  # SET_REFLECT: Basic_CheckAlreadyUnderReflect (:178); Expert_Reflect (:1677)
     }
 )
 # The transcribed effects (KAIZO_TRANSCRIBED) whose Expert_Main entry goes to a label added
@@ -415,6 +431,14 @@ KAIZO_EXPERT_LABELS: dict[int, tuple[str, int]] = {
     211: ("Expert_StatusSpDefenseUp", 1756),
     212: ("Expert_DragonDance", 1757),
     249: ("Expert_ToxicSpikes", 1792),
+    # E1 batch 10.
+    18: ("Expert_StatusAttackDown", 1641),
+    20: ("Expert_StatusSpeedDown", 1643),
+    24: ("Expert_StatusEvasionDown", 1647),
+    58: ("Expert_StatusAttackDown", 1670),
+    60: ("Expert_StatusSpeedDown", 1672),
+    62: ("Expert_StatusSpDefenseDown", 1674),
+    65: ("Expert_Reflect", 1677),
 }
 # Of KAIZO_EXPERT_LABELS, the effects whose Expert label policy._expert transcribes
 # (layout.KAIZO expert_transcribed), written out: it is not derived from the table, so an
@@ -459,6 +483,13 @@ KAIZO_EXPERT_TRANSCRIBED: frozenset[int] = frozenset(
         211,  # SP_ATK_SP_DEF_UP: Expert_StatusSpDefenseUp
         212,  # ATK_SPD_UP: Expert_DragonDance
         249,  # TOXIC_SPIKES: Expert_ToxicSpikes
+        18,  # ATK_DOWN: Expert_StatusAttackDown
+        20,  # SPEED_DOWN: Expert_StatusSpeedDown
+        24,  # EVA_DOWN: Expert_StatusEvasionDown
+        58,  # ATK_DOWN_2: Expert_StatusAttackDown
+        60,  # SPEED_DOWN_2: Expert_StatusSpeedDown
+        62,  # SP_DEF_DOWN_2: Expert_StatusSpDefenseDown
+        65,  # SET_REFLECT: Expert_Reflect
     }
 )
 assert set(KAIZO_EXPERT_LABELS) <= KAIZO_TRANSCRIBED
