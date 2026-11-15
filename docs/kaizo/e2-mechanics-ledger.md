@@ -16,11 +16,12 @@
   Done on this branch (batch 10, unmerged): family 1 recoil / crash (597ad95, B10-1/2), the 3-9
   merge-check follow-ups (ff4490b, B10-3), family 3 Substitute (939bd45, B10-4), family 5
   Endeavor / Pain Split (a9806c2, B10-5), family 6 Knock Off (b051b45, B10-6), family 8
-  Safeguard with two Substitute follow-ups (683e5dd, B10-7). Backlog now 236 missing groups, 58
-  runnable battles. E1 owns families 2 (Focus Band, Wiki Berry), 4 (Pressure)
+  Safeguard with two Substitute follow-ups (683e5dd, B10-7), family 10's Focus Punch (5efc1e9,
+  B10-8). Backlog now 235 missing groups, 58 runnable battles. E1 owns families 2 (Focus Band, Wiki Berry), 4 (Pressure)
   and the abilities of 8-9. E2 left: family 7 the charge turn (SolarBeam #151, Razor Wind, Fly /
-  Dig / Dive / Bounce / Shadow Force, Skull Bash, Sky Attack, Power Herb), family 10 Encore /
-  Focus Punch / Assist. Still owed from the manager: tests/search/
+  Dig / Dive / Bounce / Shadow Force, Skull Bash, Sky Attack, Power Herb), family 10's Encore
+  (new state: the encored move and its turns; it forces the selection) and Assist (the invoker
+  framework of Sleep Talk / Metronome / Copycat, with the party's moves). Still owed from the manager: tests/search/
   test_pivot_search.py under 8 GB (fight-sized roots, shared programs) once the fast tier's figure
   for it is in. Tell the manager: B10-6's stale ai_item_known after Knock Off (E1's area).
 - **Fast tier.** The batches 3-9 merge fast tier runs on c961e18 in `_scratch/e2/testwt`
