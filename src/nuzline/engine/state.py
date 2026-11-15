@@ -223,6 +223,10 @@ class BattleState(NamedTuple):
     foresight: jnp.ndarray  # int8, VOLATILE_CONDITION_FORESIGHT
     disabled_move: jnp.ndarray  # int16, MoveEffectsData.disabledMove: move id, 0 = none
     disable_turns: jnp.ndarray  # int8, MoveEffectsData.disabledTurns (hidden)
+    # E2 batch 10 (B10-9): MoveEffectsData.encoredMove / encoredMoveSlot / encoredTurns.
+    encore_move: jnp.ndarray  # int16, 0 = not encored
+    encore_slot: jnp.ndarray  # int8
+    encore_turns: jnp.ndarray  # int8 (hidden)
     locked_move: jnp.ndarray  # int16, moveLockedInto while VOLATILE_CONDITION_MOVE_LOCKED
     bide_turns: jnp.ndarray  # int8, VOLATILE_CONDITION_BIDE turns, 0-2
     bide_damage: jnp.ndarray  # int16, storedDamage while Biding (hidden), else 0
@@ -399,6 +403,9 @@ VOLATILE_FIELDS = (
     "foresight",
     "disabled_move",
     "disable_turns",
+    "encore_move",
+    "encore_slot",
+    "encore_turns",
     "locked_move",
     "bide_turns",
     "bide_damage",
@@ -492,6 +499,9 @@ LAYOUT: dict[str, tuple[tuple[int, ...], type]] = {
     "foresight": (_SIDE, np.int8),
     "disabled_move": (_SIDE, np.int16),
     "disable_turns": (_SIDE, np.int8),
+    "encore_move": (_SIDE, np.int16),
+    "encore_slot": (_SIDE, np.int8),
+    "encore_turns": (_SIDE, np.int8),
     "locked_move": (_SIDE, np.int16),
     "bide_turns": (_SIDE, np.int8),
     "bide_damage": (_SIDE, np.int16),

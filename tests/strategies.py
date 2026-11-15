@@ -880,7 +880,9 @@ def _draw_batch9(draw, tables: Tables, a: dict, side: int, active: int, names: N
             a["item"][side, active] = 0
             a["can_unburden"][side] = 1
         else:
-            a["item"][side, active] = names.item(rnd.choice(("Oran Berry", "Sitrus Berry", "Lum Berry")))
+            a["item"][side, active] = names.item(
+                rnd.choice(("Oran Berry", "Sitrus Berry", "Lum Berry"))
+            )
             # A holder with an item has canUnburden set: its switch-in check armed it
             # (battle_lib.c:4433-4437) and nothing clears it while it stays in (B9-13).
             a["can_unburden"][side] = 1
@@ -915,9 +917,24 @@ def _draw_batch10(draw, tables: Tables, a: dict, side: int, active: int, names: 
             "Knock Off",
             "Safeguard",
             "Focus Punch",
+            "Encore",
         )
     )
     give(move)
+    if move == "Encore":  # B10-9: the foe's last move one of its own (or none)
+        foe_moves = [int(m) for m in a["moves"][foe, foe_mon] if m]
+        a["last_move"][foe] = rnd.choice(foe_moves + [0]) if foe_moves else 0
+    if rnd.random() < 0.15:  # B10-9: an encore already on either side, on a move it knows
+        who = rnd.choice((side, foe))
+        mon = active if who == side else foe_mon
+        slots = [k for k in range(4) if a["moves"][who, mon, k]]
+        if slots:
+            k = rnd.choice(slots)
+            a["encore_move"][who] = a["moves"][who, mon, k]
+            a["encore_slot"][who] = k
+            a["encore_turns"][who] = rnd.randint(0, 7)
+            if rnd.random() < 0.2:
+                a["pp"][who, mon, k] = 0
     if rnd.random() < 0.15:  # B10-7: a Safeguard up on either side, against the status moves
         a["safeguard"][rnd.choice((side, foe))] = rnd.randint(1, 5)
         give(rnd.choice(("Thunder Wave", "Toxic", "Supersonic", "Swagger", "Ember")), foe, foe_mon)

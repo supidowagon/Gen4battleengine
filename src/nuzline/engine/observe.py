@@ -196,6 +196,9 @@ _NONZERO_SIDE = (
     "curse",
     # E2 batch 9: Minimize's own message (it used the move).
     "minimized",
+    # E2 batch 10: "{0} got an encore!" (subscript_encore_start.s) until "{0}'s encore ended!";
+    # the count is hidden (B10-9).
+    "encore_move",
 )
 _NONZERO_FIELD = ("trick_room", "gravity")
 

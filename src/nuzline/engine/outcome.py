@@ -969,10 +969,15 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions) -> Outcome:
     # same 3-6 as Bind.
     effect = tables.move_effect[moves]
     three = (effect == EffectId.TRAP) | (effect == EffectId.DISABLE) | (effect == EffectId.UPROAR)
+    # BtlCmd_TryEncore (battle_script.c:4742): RandNext() % 5 + 3, 3-7 (B10-9).
     duration = jnp.where(
         effect == EffectId.TAUNT,
         draw(13, per_side, 3) + 3,
-        draw(10, per_side, 4) + jnp.where(three, 3, 2),
+        jnp.where(
+            effect == EffectId.ENCORE,
+            draw(10, per_side, 5) + 3,
+            draw(10, per_side, 4) + jnp.where(three, 3, 2),
+        ),
     )
     outcome = Outcome(
         speed_tie=speed_tie,

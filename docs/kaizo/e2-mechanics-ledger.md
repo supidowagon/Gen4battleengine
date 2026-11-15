@@ -23,7 +23,7 @@
   (new state: the encored move and its turns; it forces the selection) and Assist (the invoker
   framework of Sleep Talk / Metronome / Copycat, with the party's moves). Still owed from the manager: tests/search/
   test_pivot_search.py under 8 GB (fight-sized roots, shared programs) once the fast tier's figure
-  for it is in. Tell the manager: B10-6's stale ai_item_known after Knock Off (E1's area).
+  for it is in.
   AI convention (manager, 2026-11-15, from E1's ALLIN branch claude/e1-allin-ai 4fa42e4): gate
   a flag only through policy._flags / _run_flags (never layout.runs / layout.flags in traced
   scoring); every random read through commands._slot_read with its bound in
@@ -1513,10 +1513,14 @@ Rules left out because another mechanic is missing; each closes with the mechani
   then reaches its move start or faints). The Sticky Barb transfer skips a knocked-off attacker
   and Knock Off itself (battle_lib.c:5390-5391; pivot :7380). Laws: a table-damage effect and an
   input clause (the foe's later hit when it holds an item). The AI's Knock Off is E1's (branch
-  claude/e1-prep-on-e2). Owed (AI knowledge, E1's area): TryKnockOff runs no CopyToParty, so
-  `ai_item_known` keeps the knocked item until the battler's next CopyToParty (an HP-bar update,
-  battle_script.c:1720, or the other sites of battle_lib.c:1819); the engine leaves it as it is
-  at the knock-off, and no later site clears it yet. Thief, Covet, Trick and Fling, which also
+  claude/e1-prep-on-e2). The AI's record (E2's under the end-to-end rule, manager 2026-11-15):
+  TryKnockOff runs no CopyToParty, so `ai_item_known` keeps the knocked item until the
+  battler's next CopyToParty (battle_lib.c:1819-1823): its next HP-bar update
+  (battle_script.c:1720) or move attempt (bcp.c:2748). Modelled per segment (an action, the end
+  of the turn) in both engines (`step._stale_known_item`, the reference's twin): exact, as a
+  knocked-off slot never holds an item again and the AI reads the record only at its next
+  choice; test_knock_off_leaves_the_ai_record_until_the_next_copy_to_party. Thief, Covet, Trick
+  and Fling, which also
   read the mask, are unsupported.
   STATE.md maps quickClaw (`ts_claw`) and knockedOffItemsMask (`knocked_off`); test_state's
   audit list no longer pins quickClaw as later. Differential seed 5, 150: clean.
@@ -1547,3 +1551,32 @@ Rules left out because another mechanic is missing; each closes with the mechani
   focus" message (bcp.c:811-834, PRE_MOVE_ACTION_STATE_TIGHTEN_FOCUS) changes no state; the
   observation shows the move and the miss (coarser: "lost its focus" and a miss share a set).
   The AI's Expert_FocusPunch was E1's. Encore and Assist (the rest of family 10) are not done.
+- B10-9 (batch 10, family 10) Encore (`EffectId.ENCORE`, 88, decomp 90), both engines; its AI
+  (Basic_CheckCannotEncore script.s:655-657, Expert_Encore :3177-3240) is still to transcribe
+  (the AI refuses the move until then). New volatile state `encore_move`, `encore_slot`,
+  `encore_turns` (MoveEffectsData, cleared on a switch, not Baton-passed). BtlCmd_TryEncore
+  (battle_script.c:4725-4748; `effects.encore_slot_of`, `_encore`): fails (MOVE_STATUS_FAILED) for
+  an encored target, no last move, a last move not in its slots, one of sCannotEncoreMoves'
+  battle effects (battle_lib.c:7212-7231, `ids.CANNOT_ENCORE_MOVES` through `move_ai_effect`) or
+  no PP; else the move, its slot and RandNext() % 5 + 3 turns (`DURATION_ENCORE`, 3-7). The
+  selection (`actions.usable_moves`): CheckInvalidMoves leaves only the encored move
+  (battle_lib.c:2302-2304), and with it valid the encored slot is the one FIGHT action
+  (bcp.c:443-446), else Struggle. The action (FightCommand, bcp.c:1866-1883): after Struggle, the
+  encored move runs whatever was chosen (a faster Encore this turn takes over), from its slot's PP
+  (no PP: MOVE_STATUS_NO_PP, now modelled in the JAX engine too); a slot that no longer holds it
+  ends the encore. The turn end (`step._encore_check`, bcp.c:1591-1612, between Disable and
+  Lock-On): unknown or 0-PP move zeroes the count; the count drops, at 0 the encore ends. The
+  observation shows that an encore is on (the count is hidden).
+  Owed (this batch, after E1's ALLIN merge lands in main): Encore's AI. Basic_CheckCannotEncore
+  and Expert_Encore need AICmd_IfBattlerUnderEffect (CHECK_ENCORE, CHECK_DISABLE), not on this
+  base, and Expert_Encore's IfRandomLessThan 30 (script.s:3192) goes through ALLIN's
+  commands._slot_read with a read_bounds.READ_BOUNDS entry. Until then coverage refuses Encore
+  for the trainer AI. Found by the differential (seeds 9, 10): the reference's volatile reset list
+  lacked the three encore fields; its usable-move check (`_usable`) ignored Encore (Struggle and
+  the forced slot); both fixed. Sleep Talk's callable slots drop every move but the encored one
+  (CheckInvalidMoves at battle_script.c:4927; `order.sleep_talk_slots`, both engines).
+- B10-10 (law) `Reads.flinch_sure` counted Snore (FLINCH with SNORE_PARAM), whose flinch fails
+  with its move unless the user is asleep when it acts (effect_script_0092.s:5): an awake Snore
+  user moving first let the laws drop the foe's reads (test_matches_sampled_frequencies_random's
+  derandomized case, Snore vs Future Sight; on main d420167 too, reached now by the batch 10
+  generator draws). Snore is left out of `flinch_sure` (its foe's reads stay planned).

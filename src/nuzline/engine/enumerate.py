@@ -194,6 +194,7 @@ from nuzline.engine.ids import (
     MINIMIZE_PARAM,
     QUICK_CLAW_MODULUS,
     SLEEP_TALK_VALUES,
+    SNORE_PARAM,
     STOMP_PARAM,
     TAILWIND_TURNS,
     TRI_ATTACK_STATUSES,
@@ -261,6 +262,7 @@ WIDTH_CAP = 131072
 DURATION_DEFAULT = 0  # Random 3, 2: 2-5 (sleep, confusion and every other move)
 DURATION_TRAP = 1  # Random 3, 3: 3-6 (Bind, Uproar; Disable: RandNext() % 4 + 3, the same law)
 DURATION_TAUNT = 2  # Random 2, 3: 3-5
+DURATION_ENCORE = 3  # BtlCmd_TryEncore's RandNext() % 5 + 3: 3-7 (B10-9)
 
 # Effects whose hits read ``outcome.secondary`` through ``proc`` (effects.py:468).
 _PROC_EFFECTS = (
@@ -695,6 +697,8 @@ INPUT_NEUTRAL_EFFECTS = (
     _E.SAFEGUARD,
     # B10-8: a plain hit, or none once the user took a hit (its foe's damage is unchanged).
     _E.FOCUS_PUNCH,
+    # B10-9: it forces the foe's later turns' move; nothing of this turn's damage.
+    _E.ENCORE,
 )
 INPUT_CLAUSE_EFFECTS = (
     _E.STAT_SELF,  # the foe's Defense / Sp. Def; Minimize's flag (Stomp's power)
@@ -991,6 +995,7 @@ TABLE_DAMAGE_EFFECTS = (
     _E.FOCUS_PUNCH,
 )
 NON_TABLE_DAMAGE_EFFECTS = (
+    _E.ENCORE,  # a status move: no damage (B10-9)
     _E.STAT_SELF,
     _E.STAT_FOE,
     _E.STATUS_FOE,
@@ -1698,7 +1703,10 @@ def outcome_laws(
         & (kinds == Type.WATER)
     ) | ((ignorable == AbilityId.VOLT_ABSORB) & (kinds == Type.ELECTRIC))
     flinch_sure = (
-        ((effect == _E.FLINCH) | fake_out_ok | fang)
+        # Snore (FLINCH with SNORE_PARAM) fails unless its user is asleep when it acts
+        # (effect_script_0092.s:5; step's ``failed``), which a wake-up this turn can undo: its
+        # flinch is never sure (B10, found by test_matches_sampled_frequencies_random).
+        (((effect == _E.FLINCH) & (params[:, 2] != SNORE_PARAM)) | fake_out_ok | fang)
         & reach
         & deals
         & (ignorable != AbilityId.INNER_FOCUS)
@@ -1747,7 +1755,11 @@ def outcome_laws(
         effect == _E.TAUNT,
         DURATION_TAUNT,
         jnp.where(
-            _any_of(effect, (_E.TRAP, _E.DISABLE, _E.UPROAR)), DURATION_TRAP, DURATION_DEFAULT
+            effect == _E.ENCORE,
+            DURATION_ENCORE,
+            jnp.where(
+                _any_of(effect, (_E.TRAP, _E.DISABLE, _E.UPROAR)), DURATION_TRAP, DURATION_DEFAULT
+            ),
         ),
     )
     # Damage classes (rules §10.3 item 5): a hit whose damage the turn-start table gives
@@ -1877,6 +1889,8 @@ def _duration(laws: OutcomeLaws, side: int) -> _Law:
     kind = int(laws.duration_kind[side])
     if kind == DURATION_TAUNT:
         return [3, 4, 5], [1, 1, 1], 3
+    if kind == DURATION_ENCORE:
+        return [3, 4, 5, 6, 7], [1] * 5, 5
     low = 3 if kind == DURATION_TRAP else 2
     return list(range(low, low + 4)), [1] * 4, 4
 

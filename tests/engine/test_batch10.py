@@ -394,3 +394,62 @@ def test_focus_punch_loses_its_focus_after_a_hit_but_not_a_substitute_hit(tables
     )
     out = assert_matches_reference(tables, calm, (0, 0), O)
     assert int(out.hp[1, 0]) < int(calm.hp[1, 0])
+
+
+def test_encore_locks_the_last_move_and_counts_down(tables, names):
+    """B10-9: BtlCmd_TryEncore (battle_script.c:4725-4748) encores the target's last move for
+    RandNext() % 5 + 3 turns (outcome.duration); CheckInvalidMoves (battle_lib.c:2302) then leaves
+    only that move, which the selection takes (bcp.c:443-446); the count drops at the turn end
+    (bcp.c:1591-1612). Encore fails on a target that has not moved."""
+    from nuzline.engine.actions import usable_moves
+
+    n = names
+    s = make_state(
+        tables,
+        [_mon(n, "Clefairy", ["Encore"], 40)],
+        [_mon(n, "Bidoof", ["Growl", "Tackle"], 30)],
+    )
+    fresh = assert_matches_reference(tables, s, (0, 1), O)
+    assert int(fresh.encore_move[1]) == 0  # Clefairy moved first: no last move yet
+    grown = s._replace(last_move=s.last_move.at[1].set(n.move("Growl")))
+    o = O._replace(duration=jnp.asarray([5, 2], O.duration.dtype))
+    out = assert_matches_reference(tables, grown, (0, 1), o)
+    assert int(out.encore_move[1]) == n.move("Growl") and int(out.encore_slot[1]) == 0
+    assert int(out.encore_turns[1]) == 4  # 5, then this turn's count-down
+    assert [bool(x) for x in usable_moves(tables, out, 1)] == [True, False, False, False]
+
+
+def test_a_faster_encore_takes_over_this_turns_move(tables, names):
+    """B10-9: FightCommand (bcp.c:1869-1873) runs the encored move whatever was chosen: Bidoof
+    chose Tackle, a faster Encore on its last Growl makes it Growl this turn, from Growl's PP."""
+    n = names
+    s = make_state(
+        tables,
+        [_mon(n, "Clefairy", ["Encore"], 40)],
+        [_mon(n, "Bidoof", ["Growl", "Tackle"], 30)],
+    )
+    s = s._replace(last_move=s.last_move.at[1].set(n.move("Growl")))
+    out = assert_matches_reference(tables, s, (0, 1), O)
+    assert int(out.hp[0, 0]) == int(s.hp[0, 0])  # no Tackle
+    assert int(out.stages[0, Stat.ATK]) == -1  # a Growl
+    assert int(out.pp[1, 0, 0]) == int(s.pp[1, 0, 0]) - 1 and int(out.pp[1, 0, 1]) == int(
+        s.pp[1, 0, 1]
+    )
+
+
+def test_knock_off_leaves_the_ai_record_until_the_next_copy_to_party(tables, names):
+    """B10-6: TryKnockOff runs no CopyToParty, so the AI's record of the player's knocked item
+    stays (aiContext.battlerHeldItems) until the battler's next CopyToParty: its move attempt
+    (bcp.c:2748) or an HP-bar update (battle_script.c:1720), not the knock-off hit's own update."""
+    n = names
+    # Ninjask moves first (its record stays); Bidoof moves after the knock-off (cleared).
+    for species, kept in (("Ninjask", True), ("Bidoof", False)):
+        s = make_state(
+            tables,
+            [_mon(n, species, ["Growl"], 30, "Leftovers")],
+            [_mon(n, "Sneasel", ["Knock Off"], 30)],
+        )
+        s = s._replace(ai_item_known=s.ai_item_known.at[0].set(n.item("Leftovers")))
+        out = assert_matches_reference(tables, s, (0, 0), O)
+        assert int(out.item[0, 0]) == 0 and int(out.knocked_off[0, 0]) == 1
+        assert (int(out.ai_item_known[0]) == n.item("Leftovers")) == kept, species

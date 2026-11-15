@@ -383,7 +383,7 @@ three structs has a row.
 | Struct.field | pytree field | status |
 |---|---|---|
 | `MoveEffectsData.disabledTurns` | `disable_turns` | mapped |
-| `MoveEffectsData.encoredTurns` | — | later (M6) |
+| `MoveEffectsData.encoredTurns` | `encore_turns` | mapped |
 | `MoveEffectsData.chargedTurns` | — | later (M6) |
 | `MoveEffectsData.tauntedTurns` | `taunt` | mapped |
 | `MoveEffectsData.protectSuccessTurns` | `protect_count` | mapped |
@@ -418,8 +418,8 @@ three structs has a row.
 | `MoveEffectsData.transformedPID` | — | later (M6) |
 | `MoveEffectsData.disabledMove` | `disabled_move` | mapped |
 | `MoveEffectsData.bindingMove` | `trap_move` | mapped |
-| `MoveEffectsData.encoredMove` | — | later (M6) |
-| `MoveEffectsData.encoredMoveSlot` | — | later (M6) |
+| `MoveEffectsData.encoredMove` | `encore_move` | mapped |
+| `MoveEffectsData.encoredMoveSlot` | `encore_slot` | mapped |
 | `MoveEffectsData.lastResortMoves` | — | later (M6) |
 | `MoveEffectsData.choiceLockedMove` | `choice_lock` | mapped |
 | `MoveEffectsData.transformedGender` | — | later (M6) |

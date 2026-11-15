@@ -300,6 +300,9 @@ class EffectId(IntEnum):
     # bcp.c:3416-3424) gets MOVE_STATUS_LOST_FOCUS (:5-6, :12-16; a DID_NOT_HIT status:
     # subscript_missed.s:8-10, "lost its focus"); else a plain table hit (B10-8).
     FOCUS_PUNCH = 87
+    # Encore (90, BATTLE_EFFECT_ENCORE): zeros. A direct ON_HIT subscript_encore_start.s ->
+    # BtlCmd_TryEncore (battle_script.c:4725-4748), ``effects._encore``, B10-9.
+    ENCORE = 88
 
 
 # ``EffectId.COUNTER``'s source (``move_param[m, 0]``).
@@ -888,6 +891,10 @@ MOVE_FAKE_OUT = 252
 # MOVE_KNOCK_OFF (generated/moves.txt): the on-hit Sticky Barb transfer skips it
 # (battle_lib.c:5391), B10-6.
 MOVE_KNOCK_OFF = 282
+# sCannotEncoreMoves (battle_lib.c:7212-7219): Move_CanBeEncored compares their battle effects
+# (MOVE_DATA(move).effect, :7225) with the last move's: Transform, Mimic, Sketch, Mirror Move,
+# Encore, Struggle (generated/moves.txt), B10-9.
+CANNOT_ENCORE_MOVES = (144, 102, 166, 119, 227, 165)
 # Protect, Detect, Endure (``generated/moves.txt`` lines 183, 198, 204): ``BtlCmd_TryProtection``
 # (battle_script.c:5154-5158) keeps the chain only when ``moveProtect`` is one of them, and
 # ``AICmd_LoadProtectChain`` (trainer_ai.c:2546-2552) reads it the same way. The engine folds
