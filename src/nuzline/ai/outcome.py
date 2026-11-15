@@ -470,6 +470,9 @@ KAIZO_TRANSCRIBED: frozenset[int] = frozenset(
         8,  # RECOVER_DAMAGE_SLEEP: Basic_CheckDreamEater (:136); Expert_DreamEater (:1631)
         28,  # FORCE_SWITCH: Basic_CheckCanForceSwitch (:153); Expert_ForceSwitch (:1650)
         79,  # SET_SUBSTITUTE: Basic_CheckCannotSubstitute (:181); Expert_Substitute (:1684)
+        # Roost: Recover's labels. turnFlags.roosting is cleared before command selection
+        # (BattleSystem_SetupNextTurn, battle_lib.c:2229-2231), so scoring never sees it set.
+        214,  # HEAL_HALF_REMOVE_FLYING_TYPE: Basic_CheckCanRecoverHP (:253); Expert_Recovery
     }
 )
 # The transcribed effects (KAIZO_TRANSCRIBED) whose Expert_Main entry goes to a label added
@@ -558,6 +561,7 @@ KAIZO_EXPERT_LABELS: dict[int, tuple[str, int]] = {
     8: ("Expert_DreamEater", 1631),
     28: ("Expert_ForceSwitch", 1650),
     79: ("Expert_Substitute", 1684),
+    214: ("Expert_Recovery", 1758),
 }
 # Of KAIZO_EXPERT_LABELS, the effects whose Expert label policy._expert transcribes
 # (layout.KAIZO expert_transcribed), written out: it is not derived from the table, so an
@@ -634,6 +638,7 @@ KAIZO_EXPERT_TRANSCRIBED: frozenset[int] = frozenset(
         8,  # RECOVER_DAMAGE_SLEEP: Expert_DreamEater
         28,  # FORCE_SWITCH: Expert_ForceSwitch
         79,  # SET_SUBSTITUTE: Expert_Substitute
+        214,  # HEAL_HALF_REMOVE_FLYING_TYPE: Expert_Recovery
     }
 )
 assert set(KAIZO_EXPERT_LABELS) <= KAIZO_TRANSCRIBED

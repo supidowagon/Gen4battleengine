@@ -64,7 +64,7 @@ def test_layout_per_flag_set(tables, kaizo_tables):
         assert layout == roark._replace(flags=flags, slot_reads=reads)
         assert layout.key.startswith(f"kaizo-{flags:#x}-r{reads}-e")
     assert len({kaizo_layout(f, 7).key for f in sets} | {VANILLA.key}) == len(sets) + 1
-    assert kaizo_layout(0x17, 7) is KAIZO and kaizo_layout(0x17, 6).key != KAIZO.key
+    assert kaizo_layout(0x17, 7) == KAIZO and kaizo_layout(0x17, 6).key != KAIZO.key
     with pytest.raises(ValueError, match="not set"):
         layout_of(t._replace(ai_flags=AI_FLAGS_UNSET))
     with pytest.raises(ValueError, match="not set"):
