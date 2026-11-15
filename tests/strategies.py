@@ -36,7 +36,9 @@ from nuzline.engine.actions import (
 from nuzline.engine.coverage import halved_defense_line, low_defense
 from nuzline.engine.damage import STATUS as STATUS_CATEGORY
 from nuzline.engine.ids import (
+    CONFUSION_PENDING,
     MOVE_STRUGGLE,
+    NATURE_DISLIKED_FLAVOR,
     AbilityId,
     EffectId,
     ItemId,
@@ -248,6 +250,10 @@ BATCH2_ITEMS = (
 )
 # E2 batch 3: the weather rocks (their holder's weather move lasts longer).
 WEATHER_ROCKS = ("Damp Rock", "Heat Rock", "Smooth Rock", "Icy Rock")
+# E1 Gardenia batch (G-1, G-4): Focus Band and the flavor berries; ``_draw_gardenia_item`` also
+# gives one to an active Pokemon on purpose, with what makes it act.
+FLAVOR_BERRIES = ("Figy Berry", "Wiki Berry", "Mago Berry", "Aguav Berry", "Iapapa Berry")
+GARDENIA_ITEMS = ("Focus Band", *FLAVOR_BERRIES)
 ITEM_GROUPS = (
     TYPE_BOOST_ITEMS,
     DAMAGE_ITEMS,
@@ -255,6 +261,7 @@ ITEM_GROUPS = (
     NO_EFFECT_ITEMS,
     BATCH2_ITEMS,
     WEATHER_ROCKS,
+    GARDENIA_ITEMS,
 )
 # E2 batch 3: abilities ``_draw_batch3`` puts on an active Pokemon (the battler's ability; a
 # switch-out restores its own) and the switch-in ones it puts on a bench Pokemon.
@@ -706,6 +713,40 @@ def _draw_batch2_item(draw, tables: Tables, a: dict, side: int, active: int, nam
         give(1 - side, foe, "Tackle")
 
 
+def _draw_gardenia_item(
+    draw, tables: Tables, a: dict, side: int, active: int, names: Names
+) -> None:
+    """Maybe (1 in 3) give the active Pokemon a ``GARDENIA_ITEMS`` item, picked uniformly, with
+    what makes it act most of the time: a flavor berry at or near half HP and (half the time) a
+    nature that dislikes it (``ids.NATURE_DISLIKED_FLAVOR``), the foe sometimes with Bug Bite to
+    eat it; a Focus Band holder at low HP or confused (its self-hit roll). Sometimes the active
+    Pokemon's confusion is a flavor berry's pending counter (``CONFUSION_PENDING``, G-5)."""
+    if draw(st.integers(0, 2)) != 0:
+        return
+    rnd = draw(st.randoms(use_true_random=False))
+    if rnd.random() < 0.15:
+        a["confusion"][side] = CONFUSION_PENDING
+    name = rnd.choice(GARDENIA_ITEMS)
+    a["item"][side, active] = names.item(name)
+    max_hp = int(a["max_hp"][side, active])
+    if rnd.random() < 0.6:
+        a["hp"][side, active] = rnd.randint(1, max(max_hp * 3 // 4, 1))
+    if name in FLAVOR_BERRIES:
+        flavor = FLAVOR_BERRIES.index(name)
+        if rnd.random() < 0.5:
+            disliking = [k for k, f in enumerate(NATURE_DISLIKED_FLAVOR) if f == flavor]
+            a["nature"][side, active] = rnd.choice(disliking)
+        if rnd.random() < 0.3:
+            foe = 1 - side
+            foe_mon = int(a["active"][foe])
+            move = names.move(rnd.choice(("Bug Bite", "Pluck")))
+            k = rnd.randint(0, 3)
+            a["moves"][foe, foe_mon, k] = move
+            a["pp"][foe, foe_mon, k] = int(tables.move_pp[move])
+    elif rnd.random() < 0.3:
+        a["confusion"][side] = rnd.randint(2, _CONFUSION_MAX)
+
+
 def _draw_batch3(draw, tables: Tables, a: dict, side: int, active: int, names: Names) -> None:
     """Maybe (1 in 2) put a ``BATCH3_ABILITIES`` ability on the active Pokemon, picked uniformly,
     with what makes it act most of the time: a recoil move for Reckless, a low-power hit for
@@ -880,7 +921,9 @@ def _draw_batch9(draw, tables: Tables, a: dict, side: int, active: int, names: N
             a["item"][side, active] = 0
             a["can_unburden"][side] = 1
         else:
-            a["item"][side, active] = names.item(rnd.choice(("Oran Berry", "Sitrus Berry", "Lum Berry")))
+            a["item"][side, active] = names.item(
+                rnd.choice(("Oran Berry", "Sitrus Berry", "Lum Berry"))
+            )
             # A holder with an item has canUnburden set: its switch-in check armed it
             # (battle_lib.c:4433-4437) and nothing clears it while it stays in (B9-13).
             a["can_unburden"][side] = 1
@@ -1373,6 +1416,7 @@ def supported_state(draw, tables: Tables, names: Names, invokers: bool = True) -
         _draw_battle_item(draw, tables, a, side, active, names)
         _draw_species_item(draw, tables, a, side, active, names)
         _draw_batch2_item(draw, tables, a, side, active, names)
+        _draw_gardenia_item(draw, tables, a, side, active, names)
         _draw_batch3(draw, tables, a, side, active, names)
         _draw_batch4(draw, tables, a, side, active, names)
         if invokers:
@@ -1610,6 +1654,9 @@ def any_outcome() -> st.SearchStrategy[Outcome]:
         # The Future Sight hit's roll: a flag or any class value (1-100), like ``hit``.
         future_hit=st.one_of(_flag(sides), _ints(0, 100, sides)),
         yawn_sleep=_ints(2, 5, sides),
+        focus_band=_flag(hits),
+        future_band=_flag(sides),
+        berry_confusion=_ints(2, 5, sides),
     )
 
 

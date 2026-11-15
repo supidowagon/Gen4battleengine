@@ -234,6 +234,10 @@ def _code_entries(where: str) -> set:
         (claw,) = [c for c in CONSTANTS if c.where == where]
         assert claw.hold_param == obj
         return {("Quick Claw", claw.id)}
+    if where == "nuzline.engine.ids.FOCUS_BAND_PARAM":
+        (band,) = [c for c in CONSTANTS if c.where == where]
+        assert band.hold_param == obj
+        return {("Focus Band", band.id)}
     if where == "nuzline.saves.check.ULTIMATE_MOVES":  # species keys and move values
         return {(None, k) for k in obj} | {(None, v) for v in set(obj.values())}
     if where == "nuzline.ai.switching._MOVES":

@@ -2026,8 +2026,11 @@ def play_hit(
     Focus Sash (``HOLD_EFFECT_ENDURE``): ``BattleControllerPlayer_UpdateHP`` runs for every
     damaging hit (``battleCtx->damage != 0``) and sets ``focusItemActivated`` when the
     defender holds a Focus Sash at full HP (bcp.c:3391-3393; Endure, the move, is
-    unsupported); while it is set, a hit that would KO leaves 1 HP (``focus_sash_damage``)
-    and the followup message removes the sash. The flag is never cleared between hits, so
+    unsupported), or a Focus Band (``HOLD_EFFECT_MAYBE_ENDURE``) whose roll passes
+    (bcp.c:3387-3389: drawn on every such hit, lethal or not, ``Outcome.focus_band[side,
+    hit_index]``, ruling G-1); while it is set, a hit that would KO leaves 1 HP
+    (``focus_sash_damage``) and the followup message names the item (``reveal_item``) and
+    removes it only while it is a Focus Sash. The flag is never cleared between hits, so
     after a full-HP hit every later hit of the same move is capped as well (a holder at 1 HP
     takes 0); a holder below full HP at the first hit is never protected. Bide stores the
     capped damage (bcp.c:3407), drain and the contact ability see it. Sturdy only blocks
@@ -2113,7 +2116,11 @@ def play_hit(
     real = update_hp & ~sub_take
     sash = holds(tables, state, target_side, ItemId.FOCUS_SASH)
     full = target_hp == state.max_hp[target_side, target].astype(_I32)
-    armed = jnp.asarray(focus_armed) | (real & sash & full)
+    # Focus Band (bcp.c:3386-3389, ruling G-1): RandNext() % 100 < param on every UpdateHP that
+    # reaches the endure checks, lethal or not (Outcome.focus_band).
+    band = holds(tables, state, target_side, ItemId.FOCUS_BAND)
+    rolled = band & (outcome.focus_band[side, hit_index] != 0)
+    armed = jnp.asarray(focus_armed) | (real & sash & full) | (real & rolled)
     capped, endured = focus_sash_damage(state, target_side, damage, armed & real)
     # battleCtx->damage after the endure cap: what subscript_update_hp.s receives.
     taken = jnp.where(endured, target_hp - 1, damage)
@@ -2154,6 +2161,9 @@ def play_hit(
     else:
         state = _set(state, "substitute_hp", target_side, sub_hp - to_sub, sub_take)
         sub_hit = jnp.asarray(sub_hit) | sub_take
+    # subscript_move_followup_message.s:12-16: "hung on using its {1}" tags the defender's item
+    # (BattleMessage_ItemTag, battle_script.c:11736-11739): the AI learns a Focus Band that stays.
+    state = reveal_item(state, target_side, target, endured)
     state = consume_item(state, target_side, (endured & sash) | resisted)
     # BattleControllerPlayer_UpdateHP (bcp.c:3407): a Biding target stores battleCtx->damage,
     # before the berry halves the HP change: what it lost, or the unhalved amount after a

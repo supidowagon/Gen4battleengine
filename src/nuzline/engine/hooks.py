@@ -72,10 +72,18 @@ from __future__ import annotations
 import jax.numpy as jnp
 
 from nuzline.data.tables import Tables
-from nuzline.engine.damage import ability_weather, trace_copy
+from nuzline.engine.damage import ability_weather, decomp_abilities, divide, trace_copy
 from nuzline.engine.effects import change_stage, entry_hazards, forget_item
-from nuzline.engine.ids import AbilityId, ItemId, Stat, Status, Weather
-from nuzline.engine.order import pinch_divisor
+from nuzline.engine.ids import (
+    CONFUSION_PENDING,
+    ITEM_ABILITY_IDS,
+    AbilityId,
+    ItemId,
+    Stat,
+    Status,
+    Weather,
+)
+from nuzline.engine.order import dislikes_berry, pinch_divisor
 from nuzline.engine.state import STAGE_MAX, BattleState
 
 _I32 = jnp.int32
@@ -347,10 +355,32 @@ def _raise_stat(tables: Tables, state: BattleState, side, item, cond):
 def _hp_restore(effect, power, max_hp) -> jnp.ndarray:
     """HP an HP berry restores: Oran Berry and Berry Juice (``HOLD_EFFECT_HP_RESTORE``) its
     param, Sitrus Berry (``HOLD_EFFECT_HP_PCT_RESTORE``) ``BattleSystem_Divide(maxHP *
-    param, 100)``; else 0."""
+    param, 100)``, a flavor berry (``HOLD_EFFECT_HP_RESTORE_SPICY`` .. ``_SOUR``)
+    ``BattleSystem_Divide(maxHP, param)`` (battle_lib.c:4700 etc., :5680 etc.; build_tables
+    keeps its param >= 1, ruling G-4); else 0."""
     flat = (effect == ItemId.ORAN_BERRY) | (effect == ItemId.BERRY_JUICE)
     pct = jnp.maximum(max_hp * power // 100, 1)
-    return jnp.where(flat, power, jnp.where(effect == ItemId.SITRUS_BERRY, pct, 0))
+    flavor = divide(max_hp, jnp.maximum(power, 1))
+    heal = jnp.where(effect == ItemId.FLAVOR_BERRY, flavor, 0)
+    return jnp.where(flat, power, jnp.where(effect == ItemId.SITRUS_BERRY, pct, heal))
+
+
+def berry_confuse(tables: Tables, state: BattleState, side, mon, cond) -> BattleState:
+    """A flavor berry's dislike (subscript_held_item_dislike_flavor.s:10-13): after the heal,
+    ``side``'s Pokemon in party slot ``mon`` (its active battler) goes through
+    subscript_confuse.s with ``SIDE_EFFECT_TYPE_HELD_ITEM`` where ``cond``: its own Own Tempo
+    (``CheckAbility``, :6), a confusion already (:7) or Safeguard on its side (:8) end the
+    script before any draw; else ``Random 3, 2`` (:34) sets the counter. The counter is
+    ``CONFUSION_PENDING`` until the battler's confusion check reads it, which draws it
+    (``Outcome.berry_confusion``, ``step._use_move``): nothing reads more than the confusion
+    bit before that, so the late draw has the decomp's law, in and out of ``step`` (the battle
+    start, a faint replacement), ruling G-5."""
+    own_tempo = decomp_abilities(tables, state)[side, mon] == ITEM_ABILITY_IDS["Own Tempo"]
+    on = (
+        jnp.asarray(cond) & ~own_tempo & (state.confusion[side] == 0) & (state.safeguard[side] == 0)
+    )
+    new = jnp.where(on, CONFUSION_PENDING, state.confusion[side]).astype(state.confusion.dtype)
+    return state._replace(confusion=state.confusion.at[side].set(new))
 
 
 def held_item_check(
@@ -362,7 +392,11 @@ def held_item_check(
     (``_hp_restore``) at ``curHP <= maxHP / 2`` (``hp * 2 <= max_hp``) heals, capped
     (``subscript_held_item_hp_restore.s``); a status berry or White Herb cures
     (``_restore``); a stat pinch berry at ``curHP <= maxHP / pinch_divisor`` raises its stat
-    (``_raise_stat``, battle_lib.c:4773-4836; ``order.pinch_divisor``). Every one of those subscripts ends in
+    (``_raise_stat``, battle_lib.c:4773-4836; ``order.pinch_divisor``); a flavor berry heals
+    like the HP berries and then confuses a holder that dislikes its flavor (``berry_confuse``,
+    after the item is removed: the heal subscript's ``PLUCK_CHECK`` runs first,
+    subscript_held_item_hp_restore.s:13; Gluttony does not touch it, battle_lib.c:4698-4771).
+    Every one of those subscripts ends in
     ``BATTLE_SUBSCRIPT_PLUCK_CHECK``, which removes the item (``BtlCmd_RemoveItem``,
     battle_script.c:8972, which keeps it in ``item_consumed``) unless the attacker's
     ``SELF_TURN_FLAG_PLUCK_BERRY`` is set (``keep``, ``effects.MoveHit.pluck_flag``), and
@@ -391,7 +425,8 @@ def held_item_check(
             jnp.where(spent, item, state.item_consumed[side, mon]).astype(state.item_consumed.dtype)
         ),
     )
-    return state, on
+    disliked = healed & dislikes_berry(tables, state, side, mon, item)
+    return berry_confuse(tables, state, side, mon, disliked), on
 
 
 def after_damage_items(tables: Tables, state: BattleState, side, cond=True) -> BattleState:
@@ -418,6 +453,7 @@ PLUCKABLE = (
     ItemId.PERSIM_BERRY,
     ItemId.LUM_BERRY,
     ItemId.PINCH_BERRY,
+    ItemId.FLAVOR_BERRY,  # PLUCK_EFFECT_HP_RESTORE_SPICY .. _SOUR (:5678-5751), G-4
     # The resist berries, Custap Berry and the berries with no hold effect (Razz, Nanab,
     # ...): PLUCK_EFFECT_NONE berries, eaten with no effect (Item_IsBerry, :5833).
     ItemId.RESIST_BERRY,
@@ -438,7 +474,10 @@ def pluck_berry(
     foe holds an item (battle_script.c:8125-8127). A ``PLUCKABLE`` berry is removed
     (``RemoveItem BTLSCR_DEFENDER``, kept in ``item_consumed``) even if the foe fainted,
     and its pluck effect acts on the eater: Oran heals its param, Sitrus
-    ``Divide(maxHP * param, 100)``, each only below full HP (capped); Cheri, Chesto, Pecha,
+    ``Divide(maxHP * param, 100)``, a flavor berry ``Divide(maxHP, param)`` (and confuses an
+    eater whose nature dislikes it, ``berry_confuse``: subscript_pluck.s sets
+    ``msgBattlerTemp`` to the attacker, battle_lib.c:5678-5751), each only below full HP
+    (capped); Cheri, Chesto, Pecha,
     Rawst, Aspear, Persim and Lum cure as the held berry would (``_restore``: the same restore
     subscripts); a stat pinch berry raises the eater's stat by 1 below +6 whatever its HP
     (``_raise_stat``, :5753-5796: ``subscript_pluck.s`` sets ``msgBattlerTemp`` to the
@@ -474,6 +513,8 @@ def pluck_berry(
             jnp.where(on, item, state.item_consumed[foe, target]).astype(state.item_consumed.dtype)
         ),
     )
+    disliked = healed & dislikes_berry(tables, state, side, user, item)
+    state = berry_confuse(tables, state, side, user, disliked)
     return state, on & ~healed & ~cured & ~raised
 
 

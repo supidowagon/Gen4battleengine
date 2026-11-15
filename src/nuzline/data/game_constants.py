@@ -476,6 +476,8 @@ CONSTANTS: tuple[Constant, ...] = (
             "Immunity": 17,
             "Water Veil": 41,
             "Leaf Guard": 102,
+            "Sticky Hold": 60,
+            "Own Tempo": 20,
         },
     ),
     Constant("nuzline.ai.switching.MOVE_STRUGGLE", "move", 165, "Struggle", _E),
@@ -528,6 +530,12 @@ CONSTANTS: tuple[Constant, ...] = (
     # (battle_lib.c:1278-1286) as one bit, exact only for this param.
     Constant(
         "nuzline.engine.ids.QUICK_CLAW_PARAM", "item", 217, "Quick Claw", _E, 52, hold_param=20
+    ),
+    # Focus Band's effectParam (res/items/data/focus_band.json) with HOLD_EFFECT_MAYBE_ENDURE
+    # (65): the engine stores RandNext() % 100 < param (bcp.c:3387, battle_script.c:9110) as
+    # one bit (Outcome.focus_band / future_band), exact only for this param (ruling G-1).
+    Constant(
+        "nuzline.engine.ids.FOCUS_BAND_PARAM", "item", 230, "Focus Band", _E, 65, hold_param=10
     ),
     # saves/check.py: Sketch's user and the special routes outside the learnset tables
     # (Rotom's form moves, Route 228's ultimate moves, Wilma's Draco Meteor for Dragon
@@ -736,6 +744,16 @@ EXEMPT: dict[str, str] = {
         "keyed by decomp hold effect id, read off the vanilla sTypeBoostingItems "
         "(battle_lib.c:6514): each game's items carry their own hold effect (build_tables "
         "looks theirs up here), and a game's code changes are rom_diff.toml entries"
+    ),
+    "tools.effect_map.FLAVOR_HOLD_EFFECTS": (
+        "keyed by decomp hold effect id, read off BattleSystem_TriggerHeldItem's flavor berries "
+        "(battle_lib.c:4698-4771, ruling G-4): each game's items carry their own hold effect "
+        "(build_tables looks theirs up here), and a game's code changes are rom_diff.toml entries"
+    ),
+    "nuzline.engine.ids.Flavor": "enum Flavor (include/constants/flavor.h); " + _ENGINE_ENCODING,
+    "nuzline.engine.ids.NATURE_DISLIKED_FLAVOR": (
+        "sNatureFlavorAffinities (src/pokemon.c:61-237) indexed by decomp nature id: a code table, "
+        "not item or move data; tests/engine/test_e1_gardenia.py reads it back from the decomp"
     ),
     "tools.effect_map.PINCH_STAT_HOLD_EFFECTS": (
         "keyed by decomp hold effect id, read off BattleSystem_TriggerHeldItem's stat pinch "

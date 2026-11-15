@@ -44,6 +44,10 @@ three structs has a row.
 - **Status.** The decomp packs sleep turns and the toxic counter into `status`
   bits (`include/constants/battle/condition.h`); `BattleState` splits them into
   `status` (`ids.Status`) and `status_counter`.
+- **Pending confusion.** `confusion == ids.CONFUSION_PENDING` (6): a disliked flavor berry
+  confused the battler (subscript_confuse.s:34's `Random 3, 2` not drawn yet); its next
+  confusion check draws the counter (`Outcome.berry_confusion`), ruling G-5 in
+  docs/kaizo/e1-mechanics-ledger.md. Every other read takes it as confused.
 - **statusVolatile** bits mapped: confusion turns -> `confusion`, flinch ->
   `flinched`, bind turns -> `trapped`, recharging -> `recharge`, Foresight ->
   `foresight`, Bide turns -> `bide_turns`, Defense Curl -> `curled`,

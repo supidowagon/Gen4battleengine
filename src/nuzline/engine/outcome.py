@@ -46,6 +46,7 @@ import numpy as np
 from nuzline.data.tables import Tables
 from nuzline.engine.damage import PRESENT_HEAL, entry_ability, entry_weather, weather_suppressed
 from nuzline.engine.ids import (
+    FOCUS_BAND_PARAM,
     QUICK_CLAW_MODULUS,
     SLEEP_TALK_VALUES,
     AbilityId,
@@ -61,6 +62,7 @@ from nuzline.engine.order import (
     MOVE_ACTIONS,
     action_order,
     call_kind,
+    dislikes_berry,
     is_item,
     is_switch,
     metronome_weights,
@@ -122,6 +124,20 @@ class Outcome(NamedTuple):
     # int8[2], by the battler a Yawn puts to sleep at this turn's end: subscript_fall_asleep.s's
     # ``Random 3, 2`` (2-5 turns), a draw of its own (bcp.c:1684-1697).
     yawn_sleep: jnp.ndarray
+    # int8[2,5], 1 = a Focus Band roll passes (``RandNext() % 100 < FOCUS_BAND_PARAM``,
+    # bcp.c:3387, battle_script.c:9110): ``[s, i]`` the defender's roll at hit ``i`` of ``s``'s
+    # move (``BattleControllerPlayer_UpdateHP``; Pursuit's ``CheckHoldOnWith1HP`` at ``[pursuer,
+    # 0]``), ``[s, 0]`` also ``s``'s own roll at its confusion self-hit (its move does not run
+    # then), ruling G-1.
+    focus_band: jnp.ndarray
+    # int8[2], by the battler Future Sight hits at this turn's end: its Focus Band roll
+    # (subscript_future_sight_damage.s:28, ``CheckHoldOnWith1HP``).
+    future_band: jnp.ndarray
+    # int8[2]: the confusion counter (2-5) of subscript_confuse.s's ``Random 3, 2`` for a flavor
+    # berry the side's battler disliked (subscript_held_item_dislike_flavor.s:13), drawn when
+    # its confusion check first reads the pending counter (``ids.CONFUSION_PENDING``; one check
+    # per side per turn), ruling G-5.
+    berry_confusion: jnp.ndarray
 
 
 def empty_outcome() -> Outcome:
@@ -154,6 +170,9 @@ def empty_outcome() -> Outcome:
         call=jnp.zeros((2,), jnp.int16),
         future_hit=sides + 1,
         yawn_sleep=sides + 2,
+        focus_band=hits,
+        future_band=sides,
+        berry_confusion=sides + 2,
     )
 
 
@@ -597,7 +616,9 @@ def hit_thresholds(
       turn-start threshold (``damage.entry_weather``);
     * the target's confusion (Tangled Feet): a confused foe moving first can snap out of it
       or be cured by its Persim / Lum Berry (over-approximate: whenever it is confused and can
-      go first).
+      go first); an unconfused one can eat a flavor berry it dislikes before the check (its own
+      move's after-effects, its switch-in, or a Pluck of the side's berry: ``hooks``,
+      ruling G-5; over-approximate: whenever it or the side holds such a berry).
 
     Each applies once: a move has one effect, and the only repeated hits are
     ``MULTI_HIT``'s, which change no stage (a future multi-hit stat effect must add
@@ -665,8 +686,15 @@ def hit_thresholds(
         weathers = jnp.stack([weather0, moved_weather.astype(weather0.dtype)])
         weather_ok = jnp.stack([jnp.asarray(True), weather_move[foe]])
         confused0 = ~foe_fresh & (state.confusion[foe] > 0)
-        confuseds = jnp.stack([confused0, jnp.asarray(False)])
-        confused_ok = jnp.stack([jnp.asarray(True), confused0 & changes[foe]])
+        # The second variant is the other confusion value: snapping out (confused now), or a
+        # disliked flavor berry eaten before the check (not confused now), ruling G-5.
+        berry = dislikes_berry(
+            tables, state, foe, target_mon, state.item[foe, target_mon]
+        ) | dislikes_berry(tables, state, foe, target_mon, state.item[side, state.active[side]])
+        confuseds = jnp.stack([confused0, ~confused0])
+        confused_ok = jnp.stack(
+            [jnp.asarray(True), jnp.where(confused0, changes[foe], live & berry)]
+        )
         # Grid order: moved (2) x weather (2) x confusion (2) x accuracy (4) x evasion (4).
         acc_grid = jnp.tile(jnp.repeat(accs, _STAGE_VARIANTS), 8)
         eva_grid = jnp.tile(evas, 8 * _STAGE_VARIANTS)
@@ -1056,6 +1084,16 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions) -> Outcome:
         # Yawn's sleep at the turn end: subscript_fall_asleep.s ``Random 3, 2`` (BtlCmd_Random,
         # battle_script.c:3200-3210: rand % 4 + 2). From a fold_in key.
         yawn_sleep=jax.random.randint(jax.random.fold_in(key, 26), per_side, 0, 4, dtype=_I32) + 2,
+        # Focus Band (bcp.c:3387, battle_script.c:9110): RandNext() % 100 < param, uniform by the
+        # % n convention, per hit and for the Future Sight hit. From fold_in keys (G-1).
+        focus_band=jax.random.randint(jax.random.fold_in(key, 29), per_hit, 0, 100, dtype=_I32)
+        < FOCUS_BAND_PARAM,
+        future_band=jax.random.randint(jax.random.fold_in(key, 30), per_side, 0, 100, dtype=_I32)
+        < FOCUS_BAND_PARAM,
+        # A flavor berry's confusion: subscript_confuse.s:34 ``Random 3, 2`` (rand % 4 + 2). From a
+        # fold_in key (G-5).
+        berry_confusion=jax.random.randint(jax.random.fold_in(key, 31), per_side, 0, 4, dtype=_I32)
+        + 2,
     )
     return Outcome(
         *(

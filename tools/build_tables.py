@@ -25,7 +25,8 @@ Encodings:
   ``RESIST_BERRY``'s column 1 is the type its hold effect resists
   (``effect_map.RESIST_BERRY_HOLD_EFFECTS``), a ``TYPE_BOOST``'s the type its hold effect
   boosts (``effect_map.TYPE_BOOST_HOLD_EFFECTS``), a ``PINCH_BERRY``'s the ``Stat`` its hold
-  effect raises (``effect_map.PINCH_STAT_HOLD_EFFECTS``).
+  effect raises (``effect_map.PINCH_STAT_HOLD_EFFECTS``), a ``FLAVOR_BERRY``'s its ``Flavor``
+  (``effect_map.FLAVOR_HOLD_EFFECTS``).
 * ``item_effect[item]``: the ``ids.ItemId`` (``effect_map.held_item_ids``: by name, else by
   hold effect, else ``NONE`` / ``NO_EFFECT_BERRY`` for an item with no hold effect);
   ``UNSUPPORTED`` for an item dividing by a param below its minimum (``_pinch_divisor_ok``).
@@ -113,6 +114,7 @@ from tools.effect_map import (
     DECOMP_ITEM_TO_ID,
     DECOMP_TRAINER_ITEM_TO_ID,
     DIVISOR_PARAM_MIN,
+    FLAVOR_HOLD_EFFECTS,
     INVOKER_MOVES,
     KAIZO_EFFECTS,
     METRONOME_EXCLUDED_MOVES,
@@ -250,7 +252,9 @@ def _move_effect(
     if eid == EffectId.RECOIL_STATUS and move["effect_chance"] == 0:
         # The PROBABILISTIC branch asserts effectChance != 0 (battle_lib.c:1557), while the
         # engine would read chance 0 as a certain status (B10-1).
-        raise BuildError(f"move {move['name']!r}: recoil-status effect {move['effect']} with chance 0")
+        raise BuildError(
+            f"move {move['name']!r}: recoil-status effect {move['effect']} with chance 0"
+        )
     if eid == EffectId.FAKE_OUT and move["effect_chance"] == 0:
         # effect_script_0158.s rolls RandNext() % 100 < chance: chance 0 never flinches, but
         # the engine reads chance 0 as an ON_HIT effect, and PLAIN would drop the failure.
@@ -324,15 +328,16 @@ def _form_names(species: list[dict], forms: list[dict]) -> dict[str, list[str]]:
 def _item_type(item: dict, item_id: int) -> int:
     """``item_param[i, 1]``: the type a ``RESIST_BERRY`` resists
     (``subscript_type_resist_berry.s``) or a ``TYPE_BOOST`` boosts (``sTypeBoostingItems``,
-    battle_lib.c:6514), the ``Stat`` a ``PINCH_BERRY`` raises (battle_lib.c:4773-4836) or the
-    ``Weather`` a ``WEATHER_ROCK`` extends (effect_script_0136.s etc.), by its own hold effect,
-    else 0."""
+    battle_lib.c:6514), the ``Stat`` a ``PINCH_BERRY`` raises (battle_lib.c:4773-4836), the
+    ``Weather`` a ``WEATHER_ROCK`` extends (effect_script_0136.s etc.) or the ``Flavor`` of a
+    ``FLAVOR_BERRY`` (battle_lib.c:4698-4771), by its own hold effect, else 0."""
     tables = {
         ItemId.RESIST_BERRY: (RESIST_BERRY_HOLD_EFFECTS, "resists"),
         ItemId.TYPE_BOOST: (TYPE_BOOST_HOLD_EFFECTS, "boosts"),
         ItemId.PINCH_BERRY: (PINCH_STAT_HOLD_EFFECTS, "raises"),
         ItemId.WEATHER_ROCK: (WEATHER_ROCK_HOLD_EFFECTS, "extends"),
         ItemId.CRIT_ITEM: (CRIT_HOLD_EFFECTS, "needs"),
+        ItemId.FLAVOR_BERRY: (FLAVOR_HOLD_EFFECTS, "tastes of"),
     }
     if item_id not in tables:
         return 0

@@ -161,6 +161,7 @@ from nuzline.engine.hooks import (
 )
 from nuzline.engine.ids import (
     CHOICE_ITEMS,
+    CONFUSION_PENDING,
     COUNTER_PHYSICAL,
     COUNTER_SPECIAL,
     FUTURE_SIGHT_TURNS,
@@ -779,22 +780,34 @@ def _use_move(
     # CHECK_STATUS_STATE_CONFUSION (:2614): the counter drops first; at 0 the battler snaps
     # out and moves, otherwise RandNext() & 1 (outcome.confusion_hit) makes it hit itself
     # (:2633, damage.confusion_damage) instead of moving. subscript_hurt_self_in_confusion.s
-    # runs CheckHoldOnWith1HP on the user (script.c:9098-9124): a Focus Sash at full HP
-    # leaves 1 HP, and the followup message removes it (the user is the defender, :2629).
+    # runs CheckHoldOnWith1HP on the user (script.c:9098-9124): a Focus Sash at full HP, or a
+    # Focus Band whose roll passes, leaves 1 HP, and the followup message removes a sash (the
+    # user is the defender, :2629).
     # Its BATTLE_SUBSCRIPT_UPDATE_HP then runs the resist-berry check on the user
     # (effects.resist_berry): BattleContext_Init left moveType Normal and moveStatusFlags 0
     # (battle_lib.c:1981-1982), so calcTemp is the table type of the move the battler
     # chose (moveCur, bcp.c:1898; Hidden Power's too) and nothing is super-effective: a
     # Chilan Berry halves the self-hit when that move is Normal-type, a Rindo Berry never.
-    confused = go & (state.confusion[side] > 0)
-    confusion = state.confusion[side] - confused.astype(state.confusion.dtype)
+    # A flavor berry's pending counter (ids.CONFUSION_PENDING, hooks.berry_confuse) is drawn
+    # at this first read: its Random 3, 2 (subscript_confuse.s:34), Outcome.berry_confusion
+    # (ruling G-5).
+    counter = jnp.where(
+        state.confusion[side] == CONFUSION_PENDING,
+        outcome.berry_confusion[side],
+        state.confusion[side],
+    ).astype(state.confusion.dtype)
+    confused = go & (counter > 0)
+    confusion = jnp.where(go, counter - confused.astype(counter.dtype), state.confusion[side])
     still_confused = confused & (confusion > 0)
     self_hit = still_confused & (outcome.confusion_hit[side] != 0)
     user_hp = state.hp[side, user].astype(_I32)
     sash = holds(tables, state, side, ItemId.FOCUS_SASH)
     full = user_hp == state.max_hp[side, user].astype(_I32)
+    # A Focus Band's roll (script.c:9109-9112, ruling G-1): Outcome.focus_band[side, 0], the
+    # user's own (its move does not run after a self-hit).
+    band = holds(tables, state, side, ItemId.FOCUS_BAND) & (outcome.focus_band[side, 0] != 0)
     raw = confusion_damage(tables, state, side, outcome.roll[side, 0])
-    hurt, endured = focus_sash_damage(state, side, raw, sash & full)
+    hurt, endured = focus_sash_damage(state, side, raw, (sash & full) | band)
     resisted = self_hit & resist_berry(tables, state, side, tables.move_type[move], False)
     taken = jnp.where(endured, user_hp - 1, raw)
     hurt = resist_berry_damage(state, side, taken, resisted, hurt)
@@ -803,7 +816,9 @@ def _use_move(
         confusion=state.confusion.at[side].set(confusion),
         hp=state.hp.at[side, user].set(user_hp.astype(state.hp.dtype)),
     )
-    state = consume_item(state, side, (self_hit & endured) | resisted)
+    # subscript_move_followup_message.s:16 names the endured item (the user is the defender).
+    state = reveal_item(state, side, user, self_hit & endured)
+    state = consume_item(state, side, (self_hit & endured & sash) | resisted)
     state = _unlock(state, side, self_hit)  # subscript_hurt_self_in_confusion.s
     go = go & ~self_hit
     # CHECK_STATUS_STATE_PARALYSIS (:2652-2654): RandNext() % 4 == 0 (outcome.full_para) fully
@@ -2674,8 +2689,9 @@ def _future_sight(
     ``MOVE_STATUS_DID_NOT_HIT`` "But it failed!" (:53-59). Else a defender behind a substitute
     (its bit, :13) has the damage taken off the substitute's HP, 0 when ``substituteHP <=
     damage`` (:15-21, B10-4; no flag, no HP change), then goes to :92; otherwise (Rage, :30-37,
-    is unsupported) ``CheckHoldOnWith1HP`` (:28; battle_script.c:9098-9124: a Focus Sash at full HP
-    leaves 1 HP, ``MOVE_STATUS_ENDURED_ITEM``) and ``UPDATE_HP`` (:29; ``waitingBattlers`` is 0
+    is unsupported) ``CheckHoldOnWith1HP`` (:28; battle_script.c:9098-9124: a Focus Sash at full HP,
+    or a Focus Band whose roll ``Outcome.future_band[battler]`` passes, leaves 1 HP,
+    ``MOVE_STATUS_ENDURED_ITEM``; ruling G-1) and ``UPDATE_HP`` (:29; ``waitingBattlers`` is 0
     after the actions, bcp.c:881-886, so no resist berry, subscript_update_hp.s:9-10); then, under
     ``MOVE_STATUS_ENDURED_ITEM``, a ``HOLD_EFFECT_ENDURE`` item is removed (:40-48).
 
@@ -2720,10 +2736,15 @@ def _future_sight(
         sub_hp = state.substitute_hp[d].astype(_I32)
         behind = sub_hp != 0
         state = _set_side(state, "substitute_hp", d, jnp.maximum(sub_hp - damage, 0), hit & behind)
-        endured_now = hit & ~behind & sash & full & (damage >= hp)
+        # A Focus Band's roll (Outcome.future_band[d], ruling G-1) or a full-HP Focus Sash.
+        band = holds(tables, state, d, ItemId.FOCUS_BAND) & (outcome.future_band[d] != 0)
+        endured_now = hit & ~behind & ((sash & full) | band) & (damage >= hp)
         dealt = jnp.where(endured_now, hp - 1, jnp.minimum(damage, hp))
         state = _set_mon(state, "hp", d, mon, hp - dealt, hit & ~behind)
         endure_flag = endured | endured_now
+        # :39-44: under MOVE_STATUS_ENDURED_ITEM the message tags msgBattlerTemp's item (bcp.c:
+        # 1776; BattleMessage_ItemTag, battle_script.c:11741-11744), then removes a sash.
+        state = reveal_item(state, d, mon, hit & endure_flag)
         state = consume_item(state, d, hit & endure_flag & sash)
         missed = jnp.where(fires, miss_flag, missed)
         shielded = jnp.where(fires, shield_flag, shielded)

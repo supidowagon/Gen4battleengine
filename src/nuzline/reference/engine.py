@@ -39,6 +39,7 @@ from nuzline.engine.ids import (
     ABILITY_DECOMP_IDS,
     ABILITY_MULTITYPE,
     CHOICE_ITEMS,
+    CONFUSION_PENDING,
     FUTURE_SIGHT_TURNS,
     ITEM_ABILITY_IDS,
     ITEM_GRISEOUS_ORB,
@@ -52,6 +53,7 @@ from nuzline.engine.ids import (
     MOVE_SNORE,
     MOVE_STRUGGLE,
     MOVE_U_TURN,
+    NATURE_DISLIKED_FLAVOR,
     POTION_HP_RESTORED,
     POWER_IF_TARGET_HALF_HP,
     POWER_IF_TARGET_PARALYZED,
@@ -949,8 +951,7 @@ def _move_damage(
     # effect_script_0048.s, _0269.s: a Reckless user's RECOIL move sets powerMul to 12; so do
     # effect_script_0045.s (Jump Kick), _0253.s and _0262.s (B10-1, B10-2).
     if (
-        _t(tables, "move_effect", move)
-        in (EffectId.RECOIL, EffectId.RECOIL_STATUS, EffectId.CRASH)
+        _t(tables, "move_effect", move) in (EffectId.RECOIL, EffectId.RECOIL_STATUS, EffectId.CRASH)
         and _active(s, attacker).ability == AbilityId.RECKLESS
     ):
         power_mul = 12
@@ -1558,11 +1559,19 @@ def _held_item(turn: _Turn, s: RefState, side: int, keep: bool = False) -> bool:
         return False
     effect = _item_effect(tables, mon)
     power = _t(tables, "item_param", mon.item, 0)
+    disliked = False
     if effect in (ItemId.ORAN_BERRY, ItemId.BERRY_JUICE, ItemId.SITRUS_BERRY):
         if mon.hp > mon.max_hp // 2:
             return False
         flat = effect != ItemId.SITRUS_BERRY
         _gain_hp(s, side, power if flat else _divide(mon.max_hp * power, 100))
+    elif effect == ItemId.FLAVOR_BERRY:
+        # HOLD_EFFECT_HP_RESTORE_SPICY .. _SOUR (lib.c:4698-4771): Divide(maxHP, param) at
+        # curHP <= maxHP / 2, no Gluttony (G-4).
+        if mon.hp > mon.max_hp // 2:
+            return False
+        _gain_hp(s, side, _divide(mon.max_hp, power))
+        disliked = _dislikes(tables, mon, mon.item)
     elif effect == ItemId.PINCH_BERRY:
         # HOLD_EFFECT_PINCH_*_UP (lib.c:4773-4836): curHP <= maxHP / param (Gluttony halves it).
         if mon.hp > mon.max_hp // _pinch_divisor(tables, mon):
@@ -1575,7 +1584,31 @@ def _held_item(turn: _Turn, s: RefState, side: int, keep: bool = False) -> bool:
         mon.item_consumed = mon.item
         mon.item = 0
         _forget_item(s, side)
+    if disliked:  # subscript_held_item_dislike_flavor.s:13, after the heal's PLUCK_CHECK
+        _berry_confuse(turn, s, side)
     return True
+
+
+def _dislikes(tables, mon: RefPokemon, item: int) -> bool:
+    """``item`` is a flavor berry whose flavor (``item_param[item, 1]``) ``mon``'s nature
+    dislikes (``Pokemon_GetFlavorAffinityOf == -1``, src/pokemon.c:4123-4127), G-4."""
+    if _t(tables, "item_effect", item) != ItemId.FLAVOR_BERRY:
+        return False
+    return NATURE_DISLIKED_FLAVOR[mon.nature] == _t(tables, "item_param", item, 1)
+
+
+def _berry_confuse(turn: _Turn, s: RefState, side: int) -> None:
+    """subscript_confuse.s with ``SIDE_EFFECT_TYPE_HELD_ITEM`` on ``side``'s battler: its own
+    Own Tempo (:6), a confusion already (:7) or Safeguard (:8) end it with no draw; else
+    ``Random 3, 2`` (:34), kept as ``CONFUSION_PENDING`` until the battler's confusion check
+    draws it (``Outcome.berry_confusion[side]``, ``_status_disrupted``), G-5."""
+    sd = s.sides[side]
+    mon = _active(s, side)
+    if _decomp_ability(turn.tables, mon) == ITEM_ABILITY_IDS["Own Tempo"]:
+        return
+    if sd.confusion or sd.safeguard:
+        return
+    sd.confusion = CONFUSION_PENDING
 
 
 def _held_item_hp(turn: _Turn, s: RefState, side: int) -> None:
@@ -1602,6 +1635,21 @@ def _focus_sash(turn: _Turn, s: RefState, side: int, damage: int, armed: bool) -
 def _sash_at_full_hp(turn: _Turn, s: RefState, side: int) -> bool:
     mon = _active(s, side)
     return _item_effect(turn.tables, mon) == ItemId.FOCUS_SASH and mon.hp == mon.max_hp
+
+
+def _band_rolls(turn: _Turn, s: RefState, side: int, roll: int) -> bool:
+    """A Focus Band (``HOLD_EFFECT_MAYBE_ENDURE``) on ``side``'s active Pokemon whose roll
+    ``RandNext() % 100 < param`` passed (``roll``, an ``Outcome.focus_band`` /
+    ``future_band`` element): bcp.c:3387, script.c:9109-9112, ruling G-1."""
+    return _item_effect(turn.tables, _active(s, side)) == ItemId.FOCUS_BAND and bool(roll)
+
+
+def _hung_on(turn: _Turn, s: RefState, side: int, damage: int, armed: bool) -> None:
+    """subscript_move_followup_message.s:12-16 (future_sight_damage.s:39-44): an endured hit's
+    message names the item of ``side``'s battler (``_reveal_item``) before a sash goes."""
+    mon = _active(s, side)
+    if armed and damage > 0 and mon.hp - damage <= 0:
+        _reveal_item(s, side)
 
 
 def _resist_berry(
@@ -2068,6 +2116,8 @@ def _pluck_berry(turn: _Turn, s: RefState, side: int, target: int) -> None:
         heal = power
     elif effect == ItemId.SITRUS_BERRY:
         heal = _divide(user.max_hp * power, 100)
+    elif effect == ItemId.FLAVOR_BERRY:
+        heal = _divide(user.max_hp, power)  # PLUCK_EFFECT_HP_RESTORE_SPICY .. (lib.c:5678-5751)
     # The resist berries, Custap and the berries with no hold effect: PLUCK_EFFECT_NONE
     # berries, eaten with no effect (Item_IsBerry, :5833). The status berries cure, a stat
     # pinch berry raises the eater's stat (PLUCK_EFFECT_*_UP, lib.c:5753-5796; no HP test).
@@ -2095,6 +2145,8 @@ def _pluck_berry(turn: _Turn, s: RefState, side: int, target: int) -> None:
         did = user.hp != user.max_hp
         if did:
             _gain_hp(s, side, heal)
+            if _dislikes(tables, user, item):  # subscript_held_item_dislike_flavor.s:13
+                _berry_confuse(turn, s, side)
     elif effect == ItemId.PINCH_BERRY:
         did = _raise_pinch_stat(turn, s, side, item)
     else:
@@ -2710,10 +2762,14 @@ def _hit(turn: _Turn, s: RefState, side: int, move: int, hit: int, struggling: b
         # a Focus Sash at full HP sets focusItemActivated, which lasts the whole action.
         if damage > 0 and _sash_at_full_hp(turn, s, target):
             turn.focus_armed = True
+        # bcp.c:3387-3389 (G-1): a Focus Band's roll on every such UpdateHP, lethal or not.
+        if damage > 0 and _band_rolls(turn, s, target, o.focus_band[side][hit]):
+            turn.focus_armed = True
         # bcp.c:3381-3384, before the endure checks: False Swipe leaves 1 HP.
         swipe = _t(tables, "move_effect", move) == EffectId.FALSE_SWIPE
         if swipe and damage > 0 and damage >= target_mon.hp:
             damage = target_mon.hp - 1
+        _hung_on(turn, s, target, damage, turn.focus_armed)
         taken = _focus_sash(turn, s, target, damage, turn.focus_armed)  # battleCtx->damage
         if update_hp:  # shellBellDamageDealt (bcp.c:3427-3431): capped at the target's HP
             turn.shell_dealt += min(taken, target_mon.hp)
@@ -2935,6 +2991,8 @@ def _status_disrupted(turn: _Turn, s: RefState, side: int, move: int) -> int:
     # CHECK_STATUS_STATE_CONFUSION (bcp.c:2614): the counter drops; while it stays
     # above 0, RandNext() & 1 makes the battler hurt itself (CALC_SELF_HIT, a Normal
     # physical hit on itself with no side or field conditions, then the variance).
+    if sd.confusion == CONFUSION_PENDING:  # a flavor berry's counter, drawn at this read (G-5)
+        sd.confusion = o.berry_confusion[side]
     if sd.confusion:
         sd.confusion -= 1
         if sd.confusion and o.confusion_hit[side]:
@@ -2953,6 +3011,8 @@ def _status_disrupted(turn: _Turn, s: RefState, side: int, move: int) -> int:
             # subscript_hurt_self_in_confusion.s: CheckHoldOnWith1HP on the user
             # (script.c:9098-9124), then the followup message removes the sash.
             armed = _sash_at_full_hp(turn, s, side)
+            armed = armed or _band_rolls(turn, s, side, o.focus_band[side][0])  # G-1
+            _hung_on(turn, s, side, damage, armed)
             taken = _focus_sash(turn, s, side, damage, armed)
             # Its UPDATE_HP runs the resist-berry check on the user: moveType is Normal and
             # moveStatusFlags 0 since BattleContext_Init (lib.c:1981-1982), so calcTemp is the
@@ -3390,9 +3450,7 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
             and (bool(s.sides[side].substitute_hp) or user.hp <= _divide(user.max_hp, 4))
         )
         second = _t(tables, "move_param", move, 0)
-        full = full or (
-            effect == EffectId.DRAGON_DANCE and own[Stat.ATK] >= 6 and own[second] >= 6
-        )
+        full = full or (effect == EffectId.DRAGON_DANCE and own[Stat.ATK] >= 6 and own[second] >= 6)
         # subscript_belly_drum.s:3-6 (MOVE_STATUS_FAILED).
         full = full or (
             effect == EffectId.BELLY_DRUM
@@ -3554,6 +3612,8 @@ def _pursuit(turn: _Turn, s: RefState, side: int, actions, choices) -> None:
         return
     # subscript_pursuit.s: CheckHoldOnWith1HP on the target (script.c:9098-9124).
     armed = _sash_at_full_hp(turn, s, side)
+    armed = armed or _band_rolls(turn, s, side, o.focus_band[pursuer][0])  # G-1
+    _hung_on(turn, s, side, damage, armed)
     taken = _focus_sash(turn, s, side, damage, armed)
     # Its UPDATE_HP runs the resist-berry check on the target (subscript_update_hp.s:9).
     if damage > 0 and _hit_resist_berry(turn, s, pursuer, move):
@@ -3802,10 +3862,14 @@ def _future_sight(turn: _Turn, s: RefState, order: list[int]) -> None:
             # no flag; then :92 (an endured first hit still removes the sash).
             sd.substitute_hp = max(sd.substitute_hp - damage, 0)
         else:
-            if sash and mon.hp == mon.max_hp and mon.hp - damage <= 0:
+            # CheckHoldOnWith1HP (:28): a full-HP sash, or a Focus Band's roll (G-1).
+            band = _band_rolls(turn, s, d, o.future_band[d])
+            if ((sash and mon.hp == mon.max_hp) or band) and mon.hp - damage <= 0:
                 damage = mon.hp - 1
                 flags.add("endured")
             _lose_hp(turn, s, d, damage)
+        if "endured" in flags:
+            _reveal_item(s, d)  # :44 tags msgBattlerTemp's item (bcp.c:1776)
         if "endured" in flags and sash:
             mon.item_consumed, mon.item = mon.item, 0
             _forget_item(s, d)

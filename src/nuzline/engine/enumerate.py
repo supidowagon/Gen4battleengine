@@ -128,6 +128,19 @@ of the turn:
   (``effects._kings_rock``; its law is the holder's param, ``outcome.kings_rock_chance``),
   only when ``s`` acts first in the branch (``subscript_flinch_mon.s``'s ``IfMovedThisTurn``)
   and the target has no Inner Focus as ``s`` sees it, as ``fang_flinch``.
+* ``focus_band[s, i]`` (E1 Gardenia, ruling G-1): the defender's Focus Band roll on hit ``i``
+  of ``s``'s non-status move (``effects.play_hit``, Pursuit's hit included) while the foe's
+  active Pokemon or the one it switches in holds one (no implemented path gives one mid-turn);
+  ``focus_band[s, 0]`` also when ``s`` can hurt itself in confusion (``confusion_hit`` relevant)
+  holding one (``step._use_move``). Its "move" path is the move's; the self-hit's are
+  ``roll[s, 0]``'s confusion paths. ``future_band[d]``: ``future_hit[d]``'s gate and a living
+  holder in side ``d``'s party.
+* ``berry_confusion[s]`` (G-5): ``s`` moves and its confusion counter is ``CONFUSION_PENDING``
+  at the start (a flavor berry's), or the foe moves first while ``s``'s active Pokemon, not
+  confused, holds a flavor berry it dislikes (``hooks.held_item_check`` after the foe's hit):
+  the draw of ``step._use_move``'s confusion check. A berry eaten after ``s``'s check leaves the
+  counter pending for a later turn. The same foe-first case makes ``confusion_hit[s]`` and
+  ``roll[s, 0]`` relevant (the "confusion_berry" path: the foe's move hits).
 * Nothing is relevant once the battle is over (``step`` returns the state,
   ``step.step_events``, step.py:1439).
 
@@ -190,6 +203,8 @@ from nuzline.engine.damage import (
 )
 from nuzline.engine.effects import can_have_status, ingrain_anchors, protect_blocks
 from nuzline.engine.ids import (
+    CONFUSION_PENDING,
+    FOCUS_BAND_PARAM,
     METRONOME_DRAW,
     MINIMIZE_PARAM,
     QUICK_CLAW_MODULUS,
@@ -218,6 +233,7 @@ from nuzline.engine.order import (
     call_kind,
     called_move,
     copycat_call,
+    dislikes_berry,
     effective_speed,
     invoked_move,
     is_item,
@@ -305,6 +321,11 @@ class Reads(NamedTuple):
     infatuated_by_foe: jnp.ndarray  # bool[2, 2]: it moves after a foe Attract that can work
     future_roll: jnp.ndarray  # its Future Sight can be set: TryFutureSight's roll[s, 0]
     crash: jnp.ndarray  # its move crashes on a miss (EffectId.CRASH): crit / roll[s, 0] then too
+    # E1 Gardenia batch (G-1, G-5).
+    band_move: jnp.ndarray  # bool[2, MAX_HITS]: the foe's Focus Band rolls at that hit
+    band_self: jnp.ndarray  # it holds a Focus Band: a confusion self-hit rolls focus_band[s, 0]
+    berry_by_foe: jnp.ndarray  # bool[2, 2]: a foe move first can feed it a disliked flavor berry
+    pending_own: jnp.ndarray  # it moves with a CONFUSION_PENDING counter at the start
 
 
 class OutcomeLaws(NamedTuple):
@@ -548,7 +569,10 @@ def _branch_masks(foe_first, first_self, base: dict) -> dict:
     freeze_by_foe = b["uses_move"] & foe_first & b["freeze_inflict"][::-1]
     confused_by_foe = b["uses_move"] & foe_first & b["confuse_inflict"][::-1]
     infatuated_by_foe = b["uses_move"] & foe_first & b["attract_inflict"][::-1]
-    confusable = b["confused_own"] | confused_by_foe
+    # A foe moving first can bring an unconfused holder of a disliked flavor berry to half HP
+    # (hooks.held_item_check, G-5): its check then reads the berry's counter.
+    berry_by_foe = b["uses_move"] & foe_first & b["berry_confuse"] & b["uses_move"][::-1]
+    confusable = b["confused_own"] | confused_by_foe | berry_by_foe
     # A flinch roll is read only when the user moves first (subscript_flinch_mon.s: the
     # target has not moved, effects._flinch). A secondary status or confusion on a target
     # that cannot take it changes nothing (status eligibility), judged on the turn-start
@@ -574,6 +598,11 @@ def _branch_masks(foe_first, first_self, base: dict) -> dict:
         "fang_flinch": b["fang_flinch"] & first_self & ~b["flinch_blocked"],
         # King's Rock / Razor Fang (effects._kings_rock): the same gates, per hit.
         "flinch_item": b["flinch_item"] & (first_self & ~b["flinch_blocked"])[:, None],
+        # Focus Band (G-1): the foe's on the move's hits, the side's own on a self-hit.
+        "focus_band": b["focus_band"]
+        | ((confusable & b["own_band"])[:, None] & (b["hit_index"] == 0)),
+        "berry_confusion": b["pending"] | berry_by_foe,
+        "berry_by_foe": berry_by_foe,
         # The battler acting last fails Protect whatever its roll (waitingBattlers == 1).
         "protect": b["protect"] & first_self,
         "full_para": b["para_own"] | para_by_foe,
@@ -854,6 +883,7 @@ INPUT_CLAUSE_ABILITIES = (
 INPUT_NEUTRAL_ITEMS = (
     ItemId.NONE,
     ItemId.FOCUS_SASH,  # after the damage (effects.play_hit)
+    ItemId.FOCUS_BAND,  # likewise (G-1)
     ItemId.LAGGING_TAIL,
     ItemId.RESIST_BERRY,  # after the damage (effects.resist_berry_damage)
     # Changes only the order: the turn's is fixed at its start (action_order, qc_roll) and the
@@ -927,6 +957,8 @@ INPUT_CLAUSE_ITEMS = (
     ItemId.ASPEAR_BERRY,
     ItemId.WHITE_HERB,  # item clause (a lowered stage restored)
     ItemId.PINCH_BERRY,  # item clause (a stage raised in a pinch); pluck clause
+    # Its heal is the holder's HP (HP clause); its confusion is no damage input (G-4, G-5).
+    ItemId.FLAVOR_BERRY,
 )
 _STATUS_CURES = (
     ItemId.CHERI_BERRY,
@@ -1409,6 +1441,22 @@ def outcome_laws(
     if not loose:
         attract = attract & lovers(gender[sides, mons], gender[sides, mons][::-1]) & foe_calm
         infatuated_own = infatuated_own & ~switch[::-1]
+    # Focus Band (effects.play_hit, step._use_move; G-1): the defender's roll on every hit of a
+    # non-status move, the foe's active Pokemon or the one it switches in (no implemented path
+    # gives a Focus Band mid-turn); a self-hit's roll is the user's own (_branch_masks).
+    band_held = _holds_item(tables, state, actions, (ItemId.FOCUS_BAND,))
+    band_move = lands & ((tables.move_category[moves] != STATUS) & band_held[::-1])[:, None]
+    own_band = tables.item_effect[state.item[sides, mons]] == ItemId.FOCUS_BAND
+    # A disliked flavor berry on the side's active Pokemon (hooks.berry_confuse, G-5).
+    own_berry = jnp.stack(
+        [
+            dislikes_berry(tables, state, side, mons[side], state.item[side, mons[side]])
+            for side in (0, 1)
+        ]
+    )
+    calm_now = state.confusion == 0
+    if loose:
+        calm_now = jnp.ones((2,), bool)
     # King's Rock / Razor Fang (effects._kings_rock): the attacker's item, fixed through the turn.
     kings_rock = outcome_kings_rock_chance(tables, state)
     kings_move = (tables.move_flags[moves] & MoveFlag.KINGS_ROCK) != 0
@@ -1439,6 +1487,10 @@ def outcome_laws(
         "confuse_inflict": uses_move & confuses & ~confused_blocked,
         "infatuated_own": infatuated_own,
         "attract_inflict": attract,
+        "focus_band": band_move,
+        "own_band": uses_move & own_band,
+        "berry_confuse": uses_move & own_berry & calm_now,
+        "pending": uses_move & (state.confusion == CONFUSION_PENDING),
     }
 
     # Order branches: order.action_order under speed_tie = 0 and 1. speed_tie is read
@@ -1507,6 +1559,10 @@ def outcome_laws(
         | (foe_moves & (effect[::-1] == _E.DOUBLE_POWER) & (params[::-1, 1] == 1))
         # Quick Feet reads any status (order.effective_speed): free for a holder.
         | _holds(tables, state, actions, (AbilityId.QUICK_FEET,))
+        # A paralyzed Limber holder is cured at a move's end or a switch-in
+        # (hooks.recover_status_by_ability, battle_lib.c:4397): the hole a generator state with a
+        # paralyzed Limber foe exposed (E1 Gardenia batch).
+        | _holds(tables, state, actions, (AbilityId.LIMBER,))
     )
     # Roar / Whirlwind (step._use_move): BtlCmd_TryWhirlwind draws nothing with no eligible
     # bench Pokemon, BattleSystem_CanWhirlwind nothing for a user of at least the target's
@@ -1621,6 +1677,13 @@ def outcome_laws(
         # would only multiply every other brute force past the width cap.
         quick_claw = jnp.broadcast_to(live & jnp.any(claw & (state.species != 0)), (2,))
 
+    band_party = jnp.any(
+        (tables.item_effect[state.item] == ItemId.FOCUS_BAND)
+        & (state.species != 0)
+        & (state.hp > 0),
+        axis=1,
+    )
+
     def branch_relevant(m: dict) -> Outcome:
         return Outcome(
             speed_tie=speed_tie,
@@ -1653,6 +1716,11 @@ def outcome_laws(
             # Yawn's sleep of this turn's end: a count of 1 now reaches 0 there (a Yawn of this
             # turn sets 2; over-approximate: the sleep may still be blocked).
             yawn_sleep=live & (state.yawn == 1),
+            focus_band=m["focus_band"],
+            # The Future Sight hit's Focus Band roll: future_hit's gate, a living holder in the
+            # party (the battler on the field at the turn's end), G-1.
+            future_band=live & (state.future_timer == 1) & band_party,
+            berry_confusion=m["berry_confusion"],
         )
 
     both = zip(branch_relevant(branches[0]), branch_relevant(branches[1]), strict=True)
@@ -1742,6 +1810,10 @@ def outcome_laws(
         future_roll=future_roll,
         # B10-2: a miss or a Protect still reads hit 0's crit and roll (step._use_move's crash).
         crash=off if loose else uses_move & (effect == _E.CRASH),
+        band_move=base["focus_band"],
+        band_self=base["own_band"],
+        berry_by_foe=jnp.stack([m["berry_by_foe"] for m in branches]),
+        pending_own=base["pending"],
     )
     kind = jnp.where(
         effect == _E.TAUNT,
@@ -1944,6 +2016,12 @@ def _flinch_item(laws: OutcomeLaws, side: int) -> _Law:
     return [0, 1], [100 - chance, chance], 100
 
 
+def _focus_band(laws: OutcomeLaws, side: int) -> _Law:
+    # bcp.c:3387, battle_script.c:9110: RandNext() % 100 < param, uniform by the % n convention
+    # (ids.FOCUS_BAND_PARAM, the only HOLD_EFFECT_MAYBE_ENDURE param), G-1.
+    return [0, 1], [100 - FOCUS_BAND_PARAM, FOCUS_BAND_PARAM], 100
+
+
 _LAWS = {
     "speed_tie": _coin,
     "hit": _hit,
@@ -1972,6 +2050,10 @@ _LAWS = {
     "future_hit": _future_hit,
     # subscript_fall_asleep.s Random 3, 2 at Yawn's turn end: 2-5, uniform.
     "yawn_sleep": lambda laws, side: ([2, 3, 4, 5], [1, 1, 1, 1], 4),
+    "focus_band": _focus_band,
+    "future_band": _focus_band,
+    # subscript_confuse.s:34 Random 3, 2 (G-5): 2-5, uniform.
+    "berry_confusion": lambda laws, side: ([2, 3, 4, 5], [1, 1, 1, 1], 4),
 }
 
 
@@ -2174,6 +2256,8 @@ def _move_reads(laws: OutcomeLaws, branch: Branch, plan: ReadPlan) -> None:
                 ("flinch_item", (s, i)),
             ):
                 plan.path(elem, "move", *hits)
+            if bool(reads.band_move[s, i]):  # the foe's Focus Band on this hit (G-1)
+                plan.path(("focus_band", (s, i)), "move", *hits)
             # roll[s, 0]: damage, Future Sight's stored damage, or a self-hit below.
             if i > 0 or bool(rel.crit[s, 0]) or bool(reads.future_roll[s]):
                 plan.path(("roll", (s, i)), "move", *hits)
@@ -2207,6 +2291,22 @@ def _move_reads(laws: OutcomeLaws, branch: Branch, plan: ReadPlan) -> None:
                 plan.path(elem, path)
             if bool(by_foe[t, s]):
                 plan.path(elem, path + "_inflicted", *inflicted(foe))
+        # G-1: a self-hit's Focus Band roll, read where its roll is (the confusion paths).
+        # G-5: a disliked flavor berry the foe's earlier hit feeds it: the check reads the
+        # berry's counter, and the self-hit's roll and coin follow; a pending counter is read
+        # at the check like a confusion of its own.
+        selfs = [("confusion_hit", (s,)), ("roll", (s, 0))]
+        if bool(reads.band_self[s]):
+            selfs.append(("focus_band", (s, 0)))
+            if bool(reads.confused_own[s]):
+                plan.path(("focus_band", (s, 0)), "confusion")
+            if bool(reads.confused_by_foe[t, s]):
+                plan.path(("focus_band", (s, 0)), "confusion_inflicted", *inflicted(foe))
+        if bool(reads.pending_own[s]):
+            plan.path(("berry_confusion", (s,)), "confusion")
+        if bool(reads.berry_by_foe[t, s]):
+            for elem in (*selfs, ("berry_confusion", (s,))):
+                plan.path(elem, "confusion_berry", *move_conds(foe))
 
     # The first mover's flinch roll: Thunder Fang's own element, else its secondary.
     if bool(reads.fang[first]):
@@ -2237,6 +2337,7 @@ def _move_reads(laws: OutcomeLaws, branch: Branch, plan: ReadPlan) -> None:
                 ("secondary", (q, i)),
                 ("contact_proc", (first, i)),
                 ("flinch_item", (q, i)),
+                ("focus_band", (q, i)),
             ):
                 plan.gate(elem, cond)
         for name in (
@@ -2244,6 +2345,7 @@ def _move_reads(laws: OutcomeLaws, branch: Branch, plan: ReadPlan) -> None:
             "duration",
             "magnitude",
             "confusion_hit",
+            "berry_confusion",
             "full_para",
             "infatuation",
             "fang_flinch",
@@ -2318,8 +2420,11 @@ def _protect_reads(laws: OutcomeLaws, branch: Branch, plan: ReadPlan) -> None:
             ("secondary", (q, i)),
             ("contact_proc", (first, i)),
             ("flinch_item", (q, i)),
+            ("focus_band", (q, i)),
         ):
+            # A Focus Band roll may be read only by a self-hit (no "move" path, G-1).
             optional = e == ("roll", (q, 0)) and ("crit", (q, 0)) not in plan
+            optional = optional or e[0] == "focus_band"
             plan.restrict(e, "move", cond, required=not optional)
     for name in (
         "n_hits",
