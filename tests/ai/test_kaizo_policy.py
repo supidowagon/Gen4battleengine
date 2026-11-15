@@ -105,13 +105,14 @@ def _state(t, party, mon: int, moves, bench=(CRANIDOS,), players: int = 2, hp: i
     return _bulky(s, hp)
 
 
-def _outcome(t, s, guess: int = 0, jumps=(), layout=KAIZO) -> AiOutcome:
+def _outcome(t, s, guess: int = 0, jumps=(), layout=KAIZO, tie: int = 0) -> AiOutcome:
     """The per-slot outcome where the ``(slot, line)`` ``IfRandomLessThan`` reads of ``jumps``
-    jump and no other does, and every guessing read takes ability slot ``guess``. The reads'
-    order on each slot's path (E1 Ruling R4) is the loose oracle's (``LooseDraws``: every read
-    in static order, its kind and line) restricted to the reads on the path; the speed tie,
-    which the exact layout does not draw (Ruling 3), takes 0 in both, and so does a defender
-    ability read that does not guess."""
+    jump and no other does, every guessing read takes ability slot ``guess``, and every drawn
+    speed tie (a FASTER or TIE compare at equal speed, E1 Ruling R8) takes bit ``tie`` (1:
+    TIE). The reads' order on each slot's path (E1 Ruling R4) is the loose oracle's
+    (``LooseDraws``: every read in static order, its kind and line) restricted to the reads on
+    the path; a SLOWER compare's tie, which the exact layout does not draw (Ruling 3), takes 0
+    in both, and so does a defender ability read that does not guess."""
     batch = jax.tree.map(lambda a: jnp.asarray(a)[None], s)
     bits = np.zeros((1, MOVES, c.LOOSE_READS), np.int8)
     _, lo = policy._loose_batch(t, batch, jnp.asarray(bits), layout)
@@ -119,17 +120,25 @@ def _outcome(t, s, guess: int = 0, jumps=(), layout=KAIZO) -> AiOutcome:
     roll = kind == c.ReadKind.ROLL
     # A LoadBattlerAbility DEFENDER draws only when the decision guesses (trainer_ai.c:1191-1198).
     ability = (kind == c.ReadKind.ABILITY) & bool(c.ability_guessed(t, s))
+    drawn = kind == c.ReadKind.SPEED_TIE_DRAWN
     for slot, at in jumps:
         bits[0, slot] |= (roll[slot] & (line[slot] == at)).astype(np.int8)
     bits[0] |= (ability * guess).astype(np.int8)
+    bits[0] |= (drawn * tie).astype(np.int8)
     _, lo = policy._loose_batch(t, batch, jnp.asarray(bits), layout)
     live = np.asarray(lo.live)[0, 0]
     rolls = np.full((MOVES, layout.slot_reads), READ_DRAWS[0], np.uint8)
     for slot in range(MOVES):
-        on_path = np.flatnonzero(live[slot] & (roll[slot] | ability[slot]))
+        on_path = np.flatnonzero(live[slot] & (roll[slot] | ability[slot] | drawn[slot]))
         for k, i in enumerate(on_path):
-            # A jump draws below N; ability slot 0 is RandNext() & 1 set (trainer_ai.c:1195).
-            taken = bits[0, slot, i] == 1 if roll[slot, i] else guess == 0
+            # A jump draws below N; ability slot 0 is RandNext() & 1 set (trainer_ai.c:1195);
+            # a tie is RandNext() & 1 set (battle_lib.c:1445-1446).
+            if roll[slot, i]:
+                taken = bits[0, slot, i] == 1
+            elif drawn[slot, i]:
+                taken = tie == 1
+            else:
+                taken = guess == 0
             rolls[slot, k] = READ_DRAWS[int(taken)]
     return AiOutcome(
         sim_roll=jnp.full((MOVES,), SIM_ROLL_MAX, jnp.int8),
@@ -1323,12 +1332,13 @@ def _layout_scores(t, s, o, layout):
     return policy._run_flags(c.new_context(t, s, o), layout).scores
 
 
-def _delta(t, s, base: int, flags: int, jumps=()) -> list[int]:
+def _delta(t, s, base: int, flags: int, jumps=(), tie: int = 0) -> list[int]:
     """Per slot, the score under the flag set ``flags`` minus the score under ``base`` (its
-    first flags), with the ``(slot, line)`` rolls of ``jumps`` jumping and no other."""
+    first flags), with the ``(slot, line)`` rolls of ``jumps`` jumping and no other, and every
+    drawn speed tie taking bit ``tie`` (``_outcome``)."""
     lo, hi = layout_for(t, base, s), layout_for(t, flags, s)
-    before = _layout_scores(t, s, _outcome(t, s, layout=lo), lo)
-    after = _layout_scores(t, s, _outcome(t, s, jumps=jumps, layout=hi), hi)
+    before = _layout_scores(t, s, _outcome(t, s, layout=lo, tie=tie), lo)
+    after = _layout_scores(t, s, _outcome(t, s, jumps=jumps, layout=hi, tie=tie), hi)
     return [int(b) - int(a) for a, b in zip(before, after, strict=True)]
 
 
@@ -2116,6 +2126,33 @@ def test_basic_double_stat_stage(
     assert _delta(t, s, 0x2, 0x3)[0] == expected
 
 
+@pytest.mark.parametrize(
+    ("stages", "expected"),
+    [
+        # Basic_CheckBulkUp with Simple (script.s:967-970): either stat above decomp 8 (+3), -10
+        ({Stat.ATK: 3}, -10),
+        ({Stat.DEF: 3}, -10),
+        ({Stat.ATK: 2, Stat.DEF: 2}, 0),
+    ],
+)
+def test_basic_double_stat_stage_simple(
+    kaizo_tables, kaizo_names, kaizo_roark_party, stages, expected
+):
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Bulk Up", "Accelerock", "", ""))
+    abilities = np.asarray(t.species_abilities_decomp)
+    rows = np.asarray(t.species_form_row)[:, 0]
+    species = next(
+        sp for sp in range(1, rows.shape[0]) if abilities[rows[sp], 0] == c.ABILITY_IDS["Simple"]
+    )
+    s = s._replace(
+        species=s.species.at[1, 0].set(species), ability_slot=s.ability_slot.at[1, 0].set(0)
+    )
+    for stat, stage in stages.items():
+        s = s._replace(stages=s.stages.at[1, stat].set(stage))
+    assert _delta(t, s, 0x2, 0x3)[0] == expected
+
+
 def test_basic_dragon_dance_trick_room(kaizo_tables, kaizo_names, kaizo_roark_party):
     """Basic_CheckDragonDance gives -10 under Trick Room first (:1004)."""
     t, n = kaizo_tables, kaizo_names
@@ -2405,6 +2442,59 @@ def test_basic_check_tailwind(kaizo_tables, kaizo_names, kaizo_roark_party, case
     elif case == "tailwind":
         s = s._replace(tailwind=s.tailwind.at[1].set(3))
     assert _delta(t, s, 0x2, 0x3)[0] == expected
+    # the player's own Tailwind is not the AI's side (:1131 reads AI_BATTLER_ATTACKER)
+    if case == "plain":
+        s = s._replace(tailwind=s.tailwind.at[0].set(3))
+        assert _delta(t, s, 0x2, 0x3)[0] == 0
+
+
+@pytest.mark.parametrize(
+    ("tie", "jumps", "expected"),
+    [
+        # Expert_Tailwind at equal speed (script.s:4993; battle_lib.c:1445-1446): the tie's
+        # RandNext() & 1 is the slot's read after :4992 (E1 Ruling R8)
+        (0, (), -1),  # bit 0: FASTER, -1
+        (1, (), 1),  # bit 1: TIE, not faster; above 75 % HP, +1
+        (1, (4992,), 0),  # the first roll jumps before the compare: nothing, no tie drawn
+    ],
+)
+def test_expert_tailwind_tie(kaizo_tables, kaizo_names, kaizo_roark_party, tie, jumps, expected):
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Tailwind", "Accelerock", "", ""))
+    s = _speeds(s, player=100, opp=100)
+    assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps), tie=tie)[0] == expected
+
+
+def test_check_battler_ability_guess(kaizo_tables, kaizo_roark_party):
+    """CheckBattlerAbility on an unlearned player ability (trainer_ai.c:1236-1251): two
+    abilities, neither the one asked, answers ability 1, so AI_NOT_HAVE (:1242-1243); one
+    ability answers that one (:1247-1251), AI_HAVE when it is the one asked."""
+    t = kaizo_tables
+    abilities = np.asarray(t.species_abilities_decomp)
+    rows = np.asarray(t.species_form_row)[:, 0]
+    boost = c.ABILITY_IDS["Speed Boost"]
+    two = next(
+        sp
+        for sp in range(1, rows.shape[0])
+        if 0 not in abilities[rows[sp]][:2]
+        and boost not in abilities[rows[sp]][:2]
+        and abilities[rows[sp], 0] != abilities[rows[sp], 1]
+    )
+    one = next(
+        sp
+        for sp in range(1, rows.shape[0])
+        if abilities[rows[sp], 0] != 0 and abilities[rows[sp], 1] == 0
+    )
+    s = _state(t, kaizo_roark_party, BONSLY, (ACCELEROCK, 0, 0, 0))
+
+    def ask(species, expected):
+        p = _with_player(t, s, species, 0, known=False)
+        ctx = c.at_slot(c.new_context(t, p, _outcome(t, p)), 0)
+        return int(c.check_battler_ability(ctx, c.Battler.DEFENDER, expected).calc_temp)
+
+    assert ask(two, boost) == c.AI_NOT_HAVE
+    assert ask(one, int(abilities[rows[one], 0])) == c.AI_HAVE
+    assert ask(one, boost if abilities[rows[one], 0] != boost else 1) == c.AI_NOT_HAVE
 
 
 @pytest.mark.parametrize(
@@ -2453,7 +2543,7 @@ def test_speed_faster_exact_equals_loose(
     kaizo_tables, kaizo_names, kaizo_roark_party, flags, speeds
 ):
     """Exact == loose for Tailwind and Payback, whose labels compare for COMPARE_SPEED_FASTER:
-    at equal speed the tie's RandNext() & 1 decides (battle_lib.c:1438-1444) and is a read
+    at equal speed the tie's RandNext() & 1 decides (battle_lib.c:1437-1438 under Trick Room, :1445-1446 plain) and is a read
     of the exact layout (E1 Ruling R8); slower and faster too."""
     t, n = kaizo_tables, kaizo_names
     s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Tailwind", "Payback", "Accelerock", ""))

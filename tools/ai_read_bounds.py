@@ -125,7 +125,7 @@ def flag_reads(script: Script, bit: int, effect: int, damaging: bool, can_quad: 
             elif cmd == "LoadBattlerAbility":
                 reads = int(args[0] == "AI_BATTLER_DEFENDER")
             elif cmd == "IfSpeedCompareEqualTo":
-                reads = int(args[0] == "COMPARE_SPEED_FASTER")  # its tie (E1 Ruling R8)
+                reads = int(args[0] != "COMPARE_SPEED_SLOWER")  # the tie (E1 Ruling R8)
             target = args[-1] if args and args[-1] in script.labels else None
             if cmd == "GoTo":
                 return reads + most(script.labels[target], calc)

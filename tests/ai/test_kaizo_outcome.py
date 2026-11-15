@@ -238,13 +238,15 @@ def _loose_paths(t, s, layout=KAIZO) -> np.ndarray:
     that draw a ``RandNext`` the scoring can split on: every ``IfRandomLessThan``, and a
     ``LoadBattlerAbility DEFENDER`` when the decision guesses (trainer_ai.c:1191-1198; loose
     flips a coin at every such read, which only resolves to the known ability otherwise). The
-    speed tie is left out (Ruling 3: it never changes a compare the scripts make)."""
+    speed tie of a SLOWER compare is left out (Ruling 3: it never changes it); a FASTER
+    compare's is counted (E1 Ruling R8)."""
     batch = _one(s)
     reads, _, kind = policy._loose_reads(t, batch, layout)
     bits = policy._loose_patterns(reads)
     _, lo = policy._loose_batch(t, batch, jnp.asarray(bits), layout)
     guessed = bool(commands.ability_guessed(t, s))
     draws = (kind == commands.ReadKind.ROLL) | ((kind == commands.ReadKind.ABILITY) & guessed)
+    draws |= kind == commands.ReadKind.SPEED_TIE_DRAWN
     live = np.asarray(lo.live)[0] & draws[None]  # [P, MOVES, LOOSE_READS]
     out = []
     for m in range(MOVES):
@@ -276,6 +278,13 @@ def _sensitive_reads(t, states: BattleState, layout) -> np.ndarray:
 
 def _one(s: BattleState) -> BattleState:
     return jax.tree.map(lambda a: jnp.asarray(a)[None], s)
+
+
+def _equal_speed(s: BattleState) -> BattleState:
+    """``s`` with the player's active Speed stat set to the AI's (``stats[..., Stat.SPE - 1]``)."""
+    spe = Stat.SPE - 1
+    ai = s.stats[1, int(s.active[1]), spe]
+    return s._replace(stats=s.stats.at[0, int(s.active[0]), spe].set(ai))
 
 
 # --- The layout ----------------------------------------------------------------------------
@@ -713,8 +722,9 @@ def test_slot_reads_fit_every_transcribed_effect(kaizo_tables, kaizo_roark_party
     such move with Roark's Accelerock and Headbutt, over random players (any species with two
     abilities, any types, guessed or known), random HP, Defense and evasion stages and the
     first turn or a later one: the loose oracle's longest path, under every transcribed flag,
-    makes at most the fight's bound (``layout.fight_slot_reads``; speed ties are no read of
-    the exact layout). Each piece is a fight-sized program, and JAX's caches are cleared
+    makes at most the fight's bound (``layout.fight_slot_reads``; a SLOWER compare's tie is no
+    read of the exact layout, a FASTER one's is, E1 Ruling R8). Tailwind is always sampled, and
+    half the states put both sides at equal speed so that its tie is on the path. Each piece is a fight-sized program, and JAX's caches are cleared
     between pieces. Selfdestruct reaches Roark's bound by hand: :117 and :304 (two guesses),
     :6374, :1859 (evasion +4 or more), :1870 and :1875 (HP at most 30 %) (script.s:6365-6374,
     :1841-1884), and Risky :6530 (:6521-6534)."""
@@ -734,6 +744,7 @@ def test_slot_reads_fit_every_transcribed_effect(kaizo_tables, kaizo_roark_party
 
     sample = sorted(first, key=lambda e: (-walked(e), e))[:8]
     sample = [*sample, *([7] if 7 not in sample else [])]  # HALVE_DEFENSE: Selfdestruct
+    sample = [*sample, *([225] if 225 not in sample else [])]  # Tailwind: a FASTER tie
     assert len(READ_BOUND_BITS) == 8
     rng = np.random.default_rng(11)
     species = _two_ability_species(t)
@@ -756,6 +767,8 @@ def test_slot_reads_fit_every_transcribed_effect(kaizo_tables, kaizo_roark_party
             stages = s.stages.at[0, Stat.DEF].set(int(rng.integers(-6, 7)))
             stages = stages.at[0, Stat.EVA].set(int(rng.integers(0, 7)))
             s = s._replace(stages=stages.at[1, Stat.DEF].set(int(rng.integers(-6, 7))))
+            if rng.integers(2):  # equal speed: the tie is drawn
+                s = _equal_speed(s)
             states.append(s._replace(turn=jnp.asarray(int(rng.integers(2)), s.turn.dtype)))
         batch = jax.tree.map(lambda *xs: jnp.stack(xs), *states)
         party = np.asarray(states[0].moves[1]).ravel()

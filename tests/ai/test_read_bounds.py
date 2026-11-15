@@ -43,6 +43,11 @@ def test_read_bounds_decide_by_the_move(kaizo_tables):
     assert READ_BOUNDS[(7, False, True)][1] == 2  # the quad roll :6383 on top
     hit = dict(zip(bits, READ_BOUNDS[(0, True, False)], strict=True))
     assert hit[2] == 0 and hit[1] == 0
+    # COMPARE_SPEED_FASTER's tie is a read (E1 Ruling R8): Expert_Tailwind (:4982-5006) makes
+    # :4992, the tie at :4993 and :4996 (3); Expert_Payback (:5169-5187) the tie at :5177 and
+    # :5179 (2).
+    assert dict(zip(bits, READ_BOUNDS[(225, False, False)], strict=True))[2] == 3
+    assert dict(zip(bits, READ_BOUNDS[(230, True, False)], strict=True))[2] == 2
 
 
 def test_fight_slot_reads(kaizo_tables, kaizo_roark_party):

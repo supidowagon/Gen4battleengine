@@ -760,12 +760,14 @@ class ReadKind(IntEnum):
     NONE = 0  # no read at this index
     ROLL = 1  # IfRandomLessThan N: P(1) = N/256
     ABILITY = 2  # LoadBattlerAbility DEFENDER's coin flip: P(1) = 1/2
-    SPEED_TIE = 3  # IfSpeedCompareEqualTo's tie, RandNext() & 1: P(1) = 1/2
+    SPEED_TIE = 3  # a SLOWER compare's tie, RandNext() & 1: P(1) = 1/2; no exact read (R3)
+    SPEED_TIE_DRAWN = 4  # a FASTER or TIE compare's tie: a read of the exact layout (E1 R8)
 
 
 # LooseDraws columns: at least the reads one slot's scripts make. Every read counts, on the
 # slot's path or not (the scripts are straight-line): 35 after K3c Task 6, 74 after E1 batch 7
-# under every transcribed flag. More raises (policy._loose_reads). Tests only, but each column
+# under every transcribed flag; only fight-sized layouts (E1 Ruling R7) are run loose, and each
+# stays well under this (tests/ai/test_kaizo_outcome.py test_slot_reads_fit_*). More raises (policy._loose_reads). Tests only, but each column
 # costs compile memory in every loose program, so the headroom is kept modest.
 LOOSE_READS = 96
 
@@ -1210,7 +1212,8 @@ def check_battler_ability(ctx: AiContext, battler: Battler, expected: int) -> Ai
     The player's: the one the AI knows (learned, or a trapping ability, :1224-1233); else, for
     a species of two abilities, ability 1 when neither is ``expected`` and unknown when one
     is (:1238-1246), for a species of one, that one (:1247-1251). No draw."""
-    if battler == Battler.ATTACKER:
+    # The decomp branches on the player's side (DEFENDER or DEFENDER_PARTNER, :1223).
+    if _side(battler) == _side(Battler.ATTACKER):
         ability = attacker_ability(ctx.tables, ctx.state)
     else:
         true, known, base = _defender_abilities(ctx.tables, ctx.state)
@@ -1461,27 +1464,30 @@ def if_speed_compare_equal_to(ctx: AiContext, value: int) -> AiContext:
       ``== FASTER`` does depend on it (E1 Ruling R8): where the compare would read the tie
       (``compare_speed`` gives TIE for a set bit), it is the slot's next random read
       (``_slot_read``), TIE when the draw's low bit is set (READ_DRAWS[1] = 1), probability
-      1/2. ``COMPARE_SPEED_TIE`` itself is not compared by any transcribed label (asserted).
+      1/2. ``== TIE`` (Basic_CheckTrickRoom, script.s:1505) reads it the same way.
 
-    Loose (module docstring): the tie is its own draw (``ReadKind.SPEED_TIE``), on the path
+    Loose (module docstring): the tie is its own draw (``ReadKind.SPEED_TIE`` for SLOWER,
+    ``SPEED_TIE_DRAWN`` for the compares that the exact layout reads it for), on the path
     where the decomp makes it (equal speed in a branch that reads it, which is where
     ``compare_speed`` gives TIE for a 1), and the decomp's three-valued result is compared
     with ``value``."""
-    assert int(value) in (COMPARE_SPEED_SLOWER, COMPARE_SPEED_FASTER), f"speed compare {value}"
+    value = int(value)
+    assert value in (COMPARE_SPEED_FASTER, COMPARE_SPEED_SLOWER, COMPARE_SPEED_TIE), value
     tables, state = ctx.tables, ctx.state
+    a = _side(Battler.ATTACKER)
+    slower = value == COMPARE_SPEED_SLOWER
     if ctx.loose is not None:
-        reads = compare_speed(tables, state, 1, 1, state.qc_roll) == COMPARE_SPEED_TIE
-        ctx, bit = _loose_read(ctx, 0.5, ReadKind.SPEED_TIE, live=ctx.live & reads)
-        return _jump(ctx, compare_speed(tables, state, 1, bit, state.qc_roll) == value)
-    if int(value) == COMPARE_SPEED_SLOWER:
-        return _jump(ctx, battler_slower(tables, state, 1, 0, state.qc_roll))
-    tie = compare_speed(tables, state, 1, 1, state.qc_roll) == COMPARE_SPEED_TIE
-    if per_slot(ctx):
-        ctx, r = _slot_read(ctx, lambda r: (0.5, tie))
-        bit = r & 1
-    else:
-        raise AssertionError("COMPARE_SPEED_FASTER is transcribed for the per-slot layout only")
-    return _jump(ctx, compare_speed(tables, state, 1, bit, state.qc_roll) == COMPARE_SPEED_FASTER)
+        reads = compare_speed(tables, state, a, 1, state.qc_roll) == COMPARE_SPEED_TIE
+        kind = ReadKind.SPEED_TIE if slower else ReadKind.SPEED_TIE_DRAWN
+        ctx, bit = _loose_read(ctx, 0.5, kind, live=ctx.live & reads)
+        return _jump(ctx, compare_speed(tables, state, a, bit, state.qc_roll) == value)
+    if slower:
+        return _jump(ctx, battler_slower(tables, state, a, 0, state.qc_roll))
+    if not per_slot(ctx):
+        raise AssertionError("a FASTER or TIE compare is transcribed for the per-slot layout only")
+    tie = compare_speed(tables, state, a, 1, state.qc_roll) == COMPARE_SPEED_TIE
+    ctx, r = _slot_read(ctx, lambda r: (0.5, tie))
+    return _jump(ctx, compare_speed(tables, state, a, r & 1, state.qc_roll) == value)
 
 
 def _knows_effect(ctx: AiContext, battler: Battler, effect: int) -> jnp.ndarray:

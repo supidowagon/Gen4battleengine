@@ -235,7 +235,10 @@ def fight_slot_reads(rows, flags: int) -> int:
 
 def fight_effects(tables: Tables, moves) -> frozenset[int]:
     """The battle effects (``Tables.move_ai_effect``) of ``moves`` (move ids, 0 or less for
-    none): a fight's own (E1 Ruling R7)."""
+    none): a fight's own (E1 Ruling R7). It assumes the AI's moves are its party's: when
+    Transform or Mimic (effects 57, 82) are modelled, a move they copy is scored by its effect's
+    label, so the layout must add the effects those can copy (until then coverage refuses
+    them)."""
     effect = np.asarray(tables.move_ai_effect)
     return frozenset(int(effect[int(m)]) for m in np.asarray(moves).ravel() if int(m) > 0)
 
