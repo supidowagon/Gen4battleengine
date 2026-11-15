@@ -21,7 +21,7 @@
   cbfcce1 (Curse by a Ghost user), ffa0766 (the opponent-legality test invariant:
   tests/ai_legality.py; first run over the playout, replacement and policy tests and the
   property: no violation), and the ledger commit. Backlog regenerated: Metronome's unmodelled
-  callable moves 123 -> 115; no other entry (no Roark-split trainer uses these moves).
+  callable moves 118 -> 115; no other entry (no Roark-split trainer uses these moves).
 - Fixed after batch 7 (B7-12): the differential divergence found at f22b818 (a switch replaying
   on the newcomer), from 470fbef (batch 6's pause loop); the JAX engine was wrong.
   Also pre-existing at f22b818: tests/prep/test_variants.py `test_ai_hp_checks_pinned` /
