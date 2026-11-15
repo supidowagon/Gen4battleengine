@@ -51,6 +51,7 @@ from nuzline.engine.ids import (
     MOVE_KNOCK_OFF,
     MOVE_SLEEP_TALK,
     MOVE_SNORE,
+    MOVE_SOLAR_BEAM,
     MOVE_STRUGGLE,
     MOVE_U_TURN,
     POTION_HP_RESTORED,
@@ -61,6 +62,8 @@ from nuzline.engine.ids import (
     PROTECT_CHAIN_MOVES,
     RESIST_ANY_NORMAL,
     SECRET_POWER_EFFECTS,
+    SEMI_HIT_FLAGS,
+    SEMI_SET_FLAGS,
     SNORE_PARAM,
     SPECIES_CLAMPERL,
     SPECIES_CUBONE,
@@ -91,6 +94,7 @@ from nuzline.engine.ids import (
     ItemId,
     MoveFlag,
     MoveTarget,
+    SemiKind,
     Stat,
     Status,
     TrainerItemId,
@@ -188,6 +192,9 @@ class _Turn:
     # SYSCTL_ATTACK_MESSAGE_SHOWN of the current action (script.c:1432), for
     # UpdateMoveBuffers' moveProtect (bcp.c:3936-3942).
     attack_message: bool = False
+    # SYSCTL_FIRST_OF_MULTI_TURN of the current action: a charge turn (B10-12), which updates the
+    # Choice locks as the attack message does (bcp.c:3921-3922, :4490-4491).
+    charging: bool = False
     # SYSCTL_PAYOUT_EXP (script.c:1800): the opponent party slots whose faint is still to pay.
     payout: list[int] = field(default_factory=list)
     # SYSCTL_MOVE_HIT of the current action: a hit's UpdateHP ran (bcp.c:3340, :3441).
@@ -828,6 +835,10 @@ def _calc_move_damage(
             damage //= 2
         elif move_type == Type.WATER:
             damage = damage * 15 // 10
+    # lib.c:7058-7060 SolarBeam (by move id) under FIELD_CONDITION_SOLAR_DOWN (B10-13).
+    solar_down = (Weather.RAIN, Weather.SANDSTORM, Weather.HAIL, Weather.FOG)
+    if weather in solar_down and move == MOVE_SOLAR_BEAM:
+        damage //= 2
     if weather == Weather.SUN:
         if move_type == Type.FIRE:
             damage = damage * 15 // 10
@@ -945,6 +956,12 @@ def _apply_type_multiplier(damage: int, mul: int, update: bool, flags: set[str])
     return damage
 
 
+def _hits_semi(tables, move: int, kind: int) -> bool:
+    """``move``'s script sets SYSCTL_HIT_DURING_* for the semi-invulnerable ``kind``
+    (CheckMoveHitOverrides, bcp.c:3034-3040), B10-12."""
+    return bool(kind) and bool(_t(tables, "move_flags", move) & SEMI_HIT_FLAGS[SemiKind(kind)])
+
+
 def _move_damage(
     tables, s: RefState, attacker: int, move: int, crit: bool, roll: int, power_mul=10,
     magnitude: int = 4, present: int = -1,
@@ -975,6 +992,13 @@ def _move_damage(
     )
     if _double_power(tables, s, attacker, defender, move) or (
         stomp and s.sides[defender].minimized
+    ):
+        power_mul = 20
+    # effect_script_0146.s, _0149.s, _0126.s, _0147.s, _0257.s, _0261.s (line 7-8): powerMul 20
+    # against a defender with the semi-invulnerable bit the move hits (B10-12).
+    flags = _t(tables, "move_flags", move)
+    if flags & MoveFlag.DOUBLE_SEMI and _hits_semi(
+        tables, move, s.sides[defender].semi_invulnerable
     ):
         power_mul = 20
     damage = _calc_move_damage(
@@ -1075,6 +1099,7 @@ def _reset_battler(sd: RefSide, baton: bool = False) -> None:
         "curse",
         "can_unburden",
         "minimized",
+        "semi_invulnerable",  # MOVE_EFFECT_SEMI_INVULNERABLE (B10-12)
     ):
         if not (baton and name in BATON_PASSED):
             setattr(sd, name, 0)
@@ -1082,10 +1107,11 @@ def _reset_battler(sd: RefSide, baton: bool = False) -> None:
 
 def _unlock(sd: RefSide) -> None:
     """``Battler_UnlockMoveChoice`` (lib.c:1834-1841): the move lock, Bide's turns and stored
-    damage (0 outside a Bide) and the Rollout count. It clears VOLATILE_CONDITION_MOVE_LOCKED
+    damage (0 outside a Bide), the semi-invulnerable bit and the Rollout count. It clears VOLATILE_CONDITION_MOVE_LOCKED
     only: an uproaring battler keeps VOLATILE_CONDITION_UPROAR and moveLockedInto, so it stays
     locked (Battler_CanPickCommand, lib.c:6224-6235)."""
     sd.bide_turns = sd.bide_damage = sd.rollout_count = 0
+    sd.semi_invulnerable = 0  # moveEffectsMask &= ~MOVE_EFFECT_SEMI_INVULNERABLE (lib.c:1838)
     if not sd.uproar:
         sd.locked_move = 0
 
@@ -2050,7 +2076,7 @@ def _update_choice_lock(
     U-turn under SYSCTL_UTURN_ACTIVE or a Baton Pass that succeeded, bcp.c:3927-3928) while it
     holds one, else its lock is cleared. ``defender``:
     the defending side (``DEFENDING_MON``, bcp.c:4488-4496), None when the foe is not it."""
-    if not turn.attack_message:
+    if not (turn.attack_message or turn.charging):
         return
     if defender is not None and not _holds_choice(turn.tables, s, defender):
         s.sides[defender].choice_lock = 0
@@ -3144,9 +3170,15 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
     # A special-range Counter / Mirror Coat / Metal Burst is its own defender until its command.
     counter = _t(tables, "move_effect", move) == EffectId.COUNTER
     special_counter = counter and _move_target(tables, move) in SELF_DEFENDER
+    # A charge move's first use keeps a defender (the user, bcp.c:2327-2334) and runs its script,
+    # whose hit then finds none (below), B10-12.
+    first_charge = bool(_t(tables, "move_flags", move) & MoveFlag.CHARGE) and not (
+        s.sides[side].locked_move
+    )
     if (
         not nature_power
         and not special_counter
+        and not first_charge
         and not _defender_always(tables, move, _ghost(s, side))
         and _active(s, 1 - side).hp == 0
     ):
@@ -3195,6 +3227,44 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
         record = None if own_defender else move
         counter = _t(tables, "move_effect", move) == EffectId.COUNTER
         special_counter = counter and _move_target(tables, move) in SELF_DEFENDER
+    # The charge-turn moves (B10-12; step._use_move cites the scripts): they hit when the user is
+    # locked (the second turn), SolarBeam in sun without Cloud Nine / Air Lock, or with a Power
+    # Herb (removed, and Skull Bash's Defense +1 first); else they charge: the lock into moveCur,
+    # the semi-invulnerable bit, Skull Bash's Defense +1, and the action ends (no accuracy,
+    # Protect or type chart: SYSCTL_FIRST_OF_MULTI_TURN). Only Skull Bash's charge sets
+    # SYSCTL_ATTACK_MESSAGE_SHOWN (subscript_update_stat_stage.s:6-7).
+    flags = _t(tables, "move_flags", move)
+    sd = s.sides[side]
+    if flags & MoveFlag.CHARGE:
+        second = bool(sd.locked_move)
+        sun_now = (
+            bool(flags & MoveFlag.SUN_SKIP)
+            and s.weather == Weather.SUN
+            and not _weather_suppressed(tables, s)
+        )
+        herb = not second and not sun_now and _item_effect(tables, mon) == ItemId.POWER_HERB
+        if herb:
+            mon.item_consumed, mon.item = mon.item, 0  # RemoveItem
+            _forget_item(s, side)
+            if flags & MoveFlag.CHARGE_DEF_UP:
+                _change_stage(s, side, Stat.DEF, 1)
+        elif not second and not sun_now:
+            sd.locked_move = move
+            for kind, bit in SEMI_SET_FLAGS.items():
+                if flags & bit:
+                    sd.semi_invulnerable = int(kind)
+            turn.charging = True
+            if flags & MoveFlag.CHARGE_DEF_UP:
+                _change_stage(s, side, Stat.DEF, 1)
+            else:
+                turn.attack_message = False
+                return 0 if record is not None else None
+            return record
+        sd.locked_move = 0  # subscript_charge_move_cleanup.s:6
+        sd.semi_invulnerable = 0  # the scripts' FLAG_OFF MOVE_EFFECT_SEMI_INVULNERABLE
+        if _active(s, 1 - side).hp == 0:  # TryMove's HasNoTarget: subscript_no_target.s
+            _unlock(sd)
+            return record
     # TRY_MOVE_STATE_CHECK_TYPE_CHART (bcp.c:3271-3277, after the script, hit or miss): a move
     # with power that is not RANGE_USER / RANGE_USER_SIDE and is ineffective on the foe sets the
     # attacker's moveFailFlags.noEffect (bcp.c:2350-2370), which the Uproar check reads.
@@ -3281,8 +3351,31 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
     # An OHKO move against an ignorable Sturdy (script.c:4340-4341, MOVE_STATUS_STURDY):
     # subscript_missed.s:67-69 tags the defender's ability (BattleAI_SetAbility,
     # script.c:11806) unless it is protected (:18), Levitate (:34) or ineffective (:59) first.
+    # CheckMoveHitOverrides (bcp.c:3016-3040): past Protect and the Lock-On / No Guard return,
+    # a move aimed at the foe (not RANGE_OPPONENT_SIDE) misses a semi-invulnerable foe its
+    # script does not hit (MOVE_STATUS_SEMI_INVULNERABLE), B10-12.
+    aims_foe = (
+        (
+            _move_target(tables, move) not in SELF_DEFENDER
+            and not _curse_on_user(tables, move, _ghost(s, side))
+        )
+        or special_counter
+        or unleash
+    )
+    foe_kind = s.sides[1 - side].semi_invulnerable
+    bypass = AbilityId.NO_GUARD in (mon.ability, _active(s, 1 - side).ability) or _locked_onto(
+        s, side, 1 - side
+    )
+    semi_miss = (
+        aims_foe
+        and bool(foe_kind)
+        and not _hits_semi(tables, move, foe_kind)
+        and _move_target(tables, move) != MoveTarget.RANGE_OPPONENT_SIDE
+        and not bypass
+    )
     if (
         effect == EffectId.OHKO
+        and not semi_miss  # subscript_missed.s:13 shows the miss first
         and 1 - side == 0
         and _ignorable(s, side, 1 - side) == AbilityId.STURDY
         and not _protected(turn, s, side, move, unleash)
@@ -3301,7 +3394,7 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
     )
     # CheckMoveHitOverrides (bcp.c:3001-3014) after the accuracy roll: a protecting foe
     # stops the move, Battler_UnlockMoveChoice; subscript_missed.s unlocks too.
-    if missed or _protected(turn, s, side, move, unleash):
+    if missed or semi_miss or _protected(turn, s, side, move, unleash):
         _unlock(s.sides[side])  # subscript_missed.s
         if effect == EffectId.CRASH and mon.ability != AbilityId.MAGIC_GUARD:
             # subscript_missed.s:98 -> subscript_crash_on_miss.s (SYSCTL_CRASH_DAMAGE from
@@ -3674,20 +3767,27 @@ def _weather_effect(turn: _Turn, s: RefState, side: int) -> None:
     """``BtlCmd_EndOfTurnWeatherEffect`` (script.c:5561-5647) and
     ``subscript_weather_continues.s`` for one battler (``NO_CLOUD_NINE`` checked by the
     caller). Rain and sun do something only through unmapped abilities (Dry Skin, Solar
-    Power, Rain Dish, Hydration); Dig / Dive's no-weather-damage flag cannot be set."""
+    Power, Rain Dish, Hydration). MOVE_EFFECT_NO_WEATHER_DAMAGE (Dig, Dive: moves.h:50) skips the
+    sandstorm, sun and hail branches (script.c:5580, :5587, :5600), B10-12."""
     mon = _active(s, side)
     if not mon.hp:
         return
     ability = _decomp_ability(turn.tables, mon)
     hp_calc = 0
-    if s.weather == Weather.SANDSTORM:  # script.c:5573-5583
+    hidden = s.sides[side].semi_invulnerable in (SemiKind.UNDERGROUND, SemiKind.UNDERWATER)
+    if s.weather == Weather.SANDSTORM and not hidden:  # script.c:5573-5583
         immune = {Type.ROCK, Type.STEEL, Type.GROUND} & set(mon.types)
         if not immune and mon.ability != AbilityId.SAND_VEIL:
             hp_calc = -_divide(mon.max_hp, 16)
     # script.c:5585-5596: sun hurts Dry Skin and Solar Power by Divide(maxHP, 8).
-    if s.weather == Weather.SUN and mon.ability in (AbilityId.DRY_SKIN, AbilityId.SOLAR_POWER):
+    sun = (
+        s.weather == Weather.SUN
+        and not hidden
+        and mon.ability in (AbilityId.DRY_SKIN, AbilityId.SOLAR_POWER)
+    )
+    if sun:
         hp_calc = -_divide(mon.max_hp, 8)
-    if s.weather == Weather.HAIL:  # the hail branch
+    if s.weather == Weather.HAIL and not hidden:  # the hail branch
         if ability == WEATHER_ABILITY_IDS["Ice Body"]:
             if mon.hp < mon.max_hp:
                 hp_calc = _divide(mon.max_hp, 16)
@@ -3698,7 +3798,6 @@ def _weather_effect(turn: _Turn, s: RefState, side: int) -> None:
         hp_calc = _divide(mon.max_hp, 16)  # script.c:5614-5618 (B9-6)
     if s.weather == Weather.RAIN and mon.ability == AbilityId.DRY_SKIN and mon.hp < mon.max_hp:
         hp_calc = _divide(mon.max_hp, 8)
-    sun = s.weather == Weather.SUN and mon.ability in (AbilityId.DRY_SKIN, AbilityId.SOLAR_POWER)
     rain = (
         s.weather == Weather.RAIN
         and mon.ability in (AbilityId.DRY_SKIN, AbilityId.RAIN_DISH)
@@ -4176,7 +4275,7 @@ def _ingrain_anchors(tables, s: RefState, side: int) -> bool:
     sd, mon = s.sides[side], _active(s, side)
     others = (
         sd.leech_seed, sd.lock_on, sd.perish_song, sd.yawn, sd.imprison, sd.imprisoned,
-        sd.mud_sport, sd.water_sport, sd.aqua_ring, sd.minimized,
+        sd.mud_sport, sd.water_sport, sd.aqua_ring, sd.minimized, sd.semi_invulnerable,
     )  # fmt: skip
     row = _t(tables, "species_form_row", mon.species, mon.form)
     party = [_t(tables, "species_types", row, i) for i in range(len(mon.types))]
@@ -4331,6 +4430,7 @@ def _actions(turn: _Turn, s: RefState, start: int) -> None:
         else:
             move, struggling, locked = choices[side]
             turn.attack_message = turn.move_hit = turn.damaged = turn.sub_hit = False
+            turn.charging = False
             # FightCommand (bcp.c:1866-1883, B10-9): after Struggle, an encored battler uses the
             # encored move (its slot's PP and no-PP failure) when the slot holds it, whatever it
             # chose; else its encore ends and the slot's move (its forced choice) runs.

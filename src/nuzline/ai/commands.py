@@ -311,6 +311,21 @@ class BattleEffect(IntEnum):
     RECOIL_PARALYZE_HIT = 262
     STEALTH_ROCK = 266
     RECOIL_HALF = 269  # Head Smash
+    # E2 batch 10: the charge-turn moves (Expert_ChargeTurnNoInvuln, script.s:3933-3973;
+    # Expert_ChargeTurnWithInvuln / Expert_ShadowForce, :3992-4072) and the two hits on a
+    # flying target, which no script names.
+    CHARGE_TURN_HIGH_CRIT = 39  # Razor Wind
+    CHARGE_TURN_HIGH_CRIT_FLINCH = 75  # Sky Attack
+    NEXT_ATTACK_ALWAYS_HITS = 94  # Lock-On, Mind Reader (Expert_ChargeTurnWithInvuln, :4053)
+    CHARGE_TURN_DEF_UP = 145  # Skull Bash
+    FLINCH_DOUBLE_DAMAGE_FLY_OR_BOUNCE = 146  # Twister
+    SKIP_CHARGE_TURN_IN_SUN = 151  # SolarBeam
+    FLY = 155
+    HIT_FLY = 207  # Sky Uppercut
+    DIVE = 255
+    DIG = 256
+    BOUNCE = 263
+    SHADOW_FORCE = 272
 
 
 # BattleEffect members whose decomp name (BATTLE_EFFECT_<name>) starts with a digit, which a
@@ -854,6 +869,11 @@ MIRROR_COAT_SPECIAL_TYPES = tuple(
     TYPE_IDS[n] for n in ("Fire", "Water", "Grass", "Electric", "Psychic", "Ice", "Dragon", "Dark")
 )
 ITEM_EXPERT_BELT = 268  # HOLD_EFFECT_POWER_UP_SE
+# ITEM_POWER_HERB: line 272 of generated/items.txt (id = line - 1), the item
+# Expert_ChargeTurnNoInvuln / _WithInvuln / Expert_ShadowForce test (script.s:3956, :4009, :4020).
+ITEM_POWER_HERB = 271
+# Expert_ChargeTurnWithInvuln_SandImmuneTypes (script.s:4068-4072).
+CHARGE_TURN_SAND_IMMUNE_TYPES = tuple(TYPE_IDS[n] for n in ("Ground", "Rock", "Steel"))
 _TRAPPING = jnp.array([ABILITY_IDS[n] for n in ("Shadow Tag", "Magnet Pull", "Arena Trap")], _I32)
 
 
@@ -1633,6 +1653,20 @@ def if_not_status(ctx: AiContext, battler: Battler, mask: int) -> AiContext:
 def if_stat_stage_less_than(ctx: AiContext, battler: Battler, stat: Stat, value: int) -> AiContext:
     """``IfStatStageLessThan`` (trainer_ai.c:1465), ``value`` in decomp units."""
     return _jump(ctx, _stage(ctx, battler, stat) < value)
+
+
+def if_held_item_equal_to(ctx: AiContext, battler: Battler, item: int) -> AiContext:
+    """``IfHeldItemEqualTo`` (trainer_ai.c:1915-1934): the AI's own battler's true held item
+    (``battleMons[battler].heldItem``, :1925-1926; ``BattleState.item`` of its active
+    Pokemon, 0 once consumed or lost), the other side's as the AI knows it
+    (``AI_CONTEXT.battlerHeldItems``, :1927-1928; ``BattleState.ai_item_known`` of the
+    player's active party slot), equal to ``item``."""
+    state = ctx.state
+    if battler == Battler.ATTACKER:
+        held = state.item[1, state.active[1]]
+    else:
+        held = state.ai_item_known[state.active[0]]
+    return _jump(ctx, held.astype(_I32) == int(item))
 
 
 def if_field_conditions_mask(ctx: AiContext, mask: int) -> AiContext:

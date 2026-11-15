@@ -768,7 +768,8 @@ def unlock_move(state: BattleState, side, cond) -> BattleState:
     ``VOLATILE_CONDITION_UPROAR``: an uproaring battler stays locked into its move
     (``Battler_CanPickCommand``, battle_lib.c:6224-6235), so ``locked_move`` stays while
     ``uproar`` is up (ruling B5-5)."""
-    for field in ("bide_turns", "bide_damage", "rollout_count"):
+    # :1838 also clears MOVE_EFFECT_SEMI_INVULNERABLE (B10-12).
+    for field in ("bide_turns", "bide_damage", "rollout_count", "semi_invulnerable"):
         state = _set(state, field, side, 0, cond)
     return _set(state, "locked_move", side, 0, cond & (state.uproar[side] == 0))
 
@@ -1221,6 +1222,7 @@ MOVE_EFFECT_MASK_FIELDS = (
     "water_sport",
     "aqua_ring",
     "minimized",
+    "semi_invulnerable",  # B10-12
 )
 
 
@@ -1229,9 +1231,9 @@ def ingrain_anchors(tables: Tables, state: BattleState, side) -> jnp.ndarray:
     ``moveEffectsMask`` equal (``OPCODE_EQU``) to ``MOVE_EFFECT_INGRAIN``: ``side``'s battler is
     ingrained and has no other bit of the mask: none of ``MOVE_EFFECT_MASK_FIELDS`` (the Leech
     Seed bits sit on the seeded battler, subscript_leech_seed_start.s:13-14) and no Camouflage
-    (``camouflaged``). The other bits come from unsupported moves (Fly, Dig, Dive, Shadow Force,
-    Minimize, Charge, Grudge, Gastro Acid, Miracle Eye, Power Trick, Heal Block, Embargo, Magnet
-    Rise); each joins the tuple with its move."""
+    (``camouflaged``). The other bits come from unsupported moves (Charge, Grudge, Gastro Acid,
+    Miracle Eye, Power Trick, Heal Block, Embargo, Magnet Rise); each joins the tuple with its
+    move."""
     other = camouflaged(tables, state, side)
     for name in MOVE_EFFECT_MASK_FIELDS:
         other = other | (getattr(state, name)[side] != 0)

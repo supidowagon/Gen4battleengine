@@ -96,6 +96,7 @@ class RefSide:
     roosting: int  # turnFlags.roosting while it can be read (engine.state docstring)
     can_unburden: int  # MoveEffectsData.canUnburden
     minimized: int  # MOVE_EFFECT_MINIMIZE
+    semi_invulnerable: int  # ids.SemiKind: MOVE_EFFECT_SEMI_INVULNERABLE's bit (B10-12)
     spikes: int
     toxic_spikes: int
     stealth_rock: int

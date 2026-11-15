@@ -232,6 +232,8 @@ _LAYOUT: tuple[tuple[str, tuple[int, ...]], ...] = (
     ("stages", (SIDES, 8)),
     ("disabled_move", _SIDE),
     ("locked_move", _SIDE),
+    # B10-12: the vanished battler ("flew up high!", subscript_vanish_on_charge_turn.s), its kind.
+    ("semi_invulnerable", _SIDE),
     *((name, _SIDE) for name in _NONZERO_SIDE),
     ("spikes", _SIDE),
     ("toxic_spikes", _SIDE),
@@ -314,6 +316,7 @@ def observation(events: dict, after: BattleState) -> jnp.ndarray:
         "stages": after.stages,
         "disabled_move": after.disabled_move,
         "locked_move": after.locked_move,
+        "semi_invulnerable": after.semi_invulnerable,
         **{name: _nonzero(getattr(after, name)) for name in _NONZERO_SIDE},
         "spikes": after.spikes,
         "toxic_spikes": after.toxic_spikes,

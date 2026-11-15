@@ -49,10 +49,12 @@ from nuzline.data.tables import Tables
 from nuzline.engine.ids import (
     ABILITY_DECOMP_IDS,
     ITEM_GRISEOUS_ORB,
+    MOVE_SOLAR_BEAM,
     MOVE_STRUGGLE,
     POWER_IF_TARGET_HALF_HP,
     POWER_IF_TARGET_PARALYZED,
     POWER_IF_USER_STATUSED,
+    SEMI_HIT_FLAGS,
     SPECIES_CLAMPERL,
     SPECIES_CUBONE,
     SPECIES_DIALGA,
@@ -70,6 +72,7 @@ from nuzline.engine.ids import (
     AbilityId,
     EffectId,
     ItemId,
+    MoveFlag,
     Stat,
     Status,
     Type,
@@ -339,6 +342,17 @@ def double_power(tables: Tables, state: BattleState, atk_side, def_side, move) -
     return (tables.move_effect[move] == EffectId.DOUBLE_POWER) & holds
 
 
+# MoveFlag.HIT_* by ids.SemiKind (index 0, no bit, hits nothing).
+_SEMI_HIT_BITS = (0, *(int(SEMI_HIT_FLAGS[k]) for k in sorted(SEMI_HIT_FLAGS)))
+
+
+def hits_semi(tables: Tables, move, kind) -> jnp.ndarray:
+    """``bool``: ``move``'s script sets the SYSCTL_HIT_DURING_* of the semi-invulnerable
+    ``kind`` (an ``ids.SemiKind``; CheckMoveHitOverrides, bcp.c:3034-3040), B10-12."""
+    bits = jnp.asarray(_SEMI_HIT_BITS, _I32)[_i32(kind)]
+    return (_i32(tables.move_flags[_i32(move)]) & bits) != 0
+
+
 def script_power_mul(
     tables: Tables, state: BattleState, atk_side, def_side, move, power_mul
 ) -> jnp.ndarray:
@@ -358,6 +372,11 @@ def script_power_mul(
         _i32(tables.move_param[_i32(move), 2]) == STOMP_PARAM
     )
     doubled = doubled | (stomp & (state.minimized[def_side] != 0))
+    # Gust / Twister, Earthquake / Magnitude, Surf / Whirlpool (effect_script_0146.s, _0149.s,
+    # _0126.s, _0147.s, _0257.s, _0261.s: line 7-8): powerMul 20 against a defender with the
+    # MOVE_EFFECT_* bit the move hits (MoveFlag.DOUBLE_SEMI), B10-12.
+    semi_double = (_i32(tables.move_flags[_i32(move)]) & MoveFlag.DOUBLE_SEMI) != 0
+    doubled = doubled | (semi_double & hits_semi(tables, move, state.semi_invulnerable[def_side]))
     out = jnp.where(reckless & recoil, RECKLESS_POWER_MUL, _i32(power_mul))
     return jnp.where(doubled, DOUBLE_POWER_MUL, out)
 
@@ -930,6 +949,15 @@ def _pre_random(
     fire, water = move_type == Type.FIRE, move_type == Type.WATER
     damage = jnp.where(rain & fire, damage // 2, damage)
     damage = jnp.where(rain & water, damage * 15 // 10, damage)
+    # :7058-7060 SolarBeam (by move id) under FIELD_CONDITION_SOLAR_DOWN (rain, sandstorm, hail,
+    # fog: condition.h:136-139) is halved, between rain and sun (B10-13).
+    solar_down = (
+        (weather == Weather.RAIN)
+        | (weather == Weather.SANDSTORM)
+        | (weather == Weather.HAIL)
+        | (weather == Weather.FOG)
+    )
+    damage = jnp.where(solar_down & (move == MOVE_SOLAR_BEAM) & (not self_hit), damage // 2, damage)
     damage = jnp.where(sun & fire, damage * 15 // 10, damage)
     damage = jnp.where(sun & water, damage // 2, damage)
 

@@ -481,3 +481,142 @@ def test_assist_calls_a_party_mates_move(tables, names):
     )
     out = assert_matches_reference(tables, alone, (0, 0), O)
     assert int(out.stages[1, Stat.ATK]) == 0 and int(out.hp[1, 0]) == int(alone.hp[1, 0])
+
+
+def test_fly_charges_vanishes_then_hits_and_dodges_tackle(tables, names):
+    """B10-12: effect_script_0155.s: the first use charges (no PP on the second turn, the lock
+    into Fly, MOVE_EFFECT_AIRBORNE); the foe's Tackle misses the airborne user
+    (bcp.c:3034-3040); the second turn hits and clears the bit and the lock."""
+    from nuzline.engine.ids import SemiKind
+
+    n = names
+    s = make_state(tables, [_mon(n, "Pidgeotto", ["Fly"], 40)], [_mon(n, "Bidoof", ["Tackle"], 20)])
+    one = assert_matches_reference(tables, s, (0, 0), O)
+    assert int(one.semi_invulnerable[0]) == SemiKind.AIRBORNE
+    assert int(one.locked_move[0]) == n.move("Fly")
+    assert int(one.hp[1, 0]) == int(s.hp[1, 0])
+    assert int(one.hp[0, 0]) == int(s.hp[0, 0])  # the slower foe's Tackle missed
+    assert int(one.pp[0, 0, 0]) == int(s.pp[0, 0, 0]) - 1
+    two = assert_matches_reference(tables, one, (0, 0), O)
+    assert int(two.semi_invulnerable[0]) == 0 and int(two.locked_move[0]) == 0
+    assert int(two.hp[1, 0]) < int(one.hp[1, 0])
+    assert int(two.pp[0, 0, 0]) == int(one.pp[0, 0, 0])
+
+
+def test_gust_doubles_and_earthquake_misses_a_flyer(tables, names):
+    """B10-12: effect_script_0149.s: Gust hits an airborne foe at powerMul 20; Earthquake
+    (effect_script_0147.s: SYSCTL_HIT_DURING_DIG only) misses it."""
+    from nuzline.engine.ids import SemiKind
+
+    n = names
+    s = make_state(
+        tables,
+        [_mon(n, "Pidgey", ["Gust", "Earthquake"], 40)],
+        [_mon(n, "Pidgeotto", ["Fly"], 40)],
+    )
+    up = s._replace(
+        semi_invulnerable=s.semi_invulnerable.at[1].set(SemiKind.AIRBORNE),
+        locked_move=s.locked_move.at[1].set(n.move("Fly")),
+    )
+    gust = int(damage_for_roll(tables, s, 0, n.move("Gust"), False, 15))
+    doubled = int(damage_for_roll(tables, up, 0, n.move("Gust"), False, 15))
+    assert doubled > gust
+    quake = assert_matches_reference(tables, up, (1, 0), O)
+    # The Earthquake missed; Fly then landed on the player.
+    assert int(quake.hp[0, 0]) < int(up.hp[0, 0])
+    assert int(quake.semi_invulnerable[1]) == 0
+    assert_matches_reference(tables, up, (0, 0), O)
+
+
+def test_dig_dodges_sandstorm_and_earthquake_doubles(tables, names):
+    """B10-12: MOVE_EFFECT_NO_WEATHER_DAMAGE (moves.h:50) skips the sandstorm chip of a digging
+    battler (battle_script.c:5580); Earthquake doubles on it (effect_script_0147.s:7-8)."""
+    from nuzline.engine.ids import SemiKind, Weather
+
+    n = names
+    s = make_state(tables, [_mon(n, "Sandshrew", ["Dig"], 30)], [_mon(n, "Pikachu", ["Growl"], 30)])
+    s = s._replace(weather=jnp.asarray(Weather.SANDSTORM, s.weather.dtype))
+    one = assert_matches_reference(tables, s, (0, 0), O)
+    assert int(one.semi_invulnerable[0]) == SemiKind.UNDERGROUND
+    assert int(one.hp[1, 0]) < int(s.hp[1, 0])  # the foe takes the chip
+    d = make_state(tables, [_mon(n, "Pikachu", ["Dig"], 30)], [_mon(n, "Pikachu", ["Growl"], 30)])
+    d = d._replace(weather=jnp.asarray(Weather.SANDSTORM, d.weather.dtype))
+    dug = assert_matches_reference(tables, d, (0, 0), O)
+    assert int(dug.hp[0, 0]) == int(d.hp[0, 0])  # no chip while underground
+    assert int(dug.hp[1, 0]) < int(d.hp[1, 0])
+
+
+def test_solarbeam_fires_in_sun_and_power_herb_skips_the_charge(tables, names):
+    """B10-12: effect_script_0151.s:5-6 hits at once in sun; a Power Herb skips any charge and
+    is used up (subscript_item_skip_charge_turn.s:20); SolarBeam is halved in rain
+    (battle_lib.c:7058-7060)."""
+    from nuzline.engine.ids import Weather
+
+    n = names
+    s = make_state(
+        tables, [_mon(n, "Bulbasaur", ["SolarBeam"], 40)], [_mon(n, "Geodude", ["Growl"], 30)]
+    )
+    sun = s._replace(weather=jnp.asarray(Weather.SUN, s.weather.dtype))
+    out = assert_matches_reference(tables, sun, (0, 0), O)
+    assert int(out.hp[1, 0]) < int(s.hp[1, 0]) and int(out.locked_move[0]) == 0
+    herb = make_state(
+        tables,
+        [_mon(n, "Bulbasaur", ["SolarBeam"], 40, item="Power Herb")],
+        [_mon(n, "Geodude", ["Growl"], 30)],
+    )
+    out = assert_matches_reference(tables, herb, (0, 0), O)
+    assert int(out.hp[1, 0]) < int(s.hp[1, 0]) and int(out.item[0, 0]) == 0
+    rain = s._replace(weather=jnp.asarray(Weather.RAIN, s.weather.dtype))
+    beam = n.move("SolarBeam")
+    assert int(damage_for_roll(tables, rain, 0, beam, False, 15)) < int(
+        damage_for_roll(tables, s, 0, beam, False, 15)
+    )
+
+
+def test_skull_bash_raises_defense_and_a_flinch_drops_the_charge(tables, names):
+    """B10-12: effect_script_0145.s:8 Defense +1 on the charge turn; on the second turn a faster
+    foe's flinch (subscript_flinched.s:9, Battler_UnlockMoveChoice) drops the lock, and a
+    full paralysis likewise; the next turn the move charges again."""
+    n = names
+    s = make_state(
+        tables, [_mon(n, "Squirtle", ["Skull Bash"], 30)], [_mon(n, "Starly", ["Headbutt"], 30)]
+    )
+    one = assert_matches_reference(tables, s, (0, 0), O)
+    assert int(one.stages[0, Stat.DEF]) == 1 and int(one.locked_move[0]) == n.move("Skull Bash")
+    flinch = O._replace(secondary=jnp.ones((2, 5), jnp.int8))
+    two = assert_matches_reference(tables, one, (0, 0), flinch)
+    assert int(two.locked_move[0]) == 0
+    para = one.with_status(0, 0, Status.PARALYSIS)
+    full = O._replace(full_para=jnp.ones((2,), jnp.int8))
+    three = assert_matches_reference(tables, para, (0, 0), full)
+    assert int(three.locked_move[0]) == 0
+
+
+def test_shadow_force_vanishes_and_surf_doubles_on_a_diver(tables, names):
+    """B10-12: effect_script_0272.s sets MOVE_EFFECT_SHADOW_FORCE (Surf misses it); Surf
+    (effect_script_0257.s) hits and doubles on a diver (MOVE_EFFECT_UNDERWATER); the diver's
+    switch clears its bit (a volatile)."""
+    from nuzline.engine.ids import SemiKind
+
+    n = names
+    s = make_state(
+        tables, [_mon(n, "Gengar", ["Shadow Force"], 40)], [_mon(n, "Psyduck", ["Surf"], 30)]
+    )
+    one = assert_matches_reference(tables, s, (0, 0), O)
+    assert int(one.semi_invulnerable[0]) == SemiKind.SHADOW_FORCE
+    assert int(one.hp[0, 0]) == int(s.hp[0, 0])
+    d = make_state(
+        tables,
+        [_mon(n, "Psyduck", ["Surf"], 40)],
+        [_mon(n, "Psyduck", ["Dive"], 30), _mon(n, "Geodude", ["Tackle"], 30)],
+    )
+    under = d._replace(
+        semi_invulnerable=d.semi_invulnerable.at[1].set(SemiKind.UNDERWATER),
+        locked_move=d.locked_move.at[1].set(n.move("Dive")),
+    )
+    surf = n.move("Surf")
+    assert int(damage_for_roll(tables, under, 0, surf, False, 15)) > int(
+        damage_for_roll(tables, d, 0, surf, False, 15)
+    )
+    out = assert_matches_reference(tables, under, (0, 0), O)
+    assert int(out.hp[1, 0]) < int(d.hp[1, 0])

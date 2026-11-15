@@ -6,11 +6,12 @@ from pathlib import Path
 
 import pytest
 
-from nuzline.engine.ids import EffectId, Stat
+from nuzline.engine.ids import EffectId, MoveFlag, Stat
 from tools.effect_map import (
     CERTAIN_SECONDARY_EFFECTS,
     DECOMP_EFFECT_NAMES,
     DECOMP_EFFECT_TO_ID,
+    SEMI_HIT_EFFECTS,
     TYPE_CHART_STATUS_MOVES,
 )
 
@@ -198,21 +199,26 @@ def test_mapping_only_scripts_do_what_the_effect_does():
     assert "MOVE_EFFECT_AIRBORNE" in s149 and "BTLVAR_POWER_MULTI, 20" in s149
 
 
-def test_gust_note_holds(tables, names, kaizo_tables, kaizo_names):
-    """Gust's x2 against Fly/Bounce (effect 149) and Whirlpool's against Dive (effect 261) are
-    unreachable only while the moves that set MOVE_EFFECT_AIRBORNE / MOVE_EFFECT_UNDERWATER stay
-    unsupported: Fly (155), Dive (255) and Bounce (263). Kaizo rewrites Dive to a plain hit
-    and Bounce to a Paralyze-hit (no semi-invulnerable turn). When one becomes supported, the
-    double is reachable, and this test fails."""
-    assert not {155, 255, 263} & set(DECOMP_EFFECT_TO_ID)
+def test_semi_invulnerable_flags(tables, names, kaizo_tables, kaizo_names):
+    """B10-12: the charge moves that vanish (Fly 155, Bounce 263: AIRBORNE; Dig 256; Dive 255;
+    Shadow Force 272) carry their SEMI_* bit, and the moves whose scripts set
+    SYSCTL_HIT_DURING_* carry the HIT_* bits (with DOUBLE_SEMI for the x2 scripts), in both
+    games by their ROM effect; each table entry is checked against its script's text."""
+    for e in (155, 263, 256, 255, 272):
+        assert "MOVE_EFFECT_" in _script(e) and "VANISH_CHARGE_TURN" in _script(e)
+    for e, bits in SEMI_HIT_EFFECTS.items():
+        text = _script(e)
+        assert "SYSCTL_HIT_DURING_" in text
+        assert ("BTLVAR_POWER_MULTI, 20" in text) == bool(bits & MoveFlag.DOUBLE_SEMI)
     for t, n in ((tables, names), (kaizo_tables, kaizo_names)):
-        assert int(t.move_effect[n.move("Fly")]) == EffectId.UNSUPPORTED
-    assert int(tables.move_effect[names.move("Dive")]) == EffectId.UNSUPPORTED
-    assert int(tables.move_effect[names.move("Bounce")]) == EffectId.UNSUPPORTED
+        fly = int(t.move_flags[n.move("Fly")])
+        assert fly & MoveFlag.CHARGE and fly & MoveFlag.SEMI_AIR
+        gust = int(t.move_flags[n.move("Gust")])
+        assert gust & MoveFlag.HIT_AIR and gust & MoveFlag.DOUBLE_SEMI
+    assert int(tables.move_flags[names.move("Dive")]) & MoveFlag.SEMI_DIVE
+    # Kaizo rewrites Dive and Bounce (effects 0 and 6): no charge.
     for move in ("Dive", "Bounce"):
-        scripts = {_script(e) for e in (0, 6)}  # Kaizo's Dive and Bounce effects
-        assert all("MOVE_EFFECT_AIRBORNE" not in s and "UNDERWATER" not in s for s in scripts)
-        assert int(kaizo_tables.move_effect[kaizo_names.move(move)]) != EffectId.UNSUPPORTED
+        assert not int(kaizo_tables.move_flags[kaizo_names.move(move)]) & MoveFlag.CHARGE
 
 
 def test_whirlpool_bind_matches_bind():

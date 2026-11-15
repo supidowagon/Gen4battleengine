@@ -1574,6 +1574,113 @@ _expert_mirror_coat = _counter_like(
 )
 
 
+def _expert_charge_turn_no_invuln(ctx: AiContext, mask) -> AiContext:
+    """``Expert_ChargeTurnNoInvuln`` (script.s:3933-3973): immune or resisted, -2; SolarBeam
+    in sun +2; else holding a Power Herb +2; else the player seen with a Protect effect -2,
+    or the attacker at 38 % HP or less -1. No random read."""
+    # Expert_ChargeTurnNoInvuln (:3933)
+    ctx = _at(ctx, mask)
+    ctx, minus2 = _not_resisted(ctx)  # :3942-3944
+    in_sun = BattleEffect.SKIP_CHARGE_TURN_IN_SUN
+    ctx, sun = _split(c.if_current_move_effect_equal_to(ctx, in_sun))  # :3945
+    ctx, herb = _split(c.go_to(ctx))  # :3946
+    # Expert_ChargeTurnNoInvuln_CheckForSunnyWeather (:3949)
+    ctx = c.load_current_weather(_at(ctx, sun))
+    ctx, t = _split(c.if_loaded_not_equal_to(ctx, c.AiWeather.SUNNY))
+    herb = herb | t
+    ctx = c.add_to_move_score(ctx, 2)
+    ctx, _ = _split(c.go_to(ctx))  # -> _End
+    # Expert_ChargeTurnNoInvuln_CheckForPowerHerb (:3955)
+    ctx = _at(ctx, herb)
+    ctx, plus2 = _split(c.if_held_item_equal_to(ctx, _A, c.ITEM_POWER_HERB))
+    ctx, protect_hp = _split(c.go_to(ctx))
+    # Expert_ChargeTurnNoInvuln_ScorePlus2 (:3959)
+    ctx = c.add_to_move_score(_at(ctx, plus2), 2)
+    ctx, _ = _split(c.go_to(ctx))  # -> _End
+    # Expert_ChargeTurnNoInvuln_CheckForProtectAndHP (:3963)
+    ctx = _at(ctx, protect_hp)
+    ctx, t = _split(c.if_move_effect_known(ctx, _D, BattleEffect.PROTECT))
+    minus2 = minus2 | t
+    ctx, _ = _split(c.if_hp_percent_greater_than(ctx, _A, 38))  # -> _End
+    ctx = c.add_to_move_score(ctx, -1)
+    ctx, _ = _split(c.go_to(ctx))  # -> _End
+    # Expert_ChargeTurnNoInvuln_ScoreMinus2 (:3969), then _End (:3972)
+    return c.pop_or_end(c.add_to_move_score(_at(ctx, minus2), -2))
+
+
+def _expert_charge_turn_with_invuln(ctx: AiContext, mask) -> AiContext:
+    """``Expert_ChargeTurnWithInvuln`` (script.s:3992-4012): holding a Power Herb, +2 (it jumps
+    to Expert_ChargeTurnNoInvuln_ScorePlus2, :3959); else the player seen with a Protect effect
+    -1; else on into Expert_ShadowForce (:4014)."""
+    ctx = _at(ctx, mask)
+    ctx, plus2 = _split(c.if_held_item_equal_to(ctx, _A, c.ITEM_POWER_HERB))  # :4009
+    ctx, shadow_force = _split(c.if_move_effect_not_known(ctx, _D, BattleEffect.PROTECT))
+    ctx = c.add_to_move_score(ctx, -1)
+    ctx, _ = _split(c.go_to(ctx))  # -> Expert_ChargeTurnWithInvuln_End
+    # Expert_ChargeTurnNoInvuln_ScorePlus2 (:3959-3961), then Expert_ChargeTurnNoInvuln_End
+    ctx = c.pop_or_end(c.add_to_move_score(_at(ctx, plus2), 2))
+    return _expert_shadow_force(ctx, shadow_force)
+
+
+def _expert_shadow_force(ctx: AiContext, mask) -> AiContext:
+    """``Expert_ShadowForce`` (script.s:4014-4066), also the tail of
+    Expert_ChargeTurnWithInvuln: immune or resisted +1 (the decomp's comment: "Bug?"); else a
+    Power Herb +1; else +1 unless the 80 roll (:4058) jumps, when the player is badly
+    poisoned, cursed or seeded, or in sand with a Ground, Rock or Steel attacker, or in hail
+    with an Ice attacker, or when the attacker is not slower and the effect of the player's
+    last move is not NEXT_ATTACK_ALWAYS_HITS."""
+    # Expert_ShadowForce (:4014)
+    ctx = _at(ctx, mask)
+    ctx, plus1 = _not_resisted(ctx)  # :4017-4019 -> Expert_ChargeTurnWithInvuln_ScorePlus1
+    ctx, plus1_end = _split(c.if_held_item_equal_to(ctx, _A, c.ITEM_POWER_HERB))  # :4020
+    ctx, conditions = _split(c.go_to(ctx))
+    # Expert_ChargeTurnWithInvuln_ScorePlus1AndEnd (:4023)
+    ctx = c.add_to_move_score(_at(ctx, plus1_end), 1)
+    ctx, _ = _split(c.go_to(ctx))  # -> _End
+    # Expert_ChargeTurnWithInvuln_CheckConditions (:4027)
+    ctx = _at(ctx, conditions)
+    ctx, roll = _split(c.if_status(ctx, _D, c.MonCondition.TOXIC))
+    ctx, t = _split(c.if_volatile_status(ctx, _D, c.VolatileCondition.CURSE))
+    roll = roll | t
+    ctx, t = _split(c.if_move_effect(ctx, _D, c.MoveEffectMask.LEECH_SEED))
+    roll = roll | t
+    ctx = c.load_current_weather(ctx)
+    ctx, sand = _split(c.if_loaded_equal_to(ctx, c.AiWeather.SANDSTORM))
+    ctx, hail = _split(c.if_loaded_equal_to(ctx, c.AiWeather.HAILING))
+    ctx, speed = _split(c.go_to(ctx))
+    # Expert_ChargeTurnWithInvuln_CheckSandImmuneType (:4036; its table :4068-4072)
+    ctx = c.load_type_from(_at(ctx, sand), LoadType.ATTACKER_TYPE_1)
+    ctx, t = _split(c.if_loaded_in_table(ctx, c.CHARGE_TURN_SAND_IMMUNE_TYPES))
+    roll = roll | t
+    ctx = c.load_type_from(ctx, LoadType.ATTACKER_TYPE_2)
+    ctx, t = _split(c.if_loaded_in_table(ctx, c.CHARGE_TURN_SAND_IMMUNE_TYPES))
+    roll = roll | t
+    ctx, t = _split(c.go_to(ctx))
+    speed = speed | t
+    # Expert_ChargeTurnWithInvuln_CheckHailImmuneType (:4043)
+    ctx = c.load_type_from(_at(ctx, hail), LoadType.ATTACKER_TYPE_1)
+    ctx, t = _split(c.if_loaded_equal_to(ctx, _TYPE["Ice"]))
+    roll = roll | t
+    ctx = c.load_type_from(ctx, LoadType.ATTACKER_TYPE_2)
+    ctx, t = _split(c.if_loaded_equal_to(ctx, _TYPE["Ice"]))
+    roll = roll | t
+    ctx, t = _split(c.go_to(ctx))
+    speed = speed | t
+    # Expert_ChargeTurnWithInvuln_CompareSpeed (:4050): SLOWER, whose tie is no read (plan
+    # K3c Ruling 3).
+    ctx = _at(ctx, speed)
+    ctx, _ = _split(c.if_speed_compare_equal_to(ctx, COMPARE_SPEED_SLOWER))  # -> _End
+    ctx = c.load_effect_of_loaded_move(c.load_battler_previous_move(ctx, _D))
+    ctx, t = _split(c.if_loaded_not_equal_to(ctx, BattleEffect.NEXT_ATTACK_ALWAYS_HITS))
+    roll = roll | t
+    ctx, _ = _split(c.go_to(ctx))  # -> _End
+    # Expert_ChargeTurnWithInvuln_TryScorePlus1 (:4057), falling into _End (:4061)
+    ctx, _ = _split(c.if_random_less_than(_at(ctx, roll), 80, 4058))
+    ctx = c.pop_or_end(c.add_to_move_score(ctx, 1))
+    # Expert_ChargeTurnWithInvuln_ScorePlus1 (:4064)
+    return c.pop_or_end(c.add_to_move_score(_at(ctx, plus1), 1))
+
+
 def _expert_superpower(ctx: AiContext, mask) -> AiContext:
     """``Expert_Superpower`` (script.s:4467-4488): resisted, or the attacker's Attack below +0,
     -1; faster or tied above 40 % HP -1; slower at 60 % HP or more -1."""
@@ -2108,6 +2215,7 @@ _BASIC_LABELS = (
     (BattleEffect.STATUS_BADLY_POISON, _basic_check_cannot_poison),  # :155
     (BattleEffect.SET_LIGHT_SCREEN, _basic_check_light_screen),  # :156
     (BattleEffect.ONE_HIT_KO, _basic_check_ohko),  # :157
+    (BattleEffect.CHARGE_TURN_HIGH_CRIT, _basic_check_non_standard_damage),  # :158
     (BattleEffect.HALVE_HP, _basic_check_non_standard_damage),  # :159
     (BattleEffect.DAMAGE_FLAT_40, _basic_check_non_standard_damage),  # :160
     (BattleEffect.STATUS_CONFUSE, _basic_check_cannot_confuse),  # :163
@@ -2144,6 +2252,7 @@ _BASIC_LABELS = (
     (BattleEffect.WEATHER_SUN, _basic_check_sunny_day),  # :215
     (BattleEffect.MAX_ATK_LOSE_HALF_MAX_HP, _basic_check_belly_drum),  # :216
     (BattleEffect.MIRROR_COAT, _basic_check_non_standard_damage),  # :218
+    (BattleEffect.CHARGE_TURN_DEF_UP, _basic_check_non_standard_damage),  # :219
     (BattleEffect.ALWAYS_FLINCH_FIRST_TURN_ONLY, _basic_check_first_turn),  # :224
     (BattleEffect.WEATHER_HAIL, _basic_check_hail),  # :228
     (BattleEffect.STATUS_BURN, _basic_check_cannot_burn),  # :231
@@ -2179,6 +2288,7 @@ _EXPERT_LABELS = (
     (BattleEffect.STATUS_BADLY_POISON, _expert_toxic_leech_seed),  # :1653
     (BattleEffect.SET_LIGHT_SCREEN, _expert_light_screen),  # :1654
     (BattleEffect.ONE_HIT_KO, _expert_ohko),  # :1656
+    (BattleEffect.CHARGE_TURN_HIGH_CRIT, _expert_charge_turn_no_invuln),  # :1657
     (BattleEffect.HALVE_HP, _expert_super_fang),  # :1658
     (BattleEffect.HIGH_CRITICAL, _expert_high_critical),  # :1660
     (BattleEffect.RECOIL_QUARTER, _expert_recoil_move),  # :1661
@@ -2196,6 +2306,7 @@ _EXPERT_LABELS = (
     (BattleEffect.STATUS_PARALYZE, _expert_status_paralyze),  # :1679
     (BattleEffect.ATK_UP_2_STATUS_CONFUSION, _expert_swagger),  # :1680
     (BattleEffect.LOWER_SPEED_HIT, _expert_speed_down_on_hit),  # :1681
+    (BattleEffect.CHARGE_TURN_HIGH_CRIT_FLINCH, _expert_charge_turn_no_invuln),  # :1682
     (BattleEffect.SET_SUBSTITUTE, _expert_substitute),  # :1684
     (BattleEffect.STATUS_LEECH_SEED, _expert_toxic_leech_seed),  # :1686
     (BattleEffect.COUNTER, _expert_counter),  # :1688
@@ -2212,6 +2323,12 @@ _EXPERT_LABELS = (
     (BattleEffect.WEATHER_SUN, _expert_sunny_day),  # :1711
     (BattleEffect.MAX_ATK_LOSE_HALF_MAX_HP, _expert_belly_drum),  # :1712
     (BattleEffect.MIRROR_COAT, _expert_mirror_coat),  # :1714
+    (BattleEffect.CHARGE_TURN_DEF_UP, _expert_charge_turn_no_invuln),  # :1715
+    # :1716. Its second entry, to Expert_Thunder (:1719, the decomp's BUG note), is never
+    # reached: IfCurrentMoveEffectEqualTo jumps (trainer_ai.c:1441-1451) and every label ends
+    # in PopOrEnd, so the first match wins (_dispatch drops a taken path).
+    (BattleEffect.SKIP_CHARGE_TURN_IN_SUN, _expert_charge_turn_no_invuln),
+    (BattleEffect.FLY, _expert_charge_turn_with_invuln),  # :1721
     (BattleEffect.ALWAYS_FLINCH_FIRST_TURN_ONLY, _expert_fake_out),  # :1723
     (BattleEffect.WEATHER_HAIL, _expert_hail),  # :1726
     (BattleEffect.DOUBLE_POWER_WHEN_STATUSED, _expert_facade),  # :1729
@@ -2232,10 +2349,14 @@ _EXPERT_LABELS = (
     (BattleEffect.DOUBLE_POWER_IF_MOVING_SECOND, _expert_payback),  # :1773
     (BattleEffect.TOXIC_SPIKES, _expert_toxic_spikes),  # :1792
     (BattleEffect.RECOIL_BURN_HIT, _expert_recoil_move),  # :1796
+    (BattleEffect.DIVE, _expert_charge_turn_with_invuln),  # :1797
+    (BattleEffect.DIG, _expert_charge_turn_with_invuln),  # :1798
     (BattleEffect.BLIZZARD, _expert_blizzard),  # :1801
     (BattleEffect.RECOIL_PARALYZE_HIT, _expert_recoil_move),  # :1802
+    (BattleEffect.BOUNCE, _expert_charge_turn_with_invuln),  # :1803
     (BattleEffect.STEALTH_ROCK, _expert_stealth_rock),  # :1805
     (BattleEffect.RECOIL_HALF, _expert_recoil_move),  # :1806
+    (BattleEffect.SHADOW_FORCE, _expert_shadow_force),  # :1808
 )
 # The effects _expert branches on: the per-slot guard's transcribed set
 # (outcome.KAIZO_EXPERT_TRANSCRIBED, a literal) must be among them

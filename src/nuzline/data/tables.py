@@ -103,7 +103,7 @@ class Tables(NamedTuple):
     move_effect_chance: jnp.ndarray  # int8[M]; a chance-0 non-certain secondary packs as PLAIN
     move_ai_effect: jnp.ndarray  # int16[M], the decomp battle effect id the AI scripts read
     move_param: jnp.ndarray  # int16[M,3]
-    move_flags: jnp.ndarray  # int16[M], ids.MoveFlag bits
+    move_flags: jnp.ndarray  # int32[M], ids.MoveFlag bits
     move_is_hm: jnp.ndarray  # int8[M], 1 = taught by HM01-HM08 (Item_IsHMMove)
     type_chart: jnp.ndarray  # int8[T,T], tenths
     type_chart_order: jnp.ndarray  # int16[T,T], decomp chart row index, -1 unlisted
