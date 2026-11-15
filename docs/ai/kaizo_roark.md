@@ -721,7 +721,7 @@ R8) with `:5139`.
   or Solar Power straight to the sun check, else against a statused Hydration player -10,
   then in sun -8; `Expert_SunnyDay` (`:1711`; `:3773-3801`), Rain Dance's shape (5.16).
 - MAX_ATK_LOSE_HALF_MAX_HP (142): `Basic_CheckBellyDrum` (`:335-337`; `:216`), at 50 % HP or
-  less -10, then falling into `Basic_CheckHighStatStage_Attack` (`:338`); `Expert_BellyDrum`
+  less -10, then falling into `Basic_CheckHighStatStage_Attack` (`:343`); `Expert_BellyDrum`
   (`:1712`; `:3803-3812`), below 90 % HP -2.
 - SET_HP_EQUAL_TO_USER (189) and AVERAGE_HP (91): `Expert_Endeavor` (`:1741`; `:4583-4608`)
   and `Expert_PainSplit` (`:1690`; `:3287-3312`), one shape (`policy._hp_trade`); Endeavor
@@ -731,7 +731,7 @@ R8) with `:5139`.
   `VolatileCondition.SUBSTITUTE` read from `substitute_hp`), and EVAL_ATTACK's deprioritize
   test (`:6366`, the 51 roll at `:6374`). Its kill bonus (`:6394`) is unreachable: a no-calc
   move never kills.
-- BLIZZARD (260, Kaizo Blizzard and Ice Ball): `Expert_Blizzard` (`:1801`; `:6216-6234`),
+- BLIZZARD (260, Kaizo Blizzard, Ice Ball and Sheer Cold): `Expert_Blizzard` (`:1801`; `:6216-6234`),
   resisted -3 unless the 50 roll (`:6229`) jumps, else in hail +1.
 
 ## 6. Where the AI reads the true battle state

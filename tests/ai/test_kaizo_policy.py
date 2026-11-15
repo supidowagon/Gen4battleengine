@@ -3034,7 +3034,7 @@ def test_sunny_day(kaizo_tables, kaizo_names, kaizo_roark_party, weather, hp, ba
 @pytest.mark.parametrize(
     ("hp", "attack", "basic", "expert"),
     [
-        # Basic_CheckBellyDrum (script.s:335-337, falling into :338) / Expert_BellyDrum
+        # Basic_CheckBellyDrum (script.s:335-337, falling into :343) / Expert_BellyDrum
         # (:3803-3812)
         (100, 0, 0, 0),
         (50, 0, -10, -2),
@@ -3060,6 +3060,9 @@ def test_belly_drum(kaizo_tables, kaizo_names, kaizo_roark_party, hp, attack, ba
         ("Endeavor", "slower", 60, 100, -1),
         ("Endeavor", "slower", 50, 100, 1),
         ("Endeavor", "faster", 30, 50, -1),
+        # equal speed: SLOWER never holds at a tie (battle_lib.c:1401-1447; no tie read,
+        # plan K3c Ruling 3), so the faster branch: above 40 % -1
+        ("Endeavor", "tied", 45, 100, -1),
         # Expert_PainSplit (:3287-3312): player below 80 %; slower above 60 %
         ("Pain Split", "faster", 30, 100, 1),
         ("Pain Split", "faster", 100, 100, -1),
@@ -3071,7 +3074,7 @@ def test_belly_drum(kaizo_tables, kaizo_names, kaizo_roark_party, hp, attack, ba
 def test_hp_trade(kaizo_tables, kaizo_names, kaizo_roark_party, move, speed, own, player, expected):
     t, n = kaizo_tables, kaizo_names
     s = _state(t, kaizo_roark_party, BONSLY, _ids(n, move, "Accelerock", "", ""))
-    s = _speeds(s, player=1 if speed == "faster" else 500, opp=100)
+    s = _speeds(s, player={"faster": 1, "tied": 100}.get(speed, 500), opp=100)
     s = _hp(_hp(s, 1, own), 0, player)
     assert _delta(t, s, 0x3, 0x7)[0] == expected
 
@@ -3086,6 +3089,7 @@ def test_hp_trade(kaizo_tables, kaizo_names, kaizo_roark_party, move, speed, own
         ("asleep", (), 1),
         ("confused", (), 1),  # +1 unless the 100 roll (:4157) jumps
         ("confused", (4157,), 0),
+        ("infatuated", (), 1),  # :4144, the same try
         ("substitute", (), 5),  # behind its own Substitute: +5
     ],
 )
@@ -3098,6 +3102,8 @@ def test_expert_focus_punch(kaizo_tables, kaizo_names, kaizo_roark_party, case, 
         s = s._replace(status=s.status.at[0, 0].set(Status.SLEEP))
     elif case == "confused":
         s = s._replace(confusion=s.confusion.at[0].set(2))
+    elif case == "infatuated":
+        s = s._replace(infatuated=s.infatuated.at[0].set(1))
     elif case == "substitute":
         s = s._replace(substitute_hp=s.substitute_hp.at[1].set(10))
     assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expected

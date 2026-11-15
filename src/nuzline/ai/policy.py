@@ -679,7 +679,7 @@ def _basic_check_sunny_day(ctx: AiContext, mask) -> AiContext:
 
 def _basic_check_belly_drum(ctx: AiContext, mask) -> AiContext:
     """``Basic_CheckBellyDrum`` (script.s:335-337): at 50 % HP or less -10; otherwise it
-    falls into ``Basic_CheckHighStatStage_Attack`` (:338)."""
+    falls into ``Basic_CheckHighStatStage_Attack`` (:343)."""
     ctx, t = _split(c.if_hp_percent_less_than(_at(ctx, mask), _A, 51))
     ctx = _score(ctx, t, -10)
     return _basic_check_high_atk(ctx, ctx.live)
