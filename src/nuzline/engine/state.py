@@ -421,7 +421,8 @@ VOLATILE_FIELDS = (
 )
 # Baton Pass keeps these of ``VOLATILE_FIELDS`` (and the stat stages): BattleSystem_UpdateAfterSwitch
 # keeps statusVolatile & VOLATILE_CONDITION_BATON_PASSED (battle_lib.c:2078; condition.h:72-76:
-# confusion, Mean Look; Focus Energy, Curse and Substitute's bit come from unsupported moves),
+# confusion, Mean Look, Curse, Substitute's bit (``substitute_hp != 0``); Focus Energy comes
+# from an unsupported move),
 # moveEffectsMask & MOVE_EFFECT_BATON_PASSED (:2079; moves.h:46-48: the Leech Seed recipient, Mud
 # and Water Sport, Aqua Ring, Ingrain; the rest from unsupported moves), the substitute HP and the
 # meanLookTarget (:2107, :2111); BattleSystem_InitBattleMon keeps the stat stages (:97-101).

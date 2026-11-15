@@ -925,6 +925,64 @@ def _draw_batch10(draw, tables: Tables, a: dict, side: int, active: int, names: 
         a["hp"][side, active] = max(1, int(a["max_hp"][side, active]) // 8)
 
 
+# Moves whose decomp path tests a substitute or meets one (B10-4).
+SUBSTITUTE_FOE_MOVES = (
+    "Tackle",
+    "Double Kick",
+    "Thunder Wave",
+    "Growl",
+    "Toxic",
+    "Supersonic",
+    "Swagger",
+    "Leech Seed",
+    "Mega Drain",
+    "Dream Eater",
+    "SmellingSalt",
+    "Wrap",
+    "Fire Fang",
+    "Headbutt",
+    "Fake Out",
+    "Thunderbolt",
+    "Pursuit",
+    "Future Sight",
+    "Pluck",
+    "False Swipe",
+    "Super Fang",
+    "Take Down",
+)
+
+
+def _draw_substitute(draw, tables: Tables, a: dict, side: int, active: int, names: Names) -> None:
+    """Maybe (1 in 3) give the active Pokemon Substitute, or a substitute already up (a small one
+    breaks, a big one holds), and its foe a move that meets it (``SUBSTITUTE_FOE_MOVES``); a
+    sleeping or paralyzed holder for Dream Eater / SmellingSalt, Static for the contact gate."""
+    if draw(st.integers(0, 2)) != 0:
+        return
+    rnd = draw(st.randoms(use_true_random=False))
+    foe = 1 - side
+    foe_mon = int(a["active"][foe])
+
+    def give(move_name: str, who: int, mon: int) -> None:
+        move = names.move(move_name)
+        k = rnd.randint(0, 3)
+        a["moves"][who, mon, k] = move
+        a["pp"][who, mon, k] = int(tables.move_pp[move])
+
+    if rnd.random() < 0.5:
+        give("Substitute", side, active)
+        if rnd.random() < 0.3:  # at or near the quarter: the failure
+            quarter = max(int(a["max_hp"][side, active]) // 4, 1)
+            a["hp"][side, active] = rnd.randint(1, quarter + 1)
+    if rnd.random() < 0.7:
+        a["substitute_hp"][side] = rnd.choice((1, rnd.randint(1, 60), 200))
+    give(rnd.choice(SUBSTITUTE_FOE_MOVES), foe, foe_mon)
+    if rnd.random() < 0.3:
+        a["status"][side, active] = rnd.choice((Status.SLEEP, Status.PARALYSIS))
+        a["status_counter"][side, active] = 2 if a["status"][side, active] == Status.SLEEP else 0
+    if rnd.random() < 0.2:
+        a["ability"][side, active] = rnd.choice((AbilityId.STATIC, AbilityId.INTIMIDATE))
+
+
 def _draw_batch4(draw, tables: Tables, a: dict, side: int, active: int, names: Names) -> None:
     """Maybe (1 in 2) give the active Pokemon a ``BATCH4_MOVES`` move, with what makes it act
     most of the time: a paralyzed foe for SmellingSalt, a status for Facade, a foe at low HP for
@@ -1300,6 +1358,7 @@ def supported_state(draw, tables: Tables, names: Names, invokers: bool = True) -
         _draw_batch7(draw, tables, a, side, active, names)
         _draw_batch9(draw, tables, a, side, active, names)
         _draw_batch10(draw, tables, a, side, active, names)
+        _draw_substitute(draw, tables, a, side, active, names)
         _draw_choice_lock(draw, a, side, active)
     # B7-13: an Imprison user sharing a move with a Sleep Talk user, so a faster Imprison (or one
     # already up) can shrink the Sleep Talk set.

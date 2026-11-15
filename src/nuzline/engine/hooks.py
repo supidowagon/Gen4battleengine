@@ -496,6 +496,9 @@ def intimidate(state: BattleState, side, cond=True, foe=None) -> BattleState:
         & (state.ability[side, mon] == AbilityId.INTIMIDATE)
         & (state.hp[side, mon] > 0)
         & (state.hp[foe, target] > 0)
+        # subscript_intimidate.s:13: a foe behind a substitute is skipped (B10-4); outside an
+        # action no flag is set, so its bit.
+        & (state.substitute_hp[foe] == 0)
         & ~blocks
     )
     return change_stage(state, foe, Stat.ATK, -1, on)

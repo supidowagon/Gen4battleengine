@@ -456,6 +456,11 @@ _NO_ACC_EVA_WRITE = (frozenset(EffectId(i) for i in range(40)) - _STAT_KINDS) | 
     EffectId.FOLLOW_ME,
     EffectId.HELPING_HAND,
     EffectId.BELLY_DRUM,
+    # E2 batch 10: hits whose recoil, status or crash write no stage (B10-1, B10-2); Substitute
+    # writes the user's HP and substitute only (B10-4).
+    EffectId.RECOIL_STATUS,
+    EffectId.CRASH,
+    EffectId.SUBSTITUTE,
 }
 # (effect, stat) pairs hit_thresholds follows: they change a later foe move's threshold.
 _SEEN = {

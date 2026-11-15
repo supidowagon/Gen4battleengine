@@ -685,6 +685,9 @@ INPUT_NEUTRAL_EFFECTS = (
     _E.BELLY_DRUM,
     # B10-2: a hit, and on a miss its crash hurts the foe (the HP clause).
     _E.CRASH,
+    # B10-4: the user's HP (the HP clause) and its substitute, which no table-damage input reads
+    # (SmellingSalt's x2 is DOUBLE_POWER's, never compressed: NON_TABLE_DAMAGE_EFFECTS).
+    _E.SUBSTITUTE,
 )
 INPUT_CLAUSE_EFFECTS = (
     _E.STAT_SELF,  # the foe's Defense / Sp. Def; Minimize's flag (Stomp's power)
@@ -1034,6 +1037,7 @@ NON_TABLE_DAMAGE_EFFECTS = (
     _E.FOLLOW_ME,  # status moves: no damage
     _E.HELPING_HAND,
     _E.BELLY_DRUM,
+    _E.SUBSTITUTE,  # a status move: no damage (B10-4)
 )
 
 

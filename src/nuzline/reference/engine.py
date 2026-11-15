@@ -170,6 +170,8 @@ class _Turn:
     # SELF_TURN_FLAG_PLUCK_BERRY (lib.c:5848).
     focus_armed: bool = False
     pluck_flag: bool = False
+    # The defender's SELF_TURN_FLAG_SUBSTITUTE_HIT (bcp.c:3371), cleared with the others (B10-4).
+    sub_hit: bool = False
     # turnFlags.protecting (cleared at the turn end, lib.c:2231): TryProtection succeeded.
     protecting: list[bool] = field(default_factory=lambda: [False, False])
     # turnFlags.roosting (subscript_roost.s:11-12, cleared at the turn end): the battler's chart
@@ -827,7 +829,8 @@ def _double_power(tables, s: RefState, attacker: int, defender: int, move: int) 
     cond = _t(tables, "move_param", move, 0)
     foe = _active(s, defender)
     if cond == POWER_IF_TARGET_PARALYZED:
-        return foe.status == Status.PARALYSIS
+        # effect_script_0171.s:5: CheckSubstitute jumps past the x2 (B10-4).
+        return foe.status == Status.PARALYSIS and not s.sides[defender].substitute_hp
     if cond == POWER_IF_USER_STATUSED:
         return _active(s, attacker).status in (
             Status.POISON,
@@ -1679,7 +1682,9 @@ def _entry_hazards(turn: _Turn, s: RefState, side: int) -> None:
                     # _badly_poison.s:93-103): BattleAI_SetAbility (script.c:11806).
                     if side == 0:
                         s.ai_ability_known[sd.active] = 1
-                elif _can_have_status(tables, s, side, status):
+                # subscript_poison.s:29 / _badly_poison.s:46: CheckSubstitute, silent (a Baton
+                # Pass newcomer keeps the substitute, B10-4).
+                elif not sd.substitute_hp and _can_have_status(tables, s, side, status):
                     mon.status, mon.status_counter = status, 0
         if sd.spikes and mon.hp:
             _lose_hp(turn, s, side, _divide(mon.max_hp, (5 - sd.spikes) * 2))
@@ -1716,6 +1721,12 @@ def _drop_blocked(seen: int, stat: int, delta: int) -> bool:
         or (seen == AbilityId.KEEN_EYE and stat == Stat.ACC)
         or (seen == AbilityId.HYPER_CUTTER and stat == Stat.ATK)
     )
+
+
+def _sub_blocks_drop(s: RefState, side: int, delta: int) -> bool:
+    """BtlCmd_ChangeStatStage (script.c:2921-2923): a drop on a battler behind a substitute (its
+    VOLATILE_CONDITION_SUBSTITUTE bit only) fails (direct) or is skipped (indirect), B10-4."""
+    return delta < 0 and bool(s.sides[side].substitute_hp)
 
 
 def _recover_status_by_ability(s: RefState, side: int) -> None:
@@ -1773,17 +1784,24 @@ def _switch_in_effects(turn: _Turn, s: RefState, side: int) -> None:
             if not (s.weather == weather and s.weather_timer == 0) and battler == 0:
                 s.ai_ability_known[s.sides[0].active] = 1  # subscript_drought.s etc.
             s.weather, s.weather_timer = weather, 0
-    # subscript_intimidate.s: ATTACK_DOWN_1_STAGE on a living foe (Clear Body, Hyper
-    # Cutter, White Smoke, Mist and Substitute are unsupported). Its "cuts" message is
-    # built in C (BtlCmd_ChangeStatStage, script.c:2956): the AI learns nothing.
+    # subscript_intimidate.s: ATTACK_DOWN_1_STAGE on a living foe not behind a substitute (:13,
+    # B10-4; White Smoke and Mist are unsupported). Its "cuts" message is built in C
+    # (BtlCmd_ChangeStatStage, script.c:2956): the AI learns nothing.
     blockers = (AbilityId.CLEAR_BODY, AbilityId.HYPER_CUTTER)  # script.c:2884-2902 (B9-6)
-    if mon.hp and mon.ability == AbilityId.INTIMIDATE and foe.hp and foe.ability not in blockers:
+    if (
+        mon.hp
+        and mon.ability == AbilityId.INTIMIDATE
+        and foe.hp
+        and not s.sides[other].substitute_hp
+        and foe.ability not in blockers
+    ):
         _change_stage(s, other, Stat.ATK, -1)
     if (
         traced
         and foe.hp
         and foe.ability == AbilityId.INTIMIDATE
         and mon.hp
+        and not s.sides[side].substitute_hp
         and mon.ability not in blockers
     ):
         _change_stage(s, side, Stat.ATK, -1)
@@ -1945,6 +1963,10 @@ def _inflict(turn: _Turn, s: RefState, side: int, target: int, status: int,
     # subscript_burn.s:27, subscript_freeze.s:11, subscript_poison.s:20, ...).
     if not direct and _ignorable(s, side, target) == AbilityId.SHIELD_DUST:
         return
+    # CheckSubstitute on the side-effect battler (subscript_paralyze.s:21, burn :36, freeze :19,
+    # poison :29, badly_poison :46, fall_asleep :40), B10-4.
+    if _shielded(turn, s, target):
+        return
     # subscript_fall_asleep.s:43-45: a target not asleep yet stays awake while any battler is in
     # an uproar (FIELD_CONDITION_UPROAR; Soundproof is unsupported).
     if status == Status.SLEEP and mon.status != Status.SLEEP and _uproar_on(s):
@@ -2089,7 +2111,7 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
         if p2 == 1 and p0 == Stat.DEF:  # Defense Curl (effect_script_0156.s)
             s.sides[side].curled = 1
     elif effect == EffectId.STAT_FOE and landed and target_alive:
-        if not _drop_blocked(seen, p0, p1):
+        if not _drop_blocked(seen, p0, p1) and not _sub_blocks_drop(s, target, p1):
             _change_stage(s, target, p0, p1)
     elif effect == EffectId.SECONDARY_STAT_SELF and effective and proc:
         if certain or _active(s, side).hp > 0:
@@ -2097,6 +2119,9 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
     elif effect == EffectId.SECONDARY_STAT_FOE and effective and proc:
         # BtlCmd_ChangeStatStage (script.c:2918-2921): Shield Dust stops an indirect drop.
         blocked = _drop_blocked(seen, p0, p1) or seen == AbilityId.SHIELD_DUST
+        blocked = blocked or _sub_blocks_drop(s, target, p1)
+        # A rolled secondary on the defender needs ~SubstituteWasHit (lib.c:1580-1582).
+        blocked = blocked or (turn.sub_hit and not certain)
         if (certain or target_alive) and not blocked:
             _change_stage(s, target, p0, p1)
     elif effect in (EffectId.STATUS_FOE, EffectId.SECONDARY_STATUS) and effective:
@@ -2124,12 +2149,14 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
             _inflict(turn, s, side, target, p0, False)
         alive = _active(s, target).hp > 0
         blocked = seen in (AbilityId.INNER_FOCUS, AbilityId.SHIELD_DUST)  # flinch_mon.s:7, :9
+        blocked = blocked or _shielded(turn, s, target)  # flinch_mon.s:6
         if o.fang_flinch[side] and alive and not target_moved and not blocked:
             s.sides[target].flinched = 1
     elif effect in (EffectId.FLINCH, EffectId.FAKE_OUT) and effective and proc:
         # subscript_flinch_mon.s: a living target that has not moved yet; Inner Focus,
         # whose message (:18-23, TAG_NICKNAME_ABILITY) is shown for Fake Out only.
-        if target_alive and not target_moved:
+        # :6 CheckSubstitute first (B10-4).
+        if target_alive and not target_moved and not _shielded(turn, s, target):
             if seen == AbilityId.INNER_FOCUS:
                 if move == MOVE_FAKE_OUT and target == 0:
                     s.ai_ability_known[s.sides[0].active] = 1
@@ -2201,7 +2228,8 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
             s.sides[target].stealth_rock = 1
     elif effect == EffectId.TRAP and effective and proc:
         # subscript_bind_start.s (CHECK_HP_AND_SUBSTITUTE): Random 3, 3 turns.
-        if target_alive and not s.sides[target].trapped:
+        # CHECK_HP_AND_SUBSTITUTE (lib.c:1537-1544) and bind_start.s:5 CheckSubstitute.
+        if target_alive and not s.sides[target].trapped and not _shielded(turn, s, target):
             s.sides[target].trapped = o.duration[side]
             s.sides[target].trap_move = move
     elif effect == EffectId.TAUNT and effective:
@@ -2218,14 +2246,20 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
             victim.disabled_move = last
             victim.disable_turns = o.duration[side]
     elif effect == EffectId.CONFUSE_FOE and effective:
-        # subscript_confuse.s: fails on a confused target; Random 3, 2 turns.
-        if target_alive and not s.sides[target].confusion:
+        # subscript_confuse.s: fails behind a substitute (:23) or on a confused target;
+        # Random 3, 2 turns.
+        if target_alive and not s.sides[target].confusion and not _shielded(turn, s, target):
             s.sides[target].confusion = o.duration[side]
     elif effect == EffectId.SECONDARY_CONFUSE and effective and proc:
         # effect_script_0076.s: a probabilistic effect, cleared for a fainted target
         # (lib.c:1556); subscript_confuse.s fails on a confused target (Shield Dust stops it,
         # :15); Random 3, 2 turns.
-        if target_alive and not s.sides[target].confusion and seen != AbilityId.SHIELD_DUST:
+        if (
+            target_alive
+            and not s.sides[target].confusion
+            and seen != AbilityId.SHIELD_DUST
+            and not _shielded(turn, s, target)  # the rolled gate (lib.c:1580); confuse :23
+        ):
             s.sides[target].confusion = o.duration[side]
     elif effect == EffectId.MUD_SPORT and landed and not s.sides[side].mud_sport:
         # effect_script_0201.s: fails when the user already has it.
@@ -2277,12 +2311,15 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
         # lib.c:1481-1510: applies on an immune target, not on a miss; script.c:6550.
         s.sides[target].reflect = s.sides[target].light_screen = 0
     elif effect == EffectId.EAT_BERRY and effective:
-        # effect_script_0224.s / subscript_pluck.s: an ON_HIT effect, no HP check.
-        _pluck_berry(turn, s, side, target)
+        # effect_script_0224.s / subscript_pluck.s: an ON_HIT effect, no HP check;
+        # BattleSystem_PluckBerry returns early on a substitute hit (lib.c:5546).
+        if not turn.sub_hit:
+            _pluck_berry(turn, s, side, target)
     elif effect == EffectId.LEECH_SEED and effective:
         # subscript_leech_seed_start.s: Grass types and seeded targets are immune.
         grass = Type.GRASS in _active(s, target).types
-        if target_alive and not grass and not s.sides[target].leech_seed:
+        shielded = _shielded(turn, s, target)  # subscript_leech_seed_start.s:5
+        if target_alive and not shielded and not grass and not s.sides[target].leech_seed:
             s.sides[target].leech_seed = 1
     elif effect == EffectId.FORESIGHT and landed:
         # effect_script_0113.s / subscript_foresight.s: an ON_HIT indirect effect on a
@@ -2312,12 +2349,13 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
     elif effect == EffectId.DOUBLE_POWER and effective and p1 == 1:
         # effect_script_0171.s:12: an ON_HIT indirect subscript_heal_target_paralysis.s
         # against a defender paralyzed when the script ran: cured when it has HP left (:5-6).
+        # :5 CheckSubstitute jumped past it (B10-4): the hit took the substitute.
         foe = _active(s, target)
-        if foe.hp and foe.status == Status.PARALYSIS:
+        if foe.hp and foe.status == Status.PARALYSIS and not turn.sub_hit:
             foe.status, foe.status_counter = Status.NONE, 0
-    elif effect == EffectId.SWAGGER and landed and target_alive:
-        # subscript_swagger.s: Attack +2 below +6 (:6), then subscript_confuse.s unless
-        # confused (:13; Random 3, 2 turns).
+    elif effect == EffectId.SWAGGER and landed and target_alive and not _shielded(turn, s, target):
+        # subscript_swagger.s: fails behind a substitute (:5); Attack +2 below +6 (:6), then
+        # subscript_confuse.s unless confused (:13; Random 3, 2 turns).
         if s.sides[target].stages[Stat.ATK] < 6:
             _change_stage(s, target, Stat.ATK, 2)
         if not s.sides[target].confusion:
@@ -2356,6 +2394,16 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
         if s.sides[side].stages[Stat.ATK] < 6 and user.hp > half:
             s.sides[side].stages[Stat.ATK] = 6
             _lose_hp(turn, s, side, half)
+    elif effect == EffectId.SUBSTITUTE and landed:
+        # subscript_try_substitute.s (B10-4): fails behind one (:7) or at curHP <= Divide(maxHP,
+        # 4) (BtlCmd_TrySubstitute, script.c:5215-5218); else substituteHP, the bind cleared
+        # (:5222), the HP lost through UPDATE_HP.
+        user, sd = _active(s, side), s.sides[side]
+        quarter = _divide(user.max_hp, 4)
+        if not sd.substitute_hp and user.hp > quarter:
+            sd.substitute_hp = quarter
+            sd.trapped = sd.trap_move = 0
+            _lose_hp(turn, s, side, quarter)
     elif effect == EffectId.ROLLOUT and landed:
         # BtlCmd_CalcRolloutPower (script.c:5661): rolloutCount starts at 5 on a first use,
         # every use decrements it, the lock ends at 0; a hit that dealt nothing (an
@@ -2581,10 +2629,20 @@ def _hit(turn: _Turn, s: RefState, side: int, move: int, hit: int, struggling: b
         )
     dealt = stored = 0
     update_hp = landed and hits_foe and damage > 0
+    sub_dealt = 0  # hitDamage on the substitute path
+    target_sd = s.sides[target]
+    if update_hp and target_sd.substitute_hp:
+        # bcp.c:3359-3378 (B10-4): the substitute takes battleCtx->damage, at most its HP
+        # (hitDamage, shellBellDamageDealt), the flag sets and UpdateHP returns early.
+        sub_dealt = min(damage, target_sd.substitute_hp)
+        target_sd.substitute_hp -= sub_dealt
+        turn.shell_dealt += sub_dealt
+        turn.sub_hit = True
+        update_hp = False
     if update_hp:
         turn.move_hit = True  # BattleControllerPlayer_UpdateHP: SYSCTL_MOVE_HIT (bcp.c:3441)
     taken = 0
-    if landed and hits_foe:
+    if landed and hits_foe and not sub_dealt:
         # BattleControllerPlayer_UpdateHP (bcp.c:3346-3404) runs for a non-zero damage:
         # a Focus Sash at full HP sets focusItemActivated, which lasts the whole action.
         if damage > 0 and _sash_at_full_hp(turn, s, target):
@@ -2617,7 +2675,7 @@ def _hit(turn: _Turn, s: RefState, side: int, move: int, hit: int, struggling: b
     # BattleControllerPlayer_UpdateHP (bcp.c:3407): a Biding target stores battleCtx->damage,
     # unhalved by a resist berry; otherwise what it lost (the same unless it fainted, and a
     # fainted battler's is cleared at the faint check).
-    if s.sides[target].bide_turns:
+    if s.sides[target].bide_turns and not sub_dealt:
         s.sides[target].bide_damage += stored
 
     # Whether the move "worked" on the target: a damaging move dealt damage (not
@@ -2637,7 +2695,8 @@ def _hit(turn: _Turn, s: RefState, side: int, move: int, hit: int, struggling: b
         passes = damage > 0
     effective = landed and passes
 
-    _move_effect(turn, s, side, move, hit, landed, effective, dealt, target_moved)
+    # Drain and recoil read hitDamage: the substitute's share on its path.
+    _move_effect(turn, s, side, move, hit, landed, effective, sub_dealt or dealt, target_moved)
     if struggling and landed:
         # effect_script_0254.s: MOVE_SIDE_EFFECT_ON_HIT | subscript_struggle.s, a
         # secondary effect: Divide(maxHP, 4) recoil, before the contact ability.
@@ -2645,7 +2704,9 @@ def _hit(turn: _Turn, s: RefState, side: int, move: int, hit: int, struggling: b
     effect = _t(tables, "move_effect", move)
     if effect == EffectId.U_TURN and effective and _u_turn(turn, s, side, move, hit, dealt):
         return dealt, update_hp
-    _contact_ability(turn, s, side, move, hit, effective, dealt)
+    # TriggerAbilityOnHit returns early on a substitute hit (lib.c:4209).
+    if not turn.sub_hit:
+        _contact_ability(turn, s, side, move, hit, effective, dealt)
     # BattleControllerPlayer_CheckExtraFlinch (bcp.c:4630-4653): King's Rock / Razor Fang on a
     # hit that damaged a living target, RandNext() % 100 < param (outcome.flinch_item), a
     # MOVE_FLAG_TRIGGERS_KINGS_ROCK move; subscript_flinch_mon.s: a target that has not moved,
@@ -2659,9 +2720,16 @@ def _hit(turn: _Turn, s: RefState, side: int, move: int, hit: int, struggling: b
         and _active(s, target).hp > 0
         and not target_moved
         and _ignorable(s, side, target) not in (AbilityId.INNER_FOCUS, AbilityId.SHIELD_DUST)
+        and not _shielded(turn, s, target)  # subscript_flinch_mon.s:6
     ):
         s.sides[target].flinched = 1
     return dealt, update_hp
+
+
+def _shielded(turn: _Turn, s: RefState, side: int) -> bool:
+    """``BtlCmd_CheckSubstitute`` (battle_script.c:9173-9186) on ``side``'s battler: its
+    substitute is up, or a hit of this action landed on it (B10-4)."""
+    return bool(s.sides[side].substitute_hp) or turn.sub_hit
 
 
 def _bench(s: RefState, side: int) -> bool:
@@ -3220,7 +3288,7 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
         hits = _t(tables, "move_param", move, 0) or o.n_hits[side]
     foe_mon0 = _active(s, 1 - side)
     foe_hp0 = foe_mon0.hp
-    turn.focus_armed = turn.pluck_flag = turn.damaged = False  # BattleContext_Init
+    turn.focus_armed = turn.pluck_flag = turn.damaged = turn.sub_hit = False  # BattleContext_Init
     for hit in range(hits):
         # BattleControllerPlayer_LoopMultiHit (bcp.c:3780) stops once a battler fainted
         # (faintedMon): the target, or the attacker by Rough Skin.
@@ -3238,7 +3306,16 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
         # (MOVE_STATUS_NO_MORE_WORK): CheckMoveFailure skips AfterMoveEffects (bcp.c:3312-3331).
         own, theirs = s.sides[side].stages, s.sides[1 - side].stages
         full = full or (
-            effect == EffectId.SWAGGER and theirs[Stat.ATK] >= 6 and s.sides[1 - side].confusion
+            effect == EffectId.SWAGGER
+            and (
+                bool(s.sides[1 - side].substitute_hp)  # subscript_swagger.s:5
+                or (theirs[Stat.ATK] >= 6 and bool(s.sides[1 - side].confusion))
+            )
+        )
+        # subscript_try_substitute.s:7-8 (MOVE_STATUS_NO_MORE_WORK), B10-4.
+        full = full or (
+            effect == EffectId.SUBSTITUTE
+            and (bool(s.sides[side].substitute_hp) or user.hp <= _divide(user.max_hp, 4))
         )
         second = _t(tables, "move_param", move, 0)
         full = full or (
@@ -3294,7 +3371,8 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
         for battler in (side, 1 - side):
             if _held_item(turn, s, battler, keep=turn.pluck_flag):
                 turn.pluck_flag = False
-        if turn.damaged:
+        # TriggerHeldItemOnHit returns early once the substitute was hit (lib.c:5378), B10-4.
+        if turn.damaged and not turn.sub_hit:
             _sticky_barb_transfer(turn, s, side, 1 - side, move)
         _thaw_target(turn, s, side, move, dealt)
         for battler in (side, 1 - side):
@@ -3393,6 +3471,14 @@ def _pursuit(turn: _Turn, s: RefState, side: int, actions, choices) -> None:
     crit = o.crit[pursuer][0] != 0 and not _armored(s, pursuer, side)
     damage = _move_damage(tables, s, pursuer, move, crit, o.roll[pursuer][0],
                           PURSUIT_POWER_MUL)  # fmt: skip
+    target_sd = s.sides[side]
+    if damage > 0 and target_sd.substitute_hp:
+        # subscript_pursuit.s:20, :56-73 (B10-4): the substitute breaks when substituteHP <=
+        # damage and otherwise keeps its HP (no UpdateMonData there); no flag, and :158 skips
+        # the ability, the items and SYSCTL_MOVE_HIT.
+        if target_sd.substitute_hp <= damage:
+            target_sd.substitute_hp = 0
+        return
     # subscript_pursuit.s: CheckHoldOnWith1HP on the target (script.c:9098-9124).
     armed = _sash_at_full_hp(turn, s, side)
     taken = _focus_sash(turn, s, side, damage, armed)
@@ -3638,10 +3724,15 @@ def _future_sight(turn: _Turn, s: RefState, order: list[int]) -> None:
             continue
         damage = sd.future_damage
         sash = _item_effect(tables, mon) == ItemId.FOCUS_SASH
-        if sash and mon.hp == mon.max_hp and mon.hp - damage <= 0:
-            damage = mon.hp - 1
-            flags.add("endured")
-        _lose_hp(turn, s, d, damage)
+        if sd.substitute_hp:
+            # :13-21 (B10-4): the substitute takes it, 0 at substituteHP <= damage; no HP change,
+            # no flag; then :92 (an endured first hit still removes the sash).
+            sd.substitute_hp = max(sd.substitute_hp - damage, 0)
+        else:
+            if sash and mon.hp == mon.max_hp and mon.hp - damage <= 0:
+                damage = mon.hp - 1
+                flags.add("endured")
+            _lose_hp(turn, s, d, damage)
         if "endured" in flags and sash:
             mon.item_consumed, mon.item = mon.item, 0
             _forget_item(s, d)
@@ -3922,8 +4013,10 @@ def _script_fails(s: RefState, side: int, effect: int, move_param1: int = 0) -> 
     sd = s.sides[side]
     if effect == EffectId.HELPING_HAND:  # BtlCmd_TryHelpingHand: no partner (script.c:6309-6311)
         return True
-    if effect == EffectId.DRAIN and move_param1 == 1:  # Dream Eater, effect_script_0008.s:5
-        return _active(s, 1 - side).status != Status.SLEEP
+    if effect == EffectId.DRAIN and move_param1 == 1:  # Dream Eater, effect_script_0008.s:5-6
+        # CheckSubstitute (:5; no hit of the action yet) then the sleep test (:6), B10-4.
+        foe_sd = s.sides[1 - side]
+        return bool(foe_sd.substitute_hp) or _active(s, 1 - side).status != Status.SLEEP
     if effect == EffectId.IMPRISON:
         own = [m for m in _active(s, side).moves if m]
         shared = any(m in _active(s, b).moves for b in (0, 1) if b != side for m in own)
@@ -4092,7 +4185,7 @@ def _actions(turn: _Turn, s: RefState, start: int) -> None:
                 turn.pursued = 2 - side
         else:
             move, struggling, locked = choices[side]
-            turn.attack_message = turn.move_hit = turn.damaged = False
+            turn.attack_message = turn.move_hit = turn.damaged = turn.sub_hit = False
             turn.move_cur = move
             turn.shell_dealt = 0
             # A foe that roosted this turn: the move's chart skips its Flying rows

@@ -13,6 +13,15 @@
   branch claude/e1-prep-on-e2 holds the AI for Metal Burst, Future Sight, ACC_DOWN, Minimize,
   Mean Look, Knock Off, Imprison, Copycat, Ingrain, Baton Pass, Helping Hand, SolarBeam: do not
   redo those. Batches 3-9 await merge; batch 10 is the only batch allowed until then.
+  Family 3 (Substitute, B10-4) is written: see its ruling; the merge-check follow-ups for 3-9
+  are B10-3 (ff4490b). Still owed from the manager: tests/search/test_pivot_search.py under 8 GB
+  (fight-sized roots, shared programs) once the fast tier's figure for it is in. E1 owns
+  families 2 (Focus Band, Wiki Berry), 4 (Pressure) and the abilities of 8-9; E2's next: Endeavor /
+  Pain Split, Knock Off, the charge turn, Safeguard, Encore / Focus Punch / Assist.
+- **Fast tier.** The batches 3-9 merge fast tier runs on c961e18 in `_scratch/e2/testwt`
+  (launcher `_scratch/e2/run_fast_tier.ps1`, log `_scratch/e2/ft_c961e18.log`, started 09:20,
+  pid 15236 in the lock). Report passed / failed, wall time, peak and the ten slowest to the
+  manager when it ends.
 - **Batch 9 follow-ups.** test_stage_b's six failing nodes are fixed (the exhaustive solver's
   unpack, B9-15) and confirmed: 6 passed (test_terminal_win_after_a_death_scores_zero_at_k0,
   test_win_after_a_new_death_scores_zero_at_k0, test_result_dict_round_trip,
@@ -381,11 +390,9 @@ Rules left out because another mechanic is missing; each closes with the mechani
   before the second mover's check (its own recoil, Life Orb) is not followed (pre-existing for
   Sand Veil; Thunder makes it a 70 vs 100 difference).
 
-- King's Rock's flinch vs Substitute (effects.py `_kings_rock`; subscript_flinch_mon.s:6):
-  Substitute. (Its Shield Dust test, :9, is modelled by E2 batch 3, B3-9.)
-- The Sticky Barb transfer vs Knock Off, the knocked-off mask and the substitute test
-  (effects.py `sticky_barb_transfer`; battle_lib.c:5378, :5390-5393): those moves (U-turn's
-  guard is modelled since B6-4). Magic Guard's readers are reached since B4-11.
+- The Sticky Barb transfer vs Knock Off and the knocked-off mask (effects.py
+  `sticky_barb_transfer`; battle_lib.c:5390-5393): Knock Off (U-turn's guard is modelled since
+  B6-4; the substitute test, :5378, since B10-4). Magic Guard's readers are reached since B4-11.
 - Fire Fang (`BATTLE_EFFECT_FLINCH_BURN_HIT`) always bypasses Wonder Guard (the decomp's bug note,
   battle_lib.c:7600): Fire Fang / Wonder Guard.
 - Gravity makes the moves that fail in high gravity (Jump Kick, Hi Jump Kick, ...) invalid:
@@ -1409,3 +1416,28 @@ Rules left out because another mechanic is missing; each closes with the mechani
   is :5-7 (tests), :9-15 (curse and HP), :17 (message), :22-24 (failure); InitBattleMon's arm is
   :161-166 and UpdateAfterSwitch's clear :2100-2104. tests/ai_legality.py says in its first line
   that it checks host-side picks only.
+- B10-4 (batch 10, family 3) Substitute (`EffectId.SUBSTITUTE`, 82, decomp 79), both engines, as
+  designed under "Family 3 design" (decomp inventory: `_scratch/e2/b10/substitute_inventory.md`).
+  The move (`effects._substitute`, `substitute_fails`: subscript_try_substitute.s:7-8,
+  battle_script.c:5211-5226, MOVE_STATUS_NO_MORE_WORK). The hit (`play_hit`; bcp.c:3359-3378):
+  the substitute takes min(damage, its HP), hitDamage for drain and recoil, shellBellDamageDealt,
+  the flag (`MoveHit.sub_hit`, a hit-loop carry; the reference's `_Turn.sub_hit`), and none of
+  False Swipe's cap, the Focus Sash, Bide's store, the damage-taken records, the resist berry,
+  SYSCTL_MOVE_HIT. Gates: `_Hit.shielded` (CheckSubstitute: the bit or the flag) for the status
+  subscripts, flinch (King's Rock too), confuse, Bind, Leech Seed, Swagger (whole move fails);
+  `_Hit.sub_hit` (SubstituteWasHit) for rolled foe secondaries, Pluck (lib.c:5546), the contact
+  ability (:4209), the Sticky Barb transfer (:5378); the bit only for a foe stat drop
+  (script.c:2921-2923), Dream Eater (effect_script_0008.s:5), SmellingSalt's x2 and cure
+  (effect_script_0171.s:5), Intimidate (subscript_intimidate.s:13), Toxic Spikes on a Baton Pass
+  newcomer (subscript_poison.s:29, _badly_poison.s:46). Special paths: Future Sight's hit
+  (subscript_future_sight_damage.s:13-24), Pursuit's pre-switch hit (subscript_pursuit.s:20,
+  :56-73: only a break changes the substitute; `play_hit(pursuit_switch=True)`). Laws: SUBSTITUTE
+  is input-neutral and non-table (SmellingSalt is DOUBLE_POWER, never compressed). Observation:
+  the substitute's presence was already public, its HP hidden. The AI's scripts (Basic :633-636,
+  Expert_Substitute :2976-3042) were E1's. Hand tests in tests/engine/test_batch10.py (the move,
+  the hit and the break, status / drop / drain, multi-hit with Static, King's Rock, Pursuit, Ghost
+  Curse); the generator `strategies._draw_substitute`. Differential seed 3, 150: clean.
+  Backlog regenerated: missing groups 241 -> 240, runnable battles 53 -> 57. Found on the way:
+  family 1 left RECOIL_STATUS / CRASH unclassified in test_accuracy_classes and Flare Blitz's thaw
+  unflagged in test_effect_map's thaw test; batch 7 (4a06792) left its four observation cases out
+  of test_observe.VISIBLE_CLASSES (a slow test): all three fixed with this commit.

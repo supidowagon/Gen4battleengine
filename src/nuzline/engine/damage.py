@@ -319,12 +319,14 @@ def double_power(tables: Tables, state: BattleState, atk_side, def_side, move) -
     battler: SmellingSalt against a paralyzed defender (effect_script_0171.s:6), Facade for a
     user with ``MON_CONDITION_FACADE_BOOST`` (effect_script_0169.s:5), Brine against
     ``curHP <= maxHP / 2`` (effect_script_0221.s:5-8; ``OPCODE_DIV`` is a plain ``/``,
-    battle_script.c:2711-2712). SmellingSalt's ``CheckSubstitute`` meets no substitute:
-    Substitute is an unsupported move."""
+    battle_script.c:2711-2712). SmellingSalt's ``CheckSubstitute`` (effect_script_0171.s:5) jumps
+    past the x2 for a defender behind a substitute (its bit: no hit of the action came first)."""
     move = _i32(move)
     cond = _i32(tables.move_param[move, 0])
     user, target = state.active[atk_side], state.active[def_side]
-    paralyzed = state.status[def_side, target] == Status.PARALYSIS
+    paralyzed = (state.status[def_side, target] == Status.PARALYSIS) & (
+        state.substitute_hp[def_side] == 0
+    )
     statused = jnp.isin(state.status[atk_side, user], jnp.asarray(FACADE_STATUSES, jnp.int8))
     half = _i32(state.hp[def_side, target]) <= _i32(state.max_hp[def_side, target]) // 2
     holds = jnp.where(

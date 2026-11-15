@@ -940,11 +940,12 @@ def _use_move(
     # Helping Hand (effect_script_0176.s:5, :15-17): BtlCmd_TryHelpingHand fails outside a double
     # battle (battle_script.c:6309-6311), so always in singles (B9-5).
     failed = failed | (effect_used == EffectId.HELPING_HAND)
-    # Dream Eater (effect_script_0008.s:5, :9-16): MOVE_STATUS_NO_MORE_WORK unless the defender
-    # is asleep (B9-12).
+    # Dream Eater (effect_script_0008.s:5-6, :12-20): MOVE_STATUS_NO_MORE_WORK when the defender
+    # is behind a substitute (:5, CheckSubstitute; no hit of this action came first) or is not
+    # asleep (B9-12, B10-4).
     dream = (effect_used == EffectId.DRAIN) & (tables.move_param[used, 1] == 1)
     awake = state.status[target_side, state.active[target_side]] != Status.SLEEP
-    failed = failed | (dream & awake)
+    failed = failed | (dream & (awake | (state.substitute_hp[target_side] != 0)))
     # Imprison (effect_script_0192.s): BtlCmd_TryImprison first sets MOVE_EFFECT_IMPRISONED on
     # the user's foes (battle_script.c:6686-6690: both enemy slots, which in singles name the
     # one foe battler, whatever its HP), then fails (:10) a user already imprisoning or sharing
@@ -1249,7 +1250,9 @@ def _use_move(
     # landed ("Hit N times", battle_controller_player.c:3777-3812) and their crits.
     def one_hit(hit_index, carry):
         state, hits, crits, contact, thaw, dealt, armed, struck, shell, barbed, record = carry[:11]
-        paused, pursue, damaged0, dealt0 = carry[11:]
+        # sub_hit: the defender's SELF_TURN_FLAG_SUBSTITUTE_HIT, set by an earlier hit of this
+        # action (MoveHit.sub_hit).
+        paused, pursue, damaged0, dealt0, sub_hit = carry[11:]
         stopped = paused | pursue
         # BattleControllerPlayer_LoopMultiHit (bcp.c:3780) stops once a battler fainted
         # (faintedMon): the target, or the attacker by Rough Skin (Selfdestruct's user is
@@ -1278,6 +1281,7 @@ def _use_move(
             foe_custap=custap[target_side],
             counter_damage=counter_damage,
             extra_flinch=~is_uturn,  # U-turn's check comes after its secondary effect (below)
+            sub_hit=sub_hit,
         )
         first = hit_index == 0
         # U-turn's secondary effect (ONE_HIT_TRIGGER_SECONDARY, bcp.c:3484-3494: an ON_HIT effect
@@ -1357,8 +1361,10 @@ def _use_move(
         struck = struck | info.update_hp
         # The transfer reads the defender's physical / specialDamageTaken (MoveHit.damaged).
         barbed = barbed | info.damaged
+        # TriggerHeldItemOnHit returns early once the substitute was hit this action
+        # (battle_lib.c:5378), a later hit on real HP included (B10-4).
         state = sticky_barb_transfer(
-            tables, state, side, target_side, used, items & landed & barbed
+            tables, state, side, target_side, used, items & landed & barbed & ~info.sub_hit
         )
         hit_dealt = jnp.where(head_on, info.dealt, jnp.where(first, state_in.ts_dealt, 0))
         state, thawed = thaw_target(tables, state, side, target_side, used_t, hit_dealt, items)
@@ -1395,6 +1401,7 @@ def _use_move(
             pursue | chases,
             jnp.where(first, info.damaged, damaged0),
             jnp.where(first, info.dealt, dealt0),
+            info.sub_hit,
         )
 
     init = (
@@ -1413,12 +1420,13 @@ def _use_move(
         jnp.bool_(False),
         jnp.bool_(False),
         _I32(0),
+        jnp.bool_(False),
     )
     category = tables.move_category[used]  # CURRENT_MOVE_DATA.class (moveCur)
     target_hp0 = state.hp[target_side, target]
     looped = jax.lax.fori_loop(0, MAX_HITS, one_hit, init)
     state, hits, crits, contact, thaw, dealt, _, struck, shell, _, damage_taken = looped[:11]
-    paused, pursue, damaged0, dealt0 = looped[11:]
+    paused, pursue, damaged0, dealt0 = looped[11:15]
     # Where the action stops (a pause at the list, or U-turn's Pursuit next), the tail waits:
     # the paused action's inputs go to the scratch (``ts_used``, ``ts_damaged``, ``ts_dealt``).
     stopped = paused | pursue
@@ -1771,6 +1779,7 @@ def _pursuit_hit(
         target_moved=False,
         power_mul=PURSUIT_POWER_MUL,
         extra_flinch=False,  # subscript_pursuit.s has no CheckExtraFlinch (bcp.c:3527, :3593)
+        pursuit_switch=True,  # its substitute path (:20, :56-73), B10-4
     )
     # subscript_pursuit.s:85: a switcher that fainted holding Destiny Bond takes the pursuer
     # down (subscript_faint_check_destiny_bond.s), before the items (:90, :94-95).
@@ -2635,8 +2644,10 @@ def _future_sight(
     ``CheckMoveHitOverrides``: a protecting defender (``protecting``: this turn's turnFlags) stops a
     ``MOVE_FLAG_CAN_PROTECT`` move and unlocks the battler in the attacker's slot, bcp.c:3005-3011;
     either battler's No Guard clears ``MOVE_STATUS_MISSED``, :3016-3021); on
-    ``MOVE_STATUS_DID_NOT_HIT`` "But it failed!" (:53-59). Else (Substitute and Rage, :13-37, are
-    unsupported) ``CheckHoldOnWith1HP`` (:28; battle_script.c:9098-9124: a Focus Sash at full HP
+    ``MOVE_STATUS_DID_NOT_HIT`` "But it failed!" (:53-59). Else a defender behind a substitute
+    (its bit, :13) has the damage taken off the substitute's HP, 0 when ``substituteHP <=
+    damage`` (:15-21, B10-4; no flag, no HP change), then goes to :92; otherwise (Rage, :30-37,
+    is unsupported) ``CheckHoldOnWith1HP`` (:28; battle_script.c:9098-9124: a Focus Sash at full HP
     leaves 1 HP, ``MOVE_STATUS_ENDURED_ITEM``) and ``UPDATE_HP`` (:29; ``waitingBattlers`` is 0
     after the actions, bcp.c:881-886, so no resist berry, subscript_update_hp.s:9-10); then, under
     ``MOVE_STATUS_ENDURED_ITEM``, a ``HOLD_EFFECT_ENDURE`` item is removed (:40-48).
@@ -2679,9 +2690,12 @@ def _future_sight(
         sash = holds(tables, state, d, ItemId.FOCUS_SASH)
         damage = state.future_damage[d].astype(_I32)
         full = hp == state.max_hp[d, mon].astype(_I32)
-        endured_now = hit & sash & full & (damage >= hp)
+        sub_hp = state.substitute_hp[d].astype(_I32)
+        behind = sub_hp != 0
+        state = _set_side(state, "substitute_hp", d, jnp.maximum(sub_hp - damage, 0), hit & behind)
+        endured_now = hit & ~behind & sash & full & (damage >= hp)
         dealt = jnp.where(endured_now, hp - 1, jnp.minimum(damage, hp))
-        state = _set_mon(state, "hp", d, mon, hp - dealt, hit)
+        state = _set_mon(state, "hp", d, mon, hp - dealt, hit & ~behind)
         endure_flag = endured | endured_now
         state = consume_item(state, d, hit & endure_flag & sash)
         missed = jnp.where(fires, miss_flag, missed)

@@ -78,9 +78,10 @@ order of residual messages, so states it separates stay in one set (coarser than
 game, never finer). Likewise a crit into a substitute: the game prints "A critical hit!"
 whenever a landed hit's ``criticalMul != 1`` (bcp.c:4547-4554, whatever took the
 damage), but ``crit`` is gated on the target's HP dropping (``step._hit_events``), so
-such a crit is not recorded. No implemented move sets ``substitute_hp`` (it is only
-reset, ``_VOLATILE`` step.py:94; notes/stage-b/observe.md section 1), so the case cannot
-arise yet; were it to, its states would stay in one set (coarser, never finer).
+such a crit is not recorded: states that differ only there stay in one set (coarser, never
+finer). Substitute (E2 batch 10, B10-4) shows only whether one is up ("{0} made a
+substitute!", "The substitute took damage for {0}!", "{0}'s substitute faded!",
+subscript_try_substitute.s, subscript_hit_substitute.s:12, :23); its HP is hidden.
 
 The visible projection of ``after``: both actives and their current types (Camouflage's
 "X transformed into the TYPE type!", effect_script_0213.s), every slot's species, status and

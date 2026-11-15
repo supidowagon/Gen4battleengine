@@ -124,7 +124,8 @@ def test_status_subscript_type_immunities():
 def test_thaw_flag_matches_the_self_thaw_check():
     """The effects the decomp lets a frozen user move with and thaws
     (CHECK_STATUS_STATE_SELF_THAW in BattleControllerPlayer_CheckStatusDisruption) are
-    exactly the ones flagged move_param[2] = 1, or unsupported."""
+    exactly the ones flagged move_param[2] = 1 (SECONDARY_STATUS, and RECOIL_STATUS since B10-1),
+    or unsupported."""
     src = (DECOMP / "src/battle/battle_controller_player.c").read_text(encoding="utf-8")
     case = re.search(r"case CHECK_STATUS_STATE_SELF_THAW:(.*?)break;", src, re.DOTALL).group(1)
     thawing = set(re.findall(r"\bBATTLE_EFFECT_[A-Z_]+", case))
@@ -132,7 +133,7 @@ def test_thaw_flag_matches_the_self_thaw_check():
     flagged = {
         DECOMP_EFFECT_NAMES[e]
         for e, (eid, params) in DECOMP_EFFECT_TO_ID.items()
-        if eid == EffectId.SECONDARY_STATUS and params[2] == 1
+        if eid in (EffectId.SECONDARY_STATUS, EffectId.RECOIL_STATUS) and params[2] == 1
     }
     assert flagged <= thawing
     assert thawing - flagged <= thawing - set(DECOMP_EFFECT_NAMES.values())

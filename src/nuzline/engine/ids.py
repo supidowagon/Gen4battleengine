@@ -275,6 +275,10 @@ class EffectId(IntEnum):
     # min(Divide(damage, 2), Divide(defender maxHP, 2)) of the damage the script computed
     # (crit and roll included, then the type chart), Magic Guard excepted (B10-2).
     CRASH = 81
+    # Substitute (79, BATTLE_EFFECT_SET_SUBSTITUTE): zeros. subscript_try_substitute.s: fails
+    # behind one or at curHP <= Divide(maxHP, 4); else ``substitute_hp`` = Divide(maxHP, 4), the
+    # user's bind cleared and the HP lost (``effects._substitute``, B10-4).
+    SUBSTITUTE = 82
 
 
 # ``EffectId.COUNTER``'s source (``move_param[m, 0]``).
