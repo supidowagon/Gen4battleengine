@@ -3,6 +3,7 @@ every test that needs them skips when ``data/gen4_platinum/tables.npz`` is absen
 
 import gc
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -71,8 +72,10 @@ def _resident_bytes() -> int:
         return 0
 
 
-# Above this resident size, JAX's in-memory programs are dropped after the current test.
-_CLEAR_ABOVE = 6 * 2**30
+# Above this resident size, JAX's in-memory programs are dropped after the current test
+# ($NUZLINE_CLEAR_ABOVE_GB overrides it). Each clear is recorded and summarised at the end.
+_CLEAR_ABOVE = int(float(os.environ.get("NUZLINE_CLEAR_ABOVE_GB", "6")) * 2**30)
+_CLEARS: list[tuple[str, int, int, bool]] = []  # (test, before, after, memory-driven)
 
 
 @pytest.hookimpl(hookwrapper=True)
@@ -86,9 +89,27 @@ def pytest_runtest_protocol(item, nextitem):
     the clear follows memory instead. The persistent compile cache keeps recompiles cheap."""
     yield
     next_module = nextitem is None or nextitem.module is not item.module
-    if "jax" in sys.modules and (next_module or _resident_bytes() > _CLEAR_ABOVE):
+    before = _resident_bytes()
+    if "jax" in sys.modules and (next_module or before > _CLEAR_ABOVE):
         sys.modules["jax"].clear_caches()
         gc.collect()
+        _CLEARS.append((item.nodeid, before, _resident_bytes(), not next_module))
+
+
+def pytest_terminal_summary(terminalreporter):
+    """The JAX cache clears of the run: how many were memory-driven, and the resident size
+    they left (a clear that leaves the process above the threshold fires after every test)."""
+    memory = [c for c in _CLEARS if c[3]]
+    if not _CLEARS:
+        return
+    gb = 2**30
+    afters = [c[2] / gb for c in memory] or [0.0]
+    terminalreporter.write_line(
+        f"jax cache clears: {len(_CLEARS)} ({len(memory)} memory-driven above "
+        f"{_CLEAR_ABOVE / gb:.1f} GB; resident after them {min(afters):.2f}-{max(afters):.2f} GB)"
+    )
+    for nodeid, before, after, _ in memory[:5]:
+        terminalreporter.write_line(f"  {nodeid}: {before / gb:.2f} -> {after / gb:.2f} GB")
 
 
 def _require_tables() -> None:
