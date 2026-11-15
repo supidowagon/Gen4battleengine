@@ -850,6 +850,8 @@ def primary_effect_fails(tables, state: BattleState, side, target_side, move) ->
         | ((effect == _E.MEAN_LOOK) & mean_look_fails(state, target_side))
         # subscript_lock_on.s:6, :33.
         | ((effect == _E.LOCK_ON) & lock_on_fails(state, target_side))
+        # BtlCmd_TryPerishSong (battle_script.c:5482-5484): no battler eligible.
+        | ((effect == _E.PERISH_SONG) & ~jnp.any(perish_song_eligible(state)))
     )
 
 
@@ -1042,6 +1044,30 @@ def _lock_on(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     )
     state = _set(state, "lock_on", h.target_side, LOCK_ON_TURNS, cond)
     return _set(state, "lock_on_target", h.target_side, 1 + jnp.asarray(h.side, _I32), cond)
+
+
+PERISH_SONG_TURNS = 3  # BtlCmd_TryPerishSong (battle_script.c:5478)
+
+
+def perish_song_eligible(state: BattleState) -> jnp.ndarray:
+    """``bool[2]``: the battlers ``BtlCmd_TryPerishSong`` marks (battle_script.c:5471-5479): no
+    MOVE_EFFECT_PERISH_SONG yet and HP left (Soundproof, the third test, is an unsupported
+    ability). Every battler, whatever its side (doubles convention 4)."""
+    sides = jnp.arange(state.active.shape[0])
+    return (state.perish_song == 0) & (state.hp[sides, state.active] > 0)
+
+
+def _perish_song(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    """Perish Song (effect_script_0114.s: a direct ON_HIT subscript_perish_song_start.s for a
+    move that connected; RANGE_FIELD, its own defender): ``BtlCmd_TryPerishSong`` gives every
+    eligible battler (``perish_song_eligible``) the effect and a count of ``PERISH_SONG_TURNS``;
+    with none eligible it fails (:5482-5484, MOVE_STATUS_FAILED: ``primary_effect_fails``)."""
+    eligible = perish_song_eligible(state)
+    for battler in range(state.active.shape[0]):
+        cond = (h.effect == _E.PERISH_SONG) & h.landed & eligible[battler]
+        state = _set(state, "perish_song", battler, 1, cond)
+        state = _set(state, "perish_song_turns", battler, PERISH_SONG_TURNS, cond)
+    return state
 
 
 def locked_onto(state: BattleState, attacker, defender) -> jnp.ndarray:
@@ -1839,6 +1865,7 @@ def play_hit(
         _mean_look,
         _imprison,
         _lock_on,
+        _perish_song,
         _screen,
         _brick_break,
         _foresight,

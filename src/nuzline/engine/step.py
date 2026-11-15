@@ -2568,11 +2568,32 @@ def _future_sight(
         missed = jnp.where(fires, miss_flag, missed)
         shielded = jnp.where(fires, shield_flag, shielded)
         endured = endured | (fires & endured_now)
-        if position == 0:
-            state = _faint_check(tables, start, state, decide=False)
-            mid = state
-    state = _faint_check(tables, mid, state)
+        state = _faint_check(tables, mid, state, decide=False)
+        mid = state
+    state = _perish_song_check(tables, state, sides, live)
+    # TurnEnd's CheckBattleOver (bcp.c:1845) after the whole side-condition pass.
+    state = _faint_check(tables, state, state)
     return pay_exp(tables, start, state)
+
+
+def _perish_song_check(tables: Tables, state: BattleState, sides, live) -> BattleState:
+    """``SIDE_COND_CHECK_STATE_PERISH_SONG`` (bcp.c:1791-1820), after Future Sight's: each
+    battler in ``sides`` (``monSpeedOrder``) with MOVE_EFFECT_PERISH_SONG either, at a count of 0,
+    loses the effect and all its HP (subscript_continue_perish_song.s:6-7, UPDATE_HP of -curHP:
+    no Focus Sash, no Magic Guard), or has its count drop by 1. Each re-entry of the pass runs
+    ``AnyFainted`` first (:1749), with no battle-over check until TurnEnd."""
+    for position in (0, 1):
+        d = sides[position]
+        mon = state.active[d]
+        on = live & (state.perish_song[d] != 0)
+        turns = state.perish_song_turns[d].astype(_I32)
+        dies = on & (turns == 0)
+        before = state
+        state = _set_side(state, "perish_song", d, 0, dies)
+        state = _set_side(state, "perish_song_turns", d, turns - 1, on & ~dies)
+        state = _set_mon(state, "hp", d, mon, 0, dies)
+        state = _faint_check(tables, before, state, decide=False)
+    return state
 
 
 def _turn_start_items(tables: Tables, state: BattleState) -> BattleState:

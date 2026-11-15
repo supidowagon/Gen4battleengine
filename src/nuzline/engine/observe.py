@@ -225,6 +225,7 @@ _LAYOUT: tuple[tuple[str, tuple[int, ...]], ...] = (
     *((name, _SIDE) for name in _NONZERO_SIDE),
     ("spikes", _SIDE),
     ("toxic_spikes", _SIDE),
+    ("perish_count", _SIDE),
     ("weather", ()),
     *((name, ()) for name in _NONZERO_FIELD),
     ("over", ()),
@@ -306,6 +307,9 @@ def observation(events: dict, after: BattleState) -> jnp.ndarray:
         **{name: _nonzero(getattr(after, name)) for name in _NONZERO_SIDE},
         "spikes": after.spikes,
         "toxic_spikes": after.toxic_spikes,
+        # "{0}'s perish count fell to {1}!" (subscript_continue_perish_song.s:3): 1 + the count
+        # while the effect is up, else 0.
+        "perish_count": jnp.where(after.perish_song != 0, 1 + after.perish_song_turns, 0),
         "weather": after.weather,
         **{name: _nonzero(getattr(after, name)) for name in _NONZERO_FIELD},
         "over": after.over,

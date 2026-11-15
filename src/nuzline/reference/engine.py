@@ -958,6 +958,7 @@ def _cleanup_fainted(turn: _Turn, s: RefState, side: int) -> None:
 BATON_PASSED = (
     "confusion", "leech_seed", "substitute_hp", "water_sport", "mud_sport", "aqua_ring",
     "ingrain", "mean_look", "mean_look_target", "lock_on", "lock_on_target",
+    "perish_song", "perish_song_turns",
 )  # fmt: skip
 
 
@@ -1002,6 +1003,8 @@ def _reset_battler(sd: RefSide, baton: bool = False) -> None:
         "imprisoned",
         "lock_on",
         "lock_on_target",
+        "perish_song",
+        "perish_song_turns",
     ):
         if not (baton and name in BATON_PASSED):
             setattr(sd, name, 0)
@@ -2125,6 +2128,11 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
     elif effect == EffectId.AQUA_RING and landed and not s.sides[side].aqua_ring:
         # effect_script_0251.s: fails when the user already has it.
         s.sides[side].aqua_ring = 1
+    elif effect == EffectId.PERISH_SONG and landed:
+        # BtlCmd_TryPerishSong (script.c:5465-5487): every living battler without the effect.
+        for k in (0, 1):
+            if not s.sides[k].perish_song and _active(s, k).hp:
+                s.sides[k].perish_song, s.sides[k].perish_song_turns = 1, 3
     elif effect == EffectId.LOCK_ON and landed:
         # subscript_lock_on.s: a living defender without a substitute gets the counter 2 and
         # lockOnTarget = the attacker (:7-9), whatever it had.
@@ -3079,6 +3087,10 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
             effect == EffectId.MEAN_LOOK and bool(foe_sd.mean_look or foe_sd.substitute_hp)
         )
         full = full or (effect == EffectId.LOCK_ON and bool(foe_sd.substitute_hp))  # :6, :33
+        full = full or (
+            effect == EffectId.PERISH_SONG
+            and not any(not x.perish_song and _active(s, k).hp for k, x in enumerate(s.sides))
+        )  # BtlCmd_TryPerishSong's failure (script.c:5482-5484)
         full = full or (effect == EffectId.SPIKES and s.sides[1 - side].spikes >= SPIKES_MAX)
         full = full or (
             effect == EffectId.TOXIC_SPIKES and s.sides[1 - side].toxic_spikes >= TOXIC_SPIKES_MAX
@@ -3448,8 +3460,25 @@ def _future_sight(turn: _Turn, s: RefState, order: list[int]) -> None:
             mon.item_consumed, mon.item = mon.item, 0
             _forget_item(s, d)
         _faint_check(turn, s, decide=False)
-    _faint_check(turn, s)
+    _perish_song_check(turn, s, order)
+    _faint_check(turn, s)  # TurnEnd's CheckBattleOver (bcp.c:1845)
     _pay_exp(turn, s)
+
+
+def _perish_song_check(turn: _Turn, s: RefState, order: list[int]) -> None:
+    """``SIDE_COND_CHECK_STATE_PERISH_SONG`` (bcp.c:1791-1820): each battler in monSpeedOrder
+    with the effect faints at a count of 0 (subscript_continue_perish_song.s:6-7), else its count
+    drops; AnyFainted after each (:1749), no battle-over check."""
+    for d in order:
+        sd = s.sides[d]
+        if not sd.perish_song:
+            continue
+        if sd.perish_song_turns == 0:
+            sd.perish_song = 0
+            _lose_hp(turn, s, d, _active(s, d).hp)  # UPDATE_HP of -curHP
+        else:
+            sd.perish_song_turns -= 1
+        _faint_check(turn, s, decide=False)
 
 
 def _lock_on_check(turn: _Turn, s: RefState, side: int) -> None:

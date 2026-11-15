@@ -966,6 +966,7 @@ BATCH7_MOVES = (
     "Lock-On",
     "Mind Reader",
     "Sheer Cold",
+    "Perish Song",
 )
 
 
@@ -1007,6 +1008,10 @@ def _draw_batch7(draw, tables: Tables, a: dict, side: int, active: int, names: N
         a["lock_on_target"][side] = 1 + foe
     elif lock == 2:
         a["lock_on_target"][side] = 1 + foe
+    # Perish Song under way: a count 0-3 (0 faints at this turn's end).
+    if draw(st.integers(0, 4)) == 0:
+        a["perish_song"][side] = 1
+        a["perish_song_turns"][side] = draw(st.integers(0, 3))
     a["imprisoned"][side] = int(draw(st.integers(0, 5)) == 0)
 
 

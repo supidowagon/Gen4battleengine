@@ -49,3 +49,20 @@ def test_lock_on_ends_with_its_lockers_switch_not_its_faint(tables, names):
     fainted = assert_matches_reference(tables, s.replace_hp(0, 0, 1), (0, 0), O)
     assert int(fainted.hp[0, 0]) == 0
     assert int(fainted.lock_on[1]) == 1 and int(fainted.lock_on_target[1]) == 1
+
+
+def test_perish_song_counts_down_and_faints_at_zero(tables, names):
+    """B8-3: BtlCmd_TryPerishSong gives every living battler the effect and a count of 3
+    (battle_script.c:5465-5487); the side-condition pass drops it at each turn end and faints a
+    battler that it finds at 0 (bcp.c:1791-1820). Both last Pokemon at 0 faint in one pass with no
+    battle-over check between (AnyFainted, :1749): the draw TurnEnd plays as a loss."""
+    n = names
+    s = make_state(
+        tables, [_mon(n, "Misdreavus", ["Perish Song"], 30)], [_mon(n, "Geodude", ["Growl"], 30)]
+    )
+    sung = assert_matches_reference(tables, s, (0, 0), O)
+    assert [int(x) for x in sung.perish_song] == [1, 1]
+    assert [int(x) for x in sung.perish_song_turns] == [2, 2]
+    doomed = sung._replace(perish_song_turns=jnp.zeros_like(sung.perish_song_turns))
+    end = assert_matches_reference(tables, doomed, (0, 0), O)
+    assert [int(x) for x in end.hp[:, 0]] == [0, 0] and int(end.winner) == 1

@@ -238,6 +238,11 @@ class EffectId(IntEnum):
     # MOVE_EFFECT_LOCK_ON counter (2) and lockOnTarget (``lock_on``, ``lock_on_target``); the
     # locker's next moves on it skip the accuracy roll (MON_IS_LOCKED_ONTO, bcp.c:3016-3021).
     LOCK_ON = 74
+    # Perish Song (effect_script_0114.s, a direct ON_HIT subscript_perish_song_start.s:
+    # BtlCmd_TryPerishSong, battle_script.c:5465-5487): every living battler without the effect
+    # gets MOVE_EFFECT_PERISH_SONG and a count of 3 (``perish_song``, ``perish_song_turns``); the
+    # side-condition pass counts it down and faints the battler at 0 (bcp.c:1791-1820).
+    PERISH_SONG = 75
 
 
 # ``EffectId.COUNTER``'s source (``move_param[m, 0]``).
