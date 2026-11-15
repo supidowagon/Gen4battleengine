@@ -262,6 +262,18 @@ three structs has a row.
   from per-turn scratch (the opposing battler's selected move when a switch is
   chosen) and Wish's heal from the battlers' HP when it lands.
 
+- The mid-turn switch decision (E2 batch 6, U-turn and Baton Pass): `pivot_battler` (per field,
+  `1 + battler` owing the party pick at subscript_attack_then_switch_out.s:71 /
+  subscript_baton_pass.s:17, else 0) and the turn scratch `ts_*` (per field: the
+  `BattleContext` values a resumed turn reads: `turnOrderCounter`, `battlerActionOrder`, the
+  command-selection picks (`ts_move`, `ts_struggling`, `ts_locked`, `ts_item`), the per-battler
+  `moveEffectsData.custapBerry` (`ts_custap`), the per-battler `turnFlags` later actors read
+  (`ts_protect_ok`, `ts_roosted`, `ts_taken`), the per-battler `moveFailFlags`
+  (`ts_move_failed`), the paused action's `moveCur` and its defender's damage taken (`ts_used`,
+  `ts_damaged`, `ts_dealt`), the per-side bitmask of the faints handled (`ts_alive`), `powerMul`
+  at the list (`ts_pick_mul`) and the search's turn-start reads (`ts_power_mul`,
+  `ts_ai_switched`). All are 0 between turns (`engine.state` docstring).
+
 ## BattleMon (`include/battle/battle_mon.h`)
 
 | Struct.field | pytree field | status |
@@ -457,7 +469,7 @@ three structs has a row.
 | `BattleContext.scriptStackNarc` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |
 | `BattleContext.scriptStackFile` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |
 | `BattleContext.scriptStackCursor` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |
-| `BattleContext.turnOrderCounter` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |
+| `BattleContext.turnOrderCounter` | `ts_cursor` | mapped (E2 batch 6: kept only at a pause at a party list, `pivot_battler`; else 0) |
 | `BattleContext.waitCounter` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |
 | `BattleContext.msgBuffer` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |
 | `BattleContext.msgBattlerTemp` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |
@@ -514,8 +526,8 @@ three structs has a row.
 | `BattleContext.selectedPartySlot` | — | not needed because the switch target comes from the action and is written to `active` inside `step` |
 | `BattleContext.switchedPartySlot` | — | not needed because the switch target comes from the action (or, for Roar's drag, from `Outcome.roar_target` inside `step._use_move`) and is written to `active` inside `step` |
 | `BattleContext.aiSwitchedPartySlot` | — | not needed because the switch target comes from the action and is written to `active` inside `step` |
-| `BattleContext.battlerActions` | — | not needed because it is reset every turn and `step` resolves a whole turn (the MOVE_END UpdateAfterSwitch writes for a Pokemon Roar drags in is the turn's `dragged` event, which skips its action in `step._execute_actions`) |
-| `BattleContext.battlerActionOrder` | — | not needed because it is reset every turn and `step` resolves a whole turn |
+| `BattleContext.battlerActions` | `ts_actions`, `ts_pursued`, `ts_dragged` | mapped at a pause (E2 batch 6): the actions as chosen, and the MOVE_END writes of a Pursuit (its pursuer) and of UpdateAfterSwitch for a Pokemon Roar drags in (the turn's `dragged` event, which skips its action in `step._execute_actions`); else reset every turn |
+| `BattleContext.battlerActionOrder` | `ts_order` | mapped at a pause (E2 batch 6); else reset every turn |
 | `BattleContext.monSpeedOrder` | — | not needed because it is reset every turn and `step` resolves a whole turn |
 | `BattleContext.monSpeedValues` | — | later (M6) |
 | `BattleContext.ioQueue` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |

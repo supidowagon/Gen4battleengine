@@ -128,6 +128,29 @@ class RefState:
     faint_budget: int
     protected: list[int]
     replace_mul: int
+    # E2 batch 6: the mid-turn switch decision (engine.state docstring): 0 between turns.
+    pivot_battler: int
+    ts_cursor: int
+    ts_order: list[int]
+    ts_actions: list[int]
+    ts_move: list[int]
+    ts_struggling: list[int]
+    ts_locked: list[int]
+    ts_item: list[int]
+    ts_custap: list[int]
+    ts_pursued: int
+    ts_protect_ok: list[int]
+    ts_roosted: list[int]
+    ts_taken: list[list[int]]
+    ts_dragged: list[int]
+    ts_move_failed: list[int]
+    ts_used: int
+    ts_damaged: int
+    ts_dealt: int
+    ts_alive: list[int]
+    ts_power_mul: int
+    ts_ai_switched: int
+    ts_pick_mul: int
 
 
 # BattleState field names by level.

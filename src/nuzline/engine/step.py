@@ -53,6 +53,14 @@ held-item, Leftovers, Leech Seed, poison, toxic, burn, Bind, Taunt and detriment
 pass (``field_conditions``), faints and the end of the battle. A player faint is a death, not the end (spec §4): the battle ends
 when a side has no Pokemon with HP left. A state that is already over is returned unchanged.
 
+The mid-turn switch decision (E2 batch 6, U-turn and Baton Pass; rulings B6-1..B6-9): a turn
+that reaches a party list (subscript_attack_then_switch_out.s:71, subscript_baton_pass.s:17)
+stops there, ``BattleState.pivot_battler`` naming the battler that picks and the ``ts_*``
+scratch holding the turn (``_execute_actions``); ``step`` on such a state, with
+``actions[pivot]`` the switch to the pick, resumes it: the switch, the hazards and a faint check,
+the rest of the paused action on the newcomer (``_use_move``'s ``MODE_RESUME``), the later
+actions and the end of the turn. Each half reads its own ``Outcome``.
+
 ``step_events`` plays the same turn and also returns what each action showed (the move
 used and the result of each status check, hits and crits: ``ACT_*``, ``EVENT_FLAGS``),
 recorded where ``_use_move`` and ``execute_actions`` run it; ``engine.observe`` builds
@@ -101,10 +109,13 @@ from nuzline.engine.effects import (
     change_stage,
     consume_item,
     defender_always,
+    entry_hazards,
     focus_sash_damage,
     hit_count,
     holds,
+    kings_rock_flinch,
     life_orb_recoil,
+    pivot_item,
     play_hit,
     primary_effect_fails,
     protect_blocks,
@@ -130,6 +141,7 @@ from nuzline.engine.hooks import (
     on_switch_in,
     recover_status_by_ability,
     reveal_ability,
+    switch_in_effects,
 )
 from nuzline.engine.ids import (
     CHOICE_ITEMS,
@@ -137,9 +149,11 @@ from nuzline.engine.ids import (
     COUNTER_SPECIAL,
     FUTURE_SIGHT_TURNS,
     ITEM_ABILITY_IDS,
+    MOVE_BATON_PASS,
     MOVE_SLEEP_TALK,
     MOVE_SNORE,
     MOVE_STRUGGLE,
+    MOVE_U_TURN,
     POTION_HP_RESTORED,
     PROTECT_CHAIN_MOVES,
     QUICK_CLAW_MODULUS,
@@ -181,7 +195,7 @@ from nuzline.engine.outcome import (
     roar_bench,
     roar_slot,
 )
-from nuzline.engine.state import BAG_SLOTS, BattleState
+from nuzline.engine.state import BAG_SLOTS, TURN_SCRATCH, BattleState
 
 _I32 = jnp.int32
 _unlock = unlock_move  # Battler_UnlockMoveChoice (battle_lib.c:1834): (state, side, cond)
@@ -232,6 +246,25 @@ _VOLATILE = (
     "destiny_bond",
     "uproar",
 )
+# Baton Pass keeps these of ``_VOLATILE`` (and the stat stages): BattleSystem_UpdateAfterSwitch
+# keeps statusVolatile & VOLATILE_CONDITION_BATON_PASSED (battle_lib.c:2078; condition.h:72-76:
+# confusion; Focus Energy, Mean Look, Curse and Substitute's bit come from unsupported moves),
+# moveEffectsMask & MOVE_EFFECT_BATON_PASSED (:2079; moves.h:46-48: the Leech Seed recipient, Mud
+# and Water Sport, Aqua Ring; the rest from unsupported moves) and the substitute HP
+# (:2107); BattleSystem_InitBattleMon keeps the stat stages (:97-101). Ruling B6-3.
+_BATON_PASSED = (
+    "confusion",
+    "leech_seed",
+    "substitute_hp",
+    "water_sport",
+    "mud_sport",
+    "aqua_ring",
+)
+# ``_use_move``'s ``mode`` (E2 batch 6): the action from its start; its tail after the U-turn
+# user survived the Pursuit of subscript_attack_then_switch_out.s:54 (or died to it); the tail
+# after the party list, on the newcomer (``step``'s resume).
+MODE_FULL, MODE_PURSUIT, MODE_RESUME = 0, 1, 2
+
 # BtlCmd_TryProtection caps protectSuccessTurns at NELEMS(sProtectSuccessRate) - 1
 # (battle_script.c:5182-5184; outcome.PROTECT_RATES).
 PROTECT_CHAIN_MAX = 3
@@ -328,14 +361,16 @@ def _switch_out(state: BattleState, side) -> BattleState:
     return _set_mon(state, "status_counter", side, mon, 0, toxic)
 
 
-def _reset_battler(state: BattleState, side, cond) -> BattleState:
+def _reset_battler(state: BattleState, side, cond, baton=False) -> BattleState:
     """Stages and ``_VOLATILE`` fields of ``side``'s active battler back to neutral
-    where ``cond``."""
-    fields = {
-        name: getattr(state, name).at[side].set(jnp.where(cond, 0, getattr(state, name)[side]))
-        for name in (*_VOLATILE, "stages")
-    }
-    return state._replace(**fields)
+    where ``cond``; ``baton`` (a Baton Pass switch) keeps the stages and ``_BATON_PASSED``."""
+    baton = jnp.asarray(baton)
+
+    def reset(name):
+        clear = cond & ~baton if name in (*_BATON_PASSED, "stages") else cond
+        return getattr(state, name).at[side].set(jnp.where(clear, 0, getattr(state, name)[side]))
+
+    return state._replace(**{name: reset(name) for name in (*_VOLATILE, "stages")})
 
 
 def _entered(state: BattleState, side, entry_turn, cond) -> BattleState:
@@ -362,7 +397,7 @@ def _set_choice_lock(state: BattleState, side, move, cond) -> BattleState:
 
 
 def _choice_lock(
-    tables: Tables, state: BattleState, side, defender, move, shown, record
+    tables: Tables, state: BattleState, side, defender, move, shown, record, exempt=False
 ) -> BattleState:
     """The Choice lock after ``side``'s move, where its attack message was ``shown``
     (``SYSCTL_ATTACK_MESSAGE_SHOWN``; ``SYSCTL_FIRST_OF_MULTI_TURN`` comes only from the
@@ -370,15 +405,17 @@ def _choice_lock(
     (battle_controller_player.c:4489-4496) first clears the defender's lock unless it holds
     a Choice item, where ``record`` (the foe is the defender, the same test as its
     ``moveHit``); then ``UpdateMoveBuffers`` (:3921-3934) locks a Choice holder into
-    ``moveTemp`` (``move``: the chosen move, Nature Power itself), except Struggle (U-turn and
-    Baton Pass, its other exceptions, are unsupported moves), and clears a non-holder's.
+    ``moveTemp`` (``move``: the chosen move, Nature Power itself), except Struggle and ``exempt``
+    (U-turn under ``SYSCTL_UTURN_ACTIVE``, Baton Pass under ``SYSCTL_MOVE_SUCCEEDED``, bcp.c:
+    3927-3928, by ``moveTemp``), and clears a non-holder's.
     ``defender``: the defender's side (``DEFENDING_MON``, bcp.c:4488-4496)."""
     state = _set_choice_lock(
         state, defender, 0, record & shown & ~_holds_choice(tables, state, defender)
     )
     holder = _holds_choice(tables, state, side)
     move = jnp.asarray(move, _I32)
-    state = _set_choice_lock(state, side, move, shown & holder & (move != MOVE_STRUGGLE))
+    lock = shown & holder & (move != MOVE_STRUGGLE) & ~jnp.asarray(exempt)
+    state = _set_choice_lock(state, side, move, lock)
     return _set_choice_lock(state, side, 0, shown & ~holder)
 
 
@@ -452,16 +489,19 @@ def _restore_ability(tables: Tables, state: BattleState, side, cond) -> BattleSt
     return state._replace(ability=state.ability.at[side, mon].set(value))
 
 
-def _switch_in(tables: Tables, state: BattleState, side, slot, entry_turn) -> BattleState:
+def _switch_in(
+    tables: Tables, state: BattleState, side, slot, entry_turn, baton=False
+) -> BattleState:
     """``side`` sends out party ``slot``: the outgoing battler's types are restored
     (``_restore_types``), stages and volatiles reset, the effects the
     outgoing Pokemon is the source of end (``_source_leaves``: the Bind it put on the other
     side, the other side's infatuation), ``fake_out_turn`` becomes ``entry_turn`` and the AI
     forgets the newcomer (``_forget``; ``BattleSystem_UpdateAfterSwitch``, battle_lib.c:2094).
-    Then the send-out updates the participation mask (``_flag_exp``)."""
+    Then the send-out updates the participation mask (``_flag_exp``). ``baton``: a Baton Pass
+    switch (``_reset_battler``)."""
     state = _restore_types(tables, state, side, True)
     state = _restore_ability(tables, state, side, True)
-    state = _reset_battler(state, side, True)
+    state = _reset_battler(state, side, True, baton)
     state = _forget(state, side, slot)
     state = _entered(state, side, entry_turn, True)
     state = state._replace(active=state.active.at[side].set(jnp.asarray(slot).astype(jnp.int8)))
@@ -486,11 +526,49 @@ def _flag_exp(state: BattleState, side) -> BattleState:
     return state._replace(exp_mask=mask.astype(state.exp_mask.dtype))
 
 
-def _send_out(tables: Tables, state: BattleState, side, slot) -> BattleState:
-    """A switch action, or Roar's drag (``_use_move``): ``_switch_out``, ``_switch_in``, then
-    ``hooks.on_switch_in`` (entry hazards, Intimidate, berries)."""
-    entered = _switch_in(tables, _switch_out(state, side), side, slot, state.turn + 1)
-    return on_switch_in(tables, entered, side)
+def _send_out(
+    tables: Tables, state: BattleState, side, slot, effects=True, baton=False
+) -> BattleState:
+    """A switch action, or Roar's drag (``_use_move``): ``_switch_out``, ``_switch_in``, the
+    entry hazards, then (``effects``, static ``False`` or a traced flag) the rest of
+    ``hooks.on_switch_in`` (Trace, weather, Intimidate, berries). The party list of a U-turn or
+    Baton Pass runs only the hazards (subscript_show_party_list.s:22; the rest comes at
+    ``_use_move``'s ``TRIGGER_SWITCH_IN_EFFECTS``, as Roar's drag does)."""
+    entered = _switch_in(tables, _switch_out(state, side), side, slot, state.turn + 1, baton)
+    hazards = entry_hazards(tables, entered, side)
+    if effects is False:
+        return hazards
+    return _where(effects, switch_in_effects(tables, hazards, side), hazards)
+
+
+def _alive_mask(state: BattleState) -> jnp.ndarray:
+    """``int8[2]``: per side the party bitmask of HP > 0 (``BattleState.ts_alive``)."""
+    bits = jnp.left_shift(jnp.int32(1), jnp.arange(state.hp.shape[1], dtype=_I32))
+    return jnp.sum(jnp.where(state.hp > 0, bits[None, :], 0), axis=1).astype(jnp.int8)
+
+
+def _with_alive(state: BattleState, mask) -> BattleState:
+    """``state`` with ``hp`` 1 where ``mask`` (``int8[2]``, ``_alive_mask``) has the slot, else 0:
+    the ``before`` of a faint check or a payout, which read only ``before.hp > 0``
+    (``_faint_check``; ``levelup.pay_exp_leveled``)."""
+    slots = jnp.arange(state.hp.shape[1], dtype=_I32)
+    on = (jnp.right_shift(jnp.asarray(mask, _I32)[:, None], slots[None, :]) & 1) == 1
+    return state._replace(hp=on.astype(state.hp.dtype))
+
+
+def _has_bench(state: BattleState, side) -> jnp.ndarray:
+    """``BattleSystem_AnyReplacementMons`` (battle_lib.c:3125-3180) in singles: a living,
+    non-empty party slot of ``side`` other than the active one (TryReplaceFaintedMon,
+    battle_script.c:5867-5877)."""
+    slots = jnp.arange(state.hp.shape[1])
+    bench = (state.species[side] != 0) & (state.hp[side] > 0) & (slots != state.active[side])
+    return jnp.any(bench)
+
+
+def _blacked_out(state: BattleState, side) -> jnp.ndarray:
+    """``BtlCmd_CheckBlackOut`` (battle_script.c:8846-8920) in singles: no party Pokemon of
+    ``side`` has HP."""
+    return ~jnp.any((state.species[side] != 0) & (state.hp[side] > 0))
 
 
 def _empty_events() -> dict:
@@ -564,7 +642,9 @@ def _use_move(
     custap=(False, False),
     foe_roosting=False,
     foe_taken=(0, 0, 0, 0, 0, 0),
-) -> tuple[BattleState, dict, dict]:
+    mode=MODE_FULL,
+    pursuit=None,
+) -> tuple[BattleState, dict, dict, dict]:
     """``side``'s active Pokemon uses the move in slot ``action`` (or Struggle).
     ``choice``: its ``(move, struggling, locked)`` from ``selected_move`` and
     ``locked_slot`` at the start of the turn, when the decomp fixes Struggle
@@ -583,10 +663,29 @@ def _use_move(
     ``last_taken`` and ``phys_from`` / ``spec_from`` / ``last_from`` events), which Counter,
     Mirror Coat and Metal Burst read.
 
-    Returns ``(state, own, foe)``: the state after the move, the user's events (each
+    E2 batch 6, the pivots (rulings B6-n). U-turn: its ON_HIT secondary effect
+    (subscript_attack_then_switch_out.s) runs after the hit's contact ability; past the defender
+    side's black-out check and the user's replacement check (:5-6) it runs the pivot item (:11,
+    ``effects.pivot_item``) and Destiny Bond (:15-34); a user still alive (:48) then meets the foe's
+    Pursuit (:54: ``pursuit``, ``(action, move, struggling)`` of the foe at selection), which
+    ``_execute_actions`` plays (``ctl["pursue"]``), else its Natural Cure (:56-57) and the party
+    list (:71): the action stops there (``ctl["pause"]``). Baton Pass (subscript_baton_pass.s): a
+    user with a replacement (:5; else MOVE_STATUS_FAILED, :19-20) gets its Natural Cure (:7-8) and
+    the list (:17). ``mode`` ``MODE_PURSUIT`` (after the Pursuit) and ``MODE_RESUME`` (on the
+    newcomer, after the list's switch-in, hazards and faint check) run only the action's tail:
+    the head's state is dropped and its values come from ``BattleState.ts_used`` /
+    ``ts_damaged`` / ``ts_dealt`` (written where the action stops).
+
+    Returns ``(state, own, foe, ctl)``: the state after the move, the user's events (each
     status check's result, effect-gated: set only when the check was reached and had an
-    effect) and the foe's (``contact_ability``, ``thawed_by_hit``, ``dragged``: the party
-    slot + 1 Roar dragged in, else 0)."""
+    effect), the foe's (``contact_ability``, ``thawed_by_hit``, ``dragged``: the party
+    slot + 1 Roar dragged in, else 0) and ``ctl`` (``pause``, ``pursue``: where the action
+    stopped)."""
+    state_in = state
+    mode = jnp.asarray(mode, _I32)
+    head_on = mode == MODE_FULL
+    resumed = mode == MODE_RESUME
+    after_pursuit = mode == MODE_PURSUIT
     move, struggling, locked = choice
     slot = jnp.clip(action, 0, MOVE_ACTIONS - 1)
     user = state.active[side]
@@ -939,7 +1038,7 @@ def _use_move(
     dragged = roar & jnp.any(eligible) & level_ok
     roar_failed = roar & ~dragged
     drag_slot = roar_slot(eligible, outcome.roar_target[side])
-    state = _where(dragged, _send_out(tables, state, target_side, drag_slot), state)
+    state = _where(dragged, _send_out(tables, state, target_side, drag_slot, effects=False), state)
     # subscript_no_target.s and subscript_missed.s unlock the attacker (a Rollout that
     # missed; a first use never locked, so this is then a no-op).
     state = _unlock(state, side, can_act & ~connected)
@@ -1035,15 +1134,55 @@ def _use_move(
         & weather_fails(state, tables.move_param[used].astype(_I32))
     )
 
+    # Baton Pass (effect_script_0127.s: a direct ON_HIT effect at BATTLE_CONTROL_PRIMARY_EFFECT,
+    # bcp.c:3298-3308, for a move that connected): subscript_baton_pass.s:5 fails without a
+    # replacement (MOVE_STATUS_FAILED, :19-20: subscript_missed.s, no AfterMoveEffects); else
+    # Natural Cure (:7-8) and the party list (:17): the action stops (``ctl["pause"]``).
+    baton = connected & (tables.move_effect[used] == EffectId.BATON_PASS)
+    baton_failed = baton & ~_has_bench(state, side)
+    baton_go = baton & ~baton_failed & head_on
+    # The head ends here in the tail modes: their state is the one given (MODE_RESUME: after the
+    # list's switch-in, hazards and faint check), their inputs the scratch.
+    state = _where(head_on, state, state_in)
+    used_t = jnp.where(head_on, used, state_in.ts_used.astype(_I32))
+    # MODE_PURSUIT: the U-turn user survived the Pursuit (:55): Natural Cure and the list; else the
+    # action goes on without a switch.
+    pursuit_pause = after_pursuit & (state_in.hp[side, user] > 0) & (state_in.over == 0)
+    stops = baton_go | pursuit_pause
+    state = _where(stops, _natural_cure(state, side), state)
+    # MODE_RESUME: the rest of AfterMoveMessage on the newcomer (bcp.c:3497-3530): King's Rock with
+    # its item (CheckExtraFlinch, bcp.c:4630-4650, no U-turn guard; U-turn has
+    # MOVE_FLAG_TRIGGERS_KINGS_ROCK, res/moves/u_turn/data.json:25; flinch_item[side, 0]), then
+    # AfterMoveEffects' TRIGGER_SWITCH_IN_EFFECTS (bcp.c:3672-3682): the newcomer's switch-in
+    # effects, at the site Roar's drag shares.
+    rock = resumed & (state_in.ts_damaged != 0) & (outcome.flinch_item[side, 0] != 0)
+    state = kings_rock_flinch(tables, state, side, target_side, used_t, rock & ~target_moved)
+    fx_side = jnp.where(resumed, side, target_side)
+    entering = (dragged & head_on) | resumed
+    state = _where(entering, switch_in_effects(tables, state, fx_side), state)
+    # U-turn's Pursuit (:54): the foe has not moved and can Pursuit now (``_pursuer_ready``).
+    if pursuit is None:
+        pursuit = (jnp.int32(0), jnp.int32(0), jnp.bool_(True))
+    foe_action, foe_move, foe_struggling = pursuit
+    is_uturn = tables.move_effect[used] == EffectId.U_TURN
+    # The tail modes' items (AfterMoveEffects): on the newcomer, or a U-turn user that died to the
+    # Pursuit (its continuation without a switch).
+    tail_items = resumed | (after_pursuit & ~pursuit_pause)
+    items_full = connected & ~no_more_work & ~protect_failed & ~roar_failed & ~weather_failed
+    items_full = items_full & ~baton_failed
+
     # A loop, not unrolled: one copy of the effect code in the program, not MAX_HITS
     # (unrolled, it dominated trace and compile time). It also counts the hits that
     # landed ("Hit N times", battle_controller_player.c:3777-3812) and their crits.
     def one_hit(hit_index, carry):
-        state, hits, crits, contact, thaw, dealt, armed, struck, shell, barbed, record = carry
+        state, hits, crits, contact, thaw, dealt, armed, struck, shell, barbed, record = carry[:11]
+        paused, pursue, damaged0, dealt0 = carry[11:]
+        stopped = paused | pursue
         # BattleControllerPlayer_LoopMultiHit (bcp.c:3780) stops once a battler fainted
         # (faintedMon): the target, or the attacker by Rough Skin (Selfdestruct's user is
         # at 0 HP before its only hit, so the first hit is exempt).
         going = connected & ~absorbed & ((hit_index == 0) | (state.hp[side, user] > 0))
+        going = going & head_on & ~stopped
         landed = (
             going
             & (hit_index < n_hits)
@@ -1062,7 +1201,60 @@ def _use_move(
             focus_armed=armed,
             foe_custap=custap[target_side],
             counter_damage=counter_damage,
+            extra_flinch=~is_uturn,  # U-turn's check comes after its secondary effect (below)
         )
+        first = hit_index == 0
+        # U-turn's secondary effect (ONE_HIT_TRIGGER_SECONDARY, bcp.c:3484-3494: an ON_HIT effect
+        # of a hit without MOVE_STATUS_DID_NOT_HIT / NO_EFFECTS, battle_lib.c:1524-1529):
+        # subscript_attack_then_switch_out.s:5-6, then the contact ability (:7, play_hit's), the
+        # pivot item (:11) and Destiny Bond (:15-34: the defender fainted holding it takes the
+        # attacker down, before the post-hit check of LOOP_FAINTED).
+        tries = (
+            going
+            & first
+            & is_uturn
+            & info.effective
+            & ~_blacked_out(hit_state, target_side)
+            & _has_bench(hit_state, side)
+        )
+        hit_state = _where(
+            tries,
+            pivot_item(
+                tables,
+                hit_state,
+                side,
+                target_side,
+                used,
+                info.shell_bell,
+                info.update_hp,
+                info.damaged,
+            ),
+            hit_state,
+        )
+        fell = (state.hp[target_side, target] > 0) & (hit_state.hp[target_side, target] == 0)
+        bonded = (
+            tries
+            & fell
+            & (hit_state.destiny_bond[target_side] != 0)
+            & (hit_state.hp[side, user] > 0)
+        )
+        hit_state = _set_mon(hit_state, "hp", side, user, 0, bonded)
+        # :48: a user that fainted does not switch; :54 its foe's Pursuit, else the list.
+        goes = tries & (hit_state.hp[side, user] > 0)
+        foe = target_side
+        chases = (
+            goes
+            & ~jnp.asarray(target_moved)
+            & _pursuer_ready(tables, hit_state, foe, foe_action, foe_move, foe_struggling)
+        )
+        lists = goes & ~chases
+        hit_state = _where(lists, _natural_cure(hit_state, side), hit_state)
+        # A U-turn that does not switch makes its King's Rock check after the secondary effect
+        # (ONE_HIT_EXTRA_FLINCH, bcp.c:3524).
+        rock_now = going & first & is_uturn & ~goes & landed & info.damaged
+        rock_now = rock_now & (outcome.flinch_item[side, 0] != 0) & ~jnp.asarray(target_moved)
+        hit_state = kings_rock_flinch(tables, hit_state, side, target_side, used, rock_now)
+        stop_now = lists | chases
         # A move whose script runs no CalcCrit (ids.UNROLLED_EFFECTS): no crit message.
         unrolled = jnp.isin(tables.move_effect[used], jnp.asarray(UNROLLED_EFFECTS, _I32))
         crit = (outcome.crit[side, hit_index] != 0) & ~armored(state, side, target_side) & ~unrolled
@@ -1087,7 +1279,7 @@ def _use_move(
         # (effects.sticky_barb_transfer) on a hit that happened, once the defender took damage
         # this action (struck), and the thaw of a frozen defender a Fire hit damaged
         # (effects.thaw_target; an Aspear / Lum Berry it holds has cured the freeze first).
-        items = connected & ~no_more_work & ~protect_failed & ~roar_failed & ~weather_failed
+        items = jnp.where(head_on, items_full & ~stopped & ~stop_now, tail_items & ~stops)
         state, item_used = held_item_check(tables, hit_state, side, items, info.pluck_flag)
         state = after_damage_items(tables, state, 1 - side, items)
         struck = struck | info.update_hp
@@ -1096,7 +1288,8 @@ def _use_move(
         state = sticky_barb_transfer(
             tables, state, side, target_side, used, items & landed & barbed
         )
-        state, thawed = thaw_target(tables, state, side, target_side, used, info.dealt, items)
+        hit_dealt = jnp.where(head_on, info.dealt, jnp.where(first, state_in.ts_dealt, 0))
+        state, thawed = thaw_target(tables, state, side, target_side, used_t, hit_dealt, items)
         state = after_damage_items(tables, state, side, items & item_used & info.pluck_flag)
         return (
             state,
@@ -1126,6 +1319,10 @@ def _use_move(
                 ),
                 record,
             ),
+            paused | lists,
+            pursue | chases,
+            jnp.where(first, info.damaged, damaged0),
+            jnp.where(first, info.dealt, dealt0),
         )
 
     init = (
@@ -1140,11 +1337,28 @@ def _use_move(
         _I32(0),
         jnp.bool_(False),
         jnp.zeros((6,), _I32),
+        stops,
+        jnp.bool_(False),
+        jnp.bool_(False),
+        _I32(0),
     )
     category = tables.move_category[used]  # CURRENT_MOVE_DATA.class (moveCur)
     target_hp0 = state.hp[target_side, target]
-    state, hits, crits, contact, thaw, dealt, _, struck, shell, _, damage_taken = jax.lax.fori_loop(
-        0, MAX_HITS, one_hit, init
+    looped = jax.lax.fori_loop(0, MAX_HITS, one_hit, init)
+    state, hits, crits, contact, thaw, dealt, _, struck, shell, _, damage_taken = looped[:11]
+    paused, pursue, damaged0, dealt0 = looped[11:]
+    # Where the action stops (a pause at the list, or U-turn's Pursuit next), the tail waits:
+    # the paused action's inputs go to the scratch (``ts_used``, ``ts_damaged``, ``ts_dealt``).
+    stopped = paused | pursue
+    tail = ~stopped
+    note = stopped & head_on
+    state = state._replace(
+        ts_used=jnp.where(note, used, state.ts_used).astype(state.ts_used.dtype),
+        ts_damaged=jnp.where(note, damaged0, state.ts_damaged).astype(state.ts_damaged.dtype),
+        ts_dealt=jnp.where(note, dealt0, state.ts_dealt).astype(state.ts_dealt.dtype),
+        pivot_battler=jnp.where(paused, side + 1, state.pivot_battler).astype(
+            state.pivot_battler.dtype
+        ),
     )
     # The roosting chart ends with the move: the target's own types again (if it is still the
     # active battler: a drag restored the outgoing one's from its personal row).
@@ -1160,7 +1374,7 @@ def _use_move(
     state = _set_mon(state, "hp", side, user, 0, bonded)
     # The unleash script clears the lock (the Bide counter is spent); the move above still
     # saw it locked, so effect_script_0026.s did not restart Bide.
-    state = _unlock(state, side, bide_ends)
+    state = _unlock(state, side, bide_ends & head_on)
     # BattleControllerPlayer_UpdateFlagsWhenHit (battle_controller_player.c:4499-4507),
     # reached on every path once the move was chosen (UPDATE_MOVE_BUFFERS, :3956, or
     # LOOP_SPREAD_MOVES, :3837): moveHit[defender] = the move when the attack message
@@ -1181,7 +1395,12 @@ def _use_move(
     )
     # A special-range Counter's defender is the foe only once its command succeeded.
     record = jnp.where(special_counter, can_act & counter_ok, record)
-    hit_record = jnp.where(record, jnp.where(can_act, used, 0), state.move_hit[target_side])
+    # The tail modes: the paused move showed its attack message and its defender is the foe
+    # unless it is a self-defender (Baton Pass).
+    record = jnp.where(head_on, record, ~self_defender(tables, used_t))
+    shown_t = jnp.where(head_on, can_act, True)
+    hit_record = jnp.where(record, jnp.where(shown_t, used_t, 0), state.move_hit[target_side])
+    hit_record = jnp.where(tail, hit_record, state.move_hit[target_side])
     state = state._replace(
         move_hit=state.move_hit.at[target_side].set(hit_record.astype(state.move_hit.dtype))
     )
@@ -1189,18 +1408,35 @@ def _use_move(
     # FAINT_AFTER_SELFDESTRUCT): AFTER_MOVE_HIT_STATE_SHELL_BELL (:4736-4752) and
     # AFTER_MOVE_HIT_STATE_LIFE_ORB (:4758-4772) need SYSCTL_MOVE_HIT (a hit's UpdateHP,
     # :3441; never the confusion self-hit); Life Orb also a non-status moveCur (``used``).
+    # In the tail modes they are guarded (SYSCTL_UTURN_ACTIVE, bcp.c:4739, :4761) or find a
+    # fainted holder.
+    struck = struck & head_on & tail
     state = shell_bell_heal(tables, state, side, shell, struck)
     life_orb = struck & (tables.move_category[used] != STATUS_CATEGORY)
     state = life_orb_recoil(tables, state, side, life_orb)
-    # UPDATE_MOVE_BUFFERS (:3917) after it: the Choice lock.
-    state = _choice_lock(tables, state, side, target_side, move, ready & can_act, record)
+    # UPDATE_MOVE_BUFFERS (:3917) after it: the Choice lock, on the battler in the slot (the
+    # newcomer after a switch), not for U-turn under SYSCTL_UTURN_ACTIVE (set at the list,
+    # subscript_attack_then_switch_out.s:68, so on a resumed U-turn) nor a Baton Pass whose move
+    # succeeded (bcp.c:3927-3928, by moveTemp).
+    ready_t = jnp.where(head_on, ready, True)
+    exempt = ((move == MOVE_U_TURN) & resumed) | (
+        (move == MOVE_BATON_PASS) & jnp.where(head_on, succeeded, True)
+    )
+    state = _choice_lock(
+        tables, state, side, target_side, move, ready_t & shown_t & tail, record, exempt
+    )
+    # UpdateMoveBuffers writes movePrevByBattler / moveProtect onto the battler in the slot
+    # (bcp.c:3934-3944): the newcomer, whose switch-in cleared them (battle_lib.c:2119, :2123).
+    # U-turn and Baton Pass are not Protect-chain moves, so its chain stays 0.
+    state = _set_last_move(state, side, move, resumed)
     # UpdateMoveBuffers (bcp.c:3936-3942) and UpdateFlagsWhenHit (:4499-4508), on every path of a
     # battler that acts: the battle's movePrev is moveTemp (``move``: the invoker, Nature Power,
     # Struggle, not the called move) when the attack message showed (``can_act``, as the Choice
     # lock's ``shown``), else MOVE_NONE. Copycat reads it (order.copycat_call). Pursuit's
     # pre-switch hit ends without either (battle_script.c:6931-6935), a switch and a bag item
     # never reach them.
-    prev = jnp.where(ready, jnp.where(can_act, move, 0), state.move_prev)
+    prev = jnp.where(ready_t, jnp.where(shown_t, move, 0), state.move_prev)
+    prev = jnp.where(tail, prev, state.move_prev)
     state = state._replace(move_prev=prev.astype(state.move_prev.dtype))
     own = {
         "act_kind": jnp.where(
@@ -1258,7 +1494,8 @@ def _use_move(
     }
     # turnFlags.roosting (subscript_roost.s:11-12): set unless "HP is full!" (NO_MORE_WORK).
     own["roosted"] = connected & (tables.move_effect[used] == EffectId.ROOST) & ~no_more_work
-    return state, own, foe
+    ctl = {"pause": paused, "pursue": pursue}
+    return state, own, foe, ctl
 
 
 def _bag_slot(action) -> jnp.ndarray:
@@ -1312,16 +1549,35 @@ def _act(
     custap,
     foe_roosting=False,
     taken=(0, 0, 0, 0, 0, 0),
-) -> tuple[BattleState, dict, dict]:
-    """``side``'s action: ``(state, own, foe)`` with the events of ``_use_move``. A
-    switch shows the party slot (``ACT_SWITCH``), an item its item id (``ACT_ITEM``)."""
+    mode=MODE_FULL,
+    base=None,
+) -> tuple[BattleState, dict, dict, dict]:
+    """``side``'s action: ``(state, own, foe, ctl)`` with the events of ``_use_move``. A
+    switch shows the party slot (``ACT_SWITCH``), an item its item id (``ACT_ITEM``).
+
+    ``mode`` ``MODE_RESUME`` (E2 batch 6): the paused U-turn / Baton Pass resumes with
+    ``actions[side]`` the switch to the picked slot. The switch branch sends it in
+    (subscript_show_party_list.s:9-24: ``SwitchAndUpdateMon``, a Baton Pass keeping its effects,
+    the hazards, then a faint check against ``base``, the party bitmask of the faints already
+    handled, ``BattleState.ts_alive``), and that state feeds the move branch, which runs the
+    action's tail on the newcomer. ``ctl["fbase"]``: the bitmask the action's own faint check
+    starts from (after the list's)."""
     action = actions[side]
-    switched = _send_out(tables, state, side, jnp.clip(action - MOVE_ACTIONS, 0, 5))
+    mode = jnp.asarray(mode, _I32)
+    resumed = mode == MODE_RESUME
+    baton = resumed & (tables.move_effect[state.ts_used] == EffectId.BATON_PASS)
+    switched = _send_out(
+        tables, state, side, jnp.clip(action - MOVE_ACTIONS, 0, 5), effects=~resumed, baton=baton
+    )
+    base = _alive_mask(state) if base is None else base
+    listed = _faint_check(tables, _with_alive(state, base), switched)
     used = _use_trainer_item(tables, state, side, items[side])
     choice = (choices[0][side], choices[1][side], choices[2][side])
-    moved, own, foe = _use_move(
+    foe = 1 - side
+    pursuit = (actions[foe], choices[0][foe], choices[1][foe])
+    moved, own, foe_events, ctl = _use_move(
         tables,
-        state,
+        _where(resumed, listed, state),
         side,
         action,
         choice,
@@ -1331,41 +1587,52 @@ def _act(
         custap,
         foe_roosting,
         taken,
+        mode,
+        pursuit,
     )
     live = state.over == 0
     switch, item = is_switch(action) & live, is_item(action) & live
     acted = _where(item, used, moved)
-    acted = _where(switch, switched, acted)
+    acted = _where(switch & ~resumed, switched, acted)
     is_move = ~is_switch(action) & ~is_item(action)
     kind = jnp.where(switch, ACT_SWITCH, jnp.where(item, ACT_ITEM, own["act_kind"]))
     act_id = jnp.where(switch, action - MOVE_ACTIONS, jnp.where(item, items[side], own["act_id"]))
     own = {name: jnp.where(is_move, value, 0) for name, value in own.items()}
     own.update(act_kind=kind, act_id=act_id, shown=switch | item | (own["shown"] != 0))
-    return acted, own, {name: jnp.where(is_move, value, 0) for name, value in foe.items()}
+    foe_events = {name: jnp.where(is_move, value, 0) for name, value in foe_events.items()}
+    ctl = {**ctl, "fbase": jnp.where(resumed, _alive_mask(listed), base)}
+    return acted, own, foe_events, ctl
 
 
-def pursuit_fires(tables: Tables, state: BattleState, side, actions, choices) -> jnp.ndarray:
-    """``side`` switches and the other side, which has not acted yet, chose Pursuit:
-    ``BtlCmd_TryPursuit`` (battle_script.c:6884, called from
-    ``subscript_switch_pokemon.s:11`` before the switch) needs the pursuer alive, not
-    asleep or frozen, not loafing (``truant_loafs``, battle_script.c:6903), and PP left in the
-    move."""
-    pursuer = 1 - side
-    move, struggling = choices[0][pursuer], choices[1][pursuer]
+def _pursuer_ready(tables: Tables, state: BattleState, pursuer, action, move, struggling):
+    """``BtlCmd_TryPursuit``'s test of a battler that has not acted yet (battle_script.c:
+    6899-6918): ``pursuer`` chose a move (``action``) whose effect is Pursuit (``move``, fixed at
+    selection; not Struggle) and is alive, not asleep or frozen and not loafing
+    (``truant_loafs``, :6903) now, as the switch or U-turn finds it."""
     mon = state.active[pursuer]
     status = state.status[pursuer, mon]
     return (
         ~truant_loafs(state, pursuer)
         & (state.over == 0)
-        & is_switch(actions[side])
-        & ~is_switch(actions[pursuer])
-        & ~is_item(actions[pursuer])
-        & ~struggling
+        & ~is_switch(action)
+        & ~is_item(action)
+        & ~jnp.asarray(struggling)
         & (tables.move_effect[move] == EffectId.PURSUIT)
         & (state.hp[pursuer, mon] > 0)
         & (status != Status.SLEEP)
         & (status != Status.FREEZE)
     )
+
+
+def pursuit_fires(tables: Tables, state: BattleState, side, actions, choices) -> jnp.ndarray:
+    """``side`` switches and the other side, which has not acted yet, chose Pursuit:
+    ``BtlCmd_TryPursuit`` (battle_script.c:6884, called from
+    ``subscript_switch_pokemon.s:11`` before the switch; ``_pursuer_ready``)."""
+    pursuer = 1 - side
+    ready = _pursuer_ready(
+        tables, state, pursuer, actions[pursuer], choices[0][pursuer], choices[1][pursuer]
+    )
+    return is_switch(actions[side]) & ready
 
 
 def replacement_power_mul(tables: Tables, state: BattleState, actions) -> jnp.ndarray:
@@ -1502,77 +1769,115 @@ def execute_actions(
     """Phase 3: both actors in order, each followed by a faint check. A switch facing
     Pursuit is hit first (with its own faint check), and the pursuer does not act again.
     An item action's bag slot is spent first (``_consume_trainer_items``)."""
-    return _execute_actions(tables, state, actions, outcome, order)[0]
+    actions = jnp.asarray(actions, _I32)
+    return _execute_actions(tables, state, actions, outcome, order, jnp.bool_(False), _I32(10))[0]
+
+
+# The phases of an action in ``_execute_actions``' loop: from its start, after U-turn's Pursuit
+# (``_use_move``'s ``MODE_PURSUIT``), resumed after the party list (``MODE_RESUME``).
+_START, _PURSUIT, _RESUME = MODE_FULL, MODE_PURSUIT, MODE_RESUME
+# The turn-flag events later actors read (``_execute_actions``), kept in the scratch at a pause.
+_TAKEN = ("phys_taken", "spec_taken", "last_taken", "phys_from", "spec_from", "last_from")
 
 
 def _execute_actions(
-    tables: Tables, state: BattleState, actions, outcome: Outcome, order
-) -> tuple[BattleState, dict]:
-    """``execute_actions`` with the turn's events (``_act``; ``pursuit``: the Pursuit hit
-    on the switching Pokemon ran, which shows the pursuer's move)."""
-    first = order[0].astype(_I32)
-    # Each side's move and bag item are fixed when chosen, from the turn's starting state.
-    picks = [selected_move(tables, state, side, actions[side]) for side in (0, 1)]
-    locked = jnp.stack([locked_slot(state, side) >= 0 for side in (0, 1)])
-    choices = (jnp.stack([p[0] for p in picks]), jnp.stack([p[1] for p in picks]), locked)
-    items = jnp.stack(
-        [state.trainer_items[side, _bag_slot(actions[side])] for side in (0, 1)]
-    ).astype(_I32)
-    # CalcTurnOrder's moveEffectsData.custapBerry, from the state the order was fixed in.
-    custap = custap_flags(tables, state, actions)
-    state = _consume_trainer_items(state, actions)
-    pursued = pursuit_fires(tables, state, first, actions, choices)
-    state = _where(
-        is_switch(actions[first]) & (state.over == 0), _natural_cure(state, first), state
-    )
-    before = state
-    pursuer = 1 - first
-    hit = _pursuit_hit(tables, state, pursuer, actions, choices, outcome)
-    crit = (outcome.crit[pursuer, 0] != 0) & ~armored(state, pursuer, first)
-    seen = _hit_events(before, hit, pursuer, True, crit)
-    events = _empty_events()
-    pursuer_events = {
-        "act_kind": ACT_MOVE,
-        "act_id": choices[0][pursuer],
-        "hits": 1,
-        "crit": jnp.zeros((MAX_HITS,), _I32).at[0].set(seen["crit"]),
-    }
-    events = _put(events, pursuer, pursuer_events, pursued)
-    target_events = {"contact_ability": seen["contact"]}
-    events = _put(events, first, target_events, pursued)
-    state = _faint_check(tables, before, _where(pursued, hit, state))
-    # subscript_pursuit.s:106-108: Pursuit's own payout (no pending move: the pursuer's
-    # action is over and a switcher's action reads no move list).
-    state = pay_exp(tables, before, state)
+    tables: Tables, state: BattleState, actions, outcome: Outcome, order, paused, power_mul
+) -> tuple[BattleState, dict, dict]:
+    """``execute_actions`` with the turn's events: ``(state, read, shown)``. ``read``: every
+    event of the turn so far (later actors read the turn flags in it; on a resume it starts from
+    the scratch); ``shown``: this call's own (the observation's; ``pursuit``: a Pursuit hit ran,
+    which shows the pursuer's move).
 
-    # Both actors through one loop body (a loop, not unrolled: one copy of ``_act``).
-    def act(position, carry):
-        state, events = carry
-        before = state
+    E2 batch 6: the actions run in a loop over (position, phase). A U-turn that reaches its
+    foe's Pursuit (subscript_attack_then_switch_out.s:54) stops after its head; the next pass
+    plays the Pursuit at the one Pursuit site (``_pursuit_hit``, a switch's pre-switch hit too),
+    then the action's tail (``MODE_PURSUIT``). A pause at the party list ends the loop with
+    ``pivot_battler`` set and the scratch written (``ts_*``: the order, the cursor, the picks,
+    the turn flags, the bitmask of the faints handled, ``power_mul`` (the search's turn
+    ``powerMul``), the AI switch, the list's ``powerMul``). ``paused`` (the state is such a
+    pause): the picks, the order and the turn flags come from the scratch, ``actions[pivot]`` is
+    the switch to the picked slot, and the loop resumes at the cursor (``MODE_RESUME``)."""
+    real = jnp.where(paused, state.ts_actions.astype(_I32), actions)
+    pivot = jnp.clip(state.pivot_battler.astype(_I32) - 1, 0, 1)
+    acts = jnp.where(paused & (jnp.arange(2) == pivot), actions, real)
+    # Each side's move and bag item are fixed when chosen, from the turn's starting state.
+    picks = [selected_move(tables, state, side, real[side]) for side in (0, 1)]
+    locked = jnp.stack([locked_slot(state, side) >= 0 for side in (0, 1)])
+    choices = (
+        jnp.where(paused, state.ts_move.astype(_I32), jnp.stack([p[0] for p in picks])),
+        # A locked battler picks no command, so it never Struggles (bcp.c:335, :433).
+        jnp.where(paused, state.ts_struggling != 0, jnp.stack([p[1] for p in picks]) & ~locked),
+        jnp.where(paused, state.ts_locked != 0, locked),
+    )
+    items = jnp.stack([state.trainer_items[side, _bag_slot(real[side])] for side in (0, 1)])
+    items = jnp.where(is_item(real), items, 0)
+    items = jnp.where(paused, state.ts_item, items).astype(_I32)
+    # CalcTurnOrder's moveEffectsData.custapBerry, from the state the order was fixed in.
+    custap = jnp.where(paused, state.ts_custap != 0, custap_flags(tables, state, real))
+    state = _where(paused, state, _consume_trainer_items(state, real))
+    state = state._replace(pivot_battler=jnp.zeros_like(state.pivot_battler))
+    read = _empty_events()
+    for name, field in (("protect_ok", "ts_protect_ok"), ("roosted", "ts_roosted")):
+        read[name] = jnp.where(paused, getattr(state, field).astype(_I32), 0)
+    for k, name in enumerate(_TAKEN):
+        read[name] = jnp.where(paused, state.ts_taken[:, k].astype(_I32), 0)
+    read["dragged"] = jnp.where(paused, state.ts_dragged.astype(_I32), 0)
+    read["move_failed"] = jnp.where(paused, state.ts_move_failed.astype(_I32), 0)
+    shown = _empty_events()
+
+    def put(events_pair, side, values, cond):
+        a, b = events_pair
+        return _put(a, side, values, cond), _put(b, side, values, cond)
+
+    def cond(carry):
+        state, _, _, position = carry[:4]
+        return (position < 2) & (state.pivot_battler == 0)
+
+    def body(carry):
+        state, read, shown, position, phase, pursued, base, pick_mul, fired = carry
         side = order[position].astype(_I32)
         second = position == 1  # the first actor's target has not moved yet
+        start, resumed, ap = phase == _START, phase == _RESUME, phase == _PURSUIT
+        # subscript_switch_pokemon.s:5-6: a first actor's switch gets its Natural Cure before
+        # the Pursuit (:11).
+        first_switch = start & (position == 0) & is_switch(acts[side]) & (state.over == 0)
+        state = _where(first_switch, _natural_cure(state, side), state)
+        # The one Pursuit site: the hit before a first actor's switch, or the one U-turn's
+        # head stopped for (``ap``); the pursuer has not acted yet, so it is the second actor.
+        pursuer = 1 - side
+        fire = (start & (position == 0) & pursuit_fires(tables, state, side, acts, choices)) | ap
+        pre = state
+        hit = _pursuit_hit(tables, pre, pursuer, acts, choices, outcome)
+        crit = (outcome.crit[pursuer, 0] != 0) & ~armored(pre, pursuer, side)
+        seen = _hit_events(pre, hit, pursuer, True, crit)
+        pursuer_events = {
+            "act_kind": ACT_MOVE,
+            "act_id": choices[0][pursuer],
+            "hits": 1,
+            "crit": jnp.zeros((MAX_HITS,), _I32).at[0].set(seen["crit"]),
+        }
+        read, shown = put((read, shown), pursuer, pursuer_events, fire)
+        read, shown = put((read, shown), side, {"contact_ability": seen["contact"]}, fire)
+        state = _faint_check(tables, pre, _where(fire, hit, pre))
+        # subscript_pursuit.s:106-108: Pursuit's own payout (no pending move: the pursuer's
+        # action is over, and a switcher's or a U-turn's reads no move list).
+        state = pay_exp(tables, pre, state)
+        pursued = jnp.where(fire, 1 + pursuer, pursued)
+        fired = fired | fire
+        # BtlCmd_TryPursuit's powerMul = 20 (battle_script.c:6928) stands at U-turn's list.
+        pick_mul = jnp.where(ap, PURSUIT_POWER_MUL, pick_mul)
+        # The faints handled so far: the action's faint check and payout start here.
+        base = jnp.where(resumed, base, _alive_mask(state))
         # The foe's Protect this turn (turnFlags.protecting): only a first actor's succeeds.
-        foe_protecting = events["protect_ok"][1 - side] != 0
-        foe_roosting = events["roosted"][1 - side] != 0  # turnFlags.roosting
+        foe_protecting = read["protect_ok"][1 - side] != 0
+        foe_roosting = read["roosted"][1 - side] != 0  # turnFlags.roosting
         # The side's turnFlags damage taken and its attackers (Counter, Metal Burst).
-        taken = jnp.stack(
-            [
-                events[n][side]
-                for n in (
-                    "phys_taken",
-                    "spec_taken",
-                    "last_taken",
-                    "phys_from",
-                    "spec_from",
-                    "last_from",
-                )
-            ]
-        )
-        acted, own, foe_events = _act(
+        taken = jnp.stack([read[n][side] for n in _TAKEN])
+        acted, own, foe_events, ctl = _act(
             tables,
             state,
             side,
-            actions,
+            acts,
             choices,
             items,
             outcome,
@@ -1581,30 +1886,94 @@ def _execute_actions(
             custap,
             foe_roosting,
             taken,
+            phase,
+            base,
         )
-        ran = (state.over == 0) & (state.hp[side, state.active[side]] > 0)
+        # The action ran: its battler was alive at its start (a resumed or pursued one was).
+        ran = (state.over == 0) & ((state.hp[side, state.active[side]] > 0) | ~start)
         # The pursuer does not act again; a Pokemon the first actor's Roar dragged in does not
         # act this turn (UpdateAfterSwitch, battle_lib.c:2053: its action is MOVE_END, so
         # BranchActions runs only MoveEnd for it, bcp.c:893, whose checks repeat the first
         # actor's and change nothing).
-        skip = second & (pursued | (events["dragged"][side] != 0))
+        skip = second & start & ((pursued == 1 + side) | (read["dragged"][side] != 0))
         acted = _where(skip, state, acted)
         ran = ran & ~skip
-        events = _put(events, side, own, ~skip)
+        # The events of an action are its start's (a U-turn's head) or its resume's; the pass
+        # after the Pursuit adds none of its own.
+        keep = ~skip & ~ap
+        read, shown = put((read, shown), side, own, keep)
         foe = 1 - side
-        foe_events = {
-            name: jnp.where(v != 0, v, events[name][foe]) for name, v in foe_events.items()
-        }
-        events = _put(events, foe, foe_events, ~skip)
-        state = _move_end(_faint_check(tables, before, acted), acted, side, ran)
+        merged = [
+            {name: jnp.where(v != 0, v, ev[name][foe]) for name, v in foe_events.items()}
+            for ev in (read, shown)
+        ]
+        read = _put(read, foe, merged[0], keep)
+        shown = _put(shown, foe, merged[1], keep)
+        stop = ctl["pause"] | ctl["pursue"]
+        done = _move_end(
+            _faint_check(tables, _with_alive(acted, ctl["fbase"]), acted), acted, side, ran
+        )
         # MoveEnd's AnyExpPayout, after RecoverStatusByAbility and before CheckBattleOver
-        # (bcp.c:3965-3969). The player's move is still to run when the opponent acted
-        # first and the player chose a move (design §3.3(a), ``learn_pin``).
-        pending = (position == 0) & (side == 1) & (actions[0] < MOVE_ACTIONS)
-        return pay_exp(tables, before, state, pending, actions[0]), events
+        # (bcp.c:3965-3969). The player's move is still to run when the opponent acted first
+        # and the player chose a move (design §3.3(a), ``learn_pin``).
+        pending = (position == 0) & (side == 1) & (real[0] < MOVE_ACTIONS)
+        done = pay_exp(tables, _with_alive(acted, base), done, pending, real[0])
+        state = _where(stop, acted, done)
+        position = jnp.where(stop, position, position + 1)
+        phase = jnp.where(ctl["pursue"], _PURSUIT, _START).astype(_I32)
+        return state, read, shown, position, phase, pursued, base, pick_mul, fired
 
-    state, events = jax.lax.fori_loop(0, 2, act, (state, events))
-    return state, {**events, "pursuit": pursued.astype(_I32)}
+    start = (
+        state,
+        read,
+        shown,
+        jnp.where(paused, state.ts_cursor.astype(_I32), 0),
+        jnp.where(paused, _RESUME, _START).astype(_I32),
+        jnp.where(paused, state.ts_pursued.astype(_I32), 0),
+        jnp.where(paused, state.ts_alive, _alive_mask(state)),
+        jnp.where(paused, state.ts_pick_mul.astype(_I32), NORMAL_POWER_MUL),
+        jnp.bool_(False),
+    )
+    out = jax.lax.while_loop(cond, body, start)
+    state, read, shown, position, _, pursued, base, pick_mul, fired = out
+    # At a pause the scratch holds the turn; else every ts_* is 0 (states merge between turns).
+    stopped = state.pivot_battler != 0
+    scratch = {
+        "ts_cursor": position,
+        "ts_order": order,
+        "ts_actions": real,
+        "ts_move": choices[0],
+        "ts_struggling": choices[1],
+        "ts_locked": choices[2],
+        "ts_item": items,
+        # Only an actor still to come keeps its flag: an earlier one ate its Custap Berry when
+        # its move started (_use_move).
+        "ts_custap": custap & (jnp.arange(2) == order[1]) & (position == 0),
+        "ts_pursued": pursued,
+        "ts_protect_ok": read["protect_ok"],
+        "ts_roosted": read["roosted"],
+        "ts_taken": jnp.stack([read[n] for n in _TAKEN], axis=1),
+        "ts_dragged": read["dragged"],
+        "ts_move_failed": read["move_failed"],
+        "ts_used": state.ts_used,
+        "ts_damaged": state.ts_damaged,
+        "ts_dealt": state.ts_dealt,
+        "ts_alive": base,
+        "ts_power_mul": jnp.where(paused, state.ts_power_mul, power_mul),
+        "ts_ai_switched": is_switch(real[1]),
+        "ts_pick_mul": pick_mul,
+    }
+    if set(scratch) != set(TURN_SCRATCH):
+        raise RuntimeError("the pause must write every ts_* field")
+    state = state._replace(
+        **{
+            name: jnp.where(stopped, jnp.asarray(value), 0).astype(getattr(state, name).dtype)
+            for name, value in scratch.items()
+        },
+        # Read when the order was fixed, read again only at the next turn (the resumed half's).
+        qc_roll=jnp.where(stopped, 0, state.qc_roll).astype(state.qc_roll.dtype),
+    )
+    return state, read, {**shown, "pursuit": fired.astype(_I32)}
 
 
 def _hp_change(state: BattleState, side, mon, delta) -> BattleState:
@@ -2172,15 +2541,21 @@ def _quick_claw_shown(tables: Tables, state: BattleState, actions, order) -> jnp
 
 def _action_phase(
     tables: Tables, state: BattleState, actions, outcome: Outcome
-) -> tuple[BattleState, dict, jnp.ndarray]:
-    """Phases 2-3 with the turn's events: ``(state, events, order)``. ``learn_pin`` is the
-    turn's own (design §3.3(a)): it starts each turn at 0."""
-    state = state._replace(learn_pin=jnp.zeros_like(state.learn_pin))
-    s = _record_last_move(tables, state, actions)
-    order = action_order(tables, s, actions, outcome)
-    claw = _quick_claw_shown(tables, s, actions, order)
-    s, events = _execute_actions(tables, s, actions, outcome, order)
-    return s, {**events, "order": order.astype(_I32), "quick_claw": claw}, order
+) -> tuple[BattleState, dict, dict, jnp.ndarray]:
+    """Phases 2-3 with the turn's events: ``(state, shown, read, order)``. ``learn_pin`` is the
+    turn's own (design §3.3(a)): it starts each turn at 0. A resumed pause (``pivot_battler``)
+    skips the turn's prologue (the pin, the AI's record of the player's move, the order and its
+    Quick Claw, the bag items and a switch's Pursuit) and reads the order from the scratch."""
+    paused = state.pivot_battler != 0
+    fresh = state._replace(learn_pin=jnp.zeros_like(state.learn_pin))
+    fresh = _record_last_move(tables, fresh, actions)
+    order = action_order(tables, fresh, actions, outcome)
+    claw = jnp.where(paused, 0, _quick_claw_shown(tables, fresh, actions, order))
+    order = jnp.where(paused, state.ts_order, order).astype(_I32)
+    power_mul = replacement_power_mul(tables, state, actions)
+    s = _where(paused, state, fresh)
+    s, read, shown = _execute_actions(tables, s, actions, outcome, order, paused, power_mul)
+    return s, {**shown, "order": order, "quick_claw": claw}, read, order
 
 
 def turn_events(tables: Tables, state: BattleState, actions, outcome: Outcome) -> dict:
@@ -2196,18 +2571,22 @@ def step_events(
     (which drops the events) and ``engine.observe`` (which reads them). The events, a
     dict of ``int32`` arrays: per side (``[2]``) ``act_kind`` (``ACT_*``), ``act_id``,
     ``shown`` (the side's turn showed a message), ``crit`` (``[2, MAX_HITS]``) and
-    ``EVENT_FLAGS``; ``order`` (``action_order``) and ``pursuit``."""
+    ``EVENT_FLAGS``; ``order`` (``action_order``) and ``pursuit``. A call that pauses (E2 batch
+    6) returns the first half's events and stops before the end of the turn; the resuming call
+    returns the second half's."""
     actions = jnp.asarray(actions, _I32)
-    s, events, order = _action_phase(tables, state, actions, outcome)
+    s, events, read, order = _action_phase(tables, state, actions, outcome)
+    halted = s.pivot_battler != 0
     sides = end_of_turn_order(tables, s, outcome)
-    s = field_conditions(tables, s, sides)
-    s = end_of_turn(tables, s, actions, outcome, order, sides, events["move_failed"])
-    s = _future_sight(tables, s, sides, outcome, events["protect_ok"])
-    s = _unlock_sleepers(s)
-    s = s._replace(turn=(s.turn + 1).astype(s.turn.dtype))
-    s = _turn_start_items(tables, s)
+    e = field_conditions(tables, s, sides)
+    e = end_of_turn(tables, e, actions, outcome, order, sides, read["move_failed"])
+    e = _future_sight(tables, e, sides, outcome, read["protect_ok"])
+    e = _unlock_sleepers(e)
+    e = e._replace(turn=(e.turn + 1).astype(e.turn.dtype))
+    e = _turn_start_items(tables, e)
     # The turn's speedRand draw, kept for the next turn's readers (qc_kept).
-    s = _keep_quick_claw(tables, s, outcome.quick_claw)
+    e = _keep_quick_claw(tables, e, outcome.quick_claw)
+    s = _where(halted, s, e)
     return _where(state.over != 0, state, s), events
 
 

@@ -236,6 +236,7 @@ from nuzline.engine.outcome import (
     empty_outcome,
     future_thresholds,
     hit_thresholds,
+    pivot_view,
     roar_inputs,
     roar_levels,
     secondary_chance,
@@ -1119,8 +1120,14 @@ def outcome_laws(
     Copycat's order (1: its foe used a move before it, so movePrev is the foe's moveTemp; 0:
     the turn-start movePrev), which keeps only the consistent ``speed_tie`` branches
     (``branch_ok``). Without ``call`` an invoker runs nothing (``call_pending``:
-    ``enumerate_drawn`` refuses those laws)."""
-    actions = jnp.asarray(actions, _I32)
+    ``enumerate_drawn`` refuses those laws).
+
+    A state paused at a party list (E2 batch 6) is read through ``outcome.pivot_view``: the
+    order branch is the stored one (a switch first), and the paused action's King's Rock
+    (``flinch_item[pivot, 0]``, the newcomer's item, ``step._use_move``) is relevant when its hit
+    damaged a target that has not moved."""
+    paused_rock = _paused_rock(tables, state)
+    state, actions = pivot_view(state, actions)
     live = state.over == 0
     sides = jnp.arange(2)
     switch, item = is_switch(actions), is_item(actions)
@@ -1600,6 +1607,10 @@ def outcome_laws(
         # (an extra cut only splits a class), and the Future Sight roll whole.
         possible = jnp.ones_like(possible)
         future_loose = jnp.ones_like(future_loose)
+    # The paused action's King's Rock (E2 batch 6): its own read, in both branches.
+    rock = (jnp.arange(MAX_HITS) == 0)[None, :] & (paused_rock & (kings_rock > 0))[:, None]
+    relevant = relevant._replace(flinch_item=relevant.flinch_item | rock)
+    per_branch = per_branch._replace(flinch_item=per_branch.flinch_item | rock[None])
     return OutcomeLaws(
         hit_thresholds=thresholds,
         hit_possible=possible,
@@ -2431,6 +2442,17 @@ CALL_KEEP = SLEEP_TALK_VALUES
 CALL_DISABLED = 2 * SLEEP_TALK_VALUES
 
 
+def _paused_rock(tables: Tables, state: BattleState) -> jnp.ndarray:
+    """``bool[2]``: the paused action's King's Rock read (``flinch_item[pivot, 0]``) is possible:
+    a paused U-turn whose hit damaged its target (``ts_damaged``), with
+    ``MOVE_FLAG_TRIGGERS_KINGS_ROCK``, before the target moved (``ts_cursor`` 0); whether the
+    newcomer holds one is the law's (``flinch_item_chance``, its item through ``pivot_view``)."""
+    pivot = jnp.clip(state.pivot_battler.astype(_I32) - 1, 0, 1)
+    flag = (tables.move_flags[state.ts_used] & MoveFlag.KINGS_ROCK) != 0
+    on = (state.pivot_battler != 0) & (state.ts_damaged != 0) & flag & (state.ts_cursor == 0)
+    return on & (jnp.arange(2) == pivot)
+
+
 def _disabled_state(state: BattleState, sides) -> BattleState:
     """``state`` with ``disabled_move = last_move`` on ``sides`` (``bool[2]``): the only set
     change of Sleep Talk a turn can make. BtlCmd_TryDisable (battle_script.c:4586-4594) disables
@@ -2473,7 +2495,8 @@ class CallLaws(NamedTuple):
 
 def call_laws(tables: Tables, state: BattleState, actions) -> CallLaws:
     """The law of ``Outcome.call`` for ``step(tables, state, actions, .)``, as
-    ``outcome.sample_outcome`` draws it, read with the turn-start ``state``:
+    ``outcome.sample_outcome`` draws it, read with the turn-start ``state`` (a paused one
+    through ``outcome.pivot_view``):
 
     * Sleep Talk: every value 0..``SLEEP_TALK_VALUES`` - 1 weighs 1 (BtlCmd_TrySleepTalk's
       uniform redraw, battle_script.c:4931-4933; ``order.invoked_move`` takes the allowed slot
@@ -2487,7 +2510,7 @@ def call_laws(tables: Tables, state: BattleState, actions) -> CallLaws:
     * Copycat: no draw; its two orders (``outcome_laws``' ``call``) each weigh 1 and keep their
       consistent ``speed_tie`` branches (``branch_ok``), the second only when its foe uses a
       move."""
-    actions = jnp.asarray(actions, _I32)
+    state, actions = pivot_view(state, actions)
     live = state.over == 0
     uses_move = live & ~is_switch(actions) & ~is_item(actions)
     chosen = jnp.stack([selected_move(tables, state, side, actions[side])[0] for side in (0, 1)])

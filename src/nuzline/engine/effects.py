@@ -1126,23 +1126,34 @@ def _kings_rock(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     ``MOVE_FLAG_TRIGGERS_KINGS_ROCK`` and the defender has HP left. ``subscript_flinch_mon.s``
     then flinches a target that has not moved (:5), unless its Inner Focus (as the attacker
     sees it, :7; a silent block: not Fake Out, not a direct effect) or its Shield Dust (:9,
-    ``_shield_dust``). Substitute (:6) is an unsupported move."""
-    item = state.item[h.side, h.user]
-    flag = (tables.move_flags[h.move] & MoveFlag.KINGS_ROCK) != 0
-    cond = (
-        (tables.item_effect[item] == ItemId.KINGS_ROCK)
-        & h.landed
-        & h.update_hp
-        & (outcome.flinch_item[h.side, h.hit_index] != 0)
+    ``_shield_dust``). Substitute (:6) is an unsupported move. A U-turn that
+    switches makes its check with the newcomer's item (``kings_rock_flinch``, from ``step._use_move``)."""
+    cond = h.landed & h.update_hp & (outcome.flinch_item[h.side, h.hit_index] != 0)
+    return kings_rock_flinch(tables, state, h.side, h.target_side, h.move, cond & ~h.target_moved)
+
+
+def kings_rock_flinch(tables, state, side, target_side, move, cond) -> BattleState:
+    """``CheckExtraFlinch``'s flinch (``_kings_rock``) by ``side``'s active battler on
+    ``target_side``'s where ``cond`` (the hit landed with damage, its ``flinch_item`` roll passed
+    and the target has not moved): the attacker's item now (``Battler_HeldItemEffect(attacker)``,
+    bcp.c:4633; after a U-turn switch the newcomer's, with no U-turn guard, :4636-4642), the move's
+    ``MOVE_FLAG_TRIGGERS_KINGS_ROCK``, a living target, and subscript_flinch_mon.s's Inner Focus
+    (:7) and Shield Dust (:9) as this attacker sees them (``Battler_IgnorableAbility``)."""
+    user, target = state.active[side], state.active[target_side]
+    item = state.item[side, user]
+    flag = (tables.move_flags[move] & MoveFlag.KINGS_ROCK) != 0
+    seen = ignorable(state, side, target_side)
+    on = (
+        jnp.asarray(cond)
+        & (tables.item_effect[item] == ItemId.KINGS_ROCK)
         & flag
-        & _alive(state, h.target_side, h.target)
-        & ~h.target_moved
-        & (h.target_ignorable != AbilityId.INNER_FOCUS)
-        & ~_shield_dust(h)  # CheckExtraFlinch's side effect is INDIRECT (bcp.c:4646)
+        & _alive(state, target_side, target)
+        & (seen != AbilityId.INNER_FOCUS)
+        & (seen != AbilityId.SHIELD_DUST)  # CheckExtraFlinch's side effect is INDIRECT (:4646)
     )
-    old = state.flinched[h.target_side]
+    old = state.flinched[target_side]
     return state._replace(
-        flinched=state.flinched.at[h.target_side].set(jnp.where(cond, 1, old).astype(old.dtype))
+        flinched=state.flinched.at[target_side].set(jnp.where(on, 1, old).astype(old.dtype))
     )
 
 
@@ -1186,6 +1197,38 @@ def sticky_barb_transfer(tables: Tables, state: BattleState, side, foe, move, co
     )
     state = _set(state, "item", (side, user), barb, on)
     return _set(state, "item", (foe, target), 0, on)
+
+
+def sticky_barb_ready(tables: Tables, state: BattleState, side, foe, move) -> jnp.ndarray:
+    """``bool``: ``side``'s attacker would take ``foe``'s Sticky Barb (``sticky_barb_transfer``'s
+    tests but the damage flag)."""
+    user, target = state.active[side], state.active[foe]
+    contact = (tables.move_flags[move] & MoveFlag.CONTACT) != 0
+    return (
+        (tables.item_effect[state.item[foe, target]] == ItemId.STICKY_BARB)
+        & _alive(state, side, user)
+        & (state.item[side, user] == 0)
+        & contact
+    )
+
+
+def pivot_item(
+    tables: Tables, state: BattleState, side, foe, move, shell_dealt, move_hit, damaged
+) -> BattleState:
+    """``BattleSystem_TriggerHeldItemOnPivotMove`` (battle_lib.c:7336-7386) once, at U-turn's
+    subscript_attack_then_switch_out.s:11: four independent ``if``s each overwrite the subscript,
+    so only the last match runs: the defender's Sticky Barb (:7378-7385: a living attacker holding
+    nothing, the defender's damage taken, a contact move; no U-turn guard, the knocked-off mask comes
+    with Knock Off), else the defender's Jaboca Berry (:7368-7375, ``HOLD_EFFECT_RECOIL_PHYSICAL``,
+    an unsupported item), else the attacker's Life Orb (:7357-7366: ``SYSCTL_MOVE_HIT``, not a
+    status move, a living holder without Magic Guard) or Shell Bell (:7345-7355; one holder holds
+    one of them). ``move_hit``: ``SYSCTL_MOVE_HIT``; ``damaged``: the defender's
+    physical / specialDamageTaken; ``shell_dealt``: ``shellBellDamageDealt``."""
+    barb = jnp.asarray(damaged) & sticky_barb_ready(tables, state, side, foe, move)
+    state = sticky_barb_transfer(tables, state, side, foe, move, barb)
+    hit = jnp.asarray(move_hit) & ~barb
+    state = shell_bell_heal(tables, state, side, shell_dealt, hit)
+    return life_orb_recoil(tables, state, side, hit & (tables.move_category[move] != STATUS))
 
 
 def shell_bell_heal(tables: Tables, state: BattleState, side, dealt, cond) -> BattleState:
@@ -1300,6 +1343,9 @@ class MoveHit(NamedTuple):
     # battleCtx->damage after the endure caps where UpdateHP ran (the defender's turnFlags
     # damage taken, bcp.c:3413-3434: Counter, Mirror Coat, Metal Burst), else 0.
     taken: jnp.ndarray
+    # The hit reached its effects: landed and not MOVE_STATUS_DID_NOT_HIT (the move passed the type
+    # chart, ``_Hit.effective``): a U-turn's ON_HIT switch needs it (bcp.c:3486-3487).
+    effective: jnp.ndarray
 
 
 def focus_sash_damage(state: BattleState, side, damage, armed) -> tuple:
@@ -1436,7 +1482,7 @@ def play_hit(
     struggling=False,
     focus_armed=False,
     foe_custap=False,
-    extra_flinch: bool = True,
+    extra_flinch=True,
     counter_damage=0,
 ) -> tuple[BattleState, MoveHit]:
     """Hit ``hit_index`` (0-4, an int or a traced int32) of ``move`` by ``side``'s active Pokemon: damage with
@@ -1644,8 +1690,8 @@ def play_hit(
     state, pluck_flag = _eat_berry(tables, state, h, outcome, foe_custap)
     state = _struggle_recoil(state, h, jnp.asarray(struggling, jnp.bool_))
     state = _contact_ability(tables, state, h, outcome)
-    if extra_flinch:
-        state = _kings_rock(tables, state, h, outcome)
+    if extra_flinch is not False:  # a traced bool: U-turn defers its check (step._use_move)
+        state = _kings_rock(tables, state, h._replace(landed=h.landed & extra_flinch), outcome)
     # UpdateHP's shellBellDamageDealt (bcp.c:3427-3431) and subscript_pursuit.s's (:21-29).
     shell = jnp.where(update_hp, jnp.minimum(taken, target_hp), 0)
     pursuit_shell = jnp.where(update_hp, jnp.minimum(damage, target_hp), 0)
@@ -1658,4 +1704,5 @@ def play_hit(
         shell_bell=shell,
         pursuit_shell_bell=pursuit_shell,
         taken=jnp.where(update_hp, taken, 0),
+        effective=h.effective,
     )

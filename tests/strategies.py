@@ -27,7 +27,12 @@ from hypothesis import strategies as st
 from nuzline.data.spec import PokemonSpec
 from nuzline.data.tables import Names, Tables
 from nuzline.data.trainer import TERRAIN_NAMES, TERRAIN_UNKNOWN, IntermediateData
-from nuzline.engine.actions import legal_actions, legal_opponent_actions
+from nuzline.engine.actions import (
+    MOVE_ACTIONS,
+    legal_actions,
+    legal_opponent_actions,
+    legal_replacements,
+)
 from nuzline.engine.coverage import halved_defense_line, low_defense
 from nuzline.engine.damage import STATUS as STATUS_CATEGORY
 from nuzline.engine.ids import (
@@ -610,6 +615,24 @@ def _draw_pursuit(draw, tables: Tables, a: dict, side: int, active: int, names: 
     a["pp"][side, active, k] = int(tables.move_pp[pursuit])
 
 
+def _draw_pivot(draw, tables: Tables, a: dict, side: int, active: int, names: Names) -> None:
+    """E2 batch 6: maybe (1 in 2) put U-turn (two times in three) or Baton Pass (full PP) in a
+    move slot of the active Pokemon; ``legal_action_pair`` uses it three draws in four, against
+    a Pursuit one draw in four when the foe has one. With a stage or a kept volatile drawn
+    elsewhere, a Baton Pass carries it."""
+    if draw(st.booleans()):
+        return
+    name = "Baton Pass" if draw(st.integers(0, 2)) == 0 else "U-turn"
+    move = names.move(name)
+    # Not over a move the battler is locked into (Bide, Rollout, Uproar: its lock reads it).
+    free = [k for k in range(4) if a["moves"][side, active, k] != a["locked_move"][side]]
+    if not free:
+        return
+    k = draw(st.sampled_from(free))
+    a["moves"][side, active, k] = move
+    a["pp"][side, active, k] = int(tables.move_pp[move])
+
+
 def _draw_batch2_item(draw, tables: Tables, a: dict, side: int, active: int, names: Names) -> None:
     """Maybe (1 in 2) give the active Pokemon a ``BATCH2_ITEMS`` item, picked uniformly
     (``st.randoms``: ``sampled_from`` favours its first entries), with what makes it act, each
@@ -1020,6 +1043,7 @@ def supported_state(draw, tables: Tables, names: Names, invokers: bool = True) -
             _draw_batch5(draw, tables, a, side, active, names)
         _draw_uproar(draw, tables, a, side, active, names)
         _draw_future_sight(draw, tables, a, side, active, names)
+        _draw_pivot(draw, tables, a, side, active, names)
         _draw_choice_lock(draw, a, side, active)
     # No battler on the field sleeps at a turn start during an uproar (B5-7: the turn end woke
     # it): the other side's draws above may have put one to sleep after the uproar was drawn.
@@ -1098,8 +1122,21 @@ def legal_action_pair(draw, tables: Tables, state: BattleState) -> jnp.ndarray:
         for j in range(4, 10)
         if masks[1 - side][j]
     ]
+    # E2 batch 6: U-turn / Baton Pass, and U-turn against a Pursuit.
+    pivots = np.isin(np.asarray(tables.move_effect)[moves], (EffectId.U_TURN, EffectId.BATON_PASS))
+    chase = [
+        (k, j, side)
+        for side in (0, 1)
+        for k in range(4)
+        if pivots[side, k] and masks[side][k]
+        for j in range(4)
+        if pursuit[1 - side, j] and masks[1 - side][j]
+    ]
     if pairs and draw(st.integers(0, 3)) == 0:
         k, j, side = draw(st.sampled_from(pairs))
+        acts = [k, j] if side == 0 else [j, k]
+    elif chase and draw(st.integers(0, 3)) == 0:
+        k, j, side = draw(st.sampled_from(chase))
         acts = [k, j] if side == 0 else [j, k]
     else:
         acts = [draw(st.sampled_from(options)) for options in legal]
@@ -1158,6 +1195,22 @@ def legal_action_pair(draw, tables: Tables, state: BattleState) -> jnp.ndarray:
             slots = [k for k in range(4) if wanted[k] and masks[side][k]]
             if slots and draw(st.booleans()):
                 acts[side] = draw(st.sampled_from(slots))
+        for side in (0, 1):
+            slots = [k for k in range(4) if pivots[side, k] and masks[side][k]]
+            if slots and draw(st.integers(0, 3)) != 0:
+                acts[side] = draw(st.sampled_from(slots))
+    return jnp.asarray(acts, jnp.int32)
+
+
+@st.composite
+def pivot_actions(draw, state: BattleState, actions) -> jnp.ndarray:
+    """E2 batch 6: the actions that resume ``state`` paused at a party list: the pivoting side's
+    switch to any legal replacement (the engine takes any; the AI's pick is the search's), the
+    other side's as before (``step`` reads the scratch's)."""
+    side = int(state.pivot_battler) - 1
+    slots = np.flatnonzero(np.asarray(legal_replacements(state, side))).tolist()
+    acts = np.array(actions)
+    acts[side] = MOVE_ACTIONS + draw(st.sampled_from(slots))
     return jnp.asarray(acts, jnp.int32)
 
 

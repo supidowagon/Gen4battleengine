@@ -43,10 +43,12 @@ from nuzline.engine.ids import (
     ITEM_ABILITY_IDS,
     ITEM_GRISEOUS_ORB,
     METRONOME_DRAW,
+    MOVE_BATON_PASS,
     MOVE_FAKE_OUT,
     MOVE_SLEEP_TALK,
     MOVE_SNORE,
     MOVE_STRUGGLE,
+    MOVE_U_TURN,
     POTION_HP_RESTORED,
     POWER_IF_TARGET_HALF_HP,
     POWER_IF_TARGET_PARALYZED,
@@ -184,6 +186,26 @@ class _Turn:
     # moveFailFlags per side (BattleContext_MoveFailed, lib.c:2808-2820; cleared by
     # SetupNextTurn, lib.c:2232): the Uproar check of the turn's end reads them.
     move_failed: list[bool] = field(default_factory=lambda: [False, False])
+    # E2 batch 6: the turn's actions, picks and order as chosen, the position acting, the
+    # battler whose action a Pursuit ended (1 + battler), the slot a Roar dragged in per side
+    # (1 + slot), powerMul at a U-turn's party list, the search's turn powerMul.
+    actions: tuple = (0, 0)
+    choices: list = field(default_factory=list)
+    items: list[int] = field(default_factory=lambda: [0, 0])
+    commands: list[str] = field(default_factory=list)
+    order: list[int] = field(default_factory=lambda: [0, 1])
+    position: int = 0
+    pursued: int = 0
+    dragged: list[int] = field(default_factory=lambda: [0, 0])
+    pick_mul: int = 10
+    power_mul: int = 10
+    # The paused action's own inputs (BattleState.ts_used / ts_dealt).
+    pivot_dealt: int = 0
+
+
+class _Pause(Exception):
+    """The turn stops at a U-turn's or Baton Pass's party list (``ref_step`` writes the
+    scratch, ``_resume`` goes on)."""
 
 
 def _active(s: RefState, side: int) -> RefPokemon:
@@ -904,9 +926,16 @@ def _cleanup_fainted(turn: _Turn, s: RefState, side: int) -> None:
     _source_leaves(s, side)
 
 
-def _reset_battler(sd: RefSide) -> None:
-    """The volatile state of a side's active battler back to a fresh battler's."""
-    sd.stages = [0] * len(sd.stages)
+# What Baton Pass keeps (BattleSystem_UpdateAfterSwitch, lib.c:2078-2079, :2107; condition.h:72,
+# moves.h:46-48), with the stat stages (InitBattleMon, lib.c:97-101).
+BATON_PASSED = ("confusion", "leech_seed", "substitute_hp", "water_sport", "mud_sport", "aqua_ring")
+
+
+def _reset_battler(sd: RefSide, baton: bool = False) -> None:
+    """The volatile state of a side's active battler back to a fresh battler's; a Baton Pass
+    keeps ``BATON_PASSED`` and the stages."""
+    if not baton:
+        sd.stages = [0] * len(sd.stages)
     for name in (
         "confusion",
         "leech_seed",
@@ -937,7 +966,8 @@ def _reset_battler(sd: RefSide) -> None:
         "destiny_bond",
         "uproar",
     ):
-        setattr(sd, name, 0)
+        if not (baton and name in BATON_PASSED):
+            setattr(sd, name, 0)
 
 
 def _unlock(sd: RefSide) -> None:
@@ -1656,7 +1686,7 @@ def _trace(tables, s: RefState, side: int, foe: int) -> bool:
     return True
 
 
-def _enter(turn: _Turn, s: RefState, side: int, slot: int) -> None:
+def _enter(turn: _Turn, s: RefState, side: int, slot: int, baton: bool = False) -> None:
     """``SwitchAndUpdateMon`` -> ``BattleSystem_InitBattleMon`` (lib.c:70): a fresh
     battler (stages neutral, no volatiles; no Baton Pass in M1), and
     ``BattleSystem_UpdateAfterSwitch`` (lib.c:2094) sets ``fakeOutTurnNumber =
@@ -1668,7 +1698,7 @@ def _enter(turn: _Turn, s: RefState, side: int, slot: int) -> None:
     _restore_types(turn.tables, s, side)  # the outgoing battler's Camouflage ends
     _restore_ability(turn.tables, s, side)  # and its traced ability
     sd.active = slot
-    _reset_battler(sd)
+    _reset_battler(sd, baton)
     sd.fake_out_turn = turn.entry_turn
     # lib.c:2151-2152: the AI forgets the battler's moves and ability (it only tracks
     # the player's).
@@ -1807,12 +1837,13 @@ def _holds_choice(tables, s: RefState, side: int) -> bool:
 
 
 def _update_choice_lock(
-    turn: _Turn, s: RefState, side: int, defender: int | None, move: int
+    turn: _Turn, s: RefState, side: int, defender: int | None, move: int, exempt: bool = False
 ) -> None:
     """``UpdateFlagsWhenHit`` (bcp.c:4489-4496) then ``UpdateMoveBuffers`` (bcp.c:3921-3934),
     when the attack message was shown: the defending foe's lock is cleared unless it holds a
-    Choice item; the user is locked into ``moveTemp`` (``move``; not Struggle; U-turn and
-    Baton Pass are unsupported) while it holds one, else its lock is cleared. ``defender``:
+    Choice item; the user is locked into ``moveTemp`` (``move``; not Struggle, not ``exempt``: a
+    U-turn under SYSCTL_UTURN_ACTIVE or a Baton Pass that succeeded, bcp.c:3927-3928) while it
+    holds one, else its lock is cleared. ``defender``:
     the defending side (``DEFENDING_MON``, bcp.c:4488-4496), None when the foe is not it."""
     if not turn.attack_message:
         return
@@ -1820,7 +1851,7 @@ def _update_choice_lock(
         s.sides[defender].choice_lock = 0
     if not _holds_choice(turn.tables, s, side):
         s.sides[side].choice_lock = 0
-    elif move != MOVE_STRUGGLE:
+    elif move != MOVE_STRUGGLE and not exempt:
         s.sides[side].choice_lock = move
 
 
@@ -2385,6 +2416,9 @@ def _hit(turn: _Turn, s: RefState, side: int, move: int, hit: int, struggling: b
         # effect_script_0254.s: MOVE_SIDE_EFFECT_ON_HIT | subscript_struggle.s, a
         # secondary effect: Divide(maxHP, 4) recoil, before the contact ability.
         _lose_hp(turn, s, side, _divide(_active(s, side).max_hp, 4))
+    effect = _t(tables, "move_effect", move)
+    if effect == EffectId.U_TURN and effective and _u_turn(turn, s, side, move, hit, dealt):
+        return dealt, update_hp
     _contact_ability(turn, s, side, move, hit, effective, dealt)
     # BattleControllerPlayer_CheckExtraFlinch (bcp.c:4630-4653): King's Rock / Razor Fang on a
     # hit that damaged a living target, RandNext() % 100 < param (outcome.flinch_item), a
@@ -2402,6 +2436,74 @@ def _hit(turn: _Turn, s: RefState, side: int, move: int, hit: int, struggling: b
     ):
         s.sides[target].flinched = 1
     return dealt, update_hp
+
+
+def _bench(s: RefState, side: int) -> bool:
+    """``BattleSystem_AnyReplacementMons`` (lib.c:3125) in singles."""
+    sd = s.sides[side]
+    return any(m.species and m.hp for i, m in enumerate(sd.party) if i != sd.active)
+
+
+def _u_turn(turn: _Turn, s: RefState, side: int, move: int, hit: int, dealt: int) -> bool:
+    """U-turn's ON_HIT secondary effect, ``subscript_attack_then_switch_out.s``, on a hit that
+    worked. Returns whether it ran past its checks (:5 the defender side is not blacked out,
+    :6 the user has a replacement), in which case its contact ability (:7) and the King's Rock
+    check after it are this function's: the contact ability, the pivot item (:11,
+    ``BattleSystem_TriggerHeldItemOnPivotMove``, lib.c:7336-7386: the last match of the
+    defender's Sticky Barb, Jaboca (unsupported), the attacker's Life Orb or Shell Bell), Destiny
+    Bond (:15-34); a user still alive (:48) meets its foe's Pursuit (:54, then the faint check
+    and payout of subscript_pursuit.s), and a user alive after it (:55) gets its Natural Cure
+    (:56-57) and the party list (:71): ``_Pause``. A user that fainted switches nothing: the
+    action goes on, King's Rock included (bcp.c:3524, no attacker HP test)."""
+    tables, o = turn.tables, turn.outcome
+    foe = 1 - side
+    if all(m.species == 0 or m.hp == 0 for m in s.sides[foe].party) or not _bench(s, side):
+        return False
+    target_moved = turn.position == 1
+    _contact_ability(turn, s, side, move, hit, True, dealt)
+    user, holder = _active(s, side), _active(s, foe)
+    barb = (
+        turn.damaged
+        and _item_effect(tables, holder) == ItemId.STICKY_BARB
+        and user.hp
+        and user.item == 0
+        and _t(tables, "move_flags", move) & MoveFlag.CONTACT
+    )
+    if barb:
+        _sticky_barb_transfer(turn, s, side, foe, move)
+    elif turn.move_hit:
+        _shell_bell(turn, s, side, turn.shell_dealt)
+        if _t(tables, "move_category", move) != STATUS_CLASS:
+            _life_orb_recoil(turn, s, side)
+    if holder.hp == 0 and s.sides[foe].destiny_bond and user.hp > 0:
+        _lose_hp(turn, s, side, user.hp)
+    if user.hp > 0 and not target_moved:
+        before = turn.done[foe]
+        _pursuit(turn, s, side, turn.actions, turn.choices)
+        if turn.done[foe] and not before:  # the Pursuit hit (subscript_pursuit.s)
+            turn.pursued = foe + 1
+            turn.pick_mul = PURSUIT_POWER_MUL
+            _faint_check(turn, s)
+            _pay_exp(turn, s)
+    if user.hp > 0 and not s.over:
+        if user.ability == AbilityId.NATURAL_CURE:  # TryRestoreStatusOnSwitch, script.c:9139
+            user.status = Status.NONE
+            user.status_counter = 0
+        turn.pivot_dealt = dealt
+        raise _Pause
+    # No switch: AfterMoveMessage goes on with the extra flinch (the pursuer, if any, has moved).
+    if (
+        turn.damaged
+        and _item_effect(tables, user) == ItemId.KINGS_ROCK
+        and o.flinch_item[side][hit]
+        and _t(tables, "move_flags", move) & MoveFlag.KINGS_ROCK
+        and holder.hp > 0
+        and not target_moved
+        and not turn.done[foe]
+        and _ignorable(s, side, foe) not in (AbilityId.INNER_FOCUS, AbilityId.SHIELD_DUST)
+    ):
+        s.sides[foe].flinched = 1
+    return True
 
 
 def _status_disrupted(turn: _Turn, s: RefState, side: int, move: int) -> int:
@@ -2802,6 +2904,16 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
     # attacker and the new defender.
     if effect == EffectId.ROAR and not _roar(turn, s, side):
         return record
+    # Baton Pass (effect_script_0127.s, subscript_baton_pass.s): no replacement fails (:5,
+    # :19-20: subscript_missed.s, no AfterMoveEffects); else Natural Cure (:7-8) and the list.
+    if effect == EffectId.BATON_PASS:
+        if not _bench(s, side):
+            return record
+        if mon.ability == AbilityId.NATURAL_CURE:
+            mon.status = Status.NONE
+            mon.status_counter = 0
+        turn.pivot_dealt = 0
+        raise _Pause
     # A failed weather move: MOVE_STATUS_FAILED, subscript_missed.s, no AfterMoveEffects.
     if effect == EffectId.WEATHER and _weather_fails(
         s, _t(tables, "move_param", move, 0), _t(tables, "move_param", move, 1)
@@ -2941,6 +3053,7 @@ def _roar(turn: _Turn, s: RefState, side: int) -> bool:
     if out.status == Status.TOXIC:
         out.status_counter = 0
     _enter(turn, s, foe, slot)
+    turn.dragged[foe] = slot + 1
     _send_out_exp(s, foe)  # PokemonSendOut BTLSCR_DEFENDER (:22)
     _entry_hazards(turn, s, foe)  # BATTLE_SUBSCRIPT_HAZARDS_CHECK (:31)
     _switch_in_effects(turn, s, foe)
@@ -3382,13 +3495,18 @@ def _choose(tables, s: RefState, side: int, action: int) -> tuple[int, bool, boo
 
 
 def ref_step(tables, state: RefState, actions: tuple[int, int], outcome) -> RefState:
-    """Play one turn (``engine.step.step``'s contract)."""
+    """Play one turn (``engine.step.step``'s contract): a state paused at a U-turn's or Baton
+    Pass's party list (``pivot_battler``) resumes with ``actions[pivot]`` the switch to the
+    picked slot (``_resume``); a turn that reaches such a list stops there and writes the
+    scratch (``_write_scratch``)."""
     s = copy.deepcopy(state)
     if s.over:
         return s
+    actions = (int(actions[0]), int(actions[1]))
+    if s.pivot_battler:
+        return _resume(tables, s, actions, outcome)
     s.learn_pin = 0  # the turn's own pin (design §3.3(a))
     turn = _Turn(tables, outcome, entry_turn=s.turn + 1)
-    actions = (int(actions[0]), int(actions[1]))
     choices = [_choose(tables, s, side, actions[side]) for side in (0, 1)]
     commands = [_command(a) for a in actions]
     # TrainerAI_RecordLastMove (trainer_ai.c:2705-2717) runs on the AI's FIGHT path
@@ -3401,6 +3519,9 @@ def ref_step(tables, state: RefState, actions: tuple[int, int], outcome) -> RefS
         for k, m in enumerate(_active(s, 0).moves):
             if pending and m == pending:
                 s.ai_seen_moves[player.active][k] = 1
+    # The search's turn powerMul (step.replacement_power_mul): the player's switch meets the
+    # opponent's Pursuit, judged on the turn-start state.
+    turn.power_mul = PURSUIT_POWER_MUL if _pursues(tables, s, 0, actions, choices) else 10
     # TrainerAI_ShouldUseItem (trainer_ai.c:4056) empties the bag slot when it picks the
     # item (:4193), before any action runs. Its loop (:4091) does not break: every later
     # slot i with aliveMons <= trainerItemCounts - i + 1 (:4092) is zeroed too, aliveMons
@@ -3437,8 +3558,41 @@ def ref_step(tables, state: RefState, actions: tuple[int, int], outcome) -> RefS
         # activated Custap Berry sets its holder's custapBerry flag (lib.c:1296, :1362).
         if not early[0]:
             turn.custap = [_custap_active(tables, s, side) for side in (0, 1)]
+    turn.actions, turn.choices, turn.items = actions, choices, items
+    turn.commands, turn.order = commands, order
+    try:
+        _actions(turn, s, 0)
+    except _Pause:
+        _write_scratch(turn, s)
+        return s
+    return _end_turn(turn, s)
 
-    for position, side in enumerate(order):
+
+def _pursues(tables, s: RefState, side: int, actions, choices) -> bool:
+    """``step.pursuit_fires``: ``side`` switches and the other side, which has not acted, chose
+    Pursuit and can use it now (alive, not asleep or frozen, not loafing)."""
+    pursuer = 1 - side
+    move, struggling, _ = choices[pursuer]
+    mon = _active(s, pursuer)
+    return (
+        _command(actions[side]) == SWITCH
+        and _command(actions[pursuer]) == FIGHT
+        and not struggling
+        and _t(tables, "move_effect", move) == EffectId.PURSUIT
+        and mon.hp > 0
+        and mon.status not in (Status.SLEEP, Status.FREEZE)
+        and not _truant_loafs(s, pursuer)
+    )
+
+
+def _actions(turn: _Turn, s: RefState, start: int) -> None:
+    """The actions from ``start`` on in ``turn.order``; each ends in ``_finish_action``. A party
+    list raises ``_Pause`` with ``turn.position`` at the paused action."""
+    tables = turn.tables
+    actions, choices, items, commands = turn.actions, turn.choices, turn.items, turn.commands
+    for position in range(start, 2):
+        side = turn.order[position]
+        turn.position = position
         if s.over:
             break
         if turn.done[side] or _active(s, side).hp == 0:
@@ -3447,7 +3601,10 @@ def ref_step(tables, state: RefState, actions: tuple[int, int], outcome) -> RefS
         if commands[side] == ITEM:
             _use_item(tables, s, side, items[side])
         elif commands[side] == SWITCH:
+            pursuer_done = turn.done[1 - side]
             _switch(turn, s, side, actions[side] - MOVE_ACTIONS, actions, choices)
+            if turn.done[1 - side] and not pursuer_done:  # its Pursuit hit (_pursuit)
+                turn.pursued = 2 - side
         else:
             move, struggling, locked = choices[side]
             turn.attack_message = turn.move_hit = turn.damaged = False
@@ -3459,11 +3616,14 @@ def ref_step(tables, state: RefState, actions: tuple[int, int], outcome) -> RefS
             saved = list(foe.types)
             if turn.roosting[1 - side]:
                 foe.types = [Type.MYSTERY if t == Type.FLYING else t for t in foe.types]
-            record = _fight(
-                turn, s, side, actions[side], move, struggling, locked, target_moved=position == 1
-            )
-            if _active(s, 1 - side) is foe:
-                foe.types = saved
+            try:
+                record = _fight(
+                    turn, s, side, actions[side], move, struggling, locked,
+                    target_moved=position == 1,
+                )  # fmt: skip
+            finally:
+                if _active(s, 1 - side) is foe:
+                    foe.types = saved
             # TRIGGER_AFTER_HIT_EFFECTS (bcp.c:3897-3915): Shell Bell (:4736-4752), then Life
             # Orb's recoil, which needs SYSCTL_MOVE_HIT and a non-status moveCur (:4758-4772).
             if turn.move_hit:
@@ -3471,9 +3631,11 @@ def ref_step(tables, state: RefState, actions: tuple[int, int], outcome) -> RefS
             if turn.move_hit and _t(tables, "move_category", turn.move_cur) != STATUS_CLASS:
                 _life_orb_recoil(turn, s, side)
             # UpdateFlagsWhenHit / UpdateMoveBuffers: the Choice lock (the foe is the defender
-            # exactly when _fight returns its moveHit record).
+            # exactly when _fight returns its moveHit record); a Baton Pass that succeeded
+            # (moveTemp, bcp.c:3928) never locks.
             defender = 1 - side if record is not None else None
-            _update_choice_lock(turn, s, side, defender, move)
+            exempt = move == MOVE_BATON_PASS and turn.attack_message
+            _update_choice_lock(turn, s, side, defender, move, exempt)
             # UpdateMoveBuffers (bcp.c:3936-3942) / UpdateFlagsWhenHit (:4499-4508): the
             # battle's movePrev is moveTemp (the chosen move) when the attack message showed.
             s.move_prev = move if turn.attack_message else 0
@@ -3482,26 +3644,35 @@ def ref_step(tables, state: RefState, actions: tuple[int, int], outcome) -> RefS
             # Protect, Detect or Endure (script.c:5154-5158). Folded into protect_count here.
             if not (turn.attack_message and turn.move_cur in PROTECT_CHAIN_MOVES):
                 s.sides[side].protect_count = 0
-        turn.done[side] = True
-        _faint_check(turn, s)  # BATTLE_CONTROL_CHECK_ANY_FAINTED after each action
-        # UpdateFlagsWhenHit runs after LOOP_FAINTED (bcp.c:3820-3837): a KO'd defender
-        # keeps the record until its replacement clears it.
-        if record is not None:
-            s.sides[1 - side].move_hit = record
-        # BattleControllerPlayer_MoveEnd -> ClearFlags (bcp.c:3986, :4389) clears the
-        # actor's own moveHit, unless CheckBattleOver ended the battle first (:3969).
-        if not s.over:
-            s.sides[side].move_hit = 0
-            # BattleControllerPlayer_MoveEnd: RecoverStatusByAbility, attacker then
-            # defender (bcp.c:3965-3967).
-            _recover_status_by_ability(s, side)
-            _recover_status_by_ability(s, 1 - side)
-        # MoveEnd's AnyExpPayout, after the status recovery and before CheckBattleOver
-        # (bcp.c:3965-3969): a KO that ends the battle pays too. The player's move is still to
-        # run when the opponent acted first and the player chose a move (learn_pin).
-        pending = position == 0 and side == 1 and commands[0] == FIGHT
-        _pay_exp(turn, s, pending, actions[0])
+        _finish_action(turn, s, side, position, record)
 
+
+def _finish_action(turn: _Turn, s: RefState, side: int, position: int, record) -> None:
+    """An action's end: its faint check, ``moveHit``, ``MoveEnd`` and its payout."""
+    turn.done[side] = True
+    _faint_check(turn, s)  # BATTLE_CONTROL_CHECK_ANY_FAINTED after each action
+    # UpdateFlagsWhenHit runs after LOOP_FAINTED (bcp.c:3820-3837): a KO'd defender
+    # keeps the record until its replacement clears it.
+    if record is not None:
+        s.sides[1 - side].move_hit = record
+    # BattleControllerPlayer_MoveEnd -> ClearFlags (bcp.c:3986, :4389) clears the
+    # actor's own moveHit, unless CheckBattleOver ended the battle first (:3969).
+    if not s.over:
+        s.sides[side].move_hit = 0
+        # BattleControllerPlayer_MoveEnd: RecoverStatusByAbility, attacker then
+        # defender (bcp.c:3965-3967).
+        _recover_status_by_ability(s, side)
+        _recover_status_by_ability(s, 1 - side)
+    # MoveEnd's AnyExpPayout, after the status recovery and before CheckBattleOver
+    # (bcp.c:3965-3969): a KO that ends the battle pays too. The player's move is still to
+    # run when the opponent acted first and the player chose a move (learn_pin).
+    pending = position == 0 and side == 1 and turn.commands[0] == FIGHT
+    _pay_exp(turn, s, pending, turn.actions[0])
+
+
+def _end_turn(turn: _Turn, s: RefState) -> RefState:
+    """The end of the turn after the actions."""
+    tables, outcome = turn.tables, turn.outcome
     order = _speed_order(tables, s, outcome)  # BattleSystem_SortMonSpeedOrder, bcp.c:887
     _field_conditions(turn, s, order)
     _end_of_turn(turn, s, order)
@@ -3527,6 +3698,144 @@ def ref_step(tables, state: RefState, actions: tuple[int, int], outcome) -> RefS
     # The turn's speedRand (bcp.c:853-857), kept only while it can be read (_qc_kept).
     _keep_qc(tables, s, list(outcome.quick_claw))
     return s
+
+
+def _write_scratch(turn: _Turn, s: RefState) -> None:
+    """The turn stopped at a party list: ``BattleState``'s scratch (``engine.state``
+    docstring), field for field as ``step`` writes it."""
+    side = turn.order[turn.position]
+    assert not turn.payout, "the payouts before a list are paid"
+    s.pivot_battler = side + 1
+    s.ts_cursor = turn.position
+    s.ts_order = list(turn.order)
+    s.ts_actions = list(turn.actions)
+    s.ts_move = [c[0] for c in turn.choices]
+    s.ts_struggling = [int(c[1]) for c in turn.choices]
+    s.ts_locked = [int(c[2]) for c in turn.choices]
+    s.ts_item = list(turn.items)
+    s.ts_custap = [int(f) for f in turn.custap]
+    s.ts_pursued = turn.pursued
+    s.ts_protect_ok = [int(f) for f in turn.protecting]
+    s.ts_roosted = [int(f) for f in turn.roosting]
+    s.ts_taken = [list(row) for row in turn.taken]
+    s.ts_dragged = list(turn.dragged)
+    s.ts_move_failed = [int(f) for f in turn.move_failed]
+    s.ts_used = turn.move_cur
+    s.ts_damaged = int(turn.damaged)
+    s.ts_dealt = turn.pivot_dealt
+    fainted = set(turn.fainted)
+    s.ts_alive = [
+        sum(1 << i for i, m in enumerate(sd.party) if m.hp > 0 or (k, i) in fainted)
+        for k, sd in enumerate(s.sides)
+    ]
+    s.ts_power_mul = turn.power_mul
+    s.ts_ai_switched = int(turn.commands[1] == SWITCH)
+    s.ts_pick_mul = turn.pick_mul
+    for sd in s.sides:  # read by the order, next read at the next turn
+        sd.qc_roll = 0
+
+
+_SCRATCH_ZERO = {
+    "pivot_battler": 0, "ts_cursor": 0, "ts_order": [0, 0], "ts_actions": [0, 0],
+    "ts_move": [0, 0], "ts_struggling": [0, 0], "ts_locked": [0, 0], "ts_item": [0, 0],
+    "ts_custap": [0, 0], "ts_pursued": 0, "ts_protect_ok": [0, 0], "ts_roosted": [0, 0],
+    "ts_taken": [[0] * 6, [0] * 6], "ts_dragged": [0, 0], "ts_move_failed": [0, 0],
+    "ts_used": 0, "ts_damaged": 0, "ts_dealt": 0, "ts_alive": [0, 0], "ts_power_mul": 0,
+    "ts_ai_switched": 0, "ts_pick_mul": 0,
+}  # fmt: skip
+
+
+def _resume(tables, s: RefState, actions: tuple[int, int], outcome) -> RefState:
+    """Resume a turn paused at a party list: the turn's scratch back into ``_Turn``, the
+    switch of ``subscript_show_party_list.s`` (``SwitchAndUpdateMon``, a Baton Pass keeping its
+    effects, ``PokemonSendOut``, the hazards, the faint check: :9-24), then the rest of the paused
+    action on the newcomer (``AfterMoveMessage``'s King's Rock, ``AfterMoveEffects``: the switch-in
+    effects, the item checks, the thaw; the guarded Sticky Barb, Shell Bell and Life Orb skipped;
+    ``UpdateMoveBuffers``, ``MoveEnd``), the later actions and the end of the turn."""
+    side = s.pivot_battler - 1
+    turn = _Turn(tables, outcome, entry_turn=s.turn + 1)
+    turn.actions = tuple(s.ts_actions)
+    turn.choices = [(s.ts_move[k], bool(s.ts_struggling[k]), bool(s.ts_locked[k])) for k in (0, 1)]
+    turn.items = list(s.ts_item)
+    turn.commands = [_command(a) for a in turn.actions]
+    turn.order = list(s.ts_order)
+    turn.position = s.ts_cursor
+    turn.custap = [bool(f) for f in s.ts_custap]
+    turn.pursued = s.ts_pursued
+    turn.protecting = [bool(f) for f in s.ts_protect_ok]
+    turn.roosting = [bool(f) for f in s.ts_roosted]
+    turn.taken = [list(row) for row in s.ts_taken]
+    turn.dragged = list(s.ts_dragged)
+    turn.move_failed = [bool(f) for f in s.ts_move_failed]
+    turn.power_mul, turn.pick_mul = s.ts_power_mul, s.ts_pick_mul
+    turn.fainted = [
+        (k, i)
+        for k, sd in enumerate(s.sides)
+        for i, m in enumerate(sd.party)
+        if m.hp == 0 and s.ts_alive[k] >> i & 1
+    ]
+    for position in range(s.ts_cursor):
+        turn.done[turn.order[position]] = True
+    if s.ts_pursued:
+        turn.done[s.ts_pursued - 1] = True
+    for k in (0, 1):
+        if s.ts_dragged[k]:
+            turn.done[k] = True
+    move, used = s.ts_move[side], s.ts_used
+    damaged, dealt = bool(s.ts_damaged), s.ts_dealt
+    position = s.ts_cursor
+    for name, value in _SCRATCH_ZERO.items():
+        setattr(s, name, copy.deepcopy(value))
+    foe = 1 - side
+    baton = _t(tables, "move_effect", used) == EffectId.BATON_PASS
+    # The list (subscript_show_party_list.s): the outgoing Pokemon goes back to the party
+    # without its toxic counter (battle_controller.c:1482).
+    out = _active(s, side)
+    if out.status == Status.TOXIC:
+        out.status_counter = 0
+    _enter(turn, s, side, actions[side] - MOVE_ACTIONS, baton)
+    _send_out_exp(s, side)  # :18
+    _entry_hazards(turn, s, side)  # :22
+    _faint_check(turn, s)  # :23-24
+    # AfterMoveMessage's King's Rock with the newcomer's item (bcp.c:4630-4650).
+    o = turn.outcome
+    holder = _active(s, foe)
+    if (
+        damaged
+        and _item_effect(tables, _active(s, side)) == ItemId.KINGS_ROCK
+        and o.flinch_item[side][0]
+        and _t(tables, "move_flags", used) & MoveFlag.KINGS_ROCK
+        and holder.hp > 0
+        and position == 0
+        and _ignorable(s, side, foe) not in (AbilityId.INNER_FOCUS, AbilityId.SHIELD_DUST)
+    ):
+        s.sides[foe].flinched = 1
+    # AfterMoveEffects (bcp.c:3638): the switch-in effects, the item checks, the thaw.
+    _switch_in_effects(turn, s, side)
+    for battler in (side, foe):
+        _held_item(turn, s, battler)
+    _thaw_target(turn, s, side, used, dealt)
+    for battler in (side, foe):
+        _held_item(turn, s, battler)
+    # UpdateMoveBuffers / UpdateFlagsWhenHit on the newcomer (bcp.c:3917-3944): no Choice lock
+    # for U-turn under SYSCTL_UTURN_ACTIVE nor Baton Pass (moveTemp), movePrev and
+    # movePrevByBattler the paused move's moveTemp, the protect chain reset.
+    turn.attack_message = True
+    turn.move_cur = used
+    record = None if _move_target(tables, used) in SELF_DEFENDER else used
+    defender = foe if record is not None else None
+    exempt = move in (MOVE_U_TURN, MOVE_BATON_PASS)
+    _update_choice_lock(turn, s, side, defender, move, exempt)
+    s.move_prev = move
+    s.sides[side].last_move = move
+    s.sides[side].protect_count = 0
+    _finish_action(turn, s, side, position, record)
+    try:
+        _actions(turn, s, position + 1)
+    except _Pause:
+        _write_scratch(turn, s)
+        return s
+    return _end_turn(turn, s)
 
 
 def _qc_rolls(s: RefState) -> list[int]:

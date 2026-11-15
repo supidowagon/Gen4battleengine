@@ -28,6 +28,7 @@ from tests.strategies import (
     MALE_ONLY,
     any_outcome,
     legal_action_pair,
+    pivot_actions,
     possible_genders,
     supported_state,
 )
@@ -47,12 +48,30 @@ def test_jax_matches_reference(tables, names, data):
     s = data.draw(supported_state(tables, names))
     acts = data.draw(legal_action_pair(tables, s))
     o = data.draw(any_outcome())
-    jax_out = jit_step(tables, s, acts, o)
-    ref_out = from_ref(
-        ref_step(to_numpy(tables), to_ref(s), tuple(int(x) for x in acts), outcome_to_py(o))
-    )
-    for name, a, b in zip(jax_out._fields, jax_out, ref_out):
-        np.testing.assert_array_equal(np.asarray(a), np.asarray(b), err_msg=name)
+    _step_both(tables, s, acts, o, data)
+
+
+_PAUSES: list[int] = []  # the pauses the generator reached (a coverage aid for runs)
+
+
+def _step_both(tables, s, acts, o, data):
+    """Both engines on one turn, field for field; a turn that pauses at a U-turn's or Baton
+    Pass's party list (E2 batch 6) is resumed with a drawn pick and a fresh outcome (each half
+    reads its own draws), again for a second pause in the same turn."""
+    for _ in range(3):
+        jax_out = jit_step(tables, s, acts, o)
+        ref_out = from_ref(
+            ref_step(to_numpy(tables), to_ref(s), tuple(int(x) for x in acts), outcome_to_py(o))
+        )
+        for name, a, b in zip(jax_out._fields, jax_out, ref_out, strict=True):
+            np.testing.assert_array_equal(np.asarray(a), np.asarray(b), err_msg=name)
+        if int(jax_out.pivot_battler) == 0:
+            return jax_out
+        _PAUSES.append(int(jax_out.pivot_battler))
+        s = jax_out
+        acts = data.draw(pivot_actions(s, acts))
+        o = data.draw(any_outcome())
+    raise AssertionError("a turn paused more than twice")
 
 
 def test_possible_genders_follows_the_decomp_gender_ratio():
@@ -173,12 +192,7 @@ def test_step_payouts_match_reference(tables, names, data):
     s = s._replace(hp=jnp.asarray(hp, s.hp.dtype))
     acts = data.draw(legal_action_pair(tables, s))
     o = data.draw(any_outcome())
-    jax_out = jit_step(tables, s, acts, o)
-    ref_out = from_ref(
-        ref_step(to_numpy(tables), to_ref(s), tuple(int(x) for x in acts), outcome_to_py(o))
-    )
-    for name, a, b in zip(jax_out._fields, jax_out, ref_out):
-        np.testing.assert_array_equal(np.asarray(a), np.asarray(b), err_msg=name)
+    jax_out = _step_both(tables, s, acts, o, data)
     if int(needs_replacement(jax_out)[1]):
         bench = [
             j

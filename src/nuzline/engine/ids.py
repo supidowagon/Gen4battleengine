@@ -214,6 +214,12 @@ class EffectId(IntEnum):
     # turn's end (bcp.c:1758-1783, subscript_future_sight_damage.s); the use itself deals none and
     # never misses (rulings B5-8..).
     FUTURE_SIGHT = 68
+    # E2 batch 6 (rulings B6-n). U-turn (effect_script_0228.s: an ON_HIT indirect
+    # subscript_attack_then_switch_out.s) and Baton Pass (effect_script_0127.s: an ON_HIT direct
+    # subscript_baton_pass.s): the user switches out mid-action through the party list, a decision
+    # inside the turn (``BattleState.pivot_battler``; ``step``'s pause and resume).
+    U_TURN = 69
+    BATON_PASS = 70
 
 
 # ``EffectId.COUNTER``'s source (``move_param[m, 0]``).
@@ -743,6 +749,10 @@ MOVE_FAKE_OUT = 252
 MOVE_PROTECT = 182
 MOVE_DETECT = 197
 MOVE_ENDURE = 203
+# Baton Pass and U-turn (``generated/moves.txt`` lines 227, 370): UpdateMoveBuffers skips the
+# Choice lock for them (bcp.c:3927-3928, by ``moveTemp``).
+MOVE_BATON_PASS = 226
+MOVE_U_TURN = 369
 PROTECT_CHAIN_MOVES = (MOVE_PROTECT, MOVE_DETECT, MOVE_ENDURE)
 
 # ABILITY_MULTITYPE (``generated/abilities.txt`` line 122): ``BtlCmd_TryCamouflage``

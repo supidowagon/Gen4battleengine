@@ -796,6 +796,34 @@ def roar_inputs(state: BattleState, actions) -> tuple[jnp.ndarray, jnp.ndarray]:
     return roar_level_weight(la, ld), jnp.stack(counts)
 
 
+def pivot_view(state: BattleState, actions) -> tuple[BattleState, jnp.ndarray]:
+    """``(state, actions)`` the laws and the sampler read (E2 batch 6, rulings B6-n). A state
+    paused at a U-turn's or Baton Pass's party list (``pivot_battler``) resumes with
+    ``actions[pivot]`` the switch to the picked slot: its draws are those of a turn in which the
+    pivoting side switches to it first (the switch-in effects of the newcomer are a switch's), with
+    the newcomer already on the field (its item gives the King's Rock law, ``kings_rock_chance``),
+    the battle's movePrev the paused move's moveTemp (the tail's UpdateMoveBuffers writes it before
+    a later actor's Copycat reads it, bcp.c:3936-3942) and the other side's action as chosen
+    (``ts_actions``) while it is still to act (``ts_cursor`` 0), else a switch to its own active
+    Pokemon (no move: it has acted). The paused action's own King's Rock read is
+    ``enumerate.outcome_laws``'. Any other state: unchanged."""
+    actions = jnp.asarray(actions, _I32)
+    paused = state.pivot_battler != 0
+    pivot = jnp.clip(state.pivot_battler.astype(_I32) - 1, 0, 1)
+    sides = jnp.arange(2)
+    still = state.ts_cursor == 0
+    other = jnp.where(
+        still, state.ts_actions.astype(_I32), MOVE_ACTIONS + state.active.astype(_I32)
+    )
+    viewed = jnp.where(sides == pivot, actions, other)
+    slot = jnp.clip(actions[pivot] - MOVE_ACTIONS, 0, state.hp.shape[1] - 1)
+    active = state.active.at[pivot].set(slot.astype(state.active.dtype))
+    prev = state.ts_move[pivot].astype(state.move_prev.dtype)
+    seen = state._replace(active=active, move_prev=prev)
+    view = jax.tree.map(lambda a, b: jnp.where(paused, a, b), seen, state)
+    return view, jnp.where(paused, viewed, actions)
+
+
 def kings_rock_chance(tables: Tables, state: BattleState) -> jnp.ndarray:
     """``int32[2]``: the hold param of each side's active King's Rock / Razor Fang
     (``HOLD_EFFECT_SOMETIMES_FLINCH``, ``Battler_HeldItemPower(attacker, 0)``,
@@ -807,8 +835,9 @@ def kings_rock_chance(tables: Tables, state: BattleState) -> jnp.ndarray:
 
 
 def sample_outcome(key, tables: Tables, state: BattleState, actions) -> Outcome:
-    """Draw every field from its Gen 4 probability for this state and these actions."""
-    actions = jnp.asarray(actions, _I32)
+    """Draw every field from its Gen 4 probability for this state and these actions (a paused
+    state: ``pivot_view``'s)."""
+    state, actions = pivot_view(state, actions)
     k = jax.random.split(key, 14)
     per_hit, per_side = (2, MAX_HITS), (2,)
 

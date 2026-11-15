@@ -309,6 +309,10 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     # Future Sight, Doom Desire: effect_script_0148.s, TryFutureSight then an ON_HIT message
     # (engine/step.py ``_use_move``, ``_future_sight``).
     148: ("BATTLE_EFFECT_HIT_IN_3_TURNS", _E.FUTURE_SIGHT, (0, 0, 0)),
+    # E2 batch 6. U-turn: effect_script_0228.s (ON_HIT | ATTACK_THEN_SWITCH_OUT); Baton Pass:
+    # effect_script_0127.s (a direct ON_HIT subscript_baton_pass.s) (engine/step.py ``_use_move``).
+    228: ("BATTLE_EFFECT_SWITCH_HIT", _E.U_TURN, (0, 0, 0)),
+    127: ("BATTLE_EFFECT_PASS_STATS_AND_STATUS", _E.BATON_PASS, (0, 0, 0)),
 }
 
 DECOMP_EFFECT_NAMES: dict[int, str] = {k: v[0] for k, v in _EFFECTS.items()}

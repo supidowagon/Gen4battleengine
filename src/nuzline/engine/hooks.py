@@ -478,9 +478,17 @@ def on_switch_in(tables: Tables, state: BattleState, side) -> BattleState:
     state loops over ``monSpeedOrder``; in singles the order changes nothing here: two Trace
     holders cannot copy each other, a traced ability is the other battler's own, and coverage
     refuses two different weather abilities on the two sides (``coverage.weather_war``)."""
+    return switch_in_effects(tables, entry_hazards(tables, state, jnp.asarray(side, _I32)), side)
+
+
+def switch_in_effects(tables: Tables, state: BattleState, side) -> BattleState:
+    """``on_switch_in`` after the entry hazards: ``BattleSystem_TriggerEffectOnSwitch``'s states
+    for ``side``'s newcomer. A U-turn or Baton Pass newcomer meets them apart from its hazards: the
+    party list runs only the hazards and a faint check (subscript_show_party_list.s:22-24), and the
+    rest comes at ``AfterMoveEffects``' ``TRIGGER_SWITCH_IN_EFFECTS`` (bcp.c:3672-3682;
+    ``step._use_move``)."""
     side = jnp.asarray(side, _I32)
     foe = 1 - side  # the entry point: the battler facing the newcomer in singles
-    state = entry_hazards(tables, state, side)
     state, _ = trace(tables, state, side, foe)
     state, traced = trace(tables, state, foe, side)
     state = weather_ability(state, side)

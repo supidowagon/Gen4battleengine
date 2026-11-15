@@ -82,6 +82,17 @@ Encodings:
   send-out (``step._switch_in``). ``learn_level`` / ``learn_cursor`` (the pending learnset
   scan), ``learn_pin`` and ``exp_refused`` are 0 until the payout and the learn resolve set
   them (later K3d-exp tasks).
+* The mid-turn switch decision (E2 batch 6, U-turn and Baton Pass; docs/kaizo/
+  e2-mechanics-ledger.md "Batch 6 design"): a turn can pause at the party list of
+  subscript_attack_then_switch_out.s:71 / subscript_baton_pass.s:17, inside one action.
+  ``pivot_battler`` is ``1 + battler`` of the battler owing the pick (one at a time: each list is
+  inside one action and its flag clears at the switch, battle_script.c:2511, or the faint,
+  battle_lib.c:2222), else 0. While it is set, the ``ts_*`` fields hold the turn's scratch
+  (``BattleContext``: the order and its counter, the picks of command selection, the turn flags
+  later actors read, the paused action's own inputs, and the search's ``powerMul`` reads), which
+  ``step`` resumes from (``step.step``'s docstring); otherwise every ``ts_*`` is 0, so states
+  between turns merge. ``qc_roll`` is 0 at a pause: the order read it, and the next read is the
+  next turn's, from the resumed half's draw.
 """
 
 from __future__ import annotations
@@ -217,6 +228,29 @@ class BattleState(NamedTuple):
     faint_budget: jnp.ndarray  # int8, k: the deaths the search allows
     protected: jnp.ndarray  # int8[6], 1 where the player's slot must not faint
     replace_mul: jnp.ndarray  # int8, the turn's powerMul while a player replacement is pending
+    # E2 batch 6: the mid-turn switch decision (U-turn, Baton Pass; see the docstring).
+    pivot_battler: jnp.ndarray  # int8, 1 + the battler owing the party pick, 0 = none
+    ts_cursor: jnp.ndarray  # int8, turnOrderCounter: the paused action's position
+    ts_order: jnp.ndarray  # int8[2], battlerActionOrder
+    ts_actions: jnp.ndarray  # int8[2], the turn's actions as chosen
+    ts_move: jnp.ndarray  # int16[2], each side's move fixed at selection (selected_move)
+    ts_struggling: jnp.ndarray  # int8[2]
+    ts_locked: jnp.ndarray  # int8[2], locked at selection (no PP)
+    ts_item: jnp.ndarray  # int16[2], the bag item picked
+    ts_custap: jnp.ndarray  # int8[2], moveEffectsData.custapBerry from the turn order
+    ts_pursued: jnp.ndarray  # int8, 1 + the battler whose action a Pursuit ended, 0 = none
+    ts_protect_ok: jnp.ndarray  # int8[2], turnFlags.protecting
+    ts_roosted: jnp.ndarray  # int8[2], turnFlags.roosting
+    ts_taken: jnp.ndarray  # int16[2,6], turnFlags damage taken and attackers (step._use_move)
+    ts_dragged: jnp.ndarray  # int8[2], 1 + the slot a Roar dragged in this turn
+    ts_move_failed: jnp.ndarray  # int8[2], moveFailFlags (the turn end's Uproar check)
+    ts_used: jnp.ndarray  # int16, the paused action's moveCur
+    ts_damaged: jnp.ndarray  # int8, its defender's physical / specialDamageTaken != 0
+    ts_dealt: jnp.ndarray  # int16, its hit's HP drop (the thaw)
+    ts_alive: jnp.ndarray  # int8[2], per side the party bitmask of HP > 0 at the last faint check
+    ts_power_mul: jnp.ndarray  # int8, the search's turn powerMul (replacement_power_mul)
+    ts_ai_switched: jnp.ndarray  # int8, the opponent chose a switch this turn
+    ts_pick_mul: jnp.ndarray  # int8, powerMul at the party list (20 after U-turn's Pursuit)
 
     def replace_hp(self, side: int, slot: int, hp: int) -> BattleState:
         return self._replace(hp=self.hp.at[side, slot].set(hp))
@@ -366,7 +400,31 @@ LAYOUT: dict[str, tuple[tuple[int, ...], type]] = {
     "faint_budget": (_FIELD, np.int8),
     "protected": ((SLOTS,), np.int8),
     "replace_mul": (_FIELD, np.int8),
+    "pivot_battler": (_FIELD, np.int8),
+    "ts_cursor": (_FIELD, np.int8),
+    "ts_order": (_SIDE, np.int8),
+    "ts_actions": (_SIDE, np.int8),
+    "ts_move": (_SIDE, np.int16),
+    "ts_struggling": (_SIDE, np.int8),
+    "ts_locked": (_SIDE, np.int8),
+    "ts_item": (_SIDE, np.int16),
+    "ts_custap": (_SIDE, np.int8),
+    "ts_pursued": (_FIELD, np.int8),
+    "ts_protect_ok": (_SIDE, np.int8),
+    "ts_roosted": (_SIDE, np.int8),
+    "ts_taken": ((SIDES, 6), np.int16),
+    "ts_dragged": (_SIDE, np.int8),
+    "ts_move_failed": (_SIDE, np.int8),
+    "ts_used": (_FIELD, np.int16),
+    "ts_damaged": (_FIELD, np.int8),
+    "ts_dealt": (_FIELD, np.int16),
+    "ts_alive": (_SIDE, np.int8),
+    "ts_power_mul": (_FIELD, np.int8),
+    "ts_ai_switched": (_FIELD, np.int8),
+    "ts_pick_mul": (_FIELD, np.int8),
 }
+# The turn scratch (``ts_*``, design rev. 2 section 1): 0 everywhere unless ``pivot_battler``.
+TURN_SCRATCH = tuple(name for name in LAYOUT if name.startswith("ts_"))
 if tuple(LAYOUT) != BattleState._fields:
     raise RuntimeError("LAYOUT must list every BattleState field, in order")
 
