@@ -275,3 +275,24 @@ def test_jit_without_64bit(tables, names):
     assert "int64" not in jaxpr and "float64" not in jaxpr
     jaxpr = str(jax.make_jaxpr(switch_action)(tables, s, jnp.int8(0)))
     assert "int64" not in jaxpr and "float64" not in jaxpr
+
+
+def test_party_hidden_power_takes_each_members_ivs(tables, names):
+    """Move_CalcVariableType (battle_lib.c:8162-8175): each party member's Hidden Power is
+    typed from its own IVs. All 31: type bits 63, 63 * 15 / 63 + 1 = 16, one more from
+    TYPE_MYSTERY up: Dark (17). All 30: bits 0, 0 + 1 = 1: Fighting."""
+    from nuzline.ai.switching import party_move_types
+
+    s = _trace_f(tables, names)
+    hidden = names.move("Hidden Power")
+    s = s._replace(moves=s.moves.at[1, 0, 3].set(hidden).at[1, 1, 3].set(hidden))
+    s = s._replace(
+        ivs=s.ivs.at[1, 0]
+        .set(jnp.full(6, 30, s.ivs.dtype))
+        .at[1, 1]
+        .set(jnp.full(6, 31, s.ivs.dtype))
+    )
+    types = np.asarray(party_move_types(tables, s))
+    assert (types[0, 3], types[1, 3]) == (1, 17)
+    other = int(s.moves[1, 0, 0])
+    assert types[0, 0] == int(tables.move_type[other])

@@ -130,7 +130,9 @@ uses the table's power for 0 and the table's type for TYPE_NORMAL, `battle_lib.c
 - Hidden Power (E1 batch 14): its IV power and type (`:2973-2993`), and its AI type
   everywhere the AI types a move (`TrainerAI_MoveType`, `:3208-3220`;
   `engine.damage.ai_move_type`: the effectiveness class, the switch's chart, `moveHit`), a
-  bench member's from its own IVs (`Move_CalcVariableType`, `battle_lib.c:8162-8175`);
+  bench member's from its own IVs (`Move_CalcVariableType`, `battle_lib.c:8162-8175`;
+  `ai.switching.party_move_types`: the switch's bench check and both stages of the
+  post-KO replacement, `:7998`, `:8051`);
 - refused (`commands.CALC_DAMAGE_MOVES`): Natural Gift and Judgment (item data), Gyro Ball (`monSpeedValues`, left by the last speed compare,
   `battle_lib.c:1372`), Psywave and Magnitude (a `RandNext` in the estimate, `:3015`,
   `:3030`). Kaizo Triple Axel sits on MOVE_PSYWAVE's id (`:3014`);
@@ -699,6 +701,17 @@ MIRROR_COAT (144), LOWER_OWN_ATK_AND_DEF (182), WEATHER_RAIN (136), WEATHER_HAIL
   (`:1656`; `:2792-2798`): +1 unless the 192 roll (`:2794`) jumps.
 - ACC_DOWN waits: `Expert_StatusAccuracyDown` reads the AI's Ingrain (`:2472`,
   `MOVE_EFFECT_INGRAIN`), which `BattleState` does not hold.
+
+### 5.18 U-turn (E1 batch 15)
+
+SWITCH_HIT (228): `Expert_UTurn` (`:1771`; `:5085-5145`; no Basic entry): resisted -1; with
+no other living Pokemon, nothing; a super-effective move (the new command
+`IfHasSuperEffectiveMove`, `trainer_ai.c:2176-2184`, `:3560-3622`) -2 unless the 64 roll
+(`:5114`) jumps; unless a party member out-damages the active (the new command
+`IfPartyMemberDealsMoreDamage`, `:2106-2174`, which calculates the member's moves **as the
+active battler**, with only the member's IVs), -2 unless `:5119` jumps and end; then the
+player's HP bands (`:5126`, `:5130`, `:5134`) and the FASTER compare (its tie a read, Ruling
+R8) with `:5139`.
 
 ## 6. Where the AI reads the true battle state
 

@@ -280,6 +280,13 @@ SITE_N: dict[int, int] = {
     3571: 128,  # -1 when it does NOT jump
     3578: 128,  # -1 more when it does NOT jump
     2794: 192,  # Expert_OHKOMove (+1 when it does NOT jump; E1 batch 14)
+    # Expert_UTurn (:5085-5145; E1 batch 15)
+    5114: 64,
+    5119: 64,
+    5126: 128,
+    5130: 64,
+    5134: 128,
+    5139: 128,
 }
 SITE_LINES = tuple(SITE_N)
 # The flat (vanilla) layout's column of script_roll_sites that each line reads: column 0 is
@@ -436,6 +443,7 @@ KAIZO_TRANSCRIBED: frozenset[int] = frozenset(
         135,  # RANDOM_POWER_BASED_ON_IVS (:213): Hidden Power, its AI type ai_move_type
         196,  # INCREASE_POWER_WITH_WEIGHT (:244)
         38,  # ONE_HIT_KO: Basic_CheckOHKOWouldFail (:157); Expert_OHKOMove (:1656), :2794
+        228,  # SWITCH_HIT: Expert_UTurn (:1771); no Basic entry (E1 batch 15)
     }
 )
 # The transcribed effects (KAIZO_TRANSCRIBED) whose Expert_Main entry goes to a label added
@@ -514,6 +522,7 @@ KAIZO_EXPERT_LABELS: dict[int, tuple[str, int]] = {
     224: ("Expert_Pluck", 1767),
     111: ("Expert_Protect", 1701),
     38: ("Expert_OHKOMove", 1656),
+    228: ("Expert_UTurn", 1771),
 }
 # Of KAIZO_EXPERT_LABELS, the effects whose Expert label policy._expert transcribes
 # (layout.KAIZO expert_transcribed), written out: it is not derived from the table, so an
@@ -580,6 +589,7 @@ KAIZO_EXPERT_TRANSCRIBED: frozenset[int] = frozenset(
         224,  # EAT_BERRY: Expert_Pluck
         111,  # PROTECT: Expert_Protect
         38,  # ONE_HIT_KO: Expert_OHKOMove
+        228,  # SWITCH_HIT: Expert_UTurn
     }
 )
 assert set(KAIZO_EXPERT_LABELS) <= KAIZO_TRANSCRIBED

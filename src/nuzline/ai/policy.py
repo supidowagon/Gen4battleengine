@@ -1650,6 +1650,48 @@ def _expert_protect(ctx: AiContext, mask) -> AiContext:
     return c.pop_or_end(c.add_to_move_score(_at(ctx, minus2 | ctx.live), -2))
 
 
+def _expert_u_turn(ctx: AiContext, mask) -> AiContext:
+    """``Expert_UTurn`` (script.s:5085-5145): resisted -1; with no other living Pokemon,
+    nothing; with a super-effective move -2 unless the 64 roll (:5114) jumps; a party member
+    out-damaging it, on to the player's HP, else -2 unless :5119 jumps and end; the player
+    above 70 % HP +1 unless :5130 jumps, then (above 30 %, or :5126 not jumping) +1 unless
+    :5134 jumps; then faster (FASTER's tie a read, E1 Ruling R8) +1, else +1 unless :5139
+    jumps."""
+    ctx, minus1 = _not_resisted(_at(ctx, mask))
+    ctx = c.count_alive_party_battlers(ctx, _A)
+    ctx, _ = _split(c.if_loaded_equal_to(ctx, 0))  # -> _End
+    ctx, try_minus2 = _split(c.if_has_super_effective_move(ctx))
+    ctx, party = _split(c.go_to(ctx))
+    # Expert_UTurn_ScoreMinus1 (:5109)
+    ctx = c.pop_or_end(c.add_to_move_score(_at(ctx, minus1), -1))
+    # Expert_UTurn_TryScoreMinus2 (:5113), falling into _CheckPartyDamage (:5117)
+    ctx, t = _split(c.if_random_less_than(_at(ctx, try_minus2), 64, 5114))
+    ctx = c.add_to_move_score(ctx, -2)
+    ctx = _at(ctx, party | t | ctx.live)
+    ctx, check_hp = _split(c.if_party_member_deals_more_damage(ctx, c.USE_MAX_DAMAGE))
+    ctx, t = _split(c.if_random_less_than(ctx, 64, 5119))
+    check_hp = check_hp | t
+    ctx = c.pop_or_end(c.add_to_move_score(ctx, -2))
+    # Expert_UTurn_CheckTargetHP (:5123)
+    ctx = _at(ctx, check_hp)
+    ctx, plus75 = _split(c.if_hp_percent_greater_than(ctx, _D, 70))
+    ctx, plus50 = _split(c.if_hp_percent_greater_than(ctx, _D, 30))
+    ctx, speed = _split(c.if_random_less_than(ctx, 128, 5126))
+    ctx, t = _split(c.go_to(ctx))
+    plus50 = plus50 | t
+    # Expert_UTurn_75PercentScorePlus1 (:5129), falling into _50PercentScorePlus1 (:5133)
+    ctx, t = _split(c.if_random_less_than(_at(ctx, plus75), 64, 5130))
+    ctx = c.add_to_move_score(ctx, 1)
+    ctx = _at(ctx, plus50 | t | ctx.live)
+    ctx, t = _split(c.if_random_less_than(ctx, 128, 5134))
+    ctx = c.add_to_move_score(ctx, 1)
+    # Expert_UTurn_CheckSpeed (:5137), falling into _ScorePlus1 (:5141)
+    ctx = _at(ctx, speed | t | ctx.live)
+    ctx, plus1 = _split(c.if_speed_compare_equal_to(ctx, c.COMPARE_SPEED_FASTER))
+    ctx, _ = _split(c.if_random_less_than(ctx, 128, 5139))  # -> _End
+    return c.pop_or_end(c.add_to_move_score(_at(ctx, plus1 | ctx.live), 1))
+
+
 def _expert_curse(ctx: AiContext, mask) -> AiContext:
     """``Expert_Curse`` (script.s:3452-3500)."""
     # Expert_Curse (:3452). A Ghost-type attacker jumps to Expert_Curse_GhostCheckHP
@@ -1925,6 +1967,7 @@ _EXPERT_LABELS = (
     (BattleEffect.DOUBLE_POWER_WHEN_BELOW_HALF, _expert_brine),  # :1765
     (BattleEffect.EAT_BERRY, _expert_pluck),  # :1767
     (BattleEffect.DOUBLE_SPEED_3_TURNS, _expert_tailwind),  # :1768
+    (BattleEffect.SWITCH_HIT, _expert_u_turn),  # :1771
     (BattleEffect.DOUBLE_POWER_IF_MOVING_SECOND, _expert_payback),  # :1773
     (BattleEffect.TOXIC_SPIKES, _expert_toxic_spikes),  # :1792
     (BattleEffect.RECOIL_PARALYZE_HIT, _expert_recoil_move),  # :1802

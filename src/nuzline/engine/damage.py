@@ -186,8 +186,8 @@ def rollout_multiplier(state: BattleState, atk_side) -> jnp.ndarray:
 
 
 # TrainerAI_CalcDamage's move-id cases (trainer_ai.c:2885-3071) that the AI damage models;
-# decomp move ids (line - 1 of generated/moves.txt). The others (Natural Gift, Judgment, Hidden
-# Power, Gyro Ball, Psywave, Magnitude) are refused (ai.commands.CALC_DAMAGE_MOVES).
+# decomp move ids (line - 1 of generated/moves.txt). The others (Natural Gift, Judgment, Gyro
+# Ball, Psywave, Magnitude) are refused (ai.commands.CALC_DAMAGE_MOVES).
 AI_RETURN, AI_FRUSTRATION, AI_LOW_KICK, AI_GRASS_KNOT = 216, 218, 67, 447
 AI_HIDDEN_POWER = 237
 AI_DRAGON_RAGE, AI_SONIC_BOOM, AI_SEISMIC_TOSS, AI_NIGHT_SHADE = 82, 49, 69, 101
@@ -230,7 +230,9 @@ def ai_move_type(tables: Tables, s: BattleState, side, move) -> jnp.ndarray:
     (``hidden_power``), any other move its table type (the function's TYPE_NORMAL, which
     ``ApplyTypeChart`` and ``CalcMoveDamage`` read as the table's, battle_lib.c:2588-2590,
     :6681-6684). Natural Gift, Judgment and Weather Ball are refused
-    (``ai.commands.MOVE_TYPE_MOVES``)."""
+    (``ai.commands.MOVE_TYPE_MOVES``). It reads ``side``'s own IVs: a command that types
+    another battler's move with the AI attacker's IVs (``IfBattlerDealsMoreDamage``,
+    trainer_ai.c:2206-2237, not transcribed) needs its own reading."""
     side = _i32(side)
     move = _i32(move)
     iv_type = hidden_power(s.ivs[side, s.active[side]])[0]
@@ -330,8 +332,8 @@ def _pre_random(
     # CalcRolloutPower (:5661) doubles movePower per use, and again when curled.
     # CalcFlailPower (:4958) reads the attacker's current and max HP.
     rollout_mul = 1 if ai else rollout_multiplier(s, atk_side)
-    # The AI has move-id cases instead of the battle's effect ones (ai_case_power); none of
-    # Hidden Power, Magnitude, Rollout or Flail is among those it models.
+    # The AI has move-id cases instead of the battle's effect ones (ai_case_power, Hidden
+    # Power's by id); it has none for Magnitude's effect, Rollout or Flail.
     variable = jnp.where(
         effect == EffectId.HIDDEN_POWER,
         hidden_power(s.ivs[atk_side, a_slot])[1],

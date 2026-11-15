@@ -2820,7 +2820,8 @@ def test_protect_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party
 @pytest.mark.parametrize(
     ("move", "player", "expected"),
     [
-        # Basic_CheckNonStandardDamageOrChargeTurn (script.s:572-585), Kaizo move types
+        # Basic_Main (script.s:62-68) and Basic_CheckNonStandardDamageOrChargeTurn
+        # (:572-585): a damaging immune move already scores -10 at Basic_CheckForImmunity
         ("Seismic Toss", "Shuppet", -10),  # Fighting against a Ghost: immune
         ("Seismic Toss", "Gible", 0),
         ("Night Shade", "Bidoof", -10),  # Ghost against a Normal: immune
@@ -2828,6 +2829,10 @@ def test_protect_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party
         ("Dragon Rage", "Gible", 0),
         ("SonicBoom", "Shuppet", -10),  # Normal against a Ghost
         ("Fury Cutter", "Gible", 0),
+        # Present (122, power 1, not alt-power: not damaging) skips Basic_CheckForImmunity's
+        # -10 (:62-63) and reaches this label, the one Kaizo case it decides: Normal on a Ghost
+        ("Present", "Shuppet", -10),
+        ("Present", "Gible", 0),
     ],
 )
 def test_basic_alt_power_effects(
@@ -2909,3 +2914,69 @@ def test_expert_ohko(kaizo_tables, kaizo_names, kaizo_roark_party, jumps, expect
     t, n = kaizo_tables, kaizo_names
     s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Guillotine", "Accelerock", "", ""))
     assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expected
+
+
+# --- E1 batch 15: U-turn ---------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("case", "jumps", "expected"),
+    [
+        # Expert_UTurn (script.s:5085-5145), Bonsly's U-turn (Bug, 80) against Gible (neutral;
+        # Accelerock is resisted, so no super-effective move), the AI faster, the player at 100 %
+        ("weak bench", (), -2),  # no member out-damages it: -2 unless :5119 jumps, and end
+        ("weak bench", (5119,), 3),  # then 75 % +1, 50 % +1, faster +1
+        ("strong bench", (), 3),  # a bench Earthquake (100) beats U-turn as Bonsly: to the HP
+        ("strong bench", (5130, 5134), 1),  # only the faster +1
+        ("no bench", (), 0),  # no other living Pokemon (:5104-5105)
+        ("resisted", (), -1),  # Charmander (Fire) resists Bug (:5101-5103)
+    ],
+)
+def test_expert_u_turn(kaizo_tables, kaizo_names, kaizo_roark_party, case, jumps, expected):
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "U-turn", "Accelerock", "", ""))
+    s = _speeds(s, player=1, opp=100)
+    bench_moves = (
+        _ids(n, "Earthquake", "", "", "")
+        if case == "strong bench"
+        else _ids(n, "Tackle", "", "", "")
+    )
+    s = s._replace(moves=s.moves.at[1, 1].set(jnp.asarray(bench_moves, s.moves.dtype)))
+    if case == "no bench":
+        s = s._replace(hp=s.hp.at[1, 1].set(0))
+    elif case == "resisted":
+        s = _with_player(t, s, n.species_names.index("Charmander"), 0, known=True)
+    assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expected
+
+
+def test_party_member_deals_more_damage_as_the_active(kaizo_tables, kaizo_names, kaizo_roark_party):
+    """IfPartyMemberDealsMoreDamage (trainer_ai.c:2106-2174) calculates the party member's
+    moves as the AI's active battler: the bench's Earthquake beats U-turn by Bonsly's own
+    Attack, and a weaker bench move (Tackle) does not."""
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "U-turn", "Accelerock", "", ""))
+    ctx = c.at_slot(c.new_context(t, s, _outcome(t, s)), 0)
+    for bench, jumps in (("Earthquake", True), ("Tackle", False)):
+        s2 = s._replace(
+            moves=s.moves.at[1, 1].set(jnp.asarray(_ids(n, bench, "", "", ""), s.moves.dtype))
+        )
+        ctx2 = c.at_slot(c.new_context(t, s2, _outcome(t, s2)), 0)
+        assert bool(c.if_party_member_deals_more_damage(ctx2, c.USE_MAX_DAMAGE).jump) == jumps, (
+            bench
+        )
+    assert not bool(c.if_has_super_effective_move(ctx).jump)  # U-turn neutral, Accelerock resisted
+
+
+@pytest.mark.parametrize("flags", [0x17, 0x10F])
+def test_u_turn_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, flags):
+    """Exact == loose for U-turn at equal speed (its FASTER tie) and not, against a Grass
+    player (super effective: the :5114 roll) and Gible."""
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "U-turn", "Accelerock", "", ""))
+    for player, speed in (("Gible", 100), ("Turtwig", 1)):
+        s2 = _speeds(s, player=speed, opp=100)
+        if player != "Gible":
+            s2 = _with_player(t, s2, n.species_names.index(player), 0, known=True)
+        layout = layout_for(t, flags, s2)
+        assert policy.ai_refusals(t, s2, n, layout) == []
+        _assert_exact_equals_loose(t, s2, layout)

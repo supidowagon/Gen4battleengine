@@ -41,7 +41,12 @@ import jax
 import jax.numpy as jnp
 
 from nuzline.ai.outcome import SITE_LINES, SITE_N, AiOutcome, line_sites
-from nuzline.ai.switching import INEFFECTIVE, apply_type_chart, type_chart_flags
+from nuzline.ai.switching import (
+    INEFFECTIVE,
+    SUPER_EFFECTIVE,
+    apply_type_chart,
+    type_chart_flags,
+)
 from nuzline.data.tables import BATTLE_TYPE_DOUBLES as _BATTLE_TYPE_DOUBLES
 from nuzline.data.tables import Tables
 from nuzline.engine.actions import usable_moves
@@ -284,7 +289,8 @@ class BattleEffect(IntEnum):
     DAMAGE_FLAT_20 = 130  # 20_DAMAGE_FLAT: SonicBoom
     INCREASE_POWER_WITH_WEIGHT = 196  # Low Kick, Grass Knot
     RANDOM_POWER_BASED_ON_IVS = 135  # Hidden Power
-    ONE_HIT_KO = 38  # Fissure, Guillotine, Horn Drill, Sheer Cold
+    ONE_HIT_KO = 38  # Guillotine, Horn Drill, Fissure
+    SWITCH_HIT = 228  # U-turn
 
     TOXIC_SPIKES = 249
     RECOIL_PARALYZE_HIT = 262
@@ -934,6 +940,52 @@ def _slot_damage(tables: Tables, state: BattleState, rolls) -> jnp.ndarray:
     moveset, whatever the PP, with ``rolls[i]`` for slot i."""
     moves = state.moves[1, state.active[1]].astype(_I32)
     return jax.vmap(lambda m, r: ai_damage(tables, state, m, r))(moves, jnp.asarray(rolls, _I32))
+
+
+def if_has_super_effective_move(ctx: AiContext) -> AiContext:
+    """``IfHasSuperEffectiveMove`` (trainer_ai.c:2176-2184): ``AI_HasSuperEffectiveMove(
+    attacker, TRUE)`` (:3560-3622), which draws nothing with TRUE: a move of the AI's active
+    whose ``ApplyTypeChart`` (:3582, ``TrainerAI_MoveType`` :3578) sets
+    ``MOVE_STATUS_SUPER_EFFECTIVE`` against the player's active. That battler is never in
+    ``battlersSwitchingMask`` while its side has HP left (battle_controller_player.c:
+    4108-4110, :4133-4134), and the partner check needs a doubles battle (:3597)."""
+    tables, state = ctx.tables, ctx.state
+    a, d = _side(Battler.ATTACKER), _side(Battler.DEFENDER)
+    moves = state.moves[a, state.active[a]].astype(_I32)
+    d_types = state.types[d, state.active[d]]
+    identified = state.foresight[d] != 0
+    flags = jax.vmap(
+        lambda m: type_chart_flags(
+            tables, m, d_types, state.gravity, identified, ai_move_type(tables, state, a, m)
+        )
+    )(moves)
+    return _jump(ctx, jnp.any((moves != 0) & ((flags & SUPER_EFFECTIVE) != 0)))
+
+
+def if_party_member_deals_more_damage(ctx: AiContext, use_damage_roll: int) -> AiContext:
+    """``IfPartyMemberDealsMoreDamage`` (trainer_ai.c:2106-2174): jumps when a living party
+    member other than the active one has a move whose ``TrainerAI_CalcAllDamage`` beats the
+    active's best. The party member's moves are calculated **as the AI's active battler**
+    (``AI_CONTEXT.attacker``: its stats, level, types, ability and item in
+    ``CalcMoveDamage``), with only the member's IVs passed (Hidden Power's case; the item
+    and ability parameters only reach Natural Gift and Judgment, refused). Only
+    ``USE_MAX_DAMAGE`` (variance 100) is transcribed (asserted)."""
+    assert int(use_damage_roll) == USE_MAX_DAMAGE, use_damage_roll
+    tables, state = ctx.tables, ctx.state
+    a = _side(Battler.ATTACKER)
+    active = state.active[a]
+
+    def best(moves, ivs):
+        as_active = state._replace(ivs=state.ivs.at[a, active].set(ivs))
+        return jnp.max(
+            jax.vmap(lambda m: ai_damage(tables, as_active, m, SIM_ROLL_MAX))(moves.astype(_I32))
+        )
+
+    mine = best(state.moves[a, active], state.ivs[a, active])
+    theirs = jax.vmap(best)(state.moves[a], state.ivs[a])  # [SLOTS]
+    slots = jnp.arange(state.species.shape[1])
+    alive = (state.species[a] > 0) & (state.hp[a] > 0) & (slots != active)
+    return _jump(ctx, jnp.any(alive & (theirs > mine)))
 
 
 def move_effect(tables: Tables, move) -> jnp.ndarray:

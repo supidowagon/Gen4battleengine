@@ -147,10 +147,7 @@ def _move_pool(t, layout=KAIZO) -> tuple[int, ...]:
     return tuple(
         m
         for m in range(1, len(effect))
-        if int(effect[m]) in layout.transcribed
-        and int(effect[m]) not in pending
-        and m not in skip
-        and int(effect[m]) not in commands.ALT_POWER_EFFECTS
+        if int(effect[m]) in layout.transcribed and int(effect[m]) not in pending and m not in skip
     )
 
 
@@ -737,7 +734,10 @@ def test_slot_reads_fit_every_transcribed_effect(kaizo_tables, kaizo_roark_party
     first = {}
     for move in _move_pool(t, KAIZO_ALL):
         first.setdefault(int(effect[move]), move)
-    assert set(first) == KAIZO_ALL.transcribed
+    # every transcribed effect a Kaizo move carries (Kaizo's Return and Frustration have
+    # effect 0, so 121 and 123 have no move here)
+    carried = {int(e) for e in effect[1:]}
+    assert set(first) == KAIZO_ALL.transcribed & carried
 
     def walked(e):
         return max(sum(READ_BOUNDS[(e, d, q)]) for d in (False, True) for q in (False, True))

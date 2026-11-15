@@ -230,19 +230,35 @@ def chart_multipliers(
     return jnp.where(t2_first, m2, m1), jnp.where(t2_first, m1, m2)
 
 
-def apply_type_chart(tables: Tables, state: BattleState, atk_side, move, value) -> jnp.ndarray:
+def party_move_types(tables: Tables, state: BattleState, side: int = 1) -> jnp.ndarray:
+    """``int32[SLOTS, MOVES]``: ``Move_CalcVariableType`` (battle_lib.c:8097) of each party
+    member's moves on ``side``: Hidden Power its own IV type (:8162-8175), any other move
+    its table type (Natural Gift, Judgment and Weather Ball are refused)."""
+    moves = state.moves[side].astype(_I32)
+    iv_types = jax.vmap(lambda ivs: hidden_power(ivs)[0])(state.ivs[side])  # [SLOTS]
+    return jnp.where(
+        moves == MOVE_IDS["Hidden Power"], iv_types[:, None], tables.move_type[moves].astype(_I32)
+    )
+
+
+def apply_type_chart(
+    tables: Tables, state: BattleState, atk_side, move, value, move_type=None
+) -> jnp.ndarray:
     """``int32``: ``BattleSystem_ApplyTypeChart`` (battle_lib.c:2560) on ``value`` for
     ``move`` by ``atk_side``'s active Pokemon against the other side's: STAB x15/10
     (:2592), then each ``chart_multipliers`` factor through ``ApplyTypeMultiplier``'s
     ``BattleSystem_Divide(value * mul, 10)`` (:7547); Struggle returns ``value``
     unchanged (:2573). The defender's Foresight flag is read; the other type-chart
     modifiers (Adaptability, Normalize, Scrappy, Levitate, Wonder Guard, Iron Ball,
-    Miracle Eye and the other volatiles) are not implemented: ``policy.ai_refusals`` refuses them."""
+    Miracle Eye and the other volatiles) are not implemented: ``policy.ai_refusals`` refuses them.
+    ``move_type`` is the caller's type for the move (``party_move_types``); by default the
+    attacker's ``TrainerAI_MoveType`` (``damage.ai_move_type``)."""
     move = jnp.asarray(move, _I32)
     atk_side = jnp.asarray(atk_side, _I32)
     a_types = state.types[atk_side, state.active[atk_side]].astype(_I32)
     d_types = state.types[1 - atk_side, state.active[1 - atk_side]]
-    move_type = ai_move_type(tables, state, atk_side, move)  # TrainerAI_MoveType
+    if move_type is None:
+        move_type = ai_move_type(tables, state, atk_side, move)  # TrainerAI_MoveType
     value = jnp.asarray(value, _I32)
     out = jnp.where(jnp.any(a_types == move_type), value * 15 // 10, value)
     identified = state.foresight[1 - atk_side] != 0
@@ -341,14 +357,8 @@ def _layout(tables: Tables, state: BattleState, sites: int) -> _Layout:
         state.types[1]
     )
     bench_moves = state.moves[1].astype(_I32).reshape(-1)  # [SLOTS * MOVES], slot-major
-    # Move_CalcVariableType (battle_lib.c:8097): a bench Hidden Power takes that party
-    # member's own IV type (:8162-8175), any other move its table type.
-    bench_iv_types = jax.vmap(lambda ivs: hidden_power(ivs)[0])(state.ivs[1])  # [SLOTS]
-    bench_types = jnp.where(
-        bench_moves == MOVE_IDS["Hidden Power"],
-        jnp.repeat(bench_iv_types, MOVES),
-        tables.move_type[bench_moves].astype(_I32),
-    )
+    # Move_CalcVariableType (:3780): each bench member's own Hidden Power type.
+    bench_types = party_move_types(tables, state).reshape(-1)
     bench_flags = jax.vmap(lambda m, k: calc_effectiveness_flags(tables, m, d_types, gravity, k))(
         bench_moves, bench_types
     ).reshape(SLOTS, MOVES)
