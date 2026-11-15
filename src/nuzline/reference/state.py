@@ -76,6 +76,12 @@ class RefSide:
     mud_sport: int
     aqua_ring: int
     infatuated: int
+    curse: int
+    perish_song: int
+    perish_song_turns: int
+    yawn: int
+    lock_on: int
+    lock_on_target: int
     spikes: int
     toxic_spikes: int
     stealth_rock: int
