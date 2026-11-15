@@ -133,8 +133,9 @@ three structs has a row.
   battler's `MoveEffectsData.lockOnTarget` (`battle_mon.h:23`), the battler that locked on,
   as `1 + battler`, 0 = none (doubles convention 3). Their clearing is for the moves' work, not modelled yet: a switch-out or
   faint clears the battler's volatiles and move-effect bits except what Baton Pass keeps
-  (`MOVE_EFFECT_BATON_PASSED` keeps Lock-On and Perish Song, `moves.h:44-46`), and another
-  battler's Lock-On that targets the leaving battler (`battle_lib.c:2063-2083`).
+  (`MOVE_EFFECT_BATON_PASSED` keeps Lock-On and Perish Song, `moves.h:44-46`), and the Lock-On
+  bit of another battler that the leaving battler had locked onto (that battler's
+  `lockOnTarget` is the leaving one, `battle_lib.c:2063-2083`).
 - **speedRand -> `qc_roll`** (K3b2 Task 8; docs/kaizo/k3b2-rules.md §5, §12):
   `speedRand[battler]` is one `RandNext()` per battler slot, drawn at battle start
   (`BattleContext_InitCounters`, `src/battle/battle_lib.c:2019-2025`) and in each turn's

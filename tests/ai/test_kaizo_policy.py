@@ -2221,6 +2221,7 @@ def test_expert_spikes(kaizo_tables, kaizo_names, kaizo_roark_party, roar, jumps
         ("Roar", (), 2),
         ("Roar", (6281,), 1),
         ("Whirlwind", (), 2),
+        ("Whirlwind", (6281,), 1),
         ("Roar", (6274,), 0),
     ],
 )

@@ -348,15 +348,24 @@ def test_kaizo_accelerock_is_transcribed_with_its_site(kaizo_tables, kaizo_roark
 
 
 def test_kaizo_effect_check_refuses_an_untranscribed_effect(kaizo_tables, kaizo_roark_party):
-    """Task 2 review m3: with the id guard gone the effect check carries the refusal. Rock
-    Throw given STATUS_SLEEP (1, untranscribed) is refused."""
+    """Task 2 review m3: with the id guard gone the effect check carries the refusal, with
+    two messages: Rock Throw given an effect no layout transcribes is "not transcribed"; given
+    STATUS_SLEEP (1), transcribed but not in Roark's fight layout (E1 Ruling R7), it says so."""
+    from nuzline.ai.outcome import KAIZO_TRANSCRIBED
+
     t = kaizo_tables
     s = _kaizo_state(t, kaizo_roark_party, (ROCK_THROW, LEER, 0, 0))
     assert policy.ai_refusals(t, s) == []
-    assert 1 not in KAIZO.transcribed
-    t7 = t._replace(move_ai_effect=t.move_ai_effect.at[ROCK_THROW].set(1))
-    reasons = policy.ai_refusals(t7, s)
+    untranscribed = min(set(range(1, 300)) - KAIZO_TRANSCRIBED)
+    t_none = t._replace(move_ai_effect=t.move_ai_effect.at[ROCK_THROW].set(untranscribed))
+    reasons = policy.ai_refusals(t_none, s)
     assert any("Rock Throw are not transcribed" in r for r in reasons), reasons
+    assert 1 in KAIZO_TRANSCRIBED and 1 not in KAIZO.transcribed
+    t_outside = t._replace(move_ai_effect=t.move_ai_effect.at[ROCK_THROW].set(1))
+    reasons = policy.ai_refusals(t_outside, s)
+    assert any("Rock Throw is transcribed but not in this fight's layout" in r for r in reasons), (
+        reasons
+    )
 
 
 # --- Width ---------------------------------------------------------------------------------
