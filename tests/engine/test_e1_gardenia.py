@@ -1,9 +1,9 @@
 """E1 Gardenia batch (rulings G-n, docs/kaizo/e1-mechanics-ledger.md): hand cases, each checked
 against the reference engine (``assert_matches_reference``).
 
-Family: held items that draw. Focus Band (``HOLD_EFFECT_MAYBE_ENDURE``, G-1 .. G-3) and the
+Family A: held items that draw. Focus Band (``HOLD_EFFECT_MAYBE_ENDURE``, G-1 .. G-3) and the
 flavor berries Figy, Wiki, Mago, Aguav, Iapapa (``HOLD_EFFECT_HP_RESTORE_SPICY`` .. ``_SOUR``,
-G-4 .. G-6).
+G-4 .. G-6). Family B: the ability Pressure (G-8 .. G-11).
 """
 
 from __future__ import annotations
@@ -16,11 +16,13 @@ import numpy as np
 import pytest
 
 from nuzline.data.tables import to_numpy
+from nuzline.engine.actions import legal_actions
 from nuzline.engine.damage import damage_table
 from nuzline.engine.ids import (
     CONFUSION_PENDING,
     FOCUS_BAND_PARAM,
     NATURE_DISLIKED_FLAVOR,
+    AbilityId,
     Flavor,
     ItemId,
 )
@@ -292,3 +294,117 @@ def test_a_replacement_eats_its_berry_with_a_pending_counter(tables, names):
     for name, x, y in zip(out._fields, out, ref, strict=True):
         np.testing.assert_array_equal(np.asarray(x), np.asarray(y), err_msg=name)
     assert int(out.hp[0, 1]) == 40 and int(out.confusion[0]) == CONFUSION_PENDING
+
+
+# --- Pressure (G-8 .. G-11) ---------------------------------------------------------------
+
+
+def _pressure(s, side):
+    """``s`` with ``side``'s active battler holding Pressure (its ``BattleMon.ability``)."""
+    mon = int(s.active[side])
+    return s._replace(ability=s.ability.at[side, mon].set(AbilityId.PRESSURE))
+
+
+def _pp(s, side, move, names):
+    return int(s.pp[side, int(s.active[side]), names.move_slot(s, side, move)])
+
+
+def test_tables_map_pressure_in_both_games(tables, names, kaizo_tables, kaizo_names):
+    """G-8: every species slot with the decomp's ABILITY_PRESSURE (46) carries
+    ``AbilityId.PRESSURE`` in both games' tables, and no other slot does."""
+    for t, n in ((tables, names), (kaizo_tables, kaizo_names)):
+        decomp = np.asarray(t.species_abilities_decomp) == n.ability("Pressure")
+        engine = np.asarray(t.species_abilities) == AbilityId.PRESSURE
+        assert decomp.any() and (decomp == engine).all()
+    absol = names.species("Absol")
+    assert AbilityId.PRESSURE in [int(a) for a in np.asarray(tables.species_abilities[absol])]
+
+
+@pytest.mark.parametrize(
+    ("move", "cost"),
+    [
+        ("Tackle", 2),  # RANGE_SINGLE_TARGET: the defender's Pressure (bcp.c:2261-2266)
+        ("Growl", 2),  # RANGE_ADJACENT_OPPONENTS: COUNT_ALIVE_BATTLERS_THEIR_SIDE
+        ("Earthquake", 2),  # RANGE_ALL_ADJACENT: COUNT_ALIVE_BATTLERS_EXCEPT_ME
+        ("Sunny Day", 2),  # RANGE_FIELD: likewise, its defender is the user
+        ("Spikes", 2),  # RANGE_OPPONENT_SIDE
+        ("Imprison", 2),  # RANGE_USER, counted by move id (:2239-2240)
+        ("Swords Dance", 1),  # RANGE_USER
+        ("Reflect", 1),  # RANGE_USER_SIDE
+        ("Counter", 1),  # RANGE_SINGLE_TARGET_SPECIAL: the user is the defender; it fails here
+    ],
+)
+def test_pressure_pp_cost_by_range(tables, names, move, cost):
+    """G-8: BattleControllerPlayer_DecrementPP's cost against a Pressure foe, by moveTemp's range;
+    without Pressure every move costs 1, and the user's own Pressure never counts."""
+    s = roark_state(tables, names, player_moves=[move])
+    before = _pp(s, 0, move, names)
+    acts = A(move, "Leer", s, names)
+    out = assert_matches_reference(tables, _pressure(s, 1), acts, O)
+    assert before - _pp(out, 0, move, names) == cost
+    out = assert_matches_reference(tables, s, acts, O)
+    assert before - _pp(out, 0, move, names) == 1
+    out = assert_matches_reference(tables, _pressure(s, 0), acts, O)
+    assert before - _pp(out, 0, move, names) == 1
+
+
+def test_pressure_runs_a_move_out(tables, names):
+    """G-8: with 1 PP left the cost of 2 stops at 0 (bcp.c:2276-2280; the move still runs), and
+    with 2 PP left one use empties the slot, so the move can no longer be chosen."""
+    s = _pressure(roark_state(tables, names, player_moves=["Tackle"]), 1)
+    slot = names.move_slot(s, 0, "Tackle")
+    acts = A("Tackle", "Leer", s, names)
+    for left in (1, 2):
+        low = s._replace(pp=s.pp.at[0, 0, slot].set(left))
+        out = assert_matches_reference(tables, low, acts, O)
+        assert int(out.pp[0, 0, slot]) == 0
+        assert int(out.hp[1, 0]) < int(s.hp[1, 0])  # the move ran
+        assert not bool(legal_actions(tables, out, 0)[slot])
+
+
+def test_pressure_counter_spends_one_more(tables, names):
+    """G-9: a Counter that passes runs BattleSystem_DecPPForPressure on its new defender
+    (battle_script.c:4646; battle_lib.c:7390-7397): 1 at DecrementPP, 1 more for the Pressure
+    foe; a Counter that fails spends only the 1."""
+    s = roark_state(tables, names, player_moves=["Counter"], opp_faster=True)
+    before = _pp(s, 0, "Counter", names)
+    acts = A("Counter", "Tackle", s, names)
+    out = assert_matches_reference(tables, _pressure(s, 1), acts, O)
+    assert before - _pp(out, 0, "Counter", names) == 2
+    assert int(out.hp[1, 0]) < int(s.hp[1, 0])
+    out = assert_matches_reference(tables, s, acts, O)
+    assert before - _pp(out, 0, "Counter", names) == 1
+    # With 1 PP left, nothing remains for the second decrement.
+    slot = names.move_slot(s, 0, "Counter")
+    low = _pressure(s, 1)._replace(pp=s.pp.at[0, 0, slot].set(1))
+    assert int(assert_matches_reference(tables, low, acts, O).pp[0, 0, slot]) == 0
+
+
+def test_pressure_pursuit_on_a_switching_holder(tables, names):
+    """G-9: Pursuit's hit before a switch spends 1 PP, and 1 more while PP is left when the
+    switching battler has Pressure (battle_script.c:6915-6922)."""
+    s = roark_state(tables, names, opp_moves=["Pursuit"])
+    before = _pp(s, 1, "Pursuit", names)
+    acts = A(SWITCH_TO_1, "Pursuit", s, names)
+    out = assert_matches_reference(tables, _pressure(s, 0), acts, O)
+    assert before - _pp(out, 1, "Pursuit", names) == 2
+    out = assert_matches_reference(tables, s, acts, O)
+    assert before - _pp(out, 1, "Pursuit", names) == 1
+
+
+def test_pressure_switch_in_reveals_it_to_the_ai(tables, names):
+    """G-10: SWITCH_IN_CHECK_STATE_PRESSURE's subscript_pressure.s tags the holder's ability
+    (BattleMessage_AbilityTag, battle_script.c:11798-11809): the AI knows a player's Pressure
+    lead from the battle start and a Pressure newcomer from its switch-in."""
+    n = names
+    lead = make_state(tables, [_mon(n, "Absol", ["Tackle"])], [_mon(n, "Geodude", ["Tackle"])])
+    assert int(lead.ability[0, 0]) == AbilityId.PRESSURE
+    assert int(lead.ai_ability_known[0]) == 1
+    s = make_state(
+        tables,
+        [_mon(n, "Geodude", ["Tackle"]), _mon(n, "Absol", ["Tackle"])],
+        [_mon(n, "Geodude", ["Tackle"])],
+    )
+    assert int(s.ai_ability_known[0]) == 0
+    out = assert_matches_reference(tables, s, (SWITCH_TO_1, 0), O)
+    assert int(out.active[0]) == 1 and int(out.ai_ability_known[1]) == 1

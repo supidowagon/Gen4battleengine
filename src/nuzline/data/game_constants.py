@@ -326,6 +326,9 @@ CONSTANTS: tuple[Constant, ...] = (
     Constant("nuzline.engine.ids.MOVE_PROTECT", "move", 182, "Protect", _E),
     Constant("nuzline.engine.ids.MOVE_DETECT", "move", 197, "Detect", _E),
     Constant("nuzline.engine.ids.MOVE_ENDURE", "move", 203, "Endure", _E),
+    # MOVE_IMPRISON (generated/moves.txt line 287): DecrementPP's Pressure count for it
+    # (battle_controller_player.c:2239-2240), ruling G-8.
+    Constant("nuzline.engine.ids.MOVE_IMPRISON", "move", 286, "Imprison", _E),
     # ABILITY_MULTITYPE (generated/abilities.txt line 122): BtlCmd_TryCamouflage
     # (battle_script.c:8001-8004).
     Constant("nuzline.engine.ids.ABILITY_MULTITYPE", "ability", 121, "Multitype", _E),
@@ -432,6 +435,7 @@ CONSTANTS: tuple[Constant, ...] = (
             "Arena Trap": 71,
             "Shadow Tag": 23,
             "Magnet Pull": 42,
+            "Pressure": 46,
         },
     ),
     # ChooseTraceTarget's untraceable abilities (battle_lib.c:7750-7775) and its Forecast.

@@ -325,6 +325,25 @@ SWITCH_IN_ABILITIES = (
     AbilityId.DRIZZLE,
     AbilityId.SAND_STREAM,
     AbilityId.SNOW_WARNING,
+    AbilityId.PRESSURE,  # its switch-in announcement (G-8)
+)
+# E1 Gardenia batch (G-8): moves of each Pressure range class ``_draw_pressure`` gives the foe of
+# a Pressure holder (single target, field, opponent side, adjacent opponents, all adjacent, the
+# user, Imprison by id, the Counter family and Pursuit's extra PP; a Sleep Talk / Copycat call).
+PRESSURE_MOVES = (
+    "Tackle",
+    "Sunny Day",
+    "Spikes",
+    "Toxic Spikes",
+    "Growl",
+    "Earthquake",
+    "Swords Dance",
+    "Imprison",
+    "Counter",
+    "Mirror Coat",
+    "Metal Burst",
+    "Pursuit",
+    "Sleep Talk",
 )
 # The species items' holders (BattleSystem_CalcMoveDamage, battle_lib.c:6730-6774), none of
 # them an M1 species: ``_draw_species_item`` makes an active Pokemon one of them, holding the
@@ -812,6 +831,27 @@ def _draw_batch3(draw, tables: Tables, a: dict, side: int, active: int, names: N
     ]
     if bench and draw(st.integers(0, 2)) == 0:
         a["ability"][side, rnd.choice(bench)] = rnd.choice(SWITCH_IN_ABILITIES)
+
+
+def _draw_pressure(draw, tables: Tables, a: dict, side: int, active: int, names: Names) -> None:
+    """Maybe (1 in 4) give the active Pokemon Pressure (G-8), its foe a ``PRESSURE_MOVES`` move
+    (kept only when supported) and, half the time, 1-2 PP left in each of the foe's moves, so a
+    Pressure cost can run a move out."""
+    if draw(st.integers(0, 3)) != 0:
+        return
+    rnd = draw(st.randoms(use_true_random=False))
+    a["ability"][side, active] = AbilityId.PRESSURE
+    foe = 1 - side
+    foe_mon = int(a["active"][foe])
+    move = names.move(rnd.choice(PRESSURE_MOVES))
+    if tables.move_effect[move] != EffectId.UNSUPPORTED:
+        k = rnd.randint(0, 3)
+        a["moves"][foe, foe_mon, k] = move
+        a["pp"][foe, foe_mon, k] = int(tables.move_pp[move])
+    if rnd.random() < 0.5:
+        for k in range(4):
+            if a["moves"][foe, foe_mon, k]:
+                a["pp"][foe, foe_mon, k] = rnd.randint(1, 2)
 
 
 # E2 batch 9: abilities ``_draw_batch9`` puts on the active Pokemon.
@@ -1428,6 +1468,7 @@ def supported_state(draw, tables: Tables, names: Names, invokers: bool = True) -
         _draw_batch9(draw, tables, a, side, active, names)
         _draw_batch10(draw, tables, a, side, active, names)
         _draw_substitute(draw, tables, a, side, active, names)
+        _draw_pressure(draw, tables, a, side, active, names)
         _draw_choice_lock(draw, a, side, active)
     # B7-13: an Imprison user sharing a move with a Sleep Talk user, so a faster Imprison (or one
     # already up) can shrink the Sleep Talk set.

@@ -860,6 +860,8 @@ INPUT_NEUTRAL_ABILITIES = (
     AbilityId.ARENA_TRAP,
     AbilityId.SHADOW_TAG,
     AbilityId.MAGNET_PULL,
+    # G-8..G-10: PP and the AI's knowledge only, no damage input.
+    AbilityId.PRESSURE,
 )
 INPUT_CLAUSE_ABILITIES = (
     AbilityId.GUTS,  # status clause

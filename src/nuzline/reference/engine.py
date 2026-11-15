@@ -48,6 +48,7 @@ from nuzline.engine.ids import (
     POWER_IF_TARGET_MOVED,
     MOVE_BATON_PASS,
     MOVE_FAKE_OUT,
+    MOVE_IMPRISON,
     MOVE_KNOCK_OFF,
     MOVE_SLEEP_TALK,
     MOVE_SNORE,
@@ -142,6 +143,21 @@ SELF_DEFENDER = TARGETS_USER | {
     MoveTarget.RANGE_SINGLE_TARGET_SPECIAL,
     MoveTarget.RANGE_ALLY,
     MoveTarget.RANGE_USER_OR_ALLY,
+}
+# BattleControllerPlayer_DecrementPP's range switch (bcp.c:2241-2267): the ranges that count the
+# living Pressure holders other than the user / of the other side (COUNT_ALIVE_BATTLERS_EXCEPT_ME,
+# _THEIR_SIDE, lib.c:2905-2967), and those that add nothing; the default case reads the defender.
+PRESSURE_COUNTED = {
+    MoveTarget.RANGE_ALL_ADJACENT,
+    MoveTarget.RANGE_FIELD,
+    MoveTarget.RANGE_ADJACENT_OPPONENTS,
+    MoveTarget.RANGE_OPPONENT_SIDE,
+}
+PRESSURE_NONE = {
+    MoveTarget.RANGE_USER_SIDE,
+    MoveTarget.RANGE_USER,
+    MoveTarget.RANGE_USER_OR_ALLY,
+    MoveTarget.RANGE_ALLY,
 }
 # _status_disrupted's results.
 GOES_AHEAD, DISRUPTED, HURT_ITSELF = 0, 1, 2
@@ -1872,9 +1888,11 @@ def _switch_in_effects(turn: _Turn, s: RefState, side: int) -> None:
         _change_stage(s, side, Stat.ATK, -1)
     # SWITCH_IN_CHECK_STATE_MOLD_BREAKER (lib.c:4075): subscript_mold_breaker.s tags the
     # living newcomer's ability, BattleAI_SetAbility (script.c:11806).
-    if side == 0 and mon.hp and mon.ability == AbilityId.MOLD_BREAKER:
+    # SWITCH_IN_CHECK_STATE_PRESSURE (lib.c:4096-4110) likewise: subscript_pressure.s (G-10).
+    announced = (AbilityId.MOLD_BREAKER, AbilityId.PRESSURE)
+    if side == 0 and mon.hp and mon.ability in announced:
         s.ai_ability_known[s.sides[0].active] = 1
-    if traced and other == 0 and foe.ability == AbilityId.MOLD_BREAKER:
+    if traced and other == 0 and foe.ability in announced:
         s.ai_ability_known[s.sides[0].active] = 1
     _recover_status_by_ability(s, side)
     if traced:
@@ -3126,6 +3144,20 @@ def _hit_rate(tables, s: RefState, attacker: int, move: int, target_moved: bool 
     return rate
 
 
+def _pp_cost(tables, s: RefState, side: int, defender: int | None, move: int) -> int:
+    """BattleControllerPlayer_DecrementPP's ``ppCost`` (bcp.c:2236-2270) for ``moveTemp``
+    ``move`` of ``side`` with the fight command's ``defender`` (None: BATTLER_NONE).
+    ``skipPressureCheck`` is only set by script commands after it (G-8)."""
+    if defender is None:
+        return 1
+    foe = _active(s, 1 - side)
+    if move == MOVE_IMPRISON or _move_target(tables, move) in PRESSURE_COUNTED:
+        return 1 + int(foe.hp > 0 and foe.ability == AbilityId.PRESSURE)
+    if _move_target(tables, move) in PRESSURE_NONE:
+        return 1
+    return 1 + int(defender != side and _active(s, defender).ability == AbilityId.PRESSURE)
+
+
 def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggling: bool,
            locked: bool, target_moved: bool) -> int | None:  # fmt: skip
     """``BattleControllerPlayer_FightCommand`` through ``TryMove`` and the move script
@@ -3163,14 +3195,21 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
     # subscript_no_target.s, subscript_missed.s, the move script): moveHit = the move.
     record = move if foe_defender else None
     turn.attack_message = True
-    # BattleControllerPlayer_DecrementPP (bcp.c:2235): one PP from the move's slot;
+    # BattleControllerPlayer_DecrementPP (bcp.c:2235): PP from the move's slot;
     # none left fails the move (MOVE_STATUS_NO_PP). Struggle spends none, nor does a
-    # battler that was locked at command selection (ppDecremented, bcp.c:335).
+    # battler that was locked at command selection (ppDecremented, bcp.c:335). The cost is
+    # 1 plus Pressure's (bcp.c:2236-2270), capped at the PP left (:2276-2280), ruling G-8.
     if not struggling and not locked:
         slot = action
         if mon.pp[slot] == 0:
             return record
-        mon.pp[slot] -= 1
+        if foe_defender:
+            defender = 1 - side
+        elif target_range in SELF_DEFENDER or _curse_on_user(tables, move, _ghost(s, side)):
+            defender = side
+        else:
+            defender = None  # BATTLER_NONE
+        mon.pp[slot] = max(mon.pp[slot] - _pp_cost(tables, s, side, defender, move), 0)
     # BattleControllerPlayer_HasNoTarget (bcp.c:2306): BattleSystem_Defender found no
     # living foe for a move aimed at it. Nature Power's defender is its user
     # (RANGE_SINGLE_TARGET_SPECIAL, lib.c:1665-1669): it never fails here.
@@ -3294,6 +3333,11 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
             _unlock(s.sides[side])
             return None if special_counter else record
         turn.counter_damage = taken * _t(tables, "move_param", move, 1) // 10
+        # BattleSystem_DecPPForPressure on the new defender, the last attacker (script.c:4646,
+        # :4699, :7180; lib.c:7390-7397): one more PP from moveSlot, the chosen slot (an
+        # invoker's when it called the move), while it has PP left, ruling G-9.
+        if _active(s, attacker).ability == AbilityId.PRESSURE and mon.pp[action] > 0:
+            mon.pp[action] -= 1
         if special_counter:
             record = move
     snore = effect == EffectId.FLINCH and _t(tables, "move_param", move, 2) == SNORE_PARAM
@@ -3592,6 +3636,10 @@ def _pursuit(turn: _Turn, s: RefState, side: int, actions, choices) -> None:
     if mon.pp[slot] == 0:
         return
     mon.pp[slot] -= 1
+    # script.c:6919-6922: one more while PP is left when the switching battler has Pressure
+    # (ruling G-9).
+    if _active(s, side).ability == AbilityId.PRESSURE and mon.pp[slot] > 0:
+        mon.pp[slot] -= 1
     turn.done[pursuer] = True
     # script.c:6930: movePrevByBattler[pursuer] = Pursuit; :6943-6950: a Choice holder's
     # choiceLockedMove = Pursuit.

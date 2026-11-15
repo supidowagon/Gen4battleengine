@@ -553,6 +553,7 @@ DECOMP_ABILITY_TO_ID: dict[str, AbilityId] = {
     "Arena Trap": AbilityId.ARENA_TRAP,
     "Shadow Tag": AbilityId.SHADOW_TAG,
     "Magnet Pull": AbilityId.MAGNET_PULL,
+    "Pressure": AbilityId.PRESSURE,
 }
 
 DECOMP_ITEM_TO_ID: dict[str, ItemId] = {

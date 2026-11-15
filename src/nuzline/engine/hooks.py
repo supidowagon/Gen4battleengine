@@ -101,6 +101,10 @@ STATUS_HP, TORMENT = "status_hp", "torment"
 # * Mold Breaker: SWITCH_IN_CHECK_STATE_MOLD_BREAKER (battle_lib.c:4075), a living
 #   battler that has not announced it: subscript_mold_breaker.s prints
 #   ``TAG_NICKNAME_ABILITY, BTLSCR_MSG_TEMP, BTLSCR_MSG_BATTLER_TEMP``.
+# * Pressure: SWITCH_IN_CHECK_STATE_PRESSURE (battle_lib.c:4096-4110), likewise for a living
+#   battler whose ``pressureAnnounced`` is clear (cleared on entry, :113): subscript_pressure.s
+#   prints "{0} is exerting its {1}!" with ``TAG_NICKNAME_ABILITY, BTLSCR_MSG_TEMP,
+#   BTLSCR_MSG_BATTLER_TEMP`` (ruling G-10).
 # * Static / Poison Point / Flame Body: when the contact ability inflicts its status
 #   (``effects._contact_ability``): subscript_paralyze.s:44 / subscript_poison.s:57 /
 #   subscript_burn.s:_177 tag ``BTLSCR_MSG_BATTLER_TEMP``, the holder. A target that
@@ -149,6 +153,7 @@ STATUS_HP, TORMENT = "status_hp", "torment"
 # nothing).
 REVEALS_ON: dict[int, frozenset[str]] = {
     AbilityId.MOLD_BREAKER: frozenset({SWITCH_IN}),
+    AbilityId.PRESSURE: frozenset({SWITCH_IN}),
     AbilityId.STATIC: frozenset({CONTACT_STATUS}),
     AbilityId.POISON_POINT: frozenset({CONTACT_STATUS}),
     AbilityId.FLAME_BODY: frozenset({CONTACT_STATUS}),
@@ -553,7 +558,7 @@ def on_switch_in(tables: Tables, state: BattleState, side) -> BattleState:
     double KO's replacements: the player's newcomer enters first, ``playout``); the weather
     abilities (``weather_ability``) and Intimidate of the newcomer and of a battler that just
     traced one; a living newcomer's switch-in announcement (``reveal_ability``,
-    ``SWITCH_IN``) and a traced Mold Breaker's; the forbidden-status check
+    ``SWITCH_IN``: Mold Breaker, Pressure) and a traced one's; the forbidden-status check
     (``recover_status_by_ability``, battle_lib.c:4135); then the held-item check of both
     active Pokemon (``SWITCH_IN_CHECK_STATE_HELD_ITEM_STATUS`` loops over every battler). Each
     state loops over ``monSpeedOrder``; in singles the order changes nothing here: two Trace

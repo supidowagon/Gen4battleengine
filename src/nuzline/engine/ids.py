@@ -455,6 +455,11 @@ class AbilityId(IntEnum):
     ARENA_TRAP = 74
     SHADOW_TAG = 75
     MAGNET_PULL = 76
+    # E1 Gardenia batch, rulings G-8..G-11: Pressure's PP cost (BattleControllerPlayer_DecrementPP,
+    # bcp.c:2235-2270; effects.pressure_pp_cost), the Pursuit and Counter-family extra PP
+    # (battle_script.c:6919-6922, BattleSystem_DecPPForPressure battle_lib.c:7390-7397) and its
+    # switch-in announcement (SWITCH_IN_CHECK_STATE_PRESSURE, battle_lib.c:4096-4110).
+    PRESSURE = 77
 
 
 # The decomp ability id of every supported ``AbilityId`` (generated/abilities.txt line N is id
@@ -539,6 +544,7 @@ ABILITY_DECOMP_IDS = {
     AbilityId.ARENA_TRAP: 71,
     AbilityId.SHADOW_TAG: 23,
     AbilityId.MAGNET_PULL: 42,
+    AbilityId.PRESSURE: 46,
 }
 
 # ChooseTraceTarget (battle_lib.c:7750-7775) never picks a battler whose ``BattleMon.ability``
@@ -969,6 +975,9 @@ MOVE_ENDURE = 203
 # Choice lock for them (bcp.c:3927-3928, by ``moveTemp``).
 MOVE_BATON_PASS = 226
 MOVE_U_TURN = 369
+# Imprison (``generated/moves.txt`` line 287): BattleControllerPlayer_DecrementPP counts the
+# other side's living Pressure holders for it by ``moveTemp``, whatever its range (bcp.c:2239-2240).
+MOVE_IMPRISON = 286
 PROTECT_CHAIN_MOVES = (MOVE_PROTECT, MOVE_DETECT, MOVE_ENDURE)
 
 # ABILITY_MULTITYPE (``generated/abilities.txt`` line 122): ``BtlCmd_TryCamouflage``

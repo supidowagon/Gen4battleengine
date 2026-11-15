@@ -111,6 +111,7 @@ from nuzline.engine.damage import (
 )
 from nuzline.engine.effects import (
     LOCK_ON_TURNS,
+    NO_DEFENDER,
     armored,
     big_root,
     can_have_status,
@@ -129,6 +130,8 @@ from nuzline.engine.effects import (
     locked_onto,
     pivot_item,
     play_hit,
+    pressure_holder,
+    pressure_pp_cost,
     primary_effect_fails,
     protect_blocks,
     recovers_at_full_hp,
@@ -862,9 +865,20 @@ def _use_move(
     state = _set_mon(state, "status", side, user, Status.NONE, self_thaw)
 
     # BattleControllerPlayer_DecrementPP (battle_controller_player.c:3182) runs before the
-    # no-target check (:3190); Struggle has no PP to spend.
+    # no-target check (:3190); Struggle has no PP to spend. It takes 1 plus the Pressure cost of
+    # moveTemp (``move``, an invoker's own range) against the fight command's defender
+    # (effects.pressure_pp_cost), at most the PP left (:2276-2280), ruling G-8.
     spend = can_act & ~struggling & ~locked
-    pp = state.pp.at[side, user, slot].add(jnp.where(spend, -1, 0).astype(state.pp.dtype))
+    defender = jnp.where(
+        foe_defender,
+        target_side,
+        jnp.where(self_defender(tables, move, ghost_user(state, side)), side, NO_DEFENDER),
+    )
+    cost = pressure_pp_cost(tables, state, side, defender, move)
+    left = jnp.maximum(state.pp[side, user, slot].astype(_I32) - cost, 0)
+    pp = state.pp.at[side, user, slot].set(
+        jnp.where(spend, left, state.pp[side, user, slot]).astype(state.pp.dtype)
+    )
     state = state._replace(pp=pp)
 
     # Nature Power (effect_script_0173.s): its script turns it into the terrain's move
@@ -928,6 +942,19 @@ def _use_move(
     )
     special_counter = counter & self_defender(tables, used, ghost_user(state, side))
     has_target = has_target | special_counter | (invoker & call_failed)
+    # A Counter-family command that passes (its script's first command, effect_script_0089.s,
+    # _0144.s, _0227.s) runs BattleSystem_DecPPForPressure on its new defender, the last
+    # attacker (battle_script.c:4646, :4699, :7180; battle_lib.c:7390-7397): one more PP from
+    # the user's chosen slot (moveSlot: an invoker's when the invoker called it) while that slot
+    # has PP left and the defender has Pressure, ruling G-9.
+    counter_pressure = (
+        can_act & has_target & counter & counter_ok & pressure_holder(state, attacker)
+    ) & (state.pp[side, user, slot] > 0)
+    state = state._replace(
+        pp=state.pp.at[side, user, slot].add(
+            jnp.where(counter_pressure, -1, 0).astype(state.pp.dtype)
+        )
+    )
     # SYSCTL_MOVE_SUCCEEDED (battle_controller_player.c:3212) once the move got past the
     # status checks, the PP decrement and the no-target check, before the accuracy check
     # (a miss counts): UpdateMoveBuffers (:3945-3949) writes the move (Struggle's own id
@@ -1781,7 +1808,7 @@ def replacement_power_mul(tables: Tables, state: BattleState, actions) -> jnp.nd
 
 
 def _pursuit_hit(
-    tables: Tables, state: BattleState, pursuer, actions, choices, outcome: Outcome
+    tables: Tables, state: BattleState, pursuer, switcher, actions, choices, outcome: Outcome
 ) -> BattleState:
     """The pursuer hits the outgoing Pokemon: ``BtlCmd_TryPursuit`` spends the PP and
     sets ``powerMul = 20``; ``subscript_pursuit.s`` then runs crit, damage and the type
@@ -1794,11 +1821,18 @@ def _pursuit_hit(
     ``effects.sticky_barb_transfer``, the defender's physicalDamageTaken being the script's
     damage, :33): Shell Bell's heal of the script's ``shellBellDamageDealt`` (:21-29,
     ``effects.shell_bell_heal``) or Life Orb's recoil (``effects.life_orb_recoil``; one
-    holder holds one of them). The switching side chose no FIGHT, so no Custap flag is set."""
+    holder holds one of them). The switching side chose no FIGHT, so no Custap flag is set.
+    ``switcher``: the switching battler (``switchedMon``)."""
     action = actions[pursuer]
     slot = jnp.clip(action, 0, MOVE_ACTIONS - 1)
     mon = state.active[pursuer]
     state = state._replace(pp=state.pp.at[pursuer, mon, slot].add(jnp.int8(-1)))
+    # battle_script.c:6919-6922: one more while PP is left when the switching battler has
+    # Pressure (Battler_Ability, its own: the switch has not happened yet), ruling G-9.
+    extra = pressure_holder(state, switcher) & (state.pp[pursuer, mon, slot] > 0)
+    state = state._replace(
+        pp=state.pp.at[pursuer, mon, slot].add(jnp.where(extra, -1, 0).astype(state.pp.dtype))
+    )
     move = choices[0][pursuer]
     state = _set_last_move(state, pursuer, move, True)
     state = _set_choice_lock(state, pursuer, move, _holds_choice(tables, state, pursuer))
@@ -1818,7 +1852,6 @@ def _pursuit_hit(
     )
     # subscript_pursuit.s:85: a switcher that fainted holding Destiny Bond takes the pursuer
     # down (subscript_faint_check_destiny_bond.s), before the items (:90, :94-95).
-    switcher = 1 - pursuer
     fell = (before_hp > 0) & (state.hp[switcher, state.active[switcher]] == 0)
     bonded = fell & (state.destiny_bond[switcher] != 0) & (state.hp[pursuer, mon] > 0)
     state = _set_mon(state, "hp", pursuer, mon, 0, bonded)
@@ -1984,7 +2017,7 @@ def _execute_actions(
         pursuer = 1 - side
         fire = (start & (position == 0) & pursuit_fires(tables, state, side, acts, choices)) | ap
         pre = state
-        hit = _pursuit_hit(tables, pre, pursuer, acts, choices, outcome)
+        hit = _pursuit_hit(tables, pre, pursuer, side, acts, choices, outcome)
         crit = (outcome.crit[pursuer, 0] != 0) & ~armored(pre, pursuer, side)
         seen = _hit_events(pre, hit, pursuer, True, crit)
         pursuer_events = {

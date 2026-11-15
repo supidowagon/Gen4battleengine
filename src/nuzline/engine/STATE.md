@@ -356,7 +356,7 @@ three structs has a row.
 | `BattleMon.slowStartFinished` | — | later (M6) |
 | `BattleMon.friskAnnounced` | — | not needed because it only stops a switch-in message repeating; switch-in hooks run once per switch-in |
 | `BattleMon.moldBreakerAnnounced` | — | not needed because it only stops a switch-in message repeating; switch-in hooks run once per switch-in |
-| `BattleMon.pressureAnnounced` | — | not needed because it only stops a switch-in message repeating; switch-in hooks run once per switch-in |
+| `BattleMon.pressureAnnounced` | — | not needed because it only stops a switch-in message repeating; switch-in hooks run once per switch-in (the message's AI reveal, ruling G-10, is `ai_ability_known`) |
 | `BattleMon.padding0028_0B` | — | not needed because it is padding |
 | `BattleMon.ppCur` | `pp` | mapped |
 | `BattleMon.ppUps` | — | later (M3) |

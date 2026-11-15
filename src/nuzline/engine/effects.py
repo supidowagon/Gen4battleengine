@@ -257,6 +257,7 @@ from nuzline.engine.ids import (
     ITEM_ABILITY_IDS,
     ITEM_GRISEOUS_ORB,
     MOVE_FAKE_OUT,
+    MOVE_IMPRISON,
     MOVE_KNOCK_OFF,
     MINIMIZE_PARAM,
     MOVE_STRUGGLE,
@@ -728,6 +729,62 @@ def self_defender(tables: Tables, move, ghost=False) -> jnp.ndarray:
     move_range = tables.move_target[move]
     in_range = jnp.isin(move_range, jnp.asarray(SELF_DEFENDER_RANGES, move_range.dtype))
     return in_range | targets_user(tables, move, ghost)
+
+
+# BattleControllerPlayer_DecrementPP's range switch (battle_controller_player.c:2241-2267):
+# these ranges count the living Pressure holders other than the user (RANGE_ALL_ADJACENT,
+# RANGE_FIELD: COUNT_ALIVE_BATTLERS_EXCEPT_ME) or of the other side (RANGE_ADJACENT_OPPONENTS,
+# RANGE_OPPONENT_SIDE: COUNT_ALIVE_BATTLERS_THEIR_SIDE, battle_lib.c:2905-2967); these add
+# nothing; every other range (the default case) reads the defender's ability alone.
+PRESSURE_COUNT_EXCEPT_ME = (MoveTarget.RANGE_ALL_ADJACENT, MoveTarget.RANGE_FIELD)
+PRESSURE_COUNT_THEIR_SIDE = (MoveTarget.RANGE_ADJACENT_OPPONENTS, MoveTarget.RANGE_OPPONENT_SIDE)
+PRESSURE_NONE = (
+    MoveTarget.RANGE_USER_SIDE,
+    MoveTarget.RANGE_USER,
+    MoveTarget.RANGE_USER_OR_ALLY,
+    MoveTarget.RANGE_ALLY,
+)
+# ``defender`` of ``pressure_pp_cost`` when the decomp's is BATTLER_NONE.
+NO_DEFENDER = -1
+
+
+def pressure_holder(state: BattleState, battler) -> jnp.ndarray:
+    """``Battler_Ability(battler) == ABILITY_PRESSURE`` (battle_lib.c:3088-3106: no supported
+    move suppresses an ability; ``battler`` is a side in singles, its active Pokemon)."""
+    return state.ability[battler, state.active[battler]] == AbilityId.PRESSURE
+
+
+def pressure_pp_cost(tables: Tables, state: BattleState, attacker, defender, move) -> jnp.ndarray:
+    """``int32`` PP ``BattleControllerPlayer_DecrementPP`` (battle_controller_player.c:2235-2270)
+    takes for ``moveTemp`` ``move`` of ``attacker`` with ``defender`` (the battler
+    ``BattleSystem_Defender`` picked at the fight command, ``NO_DEFENDER`` for BATTLER_NONE):
+    1, plus, when there is a defender (:2238; ``skipPressureCheck`` is set only by script
+    commands that run after this, battle_script.c:3521, :4648, :4701, :5395, :7599, and
+    BattleContext_Init clears it for the next action, battle_lib.c:2014), for Imprison (by move
+    id, :2239-2240) or a counting range (``PRESSURE_COUNT_*``) one per living Pressure holder of
+    the other side / other than the user (a fainted holder and the user's own Pressure never
+    count), for a ``PRESSURE_NONE`` range nothing, and otherwise (the default case, :2261-2266)
+    one when the defender is not the user and its ability is Pressure, whatever its HP. The
+    caller spends ``min(cost, ppCur)`` (:2276-2280). Ruling G-8."""
+    move_range = tables.move_target[move]
+    holders = jnp.zeros((), _I32)
+    for battler in range(state.active.shape[0]):  # battler b is on side b in singles
+        mon = state.active[battler]
+        alive_holder = pressure_holder(state, battler) & (state.hp[battler, mon] > 0)
+        # In singles the only other battler is the other side's: EXCEPT_ME and THEIR_SIDE agree.
+        holders = holders + (alive_holder & (attacker != battler)).astype(_I32)
+    counted = (
+        (move == MOVE_IMPRISON)
+        | jnp.isin(move_range, jnp.asarray(PRESSURE_COUNT_EXCEPT_ME, move_range.dtype))
+        | jnp.isin(move_range, jnp.asarray(PRESSURE_COUNT_THEIR_SIDE, move_range.dtype))
+    )
+    silent = jnp.isin(move_range, jnp.asarray(PRESSURE_NONE, move_range.dtype))
+    defender = jnp.asarray(defender, _I32)
+    has_defender = defender != NO_DEFENDER
+    named = jnp.clip(defender, 0, state.active.shape[0] - 1)
+    single = (defender != attacker) & pressure_holder(state, named)
+    extra = jnp.where(counted, holders, jnp.where(silent, 0, single.astype(_I32)))
+    return 1 + jnp.where(has_defender, extra, 0)
 
 
 def protect_blocks(tables: Tables, move, unleash) -> jnp.ndarray:

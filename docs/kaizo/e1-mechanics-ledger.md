@@ -75,3 +75,45 @@ names the decomp sites, what the engine does, and where. E2's rulings are in
   transcribed, in Trick's branch (Trick's effect is unsupported, so coverage refuses a fight
   with it before the branch can run). Nothing in the AI reads `HOLD_EFFECT_MAYBE_ENDURE`. The
   AI's knowledge of a player's Focus Band comes from G-1's reveal.
+- G-8 Pressure's PP cost: `BattleControllerPlayer_DecrementPP` (battle_controller_player.c:
+  2235-2296) takes `ppCost` from the chosen slot (at most what is left, :2276-2280; the move still
+  runs) for `moveTemp`, the move chosen (an invoker's own range, not the called move's), against
+  the defender the fight command picked (bcp.c:1900, `BattleSystem_Defender`). With no defender
+  (BATTLER_NONE, :2238) the cost is 1. Imprison (by move id, :2239-2240) and the ranges
+  `RANGE_ALL_ADJACENT` / `RANGE_FIELD` (COUNT_ALIVE_BATTLERS_EXCEPT_ME) and
+  `RANGE_ADJACENT_OPPONENTS` / `RANGE_OPPONENT_SIDE` (COUNT_ALIVE_BATTLERS_THEIR_SIDE,
+  battle_lib.c:2905-2967) add one per living Pressure holder other than the user (singles: the
+  foe if alive; the user's own Pressure never counts). `RANGE_USER_SIDE`, `RANGE_USER`,
+  `RANGE_USER_OR_ALLY`, `RANGE_ALLY` add nothing. Every other range (single target, the special
+  single target of Counter / the invokers / Nature Power, random opponent, Me First) adds one
+  when the defender is not the user and its `Battler_Ability` is Pressure (:2261-2266, no HP
+  test): so Sunny Day, Spikes, Growl, Earthquake and Imprison cost 2 against a Pressure foe,
+  Swords Dance, Reflect, a non-Ghost Curse, Counter and Sleep Talk 1. `skipPressureCheck` is set
+  only by script commands (battle_script.c:3521, :4648, :4701, :5395, :7599) that run after the
+  decrement, and `BattleContext_Init` clears it before the next action (battle_lib.c:2014), so it
+  never changes a cost here. Struggle and a battler locked at command selection spend nothing
+  (unchanged). `effects.pressure_pp_cost` / `pressure_holder`, `step._use_move`; the reference's
+  `_pp_cost`.
+- G-9 Pressure's other PP sites: Pursuit's hit before a switch takes one more PP while any is
+  left when the switching battler has Pressure (`BtlCmd_TryPursuit`, battle_script.c:6915-6922;
+  a U-turn user's switch goes through the same command), `step._pursuit_hit`, the reference's
+  `_pursuit`. A Counter / Mirror Coat / Metal Burst whose command passes runs
+  `BattleSystem_DecPPForPressure` (battle_lib.c:7390-7397) on its new defender, the last
+  attacker (battle_script.c:4646, :4699, :7180): one more PP from `moveSlot`, the slot chosen
+  (Sleep Talk's or Copycat's when it called the move), while that slot has PP left; with the
+  special range's DecrementPP cost of 1 a passing Counter costs 2 against a Pressure foe.
+  Magic Coat and Snatch (bcp.c:3083, :3107) and Spite are unsupported moves (refused by
+  coverage), so their Pressure branches are not built.
+- G-10 Pressure's switch-in announcement: `SWITCH_IN_CHECK_STATE_PRESSURE` (battle_lib.c:
+  4096-4110) shows subscript_pressure.s for a living holder whose `pressureAnnounced` is clear
+  (cleared at entry, :113, and by Transform, battle_script.c:5358, unsupported); its message tags
+  `BTLSCR_MSG_BATTLER_TEMP`'s ability (`TAG_NICKNAME_ABILITY`), so `BattleMessage_AbilityTag`
+  runs `BattleAI_SetAbility` (battle_script.c:11798-11809): the AI learns a player's Pressure
+  (`ai_ability_known`) at the battle start and at its switch-in, as Mold Breaker's
+  (`hooks.REVEALS_ON`, the reference's `_switch_in_effects`). The flag itself only stops a
+  repeat (STATE.md row); a traced Pressure is known already through Trace's message.
+- G-11 AI: the only trainer AI read of Pressure is `Expert_TrumpCard` (script.s:5331-5334,
+  `LoadBattlerAbility AI_BATTLER_DEFENDER`), which is not transcribed (Trump Card's effect is
+  unsupported, so coverage refuses a fight with it before the branch could run). The AI's
+  other PP readers (`LoadCurrentMovePP`, the usable-move mask) read the state, so they see
+  Pressure's cost as it happens.
