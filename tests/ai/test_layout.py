@@ -154,11 +154,15 @@ def _dry_skin_state(tables, names):
 def test_dry_skin_compare_per_policy(tables, names):
     """Basic_CheckForImmunity's last compare (script.s:78) branches to
     Basic_CheckWaterAbsorption2 (:106-109): a Water move scores -12 against Dry Skin in
-    Kaizo. Vanilla compares Levitate again there, which never matches."""
+    Kaizo. Vanilla compares Levitate again there, which never matches. The Kaizo layout holds
+    the fight's own effects (E1 Ruling R7): another effect's label may make a FASTER compare's
+    per-slot read (E1 Ruling R8), which this flat outcome has no place for."""
     s = _dry_skin_state(tables, names)
     ctx = commands.at_slot(commands.new_context(tables, s, outcome()), 0)
+    own = {int(tables.move_ai_effect[m]) for m in np.asarray(s.moves[1, 0]) if m}
+    kaizo = kaizo_layout(KAIZO.flags, KAIZO.slot_reads, own)
     scores = {
-        layout.name: int(policy._basic(ctx, layout).scores[0]) - 100 for layout in (VANILLA, KAIZO)
+        layout.name: int(policy._basic(ctx, layout).scores[0]) - 100 for layout in (VANILLA, kaizo)
     }
     assert scores == {"vanilla": 0, "kaizo": -12}
 

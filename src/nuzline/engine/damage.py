@@ -489,21 +489,27 @@ _WEIGHT_LIMITS = jnp.array([100, 250, 500, 1000, 2000], jnp.int32)
 _WEIGHT_POWERS = jnp.array([20, 40, 60, 80, 100, 120], jnp.int32)
 
 
-def ai_case_power(tables: Tables, s: BattleState, atk_side, move) -> jnp.ndarray:
+def ai_case_power(
+    tables: Tables, s: BattleState, atk_side, move, *, def_side=None, ivs=None
+) -> jnp.ndarray:
     """``int32``: the power ``TrainerAI_CalcDamage`` passes for ``move`` (0 = the table's,
     ``BattleSystem_CalcMoveDamage``, battle_lib.c:6673-6677): Return
     ``friendship * 10 / 25`` and Frustration ``(255 - friendship) * 10 / 25``
     (trainer_ai.c:3018-3026; ``battleMons[attacker].friendship``), Low Kick and Grass Knot by
     the defender's weight (:3055-3071; ``battleMons[defender].weight``, its species' Pokedex
     weight, battle_lib.c:150), Hidden Power its IV power (:2973-2993, ``hidden_power``). A
-    computed 0 is the table's power too."""
+    computed 0 is the table's power too. ``def_side`` is ``AI_CONTEXT.defender``'s side
+    (default the other side) and ``ivs`` the ``ivs`` argument (default the attacker's own):
+    ``IfBattlerDealsMoreDamage`` (trainer_ai.c:2187-2240) passes the player as attacker,
+    the player again as defender and the AI attacker's IVs."""
     atk_side = _i32(atk_side)
-    def_side = 1 - atk_side
+    def_side = 1 - atk_side if def_side is None else _i32(def_side)
     move = _i32(move)
     friendship = _i32(s.friendship[atk_side, s.active[atk_side]])
     weight = _i32(tables.species_weight[s.species[def_side, s.active[def_side]]])
     by_weight = _WEIGHT_POWERS[jnp.sum(_WEIGHT_LIMITS < weight)]
-    hidden = hidden_power(s.ivs[atk_side, s.active[atk_side]])[1]
+    ivs = s.ivs[atk_side, s.active[atk_side]] if ivs is None else ivs
+    hidden = hidden_power(ivs)[1]
     return jnp.select(
         [
             move == AI_RETURN,
@@ -516,18 +522,19 @@ def ai_case_power(tables: Tables, s: BattleState, atk_side, move) -> jnp.ndarray
     )
 
 
-def ai_move_type(tables: Tables, s: BattleState, side, move) -> jnp.ndarray:
+def ai_move_type(tables: Tables, s: BattleState, side, move, *, ivs=None) -> jnp.ndarray:
     """``int32``: ``TrainerAI_MoveType`` (trainer_ai.c:3127-3222) of ``move`` used by
     ``side``'s active Pokemon: Hidden Power (by id, :3208-3220) its IV type
     (``hidden_power``), any other move its table type (the function's TYPE_NORMAL, which
     ``ApplyTypeChart`` and ``CalcMoveDamage`` read as the table's, battle_lib.c:2588-2590,
     :6681-6684). Natural Gift, Judgment and Weather Ball are refused
-    (``ai.commands.MOVE_TYPE_MOVES``). It reads ``side``'s own IVs: a command that types
-    another battler's move with the AI attacker's IVs (``IfBattlerDealsMoreDamage``,
-    trainer_ai.c:2206-2237, not transcribed) needs its own reading."""
+    (``ai.commands.MOVE_TYPE_MOVES``). It reads ``ivs``, by default ``side``'s own;
+    ``IfBattlerDealsMoreDamage`` (trainer_ai.c:2206-2237) types the player's move with the AI
+    attacker's IVs (``TrainerAI_CalcDamage``'s Hidden Power case, :2973-2993)."""
     side = _i32(side)
     move = _i32(move)
-    iv_type = hidden_power(s.ivs[side, s.active[side]])[0]
+    ivs = s.ivs[side, s.active[side]] if ivs is None else ivs
+    iv_type = hidden_power(ivs)[0]
     return jnp.where(move == AI_HIDDEN_POWER, iv_type, _i32(tables.move_type[move]))
 
 
@@ -694,6 +701,8 @@ def _pre_random(
     magnitude=MAGNITUDE_MIN,
     present=PRESENT_TABLE,
     ai: bool = False,
+    def_side=None,
+    ai_ivs=None,
 ):
     """Damage after ``+ 2`` and the crit multiplier, before the random roll.
 
@@ -704,9 +713,17 @@ def _pre_random(
     Magnitude's level (``Outcome.magnitude``); ``present`` is Present's draw
     (``Outcome.present``: 0-2 is the power 40/80/120, any other value keeps the table
     power). ``ai`` is ``TrainerAI_CalcDamage`` (trainer_ai.c:2868-3109), which has no Flail,
-    Rollout or Present case: they keep the move's table power."""
+    Rollout or Present case: they keep the move's table power. ``def_side`` (``ai`` only)
+    is ``AI_CONTEXT.defender``'s side, default the other side, and ``ai_ivs`` the IVs it
+    passes, default the attacker's own (``ai_case_power``)."""
     atk_side = _i32(atk_side)
-    def_side = atk_side if self_hit else 1 - atk_side
+    if self_hit:
+        def_side = atk_side
+    elif def_side is None:
+        def_side = 1 - atk_side
+    else:
+        assert ai, "a defender side is the AI damage's (IfBattlerDealsMoreDamage)"
+        def_side = _i32(def_side)
     move = _i32(move)
     crit = jnp.asarray(crit, jnp.bool_)
     a_slot, d_slot = _i32(s.active[atk_side]), _i32(s.active[def_side])
@@ -740,7 +757,7 @@ def _pre_random(
         | (effect == EffectId.FLAIL)
     )
     if ai:
-        case = ai_case_power(tables, s, atk_side, move)
+        case = ai_case_power(tables, s, atk_side, move, def_side=def_side, ivs=ai_ivs)
         power = jnp.where(case > 0, case, base_power)
     else:
         power = jnp.where(has_variable, variable, base_power)
@@ -766,7 +783,9 @@ def _pre_random(
     # the AI passes type 0 (the table's) for every case it models (trainer_ai.c:2881) but
     # Hidden Power's IV type (:2973-2993; ai_move_type).
     move_type = (
-        ai_move_type(tables, s, atk_side, move) if ai else move_type_of(tables, s, atk_side, move)
+        ai_move_type(tables, s, atk_side, move, ivs=ai_ivs)
+        if ai
+        else move_type_of(tables, s, atk_side, move)
     )
     category = _i32(tables.move_category[move])  # :6704 moveClass
     level = _i32(s.level[atk_side, a_slot])
@@ -909,6 +928,7 @@ def _finish(
     roll,
     *,
     variance_last: bool = False,
+    def_side=None,
 ):
     """Random roll, STAB and type chart; 0 for status moves and immunities. Struggle
     skips STAB and the chart (``ApplyTypeChart`` returns early for it, :2573).
@@ -916,9 +936,13 @@ def _finish(
     The battle applies the variance first (``BattleSystem_CalcDamageVariance``, :7081,
     at least 1), then the chart. ``variance_last`` is the trainer AI's order instead
     (``TrainerAI_CalcDamage``, trainer_ai.c:3096-3109): STAB and the chart first, then
-    ``BattleSystem_Divide(damage * variance, 100)``."""
+    ``BattleSystem_Divide(damage * variance, 100)``, and it computes a status or power-0
+    move too: ``CalcMoveDamage``'s ``+ 2`` (battle_lib.c:7078) goes through the chart, which
+    ``IfBattlerDealsMoreDamage`` reaches with the player's last move (trainer_ai.c:2229-2237;
+    the other AI callers pass only damaging moves, ``ai.commands.is_damaging``).
+    ``def_side`` is ``AI_CONTEXT.defender``'s side there (default the other side)."""
     atk_side = _i32(atk_side)
-    def_side = 1 - atk_side
+    def_side = 1 - atk_side if def_side is None else _i32(def_side)
     a_types = _i32(s.types[atk_side, s.active[atk_side]])
     d_types = _i32(s.types[def_side, s.active[def_side]])
     a_ability = _i32(s.ability[atk_side, s.active[atk_side]])
@@ -971,8 +995,9 @@ def _finish(
     damage = jnp.where(levitated(s, atk_side, def_side, move_type), 0, damage)
     damage = jnp.where(typeless, unchanged, damage)
     if variance_last:
-        # trainer_ai.c:3109; an immunity is already 0 (:3106).
-        damage = divide(damage * variance, 100)
+        # trainer_ai.c:3109; an immunity is already 0 (:3106). TrainerAI_CalcDamage has no
+        # status-move test: it returns this.
+        return divide(damage * variance, 100)
     # Status moves never calculate damage; CheckTypeChart needs base power
     # (battle_controller_player.c:2354).
     return jnp.where((category == STATUS) | (power == 0), 0, damage)
@@ -1055,12 +1080,20 @@ def calc_move_damage(
     return _pre_random(tables, state, atk_side, move, False, power_mul=power_mul)[0]
 
 
-def ai_damage_for_roll(tables: Tables, state: BattleState, atk_side, move, roll) -> jnp.ndarray:
+def ai_damage_for_roll(
+    tables: Tables, state: BattleState, atk_side, move, roll, *, def_side=None, ivs=None
+) -> jnp.ndarray:
     """``int32``: ``TrainerAI_CalcDamage`` (trainer_ai.c:2868-3109) for a move with no
     special calculation: ``BattleSystem_CalcMoveDamage`` with ``criticalMul`` 1 (screens,
     weather, abilities, items and stages as in battle), then STAB and the type chart,
-    then the variance ``85 + roll`` percent last, at least 1 when non-zero."""
-    damage, move_type, category, power = _pre_random(tables, state, atk_side, move, False, ai=True)
+    then the variance ``85 + roll`` percent last, at least 1 when non-zero. A status or
+    power-0 move gives the ``+ 2`` through the chart (``_finish``). ``def_side`` is
+    ``AI_CONTEXT.defender``'s side (default the other side) and ``ivs`` the IVs passed
+    (default the attacker's own): ``IfBattlerDealsMoreDamage`` (trainer_ai.c:2229-2237) has
+    the player attack itself with the AI attacker's IVs."""
+    damage, move_type, category, power = _pre_random(
+        tables, state, atk_side, move, False, ai=True, def_side=def_side, ai_ivs=ivs
+    )
     computed = _finish(
         tables,
         state,
@@ -1072,10 +1105,11 @@ def ai_damage_for_roll(tables: Tables, state: BattleState, atk_side, move, roll)
         power,
         _i32(roll),
         variance_last=True,
+        def_side=def_side,
     )
     # The fixed cases (ai_case_fixed): an immunity 0 (:3106), else the variance (:3109).
     fixed, amount = ai_case_fixed(state, atk_side, move)
-    def_side = 1 - _i32(atk_side)
+    def_side = 1 - _i32(atk_side) if def_side is None else _i32(def_side)
     d_types = state.types[def_side, state.active[def_side]]
     identified = state.foresight[def_side] != 0
     immune = effectiveness(tables, move_type, d_types, identified) == 0

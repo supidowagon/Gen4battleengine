@@ -617,14 +617,14 @@ None of these has a `Basic_ScoreMoveEffect` entry.
 - `Expert_DestinyBond` (`:1694`; `:3335-3360`): -1; slower than the player, nothing more;
   otherwise at 70 % HP or less +1 unless `:3346` jumps, at 50 % or less +1 more unless `:3351`
   jumps, at 30 % or less +2 more unless the 100 roll (`:3356`) jumps.
-- Roost's labels exist (Recover's) but the AI's type chart does not yet model the roosting
-  state. Tailwind came in batch 11 (5.15).
+- Roost's labels exist (Recover's); the AI's type chart reads the roosting state since E1 prep
+  batch P2 (5.22). Tailwind came in batch 11 (5.15).
 
 ### 5.14 Stat drops and Reflect (E1 batch 10)
 
 ATK_DOWN, SPEED_DOWN, EVA_DOWN, ATK_DOWN_2, SPEED_DOWN_2, SP_DEF_DOWN_2 (DEF_DOWN and
-DEF_DOWN_2 were Roark's) and SET_REFLECT. ACC_DOWN waits: `Expert_StatusAccuracyDown`
-(`:2431-2498`) reads Ingrain and Curse states the engine does not model yet.
+DEF_DOWN_2 were Roark's) and SET_REFLECT. ACC_DOWN came with E2's Ingrain and Curse state
+(5.21).
 - BASIC (`:144`, `:146`, `:150`, `:171`, `:173`, `:175`): `Basic_CheckLowStatStage_<stat>`
   (`:428-467`), -10 at -6 already, Attack also against Hyper Cutter, Speed also under Trick
   Room or against Speed Boost as the new command `CheckBattlerAbility` sees it (`:441`; for an
@@ -748,9 +748,62 @@ R8) with `:5139`.
   on the player's last move and `IfNotVolatileStatus`.
 - RECOVER_DAMAGE_SLEEP (8): `Basic_CheckDreamEater` (`:329-333`; `:136`); `Expert_DreamEater`
   (`:1631`; `:1886-1905`), the player asleep +3 unless the 51 roll (`:1897`) jumps.
-- Waiting on state the engine does not hold: Knock Off (the AI's record of the player's held
-  item, `LoadHeldItem`), Imprison (`MOVE_EFFECT_IMPRISON` / `_IMPRISONED`), Mean Look
-  (`VOLATILE_CONDITION_MEAN_LOOK`), Minimize (`Expert_StatusEvasionUp` reads Ingrain).
+- Knock Off, Imprison, Mean Look and Minimize waited on E2's state; they came in E1 prep
+  batch P1 (5.21).
+
+### 5.21 Metal Burst, Future Sight, ACC_DOWN, Minimize, Mean Look, Knock Off, Imprison (E1 prep batch P1)
+
+On E2's state (`ai_item_known`, `ingrain`, `mean_look`, `imprison` / `imprisoned`,
+`future_sight`, `curse`).
+- New commands: `IfHeldItemEqualTo` (trainer_ai.c; the AI side's true item, the player's
+  side the AI's record of it, `ai_item_known`), `LoadHeldItem` (the true item),
+  `IfNotMoveEffect`.
+- METAL_BURST (227): `Basic_CheckMetalBurst` (`:1160-1182`, FASTER's tie a read, Ruling R8;
+  the Shiny Stone compare is the decomp's Lagging Tail quirk); `Expert_MetalBurst`
+  (`:5029-5083`).
+- HIT_IN_3_TURNS (148): `Basic_CheckFutureSight` (`:823-827`), Future Sight pending on
+  either side -12; `EvalAttack_ApplyKillBonuses` `:6396`, a killing Future Sight +4 unless
+  the 170 roll (`:6405`) jumps.
+- ACC_DOWN (23) and EVA_UP_2_MINIMIZE (108): `Basic_CheckLowStatStage_Accuracy` /
+  `Basic_CheckHighStatStage_Evasion`; `Expert_StatusAccuracyDown` (`:2431-2498`) and
+  `Expert_StatusEvasionUp` (`:2184-2253`), the player below 40 % (a per-effect HP cut).
+- PREVENT_ESCAPE (106): `Basic_CheckMeanLook` (`:674-677`); `Expert_BindingMove`
+  (`:2808-2825`).
+- REMOVE_HELD_ITEM (188): `Basic_CheckCanRemoveItem` (`:898-904`); `Expert_KnockOff`
+  (`:4571-4581`), the player below 30 %.
+- MAKE_SHARED_MOVES_UNUSEABLE (192): `Basic_CheckCanImprison` (`:917-921`);
+  `Expert_Imprison` (`:4634-4642`).
+
+### 5.22 Copycat, Ingrain, the chart's Ingrain and Roost, Baton Pass (E1 prep batches P2-P3)
+
+- USE_LAST_USED_MOVE (242): `Basic_CheckCopycat` (`:1383-1390`), on the battle's first turn
+  faster (FASTER's tie a read) -10; `Expert_Copycat` (`:5552-5580`) with its
+  `EncouragedMoves` table (`:5582-5630`, `commands.COPYCAT_ENCOURAGED_MOVES`) and the new
+  command `IfBattlerDealsMoreDamage` (trainer_ai.c:2187-2240): the AI's best
+  `TrainerAI_CalcAllDamage` against `TrainerAI_CalcDamage` of the player's last move with
+  the player as attacker **and** defender (`AI_CONTEXT.defender`) and the AI attacker's IVs,
+  both at variance 100, strictly greater. There is no damaging-move test: a status move or
+  `MOVE_NONE` deals `CalcMoveDamage`'s `+ 2` through the chart (`engine.damage._finish`
+  computes it on the AI path; `ai_damage_for_roll` takes `def_side` and `ivs`). The AI's
+  estimate never sees Stomp's x2 (`effect_script_0150.s`'s `BTLVAR_POWER_MULTI`; `powerMul`
+  is reset at the turn's end, battle_controller_player.c:1855). A player move with a refused
+  `TrainerAI_CalcDamage` id case (Gyro Ball, Psywave / Triple Axel, Magnitude / Bulldoze,
+  Natural Gift, Judgment) is refused in a fight whose AI knows Copycat.
+- GROUND_TRAP_USER_CONTINUOUS_HEAL (181): `Basic_CheckAlreadyIngrained` (`:906-909`);
+  `Expert_Ingrain` (`:4463-4465`, no change).
+- The AI's `ApplyTypeChart` (`switching.chart_multipliers`, `defender_chart_flags`) reads the
+  defender's Ingrain (the Flying immunity lifted) and `turnFlags.roosting` (every Flying row
+  skipped), `BasicTypeMulApplies` (battle_lib.c:2534-2543): `IfMoveEffectivenessEquals`,
+  `IfHasSuperEffectiveMove`, the switch check's keep draws and the replacement's stage 2.
+  `CalcEffectiveness` has neither (`NoImmunityOverrides`, :2759). Roosting is cleared before
+  command selection (battle_lib.c:2229-2231), so only the replacement after a faint reads it.
+  Roost and Ingrain are no longer refused on either side; Miracle Eye and Magnet Rise are.
+- PASS_STATS_AND_STATUS (127): `Basic_CheckBatonPass` (`:780-784`); `Expert_BatonPass`
+  (`:3651-3704`, rolls `:3680`).
+- AI_FLAG_BATON_PASS (bit 6): `BatonPass_Main` (`:6564-6635`), rolls `:6577` and `:6591`.
+  As written, the `+3` of `BatonPass_EvalMove` (`:6592`) falls into `_SetupAtHighHP`. The
+  read bounds gain its column; the widest Kaizo fight with bit 6 (Danny, 725) bounds at 14,
+  under `WIDTH_CAP`.
 
 ## 6. Where the AI reads the true battle state
 

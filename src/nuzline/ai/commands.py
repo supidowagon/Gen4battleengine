@@ -45,6 +45,7 @@ from nuzline.ai.switching import (
     INEFFECTIVE,
     SUPER_EFFECTIVE,
     apply_type_chart,
+    defender_chart_flags,
     type_chart_flags,
 )
 from nuzline.data.tables import BATTLE_TYPE_DOUBLES as _BATTLE_TYPE_DOUBLES
@@ -322,6 +323,9 @@ class BattleEffect(IntEnum):
     PREVENT_ESCAPE = 106  # Mean Look, Block, Spider Web
     REMOVE_HELD_ITEM = 188  # Knock Off
     MAKE_SHARED_MOVES_UNUSEABLE = 192  # Imprison
+    USE_LAST_USED_MOVE = 242  # Copycat
+    GROUND_TRAP_USER_CONTINUOUS_HEAL = 181  # Ingrain
+    PASS_STATS_AND_STATUS = 127  # Baton Pass
     DOUBLE_POWER_IF_HIT = 185  # Avalanche, Revenge (Expert_MetalBurst, script.s:5049)
     PRIORITY_NEG_1_BYPASS_ACCURACY = 78  # Vital Throw (Expert_MetalBurst, script.s:5051)
     SET_SUBSTITUTE = 79  # Substitute
@@ -734,6 +738,14 @@ CALC_DAMAGE_MOVES = (363, 449, 360, 149, 222)
 # TrainerAI_MoveType's move-id cases (trainer_ai.c:3132-3222): the type the AI gives
 # these moves is not their table type. Decomp move ids.
 MOVE_TYPE_MOVES = (363, 449, 311)  # Hidden Power's is modelled (damage.ai_move_type)
+# Expert_Copycat_EncouragedMoves (script.s:5582-5630): the player's last moves Copycat is
+# encouraged to copy. Decomp move ids (MOVE_* of generated/moves.txt, line N is id N-1), in
+# script order; the same numbers in Kaizo, whose names differ (data/game_constants.py).
+COPYCAT_ENCOURAGED_MOVES = (
+    79, 142, 147, 95, 47, 320, 325, 28, 108, 92, 12, 32, 90, 329, 238, 177, 109, 186, 103,
+    178, 184, 313, 319, 86, 137, 77, 247, 223, 63, 245, 168, 343, 213, 207, 259, 260, 271,
+    276, 285, 375, 384, 385, 389, 391, 415, 445, 464,
+)  # fmt: skip
 
 # Decomp ids, checked against the manifest by tests/ai/test_policy.py.
 ABILITY_IDS = {
@@ -813,6 +825,15 @@ MOVE_IDS = {
     # Expert_Curse's IfMoveKnown checks (script.s:3472-3473), read from K3c Task 6.
     "Gyro Ball": 360,
     "Trick Room": 433,
+    # BatonPass_Main's IfMoveEqualTo and BatonPass_ProtectDetect (script.s:6581-6588,
+    # :6615-6618), E1 prep batch P3.
+    "Swords Dance": 14,
+    "Dragon Dance": 349,
+    "Calm Mind": 347,
+    "Nasty Plot": 417,
+    "Baton Pass": 226,
+    "Protect": 182,
+    "Detect": 197,
     # Basic_CheckSoundproof's IfMoveEqualTo list (script.s:121-131).
     "Growl": 45,
     "Sing": 47,
@@ -1000,10 +1021,17 @@ def if_has_super_effective_move(ctx: AiContext) -> AiContext:
     a, d = _side(Battler.ATTACKER), _side(Battler.DEFENDER)
     moves = state.moves[a, state.active[a]].astype(_I32)
     d_types = state.types[d, state.active[d]]
-    identified = state.foresight[d] != 0
+    identified, grounded, roosting = defender_chart_flags(state, d)
     flags = jax.vmap(
         lambda m: type_chart_flags(
-            tables, m, d_types, state.gravity, identified, ai_move_type(tables, state, a, m)
+            tables,
+            m,
+            d_types,
+            state.gravity,
+            identified,
+            ai_move_type(tables, state, a, m),
+            grounded,
+            roosting,
         )
     )(moves)
     return _jump(ctx, jnp.any((moves != 0) & ((flags & SUPER_EFFECTIVE) != 0)))
@@ -1035,6 +1063,37 @@ def if_party_member_deals_more_damage(ctx: AiContext, use_damage_roll: int) -> A
     return _jump(ctx, jnp.any(alive & (theirs > mine)))
 
 
+def if_battler_deals_more_damage(
+    ctx: AiContext, battler: Battler, use_damage_roll: int
+) -> AiContext:
+    """``IfBattlerDealsMoreDamage`` (trainer_ai.c:2187-2240): jumps when ``battler``'s last
+    move (``movePrevByBattler``, ``BattleState.last_move``) out-damages the AI's best move.
+    The AI's best is ``TrainerAI_CalcAllDamage`` over its active's moves (:2210-2219,
+    ``_slot_damage``). The battler's move goes through ``TrainerAI_CalcDamage`` with no
+    damaging-move test (:2229-2237): the battler is the attacker, ``AI_CONTEXT.defender``
+    stays the defender (for ``AI_BATTLER_DEFENDER``, the player attacking itself: its own
+    Defense, types, ability, screens), and the IVs are the AI attacker's (:2206-2208, Hidden
+    Power's case and type). A status move or ``MOVE_NONE`` deals ``CalcMoveDamage``'s ``+ 2``
+    through the chart (``engine.damage._finish``). Strictly greater (:2237). Only
+    ``USE_MAX_DAMAGE`` (variance 100 on both sides, :2224-2227) is transcribed (asserted),
+    and only the defender (asserted): the decomp's one call (script.s:5560, :5573)."""
+    assert int(use_damage_roll) == USE_MAX_DAMAGE, use_damage_roll
+    assert battler == Battler.DEFENDER, battler
+    tables, state = ctx.tables, ctx.state
+    a, d = _side(Battler.ATTACKER), _side(battler)
+    ai_best = jnp.max(_slot_damage(tables, state, jnp.full(MOVES, SIM_ROLL_MAX, _I32)))
+    theirs = ai_damage_for_roll(
+        tables,
+        state,
+        d,
+        state.last_move[d].astype(_I32),
+        SIM_ROLL_MAX,
+        def_side=_side(Battler.DEFENDER),
+        ivs=state.ivs[a, state.active[a]],
+    )
+    return _jump(ctx, theirs > ai_best)
+
+
 def move_effect(tables: Tables, move) -> jnp.ndarray:
     """``int32``: the decomp battle effect of ``move`` as the AI reads it,
     ``MOVE_DATA(move).effect`` (``tables.move_ai_effect``; ``IfCurrentMoveEffectEqualTo``,
@@ -1048,9 +1107,9 @@ def effectiveness_class(tables: Tables, state: BattleState, move) -> jnp.ndarray
     through ``BattleSystem_ApplyTypeChart`` (STAB x15/10, then each chart entry with
     ``BattleSystem_Divide``), mapped 120 -> 80, 240 -> 160, 30 -> 20, 15 -> 10, and 0 when
     the status mask has an immunity bit. Normalize, Adaptability, Scrappy, Tinted Lens,
-    Expert Belt, Levitate, Wonder Guard, Filter, Solid Rock, Iron Ball,
-    Miracle Eye, Roost, Magnet Rise and Ingrain change this value and are refused
-    (``policy.ai_refusals``)."""
+    Expert Belt, Levitate, Wonder Guard, Filter, Solid Rock, Iron Ball, Miracle Eye and
+    Magnet Rise change this value and are refused (``policy.ai_refusals``); the player's
+    Foresight, Ingrain and roosting flags are read (``switching.defender_chart_flags``)."""
     move = jnp.asarray(move, _I32)
     d_types = state.types[0, state.active[0]]
     value = apply_type_chart(tables, state, 1, move, TypeMulti.BASE)
@@ -1065,13 +1124,16 @@ def effectiveness_class(tables: Tables, state: BattleState, move) -> jnp.ndarray
         [TypeMulti.DOUBLE, TypeMulti.QUADRUPLE, TypeMulti.HALF, TypeMulti.QUARTER],
         value,
     )
+    identified, grounded, roosting = defender_chart_flags(state, 0)
     flags = type_chart_flags(
         tables,
         move,
         d_types,
         state.gravity,
-        state.foresight[0] != 0,
-        move_type=ai_move_type(tables, state, 1, move),  # TrainerAI_MoveType (:1323)
+        identified,
+        ai_move_type(tables, state, 1, move),  # TrainerAI_MoveType (:1323)
+        grounded,
+        roosting,
     )
     immune = (flags & INEFFECTIVE) != 0
     # Struggle: ApplyTypeChart returns 40 unchanged and sets no bit (battle_lib.c:2573).

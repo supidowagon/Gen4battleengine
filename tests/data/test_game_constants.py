@@ -77,6 +77,7 @@ LISTED = [
     "nuzline.ai.outcome._SITES",
     "nuzline.ai.commands.CALC_DAMAGE_MOVES",
     "nuzline.ai.commands.MOVE_TYPE_MOVES",
+    "nuzline.ai.commands.COPYCAT_ENCOURAGED_MOVES",
     # vanilla_policy / kaizo_policy: script.s:78's compare (the Dry Skin word)
     "nuzline.ai.layout.VANILLA",
     "nuzline.ai.layout.KAIZO",

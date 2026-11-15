@@ -62,6 +62,7 @@ from nuzline.ai import switching
 from nuzline.ai.commands import AiContext, BattleEffect, Battler, LoadType, TypeMulti
 from nuzline.ai.layout import (
     BASIC,
+    BATON_PASS,
     CHECK_HP,
     EVAL_ATTACK,
     EXPERT,
@@ -808,6 +809,81 @@ def _basic_check_imprison(ctx: AiContext, mask) -> AiContext:
     ctx, t = _split(c.if_move_effect(ctx, _A, c.MoveEffectMask.IMPRISON))
     ctx = _score(ctx, t, -10)
     ctx, t = _split(c.if_move_effect(ctx, _D, c.MoveEffectMask.IMPRISONED))
+    return c.pop_or_end(_score(ctx, t, -10))
+
+
+def _basic_check_baton_pass(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckBatonPass`` (script.s:780-784): no other living party member, -10."""
+    ctx = c.count_alive_party_battlers(_at(ctx, mask), _A)
+    ctx, t = _split(c.if_loaded_equal_to(ctx, 0))
+    return c.pop_or_end(_score(ctx, t, -10))
+
+
+def _expert_baton_pass(ctx: AiContext, mask) -> AiContext:
+    """``Expert_BatonPass`` (script.s:3651-3704): a stage of Attack, Defense, Sp. Atk, Sp. Def
+    or evasion at +3 or more: faster (no tie read: a SLOWER compare) at 60 % HP or less, or
+    slower at 70 % or less, +2 unless the 80 roll (:3680) jumps; else at +2 or more: faster
+    above 60 %, or slower at 70 % or more, -2; else -2."""
+    stats = (Stat.ATK, Stat.DEF, Stat.SPA, Stat.SPD, Stat.EVA)
+    ctx = _at(ctx, mask)
+    high = jnp.zeros_like(ctx.live)
+    for stat in stats:
+        ctx, t = _split(c.if_stat_stage_greater_than(ctx, _A, stat, 8))
+        high = high | t
+    ctx, medium = _split(c.go_to(ctx))
+    # _HighStatStage_CheckSpeedAndHP (:3671)
+    ctx = _at(ctx, high)
+    ctx, slower = _split(c.if_speed_compare_equal_to(ctx, COMPARE_SPEED_SLOWER))
+    ctx, end = _split(c.if_hp_percent_greater_than(ctx, _A, 60))
+    ctx, try_plus2 = _split(c.go_to(ctx))
+    # _HighStatStage_SlowerCheckHP (:3676)
+    ctx, t = _split(c.if_hp_percent_greater_than(_at(ctx, slower), _A, 70))
+    end = end | t
+    # _HighStatStage_TryScorePlus2 (:3679)
+    ctx, t = _split(c.if_random_less_than(_at(ctx, try_plus2 | ctx.live), 80, 3680))
+    end = end | t
+    ctx = c.add_to_move_score(ctx, 2)
+    ctx, t = _split(c.go_to(ctx))
+    end = end | t
+    # _CheckMediumStatStage (:3684)
+    ctx = _at(ctx, medium)
+    mid = jnp.zeros_like(ctx.live)
+    for stat in stats:
+        ctx, t = _split(c.if_stat_stage_greater_than(ctx, _A, stat, 7))
+        mid = mid | t
+    ctx, minus2 = _split(c.go_to(ctx))
+    # _MediumStatStage_CheckSpeedAndHP (:3692)
+    ctx = _at(ctx, mid)
+    ctx, slower = _split(c.if_speed_compare_equal_to(ctx, COMPARE_SPEED_SLOWER))
+    ctx, t = _split(c.if_hp_percent_greater_than(ctx, _A, 60))
+    minus2 = minus2 | t
+    ctx, t = _split(c.go_to(ctx))
+    end = end | t
+    # _MediumStatStage_SlowerCheckHP (:3697), falling into _ScoreMinus2 (:3700)
+    ctx, t = _split(c.if_hp_percent_less_than(_at(ctx, slower), _A, 70))
+    end = end | t
+    ctx = c.add_to_move_score(_at(ctx, minus2 | ctx.live), -2)
+    # _End (:3703)
+    return c.pop_or_end(_at(ctx, end | ctx.live))
+
+
+def _basic_check_already_ingrained(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckAlreadyIngrained`` (script.s:906-909): the attacker ingrained, -10."""
+    ctx, t = _split(c.if_move_effect(_at(ctx, mask), _A, c.MoveEffectMask.INGRAIN))
+    return c.pop_or_end(_score(ctx, t, -10))
+
+
+def _expert_ingrain(ctx: AiContext, mask) -> AiContext:
+    """``Expert_Ingrain`` (script.s:4463-4465): no score change."""
+    return c.pop_or_end(_at(ctx, mask))
+
+
+def _basic_check_copycat(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckCopycat`` (script.s:1383-1390): on the battle's first turn, faster
+    (FASTER's tie a read, E1 Ruling R8) -10."""
+    ctx = c.load_turn_count(_at(ctx, mask))
+    ctx, _ = _split(c.if_loaded_not_equal_to(ctx, 0))  # -> _Terminate
+    ctx, t = _split(c.if_speed_compare_equal_to(ctx, c.COMPARE_SPEED_FASTER))
     return c.pop_or_end(_score(ctx, t, -10))
 
 
@@ -2090,6 +2166,41 @@ def _expert_metal_burst(ctx: AiContext, mask) -> AiContext:
     return c.pop_or_end(c.add_to_move_score(_at(ctx, minus1), -1))
 
 
+def _expert_copycat(ctx: AiContext, mask) -> AiContext:
+    """``Expert_Copycat`` (script.s:5552-5580): slower, or the player's last move neither
+    out-damaging the AI's best (``IfBattlerDealsMoreDamage``) nor encouraged
+    (``COPYCAT_ENCOURAGED_MOVES``), -1 unless the 80 roll (:5576) jumps; faster (no tie read:
+    a SLOWER compare) with the player's last move out-damaging, +2 unless :5568 jumps, or
+    encouraged, +2 unless :5563 jumps."""
+    ctx = _at(ctx, mask)
+    ctx, check = _split(c.if_speed_compare_equal_to(ctx, c.COMPARE_SPEED_SLOWER))
+    ctx, plus2 = _split(c.if_battler_deals_more_damage(ctx, _D, c.USE_MAX_DAMAGE))
+    ctx = c.load_battler_previous_move(ctx, _D)
+    ctx, t = _split(c.if_loaded_not_in_table(ctx, c.COPYCAT_ENCOURAGED_MOVES))
+    check = check | t
+    ctx, end = _split(c.if_random_less_than(ctx, 128, 5563))
+    ctx = c.add_to_move_score(ctx, 2)
+    ctx, t = _split(c.go_to(ctx))
+    end = end | t
+    # _TryScorePlus2 (:5567)
+    ctx, t = _split(c.if_random_less_than(_at(ctx, plus2), 32, 5568))
+    end = end | t
+    ctx = c.add_to_move_score(ctx, 2)
+    ctx, t = _split(c.go_to(ctx))
+    end = end | t
+    # _CheckMoveEncouraged (:5572)
+    ctx, t = _split(c.if_battler_deals_more_damage(_at(ctx, check), _D, c.USE_MAX_DAMAGE))
+    end = end | t
+    ctx = c.load_battler_previous_move(ctx, _D)
+    ctx, t = _split(c.if_loaded_in_table(ctx, c.COPYCAT_ENCOURAGED_MOVES))
+    end = end | t
+    ctx, t = _split(c.if_random_less_than(ctx, 80, 5576))
+    end = end | t
+    ctx = c.add_to_move_score(ctx, -1)
+    # _End (:5579)
+    return c.pop_or_end(_at(ctx, end | ctx.live))
+
+
 def _status_stat_trick(label: str, lines: dict[str, int], first, hp_check):
     """``Expert_StatusAccuracyDown`` (script.s:2431-2498) and ``Expert_StatusEvasionUp``
     (:2184-2253), one shape after their first round (``first``): the attacker's own
@@ -2468,6 +2579,7 @@ _BASIC_LABELS = (
     (BattleEffect.RANDOM_POWER_MAYBE_HEAL, _basic_check_non_standard_damage),  # :204
     (BattleEffect.POWER_BASED_ON_LOW_FRIENDSHIP, _basic_check_non_standard_damage),  # :205
     (BattleEffect.PREVENT_STATUS, _basic_check_safeguard),  # :206
+    (BattleEffect.PASS_STATS_AND_STATUS, _basic_check_baton_pass),  # :208
     (BattleEffect.DAMAGE_FLAT_20, _basic_check_non_standard_damage),  # :209
     (BattleEffect.RANDOM_POWER_BASED_ON_IVS, _basic_check_non_standard_damage),  # :213
     (BattleEffect.WEATHER_RAIN, _basic_check_rain_dance),  # :214
@@ -2479,6 +2591,7 @@ _BASIC_LABELS = (
     (BattleEffect.WEATHER_HAIL, _basic_check_hail),  # :228
     (BattleEffect.STATUS_BURN, _basic_check_cannot_burn),  # :231
     (BattleEffect.HIT_LAST_WHIFF_IF_HIT, _basic_check_non_standard_damage),  # :233
+    (BattleEffect.GROUND_TRAP_USER_CONTINUOUS_HEAL, _basic_check_already_ingrained),  # :236
     (BattleEffect.LOWER_OWN_ATK_AND_DEF, _basic_check_non_standard_damage),  # :237
     (BattleEffect.REMOVE_HELD_ITEM, _basic_check_remove_item),  # :240
     (BattleEffect.SET_HP_EQUAL_TO_USER, _basic_check_non_standard_damage),  # :241
@@ -2490,6 +2603,7 @@ _BASIC_LABELS = (
     (BattleEffect.HEAL_HALF_REMOVE_FLYING_TYPE, _basic_check_can_recover_hp),  # :253
     (BattleEffect.DOUBLE_SPEED_3_TURNS, _basic_check_tailwind),  # :259
     (BattleEffect.METAL_BURST, _basic_check_metal_burst),  # :261
+    (BattleEffect.USE_LAST_USED_MOVE, _basic_check_copycat),  # :271
     (BattleEffect.TOXIC_SPIKES, _basic_check_toxic_spikes),  # :277
     (BattleEffect.STEALTH_ROCK, _basic_check_stealth_rock),  # :284
 )
@@ -2544,6 +2658,7 @@ _EXPERT_LABELS = (
     (BattleEffect.CURSE, _expert_curse),  # :1700
     (BattleEffect.PROTECT, _expert_protect),  # :1701
     (BattleEffect.SET_SPIKES, _expert_spikes),  # :1702
+    (BattleEffect.PASS_STATS_AND_STATUS, _expert_baton_pass),  # :1705
     (BattleEffect.HIT_BEFORE_SWITCH, _expert_pursuit),  # :1706
     (BattleEffect.WEATHER_RAIN, _expert_rain_dance),  # :1710
     (BattleEffect.WEATHER_SUN, _expert_sunny_day),  # :1711
@@ -2554,6 +2669,7 @@ _EXPERT_LABELS = (
     (BattleEffect.DOUBLE_POWER_WHEN_STATUSED, _expert_facade),  # :1729
     (BattleEffect.HIT_LAST_WHIFF_IF_HIT, _expert_focus_punch),  # :1730
     (BattleEffect.DOUBLE_POWER_AND_CURE_PARALYSIS, _expert_smelling_salts),  # :1731
+    (BattleEffect.GROUND_TRAP_USER_CONTINUOUS_HEAL, _expert_ingrain),  # :1734
     (BattleEffect.LOWER_OWN_ATK_AND_DEF, _expert_superpower),  # :1735
     (BattleEffect.REMOVE_SCREENS, _expert_brick_break),  # :1739
     (BattleEffect.REMOVE_HELD_ITEM, _expert_knock_off),  # :1740
@@ -2570,6 +2686,7 @@ _EXPERT_LABELS = (
     (BattleEffect.METAL_BURST, _expert_metal_burst),  # :1770
     (BattleEffect.SWITCH_HIT, _expert_u_turn),  # :1771
     (BattleEffect.DOUBLE_POWER_IF_MOVING_SECOND, _expert_payback),  # :1773
+    (BattleEffect.USE_LAST_USED_MOVE, _expert_copycat),  # :1785
     (BattleEffect.TOXIC_SPIKES, _expert_toxic_spikes),  # :1792
     (BattleEffect.BLIZZARD, _expert_blizzard),  # :1801
     (BattleEffect.RECOIL_PARALYZE_HIT, _expert_recoil_move),  # :1802
@@ -2652,6 +2769,55 @@ def _prioritize_extremes(ctx: AiContext) -> AiContext:
     return c.pop_or_end(c.add_to_move_score(ctx, 2))
 
 
+def _baton_pass(ctx: AiContext) -> AiContext:
+    """``BatonPass_Main`` (script.s:6564-6635): with another living party member, a move
+    ``FlagMoveDamageScore`` makes no comparison for: unless the attacker knows a Baton Pass
+    effect, the 80 roll (:6577) ends it. Swords Dance, Dragon Dance, Calm Mind and Nasty Plot
+    go to ``_SetupAtHighHP``; a Protect effect +2, or -2 after the attacker's own Protect or
+    Detect; Baton Pass on the battle's first turn -2, else +3/+2/+1 for an Attack stage above
+    +2/+1/0, the same for Sp. Atk; any other move +3 unless the 20 roll (:6591) jumps, falling
+    into ``_SetupAtHighHP``: on the battle's first turn +5, below 60 % HP -10, else +1."""
+    ctx = _terminate(ctx)
+    ctx = c.count_alive_party_battlers(ctx, _A)
+    ctx, _ = _split(c.if_loaded_equal_to(ctx, 0))  # -> BatonPass_Terminate
+    ctx = c.flag_move_damage_score(ctx, c.USE_MAX_DAMAGE)
+    ctx, _ = _split(c.if_loaded_not_equal_to(ctx, c.AI_NO_COMPARISON_MADE))  # -> _Terminate
+    ctx, known = _split(c.if_move_effect_known(ctx, _A, BattleEffect.PASS_STATS_AND_STATUS))
+    ctx, _ = _split(c.if_random_less_than(ctx, 80, 6577))  # -> Risky_Terminate
+    # BatonPass_EvalMove (:6579)
+    ctx = _at(ctx, known | ctx.live)
+    setup = jnp.zeros_like(ctx.live)
+    for name in ("Swords Dance", "Dragon Dance", "Calm Mind", "Nasty Plot"):
+        ctx, t = _split(c.if_move_equal_to(ctx, c.MOVE_IDS[name]))
+        setup = setup | t
+    ctx, protect = _split(c.if_current_move_effect_equal_to(ctx, BattleEffect.PROTECT))
+    ctx, baton = _split(c.if_move_equal_to(ctx, c.MOVE_IDS["Baton Pass"]))
+    ctx, _ = _split(c.if_random_less_than(ctx, 20, 6591))  # -> Risky_Terminate
+    ctx = c.add_to_move_score(ctx, 3)
+    # BatonPass_SetupAtHighHP (:6594)
+    ctx = c.load_turn_count(_at(ctx, setup | ctx.live))
+    ctx, t = _split(c.if_loaded_equal_to(ctx, 0))
+    ctx = _score(ctx, t, 5)
+    ctx, t = _split(c.if_hp_percent_less_than(ctx, _A, 60))
+    ctx = _score(ctx, t, -10)
+    ctx = c.pop_or_end(c.add_to_move_score(ctx, 1))  # GoTo ScorePlus1
+    # BatonPass_EvalProtect (:6605)
+    ctx = c.load_battler_previous_move(_at(ctx, protect), _A)
+    table = (c.MOVE_IDS["Protect"], c.MOVE_IDS["Detect"])  # BatonPass_ProtectDetect
+    ctx, t = _split(c.if_loaded_in_table(ctx, table))
+    ctx = _score(ctx, t, -2)
+    ctx = c.pop_or_end(c.add_to_move_score(ctx, 2))
+    # BatonPass_EvalBatonPass (:6620)
+    ctx = c.load_turn_count(_at(ctx, baton))
+    ctx, t = _split(c.if_loaded_equal_to(ctx, 0))
+    ctx = _score(ctx, t, -2)
+    for stat in (Stat.ATK, Stat.SPA):
+        for value, plus in ((8, 3), (7, 2), (6, 1)):
+            ctx, t = _split(c.if_stat_stage_greater_than(ctx, _A, stat, value))
+            ctx = _score(ctx, t, plus)
+    return c.pop_or_end(ctx)
+
+
 def _check_hp_round(ctx: AiContext, high, medium, prefix: str, line: int) -> AiContext:
     """One round of ``CheckHP_Main`` after its two ``IfHPPercentGreaterThan`` (70 to the high
     band's label in ``high``, 30 to the medium band's in ``medium``, the rest low): each band
@@ -2691,8 +2857,8 @@ def _flags(layout: AiLayout) -> tuple:
     """The flag scripts the policy runs: those of ``layout.flags``' set bits, in bit order
     (``TrainerAI_MainSingles`` runs a flag's script only when its bit is set, low bit first,
     trainer_ai.c:297-308; ``FlagTable``, script.s:18-30): BASIC (bit 0), EVAL_ATTACK (1),
-    EXPERT (2), SETUP_FIRST_TURN (3), RISKY (4), PRIORITIZE_EXTREMES (5), CHECK_HP (8), WEATHER
-    (9). Vanilla runs 7 (roark.md 1);
+    EXPERT (2), SETUP_FIRST_TURN (3), RISKY (4), PRIORITIZE_EXTREMES (5), BATON_PASS (6),
+    CHECK_HP (8), WEATHER (9). Vanilla runs 7 (roark.md 1);
     Kaizo the trainer's set (E1 Ruling
     R2), Roark's 23. A bit without a transcribed script raises (``layout.kaizo_layout``
     builds no such layout; coverage refuses the trainer)."""
@@ -2703,6 +2869,7 @@ def _flags(layout: AiLayout) -> tuple:
         SETUP_FIRST_TURN: _setup_first_turn,
         RISKY: _risky,
         PRIORITIZE_EXTREMES: _prioritize_extremes,
+        BATON_PASS: _baton_pass,
         CHECK_HP: _check_hp,
         WEATHER: _weather,
     }
@@ -2719,9 +2886,8 @@ def _flags(layout: AiLayout) -> tuple:
 
 _ATTACKER_ABILITIES = ("Normalize", "Adaptability", "Scrappy", "Tinted Lens")
 _DEFENDER_ABILITIES = ("Levitate", "Wonder Guard", "Filter", "Solid Rock")
-_STATE_MOVE_IDS = {
-    n: switching.MOVE_IDS[n] for n in ("Miracle Eye", "Roost", "Magnet Rise", "Ingrain")
-}
+# Ingrain and Roost are read since E1 prep batch P2 (switching.defender_chart_flags).
+_STATE_MOVE_IDS = {n: switching.MOVE_IDS[n] for n in ("Miracle Eye", "Magnet Rise")}
 
 
 def player_move_refusal(move: int) -> str | None:
@@ -2758,6 +2924,7 @@ class _Refused(NamedTuple):
     ability: jnp.ndarray  # bool[2, SLOTS]
     item: jnp.ndarray  # bool[2, SLOTS]
     state_move: jnp.ndarray  # bool[2, SLOTS, MOVES]
+    copied: jnp.ndarray  # bool[SLOTS, MOVES]: a player move Copycat's damage test calculates
     bag: jnp.ndarray  # bool[BAG_SLOTS]: bag item other than a Potion
     scoring: jnp.ndarray  # bool: ai_scores is refused
     any: jnp.ndarray  # bool: ai_policy is refused (switching aside)
@@ -2810,6 +2977,13 @@ def _refused(tables: Tables, state: BattleState, layout: AiLayout = VANILLA) -> 
     )
     state_ids = jnp.array(list(_STATE_MOVE_IDS.values()), _I32)
     state_move = present[..., None] & jnp.isin(moves, state_ids)
+    # Expert_Copycat's IfBattlerDealsMoreDamage (trainer_ai.c:2229-2237) runs the player's
+    # last move through TrainerAI_CalcDamage: its refused id cases are refused on the
+    # player's side too, in a fight whose AI knows a transcribed Copycat.
+    copycat = jnp.any(known & ~move & (effects == BattleEffect.USE_LAST_USED_MOVE))
+    copied = (
+        present[0][:, None] & jnp.isin(moves[0], jnp.array(c.CALC_DAMAGE_MOVES, _I32)) & copycat
+    )
     bag_items = state.trainer_items[1].astype(_I32)
     bag = (bag_items != 0) & (tables.trainer_item_effect[bag_items] != TrainerItemId.POTION)
     scoring = (
@@ -2823,6 +2997,7 @@ def _refused(tables: Tables, state: BattleState, layout: AiLayout = VANILLA) -> 
         | jnp.any(ability_bad)
         | jnp.any(item_bad)
         | jnp.any(state_move)
+        | jnp.any(copied)
     )
     return _Refused(
         move,
@@ -2835,6 +3010,7 @@ def _refused(tables: Tables, state: BattleState, layout: AiLayout = VANILLA) -> 
         ability_bad,
         item_bad,
         state_move,
+        copied,
         bag,
         scoring,
         scoring | jnp.any(bag),
@@ -2985,6 +3161,13 @@ def _scoring_refusals(
         out.append(
             f"ai scoring: side {side} slot {s}: move {move_names[int(moves[side, s, k])]} "
             "leaves a type-chart state the engine does not carry"
+        )
+    for s, k in zip(*np.nonzero(np.asarray(r.copied)), strict=True):
+        out.append(
+            f"ai scoring: player slot {s}: move {_move_name(int(moves[0, s, k]), names)} "
+            "takes a TrainerAI_CalcDamage move-id case (trainer_ai.c:2885-3056) that is not "
+            "transcribed, which Expert_Copycat's IfBattlerDealsMoreDamage calculates "
+            "(trainer_ai.c:2229-2237)"
         )
     return out
 

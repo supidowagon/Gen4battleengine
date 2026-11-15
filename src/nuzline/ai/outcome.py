@@ -328,6 +328,14 @@ SITE_N: dict[int, int] = {
     2821: 128,  # Expert_BindingMove
     4577: 180,  # Expert_KnockOff
     4638: 100,  # Expert_Imprison
+    # E1 prep batch P2 (on E2's state)
+    5563: 128,  # Expert_Copycat: an encouraged last move
+    5568: 32,  # Expert_Copycat_TryScorePlus2
+    5576: 80,  # Expert_Copycat_CheckMoveEncouraged
+    # E1 prep batch P3: Baton Pass
+    3680: 80,  # Expert_BatonPass_HighStatStage_TryScorePlus2
+    6577: 80,  # BatonPass_Main: the attacker without a Baton Pass effect
+    6591: 20,  # BatonPass_EvalMove: +3
 }
 SITE_LINES = tuple(SITE_N)
 # The flat (vanilla) layout's column of script_roll_sites that each line reads: column 0 is
@@ -509,6 +517,10 @@ KAIZO_TRANSCRIBED: frozenset[int] = frozenset(
         188,  # REMOVE_HELD_ITEM: Basic_CheckCanRemoveItem (:240); Expert_KnockOff (:1740)
         192,  # MAKE_SHARED_MOVES_UNUSEABLE: Basic_CheckCanImprison (:242); Expert_Imprison
         227,  # METAL_BURST: Basic_CheckMetalBurst (:261); Expert_MetalBurst (:1770)
+        # E1 prep batch P2, on E2's state (last_move, Copycat's call)
+        242,  # USE_LAST_USED_MOVE: Basic_CheckCopycat (:271); Expert_Copycat (:1785)
+        181,  # GROUND_TRAP_USER_CONTINUOUS_HEAL: Basic_CheckAlreadyIngrained (:236); Expert_Ingrain
+        127,  # PASS_STATS_AND_STATUS: Basic_CheckBatonPass (:208); Expert_BatonPass (:1705)
     }
 )
 # The transcribed effects (KAIZO_TRANSCRIBED) whose Expert_Main entry goes to a label added
@@ -604,6 +616,9 @@ KAIZO_EXPERT_LABELS: dict[int, tuple[str, int]] = {
     188: ("Expert_KnockOff", 1740),
     192: ("Expert_Imprison", 1744),
     227: ("Expert_MetalBurst", 1770),
+    242: ("Expert_Copycat", 1785),
+    181: ("Expert_Ingrain", 1734),
+    127: ("Expert_BatonPass", 1705),
 }
 # Of KAIZO_EXPERT_LABELS, the effects whose Expert label policy._expert transcribes
 # (layout.KAIZO expert_transcribed), written out: it is not derived from the table, so an
@@ -687,6 +702,9 @@ KAIZO_EXPERT_TRANSCRIBED: frozenset[int] = frozenset(
         188,  # REMOVE_HELD_ITEM: Expert_KnockOff
         192,  # MAKE_SHARED_MOVES_UNUSEABLE: Expert_Imprison
         227,  # METAL_BURST: Expert_MetalBurst
+        242,  # USE_LAST_USED_MOVE: Expert_Copycat
+        181,  # GROUND_TRAP_USER_CONTINUOUS_HEAL: Expert_Ingrain (no score change)
+        127,  # PASS_STATS_AND_STATUS: Expert_BatonPass
     }
 )
 assert set(KAIZO_EXPERT_LABELS) <= KAIZO_TRANSCRIBED
