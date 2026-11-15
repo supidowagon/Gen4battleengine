@@ -42,8 +42,9 @@ Poison/Steel, burn vs Fire and freeze vs Ice (and no freezing in sun), which
 are Insomnia and Limber (implemented in ``engine/effects.py``), Shield Dust against a
 damaging move's secondary status (``effects._inflict``), and Vital Spirit, Immunity, Water
 Veil, Magma Armor and Leaf Guard (``AbilityId.UNSUPPORTED``), and
-Safeguard, Substitute and Uproar are unsupported moves, so none of those branches can be
-reached silently.
+Safeguard and Substitute are unsupported moves, so none of those branches can be
+reached silently. Uproar's sleep block (subscript_fall_asleep.s:14-16, :43-45) is modelled
+(E2 batch 5, ``effects._inflict``).
 """
 
 from __future__ import annotations
@@ -302,6 +303,9 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     144: ("BATTLE_EFFECT_MIRROR_COAT", _E.COUNTER, (COUNTER_SPECIAL, 20, 0)),
     227: ("BATTLE_EFFECT_METAL_BURST", _E.COUNTER, (COUNTER_ANY, 15, 0)),
     212: ("BATTLE_EFFECT_ATK_SPD_UP", _E.DRAGON_DANCE, (0, 0, 0)),
+    # E2 batch 5. Uproar: effect_script_0159.s, a hit plus, for a user not in an uproar, an ON_HIT
+    # indirect subscript_uproar.s (engine/effects.py ``_uproar``, engine/step.py).
+    159: ("BATTLE_EFFECT_UPROAR", _E.UPROAR, (0, 0, 0)),
 }
 
 DECOMP_EFFECT_NAMES: dict[int, str] = {k: v[0] for k, v in _EFFECTS.items()}

@@ -9,7 +9,9 @@
   `search.expand` enumerates every variant); Metronome modelled but refused while any move it
   can call is unmodelled (150 vanilla / 128 Kaizo of 442). New refusal: Sleep Talk facing a
   reachable Disable (B5-3). Roark split entries closed: Sleep Talk (10 fights), Copycat (1).
-- Next in batch 5: Uproar, Future Sight / Doom Desire (Owed entries below); then the review.
+- Batch 5 part 2: Uproar modelled and supported in both engines, the sampler and the laws
+  (B5-4..B5-7; Roark split entry closed). Next: Future Sight / Doom Desire (Owed below); then
+  the review.
 - Left after batch 5: U-turn (3 fights, the batch 6 design below), Metronome (3, B5-2).
 - Standing: the doubles conventions below apply to all new code; one review per batch.
 
@@ -155,8 +157,12 @@ Rules left out because another mechanic is missing; each closes with the mechani
   Also owed with it: Shell Bell / Life Orb / the contact abilities / Sticky Barb vs
   `SYSCTL_UTURN_ACTIVE` (bcp.c:4739, :4761; battle_lib.c:4219-4362, :5393) and the pivot items
   (battle_lib.c:7336-7386), and the Pursuit it triggers (:51-54).
-- Uproar (#159): a 3-6 turn lock (`Random 3, 3`), sleep prevention and wake-ups
-  (bcp.c:1505-1541, :2431-2439; subscript_fall_asleep.s:15-16), early end on `moveFailFlags`.
+- Rest and Yawn (unsupported moves) read `FIELD_CONDITION_UPROAR` too (subscript_rest.s,
+  subscript_yawn.s): whoever adds them must test `effects.uproar_on` there (B5-6).
+- AI owner (E1): Uproar's AI side is untranscribed (the backlog's "AI move effect #159" entry; the
+  Basic script's `IfMoveEqualTo MOVE_UPROAR, ScoreMinus10`, trainer_ai/script.s:127, is in its
+  sleep-move block). An uproaring opponent picks no command, which the AI already reads through
+  `actions.locked_slot` (B5-5); no AI change is needed for the lock.
 - Future Sight / Doom Desire (#148): use-time damage (CalcMoveDamage + variance, no crit, STAB or
   chart), a per-slot counter, and the hit as the first side-condition check after
   `CheckMonConditions` (bcp.c:1739, :1758-1783) with its own accuracy roll (a new draw).
@@ -541,3 +547,45 @@ Rules left out because another mechanic is missing; each closes with the mechani
   (`coverage.call_disable_line`; prep's pool and problem per candidate), as Trace in both
   parties is (B3-14). The engines play the live set exactly. The sampler and the laws read
   Copycat's call by the order (`order.used_moves`).
+- B5-4 Uproar (`EffectId.UPROAR`, effect 159 in both games, the move Uproar only): a plain hit
+  (CalcCrit, CalcDamage; effect_script_0159.s:9-10) whose ON_HIT indirect effect, for a user not
+  in an uproar yet (:5), runs when the hit was not `MOVE_STATUS_NO_EFFECTS` (battle_lib.c:1524-1529:
+  not missed, protected or ineffective): subscript_uproar.s sets `moveLockedInto` = moveCur (:5),
+  `Random 3, 3` (3-6, `Outcome.duration`, the Bind law `DURATION_TRAP`, :6-8) into
+  `VOLATILE_CONDITION_UPROAR` (`BattleState.uproar`, per battler) and the battler's
+  `FIELD_CONDITION_UPROAR` bit (:9-11, condition.h:118, :147), which is set and cleared with the
+  count and so is `uproar != 0`. The first use spends PP; later turns spend none
+  (`Battler_CanPickCommand` FALSE, battle_lib.c:6224-6235, sets `ppDecremented` at selection,
+  bcp.c:335).
+- B5-5 The lock: `Battler_UnlockMoveChoice` (battle_lib.c:1834-1841) clears only
+  `VOLATILE_CONDITION_MOVE_LOCKED` (and Bide, Rollout), never the Uproar count nor
+  `moveLockedInto`, so every disruption (flinch, Disable, confusion, paralysis, love, Truant, a
+  freeze, a miss, Protect, no target) leaves an uproarer locked: `effects.unlock_move` keeps
+  `locked_move` while `uproar` is up. `FightCommand` runs `moveLockedInto` whether or not the
+  battler knows it (bcp.c:1885-1888; `Battler_SlotForMove` finds no slot and nothing is spent,
+  :2272-2292), so a lock a call made (Copycat calling Uproar, Bide or Rollout: moveLockedInto is
+  moveCur, battle_lib.c:1828-1832) is still a lock: `actions.locked_slot` gives action 0 then
+  (the reference's `_locked_slot` too). This also fixes Copycat's Bide / Rollout locks, which
+  the engines read as no lock before.
+- B5-6 No sleep in an uproar: a sleeper's status check wakes it at once while
+  `FIELD_CONDITION_UPROAR` is set (a faster uproar of this turn included), without the counter
+  drop, and the checks go on (bcp.c:2432-2439, subscript_wake_up.s:19 clears every sleep bit;
+  Soundproof, the exception, is an unsupported ability). subscript_fall_asleep.s blocks a sleep
+  on a target not asleep yet (:43-45 after Insomnia, Shield Dust and the asleep test; :14-16 for
+  a move effect): a direct one prints "kept awake" and sets `MOVE_STATUS_NO_MORE_WORK` (:_292,
+  :_330: no AfterMoveEffects, `step`'s `kept_awake`), an indirect one (Secret Power's) ends
+  silently (`effects._inflict`). Rest and Yawn (unsupported) read the bit too (Owed).
+- B5-7 The turn end: `MON_COND_CHECK_STATE_UPROAR` (bcp.c:1505-1541) runs after Bind (Bad
+  Dreams, between, is unsupported) and before Disable (Thrash, between, is unsupported): for a
+  battler in an uproar, every battler asleep with HP left wakes, in battler order, the check
+  repeating until none sleeps (:1508-1521); then the count drops by 1 and the uproar ends
+  (subscript_uproar_end.s, the volatile and field bits cleared, :1525-1535) when the count
+  reached 0 or the battler's `moveFailFlags` of this turn are set (`BattleContext_MoveFailed`,
+  battle_lib.c:2808-2820: flinch, Disable, Taunt, the confusion self-hit, full paralysis, love,
+  bcp.c:2531-2681, and `noEffect`: CheckTypeChart found the move ineffective, bcp.c:2350-2370,
+  run once the move passed the no-target check, hit or miss, :3271-3277); sleep, freeze, Truant,
+  a miss and Protect set none. Ending frees the command (`locked_move` 0: no MOVE_LOCKED was
+  set). The flags are the turn's `move_failed` event (`step._use_move`), cleared every turn
+  (`SetupNextTurn`, battle_lib.c:2232). Neither check changes HP, so Uproar and Disable share
+  one faint check (`step._uproar_then_disable`). The player sees the uproar ("caused an
+  uproar!", "calmed down."): `uproar`'s non-zero-ness is in the observation.

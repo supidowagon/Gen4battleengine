@@ -202,6 +202,12 @@ class EffectId(IntEnum):
     SLEEP_TALK = 64
     METRONOME = 65
     COPYCAT = 66
+    # Uproar (effect_script_0159.s): a hit whose ON_HIT indirect effect, for a user not in an
+    # uproar yet, runs subscript_uproar.s: the user is locked into the move (moveLockedInto) for
+    # ``Random 3, 3`` (3-6) turns (``BattleState.uproar``, ``Outcome.duration``), during which
+    # no battler sleeps (``effects._inflict``, ``step._use_move``, ``step._uproar_check``;
+    # rulings B5-4..).
+    UPROAR = 67
 
 
 # ``EffectId.COUNTER``'s source (``move_param[m, 0]``).

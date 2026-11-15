@@ -842,8 +842,43 @@ def _draw_batch5(draw, tables: Tables, a: dict, side: int, active: int, names: N
             a["status"][side, active] = Status.SLEEP
             a["status_counter"][side, active] = rnd.randint(1, 4)
     pool = [int(m) for sd in (0, 1) for m in a["moves"][sd, a["active"][sd]] if m]
-    extra = [MOVE_STRUGGLE, names.move("Sleep Talk"), names.move("Protect")]
+    extra = [MOVE_STRUGGLE, names.move("Sleep Talk"), names.move("Protect"), names.move("Uproar")]
     a["move_prev"][...] = draw(st.sampled_from([0, *pool, *extra]))
+
+
+def _draw_uproar(draw, tables: Tables, a: dict, side: int, active: int, names: Names) -> None:
+    """E2 batch 5: maybe (1 in 3) give the active Pokemon Uproar (full PP), and then maybe (1 in
+    2) an uproar under way: 1-5 turns left (subscript_uproar.s's 3-6, counted down at every turn
+    end), locked into Uproar (``locked_move``; a quarter of the time it does not know the move:
+    Copycat's call), the Bide / Rollout lock dropped (an uproarer runs only Uproar), and half the
+    time the actives awake (the turn end's check woke them). Maybe (1 in 4) the foe asleep (1-4
+    turns: Uproar wakes it) or a Ghost type (Uproar is ineffective: noEffect ends the uproar)."""
+    rnd = draw(st.randoms(use_true_random=False))
+    if draw(st.integers(0, 2)) != 0:
+        return
+    uproar = names.move("Uproar")
+    k = rnd.randint(0, 3)
+    a["moves"][side, active, k] = uproar
+    a["pp"][side, active, k] = int(tables.move_pp[uproar])
+    foe = 1 - side
+    foe_mon = int(a["active"][foe])
+    if draw(st.booleans()):
+        if rnd.random() < 0.25:
+            a["moves"][side, active, k] = names.move("Copycat")
+        a["uproar"][side] = rnd.randint(1, 5)
+        a["locked_move"][side] = uproar
+        a["bide_turns"][side] = a["bide_damage"][side] = a["rollout_count"][side] = 0
+        if rnd.random() < 0.5:
+            for sd in (0, 1):
+                mon = int(a["active"][sd])
+                if a["status"][sd, mon] == Status.SLEEP:
+                    a["status"][sd, mon] = Status.NONE
+                    a["status_counter"][sd, mon] = 0
+    if a["hp"][foe, foe_mon] > 0 and draw(st.integers(0, 3)) == 0:
+        a["status"][foe, foe_mon] = Status.SLEEP
+        a["status_counter"][foe, foe_mon] = rnd.randint(1, 4)
+    elif draw(st.integers(0, 3)) == 0:
+        a["types"][foe, foe_mon, 0] = Type.GHOST
 
 
 def _draw_choice_lock(draw, a: dict, side: int, active: int) -> None:
@@ -947,6 +982,7 @@ def supported_state(draw, tables: Tables, names: Names, invokers: bool = True) -
         _draw_batch4(draw, tables, a, side, active, names)
         if invokers:
             _draw_batch5(draw, tables, a, side, active, names)
+        _draw_uproar(draw, tables, a, side, active, names)
         _draw_choice_lock(draw, a, side, active)
     count = draw(st.integers(0, BAG_SLOTS))
     bag = draw(st.lists(st.sampled_from(M1_BAG_ITEMS), min_size=count, max_size=count))
@@ -1185,6 +1221,8 @@ LAW_MOVES = (
     "Secret Power",
     "Spikes",
     "Counter",
+    # E2 batch 5: Uproar's duration (Random 3, 3).
+    "Uproar",
 )
 # Abilities the outcome relevance reads (contact procs, Steadfast, Simple's and Swift
 # Swim's Speed) or the hit odds read (Compoundeyes, Sand Veil, Snow Cloak), and Rough Skin

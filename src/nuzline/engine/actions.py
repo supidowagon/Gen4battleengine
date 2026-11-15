@@ -28,10 +28,14 @@ of letting the player pick a move (battle_controller_player.c:433); here action 
 Switches are legal to a non-active, non-empty, non-fainted slot, and never while the
 active Pokemon is trapped (``trapped > 0``, Bind and friends).
 
-A battler locked into a move (``locked_move``: Bide, Rollout, Ice Ball) picks no command
-(``Battler_CanPickCommand`` is FALSE, battle_controller_player.c:335): its only action is
-the slot holding the locked move, whatever its PP, and it has no switch or bag item
-(``locked_slot``).
+A battler locked into a move (``locked_move``: Bide, Rollout, Ice Ball, an uproar) picks no
+command (``Battler_CanPickCommand`` is FALSE, battle_controller_player.c:335): its only action
+is the slot holding the locked move, whatever its PP, and it has no switch or bag item
+(``locked_slot``). A lock on a move the battler does not know (a call's: Copycat calling Bide,
+Rollout or Uproar locks ``moveLockedInto`` to moveCur, battle_lib.c:1828-1832,
+subscript_uproar.s:5) is still a lock: ``FightCommand`` runs ``moveLockedInto``
+(battle_controller_player.c:1885-1888) and spends no PP (``ppDecremented``, :335;
+``Battler_SlotForMove`` finds no slot, :2272); its one action is then action 0 (ruling B5-5).
 """
 
 from __future__ import annotations
@@ -50,10 +54,12 @@ NUM_OPP_ACTIONS = FIRST_ITEM_ACTION + BAG_SLOTS
 
 def locked_slot(state: BattleState, side) -> jnp.ndarray:
     """``int32``: the move slot of ``side``'s active Pokemon holding ``locked_move``
-    (``moveLockedInto``), -1 when it is not locked."""
+    (``moveLockedInto``), 0 when it is locked into a move it does not know (module docstring),
+    -1 when it is not locked."""
     moves = state.moves[side, state.active[side]]
-    held = (moves == state.locked_move[side]) & (state.locked_move[side] != 0)
-    return jnp.where(jnp.any(held), jnp.argmax(held), -1).astype(jnp.int32)
+    lock = state.locked_move[side]
+    held = (moves == lock) & (lock != 0)
+    return jnp.where(lock == 0, -1, jnp.where(jnp.any(held), jnp.argmax(held), 0)).astype(jnp.int32)
 
 
 def choice_locked(tables: Tables, state: BattleState, side) -> jnp.ndarray:

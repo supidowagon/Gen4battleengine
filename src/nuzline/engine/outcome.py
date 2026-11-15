@@ -92,7 +92,7 @@ class Outcome(NamedTuple):
     confusion_hit: jnp.ndarray  # int8[2]
     duration: (
         jnp.ndarray
-    )  # int8[2], sleep/confusion/Bind/Taunt/Disable counter rolled at infliction
+    )  # int8[2], sleep/confusion/Bind/Taunt/Disable/Uproar counter rolled at infliction
     thaw: jnp.ndarray  # int8[2]
     flinch_item: jnp.ndarray  # int8[2,5], King's Rock / Razor Fang's flinch roll per hit
     quick_claw: jnp.ndarray  # int8[2], this turn's speedRand % 5 == 0 (Quick Claw)
@@ -714,14 +714,15 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions) -> Outcome:
     n_hits = jnp.where(first < 2, first + 2, second + 2)
     # BtlCmd_Random (battle_script.c:3207) ``Random r, o`` is rand % (r + 1) + o, by the
     # acting side's move: Random 3, 2 (subscript_fall_asleep.s, subscript_confuse.s),
-    # Random 3, 3 (subscript_bind_start.s), Random 2, 3 (subscript_taunt_start.s);
-    # TryDisable (battle_script.c:4590) stores RandNext() % 4 + 3, the same 3-6 as Bind.
+    # Random 3, 3 (subscript_bind_start.s, subscript_uproar.s:6), Random 2, 3
+    # (subscript_taunt_start.s); TryDisable (battle_script.c:4590) stores RandNext() % 4 + 3, the
+    # same 3-6 as Bind.
     effect = tables.move_effect[moves]
+    three = (effect == EffectId.TRAP) | (effect == EffectId.DISABLE) | (effect == EffectId.UPROAR)
     duration = jnp.where(
         effect == EffectId.TAUNT,
         draw(13, per_side, 3) + 3,
-        draw(10, per_side, 4)
-        + jnp.where((effect == EffectId.TRAP) | (effect == EffectId.DISABLE), 3, 2),
+        draw(10, per_side, 4) + jnp.where(three, 3, 2),
     )
     outcome = Outcome(
         speed_tie=speed_tie,

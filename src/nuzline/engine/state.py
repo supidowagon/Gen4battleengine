@@ -43,6 +43,13 @@ Encodings:
 * ``destiny_bond`` is the active battler's ``VOLATILE_CONDITION_DESTINY_BOND``
   (subscript_destiny_bond.s:9): cleared when its next move attempt starts
   (``CHECK_STATUS_START``, bcp.c:2425) and with the other volatiles (``step._VOLATILE``).
+* ``uproar`` is the active battler's ``VOLATILE_CONDITION_UPROAR`` count (subscript_uproar.s:
+  ``Random 3, 3``, 3-6; condition.h:66, :81), decremented by the end-of-turn check
+  (``step._uproar_check``, bcp.c:1505-1541) and cleared with the other volatiles. The battler's
+  ``FIELD_CONDITION_UPROAR`` bit (condition.h:118, :147) is set and cleared with it
+  (subscript_uproar.s:9-11, bcp.c:1527-1534, battle_lib.c:2135, :2213), so it is
+  ``uproar != 0``. While it is up, ``locked_move`` holds the move (``moveLockedInto``,
+  subscript_uproar.s:5): ``Battler_CanPickCommand`` is FALSE (battle_lib.c:6224-6235).
 * ``trainer_item_count`` is ``aiContext.trainerItemCounts``: the bag's size at battle
   start, never decremented.
 * ``terrain`` is ``BattleSystem.terrain``: the battle terrain, a decomp ``TERRAIN_*`` id
@@ -151,6 +158,7 @@ class BattleState(NamedTuple):
     aqua_ring: jnp.ndarray  # int8, MOVE_EFFECT_AQUA_RING in moveEffectsMask
     infatuated: jnp.ndarray  # int8, VOLATILE_CONDITION_ATTRACT (source: the foe's active)
     destiny_bond: jnp.ndarray  # int8, VOLATILE_CONDITION_DESTINY_BOND
+    uproar: jnp.ndarray  # int8, VOLATILE_CONDITION_UPROAR turns left (its FIELD_CONDITION bit)
     # per side [2]
     spikes: jnp.ndarray  # int8, layers
     toxic_spikes: jnp.ndarray  # int8, layers
@@ -301,6 +309,7 @@ LAYOUT: dict[str, tuple[tuple[int, ...], type]] = {
     "aqua_ring": (_SIDE, np.int8),
     "infatuated": (_SIDE, np.int8),
     "destiny_bond": (_SIDE, np.int8),
+    "uproar": (_SIDE, np.int8),
     "spikes": (_SIDE, np.int8),
     "toxic_spikes": (_SIDE, np.int8),
     "stealth_rock": (_SIDE, np.int8),

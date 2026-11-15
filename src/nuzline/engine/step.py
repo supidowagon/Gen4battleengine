@@ -22,10 +22,11 @@ Pure, jit- and vmap-able, fixed shapes; every random event comes from
    (``_faint_check``); later checks of the turn do nothing. A player faint otherwise
    only records a death.
 
-Move locks (Bide, Rollout, Ice Ball; ``actions.locked_slot``): a locked battler's action is
-its locked move and spends no PP (battle_controller_player.c:335); every script that
-disrupts a move unlocks it (``_unlock``), and a sleeping battler is unlocked when the
-next turn is set up (``_unlock_sleepers``, battle_lib.c:2240).
+Move locks (Bide, Rollout, Ice Ball, Uproar; ``actions.locked_slot``): a locked battler's action
+is its locked move and spends no PP (battle_controller_player.c:335); every script that
+disrupts a move unlocks it (``_unlock``; an uproar stays, ruling B5-5), and a sleeping battler
+is unlocked when the next turn is set up (``_unlock_sleepers``, battle_lib.c:2240). An uproar
+(``BattleState.uproar``) ends at the turn end's check (``_uproar_check``).
 
 The Choice lock (``choice_lock``, ``moveEffectsData.choiceLockedMove``): ``_choice_lock``
 sets and clears it where ``UpdateMoveBuffers`` and ``UpdateFlagsWhenHit`` do, and
@@ -112,8 +113,10 @@ from nuzline.engine.effects import (
     self_defender,
     shell_bell_heal,
     sticky_barb_transfer,
+    targets_user,
     thaw_target,
     unlock_move,
+    uproar_on,
     weather_fails,
 )
 from nuzline.engine.hooks import (
@@ -222,6 +225,7 @@ _VOLATILE = (
     "aqua_ring",
     "infatuated",
     "destiny_bond",
+    "uproar",
 )
 # BtlCmd_TryProtection caps protectSuccessTurns at NELEMS(sProtectSuccessRate) - 1
 # (battle_script.c:5182-5184; outcome.PROTECT_RATES).
@@ -497,6 +501,7 @@ def _empty_events() -> dict:
             "phys_from",
             "spec_from",
             "last_from",
+            "move_failed",
             *EVENT_FLAGS,
         )
     }
@@ -597,10 +602,14 @@ def _use_move(
     # before the PP decrement; the first check that disrupts the move stops the rest.
     # CHECK_STATUS_STATE_SLEEP (:2430): the counter drops by 1 (Early Bird is not
     # implemented); still asleep disrupts the move, while waking up (subscript_wake_up)
-    # clears the status and the checks go on.
+    # clears the status and the checks go on. While FIELD_CONDITION_UPROAR is set (an uproar,
+    # a faster one of this turn included) a sleeper without Soundproof (unsupported) wakes
+    # instead, with no counter drop (:2432-2439, subscript_wake_up.s:19 clears every sleep bit).
     status = state.status[side, user]
     asleep = ready & (status == Status.SLEEP)
+    roused = asleep & uproar_on(state)
     sleep_left = jnp.maximum(state.status_counter[side, user].astype(_I32) - 1, 0)
+    sleep_left = jnp.where(roused, 0, sleep_left)
     sleeping = asleep & (sleep_left > 0)
     state = _set_mon(state, "status_counter", side, user, sleep_left, asleep)
     state = _set_mon(state, "status", side, user, Status.NONE, asleep & ~sleeping)
@@ -942,6 +951,36 @@ def _use_move(
     state = _set_mon(state, "hp", target_side, target, healed, absorbed & (target_hp != target_max))
     state = reveal_ability(state, target_side, target, ABSORB, absorbed)
     no_more_work = no_more_work | absorbed
+    # A direct sleep (a STATUS_FOE sleep move) on a living target that is not asleep, has no
+    # Insomnia as the attacker sees it and meets FIELD_CONDITION_UPROAR: subscript_fall_asleep.s
+    # :43-45 -> :_292 prints "...kept awake" and sets MOVE_STATUS_NO_MORE_WORK (:_330): no
+    # AfterMoveEffects (effects._inflict blocks the sleep).
+    kept_awake = (
+        connected
+        & (tables.move_effect[used] == EffectId.STATUS_FOE)
+        & (tables.move_param[used, 0] == Status.SLEEP)
+        & (state.hp[target_side, target] > 0)
+        & (ignorable(state, side, target_side) != AbilityId.INSOMNIA)
+        & (state.status[target_side, target] != Status.SLEEP)
+        & uproar_on(state)
+    )
+    no_more_work = no_more_work | kept_awake
+    # moveFailFlags (BattleContext_MoveFailed, battle_lib.c:2808-2820), which only the Uproar check
+    # of the turn's end reads (bcp.c:1525), set by this action: flinch, Disable, Taunt, the
+    # confusion self-hit, full paralysis, love (bcp.c:2531, :2545, :2560, :2628, :2656, :2681) and
+    # noEffect: CheckTypeChart (bcp.c:2350-2370) found the move ineffective, run once the move
+    # passed the no-target check (TRY_MOVE_STATE_CHECK_TYPE_CHART, bcp.c:3271-3277, hit, miss or
+    # Protect alike) for a move with power that is not RANGE_USER / RANGE_USER_SIDE. Sleep,
+    # freeze and Truant set none.
+    no_effect = (
+        can_act
+        & has_target
+        & ~(invoker & call_failed)
+        & (tables.move_power[used] != 0)
+        & ~targets_user(tables, used)
+        & (chart == 0)
+    )
+    move_failed = flinched | disabled | taunted | self_hit | full_para | immobilized | no_effect
     # A weather move that failed (effects.weather_fails, on the field before its script):
     # MOVE_STATUS_FAILED, subscript_missed.s, no AfterMoveEffects.
     weather_failed = (
@@ -1156,6 +1195,7 @@ def _use_move(
         "self_hit": self_hit,
         "in_love": in_love,
         "immobilized": immobilized,
+        "move_failed": move_failed,
     }
     foe = {
         "contact_ability": contact,
@@ -1625,6 +1665,39 @@ def _disable_check(tables: Tables, state: BattleState, side) -> BattleState:
     )
 
 
+def _uproar_check(tables: Tables, state: BattleState, side, failed) -> BattleState:
+    """``MON_COND_CHECK_STATE_UPROAR`` (battle_controller_player.c:1505-1541) for ``side`` in an
+    uproar: every battler, in battler order, that is asleep with HP left (Soundproof, which is
+    spared, is unsupported) wakes (subscript_wake_up.s: every sleep bit cleared, :19), the check
+    repeating until none sleeps (``STATE_DONE``, :1518-1521); then the count drops by 1 and the
+    uproar ends (subscript_uproar_end.s; the volatile bits and the battler's
+    ``FIELD_CONDITION_UPROAR`` bit cleared, :1525-1535) when this turn's ``moveFailFlags`` are
+    set (``failed``, ``BattleContext_MoveFailed``, battle_lib.c:2808-2820) or it reached 0. The
+    battler is then no longer locked: it was never ``VOLATILE_CONDITION_MOVE_LOCKED``
+    (subscript_uproar.s sets only ``moveLockedInto``), so ``Battler_CanPickCommand`` is TRUE
+    again and ``locked_move`` goes to 0."""
+    on = state.uproar[side] != 0
+    for battler in (0, 1):
+        mon = state.active[battler]
+        wake = on & (state.status[battler, mon] == Status.SLEEP) & (state.hp[battler, mon] > 0)
+        state = _set_mon(state, "status", battler, mon, Status.NONE, wake)
+        state = _set_mon(state, "status_counter", battler, mon, 0, wake)
+    left = state.uproar[side].astype(_I32) - 1
+    ends = on & ((jnp.asarray(failed)[side] != 0) | (left <= 0))
+    uproar = jnp.where(on, jnp.where(ends, 0, left), state.uproar[side])
+    locked = jnp.where(ends, 0, state.locked_move[side])
+    return state._replace(
+        uproar=state.uproar.at[side].set(uproar.astype(state.uproar.dtype)),
+        locked_move=state.locked_move.at[side].set(locked.astype(state.locked_move.dtype)),
+    )
+
+
+def _uproar_then_disable(tables: Tables, state: BattleState, side, failed) -> BattleState:
+    """``MON_COND_CHECK_STATE_UPROAR`` then (``_THRASH``, unsupported, between)
+    ``MON_COND_CHECK_STATE_DISABLE``: neither changes HP, so they share one faint check."""
+    return _disable_check(tables, _uproar_check(tables, state, side, failed), side)
+
+
 def _taunt_check(tables: Tables, state: BattleState, side) -> BattleState:
     """The Taunt counter drops by 1 (no HP condition in the decomp)."""
     taunt = state.taunt[side] - (state.taunt[side] > 0).astype(state.taunt.dtype)
@@ -1761,8 +1834,10 @@ END_OF_TURN_ORDER = (
     ("burn", _burn_check),
     # MON_COND_CHECK_STATE_BIND, battle_controller_player.c:1462
     ("bind", _bind_check),
-    # MON_COND_CHECK_STATE_DISABLE, battle_controller_player.c:1565
-    ("disable", _disable_check),
+    # MON_COND_CHECK_STATE_UPROAR, battle_controller_player.c:1505, then
+    # MON_COND_CHECK_STATE_DISABLE, :1565 (``_uproar_then_disable``; the only check that reads
+    # the turn's moveFailFlags)
+    ("uproar_disable", _uproar_then_disable),
     # MON_COND_CHECK_STATE_TAUNT, battle_controller_player.c:1635
     ("taunt", _taunt_check),
     # MON_COND_CHECK_STATE_ITEM_CONDITION, battle_controller_player.c:1699: the same berry
@@ -1899,20 +1974,23 @@ def field_conditions(tables: Tables, state: BattleState, sides) -> BattleState:
 
 
 def end_of_turn(
-    tables: Tables, state: BattleState, actions, outcome: Outcome, order, sides
+    tables: Tables, state: BattleState, actions, outcome: Outcome, order, sides, failed=(0, 0)
 ) -> BattleState:
     """Phase 4: ``BattleControllerPlayer_CheckMonConditions`` (battle_controller_player.c:
     1289) runs every check of ``END_OF_TURN_ORDER`` for one battler, then for the next,
     in ``sides`` (``end_of_turn_order`` of the state after the actions: ``monSpeedOrder``
     is sorted once, before ``field_conditions``, so a Tailwind that ended there still
     counts); a faint check follows each, and nothing runs once the battle is over.
-    Flinch lasts only for the turn it is set in."""
+    Flinch lasts only for the turn it is set in. ``failed`` (``int[2]``): each side's
+    ``moveFailFlags`` of the turn (the ``move_failed`` event), read by the Uproar check."""
     for position in (0, 1):
         side = sides[position]
         start = state
         for name, check in END_OF_TURN_ORDER:
             before = state
-            args = (outcome,) if name == "ability" else ()
+            args = (
+                (outcome,) if name == "ability" else (failed,) if name == "uproar_disable" else ()
+            )
             after = check(tables, state, side, *args)
             state = _faint_check(tables, before, _where(state.over == 0, after, state))
         # The payout of CheckMonConditions' head (AnyFainted, then AnyExpPayout, bcp.c:
@@ -1988,7 +2066,7 @@ def step_events(
     s, events, order = _action_phase(tables, state, actions, outcome)
     sides = end_of_turn_order(tables, s, outcome)
     s = field_conditions(tables, s, sides)
-    s = end_of_turn(tables, s, actions, outcome, order, sides)
+    s = end_of_turn(tables, s, actions, outcome, order, sides, events["move_failed"])
     s = _unlock_sleepers(s)
     s = s._replace(turn=(s.turn + 1).astype(s.turn.dtype))
     # The turn's speedRand draw, kept for the next turn's readers (qc_kept).

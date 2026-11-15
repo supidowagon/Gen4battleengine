@@ -86,8 +86,9 @@ The visible projection of ``after``: both actives and their current types (Camou
 held/consumed item (a Rindo / Chilan Berry's "weakened" message,
 ``subscript_type_resist_berry.s:_245``, is always followed by its ``RemoveItem``, so
 ``item_consumed`` shows it); the non-zero-ness of ``confusion``, ``taunt``, ``trapped``,
-``leech_seed`` and ``substitute_hp`` (their counters are hidden) and of ``infatuated`` ("fell in
-love", subscript_infatuate.s); stat stages, Water
+``leech_seed`` and ``substitute_hp`` (their counters are hidden), of ``infatuated`` ("fell in
+love", subscript_infatuate.s) and of ``uproar`` ("caused an uproar!", subscript_uproar.s); stat
+stages, Water
 Sport, hazards (Stealth Rock, Spikes layers), screens and the other side conditions
 (non-zero), weather and the field conditions; the player's exact HP and PP per party
 slot (the player's healthbox and move menu); the opponent's HP as HP-bar pixels per
@@ -171,6 +172,8 @@ _NONZERO_SIDE = (
     "mud_sport",
     "aqua_ring",
     "infatuated",
+    # "{0} caused an uproar!" / "{0} calmed down." (subscript_uproar.s, subscript_uproar_end.s).
+    "uproar",
 )
 _NONZERO_FIELD = ("trick_room", "gravity")
 

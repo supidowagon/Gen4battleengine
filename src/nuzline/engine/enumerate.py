@@ -253,7 +253,7 @@ WIDTH_CAP = 131072
 
 # ``OutcomeLaws.duration_kind``: the acting side's ``Random`` command (outcome.py:166-174).
 DURATION_DEFAULT = 0  # Random 3, 2: 2-5 (sleep, confusion and every other move)
-DURATION_TRAP = 1  # Random 3, 3: 3-6 (Bind; Disable: RandNext() % 4 + 3, the same law)
+DURATION_TRAP = 1  # Random 3, 3: 3-6 (Bind, Uproar; Disable: RandNext() % 4 + 3, the same law)
 DURATION_TAUNT = 2  # Random 2, 3: 3-5
 
 # Effects whose hits read ``outcome.secondary`` through ``proc`` (effects.py:468).
@@ -623,6 +623,9 @@ INPUT_NEUTRAL_EFFECTS = (
     _E.SLEEP_TALK,
     _E.METRONOME,
     _E.COPYCAT,
+    # E2 batch 5. Uproar starts an uproar on its user, which wakes a sleeper at its own status
+    # check: the side's own status change, which ``own_pre_move`` covers for a Guts user.
+    _E.UPROAR,
 )
 INPUT_CLAUSE_EFFECTS = (
     _E.STAT_SELF,  # the foe's Defense / Sp. Def
@@ -864,6 +867,8 @@ TABLE_DAMAGE_EFFECTS = (
     _E.SECRET_POWER,
     # Its table damage, capped after the roll (effects.play_hit) by the target's HP alone.
     _E.FALSE_SWIPE,
+    # A plain hit (effect_script_0159.s: CalcCrit, CalcDamage); the uproar comes after it.
+    _E.UPROAR,
 )
 NON_TABLE_DAMAGE_EFFECTS = (
     _E.STAT_SELF,
@@ -1177,6 +1182,9 @@ def outcome_laws(
             (_E.TAUNT, _E.TRAP, _E.DISABLE, _E.CONFUSE_FOE, _E.SECONDARY_CONFUSE, _E.SWAGGER),
         )
         | _inflicts(tables, state, moves, Status.SLEEP)
+        # Uproar's Random 3, 3 (subscript_uproar.s:6), only for a user not in an uproar yet
+        # (effect_script_0159.s:5; only its own move can start one this turn).
+        | ((effect == _E.UPROAR) & (state.uproar == 0))
     )
 
     # Status eligibility of the foe's active Pokemon, the target when the user moves
@@ -1531,7 +1539,9 @@ def outcome_laws(
     kind = jnp.where(
         effect == _E.TAUNT,
         DURATION_TAUNT,
-        jnp.where(_any_of(effect, (_E.TRAP, _E.DISABLE)), DURATION_TRAP, DURATION_DEFAULT),
+        jnp.where(
+            _any_of(effect, (_E.TRAP, _E.DISABLE, _E.UPROAR)), DURATION_TRAP, DURATION_DEFAULT
+        ),
     )
     # Damage classes (rules §10.3 item 5): a hit whose damage the turn-start table gives
     # whatever happened before it (damage_inputs_can_change), of a move whose table is

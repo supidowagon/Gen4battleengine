@@ -415,6 +415,11 @@ def _inflict(
     # Shield Dust, after Insomnia / Limber (Leaf Guard, Water Veil and the like in between are
     # unsupported), for an indirect effect only.
     blocked = blocked | limber | (cond & ~jnp.asarray(direct, bool) & _shield_dust(h))
+    # subscript_fall_asleep.s:43-45 (:14-16 for a move effect): a target not asleep yet stays
+    # awake while FIELD_CONDITION_UPROAR is set (Soundproof, which skips it, is unsupported);
+    # a direct effect then ends in MOVE_STATUS_NO_MORE_WORK (``step``: ``kept_awake``), an
+    # indirect one silently (:_292).
+    blocked = blocked | (cond & (status == Status.SLEEP) & uproar_on(state))
     cond = cond & ~blocked & can_have_status(tables, state, h.target_side, h.target, status)
     counter = jnp.where(status == Status.SLEEP, outcome.duration[h.side], 0)
     old_status = state.status[h.target_side, h.target]
@@ -676,12 +681,15 @@ def _set(state: BattleState, field: str, index, value, cond) -> BattleState:
 
 
 def unlock_move(state: BattleState, side, cond) -> BattleState:
-    """``Battler_UnlockMoveChoice`` (battle_lib.c:1834) on ``side`` where ``cond``: the move
+    """``Battler_UnlockMoveChoice`` (battle_lib.c:1834-1841) on ``side`` where ``cond``: the move
     lock, Bide's turns and stored damage (hidden state, 0 outside a Bide) and the Rollout
-    count go to 0."""
-    for field in ("locked_move", "bide_turns", "bide_damage", "rollout_count"):
+    count go to 0. It clears ``VOLATILE_CONDITION_MOVE_LOCKED``, not ``moveLockedInto`` nor
+    ``VOLATILE_CONDITION_UPROAR``: an uproaring battler stays locked into its move
+    (``Battler_CanPickCommand``, battle_lib.c:6224-6235), so ``locked_move`` stays while
+    ``uproar`` is up (ruling B5-5)."""
+    for field in ("bide_turns", "bide_damage", "rollout_count"):
         state = _set(state, field, side, 0, cond)
-    return state
+    return _set(state, "locked_move", side, 0, cond & (state.uproar[side] == 0))
 
 
 def _bide(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
@@ -805,6 +813,23 @@ def _destiny_bond(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     """Destiny Bond (effect_script_0098.s: an ON_HIT indirect effect): subscript_destiny_bond.s:9
     sets the user's flag; there is no failure on a repeated use."""
     return _set(state, "destiny_bond", h.side, 1, (h.effect == _E.DESTINY_BOND) & h.landed)
+
+
+def _uproar(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    """Uproar (effect_script_0159.s:5-6): for a user not in an uproar yet, an ON_HIT indirect
+    effect (``BattleSystem_TriggerSecondaryEffect``, battle_lib.c:1524-1529: not
+    ``MOVE_STATUS_NO_EFFECTS``, so a hit that was not ineffective) runs subscript_uproar.s:
+    ``moveLockedInto`` = moveCur (:5), ``Random 3, 3`` turns (:6-8, ``outcome.duration``, 3-6) and
+    the battler's ``FIELD_CONDITION_UPROAR`` bit (:9-11, ``uproar != 0``)."""
+    cond = (h.effect == _E.UPROAR) & h.effective & (state.uproar[h.side] == 0)
+    state = _set(state, "locked_move", h.side, h.move, cond)
+    return _set(state, "uproar", h.side, outcome.duration[h.side], cond)
+
+
+def uproar_on(state: BattleState) -> jnp.ndarray:
+    """``bool``: ``FIELD_CONDITION_UPROAR`` is set: some battler is in an uproar
+    (``BattleState.uproar``)."""
+    return jnp.any(state.uproar != 0)
 
 
 def primary_effect_fails(tables, state: BattleState, side, target_side, move) -> jnp.ndarray:
@@ -1612,6 +1637,7 @@ def play_hit(
         _roost,
         _side_layers,
         _destiny_bond,
+        _uproar,
     ):
         state = fn(tables, state, h, outcome)
     state, pluck_flag = _eat_berry(tables, state, h, outcome, foe_custap)

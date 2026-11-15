@@ -415,7 +415,8 @@ def decomp_law(tables, state, actions, name: str, index: tuple) -> dict[int, Fra
         effect = int(tables.move_effect[move])
         if effect == EffectId.TAUNT:
             return {d: Fraction(1, 3) for d in (3, 4, 5)}
-        low = 3 if effect in (EffectId.TRAP, EffectId.DISABLE) else 2
+        # Random 3, 3: Bind, Disable's RandNext() % 4 + 3, Uproar (subscript_uproar.s:6).
+        low = 3 if effect in (EffectId.TRAP, EffectId.DISABLE, EffectId.UPROAR) else 2
         return {d: Fraction(1, 4) for d in range(low, low + 4)}
     if name == "full_para":
         return coin(Fraction(1, 4))

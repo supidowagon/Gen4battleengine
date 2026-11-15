@@ -77,6 +77,7 @@ class RefSide:
     aqua_ring: int
     infatuated: int
     destiny_bond: int
+    uproar: int  # VOLATILE_CONDITION_UPROAR turns left (and the battler's FIELD_CONDITION bit)
     spikes: int
     toxic_spikes: int
     stealth_rock: int

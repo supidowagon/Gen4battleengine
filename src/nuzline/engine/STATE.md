@@ -50,8 +50,10 @@ three structs has a row.
   `VOLATILE_CONDITION_MOVE_LOCKED` -> `locked_move` (with `moveLockedInto`), the
   ATTRACT bits -> `infatuated` (below), Destiny Bond -> `destiny_bond` (E2 batch 4:
   per battler, set by subscript_destiny_bond.s:9, cleared at the holder's next
-  `CHECK_STATUS_START`, bcp.c:2425, and with the volatiles). The
-  other bits (Uproar, Thrash, Focus Energy, Transform, Rage, Substitute
+  `CHECK_STATUS_START`, bcp.c:2425, and with the volatiles), the Uproar count ->
+  `uproar` (E2 batch 5, per battler: `Random 3, 3` turns from subscript_uproar.s:6-8, counted
+  down by the end-of-turn check, bcp.c:1505-1541, cleared with the volatiles). The
+  other bits (Thrash, Focus Energy, Transform, Rage, Substitute
   flag, Mean Look, Nightmare, Curse, Torment) are later (M6); the Substitute flag is implied by `substitute_hp > 0`.
 - **moveEffectsMask** bits mapped: Leech Seed -> `leech_seed`, Water Sport ->
   `water_sport`, Mud Sport -> `mud_sport`, Aqua Ring -> `aqua_ring` (per battler, cleared on switch-out; the
@@ -63,7 +65,10 @@ three structs has a row.
 - **fieldConditionsMask**: the weather bits (temporary vs. permanent rain, sand,
   sun, hail, plus deep fog) -> `weather` with `weather_timer == 0` meaning
   permanent; Trick Room turns -> `trick_room`; Gravity turns -> `gravity`. The
-  Uproar battler mask is later (M6).
+  Uproar battler mask (`FIELD_CONDITION_UPROAR`, one bit per battler) is `uproar != 0`: the
+  bit and the battler's Uproar count are set together (subscript_uproar.s:6-11) and cleared
+  together (bcp.c:1525-1535; `UpdateAfterSwitch`, battle_lib.c:2135, and
+  `CleanupFaintedMon`, :2213, with the volatiles).
 - **sideConditionsMask**: Stealth Rock -> `stealth_rock`, Tailwind turns ->
   `tailwind`, Lucky Chant turns -> `lucky_chant`. Its Reflect, Light Screen,
   Spikes, Safeguard, Mist, Toxic Spikes, Future Sight and Wish bits are implied by
@@ -79,10 +84,13 @@ three structs has a row.
   the attack message showed, else 0, on every acting path (`step._use_move`); Copycat reads it
   (`order.copycat_call`). A field condition, not a battler's: it does not leave with a battler.
 - **moveLockedInto -> `locked_move`**, not `charge_turn`: it holds the move id a
-  battler is locked into for its next turn (Bide, Rollout; charge-up moves are
+  battler is locked into for its next turn (Bide, Rollout, Uproar; charge-up moves are
   later, M6), and `charge_turn` is an `int8` flag that cannot hold a move id.
-  `locked_move` is an `int16`, 0 = not locked (set only while
-  `VOLATILE_CONDITION_MOVE_LOCKED`); `charge_turn` stays reserved.
+  `locked_move` is an `int16`, 0 = not locked: it is set while `Battler_CanPickCommand` is
+  FALSE (battle_lib.c:6224-6235) through `VOLATILE_CONDITION_MOVE_LOCKED` or an uproar (E2
+  batch 5: `Battler_UnlockMoveChoice` clears only the first, battle_lib.c:1834-1841, so an
+  uproaring battler stays locked, ruling B5-5); `charge_turn` stays reserved. A lock on a
+  move the battler does not know (a call's) is still a lock (`actions.locked_slot`).
 - **storedDamage -> `bide_damage`** only while Biding (`bide_turns > 0`), else 0:
   the decomp's value outside a Bide is never read (`subscript_bide_start.s`
   zeroes it), and 0 lets equal states merge.
@@ -297,7 +305,7 @@ three structs has a row.
 | `BattleMon.exp` | `exp` | mapped |
 | `BattleMon.personality` | — | not needed because its battle uses (nature, ability slot, gender) are resolved into `PokemonSpec` before `make_state` |
 | `BattleMon.status` | `status`, `status_counter` | mapped |
-| `BattleMon.statusVolatile` | `confusion`, `flinched`, `trapped`, `recharge`, `foresight`, `bide_turns`, `curled`, `locked_move`, `infatuated`, `destiny_bond` | mapped |
+| `BattleMon.statusVolatile` | `confusion`, `flinched`, `trapped`, `recharge`, `foresight`, `bide_turns`, `curled`, `locked_move`, `infatuated`, `destiny_bond`, `uproar` | mapped |
 | `BattleMon.OTId` | — | not needed because only obedience and the traded-Pokemon exp bonus read it; the tool assumes an obedient party and resolves the exp bonus into `exp_boost` before `make_state` |
 | `BattleMon.heldItem` | `item` | mapped |
 | `BattleMon.padding007A` | — | not needed because it is padding |
@@ -462,13 +470,13 @@ three structs has a row.
 | `BattleContext.meFirstTurnOrder` | — | later (M6) |
 | `BattleContext.taskData` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |
 | `BattleContext.tmpData` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |
-| `BattleContext.fieldConditionsMask` | `weather`, `trick_room`, `gravity` | mapped |
+| `BattleContext.fieldConditionsMask` | `weather`, `trick_room`, `gravity`, `uproar` | mapped |
 | `BattleContext.fieldConditions` | `weather_timer`, `future_timer`, `future_damage`, `wish_timer` | mapped |
 | `BattleContext.sideConditionsMask` | `stealth_rock`, `tailwind`, `lucky_chant` | mapped |
 | `BattleContext.sideConditions` | `reflect`, `light_screen`, `mist`, `safeguard`, `spikes`, `toxic_spikes` | mapped |
 | `BattleContext.turnFlags` | — | not needed because it is reset every turn and `step` resolves a whole turn (`protecting`: the first actor's `protect_ok` event, read by the second actor in `step._execute_actions`; `roosting`: the first actor's `roosted` event, E2 batch 4) |
 | `BattleContext.selfTurnFlags` | — | not needed because it is reset at every action's end (`BattleContext_Init`, bcp.c:3998) and `step` resolves a whole action; `focusItemActivated` and `SELF_TURN_FLAG_PLUCK_BERRY` live in `_use_move`'s hit loop (`effects.MoveHit`) |
-| `BattleContext.moveFailFlags` | — | not needed because it is reset every turn and `step` resolves a whole turn |
+| `BattleContext.moveFailFlags` | — | not needed because it is reset every turn and `step` resolves a whole turn (its only reader, the Uproar check, reads the turn's `move_failed` event) |
 | `BattleContext.aiContext` | `ai_seen_moves`, `ai_ability_known`, `trainer_items`, `trainer_item_count` | mapped |
 | `BattleContext.aiScriptTemp` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |
 | `BattleContext.aiScriptCursor` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |

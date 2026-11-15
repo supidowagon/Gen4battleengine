@@ -180,6 +180,9 @@ class _Turn:
     shell_dealt: int = 0
     # moveEffectsData.custapBerry per side, written by CalcTurnOrder (lib.c:1296, :1362).
     custap: list[bool] = field(default_factory=lambda: [False, False])
+    # moveFailFlags per side (BattleContext_MoveFailed, lib.c:2808-2820; cleared by
+    # SetupNextTurn, lib.c:2232): the Uproar check of the turn's end reads them.
+    move_failed: list[bool] = field(default_factory=lambda: [False, False])
 
 
 def _active(s: RefState, side: int) -> RefPokemon:
@@ -929,14 +932,19 @@ def _reset_battler(sd: RefSide) -> None:
         "aqua_ring",
         "infatuated",
         "destiny_bond",
+        "uproar",
     ):
         setattr(sd, name, 0)
 
 
 def _unlock(sd: RefSide) -> None:
-    """``Battler_UnlockMoveChoice`` (lib.c:1834): the move lock, Bide's turns and stored
-    damage (0 outside a Bide) and the Rollout count."""
-    sd.locked_move = sd.bide_turns = sd.bide_damage = sd.rollout_count = 0
+    """``Battler_UnlockMoveChoice`` (lib.c:1834-1841): the move lock, Bide's turns and stored
+    damage (0 outside a Bide) and the Rollout count. It clears VOLATILE_CONDITION_MOVE_LOCKED
+    only: an uproaring battler keeps VOLATILE_CONDITION_UPROAR and moveLockedInto, so it stays
+    locked (Battler_CanPickCommand, lib.c:6224-6235)."""
+    sd.bide_turns = sd.bide_damage = sd.rollout_count = 0
+    if not sd.uproar:
+        sd.locked_move = 0
 
 
 def _release_bind(sd: RefSide) -> None:
@@ -1758,6 +1766,10 @@ def _inflict(turn: _Turn, s: RefState, side: int, target: int, status: int,
     # subscript_burn.s:27, subscript_freeze.s:11, subscript_poison.s:20, ...).
     if not direct and _ignorable(s, side, target) == AbilityId.SHIELD_DUST:
         return
+    # subscript_fall_asleep.s:43-45: a target not asleep yet stays awake while any battler is in
+    # an uproar (FIELD_CONDITION_UPROAR; Soundproof is unsupported).
+    if status == Status.SLEEP and mon.status != Status.SLEEP and _uproar_on(s):
+        return
     if mon.hp and _can_have_status(turn.tables, s, target, status):
         mon.status = status
         mon.status_counter = turn.outcome.duration[side] if status == Status.SLEEP else 0
@@ -1765,6 +1777,11 @@ def _inflict(turn: _Turn, s: RefState, side: int, target: int, status: int,
         # or ice cube.
         if status in (Status.SLEEP, Status.FREEZE):
             _unlock(s.sides[target])
+
+
+def _uproar_on(s: RefState) -> bool:
+    """FIELD_CONDITION_UPROAR: a battler's bit is set while it is in an uproar."""
+    return any(sd.uproar for sd in s.sides)
 
 
 def _life_orb_recoil(turn: _Turn, s: RefState, side: int) -> None:
@@ -2086,6 +2103,12 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
             s.sides[target].toxic_spikes += 1
     elif effect == EffectId.DESTINY_BOND and landed:
         s.sides[side].destiny_bond = 1  # subscript_destiny_bond.s:9
+    elif effect == EffectId.UPROAR and effective and not s.sides[side].uproar:
+        # effect_script_0159.s:5-6: an ON_HIT indirect subscript_uproar.s for a user not in an
+        # uproar (lib.c:1524-1529: not NO_EFFECTS): moveLockedInto = moveCur, Random 3, 3 turns
+        # and its FIELD_CONDITION_UPROAR bit.
+        s.sides[side].locked_move = move
+        s.sides[side].uproar = o.duration[side]
     elif effect == EffectId.DRAGON_DANCE and landed and _active(s, side).hp > 0:
         # subscript_user_atk_and_speed_up_1_stage.s:13-16: Attack +1, Speed +1.
         _change_stage(s, side, Stat.ATK, 1)
@@ -2386,7 +2409,10 @@ def _status_disrupted(turn: _Turn, s: RefState, side: int, move: int) -> int:
     thaw_move = effect == EffectId.SECONDARY_STATUS and _t(tables, "move_param", move, 2) == 1
 
     # CHECK_STATUS_STATE_SLEEP (bcp.c:2430): the counter drops by 1 (Early Bird is
-    # unsupported); still asleep stops the move, waking up lets the checks go on.
+    # unsupported); still asleep stops the move, waking up lets the checks go on. In an uproar
+    # (FIELD_CONDITION_UPROAR) a sleeper wakes at once (bcp.c:2432-2439, subscript_wake_up.s).
+    if mon.status == Status.SLEEP and _uproar_on(s):
+        mon.status, mon.status_counter = Status.NONE, 0
     if mon.status == Status.SLEEP:
         if mon.status_counter < 1:
             mon.status = Status.NONE
@@ -2413,7 +2439,10 @@ def _status_disrupted(turn: _Turn, s: RefState, side: int, move: int) -> int:
         _unlock(sd)
         return DISRUPTED
     # CHECK_STATUS_STATE_FLINCH (bcp.c:2529): subscript_flinched.s raises Steadfast's Speed.
+    # The checks below that disrupt the move set moveFailFlags (bcp.c:2531, :2545, :2560, :2628,
+    # :2656, :2681); sleep, freeze and Truant above do not.
     if sd.flinched:
+        turn.move_failed[side] = True
         sd.flinched = 0
         if mon.ability == AbilityId.STEADFAST:
             _change_stage(s, side, Stat.SPE, 1)
@@ -2421,10 +2450,12 @@ def _status_disrupted(turn: _Turn, s: RefState, side: int, move: int) -> int:
         return DISRUPTED
     # CHECK_STATUS_STATE_DISABLE (bcp.c:2543): the chosen move is the disabled one.
     if sd.disabled_move and sd.disabled_move == move:
+        turn.move_failed[side] = True
         _unlock(sd)  # subscript_move_is_disabled.s
         return DISRUPTED
     # CHECK_STATUS_STATE_TAUNT (bcp.c:2557): a taunted battler's power-0 move fails.
     if sd.taunt and _t(tables, "move_power", move) == 0:
+        turn.move_failed[side] = True
         _unlock(sd)  # subscript_move_fail_taunted.s
         return DISRUPTED
     # CHECK_STATUS_STATE_CONFUSION (bcp.c:2614): the counter drops; while it stays
@@ -2456,6 +2487,7 @@ def _status_disrupted(turn: _Turn, s: RefState, side: int, move: int) -> int:
                 taken = _divide(taken, 2)
             _lose_hp(turn, s, side, taken)
             _unlock(sd)  # subscript_hurt_self_in_confusion.s
+            turn.move_failed[side] = True
             return HURT_ITSELF
     # CHECK_STATUS_STATE_PARALYSIS (bcp.c:2652): RandNext() % 4 == 0 (Magic Guard is
     # unsupported).
@@ -2465,11 +2497,13 @@ def _status_disrupted(turn: _Turn, s: RefState, side: int, move: int) -> int:
         and mon.ability != AbilityId.MAGIC_GUARD
         and o.full_para[side]
     ):
+        turn.move_failed[side] = True
         _unlock(sd)  # subscript_fully_paralyzed.s
         return DISRUPTED
     # CHECK_STATUS_STATE_ATTRACT (bcp.c:2669-2692): in love, RandNext() & 1 == 0 immobilizes
     # (subscript_immobilized_by_love.s: UnlockMoveChoice, UPDATE_MOVE_BUFFERS, no message).
     if sd.infatuated and o.infatuation[side]:
+        turn.move_failed[side] = True
         _unlock(sd)
         return DISRUPTED
     # CHECK_STATUS_STATE_BIDE (bcp.c:2694): the counter drops; at 0 the unleash is
@@ -2645,6 +2679,21 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
         record = None if own_defender else move
         counter = _t(tables, "move_effect", move) == EffectId.COUNTER
         special_counter = counter and _move_target(tables, move) in SELF_DEFENDER
+    # TRY_MOVE_STATE_CHECK_TYPE_CHART (bcp.c:3271-3277, after the script, hit or miss): a move
+    # with power that is not RANGE_USER / RANGE_USER_SIDE and is ineffective on the foe sets the
+    # attacker's moveFailFlags.noEffect (bcp.c:2350-2370), which the Uproar check reads.
+    if (
+        _t(tables, "move_power", move) != 0
+        and not _targets_user(tables, move)
+        and _matchup_x40(
+            tables,
+            _move_type(tables, s, side, move),
+            _active(s, 1 - side).types,
+            _identified(s, side, 1 - side),
+        )
+        == 0
+    ):
+        turn.move_failed[side] = True
     # The move script (bcp.c:3214): effect_script_0158.s (Fake Out) sets MOVE_STATUS_FAILED
     # unless fakeOutTurnNumber == totalTurns; TryMove then ends in subscript_missed.s
     # ("But it failed!").
@@ -2788,6 +2837,16 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
         full = full or (effect == EffectId.SPIKES and s.sides[1 - side].spikes >= SPIKES_MAX)
         full = full or (
             effect == EffectId.TOXIC_SPIKES and s.sides[1 - side].toxic_spikes >= TOXIC_SPIKES_MAX
+        )
+        # A direct sleep on a living foe not asleep, without Insomnia as the user sees it, in an
+        # uproar: subscript_fall_asleep.s:43-45 -> :_292 sets MOVE_STATUS_NO_MORE_WORK (:_330).
+        full = full or (
+            effect == EffectId.STATUS_FOE
+            and _t(tables, "move_param", move, 0) == Status.SLEEP
+            and foe.hp > 0
+            and _ignorable(s, side, 1 - side) != AbilityId.INSOMNIA
+            and foe.status != Status.SLEEP
+            and _uproar_on(s)
         )
         dealt, _ = _hit(turn, s, side, move, hit, struggling, target_moved)
         if full:
@@ -3077,6 +3136,7 @@ def _end_of_turn(turn: _Turn, s: RefState, order: list[int]) -> None:
             _toxic_check,  # MON_COND_CHECK_STATE_TOXIC, bcp.c:1405
             _burn_check,  # MON_COND_CHECK_STATE_BURN, bcp.c:1425
             _bind_check,  # MON_COND_CHECK_STATE_BIND, bcp.c:1462
+            _uproar_check,  # MON_COND_CHECK_STATE_UPROAR, bcp.c:1505
             _disable_check,  # MON_COND_CHECK_STATE_DISABLE, bcp.c:1565
             _taunt_check,  # MON_COND_CHECK_STATE_TAUNT, bcp.c:1635
             _held_item_hp,  # MON_COND_CHECK_STATE_ITEM_CONDITION, bcp.c:1699
@@ -3149,6 +3209,30 @@ def _bind_check(turn: _Turn, s: RefState, side: int) -> None:
             sd.trap_move = 0
 
 
+def _uproar_check(turn: _Turn, s: RefState, side: int) -> None:
+    """``MON_COND_CHECK_STATE_UPROAR`` (bcp.c:1505-1541): while the battler is in an uproar,
+    the first battler (battler order) asleep with HP left wakes (subscript_wake_up.s; Soundproof
+    is unsupported) and the check repeats; then the count drops, and the uproar ends
+    (subscript_uproar_end.s) on this turn's moveFailFlags or at 0, which frees the battler's
+    command: it never had VOLATILE_CONDITION_MOVE_LOCKED."""
+    sd = s.sides[side]
+    if not sd.uproar:
+        return
+    while True:
+        sleeper = next(
+            (j for j in (0, 1) if _active(s, j).status == Status.SLEEP and _active(s, j).hp),
+            None,
+        )
+        if sleeper is None:
+            break
+        woken = _active(s, sleeper)
+        woken.status, woken.status_counter = Status.NONE, 0
+    sd.uproar -= 1
+    if turn.move_failed[side] or not sd.uproar:
+        sd.uproar = 0
+        sd.locked_move = 0
+
+
 def _disable_check(turn: _Turn, s: RefState, side: int) -> None:
     """bcp.c:1565: a disabled move the Pokemon no longer knows zeroes the counter; the
     counter drops while non-zero, else the move is cleared."""
@@ -3195,10 +3279,14 @@ def _usable(tables, s: RefState, side: int) -> list[bool]:
 
 
 def _locked_slot(s: RefState, side: int) -> int:
-    """The move slot holding ``moveLockedInto``, -1 when not locked."""
+    """The move slot holding ``moveLockedInto``, -1 when not locked; 0 (action 0) for a lock on
+    a move the battler does not know (a call's: FightCommand runs moveLockedInto anyway,
+    bcp.c:1885-1888)."""
     locked = s.sides[side].locked_move
     moves = _active(s, side).moves
-    return moves.index(locked) if locked and locked in moves else -1
+    if not locked:
+        return -1
+    return moves.index(locked) if locked in moves else 0
 
 
 def _command(action: int) -> str:
