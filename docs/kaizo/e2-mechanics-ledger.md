@@ -187,18 +187,19 @@ Rules left out because another mechanic is missing; each closes with the mechani
   and `Move_CanBeMetronomed` (battle_lib.c:7204-7207: `order.metronome_candidates`,
   `order.copycat_call`, `coverage.metronome_calls`); its Heal Block test is an unsupported move's:
   Gravity.
-- E1's per-battler int8 fields (da1d60f on `claude/engine-e1-ai`, here when main is next
-  merged; zero at battle start, no behaviour yet): `curse` (VOLATILE_CONDITION_CURSE,
+- E1's per-battler int8 fields (merged from main at 23e10f0; zero at battle
+  start, no behaviour yet; the AI reads them, `ai.commands._VOLATILE_FIELDS` /
+  `_MOVE_EFFECT_FIELDS`): `curse` (VOLATILE_CONDITION_CURSE,
   condition.h:60), `perish_song` (MOVE_EFFECT_PERISH_SONG, moves.h:13), `perish_song_turns`
   (perishSongTurns, battle_mon.h:14; the battler faints at the turn end that finds it at 0,
   bcp.c:1801), `yawn` (two-bit counter, moves.h:19-20), `lock_on` (two-bit counter, moves.h:11-12),
   `lock_on_target` (lockOnTarget, battle_mon.h:23, as 1 + battler). Owed here when those moves are
   modelled: setting the fields, their end-of-turn behaviour and the clear-on-switch rules
   (battle_lib.c:2063-2080), on E1's fields (no fields of our own; citations to verify then).
-- AI owner (E1): the AI move-effect scripts of Sleep Talk (#97: Basic_CheckAttackerAsleep /
-  Expert_SleepTalk), Copycat (#242: Basic_CheckCopycat / Expert_Copycat) and Metronome (#83) are
-  untranscribed (the backlog's AI entries); the engine side is B5-1..B5-3. The battle's movePrev is
-  `BattleState.move_prev`; trainer_ai.c reads only movePrevByBattler (`last_move`).
+- AI owner (E1): Copycat's AI move-effect script (#242: Basic_CheckCopycat / Expert_Copycat) is
+  untranscribed (the backlog's AI entry); the engine side is B5-1. The battle's movePrev is
+  `BattleState.move_prev`; trainer_ai.c reads only movePrevByBattler (`last_move`). (Sleep Talk
+  #97 and Metronome #83 are transcribed on main, merged at 23e10f0.)
 - Metronome (#83, 3 fights) stays refused by B5-2 until every move it can call is modelled
   (150 vanilla / 128 Kaizo of its 442 candidates have unsupported effects).
 - Around the pivots (E2 batch 6, B6-2..B6-4), each with its mechanic: the defender's Jaboca Berry
@@ -210,9 +211,11 @@ Rules left out because another mechanic is missing; each closes with the mechani
   (battle_lib.c:2056-2086, :2105-2115, :2136-2140; E1's per-battler fields too); Pressure on U-turn's
   Pursuit (battle_script.c:6919-6922); doubles: `BattleAI_PostKOSwitchIn`'s
   `BattleSystem_RandomOpponent` draw (battle_lib.c:4183-4187) at the opponent's list.
-- AI owner (E1): U-turn's and Baton Pass's AI side is untranscribed (the backlog's "AI move effect
-  #228" entry, Expert_UTurn; `AI_FLAG_BATON_PASS`). The engine side is B6-1..B6-9; the AI is never
-  asked at a paused state (the opponent's pick at its own list is `post_ko_switch_in` with
+- AI owner (E1): Baton Pass's AI side is untranscribed (the backlog's "AI move effect #127"
+  entry, Basic_CheckBatonPass / Expert_BatonPass; `AI_FLAG_BATON_PASS`). U-turn's (#228,
+  Expert_UTurn, script.s:5085-5145) is transcribed on main (`policy._expert_u_turn`), checked
+  against the pivot at the merge (23e10f0): it scores at the turn's choice, never at a pause.
+  The engine side is B6-1..B6-9; the AI is never asked at a paused state (the opponent's pick at its own list is `post_ko_switch_in` with
   `ts_pick_mul`, `playout.turn_inputs`). After a switch the newcomer's `last_move` is the paused
   move's moveTemp (UpdateMoveBuffers, bcp.c:3944), which the next turn's
   `TrainerAI_RecordLastMove` reads.
@@ -223,10 +226,6 @@ Rules left out because another mechanic is missing; each closes with the mechani
   U-turn or Baton Pass.
 - Rest and Yawn (unsupported moves) read `FIELD_CONDITION_UPROAR` too (subscript_rest.s,
   subscript_yawn.s): whoever adds them must test `effects.uproar_on` there (B5-6).
-- AI owner (E1): Uproar's AI side is untranscribed (the backlog's "AI move effect #159" entry; the
-  Basic script's `IfMoveEqualTo MOVE_UPROAR, ScoreMinus10`, trainer_ai/script.s:127, is in its
-  sleep-move block). An uproaring opponent picks no command, which the AI already reads through
-  `actions.locked_slot` (B5-5); no AI change is needed for the lock.
 - AI owner (E1): Future Sight / Doom Desire's AI side is untranscribed (the backlog's "AI move
   effect #148" entry: Basic_CheckFutureSight, trainer_ai/script.s:825-826, scores -12 when
   `SIDE_CONDITION_FUTURE_SIGHT` is up on the defender's or the attacker's side). That bit is
