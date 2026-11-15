@@ -19,9 +19,10 @@
   test_invokers 191 passed (then the POWER_HERB item classification fix, rechecked); differential
   seeds 21-22 (300 each) clean; guards 237 passed after game_constants entries (also the
   pre-existing CANNOT_ENCORE_MOVES / INVOKER_MOVES / Sticky Hold gaps); backlog 234 -> 230.
-- **Left in batch 10 (manager, 2026-11-15):**
-  tests/search/test_pivot_search.py under 8 GB per test with per-test memory shown
-  (after E1's fast tier and its search-test rework are in main); then merge main, focused tests
+- **test_pivot_search under 8 GB done:** conftest now prints each test's sampled peak (50 ms);
+  the file runs expand at CHUNK 1024 (module fixture): peaks 14.95/15.48/15.49 -> 4.86/3.75/3.75 GB.
+- **Left in batch 10 (manager, 2026-11-15):** after E1's fast tier and its search-test rework
+  are in main: merge main, focused tests
   + the four guards + one review, and send the tip to the manager. No Encore AI in batch 10.
 - **Batch 11 (start once the batch 10 tip is with the manager):** the takeover mechanism exactly
   as designed at 88fb6c5 (ledger "Design: a chosen move replaced mid-turn": one event for every

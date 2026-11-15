@@ -5,6 +5,7 @@ import gc
 import json
 import os
 import sys
+import threading
 from pathlib import Path
 
 import numpy as np
@@ -76,7 +77,29 @@ def _resident_bytes() -> int:
 # ($NUZLINE_CLEAR_ABOVE_GB overrides it). Each clear is recorded and summarised at the end.
 _CLEAR_ABOVE = int(float(os.environ.get("NUZLINE_CLEAR_ABOVE_GB", "6")) * 2**30)
 _CLEARS: list[tuple[str, int, int, bool]] = []  # (test, before, after, memory-driven)
-_GROWTH: list[tuple[int, str, int]] = []  # (resident growth over a test, test, resident after)
+_GROWTH: list[tuple[int, str, int, int]] = []  # (growth over a test, test, after, peak)
+_PEAKS: list[tuple[int, str]] = []  # (sampled peak resident size during a test, test)
+
+
+class _PeakSampler:
+    """The highest resident size seen while a test runs, sampled every 50 ms on a thread
+    (the end-of-test figure misses what a test frees before it returns)."""
+
+    def __init__(self) -> None:
+        self.peak = _resident_bytes()
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def _run(self) -> None:
+        while not self._stop.wait(0.05):
+            self.peak = max(self.peak, _resident_bytes())
+
+    def stop(self) -> int:
+        self._stop.set()
+        self._thread.join()
+        self.peak = max(self.peak, _resident_bytes())
+        return self.peak
 
 
 @pytest.hookimpl(hookwrapper=True)
@@ -89,12 +112,17 @@ def pytest_runtest_protocol(item, nextitem):
     20 GB (E1 batch 8); clearing after every test there made them re-trace every program, so
     the clear follows memory instead. The persistent compile cache keeps recompiles cheap."""
     start = _resident_bytes()
+    sampler = _PeakSampler()
     yield
+    peak = sampler.stop()
     next_module = nextitem is None or nextitem.module is not item.module
     before = _resident_bytes()
-    _GROWTH.append((before - start, item.nodeid, before))
+    _GROWTH.append((before - start, item.nodeid, before, peak))
     _GROWTH.sort(reverse=True)
     del _GROWTH[5:]
+    _PEAKS.append((peak, item.nodeid))
+    _PEAKS.sort(reverse=True)
+    del _PEAKS[5:]
     if "jax" in sys.modules and (next_module or before > _CLEAR_ABOVE):
         sys.modules["jax"].clear_caches()
         gc.collect()
@@ -109,8 +137,16 @@ def pytest_terminal_summary(terminalreporter):
     gb = 2**30
     if _GROWTH:
         terminalreporter.write_line("largest resident growth over one test:")
-        for growth, nodeid, after in _GROWTH:
-            terminalreporter.write_line(f"  {nodeid}: +{growth / gb:.2f} GB to {after / gb:.2f} GB")
+        for growth, nodeid, after, peak in _GROWTH:
+            terminalreporter.write_line(
+                f"  {nodeid}: +{growth / gb:.2f} GB to {after / gb:.2f} GB, peak {peak / gb:.2f} GB"
+            )
+    if _PEAKS:
+        terminalreporter.write_line(
+            "highest peak resident size during one test (sampled every 50 ms):"
+        )
+        for peak, nodeid in _PEAKS:
+            terminalreporter.write_line(f"  {nodeid}: peak {peak / gb:.2f} GB")
     if not _CLEARS:
         return
     afters = [c[2] / gb for c in memory] or [0.0]
