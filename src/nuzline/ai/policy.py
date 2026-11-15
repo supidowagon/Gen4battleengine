@@ -718,6 +718,99 @@ def _basic_check_dream_eater(ctx: AiContext, mask) -> AiContext:
     return c.pop_or_end(_score(ctx, t, -10))
 
 
+def _basic_check_metal_burst(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckMetalBurst`` (script.s:1160-1182): immune -10; against Stall (a guessing
+    read) or a player known to hold a Shiny Stone (the decomp's Lagging Tail bug, :1163-1164)
+    -10; unless the attacker has Stall or a Shiny Stone, faster (FASTER's tie a read, E1
+    Ruling R8) -10."""
+    ctx = _at(ctx, mask)
+    ctx, t = _split(c.if_move_effectiveness_equals(ctx, TypeMulti.IMMUNE))
+    ctx = _score(ctx, t, -10)
+    ctx = c.load_battler_ability(ctx, _D)
+    ctx, t = _split(c.if_loaded_equal_to(ctx, _ABILITY["Stall"]))
+    ctx = _score(ctx, t, -10)
+    ctx, t = _split(c.if_held_item_equal_to(ctx, _D, c.ITEM_SHINY_STONE))
+    ctx = _score(ctx, t, -10)
+    ctx = c.load_battler_ability(ctx, _A)
+    ctx, _ = _split(c.if_loaded_equal_to(ctx, _ABILITY["Stall"]))  # -> _Terminate
+    ctx, _ = _split(c.if_held_item_equal_to(ctx, _A, c.ITEM_SHINY_STONE))  # -> _Terminate
+    ctx, t = _split(c.if_speed_compare_equal_to(ctx, c.COMPARE_SPEED_FASTER))
+    return c.pop_or_end(_score(ctx, t, -10))
+
+
+def _basic_check_future_sight(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckFutureSight`` (script.s:823-827): Future Sight pending on either side,
+    -12."""
+    ctx = _at(ctx, mask)
+    ctx, t = _split(c.if_side_condition(ctx, _D, c.SideCondition.FUTURE_SIGHT))
+    ctx = _score(ctx, t, -12)
+    ctx, t = _split(c.if_side_condition(ctx, _A, c.SideCondition.FUTURE_SIGHT))
+    return c.pop_or_end(_score(ctx, t, -12))
+
+
+def _basic_check_low_accuracy(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckLowStatStage_Accuracy`` (script.s:453-460): the player's accuracy at -6
+    already, the attacker's No Guard, the player's Keen Eye or No Guard (a guessing read):
+    -10; then ``Basic_CheckClearBodyEffect`` (:469)."""
+    ctx = _at(ctx, mask)
+    ctx, t = _split(c.if_stat_stage_equal_to(ctx, _D, Stat.ACC, 0))
+    ctx = _score(ctx, t, -10)
+    ctx = c.load_battler_ability(ctx, _A)
+    ctx, t = _split(c.if_loaded_equal_to(ctx, _ABILITY["No Guard"]))
+    ctx = _score(ctx, t, -10)
+    ctx = c.load_battler_ability(ctx, _D)
+    for name in ("Keen Eye", "No Guard"):
+        ctx, t = _split(c.if_loaded_equal_to(ctx, _ABILITY[name]))
+        ctx = _score(ctx, t, -10)
+    ctx, t = _split(c.go_to(ctx))
+    return _clear_body(ctx, t)
+
+
+def _basic_check_high_evasion(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckHighStatStage_Evasion`` (script.s:407-418): the player's No Guard (a
+    guessing read) or the attacker's -10; with Simple above decomp 8 -10, without at +6 -10."""
+    ctx = c.load_battler_ability(_at(ctx, mask), _D)
+    ctx, t = _split(c.if_loaded_equal_to(ctx, _ABILITY["No Guard"]))
+    ctx = _score(ctx, t, -10)
+    ctx = c.load_battler_ability(ctx, _A)
+    ctx, t = _split(c.if_loaded_equal_to(ctx, _ABILITY["No Guard"]))
+    ctx = _score(ctx, t, -10)
+    ctx, no_simple = _split(c.if_loaded_not_equal_to(ctx, _ABILITY["Simple"]))
+    ctx, t = _split(c.if_stat_stage_greater_than(ctx, _A, Stat.EVA, 8))
+    ctx = c.pop_or_end(_score(ctx, t, -10))
+    # Basic_CheckHighStatStage_Evasion_NoSimple (:416)
+    ctx, t = _split(c.if_stat_stage_equal_to(_at(ctx, no_simple), _A, Stat.EVA, 12))
+    return c.pop_or_end(_score(ctx, t, -10))
+
+
+def _basic_check_mean_look(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckMeanLook`` (script.s:674-677): the player already unable to escape by
+    Mean Look, -10."""
+    ctx, t = _split(c.if_volatile_status(_at(ctx, mask), _D, c.VolatileCondition.MEAN_LOOK))
+    return c.pop_or_end(_score(ctx, t, -10))
+
+
+def _basic_check_remove_item(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckCanRemoveItem`` (script.s:898-904): against Sticky Hold (a guessing read)
+    or a player holding nothing (``LoadHeldItem``, its true item) -10."""
+    ctx = c.load_battler_ability(_at(ctx, mask), _D)
+    ctx, t = _split(c.if_loaded_equal_to(ctx, _ABILITY["Sticky Hold"]))
+    ctx = _score(ctx, t, -10)
+    ctx = c.load_held_item(ctx, _D)
+    ctx, t = _split(c.if_loaded_equal_to(ctx, 0))
+    return c.pop_or_end(_score(ctx, t, -10))
+
+
+def _basic_check_imprison(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckCanImprison`` (script.s:917-921): the attacker already imprisoning, or the
+    player already imprisoned, -10."""
+    ctx = _at(ctx, mask)
+    ctx, t = _split(c.if_move_effect(ctx, _A, c.MoveEffectMask.IMPRISON))
+    ctx = _score(ctx, t, -10)
+    ctx, t = _split(c.if_move_effect(ctx, _D, c.MoveEffectMask.IMPRISONED))
+    return c.pop_or_end(_score(ctx, t, -10))
+
+
 def _basic_check_ohko(ctx: AiContext, mask) -> AiContext:
     """``Basic_CheckOHKOWouldFail`` (script.s:554-564): immune -10; against Sturdy (a guessing
     read) -10 unless the attacker has Mold Breaker; the attacker's level below the
@@ -857,8 +950,13 @@ def _eval_attack(ctx: AiContext) -> AiContext:
     # EvalAttack_ScorePlus4 (:6411); anything else jumps to it (:6401).
     ctx = _at(ctx, kill)
     ctx, _ = _split(c.if_current_move_effect_equal_to(ctx, BattleEffect.HALVE_DEFENSE))
+    ctx, try_plus4 = _split(c.if_current_move_effect_equal_to(ctx, BattleEffect.HIT_IN_3_TURNS))
     ctx, priority = _split(c.if_current_move_effect_equal_to(ctx, BattleEffect.PRIORITY_1))
     ctx, plus4 = _split(c.go_to(ctx))
+    # EvalAttack_TryScorePlus4 (:6403): Future Sight's kill +4 unless the 170 roll jumps
+    ctx, t = _split(c.if_random_less_than(_at(ctx, try_plus4), 170, 6405))
+    plus4 = plus4 | ctx.live
+    ctx = _at(ctx, jnp.zeros_like(ctx.live))
     ctx = c.add_to_move_score(_at(ctx, priority), 2)
     ctx = c.pop_or_end(c.add_to_move_score(_at(ctx, priority | plus4), 4))
     return ctx
@@ -1944,6 +2042,235 @@ def _expert_dream_eater(ctx: AiContext, mask) -> AiContext:
     return c.pop_or_end(c.add_to_move_score(_at(ctx, minus1), -1))
 
 
+def _expert_metal_burst(ctx: AiContext, mask) -> AiContext:
+    """``Expert_MetalBurst`` (script.s:5029-5083): the player asleep, infatuated, confused, or
+    known to have Avalanche/Revenge, Focus Punch or Vital Throw, -1; at 30 % HP or less -1
+    unless the 10 roll (:5053) jumps; at 50 % or less -1 unless :5058 jumps; +1 unless the 192
+    roll (:5062) jumps; with a damaging last move by the player, +1 unless not taunted or
+    :5070 jumps; then +1 unless not taunted or :5075 jumps."""
+    ctx = _at(ctx, mask)
+    ctx, minus1 = _split(c.if_status(ctx, _D, c.MonCondition.SLEEP))
+    for cond in (c.VolatileCondition.ATTRACT, c.VolatileCondition.CONFUSION):
+        ctx, t = _split(c.if_volatile_status(ctx, _D, cond))
+        minus1 = minus1 | t
+    for effect in (
+        BattleEffect.DOUBLE_POWER_IF_HIT,
+        BattleEffect.HIT_LAST_WHIFF_IF_HIT,
+        BattleEffect.PRIORITY_NEG_1_BYPASS_ACCURACY,
+    ):
+        ctx, t = _split(c.if_move_effect_known(ctx, _D, effect))
+        minus1 = minus1 | t
+    ctx, medium = _split(c.if_hp_percent_greater_than(ctx, _A, 30))
+    ctx, t = _split(c.if_random_less_than(ctx, 10, 5053))
+    ctx = c.add_to_move_score(ctx, -1)
+    # _MediumHPTryScoreMinus1 (:5056)
+    ctx = _at(ctx, medium | t | ctx.live)
+    ctx, high = _split(c.if_hp_percent_greater_than(ctx, _A, 50))
+    ctx, t = _split(c.if_random_less_than(ctx, 100, 5058))
+    ctx = c.add_to_move_score(ctx, -1)
+    # _HighHPTryScorePlus1 (:5061)
+    ctx = _at(ctx, high | t | ctx.live)
+    ctx, last = _split(c.if_random_less_than(ctx, 192, 5062))
+    ctx = c.add_to_move_score(ctx, 1)
+    # _CheckLastUsedMove (:5065)
+    ctx = c.load_power_of_loaded_move(c.load_battler_previous_move(_at(ctx, last | ctx.live), _D))
+    ctx, try_plus1 = _split(c.if_loaded_equal_to(ctx, 0))
+    ctx, t = _split(c.if_target_is_not_taunted(ctx))
+    try_plus1 = try_plus1 | t
+    ctx, t = _split(c.if_random_less_than(ctx, 100, 5070))
+    try_plus1 = try_plus1 | t
+    ctx = c.add_to_move_score(ctx, 1)
+    # _TryScorePlus1 (:5073)
+    ctx = _at(ctx, try_plus1 | ctx.live)
+    ctx, _ = _split(c.if_target_is_not_taunted(ctx))  # -> _End
+    ctx, _ = _split(c.if_random_less_than(ctx, 100, 5075))  # -> _End
+    ctx = c.add_to_move_score(ctx, 1)
+    ctx, _ = _split(c.go_to(ctx))  # -> _End
+    # _ScoreMinus1 (:5079)
+    return c.pop_or_end(c.add_to_move_score(_at(ctx, minus1), -1))
+
+
+def _status_stat_trick(label: str, lines: dict[str, int], first, hp_check):
+    """``Expert_StatusAccuracyDown`` (script.s:2431-2498) and ``Expert_StatusEvasionUp``
+    (:2184-2253), one shape after their first round (``first``): the attacker's own
+    accuracy / evasion test, the player badly poisoned, seeded, the attacker ingrained or in
+    Aqua Ring, the player cursed, each with its roll (``lines``), then the HP-range test whose
+    stage check is ``hp_check``."""
+
+    def run(ctx: AiContext, mask) -> AiContext:
+        ctx = first(_at(ctx, mask))
+        # _CheckTargetBadlyPoisoned / _CheckEnemyBadlyPoisoned, _CheckTargetSeeded / ...:
+        ctx = lines["poisoned"](ctx)
+        ctx, ingrained = _split(c.if_not_move_effect(ctx, _D, c.MoveEffectMask.LEECH_SEED))
+        ctx, t = _split(c.if_random_less_than(ctx, 70, lines["seeded"]))
+        ingrained = ingrained | t
+        ctx = c.add_to_move_score(ctx, lines["seeded_score"])
+        # _CheckUserIngrained
+        ctx = _at(ctx, ingrained | ctx.live)
+        ctx, aqua = _split(c.if_not_move_effect(ctx, _A, c.MoveEffectMask.INGRAIN))
+        ctx, cursed = _split(c.if_random_less_than(ctx, 128, lines["ingrain"]))
+        ctx = c.add_to_move_score(ctx, lines["root_score"])
+        ctx, t = _split(c.go_to(ctx))
+        cursed = cursed | t
+        # _CheckUserHasAquaRing
+        ctx, t = _split(c.if_not_move_effect(_at(ctx, aqua), _A, c.MoveEffectMask.AQUA_RING))
+        cursed = cursed | t
+        ctx, t = _split(c.if_random_less_than(ctx, 128, lines["aqua"]))
+        cursed = cursed | t
+        ctx = c.add_to_move_score(ctx, lines["root_score"])
+        # _CheckTargetCursed / _CheckEnemyCursed
+        ctx = _at(ctx, cursed | ctx.live)
+        ctx, ranges = _split(c.if_not_volatile_status(ctx, _D, c.VolatileCondition.CURSE))
+        ctx, t = _split(c.if_random_less_than(ctx, 70, lines["cursed"]))
+        ranges = ranges | t
+        ctx = c.add_to_move_score(ctx, lines["cursed_score"])
+        # _CheckHPRanges
+        ctx = _at(ctx, ranges | ctx.live)
+        ctx, _ = _split(c.if_hp_percent_greater_than(ctx, _A, 70))  # -> _End
+        ctx, _ = _split(hp_check(ctx))  # -> _End
+        ctx, minus2 = _split(c.if_hp_percent_less_than(ctx, _A, 40))
+        ctx, t = _split(c.if_hp_percent_less_than(ctx, _D, 40))
+        minus2 = minus2 | t
+        ctx, _ = _split(c.if_random_less_than(ctx, 70, lines["range"]))  # -> _End
+        # _ScoreMinus2
+        return c.pop_or_end(c.add_to_move_score(_at(ctx, minus2 | ctx.live), -2))
+
+    run.__name__ = run.__qualname__ = label
+    return run
+
+
+def _accuracy_down_first(ctx: AiContext) -> AiContext:
+    """``Expert_StatusAccuracyDown`` (script.s:2449-2459): below 70 % HP, or the player at 70 %
+    or less, -1 unless the 100 roll (:2453) jumps; the attacker's accuracy at decomp 4 or
+    less, -2 unless the 80 roll (:2458) jumps."""
+    ctx, try_minus1 = _split(c.if_hp_percent_less_than(ctx, _A, 70))
+    ctx, check = _split(c.if_hp_percent_greater_than(ctx, _D, 70))
+    # _TryScoreMinus1 (:2452)
+    ctx = _at(ctx, try_minus1 | ctx.live)
+    ctx, t = _split(c.if_random_less_than(ctx, 100, 2453))
+    check = check | t
+    ctx = c.add_to_move_score(ctx, -1)
+    # _CheckUserAccuracy (:2456)
+    ctx = _at(ctx, check | ctx.live)
+    ctx, poisoned = _split(c.if_stat_stage_greater_than(ctx, _A, Stat.ACC, 4))
+    ctx, t = _split(c.if_random_less_than(ctx, 80, 2458))
+    ctx = c.add_to_move_score(ctx, -2)
+    return _at(ctx, poisoned | t | ctx.live)
+
+
+def _accuracy_down_poisoned(ctx: AiContext) -> AiContext:
+    """:2461-2464: the player badly poisoned, +2 unless the 70 roll (:2463) jumps."""
+    ctx, seeded = _split(c.if_not_status(ctx, _D, c.MonCondition.TOXIC))
+    ctx, t = _split(c.if_random_less_than(ctx, 70, 2463))
+    ctx = c.add_to_move_score(ctx, 2)
+    return _at(ctx, seeded | t | ctx.live)
+
+
+def _evasion_up_first(ctx: AiContext) -> AiContext:
+    """``Expert_StatusEvasionUp`` (script.s:2203-2210): at 90 % HP or more +3 unless the 100
+    roll (:2204) jumps; the attacker's evasion at decomp 9 or more, -1 unless the 128 roll
+    (:2209) jumps."""
+    ctx, check = _split(c.if_hp_percent_less_than(ctx, _A, 90))
+    ctx, t = _split(c.if_random_less_than(ctx, 100, 2204))
+    check = check | t
+    ctx = c.add_to_move_score(ctx, 3)
+    # _CheckUserStatStage (:2207)
+    ctx = _at(ctx, check | ctx.live)
+    ctx, poisoned = _split(c.if_stat_stage_less_than(ctx, _A, Stat.EVA, 9))
+    ctx, t = _split(c.if_random_less_than(ctx, 128, 2209))
+    ctx = c.add_to_move_score(ctx, -1)
+    return _at(ctx, poisoned | t | ctx.live)
+
+
+def _evasion_up_poisoned(ctx: AiContext) -> AiContext:
+    """:2212-2219: the player badly poisoned, above 50 % HP straight to +3 unless the 50 roll
+    (:2218) jumps, else first the 80 roll (:2215)."""
+    ctx, seeded = _split(c.if_not_status(ctx, _D, c.MonCondition.TOXIC))
+    ctx, plus3 = _split(c.if_hp_percent_greater_than(ctx, _A, 50))
+    ctx, t = _split(c.if_random_less_than(ctx, 80, 2215))
+    seeded = seeded | t
+    # _TryScorePlus3 (:2217)
+    ctx = _at(ctx, plus3 | ctx.live)
+    ctx, t = _split(c.if_random_less_than(ctx, 50, 2218))
+    ctx = c.add_to_move_score(ctx, 3)
+    return _at(ctx, seeded | t | ctx.live)
+
+
+_expert_status_accuracy_down = _status_stat_trick(
+    "Expert_StatusAccuracyDown",
+    {
+        "poisoned": _accuracy_down_poisoned,
+        "seeded": 2468,
+        "seeded_score": 2,
+        "ingrain": 2473,
+        "aqua": 2479,
+        "root_score": 1,
+        "cursed": 2484,
+        "cursed_score": 2,
+        "range": 2492,
+    },
+    _accuracy_down_first,
+    lambda x: c.if_stat_stage_equal_to(x, _D, Stat.ACC, 6),  # :2489
+)
+_expert_status_evasion_up = _status_stat_trick(
+    "Expert_StatusEvasionUp",
+    {
+        "poisoned": _evasion_up_poisoned,
+        "seeded": 2223,
+        "seeded_score": 3,
+        "ingrain": 2228,
+        "aqua": 2234,
+        "root_score": 2,
+        "cursed": 2240,
+        "cursed_score": 3,
+        "range": 2248,
+    },
+    _evasion_up_first,
+    lambda x: c.if_stat_stage_equal_to(x, _A, Stat.EVA, 6),  # :2245
+)
+
+
+def _expert_binding_move(ctx: AiContext, mask) -> AiContext:
+    """``Expert_BindingMove`` (script.s:2808-2825): the player badly poisoned, cursed,
+    perishing or infatuated, +1 unless the 128 roll (:2821) jumps."""
+    ctx = _at(ctx, mask)
+    try_plus1 = jnp.zeros_like(ctx.live)
+    for check in (
+        lambda x: c.if_status(x, _D, c.MonCondition.TOXIC),
+        lambda x: c.if_volatile_status(x, _D, c.VolatileCondition.CURSE),
+        lambda x: c.if_move_effect(x, _D, c.MoveEffectMask.PERISH_SONG),
+        lambda x: c.if_volatile_status(x, _D, c.VolatileCondition.ATTRACT),
+    ):
+        ctx, t = _split(check(ctx))
+        try_plus1 = try_plus1 | t
+    ctx, _ = _split(c.go_to(ctx))  # -> _End
+    ctx, _ = _split(c.if_random_less_than(_at(ctx, try_plus1), 128, 2821))  # -> _End
+    return c.pop_or_end(c.add_to_move_score(ctx, 1))
+
+
+def _first_turn_try(label: str, roll: tuple[int, int], value: int):
+    """``Expert_KnockOff`` (script.s:4571-4581, the player below 30 % HP first ends it) and
+    ``Expert_Imprison`` (:4634-4642): after the attacker's first turn in battle (its first
+    turn ends the label, ``IfLoadedGreaterThan FALSE``), ``value`` unless the roll jumps."""
+    n, line = roll
+
+    def run(ctx: AiContext, mask) -> AiContext:
+        ctx = _at(ctx, mask)
+        if label == "Expert_KnockOff":
+            ctx, _ = _split(c.if_hp_percent_less_than(ctx, _D, 30))  # -> _End
+        ctx = c.load_is_first_turn_in_battle(ctx, _A)
+        ctx, _ = _split(c.if_loaded_greater_than(ctx, 0))  # -> _End
+        ctx, _ = _split(c.if_random_less_than(ctx, n, line))  # -> _End
+        return c.pop_or_end(c.add_to_move_score(ctx, value))
+
+    run.__name__ = run.__qualname__ = label
+    return run
+
+
+_expert_knock_off = _first_turn_try("Expert_KnockOff", (180, 4577), 1)
+_expert_imprison = _first_turn_try("Expert_Imprison", (100, 4638), 2)
+
+
 def _expert_curse(ctx: AiContext, mask) -> AiContext:
     """``Expert_Curse`` (script.s:3452-3500)."""
     # Expert_Curse (:3452). A Ghost-type attacker jumps to Expert_Curse_GhostCheckHP
@@ -2102,6 +2429,7 @@ _BASIC_LABELS = (
     (BattleEffect.ATK_DOWN, _basic_check_low_attack),  # :144
     (BattleEffect.DEF_DOWN, _basic_check_defense),  # :145
     (BattleEffect.SPEED_DOWN, _basic_check_low_speed),  # :146
+    (BattleEffect.ACC_DOWN, _basic_check_low_accuracy),  # :149
     (BattleEffect.EVA_DOWN, _basic_check_low_evasion),  # :150
     (BattleEffect.FORCE_SWITCH, _basic_check_force_switch),  # :153
     (BattleEffect.RESTORE_HALF_HP, _basic_check_can_recover_hp),  # :154
@@ -2130,6 +2458,8 @@ _BASIC_LABELS = (
     (BattleEffect.DAMAGE_WHILE_ASLEEP, _basic_check_attacker_asleep),  # :189
     (BattleEffect.USE_RANDOM_LEARNED_MOVE_SLEEP, _basic_check_attacker_asleep),  # :191
     (BattleEffect.INCREASE_POWER_WITH_LESS_HP, _basic_check_non_standard_damage),  # :192
+    (BattleEffect.PREVENT_ESCAPE, _basic_check_mean_look),  # :193
+    (BattleEffect.EVA_UP_2_MINIMIZE, _basic_check_high_evasion),  # :195
     (BattleEffect.CURSE, _basic_check_curse),  # :196
     (BattleEffect.SET_SPIKES, _basic_check_spikes),  # :197
     (BattleEffect.ATK_UP_2_STATUS_CONFUSION, _basic_check_cannot_confuse),  # :201
@@ -2144,18 +2474,22 @@ _BASIC_LABELS = (
     (BattleEffect.WEATHER_SUN, _basic_check_sunny_day),  # :215
     (BattleEffect.MAX_ATK_LOSE_HALF_MAX_HP, _basic_check_belly_drum),  # :216
     (BattleEffect.MIRROR_COAT, _basic_check_non_standard_damage),  # :218
+    (BattleEffect.HIT_IN_3_TURNS, _basic_check_future_sight),  # :220
     (BattleEffect.ALWAYS_FLINCH_FIRST_TURN_ONLY, _basic_check_first_turn),  # :224
     (BattleEffect.WEATHER_HAIL, _basic_check_hail),  # :228
     (BattleEffect.STATUS_BURN, _basic_check_cannot_burn),  # :231
     (BattleEffect.HIT_LAST_WHIFF_IF_HIT, _basic_check_non_standard_damage),  # :233
     (BattleEffect.LOWER_OWN_ATK_AND_DEF, _basic_check_non_standard_damage),  # :237
+    (BattleEffect.REMOVE_HELD_ITEM, _basic_check_remove_item),  # :240
     (BattleEffect.SET_HP_EQUAL_TO_USER, _basic_check_non_standard_damage),  # :241
+    (BattleEffect.MAKE_SHARED_MOVES_UNUSEABLE, _basic_check_imprison),  # :242
     (BattleEffect.INCREASE_POWER_WITH_WEIGHT, _basic_check_non_standard_damage),  # :244
     (BattleEffect.ATK_DEF_UP, _basic_check_bulk_up),  # :248
     (BattleEffect.SP_ATK_SP_DEF_UP, _basic_check_calm_mind),  # :250
     (BattleEffect.ATK_SPD_UP, _basic_check_dragon_dance),  # :251
     (BattleEffect.HEAL_HALF_REMOVE_FLYING_TYPE, _basic_check_can_recover_hp),  # :253
     (BattleEffect.DOUBLE_SPEED_3_TURNS, _basic_check_tailwind),  # :259
+    (BattleEffect.METAL_BURST, _basic_check_metal_burst),  # :261
     (BattleEffect.TOXIC_SPIKES, _basic_check_toxic_spikes),  # :277
     (BattleEffect.STEALTH_ROCK, _basic_check_stealth_rock),  # :284
 )
@@ -2173,6 +2507,7 @@ _EXPERT_LABELS = (
     (BattleEffect.ATK_DOWN, _expert_status_attack_down),  # :1641
     (BattleEffect.DEF_DOWN, _expert_status_defense_down),  # :1642
     (BattleEffect.SPEED_DOWN, _expert_status_speed_down),  # :1643
+    (BattleEffect.ACC_DOWN, _expert_status_accuracy_down),  # :1646
     (BattleEffect.EVA_DOWN, _expert_status_eva_down),  # :1647
     (BattleEffect.FORCE_SWITCH, _expert_force_switch),  # :1650
     (BattleEffect.RESTORE_HALF_HP, _expert_recovery),  # :1652
@@ -2204,6 +2539,8 @@ _EXPERT_LABELS = (
     (BattleEffect.USE_RANDOM_LEARNED_MOVE_SLEEP, _expert_sleep_talk),  # :1693
     (BattleEffect.KO_MON_THAT_DEFEATED_USER, _expert_destiny_bond),  # :1694
     (BattleEffect.INCREASE_POWER_WITH_LESS_HP, _expert_reversal),  # :1695
+    (BattleEffect.PREVENT_ESCAPE, _expert_binding_move),  # :1698
+    (BattleEffect.EVA_UP_2_MINIMIZE, _expert_status_evasion_up),  # :1699
     (BattleEffect.CURSE, _expert_curse),  # :1700
     (BattleEffect.PROTECT, _expert_protect),  # :1701
     (BattleEffect.SET_SPIKES, _expert_spikes),  # :1702
@@ -2219,7 +2556,9 @@ _EXPERT_LABELS = (
     (BattleEffect.DOUBLE_POWER_AND_CURE_PARALYSIS, _expert_smelling_salts),  # :1731
     (BattleEffect.LOWER_OWN_ATK_AND_DEF, _expert_superpower),  # :1735
     (BattleEffect.REMOVE_SCREENS, _expert_brick_break),  # :1739
+    (BattleEffect.REMOVE_HELD_ITEM, _expert_knock_off),  # :1740
     (BattleEffect.SET_HP_EQUAL_TO_USER, _expert_endeavor),  # :1741
+    (BattleEffect.MAKE_SHARED_MOVES_UNUSEABLE, _expert_imprison),  # :1744
     (BattleEffect.RECOIL_THIRD, _expert_recoil_move),  # :1747
     (BattleEffect.ATK_DEF_UP, _expert_status_def_up),  # :1753
     (BattleEffect.SP_ATK_SP_DEF_UP, _expert_status_spd_up),  # :1756
@@ -2228,6 +2567,7 @@ _EXPERT_LABELS = (
     (BattleEffect.DOUBLE_POWER_WHEN_BELOW_HALF, _expert_brine),  # :1765
     (BattleEffect.EAT_BERRY, _expert_pluck),  # :1767
     (BattleEffect.DOUBLE_SPEED_3_TURNS, _expert_tailwind),  # :1768
+    (BattleEffect.METAL_BURST, _expert_metal_burst),  # :1770
     (BattleEffect.SWITCH_HIT, _expert_u_turn),  # :1771
     (BattleEffect.DOUBLE_POWER_IF_MOVING_SECOND, _expert_payback),  # :1773
     (BattleEffect.TOXIC_SPIKES, _expert_toxic_spikes),  # :1792

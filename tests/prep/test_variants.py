@@ -18,6 +18,7 @@ from nuzline.engine.state import make_state
 from nuzline.prep.problem import Resources
 from nuzline.prep.variants import (
     AI_DEFENDER_HP_CHECKS,
+    AI_EFFECT_DEFENDER_HP_CHECKS,
     AI_FLAG_DEFENDER_HP_CHECKS,
     AI_HP_READERS,
     DEFAULT_WEIGHTS,
@@ -176,11 +177,16 @@ def test_ai_hp_checks_pinned():
             rf"if_hp_percent_({commands_re})\(ctx, _D, (\d+)\)", text
         ):
             found.add((_HP_PERCENT_COMMANDS[suffix], int(percent)))
-    # the literal calls; policy._hp_trade passes its percents as arguments, so its checks
-    # (AI_EFFECT_DEFENDER_HP_CHECKS) are recorded while tracing, test_ai_hp_checks_per_policy
-    assert found == set().union(
-        *AI_DEFENDER_HP_CHECKS.values(), *AI_FLAG_DEFENDER_HP_CHECKS.values()
+    # the literal calls: every policy-wide and flag check is one, and every one is listed
+    # (a per-effect check may also be a variable, policy._hp_trade; the tracing test
+    # test_ai_hp_checks_per_policy checks AI_EFFECT_DEFENDER_HP_CHECKS is complete)
+    listed = set().union(
+        *AI_DEFENDER_HP_CHECKS.values(),
+        *AI_FLAG_DEFENDER_HP_CHECKS.values(),
+        *AI_EFFECT_DEFENDER_HP_CHECKS.values(),
     )
+    always = set().union(*AI_DEFENDER_HP_CHECKS.values(), *AI_FLAG_DEFENDER_HP_CHECKS.values())
+    assert always <= found <= listed
     readers = set()
     kill_calls = []
     for text in sources.values():

@@ -103,6 +103,7 @@ class SideCondition(IntEnum):
     STEALTH_ROCK = 1 << 7  # BattleState.stealth_rock
     TOXIC_SPIKES = 1 << 10  # :98; BattleState.toxic_spikes (layers, LoadSpikesLayers)
     TAILWIND = (1 << 8) | (1 << 9)  # :96-97, :104; BattleState.tailwind (turns left)
+    FUTURE_SIGHT = 1 << 4  # :92; BattleState.future_sight (per side)
 
 
 _SIDE_CONDITION_FIELDS = {
@@ -113,6 +114,7 @@ _SIDE_CONDITION_FIELDS = {
     SideCondition.TAILWIND: "tailwind",
     SideCondition.SPIKES: "spikes",  # layers; on while above 0 (Expert_ForceSwitch, :2591)
     SideCondition.TOXIC_SPIKES: "toxic_spikes",
+    SideCondition.FUTURE_SIGHT: "future_sight",
 }
 
 
@@ -148,6 +150,7 @@ class VolatileCondition(IntEnum):
     ATTRACT = (1 << 16) | (1 << 17) | (1 << 18) | (1 << 19)  # :48-51, :70; .infatuated
     CURSE = 1 << 28  # :60; BattleState.curse
     SUBSTITUTE = 1 << 24  # :56; BattleState.substitute_hp (its HP left, 0 = none)
+    MEAN_LOOK = 1 << 26  # :58; BattleState.mean_look
 
 
 _VOLATILE_FIELDS = {
@@ -155,6 +158,7 @@ _VOLATILE_FIELDS = {
     VolatileCondition.ATTRACT: "infatuated",
     VolatileCondition.CURSE: "curse",
     VolatileCondition.SUBSTITUTE: "substitute_hp",
+    VolatileCondition.MEAN_LOOK: "mean_look",
 }
 
 
@@ -166,6 +170,10 @@ class MoveEffectMask(IntEnum):
     LOCK_ON = (1 << 3) | (1 << 4)  # :11-12, :41; BattleState.lock_on (turns)
     PERISH_SONG = 1 << 5  # :13; BattleState.perish_song
     YAWN = (1 << 11) | (1 << 12)  # :19-20, :42; BattleState.yawn (turns)
+    INGRAIN = 1 << 10  # :18; BattleState.ingrain
+    IMPRISON = 1 << 13  # :21; BattleState.imprison (the Imprison user)
+    AQUA_RING = 1 << 24  # :37; BattleState.aqua_ring
+    IMPRISONED = 1 << 30  # :38; BattleState.imprisoned
 
 
 _MOVE_EFFECT_FIELDS = {
@@ -173,6 +181,10 @@ _MOVE_EFFECT_FIELDS = {
     MoveEffectMask.LOCK_ON: "lock_on",
     MoveEffectMask.PERISH_SONG: "perish_song",
     MoveEffectMask.YAWN: "yawn",
+    MoveEffectMask.INGRAIN: "ingrain",
+    MoveEffectMask.IMPRISON: "imprison",
+    MoveEffectMask.AQUA_RING: "aqua_ring",
+    MoveEffectMask.IMPRISONED: "imprisoned",
 }
 BATTLE_TYPE_DOUBLES = int(_BATTLE_TYPE_DOUBLES)  # include/constants/battle.h:27
 
@@ -303,6 +315,15 @@ class BattleEffect(IntEnum):
     BLIZZARD = 260  # Kaizo Blizzard, Ice Ball, Sheer Cold
     FORCE_SWITCH = 28  # Roar, Whirlwind
     HEAL_HALF_REMOVE_FLYING_TYPE = 214  # Roost
+    METAL_BURST = 227  # Metal Burst, Bide (Kaizo)
+    HIT_IN_3_TURNS = 148  # Future Sight, Doom Desire
+    ACC_DOWN = 23  # Sand-Attack, SmokeScreen, Flash
+    EVA_UP_2_MINIMIZE = 108  # Minimize
+    PREVENT_ESCAPE = 106  # Mean Look, Block, Spider Web
+    REMOVE_HELD_ITEM = 188  # Knock Off
+    MAKE_SHARED_MOVES_UNUSEABLE = 192  # Imprison
+    DOUBLE_POWER_IF_HIT = 185  # Avalanche, Revenge (Expert_MetalBurst, script.s:5049)
+    PRIORITY_NEG_1_BYPASS_ACCURACY = 78  # Vital Throw (Expert_MetalBurst, script.s:5051)
     SET_SUBSTITUTE = 79  # Substitute
     STATUS_POISON = 66  # Poison Powder (Expert_Substitute's last-move table, script.s:3019)
 
@@ -755,6 +776,11 @@ ABILITY_IDS = {
     "Flower Gift": 122,
     # Basic_CheckCanForceSwitch (script.s:506).
     "Suction Cups": 21,
+    # Basic_CheckMetalBurst (script.s:1168, :1175), Basic_CheckCanRemoveItem (:901),
+    # Basic_CheckLowStatStage_Accuracy (:458).
+    "Stall": 100,
+    "Sticky Hold": 60,
+    "Keen Eye": 51,
     "Solar Power": 94,
     # Expert_RecoilMove (script.s:6297-6298; Magic Guard above).
     "Rock Head": 69,
@@ -1364,6 +1390,38 @@ def load_effect_of_loaded_move(ctx: AiContext) -> AiContext:
     """``LoadEffectOfLoadedMove`` (trainer_ai.c): ``calcTemp = MOVE_DATA(calcTemp).effect``
     (``Tables.move_ai_effect``)."""
     return ctx._replace(calc_temp=ctx.tables.move_ai_effect[ctx.calc_temp].astype(_I32))
+
+
+ITEM_SHINY_STONE = 107  # Basic_CheckMetalBurst (script.s:1169, :1176; generated/items.txt)
+
+
+def _held_item(ctx: AiContext, battler: Battler) -> jnp.ndarray:
+    """The battler's held item as the AI sees it for ``IfHeldItemEqualTo`` (trainer_ai.c:
+    1915-1934): its own side's true ``heldItem``; the other side's
+    ``aiContext.battlerHeldItems`` (``BattleState.ai_item_known`` of the active slot, the
+    item a message named, 0 none)."""
+    state, side = ctx.state, _side(battler)
+    if side == _side(Battler.ATTACKER):
+        return state.item[side, state.active[side]].astype(_I32)
+    return state.ai_item_known[state.active[side]].astype(_I32)
+
+
+def if_held_item_equal_to(ctx: AiContext, battler: Battler, item: int) -> AiContext:
+    """``IfHeldItemEqualTo`` (trainer_ai.c:1915-1934): ``_held_item == item``."""
+    return _jump(ctx, _held_item(ctx, battler) == item)
+
+
+def load_held_item(ctx: AiContext, battler: Battler) -> AiContext:
+    """``LoadHeldItem`` (trainer_ai.c): ``battleMons[battler].heldItem``, the true item of
+    either side (unlike ``IfHeldItemEqualTo``)."""
+    state, side = ctx.state, _side(battler)
+    return ctx._replace(calc_temp=state.item[side, state.active[side]].astype(_I32))
+
+
+def if_not_move_effect(ctx: AiContext, battler: Battler, mask: int) -> AiContext:
+    """``IfNotMoveEffect`` (trainer_ai.c): the negation of ``IfMoveEffect``."""
+    ctx = if_move_effect(ctx, battler, mask)
+    return ctx._replace(jump=~ctx.jump)
 
 
 def if_loaded_greater_than(ctx: AiContext, value: int) -> AiContext:

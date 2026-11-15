@@ -301,6 +301,33 @@ SITE_N: dict[int, int] = {
     3038: 100,  # Expert_Substitute_TryScorePlus1
     1897: 51,  # Expert_DreamEater_TryScorePlus3
     6281: 64,  # Expert_StealthRock_TryScorePlus1: with Roar or Whirlwind (since batch 17)
+    # E1 prep batch P1 (on E2's state)
+    6405: 170,  # EvalAttack_TryScorePlus4: Future Sight's kill bonus
+    5053: 10,  # Expert_MetalBurst, 30 % HP or less
+    5058: 100,
+    5062: 192,
+    5070: 100,
+    5075: 100,
+    2453: 100,  # Expert_StatusAccuracyDown
+    2458: 80,
+    2463: 70,
+    2468: 70,
+    2473: 128,
+    2479: 128,
+    2484: 70,
+    2492: 70,
+    2204: 100,  # Expert_StatusEvasionUp
+    2209: 128,
+    2215: 80,
+    2218: 50,
+    2223: 70,
+    2228: 128,
+    2234: 128,
+    2240: 70,
+    2248: 70,
+    2821: 128,  # Expert_BindingMove
+    4577: 180,  # Expert_KnockOff
+    4638: 100,  # Expert_Imprison
 }
 SITE_LINES = tuple(SITE_N)
 # The flat (vanilla) layout's column of script_roll_sites that each line reads: column 0 is
@@ -473,6 +500,15 @@ KAIZO_TRANSCRIBED: frozenset[int] = frozenset(
         # Roost: Recover's labels. turnFlags.roosting is cleared before command selection
         # (BattleSystem_SetupNextTurn, battle_lib.c:2229-2231), so scoring never sees it set.
         214,  # HEAL_HALF_REMOVE_FLYING_TYPE: Basic_CheckCanRecoverHP (:253); Expert_Recovery
+        # E1 prep batch P1, on E2's state (ingrain, mean_look, imprison/ed, ai_item_known,
+        # future_sight; docs/ai/kaizo_roark.md 5.21)
+        23,  # ACC_DOWN: Basic_CheckLowStatStage_Accuracy (:149); Expert_StatusAccuracyDown
+        106,  # PREVENT_ESCAPE: Basic_CheckMeanLook (:193); Expert_BindingMove (:1698)
+        108,  # EVA_UP_2_MINIMIZE: Basic_CheckHighStatStage_Evasion (:195); Expert_StatusEvasionUp
+        148,  # HIT_IN_3_TURNS: Basic_CheckFutureSight (:220); EvalAttack :6396 kill bonus
+        188,  # REMOVE_HELD_ITEM: Basic_CheckCanRemoveItem (:240); Expert_KnockOff (:1740)
+        192,  # MAKE_SHARED_MOVES_UNUSEABLE: Basic_CheckCanImprison (:242); Expert_Imprison
+        227,  # METAL_BURST: Basic_CheckMetalBurst (:261); Expert_MetalBurst (:1770)
     }
 )
 # The transcribed effects (KAIZO_TRANSCRIBED) whose Expert_Main entry goes to a label added
@@ -562,6 +598,12 @@ KAIZO_EXPERT_LABELS: dict[int, tuple[str, int]] = {
     28: ("Expert_ForceSwitch", 1650),
     79: ("Expert_Substitute", 1684),
     214: ("Expert_Recovery", 1758),
+    23: ("Expert_StatusAccuracyDown", 1646),
+    106: ("Expert_BindingMove", 1698),
+    108: ("Expert_StatusEvasionUp", 1699),
+    188: ("Expert_KnockOff", 1740),
+    192: ("Expert_Imprison", 1744),
+    227: ("Expert_MetalBurst", 1770),
 }
 # Of KAIZO_EXPERT_LABELS, the effects whose Expert label policy._expert transcribes
 # (layout.KAIZO expert_transcribed), written out: it is not derived from the table, so an
@@ -639,6 +681,12 @@ KAIZO_EXPERT_TRANSCRIBED: frozenset[int] = frozenset(
         28,  # FORCE_SWITCH: Expert_ForceSwitch
         79,  # SET_SUBSTITUTE: Expert_Substitute
         214,  # HEAL_HALF_REMOVE_FLYING_TYPE: Expert_Recovery
+        23,  # ACC_DOWN: Expert_StatusAccuracyDown
+        106,  # PREVENT_ESCAPE: Expert_BindingMove
+        108,  # EVA_UP_2_MINIMIZE: Expert_StatusEvasionUp
+        188,  # REMOVE_HELD_ITEM: Expert_KnockOff
+        192,  # MAKE_SHARED_MOVES_UNUSEABLE: Expert_Imprison
+        227,  # METAL_BURST: Expert_MetalBurst
     }
 )
 assert set(KAIZO_EXPERT_LABELS) <= KAIZO_TRANSCRIBED

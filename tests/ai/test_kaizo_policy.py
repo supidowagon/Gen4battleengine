@@ -3321,3 +3321,194 @@ def test_roost_scores_as_recover(kaizo_tables, kaizo_names, kaizo_roark_party, o
         return _delta(t, s, 0x2, 0x3)[0], _delta(t, s, 0x3, 0x7)[0]
 
     assert scored("Roost") == scored("Recover")
+
+
+# --- E1 prep batch P1 (on E2's state): Metal Burst, Future Sight, ACC_DOWN, Minimize, -------
+# --- Mean Look, Knock Off, Imprison --------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("case", "basic"),
+    [
+        # Basic_CheckMetalBurst (script.s:1160-1182), Kaizo Metal Burst (Steel)
+        ("faster", -10),  # the AI faster: -10 (:1179)
+        ("slower", 0),
+        ("shiny player", -10),  # the player known to hold a Shiny Stone (:1169)
+        ("shiny self", 0),  # the AI holds one: straight to _Terminate (:1176)
+    ],
+)
+def test_basic_metal_burst(kaizo_tables, kaizo_names, kaizo_roark_party, case, basic):
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Metal Burst", "Accelerock", "", ""))
+    s = _speeds(s, player=500 if case == "slower" else 1, opp=100)
+    if case == "shiny player":
+        s = s._replace(ai_item_known=s.ai_item_known.at[0].set(c.ITEM_SHINY_STONE))
+    elif case == "shiny self":
+        s = s._replace(item=s.item.at[1, 0].set(c.ITEM_SHINY_STONE))
+    assert _delta(t, s, 0x2, 0x3)[0] == basic
+
+
+@pytest.mark.parametrize(
+    ("own", "asleep", "jumps", "expected"),
+    [
+        # Expert_MetalBurst (script.s:5029-5083), no last move by the player
+        (100, False, (), 1),  # +1 unless the 192 roll (:5062) jumps; then not taunted: end
+        (100, False, (5062,), 0),
+        (20, False, (), -1),  # -1 (:5053), -1 (:5058), +1 (:5062)
+        (100, True, (), -1),  # the player asleep: -1
+    ],
+)
+def test_expert_metal_burst(
+    kaizo_tables, kaizo_names, kaizo_roark_party, own, asleep, jumps, expected
+):
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Metal Burst", "Accelerock", "", ""))
+    s = _hp(s, 1, own)
+    if asleep:
+        s = s._replace(status=s.status.at[0, 0].set(Status.SLEEP))
+    assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expected
+
+
+@pytest.mark.parametrize(("side", "basic"), [(None, 0), (0, -12), (1, -12)])
+def test_basic_future_sight(kaizo_tables, kaizo_names, kaizo_roark_party, side, basic):
+    """Basic_CheckFutureSight (script.s:823-827): Future Sight pending on either side, -12."""
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Future Sight", "Accelerock", "", ""))
+    if side is not None:
+        s = s._replace(future_sight=s.future_sight.at[side].set(1))
+    assert _delta(t, s, 0x2, 0x3)[0] == basic
+
+
+@pytest.mark.parametrize(("jumps", "expected"), [((), 4), ((6405,), 0)])
+def test_eval_attack_future_sight_kill(
+    kaizo_tables, kaizo_names, kaizo_roark_party, jumps, expected
+):
+    """EvalAttack_ApplyKillBonuses (script.s:6396 -> :6403): a killing Future Sight takes
+    +4 unless the 170 roll (:6405) jumps."""
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Future Sight", "Accelerock", "", ""))
+    s = _hp(s, 0, 1)
+    assert _delta(t, s, 0x1, 0x3, tuple((0, line) for line in jumps))[0] == expected
+
+
+@pytest.mark.parametrize(
+    ("case", "basic", "expert"),
+    [
+        # Basic_CheckLowStatStage_Accuracy (script.s:453-460) / Expert_StatusAccuracyDown
+        # (:2431-2498), Sand-Attack against Gible
+        ("plain", 0, 0),  # both at full HP: to the HP ranges, above 70 %: end
+        ("floored", -10, 0),  # the player's accuracy at -6
+        ("ingrain", 0, 1),  # the AI ingrained: +1 unless :2473 jumps
+        ("cursed", 0, 2),  # the player cursed: +2 unless :2484 jumps
+        ("hurt", 0, -1),  # the AI at 50 %: -1 (:2453), then its range ends (player acc +0)
+    ],
+)
+def test_accuracy_down(kaizo_tables, kaizo_names, kaizo_roark_party, case, basic, expert):
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Sand-Attack", "Accelerock", "", ""))
+    if case == "floored":
+        s = s._replace(stages=s.stages.at[0, Stat.ACC].set(-6))
+    elif case == "ingrain":
+        s = s._replace(ingrain=s.ingrain.at[1].set(1))
+    elif case == "cursed":
+        s = s._replace(curse=s.curse.at[0].set(1))
+    elif case == "hurt":
+        s = _hp(s, 1, 50)
+    assert _delta(t, s, 0x2, 0x3)[0] == basic
+    assert _delta(t, s, 0x3, 0x7)[0] == expert
+
+
+@pytest.mark.parametrize(
+    ("evasion", "jumps", "basic", "expert"),
+    [
+        # Basic_CheckHighStatStage_Evasion (script.s:407-418) / Expert_StatusEvasionUp
+        # (:2184-2253): at full HP +3 unless :2204 jumps, then the HP ranges end it
+        (0, (), 0, 3),
+        (0, (2204,), 0, 0),
+        (6, (), -10, 2),  # +6: Basic -10; Expert +3, then -1 unless :2209 jumps
+    ],
+)
+def test_minimize(kaizo_tables, kaizo_names, kaizo_roark_party, evasion, jumps, basic, expert):
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Minimize", "Accelerock", "", ""))
+    s = s._replace(stages=s.stages.at[1, Stat.EVA].set(evasion))
+    assert _delta(t, s, 0x2, 0x3)[0] == basic
+    assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expert
+
+
+@pytest.mark.parametrize(
+    ("case", "jumps", "basic", "expert"),
+    [
+        # Basic_CheckMeanLook (script.s:674-677) / Expert_BindingMove (:2808-2825)
+        ("plain", (), 0, 0),
+        ("trapped", (), -10, 0),
+        ("toxic", (), 0, 1),  # the player badly poisoned: +1 unless :2821 jumps
+        ("toxic", (2821,), 0, 0),
+    ],
+)
+def test_mean_look(kaizo_tables, kaizo_names, kaizo_roark_party, case, jumps, basic, expert):
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Mean Look", "Accelerock", "", ""))
+    if case == "trapped":
+        s = s._replace(mean_look=s.mean_look.at[0].set(1))
+    elif case == "toxic":
+        s = s._replace(status=s.status.at[0, 0].set(Status.TOXIC))
+    assert _delta(t, s, 0x2, 0x3)[0] == basic
+    assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expert
+
+
+@pytest.mark.parametrize(
+    ("case", "jumps", "basic", "expert"),
+    [
+        # Basic_CheckCanRemoveItem (script.s:898-904) / Expert_KnockOff (:4571-4581)
+        ("first turn", (), 0, 0),  # its first turn ends the Expert label
+        ("later", (), 0, 1),  # +1 unless :4577 jumps
+        ("later", (4577,), 0, 0),
+        ("later no item", (), -10, 1),  # the player holds nothing (its true item)
+    ],
+)
+def test_knock_off(kaizo_tables, kaizo_names, kaizo_roark_party, case, jumps, basic, expert):
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Knock Off", "Accelerock", "", ""))
+    if case.startswith("later"):
+        s = _turn(s, 3)
+    if case.endswith("no item"):
+        s = s._replace(item=s.item.at[0, 0].set(0))
+    else:
+        s = s._replace(item=s.item.at[0, 0].set(c.ITEM_SHINY_STONE))
+    assert _delta(t, s, 0x2, 0x3)[0] == basic
+    assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expert
+
+
+@pytest.mark.parametrize(
+    ("case", "basic", "expert"),
+    [
+        # Basic_CheckCanImprison (script.s:917-921) / Expert_Imprison (:4634-4642)
+        ("later", 0, 2),  # not its first turn: +2 unless :4638 jumps
+        ("imprisoning", -10, 2),
+        ("imprisoned", -10, 2),
+    ],
+)
+def test_imprison(kaizo_tables, kaizo_names, kaizo_roark_party, case, basic, expert):
+    t, n = kaizo_tables, kaizo_names
+    s = _turn(_state(t, kaizo_roark_party, BONSLY, _ids(n, "Imprison", "Accelerock", "", "")), 3)
+    if case == "imprisoning":
+        s = s._replace(imprison=s.imprison.at[1].set(1))
+    elif case == "imprisoned":
+        s = s._replace(imprisoned=s.imprisoned.at[0].set(1))
+    assert _delta(t, s, 0x2, 0x3)[0] == basic
+    assert _delta(t, s, 0x3, 0x7)[0] == expert
+
+
+@pytest.mark.parametrize("flags", SWEEP_FLAGS)
+def test_p1_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, flags):
+    t, n = kaizo_tables, kaizo_names
+    s = _state(
+        t, kaizo_roark_party, BONSLY, _ids(n, "Metal Burst", "Sand-Attack", "Minimize", "Knock Off")
+    )
+    for own, turn in ((100, 0), (40, 3)):
+        s2 = _turn(_hp(s, 1, own), turn)
+        s2 = s2._replace(ingrain=s2.ingrain.at[1].set(1))
+        layout = layout_for(t, flags, s2)
+        assert policy.ai_refusals(t, s2, n, layout) == []
+        _assert_exact_equals_loose(t, s2, layout)
