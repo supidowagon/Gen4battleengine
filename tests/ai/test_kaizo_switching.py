@@ -131,7 +131,7 @@ def test_six_bench_layout_fits(kaizo_tables, kaizo_names, kaizo_roark_party):
         assert int(type_chart_flags(t, m, s.types[0, 0], 0)) & SUPER_EFFECTIVE
         assert int(calc_effectiveness_flags(t, m, s.types[0, 0], 0)) & SUPER_EFFECTIVE
 
-    assert layout_of(t) is KAIZO
+    assert layout_of(t) == KAIZO
     assert switching_refusals(t, s, KAIZO.switch_sites) == []
     sites = switch_sites(t, s, KAIZO.switch_sites).tolist()
     assert sites == [K.KEEP] * 4 + [K.PASS_INEFFECTIVE] * 20 + [K.PASS_NOT_VERY_EFFECTIVE] * 20

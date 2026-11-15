@@ -58,6 +58,15 @@ DECOMP = Path(__file__).resolve().parents[2] / "external/pokeplatinum"
 # moves.json), checked by test_roark_moves_and_effects.
 BONSLY, LILEEP, GIBLE, CORSOLA, SHUCKLE, CRANIDOS = range(6)
 
+# The flag sets of the batches' exact-equals-loose sweeps. The fast tier runs their union
+# (0x11F: BASIC, EVAL_ATTACK, EXPERT, SETUP_FIRST_TURN, RISKY, CHECK_HP), which traces every
+# label either set does; each set alone, the per-set read bound and order, runs in the slow
+# tier (owed test work after K3c/E1: one compile instead of two per sweep).
+SWEEP_FLAGS = [
+    pytest.param(0x17, marks=pytest.mark.slow),
+    pytest.param(0x10F, marks=pytest.mark.slow),
+    0x11F,
+]
 STEALTH_ROCK, SELFDESTRUCT, BRICK_BREAK, ACCELEROCK = 446, 120, 280, 205
 SLUDGE_BOMB, GIGA_DRAIN, ANCIENTPOWER, RECOVER = 188, 202, 246, 105
 DRAGONBREATH, FLAMETHROWER, THUNDER_FANG, EARTH_POWER = 225, 53, 422, 414
@@ -1659,7 +1668,7 @@ def test_status_defense_up(kaizo_tables, kaizo_names, kaizo_roark_party, hp, las
     assert got == [expected, 0, 0, 0]
 
 
-@pytest.mark.parametrize("flags", [0x17, 0x10F])
+@pytest.mark.parametrize("flags", SWEEP_FLAGS)
 def test_stat_raises_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, flags):
     """Exact == loose for the batch 4 raises, the first Kaizo move of each effect (ATK_UP,
     DEF_UP, SP_ATK_UP, ATK_UP_2; DEF_UP_2, SP_ATK_UP_2, SP_DEF_UP_2), at several stages and
@@ -1838,7 +1847,7 @@ def test_swagger_with_psych_up(kaizo_tables, kaizo_names, kaizo_roark_party, atk
     assert _delta(t, s, 0x3, 0x7)[0] == expected
 
 
-@pytest.mark.parametrize("flags", [0x17, 0x10F])
+@pytest.mark.parametrize("flags", SWEEP_FLAGS)
 def test_status_moves_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, flags):
     """Exact == loose for the batch 6 status moves, against a guessed Gible and Tentacool, at
     two HP levels, the player confused or not."""
@@ -1965,7 +1974,7 @@ def test_brine_resisted(kaizo_tables, kaizo_names, kaizo_roark_party):
     assert _delta(t, s, 0x3, 0x7)[0] == -1
 
 
-@pytest.mark.parametrize("flags", [0x17, 0x10F])
+@pytest.mark.parametrize("flags", SWEEP_FLAGS)
 def test_expert_only_hits_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, flags):
     """Exact == loose for one Kaizo move of each batch 7 effect, against a guessed Gible and
     Tentacool, at full and low HP, with the player's evasion up."""
@@ -2273,7 +2282,7 @@ def test_expert_destiny_bond(
     assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expected
 
 
-@pytest.mark.parametrize("flags", [0x17, 0x10F])
+@pytest.mark.parametrize("flags", SWEEP_FLAGS)
 def test_batch9_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, flags):
     """Exact == loose for the batch 9 moves, against a guessed Gible and Tentacool, at two HP
     levels, the player's side with a Spikes layer."""
@@ -2439,7 +2448,7 @@ def test_expert_reflect(kaizo_tables, kaizo_names, kaizo_roark_party, hp, last, 
     assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expected
 
 
-@pytest.mark.parametrize("flags", [0x17, 0x10F])
+@pytest.mark.parametrize("flags", SWEEP_FLAGS)
 def test_batch10_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, flags):
     """Exact == loose for the batch 10 effects, against a guessed Gible and Tentacool, at two
     HP levels, the player's Attack down one stage."""
@@ -2568,7 +2577,7 @@ def test_expert_payback(
     assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expected
 
 
-@pytest.mark.parametrize("flags", [0x17, 0x10F])
+@pytest.mark.parametrize("flags", SWEEP_FLAGS)
 @pytest.mark.parametrize("speeds", [(100, 100), (500, 100), (1, 100)])
 def test_speed_faster_exact_equals_loose(
     kaizo_tables, kaizo_names, kaizo_roark_party, flags, speeds
@@ -2766,7 +2775,7 @@ def test_weather_moves(
     assert _delta(t, s, 0x3, 0x7)[0] == expert
 
 
-@pytest.mark.parametrize("flags", [0x17, 0x10F])
+@pytest.mark.parametrize("flags", SWEEP_FLAGS)
 def test_batch12_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, flags):
     """Exact == loose on a fight of batch 12's rolling labels (Counter, Mirror Coat, Pluck,
     Reversal), at equal speed and not, with the player's last move physical, special or
@@ -2828,7 +2837,7 @@ def test_expert_protect(kaizo_tables, kaizo_names, kaizo_roark_party, case, jump
     assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expected
 
 
-@pytest.mark.parametrize("flags", [0x17, 0x10F])
+@pytest.mark.parametrize("flags", SWEEP_FLAGS)
 def test_protect_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, flags):
     """Exact == loose for Protect with no chain, a chain of 1, and the player badly
     poisoned."""
@@ -2875,7 +2884,7 @@ def test_basic_alt_power_effects(
     assert _delta(t, s, 0x2, 0x3)[0] == expected
 
 
-@pytest.mark.parametrize("flags", [0x17, 0x10F])
+@pytest.mark.parametrize("flags", SWEEP_FLAGS)
 def test_batch14_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, flags):
     """Exact == loose on a fight of the batch 14 effects, whose damage the AI estimates
     through TrainerAI_CalcDamage's cases (engine.damage.ai_case_power / ai_case_fixed) or its
@@ -2996,7 +3005,7 @@ def test_party_member_deals_more_damage_as_the_active(kaizo_tables, kaizo_names,
     assert not bool(c.if_has_super_effective_move(ctx).jump)  # U-turn neutral, Accelerock resisted
 
 
-@pytest.mark.parametrize("flags", [0x17, 0x10F])
+@pytest.mark.parametrize("flags", SWEEP_FLAGS)
 def test_u_turn_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, flags):
     """Exact == loose for U-turn at equal speed (its FASTER tie) and not, against a Grass
     player (super effective: the :5114 roll) and Gible."""
@@ -3168,7 +3177,7 @@ def test_expert_blizzard(
     assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expected
 
 
-@pytest.mark.parametrize("flags", [0x17, 0x10F])
+@pytest.mark.parametrize("flags", SWEEP_FLAGS)
 def test_batch16_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, flags):
     t, n = kaizo_tables, kaizo_names
     s = _state(
@@ -3282,7 +3291,7 @@ def test_dream_eater(kaizo_tables, kaizo_names, kaizo_roark_party, asleep, jumps
     assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expert
 
 
-@pytest.mark.parametrize("flags", [0x17, 0x10F])
+@pytest.mark.parametrize("flags", SWEEP_FLAGS)
 def test_batch17_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, flags):
     t, n = kaizo_tables, kaizo_names
     s = _state(
