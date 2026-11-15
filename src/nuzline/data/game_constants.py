@@ -142,23 +142,17 @@ _AI_MOVE_IDS = {
     "Shadow Force": 467,
     **{k: v for k, v in _SOUND_MOVES.items() if k != "Roar"},
 }
-# ai/commands.py CALC_DAMAGE_MOVES: TrainerAI_CalcDamage's id cases (trainer_ai.c:2885-3056;
-# MOVE_* of generated/moves.txt, line N is id N-1).
+# ai/commands.py CALC_DAMAGE_MOVES: TrainerAI_CalcDamage's id cases the AI damage does not
+# model, refused (trainer_ai.c:2885-3071; MOVE_* of generated/moves.txt, line N is id N-1).
+# Return, Frustration, Low Kick, Grass Knot, Dragon Rage, SonicBoom, Seismic Toss and Night
+# Shade are modelled since E1 batch 13 (engine.damage.ai_case_power, ai_case_fixed).
 _CALC_DAMAGE_MOVES = {
     "Natural Gift": 363,
     "Judgment": 449,
     "Hidden Power": 237,
     "Gyro Ball": 360,
-    "Dragon Rage": 82,
-    "Seismic Toss": 69,
-    "Night Shade": 101,
     "Psywave": 149,
-    "Return": 216,
-    "Frustration": 218,
     "Magnitude": 222,
-    "SonicBoom": 49,
-    "Low Kick": 67,
-    "Grass Knot": 447,
 }
 # ai/commands.py MOVE_TYPE_MOVES: TrainerAI_MoveType's id cases (trainer_ai.c:3132-3222).
 _MOVE_TYPE_MOVES = {"Natural Gift": 363, "Judgment": 449, "Hidden Power": 237, "Weather Ball": 311}
