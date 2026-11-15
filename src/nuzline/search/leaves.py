@@ -40,7 +40,6 @@ from jax.sharding import Mesh, NamedSharding, PartitionSpec
 import nuzline.search.stage_a  # noqa: F401 - registers Tables/BattleState/PlayoutResult
 from nuzline.ai.layout import AiLayout, layout_of
 from nuzline.data.tables import Tables
-from nuzline.engine.outcome import sample_outcome
 from nuzline.engine.state import BattleState
 from nuzline.jaxcache import cached_export, code_version
 from nuzline.search import deaths
@@ -51,7 +50,7 @@ from nuzline.search.playout import (
     playout,
     root_state,
     step_through,
-    turn_inputs,
+    turn_muls,
 )
 
 __all__ = [
@@ -181,13 +180,13 @@ def _forced_turn(tables: Tables, state: BattleState, pair, key):
     turn's draws come from the second split of ``k_turn``. Returns the state after
     ``finish_turn`` (opponent's and the player's replacements), whether that was refused, and the key for the rest."""
     key, _, k_turn = jax.random.split(key, 3)
-    actions, pick_refused, power_mul, ai_switched = turn_inputs(tables, state, pair)
-    outcome = sample_outcome(jax.random.split(k_turn)[1], tables, state, actions)
+    actions = pair.astype(_I32)
+    power_mul, ai_switched = turn_muls(tables, state, actions)
     stepped, paused_refused = step_through(
-        tables, state, actions, outcome, jax.random.fold_in(k_turn, 1)
+        tables, state, actions, jax.random.split(k_turn)[1], jax.random.fold_in(k_turn, 1)
     )
     after, refused = finish_turn(tables, stepped, ai_switched, power_mul)
-    return after, refused | paused_refused | pick_refused, key
+    return after, refused | paused_refused, key
 
 
 def _forced_one(

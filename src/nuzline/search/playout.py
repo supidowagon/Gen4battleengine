@@ -390,29 +390,38 @@ def pivot_pick(tables: Tables, state: BattleState) -> tuple[jnp.ndarray, jnp.nda
     return actions, (state.pivot_battler == 2) & (opp < 0)
 
 
-def turn_inputs(tables: Tables, state: BattleState, actions):
-    """``(actions, refused, power_mul, ai_switched)`` of a turn from ``state``: as given, with
-    ``replacement_power_mul`` and the opponent's switch; at a pause (E2 batch 6) the opponent's
-    own list pick replaces its action (``pivot_pick``, ``refused`` when the AI refuses it) and the
-    powerMul and AI switch are the turn start's (``ts_power_mul``, ``ts_ai_switched``): the
-    resume's actions are switch-shaped. The one source for playouts, the forced turns of
-    ``leaves`` and ``expand``."""
+def turn_muls(tables: Tables, state: BattleState, actions) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """``(power_mul, ai_switched)`` of a turn from ``state``: ``replacement_power_mul`` and the
+    opponent's switch; at a pause (E2 batch 6) the turn start's (``ts_power_mul``,
+    ``ts_ai_switched``): the resume's actions are switch-shaped."""
     actions = jnp.asarray(actions, _I32)
     paused = state.pivot_battler != 0
-    picked, bad = pivot_pick(tables, state)
-    opp_list = state.pivot_battler == 2
-    actions = jnp.where(opp_list, picked, actions)
     power_mul = jnp.where(
         paused, state.ts_power_mul.astype(_I32), replacement_power_mul(tables, state, actions)
     )
     ai_switched = jnp.where(paused, state.ts_ai_switched != 0, is_switch(actions[1]))
+    return power_mul, ai_switched
+
+
+def turn_inputs(tables: Tables, state: BattleState, actions):
+    """``(actions, refused, power_mul, ai_switched)`` of a turn from ``state`` (``expand``'s row
+    program): ``turn_muls``, and at the opponent's own list its pick replaces its action
+    (``pivot_pick``, ``refused`` when the AI refuses it)."""
+    actions = jnp.asarray(actions, _I32)
+    picked, bad = pivot_pick(tables, state)
+    opp_list = state.pivot_battler == 2
+    actions = jnp.where(opp_list, picked, actions)
+    power_mul, ai_switched = turn_muls(tables, state, actions)
     return actions, opp_list & bad, power_mul, ai_switched
 
 
-def step_through(tables: Tables, state: BattleState, actions, outcome, key):
-    """``(state, refused)``: ``step``, then while it pauses at a party list (at most twice a
-    turn) ``pivot_pick``'s pick and ``step`` again on a fresh ``sample_outcome`` of the paused
-    state (each half reads its own draws; ``key`` gives them). One ``step`` in the program."""
+def step_through(tables: Tables, state: BattleState, actions, first_key, key, pick=-1):
+    """``(state, refused)``: the turn from ``state`` to its end. Each pass of one loop makes the
+    pick when the state is paused at a party list (``pivot_pick``; at the first pass ``pick``, a
+    switch action, overrides the player's own), draws ``sample_outcome`` (``first_key`` at the
+    first pass, then from ``key``: each half reads its own draws) and plays ``step``; it loops
+    while ``step`` pauses (at most twice a turn). One ``step``, one ``sample_outcome`` and one
+    ``pivot_pick`` in the program. ``refused``: the AI refused its pick."""
 
     def cond(carry):
         s, _, _, refused, n = carry
@@ -420,13 +429,15 @@ def step_through(tables: Tables, state: BattleState, actions, outcome, key):
 
     def body(carry):
         s, a, k, refused, n = carry
+        paused = s.pivot_battler != 0
+        picked, bad = pivot_pick(tables, s)
+        mine = (s.pivot_battler == 1) & (n == 0) & (pick >= MOVE_ACTIONS)
+        picked = jnp.where(mine, picked.at[0].set(pick), picked)
+        a = jnp.where(paused, picked, a)
         k, k_half = jax.random.split(k)
-        fresh = sample_outcome(k_half, tables, s, a)
-        o = jax.tree.map(lambda x, y: jnp.where(n == 0, x, y), outcome, fresh)
-        played = step(tables, s, a, o)
-        nxt, bad = pivot_pick(tables, played)
-        bad = bad & (played.pivot_battler != 0)
-        return played, nxt, k, refused | bad, n + 1
+        k_half = jnp.where(n == 0, first_key, k_half)
+        played = step(tables, s, a, sample_outcome(k_half, tables, s, a))
+        return played, a, k, refused | (paused & bad), n + 1
 
     init = (state, jnp.asarray(actions, _I32), key, jnp.bool_(False), jnp.int32(0))
     state, _, _, refused, _ = jax.lax.while_loop(cond, body, init)
@@ -440,21 +451,16 @@ def _play(
     ``(state after step, ai_refused, ai_switched, power_mul)``. A pause at a party list is
     resumed in the turn (``step_through``). From a paused state (a playout's root) the turn is
     its resume: ``pick`` (a switch action) is the player's pick at its own list, else
-    ``pivot_pick``'s; the AI picks no action."""
+    ``pivot_pick``'s; the AI's action is not used."""
     k_ai, k_turn = jax.random.split(key)
     ai_outcome = sample_ai_outcome(k_ai, tables, state, layout)
     opp_action = ai_policy(tables, state, ai_outcome, layout)
     paused = state.pivot_battler != 0
     ai_refused = (opp_action < 0) & ~paused  # switching.REFUSED_ACTION
     actions = jnp.stack([player_action, jnp.maximum(opp_action, 0)]).astype(_I32)
-    picked, _ = pivot_pick(tables, state)
-    mine = jnp.where(pick >= MOVE_ACTIONS, picked.at[0].set(pick), picked)
-    actions = jnp.where(paused, mine, actions)
-    actions, pick_refused, power_mul, ai_switched = turn_inputs(tables, state, actions)
-    ai_refused = ai_refused | pick_refused
-    outcome = sample_outcome(k_turn, tables, state, actions)
+    power_mul, ai_switched = turn_muls(tables, state, actions)
     played, pick_refused = step_through(
-        tables, state, actions, outcome, jax.random.fold_in(k_turn, 1)
+        tables, state, actions, k_turn, jax.random.fold_in(k_turn, 1), pick
     )
     return played, ai_refused | pick_refused, ai_switched, power_mul
 

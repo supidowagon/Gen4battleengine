@@ -153,6 +153,21 @@ Reuse the faint-replacement decision but not its transition; the search reads `p
     one program per fight.
   - (b) `lax.switch` on the effect id. Cuts compile, but under `vmap` every branch is still
     evaluated at run time.
+- **The pivot paths (E2 batch 6), measured trace-only on a synthetic 2v2 state
+  (`_scratch/e2/b6/prog_count.py`), ffcdc54 -> after the batch:** `step` 73,169 -> 80,110 jaxpr
+  equations, one playout 236,143 -> 262,065 (+11%), `leaves._forced_turn` 127,788 -> 152,679
+  (+19%), with only `playout.step_through`'s loop picking and drawing (one `step`, one
+  `sample_outcome`, one `pivot_pick` per program; before, 310,620 / 183,980); the rest is `step`'s
+  own growth and the loop's `pivot_pick` (`post_ko_switch_in`, `replacement_policy`, also traced
+  by `finish_turn`'s replacements: one loop for both pick points would trace them once). Chance-node width unchanged (4,616 rows over the
+  Roark start pairs at full and 10 HP, both trees). Option, parked (manager 2026-11-15): a static
+  per-fight flag that traces the pause paths only when set. Its condition: the set that turns the
+  paths on must be provable from the fight's setup: either party's moves and learnable moves, plus
+  every move that can call or copy another (Metronome, Sleep Talk, Copycat, Mirror Move, Me First,
+  Assist, Mimic, Sketch, Transform); it covers every party member on both sides plus the player's
+  learnable moves, and keys on `move_effect in {U_TURN, BATON_PASS}`, not on move names (Kaizo
+  remaps moves); a pivot move reached while the flag is off must fail loudly, never silently do
+  nothing. The batch 6 review confirmed the bound sound given the current refusals.
 
 ## Owed
 
@@ -206,16 +221,9 @@ Rules left out because another mechanic is missing; each closes with the mechani
   `ts_pick_mul`, `playout.turn_inputs`). After a switch the newcomer's `last_move` is the paused
   move's moveTemp (UpdateMoveBuffers, bcp.c:3944), which the next turn's
   `TrainerAI_RecordLastMove` reads.
-- Program size after batch 6 (trace-only, a synthetic 2v2 state; `_scratch/e2/b6/prog_count.py`):
-  `step` 73,169 -> 80,110 jaxpr equations, one playout 236,143 -> 310,620 (+32%), `leaves._forced_turn`
-  127,788 -> 183,980 (+44%): `playout.step_through` traces `step`'s pause loop with a second
-  `sample_outcome` and `pivot_pick` (`post_ko_switch_in`, `replacement_policy`) in it. Chance-node
-  width unchanged (4,616 rows over the Roark start pairs at full and 10 HP, both trees). Peak memory
-  of one node, `test_leaves.py::test_wins_count_successes`: 7.4 GB at ffcdc54, over 7.9 GB at the
-  tip (stopped at the cap). Proposed bound, awaiting the coordinator: a static per-fight flag (a
-  U-turn, Baton Pass or Metronome among both parties' moves and learnable moves) that traces the
-  pause paths only when set, and the turn's first `sample_outcome` folded into `step_through`'s
-  loop (one trace).
+- Owed test restructuring: `tests/search/test_leaves.py`. One node, `test_wins_count_successes`,
+  peaked at 7.4 GB at ffcdc54 (before batch 6); the file goes past 8 GB at the tip (the standing
+  per-file cap is 8 GB).
 - Tests: `tests/search/exhaustive.py` (the reference solver) plays no pause; its endgames have no
   U-turn or Baton Pass.
 - Rest and Yawn (unsupported moves) read `FIELD_CONDITION_UPROAR` too (subscript_rest.s,
