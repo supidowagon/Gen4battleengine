@@ -23,13 +23,19 @@ from tests.strategies import any_outcome, legal_action_pair, supported_state
 jit_step = jax.jit(step)
 
 NEW_FIELDS = ("deaths", "faint_budget", "protected", "replace_mul")
+# Fields added after them (E2 batch 6: the turn scratch, 0 between turns, docs/kaizo/
+# e2-mechanics-ledger.md "Batch 6 design"): all 0 in a fresh state too.
+LATER_FIELDS = tuple(BattleState._fields[BattleState._fields.index("replace_mul") + 1 :])
 
 
 def test_new_fields_default_to_zero(tables, names):
     s = roark_state(tables, names)
-    for name in NEW_FIELDS:
+    assert LATER_FIELDS and BattleState._fields[-len(LATER_FIELDS) :] == LATER_FIELDS
+    for name in NEW_FIELDS + LATER_FIELDS:
         assert not np.any(np.asarray(getattr(s, name))), name
-    assert BattleState._fields[-4:] == NEW_FIELDS
+    start = BattleState._fields.index("deaths")
+    assert BattleState._fields[start : start + 4] == NEW_FIELDS
+    assert all(name == "pivot_battler" or name.startswith("ts_") for name in LATER_FIELDS)
     assert LAYOUT["deaths"] == ((6,), np.int8)
     assert LAYOUT["faint_budget"] == ((), np.int8)
     assert LAYOUT["protected"] == ((6,), np.int8)

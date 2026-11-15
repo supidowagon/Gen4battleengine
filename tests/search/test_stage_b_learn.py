@@ -78,7 +78,8 @@ def _move(names, name: str) -> int:
 
 def test_a_turn_child_stops_at_the_learn_prompt(tables, names):
     s = _vs(tables, names, [_geodude_1hp(names), _mon(names, "Bonsly", 15)])
-    after, refused, obs = _turn(tables, s, A("Tackle", "Tackle", s, names), empty_outcome())
+    after, refused, obs, keep = _turn(tables, s, A("Tackle", "Tackle", s, names), empty_outcome())
+    assert bool(keep)  # expand._turn's call_consistent row flag (E2 batch 5)
     assert not bool(refused)
     assert bool(needs_learn(after)) and int(after.learn_level[0]) == 13
     assert stage_b._offered_move(tables, after) == _move(names, "PoisonPowder")
@@ -109,7 +110,8 @@ def test_the_learn_stop_holds_the_turns_pursuit_power_mul(tables, names):
     s = _short(tables, names, make_state(tables, [steelix, _bulbasaur(names)], opp), 1)
     actions = jnp.asarray([MOVE_ACTIONS + 1, 0], jnp.int32)
     assert int(replacement_power_mul(tables, s, actions)) == PURSUIT_POWER_MUL
-    after, refused, _ = _turn(tables, s, actions, empty_outcome())
+    after, refused, _, keep = _turn(tables, s, actions, empty_outcome())
+    assert bool(keep)  # expand._turn's call_consistent row flag (E2 batch 5)
     assert not bool(refused)
     assert int(after.hp[1, GEODUDE]) == 0 and int(after.active[1]) == GEODUDE
     assert bool(needs_learn(after)) and int(after.learn_level[1]) == 13
@@ -137,7 +139,8 @@ def test_an_ai_switch_with_a_needed_replacement_refuses_at_the_learn_stop(tables
     # replacement after its AI switched is refused (roark.md 14, item 3), at the stop.
     s = _vs(tables, names, [_mon(names, "Geodude", 12), _mon(names, "Onix", 12, current_hp=1)])
     actions = jnp.asarray([names.move_slot(s, 0, "Tackle"), MOVE_ACTIONS + 1], jnp.int32)
-    after, refused, _ = _turn(tables, s, actions, empty_outcome())
+    after, refused, _, keep = _turn(tables, s, actions, empty_outcome())
+    assert bool(keep)  # expand._turn's call_consistent row flag (E2 batch 5)
     assert int(after.hp[1, 1]) == 0 and bool(needs_learn(after))
     assert bool(refused)
 
@@ -145,7 +148,8 @@ def test_an_ai_switch_with_a_needed_replacement_refuses_at_the_learn_stop(tables
 def test_learn_work_at_a_battle_ending_ko_is_terminal(tables, names):
     # D8: the last foe faints; the prompt stays in the state but is no decision.
     s = _vs(tables, names, [_geodude_1hp(names)])
-    after, refused, obs = _turn(tables, s, A("Tackle", "Tackle", s, names), empty_outcome())
+    after, refused, obs, keep = _turn(tables, s, A("Tackle", "Tackle", s, names), empty_outcome())
+    assert bool(keep)  # expand._turn's call_consistent row flag (E2 batch 5)
     assert not bool(refused) and int(after.over) == 1
     assert int(after.learn_level[0]) == 13
     assert int(np.asarray(obs)[_OBS["learn_level"]][0]) == 0

@@ -386,6 +386,24 @@ CONSTANTS: tuple[Constant, ...] = (
             "Filter": 111,
             "Magic Guard": 98,
             "Sniper": 97,
+            # E2 batch 9.
+            "Chlorophyll": 34,
+            "Huge Power": 37,
+            "Pure Power": 74,
+            "Swarm": 68,
+            "Unburden": 84,
+            "Flower Gift": 122,
+            "Volt Absorb": 10,
+            "Water Absorb": 11,
+            "Rain Dish": 44,
+            "Clear Body": 29,
+            "Hyper Cutter": 52,
+            "Aftermath": 106,
+            "Poison Heal": 90,
+            "Bad Dreams": 123,
+            "Arena Trap": 71,
+            "Shadow Tag": 23,
+            "Magnet Pull": 42,
         },
     ),
     # ChooseTraceTarget's untraceable abilities (battle_lib.c:7750-7775) and its Forecast.
@@ -406,6 +424,19 @@ CONSTANTS: tuple[Constant, ...] = (
             "Air Lock": 76,
             "Magic Guard": 98,
             "Ice Body": 115,
+        },
+    ),
+    # Yawn's decomp abilities (subscript_yawn.s:5-9, :14; subscript_fall_asleep.s:7-14), E2
+    # batch 8.
+    *_table(
+        "nuzline.engine.ids.YAWN_ABILITY_IDS",
+        "ability",
+        _E,
+        {
+            "Insomnia": 15,
+            "Soundproof": 43,
+            "Vital Spirit": 72,
+            "Leaf Guard": 102,
         },
     ),
     # The status orbs' decomp abilities (subscript_badly_poison.s:14, subscript_burn.s:6, :9).
@@ -698,6 +729,10 @@ EXEMPT: dict[str, str] = {
     "tools.effect_map.DECOMP_ABILITY_TO_ID": (
         "keyed by ability name: engine semantics of the vanilla ability handling; a game's "
         "changes to it are rom_diff.toml entries (Ruling 13)"
+    ),
+    "tools.effect_map.KAIZO_EFFECTS": (
+        "keyed by the decomp effect id of a be_seq member the Kaizo ROM changed; it is used "
+        "only for Kaizo and only for a member rom_diff.toml marks modelled (Ruling 13, B9-4)"
     ),
     "tools.effect_map.DIVISOR_PARAM_MIN": (
         "keyed by engine ItemId, whose ints are the smallest hold params each item may divide "

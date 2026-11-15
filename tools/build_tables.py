@@ -409,10 +409,10 @@ def _kaizo_rom_changes(inter: Path, rom_diff: Path = ROM_DIFF) -> tuple[frozense
     modelled = {
         i for (narc, i), (status, _) in members.items() if narc == BE_SEQ and status == "modelled"
     }
-    if modelled != set(KAIZO_EFFECTS):
+    if not modelled <= set(KAIZO_EFFECTS):
         raise BuildError(
-            f"modelled be_seq members {sorted(modelled)} != effect_map.KAIZO_EFFECTS "
-            f"{sorted(KAIZO_EFFECTS)}"
+            f"modelled be_seq members {sorted(modelled - set(KAIZO_EFFECTS))} have no "
+            "effect_map.KAIZO_EFFECTS entry"
         )
     unknown = sum(st == "unknown" for st, _ in code.values())
     unknown += sum(st == "unknown" for st, _ in members.values())
