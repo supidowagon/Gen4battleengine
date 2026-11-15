@@ -340,36 +340,19 @@ def test_kaizo_roark_ai_flags_exact(kaizo_tables, kaizo_names, kaizo_roark, kaiz
     assert not any("trainer AI" in m or "AI flag" in m for m in full.missing), full.missing
 
 
-@pytest.mark.parametrize(
-    ("flags", "refused"),
-    [
-        (0x1, []),
-        (0x5, []),
-        (0x7, []),
-        (0x17, []),
-        (0xD, []),
-        (0xF, []),
-        (0x1F, []),
-        (0x207, []),
-        (0x20F, []),
-        (0x27, ["PRIORITIZE_EXTREMES"]),
-        (0x10F, ["CHECK_HP"]),
-    ],
-)
-def test_kaizo_flag_set_needs_every_flag(
-    kaizo_tables, kaizo_names, kaizo_roark, kaizo_roark_party, flags, refused
+@pytest.mark.parametrize("flags", [0x1, 0x5, 0x7, 0x17, 0xD, 0xF, 0x1F, 0x207, 0x20F, 0x27, 0x10F])
+def test_kaizo_flag_set_has_no_flag_line(
+    kaizo_tables, kaizo_names, kaizo_roark, kaizo_roark_party, flags
 ):
     # E1 Ruling R2 (replaces plan K3c Ruling 10's exact set): the Kaizo policy runs each
-    # trainer's own flag set, so a set is refused exactly by its unimplemented flags, one line
-    # each, and an implemented set (0x1, 0x5, 0x7, Roark's 0x17; with SETUP_FIRST_TURN and
-    # WEATHER since E1 batch 2b) is not.
+    # trainer's own flag set, every flag of it transcribed (layout.KAIZO_FLAG_BITS): the
+    # singles sets of the Roark and Gardenia splits give no "AI flag" line.
     from nuzline.ai.layout import KAIZO_FLAG_BITS
 
     assert set(IMPLEMENTED_AI_FLAGS["kaizo"]) == KAIZO_FLAG_BITS
     trainer = replace(kaizo_roark, ai_flags=flags)
     report = check_opponent(kaizo_tables, kaizo_names, trainer, kaizo_roark_party, Weather.NONE)
-    flag_lines = [m for m in report.missing if "AI flag" in m]
-    assert flag_lines == [f"Leader Roark: AI_FLAG_{x} (AI flag UNSUPPORTED)" for x in refused]
+    assert not [m for m in report.missing if "AI flag" in m]
 
 
 # --- Kaizo trainer fields (K2b Task 14) ----------------------------------------------

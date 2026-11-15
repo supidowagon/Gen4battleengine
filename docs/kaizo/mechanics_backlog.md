@@ -25,21 +25,21 @@ New groups: needed in this split and in no earlier one.
 
 | Split | Rows | Battles | Singles | Doubles | Two-trainer | Multi (no known partner) | Runnable battles | Distinct missing groups | New groups |
 |---|---|---|---|---|---|---|---|---|---|
-| Roark Split | 26 | 26 | 26 | 0 | 0 | 0 (0) | 1 | 64 | 64 |
-| Gardenia Split | 42 | 35 | 19 | 5 | 0 | 11 (0) | 0 | 154 | 112 |
-| Fantina Split | 42 | 40 | 38 | 0 | 2 | 0 (0) | 0 | 203 | 81 |
-| Maylene Split | 34 | 33 | 27 | 5 | 0 | 1 (0) | 0 | 187 | 23 |
-| Wake Split | 38 | 33 | 26 | 2 | 5 | 0 (0) | 0 | 163 | 18 |
-| Byron Split | 66 | 58 | 42 | 8 | 0 | 8 (0) | 0 | 194 | 14 |
-| Candice Split | 48 | 36 | 24 | 0 | 0 | 12 (0) | 0 | 167 | 15 |
-| Galactic Split | 109 | 79 | 37 | 12 | 19 | 11 (0) | 0 | 268 | 47 |
-| Volkner Split | 25 | 19 | 9 | 4 | 6 | 0 (0) | 0 | 132 | 2 |
-| Elite Four Split | 28 | 28 | 27 | 1 | 0 | 0 (0) | 0 | 192 | 6 |
-| **Whole game** | 458 | 387 | 275 | 37 | 32 | 43 (0) | 1 | 382 | 382 |
+| Roark Split | 26 | 26 | 26 | 0 | 0 | 0 (0) | 13 | 12 | 12 |
+| Gardenia Split | 42 | 35 | 19 | 5 | 0 | 11 (0) | 0 | 82 | 78 |
+| Fantina Split | 42 | 40 | 38 | 0 | 2 | 0 (0) | 0 | 135 | 78 |
+| Maylene Split | 34 | 33 | 27 | 5 | 0 | 1 (0) | 0 | 117 | 21 |
+| Wake Split | 38 | 33 | 26 | 2 | 5 | 0 (0) | 0 | 100 | 18 |
+| Byron Split | 66 | 58 | 42 | 8 | 0 | 8 (0) | 4 | 132 | 12 |
+| Candice Split | 48 | 36 | 24 | 0 | 0 | 12 (0) | 0 | 109 | 15 |
+| Galactic Split | 109 | 79 | 37 | 12 | 19 | 11 (0) | 0 | 197 | 47 |
+| Volkner Split | 25 | 19 | 9 | 4 | 6 | 0 (0) | 0 | 86 | 2 |
+| Elite Four Split | 28 | 28 | 27 | 1 | 0 | 0 (0) | 0 | 123 | 6 |
+| **Whole game** | 458 | 387 | 275 | 37 | 32 | 43 (0) | 17 | 289 | 289 |
 
 ## Whole game
 
-382 distinct missing groups across all ten splits (387 battles,
+289 distinct missing groups across all ten splits (387 battles,
 458 opposing trainer rows). Kinds: AI flags are flag lines the
 policy lacks; AI move effects are the AI's per-move script paths (untranscribed
 effects, refused effects, move-id cases of its damage and type helpers); battle
@@ -53,17 +53,17 @@ Groups first needed in that split (needed by no earlier split). The whole-game r
 
 | Split | AI flags | AI move effects | move effects | held items | abilities | battle conditions | other | All |
 |---|---|---|---|---|---|---|---|---|
-| Roark Split | 2 | 57 | 1 | 0 | 0 | 3 | 1 | 64 |
-| Gardenia Split | 3 | 41 | 30 | 2 | 22 | 11 | 3 | 112 |
-| Fantina Split | 0 | 27 | 23 | 10 | 7 | 9 | 5 | 81 |
-| Maylene Split | 0 | 10 | 7 | 3 | 2 | 0 | 1 | 23 |
+| Roark Split | 0 | 7 | 1 | 0 | 0 | 3 | 1 | 12 |
+| Gardenia Split | 3 | 7 | 30 | 2 | 22 | 11 | 3 | 78 |
+| Fantina Split | 0 | 24 | 23 | 10 | 7 | 9 | 5 | 78 |
+| Maylene Split | 0 | 8 | 7 | 3 | 2 | 0 | 1 | 21 |
 | Wake Split | 0 | 3 | 2 | 3 | 1 | 6 | 3 | 18 |
-| Byron Split | 0 | 8 | 5 | 1 | 0 | 0 | 0 | 14 |
+| Byron Split | 0 | 6 | 5 | 1 | 0 | 0 | 0 | 12 |
 | Candice Split | 0 | 6 | 4 | 0 | 0 | 5 | 0 | 15 |
 | Galactic Split | 0 | 14 | 13 | 3 | 1 | 16 | 0 | 47 |
 | Volkner Split | 0 | 1 | 1 | 0 | 0 | 0 | 0 | 2 |
 | Elite Four Split | 0 | 2 | 1 | 0 | 1 | 1 | 1 | 6 |
-| **Whole game** | **5** | **169** | **87** | **22** | **34** | **51** | **14** | **382** |
+| **Whole game** | **3** | **78** | **87** | **22** | **34** | **51** | **14** | **289** |
 
 ### Groups needed in each split, by kind
 
@@ -71,17 +71,17 @@ Every group the split's battles need, whether or not an earlier split needs it t
 
 | Split | AI flags | AI move effects | move effects | held items | abilities | battle conditions | other | All |
 |---|---|---|---|---|---|---|---|---|
-| Roark Split | 2 | 57 | 1 | 0 | 0 | 3 | 1 | 64 |
-| Gardenia Split | 5 | 80 | 31 | 2 | 22 | 11 | 3 | 154 |
-| Fantina Split | 4 | 98 | 46 | 12 | 26 | 9 | 8 | 203 |
-| Maylene Split | 5 | 98 | 45 | 10 | 17 | 3 | 9 | 187 |
-| Wake Split | 5 | 81 | 31 | 12 | 16 | 8 | 10 | 163 |
-| Byron Split | 5 | 97 | 45 | 10 | 23 | 3 | 11 | 194 |
-| Candice Split | 4 | 87 | 39 | 7 | 17 | 6 | 7 | 167 |
-| Galactic Split | 5 | 124 | 64 | 15 | 25 | 24 | 11 | 268 |
-| Volkner Split | 5 | 65 | 30 | 7 | 14 | 2 | 9 | 132 |
-| Elite Four Split | 5 | 103 | 46 | 3 | 20 | 3 | 12 | 192 |
-| **Whole game** | **5** | **169** | **87** | **22** | **34** | **51** | **14** | **382** |
+| Roark Split | 0 | 7 | 1 | 0 | 0 | 3 | 1 | 12 |
+| Gardenia Split | 3 | 10 | 31 | 2 | 22 | 11 | 3 | 82 |
+| Fantina Split | 2 | 32 | 46 | 12 | 26 | 9 | 8 | 135 |
+| Maylene Split | 3 | 30 | 45 | 10 | 17 | 3 | 9 | 117 |
+| Wake Split | 3 | 20 | 31 | 12 | 16 | 8 | 10 | 100 |
+| Byron Split | 3 | 37 | 45 | 10 | 23 | 3 | 11 | 132 |
+| Candice Split | 2 | 31 | 39 | 7 | 17 | 6 | 7 | 109 |
+| Galactic Split | 3 | 55 | 64 | 15 | 25 | 24 | 11 | 197 |
+| Volkner Split | 3 | 21 | 30 | 7 | 14 | 2 | 9 | 86 |
+| Elite Four Split | 3 | 36 | 46 | 3 | 20 | 3 | 12 | 123 |
+| **Whole game** | **3** | **78** | **87** | **22** | **34** | **51** | **14** | **289** |
 
 ### Battle conditions and other groups
 
@@ -281,7 +281,7 @@ include/battle, res/battle) names it elsewhere; the tool re-checks both on every
 
 ## AI partners in multi battles
 
-25 partner trainer rows (607, 608, 609, 610, 612, 613, 614, 615, 616, 617, 618, 619, 620, 621, 622, 623, 624, 625, 626, 800, 801, 861, 863, 864, 865), checked like opponents: 123 missing groups, 3 not needed by any opposing trainer, 0 also not on your side. Not needed by opponents, by kind: held items 2, abilities 1.
+25 partner trainer rows (607, 608, 609, 610, 612, 613, 614, 615, 616, 617, 618, 619, 620, 621, 622, 623, 624, 625, 626, 800, 801, 861, 863, 864, 865), checked like opponents: 74 missing groups, 3 not needed by any opposing trainer, 0 also not on your side. Not needed by opponents, by kind: held items 2, abilities 1.
 
 ## Roark split
 
@@ -289,72 +289,20 @@ include/battle, res/battle) names it elsewhere; the tool re-checks both on every
 
 | Fights blocked | Group |
 |---|---|
-| 15 | AI move effect #103 PRIORITY_1 not transcribed (no Basic or Expert label): Aqua Jet, Bullet Punch, Ice Shard, Mach Punch, Quick Attack, Shadow Sneak, +1 more |
-| 10 | AI move effect #17 BYPASS_ACCURACY not transcribed (Expert_BypassAccuracyMove): Aerial Ace, Aura Sphere, Aurora Beam, Dragon Pulse, Faint Attack, Magical Leaf, +5 more |
-| 10 | AI move effect #67 STATUS_PARALYZE not transcribed (Basic_CheckCannotParalyze / Expert_StatusParalyze): Glare, Stun Spore, Thunder Wave |
-| 10 | AI move effect #97 USE_RANDOM_LEARNED_MOVE_SLEEP not transcribed (Basic_CheckAttackerAsleep / Expert_SleepTalk): Sleep Talk |
-| 9 | AI move effect #43 HIGH_CRITICAL not transcribed (Expert_HighCritical): Air Cutter, Aqua Cutter, Crabhammer, Cross Chop, Dragon Claw, Drill Peck, +12 more |
-| 7 | AI move effect #111 PROTECT not transcribed (Expert_Protect): Detect, Protect |
-| 7 | AI move effect #158 ALWAYS_FLINCH_FIRST_TURN_ONLY not transcribed (Basic_CheckFirstTurnInBattle / Expert_FakeOut): Fake Out |
-| 7 | AI move effect #224 EAT_BERRY not transcribed (Expert_Pluck): Bug Bite, Pluck |
-| 7 | AI move effect #73 LOWER_ACCURACY_HIT not transcribed (no Basic or Expert label): Mirror Shot, Mud Bomb, Mud-Slap, Muddy Water, Octazooka |
-| 6 | AI move effect #1 STATUS_SLEEP not transcribed (Basic_CheckCannotSleep / Expert_StatusSleep): Dark Void, GrassWhistle, Hypnosis, Lovely Kiss, Sing, Sleep Powder, +2 more |
-| 6 | AI move effect #197 SECRET_POWER not transcribed (no Basic or Expert label): Secret Power |
-| 5 | AI move effect #120 INFATUATE not transcribed (Basic_CheckCannotAttract): Attract |
-| 4 | AI move effect #29 MULTI_HIT not transcribed (no Basic or Expert label): Bone Rush, Bullet Seed, Fury Swipes, Icicle Spear, Pin Missile, Rock Blast, +1 more |
-| 4 | AI move effect #92 DAMAGE_WHILE_ASLEEP not transcribed (Basic_CheckAttackerAsleep / Expert_Nightmare): Snore |
-| 3 | AI: AI_FLAG_PRIORITIZE_EXTREMES |
-| 3 | AI move effect #171 DOUBLE_POWER_AND_CURE_PARALYSIS not transcribed (Expert_SmellingSalts): SmellingSalt |
-| 3 | AI move effect #228 SWITCH_HIT not transcribed (Expert_UTurn): U-turn |
-| 3 | AI move effect #49 STATUS_CONFUSE not transcribed (Basic_CheckCannotConfuse / Expert_StatusConfuse): Confuse Ray, Supersonic, Sweet Kiss, Teeter Dance |
-| 3 | AI move effect #65 SET_REFLECT not transcribed (Basic_CheckAlreadyUnderReflect / Expert_Reflect): Reflect |
-| 3 | AI move effect #70 LOWER_SPEED_HIT not transcribed (Expert_SpeedDownOnHit): BubbleBeam, Bulldoze, Icy Wind, Mud Shot, Rock Tomb |
-| 3 | AI move effect #83 CALL_RANDOM_MOVE not transcribed (no Basic or Expert label): Metronome |
-| 3 | AI move-id case of TrainerAI_CalcDamage: Frustration, Return |
 | 3 | move effect #83: Metronome; 123 of 442 callable moves unmodelled |
-| 2 | AI move effect #125 THAW_AND_BURN_HIT not transcribed (no Basic or Expert label): Flame Wheel, Sacred Fire, Scald |
-| 2 | AI move effect #196 INCREASE_POWER_WITH_WEIGHT not transcribed (Basic_CheckNonStandardDamageOrChargeTurn): Grass Knot, Low Kick |
 | 2 | AI move effect #214 HEAL_HALF_REMOVE_FLYING_TYPE not transcribed (Basic_CheckCanRecoverHP / Expert_Recovery): Roost |
 | 2 | AI move effect #227 METAL_BURST not transcribed (Basic_CheckMetalBurst / Expert_MetalBurst): Bide, Metal Burst |
-| 2 | AI move effect #44 HIT_TWICE not transcribed (no Basic or Expert label): Bonemerang, Double Hit, Double Kick, DoubleSlap |
-| 2 | AI move effect #58 ATK_DOWN_2 not transcribed (Basic_CheckLowStatStage_Attack / Expert_StatusAttackDown): Charm, FeatherDance |
 | 2 | battle terrain: the battle terrain varies over its maps (TERRAIN_PLAIN, TERRAIN_GRASS, TERRAIN_BUILDING), and Nature Power, Secret Power, Camouflage would read it |
-| 1 | AI: AI_FLAG_CHECK_HP |
-| 1 | AI move effect #101 LEAVE_WITH_1_HP not transcribed (no Basic or Expert label): False Swipe |
-| 1 | AI move effect #112 SET_SPIKES not transcribed (Basic_CheckSpikes / Expert_Spikes): Spikes |
-| 1 | AI move effect #118 ATK_UP_2_STATUS_CONFUSION not transcribed (Basic_CheckCannotConfuse / Expert_Swagger): Swagger |
-| 1 | AI move effect #122 RANDOM_POWER_MAYBE_HEAL not transcribed (Basic_CheckNonStandardDamageOrChargeTurn): Present |
-| 1 | AI move effect #135 RANDOM_POWER_BASED_ON_IVS not transcribed (Basic_CheckNonStandardDamageOrChargeTurn): Hidden Power |
-| 1 | AI move effect #136 WEATHER_RAIN not transcribed (Basic_CheckRainDance / Expert_RainDance): Rain Dance |
-| 1 | AI move effect #139 RAISE_ATTACK_HIT not transcribed (no Basic or Expert label): Metal Claw, Meteor Mash |
-| 1 | AI move effect #144 MIRROR_COAT not transcribed (Basic_CheckNonStandardDamageOrChargeTurn / Expert_MirrorCoat): Mirror Coat |
-| 1 | AI move effect #147 DOUBLE_DAMAGE_DIG not transcribed (no Basic or Expert label): Earthquake |
 | 1 | AI move effect #148 HIT_IN_3_TURNS not transcribed (Basic_CheckFutureSight): Doom Desire, Future Sight |
-| 1 | AI move effect #149 DOUBLE_DAMAGE_FLY_OR_BOUNCE not transcribed (no Basic or Expert label): Gust, Sky Uppercut |
-| 1 | AI move effect #159 UPROAR not transcribed (no Basic or Expert label): Uproar |
-| 1 | AI move effect #164 WEATHER_HAIL not transcribed (Basic_CheckHail / Expert_Hail): Hail |
-| 1 | AI move effect #167 STATUS_BURN not transcribed (Basic_CheckCannotBurn): Will-O-Wisp |
-| 1 | AI move effect #169 DOUBLE_POWER_WHEN_STATUSED not transcribed (Expert_Facade): Facade |
-| 1 | AI move effect #20 SPEED_DOWN not transcribed (Basic_CheckLowStatStage_Speed / Expert_StatusSpeedDown): String Shot |
-| 1 | AI move effect #202 BADLY_POISON_HIT not transcribed (no Basic or Expert label): Poison Fang |
-| 1 | AI move effect #212 ATK_SPD_UP not transcribed (Basic_CheckDragonDance / Expert_DragonDance): Dragon Dance |
-| 1 | AI move effect #221 DOUBLE_POWER_WHEN_BELOW_HALF not transcribed (Expert_Brine): Brine, Wring Out |
-| 1 | AI move effect #225 DOUBLE_SPEED_3_TURNS not transcribed (Basic_CheckTailwind / Expert_Tailwind): Tailwind |
 | 1 | AI move effect #23 ACC_DOWN not transcribed (Basic_CheckLowStatStage_Accuracy / Expert_StatusAccuracyDown): Flash, Sand-Attack, SmokeScreen |
 | 1 | AI move effect #242 USE_LAST_USED_MOVE not transcribed (Basic_CheckCopycat / Expert_Copycat): Copycat |
-| 1 | AI move effect #38 ONE_HIT_KO not transcribed (Basic_CheckOHKOWouldFail / Expert_OHKOMove): Fissure, Guillotine, Horn Drill |
-| 1 | AI move effect #40 HALVE_HP not transcribed (Basic_CheckNonStandardDamageOrChargeTurn / Expert_SuperFang): Super Fang |
-| 1 | AI move effect #51 DEF_UP_2 not transcribed (Basic_CheckHighStatStage_Defense / Expert_StatusDefenseUp): Acid Armor, Barrier, Iron Defense |
-| 1 | AI move effect #84 STATUS_LEECH_SEED not transcribed (Basic_CheckCannotLeechSeed / Expert_ToxicLeechSeed): Leech Seed |
-| 1 | AI move effect #87 LEVEL_DAMAGE_FLAT not transcribed (Basic_CheckNonStandardDamageOrChargeTurn): Night Shade, Seismic Toss |
-| 1 | AI move effect #98 KO_MON_THAT_DEFEATED_USER not transcribed (Expert_DestinyBond): Destiny Bond |
-| 1 | AI move effect #99 INCREASE_POWER_WITH_LESS_HP not transcribed (Basic_CheckNonStandardDamageOrChargeTurn / Expert_Reversal): Flail, Reversal |
+| 1 | AI move-id case of TrainerAI_CalcDamage: Bulldoze, Triple Axel |
 | 1 | battle format: gauntlet Oreburgh Mine (position 1; rules not recorded) |
 | 1 | battle format: gauntlet Oreburgh Mine (position 2; rules not recorded) |
 | 1 | trainer AI: Trace: the AI reads the species' ability, not the one Trace copied into the battler (LoadBattlerAbility, trainer_ai.c:1170-1198; battle_script.c:3401-3403) |
 | 1 | trainer item: Poké Ball |
 
-Groups by kind: AI 58, battle format 2, move effect 1, battle terrain 1, trainer AI 1, trainer item 1
+Groups by kind: AI 6, battle format 2, battle terrain 1, move effect 1, trainer AI 1, trainer item 1
 
 ## Roark and Gardenia splits (up to the second gym)
 
@@ -362,55 +310,13 @@ Groups by kind: AI 58, battle format 2, move effect 1, battle terrain 1, trainer
 
 | Fights blocked | Group |
 |---|---|
-| 37 | AI move effect #103 PRIORITY_1 not transcribed (no Basic or Expert label): Aqua Jet, Bullet Punch, Ice Shard, Mach Punch, Quick Attack, Shadow Sneak, +1 more |
-| 30 | AI move effect #1 STATUS_SLEEP not transcribed (Basic_CheckCannotSleep / Expert_StatusSleep): Dark Void, GrassWhistle, Hypnosis, Lovely Kiss, Sing, Sleep Powder, +2 more |
-| 29 | AI move effect #43 HIGH_CRITICAL not transcribed (Expert_HighCritical): Air Cutter, Aqua Cutter, Crabhammer, Cross Chop, Dragon Claw, Drill Peck, +12 more |
-| 25 | AI move effect #17 BYPASS_ACCURACY not transcribed (Expert_BypassAccuracyMove): Aerial Ace, Aura Sphere, Aurora Beam, Dragon Pulse, Faint Attack, Magical Leaf, +5 more |
-| 23 | AI move effect #97 USE_RANDOM_LEARNED_MOVE_SLEEP not transcribed (Basic_CheckAttackerAsleep / Expert_SleepTalk): Sleep Talk |
 | 18 | battle format: a multi battle |
-| 15 | AI move effect #224 EAT_BERRY not transcribed (Expert_Pluck): Bug Bite, Pluck |
-| 15 | AI move effect #67 STATUS_PARALYZE not transcribed (Basic_CheckCannotParalyze / Expert_StatusParalyze): Glare, Stun Spore, Thunder Wave |
 | 13 | AI: AI_FLAG_TAG_STRATEGY |
-| 13 | AI move effect #49 STATUS_CONFUSE not transcribed (Basic_CheckCannotConfuse / Expert_StatusConfuse): Confuse Ray, Supersonic, Sweet Kiss, Teeter Dance |
-| 12 | AI move effect #111 PROTECT not transcribed (Expert_Protect): Detect, Protect |
-| 12 | AI move effect #158 ALWAYS_FLINCH_FIRST_TURN_ONLY not transcribed (Basic_CheckFirstTurnInBattle / Expert_FakeOut): Fake Out |
-| 11 | AI: AI_FLAG_PRIORITIZE_EXTREMES |
-| 11 | AI move effect #29 MULTI_HIT not transcribed (no Basic or Expert label): Bone Rush, Bullet Seed, Fury Swipes, Icicle Spear, Pin Missile, Rock Blast, +1 more |
-| 11 | AI move effect #73 LOWER_ACCURACY_HIT not transcribed (no Basic or Expert label): Mirror Shot, Mud Bomb, Mud-Slap, Muddy Water, Octazooka |
-| 9 | AI move effect #228 SWITCH_HIT not transcribed (Expert_UTurn): U-turn |
-| 9 | AI move effect #70 LOWER_SPEED_HIT not transcribed (Expert_SpeedDownOnHit): BubbleBeam, Bulldoze, Icy Wind, Mud Shot, Rock Tomb |
 | 8 | AI: AI_FLAG_HARRASSMENT |
-| 8 | AI move effect #125 THAW_AND_BURN_HIT not transcribed (no Basic or Expert label): Flame Wheel, Sacred Fire, Scald |
-| 8 | AI move effect #197 SECRET_POWER not transcribed (no Basic or Expert label): Secret Power |
-| 8 | AI move effect #65 SET_REFLECT not transcribed (Basic_CheckAlreadyUnderReflect / Expert_Reflect): Reflect |
 | 8 | ability: Chlorophyll |
-| 7 | AI move effect #221 DOUBLE_POWER_WHEN_BELOW_HALF not transcribed (Expert_Brine): Brine, Wring Out |
-| 7 | AI move effect #5 FREEZE_HIT not transcribed (no Basic or Expert label): Ice Beam, Ice Punch |
-| 6 | AI: AI_FLAG_CHECK_HP |
-| 6 | AI move effect #120 INFATUATE not transcribed (Basic_CheckCannotAttract): Attract |
-| 6 | AI move effect #147 DOUBLE_DAMAGE_DIG not transcribed (no Basic or Expert label): Earthquake |
-| 6 | AI move effect #198 RECOIL_THIRD not transcribed (Expert_RecoilMove): Double-Edge, Wood Hammer |
-| 6 | AI move effect #202 BADLY_POISON_HIT not transcribed (no Basic or Expert label): Poison Fang |
 | 6 | move effect #198: Double-Edge, Wood Hammer |
-| 5 | AI move effect #169 DOUBLE_POWER_WHEN_STATUSED not transcribed (Expert_Facade): Facade |
-| 5 | AI move effect #196 INCREASE_POWER_WITH_WEIGHT not transcribed (Basic_CheckNonStandardDamageOrChargeTurn): Grass Knot, Low Kick |
-| 5 | AI move effect #212 ATK_SPD_UP not transcribed (Basic_CheckDragonDance / Expert_DragonDance): Dragon Dance |
-| 5 | AI move effect #249 TOXIC_SPIKES not transcribed (Basic_CheckToxicSpikes / Expert_ToxicSpikes): Toxic Spikes |
-| 5 | AI move effect #44 HIT_TWICE not transcribed (no Basic or Expert label): Bonemerang, Double Hit, Double Kick, DoubleSlap |
-| 5 | AI move effect #87 LEVEL_DAMAGE_FLAT not transcribed (Basic_CheckNonStandardDamageOrChargeTurn): Night Shade, Seismic Toss |
 | 5 | ability: Aftermath |
 | 5 | battle format: a double battle |
-| 4 | AI move effect #136 WEATHER_RAIN not transcribed (Basic_CheckRainDance / Expert_RainDance): Rain Dance |
-| 4 | AI move effect #152 THUNDER not transcribed (no Basic or Expert label): Thunder |
-| 4 | AI move effect #172 MAKE_GLOBAL_TARGET not transcribed (no Basic or Expert label): Follow Me |
-| 4 | AI move effect #260 BLIZZARD not transcribed (Expert_Blizzard): Blizzard, Ice Ball, Sheer Cold |
-| 4 | AI move effect #273 FLINCH_BURN_HIT not transcribed (no Basic or Expert label): Fire Fang |
-| 4 | AI move effect #41 40_DAMAGE_FLAT not transcribed (Basic_CheckNonStandardDamageOrChargeTurn): Dragon Rage |
-| 4 | AI move effect #83 CALL_RANDOM_MOVE not transcribed (no Basic or Expert label): Metronome |
-| 4 | AI move effect #84 STATUS_LEECH_SEED not transcribed (Basic_CheckCannotLeechSeed / Expert_ToxicLeechSeed): Leech Seed |
-| 4 | AI move effect #92 DAMAGE_WHILE_ASLEEP not transcribed (Basic_CheckAttackerAsleep / Expert_Nightmare): Snore |
-| 4 | AI move effect #98 KO_MON_THAT_DEFEATED_USER not transcribed (Expert_DestinyBond): Destiny Bond |
-| 4 | AI move-id case of TrainerAI_CalcDamage: Frustration, Return |
 | 4 | move effect #152: Thunder |
 | 4 | move effect #172: Follow Me |
 | 4 | move effect #260: Blizzard, Ice Ball, Sheer Cold |
@@ -419,33 +325,16 @@ Groups by kind: AI 58, battle format 2, move effect 1, battle terrain 1, trainer
 | 4 | move effect #83: Metronome; 123 of 442 callable moves unmodelled |
 | 4 | trainer AI: Trace: the AI reads the species' ability, not the one Trace copied into the battler (LoadBattlerAbility, trainer_ai.c:1170-1198; battle_script.c:3401-3403) |
 | 3 | AI: AI_FLAG_BATON_PASS |
-| 3 | AI move effect #150 FLINCH_MINIMIZE_DOUBLE_HIT not transcribed (no Basic or Expert label): Stomp |
-| 3 | AI move effect #171 DOUBLE_POWER_AND_CURE_PARALYSIS not transcribed (Expert_SmellingSalts): SmellingSalt |
 | 3 | AI move effect #214 HEAL_HALF_REMOVE_FLYING_TYPE not transcribed (Basic_CheckCanRecoverHP / Expert_Recovery): Roost |
-| 3 | AI move effect #225 DOUBLE_SPEED_3_TURNS not transcribed (Basic_CheckTailwind / Expert_Tailwind): Tailwind |
-| 3 | AI move effect #276 RAISE_SP_ATK_HIT not transcribed (no Basic or Expert label): Charge Beam |
-| 3 | AI move effect #50 ATK_UP_2 not transcribed (Basic_CheckHighStatStage_Attack / Expert_StatusAttackUp): Swords Dance |
+| 3 | AI move-id case of TrainerAI_CalcDamage: Bulldoze, Triple Axel |
 | 3 | ability: Clear Body |
 | 3 | form: trainer Pokemon in a data form: this game's party builder applies the form before computing its stats, which the engine's trainer party build does not model |
 | 3 | held item effect #65: Focus Band |
 | 3 | move effect #150: Stomp |
 | 2 | AI move effect #106 PREVENT_ESCAPE not transcribed (Basic_CheckMeanLook / Expert_BindingMove): Block, Mean Look, Spider Web |
-| 2 | AI move effect #112 SET_SPIKES not transcribed (Basic_CheckSpikes / Expert_Spikes): Spikes |
-| 2 | AI move effect #138 RAISE_DEF_HIT not transcribed (no Basic or Expert label): Steel Wing |
-| 2 | AI move effect #142 MAX_ATK_LOSE_HALF_MAX_HP not transcribed (Basic_CheckBellyDrum / Expert_BellyDrum): Belly Drum |
-| 2 | AI move effect #144 MIRROR_COAT not transcribed (Basic_CheckNonStandardDamageOrChargeTurn / Expert_MirrorCoat): Mirror Coat |
-| 2 | AI move effect #149 DOUBLE_DAMAGE_FLY_OR_BOUNCE not transcribed (no Basic or Expert label): Gust, Sky Uppercut |
-| 2 | AI move effect #167 STATUS_BURN not transcribed (Basic_CheckCannotBurn): Will-O-Wisp |
-| 2 | AI move effect #182 LOWER_OWN_ATK_AND_DEF not transcribed (Basic_CheckNonStandardDamageOrChargeTurn / Expert_Superpower): Brave Bird, Close Combat, Take Down |
 | 2 | AI move effect #188 REMOVE_HELD_ITEM not transcribed (Basic_CheckCanRemoveItem / Expert_KnockOff): Knock Off |
 | 2 | AI move effect #192 MAKE_SHARED_MOVES_UNUSEABLE not transcribed (Basic_CheckCanImprison / Expert_Imprison): Imprison |
 | 2 | AI move effect #227 METAL_BURST not transcribed (Basic_CheckMetalBurst / Expert_MetalBurst): Bide, Metal Burst |
-| 2 | AI move effect #257 DOUBLE_DAMAGE_DIVE not transcribed (no Basic or Expert label): Surf |
-| 2 | AI move effect #274 FLINCH_FREEZE_HIT not transcribed (no Basic or Expert label): Avalanche, Ice Fang |
-| 2 | AI move effect #36 TRI_ATTACK not transcribed (no Basic or Expert label): Aeroblast, Tri Attack |
-| 2 | AI move effect #45 CRASH_ON_MISS not transcribed (no Basic or Expert label): Hi Jump Kick, Jump Kick |
-| 2 | AI move effect #51 DEF_UP_2 not transcribed (Basic_CheckHighStatStage_Defense / Expert_StatusDefenseUp): Acid Armor, Barrier, Iron Defense |
-| 2 | AI move effect #58 ATK_DOWN_2 not transcribed (Basic_CheckLowStatStage_Attack / Expert_StatusAttackDown): Charm, FeatherDance |
 | 2 | ROM change: battle/skill/be_seq.narc#182 is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) |
 | 2 | ability: Arena Trap |
 | 2 | ability: Bad Dreams |
@@ -463,40 +352,13 @@ Groups by kind: AI 58, battle format 2, move effect 1, battle terrain 1, trainer
 | 2 | move effect #257: Surf |
 | 2 | move effect #274: Avalanche, Ice Fang |
 | 2 | move effect #45: Hi Jump Kick, Jump Kick |
-| 1 | AI move effect #10 ATK_UP not transcribed (Basic_CheckHighStatStage_Attack / Expert_StatusAttackUp): Howl, Meditate, Sharpen |
-| 1 | AI move effect #101 LEAVE_WITH_1_HP not transcribed (no Basic or Expert label): False Swipe |
 | 1 | AI move effect #108 EVA_UP_2_MINIMIZE not transcribed (Basic_CheckHighStatStage_Evasion / Expert_StatusEvasionUp): Minimize |
-| 1 | AI move effect #118 ATK_UP_2_STATUS_CONFUSION not transcribed (Basic_CheckCannotConfuse / Expert_Swagger): Swagger |
-| 1 | AI move effect #122 RANDOM_POWER_MAYBE_HEAL not transcribed (Basic_CheckNonStandardDamageOrChargeTurn): Present |
-| 1 | AI move effect #124 PREVENT_STATUS not transcribed (Basic_CheckAlreadyUnderSafeguard): Safeguard |
-| 1 | AI move effect #135 RANDOM_POWER_BASED_ON_IVS not transcribed (Basic_CheckNonStandardDamageOrChargeTurn): Hidden Power |
-| 1 | AI move effect #137 WEATHER_SUN not transcribed (Basic_CheckSunnyDay / Expert_SunnyDay): Sunny Day |
-| 1 | AI move effect #139 RAISE_ATTACK_HIT not transcribed (no Basic or Expert label): Metal Claw, Meteor Mash |
 | 1 | AI move effect #148 HIT_IN_3_TURNS not transcribed (Basic_CheckFutureSight): Doom Desire, Future Sight |
 | 1 | AI move effect #151 SKIP_CHARGE_TURN_IN_SUN not transcribed (Expert_ChargeTurnNoInvuln / Expert_Thunder): SolarBeam |
-| 1 | AI move effect #159 UPROAR not transcribed (no Basic or Expert label): Uproar |
-| 1 | AI move effect #164 WEATHER_HAIL not transcribed (Basic_CheckHail / Expert_Hail): Hail |
-| 1 | AI move effect #170 HIT_LAST_WHIFF_IF_HIT not transcribed (Basic_CheckNonStandardDamageOrChargeTurn / Expert_FocusPunch): Focus Punch |
 | 1 | AI move effect #176 BOOST_ALLY_POWER_BY_50_PERCENT not transcribed (Basic_CheckHelpingHand): Helping Hand |
-| 1 | AI move effect #180 USE_RANDOM_ALLY_MOVE not transcribed (no Basic or Expert label): Assist |
-| 1 | AI move effect #189 SET_HP_EQUAL_TO_USER not transcribed (Basic_CheckNonStandardDamageOrChargeTurn / Expert_Endeavor): Endeavor |
-| 1 | AI move effect #20 SPEED_DOWN not transcribed (Basic_CheckLowStatStage_Speed / Expert_StatusSpeedDown): String Shot |
-| 1 | AI move effect #208 ATK_DEF_UP not transcribed (Basic_CheckBulkUp / Expert_StatusDefenseUp): Bulk Up |
 | 1 | AI move effect #23 ACC_DOWN not transcribed (Basic_CheckLowStatStage_Accuracy / Expert_StatusAccuracyDown): Flash, Sand-Attack, SmokeScreen |
-| 1 | AI move effect #230 DOUBLE_POWER_IF_MOVING_SECOND not transcribed (Expert_Payback): Payback, Revenge |
 | 1 | AI move effect #242 USE_LAST_USED_MOVE not transcribed (Basic_CheckCopycat / Expert_Copycat): Copycat |
-| 1 | AI move effect #262 RECOIL_PARALYZE_HIT not transcribed (Expert_RecoilMove): Frenzy Plant, Roar of Time, Sky Attack, Thrash, Volt Tackle, Wild Charge |
-| 1 | AI move effect #271 LOWER_SP_DEF_2_HIT not transcribed (no Basic or Expert label): Seed Flare |
-| 1 | AI move effect #28 FORCE_SWITCH not transcribed (Basic_CheckCanForceSwitch / Expert_ForceSwitch): Roar, Whirlwind |
-| 1 | AI move effect #38 ONE_HIT_KO not transcribed (Basic_CheckOHKOWouldFail / Expert_OHKOMove): Fissure, Guillotine, Horn Drill |
-| 1 | AI move effect #40 HALVE_HP not transcribed (Basic_CheckNonStandardDamageOrChargeTurn / Expert_SuperFang): Super Fang |
-| 1 | AI move effect #48 RECOIL_QUARTER not transcribed (Expert_RecoilMove): Draco Meteor, Giga Impact, Hydro Cannon, Hyper Beam, Outrage, Superpower |
-| 1 | AI move effect #79 SET_SUBSTITUTE not transcribed (Basic_CheckCannotSubstitute / Expert_Substitute): Substitute |
-| 1 | AI move effect #8 RECOVER_DAMAGE_SLEEP not transcribed (Basic_CheckDreamEater / Expert_DreamEater): Dream Eater |
-| 1 | AI move effect #89 COUNTER not transcribed (Basic_CheckNonStandardDamageOrChargeTurn / Expert_Counter): Counter |
 | 1 | AI move effect #90 ENCORE not transcribed (Basic_CheckCannotEncore / Expert_Encore): Encore |
-| 1 | AI move effect #91 AVERAGE_HP not transcribed (Expert_PainSplit): Pain Split |
-| 1 | AI move effect #99 INCREASE_POWER_WITH_LESS_HP not transcribed (Basic_CheckNonStandardDamageOrChargeTurn / Expert_Reversal): Flail, Reversal |
 | 1 | ROM change: battle/skill/be_seq.narc#48 is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) |
 | 1 | ability: Download |
 | 1 | ability: Flower Gift |
@@ -539,7 +401,7 @@ Groups by kind: AI 58, battle format 2, move effect 1, battle terrain 1, trainer
 | 1 | move effect #91: Pain Split |
 | 1 | trainer item: Poké Ball |
 
-Groups by kind: AI 102, move effect 31, ability 22, battle format 12, ROM change 2, held item effect 2, battle terrain 2, form 1, trainer AI 1, trainer item 1
+Groups by kind: move effect 31, ability 22, AI 16, battle format 12, held item effect 2, ROM change 2, battle terrain 2, form 1, trainer AI 1, trainer item 1
 
 ## All ten splits (top 60)
 
@@ -547,68 +409,68 @@ Groups by kind: AI 102, move effect 31, ability 22, battle format 12, ROM change
 
 | Fights blocked | Group |
 |---|---|
-| 167 | AI move effect #43 HIGH_CRITICAL not transcribed (Expert_HighCritical): Air Cutter, Aqua Cutter, Crabhammer, Cross Chop, Dragon Claw, Drill Peck, +12 more |
-| 151 | AI move effect #147 DOUBLE_DAMAGE_DIG not transcribed (no Basic or Expert label): Earthquake |
-| 140 | AI move effect #1 STATUS_SLEEP not transcribed (Basic_CheckCannotSleep / Expert_StatusSleep): Dark Void, GrassWhistle, Hypnosis, Lovely Kiss, Sing, Sleep Powder, +2 more |
 | 129 | AI: AI_FLAG_TAG_STRATEGY |
-| 124 | AI move effect #48 RECOIL_QUARTER not transcribed (Expert_RecoilMove): Draco Meteor, Giga Impact, Hydro Cannon, Hyper Beam, Outrage, Superpower |
 | 124 | ROM change: battle/skill/be_seq.narc#48 is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) |
 | 124 | move effect #48: Draco Meteor, Giga Impact, Hydro Cannon, Hyper Beam, Outrage, Superpower |
-| 122 | AI move effect #103 PRIORITY_1 not transcribed (no Basic or Expert label): Aqua Jet, Bullet Punch, Ice Shard, Mach Punch, Quick Attack, Shadow Sneak, +1 more |
-| 121 | AI move effect #5 FREEZE_HIT not transcribed (no Basic or Expert label): Ice Beam, Ice Punch |
-| 108 | AI move effect #17 BYPASS_ACCURACY not transcribed (Expert_BypassAccuracyMove): Aerial Ace, Aura Sphere, Aurora Beam, Dragon Pulse, Faint Attack, Magical Leaf, +5 more |
 | 105 | AI: AI_FLAG_HARRASSMENT |
-| 89 | AI: AI_FLAG_CHECK_HP |
-| 83 | AI move effect #158 ALWAYS_FLINCH_FIRST_TURN_ONLY not transcribed (Basic_CheckFirstTurnInBattle / Expert_FakeOut): Fake Out |
 | 82 | battle format: a multi battle |
-| 77 | AI move effect #73 LOWER_ACCURACY_HIT not transcribed (no Basic or Expert label): Mirror Shot, Mud Bomb, Mud-Slap, Muddy Water, Octazooka |
-| 72 | AI move effect #274 FLINCH_FREEZE_HIT not transcribed (no Basic or Expert label): Avalanche, Ice Fang |
-| 72 | AI move effect #97 USE_RANDOM_LEARNED_MOVE_SLEEP not transcribed (Basic_CheckAttackerAsleep / Expert_SleepTalk): Sleep Talk |
 | 72 | move effect #274: Avalanche, Ice Fang |
-| 70 | AI move effect #260 BLIZZARD not transcribed (Expert_Blizzard): Blizzard, Ice Ball, Sheer Cold |
 | 70 | move effect #260: Blizzard, Ice Ball, Sheer Cold |
-| 68 | AI move effect #49 STATUS_CONFUSE not transcribed (Basic_CheckCannotConfuse / Expert_StatusConfuse): Confuse Ray, Supersonic, Sweet Kiss, Teeter Dance |
 | 64 | battle format: a double_two_trainer battle |
-| 63 | AI: AI_FLAG_PRIORITIZE_EXTREMES |
-| 58 | AI move effect #262 RECOIL_PARALYZE_HIT not transcribed (Expert_RecoilMove): Frenzy Plant, Roar of Time, Sky Attack, Thrash, Volt Tackle, Wild Charge |
 | 58 | ROM change: battle/skill/sub_seq.narc#251 is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) |
 | 58 | move effect #262: Frenzy Plant, Roar of Time, Sky Attack, Thrash, Volt Tackle, Wild Charge |
-| 56 | AI move effect #111 PROTECT not transcribed (Expert_Protect): Detect, Protect |
 | 53 | held item effect #65: Focus Band |
-| 52 | AI move effect #228 SWITCH_HIT not transcribed (Expert_UTurn): U-turn |
 | 52 | field condition: permanent Trick Room |
-| 51 | AI move effect #198 RECOIL_THIRD not transcribed (Expert_RecoilMove): Double-Edge, Wood Hammer |
 | 51 | ability: Chlorophyll |
 | 51 | move effect #198: Double-Edge, Wood Hammer |
-| 50 | AI move effect #67 STATUS_PARALYZE not transcribed (Basic_CheckCannotParalyze / Expert_StatusParalyze): Glare, Stun Spore, Thunder Wave |
-| 49 | AI move effect #152 THUNDER not transcribed (no Basic or Expert label): Thunder |
 | 49 | move effect #152: Thunder |
-| 48 | AI move effect #79 SET_SUBSTITUTE not transcribed (Basic_CheckCannotSubstitute / Expert_Substitute): Substitute |
 | 48 | move effect #79: Substitute |
-| 47 | AI move effect #182 LOWER_OWN_ATK_AND_DEF not transcribed (Basic_CheckNonStandardDamageOrChargeTurn / Expert_Superpower): Brave Bird, Close Combat, Take Down |
 | 47 | ROM change: battle/skill/be_seq.narc#182 is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) |
 | 47 | move effect #182: Brave Bird, Close Combat, Take Down |
-| 45 | AI move effect #29 MULTI_HIT not transcribed (no Basic or Expert label): Bone Rush, Bullet Seed, Fury Swipes, Icicle Spear, Pin Missile, Rock Blast, +1 more |
 | 45 | ROM change: arm9 gFieldScriptCommands is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) |
-| 43 | AI move effect #98 KO_MON_THAT_DEFEATED_USER not transcribed (Expert_DestinyBond): Destiny Bond |
 | 43 | ROM change: arm9 MapHeader_GetMapType is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) |
-| 42 | AI move effect #112 SET_SPIKES not transcribed (Basic_CheckSpikes / Expert_Spikes): Spikes |
-| 42 | AI move effect #50 ATK_UP_2 not transcribed (Basic_CheckHighStatStage_Attack / Expert_StatusAttackUp): Swords Dance |
 | 37 | AI move effect #16 EVA_UP not transcribed (Basic_CheckHighStatStage_Evasion / Expert_StatusEvasionUp): Double Team |
 | 37 | AI move effect #253 RECOIL_BURN_HIT not transcribed (Expert_RecoilMove): Blast Burn, Eruption, Flare Blitz, Overheat |
-| 37 | AI move effect #53 SP_ATK_UP_2 not transcribed (Basic_CheckHighStatStage_SpAttack / Expert_StatusSpAttackUp): Nasty Plot, Tail Glow |
 | 37 | battle format: a double battle |
 | 37 | move effect #253: Blast Burn, Eruption, Flare Blitz, Overheat |
-| 36 | AI move effect #196 INCREASE_POWER_WITH_WEIGHT not transcribed (Basic_CheckNonStandardDamageOrChargeTurn): Grass Knot, Low Kick |
-| 36 | AI move effect #197 SECRET_POWER not transcribed (no Basic or Expert label): Secret Power |
-| 35 | AI move effect #211 SP_ATK_SP_DEF_UP not transcribed (Basic_CheckCalmMind / Expert_StatusSpDefenseUp): Calm Mind |
 | 35 | move effect #211: Calm Mind |
-| 34 | AI move effect #249 TOXIC_SPIKES not transcribed (Basic_CheckToxicSpikes / Expert_ToxicSpikes): Toxic Spikes |
 | 34 | weather: Fog |
 | 33 | ability: Pressure |
-| 32 | AI move effect #125 THAW_AND_BURN_HIT not transcribed (no Basic or Expert label): Flame Wheel, Sacred Fire, Scald |
+| 32 | ability: Aftermath |
+| 32 | ability: Clear Body |
+| 29 | AI: AI_FLAG_BATON_PASS |
+| 29 | AI move effect #127 PASS_STATS_AND_STATUS not transcribed (Basic_CheckBatonPass / Expert_BatonPass): Baton Pass |
+| 29 | ability: Shadow Tag |
+| 26 | move effect #172: Follow Me |
+| 25 | AI move effect #141 UNUSED_141 not transcribed (no Basic or Expert label): Hurricane |
+| 25 | ROM change: battle/skill/be_seq.narc#141 is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) |
+| 25 | ROM change: overlay16 BattleControllerPlayer_CheckMoveHitAccuracy is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) |
+| 25 | ROM change: overlay16 BattleControllerPlayer_CheckMoveHitOverrides is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) |
+| 25 | held item effect #37: Ganlon Berry |
+| 25 | move effect #141: Hurricane |
+| 25 | move effect #150: Stomp |
+| 24 | AI move effect #148 HIT_IN_3_TURNS not transcribed (Basic_CheckFutureSight): Doom Desire, Future Sight |
+| 24 | form: trainer Pokemon in a data form: this game's party builder applies the form before computing its stats, which the engine's trainer party build does not model |
+| 24 | held item effect #50: Macho Brace, Power Anklet, Power Band, Power Belt, Power Bracer, Power Lens, +1 more |
+| 23 | AI move effect #37 REST not transcribed (Expert_Rest): Rest |
+| 23 | AI move-id case of TrainerAI_CalcDamage: Bulldoze, Triple Axel |
+| 23 | move effect #273: Fire Fang |
+| 23 | move effect #37: Rest |
+| 22 | ROM change: battle/skill/be_seq.narc#88 is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) |
+| 22 | move effect #257: Surf |
+| 22 | move effect #88: Fury Cutter, Triple Axel |
+| 21 | ability: Hyper Cutter |
+| 21 | ability: Unburden |
+| 20 | trainer AI: Trace: the AI reads the species' ability, not the one Trace copied into the battler (LoadBattlerAbility, trainer_ai.c:1170-1198; battle_script.c:3401-3403) |
+| 19 | AI move effect #106 PREVENT_ESCAPE not transcribed (Basic_CheckMeanLook / Expert_BindingMove): Block, Mean Look, Spider Web |
+| 19 | AI move effect #218 SPEED_DOWN_HIT not transcribed (Expert_HammerArm): Hammer Arm |
+| 19 | ability: Hydration |
+| 19 | move effect #106: Block, Mean Look, Spider Web |
+| 18 | AI move effect #188 REMOVE_HELD_ITEM not transcribed (Basic_CheckCanRemoveItem / Expert_KnockOff): Knock Off |
+| 18 | move effect #188: Knock Off |
+| 18 | move effect #189: Endeavor |
 
-Groups by kind: AI 173, move effect 87, battle format 36, ability 34, held item effect 22, battle terrain 12, ROM change 11, field condition 2, weather 1, trainer AI 1, form 1, trainer item 1, form change 1
+Groups by kind: move effect 87, AI 80, battle format 36, ability 34, held item effect 22, battle terrain 12, ROM change 11, field condition 2, weather 1, trainer AI 1, form 1, trainer item 1, form change 1
 
 ## Build order for the first two splits
 
@@ -616,179 +478,93 @@ Greedy: each step is the group that brings the most fights closest to runnable.
 
 | Step | Group | Fights runnable after |
 |---|---|---|
-| 1 | AI move effect #103 PRIORITY_1 not transcribed (no Basic or Expert label): Aqua Jet, Bullet Punch, Ice Shard, Mach Punch, Quick Attack, Shadow Sneak, +1 more | 1 of 68 |
-| 2 | AI move effect #1 STATUS_SLEEP not transcribed (Basic_CheckCannotSleep / Expert_StatusSleep): Dark Void, GrassWhistle, Hypnosis, Lovely Kiss, Sing, Sleep Powder, +2 more | 1 of 68 |
-| 3 | AI move effect #43 HIGH_CRITICAL not transcribed (Expert_HighCritical): Air Cutter, Aqua Cutter, Crabhammer, Cross Chop, Dragon Claw, Drill Peck, +12 more | 1 of 68 |
-| 4 | AI move effect #17 BYPASS_ACCURACY not transcribed (Expert_BypassAccuracyMove): Aerial Ace, Aura Sphere, Aurora Beam, Dragon Pulse, Faint Attack, Magical Leaf, +5 more | 1 of 68 |
-| 5 | AI move effect #97 USE_RANDOM_LEARNED_MOVE_SLEEP not transcribed (Basic_CheckAttackerAsleep / Expert_SleepTalk): Sleep Talk | 1 of 68 |
-| 6 | AI move effect #67 STATUS_PARALYZE not transcribed (Basic_CheckCannotParalyze / Expert_StatusParalyze): Glare, Stun Spore, Thunder Wave | 1 of 68 |
-| 7 | battle format: a multi battle | 1 of 68 |
-| 8 | AI move effect #73 LOWER_ACCURACY_HIT not transcribed (no Basic or Expert label): Mirror Shot, Mud Bomb, Mud-Slap, Muddy Water, Octazooka | 1 of 68 |
-| 9 | AI move effect #224 EAT_BERRY not transcribed (Expert_Pluck): Bug Bite, Pluck | 1 of 68 |
-| 10 | AI move effect #111 PROTECT not transcribed (Expert_Protect): Detect, Protect | 1 of 68 |
-| 11 | AI move effect #158 ALWAYS_FLINCH_FIRST_TURN_ONLY not transcribed (Basic_CheckFirstTurnInBattle / Expert_FakeOut): Fake Out | 1 of 68 |
-| 12 | AI move effect #29 MULTI_HIT not transcribed (no Basic or Expert label): Bone Rush, Bullet Seed, Fury Swipes, Icicle Spear, Pin Missile, Rock Blast, +1 more | 1 of 68 |
-| 13 | AI move effect #120 INFATUATE not transcribed (Basic_CheckCannotAttract): Attract | 2 of 68 |
-| 14 | AI move effect #49 STATUS_CONFUSE not transcribed (Basic_CheckCannotConfuse / Expert_StatusConfuse): Confuse Ray, Supersonic, Sweet Kiss, Teeter Dance | 3 of 68 |
-| 15 | AI: AI_FLAG_PRIORITIZE_EXTREMES | 3 of 68 |
-| 16 | AI: AI_FLAG_TAG_STRATEGY | 3 of 68 |
-| 17 | AI move effect #197 SECRET_POWER not transcribed (no Basic or Expert label): Secret Power | 3 of 68 |
-| 18 | AI move effect #228 SWITCH_HIT not transcribed (Expert_UTurn): U-turn | 3 of 68 |
-| 19 | AI move-id case of TrainerAI_CalcDamage: Frustration, Return | 6 of 68 |
-| 20 | AI move effect #65 SET_REFLECT not transcribed (Basic_CheckAlreadyUnderReflect / Expert_Reflect): Reflect | 6 of 68 |
-| 21 | AI move effect #125 THAW_AND_BURN_HIT not transcribed (no Basic or Expert label): Flame Wheel, Sacred Fire, Scald | 6 of 68 |
-| 22 | AI move effect #196 INCREASE_POWER_WITH_WEIGHT not transcribed (Basic_CheckNonStandardDamageOrChargeTurn): Grass Knot, Low Kick | 7 of 68 |
-| 23 | ability: Chlorophyll | 7 of 68 |
-| 24 | ability: Aftermath | 8 of 68 |
-| 25 | AI move effect #169 DOUBLE_POWER_WHEN_STATUSED not transcribed (Expert_Facade): Facade | 8 of 68 |
-| 26 | AI move effect #70 LOWER_SPEED_HIT not transcribed (Expert_SpeedDownOnHit): BubbleBeam, Bulldoze, Icy Wind, Mud Shot, Rock Tomb | 8 of 68 |
-| 27 | AI move effect #147 DOUBLE_DAMAGE_DIG not transcribed (no Basic or Expert label): Earthquake | 8 of 68 |
-| 28 | AI: AI_FLAG_CHECK_HP | 8 of 68 |
-| 29 | AI: AI_FLAG_HARRASSMENT | 8 of 68 |
-| 30 | AI move effect #221 DOUBLE_POWER_WHEN_BELOW_HALF not transcribed (Expert_Brine): Brine, Wring Out | 8 of 68 |
-| 31 | AI move effect #87 LEVEL_DAMAGE_FLAT not transcribed (Basic_CheckNonStandardDamageOrChargeTurn): Night Shade, Seismic Toss | 8 of 68 |
-| 32 | AI move effect #227 METAL_BURST not transcribed (Basic_CheckMetalBurst / Expert_MetalBurst): Bide, Metal Burst | 9 of 68 |
-| 33 | AI move effect #92 DAMAGE_WHILE_ASLEEP not transcribed (Basic_CheckAttackerAsleep / Expert_Nightmare): Snore | 9 of 68 |
-| 34 | ability: Unburden | 10 of 68 |
-| 35 | AI move effect #5 FREEZE_HIT not transcribed (no Basic or Expert label): Ice Beam, Ice Punch | 10 of 68 |
-| 36 | AI move effect #84 STATUS_LEECH_SEED not transcribed (Basic_CheckCannotLeechSeed / Expert_ToxicLeechSeed): Leech Seed | 10 of 68 |
-| 37 | AI move effect #214 HEAL_HALF_REMOVE_FLYING_TYPE not transcribed (Basic_CheckCanRecoverHP / Expert_Recovery): Roost | 11 of 68 |
-| 38 | AI move effect #171 DOUBLE_POWER_AND_CURE_PARALYSIS not transcribed (Expert_SmellingSalts): SmellingSalt | 11 of 68 |
-| 39 | AI move effect #44 HIT_TWICE not transcribed (no Basic or Expert label): Bonemerang, Double Hit, Double Kick, DoubleSlap | 11 of 68 |
-| 40 | move effect #83: Metronome; 123 of 442 callable moves unmodelled | 11 of 68 |
-| 41 | AI move effect #83 CALL_RANDOM_MOVE not transcribed (no Basic or Expert label): Metronome | 11 of 68 |
-| 42 | battle terrain: the battle terrain varies over its maps (TERRAIN_PLAIN, TERRAIN_GRASS, TERRAIN_BUILDING), and Nature Power, Secret Power, Camouflage would read it | 13 of 68 |
-| 43 | AI move effect #167 STATUS_BURN not transcribed (Basic_CheckCannotBurn): Will-O-Wisp | 14 of 68 |
-| 44 | AI move effect #144 MIRROR_COAT not transcribed (Basic_CheckNonStandardDamageOrChargeTurn / Expert_MirrorCoat): Mirror Coat | 15 of 68 |
-| 45 | AI move effect #202 BADLY_POISON_HIT not transcribed (no Basic or Expert label): Poison Fang | 15 of 68 |
-| 46 | move effect #198: Double-Edge, Wood Hammer | 15 of 68 |
-| 47 | AI move effect #198 RECOIL_THIRD not transcribed (Expert_RecoilMove): Double-Edge, Wood Hammer | 15 of 68 |
-| 48 | AI move effect #249 TOXIC_SPIKES not transcribed (Basic_CheckToxicSpikes / Expert_ToxicSpikes): Toxic Spikes | 15 of 68 |
-| 49 | AI move effect #276 RAISE_SP_ATK_HIT not transcribed (no Basic or Expert label): Charge Beam | 15 of 68 |
-| 50 | ability: Clear Body | 16 of 68 |
-| 51 | AI move effect #212 ATK_SPD_UP not transcribed (Basic_CheckDragonDance / Expert_DragonDance): Dragon Dance | 16 of 68 |
-| 52 | AI move effect #136 WEATHER_RAIN not transcribed (Basic_CheckRainDance / Expert_RainDance): Rain Dance | 16 of 68 |
-| 53 | trainer AI: Trace: the AI reads the species' ability, not the one Trace copied into the battler (LoadBattlerAbility, trainer_ai.c:1170-1198; battle_script.c:3401-3403) | 16 of 68 |
-| 54 | AI move effect #98 KO_MON_THAT_DEFEATED_USER not transcribed (Expert_DestinyBond): Destiny Bond | 17 of 68 |
-| 55 | move effect #41: Dragon Rage | 17 of 68 |
-| 56 | AI move effect #41 40_DAMAGE_FLAT not transcribed (Basic_CheckNonStandardDamageOrChargeTurn): Dragon Rage | 18 of 68 |
-| 57 | move effect #152: Thunder | 18 of 68 |
-| 58 | AI move effect #152 THUNDER not transcribed (no Basic or Expert label): Thunder | 19 of 68 |
-| 59 | ability: Volt Absorb | 20 of 68 |
-| 60 | battle format: gauntlet Oreburgh Mine (position 2; rules not recorded) | 21 of 68 |
-| 61 | ability: Pressure | 22 of 68 |
-| 62 | ability: Magnet Pull | 23 of 68 |
-| 63 | ability: Huge Power | 24 of 68 |
-| 64 | AI move effect #99 INCREASE_POWER_WITH_LESS_HP not transcribed (Basic_CheckNonStandardDamageOrChargeTurn / Expert_Reversal): Flail, Reversal | 25 of 68 |
-| 65 | AI move effect #50 ATK_UP_2 not transcribed (Basic_CheckHighStatStage_Attack / Expert_StatusAttackUp): Swords Dance | 25 of 68 |
-| 66 | form: trainer Pokemon in a data form: this game's party builder applies the form before computing its stats, which the engine's trainer party build does not model | 25 of 68 |
-| 67 | move effect #260: Blizzard, Ice Ball, Sheer Cold | 25 of 68 |
-| 68 | AI move effect #260 BLIZZARD not transcribed (Expert_Blizzard): Blizzard, Ice Ball, Sheer Cold | 25 of 68 |
-| 69 | held item effect #65: Focus Band | 26 of 68 |
-| 70 | AI: AI_FLAG_BATON_PASS | 27 of 68 |
-| 71 | ability: Hyper Cutter | 28 of 68 |
-| 72 | AI move effect #28 FORCE_SWITCH not transcribed (Basic_CheckCanForceSwitch / Expert_ForceSwitch): Roar, Whirlwind | 29 of 68 |
-| 73 | AI move effect #20 SPEED_DOWN not transcribed (Basic_CheckLowStatStage_Speed / Expert_StatusSpeedDown): String Shot | 30 of 68 |
-| 74 | AI move effect #164 WEATHER_HAIL not transcribed (Basic_CheckHail / Expert_Hail): Hail | 31 of 68 |
-| 75 | AI move effect #148 HIT_IN_3_TURNS not transcribed (Basic_CheckFutureSight): Doom Desire, Future Sight | 32 of 68 |
-| 76 | battle format: a double battle | 32 of 68 |
-| 77 | move effect #273: Fire Fang | 32 of 68 |
-| 78 | AI move effect #273 FLINCH_BURN_HIT not transcribed (no Basic or Expert label): Fire Fang | 32 of 68 |
-| 79 | AI move effect #225 DOUBLE_SPEED_3_TURNS not transcribed (Basic_CheckTailwind / Expert_Tailwind): Tailwind | 33 of 68 |
-| 80 | ability: Swarm | 34 of 68 |
-| 81 | AI move effect #58 ATK_DOWN_2 not transcribed (Basic_CheckLowStatStage_Attack / Expert_StatusAttackDown): Charm, FeatherDance | 34 of 68 |
-| 82 | battle format: gauntlet Oreburgh Mine (position 1; rules not recorded) | 35 of 68 |
-| 83 | AI move effect #36 TRI_ATTACK not transcribed (no Basic or Expert label): Aeroblast, Tri Attack | 35 of 68 |
-| 84 | ability: Download | 36 of 68 |
-| 85 | AI move effect #149 DOUBLE_DAMAGE_FLY_OR_BOUNCE not transcribed (no Basic or Expert label): Gust, Sky Uppercut | 36 of 68 |
-| 86 | AI move effect #23 ACC_DOWN not transcribed (Basic_CheckLowStatStage_Accuracy / Expert_StatusAccuracyDown): Flash, Sand-Attack, SmokeScreen | 37 of 68 |
-| 87 | move effect #150: Stomp | 37 of 68 |
-| 88 | AI move effect #150 FLINCH_MINIMIZE_DOUBLE_HIT not transcribed (no Basic or Expert label): Stomp | 37 of 68 |
-| 89 | move effect #172: Follow Me | 37 of 68 |
-| 90 | AI move effect #172 MAKE_GLOBAL_TARGET not transcribed (no Basic or Expert label): Follow Me | 37 of 68 |
-| 91 | move effect #274: Avalanche, Ice Fang | 37 of 68 |
-| 92 | AI move effect #274 FLINCH_FREEZE_HIT not transcribed (no Basic or Expert label): Avalanche, Ice Fang | 38 of 68 |
-| 93 | move effect #257: Surf | 38 of 68 |
-| 94 | AI move effect #257 DOUBLE_DAMAGE_DIVE not transcribed (no Basic or Expert label): Surf | 39 of 68 |
-| 95 | move effect #106: Block, Mean Look, Spider Web | 39 of 68 |
-| 96 | AI move effect #106 PREVENT_ESCAPE not transcribed (Basic_CheckMeanLook / Expert_BindingMove): Block, Mean Look, Spider Web | 40 of 68 |
-| 97 | AI move effect #138 RAISE_DEF_HIT not transcribed (no Basic or Expert label): Steel Wing | 40 of 68 |
-| 98 | ability: Arena Trap | 41 of 68 |
-| 99 | AI move effect #112 SET_SPIKES not transcribed (Basic_CheckSpikes / Expert_Spikes): Spikes | 41 of 68 |
-| 100 | AI move effect #51 DEF_UP_2 not transcribed (Basic_CheckHighStatStage_Defense / Expert_StatusDefenseUp): Acid Armor, Barrier, Iron Defense | 41 of 68 |
-| 101 | AI move effect #135 RANDOM_POWER_BASED_ON_IVS not transcribed (Basic_CheckNonStandardDamageOrChargeTurn): Hidden Power | 42 of 68 |
-| 102 | move effect #192: Imprison | 42 of 68 |
-| 103 | AI move effect #192 MAKE_SHARED_MOVES_UNUSEABLE not transcribed (Basic_CheckCanImprison / Expert_Imprison): Imprison | 42 of 68 |
-| 104 | ability: Wonder Guard | 43 of 68 |
-| 105 | move effect #188: Knock Off | 43 of 68 |
-| 106 | AI move effect #188 REMOVE_HELD_ITEM not transcribed (Basic_CheckCanRemoveItem / Expert_KnockOff): Knock Off | 43 of 68 |
-| 107 | battle format: gauntlet Route 204 North (position 2; rules not recorded) | 44 of 68 |
-| 108 | ability: Bad Dreams | 44 of 68 |
-| 109 | ability: Rain Dish | 44 of 68 |
-| 110 | battle format: gauntlet Route 204 North B2B (position 2; rules not recorded) | 45 of 68 |
-| 111 | move effect #142: Belly Drum | 45 of 68 |
-| 112 | AI move effect #142 MAX_ATK_LOSE_HALF_MAX_HP not transcribed (Basic_CheckBellyDrum / Expert_BellyDrum): Belly Drum | 45 of 68 |
-| 113 | ability: Water Absorb | 46 of 68 |
-| 114 | move effect #91: Pain Split | 46 of 68 |
-| 115 | AI move effect #91 AVERAGE_HP not transcribed (Expert_PainSplit): Pain Split | 47 of 68 |
-| 116 | move effect #8: Dream Eater | 47 of 68 |
-| 117 | AI move effect #8 RECOVER_DAMAGE_SLEEP not transcribed (Basic_CheckDreamEater / Expert_DreamEater): Dream Eater | 48 of 68 |
-| 118 | move effect #79: Substitute | 48 of 68 |
-| 119 | AI move effect #79 SET_SUBSTITUTE not transcribed (Basic_CheckCannotSubstitute / Expert_Substitute): Substitute | 49 of 68 |
-| 120 | move effect #262: Frenzy Plant, Roar of Time, Sky Attack, Thrash, Volt Tackle, Wild Charge | 49 of 68 |
-| 121 | AI move effect #262 RECOIL_PARALYZE_HIT not transcribed (Expert_RecoilMove): Frenzy Plant, Roar of Time, Sky Attack, Thrash, Volt Tackle, Wild Charge | 50 of 68 |
-| 122 | move effect #230: Payback, Revenge | 50 of 68 |
-| 123 | AI move effect #230 DOUBLE_POWER_IF_MOVING_SECOND not transcribed (Expert_Payback): Payback, Revenge | 51 of 68 |
-| 124 | move effect #208: Bulk Up | 51 of 68 |
-| 125 | AI move effect #208 ATK_DEF_UP not transcribed (Basic_CheckBulkUp / Expert_StatusDefenseUp): Bulk Up | 52 of 68 |
-| 126 | battle format: gauntlet Route 204 North (position 3; rules not recorded) | 52 of 68 |
-| 127 | AI move effect #137 WEATHER_SUN not transcribed (Basic_CheckSunnyDay / Expert_SunnyDay): Sunny Day | 53 of 68 |
-| 128 | battle format: gauntlet Eterna Gym gym trainers (position 3; rules not recorded) | 53 of 68 |
-| 129 | AI move effect #271 LOWER_SP_DEF_2_HIT not transcribed (no Basic or Expert label): Seed Flare | 54 of 68 |
-| 130 | battle format: gauntlet Eterna Gym gym trainers (position 2; rules not recorded) | 54 of 68 |
-| 131 | ability: Flower Gift | 55 of 68 |
-| 132 | battle format: gauntlet Eterna Gym gym trainers (position 1; rules not recorded) | 55 of 68 |
-| 133 | ability: Leaf Guard | 56 of 68 |
-| 134 | AI move effect #38 ONE_HIT_KO not transcribed (Basic_CheckOHKOWouldFail / Expert_OHKOMove): Fissure, Guillotine, Horn Drill | 56 of 68 |
-| 135 | AI move effect #118 ATK_UP_2_STATUS_CONFUSION not transcribed (Basic_CheckCannotConfuse / Expert_Swagger): Swagger | 57 of 68 |
-| 136 | AI move effect #242 USE_LAST_USED_MOVE not transcribed (Basic_CheckCopycat / Expert_Copycat): Copycat | 57 of 68 |
-| 137 | AI move effect #122 RANDOM_POWER_MAYBE_HEAL not transcribed (Basic_CheckNonStandardDamageOrChargeTurn): Present | 58 of 68 |
-| 138 | AI move effect #159 UPROAR not transcribed (no Basic or Expert label): Uproar | 58 of 68 |
-| 139 | AI move effect #139 RAISE_ATTACK_HIT not transcribed (no Basic or Expert label): Metal Claw, Meteor Mash | 59 of 68 |
-| 140 | move effect #45: Hi Jump Kick, Jump Kick | 59 of 68 |
-| 141 | ability: Pure Power | 59 of 68 |
-| 142 | AI move effect #45 CRASH_ON_MISS not transcribed (no Basic or Expert label): Hi Jump Kick, Jump Kick | 60 of 68 |
-| 143 | trainer item: Poké Ball | 60 of 68 |
-| 144 | AI move effect #40 HALVE_HP not transcribed (Basic_CheckNonStandardDamageOrChargeTurn / Expert_SuperFang): Super Fang | 60 of 68 |
-| 145 | AI move effect #101 LEAVE_WITH_1_HP not transcribed (no Basic or Expert label): False Swipe | 61 of 68 |
-| 146 | move effect #48: Draco Meteor, Giga Impact, Hydro Cannon, Hyper Beam, Outrage, Superpower | 61 of 68 |
-| 147 | ROM change: battle/skill/be_seq.narc#48 is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) | 61 of 68 |
-| 148 | AI move effect #48 RECOIL_QUARTER not transcribed (Expert_RecoilMove): Draco Meteor, Giga Impact, Hydro Cannon, Hyper Beam, Outrage, Superpower | 62 of 68 |
-| 149 | move effect #176: Helping Hand | 62 of 68 |
-| 150 | ability: Synchronize | 62 of 68 |
-| 151 | AI move effect #176 BOOST_ALLY_POWER_BY_50_PERCENT not transcribed (Basic_CheckHelpingHand): Helping Hand | 63 of 68 |
-| 152 | move effect #182: Brave Bird, Close Combat, Take Down | 63 of 68 |
-| 153 | ROM change: battle/skill/be_seq.narc#182 is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) | 63 of 68 |
-| 154 | AI move effect #182 LOWER_OWN_ATK_AND_DEF not transcribed (Basic_CheckNonStandardDamageOrChargeTurn / Expert_Superpower): Brave Bird, Close Combat, Take Down | 63 of 68 |
-| 155 | move effect #124: Safeguard | 63 of 68 |
-| 156 | battle terrain: the battle terrain varies over its maps (TERRAIN_PLAIN, TERRAIN_GRASS, TERRAIN_BUILDING), and Secret Power would read it | 63 of 68 |
-| 157 | AI move effect #124 PREVENT_STATUS not transcribed (Basic_CheckAlreadyUnderSafeguard): Safeguard | 64 of 68 |
-| 158 | move effect #189: Endeavor | 64 of 68 |
-| 159 | held item effect #15: Wiki Berry | 64 of 68 |
-| 160 | AI move effect #189 SET_HP_EQUAL_TO_USER not transcribed (Basic_CheckNonStandardDamageOrChargeTurn / Expert_Endeavor): Endeavor | 64 of 68 |
-| 161 | AI move effect #10 ATK_UP not transcribed (Basic_CheckHighStatStage_Attack / Expert_StatusAttackUp): Howl, Meditate, Sharpen | 65 of 68 |
-| 162 | move effect #180: Assist | 65 of 68 |
-| 163 | move effect #151: SolarBeam | 65 of 68 |
-| 164 | AI move effect #180 USE_RANDOM_ALLY_MOVE not transcribed (no Basic or Expert label): Assist | 65 of 68 |
-| 165 | AI move effect #151 SKIP_CHARGE_TURN_IN_SUN not transcribed (Expert_ChargeTurnNoInvuln / Expert_Thunder): SolarBeam | 66 of 68 |
-| 166 | move effect #170: Focus Punch | 66 of 68 |
-| 167 | battle format: gauntlet Route 204 North (position 1; rules not recorded) | 66 of 68 |
-| 168 | ability: Poison Heal | 66 of 68 |
-| 169 | AI move effect #170 HIT_LAST_WHIFF_IF_HIT not transcribed (Basic_CheckNonStandardDamageOrChargeTurn / Expert_FocusPunch): Focus Punch | 67 of 68 |
-| 170 | move effect #90: Encore | 67 of 68 |
-| 171 | move effect #108: Minimize | 67 of 68 |
-| 172 | battle format: gauntlet Route 204 North B2B (position 1; rules not recorded) | 67 of 68 |
-| 173 | ability: Shadow Tag | 67 of 68 |
-| 174 | AI move effect #90 ENCORE not transcribed (Basic_CheckCannotEncore / Expert_Encore): Encore | 67 of 68 |
-| 175 | AI move effect #89 COUNTER not transcribed (Basic_CheckNonStandardDamageOrChargeTurn / Expert_Counter): Counter | 67 of 68 |
-| 176 | AI move effect #108 EVA_UP_2_MINIMIZE not transcribed (Basic_CheckHighStatStage_Evasion / Expert_StatusEvasionUp): Minimize | 68 of 68 |
+| 1 | battle format: a multi battle | 13 of 68 |
+| 2 | AI: AI_FLAG_TAG_STRATEGY | 13 of 68 |
+| 3 | ability: Chlorophyll | 13 of 68 |
+| 4 | ability: Aftermath | 14 of 68 |
+| 5 | AI: AI_FLAG_HARRASSMENT | 14 of 68 |
+| 6 | move effect #198: Double-Edge, Wood Hammer | 14 of 68 |
+| 7 | move effect #83: Metronome; 123 of 442 callable moves unmodelled | 15 of 68 |
+| 8 | move effect #41: Dragon Rage | 16 of 68 |
+| 9 | move effect #152: Thunder | 17 of 68 |
+| 10 | battle terrain: the battle terrain varies over its maps (TERRAIN_PLAIN, TERRAIN_GRASS, TERRAIN_BUILDING), and Nature Power, Secret Power, Camouflage would read it | 19 of 68 |
+| 11 | AI move effect #227 METAL_BURST not transcribed (Basic_CheckMetalBurst / Expert_MetalBurst): Bide, Metal Burst | 21 of 68 |
+| 12 | trainer AI: Trace: the AI reads the species' ability, not the one Trace copied into the battler (LoadBattlerAbility, trainer_ai.c:1170-1198; battle_script.c:3401-3403) | 22 of 68 |
+| 13 | AI move effect #214 HEAL_HALF_REMOVE_FLYING_TYPE not transcribed (Basic_CheckCanRecoverHP / Expert_Recovery): Roost | 23 of 68 |
+| 14 | move effect #260: Blizzard, Ice Ball, Sheer Cold | 23 of 68 |
+| 15 | ability: Volt Absorb | 24 of 68 |
+| 16 | move effect #273: Fire Fang | 24 of 68 |
+| 17 | battle format: a double battle | 24 of 68 |
+| 18 | AI: AI_FLAG_BATON_PASS | 25 of 68 |
+| 19 | form: trainer Pokemon in a data form: this game's party builder applies the form before computing its stats, which the engine's trainer party build does not model | 26 of 68 |
+| 20 | AI move-id case of TrainerAI_CalcDamage: Bulldoze, Triple Axel | 27 of 68 |
+| 21 | ability: Unburden | 28 of 68 |
+| 22 | ability: Clear Body | 29 of 68 |
+| 23 | held item effect #65: Focus Band | 30 of 68 |
+| 24 | ability: Swarm | 31 of 68 |
+| 25 | move effect #172: Follow Me | 31 of 68 |
+| 26 | move effect #274: Avalanche, Ice Fang | 32 of 68 |
+| 27 | ability: Arena Trap | 33 of 68 |
+| 28 | move effect #150: Stomp | 33 of 68 |
+| 29 | move effect #257: Surf | 34 of 68 |
+| 30 | trainer item: Poké Ball | 35 of 68 |
+| 31 | move effect #79: Substitute | 36 of 68 |
+| 32 | move effect #262: Frenzy Plant, Roar of Time, Sky Attack, Thrash, Volt Tackle, Wild Charge | 37 of 68 |
+| 33 | move effect #230: Payback, Revenge | 38 of 68 |
+| 34 | battle format: gauntlet Route 204 North (position 3; rules not recorded) | 39 of 68 |
+| 35 | battle format: gauntlet Oreburgh Mine (position 2; rules not recorded) | 40 of 68 |
+| 36 | battle format: gauntlet Oreburgh Mine (position 1; rules not recorded) | 41 of 68 |
+| 37 | battle format: gauntlet Eterna Gym gym trainers (position 3; rules not recorded) | 42 of 68 |
+| 38 | ability: Pressure | 43 of 68 |
+| 39 | ability: Magnet Pull | 44 of 68 |
+| 40 | ability: Hyper Cutter | 45 of 68 |
+| 41 | ability: Huge Power | 46 of 68 |
+| 42 | ability: Download | 47 of 68 |
+| 43 | AI move effect #242 USE_LAST_USED_MOVE not transcribed (Basic_CheckCopycat / Expert_Copycat): Copycat | 48 of 68 |
+| 44 | AI move effect #23 ACC_DOWN not transcribed (Basic_CheckLowStatStage_Accuracy / Expert_StatusAccuracyDown): Flash, Sand-Attack, SmokeScreen | 49 of 68 |
+| 45 | AI move effect #148 HIT_IN_3_TURNS not transcribed (Basic_CheckFutureSight): Doom Desire, Future Sight | 50 of 68 |
+| 46 | move effect #142: Belly Drum | 50 of 68 |
+| 47 | move effect #208: Bulk Up | 51 of 68 |
+| 48 | move effect #106: Block, Mean Look, Spider Web | 51 of 68 |
+| 49 | AI move effect #106 PREVENT_ESCAPE not transcribed (Basic_CheckMeanLook / Expert_BindingMove): Block, Mean Look, Spider Web | 52 of 68 |
+| 50 | ability: Rain Dish | 52 of 68 |
+| 51 | ability: Water Absorb | 53 of 68 |
+| 52 | ability: Bad Dreams | 53 of 68 |
+| 53 | move effect #8: Dream Eater | 54 of 68 |
+| 54 | move effect #45: Hi Jump Kick, Jump Kick | 54 of 68 |
+| 55 | ability: Pure Power | 55 of 68 |
+| 56 | move effect #192: Imprison | 55 of 68 |
+| 57 | AI move effect #192 MAKE_SHARED_MOVES_UNUSEABLE not transcribed (Basic_CheckCanImprison / Expert_Imprison): Imprison | 55 of 68 |
+| 58 | move effect #91: Pain Split | 56 of 68 |
+| 59 | ability: Wonder Guard | 57 of 68 |
+| 60 | move effect #188: Knock Off | 57 of 68 |
+| 61 | AI move effect #188 REMOVE_HELD_ITEM not transcribed (Basic_CheckCanRemoveItem / Expert_KnockOff): Knock Off | 57 of 68 |
+| 62 | battle format: gauntlet Route 204 North B2B (position 2; rules not recorded) | 58 of 68 |
+| 63 | battle format: gauntlet Route 204 North (position 2; rules not recorded) | 59 of 68 |
+| 64 | move effect #48: Draco Meteor, Giga Impact, Hydro Cannon, Hyper Beam, Outrage, Superpower | 59 of 68 |
+| 65 | ROM change: battle/skill/be_seq.narc#48 is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) | 60 of 68 |
+| 66 | move effect #182: Brave Bird, Close Combat, Take Down | 60 of 68 |
+| 67 | ROM change: battle/skill/be_seq.narc#182 is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) | 60 of 68 |
+| 68 | move effect #189: Endeavor | 60 of 68 |
+| 69 | held item effect #15: Wiki Berry | 61 of 68 |
+| 70 | move effect #124: Safeguard | 61 of 68 |
+| 71 | battle terrain: the battle terrain varies over its maps (TERRAIN_PLAIN, TERRAIN_GRASS, TERRAIN_BUILDING), and Secret Power would read it | 62 of 68 |
+| 72 | battle format: gauntlet Eterna Gym gym trainers (position 2; rules not recorded) | 62 of 68 |
+| 73 | ability: Flower Gift | 63 of 68 |
+| 74 | battle format: gauntlet Eterna Gym gym trainers (position 1; rules not recorded) | 63 of 68 |
+| 75 | ability: Leaf Guard | 64 of 68 |
+| 76 | move effect #180: Assist | 64 of 68 |
+| 77 | move effect #151: SolarBeam | 64 of 68 |
+| 78 | AI move effect #151 SKIP_CHARGE_TURN_IN_SUN not transcribed (Expert_ChargeTurnNoInvuln / Expert_Thunder): SolarBeam | 65 of 68 |
+| 79 | move effect #176: Helping Hand | 65 of 68 |
+| 80 | ability: Synchronize | 65 of 68 |
+| 81 | AI move effect #176 BOOST_ALLY_POWER_BY_50_PERCENT not transcribed (Basic_CheckHelpingHand): Helping Hand | 66 of 68 |
+| 82 | move effect #170: Focus Punch | 66 of 68 |
+| 83 | battle format: gauntlet Route 204 North (position 1; rules not recorded) | 66 of 68 |
+| 84 | ability: Poison Heal | 67 of 68 |
+| 85 | move effect #90: Encore | 67 of 68 |
+| 86 | move effect #108: Minimize | 67 of 68 |
+| 87 | battle format: gauntlet Route 204 North B2B (position 1; rules not recorded) | 67 of 68 |
+| 88 | ability: Shadow Tag | 67 of 68 |
+| 89 | AI move effect #90 ENCORE not transcribed (Basic_CheckCannotEncore / Expert_Encore): Encore | 67 of 68 |
+| 90 | AI move effect #108 EVA_UP_2_MINIMIZE not transcribed (Basic_CheckHighStatStage_Evasion / Expert_StatusEvasionUp): Minimize | 68 of 68 |

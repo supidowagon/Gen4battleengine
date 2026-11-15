@@ -47,8 +47,9 @@ Refused, never approximated (``switching_refusals`` names each one):
   ``AI_IsAsleepWithNaturalCure``), whose draws are not modelled;
 * Iron Ball (``HOLD_EFFECT_SPEED_DOWN_GROUNDED``) on either side;
 * moves whose state M1 does not carry: Magnet Rise, Roost, Miracle Eye, Ingrain, Perish Song (step 3), and the variable-type moves Weather
-  Ball, Natural Gift and Judgment (``TrainerAI_MoveType``, :3127), and Hidden Power
-  on the opponent's side only (the player's is read from its IVs: ``move_type_of``);
+  Ball, Natural Gift and Judgment (``TrainerAI_MoveType``, :3127; Hidden Power's IV type is
+  modelled on both sides: ``damage.ai_move_type``, and a bench member's own,
+  ``Move_CalcVariableType``, battle_lib.c:8162-8175);
 * a state where ``AI_OnlyIneffectiveMoves`` (step 5, :3361) applies;
 * a layout with more than ``sites`` sites (never under ``KAIZO_SWITCH_SITES``).
 
@@ -71,7 +72,7 @@ import numpy as np
 
 from nuzline.data.tables import Tables
 from nuzline.engine.actions import MOVE_ACTIONS
-from nuzline.engine.damage import divide, move_type_of
+from nuzline.engine.damage import ai_move_type, decomp_abilities, divide, hidden_power
 from nuzline.engine.state import MOVES, SLOTS, BattleState
 
 SWITCH_SITES = 9  # roark.md 11.1: 1 keep draw + 4 + 4 party-pass draws for Roark
@@ -151,21 +152,18 @@ _MOVES = {
     "Miracle Eye": "lifts the Dark immunity",
     "Ingrain": "grounds the defender and blocks the switch",
     "Perish Song": "AI_PerishSongKO",
-    "Hidden Power": "variable type (TrainerAI_MoveType)",
     "Weather Ball": "variable type (TrainerAI_MoveType)",
     "Natural Gift": "variable type (TrainerAI_MoveType)",
     "Judgment": "variable type (TrainerAI_MoveType)",
 }
-# What the AI refuses on the player's side (side 0): the any-side abilities, and every refused
-# move but Hidden Power (its IV type is modelled for the player, see ``_layout``). Decomp ids.
+# What the AI refuses on the player's side (side 0): the any-side abilities and every refused
+# move (Hidden Power's IV type is modelled on both sides, see ``_layout``). Decomp ids.
 PLAYER_ABILITY_REFUSALS = {
     ABILITY_IDS[n]: f"ability {n} ({why}) is not implemented"
     for n, why in _ANY_SIDE_ABILITIES.items()
 }
 PLAYER_MOVE_REFUSALS = {
-    MOVE_IDS[n]: f"move {n} ({why}) is not implemented"
-    for n, why in _MOVES.items()
-    if n != "Hidden Power"
+    MOVE_IDS[n]: f"move {n} ({why}) is not implemented" for n, why in _MOVES.items()
 }
 _ANY_SIDE_IDS = jnp.array([ABILITY_IDS[n] for n in _ANY_SIDE_ABILITIES], _I32)
 _AI_SIDE_IDS = jnp.array([ABILITY_IDS[n] for n in _AI_SIDE_ABILITIES], _I32)
@@ -232,19 +230,35 @@ def chart_multipliers(
     return jnp.where(t2_first, m2, m1), jnp.where(t2_first, m1, m2)
 
 
-def apply_type_chart(tables: Tables, state: BattleState, atk_side, move, value) -> jnp.ndarray:
+def party_move_types(tables: Tables, state: BattleState, side: int = 1) -> jnp.ndarray:
+    """``int32[SLOTS, MOVES]``: ``Move_CalcVariableType`` (battle_lib.c:8097) of each party
+    member's moves on ``side``: Hidden Power its own IV type (:8162-8175), any other move
+    its table type (Natural Gift, Judgment and Weather Ball are refused)."""
+    moves = state.moves[side].astype(_I32)
+    iv_types = jax.vmap(lambda ivs: hidden_power(ivs)[0])(state.ivs[side])  # [SLOTS]
+    return jnp.where(
+        moves == MOVE_IDS["Hidden Power"], iv_types[:, None], tables.move_type[moves].astype(_I32)
+    )
+
+
+def apply_type_chart(
+    tables: Tables, state: BattleState, atk_side, move, value, move_type=None
+) -> jnp.ndarray:
     """``int32``: ``BattleSystem_ApplyTypeChart`` (battle_lib.c:2560) on ``value`` for
     ``move`` by ``atk_side``'s active Pokemon against the other side's: STAB x15/10
     (:2592), then each ``chart_multipliers`` factor through ``ApplyTypeMultiplier``'s
     ``BattleSystem_Divide(value * mul, 10)`` (:7547); Struggle returns ``value``
     unchanged (:2573). The defender's Foresight flag is read; the other type-chart
     modifiers (Adaptability, Normalize, Scrappy, Levitate, Wonder Guard, Iron Ball,
-    Miracle Eye and the other volatiles) are not implemented: ``policy.ai_refusals`` refuses them."""
+    Miracle Eye and the other volatiles) are not implemented: ``policy.ai_refusals`` refuses them.
+    ``move_type`` is the caller's type for the move (``party_move_types``); by default the
+    attacker's ``TrainerAI_MoveType`` (``damage.ai_move_type``)."""
     move = jnp.asarray(move, _I32)
     atk_side = jnp.asarray(atk_side, _I32)
     a_types = state.types[atk_side, state.active[atk_side]].astype(_I32)
     d_types = state.types[1 - atk_side, state.active[1 - atk_side]]
-    move_type = move_type_of(tables, state, atk_side, move)
+    if move_type is None:
+        move_type = ai_move_type(tables, state, atk_side, move)  # TrainerAI_MoveType
     value = jnp.asarray(value, _I32)
     out = jnp.where(jnp.any(a_types == move_type), value * 15 // 10, value)
     identified = state.foresight[1 - atk_side] != 0
@@ -262,12 +276,15 @@ def _chart_flags(
     return jnp.where(move == MOVE_STRUGGLE, 0, mask)
 
 
-def type_chart_flags(tables: Tables, move, def_types, gravity, identified=False) -> jnp.ndarray:
+def type_chart_flags(
+    tables: Tables, move, def_types, gravity, identified=False, move_type=None
+) -> jnp.ndarray:
     """``int32``: the ``MOVE_STATUS_*`` bits ``BattleSystem_ApplyTypeChart`` leaves for
     ``move`` against a defender of ``def_types`` (int8[2]), identified by Foresight or
-    not; only a move with power updates the super/not-very-effective bits."""
+    not; only a move with power updates the super/not-very-effective bits. ``move_type``
+    overrides the move's table type (``damage.ai_move_type``)."""
     power = tables.move_power[jnp.asarray(move, _I32)]
-    return _chart_flags(tables, move, def_types, gravity, power > 0, identified)
+    return _chart_flags(tables, move, def_types, gravity, power > 0, identified, move_type)
 
 
 def calc_effectiveness_flags(
@@ -275,7 +292,7 @@ def calc_effectiveness_flags(
 ) -> jnp.ndarray:
     """``int32``: the ``MOVE_STATUS_*`` bits ``BattleSystem_CalcEffectiveness`` leaves
     for ``move`` against ``def_types`` (int8[2]), for any move, power or not.
-    ``move_type`` overrides the move's table type (``move_type_of``)."""
+    ``move_type`` overrides the move's table type (``damage.ai_move_type``)."""
     return _chart_flags(tables, move, def_types, gravity, True, move_type=move_type)
 
 
@@ -297,9 +314,7 @@ def _layout(tables: Tables, state: BattleState, sites: int) -> _Layout:
     gravity = state.gravity
     d_types = state.types[0, d]
     species = state.species.astype(_I32)
-    row = tables.species_form_row[species, state.form.astype(_I32)].astype(_I32)
-    ability = tables.species_abilities_decomp[row, state.ability_slot.astype(_I32)]
-    ability = ability.astype(_I32)
+    ability = decomp_abilities(tables, state)  # the engine's current abilities
     d_ability = ability[0, d]
     present = species > 0
 
@@ -317,7 +332,11 @@ def _layout(tables: Tables, state: BattleState, sites: int) -> _Layout:
     # Step 5 precondition and step 8: A's moves against D through ApplyTypeChart.
     a_moves = state.moves[1, a].astype(_I32)
     identified = state.foresight[0] != 0
-    a_flags = jax.vmap(lambda m: type_chart_flags(tables, m, d_types, gravity, identified))(a_moves)
+    a_flags = jax.vmap(
+        lambda m: type_chart_flags(
+            tables, m, d_types, gravity, identified, ai_move_type(tables, state, 1, m)
+        )
+    )(a_moves)
     keep = (a_moves != 0) & ((a_flags & SUPER_EFFECTIVE) != 0)
     damaging = (a_moves != 0) & (tables.move_power[a_moves] > 0)
     only_ineffective = (
@@ -333,13 +352,15 @@ def _layout(tables: Tables, state: BattleState, sites: int) -> _Layout:
     hit = state.move_hit[1].astype(_I32)
     hit_ok = (hit != 0) & (tables.move_power[hit] > 0)
     # TrainerAI_MoveType (:3767): the type of moveHit as its user (the player's active) used it.
-    hit_type = move_type_of(tables, state, 0, hit)
+    hit_type = ai_move_type(tables, state, 0, hit)
     hit_flags = jax.vmap(lambda t: calc_effectiveness_flags(tables, hit, t, gravity, hit_type))(
         state.types[1]
     )
     bench_moves = state.moves[1].astype(_I32).reshape(-1)  # [SLOTS * MOVES], slot-major
-    bench_flags = jax.vmap(lambda m: calc_effectiveness_flags(tables, m, d_types, gravity))(
-        bench_moves
+    # Move_CalcVariableType (:3780): each bench member's own Hidden Power type.
+    bench_types = party_move_types(tables, state).reshape(-1)
+    bench_flags = jax.vmap(lambda m, k: calc_effectiveness_flags(tables, m, d_types, gravity, k))(
+        bench_moves, bench_types
     ).reshape(SLOTS, MOVES)
     bench_moves = bench_moves.reshape(SLOTS, MOVES)
     bench_se = (bench_moves != 0) & ((bench_flags & SUPER_EFFECTIVE) != 0)
@@ -361,11 +382,6 @@ def _layout(tables: Tables, state: BattleState, sites: int) -> _Layout:
     )
     item_refused = present & (state.item.astype(_I32) == ITEM_IRON_BALL)
     move_refused = present[..., None] & jnp.isin(state.moves.astype(_I32), _MOVE_REFUSED_IDS)
-    # Hidden Power's IV type is modelled for the player (moveHit); the AI's own is not.
-    player_hidden_power = (side[..., None] == 0) & (
-        state.moves.astype(_I32) == MOVE_IDS["Hidden Power"]
-    )
-    move_refused = move_refused & ~player_hidden_power
     refused = (
         (count > sites)
         | only_ineffective
@@ -388,11 +404,7 @@ def _layout(tables: Tables, state: BattleState, sites: int) -> _Layout:
 
 def _refusals(lay: _Layout, state: BattleState, tables: Tables, sites: int) -> list[str]:
     out: list[str] = []
-    species = np.asarray(state.species).astype(np.int64)
-    form = np.asarray(state.form).astype(np.int64)
-    row = np.asarray(tables.species_form_row)[species, form].astype(np.int64)
-    slot = np.asarray(state.ability_slot).astype(np.int64)
-    ability = np.asarray(tables.species_abilities_decomp)[row, slot]
+    ability = np.asarray(decomp_abilities(tables, state))
     for side, s in zip(*np.nonzero(np.asarray(lay.ability_refused)), strict=True):
         name = _ABILITY_NAMES[int(ability[side, s])]
         why = (_ANY_SIDE_ABILITIES | _AI_SIDE_ABILITIES)[name]

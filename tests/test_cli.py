@@ -1268,30 +1268,42 @@ def test_renamed_slot_lookup_is_one_error_line(capsys, kaizo_tables, kaizo_names
 
 def test_kaizo_prep_refusal_exits_2_before_the_cap(
     tmp_path, monkeypatch, capsys, kaizo_tables, kaizo_names, kaizo_save_pre_roark_path
-):  # M8: Martha (51) is placed on a map but has no split, so default_cap would raise "pass --cap" (exit 1)
+):  # M8: Gambler Evan (104) is placed on a map but has no split, so default_cap would raise "pass --cap" (exit 1)
+    # A refused fight exits 2 before the cap is asked for. The refusal is synthetic (singles
+    # marked unsupported), so the test does not depend on what coverage models for Evan.
     from nuzline import cli
+    from nuzline.engine import coverage
+    from nuzline.engine.coverage import Support
 
+    monkeypatch.setitem(coverage.IMPLEMENTED_FORMATS, "single", Support.NONE)
     monkeypatch.setattr(cli, "RUNS", tmp_path / "runs")
     path = str(kaizo_save_pre_roark_path)
-    args = ["prep", "--game", "kaizo", "--save", path, "--trainer-id", "51", "--devices", "1"]
+    args = ["prep", "--game", "kaizo", "--save", path, "--trainer-id", "104", "--devices", "1"]
     assert main(args) == 2
     out = capsys.readouterr().out
-    assert "Support: NONE" in out and "Martha: AI_FLAG_CHECK_HP (AI flag UNSUPPORTED)" in out
+    assert "Support: NONE" in out
     assert not (tmp_path / "runs").exists()
 
 
 def test_kaizo_pool_cap_is_never_defaulted(
-    capsys, kaizo_tables, kaizo_names, kaizo_save_pre_roark_path
+    monkeypatch, capsys, kaizo_tables, kaizo_names, kaizo_save_pre_roark_path
 ):
-    # M9: Martha (51) is placed on a map but has no split, so there is no cap; the pool is not shown at the party max.
+    # M9: Gambler Evan (104) is placed on a map (terrains 1, 2, 7) but has no split, so there is
+    # no cap; the pool is not shown at the party max. (Martha 51 has a split since E3 batch 5.)
+    # The refusal (exit 2) is synthetic, singles marked unsupported, so the test does not
+    # depend on what coverage models for Evan.
+    from nuzline.engine import coverage
+    from nuzline.engine.coverage import Support
+
+    monkeypatch.setitem(coverage.IMPLEMENTED_FORMATS, "single", Support.NONE)
     path = str(kaizo_save_pre_roark_path)
-    assert main(["coverage", "--game", "kaizo", "--save", path, "--trainer-id", "51"]) == 2
+    assert main(["coverage", "--game", "kaizo", "--save", path, "--trainer-id", "104"]) == 2
     captured = capsys.readouterr()
     assert "Pool at level cap" not in captured.out
     assert "nuzline: error: pool left out: no level cap for" in captured.err
     assert "--cap" in captured.err
     assert (
-        main(["coverage", "--game", "kaizo", "--save", path, "--trainer-id", "51", "--cap", "12"])
+        main(["coverage", "--game", "kaizo", "--save", path, "--trainer-id", "104", "--cap", "12"])
         == 2
     )
     assert "Pool at level cap 12" in capsys.readouterr().out

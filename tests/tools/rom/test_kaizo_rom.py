@@ -171,7 +171,8 @@ def test_kaizo_field_effects_and_unknown_starts(kaizo_rom_dir, kaizo_rom_trainer
     assert by_id[403]["name"] == "Cyrus" and kaizo_rom_trainers[403]["start_condition"] == "none"
     assert len(rows) == 53
     unknown = [t["id"] for t in kaizo_rom_trainers if t["start_condition"] == "unknown"]
-    assert unknown == [318, 325, 343, 509, 559, 610, 649, 676, 746, 747]
+    # 318, 583 and 676 were settled in E3's batches 5-7.
+    assert unknown == [325, 343, 509, 559, 610, 649, 746, 747]
     assert [kaizo_rom_trainers[i]["format"] for i in (521, 527)] == ["unknown", "unknown"]
     assert kaizo_rom_trainers[94]["start_condition"] == "rain"  # Route 212 South
 

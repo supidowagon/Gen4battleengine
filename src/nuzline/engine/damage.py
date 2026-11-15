@@ -456,6 +456,80 @@ def rollout_multiplier(state: BattleState, atk_side) -> jnp.ndarray:
     return jnp.left_shift(1, jnp.clip(4 - left, 0, 4)) * curled
 
 
+# TrainerAI_CalcDamage's move-id cases (trainer_ai.c:2885-3071) that the AI damage models;
+# decomp move ids (line - 1 of generated/moves.txt). The others (Natural Gift, Judgment, Gyro
+# Ball, Psywave, Magnitude) are refused (ai.commands.CALC_DAMAGE_MOVES).
+AI_RETURN, AI_FRUSTRATION, AI_LOW_KICK, AI_GRASS_KNOT = 216, 218, 67, 447
+AI_HIDDEN_POWER = 237
+AI_DRAGON_RAGE, AI_SONIC_BOOM, AI_SEISMIC_TOSS, AI_NIGHT_SHADE = 82, 49, 69, 101
+# sWeightToPower (include/data/battle/weight_to_power.h): the first row whose weight
+# (hectograms) is at least the defender's gives the power, else 120 (trainer_ai.c:3055-3071).
+_WEIGHT_LIMITS = jnp.array([100, 250, 500, 1000, 2000], jnp.int32)
+_WEIGHT_POWERS = jnp.array([20, 40, 60, 80, 100, 120], jnp.int32)
+
+
+def ai_case_power(tables: Tables, s: BattleState, atk_side, move) -> jnp.ndarray:
+    """``int32``: the power ``TrainerAI_CalcDamage`` passes for ``move`` (0 = the table's,
+    ``BattleSystem_CalcMoveDamage``, battle_lib.c:6673-6677): Return
+    ``friendship * 10 / 25`` and Frustration ``(255 - friendship) * 10 / 25``
+    (trainer_ai.c:3018-3026; ``battleMons[attacker].friendship``), Low Kick and Grass Knot by
+    the defender's weight (:3055-3071; ``battleMons[defender].weight``, its species' Pokedex
+    weight, battle_lib.c:150), Hidden Power its IV power (:2973-2993, ``hidden_power``). A
+    computed 0 is the table's power too."""
+    atk_side = _i32(atk_side)
+    def_side = 1 - atk_side
+    move = _i32(move)
+    friendship = _i32(s.friendship[atk_side, s.active[atk_side]])
+    weight = _i32(tables.species_weight[s.species[def_side, s.active[def_side]]])
+    by_weight = _WEIGHT_POWERS[jnp.sum(_WEIGHT_LIMITS < weight)]
+    hidden = hidden_power(s.ivs[atk_side, s.active[atk_side]])[1]
+    return jnp.select(
+        [
+            move == AI_RETURN,
+            move == AI_FRUSTRATION,
+            (move == AI_LOW_KICK) | (move == AI_GRASS_KNOT),
+            move == AI_HIDDEN_POWER,
+        ],
+        [friendship * 10 // 25, (255 - friendship) * 10 // 25, by_weight, hidden],
+        0,
+    )
+
+
+def ai_move_type(tables: Tables, s: BattleState, side, move) -> jnp.ndarray:
+    """``int32``: ``TrainerAI_MoveType`` (trainer_ai.c:3127-3222) of ``move`` used by
+    ``side``'s active Pokemon: Hidden Power (by id, :3208-3220) its IV type
+    (``hidden_power``), any other move its table type (the function's TYPE_NORMAL, which
+    ``ApplyTypeChart`` and ``CalcMoveDamage`` read as the table's, battle_lib.c:2588-2590,
+    :6681-6684). Natural Gift, Judgment and Weather Ball are refused
+    (``ai.commands.MOVE_TYPE_MOVES``). It reads ``side``'s own IVs: a command that types
+    another battler's move with the AI attacker's IVs (``IfBattlerDealsMoreDamage``,
+    trainer_ai.c:2206-2237, not transcribed) needs its own reading."""
+    side = _i32(side)
+    move = _i32(move)
+    iv_type = hidden_power(s.ivs[side, s.active[side]])[0]
+    return jnp.where(move == AI_HIDDEN_POWER, iv_type, _i32(tables.move_type[move]))
+
+
+def ai_case_fixed(s: BattleState, atk_side, move) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """``(is_fixed, damage)``: ``TrainerAI_CalcDamage``'s fixed damage (trainer_ai.c:
+    3005-3012, :3051-3053): Dragon Rage 40, Sonic Boom 20, Seismic Toss and Night Shade the
+    attacker's level. It skips ``CalcMoveDamage`` and goes through the type chart with
+    ``SYSCTL_IGNORE_TYPE_CHECKS`` (:3081-3104): no STAB or multiplier, an immunity still 0."""
+    atk_side = _i32(atk_side)
+    move = _i32(move)
+    level = _i32(s.level[atk_side, s.active[atk_side]])
+    damage = jnp.select(
+        [
+            move == AI_DRAGON_RAGE,
+            move == AI_SONIC_BOOM,
+            (move == AI_SEISMIC_TOSS) | (move == AI_NIGHT_SHADE),
+        ],
+        [40, 20, level],
+        0,
+    )
+    return damage > 0, damage
+
+
 def divide(x: jnp.ndarray, d: int) -> jnp.ndarray:
     """``BattleSystem_Divide`` (battle_lib.c:3599) for non-negative ``x``."""
     return jnp.where(x == 0, 0, jnp.maximum(x // d, 1))
@@ -620,11 +694,8 @@ def _pre_random(
     # CalcRolloutPower (:5661) doubles movePower per use, and again when curled.
     # CalcFlailPower (:4958) reads the attacker's current and max HP.
     rollout_mul = 1 if ai else rollout_multiplier(s, atk_side)
-    # CalcWringOutPower (battle_script.c:7265) and CalcWeightBasedPower (:6808-6826) set
-    # movePower from the defender; the AI's estimate keeps the table power (no case here).
-    defender_power = jnp.where(
-        effect == EffectId.HP_POWER, hp_power(s, def_side), weight_power(tables, s, def_side)
-    )
+    # The AI has move-id cases instead of the battle's effect ones (ai_case_power, Hidden
+    # Power's by id); it has none for Magnitude's effect, Rollout or Flail.
     variable = jnp.where(
         effect == EffectId.HIDDEN_POWER,
         hidden_power(s.ivs[atk_side, a_slot])[1],
@@ -642,11 +713,20 @@ def _pre_random(
         (effect == EffectId.HIDDEN_POWER)
         | (effect == EffectId.MAGNITUDE)
         | (effect == EffectId.ROLLOUT)
-        | ((effect == EffectId.FLAIL) & (not ai))
+        | (effect == EffectId.FLAIL)
     )
-    power = jnp.where(has_variable, variable, base_power)
-    by_defender = ((effect == EffectId.HP_POWER) | (effect == EffectId.WEIGHT_POWER)) & (not ai)
-    power = jnp.where(by_defender, defender_power, power)
+    if ai:
+        case = ai_case_power(tables, s, atk_side, move)
+        power = jnp.where(case > 0, case, base_power)
+    else:
+        power = jnp.where(has_variable, variable, base_power)
+        # CalcWringOutPower (battle_script.c:7265) and CalcWeightBasedPower (:6808-6826) set
+        # movePower from the defender (the AI's Low Kick / Grass Knot are ai_case_power's).
+        defender_power = jnp.where(
+            effect == EffectId.HP_POWER, hp_power(s, def_side), weight_power(tables, s, def_side)
+        )
+        by_defender = (effect == EffectId.HP_POWER) | (effect == EffectId.WEIGHT_POWER)
+        power = jnp.where(by_defender, defender_power, power)
     # BtlCmd_Present (battle_script.c:5795-5800) sets movePower before CalcDamage.
     present = _i32(present)
     drawn = (effect == EffectId.PRESENT) & (present >= 0) & (present < PRESENT_HEAL) & (not ai)
@@ -658,8 +738,12 @@ def _pre_random(
     technician = (_i32(s.ability[atk_side, a_slot]) == AbilityId.TECHNICIAN) & (power <= 60)
     technician = technician & (move != MOVE_STRUGGLE)
     power = jnp.where(technician, power * 15 // 10, power)
-    # :6682 moveType = MOVE_DATA(move).type, or Hidden Power's IV type (battle_script.c:6028)
-    move_type = move_type_of(tables, s, atk_side, move)
+    # :6682 moveType = MOVE_DATA(move).type, or Hidden Power's IV type (battle_script.c:6028);
+    # the AI passes type 0 (the table's) for every case it models (trainer_ai.c:2881) but
+    # Hidden Power's IV type (:2973-2993; ai_move_type).
+    move_type = (
+        ai_move_type(tables, s, atk_side, move) if ai else move_type_of(tables, s, atk_side, move)
+    )
     category = _i32(tables.move_category[move])  # :6704 moveClass
     level = _i32(s.level[atk_side, a_slot])
     a_ability = _i32(s.ability[atk_side, a_slot])
@@ -953,7 +1037,7 @@ def ai_damage_for_roll(tables: Tables, state: BattleState, atk_side, move, roll)
     weather, abilities, items and stages as in battle), then STAB and the type chart,
     then the variance ``85 + roll`` percent last, at least 1 when non-zero."""
     damage, move_type, category, power = _pre_random(tables, state, atk_side, move, False, ai=True)
-    return _finish(
+    computed = _finish(
         tables,
         state,
         atk_side,
@@ -965,6 +1049,14 @@ def ai_damage_for_roll(tables: Tables, state: BattleState, atk_side, move, roll)
         _i32(roll),
         variance_last=True,
     )
+    # The fixed cases (ai_case_fixed): an immunity 0 (:3106), else the variance (:3109).
+    fixed, amount = ai_case_fixed(state, atk_side, move)
+    def_side = 1 - _i32(atk_side)
+    d_types = state.types[def_side, state.active[def_side]]
+    identified = state.foresight[def_side] != 0
+    immune = effectiveness(tables, move_type, d_types, identified) == 0
+    fixed_damage_ = jnp.where(immune, 0, divide(amount * (85 + _i32(roll)), 100))
+    return jnp.where(fixed, fixed_damage_, computed)
 
 
 def confusion_damage(tables: Tables, state: BattleState, side, roll) -> jnp.ndarray:

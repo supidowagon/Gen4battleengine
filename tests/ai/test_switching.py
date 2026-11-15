@@ -197,7 +197,7 @@ def test_too_many_sites_are_refused(tables, names):
     ("change", "missing"),
     [
         ("player_move", "Miracle Eye"),
-        ("opp_move", "Hidden Power"),
+        ("opp_move", "Weather Ball"),
         ("item", "Iron Ball"),
         ("ability", "Levitate"),
         ("absorb", "Water Absorb"),
@@ -208,7 +208,7 @@ def test_unimplemented_modifiers_are_refused(tables, names, change, missing):
     if change == "player_move":
         s = s._replace(moves=s.moves.at[0, 3, 1].set(names.move(missing)))
     elif change == "opp_move":
-        s = s._replace(moves=s.moves.at[1, 2, 3].set(names.move("Hidden Power")))
+        s = s._replace(moves=s.moves.at[1, 2, 3].set(names.move(missing)))
     elif change == "item":
         s = s._replace(item=s.item.at[0, 2].set(names.item("Iron Ball")))
     elif change == "ability":  # Gastly's only ability is Levitate
@@ -237,9 +237,10 @@ def test_hidden_power_move_hit_type(tables, names):
     layout = switch_sites(tables, hidden).tolist()
     assert layout == switch_sites(tables, with_hit("Water Gun")).tolist()
     assert layout != switch_sites(tables, with_hit("Tackle")).tolist()
-    # Hidden Power is still refused on the opponent's own side.
+    # The AI's own Hidden Power is typed too (E1 batch 14): its active's by TrainerAI_MoveType,
+    # a bench member's by Move_CalcVariableType from its own IVs (battle_lib.c:8162-8175).
     own = hidden._replace(moves=hidden.moves.at[1, 2, 3].set(names.move("Hidden Power")))
-    assert any("Hidden Power" in r for r in switching_refusals(tables, own))
+    assert switching_refusals(tables, own) == []
 
 
 def test_only_ineffective_moves_is_refused(tables, names):
@@ -274,3 +275,24 @@ def test_jit_without_64bit(tables, names):
     assert "int64" not in jaxpr and "float64" not in jaxpr
     jaxpr = str(jax.make_jaxpr(switch_action)(tables, s, jnp.int8(0)))
     assert "int64" not in jaxpr and "float64" not in jaxpr
+
+
+def test_party_hidden_power_takes_each_members_ivs(tables, names):
+    """Move_CalcVariableType (battle_lib.c:8162-8175): each party member's Hidden Power is
+    typed from its own IVs. All 31: type bits 63, 63 * 15 / 63 + 1 = 16, one more from
+    TYPE_MYSTERY up: Dark (17). All 30: bits 0, 0 + 1 = 1: Fighting."""
+    from nuzline.ai.switching import party_move_types
+
+    s = _trace_f(tables, names)
+    hidden = names.move("Hidden Power")
+    s = s._replace(moves=s.moves.at[1, 0, 3].set(hidden).at[1, 1, 3].set(hidden))
+    s = s._replace(
+        ivs=s.ivs.at[1, 0]
+        .set(jnp.full(6, 30, s.ivs.dtype))
+        .at[1, 1]
+        .set(jnp.full(6, 31, s.ivs.dtype))
+    )
+    types = np.asarray(party_move_types(tables, s))
+    assert (types[0, 3], types[1, 3]) == (1, 17)
+    other = int(s.moves[1, 0, 0])
+    assert types[0, 0] == int(tables.move_type[other])

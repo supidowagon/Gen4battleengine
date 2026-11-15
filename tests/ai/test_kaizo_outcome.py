@@ -25,8 +25,10 @@ compares are on transcribed paths (Expert_Explosion, Expert_StatusSpeedUp and Ex
 script.s:1864, :2070, :2650), and ``tests/ai/test_kaizo_policy.py
 test_exact_equals_loose_at_equal_speed`` checks exact against loose at equal speed on each.
 
-The tests run on the real ``KAIZO`` layout: since K3c Task 6 every Expert label of Kaizo
-Roark's effects is transcribed, so no test-only layout is needed.
+The tests run on ``KAIZO`` restricted to the K3c transcription's 24 effects (``ROARK_EFFECTS``:
+Kaizo Roark's party's and the K3c test moves'), the ``kaizo_tables`` fight's (E1 Ruling R7: a fight's programs trace its own moves' labels only), so no
+test compiles a program wider than a real fight's (E1 batch 8: a program of every transcribed
+effect reached 20 GB in one test module).
 """
 
 import dataclasses
@@ -40,7 +42,9 @@ from hypothesis import strategies as st
 from scipy.stats import chisquare
 
 from nuzline.ai import commands, policy
-from nuzline.ai.layout import KAIZO, VANILLA, layout_of
+from nuzline.ai.commands import ReadKind
+from nuzline.ai.layout import KAIZO as KAIZO_ALL
+from nuzline.ai.layout import VANILLA, kaizo_layout, layout_of
 from nuzline.ai.outcome import (
     ENUMERATION_WIDTH,
     KAIZO_EXPERT_LABELS,
@@ -63,11 +67,17 @@ from nuzline.engine.ids import Stat
 from nuzline.engine.state import MOVES, BattleState, make_state
 from nuzline.search.rows import take
 from tests.ai.fixtures import GEODUDE, outcome, versus
+from tests.conftest import K3C_EFFECTS
 
 # Kaizo move ids (data/gen4_platinum_kaizo names).
 ROCK_THROW, PURSUIT, LEER, SCREECH, HEADBUTT, TACKLE = 88, 228, 43, 103, 29, 33
 STEALTH_ROCK, ACCELEROCK, WATER_GUN, U_TURN, TOXIC = 446, 205, 55, 369, 92
 SELFDESTRUCT = 120
+# The K3c transcription's effects (tests/conftest.py K3C_EFFECTS): the layout these tests
+# ran on, the kaizo_tables fight's (test_kaizo_layout_shapes).
+ROARK_EFFECTS = K3C_EFFECTS
+KAIZO = kaizo_layout(KAIZO_ALL.flags, KAIZO_ALL.slot_reads, ROARK_EFFECTS)
+
 GIBLE = 443  # species: Sand Veil / Rough Skin, Dragon/Ground
 SOUNDPROOF, CLEAR_BODY = 43, 29  # decomp ability ids (commands.ABILITY_IDS)
 _SETTINGS = settings(
@@ -113,6 +123,15 @@ def _kaizo_state(t, party, moves, bench=((ACCELEROCK, HEADBUTT, 0, 0),)) -> Batt
     return make_state(t, [party[2]], opp)
 
 
+def layout_for(t, flags: int, s: BattleState):
+    """The Kaizo layout of flag set ``flags`` for ``s``'s opponent party: the read bound and the
+    transcribed effects of its moves (E1 Rulings R6, R7), as ``ai.layout.fight_tables`` gives
+    a fight."""
+    from nuzline.ai.layout import fight_layout
+
+    return fight_layout(t, flags, np.asarray(s.moves[1]).ravel())
+
+
 def _bulky(s: BattleState, hp: int = 400) -> BattleState:
     """The player's active at ``hp``/``hp``: no transcribed move kills it."""
     return s._replace(hp=s.hp.at[0, 0].set(hp), max_hp=s.max_hp.at[0, 0].set(hp))
@@ -120,18 +139,15 @@ def _bulky(s: BattleState, hp: int = 400) -> BattleState:
 
 def _move_pool(t, layout=KAIZO) -> tuple[int, ...]:
     """Kaizo moves ``layout`` transcribes (effect in ``layout.transcribed`` and, of
-    ``KAIZO_EXPERT_LABELS``, only those in ``layout.expert_transcribed``; no id case, no
-    alternative power)."""
+    ``KAIZO_EXPERT_LABELS``, only those in ``layout.expert_transcribed``; no unmodelled id
+    case)."""
     effect = np.asarray(t.move_ai_effect)
     skip = set(commands.CALC_DAMAGE_MOVES) | set(commands.MOVE_TYPE_MOVES)
     pending = set(KAIZO_EXPERT_LABELS) - layout.expert_transcribed
     return tuple(
         m
         for m in range(1, len(effect))
-        if int(effect[m]) in layout.transcribed
-        and int(effect[m]) not in pending
-        and m not in skip
-        and int(effect[m]) not in commands.ALT_POWER_EFFECTS
+        if int(effect[m]) in layout.transcribed and int(effect[m]) not in pending and m not in skip
     )
 
 
@@ -219,13 +235,15 @@ def _loose_paths(t, s, layout=KAIZO) -> np.ndarray:
     that draw a ``RandNext`` the scoring can split on: every ``IfRandomLessThan``, and a
     ``LoadBattlerAbility DEFENDER`` when the decision guesses (trainer_ai.c:1191-1198; loose
     flips a coin at every such read, which only resolves to the known ability otherwise). The
-    speed tie is left out (Ruling 3: it never changes a compare the scripts make)."""
+    speed tie of a SLOWER compare is left out (Ruling 3: it never changes it); a FASTER
+    compare's is counted (E1 Ruling R8)."""
     batch = _one(s)
     reads, _, kind = policy._loose_reads(t, batch, layout)
     bits = policy._loose_patterns(reads)
     _, lo = policy._loose_batch(t, batch, jnp.asarray(bits), layout)
     guessed = bool(commands.ability_guessed(t, s))
     draws = (kind == commands.ReadKind.ROLL) | ((kind == commands.ReadKind.ABILITY) & guessed)
+    draws |= kind == commands.ReadKind.SPEED_TIE_DRAWN
     live = np.asarray(lo.live)[0] & draws[None]  # [P, MOVES, LOOSE_READS]
     out = []
     for m in range(MOVES):
@@ -259,6 +277,13 @@ def _one(s: BattleState) -> BattleState:
     return jax.tree.map(lambda a: jnp.asarray(a)[None], s)
 
 
+def _equal_speed(s: BattleState) -> BattleState:
+    """``s`` with the player's active Speed stat set to the AI's (``stats[..., Stat.SPE - 1]``)."""
+    spe = Stat.SPE - 1
+    ai = s.stats[1, int(s.active[1]), spe]
+    return s._replace(stats=s.stats.at[0, int(s.active[0]), spe].set(ai))
+
+
 # --- The layout ----------------------------------------------------------------------------
 
 
@@ -287,8 +312,9 @@ def test_vanilla_layout_frozen(tables, names):
 
 def test_kaizo_layout_shapes(kaizo_tables, kaizo_roark_party):
     t = kaizo_tables
+    # Roark's fight layout is the tests' (E1 Ruling R7): his party's effects only
     assert layout_of(t) is KAIZO and KAIZO.per_slot_sites
-    assert KAIZO.transcribed == KAIZO_TRANSCRIBED
+    assert KAIZO.transcribed == ROARK_EFFECTS < KAIZO_TRANSCRIBED
     s = _kaizo_state(t, kaizo_roark_party, (ROCK_THROW, PURSUIT, LEER, STEALTH_ROCK))
     o = sample_ai_outcome(jax.random.PRNGKey(0), t, s, KAIZO)
     assert o.script_rolls.shape == (MOVES, KAIZO.slot_reads) and o.script_rolls.dtype == jnp.uint8
@@ -322,15 +348,24 @@ def test_kaizo_accelerock_is_transcribed_with_its_site(kaizo_tables, kaizo_roark
 
 
 def test_kaizo_effect_check_refuses_an_untranscribed_effect(kaizo_tables, kaizo_roark_party):
-    """Task 2 review m3: with the id guard gone the effect check carries the refusal. Rock
-    Throw given STATUS_SLEEP (1, untranscribed) is refused."""
+    """Task 2 review m3: with the id guard gone the effect check carries the refusal, with
+    two messages: Rock Throw given an effect no layout transcribes is "not transcribed"; given
+    STATUS_SLEEP (1), transcribed but not in Roark's fight layout (E1 Ruling R7), it says so."""
+    from nuzline.ai.outcome import KAIZO_TRANSCRIBED
+
     t = kaizo_tables
     s = _kaizo_state(t, kaizo_roark_party, (ROCK_THROW, LEER, 0, 0))
     assert policy.ai_refusals(t, s) == []
-    assert 1 not in KAIZO.transcribed
-    t7 = t._replace(move_ai_effect=t.move_ai_effect.at[ROCK_THROW].set(1))
-    reasons = policy.ai_refusals(t7, s)
+    untranscribed = min(set(range(1, 300)) - KAIZO_TRANSCRIBED)
+    t_none = t._replace(move_ai_effect=t.move_ai_effect.at[ROCK_THROW].set(untranscribed))
+    reasons = policy.ai_refusals(t_none, s)
     assert any("Rock Throw are not transcribed" in r for r in reasons), reasons
+    assert 1 in KAIZO_TRANSCRIBED and 1 not in KAIZO.transcribed
+    t_outside = t._replace(move_ai_effect=t.move_ai_effect.at[ROCK_THROW].set(1))
+    reasons = policy.ai_refusals(t_outside, s)
+    assert any("Rock Throw is transcribed but not in this fight's layout" in r for r in reasons), (
+        reasons
+    )
 
 
 # --- Width ---------------------------------------------------------------------------------
@@ -650,6 +685,9 @@ def test_exact_equals_loose_on_roark_split_pokemon(
         (196, 3, "Bidoof", ["Curse", "Accelerock"]),  # Mason, flags 0xf
         (10, 2, "Psyduck", ["Water Gun", "Confusion"]),  # Youngster Tyler, flags 0x20f
         (14, 4, "Bellsprout", ["Vine Whip", "Poison Jab", "Wrap"]),  # Taylor, flags 0x20f
+        # E1 batch 2c: PRIORITIZE_EXTREMES and CHECK_HP.
+        (249, 5, "Piplup", ["Water Pulse", "Rock Smash"]),  # Rival Barry, flags 0x27
+        (356, 1, "Cascoon", ["Poison Sting"]),  # Bug Catcher Sebastian, flags 0x10f
     ],
 )
 def test_exact_equals_loose_per_flag_set(
@@ -657,18 +695,17 @@ def test_exact_equals_loose_per_flag_set(
 ):
     """E1 Ruling R2: each Roark-split trainer runs its own flag set (0x1 BASIC; 0x5 BASIC and
     EXPERT; 0x7 BASIC, EVAL_ATTACK and EXPERT; Roark's 0x17 with RISKY; 0xf with
-    SETUP_FIRST_TURN; 0x20f with SETUP_FIRST_TURN and WEATHER; trainer_ai.c:297-308; the
+    SETUP_FIRST_TURN; 0x20f with SETUP_FIRST_TURN and WEATHER; 0x27 with PRIORITIZE_EXTREMES;
+    0x10f with SETUP_FIRST_TURN and CHECK_HP; trainer_ai.c:297-308; the
     states are the battle's first turn, where SETUP_FIRST_TURN and WEATHER score),
     and exact == loose under each, on a Pokemon of the trainer with the moves the AI
     transcribes (the others, e.g. Bug Bite, Leech Seed, Protect, Pluck, are not yet), Roark's
     Cranidos behind it, against two guessed players (Gible, Tentacool)."""
-    from nuzline.ai.layout import kaizo_layout
     from nuzline.data.trainer import IntermediateData, build_trainer_party
     from tests.conftest import KAIZO_INTERMEDIATE
 
     t, n = kaizo_tables, kaizo_names
     trainer = next(x for x in kaizo_trainers if x.id == trainer_id)
-    layout = kaizo_layout(trainer.ai_flags)
     mon = build_trainer_party(trainer, IntermediateData(KAIZO_INTERMEDIATE))[index]
     assert n.species_names[mon.species] == species
     kept = [m for m in mon.moves if n.move_names[m] in moves]
@@ -676,6 +713,7 @@ def test_exact_equals_loose_per_flag_set(
     mon = dataclasses.replace(mon, moves=tuple(kept + [0] * (4 - len(kept))), pp=None)
     bench = dataclasses.replace(kaizo_roark_party[5], moves=(ACCELEROCK, HEADBUTT, 0, 0), pp=None)
     base = make_state(t, [kaizo_roark_party[2]], [mon, bench])
+    layout = layout_for(t, trainer.ai_flags, base)
     for player in (GIBLE, 72):
         s = _bulky(_with_player(t, base, player), 200)
         assert policy.ai_refusals(t, s, n, layout) == []
@@ -683,29 +721,46 @@ def test_exact_equals_loose_per_flag_set(
 
 
 def test_slot_reads_fit_every_transcribed_effect(kaizo_tables, kaizo_roark_party):
-    """``KAIZO.slot_reads`` is the most random reads one move's scoring path makes, from the
-    data: for every transcribed Kaizo move in slot 0 (the rest drawn from the transcribed
-    pool), under every implemented flag at once (0x21f: SETUP_FIRST_TURN's :6429 adds a read
-    on the first turn; WEATHER reads none), over random players (any species with two
-    abilities, any types, guessed or known), random HP, Defense and evasion stages on both
-    sides and the first turn or a later one, the loose oracle's longest path
-    (``LooseDraws.live``) makes at most ``slot_reads`` reads, and Selfdestruct's reaches it:
-    :117 and :304 (two guesses), :6374, :1859 (evasion +4 or more), :1870 and :1875 (HP at
-    most 30 %) and Risky :6530 (script.s:6365-6374, :1841-1884, :6521-6534)."""
-    from nuzline.ai.layout import KAIZO_FLAG_BITS, kaizo_layout
+    """E1 Ruling R6 against the data, in small pieces (E1 batch 8). The proof that no path makes
+    more reads than its fight's bound is the walk of script.s (tests/ai/test_read_bounds.py
+    regenerates its table); this checks it on the transcription. For the eight transcribed
+    effects whose walked bound under every flag is largest, and Selfdestruct's, a fight of one
+    such move with Roark's Accelerock and Headbutt, over random players (any species with two
+    abilities, any types, guessed or known), random HP, Defense and evasion stages and the
+    first turn or a later one: the loose oracle's longest path, under every transcribed flag,
+    makes at most the fight's bound (``layout.fight_slot_reads``; a SLOWER compare's tie is no
+    read of the exact layout, a FASTER one's is, E1 Ruling R8). Tailwind is always sampled, and
+    half the states put both sides at equal speed so that its tie is on the path. Each piece is a fight-sized program, and JAX's caches are cleared
+    between pieces. Selfdestruct reaches Roark's bound by hand: :117 and :304 (two guesses),
+    :6374, :1859 (evasion +4 or more), :1870 and :1875 (HP at most 30 %) (script.s:6365-6374,
+    :1841-1884), and Risky :6530 (:6521-6534)."""
+    from nuzline.ai.layout import KAIZO_FLAG_BITS, fight_layout, fight_slot_reads, move_read_rows
+    from nuzline.ai.read_bounds import READ_BOUND_BITS, READ_BOUNDS
 
     t = kaizo_tables
-    widest = kaizo_layout(sum(1 << b for b in KAIZO_FLAG_BITS))
+    every = sum(1 << b for b in KAIZO_FLAG_BITS)
     effect = np.asarray(t.move_ai_effect)
-    pool = _move_pool(t)
-    assert {int(effect[m]) for m in pool} == KAIZO.transcribed
+    first = {}
+    for move in _move_pool(t, KAIZO_ALL):
+        first.setdefault(int(effect[move]), move)
+    # every transcribed effect a Kaizo move carries (Kaizo's Return and Frustration have
+    # effect 0, so 121 and 123 have no move here)
+    carried = {int(e) for e in effect[1:]}
+    assert set(first) == KAIZO_ALL.transcribed & carried
+
+    def walked(e):
+        return max(sum(READ_BOUNDS[(e, d, q)]) for d in (False, True) for q in (False, True))
+
+    sample = sorted(first, key=lambda e: (-walked(e), e))[:8]
+    sample = [*sample, *([7] if 7 not in sample else [])]  # HALVE_DEFENSE: Selfdestruct
+    sample = [*sample, *([225] if 225 not in sample else [])]  # Tailwind: a FASTER tie
+    assert len(READ_BOUND_BITS) == 8
     rng = np.random.default_rng(11)
     species = _two_ability_species(t)
-    most: dict[int, int] = {}
-    for move in pool:
+    for e in sample:
+        moves = [first[e], ACCELEROCK, HEADBUTT, 0]
         states = []
         for _ in range(4):
-            moves = [move] + [int(rng.choice((0, *pool))) for _ in range(3)]
             s = _kaizo_state(t, kaizo_roark_party, moves)
             s = _with_player(t, s, int(rng.choice(species)), int(rng.integers(2)))
             s = s._replace(ai_ability_known=s.ai_ability_known.at[0].set(int(rng.integers(4) == 0)))
@@ -721,15 +776,22 @@ def test_slot_reads_fit_every_transcribed_effect(kaizo_tables, kaizo_roark_party
             stages = s.stages.at[0, Stat.DEF].set(int(rng.integers(-6, 7)))
             stages = stages.at[0, Stat.EVA].set(int(rng.integers(0, 7)))
             s = s._replace(stages=stages.at[1, Stat.DEF].set(int(rng.integers(-6, 7))))
+            if rng.integers(2):  # equal speed: the tie is drawn
+                s = _equal_speed(s)
             states.append(s._replace(turn=jnp.asarray(int(rng.integers(2)), s.turn.dtype)))
         batch = jax.tree.map(lambda *xs: jnp.stack(xs), *states)
-        reads, _, _ = policy._loose_reads(t, batch, widest)
-        _, lo = policy._loose_batch(t, batch, jnp.asarray(policy._loose_patterns(reads)), widest)
-        e = int(effect[move])
-        most[e] = max(most.get(e, 0), int(np.asarray(lo.live)[:, :, 0].sum(axis=2).max()))
-    assert max(most.values()) <= KAIZO.slot_reads, most
-    # The longest path, by hand: Selfdestruct, a guessed two-ability player, evasion +4
-    # (decomp stage 10, script.s:1857), Bonsly at 10 % HP.
+        party = np.asarray(states[0].moves[1]).ravel()
+        layout = fight_layout(t, every, party)
+        reads, _, _ = policy._loose_reads(t, batch, layout)
+        _, lo = policy._loose_batch(t, batch, jnp.asarray(policy._loose_patterns(reads)), layout)
+        counted = np.asarray(lo.live) & (np.asarray(lo.kind) != ReadKind.SPEED_TIE)
+        longest = int(counted[:, :, 0].sum(axis=2).max())
+        bound = fight_slot_reads(move_read_rows(t, party), every)
+        assert longest <= bound, (e, longest, bound)
+        jax.clear_caches()
+    # Roark's bound by hand: Selfdestruct, a guessed two-ability player, evasion +4 (decomp
+    # stage 10, script.s:1857), Bonsly at 10 % HP.
+    assert fight_slot_reads(move_read_rows(t, t.ai_moves), KAIZO.flags) == KAIZO.slot_reads == 7
     s = _kaizo_state(t, kaizo_roark_party, (SELFDESTRUCT, 0, 0, 0))
     s = _bulky(_with_player(t, s, GIBLE), 400)
     s = s._replace(
@@ -812,6 +874,7 @@ _DEVICES_SCRIPT = """
 import hashlib, jax, numpy as np
 from nuzline.data.games import GAMES, KAIZO
 from nuzline.data.tables import load_tables
+from nuzline.ai.layout import fight_tables
 from nuzline.data.trainer import IntermediateData, build_trainer_party, load_trainers
 from nuzline.engine.actions import NUM_OPP_ACTIONS
 from nuzline.search.expand import ai_rows
@@ -822,8 +885,8 @@ assert jax.device_count() == DEVICES, jax.device_count()
 d = GAMES[KAIZO]
 t = load_tables(d.tables_dir)
 roark = next(x for x in load_trainers(d.intermediate_dir) if x.name == "Roark")
-t = t._replace(ai_flags=np.int32(roark.ai_flags))
 party = build_trainer_party(roark, IntermediateData(d.intermediate_dir))
+t = fight_tables(t, roark, party)
 rows = _random_kaizo_rows(t, party, 40, seed=5)
 empty = ai_rows(t, take(rows, np.arange(0)))  # K3c final review: no rows, any device count
 assert empty.shape == (0, NUM_OPP_ACTIONS) and empty.dtype == np.float32, empty

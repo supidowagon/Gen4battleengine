@@ -150,6 +150,25 @@ three structs has a row.
   `src/battle/battle_lib.c:2088-2092`; `BattleSystem_CleanupFaintedMon`, `:2168-2177`;
   `step._source_leaves`, which Roar's drag reuses). `SELF_TURN_FLAG_INFATUATED` (a per-action
   turn flag read only by Destiny Knot, an unsupported item) stays a local.
+- **Curse, Perish Song, Yawn, Lock-On -> `curse`, `perish_song`, `perish_song_turns`, `yawn`,
+  `lock_on`, `lock_on_target`** (E1 batch 12): per battler, defined with the decomp's meaning
+  so the trainer AI reads them (`Expert_Protect`, `script.s:3544-3586`). Nothing sets them
+  yet: E2 builds Curse, Perish Song, Yawn and Lock-On / Mind Reader on them (coverage refuses
+  those moves until then). `curse` is `VOLATILE_CONDITION_CURSE`
+  (`include/constants/battle/condition.h:60`), 0/1. `perish_song` is
+  `MOVE_EFFECT_PERISH_SONG` (`include/constants/battle/moves.h:13`), 0/1, and
+  `perish_song_turns` is `MoveEffectsData.perishSongTurns` (`include/battle/battle_mon.h:14`),
+  a counter still live at 0 (`battle_controller_player.c:1801`). `yawn` is the two-bit
+  `MOVE_EFFECT_YAWN` counter (`moves.h:19-20`, `:42`, `:53`; decremented at
+  `battle_controller_player.c:1684-1687`), 0 = none. `lock_on` is the two-bit
+  `MOVE_EFFECT_LOCK_ON` counter (`moves.h:11-12`, `:41`), 0 = none, on the battler locked
+  onto (Lock-On sets it on its target, `subscript_lock_on.s`), and `lock_on_target` is that
+  battler's `MoveEffectsData.lockOnTarget` (`battle_mon.h:23`), the battler that locked on,
+  as `1 + battler`, 0 = none (doubles convention 3). Their clearing is for the moves' work, not modelled yet: a switch-out or
+  faint clears the battler's volatiles and move-effect bits except what Baton Pass keeps
+  (`MOVE_EFFECT_BATON_PASSED` keeps Lock-On and Perish Song, `moves.h:44-46`), and the Lock-On
+  bit of another battler that the leaving battler had locked onto (that battler's
+  `lockOnTarget` is the leaving one, `battle_lib.c:2063-2083`).
 - **speedRand -> `qc_roll`** (K3b2 Task 8; docs/kaizo/k3b2-rules.md §5, §12):
   `speedRand[battler]` is one `RandNext()` per battler slot, drawn at battle start
   (`BattleContext_InitCounters`, `src/battle/battle_lib.c:2019-2025`) and in each turn's
@@ -327,7 +346,7 @@ three structs has a row.
 | `BattleMon.exp` | `exp` | mapped |
 | `BattleMon.personality` | — | not needed because its battle uses (nature, ability slot, gender) are resolved into `PokemonSpec` before `make_state` |
 | `BattleMon.status` | `status`, `status_counter` | mapped |
-| `BattleMon.statusVolatile` | `confusion`, `flinched`, `trapped`, `recharge`, `foresight`, `bide_turns`, `curled`, `locked_move`, `infatuated`, `destiny_bond`, `uproar` | mapped |
+| `BattleMon.statusVolatile` | `confusion`, `flinched`, `trapped`, `recharge`, `foresight`, `bide_turns`, `curled`, `locked_move`, `infatuated`, `destiny_bond`, `uproar`, `curse` | mapped |
 | `BattleMon.OTId` | — | not needed because only obedience and the traded-Pokemon exp bonus read it; the tool assumes an obedient party and resolves the exp bonus into `exp_boost` before `make_state` |
 | `BattleMon.heldItem` | `item` | mapped |
 | `BattleMon.padding007A` | — | not needed because it is padding |
@@ -336,7 +355,7 @@ three structs has a row.
 | `BattleMon.gender` | `gender` | mapped |
 | `BattleMon.OTGender` | — | not needed because it is cosmetic (names, messages, sprites, animation) |
 | `BattleMon.capturedBall` | — | not needed because it is cosmetic (names, messages, sprites, animation) |
-| `BattleMon.moveEffectsMask` | `leech_seed`, `water_sport`, `mud_sport`, `aqua_ring` | mapped |
+| `BattleMon.moveEffectsMask` | `leech_seed`, `water_sport`, `mud_sport`, `aqua_ring`, `perish_song`, `yawn`, `lock_on` | mapped |
 | `BattleMon.moveEffectsTemp` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
 | `BattleMon.moveEffectsData` | `taunt`, `protect_count`, `rollout_count`, `recharge`, `substitute_hp`, `trap_move`, `choice_lock` | mapped |
 
@@ -349,7 +368,7 @@ three structs has a row.
 | `MoveEffectsData.chargedTurns` | — | later (M6) |
 | `MoveEffectsData.tauntedTurns` | `taunt` | mapped |
 | `MoveEffectsData.protectSuccessTurns` | `protect_count` | mapped |
-| `MoveEffectsData.perishSongTurns` | — | later (M6) |
+| `MoveEffectsData.perishSongTurns` | `perish_song_turns` | mapped |
 | `MoveEffectsData.rolloutCount` | `rollout_count` | mapped |
 | `MoveEffectsData.furyCutterCount` | — | later (M6) |
 | `MoveEffectsData.stockpileCount` | — | later (M6) |
@@ -357,7 +376,7 @@ three structs has a row.
 | `MoveEffectsData.stockpileSpDefBoosts` | — | later (M6) |
 | `MoveEffectsData.truant` | `fake_out_turn` | mapped |
 | `MoveEffectsData.flashFire` | — | later (M6) |
-| `MoveEffectsData.lockOnTarget` | — | later (M6) |
+| `MoveEffectsData.lockOnTarget` | `lock_on_target` | mapped |
 | `MoveEffectsData.mimickedMoveSlot` | — | later (M6) |
 | `MoveEffectsData.bindTarget` | — | not needed because in singles the binder is always the opposing active Pokemon |
 | `MoveEffectsData.meanLookTarget` | — | later (M6) |
