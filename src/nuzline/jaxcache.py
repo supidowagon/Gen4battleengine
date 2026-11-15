@@ -122,6 +122,31 @@ def prune_other_versions(directory: Path, root: Path | None = None) -> None:
             shutil.rmtree(sibling, ignore_errors=True)
 
 
+def cap_directory(directory: Path, max_bytes: int) -> None:
+    """Delete the oldest files (by modification time) under ``directory`` until the rest
+    total at most ``max_bytes``. JAX's own cap (``jax_compilation_cache_max_size``) is off by
+    default (-1) and its LRU eviction needs the ``filelock`` package, which is not a
+    dependency. Errors (a file another process holds open, or deleted meanwhile) are
+    ignored."""
+    files = []
+    for path in Path(directory).rglob("*"):
+        try:
+            if path.is_file() and not path.is_symlink():
+                stat = path.stat()
+                files.append((stat.st_mtime, stat.st_size, path))
+        except OSError:
+            continue
+    total = sum(size for _, size, _ in files)
+    for _, size, path in sorted(files, key=lambda f: f[0]):
+        if total <= max_bytes:
+            break
+        try:
+            path.unlink()
+            total -= size
+        except OSError:
+            continue
+
+
 def set_compile_cache_dir(directory: Path) -> None:
     """Point JAX's persistent compilation cache at ``directory``, caching every compile
     that takes at least a second. Takes effect only before the first compile of the

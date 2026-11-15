@@ -293,3 +293,18 @@ def test_legacy_flat_dirs_pruned(game_cache):
 
 def test_default_game_is_vanilla(game_cache):
     assert jaxcache.enable_compile_cache("a" * 32).parent.name == "platinum_us"
+
+
+def test_cap_directory_deletes_oldest_first(tmp_path):
+    import os
+
+    for i, name in enumerate(("old", "mid", "new")):
+        path = tmp_path / "sub" / name if name == "mid" else tmp_path / name
+        path.parent.mkdir(exist_ok=True)
+        path.write_bytes(b"x" * 100)
+        os.utime(path, (1000 + i, 1000 + i))
+    jaxcache.cap_directory(tmp_path, 200)
+    assert not (tmp_path / "old").exists()
+    assert (tmp_path / "sub" / "mid").exists() and (tmp_path / "new").exists()
+    jaxcache.cap_directory(tmp_path, 1000)  # under the cap: nothing more goes
+    assert (tmp_path / "sub" / "mid").exists()
