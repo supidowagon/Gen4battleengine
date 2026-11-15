@@ -693,6 +693,8 @@ INPUT_NEUTRAL_EFFECTS = (
     _E.PAIN_SPLIT,
     # B10-7: a side condition that stops statuses (a burn's Attack is the status clause's).
     _E.SAFEGUARD,
+    # B10-8: a plain hit, or none once the user took a hit (its foe's damage is unchanged).
+    _E.FOCUS_PUNCH,
 )
 INPUT_CLAUSE_EFFECTS = (
     _E.STAT_SELF,  # the foe's Defense / Sp. Def; Minimize's flag (Stomp's power)
@@ -985,6 +987,8 @@ TABLE_DAMAGE_EFFECTS = (
     _E.CRASH,
     # B10-6: CalcCrit, CalcDamage (effect_script_0188.s:6-7); the item goes after the damage.
     _E.KNOCK_OFF,
+    # B10-8: CalcCrit, CalcDamage (effect_script_0170.s:8-9) unless the focus is lost first.
+    _E.FOCUS_PUNCH,
 )
 NON_TABLE_DAMAGE_EFFECTS = (
     _E.STAT_SELF,

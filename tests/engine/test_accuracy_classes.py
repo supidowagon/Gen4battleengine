@@ -467,6 +467,7 @@ _NO_ACC_EVA_WRITE = (frozenset(EffectId(i) for i in range(40)) - _STAT_KINDS) | 
     # Knock Off takes an item only (B10-6).
     EffectId.KNOCK_OFF,
     EffectId.SAFEGUARD,  # a side condition (B10-7)
+    EffectId.FOCUS_PUNCH,  # a plain hit (B10-8)
 }
 # (effect, stat) pairs hit_thresholds follows: they change a later foe move's threshold.
 _SEEN = {

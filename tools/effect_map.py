@@ -363,6 +363,8 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     188: ("BATTLE_EFFECT_REMOVE_HELD_ITEM", _E.KNOCK_OFF, (0, 0, 0)),
     # Safeguard (B10-7): effect_script_0124.s, a direct ON_HIT subscript_safeguard_start.s.
     124: ("BATTLE_EFFECT_PREVENT_STATUS", _E.SAFEGUARD, (0, 0, 0)),
+    # Focus Punch (B10-8): effect_script_0170.s, CalcCrit / CalcDamage unless it lost its focus.
+    170: ("BATTLE_EFFECT_HIT_LAST_WHIFF_IF_HIT", _E.FOCUS_PUNCH, (0, 0, 0)),
     # Minimize: effect_script_0108.s, a direct TO_ATTACKER subscript_minimize.s: the user's
     # MOVE_EFFECT_MINIMIZE, then Evasion +1 (STAT_SELF with move_param[m, 2] = MINIMIZE_PARAM).
     108: ("BATTLE_EFFECT_EVA_UP_2_MINIMIZE", _E.STAT_SELF, (_EVA, 1, MINIMIZE_PARAM)),

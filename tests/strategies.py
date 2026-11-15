@@ -914,6 +914,7 @@ def _draw_batch10(draw, tables: Tables, a: dict, side: int, active: int, names: 
             "Pain Split",
             "Knock Off",
             "Safeguard",
+            "Focus Punch",
         )
     )
     give(move)

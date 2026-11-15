@@ -371,3 +371,26 @@ def test_laws_no_sure_flinch_through_a_substitute(tables, names):
     s = _subbed(s, 1, 1)._replace(trick_room=jnp.asarray(3, s.trick_room.dtype))
     s = s._replace(hp=s.hp.at[0, 0].set(3))
     assert_equals_bruteforce(tables, s, np.zeros(2, np.int32))
+
+
+def test_focus_punch_loses_its_focus_after_a_hit_but_not_a_substitute_hit(tables, names):
+    """B10-8: effect_script_0170.s:5-6: a user hit on its HP this turn (the turnFlags attacker
+    masks, bcp.c:3416-3424) loses its focus (MOVE_STATUS_LOST_FOCUS); a hit on its substitute sets
+    no mask (bcp.c:3359-3378 returns first), so it punches."""
+    n = names
+    s = make_state(
+        tables,
+        [_mon(n, "Machop", ["Focus Punch"], 40)],
+        [_mon(n, "Snorlax", ["Tackle"], 40)],
+    )
+    hit = assert_matches_reference(tables, s, (0, 0), O)
+    assert int(hit.hp[1, 0]) == int(s.hp[1, 0])  # lost its focus
+    sub = assert_matches_reference(tables, _subbed(s, 0, 200), (0, 0), O)
+    assert int(sub.hp[1, 0]) < int(s.hp[1, 0])
+    calm = make_state(
+        tables,
+        [_mon(n, "Machop", ["Focus Punch"], 40)],
+        [_mon(n, "Snorlax", ["Growl"], 40)],
+    )
+    out = assert_matches_reference(tables, calm, (0, 0), O)
+    assert int(out.hp[1, 0]) < int(calm.hp[1, 0])

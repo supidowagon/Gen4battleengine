@@ -954,6 +954,12 @@ def _use_move(
         side, state.active[side]
     ].astype(_I32)
     failed = failed | ((effect_used == EffectId.ENDEAVOR) & (gap <= 0))
+    # Focus Punch (effect_script_0170.s:5-6, :12-16): MOVE_STATUS_LOST_FOCUS, a DID_NOT_HIT status
+    # (subscript_missed.s), when the user's physical / specialDamageAttackerMask is set: a hit on
+    # its HP this turn (``foe_taken``'s attackers; a substitute hit sets none), B10-8.
+    taken_mask = jnp.asarray(foe_taken, _I32)
+    lost_focus = (taken_mask[3] != 0) | (taken_mask[4] != 0)
+    failed = failed | ((effect_used == EffectId.FOCUS_PUNCH) & lost_focus)
     # Imprison (effect_script_0192.s): BtlCmd_TryImprison first sets MOVE_EFFECT_IMPRISONED on
     # the user's foes (battle_script.c:6686-6690: both enemy slots, which in singles name the
     # one foe battler, whatever its HP), then fails (:10) a user already imprisoning or sharing

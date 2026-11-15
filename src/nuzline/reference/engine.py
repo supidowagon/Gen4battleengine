@@ -3216,7 +3216,10 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
     # The scripts that fail a user that has their effect already (MOVE_STATUS_FAILED, as Fake
     # Out's): Ingrain (effect_script_0181.s:5), Aqua Ring (_0251.s:5), Mud Sport (_0201.s:5),
     # Water Sport (_0210.s:5); Imprison also without a move shared with a foe (script.c:6692-6722).
-    if _script_fails(s, side, effect, _t(tables, "move_param", move, 1)):
+    # Focus Punch (effect_script_0170.s:5-6): MOVE_STATUS_LOST_FOCUS when the user's
+    # physical / specialDamageAttackerMask is set this turn (its turnFlags attackers), B10-8.
+    lost_focus = effect == EffectId.FOCUS_PUNCH and bool(turn.taken[side][3] or turn.taken[side][4])
+    if _script_fails(s, side, effect, _t(tables, "move_param", move, 1)) or lost_focus:
         _unlock(s.sides[side])  # subscript_missed.s
         return record
     # Snore (effect_script_0092.s:5): MOVE_STATUS_FAILED unless the user is asleep.

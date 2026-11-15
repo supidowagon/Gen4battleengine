@@ -1512,3 +1512,13 @@ Rules left out because another mechanic is missing; each closes with the mechani
   (subscript_flinch_mon.s:6): test_damage_classes' generated case (a 1-HP substitute, Trick
   Room, an uproar) found it; it now needs the foe's `substitute_hp == 0`, and
   test_laws_no_sure_flinch_through_a_substitute fails without that clause.
+- B10-8 (batch 10, family 10) Focus Punch (`EffectId.FOCUS_PUNCH`, 87, decomp 170), both engines.
+  effect_script_0170.s:5-6: a user whose turnFlags physical / specialDamageAttackerMask is set
+  (a hit on its HP this turn, bcp.c:3416-3424; the engine's `phys_from` / `spec_from` records,
+  `foe_taken[3:5]`) gets MOVE_STATUS_LOST_FOCUS, a DID_NOT_HIT status: subscript_missed.s:8-10
+  prints "lost its focus" and the move ends like a failed script (`step`'s `failed`, the
+  reference's lost_focus beside `_script_fails`); else a plain table hit (priority -3 is the
+  move's data). A hit on its substitute sets no mask (B10-4). The turn-start "tightening its
+  focus" message (bcp.c:811-834, PRE_MOVE_ACTION_STATE_TIGHTEN_FOCUS) changes no state; the
+  observation shows the move and the miss (coarser: "lost its focus" and a miss share a set).
+  The AI's Expert_FocusPunch was E1's. Encore and Assist (the rest of family 10) are not done.

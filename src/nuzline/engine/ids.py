@@ -295,6 +295,11 @@ class EffectId(IntEnum):
     # BtlCmd_TrySafeguard (battle_script.c:5754-5772): fails with the user's side's Safeguard up,
     # else 5 turns on it (``effects._safeguard``), B10-7.
     SAFEGUARD = 86
+    # Focus Punch (170, BATTLE_EFFECT_HIT_LAST_WHIFF_IF_HIT): zeros. effect_script_0170.s: a
+    # user with its turnFlags physical / specialDamageAttackerMask set (a hit on its HP this turn,
+    # bcp.c:3416-3424) gets MOVE_STATUS_LOST_FOCUS (:5-6, :12-16; a DID_NOT_HIT status:
+    # subscript_missed.s:8-10, "lost its focus"); else a plain table hit (B10-8).
+    FOCUS_PUNCH = 87
 
 
 # ``EffectId.COUNTER``'s source (``move_param[m, 0]``).
