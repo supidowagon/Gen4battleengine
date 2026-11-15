@@ -291,6 +291,10 @@ class EffectId(IntEnum):
     # Knock Off (188, BATTLE_EFFECT_REMOVE_HELD_ITEM): zeros. A table hit with an indirect ON_HIT
     # subscript_knock_off.s (``effects._knock_off``), B10-6.
     KNOCK_OFF = 85
+    # Safeguard (124, BATTLE_EFFECT_PREVENT_STATUS): zeros. subscript_safeguard_start.s ->
+    # BtlCmd_TrySafeguard (battle_script.c:5754-5772): fails with the user's side's Safeguard up,
+    # else 5 turns on it (``effects._safeguard``), B10-7.
+    SAFEGUARD = 86
 
 
 # ``EffectId.COUNTER``'s source (``move_param[m, 0]``).

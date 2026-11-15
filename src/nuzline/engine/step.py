@@ -1186,6 +1186,8 @@ def _use_move(
         & (state.hp[target_side, target] > 0)
         & (ignorable(state, side, target_side) != AbilityId.INSOMNIA)
         & (state.status[target_side, target] != Status.SLEEP)
+        # :40 CheckSubstitute comes first: behind a substitute it fails instead (B10-4).
+        & (state.substitute_hp[target_side] == 0)
         & uproar_on(state)
     )
     no_more_work = no_more_work | kept_awake
@@ -2360,9 +2362,9 @@ def _detrimental_item_check(tables: Tables, state: BattleState, side) -> BattleS
       effect (:13-28): nothing for an Immunity holder (its own ability, :14), a Leaf Guard
       holder in sun unless a weather lock (``CheckIgnoreWeather``, :15-17), a holder with any
       status, or a Poison or Steel type (the battler's types, :20-26); else it is badly
-      poisoned (counter 0). Safeguard (:27) comes from an unsupported move.
+      poisoned (counter 0), unless its side's Safeguard is up (:27, B10-7).
     * Flame Orb (``HOLD_EFFECT_BRN_USER``): ``subscript_burn.s`` (:5-17): the same with Water
-      Veil for Immunity and Fire for Poison / Steel; else it is burned.
+      Veil for Immunity and Fire for Poison / Steel, and Safeguard (:16); else it is burned.
     * Sticky Barb (``HOLD_EFFECT_DMG_USER_CONTACT_XFR``): a holder without Magic Guard takes
       ``BattleSystem_Divide(maxHP * -1, param)``
       (``subscript_lose_hp_from_item_with_message.s``, capped at its HP; it may faint).
@@ -2383,6 +2385,7 @@ def _detrimental_item_check(tables: Tables, state: BattleState, side) -> BattleS
         & (ability != ITEM_ABILITY_IDS["Immunity"])
         & ~leaf_guard
         & can_have_status(tables, state, side, mon, Status.TOXIC)
+        & (state.safeguard[side] == 0)  # subscript_badly_poison.s:27 (B10-7)
     )
     burn = (
         alive
@@ -2390,6 +2393,7 @@ def _detrimental_item_check(tables: Tables, state: BattleState, side) -> BattleS
         & (ability != ITEM_ABILITY_IDS["Water Veil"])
         & ~leaf_guard
         & can_have_status(tables, state, side, mon, Status.BURN)
+        & (state.safeguard[side] == 0)  # subscript_burn.s:16 (B10-7)
     )
     status = jnp.where(toxic, Status.TOXIC, Status.BURN)
     state = _set_mon(state, "status", side, mon, status, toxic | burn)

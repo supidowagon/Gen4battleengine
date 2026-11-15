@@ -1696,7 +1696,12 @@ def _entry_hazards(turn: _Turn, s: RefState, side: int) -> None:
                         s.ai_ability_known[sd.active] = 1
                 # subscript_poison.s:29 / _badly_poison.s:46: CheckSubstitute, silent (a Baton
                 # Pass newcomer keeps the substitute, B10-4).
-                elif not sd.substitute_hp and _can_have_status(tables, s, side, status):
+                # Then the side's Safeguard (poison :41, badly_poison :55), B10-7.
+                elif (
+                    not sd.substitute_hp
+                    and not sd.safeguard
+                    and _can_have_status(tables, s, side, status)
+                ):
                     mon.status, mon.status_counter = status, 0
         if sd.spikes and mon.hp:
             _lose_hp(turn, s, side, _divide(mon.max_hp, (5 - sd.spikes) * 2))
@@ -1979,6 +1984,12 @@ def _inflict(turn: _Turn, s: RefState, side: int, target: int, status: int,
     # poison :29, badly_poison :46, fall_asleep :40), B10-4.
     if _shielded(turn, s, target):
         return
+    # subscript_fall_asleep.s:43-45: an uproar keeps a target not asleep awake before the
+    # Safeguard test (:51); the other subscripts' Safeguard tests (paralyze :28, burn :45, ...).
+    if status == Status.SLEEP and mon.status != Status.SLEEP and _uproar_on(s):
+        return
+    if s.sides[target].safeguard:  # B10-7
+        return
     # subscript_fall_asleep.s:43-45: a target not asleep yet stays awake while any battler is in
     # an uproar (FIELD_CONDITION_UPROAR; Soundproof is unsupported).
     if status == Status.SLEEP and mon.status != Status.SLEEP and _uproar_on(s):
@@ -2259,8 +2270,13 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
             victim.disable_turns = o.duration[side]
     elif effect == EffectId.CONFUSE_FOE and effective:
         # subscript_confuse.s: fails behind a substitute (:23) or on a confused target;
-        # Random 3, 2 turns.
-        if target_alive and not s.sides[target].confusion and not _shielded(turn, s, target):
+        # Random 3, 2 turns. Safeguard (:26, B10-7).
+        if (
+            target_alive
+            and not s.sides[target].confusion
+            and not _shielded(turn, s, target)
+            and not s.sides[target].safeguard
+        ):
             s.sides[target].confusion = o.duration[side]
     elif effect == EffectId.SECONDARY_CONFUSE and effective and proc:
         # effect_script_0076.s: a probabilistic effect, cleared for a fainted target
@@ -2271,6 +2287,7 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
             and not s.sides[target].confusion
             and seen != AbilityId.SHIELD_DUST
             and not _shielded(turn, s, target)  # the rolled gate (lib.c:1580); confuse :23
+            and not s.sides[target].safeguard  # :26 (B10-7)
         ):
             s.sides[target].confusion = o.duration[side]
     elif effect == EffectId.MUD_SPORT and landed and not s.sides[side].mud_sport:
@@ -2389,7 +2406,8 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
         # subscript_confuse.s unless confused (:13; Random 3, 2 turns).
         if s.sides[target].stages[Stat.ATK] < 6:
             _change_stage(s, target, Stat.ATK, 2)
-        if not s.sides[target].confusion:
+        # subscript_confuse.s:26: Safeguard after the raise (B10-7).
+        if not s.sides[target].confusion and not s.sides[target].safeguard:
             s.sides[target].confusion = o.duration[side]
     elif effect == EffectId.ROOST and landed:
         # subscript_roost.s: Divide(maxHP, 2) unless at full HP, then turnFlags.roosting.
@@ -2435,6 +2453,9 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
             sd.substitute_hp = quarter
             sd.trapped = sd.trap_move = 0
             _lose_hp(turn, s, side, quarter)
+    elif effect == EffectId.SAFEGUARD and landed and not s.sides[side].safeguard:
+        # BtlCmd_TrySafeguard (script.c:5754-5772): 5 turns on the user's side (B10-7).
+        s.sides[side].safeguard = 5
     elif effect == EffectId.PAIN_SPLIT and landed and not _shielded(turn, s, target):
         # subscript_pain_split.s (B10-5): avg = (a + d) / 2 (:7-10), each battler's HP to it through
         # UPDATE_HP, capped at its max HP (:12-22). A substitute fails it (:5).
@@ -2604,6 +2625,8 @@ def _detrimental_item_check(turn: _Turn, s: RefState, side: int) -> None:
     ability = _decomp_ability(tables, mon)
     sun = s.weather == Weather.SUN and not _weather_suppressed(tables, s)
     leaf_guard = sun and ability == ITEM_ABILITY_IDS["Leaf Guard"]
+    if effect in (ItemId.TOXIC_ORB, ItemId.FLAME_ORB) and s.sides[side].safeguard:
+        return  # subscript_badly_poison.s:27, subscript_burn.s:16 (B10-7)
     if effect == ItemId.TOXIC_ORB:
         if ability == ITEM_ABILITY_IDS["Immunity"] or leaf_guard:
             return
@@ -3354,6 +3377,8 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
                 or (theirs[Stat.ATK] >= 6 and bool(s.sides[1 - side].confusion))
             )
         )
+        # BtlCmd_TrySafeguard (script.c:5760-5762, MOVE_STATUS_FAILED), B10-7.
+        full = full or (effect == EffectId.SAFEGUARD and bool(s.sides[side].safeguard))
         # subscript_pain_split.s:5 (MOVE_STATUS_FAILED), B10-5.
         full = full or (effect == EffectId.PAIN_SPLIT and bool(s.sides[1 - side].substitute_hp))
         # subscript_try_substitute.s:7-8 (MOVE_STATUS_NO_MORE_WORK), B10-4.
@@ -3401,6 +3426,7 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
             and foe.hp > 0
             and _ignorable(s, side, 1 - side) != AbilityId.INSOMNIA
             and foe.status != Status.SLEEP
+            and not s.sides[1 - side].substitute_hp  # :40 CheckSubstitute fails it first (B10-4)
             and _uproar_on(s)
         )
         dealt, _ = _hit(turn, s, side, move, hit, struggling, target_moved)

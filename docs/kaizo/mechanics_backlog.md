@@ -26,20 +26,20 @@ New groups: needed in this split and in no earlier one.
 | Split | Rows | Battles | Singles | Doubles | Two-trainer | Multi (no known partner) | Runnable battles | Distinct missing groups | New groups |
 |---|---|---|---|---|---|---|---|---|---|
 | Roark Split | 26 | 26 | 26 | 0 | 0 | 0 (0) | 15 | 10 | 10 |
-| Gardenia Split | 42 | 35 | 19 | 5 | 0 | 11 (0) | 10 | 36 | 34 |
-| Fantina Split | 42 | 40 | 38 | 0 | 2 | 0 (0) | 1 | 93 | 74 |
+| Gardenia Split | 42 | 35 | 19 | 5 | 0 | 11 (0) | 10 | 35 | 33 |
+| Fantina Split | 42 | 40 | 38 | 0 | 2 | 0 (0) | 1 | 92 | 74 |
 | Maylene Split | 34 | 33 | 27 | 5 | 0 | 1 (0) | 7 | 81 | 21 |
-| Wake Split | 38 | 33 | 26 | 2 | 5 | 0 (0) | 4 | 70 | 18 |
-| Byron Split | 66 | 58 | 42 | 8 | 0 | 8 (0) | 13 | 89 | 11 |
+| Wake Split | 38 | 33 | 26 | 2 | 5 | 0 (0) | 4 | 69 | 18 |
+| Byron Split | 66 | 58 | 42 | 8 | 0 | 8 (0) | 13 | 88 | 11 |
 | Candice Split | 48 | 36 | 24 | 0 | 0 | 12 (0) | 3 | 75 | 14 |
-| Galactic Split | 109 | 79 | 37 | 12 | 19 | 11 (0) | 2 | 153 | 47 |
+| Galactic Split | 109 | 79 | 37 | 12 | 19 | 11 (0) | 2 | 152 | 47 |
 | Volkner Split | 25 | 19 | 9 | 4 | 6 | 0 (0) | 0 | 61 | 2 |
-| Elite Four Split | 28 | 28 | 27 | 1 | 0 | 0 (0) | 3 | 85 | 6 |
-| **Whole game** | 458 | 387 | 275 | 37 | 32 | 43 (0) | 58 | 237 | 237 |
+| Elite Four Split | 28 | 28 | 27 | 1 | 0 | 0 (0) | 3 | 84 | 6 |
+| **Whole game** | 458 | 387 | 275 | 37 | 32 | 43 (0) | 58 | 236 | 236 |
 
 ## Whole game
 
-237 distinct missing groups across all ten splits (387 battles,
+236 distinct missing groups across all ten splits (387 battles,
 458 opposing trainer rows). Kinds: AI flags are flag lines the
 policy lacks; AI move effects are the AI's per-move script paths (untranscribed
 effects, refused effects, move-id cases of its damage and type helpers); battle
@@ -54,7 +54,7 @@ Groups first needed in that split (needed by no earlier split). The whole-game r
 | Split | AI flags | AI move effects | move effects | held items | abilities | battle conditions | other | All |
 |---|---|---|---|---|---|---|---|---|
 | Roark Split | 0 | 5 | 1 | 0 | 0 | 3 | 1 | 10 |
-| Gardenia Split | 3 | 7 | 5 | 2 | 5 | 11 | 1 | 34 |
+| Gardenia Split | 3 | 7 | 4 | 2 | 5 | 11 | 1 | 33 |
 | Fantina Split | 0 | 23 | 20 | 10 | 7 | 9 | 5 | 74 |
 | Maylene Split | 0 | 8 | 7 | 3 | 2 | 0 | 1 | 21 |
 | Wake Split | 0 | 3 | 2 | 3 | 1 | 6 | 3 | 18 |
@@ -63,7 +63,7 @@ Groups first needed in that split (needed by no earlier split). The whole-game r
 | Galactic Split | 0 | 14 | 13 | 3 | 1 | 16 | 0 | 47 |
 | Volkner Split | 0 | 1 | 1 | 0 | 0 | 0 | 0 | 2 |
 | Elite Four Split | 0 | 2 | 1 | 0 | 1 | 1 | 1 | 6 |
-| **Whole game** | **3** | **75** | **58** | **22** | **17** | **50** | **12** | **237** |
+| **Whole game** | **3** | **75** | **57** | **22** | **17** | **50** | **12** | **236** |
 
 ### Groups needed in each split, by kind
 
@@ -72,16 +72,16 @@ Every group the split's battles need, whether or not an earlier split needs it t
 | Split | AI flags | AI move effects | move effects | held items | abilities | battle conditions | other | All |
 |---|---|---|---|---|---|---|---|---|
 | Roark Split | 0 | 5 | 1 | 0 | 0 | 3 | 1 | 10 |
-| Gardenia Split | 3 | 8 | 6 | 2 | 5 | 11 | 1 | 36 |
-| Fantina Split | 2 | 29 | 24 | 12 | 11 | 9 | 6 | 93 |
+| Gardenia Split | 3 | 8 | 5 | 2 | 5 | 11 | 1 | 35 |
+| Fantina Split | 2 | 29 | 23 | 12 | 11 | 9 | 6 | 92 |
 | Maylene Split | 3 | 29 | 24 | 10 | 5 | 3 | 7 | 81 |
-| Wake Split | 3 | 18 | 16 | 12 | 5 | 8 | 8 | 70 |
-| Byron Split | 3 | 34 | 21 | 10 | 9 | 3 | 9 | 89 |
+| Wake Split | 3 | 18 | 15 | 12 | 5 | 8 | 8 | 69 |
+| Byron Split | 3 | 34 | 20 | 10 | 9 | 3 | 9 | 88 |
 | Candice Split | 2 | 28 | 20 | 7 | 8 | 5 | 5 | 75 |
-| Galactic Split | 3 | 52 | 41 | 15 | 10 | 23 | 9 | 153 |
+| Galactic Split | 3 | 52 | 40 | 15 | 10 | 23 | 9 | 152 |
 | Volkner Split | 3 | 20 | 18 | 7 | 4 | 2 | 7 | 61 |
-| Elite Four Split | 3 | 33 | 24 | 3 | 9 | 3 | 10 | 85 |
-| **Whole game** | **3** | **75** | **58** | **22** | **17** | **50** | **12** | **237** |
+| Elite Four Split | 3 | 33 | 23 | 3 | 9 | 3 | 10 | 84 |
+| **Whole game** | **3** | **75** | **57** | **22** | **17** | **50** | **12** | **236** |
 
 ### Battle conditions and other groups
 
@@ -174,19 +174,19 @@ bound under these assumptions:
 
 | Split | Cap | Species reachable (via a non-level step) | Your groups | Player-only | New player-only |
 |---|---|---|---|---|---|
-| Roark Split | 16 | 358 (64) | 136 | 45 | 45 |
-| Gardenia Split | 28 | 410 (65) | 136 | 45 | 0 |
-| Fantina Split | 38 | 463 (69) | 137 | 45 | 0 |
-| Maylene Split | 47 | 480 (73) | 138 | 45 | 0 |
-| Wake Split | 54 | 482 (71) | 139 | 45 | 0 |
-| Byron Split | 65 | 486 (72) | 139 | 45 | 0 |
-| Candice Split | 74 | 486 (72) | 139 | 45 | 0 |
-| Galactic Split | 100 | 493 (73) | 142 | 47 | 2 |
-| Volkner Split | 84 | 487 (73) | 140 | 45 | 0 |
-| Elite Four Split | 100 | 493 (73) | 142 | 47 | 0 |
-| **Whole game** | | | 142 | 47 | 47 |
+| Roark Split | 16 | 358 (64) | 135 | 45 | 45 |
+| Gardenia Split | 28 | 410 (65) | 135 | 45 | 0 |
+| Fantina Split | 38 | 463 (69) | 136 | 45 | 0 |
+| Maylene Split | 47 | 480 (73) | 137 | 45 | 0 |
+| Wake Split | 54 | 482 (71) | 138 | 45 | 0 |
+| Byron Split | 65 | 486 (72) | 138 | 45 | 0 |
+| Candice Split | 74 | 486 (72) | 138 | 45 | 0 |
+| Galactic Split | 100 | 493 (73) | 141 | 47 | 2 |
+| Volkner Split | 84 | 487 (73) | 139 | 45 | 0 |
+| Elite Four Split | 100 | 493 (73) | 141 | 47 | 0 |
+| **Whole game** | | | 141 | 47 | 47 |
 
-Of your 142 groups, 95 are also needed by opposing trainers and 47 are player-only.
+Of your 141 groups, 94 are also needed by opposing trainers and 47 are player-only.
 
 ### New player-only groups per split, by kind
 
@@ -276,7 +276,7 @@ include/battle, res/battle) names it elsewhere; the tool re-checks both on every
 
 ## AI partners in multi battles
 
-25 partner trainer rows (607, 608, 609, 610, 612, 613, 614, 615, 616, 617, 618, 619, 620, 621, 622, 623, 624, 625, 626, 800, 801, 861, 863, 864, 865), checked like opponents: 53 missing groups, 3 not needed by any opposing trainer, 0 also not on your side. Not needed by opponents, by kind: held items 2, abilities 1.
+25 partner trainer rows (607, 608, 609, 610, 612, 613, 614, 615, 616, 617, 618, 619, 620, 621, 622, 623, 624, 625, 626, 800, 801, 861, 863, 864, 865), checked like opponents: 52 missing groups, 3 not needed by any opposing trainer, 0 also not on your side. Not needed by opponents, by kind: held items 2, abilities 1.
 
 ## Roark split
 
@@ -284,7 +284,7 @@ include/battle, res/battle) names it elsewhere; the tool re-checks both on every
 
 | Fights blocked | Group |
 |---|---|
-| 3 | move effect #83: Metronome; 71 of 442 callable moves unmodelled |
+| 3 | move effect #83: Metronome; 70 of 442 callable moves unmodelled |
 | 2 | AI move effect #227 METAL_BURST not transcribed (Basic_CheckMetalBurst / Expert_MetalBurst): Bide, Metal Burst |
 | 2 | battle terrain: the battle terrain varies over its maps (TERRAIN_PLAIN, TERRAIN_GRASS, TERRAIN_BUILDING), and Nature Power, Secret Power, Camouflage would read it |
 | 1 | AI move effect #148 HIT_IN_3_TURNS not transcribed (Basic_CheckFutureSight): Doom Desire, Future Sight |
@@ -307,7 +307,7 @@ Groups by kind: AI 5, battle format 2, battle terrain 1, move effect 1, trainer 
 | 13 | AI: AI_FLAG_TAG_STRATEGY |
 | 8 | AI: AI_FLAG_HARRASSMENT |
 | 5 | battle format: a double battle |
-| 4 | move effect #83: Metronome; 71 of 442 callable moves unmodelled |
+| 4 | move effect #83: Metronome; 70 of 442 callable moves unmodelled |
 | 3 | AI: AI_FLAG_BATON_PASS |
 | 3 | AI move-id case of TrainerAI_CalcDamage: Bulldoze, Triple Axel |
 | 3 | form: trainer Pokemon in a data form: this game's party builder applies the form before computing its stats, which the engine's trainer party build does not model |
@@ -341,14 +341,13 @@ Groups by kind: AI 5, battle format 2, battle terrain 1, move effect 1, trainer 
 | 1 | battle format: gauntlet Route 204 North B2B (position 2; rules not recorded) |
 | 1 | battle terrain: the battle terrain varies over its maps (TERRAIN_PLAIN, TERRAIN_GRASS, TERRAIN_BUILDING), and Secret Power would read it |
 | 1 | held item effect #15: Wiki Berry |
-| 1 | move effect #124: Safeguard |
 | 1 | move effect #151: SolarBeam |
 | 1 | move effect #170: Focus Punch |
 | 1 | move effect #180: Assist |
 | 1 | move effect #90: Encore |
 | 1 | trainer item: Poké Ball |
 
-Groups by kind: AI 15, battle format 12, move effect 6, ability 5, held item effect 2, battle terrain 2, form 1, trainer item 1
+Groups by kind: AI 15, battle format 12, move effect 5, ability 5, held item effect 2, battle terrain 2, form 1, trainer item 1
 
 ## All ten splits (top 60)
 
@@ -403,11 +402,10 @@ Groups by kind: AI 15, battle format 12, move effect 6, ability 5, held item eff
 | 15 | AI move effect #227 METAL_BURST not transcribed (Basic_CheckMetalBurst / Expert_MetalBurst): Bide, Metal Burst |
 | 15 | ability: Synchronize |
 | 15 | move effect #215: Gravity |
-| 15 | move effect #83: Metronome; 71 of 442 callable moves unmodelled |
+| 15 | move effect #83: Metronome; 70 of 442 callable moves unmodelled |
 | 13 | AI move effect #114 ALL_FAINT_3_TURNS not transcribed (Basic_CheckPerishSong): Perish Song |
 | 13 | AI move effect #71 LOWER_SP_ATK_HIT not transcribed (no Basic or Expert label): Mist Ball, Mystical Fire |
 | 12 | held item effect #106: Iron Ball |
-| 12 | move effect #124: Safeguard |
 | 11 | AI move effect #209 HIGH_CRITICAL_POISON_HIT not transcribed (Expert_HighCritical): Cross Poison, Poison Tail |
 | 11 | move effect #209: Cross Poison, Poison Tail |
 | 10 | AI move effect #200 HIGH_CRITICAL_BURN_HIT not transcribed (Expert_HighCritical): Blaze Kick |
@@ -416,8 +414,9 @@ Groups by kind: AI 15, battle format 12, move effect 6, ability 5, held item eff
 | 9 | AI move effect #190 DECREASE_POWER_WITH_LESS_USER_HP not transcribed (Expert_WaterSpout): Water Spout |
 | 9 | AI move effect #226 RANDOM_STAT_UP_2 not transcribed (Basic_CheckAcupressure / Expert_Acupressure): Acupressure |
 | 9 | AI move effect #239 SUPRESS_ABILITY not transcribed (Basic_CheckGastroAcid / Expert_GastroAcid): Gastro Acid |
+| 9 | AI move effect #57 TRANSFORM not transcribed (no Basic or Expert label): Transform |
 
-Groups by kind: AI 78, move effect 58, battle format 36, held item effect 22, ability 17, battle terrain 11, ROM change 9, field condition 2, weather 1, form 1, trainer item 1, form change 1
+Groups by kind: AI 78, move effect 57, battle format 36, held item effect 22, ability 17, battle terrain 11, ROM change 9, field condition 2, weather 1, form 1, trainer item 1, form change 1
 
 ## Build order for the first two splits
 
@@ -428,7 +427,7 @@ Greedy: each step is the group that brings the most fights closest to runnable.
 | 1 | battle format: a multi battle | 28 of 68 |
 | 2 | AI: AI_FLAG_TAG_STRATEGY | 30 of 68 |
 | 3 | AI: AI_FLAG_HARRASSMENT | 34 of 68 |
-| 4 | move effect #83: Metronome; 71 of 442 callable moves unmodelled | 36 of 68 |
+| 4 | move effect #83: Metronome; 70 of 442 callable moves unmodelled | 36 of 68 |
 | 5 | battle format: a double battle | 36 of 68 |
 | 6 | form: trainer Pokemon in a data form: this game's party builder applies the form before computing its stats, which the engine's trainer party build does not model | 37 of 68 |
 | 7 | AI: AI_FLAG_BATON_PASS | 39 of 68 |
@@ -440,32 +439,31 @@ Greedy: each step is the group that brings the most fights closest to runnable.
 | 13 | AI move effect #106 PREVENT_ESCAPE not transcribed (Basic_CheckMeanLook / Expert_BindingMove): Block, Mean Look, Spider Web | 47 of 68 |
 | 14 | trainer item: Poké Ball | 48 of 68 |
 | 15 | held item effect #15: Wiki Berry | 49 of 68 |
-| 16 | battle format: gauntlet Route 204 North (position 3; rules not recorded) | 50 of 68 |
-| 17 | battle format: gauntlet Oreburgh Mine (position 2; rules not recorded) | 51 of 68 |
-| 18 | battle format: gauntlet Oreburgh Mine (position 1; rules not recorded) | 52 of 68 |
-| 19 | battle format: gauntlet Eterna Gym gym trainers (position 3; rules not recorded) | 53 of 68 |
-| 20 | battle format: gauntlet Eterna Gym gym trainers (position 2; rules not recorded) | 54 of 68 |
-| 21 | ability: Wonder Guard | 55 of 68 |
-| 22 | ability: Pressure | 56 of 68 |
-| 23 | ability: Download | 57 of 68 |
-| 24 | AI move effect #242 USE_LAST_USED_MOVE not transcribed (Basic_CheckCopycat / Expert_Copycat): Copycat | 58 of 68 |
-| 25 | AI move effect #23 ACC_DOWN not transcribed (Basic_CheckLowStatStage_Accuracy / Expert_StatusAccuracyDown): Flash, Sand-Attack, SmokeScreen | 59 of 68 |
-| 26 | AI move effect #188 REMOVE_HELD_ITEM not transcribed (Basic_CheckCanRemoveItem / Expert_KnockOff): Knock Off | 59 of 68 |
-| 27 | battle format: gauntlet Route 204 North B2B (position 2; rules not recorded) | 60 of 68 |
-| 28 | battle format: gauntlet Route 204 North (position 2; rules not recorded) | 61 of 68 |
-| 29 | AI move effect #148 HIT_IN_3_TURNS not transcribed (Basic_CheckFutureSight): Doom Desire, Future Sight | 62 of 68 |
-| 30 | move effect #170: Focus Punch | 62 of 68 |
-| 31 | battle format: gauntlet Route 204 North (position 1; rules not recorded) | 63 of 68 |
-| 32 | move effect #124: Safeguard | 63 of 68 |
-| 33 | battle terrain: the battle terrain varies over its maps (TERRAIN_PLAIN, TERRAIN_GRASS, TERRAIN_BUILDING), and Secret Power would read it | 64 of 68 |
-| 34 | battle format: gauntlet Eterna Gym gym trainers (position 1; rules not recorded) | 64 of 68 |
-| 35 | ability: Leaf Guard | 65 of 68 |
-| 36 | ability: Synchronize | 65 of 68 |
-| 37 | AI move effect #176 BOOST_ALLY_POWER_BY_50_PERCENT not transcribed (Basic_CheckHelpingHand): Helping Hand | 66 of 68 |
-| 38 | move effect #180: Assist | 66 of 68 |
-| 39 | move effect #151: SolarBeam | 66 of 68 |
-| 40 | AI move effect #151 SKIP_CHARGE_TURN_IN_SUN not transcribed (Expert_ChargeTurnNoInvuln / Expert_Thunder): SolarBeam | 67 of 68 |
-| 41 | move effect #90: Encore | 67 of 68 |
-| 42 | battle format: gauntlet Route 204 North B2B (position 1; rules not recorded) | 67 of 68 |
-| 43 | AI move effect #90 ENCORE not transcribed (Basic_CheckCannotEncore / Expert_Encore): Encore | 67 of 68 |
-| 44 | AI move effect #108 EVA_UP_2_MINIMIZE not transcribed (Basic_CheckHighStatStage_Evasion / Expert_StatusEvasionUp): Minimize | 68 of 68 |
+| 16 | battle terrain: the battle terrain varies over its maps (TERRAIN_PLAIN, TERRAIN_GRASS, TERRAIN_BUILDING), and Secret Power would read it | 50 of 68 |
+| 17 | battle format: gauntlet Route 204 North (position 3; rules not recorded) | 51 of 68 |
+| 18 | battle format: gauntlet Oreburgh Mine (position 2; rules not recorded) | 52 of 68 |
+| 19 | battle format: gauntlet Oreburgh Mine (position 1; rules not recorded) | 53 of 68 |
+| 20 | battle format: gauntlet Eterna Gym gym trainers (position 3; rules not recorded) | 54 of 68 |
+| 21 | battle format: gauntlet Eterna Gym gym trainers (position 2; rules not recorded) | 55 of 68 |
+| 22 | ability: Wonder Guard | 56 of 68 |
+| 23 | ability: Pressure | 57 of 68 |
+| 24 | ability: Download | 58 of 68 |
+| 25 | AI move effect #242 USE_LAST_USED_MOVE not transcribed (Basic_CheckCopycat / Expert_Copycat): Copycat | 59 of 68 |
+| 26 | AI move effect #23 ACC_DOWN not transcribed (Basic_CheckLowStatStage_Accuracy / Expert_StatusAccuracyDown): Flash, Sand-Attack, SmokeScreen | 60 of 68 |
+| 27 | AI move effect #188 REMOVE_HELD_ITEM not transcribed (Basic_CheckCanRemoveItem / Expert_KnockOff): Knock Off | 60 of 68 |
+| 28 | battle format: gauntlet Route 204 North B2B (position 2; rules not recorded) | 61 of 68 |
+| 29 | battle format: gauntlet Route 204 North (position 2; rules not recorded) | 62 of 68 |
+| 30 | AI move effect #148 HIT_IN_3_TURNS not transcribed (Basic_CheckFutureSight): Doom Desire, Future Sight | 63 of 68 |
+| 31 | move effect #170: Focus Punch | 63 of 68 |
+| 32 | battle format: gauntlet Route 204 North (position 1; rules not recorded) | 64 of 68 |
+| 33 | battle format: gauntlet Eterna Gym gym trainers (position 1; rules not recorded) | 64 of 68 |
+| 34 | ability: Leaf Guard | 65 of 68 |
+| 35 | ability: Synchronize | 65 of 68 |
+| 36 | AI move effect #176 BOOST_ALLY_POWER_BY_50_PERCENT not transcribed (Basic_CheckHelpingHand): Helping Hand | 66 of 68 |
+| 37 | move effect #180: Assist | 66 of 68 |
+| 38 | move effect #151: SolarBeam | 66 of 68 |
+| 39 | AI move effect #151 SKIP_CHARGE_TURN_IN_SUN not transcribed (Expert_ChargeTurnNoInvuln / Expert_Thunder): SolarBeam | 67 of 68 |
+| 40 | move effect #90: Encore | 67 of 68 |
+| 41 | battle format: gauntlet Route 204 North B2B (position 1; rules not recorded) | 67 of 68 |
+| 42 | AI move effect #90 ENCORE not transcribed (Basic_CheckCannotEncore / Expert_Encore): Encore | 67 of 68 |
+| 43 | AI move effect #108 EVA_UP_2_MINIMIZE not transcribed (Basic_CheckHighStatStage_Evasion / Expert_StatusEvasionUp): Minimize | 68 of 68 |

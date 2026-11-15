@@ -913,9 +913,13 @@ def _draw_batch10(draw, tables: Tables, a: dict, side: int, active: int, names: 
             "Endeavor",
             "Pain Split",
             "Knock Off",
+            "Safeguard",
         )
     )
     give(move)
+    if rnd.random() < 0.15:  # B10-7: a Safeguard up on either side, against the status moves
+        a["safeguard"][rnd.choice((side, foe))] = rnd.randint(1, 5)
+        give(rnd.choice(("Thunder Wave", "Toxic", "Supersonic", "Swagger", "Ember")), foe, foe_mon)
     if move == "Knock Off":  # B10-6: an item to take, a Quick Claw, a barb; a knocked-off user
         a["item"][foe, foe_mon] = names.item(
             rnd.choice(("Leftovers", "Quick Claw", "Sticky Barb", "Oran Berry", "Life Orb"))

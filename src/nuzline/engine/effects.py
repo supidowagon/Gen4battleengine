@@ -287,6 +287,7 @@ from nuzline.engine.state import STAGE_MAX, STAGE_MIN, BattleState
 _I32 = jnp.int32
 _E = EffectId
 BIDE_TURNS = 2  # VOLATILE_CONDITION_BIDE_1 (condition.h:41): the 2-bit counter's value 2
+SAFEGUARD_TURNS = 5  # BtlCmd_TrySafeguard (battle_script.c:5765)
 ROLLOUT_USES = 5  # BtlCmd_CalcRolloutPower starts rolloutCount at 5
 
 
@@ -445,6 +446,10 @@ def _inflict(
     # :43): a direct effect prints "But it failed!", an indirect one stops silently. An
     # ABILITY side effect skips the test (paralyze :20 and the like; not through here).
     blocked = blocked | (cond & h.shielded)
+    # Then the target's side's Safeguard (paralyze :28, burn :45, freeze :25, poison :41,
+    # badly_poison :55, fall_asleep :51, after its uproar test at :45), B10-7: silent for an
+    # indirect effect.
+    blocked = blocked | (cond & (state.safeguard[h.target_side] != 0))
     # subscript_fall_asleep.s:43-45 (:14-16 for a move effect): a target not asleep yet stays
     # awake while FIELD_CONDITION_UPROAR is set (Soundproof, which skips it, is unsupported);
     # a direct effect then ends in MOVE_STATUS_NO_MORE_WORK (``step``: ``kept_awake``), an
@@ -830,7 +835,9 @@ def _swagger(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     cond = cond & ~swagger_fails(state, h.target_side)
     below = state.stages[h.target_side, Stat.ATK] < STAGE_MAX
     state = change_stage(state, h.target_side, Stat.ATK, SWAGGER_STAGES, cond & below)
-    confuse = cond & (state.confusion[h.target_side] == 0)
+    # subscript_confuse.s (a direct side effect): the substitute is swagger_fails'; then Safeguard
+    # (:26, B10-7), after the Attack raise.
+    confuse = cond & (state.confusion[h.target_side] == 0) & (state.safeguard[h.target_side] == 0)
     return _set(state, "confusion", h.target_side, outcome.duration[h.side], confuse)
 
 
@@ -892,6 +899,14 @@ def _pain_split(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     theirs_new = jnp.minimum(avg, state.max_hp[h.target_side, h.target].astype(_I32))
     state = _set(state, "hp", (h.side, h.user), mine_new, cond)
     return _set(state, "hp", (h.target_side, h.target), theirs_new, cond)
+
+
+def _safeguard(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    """Safeguard (BtlCmd_TrySafeguard, battle_script.c:5754-5772): safeguardTurns = 5 on the
+    user's side (the field-condition pass counts it down, ``step.FIELD_SIDE_TIMERS``); with it up
+    already the move fails (``primary_effect_fails``), B10-7."""
+    cond = (h.effect == _E.SAFEGUARD) & h.landed & (state.safeguard[h.side] == 0)
+    return _set(state, "safeguard", h.side, SAFEGUARD_TURNS, cond)
 
 
 def _belly_drum(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
@@ -991,6 +1006,8 @@ def primary_effect_fails(tables, state: BattleState, side, target_side, move) ->
         | ((effect == _E.SUBSTITUTE) & substitute_fails(state, side))
         # subscript_pain_split.s:5, :50-52 (MOVE_STATUS_FAILED), B10-5.
         | ((effect == _E.PAIN_SPLIT) & (state.substitute_hp[target_side] != 0))
+        # BtlCmd_TrySafeguard (battle_script.c:5760-5762, MOVE_STATUS_FAILED), B10-7.
+        | ((effect == _E.SAFEGUARD) & (state.safeguard[side] != 0))
         # subscript_tailwind_start.s:5, :18 and the effect scripts' TrySpikes / TryToxicSpikes
         # jumps (effect_script_0112.s, _0249.s): MOVE_STATUS_FAILED.
         | ((effect == _E.TAILWIND) & (state.tailwind[side] != 0))
@@ -1062,6 +1079,7 @@ def _confuse_foe(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
         & _alive(state, h.target_side, h.target)
         & (state.confusion[h.target_side] == 0)
         & ~h.shielded  # subscript_confuse.s:23
+        & (state.safeguard[h.target_side] == 0)  # :26 (B10-7)
     )
     return _set(state, "confusion", h.target_side, outcome.duration[h.side], cond)
 
@@ -1075,6 +1093,7 @@ def _secondary_confuse(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
         & (state.confusion[h.target_side] == 0)
         & ~_shield_dust(h)
         & ~h.shielded  # the rolled-secondary gate (battle_lib.c:1580-1582); confuse :23
+        & (state.safeguard[h.target_side] == 0)  # :26 (B10-7)
     )
     return _set(state, "confusion", h.target_side, outcome.duration[h.side], cond)
 
@@ -1758,6 +1777,8 @@ def entry_hazards(tables: Tables, state: BattleState, side) -> BattleState:
         # subscript_poison.s:29 / subscript_badly_poison.s:46: CheckSubstitute after the ability
         # tests, silent: a Baton Pass newcomer keeps the passer's substitute (B10-4).
         & (state.substitute_hp[side] == 0)
+        # subscript_poison.s:41 / _badly_poison.s:55: the side's Safeguard (B10-7).
+        & (state.safeguard[side] == 0)
         & can_have_status(tables, state, side, mon, status)
     )
     state = _set_status(state, side, mon, status, poisoned)
@@ -2227,6 +2248,7 @@ def play_hit(
         _belly_drum,
         _substitute,
         _pain_split,
+        _safeguard,
         _roost,
         _side_layers,
         _destiny_bond,

@@ -1494,3 +1494,20 @@ Rules left out because another mechanic is missing; each closes with the mechani
   read the mask, are unsupported.
   STATE.md maps quickClaw (`ts_claw`) and knockedOffItemsMask (`knocked_off`); test_state's
   audit list no longer pins quickClaw as later. Differential seed 5, 150: clean.
+- B10-7 (batch 10, family 8) Safeguard (`EffectId.SAFEGUARD`, 86, decomp 124), both engines.
+  BtlCmd_TrySafeguard (battle_script.c:5754-5772): fails with the user's side's Safeguard up
+  (MOVE_STATUS_FAILED, `primary_effect_fails`), else safeguardTurns = 5 (the existing
+  field-condition count-down, bcp.c:1016-1030). Its tests: every status subscript after the
+  substitute and status tests (paralyze :28, burn :45, freeze :25, poison :41, badly_poison :55,
+  fall_asleep :51, after its uproar test), subscript_confuse.s:26 (Swagger's confusion too, after
+  its Attack raise), the held-item path (Flame Orb subscript_burn.s:16, Toxic Orb
+  subscript_badly_poison.s:27) and Toxic Spikes on a newcomer (poison :41, badly_poison :55);
+  Yawn's test was already modelled (B8-3); the drowsy sleep (MOVE_EFFECT type) has none. The AI's
+  Basic_CheckAlreadyUnderSafeguard was E1's. Found on the way (B10-4 follow-up): Uproar's
+  "kept awake" NO_MORE_WORK for a direct sleep move now excludes a substituted target, whose
+  CheckSubstitute (subscript_fall_asleep.s:40) fails it first (both engines).
+  And a law fix (B10-4): `Reads.flinch_sure` let the first mover's flinch roll drop the foe's
+  hit reads even when the foe was behind a substitute, where the flinch never applies
+  (subscript_flinch_mon.s:6): test_damage_classes' generated case (a 1-HP substitute, Trick
+  Room, an uproar) found it; it now needs the foe's `substitute_hp == 0`, and
+  test_laws_no_sure_flinch_through_a_substitute fails without that clause.

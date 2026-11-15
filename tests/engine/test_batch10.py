@@ -317,3 +317,57 @@ def test_a_knocked_off_attacker_never_takes_a_sticky_barb(tables, names):
     knocked = s._replace(knocked_off=s.knocked_off.at[0, 0].set(1))
     out = assert_matches_reference(tables, knocked, (0, 0), O)
     assert int(out.item[0, 0]) == 0 and int(out.item[1, 0]) == n.item("Sticky Barb")
+
+
+def test_safeguard_sets_five_turns_and_blocks_status_and_confusion(tables, names):
+    """B10-7: BtlCmd_TrySafeguard (battle_script.c:5754-5772): 5 turns, failing while up; the
+    status subscripts (paralyze :28) and subscript_confuse.s:26 stop at it; Swagger still raises
+    the Attack."""
+    n = names
+    s = make_state(
+        tables,
+        [_mon(n, "Chansey", ["Safeguard"], 40)],
+        [_mon(n, "Pikachu", ["Thunder Wave", "Swagger"], 10)],
+    )
+    up = assert_matches_reference(tables, s, (0, 0), O)
+    assert int(up.safeguard[0]) == 4  # set to 5, then this turn's count-down
+    assert int(up.status[0, 0]) == Status.NONE  # the slower Thunder Wave met it
+    again = assert_matches_reference(tables, up, (0, 1), O)
+    assert int(again.confusion[0]) == 0 and int(again.stages[0, Stat.ATK]) == 2
+    assert int(again.safeguard[0]) == 3  # a second use failed: the count only went down
+
+
+def test_safeguard_stops_toxic_spikes_and_flame_orb(tables, names):
+    """B10-7: subscript_poison.s:41 (Toxic Spikes on a newcomer) and subscript_burn.s:16 (Flame
+    Orb at the turn end)."""
+    from nuzline.engine.actions import MOVE_ACTIONS
+
+    n = names
+    s = make_state(
+        tables,
+        [_mon(n, "Bidoof", ["Growl"], 30, "Flame Orb"), _mon(n, "Geodude", ["Tackle"], 30)],
+        [_mon(n, "Snorlax", ["Growl"], 30)],
+    )
+    s = s._replace(safeguard=s.safeguard.at[0].set(5), toxic_spikes=s.toxic_spikes.at[0].set(1))
+    out = assert_matches_reference(tables, s, (0, 0), O)
+    assert int(out.status[0, 0]) == Status.NONE
+    switched = assert_matches_reference(tables, s, (MOVE_ACTIONS + 1, 0), O)
+    assert int(switched.status[0, 1]) == Status.NONE
+
+
+def test_laws_no_sure_flinch_through_a_substitute(tables, names):
+    """B10-4 (law): moving first, Headbutt never flinches a foe behind a substitute
+    (subscript_flinch_mon.s:6), so ``Reads.flinch_sure`` must not let its roll drop the foe's
+    hit: the exact laws equal brute force. A slow user under Trick Room, the foe at a 1-HP
+    substitute."""
+    import numpy as np
+
+    from tests.engine.test_damage_classes import assert_equals_bruteforce
+
+    n = names
+    s = make_state(
+        tables, [_mon(n, "Pikachu", ["Headbutt"], 12)], [_mon(n, "Starly", ["Tackle"], 30)]
+    )
+    s = _subbed(s, 1, 1)._replace(trick_room=jnp.asarray(3, s.trick_room.dtype))
+    s = s._replace(hp=s.hp.at[0, 0].set(3))
+    assert_equals_bruteforce(tables, s, np.zeros(2, np.int32))

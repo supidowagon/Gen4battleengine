@@ -691,6 +691,8 @@ INPUT_NEUTRAL_EFFECTS = (
     # B10-5: both battlers' HP only (the HP clause).
     _E.ENDEAVOR,
     _E.PAIN_SPLIT,
+    # B10-7: a side condition that stops statuses (a burn's Attack is the status clause's).
+    _E.SAFEGUARD,
 )
 INPUT_CLAUSE_EFFECTS = (
     _E.STAT_SELF,  # the foe's Defense / Sp. Def; Minimize's flag (Stomp's power)
@@ -1048,6 +1050,7 @@ NON_TABLE_DAMAGE_EFFECTS = (
     _E.SUBSTITUTE,  # a status move: no damage (B10-4)
     _E.ENDEAVOR,  # no roll (damage.fixed_damage), B10-5
     _E.PAIN_SPLIT,  # a status move: no damage
+    _E.SAFEGUARD,  # a status move: no damage (B10-7)
 )
 
 
@@ -1696,6 +1699,9 @@ def outcome_laws(
         & deals
         & (ignorable != AbilityId.INNER_FOCUS)
         & (ignorable != AbilityId.SHIELD_DUST)  # effects._shield_dust
+        # subscript_flinch_mon.s:6: a foe behind a substitute is never flinched (its bit, or the
+        # flag this single hit sets), B10-4.
+        & (state.substitute_hp[::-1] == 0)
         & ~absorbs
         & foe_moves
         & (chance != 0)
