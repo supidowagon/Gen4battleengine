@@ -145,12 +145,14 @@ class VolatileCondition(IntEnum):
     CONFUSION = (1 << 0) | (1 << 1) | (1 << 2)  # :32-34, :65; BattleState.confusion
     ATTRACT = (1 << 16) | (1 << 17) | (1 << 18) | (1 << 19)  # :48-51, :70; .infatuated
     CURSE = 1 << 28  # :60; BattleState.curse
+    SUBSTITUTE = 1 << 24  # :56; BattleState.substitute_hp (its HP left, 0 = none)
 
 
 _VOLATILE_FIELDS = {
     VolatileCondition.CONFUSION: "confusion",
     VolatileCondition.ATTRACT: "infatuated",
     VolatileCondition.CURSE: "curse",
+    VolatileCondition.SUBSTITUTE: "substitute_hp",
 }
 
 
@@ -291,6 +293,12 @@ class BattleEffect(IntEnum):
     RANDOM_POWER_BASED_ON_IVS = 135  # Hidden Power
     ONE_HIT_KO = 38  # Guillotine, Horn Drill, Fissure
     SWITCH_HIT = 228  # U-turn
+    AVERAGE_HP = 91  # Pain Split
+    PREVENT_STATUS = 124  # Safeguard
+    MAX_ATK_LOSE_HALF_MAX_HP = 142  # Belly Drum
+    HIT_LAST_WHIFF_IF_HIT = 170  # Focus Punch
+    SET_HP_EQUAL_TO_USER = 189  # Endeavor
+    BLIZZARD = 260  # Kaizo Blizzard, Ice Ball, Sheer Cold
 
     TOXIC_SPIKES = 249
     RECOIL_PARALYZE_HIT = 262
@@ -737,6 +745,9 @@ ABILITY_IDS = {
     "Swift Swim": 33,
     "Rain Dish": 44,
     "Ice Body": 115,
+    # Basic_CheckSunnyDay / Expert_SunnyDay (script.s:807-809, :3788).
+    "Flower Gift": 122,
+    "Solar Power": 94,
     # Expert_RecoilMove (script.s:6297-6298; Magic Guard above).
     "Rock Head": 69,
     # E1 batch 6: Basic_CheckCannotSleep / _Confuse / _Paralyze / _Attract / _Burn

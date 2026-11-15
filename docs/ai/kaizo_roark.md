@@ -713,6 +713,27 @@ active battler**, with only the member's IVs), -2 unless `:5119` jumps and end; 
 player's HP bands (`:5126`, `:5130`, `:5134`) and the FASTER compare (its tie a read, Ruling
 R8) with `:5139`.
 
+### 5.19 Gardenia's first groups (E1 batch 16)
+
+- PREVENT_STATUS (124): `Basic_CheckAlreadyUnderSafeguard` (`:754-757`; `:206`), -8 under the
+  AI's own Safeguard; no Expert entry.
+- WEATHER_SUN (137): `Basic_CheckSunnyDay` (`:803-820`; `:215`), with Flower Gift, Leaf Guard
+  or Solar Power straight to the sun check, else against a statused Hydration player -10,
+  then in sun -8; `Expert_SunnyDay` (`:1711`; `:3773-3801`), Rain Dance's shape (5.16).
+- MAX_ATK_LOSE_HALF_MAX_HP (142): `Basic_CheckBellyDrum` (`:335-337`; `:216`), at 50 % HP or
+  less -10, then falling into `Basic_CheckHighStatStage_Attack` (`:338`); `Expert_BellyDrum`
+  (`:1712`; `:3803-3812`), below 90 % HP -2.
+- SET_HP_EQUAL_TO_USER (189) and AVERAGE_HP (91): `Expert_Endeavor` (`:1741`; `:4583-4608`)
+  and `Expert_PainSplit` (`:1690`; `:3287-3312`), one shape (`policy._hp_trade`); Endeavor
+  also takes the non-standard Basic label (`:241`).
+- HIT_LAST_WHIFF_IF_HIT (170, Focus Punch): the non-standard Basic label (`:233`),
+  `Expert_FocusPunch` (`:1730`; `:4129-4163`; +5 behind its own Substitute, the new
+  `VolatileCondition.SUBSTITUTE` read from `substitute_hp`), and EVAL_ATTACK's deprioritize
+  test (`:6366`, the 51 roll at `:6374`). Its kill bonus (`:6394`) is unreachable: a no-calc
+  move never kills.
+- BLIZZARD (260, Kaizo Blizzard and Ice Ball): `Expert_Blizzard` (`:1801`; `:6216-6234`),
+  resisted -3 unless the 50 roll (`:6229`) jumps, else in hail +1.
+
 ## 6. Where the AI reads the true battle state
 
 roark.md 6 holds: the damage estimate, the kill check and the effectiveness class read the

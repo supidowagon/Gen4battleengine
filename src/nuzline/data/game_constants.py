@@ -233,6 +233,8 @@ CONSTANTS: tuple[Constant, ...] = (
             "Rain Dish": 44,
             "Ice Body": 115,
             "Sturdy": 5,
+            "Flower Gift": 122,
+            "Solar Power": 94,
         },
     ),
     *_table(

@@ -2995,3 +2995,152 @@ def test_party_member_damage_ties_as_the_active(kaizo_tables, kaizo_names, kaizo
     assert as_active == int(c.ai_damage(t, s, u_turn, c.SIM_ROLL_MAX)) > 0  # the tie
     ctx = c.at_slot(c.new_context(t, s, _outcome(t, s)), 0)
     assert not bool(c.if_party_member_deals_more_damage(ctx, c.USE_MAX_DAMAGE).jump)
+
+
+# --- E1 batch 16: Gardenia's Sunny Day, Safeguard, Blizzard, Belly Drum, Endeavor, ----------
+# --- Focus Punch, Pain Split -----------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("case", "basic"),
+    [("plain", 0), ("safeguard", -8)],  # Basic_CheckAlreadyUnderSafeguard (script.s:754-757)
+)
+def test_basic_safeguard(kaizo_tables, kaizo_names, kaizo_roark_party, case, basic):
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Safeguard", "Accelerock", "", ""))
+    if case == "safeguard":
+        s = s._replace(safeguard=s.safeguard.at[1].set(3))
+    assert _delta(t, s, 0x2, 0x3)[0] == basic
+
+
+@pytest.mark.parametrize(
+    ("weather", "hp", "basic", "expert"),
+    [
+        # Basic_CheckSunnyDay (script.s:803-820) / Expert_SunnyDay (:3773-3801)
+        (Weather.NONE, 100, 0, 0),
+        (Weather.SUN, 100, -8, 0),
+        (Weather.RAIN, 100, 0, 1),
+        (Weather.NONE, 30, 0, -1),
+    ],
+)
+def test_sunny_day(kaizo_tables, kaizo_names, kaizo_roark_party, weather, hp, basic, expert):
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Sunny Day", "Accelerock", "", ""))
+    s = _hp(s, 1, hp)._replace(weather=jnp.asarray(weather, s.weather.dtype))
+    assert _delta(t, s, 0x2, 0x3)[0] == basic
+    assert _delta(t, s, 0x3, 0x7)[0] == expert
+
+
+@pytest.mark.parametrize(
+    ("hp", "attack", "basic", "expert"),
+    [
+        # Basic_CheckBellyDrum (script.s:335-337, falling into :338) / Expert_BellyDrum
+        # (:3803-3812)
+        (100, 0, 0, 0),
+        (50, 0, -10, -2),
+        (80, 0, 0, -2),
+        (100, 6, -10, 0),  # Attack at +6: Basic_CheckHighStatStage_Attack's -10
+    ],
+)
+def test_belly_drum(kaizo_tables, kaizo_names, kaizo_roark_party, hp, attack, basic, expert):
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Belly Drum", "Accelerock", "", ""))
+    s = _hp(s, 1, hp)._replace(stages=s.stages.at[1, Stat.ATK].set(attack))
+    assert _delta(t, s, 0x2, 0x3)[0] == basic
+    assert _delta(t, s, 0x3, 0x7)[0] == expert
+
+
+@pytest.mark.parametrize(
+    ("move", "speed", "own", "player", "expected"),
+    [
+        # Expert_Endeavor (script.s:4583-4608): player below 70 % -1; faster above 40 % -1,
+        # else +1; slower above 50 % -1, else +1
+        ("Endeavor", "faster", 100, 100, -1),
+        ("Endeavor", "faster", 30, 100, 1),
+        ("Endeavor", "slower", 60, 100, -1),
+        ("Endeavor", "slower", 50, 100, 1),
+        ("Endeavor", "faster", 30, 50, -1),
+        # Expert_PainSplit (:3287-3312): player below 80 %; slower above 60 %
+        ("Pain Split", "faster", 30, 100, 1),
+        ("Pain Split", "faster", 100, 100, -1),
+        ("Pain Split", "slower", 70, 100, -1),
+        ("Pain Split", "slower", 50, 100, 1),
+        ("Pain Split", "faster", 30, 70, -1),
+    ],
+)
+def test_hp_trade(kaizo_tables, kaizo_names, kaizo_roark_party, move, speed, own, player, expected):
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, move, "Accelerock", "", ""))
+    s = _speeds(s, player=1 if speed == "faster" else 500, opp=100)
+    s = _hp(_hp(s, 1, own), 0, player)
+    assert _delta(t, s, 0x3, 0x7)[0] == expected
+
+
+@pytest.mark.parametrize(
+    ("case", "jumps", "expected"),
+    [
+        # Expert_FocusPunch (script.s:4129-4163), Fighting against Gible (neutral)
+        ("first turn", (), 0),  # its first turn: nothing
+        ("later turn", (), 1),  # +1 unless the 200 roll (:4148) jumps
+        ("later turn", (4148,), 0),
+        ("asleep", (), 1),
+        ("confused", (), 1),  # +1 unless the 100 roll (:4157) jumps
+        ("confused", (4157,), 0),
+        ("substitute", (), 5),  # behind its own Substitute: +5
+    ],
+)
+def test_expert_focus_punch(kaizo_tables, kaizo_names, kaizo_roark_party, case, jumps, expected):
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Focus Punch", "Accelerock", "", ""))
+    if case != "first turn":
+        s = _turn(s, 3)
+    if case == "asleep":
+        s = s._replace(status=s.status.at[0, 0].set(Status.SLEEP))
+    elif case == "confused":
+        s = s._replace(confusion=s.confusion.at[0].set(2))
+    elif case == "substitute":
+        s = s._replace(substitute_hp=s.substitute_hp.at[1].set(10))
+    assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expected
+
+
+@pytest.mark.parametrize(("jumps", "expected"), [((), -2), ((6374,), 0)])
+def test_eval_attack_focus_punch(kaizo_tables, kaizo_names, kaizo_roark_party, jumps, expected):
+    """EvalAttack_Main (script.s:6366): Focus Punch takes EvalAttack_MaybeDeprioritize, -2
+    unless the 51 roll (:6374) jumps; as a no-calc move it makes no damage comparison."""
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Focus Punch", "Accelerock", "", ""))
+    assert _delta(t, s, 0x1, 0x3, tuple((0, line) for line in jumps))[0] == expected
+
+
+@pytest.mark.parametrize(
+    ("player", "weather", "jumps", "expected"),
+    [
+        # Expert_Blizzard (script.s:6216-6234), Kaizo Blizzard (Ice, effect 260)
+        ("Gible", Weather.NONE, (), 0),
+        ("Gible", Weather.HAIL, (), 1),
+        ("Charmander", Weather.NONE, (), -3),  # Fire resists Ice: -3 unless :6229 jumps
+        ("Charmander", Weather.NONE, (6229,), 0),
+    ],
+)
+def test_expert_blizzard(
+    kaizo_tables, kaizo_names, kaizo_roark_party, player, weather, jumps, expected
+):
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Blizzard", "Accelerock", "", ""))
+    s = s._replace(weather=jnp.asarray(weather, s.weather.dtype))
+    if player != "Gible":
+        s = _with_player(t, s, n.species_names.index(player), 0, known=True)
+    assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expected
+
+
+@pytest.mark.parametrize("flags", [0x17, 0x10F])
+def test_batch16_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, flags):
+    t, n = kaizo_tables, kaizo_names
+    s = _state(
+        t, kaizo_roark_party, BONSLY, _ids(n, "Focus Punch", "Blizzard", "Pain Split", "Sunny Day")
+    )
+    for hp, turn in ((100, 0), (30, 3)):
+        s2 = _turn(_hp(s, 1, hp), turn)
+        layout = layout_for(t, flags, s2)
+        assert policy.ai_refusals(t, s2, n, layout) == []
+        _assert_exact_equals_loose(t, s2, layout)

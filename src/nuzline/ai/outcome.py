@@ -287,6 +287,10 @@ SITE_N: dict[int, int] = {
     5130: 64,
     5134: 128,
     5139: 128,
+    # E1 batch 16
+    6229: 50,  # Expert_Blizzard (-3 when it does NOT jump)
+    4148: 200,  # Expert_FocusPunch (+1 when it does NOT jump)
+    4157: 100,  # Expert_FocusPunch_TryScorePlus1 (+1 when it does NOT jump)
 }
 SITE_LINES = tuple(SITE_N)
 # The flat (vanilla) layout's column of script_roll_sites that each line reads: column 0 is
@@ -444,6 +448,14 @@ KAIZO_TRANSCRIBED: frozenset[int] = frozenset(
         196,  # INCREASE_POWER_WITH_WEIGHT (:244)
         38,  # ONE_HIT_KO: Basic_CheckOHKOWouldFail (:157); Expert_OHKOMove (:1656), :2794
         228,  # SWITCH_HIT: Expert_UTurn (:1771); no Basic entry (E1 batch 15)
+        # E1 batch 16 (docs/ai/kaizo_roark.md 5.19)
+        91,  # AVERAGE_HP: Expert_PainSplit (:1690); no Basic entry
+        124,  # PREVENT_STATUS: Basic_CheckAlreadyUnderSafeguard (:206); no Expert entry
+        137,  # WEATHER_SUN: Basic_CheckSunnyDay (:215); Expert_SunnyDay (:1711)
+        142,  # MAX_ATK_LOSE_HALF_MAX_HP: Basic_CheckBellyDrum (:216); Expert_BellyDrum (:1712)
+        170,  # HIT_LAST_WHIFF_IF_HIT: NonStandard (:233); Expert_FocusPunch (:1730), :6366
+        189,  # SET_HP_EQUAL_TO_USER: NonStandard (:241); Expert_Endeavor (:1741)
+        260,  # BLIZZARD: Expert_Blizzard (:1801); no Basic entry
     }
 )
 # The transcribed effects (KAIZO_TRANSCRIBED) whose Expert_Main entry goes to a label added
@@ -523,6 +535,12 @@ KAIZO_EXPERT_LABELS: dict[int, tuple[str, int]] = {
     111: ("Expert_Protect", 1701),
     38: ("Expert_OHKOMove", 1656),
     228: ("Expert_UTurn", 1771),
+    91: ("Expert_PainSplit", 1690),
+    137: ("Expert_SunnyDay", 1711),
+    142: ("Expert_BellyDrum", 1712),
+    170: ("Expert_FocusPunch", 1730),
+    189: ("Expert_Endeavor", 1741),
+    260: ("Expert_Blizzard", 1801),
 }
 # Of KAIZO_EXPERT_LABELS, the effects whose Expert label policy._expert transcribes
 # (layout.KAIZO expert_transcribed), written out: it is not derived from the table, so an
@@ -590,6 +608,12 @@ KAIZO_EXPERT_TRANSCRIBED: frozenset[int] = frozenset(
         111,  # PROTECT: Expert_Protect
         38,  # ONE_HIT_KO: Expert_OHKOMove
         228,  # SWITCH_HIT: Expert_UTurn
+        91,  # AVERAGE_HP: Expert_PainSplit
+        137,  # WEATHER_SUN: Expert_SunnyDay
+        142,  # MAX_ATK_LOSE_HALF_MAX_HP: Expert_BellyDrum
+        170,  # HIT_LAST_WHIFF_IF_HIT: Expert_FocusPunch
+        189,  # SET_HP_EQUAL_TO_USER: Expert_Endeavor
+        260,  # BLIZZARD: Expert_Blizzard
     }
 )
 assert set(KAIZO_EXPERT_LABELS) <= KAIZO_TRANSCRIBED

@@ -650,6 +650,41 @@ def _basic_check_non_standard_damage(ctx: AiContext, mask) -> AiContext:
     return _score(ctx, t, -10)
 
 
+def _basic_check_safeguard(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckAlreadyUnderSafeguard`` (script.s:754-757): the AI's side under
+    Safeguard, -8."""
+    ctx, t = _split(c.if_side_condition(_at(ctx, mask), _A, c.SideCondition.SAFEGUARD))
+    return c.pop_or_end(_score(ctx, t, -8))
+
+
+def _basic_check_sunny_day(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckSunnyDay`` (script.s:803-820): unless the attacker has Flower Gift, Leaf
+    Guard or Solar Power, against a statused Hydration player (a guessing read) -10; then
+    in sun -8 (``Basic_CheckCurrentWeatherIsSun``)."""
+    ctx = c.load_battler_ability(_at(ctx, mask), _A)
+    sun = jnp.zeros_like(ctx.live)
+    for name in ("Flower Gift", "Leaf Guard", "Solar Power"):
+        ctx, t = _split(c.if_loaded_equal_to(ctx, _ABILITY[name]))
+        sun = sun | t
+    ctx = c.load_battler_ability(ctx, _D)
+    ctx, t = _split(c.if_loaded_not_equal_to(ctx, _ABILITY["Hydration"]))
+    sun = sun | t
+    ctx, t = _split(c.if_status(ctx, _D, c.MonCondition.ANY))
+    ctx = _score(ctx, t, -10)
+    # Basic_CheckCurrentWeatherIsSun (:816)
+    ctx = c.load_current_weather(_at(ctx, sun | ctx.live))
+    ctx, t = _split(c.if_loaded_equal_to(ctx, int(c.AiWeather.SUNNY)))
+    return c.pop_or_end(_score(ctx, t, -8))
+
+
+def _basic_check_belly_drum(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckBellyDrum`` (script.s:335-337): at 50 % HP or less -10; otherwise it
+    falls into ``Basic_CheckHighStatStage_Attack`` (:338)."""
+    ctx, t = _split(c.if_hp_percent_less_than(_at(ctx, mask), _A, 51))
+    ctx = _score(ctx, t, -10)
+    return _basic_check_high_atk(ctx, ctx.live)
+
+
 def _basic_check_ohko(ctx: AiContext, mask) -> AiContext:
     """``Basic_CheckOHKOWouldFail`` (script.s:554-564): immune -10; against Sturdy (a guessing
     read) -10 unless the attacker has Mold Breaker; the attacker's level below the
@@ -750,10 +785,11 @@ def _basic_check_stealth_rock(ctx: AiContext, mask) -> AiContext:
 
 
 def _eval_attack(ctx: AiContext) -> AiContext:
-    """``EvalAttack_Main`` (script.s:6353; roark.md 5.2, docs/ai/kaizo_roark.md 5.2). The
-    Focus Punch and Sucker Punch tests (:6366-6367) and the Focus Punch, Sucker Punch and
-    Future Sight kill tests (:6394-6396, with their 170 roll at :6405) match no transcribed
-    effect and are not written out. HALVE_DEFENSE (:6365, :6389) and PRIORITY_1 (:6400) are:
+    """``EvalAttack_Main`` (script.s:6353; roark.md 5.2, docs/ai/kaizo_roark.md 5.2). Focus
+    Punch's deprioritize test (:6366) is written out (E1 batch 16); its kill test (:6394) is
+    unreachable, since a ``NO_DAMAGE_CALC_EFFECTS`` move never kills. The Sucker Punch tests
+    (:6367, :6395) and Future Sight's kill test (:6396, with the 170 roll at :6405) match no
+    transcribed effect and are not written out. HALVE_DEFENSE (:6365, :6389) and PRIORITY_1 (:6400) are:
     the kill bonus keys on the effect, not the move's priority (Ruling 8), and a
     HALVE_DEFENSE move never kills, since IfCurrentMoveKills computes no damage for a
     ``NO_DAMAGE_CALC_EFFECTS`` move (trainer_ai.c:1539-1554)."""
@@ -763,6 +799,8 @@ def _eval_attack(ctx: AiContext) -> AiContext:
     ctx, t = _split(c.if_loaded_equal_to(ctx, c.AI_NOT_HIGHEST_DAMAGE))
     ctx = _score(ctx, t, -1)
     ctx, deprioritize = _split(c.if_current_move_effect_equal_to(ctx, BattleEffect.HALVE_DEFENSE))
+    ctx, t = _split(c.if_current_move_effect_equal_to(ctx, BattleEffect.HIT_LAST_WHIFF_IF_HIT))
+    deprioritize = deprioritize | t
     ctx, quad = _split(c.go_to(ctx))
 
     # EvalAttack_MaybeDeprioritize (:6372): -2 unless the 51 roll jumps.
@@ -1692,6 +1730,90 @@ def _expert_u_turn(ctx: AiContext, mask) -> AiContext:
     return c.pop_or_end(c.add_to_move_score(_at(ctx, plus1 | ctx.live), 1))
 
 
+def _expert_sunny_day(ctx: AiContext, mask) -> AiContext:
+    """``Expert_SunnyDay`` (script.s:3773-3801): below 40 % HP -1; in hail, rain or sand +1;
+    with Flower Gift +1; with Leaf Guard and a status +1."""
+    ctx = _at(ctx, mask)
+    ctx, minus1 = _split(c.if_hp_percent_less_than(ctx, _A, 40))
+    ctx = c.load_current_weather(ctx)
+    plus1 = jnp.zeros_like(ctx.live)
+    for weather in (c.AiWeather.HAILING, c.AiWeather.RAINING, c.AiWeather.SANDSTORM):
+        ctx, t = _split(c.if_loaded_equal_to(ctx, int(weather)))
+        plus1 = plus1 | t
+    ctx = c.load_battler_ability(ctx, _A)
+    ctx, t = _split(c.if_loaded_equal_to(ctx, _ABILITY["Flower Gift"]))
+    plus1 = plus1 | t
+    ctx, _ = _split(c.if_loaded_not_equal_to(ctx, _ABILITY["Leaf Guard"]))  # -> _End
+    ctx, t = _split(c.if_status(ctx, _A, c.MonCondition.ANY))
+    plus1 = plus1 | t
+    ctx, _ = _split(c.go_to(ctx))  # -> _End
+    ctx = c.pop_or_end(c.add_to_move_score(_at(ctx, plus1), 1))
+    return c.pop_or_end(c.add_to_move_score(_at(ctx, minus1), -1))
+
+
+def _expert_belly_drum(ctx: AiContext, mask) -> AiContext:
+    """``Expert_BellyDrum`` (script.s:3803-3812): below 90 % HP -2."""
+    ctx, t = _split(c.if_hp_percent_less_than(_at(ctx, mask), _A, 90))
+    return c.pop_or_end(c.add_to_move_score(_at(ctx, t), -2))
+
+
+def _hp_trade(label: str, player_below: int, faster_above: int, slower_above: int):
+    """``Expert_Endeavor`` (script.s:4583-4608) and ``Expert_PainSplit`` (:3287-3312), one
+    shape: the player below ``player_below`` % HP -1; faster or tied, above
+    ``faster_above`` % HP -1, else +1; slower, above ``slower_above`` % HP -1, else +1."""
+
+    def run(ctx: AiContext, mask) -> AiContext:
+        ctx = _at(ctx, mask)
+        ctx, minus1 = _split(c.if_hp_percent_less_than(ctx, _D, player_below))
+        ctx, slower = _split(c.if_speed_compare_equal_to(ctx, COMPARE_SPEED_SLOWER))
+        ctx, t = _split(c.if_hp_percent_greater_than(ctx, _A, faster_above))
+        minus1 = minus1 | t
+        ctx = c.pop_or_end(c.add_to_move_score(ctx, 1))
+        ctx, t = _split(c.if_hp_percent_greater_than(_at(ctx, slower), _A, slower_above))
+        minus1 = minus1 | t
+        ctx = c.pop_or_end(c.add_to_move_score(ctx, 1))
+        return c.pop_or_end(c.add_to_move_score(_at(ctx, minus1), -1))
+
+    run.__name__ = run.__qualname__ = label
+    return run
+
+
+_expert_endeavor = _hp_trade("Expert_Endeavor", 70, 40, 50)
+_expert_pain_split = _hp_trade("Expert_PainSplit", 80, 40, 60)
+
+
+def _expert_focus_punch(ctx: AiContext, mask) -> AiContext:
+    """``Expert_FocusPunch`` (script.s:4129-4163): resisted -1; behind its own Substitute +5;
+    the player asleep +1; infatuated or confused, +1 unless the 100 roll (:4157) jumps; else
+    on not its first turn in battle, +1 unless the 200 roll (:4148) jumps."""
+    ctx, minus1 = _not_resisted(_at(ctx, mask))
+    ctx, t = _split(c.if_volatile_status(ctx, _A, c.VolatileCondition.SUBSTITUTE))
+    ctx = _score(ctx, t, 5)
+    ctx, plus1 = _split(c.if_status(ctx, _D, c.MonCondition.SLEEP))
+    ctx, try_plus1 = _split(c.if_volatile_status(ctx, _D, c.VolatileCondition.ATTRACT))
+    ctx, t = _split(c.if_volatile_status(ctx, _D, c.VolatileCondition.CONFUSION))
+    try_plus1 = try_plus1 | t
+    ctx = c.load_is_first_turn_in_battle(ctx, _A)
+    ctx, _ = _split(c.if_loaded_not_equal_to(ctx, 0))  # -> _End
+    ctx, _ = _split(c.if_random_less_than(ctx, 200, 4148))  # -> _End
+    ctx = c.pop_or_end(c.add_to_move_score(ctx, 1))
+    ctx = c.pop_or_end(c.add_to_move_score(_at(ctx, minus1), -1))
+    # Expert_FocusPunch_TryScorePlus1 (:4156), falling into _ScorePlus1 (:4159)
+    ctx, _ = _split(c.if_random_less_than(_at(ctx, try_plus1), 100, 4157))  # -> _End
+    return c.pop_or_end(c.add_to_move_score(_at(ctx, plus1 | ctx.live), 1))
+
+
+def _expert_blizzard(ctx: AiContext, mask) -> AiContext:
+    """``Expert_Blizzard`` (script.s:6216-6234): resisted, -3 unless the 50 roll (:6229)
+    jumps; else in hail +1."""
+    ctx, minus3 = _not_resisted(_at(ctx, mask))
+    ctx = c.load_current_weather(ctx)
+    ctx, _ = _split(c.if_loaded_not_equal_to(ctx, int(c.AiWeather.HAILING)))  # -> _End
+    ctx = c.pop_or_end(c.add_to_move_score(ctx, 1))
+    ctx, _ = _split(c.if_random_less_than(_at(ctx, minus3), 50, 6229))  # -> _End
+    return c.pop_or_end(c.add_to_move_score(ctx, -3))
+
+
 def _expert_curse(ctx: AiContext, mask) -> AiContext:
     """``Expert_Curse`` (script.s:3452-3500)."""
     # Expert_Curse (:3452). A Ghost-type attacker jumps to Expert_Curse_GhostCheckHP
@@ -1891,14 +2013,19 @@ _BASIC_LABELS = (
     (BattleEffect.POWER_BASED_ON_FRIENDSHIP, _basic_check_non_standard_damage),  # :203
     (BattleEffect.RANDOM_POWER_MAYBE_HEAL, _basic_check_non_standard_damage),  # :204
     (BattleEffect.POWER_BASED_ON_LOW_FRIENDSHIP, _basic_check_non_standard_damage),  # :205
+    (BattleEffect.PREVENT_STATUS, _basic_check_safeguard),  # :206
     (BattleEffect.DAMAGE_FLAT_20, _basic_check_non_standard_damage),  # :209
     (BattleEffect.RANDOM_POWER_BASED_ON_IVS, _basic_check_non_standard_damage),  # :213
     (BattleEffect.WEATHER_RAIN, _basic_check_rain_dance),  # :214
+    (BattleEffect.WEATHER_SUN, _basic_check_sunny_day),  # :215
+    (BattleEffect.MAX_ATK_LOSE_HALF_MAX_HP, _basic_check_belly_drum),  # :216
     (BattleEffect.MIRROR_COAT, _basic_check_non_standard_damage),  # :218
     (BattleEffect.ALWAYS_FLINCH_FIRST_TURN_ONLY, _basic_check_first_turn),  # :224
     (BattleEffect.WEATHER_HAIL, _basic_check_hail),  # :228
     (BattleEffect.STATUS_BURN, _basic_check_cannot_burn),  # :231
+    (BattleEffect.HIT_LAST_WHIFF_IF_HIT, _basic_check_non_standard_damage),  # :233
     (BattleEffect.LOWER_OWN_ATK_AND_DEF, _basic_check_non_standard_damage),  # :237
+    (BattleEffect.SET_HP_EQUAL_TO_USER, _basic_check_non_standard_damage),  # :241
     (BattleEffect.INCREASE_POWER_WITH_WEIGHT, _basic_check_non_standard_damage),  # :244
     (BattleEffect.ATK_DEF_UP, _basic_check_bulk_up),  # :248
     (BattleEffect.SP_ATK_SP_DEF_UP, _basic_check_calm_mind),  # :250
@@ -1944,6 +2071,7 @@ _EXPERT_LABELS = (
     (BattleEffect.LOWER_SPEED_HIT, _expert_speed_down_on_hit),  # :1681
     (BattleEffect.STATUS_LEECH_SEED, _expert_toxic_leech_seed),  # :1686
     (BattleEffect.COUNTER, _expert_counter),  # :1688
+    (BattleEffect.AVERAGE_HP, _expert_pain_split),  # :1690
     (BattleEffect.DAMAGE_WHILE_ASLEEP, _expert_nightmare),  # :1691
     (BattleEffect.USE_RANDOM_LEARNED_MOVE_SLEEP, _expert_sleep_talk),  # :1693
     (BattleEffect.KO_MON_THAT_DEFEATED_USER, _expert_destiny_bond),  # :1694
@@ -1953,13 +2081,17 @@ _EXPERT_LABELS = (
     (BattleEffect.SET_SPIKES, _expert_spikes),  # :1702
     (BattleEffect.HIT_BEFORE_SWITCH, _expert_pursuit),  # :1706
     (BattleEffect.WEATHER_RAIN, _expert_rain_dance),  # :1710
+    (BattleEffect.WEATHER_SUN, _expert_sunny_day),  # :1711
+    (BattleEffect.MAX_ATK_LOSE_HALF_MAX_HP, _expert_belly_drum),  # :1712
     (BattleEffect.MIRROR_COAT, _expert_mirror_coat),  # :1714
     (BattleEffect.ALWAYS_FLINCH_FIRST_TURN_ONLY, _expert_fake_out),  # :1723
     (BattleEffect.WEATHER_HAIL, _expert_hail),  # :1726
     (BattleEffect.DOUBLE_POWER_WHEN_STATUSED, _expert_facade),  # :1729
+    (BattleEffect.HIT_LAST_WHIFF_IF_HIT, _expert_focus_punch),  # :1730
     (BattleEffect.DOUBLE_POWER_AND_CURE_PARALYSIS, _expert_smelling_salts),  # :1731
     (BattleEffect.LOWER_OWN_ATK_AND_DEF, _expert_superpower),  # :1735
     (BattleEffect.REMOVE_SCREENS, _expert_brick_break),  # :1739
+    (BattleEffect.SET_HP_EQUAL_TO_USER, _expert_endeavor),  # :1741
     (BattleEffect.RECOIL_THIRD, _expert_recoil_move),  # :1747
     (BattleEffect.ATK_DEF_UP, _expert_status_def_up),  # :1753
     (BattleEffect.SP_ATK_SP_DEF_UP, _expert_status_spd_up),  # :1756
@@ -1970,6 +2102,7 @@ _EXPERT_LABELS = (
     (BattleEffect.SWITCH_HIT, _expert_u_turn),  # :1771
     (BattleEffect.DOUBLE_POWER_IF_MOVING_SECOND, _expert_payback),  # :1773
     (BattleEffect.TOXIC_SPIKES, _expert_toxic_spikes),  # :1792
+    (BattleEffect.BLIZZARD, _expert_blizzard),  # :1801
     (BattleEffect.RECOIL_PARALYZE_HIT, _expert_recoil_move),  # :1802
     (BattleEffect.STEALTH_ROCK, _expert_stealth_rock),  # :1805
     (BattleEffect.RECOIL_HALF, _expert_recoil_move),  # :1806
