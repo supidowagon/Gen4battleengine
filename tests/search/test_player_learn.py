@@ -11,6 +11,7 @@ import numpy as np
 import pytest
 
 from nuzline.engine.ids import Stat
+from nuzline.engine.levelup import needs_learn
 from nuzline.engine.state import make_state
 from nuzline.search.line import LINE, empty_line
 from nuzline.search.player import GREEDY, Player, _player_run, player_playout, refusal_reason
@@ -68,29 +69,36 @@ def _window_c_root(tables, names):
     return _with_prompt(tables, names, s)[0]
 
 
-def _same(got, want):
+def _same(got, want, root=""):
     for field in ("won", "player_faints", "turns", "refused", "ended", "hp_left", "pp_left"):
-        assert float(getattr(got, field)) == float(getattr(want, field)), field
-    assert np.array_equal(np.asarray(got.deaths), np.asarray(want.deaths))
+        assert float(getattr(got, field)) == float(getattr(want, field)), f"{root}: {field}"
+    assert np.array_equal(np.asarray(got.deaths), np.asarray(want.deaths)), f"{root}: deaths"
 
 
 def test_greedy_and_the_empty_line_equal_playout_through_learns(tables, names):
-    # One test over the four roots: each case traces the same three programs (playout and the
-    # GREEDY and LINE player_playout), and as separate tests each grew the process past the
-    # conftest cache-clear threshold, so every case traced them again.
+    # One test over the four roots: each case traces the same three programs (playout, the
+    # GREEDY _player_run and the LINE player_playout), and as separate tests each grew the
+    # process past the conftest cache-clear threshold, so every case traced them again.
+    # The GREEDY run's final state carries no learn prompt: the loop resolves each turn's
+    # learns (player.py, resolve_learns before send_replacements) and the root's pending one.
+    # The result fields alone cannot see a skipped resolve: every move is given up anyway.
     builds = (_level_up_turn, _pending_learn_root, _pending_learn_root_pursuit, _window_c_root)
     for build in builds:
         s = build(tables, names)
         for k in jax.random.split(jax.random.PRNGKey(5), 4):
+            root = f"{build.__name__}, key {np.asarray(k).tolist()}"
             want = playout(tables, root_state(tables, s, k), k, 8)
-            _same(player_playout(tables, s, GREEDY, (), k, 8), want)
-            _same(player_playout(tables, s, LINE, empty_line(), k, 8), want)
+            got, out = _run(tables, s, GREEDY, (), k, 8)
+            _same(got, want, root)
+            if not int(got.refused):
+                assert not bool(needs_learn(out)), f"{root}: a learn prompt was left pending"
+            _same(player_playout(tables, s, LINE, empty_line(), k, 8), want, root)
 
 
 # Slow: the one-turn FIXED player loop is a program of its own that grows the process by
 # about 9.6 GB from a cold cache. The fast tier keeps the property through
-# test_greedy_and_the_empty_line_equal_playout_through_learns, whose _level_up_turn root
-# requires player_playout to equal playout through this same turn, learns resolved.
+# test_greedy_and_the_empty_line_equal_playout_through_learns, which asserts the GREEDY run
+# leaves no learn prompt pending (it fails with player.py's turn resolve_learns removed).
 @pytest.mark.slow
 def test_a_turn_resolves_its_learns(tables, names):
     # The final state of a one-turn run: Bulbasaur reached L13 and its prompts were answered
