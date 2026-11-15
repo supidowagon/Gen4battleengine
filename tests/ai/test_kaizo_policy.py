@@ -398,9 +398,17 @@ def test_expert_guard_refuses_an_untranscribed_label(
     report = check_coverage(t, n, player, kaizo_roark, opp, Weather.NONE)
     assert not any("AI_FLAG" in m or "ai scoring" in m for m in report.missing), report.missing
     recover = BattleEffect.RESTORE_HALF_HP
-    closed = KAIZO._replace(expert_transcribed=KAIZO.expert_transcribed - {recover})
-    monkeypatch.setattr(layout_module, "LAYOUTS", (layout_module.VANILLA, closed))
-    report = check_coverage(t, n, player, kaizo_roark, opp, Weather.NONE)
+    # Each fight's layout comes from ai.layout.kaizo_layout (E1 Rulings R6, R7), which reads
+    # layout.KAIZO through a cache: patch the base layout and clear the cache around it.
+    base = layout_module.KAIZO
+    closed = base._replace(expert_transcribed=base.expert_transcribed - {recover})
+    monkeypatch.setattr(layout_module, "KAIZO", closed)
+    layout_module._with.cache_clear()
+    try:
+        report = check_coverage(t, n, player, kaizo_roark, opp, Weather.NONE)
+    finally:
+        monkeypatch.undo()
+        layout_module._with.cache_clear()
     assert any(line in m for m in report.missing), report.missing
 
 

@@ -76,6 +76,7 @@ def _resident_bytes() -> int:
 # ($NUZLINE_CLEAR_ABOVE_GB overrides it). Each clear is recorded and summarised at the end.
 _CLEAR_ABOVE = int(float(os.environ.get("NUZLINE_CLEAR_ABOVE_GB", "6")) * 2**30)
 _CLEARS: list[tuple[str, int, int, bool]] = []  # (test, before, after, memory-driven)
+_GROWTH: list[tuple[int, str, int]] = []  # (resident growth over a test, test, resident after)
 
 
 @pytest.hookimpl(hookwrapper=True)
@@ -87,9 +88,13 @@ def pytest_runtest_protocol(item, nextitem):
     set, read bound and a fight's effects, E1 Rulings R2, R6, R7) and one of them alone passed
     20 GB (E1 batch 8); clearing after every test there made them re-trace every program, so
     the clear follows memory instead. The persistent compile cache keeps recompiles cheap."""
+    start = _resident_bytes()
     yield
     next_module = nextitem is None or nextitem.module is not item.module
     before = _resident_bytes()
+    _GROWTH.append((before - start, item.nodeid, before))
+    _GROWTH.sort(reverse=True)
+    del _GROWTH[5:]
     if "jax" in sys.modules and (next_module or before > _CLEAR_ABOVE):
         sys.modules["jax"].clear_caches()
         gc.collect()
@@ -97,12 +102,17 @@ def pytest_runtest_protocol(item, nextitem):
 
 
 def pytest_terminal_summary(terminalreporter):
-    """The JAX cache clears of the run: how many were memory-driven, and the resident size
-    they left (a clear that leaves the process above the threshold fires after every test)."""
+    """The tests whose run grew the resident size most, and the JAX cache clears of the run:
+    how many were memory-driven, and the resident size they left (a clear that leaves the
+    process above the threshold would fire after every test)."""
     memory = [c for c in _CLEARS if c[3]]
+    gb = 2**30
+    if _GROWTH:
+        terminalreporter.write_line("largest resident growth over one test:")
+        for growth, nodeid, after in _GROWTH:
+            terminalreporter.write_line(f"  {nodeid}: +{growth / gb:.2f} GB to {after / gb:.2f} GB")
     if not _CLEARS:
         return
-    gb = 2**30
     afters = [c[2] / gb for c in memory] or [0.0]
     terminalreporter.write_line(
         f"jax cache clears: {len(_CLEARS)} ({len(memory)} memory-driven above "
