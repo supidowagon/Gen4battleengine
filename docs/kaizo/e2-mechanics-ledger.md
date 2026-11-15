@@ -13,11 +13,15 @@
   branch claude/e1-prep-on-e2 holds the AI for Metal Burst, Future Sight, ACC_DOWN, Minimize,
   Mean Look, Knock Off, Imprison, Copycat, Ingrain, Baton Pass, Helping Hand, SolarBeam: do not
   redo those. Batches 3-9 await merge; batch 10 is the only batch allowed until then.
-  Family 3 (Substitute, B10-4) is written: see its ruling; the merge-check follow-ups for 3-9
-  are B10-3 (ff4490b). Still owed from the manager: tests/search/test_pivot_search.py under 8 GB
-  (fight-sized roots, shared programs) once the fast tier's figure for it is in. E1 owns
-  families 2 (Focus Band, Wiki Berry), 4 (Pressure) and the abilities of 8-9; E2's next: Endeavor /
-  Pain Split, Knock Off, the charge turn, Safeguard, Encore / Focus Punch / Assist.
+  Done on this branch (batch 10, unmerged): family 1 recoil / crash (597ad95, B10-1/2), the 3-9
+  merge-check follow-ups (ff4490b, B10-3), family 3 Substitute (939bd45, B10-4), family 5
+  Endeavor / Pain Split (a9806c2, B10-5), family 6 Knock Off (b051b45, B10-6). Backlog now 237
+  missing groups, 58 runnable battles. E1 owns families 2 (Focus Band, Wiki Berry), 4 (Pressure)
+  and the abilities of 8-9. E2 left: family 7 the charge turn (SolarBeam #151, Razor Wind, Fly /
+  Dig / Dive / Bounce / Shadow Force, Skull Bash, Sky Attack, Power Herb), family 8 Safeguard,
+  family 10 Encore / Focus Punch / Assist. Still owed from the manager: tests/search/
+  test_pivot_search.py under 8 GB (fight-sized roots, shared programs) once the fast tier's figure
+  for it is in. Tell the manager: B10-6's stale ai_item_known after Knock Off (E1's area).
 - **Fast tier.** The batches 3-9 merge fast tier runs on c961e18 in `_scratch/e2/testwt`
   (launcher `_scratch/e2/run_fast_tier.ps1`, log `_scratch/e2/ft_c961e18.log`, started 09:20,
   pid 15236 in the lock). Report passed / failed, wall time, peak and the ten slowest to the
