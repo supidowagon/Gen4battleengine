@@ -280,6 +280,23 @@ Out of scope: AI entries (E1), double / multi formats, gauntlets, the terrain en
   keeps the Custap flag (step `custap`, `ts_custap`) and whether it needs the same persistence.
 - Knock Off leaves canUnburden as it was: an armed Unburden holder doubles its speed after it.
 
+### Family 10 rest: Encore and Assist (next; decomp sites, not yet modelled)
+
+- Encore (effect 90, effect_script_0090.s: a direct ON_HIT subscript_encore_start.s ->
+  BtlCmd_TryEncore, battle_script.c:4725-4748): fails (MOVE_STATUS_FAILED) when the defender is
+  encored already, its last move (movePrevByBattler) is none, is not in its slots, cannot be
+  encored (Move_CanBeEncored) or has no PP; else encoredMove / encoredMoveSlot and encoredTurns =
+  RandNext() % 5 + 3 (3-7: a new duration law). Readers: command selection (bcp.c:435-450, the
+  move forced), BattleSystem_CheckInvalidMoves (battle_lib.c:2302-2304: other moves invalid, so
+  the legal actions and the AI's choices change), the action (bcp.c:1869-1883: the encored move
+  used, or the encore dropped when the slot no longer holds it), the end-of-turn count
+  (bcp.c:1592-1610: ends at 0 or when the move's PP is 0), Pursuit (script.c:6905), Sucker Punch
+  (:7292), Me First (:7391). New state: the encored move, slot and turns per battler (volatile,
+  Baton Pass?: check condition / moves.h); the AI's Encore scripts are E2's to transcribe.
+- Assist (effect 180): the invoker family (Sleep Talk / Metronome / Copycat, B5-1): a random
+  move of the user's party mates' known moves minus the exclusion list; find its command and the
+  call law shape before starting.
+
 ## Batch 6 design: mid-turn switch decision (U-turn, Baton Pass)
 
 # Mid-turn switch decision (U-turn, Baton Pass): design, rev. 2
