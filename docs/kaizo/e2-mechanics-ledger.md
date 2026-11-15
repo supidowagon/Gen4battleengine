@@ -23,7 +23,11 @@
   (new state: the encored move and its turns; it forces the selection) and Assist (the invoker
   framework of Sleep Talk / Metronome / Copycat, with the party's moves). Still owed from the manager: tests/search/
   test_pivot_search.py under 8 GB (fight-sized roots, shared programs) once the fast tier's figure
-  for it is in.
+  for it is in. Since then: Encore's engine side, B10-6's AI record and the B10-10 law fix
+  (5e9b960); batches 3-9 are in main (d420167). Left in batch 10: Encore's AI (after ALLIN),
+  Encore's takeover laws (decision pending), Assist, the charge turn, test_pivot_search under
+  8 GB with per-test memory shown; then merge main, focused tests + guards + one review, and the
+  tip to the manager. Batch 11 may start once the batch 10 tip is with the manager.
   AI convention (manager, 2026-11-15, from E1's ALLIN branch claude/e1-allin-ai 4fa42e4): gate
   a flag only through policy._flags / _run_flags (never layout.runs / layout.flags in traced
   scoring); every random read through commands._slot_read with its bound in
@@ -1575,6 +1579,11 @@ Rules left out because another mechanic is missing; each closes with the mechani
   lacked the three encore fields; its usable-move check (`_usable`) ignored Encore (Struggle and
   the forced slot); both fixed. Sleep Talk's callable slots drop every move but the encored one
   (CheckInvalidMoves at battle_script.c:4927; `order.sleep_talk_slots`, both engines).
+  Owed (decision asked of the manager 2026-11-15): the same-turn takeover (FightCommand,
+  bcp.c:1869-1873) is exact in both engines but not in `outcome_laws` (reads are planned from the
+  chosen move: a hand case gives 1 child against 33 sampled outcomes) nor in `sample_outcome`
+  (crit and secondary drawn with the chosen move's rates). Proposed: the encored move as a second
+  candidate move for that side, reads unioned and crit / secondary drawn per candidate.
 - B10-10 (law) `Reads.flinch_sure` counted Snore (FLINCH with SNORE_PARAM), whose flinch fails
   with its move unless the user is asleep when it acts (effect_script_0092.s:5): an awake Snore
   user moving first let the laws drop the foe's reads (test_matches_sampled_frequencies_random's
