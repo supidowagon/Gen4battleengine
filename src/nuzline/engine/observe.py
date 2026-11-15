@@ -49,8 +49,10 @@ Events, per side (``[side]``; 0 = player):
   (``subscript_recover_hp.s``), else 0. Its damage path's power is never printed (only the
   HP change shows it).
 * ``called``: the move Nature Power turned into ("Nature Power turned into MOVE!",
-  effect_script_0173.s), once its script ran, else 0. ``act_id`` stays Nature Power; the
-  called move's hits, misses and crits are the side's.
+  effect_script_0173.s), once its script ran, else 0; likewise the move Sleep Talk,
+  Metronome or Copycat called (its own attack message after the invoker's, GoToMoveScript),
+  0 when the call failed. ``act_id`` stays the chosen move; the called move's hits, misses and
+  crits are the side's.
 * ``dragged``: the party slot + 1 the foe's Roar / Whirlwind dragged in on this side ("{0} was
   dragged out!", subscript_force_target_to_switch_or_flee.s), else 0: a drag told apart from
   a switch. The newcomer runs no action this turn. A Roar that fails shows only its

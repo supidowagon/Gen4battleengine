@@ -429,6 +429,11 @@ _NO_ACC_EVA_WRITE = (frozenset(EffectId(i) for i in range(40)) - _STAT_KINDS) | 
     EffectId.DESTINY_BOND,
     EffectId.SECRET_POWER,
     EffectId.COUNTER,
+    # E2 batch 5: the invokers write none themselves; hit_thresholds reads the move they call
+    # (outcome_laws' and sample_outcome's ``moves``, order.used_moves).
+    EffectId.SLEEP_TALK,
+    EffectId.METRONOME,
+    EffectId.COPYCAT,
 }
 # (effect, stat) pairs hit_thresholds follows: they change a later foe move's threshold.
 _SEEN = {

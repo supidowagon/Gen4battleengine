@@ -41,6 +41,7 @@ from nuzline.engine.ids import (
     CHOICE_ITEMS,
     ITEM_ABILITY_IDS,
     ITEM_GRISEOUS_ORB,
+    METRONOME_DRAW,
     MOVE_FAKE_OUT,
     MOVE_SLEEP_TALK,
     MOVE_SNORE,
@@ -205,6 +206,44 @@ def _called_move(tables, s: RefState, move: int) -> int:
         return move
     row = _terrain_row(s)
     return 0 if row is None else TERRAIN_MOVES[row]
+
+
+def _invoked_move(tables, s: RefState, side: int, move: int, call: int) -> int:
+    """The move an invoker's script calls (``order.invoked_move``), 0 when it finds none; any
+    other move itself. BtlCmd_TrySleepTalk (script.c:4907-4937): the allowed slots (not
+    Move_IsInvoker / Focus Punch / Uproar / Chatter / Move_IsMultiTurn, ``NO_SLEEP_TALK``; not
+    flagged by CheckInvalidMoves without its NO_PP check: disabled, power 0 while taunted, a
+    Choice holder's other moves), the ``call % count``-th of them. BtlCmd_Metronome
+    (:4535-4562): the ``call % count``-th of ids 1..467 that the user does not know and
+    Move_CanBeMetronomed allows (``NO_METRONOME``). BtlCmd_TryCopycat (:7328-7341): the battle's
+    movePrev unless it is MOVE_NONE or not Metronome-able."""
+    effect = _t(tables, "move_effect", move)
+    mon, sd = _active(s, side), s.sides[side]
+    if effect == EffectId.SLEEP_TALK:
+        lock = sd.choice_lock
+        locked = _holds_choice(tables, s, side) and lock != 0 and lock in mon.moves
+        allowed = [
+            m
+            for m in mon.moves
+            if m > 0
+            and not _t(tables, "move_flags", m) & MoveFlag.NO_SLEEP_TALK
+            and m != sd.disabled_move
+            and not (sd.taunt > 0 and _t(tables, "move_power", m) == 0)
+            and not (locked and m != lock)
+        ]
+        return allowed[call % len(allowed)] if allowed else 0
+    if effect == EffectId.METRONOME:
+        allowed = [
+            m
+            for m in range(1, METRONOME_DRAW + 1)
+            if m not in mon.moves and not _t(tables, "move_flags", m) & MoveFlag.NO_METRONOME
+        ]
+        return allowed[call % len(allowed)] if allowed else 0
+    if effect == EffectId.COPYCAT:
+        prev = s.move_prev
+        ok = prev != 0 and not _t(tables, "move_flags", prev) & MoveFlag.NO_METRONOME
+        return prev if ok else 0
+    return move
 
 
 def _restore_types(tables, s: RefState, side: int) -> None:
@@ -2582,6 +2621,30 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
             _unlock(s.sides[side])
             return None
         record = move
+    if _t(tables, "move_effect", move) in (
+        EffectId.SLEEP_TALK,
+        EffectId.METRONOME,
+        EffectId.COPYCAT,
+    ):
+        # The invokers (B5-1..): the script picks the move now (Copycat reads the battle's
+        # movePrev as the faster foe left it), then GoToMoveScript (script.c:2111-2134) runs it
+        # as moveCur with a defender re-picked for it. Sleep Talk fails unless the user is still
+        # asleep (effect_script_0097.s:5); a call that finds no move fails (MOVE_STATUS_FAILED,
+        # subscript_missed.s); either way the defender stays the user (no moveHit).
+        called = _invoked_move(tables, s, side, move, turn.outcome.call[side])
+        sleep_talk = _t(tables, "move_effect", move) == EffectId.SLEEP_TALK
+        if called == 0 or (sleep_talk and mon.status != Status.SLEEP):
+            _unlock(s.sides[side])
+            return None
+        move = _called_move(tables, s, called)
+        turn.move_cur = move
+        if not _defender_always(tables, move) and _active(s, 1 - side).hp == 0:
+            _unlock(s.sides[side])  # subscript_no_target.s
+            return None
+        own_defender = _move_target(tables, move) in SELF_DEFENDER or _curse_on_user(tables, move)
+        record = None if own_defender else move
+        counter = _t(tables, "move_effect", move) == EffectId.COUNTER
+        special_counter = counter and _move_target(tables, move) in SELF_DEFENDER
     # The move script (bcp.c:3214): effect_script_0158.s (Fake Out) sets MOVE_STATUS_FAILED
     # unless fakeOutTurnNumber == totalTurns; TryMove then ends in subscript_missed.s
     # ("But it failed!").
@@ -3248,10 +3311,13 @@ def ref_step(tables, state: RefState, actions: tuple[int, int], outcome) -> RefS
             # exactly when _fight returns its moveHit record).
             defender = 1 - side if record is not None else None
             _update_choice_lock(turn, s, side, defender, move)
+            # UpdateMoveBuffers (bcp.c:3936-3942) / UpdateFlagsWhenHit (:4499-4508): the
+            # battle's movePrev is moveTemp (the chosen move) when the attack message showed.
+            s.move_prev = move if turn.attack_message else 0
             # UpdateMoveBuffers (bcp.c:3936-3942): moveProtect = the move if its attack
             # message showed, else MOVE_NONE; the next TryProtection keeps the chain only for
             # Protect, Detect or Endure (script.c:5154-5158). Folded into protect_count here.
-            if not (turn.attack_message and move in PROTECT_CHAIN_MOVES):
+            if not (turn.attack_message and turn.move_cur in PROTECT_CHAIN_MOVES):
                 s.sides[side].protect_count = 0
         turn.done[side] = True
         _faint_check(turn, s)  # BATTLE_CONTROL_CHECK_ANY_FAINTED after each action

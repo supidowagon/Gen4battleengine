@@ -193,6 +193,15 @@ class EffectId(IntEnum):
     # last one, bcp.c:3413-3434) times ``numerator / 10`` (``step._use_move``,
     # ``effects.play_hit``), under SYSCTL_IGNORE_TYPE_CHECKS; 0 taken fails the move.
     COUNTER = 63
+    # E2 batch 5 (rulings B5-n). The invokers: the move script draws or reads another move and
+    # GoToMoveScript runs it as moveCur (battle_script.c:2111-2134; ``order.invoked_move``):
+    # Sleep Talk (effect_script_0097.s: fails unless the user is asleep, BtlCmd_TrySleepTalk
+    # :4907-4937 draws an eligible slot, ``Outcome.call``), Metronome (effect_script_0083.s,
+    # BtlCmd_Metronome :4535-4562 draws a move id, ``Outcome.call``), Copycat
+    # (effect_script_0242.s, BtlCmd_TryCopycat :7328-7341 reads ``BattleState.move_prev``).
+    SLEEP_TALK = 64
+    METRONOME = 65
+    COPYCAT = 66
 
 
 # ``EffectId.COUNTER``'s source (``move_param[m, 0]``).
@@ -612,6 +621,12 @@ class MoveFlag(IntFlag):
     SOUND = 4
     PUNCH = 8
     KINGS_ROCK = 16  # MOVE_FLAG_TRIGGERS_KINGS_ROCK (BattleControllerPlayer_CheckExtraFlinch)
+    # Engine bits from the decomp's code tables (tools/build_tables.py ``_move_flags``):
+    # BtlCmd_TrySleepTalk's own exclusions (battle_script.c:4918-4925: Move_IsInvoker, Focus
+    # Punch, Uproar, Chatter, Move_IsMultiTurn by the move's effect) and sCannotMetronomeMoves up
+    # to its 0xFFFF delimiter (battle_lib.c:7152-7178, Move_CanBeMetronomed :7204-7218).
+    NO_SLEEP_TALK = 32
+    NO_METRONOME = 64
 
 
 class MoveTarget(IntEnum):
@@ -690,6 +705,17 @@ MOVE_STRUGGLE = 165
 # battler use them (bcp.c:2455).
 MOVE_SNORE = 173
 MOVE_SLEEP_TALK = 214
+# BtlCmd_Metronome (battle_script.c:4540): ``RandNext() % NUM_VALID_MOVES + 1`` with
+# NUM_VALID_MOVES = MAX_MOVES - 1 (include/constants/moves.h:12; MAX_MOVES 468,
+# generated/moves.txt), redrawn until the move is allowed: a move ``m`` weighs the count of u16
+# values ``r`` with ``r % 467 == m - 1``: 141 for ``m <= 65536 % 467 = 156``, else 140.
+METRONOME_DRAW = 467
+METRONOME_HEAVY = 65536 % METRONOME_DRAW
+# BtlCmd_TrySleepTalk (battle_script.c:4931-4933) redraws ``RandNext() % 4`` until the slot is
+# allowed: uniform over the allowed slots (65536 % 4 == 0). ``Outcome.call`` holds a value
+# ``u`` in 0..11 and the call is allowed slot ``u % count`` (12 is a multiple of every count
+# 1-4), so the draw stays exact for whatever set the move sees when it runs.
+SLEEP_TALK_VALUES = 12
 # Fake Out (``generated/moves.txt`` line 253): ``subscript_flinch_mon.s:18`` shows Inner
 # Focus's message, which names the ability, only for ``BTLVAR_CURRENT_MOVE == MOVE_FAKE_OUT``
 # (or a direct flinch effect, which no supported move has).

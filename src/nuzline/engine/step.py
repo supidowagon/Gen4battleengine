@@ -153,10 +153,14 @@ from nuzline.engine.ids import (
 )
 from nuzline.engine.levelup import pay_exp, pay_exp_leveled
 from nuzline.engine.order import (
+    CALL_NONE,
+    CALL_SLEEP_TALK,
     MOVE_ACTIONS,
     action_order,
+    call_kind,
     called_move,
     custap_flags,
+    invoked_move,
     is_item,
     is_switch,
     player_second,
@@ -713,7 +717,26 @@ def _use_move(
     # defender), so from here on the move that runs is ``used``; the status checks above, the
     # PP, priority and movePrevByBattler (moveTemp) stay Nature Power's.
     nature_power = tables.move_effect[move] == EffectId.NATURE_POWER
-    used = called_move(tables, state, move)
+    # The invokers (E2 batch 5, B5-1..): Sleep Talk, Metronome and Copycat run the move their
+    # script picks (order.invoked_move: BtlCmd_TrySleepTalk, _Metronome, _TryCopycat) through
+    # GoToMoveScript (battle_script.c:2111-2134) as Nature Power does, read now, so a faster
+    # foe's move this turn counts (Copycat's movePrev). Their own defender is the user (RANGE_USER),
+    # so they pass the no-target check; a call that finds no move, or a Sleep Talk whose user is
+    # not asleep now (effect_script_0097.s:5: one that woke this turn), is MOVE_STATUS_FAILED
+    # ("But it failed!", subscript_missed.s). A called move uses no PP; the status checks above,
+    # the PP, priority, movePrevByBattler, movePrev and the Choice lock stay the invoker's
+    # (moveTemp).
+    kind = call_kind(tables, move)
+    invoker = kind != CALL_NONE
+    invoked = invoked_move(tables, state, side, move, outcome.call[side])
+    call_failed = invoker & (
+        (invoked == 0) | ((kind == CALL_SLEEP_TALK) & (state.status[side, user] != Status.SLEEP))
+    )
+    used = jnp.where(
+        invoker & ~call_failed,
+        called_move(tables, state, invoked),
+        called_move(tables, state, move),
+    )
     # Accuracy 0 never misses (CheckMoveHitAccuracy returns before rolling, :2901). A
     # multi-hit move checks accuracy on its first hit only (effects.py).
     # The no-target check (:3190) fails a move whose defender has fainted; a move whose
@@ -745,14 +768,14 @@ def _use_move(
         & (state.hp[attacker, state.active[attacker]] > 0)
     )
     special_counter = counter & self_defender(tables, used)
-    has_target = has_target | special_counter
+    has_target = has_target | special_counter | (invoker & call_failed)
     # SYSCTL_MOVE_SUCCEEDED (battle_controller_player.c:3212) once the move got past the
     # status checks, the PP decrement and the no-target check, before the accuracy check
     # (a miss counts): UpdateMoveBuffers (:3945-3949) writes the move (Struggle's own id
     # when struggling; Nature Power, moveTemp, for Nature Power, even when its call finds no
     # target) to movePrevByBattler, else MOVE_NONE. Every path of a battler that acts
     # reaches it, the confusion self-hit too (LOOP_FAINTED, :2639).
-    succeeded = can_act & (has_target | nature_power)
+    succeeded = can_act & (has_target | nature_power | invoker)
     state = _set_last_move(state, side, jnp.where(succeeded, move, 0), ready)
     # The move script runs next (BATTLE_CONTROL_EXEC_SCRIPT, :3214): Fake Out's
     # (effect_script_0158.s) sets MOVE_STATUS_FAILED unless fakeOutTurnNumber == totalTurns.
@@ -766,7 +789,7 @@ def _use_move(
         tables.move_param[used, 2] == SNORE_PARAM
     )
     failed = failed | (snore & (state.status[side, user] != Status.SLEEP))
-    failed = failed | (counter & ~counter_ok)
+    failed = failed | (counter & ~counter_ok) | call_failed
     # Selfdestruct / Explosion (effect_script_0007.s): the script sets the user's HP to 0
     # before TryMove, so the user faints on a miss or into a Ghost too, and its own Cloud
     # Nine no longer counts for the hit (COUNT_ALIVE_BATTLERS). The faint itself is
@@ -1066,6 +1089,11 @@ def _use_move(
     # first or its call found no target: the defender is the user or BATTLER_NONE).
     record = ready & ~self_hit & (foe_defender | (bide_ends & can_act))
     record = jnp.where(nature_power, can_act & has_target, record)
+    # An invoker's GoToMoveScript re-picks the defender for the called move: the foe gets moveCur
+    # when the called move's defender is the foe (not a self-defender range) and it has one.
+    record = jnp.where(
+        invoker, can_act & ~call_failed & has_target & ~self_defender(tables, used), record
+    )
     # A special-range Counter's defender is the foe only once its command succeeded.
     record = jnp.where(special_counter, can_act & counter_ok, record)
     hit_record = jnp.where(record, jnp.where(can_act, used, 0), state.move_hit[target_side])
@@ -1081,6 +1109,14 @@ def _use_move(
     state = life_orb_recoil(tables, state, side, life_orb)
     # UPDATE_MOVE_BUFFERS (:3917) after it: the Choice lock.
     state = _choice_lock(tables, state, side, target_side, move, ready & can_act, record)
+    # UpdateMoveBuffers (bcp.c:3936-3942) and UpdateFlagsWhenHit (:4499-4508), on every path of a
+    # battler that acts: the battle's movePrev is moveTemp (``move``: the invoker, Nature Power,
+    # Struggle, not the called move) when the attack message showed (``can_act``, as the Choice
+    # lock's ``shown``), else MOVE_NONE. Copycat reads it (order.copycat_call). Pursuit's
+    # pre-switch hit ends without either (battle_script.c:6931-6935), a switch and a bag item
+    # never reach them.
+    prev = jnp.where(ready, jnp.where(can_act, move, 0), state.move_prev)
+    state = state._replace(move_prev=prev.astype(state.move_prev.dtype))
     own = {
         "act_kind": jnp.where(
             can_act,
@@ -1106,7 +1142,8 @@ def _use_move(
         "present_heal": present_heal,
         # effect_script_0173.s: "Nature Power turned into MOVE!" (msgMoveTemp) once its script
         # runs: the called move's id, else 0.
-        "called": jnp.where(can_act & nature_power, used, 0),
+        # The invokers' called move likewise (the attack message of the called move).
+        "called": jnp.where(can_act & (nature_power | (invoker & ~call_failed)), used, 0),
         "crit": crits,
         "full_para": full_para,
         "flinched": flinched,

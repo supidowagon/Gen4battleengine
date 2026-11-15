@@ -515,6 +515,13 @@ _KEYED_BY_EFFECT = (
     "script changes are rom_diff.toml entries (Ruling 13)"
 )
 _KEYED_BY_NAME = "keyed by name, looked up in each game's own data at table build"
+_CODE_MOVE_IDS = (
+    "move ids compared in battle code (battle_script.c:4918-4922, battle_lib.c:3032-3045, "
+    ":7152-7178), not move data: the Kaizo ROM leaves that code unchanged (rom_diff.md), so the "
+    "ids hold in both games whatever a slot is named (Kaizo renamed Snatch, Covet, Trick and "
+    "Switcheroo's slots, which stay excluded); tests/tools/test_effect_map.py checks them "
+    "against the decomp"
+)
 
 # "module.ATTR" -> why it is not a game id table.
 EXEMPT: dict[str, str] = {
@@ -600,6 +607,12 @@ EXEMPT: dict[str, str] = {
     "tools.effect_map._EFFECTS": _KEYED_BY_EFFECT,
     "tools.effect_map.DECOMP_EFFECT_NAMES": _KEYED_BY_EFFECT,
     "tools.effect_map.CERTAIN_SECONDARY_EFFECTS": _KEYED_BY_EFFECT,
+    "tools.effect_map.MULTI_TURN_EFFECTS": _KEYED_BY_EFFECT,
+    # E2 batch 5: move ids the battle code compares against (BtlCmd_TrySleepTalk,
+    # Move_IsInvoker, sCannotMetronomeMoves), turned into MoveFlag bits at table build.
+    "tools.effect_map.INVOKER_MOVES": _CODE_MOVE_IDS,
+    "tools.effect_map.SLEEP_TALK_EXCLUDED_MOVES": _CODE_MOVE_IDS,
+    "tools.effect_map.METRONOME_EXCLUDED_MOVES": _CODE_MOVE_IDS,
     "tools.effect_map.RESIST_BERRY_HOLD_EFFECTS": (
         "keyed by decomp hold effect id, read off the vanilla subscript_type_resist_berry.s: "
         "each game's items carry their own hold effect (build_tables looks theirs up here), "

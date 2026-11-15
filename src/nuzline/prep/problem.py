@@ -22,6 +22,7 @@ from nuzline.engine.coverage import (
     IMPLEMENTED_EFFECTS,
     IMPLEMENTED_ITEMS,
     Support,
+    call_disable_line,
     exp_refusals,
     ghost_curse,
     halved_by_line,
@@ -29,6 +30,7 @@ from nuzline.engine.coverage import (
     halving_moves,
     learnable_moves,
     low_defense,
+    metronome_calls,
     reachable_level,
     rom_change_line,
     rom_change_refusals,
@@ -126,6 +128,11 @@ def _move_refusal(
     effect = EffectId(int(np.asarray(tables.move_effect)[move]))
     if IMPLEMENTED_EFFECTS.get(effect, Support.NONE) == Support.NONE:
         return "move effect not implemented"
+    if effect == EffectId.METRONOME and any(
+        _move_refusal(tables, m, spec, foe_defense) is not None
+        for m in metronome_calls(tables, spec)
+    ):
+        return "Metronome can call a move not implemented (ruling B5-2)"
     return player_move_refusal(move)
 
 
@@ -224,6 +231,7 @@ def usable_pool(
         for line in (
             weather_war_line(tables, [spec], opp),
             trace_standoff_line(tables, [spec], opp),
+            call_disable_line(tables, [spec], opp),
             trace_ai_line(tables, [spec]),
         ):
             if line is not None:

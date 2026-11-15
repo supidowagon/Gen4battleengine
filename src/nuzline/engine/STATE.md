@@ -74,6 +74,10 @@ three structs has a row.
   a temporary weather's `weather_timer` (the weather ends at 0) and `gravity`; a turn
   count of 0 is the condition's mask bit clear. `wish_timer` (Wish's heal) and
   `trick_room` (the turn end's side-condition pass, :1823-1826) are not counted down yet.
+- **movePrev -> `move_prev`** (E2 batch 5): battle-wide, the last move used in the battle:
+  `UpdateMoveBuffers` / `UpdateFlagsWhenHit` (bcp.c:3936-3942, :4499-4508) write moveTemp when
+  the attack message showed, else 0, on every acting path (`step._use_move`); Copycat reads it
+  (`order.copycat_call`). A field condition, not a battler's: it does not leave with a battler.
 - **moveLockedInto -> `locked_move`**, not `charge_turn`: it holds the move id a
   battler is locked into for its next turn (Bide, Rollout; charge-up moves are
   later, M6), and `charge_turn` is an `int8` flag that cannot hold a move id.
@@ -505,7 +509,7 @@ three structs has a row.
 | `BattleContext.battleMons` | `active` | mapped |
 | `BattleContext.moveTemp` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
 | `BattleContext.moveCur` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
-| `BattleContext.movePrev` | — | later (M6) |
+| `BattleContext.movePrev` | `move_prev` | mapped |
 | `BattleContext.moveLockedInto` | `locked_move` | mapped |
 | `BattleContext.moveProtect` | `protect_count` | mapped |
 | `BattleContext.moveHit` | `move_hit` | mapped |

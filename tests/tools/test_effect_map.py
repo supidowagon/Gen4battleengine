@@ -496,3 +496,39 @@ def test_divisor_items_need_a_param_to_divide_by():
         ItemId.STICKY_BARB,
         ItemId.UNSUPPORTED,
     ]
+
+
+def _function(path: str, name: str) -> str:
+    """The body of the C function whose definition starts with ``name`` (not a declaration)."""
+    src = (DECOMP / path).read_text(encoding="utf-8")
+    start = re.search(re.escape(name) + r"[^;{]*\n\{", src).end()
+    return src[start : src.index("\n}\n", start)]
+
+
+def test_invoker_id_lists_match_the_decomp():
+    """E2 batch 5: the move ids BtlCmd_TrySleepTalk, Move_IsInvoker, Move_IsMultiTurn and
+    sCannotMetronomeMoves compare against (``tools.effect_map``)."""
+    from tools.effect_map import (
+        INVOKER_MOVES,
+        METRONOME_EXCLUDED_MOVES,
+        MULTI_TURN_EFFECTS,
+        SLEEP_TALK_EXCLUDED_MOVES,
+    )
+
+    moves = (DECOMP / "generated/moves.txt").read_text().split()
+    effects = (DECOMP / "generated/move_battle_effects.txt").read_text().split()
+    invoker = _function("src/battle/battle_lib.c", "BOOL Move_IsInvoker(")
+    assert sorted(moves.index(m) for m in re.findall(r"move == (MOVE_\w+)", invoker)) == sorted(
+        INVOKER_MOVES
+    )
+    talk = _function("src/battle/battle_script.c", "static BOOL BtlCmd_TrySleepTalk(")
+    listed = re.findall(r"ATTACKING_MON\.moves\[i\] == (MOVE_\w+)", talk)
+    assert sorted(moves.index(m) for m in listed) == sorted(SLEEP_TALK_EXCLUDED_MOVES)
+    multi = _function("src/battle/battle_lib.c", "BOOL Move_IsMultiTurn(")
+    cases = re.findall(r"case (BATTLE_EFFECT_\w+):", multi)
+    assert sorted(effects.index(e) for e in cases) == sorted(MULTI_TURN_EFFECTS)
+    lib = (DECOMP / "src/battle/battle_lib.c").read_text(encoding="utf-8")
+    table = lib[lib.index("sCannotMetronomeMoves[] = {") :]
+    table = table[: table.index("FORBIDDEN_BY_METRONOME_DELIM,")]
+    listed = [m for m in re.findall(r"(MOVE_\w+),", table)]
+    assert [moves.index(m) for m in listed] == list(METRONOME_EXCLUDED_MOVES)

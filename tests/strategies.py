@@ -302,6 +302,10 @@ BATCH4_MOVES = (
     "Metal Burst",
 )
 BATCH4_ABILITIES = (AbilityId.FILTER, AbilityId.MAGIC_GUARD, AbilityId.SNIPER)
+# E2 batch 5: the invokers, and moves for them to call or copy (a sleep move, Protect, a
+# multi-hit move, Disable, a Choice item's lock).
+INVOKERS = ("Sleep Talk", "Sleep Talk", "Copycat", "Metronome")
+CALLED_MOVES = ("Tackle", "Spore", "Protect", "Fury Swipes", "Disable", "Counter", "Ember", "Bide")
 CRIT_ITEMS = ("Scope Lens", "Razor Claw", "Lucky Punch", "Stick")
 SWITCH_IN_ABILITIES = (
     AbilityId.TRACE,
@@ -822,6 +826,26 @@ def _draw_batch4(draw, tables: Tables, a: dict, side: int, active: int, names: N
         a["item"][side, active] = names.item(item)
 
 
+def _draw_batch5(draw, tables: Tables, a: dict, side: int, active: int, names: Names) -> None:
+    """Maybe (1 in 3) give the active Pokemon an invoker (``INVOKERS``) and another move it can
+    call (``CALLED_MOVES``), a Sleep Talk user mostly asleep (1-4 turns left, so it can wake);
+    the battle's ``move_prev``: none, a move of either active, Struggle, an invoker or a move
+    Copycat cannot copy (Protect)."""
+    rnd = draw(st.randoms(use_true_random=False))
+    if draw(st.integers(0, 2)) == 0:
+        name = rnd.choice(INVOKERS)
+        for slot, move_name in zip(rnd.sample(range(4), 2), (name, rnd.choice(CALLED_MOVES))):
+            move = names.move(move_name)
+            a["moves"][side, active, slot] = move
+            a["pp"][side, active, slot] = int(tables.move_pp[move])
+        if name == "Sleep Talk" and a["hp"][side, active] > 0 and rnd.random() < 0.8:
+            a["status"][side, active] = Status.SLEEP
+            a["status_counter"][side, active] = rnd.randint(1, 4)
+    pool = [int(m) for sd in (0, 1) for m in a["moves"][sd, a["active"][sd]] if m]
+    extra = [MOVE_STRUGGLE, names.move("Sleep Talk"), names.move("Protect")]
+    a["move_prev"][...] = draw(st.sampled_from([0, *pool, *extra]))
+
+
 def _draw_choice_lock(draw, a: dict, side: int, active: int) -> None:
     """``choice_lock``: none or one of the active Pokemon's moves, whatever its item (a lock
     without a Choice item is what a lost item would leave; ``UpdateMoveBuffers`` clears it)."""
@@ -850,7 +874,7 @@ def _draw_lock(draw, a: dict, side: int, active: int, names: Names) -> None:
 
 
 @st.composite
-def supported_state(draw, tables: Tables, names: Names) -> BattleState:
+def supported_state(draw, tables: Tables, names: Names, invokers: bool = True) -> BattleState:
     """A mid-battle state: 1-6 Pokemon per side (``supported_pokemon``), any active
     slot, random PP, status counters, stat stages, confusion, Taunt, Bind, Leech Seed, Disable (a move of the active and its turns), Defense Curl, a Bide / Rollout lock (``_draw_lock``),
     Pursuit in a slot (``_draw_pursuit``), a Choice item, Life Orb or other battle item
@@ -921,6 +945,8 @@ def supported_state(draw, tables: Tables, names: Names) -> BattleState:
         _draw_batch2_item(draw, tables, a, side, active, names)
         _draw_batch3(draw, tables, a, side, active, names)
         _draw_batch4(draw, tables, a, side, active, names)
+        if invokers:
+            _draw_batch5(draw, tables, a, side, active, names)
         _draw_choice_lock(draw, a, side, active)
     count = draw(st.integers(0, BAG_SLOTS))
     bag = draw(st.lists(st.sampled_from(M1_BAG_ITEMS), min_size=count, max_size=count))
@@ -1095,6 +1121,11 @@ def any_outcome() -> st.SearchStrategy[Outcome]:
         tri_attack=_ints(0, 2, sides),
         roar_level=_flag(sides),
         roar_target=_ints(0, 4, sides),
+        # An invoker's draw: Sleep Talk's value, Metronome's candidate rank (taken modulo
+        # their counts, order.invoked_move).
+        call=st.lists(st.integers(0, 500), min_size=2, max_size=2).map(
+            lambda v: jnp.asarray(np.asarray(v, np.int16))
+        ),
     )
 
 
@@ -1199,9 +1230,16 @@ def outcome_law_state(draw, tables: Tables, names: Names) -> BattleState:
     side (0-5 turns), and on each side, independently, maybe one of ``LAW_MOVES`` in
     the active Pokemon's slot 0 (full PP) and maybe one of ``LAW_ABILITIES`` on the
     active Pokemon. Only ``sample_outcome`` reads Lucky Chant."""
-    s = draw(supported_state(tables, names))
+    # No invokers: these laws are one call variant's (enumerate.outcome_laws' ``call``); the
+    # invokers' variants have their own tests (tests/engine/test_invokers.py).
+    s = draw(supported_state(tables, names, invokers=False))
     a = {name: np.asarray(getattr(s, name)).copy() for name in BattleState._fields}
     move_pp = np.asarray(tables.move_pp)
+    effect = np.asarray(tables.move_effect)
+    invoker = np.isin(
+        effect[a["moves"]], (EffectId.SLEEP_TALK, EffectId.METRONOME, EffectId.COPYCAT)
+    )
+    a["moves"][invoker] = names.move("Tackle")  # a learnset's own invoker too
     for side in (0, 1):
         mon = int(a["active"][side])
         a["lucky_chant"][side] = draw(st.sampled_from([0, 0, 1, 5]))

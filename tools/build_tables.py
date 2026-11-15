@@ -112,8 +112,12 @@ from tools.effect_map import (
     DECOMP_ITEM_TO_ID,
     DECOMP_TRAINER_ITEM_TO_ID,
     DIVISOR_PARAM_MIN,
+    INVOKER_MOVES,
+    METRONOME_EXCLUDED_MOVES,
+    MULTI_TURN_EFFECTS,
     PINCH_STAT_HOLD_EFFECTS,
     RESIST_BERRY_HOLD_EFFECTS,
+    SLEEP_TALK_EXCLUDED_MOVES,
     TYPE_BOOST_HOLD_EFFECTS,
     TYPE_CHART_STATUS_MOVES,
     UNSUPPORTED_MOVES,
@@ -173,7 +177,9 @@ def _decomp_commit() -> str:
 
 
 def _move_flags(move: dict, move_id: int, lists: dict[str, list[int]]) -> int:
-    """The move's flag bits; SOUND and PUNCH come from ``move_lists.json`` by move id."""
+    """The move's flag bits; SOUND and PUNCH come from ``move_lists.json`` by move id;
+    NO_SLEEP_TALK and NO_METRONOME from the battle code's id lists (``tools.effect_map``) and,
+    for Move_IsMultiTurn, the move's own decomp effect."""
     bits = 0
     for flag in move["flags"]:
         bits |= DECOMP_FLAG_BITS.get(flag, 0)
@@ -181,6 +187,14 @@ def _move_flags(move: dict, move_id: int, lists: dict[str, list[int]]) -> int:
         bits |= MoveFlag.SOUND
     if move_id in lists["punch"]:
         bits |= MoveFlag.PUNCH
+    if (
+        move_id in INVOKER_MOVES
+        or move_id in SLEEP_TALK_EXCLUDED_MOVES
+        or move.get("effect") in MULTI_TURN_EFFECTS
+    ):
+        bits |= MoveFlag.NO_SLEEP_TALK
+    if move_id in METRONOME_EXCLUDED_MOVES:
+        bits |= MoveFlag.NO_METRONOME
     return int(bits)
 
 

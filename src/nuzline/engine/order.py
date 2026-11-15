@@ -39,9 +39,17 @@ from __future__ import annotations
 import jax.numpy as jnp
 
 from nuzline.data.tables import Tables
-from nuzline.engine.actions import FIRST_ITEM_ACTION, MOVE_ACTIONS, locked_slot, usable_moves
+from nuzline.engine.actions import (
+    FIRST_ITEM_ACTION,
+    MOVE_ACTIONS,
+    choice_locked,
+    locked_slot,
+    usable_moves,
+)
 from nuzline.engine.damage import apply_stage, simple_stage, weather_suppressed
 from nuzline.engine.ids import (
+    METRONOME_DRAW,
+    METRONOME_HEAVY,
     MOVE_STRUGGLE,
     SECRET_POWER_EFFECTS,
     TERRAIN_MOVES,
@@ -49,6 +57,7 @@ from nuzline.engine.ids import (
     AbilityId,
     EffectId,
     ItemId,
+    MoveFlag,
     Stat,
     Status,
     Weather,
@@ -119,6 +128,109 @@ def called_move(tables: Tables, state: BattleState, move) -> jnp.ndarray:
     return jnp.where(nature_power, terrain_move, move)
 
 
+# The invokers (ids.EffectId.SLEEP_TALK, METRONOME, COPYCAT): ``call_kind``.
+CALL_NONE, CALL_SLEEP_TALK, CALL_METRONOME, CALL_COPYCAT = 0, 1, 2, 3
+
+
+def call_kind(tables: Tables, move) -> jnp.ndarray:
+    """``int32``: which invoker ``move`` is (``CALL_*``), ``CALL_NONE`` for any other move."""
+    effect = tables.move_effect[jnp.asarray(move, _I32)]
+    return jnp.where(
+        effect == EffectId.SLEEP_TALK,
+        CALL_SLEEP_TALK,
+        jnp.where(
+            effect == EffectId.METRONOME,
+            CALL_METRONOME,
+            jnp.where(effect == EffectId.COPYCAT, CALL_COPYCAT, CALL_NONE),
+        ),
+    ).astype(_I32)
+
+
+def _nth(mask, k) -> jnp.ndarray:
+    """``int32``: the index of the ``k``-th (0-based) true entry of ``mask`` (0 when none)."""
+    rank = jnp.cumsum(mask.astype(_I32)) - 1
+    return jnp.argmax(mask & (rank == k)).astype(_I32)
+
+
+def sleep_talk_slots(tables: Tables, state: BattleState, side) -> jnp.ndarray:
+    """``bool[4]``: the slots ``BtlCmd_TrySleepTalk`` (battle_script.c:4907-4937) can draw for
+    ``side``'s active battler, as the battler is now: not ``MoveFlag.NO_SLEEP_TALK``
+    (Move_IsInvoker, which holds an empty slot's MOVE_NONE, Focus Punch, Uproar, Chatter,
+    Move_IsMultiTurn: :4918-4925), and not flagged by ``BattleSystem_CheckInvalidMoves`` with every
+    check but NO_PP (:4929; battle_lib.c:2255-2316): the disabled move, a power-0 move while
+    taunted, and a Choice holder's moves other than its lock (``actions.choice_locked``: a lock
+    it does not know is cleared there and restricts nothing). Torment, Imprison, Heal Block and
+    Encore come from unsupported moves; Gravity (``Move_FailsInHighGravity``) is owed with
+    Gravity (ledger)."""
+    mon = state.active[side]
+    moves = state.moves[side, mon].astype(_I32)
+    ok = (moves > 0) & ((tables.move_flags[moves] & MoveFlag.NO_SLEEP_TALK) == 0)
+    ok = ok & (moves != state.disabled_move[side])
+    ok = ok & ~((state.taunt[side] > 0) & (tables.move_power[moves] == 0))
+    lock = state.choice_lock[side].astype(_I32)
+    return ok & (~choice_locked(tables, state, side) | (moves == lock))
+
+
+def metronome_candidates(tables: Tables, state: BattleState, side) -> jnp.ndarray:
+    """``bool[N]`` over move ids: what ``BtlCmd_Metronome`` (battle_script.c:4535-4562) can call
+    for ``side``'s active battler: ids 1..``METRONOME_DRAW``, none of the battler's own moves
+    (:4544-4551), none of ``MoveFlag.NO_METRONOME`` (``Move_CanBeMetronomed``, battle_lib.c:
+    7204-7218; its Gravity and Heal Block tests are owed with Gravity / unsupported)."""
+    ids = jnp.arange(tables.move_effect.shape[0], dtype=_I32)
+    own = state.moves[side, state.active[side]].astype(_I32)
+    ok = (ids >= 1) & (ids <= METRONOME_DRAW)
+    ok = ok & ((tables.move_flags[ids] & MoveFlag.NO_METRONOME) == 0)
+    return ok & ~jnp.any(ids[:, None] == own[None, :], axis=1)
+
+
+def metronome_weights(tables: Tables, state: BattleState, side) -> jnp.ndarray:
+    """``int32[N]``: each move id's weight in Metronome's draw (``ids.METRONOME_HEAVY``): 141 or
+    140 of 65536 for a candidate, 0 otherwise. The call is the candidate itself: its
+    probability is its weight over the candidates' sum (the redraw loop, :4538-4560)."""
+    ids = jnp.arange(tables.move_effect.shape[0], dtype=_I32)
+    weight = jnp.where(ids <= METRONOME_HEAVY, 141, 140)
+    return jnp.where(metronome_candidates(tables, state, side), weight, 0).astype(_I32)
+
+
+def copycat_call(tables: Tables, move_prev) -> jnp.ndarray:
+    """``int32``: the move ``BtlCmd_TryCopycat`` (battle_script.c:7328-7341) calls with the
+    battle's ``movePrev`` ``move_prev``, 0 when it fails: MOVE_NONE, an invoker or a move
+    ``Move_CanBeMetronomed`` refuses (every invoker is in sCannotMetronomeMoves, so
+    ``MoveFlag.NO_METRONOME`` covers both)."""
+    move_prev = jnp.asarray(move_prev, _I32)
+    ok = (move_prev != 0) & ((tables.move_flags[move_prev] & MoveFlag.NO_METRONOME) == 0)
+    return jnp.where(ok, move_prev, 0).astype(_I32)
+
+
+def invoked_move(tables: Tables, state: BattleState, side, move, call, move_prev=None):
+    """``int32``: the move ``side``'s ``move`` runs through its invoker script, read with
+    ``state`` as it is when the script runs; 0 when the invoker finds none. Sleep Talk: the
+    allowed slot ``call % count`` (``Outcome.call``, ``ids.SLEEP_TALK_VALUES``); Metronome: the
+    candidate of rank ``call % count`` (``metronome_candidates``; ``Outcome.call`` draws it by
+    ``metronome_weights``); Copycat: ``copycat_call`` of ``move_prev`` (default
+    ``state.move_prev``, the battle's movePrev when the script runs). Any other move: itself.
+    Nature Power on the result is ``called_move``'s."""
+    move = jnp.asarray(move, _I32)
+    call = jnp.asarray(call, _I32)
+    kind = call_kind(tables, move)
+    slots = sleep_talk_slots(tables, state, side)
+    n_slots = jnp.sum(slots.astype(_I32))
+    slot = _nth(slots, call % jnp.maximum(n_slots, 1))
+    talk = jnp.where(n_slots > 0, state.moves[side, state.active[side], slot].astype(_I32), 0)
+    cands = metronome_candidates(tables, state, side)
+    n_cands = jnp.sum(cands.astype(_I32))
+    metronome = jnp.where(n_cands > 0, _nth(cands, call % jnp.maximum(n_cands, 1)), 0)
+    prev = state.move_prev if move_prev is None else move_prev
+    copycat = copycat_call(tables, prev)
+    return jnp.where(
+        kind == CALL_SLEEP_TALK,
+        talk,
+        jnp.where(
+            kind == CALL_METRONOME, metronome, jnp.where(kind == CALL_COPYCAT, copycat, move)
+        ),
+    ).astype(_I32)
+
+
 def move_effects(tables: Tables, state: BattleState, move) -> tuple[jnp.ndarray, jnp.ndarray]:
     """``(effect, param)``: ``tables.move_effect[move]`` and ``tables.move_param[move]`` (``int32``,
     ``int32[..., 3]``), with Secret Power's resolved to the terrain's secondary effect
@@ -140,10 +252,35 @@ def move_effects(tables: Tables, state: BattleState, move) -> tuple[jnp.ndarray,
     )
 
 
-def used_move(tables: Tables, state: BattleState, side, action) -> jnp.ndarray:
+def used_move(
+    tables: Tables, state: BattleState, side, action, call=None, move_prev=None
+) -> jnp.ndarray:
     """``int32``: ``called_move`` of ``selected_move``: the move whose accuracy, crit odds,
-    damage and effect a move action draws for."""
-    return called_move(tables, state, selected_move(tables, state, side, action)[0])
+    damage and effect a move action draws for. ``call`` (``int[2]``, ``Outcome.call``) resolves
+    an invoker (``invoked_move``; ``move_prev`` for Copycat, default ``state.move_prev``); one
+    whose call finds no move uses itself (it fails). Without ``call`` an invoker uses itself:
+    the heuristics' view (``search.playout``), never a chance law's."""
+    chosen = selected_move(tables, state, side, action)[0]
+    if call is None:
+        return called_move(tables, state, chosen)
+    invoked = invoked_move(tables, state, side, chosen, jnp.asarray(call)[side], move_prev)
+    return jnp.where(invoked == 0, chosen, called_move(tables, state, invoked)).astype(_I32)
+
+
+def used_moves(tables: Tables, state: BattleState, actions, call, after_foe) -> jnp.ndarray:
+    """``int32[2]``: ``used_move`` of each side with ``call`` (``Outcome.call``) and Copycat's
+    movePrev as the order leaves it: ``after_foe[side]`` (the foe used a move before the side's
+    action) makes it the foe's chosen move (moveTemp, UpdateMoveBuffers bcp.c:3936-3942; a foe
+    whose attack message did not show leaves MOVE_NONE and Copycat fails, reading nothing),
+    else the turn-start ``state.move_prev``."""
+    actions = jnp.asarray(actions, _I32)
+    chosen = [selected_move(tables, state, side, actions[side])[0] for side in (0, 1)]
+    after_foe = jnp.asarray(after_foe, bool)
+    out = []
+    for side in (0, 1):
+        prev = jnp.where(after_foe[side], chosen[1 - side], state.move_prev.astype(_I32))
+        out.append(used_move(tables, state, side, actions[side], call, prev))
+    return jnp.stack(out)
 
 
 def effective_speed(

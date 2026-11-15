@@ -45,14 +45,28 @@ import numpy as np
 
 from nuzline.data.tables import Tables
 from nuzline.engine.damage import PRESENT_HEAL, entry_ability, entry_weather, weather_suppressed
-from nuzline.engine.ids import QUICK_CLAW_MODULUS, AbilityId, EffectId, ItemId, Stat, Weather
+from nuzline.engine.ids import (
+    QUICK_CLAW_MODULUS,
+    SLEEP_TALK_VALUES,
+    AbilityId,
+    EffectId,
+    ItemId,
+    Stat,
+    Weather,
+)
 from nuzline.engine.order import (
+    CALL_METRONOME,
+    CALL_SLEEP_TALK,
     MOVE_ACTIONS,
     action_order,
+    call_kind,
     is_item,
     is_switch,
+    metronome_weights,
     move_effects,
+    selected_move,
     used_move,
+    used_moves,
 )
 from nuzline.engine.state import STAGE_MAX, STAGE_MIN, BattleState
 
@@ -92,6 +106,9 @@ class Outcome(NamedTuple):
     tri_attack: jnp.ndarray  # int8[2], Tri Attack's status 0/1/2 (ids.TRI_ATTACK_STATUSES)
     roar_level: jnp.ndarray  # int8[2], 1 = Roar's level check passes (BattleSystem_CanWhirlwind)
     roar_target: jnp.ndarray  # int8[2], Roar's pick: a rank in the eligible bench (roar_slot)
+    # int16[2], an invoker's draw (order.invoked_move): Sleep Talk's 0..SLEEP_TALK_VALUES - 1,
+    # Metronome's candidate rank; Copycat draws nothing.
+    call: jnp.ndarray
 
 
 def empty_outcome() -> Outcome:
@@ -121,6 +138,7 @@ def empty_outcome() -> Outcome:
         tri_attack=sides,
         roar_level=sides,
         roar_target=sides,
+        call=jnp.zeros((2,), jnp.int16),
     )
 
 
@@ -275,13 +293,16 @@ def _hit_threshold(
     target_moved=False,
     weather=None,
     target_confused=None,
+    move=None,
 ):
     """The turn-start threshold of ``side``'s move, or with these stages (and, for Zoom Lens,
     a target that has moved; the weather and the target's confusion at the check) instead.
     The default weather is the one after the target's switch-in, which goes first
     (``damage.entry_weather``). Nature Power's accuracy check is its called move's
-    (``order.called_move``)."""
-    move = used_move(tables, state, side, actions[side])
+    (``order.called_move``). ``move``: the move the side runs (default ``used_move`` without a
+    call; an invoker's called move comes from ``hit_thresholds``' ``moves``)."""
+    if move is None:
+        move = used_move(tables, state, side, actions[side])
     target, target_switches, target_mon = _target_mon(state, actions, side)
     acc = state.stages[side, Stat.ACC] if acc is None else acc
     if eva is None:
@@ -351,7 +372,9 @@ def _stage_variants(start, delta, changes, herb) -> tuple[jnp.ndarray, jnp.ndarr
     )
 
 
-def hit_thresholds(tables: Tables, state: BattleState, actions) -> tuple[jnp.ndarray, jnp.ndarray]:
+def hit_thresholds(
+    tables: Tables, state: BattleState, actions, moves=None
+) -> tuple[jnp.ndarray, jnp.ndarray]:
     """``(int32[2, HIT_VARIANTS], bool[2, HIT_VARIANTS])``: every threshold each side's
     move can have at its accuracy check this turn, and which of them are possible.
     Column 0 is the turn-start threshold (``hit_threshold``), always possible.
@@ -389,11 +412,13 @@ def hit_thresholds(tables: Tables, state: BattleState, actions) -> tuple[jnp.nda
     mid-turn only facing another Trace holder, which coverage refuses), and a faint of either
     battler leaves no check. The
     variants over-approximate (Keen Eye, misses and the chance of a secondary only remove
-    changes): an extra threshold splits a class, never merges two."""
+    changes): an extra threshold splits a class, never merges two. ``moves`` (``int32[2]``): the moves the sides run (an invoker's call,
+    ``order.used_moves``), default ``used_move`` without a call."""
     actions = jnp.asarray(actions, _I32)
     live = state.over == 0
     uses_move = live & ~is_switch(actions) & ~is_item(actions)
-    moves = jnp.stack([used_move(tables, state, side, actions[side]) for side in (0, 1)])
+    if moves is None:
+        moves = jnp.stack([used_move(tables, state, side, actions[side]) for side in (0, 1)])
     effect, params = move_effects(tables, state, moves)  # Secret Power's terrain effect
     stat = params[:, 0]
     delta = params[:, 1]
@@ -451,7 +476,7 @@ def hit_thresholds(tables: Tables, state: BattleState, actions) -> tuple[jnp.nda
         thresholds.append(
             jax.vmap(
                 lambda a, e, m, w, c, side=side: _hit_threshold(
-                    tables, state, actions, side, a, e, m, w, c
+                    tables, state, actions, side, a, e, m, w, c, moves[side]
                 )
             )(acc_grid, eva_grid, moved_grid, weather_grid, conf_grid)
         )
@@ -475,15 +500,16 @@ def hit_class(u, thresholds, possible) -> jnp.ndarray:
     return jnp.where(misses_all, 0, low)
 
 
-def crit_odds(tables: Tables, state: BattleState, actions) -> jnp.ndarray:
+def crit_odds(tables: Tables, state: BattleState, actions, moves=None) -> jnp.ndarray:
     """``int32[2]``: each side's move crits 1 in N (``BattleSystem_CalcCriticalMulti``,
     battle_lib.c:7105). ``HIGH_CRIT`` (+1) and the attacker's Super Luck (+1, :7126) raise
     the stage, and so do the crit items (``ItemId.CRIT_ITEM``); Focus Energy is not implemented. Lucky
     Chant on the defending side and the target's Battle Armor / Shell Armor (``armored``)
     are applied by ``sample_outcome``. Nature Power's are its called move's
-    (``CalcCrit`` runs in the called move's script)."""
+    (``CalcCrit`` runs in the called move's script); ``moves`` as ``hit_thresholds``'."""
     actions = jnp.asarray(actions, _I32)
-    moves = jnp.stack([used_move(tables, state, side, actions[side]) for side in (0, 1)])
+    if moves is None:
+        moves = jnp.stack([used_move(tables, state, side, actions[side]) for side in (0, 1)])
     stage = (tables.move_effect[moves] == EffectId.HIGH_CRIT).astype(_I32)
     # battle_lib.c:7126: + (attackerAbility == ABILITY_SUPER_LUCK), the battler's own ability.
     super_luck = state.ability[jnp.arange(2), state.active] == AbilityId.SUPER_LUCK
@@ -643,16 +669,42 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions) -> Outcome:
 
     roar_counts = roar_inputs(state, actions)[1]
     roar_la, roar_ld = roar_levels(state, actions)
-    # Nature Power draws for its called move (order.called_move): its accuracy, crit odds,
-    # effect chance and secondary effect are the called move's.
-    moves = jnp.stack([used_move(tables, state, side, actions[side]) for side in (0, 1)])
+    speed_tie = draw(5, (), 2)  # battle_lib.c:1445, RandNext() & 1
+    # The invokers' draws (order.invoked_move), from fold_in keys so every other field keeps its
+    # samples: Sleep Talk's value uniform on 0..SLEEP_TALK_VALUES - 1 (BtlCmd_TrySleepTalk's
+    # RandNext() % 4 redraw, battle_script.c:4931-4933), Metronome's candidate by
+    # order.metronome_weights (BtlCmd_Metronome's RandNext() % 467 + 1 redraw, :4538-4560) as its
+    # rank among the candidates.
+    talk = jax.random.randint(jax.random.fold_in(key, 25), (2,), 0, SLEEP_TALK_VALUES, dtype=_I32)
+    ranks = []
+    for side in (0, 1):
+        weights = metronome_weights(tables, state, side)
+        cands = weights > 0
+        pick = jax.random.choice(
+            jax.random.fold_in(key, 26 + side),
+            weights.shape[0],
+            p=weights / jnp.maximum(jnp.sum(weights), 1),
+        )
+        ranks.append(jnp.sum(cands & (jnp.arange(weights.shape[0]) < pick)))
+    chosen = jnp.stack([selected_move(tables, state, side, actions[side])[0] for side in (0, 1)])
+    kinds = call_kind(tables, chosen)
+    call = jnp.where(
+        kinds == CALL_SLEEP_TALK, talk, jnp.where(kinds == CALL_METRONOME, jnp.stack(ranks), 0)
+    )
+    # Nature Power and the invokers draw for their called move (order.called_move, used_moves):
+    # its accuracy, crit odds, effect chance and secondary effect are the called move's. Copycat's
+    # call follows this outcome's order (the foe's move before it, or the turn-start movePrev).
+    first = action_order(tables, state, actions, empty_outcome()._replace(speed_tie=speed_tie))[0]
+    fight = ~is_switch(actions) & ~is_item(actions)
+    after_foe = jnp.stack([(first == 1 - side) & fight[1 - side] for side in (0, 1)])
+    moves = used_moves(tables, state, actions, call, after_foe)
     # The roll u = RandNext() % 100 + 1 (battle_controller_player.c:2976), as its class.
-    thresholds, possible = hit_thresholds(tables, state, actions)
+    thresholds, possible = hit_thresholds(tables, state, actions, moves)
     hit = hit_class(draw(0, per_hit, 100) + 1, thresholds[:, None, :], possible[:, None, :])
     # Lucky Chant on the defending side blocks crits (battle_lib.c:7137), as does the target's
     # Battle Armor / Shell Armor (:7135-7136).
     no_crit = ((state.lucky_chant[::-1] != 0) | armored(tables, state, actions))[:, None]
-    crit = (draw(1, per_hit, crit_odds(tables, state, actions)[:, None]) == 0) & ~no_crit
+    crit = (draw(1, per_hit, crit_odds(tables, state, actions, moves)[:, None]) == 0) & ~no_crit
     # BtlCmd_CheckEffectActivation (battle_script.c:8377): RandNext() % 100 < chance (Serene
     # Grace doubled); chance 0 means the effect applies on every hit (ids.EffectId).
     chance = secondary_chance(tables, state, moves)[:, None]
@@ -672,7 +724,7 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions) -> Outcome:
         + jnp.where((effect == EffectId.TRAP) | (effect == EffectId.DISABLE), 3, 2),
     )
     outcome = Outcome(
-        speed_tie=draw(5, (), 2),  # battle_lib.c:1445, RandNext() & 1
+        speed_tie=speed_tie,
         hit=hit,
         crit=crit,
         roll=draw(6, per_hit, 16),  # BattleSystem_CalcDamageVariance, rand % 16
@@ -742,5 +794,11 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions) -> Outcome:
         roar_target=jax.random.randint(
             jax.random.fold_in(key, 23), per_side, 0, jnp.maximum(roar_counts, 1), dtype=_I32
         ),
+        call=call,
     )
-    return Outcome(*(jnp.asarray(f).astype(_I8) for f in outcome))
+    return Outcome(
+        *(
+            jnp.asarray(f).astype(jnp.int16 if name == "call" else _I8)
+            for name, f in zip(Outcome._fields, outcome, strict=True)
+        )
+    )

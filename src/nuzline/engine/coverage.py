@@ -74,6 +74,15 @@ items) and plan 1b (Task 2b: trainer items; Task 3: Roark's AI flags) implement:
   (``enumerate``, ``outcome.sample_outcome``) read the holder's ability at the turn start;
   refused (ruling B3-14); and, until the AI reads the battler's ability, a Trace holder on
   either side or in the pool, as an AI gap (``trace_ai_line``, ruling B3-21);
+* Metronome (ruling B5-2): ``BtlCmd_Metronome`` can call any move ``metronome_calls`` lists
+  (ids 1-467 but the user's own moves and sCannotMetronomeMoves, battle_lib.c:7152-7178), so a
+  holder is refused while any of them is refused as a move of that Pokemon
+  (``move_effect_line``), and every per-move check of the fight (the terrain, the Kaizo ROM
+  changes, the halved Defense) runs over them too (``fight_calls``);
+* Sleep Talk facing a Disable (``call_disable_line``, ruling B5-3): a Disable that lands before
+  a Sleep Talk user moves can remove a move from the slots its call draws from, in the middle of
+  the turn whose call law (``enumerate.call_laws``, ``outcome.sample_outcome``) reads them at
+  the turn start; refused when one party has a Sleep Talk user and the other can Disable it;
 * in-battle form changes (plan K2a Ruling 8), on either side: Giratina-Origin without the
   Griseous Orb reverts to Altered Forme at battle start (``battle_lib.c:6412-6417``,
   ``subscript_form_change``) and Shaymin-Sky reverts to Land Forme when frozen
@@ -143,12 +152,14 @@ from nuzline.data.trainer import (
 )
 from nuzline.engine.damage import PHYSICAL
 from nuzline.engine.ids import (
+    METRONOME_DRAW,
     TERRAIN_MOVES,
     TERRAIN_SPECIAL,
     WEATHER_ABILITIES,
     AbilityId,
     EffectId,
     ItemId,
+    MoveFlag,
     Stat,
     TrainerItemId,
     Type,
@@ -391,15 +402,28 @@ def halved_by_line(
     return f"Defense {defense} against the opponent's {names.move_names[moves[0]]}"
 
 
-def move_effect_line(tables: Tables, names: Names, move: int, row: int) -> tuple[Support, str]:
+def move_effect_line(
+    tables: Tables, names: Names, move: int, row: int, known: Sequence[int] = ()
+) -> tuple[Support, str]:
     """The support of ``move`` for the Pokemon at personal ``row`` and its name as a report
     line shows it: by engine effect, ``" (Ghost user)"`` added and refused for
-    ``ghost_curse``."""
+    ``ghost_curse``. Metronome (ruling B5-2) is refused while any move it can call for a
+    Pokemon knowing ``known`` (``metronome_calls``) is."""
     name = names.move_names[move]
     if ghost_curse(tables, move, row):
         return Support.NONE, f"{name} (Ghost user)"
     effect = EffectId(int(np.asarray(tables.move_effect)[move]))
-    return IMPLEMENTED_EFFECTS.get(effect, Support.NONE), name
+    support = IMPLEMENTED_EFFECTS.get(effect, Support.NONE)
+    if effect == EffectId.METRONOME and support != Support.NONE:
+        flags = np.asarray(tables.move_flags)
+        calls = [
+            m
+            for m in range(1, METRONOME_DRAW + 1)
+            if m not in known and m != move and not flags[m] & MoveFlag.NO_METRONOME
+        ]
+        if any(move_effect_line(tables, names, m, row)[0] == Support.NONE for m in calls):
+            support = Support.NONE
+    return support, name
 
 
 # --- Experience, level-up and learnable moves (K3d-exp design §4) ---------------------------
@@ -657,6 +681,82 @@ def trace_ai_line(tables: Tables, party: Sequence[PokemonSpec]) -> str | None:
     return TRACE_AI_REASON if AbilityId.TRACE in _party_abilities(tables, party) else None
 
 
+def metronome_calls(tables: Tables, mon: PokemonSpec) -> list[int]:
+    """The moves ``BtlCmd_Metronome`` (battle_script.c:4535-4562) can call for ``mon``: ids
+    1-467 it does not know that ``Move_CanBeMetronomed`` allows (``MoveFlag.NO_METRONOME``;
+    ``order.metronome_candidates``). Gravity and Heal Block, its other tests, are owed with
+    Gravity and an unsupported move."""
+    flags = np.asarray(tables.move_flags)
+    return [
+        m
+        for m in range(1, METRONOME_DRAW + 1)
+        if m not in mon.moves and not flags[m] & MoveFlag.NO_METRONOME
+    ]
+
+
+def fight_calls(tables: Tables, party: Sequence[PokemonSpec]) -> list[int]:
+    """The moves ``party``'s Metronome holders can call (``metronome_calls``): moves of the
+    fight for the checks that read every move (the terrain, the Kaizo ROM changes). Sleep Talk
+    calls its user's own moves and Copycat a move used in the fight, moves of the fight
+    already."""
+    effect = np.asarray(tables.move_effect)
+    out: set[int] = set()
+    for mon in party:
+        if any(m and int(effect[m]) == EffectId.METRONOME for m in mon.moves):
+            out.update(metronome_calls(tables, mon))
+    return sorted(out)
+
+
+def _can_disable(tables: Tables, movesets: Sequence[Sequence[int]], both) -> bool:
+    """A Pokemon with one of ``movesets`` can Disable a foe: a Disable move, a Metronome that can
+    call one, or a Copycat while a Disable move is in the fight (``both``: every move of both
+    parties)."""
+    effect = np.asarray(tables.move_effect)
+    disable_in_fight = any(m and int(effect[m]) == EffectId.DISABLE for m in both)
+    for moves in movesets:
+        kinds = {int(effect[m]) for m in moves if m}
+        if EffectId.DISABLE in kinds:
+            return True
+        if EffectId.COPYCAT in kinds and disable_in_fight:
+            return True
+        calls = [
+            m
+            for m in range(1, METRONOME_DRAW + 1)
+            if m not in moves and not np.asarray(tables.move_flags)[m] & MoveFlag.NO_METRONOME
+        ]
+        if EffectId.METRONOME in kinds and any(int(effect[m]) == EffectId.DISABLE for m in calls):
+            return True
+    return False
+
+
+def call_disable_line(
+    tables: Tables,
+    player: Sequence[PokemonSpec],
+    opp: Sequence[PokemonSpec],
+    player_extra: Sequence[int] = (),
+) -> str | None:
+    """Why a Sleep Talk user facing a Disable is refused (``coverage`` docstring, ruling B5-3),
+    else None. ``player_extra``: moves the player's Pokemon can learn in the battle (any of them
+    may learn any, over-approximate)."""
+    effect = np.asarray(tables.move_effect)
+
+    def talks(movesets) -> bool:
+        return any(m and int(effect[m]) == EffectId.SLEEP_TALK for ms in movesets for m in ms)
+
+    mine = [[*mon.moves, *player_extra] for mon in player]
+    theirs = [list(mon.moves) for mon in opp]
+    both = [m for ms in (*mine, *theirs) for m in ms if m]
+    if (talks(mine) and _can_disable(tables, theirs, both)) or (
+        talks(theirs) and _can_disable(tables, mine, both)
+    ):
+        return (
+            "Sleep Talk facing a Disable: a Disable landing before the Sleep Talk user moves "
+            "changes the slots its call draws from (battle_script.c:4929, battle_lib.c:2266-2269) "
+            "after the turn's call law was read"
+        )
+    return None
+
+
 def _check_party(
     c: _Collector,
     tables: Tables,
@@ -672,7 +772,7 @@ def _check_party(
         row = personal_row(tables, mon.species, mon.form)  # ValueError: no such form
         for move in mon.moves:
             if move:
-                support, name = move_effect_line(tables, names, move, row)
+                support, name = move_effect_line(tables, names, move, row, mon.moves)
                 c.add(support, f"{where}: {name}", "move effect")
         ability = AbilityId(int(abilities[row, mon.ability_slot]))
         ability_name = names.ability_names[
@@ -844,7 +944,7 @@ def _check_trainer(
     if names.game == KAIZO:
         for label in rom_change_refusals(tables, names, trainer, specs, extra_moves):
             c.add(Support.NONE, rom_change_line(label), "ROM change")
-    moves = [m for s in specs for m in s.moves] + list(extra_moves)
+    moves = [m for s in specs for m in s.moves] + list(extra_moves) + fight_calls(tables, specs)
     if (line := terrain_refusal(tables, names, trainer, moves)) is not None:
         c.add(Support.NONE, line, "battle terrain")
     effect = np.asarray(tables.trainer_item_effect)
@@ -995,6 +1095,8 @@ def check_coverage(
     c.report.missing.extend(theirs.missing)
     c.report.sampling_only.extend(theirs.sampling_only)
     c.report.level = min(c.report.level, theirs.level)
+    if (line := call_disable_line(tables, player, opp, extra)) is not None:
+        c.add(Support.NONE, f"{display_name(trainer)}: {line}", "move effect")
     fight_moves = [m for mon in (*player, *opp) for m in mon.moves if m] + extra
     for slot, mon in enumerate(player):
         where = f"Player {names.species_names[mon.species]} (slot {slot})"
@@ -1014,7 +1116,8 @@ def check_coverage(
         foe_defense = low_defense(tables, foes)
         for slot, mon in enumerate(party):
             extra_moves = learnable[slot] if owner == "Player" else ()
-            for move in [*mon.moves, *(m for m in extra_moves if m not in mon.moves)]:
+            calls = fight_calls(tables, [mon])
+            for move in [*mon.moves, *(m for m in [*extra_moves, *calls] if m not in mon.moves)]:
                 if move and (low := halved_defense_line(tables, move, foe_defense)):
                     where = f"{owner} {names.species_names[mon.species]} (slot {slot})"
                     c.add(Support.NONE, f"{where}: {names.move_names[move]}{low}", "move effect")

@@ -16,7 +16,7 @@ from hypothesis import strategies as st
 
 from nuzline.engine.actions import legal_actions, legal_opponent_actions, legal_replacements
 from nuzline.engine.damage import STATUS
-from nuzline.engine.enumerate import SamplingOnly, enumerate_outcomes, outcome_laws
+from nuzline.engine.enumerate import SamplingOnly, enumerate_turn
 from nuzline.engine.ids import AbilityId, Status, Weather
 from nuzline.engine.observe import (
     OBS_FIELDS,
@@ -515,7 +515,7 @@ def test_ineffective_draws_invisible_enumerated(tables, names, data):
         s = shinx_vs_cranidos(tables, names, slower_opp=data.draw(st.booleans()))
     acts = np.asarray(data.draw(legal_action_pair(tables, s)))
     try:
-        outcomes, _ = enumerate_outcomes(_np(jax.jit(outcome_laws)(tables, s, acts)))
+        outcomes, _ = enumerate_turn(tables, s, acts)  # every invoker call variant
     except SamplingOnly:
         return
     k = len(outcomes.hit)
@@ -573,9 +573,6 @@ def legal_pairs(tables, state):
     return [(int(a), int(b)) for a in player for b in opp]
 
 
-_laws = jax.jit(outcome_laws)
-
-
 def grouped_children(tables, parents, pairs, max_k=None):
     """``obs bytes -> {child state bytes: legal-action bytes}`` over every enumerated
     outcome of each parent's pairs (refused replacements left out). ``max_k`` skips
@@ -585,7 +582,7 @@ def grouped_children(tables, parents, pairs, max_k=None):
         for pair in pairs(s):
             acts = np.asarray(pair, np.int32)
             try:
-                outcomes, _ = enumerate_outcomes(_np(_laws(tables, s, acts)))
+                outcomes, _ = enumerate_turn(tables, s, acts)
             except SamplingOnly:
                 continue
             k = len(outcomes.hit)

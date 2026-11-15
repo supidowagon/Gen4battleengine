@@ -1,22 +1,16 @@
 # E2 mechanics ledger (Kaizo Roark split)
 
-## RESUME (updated 2026-11-14, batch 4 partly done, awaiting review)
+## RESUME (updated 2026-11-14, batch 5 in progress)
 
-- Batch 3 review follow-ups: 51ab3ae (B3-18..B3-22); the stale Shield Dust test dropped (06f357e).
-- Batch 4 committed: terrain narrowing d4e3d99 (B4-1), effects / abilities / items 4980309
-  (B4-2..B4-17), Counter family 4ba2753 (B4-18). Roark split move effect + held item + ability +
-  terrain entries 29 -> 8: left are Sleep Talk (10 fights), U-turn (3), Metronome (3, refused by
-  B4-2), Future Sight / Doom Desire, Uproar, Copycat (1 each), all under Owed with what they need.
-- Batch 4 review follow-ups: B4-19..B4-24 (Lass Kaitlin is GRASS: the Roark terrain entry
-  closed; SmellingSalt's end speed, the Sturdy and Toxic Spikes reveals, Counter's attacker,
-  the terrain narrowing tests made to fail without their rules, cited `SAFE_COMMANDS`); the
-  batch 6 design section below.
-- Checks on 4ba2753: differential jax_matches_reference and payouts green; engine / prep / data /
-  tools fast tier 1588 passed, 1 failed (test_kaizo_field_effects_and_unknown_starts, the stale E3
-  test another session fixes). Compile: `jit(step)` 49.8 -> 50.7 s, `jit(vmap(step))` 36.4 ->
-  36.9 s (start / end of batch 4, same session; logs in `_scratch/e2/b4/` on G:).
-- Next: the review of batch 4; then the owed mechanics (Sleep Talk and Copycat need the
-  enumerator to branch on the called move; U-turn a mid-turn decision point).
+- Batch 4 review follow-ups landed: dd5a9c4 (B4-19..B4-24; Lass Kaitlin GRASS, the Roark terrain
+  entry closed; the batch 6 design section below).
+- Batch 5, the random called-move family (B5-1..B5-3): Sleep Talk and Copycat modelled and
+  supported in both engines, the sampler and the enumerator (call variants, `enumerate_turn`;
+  `search.expand` enumerates every variant); Metronome modelled but refused while any move it
+  can call is unmodelled (150 vanilla / 128 Kaizo of 442). New refusal: Sleep Talk facing a
+  reachable Disable (B5-3). Roark split entries closed: Sleep Talk (10 fights), Copycat (1).
+- Next in batch 5: Uproar, Future Sight / Doom Desire (Owed entries below); then the review.
+- Left after batch 5: U-turn (3 fights, the batch 6 design below), Metronome (3, B5-2).
 - Standing: the doubles conventions below apply to all new code; one review per batch.
 
 Session E2 builds the battle mechanics the Roark split's trainers need (held items,
@@ -143,15 +137,16 @@ Rules left out because another mechanic is missing; each closes with the mechani
 - Gravity makes the moves that fail in high gravity (Jump Kick, Hi Jump Kick, ...) invalid:
   `Move_FailsInHighGravity` under `CHECK_INVALID_GRAVITY` in `BattleSystem_CheckInvalidMoves`
   (battle_lib.c:2292, :2348), which the AI also reads (trainer_ai.c:234); `actions.usable_moves`
-  ignores Gravity: Gravity.
-- Sleep Talk (#97, 10 Roark fights): `BtlCmd_TrySleepTalk` (battle_script.c:4907-4937) draws a
-  slot uniformly over the eligible ones (`RandNext() % 4` rejection), and the called move's own
-  draws (hit, crit, roll, secondary) follow that draw: `enumerate.outcome_laws` reads one move per
-  side, so the laws must branch on the draw first (like `speed_tie`). Needs that enumerator
-  extension; the engine side is `order.called_move` with an `Outcome` draw.
-- Copycat (#242): `movePrev` (battle-wide, `UpdateMoveBuffers` / `UpdateFlagsWhenHit`,
-  bcp.c:3936-3943, :4499-4508) as a field; the called move depends on the first mover's attack
-  message this turn, so the same enumerator branching as Sleep Talk.
+  ignores Gravity, and so do Sleep Talk's slots (`order.sleep_talk_slots`, battle_script.c:4929)
+  and `Move_CanBeMetronomed` (battle_lib.c:7204-7207: `order.metronome_candidates`,
+  `order.copycat_call`, `coverage.metronome_calls`); its Heal Block test is an unsupported move's:
+  Gravity.
+- AI owner (E1): the AI move-effect scripts of Sleep Talk (#97: Basic_CheckAttackerAsleep /
+  Expert_SleepTalk), Copycat (#242: Basic_CheckCopycat / Expert_Copycat) and Metronome (#83) are
+  untranscribed (the backlog's AI entries); the engine side is B5-1..B5-3. The battle's movePrev is
+  `BattleState.move_prev`; trainer_ai.c reads only movePrevByBattler (`last_move`).
+- Metronome (#83, 3 fights) stays refused by B5-2 until every move it can call is modelled
+  (150 vanilla / 128 Kaizo of its 442 candidates have unsupported effects).
 - U-turn (#228, 3 fights): the switch is a decision inside the turn (subscript_attack_then_switch_out.s
   :6-71; the AI side is `BattleAI_PostKOSwitchIn`, battle_display.c:4543-4546, with
   `aiSwitchedPartySlot` always 6 after a move choice). `step` resolves a whole turn and the search
@@ -502,3 +497,47 @@ Rules left out because another mechanic is missing; each closes with the mechani
   RANGE_SINGLE_TARGET_SPECIAL; Kaizo's Bide: RANGE_SINGLE_TARGET), so the chart's RANGE_USER skip
   (bcp.c:2352) is never met: the branch is removed from `effects.play_hit` and the reference.
   `damage.script_power_mul` takes the defender (convention 1).
+- B5-1 Sleep Talk, Metronome and Copycat (`EffectId.SLEEP_TALK` / `METRONOME` / `COPYCAT`) run
+  the move their script picks through GoToMoveScript (battle_script.c:2111-2134) as Nature Power
+  does: from the accuracy check on everything reads the called move (moveCur: Protect, the
+  chart, damage, effects, moveHit, the Protect chain); the status checks, PP, priority,
+  movePrevByBattler, the battle's movePrev and the Choice lock stay the invoker's (moveTemp); a
+  called move spends no PP. Their own defender is the user (RANGE_USER), so the no-target check
+  passes and the foe's moveHit is written only when the called move's re-picked defender is the
+  foe. Sleep Talk (effect_script_0097.s:5) fails unless the user is asleep now (one that woke
+  this turn fails); BtlCmd_TrySleepTalk (:4907-4937) draws uniformly (65536 % 4 == 0) over the
+  slots not `MoveFlag.NO_SLEEP_TALK` (Move_IsInvoker, Focus Punch, Uproar, Chatter, and
+  Move_IsMultiTurn by the move's decomp effect, :4918-4925; battle_lib.c:2975-2992, :3032-3045)
+  and not flagged by CheckInvalidMoves without NO_PP (disabled, power 0 while taunted, a Choice
+  holder's other moves; :4929); none fails the move. `Outcome.call` holds u in 0..11 and the
+  call is allowed slot `u % count` of the set the move sees when it runs (12 is a multiple of
+  every count 1-4). Copycat (BtlCmd_TryCopycat :7328-7341) reads `BattleState.move_prev`
+  (battle-wide `movePrev`) at its turn and fails on MOVE_NONE or a move of sCannotMetronomeMoves
+  (every invoker is one). movePrev is set on every acting path by UpdateMoveBuffers
+  (bcp.c:3936-3942) and UpdateFlagsWhenHit (:4499-4508): moveTemp when the attack message
+  showed, else MOVE_NONE; Pursuit's pre-switch hit (battle_script.c:6931-6935), switches and
+  items leave it. A failed call is MOVE_STATUS_FAILED ("But it failed!", subscript_missed.s).
+  The id lists are code constants in both games (rom_diff.md: the functions are unchanged; Kaizo's
+  renamed Snatch / Covet / Trick / Switcheroo slots stay excluded), `MoveFlag` bits at table
+  build, checked against the decomp (tests/tools/test_effect_map.py).
+- B5-2 Metronome (BtlCmd_Metronome :4535-4562) draws `RandNext() % 467 + 1` until the move is
+  not the user's and `Move_CanBeMetronomed` allows it: candidate m weighs 141 (m <= 65536 % 467 =
+  156) or 140 of 65536 (`order.metronome_weights`); `Outcome.call` holds its rank. Modelled in both
+  engines, the sampler and the enumerator (one call variant per candidate; the set cannot change
+  within a turn). Coverage refuses a holder while any candidate would be refused as a move of it
+  (`coverage.metronome_calls`); the terrain, Kaizo ROM-change and halved-Defense checks run over
+  the candidates too (`fight_calls`). Today 150 (vanilla) / 128 (Kaizo) of the 442 candidates
+  have unsupported effects, so every Metronome stays refused (supersedes B4-2's counts); no
+  partial set is sampled.
+- B5-3 The call laws are read at the turn start (`enumerate.call_laws`, `call_variants`,
+  `enumerate_turn`; `outcome.sample_outcome` draws the same): each variant is one
+  `outcome_laws(..., call)` enumerated and weighted, the rows carrying their `Outcome.call`; the
+  variants together are held to `WIDTH_CAP`. Copycat draws nothing: its two orders (its foe used a
+  move before it, or not) are variants that keep only their consistent `speed_tie` branches. The
+  only implemented change of Sleep Talk's set within a turn is a faster foe's Disable
+  (CheckInvalidMoves, battle_lib.c:2266-2269), which the turn-start laws cannot follow (the
+  called move's own draws are laid out at the start): a Sleep Talk user facing a reachable Disable
+  (a Disable move, a Copycat with Disable in the fight, a Metronome that can call it) is refused
+  (`coverage.call_disable_line`; prep's pool and problem per candidate), as Trace in both
+  parties is (B3-14). The engines play the live set exactly. The sampler and the laws read
+  Copycat's call by the order (`order.used_moves`).

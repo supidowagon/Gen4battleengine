@@ -234,6 +234,11 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     # effect_script_0173.s (Nature Power): BtlCmd_GetTerrainMove (battle_script.c:8036-8048)
     # then GoToMoveScript into the terrain's move (engine/order.py ``called_move``).
     173: ("BATTLE_EFFECT_NATURE_POWER", _E.NATURE_POWER, (0, 0, 0)),
+    # E2 batch 5: the invokers (engine/order.py ``invoked_move``). effect_script_0097.s (Sleep
+    # Talk), _0083.s (Metronome), _0242.s (Copycat).
+    97: ("BATTLE_EFFECT_USE_RANDOM_LEARNED_MOVE_SLEEP", _E.SLEEP_TALK, (0, 0, 0)),
+    83: ("BATTLE_EFFECT_CALL_RANDOM_MOVE", _E.METRONOME, (0, 0, 0)),
+    242: ("BATTLE_EFFECT_USE_LAST_USED_MOVE", _E.COPYCAT, (0, 0, 0)),
     # effect_script_0213.s (Camouflage): BtlCmd_TryCamouflage (battle_script.c:7997-8022;
     # engine/effects.py ``_camouflage``).
     213: ("BATTLE_EFFECT_CAMOUFLAGE", _E.CAMOUFLAGE, (0, 0, 0)),
@@ -322,6 +327,29 @@ UNSUPPORTED_MOVES: frozenset[str] = frozenset()
 # for them and the engine fails the move on a 0x matchup (engine/effects.py). Glare
 # (same effect 67) is not special-cased there, so it hits Ghost types in Platinum.
 TYPE_CHART_STATUS_MOVES: frozenset[str] = frozenset({"Thunder Wave"})
+
+# Move ids the battle code compares against (code constants, not move data: the Kaizo ROM
+# leaves BtlCmd_TrySleepTalk, Move_IsInvoker and Move_CanBeMetronomed unchanged, rom_diff.md,
+# so these ids hold in both games whatever a slot is named; Kaizo renamed Snatch, Covet, Trick
+# and Switcheroo's slots, which stay excluded). tools/build_tables.py turns them into
+# ``MoveFlag.NO_SLEEP_TALK`` / ``NO_METRONOME``.
+# Move_IsInvoker (battle_lib.c:3032-3045): MOVE_NONE, Sleep Talk, Copycat, Assist, Me First,
+# Mirror Move, Metronome.
+INVOKER_MOVES: tuple[int, ...] = (0, 214, 383, 274, 382, 119, 118)
+# BtlCmd_TrySleepTalk's own list (battle_script.c:4918-4922): Focus Punch, Uproar, Chatter.
+SLEEP_TALK_EXCLUDED_MOVES: tuple[int, ...] = (264, 253, 448)
+# Move_IsMultiTurn (battle_lib.c:2975-2992), by decomp effect id: BIDE, CHARGE_TURN_HIGH_CRIT,
+# CHARGE_TURN_HIGH_CRIT_FLINCH, CHARGE_TURN_DEF_UP, SKIP_CHARGE_TURN_IN_SUN, FLY, DIVE, DIG,
+# BOUNCE, SHADOW_FORCE (generated/move_battle_effects.txt).
+MULTI_TURN_EFFECTS: tuple[int, ...] = (26, 39, 75, 145, 151, 155, 255, 256, 263, 272)
+# sCannotMetronomeMoves up to FORBIDDEN_BY_METRONOME_DELIM (battle_lib.c:7152-7178):
+# Metronome, Struggle, Sketch, Mimic, Chatter, Sleep Talk, Assist, Mirror Move, Counter, Mirror
+# Coat, Protect, Detect, Endure, Destiny Bond, Thief, Follow Me, Snatch, Helping Hand, Covet,
+# Trick, Focus Punch, Feint, Copycat, Me First, Switcheroo.
+METRONOME_EXCLUDED_MOVES: tuple[int, ...] = (
+    118, 165, 166, 102, 448, 214, 274, 119, 68, 243, 182, 197, 203, 194, 168, 266, 289, 270,
+    343, 271, 264, 364, 383, 382, 415,
+)  # fmt: skip
 
 DECOMP_ABILITY_TO_ID: dict[str, AbilityId] = {
     "-": AbilityId.NONE,  # ABILITY_NONE (id 0): a species' empty second ability slot

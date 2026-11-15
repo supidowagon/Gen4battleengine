@@ -188,7 +188,9 @@ from nuzline.engine.damage import (
 )
 from nuzline.engine.effects import can_have_status, protect_blocks
 from nuzline.engine.ids import (
+    METRONOME_DRAW,
     QUICK_CLAW_MODULUS,
+    SLEEP_TALK_VALUES,
     TAILWIND_TURNS,
     TRI_ATTACK_STATUSES,
     UNROLLED_EFFECTS,
@@ -203,15 +205,24 @@ from nuzline.engine.ids import (
     Weather,
 )
 from nuzline.engine.order import (
+    CALL_COPYCAT,
+    CALL_METRONOME,
+    CALL_NONE,
+    CALL_SLEEP_TALK,
     MOVE_ACTIONS,
     action_order,
+    call_kind,
     called_move,
+    copycat_call,
     effective_speed,
+    invoked_move,
     is_item,
     is_switch,
+    metronome_weights,
     move_effects,
     selected_move,
     truant_loafs,
+    used_moves,
 )
 from nuzline.engine.outcome import (
     MAX_HITS,
@@ -306,6 +317,10 @@ class OutcomeLaws(NamedTuple):
     roar_bench: jnp.ndarray  # int32[2]: the eligible bench Pokemon Roar picks from (roar_target)
     compress: jnp.ndarray  # bool[2, 2, MAX_HITS]: [branch, side, hit] uses damage classes
     flinch_item_chance: jnp.ndarray  # int32[2]: the King's Rock param (outcome.kings_rock_chance)
+    # E2 batch 5: the invokers' call these laws assume (``call_laws``, ``call_variants``).
+    call: jnp.ndarray  # int32[2]: the Outcome.call value the rows carry (Copycat: 0 / 1, none)
+    branch_ok: jnp.ndarray  # bool[2]: the speed_tie branches this call is consistent with
+    call_pending: jnp.ndarray  # bool[]: an invoker is used but no call was given
 
 
 class SamplingOnly(Exception):
@@ -603,6 +618,11 @@ INPUT_NEUTRAL_EFFECTS = (
     # (order.called_move), Nature Power's call; an unresolved one (unknown terrain, refused
     # by coverage) calls MOVE_NONE and does nothing.
     _E.NATURE_POWER,
+    # The invokers likewise (order.used_moves): their called move is read; one whose call
+    # fails does nothing.
+    _E.SLEEP_TALK,
+    _E.METRONOME,
+    _E.COPYCAT,
 )
 INPUT_CLAUSE_EFFECTS = (
     _E.STAT_SELF,  # the foe's Defense / Sp. Def
@@ -890,10 +910,16 @@ NON_TABLE_DAMAGE_EFFECTS = (
     # move (order.called_move), whose own effect decides (Tri Attack's is a table hit), so
     # this entry only keeps an unresolved Nature Power (unknown terrain) uncompressed.
     _E.NATURE_POWER,
+    # The invokers likewise: their called move's effect decides; a failed call deals nothing.
+    _E.SLEEP_TALK,
+    _E.METRONOME,
+    _E.COPYCAT,
 )
 
 
-def damage_inputs_can_change(tables: Tables, state: BattleState, actions, foe_first) -> jnp.ndarray:
+def damage_inputs_can_change(
+    tables: Tables, state: BattleState, actions, foe_first, moves=None
+) -> jnp.ndarray:
     """``bool[2, MAX_HITS]``: ``[side, hit]`` can deal damage other than
     ``hit_damage_table`` at the turn start says, for some ``(crit, roll)``, because an
     event earlier in the turn can change one of its damage inputs (``damage._pre_random``,
@@ -946,9 +972,13 @@ def damage_inputs_can_change(tables: Tables, state: BattleState, actions, foe_fi
     sides = jnp.arange(2)
     mons = state.active
     live = state.over == 0
-    # The move each action runs (Nature Power's call, order.called_move).
-    chosen = jnp.stack([selected_move(tables, state, side, actions[side])[0] for side in (0, 1)])
-    moves = jnp.stack([called_move(tables, state, chosen[side]) for side in (0, 1)])
+    # The move each action runs (Nature Power's call, order.called_move; an invoker's call,
+    # ``moves`` from outcome_laws).
+    if moves is None:
+        chosen = jnp.stack(
+            [selected_move(tables, state, side, actions[side])[0] for side in (0, 1)]
+        )
+        moves = jnp.stack([called_move(tables, state, chosen[side]) for side in (0, 1)])
     uses_move = live & ~is_switch(actions) & ~is_item(actions)
     effect, params = move_effects(tables, state, moves)  # Secret Power's terrain effect
     param0 = params[:, 0]
@@ -1062,21 +1092,38 @@ def damage_inputs_can_change(tables: Tables, state: BattleState, actions, foe_fi
 
 
 def outcome_laws(
-    tables: Tables, state: BattleState, actions, *, loose: bool = False
+    tables: Tables, state: BattleState, actions, call=None, *, loose: bool = False
 ) -> OutcomeLaws:
     """The law parameters and relevance masks of ``step(tables, state, actions, .)``
     (module docstring). ``loose`` (tests only: the brute-force reference) drops every
     order and eligibility gate and every conditional read: each element any order or
-    event can read is relevant in both branches, and ``reads`` gates nothing."""
+    event can read is relevant in both branches, and ``reads`` gates nothing.
+
+    ``call`` (``int32[2]``, one variant of ``call_variants``): the invokers' call these laws
+    assume: Sleep Talk's and Metronome's ``Outcome.call`` value, which the rows carry, and
+    Copycat's order (1: its foe used a move before it, so movePrev is the foe's moveTemp; 0:
+    the turn-start movePrev), which keeps only the consistent ``speed_tie`` branches
+    (``branch_ok``). Without ``call`` an invoker runs nothing (``call_pending``:
+    ``enumerate_drawn`` refuses those laws)."""
     actions = jnp.asarray(actions, _I32)
     live = state.over == 0
     sides = jnp.arange(2)
-    # ``chosen``: the move each action selects (its status checks: Disable, Taunt); ``moves``:
-    # the move it runs (Nature Power's call, order.called_move), whose draws these are.
-    chosen = jnp.stack([selected_move(tables, state, side, actions[side])[0] for side in (0, 1)])
-    moves = jnp.stack([called_move(tables, state, chosen[side]) for side in (0, 1)])
     switch, item = is_switch(actions), is_item(actions)
     uses_move = live & ~switch & ~item  # bool[2]
+    # ``chosen``: the move each action selects (its status checks: Disable, Taunt); ``moves``:
+    # the move it runs (Nature Power's and the invokers' call, order.called_move,
+    # order.used_moves), whose draws these are.
+    chosen = jnp.stack([selected_move(tables, state, side, actions[side])[0] for side in (0, 1)])
+    kinds = call_kind(tables, chosen)
+    copycat = uses_move & (kinds == CALL_COPYCAT)
+    if call is None:
+        moves = jnp.stack([called_move(tables, state, chosen[side]) for side in (0, 1)])
+        call = jnp.zeros((2,), _I32)
+        call_pending = jnp.any(uses_move & (kinds != CALL_NONE))
+    else:
+        call = jnp.asarray(call, _I32)
+        moves = used_moves(tables, state, actions, call, copycat & (call == 1))
+        call_pending = jnp.asarray(False)
     foe_moves = uses_move[::-1]  # the other side uses a move
     effect, params = move_effects(tables, state, moves)  # Secret Power's terrain effect
     foe_move = moves[::-1]
@@ -1219,7 +1266,7 @@ def outcome_laws(
         # order.action_order: priority only between two moves; a tie only between two
         # actions of the same kind.
         priority = jnp.where(
-            uses_move[0] & uses_move[1], tables.move_priority[moves].astype(_I32), 0
+            uses_move[0] & uses_move[1], tables.move_priority[chosen].astype(_I32), 0
         )
         same_kind = (switch[0] == switch[1]) & (item[0] == item[1])
         speed_tie = (
@@ -1233,6 +1280,10 @@ def outcome_laws(
     else:
         speed_tie = live & (firsts[0] != firsts[1])
         branches = [_branch_masks(firsts[t] == 1 - sides, firsts[t] == sides, base) for t in (0, 1)]
+    # Copycat's call (order.used_moves): variant 1 needs its foe to use a move before it in the
+    # branch, variant 0 the opposite.
+    after_foe = jnp.stack([(firsts == 1 - side) & uses_move[1 - side] for side in (0, 1)])
+    branch_ok = jnp.all(~copycat[:, None] | (after_foe == (call == 1)[:, None]), axis=0)
 
     own_speed = (_any_of(effect, (_E.STAT_SELF, _E.SECONDARY_STAT_SELF)) & (param0 == Stat.SPE)) | (
         _any_of(effect, (_E.RAISE_ALL_STATS_HIT, _E.CURSE, _E.DRAGON_DANCE))
@@ -1396,6 +1447,7 @@ def outcome_laws(
             tri_attack=m["tri_attack"],
             roar_level=roar_level,
             roar_target=roar_target,
+            call=jnp.zeros((2,), bool),  # stamped per call variant (enumerate_turn), not drawn
         )
 
     both = zip(branch_relevant(branches[0]), branch_relevant(branches[1]), strict=True)
@@ -1490,14 +1542,14 @@ def outcome_laws(
         [
             crit
             & tabled[:, None]
-            & ~damage_inputs_can_change(tables, state, actions, firsts[t] == 1 - sides)
+            & ~damage_inputs_can_change(tables, state, actions, firsts[t] == 1 - sides, moves)
             & ~(m["confusion_hit"][:, None] & (hit_index == 0))
             for t, m in enumerate(branches)
         ]
     )
     if loose:
         compress = jnp.zeros_like(compress)
-    thresholds, possible = hit_thresholds(tables, state, actions)
+    thresholds, possible = hit_thresholds(tables, state, actions, moves)
     if loose:
         # The brute force: the hit law cut at every threshold variant, possible or not
         # (an extra cut only splits a class).
@@ -1505,7 +1557,7 @@ def outcome_laws(
     return OutcomeLaws(
         hit_thresholds=thresholds,
         hit_possible=possible,
-        crit_odds=crit_odds(tables, state, actions),
+        crit_odds=crit_odds(tables, state, actions, moves),
         # Lucky Chant, or the target's Battle Armor / Shell Armor (outcome.armored).
         no_crit=(state.lucky_chant[::-1] != 0) | armored(tables, state, actions),
         secondary_chance=secondary_chance(tables, state, moves),
@@ -1519,6 +1571,9 @@ def outcome_laws(
         roar_level_weight=roar_weight,
         roar_bench=roar_bench,
         flinch_item_chance=kings_rock,
+        call=call,
+        branch_ok=branch_ok,
+        call_pending=call_pending,
     )
 
 
@@ -2242,11 +2297,15 @@ def enumerate_drawn(laws: OutcomeLaws) -> tuple[Outcome, np.ndarray, Outcome]:
     """``enumerate_outcomes`` with ``drawn``: an ``Outcome`` of ``bool`` arrays shaped
     like the outcomes, true where the row reads (and enumerated) the element."""
     laws = jax.tree.map(np.asarray, laws)
+    if bool(laws.call_pending):
+        raise ValueError("an invoker is used: enumerate its calls (enumerate_turn)")
     reads = laws.reads
     tied = bool(laws.relevant.speed_tie)
+    # A call variant keeps the speed_tie branches it is consistent with (Copycat's order).
     branches = [
         Branch(t, int(reads.first[t]), Outcome(*(f[t] for f in laws.branch_relevant)))
         for t in ((0, 1) if tied else (0,))
+        if bool(laws.branch_ok[t])
     ]
     parts = []
     for branch in branches:
@@ -2256,7 +2315,7 @@ def enumerate_drawn(laws: OutcomeLaws) -> tuple[Outcome, np.ndarray, Outcome]:
     empty = _empty()
     fields = {name: np.repeat(f[None], k, axis=0) for name, f in zip(Outcome._fields, empty)}
     drawn = {name: np.zeros((k, *np.shape(f)), bool) for name, f in zip(Outcome._fields, empty)}
-    if tied:
+    if tied and parts:
         fields["speed_tie"] = np.concatenate(
             [np.full(len(p[1]), b.tie, np.int8) for b, p in zip(branches, parts)]
         )
@@ -2270,7 +2329,8 @@ def enumerate_drawn(laws: OutcomeLaws) -> tuple[Outcome, np.ndarray, Outcome]:
             fields[name][(rows_, *index)] = np.where(read, col, target).astype(np.int8)
             drawn[name][(rows_, *index)] = read
         start += len(probs)
-    probs = np.concatenate([p[1] for p in parts])
+    fields["call"][:] = laws.call.astype(fields["call"].dtype)
+    probs = np.concatenate([p[1] for p in parts]) if parts else np.zeros(0, np.float64)
     return Outcome(**fields), probs, Outcome(**drawn)
 
 
@@ -2291,3 +2351,164 @@ def enumerate_outcomes(laws: OutcomeLaws) -> tuple[Outcome, np.ndarray]:
     product). Raises ``SamplingOnly`` when ``K`` exceeds ``WIDTH_CAP``."""
     outcomes, probs, _ = enumerate_drawn(laws)
     return outcomes, probs
+
+
+# --- The invokers' calls (E2 batch 5, rulings B5-n) ----------------------------------------
+
+# Call values per side: Sleep Talk's 0..SLEEP_TALK_VALUES - 1, Metronome's candidate ranks (at
+# most METRONOME_DRAW), Copycat's two orders.
+CALL_VALUES = METRONOME_DRAW
+
+
+class CallLaws(NamedTuple):
+    """Each side's invoker draw before the turn (``call_laws``). Fixed shapes; a batch adds a
+    leading axis."""
+
+    kind: jnp.ndarray  # int32[2]: order.CALL_*, CALL_NONE when nothing is drawn
+    weight: jnp.ndarray  # int32[2, CALL_VALUES]: the integer weight of each call value
+    called: jnp.ndarray  # int32[2, CALL_VALUES]: the move each value calls (0: the call fails)
+
+
+def call_laws(tables: Tables, state: BattleState, actions) -> CallLaws:
+    """The law of ``Outcome.call`` for ``step(tables, state, actions, .)``, as
+    ``outcome.sample_outcome`` draws it, read with the turn-start ``state``:
+
+    * Sleep Talk: every value 0..``SLEEP_TALK_VALUES`` - 1 weighs 1 (BtlCmd_TrySleepTalk's
+      uniform redraw, battle_script.c:4931-4933; ``order.invoked_move`` takes the allowed slot
+      ``value % count``). Its allowed set is the turn-start one: a faster foe's Disable is the
+      only implemented mechanic that changes it within the turn, and a Disable reachable against
+      a Sleep Talk user is refused (``coverage.call_disable_line``, ruling B5-3). Drawn only
+      when it can be read: the user sleeps at the start, or its foe uses an invoker or a move
+      that can put it to sleep (over-approximate);
+    * Metronome: each candidate rank weighs ``order.metronome_weights`` (141 or 140 of 65536):
+      the set is fixed through the turn (the user's moves; Gravity and Heal Block are owed);
+    * Copycat: no draw; its two orders (``outcome_laws``' ``call``) each weigh 1 and keep their
+      consistent ``speed_tie`` branches (``branch_ok``), the second only when its foe uses a
+      move."""
+    actions = jnp.asarray(actions, _I32)
+    live = state.over == 0
+    uses_move = live & ~is_switch(actions) & ~is_item(actions)
+    chosen = jnp.stack([selected_move(tables, state, side, actions[side])[0] for side in (0, 1)])
+    kinds = jnp.where(uses_move, call_kind(tables, chosen), CALL_NONE)
+    foe_called = jnp.stack([called_move(tables, state, chosen[side]) for side in (0, 1)])[::-1]
+    sleeps = state.status[jnp.arange(2), state.active] == Status.SLEEP
+    put_to_sleep = uses_move[::-1] & (
+        (call_kind(tables, chosen[::-1]) != CALL_NONE)
+        | _inflicts(tables, state, foe_called, Status.SLEEP)
+    )
+    kinds = jnp.where((kinds == CALL_SLEEP_TALK) & ~sleeps & ~put_to_sleep, CALL_NONE, kinds)
+    values = jnp.arange(CALL_VALUES, dtype=_I32)
+    weights, called = [], []
+    for side in (0, 1):
+        foe = 1 - side
+        talk_w = (values < SLEEP_TALK_VALUES).astype(_I32)
+        talk = jax.vmap(lambda v, side=side: invoked_move(tables, state, side, chosen[side], v))(
+            values
+        )
+        metro_all = metronome_weights(tables, state, side)
+        cands = metro_all > 0
+        n = jnp.sum(cands.astype(_I32))
+        # The candidate of each rank (the k-th true entry), and its weight.
+        rank = jnp.cumsum(cands.astype(_I32)) - 1
+        ids = jnp.arange(metro_all.shape[0], dtype=_I32)
+        by_rank = (
+            jnp.zeros((CALL_VALUES,), _I32)
+            .at[jnp.where(cands, rank, CALL_VALUES)]
+            .set(ids, mode="drop")
+        )
+        metro_w = jnp.where(values < n, metro_all[by_rank], 0)
+        copy_w = ((values == 0) | ((values == 1) & uses_move[foe])).astype(_I32)
+        copy_called = jnp.where(
+            values == 0,
+            copycat_call(tables, state.move_prev),
+            jnp.where(values == 1, copycat_call(tables, chosen[foe]), 0),
+        )
+        kind = kinds[side]
+        weights.append(
+            jnp.where(
+                kind == CALL_SLEEP_TALK,
+                talk_w,
+                jnp.where(
+                    kind == CALL_METRONOME,
+                    metro_w,
+                    jnp.where(kind == CALL_COPYCAT, copy_w, (values == 0).astype(_I32)),
+                ),
+            )
+        )
+        called.append(
+            jnp.where(
+                kind == CALL_SLEEP_TALK,
+                talk,
+                jnp.where(
+                    kind == CALL_METRONOME,
+                    by_rank,
+                    jnp.where(kind == CALL_COPYCAT, copy_called, 0),
+                ),
+            )
+        )
+    return CallLaws(kind=kinds.astype(_I32), weight=jnp.stack(weights), called=jnp.stack(called))
+
+
+def call_variants(laws: CallLaws) -> list[tuple[np.ndarray, int, int]]:
+    """``(call int32[2], numerator, denominator)`` per call variant of one (unbatched) row of
+    ``call_laws``: the product of each side's values grouped by the move they call (one
+    representative value per move, the smallest, with the group's summed weight). Copycat's
+    orders are not a chance: each has weight 1 / 1 and its laws keep only the branches that
+    agree with it, so the variants' rows still sum to 1."""
+    laws = jax.tree.map(np.asarray, laws)
+    per_side = []
+    for side in (0, 1):
+        weight, called, kind = laws.weight[side], laws.called[side], int(laws.kind[side])
+        if kind in (CALL_SLEEP_TALK, CALL_METRONOME):
+            groups: dict[int, list[int]] = {}
+            for v in np.flatnonzero(weight):
+                groups.setdefault(int(called[v]), [int(v), 0])[1] += int(weight[v])
+            den = int(weight.sum())
+            per_side.append([(v, w, den) for v, w in groups.values()])
+        elif kind == CALL_COPYCAT:
+            per_side.append([(int(v), 1, 1) for v in np.flatnonzero(weight)])
+        else:
+            per_side.append([(0, 1, 1)])
+    return [
+        (np.asarray([a, b], np.int32), wa * wb, da * db)
+        for a, wa, da in per_side[0]
+        for b, wb, db in per_side[1]
+    ]
+
+
+def combine_variants(
+    parts: list[tuple[Outcome, np.ndarray, int, int]],
+) -> tuple[Outcome, np.ndarray]:
+    """The rows of every call variant ``(outcomes, probs, numerator, denominator)`` as one
+    enumeration, each variant's probabilities scaled by its weight. Raises ``SamplingOnly`` when
+    the variants' rows together exceed ``WIDTH_CAP``."""
+    total = sum(len(p[1]) for p in parts)
+    if total > WIDTH_CAP:
+        raise SamplingOnly(
+            f"the outcome combinations exceed the width cap {WIDTH_CAP} "
+            f"({total} rows over {len(parts)} call variants)"
+        )
+    outcomes = Outcome(
+        *(
+            np.concatenate([np.asarray(getattr(p[0], name)) for p in parts])
+            for name in Outcome._fields
+        )
+    )
+    probs = np.concatenate([p[1] * (p[2] / p[3]) for p in parts])
+    return outcomes, probs
+
+
+_jit_call_laws = jax.jit(call_laws)
+_jit_laws = jax.jit(outcome_laws)
+
+
+def enumerate_turn(tables: Tables, state: BattleState, actions) -> tuple[Outcome, np.ndarray]:
+    """``enumerate_outcomes`` over every call variant (``call_variants``) of one state and action
+    pair: the turn's full enumeration whatever the invokers draw, the ``Outcome.call`` of each
+    row its variant's value. Raises ``SamplingOnly`` above ``WIDTH_CAP`` rows in all."""
+    actions = jnp.asarray(actions, _I32)
+    parts = []
+    for call, num, den in call_variants(_jit_call_laws(tables, state, actions)):
+        outcomes, probs = enumerate_outcomes(_jit_laws(tables, state, actions, jnp.asarray(call)))
+        parts.append((outcomes, probs, num, den))
+    return combine_variants(parts)

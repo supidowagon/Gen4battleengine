@@ -71,9 +71,13 @@ from nuzline.ai.policy import _distribution
 from nuzline.data.tables import Tables
 from nuzline.engine.actions import MOVE_ACTIONS
 from nuzline.engine.enumerate import (
+    CallLaws,
     OutcomeLaws,
     Reads,
     SamplingOnly,
+    call_laws,
+    call_variants,
+    combine_variants,
     enumerate_outcomes,
     outcome_laws,
 )
@@ -106,7 +110,7 @@ AI_MIN_ROWS = 256  # ai_rows' smallest call (bucket_rows)
 
 # The pytrees of the programs' arguments and results, for ``jax.export`` serialization
 # (``Tables`` and ``BattleState`` are registered by ``stage_a``).
-for _cls in (Outcome, OutcomeLaws, Reads):
+for _cls in (Outcome, OutcomeLaws, Reads, CallLaws):
     jax.export.register_namedtuple_serialization(_cls, serialized_name=f"nuzline.{_cls.__name__}")
 
 
@@ -194,14 +198,26 @@ def ai_rows(tables: Tables, states: BattleState, per_call: int | None = None) ->
     return _run(fn, "expand_ai", tables, (states,), n, {"layout": layout.key}, per_call)
 
 
-def _laws(tables: Tables, states: BattleState, actions) -> OutcomeLaws:
-    return jax.vmap(outcome_laws, in_axes=(None, 0, 0))(tables, states, actions)
+def _laws(tables: Tables, states: BattleState, actions, calls) -> OutcomeLaws:
+    return jax.vmap(outcome_laws, in_axes=(None, 0, 0, 0))(tables, states, actions, calls)
 
 
-def laws_rows(tables: Tables, states: BattleState, actions) -> OutcomeLaws:
-    """``outcome_laws`` of each of ``N`` (state, ``int32[2]`` actions) rows, numpy."""
+def laws_rows(tables: Tables, states: BattleState, actions, calls) -> OutcomeLaws:
+    """``outcome_laws`` of each of ``N`` (state, ``int32[2]`` actions, ``int32[2]`` call)
+    rows, numpy (``enumerate.call_variants`` gives the calls)."""
     actions = np.asarray(actions, np.int32)
-    return _run(_laws, "expand_laws", tables, (states, actions), len(actions))
+    calls = np.asarray(calls, np.int32)
+    return _run(_laws, "expand_laws", tables, (states, actions, calls), len(actions))
+
+
+def _calls(tables: Tables, states: BattleState, actions) -> CallLaws:
+    return jax.vmap(call_laws, in_axes=(None, 0, 0))(tables, states, actions)
+
+
+def calls_rows(tables: Tables, states: BattleState, actions) -> CallLaws:
+    """``call_laws`` of each of ``N`` (state, ``int32[2]`` actions) rows, numpy."""
+    actions = np.asarray(actions, np.int32)
+    return _run(_calls, "expand_calls", tables, (states, actions), len(actions))
 
 
 def _select(cond, a, b):
@@ -296,7 +312,13 @@ def expand(
     states = jax.tree.map(np.asarray, states)
     index = np.asarray([p[0] for p in pairs], np.int64).reshape(-1)
     actions = np.asarray([p[1:] for p in pairs], np.int32).reshape(-1, 2)
-    laws = laws_rows(tables, take(states, index), actions)
+    # The invokers' calls (enumerate.call_variants): one laws row per (request, call variant).
+    cl = calls_rows(tables, take(states, index), actions)
+    variants = [call_variants(take(cl, r)) for r in range(len(pairs))]
+    v_req = np.asarray([r for r, vs in enumerate(variants) for _ in vs], np.int64)
+    v_call = np.asarray([v[0] for vs in variants for v in vs], np.int32).reshape(-1, 2)
+    laws = laws_rows(tables, take(states, index[v_req]), actions[v_req], v_call)
+    first_row = np.concatenate([[0], np.cumsum([len(vs) for vs in variants])])
     merger = _Merger(tables, len(pairs))
     out: dict[int, list[Child] | SamplingOnly] = {}
     buffer: list[tuple] = []  # (request ids, outcomes, probs) segments of the next chunk
@@ -312,7 +334,11 @@ def expand(
 
     for r in range(len(pairs)):
         try:
-            outcomes, probs = enumerate_outcomes(take(laws, r))
+            parts = []
+            for i, (_, num, den) in enumerate(variants[r]):
+                outcomes, probs = enumerate_outcomes(take(laws, int(first_row[r]) + i))
+                parts.append((outcomes, probs, num, den))
+            outcomes, probs = combine_variants(parts)
         except SamplingOnly as e:
             out[r] = e
             continue

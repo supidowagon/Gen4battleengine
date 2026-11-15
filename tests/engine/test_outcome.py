@@ -23,7 +23,9 @@ def test_empty_outcome_is_all_hits_no_crits_max_roll():
     assert o.hit.tolist() == [[1] * 5] * 2 and o.crit.tolist() == [[0] * 5] * 2
     assert o.roll.tolist() == [[15] * 5] * 2
     assert o.secondary.tolist() == [[0] * 5] * 2 and o.contact_proc.tolist() == [[0] * 5] * 2
-    assert all(getattr(o, f).dtype == jnp.int8 for f in Outcome._fields)
+    # Every field int8 but the invokers' call (int16: Metronome's rank, E2 batch 5).
+    assert all(getattr(o, f).dtype == jnp.int8 for f in Outcome._fields if f != "call")
+    assert o.call.dtype == jnp.int16 and o.call.tolist() == [0, 0]
 
 
 def acts(*a):
@@ -75,7 +77,7 @@ def freq(x, value=1):
 
 def test_sample_shapes_and_dtypes(samples):
     for f in Outcome._fields:
-        assert getattr(samples, f).dtype == jnp.int8, f
+        assert getattr(samples, f).dtype == (jnp.int16 if f == "call" else jnp.int8), f
     assert samples.hit.shape == (N, 2, 5) and samples.n_hits.shape == (N, 2)
 
 
