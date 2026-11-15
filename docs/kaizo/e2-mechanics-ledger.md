@@ -218,6 +218,34 @@ family committed on its own, rulings B10-n.
 
 Out of scope: AI entries (E1), double / multi formats, gauntlets, the terrain entries (data).
 
+### Family 3 design: Substitute (in progress; decomp inventory at
+`G:/Farry/Claude Workspace/_scratch/e2/b10/substitute_inventory.md`)
+
+- The move: `EffectId.SUBSTITUTE` (decomp 79). subscript_try_substitute.s:7 fails with a
+  substitute up; BtlCmd_TrySubstitute (battle_script.c:5211-5226): q = Divide(maxHP, 4), fails
+  when curHP <= q, else the user loses q through UPDATE_HP, `substitute_hp` = q, and its
+  VOLATILE_CONDITION_BIND clears (:5222). The AI's scripts are E1's, already transcribed.
+- State: `substitute_hp != 0` stands for VOLATILE_CONDITION_SUBSTITUTE (every break zeroes both
+  but Pursuit's, whose stale HP nothing reads without the bit). SELF_TURN_FLAG_SUBSTITUTE_HIT
+  lasts one action (BattleContext_Init, battle_lib.c:2014, after every action, bcp.c:3998): a
+  carry of the hit loop (`MoveHit.sub_hit`, like `focus_armed`), not a state field.
+- The hit (bcp.c:3359-3378): with a substitute and damage, the substitute takes min(damage, its
+  HP) (hitDamage: drain and recoil read it; shellBellDamageDealt too), the flag sets, and
+  UpdateHP returns early: no False Swipe cap, Focus Sash / Band, Bide store, damage-taken fields
+  (Counter, Mirror Coat, Metal Burst), lastDamageTaken, SYSCTL_MOVE_HIT (Life Orb, Shell Bell),
+  resist berry. Later hits of a multi-hit go on, on real HP once it broke, the flag still set.
+- Gates: CheckSubstitute (battle_script.c:9173-9186) = the bit or the flag; SubstituteWasHit
+  (battle_lib.c:6259) = the flag. Default-chance secondaries on the defender (lib.c:1570-1587),
+  CHECK_HP_AND_SUBSTITUTE (Bind), the status / flinch / confuse / leech seed / lock-on / mean
+  look / yawn / curse / swagger subscripts, ChangeStatStage's drop on a foe (bit only: direct
+  fails, indirect silent), Dream Eater (no damage), SmellingSalt (no x2, no cure), the contact
+  ability (lib.c:4209), the on-hit items (:5378), Pluck (:5546), Intimidate (subscript :13),
+  Toxic Spikes on a Baton-Passed substitute. Not gated: self-recipient secondaries, ON_HIT,
+  Taunt, Disable, Attract, Foresight, Roar, Perish Song, U-turn, sound moves.
+- Special paths: Future Sight (subscript_future_sight_damage.s:13-24, no flag); Pursuit on a
+  switcher (subscript_pursuit.s:20, :56-73: only a break changes it); confusion self-hit and Leech
+  Seed's drain bypass it; Struggle's recoil is maxHP/4 anyway.
+
 ## Batch 6 design: mid-turn switch decision (U-turn, Baton Pass)
 
 # Mid-turn switch decision (U-turn, Baton Pass): design, rev. 2
