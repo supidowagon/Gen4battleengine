@@ -16,6 +16,10 @@
   `jit(vmap(step))` 42.8 -> 43.8 s (logs in `_scratch/e2/b5/` on G:).
 - Left after batch 5: U-turn (3 fights, the batch 6 design below), Metronome (3, B5-2).
 - Standing: the doubles conventions below apply to all new code; one review per batch.
+- Standing: record `jit(step)` and `vmap` compile time once per batch, measured with the
+  fast-tier lock free.
+- Standing: at the Roark-split close, also record run-time throughput (steps per second on the
+  existing benchmark) against the e139cd1 baseline.
 - Standing (process, coordinator 2026-11-14): (1) the fast-tier lock
   (`_scratch/fast_tier.lock`) names the running pytest's pid (`pid=<id>`); write it only after
   that process has started and is confirmed alive, never before launching and never from a
@@ -129,6 +133,25 @@ The resume is extra `fori_loop` iterations through the existing `_act` (dynamic 
 
 **Answer:** pause inside `_use_move` before the list with `pivot_battler` and `TurnScratch`; resume re-enters the same `fori_loop` at `cursor`, switching in and then running the action's tail on the newcomer.
 Reuse the faint-replacement decision but not its transition; the search reads `power_mul` / `ai_switched` from `TurnScratch`; expected compile cost +1 to +3 s.
+
+## Performance, after the engine is complete (parked, manager decision 2026-11-14)
+
+- **Measurement.** `jit(step)` was re-timed back to back with the fast-tier lock free. It grew
+  gradually: 18.4-18.8 s at e139cd1, 19.7-20.3 at 5b65dcd, 23.9-30.8 at ac2b497, 28.9-36.0 at
+  726e3f9. `vmap` grew from 14 to 19.5 s. Over the same span the jaxpr grew from 50.7k to 64.4k
+  equations (+27%). The earlier 39-60 s readings were taken under machine load. Single-commit
+  noise is up to 7 s.
+- **Shape.** Every fight compiles and runs all 39 move-effect handlers, plus the ability and item
+  logic, as `jnp.where` masks. Production compiles one program per game. Stubbing the handlers
+  cuts 10% of the equations and 25% of compile time (25.4 -> 19.0 s). `_reset_battler`,
+  `_restore_types` and the whole-state `_where` together are about 21% of the equations.
+- **Options, in this order:**
+  - (c) Narrow `_reset_battler`/`_where` to the fields that actually change. Cheap.
+  - (a) A static per-fight feature set that skips absent handlers at trace time. Only valid with a
+    provable upper bound on what a fight can reach (moves learned mid-search, items, Trace); means
+    one program per fight.
+  - (b) `lax.switch` on the effect id. Cuts compile, but under `vmap` every branch is still
+    evaluated at run time.
 
 ## Owed
 
@@ -565,7 +588,7 @@ Rules left out because another mechanic is missing; each closes with the mechani
   called move's own draws are laid out at the start): a Sleep Talk user facing a reachable Disable
   (a Disable move, a Copycat with Disable in the fight, a Metronome that can call it) is refused
   (`coverage.call_disable_line`; prep's pool and problem per candidate), as Trace in both
-  parties is (B3-14). The engines play the live set exactly. The sampler and the laws read
+  parties is (B3-14). **Refusal superseded by B5-13** (the Disable is modelled). The engines play the live set exactly. The sampler and the laws read
   Copycat's call by the order (`order.used_moves`).
 - B5-4 Uproar (`EffectId.UPROAR`, effect 159 in both games, the move Uproar only): a plain hit
   (CalcCrit, CalcDamage; effect_script_0159.s:9-10) whose ON_HIT indirect effect, for a user not
@@ -663,3 +686,36 @@ Rules left out because another mechanic is missing; each closes with the mechani
   an accuracy / evasion stat move, Foresight or a White Herb is in play (else the start stages or
   0), the weather of the start, none, sandstorm or hail, the target confused or not; a Trace
   holder among them keeps every roll (`future_loose`). `sample_outcome` draws the same.
+- B5-13 (supersedes B5-3's refusal) Sleep Talk facing a faster Disable is modelled, not refused.
+  `BtlCmd_TryDisable` (battle_script.c:4581-4598) disables only the defender's movePrevByBattler
+  (:4586), only while that move has PP and nothing is disabled yet (:4588-4591). A Sleep Talk
+  user that moves second has not moved this turn, so the move is its turn-start `last_move`, and
+  its set at its move is either the turn-start set or that set without the last move's slot
+  (`enumerate._disabled_state`; CheckInvalidMoves, battle_lib.c:2266-2269, through
+  `order.sleep_talk_slots`). `call_laws` gives `alt`, each value's call from the second set,
+  where it can arise (nothing disabled, a last move, the foe uses a move: any move can be an
+  invoker calling Disable). `call_variants` splits a value group whose two calls differ into two
+  variants of the group's weight, `CALL_KEEP` (value + 12) and `CALL_DISABLED` (value + 24);
+  `outcome_laws` lays out the second one's reads from the shrunk set. `order.invoked_move` takes
+  `call % count` (count 1-4 divides 12 and 24), so `step` plays every encoding of a value alike, on
+  the live set, and the sampler still draws 0-11. Each row is kept only in the variant whose
+  assumption its turn met: `step`'s new `disabled_at_move` event (a move of the battler disabled
+  when its action starts) against the variant (`enumerate.call_consistent`; `expand`'s step
+  program returns it and the merger drops the rest, `enumerate_turn` filters). Removed:
+  `coverage.call_disable_line` and its calls in `check_coverage`, `prep/pool.py` and
+  `prep/problem.py` (so the review's missing `player_extra` there is moot). The brute force
+  (`tests/engine/test_invokers.py::_raw_brute`) no longer shares `branch_ok` / `after_foe`: it
+  loops over the raw `speed_tie`, takes the order from `order.action_order` as `step` does,
+  derives Copycat's movePrev from it (its foe used a move before it), forces every branch open
+  and cuts the rows to that `speed_tie`; the hand cases add a faster Disable and a foe that
+  switches before Copycat.
+- B5-14 Zoom Lens on the Future Sight hit (`outcome.future_threshold`, reference `_hit_rate(...,
+  True)`): no change. `Battler_MovedThisTurn` (battle_lib.c:5365-5368) reads `battlerActions[d]
+  [PICK_COMMAND] == BATTLE_CONTROL_MOVE_END`; every action's MoveEnd sets it for the actor's slot
+  (bcp.c:3989), a switch by choice included, `UpdateAfterSwitch` sets it for a battler dragged in
+  by Roar / Whirlwind (battle_lib.c:2053) and `PlayFaintAnimation` for a fainted one
+  (battle_script.c:1801); only the next command selection writes it again (bcp.c:337-512). So at the turn end's
+  check (bcp.c:2963-2965) every battler has moved, a newcomer included
+  (`tests/engine/test_batch5_review.py`).
+- B5-15 Generator (`tests/strategies.py`): with an uproar under way no active Pokemon sleeps at
+  the turn start (B5-7's turn-end wake-up), also after the other side's draws.

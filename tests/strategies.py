@@ -850,9 +850,10 @@ def _draw_uproar(draw, tables: Tables, a: dict, side: int, active: int, names: N
     """E2 batch 5: maybe (1 in 3) give the active Pokemon Uproar (full PP), and then maybe (1 in
     2) an uproar under way: 1-5 turns left (subscript_uproar.s's 3-6, counted down at every turn
     end), locked into Uproar (``locked_move``; a quarter of the time it does not know the move:
-    Copycat's call), the Bide / Rollout lock dropped (an uproarer runs only Uproar), and half the
-    time the actives awake (the turn end's check woke them). Maybe (1 in 4) the foe asleep (1-4
-    turns: Uproar wakes it) or a Ghost type (Uproar is ineffective: noEffect ends the uproar)."""
+    Copycat's call), the Bide / Rollout lock dropped (an uproarer runs only Uproar), and the
+    actives awake (no battler on the field sleeps at a turn start during an uproar: the turn end's
+    check woke them, B5-7). Else maybe (1 in 4) the foe asleep (1-4 turns: Uproar wakes it); maybe
+    a Ghost-type foe (Uproar is ineffective: noEffect ends the uproar)."""
     rnd = draw(st.randoms(use_true_random=False))
     if draw(st.integers(0, 2)) != 0:
         return
@@ -862,19 +863,19 @@ def _draw_uproar(draw, tables: Tables, a: dict, side: int, active: int, names: N
     a["pp"][side, active, k] = int(tables.move_pp[uproar])
     foe = 1 - side
     foe_mon = int(a["active"][foe])
-    if draw(st.booleans()):
+    under_way = draw(st.booleans())
+    if under_way:
         if rnd.random() < 0.25:
             a["moves"][side, active, k] = names.move("Copycat")
         a["uproar"][side] = rnd.randint(1, 5)
         a["locked_move"][side] = uproar
         a["bide_turns"][side] = a["bide_damage"][side] = a["rollout_count"][side] = 0
-        if rnd.random() < 0.5:
-            for sd in (0, 1):
-                mon = int(a["active"][sd])
-                if a["status"][sd, mon] == Status.SLEEP:
-                    a["status"][sd, mon] = Status.NONE
-                    a["status_counter"][sd, mon] = 0
-    if a["hp"][foe, foe_mon] > 0 and draw(st.integers(0, 3)) == 0:
+        for sd in (0, 1):
+            mon = int(a["active"][sd])
+            if a["status"][sd, mon] == Status.SLEEP:
+                a["status"][sd, mon] = Status.NONE
+                a["status_counter"][sd, mon] = 0
+    if not under_way and a["hp"][foe, foe_mon] > 0 and draw(st.integers(0, 3)) == 0:
         a["status"][foe, foe_mon] = Status.SLEEP
         a["status_counter"][foe, foe_mon] = rnd.randint(1, 4)
     elif draw(st.integers(0, 3)) == 0:
@@ -1020,6 +1021,14 @@ def supported_state(draw, tables: Tables, names: Names, invokers: bool = True) -
         _draw_uproar(draw, tables, a, side, active, names)
         _draw_future_sight(draw, tables, a, side, active, names)
         _draw_choice_lock(draw, a, side, active)
+    # No battler on the field sleeps at a turn start during an uproar (B5-7: the turn end woke
+    # it): the other side's draws above may have put one to sleep after the uproar was drawn.
+    if np.any(a["uproar"] > 0):
+        for sd in (0, 1):
+            mon = int(a["active"][sd])
+            if a["status"][sd, mon] == Status.SLEEP:
+                a["status"][sd, mon] = Status.NONE
+                a["status_counter"][sd, mon] = 0
     count = draw(st.integers(0, BAG_SLOTS))
     bag = draw(st.lists(st.sampled_from(M1_BAG_ITEMS), min_size=count, max_size=count))
     a["trainer_items"][1] = [names.item(i) for i in bag] + [0] * (BAG_SLOTS - count)

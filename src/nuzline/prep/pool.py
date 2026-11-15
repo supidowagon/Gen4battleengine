@@ -21,7 +21,6 @@ from nuzline.engine.coverage import (
     CoverageReport,
     Support,
     _Collector,
-    call_disable_line,
     exp_refusals,
     halved_by_line,
     halved_defense_line,
@@ -175,7 +174,6 @@ def check_pool(
         for line, kind in (
             (weather_war_line(tables, [spec], opp), "ability"),
             (trace_standoff_line(tables, [spec], opp), "ability"),
-            (call_disable_line(tables, [spec], opp), "move effect"),
             (trace_ai_line(tables, [spec]), "trainer AI"),
         ):
             if line is not None:

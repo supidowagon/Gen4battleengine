@@ -75,6 +75,7 @@ from nuzline.engine.enumerate import (
     OutcomeLaws,
     Reads,
     SamplingOnly,
+    call_consistent,
     call_laws,
     call_variants,
     combine_variants,
@@ -229,7 +230,9 @@ def _turn(tables: Tables, before: BattleState, actions, outcome: Outcome):
     refused, observation)``. The learnset scans run first (``advance_learns``: the
     ``TurnEnd`` payout's prompts come before ``ReplaceFainted``, bcp.c:1846-1848); a prompt
     in a battle that goes on stops the child at the learn decision (module docstring),
-    else the opponent's replacement follows as in the playout (``finish_turn``)."""
+    else the opponent's replacement follows as in the playout (``finish_turn``). The fourth
+    result is ``enumerate.call_consistent``: a row of a split Sleep Talk variant whose turn did
+    not meet the variant's assumption is dropped (ruling B5-13)."""
     power_mul = replacement_power_mul(tables, before, actions)
     ai_switched = is_switch(actions[1])
     stepped, events = step_events(tables, before, actions, outcome)
@@ -246,7 +249,8 @@ def _turn(tables: Tables, before: BattleState, actions, outcome: Outcome):
     sent, sent_refused = send_replacements(tables, stepped, ai_switched, power_mul)
     after = _select(prompt, held, sent)
     refused = jnp.where(prompt, held_refused, sent_refused) | (after.exp_refused != 0)
-    return after, refused, observation(events, after)
+    keep = call_consistent(tables, before, actions, outcome, events)
+    return after, refused, observation(events, after), keep
 
 
 def _turns(tables: Tables, states: BattleState, actions, outcomes: Outcome):
@@ -255,15 +259,15 @@ def _turns(tables: Tables, states: BattleState, actions, outcomes: Outcome):
 
 def step_rows(
     tables: Tables, states: BattleState, actions, outcomes: Outcome
-) -> tuple[BattleState, np.ndarray, np.ndarray]:
-    """``(after, refused bool[N], observation int32[N, OBS_SIZE])`` of ``N`` rows of
-    (state, ``int32[2]`` actions, outcome): ``step``, the opponent's replacement and the
-    observation, in one cached program (module docstring)."""
+) -> tuple[BattleState, np.ndarray, np.ndarray, np.ndarray]:
+    """``(after, refused bool[N], observation int32[N, OBS_SIZE], keep bool[N])`` of ``N``
+    rows of (state, ``int32[2]`` actions, outcome): ``step``, the opponent's replacement, the
+    observation and ``enumerate.call_consistent``, in one cached program (module docstring)."""
     actions = np.asarray(actions, np.int32)
-    after, refused, obs = _run(
+    after, refused, obs, keep = _run(
         _turns, "expand_step", tables, (states, actions, outcomes), len(actions)
     )
-    return after, np.asarray(refused, bool), np.asarray(obs, np.int32)
+    return after, np.asarray(refused, bool), np.asarray(obs, np.int32), np.asarray(keep, bool)
 
 
 class _Merger:
@@ -277,11 +281,13 @@ class _Merger:
         self.parts: list[BattleState] = []  # new store rows, per chunk
 
     def add(self, request, states, actions, outcomes, probs) -> None:
-        after, refused, obs = step_rows(self.tables, states, actions, outcomes)
+        after, refused, obs, keep = step_rows(self.tables, states, actions, outcomes)
         n = len(request)
         state_bytes, obs_bytes = row_bytes(after, n), row_bytes(obs, n)
         new = []
         for i in range(n):
+            if not keep[i]:
+                continue
             sk, ok = state_bytes[i].tobytes(), obs_bytes[i].tobytes()
             row = self.rows.get(sk)
             if row is None:

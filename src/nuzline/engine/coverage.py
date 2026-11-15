@@ -79,10 +79,6 @@ items) and plan 1b (Task 2b: trainer items; Task 3: Roark's AI flags) implement:
   holder is refused while any of them is refused as a move of that Pokemon
   (``move_effect_line``), and every per-move check of the fight (the terrain, the Kaizo ROM
   changes, the halved Defense) runs over them too (``fight_calls``);
-* Sleep Talk facing a Disable (``call_disable_line``, ruling B5-3): a Disable that lands before
-  a Sleep Talk user moves can remove a move from the slots its call draws from, in the middle of
-  the turn whose call law (``enumerate.call_laws``, ``outcome.sample_outcome``) reads them at
-  the turn start; refused when one party has a Sleep Talk user and the other can Disable it;
 * in-battle form changes (plan K2a Ruling 8), on either side: Giratina-Origin without the
   Griseous Orb reverts to Altered Forme at battle start (``battle_lib.c:6412-6417``,
   ``subscript_form_change``) and Shaymin-Sky reverts to Land Forme when frozen
@@ -707,56 +703,6 @@ def fight_calls(tables: Tables, party: Sequence[PokemonSpec]) -> list[int]:
     return sorted(out)
 
 
-def _can_disable(tables: Tables, movesets: Sequence[Sequence[int]], both) -> bool:
-    """A Pokemon with one of ``movesets`` can Disable a foe: a Disable move, a Metronome that can
-    call one, or a Copycat while a Disable move is in the fight (``both``: every move of both
-    parties)."""
-    effect = np.asarray(tables.move_effect)
-    disable_in_fight = any(m and int(effect[m]) == EffectId.DISABLE for m in both)
-    for moves in movesets:
-        kinds = {int(effect[m]) for m in moves if m}
-        if EffectId.DISABLE in kinds:
-            return True
-        if EffectId.COPYCAT in kinds and disable_in_fight:
-            return True
-        calls = [
-            m
-            for m in range(1, METRONOME_DRAW + 1)
-            if m not in moves and not np.asarray(tables.move_flags)[m] & MoveFlag.NO_METRONOME
-        ]
-        if EffectId.METRONOME in kinds and any(int(effect[m]) == EffectId.DISABLE for m in calls):
-            return True
-    return False
-
-
-def call_disable_line(
-    tables: Tables,
-    player: Sequence[PokemonSpec],
-    opp: Sequence[PokemonSpec],
-    player_extra: Sequence[int] = (),
-) -> str | None:
-    """Why a Sleep Talk user facing a Disable is refused (``coverage`` docstring, ruling B5-3),
-    else None. ``player_extra``: moves the player's Pokemon can learn in the battle (any of them
-    may learn any, over-approximate)."""
-    effect = np.asarray(tables.move_effect)
-
-    def talks(movesets) -> bool:
-        return any(m and int(effect[m]) == EffectId.SLEEP_TALK for ms in movesets for m in ms)
-
-    mine = [[*mon.moves, *player_extra] for mon in player]
-    theirs = [list(mon.moves) for mon in opp]
-    both = [m for ms in (*mine, *theirs) for m in ms if m]
-    if (talks(mine) and _can_disable(tables, theirs, both)) or (
-        talks(theirs) and _can_disable(tables, mine, both)
-    ):
-        return (
-            "Sleep Talk facing a Disable: a Disable landing before the Sleep Talk user moves "
-            "changes the slots its call draws from (battle_script.c:4929, battle_lib.c:2266-2269) "
-            "after the turn's call law was read"
-        )
-    return None
-
-
 def _check_party(
     c: _Collector,
     tables: Tables,
@@ -1095,8 +1041,6 @@ def check_coverage(
     c.report.missing.extend(theirs.missing)
     c.report.sampling_only.extend(theirs.sampling_only)
     c.report.level = min(c.report.level, theirs.level)
-    if (line := call_disable_line(tables, player, opp, extra)) is not None:
-        c.add(Support.NONE, f"{display_name(trainer)}: {line}", "move effect")
     fight_moves = [m for mon in (*player, *opp) for m in mon.moves if m] + extra
     for slot, mon in enumerate(player):
         where = f"Player {names.species_names[mon.species]} (slot {slot})"

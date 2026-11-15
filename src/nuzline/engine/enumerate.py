@@ -1137,7 +1137,16 @@ def outcome_laws(
         call_pending = jnp.any(uses_move & (kinds != CALL_NONE))
     else:
         call = jnp.asarray(call, _I32)
-        moves = used_moves(tables, state, actions, call, copycat & (call == 1))
+        # A Sleep Talk variant that assumes a faster foe's Disable lands (CALL_DISABLED, ruling
+        # B5-13) calls from the set with the user's last move disabled.
+        disabled = (kinds == CALL_SLEEP_TALK) & (call >= CALL_DISABLED)
+        hyp = _disabled_state(state, disabled)
+        after_foe = copycat & (call == 1)
+        moves = jnp.where(
+            disabled,
+            used_moves(tables, hyp, actions, call, after_foe),
+            used_moves(tables, state, actions, call, after_foe),
+        )
         call_pending = jnp.asarray(False)
     foe_moves = uses_move[::-1]  # the other side uses a move
     effect, params = move_effects(tables, state, moves)  # Secret Power's terrain effect
@@ -2412,6 +2421,42 @@ def enumerate_outcomes(laws: OutcomeLaws) -> tuple[Outcome, np.ndarray]:
 # Call values per side: Sleep Talk's 0..SLEEP_TALK_VALUES - 1, Metronome's candidate ranks (at
 # most METRONOME_DRAW), Copycat's two orders.
 CALL_VALUES = METRONOME_DRAW
+# Sleep Talk's call variants when a faster foe's Disable can shrink its set within the turn
+# (ruling B5-13): a value ``u`` in 0..SLEEP_TALK_VALUES - 1 is unsplit; ``u + CALL_KEEP`` assumes
+# the turn-start set (no Disable landed before the move) and ``u + CALL_DISABLED`` the set with the
+# user's last move disabled. ``order.invoked_move`` takes ``call % count`` with ``count`` 1-4, a
+# divisor of both offsets, so ``step`` plays every encoding of ``u`` alike, on the live set;
+# ``call_consistent`` keeps each row in the one variant whose assumption its turn met.
+CALL_KEEP = SLEEP_TALK_VALUES
+CALL_DISABLED = 2 * SLEEP_TALK_VALUES
+
+
+def _disabled_state(state: BattleState, sides) -> BattleState:
+    """``state`` with ``disabled_move = last_move`` on ``sides`` (``bool[2]``): the only set
+    change of Sleep Talk a turn can make. BtlCmd_TryDisable (battle_script.c:4586-4594) disables
+    the defender's movePrevByBattler, only while it has PP and nothing is disabled yet; a Sleep
+    Talk user that moves second has not moved this turn, so the move is its turn-start
+    ``last_move``."""
+    value = jnp.where(sides, state.last_move, state.disabled_move)
+    return state._replace(disabled_move=value.astype(state.disabled_move.dtype))
+
+
+def call_consistent(
+    tables: Tables, state: BattleState, actions, outcome: Outcome, events
+) -> jnp.ndarray:
+    """``bool``: an outcome row of a call variant keeps its weight (ruling B5-13): for each Sleep
+    Talk side whose call is a split variant (``CALL_KEEP`` / ``CALL_DISABLED``), whether a move of
+    it was disabled when its action started (the ``disabled_at_move`` event of ``step_events``
+    on ``state``, ``actions``, ``outcome``) matches the variant. Unsplit rows always keep."""
+    actions = jnp.asarray(actions, _I32)
+    chosen = jnp.stack([selected_move(tables, state, side, actions[side])[0] for side in (0, 1)])
+    talk = (state.over == 0) & ~is_switch(actions) & ~is_item(actions)
+    talk = talk & (call_kind(tables, chosen) == CALL_SLEEP_TALK)
+    call = jnp.asarray(outcome.call, _I32)
+    split = talk & (call >= CALL_KEEP)
+    want = call >= CALL_DISABLED
+    seen = jnp.asarray(events["disabled_at_move"]) != 0
+    return jnp.all(~split | (seen == want))
 
 
 class CallLaws(NamedTuple):
@@ -2421,6 +2466,9 @@ class CallLaws(NamedTuple):
     kind: jnp.ndarray  # int32[2]: order.CALL_*, CALL_NONE when nothing is drawn
     weight: jnp.ndarray  # int32[2, CALL_VALUES]: the integer weight of each call value
     called: jnp.ndarray  # int32[2, CALL_VALUES]: the move each value calls (0: the call fails)
+    # int32[2, CALL_VALUES]: Sleep Talk's call of each value from the set a faster foe's Disable
+    # can leave (``_disabled_state``, ruling B5-13); ``called`` where no such set can arise.
+    alt: jnp.ndarray
 
 
 def call_laws(tables: Tables, state: BattleState, actions) -> CallLaws:
@@ -2429,9 +2477,9 @@ def call_laws(tables: Tables, state: BattleState, actions) -> CallLaws:
 
     * Sleep Talk: every value 0..``SLEEP_TALK_VALUES`` - 1 weighs 1 (BtlCmd_TrySleepTalk's
       uniform redraw, battle_script.c:4931-4933; ``order.invoked_move`` takes the allowed slot
-      ``value % count``). Its allowed set is the turn-start one: a faster foe's Disable is the
-      only implemented mechanic that changes it within the turn, and a Disable reachable against
-      a Sleep Talk user is refused (``coverage.call_disable_line``, ruling B5-3). Drawn only
+      ``value % count``), from the turn-start set; ``alt`` from the set a faster foe's Disable can
+      leave (the only implemented change of it within the turn, ruling B5-13), possible while
+      nothing is disabled, the user has a last move and its foe uses a move. Drawn only
       when it can be read: the user sleeps at the start, or its foe uses an invoker or a move
       that can put it to sleep (over-approximate);
     * Metronome: each candidate rank weighs ``order.metronome_weights`` (141 or 140 of 65536):
@@ -2452,13 +2500,23 @@ def call_laws(tables: Tables, state: BattleState, actions) -> CallLaws:
     )
     kinds = jnp.where((kinds == CALL_SLEEP_TALK) & ~sleeps & ~put_to_sleep, CALL_NONE, kinds)
     values = jnp.arange(CALL_VALUES, dtype=_I32)
-    weights, called = [], []
+    can_split = (
+        (kinds == CALL_SLEEP_TALK)
+        & (state.disabled_move == 0)
+        & (state.last_move != 0)
+        & uses_move[::-1]
+    )
+    weights, called, alts = [], [], []
     for side in (0, 1):
         foe = 1 - side
         talk_w = (values < SLEEP_TALK_VALUES).astype(_I32)
         talk = jax.vmap(lambda v, side=side: invoked_move(tables, state, side, chosen[side], v))(
             values
         )
+        hyp = _disabled_state(state, jnp.arange(2) == side)
+        alt = jax.vmap(
+            lambda v, side=side, hyp=hyp: invoked_move(tables, hyp, side, chosen[side], v)
+        )(values)
         metro_all = metronome_weights(tables, state, side)
         cands = metro_all > 0
         n = jnp.sum(cands.astype(_I32))
@@ -2500,25 +2558,42 @@ def call_laws(tables: Tables, state: BattleState, actions) -> CallLaws:
                 ),
             )
         )
-    return CallLaws(kind=kinds.astype(_I32), weight=jnp.stack(weights), called=jnp.stack(called))
+        alts.append(jnp.where(can_split[side], alt, called[-1]))
+    return CallLaws(
+        kind=kinds.astype(_I32),
+        weight=jnp.stack(weights),
+        called=jnp.stack(called),
+        alt=jnp.stack(alts),
+    )
 
 
 def call_variants(laws: CallLaws) -> list[tuple[np.ndarray, int, int]]:
     """``(call int32[2], numerator, denominator)`` per call variant of one (unbatched) row of
     ``call_laws``: the product of each side's values grouped by the move they call (one
-    representative value per move, the smallest, with the group's summed weight). Copycat's
+    representative value per move, the smallest, with the group's summed weight). A Sleep Talk
+    group whose values call another move from the Disable-shrunk set (``CallLaws.alt``) is two
+    variants of the same weight, ``CALL_KEEP`` and ``CALL_DISABLED`` (ruling B5-13): their rows
+    are kept only where the turn met the variant's assumption (``call_consistent``). Copycat's
     orders are not a chance: each has weight 1 / 1 and its laws keep only the branches that
     agree with it, so the variants' rows still sum to 1."""
     laws = jax.tree.map(np.asarray, laws)
     per_side = []
     for side in (0, 1):
         weight, called, kind = laws.weight[side], laws.called[side], int(laws.kind[side])
+        alt = laws.alt[side]
         if kind in (CALL_SLEEP_TALK, CALL_METRONOME):
-            groups: dict[int, list[int]] = {}
+            groups: dict[tuple[int, int], list[int]] = {}
             for v in np.flatnonzero(weight):
-                groups.setdefault(int(called[v]), [int(v), 0])[1] += int(weight[v])
+                key = (int(called[v]), int(alt[v]))
+                groups.setdefault(key, [int(v), 0])[1] += int(weight[v])
             den = int(weight.sum())
-            per_side.append([(v, w, den) for v, w in groups.values()])
+            out = []
+            for (move, other), (v, w) in groups.items():
+                if move == other:
+                    out.append((v, w, den))
+                else:
+                    out += [(v + CALL_KEEP, w, den), (v + CALL_DISABLED, w, den)]
+            per_side.append(out)
         elif kind == CALL_COPYCAT:
             per_side.append([(int(v), 1, 1) for v in np.flatnonzero(weight)])
         else:
@@ -2559,10 +2634,32 @@ _jit_laws = jax.jit(outcome_laws)
 def enumerate_turn(tables: Tables, state: BattleState, actions) -> tuple[Outcome, np.ndarray]:
     """``enumerate_outcomes`` over every call variant (``call_variants``) of one state and action
     pair: the turn's full enumeration whatever the invokers draw, the ``Outcome.call`` of each
-    row its variant's value. Raises ``SamplingOnly`` above ``WIDTH_CAP`` rows in all."""
+    row its variant's value. Raises ``SamplingOnly`` above ``WIDTH_CAP`` rows in all. Split Sleep
+    Talk variants (ruling B5-13) are played (``step.turn_events``) and each row is kept only where
+    ``call_consistent``."""
     actions = jnp.asarray(actions, _I32)
     parts = []
-    for call, num, den in call_variants(_jit_call_laws(tables, state, actions)):
+    cl = _jit_call_laws(tables, state, actions)
+    talks = np.asarray(cl.kind) == CALL_SLEEP_TALK
+    split = False
+    for call, num, den in call_variants(cl):
         outcomes, probs = enumerate_outcomes(_jit_laws(tables, state, actions, jnp.asarray(call)))
         parts.append((outcomes, probs, num, den))
-    return combine_variants(parts)
+        split = split or bool(np.any(talks & (call >= CALL_KEEP)))
+    outcomes, probs = combine_variants(parts)
+    if split:
+        keep = np.asarray(_jit_keep()(tables, state, actions, outcomes))
+        outcomes = jax.tree.map(lambda f: np.asarray(f)[keep], outcomes)
+        probs = probs[keep]
+    return outcomes, probs
+
+
+@cache
+def _jit_keep():
+    from nuzline.engine.step import turn_events  # step imports this module's peers only
+
+    def keep(tables, state, actions, outcome):
+        events = turn_events(tables, state, actions, outcome)
+        return call_consistent(tables, state, actions, outcome, events)
+
+    return jax.jit(jax.vmap(keep, in_axes=(None, None, None, 0)))

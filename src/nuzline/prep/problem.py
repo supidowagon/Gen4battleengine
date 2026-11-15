@@ -22,7 +22,6 @@ from nuzline.engine.coverage import (
     IMPLEMENTED_EFFECTS,
     IMPLEMENTED_ITEMS,
     Support,
-    call_disable_line,
     exp_refusals,
     ghost_curse,
     halved_by_line,
@@ -231,7 +230,6 @@ def usable_pool(
         for line in (
             weather_war_line(tables, [spec], opp),
             trace_standoff_line(tables, [spec], opp),
-            call_disable_line(tables, [spec], opp),
             trace_ai_line(tables, [spec]),
         ):
             if line is not None:

@@ -514,6 +514,7 @@ def _empty_events() -> dict:
             "spec_from",
             "last_from",
             "move_failed",
+            "disabled_at_move",
             *EVENT_FLAGS,
         )
     }
@@ -592,6 +593,9 @@ def _use_move(
     target_side = 1 - side
     target = state.active[target_side]
     ready = (state.over == 0) & (state.hp[side, user] > 0)
+    # A move of the battler is disabled when its action starts (a faster foe's Disable this turn
+    # included): the event the Sleep Talk call variants split on (enumerate.call_consistent).
+    disabled_at_move = ready & (state.disabled_move[side] != 0)
     # BattleControllerPlayer_FightCommand (battle_controller_player.c:1900) fixes the
     # defender before the status checks: the foe when it is alive (any HP for
     # RANGE_OPPONENT_SIDE: BattleSystem_RandomOpponent), the user for a self-defender range
@@ -1238,6 +1242,7 @@ def _use_move(
         "in_love": in_love,
         "immobilized": immobilized,
         "move_failed": move_failed,
+        "disabled_at_move": disabled_at_move,
     }
     foe = {
         "contact_ability": contact,
