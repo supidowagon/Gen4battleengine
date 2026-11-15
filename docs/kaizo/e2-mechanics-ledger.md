@@ -14,6 +14,9 @@
   test follow-ups: U-turn / Baton Pass damage classes, the turn-end order test's
   `uproar_disable`), and this ledger commit. The second family (E1's six fields with Curse
   (Ghost), Perish Song, Yawn, Lock-On, Mind Reader) was not started: Owed.
+- After batch 7: ceb971c (B7-12, the divergence), 60aba75 (review follow-ups B7-13..B7-17),
+  de44007 (the AI switch gate, B7-18, with the manager's go). Next: E1's six fields with Curse
+  (Ghost), Perish Song, Yawn, Lock-On / Mind Reader (Owed), not started.
 - Fixed after batch 7 (B7-12): the differential divergence found at f22b818 (a switch replaying
   on the newcomer), from 470fbef (batch 6's pause loop); the JAX engine was wrong.
   Also pre-existing at f22b818: tests/prep/test_variants.py `test_ai_hp_checks_pinned` /
