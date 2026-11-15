@@ -1140,7 +1140,8 @@ The user chose one transcription in two program shapes (`ai.layout` module docst
   - The exact entry points refuse `ALLIN` with a `ValueError`.
 - **The sampled AI can run `ALLIN`, one program for every Kaizo fight.** `ALLIN` is used by `sample_ai_outcome` and `ai_policy`.
   - It carries every transcribed flag bit and effect, and the bound `ALLIN_READS`: the largest row sum of `read_bounds.READ_BOUNDS`, which no fight's path under any of its flags passes.
-  - The trainer's flags are read at run time from `tables.ai_flags`. `_run_flags` runs each flag script and keeps its result only when the bit is set (`trainer_ai.c:297-308` runs a set bit's script only).
+  - The trainer's flags are read at run time: `layout.thinking_mask`, the trainer's `tables.ai_flags` plus TAG_STRATEGY in a doubles battle (`trainer_ai.c:245-255`).
+  - A loop takes `ALLIN` only once its player and its opponent take separate layouts. Today's `playout`, `GREEDY` and `LINE` players read the exact distribution, so they stay per fight; a fixed or learned player does not. `_run_flags` runs each flag script and keeps its result only when the bit is set (`trainer_ai.c:297-308` runs a set bit's script only).
   - Otherwise it restores every context field the script could write, `reads`, `weight` and `missing_read` among them. So a masked script consumes no random read, and the next script's reads take the same `script_rolls[slot, k]` as in the fight's own layout (8.2).
 - **Draws do not depend on the read bound.** `sample_ai_outcome` draws read column `i` from `fold_in(key, i)`, so one key gives both shapes the same reads.
 - **Refusals under `ALLIN`.**

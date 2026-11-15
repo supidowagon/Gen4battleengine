@@ -14,6 +14,7 @@ import numpy as np
 import pytest
 
 from nuzline.ai import policy
+from nuzline.ai.commands import AiContext
 from nuzline.ai.layout import (
     ALLIN,
     ALLIN_READS,
@@ -26,6 +27,7 @@ from nuzline.ai.layout import (
 from nuzline.ai.outcome import sample_ai_outcome
 from nuzline.ai.read_bounds import READ_BOUND_BITS
 from nuzline.data.games import GAMES, KAIZO
+from nuzline.data.tables import BATTLE_TYPES
 from nuzline.data.trainer import IntermediateData, build_trainer_party, load_trainers
 from nuzline.engine.state import make_state
 
@@ -83,40 +85,65 @@ def _fight(kaizo_tables, trainer, party, seed: int):
     return t, states, keys
 
 
-def _program(layout):
-    """A jitted program over a fight's batch (``lax.map``, not ``vmap``: the unbatched
-    program compiles in a fraction of the memory): per (state, key), the sampled opponent
-    action and the scoring context fields a flag script writes (scores, read counts, path
-    weights, missing-read code), from the same sampled outcome."""
+# The AiContext fields compared (every field a flag script can write; not the inputs, nor the
+# loose oracle's draws, None outside the oracle).
+CONTEXT_FIELDS = tuple(
+    f for f in AiContext._fields if f not in {"tables", "state", "outcome", "loose"}
+)
 
-    def one(t, s, k):
-        # ai_policy's own program (_policy), with the context it scored (one scoring).
+
+def _program(layout):
+    """A jitted program over a batch of rows, each with its own fight flags and moves
+    (``Tables.ai_flags``, ``ai_moves``) on otherwise shared tables (``lax.map``, not
+    ``vmap``: the unbatched program compiles in a fraction of the memory): per row, the
+    sampled opponent action and the scoring context (``CONTEXT_FIELDS``), from one sampled
+    outcome and one scoring (``policy._policy_and_context``, ``ai_policy``'s program)."""
+
+    def one(t, s, k, flags, moves):
+        t = t._replace(ai_flags=flags, ai_moves=moves)
         o = sample_ai_outcome(k, t, s, layout)
         action, ctx = policy._policy_and_context(t, s, o, layout)
-        return action, (ctx.scores, ctx.reads, ctx.weight, ctx.missing_read)
+        return action, {f: getattr(ctx, f) for f in CONTEXT_FIELDS}
 
-    return jax.jit(lambda t, states, keys: jax.lax.map(lambda x: one(t, *x), (states, keys)))
+    return jax.jit(lambda t, rows: jax.lax.map(lambda x: one(t, *x), rows))
+
+
+def _rows(t, states, keys):
+    n = len(keys)
+    flags = jnp.full((n,), t.ai_flags, jnp.int32)
+    moves = jnp.broadcast_to(jnp.asarray(t.ai_moves), (n, *np.shape(t.ai_moves)))
+    return states, keys, flags, moves
 
 
 def _runs(kaizo_tables, fights, flag_sets, seed0: int) -> dict:
-    """``{flags: (own, allin)}``, each ``(actions, context fields)`` on the fight's batch
-    (``_fight``). ALLIN's one program serves every fight (its tables are traced); each program
-    is dropped after its use, so one compiled program is resident at a time."""
+    """``{flags: (own, allin)}``, each ``(actions, context)`` on the fight's batch
+    (``_fight``). The fight's own layouts run fight by fight, each program dropped after its
+    use. ALLIN runs once over every fight's rows together, each row with its own fight's
+    flags and moves: one cross-fight batch, and one compiled program (asserted)."""
     batches = {f: _fight(kaizo_tables, *fights[f], seed0 + i) for i, f in enumerate(flag_sets)}
-
-    def run(layout_of_fight):
-        out, programs = {}, {}
-        for f, (t, states, keys) in batches.items():
-            lay = layout_of_fight(t)
-            if lay.key not in programs:
-                programs = {lay.key: _program(lay)}  # drops the last one
-                gc.collect()
-            out[f] = jax.device_get(programs[lay.key](t, states, keys))
-        return out
-
-    allin = run(lambda t: ALLIN)
-    own = run(layout_of)
-    return {f: (own[f], allin[f]) for f in flag_sets}
+    own = {}
+    for f, (t, states, keys) in batches.items():
+        program = _program(layout_of(t))
+        own[f] = jax.device_get(program(t, _rows(t, states, keys)))
+        del program
+        gc.collect()
+    parts = [_rows(t, states, keys) for t, states, keys in batches.values()]
+    rows = jax.tree.map(lambda *xs: jnp.concatenate(xs), *parts)
+    program = _program(ALLIN)
+    t0 = next(iter(batches.values()))[0]  # every fight's tables but ai_flags and ai_moves
+    acts, ctx = jax.device_get(program(t0, rows))
+    assert program._cache_size() == 1
+    out, start = {}, 0
+    for f, part in zip(batches, parts, strict=True):
+        n = len(part[1])
+        out[f] = (
+            own[f],
+            (acts[start : start + n], {k: v[start : start + n] for k, v in ctx.items()}),
+        )
+        start += n
+    del program
+    gc.collect()
+    return out
 
 
 def _fast_sets(fights) -> list[int]:
@@ -164,16 +191,15 @@ def test_allin_picks_the_fights_own_action_for_every_flag_set(kaizo_tables, figh
 
 
 def test_a_masked_flag_script_consumes_no_read(kaizo_tables, fights, cover_runs):
-    # The all-in scoring leaves exactly the fight's own read counts, path weights, scores and
-    # missing-read code. The masked scripts have reads to consume: some of the fight's moves
+    # The all-in scoring leaves exactly the fight's own scoring context: read counts, path
+    # weights, scores, missing-read code, calcTemp and every other field a script writes. The masked scripts have reads to consume: some of the fight's moves
     # read under a flag it lacks (read_bounds.READ_BOUNDS, the most reads each flag's script
     # makes on a move's path).
     masked_reads = 0
     for flags, ((_, want), (_, got)) in cover_runs.items():
         trainer, party = fights[flags]
-        names = ("scores", "reads", "weight", "missing_read")
-        for name, a, b in zip(names, want, got, strict=True):
-            assert np.array_equal(a, b), (trainer.name, f"{flags:#x}", name)
+        for name in CONTEXT_FIELDS:
+            assert np.array_equal(want[name], got[name]), (trainer.name, f"{flags:#x}", name)
         rows = move_read_rows(kaizo_tables, [m for spec in party for m in spec.moves])
         off = [col for col, bit in enumerate(READ_BOUND_BITS) if not flags >> bit & 1]
         masked_reads += int(rows[:, off].sum())
@@ -216,11 +242,14 @@ def test_the_exact_distribution_refuses_allin(kaizo_tables, fights):
             exact(t, s, ALLIN)
 
 
-@pytest.mark.parametrize("flags", [-1, 0x40 | 0x7])
-def test_allin_refuses_unset_or_untranscribed_flags(kaizo_tables, fights, flags):
+@pytest.mark.parametrize("flags, doubles", [(-1, False), (0x40 | 0x7, False), (0x7, True)])
+def test_allin_refuses_unset_or_untranscribed_flags(kaizo_tables, fights, flags, doubles):
+    # A doubles battle adds TAG_STRATEGY to the mask (trainer_ai.c:253-254), not transcribed.
     trainer, party = fights[min(fights)]
     t, states, _ = _fight(kaizo_tables, trainer, party, seed=5)
     t = t._replace(ai_flags=np.int32(flags))
+    if doubles:
+        t = t._replace(battle_type=BATTLE_TYPES["double"])
     s = jax.tree.map(lambda x: x[0], states)
     assert any("AI flags" in r for r in policy.ai_refusals(t, s, layout=ALLIN))
     # Traced, _policy gives REFUSED_ACTION on _Refused.any, which the policy refusal sets.

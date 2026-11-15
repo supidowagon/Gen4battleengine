@@ -72,6 +72,7 @@ from nuzline.ai.layout import (
     WEATHER,
     AiLayout,
     layout_of,
+    thinking_mask,
 )
 from nuzline.ai.outcome import (
     ABILITY_GUESSES,
@@ -2452,8 +2453,8 @@ def _refused(tables: Tables, state: BattleState, layout: AiLayout = VANILLA) -> 
     expert = present[1][:, None] & (moves[1] != 0) & ~move & ~ghost_curse
     if layout.per_slot_sites and pending and layout.runs(EXPERT):
         expert = expert & jnp.isin(effects, jnp.array(pending, _I32))
-        if layout.runtime_flags:  # the fight's own EXPERT bit
-            expert = expert & ((tables.ai_flags >> EXPERT) & 1 == 1)
+        if layout.runtime_flags:  # the battler's own EXPERT bit
+            expert = expert & ((thinking_mask(tables) >> EXPERT) & 1 == 1)
     else:
         expert = jnp.zeros_like(expert)
     known = present[1][:, None] & (moves[1] != 0)
@@ -2461,8 +2462,10 @@ def _refused(tables: Tables, state: BattleState, layout: AiLayout = VANILLA) -> 
     move_type = known & jnp.isin(moves[1], jnp.array(c.MOVE_TYPE_MOVES, _I32))
     policy = tables.ai_policy != AI_POLICIES.index(layout.name)
     if layout.runtime_flags:
-        # The fight's flags must be set and transcribed (kaizo_layout refuses another set).
-        policy = policy | (tables.ai_flags < 0) | ((tables.ai_flags & ~layout.flags) != 0)
+        # The fight's flags must be set and transcribed (kaizo_layout refuses another set);
+        # a doubles battle adds TAG_STRATEGY (thinking_mask), which is not transcribed.
+        mask = thinking_mask(tables)
+        policy = policy | (tables.ai_flags < 0) | ((mask & ~layout.flags) != 0)
     if layout.per_slot_sites:  # reads by order, bounded per path (missing_read)
         sites = jnp.zeros_like(present[1])
     else:
@@ -2536,8 +2539,12 @@ def opponent_move_refusals(
     if ghost and effect == BattleEffect.CURSE:
         out.append("ghost curse")
     pending = set(KAIZO_EXPERT_LABELS) - layout.expert_transcribed
-    expert_runs = layout.fight_flags(tables) >> EXPERT & 1
-    if layout.per_slot_sites and expert_runs and effect in pending and not out:
+    if (
+        layout.per_slot_sites
+        and effect in pending
+        and not out
+        and layout.fight_flags(tables) >> EXPERT & 1
+    ):
         out.append("expert label")
     if move in c.CALC_DAMAGE_MOVES:
         out.append("calc damage")
@@ -2777,7 +2784,8 @@ def _run_flags(ctx: AiContext, layout: AiLayout, flags: tuple | None = None) -> 
 
     A ``runtime_flags`` layout (``layout.ALLIN``) runs every script it traces and keeps its
     result only when the fight's ``tables.ai_flags`` has the script's bit (trainer_ai.c:297-308
-    runs a set bit's script only); otherwise every field the script could write is restored
+    runs a set bit's script only), the battler's ``layout.thinking_mask``; otherwise every
+    field the script could write is restored
     (``_keep_if``), the read counts and path weights of ``commands._slot_read`` among them,
     so a masked script consumes no random read and the next script's reads take the same
     draws as in the fight's own layout (E1 Ruling R4)."""
@@ -2795,7 +2803,7 @@ def _run_flags(ctx: AiContext, layout: AiLayout, flags: tuple | None = None) -> 
 
         ran = jax.lax.fori_loop(0, MOVES, eval_slot, ctx)
         if layout.runtime_flags and bit is not None:
-            ran = _keep_if((ctx.tables.ai_flags >> bit) & 1 == 1, ran, ctx)
+            ran = _keep_if((thinking_mask(ctx.tables) >> bit) & 1 == 1, ran, ctx)
         ctx = ran
     return ctx
 
@@ -3196,7 +3204,9 @@ def ai_path_refusals(
 
 
 def _raise_path_refusal(tables: Tables, state: BattleState, layout: AiLayout) -> None:
-    found = ai_path_refusals(tables, state, layout=layout)
+    # ai_path_refusals replays every read pattern (2**slot_reads), per fight only; ALLIN's
+    # bound is no fight's path's (ALLIN_READS), so it names none.
+    found = [] if layout.runtime_flags else ai_path_refusals(tables, state, layout=layout)
     raise UnsupportedAi("; ".join(found) or _PATH_REFUSAL)
 
 
