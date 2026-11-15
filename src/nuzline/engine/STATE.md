@@ -160,9 +160,8 @@ three structs has a row.
   turn flag read only by Destiny Knot, an unsupported item) stays a local.
 - **Curse, Perish Song, Yawn, Lock-On -> `curse`, `perish_song`, `perish_song_turns`, `yawn`,
   `lock_on`, `lock_on_target`** (E1 batch 12): per battler, defined with the decomp's meaning
-  so the trainer AI reads them (`Expert_Protect`, `script.s:3544-3586`). Nothing sets them
-  yet: E2 builds Curse, Perish Song, Yawn and Lock-On / Mind Reader on them (coverage refuses
-  those moves until then). `curse` is `VOLATILE_CONDITION_CURSE`
+  so the trainer AI reads them (`Expert_Protect`, `script.s:3544-3586`), set by E2 batch 8's
+  Curse (Ghost user), Perish Song, Yawn and Lock-On / Mind Reader (B8-1..B8-5). `curse` is `VOLATILE_CONDITION_CURSE`
   (`include/constants/battle/condition.h:60`), 0/1. `perish_song` is
   `MOVE_EFFECT_PERISH_SONG` (`include/constants/battle/moves.h:13`), 0/1, and
   `perish_song_turns` is `MoveEffectsData.perishSongTurns` (`include/battle/battle_mon.h:14`),
@@ -172,11 +171,13 @@ three structs has a row.
   `MOVE_EFFECT_LOCK_ON` counter (`moves.h:11-12`, `:41`), 0 = none, on the battler locked
   onto (Lock-On sets it on its target, `subscript_lock_on.s`), and `lock_on_target` is that
   battler's `MoveEffectsData.lockOnTarget` (`battle_mon.h:23`), the battler that locked on,
-  as `1 + battler`, 0 = none (doubles convention 3). Their clearing is for the moves' work, not modelled yet: a switch-out or
-  faint clears the battler's volatiles and move-effect bits except what Baton Pass keeps
-  (`MOVE_EFFECT_BATON_PASSED` keeps Lock-On and Perish Song, `moves.h:44-46`), and the Lock-On
-  bit of another battler that the leaving battler had locked onto (that battler's
-  `lockOnTarget` is the leaving one, `battle_lib.c:2063-2083`).
+  as `1 + battler`, 0 = none (doubles convention 3). A switch-out or faint clears the
+  battler's own (volatiles); Baton Pass keeps Curse (`condition.h:72-76`), Lock-On and Perish
+  Song (`moves.h:46-48`, `battle_lib.c:2109-2110`); the Lock-On of another battler that the
+  leaving one locked onto is cleared by its switch, restarted by its Baton Pass
+  (`battle_lib.c:2063-2085`) and kept through its faint (B8-2). Their turn-end checks:
+  Curse (bcp.c:1451, with Burn), Lock-On (:1618, with Uproar / Disable), Yawn (:1684, with
+  Taunt), Perish Song in the side-condition pass (:1791).
 - **speedRand -> `qc_roll`** (K3b2 Task 8; docs/kaizo/k3b2-rules.md §5, §12):
   `speedRand[battler]` is one `RandNext()` per battler slot, drawn at battle start
   (`BattleContext_InitCounters`, `src/battle/battle_lib.c:2019-2025`) and in each turn's

@@ -58,10 +58,10 @@ Encodings:
   ``SIDE_CONDITION_FUTURE_SIGHT`` bit: set with them, cleared only when the hit fires on a
   battler with HP (bcp.c:1767-1770), so it can outlive the timer (the AI reads it).
 * ``curse``, ``perish_song``/``perish_song_turns``, ``yawn`` and ``lock_on``/
-  ``lock_on_target`` are the active battler's decomp state, defined now so the trainer AI
-  reads them (``Expert_Protect``, script.s:3544-3586); nothing sets them yet (the moves are
-  refused by coverage until E2 models Curse, Perish Song, Yawn and Lock-On / Mind Reader on
-  these fields). ``curse`` is ``VOLATILE_CONDITION_CURSE`` (condition.h:60), 0/1;
+  ``lock_on_target`` are the active battler's decomp state, which the trainer AI reads
+  (``Expert_Protect``, script.s:3544-3586) and E2 batch 8 sets with Curse by a Ghost user,
+  Perish Song, Yawn and Lock-On / Mind Reader (rulings B8-1..B8-5); all are volatiles, Baton
+  Pass keeping ``curse``, the Perish Song pair and the Lock-On pair. ``curse`` is ``VOLATILE_CONDITION_CURSE`` (condition.h:60), 0/1;
   ``perish_song`` is ``MOVE_EFFECT_PERISH_SONG`` (moves.h:13), 0/1, and
   ``perish_song_turns`` is ``MoveEffectsData.perishSongTurns`` (battle_mon.h:14), the
   counter that is still live at 0 (the battler faints at the turn end that finds it 0,

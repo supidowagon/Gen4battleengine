@@ -16,7 +16,12 @@
   (Ghost), Perish Song, Yawn, Lock-On, Mind Reader) was not started: Owed.
 - After batch 7: ceb971c (B7-12, the divergence), 60aba75 (review follow-ups B7-13..B7-17),
   de44007 (the AI switch gate, B7-18, with the manager's go). Next: E1's six fields with Curse
-  (Ghost), Perish Song, Yawn, Lock-On / Mind Reader (Owed), not started.
+  (Ghost), Perish Song, Yawn, Lock-On / Mind Reader: done in batch 8 (below).
+- Batch 8 (B8-1..B8-5): 651bff4 (Lock-On / Mind Reader), 208e996 (Perish Song), ecd1a4f (Yawn),
+  cbfcce1 (Curse by a Ghost user), ffa0766 (the opponent-legality test invariant:
+  tests/ai_legality.py; first run over the playout, replacement and policy tests and the
+  property: no violation), and the ledger commit. Backlog regenerated: Metronome's unmodelled
+  callable moves 123 -> 115; no other entry (no Roark-split trainer uses these moves).
 - Fixed after batch 7 (B7-12): the differential divergence found at f22b818 (a switch replaying
   on the newcomer), from 470fbef (batch 6's pause loop); the JAX engine was wrong.
   Also pre-existing at f22b818: tests/prep/test_variants.py `test_ai_hp_checks_pinned` /
@@ -84,6 +89,8 @@ the `step` turn skeleton and `enumerate.py`'s branch structure stay as they are.
 6. The mid-turn switch decision: U-turn, Baton Pass (B6-n).
 7. The state the AI reads: `ai_item_known`, Ingrain, Mean Look / Block / Spider Web, Imprison,
    `roosting` (B7-n).
+8. The moves behind the AI's six fields: Lock-On / Mind Reader, Perish Song, Yawn, Curse by a
+   Ghost user (B8-n); the opponent-legality test invariant.
 
 ## Batch 6 design: mid-turn switch decision (U-turn, Baton Pass)
 
@@ -224,15 +231,15 @@ Rules left out because another mechanic is missing; each closes with the mechani
   `AICmd_LoadHeldItemEffect` (trainer_ai.c:1907-1910) reads `battlerHeldItems` for any battler
   but the AI's own, so in doubles it also reads the AI partner's record (and `IfHeldItemEqualTo`,
   :1924-1928, the other side's). The doubles milestone keeps it per battler on both sides.
-- E1's per-battler int8 fields (merged from main at 23e10f0; zero at battle
-  start, no behaviour yet; the AI reads them, `ai.commands._VOLATILE_FIELDS` /
-  `_MOVE_EFFECT_FIELDS`): `curse` (VOLATILE_CONDITION_CURSE,
-  condition.h:60), `perish_song` (MOVE_EFFECT_PERISH_SONG, moves.h:13), `perish_song_turns`
-  (perishSongTurns, battle_mon.h:14; the battler faints at the turn end that finds it at 0,
-  bcp.c:1801), `yawn` (two-bit counter, moves.h:19-20), `lock_on` (two-bit counter, moves.h:11-12),
-  `lock_on_target` (lockOnTarget, battle_mon.h:23, as 1 + battler). Owed here when those moves are
-  modelled: setting the fields, their end-of-turn behaviour and the clear-on-switch rules
-  (battle_lib.c:2063-2080), on E1's fields (no fields of our own; citations to verify then).
+- AI owner (E1), batch 8: `curse`, `perish_song` / `perish_song_turns`, `yawn`, `lock_on` /
+  `lock_on_target` are now set (B8-1..B8-5), with the turn-end checks and the leave rules; the AI
+  scripts of the moves (Lock-On, Perish Song, Yawn, Ghost Curse) are E1's. New Outcome field
+  `yawn_sleep` (the turn-end sleep's Random 3, 2; `ai.outcome` is untouched). Lock-On makes the
+  locker's next moves skip the miss in the engine's hit laws (`outcome._rate`): the AI's own
+  accuracy reads are E1's. `coverage.ghost_curse` is gone (the AI's own Ghost Curse refusal in
+  `ai.policy` stays E1's).
+- Lock-On's lock survives its locker's faint (CleanupFaintedMon has no Lock-On loop) and the
+  slot's replacement inherits it (B8-2): `MON_IS_LOCKED_ONTO` compares battler slots.
 - AI owner (E1): Copycat's AI move-effect script (#242: Basic_CheckCopycat / Expert_Copycat) is
   untranscribed (the backlog's AI entry); the engine side is B5-1. The battle's movePrev is
   `BattleState.move_prev`; trainer_ai.c reads only movePrevByBattler (`last_move`). (Sleep Talk
@@ -1018,3 +1025,42 @@ Rules left out because another mechanic is missing; each closes with the mechani
   to -1 (`spend`), a Choice-locked holder's other move runs; Disable, Taunt and Imprison are
   still caught at their status checks (bcp.c:2543-2583), as for a faster foe's this turn. The
   player's actions are checked by the search (`legal_actions`, `decision_actions`).
+- B8-1 Lock-On / Mind Reader (effect 94, effect_script_0094.s: a direct `CHECK_HP |
+  TO_DEFENDER` subscript_lock_on.s): a living defender without a substitute gets its
+  MOVE_EFFECT_LOCK_ON count set to 2 and lockOnTarget = the attacker (:5-9, `OPCODE_SET`, whatever
+  it had); a substitute fails it (:6, :33). `MON_IS_LOCKED_ONTO(attacker, defender)`
+  (include/battle/common.h:51) clears a miss beside No Guard (bcp.c:3016-3018), in TryOHKOMove's
+  bypass (battle_script.c:4343-4361) and at the Future Sight hit (`outcome._rate`, both engines);
+  `MON_COND_CHECK_STATE_LOCK_ON` drops the count at each turn end (bcp.c:1618-1624), so a lock
+  set this turn serves the locker's move of the next.
+- B8-2 Lock-On's leave rules: the locked battler's own count and target are volatile, Baton
+  Pass keeping both (moves.h:46, battle_lib.c:2109); when the locker leaves by a switch the lock
+  on it ends (battle_lib.c:2063-2067), by Baton Pass it restarts at the initial count
+  (:2077-2085, moves.h:55); its faint leaves it (CleanupFaintedMon, :2156-2205, has no such loop),
+  so the slot's replacement holds it (`step._source_leaves(faint=True)`).
+- B8-3 Perish Song (effect 114, a direct ON_HIT subscript_perish_song_start.s):
+  `BtlCmd_TryPerishSong` (battle_script.c:5465-5487) marks every living battler without the effect
+  (count 3), failing with none (Soundproof is an unsupported ability).
+  `SIDE_COND_CHECK_STATE_PERISH_SONG` (bcp.c:1791-1820), after Future Sight's: a battler found at
+  0 loses the effect and all its HP (subscript_continue_perish_song.s:6-7), else the count
+  drops; the pass's re-entries run only `AnyFainted` (:1749), the battle-over check is TurnEnd's
+  (:1845), so `_future_sight` no longer decides the battle mid-pass (two last Pokemon that faint in
+  the pass: a draw, played as a loss). Volatile, kept by Baton Pass (battle_lib.c:2110).
+  Observation: `perish_count` (1 + the count while up).
+- B8-4 Yawn (effect 187, a direct `CHECK_HP | TO_DEFENDER` subscript_yawn.s): an ignorable
+  Insomnia or Vital Spirit, or Leaf Guard in sun, makes it ineffective and is tagged (:5-9,
+  :25-30); a substitute, an uproar unless Soundproof, any status, Safeguard or a Yawn counting
+  fail it (:14-21); else the count is 2 (`TryYawn`, battle_script.c:6580-6590).
+  `MON_COND_CHECK_STATE_YAWN` (bcp.c:1684-1697) drops it and at 0 runs subscript_fall_asleep.s
+  as a move effect (:4-14): the battler's own (not ignorable) Insomnia / Vital Spirit / sunny
+  Leaf Guard keep it awake (tagged, :_202/_221), a sleeper, an uproar or a status stop it
+  silently, no Safeguard test; else `Random 3, 2` turns (`Outcome.yawn_sleep`, its own draw and
+  law) and the move lock released. Volatile, not kept by Baton Pass.
+- B8-5 Curse by a Ghost user (effect 109's Ghost branch, effect_script_0109.s:9-17): its
+  defender is the foe (`effects.ghost_user` through `targets_user` / `self_defender` /
+  `defender_always`, both engines); subscript_curse_ghost.s fails behind a substitute or on a
+  cursed foe (:3-4, :18-20), else curses the foe and costs the user Divide(maxHP, 2) through
+  UPDATE_HP (:6-12; it can faint). Curse has no MOVE_FLAG_CAN_PROTECT (res/moves/curse/
+  data.json): Protect never stops it. `MON_COND_CHECK_STATE_CURSE` (bcp.c:1451-1459, after Burn):
+  Divide(maxHP, 4) unless Magic Guard (subscript_curse_damage.s). Volatile, kept by Baton Pass
+  (condition.h:72-76). The coverage / prep refusal (`coverage.ghost_curse`) is removed.
