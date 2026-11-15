@@ -176,6 +176,8 @@ def test_ai_hp_checks_pinned():
             rf"if_hp_percent_({commands_re})\(ctx, _D, (\d+)\)", text
         ):
             found.add((_HP_PERCENT_COMMANDS[suffix], int(percent)))
+    # the literal calls; policy._hp_trade passes its percents as arguments, so its checks
+    # (AI_EFFECT_DEFENDER_HP_CHECKS) are recorded while tracing, test_ai_hp_checks_per_policy
     assert found == set().union(
         *AI_DEFENDER_HP_CHECKS.values(), *AI_FLAG_DEFENDER_HP_CHECKS.values()
     )
@@ -204,7 +206,9 @@ def test_ai_hp_checks_per_policy(monkeypatch, tables, names, kaizo_tables, kaizo
     """``AI_DEFENDER_HP_CHECKS`` per policy is the set of player-HP percent checks (all four
     comparisons) that policy's flag scripts call (K3c Task 6 review m2), recorded while they
     trace: vanilla {> 70} (script.s:2332), Kaizo {> 70, > 50} (:2332, :2694), and under
-    CHECK_HP (Kaizo set 0x10f) also > 30 (:7724-7725; ``ai_defender_hp_checks``)."""
+    CHECK_HP (Kaizo set 0x10f) also > 30 (:7724-7725; ``ai_defender_hp_checks``), and with
+    Endeavor's or Pain Split's effect in the layout (the full Kaizo layout here) < 70 and
+    < 80 (:4593, :3297; ``AI_EFFECT_DEFENDER_HP_CHECKS``)."""
     from nuzline.ai.layout import KAIZO, VANILLA
     from tests.ai.test_kaizo_outcome import layout_for
 
@@ -218,7 +222,7 @@ def test_ai_hp_checks_per_policy(monkeypatch, tables, names, kaizo_tables, kaizo
     )
     for layout, t, s in cases:
         calls = _defender_hp_calls(monkeypatch, t, s, layout)
-        assert calls == set(ai_defender_hp_checks(t)), layout.key
+        assert calls == set(ai_defender_hp_checks(t, layout)), layout.key
 
 
 def test_move_changes(names):

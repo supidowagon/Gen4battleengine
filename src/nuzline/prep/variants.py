@@ -31,6 +31,7 @@ from nuzline.prep.problem import (
 
 __all__ = [
     "AI_DEFENDER_HP_CHECKS",
+    "AI_EFFECT_DEFENDER_HP_CHECKS",
     "AI_FLAG_DEFENDER_HP_CHECKS",
     "AI_HP_READERS",
     "DEFAULT_WEIGHTS",
@@ -86,6 +87,14 @@ AI_DEFENDER_HP_CHECKS: dict[str, tuple[tuple[str, int], ...]] = {
 AI_FLAG_DEFENDER_HP_CHECKS: dict[int, tuple[tuple[str, int], ...]] = {
     8: (("greater", 70), ("greater", 30)),
 }
+# The checks a Kaizo label adds when the fight's layout transcribes its battle effect (E1
+# batch 16): Expert_Endeavor (SET_HP_EQUAL_TO_USER, 189) tests the player below 70 %
+# (script.s:4593) and Expert_PainSplit (AVERAGE_HP, 91) below 80 % (:3297), both through
+# policy._hp_trade. Per fight, so the many fights without them keep their cuts.
+AI_EFFECT_DEFENDER_HP_CHECKS: dict[int, tuple[tuple[str, int], ...]] = {
+    189: (("less", 70),),
+    91: (("less", 80),),
+}
 
 # Every function in ``src/nuzline/ai/*.py`` that indexes an ``hp`` array at the Task 4 commit,
 # and how ``hp_cuts`` covers it: ``percent`` by ``AI_DEFENDER_HP_CHECKS``, ``kill`` by the
@@ -94,6 +103,9 @@ AI_HP_READERS: dict[str, str] = {
     "_hp_percent": "percent",
     "if_current_move_kills": "kill",
     "count_alive_party_battlers": "alive",
+    # IfPartyMemberDealsMoreDamage (E1 batch 15) reads only the AI side's HP, its living
+    # party members (trainer_ai.c:2147-2150)
+    "if_party_member_deals_more_damage": "opponent",
     "_use_item": "opponent",
     "_post_ko": "opponent",
     "_layout": "opponent",
@@ -290,20 +302,26 @@ def ai_kill_damage(
     return tuple(sorted(d for d in out if d > 0))
 
 
-def ai_defender_hp_checks(tables: Tables) -> tuple[tuple[str, int], ...]:
+def ai_defender_hp_checks(tables: Tables, layout=None) -> tuple[tuple[str, int], ...]:
     """``AI_DEFENDER_HP_CHECKS`` of ``tables``' AI policy (``Tables.ai_policy``), then those of
-    each flag of the fight's set (``AI_FLAG_DEFENDER_HP_CHECKS``; ``ai.layout.layout_of``, so
-    Kaizo tables need the fight's ``ai_flags``) not already listed."""
-    layout = layout_of(tables)
+    each flag of the fight's set (``AI_FLAG_DEFENDER_HP_CHECKS``) and of each battle effect
+    its layout transcribes (``AI_EFFECT_DEFENDER_HP_CHECKS``) not already listed. ``layout``
+    is the fight's (default ``ai.layout.layout_of``, so Kaizo tables need the fight's
+    ``ai_flags`` and ``ai_moves``)."""
+    layout = layout_of(tables) if layout is None else layout
     checks = list(AI_DEFENDER_HP_CHECKS[AI_POLICIES[int(np.asarray(tables.ai_policy))]])
     for bit, extra in AI_FLAG_DEFENDER_HP_CHECKS.items():
         if layout.per_slot_sites and layout.runs(bit):
+            checks += [check for check in extra if check not in checks]
+    for effect, extra in AI_EFFECT_DEFENDER_HP_CHECKS.items():
+        if layout.per_slot_sites and effect in layout.transcribed:
             checks += [check for check in extra if check not in checks]
     return tuple(checks)
 
 
 def percent_cut(kind: str, percent: int, max_hp: int) -> int:
-    """The highest HP on the keep-off side of one ``AI_DEFENDER_HP_CHECKS`` entry."""
+    """The region top one HP check makes: for ``"greater"``, the highest HP that keeps the
+    check off; for ``"less"``, the highest HP that turns it on."""
     if kind == "greater":
         return ((percent + 1) * max_hp - 1) // 100
     return (percent * max_hp - 1) // 100
