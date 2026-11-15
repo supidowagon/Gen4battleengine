@@ -139,8 +139,8 @@ def _bulky(s: BattleState, hp: int = 400) -> BattleState:
 
 def _move_pool(t, layout=KAIZO) -> tuple[int, ...]:
     """Kaizo moves ``layout`` transcribes (effect in ``layout.transcribed`` and, of
-    ``KAIZO_EXPERT_LABELS``, only those in ``layout.expert_transcribed``; no id case, no
-    alternative power)."""
+    ``KAIZO_EXPERT_LABELS``, only those in ``layout.expert_transcribed``; no unmodelled id
+    case)."""
     effect = np.asarray(t.move_ai_effect)
     skip = set(commands.CALC_DAMAGE_MOVES) | set(commands.MOVE_TYPE_MOVES)
     pending = set(KAIZO_EXPERT_LABELS) - layout.expert_transcribed

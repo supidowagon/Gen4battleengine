@@ -1318,7 +1318,7 @@ def test_opponent_move_refusals_are_refused(kaizo_tables, kaizo_roark_party):
         r = refused(jnp.int32(move))
         by_move = any(
             bool(np.asarray(f)[0, 1])
-            for f in (r.move, r.ghost_curse, r.expert, r.alt_power, r.calc_damage, r.move_type)
+            for f in (r.move, r.ghost_curse, r.expert, r.calc_damage, r.move_type)
         )
         kinds = policy.opponent_move_refusals(t, move, KAIZO)
         assert bool(kinds) == by_move, (move, kinds)

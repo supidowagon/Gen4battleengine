@@ -314,9 +314,9 @@ NO_DAMAGE_CALC_EFFECTS = (
     269,  # RECOIL_HALF (Head Smash)
 )
 # sAltPowerMoveEffects (trainer_ai.c:48-61): the same three commands compute damage for a
-# move with one of these effects whatever its power (:1035, :1553, :2827),
-# through TrainerAI_CalcDamage's id cases, which the engine's AI damage does not transcribe;
-# policy.ai_refusals refuses such an opponent move.
+# move with one of these effects whatever its power (:1035, :1553, :2827), through
+# TrainerAI_CalcDamage: its move-id case, or, for another move id, the default (the table's
+# power and type, :3074-3078).
 ALT_POWER_EFFECTS = (
     135,  # RANDOM_POWER_BASED_ON_IVS
     219,  # POWER_BASED_ON_LOW_SPEED
@@ -663,10 +663,13 @@ CHECK_HP_TABLES: dict[str, tuple[int, ...]] = {
 # A move's class (MoveTable.class, generated/move_classes.txt: line n + 1 is id n), as
 # LoadDefenderLastUsedMoveClass loads it (Expert_LightScreen, script.s:2723).
 CLASS_PHYSICAL, CLASS_SPECIAL = 0, 1
-# TrainerAI_CalcDamage's move-id cases (trainer_ai.c:2885-3056): power, type or damage of
-# these moves come from the case, not the move table, whatever the move's effect (Kaizo's
-# Return and Frustration have effect 0 and still take theirs, :3018-3026). Decomp move ids.
-CALC_DAMAGE_MOVES = (363, 449, 237, 360, 82, 69, 101, 149, 216, 218, 222, 49, 67, 447)
+# TrainerAI_CalcDamage's move-id cases (trainer_ai.c:2885-3071) the AI damage does not model,
+# refused: Natural Gift and Judgment (item data), Hidden Power (its AI type,
+# TrainerAI_MoveType, is not modelled either), Gyro Ball (monSpeedValues, the last speed
+# compare's, battle_lib.c:1372), Psywave and Magnitude (a RandNext draw in the damage, :3015,
+# :3030). Return, Frustration, Low Kick, Grass Knot and the fixed-damage cases are modelled
+# (engine.damage.ai_case_power, ai_case_fixed; E1 batch 13). Decomp move ids.
+CALC_DAMAGE_MOVES = (363, 449, 237, 360, 149, 222)
 # TrainerAI_MoveType's move-id cases (trainer_ai.c:3132-3222): the type the AI gives
 # these moves is not their table type. Decomp move ids.
 MOVE_TYPE_MOVES = (363, 449, 237, 311)
@@ -896,10 +899,12 @@ def is_damaging(tables: Tables, move) -> jnp.ndarray:
     than 1 and its battle effect is not in ``NO_DAMAGE_CALC_EFFECTS``
     (``TrainerAI_CalcAllDamage``, trainer_ai.c:2827-2828; ``FlagMoveDamageScore``,
     :1035-1036; ``IfCurrentMoveKills``, :1553-1554). Those tests also pass a move whose
-    effect is in ``ALT_POWER_EFFECTS``; ``policy.ai_refusals`` refuses those."""
+    effect is in ``ALT_POWER_EFFECTS``, whatever its power (:2823-2828)."""
     move = jnp.asarray(move, _I32)
-    no_calc = jnp.isin(move_effect(tables, move), _NO_DAMAGE_CALC)
-    return (move != 0) & (tables.move_power[move] > 1) & ~no_calc
+    effect = move_effect(tables, move)
+    no_calc = jnp.isin(effect, _NO_DAMAGE_CALC)
+    alt = jnp.isin(effect, jnp.asarray(ALT_POWER_EFFECTS, _I32))
+    return alt | ((move != 0) & (tables.move_power[move] > 1) & ~no_calc)
 
 
 def _slot_damage(tables: Tables, state: BattleState, rolls) -> jnp.ndarray:

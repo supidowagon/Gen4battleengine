@@ -163,23 +163,22 @@ def test_dry_skin_compare_per_policy(tables, names):
     assert scores == {"vanilla": 0, "kaizo": -12}
 
 
-def test_kaizo_refuses_alt_power_and_id_cases(kaizo_tables, kaizo_names, kaizo_roark_party):
+def test_kaizo_refuses_unmodelled_id_cases(kaizo_tables, kaizo_names, kaizo_roark_party):
     """Kaizo Triple Axel (149) has effect 88, in sAltPowerMoveEffects (trainer_ai.c:48-61),
-    and its id is MOVE_PSYWAVE's, a TrainerAI_CalcDamage id case (:3014). Kaizo Return
-    (216) has effect 0 but still hits the MOVE_RETURN case (:3018)."""
+    and its id is MOVE_PSYWAVE's, a TrainerAI_CalcDamage id case that draws (:3014): refused.
+    Kaizo Return (216) has effect 0 but still hits the MOVE_RETURN case (:3018), which the AI
+    damage models (E1 batch 13): not refused for it."""
     t, n = kaizo_tables, kaizo_names
     cranidos = _kaizo_mon(kaizo_roark_party, "Cranidos", n)
     gible = _kaizo_mon(kaizo_roark_party, "Gible", n)
     s = make_state(t, [gible], [cranidos])
     axel = s._replace(moves=s.moves.at[1, 0, 3].set(TRIPLE_AXEL))
     reasons = ai_refusals(t, axel, n)
-    assert any("Triple Axel" in r and "sAltPowerMoveEffects" in r for r in reasons), reasons
     assert any("Triple Axel" in r and "TrainerAI_CalcDamage" in r for r in reasons), reasons
     ret = s._replace(moves=s.moves.at[1, 0, 3].set(RETURN))
     assert int(t.move_ai_effect[RETURN]) == 0
     reasons = ai_refusals(t, ret, n)
-    assert any("Return" in r and "TrainerAI_CalcDamage" in r for r in reasons), reasons
-    assert not any("sAltPowerMoveEffects" in r for r in reasons), reasons
+    assert not any("Return" in r and "TrainerAI_CalcDamage" in r for r in reasons), reasons
 
 
 def test_move_type_id_case_refused(tables, names):

@@ -114,16 +114,23 @@ Kaizo data reaches them on a transcribed path.
 - No vanilla-transcribed move has such an effect, so vanilla is unchanged
   (`tests/ai/test_policy.py::test_vanilla_distribution_unchanged`).
 
-**2.4 Refusals that only Kaizo data reaches.** Both policies refuse an opponent move that
-the AI's damage estimate or move type does not take from the move table:
-- an effect in `sAltPowerMoveEffects` (`trainer_ai.c:48-61`; `commands.ALT_POWER_EFFECTS`).
-  Such a move is damage-estimated whatever its power (`:1035`, `:1553`, `:2827`). Kaizo
-  Triple Axel (149) and Fury Cutter (210) carry RANDOM_DAMAGE_1_TO_150_LEVEL (88);
-- a move id that `TrainerAI_CalcDamage` takes by case (`trainer_ai.c:2885-3056`;
-  `commands.CALC_DAMAGE_MOVES`). The case applies whatever the move's effect. Kaizo
-  Triple Axel sits on MOVE_PSYWAVE's id (`:3014`, which also draws `RandNext`). Kaizo
-  Return (216) and Frustration (218) have effect 0 but still take their friendship
-  cases (`:3018-3026`);
+**2.4 The AI damage's move-id cases, and the refusals left (E1 batch 13).** A move whose
+effect is in `sAltPowerMoveEffects` (`trainer_ai.c:48-61`; `commands.ALT_POWER_EFFECTS`) is
+damage-estimated whatever its power (`:1035`, `:1553`, `:2827`; `commands.is_damaging`).
+`TrainerAI_CalcDamage` then takes a move-id case (`:2885-3071`), whatever the move's effect,
+or the default, the table's power and type (`:3074-3078`; `BattleSystem_CalcMoveDamage`
+uses the table's power for 0 and the table's type for TYPE_NORMAL, `battle_lib.c:6673-6684`):
+- modelled (`engine.damage.ai_case_power`, `ai_case_fixed`): Return and Frustration by the
+  attacker's friendship (`:3018-3026`; Kaizo's have effect 0 and still take them), Low Kick
+  and Grass Knot by the defender's Pokedex weight (`:3055-3071`, `weight_to_power.h`), and
+  the fixed Dragon Rage 40, Sonic Boom 20, Seismic Toss and Night Shade the level
+  (`:3005-3012`, `:3051-3053`), which skip `CalcMoveDamage` and take the chart with
+  `SYSCTL_IGNORE_TYPE_CHECKS` (no STAB or multiplier, an immunity 0), then the variance;
+  every other alt-power move takes the default (Kaizo Fury Cutter, 210, with effect 88);
+- refused (`commands.CALC_DAMAGE_MOVES`): Natural Gift and Judgment (item data), Hidden
+  Power (its AI type, below), Gyro Ball (`monSpeedValues`, left by the last speed compare,
+  `battle_lib.c:1372`), Psywave and Magnitude (a `RandNext` in the estimate, `:3015`,
+  `:3030`). Kaizo Triple Axel sits on MOVE_PSYWAVE's id (`:3014`);
 - a move id that `TrainerAI_MoveType` takes by case (`trainer_ai.c:3132-3222`;
   `commands.MOVE_TYPE_MOVES`): Natural Gift, Judgment, Hidden Power, Weather Ball.
 
@@ -453,7 +460,7 @@ Bit 5 (Barry's 0x27). `FlagMoveDamageScore USE_MAX_DAMAGE` then `IfLoadedNotEqua
 AI_NO_COMPARISON_MADE` (`:6511-6512`): only a move the damage compare skips continues, that is
 one not in `sAltPowerMoveEffects` with power at most 1 or a `sNoDamageCalcMoveEffects` effect
 (`trainer_ai.c:1012-1063`). Despite the comment at `:6503-6509`, alt-power moves are compared,
-so they never reach the roll; they are refused anyway (`_refused.alt_power`). The 100 roll
+so they never reach the roll (`commands.is_damaging`). The 100 roll
 (`:6515`) gives **+2** when it does not jump (156/256). Of the transcribed effects it reaches
 every status move (Stealth Rock, Toxic, Recover, Light Screen, Rock Polish, Curse, Leer,
 Screech) and the no-calc Selfdestruct and Head Smash.
@@ -673,8 +680,8 @@ MIRROR_COAT (144), LOWER_OWN_ATK_AND_DEF (182), WEATHER_RAIN (136), WEATHER_HAIL
 - Waiting: Metal Burst (`Basic_CheckMetalBurst`, `:1160-1182`) reads
   the AI's record of the player's held item (`aiContext.battlerHeldItems`,
   `battle_script.c:12121`), which `BattleState` does not hold either. Both wait for the
-  managing session's decision. The fixed- and alternative-power moves of
-  `sAltPowerMoveEffects` (`trainer_ai.c:48-61`) stay refused in the AI damage estimate.
+  managing session's decision. The alternative-power moves' AI damage came in batch 13
+  (2.4).
 
 ## 6. Where the AI reads the true battle state
 

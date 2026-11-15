@@ -31,7 +31,7 @@ Refusals (``ai_refusals``): an opponent move whose script paths are not transcri
 or, in a per-slot layout, a move whose effect's Expert_Main label is not transcribed
 (``outcome.KAIZO_EXPERT_LABELS`` less ``layout.expert_transcribed``; none for Kaizo
 Roark since K3c Task 6), an opponent move the AI's damage estimate or move type takes
-by an alternative power or a move-id case, a vanilla moveset with more script-roll sites than
+by a move-id case it does not model, a vanilla moveset with more script-roll sites than
 ``AiOutcome`` encodes, a per-slot path with more random reads than ``layout.slot_reads``
 (``ai_path_refusals``), the abilities, items and moves that change
 ``effectiveness_class``, a bag item other than a Potion, and every refusal of the
@@ -1960,8 +1960,8 @@ def _weather(ctx: AiContext) -> AiContext:
 def _prioritize_extremes(ctx: AiContext) -> AiContext:
     """``PrioritizeExtremes_Main`` (script.s:6499-6519): a move ``FlagMoveDamageScore
     USE_MAX_DAMAGE`` makes no comparison for (``AI_NO_COMPARISON_MADE``, :6511-6512; a status
-    move or a no-calc effect, trainer_ai.c:1012-1063; alt-power moves are refused,
-    ``_refused.alt_power``) gets +2 unless the 100 roll (:6515) jumps."""
+    move or a no-calc effect, trainer_ai.c:1012-1063; an alt-power effect always compares,
+    ``c.is_damaging``) gets +2 unless the 100 roll (:6515) jumps."""
     ctx = _terminate(ctx)
     ctx = c.flag_move_damage_score(ctx, c.USE_MAX_DAMAGE)
     ctx, _ = _split(c.if_loaded_not_equal_to(ctx, c.AI_NO_COMPARISON_MADE))
@@ -2068,7 +2068,6 @@ class _Refused(NamedTuple):
     move: jnp.ndarray  # bool[SLOTS, MOVES]: opponent move without transcribed script paths
     ghost_curse: jnp.ndarray  # bool[SLOTS, MOVES]: Curse by a Ghost type (its labels are not)
     expert: jnp.ndarray  # bool[SLOTS, MOVES]: its effect's Expert label is not transcribed
-    alt_power: jnp.ndarray  # bool[SLOTS, MOVES]: opponent move with an ALT_POWER_EFFECTS effect
     calc_damage: jnp.ndarray  # bool[SLOTS, MOVES]: a TrainerAI_CalcDamage id case
     move_type: jnp.ndarray  # bool[SLOTS, MOVES]: a TrainerAI_MoveType id case
     policy: jnp.ndarray  # bool: tables of another policy than the layout's
@@ -2106,7 +2105,6 @@ def _refused(tables: Tables, state: BattleState, layout: AiLayout = VANILLA) -> 
     else:
         expert = jnp.zeros_like(expert)
     known = present[1][:, None] & (moves[1] != 0)
-    alt_power = known & jnp.isin(effects, jnp.array(c.ALT_POWER_EFFECTS, _I32))
     calc_damage = known & jnp.isin(moves[1], jnp.array(c.CALC_DAMAGE_MOVES, _I32))
     move_type = known & jnp.isin(moves[1], jnp.array(c.MOVE_TYPE_MOVES, _I32))
     policy = tables.ai_policy != AI_POLICIES.index(layout.name)
@@ -2135,7 +2133,6 @@ def _refused(tables: Tables, state: BattleState, layout: AiLayout = VANILLA) -> 
         jnp.any(move)
         | jnp.any(ghost_curse)
         | jnp.any(expert)
-        | jnp.any(alt_power)
         | jnp.any(calc_damage)
         | jnp.any(move_type)
         | policy
@@ -2148,7 +2145,6 @@ def _refused(tables: Tables, state: BattleState, layout: AiLayout = VANILLA) -> 
         move,
         ghost_curse,
         expert,
-        alt_power,
         calc_damage,
         move_type,
         policy,
@@ -2169,8 +2165,7 @@ def opponent_move_refusals(
     whatever the player's party (``tools/kaizo/backlog.py`` lists them per fight), as kinds:
     ``"not transcribed"`` (its script paths, ``layout.transcribed``), ``"ghost curse"`` (Curse
     by a Ghost type, ``ghost``), ``"expert label"`` (its Expert_Main label is not transcribed
-    yet, when the layout runs EXPERT), ``"alternative power"`` (sAltPowerMoveEffects,
-    trainer_ai.c:48-61), ``"calc damage"`` and ``"move type"`` (TrainerAI_CalcDamage and
+    yet, when the layout runs EXPERT), ``"calc damage"`` and ``"move type"`` (TrainerAI_CalcDamage and
     TrainerAI_MoveType move-id cases). Pinned against ``_refused`` by
     tests/ai/test_kaizo_policy.py test_opponent_move_refusals_are_refused."""
     if move == 0:
@@ -2185,8 +2180,6 @@ def opponent_move_refusals(
     pending = set(KAIZO_EXPERT_LABELS) - layout.expert_transcribed
     if layout.per_slot_sites and layout.runs(EXPERT) and effect in pending and not out:
         out.append("expert label")
-    if effect in c.ALT_POWER_EFFECTS:
-        out.append("alternative power")
     if move in c.CALC_DAMAGE_MOVES:
         out.append("calc damage")
     if move in c.MOVE_TYPE_MOVES:
@@ -2260,12 +2253,6 @@ def _scoring_refusals(
             f"ai scoring: opponent slot {s}: move {_move_name(move, names)} goes to {label} "
             f"(Expert_Main, script.s:{line}), whose script path is not transcribed yet "
             "(docs/ai/kaizo_roark.md 5)"
-        )
-    for s, k in zip(*np.nonzero(np.asarray(r.alt_power)), strict=True):
-        out.append(
-            f"ai scoring: opponent slot {s}: move {_move_name(int(moves[1, s, k]), names)} "
-            "has an alternative-power effect (sAltPowerMoveEffects, trainer_ai.c:48-61) whose "
-            "AI damage is not transcribed"
         )
     for s, k in zip(*np.nonzero(np.asarray(r.calc_damage)), strict=True):
         out.append(
