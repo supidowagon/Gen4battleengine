@@ -1,6 +1,19 @@
 # E2 mechanics ledger (Kaizo Roark split)
 
-## RESUME (updated 2026-11-15, batch 7 done at the commits below, its review next)
+## RESUME (updated 2026-11-15, batch 9 done at the commits below, its review next)
+
+- Batch 9, the Gardenia split (plan and rulings B9-1..B9-12 below; batch 8 review follow-ups
+  B8-6..B8-8 at 0936d40). Commits: 2acd05f (plan), 9370721 (speed / damage abilities, Thunder /
+  Blizzard, Fire / Ice Fang), 8705722 (recoil divisors, Kaizo be_seq 48 / 182 modelled, Follow
+  Me, Helping Hand, Surf), then the absorb / Rain Dish / Clear Body / Hyper Cutter / Aftermath /
+  Poison Heal / Bad Dreams / Dragon Rage / SonicBoom / stat moves / trapping abilities / Dream
+  Eater / Payback commit (db0b6d7), and this ledger commit (backlog regenerated: the Gardenia
+  split's missing groups 78 -> 42, runnable battles 0 -> 9; Metronome's unmodelled callable moves
+  115 -> 87). New state: `can_unburden`, `minimized`.
+- Left of batch 9's plan (Owed: "Batch 9 left"): SolarBeam, Jump Kick's crash, Volt Tackle's
+  family (262), Endeavor, Pain Split, Knock Off, Focus Punch, Safeguard, Substitute, Encore,
+  Assist, Leaf Guard, Synchronize, Wonder Guard, Pressure, Download, Focus Band, Wiki Berry, the
+  terrain entries.
 
 - Tip history: batch 6 and its review follow-ups (470fbef, af6b010, 639ee89); main with E1's
   batches 2c-17 merged in at 23e10f0 (clean: E1's six per-battler fields `curse`,
@@ -228,6 +241,36 @@ Reuse the faint-replacement decision but not its transition; the search reads `p
 ## Owed
 
 Rules left out because another mechanic is missing; each closes with the mechanic named.
+
+- Batch 9 left (Gardenia-split entries not done, by why): SolarBeam #151 (a charge turn: the
+  two-turn lock and SYSCTL_FIRST_OF_MULTI_TURN's skips); Jump Kick / Hi Jump Kick #45
+  (subscript_crash_on_miss.s reads the miss's damage: crit and roll on a miss, a law change);
+  Volt Tackle's family #262 (recoil plus a PROBABILISTIC paralysis that runs on every hit,
+  battle_lib.c:1551-1567: a new secondary shape); Endeavor #189, Pain Split #91 (Pain Split's
+  UPDATE_HP meets the resist-berry subscript); Knock Off #188 (knockedOffItemsMask, Unburden,
+  Sticky Barb's Owed test); Focus Punch #170, Safeguard #124, Substitute #79, Encore #90, Assist
+  #180; abilities Leaf Guard (every status subscript's two checks), Synchronize, Wonder Guard
+  (with Fire Fang's bypass), Pressure (PP cost by range, skipPressureCheck, its switch-in
+  reveal), Download (downloadAnnounced, the search's replacement pass); held items Focus Band
+  (a per-hit roll at three sites: a new Outcome field and law), Wiki Berry and the other flavor
+  berries (the dislike confusion's duration draw at an item check); the terrain entries (a
+  trainer whose maps give several terrains: data, not a mechanic). Metronome stays refused
+  (B5-2).
+- AI owner (E1), batch 9. Engine reads the AI meets: `order.effective_speed` (Chlorophyll,
+  Unburden with the new `can_unburden`), `actions.trapped` (Shadow Tag, Arena Trap, Magnet Pull:
+  the player's switch gate), `outcome._rate` (Thunder / Blizzard weather accuracy, by
+  `MoveFlag.THUNDER` / `BLIZZARD`), `damage._pre_random` (Huge Power / Pure Power, Swarm, Flower
+  Gift; `TrainerAI_CalcDamage` calls BattleSystem_CalcMoveDamage, trainer_ai.c:3082), the
+  absorb abilities (Volt / Water Absorb), `minimized` (Stomp's x2 is the move script's, which the
+  AI's estimate does not run). New EffectIds FOLLOW_ME, HELPING_HAND, BELLY_DRUM; Bulk Up is
+  DRAGON_DANCE with Defense (move_param 0), Minimize STAT_SELF (Evasion, param 2), Stomp FLINCH
+  (param 2), Payback DOUBLE_POWER (POWER_IF_TARGET_MOVED), Dream Eater DRAIN (param 1), Dragon
+  Rage / SonicBoom LEVEL_DAMAGE (param 0 the amount), Double-Edge RECOIL (param 0 the divisor
+  now, 2 / 3 / 4). The AI move-effect scripts of these (the backlog's AI entries) are E1's.
+- The weather lock read by Thunder / Blizzard (and Sand Veil, Snow Cloak) in the hit laws is the
+  turn start's battlers (`outcome._rate`'s `on_field`); a Cloud Nine / Air Lock holder that faints
+  before the second mover's check (its own recoil, Life Orb) is not followed (pre-existing for
+  Sand Veil; Thunder makes it a 70 vs 100 difference).
 
 - King's Rock's flinch vs Substitute (effects.py `_kings_rock`; subscript_flinch_mon.s:6):
   Substitute. (Its Shield Dust test, :9, is modelled by E2 batch 3, B3-9.)
@@ -1158,3 +1201,50 @@ Rules left out because another mechanic is missing; each closes with the mechani
   (BtlCmd_TryHelpingHand :6309-6311, MOVE_STATUS_FAILED, effect_script_0176.s:15-17;
   `EffectId.HELPING_HAND`). Surf (257) is Gust's case: its x2 needs a diving target (Dive is
   unsupported).
+- B9-6 Volt Absorb / Water Absorb join Dry Skin's absorb (BattleSystem_TriggerImmunityAbility,
+  battle_lib.c:3500-3512, run at TRY_MOVE_STATE_TRIGGER_IMMUNITY_ABILITIES on a move that hit):
+  Water Absorb has Dry Skin's test (a Water move with power); Volt Absorb takes any Electric move
+  aimed at another battler, Thunder Wave included (no power test); both heal Divide(maxHP, 4)
+  below full HP and tag the holder (subscript_ability_restores_hp.s). Rain Dish heals
+  Divide(maxHP, 16) below full HP in rain (BtlCmd_EndOfTurnWeatherEffect, battle_script.c:
+  5614-5618) and tags the holder (subscript_weather_continues.s:_076). Clear Body blocks any drop
+  by another battler and Hyper Cutter an Attack drop, before Keen Eye's accuracy test
+  (BtlCmd_ChangeStatStage, :2884-2902, Battler_IgnorableAbility), Intimidate's included (its
+  attacker is the Intimidate holder, subscript_intimidate.s:6); those messages are built in C, so
+  the AI learns nothing.
+- B9-7 Aftermath (battle_lib.c:4358-4371): the defender is faintedMon (this hit's UPDATE_HP fainted
+  it, TryFaintMon battle_script.c:1768-1770), a living attacker without Magic Guard, no Damp on the
+  field (unsupported), no MOVE_STATUS_NO_EFFECTS, a contact move, not under SYSCTL_UTURN_ACTIVE
+  (U-turn's contact ability runs before that flag, B6): Divide(maxHP, 4) from the attacker; the
+  message tags the holder.
+- B9-8 Poison Heal (subscript_poison_damage.s:4-12, poison and toxic alike): below full HP it heals
+  Divide(maxHP, 8) instead of the damage and tags itself; at full HP nothing (the toxic counter
+  still rises, bcp.c:1405-1415). Bad Dreams (MON_COND_CHECK_STATE_BAD_DREAMS, bcp.c:1484-1500,
+  after Bind): an asleep battler with HP and no Magic Guard facing a living holder
+  (COUNT_ALIVE_BATTLERS_THEIR_SIDE_FLAG, battle_lib.c:2915-2922) loses Divide(maxHP, 8) per
+  holder, the message tagging the holder (subscript_bad_dreams.s).
+- B9-9 Dragon Rage (41) and SonicBoom (130) are Night Shade's family with a fixed amount (40, 20) in
+  param 0 (effect_script_0041.s, _0130.s: SYSCTL_IGNORE_TYPE_CHECKS, BTLVAR_DAMAGE). Their
+  BTLVAR_REGULATION_FLAG failure reads battleSys->rulesetMask (battle_script.c:9647-9648), set only
+  for a regulated battle (field_battle_data_transfer.c:110, :376-379).
+- B9-10 Stat moves. Bulk Up (208) is Dragon Dance's family with Defense for Speed
+  (subscript_user_atk_and_def_up_1_stage.s differs at :4, :12 only); since it raises Defense it is
+  a clause effect for the foe's later hit. Belly Drum (142, subscript_belly_drum.s): fails at
+  Attack +6 or curHP <= Divide(maxHP, 2) (MOVE_STATUS_FAILED, :3-6, :52), else Attack +6 and
+  Divide(maxHP, 2) through UPDATE_HP. Minimize (108, subscript_minimize.s): sets the user's
+  MOVE_EFFECT_MINIMIZE (`BattleState.minimized`, volatile, not Baton Passed, a mask bit Roar's
+  Ingrain test sees) then Evasion +1. Stomp (150, effect_script_0150.s): a flinch at its chance
+  with powerMul 20 against a minimized defender (`damage.script_power_mul`).
+- B9-11 Trapping abilities in `actions.trapped` (Battler_IsTrapped, battle_lib.c:5514-5536, read by
+  the party menu, bcp.c:572): a living foe's Shadow Tag unless the battler has it too, a living
+  foe's Magnet Pull on a Steel battler, a living foe's Arena Trap on a grounded battler
+  (BattlerIsGrounded, :5500-5507: no Levitate, no Magnet Rise, not Flying, or Iron Ball, or
+  Gravity; Ingrain does not ground here), by Battler_Ability over the other side's living battlers
+  (:5509-5512). Shed Shell (:5518) is unsupported. The AI's own gate already had them (B7-18).
+- B9-12 Dream Eater (8) is DRAIN 50 with param 1 = 1: effect_script_0008.s ends with
+  MOVE_STATUS_NO_MORE_WORK ("wasn't affected") on an awake defender (:5, :9-16), else
+  subscript_dream_eater.s: Divide(hitDamage, 2) then Big Root (as drain). Payback (230, Kaizo's
+  Revenge too) doubles movePower once the defender's action is over (BtlCmd_CalcPaybackPower,
+  battle_script.c:7198-7209; Battler_MovedThisTurn, battle_lib.c:5365-5368: a switched-in
+  newcomer's action is MOVE_END too, :2053), as a powerMul of 20 in `effects.play_hit` (the same
+  product, battle_lib.c:6688).
