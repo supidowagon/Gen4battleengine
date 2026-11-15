@@ -737,10 +737,10 @@ class ReadKind(IntEnum):
 
 
 # LooseDraws columns: at least the reads one slot's scripts make. Every read counts, on the
-# slot's path or not (the scripts are straight-line): 35 after K3c Task 6, 53 after E1 batch 4
-# (the stat-raise Expert labels). More raises (policy._loose_reads); the loose oracle is tests
-# only, so the headroom costs nothing in a fight.
-LOOSE_READS = 128
+# slot's path or not (the scripts are straight-line): 35 after K3c Task 6, 74 after E1 batch 7
+# under every transcribed flag. More raises (policy._loose_reads). Tests only, but each column
+# costs compile memory in every loose program, so the headroom is kept modest.
+LOOSE_READS = 96
 
 
 class LooseDraws(NamedTuple):
@@ -1396,8 +1396,8 @@ def if_speed_compare_equal_to(ctx: AiContext, value: int) -> AiContext:
     - The tie's ``RandNext() & 1`` is not drawn (plan K3c Ruling 3). At equal speed every
       branch gives FASTER or TIE, never SLOWER (:1401-1447), so ``== SLOWER`` does not
       depend on it: ``order.battler_slower`` with ``tie_roll = 0``. ``value`` must be
-      ``COMPARE_SPEED_SLOWER`` (asserted at trace time), as at every compare on Roark's
-      paths (script.s:1864, :2070, :2650). The decomp still consumes the draw (K3d).
+      ``COMPARE_SPEED_SLOWER`` (asserted at trace time), as at every transcribed compare on the
+      paths (script.s:1864, :2070, :2357, :2650, :2944). The decomp still consumes the draw (K3d).
 
     Loose (module docstring): the tie is its own draw (``ReadKind.SPEED_TIE``), on the path
     where the decomp makes it (equal speed in a branch that reads it, which is where

@@ -2239,10 +2239,24 @@ def _loose_run(tables: Tables, state: BattleState, bits, layout: AiLayout):
     return ctx.scores, ctx.loose
 
 
-@partial(jax.jit, static_argnames="layout")
 def _loose_batch(tables: Tables, states: BattleState, bits, layout: AiLayout):
     """``_loose_run`` for every state (leading axis N) and bit pattern (``bits``,
-    ``int8[P, MOVES, LOOSE_READS]``): scores ``[N, P, MOVES]`` and ``LooseDraws [N, P, ...]``."""
+    ``int8[P, MOVES, LOOSE_READS]``): scores ``[N, P, MOVES]`` and ``LooseDraws [N, P, ...]``.
+    The loose oracle reads no read bound (it has no ``AiOutcome`` draws), so its program is
+    compiled once per flag set and effect set, not once per fight's bound (E1 Ruling R6), and
+    the patterns are padded to a power of two (zero rows, sliced off again), so a growing
+    enumeration reuses a few compiled shapes instead of compiling one per count."""
+    bits = jnp.asarray(bits)
+    n = int(bits.shape[0])
+    padded = 1 << max(n - 1, 0).bit_length()
+    if padded != n:
+        bits = jnp.concatenate([bits, jnp.zeros((padded - n, *bits.shape[1:]), bits.dtype)])
+    out = _loose_batch_program(tables, states, bits, layout._replace(slot_reads=0))
+    return jax.tree.map(lambda x: x[:, :n], out)
+
+
+@partial(jax.jit, static_argnames="layout")
+def _loose_batch_program(tables: Tables, states: BattleState, bits, layout: AiLayout):
     per_state = jax.vmap(lambda s, b: _loose_run(tables, s, b, layout), in_axes=(None, 0))
     return jax.vmap(lambda s: per_state(s, bits))(states)
 

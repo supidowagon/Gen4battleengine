@@ -573,7 +573,7 @@ None of these has a `Basic_ScoreMoveEffect` entry.
   or below 4, only the roll's +1.
 - `Expert_HighCritical` (`:1660`; `:2827-2843`): resisted, nothing; super effective, +1 unless
   the 128 roll (`:2839`) jumps; neutral, a first 128 roll (`:2836`) ends it when it jumps,
-  else the same. RISKY's table holds HIGH_CRITICAL too (`:6530`).
+  else the same. RISKY's table holds HIGH_CRITICAL too (`:6541`; its roll `:6530`).
 - `Expert_SpeedDownOnHit` (`:1681`; `:2338-2350`): resisted, nothing; Icy Wind, Rock Tomb and
   Mud Shot go to `Expert_StatusSpeedDown` (`:2353-2366`: not slower -3; slower +2 unless the 70
   roll, `:2362`, jumps); any other LOWER_SPEED_HIT move ends.
