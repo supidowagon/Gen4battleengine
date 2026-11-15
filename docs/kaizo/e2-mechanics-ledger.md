@@ -21,6 +21,12 @@
   ability back to Rough Skin, the reference with it alive until the Tackle KO. Repro:
   `_scratch/e2/b7/repro.py _scratch/e2/b7/diff2.log 2` on G: (the case is the log's third
   "Failing test case"). Needs its own look before the next full differential run.
+  Also pre-existing at f22b818: tests/prep/test_variants.py `test_ai_hp_checks_pinned` /
+  `_per_policy` expect no `if_party_member_deals_more_damage` among the AI's HP checks (E1's
+  merged batch 15 added it): E1's or the prep owner's.
+- Batch 7 compile, with the fast-tier lock held (pid 20932): `jit(step)` 59.0 s (trace 4.2,
+  compile 54.8), `jit(vmap(step))` 27.6 s; to re-time with the lock free (standing rule).
+  Differential: 380 examples at reduced counts (seeds 1-5), no batch-7 disagreement.
 - Compile, both with the fast-tier lock held (E1's run, pid 14524): `jit(step)` 35.0 -> 52.5 s, `jit(vmap(step))` 24.2 -> 25.6 s (the end run also beside this batch's slow search tests, so the step figure is load-skewed: logs in `_scratch/e2/b6/` on G:). Load-free size: the step jaxpr 73,192 -> 80,110 equations (+9.5%, `_scratch/e2/b6/eqns.py`, a synthetic state): the 22 `ts_*` / `pivot_battler` leaves widen every whole-state `_where` and reset, plus the list's faint check in `_act`, the scratch writes and the pivot logic. To re-time with the lock free (standing rule).
 - Left in the Roark split: Metronome (3 fights, B5-2: 123 of 442 callable moves unmodelled) and
   the terrain entry (2: Nature Power / Secret Power / Camouflage over several maps); the AI's
