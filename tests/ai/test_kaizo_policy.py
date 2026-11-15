@@ -3582,6 +3582,21 @@ def test_battler_deals_more_damage_counts_a_status_move(
             )
 
 
+def test_a_status_move_takes_no_type_chart_bonus(kaizo_tables, kaizo_names, kaizo_roark_party):
+    """ApplyTypeMultiplier sets the effectiveness flags only for a move with table power
+    (battle_lib.c:2627, :7568), and Tinted Lens needs it too (:2667-2669): Gible's Toxic on
+    itself (Poison into Ground, 2 -> 1) stays 1 with Tinted Lens, review of prep P2."""
+    from nuzline.engine.ids import AbilityId
+
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Copycat", "Accelerock", "", ""))
+    toxic = n.move_names.index("Toxic")
+    for ability in (int(s.ability[0, 0]), AbilityId.TINTED_LENS):
+        s2 = s._replace(ability=s.ability.at[0, 0].set(ability))
+        got = ai_damage_for_roll(t, s2, 0, toxic, c.SIM_ROLL_MAX, def_side=0, ivs=s2.ivs[1, 0])
+        assert int(got) == 1, ability
+
+
 def test_copycat_refuses_a_player_calc_damage_case(kaizo_tables, kaizo_names, kaizo_roark_party):
     """A player Pokemon that knows a refused TrainerAI_CalcDamage id case (Gyro Ball, 360) is
     refused in a fight whose AI knows Copycat (its IfBattlerDealsMoreDamage calculates the
@@ -3720,6 +3735,52 @@ def test_p3_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, fla
     for own, turn, stage in ((100, 0, 0), (50, 3, 3), (100, 3, 2)):
         s2 = _turn(_hp(s, 1, own), turn)
         s2 = s2._replace(stages=s2.stages.at[1, Stat.ATK].set(stage))
+        layout = layout_for(t, flags, s2)
+        assert policy.ai_refusals(t, s2, n, layout) == []
+        _assert_exact_equals_loose(t, s2, layout)
+
+
+# --- E1 prep batch P4 (Gardenia): Helping Hand, SolarBeam ------------------------------------
+
+
+def test_basic_helping_hand(kaizo_tables, kaizo_names, kaizo_roark_party):
+    """Basic_CheckHelpingHand (script.s:892-896): a singles battle, -10."""
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Helping Hand", "Accelerock", "", ""))
+    assert _delta(t, s, 0x2, 0x3)[0] == -10
+
+
+@pytest.mark.parametrize(
+    ("case", "expected"),
+    [
+        # Expert_ChargeTurnNoInvuln (script.s:3933-3972), SolarBeam (Grass) against Gible
+        ("plain", 0),
+        ("sun", 2),
+        ("power herb", 2),
+        ("low hp", -1),  # 38 % HP or less
+        ("resisted", -2),  # against a Grass player: half damage
+    ],
+)
+def test_expert_solar_beam(kaizo_tables, kaizo_names, kaizo_roark_party, case, expected):
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "SolarBeam", "Accelerock", "", ""))
+    if case == "sun":
+        s = s._replace(weather=jnp.asarray(Weather.SUN, s.weather.dtype))
+    elif case == "power herb":
+        s = s._replace(item=s.item.at[1, 0].set(c.ITEM_POWER_HERB))
+    elif case == "low hp":
+        s = _hp(s, 1, 30)
+    elif case == "resisted":
+        s = _with_player(t, s, n.species_names.index("Turtwig"), 0, known=True)
+    assert _delta(t, s, 0x3, 0x7)[0] == expected
+
+
+@pytest.mark.parametrize("flags", SWEEP_FLAGS)
+def test_p4_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, flags):
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "SolarBeam", "Helping Hand", "Accelerock", ""))
+    for own, weather in ((100, Weather.SUN), (30, Weather.NONE)):
+        s2 = _hp(s, 1, own)._replace(weather=jnp.asarray(weather, s.weather.dtype))
         layout = layout_for(t, flags, s2)
         assert policy.ai_refusals(t, s2, n, layout) == []
         _assert_exact_equals_loose(t, s2, layout)

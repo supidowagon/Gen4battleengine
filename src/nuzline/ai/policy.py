@@ -812,6 +812,55 @@ def _basic_check_imprison(ctx: AiContext, mask) -> AiContext:
     return c.pop_or_end(_score(ctx, t, -10))
 
 
+def _basic_check_helping_hand(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckHelpingHand`` (script.s:892-896): not a doubles battle (``LoadBattleType``,
+    ``IfLoadedNotMask BATTLE_TYPE_DOUBLES``), -10."""
+    ctx = c.load_battle_type(_at(ctx, mask))
+    ctx, t = _split(c.if_loaded_not_mask(ctx, c.BATTLE_TYPE_DOUBLES))
+    return c.pop_or_end(_score(ctx, t, -10))
+
+
+def _expert_charge_turn_no_invuln(ctx: AiContext, mask) -> AiContext:
+    """``Expert_ChargeTurnNoInvuln`` (script.s:3933-3972) for SKIP_CHARGE_TURN_IN_SUN (its
+    other entry, CHARGE_TURN_DEF_UP at :1715, is not transcribed): immune, quarter or half
+    damage -2; in sun +2; else holding Power Herb (its true item) +2; else the player known
+    to have a Protect effect -2, or the attacker at 38 % HP or less -1. Expert_Main's second
+    SKIP_CHARGE_TURN_IN_SUN entry (:1719, Expert_Thunder, the decomp's Thunder bug) is never
+    reached: the first one jumps."""
+    ctx = _at(ctx, mask)
+    minus2 = jnp.zeros_like(ctx.live)
+    for multi in (TypeMulti.IMMUNE, TypeMulti.QUARTER, TypeMulti.HALF):
+        ctx, t = _split(c.if_move_effectiveness_equals(ctx, multi))
+        minus2 = minus2 | t
+    ctx, sun = _split(c.if_current_move_effect_equal_to(ctx, BattleEffect.SKIP_CHARGE_TURN_IN_SUN))
+    ctx, herb = _split(c.go_to(ctx))
+    # _CheckForSunnyWeather (:3949)
+    ctx = c.load_current_weather(_at(ctx, sun))
+    ctx, t = _split(c.if_loaded_not_equal_to(ctx, c.AiWeather.SUNNY))
+    herb = herb | t
+    ctx = c.add_to_move_score(ctx, 2)
+    ctx, end = _split(c.go_to(ctx))
+    # _CheckForPowerHerb (:3955)
+    ctx, plus2 = _split(c.if_held_item_equal_to(_at(ctx, herb), _A, c.ITEM_POWER_HERB))
+    ctx, protect_hp = _split(c.go_to(ctx))
+    # _ScorePlus2 (:3959)
+    ctx = c.add_to_move_score(_at(ctx, plus2), 2)
+    ctx, t = _split(c.go_to(ctx))
+    end = end | t
+    # _CheckForProtectAndHP (:3963)
+    ctx = _at(ctx, protect_hp)
+    ctx, t = _split(c.if_move_effect_known(ctx, _D, BattleEffect.PROTECT))
+    minus2 = minus2 | t
+    ctx, t = _split(c.if_hp_percent_greater_than(ctx, _A, 38))
+    end = end | t
+    ctx = c.add_to_move_score(ctx, -1)
+    ctx, t = _split(c.go_to(ctx))
+    end = end | t
+    # _ScoreMinus2 (:3969), falling into _End (:3972)
+    ctx = c.add_to_move_score(_at(ctx, minus2), -2)
+    return c.pop_or_end(_at(ctx, end | ctx.live))
+
+
 def _basic_check_baton_pass(ctx: AiContext, mask) -> AiContext:
     """``Basic_CheckBatonPass`` (script.s:780-784): no other living party member, -10."""
     ctx = c.count_alive_party_battlers(_at(ctx, mask), _A)
@@ -2591,6 +2640,7 @@ _BASIC_LABELS = (
     (BattleEffect.WEATHER_HAIL, _basic_check_hail),  # :228
     (BattleEffect.STATUS_BURN, _basic_check_cannot_burn),  # :231
     (BattleEffect.HIT_LAST_WHIFF_IF_HIT, _basic_check_non_standard_damage),  # :233
+    (BattleEffect.BOOST_ALLY_POWER_BY_50_PERCENT, _basic_check_helping_hand),  # :234
     (BattleEffect.GROUND_TRAP_USER_CONTINUOUS_HEAL, _basic_check_already_ingrained),  # :236
     (BattleEffect.LOWER_OWN_ATK_AND_DEF, _basic_check_non_standard_damage),  # :237
     (BattleEffect.REMOVE_HELD_ITEM, _basic_check_remove_item),  # :240
@@ -2664,6 +2714,7 @@ _EXPERT_LABELS = (
     (BattleEffect.WEATHER_SUN, _expert_sunny_day),  # :1711
     (BattleEffect.MAX_ATK_LOSE_HALF_MAX_HP, _expert_belly_drum),  # :1712
     (BattleEffect.MIRROR_COAT, _expert_mirror_coat),  # :1714
+    (BattleEffect.SKIP_CHARGE_TURN_IN_SUN, _expert_charge_turn_no_invuln),  # :1716
     (BattleEffect.ALWAYS_FLINCH_FIRST_TURN_ONLY, _expert_fake_out),  # :1723
     (BattleEffect.WEATHER_HAIL, _expert_hail),  # :1726
     (BattleEffect.DOUBLE_POWER_WHEN_STATUSED, _expert_facade),  # :1729
@@ -2775,7 +2826,7 @@ def _baton_pass(ctx: AiContext) -> AiContext:
     effect, the 80 roll (:6577) ends it. Swords Dance, Dragon Dance, Calm Mind and Nasty Plot
     go to ``_SetupAtHighHP``; a Protect effect +2, or -2 after the attacker's own Protect or
     Detect; Baton Pass on the battle's first turn -2, else +3/+2/+1 for an Attack stage above
-    +2/+1/0, the same for Sp. Atk; any other move +3 unless the 20 roll (:6591) jumps, falling
+    +2/+1/0 (each ScorePlusN ends the script), then the same for Sp. Atk; any other move +3 unless the 20 roll (:6591) jumps, falling
     into ``_SetupAtHighHP``: on the battle's first turn +5, below 60 % HP -10, else +1."""
     ctx = _terminate(ctx)
     ctx = c.count_alive_party_battlers(ctx, _A)

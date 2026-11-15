@@ -521,6 +521,9 @@ KAIZO_TRANSCRIBED: frozenset[int] = frozenset(
         242,  # USE_LAST_USED_MOVE: Basic_CheckCopycat (:271); Expert_Copycat (:1785)
         181,  # GROUND_TRAP_USER_CONTINUOUS_HEAL: Basic_CheckAlreadyIngrained (:236); Expert_Ingrain
         127,  # PASS_STATS_AND_STATUS: Basic_CheckBatonPass (:208); Expert_BatonPass (:1705)
+        # E1 prep batch P4 (Gardenia)
+        176,  # BOOST_ALLY_POWER_BY_50_PERCENT: Basic_CheckHelpingHand (:234); no Expert entry
+        151,  # SKIP_CHARGE_TURN_IN_SUN: Expert_ChargeTurnNoInvuln (:1716), no roll
     }
 )
 # The transcribed effects (KAIZO_TRANSCRIBED) whose Expert_Main entry goes to a label added
@@ -619,6 +622,7 @@ KAIZO_EXPERT_LABELS: dict[int, tuple[str, int]] = {
     242: ("Expert_Copycat", 1785),
     181: ("Expert_Ingrain", 1734),
     127: ("Expert_BatonPass", 1705),
+    151: ("Expert_ChargeTurnNoInvuln", 1716),
 }
 # Of KAIZO_EXPERT_LABELS, the effects whose Expert label policy._expert transcribes
 # (layout.KAIZO expert_transcribed), written out: it is not derived from the table, so an
@@ -705,6 +709,7 @@ KAIZO_EXPERT_TRANSCRIBED: frozenset[int] = frozenset(
         242,  # USE_LAST_USED_MOVE: Expert_Copycat
         181,  # GROUND_TRAP_USER_CONTINUOUS_HEAL: Expert_Ingrain (no score change)
         127,  # PASS_STATS_AND_STATUS: Expert_BatonPass
+        151,  # SKIP_CHARGE_TURN_IN_SUN: Expert_ChargeTurnNoInvuln
     }
 )
 assert set(KAIZO_EXPERT_LABELS) <= KAIZO_TRANSCRIBED

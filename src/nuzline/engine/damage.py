@@ -973,7 +973,11 @@ def _finish(
     # when MOVE_STATUS_SUPER_EFFECTIVE is set. ApplyTypeMultiplier (:7557-7574) sets it for a
     # x2 entry unless NOT_VERY_EFFECTIVE was set, which it clears instead (and the other way
     # round), so it stands exactly when the product is above neutral; an immunity leaves 0.
-    super_effective = first * second > 100
+    # ApplyTypeMultiplier updates the flags only for a move with table power (``update`` is
+    # ``movePower``, :2627, :7558, :7568), and the bonuses need it too (:2656, :2667): a status
+    # move or MOVE_NONE, which the AI path computes (IfBattlerDealsMoreDamage), takes none.
+    has_power = _i32(power) > 0
+    super_effective = (first * second > 100) & has_power
     # Filter shares Solid Rock's line (:2657-2661, Battler_IgnorableAbility).
     solid_rock = super_effective & (
         (d_ability == AbilityId.SOLID_ROCK) | (d_ability == AbilityId.FILTER)
@@ -987,7 +991,7 @@ def _finish(
     # :2668-2672 Tinted Lens (Battler_Ability) doubles a MOVE_STATUS_NOT_VERY_EFFECTIVE hit,
     # which ApplyTypeMultiplier sets, like the super-effective flag above, exactly when the
     # product is below neutral (an immunity leaves 0).
-    not_very = first * second < 100
+    not_very = (first * second < 100) & has_power
     damage = jnp.where(not_very & (a_ability == AbilityId.TINTED_LENS), damage * 2, damage)
     # :2600-2603 Levitate: MOVE_STATUS_LEVITATED instead of the chart walk, part of
     # MOVE_STATUS_IMMUNE: no damage (its DID_NOT_HIT ends the move, bcp.c:3325; the AI's

@@ -326,6 +326,8 @@ class BattleEffect(IntEnum):
     USE_LAST_USED_MOVE = 242  # Copycat
     GROUND_TRAP_USER_CONTINUOUS_HEAL = 181  # Ingrain
     PASS_STATS_AND_STATUS = 127  # Baton Pass
+    BOOST_ALLY_POWER_BY_50_PERCENT = 176  # Helping Hand
+    SKIP_CHARGE_TURN_IN_SUN = 151  # SolarBeam
     DOUBLE_POWER_IF_HIT = 185  # Avalanche, Revenge (Expert_MetalBurst, script.s:5049)
     PRIORITY_NEG_1_BYPASS_ACCURACY = 78  # Vital Throw (Expert_MetalBurst, script.s:5051)
     SET_SUBSTITUTE = 79  # Substitute
@@ -1081,7 +1083,7 @@ def if_battler_deals_more_damage(
     assert battler == Battler.DEFENDER, battler
     tables, state = ctx.tables, ctx.state
     a, d = _side(Battler.ATTACKER), _side(battler)
-    ai_best = jnp.max(_slot_damage(tables, state, jnp.full(MOVES, SIM_ROLL_MAX, _I32)))
+    ai_best = jnp.max(ctx.damage)  # _slot_damage at USE_MAX_DAMAGE (new_context)
     theirs = ai_damage_for_roll(
         tables,
         state,
@@ -1455,6 +1457,7 @@ def load_effect_of_loaded_move(ctx: AiContext) -> AiContext:
 
 
 ITEM_SHINY_STONE = 107  # Basic_CheckMetalBurst (script.s:1169, :1176; generated/items.txt)
+ITEM_POWER_HERB = 271  # Expert_ChargeTurnNoInvuln_CheckForPowerHerb (script.s:3956)
 
 
 def _held_item(ctx: AiContext, battler: Battler) -> jnp.ndarray:
@@ -1494,6 +1497,11 @@ def if_loaded_greater_than(ctx: AiContext, value: int) -> AiContext:
 def if_loaded_mask(ctx: AiContext, mask: int) -> AiContext:
     """``IfLoadedMask`` (trainer_ai.c:810-820): ``calcTemp & mask``."""
     return _jump(ctx, (ctx.calc_temp & mask) != 0)
+
+
+def if_loaded_not_mask(ctx: AiContext, mask: int) -> AiContext:
+    """``IfLoadedNotMask`` (trainer_ai.c): ``(calcTemp & mask) == 0``."""
+    return _jump(ctx, (ctx.calc_temp & mask) == 0)
 
 
 def load_battle_type(ctx: AiContext) -> AiContext:

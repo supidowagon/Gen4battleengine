@@ -485,6 +485,9 @@ CONSTANTS: tuple[Constant, ...] = (
     # Hold effects (generated/item_hold_effects.txt, line N is id N-1):
     # HOLD_EFFECT_POWER_UP_SE (96) and HOLD_EFFECT_SPEED_DOWN_GROUNDED (106).
     Constant("nuzline.ai.commands.ITEM_EXPERT_BELT", "item", 268, "Expert Belt", _E, 96),
+    # IfHeldItemEqualTo's items (Basic_CheckMetalBurst, Expert_ChargeTurnNoInvuln).
+    Constant("nuzline.ai.commands.ITEM_SHINY_STONE", "item", 107, "Shiny Stone", _E),
+    Constant("nuzline.ai.commands.ITEM_POWER_HERB", "item", 271, "Power Herb", _E),
     Constant("nuzline.ai.switching.ITEM_IRON_BALL", "item", 278, "Iron Ball", _E, 106),
     # Potion's itemUseParams.hpRestored (res/items/data/potion.json), which
     # BattleSystem_UseBagItem (src/battle/battle_system.c:435) restores.
