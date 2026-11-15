@@ -959,7 +959,7 @@ def _cleanup_fainted(turn: _Turn, s: RefState, side: int) -> None:
 BATON_PASSED = (
     "confusion", "leech_seed", "substitute_hp", "water_sport", "mud_sport", "aqua_ring",
     "ingrain", "mean_look", "mean_look_target", "lock_on", "lock_on_target",
-    "perish_song", "perish_song_turns",
+    "perish_song", "perish_song_turns", "curse",
 )  # fmt: skip
 
 
@@ -1007,6 +1007,7 @@ def _reset_battler(sd: RefSide, baton: bool = False) -> None:
         "perish_song",
         "perish_song_turns",
         "yawn",
+        "curse",
     ):
         if not (baton and name in BATON_PASSED):
             setattr(sd, name, 0)
@@ -1793,20 +1794,25 @@ def _move_target(tables, move: int) -> int:
     return _t(tables, "move_target", move)
 
 
-def _curse_on_user(tables, move: int) -> bool:
-    """A non-Ghost user's Curse (coverage refuses a Ghost-type one) targets its user although
+def _ghost(s: RefState, side: int) -> bool:
+    """``side``'s active battler has the Ghost type (effect_script_0109.s:5-6)."""
+    return Type.GHOST in _active(s, side).types
+
+
+def _curse_on_user(tables, move: int, ghost: bool = False) -> bool:
+    """A non-Ghost user's Curse (a Ghost user's targets the foe, B8-5) targets its user although
     its data range is RANGE_SINGLE_TARGET: ``BattleControllerPlayer_MustSelectTarget``
     (bcp.c:4344-4346) gives it ``RANGE_USER``, so the chosen target is the user (:4363) and
     ``BattleSystem_Defender`` (lib.c:1709-1718) returns it: like a ``TARGETS_USER`` move."""
-    return _t(tables, "move_effect", move) == EffectId.CURSE
+    return _t(tables, "move_effect", move) == EffectId.CURSE and not ghost
 
 
-def _targets_user(tables, move: int) -> bool:
-    return _move_target(tables, move) in TARGETS_USER or _curse_on_user(tables, move)
+def _targets_user(tables, move: int, ghost: bool = False) -> bool:
+    return _move_target(tables, move) in TARGETS_USER or _curse_on_user(tables, move, ghost)
 
 
-def _defender_always(tables, move: int) -> bool:
-    return _move_target(tables, move) in DEFENDER_ALWAYS or _curse_on_user(tables, move)
+def _defender_always(tables, move: int, ghost: bool = False) -> bool:
+    return _move_target(tables, move) in DEFENDER_ALWAYS or _curse_on_user(tables, move, ghost)
 
 
 def _protected(turn: _Turn, s: RefState, side: int, move: int, unleash: bool) -> bool:
@@ -1821,7 +1827,9 @@ def _protected(turn: _Turn, s: RefState, side: int, move: int, unleash: bool) ->
         return False
     if _t(tables, "move_effect", move) == EffectId.BIDE:
         return unleash
-    return _move_target(tables, move) not in SELF_DEFENDER and not _curse_on_user(tables, move)
+    return _move_target(tables, move) not in SELF_DEFENDER and not _curse_on_user(
+        tables, move, _ghost(s, side)
+    )
 
 
 def _can_have_status(tables, s: RefState, side: int, status: int) -> bool:
@@ -2058,6 +2066,14 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
         if _active(s, side).hp > 0:
             for stat in (Stat.ATK, Stat.DEF, Stat.SPE, Stat.SPA, Stat.SPD):
                 _change_stage(s, side, stat, 1)
+    elif effect == EffectId.CURSE and landed and _ghost(s, side):
+        # effect_script_0109.s:9-17 (a Ghost user) -> subscript_curse_ghost.s on the foe: fails
+        # behind a substitute or on a cursed foe (:3-4); else the foe's curse, and the user loses
+        # Divide(maxHP, 2) through UPDATE_HP (:6-12).
+        foe_sd = s.sides[target]
+        if not foe_sd.substitute_hp and not foe_sd.curse:
+            foe_sd.curse = 1
+            _lose_hp(turn, s, side, _divide(_active(s, side).max_hp, 2))
     elif effect == EffectId.CURSE and landed and _active(s, side).hp > 0:
         # effect_script_0109.s (non-Ghost user) -> subscript_curse_normal.s: three
         # ChangeStatStage calls, each skipped on its own at the cap.
@@ -2424,11 +2440,11 @@ def _hit(turn: _Turn, s: RefState, side: int, move: int, hit: int, struggling: b
     target_mon = _active(s, target)
     # The move reaches its defender (BattleSystem_Defender): the living foe, or the
     # defender a DEFENDER_ALWAYS move always has; a TARGETS_USER move hits its user.
-    landed = target_mon.hp > 0 or _defender_always(tables, move)
+    landed = target_mon.hp > 0 or _defender_always(tables, move, _ghost(s, side))
     # Bide is a RANGE_USER move whose unleash hits the foe (bcp.c:2702-2713).
     counter = _t(tables, "move_effect", move) == EffectId.COUNTER
     hits_foe = (
-        not _targets_user(tables, move)
+        not _targets_user(tables, move, _ghost(s, side))
         or _t(tables, "move_effect", move) == EffectId.BIDE
         or counter
     )
@@ -2808,7 +2824,7 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
     target_range = _move_target(tables, move)
     foe_defender = (
         target_range not in SELF_DEFENDER
-        and not _curse_on_user(tables, move)
+        and not _curse_on_user(tables, move, _ghost(s, side))
         and (_active(s, 1 - side).hp > 0 or target_range == MoveTarget.RANGE_OPPONENT_SIDE)
     )
     # BEFORE_MOVE_STATE_QUICK_CLAW (bcp.c:3140-3143): subscript_check_quick_claw.s:26-28 eats
@@ -2849,7 +2865,7 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
     if (
         not nature_power
         and not special_counter
-        and not _defender_always(tables, move)
+        and not _defender_always(tables, move, _ghost(s, side))
         and _active(s, 1 - side).hp == 0
     ):
         _unlock(s.sides[side])  # subscript_no_target.s
@@ -2866,7 +2882,7 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
         # moveHit becomes moveCur.
         move = _called_move(tables, s, move)
         turn.move_cur = move
-        if not _defender_always(tables, move) and _active(s, 1 - side).hp == 0:
+        if not _defender_always(tables, move, _ghost(s, side)) and _active(s, 1 - side).hp == 0:
             _unlock(s.sides[side])
             return None
         record = move
@@ -2887,10 +2903,12 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
             return None
         move = _called_move(tables, s, called)
         turn.move_cur = move
-        if not _defender_always(tables, move) and _active(s, 1 - side).hp == 0:
+        if not _defender_always(tables, move, _ghost(s, side)) and _active(s, 1 - side).hp == 0:
             _unlock(s.sides[side])  # subscript_no_target.s
             return None
-        own_defender = _move_target(tables, move) in SELF_DEFENDER or _curse_on_user(tables, move)
+        own_defender = _move_target(tables, move) in SELF_DEFENDER or _curse_on_user(
+            tables, move, _ghost(s, side)
+        )
         record = None if own_defender else move
         counter = _t(tables, "move_effect", move) == EffectId.COUNTER
         special_counter = counter and _move_target(tables, move) in SELF_DEFENDER
@@ -2899,7 +2917,7 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
     # attacker's moveFailFlags.noEffect (bcp.c:2350-2370), which the Uproar check reads.
     if (
         _t(tables, "move_power", move) != 0
-        and not _targets_user(tables, move)
+        and not _targets_user(tables, move, _ghost(s, side))
         # Future Sight's script sets SYSCTL_IGNORE_IMMUNITIES (effect_script_0148.s:7).
         and _t(tables, "move_effect", move) != EffectId.FUTURE_SIGHT
         and _matchup_x40(
@@ -3097,6 +3115,11 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
         )
         full = full or (effect == EffectId.LOCK_ON and bool(foe_sd.substitute_hp))  # :6, :33
         full = full or (effect == EffectId.YAWN and _yawn_blocks(tables, s, side, 1 - side)[0])
+        full = full or (
+            effect == EffectId.CURSE
+            and _ghost(s, side)
+            and bool(foe_sd.substitute_hp or foe_sd.curse)
+        )  # subscript_curse_ghost.s:3-4, :18-20
         full = full or (
             effect == EffectId.PERISH_SONG
             and not any(not x.perish_song and _active(s, k).hp for k, x in enumerate(s.sides))
@@ -3407,6 +3430,7 @@ def _end_of_turn(turn: _Turn, s: RefState, order: list[int]) -> None:
             _poison_check,  # MON_COND_CHECK_STATE_POISON, bcp.c:1393
             _toxic_check,  # MON_COND_CHECK_STATE_TOXIC, bcp.c:1405
             _burn_check,  # MON_COND_CHECK_STATE_BURN, bcp.c:1425
+            _curse_check,  # MON_COND_CHECK_STATE_CURSE, bcp.c:1451
             _bind_check,  # MON_COND_CHECK_STATE_BIND, bcp.c:1462
             _uproar_check,  # MON_COND_CHECK_STATE_UPROAR, bcp.c:1505
             _disable_check,  # MON_COND_CHECK_STATE_DISABLE, bcp.c:1565
@@ -3611,6 +3635,14 @@ def _burn_check(turn: _Turn, s: RefState, side: int) -> None:
     # subscript_burn_damage.s:5: not for Magic Guard.
     if mon.status == Status.BURN and mon.hp and mon.ability != AbilityId.MAGIC_GUARD:
         _lose_hp(turn, s, side, _divide(mon.max_hp, 8))
+
+
+def _curse_check(turn: _Turn, s: RefState, side: int) -> None:
+    """``MON_COND_CHECK_STATE_CURSE`` (bcp.c:1451-1459), subscript_curse_damage.s: a cursed
+    battler with HP and no Magic Guard loses ``Divide(maxHP, 4)``."""
+    mon = _active(s, side)
+    if s.sides[side].curse and mon.hp and mon.ability != AbilityId.MAGIC_GUARD:
+        _lose_hp(turn, s, side, _divide(mon.max_hp, 4))
 
 
 def _bind_check(turn: _Turn, s: RefState, side: int) -> None:

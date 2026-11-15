@@ -117,6 +117,7 @@ from nuzline.engine.effects import (
     defender_always,
     entry_hazards,
     focus_sash_damage,
+    ghost_user,
     hit_count,
     holds,
     imprison_fails,
@@ -700,7 +701,7 @@ def _use_move(
     # RANGE_OPPONENT_SIDE: BattleSystem_RandomOpponent), the user for a self-defender range
     # and a non-Ghost Curse (effects.self_defender).
     move_range = tables.move_target[move]
-    foe_defender = ~self_defender(tables, move) & (
+    foe_defender = ~self_defender(tables, move, ghost_user(state, side)) & (
         (state.hp[target_side, target] > 0) | (move_range == MoveTarget.RANGE_OPPONENT_SIDE)
     )
     custap = jnp.asarray(custap, bool)
@@ -879,7 +880,9 @@ def _use_move(
     never_misses = (tables.move_accuracy[used] == 0) | (
         tables.move_effect[used] == EffectId.FUTURE_SIGHT
     )
-    has_target = (state.hp[target_side, target] > 0) | defender_always(tables, used)
+    has_target = (state.hp[target_side, target] > 0) | defender_always(
+        tables, used, ghost_user(state, side)
+    )
     # Counter, Mirror Coat, Metal Burst (battle_script.c:4615-4705, :7153-7184): the command
     # reads the user's turnFlags damage and its last attacker (physical / special /
     # lastAttacker, stored as 1 + battler) and fails (MOVE_STATUS_FAILED) on 0 taken, an
@@ -899,7 +902,7 @@ def _use_move(
         & (attacker != side)
         & (state.hp[attacker, state.active[attacker]] > 0)
     )
-    special_counter = counter & self_defender(tables, used)
+    special_counter = counter & self_defender(tables, used, ghost_user(state, side))
     has_target = has_target | special_counter | (invoker & call_failed)
     # SYSCTL_MOVE_SUCCEEDED (battle_controller_player.c:3212) once the move got past the
     # status checks, the PP decrement and the no-target check, before the accuracy check
@@ -1111,7 +1114,7 @@ def _use_move(
     )
     absorbed = (
         connected
-        & ~self_defender(tables, used)
+        & ~self_defender(tables, used, ghost_user(state, side))
         & (ignorable(state, side, target_side) == AbilityId.DRY_SKIN)
         & (move_type == Type.WATER)
         & (tables.move_power[used] != 0)
@@ -1149,7 +1152,7 @@ def _use_move(
         & has_target
         & ~(invoker & call_failed)
         & (tables.move_power[used] != 0)
-        & ~targets_user(tables, used)
+        & ~targets_user(tables, used, ghost_user(state, side))
         & (tables.move_effect[used] != EffectId.FUTURE_SIGHT)  # SYSCTL_IGNORE_IMMUNITIES
         & (chart == 0)
     )
@@ -1216,7 +1219,10 @@ def _use_move(
         landed = (
             going
             & (hit_index < n_hits)
-            & ((state.hp[target_side, target] > 0) | defender_always(tables, used))
+            & (
+                (state.hp[target_side, target] > 0)
+                | defender_always(tables, used, ghost_user(state, side))
+            )
         )
         hit_state, info = play_hit(
             tables,
@@ -1417,13 +1423,15 @@ def _use_move(
     # An invoker's GoToMoveScript re-picks the defender for the called move: the foe gets moveCur
     # when the called move's defender is the foe (not a self-defender range) and it has one.
     record = jnp.where(
-        invoker, can_act & ~call_failed & has_target & ~self_defender(tables, used), record
+        invoker,
+        can_act & ~call_failed & has_target & ~self_defender(tables, used, ghost_user(state, side)),
+        record,
     )
     # A special-range Counter's defender is the foe only once its command succeeded.
     record = jnp.where(special_counter, can_act & counter_ok, record)
     # The tail modes: the paused move showed its attack message and its defender is the foe
     # unless it is a self-defender (Baton Pass).
-    record = jnp.where(head_on, record, ~self_defender(tables, used_t))
+    record = jnp.where(head_on, record, ~self_defender(tables, used_t, ghost_user(state, side)))
     shown_t = jnp.where(head_on, can_act, True)
     hit_record = jnp.where(record, jnp.where(shown_t, used_t, 0), state.move_hit[target_side])
     hit_record = jnp.where(tail, hit_record, state.move_hit[target_side])
@@ -2105,6 +2113,24 @@ def _burn_check(tables: Tables, state: BattleState, side) -> BattleState:
     return _status_damage(state, side, Status.BURN, _eighth(state, side))
 
 
+def _curse_check(state: BattleState, side) -> BattleState:
+    """``MON_COND_CHECK_STATE_CURSE`` (bcp.c:1451-1459): a cursed battler with HP left runs
+    subscript_curse_damage.s: nothing for its own Magic Guard (``CheckAbility``, :2), else
+    ``Divide(maxHP, 4)`` through UPDATE_HP (:5-13, capped at its HP; it may faint)."""
+    mon = state.active[side]
+    guarded = state.ability[side, mon] == AbilityId.MAGIC_GUARD
+    on = (state.curse[side] != 0) & (state.hp[side, mon] > 0) & ~guarded
+    loss = jnp.maximum(state.max_hp[side, mon].astype(_I32) // 4, 1)
+    return _hp_change(state, side, mon, -jnp.where(on, loss, 0))
+
+
+def _burn_then_curse(tables: Tables, state: BattleState, side) -> BattleState:
+    """``MON_COND_CHECK_STATE_BURN`` then (``_NIGHTMARE``, unsupported, between) ``_CURSE``: one
+    faint check serves both, as a battler the burn fainted has no HP for the curse and the
+    battle-over check between finds what the one after them finds."""
+    return _curse_check(_burn_check(tables, state, side), side)
+
+
 def _bind_check(tables: Tables, state: BattleState, side) -> BattleState:
     """A bound active Pokemon with HP left: the counter drops, and while it stays above
     0 the Pokemon loses ``BattleSystem_Divide(maxHP, 16)``; at 0 Bind ends without damage."""
@@ -2328,8 +2354,9 @@ END_OF_TURN_ORDER = (
     ("poison", _poison_check),
     # MON_COND_CHECK_STATE_TOXIC, battle_controller_player.c:1405
     ("toxic", _toxic_check),
-    # MON_COND_CHECK_STATE_BURN, battle_controller_player.c:1425
-    ("burn", _burn_check),
+    # MON_COND_CHECK_STATE_BURN, battle_controller_player.c:1425, then _CURSE, :1451
+    # (``_burn_then_curse``)
+    ("burn_curse", _burn_then_curse),
     # MON_COND_CHECK_STATE_BIND, battle_controller_player.c:1462
     ("bind", _bind_check),
     # MON_COND_CHECK_STATE_UPROAR, battle_controller_player.c:1505, then

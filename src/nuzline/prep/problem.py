@@ -23,7 +23,6 @@ from nuzline.engine.coverage import (
     IMPLEMENTED_ITEMS,
     Support,
     exp_refusals,
-    ghost_curse,
     halved_by_line,
     halved_defense_line,
     halving_moves,
@@ -107,21 +106,15 @@ def bag_resources(
     return resources, warnings
 
 
-GHOST_CURSE_REFUSAL = "Ghost-type user: move effect not implemented"
-
-
 def _move_refusal(
     tables: Tables, move: int, spec: PokemonSpec, foe_defense: int | None = None
 ) -> str | None:
     """Why ``spec``'s Pokemon cannot use ``move`` (engine effect, as ``coverage``'s
-    ``move_effect_line`` grades it for that Pokemon: a Ghost-type user's Curse is refused,
-    ``coverage.ghost_curse``; a Selfdestruct-family move against a foe's Defense
+    ``move_effect_line`` grades it for that Pokemon: a Selfdestruct-family move against a foe's Defense
     ``foe_defense`` below ``coverage.HALVED_DEFENSE_MIN``, ``coverage.halved_defense_line``;
     or the AI), or None."""
     from nuzline.ai.policy import player_move_refusal
 
-    if ghost_curse(tables, move, personal_row(tables, spec.species, spec.form)):
-        return GHOST_CURSE_REFUSAL
     if (low := halved_defense_line(tables, move, foe_defense)) is not None:
         return f"{low.strip()}: zero damage divisor at -6 Defense, not implemented"
     effect = EffectId(int(np.asarray(tables.move_effect)[move]))

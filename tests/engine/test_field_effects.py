@@ -246,7 +246,7 @@ def test_end_of_turn_order_lists_the_implemented_checks_in_decomp_order():
         "leech_seed",
         "poison",
         "toxic",
-        "burn",
+        "burn_curse",
         "bind",
         "uproar_disable",
         "taunt_yawn",

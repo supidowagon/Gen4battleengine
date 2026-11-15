@@ -576,10 +576,25 @@ def _raise_all_stats(tables, state, h: _Hit) -> BattleState:
 
 def _curse(tables, state, h: _Hit) -> BattleState:
     # BattleSystem_TriggerPrimaryEffect (battle_lib.c:1491): the recipient (the user) has HP.
-    cond = (h.effect == _E.CURSE) & h.landed & _alive(state, h.side, h.user)
+    # effect_script_0109.s:5-7: the non-Ghost branch (subscript_curse_normal.s).
+    ghost = ghost_user(state, h.side)
+    cond = (h.effect == _E.CURSE) & h.landed & _alive(state, h.side, h.user) & ~ghost
     for stat, delta in CURSE_STAGES:
         state = change_stage(state, h.side, stat, delta, cond)
-    return state
+    # The Ghost branch (:9-17): a direct ON_HIT subscript_curse_ghost.s on the foe, unless it
+    # fails (``curse_fails``): the foe's VOLATILE_CONDITION_CURSE, then the user loses
+    # Divide(maxHP, 2) through UPDATE_HP (:6-12; it can faint).
+    hexed = (h.effect == _E.CURSE) & h.landed & ghost & ~curse_fails(state, h.target_side)
+    state = _set(state, "curse", h.target_side, 1, hexed)
+    hp = state.hp[h.side, h.user].astype(_I32)
+    cost = divide(state.max_hp[h.side, h.user].astype(_I32), 2)
+    return _set(state, "hp", (h.side, h.user), jnp.maximum(hp - cost, 0), hexed)
+
+
+def curse_fails(state: BattleState, target_side) -> jnp.ndarray:
+    """``bool``: subscript_curse_ghost.s fails (MOVE_STATUS_FAILED, :18-20) on a defender behind
+    a substitute (:3) or already cursed (:4); its semi-invulnerable test (:2) cannot hold."""
+    return (state.substitute_hp[target_side] != 0) | (state.curse[target_side] != 0)
 
 
 def _percent_of_dealt(h: _Hit) -> jnp.ndarray:
@@ -617,19 +632,27 @@ def _recoil(tables, state, h: _Hit) -> BattleState:
     return state._replace(hp=state.hp.at[h.side, h.user].set(hp.astype(state.hp.dtype)))
 
 
-def targets_user(tables: Tables, move) -> jnp.ndarray:
+def ghost_user(state: BattleState, side) -> jnp.ndarray:
+    """``bool``: ``side``'s active battler has the Ghost type (``Move_IsGhostCurse``'s and
+    effect_script_0109.s:5-6's test, its ``BattleMon`` types; Camouflage can take it away, no
+    implemented move gives it, so selection and execution agree)."""
+    return jnp.any(state.types[side, state.active[side]] == Type.GHOST)
+
+
+def targets_user(tables: Tables, move, ghost=False) -> jnp.ndarray:
     """The move's decomp defender is the user itself: ``RANGE_USER``,
     ``RANGE_USER_SIDE`` and ``RANGE_FIELD`` (battle_lib.c:1665-1669), e.g. Growth,
     Reflect, Water Sport; and a non-Ghost user's Curse (``RANGE_SINGLE_TARGET`` in the
     data): ``BattleControllerPlayer_MustSelectTarget`` (bcp.c:4344-4346) makes its range
     ``RANGE_USER``, so the chosen target is the user (:4363-4364) and
-    ``BattleSystem_Defender``'s single-target branch returns it (battle_lib.c:1709-1718)."""
+    ``BattleSystem_Defender``'s single-target branch returns it (battle_lib.c:1709-1718).
+    ``ghost``: the user has the Ghost type (``ghost_user``), whose Curse targets the foe (B8-5)."""
     target = tables.move_target[move]
     return (
         (target == MoveTarget.RANGE_USER)
         | (target == MoveTarget.RANGE_USER_SIDE)
         | (target == MoveTarget.RANGE_FIELD)
-        | (tables.move_effect[move] == _E.CURSE)
+        | ((tables.move_effect[move] == _E.CURSE) & ~jnp.asarray(ghost, bool))
     )
 
 
@@ -645,12 +668,12 @@ SELF_DEFENDER_RANGES = (
 )
 
 
-def self_defender(tables: Tables, move) -> jnp.ndarray:
+def self_defender(tables: Tables, move, ghost=False) -> jnp.ndarray:
     """The move's decomp defender is its user: a ``SELF_DEFENDER_RANGES`` range or a
-    non-Ghost Curse (``targets_user``)."""
+    non-Ghost Curse (``targets_user``; ``ghost``: the user is Ghost-type)."""
     move_range = tables.move_target[move]
     in_range = jnp.isin(move_range, jnp.asarray(SELF_DEFENDER_RANGES, move_range.dtype))
-    return in_range | targets_user(tables, move)
+    return in_range | targets_user(tables, move, ghost)
 
 
 def protect_blocks(tables: Tables, move, unleash) -> jnp.ndarray:
@@ -666,12 +689,14 @@ def protect_blocks(tables: Tables, move, unleash) -> jnp.ndarray:
     return flagged & jnp.where(bide, unleash, ~self_defender(tables, move))
 
 
-def defender_always(tables: Tables, move) -> jnp.ndarray:
+def defender_always(tables: Tables, move, ghost=False) -> jnp.ndarray:
     """``BattleSystem_Defender`` (battle_lib.c:1599) finds a defender for the move
     whatever the foe's HP: the user (``targets_user``) or, for ``RANGE_OPPONENT_SIDE``
     (Stealth Rock), the foe's battler slot (``BattleSystem_RandomOpponent``, :4194). The
     no-target check (battle_controller_player.c:2306) never fails such a move."""
-    return targets_user(tables, move) | (tables.move_target[move] == MoveTarget.RANGE_OPPONENT_SIDE)
+    return targets_user(tables, move, ghost) | (
+        tables.move_target[move] == MoveTarget.RANGE_OPPONENT_SIDE
+    )
 
 
 def _set(state: BattleState, field: str, index, value, cond) -> BattleState:
@@ -853,6 +878,8 @@ def primary_effect_fails(tables, state: BattleState, side, target_side, move) ->
         | ((effect == _E.LOCK_ON) & lock_on_fails(state, target_side))
         # BtlCmd_TryPerishSong (battle_script.c:5482-5484): no battler eligible.
         | ((effect == _E.PERISH_SONG) & ~jnp.any(perish_song_eligible(state)))
+        # subscript_curse_ghost.s:18-20 (a Ghost user's Curse).
+        | ((effect == _E.CURSE) & ghost_user(state, side) & curse_fails(state, target_side))
         # subscript_yawn.s's failures (``yawn_blocks``).
         | ((effect == _E.YAWN) & yawn_blocks(tables, state, side, target_side)[0])
     )
@@ -1794,7 +1821,10 @@ def play_hit(
     landed = (
         connected
         & (hit_index < hit_count(tables, move, outcome, side))
-        & (_alive(state, target_side, target) | defender_always(tables, move))
+        & (
+            _alive(state, target_side, target)
+            | defender_always(tables, move, ghost_user(state, side))
+        )
     )
 
     damage = damage_for_roll(
@@ -1832,7 +1862,11 @@ def play_hit(
     raw = damage
     damage = jnp.where(swipe, target_hp - 1, damage)
     # Bide is a RANGE_USER move whose unleash hits the foe (bcp.c:2702-2713).
-    hits_foe = ~targets_user(tables, move) | (tables.move_effect[move] == _E.BIDE) | is_counter
+    hits_foe = (
+        ~targets_user(tables, move, ghost_user(state, side))
+        | (tables.move_effect[move] == _E.BIDE)
+        | is_counter
+    )
     update_hp = landed & hits_foe & (raw > 0)  # BattleControllerPlayer_UpdateHP runs
     sash = holds(tables, state, target_side, ItemId.FOCUS_SASH)
     full = target_hp == state.max_hp[target_side, target].astype(_I32)

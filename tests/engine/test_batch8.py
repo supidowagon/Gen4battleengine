@@ -93,3 +93,19 @@ def test_yawn_meets_insomnia(tables, names):
     s = s._replace(ai_ability_known=jnp.zeros_like(s.ai_ability_known))
     out = assert_matches_reference(tables, s, (0, 0), O)
     assert int(out.yawn[0]) == 0 and int(out.ai_ability_known[0]) == 1
+
+
+def test_ghost_curse_halves_the_user_and_hurts_the_foe_each_turn(tables, names):
+    """B8-5: a Ghost user's Curse (effect_script_0109.s:5-6, :9-17) curses the foe and costs
+    Divide(maxHP, 2) (subscript_curse_ghost.s:6-12); MON_COND_CHECK_STATE_CURSE takes
+    Divide(maxHP, 4) at each turn end (bcp.c:1451-1459, subscript_curse_damage.s). A cursed foe
+    makes the next Curse fail (:4)."""
+    n = names
+    s = make_state(tables, [_mon(n, "Gastly", ["Curse"], 30)], [_mon(n, "Geodude", ["Growl"], 30)])
+    out = assert_matches_reference(tables, s, (0, 0), O)
+    user, foe = int(s.max_hp[0, 0]), int(s.max_hp[1, 0])
+    assert int(out.curse[1]) == 1 and int(out.curse[0]) == 0
+    assert int(out.hp[0, 0]) == user - max(user // 2, 1)
+    assert int(out.hp[1, 0]) == foe - max(foe // 4, 1)
+    again = assert_matches_reference(tables, out, (0, 0), O)
+    assert int(again.hp[0, 0]) == int(out.hp[0, 0])  # failed: no cost

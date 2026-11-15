@@ -24,10 +24,8 @@ Stage A and B handling of a sampling-only opponent, before anything can be marke
 The registries list exactly what plan 1a (Tasks 8a-8e: move effects, abilities, held
 items) and plan 1b (Task 2b: trainer items; Task 3: Roark's AI flags) implement:
 
-* move effects: every ``ids.EffectId`` but ``UNSUPPORTED``, except ``CURSE`` used by a
-  Ghost-type Pokemon (``ghost_curse``: ``effect_script_0109.s`` sends it down the Ghost
-  branch, ``subscript_curse_ghost.s``, which is not modelled), refused per Pokemon on both
-  sides and in the pool; and a physical ``SELF_DESTRUCT`` move (Selfdestruct, Explosion)
+* move effects: every ``ids.EffectId`` but ``UNSUPPORTED`` (a Ghost-type user's Curse is
+  modelled since E2 batch 8, B8-5), except a physical ``SELF_DESTRUCT`` move (Selfdestruct, Explosion)
   facing a Pokemon whose Defense is below ``HALVED_DEFENSE_MIN`` (``halved_defense_line``:
   the halved Defense at -6 makes the damage divisor 0), refused per move on both sides
   here, and in the pool and prep both ways: a player candidate's move against the
@@ -161,7 +159,6 @@ from nuzline.engine.ids import (
     MoveFlag,
     Stat,
     TrainerItemId,
-    Type,
     Weather,
 )
 from nuzline.engine.levelup import (
@@ -328,17 +325,6 @@ class _Collector:
             self.report.sampling_only.append(f"{what} ({kind} SAMPLING_ONLY)")
 
 
-def ghost_curse(tables: Tables, move: int, row: int) -> bool:
-    """``move`` is Curse (``EffectId.CURSE``) and personal ``row`` is Ghost-type:
-    ``effect_script_0109.s:5-6`` (``BATTLEMON_TYPE_1``/``_2 == TYPE_GHOST``) takes the
-    Ghost branch, which the engine does not model. The only type change in the implemented
-    set is Camouflage, whose types (``ids.TERRAIN_TYPES``) include no Ghost: a non-Ghost user
-    stays non-Ghost, and a Ghost user is refused whatever it does first (conservative)."""
-    if int(np.asarray(tables.move_effect)[move]) != EffectId.CURSE:
-        return False
-    return Type.GHOST in [int(t) for t in np.asarray(tables.species_types)[row]]
-
-
 # BattleSystem_CalcMoveDamage halves defenseStat for BATTLE_EFFECT_HALVE_DEFENSE
 # (battle_lib.c:6943-6945) before the stage scales it into stageDivisor (:6963-6975): at
 # -6 Defense (x2/8) a Defense below this gives stageDivisor 0, and ``damage /= 0`` is not
@@ -407,12 +393,9 @@ def move_effect_line(
     tables: Tables, names: Names, move: int, row: int, known: Sequence[int] = ()
 ) -> tuple[Support, str]:
     """The support of ``move`` for the Pokemon at personal ``row`` and its name as a report
-    line shows it: by engine effect, ``" (Ghost user)"`` added and refused for
-    ``ghost_curse``. Metronome (ruling B5-2) is refused while any move it can call for a
-    Pokemon knowing ``known`` (``metronome_calls``) is."""
+    line shows it: by engine effect. Metronome (ruling B5-2) is refused while any move it can
+    call for a Pokemon knowing ``known`` (``metronome_calls``) is."""
     name = names.move_names[move]
-    if ghost_curse(tables, move, row):
-        return Support.NONE, f"{name} (Ghost user)"
     effect = EffectId(int(np.asarray(tables.move_effect)[move]))
     support = IMPLEMENTED_EFFECTS.get(effect, Support.NONE)
     if effect == EffectId.METRONOME and support != Support.NONE:

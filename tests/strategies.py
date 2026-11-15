@@ -968,6 +968,7 @@ BATCH7_MOVES = (
     "Sheer Cold",
     "Perish Song",
     "Yawn",
+    "Curse",
 )
 
 
@@ -990,6 +991,8 @@ def _draw_batch7(draw, tables: Tables, a: dict, side: int, active: int, names: N
             a["pp"][side, active, k] = int(tables.move_pp[move])
             foe_moves = [int(m) for m in a["moves"][foe, a["active"][foe]] if m]
             others = [j for j in free if j != k]
+            if name == "Curse" and rnd.random() < 0.5:  # a Ghost user (B8-5)
+                a["types"][side, active] = [Type.GHOST, Type.GHOST]
             if name == "Imprison" and foe_moves and others and rnd.random() < 0.8:
                 shared = rnd.choice(foe_moves)
                 j = rnd.choice(others)
@@ -1009,6 +1012,7 @@ def _draw_batch7(draw, tables: Tables, a: dict, side: int, active: int, names: N
         a["lock_on_target"][side] = 1 + foe
     elif lock == 2:
         a["lock_on_target"][side] = 1 + foe
+    a["curse"][side] = int(draw(st.integers(0, 5)) == 0)
     # A Yawn counting (1: it falls asleep at this turn's end).
     a["yawn"][side] = draw(st.sampled_from([0, 0, 0, 1, 2]))
     # Perish Song under way: a count 0-3 (0 faints at this turn's end).

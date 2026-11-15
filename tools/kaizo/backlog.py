@@ -525,7 +525,7 @@ def metronome_unmodelled(tables, names, row):
     """``(n, m)`` for Metronome (ruling B5-2): of the ``m`` moves ``BtlCmd_Metronome`` can call
     for a Pokemon at personal ``row`` that knows only Metronome (``coverage.metronome_calls``),
     the ``n`` that ``coverage.move_effect_line`` refuses, each of which refuses Metronome
-    (coverage.py ``move_effect_line``). Only Curse reads ``row`` (``coverage.ghost_curse``)."""
+    (coverage.py ``move_effect_line``)."""
     from types import SimpleNamespace
 
     from nuzline.engine.coverage import Support, metronome_calls, move_effect_line
