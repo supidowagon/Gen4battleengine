@@ -683,6 +683,11 @@ INPUT_CLAUSE_EFFECTS = (
     # The ingrained foe's chart and Levitate (damage.identified, damage.ignorable): the ingrain
     # clause.
     _E.INGRAIN,
+    # E2 batch 6: the foe's U-turn / Baton Pass switches it out mid-turn (step's pause), so the
+    # side's later hit meets the newcomer (its stats, types, ability, item; a Baton Pass keeps
+    # the stages): the pivot clause.
+    _E.U_TURN,
+    _E.BATON_PASS,
 )
 INPUT_NEUTRAL_ABILITIES = (
     AbilityId.NONE,
@@ -857,6 +862,9 @@ _BURN_CURES = (ItemId.RAWST_BERRY, ItemId.LUM_BERRY)
 # (``tests/engine/test_damage_classes.py`` fails while it is in neither tuple).
 TABLE_DAMAGE_EFFECTS = (
     _E.PLAIN,
+    # U-turn's hit is a plain hit (effect_script_0228.s: CalcCrit, CalcDamage); the switch comes
+    # after it (E2 batch 6).
+    _E.U_TURN,
     _E.SECONDARY_STAT_SELF,
     _E.SECONDARY_STAT_FOE,
     _E.SECONDARY_STATUS,
@@ -938,6 +946,7 @@ NON_TABLE_DAMAGE_EFFECTS = (
     # No damage at its use (its roll is TryFutureSight's stored damage, damage.fixed_damage).
     _E.FUTURE_SIGHT,
     _E.INGRAIN,  # status moves: no damage
+    _E.BATON_PASS,
     _E.MEAN_LOOK,
     _E.IMPRISON,
 )
@@ -1050,6 +1059,7 @@ def damage_inputs_can_change(
         | ((foe_effect == _E.SWAGGER) & physical)
         | (foe_effect == _E.ROOST)
         | (foe_effect == _E.INGRAIN)
+        | _any_of(foe_effect, (_E.U_TURN, _E.BATON_PASS))
         | ((foe_effect == _E.DOUBLE_POWER) & guts)
         | (status_hit & (guts | (burnable & foe_burns)))
         | ((foe_effect == _E.REFLECT) & physical)
