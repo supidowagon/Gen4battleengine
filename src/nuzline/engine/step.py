@@ -164,6 +164,7 @@ from nuzline.engine.hooks import (
     on_switch_in,
     recover_status_by_ability,
     reveal_ability,
+    swap_war,
     switch_in_effects,
 )
 from nuzline.engine.ids import (
@@ -659,6 +660,8 @@ def _use_move(
     pursuit=None,
     claw=(False, False),
     entry_poisoned=False,
+    entry_status=None,
+    pursuit_sync=None,
 ) -> tuple[BattleState, dict, dict, dict]:
     """``side``'s active Pokemon uses the move in slot ``action`` (or Struggle).
     ``choice``: its ``(move, struggling, locked)`` from ``selected_move`` and
@@ -691,7 +694,12 @@ def _use_move(
     the head's state is dropped and its values come from ``BattleState.ts_used`` /
     ``ts_damaged`` / ``ts_dealt`` (written where the action stops). ``entry_poisoned``
     (``MODE_RESUME``): the list's Toxic Spikes poisoned the newcomer (``_act``), which set
-    ``SYSCTL_TRY_SYNCHRONIZE_STATUS`` after U-turn cleared it (rulings G-12, G-13).
+    ``SYSCTL_TRY_SYNCHRONIZE_STATUS`` after U-turn cleared it (rulings G-12, G-13), and
+    ``entry_status`` the newcomer's status before the list's faint check (its
+    ``BattleMon.status``, which the Synchronize step reads; ruling G-24). ``pursuit_sync``
+    (``MODE_PURSUIT``): ``(flag, sideEffectMon, held)`` after the Pursuit, the head's
+    Synchronize flag and side-effect battler as the Pursuit's contact ability left them and each
+    battler's ``BattleMon.status`` before the Pursuit's faint check (``_execute_actions``).
 
     Returns ``(state, own, foe, ctl)``: the state after the move, the user's events (each
     status check's result, effect-gated: set only when the check was reached and had an
@@ -1354,10 +1362,39 @@ def _use_move(
         & ((tables.move_flags[used_t] & MoveFlag.KINGS_ROCK) != 0)
         & (state.hp[target_side, state.active[target_side]] > 0)
     )
+    # MODE_PURSUIT with the user fainted (ruling G-24): the U-turn script ended at :55 before
+    # its flag clear (:69), so AfterMoveEffects' Synchronize step reads the head's flag as the
+    # Pursuit's contact ability toggled it, after CheckExtraFlinch made the defender the
+    # sideEffectMon (bcp.c:3524, :4636-4643: the fainted user's King's Rock, its roll, the
+    # flag, a damaged defender with HP). A fainted passer passes its BattleMon.status (``held``).
+    if pursuit_sync is None:
+        pursuit_sync = (False, target_side, None)
+    p_flag, p_sem, p_held = pursuit_sync
+    tail_fainted = after_pursuit & ~pursuit_pause
+    pursuit_rock = (
+        tail_fainted
+        & (state_in.ts_damaged != 0)
+        & (outcome.flinch_item[side, 0] != 0)
+        & (tables.item_effect[state.item[side, state.active[side]]] == ItemId.KINGS_ROCK)
+        & ((tables.move_flags[used_t] & MoveFlag.KINGS_ROCK) != 0)
+        & (state.hp[target_side, state.active[target_side]] > 0)
+    )
+    p_sem = jnp.where(pursuit_rock, target_side, jnp.asarray(p_sem, _I32))
     sync_sem = jnp.where(
-        resumed, jnp.where(resumed_rock, target_side, side), target_side
+        resumed,
+        jnp.where(resumed_rock, target_side, side),
+        jnp.where(after_pursuit, p_sem, target_side),
     ).astype(_I32)
-    sync_flag = jnp.where(resumed, jnp.asarray(entry_poisoned, bool), roar_poisoned)
+    sync_flag = jnp.where(
+        resumed,
+        jnp.asarray(entry_poisoned, bool),
+        jnp.where(after_pursuit, jnp.asarray(p_flag, bool), roar_poisoned),
+    )
+    held = state.status[jnp.arange(2), state.active].astype(_I32)
+    if entry_status is not None:
+        held = jnp.where(resumed, held.at[side].set(jnp.asarray(entry_status, _I32)), held)
+    if p_held is not None:
+        held = jnp.where(after_pursuit, jnp.asarray(p_held, _I32), held)
     state, _, _ = synchronize(
         tables,
         state,
@@ -1365,7 +1402,8 @@ def _use_move(
         sync_defender,
         sync_flag,
         sync_sem,
-        (dragged & head_on & items_full) | resumed,
+        (dragged & head_on & items_full) | resumed | tail_fainted,
+        held,
     )
     fx_side = jnp.where(resumed, side, target_side)
     entering = (dragged & head_on) | resumed
@@ -1759,7 +1797,9 @@ def _use_move(
     }
     # turnFlags.roosting (subscript_roost.s:11-12): set unless "HP is full!" (NO_MORE_WORK).
     own["roosted"] = connected & (tables.move_effect[used] == EffectId.ROOST) & ~no_more_work
-    ctl = {"pause": paused, "pursue": pursue}
+    # The head's Synchronize flag and sideEffectMon where it stopped for U-turn's Pursuit: the
+    # MODE_PURSUIT tail's Synchronize step reads them (``pursuit_sync``, ruling G-24).
+    ctl = {"pause": paused, "pursue": pursue, "sync_flag": looped[16], "sync_sem": looped[17]}
     return state, own, foe, ctl
 
 
@@ -1818,6 +1858,7 @@ def _act(
     base=None,
     foe=None,
     claw=(False, False),
+    pursuit_sync=None,
 ) -> tuple[BattleState, dict, dict, dict]:
     """``side``'s action: ``(state, own, foe, ctl)`` with the events of ``_use_move``. A
     switch shows the party slot (``ACT_SWITCH``), an item its item id (``ACT_ITEM``).
@@ -1828,7 +1869,7 @@ def _act(
     the hazards, then a faint check against ``base``, the party bitmask of the faints already
     handled, ``BattleState.ts_alive``), and that state feeds the move branch, which runs the
     action's tail on the newcomer. ``ctl["fbase"]``: the bitmask the action's own faint check
-    starts from (after the list's)."""
+    starts from (after the list's). ``pursuit_sync``: ``_use_move``'s, for ``MODE_PURSUIT``."""
     action = actions[side]
     mode = jnp.asarray(mode, _I32)
     resumed = mode == MODE_RESUME
@@ -1867,6 +1908,8 @@ def _act(
         pursuit,
         claw,
         entry_poisoned,
+        landed,  # the newcomer's BattleMon.status before the list's faint check (G-24)
+        pursuit_sync,
     )
     live = state.over == 0
     switch, item = is_switch(action) & live, is_item(action) & live
@@ -2139,7 +2182,7 @@ def _execute_actions(
         return (position < 2) & (state.pivot_battler == 0)
 
     def body(carry):
-        state, read, shown, position, phase, pursued, base, pick_mul, fired = carry
+        state, read, shown, position, phase, pursued, base, pick_mul, fired, sync = carry
         side = order[position].astype(_I32)
         second = position == 1  # the first actor's target has not moved yet
         start, resumed, ap = phase == _START, phase == _RESUME, phase == _PURSUIT
@@ -2163,7 +2206,20 @@ def _execute_actions(
         }
         read, shown = put((read, shown), pursuer, pursuer_events, fire)
         read, shown = put((read, shown), side, {"contact_ability": seen["contact"]}, fire)
-        state = _faint_check(tables, pre, _where(fire, hit, pre))
+        struck = _where(fire, hit, pre)
+        state = _faint_check(tables, pre, struck)
+        # U-turn's head stopped with its Synchronize flag and sideEffectMon (``sync``); the
+        # Pursuit's contact ability (subscript_pursuit.s:40, :86, TriggerAbilityOnHit: the
+        # pursuer becomes the sideEffectMon) toggles the flag, and its faint check zeroes only
+        # the party copy of a fainted battler's status (battle_controller.c:1481-1486): the
+        # MODE_PURSUIT tail's Synchronize step reads both battlers' BattleMon.status (G-24).
+        chased = ap & sync_landed(pre, struck, pursuer)
+        sides = jnp.arange(2)
+        pursuit_sync = (
+            sync[0] ^ chased,
+            jnp.where(chased, pursuer, sync[1]),
+            struck.status[sides, struck.active].astype(_I32),
+        )
         # subscript_pursuit.s:106-108: Pursuit's own payout (no pending move: the pursuer's
         # action is over, and a switcher's or a U-turn's reads no move list).
         state = pay_exp(tables, pre, state)
@@ -2195,6 +2251,7 @@ def _execute_actions(
             base,
             pursuer,
             claw=claw,
+            pursuit_sync=pursuit_sync,
         )
         # The action ran: its battler was alive at its start (a resumed or pursued one was).
         ran = (state.over == 0) & ((state.hp[side, state.active[side]] > 0) | ~start)
@@ -2228,7 +2285,11 @@ def _execute_actions(
         state = _where(stop, acted, done)
         position = jnp.where(stop, position, position + 1)
         phase = jnp.where(ctl["pursue"], _PURSUIT, _START).astype(_I32)
-        return state, read, shown, position, phase, pursued, base, pick_mul, fired
+        sync = (
+            jnp.where(ctl["pursue"], ctl["sync_flag"], sync[0]),
+            jnp.where(ctl["pursue"], ctl["sync_sem"], sync[1]).astype(_I32),
+        )
+        return state, read, shown, position, phase, pursued, base, pick_mul, fired, sync
 
     start = (
         state,
@@ -2240,9 +2301,10 @@ def _execute_actions(
         jnp.where(paused, state.ts_alive, _alive_mask(state)),
         jnp.where(paused, state.ts_pick_mul.astype(_I32), NORMAL_POWER_MUL),
         jnp.bool_(False),
+        (jnp.bool_(False), _I32(0)),  # the stopped head's Synchronize flag and sideEffectMon
     )
     out = jax.lax.while_loop(cond, body, start)
-    state, read, shown, position, _, pursued, base, pick_mul, fired = out
+    state, read, shown, position, _, pursued, base, pick_mul, fired, _ = out
     # At a pause the scratch holds the turn; else every ts_* is 0 (states merge between turns).
     stopped = state.pivot_battler != 0
     scratch = {
@@ -3091,16 +3153,23 @@ def sample_root(key, tables: Tables, state: BattleState) -> BattleState:
     battle-start ``speedRand`` (``BattleContext_InitCounters``, battle_lib.c:2019-2025), or at
     a later root the previous turn's draw, which the player never sees. ``RandNext() % 5 ==
     0`` (``QUICK_CLAW_MODULUS``), treated as uniform (1/5, the project's ``% n`` convention;
-    exact 13108/65536), for the sides ``qc_kept`` reads; 0 elsewhere."""
+    exact 13108/65536), for the sides ``qc_kept`` reads; 0 elsewhere. Then a weather war the
+    battle-start sort left open (``BattleState.war_swaps``) is settled on that ``speedRand``
+    and a tie bit from ``fold_in(key, 1)`` (``resolve_war``, ruling G-26)."""
     draw = jax.random.randint(key, (2,), 0, QUICK_CLAW_MODULUS) == 0
-    return _keep_quick_claw(tables, state, draw)
+    state = _keep_quick_claw(tables, state, draw)
+    return sample_war(jax.random.fold_in(key, 1), state)
 
 
 def root_belief(tables: Tables, state: BattleState) -> list[tuple[BattleState, float]]:
     """Stage B's root chance node (host): ``(state, probability)`` for every value of the
     hidden ``qc_roll`` under ``sample_root``'s law, one state per combination over the
     ``qc_kept`` sides (1 at 1/5, 0 at 4/5), the other sides 0. They differ only in hidden
-    state, so they are one information set. Without a kept side: ``[(state, 1.0)]``."""
+    state, so they are one information set. Without a kept side: ``[(state, 1.0)]``. A weather
+    war left open (``resolve_war``, ruling G-26) is settled per combination, split into its
+    two tie values (1/2 each) where the tie decides it: those states differ in the weather,
+    which the player sees, but the root stays one belief node, so the root action is chosen
+    over them (a lower bound on the battle's value)."""
     kept = [bool(k) for k in jax.device_get(qc_kept(tables, state))]
     n = QUICK_CLAW_MODULUS
     out = []
@@ -3109,8 +3178,40 @@ def root_belief(tables: Tables, state: BattleState) -> list[tuple[BattleState, f
         for k, b in zip(kept, bits, strict=True):
             if k:
                 prob *= 1 / n if b else (n - 1) / n
-        out.append((state._replace(qc_roll=jnp.asarray(bits, state.qc_roll.dtype)), prob))
+        drawn = state._replace(qc_roll=jnp.asarray(bits, state.qc_roll.dtype))
+        if bool(war_split(drawn)):
+            out.extend((resolve_war(drawn, tie), prob / 2) for tie in (0, 1))
+        else:
+            out.append((resolve_war(drawn, 0), prob))
     return out
+
+
+def war_split(state: BattleState) -> jnp.ndarray:
+    """``bool``: ``state`` holds an open weather war (``BattleState.war_swaps``) whose order
+    the tie bit decides at its ``speedRand`` (``qc_roll``)."""
+    swaps = state.war_swaps.astype(_I32)
+    qc = state.qc_roll.astype(_I32)
+    at = 2 * qc[0] + 4 * qc[1]
+    return (swaps != 0) & (((swaps >> at) & 1) != ((swaps >> (at + 1)) & 1))
+
+
+def resolve_war(state: BattleState, tie) -> BattleState:
+    """``state`` with its open weather war settled (ruling G-26): ``monSpeedOrder`` is the
+    sort's at the state's ``speedRand`` (``qc_roll``) and the tie's ``RandNext() & 1``
+    ``tie`` (bit ``tie + 2 * qc[0] + 4 * qc[1]`` of ``war_swaps``, ``hooks.order_swaps``);
+    where it put the player second, the player's weather stays (``hooks.swap_war``).
+    ``war_swaps`` is then 0. Without an open war: ``state`` (``war_swaps`` is 0)."""
+    swaps = state.war_swaps.astype(_I32)
+    qc = state.qc_roll.astype(_I32)
+    bit = (swaps >> (jnp.asarray(tie, _I32) + 2 * qc[0] + 4 * qc[1])) & 1
+    state = swap_war(state, (swaps != 0) & (bit == 1))
+    return state._replace(war_swaps=jnp.zeros_like(state.war_swaps))
+
+
+def sample_war(key, state: BattleState) -> BattleState:
+    """``resolve_war`` with the tie drawn from ``key`` (``RandNext() & 1``, uniform): the
+    draw a playout makes before the next decision (``search.playout``)."""
+    return resolve_war(state, jax.random.randint(key, (), 0, 2))
 
 
 def needs_replacement(state: BattleState) -> jnp.ndarray:

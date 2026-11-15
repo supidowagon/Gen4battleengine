@@ -188,6 +188,14 @@ three structs has a row.
   whose UpdateAfterSwitch (`battle_script.c:2522`) clears it (B8-2, B8-7). Their turn-end checks:
   Curse (bcp.c:1451, with Burn), Lock-On (:1618, with Uproar / Disable), Yawn (:1684, with
   Taunt), Perish Song in the side-condition pass (:1791).
+- **monSpeedOrder -> `war_swaps`** (E1 Gardenia batch, ruling G-26): inside a turn `step`
+  resolves the order itself; between turns the switch-in states run over the order
+  `BattleSystem_SortMonSpeedOrder` gave at `TrainerMessage` (battle_lib.c:3364-3382,
+  battle_controller_player.c:251), and only the weather state's result depends on it (two
+  different switch-in weather abilities entering together: the slower one's stays). Where
+  that order hangs on a draw still to come (the battle-start `speedRand`, a speed tie's
+  `RandNext() & 1`), `war_swaps` holds the swap bit of each draw (`hooks.order_swaps`) until
+  `step.resolve_war` makes it; else 0.
 - **speedRand -> `qc_roll`** (K3b2 Task 8; docs/kaizo/k3b2-rules.md §5, §12):
   `speedRand[battler]` is one `RandNext()` per battler slot, drawn at battle start
   (`BattleContext_InitCounters`, `src/battle/battle_lib.c:2019-2025`) and in each turn's
@@ -578,7 +586,7 @@ three structs has a row.
 | `BattleContext.aiSwitchedPartySlot` | — | not needed because the switch target comes from the action and is written to `active` inside `step` |
 | `BattleContext.battlerActions` | `ts_actions`, `ts_pursued`, `ts_dragged` | mapped |
 | `BattleContext.battlerActionOrder` | `ts_order` | mapped |
-| `BattleContext.monSpeedOrder` | — | not needed because it is reset every turn and `step` resolves a whole turn |
+| `BattleContext.monSpeedOrder` | `war_swaps` | mapped |
 | `BattleContext.monSpeedValues` | — | later (M6) |
 | `BattleContext.ioQueue` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |
 | `BattleContext.ioBuffer` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |

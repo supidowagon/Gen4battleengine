@@ -158,12 +158,9 @@ names the decomp sites, what the engine does, and where. E2's rulings are in
   Toxic Spikes poison sets the flag; a Baton Pass's defender is the user, so its pass aims at the
   already poisoned newcomer and ends). Pursuit's hit runs no AfterMoveEffects
   (subscript_pursuit.s), and a turn-end orb status or a switch action's Toxic Spikes is cleared by
-  the next `BattleContext_Init` before any check: no pass. Not modelled (an engine gap, not a
-  refusal): the U-turn user that falls to its foe's Pursuit (the `MODE_PURSUIT` tail) and a
-  newcomer that faints to Spikes / Stealth Rock after Toxic Spikes poisoned it: the decomp's
-  step still reads the fainted battler's `BattleMon.status` (only the party copy is zeroed,
-  battle_controller.c:1481-1486), which the engine's faint check has cleared, so the engine
-  passes nothing there (the reference's `_u_turn` clears the flag after the Pursuit to match).
+  the next `BattleContext_Init` before any check: no pass. A passer that fainted in between
+  (the U-turn user that falls to its foe's Pursuit, a newcomer that faints to Spikes / Stealth
+  Rock after Toxic Spikes poisoned it) is G-24.
   `step._use_move` (the hit loop's `sync_flag` / `sync_sem` carry from `effects.sync_landed`, the
   step before the switch-in effects for a drag or a tail), `step._act` (`entry_poisoned`); the
   reference's `_status_landed` (in `_inflict`, `_contact_ability`, `_entry_hazards`), the King's
@@ -297,3 +294,77 @@ names the decomp sites, what the engine does, and where. E2's rulings are in
   stay within `KAIZO_SWITCH_SITES` (module docstring). `Expert_ChangeUserAbility`'s table
   (script.s:4441) belongs to Role Play / Skill Swap, unsupported moves (refused with their
   user).
+- G-24 Synchronize from a fainted passer. A faint zeroes only the party copy of the status
+  (`BattleMon_CopyToParty`, battle_controller.c:1481-1486); `BattleMon.status` stays, and
+  `BattleSystem_SynchronizeStatus` reads it (battle_lib.c:4514-4520) with no HP test of the
+  passer. (1) U-turn's Pursuit: a user that falls to it ends subscript_attack_then_switch_out.s
+  at :55, before the flag clear at :69, so its AfterMoveEffects' Synchronize step
+  (bcp.c:3665-3670) reads the head's flag and `sideEffectMon` as the Pursuit's contact ability
+  left them (subscript_pursuit.s:40 / :86, TriggerAbilityOnHit: the pursuer becomes the
+  `sideEffectMon`), after CheckExtraFlinch made the defender it (bcp.c:3524, :4636-4643: the
+  fainted user's King's Rock, its roll, the move's flag, a damaged defender with HP). So a
+  Synchronize user that Static paralyzed and Pursuit fainted passes the paralysis to the
+  pursuer. (2) A U-turn / Baton Pass newcomer that Toxic Spikes poisoned and Spikes / Stealth
+  Rock fainted in the list (subscript_show_party_list.s:22-24) passes the poison in the resumed
+  tail; a Roar's drag already did (no faint check between its hazards and the step).
+  `effects.synchronize`'s `held` (each battler's `BattleMon.status`); `step._use_move`
+  (`pursuit_sync`: the head's flag and sideEffectMon through `ctl`, `_execute_actions`' loop
+  carry and the Pursuit's toggle; `entry_status`: the newcomer's status before the list's faint
+  check, from `_act`); the reference's `_Turn.battle_status` (written by `_faint_check`, read by
+  `_synchronize` for a fainted passer) and `_u_turn` (the flag goes on through the Pursuit).
+- G-25 Trace in both parties (lifts B3-14's refusal `coverage.trace_standoff_line`). A Trace
+  holder facing Trace stays armed: `ChooseTraceTarget` (battle_lib.c:7750-7775) skips a Trace
+  target, so `traceAnnounced` stays clear (:3726-3733) and every later
+  `SWITCH_IN_CHECK_STATE_TRACE` (:3718) tries again. In singles neither can copy the other, so
+  there is no order dependence and no draw; the holder copies the next battler its side faces,
+  at that battler's switch-in checks: the foe's switch action, U-turn / Baton Pass pick, Roar
+  drag or replacement (`hooks.switch_in_effects` already runs Trace for the other battler, in
+  both engines). New here: the turn's chance laws read the copy. `outcome.pivot_view` (every law
+  and the sampler read through it) gives the staying side's active Pokemon the copy
+  (`outcome._armed_trace`) where its foe enters this turn (a switch action, or the paused
+  pivot's pick) and `damage.trace_copy` passes on the newcomer (its own ability, not Forecast /
+  Trace / Multitype; it has HP after its entry hazards, the check reads the target's `curHP`,
+  :3730; `trace_copy`'s new `target` argument), so its crit odds, accuracy, secondary chance,
+  armor and speed reads are the copy's. Not where its Pursuit fires on that switch
+  (`step.pursuit_fires`: the hit comes before the switch, subscript_switch_pokemon.s:11, and
+  ends its action, so those reads see Trace). A Roar drag comes after the holder's own move
+  (the end-of-turn masks keep a Trace holder's reads, as before). `coverage.trace_standoff_line`,
+  its `check_coverage` call and prep's per-candidate uses (`prep.problem.usable_pool`,
+  `prep.pool.check_pool`) are deleted.
+- G-26 Two switch-in weather abilities at war (lifts B3-15's refusal
+  `coverage.weather_war_line`). `SWITCH_IN_CHECK_STATE_WEATHER_ABILITIES` loops over
+  `monSpeedOrder` (battle_lib.c:3740-3790): two battlers that run it together with Drizzle /
+  Sand Stream / Drought / Snow Warning setting different weathers each set their own (the
+  other's permanent weather is not theirs), so the second one's stays and both scripts run.
+  Only two newcomers meet in one weather state: the leads (`ShowBattleMon`,
+  battle_controller_player.c:256) and a double KO's replacements (the list runs only the
+  hazards, subscript_show_party_list.s:22-24; `TurnEnd` then goes to `TrainerMessage` and
+  `ShowBattleMon`, :1858, :251-263); an active battler announced its own at its entry. The
+  order is `BattleSystem_SortMonSpeedOrder` at `TrainerMessage` (:251; battle_lib.c:3364-3382):
+  `CompareBattlerSpeed(0, 1, TRUE)` puts the player second (`order.player_second`):
+  `ignoreQuickClaw` keeps the priorities 0, but a Quick Claw's `speedRand` bit still activates it
+  (:1278-1286) and an exact tie swaps on `RandNext() & 1` (:1445); a fainted battler goes last
+  (:1205-1211). The sort reads the battlers as sent out: at the battle start no weather yet (the
+  start condition is set inside the switch-in state machine, subscript_overworld_rain.s etc.)
+  and the `speedRand` of `BattleContext_InitCounters` (:2024, the root's `qc_roll`); at the
+  replacements the turn's `speedRand` (`qc_roll`; `speedRand` is redrawn only at the next turn's
+  pre-move step, bcp.c:853-857) and each newcomer's status and item as it entered, Speed stage
+  0, the turn end's weather (`playout._sort_view`). The engine runs the player's weather ability
+  first; `hooks.order_swaps` gives the sort's swap for each (tie, qc) draw, `hooks.hold_war`
+  settles a war the draws to come cannot change (`hooks.swap_war`: the player's weather,
+  permanent, its script revealing the ability to the AI) and otherwise stores the bits in the
+  new `BattleState.war_swaps` (STATE.md `monSpeedOrder`). `step.resolve_war` settles it on the
+  state's `qc_roll` and a tie bit: at the root chance node (`step.sample_root` draws the tie from
+  `fold_in(key, 1)`; `step.root_belief` splits the tie 1/2-1/2: those states differ in the
+  visible weather but stay one root belief node, so the root action is chosen over them, a lower
+  bound), in the tree's replacement children (`expand.expand_replacements`: two children at 1/2
+  where the tie decides; `stage_b` answers hold a list of children) and in the playout's next
+  turn before its decisions (`playout.settle_war` on `fold_in(k_turn, WAR_FOLD)`, in
+  `playout._run`, `player._player_run` and their replays). `hooks.battle_start`,
+  `playout.replacement_pass`. `coverage.weather_war_line`, its `check_coverage` call and prep's
+  per-candidate uses are deleted. The reference engine has no battle start or replacement pass
+  (only `ref_step` / `ref_replace`), so nothing mirrors there. Not modelled (an engine gap, not
+  a refusal): when the player's newcomer faints on its entry hazards at a double KO, the decomp
+  runs the next player newcomer's and the opponent's newcomer's switch-in states together after
+  the next pass, while the engine has run the opponent's at its entry (its weather, and its
+  Intimidate against the fainted battler), so that pair is not ordered.

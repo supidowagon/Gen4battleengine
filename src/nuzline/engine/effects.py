@@ -1685,7 +1685,7 @@ def sync_landed(before: BattleState, after: BattleState, side) -> jnp.ndarray:
 
 
 def synchronize(
-    tables: Tables, state: BattleState, attacker, defender, flag, sem, cond
+    tables: Tables, state: BattleState, attacker, defender, flag, sem, cond, held=None
 ) -> tuple[BattleState, jnp.ndarray, jnp.ndarray]:
     """``BattleSystem_SynchronizeStatus`` (battle_lib.c:4493-4534), the
     ``AFTER_MOVE_EFFECT_SYNCHRONIZE_STATUS`` step of ``AfterMoveEffects`` (bcp.c:3665-3670), where
@@ -1707,7 +1707,10 @@ def synchronize(
     Fire (burn) type ends it silently; it skips CheckSubstitute (poison :28, burn :35, paralyze
     :20) and Safeguard (:39, :43, :26). Nothing tests HP: the status lands on a receiver of any
     HP, but a fainted one's is cleared at its faint (``step._faint_check``,
-    battle_controller.c:1482-1486), so it is set only on a living one here. The message (poison
+    battle_controller.c:1482-1486), so it is set only on a living one here. The passer's status
+    is its ``BattleMon.status``, which a faint does not clear (only the party copy is zeroed,
+    battle_controller.c:1481-1486): ``held`` (``int[2]``, per battler, default each side's active
+    Pokemon's ``state.status``) gives it for a passer that fainted since (ruling G-24). The message (poison
     :57, burn :68, paralyze :44: ``BTLSCR_MSG_BATTLER_TEMP``'s ability, the passer) tags
     Synchronize: the AI learns a player's (``hooks.REVEALS_ON``). A status that lands toggles
     the flag off again (rulings G-12, G-13)."""
@@ -1727,7 +1730,7 @@ def synchronize(
     passer = jnp.where(first, defender, attacker)
     receiver = jnp.where(first, attacker, defender)
     p_mon, r_mon = state.active[passer], state.active[receiver]
-    held = state.status[passer, p_mon]
+    held = state.status[passer, p_mon] if held is None else jnp.asarray(held)[passer]
     kind = jnp.where(
         (held == Status.POISON) | (held == Status.TOXIC),
         Status.POISON,

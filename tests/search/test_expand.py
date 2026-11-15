@@ -288,14 +288,14 @@ def test_expand_replacements_match_replacement_pass(tables, names):
     assert sorted(children) == list(range(len(requests)))
     for r, (_, action) in enumerate(requests):
         after, refused = replacement_pass(tables, s, action - MOVE_ACTIONS)
-        child = children[r]
+        (child,) = children[r]  # no weather war here: one child (G-26)
         assert child.prob == 1.0
         assert child.refused == bool(refused)
         assert child.obs == np.asarray(replacement_observation(after), np.int32).tobytes()
         assert row_keys(take_row(store, child.state_row)) == row_keys(batch(after))
     # Two requests reaching one state share a store row.
-    assert children[0].state_row == children[len(slots)].state_row
-    assert len(store.hp) == len({c.state_row for c in children.values()})
+    assert children[0][0].state_row == children[len(slots)][0].state_row
+    assert len(store.hp) == len({c[0].state_row for c in children.values()})
 
 
 def take_row(tree, i: int):

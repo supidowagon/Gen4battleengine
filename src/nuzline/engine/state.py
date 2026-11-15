@@ -127,6 +127,17 @@ Encodings:
   side's replacement can send one in); else 0. Hidden from the player. At a root it is a
   chance node (``step.root_belief``, ``step.sample_root``), as the battle-start draw
   (``BattleContext_InitCounters``, battle_lib.c:2024) is.
+* ``war_swaps`` (E1 Gardenia batch, ruling G-26): two newcomers that run the weather state
+  together (the leads at the battle start, a double KO's replacements) with switch-in weather
+  abilities setting different weathers leave the slower one's weather in ``monSpeedOrder``
+  (battle_lib.c:3740-3790), the order ``BattleSystem_SortMonSpeedOrder`` (:3364-3382) gave them
+  before (battle_controller_player.c:251), which reads each Quick Claw's ``speedRand`` and a
+  speed tie's ``RandNext() & 1``. The engine runs the player's first; where that order is
+  still open (a draw not yet made: the battle-start ``speedRand`` and a tie, or a tie at a
+  replacement), ``war_swaps`` holds its bits: bit ``tie + 2 * qc[0] + 4 * qc[1]`` set where the
+  sort puts the player second, so its weather stays (``hooks.order_swaps``). The draw that
+  settles it (``step.resolve_war``: the root chance node, a playout's next turn, the tree's
+  replacement children) then clears it; 0 otherwise, so states merge.
 * Experience (K3d-exp; ``STATE.md`` "Experience"): ``exp`` is the player party's
   ``MON_DATA_EXPERIENCE``; ``evs`` (``ids.Stat`` order, like ``ivs``) and ``nature`` feed the
   level-up stat recompute; ``exp_boost``, ``pokerus`` and ``friend_bonus`` are the
@@ -271,6 +282,7 @@ class BattleState(NamedTuple):
     weather_timer: jnp.ndarray  # int8, 0 = permanent
     trick_room: jnp.ndarray  # int8
     gravity: jnp.ndarray  # int8
+    war_swaps: jnp.ndarray  # int16, a weather war's open monSpeedOrder (docstring), 0 = none
     move_prev: jnp.ndarray  # int16, BattleContext.movePrev: the last move used in the battle
     terrain: jnp.ndarray  # int8, decomp TERRAIN_* id, -1 unknown (constant per battle)
     turn: jnp.ndarray  # int16
@@ -538,6 +550,7 @@ LAYOUT: dict[str, tuple[tuple[int, ...], type]] = {
     "weather_timer": (_FIELD, np.int8),
     "trick_room": (_FIELD, np.int8),
     "gravity": (_FIELD, np.int8),
+    "war_swaps": (_FIELD, np.int16),
     "move_prev": (_FIELD, np.int16),
     "terrain": (_FIELD, np.int8),
     "turn": (_FIELD, np.int16),

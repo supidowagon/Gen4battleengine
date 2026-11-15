@@ -183,6 +183,10 @@ class _Turn:
     # :2195): turn + 1 during ref_step, turn in ref_replace (after the turn was counted).
     entry_turn: int
     fainted: list[tuple[int, int]] = field(default_factory=list)  # SYSCTL_MON_FAINTED
+    # BattleMon.status of a Pokemon that fainted this turn, (side, slot) -> status: the faint
+    # zeroes the party copy only (battle_controller.c:1481-1486); the Synchronize step reads the
+    # battler's (G-24).
+    battle_status: dict = field(default_factory=dict)
     done: list[bool] = field(default_factory=lambda: [False, False])  # action is MOVE_END
     # selfTurnFlags, cleared by BattleContext_Init at every action's end (bcp.c:3998,
     # lib.c:2014): the defender's focusItemActivated (bcp.c:3391) and the attacker's
@@ -1169,6 +1173,7 @@ def _faint_check(turn: _Turn, s: RefState, decide: bool = True) -> None:
     condition (battle_controller.c:1482-1486)."""
     for side, slot in turn.fainted:
         mon = s.sides[side].party[slot]
+        turn.battle_status[(side, slot)] = mon.status
         mon.status = Status.NONE
         mon.status_counter = 0
     if s.over:
@@ -2122,7 +2127,10 @@ def _synchronize(turn: _Turn, s: RefState, attacker: int, defender: int) -> None
     if passer is None:
         return
     turn.sync_mon = receiver
+    # The passer's BattleMon.status, which its faint did not clear (G-24).
     held = _active(s, passer).status
+    if _active(s, passer).hp == 0:
+        held = turn.battle_status.get((passer, s.sides[passer].active), held)
     if held in (Status.POISON, Status.TOXIC):
         status = Status.POISON
     elif held == Status.BURN:
@@ -3064,9 +3072,9 @@ def _u_turn(turn: _Turn, s: RefState, side: int, move: int, hit: int, dealt: int
         before = turn.done[foe]
         _pursuit(turn, s, side, turn.actions, turn.choices)
         if turn.done[foe] and not before:  # the Pursuit hit (subscript_pursuit.s)
-            # The U-turn user that falls to it runs AfterMoveEffects without its Synchronize step
-            # in the engine (ruling G-13: the step reads statuses the faint check cleared).
-            turn.sync_flag = False
+            # The Synchronize flag goes on: a user that falls to it ends the script at :55,
+            # before the clear at :69, and AfterMoveEffects' Synchronize step reads its
+            # BattleMon.status (G-24).
             turn.pursued = foe + 1
             turn.pick_mul = PURSUIT_POWER_MUL
             _faint_check(turn, s)

@@ -34,8 +34,6 @@ from nuzline.engine.coverage import (
     rom_change_refusals,
     terrain_refusal,
     trace_copy_line,
-    trace_standoff_line,
-    weather_war_line,
 )
 from nuzline.engine.ids import AbilityId, EffectId, ItemId, Status
 from nuzline.engine.state import MAX_DEATH_BUDGET
@@ -183,10 +181,9 @@ def usable_pool(
     terrain of a trainer whose terrain is unknown (``coverage.terrain_refusal``). Against the
     trainer's party ``opp``, a Selfdestruct-family move is refused against a low Defense
     (``_move_refusal``), and a candidate whose own Defense is that low is left out when a foe
-    knows such a move (``coverage.halved_by_line``). The party-pair refusals apply per
-    candidate against ``opp``: a weather ability at war with the opponent's
-    (``coverage.weather_war_line``), Trace on both sides (``coverage.trace_standoff_line``) and
-    a Trace copy the AI refuses (``coverage.trace_copy_line``; rulings B3-20, B3-21).
+    knows such a move (``coverage.halved_by_line``). The party-pair refusal applies per
+    candidate against ``opp``: a Trace copy the AI refuses (``coverage.trace_copy_line``;
+    rulings B3-20, B3-21).
 
     Experience (K3d-exp design §4): a move the candidate can learn by levelling up in the
     fight (``coverage.learnable_moves``: ruling D10 masks a
@@ -219,14 +216,9 @@ def usable_pool(
             why.append(f"{ability} ({r})")
         if (low := halved_by_line(tables, names, spec, foe_halving)) is not None:
             why.append(f"{low} (zero damage divisor at -6 Defense, not implemented)")
-        # The party-pair refusals, per candidate against the trainer's party (B3-20, B3-21).
-        for line in (
-            weather_war_line(tables, [spec], opp),
-            trace_standoff_line(tables, [spec], opp),
-            trace_copy_line(tables, names, trainer, spec, opp),
-        ):
-            if line is not None:
-                why.append(line)
+        # The party-pair refusal, per candidate against the trainer's party (B3-20, B3-21).
+        if (line := trace_copy_line(tables, names, trainer, spec, opp)) is not None:
+            why.append(line)
         for move in spec.moves:
             if move and (r := move_refusal(move, spec)) is not None:
                 why.append(f"{names.move_names[move]} ({r})")

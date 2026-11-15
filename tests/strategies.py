@@ -975,6 +975,58 @@ def _draw_guard_download(
             a["stages"][other, Stat.SPD] = rnd.randint(-6, 6)
 
 
+# E1 Gardenia batch (G-25): abilities a bench Pokemon facing an armed Trace holder carries, so
+# the holder's mid-turn copy reaches the chance laws (crit, accuracy, secondary, the armors,
+# contact procs, speed), the switch-in states (Intimidate, Download, a weather) and the turn end.
+STANDOFF_COPIES = (
+    AbilityId.SUPER_LUCK,
+    AbilityId.SERENE_GRACE,
+    AbilityId.COMPOUNDEYES,
+    AbilityId.NO_GUARD,
+    AbilityId.SHELL_ARMOR,
+    AbilityId.STATIC,
+    AbilityId.SWIFT_SWIM,
+    AbilityId.SHED_SKIN,
+    AbilityId.INTIMIDATE,
+    AbilityId.DOWNLOAD,
+    AbilityId.DRIZZLE,
+    AbilityId.SYNCHRONIZE,
+)
+# G-26: the switch-in weather abilities a weather war pairs.
+WEATHER_SETTERS = (
+    AbilityId.DRIZZLE,
+    AbilityId.DROUGHT,
+    AbilityId.SAND_STREAM,
+    AbilityId.SNOW_WARNING,
+)
+
+
+def _draw_standoff(draw, a: dict, side: int) -> None:
+    """Maybe (1 in 5) give both active Pokemon Trace, which neither can copy, so both stay armed
+    (G-25), and a living bench Pokemon of the other side a ``STANDOFF_COPIES`` ability: its
+    entry (a switch, a U-turn or Baton Pass pick, a Roar drag, a replacement) is copied mid-turn.
+    And maybe (1 in 5) a living bench Pokemon of each side a different ``WEATHER_SETTERS``
+    ability (G-26: the replacements' weather war, an active setter facing a newcomer's)."""
+    rnd = draw(st.randoms(use_true_random=False))
+    foe = 1 - side
+
+    def bench(owner: int) -> list[int]:
+        mon = int(a["active"][owner])
+        return [
+            i for i in range(SLOTS) if i != mon and a["species"][owner, i] and a["hp"][owner, i]
+        ]
+
+    if draw(st.integers(0, 4)) == 0:
+        for owner in (side, foe):
+            a["ability"][owner, int(a["active"][owner])] = AbilityId.TRACE
+        if bench(foe):
+            a["ability"][foe, rnd.choice(bench(foe))] = rnd.choice(STANDOFF_COPIES)
+    if draw(st.integers(0, 4)) == 0 and bench(side) and bench(foe):
+        mine, theirs = rnd.sample(WEATHER_SETTERS, 2)
+        a["ability"][side, rnd.choice(bench(side))] = mine
+        a["ability"][foe, rnd.choice(bench(foe))] = theirs
+
+
 # E2 batch 9: abilities ``_draw_batch9`` puts on the active Pokemon.
 BATCH9_ABILITIES = (
     AbilityId.CHLOROPHYLL,
@@ -1592,6 +1644,7 @@ def supported_state(draw, tables: Tables, names: Names, invokers: bool = True) -
         _draw_pressure(draw, tables, a, side, active, names)
         _draw_status_guard(draw, tables, a, side, active, names)
         _draw_guard_download(draw, tables, a, side, active, names)
+        _draw_standoff(draw, a, side)
         _draw_choice_lock(draw, a, side, active)
     # B7-13: an Imprison user sharing a move with a Sleep Talk user, so a faster Imprison (or one
     # already up) can shrink the Sleep Talk set.
@@ -1951,5 +2004,6 @@ def outcome_law_state(draw, tables: Tables, names: Names) -> BattleState:
 
         if draw(st.integers(0, 3)) == 0:
             a["ability"][side, mon] = draw(st.sampled_from(LAW_ABILITIES))
+    _draw_standoff(draw, a, draw(st.integers(0, 1)))  # G-25: an armed Trace holder's copy
     _draw_terrain(draw, tables, a)  # a LAW_MOVES terrain move needs one too
     return BattleState(**{name: jnp.asarray(a[name]) for name in BattleState._fields})

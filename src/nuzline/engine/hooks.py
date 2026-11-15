@@ -89,7 +89,7 @@ from nuzline.engine.ids import (
     Status,
     Weather,
 )
-from nuzline.engine.order import dislikes_berry, pinch_divisor
+from nuzline.engine.order import dislikes_berry, pinch_divisor, player_second
 from nuzline.engine.state import STAGE_MAX, BattleState
 
 _I32 = jnp.int32
@@ -298,6 +298,81 @@ def weather_ability(state: BattleState, side, cond=True) -> BattleState:
         weather=jnp.where(on, weather, state.weather).astype(state.weather.dtype),
         weather_timer=jnp.where(on, 0, state.weather_timer).astype(state.weather_timer.dtype),
     )
+
+
+# Every bit of ``order_swaps``: the three draws a sort of two battlers reads (a tie, two speedRand).
+ORDER_DRAWS = 8
+ALL_SWAPS = (1 << ORDER_DRAWS) - 1
+
+
+def order_swaps(tables: Tables, state: BattleState) -> jnp.ndarray:
+    """``int32``: ``BattleSystem_SortMonSpeedOrder`` (battle_lib.c:3364-3382) of the two battlers
+    on ``state`` (the state the sort reads) for every value of the draws it reads: bit
+    ``tie + 2 * qc[0] + 4 * qc[1]`` is set where it puts the player's battler second
+    (``CompareBattlerSpeed(0, 1, TRUE)`` swaps: ``order.player_second``; ``ignoreQuickClaw``
+    leaves both priorities 0, but each Quick Claw's ``speedRand`` bit ``qc`` still activates it,
+    :1278-1286, and an exact tie swaps on ``RandNext() & 1``, :1445). A fainted battler goes
+    after a living one (:1205-1211). Ruling G-26."""
+    down = [state.hp[side, state.active[side]] == 0 for side in (0, 1)]
+    bits = jnp.int32(0)
+    for draw in range(ORDER_DRAWS):
+        qc = jnp.asarray([(draw >> 1) & 1, (draw >> 2) & 1], _I32)
+        second = player_second(tables, state, draw & 1, qc)
+        second = jnp.where(down[0] != down[1], down[0], second)
+        bits = bits | (second.astype(_I32) << draw)
+    return bits
+
+
+def weather_war(state: BattleState) -> jnp.ndarray:
+    """``bool``: both active Pokemon have HP and switch-in weather abilities
+    (``Battler_Ability``: Drizzle, Sand Stream, Drought, Snow Warning) that set different
+    weathers. Run in one weather state (battle_lib.c:3740-3790), each sets its own (the other's
+    permanent weather is not its own), so the second in ``monSpeedOrder`` leaves its weather."""
+    weathers = [ability_weather(state.ability[side, state.active[side]]) for side in (0, 1)]
+    alive = [state.hp[side, state.active[side]] > 0 for side in (0, 1)]
+    return (
+        alive[0]
+        & alive[1]
+        & (weathers[0] != Weather.NONE)
+        & (weathers[1] != Weather.NONE)
+        & (weathers[0] != weathers[1])
+    )
+
+
+def swap_war(state: BattleState, swapped) -> BattleState:
+    """The weather state run in the order ``[opponent, player]`` where ``swapped``, on a state
+    where it ran in the order ``[player, opponent]`` (the engine's): the player's weather
+    ability runs last, so its weather stays, permanent, and its script runs (the opponent's
+    permanent weather is up, not the player's: subscript_drizzle.s etc. reveal it to the AI,
+    ``WEATHER_SET``). Ruling G-26."""
+    on = jnp.asarray(swapped, bool)
+    mon = state.active[0]
+    weather = ability_weather(state.ability[0, mon])
+    state = reveal_ability(state, 0, mon, WEATHER_SET, on)
+    return state._replace(
+        weather=jnp.where(on, weather, state.weather).astype(state.weather.dtype),
+        weather_timer=jnp.where(on, 0, state.weather_timer).astype(state.weather_timer.dtype),
+    )
+
+
+def hold_war(state: BattleState, war, swaps, qc=None) -> BattleState:
+    """After a weather state the two battlers ran together in the engine's order (player
+    first): where ``war`` (``weather_war``), the order the sort gave (``swaps``,
+    ``order_swaps``) settles it now when the draws still to come cannot change it (``qc``: the
+    ``speedRand`` bits when they are known, ``int[2]``; else every value counts), else it waits
+    in ``war_swaps`` for ``step.resolve_war``'s draw. Ruling G-26."""
+    swaps = jnp.asarray(swaps, _I32)
+    if qc is None:
+        always, never = swaps == ALL_SWAPS, swaps == 0
+    else:
+        qc = jnp.asarray(qc, _I32)
+        at = 2 * qc[0] + 4 * qc[1]
+        tie0, tie1 = (swaps >> at) & 1, (swaps >> (at + 1)) & 1
+        always, never = (tie0 == 1) & (tie1 == 1), (tie0 == 0) & (tie1 == 0)
+    war = jnp.asarray(war, bool)
+    state = swap_war(state, war & always)
+    held = jnp.where(war & ~always & ~never, swaps, 0)
+    return state._replace(war_swaps=held.astype(state.war_swaps.dtype))
 
 
 def arm_unburden(state: BattleState, side, cond=True) -> BattleState:
@@ -622,8 +697,11 @@ def on_switch_in(tables: Tables, state: BattleState, side) -> BattleState:
     (``recover_status_by_ability``, battle_lib.c:4135); then the held-item check of both
     active Pokemon (``SWITCH_IN_CHECK_STATE_HELD_ITEM_STATUS`` loops over every battler). Each
     state loops over ``monSpeedOrder``; in singles the order changes nothing here: two Trace
-    holders cannot copy each other, a traced ability is the other battler's own, and coverage
-    refuses two different weather abilities on the two sides (``coverage.weather_war``)."""
+    holders cannot copy each other (a holder facing Trace stays armed and copies the foe's next
+    newcomer here, ruling G-25), a traced ability is the other battler's own, and a newcomer
+    meets an active battler that announced its weather ability at its own entry. Two newcomers'
+    weather abilities meet only at a double KO's replacements (``playout.replacement_pass``)
+    and at the battle start (``battle_start``), ruling G-26."""
     return switch_in_effects(tables, entry_hazards(tables, state, jnp.asarray(side, _I32)), side)
 
 
@@ -666,7 +744,11 @@ def battle_start(tables: Tables, state: BattleState) -> BattleState:
     (:4135) and the held-item check (:4151). So a lead that traced Intimidate fires it once,
     in the Intimidate state, like any Intimidate lead (ruling B3-18). No entry hazard is up at
     the start. A loop over battlers per state (the doubles conventions); in singles the order
-    within a state changes nothing (``on_switch_in``'s docstring)."""
+    within a state changes nothing (``on_switch_in``'s docstring) but in the weather state: two
+    leads whose weather abilities set different weathers leave the second one's in
+    ``monSpeedOrder``, which ``TrainerMessage`` sorted before (battle_controller_player.c:251)
+    on the leads as sent out, with the battle-start ``speedRand`` and a tie draw still to come
+    (``order_swaps``, ``hold_war``: settled at the root, ``step.resolve_war``; ruling G-26)."""
     sides = (0, 1)
     # Before ShowBattleMon, BattleSystem_InitBattleMon (bcp.c:227) arms canUnburden for every
     # lead holding an item, whatever its ability (battle_lib.c:161-166; no item is knocked off
@@ -675,10 +757,21 @@ def battle_start(tables: Tables, state: BattleState) -> BattleState:
         held = state.item[side, state.active[side]] != 0
         value = jnp.where(held, 1, state.can_unburden[side]).astype(state.can_unburden.dtype)
         state = state._replace(can_unburden=state.can_unburden.at[side].set(value))
+    # TrainerMessage sorts monSpeedOrder before ShowBattleMon (battle_controller_player.c:251):
+    # on the leads as sent out, no weather yet (SWITCH_IN_CHECK_STATE_FIELD_WEATHER sets the
+    # start condition inside TriggerEffectOnSwitch), with the battle-start speedRand
+    # (BattleContext_InitCounters, battle_lib.c:2024), a root draw (ruling G-26).
+    swaps = order_swaps(
+        tables,
+        state._replace(
+            weather=jnp.zeros_like(state.weather), weather_timer=jnp.zeros_like(state.weather_timer)
+        ),
+    )
     for side in sides:
         state, _ = trace(tables, state, side, 1 - side)
-    for side in sides:
+    for side in sides:  # the engine's order, player first; hold_war reorders a weather war
         state = weather_ability(state, side)
+    state = hold_war(state, weather_war(state), swaps)
     for side in sides:
         state = intimidate(state, side, foe=1 - side)
     for side in sides:  # SWITCH_IN_CHECK_STATE_DOWNLOAD (:3814-3851), after every Intimidate

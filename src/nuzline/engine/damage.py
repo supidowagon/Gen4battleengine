@@ -280,7 +280,9 @@ def identified(state: BattleState, atk_side, def_side) -> jnp.ndarray:
     return seen | (state.ingrain[def_side] != 0).astype(_I32) * CHART_GROUNDED
 
 
-def trace_copy(tables: Tables, state: BattleState, side, foe, slot=None) -> jnp.ndarray:
+def trace_copy(
+    tables: Tables, state: BattleState, side, foe, slot=None, target=None
+) -> jnp.ndarray:
     """``bool``: ``SWITCH_IN_CHECK_STATE_TRACE`` (battle_lib.c:3720-3735) copies ``foe``'s
     active battler's ability to ``side``'s battler (its active one, or party ``slot`` as it
     enters): that battler has HP, holds no Griseous Orb and has Trace (``Battler_Ability``;
@@ -288,9 +290,10 @@ def trace_copy(tables: Tables, state: BattleState, side, foe, slot=None) -> jnp.
     that), and ``ChooseTraceTarget`` (:7750-7775) finds the foe: alive, its
     ``BattleMon.ability`` not Forecast, Trace or Multitype (decomp ids). In singles both of
     the target's slots name the one foe. ``subscript_trace.s`` then writes the foe's ability
-    (``hooks.trace``)."""
+    (``hooks.trace``). ``target``: the foe's party slot to read (default its active one; the
+    one it switches in this turn, ``outcome.pivot_view``)."""
     slot = state.active[side] if slot is None else slot
-    target = state.active[foe]
+    target = state.active[foe] if target is None else target
     foe_decomp = decomp_abilities(tables, state)[foe, target]
     traceable = ~jnp.isin(foe_decomp, jnp.asarray(UNTRACEABLE_ABILITIES, foe_decomp.dtype))
     return (

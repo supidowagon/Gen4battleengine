@@ -471,8 +471,9 @@ class _Solver:
         self.ai: dict[int, np.ndarray | None] = {}  # float64 row, None when refused
         self.legal: dict[int, list[int]] = {}
         self.expansions: dict[tuple[int, int, int], list | SamplingOnly] = {}
-        # per pending kind: (state id, answer) -> (child state id, observation, prob, refused)
-        self.answers: dict[str, dict[tuple[int, int], tuple[int, bytes, float, bool]]] = {
+        # per pending kind: (state id, answer) -> its children's (child state id, observation,
+        # prob, refused)
+        self.answers: dict[str, dict[tuple[int, int], list[tuple[int, bytes, float, bool]]]] = {
             "replacement": {},
             "learn": {},
         }
@@ -613,9 +614,9 @@ class _Solver:
                 for a in node.legal:
                     groups: dict[tuple[bytes, bool, bool], dict[int, float]] = {}
                     for s, w in node.states.items():
-                        child, obs, p, refused = answers[(s, a)]
-                        members = groups.setdefault((obs, refused, self._paused(child)), {})
-                        members[child] = members.get(child, 0.0) + w * p
+                        for child, obs, p, refused in answers[(s, a)]:
+                            members = groups.setdefault((obs, refused, self._paused(child)), {})
+                            members[child] = members.get(child, 0.0) + w * p
                     kids = self._group_nodes(groups, played, depth)
                     node.branches[a] = kids
                     for kid in kids:
@@ -633,8 +634,11 @@ class _Solver:
         local, out = fn(self.tables, self.store.take(sids), [(index[s], a) for s, a in requests])
         ids = self.store.add(local) if len(local.hp) else []
         for r, request in enumerate(requests):
-            c = out[r]
-            self.answers[kind][request] = (ids[c.state_row], c.obs, c.prob, c.refused)
+            # A replacement can have two children (an open weather war's tie, G-26).
+            kids = out[r] if isinstance(out[r], list) else [out[r]]
+            self.answers[kind][request] = [
+                (ids[c.state_row], c.obs, c.prob, c.refused) for c in kids
+            ]
 
     def _frontier(self, nodes: list[_Node]) -> list[_Node]:
         """The decision nodes below ``nodes`` that still need a turn; the pending

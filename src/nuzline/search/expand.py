@@ -33,8 +33,10 @@ player replacement is the decision-point state (``send_replacements`` stopped be
 anyone entered), observed as any turn child. The replacement itself is a request
 ``(state index, player action)`` of ``expand_replacements``: ``replace_rows`` runs
 ``playout.replacement_pass`` for the chosen slot (``action - MOVE_ACTIONS``) and observes
-the result with ``replacement_observation`` (no action ran). It has no outcome draw, so
-the one child has probability 1; the store is deduplicated by state bytes as ``expand``'s.
+the result with ``replacement_observation`` (no action ran). Its one draw is an open weather
+war's tie (ruling G-26, ``step.resolve_war``): two children at 1/2 where it decides the
+weather, else the one child has probability 1; the store is deduplicated by state bytes as
+``expand``'s.
 
 **Learn-move prompts** (K3d-exp design §3.5): ``TurnEnd`` pays exp and runs its learn-move
 prompts (battle_controller_player.c:1846) before ``ReplaceFainted`` (:1848). So a turn's
@@ -86,7 +88,7 @@ from nuzline.engine.levelup import advance_learns, learn, needs_learn
 from nuzline.engine.observe import observation, replacement_observation
 from nuzline.engine.outcome import Outcome
 from nuzline.engine.state import BattleState
-from nuzline.engine.step import needs_replacement, step_events
+from nuzline.engine.step import needs_replacement, resolve_war, step_events, war_split
 from nuzline.jaxcache import cached_export, code_version
 from nuzline.search.playout import (
     _carried_mul,
@@ -391,7 +393,13 @@ def expand(
 
 def _replace(tables: Tables, state: BattleState, action):
     after, refused = replacement_pass(tables, state, action - MOVE_ACTIONS)
-    return after, refused | (after.exp_refused != 0), replacement_observation(after)
+    refused = refused | (after.exp_refused != 0)
+    # An open weather war (ruling G-26): its tie bit is a chance node here, before the
+    # player's next decision (step.resolve_war), else both rows are the one child.
+    ties = [resolve_war(after, tie) for tie in (0, 1)]
+    obs = jnp.stack([replacement_observation(t) for t in ties])
+    both = jax.tree.map(lambda a, b: jnp.stack([a, b]), *ties)
+    return both, war_split(after), refused, obs
 
 
 def _replaces(tables: Tables, states: BattleState, actions):
@@ -400,13 +408,17 @@ def _replaces(tables: Tables, states: BattleState, actions):
 
 def replace_rows(
     tables: Tables, states: BattleState, actions
-) -> tuple[BattleState, np.ndarray, np.ndarray]:
-    """``(after, refused bool[N], observation int32[N, OBS_SIZE])`` of ``N`` rows of
-    (state at a player replacement, player action ``MOVE_ACTIONS + slot``):
-    ``replacement_pass`` and ``replacement_observation``, in one cached program."""
+) -> tuple[BattleState, np.ndarray, np.ndarray, np.ndarray]:
+    """``(after, split bool[N], refused bool[N], observation int32[N, 2, OBS_SIZE])`` of ``N``
+    rows of (state at a player replacement, player action ``MOVE_ACTIONS + slot``):
+    ``replacement_pass`` and ``replacement_observation``, in one cached program. ``after``'s
+    fields are ``[N, 2, ...]``: the state with an open weather war settled on each tie bit
+    (``step.resolve_war``); ``split`` where the two differ (else both are the one child)."""
     actions = np.asarray(actions, np.int32)
-    after, refused, obs = _run(_replaces, "expand_replace", tables, (states, actions), len(actions))
-    return after, np.asarray(refused, bool), np.asarray(obs, np.int32)
+    after, split, refused, obs = _run(
+        _replaces, "expand_replace", tables, (states, actions), len(actions)
+    )
+    return after, np.asarray(split, bool), np.asarray(refused, bool), np.asarray(obs, np.int32)
 
 
 def _one_child_rows(rows_fn, tables: Tables, states: BattleState, requests):
@@ -435,11 +447,36 @@ def _one_child_rows(rows_fn, tables: Tables, states: BattleState, requests):
 
 def expand_replacements(
     tables: Tables, states: BattleState, requests: list[tuple[int, int]]
-) -> tuple[BattleState, dict[int, Child]]:
-    """The child of each request ``(state index, player action)`` on the numpy
-    ``states``: ``(store, children)`` as ``expand`` returns them, one ``Child`` per
-    request with ``prob`` 1.0, the store deduplicated by state bytes."""
-    return _one_child_rows(replace_rows, tables, states, requests)
+) -> tuple[BattleState, dict[int, list[Child]]]:
+    """The children of each request ``(state index, player action)`` on the numpy
+    ``states``: ``(store, children)`` as ``expand`` returns them, the store deduplicated by
+    state bytes. One ``Child`` with ``prob`` 1.0, or, where an open weather war's tie decides
+    the weather (``replace_rows``' ``split``, ruling G-26), one per tie bit at 0.5."""
+    states = jax.tree.map(np.asarray, states)
+    index = np.asarray([r[0] for r in requests], np.int64).reshape(-1)
+    actions = np.asarray([r[1] for r in requests], np.int32)
+    after, split, refused, obs = replace_rows(tables, take(states, index), actions)
+    n = len(requests)
+    flat = jax.tree.map(lambda f: np.asarray(f).reshape((2 * n, *np.shape(f)[2:])), after)
+    obs = obs.reshape((2 * n, -1))
+    state_bytes, obs_bytes = row_bytes(flat, 2 * n), row_bytes(obs, 2 * n)
+    rows: dict[bytes, int] = {}
+    new: list[int] = []
+    children: dict[int, list[Child]] = {}
+    for i in range(n):
+        ties = (0, 1) if split[i] else (0,)
+        kids = []
+        for tie in ties:
+            j = 2 * i + tie
+            key = state_bytes[j].tobytes()
+            row = rows.get(key)
+            if row is None:
+                row = rows[key] = len(rows)
+                new.append(j)
+            kids.append(Child(row, obs_bytes[j].tobytes(), 1.0 / len(ties), bool(refused[i])))
+        children[i] = kids
+    store = take(flat, np.asarray(new)) if new else take(states, slice(0, 0))
+    return store, children
 
 
 def _learn(tables: Tables, state: BattleState, option):

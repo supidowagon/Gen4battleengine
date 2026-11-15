@@ -987,3 +987,217 @@ def test_wonder_guard_pursuit_on_a_switching_holder(tables, names):
     out = assert_matches_reference(tables, s, A(SWITCH_TO_1, "Pursuit", s, n), O)
     assert int(out.active[0]) == 1
     assert int(out.hp[0, 0]) == int(s.hp[0, 0]) and int(out.ai_ability_known[0]) == 1
+
+
+# --- the follow-ups (G-24 .. G-26) ---------------------------------------------------------
+
+
+def test_synchronize_u_turn_user_fainted_by_pursuit_passes_its_status(tables, names):
+    """G-24: a Synchronize U-turn user paralyzed by the foe's Static (TriggerAbilityOnHit,
+    subscript_attack_then_switch_out.s:7) that falls to the foe's Pursuit (:54) ends the script at
+    :55, before the flag clear (:69): AfterMoveEffects' Synchronize step reads its
+    BattleMon.status, which the faint left (only the party copy is zeroed,
+    battle_controller.c:1481-1486), and passes the paralysis to the pursuer."""
+    n = names
+    s = make_state(
+        tables,
+        [_spec(n, "Abra", ["U-turn"], 30), _spec(n, "Abra", ["Growl"], 30)],
+        [_spec(n, "Rattata", ["Pursuit"], 30)],
+    )
+    s = _ability(s, 1, AbilityId.STATIC)._replace(hp=s.hp.at[0, 0].set(1))
+    acts = A("U-turn", "Pursuit", s, n)
+    out = assert_matches_reference(tables, s, acts, _proc(O, "contact_proc", 1))
+    assert int(out.hp[0, 0]) == 0 and int(out.status[0, 0]) == Status.NONE
+    assert int(out.status[1, 0]) == Status.PARALYSIS
+    assert int(out.ai_ability_known[0]) == 1
+    # Without the Static paralysis nothing passes.
+    out = assert_matches_reference(tables, s, acts, O)
+    assert int(out.hp[0, 0]) == 0 and int(out.status[1, 0]) == Status.NONE
+
+
+def test_synchronize_newcomer_fainted_by_entry_hazards_passes_its_poison(tables, names):
+    """G-24: a U-turn's Synchronize newcomer poisoned by Toxic Spikes and fainted by Stealth Rock
+    in the list (subscript_show_party_list.s:22-24; the hazards check runs Toxic Spikes first,
+    subscript_hazards_check.s:14-41) keeps its BattleMon.status: the resumed tail's Synchronize
+    step passes the poison to the defender. A Roar's dragged newcomer likewise."""
+    n = names
+    s = make_state(
+        tables,
+        [_spec(n, "Scyther", ["U-turn"], 30), _spec(n, "Abra", ["Growl"], 30)],
+        [_spec(n, "Rattata", ["Growl"], 40), _spec(n, "Rattata", ["Growl"], 30)],
+    )
+    s = s._replace(
+        toxic_spikes=s.toxic_spikes.at[0].set(1),
+        stealth_rock=s.stealth_rock.at[0].set(1),
+        hp=s.hp.at[0, 1].set(1),
+    )
+    paused = assert_matches_reference(tables, s, A("U-turn", "Growl", s, n), O)
+    assert int(paused.pivot_battler) == 1
+    acts = np.asarray(paused.ts_actions).astype(int).tolist()
+    acts[0] = MOVE_ACTIONS + 1
+    out = assert_matches_reference(tables, paused, tuple(acts), O)
+    assert int(out.hp[0, 1]) == 0 and int(out.status[0, 1]) == Status.NONE
+    assert int(out.status[1, 0]) == Status.POISON
+    s = make_state(
+        tables,
+        [_spec(n, "Rattata", ["Roar"], 30)],
+        [_spec(n, "Geodude", ["Growl"], 20), _spec(n, "Abra", ["Growl"], 20)],
+    )
+    s = s._replace(
+        toxic_spikes=s.toxic_spikes.at[1].set(1),
+        stealth_rock=s.stealth_rock.at[1].set(1),
+        hp=s.hp.at[1, 1].set(1),
+    )
+    out = assert_matches_reference(tables, s, A("Roar", "Growl", s, n), O)
+    assert int(out.hp[1, 1]) == 0 and int(out.status[0, 0]) == Status.POISON
+
+
+def _standoff(tables, names, player_moves=("Tackle",)):
+    """Porygon (Trace) against Porygon (Trace): neither copies (ChooseTraceTarget skips Trace,
+    battle_lib.c:7750-7775), both stay armed; the opponent's bench Geodude holds Super Luck."""
+    n = names
+    s = make_state(
+        tables,
+        [_spec(n, "Porygon", list(player_moves), 30)],
+        [_spec(n, "Porygon", ["Tackle"], 30), _spec(n, "Geodude", ["Tackle"], 30)],
+    )
+    assert int(s.ability[0, 0]) == AbilityId.TRACE and int(s.ability[1, 0]) == AbilityId.TRACE
+    return _ability(s, 1, AbilityId.SUPER_LUCK, slot=1)
+
+
+def test_trace_standoff_copies_the_next_newcomer_before_the_holders_move(tables, names):
+    """G-25: an armed Trace holder copies the foe's switch-in at its switch-in checks
+    (SWITCH_IN_CHECK_STATE_TRACE, battle_lib.c:3718-3737), before its own move: the step writes
+    the copy and the laws read it (Super Luck: crit 1 in 8, ``outcome.pivot_view``). A Pursuit on
+    the switch hits before it (subscript_switch_pokemon.s:11): its reads see Trace."""
+    from nuzline.engine.enumerate import outcome_laws
+    from nuzline.engine.outcome import pivot_view
+
+    n = names
+    s = _standoff(tables, names)
+    acts = A("Tackle", SWITCH_TO_1, s, n)
+    out = assert_matches_reference(tables, s, acts, O)
+    assert int(out.ability[0, 0]) == AbilityId.SUPER_LUCK
+    view, _ = pivot_view(tables, s, acts)
+    assert int(view.ability[0, 0]) == AbilityId.SUPER_LUCK
+    assert int(outcome_laws(tables, s, acts).crit_odds[0]) == 8
+    assert int(outcome_laws(tables, s, A("Tackle", "Tackle", s, n)).crit_odds[0]) == 16
+    s = _standoff(tables, names, ("Pursuit",))
+    acts = A("Pursuit", SWITCH_TO_1, s, n)
+    assert int(pivot_view(tables, s, acts)[0].ability[0, 0]) == AbilityId.TRACE
+    assert int(outcome_laws(tables, s, acts).crit_odds[0]) == 16
+    out = assert_matches_reference(tables, s, acts, O)
+    assert int(out.ability[0, 0]) == AbilityId.SUPER_LUCK
+
+
+def test_trace_standoff_copies_a_u_turn_newcomer(tables, names):
+    """G-25: the foe's U-turn pick enters before the holder moves: at the paused list the laws'
+    view gives the holder the copy (``pivot_view``), and the resume writes it."""
+    from nuzline.engine.enumerate import outcome_laws
+
+    n = names
+    s = make_state(
+        tables,
+        [_spec(n, "Porygon", ["Tackle"], 20)],
+        [_spec(n, "Porygon", ["U-turn"], 40), _spec(n, "Geodude", ["Tackle"], 30)],
+    )
+    s = _ability(s, 1, AbilityId.SUPER_LUCK, slot=1)
+    paused = assert_matches_reference(tables, s, A("Tackle", "U-turn", s, n), O)
+    assert int(paused.pivot_battler) == 2
+    acts = np.asarray(paused.ts_actions).astype(int).tolist()
+    acts[1] = MOVE_ACTIONS + 1
+    assert int(outcome_laws(tables, paused, jnp.asarray(acts)).crit_odds[0]) == 8
+    out = assert_matches_reference(tables, paused, tuple(acts), O)
+    assert int(out.ability[0, 0]) == AbilityId.SUPER_LUCK
+
+
+def _war(tables, names, levels, items=("", "")):
+    """Groudon (Drought) leading against Kyogre (Drizzle), both base Speed 90: equal levels tie."""
+    n = names
+    return make_state(
+        tables,
+        [_spec(n, "Groudon", ["Tackle"], levels[0], items[0])],
+        [_spec(n, "Kyogre", ["Tackle"], levels[1], items[1])],
+    )
+
+
+def test_weather_war_at_the_battle_start_leaves_the_slower_leads_weather(tables, names):
+    """G-26: the weather state runs over monSpeedOrder (battle_lib.c:3740-3790), sorted at
+    TrainerMessage (battle_controller_player.c:251, battle_lib.c:3364-3382): the second lead's
+    weather stays. A slower player's Drought runs its script last (the AI learns it)."""
+    fast = _war(tables, names, (50, 40))
+    assert int(fast.weather) == Weather.RAIN and int(fast.war_swaps) == 0
+    assert int(fast.ai_ability_known[0]) == 1  # its own script ran first
+    slow = _war(tables, names, (40, 50))
+    assert int(slow.weather) == Weather.SUN and int(slow.weather_timer) == 0
+    assert int(slow.war_swaps) == 0 and int(slow.ai_ability_known[0]) == 1
+
+
+def test_weather_war_tie_and_quick_claw_are_root_draws(tables, names):
+    """G-26: an exact speed tie swaps on RandNext() & 1 (battle_lib.c:1445) and a lead's Quick
+    Claw reads the battle-start speedRand (:1278-1286, BattleContext_InitCounters :2024): the
+    order waits in ``war_swaps`` for the root chance node (``root_belief``, ``sample_root``)."""
+    import jax
+
+    from nuzline.engine.step import root_belief, sample_root
+
+    tie = _war(tables, names, (50, 50))
+    assert int(tie.war_swaps) == 0b10101010 and int(tie.weather) == Weather.RAIN
+    belief = root_belief(tables, tie)
+    assert sorted((int(b.weather), p) for b, p in belief) == sorted(
+        [(int(Weather.SUN), 0.5), (int(Weather.RAIN), 0.5)]
+    )
+    assert all(int(b.war_swaps) == 0 for b, _ in belief)
+    keys = jax.random.split(jax.random.PRNGKey(0), 32)
+    drawn = {int(sample_root(k, tables, tie).weather) for k in keys}
+    assert drawn == {Weather.SUN, Weather.RAIN}
+    # The slower player's Quick Claw: activated (1/5) it sorts first and the rain stays.
+    claw = _war(tables, names, (40, 50), ("Quick Claw", ""))
+    assert int(claw.war_swaps) != 0
+    belief = {(int(b.qc_roll[0]), int(b.weather)): p for b, p in root_belief(tables, claw)}
+    assert belief == pytest.approx({(1, Weather.RAIN): 0.2, (0, Weather.SUN): 0.8})
+
+
+def _double_ko(tables, names, levels):
+    """Geodude leads, both down; the player's bench Groudon (Drought, level ``levels[0]``) and
+    the opponent's only bench Pokemon Kyogre (Drizzle, ``levels[1]``) come in together."""
+    from tests.search.fixtures import at_replacement
+
+    n = names
+    s = make_state(
+        tables,
+        [_spec(n, "Geodude", ["Tackle"], 30), _spec(n, "Groudon", ["Tackle"], levels[0])],
+        [_spec(n, "Geodude", ["Tackle"], 30), _spec(n, "Kyogre", ["Tackle"], levels[1])],
+    )
+    return at_replacement(s, opp_down=True)
+
+
+def test_weather_war_at_a_double_ko(tables, names):
+    """G-26: the replacements' switch-in states run together at ShowBattleMon, over the order
+    TrainerMessage sorted on the newcomers (battle_controller_player.c:251, the turn's speedRand):
+    the slower newcomer's weather stays; a tie waits in ``war_swaps``, a chance node of the
+    tree's replacement children (``expand_replacements``) and of the playout's next turn."""
+    import jax
+
+    from nuzline.engine.step import resolve_war
+    from nuzline.search.expand import expand_replacements
+    from nuzline.search.playout import replacement_pass, settle_war
+    from nuzline.search.rows import take
+
+    for levels, weather in (((50, 40), Weather.RAIN), ((40, 50), Weather.SUN)):
+        after, refused = replacement_pass(tables, _double_ko(tables, names, levels), 1)
+        assert not bool(refused) and int(after.active[1]) == 1
+        assert int(after.weather) == weather and int(after.war_swaps) == 0
+    s = _double_ko(tables, names, (50, 50))
+    after, _ = replacement_pass(tables, s, 1)
+    assert int(after.war_swaps) != 0 and int(after.weather) == Weather.RAIN
+    assert int(resolve_war(after, 1).weather) == Weather.SUN
+    assert int(resolve_war(after, 0).weather) == Weather.RAIN
+    keys = jax.random.split(jax.random.PRNGKey(1), 32)
+    assert {int(settle_war(after, k).weather) for k in keys} == {Weather.SUN, Weather.RAIN}
+    batch = jax.tree.map(lambda f: np.asarray(f)[None], s)
+    store, children = expand_replacements(tables, batch, [(0, MOVE_ACTIONS + 1)])
+    kids = children[0]
+    assert [k.prob for k in kids] == [0.5, 0.5]
+    weathers = {int(take(store, np.asarray([k.state_row])).weather[0]) for k in kids}
+    assert weathers == {Weather.SUN, Weather.RAIN}
