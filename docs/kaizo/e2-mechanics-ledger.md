@@ -20,7 +20,9 @@
 - Batch 8 (B8-1..B8-5): 651bff4 (Lock-On / Mind Reader), 208e996 (Perish Song), ecd1a4f (Yawn),
   cbfcce1 (Curse by a Ghost user), ffa0766 (the opponent-legality test invariant:
   tests/ai_legality.py; first run over the playout, replacement and policy tests and the
-  property: no violation), and the ledger commit. Backlog regenerated: Metronome's unmodelled
+  property: no violation; it checks only the concrete picks of host-side calls: the AI picks
+  inside jitted playouts, most of them, are traced and go unchecked), and the ledger commit.
+  Review follow-ups B8-6..B8-8 in "fix(e2): batch 8 review follow-ups". Backlog regenerated: Metronome's unmodelled
   callable moves 118 -> 115; no other entry (no Roark-split trainer uses these moves).
 - Fixed after batch 7 (B7-12): the differential divergence found at f22b818 (a switch replaying
   on the newcomer), from 470fbef (batch 6's pause loop); the JAX engine was wrong.
@@ -268,8 +270,8 @@ Rules left out because another mechanic is missing; each closes with the mechani
   locker's next moves skip the miss in the engine's hit laws (`outcome._rate`): the AI's own
   accuracy reads are E1's. `coverage.ghost_curse` is gone (the AI's own Ghost Curse refusal in
   `ai.policy` stays E1's).
-- Lock-On's lock survives its locker's faint (CleanupFaintedMon has no Lock-On loop) and the
-  slot's replacement inherits it (B8-2): `MON_IS_LOCKED_ONTO` compares battler slots.
+- Lock-On's lock survives its locker's faint (CleanupFaintedMon has no Lock-On loop) until the
+  slot's replacement comes in, whose UpdateAfterSwitch clears it (B8-7).
 - AI owner (E1): Copycat's AI move-effect script (#242: Basic_CheckCopycat / Expert_Copycat) is
   untranscribed (the backlog's AI entry); the engine side is B5-1. The battle's movePrev is
   `BattleState.move_prev`; trainer_ai.c reads only movePrevByBattler (`last_move`). (Sleep Talk
@@ -1066,8 +1068,8 @@ Rules left out because another mechanic is missing; each closes with the mechani
 - B8-2 Lock-On's leave rules: the locked battler's own count and target are volatile, Baton
   Pass keeping both (moves.h:46, battle_lib.c:2109); when the locker leaves by a switch the lock
   on it ends (battle_lib.c:2063-2067), by Baton Pass it restarts at the initial count
-  (:2077-2085, moves.h:55); its faint leaves it (CleanupFaintedMon, :2156-2205, has no such loop),
-  so the slot's replacement holds it (`step._source_leaves(faint=True)`).
+  (:2077-2085, moves.h:55); its faint leaves it (CleanupFaintedMon, :2156-2205, has no such loop)
+  until the replacement comes in (corrected by B8-7).
 - B8-3 Perish Song (effect 114, a direct ON_HIT subscript_perish_song_start.s):
   `BtlCmd_TryPerishSong` (battle_script.c:5465-5487) marks every living battler without the effect
   (count 3), failing with none (Soundproof is an unsupported ability).
@@ -1094,3 +1096,20 @@ Rules left out because another mechanic is missing; each closes with the mechani
   data.json): Protect never stops it. `MON_COND_CHECK_STATE_CURSE` (bcp.c:1451-1459, after Burn):
   Divide(maxHP, 4) unless Magic Guard (subscript_curse_damage.s). Volatile, kept by Baton Pass
   (condition.h:72-76). The coverage / prep refusal (`coverage.ghost_curse`) is removed.
+- B8-6 (batch 8 review) The Future Sight hit's law (`outcome.future_thresholds`) read Lock-On as
+  it stands at the turn start, but MON_COND_CHECK_STATE_LOCK_ON drops the count in the per-battler
+  turn-end checks (bcp.c:1618-1624) before the side-condition pass hits (:1758-1783), and the hit
+  reads MON_IS_LOCKED_ONTO (:3016-3018): a lock at 1 is gone at the hit. The grid now has a lock
+  axis: unlocked always possible (also covering a locker's switch, battle_lib.c:2063-2067, and a
+  pivot view that kept a lock the switch clears), locked by the stored attacker's slot possible
+  when the count is 2 or more at the start or a Lock-On is used this turn. Test:
+  test_batch8.py `test_future_sight_law_reads_the_lock_after_the_countdown`, its expectation from
+  step's live `future_threshold` on the state at the hit.
+- B8-7 (batch 8 review) Corrects B8-2's text, the code was right: after the locker's faint the
+  lock stays until the replacement comes in; its BtlCmd_SwitchAndUpdateMon runs UpdateAfterSwitch
+  (battle_script.c:2522), which without Baton Pass clears every lock whose lockOnTarget is that
+  battler (battle_lib.c:2063-2067). Test extended through `replace` (both engines).
+- B8-8 (batch 8 review) The opponent-legality invariant checks concrete host-side picks only; the
+  AI picks inside jitted playouts (most of them) are traced and unchecked (tests/ai_legality.py
+  says so). `test_the_property_reaches_unrefused_states` checks one found state (Ingrain and
+  Mean Look on the AI's side); its docstring now says that.

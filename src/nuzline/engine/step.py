@@ -301,7 +301,8 @@ def _source_leaves(state: BattleState, side, cond, baton=False, faint=False) -> 
     # The Lock-On of every battler it locked onto (lockOnTarget == the leaving one): a switch
     # clears it (battle_lib.c:2063-2067), a Baton Pass restarts its count at
     # MOVE_EFFECT_LOCK_ON_INITIAL_DURATION (:2077-2085, moves.h:55); a faint leaves it
-    # (CleanupFaintedMon, :2156-2205, has no such loop), so the slot's replacement inherits it.
+    # (CleanupFaintedMon, :2156-2205, has no such loop) until the slot's replacement comes in,
+    # whose UpdateAfterSwitch (battle_script.c:2522) clears it like a switch (B8-7).
     if not faint:
         for battler in range(state.active.shape[0]):
             mine = (state.lock_on[battler] != 0) & (state.lock_on_target[battler] == 1 + side)

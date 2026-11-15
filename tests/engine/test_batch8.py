@@ -33,10 +33,11 @@ def test_lock_on_makes_the_next_move_hit_and_runs_out(tables, names):
     assert int(missed.hp[1, 0]) == int(s.hp[1, 0])
 
 
-def test_lock_on_ends_with_its_lockers_switch_not_its_faint(tables, names):
-    """B8-2: UpdateAfterSwitch clears the lock of a battler the leaving one locked onto
-    (battle_lib.c:2063-2067); CleanupFaintedMon has no such loop (:2156-2205): after a faint the
-    slot's replacement still holds it."""
+def test_lock_on_ends_with_its_lockers_switch_or_replacement(tables, names):
+    """B8-2 (as corrected by B8-7): UpdateAfterSwitch clears the lock of a battler the leaving
+    one locked onto (battle_lib.c:2063-2067); CleanupFaintedMon has no such loop (:2156-2205), so
+    after the locker's faint the lock stays until the replacement's SwitchAndUpdateMon runs
+    UpdateAfterSwitch (battle_script.c:2522) for the slot, which clears it the same way."""
     n = names
     s = make_state(
         tables,
@@ -49,6 +50,15 @@ def test_lock_on_ends_with_its_lockers_switch_not_its_faint(tables, names):
     fainted = assert_matches_reference(tables, s.replace_hp(0, 0, 1), (0, 0), O)
     assert int(fainted.hp[0, 0]) == 0
     assert int(fainted.lock_on[1]) == 1 and int(fainted.lock_on_target[1]) == 1
+    from nuzline.engine.step import replace
+    from nuzline.reference.convert import from_ref, to_ref
+    from nuzline.reference.engine import ref_replace
+    from nuzline.data.tables import to_numpy
+
+    sent = replace(tables, fainted, 0, 1)
+    assert int(sent.lock_on[1]) == 0 and int(sent.lock_on_target[1]) == 0
+    ref = from_ref(ref_replace(to_numpy(tables), to_ref(fainted), 0, 1))
+    assert int(ref.lock_on[1]) == 0 and int(ref.lock_on_target[1]) == 0
 
 
 def test_perish_song_counts_down_and_faints_at_zero(tables, names):
@@ -109,3 +119,40 @@ def test_ghost_curse_halves_the_user_and_hurts_the_foe_each_turn(tables, names):
     assert int(out.hp[1, 0]) == foe - max(foe // 4, 1)
     again = assert_matches_reference(tables, out, (0, 0), O)
     assert int(again.hp[0, 0]) == int(out.hp[0, 0])  # failed: no cost
+
+
+def test_future_sight_law_reads_the_lock_after_the_countdown(tables, names):
+    """B8-6: MON_COND_CHECK_STATE_LOCK_ON drops the lock (bcp.c:1618-1624) before the
+    side-condition pass's Future Sight hit (:1758-1783), which reads MON_IS_LOCKED_ONTO
+    (:3016-3018). A lock at 1 with the hit due this turn is gone at the hit: the law must hold the
+    unlocked threshold, taken here from the live threshold step reads (``future_threshold``) on
+    the state as it stands at the hit, not from ``future_thresholds``."""
+    import numpy as np
+
+    from nuzline.engine.enumerate import outcome_laws
+    from nuzline.engine.outcome import future_threshold
+
+    n = names
+    s = make_state(
+        tables, [_mon(n, "Abra", ["Future Sight"], 30)], [_mon(n, "Geodude", ["Growl"], 30)]
+    )
+    move = n.move("Future Sight")
+    s = s._replace(
+        future_timer=s.future_timer.at[1].set(1),
+        future_damage=s.future_damage.at[1].set(5),
+        future_move=s.future_move.at[1].set(move),
+        future_attacker=s.future_attacker.at[1].set(1),
+        future_sight=s.future_sight.at[1].set(1),
+        lock_on=s.lock_on.at[1].set(1),
+        lock_on_target=s.lock_on_target.at[1].set(1),
+    )
+    at_hit = s._replace(lock_on=s.lock_on.at[1].set(0), lock_on_target=s.lock_on_target.at[1].set(0))
+    live = int(future_threshold(tables, at_hit, 1))
+    assert live < 100
+    laws = outcome_laws(tables, s, jnp.asarray([0, 0]))
+    ts = np.asarray(laws.future_thresholds[1])[np.asarray(laws.future_possible[1], bool)]
+    assert live in set(int(t) for t in ts)
+    # And the step itself misses on a roll above the live threshold.
+    o = O._replace(future_hit=jnp.asarray([1, live + 1], jnp.int8))
+    out = assert_matches_reference(tables, s, (0, 0), o)
+    assert int(out.hp[1, 0]) == int(s.hp[1, 0])

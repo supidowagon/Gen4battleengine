@@ -63,7 +63,8 @@ def test_the_check_catches_an_illegal_weight(tables, names):
 
 
 def test_the_property_reaches_unrefused_states(tables, names):
-    """Most generated states are supported (not NaN), so the property checks real picks."""
+    """One generated state with Ingrain and Mean Look on the AI's side is supported (no NaN in
+    its action distribution), so the property reaches real picks there (B8-8)."""
     from hypothesis import find
 
     s = find(gated_states(tables, names), lambda s: s.ingrain[1] == 1 and s.mean_look[1] == 1)

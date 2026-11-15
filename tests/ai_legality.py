@@ -3,7 +3,8 @@ legality"): every action the AI policy picks, or gives a positive probability, i
 ``legal_opponent_actions`` allows in that state; every replacement it picks is a
 ``legal_replacements`` slot. ``step`` trusts the AI for this (it checks no opponent action), so
 the tests check it on the concrete outputs of every host-side call, never inside a traced
-program (a traced call passes through unchecked).
+program: the AI picks inside jitted playouts, which are most of the picks the search makes, are
+traced and go unchecked (ruling B8-8).
 
 ``install`` wraps ``ai_policy``, ``ai_action_distribution``, ``expand.ai_rows`` and
 ``post_ko_switch_in`` wherever a loaded module bound them (the policy, the search, the test

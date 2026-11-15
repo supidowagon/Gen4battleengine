@@ -383,7 +383,9 @@ def future_thresholds(
     stat effect on accuracy or evasion, Foresight, a White Herb); else the start stages of a battler
     that stays and 0 for a newcomer or a fainted attacker (CleanupFaintedMon). The weather can be
     the start's, none (it ended, or a lock), or a weather move's or ability's sandstorm or hail
-    (the only ones the rate reads besides fog, which never starts); the target confused or not."""
+    (the only ones the rate reads besides fog, which never starts); the target confused or not;
+    and the defender locked onto by the attacker's slot or not (B8-6: the lock as it stands after
+    the turn end's countdown)."""
     actions = jnp.asarray(actions, _I32)
     if moves is None:
         moves = jnp.stack([used_move(tables, state, side, actions[side]) for side in (0, 1)])
@@ -414,7 +416,7 @@ def future_thresholds(
     weathers = jnp.stack(
         [state.weather.astype(_I32), Weather.NONE, Weather.SANDSTORM, Weather.HAIL]
     ).astype(_I32)
-    a_mon, d_mon, total, wi, conf = (
+    a_mon, d_mon, total, wi, conf, lk = (
         g.reshape(-1)
         for g in jnp.meshgrid(
             slots,
@@ -422,23 +424,38 @@ def future_thresholds(
             jnp.arange(_FUTURE_TOTALS),
             jnp.arange(_FUTURE_WEATHERS),
             jnp.arange(2),
+            jnp.arange(2),
             indexing="ij",
         )
     )
+    # Lock-On at the hit (B8-6): MON_COND_CHECK_STATE_LOCK_ON drops the count in the turn end's
+    # per-battler checks (bcp.c:1618-1624), before the side-condition pass hits (:1758-1783), so
+    # a lock on the defender holds there when its count is 2 or more now, or when this turn's
+    # Lock-On sets it (2, subscript_lock_on.s); a switch of the locker clears it
+    # (battle_lib.c:2063-2067) and a newcomer defender starts without one. The grid's lock axis:
+    # 0 no lock (always possible), 1 locked by the stored attacker's slot (possible as above).
+    lock_move = jnp.any(uses & (effect == EffectId.LOCK_ON))
     thresholds, possible = [], []
     for d in (0, 1):
         a = jnp.clip(state.future_attacker[d].astype(_I32) - 1, 0, 1)
         move = state.future_move[d].astype(_I32)
         foe = 1 - a  # the defender is the other side's battler (singles)
 
-        def rate(am, dm, t, w, c, a=a, move=move, d=d):
-            s = state._replace(active=state.active.at[a].set(am.astype(state.active.dtype)))
+        def rate(am, dm, t, w, c, k, a=a, move=move, d=d):
+            s = state._replace(
+                active=state.active.at[a].set(am.astype(state.active.dtype)),
+                lock_on=state.lock_on.at[d].set(k.astype(state.lock_on.dtype)),
+                lock_on_target=state.lock_on_target.at[d].set(
+                    jnp.where(k == 1, 1 + a, 0).astype(state.lock_on_target.dtype)
+                ),
+            )
             return _rate(
                 tables, s, a, move, d, dm, jnp.asarray(False), 0, 0, True,
                 weathers[w], c == 1, t,
             )  # fmt: skip
 
-        thresholds.append(jax.vmap(rate)(a_mon, d_mon, total, wi, conf))
+        thresholds.append(jax.vmap(rate)(a_mon, d_mon, total, wi, conf, lk))
+        lock_ok = (lk == 0) | lock_move | (state.lock_on[d] >= 2)
 
         def actual(am, dm, keep_acc, a=a, d=d):
             s = state._replace(active=state.active.at[a].set(am.astype(state.active.dtype)))
@@ -449,7 +466,7 @@ def future_thresholds(
         kept = jax.vmap(actual)(a_mon, d_mon, jnp.ones_like(a_mon, bool))
         reset = jax.vmap(actual)(a_mon, d_mon, jnp.zeros_like(a_mon, bool))
         stage_ok = free | (total == kept) | (total == reset)
-        possible.append(on_field[a][a_mon] & on_field[d][d_mon] & stage_ok & (foe == d))
+        possible.append(on_field[a][a_mon] & on_field[d][d_mon] & stage_ok & (foe == d) & lock_ok)
     loose = jnp.broadcast_to(tracer, (2,))
     return jnp.stack(thresholds).astype(_I32), jnp.stack(possible), loose
 

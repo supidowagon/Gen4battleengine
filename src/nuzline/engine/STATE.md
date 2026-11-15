@@ -175,7 +175,8 @@ three structs has a row.
   battler's own (volatiles); Baton Pass keeps Curse (`condition.h:72-76`), Lock-On and Perish
   Song (`moves.h:46-48`, `battle_lib.c:2109-2110`); the Lock-On of another battler that the
   leaving one locked onto is cleared by its switch, restarted by its Baton Pass
-  (`battle_lib.c:2063-2085`) and kept through its faint (B8-2). Their turn-end checks:
+  (`battle_lib.c:2063-2085`) and kept through its faint until the slot's replacement comes in,
+  whose UpdateAfterSwitch (`battle_script.c:2522`) clears it (B8-2, B8-7). Their turn-end checks:
   Curse (bcp.c:1451, with Burn), Lock-On (:1618, with Uproar / Disable), Yawn (:1684, with
   Taunt), Perish Song in the side-condition pass (:1791).
 - **speedRand -> `qc_roll`** (K3b2 Task 8; docs/kaizo/k3b2-rules.md §5, §12):

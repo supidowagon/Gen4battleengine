@@ -1040,7 +1040,8 @@ def _source_leaves(s: RefState, side: int, baton: bool = False, faint: bool = Fa
             if sd.mean_look and sd.mean_look_target == 1 + side:
                 sd.mean_look = 0  # meanLookTarget stays (B7-15)
     # The Lock-On of every battler it locked onto: a switch clears it (lib.c:2063-2067), a Baton
-    # Pass restarts it at the initial count (:2077-2085); a faint leaves it (B8-2).
+    # Pass restarts it at the initial count (:2077-2085); a faint leaves it until the slot's
+    # replacement comes in, whose UpdateAfterSwitch clears it (B8-2, B8-7).
     if not faint:
         for sd in s.sides:
             if sd.lock_on and sd.lock_on_target == 1 + side:
