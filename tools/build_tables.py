@@ -409,10 +409,14 @@ def _kaizo_rom_changes(inter: Path, rom_diff: Path = ROM_DIFF) -> tuple[frozense
     modelled = {
         i for (narc, i), (status, _) in members.items() if narc == BE_SEQ and status == "modelled"
     }
-    if not modelled <= set(KAIZO_EFFECTS):
+    # A modelled member needs its KAIZO_EFFECTS entry. Against the real rom_diff.toml the match
+    # is exact (B9-15): an entry with no modelled member would override the vanilla mapping of an
+    # unchanged script. A test's own small diff models a subset only, so it gets the subset check.
+    exact = Path(rom_diff).resolve() == Path(ROM_DIFF).resolve()
+    if not modelled <= set(KAIZO_EFFECTS) or (exact and modelled != set(KAIZO_EFFECTS)):
         raise BuildError(
-            f"modelled be_seq members {sorted(modelled - set(KAIZO_EFFECTS))} have no "
-            "effect_map.KAIZO_EFFECTS entry"
+            f"modelled be_seq members {sorted(modelled)} != effect_map.KAIZO_EFFECTS "
+            f"{sorted(KAIZO_EFFECTS)}"
         )
     unknown = sum(st == "unknown" for st, _ in code.values())
     unknown += sum(st == "unknown" for st, _ in members.values())

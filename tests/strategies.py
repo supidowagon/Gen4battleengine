@@ -799,7 +799,7 @@ def _draw_batch9(draw, tables: Tables, a: dict, side: int, active: int, names: N
     """Maybe (1 in 2) put a ``BATCH9_ABILITIES`` ability on the active Pokemon with what makes it
     act most of the time: sun for Chlorophyll and Flower Gift, a Bug move at a third of its HP
     for Swarm, a physical hit for Huge Power / Pure Power, for Unburden a lost item (canUnburden,
-    no item) or a held berry it can eat and the flag up or down."""
+    no item) or a held berry it can eat (the flag up, as its switch-in check left it)."""
     rnd = draw(st.randoms(use_true_random=False))
 
     def give(move_name: str) -> None:
@@ -881,7 +881,9 @@ def _draw_batch9(draw, tables: Tables, a: dict, side: int, active: int, names: N
             a["can_unburden"][side] = 1
         else:
             a["item"][side, active] = names.item(rnd.choice(("Oran Berry", "Sitrus Berry", "Lum Berry")))
-            a["can_unburden"][side] = rnd.randint(0, 1)
+            # A holder with an item has canUnburden set: its switch-in check armed it
+            # (battle_lib.c:4433-4437) and nothing clears it while it stays in (B9-13).
+            a["can_unburden"][side] = 1
 
 
 def _draw_batch4(draw, tables: Tables, a: dict, side: int, active: int, names: Names) -> None:

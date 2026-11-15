@@ -89,7 +89,7 @@ def children(
     assert k <= P, k
     pad = np.concatenate([np.arange(k), np.zeros(P - k, np.int64)])
     padded = jax.tree.map(lambda f: np.asarray(f)[pad], outcomes)
-    after, refused, obs, _ = jax.device_get(_turns(tables, state, actions, padded))
+    after, refused, obs = jax.device_get(_turns(tables, state, actions, padded))
     # Each row's state bytes at once: the fields' bytes side by side, in ``state_bytes``'
     # order, so row i of ``rows`` is ``state_bytes(_row(after, i))``.
     rows = np.concatenate(

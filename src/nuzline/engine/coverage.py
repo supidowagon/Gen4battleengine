@@ -56,9 +56,10 @@ items) and plan 1b (Task 2b: trainer items; Task 3: Roark's AI flags) implement:
   and the weather abilities' HP (``step._weather_effect``: sand and hail, Ice Body, Dry Skin,
   Solar Power), the status orbs' Leaf Guard test, the weather moves with their rocks and the
   switch-in weather abilities (Drizzle, Sand Stream, Drought, Snow Warning). The other
-  decomp readers of a weather belong to unsupported moves (Thunder, Blizzard, SolarBeam,
-  Weather Ball, Moonlight, Kaizo's Hurricane) or abilities (Chlorophyll, Leaf Guard, Rain
-  Dish, Hydration, Forecast, Flower Gift), so they are refused with their holder. Deep fog
+  decomp readers of a weather (Thunder, Blizzard, Chlorophyll, Rain Dish and Flower Gift since
+  E2 batch 9) are modelled too; the rest belong to unsupported moves (SolarBeam, Weather Ball,
+  Moonlight, Kaizo's Hurricane) or abilities (Leaf Guard, Hydration, Forecast), so they are
+  refused with their holder. Deep fog
   stays refused (``Weather.FOG``);
 * two weather abilities that set different weathers, one in each party
   (``weather_war_line``): ``SWITCH_IN_CHECK_STATE_WEATHER_ABILITIES`` runs over

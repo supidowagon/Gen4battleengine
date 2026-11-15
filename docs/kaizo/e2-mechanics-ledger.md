@@ -338,6 +338,12 @@ Rules left out because another mechanic is missing; each closes with the mechani
 - The Iron Ball and Gravity clauses of `BasicTypeMulApplies` / `Battler_Ability`
   (battle_lib.c:2534, :2545-2549, :3095-3098) beside Ingrain's (`damage.identified`): Gravity,
   Iron Ball.
+- Doubles (batch 9 review): Flower Gift counts a living holder over the whole side
+  (COUNT_ALIVE_BATTLERS_OUR_SIDE, battle_lib.c:2886-2893, read at :6930-6941); `damage._pre_random`
+  reads the attacker's / defender's own ability, exact in singles only. RANGE_ALLY and
+  RANGE_USER_OR_ALLY naming the user (`effects.targets_user`, battle_lib.c:1670-1684) is singles
+  only: in doubles they name the partner, and Helping Hand (which fails in singles, B9-5) boosts
+  the ally's move there.
 - Doubles: `ai_item_known` is kept per player party slot, which is exact in singles only:
   `AICmd_LoadHeldItemEffect` (trainer_ai.c:1907-1910) reads `battlerHeldItems` for any battler
   but the AI's own, so in doubles it also reads the AI partner's record (and `IfHeldItemEqualTo`,
@@ -1284,3 +1290,21 @@ Rules left out because another mechanic is missing; each closes with the mechani
   battle_script.c:7198-7209; Battler_MovedThisTurn, battle_lib.c:5365-5368: a switched-in
   newcomer's action is MOVE_END too, :2053), as a powerMul of 20 in `effects.play_hit` (the same
   product, battle_lib.c:6688).
+- B9-13 (batch 9 review) The end-of-turn speed grid (`enumerate._end_speeds`) took the outgoing
+  battler's `can_unburden` for an incoming Pokemon. UpdateAfterSwitch zeroes MoveEffectsData
+  (battle_lib.c:2101-2104) and the switch-in check arms canUnburden only for an Unburden holder
+  that still holds an item (:4433-4437): a Pokemon other than the active one now carries
+  `(ability == UNBURDEN) & (item != 0)` (law test `test_unburden_speed_axis_of_a_newcomer`). The
+  generator no longer gives an item holder `can_unburden = 0` (its switch-in check set it).
+- B9-14 (batch 9 review) The reference engine applied Belly Drum on a failing use (Attack +6, or
+  curHP <= Divide(maxHP, 2)): subscript_belly_drum.s:3-6 fails before the stage and the HP, as the
+  JAX engine had it (`effects.belly_drum_fails`). Found by the new hand test; the reference fixed.
+- B9-15 (batch 9 review) `build_tables._kaizo_rom_changes` checks the modelled be_seq members
+  equal `effect_map.KAIZO_EFFECTS` exactly against the real rom_diff.toml (an entry with no
+  modelled member would override the vanilla mapping of an unchanged script); a test's own small
+  diff keeps the subset check. The exhaustive solver (`tests/search/exhaustive.py`) unpacked a
+  fourth value its own `_turn` never returns (48e278c, batch 5): `test_stage_b.py` failed there. Batch 9's hand tests strengthened: Payback's x2,
+  Belly Drum's failures, battle cases for Chlorophyll, Swarm, Flower Gift, Water Absorb, Rain
+  Dish, Aftermath, Hyper Cutter vs Intimidate, SonicBoom, the Kaizo recoil divisors, and the
+  trapping abilities (`actions.trapped`: Shadow Tag vs Shadow Tag, Arena Trap vs Flying /
+  Levitate / Gravity, Magnet Pull on Steel only, a fainted trapper).

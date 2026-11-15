@@ -499,6 +499,12 @@ def _end_speeds(
 
     def speed(mon, stage, para, lock, wind):
         unburdened = (wind & 2) != 0
+        # A Pokemon other than the active one comes in fresh: UpdateAfterSwitch zeroes its
+        # MoveEffectsData (battle_lib.c:2101-2104) and its switch-in check arms canUnburden only
+        # for an Unburden holder that still holds an item (:4433-4437); B9-13.
+        incoming = mon != state.active[side]
+        armed = (state.ability[side, mon] == AbilityId.UNBURDEN) & (state.item[side, mon] != 0)
+        base = jnp.where(incoming, armed.astype(_I32), state.can_unburden[side].astype(_I32))
         s = state._replace(
             tailwind=state.tailwind.at[side].set(
                 jnp.where((wind & 1) != 0, TAILWIND_TURNS, state.tailwind[side]).astype(
@@ -506,9 +512,7 @@ def _end_speeds(
                 )
             ),
             can_unburden=state.can_unburden.at[side].set(
-                jnp.where(unburdened, 1, state.can_unburden[side]).astype(
-                    state.can_unburden.dtype
-                )
+                jnp.where(unburdened, 1, base).astype(state.can_unburden.dtype)
             ),
             item=state.item.at[side, mon].set(
                 jnp.where(unburdened, 0, state.item[side, mon]).astype(state.item.dtype)

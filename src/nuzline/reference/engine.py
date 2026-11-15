@@ -2335,11 +2335,13 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
         _change_stage(s, side, Stat.ATK, 1)
         _change_stage(s, side, p0, 1)
     elif effect == EffectId.BELLY_DRUM and landed:
-        # subscript_belly_drum.s: Attack to +6, then Divide(maxHP, 2) through UPDATE_HP (a failing
-        # one ended at the failure check before AfterMoveEffects).
+        # subscript_belly_drum.s: fails (MOVE_STATUS_FAILED, :3-6) at Attack +6 or with curHP <=
+        # Divide(maxHP, 2); else Attack to +6, then Divide(maxHP, 2) through UPDATE_HP (B9-14).
         user = _active(s, side)
-        s.sides[side].stages[Stat.ATK] = 6
-        _lose_hp(turn, s, side, _divide(user.max_hp, 2))
+        half = _divide(user.max_hp, 2)
+        if s.sides[side].stages[Stat.ATK] < 6 and user.hp > half:
+            s.sides[side].stages[Stat.ATK] = 6
+            _lose_hp(turn, s, side, half)
     elif effect == EffectId.ROLLOUT and landed:
         # BtlCmd_CalcRolloutPower (script.c:5661): rolloutCount starts at 5 on a first use,
         # every use decrements it, the lock ends at 0; a hit that dealt nothing (an
