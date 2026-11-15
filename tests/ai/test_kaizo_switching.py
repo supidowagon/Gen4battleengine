@@ -231,9 +231,12 @@ def _loose_reads(t, s: BattleState) -> list[tuple[float, int]]:
     gravity = int(s.gravity)
     reads: list[tuple[float, int | None]] = []  # (P(the read's branch), action or None)
 
-    # :3906-3913: trapped, Shadow Tag / Arena Trap on the player's side, Magnet Pull on Steel.
+    # :3906-3913: trapped (Bind, Mean Look), ingrained, Shadow Tag / Arena Trap on the player's
+    # side, Magnet Pull on Steel.
     if (
         int(s.trapped[1]) > 0
+        or int(s.mean_look[1]) != 0
+        or int(s.ingrain[1]) != 0
         or int(ability[0, d]) in (ABILITY_IDS["Shadow Tag"], ABILITY_IDS["Arena Trap"])
         or (
             int(ability[0, d]) == ABILITY_IDS["Magnet Pull"]
@@ -339,6 +342,8 @@ def _switch_states(draw, t, n, party):
         gravity=jnp.asarray(draw(st.sampled_from((0, 0, 0, 5))), s.gravity.dtype),
         foresight=s.foresight.at[0].set(draw(st.sampled_from((0, 0, 1)))),
         trapped=s.trapped.at[1].set(draw(st.sampled_from((0, 0, 0, 0, 2)))),
+        mean_look=s.mean_look.at[1].set(draw(st.sampled_from((0, 0, 0, 0, 1)))),
+        ingrain=s.ingrain.at[1].set(draw(st.sampled_from((0, 0, 0, 0, 1)))),
         stages=s.stages.at[1, 1].set(draw(st.sampled_from((0, 0, 0, 2, 4)))),
     )
 

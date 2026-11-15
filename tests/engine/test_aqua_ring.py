@@ -63,7 +63,7 @@ def test_aqua_ring_heal_and_order(tables, names):
     out = assert_matches_reference(tables, full, A("Leer", "Leer", full, names), empty_outcome())
     assert int(out.hp[0, 0]) == mx
     # Second in the mon-condition order, before the turn-end ability (bcp.c:1331-1355).
-    assert [n for n, _ in END_OF_TURN_ORDER][:2] == ["aqua_ring", "ability"]
+    assert [n for n, _ in END_OF_TURN_ORDER][:2] == ["ingrain_aqua_ring", "ability"]
 
 
 def test_aqua_ring_heals_a_poisoned_holder_before_the_poison(tables, names):

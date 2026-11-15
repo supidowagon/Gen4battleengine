@@ -521,6 +521,22 @@ def player_section(
     )
 
 
+def metronome_unmodelled(tables, names, row):
+    """``(n, m)`` for Metronome (ruling B5-2): of the ``m`` moves ``BtlCmd_Metronome`` can call
+    for a Pokemon at personal ``row`` that knows only Metronome (``coverage.metronome_calls``),
+    the ``n`` that ``coverage.move_effect_line`` refuses, each of which refuses Metronome
+    (coverage.py ``move_effect_line``)."""
+    from types import SimpleNamespace
+
+    from nuzline.engine.coverage import Support, metronome_calls, move_effect_line
+
+    metronome = names.move_names.index("Metronome")
+    calls = metronome_calls(tables, SimpleNamespace(moves=(metronome, 0, 0, 0)))
+    calls = [m for m in calls if m != metronome]
+    n = sum(move_effect_line(tables, names, m, row)[0] == Support.NONE for m in calls)
+    return n, len(calls)
+
+
 def main(out_path):
     import argparse
     import json
@@ -656,6 +672,10 @@ def main(out_path):
         m = sorted(members.get(k, ()))
         if m:
             shown = ", ".join(m[:6]) + (f", +{len(m) - 6} more" if len(m) > 6 else "")
+            if k == ("move effect", f"#{mv['metronome']}"):  # Bulbasaur's row: not Ghost
+                shown += "; {} of {} callable moves unmodelled".format(
+                    *metronome_unmodelled(tables, names, 1)
+                )
             return f"{kind} {name}: {shown}"
         return f"{kind}: {name}"
 

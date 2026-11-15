@@ -1561,8 +1561,16 @@ def trainer_terrain_rows(
     """Per trainer id, the ``trainers.json`` terrain fields (``tools.terrain``) from the
     trainer -> map join ``where`` (``trainer_start_conditions``' ``maps``): the map headers'
     matrices (``MATRIX_NARC``), land data (``LAND_DATA_NARC``) and battle backgrounds
-    (``map_header_battle_fields``)."""
-    from tools.terrain import header_terrains, parse_matrix, terrain_fields, trainer_terrains
+    (``map_header_battle_fields``), narrowed per trainer to the tiles its battle can start
+    on (``tools.terrain.narrowed_terrains``, from ``rom_narrowing_inputs``)."""
+    from tools.terrain import (
+        header_terrains,
+        narrowed_terrains,
+        parse_matrix,
+        rom_narrowing_inputs,
+        terrain_fields,
+        trainer_terrains,
+    )
 
     check_trainer_objects(rom, decomp, symbols)
     rules = rom_terrain_rules(rom, symbols, Path(decomp))
@@ -1572,4 +1580,8 @@ def trainer_terrain_rows(
     lands = rom.narc(LAND_DATA_NARC)
     arrivals = header_arrivals(rom, symbols)
     by_header = header_terrains(rules, headers, matrices, lands, wanted, arrivals)
-    return [terrain_fields(*t) for t in trainer_terrains(n_trainers, where, by_header)]
+    sites, scripts, rematch_rows, fr = rom_narrowing_inputs(rom, symbols, decomp, n_trainers)
+    narrowed = narrowed_terrains(
+        rules, fr, headers, matrices, lands, where, arrivals, sites, scripts, rematch_rows
+    )
+    return [terrain_fields(*t) for t in trainer_terrains(n_trainers, where, by_header, narrowed)]

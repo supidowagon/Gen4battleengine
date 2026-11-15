@@ -58,10 +58,17 @@ def test_stat_effects_match_decomp_scripts():
         r"BTLVAR_SIDE_EFFECT_FLAGS_(DIRECT|INDIRECT),.*MOVE_SIDE_EFFECT_(TO_ATTACKER|TO_DEFENDER)"
         r"\|MOVE_SUBSCRIPT_PTR_([A-Z_]+?)_(UP|DOWN)_([12])_STAGES?\b"
     )
-    for effect, (eid, (stat, stages, _)) in DECOMP_EFFECT_TO_ID.items():
+    for effect, (eid, (stat, stages, p2)) in DECOMP_EFFECT_TO_ID.items():
         if eid not in STAT_EFFECTS:
             continue
         name = DECOMP_EFFECT_NAMES[effect]
+        if name == "BATTLE_EFFECT_EVA_UP_2_MINIMIZE":
+            # B9-10: the direct TO_ATTACKER subscript_minimize.s sets the flag, then Evasion +1.
+            assert "TO_ATTACKER|MOVE_SUBSCRIPT_PTR_MINIMIZE" in _script(effect)
+            sub = DECOMP / "res/battle/scripts/subscripts/subscript_minimize.s"
+            assert "MOVE_SUBSCRIPT_PTR_EVASION_UP_1_STAGE" in sub.read_text(encoding="utf-8")
+            assert (stat, stages, p2) == (Stat.EVA, 1, 2)
+            continue
         m = pattern.search(_script(effect))
         assert m, name
         kind, who, sub_stat, direction, n = m.groups()
@@ -363,3 +370,172 @@ def test_ignore_type_checks_effects_match_decomp():
         ignores = eid in IGNORES_TYPE_CHECKS or eid in heal_path_only
         assert sets == ignores, DECOMP_EFFECT_NAMES[effect]
         assert not (eid in heal_path_only and eid in IGNORES_TYPE_CHECKS)
+
+
+def test_type_boost_hold_effects_match_decomp():
+    """TYPE_BOOST_HOLD_EFFECTS is sTypeBoostingItems (battle_lib.c:6514-6549), hold effects by
+    generated/item_hold_effects.txt and types by generated/pokemon_types.txt."""
+    from tools.effect_map import TYPE_BOOST_HOLD_EFFECTS
+
+    holds = (DECOMP / "generated/item_hold_effects.txt").read_text().split()
+    types = (DECOMP / "generated/pokemon_types.txt").read_text().split()
+    lib = (DECOMP / "src/battle/battle_lib.c").read_text(encoding="utf-8")
+    table = lib[
+        lib.index("sTypeBoostingItems[] = {") : lib.index("};", lib.index("sTypeBoostingItems"))
+    ]
+    pairs = re.findall(r"\{ (HOLD_EFFECT_\w+), (TYPE_\w+) \}", table)
+    assert len(pairs) == 33
+    want = {holds.index(h): (h, types.index(t)) for h, t in pairs}
+    assert {h: (n, int(t)) for h, (n, t) in TYPE_BOOST_HOLD_EFFECTS.items()} == want
+
+
+def test_hold_effect_ids_name_their_hold_effects():
+    from tools.effect_map import HOLD_EFFECT_TO_ID
+
+    holds = (DECOMP / "generated/item_hold_effects.txt").read_text().split()
+    for effect, (name, _) in HOLD_EFFECT_TO_ID.items():
+        assert holds[effect] == name
+
+
+def test_held_item_ids_follow_the_data():
+    """Every resist berry DECOMP_ITEM_TO_ID names has a resist hold effect, and every resist
+    hold effect has its berry; the berries with no hold effect (NO_EFFECT_BERRY) are exactly
+    the items with berryData (sBerryItemIDs, tools/dataproc/src/itemproc.c:272) and no hold
+    effect."""
+    from nuzline.engine.ids import ItemId
+    from tools.effect_map import DECOMP_ITEM_TO_ID, RESIST_BERRY_HOLD_EFFECTS, held_item_ids
+
+    items = json.loads(Path("data/intermediate/items.json").read_text(encoding="utf-8"))
+    by_name = {i["name"]: i for i in items}
+    resist = {n for n, e in DECOMP_ITEM_TO_ID.items() if e == ItemId.RESIST_BERRY}
+    assert sorted(by_name[n]["hold_effect"] for n in resist) == sorted(RESIST_BERRY_HOLD_EFFECTS)
+    data = [
+        json.loads(f.read_text(encoding="utf-8"))
+        for f in sorted((DECOMP / "res/items/data").glob("*.json"))
+    ]
+    plain = {d["name"] for d in data if "berryData" in d and d["holdEffect"] == "HOLD_EFFECT_NONE"}
+    ids = held_item_ids(items)
+    assert {i["name"] for i, e in zip(items, ids) if e == ItemId.NO_EFFECT_BERRY} == plain
+
+
+def test_batch2_berries_follow_their_item_data():
+    """The berries E2 batch 2 names (DECOMP_ITEM_TO_ID: Pluck reads an item's pluck effect, not
+    its hold effect) carry the hold and pluck effects the engine gives them
+    (res/items/data/*.json), and PINCH_STAT_HOLD_EFFECTS names its hold effects
+    (generated/item_hold_effects.txt) with the stat BattleSystem_TriggerHeldItem raises
+    (battle_lib.c:4773-4836: msgTemp = BATTLE_STAT_*)."""
+    from nuzline.engine.ids import ItemId, Stat
+    from tools.effect_map import DECOMP_ITEM_TO_ID, PINCH_STAT_HOLD_EFFECTS
+
+    want = {
+        ItemId.CHERI_BERRY: ("HOLD_EFFECT_PRZ_RESTORE", "PLUCK_EFFECT_PRZ_RESTORE"),
+        ItemId.RAWST_BERRY: ("HOLD_EFFECT_BRN_RESTORE", "PLUCK_EFFECT_BRN_RESTORE"),
+        ItemId.ASPEAR_BERRY: ("HOLD_EFFECT_FRZ_RESTORE", "PLUCK_EFFECT_FRZ_RESTORE"),
+        ItemId.PERSIM_BERRY: ("HOLD_EFFECT_CONFUSE_RESTORE", "PLUCK_EFFECT_CNF_RESTORE"),
+        ItemId.CUSTAP_BERRY: ("HOLD_EFFECT_PINCH_PRIORITY", "PLUCK_EFFECT_NONE"),
+    }
+    pluck_up = {
+        Stat.ATK: "ATK",
+        Stat.DEF: "DEF",
+        Stat.SPE: "SPEED",
+        Stat.SPA: "SPATK",
+        Stat.SPD: "SPDEF",
+    }
+    holds = (DECOMP / "generated/item_hold_effects.txt").read_text().split()
+    data = {
+        d["name"]: d
+        for d in (
+            json.loads(f.read_text(encoding="utf-8"))
+            for f in sorted((DECOMP / "res/items/data").glob("*.json"))
+        )
+    }
+    pinch = 0
+    for name, eid in DECOMP_ITEM_TO_ID.items():
+        if eid == ItemId.PINCH_BERRY:
+            pinch += 1
+            hold = holds.index(data[name]["holdEffect"])
+            stat = PINCH_STAT_HOLD_EFFECTS[hold][1]
+            assert data[name]["pluckEffect"] == f"PLUCK_EFFECT_{pluck_up[stat]}_UP", name
+            assert "berryData" in data[name], name
+        elif eid in want:
+            assert (data[name]["holdEffect"], data[name]["pluckEffect"]) == want[eid], name
+            assert "berryData" in data[name], name
+    assert pinch == len(PINCH_STAT_HOLD_EFFECTS) == 5
+    lib = (DECOMP / "src/battle/battle_lib.c").read_text(encoding="utf-8")
+    trigger = lib[lib.index("BOOL BattleSystem_TriggerHeldItem(") :]
+    stat_names = {Stat.ATK: "ATTACK", Stat.DEF: "DEFENSE", Stat.SPE: "SPEED"}
+    stat_names |= {Stat.SPA: "SP_ATTACK", Stat.SPD: "SP_DEFENSE"}
+    for hold, (name, stat) in PINCH_STAT_HOLD_EFFECTS.items():
+        assert holds[hold] == name
+        case = trigger[trigger.index(f"case {name}:") :]
+        assert f"msgTemp = BATTLE_STAT_{stat_names[stat]};" in case[: case.index("break;")]
+
+
+def test_pinch_berries_need_a_param_to_divide_by(tables, names, kaizo_tables, kaizo_names):
+    """A stat pinch berry or Custap Berry with a param below 2 divides maxHP by zero
+    (battle_lib.c:4778, :1294; Gluttony halves the param): UNSUPPORTED (build_tables'
+    _pinch_divisor_ok). Kaizo sets Ganlon's and Apicot's param to 0."""
+    from nuzline.engine.ids import ItemId
+
+    for berry in ("Liechi Berry", "Ganlon Berry", "Salac Berry", "Petaya Berry", "Apicot Berry"):
+        assert int(tables.item_effect[names.item(berry)]) == ItemId.PINCH_BERRY, berry
+    assert int(tables.item_effect[names.item("Custap Berry")]) == ItemId.CUSTAP_BERRY
+    for berry in ("Ganlon Berry", "Apicot Berry"):
+        i = kaizo_names.item(berry)
+        assert int(kaizo_tables.item_hold_param[i]) == 0
+        assert int(kaizo_tables.item_effect[i]) == ItemId.UNSUPPORTED, berry
+    i = kaizo_names.item("Liechi Berry")
+    assert int(kaizo_tables.item_effect[i]) == ItemId.PINCH_BERRY
+
+
+def test_divisor_items_need_a_param_to_divide_by():
+    """Sticky Barb (``Divide(maxHP, param)``, battle_lib.c:5330-5336) and Shell Bell
+    (``Divide(dealt, param)``, bcp.c:4736-4752) with param 0, and a pinch berry below 2, are
+    UNSUPPORTED (build_tables._pinch_divisor_ok, effect_map.DIVISOR_PARAM_MIN)."""
+    from nuzline.engine.ids import ItemId
+    from tools.build_tables import _pinch_divisor_ok
+
+    ids = [ItemId.STICKY_BARB, ItemId.SHELL_BELL, ItemId.STICKY_BARB, ItemId.PINCH_BERRY]
+    items = [{"hold_param": p} for p in (0, 0, 8, 1)]
+    assert _pinch_divisor_ok(items, [int(i) for i in ids]) == [
+        ItemId.UNSUPPORTED,
+        ItemId.UNSUPPORTED,
+        ItemId.STICKY_BARB,
+        ItemId.UNSUPPORTED,
+    ]
+
+
+def _function(path: str, name: str) -> str:
+    """The body of the C function whose definition starts with ``name`` (not a declaration)."""
+    src = (DECOMP / path).read_text(encoding="utf-8")
+    start = re.search(re.escape(name) + r"[^;{]*\n\{", src).end()
+    return src[start : src.index("\n}\n", start)]
+
+
+def test_invoker_id_lists_match_the_decomp():
+    """E2 batch 5: the move ids BtlCmd_TrySleepTalk, Move_IsInvoker, Move_IsMultiTurn and
+    sCannotMetronomeMoves compare against (``tools.effect_map``)."""
+    from tools.effect_map import (
+        INVOKER_MOVES,
+        METRONOME_EXCLUDED_MOVES,
+        MULTI_TURN_EFFECTS,
+        SLEEP_TALK_EXCLUDED_MOVES,
+    )
+
+    moves = (DECOMP / "generated/moves.txt").read_text().split()
+    effects = (DECOMP / "generated/move_battle_effects.txt").read_text().split()
+    invoker = _function("src/battle/battle_lib.c", "BOOL Move_IsInvoker(")
+    assert sorted(moves.index(m) for m in re.findall(r"move == (MOVE_\w+)", invoker)) == sorted(
+        INVOKER_MOVES
+    )
+    talk = _function("src/battle/battle_script.c", "static BOOL BtlCmd_TrySleepTalk(")
+    listed = re.findall(r"ATTACKING_MON\.moves\[i\] == (MOVE_\w+)", talk)
+    assert sorted(moves.index(m) for m in listed) == sorted(SLEEP_TALK_EXCLUDED_MOVES)
+    multi = _function("src/battle/battle_lib.c", "BOOL Move_IsMultiTurn(")
+    cases = re.findall(r"case (BATTLE_EFFECT_\w+):", multi)
+    assert sorted(effects.index(e) for e in cases) == sorted(MULTI_TURN_EFFECTS)
+    lib = (DECOMP / "src/battle/battle_lib.c").read_text(encoding="utf-8")
+    table = lib[lib.index("sCannotMetronomeMoves[] = {") :]
+    table = table[: table.index("FORBIDDEN_BY_METRONOME_DELIM,")]
+    listed = [m for m in re.findall(r"(MOVE_\w+),", table)]
+    assert [moves.index(m) for m in listed] == list(METRONOME_EXCLUDED_MOVES)

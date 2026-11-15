@@ -65,12 +65,12 @@ def test_resources_from_bag(tables, names, learnsets):
 
 
 def test_bag_resources_warns_on_unsupported_item(tables, names, learnsets):
-    # Razor Claw is unsupported (Quick Claw was, until K3b2 Task 8).
-    rock, honey = names.item("Razor Claw"), names.item("Honey")
+    # Iron Ball is unsupported (Razor Claw was, until E2 batch 4).
+    rock, honey = names.item("Iron Ball"), names.item("Honey")
     bag = {"items": [(rock, 1), (honey, 1)], "berries": [(names.item("Oran Berry"), 1)]}
     resources, warnings = bag_resources(bag, tables, names, learnsets, ())
     assert rock not in dict(resources.held)
-    assert warnings == ["Razor Claw: not offered (hold effect not supported)"]
+    assert warnings == ["Iron Ball: not offered (hold effect not supported)"]
 
 
 def test_usable_pool_excludes_and_trims(tables, names):
@@ -97,10 +97,10 @@ def test_usable_pool_excludes_and_trims(tables, names):
 
 
 def test_unsupported_item_is_taken_off(tables, names):
-    spec = replace(sample_party(names)[0], item=names.item("Leftovers"))
+    spec = replace(sample_party(names)[0], item=names.item("Iron Ball"))
     pool, lines = usable_pool(tables, names, [candidate(names, spec, 0)], ())
     assert pool[0].spec.item == 0
-    assert len(lines) == 1 and "Leftovers taken off" in lines[0]
+    assert len(lines) == 1 and "Iron Ball taken off" in lines[0]
 
 
 def test_pick_ambiguous_and_locations(names):
@@ -337,10 +337,10 @@ def test_kaizo_condition_drops_levelled_moves_and_bag_items(
     assert q.resources.held == ((oran, 2),)
 
 
-def test_ghost_curse_is_not_offered_in_prep(tables, names, learnsets):
-    """A Ghost-type user's Curse takes the Ghost branch (effect_script_0109.s:5-6), which the
-    engine does not model: prep refuses it per Pokemon, as coverage does (Task K3b1-7)."""
-    from nuzline.prep.problem import GHOST_CURSE_REFUSAL, levelled_moves
+def test_ghost_curse_is_offered_in_prep(tables, names, learnsets):
+    """A Ghost-type user's Curse (effect_script_0109.s:5-6's Ghost branch) is modelled since E2
+    batch 8 (B8-5): prep offers it like any move (it was refused per Pokemon, Task K3b1-7)."""
+    from nuzline.prep.problem import levelled_moves
 
     base = sample_party(names)[0]
     curse, tackle = names.move("Curse"), names.move("Tackle")
@@ -354,16 +354,12 @@ def test_ghost_curse_is_not_offered_in_prep(tables, names, learnsets):
     furret = replace(base, species=names.species("Furret"), ability_slot=1, level=16)
     plain = candidate(names, replace(furret, moves=(curse, 0, 0, 0)), 2, relearner=(curse,))
     pool, lines = usable_pool(tables, names, [knows, could, plain], ())
-    assert [c.label for c in pool] == [could.label, plain.label]
-    assert f"{knows.label}: left out: Curse ({GHOST_CURSE_REFUSAL})" in lines
-    assert lines.count(f"{could.label}: Curse not offered ({GHOST_CURSE_REFUSAL})") == 2
-    assert pool[0].relearner == () and pool[0].tms == ()
-    assert pool[1].relearner == (curse,) and not any(plain.label in ln for ln in lines)
-    # Levelled moves: Shuppet's level-13 Curse (save level 12 -> cap 16) is dropped.
-    levelled = levelled_moves(tables, [pool[0]], learnsets, 16, ())
-    assert all(move != curse for _, move in levelled[0])
-    ungated = [m for lv, m in learnsets.level_up(shuppet) if 12 < lv <= 16]
-    assert curse in ungated
+    assert [c.label for c in pool] == [knows.label, could.label, plain.label]
+    assert not any("Curse" in line for line in lines)
+    assert pool[1].relearner == (curse,)
+    # Levelled moves: Shuppet's level-13 Curse (save level 12 -> cap 16) is offered.
+    levelled = levelled_moves(tables, [pool[1]], learnsets, 16, ())
+    assert any(move == curse for _, move in levelled[0])
 
 
 def test_opponent_explosion_leaves_a_low_defense_candidate_out(tmp_path, tables, names, learnsets):

@@ -713,5 +713,5 @@ def test_roar_is_supported_and_its_blockers_refused(tables, names):
             tables, names, [mon, *base[1:]], roark_trainer(), [foe, *roark_party(names)[1:]], 0
         )
         assert any(m.endswith(f"{ability} (ability UNSUPPORTED)") for m in report.missing)
-    # Ingrain: an unsupported move (no effect mapped), so no target can be rooted.
-    assert int(tables.move_effect[names.move("Ingrain")]) == EffectId.UNSUPPORTED
+    # Ingrain is modelled since E2 batch 7 (its anchoring: effects.ingrain_anchors, B7-5).
+    assert int(tables.move_effect[names.move("Ingrain")]) == EffectId.INGRAIN

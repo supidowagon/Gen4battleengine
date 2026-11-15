@@ -754,7 +754,7 @@ M once `terrain` exists. It depends on §9 and on Camouflage for STAB interplay 
     the player is standing in**;
   - `BACKGROUND_WATER` if surfing;
   - `terrain = CalcTerrain(fieldSystem, background)`.
-- `CalcTerrain` (fbdt:467-494): the tile behaviour under the player
+- `CalcTerrain` (fbdt:467-505): the tile behaviour under the player
   (`TerrainCollisionManager_GetTileBehavior`, src/terrain_collision_manager.c:229-240: the land-data
   terrain attribute u16 of that tile masked by `TERRAIN_ATTRIBUTES_TILE_BEHAVIOR_MASK`; both
   collision managers read the land data, :160-199). First match wins:
@@ -792,9 +792,20 @@ M once `terrain` exists. It depends on §9 and on Camouflage for STAB interplay 
    For each header, walk the matrix cells whose `mapHeaderIDs` entry equals that header. For every
    tile of each cell's land data, compute `CalcTerrain(behaviour, battleBG(header))`, with the
    surfable rule. The result is the per-trainer set S.
-2. If |S| = 1, that is the terrain. If |S| > 1, refine with the trainer's event object (position,
-   facing, sight range from zone_event): candidate tiles are the sight-line tiles plus the four
-   adjacent tiles. If still > 1, the terrain is **mixed**.
+2. S is narrowed per trainer and header to the tiles its battle can start on
+   (`tools/terrain.py` `narrowed_terrains`, both games, decomp and ROM readers alike). An object
+   trainer (script 3000/5000 + id − 1): its sight tiles, 1..`data[0]` along each facing its
+   movement type can give plus its initial facing (all four for `VIEW_ALL_DIRECTIONS`, or for a
+   Vs. Seeker rematch row, which spins it: src/overlay005/vs_seeker.c:536-542, :659-690), up to
+   the first collision tile (`GetTrainerDistToPlayer` / `IsPathInterrupted`,
+   src/trainer_encounter.c:165-226, :243-343), and its talk tiles, the four neighbours or the
+   tile past a table (src/unk_0203C954.c:62-97). A coord-event battle: the event's rectangle
+   (src/unk_0203C954.c:208-225) when no command before the battle can move the player and
+   nothing else starts that script. A collision tile counts as a talk or coord tile only when a
+   header the player can walk in from turns on collision-overriding map features. A moving
+   movement type, a script that moves the object, or any other start keeps the whole-header S.
+   Elevation, other objects and reachability are not read, so the set never shrinks below the
+   decomp's. If still > 1, the terrain is **mixed** (vanilla 415 → 217 mixed, Kaizo 371 → 242).
 3. Store `Trainer.terrain` (decomp `TERRAIN_*` id, or −1 for mixed/unknown) in the K/V trainer
    tables, beside `start_condition`.
 4. Pass it like `start_condition` (`make_state(..., terrain)`) into a constant field scalar

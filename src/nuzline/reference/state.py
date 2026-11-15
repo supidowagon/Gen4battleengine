@@ -76,12 +76,22 @@ class RefSide:
     mud_sport: int
     aqua_ring: int
     infatuated: int
+    destiny_bond: int
+    uproar: int  # VOLATILE_CONDITION_UPROAR turns left (and the battler's FIELD_CONDITION bit)
     curse: int
     perish_song: int
     perish_song_turns: int
     yawn: int
     lock_on: int
     lock_on_target: int
+    ingrain: int  # MOVE_EFFECT_INGRAIN
+    mean_look: int  # VOLATILE_CONDITION_MEAN_LOOK
+    mean_look_target: int  # meanLookTarget as 1 + battler, 0 = none
+    imprison: int  # MOVE_EFFECT_IMPRISON
+    imprisoned: int  # MOVE_EFFECT_IMPRISONED
+    roosting: int  # turnFlags.roosting while it can be read (engine.state docstring)
+    can_unburden: int  # MoveEffectsData.canUnburden
+    minimized: int  # MOVE_EFFECT_MINIMIZE
     spikes: int
     toxic_spikes: int
     stealth_rock: int
@@ -95,6 +105,9 @@ class RefSide:
     wish_hp: int
     future_timer: int
     future_damage: int
+    future_move: int
+    future_attacker: int  # 1 + battler, 0 = none
+    future_sight: int  # SIDE_CONDITION_FUTURE_SIGHT
     trainer_items: list[int]
     trainer_item_count: int
     qc_roll: int
@@ -107,12 +120,14 @@ class RefState:
     weather_timer: int
     trick_room: int
     gravity: int
+    move_prev: int
     terrain: int
     turn: int
     over: int
     winner: int
     player_faints: int
     ai_seen_moves: list[list[int]]
+    ai_item_known: list[int]  # battlerHeldItems of the player's slots (item ids)
     ai_ability_known: list[int]
     # Experience (K3d-exp): the player party's, per slot, and sideGetExpMask[0].
     exp: list[int]
@@ -128,6 +143,29 @@ class RefState:
     faint_budget: int
     protected: list[int]
     replace_mul: int
+    # E2 batch 6: the mid-turn switch decision (engine.state docstring): 0 between turns.
+    pivot_battler: int
+    ts_cursor: int
+    ts_acted: list[int]
+    ts_order: list[int]
+    ts_actions: list[int]
+    ts_move: list[int]
+    ts_struggling: list[int]
+    ts_locked: list[int]
+    ts_item: list[int]
+    ts_custap: list[int]
+    ts_pursued: int
+    ts_protect_ok: list[int]
+    ts_taken: list[list[int]]
+    ts_dragged: list[int]
+    ts_move_failed: list[int]
+    ts_used: int
+    ts_damaged: int
+    ts_dealt: int
+    ts_alive: list[int]
+    ts_power_mul: int
+    ts_switched: list[int]
+    ts_pick_mul: int
 
 
 # BattleState field names by level.

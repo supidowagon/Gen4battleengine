@@ -24,10 +24,8 @@ Stage A and B handling of a sampling-only opponent, before anything can be marke
 The registries list exactly what plan 1a (Tasks 8a-8e: move effects, abilities, held
 items) and plan 1b (Task 2b: trainer items; Task 3: Roark's AI flags) implement:
 
-* move effects: every ``ids.EffectId`` but ``UNSUPPORTED``, except ``CURSE`` used by a
-  Ghost-type Pokemon (``ghost_curse``: ``effect_script_0109.s`` sends it down the Ghost
-  branch, ``subscript_curse_ghost.s``, which is not modelled), refused per Pokemon on both
-  sides and in the pool; and a physical ``SELF_DESTRUCT`` move (Selfdestruct, Explosion)
+* move effects: every ``ids.EffectId`` but ``UNSUPPORTED`` (a Ghost-type user's Curse is
+  modelled since E2 batch 8, B8-5), except a physical ``SELF_DESTRUCT`` move (Selfdestruct, Explosion)
   facing a Pokemon whose Defense is below ``HALVED_DEFENSE_MIN`` (``halved_defense_line``:
   the halved Defense at -6 makes the damage divisor 0), refused per move on both sides
   here, and in the pool and prep both ways: a player candidate's move against the
@@ -37,11 +35,12 @@ items) and plan 1b (Task 2b: trainer items; Task 3: Roark's AI flags) implement:
   branch (Attract, Cute Charm) and the infatuation cures (Oblivious, Mental Herb) and Destiny
   Knot: Oblivious, Mental Herb and Destiny Knot are unsupported, so a holder on either side
   is refused (pool and prep too). Reflect and Light Screen are modelled
-  (``EffectId.REFLECT``, ``EffectId.LIGHT_SCREEN``, ``effects._screen``). Moves the
-  tables map to ``UNSUPPORTED`` include every move that sets weather, Tailwind or Trick
-  Room: the engines' ``CheckFieldConditions`` pass (``step.field_conditions``) counts
-  weather down, but those moves are not modelled yet (plan ruling);
-* abilities, held items, trainer items: every member but ``UNSUPPORTED``;
+  (``EffectId.REFLECT``, ``EffectId.LIGHT_SCREEN``, ``effects._screen``), and so are the
+  four weather moves (``EffectId.WEATHER``, ``effects._weather``). Moves the tables map to
+  ``UNSUPPORTED`` include Tailwind and Trick Room;
+* abilities, held items, trainer items: every member but ``UNSUPPORTED``. Held items are
+  mapped by name or by decomp hold effect (``tools.effect_map.held_item_ids``), so an item with
+  no hold effect is ``ItemId.NONE`` (or ``NO_EFFECT_BERRY``) and supported;
 * AI flags, per AI policy (``IMPLEMENTED_AI_FLAGS``): vanilla bits 0-2 (``AI_FLAG_BASIC``,
   ``AI_FLAG_EVAL_ATTACK``, ``AI_FLAG_EXPERT``), Kaizo those and bit 4 (``AI_FLAG_RISKY``).
   The vanilla policy runs its three scripts together, so a vanilla trainer must have all
@@ -49,11 +48,38 @@ items) and plan 1b (Task 2b: trainer items; Task 3: Roark's AI flags) implement:
   Ruling R2), so a Kaizo trainer needs only every set flag implemented. The Kaizo layout's ability
   guess is one coin per guessing read, as the decomp draws it (E1 Ruling R1,
   docs/ai/kaizo_roark.md 8.4), so it needs no per-trainer check;
-* weather: ``Weather.NONE`` and ``Weather.SANDSTORM``. Sandstorm's every effect on the
-  implemented set is modelled: the Rock-type SpD boost (``damage.py``), the end-of-turn
-  chip (``step.field_conditions``), Sand Veil's accuracy (``outcome.hit_threshold``), all
-  gated on Cloud Nine / Air Lock (``damage.weather_suppressed``). Rain, sun, hail and fog
-  are refused until every weather effect they touch is modelled (plan ruling);
+* weather: ``Weather.NONE``, ``SANDSTORM``, ``SUN``, ``RAIN`` and ``HAIL`` (E2 batch 3). Every
+  effect of each on the implemented set is modelled, all gated on Cloud Nine / Air Lock
+  (``damage.weather_suppressed``): the damage modifiers (rain and sun on Fire / Water, the
+  sandstorm Rock-type SpD boost, Solar Power), the accuracy abilities (Sand Veil, Snow Cloak),
+  Swift Swim, the sun's freeze immunity (``effects.can_have_status``), the end-of-turn chip
+  and the weather abilities' HP (``step._weather_effect``: sand and hail, Ice Body, Dry Skin,
+  Solar Power), the status orbs' Leaf Guard test, the weather moves with their rocks and the
+  switch-in weather abilities (Drizzle, Sand Stream, Drought, Snow Warning). The other
+  decomp readers of a weather (Thunder, Blizzard, Chlorophyll, Rain Dish and Flower Gift since
+  E2 batch 9) are modelled too; the rest belong to unsupported moves (SolarBeam, Weather Ball,
+  Moonlight, Kaizo's Hurricane) or abilities (Leaf Guard, Hydration, Forecast), so they are
+  refused with their holder. Deep fog
+  stays refused (``Weather.FOG``);
+* two weather abilities that set different weathers, one in each party
+  (``weather_war_line``): ``SWITCH_IN_CHECK_STATE_WEATHER_ABILITIES`` runs over
+  ``monSpeedOrder`` (battle_lib.c:3740-3790), so when both enter together (the battle start,
+  a double KO's replacements) the slower one's weather stays, and the order of an exact speed
+  tie is a ``RandNext() & 1`` (battle_lib.c:1445) the engine does not draw there; refused
+  (ruling B3-15);
+* Trace in both parties (``trace_standoff_line``): a Trace holder cannot copy Trace
+  (``ChooseTraceTarget``, battle_lib.c:7750-7775), so it stays armed and copies the next
+  Pokemon the other side sends in at that switch, in the middle of a turn whose chance laws
+  (``enumerate``, ``outcome.sample_outcome``) read the holder's ability at the turn start;
+  refused (ruling B3-14). The AI reads the copy (``damage.decomp_abilities``, as
+  ``LoadBattlerAbility`` does, trainer_ai.c:1170-1209), so a copy the AI refuses on the
+  holder's side is refused like the holder's own ability would be (``trace_copy_refusals``,
+  ruling B3-21);
+* Metronome (ruling B5-2): ``BtlCmd_Metronome`` can call any move ``metronome_calls`` lists
+  (ids 1-467 but the user's own moves and sCannotMetronomeMoves, battle_lib.c:7152-7178), so a
+  holder is refused while any of them is refused as a move of that Pokemon
+  (``move_effect_line``), and every per-move check of the fight (the terrain, the Kaizo ROM
+  changes, the halved Defense) runs over them too (``fight_calls``);
 * in-battle form changes (plan K2a Ruling 8), on either side: Giratina-Origin without the
   Griseous Orb reverts to Altered Forme at battle start (``battle_lib.c:6412-6417``,
   ``subscript_form_change``) and Shaymin-Sky reverts to Land Forme when frozen
@@ -121,16 +147,19 @@ from nuzline.data.trainer import (
     Trainer,
     missing_set_data,
 )
-from nuzline.engine.damage import PHYSICAL
+from nuzline.engine.damage import PHYSICAL, decomp_abilities
 from nuzline.engine.ids import (
+    METRONOME_DRAW,
     TERRAIN_MOVES,
     TERRAIN_SPECIAL,
+    UNTRACEABLE_ABILITIES,
+    WEATHER_ABILITIES,
     AbilityId,
     EffectId,
     ItemId,
+    MoveFlag,
     Stat,
     TrainerItemId,
-    Type,
     Weather,
 )
 from nuzline.engine.levelup import (
@@ -209,10 +238,10 @@ IMPLEMENTED_AI_FLAGS: dict[str, dict[int, Support]] = {
 POLICY_AI_FLAGS = {"vanilla": 0b111}
 IMPLEMENTED_WEATHER: dict[Weather, Support] = {
     Weather.NONE: Support.EXACT,
-    Weather.SUN: Support.NONE,
-    Weather.RAIN: Support.NONE,
+    Weather.SUN: Support.EXACT,
+    Weather.RAIN: Support.EXACT,
     Weather.SANDSTORM: Support.EXACT,
-    Weather.HAIL: Support.NONE,
+    Weather.HAIL: Support.EXACT,
     Weather.FOG: Support.NONE,
 }
 # Trainer.format (trainers.json: TrainerHeader.battleType, then the field scripts).
@@ -297,17 +326,6 @@ class _Collector:
             self.report.sampling_only.append(f"{what} ({kind} SAMPLING_ONLY)")
 
 
-def ghost_curse(tables: Tables, move: int, row: int) -> bool:
-    """``move`` is Curse (``EffectId.CURSE``) and personal ``row`` is Ghost-type:
-    ``effect_script_0109.s:5-6`` (``BATTLEMON_TYPE_1``/``_2 == TYPE_GHOST``) takes the
-    Ghost branch, which the engine does not model. The only type change in the implemented
-    set is Camouflage, whose types (``ids.TERRAIN_TYPES``) include no Ghost: a non-Ghost user
-    stays non-Ghost, and a Ghost user is refused whatever it does first (conservative)."""
-    if int(np.asarray(tables.move_effect)[move]) != EffectId.CURSE:
-        return False
-    return Type.GHOST in [int(t) for t in np.asarray(tables.species_types)[row]]
-
-
 # BattleSystem_CalcMoveDamage halves defenseStat for BATTLE_EFFECT_HALVE_DEFENSE
 # (battle_lib.c:6943-6945) before the stage scales it into stageDivisor (:6963-6975): at
 # -6 Defense (x2/8) a Defense below this gives stageDivisor 0, and ``damage /= 0`` is not
@@ -372,15 +390,25 @@ def halved_by_line(
     return f"Defense {defense} against the opponent's {names.move_names[moves[0]]}"
 
 
-def move_effect_line(tables: Tables, names: Names, move: int, row: int) -> tuple[Support, str]:
+def move_effect_line(
+    tables: Tables, names: Names, move: int, row: int, known: Sequence[int] = ()
+) -> tuple[Support, str]:
     """The support of ``move`` for the Pokemon at personal ``row`` and its name as a report
-    line shows it: by engine effect, ``" (Ghost user)"`` added and refused for
-    ``ghost_curse``."""
+    line shows it: by engine effect. Metronome (ruling B5-2) is refused while any move it can
+    call for a Pokemon knowing ``known`` (``metronome_calls``) is."""
     name = names.move_names[move]
-    if ghost_curse(tables, move, row):
-        return Support.NONE, f"{name} (Ghost user)"
     effect = EffectId(int(np.asarray(tables.move_effect)[move]))
-    return IMPLEMENTED_EFFECTS.get(effect, Support.NONE), name
+    support = IMPLEMENTED_EFFECTS.get(effect, Support.NONE)
+    if effect == EffectId.METRONOME and support != Support.NONE:
+        flags = np.asarray(tables.move_flags)
+        calls = [
+            m
+            for m in range(1, METRONOME_DRAW + 1)
+            if m not in known and m != move and not flags[m] & MoveFlag.NO_METRONOME
+        ]
+        if any(move_effect_line(tables, names, m, row)[0] == Support.NONE for m in calls):
+            support = Support.NONE
+    return support, name
 
 
 # --- Experience, level-up and learnable moves (K3d-exp design §4) ---------------------------
@@ -579,6 +607,139 @@ def exp_refusals(
     return out
 
 
+def _party_abilities(tables: Tables, party: Sequence[PokemonSpec]) -> set[int]:
+    """The ``AbilityId`` of every Pokemon of ``party`` (its personal row and ability slot)."""
+    abilities = np.asarray(tables.species_abilities)
+    return {
+        int(abilities[personal_row(tables, m.species, m.form), m.ability_slot])
+        for m in party
+        if m.species
+    }
+
+
+def weather_war_line(
+    tables: Tables, player: Sequence[PokemonSpec], opp: Sequence[PokemonSpec]
+) -> str | None:
+    """Why the two parties' weather abilities cannot be ordered (``coverage`` docstring,
+    ruling B3-15): one side's sets a weather the other side's does not, else None. A Trace
+    holder copies its foe's ability, which is in the other party already."""
+    mine = {
+        WEATHER_ABILITIES[a] for a in _party_abilities(tables, player) if a in WEATHER_ABILITIES
+    }
+    theirs = {WEATHER_ABILITIES[a] for a in _party_abilities(tables, opp) if a in WEATHER_ABILITIES}
+    if any(a != b for a in mine for b in theirs):
+        names = sorted(w.name.title() for w in mine | theirs)
+        return (
+            f"weather abilities of both sides set different weathers ({', '.join(names)}): "
+            "entering together, the slower one's stays, by an order the engine does not draw"
+        )
+    return None
+
+
+def trace_standoff_line(
+    tables: Tables, player: Sequence[PokemonSpec], opp: Sequence[PokemonSpec]
+) -> str | None:
+    """Why Trace on both sides is refused (``coverage`` docstring, ruling B3-14), else None."""
+    if AbilityId.TRACE in _party_abilities(tables, player) and AbilityId.TRACE in (
+        _party_abilities(tables, opp)
+    ):
+        return (
+            "Trace on both sides: a Trace facing Trace copies the next Pokemon sent in, in the "
+            "middle of a turn (battle_lib.c:3718-3737)"
+        )
+    return None
+
+
+def trace_copy_refusals(fight: Tables, state, names: Names | None = None) -> list[str]:
+    """Ruling B3-21: the AI's refusals of a Trace copy. ``subscript_trace.s`` writes the
+    copied ability into the holder's ``BattleMon.ability`` and the AI context
+    (``BattleAI_SetAbility``, battle_script.c:3401-3403, :12106-12109), and
+    ``LoadBattlerAbility`` / ``CheckBattlerAbility`` read it (trainer_ai.c:1170-1209), as the
+    AI does through ``damage.decomp_abilities``. So for every Trace holder of ``state`` (either
+    side; a lead may have traced in ``make_state`` already) and every ability it can copy from
+    the other party (``ChooseTraceTarget`` skips Forecast, Trace and Multitype,
+    battle_lib.c:7750-7775), the lines ``ai.policy.ai_refusals`` gives with that copy in place
+    and not with every holder holding Trace, each as ``"Trace copying <ability>: <line>"``.
+    ``fight`` are the fight's tables (``ai.layout.fight_tables``)."""
+    from nuzline.ai.policy import ai_refusals  # ai imports the engine
+
+    species, form = np.asarray(state.species), np.asarray(state.form)
+    row = np.asarray(fight.species_form_row)[species, form]
+    own = np.asarray(fight.species_abilities)[row, np.asarray(state.ability_slot)]
+    holders = list(zip(*np.nonzero((species > 0) & (own == AbilityId.TRACE)), strict=True))
+    if not holders:
+        return []
+    armed = state.ability
+    for side, slot in holders:
+        armed = armed.at[side, slot].set(AbilityId.TRACE)
+    armed = state._replace(ability=armed)
+    decomp = np.asarray(decomp_abilities(fight, armed))
+    base = set(ai_refusals(fight, armed, names))
+    out: list[str] = []
+    for side, slot in holders:
+        foe = 1 - side
+        copies = {
+            (int(armed.ability[foe, s]), int(decomp[foe, s]))
+            for s in range(species.shape[1])
+            if species[foe, s] and int(decomp[foe, s]) not in UNTRACEABLE_ABILITIES
+        }
+        for copy, copy_decomp in sorted(copies):
+            copied = armed._replace(ability=armed.ability.at[side, slot].set(copy))
+            label = names.ability_names[copy_decomp] if names is not None else str(copy_decomp)
+            for line in ai_refusals(fight, copied, names):
+                if line not in base and (line := f"Trace copying {label}: {line}") not in out:
+                    out.append(line)
+    return out
+
+
+def trace_copy_line(
+    tables: Tables,
+    names: Names,
+    trainer: Trainer | None,
+    spec: PokemonSpec,
+    opp: Sequence[PokemonSpec],
+) -> str | None:
+    """Prep's per-candidate form of ``trace_copy_refusals`` (ruling B3-20): ``spec`` alone
+    against ``trainer``'s party ``opp``, the first line or None. Only when a Trace holder is
+    on either side; without a ``trainer`` there is no fight AI to ask (None)."""
+    if trainer is None or AbilityId.TRACE not in (
+        _party_abilities(tables, [spec]) | _party_abilities(tables, opp)
+    ):
+        return None
+    fight, error = _fight_ai_tables(tables, names, trainer, opp)
+    if error is not None:  # refused for the fight by check_opponent
+        return None
+    state = make_state(fight, [spec], list(opp), opp_items=trainer.items, terrain=trainer.terrain)
+    lines = trace_copy_refusals(fight, state, names)
+    return lines[0] if lines else None
+
+
+def metronome_calls(tables: Tables, mon: PokemonSpec) -> list[int]:
+    """The moves ``BtlCmd_Metronome`` (battle_script.c:4535-4562) can call for ``mon``: ids
+    1-467 it does not know that ``Move_CanBeMetronomed`` allows (``MoveFlag.NO_METRONOME``;
+    ``order.metronome_candidates``). Gravity and Heal Block, its other tests, are owed with
+    Gravity and an unsupported move."""
+    flags = np.asarray(tables.move_flags)
+    return [
+        m
+        for m in range(1, METRONOME_DRAW + 1)
+        if m not in mon.moves and not flags[m] & MoveFlag.NO_METRONOME
+    ]
+
+
+def fight_calls(tables: Tables, party: Sequence[PokemonSpec]) -> list[int]:
+    """The moves ``party``'s Metronome holders can call (``metronome_calls``): moves of the
+    fight for the checks that read every move (the terrain, the Kaizo ROM changes). Sleep Talk
+    calls its user's own moves and Copycat a move used in the fight, moves of the fight
+    already."""
+    effect = np.asarray(tables.move_effect)
+    out: set[int] = set()
+    for mon in party:
+        if any(m and int(effect[m]) == EffectId.METRONOME for m in mon.moves):
+            out.update(metronome_calls(tables, mon))
+    return sorted(out)
+
+
 def _check_party(
     c: _Collector,
     tables: Tables,
@@ -594,7 +755,7 @@ def _check_party(
         row = personal_row(tables, mon.species, mon.form)  # ValueError: no such form
         for move in mon.moves:
             if move:
-                support, name = move_effect_line(tables, names, move, row)
+                support, name = move_effect_line(tables, names, move, row, mon.moves)
                 c.add(support, f"{where}: {name}", "move effect")
         ability = AbilityId(int(abilities[row, mon.ability_slot]))
         ability_name = names.ability_names[
@@ -766,7 +927,7 @@ def _check_trainer(
     if names.game == KAIZO:
         for label in rom_change_refusals(tables, names, trainer, specs, extra_moves):
             c.add(Support.NONE, rom_change_line(label), "ROM change")
-    moves = [m for s in specs for m in s.moves] + list(extra_moves)
+    moves = [m for s in specs for m in s.moves] + list(extra_moves) + fight_calls(tables, specs)
     if (line := terrain_refusal(tables, names, trainer, moves)) is not None:
         c.add(Support.NONE, line, "battle terrain")
     effect = np.asarray(tables.trainer_item_effect)
@@ -925,6 +1086,9 @@ def check_coverage(
 
     c = _Collector()
     _check_party(c, tables, names, "Player", player)
+    for line in (weather_war_line(tables, player, opp), trace_standoff_line(tables, player, opp)):
+        if line is not None:
+            c.add(Support.NONE, f"{display_name(trainer)}: {line}", "ability")
     learnable = [learnable_moves(tables, mon, opp) for mon in player]
     extra = sorted({m for moves in learnable for m in moves})
     theirs = check_opponent(tables, names, trainer, opp, start_condition, player, extra)
@@ -950,7 +1114,8 @@ def check_coverage(
         foe_defense = low_defense(tables, foes)
         for slot, mon in enumerate(party):
             extra_moves = learnable[slot] if owner == "Player" else ()
-            for move in [*mon.moves, *(m for m in extra_moves if m not in mon.moves)]:
+            calls = fight_calls(tables, [mon])
+            for move in [*mon.moves, *(m for m in [*extra_moves, *calls] if m not in mon.moves)]:
                 if move and (low := halved_defense_line(tables, move, foe_defense)):
                     where = f"{owner} {names.species_names[mon.species]} (slot {slot})"
                     c.add(Support.NONE, f"{where}: {names.move_names[move]}{low}", "move effect")
@@ -969,7 +1134,12 @@ def check_coverage(
     fight, error = _fight_ai_tables(tables, names, trainer, opp)
     if error is not None:  # listed by check_opponent
         return c.report
-    for reason in ai_refusals(fight, state, names):
+    refusals = ai_refusals(fight, state, names)
+    # A lead's battle-start copy is in ``state`` already: its lines are listed once.
+    copies = [
+        r for r in trace_copy_refusals(fight, state, names) if r.split(": ", 1)[1] not in refusals
+    ]
+    for reason in [*refusals, *copies]:
         c.add(Support.NONE, f"{display_name(trainer)}: {reason}", "trainer AI")
     return c.report
 

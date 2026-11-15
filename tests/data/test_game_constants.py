@@ -38,7 +38,13 @@ LISTED = [
     "nuzline.engine.ids.Type",
     "nuzline.engine.ids.MOVE_STRUGGLE",
     "nuzline.engine.ids.WEATHER_ABILITY_IDS",
+    "nuzline.engine.ids.ITEM_ABILITY_IDS",
+    "nuzline.engine.ids.YAWN_ABILITY_IDS",
     "nuzline.engine.ids.ABILITY_MULTITYPE",
+    "nuzline.engine.ids.ABILITY_DECOMP_IDS",
+    "nuzline.engine.ids.UNTRACEABLE_ABILITIES",
+    "nuzline.engine.ids.ABILITY_FORECAST",
+    "nuzline.engine.ids.ITEM_GRISEOUS_ORB",
     "nuzline.engine.ids.TERRAIN_MOVES",
     "nuzline.engine.stats.SPECIES_SHEDINJA",
     "nuzline.ai.switching.MOVE_STRUGGLE",
@@ -231,6 +237,8 @@ def _code_entries(where: str) -> set:
         return {(None, k) for k in obj} | {(None, v) for v in set(obj.values())}
     if where == "nuzline.ai.switching._MOVES":
         return {(n, switching.MOVE_IDS[n]) for n in obj}
+    if where == "nuzline.engine.ids.ABILITY_DECOMP_IDS":  # AbilityId keys, decomp id values
+        return {(None, v) for v in obj.values()}
     if isinstance(obj, type) and issubclass(obj, IntEnum | IntFlag):
         return {(None, int(m)) for m in obj}
     if isinstance(obj, int):
@@ -316,10 +324,14 @@ def test_policy_constants_only_for_their_policy(vanilla_manifest, vanilla_items)
     abilities = list(vanilla_manifest["ability_names"])
     abilities[87] = "Wet Skin"  # Dry Skin: script.s:78's compare in the Kaizo policy only
     renamed = Names({**vanilla_manifest, "ability_names": abilities})
-    assert check_constants(VANILLA, renamed, vanilla_items) == []
-    assert check_constants(KAIZO, renamed, vanilla_items) == [
-        "ai/layout.py KAIZO: id 87 is 'Wet Skin' in this game, expected 'Dry Skin'"
-    ]
+    # The engine's table (E2 batch 3, ids.ABILITY_DECOMP_IDS) is checked in both games.
+    engine = (
+        "engine/ids.py ABILITY_DECOMP_IDS: id 87 is 'Wet Skin' in this game, expected 'Dry Skin'"
+    )
+    assert check_constants(VANILLA, renamed, vanilla_items) == [engine]
+    assert sorted(check_constants(KAIZO, renamed, vanilla_items)) == sorted(
+        [engine, "ai/layout.py KAIZO: id 87 is 'Wet Skin' in this game, expected 'Dry Skin'"]
+    )
 
 
 def test_kaizo_policy_ids_are_checked(vanilla_manifest, vanilla_items):

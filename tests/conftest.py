@@ -398,3 +398,14 @@ def kaizo_roark_party(kaizo_roark):
     from nuzline.data.trainer import IntermediateData, build_trainer_party
 
     return build_trainer_party(kaizo_roark, IntermediateData(KAIZO_INTERMEDIATE))
+
+
+@pytest.fixture(scope="session", autouse=True)
+def ai_legality_invariant():
+    """Every concrete AI pick is a legal opponent action (tests/ai_legality.py): installed once
+    the test modules are collected, so their own imported names are wrapped too."""
+    from tests import ai_legality
+
+    patched = ai_legality.install()
+    yield
+    ai_legality.uninstall(patched)

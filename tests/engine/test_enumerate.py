@@ -27,13 +27,14 @@ from nuzline.engine.enumerate import (
     enumerate_outcomes,
     outcome_laws,
 )
-from nuzline.engine.ids import AbilityId, EffectId, Stat, Status
+from nuzline.engine.ids import AbilityId, EffectId, ItemId, Stat, Status
 from nuzline.engine.observe import observation
 from nuzline.engine.order import used_move
 from nuzline.engine.outcome import (
     Outcome,
     crit_odds,
     empty_outcome,
+    future_thresholds,
     hit_threshold,
     hit_thresholds,
     outcome_to_py,
@@ -375,18 +376,45 @@ def decomp_law(tables, state, actions, name: str, index: tuple) -> dict[int, Fra
         for u in range(1, 101):
             groups.setdefault(tuple(u <= t for t in ts[ok]), []).append(u)
         return {(min(us) if any(key) else 0): Fraction(len(us), 100) for key, us in groups.items()}
+    if name == "future_hit":
+        # The Future Sight hit's roll u = RandNext() % 100 + 1 (bcp.c:2976) at the turn's end,
+        # grouped as ``hit`` over every threshold it can have (outcome.future_thresholds), each
+        # roll alone where the grid is loose.
+        ts, ok, loose = (np.asarray(x)[side] for x in future_thresholds(tables, state, actions))
+        if bool(loose):
+            return {u: Fraction(1, 100) for u in range(1, 101)}
+        if not ok.any():
+            return {1: Fraction(1)}
+        groups = {}
+        for u in range(1, 101):
+            groups.setdefault(tuple(u <= t for t in ts[ok]), []).append(u)
+        return {(min(us) if any(key) else 0): Fraction(len(us), 100) for key, us in groups.items()}
     if name == "crit":
         lucky = int(state.lucky_chant[1 - side]) != 0
+        # battle_lib.c:7135-7136: the target's Battle Armor / Shell Armor
+        # (Battler_IgnorableAbility): the foe's active Pokemon, or the one it switches in.
+        foe = 1 - side
+        mon = int(actions[foe]) - 4 if 4 <= int(actions[foe]) < 10 else int(state.active[foe])
+        mold = int(state.ability[side, int(state.active[side])]) == AbilityId.MOLD_BREAKER
+        armor = not mold and int(state.ability[foe, mon]) in (
+            AbilityId.SHELL_ARMOR,
+            AbilityId.BATTLE_ARMOR,
+        )
         return coin(
-            Fraction(0) if lucky else Fraction(1, int(crit_odds(tables, state, actions)[side]))
+            Fraction(0)
+            if lucky or armor
+            else Fraction(1, int(crit_odds(tables, state, actions)[side]))
         )
     if name == "roll":
         return {r: Fraction(1, 16) for r in range(16)}
+    # Serene Grace doubles effectChance (battle_lib.c:1552-1556, :1571-1575; battle_script.c:
+    # 8369-8373), then RandNext() % 100 < chance.
+    grace = int(state.ability[side, int(state.active[side])]) == AbilityId.SERENE_GRACE
+    chance = int(tables.move_effect_chance[move]) * (2 if grace else 1)
     if name == "secondary":
-        chance = int(tables.move_effect_chance[move])
-        return coin(Fraction(1) if chance == 0 else Fraction(chance, 100))
+        return coin(Fraction(1) if chance == 0 else Fraction(min(chance, 100), 100))
     if name == "fang_flinch":  # the second CheckEffectActivation (battle_script.c:8377)
-        return coin(Fraction(int(tables.move_effect_chance[move]), 100))
+        return coin(Fraction(min(chance, 100), 100))
     if name == "contact_proc":
         return coin(Fraction(3, 10))
     if name == "present":  # BtlCmd_Present (battle_script.c:5793-5803): RandNext() & 0xFF
@@ -401,7 +429,8 @@ def decomp_law(tables, state, actions, name: str, index: tuple) -> dict[int, Fra
         effect = int(tables.move_effect[move])
         if effect == EffectId.TAUNT:
             return {d: Fraction(1, 3) for d in (3, 4, 5)}
-        low = 3 if effect in (EffectId.TRAP, EffectId.DISABLE) else 2
+        # Random 3, 3: Bind, Disable's RandNext() % 4 + 3, Uproar (subscript_uproar.s:6).
+        low = 3 if effect in (EffectId.TRAP, EffectId.DISABLE, EffectId.UPROAR) else 2
         return {d: Fraction(1, 4) for d in range(low, low + 4)}
     if name == "full_para":
         return coin(Fraction(1, 4))
@@ -433,10 +462,20 @@ def decomp_law(tables, state, actions, name: str, index: tuple) -> dict[int, Fra
             1 for k in range(6) if k != mon and int(state.species[foe, k]) and int(state.hp[foe, k])
         )
         return {k: Fraction(1, max(bench, 1)) for k in range(max(bench, 1))}
+    if name == "yawn_sleep":  # subscript_fall_asleep.s Random 3, 2: rand % 4 + 2
+        return {v: Fraction(1, 4) for v in range(2, 6)}
     if name == "magnitude":  # BtlCmd_CalcMagnitude (battle_script.c:5820-5852)
         return dict(zip(range(4, 11), (Fraction(n, 100) for n in (5, 10, 20, 30, 20, 10, 5)),
                         strict=True))  # fmt: skip
-    return {0: Fraction(1)}  # flinch_item
+    if name == "flinch_item":
+        # BattleControllerPlayer_CheckExtraFlinch (bcp.c:4633, :4639): RandNext() % 100 <
+        # the attacker's King's Rock / Razor Fang param.
+        mon = int(state.active[side])
+        item = int(state.item[side, mon])
+        chance = int(tables.item_param[item, 0])
+        assert int(tables.item_effect[item]) == ItemId.KINGS_ROCK
+        return coin(Fraction(chance, 100))
+    raise AssertionError(name)
 
 
 @pytest.mark.slow

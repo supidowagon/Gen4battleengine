@@ -186,14 +186,15 @@ def test_curse_non_ghost_order_and_caps(tables, names):
     assert int(out.move_hit[1]) == 0
 
 
-def test_curse_ghost_user_refused(tables, names):
+def test_curse_ghost_user_supported(tables, names):
+    # E2 batch 8 (B8-5) modelled a Ghost user's Curse: coverage no longer refuses it.
     curse = names.move("Curse")
     gastly = names.species("Gastly")
     base = sample_party(names)
     ghost = replace(base[0], species=gastly, form=0, ability_slot=0, moves=(curse, 0, 0, 0))
     report = check_coverage(tables, names, [ghost, *base[1:]], roark_trainer(),
                             roark_party(names), 0)  # fmt: skip
-    assert "Player GASTLY (slot 0): Curse (Ghost user) (move effect UNSUPPORTED)" in report.missing
+    assert not [ln for ln in report.missing if "Curse" in ln]
     plain = replace(base[0], moves=(curse, 0, 0, 0))
     report = check_coverage(tables, names, [plain, *base[1:]], roark_trainer(),
                             roark_party(names), 0)  # fmt: skip
@@ -202,8 +203,7 @@ def test_curse_ghost_user_refused(tables, names):
     knows = Candidate(("party", 0, 0), "P", ghost, 0, (), ())
     could = Candidate(("party", 0, 1), "Q", replace(ghost, moves=(0, 0, 0, 0)), 0, (curse,), ())
     missing = check_pool(tables, names, [knows, could], ()).missing
-    assert "P: Curse (Ghost user) (current, move effect UNSUPPORTED)" in missing
-    assert "Q: Curse (Ghost user) (relearner, move effect UNSUPPORTED)" in missing
+    assert not [ln for ln in missing if "Curse" in ln]
     assert not [ln for ln in check_pool(tables, names, [Candidate(("party", 0, 0), "R", plain,
                                                                   0, (), ())], ()).missing
                 if "Curse" in ln]  # fmt: skip

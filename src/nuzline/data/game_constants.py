@@ -289,6 +289,10 @@ CONSTANTS: tuple[Constant, ...] = (
     Constant("nuzline.engine.ids.MOVE_STRUGGLE", "move", 165, "Struggle", _E),
     # MOVE_FAKE_OUT (generated/moves.txt line 253): subscript_flinch_mon.s:18.
     Constant("nuzline.engine.ids.MOVE_FAKE_OUT", "move", 252, "Fake Out", _E),
+    # MOVE_SNORE, MOVE_SLEEP_TALK (generated/moves.txt lines 174, 215): the sleep check's
+    # exceptions (battle_controller_player.c:2455), E2 batch 4.
+    Constant("nuzline.engine.ids.MOVE_SNORE", "move", 173, "Snore", _E),
+    Constant("nuzline.engine.ids.MOVE_SLEEP_TALK", "move", 214, "Sleep Talk", _E),
     # MOVE_PROTECT, MOVE_DETECT, MOVE_ENDURE (generated/moves.txt lines 183, 198, 204):
     # BtlCmd_TryProtection's chain check (battle_script.c:5154-5156).
     Constant("nuzline.engine.ids.MOVE_PROTECT", "move", 182, "Protect", _E),
@@ -316,6 +320,100 @@ CONSTANTS: tuple[Constant, ...] = (
             "Air Slash": 403,
         },
     ),
+    # E2 batch 3: the decomp id of every supported AbilityId (damage.decomp_abilities of a
+    # battler that traced), compared by value (its keys are engine ids).
+    *_table(
+        "nuzline.engine.ids.ABILITY_DECOMP_IDS",
+        "ability",
+        _E,
+        {
+            "-": 0,
+            "Sturdy": 5,
+            "Rock Head": 69,
+            "Mold Breaker": 104,
+            "Blaze": 66,
+            "Torrent": 67,
+            "Overgrow": 65,
+            "Intimidate": 22,
+            "Rivalry": 79,
+            "Keen Eye": 51,
+            "Simple": 86,
+            "Unaware": 109,
+            "Natural Cure": 30,
+            "Poison Point": 38,
+            "Inner Focus": 39,
+            "Static": 9,
+            "Guts": 62,
+            "Steadfast": 80,
+            "Insomnia": 15,
+            "Cloud Nine": 13,
+            "Compoundeyes": 14,
+            "Shed Skin": 61,
+            "Sand Veil": 8,
+            "Snow Cloak": 81,
+            "Swift Swim": 33,
+            "Rough Skin": 24,
+            "Flame Body": 49,
+            "Limber": 7,
+            "Adaptability": 91,
+            "Solid Rock": 116,
+            "Cute Charm": 56,
+            "Gluttony": 82,
+            "Reckless": 120,
+            "Technician": 101,
+            "Truant": 54,
+            "Dry Skin": 87,
+            "Lightningrod": 31,
+            "No Guard": 99,
+            "Serene Grace": 32,
+            "Drought": 70,
+            "Honey Gather": 118,
+            "Levitate": 26,
+            "Quick Feet": 95,
+            "Scrappy": 113,
+            "Shell Armor": 75,
+            "Battle Armor": 4,
+            "Shield Dust": 19,
+            "Solar Power": 94,
+            "Super Luck": 105,
+            "Tangled Feet": 77,
+            "Thick Fat": 47,
+            "Tinted Lens": 110,
+            "Trace": 36,
+            "Drizzle": 2,
+            "Sand Stream": 45,
+            "Snow Warning": 117,
+            "Filter": 111,
+            "Magic Guard": 98,
+            "Sniper": 97,
+            # E2 batch 9.
+            "Chlorophyll": 34,
+            "Huge Power": 37,
+            "Pure Power": 74,
+            "Swarm": 68,
+            "Unburden": 84,
+            "Flower Gift": 122,
+            "Volt Absorb": 10,
+            "Water Absorb": 11,
+            "Rain Dish": 44,
+            "Clear Body": 29,
+            "Hyper Cutter": 52,
+            "Aftermath": 106,
+            "Poison Heal": 90,
+            "Bad Dreams": 123,
+            "Arena Trap": 71,
+            "Shadow Tag": 23,
+            "Magnet Pull": 42,
+        },
+    ),
+    # ChooseTraceTarget's untraceable abilities (battle_lib.c:7750-7775) and its Forecast.
+    *_table(
+        "nuzline.engine.ids.UNTRACEABLE_ABILITIES",
+        "ability",
+        _E,
+        {"Forecast": 59, "Trace": 36, "Multitype": 121},
+    ),
+    Constant("nuzline.engine.ids.ABILITY_FORECAST", "ability", 59, "Forecast", _E),
     # The weather code's decomp abilities (generated/abilities.txt line N is id N-1).
     *_table(
         "nuzline.engine.ids.WEATHER_ABILITY_IDS",
@@ -328,6 +426,30 @@ CONSTANTS: tuple[Constant, ...] = (
             "Ice Body": 115,
         },
     ),
+    # Yawn's decomp abilities (subscript_yawn.s:5-9, :14; subscript_fall_asleep.s:7-14), E2
+    # batch 8.
+    *_table(
+        "nuzline.engine.ids.YAWN_ABILITY_IDS",
+        "ability",
+        _E,
+        {
+            "Insomnia": 15,
+            "Soundproof": 43,
+            "Vital Spirit": 72,
+            "Leaf Guard": 102,
+        },
+    ),
+    # The status orbs' decomp abilities (subscript_badly_poison.s:14, subscript_burn.s:6, :9).
+    *_table(
+        "nuzline.engine.ids.ITEM_ABILITY_IDS",
+        "ability",
+        _E,
+        {
+            "Immunity": 17,
+            "Water Veil": 41,
+            "Leaf Guard": 102,
+        },
+    ),
     Constant("nuzline.ai.switching.MOVE_STRUGGLE", "move", 165, "Struggle", _E),
     # Thunder Wave: BattleControllerPlayer_CheckTypeChart's MOVE_THUNDER_WAVE
     # (src/battle/battle_controller_player.c:2357).
@@ -337,9 +459,30 @@ CONSTANTS: tuple[Constant, ...] = (
     Constant("nuzline.engine.stats.SPECIES_SHEDINJA", "species", 292, "Shedinja", _E),
     Constant("nuzline.engine.coverage.SPECIES_GIRATINA", "species", 487, "Giratina", _E),
     Constant("nuzline.engine.coverage.SPECIES_SHAYMIN", "species", 492, "Shaymin", _E),
+    # The crit species items' species (BattleSystem_CalcCriticalMulti, battle_lib.c:7127-7128).
+    Constant("nuzline.engine.ids.SPECIES_CHANSEY", "species", 113, "Chansey", _E),
+    Constant("nuzline.engine.ids.SPECIES_FARFETCHD", "species", 83, "Farfetch’d", _E),
+    # The species of BattleSystem_CalcMoveDamage's item block (battle_lib.c:6730-6774).
+    *(
+        Constant(f"nuzline.engine.ids.SPECIES_{name.upper()}", "species", i, name, _E)
+        for name, i in (
+            ("Pikachu", 25),
+            ("Cubone", 104),
+            ("Marowak", 105),
+            ("Ditto", 132),
+            ("Clamperl", 366),
+            ("Latias", 380),
+            ("Latios", 381),
+            ("Dialga", 483),
+            ("Palkia", 484),
+            ("Giratina", 487),
+        )
+    ),
     # Items (generated/items.txt, line N is id N-1); prep looks Heart Scale up by name.
     Constant("nuzline.prep.problem.HEART_SCALE", "item", 93, "Heart Scale", _E),
     Constant("nuzline.engine.coverage.ITEM_GRISEOUS_ORB", "item", 112, "Griseous Orb", _E),
+    # Trace never fires for a Griseous Orb holder (battle_lib.c:3728).
+    Constant("nuzline.engine.ids.ITEM_GRISEOUS_ORB", "item", 112, "Griseous Orb", _E),
     # saves/pkm.py: the Luxury Ball friendship bonus (PokemonSpec.friend_bonus).
     Constant("nuzline.saves.pkm.ITEM_LUXURY_BALL", "item", 11, "Luxury Ball", _E),
     # Hold effects (generated/item_hold_effects.txt, line N is id N-1):
@@ -443,6 +586,13 @@ _KEYED_BY_EFFECT = (
     "script changes are rom_diff.toml entries (Ruling 13)"
 )
 _KEYED_BY_NAME = "keyed by name, looked up in each game's own data at table build"
+_CODE_MOVE_IDS = (
+    "move ids compared in battle code (battle_script.c:4918-4922, battle_lib.c:3032-3045, "
+    ":7152-7178), not move data: the Kaizo ROM leaves that code unchanged (rom_diff.md), so the "
+    "ids hold in both games whatever a slot is named (Kaizo renamed Snatch, Covet, Trick and "
+    "Switcheroo's slots, which stay excluded); tests/tools/test_effect_map.py checks them "
+    "against the decomp"
+)
 
 # "module.ATTR" -> why it is not a game id table.
 EXEMPT: dict[str, str] = {
@@ -451,6 +601,10 @@ EXEMPT: dict[str, str] = {
         + _ENGINE_ENCODING
     ),
     "nuzline.engine.ids.EffectId": _ENGINE_ENCODING,
+    "nuzline.engine.ids.SECRET_POWER_EFFECTS": (
+        "sTerrainSideEffect (include/data/terrain/to_secondary_effect.h) as engine EffectId / "
+        "Stat / Status members, indexed by the decomp TERRAIN_* id; " + _ENGINE_ENCODING
+    ),
     "nuzline.engine.ids.Status": _ENGINE_ENCODING,
     "nuzline.engine.ids.Stat": "engine index order of every stat vector; " + _ENGINE_ENCODING,
     "nuzline.engine.ids.MoveFlag": _ENGINE_ENCODING,
@@ -535,14 +689,55 @@ EXEMPT: dict[str, str] = {
     "tools.effect_map._EFFECTS": _KEYED_BY_EFFECT,
     "tools.effect_map.DECOMP_EFFECT_NAMES": _KEYED_BY_EFFECT,
     "tools.effect_map.CERTAIN_SECONDARY_EFFECTS": _KEYED_BY_EFFECT,
+    "tools.effect_map.MULTI_TURN_EFFECTS": _KEYED_BY_EFFECT,
+    # E2 batch 5: move ids the battle code compares against (BtlCmd_TrySleepTalk,
+    # Move_IsInvoker, sCannotMetronomeMoves), turned into MoveFlag bits at table build.
+    "tools.effect_map.INVOKER_MOVES": _CODE_MOVE_IDS,
+    "tools.effect_map.SLEEP_TALK_EXCLUDED_MOVES": _CODE_MOVE_IDS,
+    "tools.effect_map.METRONOME_EXCLUDED_MOVES": _CODE_MOVE_IDS,
     "tools.effect_map.RESIST_BERRY_HOLD_EFFECTS": (
         "keyed by decomp hold effect id, read off the vanilla subscript_type_resist_berry.s: "
         "each game's items carry their own hold effect (build_tables looks theirs up here), "
         "and a game's script changes are rom_diff.toml entries (Ruling 13)"
     ),
+    "tools.effect_map.TYPE_BOOST_HOLD_EFFECTS": (
+        "keyed by decomp hold effect id, read off the vanilla sTypeBoostingItems "
+        "(battle_lib.c:6514): each game's items carry their own hold effect (build_tables "
+        "looks theirs up here), and a game's code changes are rom_diff.toml entries"
+    ),
+    "tools.effect_map.PINCH_STAT_HOLD_EFFECTS": (
+        "keyed by decomp hold effect id, read off BattleSystem_TriggerHeldItem's stat pinch "
+        "berries (battle_lib.c:4773-4836): each game's items carry their own hold effect "
+        "(build_tables looks theirs up here), and a game's code changes are rom_diff.toml entries"
+    ),
+    "tools.effect_map.WEATHER_ROCK_HOLD_EFFECTS": (
+        "keyed by decomp hold effect id, read off the weather moves' scripts (effect_script_0115.s, "
+        "_0136.s, _0137.s, _0164.s): each game's items carry their own hold effect (build_tables "
+        "looks theirs up here), and a game's script changes are rom_diff.toml entries"
+    ),
+    "tools.effect_map.CRIT_HOLD_EFFECTS": (
+        "keyed by decomp hold effect id, read off BattleSystem_CalcCriticalMulti "
+        "(battle_lib.c:7123-7128); its species values are ids.SPECIES_CHANSEY / _FARFETCHD, "
+        "checked by name: each game's items carry their own hold effect (build_tables looks "
+        "theirs up here), and a game's code changes are rom_diff.toml entries"
+    ),
+    "tools.effect_map.HOLD_EFFECT_TO_ID": (
+        "keyed by decomp hold effect id: engine semantics of the vanilla item code; each "
+        "game's items carry their own hold effect (build_tables looks theirs up here), and a "
+        "game's code changes are rom_diff.toml entries (Ruling 13)"
+    ),
     "tools.effect_map.DECOMP_ABILITY_TO_ID": (
         "keyed by ability name: engine semantics of the vanilla ability handling; a game's "
         "changes to it are rom_diff.toml entries (Ruling 13)"
+    ),
+    "tools.effect_map.KAIZO_EFFECTS": (
+        "keyed by the decomp effect id of a be_seq member the Kaizo ROM changed; it is used "
+        "only for Kaizo and only for a member rom_diff.toml marks modelled (Ruling 13, B9-4)"
+    ),
+    "tools.effect_map.DIVISOR_PARAM_MIN": (
+        "keyed by engine ItemId, whose ints are the smallest hold params each item may divide "
+        "by (battle_lib.c:4778, :1294, :5330-5336; bcp.c:4736-4752), not game ids; each "
+        "game's own params are compared with them at table build"
     ),
     "tools.effect_map.UNSUPPORTED_MOVES": _KEYED_BY_NAME,
     "tools.effect_map.DECOMP_ITEM_TO_ID": (

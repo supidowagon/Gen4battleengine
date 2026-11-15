@@ -23,7 +23,9 @@ def test_empty_outcome_is_all_hits_no_crits_max_roll():
     assert o.hit.tolist() == [[1] * 5] * 2 and o.crit.tolist() == [[0] * 5] * 2
     assert o.roll.tolist() == [[15] * 5] * 2
     assert o.secondary.tolist() == [[0] * 5] * 2 and o.contact_proc.tolist() == [[0] * 5] * 2
-    assert all(getattr(o, f).dtype == jnp.int8 for f in Outcome._fields)
+    # Every field int8 but the invokers' call (int16: Metronome's rank, E2 batch 5).
+    assert all(getattr(o, f).dtype == jnp.int8 for f in Outcome._fields if f != "call")
+    assert o.call.dtype == jnp.int16 and o.call.tolist() == [0, 0]
 
 
 def acts(*a):
@@ -75,7 +77,7 @@ def freq(x, value=1):
 
 def test_sample_shapes_and_dtypes(samples):
     for f in Outcome._fields:
-        assert getattr(samples, f).dtype == jnp.int8, f
+        assert getattr(samples, f).dtype == (jnp.int16 if f == "call" else jnp.int8), f
     assert samples.hit.shape == (N, 2, 5) and samples.n_hits.shape == (N, 2)
 
 
@@ -91,7 +93,7 @@ def test_sample_shapes_and_dtypes(samples):
         ("full_para", (0,), 0.25),
         ("confusion_hit", (1,), 0.5),
         ("thaw", (0,), 0.20),
-        ("flinch_item", (0,), 0.0),  # no implemented item flinches
+        ("flinch_item", (0, 0), 0.0),  # neither lead holds a King's Rock
         ("quick_claw", (1,), 0.2),  # speedRand % 5 == 0 (battle_lib.c:1279), K3b2 Task 8
     ],
 )
@@ -134,7 +136,7 @@ EXISTING_DRAWS = {
     "confusion_hit": [0, 1],
     "duration": [5, 4],
     "thaw": [0, 0],
-    "flinch_item": [0, 0],
+    "flinch_item": [[0, 0, 0, 0, 0], [0, 0, 0, 0, 0]],
     "end_speed_tie": 0,
 }
 # ``quick_claw`` was reserved (always 0) when these were recorded; K3b2 Task 8 made it a

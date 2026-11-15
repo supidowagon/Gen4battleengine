@@ -23,7 +23,12 @@ Encodings:
   whether or not the engine supports it (``item_effect`` is the mapped engine id).
 * ``item_param[item]``: ``(decomp hold param, 0)`` for supported items, else zeros; a
   ``RESIST_BERRY``'s column 1 is the type its hold effect resists
-  (``effect_map.RESIST_BERRY_HOLD_EFFECTS``).
+  (``effect_map.RESIST_BERRY_HOLD_EFFECTS``), a ``TYPE_BOOST``'s the type its hold effect
+  boosts (``effect_map.TYPE_BOOST_HOLD_EFFECTS``), a ``PINCH_BERRY``'s the ``Stat`` its hold
+  effect raises (``effect_map.PINCH_STAT_HOLD_EFFECTS``).
+* ``item_effect[item]``: the ``ids.ItemId`` (``effect_map.held_item_ids``: by name, else by
+  hold effect, else ``NONE`` / ``NO_EFFECT_BERRY`` for an item with no hold effect);
+  ``UNSUPPORTED`` for an item dividing by a param below its minimum (``_pinch_divisor_ok``).
 * ``item_hold_param[item]``: the decomp hold param as stored (``ItemData.effectParam``, which
   ``Item_LoadParam(item, ITEM_PARAM_EFFECT_PARAM)`` returns, ``src/item.c:160-161``), whether or
   not the engine supports the item. The level-up EV gain reads it as a Power item's
@@ -100,14 +105,27 @@ from nuzline.data.games import GAMES, KAIZO, VANILLA, get_game
 from nuzline.data.tables import MANIFEST_VERSION
 from nuzline.engine.ids import AbilityId, EffectId, ItemId, MoveFlag, MoveTarget, TrainerItemId
 from tools.effect_map import (
+    BLIZZARD_EFFECT,
     CERTAIN_SECONDARY_EFFECTS,
+    CRIT_HOLD_EFFECTS,
     DECOMP_ABILITY_TO_ID,
     DECOMP_EFFECT_TO_ID,
     DECOMP_ITEM_TO_ID,
     DECOMP_TRAINER_ITEM_TO_ID,
+    DIVISOR_PARAM_MIN,
+    INVOKER_MOVES,
+    KAIZO_EFFECTS,
+    METRONOME_EXCLUDED_MOVES,
+    MULTI_TURN_EFFECTS,
+    PINCH_STAT_HOLD_EFFECTS,
     RESIST_BERRY_HOLD_EFFECTS,
+    SLEEP_TALK_EXCLUDED_MOVES,
+    TYPE_BOOST_HOLD_EFFECTS,
     TYPE_CHART_STATUS_MOVES,
+    THUNDER_EFFECT,
     UNSUPPORTED_MOVES,
+    WEATHER_ROCK_HOLD_EFFECTS,
+    held_item_ids,
 )
 
 NUM_TMS = 92
@@ -127,6 +145,8 @@ MOVE_TARGETS = tuple(t.name for t in MoveTarget)
 DECOMP_FLAG_BITS = {
     "MOVE_FLAG_MAKES_CONTACT": MoveFlag.CONTACT,
     "MOVE_FLAG_CAN_PROTECT": MoveFlag.PROTECT,
+    # BattleControllerPlayer_CheckExtraFlinch (battle_controller_player.c:4642).
+    "MOVE_FLAG_TRIGGERS_KINGS_ROCK": MoveFlag.KINGS_ROCK,
 }
 SECONDARY = (
     EffectId.SECONDARY_STAT_SELF,
@@ -160,7 +180,9 @@ def _decomp_commit() -> str:
 
 
 def _move_flags(move: dict, move_id: int, lists: dict[str, list[int]]) -> int:
-    """The move's flag bits; SOUND and PUNCH come from ``move_lists.json`` by move id."""
+    """The move's flag bits; SOUND and PUNCH come from ``move_lists.json`` by move id;
+    NO_SLEEP_TALK and NO_METRONOME from the battle code's id lists (``tools.effect_map``) and,
+    for Move_IsMultiTurn, the move's own decomp effect."""
     bits = 0
     for flag in move["flags"]:
         bits |= DECOMP_FLAG_BITS.get(flag, 0)
@@ -168,6 +190,18 @@ def _move_flags(move: dict, move_id: int, lists: dict[str, list[int]]) -> int:
         bits |= MoveFlag.SOUND
     if move_id in lists["punch"]:
         bits |= MoveFlag.PUNCH
+    if (
+        move_id in INVOKER_MOVES
+        or move_id in SLEEP_TALK_EXCLUDED_MOVES
+        or move.get("effect") in MULTI_TURN_EFFECTS
+    ):
+        bits |= MoveFlag.NO_SLEEP_TALK
+    if move_id in METRONOME_EXCLUDED_MOVES:
+        bits |= MoveFlag.NO_METRONOME
+    if move.get("effect") == THUNDER_EFFECT:
+        bits |= MoveFlag.THUNDER
+    if move.get("effect") == BLIZZARD_EFFECT:
+        bits |= MoveFlag.BLIZZARD
     return int(bits)
 
 
@@ -183,10 +217,13 @@ def _no_secondary(move: dict) -> bool:
 
 
 def _move_effect(
-    move: dict, changed_effects: frozenset[int] = frozenset()
+    move: dict, changed_effects: frozenset[int] = frozenset(), kaizo: bool = False
 ) -> tuple[int, tuple[int, int, int]]:
     if move["name"] in UNSUPPORTED_MOVES or move["effect"] in changed_effects:
         return int(EffectId.UNSUPPORTED), (0, 0, 0)
+    if kaizo and move["effect"] in KAIZO_EFFECTS:  # a modelled changed script (B9-4)
+        _, eid, params = KAIZO_EFFECTS[move["effect"]]
+        return int(eid), params
     eid, params = DECOMP_EFFECT_TO_ID.get(move["effect"], (EffectId.UNSUPPORTED, (0, 0, 0)))
     if eid in SECONDARY:
         certain = move["effect"] in CERTAIN_SECONDARY_EFFECTS
@@ -280,25 +317,49 @@ def _form_names(species: list[dict], forms: list[dict]) -> dict[str, list[str]]:
     return out
 
 
-def _resisted_type(item: dict, item_id: int) -> int:
-    """``item_param[i, 1]``: the type a ``RESIST_BERRY`` resists, by its own hold effect
-    (``subscript_type_resist_berry.s``), else 0."""
-    if item_id != ItemId.RESIST_BERRY:
+def _item_type(item: dict, item_id: int) -> int:
+    """``item_param[i, 1]``: the type a ``RESIST_BERRY`` resists
+    (``subscript_type_resist_berry.s``) or a ``TYPE_BOOST`` boosts (``sTypeBoostingItems``,
+    battle_lib.c:6514), the ``Stat`` a ``PINCH_BERRY`` raises (battle_lib.c:4773-4836) or the
+    ``Weather`` a ``WEATHER_ROCK`` extends (effect_script_0136.s etc.), by its own hold effect,
+    else 0."""
+    tables = {
+        ItemId.RESIST_BERRY: (RESIST_BERRY_HOLD_EFFECTS, "resists"),
+        ItemId.TYPE_BOOST: (TYPE_BOOST_HOLD_EFFECTS, "boosts"),
+        ItemId.PINCH_BERRY: (PINCH_STAT_HOLD_EFFECTS, "raises"),
+        ItemId.WEATHER_ROCK: (WEATHER_ROCK_HOLD_EFFECTS, "extends"),
+        ItemId.CRIT_ITEM: (CRIT_HOLD_EFFECTS, "needs"),
+    }
+    if item_id not in tables:
         return 0
-    if item["hold_effect"] not in RESIST_BERRY_HOLD_EFFECTS:
-        raise BuildError(
-            f"item {item['name']!r}: hold effect {item['hold_effect']} resists no type"
-        )
-    return int(RESIST_BERRY_HOLD_EFFECTS[item["hold_effect"]][1])
+    table, verb = tables[ItemId(item_id)]
+    if item["hold_effect"] not in table:
+        raise BuildError(f"item {item['name']!r}: hold effect {item['hold_effect']} {verb} no type")
+    return int(table[item["hold_effect"]][1])
+
+
+def _pinch_divisor_ok(items: list[dict], ids: list[int]) -> list[int]:
+    """``ids`` with every ``effect_map.DIVISOR_PARAM_MIN`` item whose hold param is below its
+    minimum made ``UNSUPPORTED``: a pinch berry's trigger divides maxHP by the param, halved by
+    Gluttony (battle_lib.c:4774-4778, :1289-1294), Sticky Barb divides maxHP and Shell Bell the
+    damage dealt by it (battle_lib.c:5330-5336, bcp.c:4736-4752), so such a param divides by
+    zero, which the decomp does not define (the ROM's division routine decides)."""
+    return [
+        int(ItemId.UNSUPPORTED)
+        if e in DIVISOR_PARAM_MIN and i["hold_param"] < DIVISOR_PARAM_MIN[ItemId(e)]
+        else e
+        for i, e in zip(items, ids, strict=True)
+    ]
 
 
 def _item_maps(items: list[dict], vanilla: list[dict] | None) -> tuple[list[int], list[int]]:
-    """``(ItemId, TrainerItemId)`` per item. Vanilla: by name. Kaizo (``vanilla`` given):
-    by the slot's vanilla name, only when the slot keeps that name (up to spelling) and
-    vanilla's hold effect (and, for the bag item, vanilla's ``hp_restored``); a renamed or
-    re-purposed item is ``UNSUPPORTED``."""
+    """``(ItemId, TrainerItemId)`` per item. Vanilla: the held item by
+    ``effect_map.held_item_ids``, the bag item by name. Kaizo (``vanilla`` given): vanilla's
+    ids of the slot, only when the slot keeps vanilla's name (up to spelling) and hold effect
+    (and, for the bag item, vanilla's ``hp_restored``); a renamed or re-purposed item is
+    ``UNSUPPORTED``. The hold param is the game's own (``item_param``)."""
     if vanilla is None:
-        hold = [int(DECOMP_ITEM_TO_ID.get(i["name"], ItemId.UNSUPPORTED)) for i in items]
+        hold = [int(i) for i in held_item_ids(items)]
         bag = [
             int(DECOMP_TRAINER_ITEM_TO_ID.get(i["name"], TrainerItemId.UNSUPPORTED)) for i in items
         ]
@@ -308,12 +369,12 @@ def _item_maps(items: list[dict], vanilla: list[dict] | None) -> tuple[list[int]
     if len(vanilla) != len(items):
         raise BuildError(f"items: {len(items)} rows, vanilla has {len(vanilla)}")
     hold, bag = [], []
-    for item, van in zip(items, vanilla, strict=True):
+    vanilla_held = held_item_ids(vanilla)
+    for item, van, held in zip(items, vanilla, vanilla_held, strict=True):
         same_name = spelling(item["name"]) == spelling(van["name"])
         same_hold = same_name and item["hold_effect"] == van["hold_effect"]
         # A bag item's effect also rests on its restore amount (Potion's 20, ids.py).
         same_bag = same_hold and item.get("hp_restored") == van.get("hp_restored")
-        held = DECOMP_ITEM_TO_ID.get(van["name"], ItemId.UNSUPPORTED)
         used = DECOMP_TRAINER_ITEM_TO_ID.get(van["name"], TrainerItemId.UNSUPPORTED)
         hold.append(int(held if same_hold else ItemId.UNSUPPORTED))
         bag.append(int(used if same_bag else TrainerItemId.UNSUPPORTED))
@@ -345,6 +406,18 @@ def _kaizo_rom_changes(inter: Path, rom_diff: Path = ROM_DIFF) -> tuple[frozense
     effects = frozenset(
         i for (narc, i), (status, _) in members.items() if narc == BE_SEQ and status != "modelled"
     )
+    modelled = {
+        i for (narc, i), (status, _) in members.items() if narc == BE_SEQ and status == "modelled"
+    }
+    # A modelled member needs its KAIZO_EFFECTS entry. Against the real rom_diff.toml the match
+    # is exact (B9-15): an entry with no modelled member would override the vanilla mapping of an
+    # unchanged script. A test's own small diff models a subset only, so it gets the subset check.
+    exact = Path(rom_diff).resolve() == Path(ROM_DIFF).resolve()
+    if not modelled <= set(KAIZO_EFFECTS) or (exact and modelled != set(KAIZO_EFFECTS)):
+        raise BuildError(
+            f"modelled be_seq members {sorted(modelled)} != effect_map.KAIZO_EFFECTS "
+            f"{sorted(KAIZO_EFFECTS)}"
+        )
     unknown = sum(st == "unknown" for st, _ in code.values())
     unknown += sum(st == "unknown" for st, _ in members.values())
     return effects, unknown
@@ -520,11 +593,12 @@ def build_arrays(inter: Path, game: str = "platinum_us") -> tuple[dict[str, np.n
 
     learnset_moves, learnset_levels = _learnset_grid(level_learnsets, len(species))
     hm_moves = set(tm_moves[NUM_TMS:])
-    effects = [_move_effect(m, changed_effects) for m in moves]
+    effects = [_move_effect(m, changed_effects, kaizo) for m in moves]
     item_ids, trainer_item_ids = _item_maps(items, vanilla_items)
+    item_ids = _pinch_divisor_ok(items, item_ids)
     supported_item = [e not in (ItemId.UNSUPPORTED, ItemId.NONE) for e in item_ids]
     item_params = [
-        [i["hold_param"] if ok else 0, _resisted_type(i, e)]
+        [i["hold_param"] if ok else 0, _item_type(i, e)]
         for i, ok, e in zip(items, supported_item, item_ids, strict=True)
     ]
 

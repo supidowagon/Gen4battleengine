@@ -258,14 +258,18 @@ def test_a_seen_slot_and_the_pinned_slot_are_masked(tables, names):
 
 
 @pytest.mark.parametrize("game", ["tables", "kaizo_tables"])
-@pytest.mark.parametrize("move", ["Sleep Talk", "Assist"])
-def test_moves_that_read_the_whole_move_list_are_unsupported(request, game, move):
+@pytest.mark.parametrize(
+    "move, effect", [("Sleep Talk", EffectId.SLEEP_TALK), ("Assist", EffectId.UNSUPPORTED)]
+)
+def test_moves_that_read_the_whole_move_list(request, game, move, effect):
     # Sleep Talk (BtlCmd_TrySleepTalk, battle_script.c:4907) and Assist (BtlCmd_TryAssist,
     # :6405) read the move list when they run, which a deferred learn could change (design
-    # §3.3 (a)): they stay UNSUPPORTED, so coverage refuses them, also as learnable moves.
+    # §3.3 (a)). Sleep Talk is modelled since E2 batch 5 (B5-n): order.invoked_move reads the
+    # user's ``moves`` at the use, the list the decomp reads then; Assist (the party's lists)
+    # stays UNSUPPORTED, so coverage refuses it, also as a learnable move.
     tables = request.getfixturevalue(game)
     names = request.getfixturevalue("names" if game == "tables" else "kaizo_names")
-    assert int(tables.move_effect[names.move(move)]) == EffectId.UNSUPPORTED
+    assert int(tables.move_effect[names.move(move)]) == effect
 
 
 def test_kaizo_row_359_scans_to_its_last_column(kaizo_tables, kaizo_names):
