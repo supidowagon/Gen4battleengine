@@ -90,6 +90,7 @@ class RefSide:
     imprison: int  # MOVE_EFFECT_IMPRISON
     imprisoned: int  # MOVE_EFFECT_IMPRISONED
     roosting: int  # turnFlags.roosting while it can be read (engine.state docstring)
+    can_unburden: int  # MoveEffectsData.canUnburden
     spikes: int
     toxic_spikes: int
     stealth_rock: int

@@ -402,7 +402,7 @@ three structs has a row.
 | `MoveEffectsData.magnetRiseTurns` | — | later (M6) |
 | `MoveEffectsData.healBlockTurns` | — | later (M6) |
 | `MoveEffectsData.embargoTurns` | — | later (M6) |
-| `MoveEffectsData.canUnburden` | — | later (M6) |
+| `MoveEffectsData.canUnburden` | `can_unburden` | mapped |
 | `MoveEffectsData.metronomeTurns` | — | later (M6) |
 | `MoveEffectsData.micleBerry` | — | later (M6) |
 | `MoveEffectsData.custapBerry` | — | later (M6) |

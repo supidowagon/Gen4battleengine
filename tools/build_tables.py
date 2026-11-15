@@ -105,6 +105,7 @@ from nuzline.data.games import GAMES, KAIZO, VANILLA, get_game
 from nuzline.data.tables import MANIFEST_VERSION
 from nuzline.engine.ids import AbilityId, EffectId, ItemId, MoveFlag, MoveTarget, TrainerItemId
 from tools.effect_map import (
+    BLIZZARD_EFFECT,
     CERTAIN_SECONDARY_EFFECTS,
     CRIT_HOLD_EFFECTS,
     DECOMP_ABILITY_TO_ID,
@@ -120,6 +121,7 @@ from tools.effect_map import (
     SLEEP_TALK_EXCLUDED_MOVES,
     TYPE_BOOST_HOLD_EFFECTS,
     TYPE_CHART_STATUS_MOVES,
+    THUNDER_EFFECT,
     UNSUPPORTED_MOVES,
     WEATHER_ROCK_HOLD_EFFECTS,
     held_item_ids,
@@ -195,6 +197,10 @@ def _move_flags(move: dict, move_id: int, lists: dict[str, list[int]]) -> int:
         bits |= MoveFlag.NO_SLEEP_TALK
     if move_id in METRONOME_EXCLUDED_MOVES:
         bits |= MoveFlag.NO_METRONOME
+    if move.get("effect") == THUNDER_EFFECT:
+        bits |= MoveFlag.THUNDER
+    if move.get("effect") == BLIZZARD_EFFECT:
+        bits |= MoveFlag.BLIZZARD
     return int(bits)
 
 

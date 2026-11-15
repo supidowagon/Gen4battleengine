@@ -362,6 +362,17 @@ class AbilityId(IntEnum):
     FILTER = 57
     MAGIC_GUARD = 58
     SNIPER = 59
+    # E2 batch 9 (rulings B9-n). Speed (order.effective_speed, BattleSystem_CompareBattlerSpeed):
+    # Chlorophyll in sun (battle_lib.c:1228-1238), Unburden with no item after it held one
+    # (:1268-1272; ``BattleState.can_unburden``); the damage formula (damage._pre_random,
+    # BattleSystem_CalcMoveDamage): Huge Power / Pure Power (:6706-6708), Swarm (:6834-6838),
+    # Flower Gift in sun (:6930-6941).
+    CHLOROPHYLL = 60
+    HUGE_POWER = 61
+    PURE_POWER = 62
+    SWARM = 63
+    UNBURDEN = 64
+    FLOWER_GIFT = 65
 
 
 # The decomp ability id of every supported ``AbilityId`` (generated/abilities.txt line N is id
@@ -429,6 +440,12 @@ ABILITY_DECOMP_IDS = {
     AbilityId.FILTER: 111,
     AbilityId.MAGIC_GUARD: 98,
     AbilityId.SNIPER: 97,
+    AbilityId.CHLOROPHYLL: 34,
+    AbilityId.HUGE_POWER: 37,
+    AbilityId.PURE_POWER: 74,
+    AbilityId.SWARM: 68,
+    AbilityId.UNBURDEN: 84,
+    AbilityId.FLOWER_GIFT: 122,
 }
 
 # ChooseTraceTarget (battle_lib.c:7750-7775) never picks a battler whose ``BattleMon.ability``
@@ -677,6 +694,11 @@ class MoveFlag(IntFlag):
     # to its 0xFFFF delimiter (battle_lib.c:7152-7178, Move_CanBeMetronomed :7204-7218).
     NO_SLEEP_TALK = 32
     NO_METRONOME = 64
+    # E2 batch 9 (B9-1): the move's decomp effect is BATTLE_EFFECT_THUNDER (hitRate 50 in sun,
+    # bcp.c:2915-2917; MOVE_STATUS_MISSED cleared in rain, :3025-3027) or BATTLE_EFFECT_BLIZZARD
+    # (cleared in hail, :3029-3031), all inside NO_CLOUD_NINE.
+    THUNDER = 128
+    BLIZZARD = 256
 
 
 class MoveTarget(IntEnum):

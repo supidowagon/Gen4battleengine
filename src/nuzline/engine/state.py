@@ -97,6 +97,15 @@ Encodings:
   (bcp.c:1843-1856). It is kept where it can still be read: at a pause at a party list and while
   a replacement is pending (the AI's ``BattleAI_PostKOSwitchIn`` walks the type chart, whose
   ``BasicTypeMulApplies`` reads it, battle_lib.c:2540); else 0.
+* ``can_unburden`` is the active battler's ``MoveEffectsData.canUnburden`` (battle_mon.h:31,
+  E2 batch 9): ``BattleSystem_RecoverStatusByAbility`` sets it for an Unburden holder
+  (``Battler_Ability``) holding an item (battle_lib.c:4433-4437), at every move end for the
+  attacker and the defender (bcp.c:3965-3967) and in the switch-in checks for every battler
+  (battle_lib.c:4135-4145); ``BattleSystem_InitBattleMon`` sets it for any holder of an item
+  (:160-166), which matters only at the battle start (a switch's UpdateAfterSwitch zeroes the
+  whole MoveEffectsData after it, :2097-2101, Baton Pass included), where the switch-in check
+  sets it for the Unburden holders it can concern. Nothing clears it but a switch (a volatile).
+  ``order.effective_speed`` doubles an Unburden holder with it and no item (:1268-1272).
 * ``trainer_item_count`` is ``aiContext.trainerItemCounts``: the bag's size at battle
   start, never decremented.
 * ``terrain`` is ``BattleSystem.terrain``: the battle terrain, a decomp ``TERRAIN_*`` id
@@ -229,6 +238,7 @@ class BattleState(NamedTuple):
     imprison: jnp.ndarray  # int8, MOVE_EFFECT_IMPRISON (the user of Imprison)
     imprisoned: jnp.ndarray  # int8, MOVE_EFFECT_IMPRISONED (a foe of an Imprison user)
     roosting: jnp.ndarray  # int8, turnFlags.roosting, kept only while it can be read
+    can_unburden: jnp.ndarray  # int8, MoveEffectsData.canUnburden
     # per side [2]
     spikes: jnp.ndarray  # int8, layers
     toxic_spikes: jnp.ndarray  # int8, layers
@@ -401,6 +411,7 @@ VOLATILE_FIELDS = (
     "perish_song_turns",
     "yawn",
     "curse",
+    "can_unburden",
 )
 # Baton Pass keeps these of ``VOLATILE_FIELDS`` (and the stat stages): BattleSystem_UpdateAfterSwitch
 # keeps statusVolatile & VOLATILE_CONDITION_BATON_PASSED (battle_lib.c:2078; condition.h:72-76:
@@ -491,6 +502,7 @@ LAYOUT: dict[str, tuple[tuple[int, ...], type]] = {
     "imprison": (_SIDE, np.int8),
     "imprisoned": (_SIDE, np.int8),
     "roosting": (_SIDE, np.int8),
+    "can_unburden": (_SIDE, np.int8),
     "spikes": (_SIDE, np.int8),
     "toxic_spikes": (_SIDE, np.int8),
     "stealth_rock": (_SIDE, np.int8),

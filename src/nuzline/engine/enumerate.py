@@ -185,6 +185,7 @@ from nuzline.engine.damage import (
     entry_ability,
     hit_damage_table,
     move_type_of,
+    pinch_ability,
     weather_suppressed,
 )
 from nuzline.engine.effects import can_have_status, ingrain_anchors, protect_blocks
@@ -400,6 +401,7 @@ def _end_speeds(
     lock_free,
     weather_free=False,
     tailwind_free=False,
+    unburden_free=False,
 ):
     """``(int32[3 * (27 + 4 * SLOTS)], bool[...])``: the effective speeds ``side`` can have
     after the actions (``step.end_of_turn_order`` on the post-action state, step.py:1251-1261)
@@ -418,13 +420,16 @@ def _end_speeds(
     ``BattleSystem_CompareBattlerSpeed`` doubles Swift Swim in rain only
     ``if (NO_CLOUD_NINE)`` (battle_lib.c:1228-1237; include/battle/common.h:63-64). Where
     ``weather_free`` (a weather move, a switch-in weather ability or a drag can change the
-    weather this turn), each grid point is also taken in rain without the lock and with no
-    rain (the lock-on point's speed).
+    weather this turn), each grid point is also taken in rain (sun for a Chlorophyll holder,
+    the same line, E2 batch 9) without the lock and with no such weather (the lock-on point's
+    speed).
 
     Quick Feet (:1257-1261) reads any status: for a holder the grid's paralyzed points stand
     for every status (x15/10, no quartering), and the caller frees them
     (``para_free``). Where ``tailwind_free`` (the side's own Tailwind can blow this turn,
-    effects._side_layers), every point is also taken with Tailwind's x2 (battle_lib.c:1274-1276)."""
+    effects._side_layers), every point is also taken with Tailwind's x2 (battle_lib.c:1274-1276).
+    Where ``unburden_free`` (an Unburden holder of the side can be on the field having lost its
+    item, E2 batch 9), every point is also taken with Unburden's x2 (:1268-1272)."""
     switching = is_switch(actions[side])
     mon = jnp.where(switching, actions[side] - MOVE_ACTIONS, state.active[side]).astype(
         state.active.dtype
@@ -479,18 +484,32 @@ def _end_speeds(
         ]
     )
 
-    # Tailwind: 0 = as on the field, 1 = blowing (its own move this turn).
+    # Bit 0: Tailwind as on the field, or blowing (its own move this turn); bit 1: Unburden as on
+    # the field, or the holder unburdened (no item, canUnburden).
     n = stages.shape[0]
-    winds = jnp.repeat(jnp.arange(2), n)
-    mons, stages, paras, locks = (jnp.tile(x, 2) for x in (mons, stages, paras, locks))
-    possible = jnp.concatenate([possible, possible & jnp.asarray(tailwind_free, bool)])
+    winds = jnp.repeat(jnp.arange(4), n)
+    mons, stages, paras, locks = (jnp.tile(x, 4) for x in (mons, stages, paras, locks))
+    wind_ok = jnp.asarray(tailwind_free, bool)
+    unburden_ok = jnp.asarray(unburden_free, bool)
+    possible = jnp.concatenate(
+        [possible, possible & wind_ok, possible & unburden_ok, possible & wind_ok & unburden_ok]
+    )
 
     def speed(mon, stage, para, lock, wind):
+        unburdened = (wind & 2) != 0
         s = state._replace(
             tailwind=state.tailwind.at[side].set(
-                jnp.where(wind == 1, TAILWIND_TURNS, state.tailwind[side]).astype(
+                jnp.where((wind & 1) != 0, TAILWIND_TURNS, state.tailwind[side]).astype(
                     state.tailwind.dtype
                 )
+            ),
+            can_unburden=state.can_unburden.at[side].set(
+                jnp.where(unburdened, 1, state.can_unburden[side]).astype(
+                    state.can_unburden.dtype
+                )
+            ),
+            item=state.item.at[side, mon].set(
+                jnp.where(unburdened, 0, state.item[side, mon]).astype(state.item.dtype)
             ),
         )
         s = s._replace(
@@ -501,7 +520,9 @@ def _end_speeds(
             ),
         )
         suppressed = jnp.where(lock == 0, weather_suppressed(tables, s), lock == 1)
-        weather = jnp.where(lock == 3, Weather.RAIN, s.weather).astype(s.weather.dtype)
+        chlorophyll = s.ability[side, mon] == AbilityId.CHLOROPHYLL
+        doubling = jnp.where(chlorophyll, Weather.SUN, Weather.RAIN)
+        weather = jnp.where(lock == 3, doubling, s.weather).astype(s.weather.dtype)
         return effective_speed(tables, s, side, suppressed, weather)
 
     return jax.vmap(speed)(mons, stages, paras, locks, winds), possible
@@ -752,12 +773,21 @@ INPUT_NEUTRAL_ABILITIES = (
     AbilityId.FILTER,
     AbilityId.SNIPER,
     AbilityId.MAGIC_GUARD,
+    # E2 batch 9. Speed only (Chlorophyll, Unburden); a fixed Attack factor of the hit's own
+    # attacker (Huge Power, Pure Power); Flower Gift reads the weather (its clauses) and its
+    # holder's HP > 0 (a fainted holder has no hit to read it).
+    AbilityId.CHLOROPHYLL,
+    AbilityId.UNBURDEN,
+    AbilityId.HUGE_POWER,
+    AbilityId.PURE_POWER,
+    AbilityId.FLOWER_GIFT,
 )
 INPUT_CLAUSE_ABILITIES = (
     AbilityId.GUTS,  # status clause
     AbilityId.BLAZE,  # HP clause (pinch power)
     AbilityId.TORRENT,
     AbilityId.OVERGROW,
+    AbilityId.SWARM,
     AbilityId.FLAME_BODY,  # contact clause (burn)
     AbilityId.STATIC,  # contact clause (a status under Guts)
     AbilityId.POISON_POINT,
@@ -1040,12 +1070,7 @@ def damage_inputs_can_change(
     burnable = physical & (ability != AbilityId.GUTS)  # a burn halves it (:6978)
     attack_stat = jnp.where(physical, Stat.ATK, Stat.SPA)
     defense_stat = jnp.where(physical, Stat.DEF, Stat.SPD)
-    pinch_ability = (
-        ((move_type == Type.GRASS) & (ability == AbilityId.OVERGROW))
-        | ((move_type == Type.FIRE) & (ability == AbilityId.BLAZE))
-        | ((move_type == Type.WATER) & (ability == AbilityId.TORRENT))
-    )
-    hp_sensitive = (effect == _E.FLAIL) | pinch_ability
+    hp_sensitive = (effect == _E.FLAIL) | pinch_ability(move_type, ability)
 
     held = state.item[sides, mons]
     pinch_stat = tables.item_param[held, 1]
@@ -1474,6 +1499,13 @@ def outcome_laws(
             weather_free,
             # The side's own Tailwind when none blows yet (effects._side_layers).
             uses_move[side] & (effect[side] == _E.TAILWIND) & (state.tailwind[side] == 0),
+            # A living Unburden holder of the side (over-approximate: it may lose its item).
+            live
+            & jnp.any(
+                (state.ability[side] == AbilityId.UNBURDEN)
+                & (state.species[side] != 0)
+                & (state.hp[side] > 0)
+            ),
         )
         for side in (0, 1)
     ]

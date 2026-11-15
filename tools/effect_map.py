@@ -212,9 +212,21 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     269: ("BATTLE_EFFECT_RECOIL_HALF", _E.RECOIL, (50, 0, 0)),
     271: ("BATTLE_EFFECT_LOWER_SP_DEF_2_HIT", _E.SECONDARY_STAT_FOE, (_SPD, -2, 0)),
     # effect_script_0275.s -> subscript_paralyze_or_flinch.s: a paralysis roll, then a flinch
-    # roll (engine/effects.py ``_fang``). Fire Fang (273) and Ice Fang (274) call other
-    # subscripts and stay unmapped until those are read (docs/kaizo/k3b2-rules.md §11 item 7).
+    # roll (engine/effects.py ``_fang``).
     275: ("BATTLE_EFFECT_FLINCH_PARALYZE_HIT", _E.FANG_PARALYZE_FLINCH, (Status.PARALYSIS, 0, 0)),
+    # E2 batch 9 (B9-2): effect_script_0273.s / _0274.s are _0275.s with
+    # subscript_burn_or_flinch.s / subscript_freeze_or_flinch.s, which are
+    # subscript_paralyze_or_flinch.s with BATTLE_SUBSCRIPT_BURN / _FREEZE in place of _PARALYZE:
+    # the same family with its status in param 0 (Fire Fang; Ice Fang, Kaizo's Avalanche).
+    273: ("BATTLE_EFFECT_FLINCH_BURN_HIT", _E.FANG_PARALYZE_FLINCH, (Status.BURN, 0, 0)),
+    274: ("BATTLE_EFFECT_FLINCH_FREEZE_HIT", _E.FANG_PARALYZE_FLINCH, (Status.FREEZE, 0, 0)),
+    # Thunder (effect_script_0152.s) and Blizzard (_0260.s): a probabilistic TO_DEFENDER
+    # paralysis / freeze, as effects 6 / 5; their weather accuracy is by effect id in
+    # CheckMoveHitAccuracy / CheckMoveHitOverrides (bcp.c:2915-2917, :3024-3031), carried as
+    # MoveFlag.THUNDER / BLIZZARD (tools/build_tables.py); Thunder's SYSCTL_HIT_DURING_FLY only
+    # matters against Fly / Bounce, unsupported moves (B9-1).
+    152: ("BATTLE_EFFECT_THUNDER", _E.SECONDARY_STATUS, (Status.PARALYSIS, 0, 0)),
+    260: ("BATTLE_EFFECT_BLIZZARD", _E.SECONDARY_STATUS, (Status.FREEZE, 0, 0)),
     # effect_script_0122.s: BtlCmd_Present (battle_script.c:5789-5806) draws the power or the
     # heal path (engine/effects.py ``_present``, damage.PRESENT_POWER).
     122: ("BATTLE_EFFECT_RANDOM_POWER_MAYBE_HEAL", _E.PRESENT, (0, 0, 0)),
@@ -361,6 +373,10 @@ TYPE_CHART_STATUS_MOVES: frozenset[str] = frozenset({"Thunder Wave"})
 INVOKER_MOVES: tuple[int, ...] = (0, 214, 383, 274, 382, 119, 118)
 # BtlCmd_TrySleepTalk's own list (battle_script.c:4918-4922): Focus Punch, Uproar, Chatter.
 SLEEP_TALK_EXCLUDED_MOVES: tuple[int, ...] = (264, 253, 448)
+# The weather-accuracy effects of CheckMoveHitAccuracy / CheckMoveHitOverrides (bcp.c:2915-2917,
+# :3024-3031): decomp effect id -> its MoveFlag (tools/build_tables.py ``_move_flags``).
+THUNDER_EFFECT = 152  # BATTLE_EFFECT_THUNDER
+BLIZZARD_EFFECT = 260  # BATTLE_EFFECT_BLIZZARD
 # Move_IsMultiTurn (battle_lib.c:2975-2992), by decomp effect id: BIDE, CHARGE_TURN_HIGH_CRIT,
 # CHARGE_TURN_HIGH_CRIT_FLINCH, CHARGE_TURN_DEF_UP, SKIP_CHARGE_TURN_IN_SUN, FLY, DIVE, DIG,
 # BOUNCE, SHADOW_FORCE (generated/move_battle_effects.txt).
@@ -440,6 +456,13 @@ DECOMP_ABILITY_TO_ID: dict[str, AbilityId] = {
     "Filter": AbilityId.FILTER,
     "Magic Guard": AbilityId.MAGIC_GUARD,
     "Sniper": AbilityId.SNIPER,
+    # E2 batch 9.
+    "Chlorophyll": AbilityId.CHLOROPHYLL,
+    "Huge Power": AbilityId.HUGE_POWER,
+    "Pure Power": AbilityId.PURE_POWER,
+    "Swarm": AbilityId.SWARM,
+    "Unburden": AbilityId.UNBURDEN,
+    "Flower Gift": AbilityId.FLOWER_GIFT,
 }
 
 DECOMP_ITEM_TO_ID: dict[str, ItemId] = {

@@ -1113,3 +1113,29 @@ Rules left out because another mechanic is missing; each closes with the mechani
   AI picks inside jitted playouts (most of them) are traced and unchecked (tests/ai_legality.py
   says so). `test_the_property_reaches_unrefused_states` checks one found state (Ingrain and
   Mean Look on the AI's side); its docstring now says that.
+- B9-1 Thunder (effect 152) and Blizzard (260) are a probabilistic TO_DEFENDER paralysis /
+  freeze (effect_script_0152.s, _0260.s: `SECONDARY_STATUS`); their weather accuracy is by
+  effect id: inside NO_CLOUD_NINE, Thunder's hitRate is 50 in sun before the stage scaling
+  (bcp.c:2915-2917), and CheckMoveHitOverrides clears the miss of Thunder in rain and Blizzard in
+  hail after No Guard / Lock-On (:3023-3031). Carried as `MoveFlag.THUNDER` / `BLIZZARD`, set by
+  build_tables from the move's decomp effect (Kaizo's Ice Ball and Sheer Cold have effect 260).
+  Thunder's SYSCTL_HIT_DURING_FLY matters only against Fly / Bounce (unsupported). The hit laws
+  take the weather variants they already had (the foe's weather move, a switch-in ability).
+- B9-2 Fire Fang (273) and Ice Fang (274; Kaizo's Avalanche) are Thunder Fang's family:
+  subscript_burn_or_flinch.s / subscript_freeze_or_flinch.s are subscript_paralyze_or_flinch.s
+  with BATTLE_SUBSCRIPT_BURN / _FREEZE (`FANG_PARALYZE_FLINCH` with the status in param 0).
+  Fire Fang's Wonder Guard bypass (battle_lib.c:7600) waits for Wonder Guard (Owed).
+- B9-3 Speed and damage abilities. Chlorophyll doubles speed in sun beside Swift Swim
+  (battle_lib.c:1228-1238). Unburden doubles it with canUnburden and no item (:1268-1272);
+  `BattleState.can_unburden` is set by RecoverStatusByAbility's Unburden case for a holder with
+  an item (:4433-4437: every move end for attacker and defender, every switch-in check for every
+  battler, :4135-4145) and by InitBattleMon at the battle start (:160-166), zeroed by
+  UpdateAfterSwitch (:2097-2101, Baton Pass too). Huge Power / Pure Power double attackStat
+  before the held items (:6706-6708; so x2 then Choice Band's x1.5). Swarm is Blaze's line for
+  Bug (:6834-6838). Flower Gift in sun (inside NO_CLOUD_NINE, the self-hit passes no weather):
+  a living holder on the attacker's side gives attackStat x15/10, on the defender's side
+  spDefenseStat x15/10 unless the attacker has Mold Breaker (:6930-6941,
+  COUNT_ALIVE_BATTLERS_OUR_SIDE :2886-2893); Cherrim's form change (:6366-6392) writes only
+  formNum, which only the display reads (battle_controller.c sprite messages). The end-of-turn speed grid
+  (`enumerate._end_speeds`) takes Chlorophyll's sun beside Swift Swim's rain and an Unburden
+  axis.

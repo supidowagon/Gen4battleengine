@@ -51,6 +51,7 @@ from nuzline.engine.ids import (
     AbilityId,
     EffectId,
     ItemId,
+    MoveFlag,
     Stat,
     Weather,
 )
@@ -230,12 +231,7 @@ def _rate(
     total = (
         jnp.clip(6 + eva + acc, 0, 12) if not grid else jnp.clip(jnp.asarray(total, _I32), 0, 12)
     )
-    rate = accuracy * _ACC_NUM[total] // _ACC_DEN[total]
-    # Compoundeyes (battle_controller_player.c:2922-2924), right after the stage scaling.
-    rate = jnp.where(a_ability == AbilityId.COMPOUNDEYES, rate * 130 // 100, rate)
-    # NO_CLOUD_NINE (:2926), with the battlers on the field when the move runs: Sand Veil
-    # in sand and Snow Cloak in hail (Battler_IgnorableAbility: Mold Breaker pierces them,
-    # :2927, :2931) x80/100, then deep fog x6/10 (:2934).
+    # NO_CLOUD_NINE (:2915, :2926, :3023), with the battlers on the field when the move runs.
     on_field = state.active.at[target].set(target_mon.astype(state.active.dtype))
     # A Selfdestruct / Explosion user's HP is already 0 here (effect_script_0007.s runs
     # before the check): its own Cloud Nine / Air Lock no longer counts.
@@ -246,6 +242,15 @@ def _rate(
     if grid:  # the grid's weather is the one at the check (none for a lock)
         suppressed = jnp.asarray(False)
     weather = jnp.where(suppressed, Weather.NONE, weather)
+    flags = tables.move_flags[move]
+    thunder = (flags & MoveFlag.THUNDER) != 0
+    # :2915-2917 Thunder in sun: hitRate = 50, before the stage scaling (B9-1).
+    base = jnp.where(thunder & (weather == Weather.SUN), 50, accuracy)
+    rate = base * _ACC_NUM[total] // _ACC_DEN[total]
+    # Compoundeyes (battle_controller_player.c:2922-2924), right after the stage scaling.
+    rate = jnp.where(a_ability == AbilityId.COMPOUNDEYES, rate * 130 // 100, rate)
+    # Sand Veil in sand and Snow Cloak in hail (Battler_IgnorableAbility: Mold Breaker pierces
+    # them, :2927, :2931) x80/100, then deep fog x6/10 (:2934).
     veiled = ((weather == Weather.SANDSTORM) & (d_ability == AbilityId.SAND_VEIL)) | (
         (weather == Weather.HAIL) & (d_ability == AbilityId.SNOW_CLOAK)
     )
@@ -286,6 +291,12 @@ def _rate(
         & (state.lock_on_target[target] == 1 + jnp.asarray(side, _I32))
     )
     no_guard = no_guard | locked
+    # :3023-3031 (after No Guard / Lock-On, inside NO_CLOUD_NINE): Thunder in rain, Blizzard in
+    # hail clear MOVE_STATUS_MISSED (B9-1).
+    weather_sure = (thunder & (weather == Weather.RAIN)) | (
+        ((flags & MoveFlag.BLIZZARD) != 0) & (weather == Weather.HAIL)
+    )
+    no_guard = no_guard | weather_sure
     # An OHKO move (BtlCmd_TryOHKOMove, battle_script.c:4334-4386) sets
     # SYSCTL_NONSTANDARD_ACC_CHECK (:4338), so none of the above applies (bcp.c:2911-2913, :3016):
     # it hits when RandNext() % 100 < accuracy + (attacker level - defender level) and the

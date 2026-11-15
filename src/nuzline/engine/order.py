@@ -301,12 +301,11 @@ def effective_speed(
     stage = state.stages[side, Stat.SPE].astype(_I32)
     stage = jnp.where(ability == AbilityId.SIMPLE, simple_stage(stage), stage)
     speed = apply_stage(state.stats[side, mon, Stat.SPE - 1].astype(_I32), stage)
-    # :1228-1238 Swift Swim (Battler_Ability) in rain, inside NO_CLOUD_NINE.
+    # :1228-1238 Swift Swim in rain, Chlorophyll in sun (Battler_Ability), inside NO_CLOUD_NINE.
     swim = (
-        (ability == AbilityId.SWIFT_SWIM)
-        & (weather == Weather.RAIN)
-        & ~jnp.asarray(suppressed, bool)
-    )
+        ((ability == AbilityId.SWIFT_SWIM) & (weather == Weather.RAIN))
+        | ((ability == AbilityId.CHLOROPHYLL) & (weather == Weather.SUN))
+    ) & ~jnp.asarray(suppressed, bool)
     speed = jnp.where(swim, speed * 2, speed)
     # :1248 Choice Scarf (Battler_HeldItemEffect), after the speed-halving items (:1240-1246,
     # unsupported) and before paralysis.
@@ -321,6 +320,14 @@ def effective_speed(
         speed * 15 // 10,
         jnp.where(status == Status.PARALYSIS, speed // 4, speed),
     )
+    # :1268-1272 Unburden (Battler_Ability) with canUnburden and no held item: x2 (Slow Start,
+    # just before, is unsupported); then Tailwind (:1274-1276).
+    unburdened = (
+        (ability == AbilityId.UNBURDEN)
+        & (state.can_unburden[side] != 0)
+        & (state.item[side, mon] == 0)
+    )
+    speed = jnp.where(unburdened, speed * 2, speed)
     return jnp.where(state.tailwind[side] != 0, speed * 2, speed)
 
 

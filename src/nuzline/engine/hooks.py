@@ -217,6 +217,21 @@ def weather_ability(state: BattleState, side, cond=True) -> BattleState:
     )
 
 
+def arm_unburden(state: BattleState, side, cond=True) -> BattleState:
+    """``BattleSystem_RecoverStatusByAbility``'s ``ABILITY_UNBURDEN`` case (battle_lib.c:
+    4433-4437) for ``side``'s active battler where ``cond``: an Unburden holder
+    (``Battler_Ability``) holding an item gets ``canUnburden`` (no HP test, no result)."""
+    side = jnp.asarray(side, _I32)
+    mon = state.active[side]
+    on = (
+        jnp.asarray(cond)
+        & (state.ability[side, mon] == AbilityId.UNBURDEN)
+        & (state.item[side, mon] != 0)
+    )
+    value = jnp.where(on, 1, state.can_unburden[side]).astype(state.can_unburden.dtype)
+    return state._replace(can_unburden=state.can_unburden.at[side].set(value))
+
+
 def recover_status_by_ability(state: BattleState, side, cond=True) -> BattleState:
     """``BattleSystem_RecoverStatusByAbility`` (battle_lib.c:4378) for ``side``'s active
     Pokemon, where ``cond``: an asleep Insomnia holder (:4404) or a paralyzed Limber holder
@@ -228,6 +243,7 @@ def recover_status_by_ability(state: BattleState, side, cond=True) -> BattleStat
     every battler on a switch-in (``SWITCH_IN_CHECK_STATE_FORBIDDEN_STATUS``,
     battle_lib.c:4135-4145)."""
     side = jnp.asarray(side, _I32)
+    state = arm_unburden(state, side, cond)
     mon = state.active[side]
     ability, status = state.ability[side, mon], state.status[side, mon]
     woke = (
@@ -504,6 +520,9 @@ def switch_in_effects(tables: Tables, state: BattleState, side) -> BattleState:
     state = reveal_ability(state, foe, other, SWITCH_IN, traced)
     state = recover_status_by_ability(state, side)
     state = recover_status_by_ability(state, foe, traced)
+    # SWITCH_IN_CHECK_STATE_FORBIDDEN_STATUS runs for every battler (battle_lib.c:4135-4145):
+    # the foe's Unburden case too, traced or not (its status cure cannot newly apply untraced).
+    state = arm_unburden(state, foe)
     state = after_damage_items(tables, state, side)
     return after_damage_items(tables, state, foe)
 

@@ -512,12 +512,11 @@ def _effective_speed(tables, s: RefState, side: int) -> int:
     if mon.ability == AbilityId.SIMPLE:  # CompareSpeed_ApplySimple, lib.c:1222
         stage = _simple(stage)
     speed = _apply_stage(mon.stats[Stat.SPE - 1], stage)  # lib.c:1225
-    # lib.c:1228-1238: Swift Swim in rain, inside NO_CLOUD_NINE.
-    if (
-        mon.ability == AbilityId.SWIFT_SWIM
-        and s.weather == Weather.RAIN
-        and not _weather_suppressed(tables, s)
-    ):
+    # lib.c:1228-1238: Swift Swim in rain, Chlorophyll in sun, inside NO_CLOUD_NINE.
+    doubled = (mon.ability == AbilityId.SWIFT_SWIM and s.weather == Weather.RAIN) or (
+        mon.ability == AbilityId.CHLOROPHYLL and s.weather == Weather.SUN
+    )
+    if doubled and not _weather_suppressed(tables, s):
         speed *= 2
     # lib.c:1248: Choice Scarf (the speed-halving items before it are unsupported).
     if _item_effect(tables, mon) == ItemId.CHOICE_SCARF:
@@ -527,6 +526,9 @@ def _effective_speed(tables, s: RefState, side: int) -> int:
         speed = speed * 15 // 10
     elif mon.status == Status.PARALYSIS:
         speed //= 4
+    # lib.c:1268-1272: Unburden with canUnburden and no item.
+    if mon.ability == AbilityId.UNBURDEN and s.sides[side].can_unburden and not mon.item:
+        speed *= 2
     if s.sides[side].tailwind:  # lib.c:1274
         speed *= 2
     return speed
@@ -649,6 +651,9 @@ def _calc_move_damage(
         power = power * 15 // 10
     move_class = _t(tables, "move_category", move)
 
+    # lib.c:6706-6708 Huge Power / Pure Power: attackStat x2, before the items.
+    if a_ability in (AbilityId.HUGE_POWER, AbilityId.PURE_POWER):
+        attack *= 2
     # lib.c:6716-6783: the held items (BattleSystem_GetItemData of Battler_HeldItem,
     # lib.c:6662-6668), the attacker's and the defender's; movePower and the stats are u16,
     # which no value here reaches.
@@ -710,6 +715,8 @@ def _calc_move_damage(
         power = power * 150 // 100
     if move_type == Type.WATER and a_ability == AbilityId.TORRENT and pinch:
         power = power * 150 // 100
+    if move_type == Type.BUG and a_ability == AbilityId.SWARM and pinch:  # lib.c:6834-6838
+        power = power * 150 // 100
     # lib.c:6845-6848 Dry Skin (ignorable): Fire power x125/100.
     if d_ability == AbilityId.DRY_SKIN and move_type == Type.FIRE:
         power = power * 125 // 100
@@ -738,6 +745,17 @@ def _calc_move_damage(
         sp_attack = sp_attack * 15 // 10
     # lib.c:6926 sandstorm boosts a Rock-type defender's SpD.
     if weather == Weather.SANDSTORM and Type.ROCK in dfn.types:
+        sp_defense = sp_defense * 15 // 10
+    # lib.c:6930-6941 Flower Gift in sun: a living holder on the attacker's side (Atk) or the
+    # defender's (SpD, not against Mold Breaker); in singles the side's active battler.
+    if weather == Weather.SUN and a_ability == AbilityId.FLOWER_GIFT and atk.hp:
+        attack = attack * 15 // 10
+    if (
+        weather == Weather.SUN
+        and dfn.ability == AbilityId.FLOWER_GIFT
+        and dfn.hp
+        and a_ability != AbilityId.MOLD_BREAKER
+    ):
         sp_defense = sp_defense * 15 // 10
     # lib.c:6943-6945 BATTLE_EFFECT_HALVE_DEFENSE (Selfdestruct, Explosion) halves defenseStat.
     if effect == EffectId.SELF_DESTRUCT:
@@ -1008,6 +1026,7 @@ def _reset_battler(sd: RefSide, baton: bool = False) -> None:
         "perish_song_turns",
         "yawn",
         "curse",
+        "can_unburden",
     ):
         if not (baton and name in BATON_PASSED):
             setattr(sd, name, 0)
@@ -1656,6 +1675,14 @@ def _stealth_rock_damage(turn: _Turn, s: RefState, side: int) -> None:
     _lose_hp(turn, s, side, _divide(mon.max_hp, STEALTH_ROCK_DIVISOR[mul]))
 
 
+def _arm_unburden(s: RefState, side: int) -> None:
+    """RecoverStatusByAbility's ABILITY_UNBURDEN case (lib.c:4433-4437): an Unburden holder
+    holding an item gets canUnburden."""
+    mon = _active(s, side)
+    if mon.ability == AbilityId.UNBURDEN and mon.item:
+        s.sides[side].can_unburden = 1
+
+
 def _recover_status_by_ability(s: RefState, side: int) -> None:
     """``BattleSystem_RecoverStatusByAbility`` (lib.c:4378) for ``side``'s battler: an
     asleep Insomnia holder (:4404) or a paralyzed Limber holder (:4397) with HP left is
@@ -1663,6 +1690,7 @@ def _recover_status_by_ability(s: RefState, side: int) -> None:
     script.c:11806). Run at each move end for the attacker then the defender
     (bcp.c:3965-3967) and on a switch-in (lib.c:4135-4145)."""
     mon = _active(s, side)
+    _arm_unburden(s, side)
     forbidden = {AbilityId.INSOMNIA: Status.SLEEP, AbilityId.LIMBER: Status.PARALYSIS}
     if forbidden.get(mon.ability) == mon.status and mon.hp:
         mon.status = Status.NONE
@@ -1726,6 +1754,7 @@ def _switch_in_effects(turn: _Turn, s: RefState, side: int) -> None:
     _recover_status_by_ability(s, side)
     if traced:
         _recover_status_by_ability(s, other)
+    _arm_unburden(s, other)  # FORBIDDEN_STATUS runs for every battler (lib.c:4135-4145)
     for battler in (0, 1):
         _held_item_hp(turn, s, battler)
 
@@ -2753,8 +2782,8 @@ def _status_disrupted(turn: _Turn, s: RefState, side: int, move: int) -> int:
 def _hit_rate(tables, s: RefState, attacker: int, move: int, target_moved: bool = False) -> int:
     """``hitRate`` of ``BattleControllerPlayer_CheckMoveHitAccuracy`` (bcp.c:2865-2979) for
     ``attacker``'s ``move`` against the foe's active Pokemon, from the state as it is now;
-    ``target_moved``: the foe acted earlier this turn (Zoom Lens). Thunder in sun, Hustle,
-    Tangled Feet and the Micle Berry are unsupported."""
+    ``target_moved``: the foe acted earlier this turn (Zoom Lens). Hustle and the Micle Berry
+    are unsupported."""
     defender = 1 - attacker
     atk = _active(s, attacker)
     seen = _ignorable(s, attacker, defender)  # Battler_IgnorableAbility
@@ -2772,6 +2801,10 @@ def _hit_rate(tables, s: RefState, attacker: int, move: int, target_moved: bool 
         eva_stages = 0
     total = min(max(6 + eva_stages + acc_stages, 0), 12)  # :2892-2898
     rate = _t(tables, "move_accuracy", move)
+    weather = Weather.NONE if _weather_suppressed(tables, s) else s.weather
+    flags = _t(tables, "move_flags", move)
+    if flags & MoveFlag.THUNDER and weather == Weather.SUN:  # :2915-2917 (B9-1)
+        rate = 50
     num, den = HIT_RATE_BY_STAGE[total]
     rate = rate * num // den  # :2918-2919
     if atk.ability == AbilityId.COMPOUNDEYES:  # :2922
@@ -2799,6 +2832,11 @@ def _hit_rate(tables, s: RefState, attacker: int, move: int, target_moved: bool 
     no_guard = AbilityId.NO_GUARD in (atk.ability, _active(s, defender).ability)
     # MON_IS_LOCKED_ONTO beside No Guard (bcp.c:3016-3018; TryOHKOMove, script.c:4343-4361).
     no_guard = no_guard or _locked_onto(s, attacker, defender)
+    # :3023-3031 Thunder in rain, Blizzard in hail clear the miss (B9-1).
+    if (flags & MoveFlag.THUNDER and weather == Weather.RAIN) or (
+        flags & MoveFlag.BLIZZARD and weather == Weather.HAIL
+    ):
+        no_guard = True
     if _t(tables, "move_effect", move) == EffectId.OHKO:
         # BtlCmd_TryOHKOMove (script.c:4334-4386): its own test, nothing above (the
         # nonstandard check): accuracy + level difference at a level not lower, No Guard 100.

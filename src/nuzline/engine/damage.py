@@ -682,6 +682,17 @@ def life_orb(tables: Tables, s: BattleState, atk_side, damage) -> jnp.ndarray:
     return jnp.where(orb, damage * (100 + _i32(tables.item_param[item, 0])) // 100, damage)
 
 
+def pinch_ability(move_type, ability) -> jnp.ndarray:
+    """``bool``: ``ability`` boosts ``move_type`` in a pinch (battle_lib.c:6819-6838): Overgrow
+    Grass, Blaze Fire, Torrent Water, Swarm Bug."""
+    return (
+        ((move_type == Type.GRASS) & (ability == AbilityId.OVERGROW))
+        | ((move_type == Type.FIRE) & (ability == AbilityId.BLAZE))
+        | ((move_type == Type.WATER) & (ability == AbilityId.TORRENT))
+        | ((move_type == Type.BUG) & (ability == AbilityId.SWARM))
+    )
+
+
 def _pre_random(
     tables: Tables,
     s: BattleState,
@@ -786,6 +797,11 @@ def _pre_random(
     attack_stage, sp_attack_stage = a_stages[Stat.ATK], a_stages[Stat.SPA]  # :6639, :6641
     defense_stage, sp_defense_stage = d_stages[Stat.DEF], d_stages[Stat.SPD]  # :6640, :6642
 
+    # :6706-6708 Huge Power / Pure Power (attackerParams.ability): attackStat x2, before the
+    # held items (Slow Start, just after, is unsupported).
+    huge = (a_ability == AbilityId.HUGE_POWER) | (a_ability == AbilityId.PURE_POWER)
+    attack = jnp.where(huge, attack * 2, attack)
+
     # :6716-6783 the held items, before every ability modifier below.
     power, (attack, sp_attack, defense, sp_defense) = _item_modifiers(
         tables, s, atk_side, def_side, move_type, category, power,
@@ -807,12 +823,8 @@ def _pre_random(
     power = jnp.where((move_type == Type.ELECTRIC) & jnp.any(s.mud_sport != 0), power // 2, power)
     power = jnp.where((move_type == Type.FIRE) & jnp.any(s.water_sport != 0), power // 2, power)
 
-    # :6819-6837 Overgrow / Blaze / Torrent: power x1.5 at curHP <= maxHP / 3.
-    pinch = (
-        ((move_type == Type.GRASS) & (a_ability == AbilityId.OVERGROW))
-        | ((move_type == Type.FIRE) & (a_ability == AbilityId.BLAZE))
-        | ((move_type == Type.WATER) & (a_ability == AbilityId.TORRENT))
-    ) & (a_hp <= a_max_hp // 3)
+    # :6819-6838 Overgrow / Blaze / Torrent / Swarm: power x1.5 at curHP <= maxHP / 3.
+    pinch = pinch_ability(move_type, a_ability) & (a_hp <= a_max_hp // 3)
     power = jnp.where(pinch, power * 150 // 100, power)
     # :6845-6848 Dry Skin (Battler_IgnorableAbility): a Fire move's power x125/100 (Heatproof,
     # just before it, is unsupported).
@@ -852,6 +864,19 @@ def _pre_random(
     rock = jnp.any(d_types == Type.ROCK)
     sand = (weather == Weather.SANDSTORM) & rock & (not self_hit)
     sp_defense = jnp.where(sand, sp_defense * 15 // 10, sp_defense)
+    # :6930-6941 Flower Gift in sun: COUNT_ALIVE_BATTLERS_OUR_SIDE (battle_lib.c:2886-2893, a
+    # living battler of the side with the ability, Battler_Ability): the attacker's side's makes
+    # attackStat x15/10, the defender's spDefenseStat x15/10 unless the attacker has Mold Breaker.
+    # In singles each side's only battler is its active one (the self-hit passes no weather).
+    sunny = (weather == Weather.SUN) & (not self_hit)
+    a_gift = (a_ability == AbilityId.FLOWER_GIFT) & (a_hp > 0)
+    d_gift = (
+        (_i32(s.ability[def_side, d_slot]) == AbilityId.FLOWER_GIFT)
+        & (_i32(s.hp[def_side, d_slot]) > 0)
+        & (a_ability != AbilityId.MOLD_BREAKER)
+    )
+    attack = jnp.where(sunny & a_gift, attack * 15 // 10, attack)
+    sp_defense = jnp.where(sunny & d_gift, sp_defense * 15 // 10, sp_defense)
     # :6943-6945 Selfdestruct / Explosion (BATTLE_EFFECT_HALVE_DEFENSE) halve defenseStat,
     # before the stage scales it (coverage refuses a Defense the -6 stage would bring to 0).
     defense = jnp.where(effect == EffectId.SELF_DESTRUCT, defense // 2, defense)

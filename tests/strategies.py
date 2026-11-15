@@ -773,6 +773,57 @@ def _draw_batch3(draw, tables: Tables, a: dict, side: int, active: int, names: N
         a["ability"][side, rnd.choice(bench)] = rnd.choice(SWITCH_IN_ABILITIES)
 
 
+# E2 batch 9: abilities ``_draw_batch9`` puts on the active Pokemon.
+BATCH9_ABILITIES = (
+    AbilityId.CHLOROPHYLL,
+    AbilityId.HUGE_POWER,
+    AbilityId.PURE_POWER,
+    AbilityId.SWARM,
+    AbilityId.UNBURDEN,
+    AbilityId.FLOWER_GIFT,
+)
+
+
+def _draw_batch9(draw, tables: Tables, a: dict, side: int, active: int, names: Names) -> None:
+    """Maybe (1 in 2) put a ``BATCH9_ABILITIES`` ability on the active Pokemon with what makes it
+    act most of the time: sun for Chlorophyll and Flower Gift, a Bug move at a third of its HP
+    for Swarm, a physical hit for Huge Power / Pure Power, for Unburden a lost item (canUnburden,
+    no item) or a held berry it can eat and the flag up or down."""
+    rnd = draw(st.randoms(use_true_random=False))
+
+    def give(move_name: str) -> None:
+        move = names.move(move_name)
+        k = rnd.randint(0, 3)
+        a["moves"][side, active, k] = move
+        a["pp"][side, active, k] = int(tables.move_pp[move])
+
+    if draw(st.integers(0, 2)) == 0:  # B9-1, B9-2: a weather-accuracy move or a fang
+        give(rnd.choice(("Thunder", "Blizzard", "Fire Fang", "Ice Fang")))
+        if rnd.random() < 0.5:
+            a["weather"][...] = rnd.choice((Weather.RAIN, Weather.SUN, Weather.HAIL))
+    if not draw(st.booleans()):
+        return
+    ability = rnd.choice(BATCH9_ABILITIES)
+    a["ability"][side, active] = ability
+    if rnd.random() >= 0.75:
+        return
+    if ability in (AbilityId.CHLOROPHYLL, AbilityId.FLOWER_GIFT):
+        a["weather"][...] = Weather.SUN
+        give("Tackle")
+    if ability == AbilityId.SWARM:
+        give("Bug Bite")
+        a["hp"][side, active] = max(1, int(a["max_hp"][side, active]) // 3)
+    if ability in (AbilityId.HUGE_POWER, AbilityId.PURE_POWER):
+        give("Tackle")
+    if ability == AbilityId.UNBURDEN:
+        if rnd.random() < 0.5:
+            a["item"][side, active] = 0
+            a["can_unburden"][side] = 1
+        else:
+            a["item"][side, active] = names.item(rnd.choice(("Oran Berry", "Sitrus Berry", "Lum Berry")))
+            a["can_unburden"][side] = rnd.randint(0, 1)
+
+
 def _draw_batch4(draw, tables: Tables, a: dict, side: int, active: int, names: Names) -> None:
     """Maybe (1 in 2) give the active Pokemon a ``BATCH4_MOVES`` move, with what makes it act
     most of the time: a paralyzed foe for SmellingSalt, a status for Facade, a foe at low HP for
@@ -1146,6 +1197,7 @@ def supported_state(draw, tables: Tables, names: Names, invokers: bool = True) -
         _draw_future_sight(draw, tables, a, side, active, names)
         _draw_pivot(draw, tables, a, side, active, names)
         _draw_batch7(draw, tables, a, side, active, names)
+        _draw_batch9(draw, tables, a, side, active, names)
         _draw_choice_lock(draw, a, side, active)
     # B7-13: an Imprison user sharing a move with a Sleep Talk user, so a faster Imprison (or one
     # already up) can shrink the Sleep Talk set.
