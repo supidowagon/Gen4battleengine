@@ -954,7 +954,19 @@ def _draw_future_sight(draw, tables: Tables, a: dict, side: int, active: int, na
         a["future_sight"][side] = 1
 
 
-BATCH7_MOVES = ("Ingrain", "Mean Look", "Block", "Spider Web", "Imprison", "Roar", "Roost")
+BATCH7_MOVES = (
+    "Ingrain",
+    "Mean Look",
+    "Block",
+    "Spider Web",
+    "Imprison",
+    "Roar",
+    "Roost",
+    # E2 batch 8
+    "Lock-On",
+    "Mind Reader",
+    "Sheer Cold",
+)
 
 
 def _draw_batch7(draw, tables: Tables, a: dict, side: int, active: int, names: Names) -> None:
@@ -988,6 +1000,13 @@ def _draw_batch7(draw, tables: Tables, a: dict, side: int, active: int, names: N
     elif draw(st.integers(0, 3)) == 0:  # a stale meanLookTarget (B7-15)
         a["mean_look_target"][side] = 1 + foe
     a["imprison"][side] = int(draw(st.integers(0, 5)) == 0)
+    # Batch 8: locked onto by the foe (count 1-2) or a stale lockOnTarget with no count.
+    lock = draw(st.integers(0, 5))
+    if lock <= 1:
+        a["lock_on"][side] = lock + 1
+        a["lock_on_target"][side] = 1 + foe
+    elif lock == 2:
+        a["lock_on_target"][side] = 1 + foe
     a["imprisoned"][side] = int(draw(st.integers(0, 5)) == 0)
 
 

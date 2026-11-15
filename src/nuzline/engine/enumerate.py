@@ -640,6 +640,8 @@ INPUT_NEUTRAL_EFFECTS = (
     # side's move (its status check stops the move altogether, like Taunt): no damage input.
     _E.MEAN_LOOK,
     _E.IMPRISON,
+    # E2 batch 8. Lock-On marks the side's battler for the foe's later moves (accuracy only).
+    _E.LOCK_ON,
 )
 INPUT_CLAUSE_EFFECTS = (
     _E.STAT_SELF,  # the foe's Defense / Sp. Def
@@ -950,6 +952,7 @@ NON_TABLE_DAMAGE_EFFECTS = (
     _E.BATON_PASS,
     _E.MEAN_LOOK,
     _E.IMPRISON,
+    _E.LOCK_ON,
 )
 
 

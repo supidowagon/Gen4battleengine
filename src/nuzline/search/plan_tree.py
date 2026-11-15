@@ -266,6 +266,7 @@ _COND_TEXT = {
     "mean_look": "unable to escape",
     "imprison": "imprisoning",
     "roosting": "roosting",
+    "lock_on": "locked onto",
     "spikes": "Spikes",
     "toxic_spikes": "Toxic Spikes",
 }

@@ -319,6 +319,8 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     181: ("BATTLE_EFFECT_GROUND_TRAP_USER_CONTINUOUS_HEAL", _E.INGRAIN, (0, 0, 0)),
     106: ("BATTLE_EFFECT_PREVENT_ESCAPE", _E.MEAN_LOOK, (0, 0, 0)),
     192: ("BATTLE_EFFECT_MAKE_SHARED_MOVES_UNUSEABLE", _E.IMPRISON, (0, 0, 0)),
+    # E2 batch 8. Lock-On / Mind Reader: effect_script_0094.s (a direct subscript_lock_on.s).
+    94: ("BATTLE_EFFECT_NEXT_ATTACK_ALWAYS_HITS", _E.LOCK_ON, (0, 0, 0)),
 }
 
 DECOMP_EFFECT_NAMES: dict[int, str] = {k: v[0] for k, v in _EFFECTS.items()}

@@ -848,6 +848,8 @@ def primary_effect_fails(tables, state: BattleState, side, target_side, move) ->
         | ((effect == _E.TOXIC_SPIKES) & (state.toxic_spikes[target_side] >= TOXIC_SPIKES_MAX))
         # subscript_mean_look.s:7-8, :48: MOVE_STATUS_FAILED.
         | ((effect == _E.MEAN_LOOK) & mean_look_fails(state, target_side))
+        # subscript_lock_on.s:6, :33.
+        | ((effect == _E.LOCK_ON) & lock_on_fails(state, target_side))
     )
 
 
@@ -1016,6 +1018,36 @@ def ingrain_anchors(tables: Tables, state: BattleState, side) -> jnp.ndarray:
     for name in MOVE_EFFECT_MASK_FIELDS:
         other = other | (getattr(state, name)[side] != 0)
     return (state.ingrain[side] != 0) & ~other
+
+
+LOCK_ON_TURNS = 2  # MOVE_EFFECT_LOCK_ON_1 in the 2-bit counter (moves.h:12, subscript_lock_on.s:5)
+
+
+def lock_on_fails(state: BattleState, target_side) -> jnp.ndarray:
+    """``bool``: subscript_lock_on.s:5-6 fails (MOVE_STATUS_FAILED, :33) a defender behind a
+    substitute (``CheckSubstitute``); its miss test (:5) never holds for accuracy 0."""
+    return state.substitute_hp[target_side] != 0
+
+
+def _lock_on(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    """Lock-On, Mind Reader (effect_script_0094.s: a direct ``CHECK_HP | TO_DEFENDER``
+    subscript_lock_on.s for a living defender on a move that connected, battle_lib.c:1491-1504):
+    the defender's MOVE_EFFECT_LOCK_ON counter is set to ``LOCK_ON_TURNS`` (:7-8, whatever it was)
+    and its lockOnTarget to the attacker (:9, ``OPCODE_SET``), as ``1 + battler``."""
+    cond = (
+        (h.effect == _E.LOCK_ON)
+        & h.landed
+        & _alive(state, h.target_side, h.target)
+        & ~lock_on_fails(state, h.target_side)
+    )
+    state = _set(state, "lock_on", h.target_side, LOCK_ON_TURNS, cond)
+    return _set(state, "lock_on_target", h.target_side, 1 + jnp.asarray(h.side, _I32), cond)
+
+
+def locked_onto(state: BattleState, attacker, defender) -> jnp.ndarray:
+    """``bool``: ``MON_IS_LOCKED_ONTO(attacker, defender)`` (include/battle/common.h:51): the
+    defender's MOVE_EFFECT_LOCK_ON counter is up and its lockOnTarget is the attacker."""
+    return (state.lock_on[defender] != 0) & (state.lock_on_target[defender] == 1 + attacker)
 
 
 def _mud_sport(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
@@ -1806,6 +1838,7 @@ def play_hit(
         _ingrain,
         _mean_look,
         _imprison,
+        _lock_on,
         _screen,
         _brick_break,
         _foresight,

@@ -950,14 +950,14 @@ def _cleanup_fainted(turn: _Turn, s: RefState, side: int) -> None:
     _restore_types(turn.tables, s, side)
     _reset_battler(s.sides[side])
     s.sides[side].fake_out_turn = turn.entry_turn
-    _source_leaves(s, side)
+    _source_leaves(s, side, faint=True)
 
 
 # What Baton Pass keeps (BattleSystem_UpdateAfterSwitch, lib.c:2078-2079, :2107; condition.h:72,
 # moves.h:46-48), with the stat stages (InitBattleMon, lib.c:97-101).
 BATON_PASSED = (
     "confusion", "leech_seed", "substitute_hp", "water_sport", "mud_sport", "aqua_ring",
-    "ingrain", "mean_look", "mean_look_target",
+    "ingrain", "mean_look", "mean_look_target", "lock_on", "lock_on_target",
 )  # fmt: skip
 
 
@@ -1000,6 +1000,8 @@ def _reset_battler(sd: RefSide, baton: bool = False) -> None:
         "mean_look_target",
         "imprison",
         "imprisoned",
+        "lock_on",
+        "lock_on_target",
     ):
         if not (baton and name in BATON_PASSED):
             setattr(sd, name, 0)
@@ -1020,7 +1022,7 @@ def _release_bind(sd: RefSide) -> None:
     sd.trap_move = 0
 
 
-def _source_leaves(s: RefState, side: int, baton: bool = False) -> None:
+def _source_leaves(s: RefState, side: int, baton: bool = False, faint: bool = False) -> None:
     """``side``'s battler leaves (UpdateAfterSwitch lib.c:2088-2098, CleanupFaintedMon
     :2168-2186): the Bind it put on the foe and the foe's ATTRACT bit sourced from it end, and,
     unless it left by Baton Pass (:2055), the Mean Look of every battler it trapped
@@ -1031,6 +1033,15 @@ def _source_leaves(s: RefState, side: int, baton: bool = False) -> None:
         for sd in s.sides:
             if sd.mean_look and sd.mean_look_target == 1 + side:
                 sd.mean_look = 0  # meanLookTarget stays (B7-15)
+    # The Lock-On of every battler it locked onto: a switch clears it (lib.c:2063-2067), a Baton
+    # Pass restarts it at the initial count (:2077-2085); a faint leaves it (B8-2).
+    if not faint:
+        for sd in s.sides:
+            if sd.lock_on and sd.lock_on_target == 1 + side:
+                if baton:
+                    sd.lock_on = 2
+                else:
+                    sd.lock_on = sd.lock_on_target = 0
 
 
 def _faint_check(turn: _Turn, s: RefState, decide: bool = True) -> None:
@@ -2114,6 +2125,12 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
     elif effect == EffectId.AQUA_RING and landed and not s.sides[side].aqua_ring:
         # effect_script_0251.s: fails when the user already has it.
         s.sides[side].aqua_ring = 1
+    elif effect == EffectId.LOCK_ON and landed:
+        # subscript_lock_on.s: a living defender without a substitute gets the counter 2 and
+        # lockOnTarget = the attacker (:7-9), whatever it had.
+        foe_sd = s.sides[target]
+        if _active(s, target).hp and not foe_sd.substitute_hp:
+            foe_sd.lock_on, foe_sd.lock_on_target = 2, 1 + side
     elif effect == EffectId.INGRAIN and landed and not s.sides[side].ingrain:
         s.sides[side].ingrain = 1  # effect_script_0181.s:6
     elif effect == EffectId.IMPRISON and landed and not s.sides[side].imprison:
@@ -2746,6 +2763,8 @@ def _hit_rate(tables, s: RefState, attacker: int, move: int, target_moved: bool 
     if s.gravity:  # FIELD_CONDITION_GRAVITY, :2972
         rate = rate * 10 // 6
     no_guard = AbilityId.NO_GUARD in (atk.ability, _active(s, defender).ability)
+    # MON_IS_LOCKED_ONTO beside No Guard (bcp.c:3016-3018; TryOHKOMove, script.c:4343-4361).
+    no_guard = no_guard or _locked_onto(s, attacker, defender)
     if _t(tables, "move_effect", move) == EffectId.OHKO:
         # BtlCmd_TryOHKOMove (script.c:4334-4386): its own test, nothing above (the
         # nonstandard check): accuracy + level difference at a level not lower, No Guard 100.
@@ -3059,6 +3078,7 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
         full = full or (
             effect == EffectId.MEAN_LOOK and bool(foe_sd.mean_look or foe_sd.substitute_hp)
         )
+        full = full or (effect == EffectId.LOCK_ON and bool(foe_sd.substitute_hp))  # :6, :33
         full = full or (effect == EffectId.SPIKES and s.sides[1 - side].spikes >= SPIKES_MAX)
         full = full or (
             effect == EffectId.TOXIC_SPIKES and s.sides[1 - side].toxic_spikes >= TOXIC_SPIKES_MAX
@@ -3368,6 +3388,7 @@ def _end_of_turn(turn: _Turn, s: RefState, order: list[int]) -> None:
             _bind_check,  # MON_COND_CHECK_STATE_BIND, bcp.c:1462
             _uproar_check,  # MON_COND_CHECK_STATE_UPROAR, bcp.c:1505
             _disable_check,  # MON_COND_CHECK_STATE_DISABLE, bcp.c:1565
+            _lock_on_check,  # MON_COND_CHECK_STATE_LOCK_ON, bcp.c:1618
             _taunt_check,  # MON_COND_CHECK_STATE_TAUNT, bcp.c:1635
             _held_item_hp,  # MON_COND_CHECK_STATE_ITEM_CONDITION, bcp.c:1699
             _detrimental_item_check,  # MON_COND_CHECK_STATE_ITEM_DETRIMENTAL_EFFECT, :1710
@@ -3411,7 +3432,9 @@ def _future_sight(turn: _Turn, s: RefState, order: list[int]) -> None:
         if _protected(turn, s, attacker, move, False):
             _unlock(s.sides[attacker])
             flags.add("protected")
-        elif AbilityId.NO_GUARD in (_active(s, attacker).ability, mon.ability):
+        elif AbilityId.NO_GUARD in (_active(s, attacker).ability, mon.ability) or _locked_onto(
+            s, attacker, d
+        ):
             flags.discard("missed")
         if flags & {"missed", "protected"}:
             continue
@@ -3427,6 +3450,18 @@ def _future_sight(turn: _Turn, s: RefState, order: list[int]) -> None:
         _faint_check(turn, s, decide=False)
     _faint_check(turn, s)
     _pay_exp(turn, s)
+
+
+def _lock_on_check(turn: _Turn, s: RefState, side: int) -> None:
+    """``MON_COND_CHECK_STATE_LOCK_ON`` (bcp.c:1618-1624): the counter drops by 1."""
+    if s.sides[side].lock_on:
+        s.sides[side].lock_on -= 1
+
+
+def _locked_onto(s: RefState, attacker: int, defender: int) -> bool:
+    """``MON_IS_LOCKED_ONTO`` (include/battle/common.h:51)."""
+    sd = s.sides[defender]
+    return bool(sd.lock_on) and sd.lock_on_target == 1 + attacker
 
 
 def _ingrain_check(turn: _Turn, s: RefState, side: int) -> None:

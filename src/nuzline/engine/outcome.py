@@ -272,6 +272,16 @@ def _rate(
     # CheckMoveHitOverrides (bcp.c:3016-3021), after the roll: the attacker's or the target's
     # No Guard (Battler_Ability, the target's own: not ignorable) clears MOVE_STATUS_MISSED.
     no_guard = (a_ability == AbilityId.NO_GUARD) | (own == AbilityId.NO_GUARD)
+    # MON_IS_LOCKED_ONTO(attacker, defender) sits beside No Guard there (bcp.c:3016-3018), and
+    # in TryOHKOMove's bypass (battle_script.c:4343-4361); a switch action's newcomer carries no
+    # lock (UpdateAfterSwitch clears its moveEffectsMask, battle_lib.c:2070), a pivot's view keeps
+    # what Baton Pass keeps (B8-2).
+    locked = (
+        ~fresh
+        & (state.lock_on[target] != 0)
+        & (state.lock_on_target[target] == 1 + jnp.asarray(side, _I32))
+    )
+    no_guard = no_guard | locked
     # An OHKO move (BtlCmd_TryOHKOMove, battle_script.c:4334-4386) sets
     # SYSCTL_NONSTANDARD_ACC_CHECK (:4338), so none of the above applies (bcp.c:2911-2913, :3016):
     # it hits when RandNext() % 100 < accuracy + (attacker level - defender level) and the

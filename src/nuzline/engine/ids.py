@@ -233,6 +233,11 @@ class EffectId(IntEnum):
     INGRAIN = 71
     MEAN_LOOK = 72
     IMPRISON = 73
+    # E2 batch 8 (rulings B8-n), the moves behind the AI's fields. Lock-On, Mind Reader
+    # (effect_script_0094.s, a direct CHECK_HP | TO_DEFENDER subscript_lock_on.s): the defender's
+    # MOVE_EFFECT_LOCK_ON counter (2) and lockOnTarget (``lock_on``, ``lock_on_target``); the
+    # locker's next moves on it skip the accuracy roll (MON_IS_LOCKED_ONTO, bcp.c:3016-3021).
+    LOCK_ON = 74
 
 
 # ``EffectId.COUNTER``'s source (``move_param[m, 0]``).

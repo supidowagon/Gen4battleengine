@@ -108,6 +108,7 @@ from nuzline.engine.damage import (
     STATUS as STATUS_CATEGORY,
 )
 from nuzline.engine.effects import (
+    LOCK_ON_TURNS,
     armored,
     big_root,
     can_have_status,
@@ -122,6 +123,7 @@ from nuzline.engine.effects import (
     ingrain_anchors,
     kings_rock_flinch,
     life_orb_recoil,
+    locked_onto,
     pivot_item,
     play_hit,
     primary_effect_fails,
@@ -279,7 +281,7 @@ def _release_bind(state: BattleState, side, cond) -> BattleState:
     )
 
 
-def _source_leaves(state: BattleState, side, cond, baton=False) -> BattleState:
+def _source_leaves(state: BattleState, side, cond, baton=False, faint=False) -> BattleState:
     """``side``'s active battler leaves the field where ``cond`` (a switch, a faint, and Roar's
     drag): every effect it is the source of on the other side ends.
     ``BattleSystem_UpdateAfterSwitch`` (battle_lib.c:2088-2098) and
@@ -294,6 +296,17 @@ def _source_leaves(state: BattleState, side, cond, baton=False) -> BattleState:
     value = jnp.where(cond, 0, keep).astype(keep.dtype)
     state = state._replace(infatuated=state.infatuated.at[1 - side].set(value))
     clear = jnp.asarray(cond) & ~jnp.asarray(baton)
+    # The Lock-On of every battler it locked onto (lockOnTarget == the leaving one): a switch
+    # clears it (battle_lib.c:2063-2067), a Baton Pass restarts its count at
+    # MOVE_EFFECT_LOCK_ON_INITIAL_DURATION (:2077-2085, moves.h:55); a faint leaves it
+    # (CleanupFaintedMon, :2156-2205, has no such loop), so the slot's replacement inherits it.
+    if not faint:
+        for battler in range(state.active.shape[0]):
+            mine = (state.lock_on[battler] != 0) & (state.lock_on_target[battler] == 1 + side)
+            state = _set_side(state, "lock_on", battler, 0, mine & clear)
+            state = _set_side(state, "lock_on_target", battler, 0, mine & clear)
+            refresh = mine & jnp.asarray(cond) & jnp.asarray(baton)
+            state = _set_side(state, "lock_on", battler, LOCK_ON_TURNS, refresh)
     for battler in range(state.active.shape[0]):
         ends = (
             clear & (state.mean_look[battler] != 0) & (state.mean_look_target[battler] == 1 + side)
@@ -1767,7 +1780,7 @@ def _faint_check(
         after = _restore_types(tables, after, side, active_fainted)
         after = _reset_battler(after, side, active_fainted)
         after = _entered(after, side, entry_turn, active_fainted)
-        after = _source_leaves(after, side, active_fainted)
+        after = _source_leaves(after, side, active_fainted, faint=True)
     return after
 
 
@@ -2154,10 +2167,19 @@ def _uproar_check(tables: Tables, state: BattleState, side, failed) -> BattleSta
     )
 
 
+def _lock_on_check(state: BattleState, side) -> BattleState:
+    """``MON_COND_CHECK_STATE_LOCK_ON`` (bcp.c:1618-1624): the MOVE_EFFECT_LOCK_ON counter drops
+    by 1; lockOnTarget stays (nothing clears it but the battler's own volatiles)."""
+    on = state.lock_on[side] != 0
+    return _set_side(state, "lock_on", side, state.lock_on[side] - 1, on)
+
+
 def _uproar_then_disable(tables: Tables, state: BattleState, side, failed) -> BattleState:
-    """``MON_COND_CHECK_STATE_UPROAR`` then (``_THRASH``, unsupported, between)
-    ``MON_COND_CHECK_STATE_DISABLE``: neither changes HP, so they share one faint check."""
-    return _disable_check(tables, _uproar_check(tables, state, side, failed), side)
+    """``MON_COND_CHECK_STATE_UPROAR``, then (``_THRASH``, unsupported, between)
+    ``MON_COND_CHECK_STATE_DISABLE``, then (``_ENCORE``, unsupported) ``_LOCK_ON``: none changes
+    HP, so they share one faint check."""
+    state = _disable_check(tables, _uproar_check(tables, state, side, failed), side)
+    return _lock_on_check(state, side)
 
 
 def _taunt_check(tables: Tables, state: BattleState, side) -> BattleState:
@@ -2305,8 +2327,8 @@ END_OF_TURN_ORDER = (
     # MON_COND_CHECK_STATE_BIND, battle_controller_player.c:1462
     ("bind", _bind_check),
     # MON_COND_CHECK_STATE_UPROAR, battle_controller_player.c:1505, then
-    # MON_COND_CHECK_STATE_DISABLE, :1565 (``_uproar_then_disable``; the only check that reads
-    # the turn's moveFailFlags)
+    # MON_COND_CHECK_STATE_DISABLE, :1565, then _LOCK_ON, :1618 (``_uproar_then_disable``; the
+    # only check that reads the turn's moveFailFlags)
     ("uproar_disable", _uproar_then_disable),
     # MON_COND_CHECK_STATE_TAUNT, battle_controller_player.c:1635
     ("taunt", _taunt_check),
@@ -2527,6 +2549,8 @@ def _future_sight(
         no_guard = (state.ability[attacker, state.active[attacker]] == AbilityId.NO_GUARD) | (
             state.ability[d, mon] == AbilityId.NO_GUARD
         )
+        # MON_IS_LOCKED_ONTO of the stored attacker's battler slot (bcp.c:3016-3018).
+        no_guard = no_guard | locked_onto(state, attacker, d)
         blocked = (protecting[d] != 0) & protect_blocks(tables, move, False)
         miss_flag = jnp.where(~blocked & no_guard, False, missed | missed_now)
         shield_flag = shielded | blocked
