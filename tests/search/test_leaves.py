@@ -262,8 +262,8 @@ def test_chunk_boundary_invariant(tables, names):
 _SCRIPT = """
 import json, jax, numpy as np
 from nuzline.data.tables import load_names, load_tables
-from nuzline.jaxcache import cache_root, code_version, set_compile_cache_dir
-set_compile_cache_dir(cache_root() / "jax-tests" / code_version())
+from nuzline.jaxcache import cache_root, jax_version, set_compile_cache_dir
+set_compile_cache_dir(cache_root() / "jax-tests" / jax_version())
 from nuzline.search.leaves import evaluate_forced, evaluate_leaves
 from tests.engine.helpers import roark_state
 from tests.search.test_expand import batch

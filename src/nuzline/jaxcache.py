@@ -87,6 +87,17 @@ def code_version() -> str:
     return _sha16(*chunks)
 
 
+@functools.cache
+def jax_version() -> str:
+    """16 hex chars of the sha256 of the jax and jaxlib versions: a directory key for XLA's
+    persistent compilation cache alone, whose entries JAX already keys by the compiled
+    program (its HLO, compile options and backend), so programs that a code change leaves
+    unchanged keep loading from it."""
+    import jaxlib
+
+    return _sha16(jax.__version__.encode(), jaxlib.__version__.encode())
+
+
 def prune_other_versions(directory: Path, root: Path | None = None) -> None:
     """Delete the siblings of ``directory`` named like a version directory (16 or 32 hex
     chars), keeping ``directory``. Does nothing unless ``directory``'s parent is inside
