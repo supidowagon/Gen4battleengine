@@ -312,7 +312,7 @@ include/battle, res/battle) names it elsewhere; the tool re-checks both on every
 | 3 | AI move effect #83 CALL_RANDOM_MOVE not transcribed (no Basic or Expert label): Metronome |
 | 3 | AI move-id case of TrainerAI_CalcDamage: Frustration, Return |
 | 3 | move effect #228: U-turn |
-| 3 | move effect #83: Metronome |
+| 3 | move effect #83: Metronome; 125 of 442 callable moves unmodelled |
 | 2 | AI move effect #125 THAW_AND_BURN_HIT not transcribed (no Basic or Expert label): Flame Wheel, Sacred Fire, Scald |
 | 2 | AI move effect #196 INCREASE_POWER_WITH_WEIGHT not transcribed (Basic_CheckNonStandardDamageOrChargeTurn): Grass Knot, Low Kick |
 | 2 | AI move effect #214 HEAL_HALF_REMOVE_FLYING_TYPE not transcribed (Basic_CheckCanRecoverHP / Expert_Recovery): Roost |
@@ -418,7 +418,7 @@ Groups by kind: AI 58, battle format 2, move effect 2, battle terrain 1, trainer
 | 4 | move effect #260: Blizzard, Ice Ball, Sheer Cold |
 | 4 | move effect #273: Fire Fang |
 | 4 | move effect #41: Dragon Rage |
-| 4 | move effect #83: Metronome |
+| 4 | move effect #83: Metronome; 125 of 442 callable moves unmodelled |
 | 4 | trainer AI: Trace: the AI reads the species' ability, not the one Trace copied into the battler (LoadBattlerAbility, trainer_ai.c:1170-1198; battle_script.c:3401-3403) |
 | 3 | AI: AI_FLAG_BATON_PASS |
 | 3 | AI move effect #150 FLINCH_MINIMIZE_DOUBLE_HIT not transcribed (no Basic or Expert label): Stomp |
@@ -541,7 +541,7 @@ Groups by kind: AI 58, battle format 2, move effect 2, battle terrain 1, trainer
 | 1 | move effect #91: Pain Split |
 | 1 | trainer item: Poké Ball |
 
-Groups by kind: AI 102, move effect 32, ability 22, battle format 12, ROM change 2, held item effect 2, battle terrain 2, form 1, trainer AI 1, trainer item 1
+Groups by kind: AI 102, move effect 32, ability 22, battle format 12, held item effect 2, ROM change 2, battle terrain 2, form 1, trainer AI 1, trainer item 1
 
 ## All ten splits (top 60)
 
@@ -658,7 +658,7 @@ Greedy: each step is the group that brings the most fights closest to runnable.
 | 38 | AI move effect #214 HEAL_HALF_REMOVE_FLYING_TYPE not transcribed (Basic_CheckCanRecoverHP / Expert_Recovery): Roost | 11 of 68 |
 | 39 | AI move effect #171 DOUBLE_POWER_AND_CURE_PARALYSIS not transcribed (Expert_SmellingSalts): SmellingSalt | 11 of 68 |
 | 40 | AI move effect #44 HIT_TWICE not transcribed (no Basic or Expert label): Bonemerang, Double Hit, Double Kick, DoubleSlap | 11 of 68 |
-| 41 | move effect #83: Metronome | 11 of 68 |
+| 41 | move effect #83: Metronome; 125 of 442 callable moves unmodelled | 11 of 68 |
 | 42 | AI move effect #83 CALL_RANDOM_MOVE not transcribed (no Basic or Expert label): Metronome | 11 of 68 |
 | 43 | battle terrain: the battle terrain varies over its maps (TERRAIN_PLAIN, TERRAIN_GRASS, TERRAIN_BUILDING), and Nature Power, Secret Power, Camouflage would read it | 13 of 68 |
 | 44 | AI move effect #167 STATUS_BURN not transcribed (Basic_CheckCannotBurn): Will-O-Wisp | 14 of 68 |

@@ -16,6 +16,7 @@ from tools.kaizo.backlog import (
     group_kind,
     kind_counts,
     levelup_moves,
+    metronome_unmodelled,
     new_by_split,
     partner_unknown,
     reachable_species,
@@ -190,3 +191,22 @@ def test_sheet_cites():
     assert sheet_cites(t) == ["Galactic Split:1165", "Galactic Split:1175"]
     assert sheet_cites(SimpleNamespace(sources={})) == []
     assert sheet_cites(SimpleNamespace(sources={"split": "overrides fields.5"})) == []
+
+
+def test_metronome_unmodelled_counts_the_refused_calls(tables, names):
+    """Ruling B5-2: of the moves Metronome can call (ids 1-467 but itself and the
+    NO_METRONOME moves), the count whose own line coverage refuses."""
+    import numpy as np
+
+    from nuzline.engine.coverage import Support, move_effect_line
+    from nuzline.engine.ids import MoveFlag
+
+    metronome = names.move_names.index("Metronome")
+    flags = np.asarray(tables.move_flags)
+    calls = [m for m in range(1, 468) if m != metronome and not flags[m] & MoveFlag.NO_METRONOME]
+    refused = [m for m in calls if move_effect_line(tables, names, m, 1)[0] == Support.NONE]
+    n, m = metronome_unmodelled(tables, names, 1)
+    assert (n, m) == (len(refused), len(calls))
+    assert 0 < n < m
+    # Metronome is refused while any of them is (coverage.move_effect_line).
+    assert move_effect_line(tables, names, metronome, 1)[0] == Support.NONE
