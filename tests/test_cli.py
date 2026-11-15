@@ -1053,18 +1053,19 @@ def _kaizo_party(tmp_path, names) -> str:
     return str(path)
 
 
-def test_kaizo_roark_refused(tmp_path, capsys, kaizo_tables, kaizo_names):  # exit 2
+def test_kaizo_roark_covered(tmp_path, capsys, kaizo_tables, kaizo_names):  # exit 0
     party = _kaizo_party(tmp_path, kaizo_names)
-    assert main(["coverage", "--game", "kaizo", "--party", party, "--trainer", "roark"]) == 2
+    assert main(["coverage", "--game", "kaizo", "--party", party, "--trainer", "roark"]) == 0
     out = capsys.readouterr().out
     # K3b1: sandstorm is modelled, so Roark's battle-start Sandstorm is no longer refused.
     # K3c Task 2: Kaizo has an AI policy and its one AI script change is modelled. K3c Task 6
-    # registers the RISKY flag for the Kaizo policy. Only the player's side (the sample
-    # party's Leaf Guard and Wild Charge) still refuses the fight.
+    # registers the RISKY flag for the Kaizo policy. Wild Charge (RECOIL_STATUS, B10-1) and the
+    # sample party's Leaf Guard (E1 Gardenia batch, G-14) are modelled: the fight is covered.
+    assert "Support: EXACT" in out and "Missing: none" in out
     assert "Sandstorm" not in out
     assert "no transcribed AI policy" not in out and "code changes unclassified" not in out
     assert "AI_FLAG" not in out and "AI flag set" not in out
-    assert "Player Grotle (slot 2): Leaf Guard (ability UNSUPPORTED)" in out
+    assert "Leaf Guard" not in out
     # K3b2 Task 4: Gible's Thunder Fang (effect 275) is modelled now.
     assert "Thunder Fang (move effect UNSUPPORTED)" not in out
     # Final review I3: Kaizo Roark's move 205 is Accelerock; Rollout is no Kaizo move. K3c

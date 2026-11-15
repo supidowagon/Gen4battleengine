@@ -854,6 +854,72 @@ def _draw_pressure(draw, tables: Tables, a: dict, side: int, active: int, names:
                 a["pp"][foe, foe_mon, k] = rnd.randint(1, 2)
 
 
+# E1 Gardenia batch (G-12 .. G-14): moves ``_draw_status_guard`` gives the foe of a Synchronize or
+# Leaf Guard holder: status moves of each status, damaging moves with a status secondary (contact
+# or not), and a plain contact move; Roar and U-turn for the Toxic Spikes paths.
+STATUS_GUARD_MOVES = (
+    "Thunder Wave",
+    "Glare",
+    "Will-O-Wisp",
+    "Toxic",
+    "PoisonPowder",
+    "Spore",
+    "Ember",
+    "Body Slam",
+    "Poison Sting",
+    "Fire Punch",
+    "Tackle",
+    "Roar",
+    "U-turn",
+)
+CONTACT_STATUS_ABILITIES = (AbilityId.STATIC, AbilityId.POISON_POINT, AbilityId.FLAME_BODY)
+
+
+def _draw_status_guard(
+    draw, tables: Tables, a: dict, side: int, active: int, names: Names
+) -> None:
+    """Maybe (1 in 4) give the active Pokemon Synchronize or Leaf Guard (G-12 .. G-14), its foe a
+    ``STATUS_GUARD_MOVES`` move and its own side a contact move (kept only when supported), each
+    active Pokemon no status half the time, the foe a Static-like ability a third of the time, sun
+    half the time (Leaf Guard), and a bench Pokemon Synchronize with Toxic Spikes on its side a
+    third of the time (the Roar and U-turn newcomer paths)."""
+    if draw(st.integers(0, 3)) != 0:
+        return
+    rnd = draw(st.randoms(use_true_random=False))
+    guard = rnd.choice((AbilityId.SYNCHRONIZE, AbilityId.LEAF_GUARD))
+    a["ability"][side, active] = guard
+    foe = 1 - side
+    foe_mon = int(a["active"][foe])
+    for owner, mon, name in (
+        (foe, foe_mon, rnd.choice(STATUS_GUARD_MOVES)),
+        (side, active, rnd.choice(("Tackle", "Fire Punch", "Body Slam", "Thunder Wave", "U-turn"))),
+    ):
+        move = names.move(name)
+        if tables.move_effect[move] != EffectId.UNSUPPORTED:
+            k = rnd.randint(0, 3)
+            a["moves"][owner, mon, k] = move
+            a["pp"][owner, mon, k] = int(tables.move_pp[move])
+    for owner, mon in ((side, active), (foe, foe_mon)):
+        if rnd.random() < 0.5:
+            a["status"][owner, mon] = Status.NONE
+            a["status_counter"][owner, mon] = 0
+    if rnd.random() < 1 / 3:
+        a["ability"][foe, foe_mon] = rnd.choice(CONTACT_STATUS_ABILITIES)
+    if guard == AbilityId.LEAF_GUARD and rnd.random() < 0.5:
+        a["weather"][...] = Weather.SUN
+    bench = [
+        i
+        for i in range(SLOTS)
+        if i != active and a["species"][side, i] and a["hp"][side, i] > 0
+    ]
+    if bench and rnd.random() < 1 / 3:
+        slot = rnd.choice(bench)
+        a["ability"][side, slot] = AbilityId.SYNCHRONIZE
+        a["status"][side, slot] = Status.NONE
+        a["status_counter"][side, slot] = 0
+        a["toxic_spikes"][side] = rnd.randint(1, 2)
+
+
 # E2 batch 9: abilities ``_draw_batch9`` puts on the active Pokemon.
 BATCH9_ABILITIES = (
     AbilityId.CHLOROPHYLL,
@@ -1469,6 +1535,7 @@ def supported_state(draw, tables: Tables, names: Names, invokers: bool = True) -
         _draw_batch10(draw, tables, a, side, active, names)
         _draw_substitute(draw, tables, a, side, active, names)
         _draw_pressure(draw, tables, a, side, active, names)
+        _draw_status_guard(draw, tables, a, side, active, names)
         _draw_choice_lock(draw, a, side, active)
     # B7-13: an Imprison user sharing a move with a Sleep Talk user, so a faster Imprison (or one
     # already up) can shrink the Sleep Talk set.

@@ -436,6 +436,8 @@ CONSTANTS: tuple[Constant, ...] = (
             "Shadow Tag": 23,
             "Magnet Pull": 42,
             "Pressure": 46,
+            "Leaf Guard": 102,
+            "Synchronize": 28,
         },
     ),
     # ChooseTraceTarget's untraceable abilities (battle_lib.c:7750-7775) and its Forecast.

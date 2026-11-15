@@ -238,6 +238,11 @@ class _Turn:
     power_mul: int = 10
     # The paused action's own inputs (BattleState.ts_used / ts_dealt).
     pivot_dealt: int = 0
+    # SYSCTL_TRY_SYNCHRONIZE_STATUS (toggled at the end of every poison / bad poison / burn /
+    # paralysis subscript that lands, cleared by BattleContext_Init) and sideEffectMon, the side
+    # in singles (rulings G-12, G-13).
+    sync_flag: bool = False
+    sync_mon: int = -1
 
 
 class _Pause(Exception):
@@ -1767,6 +1772,8 @@ def _entry_hazards(turn: _Turn, s: RefState, side: int) -> None:
                     and _can_have_status(tables, s, side, status)
                 ):
                     mon.status, mon.status_counter = status, 0
+                    # BtlCmd_CheckToxicSpikes's sideEffectMon (script.c:7640-7641).
+                    _status_landed(turn, side, status)
         if sd.spikes and mon.hp:
             _lose_hp(turn, s, side, _divide(mon.max_hp, (5 - sd.spikes) * 2))
     _stealth_rock_damage(turn, s, side)
@@ -2023,6 +2030,69 @@ def _can_have_status(tables, s: RefState, side: int, status: int) -> bool:
     return not (status == Status.FREEZE and frozen_out)
 
 
+_SYNC_STATUSES = (Status.POISON, Status.TOXIC, Status.BURN, Status.PARALYSIS)
+
+
+def _status_landed(turn: _Turn, side: int, status: int) -> None:
+    """A status subscript ended with the status on ``side``'s battler, its sideEffectMon: a
+    poison, bad poison, burn or paralysis toggles ``SYSCTL_TRY_SYNCHRONIZE_STATUS``
+    (subscript_poison.s:63-69, _badly_poison.s:83-88, _burn.s:79-84, _paralyze.s:50-56).
+    The sideEffectMon is tracked from these landings and King's Rock (ruling G-13)."""
+    if status in _SYNC_STATUSES:
+        turn.sync_flag = not turn.sync_flag
+        turn.sync_mon = side
+
+
+def _synchronize(turn: _Turn, s: RefState, attacker: int, defender: int) -> None:
+    """``BattleSystem_SynchronizeStatus`` (battle_lib.c:4493-4534) at AfterMoveEffects'
+    Synchronize step (bcp.c:3665-3670): with the flag set, a Synchronize defender that is the
+    sideEffectMon passes its status to the attacker, else a Synchronize attacker that is passes
+    it to the defender; sideEffectMon becomes the receiver. Any poison passes as poison
+    (subscript_poison.s), a burn as a burn, a paralysis as a paralysis; sleep and freeze pass
+    nothing. As an ABILITY side effect: the receiver's own Immunity / Water Veil / Limber,
+    Leaf Guard in sun, a status, a Poison / Steel or Fire type stop it silently; no substitute
+    or Safeguard test, no HP test (a fainted receiver's status is cleared at its faint). The
+    message tags the passer's Synchronize (rulings G-12, G-13)."""
+    if not turn.sync_flag:
+        return
+    passer = receiver = None
+    if (
+        _active(s, defender).ability == AbilityId.SYNCHRONIZE and turn.sync_mon == defender
+    ):
+        passer, receiver = defender, attacker
+    elif _active(s, attacker).ability == AbilityId.SYNCHRONIZE and turn.sync_mon == attacker:
+        passer, receiver = attacker, defender
+    if passer is None:
+        return
+    turn.sync_mon = receiver
+    held = _active(s, passer).status
+    if held in (Status.POISON, Status.TOXIC):
+        status = Status.POISON
+    elif held == Status.BURN:
+        status = Status.BURN
+    elif held == Status.PARALYSIS:
+        status = Status.PARALYSIS
+    else:
+        return
+    mon = _active(s, receiver)
+    own = _decomp_ability(turn.tables, mon)
+    if status == Status.POISON and own == ITEM_ABILITY_IDS["Immunity"]:
+        return
+    if status == Status.BURN and own == ITEM_ABILITY_IDS["Water Veil"]:
+        return
+    if status == Status.PARALYSIS and mon.ability == AbilityId.LIMBER:
+        return
+    if mon.ability == AbilityId.LEAF_GUARD and _sunny(turn.tables, s):
+        return
+    if not _can_have_status(turn.tables, s, receiver, status):
+        return
+    if mon.hp:
+        mon.status, mon.status_counter = status, 0
+    turn.sync_flag = not turn.sync_flag
+    if passer == 0:
+        s.ai_ability_known[s.sides[0].active] = 1
+
+
 def _inflict(turn: _Turn, s: RefState, side: int, target: int, status: int,
              direct: bool) -> None:  # fmt: skip
     """The status subscripts (``subscript_fall_asleep.s`` ... ``subscript_paralyze.s``)
@@ -2039,6 +2109,18 @@ def _inflict(turn: _Turn, s: RefState, side: int, target: int, status: int,
     # subscript_paralyze.s:5/_170: an ignorable Limber stops the paralysis first; its
     # "prevents paralysis" message (TAG_NICKNAME_ABILITY) is shown for a direct effect only.
     if mon.hp and status == Status.PARALYSIS and _ignorable(s, side, target) == AbilityId.LIMBER:
+        if target == 0 and direct:
+            s.ai_ability_known[s.sides[0].active] = 1
+        return
+    # Leaf Guard in sun (ignorable; subscript_fall_asleep.s:23-25, _poison.s:14-16,
+    # _badly_poison.s:32-34, _burn.s:21-23, _paralyze.s:6-8; none in subscript_freeze.s): a
+    # direct effect prints its message, tagging the ability (G-14).
+    if (
+        mon.hp
+        and status != Status.FREEZE
+        and _ignorable(s, side, target) == AbilityId.LEAF_GUARD
+        and _sunny(turn.tables, s)
+    ):
         if target == 0 and direct:
             s.ai_ability_known[s.sides[0].active] = 1
         return
@@ -2063,6 +2145,7 @@ def _inflict(turn: _Turn, s: RefState, side: int, target: int, status: int,
     if mon.hp and _can_have_status(turn.tables, s, target, status):
         mon.status = status
         mon.status_counter = turn.outcome.duration[side] if status == Status.SLEEP else 0
+        _status_landed(turn, target, status)
         # subscript_fall_asleep.s:_176 and subscript_freeze.s:_073 unlock the new sleeper
         # or ice cube.
         if status in (Status.SLEEP, Status.FREEZE):
@@ -2609,9 +2692,13 @@ def _contact_ability(turn: _Turn, s: RefState, side: int, move: int, hit: int, e
         return
     if status == Status.PARALYSIS and attacker.ability == AbilityId.LIMBER:
         return
+    # The attacker's own Leaf Guard in sun, silent for an ABILITY side effect (G-14).
+    if attacker.ability == AbilityId.LEAF_GUARD and _sunny(turn.tables, s):
+        return
     if turn.outcome.contact_proc[target][hit] and _can_have_status(turn.tables, s, side, status):
         attacker.status = status
         attacker.status_counter = 0
+        _status_landed(turn, side, status)  # TriggerAbilityOnHit: sideEffectMon = attacker
         # subscript_paralyze.s:44 / subscript_poison.s:57 tag the holder's ability
         # (BattleAI_SetAbility, script.c:11806).
         if target == 0:
@@ -2848,13 +2935,18 @@ def _hit(turn: _Turn, s: RefState, side: int, move: int, hit: int, struggling: b
     # hit that damaged a living target, RandNext() % 100 < param (outcome.flinch_item), a
     # MOVE_FLAG_TRIGGERS_KINGS_ROCK move; subscript_flinch_mon.s: a target that has not moved,
     # no Inner Focus as the attacker sees it.
-    if (
+    rock = (
         update_hp
         and taken
         and _item_effect(tables, _active(s, side)) == ItemId.KINGS_ROCK
         and o.flinch_item[side][hit]
         and _t(tables, "move_flags", move) & MoveFlag.KINGS_ROCK
         and _active(s, target).hp > 0
+    )
+    if rock:
+        turn.sync_mon = target  # bcp.c:4643, before subscript_flinch_mon.s's tests (G-13)
+    if (
+        rock
         and not target_moved
         and _ignorable(s, side, target) not in (AbilityId.INNER_FOCUS, AbilityId.SHIELD_DUST)
         and not _shielded(turn, s, target)  # subscript_flinch_mon.s:6
@@ -2913,6 +3005,9 @@ def _u_turn(turn: _Turn, s: RefState, side: int, move: int, hit: int, dealt: int
         before = turn.done[foe]
         _pursuit(turn, s, side, turn.actions, turn.choices)
         if turn.done[foe] and not before:  # the Pursuit hit (subscript_pursuit.s)
+            # The U-turn user that falls to it runs AfterMoveEffects without its Synchronize step
+            # in the engine (ruling G-13: the step reads statuses the faint check cleared).
+            turn.sync_flag = False
             turn.pursued = foe + 1
             turn.pick_mul = PURSUIT_POWER_MUL
             _faint_check(turn, s)
@@ -2924,12 +3019,17 @@ def _u_turn(turn: _Turn, s: RefState, side: int, move: int, hit: int, dealt: int
         turn.pivot_dealt = dealt
         raise _Pause
     # No switch: AfterMoveMessage goes on with the extra flinch (the pursuer, if any, has moved).
-    if (
+    rock = (
         turn.damaged
         and _item_effect(tables, user) == ItemId.KINGS_ROCK
         and o.flinch_item[side][hit]
         and _t(tables, "move_flags", move) & MoveFlag.KINGS_ROCK
         and holder.hp > 0
+    )
+    if rock:
+        turn.sync_mon = foe  # bcp.c:4643 (G-13)
+    if (
+        rock
         and not target_moved
         and not turn.done[foe]
         and _ignorable(s, side, foe) not in (AbilityId.INNER_FOCUS, AbilityId.SHIELD_DUST)
@@ -3166,6 +3266,9 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
     None when the foe is not the defender."""
     tables, o = turn.tables, turn.outcome
     mon = _active(s, side)
+    # BattleContext_Init (battle_lib.c:2009) cleared SYSCTL_TRY_SYNCHRONIZE_STATUS at the last
+    # action's end (G-13).
+    turn.sync_flag, turn.sync_mon = False, -1
     # FightCommand (bcp.c:1900) picks the defender first: the foe while it is alive (any
     # HP for RANGE_OPPONENT_SIDE), the user for SELF_DEFENDER ranges.
     target_range = _move_target(tables, move)
@@ -3537,6 +3640,13 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
         dealt, _ = _hit(turn, s, side, move, hit, struggling, target_moved)
         if full:
             continue
+        # AFTER_MOVE_EFFECT_SYNCHRONIZE_STATUS (bcp.c:3665-3670), before the item checks; a
+        # Roar's ran at its drag (``_roar``). The defender is the user for a self-defender move.
+        if effect != EffectId.ROAR:
+            own = _move_target(tables, move) in SELF_DEFENDER or _curse_on_user(
+                tables, move, _ghost(s, side)
+            )
+            _synchronize(turn, s, side, side if own else 1 - side)
         # BattleControllerPlayer_AfterMoveEffects (bcp.c:3638), after every hit:
         # AFTER_MOVE_EFFECT_ATTACKER_ITEM (bcp.c:3684), then _DEFENDER_ITEM (:3691), then
         # _TRIGGER_ITEMS_ON_HIT (:3698, the Sticky Barb once the defender took damage this
@@ -3608,6 +3718,8 @@ def _roar(turn: _Turn, s: RefState, side: int) -> bool:
     turn.dragged[foe] = slot + 1
     _send_out_exp(s, foe)  # PokemonSendOut BTLSCR_DEFENDER (:22)
     _entry_hazards(turn, s, foe)  # BATTLE_SUBSCRIPT_HAZARDS_CHECK (:31)
+    # AfterMoveEffects: its Synchronize step (bcp.c:3665) before the switch-in effects (:3672).
+    _synchronize(turn, s, side, foe)
     _switch_in_effects(turn, s, foe)
     turn.done[foe] = True
     return True
@@ -4586,17 +4698,25 @@ def _resume(tables, s: RefState, actions: tuple[int, int], outcome) -> RefState:
     # AfterMoveMessage's King's Rock with the newcomer's item (bcp.c:4630-4650).
     o = turn.outcome
     holder = _active(s, foe)
-    if (
+    rock = (
         damaged
         and _item_effect(tables, _active(s, side)) == ItemId.KINGS_ROCK
         and o.flinch_item[side][0]
         and _t(tables, "move_flags", used) & MoveFlag.KINGS_ROCK
         and holder.hp > 0
+    )
+    if rock:
+        turn.sync_mon = foe  # bcp.c:4643 (G-13)
+    if (
+        rock
         and position == 0
         and _ignorable(s, side, foe) not in (AbilityId.INNER_FOCUS, AbilityId.SHIELD_DUST)
     ):
         s.sides[foe].flinched = 1
-    # AfterMoveEffects (bcp.c:3638): the switch-in effects, the item checks, the thaw.
+    # AfterMoveEffects (bcp.c:3638): Synchronize (the flag is the list's Toxic Spikes poison:
+    # subscript_attack_then_switch_out.s:69 cleared it; a Baton Pass's defender is the user),
+    # the switch-in effects, the item checks, the thaw.
+    _synchronize(turn, s, side, side if _move_target(tables, used) in SELF_DEFENDER else foe)
     _switch_in_effects(turn, s, side)
     for battler in (side, foe):
         _held_item(turn, s, battler)

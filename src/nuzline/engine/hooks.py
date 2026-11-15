@@ -96,6 +96,7 @@ CONTACT_DAMAGE, PARALYSIS_BLOCKED = "contact_damage", "paralysis_blocked"
 WEATHER_SET, ABSORB, WEATHER_HP = "weather_set", "absorb", "weather_hp"
 OHKO_BLOCKED = "ohko_blocked"
 STATUS_HP, TORMENT = "status_hp", "torment"
+STATUS_BLOCKED, SYNCHRONIZED = "status_blocked", "synchronized"
 # Ability -> the phases at which it shows a message tagging it, for the implemented
 # abilities that ever do:
 # * Mold Breaker: SWITCH_IN_CHECK_STATE_MOLD_BREAKER (battle_lib.c:4075), a living
@@ -124,6 +125,14 @@ STATUS_HP, TORMENT = "status_hp", "torment"
 #   because of its {1}" with ``TAG_NICKNAME_ABILITY``), and the cure of a sleep status
 #   (``RecoverStatusByAbility``, subscript_ability_forbids_status.s:6 tags
 #   ``BTLSCR_MSG_TEMP``).
+# * Leaf Guard: a direct status (a status move) it blocks in sun (``effects._inflict``; ruling
+#   G-14): subscript_poison.s:_201, _badly_poison.s:_266, _burn.s:_264, _paralyze.s:_170 and
+#   _fall_asleep.s:_221 print their "prevents" / "stayed awake" message with
+#   ``TAG_NICKNAME_ABILITY``; an indirect or ability side effect ends silently. (Toxic Spikes and
+#   Yawn reveal it through their own code, by decomp id.)
+# * Synchronize: a status it passes on (``effects.synchronize``; ruling G-13): subscript_poison.s
+#   :57 / _burn.s:68 / _paralyze.s:44 tag ``BTLSCR_MSG_BATTLER_TEMP``, the holder; a pass the
+#   receiver blocks is silent.
 # * Shed Skin: subscript_ability_restore_status.s:8 tags the holder
 #   (``TAG_NICKNAME_ABILITY_STATUS``).
 # * Inner Focus: a Fake Out flinch it blocks (``effects._flinch``): subscript_flinch_mon.s:18-23
@@ -179,6 +188,8 @@ REVEALS_ON: dict[int, frozenset[str]] = {
     AbilityId.POISON_HEAL: frozenset({STATUS_HP}),
     AbilityId.BAD_DREAMS: frozenset({TORMENT}),
     AbilityId.STURDY: frozenset({OHKO_BLOCKED}),
+    AbilityId.LEAF_GUARD: frozenset({STATUS_BLOCKED}),
+    AbilityId.SYNCHRONIZE: frozenset({SYNCHRONIZED}),
 }
 
 

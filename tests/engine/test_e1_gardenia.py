@@ -3,11 +3,13 @@ against the reference engine (``assert_matches_reference``).
 
 Family A: held items that draw. Focus Band (``HOLD_EFFECT_MAYBE_ENDURE``, G-1 .. G-3) and the
 flavor berries Figy, Wiki, Mago, Aguav, Iapapa (``HOLD_EFFECT_HP_RESTORE_SPICY`` .. ``_SOUR``,
-G-4 .. G-6). Family B: the ability Pressure (G-8 .. G-11).
+G-4 .. G-6). Family B: the ability Pressure (G-8 .. G-11). Family C: the status guards
+Synchronize and Leaf Guard (G-12 .. G-17).
 """
 
 from __future__ import annotations
 
+import dataclasses
 import re
 from pathlib import Path
 
@@ -25,6 +27,8 @@ from nuzline.engine.ids import (
     AbilityId,
     Flavor,
     ItemId,
+    Status,
+    Weather,
 )
 from nuzline.engine.order import MOVE_ACTIONS
 from nuzline.engine.outcome import empty_outcome
@@ -408,3 +412,282 @@ def test_pressure_switch_in_reveals_it_to_the_ai(tables, names):
     assert int(s.ai_ability_known[0]) == 0
     out = assert_matches_reference(tables, s, (SWITCH_TO_1, 0), O)
     assert int(out.active[0]) == 1 and int(out.ai_ability_known[1]) == 1
+
+
+# --- Status guards: Synchronize and Leaf Guard (G-12 .. G-17) -----------------------------
+
+
+def _spec(names, species: str, moves, level=30, item="", slot=0):
+    """``_mon`` with an ability slot."""
+    return dataclasses.replace(_mon(names, species, moves, level, item), ability_slot=slot)
+
+
+def _ability(s, side, ability, slot=None):
+    """``s`` with ``side``'s party ``slot`` (the active one by default) holding ``ability``."""
+    mon = int(s.active[side]) if slot is None else slot
+    return s._replace(ability=s.ability.at[side, mon].set(ability))
+
+
+def _weather(s, weather):
+    return s._replace(weather=jnp.asarray(weather, s.weather.dtype))
+
+
+def _status(s, side, slot, status):
+    return s._replace(status=s.status.at[side, slot].set(status))
+
+
+def _proc(o, field, side, hit=0):
+    """``o`` with ``field[side, hit] = 1`` (a per-hit roll that passes)."""
+    arr = np.asarray(getattr(o, field)).copy()
+    arr[side, hit] = 1
+    return o._replace(**{field: jnp.asarray(arr)})
+
+
+def _sync_duel(tables, names, foe_move, foe="Rattata", player_item=""):
+    """The player's Abra (Synchronize, slot 0) with Growl and Tackle against a level-30 foe
+    using ``foe_move``."""
+    n = names
+    s = make_state(
+        tables,
+        [_spec(n, "Abra", ["Growl", "Tackle"], 30, player_item)],
+        [_spec(n, foe, [foe_move, "Growl"], 30)],
+    )
+    assert int(s.ability[0, 0]) == AbilityId.SYNCHRONIZE
+    return s
+
+
+def test_tables_map_leaf_guard_and_synchronize_in_both_games(
+    tables, names, kaizo_tables, kaizo_names
+):
+    """G-12, G-14: every species slot with the decomp's ABILITY_SYNCHRONIZE (28) /
+    ABILITY_LEAF_GUARD (102) carries the engine id in both games' tables, and no other does."""
+    for t, n in ((tables, names), (kaizo_tables, kaizo_names)):
+        for name, ability in (
+            ("Synchronize", AbilityId.SYNCHRONIZE),
+            ("Leaf Guard", AbilityId.LEAF_GUARD),
+        ):
+            decomp = np.asarray(t.species_abilities_decomp) == n.ability(name)
+            engine = np.asarray(t.species_abilities) == ability
+            assert decomp.any() and (decomp == engine).all(), name
+
+
+@pytest.mark.parametrize(
+    ("move", "held", "passed"),
+    [
+        ("Thunder Wave", Status.PARALYSIS, Status.PARALYSIS),
+        ("Glare", Status.PARALYSIS, Status.PARALYSIS),
+        ("Will-O-Wisp", Status.BURN, Status.BURN),
+        ("PoisonPowder", Status.POISON, Status.POISON),
+        ("Toxic", Status.TOXIC, Status.POISON),  # any poison runs subscript_poison.s
+    ],
+)
+def test_synchronize_passes_a_status_moves_status_back(tables, names, move, held, passed):
+    """G-12: the defender whose Synchronize is the sideEffectMon passes its new status to the
+    attacker (battle_lib.c:4499-4504, :4514-4520); a bad poison passes as a poison. Its message
+    tags the holder's ability (subscript_poison.s:57, _burn.s:68, _paralyze.s:44): the AI learns
+    a player's Synchronize. Another ability passes nothing."""
+    s = _sync_duel(tables, names, move)
+    acts = A("Growl", move, s, names)
+    out = assert_matches_reference(tables, s, acts, O)
+    assert int(out.status[0, 0]) == held
+    assert int(out.status[1, 0]) == passed
+    assert int(out.ai_ability_known[0]) == 1
+    out = assert_matches_reference(tables, _ability(s, 0, AbilityId.INNER_FOCUS), acts, O)
+    assert int(out.status[0, 0]) == held and int(out.status[1, 0]) == Status.NONE
+    assert int(out.ai_ability_known[0]) == 0
+
+
+@pytest.mark.parametrize(
+    ("ability", "status"),
+    [
+        (AbilityId.STATIC, Status.PARALYSIS),
+        (AbilityId.POISON_POINT, Status.POISON),
+        (AbilityId.FLAME_BODY, Status.BURN),
+    ],
+)
+def test_synchronize_passes_a_contact_abilitys_status(tables, names, ability, status):
+    """G-12: a Synchronize attacker that a Static-like ability statused (TriggerAbilityOnHit sets
+    sideEffectMon to the attacker, battle_lib.c:4225) passes the status to the holder
+    (:4506-4511)."""
+    s = _ability(_sync_duel(tables, names, "Growl"), 1, ability)
+    o = _proc(O, "contact_proc", 1)
+    out = assert_matches_reference(tables, s, A("Tackle", "Growl", s, names), o)
+    assert int(out.status[0, 0]) == status
+    assert int(out.status[1, 0]) == status
+    assert int(out.ai_ability_known[0]) == 1
+
+
+def test_synchronize_after_kings_rock_passes_nothing(tables, names):
+    """G-13: CheckExtraFlinch makes the defender the sideEffectMon once the attacker's King's
+    Rock passes its own tests (bcp.c:4636-4643), after the contact ability: the paralyzed
+    Synchronize attacker is no longer the sideEffectMon and passes nothing."""
+    s = _sync_duel(tables, names, "Growl", player_item="King’s Rock")
+    s = _ability(s, 1, AbilityId.STATIC)
+    acts = A("Tackle", "Growl", s, names)
+    o = _proc(O, "contact_proc", 1)
+    out = assert_matches_reference(tables, s, acts, o)
+    assert int(out.status[1, 0]) == Status.PARALYSIS  # no King's Rock roll: it passes
+    out = assert_matches_reference(tables, s, acts, _proc(o, "flinch_item", 0))
+    assert int(out.status[0, 0]) == Status.PARALYSIS
+    assert int(out.status[1, 0]) == Status.NONE
+
+
+def test_synchronize_passes_no_sleep_or_freeze(tables, names):
+    """G-12: a sleep or a freeze picks no script (battle_lib.c:4514-4520) and never toggles the
+    flag (subscript_fall_asleep.s, subscript_freeze.s)."""
+    s = _sync_duel(tables, names, "Spore")
+    out = assert_matches_reference(tables, s, A("Growl", "Spore", s, names), O)
+    assert int(out.status[0, 0]) == Status.SLEEP and int(out.status[1, 0]) == Status.NONE
+    s = _sync_duel(tables, names, "Ice Beam")
+    o = _proc(O, "secondary", 1)
+    out = assert_matches_reference(tables, s, A("Growl", "Ice Beam", s, names), o)
+    assert int(out.status[0, 0]) == Status.FREEZE and int(out.status[1, 0]) == Status.NONE
+    assert int(out.ai_ability_known[0]) == 0
+
+
+def test_synchronize_receiver_checks(tables, names):
+    """G-12: the pass is an ABILITY side effect: a receiver already statused or of an immune
+    type takes nothing and no message is shown; its substitute and its side's Safeguard do not
+    stop it (subscript_paralyze.s:20, :26: both skipped for SIDE_EFFECT_TYPE_ABILITY)."""
+    s = _sync_duel(tables, names, "Thunder Wave")
+    acts = A("Growl", "Thunder Wave", s, names)
+    out = assert_matches_reference(tables, _status(s, 1, 0, Status.BURN), acts, O)
+    assert int(out.status[0, 0]) == Status.PARALYSIS and int(out.status[1, 0]) == Status.BURN
+    assert int(out.ai_ability_known[0]) == 0
+    guarded = s._replace(
+        safeguard=s.safeguard.at[1].set(3), substitute_hp=s.substitute_hp.at[1].set(20)
+    )
+    out = assert_matches_reference(tables, guarded, acts, O)
+    assert int(out.status[1, 0]) == Status.PARALYSIS
+    s = _sync_duel(tables, names, "Toxic", foe="Grimer")  # a Poison type
+    out = assert_matches_reference(tables, s, A("Growl", "Toxic", s, names), O)
+    assert int(out.status[0, 0]) == Status.TOXIC and int(out.status[1, 0]) == Status.NONE
+    assert int(out.ai_ability_known[0]) == 0
+
+
+def test_synchronize_pass_meets_leaf_guard_in_sun(tables, names):
+    """G-12, G-14: the receiver's own Leaf Guard in sun stops the passed status silently
+    (subscript_paralyze.s:6-8, :_170); out of sun it takes it."""
+    s = _ability(_sync_duel(tables, names, "Thunder Wave"), 1, AbilityId.LEAF_GUARD)
+    acts = A("Growl", "Thunder Wave", s, names)
+    out = assert_matches_reference(tables, _weather(s, Weather.SUN), acts, O)
+    assert int(out.status[0, 0]) == Status.PARALYSIS and int(out.status[1, 0]) == Status.NONE
+    out = assert_matches_reference(tables, s, acts, O)
+    assert int(out.status[1, 0]) == Status.PARALYSIS
+
+
+def test_synchronize_after_roar_drags_into_toxic_spikes(tables, names):
+    """G-13: Roar's drag runs the hazards in the move script; Toxic Spikes poisons a Synchronize
+    newcomer (BtlCmd_CheckToxicSpikes makes it the sideEffectMon, battle_script.c:7640-7641)
+    and AfterMoveEffects' Synchronize step passes the poison to the Roar user, before the
+    switch-in effects (bcp.c:3665-3672): a Pecha Berry cures the newcomer only after the pass."""
+    n = names
+    for item, kept in (("", Status.POISON), ("Pecha Berry", Status.NONE)):
+        s = make_state(
+            tables,
+            [_spec(n, "Rattata", ["Roar"], 30)],
+            [_spec(n, "Geodude", ["Growl"], 20), _spec(n, "Abra", ["Growl"], 20, item)],
+        )
+        s = s._replace(toxic_spikes=s.toxic_spikes.at[1].set(1))
+        out = assert_matches_reference(tables, s, A("Roar", "Growl", s, n), O)
+        assert int(out.active[1]) == 1
+        assert int(out.status[1, 1]) == kept
+        assert int(out.status[0, 0]) == Status.POISON
+
+
+def test_synchronize_after_u_turn_into_toxic_spikes(tables, names):
+    """G-13: U-turn clears the Synchronize flag before its list
+    (subscript_attack_then_switch_out.s:69); the newcomer's Toxic Spikes poison sets it, and the
+    resumed tail passes the poison (two layers: the bad poison as a poison) to the defender;
+    the AI learns the player's Synchronize."""
+    n = names
+    for layers, own in ((1, Status.POISON), (2, Status.TOXIC)):
+        s = make_state(
+            tables,
+            [_spec(n, "Scyther", ["U-turn"], 30), _spec(n, "Abra", ["Growl"], 30)],
+            [_spec(n, "Rattata", ["Growl"], 40), _spec(n, "Rattata", ["Growl"], 30)],
+        )
+        s = s._replace(toxic_spikes=s.toxic_spikes.at[0].set(layers))
+        paused = assert_matches_reference(tables, s, A("U-turn", "Growl", s, n), O)
+        assert int(paused.pivot_battler) == 1
+        acts = np.asarray(paused.ts_actions).astype(int).tolist()
+        acts[0] = MOVE_ACTIONS + 1
+        out = assert_matches_reference(tables, paused, tuple(acts), O)
+        assert int(out.active[0]) == 1 and int(out.status[0, 1]) == own
+        assert int(out.status[1, 0]) == Status.POISON
+        assert int(out.ai_ability_known[1]) == 1
+
+
+@pytest.mark.parametrize(
+    ("move", "status"),
+    [
+        ("Thunder Wave", Status.PARALYSIS),
+        ("Will-O-Wisp", Status.BURN),
+        ("PoisonPowder", Status.POISON),
+        ("Toxic", Status.TOXIC),
+        ("Spore", Status.SLEEP),
+    ],
+)
+def test_leaf_guard_in_sun_blocks_a_status_move(tables, names, move, status):
+    """G-14: CheckIgnoreWeather, then FIELD_CONDITION_SUNNY, then an ignorable Leaf Guard
+    (subscript_paralyze.s:6-8, _burn.s:21-23, _poison.s:14-16, _badly_poison.s:32-34,
+    _fall_asleep.s:23-25): in sun the status move is ineffective and its message tags the
+    ability (the AI learns it). Out of sun, under a Cloud Nine (BtlCmd_CheckIgnoreWeather,
+    battle_script.c:9195-9206) or against a Mold Breaker attacker the status lands."""
+    n = names
+    s = make_state(
+        tables,
+        [_spec(n, "Tangela", ["Growl"], 30, slot=1)],
+        [_spec(n, "Rattata", [move, "Growl"], 30)],
+    )
+    assert int(s.ability[0, 0]) == AbilityId.LEAF_GUARD
+    acts = A("Growl", move, s, n)
+    sunny = _weather(s, Weather.SUN)
+    out = assert_matches_reference(tables, sunny, acts, O)
+    assert int(out.status[0, 0]) == Status.NONE and int(out.ai_ability_known[0]) == 1
+    out = assert_matches_reference(tables, s, acts, O)
+    assert int(out.status[0, 0]) == status and int(out.ai_ability_known[0]) == 0
+    out = assert_matches_reference(tables, _ability(sunny, 1, AbilityId.MOLD_BREAKER), acts, O)
+    assert int(out.status[0, 0]) == status
+    locked = make_state(
+        tables,
+        [_spec(n, "Tangela", ["Growl"], 30, slot=1)],
+        [_spec(n, "Psyduck", [move, "Growl"], 30, slot=1)],  # Cloud Nine
+    )
+    locked_acts = A("Growl", move, locked, n)
+    out = assert_matches_reference(tables, _weather(locked, Weather.SUN), locked_acts, O)
+    assert int(out.status[0, 0]) == status
+
+
+def test_leaf_guard_in_sun_stops_a_secondary_silently(tables, names):
+    """G-14: an indirect status (Ember's burn) on a Leaf Guard holder in sun ends silently
+    (subscript_burn.s:_264: SIDE_EFFECT_TYPE_INDIRECT jumps to the end): no burn, no reveal."""
+    n = names
+    s = make_state(
+        tables,
+        [_spec(n, "Tangela", ["Growl"], 40, slot=1)],
+        [_spec(n, "Rattata", ["Ember", "Growl"], 20)],
+    )
+    acts = A("Growl", "Ember", s, n)
+    o = _proc(O, "secondary", 1)
+    out = assert_matches_reference(tables, _weather(s, Weather.SUN), acts, o)
+    assert int(out.status[0, 0]) == Status.NONE and int(out.ai_ability_known[0]) == 0
+    out = assert_matches_reference(tables, s, acts, o)
+    assert int(out.status[0, 0]) == Status.BURN
+
+
+def test_leaf_guard_in_sun_stops_static_on_its_attacker(tables, names):
+    """G-14: the attacker's own Leaf Guard in sun stops the paralysis of the defender's Static
+    (subscript_paralyze.s:6-8 on the attacker, an ABILITY side effect: silent)."""
+    n = names
+    s = make_state(
+        tables,
+        [_spec(n, "Tangela", ["Tackle"], 20, slot=1)],
+        [_spec(n, "Pikachu", ["Growl"], 30)],
+    )
+    acts = A("Tackle", "Growl", s, n)
+    o = _proc(O, "contact_proc", 1)
+    out = assert_matches_reference(tables, _weather(s, Weather.SUN), acts, o)
+    assert int(out.status[0, 0]) == Status.NONE
+    out = assert_matches_reference(tables, s, acts, o)
+    assert int(out.status[0, 0]) == Status.PARALYSIS

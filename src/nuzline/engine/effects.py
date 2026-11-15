@@ -220,7 +220,10 @@ many are real). Decomp sources:
 
 Substitute (E2 batch 10, B10-4): ``play_hit``'s hit into it and the gates of every effect
 (``_Hit.sub_hit``, ``_Hit.shielded``), ``_substitute`` the move.
-Unreachable branches are not modelled: Mist and Safeguard come from unsupported moves; Clear Body, Hyper Cutter, Immunity, Leaf Guard, Liquid Ooze,
+Leaf Guard and Synchronize (E1 Gardenia batch, rulings G-12..G-17): Leaf Guard in sun in
+``_inflict``, ``_contact_ability`` and ``synchronize`` (Toxic Spikes, the status orbs and Yawn
+read it by decomp id); ``synchronize`` is AfterMoveEffects' step, run by ``step._use_move``.
+Unreachable branches are not modelled: Mist and Safeguard come from unsupported moves; Clear Body, Hyper Cutter, Immunity, Liquid Ooze,
 Magic Guard, Skill Link, Own Tempo, Normalize and Color Change are unsupported abilities;
 Grip Claw is an unsupported item. Shield Dust (``_shield_dust``) and the weather moves
 (``_weather``) are E2 batch 3's; Serene Grace acts on the secondary chance
@@ -434,14 +437,39 @@ def _inflict(
     from nuzline.engine.hooks import (  # hooks imports this module
         PARALYSIS_BLOCKED,
         SLEEP_BLOCKED,
+        STATUS_BLOCKED,
         reveal_ability,
     )
 
     state = reveal_ability(state, h.target_side, h.target, SLEEP_BLOCKED, blocked)
     state = reveal_ability(state, h.target_side, h.target, PARALYSIS_BLOCKED, limber & direct)
-    # Shield Dust, after Insomnia / Limber (Leaf Guard, Water Veil and the like in between are
+    # Leaf Guard in sun (ruling G-14), after the status's own ability test (Insomnia, Limber;
+    # Immunity, Water Veil and Vital Spirit are unsupported): ``CheckIgnoreWeather`` then
+    # FIELD_CONDITION_SUNNY then an ignorable ABILITY_LEAF_GUARD (subscript_fall_asleep.s:23-25,
+    # subscript_poison.s:14-16, subscript_badly_poison.s:32-34, subscript_burn.s:21-23,
+    # subscript_paralyze.s:6-8; subscript_freeze.s has no such test). A direct effect prints the
+    # ability's message (TAG_NICKNAME_ABILITY: poison :_177/_201, badly_poison :_249/_266, burn
+    # :_264, paralyze :_170, fall_asleep :_202/_221), which the AI learns; an indirect one ends
+    # silently.
+    guarded = (
+        (status == Status.SLEEP)
+        | (status == Status.POISON)
+        | (status == Status.TOXIC)
+        | (status == Status.BURN)
+        | (status == Status.PARALYSIS)
+    )
+    leaf = (
+        cond
+        & ~blocked
+        & ~limber
+        & guarded
+        & _sunny(tables, state)
+        & (h.target_ignorable == AbilityId.LEAF_GUARD)
+    )
+    state = reveal_ability(state, h.target_side, h.target, STATUS_BLOCKED, leaf & direct)
+    # Shield Dust, after Insomnia / Limber / Leaf Guard (Water Veil and the like in between are
     # unsupported), for an indirect effect only.
-    blocked = blocked | limber | (cond & ~jnp.asarray(direct, bool) & _shield_dust(h))
+    blocked = blocked | limber | leaf | (cond & ~jnp.asarray(direct, bool) & _shield_dust(h))
     # Then CheckSubstitute on the side-effect battler (subscript_paralyze.s:21, burn :36,
     # freeze :19, poison :29, badly_poison :46, fall_asleep :40, before its uproar test at
     # :43): a direct effect prints "But it failed!", an indirect one stops silently. An
@@ -1583,11 +1611,15 @@ def _contact_ability(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     # attacker itself, so no Mold Breaker can pierce it) ends Static's paralysis silently
     # (:_170 ends an ABILITY side effect with no message).
     limber = (status == Status.PARALYSIS) & (state.ability[h.side, h.user] == AbilityId.LIMBER)
+    # Then the attacker's own Leaf Guard in sun (paralyze :6-8, poison :14-16, burn :21-23; ruling
+    # G-14): an ABILITY side effect ends silently (:_170, :_177, :_264).
+    leaf = _sunny(tables, state) & (state.ability[h.side, h.user] == AbilityId.LEAF_GUARD)
     cond = (
         (status != Status.NONE)
         & hit
         & h.contact_proc
         & ~limber
+        & ~leaf
         & can_have_status(tables, state, h.side, h.user, status)
     )
     # Rough Skin (battle_lib.c:4257-4271): no roll; subscript_rough_skin.s takes
@@ -1632,6 +1664,100 @@ def _contact_ability(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     # subscript_aftermath.s:6 tags BTLSCR_DEFENDER's ability (BattleMessage_AbilityTag).
     state = reveal_ability(state, h.target_side, h.target, CONTACT_DAMAGE, rough | aftermath)
     return _set_status(state, h.side, h.user, status, cond)
+
+
+SYNC_STATUSES = (Status.POISON, Status.TOXIC, Status.BURN, Status.PARALYSIS)
+
+
+def sync_landed(before: BattleState, after: BattleState, side) -> jnp.ndarray:
+    """``bool``: ``side``'s active battler (``before``'s) went from no status to poison, bad
+    poison, burn or paralysis between the two states: a status subscript reached its end
+    (subscript_poison.s:63-69, subscript_badly_poison.s:83-88, subscript_burn.s:79-84,
+    subscript_paralyze.s:50-56), which toggles ``SYSCTL_TRY_SYNCHRONIZE_STATUS`` (set when
+    clear, cleared when set). Sleep and freeze never touch it (subscript_fall_asleep.s,
+    subscript_freeze.s)."""
+    mon = before.active[side]
+    new = after.status[side, mon]
+    return (before.status[side, mon] == Status.NONE) & jnp.isin(
+        new, jnp.asarray(SYNC_STATUSES, new.dtype)
+    )
+
+
+def synchronize(
+    tables: Tables, state: BattleState, attacker, defender, flag, sem, cond
+) -> tuple[BattleState, jnp.ndarray, jnp.ndarray]:
+    """``BattleSystem_SynchronizeStatus`` (battle_lib.c:4493-4534), the
+    ``AFTER_MOVE_EFFECT_SYNCHRONIZE_STATUS`` step of ``AfterMoveEffects`` (bcp.c:3665-3670), where
+    ``cond`` (the step runs: after every hit of a move whose AfterMoveEffects run). Returns
+    ``(state, flag, sem)``. ``flag``: ``SYSCTL_TRY_SYNCHRONIZE_STATUS``; ``sem``: the
+    ``sideEffectMon`` (a battler; the side in singles). ``attacker`` / ``defender``: the action's
+    battlers (the defender is the attacker itself for a self-defender move: Baton Pass).
+
+    With the flag set: a defender whose ``Battler_Ability`` is Synchronize and which is the
+    side-effect battler passes to the attacker (:4499-4504); else a Synchronize attacker that
+    is the side-effect battler (a Static-like ability of the defender statused it) passes to
+    the defender (:4506-4511). Either way ``sideEffectMon`` becomes the receiver. The passer's
+    status picks the script (:4514-4520): any poison runs subscript_poison.s (a bad poison
+    passes as a plain poison), a burn subscript_burn.s, a paralysis subscript_paralyze.s; a
+    sleep or a freeze passes nothing. As ``SIDE_EFFECT_TYPE_ABILITY`` (:4524) the receiver's
+    own Immunity / Water Veil / Limber (the ignorable checks read the receiver's own ability:
+    neither battler of a pass has Mold Breaker in place of the ability tested), Leaf Guard in
+    sun (poison :13-16, burn :20-23, paralyze :5-8), any status or a Poison / Steel (poison) or
+    Fire (burn) type ends it silently; it skips CheckSubstitute (poison :28, burn :35, paralyze
+    :20) and Safeguard (:39, :43, :26). Nothing tests HP: the status lands on a receiver of any
+    HP, but a fainted one's is cleared at its faint (``step._faint_check``,
+    battle_controller.c:1482-1486), so it is set only on a living one here. The message (poison
+    :57, burn :68, paralyze :44: ``BTLSCR_MSG_BATTLER_TEMP``'s ability, the passer) tags
+    Synchronize: the AI learns a player's (``hooks.REVEALS_ON``). A status that lands toggles
+    the flag off again (rulings G-12, G-13)."""
+    from nuzline.engine.hooks import SYNCHRONIZED, reveal_ability  # hooks imports this module
+
+    attacker = jnp.asarray(attacker, _I32)
+    defender = jnp.asarray(defender, _I32)
+    flag = jnp.asarray(flag, bool)
+    sem = jnp.asarray(sem, _I32)
+    a_mon, d_mon = state.active[attacker], state.active[defender]
+    on = jnp.asarray(cond, bool) & flag
+    first = on & (state.ability[defender, d_mon] == AbilityId.SYNCHRONIZE) & (sem == defender)
+    second = (
+        on & ~first & (state.ability[attacker, a_mon] == AbilityId.SYNCHRONIZE) & (sem == attacker)
+    )
+    run = first | second
+    passer = jnp.where(first, defender, attacker)
+    receiver = jnp.where(first, attacker, defender)
+    p_mon, r_mon = state.active[passer], state.active[receiver]
+    held = state.status[passer, p_mon]
+    kind = jnp.where(
+        (held == Status.POISON) | (held == Status.TOXIC),
+        Status.POISON,
+        jnp.where(
+            held == Status.BURN,
+            Status.BURN,
+            jnp.where(held == Status.PARALYSIS, Status.PARALYSIS, Status.NONE),
+        ),
+    )
+    own = decomp_abilities(tables, state)[receiver, r_mon]
+    ability = state.ability[receiver, r_mon]
+    leaf = _sunny(tables, state) & (ability == AbilityId.LEAF_GUARD)
+    shield = jnp.where(
+        kind == Status.POISON,
+        own == ITEM_ABILITY_IDS["Immunity"],
+        jnp.where(
+            kind == Status.BURN,
+            own == ITEM_ABILITY_IDS["Water Veil"],
+            ability == AbilityId.LIMBER,
+        ),
+    )
+    lands = (
+        run
+        & (kind != Status.NONE)
+        & ~shield
+        & ~leaf
+        & can_have_status(tables, state, receiver, r_mon, kind)
+    )
+    state = _set_status(state, receiver, r_mon, kind, lands & _alive(state, receiver, r_mon))
+    state = reveal_ability(state, passer, p_mon, SYNCHRONIZED, lands)
+    return state, flag & ~lands, jnp.where(run, receiver, sem)
 
 
 def _kings_rock(tables, state, h: _Hit, outcome: Outcome) -> BattleState:

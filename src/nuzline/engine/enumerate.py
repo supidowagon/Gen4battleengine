@@ -862,6 +862,8 @@ INPUT_NEUTRAL_ABILITIES = (
     AbilityId.MAGNET_PULL,
     # G-8..G-10: PP and the AI's knowledge only, no damage input.
     AbilityId.PRESSURE,
+    # G-14: it only stops statuses (fewer input changes than the clauses already allow).
+    AbilityId.LEAF_GUARD,
 )
 INPUT_CLAUSE_ABILITIES = (
     AbilityId.GUTS,  # status clause
@@ -872,6 +874,9 @@ INPUT_CLAUSE_ABILITIES = (
     AbilityId.FLAME_BODY,  # contact clause (burn)
     AbilityId.STATIC,  # contact clause (a status under Guts)
     AbilityId.POISON_POINT,
+    # G-12, G-13: passes a status mid-turn: the synchronize clauses (a burn, or any status under
+    # Guts, on the receiver's later hit).
+    AbilityId.SYNCHRONIZE,
     AbilityId.ROUGH_SKIN,  # the attacker's HP: HP clause
     AbilityId.AFTERMATH,  # likewise, on its holder's faint (no later hit on it)
     AbilityId.INTIMIDATE,  # on switch-in: switch clause
@@ -1264,7 +1269,22 @@ def damage_inputs_can_change(
         ((foe_ability == AbilityId.FLAME_BODY) & (guts | burnable))
         | (_any_of(foe_ability, (AbilityId.STATIC, AbilityId.POISON_POINT)) & guts)
     )
-    own_hits = hp_sensitive | (effect != _E.MULTI_HIT) | contact_status
+    # Synchronize (effects.synchronize, G-12, G-13): a foe holder the side's hit statuses passes
+    # the status back before the side's next hit; a foe holder whose contact hit met the side's
+    # Static / Poison Point / Flame Body passes that status to the side before the side moves
+    # (the synchronize clauses; the passed status matters as a burn, or any under Guts).
+    sync_back = (foe_ability == AbilityId.SYNCHRONIZE) & (guts | burnable)
+    sync_contact = (
+        uses_move[::-1]
+        & contact[::-1]
+        & (foe_ability == AbilityId.SYNCHRONIZE)
+        & (
+            ((ability == AbilityId.FLAME_BODY) & (guts | burnable))
+            | (_any_of(ability, (AbilityId.STATIC, AbilityId.POISON_POINT)) & guts)
+        )
+    )
+    foe_action = foe_action | (live & sync_contact)
+    own_hits = hp_sensitive | (effect != _E.MULTI_HIT) | contact_status | sync_back
     own_pre_move = (guts & _any_of(status, (Status.SLEEP, Status.FREEZE))) | (
         effect == _E.SELF_DESTRUCT
     )
@@ -1481,8 +1501,17 @@ def outcome_laws(
         "confused_own": uses_move & (state.confusion >= 2),
         "future_roll": future_roll,
         "para_inflict": uses_move
-        & _inflicts(tables, state, moves, Status.PARALYSIS)
-        & ~status_blocked,
+        & (
+            (_inflicts(tables, state, moves, Status.PARALYSIS) & ~status_blocked)
+            # Synchronize (effects.synchronize, G-13): the side's holder, paralyzed by the
+            # foe's Static on its contact hit, passes the paralysis to the foe.
+            | (
+                damaging
+                & contact
+                & (state.ability[sides, mons] == AbilityId.SYNCHRONIZE)
+                & (state.ability[sides, mons][::-1] == AbilityId.STATIC)
+            )
+        ),
         "freeze_inflict": uses_move
         & _inflicts(tables, state, moves, Status.FREEZE)
         & ~status_blocked,
@@ -1547,6 +1576,7 @@ def outcome_laws(
         | plucks
     )
     static = _holds(tables, state, actions, (AbilityId.STATIC,))
+    sync_foe = _holds(tables, state, actions, (AbilityId.SYNCHRONIZE,))[::-1]
     # A Lum or Cheri Berry cures paralysis, held or plucked (hooks.held_item_check,
     # pluck_berry).
     lum = _holds_item(tables, state, actions, (ItemId.LUM_BERRY, ItemId.CHERI_BERRY))
@@ -1565,6 +1595,10 @@ def outcome_laws(
         # (hooks.recover_status_by_ability, battle_lib.c:4397): the hole a generator state with a
         # paralyzed Limber foe exposed (E1 Gardenia batch).
         | _holds(tables, state, actions, (AbilityId.LIMBER,))
+        # Synchronize (effects.synchronize, G-13): a foe holder passes back the paralysis the
+        # side's move gave it, or passes the paralysis the side's Static gave it.
+        | (uses_move & _inflicts(tables, state, moves, Status.PARALYSIS) & sync_foe)
+        | (foe_moves & damaging[::-1] & contact[::-1] & sync_foe & static)
     )
     # Roar / Whirlwind (step._use_move): BtlCmd_TryWhirlwind draws nothing with no eligible
     # bench Pokemon, BattleSystem_CanWhirlwind nothing for a user of at least the target's

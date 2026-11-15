@@ -117,3 +117,92 @@ names the decomp sites, what the engine does, and where. E2's rulings are in
   unsupported, so coverage refuses a fight with it before the branch could run). The AI's
   other PP readers (`LoadCurrentMovePP`, the usable-move mask) read the state, so they see
   Pressure's cost as it happens.
+- G-12 Synchronize's pass (`AbilityId.SYNCHRONIZE`, decomp 28; `BattleSystem_SynchronizeStatus`,
+  battle_lib.c:4493-4534). With `SYSCTL_TRY_SYNCHRONIZE_STATUS` set (G-13): a defender whose
+  `Battler_Ability` is Synchronize and which is the `sideEffectMon` passes to the attacker
+  (:4499-4504); else a Synchronize attacker that is the `sideEffectMon` (a Static-like ability of
+  the defender statused it) passes to the defender (:4506-4511); either way the receiver becomes
+  the `sideEffectMon`, even when nothing passes. The passer's status picks the script
+  (:4514-4520): any poison runs subscript_poison.s, so a bad poison passes as a plain poison
+  (counter 0); a burn subscript_burn.s; a paralysis subscript_paralyze.s; a sleep or a freeze
+  nothing. As `SIDE_EFFECT_TYPE_ABILITY` (:4524) the receiver's own Immunity / Water Veil /
+  Limber (the ignorable tests read the receiver's own ability: neither battler of a pass holds
+  Mold Breaker in place of the tested one), its Leaf Guard in sun (G-14), any status, a Poison /
+  Steel (poison) or Fire (burn) type end it silently (poison :13-16, :32-38, its ABILITY ends
+  :72-73, :89-90, :98-100, :107-110; burn :20-23, :39-42, :113-114; paralyze :5-8, :24-25,
+  :79-80); it skips CheckSubstitute (poison :28, burn :35, paralyze :20) and Safeguard (the
+  ABILITY jumps at poison :39, burn :43, paralyze :26 pass the tests). No script line tests HP: the
+  engine sets the status only on a living receiver, since a fainted one's is cleared at its
+  faint (`step._faint_check`, battle_controller.c:1482-1486). The message (poison :57, burn :68,
+  paralyze :44) tags `BTLSCR_MSG_BATTLER_TEMP`'s ability, the passer: the AI learns a player's
+  Synchronize (`hooks.REVEALS_ON`, phase `SYNCHRONIZED`); a blocked pass is silent. A landed
+  pass toggles the flag off. `effects.synchronize`; the reference's `_synchronize`.
+- G-13 The Synchronize flag and `sideEffectMon`. Every poison, bad poison, burn and paralysis
+  subscript that lands toggles `SYSCTL_TRY_SYNCHRONIZE_STATUS` (set when clear, cleared when
+  set: subscript_poison.s:63-69, _badly_poison.s:83-88, _burn.s:79-84, _paralyze.s:50-56);
+  sleep and freeze never touch it. `BattleContext_Init` clears it at every action's end
+  (battle_lib.c:2009), U-turn before its party list (subscript_attack_then_switch_out.s:69).
+  `BattleSystem_SynchronizeStatus` is called only from `AFTER_MOVE_EFFECT_SYNCHRONIZE_STATUS`
+  (bcp.c:3665-3670), after every hit of a move whose AfterMoveEffects run, before the switch-in
+  effects (:3672) and the item checks. Within a hit the `sideEffectMon` is the defender for the
+  secondary effect (TRIGGER_SECONDARY, bcp.c:3484) or a status move, the attacker for the contact
+  ability (`BattleSystem_TriggerAbilityOnHit`, battle_lib.c:4225, :4305, :4323), then the defender
+  again when `CheckExtraFlinch`'s own tests pass (bcp.c:4636-4643: the attacker's King's Rock,
+  its roll, the move's flag, a damaged defender with HP; before subscript_flinch_mon.s's tests).
+  So a secondary status on the defender and a contact status on the attacker in one hit toggle
+  the flag back: nothing passes. Paths: every move status (direct, secondary, Tri Attack, the
+  fangs, Secret Power), the contact abilities, Roar's drag into Toxic Spikes (the hazards run
+  in the move script; `BtlCmd_CheckToxicSpikes` makes the newcomer the `sideEffectMon`,
+  battle_script.c:7640-7641; the pass to the Roar user comes before the switch-in effects, so a
+  Pecha Berry cures the newcomer after it), and the resumed U-turn / Baton Pass tail (the list's
+  Toxic Spikes poison sets the flag; a Baton Pass's defender is the user, so its pass aims at the
+  already poisoned newcomer and ends). Pursuit's hit runs no AfterMoveEffects
+  (subscript_pursuit.s), and a turn-end orb status or a switch action's Toxic Spikes is cleared by
+  the next `BattleContext_Init` before any check: no pass. Not modelled (an engine gap, not a
+  refusal): the U-turn user that falls to its foe's Pursuit (the `MODE_PURSUIT` tail) and a
+  newcomer that faints to Spikes / Stealth Rock after Toxic Spikes poisoned it: the decomp's
+  step still reads the fainted battler's `BattleMon.status` (only the party copy is zeroed,
+  battle_controller.c:1481-1486), which the engine's faint check has cleared, so the engine
+  passes nothing there (the reference's `_u_turn` clears the flag after the Pursuit to match).
+  `step._use_move` (the hit loop's `sync_flag` / `sync_sem` carry from `effects.sync_landed`, the
+  step before the switch-in effects for a drag or a tail), `step._act` (`entry_poisoned`); the
+  reference's `_status_landed` (in `_inflict`, `_contact_ability`, `_entry_hazards`), the King's
+  Rock sites of `_hit`, `_u_turn`, `_resume`, and the calls in `_fight`, `_roar`, `_resume`.
+- G-14 Leaf Guard (`AbilityId.LEAF_GUARD`, decomp 102). Every status subscript but
+  subscript_freeze.s tests `CheckIgnoreWeather` (a living Cloud Nine / Air Lock holder skips the
+  test, battle_script.c:9195-9206), then `FIELD_CONDITION_SUNNY`, then the side-effect battler's
+  Leaf Guard, right after the status's own ability test: subscript_fall_asleep.s:23-25,
+  subscript_poison.s:14-16, subscript_badly_poison.s:32-34, subscript_burn.s:21-23,
+  subscript_paralyze.s:6-8 (`CheckIgnorableAbility`: an attacker's Mold Breaker pierces it). A
+  direct effect (a status move) prints "prevents ..." / "stayed awake because of its {1}"
+  (`TAG_NICKNAME_ABILITY`: poison :_177/_201, badly_poison :_249/_266, burn :_264, paralyze
+  :_170, fall_asleep :_202/_221), which the AI learns (phase `STATUS_BLOCKED`); a secondary
+  effect (INDIRECT) and an ABILITY side effect end silently. `effects._inflict` (before Shield
+  Dust), `effects._contact_ability` (the attacker's own Leaf Guard against Static, Poison Point,
+  Flame Body), `effects.synchronize`; the reference's `_inflict`, `_contact_ability`,
+  `_synchronize`. The reads E2 built by decomp id stay as they are: Toxic Spikes (B4-22,
+  `CheckAbility`, :5-10), the status orbs (the HELD_ITEM paths, subscript_badly_poison.s:13-17
+  and subscript_burn.s:5-9, end silently), Yawn's drowsiness (subscript_yawn.s:7-9) and its
+  later sleep (subscript_fall_asleep.s:9-11, the MOVE_EFFECT path, `CheckAbility`). A blocked
+  direct status ends with `MOVE_STATUS_NO_MORE_WORK`, which skips AfterMoveEffects; as for
+  Limber's and Insomnia's blocks the engine does not mark it: nothing landed, so the Synchronize
+  step has no flag, and no item check there finds anything a status move could have changed.
+- G-15 Rest: subscript_rest.s:7-11 tests Insomnia, Vital Spirit, a sleep and Soundproof /
+  an uproar only: Leaf Guard never stops Rest. Rest is an unsupported move (coverage refuses it),
+  so nothing is built.
+- G-16 AI: the trainer AI reads `ABILITY_LEAF_GUARD` at `Basic_CheckCannotPoison`
+  (script.s:534-536, the defender's, with `LoadCurrentWeather` sunny), `Basic_CheckSunnyDay`
+  (:808, the attacker's) and `Expert_SunnyDay` (:3789-3790, the attacker's with `IfStatus ANY`:
+  the decomp's inverted test is kept), all transcribed (`policy._basic_check_cannot_poison`,
+  `_basic_check_sunny_day`, `_expert_sunny_day`) through `commands.load_battler_ability`'s
+  decomp ids; nothing refuses. `TagStrategy` (:6797, :6824) is doubles only. No script or
+  trainer_ai.c code reads `ABILITY_SYNCHRONIZE`. The AI's knowledge of a player's Leaf Guard or
+  Synchronize comes from their messages (G-12, G-14) and from the guess otherwise.
+- G-17 Enumeration (`enumerate.py`): Synchronize can paralyze mid-turn, so `full_para` is read
+  for a side whose faster foe's Synchronize holder made a contact hit on the side's Static
+  (`para_inflict`), and the end-of-turn speed grid frees the paralysis of a side that paralyzes
+  a foe holder or whose Static meets a foe holder's contact hit (`para_free`). The damage classes
+  get the synchronize clauses: a foe holder's contact hit on the side's Static / Poison Point /
+  Flame Body before the side's hit, and the side's later hits once its move can status a foe
+  holder, where the passed status matters (a burn on a physical non-Guts hit, any under Guts).
+  Leaf Guard is input-neutral (it only stops statuses).

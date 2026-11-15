@@ -460,6 +460,12 @@ class AbilityId(IntEnum):
     # (battle_script.c:6919-6922, BattleSystem_DecPPForPressure battle_lib.c:7390-7397) and its
     # switch-in announcement (SWITCH_IN_CHECK_STATE_PRESSURE, battle_lib.c:4096-4110).
     PRESSURE = 77
+    # E1 Gardenia batch, rulings G-12..G-17: Synchronize (BattleSystem_SynchronizeStatus,
+    # battle_lib.c:4493-4534, from AFTER_MOVE_EFFECT_SYNCHRONIZE_STATUS, bcp.c:3665-3670;
+    # effects.synchronize) and Leaf Guard in sun (the status subscripts' CheckIgnoreWeather /
+    # FIELD_CONDITION_SUNNY / ABILITY_LEAF_GUARD tests; effects._inflict, _contact_ability).
+    LEAF_GUARD = 78
+    SYNCHRONIZE = 79
 
 
 # The decomp ability id of every supported ``AbilityId`` (generated/abilities.txt line N is id
@@ -545,6 +551,8 @@ ABILITY_DECOMP_IDS = {
     AbilityId.SHADOW_TAG: 23,
     AbilityId.MAGNET_PULL: 42,
     AbilityId.PRESSURE: 46,
+    AbilityId.LEAF_GUARD: 102,
+    AbilityId.SYNCHRONIZE: 28,
 }
 
 # ChooseTraceTarget (battle_lib.c:7750-7775) never picks a battler whose ``BattleMon.ability``

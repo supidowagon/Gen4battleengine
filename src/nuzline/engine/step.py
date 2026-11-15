@@ -141,6 +141,8 @@ from nuzline.engine.effects import (
     self_defender,
     shell_bell_heal,
     sticky_barb_transfer,
+    sync_landed,
+    synchronize,
     targets_user,
     thaw_target,
     unlock_move,
@@ -183,6 +185,7 @@ from nuzline.engine.ids import (
     AbilityId,
     EffectId,
     ItemId,
+    MoveFlag,
     MoveTarget,
     Stat,
     Status,
@@ -653,6 +656,7 @@ def _use_move(
     mode=MODE_FULL,
     pursuit=None,
     claw=(False, False),
+    entry_poisoned=False,
 ) -> tuple[BattleState, dict, dict, dict]:
     """``side``'s active Pokemon uses the move in slot ``action`` (or Struggle).
     ``choice``: its ``(move, struggling, locked)`` from ``selected_move`` and
@@ -683,7 +687,9 @@ def _use_move(
     the list (:17). ``mode`` ``MODE_PURSUIT`` (after the Pursuit) and ``MODE_RESUME`` (on the
     newcomer, after the list's switch-in, hazards and faint check) run only the action's tail:
     the head's state is dropped and its values come from ``BattleState.ts_used`` /
-    ``ts_damaged`` / ``ts_dealt`` (written where the action stops).
+    ``ts_damaged`` / ``ts_dealt`` (written where the action stops). ``entry_poisoned``
+    (``MODE_RESUME``): the list's Toxic Spikes poisoned the newcomer (``_act``), which set
+    ``SYSCTL_TRY_SYNCHRONIZE_STATUS`` after U-turn cleared it (rulings G-12, G-13).
 
     Returns ``(state, own, foe, ctl)``: the state after the move, the user's events (each
     status check's result, effect-gated: set only when the check was reached and had an
@@ -1141,7 +1147,17 @@ def _use_move(
     dragged = roar & jnp.any(eligible) & level_ok
     roar_failed = (roar & ~dragged) | anchored
     drag_slot = roar_slot(eligible, outcome.roar_target[side])
+    pre_drag = state
     state = _where(dragged, _send_out(tables, state, target_side, drag_slot, effects=False), state)
+    # The drag's Toxic Spikes poisoned the newcomer (subscript_hazards_check.s:14-28): its status
+    # subscript set SYSCTL_TRY_SYNCHRONIZE_STATUS with the newcomer, the new defender, as
+    # sideEffectMon (BtlCmd_CheckToxicSpikes, battle_script.c:7640-7641; ruling G-13).
+    newcomer_status = state.status[target_side, drag_slot]
+    roar_poisoned = (
+        dragged
+        & (pre_drag.status[target_side, drag_slot] == Status.NONE)
+        & ((newcomer_status == Status.POISON) | (newcomer_status == Status.TOXIC))
+    )
     # subscript_no_target.s and subscript_missed.s unlock the attacker (a Rollout that
     # missed; a first use never locked, so this is then a no-op).
     state = _unlock(state, side, can_act & ~connected)
@@ -1289,6 +1305,38 @@ def _use_move(
     # effects, at the site Roar's drag shares.
     rock = resumed & (state_in.ts_damaged != 0) & (outcome.flinch_item[side, 0] != 0)
     state = kings_rock_flinch(tables, state, side, target_side, used_t, rock & ~target_moved)
+    items_full = connected & ~no_more_work & ~protect_failed & ~roar_failed & ~weather_failed
+    items_full = items_full & ~baton_failed
+    # AFTER_MOVE_EFFECT_SYNCHRONIZE_STATUS (bcp.c:3665-3670) comes before the switch-in effects
+    # (:3672): a Roar's AfterMoveEffects, or the resumed tail's. The Synchronize flag is the
+    # newcomer's Toxic Spikes poison (the U-turn subscript cleared it before the list,
+    # subscript_attack_then_switch_out.s:69), its sideEffectMon the newcomer; on the resumed
+    # tail CheckExtraFlinch's King's Rock then makes the defender the sideEffectMon
+    # (bcp.c:4643, before subscript_flinch_mon.s's own tests). The defender is the user for a
+    # self-defender move (Baton Pass: the pass then aims at the newcomer itself, already
+    # poisoned). Rulings G-12, G-13.
+    sync_defender = jnp.where(
+        self_defender(tables, used_t, ghost_user(state, side)), side, target_side
+    )
+    resumed_rock = (
+        rock
+        & (tables.item_effect[state.item[side, state.active[side]]] == ItemId.KINGS_ROCK)
+        & ((tables.move_flags[used_t] & MoveFlag.KINGS_ROCK) != 0)
+        & (state.hp[target_side, state.active[target_side]] > 0)
+    )
+    sync_sem = jnp.where(
+        resumed, jnp.where(resumed_rock, target_side, side), target_side
+    ).astype(_I32)
+    sync_flag = jnp.where(resumed, jnp.asarray(entry_poisoned, bool), roar_poisoned)
+    state, _, _ = synchronize(
+        tables,
+        state,
+        side,
+        sync_defender,
+        sync_flag,
+        sync_sem,
+        (dragged & head_on & items_full) | resumed,
+    )
     fx_side = jnp.where(resumed, side, target_side)
     entering = (dragged & head_on) | resumed
     state = _where(entering, switch_in_effects(tables, state, fx_side), state)
@@ -1300,8 +1348,6 @@ def _use_move(
     # The tail modes' items (AfterMoveEffects): on the newcomer, or a U-turn user that died to the
     # Pursuit (its continuation without a switch).
     tail_items = resumed | (after_pursuit & ~pursuit_pause)
-    items_full = connected & ~no_more_work & ~protect_failed & ~roar_failed & ~weather_failed
-    items_full = items_full & ~baton_failed
 
     # A loop, not unrolled: one copy of the effect code in the program, not MAX_HITS
     # (unrolled, it dominated trace and compile time). It also counts the hits that
@@ -1310,7 +1356,10 @@ def _use_move(
         state, hits, crits, contact, thaw, dealt, armed, struck, shell, barbed, record = carry[:11]
         # sub_hit: the defender's SELF_TURN_FLAG_SUBSTITUTE_HIT, set by an earlier hit of this
         # action (MoveHit.sub_hit).
-        paused, pursue, damaged0, dealt0, sub_hit = carry[11:]
+        paused, pursue, damaged0, dealt0, sub_hit = carry[11:16]
+        # SYSCTL_TRY_SYNCHRONIZE_STATUS and sideEffectMon through the action's hits (cleared by
+        # BattleContext_Init at the action's end, battle_lib.c:2009).
+        sync_flag, sync_sem = carry[16:]
         stopped = paused | pursue
         # BattleControllerPlayer_LoopMultiHit (bcp.c:3780) stops once a battler fainted
         # (faintedMon): the target, or the attacker by Rough Skin (Selfdestruct's user is
@@ -1416,6 +1465,41 @@ def _use_move(
         # this action (struck), and the thaw of a frozen defender a Fire hit damaged
         # (effects.thaw_target; an Aspear / Lum Berry it holds has cured the freeze first).
         items = jnp.where(head_on, items_full & ~stopped & ~stop_now, tail_items & ~stops)
+        # The hit's status subscripts toggled SYSCTL_TRY_SYNCHRONIZE_STATUS: the secondary
+        # effect's on the defender (AfterMoveMessage's TRIGGER_SECONDARY, bcp.c:3484), then the
+        # contact ability's on the attacker (TRIGGER_ABILITY, :3514; BattleSystem_
+        # TriggerAbilityOnHit sets sideEffectMon to the attacker, battle_lib.c:4225), each the
+        # new sideEffectMon; CheckExtraFlinch (:3524) makes the defender the sideEffectMon once
+        # its own tests pass (bcp.c:4636-4643: the attacker's King's Rock, the roll, the move's
+        # flag, a damaged defender with HP), before subscript_flinch_mon.s's. Then
+        # AfterMoveEffects' Synchronize step (``effects.synchronize``), before the item checks
+        # (rulings G-12, G-13). A Roar's and the tails' run above.
+        def_landed = sync_landed(state, hit_state, target_side)
+        att_landed = sync_landed(state, hit_state, side)
+        sync_flag = sync_flag ^ def_landed ^ att_landed
+        sync_sem = jnp.where(att_landed, side, jnp.where(def_landed, target_side, sync_sem))
+        attacker_rock = (
+            tables.item_effect[hit_state.item[side, hit_state.active[side]]] == ItemId.KINGS_ROCK
+        )
+        rock_test = (
+            attacker_rock
+            & (outcome.flinch_item[side, hit_index] != 0)
+            & ((tables.move_flags[used] & MoveFlag.KINGS_ROCK) != 0)
+            & (hit_state.hp[target_side, target] > 0)
+        )
+        rock_sem = (landed & info.damaged & ~is_uturn) | (
+            going & first & is_uturn & ~goes & landed & info.damaged
+        )
+        sync_sem = jnp.where(rock_sem & rock_test, target_side, sync_sem).astype(_I32)
+        hit_state, sync_flag, sync_sem = synchronize(
+            tables,
+            hit_state,
+            side,
+            sync_defender,
+            sync_flag,
+            sync_sem,
+            items & landed & head_on & ~dragged,
+        )
         state, item_used = held_item_check(tables, hit_state, side, items, info.pluck_flag)
         state = after_damage_items(tables, state, 1 - side, items)
         struck = struck | info.update_hp
@@ -1462,6 +1546,8 @@ def _use_move(
             jnp.where(first, info.damaged, damaged0),
             jnp.where(first, info.dealt, dealt0),
             info.sub_hit,
+            sync_flag,
+            sync_sem,
         )
 
     init = (
@@ -1481,6 +1567,8 @@ def _use_move(
         jnp.bool_(False),
         _I32(0),
         jnp.bool_(False),
+        jnp.bool_(False),  # SYSCTL_TRY_SYNCHRONIZE_STATUS (BattleContext_Init clears it)
+        jnp.asarray(target_side, _I32),  # sideEffectMon (no side effect yet)
     )
     category = tables.move_category[used]  # CURRENT_MOVE_DATA.class (moveCur)
     target_hp0 = state.hp[target_side, target]
@@ -1720,6 +1808,15 @@ def _act(
     )
     base = _alive_mask(state) if base is None else base
     listed = _faint_check(tables, _with_alive(state, base), switched)
+    # The list's Toxic Spikes poisoned the newcomer (subscript_show_party_list.s:22, before its
+    # faint check): the resumed tail's Synchronize flag (rulings G-12, G-13).
+    newcomer = jnp.clip(action - MOVE_ACTIONS, 0, 5)
+    landed = switched.status[side, newcomer]
+    entry_poisoned = (
+        resumed
+        & (state.status[side, newcomer] == Status.NONE)
+        & ((landed == Status.POISON) | (landed == Status.TOXIC))
+    )
     used = _use_trainer_item(tables, state, side, items[side])
     choice = (choices[0][side], choices[1][side], choices[2][side])
     # U-turn's Pursuit reads the battler it hits (convention 1: passed in by the caller).
@@ -1739,6 +1836,7 @@ def _act(
         mode,
         pursuit,
         claw,
+        entry_poisoned,
     )
     live = state.over == 0
     switch, item = is_switch(action) & live, is_item(action) & live

@@ -37,9 +37,10 @@ Status families reviewed against their decomp subscripts
 the only type checks there are the target-type immunities poison vs
 Poison/Steel, burn vs Fire and freeze vs Ice (and no freezing in sun), which
 ``engine/effects.py`` applies. Paralysis and sleep have none in Gen 4. Their ability immunities
-are Insomnia and Limber (implemented in ``engine/effects.py``), Shield Dust against a
-damaging move's secondary status (``effects._inflict``), and Vital Spirit, Immunity, Water
-Veil, Magma Armor and Leaf Guard (``AbilityId.UNSUPPORTED``), and
+are Insomnia, Limber and Leaf Guard in sun (implemented in ``engine/effects.py``; Leaf Guard
+since the E1 Gardenia batch, G-14), Shield Dust against a damaging move's secondary status
+(``effects._inflict``), and Vital Spirit, Immunity, Water Veil and Magma Armor
+(``AbilityId.UNSUPPORTED``), and
 Safeguard and Substitute are unsupported moves, so none of those branches can be
 reached silently. Uproar's sleep block (subscript_fall_asleep.s:14-16, :43-45) is modelled
 (E2 batch 5, ``effects._inflict``).
@@ -554,6 +555,8 @@ DECOMP_ABILITY_TO_ID: dict[str, AbilityId] = {
     "Shadow Tag": AbilityId.SHADOW_TAG,
     "Magnet Pull": AbilityId.MAGNET_PULL,
     "Pressure": AbilityId.PRESSURE,
+    "Leaf Guard": AbilityId.LEAF_GUARD,
+    "Synchronize": AbilityId.SYNCHRONIZE,
 }
 
 DECOMP_ITEM_TO_ID: dict[str, ItemId] = {
