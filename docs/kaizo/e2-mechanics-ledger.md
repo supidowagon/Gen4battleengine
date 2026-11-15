@@ -1473,3 +1473,20 @@ Rules left out because another mechanic is missing; each closes with the mechani
   Expert_Endeavor / Expert_PainSplit were E1's. Hand tests in test_batch10.py; the generator draws
   both in `_draw_batch10` with a low user.
   Differential seed 4, 150: clean. Backlog: missing groups 240 -> 238, runnable battles 57 -> 58.
+- B10-6 (batch 10, family 6) Knock Off (`EffectId.KNOCK_OFF`, 85, decomp 188), both engines, as
+  designed under "Family 6 design". `effects._knock_off` (the reference's KNOCK_OFF branch): a
+  table hit, then subscript_knock_off.s's tests (substitute, Multitype, Griseous Orb, quickClaw,
+  custapBerry) and BtlCmd_TryKnockOff (Sticky Hold, decomp ability 60, ignorable; else the item
+  goes and the slot's bit). New state: `knocked_off` (per party slot) and the turn scratch
+  `ts_claw` (`order.claw_flags`: the quickClaw flag from the FIGHT-vs-FIGHT order, cleared at its
+  holder's move start; no persistence is needed, as only two FIGHT commands set it and the holder
+  then reaches its move start or faints). The Sticky Barb transfer skips a knocked-off attacker
+  and Knock Off itself (battle_lib.c:5390-5391; pivot :7380). Laws: a table-damage effect and an
+  input clause (the foe's later hit when it holds an item). The AI's Knock Off is E1's (branch
+  claude/e1-prep-on-e2). Owed (AI knowledge, E1's area): TryKnockOff runs no CopyToParty, so
+  `ai_item_known` keeps the knocked item until the battler's next CopyToParty (an HP-bar update,
+  battle_script.c:1720, or the other sites of battle_lib.c:1819); the engine leaves it as it is
+  at the knock-off, and no later site clears it yet. Thief, Covet, Trick and Fling, which also
+  read the mask, are unsupported.
+  STATE.md maps quickClaw (`ts_claw`) and knockedOffItemsMask (`knocked_off`); test_state's
+  audit list no longer pins quickClaw as later. Differential seed 5, 150: clean.

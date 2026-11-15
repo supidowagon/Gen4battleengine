@@ -194,6 +194,7 @@ from nuzline.engine.order import (
     action_order,
     call_kind,
     called_move,
+    claw_flags,
     custap_flags,
     invoked_move,
     is_item,
@@ -647,6 +648,7 @@ def _use_move(
     foe_taken=(0, 0, 0, 0, 0, 0),
     mode=MODE_FULL,
     pursuit=None,
+    claw=(False, False),
 ) -> tuple[BattleState, dict, dict, dict]:
     """``side``'s active Pokemon uses the move in slot ``action`` (or Struggle).
     ``choice``: its ``(move, struggling, locked)`` from ``selected_move`` and
@@ -1285,6 +1287,8 @@ def _use_move(
             struggling=struggling,
             focus_armed=armed,
             foe_custap=custap[target_side],
+            # moveEffectsData.quickClaw (order.claw_flags), cleared once its holder moved.
+            foe_claw=jnp.asarray(claw, bool)[target_side] & ~jnp.asarray(target_moved, bool),
             counter_damage=counter_damage,
             extra_flinch=~is_uturn,  # U-turn's check comes after its secondary effect (below)
             sub_hit=sub_hit,
@@ -1645,6 +1649,7 @@ def _act(
     mode=MODE_FULL,
     base=None,
     foe=None,
+    claw=(False, False),
 ) -> tuple[BattleState, dict, dict, dict]:
     """``side``'s action: ``(state, own, foe, ctl)`` with the events of ``_use_move``. A
     switch shows the party slot (``ACT_SWITCH``), an item its item id (``ACT_ITEM``).
@@ -1683,6 +1688,7 @@ def _act(
         taken,
         mode,
         pursuit,
+        claw,
     )
     live = state.over == 0
     switch, item = is_switch(action) & live, is_item(action) & live
@@ -1919,6 +1925,8 @@ def _execute_actions(
     items = jnp.where(paused, state.ts_item, items).astype(_I32)
     # CalcTurnOrder's moveEffectsData.custapBerry, from the state the order was fixed in.
     custap = jnp.where(paused, state.ts_custap != 0, custap_flags(tables, state, real))
+    # CalcTurnOrder's moveEffectsData.quickClaw (B10-6), likewise.
+    claw = jnp.where(paused, state.ts_claw != 0, claw_flags(tables, state, real))
     consumed = _consume_trainer_items(state, real).trainer_items
     state = state._replace(trainer_items=jnp.where(paused, state.trainer_items, consumed))
     state = state._replace(pivot_battler=jnp.zeros_like(state.pivot_battler))
@@ -1995,6 +2003,7 @@ def _execute_actions(
             phase,
             base,
             pursuer,
+            claw=claw,
         )
         # The action ran: its battler was alive at its start (a resumed or pursued one was).
         ran = (state.over == 0) & ((state.hp[side, state.active[side]] > 0) | ~start)
@@ -2059,6 +2068,8 @@ def _execute_actions(
         # Only an actor still to come keeps its flag: an earlier one ate its Custap Berry when
         # its move started (_use_move).
         "ts_custap": custap & (jnp.arange(2) == order[1]) & (position == 0),
+        # Likewise: an earlier actor's own move start cleared its quickClaw.
+        "ts_claw": claw & (jnp.arange(2) == order[1]) & (position == 0),
         "ts_pursued": pursued,
         "ts_protect_ok": read["protect_ok"],
         "ts_taken": jnp.stack([read[n] for n in _TAKEN], axis=1),

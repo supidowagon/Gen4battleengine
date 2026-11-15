@@ -377,6 +377,18 @@ def custap_flags(tables: Tables, state: BattleState, actions) -> jnp.ndarray:
     return custap_active(tables, state) & fight[0] & fight[1]
 
 
+def claw_flags(tables: Tables, state: BattleState, actions) -> jnp.ndarray:
+    """``bool[2]``: ``moveEffectsData.quickClaw`` after the turn order: ``CalcTurnOrder``'s
+    FIGHT-against-FIGHT compare (``ignoreQuickClaw = FALSE``, bcp.c:772-786) sets it for each
+    activated Quick Claw (battle_lib.c:1283, :1349; ``quick_claw_active`` on the turn's
+    ``qc_roll``). The holder's own BEFORE_MOVE_STATE_QUICK_CLAW clears it
+    (subscript_check_quick_claw.s:22-23), so it stands until the holder's move starts; only
+    Knock Off reads it (subscript_knock_off.s:8), B10-6."""
+    actions = jnp.asarray(actions, _I32)
+    fight = ~is_switch(actions) & ~is_item(actions)
+    return quick_claw_active(tables, state, state.qc_roll) & fight[0] & fight[1]
+
+
 def quick_claw_active(tables: Tables, state: BattleState, qc) -> jnp.ndarray:
     """``bool[2]``: each side's active battler holds a Quick Claw and its ``speedRand``
     draw ``qc`` (``int[2]``, 1 = ``speedRand % 5 == 0``) activates it (lib.c:1278-1286)."""

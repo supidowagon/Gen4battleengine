@@ -260,3 +260,60 @@ def test_pain_split_averages_and_fails_on_a_substitute(tables, names):
     assert int(out.hp[1, 0]) == avg
     sub = assert_matches_reference(tables, _subbed(s, 1, 30), (0, 0), O)
     assert int(sub.hp[0, 0]) == 10 and int(sub.hp[1, 0]) == int(s.hp[1, 0])
+
+
+def test_knock_off_takes_the_item_and_marks_the_slot(tables, names):
+    """B10-6: BtlCmd_TryKnockOff (battle_script.c:6620-6627): heldItem = ITEM_NONE and the slot's
+    knockedOffItemsMask bit; an ignorable Sticky Hold keeps it (:6614); a substitute stops it
+    (subscript_knock_off.s:5)."""
+    n = names
+    s = make_state(
+        tables,
+        [_mon(n, "Sneasel", ["Knock Off"], 40)],
+        [_mon(n, "Snorlax", ["Growl"], 40, "Leftovers")],
+    )
+    out = assert_matches_reference(tables, s, (0, 0), O)
+    assert int(out.item[1, 0]) == 0 and int(out.knocked_off[1, 0]) == 1
+    assert int(out.item_consumed[1, 0]) == 0
+    sub = assert_matches_reference(tables, _subbed(s, 1, 200), (0, 0), O)
+    assert int(sub.item[1, 0]) == n.item("Leftovers") and int(sub.knocked_off[1, 0]) == 0
+    shellos = make_state(
+        tables,
+        [_mon(n, "Sneasel", ["Knock Off"], 40)],
+        [_mon(n, "Shellos", ["Growl"], 40, "Leftovers")],
+    )
+    kept = assert_matches_reference(tables, shellos, (0, 0), O)
+    assert int(kept.item[1, 0]) == n.item("Leftovers")
+
+
+def test_knock_off_misses_a_quick_claw_holder_yet_to_move(tables, names):
+    """B10-6: subscript_knock_off.s:8: the defender's moveEffectsData.quickClaw (set by the turn
+    order, battle_lib.c:1283; cleared at its own move's start, subscript_check_quick_claw.s:22-23)
+    keeps its item: here it activated but moves last (Whirlwind, priority -6)."""
+    n = names
+    s = make_state(
+        tables,
+        [_mon(n, "Sneasel", ["Knock Off"], 40)],
+        [_mon(n, "Snorlax", ["Whirlwind"], 40, "Quick Claw")],
+    )
+    fired = s._replace(qc_roll=s.qc_roll.at[1].set(1))
+    out = assert_matches_reference(tables, fired, (0, 0), O)
+    assert int(out.item[1, 0]) == n.item("Quick Claw")
+    quiet = assert_matches_reference(tables, s._replace(qc_roll=s.qc_roll.at[1].set(0)), (0, 0), O)
+    assert int(quiet.item[1, 0]) == 0
+
+
+def test_a_knocked_off_attacker_never_takes_a_sticky_barb(tables, names):
+    """B10-6: BattleSystem_TriggerHeldItemOnHit (battle_lib.c:5390): the knocked-off mask stops the
+    transfer to an attacker holding nothing."""
+    n = names
+    s = make_state(
+        tables,
+        [_mon(n, "Machop", ["Karate Chop"], 30)],
+        [_mon(n, "Snorlax", ["Growl"], 40, "Sticky Barb")],
+    )
+    plain = assert_matches_reference(tables, s, (0, 0), O)
+    assert int(plain.item[0, 0]) == n.item("Sticky Barb")
+    knocked = s._replace(knocked_off=s.knocked_off.at[0, 0].set(1))
+    out = assert_matches_reference(tables, knocked, (0, 0), O)
+    assert int(out.item[0, 0]) == 0 and int(out.item[1, 0]) == n.item("Sticky Barb")

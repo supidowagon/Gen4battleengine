@@ -301,7 +301,8 @@ three structs has a row.
   subscript_baton_pass.s:17, else 0) and the turn scratch `ts_*` (per field: the
   `BattleContext` values a resumed turn reads: `turnOrderCounter`, `battlerActionOrder`, the
   command-selection picks (`ts_move`, `ts_struggling`, `ts_locked`, `ts_item`), the per-battler
-  `moveEffectsData.custapBerry` (`ts_custap`), the per-battler `turnFlags` later actors read
+  `moveEffectsData.custapBerry` (`ts_custap`) and `.quickClaw` (`ts_claw`, B10-6), the per-battler
+  `turnFlags` later actors read
   (`ts_protect_ok`, `ts_taken`; `turnFlags.roosting` is the public `roosting`, kept at a pause
   and while a faint replacement is pending, `engine.state`; the other turn flags are reset every
   turn and `step` resolves a whole turn: `protecting` is the first actor's `protect_ok` event,
@@ -406,7 +407,7 @@ three structs has a row.
 | `MoveEffectsData.metronomeTurns` | — | later (M6) |
 | `MoveEffectsData.micleBerry` | — | later (M6) |
 | `MoveEffectsData.custapBerry` | — | later (M6) |
-| `MoveEffectsData.quickClaw` | — | later (M6) |
+| `MoveEffectsData.quickClaw` | `ts_claw` | mapped |
 | `MoveEffectsData.meFirst` | — | later (M6) |
 | `MoveEffectsData.padding0004_1F` | — | not needed because it is padding |
 | `MoveEffectsData.rechargeTurnNumber` | `recharge` | mapped |
@@ -438,7 +439,7 @@ three structs has a row.
 | `SideConditions.safeguardTurns` | `safeguard` | mapped |
 | `SideConditions.followMe` | — | not needed because Follow Me only redirects moves in doubles |
 | `SideConditions.followMeUser` | — | not needed because Follow Me only redirects moves in doubles |
-| `SideConditions.knockedOffItemsMask` | — | later (M6) |
+| `SideConditions.knockedOffItemsMask` | `knocked_off` | mapped |
 | `SideConditions.padding00_1D` | — | not needed because it is padding |
 | `SideConditions.spikesLayers` | `spikes` | mapped |
 | `SideConditions.toxicSpikesLayers` | `toxic_spikes` | mapped |

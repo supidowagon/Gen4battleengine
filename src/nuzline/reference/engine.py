@@ -47,6 +47,7 @@ from nuzline.engine.ids import (
     POWER_IF_TARGET_MOVED,
     MOVE_BATON_PASS,
     MOVE_FAKE_OUT,
+    MOVE_KNOCK_OFF,
     MOVE_SLEEP_TALK,
     MOVE_SNORE,
     MOVE_STRUGGLE,
@@ -198,6 +199,9 @@ class _Turn:
     shell_dealt: int = 0
     # moveEffectsData.custapBerry per side, written by CalcTurnOrder (lib.c:1296, :1362).
     custap: list[bool] = field(default_factory=lambda: [False, False])
+    # moveEffectsData.quickClaw per side, written by the same compare (lib.c:1283, :1349) and
+    # cleared at its holder's move start (subscript_check_quick_claw.s:22-23), B10-6.
+    claw: list[bool] = field(default_factory=lambda: [False, False])
     # moveFailFlags per side (BattleContext_MoveFailed, lib.c:2808-2820; cleared by
     # SetupNextTurn, lib.c:2232): the Uproar check of the turn's end reads them.
     move_failed: list[bool] = field(default_factory=lambda: [False, False])
@@ -2318,6 +2322,25 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
     elif effect == EffectId.BRICK_BREAK and landed:
         # lib.c:1481-1510: applies on an immune target, not on a miss; script.c:6550.
         s.sides[target].reflect = s.sides[target].light_screen = 0
+    elif effect == EffectId.KNOCK_OFF and effective:
+        # effect_script_0188.s -> subscript_knock_off.s (B10-6): nothing behind a substitute
+        # (:5), for Multitype (:6), the Griseous Orb (:7), a set quickClaw (:8) or custapBerry
+        # (:9); BtlCmd_TryKnockOff (script.c:6608-6632): an ignorable Sticky Hold keeps the item;
+        # else heldItem = ITEM_NONE and the knockedOffItemsMask bit (no RemoveItem: no
+        # item_consumed, no CopyToParty).
+        foe = _active(s, target)
+        raw = _decomp_ability(tables, foe)
+        mold = _active(s, side).ability == AbilityId.MOLD_BREAKER
+        sticky = raw == ITEM_ABILITY_IDS["Sticky Hold"] and not mold
+        blocked = (
+            _shielded(turn, s, target)
+            or raw == ABILITY_MULTITYPE
+            or foe.item == ITEM_GRISEOUS_ORB
+            or (turn.claw[target] and not target_moved)
+            or turn.custap[target]
+        )
+        if foe.item and not blocked and not sticky:
+            foe.item, foe.knocked_off = 0, 1
     elif effect == EffectId.EAT_BERRY and effective:
         # effect_script_0224.s / subscript_pluck.s: an ON_HIT effect, no HP check;
         # BattleSystem_PluckBerry returns early on a substitute hit (lib.c:5546).
@@ -2522,6 +2545,9 @@ def _sticky_barb_transfer(turn: _Turn, s: RefState, side: int, foe: int, move: i
     tables = turn.tables
     user, holder = _active(s, side), _active(s, foe)
     if _item_effect(tables, holder) != ItemId.STICKY_BARB:
+        return
+    # lib.c:5390-5391 (B10-6): not a knocked-off attacker, not Knock Off itself.
+    if user.knocked_off or move == MOVE_KNOCK_OFF:
         return
     if user.hp and user.item == 0 and _t(tables, "move_flags", move) & MoveFlag.CONTACT:
         user.item, holder.item = holder.item, 0
@@ -2775,6 +2801,7 @@ def _u_turn(turn: _Turn, s: RefState, side: int, move: int, hit: int, dealt: int
         and _item_effect(tables, holder) == ItemId.STICKY_BARB
         and user.hp
         and user.item == 0
+        and not user.knocked_off  # lib.c:7380 (B10-6)
         and _t(tables, "move_flags", move) & MoveFlag.CONTACT
     )
     if barb:
@@ -3034,6 +3061,7 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
     )
     # BEFORE_MOVE_STATE_QUICK_CLAW (bcp.c:3140-3143): subscript_check_quick_claw.s:26-28 eats
     # an activated Custap Berry (RemoveItem: the recycle item) before the status checks.
+    turn.claw[side] = False  # subscript_check_quick_claw.s:22-23 (B10-6)
     if turn.custap[side]:
         turn.custap[side] = False
         mon.item_consumed, mon.item = mon.item, 0
@@ -4154,6 +4182,11 @@ def ref_step(tables, state: RefState, actions: tuple[int, int], outcome) -> RefS
         # activated Custap Berry sets its holder's custapBerry flag (lib.c:1296, :1362).
         if not early[0]:
             turn.custap = [_custap_active(tables, s, side) for side in (0, 1)]
+            qc = _qc_rolls(s)
+            turn.claw = [
+                _item_effect(tables, _active(s, side)) == ItemId.QUICK_CLAW and qc[side] != 0
+                for side in (0, 1)
+            ]
     turn.actions, turn.choices, turn.items = actions, choices, items
     turn.commands, turn.order = commands, order
     try:
@@ -4324,6 +4357,7 @@ def _write_scratch(turn: _Turn, s: RefState) -> None:
     s.ts_locked = [int(c[2]) for c in turn.choices]
     s.ts_item = list(turn.items)
     s.ts_custap = [int(f) for f in turn.custap]
+    s.ts_claw = [int(f) for f in turn.claw]
     s.ts_pursued = turn.pursued
     s.ts_protect_ok = [int(f) for f in turn.protecting]
     _set_roosting(s, _roosting(s, turn))
@@ -4348,7 +4382,7 @@ def _write_scratch(turn: _Turn, s: RefState) -> None:
 _SCRATCH_ZERO = {
     "pivot_battler": 0, "ts_cursor": 0, "ts_acted": [0, 0], "ts_order": [0, 0], "ts_actions": [0, 0],
     "ts_move": [0, 0], "ts_struggling": [0, 0], "ts_locked": [0, 0], "ts_item": [0, 0],
-    "ts_custap": [0, 0], "ts_pursued": 0, "ts_protect_ok": [0, 0],
+    "ts_custap": [0, 0], "ts_claw": [0, 0], "ts_pursued": 0, "ts_protect_ok": [0, 0],
     "ts_taken": [[0] * 6, [0] * 6], "ts_dragged": [0, 0], "ts_move_failed": [0, 0],
     "ts_used": 0, "ts_damaged": 0, "ts_dealt": 0, "ts_alive": [0, 0], "ts_power_mul": 0,
     "ts_switched": [0, 0], "ts_pick_mul": 0,
@@ -4371,6 +4405,7 @@ def _resume(tables, s: RefState, actions: tuple[int, int], outcome) -> RefState:
     turn.order = list(s.ts_order)
     turn.position = s.ts_cursor
     turn.custap = [bool(f) for f in s.ts_custap]
+    turn.claw = [bool(f) for f in s.ts_claw]
     turn.pursued = s.ts_pursued
     turn.protecting = [bool(f) for f in s.ts_protect_ok]
     turn.roosting = [bool(sd.roosting) for sd in s.sides]

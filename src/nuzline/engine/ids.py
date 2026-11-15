@@ -288,6 +288,9 @@ class EffectId(IntEnum):
     # fails behind a substitute (:5, :50-52); else both battlers' HP become (a + d) / 2 through
     # UPDATE_HP (:7-19), B10-5.
     PAIN_SPLIT = 84
+    # Knock Off (188, BATTLE_EFFECT_REMOVE_HELD_ITEM): zeros. A table hit with an indirect ON_HIT
+    # subscript_knock_off.s (``effects._knock_off``), B10-6.
+    KNOCK_OFF = 85
 
 
 # ``EffectId.COUNTER``'s source (``move_param[m, 0]``).
@@ -873,6 +876,9 @@ SLEEP_TALK_VALUES = 12
 # Focus's message, which names the ability, only for ``BTLVAR_CURRENT_MOVE == MOVE_FAKE_OUT``
 # (or a direct flinch effect, which no supported move has).
 MOVE_FAKE_OUT = 252
+# MOVE_KNOCK_OFF (generated/moves.txt): the on-hit Sticky Barb transfer skips it
+# (battle_lib.c:5391), B10-6.
+MOVE_KNOCK_OFF = 282
 # Protect, Detect, Endure (``generated/moves.txt`` lines 183, 198, 204): ``BtlCmd_TryProtection``
 # (battle_script.c:5154-5158) keeps the chain only when ``moveProtect`` is one of them, and
 # ``AICmd_LoadProtectChain`` (trainer_ai.c:2546-2552) reads it the same way. The engine folds
@@ -935,6 +941,8 @@ ITEM_ABILITY_IDS = {
     "Immunity": 17,
     "Water Veil": 41,
     "Leaf Guard": 102,
+    # subscript_knock_off.s / BtlCmd_TryKnockOff (battle_script.c:6614), B10-6.
+    "Sticky Hold": 60,
 }
 
 # ``sTerrainCamouflageType`` (include/data/terrain/to_type.h), indexed like ``TERRAIN_MOVES``.

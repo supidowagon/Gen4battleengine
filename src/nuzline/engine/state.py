@@ -191,6 +191,8 @@ class BattleState(NamedTuple):
     ability_slot: jnp.ndarray  # int8, species ability slot 0/1
     item: jnp.ndarray  # int16
     item_consumed: jnp.ndarray  # int16, id of the last item consumed
+    # int8, the slot's bit of its side's knockedOffItemsMask (battle_script.c:6627), B10-6
+    knocked_off: jnp.ndarray
     moves: jnp.ndarray  # int16[2,6,4]
     pp: jnp.ndarray  # int8[2,6,4]
     status: jnp.ndarray  # int8, ids.Status
@@ -307,6 +309,7 @@ class BattleState(NamedTuple):
     ts_locked: jnp.ndarray  # int8[2], locked at selection (no PP)
     ts_item: jnp.ndarray  # int16[2], the bag item picked
     ts_custap: jnp.ndarray  # int8[2], moveEffectsData.custapBerry from the turn order
+    ts_claw: jnp.ndarray  # int8[2], moveEffectsData.quickClaw from the turn order (B10-6)
     ts_pursued: jnp.ndarray  # int8, 1 + the battler whose action a Pursuit ended, 0 = none
     ts_protect_ok: jnp.ndarray  # int8[2], turnFlags.protecting
     ts_taken: jnp.ndarray  # int16[2,6], turnFlags damage taken and attackers (step._use_move)
@@ -459,6 +462,7 @@ LAYOUT: dict[str, tuple[tuple[int, ...], type]] = {
     "ability_slot": (_SLOT, np.int8),
     "item": (_SLOT, np.int16),
     "item_consumed": (_SLOT, np.int16),
+    "knocked_off": (_SLOT, np.int8),
     "moves": ((*_SLOT, MOVES), np.int16),
     "pp": ((*_SLOT, MOVES), np.int8),
     "status": (_SLOT, np.int8),
@@ -568,6 +572,7 @@ LAYOUT: dict[str, tuple[tuple[int, ...], type]] = {
     "ts_locked": (_SIDE, np.int8),
     "ts_item": (_SIDE, np.int16),
     "ts_custap": (_SIDE, np.int8),
+    "ts_claw": (_SIDE, np.int8),
     "ts_pursued": (_FIELD, np.int8),
     "ts_protect_ok": (_SIDE, np.int8),
     "ts_taken": ((SIDES, 6), np.int16),

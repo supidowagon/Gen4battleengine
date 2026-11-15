@@ -33,6 +33,7 @@ class RefPokemon:
     ability_slot: int
     item: int
     item_consumed: int
+    knocked_off: int  # the slot's knockedOffItemsMask bit (B10-6)
     moves: list[int]
     pp: list[int]
     status: int
@@ -154,6 +155,7 @@ class RefState:
     ts_locked: list[int]
     ts_item: list[int]
     ts_custap: list[int]
+    ts_claw: list[int]
     ts_pursued: int
     ts_protect_ok: list[int]
     ts_taken: list[list[int]]

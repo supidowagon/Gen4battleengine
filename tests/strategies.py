@@ -890,7 +890,8 @@ def _draw_batch10(draw, tables: Tables, a: dict, side: int, active: int, names: 
     """Maybe (1 in 3) give the active Pokemon a batch-10 move with what makes it act: Volt
     Tackle / Flare Blitz (recoil and status; a frozen user for Flare Blitz's thaw, Rock Head or
     Reckless), Jump Kick / Hi Jump Kick (a crash on a miss: a Protect or a Ghost foe, Magic
-    Guard, a foe at low max HP for the cap), Endeavor / Pain Split (B10-5; a low user)."""
+    Guard, a foe at low max HP for the cap), Endeavor / Pain Split (B10-5; a low user), Knock Off
+    (B10-6; an item on the foe, a knocked-off user with no item for the barb)."""
     if draw(st.integers(0, 2)) != 0:
         return
     rnd = draw(st.randoms(use_true_random=False))
@@ -904,9 +905,24 @@ def _draw_batch10(draw, tables: Tables, a: dict, side: int, active: int, names: 
         a["pp"][who, mon, k] = int(tables.move_pp[move])
 
     move = rnd.choice(
-        ("Volt Tackle", "Flare Blitz", "Jump Kick", "Hi Jump Kick", "Endeavor", "Pain Split")
+        (
+            "Volt Tackle",
+            "Flare Blitz",
+            "Jump Kick",
+            "Hi Jump Kick",
+            "Endeavor",
+            "Pain Split",
+            "Knock Off",
+        )
     )
     give(move)
+    if move == "Knock Off":  # B10-6: an item to take, a Quick Claw, a barb; a knocked-off user
+        a["item"][foe, foe_mon] = names.item(
+            rnd.choice(("Leftovers", "Quick Claw", "Sticky Barb", "Oran Berry", "Life Orb"))
+        )
+        if rnd.random() < 0.3:
+            a["knocked_off"][side, active] = 1
+            a["item"][side, active] = 0
     if move in ("Endeavor", "Pain Split") and rnd.random() < 0.6:  # a low user: Endeavor works
         a["hp"][side, active] = rnd.randint(1, max(1, int(a["max_hp"][side, active]) // 3))
     if rnd.random() < 0.3:

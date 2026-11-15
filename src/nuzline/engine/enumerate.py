@@ -694,6 +694,9 @@ INPUT_NEUTRAL_EFFECTS = (
 )
 INPUT_CLAUSE_EFFECTS = (
     _E.STAT_SELF,  # the foe's Defense / Sp. Def; Minimize's flag (Stomp's power)
+    # B10-6: it takes the foe's held item, which its later hit may read (a power item, Life Orb,
+    # a Choice item): the clause below, any item held.
+    _E.KNOCK_OFF,
     # The user's Attack and Speed (Dragon Dance) or Defense (Bulk Up): the stat clause.
     _E.DRAGON_DANCE,
     _E.SECONDARY_STAT_SELF,
@@ -978,6 +981,8 @@ TABLE_DAMAGE_EFFECTS = (
     # the recoil and status come after the damage, and a crash reads the same table entry.
     _E.RECOIL_STATUS,
     _E.CRASH,
+    # B10-6: CalcCrit, CalcDamage (effect_script_0188.s:6-7); the item goes after the damage.
+    _E.KNOCK_OFF,
 )
 NON_TABLE_DAMAGE_EFFECTS = (
     _E.STAT_SELF,
@@ -1169,6 +1174,7 @@ def damage_inputs_can_change(
         | (foe_effect == _E.ROAR)
         | (foe_effect == _E.WEATHER)
         | ((foe_effect == _E.EAT_BERRY) & pinch & (pinch_stat == defense_stat))
+        | ((foe_effect == _E.KNOCK_OFF) & (held != 0))  # B10-6
         | hp_sensitive
     )
     foe_action = live & (is_switch(actions)[::-1] | is_item(actions)[::-1] | foe_move)

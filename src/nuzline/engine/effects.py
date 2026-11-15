@@ -254,7 +254,10 @@ from nuzline.engine.damage import (
 )
 from nuzline.engine.ids import (
     ABILITY_MULTITYPE,
+    ITEM_ABILITY_IDS,
+    ITEM_GRISEOUS_ORB,
     MOVE_FAKE_OUT,
+    MOVE_KNOCK_OFF,
     MINIMIZE_PARAM,
     MOVE_STRUGGLE,
     POWER_IF_TARGET_MOVED,
@@ -1393,6 +1396,36 @@ def _eat_berry(
     return pluck_berry(tables, state, h.side, h.target_side, cond, foe_custap)
 
 
+def _knock_off(tables, state, h: _Hit, foe_custap, foe_claw) -> BattleState:
+    """Knock Off (effect_script_0188.s: an indirect ON_HIT subscript_knock_off.s on a hit that
+    was not MOVE_STATUS_NO_EFFECTS, battle_lib.c:1524-1529), B10-6. The subscript ends with
+    nothing done for a defender behind a substitute (:5, ``h.shielded``), with Multitype
+    (:6, its BATTLEMON_ABILITY), holding the Griseous Orb (:7) or with its quickClaw (:8,
+    ``foe_claw``) or custapBerry (:9, ``foe_custap``) flag set; then BtlCmd_TryKnockOff
+    (battle_script.c:6608-6632): no item does nothing; an ignorable Sticky Hold keeps it (its
+    C-built "made ineffective" message tags nothing for the AI); else heldItem = ITEM_NONE and
+    the slot's knockedOffItemsMask bit (:6626-6627). Neither RemoveItem nor CopyToParty runs: the
+    AI's record of the item (``ai_item_known``) stays until the battler's next CopyToParty
+    (ruling B10-6), and canUnburden stays as it was (an armed Unburden holder speeds up)."""
+    item = state.item[h.target_side, h.target]
+    raw = decomp_abilities(tables, state)[h.target_side, h.target]
+    mold_breaker = state.ability[h.side, h.user] == AbilityId.MOLD_BREAKER
+    sticky = (raw == ITEM_ABILITY_IDS["Sticky Hold"]) & ~mold_breaker
+    cond = (
+        (h.effect == _E.KNOCK_OFF)
+        & h.effective
+        & ~h.shielded
+        & (raw != ABILITY_MULTITYPE)
+        & (item != ITEM_GRISEOUS_ORB)
+        & ~jnp.asarray(foe_claw, bool)
+        & ~jnp.asarray(foe_custap, bool)
+        & (item != 0)
+        & ~sticky
+    )
+    state = _set(state, "item", (h.target_side, h.target), 0, cond)
+    return _set(state, "knocked_off", (h.target_side, h.target), 1, cond)
+
+
 def _leech_seed(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     grass = jnp.any(state.types[h.target_side, h.target] == Type.GRASS)
     cond = (
@@ -1592,8 +1625,8 @@ def sticky_barb_transfer(tables: Tables, state: BattleState, side, foe, move, co
     ``AFTER_MOVE_EFFECT_TRIGGER_ITEMS_ON_HIT``, battle_controller_player.c:3698-3706, and
     ``subscript_pursuit.s:44``, :90) needs a defender holding a
     ``HOLD_EFFECT_DMG_USER_CONTACT_XFR`` item (alive or not), a living attacker whose
-    ``heldItem`` is ``ITEM_NONE`` and a move with ``MOVE_FLAG_MAKES_CONTACT``; Knock Off,
-    U-turn and the knocked-off mask come from unsupported moves.
+    ``heldItem`` is ``ITEM_NONE``, not knocked off, a move with ``MOVE_FLAG_MAKES_CONTACT`` that
+    is not Knock Off (:5390-5391, B10-6); U-turn's guard is ``step``'s.
     ``subscript_transfer_sticky_barb.s`` moves the item: the attacker holds it, the defender
     nothing (no ``RemoveItem``: ``item_consumed`` is untouched). ``foe``: the defender's side."""
     user, target = state.active[side], state.active[foe]
@@ -1605,6 +1638,9 @@ def sticky_barb_transfer(tables: Tables, state: BattleState, side, foe, move, co
         & _alive(state, side, user)
         & (state.item[side, user] == 0)
         & contact
+        # :5390-5391: not a knocked-off attacker, not Knock Off itself (B10-6).
+        & (state.knocked_off[side, user] == 0)
+        & (move != MOVE_KNOCK_OFF)
     )
     state = _set(state, "item", (side, user), barb, on)
     state = forget_item(state, foe, target, on)
@@ -1621,6 +1657,8 @@ def sticky_barb_ready(tables: Tables, state: BattleState, side, foe, move) -> jn
         & _alive(state, side, user)
         & (state.item[side, user] == 0)
         & contact
+        # TriggerHeldItemOnPivotMove (battle_lib.c:7380): not a knocked-off attacker (B10-6).
+        & (state.knocked_off[side, user] == 0)
     )
 
 
@@ -1944,6 +1982,7 @@ def play_hit(
     counter_damage=0,
     sub_hit=False,
     pursuit_switch=False,
+    foe_claw=False,
 ) -> tuple[BattleState, MoveHit]:
     """Hit ``hit_index`` (0-4, an int or a traced int32) of ``move`` by ``side``'s active Pokemon: damage with
     this hit's crit and roll, then the move's effect.
@@ -2195,6 +2234,7 @@ def play_hit(
     ):
         state = fn(tables, state, h, outcome)
     state, pluck_flag = _eat_berry(tables, state, h, outcome, foe_custap)
+    state = _knock_off(tables, state, h, foe_custap, foe_claw)
     state = _struggle_recoil(state, h, jnp.asarray(struggling, jnp.bool_))
     state = _contact_ability(tables, state, h, outcome)
     if extra_flinch is not False:  # a traced bool: U-turn defers its check (step._use_move)
