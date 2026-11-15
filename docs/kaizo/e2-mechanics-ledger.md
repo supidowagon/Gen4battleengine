@@ -255,6 +255,25 @@ Out of scope: AI entries (E1), double / multi formats, gauntlets, the terrain en
   switcher (subscript_pursuit.s:20, :56-73: only a break changes it); confusion self-hit and Leech
   Seed's drain bypass it; Struggle's recoil is maxHP/4 anyway.
 
+### Family 6 design: Knock Off (next; the AI is E1's, branch claude/e1-prep-on-e2)
+
+- effect_script_0188.s: an indirect ON_HIT subscript_knock_off.s after CalcCrit / CalcDamage (a
+  table hit). The subscript ends with nothing done when the defender is behind a substitute (:5,
+  CheckSubstitute), has Multitype (:6, BATTLEMON_ABILITY), holds the Griseous Orb (:7), or has its
+  moveEffectsData.quickClaw (:8) or custapBerry (:9) set; then BtlCmd_TryKnockOff
+  (battle_script.c:6608-6632): no item, nothing; an ignorable Sticky Hold with an item, "{0}'s {1}
+  made {2} ineffective!" (TAG_NICKNAME_ABILITY_MOVE); else heldItem = ITEM_NONE and the side's
+  knockedOffItemsMask |= the slot's bit (:6626-6627).
+- New state: `knocked_off` int8[SIDES, SLOTS] (the mask; it survives switches): InitBattleMon
+  clears a knocked-off slot's item and canUnburden on entry (battle_lib.c:161-163), the Sticky Barb
+  transfer skips a knocked-off attacker (:5390, :7380), Thief / Covet / Trick / Fling read it
+  (script.c:5105, :6348). `quick_claw_flag` int8[SIDES] (moveEffectsData.quickClaw): set by
+  CalcTurnOrder when the Quick Claw activates and the sort does not ignore it (battle_lib.c:1283,
+  :1349), cleared by the holder's BEFORE_MOVE subscript_check_quick_claw.s:22-23 and with
+  MoveEffectsData on a switch; it outlives a turn whose holder did not FIGHT. Check how the engine
+  keeps the Custap flag (step `custap`, `ts_custap`) and whether it needs the same persistence.
+- Knock Off leaves canUnburden as it was: an armed Unburden holder doubles its speed after it.
+
 ## Batch 6 design: mid-turn switch decision (U-turn, Baton Pass)
 
 # Mid-turn switch decision (U-turn, Baton Pass): design, rev. 2
