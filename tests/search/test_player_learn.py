@@ -30,6 +30,11 @@ def _policy_replace(tables, state, params, key, layout):
 
 FIXED = Player("fixed", _fixed_act, _policy_replace)
 
+# _player_run (the final state as well as the result) compiled once per player and turn
+# count, as player_playout is: called eagerly, its while_loop traced and compiled anew at
+# every call (one per key), the slowest tests of the file.
+_run = jax.jit(_player_run, static_argnames=("player", "max_turns", "layout"))
+
 
 def _level_up_turn(tables, names):
     # test_learn.py::test_finish_turn_gives_up_before_the_opponent_replacement: Bulbasaur (one
@@ -87,7 +92,7 @@ def test_a_turn_resolves_its_learns(tables, names):
     tackle = names.move_slot(s, 0, "Tackle")
     levelled = 0
     for k in jax.random.split(jax.random.PRNGKey(2), 6):
-        out = _player_run(tables, s, FIXED, tackle, k, 1)[1]
+        out = _run(tables, s, FIXED, tackle, k, 1)[1]
         if int(out.level[0, 0]) != 13:
             continue
         levelled += 1
@@ -99,7 +104,7 @@ def test_a_turn_resolves_its_learns(tables, names):
 @pytest.mark.parametrize("mul, newcomer", [(0, CRANIDOS), (20, ONIX)])
 def test_a_pending_learn_root_sends_with_the_carried_mul(tables, names, mul, newcomer):
     s = _pending_learn_root(tables, names, mul)
-    out = _player_run(tables, s, GREEDY, (), jax.random.PRNGKey(0), 0)[1]
+    out = _run(tables, s, GREEDY, (), jax.random.PRNGKey(0), 0)[1]
     assert int(out.active[1]) == newcomer and int(out.learn_level[0]) == 0
 
 
