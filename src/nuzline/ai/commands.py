@@ -89,8 +89,10 @@ class SideCondition(IntEnum):
 
     REFLECT = 1 << 0  # BattleState.reflect
     LIGHT_SCREEN = 1 << 1  # BattleState.light_screen
+    SPIKES = 1 << 2  # :90; BattleState.spikes (layers, LoadSpikesLayers)
     SAFEGUARD = 1 << 3  # BattleState.safeguard
     STEALTH_ROCK = 1 << 7  # BattleState.stealth_rock
+    TOXIC_SPIKES = 1 << 10  # :98; BattleState.toxic_spikes (layers, LoadSpikesLayers)
 
 
 _SIDE_CONDITION_FIELDS = {
@@ -213,10 +215,12 @@ class BattleEffect(IntEnum):
     STATUS_PARALYZE = 67
     LOWER_SPEED_HIT = 70
     STATUS_LEECH_SEED = 84
+    KO_MON_THAT_DEFEATED_USER = 98  # Destiny Bond
     PRIORITY_1 = 103  # EvalAttack_ApplyKillBonuses' +2 (script.s:6400); no Roark move has it
     STATUS_NIGHTMARE = 107  # Nightmare (Expert_StatusSleep's IfMoveEffectKnown, :1817)
     CURSE = 109
     PROTECT = 111  # Expert_ToxicLeechSeed's IfMoveEffectKnown (script.s:2700)
+    SET_SPIKES = 112
     WEATHER_SANDSTORM = 115  # Weather_Main (script.s:7989)
     ATK_UP_2_STATUS_CONFUSION = 118  # Swagger
     INFATUATE = 120  # Attract
@@ -231,7 +235,11 @@ class BattleEffect(IntEnum):
     REMOVE_SCREENS = 186  # Brick Break
     STEAL_STATUS_MOVE = 195  # Snatch (Expert_Recovery_CheckForSnatch, script.s:2670)
     RECOIL_THIRD = 198
+    ATK_DEF_UP = 208  # Bulk Up
+    SP_ATK_SP_DEF_UP = 211  # Calm Mind
+    ATK_SPD_UP = 212  # Dragon Dance
     DOUBLE_POWER_WHEN_BELOW_HALF = 221  # Brine
+    TOXIC_SPIKES = 249
     RECOIL_PARALYZE_HIT = 262
     STEALTH_ROCK = 266
     RECOIL_HALF = 269  # Head Smash
@@ -1174,6 +1182,17 @@ def if_side_condition(ctx: AiContext, battler: Battler, mask: int) -> AiContext:
         if mask & member:
             on = on | (getattr(ctx.state, field)[side] > 0)
     return _jump(ctx, on)
+
+
+def load_spikes_layers(ctx: AiContext, battler: Battler, condition: SideCondition) -> AiContext:
+    """``LoadSpikesLayers`` (trainer_ai.c:1948-1966): the battler's side's Spikes or Toxic
+    Spikes layers (``sideConditions[side].spikesLayers`` / ``.toxicSpikesLayers``;
+    ``BattleState.spikes`` / ``.toxic_spikes``). Any other condition is refused at trace
+    time."""
+    field = {SideCondition.SPIKES: "spikes", SideCondition.TOXIC_SPIKES: "toxic_spikes"}[
+        SideCondition(int(condition))
+    ]
+    return ctx._replace(calc_temp=getattr(ctx.state, field)[_side(battler)].astype(_I32))
 
 
 def count_alive_party_battlers(ctx: AiContext, battler: Battler) -> AiContext:

@@ -588,6 +588,28 @@ None of these has a `Basic_ScoreMoveEffect` entry.
   `COMPARE_SPEED_FASTER`, where an equal-speed tie decides (plan K3c Ruling 3 draws no tie),
   and U-turn reads two party-damage commands.
 
+### 5.13 Setup moves, hazards and Destiny Bond (E1 batch 9)
+
+- `Basic_CheckBulkUp` / `_CalmMind` / `_DragonDance` (`:965-1019`; dispatch `:248`, `:250`,
+  `:251`): with Simple, -10 when either stat is above decomp 8; without, -10 when the first
+  (Attack, Sp. Atk) is at +6 and -8 when the second (Defense, Sp. Def, Speed) is; Dragon Dance
+  first gives -10 under Trick Room. Bulk Up and Calm Mind then take `Expert_StatusDefenseUp`
+  and `Expert_StatusSpDefenseUp` (5.10; `:1753`, `:1756`). `Expert_DragonDance`
+  (`:1757`; `:4765-4780`): slower than the player, +1 unless the 128 roll (`:4776`) jumps;
+  else at 50 % HP or less -1 unless the 70 roll (`:4771`) jumps.
+- `Basic_CheckSpikes` / `_ToxicSpikes` (`:707-713`, `:1445-1453`; `:197`, `:277`): -10 at 3
+  Spikes / 2 Toxic Spikes layers on the player's side (the new command `LoadSpikesLayers`,
+  `trainer_ai.c:1948-1966`) or with no other living Pokemon there. `Expert_Spikes` /
+  `_ToxicSpikes` (`:1702`, `:1792`; `:3591-3606`, `:6012-6029`): +1 unless the 128 roll
+  (`:3595`, `:6018`) jumps, and with Roar or Whirlwind known +1 more unless the 64 roll
+  (`:3602`, `:6025`) jumps.
+- `Expert_DestinyBond` (`:1694`; `:3335-3360`): -1; slower than the player, nothing more;
+  otherwise at 70 % HP or less +1 unless `:3346` jumps, at 50 % or less +1 more unless `:3351`
+  jumps, at 30 % or less +2 more unless the 100 roll (`:3356`) jumps.
+- Tailwind (`Expert_Tailwind`, `:4993`) compares for `COMPARE_SPEED_FASTER` and waits with
+  U-turn and Payback; Roost's labels exist (Recover's) but the AI's type chart does not yet
+  model the roosting state.
+
 ## 6. Where the AI reads the true battle state
 
 roark.md 6 holds: the damage estimate, the kill check and the effectiveness class read the

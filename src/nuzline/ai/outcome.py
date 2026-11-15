@@ -234,6 +234,16 @@ SITE_N: dict[int, int] = {
     2836: 128,  # Expert_HighCritical (neutral: on to TryScorePlus1 when it does NOT jump)
     2839: 128,  # Expert_HighCritical_TryScorePlus1 (+1 when it does NOT jump)
     4882: 128,  # Expert_Brine (+1 more when it does NOT jump)
+    # E1 batch 9.
+    3346: 128,  # Expert_DestinyBond (+1 when it does NOT jump)
+    3351: 128,  # Expert_DestinyBond_CheckUserMediumHP (+1 when it does NOT jump)
+    3356: 100,  # Expert_DestinyBond_CheckUserLowHP (+2 when it does NOT jump)
+    3595: 128,  # Expert_Spikes (+1 when it does NOT jump)
+    3602: 64,  # Expert_Spikes_TryScorePlus1 (+1 when it does NOT jump)
+    4771: 70,  # Expert_DragonDance (-1 when it does NOT jump)
+    4776: 128,  # Expert_DragonDance_TryScorePlus1 (+1 when it does NOT jump)
+    6018: 128,  # Expert_ToxicSpikes (+1 when it does NOT jump)
+    6025: 64,  # Expert_ToxicSpikes_TryScorePlus1 (+1 when it does NOT jump)
 }
 SITE_LINES = tuple(SITE_N)
 # The flat (vanilla) layout's column of script_roll_sites that each line reads: column 0 is
@@ -345,6 +355,13 @@ KAIZO_TRANSCRIBED: frozenset[int] = frozenset(
         198,  # RECOIL_THIRD: Expert_RecoilMove (:1747), no roll
         221,  # DOUBLE_POWER_WHEN_BELOW_HALF (Brine): Expert_Brine (:1765), :4882
         262,  # RECOIL_PARALYZE_HIT: Expert_RecoilMove (:1802), no roll
+        # E1 batch 9 (docs/ai/kaizo_roark.md 5.13).
+        98,  # KO_MON_THAT_DEFEATED_USER: Expert_DestinyBond (:1694), :3346, :3351, :3356
+        112,  # SET_SPIKES: Basic_CheckSpikes (:197); Expert_Spikes (:1702), :3595, :3602
+        208,  # ATK_DEF_UP: Basic_CheckBulkUp (:248); Expert_StatusDefenseUp (:1753)
+        211,  # SP_ATK_SP_DEF_UP: Basic_CheckCalmMind (:250); Expert_StatusSpDefenseUp (:1756)
+        212,  # ATK_SPD_UP: Basic_CheckDragonDance (:251); Expert_DragonDance (:1757), :4771, :4776
+        249,  # TOXIC_SPIKES: Basic_CheckToxicSpikes (:277); Expert_ToxicSpikes (:1792), :6018, :6025
     }
 )
 # The transcribed effects (KAIZO_TRANSCRIBED) whose Expert_Main entry goes to a label added
@@ -391,6 +408,13 @@ KAIZO_EXPERT_LABELS: dict[int, tuple[str, int]] = {
     198: ("Expert_RecoilMove", 1747),
     221: ("Expert_Brine", 1765),
     262: ("Expert_RecoilMove", 1802),
+    # E1 batch 9.
+    98: ("Expert_DestinyBond", 1694),
+    112: ("Expert_Spikes", 1702),
+    208: ("Expert_StatusDefenseUp", 1753),
+    211: ("Expert_StatusSpDefenseUp", 1756),
+    212: ("Expert_DragonDance", 1757),
+    249: ("Expert_ToxicSpikes", 1792),
 }
 # Of KAIZO_EXPERT_LABELS, the effects whose Expert label policy._expert transcribes
 # (layout.KAIZO expert_transcribed), written out: it is not derived from the table, so an
@@ -429,6 +453,12 @@ KAIZO_EXPERT_TRANSCRIBED: frozenset[int] = frozenset(
         198,  # RECOIL_THIRD: Expert_RecoilMove
         221,  # DOUBLE_POWER_WHEN_BELOW_HALF: Expert_Brine
         262,  # RECOIL_PARALYZE_HIT: Expert_RecoilMove
+        98,  # KO_MON_THAT_DEFEATED_USER: Expert_DestinyBond
+        112,  # SET_SPIKES: Expert_Spikes
+        208,  # ATK_DEF_UP: Expert_StatusDefenseUp
+        211,  # SP_ATK_SP_DEF_UP: Expert_StatusSpDefenseUp
+        212,  # ATK_SPD_UP: Expert_DragonDance
+        249,  # TOXIC_SPIKES: Expert_ToxicSpikes
     }
 )
 assert set(KAIZO_EXPERT_LABELS) <= KAIZO_TRANSCRIBED

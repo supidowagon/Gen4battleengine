@@ -2087,3 +2087,140 @@ def test_expert_status_paralyze(
     s = _with_player(t, s, 72, 0, known=True)
     s = _hp(_speeds(s, player=500 if slower else 1, opp=100), 1, own_hp)
     assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expected
+
+
+# --- Setup moves, hazards and Destiny Bond (E1 batch 9) --------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("move", "stages", "expected"),
+    [
+        # Basic_CheckBulkUp (script.s:965-979) / _CalmMind (:986-1000) / _DragonDance
+        # (:1002-1019), no Simple: first stat at +6 -10, second at +6 -8
+        ("Bulk Up", {Stat.ATK: 6}, -10),
+        ("Bulk Up", {Stat.DEF: 6}, -8),
+        ("Bulk Up", {Stat.ATK: 5, Stat.DEF: 5}, 0),
+        ("Calm Mind", {Stat.SPD: 6}, -8),
+        ("Dragon Dance", {Stat.SPE: 6}, -8),
+        ("Dragon Dance", {}, 0),
+    ],
+)
+def test_basic_double_stat_stage(
+    kaizo_tables, kaizo_names, kaizo_roark_party, move, stages, expected
+):
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, move, "Accelerock", "", ""))
+    for stat, stage in stages.items():
+        s = s._replace(stages=s.stages.at[1, stat].set(stage))
+    assert _delta(t, s, 0x2, 0x3)[0] == expected
+
+
+def test_basic_dragon_dance_trick_room(kaizo_tables, kaizo_names, kaizo_roark_party):
+    """Basic_CheckDragonDance gives -10 under Trick Room first (:1004)."""
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Dragon Dance", "Accelerock", "", ""))
+    s = s._replace(trick_room=jnp.asarray(3, s.trick_room.dtype))
+    assert _delta(t, s, 0x2, 0x3)[0] == -10
+
+
+@pytest.mark.parametrize(
+    ("move", "layers", "alone", "expected"),
+    [
+        # Basic_CheckSpikes (:707-713) / _ToxicSpikes (:1445-1453): full layers or no other
+        # living Pokemon on the player's side, -10
+        ("Spikes", 3, False, -10),
+        ("Spikes", 2, False, 0),
+        ("Spikes", 0, True, -10),
+        ("Toxic Spikes", 2, False, -10),
+        ("Toxic Spikes", 1, False, 0),
+    ],
+)
+def test_basic_hazards(kaizo_tables, kaizo_names, kaizo_roark_party, move, layers, alone, expected):
+    t, n = kaizo_tables, kaizo_names
+    s = _state(
+        t, kaizo_roark_party, BONSLY, _ids(n, move, "Accelerock", "", ""), players=1 if alone else 2
+    )
+    field = "spikes" if move == "Spikes" else "toxic_spikes"
+    s = s._replace(**{field: getattr(s, field).at[0].set(layers)})
+    assert _delta(t, s, 0x2, 0x3)[0] == expected
+
+
+@pytest.mark.parametrize(
+    ("roar", "jumps", "expected"),
+    [
+        # Expert_Spikes (:3591-3606): +1 unless :3595 jumps; with Roar known +1 more unless
+        # :3602 jumps
+        (False, (), 1),
+        (False, (3595,), 0),
+        (True, (), 2),
+        (True, (3602,), 1),
+    ],
+)
+def test_expert_spikes(kaizo_tables, kaizo_names, kaizo_roark_party, roar, jumps, expected):
+    t, n = kaizo_tables, kaizo_names
+    second = "Roar" if roar else "Accelerock"
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Spikes", second, "", ""))
+    assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expected
+
+
+@pytest.mark.parametrize(
+    ("slower", "hp", "jumps", "expected"),
+    [
+        # Expert_DragonDance (:4765-4780)
+        (True, 100, (), 1),  # slower: +1 unless :4776 jumps
+        (True, 100, (4776,), 0),
+        (False, 100, (), 0),  # not slower, above 50 %: nothing
+        (False, 50, (), -1),  # at 50 % or less: -1 unless :4771 jumps
+        (False, 50, (4771,), 0),
+    ],
+)
+def test_expert_dragon_dance(
+    kaizo_tables, kaizo_names, kaizo_roark_party, slower, hp, jumps, expected
+):
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Dragon Dance", "Accelerock", "", ""))
+    s = _hp(_speeds(s, player=500 if slower else 1, opp=100), 1, hp)
+    assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expected
+
+
+@pytest.mark.parametrize(
+    ("slower", "hp", "jumps", "expected"),
+    [
+        # Expert_DestinyBond (:3335-3360): -1 first
+        (True, 20, (), -1),  # slower: nothing more
+        (False, 71, (), -1),  # above 70 %: nothing more
+        (False, 60, (), 0),  # +1 unless :3346 jumps
+        (False, 40, (), 1),  # and +1 unless :3351 jumps
+        (False, 30, (), 3),  # and +2 unless :3356 jumps
+        (False, 30, (3346, 3351, 3356), -1),
+    ],
+)
+def test_expert_destiny_bond(
+    kaizo_tables, kaizo_names, kaizo_roark_party, slower, hp, jumps, expected
+):
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Destiny Bond", "Accelerock", "", ""))
+    s = _hp(_speeds(s, player=500 if slower else 1, opp=100), 1, hp)
+    assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expected
+
+
+@pytest.mark.parametrize("flags", [0x17, 0x10F])
+def test_batch9_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, flags):
+    """Exact == loose for the batch 9 moves, against a guessed Gible and Tentacool, at two HP
+    levels, the player's side with a Spikes layer."""
+    from tests.ai.test_kaizo_outcome import GIBLE as GIBLE_SPECIES
+
+    t, n = kaizo_tables, kaizo_names
+    groups = (
+        ("Bulk Up", "Calm Mind", "Dragon Dance", "Accelerock"),
+        ("Spikes", "Toxic Spikes", "Destiny Bond", "Accelerock"),
+    )
+    for moves in groups:
+        for player in (GIBLE_SPECIES, 72):
+            for hp in (100, 40):
+                s = _state(t, kaizo_roark_party, BONSLY, _ids(n, *moves))
+                s = _hp(_with_player(t, s, player), 1, hp)
+                s = s._replace(spikes=s.spikes.at[0].set(1))
+                layout = layout_for(t, flags, s)
+                assert policy.ai_refusals(t, s, n, layout) == []
+                _assert_exact_equals_loose(t, s, layout)

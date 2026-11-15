@@ -471,6 +471,67 @@ def _basic_check_cannot_burn(ctx: AiContext, mask) -> AiContext:
     return c.pop_or_end(ctx)
 
 
+def _double_stat_stage(label: str, first: Stat, second: Stat, line: int, trick_room=False):
+    """``Basic_CheckBulkUp`` (script.s:965-979) / ``_CalmMind`` (:986-1000) /
+    ``_DragonDance`` (:1002-1019, which first gives -10 under Trick Room): with Simple, -10
+    when either stat is above decomp 8; without, -10 when the first is at +6 and -8 when the
+    second is."""
+
+    def check(ctx: AiContext, mask) -> AiContext:
+        ctx = _at(ctx, mask)
+        if trick_room:
+            ctx, t = _split(c.if_field_conditions_mask(ctx, c.FieldCondition.TRICK_ROOM))
+            ctx = _score(ctx, t, -10)
+        ctx = c.load_battler_ability(ctx, _A)
+        ctx, no_simple = _split(c.if_loaded_not_equal_to(ctx, _ABILITY["Simple"]))
+        for stat in (first, second):
+            ctx, t = _split(c.if_stat_stage_greater_than(ctx, _A, stat, 8))
+            ctx = _score(ctx, t, -10)
+        ctx = c.pop_or_end(ctx)
+        # <label>_NoSimple
+        ctx, t = _split(c.if_stat_stage_equal_to(_at(ctx, no_simple), _A, first, 12))
+        ctx = _score(ctx, t, -10)
+        ctx, t = _split(c.if_stat_stage_equal_to(ctx, _A, second, 12))
+        return c.pop_or_end(_score(ctx, t, -8))
+
+    check.__name__ = check.__qualname__ = f"_basic_check_{label.split('_')[-1].lower()}"
+    check.__doc__ = f"``{label}`` (script.s:{line})."
+    return check
+
+
+_basic_check_bulk_up = _double_stat_stage("Basic_CheckBulkUp", Stat.ATK, Stat.DEF, 965)
+_basic_check_calm_mind = _double_stat_stage("Basic_CheckCalmMind", Stat.SPA, Stat.SPD, 986)
+_basic_check_dragon_dance = _double_stat_stage(
+    "Basic_CheckDragonDance", Stat.ATK, Stat.SPE, 1002, trick_room=True
+)
+
+
+def _hazard_layers(label: str, condition, full: int, line: int):
+    """``Basic_CheckSpikes`` (script.s:707-713) / ``Basic_CheckToxicSpikes`` (:1445-1453): -10
+    when the player's side already has ``full`` layers or the player has no other Pokemon
+    alive."""
+
+    def check(ctx: AiContext, mask) -> AiContext:
+        ctx = c.load_spikes_layers(_at(ctx, mask), _D, condition)
+        ctx, t = _split(c.if_loaded_equal_to(ctx, full))
+        ctx = _score(ctx, t, -10)
+        ctx = c.count_alive_party_battlers(ctx, _D)
+        ctx, t = _split(c.if_loaded_equal_to(ctx, 0))
+        return c.pop_or_end(_score(ctx, t, -10))
+
+    check.__name__ = check.__qualname__ = (
+        f"_basic_check_{label.removeprefix('Basic_Check').lower()}"
+    )
+    check.__doc__ = f"``{label}`` (script.s:{line})."
+    return check
+
+
+_basic_check_spikes = _hazard_layers("Basic_CheckSpikes", c.SideCondition.SPIKES, 3, 707)
+_basic_check_toxic_spikes = _hazard_layers(
+    "Basic_CheckToxicSpikes", c.SideCondition.TOXIC_SPIKES, 2, 1445
+)
+
+
 def _basic_check_curse(ctx: AiContext, mask) -> AiContext:
     """``Basic_CheckCurse`` (script.s:679-698)."""
     # Basic_CheckCurse (:679). A Ghost-type attacker jumps to Basic_CheckCurse_GhostType
@@ -974,6 +1035,63 @@ def _expert_brine(ctx: AiContext, mask) -> AiContext:
     return c.pop_or_end(c.add_to_move_score(_at(ctx, minus1), -1))
 
 
+def _expert_destiny_bond(ctx: AiContext, mask) -> AiContext:
+    """``Expert_DestinyBond`` (script.s:3335-3360): -1; slower than the player, nothing more;
+    otherwise at 70 % HP or less +1 unless the 128 roll (:3346) jumps, at 50 % or less +1 more
+    unless :3351 jumps, at 30 % or less +2 more unless the 100 roll (:3356) jumps."""
+    ctx = c.add_to_move_score(_at(ctx, mask), -1)
+    ctx, _ = _split(c.if_speed_compare_equal_to(ctx, COMPARE_SPEED_SLOWER))  # -> _End
+    ctx, _ = _split(c.if_hp_percent_greater_than(ctx, _A, 70))  # -> _End
+    ctx, t = _split(c.if_random_less_than(ctx, 128, 3346))
+    ctx = c.add_to_move_score(ctx, 1)
+    # Expert_DestinyBond_CheckUserMediumHP (:3349)
+    ctx, _ = _split(c.if_hp_percent_greater_than(_at(ctx, t | ctx.live), _A, 50))
+    ctx, t = _split(c.if_random_less_than(ctx, 128, 3351))
+    ctx = c.add_to_move_score(ctx, 1)
+    # Expert_DestinyBond_CheckUserLowHP (:3354)
+    ctx, _ = _split(c.if_hp_percent_greater_than(_at(ctx, t | ctx.live), _A, 30))
+    ctx, _ = _split(c.if_random_less_than(ctx, 100, 3356))
+    return c.pop_or_end(c.add_to_move_score(ctx, 2))
+
+
+def _hazard_expert(label: str, lines: tuple[int, int, int]):
+    """``Expert_Spikes`` (script.s:3591-3606) / ``Expert_ToxicSpikes`` (:6012-6029), at
+    ``lines`` (label, its 128 and 64 rolls): +1 unless the 128 roll jumps; then, with Roar or
+    Whirlwind known, +1 more unless the 64 roll jumps."""
+    start, r128, r64 = lines
+
+    def check(ctx: AiContext, mask) -> AiContext:
+        ctx, _ = _split(c.if_random_less_than(_at(ctx, mask), 128, r128))  # -> _End
+        ctx = c.add_to_move_score(ctx, 1)
+        ctx, plus1 = _split(c.if_move_known(ctx, _A, _MOVE["Roar"]))
+        ctx, t = _split(c.if_move_known(ctx, _A, _MOVE["Whirlwind"]))
+        ctx, _ = _split(c.go_to(ctx))  # -> _End
+        # <label>_TryScorePlus1
+        ctx, _ = _split(c.if_random_less_than(_at(ctx, plus1 | t), 64, r64))
+        return c.pop_or_end(c.add_to_move_score(ctx, 1))
+
+    check.__name__ = check.__qualname__ = f"_expert_{label.removeprefix('Expert_').lower()}"
+    check.__doc__ = f"``{label}`` (script.s:{start})."
+    return check
+
+
+_expert_spikes = _hazard_expert("Expert_Spikes", (3591, 3595, 3602))
+_expert_toxic_spikes = _hazard_expert("Expert_ToxicSpikes", (6012, 6018, 6025))
+
+
+def _expert_dragon_dance(ctx: AiContext, mask) -> AiContext:
+    """``Expert_DragonDance`` (script.s:4765-4780): slower than the player, +1 unless the 128
+    roll (:4776) jumps; else at 50 % HP or less, -1 unless the 70 roll (:4771) jumps."""
+    ctx = _at(ctx, mask)
+    ctx, plus1 = _split(c.if_speed_compare_equal_to(ctx, COMPARE_SPEED_SLOWER))
+    ctx, _ = _split(c.if_hp_percent_greater_than(ctx, _A, 50))  # -> _End
+    ctx, _ = _split(c.if_random_less_than(ctx, 70, 4771))  # -> _End
+    ctx = c.add_to_move_score(ctx, -1)
+    ctx, _ = _split(c.go_to(ctx))  # -> _End
+    ctx, _ = _split(c.if_random_less_than(_at(ctx, plus1), 128, 4776))
+    return c.pop_or_end(c.add_to_move_score(ctx, 1))
+
+
 def _expert_curse(ctx: AiContext, mask) -> AiContext:
     """``Expert_Curse`` (script.s:3452-3500)."""
     # Expert_Curse (:3452). A Ghost-type attacker jumps to Expert_Curse_GhostCheckHP
@@ -1151,9 +1269,14 @@ _BASIC_LABELS = (
     (BattleEffect.STATUS_PARALYZE, _basic_check_cannot_paralyze),  # :180
     (BattleEffect.STATUS_LEECH_SEED, _basic_check_cannot_leech_seed),  # :183
     (BattleEffect.CURSE, _basic_check_curse),  # :196
+    (BattleEffect.SET_SPIKES, _basic_check_spikes),  # :197
     (BattleEffect.ATK_UP_2_STATUS_CONFUSION, _basic_check_cannot_confuse),  # :201
     (BattleEffect.INFATUATE, _basic_check_cannot_attract),  # :202
     (BattleEffect.STATUS_BURN, _basic_check_cannot_burn),  # :231
+    (BattleEffect.ATK_DEF_UP, _basic_check_bulk_up),  # :248
+    (BattleEffect.SP_ATK_SP_DEF_UP, _basic_check_calm_mind),  # :250
+    (BattleEffect.ATK_SPD_UP, _basic_check_dragon_dance),  # :251
+    (BattleEffect.TOXIC_SPIKES, _basic_check_toxic_spikes),  # :277
     (BattleEffect.STEALTH_ROCK, _basic_check_stealth_rock),  # :284
 )
 # Expert_Main's entries (script.s:1628-1808) of the transcribed effects, in line order. The
@@ -1183,13 +1306,19 @@ _EXPERT_LABELS = (
     (BattleEffect.ATK_UP_2_STATUS_CONFUSION, _expert_swagger),  # :1680
     (BattleEffect.LOWER_SPEED_HIT, _expert_speed_down_on_hit),  # :1681
     (BattleEffect.STATUS_LEECH_SEED, _expert_toxic_leech_seed),  # :1686
+    (BattleEffect.KO_MON_THAT_DEFEATED_USER, _expert_destiny_bond),  # :1694
     (BattleEffect.CURSE, _expert_curse),  # :1700
+    (BattleEffect.SET_SPIKES, _expert_spikes),  # :1702
     (BattleEffect.HIT_BEFORE_SWITCH, _expert_pursuit),  # :1706
     (BattleEffect.DOUBLE_POWER_WHEN_STATUSED, _expert_facade),  # :1729
     (BattleEffect.DOUBLE_POWER_AND_CURE_PARALYSIS, _expert_smelling_salts),  # :1731
     (BattleEffect.REMOVE_SCREENS, _expert_brick_break),  # :1739
     (BattleEffect.RECOIL_THIRD, _expert_recoil_move),  # :1747
+    (BattleEffect.ATK_DEF_UP, _expert_status_def_up),  # :1753
+    (BattleEffect.SP_ATK_SP_DEF_UP, _expert_status_spd_up),  # :1756
+    (BattleEffect.ATK_SPD_UP, _expert_dragon_dance),  # :1757
     (BattleEffect.DOUBLE_POWER_WHEN_BELOW_HALF, _expert_brine),  # :1765
+    (BattleEffect.TOXIC_SPIKES, _expert_toxic_spikes),  # :1792
     (BattleEffect.RECOIL_PARALYZE_HIT, _expert_recoil_move),  # :1802
     (BattleEffect.STEALTH_ROCK, _expert_stealth_rock),  # :1805
     (BattleEffect.RECOIL_HALF, _expert_recoil_move),  # :1806
