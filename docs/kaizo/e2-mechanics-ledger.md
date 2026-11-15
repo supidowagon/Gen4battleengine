@@ -1,75 +1,51 @@
 # E2 mechanics ledger (Kaizo Roark split)
 
-## RESUME (updated 2026-11-15: batch 9 and its follow-ups done; batch 10 family 1 set aside)
+## RESUME (updated 2026-11-15 evening: batch 10 open; session cleared at the Assist commit)
 
-- **Tip and merges.** Tip: this RESUME commit on 253afaf ("fix(e2): batch 9 review follow-ups",
-  B9-13..B9-15). It holds batches 3-9 with their review follow-ups (batch 9's at 253afaf, batch
-  8's at 0936d40) and main bdb51d8 (merged at d6c3bab, backlog regenerated at 697a626). It is the
-  merge-check tip: no batch 10 code is committed.
-- **Batch 10.** The plan is committed at e2f0d73 ("Batch 10" below: ten families). Family 1
-  (recoil and crash, B10-1 / B10-2) is committed with its AI scoring (Flare Blitz #253 into
-  Expert_RecoilMove; #262 and #45 were already transcribed by E1). Ownership (2026-11-15): E2
-  owns each move-effect family end to end, its AI scoring and tests in the same batch; E1's
-  branch claude/e1-prep-on-e2 holds the AI for Metal Burst, Future Sight, ACC_DOWN, Minimize,
-  Mean Look, Knock Off, Imprison, Copycat, Ingrain, Baton Pass, Helping Hand, SolarBeam: do not
-  redo those. Batches 3-9 await merge; batch 10 is the only batch allowed until then.
-  Done on this branch (batch 10, unmerged): family 1 recoil / crash (597ad95, B10-1/2), the 3-9
-  merge-check follow-ups (ff4490b, B10-3), family 3 Substitute (939bd45, B10-4), family 5
-  Endeavor / Pain Split (a9806c2, B10-5), family 6 Knock Off (b051b45, B10-6), family 8
-  Safeguard with two Substitute follow-ups (683e5dd, B10-7), family 10's Focus Punch (5efc1e9,
-  B10-8). Backlog now 235 missing groups, 58 runnable battles. E1 owns families 2 (Focus Band, Wiki Berry), 4 (Pressure)
-  and the abilities of 8-9. E2 left: family 7 the charge turn (SolarBeam #151, Razor Wind, Fly /
-  Dig / Dive / Bounce / Shadow Force, Skull Bash, Sky Attack, Power Herb), family 10's Encore
-  (new state: the encored move and its turns; it forces the selection) and Assist (the invoker
-  framework of Sleep Talk / Metronome / Copycat, with the party's moves). Still owed from the manager: tests/search/
-  test_pivot_search.py under 8 GB (fight-sized roots, shared programs) once the fast tier's figure
-  for it is in. Since then: Encore's engine side, B10-6's AI record and the B10-10 law fix
-  (5e9b960); batches 3-9 are in main (d420167). Left in batch 10: Encore's AI (after ALLIN),
-  Encore's takeover laws (decision pending), Assist, the charge turn, test_pivot_search under
-  8 GB with per-test memory shown; then merge main, focused tests + guards + one review, and the
-  tip to the manager. Batch 11 may start once the batch 10 tip is with the manager.
-  AI convention (manager, 2026-11-15, from E1's ALLIN branch claude/e1-allin-ai 4fa42e4): gate
-  a flag only through policy._flags / _run_flags (never layout.runs / layout.flags in traced
-  scoring); every random read through commands._slot_read with its bound in
-  read_bounds.READ_BOUNDS; concrete code uses layout.fight_flags / fight_effects. Batch 10's AI
-  so far (Flare Blitz #253 into the existing _expert_recoil_move, three table rows and one
-  dispatch row) adds no flag gate and no random read: no site to switch. Encore's AI, when
-  written, follows it.
-- **Fast tier.** The batches 3-9 merge fast tier runs on c961e18 in `_scratch/e2/testwt`
-  (launcher `_scratch/e2/run_fast_tier.ps1`, log `_scratch/e2/ft_c961e18.log`, started 09:20,
-  pid 15236 in the lock). Report passed / failed, wall time, peak and the ten slowest to the
-  manager when it ends.
-- **Batch 9 follow-ups.** test_stage_b's six failing nodes are fixed (the exhaustive solver's
-  unpack, B9-15) and confirmed: 6 passed (test_terminal_win_after_a_death_scores_zero_at_k0,
-  test_win_after_a_new_death_scores_zero_at_k0, test_result_dict_round_trip,
-  test_root_chance_node_for_the_battle_start_quick_claw, test_matches_exhaustive_on_endgames,
-  test_no_peeking). Engine guards, test_stage_b_learn, test_batch9: 159 passed; tests/data +
-  tests/tools 596 passed before the build_tables gate fix, then test_build_tables_game 14
-  passed. tests/prep/test_exhaustive.py was stopped unfinished (slow). The four cross-area
-  guards on 253afaf were stopped unfinished at the session clear (2026-11-15 ~08:50); the
-  manager reruns them in the merge check.
-- **Next.** Batch 10 families 1-10 in the plan order (re-apply family 1 first), then the next
-  splits (Fantina onward, backlog order).
-- **Open rulings and items.** Compile re-time pending on a quiet machine (batch 9's 76.5 s was
-  load-skewed). `tests/search/test_leaves.py` and `tests/search/test_player_learn.py` owe a
-  restructuring (each past 8 GB). The slow search run peaked at 17 GB. A one-process focused
-  run over tests/prep and the engine guards grew past 16 GB here and was stopped: run such sets
-  per file. Sampling note: `outcome.sample_outcome` uses `fold_in(key, 26)` for both Metronome's
-  side-0 rank and `yawn_sleep` (correlated draws; marginals exact).
-- **Test worktree.** `G:\Farry\Claude Workspace\_scratch\e2\testwt` (detached; tables rebuilt per
-  tip; JAX cache under its `.cache/jax-tests`); `compile_time.py` at `_scratch\e2\`; batch 10
-  scratch at `_scratch\e2\b10\` (`diff.py N SEED`: the reduced differential).
-- **Process rules (user-approved).**
-  - Per batch: the batch's focused tests plus the four cross-area guards
-    (`tests/prep/test_variants.py`, `tests/data/test_game_constants.py`,
-    `tests/tools/test_backlog.py`, `tests/test_cli.py`) and one review. No fast tier per batch.
-  - The fast tier runs once per merge into main, on the merge-check tip, under the lock.
-  - Never start a third batch while two are unmerged: send a merge-check tip instead.
-  - The session is cleared at every batch boundary: keep this RESUME current at each one.
-- **Lock rules.** The fast-tier lock (`_scratch/fast_tier.lock`) names the launched pytest's pid,
-  written only after that process is confirmed alive; a lock whose pid is dead may be deleted.
-  At most 8 GB per test file. Every background launch gets a liveness check within two minutes.
-  No 90 minutes without a commit (else tell the coordinator in two lines what it waits on).
+- **Main.** Batches 3-9 are in local main d420167 (merge 4fb3548 of c961e18 + c6c4df0). Never push.
+- **Batch 10 on this branch (unmerged), all committed; tip = this RESUME commit on 8df2d38.**
+  597ad95 recoil/crash (B10-1/2, Flare Blitz AI); ff4490b merge-check follow-ups (B10-3: Baton
+  Pass keeps-test, Unburden lead arming, citations); 939bd45 Substitute (B10-4); a9806c2 Endeavor
+  / Pain Split (B10-5); b051b45 Knock Off (B10-6); 683e5dd Safeguard + two Substitute fixes
+  (B10-7); 5efc1e9 Focus Punch (B10-8); 5e9b960 Encore engine side (B10-9), the stale AI known
+  item after Knock Off modelled (B10-6), Snore law fix (B10-10); 8df2d38 Assist (B10-11) and
+  Encore refused by coverage for both sides (Metronome with it). Backlog at 234 missing groups.
+- **Assist status.** Differential seeds 12-14 clean, test_invokers 16 passed, test_batch10 25,
+  test_enumerate 39, test_accuracy_classes 30, test_effect_map 23, coverage 91. NOT rerun after
+  the last generator change: test_damage_classes (its earlier failure was Assist leaking into
+  invoker-free law states, fixed in tests/strategies.py). Rerun it first.
+- **Left in batch 10 (manager, 2026-11-15):** family 7 the charge turn (SolarBeam #151, Razor
+  Wind, Fly / Dig / Dive / Bounce / Shadow Force, Skull Bash, Sky Attack, Power Herb; mechanic +
+  AI + tests); tests/search/test_pivot_search.py under 8 GB per test with per-test memory shown
+  (after E1's fast tier and its search-test rework are in main); then merge main, focused tests
+  + the four guards + one review, and send the tip to the manager. No Encore AI in batch 10.
+- **Batch 11 (start once the batch 10 tip is with the manager):** the takeover mechanism exactly
+  as designed at 88fb6c5 (ledger "Design: a chosen move replaced mid-turn": one event for every
+  replaced move, TAKEN law variant from a hypothetical encored state with its tag outside `call`,
+  a second sampled outcome returned where the event fired, Outcome shape unchanged), including
+  the Sleep Talk + Disable / Imprison sampler fix with a frequency test that fails today, Encore
+  into Metronome / Assist / Sleep Talk / Copycat; then lift both Encore refusals and add Encore's
+  AI (Basic_CheckCannotEncore, Expert_Encore) under the ALLIN convention.
+- **ALLIN AI convention (from E1's merge):** gate a flag only through policy._flags /
+  _run_flags; every random read through commands._slot_read with its bound in
+  read_bounds.READ_BOUNDS; concrete code uses layout.fight_flags / fight_effects.
+- **Process rules.** Per batch: focused tests + the four guards (tests/prep/test_variants.py,
+  tests/data/test_game_constants.py, tests/tools/test_backlog.py, tests/test_cli.py) + one
+  review; the fast tier once per merge, on the merge-check tip, under
+  G:/Farry/Claude Workspace/_scratch/fast_tier.lock (launcher _scratch/e2/run_fast_tier.ps1;
+  E1's merge takes the lock first). No third batch while two are unmerged. Report in a few lines
+  to the manager (SendMessage local_a4231f03-556b-4b7f-bc82-38b27d410c76); a two-line note after
+  90 minutes without a commit. E2 owns move-effect families end to end (mechanic, AI scoring,
+  tests); E1 owns abilities, held items, battle conditions, AI flags. Keep commits small (E1
+  builds on this branch: claude/e1-gardenia-on-e2). Context: do not read whole large files or
+  full test logs (grep / tail), delegate file-heavy work to subagents. Runs narrow (one process,
+  under 6 GB) while another fast tier holds the lock.
+- **Scratch.** _scratch/e2/b10: diff.py N SEED (reduced differential, dumps fail_SEED.pkl),
+  replay.py / replay3.py (replay a dump in both engines), edit.py (scripted edits), the decomp
+  Substitute inventory. Test worktree _scratch/e2/testwt (now at d420167). Rebuild tables after
+  an effect-map change (uv run python -m tools.build_tables; uv run --group rom python -m
+  tools.build_tables --game kaizo); regenerate the backlog per family (uv run --group rom python
+  -m tools.kaizo.backlog docs/kaizo/mechanics_backlog.md).
 
 ## History
 
