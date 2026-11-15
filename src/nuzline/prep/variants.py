@@ -320,7 +320,8 @@ def ai_defender_hp_checks(tables: Tables, layout=None) -> tuple[tuple[str, int],
 
 
 def percent_cut(kind: str, percent: int, max_hp: int) -> int:
-    """The highest HP on the keep-off side of one ``AI_DEFENDER_HP_CHECKS`` entry."""
+    """The region top one HP check makes: for ``"greater"``, the highest HP that keeps the
+    check off; for ``"less"``, the highest HP that turns it on."""
     if kind == "greater":
         return ((percent + 1) * max_hp - 1) // 100
     return (percent * max_hp - 1) // 100
