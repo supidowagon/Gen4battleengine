@@ -44,6 +44,7 @@ from nuzline.engine.order import (
 from nuzline.engine.state import MOVES, make_state
 from tests.ai.test_kaizo_outcome import (
     KAIZO,
+    KAIZO_ALL,
     _assert_exact_equals_loose,
     _bulky,
     _with_player,
@@ -251,8 +252,8 @@ def test_expert_label_table_is_the_dispatch():
         BattleEffect.HIT_BEFORE_SWITCH,
         BattleEffect.STEALTH_ROCK,
     }
-    assert set(dispatch) & KAIZO.transcribed == set(KAIZO_EXPERT_LABELS) | old
-    assert KAIZO.expert_transcribed == KAIZO_EXPERT_TRANSCRIBED
+    assert set(dispatch) & KAIZO_ALL.transcribed == set(KAIZO_EXPERT_LABELS) | old
+    assert KAIZO_ALL.expert_transcribed == KAIZO_EXPERT_TRANSCRIBED
 
 
 def _dispatched(t, s, flag, layout) -> set[int]:
@@ -287,7 +288,7 @@ def test_expert_transcribed_is_the_dispatch(
     entry to outcome.py's table literal leaves KAIZO_EXPERT_TRANSCRIBED unchanged."""
     t, n = kaizo_tables, kaizo_names
     s = _state(t, kaizo_roark_party, CRANIDOS, _CRANIDOS_MOVES, bench=(BONSLY,))
-    branches = _dispatched(t, s, policy._expert, KAIZO)
+    branches = _dispatched(t, s, policy._expert, KAIZO_ALL)
     assert branches == policy.EXPERT_DISPATCH
     # (c) The literal does not follow the table: outcome.py's own source, with an entry added
     # to the KAIZO_EXPERT_LABELS literal (as a later task would), still leaves it out.
