@@ -33,8 +33,10 @@ from nuzline.data.games import VANILLA
 __all__ = [
     "cache_root",
     "cached_export",
+    "cap_directory",
     "code_version",
     "enable_compile_cache",
+    "jax_version",
     "prune_other_versions",
     "set_compile_cache_dir",
     "table_version",
@@ -87,6 +89,17 @@ def code_version() -> str:
     return _sha16(*chunks)
 
 
+@functools.cache
+def jax_version() -> str:
+    """16 hex chars of the sha256 of the jax and jaxlib versions: a directory key for XLA's
+    persistent compilation cache alone, whose entries JAX already keys by the compiled
+    program (its HLO, compile options and backend), so programs that a code change leaves
+    unchanged keep loading from it."""
+    import jaxlib
+
+    return _sha16(jax.__version__.encode(), jaxlib.__version__.encode())
+
+
 def prune_other_versions(directory: Path, root: Path | None = None) -> None:
     """Delete the siblings of ``directory`` named like a version directory (16 or 32 hex
     chars), keeping ``directory``. Does nothing unless ``directory``'s parent is inside
@@ -109,6 +122,31 @@ def prune_other_versions(directory: Path, root: Path | None = None) -> None:
             and not sibling.is_symlink()
         ):
             shutil.rmtree(sibling, ignore_errors=True)
+
+
+def cap_directory(directory: Path, max_bytes: int) -> None:
+    """Delete the oldest files (by modification time) under ``directory`` until the rest
+    total at most ``max_bytes``. JAX's own cap (``jax_compilation_cache_max_size``) is off by
+    default (-1) and its LRU eviction needs the ``filelock`` package, which is not a
+    dependency. Errors (a file another process holds open, or deleted meanwhile) are
+    ignored."""
+    files = []
+    for path in Path(directory).rglob("*"):
+        try:
+            if path.is_file() and not path.is_symlink():
+                stat = path.stat()
+                files.append((stat.st_mtime, stat.st_size, path))
+        except OSError:
+            continue
+    total = sum(size for _, size, _ in files)
+    for _, size, path in sorted(files, key=lambda f: f[0]):
+        if total <= max_bytes:
+            break
+        try:
+            path.unlink()
+            total -= size
+        except OSError:
+            continue
 
 
 def set_compile_cache_dir(directory: Path) -> None:

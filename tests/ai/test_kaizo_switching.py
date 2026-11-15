@@ -29,7 +29,7 @@ from hypothesis import HealthCheck, assume, event, given, settings, target
 from hypothesis import strategies as st
 
 from nuzline.ai import policy
-from nuzline.ai.layout import KAIZO, VANILLA, layout_of
+from nuzline.ai.layout import VANILLA, layout_of
 from nuzline.ai.outcome import (
     SWITCH_NONE,
     SWITCH_SITES,
@@ -53,6 +53,7 @@ from nuzline.ai.switching import (
 from nuzline.engine.actions import MOVE_ACTIONS
 from nuzline.engine.damage import move_type_of
 from nuzline.engine.state import MOVES, SLOTS, BattleState, make_state
+from tests.ai.test_kaizo_outcome import KAIZO  # Roark's fight layout (E1 Ruling R7)
 
 K = SwitchSite
 # Kaizo move ids (data/gen4_platinum_kaizo names; types and powers asserted in the tests).

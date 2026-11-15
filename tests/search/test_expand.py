@@ -220,8 +220,8 @@ def test_replacement_refusal_flagged(tables, names):
 _MULTI_DEVICE_SCRIPT = """
 import hashlib, json, jax
 from nuzline.data.tables import load_names, load_tables
-from nuzline.jaxcache import cache_root, code_version, set_compile_cache_dir
-set_compile_cache_dir(cache_root() / "jax-tests" / code_version())
+from nuzline.jaxcache import cache_root, jax_version, set_compile_cache_dir
+set_compile_cache_dir(cache_root() / "jax-tests" / jax_version())
 from nuzline.search.expand import expand
 from tests.search.fixtures import shinx_vs_cranidos
 from tests.search.test_expand import batch, row_keys

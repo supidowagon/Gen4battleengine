@@ -102,7 +102,8 @@ _SOUND_MOVES = {
     "Bug Buzz": 405,
     "Chatter": 448,
 }
-# ai/switching.py _MOVES: moves whose decomp handling the switch check does not model.
+# ai/switching.py MOVE_IDS; _MOVES is these less Hidden Power (_SWITCH_REFUSED): moves whose
+# decomp handling the switch check does not model.
 _SWITCH_MOVES = {
     "Magnet Rise": 393,
     "Roost": 355,
@@ -114,6 +115,7 @@ _SWITCH_MOVES = {
     "Natural Gift": 363,
     "Judgment": 449,
 }
+_SWITCH_REFUSED = {k: v for k, v in _SWITCH_MOVES.items() if k != "Hidden Power"}
 # ai/switching.py _ANY_SIDE_ABILITIES (ApplyTypeChart / CalcEffectiveness, trainer_ai.c).
 _ANY_SIDE_ABILITIES = {"Levitate": 26, "Wonder Guard": 25, "Scrappy": 113, "Normalize": 96}
 # ai/commands.py MOVE_IDS: Basic_Main's OHKO checks (script.s:57-58), Expert_Pursuit's
@@ -121,6 +123,11 @@ _ANY_SIDE_ABILITIES = {"Levitate": 26, "Wonder Guard": 25, "Scrappy": 113, "Norm
 # Ball and Trick Room (:3472-3473, read from K3c Task 6), and the Basic_CheckSoundproof list
 # (:121-131).
 _AI_MOVE_IDS = {
+    "Thunder Wave": 86,  # Basic_CheckCannotParalyze (script.s:620)
+    "Psych Up": 244,  # Expert_Swagger (script.s:2852)
+    "Icy Wind": 196,  # Expert_SpeedDownOnHit (script.s:2345-2347)
+    "Rock Tomb": 317,
+    "Mud Shot": 341,
     "Fissure": 90,
     "Horn Drill": 32,
     "U-turn": 369,
@@ -128,28 +135,30 @@ _AI_MOVE_IDS = {
     "Whirlwind": 18,
     "Gyro Ball": 360,
     "Trick Room": 433,
+    # Expert_Counter / _MirrorCoat (:3125, :3882), Expert_Hail (:4105), Expert_Protect
+    # (:3536-3537).
+    "Counter": 68,
+    "Mirror Coat": 243,
+    "Blizzard": 59,
+    "Feint": 364,
+    "Shadow Force": 467,
+    "Focus Punch": 264,
     **{k: v for k, v in _SOUND_MOVES.items() if k != "Roar"},
 }
-# ai/commands.py CALC_DAMAGE_MOVES: TrainerAI_CalcDamage's id cases (trainer_ai.c:2885-3056;
-# MOVE_* of generated/moves.txt, line N is id N-1).
+# ai/commands.py CALC_DAMAGE_MOVES: TrainerAI_CalcDamage's id cases the AI damage does not
+# model, refused (trainer_ai.c:2885-3071; MOVE_* of generated/moves.txt, line N is id N-1).
+# Return, Frustration, Low Kick, Grass Knot, Dragon Rage, SonicBoom, Seismic Toss and Night
+# Shade are modelled since E1 batch 13, Hidden Power since batch 14 (engine.damage).
 _CALC_DAMAGE_MOVES = {
     "Natural Gift": 363,
     "Judgment": 449,
-    "Hidden Power": 237,
     "Gyro Ball": 360,
-    "Dragon Rage": 82,
-    "Seismic Toss": 69,
-    "Night Shade": 101,
     "Psywave": 149,
-    "Return": 216,
-    "Frustration": 218,
     "Magnitude": 222,
-    "SonicBoom": 49,
-    "Low Kick": 67,
-    "Grass Knot": 447,
 }
 # ai/commands.py MOVE_TYPE_MOVES: TrainerAI_MoveType's id cases (trainer_ai.c:3132-3222).
-_MOVE_TYPE_MOVES = {"Natural Gift": 363, "Judgment": 449, "Hidden Power": 237, "Weather Ball": 311}
+# Hidden Power's is modelled (engine.damage.ai_move_type, E1 batch 14).
+_MOVE_TYPE_MOVES = {"Natural Gift": 363, "Judgment": 449, "Weather Ball": 311}
 
 
 def _policy_tables(scope: str) -> tuple[Constant, ...]:
@@ -160,13 +169,10 @@ def _policy_tables(scope: str) -> tuple[Constant, ...]:
         *_table("nuzline.ai.commands.MOVE_IDS", "move", scope, _AI_MOVE_IDS),
         *_table("nuzline.ai.commands.SOUND_MOVES", "move", scope, _SOUND_MOVES),
         *_table("nuzline.ai.switching.MOVE_IDS", "move", scope, _SWITCH_MOVES),
-        *_table("nuzline.ai.switching._MOVES", "move", scope, _SWITCH_MOVES),
-        *_table(
-            "nuzline.ai.switching.PLAYER_MOVE_REFUSALS",
-            "move",
-            scope,
-            {k: v for k, v in _SWITCH_MOVES.items() if k != "Hidden Power"},
-        ),
+        # Hidden Power's AI type is modelled on both sides since E1 batch 14: in MOVE_IDS
+        # (the bench's IV type), refused in neither.
+        *_table("nuzline.ai.switching._MOVES", "move", scope, _SWITCH_REFUSED),
+        *_table("nuzline.ai.switching.PLAYER_MOVE_REFUSALS", "move", scope, _SWITCH_REFUSED),
         *_table(
             "nuzline.ai.switching.PLAYER_ABILITY_REFUSALS", "ability", scope, _ANY_SIDE_ABILITIES
         ),
@@ -215,6 +221,22 @@ CONSTANTS: tuple[Constant, ...] = (
             "Leaf Guard": 102,
             "Hydration": 93,
             "Rock Head": 69,
+            "Insomnia": 15,
+            "Vital Spirit": 72,
+            "Own Tempo": 20,
+            "Limber": 7,
+            "Oblivious": 12,
+            "Water Veil": 41,
+            "Hyper Cutter": 52,
+            "Speed Boost": 3,
+            "No Guard": 99,
+            "Swift Swim": 33,
+            "Rain Dish": 44,
+            "Ice Body": 115,
+            "Sturdy": 5,
+            "Flower Gift": 122,
+            "Solar Power": 94,
+            "Suction Cups": 21,
         },
     ),
     *_table(
@@ -239,7 +261,25 @@ CONSTANTS: tuple[Constant, ...] = (
         _E,
         {
             k: _TYPES[k]
-            for k in ("Poison", "Ground", "Ghost", "Steel", "Fire", "Water", "Electric", "Psychic")
+            for k in (
+                "Poison",
+                "Ground",
+                "Ghost",
+                "Steel",
+                "Fire",
+                "Grass",
+                "Water",
+                "Electric",
+                "Psychic",
+                "Normal",
+                "Fighting",
+                "Flying",
+                "Rock",
+                "Bug",
+                "Ice",
+                "Dragon",
+                "Dark",
+            )
         },
     ),
     Constant("nuzline.ai.switching._TYPE_FLYING", "type", 2, "Flying", _E),
@@ -424,6 +464,11 @@ EXEMPT: dict[str, str] = {
     "nuzline.ai.commands.MonCondition": _AI_ENCODING + " (MON_CONDITION_*, condition.h:7-25)",
     "nuzline.ai.commands.FieldCondition": _AI_ENCODING + " (FIELD_CONDITION_*, condition.h:144)",
     "nuzline.ai.commands.AiWeather": _AI_ENCODING + " (AI_WEATHER_*, trainer_ai.c:1414-1439)",
+    "nuzline.ai.commands.VolatileCondition": _AI_ENCODING
+    + " (VOLATILE_CONDITION_* masks, include/constants/battle/condition.h)",
+    "nuzline.ai.commands.MoveEffectMask": _AI_ENCODING
+    + " (MOVE_EFFECT_* masks, include/constants/battle/moves.h)",
+    "nuzline.ai.commands.Gender": _AI_ENCODING + " (GENDER_*, generated/genders.txt)",
     "nuzline.ai.commands.TypeMulti": _AI_ENCODING + " (TYPE_MULTI_*, battle.h:144-153)",
     "nuzline.ai.commands.BattleEffect": (
         "decomp battle effect ids (BATTLE_EFFECT_*, generated/move_battle_effects.txt) that the "
@@ -445,6 +490,12 @@ EXEMPT: dict[str, str] = {
     "nuzline.ai.commands.SETUP_FIRST_TURN_EFFECTS": (
         "decomp battle effect ids of script.s's SetupFirstTurn_SetupEffects (:6435-6497), "
         "compared with MoveTable.effect (IfLoadedNotInTable, trainer_ai.c:876-891) by a script "
+        "Kaizo did not change apart from one word (docs/ai/kaizo_roark.md 2); each game's moves "
+        "carry their own effect"
+    ),
+    "nuzline.ai.commands.CHECK_HP_TABLES": (
+        "decomp battle effect ids of script.s's six CheckHP_*Discourage* tables (:7748-7977), "
+        "compared with MoveTable.effect (IfLoadedInTable, trainer_ai.c:858-874) by a script "
         "Kaizo did not change apart from one word (docs/ai/kaizo_roark.md 2); each game's moves "
         "carry their own effect"
     ),

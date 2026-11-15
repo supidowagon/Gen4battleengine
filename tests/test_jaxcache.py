@@ -293,3 +293,49 @@ def test_legacy_flat_dirs_pruned(game_cache):
 
 def test_default_game_is_vanilla(game_cache):
     assert jaxcache.enable_compile_cache("a" * 32).parent.name == "platinum_us"
+
+
+def test_cap_directory_deletes_oldest_first(tmp_path):
+    import os
+
+    for i, name in enumerate(("old", "mid", "new")):
+        path = tmp_path / "sub" / name if name == "mid" else tmp_path / name
+        path.parent.mkdir(exist_ok=True)
+        path.write_bytes(b"x" * 100)
+        os.utime(path, (1000 + i, 1000 + i))
+    jaxcache.cap_directory(tmp_path, 200)
+    assert not (tmp_path / "old").exists()
+    assert (tmp_path / "sub" / "mid").exists() and (tmp_path / "new").exists()
+    jaxcache.cap_directory(tmp_path, 1000)  # under the cap: nothing more goes
+    assert (tmp_path / "sub" / "mid").exists()
+
+
+def test_source_edit_changes_the_trace_cache_key(export_dir, monkeypatch, fresh_code_version):
+    """The serialized-trace cache loads a program by name, so its key must follow the
+    source: every caller passes ``version=code_version()`` (prep/states.py, search/expand.py,
+    search/leaves.py), and an engine source edit gives a new export directory, so the old
+    program is never loaded. Only the XLA compilation cache is keyed by ``jax_version``."""
+    from functools import partial
+
+    root = export_dir.parent.parent
+    for module in ("prep/states.py", "search/expand.py", "search/leaves.py"):
+        text = (jaxcache.PACKAGE_DIR / module).read_text(encoding="utf-8")
+        assert "version=code_version()" in text, module
+    pkg = root / "pkg" / "nuzline"
+    (pkg / "engine").mkdir(parents=True)
+    (pkg / "__init__.py").write_text("")
+    (pkg / "engine" / "damage.py").write_text("POWER = 1\n")
+    monkeypatch.setattr(jaxcache, "PACKAGE_DIR", pkg)
+    fn = _Counted()
+    before = code_version()
+    cached_export(partial(fn, scale=1.0), _args(), name="f", static={}, version=before)
+    (pkg / "engine" / "damage.py").write_text("POWER = 2\n")
+    code_version.cache_clear()
+    after = code_version()
+    assert after != before
+    jaxcache._LOADED.clear()  # a new process
+    cached_export(partial(fn, scale=1.0), _args(), name="f", static={}, version=after)
+    assert fn.calls == 2  # traced again: the first program was not loaded
+    # the new version's directory holds it (the old one is pruned, prune_other_versions)
+    assert (root / "export" / after).is_dir() and after != before
+    assert jaxcache.jax_version() not in {before, after}

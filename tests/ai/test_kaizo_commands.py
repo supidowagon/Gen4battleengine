@@ -48,7 +48,7 @@ from nuzline.engine.step import step
 from tests.ai.fixtures import GEODUDE, outcome, versus
 from tests.engine.helpers import A, roark_state
 
-DECOMP = Path("external/pokeplatinum")
+DECOMP = Path(__file__).resolve().parents[2] / "external/pokeplatinum"
 _D, _A = Battler.DEFENDER, Battler.ATTACKER
 _SPE = Stat.SPE - 1  # stats[..., 0..4] are Atk..Spe
 _step = jax.jit(step)
@@ -111,7 +111,7 @@ def test_a_score_past_the_s8_is_refused(monkeypatch, kaizo_tables, kaizo_roark_p
     # A score above 127 cannot come out of the wrapped AddToMoveScore; if one ever did, the
     # factored distribution is NaN instead of ranking it (policy._slot_move_distribution).
     from nuzline.ai import policy
-    from nuzline.ai.layout import KAIZO
+    from tests.ai.test_kaizo_outcome import KAIZO  # Roark's fight (E1 batch 8)
 
     s = make_state(kaizo_tables, [kaizo_roark_party[2]], list(kaizo_roark_party))
     real = policy._slot_histograms
@@ -478,9 +478,9 @@ def test_loose_speed_compare_reads_no_tie_at_unequal_speed(tables, names):
     assert int(ctx.loose.count[0]) == 1 and not bool(ctx.loose.live[0, 0])
 
 
-def test_speed_compare_refuses_another_value(tables, names):
-    # Every compare on Roark's paths is SLOWER (script.s:1864, :2070, :2650); the dropped tie
-    # draw is exact only for SLOWER.
+def test_flat_speed_compare_refuses_faster(tables, names):
+    # The flat (vanilla) layout draws no tie, which is exact only for SLOWER; FASTER's tie is a
+    # read of the per-slot layout only (E1 Ruling R8).
     ctx = _ctx(tables, _speed_state(tables, names, 45, 45))
     with pytest.raises(AssertionError):
         c.if_speed_compare_equal_to(ctx, COMPARE_SPEED_FASTER)

@@ -41,12 +41,19 @@ import jax
 import jax.numpy as jnp
 
 from nuzline.ai.outcome import SITE_LINES, SITE_N, AiOutcome, line_sites
-from nuzline.ai.switching import INEFFECTIVE, apply_type_chart, type_chart_flags
+from nuzline.ai.switching import (
+    INEFFECTIVE,
+    SUPER_EFFECTIVE,
+    apply_type_chart,
+    type_chart_flags,
+)
+from nuzline.data.tables import BATTLE_TYPE_DOUBLES as _BATTLE_TYPE_DOUBLES
 from nuzline.data.tables import Tables
 from nuzline.engine.actions import usable_moves
-from nuzline.engine.damage import ai_damage_for_roll
+from nuzline.engine.damage import ai_damage_for_roll, ai_move_type, decomp_abilities
 from nuzline.engine.ids import Stat, Status, Weather
 from nuzline.engine.order import (
+    COMPARE_SPEED_FASTER,
     COMPARE_SPEED_SLOWER,
     COMPARE_SPEED_TIE,
     battler_slower,
@@ -58,6 +65,8 @@ _I32 = jnp.int32
 
 # FlagMoveDamageScore / IfCurrentMoveKills argument (include/constants/battle/trainer_ai.h:45).
 USE_MAX_DAMAGE, ROLL_FOR_DAMAGE = 0, 1
+# CheckBattlerAbility results in calcTemp (trainer_ai.h:39-41).
+AI_NOT_HAVE, AI_HAVE, AI_UNKNOWN = 0, 1, 2
 # FlagMoveDamageScore results in calcTemp (trainer_ai.h:35-37).
 AI_NO_COMPARISON_MADE, AI_NOT_HIGHEST_DAMAGE, AI_MOVE_IS_HIGHEST_DAMAGE = 0, 1, 2
 SIM_ROLL_MAX = 15  # engine roll index of variance 100 (USE_MAX_DAMAGE)
@@ -89,8 +98,11 @@ class SideCondition(IntEnum):
 
     REFLECT = 1 << 0  # BattleState.reflect
     LIGHT_SCREEN = 1 << 1  # BattleState.light_screen
+    SPIKES = 1 << 2  # :90; BattleState.spikes (layers, LoadSpikesLayers)
     SAFEGUARD = 1 << 3  # BattleState.safeguard
     STEALTH_ROCK = 1 << 7  # BattleState.stealth_rock
+    TOXIC_SPIKES = 1 << 10  # :98; BattleState.toxic_spikes (layers, LoadSpikesLayers)
+    TAILWIND = (1 << 8) | (1 << 9)  # :96-97, :104; BattleState.tailwind (turns left)
 
 
 _SIDE_CONDITION_FIELDS = {
@@ -98,6 +110,9 @@ _SIDE_CONDITION_FIELDS = {
     SideCondition.LIGHT_SCREEN: "light_screen",
     SideCondition.SAFEGUARD: "safeguard",
     SideCondition.STEALTH_ROCK: "stealth_rock",
+    SideCondition.TAILWIND: "tailwind",
+    SideCondition.SPIKES: "spikes",  # layers; on while above 0 (Expert_ForceSwitch, :2591)
+    SideCondition.TOXIC_SPIKES: "toxic_spikes",
 }
 
 
@@ -112,6 +127,9 @@ class MonCondition(IntEnum):
     PARALYSIS = 1 << 6
     TOXIC = 1 << 7  # its counter (bits 8-11) is refused in a mask: _condition_statuses
     ANY = 0xFF  # MON_CONDITION_ANY: every group above
+    # MON_CONDITION_FACADE_BOOST (include/constants/battle/condition.h:29): toxic, poison,
+    # burn, paralysis
+    FACADE_BOOST = (1 << 7) | (1 << 3) | (1 << 4) | (1 << 6)
 
 
 class FieldCondition(IntEnum):
@@ -119,6 +137,53 @@ class FieldCondition(IntEnum):
     include/constants/battle/condition.h:123-125, :144)."""
 
     TRICK_ROOM = (1 << 16) | (1 << 17) | (1 << 18)  # BattleState.trick_room
+
+
+class VolatileCondition(IntEnum):
+    """``IfVolatileStatus`` masks the transcribed scripts test (``VOLATILE_CONDITION_*``,
+    include/constants/battle/condition.h), each read from its ``BattleState`` field
+    (``if_volatile_status``)."""
+
+    CONFUSION = (1 << 0) | (1 << 1) | (1 << 2)  # :32-34, :65; BattleState.confusion
+    ATTRACT = (1 << 16) | (1 << 17) | (1 << 18) | (1 << 19)  # :48-51, :70; .infatuated
+    CURSE = 1 << 28  # :60; BattleState.curse
+    SUBSTITUTE = 1 << 24  # :56; BattleState.substitute_hp (its HP left, 0 = none)
+
+
+_VOLATILE_FIELDS = {
+    VolatileCondition.CONFUSION: "confusion",
+    VolatileCondition.ATTRACT: "infatuated",
+    VolatileCondition.CURSE: "curse",
+    VolatileCondition.SUBSTITUTE: "substitute_hp",
+}
+
+
+class MoveEffectMask(IntEnum):
+    """``IfMoveEffect`` masks the transcribed scripts test (``MOVE_EFFECT_*``,
+    include/constants/battle/moves.h)."""
+
+    LEECH_SEED = 1 << 2  # :10; BattleState.leech_seed (the seeded battler's side)
+    LOCK_ON = (1 << 3) | (1 << 4)  # :11-12, :41; BattleState.lock_on (turns)
+    PERISH_SONG = 1 << 5  # :13; BattleState.perish_song
+    YAWN = (1 << 11) | (1 << 12)  # :19-20, :42; BattleState.yawn (turns)
+
+
+_MOVE_EFFECT_FIELDS = {
+    MoveEffectMask.LEECH_SEED: "leech_seed",
+    MoveEffectMask.LOCK_ON: "lock_on",
+    MoveEffectMask.PERISH_SONG: "perish_song",
+    MoveEffectMask.YAWN: "yawn",
+}
+BATTLE_TYPE_DOUBLES = int(_BATTLE_TYPE_DOUBLES)  # include/constants/battle.h:27
+
+
+class Gender(IntEnum):
+    """``LoadGender`` values (line n + 1 of generated/genders.txt is n), as
+    ``BattleState.gender`` holds them."""
+
+    MALE = 0
+    FEMALE = 1
+    NONE = 2
 
 
 class AiWeather(IntEnum):
@@ -151,28 +216,107 @@ class BattleEffect(IntEnum):
 
     HIT = 0
     RECOVER_HALF_DAMAGE_DEALT = 3  # Giga Drain
+    STATUS_SLEEP = 1
     HALVE_DEFENSE = 7  # Selfdestruct, Explosion
+    RECOVER_DAMAGE_SLEEP = 8  # Dream Eater (Expert_StatusSleep's IfMoveEffectKnown, :1816)
+    ATK_UP = 10
+    DEF_UP = 11
+    SP_ATK_UP = 13
     SP_DEF_UP = 14  # Expert_ToxicLeechSeed's IfMoveEffectKnown (script.s:2699)
+    ATK_DOWN = 18
     DEF_DOWN = 19
+    SPEED_DOWN = 20
+    EVA_DOWN = 24
     FLINCH_HIT = 31
     RESTORE_HALF_HP = 32  # Recover
     STATUS_BADLY_POISON = 33  # Toxic
     SET_LIGHT_SCREEN = 35  # Light Screen
+    BYPASS_ACCURACY = 17
+    HIGH_CRITICAL = 43
+    RECOIL_QUARTER = 48
+    STATUS_CONFUSE = 49
+    ATK_UP_2 = 50
+    DEF_UP_2 = 51
     SPEED_UP_2 = 52  # Rock Polish
+    SP_ATK_UP_2 = 53
+    SP_DEF_UP_2 = 54
+    ATK_DOWN_2 = 58
     DEF_DOWN_2 = 59
+    SPEED_DOWN_2 = 60
+    SP_DEF_DOWN_2 = 62
+    SET_REFLECT = 65
+    STATUS_PARALYZE = 67
+    LOWER_SPEED_HIT = 70
+    STATUS_LEECH_SEED = 84
+    KO_MON_THAT_DEFEATED_USER = 98  # Destiny Bond
     PRIORITY_1 = 103  # EvalAttack_ApplyKillBonuses' +2 (script.s:6400); no Roark move has it
+    STATUS_NIGHTMARE = 107  # Nightmare (Expert_StatusSleep's IfMoveEffectKnown, :1817)
     CURSE = 109
-    PROTECT = 111  # Expert_ToxicLeechSeed's IfMoveEffectKnown (script.s:2700)
+    PROTECT = 111  # Expert_ToxicLeechSeed's IfMoveEffectKnown (script.s:2700); Protect, Detect
+    DEF_UP_DOUBLE_ROLLOUT_POWER = 156  # Defense Curl (Expert_Protect, script.s:3554)
+    SET_SPIKES = 112
     WEATHER_SANDSTORM = 115  # Weather_Main (script.s:7989)
+    ATK_UP_2_STATUS_CONFUSION = 118  # Swagger
+    INFATUATE = 120  # Attract
     HIT_BEFORE_SWITCH = 128
     WEATHER_RAIN = 136  # Weather_Main (script.s:7988)
     WEATHER_SUN = 137  # Weather_Main (script.s:7987)
     RAISE_ALL_STATS_HIT = 140  # AncientPower (Risky_RiskyEffects, script.s:6550)
     WEATHER_HAIL = 164  # Weather_Main (script.s:7990)
+    STATUS_BURN = 167  # Will-O-Wisp
+    DOUBLE_POWER_WHEN_STATUSED = 169  # Facade
+    DOUBLE_POWER_AND_CURE_PARALYSIS = 171  # SmellingSalt
     REMOVE_SCREENS = 186  # Brick Break
     STEAL_STATUS_MOVE = 195  # Snatch (Expert_Recovery_CheckForSnatch, script.s:2670)
+    RECOIL_THIRD = 198
+    ATK_DEF_UP = 208  # Bulk Up
+    SP_ATK_SP_DEF_UP = 211  # Calm Mind
+    ATK_SPD_UP = 212  # Dragon Dance
+    DOUBLE_POWER_WHEN_BELOW_HALF = 221  # Brine
+    DOUBLE_SPEED_3_TURNS = 225  # Tailwind
+    DOUBLE_POWER_IF_MOVING_SECOND = 230  # Payback, Revenge
+    HALVE_HP = 40  # Super Fang
+    COUNTER = 89  # Counter
+    DAMAGE_WHILE_ASLEEP = 92  # Snore
+    USE_RANDOM_LEARNED_MOVE_SLEEP = 97  # Sleep Talk
+    INCREASE_POWER_WITH_LESS_HP = 99  # Flail, Reversal
+    MIRROR_COAT = 144  # Mirror Coat
+    ALWAYS_FLINCH_FIRST_TURN_ONLY = 158  # Fake Out
+    LOWER_OWN_ATK_AND_DEF = 182  # Superpower, Close Combat
+    EAT_BERRY = 224  # Pluck, Bug Bite
+    DAMAGE_FLAT_40 = 41  # 40_DAMAGE_FLAT: Dragon Rage
+    LEVEL_DAMAGE_FLAT = 87  # Seismic Toss, Night Shade
+    RANDOM_DAMAGE_1_TO_150_LEVEL = 88  # Psywave; Kaizo Triple Axel, Fury Cutter
+    POWER_BASED_ON_FRIENDSHIP = 121  # Return
+    RANDOM_POWER_MAYBE_HEAL = 122  # Present
+    POWER_BASED_ON_LOW_FRIENDSHIP = 123  # Frustration
+    DAMAGE_FLAT_20 = 130  # 20_DAMAGE_FLAT: SonicBoom
+    INCREASE_POWER_WITH_WEIGHT = 196  # Low Kick, Grass Knot
+    RANDOM_POWER_BASED_ON_IVS = 135  # Hidden Power
+    ONE_HIT_KO = 38  # Guillotine, Horn Drill, Fissure
+    SWITCH_HIT = 228  # U-turn
+    AVERAGE_HP = 91  # Pain Split
+    PREVENT_STATUS = 124  # Safeguard
+    MAX_ATK_LOSE_HALF_MAX_HP = 142  # Belly Drum
+    HIT_LAST_WHIFF_IF_HIT = 170  # Focus Punch
+    SET_HP_EQUAL_TO_USER = 189  # Endeavor
+    BLIZZARD = 260  # Kaizo Blizzard, Ice Ball, Sheer Cold
+    FORCE_SWITCH = 28  # Roar, Whirlwind
+    SET_SUBSTITUTE = 79  # Substitute
+    STATUS_POISON = 66  # Poison Powder (Expert_Substitute's last-move table, script.s:3019)
+
+    TOXIC_SPIKES = 249
+    RECOIL_PARALYZE_HIT = 262
     STEALTH_ROCK = 266
     RECOIL_HALF = 269  # Head Smash
+
+
+# BattleEffect members whose decomp name (BATTLE_EFFECT_<name>) starts with a digit, which a
+# Python name cannot.
+BATTLE_EFFECT_DECOMP_NAMES = {
+    BattleEffect.DAMAGE_FLAT_40: "40_DAMAGE_FLAT",
+    BattleEffect.DAMAGE_FLAT_20: "20_DAMAGE_FLAT",
+}
 
 
 # Decomp move id -> battle effect for every move whose script paths are transcribed
@@ -209,9 +353,9 @@ NO_DAMAGE_CALC_EFFECTS = (
     269,  # RECOIL_HALF (Head Smash)
 )
 # sAltPowerMoveEffects (trainer_ai.c:48-61): the same three commands compute damage for a
-# move with one of these effects whatever its power (:1035, :1553, :2827),
-# through TrainerAI_CalcDamage's id cases, which the engine's AI damage does not transcribe;
-# policy.ai_refusals refuses such an opponent move.
+# move with one of these effects whatever its power (:1035, :1553, :2827), through
+# TrainerAI_CalcDamage: its move-id case, or, for another move id, the default (the table's
+# power and type, :3074-3078).
 ALT_POWER_EFFECTS = (
     135,  # RANDOM_POWER_BASED_ON_IVS
     219,  # POWER_BASED_ON_LOW_SPEED
@@ -323,16 +467,251 @@ SETUP_FIRST_TURN_EFFECTS = (
     258,  # REMOVE_HAZARDS_SCREENS_EVA_DOWN
     261,  # WHIRLPOOL (:6496)
 )
+# CheckHP_Main's six tables (script.s:7748-7977), by label: the effects it discourages at the
+# attacker's (CheckHP_Discourage*) and the target's (CheckHP_Target_Discourage*) high (> 70 %),
+# medium (31-70 %) and low HP (IfLoadedInTable, :7703-7737; trainer_ai.c:858-874).
+# BATTLE_EFFECT_* ids, line - 1 of generated/move_battle_effects.txt, in each table's order,
+# repeats included. CheckHP_Target_DiscourageAtHighHP is empty (:7866-7867).
+CHECK_HP_TABLES: dict[str, tuple[int, ...]] = {
+    "CheckHP_DiscourageAtHighHP": (  # script.s:7748
+        7,  # HALVE_DEFENSE
+        32,  # RESTORE_HALF_HP
+        37,  # REST
+        98,  # KO_MON_THAT_DEFEATED_USER
+        99,  # INCREASE_POWER_WITH_LESS_HP
+        116,  # SURVIVE_WITH_1_HP
+        132,  # HEAL_HALF_MORE_IN_SUN
+        168,  # FAINT_AND_ATK_SP_ATK_DOWN_2
+        194,  # REMOVE_ALL_PP_ON_DEFEAT
+        214,  # HEAL_HALF_REMOVE_FLYING_TYPE
+        220,  # FAINT_AND_FULL_HEAL_NEXT_MON
+        270,  # FAINT_FULL_RESTORE_NEXT_MON
+    ),
+    "CheckHP_DiscourageAtMediumHP": (  # script.s:7763
+        7,  # HALVE_DEFENSE
+        10,  # ATK_UP
+        11,  # DEF_UP
+        12,  # SPEED_UP
+        13,  # SP_ATK_UP
+        14,  # SP_DEF_UP
+        15,  # ACC_UP
+        16,  # EVA_UP
+        18,  # ATK_DOWN
+        19,  # DEF_DOWN
+        20,  # SPEED_DOWN
+        21,  # SP_ATK_DOWN
+        22,  # SP_DEF_DOWN
+        23,  # ACC_DOWN
+        24,  # EVA_DOWN
+        26,  # BIDE
+        30,  # CONVERSION
+        35,  # SET_LIGHT_SCREEN
+        46,  # PREVENT_STAT_REDUCTION
+        47,  # CRIT_UP_2
+        50,  # ATK_UP_2
+        51,  # DEF_UP_2
+        52,  # SPEED_UP_2
+        53,  # SP_ATK_UP_2
+        54,  # SP_DEF_UP_2
+        55,  # ACC_UP_2
+        56,  # EVA_UP_2
+        58,  # ATK_DOWN_2
+        59,  # DEF_DOWN_2
+        60,  # SPEED_DOWN_2
+        61,  # SP_ATK_DOWN_2
+        62,  # SP_DEF_DOWN_2
+        63,  # EVA_DOWN_2
+        64,  # ACC_DOWN_2
+        93,  # CONVERSION2
+        124,  # PREVENT_STATUS
+        142,  # MAX_ATK_LOSE_HALF_MAX_HP
+        205,  # ATK_DEF_DOWN
+        206,  # DEF_SPD_UP
+        208,  # ATK_DEF_UP
+        211,  # SP_ATK_SP_DEF_UP
+        212,  # ATK_SPD_UP
+        240,  # PREVENT_CRITS
+        243,  # SWAP_ATK_SP_ATK_STAT_CHANGES
+        244,  # SWAP_DEF_SP_DEF_STAT_CHANGES
+        265,  # SP_ATK_DOWN_2_OPPOSITE_GENDER
+    ),
+    "CheckHP_DiscourageAtLowHP": (  # script.s:7812
+        10,  # ATK_UP
+        11,  # DEF_UP
+        12,  # SPEED_UP
+        13,  # SP_ATK_UP
+        14,  # SP_DEF_UP
+        15,  # ACC_UP
+        16,  # EVA_UP
+        18,  # ATK_DOWN
+        19,  # DEF_DOWN
+        20,  # SPEED_DOWN
+        21,  # SP_ATK_DOWN
+        22,  # SP_DEF_DOWN
+        23,  # ACC_DOWN
+        24,  # EVA_DOWN
+        26,  # BIDE
+        30,  # CONVERSION
+        35,  # SET_LIGHT_SCREEN
+        46,  # PREVENT_STAT_REDUCTION
+        47,  # CRIT_UP_2
+        50,  # ATK_UP_2
+        51,  # DEF_UP_2
+        52,  # SPEED_UP_2
+        53,  # SP_ATK_UP_2
+        54,  # SP_DEF_UP_2
+        55,  # ACC_UP_2
+        56,  # EVA_UP_2
+        58,  # ATK_DOWN_2
+        59,  # DEF_DOWN_2
+        60,  # SPEED_DOWN_2
+        61,  # SP_ATK_DOWN_2
+        62,  # SP_DEF_DOWN_2
+        63,  # EVA_DOWN_2
+        64,  # ACC_DOWN_2
+        81,  # RAISE_ATK_WHEN_HIT
+        93,  # CONVERSION2
+        94,  # NEXT_ATTACK_ALWAYS_HITS
+        124,  # PREVENT_STATUS
+        142,  # MAX_ATK_LOSE_HALF_MAX_HP
+        143,  # COPY_STAT_CHANGES
+        144,  # MIRROR_COAT
+        190,  # DECREASE_POWER_WITH_LESS_USER_HP
+        205,  # ATK_DEF_DOWN
+        206,  # DEF_SPD_UP
+        208,  # ATK_DEF_UP
+        211,  # SP_ATK_SP_DEF_UP
+        212,  # ATK_SPD_UP
+        201,  # HALVE_ELECTRIC_DAMAGE
+        210,  # HALVE_FIRE_DAMAGE
+        226,  # RANDOM_STAT_UP_2
+        227,  # METAL_BURST
+        265,  # SP_ATK_DOWN_2_OPPOSITE_GENDER
+    ),
+    "CheckHP_Target_DiscourageAtHighHP": (  # script.s:7866
+    ),
+    "CheckHP_Target_DiscourageAtMediumHP": (  # script.s:7869
+        10,  # ATK_UP
+        11,  # DEF_UP
+        12,  # SPEED_UP
+        13,  # SP_ATK_UP
+        14,  # SP_DEF_UP
+        15,  # ACC_UP
+        16,  # EVA_UP
+        18,  # ATK_DOWN
+        19,  # DEF_DOWN
+        20,  # SPEED_DOWN
+        21,  # SP_ATK_DOWN
+        22,  # SP_DEF_DOWN
+        23,  # ACC_DOWN
+        24,  # EVA_DOWN
+        46,  # PREVENT_STAT_REDUCTION
+        47,  # CRIT_UP_2
+        50,  # ATK_UP_2
+        51,  # DEF_UP_2
+        52,  # SPEED_UP_2
+        53,  # SP_ATK_UP_2
+        54,  # SP_DEF_UP_2
+        55,  # ACC_UP_2
+        56,  # EVA_UP_2
+        58,  # ATK_DOWN_2
+        59,  # DEF_DOWN_2
+        60,  # SPEED_DOWN_2
+        61,  # SP_ATK_DOWN_2
+        62,  # SP_DEF_DOWN_2
+        63,  # EVA_DOWN_2
+        64,  # ACC_DOWN_2
+        66,  # STATUS_POISON
+        91,  # AVERAGE_HP
+        114,  # ALL_FAINT_3_TURNS
+        124,  # PREVENT_STATUS
+        205,  # ATK_DEF_DOWN
+        206,  # DEF_SPD_UP
+        208,  # ATK_DEF_UP
+        211,  # SP_ATK_SP_DEF_UP
+        212,  # ATK_SPD_UP
+        226,  # RANDOM_STAT_UP_2
+        237,  # INCREASE_POWER_WITH_MORE_HP
+        265,  # SP_ATK_DOWN_2_OPPOSITE_GENDER
+    ),
+    "CheckHP_Target_DiscourageAtLowHP": (  # script.s:7914
+        1,  # STATUS_SLEEP
+        7,  # HALVE_DEFENSE
+        10,  # ATK_UP
+        11,  # DEF_UP
+        12,  # SPEED_UP
+        13,  # SP_ATK_UP
+        14,  # SP_DEF_UP
+        15,  # ACC_UP
+        16,  # EVA_UP
+        18,  # ATK_DOWN
+        19,  # DEF_DOWN
+        20,  # SPEED_DOWN
+        21,  # SP_ATK_DOWN
+        22,  # SP_DEF_DOWN
+        23,  # ACC_DOWN
+        24,  # EVA_DOWN
+        26,  # BIDE
+        30,  # CONVERSION
+        33,  # STATUS_BADLY_POISON
+        35,  # SET_LIGHT_SCREEN
+        38,  # ONE_HIT_KO
+        40,  # HALVE_HP
+        40,  # HALVE_HP
+        46,  # PREVENT_STAT_REDUCTION
+        47,  # CRIT_UP_2
+        49,  # STATUS_CONFUSE
+        50,  # ATK_UP_2
+        51,  # DEF_UP_2
+        52,  # SPEED_UP_2
+        53,  # SP_ATK_UP_2
+        54,  # SP_DEF_UP_2
+        55,  # ACC_UP_2
+        56,  # EVA_UP_2
+        58,  # ATK_DOWN_2
+        59,  # DEF_DOWN_2
+        60,  # SPEED_DOWN_2
+        61,  # SP_ATK_DOWN_2
+        62,  # SP_DEF_DOWN_2
+        63,  # EVA_DOWN_2
+        64,  # ACC_DOWN_2
+        66,  # STATUS_POISON
+        67,  # STATUS_PARALYZE
+        91,  # AVERAGE_HP
+        93,  # CONVERSION2
+        94,  # NEXT_ATTACK_ALWAYS_HITS
+        100,  # DECREASE_LAST_MOVE_PP
+        114,  # ALL_FAINT_3_TURNS
+        118,  # ATK_UP_2_STATUS_CONFUSION
+        119,  # DOUBLE_POWER_EACH_TURN
+        120,  # INFATUATE
+        124,  # PREVENT_STATUS
+        143,  # COPY_STAT_CHANGES
+        144,  # MIRROR_COAT
+        167,  # STATUS_BURN
+        205,  # ATK_DEF_DOWN
+        206,  # DEF_SPD_UP
+        208,  # ATK_DEF_UP
+        211,  # SP_ATK_SP_DEF_UP
+        212,  # ATK_SPD_UP
+        226,  # RANDOM_STAT_UP_2
+        237,  # INCREASE_POWER_WITH_MORE_HP
+        265,  # SP_ATK_DOWN_2_OPPOSITE_GENDER
+    ),
+}
 # A move's class (MoveTable.class, generated/move_classes.txt: line n + 1 is id n), as
 # LoadDefenderLastUsedMoveClass loads it (Expert_LightScreen, script.s:2723).
-CLASS_SPECIAL = 1
-# TrainerAI_CalcDamage's move-id cases (trainer_ai.c:2885-3056): power, type or damage of
-# these moves come from the case, not the move table, whatever the move's effect (Kaizo's
-# Return and Frustration have effect 0 and still take theirs, :3018-3026). Decomp move ids.
-CALC_DAMAGE_MOVES = (363, 449, 237, 360, 82, 69, 101, 149, 216, 218, 222, 49, 67, 447)
+CLASS_PHYSICAL, CLASS_SPECIAL = 0, 1
+# TrainerAI_CalcDamage's move-id cases (trainer_ai.c:2885-3071) the AI damage does not model,
+# refused: Natural Gift and Judgment (item data), Gyro Ball (monSpeedValues, the last speed
+# compare's, battle_lib.c:1372), Psywave and Magnitude (a RandNext draw in the damage, :3015,
+# :3030). Return, Frustration, Low Kick, Grass Knot, Hidden Power and the fixed-damage cases
+# are modelled
+# (engine.damage.ai_case_power, ai_case_fixed; E1 batch 13). Decomp move ids.
+CALC_DAMAGE_MOVES = (363, 449, 360, 149, 222)
 # TrainerAI_MoveType's move-id cases (trainer_ai.c:3132-3222): the type the AI gives
 # these moves is not their table type. Decomp move ids.
-MOVE_TYPE_MOVES = (363, 449, 237, 311)
+MOVE_TYPE_MOVES = (363, 449, 311)  # Hidden Power's is modelled (damage.ai_move_type)
 
 # Decomp ids, checked against the manifest by tests/ai/test_policy.py.
 ABILITY_IDS = {
@@ -364,10 +743,41 @@ ABILITY_IDS = {
     "Poison Heal": 90,
     "Leaf Guard": 102,
     "Hydration": 93,
+    # Basic_CheckOHKOWouldFail (script.s:560).
+    "Sturdy": 5,
+    # Basic_CheckRainDance / Expert_RainDance (script.s:789, :3749, :3758), Basic_CheckHail /
+    # Expert_Hail (:860, :868, :4110); generated/abilities.txt.
+    "Swift Swim": 33,
+    "Rain Dish": 44,
+    "Ice Body": 115,
+    # Basic_CheckSunnyDay / Expert_SunnyDay (script.s:807-809, :3788).
+    "Flower Gift": 122,
+    # Basic_CheckCanForceSwitch (script.s:506).
+    "Suction Cups": 21,
+    "Solar Power": 94,
     # Expert_RecoilMove (script.s:6297-6298; Magic Guard above).
     "Rock Head": 69,
+    # E1 batch 6: Basic_CheckCannotSleep / _Confuse / _Paralyze / _Attract / _Burn
+    # (script.s:293-294, :603, :616, :625-626 with Volt Absorb above, :735, :882).
+    "Insomnia": 15,
+    "Vital Spirit": 72,
+    "Own Tempo": 20,
+    "Limber": 7,
+    "Oblivious": 12,
+    "Water Veil": 41,
+    # E1 batch 10: Basic_CheckLowStatStage_Attack / _Speed / _Evasion (script.s:431, :441,
+    # :465-467).
+    "Hyper Cutter": 52,
+    "Speed Boost": 3,
+    "No Guard": 99,
 }
 MOVE_IDS = {
+    "Thunder Wave": 86,  # Basic_CheckCannotParalyze (script.s:620)
+    "Psych Up": 244,  # Expert_Swagger (script.s:2852)
+    # Expert_SpeedDownOnHit (script.s:2345-2347)
+    "Icy Wind": 196,
+    "Rock Tomb": 317,
+    "Mud Shot": 341,
     "Fissure": 90,
     "Horn Drill": 32,
     "U-turn": 369,
@@ -387,6 +797,15 @@ MOVE_IDS = {
     "GrassWhistle": 320,
     "Bug Buzz": 405,
     "Chatter": 448,
+    # Expert_Counter / Expert_MirrorCoat (script.s:3125, :3882), Expert_Hail (:4105).
+    "Counter": 68,
+    "Mirror Coat": 243,
+    "Blizzard": 59,
+    # Expert_Protect (script.s:3536-3537).
+    "Feint": 364,
+    # Expert_Substitute (script.s:2994).
+    "Focus Punch": 264,
+    "Shadow Force": 467,
 }
 SOUND_MOVES = tuple(
     MOVE_IDS[n]
@@ -410,10 +829,28 @@ TYPE_IDS = {
     "Ghost": 7,
     "Steel": 8,
     "Fire": 10,
+    "Grass": 12,  # Basic_CheckCannotLeechSeed (script.s:643-645)
     "Water": 11,
     "Electric": 13,
     "Psychic": 14,
+    # Expert_Counter_PhysicalTypes / Expert_MirrorCoat_SpecialTypes (script.s:3165-3175,
+    # :3922-3931); generated/pokemon_types.txt (line n + 1 is n).
+    "Normal": 0,
+    "Fighting": 1,
+    "Flying": 2,
+    "Rock": 5,
+    "Bug": 6,
+    "Ice": 15,
+    "Dragon": 16,
+    "Dark": 17,
 }
+COUNTER_PHYSICAL_TYPES = tuple(
+    TYPE_IDS[n]
+    for n in ("Normal", "Fighting", "Flying", "Poison", "Ground", "Rock", "Bug", "Ghost", "Steel")
+)
+MIRROR_COAT_SPECIAL_TYPES = tuple(
+    TYPE_IDS[n] for n in ("Fire", "Water", "Grass", "Electric", "Psychic", "Ice", "Dragon", "Dark")
+)
 ITEM_EXPERT_BELT = 268  # HOLD_EFFECT_POWER_UP_SE
 _TRAPPING = jnp.array([ABILITY_IDS[n] for n in ("Shadow Tag", "Magnet Pull", "Arena Trap")], _I32)
 
@@ -424,12 +861,16 @@ class ReadKind(IntEnum):
     NONE = 0  # no read at this index
     ROLL = 1  # IfRandomLessThan N: P(1) = N/256
     ABILITY = 2  # LoadBattlerAbility DEFENDER's coin flip: P(1) = 1/2
-    SPEED_TIE = 3  # IfSpeedCompareEqualTo's tie, RandNext() & 1: P(1) = 1/2
+    SPEED_TIE = 3  # a SLOWER compare's tie, RandNext() & 1: P(1) = 1/2; no exact read (R3)
+    SPEED_TIE_DRAWN = 4  # a FASTER or TIE compare's tie: a read of the exact layout (E1 R8)
 
 
 # LooseDraws columns: at least the reads one slot's scripts make. Every read counts, on the
-# slot's path or not (the scripts are straight-line): 35 after K3c Task 6.
-LOOSE_READS = 48
+# slot's path or not (the scripts are straight-line): 35 after K3c Task 6, 74 after E1 batch 7
+# under every transcribed flag; only fight-sized layouts (E1 Ruling R7) are run loose, and each
+# stays well under this (tests/ai/test_kaizo_outcome.py test_slot_reads_fit_*). More raises (policy._loose_reads). Tests only, but each column
+# costs compile memory in every loose program, so the headroom is kept modest.
+LOOSE_READS = 96
 
 
 class LooseDraws(NamedTuple):
@@ -506,10 +947,12 @@ def is_damaging(tables: Tables, move) -> jnp.ndarray:
     than 1 and its battle effect is not in ``NO_DAMAGE_CALC_EFFECTS``
     (``TrainerAI_CalcAllDamage``, trainer_ai.c:2827-2828; ``FlagMoveDamageScore``,
     :1035-1036; ``IfCurrentMoveKills``, :1553-1554). Those tests also pass a move whose
-    effect is in ``ALT_POWER_EFFECTS``; ``policy.ai_refusals`` refuses those."""
+    effect is in ``ALT_POWER_EFFECTS``, whatever its power (:2823-2828)."""
     move = jnp.asarray(move, _I32)
-    no_calc = jnp.isin(move_effect(tables, move), _NO_DAMAGE_CALC)
-    return (move != 0) & (tables.move_power[move] > 1) & ~no_calc
+    effect = move_effect(tables, move)
+    no_calc = jnp.isin(effect, _NO_DAMAGE_CALC)
+    alt = jnp.isin(effect, jnp.asarray(ALT_POWER_EFFECTS, _I32))
+    return alt | ((move != 0) & (tables.move_power[move] > 1) & ~no_calc)
 
 
 def _slot_damage(tables: Tables, state: BattleState, rolls) -> jnp.ndarray:
@@ -517,6 +960,52 @@ def _slot_damage(tables: Tables, state: BattleState, rolls) -> jnp.ndarray:
     moveset, whatever the PP, with ``rolls[i]`` for slot i."""
     moves = state.moves[1, state.active[1]].astype(_I32)
     return jax.vmap(lambda m, r: ai_damage(tables, state, m, r))(moves, jnp.asarray(rolls, _I32))
+
+
+def if_has_super_effective_move(ctx: AiContext) -> AiContext:
+    """``IfHasSuperEffectiveMove`` (trainer_ai.c:2176-2184): ``AI_HasSuperEffectiveMove(
+    attacker, TRUE)`` (:3560-3622), which draws nothing with TRUE: a move of the AI's active
+    whose ``ApplyTypeChart`` (:3582, ``TrainerAI_MoveType`` :3578) sets
+    ``MOVE_STATUS_SUPER_EFFECTIVE`` against the player's active. That battler is never in
+    ``battlersSwitchingMask`` while its side has HP left (battle_controller_player.c:
+    4108-4110, :4133-4134), and the partner check needs a doubles battle (:3597)."""
+    tables, state = ctx.tables, ctx.state
+    a, d = _side(Battler.ATTACKER), _side(Battler.DEFENDER)
+    moves = state.moves[a, state.active[a]].astype(_I32)
+    d_types = state.types[d, state.active[d]]
+    identified = state.foresight[d] != 0
+    flags = jax.vmap(
+        lambda m: type_chart_flags(
+            tables, m, d_types, state.gravity, identified, ai_move_type(tables, state, a, m)
+        )
+    )(moves)
+    return _jump(ctx, jnp.any((moves != 0) & ((flags & SUPER_EFFECTIVE) != 0)))
+
+
+def if_party_member_deals_more_damage(ctx: AiContext, use_damage_roll: int) -> AiContext:
+    """``IfPartyMemberDealsMoreDamage`` (trainer_ai.c:2106-2174): jumps when a living party
+    member other than the active one has a move whose ``TrainerAI_CalcAllDamage`` beats the
+    active's best. The party member's moves are calculated **as the AI's active battler**
+    (``AI_CONTEXT.attacker``: its stats, level, types, ability and item in
+    ``CalcMoveDamage``), with only the member's IVs passed (Hidden Power's case; the item
+    and ability parameters only reach Natural Gift and Judgment, refused). Only
+    ``USE_MAX_DAMAGE`` (variance 100) is transcribed (asserted)."""
+    assert int(use_damage_roll) == USE_MAX_DAMAGE, use_damage_roll
+    tables, state = ctx.tables, ctx.state
+    a = _side(Battler.ATTACKER)
+    active = state.active[a]
+
+    def best(moves, ivs):
+        as_active = state._replace(ivs=state.ivs.at[a, active].set(ivs))
+        return jnp.max(
+            jax.vmap(lambda m: ai_damage(tables, as_active, m, SIM_ROLL_MAX))(moves.astype(_I32))
+        )
+
+    mine = best(state.moves[a, active], state.ivs[a, active])
+    theirs = jax.vmap(best)(state.moves[a], state.ivs[a])  # [SLOTS]
+    slots = jnp.arange(state.species.shape[1])
+    alive = (state.species[a] > 0) & (state.hp[a] > 0) & (slots != active)
+    return _jump(ctx, jnp.any(alive & (theirs > mine)))
 
 
 def move_effect(tables: Tables, move) -> jnp.ndarray:
@@ -549,31 +1038,38 @@ def effectiveness_class(tables: Tables, state: BattleState, move) -> jnp.ndarray
         [TypeMulti.DOUBLE, TypeMulti.QUADRUPLE, TypeMulti.HALF, TypeMulti.QUARTER],
         value,
     )
-    flags = type_chart_flags(tables, move, d_types, state.gravity, state.foresight[0] != 0)
+    flags = type_chart_flags(
+        tables,
+        move,
+        d_types,
+        state.gravity,
+        state.foresight[0] != 0,
+        move_type=ai_move_type(tables, state, 1, move),  # TrainerAI_MoveType (:1323)
+    )
     immune = (flags & INEFFECTIVE) != 0
     # Struggle: ApplyTypeChart returns 40 unchanged and sets no bit (battle_lib.c:2573).
     return jnp.where(immune, TypeMulti.IMMUNE, mapped).astype(_I32)
 
 
 def attacker_ability(tables: Tables, state: BattleState) -> jnp.ndarray:
-    """``int32``: the AI's active Pokemon's true ability (decomp id)."""
-    a = state.active[1].astype(_I32)
-    row = tables.species_form_row[state.species[1, a].astype(_I32), state.form[1, a].astype(_I32)]
-    return tables.species_abilities_decomp[
-        row.astype(_I32), state.ability_slot[1, a].astype(_I32)
-    ].astype(_I32)
+    """``int32``: the AI's active Pokemon's current ability (decomp id): ``battleMons[battler]
+    .ability`` (trainer_ai.c:1205): ``damage.decomp_abilities``, the engine's current ability
+    (a change in battle such as Trace's copy follows it once the engine models the change)."""
+    return decomp_abilities(tables, state)[1, state.active[1].astype(_I32)]
 
 
 def _defender_abilities(tables: Tables, state: BattleState):
-    """``(true, known, base)`` of the player's active Pokemon: its true ability (the form's),
+    """``(true, known, base)`` of the player's active Pokemon: its true ability, the current
+    one (``battleMons[battler].ability``, trainer_ai.c:1184-1186; ``damage.decomp_abilities``:
+    the form's, or a copy the engine models, such as Trace's, which the AI also learns,
+    ``BattleAI_SetAbility``,
+    battle_script.c:3401-3403, :12106-12109),
     whether ``LoadBattlerAbility DEFENDER`` returns it without a guess (learned, or Shadow
     Tag, Magnet Pull or Arena Trap, trainer_ai.c:1181-1188), and the base species' two
     abilities ``int32[2]`` (``defender_ability``)."""
     d = state.active[0].astype(_I32)
     species = state.species[0, d].astype(_I32)
-    row = tables.species_form_row[species, state.form[0, d].astype(_I32)]
-    true = tables.species_abilities_decomp[row.astype(_I32), state.ability_slot[0, d].astype(_I32)]
-    true = true.astype(_I32)
+    true = decomp_abilities(tables, state)[0, d]
     known = (state.ai_ability_known[d] > 0) | jnp.isin(true, _TRAPPING)
     base = tables.species_abilities_decomp[species].astype(_I32)
     return true, known, base
@@ -747,6 +1243,12 @@ def _slot_read(ctx: AiContext, takes) -> tuple[AiContext, jnp.ndarray]:
 # --- The command functions, one per row of docs/ai/script_commands.md -------------
 
 
+def if_target_is_not_taunted(ctx: AiContext) -> AiContext:
+    """``IfTargetIsNotTaunted`` (trainer_ai.c:2620-2628): jumps when the defender's
+    ``moveEffectsData.tauntedTurns`` is 0 (``BattleState.taunt``, turns left)."""
+    return _jump(ctx, ctx.state.taunt[_side(Battler.DEFENDER)] == 0)
+
+
 def if_target_is_partner(ctx: AiContext) -> AiContext:
     """``IfTargetIsPartner`` (trainer_ai.c:2630): never in a single battle."""
     return _jump(ctx, False)
@@ -829,6 +1331,63 @@ def go_to(ctx: AiContext) -> AiContext:
     return _jump(ctx, True)
 
 
+# IfLevel's operations (include/constants/battle/trainer_ai.h:51-53).
+CHECK_HIGHER_THAN_TARGET, CHECK_LOWER_THAN_TARGET, CHECK_EQUAL_TO_TARGET = 0, 1, 2
+
+
+def if_level(ctx: AiContext, op: int) -> AiContext:
+    """``IfLevel`` (trainer_ai.c:2579-2608): the attacker's level compared with the
+    defender's (``battleMons[...].level``): higher, lower or equal by ``op``; any other
+    ``op`` never jumps."""
+    state = ctx.state
+    a, d = _side(Battler.ATTACKER), _side(Battler.DEFENDER)
+    mine = state.level[a, state.active[a]].astype(_I32)
+    theirs = state.level[d, state.active[d]].astype(_I32)
+    jump = {
+        CHECK_HIGHER_THAN_TARGET: mine > theirs,
+        CHECK_LOWER_THAN_TARGET: mine < theirs,
+        CHECK_EQUAL_TO_TARGET: mine == theirs,
+    }.get(int(op), jnp.asarray(False))
+    return _jump(ctx, jump)
+
+
+def load_battler_turn_count(ctx: AiContext, battler: Battler) -> AiContext:
+    """``LoadBattlerTurnCount`` (trainer_ai.c): ``totalTurns - fakeOutTurnNumber`` of the
+    battler, its turns since it came in (``BattleState.turn``, ``.fake_out_turn``)."""
+    state, side = ctx.state, _side(battler)
+    turns = state.turn.astype(_I32) - state.fake_out_turn[side].astype(_I32)
+    return ctx._replace(calc_temp=turns)
+
+
+def load_effect_of_loaded_move(ctx: AiContext) -> AiContext:
+    """``LoadEffectOfLoadedMove`` (trainer_ai.c): ``calcTemp = MOVE_DATA(calcTemp).effect``
+    (``Tables.move_ai_effect``)."""
+    return ctx._replace(calc_temp=ctx.tables.move_ai_effect[ctx.calc_temp].astype(_I32))
+
+
+def if_loaded_greater_than(ctx: AiContext, value: int) -> AiContext:
+    """``IfLoadedGreaterThan`` (trainer_ai.c:774-784): ``calcTemp > value``."""
+    return _jump(ctx, ctx.calc_temp > value)
+
+
+def if_loaded_mask(ctx: AiContext, mask: int) -> AiContext:
+    """``IfLoadedMask`` (trainer_ai.c:810-820): ``calcTemp & mask``."""
+    return _jump(ctx, (ctx.calc_temp & mask) != 0)
+
+
+def load_battle_type(ctx: AiContext) -> AiContext:
+    """``LoadBattleType`` (trainer_ai.c:2504-2508): ``battleSys->battleType``
+    (``Tables.battle_type``, the fight's, ``ai.layout.fight_tables``)."""
+    return ctx._replace(calc_temp=jnp.asarray(ctx.tables.battle_type, _I32))
+
+
+def load_protect_chain(ctx: AiContext, battler: Battler) -> AiContext:
+    """``LoadProtectChain`` (trainer_ai.c:2538-2552): ``protectSuccessTurns``, or 0 when the
+    battler's ``moveProtect`` is not Protect, Detect or Endure; ``BattleState.protect_count``
+    folds that reset in (engine/STATE.md, moveProtect)."""
+    return ctx._replace(calc_temp=ctx.state.protect_count[_side(battler)].astype(_I32))
+
+
 def if_loaded_not_equal_to(ctx: AiContext, value: int) -> AiContext:
     """``IfLoadedNotEqualTo`` (trainer_ai.c:798)."""
     return _jump(ctx, ctx.calc_temp != value)
@@ -865,6 +1424,41 @@ def if_side_condition(ctx: AiContext, battler: Battler, mask: int) -> AiContext:
     return _jump(ctx, on)
 
 
+def check_battler_ability(ctx: AiContext, battler: Battler, expected: int) -> AiContext:
+    """``CheckBattlerAbility`` (trainer_ai.c:1212-1265): ``AI_HAVE`` when the battler's
+    ability as the AI sees it is ``expected``, ``AI_NOT_HAVE`` when it is another, and
+    ``AI_UNKNOWN`` when the AI does not know it. The AI's own Pokemon: its current ability.
+    The player's: the one the AI knows (learned, or a trapping ability, :1224-1233); else, for
+    a species of two abilities, ability 1 when neither is ``expected`` and unknown when one
+    is (:1238-1246), for a species of one, that one (:1247-1251). No draw."""
+    # The decomp branches on the player's side (DEFENDER or DEFENDER_PARTNER, :1223).
+    if _side(battler) == _side(Battler.ATTACKER):
+        ability = attacker_ability(ctx.tables, ctx.state)
+    else:
+        true, known, base = _defender_abilities(ctx.tables, ctx.state)
+        two = (base[0] != 0) & (base[1] != 0)
+        neither = (base[0] != expected) & (base[1] != expected)
+        guess = jnp.where(
+            two, jnp.where(neither, base[0], 0), jnp.where(base[0] != 0, base[0], base[1])
+        )
+        ability = jnp.where(known, true, guess)
+    value = jnp.where(
+        ability == 0, AI_UNKNOWN, jnp.where(ability == expected, AI_HAVE, AI_NOT_HAVE)
+    )
+    return ctx._replace(calc_temp=jnp.asarray(value, _I32))
+
+
+def load_spikes_layers(ctx: AiContext, battler: Battler, condition: SideCondition) -> AiContext:
+    """``LoadSpikesLayers`` (trainer_ai.c:1948-1966): the battler's side's Spikes or Toxic
+    Spikes layers (``sideConditions[side].spikesLayers`` / ``.toxicSpikesLayers``;
+    ``BattleState.spikes`` / ``.toxic_spikes``). Any other condition is refused at trace
+    time."""
+    field = {SideCondition.SPIKES: "spikes", SideCondition.TOXIC_SPIKES: "toxic_spikes"}[
+        SideCondition(int(condition))
+    ]
+    return ctx._replace(calc_temp=getattr(ctx.state, field)[_side(battler)].astype(_I32))
+
+
 def count_alive_party_battlers(ctx: AiContext, battler: Battler) -> AiContext:
     """``CountAlivePartyBattlers`` (trainer_ai.c:1126): the side's living party members
     other than the active one."""
@@ -877,16 +1471,15 @@ def count_alive_party_battlers(ctx: AiContext, battler: Battler) -> AiContext:
 def add_to_move_score(ctx: AiContext, value: int) -> AiContext:
     """``AddToMoveScore`` (trainer_ai.c:576-586): ``moveScore[slot] += val``, then a
     negative score becomes 0. ``moveScore`` is ``s8`` (include/battle/ai_context.h:14), so
-    the sum wraps to -128..127 before the clamp: 127 + 2 is -127, then 0. No Roark path
-    comes near it (his largest score is about 108); the wrap keeps a later one exact."""
+    the sum wraps to -128..127 before the clamp: 127 + 2 is -127, then 0."""
     current = ctx.scores[ctx.slot]
     new = jnp.maximum((current + value + 128) % 256 - 128, 0)
     return ctx._replace(scores=ctx.scores.at[ctx.slot].set(jnp.where(ctx.live, new, current)))
 
 
 def pop_or_end(ctx: AiContext) -> AiContext:
-    """``PopOrEnd`` (trainer_ai.c:2568): Roark's scripts never push, so this ends the
-    slot for this flag."""
+    """``PopOrEnd`` (trainer_ai.c:2568): nothing pushes (``PushAndGoTo``, :2554, appears
+    nowhere in script.s), so this ends the slot for this flag."""
     return ctx._replace(live=jnp.asarray(False))
 
 
@@ -1023,6 +1616,18 @@ def if_status(ctx: AiContext, battler: Battler, mask: int) -> AiContext:
     return _jump(ctx, jnp.isin(status, jnp.asarray(_condition_statuses(mask), _I32)))
 
 
+def if_not_volatile_status(ctx: AiContext, battler: Battler, mask: int) -> AiContext:
+    """``IfNotVolatileStatus`` (trainer_ai.c): the negation of ``IfVolatileStatus``."""
+    ctx = if_volatile_status(ctx, battler, mask)
+    return ctx._replace(jump=~ctx.jump)
+
+
+def if_not_status(ctx: AiContext, battler: Battler, mask: int) -> AiContext:
+    """``IfNotStatus`` (trainer_ai.c:662-674): the negation of ``IfStatus``."""
+    ctx = if_status(ctx, battler, mask)
+    return ctx._replace(jump=~ctx.jump)
+
+
 def if_stat_stage_less_than(ctx: AiContext, battler: Battler, stat: Stat, value: int) -> AiContext:
     """``IfStatStageLessThan`` (trainer_ai.c:1465), ``value`` in decomp units."""
     return _jump(ctx, _stage(ctx, battler, stat) < value)
@@ -1076,23 +1681,37 @@ def if_speed_compare_equal_to(ctx: AiContext, value: int) -> AiContext:
       write). The AI decides before the turn's redraw (battle_controller_player.c:853-857),
       so it reads ``BattleState.qc_roll``, the previous turn's draw.
     - ``ignoreQuickClaw`` skips the priority read (:1375-1399): both priorities are 0.
-    - The tie's ``RandNext() & 1`` is not drawn (plan K3c Ruling 3). At equal speed every
-      branch gives FASTER or TIE, never SLOWER (:1401-1447), so ``== SLOWER`` does not
-      depend on it: ``order.battler_slower`` with ``tie_roll = 0``. ``value`` must be
-      ``COMPARE_SPEED_SLOWER`` (asserted at trace time), as at every compare on Roark's
-      paths (script.s:1864, :2070, :2650). The decomp still consumes the draw (K3d).
+    - At equal speed every branch gives FASTER, or TIE on the tie's ``RandNext() & 1``, never
+      SLOWER (:1401-1447). So ``== SLOWER`` does not depend on the tie, and the exact layout
+      does not draw it (plan K3c Ruling 3; ``order.battler_slower`` with ``tie_roll = 0``); the
+      decomp still consumes the draw (K3d), an independent draw that changes nothing here.
+      ``== FASTER`` does depend on it (E1 Ruling R8): where the compare would read the tie
+      (``compare_speed`` gives TIE for a set bit), it is the slot's next random read
+      (``_slot_read``), TIE when the draw's low bit is set (READ_DRAWS[1] = 1), probability
+      1/2. ``== TIE`` (Basic_CheckTrickRoom, script.s:1505) reads it the same way.
 
-    Loose (module docstring): the tie is its own draw (``ReadKind.SPEED_TIE``), on the path
+    Loose (module docstring): the tie is its own draw (``ReadKind.SPEED_TIE`` for SLOWER,
+    ``SPEED_TIE_DRAWN`` for the compares that the exact layout reads it for), on the path
     where the decomp makes it (equal speed in a branch that reads it, which is where
     ``compare_speed`` gives TIE for a 1), and the decomp's three-valued result is compared
     with ``value``."""
-    assert int(value) == COMPARE_SPEED_SLOWER, f"unsupported speed compare {value}"
+    value = int(value)
+    assert value in (COMPARE_SPEED_FASTER, COMPARE_SPEED_SLOWER, COMPARE_SPEED_TIE), value
     tables, state = ctx.tables, ctx.state
+    a = _side(Battler.ATTACKER)
+    slower = value == COMPARE_SPEED_SLOWER
     if ctx.loose is not None:
-        reads = compare_speed(tables, state, 1, 1, state.qc_roll) == COMPARE_SPEED_TIE
-        ctx, bit = _loose_read(ctx, 0.5, ReadKind.SPEED_TIE, live=ctx.live & reads)
-        return _jump(ctx, compare_speed(tables, state, 1, bit, state.qc_roll) == value)
-    return _jump(ctx, battler_slower(tables, state, 1, 0, state.qc_roll))
+        reads = compare_speed(tables, state, a, 1, state.qc_roll) == COMPARE_SPEED_TIE
+        kind = ReadKind.SPEED_TIE if slower else ReadKind.SPEED_TIE_DRAWN
+        ctx, bit = _loose_read(ctx, 0.5, kind, live=ctx.live & reads)
+        return _jump(ctx, compare_speed(tables, state, a, bit, state.qc_roll) == value)
+    if slower:
+        return _jump(ctx, battler_slower(tables, state, a, 0, state.qc_roll))
+    if not per_slot(ctx):
+        raise AssertionError("a FASTER or TIE compare is transcribed for the per-slot layout only")
+    tie = compare_speed(tables, state, a, 1, state.qc_roll) == COMPARE_SPEED_TIE
+    ctx, r = _slot_read(ctx, lambda r: (0.5, tie))
+    return _jump(ctx, compare_speed(tables, state, a, r & 1, state.qc_roll) == value)
 
 
 def _knows_effect(ctx: AiContext, battler: Battler, effect: int) -> jnp.ndarray:
@@ -1126,6 +1745,41 @@ def if_attacker_has_no_damaging_moves(ctx: AiContext) -> AiContext:
     return _jump(ctx, ~jnp.any(damaging))
 
 
+def load_battler_previous_move(ctx: AiContext, battler: Battler) -> AiContext:
+    """``LoadBattlerPreviousMove`` (trainer_ai.c:1068-1076): ``calcTemp =
+    movePrevByBattler[battler]`` (``BattleState.last_move`` of the battler's side; the
+    selected move on success, else ``MOVE_NONE``, battle_controller_player.c:3944-3949)."""
+    return ctx._replace(calc_temp=ctx.state.last_move[_side(battler)].astype(_I32))
+
+
+def load_power_of_loaded_move(ctx: AiContext) -> AiContext:
+    """``LoadPowerOfLoadedMove`` (trainer_ai.c:2526-2530): ``calcTemp =
+    MOVE_DATA(calcTemp).power``."""
+    return ctx._replace(calc_temp=ctx.tables.move_power[ctx.calc_temp].astype(_I32))
+
+
+def if_volatile_status(ctx: AiContext, battler: Battler, mask: int) -> AiContext:
+    """``IfVolatileStatus`` (trainer_ai.c:676-686): ``statusVolatile & mask``. ``mask`` must
+    be one ``VolatileCondition`` (refused at trace time otherwise), read from its field."""
+    field = _VOLATILE_FIELDS[VolatileCondition(int(mask))]
+    return _jump(ctx, getattr(ctx.state, field)[_side(battler)] > 0)
+
+
+def if_move_effect(ctx: AiContext, battler: Battler, mask: int) -> AiContext:
+    """``IfMoveEffect`` (trainer_ai.c:704-714): ``moveEffectsMask & mask``. ``mask`` must be
+    one ``MoveEffectMask`` (refused at trace time otherwise), read from its field."""
+    field = _MOVE_EFFECT_FIELDS[MoveEffectMask(int(mask))]
+    return _jump(ctx, getattr(ctx.state, field)[_side(battler)] > 0)
+
+
+def load_gender(ctx: AiContext, battler: Battler) -> AiContext:
+    """``LoadGender`` (trainer_ai.c:2470-2477): ``battleMons[battler].gender``
+    (``BattleState.gender`` of the side's active Pokemon; ``Gender``)."""
+    side = _side(battler)
+    state = ctx.state
+    return ctx._replace(calc_temp=state.gender[side, state.active[side]].astype(_I32))
+
+
 def load_defender_last_used_move_class(ctx: AiContext) -> AiContext:
     """``LoadDefenderLastUsedMoveClass`` (trainer_ai.c:2050-2054):
     ``MOVE_DATA(movePrevByBattler[defender]).class`` (``BattleState.last_move[0]``; 0
@@ -1146,6 +1800,14 @@ def load_turn_count(ctx: AiContext) -> AiContext:
 def load_current_move_effect(ctx: AiContext) -> AiContext:
     """``LoadCurrentMoveEffect`` (trainer_ai.c:1164): ``MOVE_DATA(move).effect``."""
     return ctx._replace(calc_temp=move_effect(ctx.tables, ctx.move))
+
+
+def if_loaded_in_table(ctx: AiContext, table: tuple[int, ...]) -> AiContext:
+    """``IfLoadedInTable`` (trainer_ai.c:858-874): ``calcTemp`` equals one of ``table``'s
+    values (the script's list up to its 0xFFFFFFFF end); an empty table never jumps."""
+    if not table:
+        return _jump(ctx, False)
+    return _jump(ctx, jnp.isin(ctx.calc_temp, jnp.asarray(table, _I32)))
 
 
 def if_loaded_not_in_table(ctx: AiContext, table: tuple[int, ...]) -> AiContext:

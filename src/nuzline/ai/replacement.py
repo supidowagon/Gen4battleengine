@@ -28,8 +28,9 @@ with the first candidate's slot 0 empty or of power 1. That slot is skipped but 
 comparison after it still runs (battle_lib.c:8080), on the ``score`` left over from stage
 1, which this module does not track. The type-chart modifiers (Levitate, Wonder Guard,
 Normalize, Scrappy, Adaptability, Tinted Lens, Filter, Solid Rock, Expert Belt, Iron
-Ball, Miracle Eye, the variable-type moves; the player's Foresight flag is read through
-``apply_type_chart``) are not implemented here:
+Ball, Miracle Eye, Natural Gift, Judgment and Weather Ball; Hidden Power takes each
+candidate's own IV type, ``switching.party_move_types``; the player's Foresight flag is read
+through ``apply_type_chart``) are not implemented here:
 ``policy.ai_refusals`` refuses every one of them for the fight, so the precondition is
 that the fight passed it (the coverage registry and every ``ai_policy`` call check it).
 """
@@ -40,7 +41,12 @@ import jax
 import jax.numpy as jnp
 
 from nuzline.ai.policy import UnsupportedAi
-from nuzline.ai.switching import SUPER_EFFECTIVE, apply_type_chart, calc_effectiveness_flags
+from nuzline.ai.switching import (
+    SUPER_EFFECTIVE,
+    apply_type_chart,
+    calc_effectiveness_flags,
+    party_move_types,
+)
 from nuzline.data.tables import Tables
 from nuzline.engine.damage import calc_move_damage
 from nuzline.engine.state import MOVES, SLOTS, BattleState
@@ -64,14 +70,15 @@ def _matchup(tables: Tables, atk_type, def_types) -> jnp.ndarray:
     return jnp.where(t2 != t1, mul * e2 // 10, mul)
 
 
-def _stage_2_score(tables: Tables, state: BattleState, move, power_mul) -> jnp.ndarray:
+def _stage_2_score(tables: Tables, state: BattleState, move, move_type, power_mul) -> jnp.ndarray:
     """battle_lib.c:8055-8074: ``CalcMoveDamage`` by the fainted battler (side 1's
     active) against ``D``, then ``ApplyTypeChart`` with the fainted battler as attacker,
     each result stored in the ``u8`` score. A chart immunity leaves 0 through
     ``ApplyTypeMultiplier`` (:7547); the ``MOVE_STATUS_IMMUNE`` check (:8070) only adds the
-    refused Levitate and Magnet Rise."""
+    refused Levitate and Magnet Rise. ``CalcMoveDamage`` takes type 0, the table's (:8058);
+    the chart takes ``move_type``, the candidate's ``Move_CalcVariableType`` (:8051)."""
     score = calc_move_damage(tables, state, 1, move, power_mul) & _U8
-    return apply_type_chart(tables, state, 1, move, score) & _U8
+    return apply_type_chart(tables, state, 1, move, score, move_type) & _U8
 
 
 def _post_ko(tables: Tables, state: BattleState, power_mul) -> tuple[jnp.ndarray, jnp.ndarray]:
@@ -86,8 +93,10 @@ def _post_ko(tables: Tables, state: BattleState, power_mul) -> tuple[jnp.ndarray
         jax.vmap(lambda t: _matchup(tables, t, d_types))(own_types[:, 0])
         + jax.vmap(lambda t: _matchup(tables, t, d_types))(own_types[:, 1])
     ) & _U8
-    flags = jax.vmap(lambda m: calc_effectiveness_flags(tables, m, d_types, state.gravity))(
-        moves.reshape(-1)
+    # Move_CalcVariableType (:7998): each candidate's own Hidden Power type.
+    types = party_move_types(tables, state)  # [SLOTS, MOVES]
+    flags = jax.vmap(lambda m, k: calc_effectiveness_flags(tables, m, d_types, state.gravity, k))(
+        moves.reshape(-1), types.reshape(-1)
     ).reshape(SLOTS, MOVES)
     super_effective = jnp.any((moves != 0) & ((flags & SUPER_EFFECTIVE) != 0), axis=1)
     eligible = candidate & super_effective & (score_1 > 0)
@@ -95,8 +104,8 @@ def _post_ko(tables: Tables, state: BattleState, power_mul) -> tuple[jnp.ndarray
 
     # Stage 2 (:8034-8088).
     scored = candidate[:, None] & (moves != 0) & (tables.move_power[moves] != 1)
-    score_2 = jax.vmap(lambda m: _stage_2_score(tables, state, m, power_mul))(
-        moves.reshape(-1)
+    score_2 = jax.vmap(lambda m, k: _stage_2_score(tables, state, m, k, power_mul))(
+        moves.reshape(-1), types.reshape(-1)
     ).reshape(SLOTS, MOVES)
     score_2 = jnp.max(jnp.where(scored, score_2, 0), axis=1)
     pick_2 = jnp.argmax(score_2).astype(_I32)  # first maximum: the lower slot

@@ -566,7 +566,8 @@ def main(out_path):
         the player's party), so the opponent's untranscribed AI move paths are listed here,
         keyed by battle effect. Runs for every checked trainer row, in every split."""
         try:
-            layout = kaizo_layout(trainer.ai_flags)
+            # the per-move refusals read no read bound (E1 Ruling R6): any bound serves
+            layout = kaizo_layout(trainer.ai_flags, KAIZO.slot_reads)
         except ValueError:  # a flag the policy lacks: its own flag line; moves under Roark's set
             layout = KAIZO
         effect = tables.move_ai_effect

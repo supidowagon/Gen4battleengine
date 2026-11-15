@@ -236,8 +236,8 @@ assert jax.device_count() == DEVICES, jax.device_count()
 d = GAMES[KAIZO]
 tables, names = load_tables(d.tables_dir), load_names(d.tables_dir)
 roark = next(x for x in load_trainers(d.intermediate_dir) if x.name == "Roark")
-tables = fight_tables(tables, roark)  # his AI flag set (E1 Ruling R2)
 party = list(build_trainer_party(roark, IntermediateData(d.intermediate_dir)))
+tables = fight_tables(tables, roark, party)  # his AI layout (E1 Rulings R2, R6)
 player = [party[2], party[5]]  # Roark's own Gible and Cranidos, as the coverage tests use
 state = make_state(
     tables, player, party, start_weather(roark), roark.items, terrain=roark.terrain

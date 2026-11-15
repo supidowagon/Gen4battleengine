@@ -40,6 +40,21 @@ Encodings:
   love with the other side's active battler (in singles the only possible source,
   ``BtlCmd_TryAttract``, battle_script.c:5738). It is a volatile (cleared when the battler
   leaves) and is also cleared when its source leaves (``step._source_leaves``).
+* ``curse``, ``perish_song``/``perish_song_turns``, ``yawn`` and ``lock_on``/
+  ``lock_on_target`` are the active battler's decomp state, defined now so the trainer AI
+  reads them (``Expert_Protect``, script.s:3544-3586); nothing sets them yet (the moves are
+  refused by coverage until E2 models Curse, Perish Song, Yawn and Lock-On / Mind Reader on
+  these fields). ``curse`` is ``VOLATILE_CONDITION_CURSE`` (condition.h:60), 0/1;
+  ``perish_song`` is ``MOVE_EFFECT_PERISH_SONG`` (moves.h:13), 0/1, and
+  ``perish_song_turns`` is ``MoveEffectsData.perishSongTurns`` (battle_mon.h:14), the
+  counter that is still live at 0 (the battler faints at the turn end that finds it 0,
+  battle_controller_player.c:1801); ``yawn`` is the two-bit ``MOVE_EFFECT_YAWN`` counter in
+  ``moveEffectsMask`` (moves.h:19-20, :42, :53), 0 = none; ``lock_on`` is the two-bit
+  ``MOVE_EFFECT_LOCK_ON`` counter (moves.h:11-12, :41), 0 = none, on the battler **locked
+  onto** (Lock-On sets it on its target, subscript_lock_on.s), and ``lock_on_target`` is that
+  battler's ``MoveEffectsData.lockOnTarget`` (battle_mon.h:23), the battler that locked on,
+  stored as ``1 + battler``, 0 = none
+  (doubles convention 3, docs/doubles-state-design.md section 5).
 * ``trainer_item_count`` is ``aiContext.trainerItemCounts``: the bag's size at battle
   start, never decremented.
 * ``terrain`` is ``BattleSystem.terrain``: the battle terrain, a decomp ``TERRAIN_*`` id
@@ -147,6 +162,12 @@ class BattleState(NamedTuple):
     mud_sport: jnp.ndarray  # int8, MOVE_EFFECT_MUD_SPORT in moveEffectsMask
     aqua_ring: jnp.ndarray  # int8, MOVE_EFFECT_AQUA_RING in moveEffectsMask
     infatuated: jnp.ndarray  # int8, VOLATILE_CONDITION_ATTRACT (source: the foe's active)
+    curse: jnp.ndarray  # int8, VOLATILE_CONDITION_CURSE
+    perish_song: jnp.ndarray  # int8, MOVE_EFFECT_PERISH_SONG in moveEffectsMask
+    perish_song_turns: jnp.ndarray  # int8, MoveEffectsData.perishSongTurns (live at 0)
+    yawn: jnp.ndarray  # int8, MOVE_EFFECT_YAWN counter in moveEffectsMask, 0 = none
+    lock_on: jnp.ndarray  # int8, MOVE_EFFECT_LOCK_ON counter in moveEffectsMask, 0 = none
+    lock_on_target: jnp.ndarray  # int8, MoveEffectsData.lockOnTarget as 1 + battler, 0 = none
     # per side [2]
     spikes: jnp.ndarray  # int8, layers
     toxic_spikes: jnp.ndarray  # int8, layers
@@ -295,6 +316,12 @@ LAYOUT: dict[str, tuple[tuple[int, ...], type]] = {
     "mud_sport": (_SIDE, np.int8),
     "aqua_ring": (_SIDE, np.int8),
     "infatuated": (_SIDE, np.int8),
+    "curse": (_SIDE, np.int8),
+    "perish_song": (_SIDE, np.int8),
+    "perish_song_turns": (_SIDE, np.int8),
+    "yawn": (_SIDE, np.int8),
+    "lock_on": (_SIDE, np.int8),
+    "lock_on_target": (_SIDE, np.int8),
     "spikes": (_SIDE, np.int8),
     "toxic_spikes": (_SIDE, np.int8),
     "stealth_rock": (_SIDE, np.int8),

@@ -627,7 +627,7 @@ def _fight(args):
     opp = build_trainer_party(trainer, inter)
     from nuzline.ai.layout import fight_tables
 
-    tables = fight_tables(tables, trainer)
+    tables = fight_tables(tables, trainer, opp)
     if 0 <= args.lead < len(player) and player[args.lead].current_hp == 0:
         raise ValueError(f"--lead {args.lead}: that Pokemon has fainted")
     return game, tables, names, trainer, player, opp, start_weather(trainer), save
@@ -904,7 +904,7 @@ def _prep(args) -> int:
     opp = build_trainer_party(trainer, inter)
     from nuzline.ai.layout import fight_tables
 
-    tables = fight_tables(tables, trainer)
+    tables = fight_tables(tables, trainer, opp)
     weather = start_weather(trainer)
     # A refused fight exits 2 before the cap, the pool or the team space can fail it. No
     # player party here: the team is not chosen yet, so build_problem's usable_pool checks
@@ -1062,11 +1062,12 @@ def line_setup(
     trainer = resolve_trainer(trainers, trainer_id=trainer_id)
     from nuzline.ai.layout import fight_tables
 
-    # The trainer's AI flag set picks its AI layout (E1 Ruling R2; ai.layout.layout_of).
-    tables = fight_tables(tables, trainer)
     inter = IntermediateData(game.intermediate_dir)
     _check_buildable(tables, names, trainer, inter)
     opp = build_trainer_party(trainer, inter)
+    # The trainer's AI flag set and its party's moves pick the AI layout (E1 Rulings R2, R6;
+    # ai.layout.layout_of).
+    tables = fight_tables(tables, trainer, opp)
     if player[0].current_hp == 0:
         raise ValueError("the lead (team slot 0) has fainted")
     rules = resolve_rules(file, names, player, opp)

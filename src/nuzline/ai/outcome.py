@@ -202,6 +202,105 @@ SITE_N: dict[int, int] = {
     6530: 128,  # Risky_Main (+2 when it does NOT jump)
     # E1 batch 2b: SetupFirstTurn_Main, turn 0 only, an effect of its table.
     6429: 80,  # SetupFirstTurn_Main (+2 when it does NOT jump)
+    # E1 batch 2c: PrioritizeExtremes_Main and CheckHP_Main.
+    6515: 100,  # PrioritizeExtremes_Main (+2 when it does NOT jump)
+    7718: 50,  # CheckHP_TryScoreMinus2 (-2 when it does NOT jump)
+    7742: 50,  # CheckHP_Target_TryScoreMinus2 (-2 when it does NOT jump)
+    # E1 batch 4: the stat-raise Expert labels (script.s:1978-2155).
+    1989: 100,  # Expert_StatusAttackUp (+3 or more: -1 when it does NOT jump)
+    1995: 128,  # Expert_StatusAttackUp_CheckUserAtMaxHP (+2 when it does NOT jump)
+    2001: 40,  # Expert_StatusAttackUp_CheckUserHPRange (-2 when it does NOT jump)
+    2023: 100,  # Expert_StatusDefenseUp
+    2029: 128,  # Expert_StatusDefenseUp_CheckUserAtMaxHP
+    2034: 200,  # Expert_StatusDefenseUp_CheckUserHighHP (jump: no further change)
+    2043: 60,  # Expert_StatusDefenseUp_CheckUserMediumHP
+    2046: 60,  # Expert_StatusDefenseUp_UserAtLowHP
+    2092: 100,  # Expert_StatusSpAttackUp
+    2098: 128,  # Expert_StatusSpAttackUp_CheckUserAtMaxHP
+    2104: 70,  # Expert_StatusSpAttackUp_CheckUserHPRange
+    2126: 100,  # Expert_StatusSpDefenseUp
+    2132: 128,  # Expert_StatusSpDefenseUp_CheckUserAtMaxHP
+    2137: 200,  # Expert_StatusSpDefenseUp_CheckUserHighHP
+    2146: 60,  # Expert_StatusSpDefenseUp_CheckUserMediumHP
+    2149: 60,  # Expert_StatusSpDefenseUp_UserAtLowHP
+    # E1 batch 6: the status moves' Expert labels.
+    1821: 128,  # Expert_StatusSleep_TryScorePlus1 (+1 when it does NOT jump)
+    2858: 128,  # Expert_Flatter (+1 when it does NOT jump)
+    2864: 128,  # Expert_StatusConfuse (-1 when it does NOT jump)
+    2950: 20,  # Expert_StatusParalyze_TryScorePlus3 (+3 when it does NOT jump)
+    # E1 batch 7: the Expert-only hits.
+    2271: 100,  # Expert_BypassAccuracyMove_TryScorePlus1 (+1 when it does NOT jump)
+    2362: 70,  # Expert_StatusSpeedDown_TryScorePlus2 (+2 when it does NOT jump)
+    2836: 128,  # Expert_HighCritical (neutral: on to TryScorePlus1 when it does NOT jump)
+    2839: 128,  # Expert_HighCritical_TryScorePlus1 (+1 when it does NOT jump)
+    4882: 128,  # Expert_Brine (+1 more when it does NOT jump)
+    # E1 batch 9.
+    3346: 128,  # Expert_DestinyBond (+1 when it does NOT jump)
+    3351: 128,  # Expert_DestinyBond_CheckUserMediumHP (+1 when it does NOT jump)
+    3356: 100,  # Expert_DestinyBond_CheckUserLowHP (+2 when it does NOT jump)
+    3595: 128,  # Expert_Spikes (+1 when it does NOT jump)
+    3602: 64,  # Expert_Spikes_TryScorePlus1 (+1 when it does NOT jump)
+    4771: 70,  # Expert_DragonDance (-1 when it does NOT jump)
+    4776: 128,  # Expert_DragonDance_TryScorePlus1 (+1 when it does NOT jump)
+    6018: 128,  # Expert_ToxicSpikes (+1 when it does NOT jump)
+    6025: 64,  # Expert_ToxicSpikes_TryScorePlus1 (+1 when it does NOT jump)
+    # E1 batch 10: the stat drops and Reflect.
+    2293: 50,  # Expert_StatusAttackDown_CheckTargetStatStage (-2 when it does NOT jump)
+    2303: 128,  # Expert_StatusAttackDown_CheckLastUsedMove (-2 when it does NOT jump)
+    2421: 50,  # Expert_StatusSpDefenseDown_TryScoreMinus2 (-2 when it does NOT jump)
+    2510: 50,  # Expert_StatusEvasionDown_TryScoreMinus2 (-2 when it does NOT jump)
+    2901: 128,  # Expert_Reflect (+1 when it does NOT jump)
+    2907: 64,  # Expert_Reflect_CheckLastUsedMove (+1 when it does NOT jump)
+    # E1 batch 11: Tailwind and Payback (COMPARE_SPEED_FASTER, E1 Ruling R8).
+    4992: 64,  # Expert_Tailwind (jump: nothing)
+    4996: 64,  # Expert_Tailwind, 31-75 % HP (+1 when it does NOT jump)
+    5179: 64,  # Expert_Payback (+1 when it does NOT jump)
+    # E1 batch 12.
+    3388: 100,  # Expert_Reversal_TryScorePlus1 (+1 when it does NOT jump)
+    4968: 64,  # Expert_Pluck, first turn (+1 when it does NOT jump)
+    4972: 128,  # Expert_Pluck_TryScorePlus1 (+1 when it does NOT jump)
+    # Expert_Counter (:3116-3153) and Expert_MirrorCoat (:3873-3910), in line order
+    3116: 10,
+    3121: 100,
+    3130: 100,
+    3136: 100,
+    3142: 100,
+    3150: 50,
+    3153: 100,
+    3873: 10,
+    3878: 100,
+    3887: 100,
+    3893: 100,
+    3899: 100,
+    3907: 50,
+    3910: 100,
+    # Expert_Protect (:3536-3589)
+    3541: 128,  # -2 when it does NOT jump
+    3564: 85,  # +2 when it jumps
+    3571: 128,  # -1 when it does NOT jump
+    3578: 128,  # -1 more when it does NOT jump
+    2794: 192,  # Expert_OHKOMove (+1 when it does NOT jump; E1 batch 14)
+    # Expert_UTurn (:5085-5145; E1 batch 15)
+    5114: 64,
+    5119: 64,
+    5126: 128,
+    5130: 64,
+    5134: 128,
+    5139: 128,
+    # E1 batch 16
+    6229: 50,  # Expert_Blizzard (-3 when it does NOT jump)
+    4148: 200,  # Expert_FocusPunch (+1 when it does NOT jump)
+    4157: 100,  # Expert_FocusPunch_TryScorePlus1 (+1 when it does NOT jump)
+    # E1 batch 17
+    2603: 64,  # Expert_ForceSwitch_75PercentScorePlus2
+    2607: 128,  # Expert_ForceSwitch_50PercentScorePlus2
+    2995: 96,  # Expert_Substitute, Focus Punch known
+    3002: 100,
+    3006: 100,
+    3010: 100,
+    3038: 100,  # Expert_Substitute_TryScorePlus1
+    1897: 51,  # Expert_DreamEater_TryScorePlus3
+    6281: 64,  # Expert_StealthRock_TryScorePlus1: with Roar or Whirlwind (since batch 17)
 }
 SITE_LINES = tuple(SITE_N)
 # The flat (vanilla) layout's column of script_roll_sites that each line reads: column 0 is
@@ -251,9 +350,126 @@ KAIZO_TRANSCRIBED: frozenset[int] = frozenset(
         140,  # RAISE_ALL_STATS_HIT (AncientPower): no Expert_Main entry; Risky :6530
         186,  # REMOVE_SCREENS (Brick Break): Expert_BrickBreak (:1739 -> :4559), no roll
         261,  # WHIRLPOOL (Sand Tomb): no Expert_Main entry (plan K3c Ruling 5)
-        266,  # STEALTH_ROCK: Expert_StealthRock (:1805 -> :6268), :6274
+        266,  # STEALTH_ROCK: Expert_StealthRock (:1805 -> :6268), :6274, :6281
         269,  # RECOIL_HALF (Head Smash): Expert_RecoilMove (:1806 -> :6289), no roll
         275,  # FLINCH_PARALYZE_HIT (Thunder Fang): no Expert_Main entry
+        # E1 batch 3: the 26 trainer-used effects with no Basic_ScoreMoveEffect (:133-286) or Expert_Main
+        # (:1628-1808) entry (docs/ai/kaizo_roark.md 5.9). Every flag script treats them
+        # generically: FlagMoveDamageScore, IfCurrentMoveKills and the damage estimates read only
+        # the no-calc and alt-power lists (trainer_ai.c:1012-1063, :1525-1560, :2800-2830), and
+        # the other mentions in script.s are tables the generic code already reads.
+        5,  # FREEZE_HIT
+        29,  # MULTI_HIT
+        36,  # TRI_ATTACK
+        44,  # HIT_TWICE
+        45,  # CRASH_ON_MISS
+        73,  # LOWER_ACCURACY_HIT
+        83,  # CALL_RANDOM_MOVE; Risky_RiskyEffects :6543
+        101,  # LEAVE_WITH_1_HP
+        103,  # PRIORITY_1; EvalAttack_ApplyKillBonuses :6400
+        125,  # THAW_AND_BURN_HIT
+        138,  # RAISE_DEF_HIT
+        139,  # RAISE_ATTACK_HIT
+        147,  # DOUBLE_DAMAGE_DIG
+        149,  # DOUBLE_DAMAGE_FLY_OR_BOUNCE
+        150,  # FLINCH_MINIMIZE_DOUBLE_HIT
+        152,  # THUNDER; Expert_Main tests SKIP_CHARGE_TURN_IN_SUN for Expert_Thunder, :1718
+        159,  # UPROAR
+        172,  # MAKE_GLOBAL_TARGET
+        180,  # USE_RANDOM_ALLY_MOVE
+        197,  # SECRET_POWER; Harrassment table :8062
+        202,  # BADLY_POISON_HIT
+        257,  # DOUBLE_DAMAGE_DIVE
+        271,  # LOWER_SP_DEF_2_HIT
+        273,  # FLINCH_BURN_HIT
+        274,  # FLINCH_FREEZE_HIT
+        276,  # RAISE_SP_ATK_HIT
+        # E1 batch 4: the stat raises (Basic_CheckHighStatStage_*, script.s:343-392;
+        # Expert_Status*Up, :1978-2155) of the Kaizo moves, but evasion
+        # (docs/ai/kaizo_roark.md 5.10).
+        10,  # ATK_UP: Expert_StatusAttackUp (:1633), :1989, :1995, :2001
+        11,  # DEF_UP: Expert_StatusDefenseUp (:1634), :2023, :2029, :2034, :2043, :2046
+        13,  # SP_ATK_UP: Expert_StatusSpAttackUp (:1636), :2092, :2098, :2104
+        50,  # ATK_UP_2: Expert_StatusAttackUp (:1663)
+        51,  # DEF_UP_2: Expert_StatusDefenseUp (:1664)
+        53,  # SP_ATK_UP_2: Expert_StatusSpAttackUp (:1666)
+        54,  # SP_DEF_UP_2: Expert_StatusSpDefenseUp (:1667)
+        # E1 batch 6: the status moves (docs/ai/kaizo_roark.md 5.11).
+        1,  # STATUS_SLEEP: Basic_CheckCannotSleep (:134); Expert_StatusSleep (:1628), :1821
+        49,  # STATUS_CONFUSE: Basic_CheckCannotConfuse (:163); Expert_StatusConfuse (:1662), :2864
+        67,  # STATUS_PARALYZE: Basic_CheckCannotParalyze (:180); Expert_StatusParalyze (:1679), :2950
+        84,  # STATUS_LEECH_SEED: Basic_CheckCannotLeechSeed (:183); Expert_ToxicLeechSeed (:1686)
+        118,  # ATK_UP_2_STATUS_CONFUSION: Basic_CheckCannotConfuse (:201); Expert_Swagger (:1680)
+        120,  # INFATUATE: Basic_CheckCannotAttract (:202); no Expert_Main entry
+        167,  # STATUS_BURN: Basic_CheckCannotBurn (:231); no Expert_Main entry
+        # E1 batch 7: hits whose only label is in Expert_Main (docs/ai/kaizo_roark.md 5.12).
+        17,  # BYPASS_ACCURACY: Expert_BypassAccuracyMove (:1640), :2271
+        43,  # HIGH_CRITICAL: Expert_HighCritical (:1660), :2836, :2839; Risky :6530
+        48,  # RECOIL_QUARTER: Expert_RecoilMove (:1661), no roll
+        70,  # LOWER_SPEED_HIT: Expert_SpeedDownOnHit (:1681) -> Expert_StatusSpeedDown, :2362
+        169,  # DOUBLE_POWER_WHEN_STATUSED (Facade): Expert_Facade (:1729), no roll
+        171,  # DOUBLE_POWER_AND_CURE_PARALYSIS (SmellingSalt): Expert_SmellingSalts (:1731)
+        198,  # RECOIL_THIRD: Expert_RecoilMove (:1747), no roll
+        221,  # DOUBLE_POWER_WHEN_BELOW_HALF (Brine): Expert_Brine (:1765), :4882
+        262,  # RECOIL_PARALYZE_HIT: Expert_RecoilMove (:1802), no roll
+        # E1 batch 9 (docs/ai/kaizo_roark.md 5.13).
+        98,  # KO_MON_THAT_DEFEATED_USER: Expert_DestinyBond (:1694), :3346, :3351, :3356
+        112,  # SET_SPIKES: Basic_CheckSpikes (:197); Expert_Spikes (:1702), :3595, :3602
+        208,  # ATK_DEF_UP: Basic_CheckBulkUp (:248); Expert_StatusDefenseUp (:1753)
+        211,  # SP_ATK_SP_DEF_UP: Basic_CheckCalmMind (:250); Expert_StatusSpDefenseUp (:1756)
+        212,  # ATK_SPD_UP: Basic_CheckDragonDance (:251); Expert_DragonDance (:1757), :4771, :4776
+        249,  # TOXIC_SPIKES: Basic_CheckToxicSpikes (:277); Expert_ToxicSpikes (:1792), :6018, :6025
+        # E1 batch 10: the stat drops Kaizo moves carry but accuracy's (docs/ai/kaizo_roark.md
+        # 5.14), and Reflect.
+        18,  # ATK_DOWN: Basic_CheckLowStatStage_Attack (:144); Expert_StatusAttackDown (:1641)
+        20,  # SPEED_DOWN: Basic_CheckLowStatStage_Speed (:146); Expert_StatusSpeedDown (:1643)
+        24,  # EVA_DOWN: Basic_CheckLowStatStage_Evasion (:150); Expert_StatusEvasionDown (:1647)
+        58,  # ATK_DOWN_2: :171; Expert_StatusAttackDown (:1670)
+        60,  # SPEED_DOWN_2: :173; Expert_StatusSpeedDown (:1672)
+        62,  # SP_DEF_DOWN_2: Basic_CheckLowStatStage_SpDefense (:175); Expert_StatusSpDefenseDown (:1674)
+        65,  # SET_REFLECT: Basic_CheckAlreadyUnderReflect (:178); Expert_Reflect (:1677)
+        # E1 batch 11 (docs/ai/kaizo_roark.md 5.15): their Expert labels compare for
+        # COMPARE_SPEED_FASTER, whose tie is a read (E1 Ruling R8).
+        225,  # DOUBLE_SPEED_3_TURNS: Basic_CheckTailwind (:259); Expert_Tailwind (:1768), :4992, :4996
+        230,  # DOUBLE_POWER_IF_MOVING_SECOND: Expert_Payback (:1773), :5179
+        # E1 batch 12 (docs/ai/kaizo_roark.md 5.16).
+        40,  # HALVE_HP: Basic_CheckNonStandardDamageOrChargeTurn (:159); Expert_SuperFang (:1658)
+        89,  # COUNTER: Basic_CheckNonStandard... (:187); Expert_Counter (:1688)
+        92,  # DAMAGE_WHILE_ASLEEP: Basic_CheckAttackerAsleep (:189); Expert_Nightmare (:1691)
+        97,  # USE_RANDOM_LEARNED_MOVE_SLEEP: Basic_CheckAttackerAsleep (:191); Expert_SleepTalk
+        99,  # INCREASE_POWER_WITH_LESS_HP: Basic_CheckNonStandard... (:192); Expert_Reversal
+        136,  # WEATHER_RAIN: Basic_CheckRainDance (:214); Expert_RainDance (:1710)
+        144,  # MIRROR_COAT: Basic_CheckNonStandard... (:218); Expert_MirrorCoat (:1714)
+        158,  # ALWAYS_FLINCH_FIRST_TURN_ONLY: Basic_CheckFirstTurnInBattle (:224); Expert_FakeOut
+        164,  # WEATHER_HAIL: Basic_CheckHail (:228); Expert_Hail (:1726)
+        182,  # LOWER_OWN_ATK_AND_DEF: Basic_CheckNonStandard... (:237); Expert_Superpower
+        224,  # EAT_BERRY: Expert_Pluck (:1767)
+        111,  # PROTECT: Expert_Protect (:1701), on the da1d60f state fields
+        # E1 batch 14: Basic_CheckNonStandardDamageOrChargeTurn only (no Expert_Main entry);
+        # their AI damage: engine.damage.ai_case_power / ai_case_fixed or the default.
+        41,  # 40_DAMAGE_FLAT (:160)
+        87,  # LEVEL_DAMAGE_FLAT (:185)
+        88,  # RANDOM_DAMAGE_1_TO_150_LEVEL (:186; Psywave's id itself stays refused)
+        121,  # POWER_BASED_ON_FRIENDSHIP (:203)
+        122,  # RANDOM_POWER_MAYBE_HEAL (:204)
+        123,  # POWER_BASED_ON_LOW_FRIENDSHIP (:205)
+        130,  # 20_DAMAGE_FLAT (:209)
+        135,  # RANDOM_POWER_BASED_ON_IVS (:213): Hidden Power, its AI type ai_move_type
+        196,  # INCREASE_POWER_WITH_WEIGHT (:244)
+        38,  # ONE_HIT_KO: Basic_CheckOHKOWouldFail (:157); Expert_OHKOMove (:1656), :2794
+        228,  # SWITCH_HIT: Expert_UTurn (:1771); no Basic entry (E1 batch 15)
+        # E1 batch 16 (docs/ai/kaizo_roark.md 5.19)
+        91,  # AVERAGE_HP: Expert_PainSplit (:1690); no Basic entry
+        124,  # PREVENT_STATUS: Basic_CheckAlreadyUnderSafeguard (:206); no Expert entry
+        137,  # WEATHER_SUN: Basic_CheckSunnyDay (:215); Expert_SunnyDay (:1711)
+        142,  # MAX_ATK_LOSE_HALF_MAX_HP: Basic_CheckBellyDrum (:216); Expert_BellyDrum (:1712)
+        170,  # HIT_LAST_WHIFF_IF_HIT: NonStandard (:233); Expert_FocusPunch (:1730), :6366
+        189,  # SET_HP_EQUAL_TO_USER: NonStandard (:241); Expert_Endeavor (:1741)
+        260,  # BLIZZARD: Expert_Blizzard (:1801); no Basic entry
+        # E1 batch 17 (docs/ai/kaizo_roark.md 5.20)
+        8,  # RECOVER_DAMAGE_SLEEP: Basic_CheckDreamEater (:136); Expert_DreamEater (:1631)
+        28,  # FORCE_SWITCH: Basic_CheckCanForceSwitch (:153); Expert_ForceSwitch (:1650)
+        79,  # SET_SUBSTITUTE: Basic_CheckCannotSubstitute (:181); Expert_Substitute (:1684)
     }
 )
 # The transcribed effects (KAIZO_TRANSCRIBED) whose Expert_Main entry goes to a label added
@@ -276,6 +492,72 @@ KAIZO_EXPERT_LABELS: dict[int, tuple[str, int]] = {
     109: ("Expert_Curse", 1700),  # CURSE (Curse)
     186: ("Expert_BrickBreak", 1739),  # REMOVE_SCREENS (Brick Break)
     269: ("Expert_RecoilMove", 1806),  # RECOIL_HALF (Head Smash)
+    # E1 batch 4: the stat raises (SPEED_UP_2's Expert_StatusSpeedUp is above).
+    10: ("Expert_StatusAttackUp", 1633),
+    11: ("Expert_StatusDefenseUp", 1634),
+    13: ("Expert_StatusSpAttackUp", 1636),
+    50: ("Expert_StatusAttackUp", 1663),
+    51: ("Expert_StatusDefenseUp", 1664),
+    53: ("Expert_StatusSpAttackUp", 1666),
+    54: ("Expert_StatusSpDefenseUp", 1667),
+    # E1 batch 6: the status moves.
+    1: ("Expert_StatusSleep", 1628),
+    49: ("Expert_StatusConfuse", 1662),
+    67: ("Expert_StatusParalyze", 1679),
+    84: ("Expert_ToxicLeechSeed", 1686),
+    118: ("Expert_Swagger", 1680),
+    # E1 batch 7: the Expert-only hits.
+    17: ("Expert_BypassAccuracyMove", 1640),
+    43: ("Expert_HighCritical", 1660),
+    48: ("Expert_RecoilMove", 1661),
+    70: ("Expert_SpeedDownOnHit", 1681),
+    169: ("Expert_Facade", 1729),
+    171: ("Expert_SmellingSalts", 1731),
+    198: ("Expert_RecoilMove", 1747),
+    221: ("Expert_Brine", 1765),
+    262: ("Expert_RecoilMove", 1802),
+    # E1 batch 9.
+    98: ("Expert_DestinyBond", 1694),
+    112: ("Expert_Spikes", 1702),
+    208: ("Expert_StatusDefenseUp", 1753),
+    211: ("Expert_StatusSpDefenseUp", 1756),
+    212: ("Expert_DragonDance", 1757),
+    249: ("Expert_ToxicSpikes", 1792),
+    # E1 batch 10.
+    18: ("Expert_StatusAttackDown", 1641),
+    20: ("Expert_StatusSpeedDown", 1643),
+    24: ("Expert_StatusEvasionDown", 1647),
+    58: ("Expert_StatusAttackDown", 1670),
+    60: ("Expert_StatusSpeedDown", 1672),
+    62: ("Expert_StatusSpDefenseDown", 1674),
+    65: ("Expert_Reflect", 1677),
+    # E1 batch 11.
+    225: ("Expert_Tailwind", 1768),
+    230: ("Expert_Payback", 1773),
+    # E1 batch 12.
+    40: ("Expert_SuperFang", 1658),
+    89: ("Expert_Counter", 1688),
+    92: ("Expert_Nightmare", 1691),
+    97: ("Expert_SleepTalk", 1693),
+    99: ("Expert_Reversal", 1695),
+    136: ("Expert_RainDance", 1710),
+    144: ("Expert_MirrorCoat", 1714),
+    158: ("Expert_FakeOut", 1723),
+    164: ("Expert_Hail", 1726),
+    182: ("Expert_Superpower", 1735),
+    224: ("Expert_Pluck", 1767),
+    111: ("Expert_Protect", 1701),
+    38: ("Expert_OHKOMove", 1656),
+    228: ("Expert_UTurn", 1771),
+    91: ("Expert_PainSplit", 1690),
+    137: ("Expert_SunnyDay", 1711),
+    142: ("Expert_BellyDrum", 1712),
+    170: ("Expert_FocusPunch", 1730),
+    189: ("Expert_Endeavor", 1741),
+    260: ("Expert_Blizzard", 1801),
+    8: ("Expert_DreamEater", 1631),
+    28: ("Expert_ForceSwitch", 1650),
+    79: ("Expert_Substitute", 1684),
 }
 # Of KAIZO_EXPERT_LABELS, the effects whose Expert label policy._expert transcribes
 # (layout.KAIZO expert_transcribed), written out: it is not derived from the table, so an
@@ -293,18 +575,74 @@ KAIZO_EXPERT_TRANSCRIBED: frozenset[int] = frozenset(
         109,  # CURSE: Expert_Curse
         186,  # REMOVE_SCREENS: Expert_BrickBreak
         269,  # RECOIL_HALF: Expert_RecoilMove
+        10,  # ATK_UP: Expert_StatusAttackUp
+        11,  # DEF_UP: Expert_StatusDefenseUp
+        13,  # SP_ATK_UP: Expert_StatusSpAttackUp
+        50,  # ATK_UP_2: Expert_StatusAttackUp
+        51,  # DEF_UP_2: Expert_StatusDefenseUp
+        53,  # SP_ATK_UP_2: Expert_StatusSpAttackUp
+        54,  # SP_DEF_UP_2: Expert_StatusSpDefenseUp
+        1,  # STATUS_SLEEP: Expert_StatusSleep
+        49,  # STATUS_CONFUSE: Expert_StatusConfuse
+        67,  # STATUS_PARALYZE: Expert_StatusParalyze
+        84,  # STATUS_LEECH_SEED: Expert_ToxicLeechSeed
+        118,  # ATK_UP_2_STATUS_CONFUSION: Expert_Swagger
+        17,  # BYPASS_ACCURACY: Expert_BypassAccuracyMove
+        43,  # HIGH_CRITICAL: Expert_HighCritical
+        48,  # RECOIL_QUARTER: Expert_RecoilMove
+        70,  # LOWER_SPEED_HIT: Expert_SpeedDownOnHit
+        169,  # DOUBLE_POWER_WHEN_STATUSED: Expert_Facade
+        171,  # DOUBLE_POWER_AND_CURE_PARALYSIS: Expert_SmellingSalts
+        198,  # RECOIL_THIRD: Expert_RecoilMove
+        221,  # DOUBLE_POWER_WHEN_BELOW_HALF: Expert_Brine
+        262,  # RECOIL_PARALYZE_HIT: Expert_RecoilMove
+        98,  # KO_MON_THAT_DEFEATED_USER: Expert_DestinyBond
+        112,  # SET_SPIKES: Expert_Spikes
+        208,  # ATK_DEF_UP: Expert_StatusDefenseUp
+        211,  # SP_ATK_SP_DEF_UP: Expert_StatusSpDefenseUp
+        212,  # ATK_SPD_UP: Expert_DragonDance
+        249,  # TOXIC_SPIKES: Expert_ToxicSpikes
+        18,  # ATK_DOWN: Expert_StatusAttackDown
+        20,  # SPEED_DOWN: Expert_StatusSpeedDown
+        24,  # EVA_DOWN: Expert_StatusEvasionDown
+        58,  # ATK_DOWN_2: Expert_StatusAttackDown
+        60,  # SPEED_DOWN_2: Expert_StatusSpeedDown
+        62,  # SP_DEF_DOWN_2: Expert_StatusSpDefenseDown
+        65,  # SET_REFLECT: Expert_Reflect
+        225,  # DOUBLE_SPEED_3_TURNS: Expert_Tailwind
+        230,  # DOUBLE_POWER_IF_MOVING_SECOND: Expert_Payback
+        40,  # HALVE_HP: Expert_SuperFang
+        89,  # COUNTER: Expert_Counter
+        92,  # DAMAGE_WHILE_ASLEEP: Expert_Nightmare
+        97,  # USE_RANDOM_LEARNED_MOVE_SLEEP: Expert_SleepTalk
+        99,  # INCREASE_POWER_WITH_LESS_HP: Expert_Reversal
+        136,  # WEATHER_RAIN: Expert_RainDance
+        144,  # MIRROR_COAT: Expert_MirrorCoat
+        158,  # ALWAYS_FLINCH_FIRST_TURN_ONLY: Expert_FakeOut
+        164,  # WEATHER_HAIL: Expert_Hail
+        182,  # LOWER_OWN_ATK_AND_DEF: Expert_Superpower
+        224,  # EAT_BERRY: Expert_Pluck
+        111,  # PROTECT: Expert_Protect
+        38,  # ONE_HIT_KO: Expert_OHKOMove
+        228,  # SWITCH_HIT: Expert_UTurn
+        91,  # AVERAGE_HP: Expert_PainSplit
+        137,  # WEATHER_SUN: Expert_SunnyDay
+        142,  # MAX_ATK_LOSE_HALF_MAX_HP: Expert_BellyDrum
+        170,  # HIT_LAST_WHIFF_IF_HIT: Expert_FocusPunch
+        189,  # SET_HP_EQUAL_TO_USER: Expert_Endeavor
+        260,  # BLIZZARD: Expert_Blizzard
+        8,  # RECOVER_DAMAGE_SLEEP: Expert_DreamEater
+        28,  # FORCE_SWITCH: Expert_ForceSwitch
+        79,  # SET_SUBSTITUTE: Expert_Substitute
     }
 )
 assert set(KAIZO_EXPERT_LABELS) <= KAIZO_TRANSCRIBED
 assert KAIZO_EXPERT_TRANSCRIBED <= set(KAIZO_EXPERT_LABELS)
 
-# The most random reads (IfRandomLessThan and guessing LoadBattlerAbility DEFENDER) one move
-# slot's scoring path makes in the Kaizo transcription, every implemented flag set (E1 Ruling
-# R4): the per-slot layout's slot_reads. Found from the data by
-# tests/ai/test_kaizo_outcome.py test_slot_reads_fit_every_transcribed_effect: Selfdestruct
-# (HALVE_DEFENSE, a no-calc effect) against a guessed player with evasion +4 and Bonsly at
-# 30 % HP or less reads :117 and :304 (two guesses), :6374, :1859, :1870, :1875 and Risky's
-# :6530. A path with more reads is refused.
+# The read bound of Kaizo Roark's layout (layout.KAIZO): the most random reads one slot's
+# path makes for his moves under his flags 0x17, by ai.read_bounds (E1 Ruling R6;
+# layout.fight_slot_reads, pinned by tests/ai/test_read_bounds.py): Selfdestruct's :117 and
+# :304 guesses, :6374, :1859, :1870, :1875 and Risky's :6530.
 KAIZO_SLOT_READS = 7
 
 # Values each field takes, in enumeration order (roark.md 14 "AiOutcome width").
