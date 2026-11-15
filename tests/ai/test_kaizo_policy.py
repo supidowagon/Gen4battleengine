@@ -2980,3 +2980,18 @@ def test_u_turn_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party,
         layout = layout_for(t, flags, s2)
         assert policy.ai_refusals(t, s2, n, layout) == []
         _assert_exact_equals_loose(t, s2, layout)
+
+
+def test_party_member_damage_ties_as_the_active(kaizo_tables, kaizo_names, kaizo_roark_party):
+    """A tie decides (batch 15 review): Cranidos's Mega Punch (Normal, 80, physical, no STAB
+    for either Rock Pokemon, neutral on Gible) calculated as Bonsly equals Bonsly's U-turn
+    (Bug, 80, neutral), so the strict ``>`` (trainer_ai.c:2165) does not jump; calculated
+    with Cranidos's own Attack (base 125 against Bonsly's 80) it would."""
+    t, n = kaizo_tables, kaizo_names
+    u_turn, mega_punch = n.move_names.index("U-turn"), n.move_names.index("Mega Punch")
+    s = _state(t, kaizo_roark_party, BONSLY, (u_turn, 0, 0, 0))
+    s = s._replace(moves=s.moves.at[1, 1].set(jnp.asarray((mega_punch, 0, 0, 0), s.moves.dtype)))
+    as_active = int(c.ai_damage(t, s, mega_punch, c.SIM_ROLL_MAX))
+    assert as_active == int(c.ai_damage(t, s, u_turn, c.SIM_ROLL_MAX)) > 0  # the tie
+    ctx = c.at_slot(c.new_context(t, s, _outcome(t, s)), 0)
+    assert not bool(c.if_party_member_deals_more_damage(ctx, c.USE_MAX_DAMAGE).jump)
