@@ -254,7 +254,9 @@ from nuzline.engine.damage import (
 from nuzline.engine.ids import (
     ABILITY_MULTITYPE,
     MOVE_FAKE_OUT,
+    MINIMIZE_PARAM,
     MOVE_STRUGGLE,
+    POWER_IF_TARGET_MOVED,
     RESIST_ANY_NORMAL,
     SPIKES_MAX,
     TAILWIND_TURNS,
@@ -332,15 +334,22 @@ def change_stage(state: BattleState, side, stat, delta, cond) -> BattleState:
 
 def _foe_stage(state: BattleState, h: _Hit, cond) -> BattleState:
     stat, delta = h.param[0], h.param[1]
-    keen_eye = (h.target_ignorable == AbilityId.KEEN_EYE) & (stat == Stat.ACC) & (delta < 0)
-    return change_stage(state, h.target_side, stat, delta, cond & ~keen_eye)
+    # BtlCmd_ChangeStatStage (battle_script.c:2884-2902), a drop by another battler: Clear Body,
+    # then Keen Eye on accuracy and Hyper Cutter on Attack (Battler_IgnorableAbility), B9-6.
+    seen = h.target_ignorable
+    keen_eye = (seen == AbilityId.KEEN_EYE) & (stat == Stat.ACC)
+    hyper_cutter = (seen == AbilityId.HYPER_CUTTER) & (stat == Stat.ATK)
+    blocked = (delta < 0) & ((seen == AbilityId.CLEAR_BODY) | keen_eye | hyper_cutter)
+    return change_stage(state, h.target_side, stat, delta, cond & ~blocked)
 
 
 def _stat_self(tables, state, h: _Hit) -> BattleState:
     cond = (h.effect == _E.STAT_SELF) & h.landed
+    # Minimize (subscript_minimize.s:5) sets MOVE_EFFECT_MINIMIZE before its Evasion +1 (B9-10).
+    state = _set(state, "minimized", h.side, 1, cond & (h.param[2] == MINIMIZE_PARAM))
     state = change_stage(state, h.side, h.param[0], h.param[1], cond)
     # Defense Curl (move_param[m, 2] = 1) sets the flag whatever the stage change does.
-    return _set(state, "curled", h.side, 1, cond & (h.param[2] == 1))
+    return _set(state, "curled", h.side, 1, cond & (h.param[2] == 1) & (h.param[0] == Stat.DEF))
 
 
 def _stat_foe(tables, state, h: _Hit) -> BattleState:
@@ -787,13 +796,34 @@ def _swagger(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     return _set(state, "confusion", h.target_side, outcome.duration[h.side], confuse)
 
 
-DRAGON_DANCE_STAGES = ((Stat.ATK, 1), (Stat.SPE, 1))  # subscript_user_atk_and_speed_up_1_stage.s
+# Attack, then the second stat in move_param[m, 0] (Speed: Dragon Dance; Defense: Bulk Up),
+# subscript_user_atk_and_{speed,def}_up_1_stage.s:13-16 (B9-10).
 
 
-def dragon_dance_fails(state: BattleState, side) -> jnp.ndarray:
-    """``bool``: both of the user's stages are at +6: the subscript prints "won't go higher"
-    and sets ``MOVE_STATUS_NO_MORE_WORK`` (:5-6, :21-29), which skips AfterMoveEffects."""
-    return (state.stages[side, Stat.ATK] >= STAGE_MAX) & (state.stages[side, Stat.SPE] >= STAGE_MAX)
+def dragon_dance_fails(state: BattleState, side, second=Stat.SPE) -> jnp.ndarray:
+    """``bool``: both of the user's stages are at +6 (Attack and ``second``): the subscript
+    prints "won't go higher" and sets ``MOVE_STATUS_NO_MORE_WORK`` (:5-6, :21-29), which skips
+    AfterMoveEffects."""
+    return (state.stages[side, Stat.ATK] >= STAGE_MAX) & (state.stages[side, second] >= STAGE_MAX)
+
+
+def belly_drum_fails(state: BattleState, side) -> jnp.ndarray:
+    """``bool``: subscript_belly_drum.s:3-6 fails (MOVE_STATUS_FAILED) at Attack +6 or with
+    ``curHP <= Divide(maxHP, 2)``."""
+    mon = state.active[side]
+    half = jnp.maximum(state.max_hp[side, mon].astype(_I32) // 2, 1)
+    return (state.stages[side, Stat.ATK] >= STAGE_MAX) | (state.hp[side, mon].astype(_I32) <= half)
+
+
+def _belly_drum(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    """Belly Drum (effect_script_0142.s, a direct ON_HIT subscript_belly_drum.s; the user, a
+    RANGE_USER defender, has HP): Attack set to +6, then Divide(maxHP, 2) through UPDATE_HP (:8-12).
+    A failing one never gets here (``primary_effect_fails``)."""
+    cond = (h.effect == _E.BELLY_DRUM) & h.landed & ~belly_drum_fails(state, h.side)
+    state = change_stage(state, h.side, Stat.ATK, STAGE_MAX * 2, cond)
+    half = jnp.maximum(state.max_hp[h.side, h.user].astype(_I32) // 2, 1)
+    hp = jnp.maximum(state.hp[h.side, h.user].astype(_I32) - half, 0)
+    return _set(state, "hp", (h.side, h.user), hp, cond)
 
 
 def _dragon_dance(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
@@ -801,9 +831,8 @@ def _dragon_dance(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     battle_lib.c:1492-1504): Attack +1 and Speed +1, each skipped on its own at +6 (:13-16,
     ``ChangeStatStage``'s ``jumpNoChange``)."""
     cond = (h.effect == _E.DRAGON_DANCE) & h.landed & _alive(state, h.side, h.user)
-    for stat, delta in DRAGON_DANCE_STAGES:
-        state = change_stage(state, h.side, stat, delta, cond)
-    return state
+    state = change_stage(state, h.side, Stat.ATK, 1, cond)
+    return change_stage(state, h.side, h.param[0], 1, cond)
 
 
 def _roost(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
@@ -874,7 +903,11 @@ def primary_effect_fails(tables, state: BattleState, side, target_side, move) ->
     effect = tables.move_effect[jnp.asarray(move, _I32)]
     return (
         ((effect == _E.SWAGGER) & swagger_fails(state, target_side))
-        | ((effect == _E.DRAGON_DANCE) & dragon_dance_fails(state, side))
+        | (
+            (effect == _E.DRAGON_DANCE)
+            & dragon_dance_fails(state, side, tables.move_param[jnp.asarray(move, _I32), 0])
+        )
+        | ((effect == _E.BELLY_DRUM) & belly_drum_fails(state, side))
         # subscript_tailwind_start.s:5, :18 and the effect scripts' TrySpikes / TryToxicSpikes
         # jumps (effect_script_0112.s, _0249.s): MOVE_STATUS_FAILED.
         | ((effect == _E.TAILWIND) & (state.tailwind[side] != 0))
@@ -1043,6 +1076,7 @@ MOVE_EFFECT_MASK_FIELDS = (
     "mud_sport",
     "water_sport",
     "aqua_ring",
+    "minimized",
 )
 
 
@@ -1365,9 +1399,21 @@ def _contact_ability(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
         & hit
         & (state.ability[h.side, h.user] != AbilityId.MAGIC_GUARD)
     )
+    # Aftermath (battle_lib.c:4358-4371): the defender is faintedMon (this hit's UPDATE_HP fainted
+    # it: TryFaintMon, battle_script.c:1768-1770), a living attacker without Magic Guard, no Damp
+    # on the field (an unsupported ability), no MOVE_STATUS_NO_EFFECTS, a contact move:
+    # subscript_aftermath.s takes Divide(maxHP, 4) (B9-7).
+    aftermath = (
+        (ability == AbilityId.AFTERMATH)
+        & hit
+        & ~_alive(state, h.target_side, h.target)
+        & (state.ability[h.side, h.user] != AbilityId.MAGIC_GUARD)
+    )
     max_hp = state.max_hp[h.side, h.user].astype(_I32)
     hp = state.hp[h.side, h.user].astype(_I32)
-    hurt = jnp.where(rough, jnp.maximum(hp - jnp.maximum(max_hp // 8, 1), 0), hp)
+    cut = jnp.where(rough, jnp.maximum(max_hp // 8, 1), 0)
+    cut = jnp.where(aftermath, jnp.maximum(max_hp // 4, 1), cut)
+    hurt = jnp.maximum(hp - cut, 0)
     state = state._replace(hp=state.hp.at[h.side, h.user].set(hurt.astype(state.hp.dtype)))
     # The status message and Rough Skin's message tag the holder's ability
     # (``hooks.REVEALS_ON``). hooks imports this module, so the import is local.
@@ -1384,7 +1430,8 @@ def _contact_ability(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     )
     state = _set(state, "infatuated", h.side, 1, charm)
     state = reveal_ability(state, h.target_side, h.target, CONTACT_STATUS, cond | charm)
-    state = reveal_ability(state, h.target_side, h.target, CONTACT_DAMAGE, rough)
+    # subscript_aftermath.s:6 tags BTLSCR_DEFENDER's ability (BattleMessage_AbilityTag).
+    state = reveal_ability(state, h.target_side, h.target, CONTACT_DAMAGE, rough | aftermath)
     return _set_status(state, h.side, h.user, status, cond)
 
 
@@ -1835,6 +1882,12 @@ def play_hit(
         )
     )
 
+    # Payback (BtlCmd_CalcPaybackPower, battle_script.c:7198-7209): movePower x2 when the target
+    # has acted this turn, as a powerMul of 20 (movePower * powerMul / 10, battle_lib.c:6688).
+    payback = (tables.move_effect[move] == _E.DOUBLE_POWER) & (
+        tables.move_param[move, 0] == POWER_IF_TARGET_MOVED
+    )
+    power_mul = jnp.where(payback & jnp.asarray(target_moved, bool), 20, power_mul)
     damage = damage_for_roll(
         tables,
         state,
@@ -2001,6 +2054,7 @@ def play_hit(
         _cure_paralysis,
         _swagger,
         _dragon_dance,
+        _belly_drum,
         _roost,
         _side_layers,
         _destiny_bond,

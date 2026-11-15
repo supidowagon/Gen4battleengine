@@ -43,6 +43,8 @@ from nuzline.engine.ids import (
     ITEM_ABILITY_IDS,
     ITEM_GRISEOUS_ORB,
     METRONOME_DRAW,
+    MINIMIZE_PARAM,
+    POWER_IF_TARGET_MOVED,
     MOVE_BATON_PASS,
     MOVE_FAKE_OUT,
     MOVE_SLEEP_TALK,
@@ -68,6 +70,7 @@ from nuzline.engine.ids import (
     SPECIES_PALKIA,
     SPECIES_PIKACHU,
     SPIKES_MAX,
+    STOMP_PARAM,
     TAILWIND_TURNS,
     TERRAIN_MOVES,
     TERRAIN_SPECIAL,
@@ -429,7 +432,8 @@ def _fixed_damage(tables, s: RefState, attacker: int, move: int) -> int:
         if _ignorable(s, attacker, 1 - attacker) == AbilityId.STURDY:
             return 0
         return foe.max_hp
-    return _active(s, attacker).level
+    flat = _t(tables, "move_param", move, 0)  # Dragon Rage 40, SonicBoom 20 (B9-9)
+    return flat if flat else _active(s, attacker).level
 
 
 def _divide(dividend: int, divisor: int) -> int:
@@ -939,8 +943,15 @@ def _move_damage(
         and _active(s, attacker).ability == AbilityId.RECKLESS
     ):
         power_mul = 12
-    # effect_script_0169.s, _0171.s, _0221.s: powerMul 20 when the condition holds.
-    if _double_power(tables, s, attacker, defender, move):
+    # effect_script_0169.s, _0171.s, _0221.s: powerMul 20 when the condition holds; Stomp
+    # against MOVE_EFFECT_MINIMIZE (effect_script_0150.s:6-8, B9-10).
+    stomp = (
+        _t(tables, "move_effect", move) == EffectId.FLINCH
+        and _t(tables, "move_param", move, 2) == STOMP_PARAM
+    )
+    if _double_power(tables, s, attacker, defender, move) or (
+        stomp and s.sides[defender].minimized
+    ):
         power_mul = 20
     damage = _calc_move_damage(
         tables,
@@ -1036,6 +1047,7 @@ def _reset_battler(sd: RefSide, baton: bool = False) -> None:
         "yawn",
         "curse",
         "can_unburden",
+        "minimized",
     ):
         if not (baton and name in BATON_PASSED):
             setattr(sd, name, 0)
@@ -1692,6 +1704,18 @@ def _arm_unburden(s: RefState, side: int) -> None:
         s.sides[side].can_unburden = 1
 
 
+def _drop_blocked(seen: int, stat: int, delta: int) -> bool:
+    """BtlCmd_ChangeStatStage (script.c:2884-2902): a drop by another battler meets the target's
+    Clear Body, Keen Eye on accuracy or Hyper Cutter on Attack (ignorable, ``seen``)."""
+    if delta >= 0:
+        return False
+    return (
+        seen == AbilityId.CLEAR_BODY
+        or (seen == AbilityId.KEEN_EYE and stat == Stat.ACC)
+        or (seen == AbilityId.HYPER_CUTTER and stat == Stat.ATK)
+    )
+
+
 def _recover_status_by_ability(s: RefState, side: int) -> None:
     """``BattleSystem_RecoverStatusByAbility`` (lib.c:4378) for ``side``'s battler: an
     asleep Insomnia holder (:4404) or a paralyzed Limber holder (:4397) with HP left is
@@ -1750,9 +1774,16 @@ def _switch_in_effects(turn: _Turn, s: RefState, side: int) -> None:
     # subscript_intimidate.s: ATTACK_DOWN_1_STAGE on a living foe (Clear Body, Hyper
     # Cutter, White Smoke, Mist and Substitute are unsupported). Its "cuts" message is
     # built in C (BtlCmd_ChangeStatStage, script.c:2956): the AI learns nothing.
-    if mon.hp and mon.ability == AbilityId.INTIMIDATE and foe.hp:
+    blockers = (AbilityId.CLEAR_BODY, AbilityId.HYPER_CUTTER)  # script.c:2884-2902 (B9-6)
+    if mon.hp and mon.ability == AbilityId.INTIMIDATE and foe.hp and foe.ability not in blockers:
         _change_stage(s, other, Stat.ATK, -1)
-    if traced and foe.hp and foe.ability == AbilityId.INTIMIDATE and mon.hp:
+    if (
+        traced
+        and foe.hp
+        and foe.ability == AbilityId.INTIMIDATE
+        and mon.hp
+        and mon.ability not in blockers
+    ):
         _change_stage(s, side, Stat.ATK, -1)
     # SWITCH_IN_CHECK_STATE_MOLD_BREAKER (lib.c:4075): subscript_mold_breaker.s tags the
     # living newcomer's ability, BattleAI_SetAbility (script.c:11806).
@@ -2049,19 +2080,22 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
     seen = _ignorable(s, side, target)
 
     if effect == EffectId.STAT_SELF and landed:
+        p2 = _t(tables, "move_param", move, 2)
+        if p2 == MINIMIZE_PARAM and p0 == Stat.EVA:  # subscript_minimize.s:5 (B9-10)
+            s.sides[side].minimized = 1
         _change_stage(s, side, p0, p1)
-        if _t(tables, "move_param", move, 2) == 1:  # Defense Curl (effect_script_0156.s)
+        if p2 == 1 and p0 == Stat.DEF:  # Defense Curl (effect_script_0156.s)
             s.sides[side].curled = 1
     elif effect == EffectId.STAT_FOE and landed and target_alive:
-        if not (seen == AbilityId.KEEN_EYE and p0 == Stat.ACC and p1 < 0):
+        if not _drop_blocked(seen, p0, p1):
             _change_stage(s, target, p0, p1)
     elif effect == EffectId.SECONDARY_STAT_SELF and effective and proc:
         if certain or _active(s, side).hp > 0:
             _change_stage(s, side, p0, p1)
     elif effect == EffectId.SECONDARY_STAT_FOE and effective and proc:
-        keen_eye = seen == AbilityId.KEEN_EYE and p0 == Stat.ACC and p1 < 0
         # BtlCmd_ChangeStatStage (script.c:2918-2921): Shield Dust stops an indirect drop.
-        if (certain or target_alive) and not keen_eye and seen != AbilityId.SHIELD_DUST:
+        blocked = _drop_blocked(seen, p0, p1) or seen == AbilityId.SHIELD_DUST
+        if (certain or target_alive) and not blocked:
             _change_stage(s, target, p0, p1)
     elif effect in (EffectId.STATUS_FOE, EffectId.SECONDARY_STATUS) and effective:
         if effect == EffectId.STATUS_FOE or proc:
@@ -2296,9 +2330,16 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
         s.sides[side].locked_move = move
         s.sides[side].uproar = o.duration[side]
     elif effect == EffectId.DRAGON_DANCE and landed and _active(s, side).hp > 0:
-        # subscript_user_atk_and_speed_up_1_stage.s:13-16: Attack +1, Speed +1.
+        # subscript_user_atk_and_{speed,def}_up_1_stage.s:13-16: Attack +1, then Speed / Defense
+        # (move_param 0) +1 (B9-10).
         _change_stage(s, side, Stat.ATK, 1)
-        _change_stage(s, side, Stat.SPE, 1)
+        _change_stage(s, side, p0, 1)
+    elif effect == EffectId.BELLY_DRUM and landed:
+        # subscript_belly_drum.s: Attack to +6, then Divide(maxHP, 2) through UPDATE_HP (a failing
+        # one ended at the failure check before AfterMoveEffects).
+        user = _active(s, side)
+        s.sides[side].stages[Stat.ATK] = 6
+        _lose_hp(turn, s, side, _divide(user.max_hp, 2))
     elif effect == EffectId.ROLLOUT and landed:
         # BtlCmd_CalcRolloutPower (script.c:5661): rolloutCount starts at 5 on a first use,
         # every use decrements it, the lock ends at 0; a hit that dealt nothing (an
@@ -2340,6 +2381,14 @@ def _contact_ability(turn: _Turn, s: RefState, side: int, move: int, hit: int, e
     contact = _t(turn.tables, "move_flags", move) & MoveFlag.CONTACT
     attacker = _active(s, side)
     if not (contact and effective and dealt > 0 and attacker.hp > 0):
+        return
+    if ability == AbilityId.AFTERMATH:
+        # lib.c:4358-4371: the defender fainted to this hit (faintedMon), the attacker has no
+        # Magic Guard: subscript_aftermath.s takes Divide(maxHP, 4) and tags the holder (B9-7).
+        if _active(s, target).hp == 0 and attacker.ability != AbilityId.MAGIC_GUARD:
+            _lose_hp(turn, s, side, _divide(attacker.max_hp, 4))
+            if target == 0:
+                s.ai_ability_known[s.sides[0].active] = 1
         return
     if ability == AbilityId.ROUGH_SKIN:
         # lib.c:4259: no subscript (and no ability tag) for a Magic Guard attacker.
@@ -2505,6 +2554,12 @@ def _hit(turn: _Turn, s: RefState, side: int, move: int, hit: int, struggling: b
             move,
             o.crit[side][hit] != 0 and not _armored(s, side, target),
             o.roll[side][hit],
+            # Payback: movePower x2 once the target acted (script.c:7198-7209, B9-12).
+            power_mul=20
+            if _t(tables, "move_effect", move) == EffectId.DOUBLE_POWER
+            and _t(tables, "move_param", move, 0) == POWER_IF_TARGET_MOVED
+            and target_moved
+            else 10,
             magnitude=o.magnitude[side],
             present=o.present[side],
         )
@@ -3008,7 +3063,7 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
     # The scripts that fail a user that has their effect already (MOVE_STATUS_FAILED, as Fake
     # Out's): Ingrain (effect_script_0181.s:5), Aqua Ring (_0251.s:5), Mud Sport (_0201.s:5),
     # Water Sport (_0210.s:5); Imprison also without a move shared with a foe (script.c:6692-6722).
-    if _script_fails(s, side, effect):
+    if _script_fails(s, side, effect, _t(tables, "move_param", move, 1)):
         _unlock(s.sides[side])  # subscript_missed.s
         return record
     # Snore (effect_script_0092.s:5): MOVE_STATUS_FAILED unless the user is asleep.
@@ -3109,11 +3164,16 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
     # ability; MOVE_STATUS_NO_MORE_WORK: no hit, no AfterMoveEffects.
     foe_side = 1 - side
     kind = _move_type(tables, s, side, move)
-    if (
-        record is not None
-        and _ignorable(s, side, foe_side) == AbilityId.DRY_SKIN
+    seen = _ignorable(s, side, foe_side)
+    water = (
+        seen in (AbilityId.DRY_SKIN, AbilityId.WATER_ABSORB)
         and kind == Type.WATER
         and _t(tables, "move_power", move) != 0
+    )
+    volt = seen == AbilityId.VOLT_ABSORB and kind == Type.ELECTRIC  # lib.c:3500-3505 (B9-6)
+    if (
+        record is not None
+        and (water or volt)
         and _matchup_x40(tables, kind, _active(s, foe_side).types, _identified(s, side, foe_side))
         > 0
     ):
@@ -3150,8 +3210,14 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
         full = full or (
             effect == EffectId.SWAGGER and theirs[Stat.ATK] >= 6 and s.sides[1 - side].confusion
         )
+        second = _t(tables, "move_param", move, 0)
         full = full or (
-            effect == EffectId.DRAGON_DANCE and own[Stat.ATK] >= 6 and own[Stat.SPE] >= 6
+            effect == EffectId.DRAGON_DANCE and own[Stat.ATK] >= 6 and own[second] >= 6
+        )
+        # subscript_belly_drum.s:3-6 (MOVE_STATUS_FAILED).
+        full = full or (
+            effect == EffectId.BELLY_DRUM
+            and (own[Stat.ATK] >= 6 or user.hp <= _divide(user.max_hp, 2))
         )
         # Roost at full HP (subscript_recover_hp.s), Tailwind up, full Spikes / Toxic Spikes.
         full = full or (effect == EffectId.ROOST and user.hp == user.max_hp)
@@ -3412,10 +3478,16 @@ def _weather_effect(turn: _Turn, s: RefState, side: int) -> None:
         elif Type.ICE not in mon.types and mon.ability != AbilityId.SNOW_CLOAK:
             hp_calc = -_divide(mon.max_hp, 16)
     # script.c:5620-5625: rain heals Dry Skin below full HP by Divide(maxHP, 8).
+    if s.weather == Weather.RAIN and mon.ability == AbilityId.RAIN_DISH and mon.hp < mon.max_hp:
+        hp_calc = _divide(mon.max_hp, 16)  # script.c:5614-5618 (B9-6)
     if s.weather == Weather.RAIN and mon.ability == AbilityId.DRY_SKIN and mon.hp < mon.max_hp:
         hp_calc = _divide(mon.max_hp, 8)
     sun = s.weather == Weather.SUN and mon.ability in (AbilityId.DRY_SKIN, AbilityId.SOLAR_POWER)
-    rain = s.weather == Weather.RAIN and mon.ability == AbilityId.DRY_SKIN and hp_calc > 0
+    rain = (
+        s.weather == Weather.RAIN
+        and mon.ability in (AbilityId.DRY_SKIN, AbilityId.RAIN_DISH)
+        and hp_calc > 0
+    )
     magic_guard = ability == WEATHER_ABILITY_IDS["Magic Guard"]
     if hp_calc > 0:  # subscript_weather_continues.s _076
         _gain_hp(s, side, hp_calc)
@@ -3480,6 +3552,7 @@ def _end_of_turn(turn: _Turn, s: RefState, order: list[int]) -> None:
             _burn_check,  # MON_COND_CHECK_STATE_BURN, bcp.c:1425
             _curse_check,  # MON_COND_CHECK_STATE_CURSE, bcp.c:1451
             _bind_check,  # MON_COND_CHECK_STATE_BIND, bcp.c:1462
+            _bad_dreams_check,  # MON_COND_CHECK_STATE_BAD_DREAMS, bcp.c:1484
             _uproar_check,  # MON_COND_CHECK_STATE_UPROAR, bcp.c:1505
             _disable_check,  # MON_COND_CHECK_STATE_DISABLE, bcp.c:1565
             _lock_on_check,  # MON_COND_CHECK_STATE_LOCK_ON, bcp.c:1618
@@ -3664,7 +3737,37 @@ def _poison_check(turn: _Turn, s: RefState, side: int) -> None:
     mon = _active(s, side)
     # subscript_poison_damage.s:5: not for Magic Guard.
     if mon.status == Status.POISON and mon.hp and mon.ability != AbilityId.MAGIC_GUARD:
+        if not _poison_heal(s, side):
+            _lose_hp(turn, s, side, _divide(mon.max_hp, 8))
+
+
+def _poison_heal(s: RefState, side: int) -> bool:
+    """subscript_poison_damage.s:4-12: a Poison Heal holder heals Divide(maxHP, 8) below full HP
+    (and tags its ability), nothing at full HP; True when it holds the ability (B9-8)."""
+    mon = _active(s, side)
+    if mon.ability != AbilityId.POISON_HEAL:
+        return False
+    if mon.hp != mon.max_hp:
+        _gain_hp(s, side, _divide(mon.max_hp, 8))
+        if side == 0:
+            s.ai_ability_known[s.sides[0].active] = 1
+    return True
+
+
+def _bad_dreams_check(turn: _Turn, s: RefState, side: int) -> None:
+    """MON_COND_CHECK_STATE_BAD_DREAMS (bcp.c:1484-1500): an asleep battler with HP, no Magic
+    Guard, facing a living Bad Dreams holder loses Divide(maxHP, 8); the message tags the holder."""
+    mon, foe = _active(s, side), _active(s, 1 - side)
+    if (
+        foe.ability == AbilityId.BAD_DREAMS
+        and foe.hp
+        and mon.status == Status.SLEEP
+        and mon.ability != AbilityId.MAGIC_GUARD
+        and mon.hp
+    ):
         _lose_hp(turn, s, side, _divide(mon.max_hp, 8))
+        if side == 1:
+            s.ai_ability_known[s.sides[0].active] = 1
 
 
 def _toxic_check(turn: _Turn, s: RefState, side: int) -> None:
@@ -3673,7 +3776,7 @@ def _toxic_check(turn: _Turn, s: RefState, side: int) -> None:
     if mon.status == Status.TOXIC and mon.hp:
         if mon.status_counter < TOXIC_COUNTER_MAX:
             mon.status_counter += 1
-        if mon.ability != AbilityId.MAGIC_GUARD:  # subscript_poison_damage.s:5
+        if mon.ability != AbilityId.MAGIC_GUARD and not _poison_heal(s, side):
             _lose_hp(turn, s, side, _divide(mon.max_hp, 16) * mon.status_counter)
 
 
@@ -3784,11 +3887,13 @@ def _move_imprisoned(s: RefState, side: int, move: int) -> bool:
     )
 
 
-def _script_fails(s: RefState, side: int, effect: int) -> bool:
+def _script_fails(s: RefState, side: int, effect: int, move_param1: int = 0) -> bool:
     """A user-effect script's MOVE_STATUS_FAILED (``_use_move``)."""
     sd = s.sides[side]
     if effect == EffectId.HELPING_HAND:  # BtlCmd_TryHelpingHand: no partner (script.c:6309-6311)
         return True
+    if effect == EffectId.DRAIN and move_param1 == 1:  # Dream Eater, effect_script_0008.s:5
+        return _active(s, 1 - side).status != Status.SLEEP
     if effect == EffectId.IMPRISON:
         own = [m for m in _active(s, side).moves if m]
         shared = any(m in _active(s, b).moves for b in (0, 1) if b != side for m in own)
@@ -3809,7 +3914,7 @@ def _ingrain_anchors(tables, s: RefState, side: int) -> bool:
     sd, mon = s.sides[side], _active(s, side)
     others = (
         sd.leech_seed, sd.lock_on, sd.perish_song, sd.yawn, sd.imprison, sd.imprisoned,
-        sd.mud_sport, sd.water_sport, sd.aqua_ring,
+        sd.mud_sport, sd.water_sport, sd.aqua_ring, sd.minimized,
     )  # fmt: skip
     row = _t(tables, "species_form_row", mon.species, mon.form)
     party = [_t(tables, "species_types", row, i) for i in range(len(mon.types))]

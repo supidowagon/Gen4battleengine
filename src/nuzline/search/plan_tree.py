@@ -268,6 +268,7 @@ _COND_TEXT = {
     "roosting": "roosting",
     "lock_on": "locked onto",
     "yawn": "drowsy",
+    "minimized": "minimized",
     "curse": "cursed",
     "spikes": "Spikes",
     "toxic_spikes": "Toxic Spikes",

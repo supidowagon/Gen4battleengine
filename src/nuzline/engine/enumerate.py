@@ -191,8 +191,10 @@ from nuzline.engine.damage import (
 from nuzline.engine.effects import can_have_status, ingrain_anchors, protect_blocks
 from nuzline.engine.ids import (
     METRONOME_DRAW,
+    MINIMIZE_PARAM,
     QUICK_CLAW_MODULUS,
     SLEEP_TALK_VALUES,
+    STOMP_PARAM,
     TAILWIND_TURNS,
     TRI_ATTACK_STATUSES,
     UNROLLED_EFFECTS,
@@ -631,8 +633,6 @@ INPUT_NEUTRAL_EFFECTS = (
     _E.HALVE_HP,
     _E.OHKO,
     _E.FALSE_SWIPE,
-    # The user's Attack and Speed: no input of the foe's hit (it reads the user's Defense).
-    _E.DRAGON_DANCE,
     # The side conditions of Tailwind (speed), Spikes and Toxic Spikes (a newcomer: the switch /
     # roar clauses), and Destiny Bond (a faint: no hit follows).
     _E.TAILWIND,
@@ -670,9 +670,14 @@ INPUT_NEUTRAL_EFFECTS = (
     # E2 batch 9: Follow Me changes nothing in singles; Helping Hand fails there.
     _E.FOLLOW_ME,
     _E.HELPING_HAND,
+    # The user's Attack and HP only (the foe's later hit reads the user's Defense and HP: the HP
+    # clause covers HP).
+    _E.BELLY_DRUM,
 )
 INPUT_CLAUSE_EFFECTS = (
-    _E.STAT_SELF,  # the foe's Defense / Sp. Def
+    _E.STAT_SELF,  # the foe's Defense / Sp. Def; Minimize's flag (Stomp's power)
+    # The user's Attack and Speed (Dragon Dance) or Defense (Bulk Up): the stat clause.
+    _E.DRAGON_DANCE,
     _E.SECONDARY_STAT_SELF,
     _E.STAT_FOE,  # the attacker's Attack / Sp. Atk
     _E.SECONDARY_STAT_FOE,
@@ -784,6 +789,20 @@ INPUT_NEUTRAL_ABILITIES = (
     AbilityId.HUGE_POWER,
     AbilityId.PURE_POWER,
     AbilityId.FLOWER_GIFT,
+    # B9-6: an absorbed move has no hit; Rain Dish heals at the turn end; Clear Body / Hyper
+    # Cutter only remove stage drops (each drop has its own clause).
+    AbilityId.VOLT_ABSORB,
+    AbilityId.WATER_ABSORB,
+    AbilityId.RAIN_DISH,
+    AbilityId.CLEAR_BODY,
+    AbilityId.HYPER_CUTTER,
+    # B9-8: turn-end HP only.
+    AbilityId.POISON_HEAL,
+    AbilityId.BAD_DREAMS,
+    # B9-11: they only gate the switch choice, made before the turn.
+    AbilityId.ARENA_TRAP,
+    AbilityId.SHADOW_TAG,
+    AbilityId.MAGNET_PULL,
 )
 INPUT_CLAUSE_ABILITIES = (
     AbilityId.GUTS,  # status clause
@@ -795,6 +814,7 @@ INPUT_CLAUSE_ABILITIES = (
     AbilityId.STATIC,  # contact clause (a status under Guts)
     AbilityId.POISON_POINT,
     AbilityId.ROUGH_SKIN,  # the attacker's HP: HP clause
+    AbilityId.AFTERMATH,  # likewise, on its holder's faint (no later hit on it)
     AbilityId.INTIMIDATE,  # on switch-in: switch clause
     # On switch-in (the switch clause): the weather, or the copied ability.
     AbilityId.TRACE,
@@ -994,6 +1014,7 @@ NON_TABLE_DAMAGE_EFFECTS = (
     _E.YAWN,
     _E.FOLLOW_ME,  # status moves: no damage
     _E.HELPING_HAND,
+    _E.BELLY_DRUM,
 )
 
 
@@ -1076,6 +1097,7 @@ def damage_inputs_can_change(
     attack_stat = jnp.where(physical, Stat.ATK, Stat.SPA)
     defense_stat = jnp.where(physical, Stat.DEF, Stat.SPD)
     hp_sensitive = (effect == _E.FLAIL) | pinch_ability(move_type, ability)
+    stomp = (effect == _E.FLINCH) & (params[:, 2] == STOMP_PARAM)
 
     held = state.item[sides, mons]
     pinch_stat = tables.item_param[held, 1]
@@ -1096,6 +1118,9 @@ def damage_inputs_can_change(
         )
         | (foe_effect == _E.RAISE_ALL_STATS_HIT)
         | ((foe_effect == _E.CURSE) & physical)
+        | ((foe_effect == _E.DRAGON_DANCE) & (foe_param0 == defense_stat))
+        # Minimize sets the flag Stomp's power reads (B9-10).
+        | ((foe_effect == _E.STAT_SELF) & (params[::-1, 2] == MINIMIZE_PARAM) & stomp)
         | ((foe_effect == _E.SWAGGER) & physical)
         | (foe_effect == _E.ROOST)
         | (foe_effect == _E.INGRAIN)
@@ -1618,10 +1643,13 @@ def outcome_laws(
         state.fake_out_turn.astype(_I32) == state.turn.astype(_I32)
     )
     fang = effect == _E.FANG_PARALYZE_FLINCH
-    # Dry Skin takes a Water move whole (step._use_move: no hit, no flinch).
-    absorbs = (ignorable == AbilityId.DRY_SKIN) & (
-        jnp.stack([move_type_of(tables, state, side, moves[side]) for side in (0, 1)]) == Type.WATER
-    )
+    # Dry Skin and Water Absorb take a Water move whole, Volt Absorb an Electric one
+    # (step._use_move: no hit, no flinch).
+    kinds = jnp.stack([move_type_of(tables, state, side, moves[side]) for side in (0, 1)])
+    absorbs = (
+        ((ignorable == AbilityId.DRY_SKIN) | (ignorable == AbilityId.WATER_ABSORB))
+        & (kinds == Type.WATER)
+    ) | ((ignorable == AbilityId.VOLT_ABSORB) & (kinds == Type.ELECTRIC))
     flinch_sure = (
         ((effect == _E.FLINCH) | fake_out_ok | fang)
         & reach

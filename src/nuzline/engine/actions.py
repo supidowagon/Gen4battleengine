@@ -44,7 +44,7 @@ from __future__ import annotations
 import jax.numpy as jnp
 
 from nuzline.data.tables import Tables
-from nuzline.engine.ids import CHOICE_ITEMS, TrainerItemId
+from nuzline.engine.ids import CHOICE_ITEMS, AbilityId, TrainerItemId, Type
 from nuzline.engine.state import BAG_SLOTS, SLOTS, BattleState
 
 MOVE_ACTIONS = 4  # actions 0-3 use a move slot; 4-9 switch
@@ -119,11 +119,38 @@ def legal_replacements(state: BattleState, side) -> jnp.ndarray:
 
 
 def trapped(state: BattleState, side) -> jnp.ndarray:
-    """``bool``: ``Battler_IsTrapped`` (battle_lib.c:5514-5531), which the party menu reads
+    """``bool``: ``Battler_IsTrapped`` (battle_lib.c:5514-5536), which the party menu reads
     (battle_controller_player.c:572): ``VOLATILE_CONDITION_TRAPPED`` (the Bind of ``trapped`` and
-    ``mean_look``, condition.h:77-78) or ``MOVE_EFFECT_INGRAIN``. Shed Shell, Shadow Tag and Magnet
-    Pull are unsupported."""
-    return (state.trapped[side] != 0) | (state.mean_look[side] != 0) | (state.ingrain[side] != 0)
+    ``mean_look``, condition.h:77-78) or ``MOVE_EFFECT_INGRAIN``; a living foe's Shadow Tag unless
+    the battler has it too, a living foe's Magnet Pull on a Steel battler, a living foe's Arena Trap
+    on a grounded battler (``BattlerIsGrounded``, :5500-5507: no Levitate, no Magnet Rise, not
+    Flying, or Iron Ball, or Gravity), all by ``Battler_Ability`` over the other side's living
+    battlers (``CountAbilityTheirSide``, :5509-5512; E2 batch 9, B9-11). Shed Shell
+    (HOLD_EFFECT_SWITCH, :5518) is an unsupported item."""
+    mon = state.active[side]
+    own = state.ability[side, mon]
+    types = state.types[side, mon]
+    grounded = (
+        (own != AbilityId.LEVITATE) & ~jnp.any(types == Type.FLYING)
+    ) | (state.gravity != 0)
+    steel = jnp.any(types == Type.STEEL)
+    trapped_by = jnp.asarray(False)
+    for foe in range(state.active.shape[0]):
+        other = state.active[foe]
+        theirs = state.ability[foe, other]
+        live = (jnp.asarray(side) != foe) & (state.hp[foe, other] > 0)
+        abilities = (
+            ((theirs == AbilityId.SHADOW_TAG) & (own != AbilityId.SHADOW_TAG))
+            | ((theirs == AbilityId.MAGNET_PULL) & steel)
+            | ((theirs == AbilityId.ARENA_TRAP) & grounded)
+        )
+        trapped_by = trapped_by | (live & abilities)
+    return (
+        (state.trapped[side] != 0)
+        | (state.mean_look[side] != 0)
+        | (state.ingrain[side] != 0)
+        | trapped_by
+    )
 
 
 def legal_actions(tables: Tables, state: BattleState, side) -> jnp.ndarray:

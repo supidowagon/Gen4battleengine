@@ -193,6 +193,8 @@ _NONZERO_SIDE = (
     "yawn",
     # "{0} cut its own HP and laid a curse on {1}!" (subscript_curse_ghost.s:14).
     "curse",
+    # E2 batch 9: Minimize's own message (it used the move).
+    "minimized",
 )
 _NONZERO_FIELD = ("trick_room", "gravity")
 

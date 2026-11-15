@@ -125,3 +125,90 @@ def test_helping_hand_fails_and_follow_me_changes_nothing_in_singles(tables, nam
     for slot in (0, 1):
         out = assert_matches_reference(tables, s, (slot, 0), O)
         assert int(out.hp[1, 0]) == int(s.hp[1, 0])
+
+
+def test_volt_absorb_takes_thunder_wave_and_clear_body_keeps_its_attack(tables, names):
+    """B9-6: Volt Absorb heals Divide(maxHP, 4) from an Electric move whatever its power
+    (battle_lib.c:3500-3505); Clear Body blocks a foe's drop (battle_script.c:2884-2895)."""
+    n = names
+    s = make_state(
+        tables, [_mon(n, "Pikachu", ["Thunder Wave"], 30)], [_mon(n, "Psyduck", ["Growl"], 30)]
+    )
+    s = s._replace(ability=s.ability.at[1, 0].set(AbilityId.VOLT_ABSORB))
+    s = s._replace(hp=s.hp.at[1, 0].set(1))
+    out = assert_matches_reference(tables, s, (0, 0), O)
+    assert int(out.status[1, 0]) == Status.NONE
+    assert int(out.hp[1, 0]) == 1 + max(int(s.max_hp[1, 0]) // 4, 1)
+    g = make_state(
+        tables, [_mon(n, "Bidoof", ["Growl"], 30)], [_mon(n, "Geodude", ["Rock Polish"], 30)]
+    )
+    g = g._replace(ability=g.ability.at[1, 0].set(AbilityId.CLEAR_BODY))
+    out = assert_matches_reference(tables, g, (0, 0), O)
+    from nuzline.engine.ids import Stat
+
+    assert int(out.stages[1, Stat.ATK]) == 0
+
+
+def test_poison_heal_and_bad_dreams(tables, names):
+    """B9-8: subscript_poison_damage.s:4-12 heals a Poison Heal holder Divide(maxHP, 8);
+    Bad Dreams takes Divide(maxHP, 8) from a sleeping foe (bcp.c:1484-1500)."""
+    n = names
+    s = make_state(tables, [_mon(n, "Shroomish", ["Growl"], 30)], [_mon(n, "Geodude", ["Growl"], 30)])
+    s = s._replace(ability=s.ability.at[0, 0].set(AbilityId.POISON_HEAL))
+    s = s.with_status(0, 0, Status.POISON)._replace(hp=s.hp.at[0, 0].set(1))
+    out = assert_matches_reference(tables, s, (0, 0), O)
+    assert int(out.hp[0, 0]) == 1 + max(int(s.max_hp[0, 0]) // 8, 1)
+    d = make_state(tables, [_mon(n, "Shroomish", ["Growl"], 30)], [_mon(n, "Geodude", ["Growl"], 30)])
+    d = d._replace(ability=d.ability.at[0, 0].set(AbilityId.BAD_DREAMS)).with_status(1, 0, Status.SLEEP, 3)
+    out = assert_matches_reference(tables, d, (0, 0), O)
+    assert int(out.hp[1, 0]) == int(d.hp[1, 0]) - max(int(d.max_hp[1, 0]) // 8, 1)
+
+
+def test_dragon_rage_deals_forty(tables, names):
+    """B9-9: effect_script_0041.s sets BTLVAR_DAMAGE -40 under SYSCTL_IGNORE_TYPE_CHECKS."""
+    n = names
+    s = make_state(tables, [_mon(n, "Gyarados", ["Dragon Rage"], 30)], [_mon(n, "Onix", ["Growl"], 40)])
+    out = assert_matches_reference(tables, s, (0, 0), O)
+    assert int(s.hp[1, 0]) - int(out.hp[1, 0]) == 40
+
+
+def test_belly_drum_minimize_stomp_bulk_up(tables, names):
+    """B9-10: subscript_belly_drum.s (Attack +6, Divide(maxHP, 2)); subscript_minimize.s (the flag
+    and Evasion +1); Stomp's powerMul 20 against it (effect_script_0150.s:6-8); Bulk Up's Attack
+    and Defense +1."""
+    from nuzline.engine.damage import damage_table
+    from nuzline.engine.ids import Stat
+
+    n = names
+    s = make_state(
+        tables,
+        [_mon(n, "Snorlax", ["Belly Drum", "Minimize", "Bulk Up"], 30)],
+        [_mon(n, "Geodude", ["Harden"], 30)],
+    )
+    out = assert_matches_reference(tables, s, (0, 0), O)
+    assert int(out.stages[0, Stat.ATK]) == 6
+    assert int(out.hp[0, 0]) == int(s.hp[0, 0]) - max(int(s.max_hp[0, 0]) // 2, 1)
+    m = assert_matches_reference(tables, s, (1, 0), O)
+    assert int(m.minimized[0]) == 1 and int(m.stages[0, Stat.EVA]) == 1
+    b = assert_matches_reference(tables, s, (2, 0), O)
+    assert int(b.stages[0, Stat.ATK]) == 1 and int(b.stages[0, Stat.DEF]) == 1
+    t = make_state(tables, [_mon(n, "Tauros", ["Stomp"], 30)], [_mon(n, "Snorlax", ["Growl"], 30)])
+    stomp = n.move("Stomp")
+    plain = int(damage_table(tables, t, 0, stomp, False)[15])
+    small = t._replace(minimized=t.minimized.at[1].set(1))
+    assert int(damage_table(tables, small, 0, stomp, False)[15]) > plain
+
+
+def test_dream_eater_needs_a_sleeper_and_payback_doubles_after_the_target(tables, names):
+    """B9-12: effect_script_0008.s fails on an awake defender (MOVE_STATUS_NO_MORE_WORK, :5);
+    BtlCmd_CalcPaybackPower doubles once the defender acted (battle_script.c:7198-7209)."""
+    n = names
+    s = make_state(tables, [_mon(n, "Drowzee", ["Dream Eater"], 30)], [_mon(n, "Geodude", ["Harden"], 30)])
+    awake = assert_matches_reference(tables, s, (0, 0), O)
+    assert int(awake.hp[1, 0]) == int(s.hp[1, 0])
+    asleep = s.with_status(1, 0, Status.SLEEP, 3)._replace(hp=s.hp.at[0, 0].set(1))
+    out = assert_matches_reference(tables, asleep, (0, 0), O)
+    dealt = int(s.hp[1, 0]) - int(out.hp[1, 0])
+    assert dealt > 0 and int(out.hp[0, 0]) == 1 + max(dealt // 2, 1)
+    slow = make_state(tables, [_mon(n, "Slowpoke", ["Payback"], 30)], [_mon(n, "Geodude", ["Harden"], 30)])
+    assert_matches_reference(tables, slow, (0, 0), O)

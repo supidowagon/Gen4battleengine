@@ -147,6 +147,8 @@ from nuzline.engine.hooks import (
     ABSORB,
     OHKO_BLOCKED,
     STATUS_CURE,
+    STATUS_HP,
+    TORMENT,
     WEATHER_HP,
     after_damage_items,
     held_item_check,
@@ -934,6 +936,11 @@ def _use_move(
     # Helping Hand (effect_script_0176.s:5, :15-17): BtlCmd_TryHelpingHand fails outside a double
     # battle (battle_script.c:6309-6311), so always in singles (B9-5).
     failed = failed | (effect_used == EffectId.HELPING_HAND)
+    # Dream Eater (effect_script_0008.s:5, :9-16): MOVE_STATUS_NO_MORE_WORK unless the defender
+    # is asleep (B9-12).
+    dream = (effect_used == EffectId.DRAIN) & (tables.move_param[used, 1] == 1)
+    awake = state.status[target_side, state.active[target_side]] != Status.SLEEP
+    failed = failed | (dream & awake)
     # Imprison (effect_script_0192.s): BtlCmd_TryImprison first sets MOVE_EFFECT_IMPRISONED on
     # the user's foes (battle_script.c:6686-6690: both enemy slots, which in singles name the
     # one foe battler, whatever its HP), then fails (:10) a user already imprisoning or sharing
@@ -1116,12 +1123,19 @@ def _use_move(
     chart = effectiveness(
         tables, move_type, state.types[target_side, target], identified(state, side, target_side)
     )
+    # Water Absorb (:3507-3512) is Dry Skin's test; Volt Absorb (:3500-3505) takes an Electric
+    # move whatever its power (Thunder Wave too), attacker != defender (B9-6).
+    seen = ignorable(state, side, target_side)
+    water = (
+        ((seen == AbilityId.DRY_SKIN) | (seen == AbilityId.WATER_ABSORB))
+        & (move_type == Type.WATER)
+        & (tables.move_power[used] != 0)
+    )
+    volt = (seen == AbilityId.VOLT_ABSORB) & (move_type == Type.ELECTRIC)
     absorbed = (
         connected
         & ~self_defender(tables, used, ghost_user(state, side))
-        & (ignorable(state, side, target_side) == AbilityId.DRY_SKIN)
-        & (move_type == Type.WATER)
-        & (tables.move_power[used] != 0)
+        & (water | volt)
         & (chart > 0)
     )
     target_hp = state.hp[target_side, target].astype(_I32)
@@ -2085,7 +2099,15 @@ def _status_damage(state: BattleState, side, status, damage) -> BattleState:
     # (CheckAbility); the toxic counter has already risen (bcp.c:1405-1415).
     guarded = state.ability[side, mon] == AbilityId.MAGIC_GUARD
     on = (state.status[side, mon] == status) & (state.hp[side, mon] > 0) & ~guarded
-    return _hp_change(state, side, mon, -jnp.where(on, damage, 0))
+    # subscript_poison_damage.s:4-12 (poison and toxic): a Poison Heal holder (CheckAbility)
+    # below full HP heals Divide(maxHP, 8) instead and tags its ability; at full HP nothing (B9-8).
+    poisoned = (status == Status.POISON) | (status == Status.TOXIC)
+    max_hp = state.max_hp[side, mon].astype(_I32)
+    healer = on & poisoned & (state.ability[side, mon] == AbilityId.POISON_HEAL)
+    heals = healer & (state.hp[side, mon].astype(_I32) != max_hp)
+    delta = jnp.where(heals, jnp.maximum(max_hp // 8, 1), jnp.where(on & ~healer, -damage, 0))
+    state = _hp_change(state, side, mon, delta)
+    return reveal_ability(state, side, mon, STATUS_HP, heals)
 
 
 def _eighth(state: BattleState, side) -> jnp.ndarray:
@@ -2149,6 +2171,35 @@ def _bind_check(tables: Tables, state: BattleState, side) -> BattleState:
         trapped=state.trapped.at[side].set(trapped),
         trap_move=state.trap_move.at[side].set(jnp.where(trapped > 0, state.trap_move[side], 0)),
     )
+
+
+def _bad_dreams_check(tables: Tables, state: BattleState, side) -> BattleState:
+    """``MON_COND_CHECK_STATE_BAD_DREAMS`` (bcp.c:1484-1500): an asleep battler with HP and no
+    Magic Guard (Battler_Ability) facing a living Bad Dreams holder of the other side
+    (COUNT_ALIVE_BATTLERS_THEIR_SIDE_FLAG, battle_lib.c:2915-2922) runs subscript_bad_dreams.s:
+    per holder Divide(maxHP, 8) through UPDATE_HP, stopping once it faints, each message tagging
+    the holder's ability (B9-8). A loop over the foe battlers (in singles the one)."""
+    mon = state.active[side]
+    max_hp = state.max_hp[side, mon].astype(_I32)
+    for foe in range(state.active.shape[0]):
+        holder = state.active[foe]
+        on = (
+            (jnp.asarray(side) != foe)
+            & (state.ability[foe, holder] == AbilityId.BAD_DREAMS)
+            & (state.hp[foe, holder] > 0)
+            & (state.status[side, mon] == Status.SLEEP)
+            & (state.ability[side, mon] != AbilityId.MAGIC_GUARD)
+            & (state.hp[side, mon] > 0)
+        )
+        state = _hp_change(state, side, mon, -jnp.where(on, jnp.maximum(max_hp // 8, 1), 0))
+        state = reveal_ability(state, foe, holder, TORMENT, on)
+    return state
+
+
+def _bind_then_bad_dreams(tables: Tables, state: BattleState, side) -> BattleState:
+    """``MON_COND_CHECK_STATE_BIND`` then ``_BAD_DREAMS`` (bcp.c:1462, :1484): one faint check, as a
+    battler the bind fainted has no HP for Bad Dreams."""
+    return _bad_dreams_check(tables, _bind_check(tables, state, side), side)
 
 
 def _disable_check(tables: Tables, state: BattleState, side) -> BattleState:
@@ -2361,8 +2412,9 @@ END_OF_TURN_ORDER = (
     # MON_COND_CHECK_STATE_BURN, battle_controller_player.c:1425, then _CURSE, :1451
     # (``_burn_then_curse``)
     ("burn_curse", _burn_then_curse),
-    # MON_COND_CHECK_STATE_BIND, battle_controller_player.c:1462
-    ("bind", _bind_check),
+    # MON_COND_CHECK_STATE_BIND, battle_controller_player.c:1462, then _BAD_DREAMS, :1484
+    # (``_bind_then_bad_dreams``)
+    ("bind", _bind_then_bad_dreams),
     # MON_COND_CHECK_STATE_UPROAR, battle_controller_player.c:1505, then
     # MON_COND_CHECK_STATE_DISABLE, :1565, then _LOCK_ON, :1618 (``_uproar_then_disable``; the
     # only check that reads the turn's moveFailFlags)
@@ -2444,14 +2496,16 @@ def _weather_effect(state: BattleState, side, ability) -> BattleState:
         (own == AbilityId.DRY_SKIN) | (own == AbilityId.SOLAR_POWER)
     )
     rain = (state.weather == Weather.RAIN) & (own == AbilityId.DRY_SKIN) & (hp < max_hp)
+    # battle_script.c:5614-5618 Rain Dish: Divide(maxHP, 16) below full HP in rain (B9-6).
+    rain_dish = (state.weather == Weather.RAIN) & (own == AbilityId.RAIN_DISH) & (hp < max_hp)
     magic_guard = ab == WEATHER_ABILITY_IDS["Magic Guard"]
     chip = (sand | hail_chip) & ~magic_guard
     sun_chip = sun & ~magic_guard
-    heal = ice_body & (hp < max_hp)
+    heal = (ice_body | rain_dish) & (hp < max_hp)
     delta = jnp.where(chip, -sixteenth, jnp.where(heal, sixteenth, 0))
     delta = jnp.where(sun_chip, -eighth, jnp.where(rain, eighth, delta))
     alive = hp > 0
-    state = reveal_ability(state, side, mon, WEATHER_HP, alive & (sun_chip | rain))
+    state = reveal_ability(state, side, mon, WEATHER_HP, alive & (sun_chip | rain | rain_dish))
     return _hp_change(state, side, mon, jnp.where(alive, delta, 0))
 
 

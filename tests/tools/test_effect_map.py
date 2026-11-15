@@ -58,10 +58,17 @@ def test_stat_effects_match_decomp_scripts():
         r"BTLVAR_SIDE_EFFECT_FLAGS_(DIRECT|INDIRECT),.*MOVE_SIDE_EFFECT_(TO_ATTACKER|TO_DEFENDER)"
         r"\|MOVE_SUBSCRIPT_PTR_([A-Z_]+?)_(UP|DOWN)_([12])_STAGES?\b"
     )
-    for effect, (eid, (stat, stages, _)) in DECOMP_EFFECT_TO_ID.items():
+    for effect, (eid, (stat, stages, p2)) in DECOMP_EFFECT_TO_ID.items():
         if eid not in STAT_EFFECTS:
             continue
         name = DECOMP_EFFECT_NAMES[effect]
+        if name == "BATTLE_EFFECT_EVA_UP_2_MINIMIZE":
+            # B9-10: the direct TO_ATTACKER subscript_minimize.s sets the flag, then Evasion +1.
+            assert "TO_ATTACKER|MOVE_SUBSCRIPT_PTR_MINIMIZE" in _script(effect)
+            sub = DECOMP / "res/battle/scripts/subscripts/subscript_minimize.s"
+            assert "MOVE_SUBSCRIPT_PTR_EVASION_UP_1_STAGE" in sub.read_text(encoding="utf-8")
+            assert (stat, stages, p2) == (Stat.EVA, 1, 2)
+            continue
         m = pattern.search(_script(effect))
         assert m, name
         kind, who, sub_stat, direction, n = m.groups()

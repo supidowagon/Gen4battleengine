@@ -54,6 +54,7 @@ from nuzline.engine.ids import (
     POWER_IF_TARGET_PARALYZED,
     POWER_IF_USER_STATUSED,
     SPECIES_CLAMPERL,
+    STOMP_PARAM,
     SPECIES_CUBONE,
     SPECIES_DIALGA,
     SPECIES_DITTO,
@@ -348,6 +349,11 @@ def script_power_mul(
     reckless = state.ability[atk_side, state.active[atk_side]] == AbilityId.RECKLESS
     recoil = tables.move_effect[_i32(move)] == EffectId.RECOIL
     doubled = double_power(tables, state, atk_side, def_side, move)
+    # Stomp (effect_script_0150.s:6-8): powerMul 10, or 20 against MOVE_EFFECT_MINIMIZE (B9-10).
+    stomp = (tables.move_effect[_i32(move)] == EffectId.FLINCH) & (
+        _i32(tables.move_param[_i32(move), 2]) == STOMP_PARAM
+    )
+    doubled = doubled | (stomp & (state.minimized[def_side] != 0))
     out = jnp.where(reckless & recoil, RECKLESS_POWER_MUL, _i32(power_mul))
     return jnp.where(doubled, DOUBLE_POWER_MUL, out)
 
@@ -455,6 +461,9 @@ def fixed_damage(
     is_ohko = effect == EffectId.OHKO
     sturdy = ignorable(state, atk_side, def_side) == AbilityId.STURDY
     ohko = jnp.where(sturdy, 0, _i32(state.max_hp[def_side, target]))
+    # Dragon Rage / SonicBoom (effect_script_0041.s, _0130.s): the amount in param 0 (B9-9).
+    flat = _i32(tables.move_param[_i32(move), 0])
+    level = jnp.where(is_level & (flat > 0), flat, level)
     amount = jnp.where(is_ohko, ohko, jnp.where(is_halve, halved, level))
     # Future Sight / Doom Desire (effect_script_0148.s): no CalcDamage at the use, so no damage;
     # the stored hit is step._future_sight's.

@@ -87,6 +87,7 @@ FLINCH_BLOCKED = "flinch_blocked"
 CONTACT_DAMAGE, PARALYSIS_BLOCKED = "contact_damage", "paralysis_blocked"
 WEATHER_SET, ABSORB, WEATHER_HP = "weather_set", "absorb", "weather_hp"
 OHKO_BLOCKED = "ohko_blocked"
+STATUS_HP, TORMENT = "status_hp", "torment"
 # Ability -> the phases at which it shows a message tagging it, for the implemented
 # abilities that ever do:
 # * Mold Breaker: SWITCH_IN_CHECK_STATE_MOLD_BREAKER (battle_lib.c:4075), a living
@@ -155,6 +156,15 @@ REVEALS_ON: dict[int, frozenset[str]] = {
     AbilityId.SNOW_WARNING: frozenset({WEATHER_SET}),
     AbilityId.DRY_SKIN: frozenset({ABSORB, WEATHER_HP}),
     AbilityId.SOLAR_POWER: frozenset({WEATHER_HP}),
+    # B9-6: subscript_ability_restores_hp.s and subscript_weather_continues.s:_076, as Dry Skin's.
+    AbilityId.VOLT_ABSORB: frozenset({ABSORB}),
+    AbilityId.WATER_ABSORB: frozenset({ABSORB}),
+    AbilityId.RAIN_DISH: frozenset({WEATHER_HP}),
+    AbilityId.AFTERMATH: frozenset({CONTACT_DAMAGE}),
+    # subscript_poison_damage.s:10 (TAG_NICKNAME_ABILITY, the holder); subscript_bad_dreams.s:6
+    # (TAG_NICKNAME_ABILITY_NICKNAME: BTLSCR_MSG_ATTACKER, the holder).
+    AbilityId.POISON_HEAL: frozenset({STATUS_HP}),
+    AbilityId.BAD_DREAMS: frozenset({TORMENT}),
     AbilityId.STURDY: frozenset({OHKO_BLOCKED}),
 }
 
@@ -475,11 +485,18 @@ def intimidate(state: BattleState, side, cond=True, foe=None) -> BattleState:
     opponent's active was down (its Intimidate is still unannounced, battle_lib.c:3795)."""
     foe = 1 - side if foe is None else foe
     mon, target = state.active[side], state.active[foe]
+    # BtlCmd_ChangeStatStage (battle_script.c:2884-2902): the foe's Clear Body or Hyper Cutter
+    # (Battler_IgnorableAbility with the Intimidate holder as attacker, never Mold Breaker)
+    # blocks the drop; its "suppressed" message is built in C (no AI reveal), B9-6.
+    blocks = (state.ability[foe, target] == AbilityId.CLEAR_BODY) | (
+        state.ability[foe, target] == AbilityId.HYPER_CUTTER
+    )
     on = (
         jnp.asarray(cond)
         & (state.ability[side, mon] == AbilityId.INTIMIDATE)
         & (state.hp[side, mon] > 0)
         & (state.hp[foe, target] > 0)
+        & ~blocks
     )
     return change_stage(state, foe, Stat.ATK, -1, on)
 

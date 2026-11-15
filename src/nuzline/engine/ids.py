@@ -25,7 +25,9 @@ class EffectId(IntEnum):
       level; ``HIDDEN_POWER`` and ``MAGNITUDE`` take their type and power from the
       battler and ``Outcome.magnitude`` (``engine/damage.py``).
     * ``SECONDARY_CONFUSE`` (Confusion, Psybeam, ...): zeros; confuses the target at the
-      move's effect chance. ``MUD_SPORT``: zeros. ``EAT_BERRY`` (Bug Bite, Pluck): zeros;
+      move's effect chance. ``MUD_SPORT``: zeros.
+    * ``LEVEL_DAMAGE``: ``(amount, 0, 0)``: the amount (Dragon Rage 40, SonicBoom 20), 0 for the
+      user's level (Night Shade, Seismic Toss). ``EAT_BERRY`` (Bug Bite, Pluck): zeros;
       the user eats the target's Oran or Sitrus Berry (``hooks.pluck_berry``).
     ``AQUA_RING``: zeros; sets the user's ``aqua_ring`` (fails if set), healed at turn end
     (``step._aqua_ring_check``).
@@ -258,6 +260,9 @@ class EffectId(IntEnum):
     # to MOVE_STATUS_FAILED (:6309-6311, effect_script_0176.s:15-17).
     FOLLOW_ME = 77
     HELPING_HAND = 78
+    # Belly Drum (subscript_belly_drum.s, B9-10): fails at Attack +6 or curHP <= Divide(maxHP, 2)
+    # (:3-6, MOVE_STATUS_FAILED); else Attack +6 and Divide(maxHP, 2) lost through UPDATE_HP.
+    BELLY_DRUM = 79
 
 
 # ``EffectId.COUNTER``'s source (``move_param[m, 0]``).
@@ -267,6 +272,12 @@ COUNTER_PHYSICAL, COUNTER_SPECIAL, COUNTER_ANY = 1, 2, 3
 # script fails unless its user is asleep (:5, :15-17), and a sleeping user uses it
 # (bcp.c:2455: ``moveCur == MOVE_SNORE``).
 SNORE_PARAM = 1
+# Stomp (effect_script_0150.s) is ``FLINCH`` with ``move_param[m, 2] == STOMP_PARAM``: powerMul 20
+# against a defender with MOVE_EFFECT_MINIMIZE (:6-8). Minimize (subscript_minimize.s) is
+# ``STAT_SELF`` (Evasion +1) with ``move_param[m, 2] == MINIMIZE_PARAM``: it sets the user's
+# ``minimized`` first (:5). E2 batch 9, B9-10.
+STOMP_PARAM = 2
+MINIMIZE_PARAM = 2
 # subscript_tailwind_start.s:11 sets both SIDE_CONDITION_TAILWIND bits: a 2-bit counter at 3.
 TAILWIND_TURNS = 3
 SPIKES_MAX = 3  # battle_script.c:5394
@@ -276,6 +287,9 @@ TOXIC_SPIKES_MAX = 2  # battle_script.c:7598
 POWER_IF_TARGET_PARALYZED = 1  # effect_script_0171.s:6 (SmellingSalt)
 POWER_IF_USER_STATUSED = 2  # effect_script_0169.s:5 (Facade, MON_CONDITION_FACADE_BOOST)
 POWER_IF_TARGET_HALF_HP = 3  # effect_script_0221.s:5-8 (Brine)
+# BtlCmd_CalcPaybackPower (battle_script.c:7198-7209, Payback): x2 once the defender has acted
+# this turn (``target_moved`` in effects.play_hit), B9-12.
+POWER_IF_TARGET_MOVED = 4
 
 
 # Effects whose script runs no CalcCrit / CalcDamage: no crit and no damage roll is read
@@ -383,6 +397,26 @@ class AbilityId(IntEnum):
     SWARM = 63
     UNBURDEN = 64
     FLOWER_GIFT = 65
+    # B9-6: Volt Absorb / Water Absorb (BattleSystem_TriggerImmunityAbility, battle_lib.c:
+    # 3500-3512; step._use_move beside Dry Skin), Rain Dish (BtlCmd_EndOfTurnWeatherEffect,
+    # battle_script.c:5614-5618; step._weather_effect), Clear Body / Hyper Cutter
+    # (BtlCmd_ChangeStatStage, :2884-2902; effects._foe_stage, hooks.intimidate).
+    VOLT_ABSORB = 66
+    WATER_ABSORB = 67
+    RAIN_DISH = 68
+    CLEAR_BODY = 69
+    HYPER_CUTTER = 70
+    # B9-7: Aftermath (BattleSystem_TriggerAbilityOnHit, battle_lib.c:4358-4371;
+    # effects._contact_ability).
+    AFTERMATH = 71
+    # B9-8: Poison Heal (subscript_poison_damage.s:4-12; step._status_damage) and Bad Dreams
+    # (MON_COND_CHECK_STATE_BAD_DREAMS, bcp.c:1484-1500; step._bad_dreams_check).
+    POISON_HEAL = 72
+    BAD_DREAMS = 73
+    # B9-11: the trapping abilities (Battler_IsTrapped, battle_lib.c:5514-5536; actions.trapped).
+    ARENA_TRAP = 74
+    SHADOW_TAG = 75
+    MAGNET_PULL = 76
 
 
 # The decomp ability id of every supported ``AbilityId`` (generated/abilities.txt line N is id
@@ -456,6 +490,17 @@ ABILITY_DECOMP_IDS = {
     AbilityId.SWARM: 68,
     AbilityId.UNBURDEN: 84,
     AbilityId.FLOWER_GIFT: 122,
+    AbilityId.VOLT_ABSORB: 10,
+    AbilityId.WATER_ABSORB: 11,
+    AbilityId.RAIN_DISH: 44,
+    AbilityId.CLEAR_BODY: 29,
+    AbilityId.HYPER_CUTTER: 52,
+    AbilityId.AFTERMATH: 106,
+    AbilityId.POISON_HEAL: 90,
+    AbilityId.BAD_DREAMS: 123,
+    AbilityId.ARENA_TRAP: 71,
+    AbilityId.SHADOW_TAG: 23,
+    AbilityId.MAGNET_PULL: 42,
 }
 
 # ChooseTraceTarget (battle_lib.c:7750-7775) never picks a battler whose ``BattleMon.ability``

@@ -106,6 +106,9 @@ Encodings:
   whole MoveEffectsData after it, :2097-2101, Baton Pass included), where the switch-in check
   sets it for the Unburden holders it can concern. Nothing clears it but a switch (a volatile).
   ``order.effective_speed`` doubles an Unburden holder with it and no item (:1268-1272).
+* ``minimized`` is the active battler's ``MOVE_EFFECT_MINIMIZE`` (moves.h:16; E2 batch 9): set by
+  Minimize (subscript_minimize.s:5), read by Stomp (effect_script_0150.s:7); a volatile Baton Pass
+  does not keep (moves.h:46-48).
 * ``trainer_item_count`` is ``aiContext.trainerItemCounts``: the bag's size at battle
   start, never decremented.
 * ``terrain`` is ``BattleSystem.terrain``: the battle terrain, a decomp ``TERRAIN_*`` id
@@ -239,6 +242,7 @@ class BattleState(NamedTuple):
     imprisoned: jnp.ndarray  # int8, MOVE_EFFECT_IMPRISONED (a foe of an Imprison user)
     roosting: jnp.ndarray  # int8, turnFlags.roosting, kept only while it can be read
     can_unburden: jnp.ndarray  # int8, MoveEffectsData.canUnburden
+    minimized: jnp.ndarray  # int8, MOVE_EFFECT_MINIMIZE in moveEffectsMask
     # per side [2]
     spikes: jnp.ndarray  # int8, layers
     toxic_spikes: jnp.ndarray  # int8, layers
@@ -412,6 +416,7 @@ VOLATILE_FIELDS = (
     "yawn",
     "curse",
     "can_unburden",
+    "minimized",
 )
 # Baton Pass keeps these of ``VOLATILE_FIELDS`` (and the stat stages): BattleSystem_UpdateAfterSwitch
 # keeps statusVolatile & VOLATILE_CONDITION_BATON_PASSED (battle_lib.c:2078; condition.h:72-76:
@@ -503,6 +508,7 @@ LAYOUT: dict[str, tuple[tuple[int, ...], type]] = {
     "imprisoned": (_SIDE, np.int8),
     "roosting": (_SIDE, np.int8),
     "can_unburden": (_SIDE, np.int8),
+    "minimized": (_SIDE, np.int8),
     "spikes": (_SIDE, np.int8),
     "toxic_spikes": (_SIDE, np.int8),
     "stealth_rock": (_SIDE, np.int8),

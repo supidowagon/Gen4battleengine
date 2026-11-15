@@ -781,6 +781,17 @@ BATCH9_ABILITIES = (
     AbilityId.SWARM,
     AbilityId.UNBURDEN,
     AbilityId.FLOWER_GIFT,
+    AbilityId.VOLT_ABSORB,
+    AbilityId.WATER_ABSORB,
+    AbilityId.RAIN_DISH,
+    AbilityId.CLEAR_BODY,
+    AbilityId.HYPER_CUTTER,
+    AbilityId.AFTERMATH,
+    AbilityId.POISON_HEAL,
+    AbilityId.BAD_DREAMS,
+    AbilityId.ARENA_TRAP,
+    AbilityId.SHADOW_TAG,
+    AbilityId.MAGNET_PULL,
 )
 
 
@@ -809,11 +820,20 @@ def _draw_batch9(draw, tables: Tables, a: dict, side: int, active: int, names: N
                     "Surf",
                     "Follow Me",
                     "Helping Hand",
+                    "Dragon Rage",
+                    "SonicBoom",
+                    "Minimize",
+                    "Stomp",
+                    "Belly Drum",
+                    "Bulk Up",
+                    "Dream Eater",
+                    "Payback",
                 )
             )
         )
         if rnd.random() < 0.5:
             a["weather"][...] = rnd.choice((Weather.RAIN, Weather.SUN, Weather.HAIL))
+    a["minimized"][side] = draw(st.sampled_from([0, 0, 1]))
     if not draw(st.booleans()):
         return
     ability = rnd.choice(BATCH9_ABILITIES)
@@ -828,6 +848,33 @@ def _draw_batch9(draw, tables: Tables, a: dict, side: int, active: int, names: N
         a["hp"][side, active] = max(1, int(a["max_hp"][side, active]) // 3)
     if ability in (AbilityId.HUGE_POWER, AbilityId.PURE_POWER):
         give("Tackle")
+    foe = 1 - side
+    foe_mon = int(a["active"][foe])
+
+    def give_foe(move_name: str) -> None:
+        move = names.move(move_name)
+        k = rnd.randint(0, 3)
+        a["moves"][foe, foe_mon, k] = move
+        a["pp"][foe, foe_mon, k] = int(tables.move_pp[move])
+
+    if ability == AbilityId.VOLT_ABSORB:
+        give_foe(rnd.choice(("ThunderShock", "Thunder Wave", "Thunder Fang")))
+    if ability == AbilityId.WATER_ABSORB:
+        give_foe(rnd.choice(("Water Gun", "Surf")))
+    if ability == AbilityId.RAIN_DISH:
+        a["weather"][...] = Weather.RAIN
+        a["hp"][side, active] = max(1, int(a["max_hp"][side, active]) // 2)
+    if ability == AbilityId.POISON_HEAL:
+        a["status"][side, active] = rnd.choice((Status.POISON, Status.TOXIC))
+        a["status_counter"][side, active] = 0
+    if ability == AbilityId.BAD_DREAMS:
+        a["status"][foe, foe_mon] = Status.SLEEP
+        a["status_counter"][foe, foe_mon] = rnd.randint(2, 5)
+    if ability == AbilityId.AFTERMATH:  # a contact hit that can KO it
+        give_foe(rnd.choice(("Tackle", "Scratch", "Headbutt")))
+        a["hp"][side, active] = rnd.randint(1, 3)
+    if ability in (AbilityId.CLEAR_BODY, AbilityId.HYPER_CUTTER):
+        give_foe(rnd.choice(("Growl", "Leer", "Sand-Attack", "Aurora Beam")))
     if ability == AbilityId.UNBURDEN:
         if rnd.random() < 0.5:
             a["item"][side, active] = 0

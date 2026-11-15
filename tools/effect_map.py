@@ -51,13 +51,16 @@ from nuzline.engine.ids import (
     COUNTER_ANY,
     COUNTER_PHYSICAL,
     COUNTER_SPECIAL,
+    MINIMIZE_PARAM,
     POWER_IF_TARGET_HALF_HP,
+    POWER_IF_TARGET_MOVED,
     POWER_IF_TARGET_PARALYZED,
     POWER_IF_USER_STATUSED,
     RESIST_ANY_NORMAL,
     SNORE_PARAM,
     SPECIES_CHANSEY,
     SPECIES_FARFETCHD,
+    STOMP_PARAM,
     AbilityId,
     EffectId,
     ItemId,
@@ -80,6 +83,19 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     2: ("BATTLE_EFFECT_POISON_HIT", _E.SECONDARY_STATUS, (Status.POISON, 0, 0)),
     # subscript_drain_half_damage_dealt: damage / 2 == damage * 50 // 100
     3: ("BATTLE_EFFECT_RECOVER_HALF_DAMAGE_DEALT", _E.DRAIN, (50, 0, 0)),
+    # Dream Eater (E2 batch 9, B9-12): effect_script_0008.s ends with MOVE_STATUS_NO_MORE_WORK
+    # ("wasn't affected", :9-16) unless the defender is asleep (:5; its substitute test, :4, is an
+    # unsupported move's), else an ON_HIT subscript_dream_eater.s: Divide(hitDamage, 2), then Big
+    # Root (Heal Block, :3, is unsupported): DRAIN 50 with move_param[m, 1] = 1.
+    8: ("BATTLE_EFFECT_RECOVER_DAMAGE_SLEEP", _E.DRAIN, (50, 1, 0)),
+    # Payback, Kaizo's Revenge (B9-12): effect_script_0230.s, BtlCmd_CalcPaybackPower
+    # (battle_script.c:7198-7209): movePower x2 once the defender's action is over
+    # (Battler_MovedThisTurn's test, battle_lib.c:5365-5368).
+    230: (
+        "BATTLE_EFFECT_DOUBLE_POWER_IF_MOVING_SECOND",
+        _E.DOUBLE_POWER,
+        (POWER_IF_TARGET_MOVED, 0, 0),
+    ),
     4: ("BATTLE_EFFECT_BURN_HIT", _E.SECONDARY_STATUS, (Status.BURN, 0, 0)),
     5: ("BATTLE_EFFECT_FREEZE_HIT", _E.SECONDARY_STATUS, (Status.FREEZE, 0, 0)),
     6: ("BATTLE_EFFECT_PARALYZE_HIT", _E.SECONDARY_STATUS, (Status.PARALYSIS, 0, 0)),
@@ -186,6 +202,13 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     113: ("BATTLE_EFFECT_FORESIGHT", _E.FORESIGHT, (0, 0, 0)),
     # Night Shade, Seismic Toss: effect_script_0087.s, damage = the attacker's level.
     87: ("BATTLE_EFFECT_LEVEL_DAMAGE_FLAT", _E.LEVEL_DAMAGE, (0, 0, 0)),
+    # Dragon Rage, SonicBoom (E2 batch 9, B9-9): effect_script_0041.s / _0130.s set
+    # SYSCTL_IGNORE_TYPE_CHECKS and BTLVAR_DAMAGE -40 / -20: Night Shade's family with the
+    # amount in param 0 (their BTLVAR_REGULATION_FLAG failure reads battleSys->rulesetMask,
+    # battle_script.c:9647-9648, which only a regulated battle sets, field_battle_data_transfer.c:
+    # 110, :376-379).
+    41: ("BATTLE_EFFECT_40_DAMAGE_FLAT", _E.LEVEL_DAMAGE, (40, 0, 0)),
+    130: ("BATTLE_EFFECT_20_DAMAGE_FLAT", _E.LEVEL_DAMAGE, (20, 0, 0)),
     # Hidden Power: effect_script_0135.s CalcHiddenPowerParams (type and power from IVs).
     135: ("BATTLE_EFFECT_RANDOM_POWER_BASED_ON_IVS", _E.HIDDEN_POWER, (0, 0, 0)),
     # Magnitude: the decomp's name is PSYWAVE but effect_script_0126.s is Magnitude's.
@@ -316,7 +339,18 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     89: ("BATTLE_EFFECT_COUNTER", _E.COUNTER, (COUNTER_PHYSICAL, 20, 0)),
     144: ("BATTLE_EFFECT_MIRROR_COAT", _E.COUNTER, (COUNTER_SPECIAL, 20, 0)),
     227: ("BATTLE_EFFECT_METAL_BURST", _E.COUNTER, (COUNTER_ANY, 15, 0)),
-    212: ("BATTLE_EFFECT_ATK_SPD_UP", _E.DRAGON_DANCE, (0, 0, 0)),
+    # Dragon Dance / Bulk Up (E2 batch 9, B9-10): subscript_user_atk_and_speed_up_1_stage.s and
+    # subscript_user_atk_and_def_up_1_stage.s differ only in the second stat (:4, :12).
+    212: ("BATTLE_EFFECT_ATK_SPD_UP", _E.DRAGON_DANCE, (_SPE, 0, 0)),
+    208: ("BATTLE_EFFECT_ATK_DEF_UP", _E.DRAGON_DANCE, (_DEF, 0, 0)),
+    # Belly Drum: effect_script_0142.s, a direct ON_HIT subscript_belly_drum.s (B9-10).
+    142: ("BATTLE_EFFECT_MAX_ATK_LOSE_HALF_MAX_HP", _E.BELLY_DRUM, (0, 0, 0)),
+    # Minimize: effect_script_0108.s, a direct TO_ATTACKER subscript_minimize.s: the user's
+    # MOVE_EFFECT_MINIMIZE, then Evasion +1 (STAT_SELF with move_param[m, 2] = MINIMIZE_PARAM).
+    108: ("BATTLE_EFFECT_EVA_UP_2_MINIMIZE", _E.STAT_SELF, (_EVA, 1, MINIMIZE_PARAM)),
+    # Stomp: effect_script_0150.s: a flinch at the move's chance, powerMul 20 against a minimized
+    # defender (FLINCH with move_param[m, 2] = STOMP_PARAM).
+    150: ("BATTLE_EFFECT_FLINCH_MINIMIZE_DOUBLE_HIT", _E.FLINCH, (0, 0, STOMP_PARAM)),
     # E2 batch 5. Uproar: effect_script_0159.s, a hit plus, for a user not in an uproar, an ON_HIT
     # indirect subscript_uproar.s (engine/effects.py ``_uproar``, engine/step.py).
     159: ("BATTLE_EFFECT_UPROAR", _E.UPROAR, (0, 0, 0)),
@@ -487,6 +521,17 @@ DECOMP_ABILITY_TO_ID: dict[str, AbilityId] = {
     "Swarm": AbilityId.SWARM,
     "Unburden": AbilityId.UNBURDEN,
     "Flower Gift": AbilityId.FLOWER_GIFT,
+    "Volt Absorb": AbilityId.VOLT_ABSORB,
+    "Water Absorb": AbilityId.WATER_ABSORB,
+    "Rain Dish": AbilityId.RAIN_DISH,
+    "Clear Body": AbilityId.CLEAR_BODY,
+    "Hyper Cutter": AbilityId.HYPER_CUTTER,
+    "Aftermath": AbilityId.AFTERMATH,
+    "Poison Heal": AbilityId.POISON_HEAL,
+    "Bad Dreams": AbilityId.BAD_DREAMS,
+    "Arena Trap": AbilityId.ARENA_TRAP,
+    "Shadow Tag": AbilityId.SHADOW_TAG,
+    "Magnet Pull": AbilityId.MAGNET_PULL,
 }
 
 DECOMP_ITEM_TO_ID: dict[str, ItemId] = {
