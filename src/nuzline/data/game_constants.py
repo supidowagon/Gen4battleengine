@@ -133,6 +133,13 @@ _AI_MOVE_IDS = {
     "Whirlwind": 18,
     "Gyro Ball": 360,
     "Trick Room": 433,
+    # Expert_Counter / _MirrorCoat (:3125, :3882), Expert_Hail (:4105), Expert_Protect
+    # (:3536-3537).
+    "Counter": 68,
+    "Mirror Coat": 243,
+    "Blizzard": 59,
+    "Feint": 364,
+    "Shadow Force": 467,
     **{k: v for k, v in _SOUND_MOVES.items() if k != "Roar"},
 }
 # ai/commands.py CALC_DAMAGE_MOVES: TrainerAI_CalcDamage's id cases (trainer_ai.c:2885-3056;
@@ -229,6 +236,9 @@ CONSTANTS: tuple[Constant, ...] = (
             "Hyper Cutter": 52,
             "Speed Boost": 3,
             "No Guard": 99,
+            "Swift Swim": 33,
+            "Rain Dish": 44,
+            "Ice Body": 115,
         },
     ),
     *_table(
@@ -263,6 +273,14 @@ CONSTANTS: tuple[Constant, ...] = (
                 "Water",
                 "Electric",
                 "Psychic",
+                "Normal",
+                "Fighting",
+                "Flying",
+                "Rock",
+                "Bug",
+                "Ice",
+                "Dragon",
+                "Dark",
             )
         },
     ),

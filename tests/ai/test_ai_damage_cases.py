@@ -57,7 +57,7 @@ def test_weight_power(kaizo_tables, kaizo_names, kaizo_roark_party, player, powe
         assert int(damage.ai_case_power(t, s, 1, n.move_names.index(move))) == power, (move, weight)
 
 
-@pytest.mark.parametrize("move", ["Seismic Toss", "Night Shade", "Dragon Rage", "Sonic Boom"])
+@pytest.mark.parametrize("move", ["Seismic Toss", "Night Shade", "Dragon Rage", "SonicBoom"])
 def test_fixed_damage(kaizo_tables, kaizo_names, kaizo_roark_party, move):
     """The fixed cases skip CalcMoveDamage and take the variance after the chart
     (trainer_ai.c:3081-3109): BattleSystem_Divide(fixed * (85 + roll), 100); a chart immunity
@@ -66,7 +66,7 @@ def test_fixed_damage(kaizo_tables, kaizo_names, kaizo_roark_party, move):
     s = _state(t, kaizo_roark_party, BONSLY, _ids(n, move, "", "", ""))
     m = n.move_names.index(move)
     level = int(s.level[1, 0])
-    fixed = {"Dragon Rage": 40, "Sonic Boom": 20}.get(move, level)
+    fixed = {"Dragon Rage": 40, "SonicBoom": 20}.get(move, level)
     for roll in (0, 7, 15):
         expect = max(fixed * (85 + roll) // 100, 1)
         assert int(damage.ai_damage_for_roll(t, s, 1, m, roll)) == expect, roll

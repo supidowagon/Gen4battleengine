@@ -1357,6 +1357,10 @@ def _expert_plus(value: int):
     return label
 
 
+_expert_nightmare = _expert_plus(2)  # Expert_Nightmare (script.s:3314-3316)
+_expert_fake_out = _expert_plus(2)  # Expert_FakeOut (script.s:4074-4076)
+
+
 def _expert_sleep_talk(ctx: AiContext, mask) -> AiContext:
     """``Expert_SleepTalk`` (script.s:3327-3333): asleep +10, else -5."""
     ctx, t = _split(c.if_status(_at(ctx, mask), _A, c.MonCondition.SLEEP))
@@ -1864,7 +1868,7 @@ _EXPERT_LABELS = (
     (BattleEffect.LOWER_SPEED_HIT, _expert_speed_down_on_hit),  # :1681
     (BattleEffect.STATUS_LEECH_SEED, _expert_toxic_leech_seed),  # :1686
     (BattleEffect.COUNTER, _expert_counter),  # :1688
-    (BattleEffect.DAMAGE_WHILE_ASLEEP, _expert_plus(2)),  # :1691 Expert_Nightmare
+    (BattleEffect.DAMAGE_WHILE_ASLEEP, _expert_nightmare),  # :1691
     (BattleEffect.USE_RANDOM_LEARNED_MOVE_SLEEP, _expert_sleep_talk),  # :1693
     (BattleEffect.KO_MON_THAT_DEFEATED_USER, _expert_destiny_bond),  # :1694
     (BattleEffect.INCREASE_POWER_WITH_LESS_HP, _expert_reversal),  # :1695
@@ -1874,7 +1878,7 @@ _EXPERT_LABELS = (
     (BattleEffect.HIT_BEFORE_SWITCH, _expert_pursuit),  # :1706
     (BattleEffect.WEATHER_RAIN, _expert_rain_dance),  # :1710
     (BattleEffect.MIRROR_COAT, _expert_mirror_coat),  # :1714
-    (BattleEffect.ALWAYS_FLINCH_FIRST_TURN_ONLY, _expert_plus(2)),  # :1723 Expert_FakeOut
+    (BattleEffect.ALWAYS_FLINCH_FIRST_TURN_ONLY, _expert_fake_out),  # :1723
     (BattleEffect.WEATHER_HAIL, _expert_hail),  # :1726
     (BattleEffect.DOUBLE_POWER_WHEN_STATUSED, _expert_facade),  # :1729
     (BattleEffect.DOUBLE_POWER_AND_CURE_PARALYSIS, _expert_smelling_salts),  # :1731
