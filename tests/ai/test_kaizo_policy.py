@@ -3164,7 +3164,8 @@ def test_batch16_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party
         ("long", (2603,), 0, 2),
         ("spikes", (), 0, 2),  # Spikes on the player's side: the second try only
         ("spikes", (2607,), 0, 0),
-        ("boosted", (), 0, 2),  # the player's Attack above +2 (decomp 8)
+        ("boosted", (), 0, 2),  # the player's Attack at +3 (decomp 9), above decomp 8
+        ("toxic spikes", (), 0, 2),  # Toxic Spikes on the player's side (:2593)
         ("alone", (), -10, -3),  # no other living Pokemon on the player's side
     ],
 )
@@ -3175,6 +3176,8 @@ def test_force_switch(kaizo_tables, kaizo_names, kaizo_roark_party, case, jumps,
         s = _turn(s, 5)
     elif case == "spikes":
         s = s._replace(spikes=s.spikes.at[0].set(1))
+    elif case == "toxic spikes":
+        s = s._replace(toxic_spikes=s.toxic_spikes.at[0].set(1))
     elif case == "boosted":
         s = s._replace(stages=s.stages.at[0, Stat.ATK].set(3))
     elif case == "alone":
@@ -3195,16 +3198,30 @@ def test_force_switch(kaizo_tables, kaizo_names, kaizo_roark_party, case, jumps,
         (60, "faster", "", (), 0, -2),  # above 50 %: two (:3006, :3010)
         (40, "faster", "", (), 0, -3),  # three (:3002, :3006, :3010)
         (20, "faster", "", (), -10, -3),  # below 26 %: Basic -10
+        # the last-move table (:3017-3039)
+        (100, "faster", "Confuse Ray", (), 0, 1),  # a confusing move, the player unconfused
+        (100, "faster", "Confuse Ray confused", (), 0, 0),
+        (100, "faster", "Leech Seed", (), 0, 1),  # unseeded: falls into TryScorePlus1
+        (100, "faster", "Leech Seed seeded", (), 0, 0),
+        # knowing Focus Punch (:2994-2996): +1 unless the 96 roll (:2995) jumps
+        (100, "faster", "focus punch", (), 0, 1),
+        (100, "faster", "focus punch", (2995,), 0, 0),
     ],
 )
 def test_substitute(
     kaizo_tables, kaizo_names, kaizo_roark_party, own, speed, last, jumps, basic, expert
 ):
     t, n = kaizo_tables, kaizo_names
-    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Substitute", "Accelerock", "", ""))
+    second = "Focus Punch" if last == "focus punch" else ""
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Substitute", "Accelerock", second, ""))
     s = _hp(_speeds(s, player=1 if speed == "faster" else 500, opp=100), 1, own)
-    if last:
-        s = s._replace(last_move=s.last_move.at[0].set(n.move_names.index(last)))
+    if last.endswith("confused"):
+        s = s._replace(confusion=s.confusion.at[0].set(2))
+    if last.endswith("seeded"):
+        s = s._replace(leech_seed=s.leech_seed.at[0].set(1))
+    move = last.removesuffix(" confused").removesuffix(" seeded")
+    if move and move != "focus punch":
+        s = s._replace(last_move=s.last_move.at[0].set(n.move_names.index(move)))
     assert _delta(t, s, 0x2, 0x3)[0] == basic
     assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expert
 
