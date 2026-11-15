@@ -57,6 +57,7 @@ DECOMP = Path(__file__).resolve().parents[2] / "external/pokeplatinum"
 # Kaizo Roark's party order and move ids (data/intermediate_kaizo/trainers.json, trainer 246;
 # moves.json), checked by test_roark_moves_and_effects.
 BONSLY, LILEEP, GIBLE, CORSOLA, SHUCKLE, CRANIDOS = range(6)
+
 STEALTH_ROCK, SELFDESTRUCT, BRICK_BREAK, ACCELEROCK = 446, 120, 280, 205
 SLUDGE_BOMB, GIGA_DRAIN, ANCIENTPOWER, RECOVER = 188, 202, 246, 105
 DRAGONBREATH, FLAMETHROWER, THUNDER_FANG, EARTH_POWER = 225, 53, 422, 414
@@ -3294,3 +3295,20 @@ def test_batch17_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party
         layout = layout_for(t, flags, s2)
         assert policy.ai_refusals(t, s2, n, layout) == []
         _assert_exact_equals_loose(t, s2, layout)
+
+
+@pytest.mark.parametrize(
+    ("own", "speed"), [(100, "faster"), (60, "faster"), (30, "slower"), (30, "faster")]
+)
+def test_roost_scores_as_recover(kaizo_tables, kaizo_names, kaizo_roark_party, own, speed):
+    """Roost (214) takes Recover's labels, Basic_CheckCanRecoverHP and Expert_Recovery
+    (script.s:253, :1758); the roosting turn flag is cleared before command selection
+    (battle_lib.c:2229-2231), so its BASIC and EXPERT scores are Recover's."""
+    t, n = kaizo_tables, kaizo_names
+
+    def scored(move):
+        s = _state(t, kaizo_roark_party, BONSLY, _ids(n, move, "Accelerock", "", ""))
+        s = _hp(_speeds(s, player=1 if speed == "faster" else 500, opp=100), 1, own)
+        return _delta(t, s, 0x2, 0x3)[0], _delta(t, s, 0x3, 0x7)[0]
+
+    assert scored("Roost") == scored("Recover")
