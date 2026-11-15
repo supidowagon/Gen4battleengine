@@ -73,6 +73,7 @@ from nuzline.ai.layout import (
     WEATHER,
     AiLayout,
     layout_of,
+    thinking_mask,
 )
 from nuzline.ai.outcome import (
     ABILITY_GUESSES,
@@ -2913,7 +2914,14 @@ def _flags(layout: AiLayout) -> tuple:
     CHECK_HP (8), WEATHER (9). Vanilla runs 7 (roark.md 1);
     Kaizo the trainer's set (E1 Ruling
     R2), Roark's 23. A bit without a transcribed script raises (``layout.kaizo_layout``
-    builds no such layout; coverage refuses the trainer)."""
+    builds no such layout; coverage refuses the trainer). A ``runtime_flags`` layout
+    (``layout.ALLIN``) gives every transcribed bit's script; ``_run_flags`` masks each by the
+    fight's ``tables.ai_flags``."""
+    return tuple(script for _, script in _flag_scripts(layout))
+
+
+def _flag_scripts(layout: AiLayout) -> tuple:
+    """``((bit, script), ...)``: ``_flags`` with each script's flag bit."""
     scripts = {
         BASIC: partial(_basic, layout=layout),
         EVAL_ATTACK: _eval_attack,
@@ -2930,7 +2938,7 @@ def _flags(layout: AiLayout) -> tuple:
         if layout.runs(bit):
             if bit not in scripts:
                 raise ValueError(f"AI flag bit {bit} of {layout.flags:#x} is not transcribed")
-            out.append(scripts[bit])
+            out.append((bit, scripts[bit]))
     return tuple(out)
 
 
@@ -3004,12 +3012,19 @@ def _refused(tables: Tables, state: BattleState, layout: AiLayout = VANILLA) -> 
     expert = present[1][:, None] & (moves[1] != 0) & ~move & ~ghost_curse
     if layout.per_slot_sites and pending and layout.runs(EXPERT):
         expert = expert & jnp.isin(effects, jnp.array(pending, _I32))
+        if layout.runtime_flags:  # the battler's own EXPERT bit
+            expert = expert & ((thinking_mask(tables) >> EXPERT) & 1 == 1)
     else:
         expert = jnp.zeros_like(expert)
     known = present[1][:, None] & (moves[1] != 0)
     calc_damage = known & jnp.isin(moves[1], jnp.array(c.CALC_DAMAGE_MOVES, _I32))
     move_type = known & jnp.isin(moves[1], jnp.array(c.MOVE_TYPE_MOVES, _I32))
     policy = tables.ai_policy != AI_POLICIES.index(layout.name)
+    if layout.runtime_flags:
+        # The fight's flags must be set and transcribed (kaizo_layout refuses another set);
+        # a doubles battle adds TAG_STRATEGY (thinking_mask), which is not transcribed.
+        mask = thinking_mask(tables)
+        policy = policy | (tables.ai_flags < 0) | ((mask & ~layout.flags) != 0)
     if layout.per_slot_sites:  # reads by order, bounded per path (missing_read)
         sites = jnp.zeros_like(present[1])
     else:
@@ -3092,7 +3107,12 @@ def opponent_move_refusals(
     if ghost and effect == BattleEffect.CURSE:
         out.append("ghost curse")
     pending = set(KAIZO_EXPERT_LABELS) - layout.expert_transcribed
-    if layout.per_slot_sites and layout.runs(EXPERT) and effect in pending and not out:
+    if (
+        layout.per_slot_sites
+        and effect in pending
+        and not out
+        and layout.fight_flags(tables) >> EXPERT & 1
+    ):
         out.append("expert label")
     if move in c.CALC_DAMAGE_MOVES:
         out.append("calc damage")
@@ -3146,7 +3166,13 @@ def _scoring_refusals(
     out: list[str] = []
     if bool(r.policy):
         policy = AI_POLICIES[int(tables.ai_policy)]
-        out.append(f"ai: the tables' AI policy is {policy}, the layout's {layout.name}")
+        if policy != layout.name:
+            out.append(f"ai: the tables' AI policy is {policy}, the layout's {layout.name}")
+        else:  # a runtime_flags layout (_refused)
+            out.append(
+                f"ai: the fight's AI flags {int(np.asarray(tables.ai_flags)):#x} are unset or "
+                f"have a bit the policy does not transcribe ({layout.flags:#x})"
+            )
     for s, k in zip(*np.nonzero(np.asarray(r.move)), strict=True):
         move = int(moves[1, s, k])
         effect = int(np.asarray(tables.move_ai_effect)[move])
@@ -3273,6 +3299,18 @@ _PATH_REFUSAL = (
 )
 
 
+def _exact_layout(layout: AiLayout) -> AiLayout:
+    """``layout`` for an exact distribution: ``ValueError`` for a ``runtime_flags`` layout
+    (``layout.ALLIN`` serves the sampled AI; its ``2**slot_reads`` scorings pass WIDTH_CAP),
+    whose exact distribution is the fight's own layout's (``layout_of``)."""
+    if layout.runtime_flags:
+        raise ValueError(
+            f"the exact AI distribution is per fight (ai.layout.layout_of); the {layout.key} "
+            "layout serves the sampled AI only (ai.layout module docstring)"
+        )
+    return layout
+
+
 def _check(tables: Tables, state: BattleState, layout: AiLayout, reasons) -> None:
     """Raise ``UnsupportedAi`` with ``reasons(tables, state, layout)`` when there are any;
     under a trace (jit, vmap, even of a closed-over state) the check cannot run."""
@@ -3300,11 +3338,35 @@ def resolve_player_ability(
     return c.defender_ability(tables, state, ai_outcome.ability_guess)
 
 
+# The AiContext fields a flag script never writes: the decision's inputs. Every other field is
+# restored after a masked script (_run_flags).
+_CONTEXT_INPUTS = frozenset({"tables", "state", "outcome"})
+
+
+def _keep_if(on, new: AiContext, old: AiContext) -> AiContext:
+    """``new`` where ``on``, else ``old``, field by field (the inputs are shared)."""
+    fields = {
+        f: jax.tree.map(lambda a, b: jnp.where(on, a, b), getattr(new, f), getattr(old, f))
+        for f in AiContext._fields
+        if f not in _CONTEXT_INPUTS
+    }
+    return new._replace(**fields)
+
+
 def _run_flags(ctx: AiContext, layout: AiLayout, flags: tuple | None = None) -> AiContext:
     """The policy's flag scripts (``flags``, default ``_flags(layout)``; tests pass a
-    prefix of them) over the four move slots."""
+    prefix of them) over the four move slots.
+
+    A ``runtime_flags`` layout (``layout.ALLIN``) runs every script it traces and keeps its
+    result only when the fight's ``tables.ai_flags`` has the script's bit (trainer_ai.c:297-308
+    runs a set bit's script only), the battler's ``layout.thinking_mask``; otherwise every
+    field the script could write is restored
+    (``_keep_if``), the read counts and path weights of ``commands._slot_read`` among them,
+    so a masked script consumes no random read and the next script's reads take the same
+    draws as in the fight's own layout (E1 Ruling R4)."""
     ctx = ctx._replace(slot=jnp.asarray(0, _I32))
-    for flag in _flags(layout) if flags is None else flags:  # trainer_ai.c:297-310
+    pairs = _flag_scripts(layout) if flags is None else tuple((None, f) for f in flags)
+    for bit, flag in pairs:  # trainer_ai.c:297-310
         # The slots in a loop, not unrolled: one copy of each flag script in the program.
 
         def eval_slot(slot, ctx, flag=flag):  # TrainerAI_EvalMoves (:483-525)
@@ -3314,7 +3376,10 @@ def _run_flags(ctx: AiContext, layout: AiLayout, flags: tuple | None = None) -> 
                 scores=ctx.scores.at[slot].set(jnp.where(ctx.move == 0, 0, ctx.scores[slot]))
             )
 
-        ctx = jax.lax.fori_loop(0, MOVES, eval_slot, ctx)
+        ran = jax.lax.fori_loop(0, MOVES, eval_slot, ctx)
+        if layout.runtime_flags and bit is not None:
+            ran = _keep_if((thinking_mask(ctx.tables) >> bit) & 1 == 1, ran, ctx)
+        ctx = ran
     return ctx
 
 
@@ -3349,11 +3414,18 @@ def _scores(
     (``AiContext.missing_read``): ``_slot_move_distribution`` is then NaN and ``_policy``
     refuses. The flat (vanilla) layout's unused column is never on a path (outcome.py
     ``_VANILLA_COLUMN``), so it is not checked and vanilla is unchanged."""
+    return _scores_and_context(tables, state, ai_outcome, layout)[0]
+
+
+def _scores_and_context(
+    tables: Tables, state: BattleState, ai_outcome: AiOutcome, layout: AiLayout
+) -> tuple[jnp.ndarray, AiContext]:
+    """``(_scores, the AiContext after the flag scripts)`` from one scoring."""
     ctx = _score_context(tables, state, ai_outcome, layout)
     refused = _refused(tables, state, layout).scoring
     if layout.per_slot_sites:
         refused = refused | (ctx.missing_read > 0)
-    return jnp.where(refused, -1, ctx.scores).astype(_I32)
+    return jnp.where(refused, -1, ctx.scores).astype(_I32), ctx
 
 
 _scores_jit = jax.jit(_scores, static_argnames="layout")
@@ -3430,9 +3502,17 @@ def _pick(tables: Tables, state: BattleState, scores, tiebreak) -> jnp.ndarray:
 def _policy(
     tables: Tables, state: BattleState, ai_outcome: AiOutcome, layout: AiLayout = VANILLA
 ) -> jnp.ndarray:
+    return _policy_and_context(tables, state, ai_outcome, layout)[0]
+
+
+def _policy_and_context(
+    tables: Tables, state: BattleState, ai_outcome: AiOutcome, layout: AiLayout = VANILLA
+) -> tuple[jnp.ndarray, AiContext]:
+    """``(_policy's action, the scoring AiContext it chose from)``: one scoring (tests read
+    the context of the action they check, tests/ai/test_allin.py)."""
     switch = maybe_switch(tables, state, ai_outcome, layout)
     item = _use_item(tables, state)
-    scores = _scores(tables, state, ai_outcome, layout)
+    scores, ctx = _scores_and_context(tables, state, ai_outcome, layout)
     move = _pick(tables, state, scores, ai_outcome.tiebreak)
     action = jnp.where(switch != NO_SWITCH, switch, jnp.where(item != NO_ITEM, item, move))
     # A battler locked into a move picks no command, so the AI never runs for it
@@ -3442,7 +3522,7 @@ def _policy(
     refused = _refused(tables, state, layout).any
     if layout.per_slot_sites:  # a read past slot_reads (_scores); else no score < 0
         refused = refused | jnp.any(scores < 0)
-    return jnp.where(refused, REFUSED_ACTION, action).astype(_I32)
+    return jnp.where(refused, REFUSED_ACTION, action).astype(_I32), ctx
 
 
 _policy_jit = jax.jit(_policy, static_argnames="layout")
@@ -3482,7 +3562,7 @@ def ai_action_distribution_enumerated(
     ``MAX_JOINT_READS`` in all), every switch stop and every tiebreak, each weighted by the
     product of its slots' path weights (``AiContext.weight``: a read's probability comes from
     the read, ``outcome`` docstring), 0 for a pattern with a bit set past a slot's reads."""
-    layout = _layout(tables, layout)
+    layout = _exact_layout(_layout(tables, layout))
     if not layout.per_slot_sites:
         return _enumerated_flat(tables, state, layout)
     _, reads = _path_records(tables, state, layout)
@@ -3699,7 +3779,9 @@ def ai_path_refusals(
 
 
 def _raise_path_refusal(tables: Tables, state: BattleState, layout: AiLayout) -> None:
-    found = ai_path_refusals(tables, state, layout=layout)
+    # ai_path_refusals replays every read pattern (2**slot_reads), per fight only; ALLIN's
+    # bound is no fight's path's (ALLIN_READS), so it names none.
+    found = [] if layout.runtime_flags else ai_path_refusals(tables, state, layout=layout)
     raise UnsupportedAi("; ".join(found) or _PATH_REFUSAL)
 
 
@@ -3741,7 +3823,7 @@ def _distribution(tables: Tables, state: BattleState, layout: AiLayout = VANILLA
     enumeration gives NaN: a refused state, or a refused switch layout (``switch_action``
     gives ``REFUSED_ACTION`` for any stop). The switch stops are the layout's
     ``switch_sites + 1`` (10 vanilla, 45 Kaizo)."""
-    sites = layout.switch_sites
+    sites = _exact_layout(layout).switch_sites
     stops = jnp.arange(sites + 1, dtype=jnp.int8)
     p_stop = switch_stop_probs(switch_sites(tables, state, sites))  # [sites + 1]
     switch = jax.vmap(lambda stop: switch_action(tables, state, stop, sites))(stops)
@@ -4013,7 +4095,7 @@ def ai_action_distribution_loose(
     does (roark.md 2). NaN on every state ``_distribution`` refuses: the scoring and item
     refusals (``_refused``) and the voluntary-switch ones (``switching_refusals``, where
     ``switch_sites`` would raise ``UnsupportedSwitching``). Concrete only."""
-    layout = _layout(tables, layout)
+    layout = _exact_layout(_layout(tables, layout))
     sites = layout.switch_sites
     if switching_refusals(tables, state, sites):
         return np.full(NUM_OPP_ACTIONS, np.nan)

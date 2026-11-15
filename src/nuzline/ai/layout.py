@@ -48,6 +48,23 @@ The fields:
   vanilla transcription), those whose Expert label is transcribed. A per-slot layout refuses
   an opponent move with any other of those effects (``policy._refused``), so a missing
   Expert path is refused, never scored. Kaizo's holds all nine since K3c Task 6.
+* ``runtime_flags``: the trainer's flags are read at run time from ``tables.ai_flags``
+  instead of fixed in ``flags`` (``ALLIN``, below).
+
+**Two shapes of one transcription (user decision, 2026-11-15).** The exact distribution
+(search) is per fight: ``layout_of`` gives the fight's flags, own effects (R7) and read bound
+(R6), all static, so its ``2**slot_reads`` scorings stay small. The sampled AI
+(``outcome.sample_ai_outcome`` and ``policy.ai_policy``) can instead take ``ALLIN``: every
+transcribed flag bit and effect, the read bound ``ALLIN_READS`` that no path of any flag set
+exceeds, and ``runtime_flags``: ``policy._run_flags`` runs every flag script and keeps its
+result only when the battler's ``thinking_mask`` has the bit, restoring the whole scoring
+context otherwise, so a masked script consumes no random read (R4). One program then serves
+every fight (``Tables`` are a traced argument; a batch of fights passes each row's
+``ai_flags``). The exact entry points refuse ``ALLIN``, so a loop whose player reads the
+exact distribution (``playout``, ``GREEDY``, ``LINE``) stays per fight: a loop takes
+``ALLIN`` only once its player and its opponent take separate layouts (a fixed or learned
+player). Concrete code that needs the fight's flags reads ``AiLayout.fight_flags(tables)``,
+never ``flags`` of a run-time layout.
 """
 
 from __future__ import annotations
@@ -73,6 +90,7 @@ from nuzline.data.game_constants import AI_POLICIES
 from nuzline.data.tables import (
     AI_FLAGS_UNSET,
     AI_MOVES_ROWS,
+    BATTLE_TYPE_DOUBLES,
     BATTLE_TYPE_TRAINER,
     BATTLE_TYPES,
     Tables,
@@ -80,6 +98,8 @@ from nuzline.data.tables import (
 from nuzline.engine.enumerate import WIDTH_CAP
 
 __all__ = [
+    "ALLIN",
+    "ALLIN_READS",
     "KAIZO",
     "KAIZO_FLAG_BITS",
     "VANILLA",
@@ -91,11 +111,12 @@ __all__ = [
     "kaizo_layout",
     "layout_of",
     "move_read_rows",
+    "thinking_mask",
 ]
 
 # AI flag bits (generated/ai_flags.txt, line n + 2 is bit n; FlagTable, script.s:18-30).
 BASIC, EVAL_ATTACK, EXPERT, SETUP_FIRST_TURN, RISKY = 0, 1, 2, 3, 4
-PRIORITIZE_EXTREMES, BATON_PASS, CHECK_HP, WEATHER = 5, 6, 8, 9
+PRIORITIZE_EXTREMES, BATON_PASS, TAG_STRATEGY, CHECK_HP, WEATHER = 5, 6, 7, 8, 9
 # The flag bits whose scripts the Kaizo policy transcribes (policy._flags):
 # engine/coverage.py IMPLEMENTED_AI_FLAGS["kaizo"] lists the same bits.
 KAIZO_FLAG_BITS = frozenset(
@@ -124,10 +145,22 @@ class AiLayout(NamedTuple):
     water2_ability: int
     transcribed: frozenset[int]
     expert_transcribed: frozenset[int] = frozenset()
+    runtime_flags: bool = False
 
     def runs(self, bit: int) -> bool:
-        """The policy runs flag ``bit``'s script."""
+        """The policy traces flag ``bit``'s script (with ``runtime_flags``, every transcribed
+        bit's, each kept only when the fight's ``tables.ai_flags`` has it: ``fight_flags``)."""
         return bool(self.flags >> bit & 1)
+
+    def fight_flags(self, tables: Tables, battler: int = 1) -> int:
+        """The flags the policy runs for ``battler`` in the fight of the concrete ``tables``:
+        ``flags``, or with ``runtime_flags`` its ``thinking_mask`` (``ValueError`` while the
+        fight's flags are unset)."""
+        if not self.runtime_flags:
+            return self.flags
+        if int(np.asarray(tables.ai_flags)) == int(AI_FLAGS_UNSET):
+            raise ValueError("the fight's trainer AI flags are not set: ai.layout.fight_tables")
+        return int(np.asarray(thinking_mask(tables, battler)))
 
     @property
     def key(self) -> str:
@@ -139,6 +172,8 @@ class AiLayout(NamedTuple):
             if self.transcribed != KAIZO_TRANSCRIBED:
                 text = ",".join(str(e) for e in sorted(self.transcribed))
                 key += "-e" + hashlib.sha1(text.encode()).hexdigest()[:10]
+            if self.runtime_flags:
+                key += "-run"
             return key
         return f"{self.name}-{self.flags:#x}"
 
@@ -176,6 +211,31 @@ KAIZO = AiLayout(
 
 LAYOUTS = (VANILLA, KAIZO)  # by Tables.ai_policy (KAIZO: Roark's flag set)
 assert tuple(layout.name for layout in LAYOUTS) == AI_POLICIES
+
+
+def thinking_mask(tables: Tables, battler: int = 1):
+    """``AI_CONTEXT.thinkingMask`` of ``battler`` (``TrainerAI_Init``, trainer_ai.c:245-255):
+    its trainer's ``aiMask`` (``Tables.ai_flags``: the fight holds one opposing trainer, so
+    every opposing battler reads it; a tag battle's second trainer needs a field per
+    battler), with ``AI_FLAG_TAG_STRATEGY`` added in a doubles battle (:253-254). A roamer's
+    mask (:246-247) belongs to a wild battle, which runs no trainer AI here. Traced or
+    concrete; the run-time flags of ``ALLIN`` (``policy._run_flags``, ``policy._refused``)."""
+    doubles = (tables.battle_type & BATTLE_TYPE_DOUBLES) != 0
+    return tables.ai_flags | (doubles * (1 << TAG_STRATEGY))
+
+
+# The most random reads one move's scoring path makes with every transcribed flag on: the
+# largest row sum of read_bounds.READ_BOUNDS (E1 Ruling R6), so no fight's path, under any of
+# its flags, passes it (each fight's own bound, fight_slot_reads, is a row sum over a subset).
+ALLIN_READS = max(sum(row) for row in READ_BOUNDS.values())
+
+# The sampled AI of every Kaizo fight in one program (module docstring): all transcribed flag
+# bits and effects, the read bound ALLIN_READS, the trainer's flags read at run time. Built
+# directly: its scoring width passes WIDTH_CAP, which only the exact distribution needs
+# (the exact entry points refuse it).
+ALLIN = KAIZO._replace(
+    flags=sum(1 << bit for bit in KAIZO_FLAG_BITS), slot_reads=ALLIN_READS, runtime_flags=True
+)
 
 
 def kaizo_layout(flags: int, slot_reads: int, effects=None) -> AiLayout:

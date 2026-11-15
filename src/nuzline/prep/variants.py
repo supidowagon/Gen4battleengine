@@ -13,7 +13,7 @@ from functools import lru_cache
 import numpy as np
 
 from nuzline.ai.commands import SIM_ROLL_MAX, ai_damage, is_damaging
-from nuzline.ai.layout import layout_of
+from nuzline.ai.layout import fight_effects, layout_of
 from nuzline.data.forms import personal_row
 from nuzline.data.game_constants import AI_POLICIES
 from nuzline.data.spec import PokemonSpec
@@ -317,10 +317,13 @@ def ai_defender_hp_checks(tables: Tables, layout=None) -> tuple[tuple[str, int],
     layout = layout_of(tables) if layout is None else layout
     checks = list(AI_DEFENDER_HP_CHECKS[AI_POLICIES[int(np.asarray(tables.ai_policy))]])
     for bit, extra in AI_FLAG_DEFENDER_HP_CHECKS.items():
-        if layout.per_slot_sites and layout.runs(bit):
+        if layout.per_slot_sites and layout.fight_flags(tables) >> bit & 1:
             checks += [check for check in extra if check not in checks]
+    transcribed = layout.transcribed
+    if layout.runtime_flags:  # ALLIN: the fight's own effects, as its own layout (R7)
+        transcribed = transcribed & fight_effects(tables, tables.ai_moves)
     for effect, extra in AI_EFFECT_DEFENDER_HP_CHECKS.items():
-        if layout.per_slot_sites and effect in layout.transcribed:
+        if layout.per_slot_sites and effect in transcribed:
             checks += [check for check in extra if check not in checks]
     return tuple(checks)
 
