@@ -623,6 +623,16 @@ def _basic_check_reflect(ctx: AiContext, mask) -> AiContext:
     return c.pop_or_end(_score(ctx, t, -8))
 
 
+def _basic_check_tailwind(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckTailwind`` (script.s:1128-1133): Trick Room, or the AI's side already under
+    Tailwind, -10."""
+    ctx = _at(ctx, mask)
+    ctx, t = _split(c.if_field_conditions_mask(ctx, c.FieldCondition.TRICK_ROOM))
+    ctx = _score(ctx, t, -10)
+    ctx, t = _split(c.if_side_condition(ctx, _A, c.SideCondition.TAILWIND))
+    return c.pop_or_end(_score(ctx, t, -10))
+
+
 def _basic_check_defense(ctx: AiContext, mask) -> AiContext:
     """``Basic_CheckLowStatStage_Defense`` (script.s:434-473)."""
     # Basic_CheckLowStatStage_Defense (:434)
@@ -1243,6 +1253,37 @@ def _expert_reflect(ctx: AiContext, mask) -> AiContext:
     return c.pop_or_end(c.add_to_move_score(_at(ctx, minus2), -2))
 
 
+def _expert_tailwind(ctx: AiContext, mask) -> AiContext:
+    """``Expert_Tailwind`` (script.s:4982-5006): nothing when the 64 roll (:4992) jumps; then
+    faster than the player (its tie a read, E1 Ruling R8) or below 31 % HP, -1; above 75 %,
+    +1; between, +1 unless the 64 roll (:4996) jumps."""
+    ctx = _at(ctx, mask)
+    ctx, _ = _split(c.if_random_less_than(ctx, 64, 4992))  # -> _End
+    ctx, minus1 = _split(c.if_speed_compare_equal_to(ctx, c.COMPARE_SPEED_FASTER))
+    ctx, t = _split(c.if_hp_percent_less_than(ctx, _A, 31))
+    minus1 = minus1 | t
+    ctx, plus1 = _split(c.if_hp_percent_greater_than(ctx, _A, 75))
+    ctx, _ = _split(c.if_random_less_than(ctx, 64, 4996))  # -> _End
+    # Expert_Tailwind_ScorePlus1 (:4998)
+    ctx = c.add_to_move_score(_at(ctx, plus1 | ctx.live), 1)
+    ctx, _ = _split(c.go_to(ctx))  # -> _End
+    # Expert_Tailwind_ScoreMinus1 (:5002), falling into _End
+    return c.pop_or_end(c.add_to_move_score(_at(ctx, minus1), -1))
+
+
+def _expert_payback(ctx: AiContext, mask) -> AiContext:
+    """``Expert_Payback`` (script.s:5169-5187): resisted -1; else faster than the player (its
+    tie a read, E1 Ruling R8) or below 30 % HP, nothing; else +1 unless the 64 roll (:5179)
+    jumps."""
+    ctx, minus1 = _not_resisted(_at(ctx, mask))
+    ctx, _ = _split(c.if_speed_compare_equal_to(ctx, c.COMPARE_SPEED_FASTER))  # -> _End
+    ctx, _ = _split(c.if_hp_percent_less_than(ctx, _A, 30))  # -> _End
+    ctx, _ = _split(c.if_random_less_than(ctx, 64, 5179))  # -> _End
+    ctx = c.pop_or_end(c.add_to_move_score(ctx, 1))
+    # Expert_Payback_ScoreMinus1 (:5183)
+    return c.pop_or_end(c.add_to_move_score(_at(ctx, minus1), -1))
+
+
 def _expert_curse(ctx: AiContext, mask) -> AiContext:
     """``Expert_Curse`` (script.s:3452-3500)."""
     # Expert_Curse (:3452). A Ghost-type attacker jumps to Expert_Curse_GhostCheckHP
@@ -1434,6 +1475,7 @@ _BASIC_LABELS = (
     (BattleEffect.ATK_DEF_UP, _basic_check_bulk_up),  # :248
     (BattleEffect.SP_ATK_SP_DEF_UP, _basic_check_calm_mind),  # :250
     (BattleEffect.ATK_SPD_UP, _basic_check_dragon_dance),  # :251
+    (BattleEffect.DOUBLE_SPEED_3_TURNS, _basic_check_tailwind),  # :259
     (BattleEffect.TOXIC_SPIKES, _basic_check_toxic_spikes),  # :277
     (BattleEffect.STEALTH_ROCK, _basic_check_stealth_rock),  # :284
 )
@@ -1483,6 +1525,8 @@ _EXPERT_LABELS = (
     (BattleEffect.SP_ATK_SP_DEF_UP, _expert_status_spd_up),  # :1756
     (BattleEffect.ATK_SPD_UP, _expert_dragon_dance),  # :1757
     (BattleEffect.DOUBLE_POWER_WHEN_BELOW_HALF, _expert_brine),  # :1765
+    (BattleEffect.DOUBLE_SPEED_3_TURNS, _expert_tailwind),  # :1768
+    (BattleEffect.DOUBLE_POWER_IF_MOVING_SECOND, _expert_payback),  # :1773
     (BattleEffect.TOXIC_SPIKES, _expert_toxic_spikes),  # :1792
     (BattleEffect.RECOIL_PARALYZE_HIT, _expert_recoil_move),  # :1802
     (BattleEffect.STEALTH_ROCK, _expert_stealth_rock),  # :1805

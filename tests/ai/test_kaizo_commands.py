@@ -478,9 +478,9 @@ def test_loose_speed_compare_reads_no_tie_at_unequal_speed(tables, names):
     assert int(ctx.loose.count[0]) == 1 and not bool(ctx.loose.live[0, 0])
 
 
-def test_speed_compare_refuses_another_value(tables, names):
-    # Every compare on Roark's paths is SLOWER (script.s:1864, :2070, :2650); the dropped tie
-    # draw is exact only for SLOWER.
+def test_flat_speed_compare_refuses_faster(tables, names):
+    # The flat (vanilla) layout draws no tie, which is exact only for SLOWER; FASTER's tie is a
+    # read of the per-slot layout only (E1 Ruling R8).
     ctx = _ctx(tables, _speed_state(tables, names, 45, 45))
     with pytest.raises(AssertionError):
         c.if_speed_compare_equal_to(ctx, COMPARE_SPEED_FASTER)

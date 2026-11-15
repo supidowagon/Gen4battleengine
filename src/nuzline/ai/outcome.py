@@ -251,6 +251,10 @@ SITE_N: dict[int, int] = {
     2510: 50,  # Expert_StatusEvasionDown_TryScoreMinus2 (-2 when it does NOT jump)
     2901: 128,  # Expert_Reflect (+1 when it does NOT jump)
     2907: 64,  # Expert_Reflect_CheckLastUsedMove (+1 when it does NOT jump)
+    # E1 batch 11: Tailwind and Payback (COMPARE_SPEED_FASTER, E1 Ruling R8).
+    4992: 64,  # Expert_Tailwind (jump: nothing)
+    4996: 64,  # Expert_Tailwind, 31-75 % HP (+1 when it does NOT jump)
+    5179: 64,  # Expert_Payback (+1 when it does NOT jump)
 }
 SITE_LINES = tuple(SITE_N)
 # The flat (vanilla) layout's column of script_roll_sites that each line reads: column 0 is
@@ -378,6 +382,10 @@ KAIZO_TRANSCRIBED: frozenset[int] = frozenset(
         60,  # SPEED_DOWN_2: :173; Expert_StatusSpeedDown (:1672)
         62,  # SP_DEF_DOWN_2: Basic_CheckLowStatStage_SpDefense (:175); Expert_StatusSpDefenseDown (:1674)
         65,  # SET_REFLECT: Basic_CheckAlreadyUnderReflect (:178); Expert_Reflect (:1677)
+        # E1 batch 11 (docs/ai/kaizo_roark.md 5.15): their Expert labels compare for
+        # COMPARE_SPEED_FASTER, whose tie is a read (E1 Ruling R8).
+        225,  # DOUBLE_SPEED_3_TURNS: Basic_CheckTailwind (:259); Expert_Tailwind (:1768), :4992, :4996
+        230,  # DOUBLE_POWER_IF_MOVING_SECOND: Expert_Payback (:1773), :5179
     }
 )
 # The transcribed effects (KAIZO_TRANSCRIBED) whose Expert_Main entry goes to a label added
@@ -439,6 +447,9 @@ KAIZO_EXPERT_LABELS: dict[int, tuple[str, int]] = {
     60: ("Expert_StatusSpeedDown", 1672),
     62: ("Expert_StatusSpDefenseDown", 1674),
     65: ("Expert_Reflect", 1677),
+    # E1 batch 11.
+    225: ("Expert_Tailwind", 1768),
+    230: ("Expert_Payback", 1773),
 }
 # Of KAIZO_EXPERT_LABELS, the effects whose Expert label policy._expert transcribes
 # (layout.KAIZO expert_transcribed), written out: it is not derived from the table, so an
@@ -490,6 +501,8 @@ KAIZO_EXPERT_TRANSCRIBED: frozenset[int] = frozenset(
         60,  # SPEED_DOWN_2: Expert_StatusSpeedDown
         62,  # SP_DEF_DOWN_2: Expert_StatusSpDefenseDown
         65,  # SET_REFLECT: Expert_Reflect
+        225,  # DOUBLE_SPEED_3_TURNS: Expert_Tailwind
+        230,  # DOUBLE_POWER_IF_MOVING_SECOND: Expert_Payback
     }
 )
 assert set(KAIZO_EXPERT_LABELS) <= KAIZO_TRANSCRIBED

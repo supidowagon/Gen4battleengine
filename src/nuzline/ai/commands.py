@@ -47,6 +47,7 @@ from nuzline.engine.actions import usable_moves
 from nuzline.engine.damage import ai_damage_for_roll, decomp_abilities
 from nuzline.engine.ids import Stat, Status, Weather
 from nuzline.engine.order import (
+    COMPARE_SPEED_FASTER,
     COMPARE_SPEED_SLOWER,
     COMPARE_SPEED_TIE,
     battler_slower,
@@ -95,6 +96,7 @@ class SideCondition(IntEnum):
     SAFEGUARD = 1 << 3  # BattleState.safeguard
     STEALTH_ROCK = 1 << 7  # BattleState.stealth_rock
     TOXIC_SPIKES = 1 << 10  # :98; BattleState.toxic_spikes (layers, LoadSpikesLayers)
+    TAILWIND = (1 << 8) | (1 << 9)  # :96-97, :104; BattleState.tailwind (turns left)
 
 
 _SIDE_CONDITION_FIELDS = {
@@ -102,6 +104,7 @@ _SIDE_CONDITION_FIELDS = {
     SideCondition.LIGHT_SCREEN: "light_screen",
     SideCondition.SAFEGUARD: "safeguard",
     SideCondition.STEALTH_ROCK: "stealth_rock",
+    SideCondition.TAILWIND: "tailwind",
 }
 
 
@@ -248,6 +251,8 @@ class BattleEffect(IntEnum):
     SP_ATK_SP_DEF_UP = 211  # Calm Mind
     ATK_SPD_UP = 212  # Dragon Dance
     DOUBLE_POWER_WHEN_BELOW_HALF = 221  # Brine
+    DOUBLE_SPEED_3_TURNS = 225  # Tailwind
+    DOUBLE_POWER_IF_MOVING_SECOND = 230  # Payback, Revenge
     TOXIC_SPIKES = 249
     RECOIL_PARALYZE_HIT = 262
     STEALTH_ROCK = 266
@@ -1449,23 +1454,34 @@ def if_speed_compare_equal_to(ctx: AiContext, value: int) -> AiContext:
       write). The AI decides before the turn's redraw (battle_controller_player.c:853-857),
       so it reads ``BattleState.qc_roll``, the previous turn's draw.
     - ``ignoreQuickClaw`` skips the priority read (:1375-1399): both priorities are 0.
-    - The tie's ``RandNext() & 1`` is not drawn (plan K3c Ruling 3). At equal speed every
-      branch gives FASTER or TIE, never SLOWER (:1401-1447), so ``== SLOWER`` does not
-      depend on it: ``order.battler_slower`` with ``tie_roll = 0``. ``value`` must be
-      ``COMPARE_SPEED_SLOWER`` (asserted at trace time), as at every transcribed compare on the
-      paths (script.s:1864, :2070, :2357, :2650, :2944). The decomp still consumes the draw (K3d).
+    - At equal speed every branch gives FASTER, or TIE on the tie's ``RandNext() & 1``, never
+      SLOWER (:1401-1447). So ``== SLOWER`` does not depend on the tie, and the exact layout
+      does not draw it (plan K3c Ruling 3; ``order.battler_slower`` with ``tie_roll = 0``); the
+      decomp still consumes the draw (K3d), an independent draw that changes nothing here.
+      ``== FASTER`` does depend on it (E1 Ruling R8): where the compare would read the tie
+      (``compare_speed`` gives TIE for a set bit), it is the slot's next random read
+      (``_slot_read``), TIE when the draw's low bit is set (READ_DRAWS[1] = 1), probability
+      1/2. ``COMPARE_SPEED_TIE`` itself is not compared by any transcribed label (asserted).
 
     Loose (module docstring): the tie is its own draw (``ReadKind.SPEED_TIE``), on the path
     where the decomp makes it (equal speed in a branch that reads it, which is where
     ``compare_speed`` gives TIE for a 1), and the decomp's three-valued result is compared
     with ``value``."""
-    assert int(value) == COMPARE_SPEED_SLOWER, f"unsupported speed compare {value}"
+    assert int(value) in (COMPARE_SPEED_SLOWER, COMPARE_SPEED_FASTER), f"speed compare {value}"
     tables, state = ctx.tables, ctx.state
     if ctx.loose is not None:
         reads = compare_speed(tables, state, 1, 1, state.qc_roll) == COMPARE_SPEED_TIE
         ctx, bit = _loose_read(ctx, 0.5, ReadKind.SPEED_TIE, live=ctx.live & reads)
         return _jump(ctx, compare_speed(tables, state, 1, bit, state.qc_roll) == value)
-    return _jump(ctx, battler_slower(tables, state, 1, 0, state.qc_roll))
+    if int(value) == COMPARE_SPEED_SLOWER:
+        return _jump(ctx, battler_slower(tables, state, 1, 0, state.qc_roll))
+    tie = compare_speed(tables, state, 1, 1, state.qc_roll) == COMPARE_SPEED_TIE
+    if per_slot(ctx):
+        ctx, r = _slot_read(ctx, lambda r: (0.5, tie))
+        bit = r & 1
+    else:
+        raise AssertionError("COMPARE_SPEED_FASTER is transcribed for the per-slot layout only")
+    return _jump(ctx, compare_speed(tables, state, 1, bit, state.qc_roll) == COMPARE_SPEED_FASTER)
 
 
 def _knows_effect(ctx: AiContext, battler: Battler, effect: int) -> jnp.ndarray:

@@ -584,9 +584,8 @@ None of these has a `Basic_ScoreMoveEffect` entry.
   and +1 more unless the 128 roll (`:4882`) jumps.
 - RECOIL_QUARTER, RECOIL_THIRD and RECOIL_PARALYZE_HIT (`:1661`, `:1747`, `:1802`) share
   Head Smash's `Expert_RecoilMove` (5.3).
-- U-turn and Payback (`Expert_UTurn`, `Expert_Payback`) wait: they compare speed for
-  `COMPARE_SPEED_FASTER`, where an equal-speed tie decides (plan K3c Ruling 3 draws no tie),
-  and U-turn reads two party-damage commands.
+- U-turn (`Expert_UTurn`) waits: it reads two party-damage commands. Payback came in batch 11
+  (5.15).
 
 ### 5.13 Setup moves, hazards and Destiny Bond (E1 batch 9)
 
@@ -606,9 +605,8 @@ None of these has a `Basic_ScoreMoveEffect` entry.
 - `Expert_DestinyBond` (`:1694`; `:3335-3360`): -1; slower than the player, nothing more;
   otherwise at 70 % HP or less +1 unless `:3346` jumps, at 50 % or less +1 more unless `:3351`
   jumps, at 30 % or less +2 more unless the 100 roll (`:3356`) jumps.
-- Tailwind (`Expert_Tailwind`, `:4993`) compares for `COMPARE_SPEED_FASTER` and waits with
-  U-turn and Payback; Roost's labels exist (Recover's) but the AI's type chart does not yet
-  model the roosting state.
+- Roost's labels exist (Recover's) but the AI's type chart does not yet model the roosting
+  state. Tailwind came in batch 11 (5.15).
 
 ### 5.14 Stat drops and Reflect (E1 batch 10)
 
@@ -630,6 +628,19 @@ DEF_DOWN_2 were Roark's) and SET_REFLECT. ACC_DOWN waits: `Expert_StatusAccuracy
   `Expert_StatusDefenseDown` shape with rolls `:2421`, `:2510`. `Expert_Reflect`
   (`:2893-2915`): below 50 % HP -2; at 90 % or more +1 unless the 128 roll (`:2901`) jumps;
   then +1 unless the 64 roll (`:2907`) jumps when the player's last move was physical.
+
+### 5.15 Tailwind and Payback (E1 batch 11, Ruling R8)
+
+Both Expert labels compare for `COMPARE_SPEED_FASTER`, so the equal-speed tie decides them
+(E1 Ruling R8, 7.1).
+- `Basic_CheckTailwind` (`:1128-1133`; dispatch `:259`): -10 under Trick Room or with the AI's
+  side already under Tailwind (`SideCondition.TAILWIND`, `include/constants/battle/condition.h:96-104`,
+  `BattleState.tailwind`).
+- `Expert_Tailwind` (`:1768`; `:4982-5006`): nothing when the 64 roll (`:4992`) jumps; then
+  faster than the player, or below 31 % HP, -1; above 75 % +1; between, +1 unless the 64 roll
+  (`:4996`) jumps.
+- `Expert_Payback` (`:1773`; `:5169-5187`): resisted -1; else faster than the player or below
+  30 % HP, nothing; else +1 unless the 64 roll (`:5179`) jumps.
 
 ## 6. Where the AI reads the true battle state
 
@@ -692,10 +703,14 @@ records the rules that need more than one table row.
 - **The tie draw (plan K3c Ruling 3).** At equal speed each branch that compares speeds
   (both Quick Claws `:1402-1407`, both Lagging Tails `:1412-1417`, both Stall `:1422-1427`,
   Trick Room `:1432-1439`, plain `:1440-1447`) gives TIE when `RandNext() & 1` is 1, else
-  FASTER, never SLOWER. Every compare on Roark's paths tests SLOWER (`script.s:1864`, `:2070`, `:2650`). So the exact
-  command passes `tie_roll = 0` (`battler_slower(..., 1, 0, qc_roll)`), has no `AiOutcome`
-  field, and asserts at trace time that its value is SLOWER. The decomp still consumes the
-  draw (8.7). The both-Stall branch is never on a graded path: Stall is not in coverage's
+  FASTER, never SLOWER. A SLOWER compare (`script.s:1864`, `:2070`, `:2650`) therefore never
+  depends on the draw: the exact command passes `tie_roll = 0`
+  (`battler_slower(..., 1, 0, qc_roll)`) with no read, and the decomp still consumes the draw
+  (8.7). **E1 Ruling R8:** a FASTER compare (Tailwind `:4993`, Payback `:5177`) does depend on
+  it, so on the per-slot layout it is a slot read with p = 1/2 (TIE when the draw's low bit
+  is set), counted by the read-bound walker (8.3) and the loose oracle's `SPEED_TIE` bit; the
+  flat layout refuses FASTER at trace time, and `COMPARE_SPEED_TIE` is not a value any
+  script tests. The both-Stall branch is never on a graded path: Stall is not in coverage's
   implemented abilities, so a state with it is refused (`engine/order.py`, "Custap and Stall
   are unsupported").
 - **Loose.** The tie is its own draw (`commands.ReadKind.SPEED_TIE`, probability 1/2). It is

@@ -7,7 +7,7 @@ loops, so the most reads over every walk is a depth-first maximum. A read is a d
 per-slot layout keys by path order (E1 Ruling R4): ``IfRandomLessThan`` (trainer_ai.c:528-538)
 and ``LoadBattlerAbility`` on the defender, which flips a coin when the AI does not know the
 player's ability (trainer_ai.c:1170-1209; counted always, an upper bound).
-``CheckBattlerAbility`` draws nothing (:1212-1265). ``IfSpeedCompareEqualTo``'s tie is not a read of the exact layout (plan K3c Ruling 3).
+``CheckBattlerAbility`` draws nothing (:1212-1265). ``IfSpeedCompareEqualTo``'s tie is a read of the exact layout only for COMPARE_SPEED_FASTER (E1 Ruling R8; plan K3c Ruling 3 for SLOWER).
 
 Branches whose outcome is fixed by the move are decided, so the bound follows the move:
 
@@ -124,6 +124,8 @@ def flag_reads(script: Script, bit: int, effect: int, damaging: bool, can_quad: 
                 reads = 1
             elif cmd == "LoadBattlerAbility":
                 reads = int(args[0] == "AI_BATTLER_DEFENDER")
+            elif cmd == "IfSpeedCompareEqualTo":
+                reads = int(args[0] == "COMPARE_SPEED_FASTER")  # its tie (E1 Ruling R8)
             target = args[-1] if args and args[-1] in script.labels else None
             if cmd == "GoTo":
                 return reads + most(script.labels[target], calc)

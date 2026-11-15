@@ -2387,3 +2387,78 @@ def test_batch10_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party
                 layout = layout_for(t, flags, s)
                 assert policy.ai_refusals(t, s, n, layout) == []
                 _assert_exact_equals_loose(t, s, layout)
+
+
+# --- Tailwind and Payback: COMPARE_SPEED_FASTER (E1 batch 11, Ruling R8) ---------------------
+
+
+@pytest.mark.parametrize(
+    ("case", "expected"), [("plain", 0), ("trick_room", -10), ("tailwind", -10)]
+)
+def test_basic_check_tailwind(kaizo_tables, kaizo_names, kaizo_roark_party, case, expected):
+    """Basic_CheckTailwind (script.s:1128-1133)."""
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Tailwind", "Accelerock", "", ""))
+    if case == "trick_room":
+        s = s._replace(trick_room=jnp.asarray(3, s.trick_room.dtype))
+    elif case == "tailwind":
+        s = s._replace(tailwind=s.tailwind.at[1].set(3))
+    assert _delta(t, s, 0x2, 0x3)[0] == expected
+
+
+@pytest.mark.parametrize(
+    ("speed", "hp", "jumps", "expected"),
+    [
+        # Expert_Tailwind (script.s:4982-5006); the AI's Speed 100 against the player's
+        ("slower", 100, (4992,), 0),  # the first 64 roll jumps: nothing
+        ("slower", 100, (), 1),  # above 75 %: +1
+        ("slower", 50, (), 1),  # 31-75 %: +1 unless :4996 jumps
+        ("slower", 50, (4996,), 0),
+        ("slower", 20, (), -1),  # below 31 %: -1
+        ("faster", 100, (), -1),  # faster: -1
+    ],
+)
+def test_expert_tailwind(kaizo_tables, kaizo_names, kaizo_roark_party, speed, hp, jumps, expected):
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Tailwind", "Accelerock", "", ""))
+    s = _hp(_speeds(s, player=500 if speed == "slower" else 1, opp=100), 1, hp)
+    assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expected
+
+
+@pytest.mark.parametrize(
+    ("player", "speed", "hp", "jumps", "expected"),
+    [
+        # Expert_Payback (script.s:5169-5187), Payback (Dark)
+        ("Machop", "slower", 100, (), -1),  # Fighting resists Dark: -1
+        ("Tentacool", "slower", 100, (), 1),  # +1 unless :5179 jumps
+        ("Tentacool", "slower", 100, (5179,), 0),
+        ("Tentacool", "faster", 100, (), 0),  # faster: nothing
+        ("Tentacool", "slower", 29, (), 0),  # below 30 %: nothing
+    ],
+)
+def test_expert_payback(
+    kaizo_tables, kaizo_names, kaizo_roark_party, player, speed, hp, jumps, expected
+):
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Payback", "Accelerock", "", ""))
+    s = _with_player(t, s, n.species_names.index(player), 0, known=True)
+    s = _hp(_speeds(s, player=500 if speed == "slower" else 1, opp=100), 1, hp)
+    assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expected
+
+
+@pytest.mark.parametrize("flags", [0x17, 0x10F])
+@pytest.mark.parametrize("speeds", [(100, 100), (500, 100), (1, 100)])
+def test_speed_faster_exact_equals_loose(
+    kaizo_tables, kaizo_names, kaizo_roark_party, flags, speeds
+):
+    """Exact == loose for Tailwind and Payback, whose labels compare for COMPARE_SPEED_FASTER:
+    at equal speed the tie's RandNext() & 1 decides (battle_lib.c:1438-1444) and is a read
+    of the exact layout (E1 Ruling R8); slower and faster too."""
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Tailwind", "Payback", "Accelerock", ""))
+    s = _with_player(t, s, 72, 0, known=True)
+    for hp in (100, 50):
+        s2 = _hp(_speeds(s, player=speeds[0], opp=speeds[1]), 1, hp)
+        layout = layout_for(t, flags, s2)
+        assert policy.ai_refusals(t, s2, n, layout) == []
+        _assert_exact_equals_loose(t, s2, layout)
