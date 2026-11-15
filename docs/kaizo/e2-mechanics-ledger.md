@@ -9,7 +9,14 @@
   Poison Heal / Bad Dreams / Dragon Rage / SonicBoom / stat moves / trapping abilities / Dream
   Eater / Payback commit (db0b6d7), and this ledger commit (backlog regenerated: the Gardenia
   split's missing groups 78 -> 42, runnable battles 0 -> 9; Metronome's unmodelled callable moves
-  115 -> 87). New state: `can_unburden`, `minimized`.
+  115 -> 87). New state: `can_unburden`, `minimized`. Guard tests fixed at f7b2ae1 ("fix(e2):
+  guard tests after batches 6-9"); the focused set (tests/data, tests/tools, tests/prep,
+  test_accuracy_classes, test_damage_classes, test_faints, test_field_effects, test_learn,
+  tests/search/test_stage_b_learn.py): 819 passed, 2 skipped.
+- Batch 9 compile, the fast-tier lock file present (its pid 20932 dead; other sessions' pytest
+  running beside): `jit(step)` 76.5 s (trace 4.8, compile 71.8), `jit(vmap(step))` 39.6 s; to
+  re-time load-free (standing rule).
+- Standing (coordinator 2026-11-15): every batch's focused set includes the files above.
 - Left of batch 9's plan (Owed: "Batch 9 left"): SolarBeam, Jump Kick's crash, Volt Tackle's
   family (262), Endeavor, Pain Split, Knock Off, Focus Punch, Safeguard, Substitute, Encore,
   Assist, Leaf Guard, Synchronize, Wonder Guard, Pressure, Download, Focus Band, Wiki Berry, the
