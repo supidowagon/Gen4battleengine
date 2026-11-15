@@ -291,6 +291,49 @@ Out of scope: AI entries (E1), double / multi formats, gauntlets, the terrain en
   keeps the Custap flag (step `custap`, `ts_custap`) and whether it needs the same persistence.
 - Knock Off leaves canUnburden as it was: an armed Unburden holder doubles its speed after it.
 
+### Design: a chosen move replaced mid-turn (Encore's takeover; manager decision (a), 2026-11-15)
+
+Problem. FightCommand (bcp.c:1866-1873) runs an encored battler's encored move whatever it chose, so
+a faster Encore this turn replaces the move the turn-start laws and sampler assumed. The same
+gap already exists, unflagged, for Sleep Talk's split variants (B5-13 Disable, B7-13 Imprison):
+`call_laws` / `call_variants` / `call_consistent` enumerate the alternative called move exactly,
+but `sample_outcome` draws every move-dependent field from the turn-start prediction
+(`used_moves`), so a split variant whose called move differs in crit stage, effect chance or
+duration law is sampled at the wrong rates. One mechanism covers both.
+
+Revised after review (approve-with-changes, 2026-11-15): the first draft listed `hit` as
+rate-free (it is the roll's class over the move's thresholds, outcome.py:967-968), missed `call`
+(Encore can lock a battler into Metronome / Assist / Sleep Talk / Copycat: Encore is not
+NO_METRONOME, and sCannotEncoreMoves leaves them), `fang_flinch` and `future_hit`, chose the copy by
+a test that can disagree with the laws, and encoded the variant in `call` (which Metronome's and
+Assist's `call % count` would corrupt). The plan now:
+
+1. One event, shared by laws, engine and sampler: `encore_taken[battler]` = its encore_move was 0
+   at the turn start and is set and held (moves[encore_slot] == encore_move) when its action
+   starts, not struggling (bcp.c:1866-1873); a new `step_events` flag. With the existing
+   `disabled_at_move` / `sealed_at_move` (`_split_events`) it decides every replaced-move variant.
+2. Laws (no new Outcome fields): a TAKEN variant per battler whose foe can make it happen (a foe
+   using Encore, or an invoker that can call it: over-approximate; `call_consistent` drops the
+   rows that did not happen), computed wholly from a hypothetical state with the encore set (as
+   `_disabled_state` does for Disable): moves, effects, crit odds, damage classes, thresholds and
+   the battler's own call law when the encored move is an invoker. The variant tag is a field
+   beside `call` (not an offset of it). Possible only when the target is not encored at the turn
+   start, its last move is encorable, held, has PP and differs from the chosen one.
+3. Sampler only: draw Outcome A as today; draw B = A with the move-dependent fields of each
+   possibly-replaced battler (`hit`, `crit`, `secondary`, `fang_flinch`, `duration`, `call`,
+   `future_hit`) redrawn for its alternative move; run the turn's events on A and return B for a
+   battler whose event fired. Exact: the event is fixed before that battler's action starts, and
+   the redrawn fields are read only after it. The same pass closes the Sleep Talk Disable /
+   Imprison split's sampler gap (today drawn from the turn-start prediction).
+4. Engine: unchanged (it already runs the replaced move; it only emits the event).
+5. Doubles: a short list of alternatives per battler, each keyed by its event (two foes can Disable
+   and Encore one battler in a turn); singles needs one per kind.
+6. Tests: the hand case (1 child vs 33) as a law test and a frequency test; a Sleep Talk + faster
+   Disable frequency test with calls of different accuracy (fails today); Encore into Metronome or
+   Assist; each shown failing without its part.
+7. Size: about two days (the reviewer's estimate for the first draft was 2-3; this route is
+   smaller). Playout cost: a second event pass on turns where a replacement is possible.
+
 ### Family 10 rest: Encore and Assist (next; decomp sites, not yet modelled)
 
 - Encore (effect 90, effect_script_0090.s: a direct ON_HIT subscript_encore_start.s ->
@@ -1589,3 +1632,13 @@ Rules left out because another mechanic is missing; each closes with the mechani
   user moving first let the laws drop the foe's reads (test_matches_sampled_frequencies_random's
   derandomized case, Snore vs Future Sight; on main d420167 too, reached now by the batch 10
   generator draws). Snore is left out of `flinch_sure` (its foe's reads stay planned).
+- B10-11 (batch 10, family 10) Assist (`EffectId.ASSIST`, 89, decomp 180), an invoker
+  (`order.CALL_ASSIST`), both engines. BtlCmd_TryAssist (battle_script.c:6405-6444;
+  `order.assist_candidates`): in party order, every move of every other party slot holding a
+  Pokemon (a fainted mate's too), not Move_IsInvoker (`ids.INVOKER_MOVES`, battle_lib.c:
+  3032-3045) and Metronome-able (NO_METRONOME; Gravity and Heal Block owed with those moves);
+  duplicates count; the call is RandNext() % numMoves (`sample_outcome`: a uniform draw over the
+  list, fold_in 30 + side; `call_laws`: each position weighs 1, grouped by the move it calls in
+  `call_variants`); none listed fails it (MOVE_STATUS_FAILED). Then GoToMoveScript like the other
+  invokers (step's generic invoker path; RANGE_SINGLE_TARGET_SPECIAL: its own defender is the
+  user). Its AI entry was transcribed generically by E1 (batch 3).
