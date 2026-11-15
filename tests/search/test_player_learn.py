@@ -116,16 +116,22 @@ def test_greedy_equals_playout_through_learns(tables, roots):
 
 
 def test_a_pending_learn_root_window_c_is_refused_and_named(tables, names):
-    # Refused at the root's settle, before any turn: both loops, both reasons, on the
-    # programs of the test above (the turn count is free: no turn is played).
+    # Refused at the root's settle, before any turn: both loops on the programs of the test
+    # above (the turn count is free there: no turn is played).
     s = _window_c_root(tables, names)
     key = jax.random.PRNGKey(7)
     assert int(_run(tables, s, GREEDY, (), key, TURNS)[0].refused) == 1
-    assert "window (c)" in player_module.refusal_reason(tables, s, GREEDY, (), key, TURNS)
-    # Formerly test_learn.py::test_refusal_reason_settles_a_pending_learn_root:
-    # refusal_reason must settle the root as _resolve_pending does (settle_learns).
     assert int(playout(tables, s, key, TURNS).refused) == 1
-    assert "window (c)" in playout_module.refusal_reason(tables, s, 0, key, TURNS)
+    # Both refusal_reason replays name it with no turn to replay (max_turns 0), so the name
+    # can only come from the root's settle (player._replay's and playout.refusal_reason's
+    # settle_reason, as _resolve_pending's settle_learns); with turns, the first replayed
+    # turn names the same window. Formerly test_learn.py::
+    # test_refusal_reason_settles_a_pending_learn_root. Python-level replays: no new program.
+    for turns in (0, TURNS):
+        reason = player_module.refusal_reason(tables, s, GREEDY, (), key, turns) or ""
+        assert "window (c)" in reason, ("player", turns)
+        reason = playout_module.refusal_reason(tables, s, 0, key, turns) or ""
+        assert "window (c)" in reason, ("playout", turns)
 
 
 def test_the_empty_line_equals_playout_through_learns(tables, roots):
