@@ -50,6 +50,13 @@ Encodings:
   (subscript_uproar.s:9-11, bcp.c:1527-1534, battle_lib.c:2135, :2213), so it is
   ``uproar != 0``. While it is up, ``locked_move`` holds the move (``moveLockedInto``,
   subscript_uproar.s:5): ``Battler_CanPickCommand`` is FALSE (battle_lib.c:6224-6235).
+* Future Sight / Doom Desire (E2 batch 5): ``future_timer``, ``future_damage``, ``future_move``
+  and ``future_attacker`` are ``FieldConditions.futureSight*[battler]`` of the battler the move
+  aims at (battle_script.c:6070-6090): the turns left, the HP the hit will take (the decomp keeps
+  it negative, ``* -1``), the move and the attacker's battler as ``1 + battler`` (convention 3),
+  0 when none; they stay when the battler leaves (field state). ``future_sight`` is the side's
+  ``SIDE_CONDITION_FUTURE_SIGHT`` bit: set with them, cleared only when the hit fires on a
+  battler with HP (bcp.c:1767-1770), so it can outlive the timer (the AI reads it).
 * ``trainer_item_count`` is ``aiContext.trainerItemCounts``: the bag's size at battle
   start, never decremented.
 * ``terrain`` is ``BattleSystem.terrain``: the battle terrain, a decomp ``TERRAIN_*`` id
@@ -171,8 +178,11 @@ class BattleState(NamedTuple):
     tailwind: jnp.ndarray  # int8
     wish_timer: jnp.ndarray  # int8
     wish_hp: jnp.ndarray  # int16
-    future_timer: jnp.ndarray  # int8
-    future_damage: jnp.ndarray  # int16
+    future_timer: jnp.ndarray  # int8, futureSightTurns (per battler)
+    future_damage: jnp.ndarray  # int16, -futureSightDamage: the HP the hit takes (per battler)
+    future_move: jnp.ndarray  # int16, futureSightMove (per battler)
+    future_attacker: jnp.ndarray  # int8, 1 + futureSightAttacker (per battler), 0 = none
+    future_sight: jnp.ndarray  # int8, SIDE_CONDITION_FUTURE_SIGHT (per side)
     trainer_items: jnp.ndarray  # int16[2,4], bag item ids (aiContext.trainerItems)
     trainer_item_count: jnp.ndarray  # int8, bag size at battle start (trainerItemCounts)
     qc_roll: jnp.ndarray  # int8, speedRand % 5 == 0 (Quick Claw), hidden, see the docstring
@@ -323,6 +333,9 @@ LAYOUT: dict[str, tuple[tuple[int, ...], type]] = {
     "wish_hp": (_SIDE, np.int16),
     "future_timer": (_SIDE, np.int8),
     "future_damage": (_SIDE, np.int16),
+    "future_move": (_SIDE, np.int16),
+    "future_attacker": (_SIDE, np.int8),
+    "future_sight": (_SIDE, np.int8),
     "trainer_items": ((SIDES, BAG_SLOTS), np.int16),
     "trainer_item_count": (_SIDE, np.int8),
     "qc_roll": (_SIDE, np.int8),

@@ -208,6 +208,12 @@ class EffectId(IntEnum):
     # no battler sleeps (``effects._inflict``, ``step._use_move``, ``step._uproar_check``;
     # rulings B5-4..).
     UPROAR = 67
+    # Future Sight, Doom Desire (effect_script_0148.s, BATTLE_EFFECT_HIT_IN_3_TURNS):
+    # ``BtlCmd_TryFutureSight`` (battle_script.c:6065-6100) stores the damage on the defender's
+    # battler for 3 turns (``BattleState.future_*``), which ``step._future_sight`` deals at the
+    # turn's end (bcp.c:1758-1783, subscript_future_sight_damage.s); the use itself deals none and
+    # never misses (rulings B5-8..).
+    FUTURE_SIGHT = 68
 
 
 # ``EffectId.COUNTER``'s source (``move_param[m, 0]``).
@@ -230,14 +236,18 @@ POWER_IF_TARGET_HALF_HP = 3  # effect_script_0221.s:5-8 (Brine)
 
 # Effects whose script runs no CalcCrit / CalcDamage: no crit and no damage roll is read
 # (``damage.fixed_damage``): Night Shade's level (effect_script_0087.s), Bide's unleash,
-# Super Fang (effect_script_0040.s), the OHKO moves (effect_script_0038.s).
+# Super Fang (effect_script_0040.s), the OHKO moves (effect_script_0038.s); Future Sight's use
+# deals nothing (effect_script_0148.s: its variance is TryFutureSight's, ``Outcome.roll[s, 0]``).
 UNROLLED_EFFECTS = (
     EffectId.LEVEL_DAMAGE,
     EffectId.BIDE,
     EffectId.HALVE_HP,
     EffectId.OHKO,
     EffectId.COUNTER,
+    EffectId.FUTURE_SIGHT,
 )
+# BtlCmd_TryFutureSight (battle_script.c:6074): futureSightTurns = 3.
+FUTURE_SIGHT_TURNS = 3
 
 
 class AbilityId(IntEnum):

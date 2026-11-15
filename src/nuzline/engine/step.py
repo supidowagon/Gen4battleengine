@@ -77,6 +77,7 @@ from nuzline.engine.damage import (
 )
 from nuzline.engine.damage import (
     PRESENT_HEAL,
+    calc_move_damage,
     chart_types,
     confusion_damage,
     decomp_abilities,
@@ -134,6 +135,7 @@ from nuzline.engine.ids import (
     CHOICE_ITEMS,
     COUNTER_PHYSICAL,
     COUNTER_SPECIAL,
+    FUTURE_SIGHT_TURNS,
     ITEM_ABILITY_IDS,
     MOVE_SLEEP_TALK,
     MOVE_SNORE,
@@ -174,6 +176,7 @@ from nuzline.engine.order import (
 from nuzline.engine.outcome import (
     MAX_HITS,
     Outcome,
+    future_threshold,
     live_hit_threshold,
     roar_bench,
     roar_slot,
@@ -183,6 +186,8 @@ from nuzline.engine.state import BAG_SLOTS, BattleState
 _I32 = jnp.int32
 _unlock = unlock_move  # Battler_UnlockMoveChoice (battle_lib.c:1834): (state, side, cond)
 WINNER_OPPONENT, WINNER_PLAYER = 1, 2
+# BattleState.future_damage's int16 cap (every HP is far below it).
+FUTURE_DAMAGE_MAX = 32767
 PURSUIT_POWER_MUL = 20  # BtlCmd_TryPursuit (battle_script.c:6884): powerMul = 20
 NORMAL_POWER_MUL = 10  # BattleContext_Init (battle_lib.c:1980): powerMul = 10
 # BattleState.exp_refused: a payout inside the opponent's replacement loop left learn work
@@ -291,6 +296,13 @@ def _set_mon(state: BattleState, field: str, side, slot, value, cond) -> BattleS
     arr = getattr(state, field)
     new = jnp.where(cond, value, arr[side, slot]).astype(arr.dtype)
     return state._replace(**{field: arr.at[side, slot].set(new)})
+
+
+def _set_side(state: BattleState, field: str, side, value, cond) -> BattleState:
+    """``state.<field>[side] = value`` where ``cond`` (a per-side or per-battler field)."""
+    arr = getattr(state, field)
+    new = jnp.where(cond, value, arr[side]).astype(arr.dtype)
+    return state._replace(**{field: arr.at[side].set(new)})
 
 
 def _natural_cure(state: BattleState, side) -> BattleState:
@@ -755,7 +767,9 @@ def _use_move(
     # GoToMoveScript (battle_script.c:2121-2131) re-picks the defender for the called move
     # (``randomize``: in singles the living foe, else BATTLER_NONE, lib.c:1683-1705) and goes
     # to subscript_no_target without one: ``has_target`` is the called move's.
-    never_misses = tables.move_accuracy[used] == 0
+    never_misses = (tables.move_accuracy[used] == 0) | (
+        tables.move_effect[used] == EffectId.FUTURE_SIGHT
+    )
     has_target = (state.hp[target_side, target] > 0) | defender_always(tables, used)
     # Counter, Mirror Coat, Metal Burst (battle_script.c:4615-4705, :7153-7184): the command
     # reads the user's turnFlags damage and its last attacker (physical / special /
@@ -799,6 +813,33 @@ def _use_move(
     )
     failed = failed | (snore & (state.status[side, user] != Status.SLEEP))
     failed = failed | (counter & ~counter_ok) | call_failed
+    # Future Sight / Doom Desire (effect_script_0148.s:5): BtlCmd_TryFutureSight
+    # (battle_script.c:6065-6100) runs once the move passed the no-target check. With nothing
+    # pending on the defender's battler (futureSightTurns == 0) it sets the defender side's
+    # SIDE_CONDITION_FUTURE_SIGHT, 3 turns, the move (moveCur), the attacker (1 + battler) and the
+    # damage of this moment: BattleSystem_CalcMoveDamage (criticalMul 1, the defender side's and
+    # the field's conditions of now, :6079-6089; no type chart, no STAB, no Life Orb) times -1,
+    # then BattleSystem_CalcDamageVariance (:6090; battle_lib.c:7081-7094: RandNext() % 16,
+    # Outcome.roll[side, 0]; CalcMoveDamage's + 2 keeps it nonzero, so the "at least 1" never turns
+    # its sign); Helping Hand (x15/10, :6092-6094) is unsupported. The script then sets SYSCTL_NONSTANDARD_ACC_CHECK and
+    # SYSCTL_IGNORE_IMMUNITIES (:7): no accuracy roll (bcp.c:2911-2913), no type chart (:2354),
+    # and its ON_HIT effect only prints. With one pending it prints "But it failed!"
+    # (:10-14, subscript_but_it_failed.s: MOVE_STATUS_NO_MORE_WORK, no AfterMoveEffects, no miss
+    # shown).
+    future = can_act & has_target & (tables.move_effect[used] == EffectId.FUTURE_SIGHT)
+    pending = state.future_timer[target_side] != 0
+    failed = failed | (future & pending)
+    sets = future & ~pending
+    rolled = 85 + outcome.roll[side, 0].astype(_I32)
+    stored = jnp.maximum(calc_move_damage(tables, state, side, used) * rolled // 100, 1)
+    # futureSightDamage is an s32; the hit reads it only through min(damage, curHP) and
+    # damage >= curHP, so it is kept capped to the int16 storage (above any HP).
+    stored = jnp.minimum(stored, FUTURE_DAMAGE_MAX)
+    state = _set_side(state, "future_sight", target_side, 1, sets)
+    state = _set_side(state, "future_timer", target_side, FUTURE_SIGHT_TURNS, sets)
+    state = _set_side(state, "future_move", target_side, used, sets)
+    state = _set_side(state, "future_attacker", target_side, side + 1, sets)
+    state = _set_side(state, "future_damage", target_side, stored, sets)
     # Selfdestruct / Explosion (effect_script_0007.s): the script sets the user's HP to 0
     # before TryMove, so the user faints on a miss or into a Ghost too, and its own Cloud
     # Nine no longer counts for the hit (COUNT_ALIVE_BATTLERS). The faint itself is
@@ -978,6 +1019,7 @@ def _use_move(
         & ~(invoker & call_failed)
         & (tables.move_power[used] != 0)
         & ~targets_user(tables, used)
+        & (tables.move_effect[used] != EffectId.FUTURE_SIGHT)  # SYSCTL_IGNORE_IMMUNITIES
         & (chart == 0)
     )
     move_failed = flinched | disabled | taunted | self_hit | full_para | immobilized | no_effect
@@ -1380,7 +1422,7 @@ def _pursuit_hit(
 
 
 def _faint_check(
-    tables: Tables, before: BattleState, after: BattleState, entry_turn=None
+    tables: Tables, before: BattleState, after: BattleState, entry_turn=None, decide: bool = True
 ) -> BattleState:
     """Count new player faints (``player_faints``) and record their party slots
     (``deaths``); a player faint ends the battle only when no player Pokemon has HP left.
@@ -1411,6 +1453,9 @@ def _faint_check(
     opp_out = jnp.all((after.species[1] == 0) | (after.hp[1] == 0))
     ended = (after.over == 0) & (player_out | opp_out)
     winner = jnp.where(player_out, WINNER_OPPONENT, WINNER_PLAYER)
+    # ``decide`` False: the faint alone (AnyFainted), no CheckBattleOver after it (the side-
+    # condition pass, bcp.c:1749-1751).
+    ended = ended & decide
     after = after._replace(
         player_faints=(after.player_faints + player_fainted).astype(after.player_faints.dtype),
         deaths=(after.deaths | fainted[0]).astype(after.deaths.dtype),
@@ -2012,6 +2057,91 @@ def end_of_turn(
     return state._replace(flinched=jnp.zeros_like(state.flinched))
 
 
+def _future_sight(
+    tables: Tables, state: BattleState, sides, outcome: Outcome, protecting
+) -> BattleState:
+    """``SIDE_COND_CHECK_STATE_FUTURE_SIGHT`` of ``BattleControllerPlayer_CheckSideConditions``
+    (battle_controller_player.c:1758-1783), after ``CheckMonConditions`` (:1733): for each battler
+    in ``sides`` (``monSpeedOrder``) with a count, the count drops, and at 0 a battler with HP
+    clears its side's ``SIDE_CONDITION_FUTURE_SIGHT`` and runs subscript_future_sight_damage.s (a
+    battler with no HP lets the count reach 0 and keeps the bit). The subscript: ``CheckMoveHit``
+    (:8; ``outcome.future_threshold`` with ``Outcome.future_hit[battler]``, then
+    ``CheckMoveHitOverrides``: a protecting defender (``protecting``: this turn's turnFlags) stops a
+    ``MOVE_FLAG_CAN_PROTECT`` move and unlocks the battler in the attacker's slot, bcp.c:3005-3011;
+    either battler's No Guard clears ``MOVE_STATUS_MISSED``, :3016-3021); on
+    ``MOVE_STATUS_DID_NOT_HIT`` "But it failed!" (:53-59). Else (Substitute and Rage, :13-37, are
+    unsupported) ``CheckHoldOnWith1HP`` (:28; battle_script.c:9098-9124: a Focus Sash at full HP
+    leaves 1 HP, ``MOVE_STATUS_ENDURED_ITEM``) and ``UPDATE_HP`` (:29; ``waitingBattlers`` is 0
+    after the actions, bcp.c:881-886, so no resist berry, subscript_update_hp.s:9-10); then, under
+    ``MOVE_STATUS_ENDURED_ITEM``, a ``HOLD_EFFECT_ENDURE`` item is removed (:40-48).
+
+    ``moveStatusFlags`` is cleared only by ``BattleContext_Init`` (battle_lib.c:1983, the last
+    MoveEnd, bcp.c:3998), so the second hit of a pass reads the first one's flags: a miss or a
+    Protect makes it fail too (unless No Guard clears the miss), and an endured first hit removes
+    the second defender's Focus Sash. Between the two, ``AnyFainted`` faints the first defender
+    (:1749, no ``CheckBattleOver``: the battle can end on both faints, a draw, which is a loss);
+    the battle-over check and the exp payout are ``TurnEnd``'s (:1844-1847)."""
+    live = state.over == 0
+    start = state
+    missed, shielded, endured = jnp.bool_(False), jnp.bool_(False), jnp.bool_(False)
+    protecting = jnp.asarray(protecting)
+    mid = state
+    for position in (0, 1):
+        d = sides[position]
+        mon = state.active[d]
+        timer = state.future_timer[d].astype(_I32)
+        counting = live & (timer > 0)
+        left = jnp.where(counting, timer - 1, timer)
+        fires = counting & (left == 0) & (state.hp[d, mon] > 0)
+        state = _set_side(state, "future_timer", d, left, True)
+        state = _set_side(state, "future_sight", d, 0, fires)
+        attacker = jnp.clip(state.future_attacker[d].astype(_I32) - 1, 0, 1)
+        move = state.future_move[d].astype(_I32)
+        roll = outcome.future_hit[d].astype(_I32)
+        missed_now = ~((roll > 0) & (roll <= future_threshold(tables, state, d)))
+        no_guard = (state.ability[attacker, state.active[attacker]] == AbilityId.NO_GUARD) | (
+            state.ability[d, mon] == AbilityId.NO_GUARD
+        )
+        blocked = (protecting[d] != 0) & protect_blocks(tables, move, False)
+        miss_flag = jnp.where(~blocked & no_guard, False, missed | missed_now)
+        shield_flag = shielded | blocked
+        state = _unlock(state, attacker, fires & blocked)
+        hit = fires & ~miss_flag & ~shield_flag
+        hp = state.hp[d, mon].astype(_I32)
+        sash = holds(tables, state, d, ItemId.FOCUS_SASH)
+        damage = state.future_damage[d].astype(_I32)
+        full = hp == state.max_hp[d, mon].astype(_I32)
+        endured_now = hit & sash & full & (damage >= hp)
+        dealt = jnp.where(endured_now, hp - 1, jnp.minimum(damage, hp))
+        state = _set_mon(state, "hp", d, mon, hp - dealt, hit)
+        endure_flag = endured | endured_now
+        state = consume_item(state, d, hit & endure_flag & sash)
+        missed = jnp.where(fires, miss_flag, missed)
+        shielded = jnp.where(fires, shield_flag, shielded)
+        endured = endured | (fires & endured_now)
+        if position == 0:
+            state = _faint_check(tables, start, state, decide=False)
+            mid = state
+    state = _faint_check(tables, mid, state)
+    return pay_exp(tables, start, state)
+
+
+def _turn_start_items(tables: Tables, state: BattleState) -> BattleState:
+    """The next turn's ``ShowBattleMon`` (battle_controller_player.c:256-268) runs
+    ``BattleSystem_TriggerEffectOnSwitch``, whose ``SWITCH_IN_CHECK_STATE_HELD_ITEM_STATUS``
+    (battle_lib.c:4151-4165) checks every battler's held item before the commands are chosen
+    (``hooks.after_damage_items``). Its other states find nothing new at a turn start, and before
+    a Future Sight hit (``_future_sight``, after the last item check of the turn's end,
+    ``MON_COND_CHECK_STATE_ITEM_CONDITION``) the item check found nothing new either; a berry the
+    hit brings into its range is eaten here. With a replacement pending, ``replace`` runs the
+    whole switch-in check (``hooks.on_switch_in``) at that point instead, after the newcomer's
+    hazards (``TurnEnd``'s ``ReplaceFainted``, bcp.c:1848, comes before the next ``ShowBattleMon``)."""
+    run = (state.over == 0) & ~jnp.any(needs_replacement(state) != 0)
+    for side in (0, 1):
+        state = after_damage_items(tables, state, side, run)
+    return state
+
+
 def _unlock_sleepers(state: BattleState) -> BattleState:
     """``BattleSystem_SetupNextTurn`` (battle_lib.c:2240-2243): a locked battler that is
     asleep when the next turn is set up is unlocked."""
@@ -2067,8 +2197,10 @@ def step_events(
     sides = end_of_turn_order(tables, s, outcome)
     s = field_conditions(tables, s, sides)
     s = end_of_turn(tables, s, actions, outcome, order, sides, events["move_failed"])
+    s = _future_sight(tables, s, sides, outcome, events["protect_ok"])
     s = _unlock_sleepers(s)
     s = s._replace(turn=(s.turn + 1).astype(s.turn.dtype))
+    s = _turn_start_items(tables, s)
     # The turn's speedRand draw, kept for the next turn's readers (qc_kept).
     s = _keep_quick_claw(tables, s, outcome.quick_claw)
     return _where(state.over != 0, state, s), events

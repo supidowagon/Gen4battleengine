@@ -234,6 +234,7 @@ from nuzline.engine.outcome import (
     armored,
     crit_odds,
     empty_outcome,
+    future_thresholds,
     hit_thresholds,
     roar_inputs,
     roar_levels,
@@ -296,6 +297,7 @@ class Reads(NamedTuple):
     freeze_by_foe: jnp.ndarray  # bool[2, 2]: it moves after a foe move that freezes
     infatuated_own: jnp.ndarray  # it moves in love at the start (its source stays)
     infatuated_by_foe: jnp.ndarray  # bool[2, 2]: it moves after a foe Attract that can work
+    future_roll: jnp.ndarray  # its Future Sight can be set: TryFutureSight's roll[s, 0]
 
 
 class OutcomeLaws(NamedTuple):
@@ -321,6 +323,10 @@ class OutcomeLaws(NamedTuple):
     call: jnp.ndarray  # int32[2]: the Outcome.call value the rows carry (Copycat: 0 / 1, none)
     branch_ok: jnp.ndarray  # bool[2]: the speed_tie branches this call is consistent with
     call_pending: jnp.ndarray  # bool[]: an invoker is used but no call was given
+    # E2 batch 5: the Future Sight hit of this turn's end (outcome.future_thresholds), per defender.
+    future_thresholds: jnp.ndarray  # int32[2, K]
+    future_possible: jnp.ndarray  # bool[2, K]
+    future_loose: jnp.ndarray  # bool[2]: every roll its own class
 
 
 class SamplingOnly(Exception):
@@ -523,7 +529,7 @@ def _branch_masks(foe_first, first_self, base: dict) -> dict:
     late_flinch = ~first_self & _any_of(b["effect"], (_E.FLINCH, _E.FAKE_OUT))
     secondary = b["secondary"] & ~(blocked | late_flinch)[:, None]
     return {
-        "roll": b["crit"] | (confusable[:, None] & (b["hit_index"] == 0)),
+        "roll": b["crit"] | ((confusable | b["future_roll"])[:, None] & (b["hit_index"] == 0)),
         "secondary": secondary,
         # Tri Attack's status draw: read only through its proc (effects._tri_attack), so only
         # where that roll is; a chance-0 Tri Attack (none in either game: the decomp asserts a
@@ -626,6 +632,8 @@ INPUT_NEUTRAL_EFFECTS = (
     # E2 batch 5. Uproar starts an uproar on its user, which wakes a sleeper at its own status
     # check: the side's own status change, which ``own_pre_move`` covers for a Guts user.
     _E.UPROAR,
+    # Stores a hit for a later turn's end (step._future_sight): nothing of this turn's hits.
+    _E.FUTURE_SIGHT,
 )
 INPUT_CLAUSE_EFFECTS = (
     _E.STAT_SELF,  # the foe's Defense / Sp. Def
@@ -919,6 +927,8 @@ NON_TABLE_DAMAGE_EFFECTS = (
     _E.SLEEP_TALK,
     _E.METRONOME,
     _E.COPYCAT,
+    # No damage at its use (its roll is TryFutureSight's stored damage, damage.fixed_damage).
+    _E.FUTURE_SIGHT,
 )
 
 
@@ -1147,7 +1157,17 @@ def outcome_laws(
 
     hit_index = jnp.arange(MAX_HITS)[None, :]
     lands = uses_move[:, None] & (hit_index < max_hits[:, None])  # [2,5]
-    hit = uses_move[:, None] & (tables.move_accuracy[moves] != 0)[:, None] & (hit_index == 0)
+    # Future Sight / Doom Desire never roll for accuracy at their use (effect_script_0148.s:7,
+    # SYSCTL_NONSTANDARD_ACC_CHECK); their set-up draws TryFutureSight's variance, roll[s, 0],
+    # when nothing is pending on the target's battler (it cannot change before the move: only
+    # this side's own Future Sight sets it, and the count drops at the turn's end).
+    future = effect == _E.FUTURE_SIGHT
+    future_roll = uses_move & future & (state.future_timer[::-1] == 0)
+    hit = (
+        uses_move[:, None]
+        & ((tables.move_accuracy[moves] != 0) & ~future)[:, None]
+        & (hit_index == 0)
+    )
     crit = lands & rolled[:, None]
     secondary = lands & ((chance != 0) & _any_of(effect, _PROC_EFFECTS))[:, None]
     holders = _holds(
@@ -1254,6 +1274,7 @@ def outcome_laws(
         "para_own": uses_move & (status == Status.PARALYSIS),
         "freeze_own": uses_move & (status == Status.FREEZE),
         "confused_own": uses_move & (state.confusion >= 2),
+        "future_roll": future_roll,
         "para_inflict": uses_move
         & _inflicts(tables, state, moves, Status.PARALYSIS)
         & ~status_blocked,
@@ -1456,6 +1477,9 @@ def outcome_laws(
             roar_level=roar_level,
             roar_target=roar_target,
             call=jnp.zeros((2,), bool),  # stamped per call variant (enumerate_turn), not drawn
+            # The Future Sight hit of this turn's end on side d's battler: its count is 1 now
+            # (step._future_sight; read when the battler has HP then, over-approximate).
+            future_hit=live & (state.future_timer == 1),
         )
 
     both = zip(branch_relevant(branches[0]), branch_relevant(branches[1]), strict=True)
@@ -1535,6 +1559,7 @@ def outcome_laws(
         freeze_by_foe=jnp.stack([m["freeze_by_foe"] for m in branches]),
         infatuated_own=base["infatuated_own"],
         infatuated_by_foe=jnp.stack([m["infatuated_by_foe"] for m in branches]),
+        future_roll=future_roll,
     )
     kind = jnp.where(
         effect == _E.TAUNT,
@@ -1560,10 +1585,12 @@ def outcome_laws(
     if loose:
         compress = jnp.zeros_like(compress)
     thresholds, possible = hit_thresholds(tables, state, actions, moves)
+    future_thr, future_ok, future_loose = future_thresholds(tables, state, actions, moves)
     if loose:
         # The brute force: the hit law cut at every threshold variant, possible or not
-        # (an extra cut only splits a class).
+        # (an extra cut only splits a class), and the Future Sight roll whole.
         possible = jnp.ones_like(possible)
+        future_loose = jnp.ones_like(future_loose)
     return OutcomeLaws(
         hit_thresholds=thresholds,
         hit_possible=possible,
@@ -1584,6 +1611,9 @@ def outcome_laws(
         call=call,
         branch_ok=branch_ok,
         call_pending=call_pending,
+        future_thresholds=future_thr,
+        future_possible=future_ok,
+        future_loose=future_loose,
     )
 
 
@@ -1612,6 +1642,18 @@ def hit_class_law(thresholds) -> _Law:
 def _hit(laws: OutcomeLaws, side: int) -> _Law:
     possible = np.asarray(laws.hit_possible[side], bool)
     return hit_class_law(np.asarray(laws.hit_thresholds[side])[possible])
+
+
+def _future_hit(laws: OutcomeLaws, side: int) -> _Law:
+    """The Future Sight hit's CheckMoveHit roll (bcp.c:2976) on side ``side``'s battler: its
+    class over ``outcome.future_thresholds``, or every roll 1-100 where ``future_loose``."""
+    if bool(laws.future_loose[side]):
+        return list(range(1, 101)), [1] * 100, 100
+    possible = np.asarray(laws.future_possible[side], bool)
+    thresholds = np.asarray(laws.future_thresholds[side])[possible]
+    if thresholds.size == 0:  # no hit this turn can read it
+        return [1], [1], 1
+    return hit_class_law(thresholds)
 
 
 def _crit(laws: OutcomeLaws, side: int) -> _Law:
@@ -1741,6 +1783,7 @@ _LAWS = {
     "tri_attack": _tri_attack,
     "roar_level": _roar_level,
     "roar_target": _roar_target,
+    "future_hit": _future_hit,
 }
 
 
@@ -1943,7 +1986,8 @@ def _move_reads(laws: OutcomeLaws, branch: Branch, plan: ReadPlan) -> None:
                 ("flinch_item", (s, i)),
             ):
                 plan.path(elem, "move", *hits)
-            if i > 0 or bool(rel.crit[s, 0]):  # roll[s, 0]: damage, or a self-hit below
+            # roll[s, 0]: damage, Future Sight's stored damage, or a self-hit below.
+            if i > 0 or bool(rel.crit[s, 0]) or bool(reads.future_roll[s]):
                 plan.path(("roll", (s, i)), "move", *hits)
         for name in (
             "n_hits",

@@ -174,6 +174,8 @@ _NONZERO_SIDE = (
     "infatuated",
     # "{0} caused an uproar!" / "{0} calmed down." (subscript_uproar.s, subscript_uproar_end.s).
     "uproar",
+    # "{0} foresaw an attack!" (subscript_future_sight_start.s) until the hit's message.
+    "future_timer",
 )
 _NONZERO_FIELD = ("trick_room", "gravity")
 

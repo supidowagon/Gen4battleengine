@@ -435,7 +435,11 @@ def fixed_damage(
     sturdy = ignorable(state, atk_side, def_side) == AbilityId.STURDY
     ohko = jnp.where(sturdy, 0, _i32(state.max_hp[def_side, target]))
     amount = jnp.where(is_ohko, ohko, jnp.where(is_halve, halved, level))
-    fixed = is_level | is_bide | is_halve | is_ohko
+    # Future Sight / Doom Desire (effect_script_0148.s): no CalcDamage at the use, so no damage;
+    # the stored hit is step._future_sight's.
+    is_future = effect == EffectId.FUTURE_SIGHT
+    fixed = is_level | is_bide | is_halve | is_ohko | is_future
+    amount = jnp.where(is_future, 0, amount)
     return fixed, jnp.where(is_bide, stored, jnp.where(immune, 0, amount))
 
 

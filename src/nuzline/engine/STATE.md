@@ -70,9 +70,16 @@ three structs has a row.
   together (bcp.c:1525-1535; `UpdateAfterSwitch`, battle_lib.c:2135, and
   `CleanupFaintedMon`, :2213, with the volatiles).
 - **sideConditionsMask**: Stealth Rock -> `stealth_rock`, Tailwind turns ->
-  `tailwind`, Lucky Chant turns -> `lucky_chant`. Its Reflect, Light Screen,
-  Spikes, Safeguard, Mist, Toxic Spikes, Future Sight and Wish bits are implied by
-  the nonzero turn/layer counts in the mapped fields.
+  `tailwind`, Lucky Chant turns -> `lucky_chant`, Future Sight -> `future_sight` (E2 batch 5:
+  per side; set by `BtlCmd_TryFutureSight`, battle_script.c:6070-6072, cleared only when the hit
+  fires on a battler with HP, bcp.c:1767-1770, so it outlives a count that ran out on a fainted
+  battler; the AI reads it). Its Reflect, Light Screen, Spikes, Safeguard, Mist, Toxic Spikes
+  and Wish bits are implied by the nonzero turn/layer counts in the mapped fields.
+- **FieldConditions.futureSight\*** (E2 batch 5): per battler (`[MAX_BATTLERS]` arrays, the
+  battler the move aims at; in singles the side's slot): `future_timer`, `future_damage` (the
+  HP the hit takes: the decomp stores it negative), `future_move` and `future_attacker` (the
+  attacker's battler as `1 + battler`, 0 = none; convention 3). Field state: they stay when the
+  battler leaves, and the hit lands on whatever battler holds the slot (`step._future_sight`).
 - **The field-condition pass** (`step.field_conditions`,
   `BattleControllerPlayer_CheckFieldConditions`, battle_controller_player.c:932-1254)
   counts down `reflect`, `light_screen`, `mist`, `safeguard`, `tailwind`, `lucky_chant`,
@@ -392,8 +399,8 @@ three structs has a row.
 | `FieldConditions.weatherTurns` | `weather_timer` | mapped |
 | `FieldConditions.futureSightTurns` | `future_timer` | mapped |
 | `FieldConditions.wishTurns` | `wish_timer` | mapped |
-| `FieldConditions.futureSightMove` | — | later (M6) |
-| `FieldConditions.futureSightAttacker` | — | later (M6) |
+| `FieldConditions.futureSightMove` | `future_move` | mapped |
+| `FieldConditions.futureSightAttacker` | `future_attacker` | mapped |
 | `FieldConditions.futureSightDamage` | `future_damage` | mapped |
 | `FieldConditions.wishTarget` | — | not needed because in singles Wish always lands on the user's side's active slot |
 
@@ -472,7 +479,7 @@ three structs has a row.
 | `BattleContext.tmpData` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |
 | `BattleContext.fieldConditionsMask` | `weather`, `trick_room`, `gravity`, `uproar` | mapped |
 | `BattleContext.fieldConditions` | `weather_timer`, `future_timer`, `future_damage`, `wish_timer` | mapped |
-| `BattleContext.sideConditionsMask` | `stealth_rock`, `tailwind`, `lucky_chant` | mapped |
+| `BattleContext.sideConditionsMask` | `stealth_rock`, `tailwind`, `lucky_chant`, `future_sight` | mapped |
 | `BattleContext.sideConditions` | `reflect`, `light_screen`, `mist`, `safeguard`, `spikes`, `toxic_spikes` | mapped |
 | `BattleContext.turnFlags` | — | not needed because it is reset every turn and `step` resolves a whole turn (`protecting`: the first actor's `protect_ok` event, read by the second actor in `step._execute_actions`; `roosting`: the first actor's `roosted` event, E2 batch 4) |
 | `BattleContext.selfTurnFlags` | — | not needed because it is reset at every action's end (`BattleContext_Init`, bcp.c:3998) and `step` resolves a whole action; `focusItemActivated` and `SELF_TURN_FLAG_PLUCK_BERRY` live in `_use_move`'s hit loop (`effects.MoveHit`) |

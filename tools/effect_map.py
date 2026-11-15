@@ -306,6 +306,9 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     # E2 batch 5. Uproar: effect_script_0159.s, a hit plus, for a user not in an uproar, an ON_HIT
     # indirect subscript_uproar.s (engine/effects.py ``_uproar``, engine/step.py).
     159: ("BATTLE_EFFECT_UPROAR", _E.UPROAR, (0, 0, 0)),
+    # Future Sight, Doom Desire: effect_script_0148.s, TryFutureSight then an ON_HIT message
+    # (engine/step.py ``_use_move``, ``_future_sight``).
+    148: ("BATTLE_EFFECT_HIT_IN_3_TURNS", _E.FUTURE_SIGHT, (0, 0, 0)),
 }
 
 DECOMP_EFFECT_NAMES: dict[int, str] = {k: v[0] for k, v in _EFFECTS.items()}

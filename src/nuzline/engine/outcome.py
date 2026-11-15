@@ -109,6 +109,9 @@ class Outcome(NamedTuple):
     # int16[2], an invoker's draw (order.invoked_move): Sleep Talk's 0..SLEEP_TALK_VALUES - 1,
     # Metronome's candidate rank; Copycat draws nothing.
     call: jnp.ndarray
+    # int8[2], by the battler Future Sight hits at this turn's end: its CheckMoveHit roll's class
+    # (``future_thresholds``; the raw roll 1-100 where ``future_loose``), read like ``hit``.
+    future_hit: jnp.ndarray
 
 
 def empty_outcome() -> Outcome:
@@ -139,6 +142,7 @@ def empty_outcome() -> Outcome:
         roar_level=sides,
         roar_target=sides,
         call=jnp.zeros((2,), jnp.int16),
+        future_hit=sides + 1,
     )
 
 
@@ -173,6 +177,7 @@ def _rate(
     target_moved=False,
     weather=None,
     target_confused=None,
+    total=None,
 ) -> jnp.ndarray:
     """``hitRate`` of ``side``'s ``move`` against side ``target``'s ``target_mon`` with the
     attacker's accuracy stage ``acc`` and the target's evasion stage ``eva_stage``
@@ -182,7 +187,9 @@ def _rate(
     (default: the target's confusion counter is nonzero, a newcomer never) as at the check.
     100 when No Guard makes the move hit (``CheckMoveHitOverrides``, bcp.c:3016-3021). A
     target that switches in holds its entry ability (``damage.entry_ability``: the copy when it
-    traces), since its switch-in checks run before the move (ruling B3-19)."""
+    traces), since its switch-in checks run before the move (ruling B3-19). ``total``: the
+    clamped stage sum to use instead of the one ``acc`` and ``eva_stage`` give (0-12,
+    ``future_thresholds``' grid); with it the weather is taken as given, unsuppressed."""
     weather = state.weather if weather is None else weather
     if target_confused is None:
         target_confused = ~target_switches & (state.confusion[target] > 0)
@@ -207,7 +214,10 @@ def _rate(
     # A defender that switches in this turn is the fresh Pokemon, not identified.
     identified = ~target_switches & (state.foresight[target] != 0)
     eva = jnp.where(identified & (eva < 0), 0, eva)
-    total = jnp.clip(6 + eva + acc, 0, 12)
+    grid = total is not None  # future_thresholds' grid point
+    total = (
+        jnp.clip(6 + eva + acc, 0, 12) if not grid else jnp.clip(jnp.asarray(total, _I32), 0, 12)
+    )
     rate = accuracy * _ACC_NUM[total] // _ACC_DEN[total]
     # Compoundeyes (battle_controller_player.c:2922-2924), right after the stage scaling.
     rate = jnp.where(a_ability == AbilityId.COMPOUNDEYES, rate * 130 // 100, rate)
@@ -221,6 +231,8 @@ def _rate(
     exploded = tables.move_effect[move] == EffectId.SELF_DESTRUCT
     hp = state.hp.at[side, user].set(jnp.where(exploded, 0, state.hp[side, user]))
     suppressed = weather_suppressed(tables, state._replace(hp=hp), on_field)
+    if grid:  # the grid's weather is the one at the check (none for a lock)
+        suppressed = jnp.asarray(False)
     weather = jnp.where(suppressed, Weather.NONE, weather)
     veiled = ((weather == Weather.SANDSTORM) & (d_ability == AbilityId.SAND_VEIL)) | (
         (weather == Weather.HAIL) & (d_ability == AbilityId.SNOW_CLOAK)
@@ -281,6 +293,143 @@ def live_hit_threshold(
     return _rate(
         tables, state, side, move, 1 - side, target_mon, jnp.asarray(False), acc, eva, target_moved
     )
+
+
+def stage_total(tables: Tables, state: BattleState, side, target, target_mon, acc, eva_stage):
+    """``int32``: the clamped stage sum ``6 + evaStages + accStages`` of
+    ``CheckMoveHitAccuracy`` (bcp.c:2873-2898) for ``side``'s active battler against side
+    ``target``'s ``target_mon`` on the field (``_rate``'s, with ``acc`` / ``eva_stage``)."""
+    a_ability = state.ability[side, state.active[side]]
+    own = state.ability[target, target_mon]
+    d_ability = jnp.where(a_ability == AbilityId.MOLD_BREAKER, AbilityId.NONE, own)
+    acc = jnp.asarray(acc, _I32)
+    eva = -jnp.asarray(eva_stage, _I32)
+    acc = jnp.where(a_ability == AbilityId.SIMPLE, acc * 2, acc)
+    eva = jnp.where(d_ability == AbilityId.SIMPLE, eva * 2, eva)
+    acc = jnp.where(d_ability == AbilityId.UNAWARE, 0, acc)
+    eva = jnp.where(a_ability == AbilityId.UNAWARE, 0, eva)
+    identified = (state.foresight[target] != 0) & (state.active[target] == target_mon)
+    eva = jnp.where(identified & (eva < 0), 0, eva)
+    return jnp.clip(6 + eva + acc, 0, 12)
+
+
+def future_threshold(tables: Tables, state: BattleState, defender) -> jnp.ndarray:
+    """``int32``: the threshold of the Future Sight / Doom Desire hit on side ``defender``'s
+    battler at this moment: ``BtlCmd_CheckMoveHit`` (battle_script.c:6115-6135) runs
+    ``BattleControllerPlayer_CheckMoveHit`` (bcp.c:217-221) for the stored attacker's battler slot
+    (``future_attacker``, whatever battler is in it now) against the defender with the stored move,
+    as an ordinary accuracy check (no SYSCTL flag is set at the turn's end: the last MoveEnd's
+    BattleContext_Init cleared them, bcp.c:3998): its stages, abilities, items, weather, and Zoom
+    Lens's ``Battler_MovedThisTurn`` true for every battler after the actions
+    (battle_lib.c:5365-5368). 100 under either battler's No Guard (bcp.c:3016-3021)."""
+    defender = jnp.asarray(defender, _I32)
+    attacker = jnp.clip(state.future_attacker[defender].astype(_I32) - 1, 0, 1)
+    move = state.future_move[defender].astype(_I32)
+    return _rate(
+        tables,
+        state,
+        attacker,
+        move,
+        defender,
+        state.active[defender],
+        jnp.asarray(False),
+        state.stages[attacker, Stat.ACC],
+        state.stages[defender, Stat.EVA],
+        True,
+    )
+
+
+# future_thresholds' grid per defender: attacker slot (SLOTS) x defender slot (SLOTS) x stage
+# total (13) x weather (4: the turn start's, none, sandstorm, hail) x the target confused or not.
+_FUTURE_TOTALS = 13
+_FUTURE_WEATHERS = 4
+
+
+def future_thresholds(
+    tables: Tables, state: BattleState, actions, moves=None
+) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+    """``(int32[2, K], bool[2, K], bool[2])``: per defender side ``d``, every threshold its
+    Future Sight hit (``future_threshold``) can have at this turn's end, which are possible, and
+    ``loose``: a Trace holder is among the battlers, so the grid does not follow the abilities and
+    the roll is kept whole (a class per roll). Sound, not tight: an extra threshold only splits a
+    class.
+
+    The hit reads the battlers on the field at the turn's end. The attacker's slot holds its
+    active Pokemon, the one it switches in, or (a foe's Roar) any living party member; likewise
+    the defender's. Their abilities and items do not change within a turn but by Trace (``loose``).
+    The stage sum takes every value 0-12 when a stage it reads can change this turn (a move with a
+    stat effect on accuracy or evasion, Foresight, a White Herb); else the start stages of a battler
+    that stays and 0 for a newcomer or a fainted attacker (CleanupFaintedMon). The weather can be
+    the start's, none (it ended, or a lock), or a weather move's or ability's sandstorm or hail
+    (the only ones the rate reads besides fog, which never starts); the target confused or not."""
+    actions = jnp.asarray(actions, _I32)
+    if moves is None:
+        moves = jnp.stack([used_move(tables, state, side, actions[side]) for side in (0, 1)])
+    live = state.over == 0
+    uses = live & ~is_switch(actions) & ~is_item(actions)
+    effect, params = move_effects(tables, state, moves)
+    slots = jnp.arange(state.hp.shape[1])
+    living = (state.species != 0) & (state.hp > 0)
+    incoming = jnp.clip(actions - MOVE_ACTIONS, 0, state.hp.shape[1] - 1)
+    roar = uses & (effect == EffectId.ROAR)
+    on_field = jnp.stack(
+        [
+            (slots == state.active[x])
+            | (is_switch(actions[x]) & (slots == incoming[x]))
+            | (roar[1 - x] & living[x])
+            for x in (0, 1)
+        ]
+    )
+    accuracy_moves = (
+        (effect == EffectId.STAT_FOE)
+        | (effect == EffectId.SECONDARY_STAT_FOE)
+        | (effect == EffectId.STAT_SELF)
+        | (effect == EffectId.SECONDARY_STAT_SELF)
+    ) & ((params[:, 0] == Stat.ACC) | (params[:, 0] == Stat.EVA))
+    herbs = jnp.any(on_field & (tables.item_effect[state.item] == ItemId.WHITE_HERB) & living)
+    free = jnp.any(uses & (accuracy_moves | (effect == EffectId.FORESIGHT))) | herbs
+    tracer = jnp.any(on_field & (state.ability == AbilityId.TRACE))
+    weathers = jnp.stack(
+        [state.weather.astype(_I32), Weather.NONE, Weather.SANDSTORM, Weather.HAIL]
+    ).astype(_I32)
+    a_mon, d_mon, total, wi, conf = (
+        g.reshape(-1)
+        for g in jnp.meshgrid(
+            slots,
+            slots,
+            jnp.arange(_FUTURE_TOTALS),
+            jnp.arange(_FUTURE_WEATHERS),
+            jnp.arange(2),
+            indexing="ij",
+        )
+    )
+    thresholds, possible = [], []
+    for d in (0, 1):
+        a = jnp.clip(state.future_attacker[d].astype(_I32) - 1, 0, 1)
+        move = state.future_move[d].astype(_I32)
+        foe = 1 - a  # the defender is the other side's battler (singles)
+
+        def rate(am, dm, t, w, c, a=a, move=move, d=d):
+            s = state._replace(active=state.active.at[a].set(am.astype(state.active.dtype)))
+            return _rate(
+                tables, s, a, move, d, dm, jnp.asarray(False), 0, 0, True,
+                weathers[w], c == 1, t,
+            )  # fmt: skip
+
+        thresholds.append(jax.vmap(rate)(a_mon, d_mon, total, wi, conf))
+
+        def actual(am, dm, keep_acc, a=a, d=d):
+            s = state._replace(active=state.active.at[a].set(am.astype(state.active.dtype)))
+            acc = jnp.where(keep_acc & (am == state.active[a]), state.stages[a, Stat.ACC], 0)
+            eva = jnp.where(dm == state.active[d], state.stages[d, Stat.EVA], 0)
+            return stage_total(tables, s, a, d, dm, acc, eva)
+
+        kept = jax.vmap(actual)(a_mon, d_mon, jnp.ones_like(a_mon, bool))
+        reset = jax.vmap(actual)(a_mon, d_mon, jnp.zeros_like(a_mon, bool))
+        stage_ok = free | (total == kept) | (total == reset)
+        possible.append(on_field[a][a_mon] & on_field[d][d_mon] & stage_ok & (foe == d))
+    loose = jnp.broadcast_to(tracer, (2,))
+    return jnp.stack(thresholds).astype(_I32), jnp.stack(possible), loose
 
 
 def _hit_threshold(
@@ -698,6 +847,8 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions) -> Outcome:
     fight = ~is_switch(actions) & ~is_item(actions)
     after_foe = jnp.stack([(first == 1 - side) & fight[1 - side] for side in (0, 1)])
     moves = used_moves(tables, state, actions, call, after_foe)
+    future_thr, future_ok, future_loose = future_thresholds(tables, state, actions, moves)
+    future_roll = jax.random.randint(jax.random.fold_in(key, 28), (2,), 1, 101, dtype=_I32)
     # The roll u = RandNext() % 100 + 1 (battle_controller_player.c:2976), as its class.
     thresholds, possible = hit_thresholds(tables, state, actions, moves)
     hit = hit_class(draw(0, per_hit, 100) + 1, thresholds[:, None, :], possible[:, None, :])
@@ -796,6 +947,13 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions) -> Outcome:
             jax.random.fold_in(key, 23), per_side, 0, jnp.maximum(roar_counts, 1), dtype=_I32
         ),
         call=call,
+        # The Future Sight hit's CheckMoveHit roll at the turn's end (bcp.c:2976, RandNext() % 100
+        # + 1), as its class over future_thresholds (the raw roll where loose). From a fold_in key.
+        future_hit=jnp.where(
+            future_loose,
+            future_roll,
+            hit_class(future_roll, future_thr, future_ok),
+        ),
     )
     return Outcome(
         *(

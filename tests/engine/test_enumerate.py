@@ -34,6 +34,7 @@ from nuzline.engine.outcome import (
     Outcome,
     crit_odds,
     empty_outcome,
+    future_thresholds,
     hit_threshold,
     hit_thresholds,
     outcome_to_py,
@@ -372,6 +373,19 @@ def decomp_law(tables, state, actions, name: str, index: tuple) -> dict[int, Fra
         ts, ok = (np.asarray(x)[side] for x in hit_thresholds(tables, state, actions))
         assert int(ts[0]) == int(hit_threshold(tables, state, actions)[side])
         groups: dict[tuple, list[int]] = {}
+        for u in range(1, 101):
+            groups.setdefault(tuple(u <= t for t in ts[ok]), []).append(u)
+        return {(min(us) if any(key) else 0): Fraction(len(us), 100) for key, us in groups.items()}
+    if name == "future_hit":
+        # The Future Sight hit's roll u = RandNext() % 100 + 1 (bcp.c:2976) at the turn's end,
+        # grouped as ``hit`` over every threshold it can have (outcome.future_thresholds), each
+        # roll alone where the grid is loose.
+        ts, ok, loose = (np.asarray(x)[side] for x in future_thresholds(tables, state, actions))
+        if bool(loose):
+            return {u: Fraction(1, 100) for u in range(1, 101)}
+        if not ok.any():
+            return {1: Fraction(1)}
+        groups = {}
         for u in range(1, 101):
             groups.setdefault(tuple(u <= t for t in ts[ok]), []).append(u)
         return {(min(us) if any(key) else 0): Fraction(len(us), 100) for key, us in groups.items()}

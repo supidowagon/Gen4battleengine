@@ -1317,10 +1317,11 @@ def focus_sash_damage(state: BattleState, side, damage, armed) -> tuple:
 
 
 # Effects whose script sets SYSCTL_IGNORE_TYPE_CHECKS or SYSCTL_IGNORE_IMMUNITIES: Night Shade
-# and Seismic Toss (effect_script_0087.s:5), Foresight (effect_script_0113.s:6, no damage).
+# and Seismic Toss (effect_script_0087.s:5), Foresight (effect_script_0113.s:6, no damage), Future
+# Sight (effect_script_0148.s:7, no damage at its use).
 # subscript_type_resist_berry.s:5 skips the berry for such a hit. tests/tools/
 # test_effect_map.py checks the list against every mapped effect script.
-IGNORES_TYPE_CHECKS = (_E.LEVEL_DAMAGE, _E.FORESIGHT, _E.HALVE_HP, _E.COUNTER)
+IGNORES_TYPE_CHECKS = (_E.LEVEL_DAMAGE, _E.FORESIGHT, _E.HALVE_HP, _E.COUNTER, _E.FUTURE_SIGHT)
 # subscript_type_resist_berry.s:6 also skips a MOVE_STATUS_ONE_HIT_KO hit.
 RESIST_BERRY_SKIPS = (*IGNORES_TYPE_CHECKS, _E.OHKO)
 

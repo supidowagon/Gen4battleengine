@@ -91,6 +91,9 @@ class RefSide:
     wish_hp: int
     future_timer: int
     future_damage: int
+    future_move: int
+    future_attacker: int  # 1 + battler, 0 = none
+    future_sight: int  # SIDE_CONDITION_FUTURE_SIGHT
     trainer_items: list[int]
     trainer_item_count: int
     qc_roll: int

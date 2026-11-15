@@ -9,9 +9,9 @@
   `search.expand` enumerates every variant); Metronome modelled but refused while any move it
   can call is unmodelled (150 vanilla / 128 Kaizo of 442). New refusal: Sleep Talk facing a
   reachable Disable (B5-3). Roark split entries closed: Sleep Talk (10 fights), Copycat (1).
-- Batch 5 part 2: Uproar modelled and supported in both engines, the sampler and the laws
-  (B5-4..B5-7; Roark split entry closed). Next: Future Sight / Doom Desire (Owed below); then
-  the review.
+- Batch 5 part 2: Uproar (B5-4..B5-7) and Future Sight / Doom Desire (B5-8..B5-12) modelled
+  and supported in both engines, the sampler and the laws; both Roark split entries closed
+  (commits: Uproar e0b708e, then Future Sight). Next: the batch 5 review.
 - Left after batch 5: U-turn (3 fights, the batch 6 design below), Metronome (3, B5-2).
 - Standing: the doubles conventions below apply to all new code; one review per batch.
 
@@ -163,9 +163,11 @@ Rules left out because another mechanic is missing; each closes with the mechani
   Basic script's `IfMoveEqualTo MOVE_UPROAR, ScoreMinus10`, trainer_ai/script.s:127, is in its
   sleep-move block). An uproaring opponent picks no command, which the AI already reads through
   `actions.locked_slot` (B5-5); no AI change is needed for the lock.
-- Future Sight / Doom Desire (#148): use-time damage (CalcMoveDamage + variance, no crit, STAB or
-  chart), a per-slot counter, and the hit as the first side-condition check after
-  `CheckMonConditions` (bcp.c:1739, :1758-1783) with its own accuracy roll (a new draw).
+- AI owner (E1): Future Sight / Doom Desire's AI side is untranscribed (the backlog's "AI move
+  effect #148" entry: Basic_CheckFutureSight, trainer_ai/script.s:825-826, scores -12 when
+  `SIDE_CONDITION_FUTURE_SIGHT` is up on the defender's or the attacker's side). That bit is
+  `BattleState.future_sight` (per side), which can stay up after the count ran out on a fainted
+  battler (B5-10): read it, not `future_timer`.
 - The status orbs vs Safeguard (subscript_badly_poison.s, subscript_burn.s): Safeguard.
 - `outcome.kings_rock_chance` reads the turn-start item (outcome.py), which breaks once a move
   can move items mid-turn: Trick, Thief, Fling.
@@ -589,3 +591,57 @@ Rules left out because another mechanic is missing; each closes with the mechani
   (`SetupNextTurn`, battle_lib.c:2232). Neither check changes HP, so Uproar and Disable share
   one faint check (`step._uproar_then_disable`). The player sees the uproar ("caused an
   uproar!", "calmed down."): `uproar`'s non-zero-ness is in the observation.
+- B5-8 Future Sight / Doom Desire (`EffectId.FUTURE_SIGHT`, effect 148: vanilla 80 / 90 % and
+  120 / 85 %, Kaizo 120 / 100 % and 250 / 100 %, no `MOVE_FLAG_CAN_PROTECT` in either): once the
+  move passed the no-target check, its script's `BtlCmd_TryFutureSight` (battle_script.c:
+  6065-6100) fails ("But it failed!", subscript_but_it_failed.s: `MOVE_STATUS_NO_MORE_WORK`, no
+  AfterMoveEffects, no miss shown) while the defender's battler has a count; else it sets the
+  defender side's `SIDE_CONDITION_FUTURE_SIGHT` (`future_sight`) and, on the defender's battler,
+  3 turns, moveCur, the attacker (`1 + battler`) and the damage of that moment:
+  `BattleSystem_CalcMoveDamage` with criticalMul 1 and the defender side's and the field's
+  conditions (:6079-6089: no crit, no type chart, no STAB, no Life Orb), then
+  `BattleSystem_CalcDamageVariance` (:6090, battle_lib.c:7081-7094: `Outcome.roll[side, 0]`;
+  the + 2 keeps it nonzero, so its sign never flips); Helping Hand is unsupported. The script then
+  sets `SYSCTL_NONSTANDARD_ACC_CHECK` and `SYSCTL_IGNORE_IMMUNITIES` (effect_script_0148.s:7): no
+  accuracy roll (bcp.c:2911-2913), no type chart (:2354, so no `noEffect`), and the use deals
+  nothing (no CalcDamage: `ids.UNROLLED_EFFECTS`, `damage.fixed_damage`); its ON_HIT effect only
+  prints. The fields are field state: they stay when either battler leaves.
+- B5-9 The hit: `SIDE_COND_CHECK_STATE_FUTURE_SIGHT` (bcp.c:1758-1783), the first side-condition
+  check, after `CheckMonConditions` (:1733) and before `TurnEnd`: per battler in monSpeedOrder
+  (the end-of-turn order) with a count, the count drops; at 0 a battler with HP clears its
+  side's bit and runs subscript_future_sight_damage.s: `CheckMoveHit` (:8; battle_script.c:
+  6115-6135, bcp.c:217-221) of the battler in the stored attacker's slot now (stages, abilities,
+  items: whoever is there, a fainted one included) against the defender with the stored move, an
+  ordinary check (no SYSCTL flag is up at the turn's end; Zoom Lens applies, every battler has
+  moved, battle_lib.c:5365-5368); a new roll, `Outcome.future_hit[battler]`
+  (`outcome.future_threshold`). Protect on that defender this turn stops a CAN_PROTECT move
+  (none) and unlocks the attacker's battler (bcp.c:3005-3011); else either battler's No Guard
+  clears the miss (:3016-3021). A miss is "But it failed!" (:53-59). Else Substitute and Rage
+  (unsupported), `CheckHoldOnWith1HP` (:28: a full-HP Focus Sash leaves 1 HP,
+  battle_script.c:9098-9124; Focus Band is unsupported), UPDATE_HP with no resist berry
+  (`waitingBattlers` is 0 after the actions, bcp.c:881-886; subscript_update_hp.s:9-10), then
+  under `MOVE_STATUS_ENDURED_ITEM` the Focus Sash's removal (:40-48). No held-item check follows.
+- B5-10 One pass, one set of flags: `moveStatusFlags` is cleared only by `BattleContext_Init`
+  (battle_lib.c:1983; the last MoveEnd, bcp.c:3998), so when both battlers' hits fall due, the
+  second reads the first's: a first miss or Protect fails the second (No Guard still clears a
+  carried miss), and a first endured hit removes the second defender's Focus Sash. Between the
+  two, `AnyFainted` (:1749, `onlyFaint`) faints the first defender without `CheckBattleOver`,
+  so the second hit still lands: two last Pokemon down is a draw, a loss (ruling 2); `TurnEnd`
+  pays the exp and checks the end (:1844-1847). A battler with no HP when its count runs out
+  takes nothing and keeps its side's bit, which only a later hit clears (`future_sight`).
+- B5-11 The next turn's `ShowBattleMon` (bcp.c:256-268) runs `BattleSystem_TriggerEffectOnSwitch`,
+  whose `SWITCH_IN_CHECK_STATE_HELD_ITEM_STATUS` (battle_lib.c:4151-4165) checks every battler's
+  item before the commands are chosen; a berry the Future Sight hit brought into range (it comes
+  after `MON_COND_CHECK_STATE_ITEM_CONDITION`) is eaten there (`step._turn_start_items`, at the
+  end of `step`; with a replacement pending, `replace`'s switch-in check runs it after the
+  newcomer's hazards, as `ReplaceFainted` precedes `ShowBattleMon`). Without such a hit it finds
+  nothing new: every earlier change of the turn's end was followed by an item check.
+- B5-12 Laws: the use draws `roll[s, 0]` (the 16-value law; its "move" read needs only that
+  the move runs) when the target's battler has no count at the turn start (only
+  the user's own Future Sight can set it before its move); no `hit` or `crit`. `future_hit[d]` is
+  read when `future_timer[d]` is 1 at the turn start; its law is the 1-100 roll as classes over
+  `outcome.future_thresholds`: every attacker / defender battler the slots can hold at the turn's
+  end (the active, its switch target, any living one a foe's Roar can drag), every stage sum when
+  an accuracy / evasion stat move, Foresight or a White Herb is in play (else the start stages or
+  0), the weather of the start, none, sandstorm or hail, the target confused or not; a Trace
+  holder among them keeps every roll (`future_loose`). `sample_outcome` draws the same.

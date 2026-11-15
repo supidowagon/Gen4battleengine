@@ -881,6 +881,41 @@ def _draw_uproar(draw, tables: Tables, a: dict, side: int, active: int, names: N
         a["types"][foe, foe_mon, 0] = Type.GHOST
 
 
+def _draw_future_sight(draw, tables: Tables, a: dict, side: int, active: int, names: Names) -> None:
+    """E2 batch 5: maybe (1 in 3) give the active Pokemon Future Sight or Doom Desire (full PP);
+    maybe (1 in 3) one pending on this side's battler from the foe's: 1 or 2 turns left (it hits
+    at the end of a turn that starts at 1), the move, the attacker (1 + battler) and a damage up
+    to twice the max HP, the side's bit up; else maybe (1 in 8) the bit alone (a hit whose
+    battler had fainted keeps it). With a hit due, maybe (1 in 3) a full-HP Focus Sash on the
+    battler, or No Guard on it or on the foe."""
+    rnd = draw(st.randoms(use_true_random=False))
+    moves = (names.move("Future Sight"), names.move("Doom Desire"))
+    if draw(st.integers(0, 2)) == 0:
+        move = rnd.choice(moves)
+        k = rnd.randint(0, 3)
+        a["moves"][side, active, k] = move
+        a["pp"][side, active, k] = int(tables.move_pp[move])
+    if draw(st.integers(0, 2)) == 0:
+        timer = rnd.choice((1, 1, 2))
+        a["future_timer"][side] = timer
+        a["future_move"][side] = rnd.choice(moves)
+        a["future_attacker"][side] = 1 + (1 - side)
+        a["future_damage"][side] = rnd.randint(1, 2 * int(a["max_hp"][side, active]))
+        a["future_sight"][side] = 1
+        if timer == 1 and draw(st.integers(0, 2)) == 0:
+            pick = rnd.randint(0, 2)
+            if pick == 0:
+                a["item"][side, active] = names.item("Focus Sash")
+                a["hp"][side, active] = a["max_hp"][side, active]
+            else:
+                a["ability"][
+                    side if pick == 1 else 1 - side,
+                    int(a["active"][side if pick == 1 else 1 - side]),
+                ] = AbilityId.NO_GUARD
+    elif draw(st.integers(0, 7)) == 0:
+        a["future_sight"][side] = 1
+
+
 def _draw_choice_lock(draw, a: dict, side: int, active: int) -> None:
     """``choice_lock``: none or one of the active Pokemon's moves, whatever its item (a lock
     without a Choice item is what a lost item would leave; ``UpdateMoveBuffers`` clears it)."""
@@ -983,6 +1018,7 @@ def supported_state(draw, tables: Tables, names: Names, invokers: bool = True) -
         if invokers:
             _draw_batch5(draw, tables, a, side, active, names)
         _draw_uproar(draw, tables, a, side, active, names)
+        _draw_future_sight(draw, tables, a, side, active, names)
         _draw_choice_lock(draw, a, side, active)
     count = draw(st.integers(0, BAG_SLOTS))
     bag = draw(st.lists(st.sampled_from(M1_BAG_ITEMS), min_size=count, max_size=count))
@@ -1162,6 +1198,8 @@ def any_outcome() -> st.SearchStrategy[Outcome]:
         call=st.lists(st.integers(0, 500), min_size=2, max_size=2).map(
             lambda v: jnp.asarray(np.asarray(v, np.int16))
         ),
+        # The Future Sight hit's roll: a flag or any class value (1-100), like ``hit``.
+        future_hit=st.one_of(_flag(sides), _ints(0, 100, sides)),
     )
 
 
@@ -1221,8 +1259,10 @@ LAW_MOVES = (
     "Secret Power",
     "Spikes",
     "Counter",
-    # E2 batch 5: Uproar's duration (Random 3, 3).
+    # E2 batch 5: Uproar's duration (Random 3, 3); Future Sight's stored roll.
     "Uproar",
+    "Future Sight",
+    "Doom Desire",
 )
 # Abilities the outcome relevance reads (contact procs, Steadfast, Simple's and Swift
 # Swim's Speed) or the hit odds read (Compoundeyes, Sand Veil, Snow Cloak), and Rough Skin

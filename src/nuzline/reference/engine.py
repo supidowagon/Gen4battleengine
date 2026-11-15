@@ -39,6 +39,7 @@ from nuzline.engine.ids import (
     ABILITY_DECOMP_IDS,
     ABILITY_MULTITYPE,
     CHOICE_ITEMS,
+    FUTURE_SIGHT_TURNS,
     ITEM_ABILITY_IDS,
     ITEM_GRISEOUS_ORB,
     METRONOME_DRAW,
@@ -359,6 +360,8 @@ def _fixed_damage(tables, s: RefState, attacker: int, move: int) -> int:
     bcp.c:2350-2358); on any other Bide turn nothing is dealt."""
     sd = s.sides[attacker]
     effect = _t(tables, "move_effect", move)
+    if effect == EffectId.FUTURE_SIGHT:  # effect_script_0148.s: no CalcDamage at the use
+        return 0
     if effect == EffectId.BIDE:
         return 2 * sd.bide_damage if sd.locked_move and sd.bide_turns == 0 else 0
     foe = _active(s, 1 - attacker)
@@ -959,7 +962,7 @@ def _source_leaves(s: RefState, side: int) -> None:
     s.sides[1 - side].infatuated = 0
 
 
-def _faint_check(turn: _Turn, s: RefState) -> None:
+def _faint_check(turn: _Turn, s: RefState, decide: bool = True) -> None:
     """``BattleControllerPlayer_AnyFainted`` (bcp.c:4409) then ``CheckBattleOver``:
     each flagged Pokemon faints (``subscript_faint_mon.s`` -> ``PlayFaintAnimation``,
     script.c:1795, which ends its action and cleans the battler up), then the battle
@@ -986,6 +989,8 @@ def _faint_check(turn: _Turn, s: RefState) -> None:
             s.deaths[slot] = 1
     turn.fainted.clear()
     s.player_faints += player_fainted
+    if not decide:  # AnyFainted alone, no CheckBattleOver (the side-condition pass, bcp.c:1749)
+        return
     if all(m.species == 0 or m.hp == 0 for m in s.sides[0].party):
         s.over, s.winner = 1, WINNER_OPPONENT
     elif all(m.species == 0 or m.hp == 0 for m in s.sides[1].party):
@@ -2685,6 +2690,8 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
     if (
         _t(tables, "move_power", move) != 0
         and not _targets_user(tables, move)
+        # Future Sight's script sets SYSCTL_IGNORE_IMMUNITIES (effect_script_0148.s:7).
+        and _t(tables, "move_effect", move) != EffectId.FUTURE_SIGHT
         and _matchup_x40(
             tables,
             _move_type(tables, s, side, move),
@@ -2698,6 +2705,23 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
     # unless fakeOutTurnNumber == totalTurns; TryMove then ends in subscript_missed.s
     # ("But it failed!").
     effect = _t(tables, "move_effect", move)
+    if effect == EffectId.FUTURE_SIGHT:
+        # effect_script_0148.s -> BtlCmd_TryFutureSight (script.c:6065-6100): with nothing pending
+        # on the defender's battler, its side's SIDE_CONDITION_FUTURE_SIGHT, 3 turns, the move,
+        # the attacker and CalcMoveDamage (criticalMul 1, the conditions of now) with its variance
+        # (o.roll[side][0]); with one pending, "But it failed!" (subscript_but_it_failed.s:
+        # MOVE_STATUS_NO_MORE_WORK). Then SYSCTL_NONSTANDARD_ACC_CHECK: no accuracy roll.
+        foe_sd = s.sides[1 - side]
+        if foe_sd.future_timer:
+            return record
+        foe_sd.future_sight = 1
+        foe_sd.future_timer = FUTURE_SIGHT_TURNS
+        foe_sd.future_move = move
+        foe_sd.future_attacker = side + 1
+        damage = _calc_move_damage(tables, s, side, 1 - side, move, False)
+        # An s32 in the decomp; read only through min(damage, curHP) and damage >= curHP, so it is
+        # kept capped to BattleState's int16 storage.
+        foe_sd.future_damage = min(_variance(damage, o.roll[side][0]), 32767)
     if effect == EffectId.FAKE_OUT and s.sides[side].fake_out_turn != s.turn:
         _unlock(s.sides[side])  # subscript_missed.s
         return record
@@ -2746,8 +2770,10 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
         ):
             s.ai_ability_known[s.sides[0].active] = 1
     roll = o.hit[side][0]
-    missed = _t(tables, "move_accuracy", move) != 0 and not 0 < roll <= _hit_rate(
-        tables, s, side, move, target_moved
+    missed = (
+        _t(tables, "move_accuracy", move) != 0
+        and effect != EffectId.FUTURE_SIGHT  # SYSCTL_NONSTANDARD_ACC_CHECK (bcp.c:2911-2913)
+        and not 0 < roll <= _hit_rate(tables, s, side, move, target_moved)
     )
     # CheckMoveHitOverrides (bcp.c:3001-3014) after the accuracy roll: a protecting foe
     # stops the move, Battler_UnlockMoveChoice; subscript_missed.s unlocks too.
@@ -3149,6 +3175,55 @@ def _end_of_turn(turn: _Turn, s: RefState, order: list[int]) -> None:
             _pay_exp(turn, s)  # CheckMonConditions' head: AnyFainted, AnyExpPayout (:1295-1299)
 
 
+def _future_sight(turn: _Turn, s: RefState, order: list[int]) -> None:
+    """``SIDE_COND_CHECK_STATE_FUTURE_SIGHT`` (bcp.c:1758-1783): each battler in monSpeedOrder
+    with a count drops it; at 0 a battler with HP clears its side's bit and takes
+    subscript_future_sight_damage.s: ``CheckMoveHit`` of the stored attacker's battler slot with
+    the stored move (bcp.c:217-221, the ordinary check; Zoom Lens: every battler has moved),
+    failing on MOVE_STATUS_DID_NOT_HIT ("But it failed!"); ``CheckHoldOnWith1HP`` (Focus Sash at
+    full HP, script.c:9098-9124), ``UPDATE_HP`` (no resist berry: waitingBattlers is 0), then the
+    endured item's removal (:40-48). ``moveStatusFlags`` lasts the whole pass (only
+    BattleContext_Init clears it, lib.c:1983), and ``AnyFainted`` faints a battler between the two
+    without CheckBattleOver (:1749); TurnEnd checks the end and pays (bcp.c:1844-1847)."""
+    if s.over:
+        return
+    tables, o = turn.tables, turn.outcome
+    flags: set[str] = set()
+    for d in order:
+        sd = s.sides[d]
+        if not sd.future_timer:
+            continue
+        sd.future_timer -= 1
+        mon = _active(s, d)
+        if sd.future_timer or not mon.hp:
+            continue
+        sd.future_sight = 0
+        attacker, move = sd.future_attacker - 1, sd.future_move
+        # BattleControllerPlayer_CheckMoveHitAccuracy: the roll against the rate of now.
+        if not 0 < o.future_hit[d] <= _hit_rate(tables, s, attacker, move, True):
+            flags.add("missed")
+        # CheckMoveHitOverrides (bcp.c:3001-3021): Protect first (it unlocks the attacker's
+        # battler), else either battler's No Guard clears MOVE_STATUS_MISSED.
+        if _protected(turn, s, attacker, move, False):
+            _unlock(s.sides[attacker])
+            flags.add("protected")
+        elif AbilityId.NO_GUARD in (_active(s, attacker).ability, mon.ability):
+            flags.discard("missed")
+        if flags & {"missed", "protected"}:
+            continue
+        damage = sd.future_damage
+        sash = _item_effect(tables, mon) == ItemId.FOCUS_SASH
+        if sash and mon.hp == mon.max_hp and mon.hp - damage <= 0:
+            damage = mon.hp - 1
+            flags.add("endured")
+        _lose_hp(turn, s, d, damage)
+        if "endured" in flags and sash:
+            mon.item_consumed, mon.item = mon.item, 0
+        _faint_check(turn, s, decide=False)
+    _faint_check(turn, s)
+    _pay_exp(turn, s)
+
+
 def _aqua_ring_check(turn: _Turn, s: RefState, side: int) -> None:
     """``MON_COND_CHECK_STATE_AQUA_RING`` (bcp.c:1332-1351): a ringed battler below full HP
     and alive heals ``Divide(maxHP, 16)`` (``subscript_aqua_ring_heal.s``, Big Root applied).
@@ -3430,6 +3505,7 @@ def ref_step(tables, state: RefState, actions: tuple[int, int], outcome) -> RefS
     order = _speed_order(tables, s, outcome)  # BattleSystem_SortMonSpeedOrder, bcp.c:887
     _field_conditions(turn, s, order)
     _end_of_turn(turn, s, order)
+    _future_sight(turn, s, order)
     # BattleSystem_SetupNextTurn (lib.c:2234) clears every flinch and unlocks a sleeping
     # battler (lib.c:2240-2243).
     for sd in s.sides:
@@ -3437,6 +3513,17 @@ def ref_step(tables, state: RefState, actions: tuple[int, int], outcome) -> RefS
         if sd.party[sd.active].status == Status.SLEEP:
             _unlock(sd)
     s.turn += 1
+    # The next ShowBattleMon (bcp.c:256) runs BattleSystem_TriggerEffectOnSwitch, whose
+    # SWITCH_IN_CHECK_STATE_HELD_ITEM_STATUS (lib.c:4151-4165) checks every battler's item; with a
+    # replacement pending it comes after it (ref_replace's switch-in effects).
+    waiting = any(
+        sd.party[sd.active].hp == 0
+        and any(m.species and m.hp for i, m in enumerate(sd.party) if i != sd.active)
+        for sd in s.sides
+    )
+    if not s.over and not waiting:
+        for side in (0, 1):
+            _held_item(turn, s, side)
     # The turn's speedRand (bcp.c:853-857), kept only while it can be read (_qc_kept).
     _keep_qc(tables, s, list(outcome.quick_claw))
     return s
