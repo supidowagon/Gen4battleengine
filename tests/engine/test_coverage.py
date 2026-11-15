@@ -33,7 +33,7 @@ from nuzline.engine.coverage import (
     terrain_refusal,
     unknown_start,
 )
-from nuzline.engine.ids import Weather
+from nuzline.engine.ids import AbilityId, Weather
 from tests.engine.helpers import (
     INTERMEDIATE,
     _inter,
@@ -244,18 +244,11 @@ def test_in_battle_form_changes_are_refused(tables, names, species, form, item, 
 
 def test_coverage_reads_the_form_row_ability(tables, names):
     origin = replace(sample_party(names)[0], species=487, form=1, item=names.item("Griseous Orb"))
-    r = check_coverage(tables, names, [origin], roark_trainer(), roark_party(names), 0)
-    # Origin Forme's row has Levitate (supported since E2 batch 3), Altered Forme's Pressure.
-    assert (
-        any(m.endswith("GIRATINA (slot 0): Pressure (ability UNSUPPORTED)") for m in r.missing)
-        is False
-    )
-    assert not any(
-        "Levitate (ability UNSUPPORTED)" in m for m in r.missing
-    )  # the AI's refusals stay
+    # Origin Forme's row has Levitate, Altered Forme's Pressure: coverage reads the form's row.
+    assert coverage_module._party_abilities(tables, [origin]) == {AbilityId.LEVITATE}
     altered = replace(origin, form=0)
-    r = check_coverage(tables, names, [altered], roark_trainer(), roark_party(names), 0)
-    assert any(m.endswith("GIRATINA (slot 0): Pressure (ability UNSUPPORTED)") for m in r.missing)
+    assert coverage_module._party_abilities(tables, [altered]) == {AbilityId.PRESSURE}
+    check_coverage(tables, names, [origin], roark_trainer(), roark_party(names), 0)
     with pytest.raises(ValueError, match="species 479 has no form 6"):
         check_coverage(
             tables,
