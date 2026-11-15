@@ -1,17 +1,26 @@
 # E2 mechanics ledger (Kaizo Roark split)
 
-## RESUME (updated 2026-11-14, batch 6 done, its review next)
+## RESUME (updated 2026-11-15, batch 7 done at the commits below, its review next)
 
-- Batch 5 review follow-ups landed: 48e278c (B5-13..B5-15: Sleep Talk vs a faster Disable
-  modelled, the B5-3 refusal removed; the invoker brute force made independent; Zoom Lens on
-  the Future Sight hit verified; the uproar generator fix; the performance section).
-- Batch 6, the mid-turn switch decision (B6-1..B6-9): U-turn and Baton Pass in both engines
-  (`step` pauses at the party list, `pivot_battler` and the `ts_*` scratch; the resume), the laws
-  and the sampler of a paused state (`outcome.pivot_view`), the search (`"pivot"` decisions in
-  Stage B, `expand` and the playouts through `playout.turn_inputs` / `step_through`), the
-  differential generator (`strategies._draw_pivot`, `pivot_actions`) and hand tests
-  (tests/engine/test_pivot.py, tests/search/test_pivot_search.py). Roark split entry closed:
-  U-turn (3 fights). Commits: 470fbef (engine, reference, laws, generator), af6b010 (search), and the closing commit (ledger, the pivot item and Natural Cure without whole-state selects).
+- Tip history: batch 6 and its review follow-ups (470fbef, af6b010, 639ee89); main with E1's
+  batches 2c-17 merged in at 23e10f0 (clean: E1's six per-battler fields `curse`,
+  `perish_song`, `perish_song_turns`, `yawn`, `lock_on`, `lock_on_target` arrived with no setter;
+  the Trace AI refusal lifted at 6f9ad2b, B3-21; the merge's Owed lines closed at f22b818).
+- Batch 7, the state the AI reads (B7-1..B7-11): `ai_item_known`, Ingrain, Mean Look / Block /
+  Spider Web, Imprison and the public `roosting` turn flag, in both engines, STATE.md, the
+  observation and the generator (`strategies._draw_batch7`). E1 reads these fields (Owed: "AI
+  owner (E1), batch 7"). E1's six fields stay owed with their moves (Owed).
+  Commits: 3c65508 (`ai_item_known`), 4a06792 (the moves and `roosting`), 0dfca0a (merged-tip
+  test follow-ups: U-turn / Baton Pass damage classes, the turn-end order test's
+  `uproar_disable`), and this ledger commit. The second family (E1's six fields with Curse
+  (Ghost), Perish Song, Yawn, Lock-On, Mind Reader) was not started: Owed.
+- Found, not fixed (pre-existing at f22b818, reproduced there): a differential divergence on a
+  generated state where the opponent switches into a bench Carvanha holding a drawn Magic Guard
+  (strategies `_draw_batch4`'s "Magic Guard newcomer facing Stealth Rock") while the player's
+  Pikachu uses Tackle: JAX ends with the newcomer fainted before the Tackle (no_target) and its
+  ability back to Rough Skin, the reference with it alive until the Tackle KO. Repro:
+  `_scratch/e2/b7/repro.py _scratch/e2/b7/diff2.log 2` on G: (the case is the log's third
+  "Failing test case"). Needs its own look before the next full differential run.
 - Compile, both with the fast-tier lock held (E1's run, pid 14524): `jit(step)` 35.0 -> 52.5 s, `jit(vmap(step))` 24.2 -> 25.6 s (the end run also beside this batch's slow search tests, so the step figure is load-skewed: logs in `_scratch/e2/b6/` on G:). Load-free size: the step jaxpr 73,192 -> 80,110 equations (+9.5%, `_scratch/e2/b6/eqns.py`, a synthetic state): the 22 `ts_*` / `pivot_battler` leaves widen every whole-state `_where` and reset, plus the list's faint check in `_act`, the scratch writes and the pivot logic. To re-time with the lock free (standing rule).
 - Left in the Roark split: Metronome (3 fights, B5-2: 123 of 442 callable moves unmodelled) and
   the terrain entry (2: Nature Power / Secret Power / Camouflage over several maps); the AI's
@@ -67,6 +76,10 @@ the `step` turn skeleton and `enumerate.py`'s branch structure stay as they are.
 2. Status orbs and the other berries and held items.
 3. Abilities.
 4. Move effects and Secret Power's terrain.
+5. Invokers, Uproar, Future Sight (B5-n).
+6. The mid-turn switch decision: U-turn, Baton Pass (B6-n).
+7. The state the AI reads: `ai_item_known`, Ingrain, Mean Look / Block / Spider Web, Imprison,
+   `roosting` (B7-n).
 
 ## Batch 6 design: mid-turn switch decision (U-turn, Baton Pass)
 
@@ -187,6 +200,29 @@ Rules left out because another mechanic is missing; each closes with the mechani
   and `Move_CanBeMetronomed` (battle_lib.c:7204-7207: `order.metronome_candidates`,
   `order.copycat_call`, `coverage.metronome_calls`); its Heal Block test is an unsupported move's:
   Gravity.
+- AI owner (E1), batch 7. New fields to read: `ai_item_known` (int16 per player party slot:
+  `battlerHeldItems`, the item id, for `IfHeldItemEqualTo` / `LoadHeldItemEffect` on the player,
+  trainer_ai.c:1901-1934), `ingrain`, `mean_look` / `mean_look_target` (1 + battler),
+  `imprison`, `imprisoned`, `roosting` (per battler; nonzero only at a pause or while a faint
+  replacement is pending, which is when `BattleAI_PostKOSwitchIn`'s chart reads it,
+  battle_lib.c:2540). Behaviour E1 now meets: `actions.trapped` (Bind, Mean Look, Ingrain) gates
+  the switch actions (switching.py reads only `trapped > 0`); `actions.move_imprisoned` removes
+  sealed moves from `usable_moves` (TrainerAI_Init's CHECK_INVALID_ALL); `damage.identified` now
+  returns flags (`CHART_IDENTIFIED | CHART_GROUNDED`), so every engine chart walk grounds an
+  ingrained Flying defender and `damage.ignorable` hides an ingrained Levitate; E1's own
+  `switching.chart_multipliers` does neither (the "Ingrain" and "Roost" refusals there can now be
+  lifted on these fields). Scripts still untranscribed: #106 (Basic_CheckMeanLook /
+  Expert_BindingMove), #192 (Basic_CheckCanImprison / Expert_Imprison), #181 Ingrain's.
+- Ingrain passed by Baton Pass to a Levitate holder: `Battler_Ability` reads its Levitate as none
+  (battle_lib.c:3100-3103), so the entry Spikes reach it (subscript_hazards_check.s,
+  `damage.grounded`) and a party-slot `damage.ignorable` read (the laws) should hide it; both
+  read the slot's own ability today (B7-7): Baton Pass with Ingrain on a Levitate newcomer.
+- The Iron Ball and Gravity clauses of `BasicTypeMulApplies` / `Battler_Ability`
+  (battle_lib.c:2534, :2545-2549, :3095-3098) beside Ingrain's (`damage.identified`): Gravity,
+  Iron Ball.
+- Doubles: subscript_mean_look.s:10 ORs the attacker's battler into the 2-bit `meanLookTarget`
+  and never clears it; in singles the OR always gives the one foe battler (B7-6), in doubles a
+  stale value can name a third battler: the doubles milestone.
 - E1's per-battler int8 fields (merged from main at 23e10f0; zero at battle
   start, no behaviour yet; the AI reads them, `ai.commands._VOLATILE_FIELDS` /
   `_MOVE_EFFECT_FIELDS`): `curse` (VOLATILE_CONDITION_CURSE,
@@ -851,3 +887,73 @@ Rules left out because another mechanic is missing; each closes with the mechani
   (battle_lib.c:7336-7386), Roar's drag: its hazards (subscript_force_target_to_switch_or_flee.s:31), then its
   switch-in effects at AfterMoveEffects (bcp.c:3672-3682), the site the resume shares. The generator: a drawn pivot half the time
   gets a living bench and a user free of sleep, freeze, confusion and love.
+- B7-1 `ai_item_known` (aiContext.battlerHeldItems, per player party slot, the item id):
+  `BattleMessage_ItemTag` (battle_script.c:11726-11745) runs `BattleAI_SetHeldItem`
+  (:12119-12122) for an item tag of `BTLSCR_ATTACKER`, `_DEFENDER` or `_MSG_BATTLER_TEMP`, never
+  for `_MSG_TEMP` (msgItemTemp), nor for a message built in C (Knock Off :6622, the pinch berries'
+  stat message :2857, the Choice refusal battle_lib.c:2362). Of the modelled items that is
+  Leftovers and Black Sludge at the turn end (subscript_restore_a_little_hp.s:10,
+  subscript_lose_hp_from_item_with_message.s:10; battle_lib.c:4955), Sticky Barb's damage
+  (:5340) and Shell Bell's heal (bcp.c:4745, battle_lib.c:7352). Not revealing: Quick Claw (no
+  message, subscript_check_quick_claw.s:6-10), Life Orb (subscript_lose_hp_from_item.s), the
+  orbs (subscript_badly_poison.s:77, subscript_burn.s:73), every berry's cure or heal, Frisk
+  (subscript_frisk.s:7). Custap (:17), Focus Sash (subscript_move_followup_message.s:16,
+  subscript_future_sight_damage.s:44), the resist berries (subscript_type_resist_berry.s:113) and
+  Pluck's victim (subscript_pluck.s:7) are named, then removed (B7-2).
+- B7-2 The record is cleared by `BattleMon_CopyToParty` of a battler holding nothing
+  (battle_lib.c:1819-1823), which every removal runs: `RemoveItem` (battle_script.c:8979-8981;
+  the berries through subscript_pluck_check.s) and the Sticky Barb transfer's `UpdateMonData`
+  (:3077-3078, subscript_transfer_sticky_barb.s:7); and on entry (`UpdateAfterSwitch`,
+  battle_lib.c:2153). `CleanupFaintedMon`'s clear (:2225) is played at the replacement's entry,
+  as for the known moves and ability: nothing reads a fainted player battler's record before.
+  Only the player's is kept: the AI reads `battlerHeldItems` for the other side only
+  (trainer_ai.c:1907-1913, :1924-1928).
+- B7-3 Ingrain (effect 181, effect_script_0181.s): sets `MOVE_EFFECT_INGRAIN` (:5-6); heals
+  `Divide(maxHP, 16)` (Big Root applied) at `MON_COND_CHECK_STATE_INGRAIN`, before Aqua Ring
+  (bcp.c:1311-1326; one faint check serves both heals); traps (`Battler_IsTrapped`,
+  battle_lib.c:5523, the party menu bcp.c:572; `actions.trapped`); grounds: `BasicTypeMulApplies`
+  skips an immune Flying row (:2534-2537, `damage.CHART_GROUNDED`) and `Battler_Ability` reads its
+  Levitate as none (:3100-3103, `damage.ignorable`). Baton Pass keeps it (moves.h:46).
+- B7-4 Ingrain, Aqua Ring, Mud Sport and Water Sport fail a user that has the effect already
+  in their effect script (effect_script_0181.s:5, _0251.s:5, _0201.s:5, _0210.s:5:
+  MOVE_STATUS_FAILED): the move does not connect, CheckMoveFailure prints "But it failed!" and
+  skips AfterMoveEffects (bcp.c:3312-3331), as Fake Out's. Aqua Ring and the sports were played
+  as a landed move with no effect; both engines now take Fake Out's path.
+- B7-5 Roar's Ingrain test (subscript_force_target_to_switch_or_flee.s:7) is `OPCODE_EQU`: only a
+  `moveEffectsMask` equal to `MOVE_EFFECT_INGRAIN` anchors the defender (:86-90,
+  NO_MORE_WORK); beside any other kept bit (Leech Seed, Lock-On, Perish Song, Yawn, Imprison(ed),
+  the sports, Aqua Ring, Camouflage) Roar drags it out (`effects.ingrain_anchors`).
+- B7-6 Mean Look, Block, Spider Web (effect 106): subscript_mean_look.s runs as a direct
+  `CHECK_HP | TO_DEFENDER` effect for a living defender on a move that connected (battle_lib.c:
+  1491-1504; accuracy 0, so only Protect stops it); it fails (MOVE_STATUS_FAILED, no
+  AfterMoveEffects) on a defender already trapped or behind a substitute (:7-8), else sets
+  `VOLATILE_CONDITION_MEAN_LOOK` and ORs the attacker into `meanLookTarget` (:9-10), stored as
+  `1 + battler` (in singles the OR always holds the one foe). It traps
+  (`VOLATILE_CONDITION_TRAPPED`, condition.h:77-78). It ends when the trapper leaves by a switch
+  that is not a Baton Pass (battle_lib.c:2055-2061) or faints (:2170-2172); Baton Pass keeps it
+  on both sides (:2078, :2111).
+- B7-7 Imprison (effect 192, `BtlCmd_TryImprison` battle_script.c:6674-6727): the foes'
+  `MOVE_EFFECT_IMPRISONED` is set first, whenever the script runs (:6686-6690), and is cleared only
+  with that battler's volatiles; the script fails a user already imprisoning or sharing no move
+  with a battler of the other side, whatever its HP (:6692-6722). A sealed move
+  (`Move_Imprisoned`, battle_lib.c:3316-3338) is invalid at selection (CHECK_INVALID_IMPRISONED,
+  :2287-2290; Sleep Talk's slots too, battle_script.c:4929) and, chosen before a faster foe's
+  Imprison, fails at `CHECK_STATUS_STATE_IMPRISON` after Taunt (bcp.c:2572-2583): unlock, no
+  PP, `moveFailFlags.imprisoned` (the Uproar check, battle_lib.c:2812), event `ACT_IMPRISONED`.
+- B7-8 `roosting` (turnFlags.roosting, battle_context.h:64) replaces `ts_roosted`: a Roost that
+  healed sets it (subscript_roost.s:11-12); a faint clears it (battle_lib.c:2189-2192) and
+  `SetupNextTurn` clears it (:2229-2231) after the faint replacements (bcp.c:1843-1856), so it is
+  kept at a pause and while a replacement is pending (`step.roosting_now`; `replace` clears it
+  with the last one), else 0. Per battler slot: a Pokemon dragged in after its side's Roost keeps
+  it, as the decomp does.
+- B7-9 Observation: the non-zero-ness of `ingrain` ("planted its roots!"), `mean_look` ("can no
+  longer escape!"), `imprison` ("sealed the opponent's move(s)!") and `roosting`, and the
+  `ACT_IMPRISONED` action kind ("can't use the sealed MOVE!"). `imprisoned` and `ai_item_known`
+  are not shown.
+- B7-10 Enumerator: Ingrain is an input clause (the foe's chart and Levitate change, like Roost);
+  Mean Look and Imprison are input-neutral (no damage input; a sealed move stops whole, like
+  Taunt); all three are status moves outside the table damage.
+- B7-11 Tests: the differential test and its generator (`strategies._draw_batch7`: the moves, a
+  shared move for Imprison, the five fields drawn; Roar against an ingrained foe with and
+  without other mask bits; `ai_item_known` none or the held item) reach every branch; no hand
+  test was needed beyond the updated order and observation tests.
