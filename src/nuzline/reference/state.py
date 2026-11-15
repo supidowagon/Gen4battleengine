@@ -119,6 +119,7 @@ class RefState:
     winner: int
     player_faints: int
     ai_seen_moves: list[list[int]]
+    ai_item_known: list[int]  # battlerHeldItems of the player's slots (item ids)
     ai_ability_known: list[int]
     # Experience (K3d-exp): the player party's, per slot, and sideGetExpMask[0].
     exp: list[int]

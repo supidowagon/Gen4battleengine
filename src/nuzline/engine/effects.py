@@ -1196,6 +1196,7 @@ def sticky_barb_transfer(tables: Tables, state: BattleState, side, foe, move, co
         & contact
     )
     state = _set(state, "item", (side, user), barb, on)
+    state = forget_item(state, foe, target, on)
     return _set(state, "item", (foe, target), 0, on)
 
 
@@ -1254,6 +1255,9 @@ def shell_bell_heal(tables: Tables, state: BattleState, side, dealt, cond) -> Ba
         & (hp < max_hp)
     )
     heal = divide(dealt, tables.item_param[item, 0].astype(_I32))
+    # "{0} restored a little HP using its {1}!" names the item (BTLSCR_MSG_BATTLER_TEMP, the
+    # attacker: subscript_restore_a_little_hp.s:10, bcp.c:4745, battle_lib.c:7352).
+    state = reveal_item(state, side, mon, on)
     return _set(state, "hp", (side, mon), jnp.minimum(hp + heal, max_hp), on)
 
 
@@ -1433,11 +1437,39 @@ def holds(tables: Tables, state: BattleState, side, item: ItemId) -> jnp.ndarray
 
 def consume_item(state: BattleState, side, cond) -> BattleState:
     """``BtlCmd_RemoveItem`` (battle_script.c:8972) on ``side``'s active Pokemon where
-    ``cond``: the item goes to ``item_consumed``."""
+    ``cond``: the item goes to ``item_consumed``; its ``BattleMon_CopyToParty`` (:8981) then
+    clears the AI's record of the item (``forget_item``)."""
     mon = state.active[side]
     item = state.item[side, mon]
     state = _set(state, "item_consumed", (side, mon), item, cond)
+    state = forget_item(state, side, mon, cond)
     return _set(state, "item", (side, mon), 0, cond)
+
+
+def reveal_item(state: BattleState, side, mon, cond) -> BattleState:
+    """A message names the held item of ``side``'s Pokemon in party slot ``mon`` where
+    ``cond``: ``BattleMessage_ItemTag`` (battle_script.c:11726-11745) runs
+    ``BattleAI_SetHeldItem`` (:12119-12122) for an item tag of ``BTLSCR_ATTACKER``,
+    ``BTLSCR_DEFENDER`` or ``BTLSCR_MSG_BATTLER_TEMP`` (not ``BTLSCR_MSG_TEMP``, which names
+    ``msgItemTemp``), so ``ai_item_known[mon]`` becomes the item. Only the player's
+    (``side`` 0) is kept: ``AICmd_IfHeldItemEqualTo`` and ``AICmd_LoadHeldItemEffect``
+    (trainer_ai.c:1901-1934) read ``battlerHeldItems`` for the other side's battlers only."""
+    on = jnp.asarray(cond) & (jnp.asarray(side) == 0)
+    known = state.ai_item_known
+    value = jnp.where(on, state.item[side, mon], known[mon]).astype(known.dtype)
+    return state._replace(ai_item_known=known.at[mon].set(value))
+
+
+def forget_item(state: BattleState, side, mon, cond) -> BattleState:
+    """``side``'s Pokemon in party slot ``mon`` loses its held item where ``cond``: every such
+    path (``BtlCmd_RemoveItem``, battle_script.c:8979-8981; ``UpdateMonData`` setting
+    ``BATTLEMON_HELD_ITEM``, :3077-3078, as subscript_transfer_sticky_barb.s:7 does) runs
+    ``BattleMon_CopyToParty``, which clears the AI's record of a battler holding nothing
+    (``BattleAI_ClearKnownItem``, battle_lib.c:1819-1823, :7735-7738). Player only
+    (``reveal_item``)."""
+    on = jnp.asarray(cond) & (jnp.asarray(side) == 0)
+    known = state.ai_item_known
+    return state._replace(ai_item_known=known.at[mon].set(jnp.where(on, 0, known[mon]).astype(known.dtype)))
 
 
 def apply_move_effect(

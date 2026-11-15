@@ -73,7 +73,7 @@ import jax.numpy as jnp
 
 from nuzline.data.tables import Tables
 from nuzline.engine.damage import ability_weather, trace_copy
-from nuzline.engine.effects import change_stage, entry_hazards
+from nuzline.engine.effects import change_stage, entry_hazards, forget_item
 from nuzline.engine.ids import AbilityId, ItemId, Stat, Status, Weather
 from nuzline.engine.order import pinch_divisor
 from nuzline.engine.state import STAGE_MAX, BattleState
@@ -358,6 +358,7 @@ def held_item_check(
     state, raised = _raise_stat(tables, state, side, item, pinch)
     on = healed | cured | raised
     spent = on & ~jnp.asarray(keep)
+    state = forget_item(state, side, mon, spent)  # RemoveItem's CopyToParty
     state = state._replace(
         item=state.item.at[side, mon].set(jnp.where(spent, 0, item).astype(state.item.dtype)),
         item_consumed=state.item_consumed.at[side, mon].set(
@@ -438,6 +439,9 @@ def pluck_berry(
     state = state._replace(hp=state.hp.at[side, user].set(new_hp.astype(state.hp.dtype)))
     state, cured = _restore(state, side, user, effect, on)
     state, raised = _raise_stat(tables, state, side, item, on)
+    # subscript_pluck.s:7 names the berry (BTLSCR_DEFENDER), then RemoveItem BTLSCR_DEFENDER
+    # (:10) clears the record again (forget_item).
+    state = forget_item(state, foe, target, on)
     state = state._replace(
         item=state.item.at[foe, target].set(jnp.where(on, 0, item).astype(state.item.dtype)),
         item_consumed=state.item_consumed.at[foe, target].set(

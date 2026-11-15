@@ -995,7 +995,7 @@ def supported_state(draw, tables: Tables, names: Names, invokers: bool = True) -
     Struggle), and the opponent's bag (a size of 0-4 in
     ``trainer_item_count``, ``M1_BAG_ITEMS`` in each slot below it, gaps allowed as
     after a use) and the AI's knowledge of the player (any ``ai_seen_moves`` and
-    ``ai_ability_known`` flags), the death record (``deaths`` = the fainted player slots), a
+    ``ai_ability_known`` flags, ``ai_item_known`` none or the held item), the death record (``deaths`` = the fainted player slots), a
     faint budget 0-3 and a random set of living player slots as ``protected``, each within
     its legal range, and the player's experience block (``_draw_exp``); the battle is not
     over."""
@@ -1082,6 +1082,10 @@ def supported_state(draw, tables: Tables, names: Names, invokers: bool = True) -
     for name in ("ai_seen_moves", "ai_ability_known"):
         flags = draw(st.lists(st.integers(0, 1), min_size=a[name].size, max_size=a[name].size))
         a[name][...] = np.reshape(flags, a[name].shape)
+    # The AI's record of each player item (batch 7): none, or the item a message named, which
+    # the Pokemon still holds (every removal clears the record, effects.forget_item).
+    known = draw(st.lists(st.booleans(), min_size=SLOTS, max_size=SLOTS))
+    a["ai_item_known"][...] = np.where(known, a["item"][0], 0)
     fainted = (a["species"][0] > 0) & (a["hp"][0] == 0)
     a["player_faints"][...] = int(np.sum(fainted))
     a["deaths"][...] = fainted

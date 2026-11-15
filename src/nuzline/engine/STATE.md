@@ -206,6 +206,11 @@ three structs has a row.
   loss), 2 player won. A player faint alone only records a death.
 - **recycleItem -> `item_consumed`**: the last item consumed, per party slot.
 - **aiContext**: `battlerMoves` (moves the AI has seen) -> `ai_seen_moves`,
+  `battlerHeldItems` (the player's held items a message named, E2 batch 7) -> `ai_item_known`
+  (per player party slot, an item id; set by `effects.reveal_item` where an item tag of
+  `BTLSCR_ATTACKER` / `DEFENDER` / `MSG_BATTLER_TEMP` names it, battle_script.c:11726-11745:
+  Leftovers and Black Sludge at the turn end, Sticky Barb's damage, Shell Bell's heal; cleared by
+  `effects.forget_item` when the item goes, battle_lib.c:1819-1823, and on entry, :2153),
   `battlerAbilities` (revealed abilities) -> `ai_ability_known`, `trainerItems`
   -> `trainer_items`, `trainerItemCounts` (the bag's size at battle start, never
   decremented, read by `TrainerAI_ShouldUseItem`'s gate, trainer_ai.c:4092) ->
@@ -518,7 +523,7 @@ three structs has a row.
 | `BattleContext.turnFlags` | — | not needed because it is reset every turn and `step` resolves a whole turn (`protecting`: the first actor's `protect_ok` event, read by the second actor in `step._execute_actions`; `roosting`: the first actor's `roosted` event, E2 batch 4) |
 | `BattleContext.selfTurnFlags` | — | not needed because it is reset at every action's end (`BattleContext_Init`, bcp.c:3998) and `step` resolves a whole action; `focusItemActivated` and `SELF_TURN_FLAG_PLUCK_BERRY` live in `_use_move`'s hit loop (`effects.MoveHit`) |
 | `BattleContext.moveFailFlags` | — | not needed because it is reset every turn and `step` resolves a whole turn (its only reader, the Uproar check, reads the turn's `move_failed` event) |
-| `BattleContext.aiContext` | `ai_seen_moves`, `ai_ability_known`, `trainer_items`, `trainer_item_count` | mapped |
+| `BattleContext.aiContext` | `ai_seen_moves`, `ai_item_known`, `ai_ability_known`, `trainer_items`, `trainer_item_count` | mapped |
 | `BattleContext.aiScriptTemp` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |
 | `BattleContext.aiScriptCursor` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |
 | `BattleContext.battleStatusMask` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |

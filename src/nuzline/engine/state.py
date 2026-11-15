@@ -72,6 +72,12 @@ Encodings:
   battler's ``MoveEffectsData.lockOnTarget`` (battle_mon.h:23), the battler that locked on,
   stored as ``1 + battler``, 0 = none
   (doubles convention 3, docs/doubles-state-design.md section 5).
+* ``ai_item_known`` is ``aiContext.battlerHeldItems`` of the player's party slot: the held item
+  a battle message named (``BattleAI_SetHeldItem``, battle_script.c:11726-11745, :12119-12122;
+  ``effects.reveal_item``), 0 when none. It is cleared when the Pokemon loses its item (every
+  removal runs ``BattleMon_CopyToParty``, battle_lib.c:1819-1823; ``effects.forget_item``) and
+  when it enters (``BattleSystem_UpdateAfterSwitch``, :2153; ``step._forget``). The AI reads it
+  for the other side's battlers only (trainer_ai.c:1901-1934), so the opponent's is not kept.
 * ``trainer_item_count`` is ``aiContext.trainerItemCounts``: the bag's size at battle
   start, never decremented.
 * ``terrain`` is ``BattleSystem.terrain``: the battle terrain, a decomp ``TERRAIN_*`` id
@@ -231,6 +237,7 @@ class BattleState(NamedTuple):
     player_faints: jnp.ndarray  # int8
     # AI knowledge of the player
     ai_seen_moves: jnp.ndarray  # int8[6,4], player slot x move slot
+    ai_item_known: jnp.ndarray  # int16[6], battlerHeldItems: the item id a message named, 0 none
     ai_ability_known: jnp.ndarray  # int8[6]
     # experience (K3d-exp, design §2.1; see the module docstring)
     exp: jnp.ndarray  # int32[6], player party MON_DATA_EXPERIENCE
@@ -464,6 +471,7 @@ LAYOUT: dict[str, tuple[tuple[int, ...], type]] = {
     "winner": (_FIELD, np.int8),
     "player_faints": (_FIELD, np.int8),
     "ai_seen_moves": ((SLOTS, MOVES), np.int8),
+    "ai_item_known": ((SLOTS,), np.int16),
     "ai_ability_known": ((SLOTS,), np.int8),
     "exp": ((SLOTS,), np.int32),
     "evs": ((*_SLOT, 6), np.int16),

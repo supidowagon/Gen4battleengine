@@ -212,6 +212,22 @@ def _active(s: RefState, side: int) -> RefPokemon:
     return s.sides[side].party[s.sides[side].active]
 
 
+def _reveal_item(s: RefState, side: int) -> None:
+    """A message names ``side``'s active Pokemon's held item through an item tag of the
+    attacker, defender or ``msgBattlerTemp`` (``BattleMessage_ItemTag``, script.c:11726-11745):
+    ``BattleAI_SetHeldItem`` (:12119-12122). The AI reads the other side's only, so only the
+    player's is kept."""
+    if side == 0:
+        s.ai_item_known[s.sides[0].active] = _active(s, 0).item
+
+
+def _forget_item(s: RefState, side: int) -> None:
+    """``side``'s active Pokemon lost its item: the removal's ``BattleMon_CopyToParty``
+    clears the AI's record (``BattleAI_ClearKnownItem``, lib.c:1819-1823)."""
+    if side == 0:
+        s.ai_item_known[s.sides[0].active] = 0
+
+
 def _t(tables, name: str, *index) -> int:
     return int(getattr(tables, name)[index])
 
@@ -1464,6 +1480,7 @@ def _held_item(turn: _Turn, s: RefState, side: int, keep: bool = False) -> bool:
     if not keep:
         mon.item_consumed = mon.item
         mon.item = 0
+        _forget_item(s, side)
     return True
 
 
@@ -1484,6 +1501,7 @@ def _focus_sash(turn: _Turn, s: RefState, side: int, damage: int, armed: bool) -
     if _item_effect(turn.tables, mon) == ItemId.FOCUS_SASH:
         mon.item_consumed = mon.item
         mon.item = 0
+        _forget_item(s, side)
     return mon.hp - 1
 
 
@@ -1512,6 +1530,7 @@ def _resist_berry(
     if triggered:
         mon.item_consumed = mon.item
         mon.item = 0
+        _forget_item(s, side)
     return triggered
 
 
@@ -1700,11 +1719,12 @@ def _enter(turn: _Turn, s: RefState, side: int, slot: int, baton: bool = False) 
     sd.active = slot
     _reset_battler(sd, baton)
     sd.fake_out_turn = turn.entry_turn
-    # lib.c:2151-2152: the AI forgets the battler's moves and ability (it only tracks
-    # the player's).
+    # lib.c:2151-2153: the AI forgets the battler's moves, ability and held item (it only
+    # tracks the player's).
     if side == 0:
         s.ai_seen_moves[slot] = [0] * len(s.ai_seen_moves[slot])
         s.ai_ability_known[slot] = 0
+        s.ai_item_known[slot] = 0
     _source_leaves(s, side)
 
 
@@ -1901,6 +1921,7 @@ def _pluck_berry(turn: _Turn, s: RefState, side: int, target: int) -> None:
     item = foe.item
     foe.item_consumed = foe.item
     foe.item = 0
+    _forget_item(s, target)  # subscript_pluck.s:7 names it, :10 removes it
     if heal:
         did = user.hp != user.max_hp
         if did:
@@ -2248,6 +2269,7 @@ def _sticky_barb_transfer(turn: _Turn, s: RefState, side: int, foe: int, move: i
         return
     if user.hp and user.item == 0 and _t(tables, "move_flags", move) & MoveFlag.CONTACT:
         user.item, holder.item = holder.item, 0
+        _forget_item(s, foe)  # UpdateMonData's CopyToParty (script.c:3077-3078)
 
 
 def _shell_bell(turn: _Turn, s: RefState, side: int, dealt: int) -> None:
@@ -2259,6 +2281,7 @@ def _shell_bell(turn: _Turn, s: RefState, side: int, dealt: int) -> None:
     if _item_effect(turn.tables, mon) != ItemId.SHELL_BELL or not dealt:
         return
     if mon.hp and mon.hp < mon.max_hp:
+        _reveal_item(s, side)  # subscript_restore_a_little_hp.s:10
         _gain_hp(s, side, _divide(dealt, _t(turn.tables, "item_param", mon.item, 0)))
 
 
@@ -2274,11 +2297,13 @@ def _leftovers_check(turn: _Turn, s: RefState, side: int) -> None:
     effect = _item_effect(tables, mon)
     if effect == ItemId.LEFTOVERS or (effect == ItemId.BLACK_SLUDGE and Type.POISON in mon.types):
         if mon.hp < mon.max_hp:
+            _reveal_item(s, side)  # subscript_restore_a_little_hp.s:10
             _gain_hp(s, side, _divide(mon.max_hp, 16))
     elif (
         effect == ItemId.BLACK_SLUDGE
         and _decomp_ability(tables, mon) != WEATHER_ABILITY_IDS["Magic Guard"]
     ):
+        _reveal_item(s, side)  # subscript_lose_hp_from_item_with_message.s:10
         _lose_hp(turn, s, side, _divide(mon.max_hp, 8))
 
 
@@ -2309,6 +2334,7 @@ def _detrimental_item_check(turn: _Turn, s: RefState, side: int) -> None:
             mon.status, mon.status_counter = Status.BURN, 0
     elif effect == ItemId.STICKY_BARB:
         if ability != WEATHER_ABILITY_IDS["Magic Guard"]:
+            _reveal_item(s, side)  # subscript_lose_hp_from_item_with_message.s:10
             _lose_hp(turn, s, side, _divide(mon.max_hp, _t(tables, "item_param", mon.item, 0)))
 
 
@@ -2709,6 +2735,7 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
     if turn.custap[side]:
         turn.custap[side] = False
         mon.item_consumed, mon.item = mon.item, 0
+        _forget_item(s, side)
     s.sides[side].destiny_bond = 0  # CHECK_STATUS_START (bcp.c:2425)
     # UpdateMoveBuffers (bcp.c:3945-3949), reached on every path of a battler that acts:
     # movePrevByBattler is MOVE_NONE unless the move succeeded (below).
@@ -3332,6 +3359,7 @@ def _future_sight(turn: _Turn, s: RefState, order: list[int]) -> None:
         _lose_hp(turn, s, d, damage)
         if "endured" in flags and sash:
             mon.item_consumed, mon.item = mon.item, 0
+            _forget_item(s, d)
         _faint_check(turn, s, decide=False)
     _faint_check(turn, s)
     _pay_exp(turn, s)

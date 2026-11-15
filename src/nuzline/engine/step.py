@@ -122,6 +122,7 @@ from nuzline.engine.effects import (
     recovers_at_full_hp,
     resist_berry,
     resist_berry_damage,
+    reveal_item,
     self_defender,
     shell_bell_heal,
     sticky_barb_transfer,
@@ -408,8 +409,8 @@ def _record_last_move(tables: Tables, state: BattleState, actions) -> BattleStat
 
 def _forget(state: BattleState, side, slot) -> BattleState:
     """The AI forgets what it knew about the player's party ``slot`` when it enters
-    (``BattleSystem_UpdateAfterSwitch`` clears the battler's known moves and ability,
-    battle_lib.c:2151-2152); nothing for the opponent's side."""
+    (``BattleSystem_UpdateAfterSwitch`` clears the battler's known moves, ability and held
+    item, battle_lib.c:2151-2153); nothing for the opponent's side."""
     on = jnp.asarray(side, _I32) == 0
     return state._replace(
         ai_seen_moves=state.ai_seen_moves.at[slot].set(
@@ -417,6 +418,9 @@ def _forget(state: BattleState, side, slot) -> BattleState:
         ),
         ai_ability_known=state.ai_ability_known.at[slot].set(
             jnp.where(on, 0, state.ai_ability_known[slot]).astype(state.ai_ability_known.dtype)
+        ),
+        ai_item_known=state.ai_item_known.at[slot].set(
+            jnp.where(on, 0, state.ai_item_known[slot]).astype(state.ai_item_known.dtype)
         ),
     )
 
@@ -2107,6 +2111,9 @@ def _leftovers_check(tables: Tables, state: BattleState, side) -> BattleState:
     delta = jnp.where(heal, jnp.maximum(max_hp // 16, 1), 0) - jnp.where(
         hurt, jnp.maximum(max_hp // 8, 1), 0
     )
+    # Both subscripts name the item (BTLSCR_MSG_BATTLER_TEMP = the holder, battle_lib.c:4955):
+    # the AI learns it (effects.reveal_item).
+    state = reveal_item(state, side, mon, (hp > 0) & (heal | hurt))
     return _hp_change(state, side, mon, jnp.where(hp > 0, delta, 0))
 
 
@@ -2156,6 +2163,10 @@ def _detrimental_item_check(tables: Tables, state: BattleState, side) -> BattleS
     magic_guard = ability == WEATHER_ABILITY_IDS["Magic Guard"]
     barb = alive & (effect == ItemId.STICKY_BARB) & ~magic_guard
     loss = jnp.maximum(max_hp // tables.item_param[item, 0].astype(_I32), 1)
+    # "{0} is hurt by its {1}!" names the barb (BTLSCR_MSG_BATTLER_TEMP, battle_lib.c:5340); the
+    # orbs' messages name msgItemTemp (BTLSCR_MSG_TEMP: subscript_badly_poison.s:77,
+    # subscript_burn.s:73), which the AI does not record.
+    state = reveal_item(state, side, mon, barb)
     return _hp_change(state, side, mon, jnp.where(barb, -loss, 0))
 
 
