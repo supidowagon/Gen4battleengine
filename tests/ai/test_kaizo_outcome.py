@@ -313,7 +313,7 @@ def test_vanilla_layout_frozen(tables, names):
 def test_kaizo_layout_shapes(kaizo_tables, kaizo_roark_party):
     t = kaizo_tables
     # Roark's fight layout is the tests' (E1 Ruling R7): his party's effects only
-    assert layout_of(t) is KAIZO and KAIZO.per_slot_sites
+    assert layout_of(t) == KAIZO and KAIZO.per_slot_sites
     assert KAIZO.transcribed == ROARK_EFFECTS < KAIZO_TRANSCRIBED
     s = _kaizo_state(t, kaizo_roark_party, (ROCK_THROW, PURSUIT, LEER, STEALTH_ROCK))
     o = sample_ai_outcome(jax.random.PRNGKey(0), t, s, KAIZO)

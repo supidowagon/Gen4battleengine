@@ -302,6 +302,7 @@ class BattleEffect(IntEnum):
     SET_HP_EQUAL_TO_USER = 189  # Endeavor
     BLIZZARD = 260  # Kaizo Blizzard, Ice Ball, Sheer Cold
     FORCE_SWITCH = 28  # Roar, Whirlwind
+    HEAL_HALF_REMOVE_FLYING_TYPE = 214  # Roost
     SET_SUBSTITUTE = 79  # Substitute
     STATUS_POISON = 66  # Poison Powder (Expert_Substitute's last-move table, script.s:3019)
 

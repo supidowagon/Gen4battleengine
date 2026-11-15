@@ -79,8 +79,10 @@ def _hp_why(problem: PrepProblem, names: Names, member: Member, tables: Tables) 
     top = max_hp_of(tables, spec)
     hp = member.hp
     for kind, percent in ai_defender_hp_checks(tables):
-        if hp == percent_cut(kind, percent, top):
+        if hp == percent_cut(kind, percent, top) and kind == "greater":
             return f"at most {percent} % keeps the trainer AI's above-{percent} % HP check off"
+        if hp == percent_cut(kind, percent, top) and kind == "less":
+            return f"below {percent} % turns the trainer AI's below-{percent} % HP check on"
     row = personal_row(tables, spec.species, spec.form)
     ability = int(np.asarray(tables.species_abilities)[row, spec.ability_slot])
     if hp == top // 3 and ability in _PINCH_ABILITIES:
