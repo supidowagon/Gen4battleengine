@@ -242,9 +242,10 @@ def test_the_exact_distribution_refuses_allin(kaizo_tables, fights):
             exact(t, s, ALLIN)
 
 
-@pytest.mark.parametrize("flags, doubles", [(-1, False), (0x40 | 0x7, False), (0x7, True)])
+@pytest.mark.parametrize("flags, doubles", [(-1, False), (0x400 | 0x7, False), (0x7, True)])
 def test_allin_refuses_unset_or_untranscribed_flags(kaizo_tables, fights, flags, doubles):
-    # A doubles battle adds TAG_STRATEGY to the mask (trainer_ai.c:253-254), not transcribed.
+    # 0x400: HARRASSMENT (bit 10), not transcribed. A doubles battle adds TAG_STRATEGY to the
+    # mask (trainer_ai.c:253-254), not transcribed.
     trainer, party = fights[min(fights)]
     t, states, _ = _fight(kaizo_tables, trainer, party, seed=5)
     t = t._replace(ai_flags=np.int32(flags))
