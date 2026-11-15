@@ -399,6 +399,7 @@ VOLATILE_FIELDS = (
     "lock_on_target",
     "perish_song",
     "perish_song_turns",
+    "yawn",
 )
 # Baton Pass keeps these of ``VOLATILE_FIELDS`` (and the stat stages): BattleSystem_UpdateAfterSwitch
 # keeps statusVolatile & VOLATILE_CONDITION_BATON_PASSED (battle_lib.c:2078; condition.h:72-76:

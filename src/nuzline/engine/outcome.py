@@ -118,6 +118,9 @@ class Outcome(NamedTuple):
     # int8[2], by the battler Future Sight hits at this turn's end: its CheckMoveHit roll's class
     # (``future_thresholds``; the raw roll 1-100 where ``future_loose``), read like ``hit``.
     future_hit: jnp.ndarray
+    # int8[2], by the battler a Yawn puts to sleep at this turn's end: subscript_fall_asleep.s's
+    # ``Random 3, 2`` (2-5 turns), a draw of its own (bcp.c:1684-1697).
+    yawn_sleep: jnp.ndarray
 
 
 def empty_outcome() -> Outcome:
@@ -149,6 +152,7 @@ def empty_outcome() -> Outcome:
         roar_target=sides,
         call=jnp.zeros((2,), jnp.int16),
         future_hit=sides + 1,
+        yawn_sleep=sides + 2,
     )
 
 
@@ -1021,6 +1025,9 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions) -> Outcome:
             future_roll,
             hit_class(future_roll, future_thr, future_ok),
         ),
+        # Yawn's sleep at the turn end: subscript_fall_asleep.s ``Random 3, 2`` (BtlCmd_Random,
+        # battle_script.c:3200-3210: rand % 4 + 2). From a fold_in key.
+        yawn_sleep=jax.random.randint(jax.random.fold_in(key, 26), per_side, 0, 4, dtype=_I32) + 2,
     )
     return Outcome(
         *(

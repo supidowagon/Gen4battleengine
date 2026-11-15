@@ -79,6 +79,7 @@ from nuzline.engine.ids import (
     WEATHER_ABILITIES,
     WEATHER_ABILITY_IDS,
     WEATHER_TURNS,
+    YAWN_ABILITY_IDS,
     AbilityId,
     EffectId,
     ItemId,
@@ -1005,6 +1006,7 @@ def _reset_battler(sd: RefSide, baton: bool = False) -> None:
         "lock_on_target",
         "perish_song",
         "perish_song_turns",
+        "yawn",
     ):
         if not (baton and name in BATON_PASSED):
             setattr(sd, name, 0)
@@ -2128,6 +2130,13 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
     elif effect == EffectId.AQUA_RING and landed and not s.sides[side].aqua_ring:
         # effect_script_0251.s: fails when the user already has it.
         s.sides[side].aqua_ring = 1
+    elif effect == EffectId.YAWN and landed and _active(s, target).hp:
+        # subscript_yawn.s: an ability that blocks it is tagged; else unless it fails the count 2.
+        fails, by_ability = _yawn_blocks(tables, s, side, target)
+        if by_ability and target == 0:
+            s.ai_ability_known[s.sides[0].active] = 1
+        if not fails:
+            s.sides[target].yawn = 2
     elif effect == EffectId.PERISH_SONG and landed:
         # BtlCmd_TryPerishSong (script.c:5465-5487): every living battler without the effect.
         for k in (0, 1):
@@ -3087,6 +3096,7 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
             effect == EffectId.MEAN_LOOK and bool(foe_sd.mean_look or foe_sd.substitute_hp)
         )
         full = full or (effect == EffectId.LOCK_ON and bool(foe_sd.substitute_hp))  # :6, :33
+        full = full or (effect == EffectId.YAWN and _yawn_blocks(tables, s, side, 1 - side)[0])
         full = full or (
             effect == EffectId.PERISH_SONG
             and not any(not x.perish_song and _active(s, k).hp for k, x in enumerate(s.sides))
@@ -3402,6 +3412,7 @@ def _end_of_turn(turn: _Turn, s: RefState, order: list[int]) -> None:
             _disable_check,  # MON_COND_CHECK_STATE_DISABLE, bcp.c:1565
             _lock_on_check,  # MON_COND_CHECK_STATE_LOCK_ON, bcp.c:1618
             _taunt_check,  # MON_COND_CHECK_STATE_TAUNT, bcp.c:1635
+            _yawn_check,  # MON_COND_CHECK_STATE_YAWN, bcp.c:1684
             _held_item_hp,  # MON_COND_CHECK_STATE_ITEM_CONDITION, bcp.c:1699
             _detrimental_item_check,  # MON_COND_CHECK_STATE_ITEM_DETRIMENTAL_EFFECT, :1710
         ):
@@ -3479,6 +3490,59 @@ def _perish_song_check(turn: _Turn, s: RefState, order: list[int]) -> None:
         else:
             sd.perish_song_turns -= 1
         _faint_check(turn, s, decide=False)
+
+
+def _sunny(tables, s: RefState) -> bool:
+    return s.weather == Weather.SUN and not _weather_suppressed(tables, s)
+
+
+def _yawn_blocks(tables, s: RefState, side: int, target: int) -> tuple[bool, bool]:
+    """subscript_yawn.s's ``(fails, by_ability)`` on ``target``'s battler (effects.yawn_blocks):
+    ignorable Insomnia / Vital Spirit, Leaf Guard in sun (:5-9), a substitute (:14), an uproar
+    unless Soundproof (:15-16), any status (:18), Safeguard (:19), a Yawn counting (:21)."""
+    mon, sd = _active(s, target), s.sides[target]
+    own = _decomp_ability(tables, mon)
+    seen = 0 if _active(s, side).ability == AbilityId.MOLD_BREAKER else own
+    ids = YAWN_ABILITY_IDS
+    by_ability = seen in (ids["Insomnia"], ids["Vital Spirit"]) or (
+        _sunny(tables, s) and seen == ids["Leaf Guard"]
+    )
+    fails = (
+        by_ability
+        or bool(sd.substitute_hp)
+        or (own != ids["Soundproof"] and _uproar_on(s))
+        or mon.status != Status.NONE
+        or bool(sd.safeguard)
+        or bool(sd.yawn)
+    )
+    return fails, by_ability
+
+
+def _yawn_check(turn: _Turn, s: RefState, side: int) -> None:
+    """``MON_COND_CHECK_STATE_YAWN`` (bcp.c:1684-1697): the count drops; at 0
+    subscript_fall_asleep.s as a move effect (:4-14): its own Insomnia / Vital Spirit / Leaf
+    Guard in sun keep it awake (tagged), a sleeper, an uproar (unless Soundproof) or a status stop
+    it, else it sleeps ``yawn_sleep`` turns and is unlocked."""
+    sd, mon, tables = s.sides[side], _active(s, side), turn.tables
+    if not sd.yawn:
+        return
+    sd.yawn -= 1
+    if sd.yawn:
+        return
+    own = _decomp_ability(tables, mon)
+    ids = YAWN_ABILITY_IDS
+    if own in (ids["Insomnia"], ids["Vital Spirit"]) or (
+        _sunny(tables, s) and own == ids["Leaf Guard"]
+    ):
+        if side == 0:
+            s.ai_ability_known[sd.active] = 1
+        return
+    if own != ids["Soundproof"] and _uproar_on(s):
+        return
+    if mon.status != Status.NONE:
+        return
+    mon.status, mon.status_counter = Status.SLEEP, turn.outcome.yawn_sleep[side]
+    _unlock(sd)
 
 
 def _lock_on_check(turn: _Turn, s: RefState, side: int) -> None:

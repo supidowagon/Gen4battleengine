@@ -243,6 +243,11 @@ class EffectId(IntEnum):
     # gets MOVE_EFFECT_PERISH_SONG and a count of 3 (``perish_song``, ``perish_song_turns``); the
     # side-condition pass counts it down and faints the battler at 0 (bcp.c:1791-1820).
     PERISH_SONG = 75
+    # Yawn (effect_script_0187.s, a direct CHECK_HP | TO_DEFENDER subscript_yawn.s): the
+    # defender's MOVE_EFFECT_YAWN counter (2, ``BtlCmd_TryYawn`` battle_script.c:6580-6590); the
+    # turn end's MON_COND_CHECK_STATE_YAWN drops it and at 0 runs subscript_fall_asleep.s as a
+    # move effect (bcp.c:1684-1697), its turns drawn as ``Outcome.yawn_sleep``.
+    YAWN = 76
 
 
 # ``EffectId.COUNTER``'s source (``move_param[m, 0]``).
@@ -814,6 +819,15 @@ WEATHER_ABILITY_IDS = {
 # (no table maps them): the status orbs' subscripts skip an Immunity holder (Toxic Orb,
 # subscript_badly_poison.s:14), a Water Veil holder (Flame Orb, subscript_burn.s:6) and a Leaf
 # Guard holder in sun (both, :15-17 / :7-9), each the holder's own ability (``CheckAbility``).
+# Decomp ability ids Yawn's scripts name (subscript_yawn.s:5-9, :14; subscript_fall_asleep.s:7-14;
+# line n + 1 of generated/abilities.txt is id n).
+YAWN_ABILITY_IDS = {
+    "Insomnia": 15,
+    "Soundproof": 43,
+    "Vital Spirit": 72,
+    "Leaf Guard": 102,
+}
+
 ITEM_ABILITY_IDS = {
     "Immunity": 17,
     "Water Veil": 41,

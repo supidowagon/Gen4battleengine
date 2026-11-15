@@ -140,6 +140,7 @@ from nuzline.engine.effects import (
     unlock_move,
     uproar_on,
     weather_fails,
+    yawn_sleep,
 )
 from nuzline.engine.hooks import (
     ABSORB,
@@ -2188,6 +2189,11 @@ def _taunt_check(tables: Tables, state: BattleState, side) -> BattleState:
     return state._replace(taunt=state.taunt.at[side].set(taunt))
 
 
+def _taunt_then_yawn(tables: Tables, state: BattleState, side, outcome: Outcome) -> BattleState:
+    """``MON_COND_CHECK_STATE_TAUNT`` then ``_YAWN`` (``effects.yawn_sleep``): one faint check."""
+    return yawn_sleep(tables, _taunt_check(tables, state, side), side, outcome)
+
+
 def _leftovers_check(tables: Tables, state: BattleState, side) -> BattleState:
     """``MON_COND_CHECK_STATE_LEFTOVERS`` (battle_controller_player.c:1369):
     ``BattleSystem_TriggerLeftovers`` (battle_lib.c:4922-4965) on a holder with HP left.
@@ -2330,8 +2336,10 @@ END_OF_TURN_ORDER = (
     # MON_COND_CHECK_STATE_DISABLE, :1565, then _LOCK_ON, :1618 (``_uproar_then_disable``; the
     # only check that reads the turn's moveFailFlags)
     ("uproar_disable", _uproar_then_disable),
-    # MON_COND_CHECK_STATE_TAUNT, battle_controller_player.c:1635
-    ("taunt", _taunt_check),
+    # MON_COND_CHECK_STATE_TAUNT, battle_controller_player.c:1635, then (Magnet Rise, Heal Block
+    # and Embargo, unsupported, between) _YAWN, :1684 (``_taunt_then_yawn``: neither changes
+    # HP; the Yawn reads the turn's ``Outcome``)
+    ("taunt_yawn", _taunt_then_yawn),
     # MON_COND_CHECK_STATE_ITEM_CONDITION, battle_controller_player.c:1699: the same berry
     # check, after the residual damage above; then MON_COND_CHECK_STATE_ITEM_DETRIMENTAL_EFFECT,
     # :1710 (``_item_condition_then_detrimental``)
@@ -2481,7 +2489,11 @@ def end_of_turn(
         for name, check in END_OF_TURN_ORDER:
             before = state
             args = (
-                (outcome,) if name == "ability" else (failed,) if name == "uproar_disable" else ()
+                (outcome,)
+                if name in ("ability", "taunt_yawn")
+                else (failed,)
+                if name == "uproar_disable"
+                else ()
             )
             after = check(tables, state, side, *args)
             state = _faint_check(tables, before, _where(state.over == 0, after, state))

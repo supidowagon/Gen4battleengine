@@ -267,6 +267,7 @@ _COND_TEXT = {
     "imprison": "imprisoning",
     "roosting": "roosting",
     "lock_on": "locked onto",
+    "yawn": "drowsy",
     "spikes": "Spikes",
     "toxic_spikes": "Toxic Spikes",
 }

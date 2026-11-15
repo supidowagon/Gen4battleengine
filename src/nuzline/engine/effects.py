@@ -263,6 +263,7 @@ from nuzline.engine.ids import (
     TRI_ATTACK_STATUSES,
     WEATHER_ABILITY_IDS,
     WEATHER_TURNS,
+    YAWN_ABILITY_IDS,
     AbilityId,
     EffectId,
     ItemId,
@@ -852,6 +853,8 @@ def primary_effect_fails(tables, state: BattleState, side, target_side, move) ->
         | ((effect == _E.LOCK_ON) & lock_on_fails(state, target_side))
         # BtlCmd_TryPerishSong (battle_script.c:5482-5484): no battler eligible.
         | ((effect == _E.PERISH_SONG) & ~jnp.any(perish_song_eligible(state)))
+        # subscript_yawn.s's failures (``yawn_blocks``).
+        | ((effect == _E.YAWN) & yawn_blocks(tables, state, side, target_side)[0])
     )
 
 
@@ -1068,6 +1071,85 @@ def _perish_song(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
         state = _set(state, "perish_song", battler, 1, cond)
         state = _set(state, "perish_song_turns", battler, PERISH_SONG_TURNS, cond)
     return state
+
+
+YAWN_TURNS = 2  # BtlCmd_TryYawn: 1 << (MOVE_EFFECT_YAWN_SHIFT + 1) (battle_script.c:6587)
+
+
+def _sunny(tables, state: BattleState) -> jnp.ndarray:
+    """``CheckIgnoreWeather`` then ``FIELD_CONDITION_SUNNY`` (battle_script.c:9195-9206)."""
+    return (state.weather == Weather.SUN) & ~weather_suppressed(tables, state)
+
+
+def yawn_blocks(tables, state: BattleState, side, target_side) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """``(fails, by_ability)`` of subscript_yawn.s on ``target_side``'s battler: an ignorable
+    Insomnia or Vital Spirit, or Leaf Guard in sun (:5-9, "made it ineffective", tagging the
+    ability), a substitute (:14), an uproar unless its own Soundproof (:15-16), any status (:18),
+    Safeguard on its side (:19), a Yawn already counting (``TryYawn``, :21; battle_script.c:6584).
+    Every one ends the move without AfterMoveEffects (MOVE_STATUS_FAILED or _NO_MORE_WORK)."""
+    mon = state.active[target_side]
+    own = decomp_abilities(tables, state)[target_side, mon]
+    mold = state.ability[side, state.active[side]] == AbilityId.MOLD_BREAKER
+    seen = jnp.where(mold, 0, own)  # Battler_IgnorableAbility
+    ids = YAWN_ABILITY_IDS
+    by_ability = (seen == ids["Insomnia"]) | (seen == ids["Vital Spirit"])
+    by_ability = by_ability | (_sunny(tables, state) & (seen == ids["Leaf Guard"]))
+    fails = (
+        by_ability
+        | (state.substitute_hp[target_side] != 0)
+        | ((own != ids["Soundproof"]) & uproar_on(state))
+        | (state.status[target_side, mon] != Status.NONE)
+        | (state.safeguard[target_side] != 0)
+        | (state.yawn[target_side] != 0)
+    )
+    return fails, by_ability
+
+
+def know_ability(state: BattleState, side, slot, cond) -> BattleState:
+    """A message tags the ability of ``side``'s party ``slot`` (``BattleAI_SetAbility``,
+    battle_script.c:11806): the AI knows it, for the player's side."""
+    on = jnp.asarray(cond) & (jnp.asarray(side) == 0)
+    known = jnp.where(on, 1, state.ai_ability_known[slot]).astype(state.ai_ability_known.dtype)
+    return state._replace(ai_ability_known=state.ai_ability_known.at[slot].set(known))
+
+
+def _yawn(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    """Yawn (effect_script_0187.s: a direct ``CHECK_HP | TO_DEFENDER`` subscript_yawn.s for a
+    living defender on a move that connected): unless ``yawn_blocks``, the defender's
+    MOVE_EFFECT_YAWN counter becomes ``YAWN_TURNS``; an ability that blocks it is tagged."""
+    run = (h.effect == _E.YAWN) & h.landed & _alive(state, h.target_side, h.target)
+    fails, by_ability = yawn_blocks(tables, state, h.side, h.target_side)
+    state = know_ability(state, h.target_side, h.target, run & by_ability)
+    return _set(state, "yawn", h.target_side, YAWN_TURNS, run & ~fails)
+
+
+def yawn_sleep(tables, state: BattleState, side, outcome: Outcome) -> BattleState:
+    """``MON_COND_CHECK_STATE_YAWN`` (bcp.c:1684-1697) on ``side``'s battler: the counter drops,
+    and at 0 subscript_fall_asleep.s runs as SIDE_EFFECT_TYPE_MOVE_EFFECT (:4-14): its own
+    (``CheckAbility``, not ignorable) Insomnia or Vital Spirit, or Leaf Guard in sun, keeps it
+    awake ("stayed awake because of its ...", tagging the ability, :_202/_221); a sleeper, an
+    uproar (unless its Soundproof) or any status stops it silently; else it sleeps
+    ``Outcome.yawn_sleep[side]`` turns (``Random 3, 2``, :_147) and is unlocked (:_176). No
+    Safeguard test on this path."""
+    mon = state.active[side]
+    on = state.yawn[side] != 0
+    left = state.yawn[side].astype(_I32) - 1
+    state = _set(state, "yawn", side, left, on)
+    falls = on & (left == 0)
+    own = decomp_abilities(tables, state)[side, mon]
+    ids = YAWN_ABILITY_IDS
+    awake = (own == ids["Insomnia"]) | (own == ids["Vital Spirit"])
+    awake = awake | (_sunny(tables, state) & (own == ids["Leaf Guard"]))
+    state = know_ability(state, side, mon, falls & awake)
+    sleeps = (
+        falls
+        & ~awake
+        & ~((own != ids["Soundproof"]) & uproar_on(state))
+        & (state.status[side, mon] == Status.NONE)
+    )
+    state = _set(state, "status", (side, mon), Status.SLEEP, sleeps)
+    state = _set(state, "status_counter", (side, mon), outcome.yawn_sleep[side], sleeps)
+    return unlock_move(state, side, sleeps)
 
 
 def locked_onto(state: BattleState, attacker, defender) -> jnp.ndarray:
@@ -1866,6 +1948,7 @@ def play_hit(
         _imprison,
         _lock_on,
         _perish_song,
+        _yawn,
         _screen,
         _brick_break,
         _foresight,

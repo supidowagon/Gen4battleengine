@@ -66,3 +66,30 @@ def test_perish_song_counts_down_and_faints_at_zero(tables, names):
     doomed = sung._replace(perish_song_turns=jnp.zeros_like(sung.perish_song_turns))
     end = assert_matches_reference(tables, doomed, (0, 0), O)
     assert [int(x) for x in end.hp[:, 0]] == [0, 0] and int(end.winner) == 1
+
+
+def test_yawn_sleeps_at_the_second_turn_end_through_safeguard(tables, names):
+    """B8-4: subscript_yawn.s sets the count 2 (TryYawn, battle_script.c:6587); the turn end
+    drops it (bcp.c:1684-1687) and at 0 runs subscript_fall_asleep.s as a move effect, whose path
+    has no Safeguard test (:4-14), with its own Random 3, 2 draw (``yawn_sleep``)."""
+    from nuzline.engine.ids import Status
+
+    n = names
+    s = make_state(tables, [_mon(n, "Slakoth", ["Yawn"], 30)], [_mon(n, "Geodude", ["Growl"], 30)])
+    drowsy = assert_matches_reference(tables, s, (0, 0), O)
+    assert int(drowsy.yawn[1]) == 1 and int(drowsy.status[1, 0]) == Status.NONE
+    guarded = drowsy._replace(safeguard=drowsy.safeguard.at[1].set(3))
+    o = O._replace(yawn_sleep=jnp.asarray([2, 4], jnp.int8))
+    out = assert_matches_reference(tables, guarded, (0, 0), o)
+    assert int(out.status[1, 0]) == Status.SLEEP and int(out.status_counter[1, 0]) == 4
+    assert int(out.yawn[1]) == 0
+
+
+def test_yawn_meets_insomnia(tables, names):
+    """B8-4: an ignorable Insomnia makes Yawn ineffective (subscript_yawn.s:5, :25-30), tagging
+    the ability (BattleAI_SetAbility through TAG_NICKNAME_ABILITY)."""
+    n = names
+    s = make_state(tables, [_mon(n, "Murkrow", ["Growl"], 30)], [_mon(n, "Slakoth", ["Yawn"], 30)])
+    s = s._replace(ai_ability_known=jnp.zeros_like(s.ai_ability_known))
+    out = assert_matches_reference(tables, s, (0, 0), O)
+    assert int(out.yawn[0]) == 0 and int(out.ai_ability_known[0]) == 1

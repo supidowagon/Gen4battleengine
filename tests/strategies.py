@@ -967,6 +967,7 @@ BATCH7_MOVES = (
     "Mind Reader",
     "Sheer Cold",
     "Perish Song",
+    "Yawn",
 )
 
 
@@ -1008,6 +1009,8 @@ def _draw_batch7(draw, tables: Tables, a: dict, side: int, active: int, names: N
         a["lock_on_target"][side] = 1 + foe
     elif lock == 2:
         a["lock_on_target"][side] = 1 + foe
+    # A Yawn counting (1: it falls asleep at this turn's end).
+    a["yawn"][side] = draw(st.sampled_from([0, 0, 0, 1, 2]))
     # Perish Song under way: a count 0-3 (0 faints at this turn's end).
     if draw(st.integers(0, 4)) == 0:
         a["perish_song"][side] = 1
@@ -1364,6 +1367,7 @@ def any_outcome() -> st.SearchStrategy[Outcome]:
         ),
         # The Future Sight hit's roll: a flag or any class value (1-100), like ``hit``.
         future_hit=st.one_of(_flag(sides), _ints(0, 100, sides)),
+        yawn_sleep=_ints(2, 5, sides),
     )
 
 

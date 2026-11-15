@@ -249,7 +249,7 @@ def test_end_of_turn_order_lists_the_implemented_checks_in_decomp_order():
         "burn",
         "bind",
         "uproar_disable",
-        "taunt",
+        "taunt_yawn",
         "item_condition",
     ]
 

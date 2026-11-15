@@ -323,6 +323,8 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     94: ("BATTLE_EFFECT_NEXT_ATTACK_ALWAYS_HITS", _E.LOCK_ON, (0, 0, 0)),
     # Perish Song: effect_script_0114.s (a direct ON_HIT subscript_perish_song_start.s).
     114: ("BATTLE_EFFECT_ALL_FAINT_3_TURNS", _E.PERISH_SONG, (0, 0, 0)),
+    # Yawn: effect_script_0187.s (a direct subscript_yawn.s).
+    187: ("BATTLE_EFFECT_STATUS_SLEEP_NEXT_TURN", _E.YAWN, (0, 0, 0)),
 }
 
 DECOMP_EFFECT_NAMES: dict[int, str] = {k: v[0] for k, v in _EFFECTS.items()}

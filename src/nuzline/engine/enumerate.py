@@ -644,6 +644,8 @@ INPUT_NEUTRAL_EFFECTS = (
     # Perish Song's count acts at the turn end.
     _E.LOCK_ON,
     _E.PERISH_SONG,
+    # Yawn's sleep comes at the turn end, after every hit.
+    _E.YAWN,
 )
 INPUT_CLAUSE_EFFECTS = (
     _E.STAT_SELF,  # the foe's Defense / Sp. Def
@@ -956,6 +958,7 @@ NON_TABLE_DAMAGE_EFFECTS = (
     _E.IMPRISON,
     _E.LOCK_ON,
     _E.PERISH_SONG,
+    _E.YAWN,
 )
 
 
@@ -1538,6 +1541,9 @@ def outcome_laws(
             # The Future Sight hit of this turn's end on side d's battler: its count is 1 now
             # (step._future_sight; read when the battler has HP then, over-approximate).
             future_hit=live & (state.future_timer == 1),
+            # Yawn's sleep of this turn's end: a count of 1 now reaches 0 there (a Yawn of this
+            # turn sets 2; over-approximate: the sleep may still be blocked).
+            yawn_sleep=live & (state.yawn == 1),
         )
 
     both = zip(branch_relevant(branches[0]), branch_relevant(branches[1]), strict=True)
@@ -1846,6 +1852,8 @@ _LAWS = {
     "roar_level": _roar_level,
     "roar_target": _roar_target,
     "future_hit": _future_hit,
+    # subscript_fall_asleep.s Random 3, 2 at Yawn's turn end: 2-5, uniform.
+    "yawn_sleep": lambda laws, side: ([2, 3, 4, 5], [1, 1, 1, 1], 4),
 }
 
 

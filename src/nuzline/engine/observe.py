@@ -189,6 +189,8 @@ _NONZERO_SIDE = (
     "roosting",
     # E2 batch 8: "{0} took aim at {1}!" (subscript_lock_on.s:11) until its count runs out.
     "lock_on",
+    # "{0} made {1} drowsy!" (subscript_yawn.s:24) until it falls asleep.
+    "yawn",
 )
 _NONZERO_FIELD = ("trick_room", "gravity")
 
