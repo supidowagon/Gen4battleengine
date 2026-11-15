@@ -116,11 +116,21 @@ __all__ = [
 
 # AI flag bits (generated/ai_flags.txt, line n + 2 is bit n; FlagTable, script.s:18-30).
 BASIC, EVAL_ATTACK, EXPERT, SETUP_FIRST_TURN, RISKY = 0, 1, 2, 3, 4
-PRIORITIZE_EXTREMES, TAG_STRATEGY, CHECK_HP, WEATHER = 5, 7, 8, 9
+PRIORITIZE_EXTREMES, BATON_PASS, TAG_STRATEGY, CHECK_HP, WEATHER = 5, 6, 7, 8, 9
 # The flag bits whose scripts the Kaizo policy transcribes (policy._flags):
 # engine/coverage.py IMPLEMENTED_AI_FLAGS["kaizo"] lists the same bits.
 KAIZO_FLAG_BITS = frozenset(
-    {BASIC, EVAL_ATTACK, EXPERT, SETUP_FIRST_TURN, RISKY, PRIORITIZE_EXTREMES, CHECK_HP, WEATHER}
+    {
+        BASIC,
+        EVAL_ATTACK,
+        EXPERT,
+        SETUP_FIRST_TURN,
+        RISKY,
+        PRIORITIZE_EXTREMES,
+        BATON_PASS,
+        CHECK_HP,
+        WEATHER,
+    }
 )
 assert set(READ_BOUND_BITS) == KAIZO_FLAG_BITS
 

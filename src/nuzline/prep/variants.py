@@ -94,6 +94,12 @@ AI_FLAG_DEFENDER_HP_CHECKS: dict[int, tuple[tuple[str, int], ...]] = {
 AI_EFFECT_DEFENDER_HP_CHECKS: dict[int, tuple[tuple[str, int], ...]] = {
     189: (("less", 70),),
     91: (("less", 80),),
+    # E1 prep batch P1: Expert_StatusAccuracyDown (ACC_DOWN, 23) and Expert_StatusEvasionUp
+    # (EVA_UP_2_MINIMIZE, 108) test the player below 40 % (script.s:2491, :2247);
+    # Expert_KnockOff (REMOVE_HELD_ITEM, 188) below 30 % (:4574)
+    23: (("less", 40),),
+    108: (("less", 40),),
+    188: (("less", 30),),
 }
 
 # Every function in ``src/nuzline/ai/*.py`` that indexes an ``hp`` array at the Task 4 commit,

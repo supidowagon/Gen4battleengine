@@ -29,8 +29,9 @@ comparison after it still runs (battle_lib.c:8080), on the ``score`` left over f
 1, which this module does not track. The type-chart modifiers (Levitate, Wonder Guard,
 Normalize, Scrappy, Adaptability, Tinted Lens, Filter, Solid Rock, Expert Belt, Iron
 Ball, Miracle Eye, Natural Gift, Judgment and Weather Ball; Hidden Power takes each
-candidate's own IV type, ``switching.party_move_types``; the player's Foresight flag is read
-through ``apply_type_chart``) are not implemented here:
+candidate's own IV type, ``switching.party_move_types``; the player's Foresight, Ingrain and
+roosting flags are read through ``apply_type_chart``: a replacement is where the AI reads
+roosting, battle_lib.c:2540) are not implemented here:
 ``policy.ai_refusals`` refuses every one of them for the fight, so the precondition is
 that the fight passed it (the coverage registry and every ``ai_policy`` call check it).
 """
