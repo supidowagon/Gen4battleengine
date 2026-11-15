@@ -31,8 +31,8 @@ def _policy_replace(tables, state, params, key, layout):
 FIXED = Player("fixed", _fixed_act, _policy_replace)
 
 # _player_run (the final state as well as the result) compiled once per player and turn
-# count, as player_playout is: called eagerly, its while_loop traced and compiled anew at
-# every call (one per key), the slowest tests of the file.
+# count, as player_playout is, for the pending-root runs (no turn): called eagerly, its
+# while_loop was traced and compiled anew at every call.
 _run = jax.jit(_player_run, static_argnames=("player", "max_turns", "layout"))
 
 
@@ -74,15 +74,17 @@ def _same(got, want):
     assert np.array_equal(np.asarray(got.deaths), np.asarray(want.deaths))
 
 
-@pytest.mark.parametrize(
-    "build", [_level_up_turn, _pending_learn_root, _pending_learn_root_pursuit, _window_c_root]
-)
-def test_greedy_and_the_empty_line_equal_playout_through_learns(tables, names, build):
-    s = build(tables, names)
-    for k in jax.random.split(jax.random.PRNGKey(5), 4):
-        want = playout(tables, root_state(tables, s, k), k, 8)
-        _same(player_playout(tables, s, GREEDY, (), k, 8), want)
-        _same(player_playout(tables, s, LINE, empty_line(), k, 8), want)
+def test_greedy_and_the_empty_line_equal_playout_through_learns(tables, names):
+    # One test over the four roots: each case traces the same three programs (playout and the
+    # GREEDY and LINE player_playout), and as separate tests each grew the process past the
+    # conftest cache-clear threshold, so every case traced them again.
+    builds = (_level_up_turn, _pending_learn_root, _pending_learn_root_pursuit, _window_c_root)
+    for build in builds:
+        s = build(tables, names)
+        for k in jax.random.split(jax.random.PRNGKey(5), 4):
+            want = playout(tables, root_state(tables, s, k), k, 8)
+            _same(player_playout(tables, s, GREEDY, (), k, 8), want)
+            _same(player_playout(tables, s, LINE, empty_line(), k, 8), want)
 
 
 def test_a_turn_resolves_its_learns(tables, names):
@@ -92,7 +94,8 @@ def test_a_turn_resolves_its_learns(tables, names):
     tackle = names.move_slot(s, 0, "Tackle")
     levelled = 0
     for k in jax.random.split(jax.random.PRNGKey(2), 6):
-        out = _run(tables, s, FIXED, tackle, k, 1)[1]
+        # eager: jitted whole, this one-turn FIXED run grew the process by 9.5 GB
+        out = _player_run(tables, s, FIXED, tackle, k, 1)[1]
         if int(out.level[0, 0]) != 13:
             continue
         levelled += 1
