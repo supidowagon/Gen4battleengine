@@ -114,6 +114,7 @@ from tools.effect_map import (
     DECOMP_TRAINER_ITEM_TO_ID,
     DIVISOR_PARAM_MIN,
     INVOKER_MOVES,
+    KAIZO_EFFECTS,
     METRONOME_EXCLUDED_MOVES,
     MULTI_TURN_EFFECTS,
     PINCH_STAT_HOLD_EFFECTS,
@@ -216,10 +217,13 @@ def _no_secondary(move: dict) -> bool:
 
 
 def _move_effect(
-    move: dict, changed_effects: frozenset[int] = frozenset()
+    move: dict, changed_effects: frozenset[int] = frozenset(), kaizo: bool = False
 ) -> tuple[int, tuple[int, int, int]]:
     if move["name"] in UNSUPPORTED_MOVES or move["effect"] in changed_effects:
         return int(EffectId.UNSUPPORTED), (0, 0, 0)
+    if kaizo and move["effect"] in KAIZO_EFFECTS:  # a modelled changed script (B9-4)
+        _, eid, params = KAIZO_EFFECTS[move["effect"]]
+        return int(eid), params
     eid, params = DECOMP_EFFECT_TO_ID.get(move["effect"], (EffectId.UNSUPPORTED, (0, 0, 0)))
     if eid in SECONDARY:
         certain = move["effect"] in CERTAIN_SECONDARY_EFFECTS
@@ -402,6 +406,14 @@ def _kaizo_rom_changes(inter: Path, rom_diff: Path = ROM_DIFF) -> tuple[frozense
     effects = frozenset(
         i for (narc, i), (status, _) in members.items() if narc == BE_SEQ and status != "modelled"
     )
+    modelled = {
+        i for (narc, i), (status, _) in members.items() if narc == BE_SEQ and status == "modelled"
+    }
+    if modelled != set(KAIZO_EFFECTS):
+        raise BuildError(
+            f"modelled be_seq members {sorted(modelled)} != effect_map.KAIZO_EFFECTS "
+            f"{sorted(KAIZO_EFFECTS)}"
+        )
     unknown = sum(st == "unknown" for st, _ in code.values())
     unknown += sum(st == "unknown" for st, _ in members.values())
     return effects, unknown
@@ -577,7 +589,7 @@ def build_arrays(inter: Path, game: str = "platinum_us") -> tuple[dict[str, np.n
 
     learnset_moves, learnset_levels = _learnset_grid(level_learnsets, len(species))
     hm_moves = set(tm_moves[NUM_TMS:])
-    effects = [_move_effect(m, changed_effects) for m in moves]
+    effects = [_move_effect(m, changed_effects, kaizo) for m in moves]
     item_ids, trainer_item_ids = _item_maps(items, vanilla_items)
     item_ids = _pinch_divisor_ok(items, item_ids)
     supported_item = [e not in (ItemId.UNSUPPORTED, ItemId.NONE) for e in item_ids]

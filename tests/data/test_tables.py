@@ -115,7 +115,7 @@ def test_m1a_effect_params(tables, names):
     assert _effect(t, n, "Spark") == (E.SECONDARY_STATUS, (Status.PARALYSIS, 0, 0))
     assert _effect(t, n, "Stun Spore") == (E.STATUS_FOE, (Status.PARALYSIS, 0, 0))
     assert _effect(t, n, "Absorb") == (E.DRAIN, (50, 0, 0))
-    assert _effect(t, n, "Take Down") == (E.RECOIL, (25, 0, 0))
+    assert _effect(t, n, "Take Down") == (E.RECOIL, (4, 0, 0))
     assert _effect(t, n, "Headbutt")[0] == E.FLINCH
     assert _effect(t, n, "Bite")[0] == E.FLINCH
     assert _effect(t, n, "Razor Leaf")[0] == E.HIGH_CRIT

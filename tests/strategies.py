@@ -729,7 +729,7 @@ def _draw_batch3(draw, tables: Tables, a: dict, side: int, active: int, names: N
         a["ability"][side, active] = ability
         enable = rnd.random() < 0.75
         if enable and ability == AbilityId.RECKLESS:
-            give(side, active, rnd.choice(("Take Down", "Head Smash")))
+            give(side, active, rnd.choice(("Take Down", "Head Smash", "Double-Edge")))
         if enable and ability in (AbilityId.TECHNICIAN, AbilityId.TINTED_LENS):
             give(side, active, rnd.choice(("Tackle", "Water Gun", "Ember")))
         if enable and ability == AbilityId.SERENE_GRACE:
@@ -798,7 +798,20 @@ def _draw_batch9(draw, tables: Tables, a: dict, side: int, active: int, names: N
         a["pp"][side, active, k] = int(tables.move_pp[move])
 
     if draw(st.integers(0, 2)) == 0:  # B9-1, B9-2: a weather-accuracy move or a fang
-        give(rnd.choice(("Thunder", "Blizzard", "Fire Fang", "Ice Fang")))
+        give(
+            rnd.choice(
+                (
+                    "Thunder",
+                    "Blizzard",
+                    "Fire Fang",
+                    "Ice Fang",
+                    "Double-Edge",
+                    "Surf",
+                    "Follow Me",
+                    "Helping Hand",
+                )
+            )
+        )
         if rnd.random() < 0.5:
             a["weather"][...] = rnd.choice((Weather.RAIN, Weather.SUN, Weather.HAIL))
     if not draw(st.booleans()):

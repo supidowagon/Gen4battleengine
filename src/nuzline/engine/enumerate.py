@@ -667,6 +667,9 @@ INPUT_NEUTRAL_EFFECTS = (
     _E.PERISH_SONG,
     # Yawn's sleep comes at the turn end, after every hit.
     _E.YAWN,
+    # E2 batch 9: Follow Me changes nothing in singles; Helping Hand fails there.
+    _E.FOLLOW_ME,
+    _E.HELPING_HAND,
 )
 INPUT_CLAUSE_EFFECTS = (
     _E.STAT_SELF,  # the foe's Defense / Sp. Def
@@ -989,6 +992,8 @@ NON_TABLE_DAMAGE_EFFECTS = (
     _E.LOCK_ON,
     _E.PERISH_SONG,
     _E.YAWN,
+    _E.FOLLOW_ME,  # status moves: no damage
+    _E.HELPING_HAND,
 )
 
 

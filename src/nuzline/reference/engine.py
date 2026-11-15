@@ -113,14 +113,23 @@ STEALTH_ROCK_DIVISOR = {160: 2, 80: 4, 40: 8, 20: 16, 10: 32}
 # BattleSystem_Defender (lib.c:1599): ranges whose defender exists whatever the foe's
 # HP: the user itself (lib.c:1665-1669) or, for RANGE_OPPONENT_SIDE, the foe's
 # battler slot (BattleSystem_RandomOpponent, lib.c:4194).
+# In singles RANGE_ALLY / RANGE_USER_OR_ALLY give the attacker itself (lib.c:1670-1684, B9-5).
 DEFENDER_ALWAYS = {
     MoveTarget.RANGE_USER,
     MoveTarget.RANGE_USER_SIDE,
     MoveTarget.RANGE_FIELD,
+    MoveTarget.RANGE_ALLY,
+    MoveTarget.RANGE_USER_OR_ALLY,
     MoveTarget.RANGE_OPPONENT_SIDE,
 }
 # ... of which these hit the user, not the foe (no damage to the foe's active).
-TARGETS_USER = {MoveTarget.RANGE_USER, MoveTarget.RANGE_USER_SIDE, MoveTarget.RANGE_FIELD}
+TARGETS_USER = {
+    MoveTarget.RANGE_USER,
+    MoveTarget.RANGE_USER_SIDE,
+    MoveTarget.RANGE_FIELD,
+    MoveTarget.RANGE_ALLY,
+    MoveTarget.RANGE_USER_OR_ALLY,
+}
 # BattleSystem_Defender (lib.c:1665-1683): in singles these ranges make the user the
 # defender, so the move leaves no moveHit on the foe.
 SELF_DEFENDER = TARGETS_USER | {
@@ -2134,10 +2143,10 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
         # Big Root.
         _gain_hp(s, side, _big_root(turn, s, side, _divide(dealt * p0, 100)))
     elif effect == EffectId.RECOIL and effective and dealt > 0:
-        # subscript_recoil_1_{2,4}.s; Rock Head prevents it.
-        # Magic Guard: subscript_recoil_1_2.s / _1_4.s:6.
+        # subscript_recoil_1_{2,3,4}.s: Divide(hitDamage, 2 / 3 / 4); Rock Head and Magic Guard
+        # skip it (:5-6).
         if _active(s, side).ability not in (AbilityId.ROCK_HEAD, AbilityId.MAGIC_GUARD):
-            _lose_hp(turn, s, side, _divide(dealt * p0, 100))
+            _lose_hp(turn, s, side, _divide(dealt, p0))
     elif effect == EffectId.STEALTH_ROCK and landed:
         # effect_script_0266.s: fails when the foe's side already has it.
         if not s.sides[target].stealth_rock:
@@ -3778,6 +3787,8 @@ def _move_imprisoned(s: RefState, side: int, move: int) -> bool:
 def _script_fails(s: RefState, side: int, effect: int) -> bool:
     """A user-effect script's MOVE_STATUS_FAILED (``_use_move``)."""
     sd = s.sides[side]
+    if effect == EffectId.HELPING_HAND:  # BtlCmd_TryHelpingHand: no partner (script.c:6309-6311)
+        return True
     if effect == EffectId.IMPRISON:
         own = [m for m in _active(s, side).moves if m]
         shared = any(m in _active(s, b).moves for b in (0, 1) if b != side for m in own)

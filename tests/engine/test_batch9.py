@@ -85,3 +85,43 @@ def test_huge_power_doubles_attack_before_the_choice_band(tables, names):
     assert int(damage_table(tables, huge, 0, move, False)[15]) > int(
         damage_table(tables, plain, 0, move, False)[15]
     )
+
+
+def test_double_edge_recoil_is_a_third(tables, names):
+    """B9-4: subscript_recoil_1_3.s: DivideVarByValue(hitDamage, 3), at least 1."""
+    n = names
+    s = make_state(
+        tables, [_mon(n, "Bidoof", ["Double-Edge"], 40)], [_mon(n, "Psyduck", ["Growl"], 40)]
+    )
+    out = assert_matches_reference(tables, s, (0, 0), O)
+    dealt = int(s.hp[1, 0]) - int(out.hp[1, 0])
+    assert dealt > 0
+    assert int(s.hp[0, 0]) - int(out.hp[0, 0]) == max(dealt // 3, 1)
+
+
+def test_kaizo_recoil_scripts(kaizo_tables, kaizo_names):
+    """B9-4: Kaizo's effect 48 is 1/2 recoil, its 182 the vanilla 1/4 recoil (rom_diff.toml
+    be_seq 48, 182 modelled; effect_map.KAIZO_EFFECTS)."""
+    import numpy as np
+
+    from nuzline.engine.ids import EffectId
+
+    t, n = kaizo_tables, kaizo_names
+    for move, divisor in (("Hyper Beam", 2), ("Take Down", 4), ("Double-Edge", 3)):
+        m = n.move(move)
+        assert int(t.move_effect[m]) == EffectId.RECOIL, move
+        assert int(np.asarray(t.move_param)[m, 0]) == divisor, move
+
+
+def test_helping_hand_fails_and_follow_me_changes_nothing_in_singles(tables, names):
+    """B9-5: BtlCmd_TryHelpingHand fails outside a double battle (battle_script.c:6309-6311);
+    Follow Me's followMe names the side's one battler, the foe's target anyway."""
+    n = names
+    s = make_state(
+        tables,
+        [_mon(n, "Togepi", ["Helping Hand", "Follow Me"], 30)],
+        [_mon(n, "Geodude", ["Growl"], 30)],
+    )
+    for slot in (0, 1):
+        out = assert_matches_reference(tables, s, (slot, 0), O)
+        assert int(out.hp[1, 0]) == int(s.hp[1, 0])

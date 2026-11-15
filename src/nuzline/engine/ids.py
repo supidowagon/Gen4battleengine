@@ -19,7 +19,8 @@ class EffectId(IntEnum):
       the type chart (Thunder Wave: Ground is immune), else 0; ``thaws_user`` is 1 for
       ``BATTLE_EFFECT_THAW_AND_BURN_HIT`` (Flame Wheel, Sacred Fire), which a frozen
       user can use and which thaws it, else 0
-    * ``DRAIN``, ``RECOIL``: ``(percent of damage dealt, 0, 0)``
+    * ``DRAIN``: ``(percent of damage dealt, 0, 0)``; ``RECOIL``: ``(divisor of the damage
+      dealt, 0, 0)`` (``DivideVarByValue``: 2, 3 or 4; E2 batch 9)
     * everything else: zeros. ``LEVEL_DAMAGE`` (Night Shade, Seismic Toss) deals the user's
       level; ``HIDDEN_POWER`` and ``MAGNITUDE`` take their type and power from the
       battler and ``Outcome.magnitude`` (``engine/damage.py``).
@@ -248,6 +249,15 @@ class EffectId(IntEnum):
     # turn end's MON_COND_CHECK_STATE_YAWN drops it and at 0 runs subscript_fall_asleep.s as a
     # move effect (bcp.c:1684-1697), its turns drawn as ``Outcome.yawn_sleep``.
     YAWN = 76
+    # E2 batch 9 (B9-5). Follow Me (effect_script_0172.s): BtlCmd_FollowMe sets the user side's
+    # followMe and followMeUser (battle_script.c:6261-6270), which BattleSystem_Defender
+    # (battle_lib.c:1714-1717), the redirection abilities (:1743) and Counter (battle_script.c:
+    # 4628) read for the foe's moves: in singles they name the side's one battler, the target
+    # anyway, so the move only shows its message. Helping Hand (effect_script_0176.s):
+    # BtlCmd_TryHelpingHand (:6291-6314) needs a double battle and a partner; in singles it jumps
+    # to MOVE_STATUS_FAILED (:6309-6311, effect_script_0176.s:15-17).
+    FOLLOW_ME = 77
+    HELPING_HAND = 78
 
 
 # ``EffectId.COUNTER``'s source (``move_param[m, 0]``).

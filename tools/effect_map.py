@@ -24,8 +24,6 @@ changes those scripts declares it in ``rom_diff.toml`` (Ruling 13).
 
 Deliberately unsupported although close to a supported family:
 
-* ``BATTLE_EFFECT_RECOIL_THIRD`` (198): the decomp divides damage by 3
-  (``subscript_recoil_1_3.s``), which a ``RECOIL`` percent cannot express exactly.
 * ``SPEED_UP``, ``ACC_UP``, ``SP_DEF_UP``, ``SP_ATK_DOWN``, ``SP_DEF_DOWN``,
   ``ACC_UP_2``, ``EVA_UP_2``, ``SP_ATK_DOWN_2``, ``EVA_DOWN_2``, ``ACC_DOWN_2``,
   ``LOWER_EVASION_HIT`` (12, 14, 15, 21, 22, 55, 56, 61, 63, 64, 74): no move uses
@@ -137,8 +135,9 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     # BIND_TARGET indirect effect) plus a x2 against MOVE_EFFECT_UNDERWATER (Dive, unsupported).
     261: ("BATTLE_EFFECT_WHIRLPOOL", _E.TRAP, (0, 0, 0)),
     43: ("BATTLE_EFFECT_HIGH_CRITICAL", _E.HIGH_CRIT, (0, 0, 0)),
-    # subscript_recoil_1_4: damage / 4 == damage * 25 // 100
-    48: ("BATTLE_EFFECT_RECOIL_QUARTER", _E.RECOIL, (25, 0, 0)),
+    # subscript_recoil_1_4.s: DivideVarByValue(hitDamage, 4) (E2 batch 9: RECOIL's param 0 is
+    # the divisor, B9-4).
+    48: ("BATTLE_EFFECT_RECOIL_QUARTER", _E.RECOIL, (4, 0, 0)),
     49: ("BATTLE_EFFECT_STATUS_CONFUSE", _E.CONFUSE_FOE, (0, 0, 0)),
     50: ("BATTLE_EFFECT_ATK_UP_2", _E.STAT_SELF, (_ATK, 2, 0)),
     51: ("BATTLE_EFFECT_DEF_UP_2", _E.STAT_SELF, (_DEF, 2, 0)),
@@ -208,8 +207,11 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     # Hammer Arm: certain self Speed drop (effect_script_0218.s, ON_HIT|TO_ATTACKER).
     218: ("BATTLE_EFFECT_SPEED_DOWN_HIT", _E.SECONDARY_STAT_SELF, (_SPE, -1, 0)),
     266: ("BATTLE_EFFECT_STEALTH_ROCK", _E.STEALTH_ROCK, (0, 0, 0)),
-    # subscript_recoil_1_2: damage / 2 == damage * 50 // 100
-    269: ("BATTLE_EFFECT_RECOIL_HALF", _E.RECOIL, (50, 0, 0)),
+    # subscript_recoil_1_2.s: DivideVarByValue(hitDamage, 2).
+    269: ("BATTLE_EFFECT_RECOIL_HALF", _E.RECOIL, (2, 0, 0)),
+    # Double-Edge, Wood Hammer: effect_script_0198.s (Reckless x1.2, ON_HIT
+    # subscript_recoil_1_3.s: DivideVarByValue(hitDamage, 3)) (B9-4).
+    198: ("BATTLE_EFFECT_RECOIL_THIRD", _E.RECOIL, (3, 0, 0)),
     271: ("BATTLE_EFFECT_LOWER_SP_DEF_2_HIT", _E.SECONDARY_STAT_FOE, (_SPD, -2, 0)),
     # effect_script_0275.s -> subscript_paralyze_or_flinch.s: a paralysis roll, then a flinch
     # roll (engine/effects.py ``_fang``).
@@ -337,6 +339,28 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     114: ("BATTLE_EFFECT_ALL_FAINT_3_TURNS", _E.PERISH_SONG, (0, 0, 0)),
     # Yawn: effect_script_0187.s (a direct subscript_yawn.s).
     187: ("BATTLE_EFFECT_STATUS_SLEEP_NEXT_TURN", _E.YAWN, (0, 0, 0)),
+    # E2 batch 9 (B9-5). Surf: effect_script_0257.s doubles the power against
+    # MOVE_EFFECT_UNDERWATER (Dive), which no supported move sets, like Gust (149) and Earthquake
+    # (147); SYSCTL_HIT_DURING_DIVE only matters against a diving target.
+    257: ("BATTLE_EFFECT_DOUBLE_DAMAGE_DIVE", _E.PLAIN, (0, 0, 0)),
+    # Follow Me: effect_script_0172.s (BtlCmd_FollowMe, battle_script.c:6261-6270, then an ON_HIT
+    # message). Helping Hand: effect_script_0176.s (BtlCmd_TryHelpingHand, :6291-6314).
+    172: ("BATTLE_EFFECT_MAKE_GLOBAL_TARGET", _E.FOLLOW_ME, (0, 0, 0)),
+    176: ("BATTLE_EFFECT_BOOST_ALLY_POWER_BY_50_PERCENT", _E.HELPING_HAND, (0, 0, 0)),
+}
+
+# The Kaizo ROM's changed battle effect scripts that data/kaizo/rom_diff.toml marks ``modelled``
+# (K2b Ruling 13): decomp effect id -> (what the Kaizo script is, EffectId, params), used for that
+# game in place of ``_EFFECTS`` (tools/build_tables.py; every modelled be_seq member must be
+# here and nothing else). B9-4:
+# * 48: effect_script_0048.s with MOVE_SUBSCRIPT_PTR_RECOIL_1_2 for _QUARTER_RECOIL, the Reckless
+#   power check unchanged: 1/2 recoil (Hyper Beam, Outrage, Superpower, Hydro Cannon, Giga
+#   Impact, Draco Meteor).
+# * 182: byte-identical to the vanilla effect 48 script: Reckless and 1/4 recoil (Take Down, Close
+#   Combat, Brave Bird).
+KAIZO_EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
+    48: ("Kaizo effect 48: Reckless, 1/2 recoil", _E.RECOIL, (2, 0, 0)),
+    182: ("Kaizo effect 182: Reckless, 1/4 recoil", _E.RECOIL, (4, 0, 0)),
 }
 
 DECOMP_EFFECT_NAMES: dict[int, str] = {k: v[0] for k, v in _EFFECTS.items()}

@@ -931,6 +931,9 @@ def _use_move(
     effect_used = tables.move_effect[used]
     failed = failed | ((effect_used == EffectId.INGRAIN) & (state.ingrain[side] != 0))
     failed = failed | ((effect_used == EffectId.AQUA_RING) & (state.aqua_ring[side] != 0))
+    # Helping Hand (effect_script_0176.s:5, :15-17): BtlCmd_TryHelpingHand fails outside a double
+    # battle (battle_script.c:6309-6311), so always in singles (B9-5).
+    failed = failed | (effect_used == EffectId.HELPING_HAND)
     # Imprison (effect_script_0192.s): BtlCmd_TryImprison first sets MOVE_EFFECT_IMPRISONED on
     # the user's foes (battle_script.c:6686-6690: both enemy slots, which in singles name the
     # one foe battler, whatever its HP), then fails (:10) a user already imprisoning or sharing

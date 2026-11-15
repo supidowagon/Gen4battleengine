@@ -1139,3 +1139,22 @@ Rules left out because another mechanic is missing; each closes with the mechani
   formNum, which only the display reads (battle_controller.c sprite messages). The end-of-turn speed grid
   (`enumerate._end_speeds`) takes Chlorophyll's sun beside Swift Swim's rain and an Unburden
   axis.
+- B9-4 Recoil: `RECOIL`'s param 0 is now the divisor of subscript_recoil_1_{2,3,4}.s
+  (DivideVarByValue = BattleSystem_Divide, battle_script.c:4413: at least 1), which a percent could
+  not give for 1/3: Double-Edge / Wood Hammer (198, effect_script_0198.s with Reckless) join.
+  Kaizo's changed be_seq 48 (1/2 recoil, Reckless) and 182 (vanilla 48's script: 1/4 recoil,
+  Reckless) are `modelled` in rom_diff.toml through `effect_map.KAIZO_EFFECTS`, which build_tables
+  uses for Kaizo in place of the vanilla entry (and checks against the modelled members). Vanilla
+  182 (Superpower) stays unsupported. Volt Tackle's family (262: recoil 1/3 and a paralysis that
+  BattleSystem_TriggerSecondaryEffect's PROBABILISTIC branch runs on every hit, battle_lib.c:
+  1551-1567) and Jump Kick's crash (45, subscript_crash_on_miss.s: half the damage the miss would
+  have dealt, capped at half the defender's max HP, so the miss reads the crit and roll) are left.
+- B9-5 Singles-only moves: in singles BattleSystem_Defender gives RANGE_ALLY and
+  RANGE_USER_OR_ALLY the attacker (battle_lib.c:1670-1684; `effects.targets_user`, both engines).
+  Follow Me (172) sets the user side's followMe / followMeUser (battle_script.c:6261-6270), read
+  only by target selection (battle_lib.c:1714-1717), the redirection abilities (:1743) and
+  Counter (battle_script.c:4628), which in singles name the target anyway: a message only
+  (`EffectId.FOLLOW_ME`). Helping Hand (176) fails outside a double battle
+  (BtlCmd_TryHelpingHand :6309-6311, MOVE_STATUS_FAILED, effect_script_0176.s:15-17;
+  `EffectId.HELPING_HAND`). Surf (257) is Gust's case: its x2 needs a diving target (Dive is
+  unsupported).

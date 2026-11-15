@@ -91,7 +91,7 @@ many are real). Decomp sources:
   not when the move has no target), then a plain hit on the halved Defense (``damage.py``).
   No effect function runs for it. Its Damp branch is unreachable (Damp is unsupported).
 * Drain / recoil:``subscript_drain_half_damage_dealt.s``,
-  ``subscript_recoil_1_{2,4}.s``: a fraction of ``hitDamage``, the damage dealt
+  ``subscript_recoil_1_{2,3,4}.s``: a fraction of ``hitDamage``, the damage dealt
   capped at the target's HP (``BtlCmd_UpdateHealthBarValue``, battle_script.c:1701),
   through ``BattleSystem_Divide`` (at least 1). Rock Head prevents recoil. A Big Root
   holder's drain is then ``* (100 + 30) / 100`` (``big_root``).
@@ -625,8 +625,12 @@ def _recoil(tables, state, h: _Hit) -> BattleState:
     # Rock Head; Magic Guard skips the subscript (subscript_recoil_1_2.s, _1_4.s:6, CheckAbility).
     rock_head = state.ability[h.side, h.user] == AbilityId.ROCK_HEAD
     magic_guard = state.ability[h.side, h.user] == AbilityId.MAGIC_GUARD
+    # subscript_recoil_1_{2,3,4}.s: DivideVarByValue(hitDamage, 2 / 3 / 4), at least 1 (B9-4).
+    third = jnp.maximum(h.dealt // jnp.maximum(h.param[0], 1), 1)
     cost = jnp.where(
-        (h.effect == _E.RECOIL) & h.effective & ~rock_head & ~magic_guard, _percent_of_dealt(h), 0
+        (h.effect == _E.RECOIL) & h.effective & ~rock_head & ~magic_guard & (h.dealt > 0),
+        third,
+        0,
     )
     hp = jnp.maximum(state.hp[h.side, h.user].astype(_I32) - cost, 0)
     return state._replace(hp=state.hp.at[h.side, h.user].set(hp.astype(state.hp.dtype)))
@@ -652,6 +656,10 @@ def targets_user(tables: Tables, move, ghost=False) -> jnp.ndarray:
         (target == MoveTarget.RANGE_USER)
         | (target == MoveTarget.RANGE_USER_SIDE)
         | (target == MoveTarget.RANGE_FIELD)
+        # In singles BattleSystem_Defender gives RANGE_ALLY (Helping Hand) and RANGE_USER_OR_ALLY
+        # (Acupressure) the attacker itself (battle_lib.c:1670-1684), B9-5.
+        | (target == MoveTarget.RANGE_ALLY)
+        | (target == MoveTarget.RANGE_USER_OR_ALLY)
         | ((tables.move_effect[move] == _E.CURSE) & ~jnp.asarray(ghost, bool))
     )
 
