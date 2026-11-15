@@ -1266,6 +1266,10 @@ def outcome_laws(
         | (uses_move & damaging & contact & static[::-1])
         | lum
         | plucks
+        # The foe's SmellingSalt cures this side's paralysis (effect_script_0171.s:12,
+        # subscript_heal_target_paralysis.s:5-6; effects._cure_paralysis) before the
+        # end-of-turn sort (battle_controller_player.c:888).
+        | (foe_moves & (effect[::-1] == _E.DOUBLE_POWER) & (params[::-1, 1] == 1))
         # Quick Feet reads any status (order.effective_speed): free for a holder.
         | _holds(tables, state, actions, (AbilityId.QUICK_FEET,))
     )

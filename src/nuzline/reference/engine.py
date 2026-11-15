@@ -158,9 +158,10 @@ class _Turn:
     # turnFlags.roosting (subscript_roost.s:11-12, cleared at the turn end): the battler's chart
     # skips its Flying rows (lib.c:2540-2543) for the rest of the turn.
     roosting: list[bool] = field(default_factory=lambda: [False, False])
-    # turnFlags damage taken per side this turn, [physical, special, last] (bcp.c:3413-3434),
-    # and the current Counter / Mirror Coat / Metal Burst damage (battleCtx->damage).
-    taken: list[list[int]] = field(default_factory=lambda: [[0, 0, 0], [0, 0, 0]])
+    # turnFlags damage taken per side this turn, [physical, special, last] and their attackers
+    # as 1 + battler (bcp.c:3413-3434), and the current Counter / Mirror Coat / Metal Burst
+    # damage (battleCtx->damage).
+    taken: list[list[int]] = field(default_factory=lambda: [[0] * 6, [0] * 6])
     counter_damage: int = 0
     # SYSCTL_ATTACK_MESSAGE_SHOWN of the current action (script.c:1432), for
     # UpdateMoveBuffers' moveProtect (bcp.c:3936-3942).
@@ -1484,11 +1485,12 @@ def _entry_hazards(turn: _Turn, s: RefState, side: int) -> None:
                     and s.weather == Weather.SUN
                     and not _weather_suppressed(tables, s)
                 )
-                if (
-                    ability != ITEM_ABILITY_IDS["Immunity"]
-                    and not leaf
-                    and _can_have_status(tables, s, side, status)
-                ):
+                if ability == ITEM_ABILITY_IDS["Immunity"] or leaf:
+                    # "{0}'s {1} prevents poisoning!" (subscript_poison.s:80-82,
+                    # _badly_poison.s:93-103): BattleAI_SetAbility (script.c:11806).
+                    if side == 0:
+                        s.ai_ability_known[sd.active] = 1
+                elif _can_have_status(tables, s, side, status):
                     mon.status, mon.status_counter = status, 0
         if sd.spikes and mon.hp:
             _lose_hp(turn, s, side, _divide(mon.max_hp, (5 - sd.spikes) * 2))
@@ -2235,12 +2237,13 @@ def _hit(turn: _Turn, s: RefState, side: int, move: int, hit: int, struggling: b
 
     if counter:
         # The command's battleCtx->damage under SYSCTL_IGNORE_TYPE_CHECKS: an immunity still
-        # flags (lib.c:7550-7551), unless a RANGE_USER move skips the chart (bcp.c:2352).
+        # flags (lib.c:7550-7551). No Counter-family move is RANGE_USER in either game (Counter,
+        # Mirror Coat, Metal Burst: RANGE_SINGLE_TARGET_SPECIAL; Kaizo's Bide: single target).
         kind = _move_type(tables, s, side, move)
         immune = _matchup_x40(
             tables, kind, target_mon.types, _identified(s, side, target)
         ) == 0 or _levitated(tables, s, side, target, kind)
-        damage = 0 if immune and not _targets_user(tables, move) else turn.counter_damage
+        damage = 0 if immune else turn.counter_damage
     else:
         damage = _move_damage(
             tables,
@@ -2277,10 +2280,10 @@ def _hit(turn: _Turn, s: RefState, side: int, move: int, hit: int, struggling: b
             record = turn.taken[target]
             klass = _t(tables, "move_category", move)
             if klass == PHYSICAL:
-                record[0] = taken
+                record[0], record[3] = taken, side + 1
             elif klass == SPECIAL:
-                record[1] = taken
-            record[2] = taken
+                record[1], record[4] = taken, side + 1
+            record[2], record[5] = taken, side + 1
         # subscript_update_hp.s: the resist berry halves hpCalcTemp (BattleSystem_Divide).
         if taken > 0 and _hit_resist_berry(turn, s, side, move):
             dealt = _lose_hp(turn, s, target, _divide(taken, 2))
@@ -2589,10 +2592,12 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
     # Snore (effect_script_0092.s:5): MOVE_STATUS_FAILED unless the user is asleep.
     if counter:
         # BtlCmd_Counter / MirrorCoat / TryMetalBurst (script.c:4615-4705, :7153-7184): the
-        # user's turnFlags damage from the foe, 0 or a fainted foe fails (MOVE_STATUS_FAILED).
+        # user's turnFlags damage and its last attacker (1 + battler); 0 taken, an attacker of
+        # the user's side or one with no HP fails (MOVE_STATUS_FAILED, :4619-4625, :4672-4678, :7157-7162).
         source = _t(tables, "move_param", move, 0)
         taken = turn.taken[side][source - 1]
-        if not taken or _active(s, 1 - side).hp == 0:
+        attacker = turn.taken[side][source + 2] - 1
+        if not taken or attacker in (-1, side) or _active(s, attacker).hp == 0:
             _unlock(s.sides[side])
             return None if special_counter else record
         turn.counter_damage = taken * _t(tables, "move_param", move, 1) // 10
@@ -2613,6 +2618,21 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
     # checks only its first hit (SYSCTL_MULTI_HIT_MOVE). The hit rate is computed here,
     # from the stages of this moment; o.hit[side][0] is the class of the roll
     # RandNext() % 100 + 1 (engine/outcome.py), which misses when it is 0 or above it.
+    # An OHKO move against an ignorable Sturdy (script.c:4340-4341, MOVE_STATUS_STURDY):
+    # subscript_missed.s:67-69 tags the defender's ability (BattleAI_SetAbility,
+    # script.c:11806) unless it is protected (:18), Levitate (:34) or ineffective (:59) first.
+    if (
+        effect == EffectId.OHKO
+        and 1 - side == 0
+        and _ignorable(s, side, 1 - side) == AbilityId.STURDY
+        and not _protected(turn, s, side, move, unleash)
+    ):
+        kind = _move_type(tables, s, side, move)
+        foe = _active(s, 1 - side)
+        if _matchup_x40(tables, kind, foe.types, _identified(s, side, 1 - side)) != 0 and not (
+            _levitated(tables, s, side, 1 - side, kind)
+        ):
+            s.ai_ability_known[s.sides[0].active] = 1
     roll = o.hit[side][0]
     missed = _t(tables, "move_accuracy", move) != 0 and not 0 < roll <= _hit_rate(
         tables, s, side, move, target_moved

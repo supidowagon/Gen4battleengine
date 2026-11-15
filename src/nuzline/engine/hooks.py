@@ -56,8 +56,8 @@ Swim in ``order.py``; Sand Veil and Snow Cloak also in the end-of-turn weather c
 (``NO_CLOUD_NINE``, include/battle/common.h:63); ``damage.weather_suppressed`` (read by
 decomp ability id, with Air Lock) gates the weather modifiers of the damage formula, the
 accuracy check, Swift Swim, the end-of-turn chip and the sun's freeze immunity
-(``effects.can_have_status``: ``CheckIgnoreWeather``, subscript_freeze.s:6). Sturdy only blocks OHKO moves in Gen
-4, and none is in M1, so it has no hook. E2 batch 3: Technician, Thick Fat, Dry Skin, Solar
+(``effects.can_have_status``: ``CheckIgnoreWeather``, subscript_freeze.s:6). Sturdy only blocks
+OHKO moves in Gen 4 (``damage.fixed_damage``; its reveal is ``step._use_move``'s). E2 batch 3: Technician, Thick Fat, Dry Skin, Solar
 Power, Reckless, Tinted Lens, Levitate and Scrappy in ``damage.py``; Shield Dust and the
 armors in ``effects.py``; Super Luck, Serene Grace, No Guard and Tangled Feet in
 ``outcome.py``; Quick Feet and Truant in ``order.py`` / ``step.py``; Dry Skin's absorb and the
@@ -86,6 +86,7 @@ SLEEP_BLOCKED, STATUS_CURE = "sleep_blocked", "status_cure"
 FLINCH_BLOCKED = "flinch_blocked"
 CONTACT_DAMAGE, PARALYSIS_BLOCKED = "contact_damage", "paralysis_blocked"
 WEATHER_SET, ABSORB, WEATHER_HP = "weather_set", "absorb", "weather_hp"
+OHKO_BLOCKED = "ohko_blocked"
 # Ability -> the phases at which it shows a message tagging it, for the implemented
 # abilities that ever do:
 # * Mold Breaker: SWITCH_IN_CHECK_STATE_MOLD_BREAKER (battle_lib.c:4075), a living
@@ -124,13 +125,17 @@ WEATHER_SET, ABSORB, WEATHER_HP = "weather_set", "absorb", "weather_hp"
 #   (subscript_weather_continues.s :_045, :_076 tag ``BTLSCR_MSG_BATTLER_TEMP``, the battler);
 #   Solar Power's turn-end loss in sun (:_057).
 # * Trace's own message names the copied ability through the target (``trace``).
+# * Sturdy: an OHKO move it blocks (BtlCmd_TryOHKOMove sets MOVE_STATUS_STURDY,
+#   battle_script.c:4340-4341; subscript_missed.s:67-69 prints "{0} was protected by {1}!"
+#   with ``TAG_NICKNAME_ABILITY``, BTLSCR_DEFENDER) unless an earlier flag of subscript_missed.s
+#   prints first: protected (:18), Levitate (:34), ineffective (:59) (``step._use_move``).
 # The others never reveal: Intimidate's "cuts" message and Keen Eye's "prevents"
 # message are built in C (``BtlCmd_ChangeStatStage``, battle_script.c:2956, :2900);
 # Shield Dust blocks silently (an indirect side effect); Truant's "loafing around"
 # (subscript_loafing_around.s) tags only the nickname; the damage, accuracy, crit, speed and
 # chance abilities print nothing;
 # Blaze, Torrent, Overgrow, Rivalry, Guts, Simple, Unaware, Rock Head, Natural Cure,
-# Steadfast, Sturdy, Cloud Nine, Compoundeyes, Sand Veil, Snow Cloak, Swift Swim,
+# Steadfast, Cloud Nine, Compoundeyes, Sand Veil, Snow Cloak, Swift Swim,
 # Adaptability and Solid Rock show no ability message in M1 (``ApplyTypeChart`` prints
 # nothing).
 REVEALS_ON: dict[int, frozenset[str]] = {
@@ -150,6 +155,7 @@ REVEALS_ON: dict[int, frozenset[str]] = {
     AbilityId.SNOW_WARNING: frozenset({WEATHER_SET}),
     AbilityId.DRY_SKIN: frozenset({ABSORB, WEATHER_HP}),
     AbilityId.SOLAR_POWER: frozenset({WEATHER_HP}),
+    AbilityId.STURDY: frozenset({OHKO_BLOCKED}),
 }
 
 

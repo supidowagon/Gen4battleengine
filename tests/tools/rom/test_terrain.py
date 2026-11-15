@@ -20,8 +20,9 @@ from tools.terrain import (
 ROARK = 246
 BUILDING = TERRAIN_NAMES.index("TERRAIN_BUILDING")
 # Mixed trainers (several terrains over the tiles their battles can start on) per game,
-# after the per-trainer narrowing of rules §9.3 step 2 (415 and 371 over whole headers).
-MIXED = {"CPUE": 217, "JAK7": 242}
+# after the per-trainer narrowing of rules §9.3 step 2 (415 and 371 over whole headers; a
+# rematch row's base unspun, ruling B4-19).
+MIXED = {"CPUE": 212, "JAK7": 235}
 
 
 def _t(name: str) -> int:
@@ -49,7 +50,7 @@ def test_version_pearl_is_the_decomp_enum(decomp):
 
 
 def test_calc_terrain_follows_the_decomp_order(decomp):
-    # CalcTerrain (src/field_battle_data_transfer.c:467-494): ice, grass, sand, snow, mud,
+    # CalcTerrain (src/field_battle_data_transfer.c:467-505): ice, grass, sand, snow, mud,
     # cave floor, surfable, then sTerrainForBackground; TERRAIN_MAX past the table.
     rules = terrain_rules(decomp)
     assert [rules.names[t] for _, t in rules.tests] == [

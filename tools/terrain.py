@@ -15,7 +15,7 @@ read from the decomp (pokeplatinum, ``external/pokeplatinum``):
 * ``SetBackgroundAndTerrain`` (:496-505): the background is
   ``MapHeader_GetBattleBG(location->mapHeaderID)``, ``BACKGROUND_WATER`` while the player
   surfs, and the terrain is ``CalcTerrain(fieldSystem, background)``.
-* ``CalcTerrain`` (:467-494) reads the behaviour of the tile under the player
+* ``CalcTerrain`` (:467-505, with its caller above) reads the behaviour of the tile under the player
   (``TerrainCollisionManager_GetTileBehavior`` at ``location->x, z``,
   src/terrain_collision_manager.c:229-240: the land data's terrain attribute u16 masked by
   ``TERRAIN_ATTRIBUTES_TILE_BEHAVIOR_MASK``; both collision managers read the tile from the
@@ -602,12 +602,14 @@ def terrain_fields(terrain: int, terrains: list[int]) -> dict:
 #   across a ``TileBehavior_IsTable`` tile. The battle script (``Battles_Trainer``,
 #   res/field/scripts/scripts_battles.s) moves no one before ``StartTrainerBattle``.
 # * The facings an object can have come from its movement type (``FACINGS``) plus its
-#   event's initial facing, which it keeps until the type first turns it. A trainer of a Vs.
-#   Seeker rematch row (the base and its rematches) can also be fought after the Vs. Seeker
-#   spins it (``MOVEMENT_TYPE_VS_SEEKER_SPIN``, src/overlay005/vs_seeker.c:659-690, then
-#   ``MOVEMENT_TYPE_LOOK_AROUND`` :599-614 or a ``LOOK_*`` type :780-810; the base's own id
-#   comes back at rematch level 0, :692-773): all four facings for the trainer types it
-#   spins (:536-542).
+#   event's initial facing, which it keeps until the type first turns it. A rematch trainer
+#   of a Vs. Seeker rematch row is fought only after the Vs. Seeker spins it
+#   (``MOVEMENT_TYPE_VS_SEEKER_SPIN``, src/overlay005/vs_seeker.c:659-690, then
+#   ``MOVEMENT_TYPE_LOOK_AROUND`` :599-614 or a ``LOOK_*`` type :780-810): all four facings
+#   for the trainer types it spins (:536-542). A row's base keeps its own facings: its
+#   terrain is the first battle's, a split's fight (ruling B4-19,
+#   docs/kaizo/e2-mechanics-ledger.md); a Vs. Seeker rematch can bring the base's own id
+#   back at rematch level 0 (:692-773) spun, but that rematch is not a split fight.
 # * A battle a coord event's script starts (``Field_CheckCoordEvent`` / ``sub_0203CC14``,
 #   src/overlay005/field_control.c:768-775, src/unk_0203C954.c:208-225) starts on a tile of
 #   the event's rectangle when every command before the battle leaves the player where it
@@ -670,63 +672,71 @@ SEES_FACING = (
 )
 SEES_ALL = ("TRAINER_TYPE_VIEW_ALL_DIRECTIONS",)
 VS_SEEKER_TYPES = SEES_FACING + SEES_ALL  # VsSeekerSystem_CollectViableNPCs (vs_seeker.c:536-542)
-# Script commands that leave the player where it is: their handlers (src/scrcmd.c) only read
-# or write variables, flags and trainer flags, show text, play sound, wait, lock or release
-# objects, or turn the talked-to object (FacePlayer). ApplyMovement of another object and
-# CallCommonScript of a common script made of these are safe too (ScriptFacts.safe).
-SAFE_COMMANDS = frozenset(
-    f"SCRCMD_{c}"
-    for c in [
-        "END",
-        "RETURN",
-        "GOTO",
-        "CALL",
-        "GOTOIF",
-        "CALLIF",
-        "RETURNCOMMONSCRIPT",
-        "COMPAREVARTOVALUE",
-        "COMPAREVARTOVAR",
-        "SETVARFROMVALUE",
-        "SETVARFROMVAR",
-        "SETFLAG",
-        "CLEARFLAG",
-        "CHECKFLAG",
-        "SETTRAINERFLAG",
-        "CLEARTRAINERFLAG",
-        "CHECKTRAINERFLAG",
-        "MESSAGE",
-        "MESSAGEINSTANT",
-        "MESSAGENOSKIP",
-        "OPENMESSAGE",
-        "CLOSEMESSAGE",
-        "CLOSEMESSAGEWITHOUTERASING",
-        "WAITBUTTON",
-        "PLAYSE",
-        "WAITSE",
-        "PLAYFANFARE",
-        "WAITFANFARE",
-        "PLAYMUSIC",
-        "STOPMUSIC",
-        "PLAYDEFAULTMUSIC",
-        "FADEOUTBGM",
-        "FADEINBGM",
-        "SETBGM",
-        "WAITTIME",
-        "WAITMOVEMENT",
-        "LOCKALL",
-        "RELEASEALL",
-        "LOCKOBJECT",
-        "RELEASEOBJECT",
-        "FACEPLAYER",
-        "GETPLAYERMAPPOS",
-        "GETPLAYERGENDER",
-        "GETPLAYERSTARTERSPECIES",
-        "BUFFERPLAYERNAME",
-        "BUFFERRIVALNAME",
-        "BUFFERPLAYERSTARTERSPECIESNAME",
-        "BUFFERRIVALSTARTERSPECIESNAME",
-    ]
-)
+# Script commands that leave the player where it is, each with its handler (src/scrcmd.c
+# unless named; read in full: none writes the player's position, its movement or a warp).
+# ApplyMovement of another object and CallCommonScript of a common script made of these are
+# safe too (ScriptFacts.safe). The tile CalcTerrain reads is the player's map position
+# (PlayerAvatar_GetXPos / GetZPos), which MapObject_StepDir advances when a step starts
+# (src/map_object_move.c:849-858), so letting a step already under way finish moves nothing.
+_SAFE_HANDLERS = {
+    "END": ":780-784, stops the script",
+    "WAITTIME": ":786-799, sets a countdown variable and waits",
+    "COMPAREVARTOVALUE": ":944-950",
+    "COMPAREVARTOVAR": ":952-958",
+    "RETURNCOMMONSCRIPT": ":996-1002, clears the sub-context flag",
+    "GOTO": ":1004-1008",
+    "CALL": ":1053-1057",
+    "RETURN": ":1059-1063",
+    "GOTOIF": ":1065-1073",
+    "CALLIF": ":1075-1083",
+    "SETFLAG": ":1085-1091",
+    "CLEARFLAG": ":1093-1099",
+    "CHECKFLAG": ":1101-1107",
+    "SETTRAINERFLAG": ":1127-1133",
+    "CLEARTRAINERFLAG": ":1135-1141",
+    "CHECKTRAINERFLAG": ":1143-1149",
+    "SETVARFROMVALUE": ":1165-1170",
+    "SETVARFROMVAR": ":1172-1178",
+    "MESSAGEINSTANT": ":1188-1194",
+    "MESSAGE": ":1303-1311",
+    "MESSAGENOSKIP": ":1346-1354",
+    "WAITBUTTON": ":1418-1422",
+    "OPENMESSAGE": ":1462-1472",
+    "CLOSEMESSAGE": ":1474-1485",
+    "CLOSEMESSAGEWITHOUTERASING": ":1487-1497",
+    # Waits until the movement counter of ApplyMovement's tasks is 0 (:2117-2125); only the
+    # movements ScriptFacts.safe already allowed (other objects') can be running.
+    "WAITMOVEMENT": ":2111-2115",
+    # Pauses every object (:2179-2181); with a partner it lets the follower finish its step
+    # (:2183-2190); with a talked-to object, LockLastTalked (:2276-2314) pauses all and lets
+    # the player, the object and the follower finish a step already under way (:2288-2303):
+    # no new step for the player.
+    "LOCKALL": ":2174-2198",
+    "RELEASEALL": ":2316-2323",
+    "LOCKOBJECT": ":2325-2333, pauses one object",
+    "RELEASEOBJECT": ":2335-2343",
+    # Turns the talked-to object to face the player (ov5_021ECDFC on SCRIPT_MANAGER_TARGET_OBJECT,
+    # :2433-2447); the player is only read (PlayerAvatar_GetFacingDir).
+    "FACEPLAYER": ":2433-2447",
+    "GETPLAYERMAPPOS": ":2449-2460, reads the position",
+    "GETPLAYERSTARTERSPECIES": ":3777-3783",
+    "GETPLAYERGENDER": ":4498-4505",
+    "PLAYMUSIC": "src/scrcmd_sound.c:29-33",
+    "STOPMUSIC": "src/scrcmd_sound.c:35-41",
+    "PLAYDEFAULTMUSIC": "src/scrcmd_sound.c:43-47",
+    "FADEOUTBGM": "src/scrcmd_sound.c:55-63",
+    "FADEINBGM": "src/scrcmd_sound.c:70-78",
+    "SETBGM": "src/scrcmd_sound.c:89-93",
+    "PLAYSE": "src/scrcmd_sound.c:101-105",
+    "WAITSE": "src/scrcmd_sound.c:113-119",
+    "PLAYFANFARE": "src/scrcmd_sound.c:147-151",
+    "WAITFANFARE": "src/scrcmd_sound.c:153-157",
+    "BUFFERPLAYERNAME": "src/scrcmd_strings.c:46-54",
+    "BUFFERRIVALNAME": "src/scrcmd_strings.c:56-64",
+    "BUFFERPLAYERSTARTERSPECIESNAME": "src/scrcmd_strings.c:278-289",
+    "BUFFERRIVALSTARTERSPECIESNAME": "src/scrcmd_strings.c:291-302",
+}
+SAFE_COMMANDS = frozenset(f"SCRCMD_{c}" for c in _SAFE_HANDLERS)
 APPLY_MOVEMENT = "SCRCMD_APPLYMOVEMENT"  # localID, movement (src/scrcmd.c:2029-2044)
 CALL_COMMON = "SCRCMD_CALLCOMMONSCRIPT"  # scriptID (src/scrcmd.c:973-987)
 STARTS_BY_ID = "SCRCMD_UNUSED_013"  # any script id (src/scrcmd.c:960-971)
@@ -1118,11 +1128,15 @@ def narrowed_terrains(
     rematches)`` of ``gVsSeekerRematchData`` (a rematch is fought at its base's objects)."""
     bases: dict[int, set[int]] = {}
     spins: set[int] = set()
+    firsts: set[int] = set()
     for base, rematches in rematch_rows:
-        spins.add(base)
+        firsts.add(base)
         for t in rematches:
             spins.add(t)
             bases.setdefault(t, set()).add(base)
+    # A base is first fought unspun (its own row's first battle, ruling B4-19); only a rematch
+    # id that is no row's base is always a Vs. Seeker battle.
+    spins -= firsts
     cache: dict[int, tuple[int, ...]] = {}
     tiles_of: dict[int, _HeaderTiles] = {}
     features: dict[int, bool] = {}

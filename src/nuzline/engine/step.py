@@ -82,6 +82,7 @@ from nuzline.engine.damage import (
     effectiveness,
     identified,
     ignorable,
+    levitated,
     move_type_of,
     weather_suppressed,
 )
@@ -117,6 +118,7 @@ from nuzline.engine.effects import (
 )
 from nuzline.engine.hooks import (
     ABSORB,
+    OHKO_BLOCKED,
     STATUS_CURE,
     WEATHER_HP,
     after_damage_items,
@@ -488,6 +490,9 @@ def _empty_events() -> dict:
             "phys_taken",
             "spec_taken",
             "last_taken",
+            "phys_from",
+            "spec_from",
+            "last_from",
             *EVENT_FLAGS,
         )
     }
@@ -536,7 +541,7 @@ def _use_move(
     foe_protecting=False,
     custap=(False, False),
     foe_roosting=False,
-    foe_taken=(0, 0, 0),
+    foe_taken=(0, 0, 0, 0, 0, 0),
 ) -> tuple[BattleState, dict, dict]:
     """``side``'s active Pokemon uses the move in slot ``action`` (or Struggle).
     ``choice``: its ``(move, struggling, locked)`` from ``selected_move`` and
@@ -551,9 +556,10 @@ def _use_move(
     (``order.custap_flags``). ``foe_roosting``: the foe's Roost succeeded earlier this turn
     (``turnFlags.roosting``, cleared at the turn end, battle_lib.c:2231): the type chart of the
     move skips its Flying rows (``damage.chart_types``). ``foe_taken``: the
-    physical, special and last damage the user took from the foe this turn (its ``turnFlags``,
-    bcp.c:3413-3434: the foe's ``phys_taken`` / ``spec_taken`` / ``last_taken`` events), which
-    Counter, Mirror Coat and Metal Burst read.
+    physical, special and last damage the user took this turn and each one's attacker as
+    ``1 + battler`` (its ``turnFlags``, bcp.c:3413-3434: the ``phys_taken`` / ``spec_taken`` /
+    ``last_taken`` and ``phys_from`` / ``spec_from`` / ``last_from`` events), which Counter,
+    Mirror Coat and Metal Burst read.
 
     Returns ``(state, own, foe)``: the state after the move, the user's events (each
     status check's result, effect-gated: set only when the check was reached and had an
@@ -720,20 +726,24 @@ def _use_move(
     never_misses = tables.move_accuracy[used] == 0
     has_target = (state.hp[target_side, target] > 0) | defender_always(tables, used)
     # Counter, Mirror Coat, Metal Burst (battle_script.c:4615-4705, :7153-7184): the command
-    # reads the user's turnFlags damage from the foe (its last attacker in singles) and fails
-    # (MOVE_STATUS_FAILED) on 0 taken or a fainted attacker; a RANGE_SINGLE_TARGET_SPECIAL one is
-    # its own defender until then (battle_lib.c:1665-1669), so it passes the no-target check and
-    # the command re-picks the foe.
+    # reads the user's turnFlags damage and its last attacker (physical / special /
+    # lastAttacker, stored as 1 + battler) and fails (MOVE_STATUS_FAILED) on 0 taken, an
+    # attacker of the user's own side or an attacker with no HP (:4619-4625, :4672-4678, :7157-7162); a
+    # RANGE_SINGLE_TARGET_SPECIAL one is its own defender until then (battle_lib.c:1665-1669),
+    # so it passes the no-target check and the command re-picks the foe.
     counter = tables.move_effect[used] == EffectId.COUNTER
     source = tables.move_param[used, 0].astype(_I32)
     foe_taken = jnp.asarray(foe_taken, _I32)
-    taken_by = jnp.where(
-        source == COUNTER_PHYSICAL,
-        foe_taken[0],
-        jnp.where(source == COUNTER_SPECIAL, foe_taken[1], foe_taken[2]),
-    )
+    pick = jnp.where(source == COUNTER_PHYSICAL, 0, jnp.where(source == COUNTER_SPECIAL, 1, 2))
+    taken_by = foe_taken[pick]
+    attacker = jnp.clip(foe_taken[3 + pick] - 1, 0, 1)
     counter_damage = taken_by * tables.move_param[used, 1].astype(_I32) // 10
-    counter_ok = (taken_by != 0) & (state.hp[target_side, target] > 0)
+    counter_ok = (
+        (taken_by != 0)
+        & (foe_taken[3 + pick] != 0)
+        & (attacker != side)
+        & (state.hp[attacker, state.active[attacker]] > 0)
+    )
     special_counter = counter & self_defender(tables, used)
     has_target = has_target | special_counter
     # SYSCTL_MOVE_SUCCEEDED (battle_controller_player.c:3212) once the move got past the
@@ -775,6 +785,29 @@ def _use_move(
     # protecting foe stops the move (effects.protect_blocks), MOVE_STATUS_PROTECTED, and
     # Battler_UnlockMoveChoice (the unlock below). Selfdestruct's user already fainted.
     blocked = jnp.asarray(foe_protecting) & protect_blocks(tables, used, bide_ends)
+    # An OHKO move against an ignorable Sturdy (BtlCmd_TryOHKOMove, battle_script.c:4340-4341:
+    # MOVE_STATUS_STURDY, no roll): subscript_missed.s:67-69 tags the defender's ability
+    # ("{0} was protected by {1}!", BattleAI_SetAbility, battle_script.c:11798-11806), unless a
+    # flag it tests first holds: protected (:18), Levitate (:34) or ineffective (:59).
+    ohko_type = move_type_of(tables, state, side, used)
+    sturdy_shown = (
+        can_act
+        & has_target
+        & ~blocked
+        & (tables.move_effect[used] == EffectId.OHKO)
+        & (ignorable(state, side, target_side) == AbilityId.STURDY)
+        & (
+            effectiveness(
+                tables,
+                ohko_type,
+                state.types[target_side, target],
+                identified(state, side, target_side),
+            )
+            != 0
+        )
+        & ~levitated(state, side, target_side, ohko_type)
+    )
+    state = reveal_ability(state, target_side, target, OHKO_BLOCKED, sturdy_shown)
     connected = can_act & has_target & hit & ~failed & ~blocked
     # Protect / Detect (effect_script_0111.s, a direct TO_ATTACKER effect: the user has HP)
     # -> subscript_protect.s -> BtlCmd_TryProtection (battle_script.c:5149-5190). The
@@ -969,7 +1002,8 @@ def _use_move(
             shell + info.shell_bell,
             barbed,
             # The defender's turnFlags (bcp.c:3413-3434): each UpdateHP assigns the damage to the
-            # move class's field and to lastDamageTaken.
+            # move class's field and to lastDamageTaken, and the attacker (1 + battler) to the
+            # matching last-attacker field.
             jnp.where(
                 info.update_hp,
                 jnp.stack(
@@ -977,6 +1011,9 @@ def _use_move(
                         jnp.where(category == PHYSICAL_CATEGORY, info.taken, record[0]),
                         jnp.where(category == SPECIAL_CATEGORY, info.taken, record[1]),
                         info.taken,
+                        jnp.where(category == PHYSICAL_CATEGORY, side + 1, record[3]),
+                        jnp.where(category == SPECIAL_CATEGORY, side + 1, record[4]),
+                        side + 1,
                     ]
                 ),
                 record,
@@ -994,7 +1031,7 @@ def _use_move(
         jnp.bool_(False),
         _I32(0),
         jnp.bool_(False),
-        jnp.zeros((3,), _I32),
+        jnp.zeros((6,), _I32),
     )
     category = tables.move_category[used]  # CURRENT_MOVE_DATA.class (moveCur)
     target_hp0 = state.hp[target_side, target]
@@ -1091,6 +1128,9 @@ def _use_move(
         "phys_taken": damage_taken[0],
         "spec_taken": damage_taken[1],
         "last_taken": damage_taken[2],
+        "phys_from": damage_taken[3],
+        "spec_from": damage_taken[4],
+        "last_from": damage_taken[5],
     }
     # turnFlags.roosting (subscript_roost.s:11-12): set unless "HP is full!" (NO_MORE_WORK).
     own["roosted"] = connected & (tables.move_effect[used] == EffectId.ROOST) & ~no_more_work
@@ -1147,7 +1187,7 @@ def _act(
     foe_protecting,
     custap,
     foe_roosting=False,
-    taken=(0, 0, 0),
+    taken=(0, 0, 0, 0, 0, 0),
 ) -> tuple[BattleState, dict, dict]:
     """``side``'s action: ``(state, own, foe)`` with the events of ``_use_move``. A
     switch shows the party slot (``ACT_SWITCH``), an item its item id (``ACT_ITEM``)."""
@@ -1387,8 +1427,20 @@ def _execute_actions(
         # The foe's Protect this turn (turnFlags.protecting): only a first actor's succeeds.
         foe_protecting = events["protect_ok"][1 - side] != 0
         foe_roosting = events["roosted"][1 - side] != 0  # turnFlags.roosting
-        # The side's turnFlags damage taken from the first actor (Counter, Metal Burst).
-        taken = jnp.stack([events[n][side] for n in ("phys_taken", "spec_taken", "last_taken")])
+        # The side's turnFlags damage taken and its attackers (Counter, Metal Burst).
+        taken = jnp.stack(
+            [
+                events[n][side]
+                for n in (
+                    "phys_taken",
+                    "spec_taken",
+                    "last_taken",
+                    "phys_from",
+                    "spec_from",
+                    "last_from",
+                )
+            ]
+        )
         acted, own, foe_events = _act(
             tables,
             state,

@@ -1215,12 +1215,25 @@ def entry_hazards(tables: Tables, state: BattleState, side) -> BattleState:
     ability = decomp_abilities(tables, state)[side, mon]
     sun = (state.weather == Weather.SUN) & ~weather_suppressed(tables, state)
     status = jnp.where(layers >= 2, Status.TOXIC, Status.POISON)
+    # subscript_poison.s:5-10 / subscript_badly_poison.s:5-10 (CheckAbility, before the status
+    # and type checks): Immunity, or Leaf Guard in sun, jumps to "{0}'s {1} prevents
+    # poisoning!" (subscript_poison.s:80-82, subscript_badly_poison.s:93-103), whose
+    # TAG_NICKNAME_ABILITY runs BattleAI_SetAbility (battle_script.c:11798-11806).
+    blocks = (ability == ITEM_ABILITY_IDS["Immunity"]) | (
+        sun & (ability == ITEM_ABILITY_IDS["Leaf Guard"])
+    )
+    stopped = down & (layers > 0) & ~poison_type & blocks
+    known = jnp.where(stopped & (side == 0), 1, state.ai_ability_known[mon])
+    state = state._replace(
+        ai_ability_known=state.ai_ability_known.at[mon].set(
+            known.astype(state.ai_ability_known.dtype)
+        )
+    )
     poisoned = (
         down
         & (layers > 0)
         & ~poison_type
-        & (ability != ITEM_ABILITY_IDS["Immunity"])
-        & ~(sun & (ability == ITEM_ABILITY_IDS["Leaf Guard"]))
+        & ~blocks
         & can_have_status(tables, state, side, mon, status)
     )
     state = _set_status(state, side, mon, status, poisoned)
@@ -1453,8 +1466,9 @@ def play_hit(
     )
     # Counter / Mirror Coat / Metal Burst (``counter_damage``: the amount step._use_move read
     # off the turn): battleCtx->damage, under SYSCTL_IGNORE_TYPE_CHECKS; the chart still flags an
-    # immunity (battle_lib.c:7550-7551), except for a RANGE_USER move, whose chart CheckTypeChart
-    # skips (bcp.c:2352).
+    # immunity (battle_lib.c:7550-7551). No Counter-family move is RANGE_USER in either game
+    # (Counter, Mirror Coat, Metal Burst: RANGE_SINGLE_TARGET_SPECIAL; Kaizo's Bide: single
+    # target), so CheckTypeChart's RANGE_USER skip (bcp.c:2352) never applies.
     is_counter = tables.move_effect[move] == _E.COUNTER
     counter_type = move_type_of(tables, state, side, move)
     immune = (
@@ -1466,7 +1480,6 @@ def play_hit(
         )
         == 0
     ) | levitated(state, side, target_side, counter_type)
-    immune = immune & ~targets_user(tables, move)
     damage = jnp.where(is_counter, jnp.where(immune, 0, jnp.asarray(counter_damage, _I32)), damage)
     target_hp = state.hp[target_side, target].astype(_I32)
     # False Swipe (bcp.c:3381-3384, inside UpdateHP before the endure checks): a hit that would

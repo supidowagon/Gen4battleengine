@@ -18,6 +18,8 @@ from tools.terrain import (
 )
 
 GRASS, PLAIN = TERRAIN_NAMES.index("TERRAIN_GRASS"), TERRAIN_NAMES.index("TERRAIN_PLAIN")
+# The terrains only one fixture tile gives, so each rule's own tile shows in the result.
+SAND, SNOW, ICE = (TERRAIN_NAMES.index(f"TERRAIN_{n}") for n in ("SAND", "SNOW", "ICE"))
 SOUTH = 1
 PARTNER_VAR = 0x4100  # any variable id; the fake scripts never set it
 
@@ -45,25 +47,29 @@ class _Script:
 @pytest.fixture(scope="module")
 def world(decomp):
     """One 32x32 PLAIN cell (header 0, BACKGROUND_PLAIN) with a trainer at (10, 10) facing
-    south: grass on (10, 11), (10, 12), a collision tile on (10, 13) and grass past it on
-    (10, 14); talk tiles: grass at (11, 10), a collision plain tile at (9, 10), a table with
-    the collision bit at (10, 9) and grass beyond it at (10, 8). Grass at (3, 3), (3, 4) for a
-    coord event."""
+    south, sight 4: grass on (10, 11), (10, 12), a collision tile on (10, 13) and sand past it
+    on (10, 14) (only a sight line that ignores the collision reaches it); east of it grass on
+    (11, 10), plain to (14, 10) and snow on (15, 10), one tile past the sight range; talk
+    tiles: grass at (11, 10), a collision plain tile at (9, 10), a table with the collision bit
+    at (10, 9) and ice beyond it at (10, 8) (only the across-the-table talk rule reaches it).
+    Grass at (3, 3), (3, 4) for a coord event."""
     rules = terrain_rules(decomp)
     fr = field_rules(decomp)
     b = tile_behaviours(decomp)
     grass, table = b["TILE_BEHAVIOR_TALL_GRASS"], b["TILE_BEHAVIOR_TABLE"]
+    sand, snow, ice = b["TILE_BEHAVIOR_SAND"], b["TILE_BEHAVIOR_SNOW_DEEP"], b["TILE_BEHAVIOR_ICE"]
     side = rules.tiles_x
     attrs = [0] * (side * side)
     for x, z, a in (
         (10, 11, grass),
         (10, 12, grass),
         (10, 13, rules.collision),
-        (10, 14, grass),
+        (10, 14, sand),
+        (15, 10, snow),
         (11, 10, grass),
         (9, 10, rules.collision),
         (10, 9, table | rules.collision),
-        (10, 8, grass),
+        (10, 8, ice),
         (3, 3, grass),
         (3, 4, grass),
     ):
@@ -114,9 +120,17 @@ def _kaitlin_like(decomp, movement="MOVEMENT_TYPE_LOOK_SOUTH", local=2):
 def test_an_object_trainer_narrows_to_its_sight_and_talk_tiles(decomp, world):
     # Sight south stops at the collision tile (IsPathInterrupted, trainer_encounter.c:310-343),
     # so (10, 14) is never a battle tile; the collision talk tiles are dropped and the table
-    # lets the player talk from (10, 8) (sub_0203C9D4, unk_0203C954.c:62-84).
+    # lets the player talk from (10, 8) (sub_0203C9D4, unk_0203C954.c:62-84): its ice is the
+    # only ICE, and the sand past the collision never shows.
     got = _narrow(world, objects=[_kaitlin_like(decomp)])
-    assert got == {(7, 0): frozenset({GRASS})}
+    assert got == {(7, 0): frozenset({GRASS, ICE})}
+
+
+def test_sight_stops_at_its_range(decomp, world):
+    # Facing east too (LOOK_EAST plus its initial south): sight 4 reaches (14, 10), never the
+    # snow on (15, 10) (GetDistance*, trainer_encounter.c:243-305: 1..data[0] tiles).
+    east = _kaitlin_like(decomp, "MOVEMENT_TYPE_LOOK_EAST")
+    assert _narrow(world, objects=[east]) == {(7, 0): frozenset({GRASS, PLAIN, ICE})}
 
 
 def test_a_moving_or_moved_object_keeps_the_whole_header(decomp, world):
@@ -126,11 +140,19 @@ def test_a_moving_or_moved_object_keeps_the_whole_header(decomp, world):
     assert _narrow(world, objects=[_kaitlin_like(decomp)], script=moves) == {}
 
 
-def test_a_vs_seeker_row_spins_the_trainer(decomp, world):
-    # NoUniqueRematches (vs_seeker.c:53): the Vs. Seeker spins the trainer (:659-690), so it
-    # can see along every facing; west and north of it are PLAIN.
+def test_a_vs_seeker_rematch_spins_the_trainer(decomp, world):
+    # A rematch-only id (base 5, rematch 7, fought at the base's objects) is fought after the
+    # Vs. Seeker spins the trainer (vs_seeker.c:659-690), so it sees along every facing: east
+    # of it are grass and PLAIN; north and west are blocked by collision tiles.
+    got = _narrow(world, objects=[_kaitlin_like(decomp)], rows=[(5, [7])])
+    assert got == {(7, 0): frozenset({GRASS, PLAIN, ICE})}
+
+
+def test_a_rematch_rows_base_keeps_its_first_battles_facings(decomp, world):
+    # NoUniqueRematches (vs_seeker.c:53) rematches the trainer as itself; its first battle,
+    # the split's fight, is fought unspun (ruling B4-19).
     got = _narrow(world, objects=[_kaitlin_like(decomp)], rows=[(7, [7])])
-    assert got == {(7, 0): frozenset({GRASS, PLAIN})}
+    assert got == {(7, 0): frozenset({GRASS, ICE})}
 
 
 def test_map_features_keep_collision_talk_tiles(decomp, world):
@@ -138,7 +160,7 @@ def test_map_features_keep_collision_talk_tiles(decomp, world):
     # the player stand on a collision tile next to the trainer.
     features = _Script([("SCRCMD_INITPERSISTEDMAPFEATURESFORPASTORIAGYM", ()), ("SCRCMD_END", ())])
     got = _narrow(world, objects=[_kaitlin_like(decomp)], script=features)
-    assert got == {(7, 0): frozenset({GRASS, PLAIN})}
+    assert got == {(7, 0): frozenset({GRASS, PLAIN, ICE})}
 
 
 def test_a_coord_event_battle_narrows_to_its_rectangle(decomp, world):
@@ -215,7 +237,7 @@ def test_vanilla_narrowing_only_resolves_mixed_sets(decomp_rows):
         (_, before), (_, after) = whole[t], narrowed[t]
         assert set(after) < set(before) and len(before) > 1, t  # only a mixed set shrinks
     resolved = [t for t in changed if narrowed[t][0] != -1]
-    assert (len(changed), len(resolved)) == (259, 198)
+    assert (len(changed), len(resolved)) == (262, 203)
     # Roark (246) was BUILDING already.
     assert narrowed[246] == whole[246] == (_t("BUILDING"), [_t("BUILDING")])
 
@@ -254,11 +276,14 @@ def test_kaizo_route_203_fights(kaizo_files, decomp, symbols):
         assert where[tid] == [344]
         assert rows[tid] == (PLAIN, [PLAIN])
     # Lass Kaitlin (323): LOOK_SOUTH at (242, 755), sight 6, so her first battle starts on a
-    # GRASS tile. NoUniqueRematches(TRAINER_LASS_KAITLIN) (vs_seeker.c:252) lets the Vs.
-    # Seeker rematch her as 323 once beaten, spun, which also sees PLAIN tiles north and east.
+    # GRASS tile, and that first battle is the split's fight (ruling B4-19).
+    # NoUniqueRematches(TRAINER_LASS_KAITLIN) (vs_seeker.c:252) lets the Vs. Seeker rematch her
+    # as 323 once beaten, spun, which also sees PLAIN tiles north and east: a rematch row's
+    # base keeps its own facings, so only a rematch-only id spins.
     assert where[323] == [344]
-    assert rows[323] == (-1, [PLAIN, GRASS])
+    assert rows[323] == (GRASS, [GRASS])
     sites, scripts, rematch_rows, fr = rom_narrowing_inputs(kaizo_files, symbols, decomp, 1000)
+    assert any(r[0] == 323 and 323 in r[1] for r in rematch_rows)
     first = narrowed_terrains(
         rom_terrain_rules(kaizo_files, symbols, decomp),
         fr,
@@ -269,6 +294,6 @@ def test_kaizo_route_203_fights(kaizo_files, decomp, symbols):
         header_arrivals(kaizo_files, symbols),
         sites,
         scripts,
-        [r for r in rematch_rows if r[0] != 323],
+        rematch_rows,
     )
     assert first == {(323, 344): frozenset({GRASS})}

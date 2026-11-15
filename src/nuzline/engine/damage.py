@@ -314,8 +314,11 @@ def double_power(tables: Tables, state: BattleState, atk_side, def_side, move) -
     return (tables.move_effect[move] == EffectId.DOUBLE_POWER) & holds
 
 
-def script_power_mul(tables: Tables, state: BattleState, atk_side, move, power_mul) -> jnp.ndarray:
-    """``int32``: ``battleCtx->powerMul`` when ``atk_side``'s move script runs ``CalcDamage``:
+def script_power_mul(
+    tables: Tables, state: BattleState, atk_side, def_side, move, power_mul
+) -> jnp.ndarray:
+    """``int32``: ``battleCtx->powerMul`` when ``atk_side``'s move script runs ``CalcDamage``
+    against ``def_side``'s active battler:
     ``RECKLESS_POWER_MUL`` for a Reckless user's ``RECOIL`` move, ``DOUBLE_POWER_MUL`` for a
     ``DOUBLE_POWER`` move whose condition holds (``double_power``; those scripts set 10
     otherwise), else ``power_mul``. The trainer AI's estimate and the confusion self-hit run no
@@ -323,7 +326,7 @@ def script_power_mul(tables: Tables, state: BattleState, atk_side, move, power_m
     atk_side = _i32(atk_side)
     reckless = state.ability[atk_side, state.active[atk_side]] == AbilityId.RECKLESS
     recoil = tables.move_effect[_i32(move)] == EffectId.RECOIL
-    doubled = double_power(tables, state, atk_side, 1 - atk_side, move)
+    doubled = double_power(tables, state, atk_side, def_side, move)
     out = jnp.where(reckless & recoil, RECKLESS_POWER_MUL, _i32(power_mul))
     return jnp.where(doubled, DOUBLE_POWER_MUL, out)
 
@@ -870,7 +873,8 @@ def damage_table(tables: Tables, state: BattleState, atk_side, move, crit) -> jn
     (its weakest hit; the playout heuristic's documented under-estimate); Bide's unleash
     stays 0 (it is a forced locked action, never a chosen attack). Present keeps its table
     power (no draw: ``PRESENT_TABLE``)."""
-    power_mul = script_power_mul(tables, state, atk_side, move, 10)  # Reckless
+    # The defender is the other side's active Pokemon (this table's contract).
+    power_mul = script_power_mul(tables, state, atk_side, 1 - _i32(atk_side), move, 10)
     damage, move_type, category, power = _pre_random(
         tables, state, atk_side, move, crit, power_mul=power_mul
     )
@@ -912,7 +916,8 @@ def damage_for_roll(
         atk_side,
         move,
         crit,
-        power_mul=script_power_mul(tables, state, atk_side, move, power_mul),  # Reckless
+        # Reckless, the DOUBLE_POWER scripts; the defender is the other side's active Pokemon.
+        power_mul=script_power_mul(tables, state, atk_side, 1 - _i32(atk_side), move, power_mul),
         magnitude=magnitude,
         present=present,
     )

@@ -754,7 +754,7 @@ M once `terrain` exists. It depends on §9 and on Camouflage for STAB interplay 
     the player is standing in**;
   - `BACKGROUND_WATER` if surfing;
   - `terrain = CalcTerrain(fieldSystem, background)`.
-- `CalcTerrain` (fbdt:467-494): the tile behaviour under the player
+- `CalcTerrain` (fbdt:467-505): the tile behaviour under the player
   (`TerrainCollisionManager_GetTileBehavior`, src/terrain_collision_manager.c:229-240: the land-data
   terrain attribute u16 of that tile masked by `TERRAIN_ATTRIBUTES_TILE_BEHAVIOR_MASK`; both
   collision managers read the land data, :160-199). First match wins:
