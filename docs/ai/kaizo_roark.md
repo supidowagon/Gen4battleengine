@@ -804,6 +804,21 @@ On E2's state (`ai_item_known`, `ingrain`, `mean_look`, `imprison` / `imprisoned
   As written, the `+3` of `BatonPass_EvalMove` (`:6592`) falls into `_SetupAtHighHP`. The
   read bounds gain its column; the widest Kaizo fight with bit 6 (Danny, 725) bounds at 14,
   under `WIDTH_CAP`.
+- The type-chart bonuses (Filter, Solid Rock, Expert Belt, Tinted Lens) need the move's
+  table power (`ApplyTypeMultiplier`'s `update`, battle_lib.c:2627, :7558-7568; :2656, :2667):
+  the status move or `MOVE_NONE` Copycat's test computes takes none. Every Kaizo trainer's
+  fight fits `WIDTH_CAP` (tests/ai/test_layout.py; the widest, Jason 82 and Danny 725, at 14).
+
+### 5.23 Helping Hand and SolarBeam (E1 prep batch P4)
+
+- BOOST_ALLY_POWER_BY_50_PERCENT (176): `Basic_CheckHelpingHand` (`:892-896`), a singles
+  battle -10 (`LoadBattleType`, the new `IfLoadedNotMask`); no Expert entry.
+- SKIP_CHARGE_TURN_IN_SUN (151): `Expert_ChargeTurnNoInvuln` (`:1716`; `:3933-3972`): resisted
+  or immune -2; in sun +2; else Power Herb (its true item) +2; else the player known to have
+  a Protect effect -2, or the attacker at 38 % HP or less -1. Expert_Main's second entry for
+  this effect (`:1719`, Expert_Thunder, the decomp's Thunder bug) is never reached. Its other
+  effect, CHARGE_TURN_DEF_UP (`:1715`), is not transcribed.
+- Encore waits on an encore state (`IfBattlerUnderEffect CHECK_ENCORE`, `:657`).
 
 ## 6. Where the AI reads the true battle state
 
