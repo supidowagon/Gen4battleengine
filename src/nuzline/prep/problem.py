@@ -34,7 +34,7 @@ from nuzline.engine.coverage import (
     rom_change_line,
     rom_change_refusals,
     terrain_refusal,
-    trace_ai_line,
+    trace_copy_line,
     trace_standoff_line,
     weather_war_line,
 )
@@ -193,7 +193,7 @@ def usable_pool(
     knows such a move (``coverage.halved_by_line``). The party-pair refusals apply per
     candidate against ``opp``: a weather ability at war with the opponent's
     (``coverage.weather_war_line``), Trace on both sides (``coverage.trace_standoff_line``) and
-    a Trace candidate for the AI (``coverage.trace_ai_line``; rulings B3-20, B3-21).
+    a Trace copy the AI refuses (``coverage.trace_copy_line``; rulings B3-20, B3-21).
 
     Experience (K3d-exp design §4): a move the candidate can learn by levelling up in the
     fight (``coverage.learnable_moves``: ruling D10 masks a
@@ -230,7 +230,7 @@ def usable_pool(
         for line in (
             weather_war_line(tables, [spec], opp),
             trace_standoff_line(tables, [spec], opp),
-            trace_ai_line(tables, [spec]),
+            trace_copy_line(tables, names, trainer, spec, opp),
         ):
             if line is not None:
                 why.append(line)

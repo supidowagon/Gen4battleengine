@@ -178,11 +178,6 @@ Rules left out because another mechanic is missing; each closes with the mechani
 - The Sticky Barb transfer vs Knock Off, the knocked-off mask and the substitute test
   (effects.py `sticky_barb_transfer`; battle_lib.c:5378, :5390-5393): those moves (U-turn's
   guard is modelled since B6-4). Magic Guard's readers are reached since B4-11.
-- The Trace refusal (`coverage.trace_ai_line`, B3-21): the AI must read the battler's ability
-  (`state.ability`, the traced copy, through `damage.decomp_abilities`) instead of
-  `tables.species_abilities_decomp` by species in ai/commands.py (~558-580), ai/policy.py (~950)
-  and ai/switching.py (~301), as `LoadBattlerAbility` does (trainer_ai.c:1170-1198); the AI owner's
-  fix lifts it.
 - Fire Fang (`BATTLE_EFFECT_FLINCH_BURN_HIT`) always bypasses Wonder Guard (the decomp's bug note,
   battle_lib.c:7600): Fire Fang / Wonder Guard.
 - Gravity makes the moves that fail in high gravity (Jump Kick, Hi Jump Kick, ...) invalid:
@@ -451,10 +446,20 @@ Rules left out because another mechanic is missing; each closes with the mechani
 - B3-20 Prep applies the party-pair refusals per candidate against the trainer's party
   (`weather_war_line`, `trace_standoff_line`): `prep.problem.usable_pool` leaves the candidate
   out and `prep.pool.check_pool` refuses it.
-- B3-21 A Trace holder on either side (and in the pool) is refused as an AI gap
-  (`coverage.trace_ai_line`): the AI reads `species_abilities_decomp` by species, where the
-  decomp's `LoadBattlerAbility` (trainer_ai.c:1170-1198) returns the copy `subscript_trace.s`
-  wrote through `BattleAI_SetAbility` (battle_script.c:3401-3403).
+- B3-21 (revised at the main merge, 2026-11-15) The AI reads a battler's current ability
+  (`damage.decomp_abilities`, E1's fix: ai/commands.py `attacker_ability` / `_defender_abilities`,
+  ai/policy.py and ai/switching.py refusals), so it sees the copy `subscript_trace.s` writes with
+  `BattleAI_SetAbility` (battle_script.c:3401-3403, :12106-12109) as `LoadBattlerAbility` /
+  `CheckBattlerAbility` do (trainer_ai.c:1170-1209); the engine already writes the copy and marks
+  it known for the player's side (`hooks.trace`, `_know`) and clears that on a switch
+  (battle_lib.c:7726, `step`). The blanket refusal (`trace_ai_line`) is lifted. What remains is
+  a copy the AI refuses on the holder's side (e.g. Filter copied by the player, Tinted Lens by
+  the trainer: `ai_refusals` is side-indexed and runs on the turn-0 state only):
+  `coverage.trace_copy_refusals` runs `ai_refusals` with each copy the holder can make
+  (`ChooseTraceTarget`'s Forecast / Trace / Multitype skipped, battle_lib.c:7750-7775) in place,
+  and lists the lines the armed state does not have; `check_coverage` adds them, prep applies them
+  per candidate (`trace_copy_line`, B3-20). `check_opponent` has no Trace line now (it depends on
+  the player's party).
 - B3-22 Stealth Rock's damage has one formula (`damage.stealth_rock_loss`), read by the switch-in
   (`effects.stealth_rock_damage`) and by the turn-start weather of a newcomer
   (`damage.entry_weather`).

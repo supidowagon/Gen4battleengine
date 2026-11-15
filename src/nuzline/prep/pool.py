@@ -32,7 +32,7 @@ from nuzline.engine.coverage import (
     rom_change_line,
     rom_change_refusals,
     terrain_refusal,
-    trace_ai_line,
+    trace_copy_line,
     trace_standoff_line,
     weather_war_line,
 )
@@ -174,7 +174,7 @@ def check_pool(
         for line, kind in (
             (weather_war_line(tables, [spec], opp), "ability"),
             (trace_standoff_line(tables, [spec], opp), "ability"),
-            (trace_ai_line(tables, [spec]), "trainer AI"),
+            (trace_copy_line(tables, names, trainer, spec, opp), "trainer AI"),
         ):
             if line is not None:
                 c.add(Support.NONE, f"{cand.label}: {line}", kind)

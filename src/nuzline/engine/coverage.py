@@ -72,8 +72,10 @@ items) and plan 1b (Task 2b: trainer items; Task 3: Roark's AI flags) implement:
   (``ChooseTraceTarget``, battle_lib.c:7750-7775), so it stays armed and copies the next
   Pokemon the other side sends in at that switch, in the middle of a turn whose chance laws
   (``enumerate``, ``outcome.sample_outcome``) read the holder's ability at the turn start;
-  refused (ruling B3-14); and, until the AI reads the battler's ability, a Trace holder on
-  either side or in the pool, as an AI gap (``trace_ai_line``, ruling B3-21);
+  refused (ruling B3-14). The AI reads the copy (``damage.decomp_abilities``, as
+  ``LoadBattlerAbility`` does, trainer_ai.c:1170-1209), so a copy the AI refuses on the
+  holder's side is refused like the holder's own ability would be (``trace_copy_refusals``,
+  ruling B3-21);
 * Metronome (ruling B5-2): ``BtlCmd_Metronome`` can call any move ``metronome_calls`` lists
   (ids 1-467 but the user's own moves and sCannotMetronomeMoves, battle_lib.c:7152-7178), so a
   holder is refused while any of them is refused as a move of that Pokemon
@@ -146,11 +148,12 @@ from nuzline.data.trainer import (
     Trainer,
     missing_set_data,
 )
-from nuzline.engine.damage import PHYSICAL
+from nuzline.engine.damage import PHYSICAL, decomp_abilities
 from nuzline.engine.ids import (
     METRONOME_DRAW,
     TERRAIN_MOVES,
     TERRAIN_SPECIAL,
+    UNTRACEABLE_ABILITIES,
     WEATHER_ABILITIES,
     AbilityId,
     EffectId,
@@ -663,20 +666,68 @@ def trace_standoff_line(
     return None
 
 
-# Ruling B3-21: the AI reads ``tables.species_abilities_decomp`` by species (ai/commands.py,
-# ai/policy.py, ai/switching.py), so it sees Trace where the decomp's LoadBattlerAbility
-# (trainer_ai.c:1170-1198) returns the copy that subscript_trace.s wrote with
-# BattleAI_SetAbility (battle_script.c:3401-3403). Until the AI reads the battler's ability, a
-# Trace holder on either side is refused as an AI gap (ledger, Owed).
-TRACE_AI_REASON = (
-    "Trace: the AI reads the species' ability, not the one Trace copied into the battler "
-    "(LoadBattlerAbility, trainer_ai.c:1170-1198; battle_script.c:3401-3403)"
-)
+def trace_copy_refusals(fight: Tables, state, names: Names | None = None) -> list[str]:
+    """Ruling B3-21: the AI's refusals of a Trace copy. ``subscript_trace.s`` writes the
+    copied ability into the holder's ``BattleMon.ability`` and the AI context
+    (``BattleAI_SetAbility``, battle_script.c:3401-3403, :12106-12109), and
+    ``LoadBattlerAbility`` / ``CheckBattlerAbility`` read it (trainer_ai.c:1170-1209), as the
+    AI does through ``damage.decomp_abilities``. So for every Trace holder of ``state`` (either
+    side; a lead may have traced in ``make_state`` already) and every ability it can copy from
+    the other party (``ChooseTraceTarget`` skips Forecast, Trace and Multitype,
+    battle_lib.c:7750-7775), the lines ``ai.policy.ai_refusals`` gives with that copy in place
+    and not with every holder holding Trace, each as ``"Trace copying <ability>: <line>"``.
+    ``fight`` are the fight's tables (``ai.layout.fight_tables``)."""
+    from nuzline.ai.policy import ai_refusals  # ai imports the engine
+
+    species, form = np.asarray(state.species), np.asarray(state.form)
+    row = np.asarray(fight.species_form_row)[species, form]
+    own = np.asarray(fight.species_abilities)[row, np.asarray(state.ability_slot)]
+    holders = list(zip(*np.nonzero((species > 0) & (own == AbilityId.TRACE)), strict=True))
+    if not holders:
+        return []
+    armed = state.ability
+    for side, slot in holders:
+        armed = armed.at[side, slot].set(AbilityId.TRACE)
+    armed = state._replace(ability=armed)
+    decomp = np.asarray(decomp_abilities(fight, armed))
+    base = set(ai_refusals(fight, armed, names))
+    out: list[str] = []
+    for side, slot in holders:
+        foe = 1 - side
+        copies = {
+            (int(armed.ability[foe, s]), int(decomp[foe, s]))
+            for s in range(species.shape[1])
+            if species[foe, s] and int(decomp[foe, s]) not in UNTRACEABLE_ABILITIES
+        }
+        for copy, copy_decomp in sorted(copies):
+            copied = armed._replace(ability=armed.ability.at[side, slot].set(copy))
+            label = names.ability_names[copy_decomp] if names is not None else str(copy_decomp)
+            for line in ai_refusals(fight, copied, names):
+                if line not in base and (line := f"Trace copying {label}: {line}") not in out:
+                    out.append(line)
+    return out
 
 
-def trace_ai_line(tables: Tables, party: Sequence[PokemonSpec]) -> str | None:
-    """``TRACE_AI_REASON`` when a Pokemon of ``party`` has Trace (ruling B3-21), else None."""
-    return TRACE_AI_REASON if AbilityId.TRACE in _party_abilities(tables, party) else None
+def trace_copy_line(
+    tables: Tables,
+    names: Names,
+    trainer: Trainer | None,
+    spec: PokemonSpec,
+    opp: Sequence[PokemonSpec],
+) -> str | None:
+    """Prep's per-candidate form of ``trace_copy_refusals`` (ruling B3-20): ``spec`` alone
+    against ``trainer``'s party ``opp``, the first line or None. Only when a Trace holder is
+    on either side; without a ``trainer`` there is no fight AI to ask (None)."""
+    if trainer is None or AbilityId.TRACE not in (
+        _party_abilities(tables, [spec]) | _party_abilities(tables, opp)
+    ):
+        return None
+    fight, error = _fight_ai_tables(tables, names, trainer, opp)
+    if error is not None:  # refused for the fight by check_opponent
+        return None
+    state = make_state(fight, [spec], list(opp), opp_items=trainer.items, terrain=trainer.terrain)
+    lines = trace_copy_refusals(fight, state, names)
+    return lines[0] if lines else None
 
 
 def metronome_calls(tables: Tables, mon: PokemonSpec) -> list[int]:
@@ -994,8 +1045,6 @@ def check_opponent(
     them per setup."""
     c = _Collector()
     _check_party(c, tables, names, display_name(trainer), opp, trainer_side=True)
-    if (line := trace_ai_line(tables, opp)) is not None:
-        c.add(Support.NONE, f"{display_name(trainer)}: {line}", "trainer AI")
     _check_trainer(c, tables, names, trainer, [*player, *opp], extra_moves)
     # An "unknown" start condition is refused by _check_trainer, never read as a weather.
     weathers = [start_condition]
@@ -1056,8 +1105,6 @@ def check_coverage(
     for line in (weather_war_line(tables, player, opp), trace_standoff_line(tables, player, opp)):
         if line is not None:
             c.add(Support.NONE, f"{display_name(trainer)}: {line}", "ability")
-    if (line := trace_ai_line(tables, player)) is not None:
-        c.add(Support.NONE, f"Player: {line}", "trainer AI")
     learnable = [learnable_moves(tables, mon, opp) for mon in player]
     extra = sorted({m for moves in learnable for m in moves})
     theirs = check_opponent(tables, names, trainer, opp, start_condition, player, extra)
@@ -1103,7 +1150,12 @@ def check_coverage(
     fight, error = _fight_ai_tables(tables, names, trainer, opp)
     if error is not None:  # listed by check_opponent
         return c.report
-    for reason in ai_refusals(fight, state, names):
+    refusals = ai_refusals(fight, state, names)
+    # A lead's battle-start copy is in ``state`` already: its lines are listed once.
+    copies = [
+        r for r in trace_copy_refusals(fight, state, names) if r.split(": ", 1)[1] not in refusals
+    ]
+    for reason in [*refusals, *copies]:
         c.add(Support.NONE, f"{display_name(trainer)}: {reason}", "trainer AI")
     return c.report
 

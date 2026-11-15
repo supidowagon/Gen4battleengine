@@ -5,7 +5,7 @@ runs), the turn-start laws of a Trace newcomer, and the per-candidate refusals i
 import numpy as np
 
 from nuzline.data.spec import PokemonSpec
-from nuzline.engine.coverage import TRACE_AI_REASON, check_coverage
+from nuzline.engine.coverage import check_coverage
 from nuzline.engine.enumerate import outcome_laws
 from nuzline.engine.ids import AbilityId, Stat, Weather
 from nuzline.engine.order import MOVE_ACTIONS
@@ -73,31 +73,51 @@ def _candidate(spec: PokemonSpec, slot: int = 0) -> Candidate:
     return Candidate(("party", 0, slot), f"party slot {slot}", spec, 0, (), ())
 
 
-def test_prep_refuses_a_weather_war_and_a_trace_candidate(tables, names):
-    """B3-20, B3-21: a Drought candidate against a Drizzle opponent and a Trace candidate are
-    left out of the usable pool and refused by the pool check, per candidate."""
+def test_prep_refuses_a_weather_war_and_a_trace_copy_the_ai_refuses(tables, names):
+    """B3-20, B3-21: a Drought candidate against a Drizzle opponent is left out and refused per
+    candidate; a Trace candidate is kept unless a copy it can make is one the AI refuses on the
+    player's side (Filter, policy ``player_ability_refusal``), in the usable pool and the pool
+    check alike."""
     opp = [_mon(names, "Kyogre")]
+    trainer = roark_trainer()
     groudon, porygon = _candidate(_mon(names, "Groudon")), _candidate(_mon(names, "Porygon"), 1)
-    kept, lines = usable_pool(tables, names, [groudon, porygon], opp)
-    assert kept == []
+    kept, lines = usable_pool(tables, names, [groudon, porygon], opp, trainer)
+    assert kept == [porygon]
     assert any("party slot 0" in line and "weather" in line for line in lines)
-    assert any("party slot 1" in line and "Trace" in line for line in lines)
-    report = check_pool(tables, names, [groudon, porygon], opp)
+    report = check_pool(tables, names, [groudon, porygon], opp, trainer)
     assert any("party slot 0" in m and "weather" in m for m in report.missing)
-    assert any("party slot 1" in m and TRACE_AI_REASON in m for m in report.missing)
+    assert not any("Trace" in m for m in report.missing)
+    filter_opp = [_mon(names, "Mr. Mime", slot=1)]
+    kept, lines = usable_pool(tables, names, [porygon], filter_opp, trainer)
+    assert kept == []
+    assert any("party slot 1" in line and "Trace copying Filter" in line for line in lines)
+    report = check_pool(tables, names, [porygon], filter_opp, trainer)
+    assert any("party slot 1" in m and "Trace copying Filter" in m for m in report.missing)
 
 
-def test_coverage_refuses_a_trace_holder_on_either_side_for_the_ai(tables, names):
-    """B3-21: the AI reads the species' ability, so a Trace holder is an AI gap on either
-    side until it reads the copy (LoadBattlerAbility, trainer_ai.c:1170-1198)."""
-    r = check_coverage(
-        tables, names, [_mon(names, "Porygon")], roark_trainer(), roark_party(names), 0
-    )
-    assert any(TRACE_AI_REASON in m for m in r.missing)
-    r = check_coverage(
-        tables, names, [_mon(names, "Geodude")], roark_trainer(), [_mon(names, "Porygon")], 0
-    )
-    assert any(TRACE_AI_REASON in m for m in r.missing)
+def test_coverage_reads_the_trace_copy_for_the_ai(tables, names):
+    """B3-21: the AI reads the copy (LoadBattlerAbility, trainer_ai.c:1170-1209), so a Trace
+    holder is refused only for a copy the AI refuses on the holder's side: Filter copied by
+    the player's Porygon (a defender ability, refused on the player's side only), Tinted Lens
+    copied by the trainer's (an attacker ability, refused on the AI's side only)."""
+    trainer = roark_trainer()
+
+    def trace_lines(player, opp):
+        r = check_coverage(tables, names, player, trainer, opp, 0)
+        return [m for m in r.missing if "Trace copying" in m]
+
+    porygon = _mon(names, "Porygon")
+    assert trace_lines([porygon], roark_party(names)) == []
+    assert trace_lines([_mon(names, "Geodude")], [porygon]) == []
+    # Copies of a Pokemon behind the lead (the lead's own copy is in the turn-0 state already,
+    # whose refusals list it once).
+    geodude = _mon(names, "Geodude")
+    lines = trace_lines([porygon], [geodude, _mon(names, "Mr. Mime", slot=1)])
+    assert lines and all("Trace copying Filter" in m and "side 0" in m for m in lines)
+    lines = trace_lines([geodude, _mon(names, "Venomoth", slot=1)], [porygon])
+    assert lines and all("Trace copying Tinted Lens" in m and "side 1" in m for m in lines)
+    r = check_coverage(tables, names, [porygon], trainer, [_mon(names, "Mr. Mime", slot=1)], 0)
+    assert sum("ability Filter" in m for m in r.missing) == 1
 
 
 def test_a_trace_newcomer_copying_battle_armor_is_never_crit(tables, names):
