@@ -153,28 +153,44 @@ def ignorable(state: BattleState, atk_side, def_side, slot=None) -> jnp.ndarray:
     """``int32``: ``def_side``'s ability (its active battler's, or party ``slot``'s) as
     ``atk_side``'s active battler sees it: ``Battler_IgnorableAbility`` (battle_lib.c:
     3108-3121) hides it behind the attacker's Mold Breaker."""
+    active = slot is None
     slot = state.active[def_side] if slot is None else slot
     attacker = _i32(state.ability[atk_side, state.active[atk_side]])
-    return jnp.where(
-        attacker == AbilityId.MOLD_BREAKER, AbilityId.NONE, _i32(state.ability[def_side, slot])
-    )
+    ability = _i32(state.ability[def_side, slot])
+    if active:
+        # Battler_Ability (battle_lib.c:3100-3103): an ingrained battler's Levitate is
+        # ABILITY_NONE. Only the active battler's: a party slot being read is a newcomer, whose
+        # Ingrain would only come by Baton Pass (owed, ledger).
+        rooted = (state.ingrain[def_side] != 0) & (ability == AbilityId.LEVITATE)
+        ability = jnp.where(rooted, AbilityId.NONE, ability)
+    return jnp.where(attacker == AbilityId.MOLD_BREAKER, AbilityId.NONE, ability)
 
 
 def levitated(state: BattleState, atk_side, def_side, move_type) -> jnp.ndarray:
     """``bool``: ``BattleSystem_ApplyTypeChart`` sets ``MOVE_STATUS_LEVITATED`` (battle_lib.c:
     2600-2603) for a Ground-type move against a Levitate holder as the attacker sees it
-    (``Battler_IgnorableAbility``; the Iron Ball, Gravity and Ingrain exceptions are
-    unsupported). The flag is part of ``MOVE_STATUS_IMMUNE``: no damage (``_finish``)."""
+    (``Battler_IgnorableAbility``, whose ``Battler_Ability`` reads an ingrained holder's
+    Levitate as none: ``ignorable``; the Iron Ball and Gravity exceptions are unsupported). The
+    flag is part of ``MOVE_STATUS_IMMUNE``: no damage (``_finish``)."""
     seen = ignorable(state, atk_side, def_side)
     return (seen == AbilityId.LEVITATE) & (_i32(move_type) == Type.GROUND)
 
 
+CHART_IDENTIFIED = 1  # ``chart_entry`` flag: skip the Ghost immunities (Foresight, Scrappy)
+CHART_GROUNDED = 2  # ``chart_entry`` flag: skip the Flying immunity (Ingrain)
+
+
 def identified(state: BattleState, atk_side, def_side) -> jnp.ndarray:
-    """``bool``: ``BattleSystem_ApplyTypeChart`` stops at the 0xFE separator, skipping the
+    """``int32`` flags of ``BattleSystem_ApplyTypeChart``'s walk for ``def_side``'s battler
+    (``chart_entry``): ``CHART_IDENTIFIED`` when it stops at the 0xFE separator, skipping the
     Ghost immunities (battle_lib.c:2611-2615), for a Foresight-identified defender or an
-    attacker with Scrappy (``Battler_Ability``)."""
+    attacker with Scrappy (``Battler_Ability``); ``CHART_GROUNDED`` when ``BasicTypeMulApplies``
+    (:2534-2537) skips the rows of an immune Flying defender for an ingrained one (Iron Ball's
+    and Gravity's clauses, :2534, :2545-2549, are unsupported). Only ``ApplyTypeChart`` walks
+    the chart this way (:2626, :2636)."""
     scrappy = state.ability[atk_side, state.active[atk_side]] == AbilityId.SCRAPPY
-    return (state.foresight[def_side] != 0) | scrappy
+    seen = ((state.foresight[def_side] != 0) | scrappy).astype(_I32) * CHART_IDENTIFIED
+    return seen | (state.ingrain[def_side] != 0).astype(_I32) * CHART_GROUNDED
 
 
 def trace_copy(tables: Tables, state: BattleState, side, foe, slot=None) -> jnp.ndarray:
@@ -547,14 +563,17 @@ def simple_stage(stage: jnp.ndarray) -> jnp.ndarray:
 
 
 def chart_entry(tables: Tables, move_type, def_type, identified=False) -> jnp.ndarray:
-    """``int32`` chart entry in tenths. The rows after the 0xFE separator (the Ghost
-    immunities) are skipped for an ``identified`` defender (Foresight, battle_lib.c:2611),
-    i.e. count as neutral."""
+    """``int32`` chart entry in tenths. ``identified``: a bool (Foresight) or ``identified``'s
+    flags. The rows after the 0xFE separator (the Ghost immunities) are skipped for an
+    identified defender (Foresight, battle_lib.c:2611), and an immune row of a Flying defender
+    for a grounded one (Ingrain, :2534-2537), i.e. count as neutral."""
+    flags = _i32(identified)
     mul = _i32(tables.type_chart[move_type, def_type])
-    skipped = jnp.asarray(identified, jnp.bool_) & (
+    ghost = ((flags & CHART_IDENTIFIED) != 0) & (
         tables.type_chart_foresight[move_type, def_type] != 0
     )
-    return jnp.where(skipped, 10, mul)
+    flying = ((flags & CHART_GROUNDED) != 0) & (_i32(def_type) == Type.FLYING) & (mul == 0)
+    return jnp.where(ghost | flying, 10, mul)
 
 
 def effectiveness(tables: Tables, move_type, def_types, identified=False) -> jnp.ndarray:

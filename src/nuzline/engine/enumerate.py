@@ -635,6 +635,10 @@ INPUT_NEUTRAL_EFFECTS = (
     _E.UPROAR,
     # Stores a hit for a later turn's end (step._future_sight): nothing of this turn's hits.
     _E.FUTURE_SIGHT,
+    # E2 batch 7. Mean Look traps the side (its switch is chosen already); Imprison seals the
+    # side's move (its status check stops the move altogether, like Taunt): no damage input.
+    _E.MEAN_LOOK,
+    _E.IMPRISON,
 )
 INPUT_CLAUSE_EFFECTS = (
     _E.STAT_SELF,  # the foe's Defense / Sp. Def
@@ -676,6 +680,9 @@ INPUT_CLAUSE_EFFECTS = (
     _E.SWAGGER,
     # The roosting foe's chart (damage.chart_types): the roost clause.
     _E.ROOST,
+    # The ingrained foe's chart and Levitate (damage.identified, damage.ignorable): the ingrain
+    # clause.
+    _E.INGRAIN,
 )
 INPUT_NEUTRAL_ABILITIES = (
     AbilityId.NONE,
@@ -930,6 +937,9 @@ NON_TABLE_DAMAGE_EFFECTS = (
     _E.COPYCAT,
     # No damage at its use (its roll is TryFutureSight's stored damage, damage.fixed_damage).
     _E.FUTURE_SIGHT,
+    _E.INGRAIN,  # status moves: no damage
+    _E.MEAN_LOOK,
+    _E.IMPRISON,
 )
 
 
@@ -1039,6 +1049,7 @@ def damage_inputs_can_change(
         | ((foe_effect == _E.CURSE) & physical)
         | ((foe_effect == _E.SWAGGER) & physical)
         | (foe_effect == _E.ROOST)
+        | (foe_effect == _E.INGRAIN)
         | ((foe_effect == _E.DOUBLE_POWER) & guts)
         | (status_hit & (guts | (burnable & foe_burns)))
         | ((foe_effect == _E.REFLECT) & physical)

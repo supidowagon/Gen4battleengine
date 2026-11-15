@@ -313,6 +313,12 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     # effect_script_0127.s (a direct ON_HIT subscript_baton_pass.s) (engine/step.py ``_use_move``).
     228: ("BATTLE_EFFECT_SWITCH_HIT", _E.U_TURN, (0, 0, 0)),
     127: ("BATTLE_EFFECT_PASS_STATS_AND_STATUS", _E.BATON_PASS, (0, 0, 0)),
+    # E2 batch 7. Ingrain: effect_script_0181.s (MOVE_EFFECT_INGRAIN on the user, failing if set);
+    # Mean Look / Block / Spider Web: effect_script_0106.s (a direct subscript_mean_look.s);
+    # Imprison: effect_script_0192.s (BtlCmd_TryImprison) (engine/effects.py, engine/step.py).
+    181: ("BATTLE_EFFECT_GROUND_TRAP_USER_CONTINUOUS_HEAL", _E.INGRAIN, (0, 0, 0)),
+    106: ("BATTLE_EFFECT_PREVENT_ESCAPE", _E.MEAN_LOOK, (0, 0, 0)),
+    192: ("BATTLE_EFFECT_MAKE_SHARED_MOVES_UNUSEABLE", _E.IMPRISON, (0, 0, 0)),
 }
 
 DECOMP_EFFECT_NAMES: dict[int, str] = {k: v[0] for k, v in _EFFECTS.items()}

@@ -79,7 +79,7 @@ import jax
 import jax.numpy as jnp
 
 from nuzline.data.tables import Tables
-from nuzline.engine.actions import FIRST_ITEM_ACTION, locked_slot
+from nuzline.engine.actions import FIRST_ITEM_ACTION, locked_slot, move_imprisoned
 from nuzline.engine.damage import (
     PHYSICAL as PHYSICAL_CATEGORY,
 )
@@ -113,6 +113,8 @@ from nuzline.engine.effects import (
     focus_sash_damage,
     hit_count,
     holds,
+    imprison_fails,
+    ingrain_anchors,
     kings_rock_flinch,
     life_orb_recoil,
     pivot_item,
@@ -233,6 +235,7 @@ PROTECT_CHAIN_MAX = 3
 # recorded where ``execute_actions`` runs it. ``engine.observe`` reads them; ``step``
 # drops them. ``act_kind`` values:
 ACT_NONE, ACT_MOVE, ACT_SWITCH, ACT_ITEM, ACT_TAUNTED, ACT_DISABLED = 0, 1, 2, 3, 4, 5
+ACT_IMPRISONED = 6  # "{0} can't use the sealed {1}!" (subscript_move_is_imprisoned.s), E2 batch 7
 # Per-side event flags, in the observation's order (engine/observe.py documents each).
 EVENT_FLAGS = (
     "missed",
@@ -271,17 +274,28 @@ def _release_bind(state: BattleState, side, cond) -> BattleState:
     )
 
 
-def _source_leaves(state: BattleState, side, cond) -> BattleState:
+def _source_leaves(state: BattleState, side, cond, baton=False) -> BattleState:
     """``side``'s active battler leaves the field where ``cond`` (a switch, a faint, and Roar's
     drag): every effect it is the source of on the other side ends.
     ``BattleSystem_UpdateAfterSwitch`` (battle_lib.c:2088-2098) and
     ``BattleSystem_CleanupFaintedMon`` (:2168-2186) clear the ATTRACT bit sourced from it
     (``FlagIndex(battler) << VOLATILE_CONDITION_ATTRACT_SHIFT``) and the Bind it put on a foe.
-    In singles the only possible source of the foe's ``infatuated`` is this battler."""
+    In singles the only possible source of the foe's ``infatuated`` is this battler. Both also
+    clear the Mean Look of every battler whose ``meanLookTarget`` is it (:2056-2061, :2170-2172),
+    except a switch by Baton Pass (``baton``: the test sits under ``SYSCTL_BATON_PASS == FALSE``,
+    :2055), whose newcomer keeps the foe trapped (ruling B7-n)."""
     state = _release_bind(state, 1 - side, cond)
     keep = state.infatuated[1 - side]
     value = jnp.where(cond, 0, keep).astype(keep.dtype)
-    return state._replace(infatuated=state.infatuated.at[1 - side].set(value))
+    state = state._replace(infatuated=state.infatuated.at[1 - side].set(value))
+    clear = jnp.asarray(cond) & ~jnp.asarray(baton)
+    for battler in range(state.active.shape[0]):
+        ends = (
+            clear & (state.mean_look[battler] != 0) & (state.mean_look_target[battler] == 1 + side)
+        )
+        state = _set_side(state, "mean_look", battler, 0, ends)
+        state = _set_side(state, "mean_look_target", battler, 0, ends)
+    return state
 
 
 def _set_mon(state: BattleState, field: str, side, slot, value, cond) -> BattleState:
@@ -469,7 +483,7 @@ def _switch_in(
     state = _forget(state, side, slot)
     state = _entered(state, side, entry_turn, True)
     state = state._replace(active=state.active.at[side].set(jnp.asarray(slot).astype(jnp.int8)))
-    return _flag_exp(_source_leaves(state, side, True), side)
+    return _flag_exp(_source_leaves(state, side, True, baton), side)
 
 
 def _flag_exp(state: BattleState, side) -> BattleState:
@@ -724,6 +738,12 @@ def _use_move(
     taunted = go & (state.taunt[side] > 0) & (tables.move_power[move] == 0)
     state = _unlock(state, side, taunted)  # subscript_move_fail_taunted.s
     go = go & ~taunted
+    # CHECK_STATUS_STATE_IMPRISON (:2572-2583): Move_Imprisoned (battle_lib.c:3316-3338) on
+    # moveCur, the move chosen: a battler of the other side with MOVE_EFFECT_IMPRISON knows it (a
+    # faster foe's Imprison this turn included). subscript_move_is_imprisoned.s unlocks the user.
+    imprisoned = go & move_imprisoned(state, side, move)
+    state = _unlock(state, side, imprisoned)
+    go = go & ~imprisoned
     # CHECK_STATUS_STATE_CONFUSION (:2614): the counter drops first; at 0 the battler snaps
     # out and moves, otherwise RandNext() & 1 (outcome.confusion_hit) makes it hit itself
     # (:2633, damage.confusion_damage) instead of moving. subscript_hurt_self_in_confusion.s
@@ -880,6 +900,22 @@ def _use_move(
     )
     failed = failed | (snore & (state.status[side, user] != Status.SLEEP))
     failed = failed | (counter & ~counter_ok) | call_failed
+    # Ingrain and Aqua Ring (effect_script_0181.s:5, _0251.s:5) fail a user that has the effect
+    # already: MOVE_STATUS_FAILED from the script, as Fake Out's (rulings B7-n).
+    effect_used = tables.move_effect[used]
+    failed = failed | ((effect_used == EffectId.INGRAIN) & (state.ingrain[side] != 0))
+    failed = failed | ((effect_used == EffectId.AQUA_RING) & (state.aqua_ring[side] != 0))
+    # Imprison (effect_script_0192.s): BtlCmd_TryImprison first sets MOVE_EFFECT_IMPRISONED on
+    # the user's foes (battle_script.c:6686-6690: both enemy slots, which in singles name the
+    # one foe battler, whatever its HP), then fails (:10) a user already imprisoning or sharing
+    # no move with them (effects.imprison_fails).
+    imprison_runs = can_act & has_target & (effect_used == EffectId.IMPRISON)
+    for battler in range(state.active.shape[0]):  # battler b is on side b in singles
+        state = _set_side(state, "imprisoned", battler, 1, imprison_runs & (side != battler))
+    failed = failed | ((effect_used == EffectId.IMPRISON) & imprison_fails(state, side))
+    # Mud Sport and Water Sport fail the same way (effect_script_0201.s:5, _0210.s:5).
+    failed = failed | ((effect_used == EffectId.MUD_SPORT) & (state.mud_sport[side] != 0))
+    failed = failed | ((effect_used == EffectId.WATER_SPORT) & (state.water_sport[side] != 0))
     # Future Sight / Doom Desire (effect_script_0148.s:5): BtlCmd_TryFutureSight
     # (battle_script.c:6065-6100) runs once the move passed the no-target check. With nothing
     # pending on the defender's battler (futureSightTurns == 0) it sets the defender side's
@@ -994,13 +1030,19 @@ def _use_move(
     # (the subscript has none) and no faint call: a hazard faint is caught by this action's
     # faint check. UpdateAfterSwitch ends the newcomer's turn (battlerActions = MOVE_END,
     # battle_lib.c:2053): ``_execute_actions`` skips its action.
+    # subscript_force_target_to_switch_or_flee.s:7 compares the defender's moveEffectsMask with
+    # OPCODE_EQU: only a mask that is exactly MOVE_EFFECT_INGRAIN anchors it ("{0} anchored
+    # itself with its roots!", :86, MOVE_STATUS_FAILED); Ingrain beside any other bit of the mask
+    # lets Roar through (ruling B7-n; ``ingrain_anchors``).
     roar = connected & (tables.move_effect[used] == EffectId.ROAR)
+    anchored = roar & ingrain_anchors(tables, state, target_side)
+    roar = roar & ~anchored
     eligible = roar_bench(state, target_side, target)
     level_ok = (state.level[side, user] >= state.level[target_side, target]) | (
         outcome.roar_level[side] != 0
     )
     dragged = roar & jnp.any(eligible) & level_ok
-    roar_failed = roar & ~dragged
+    roar_failed = (roar & ~dragged) | anchored
     drag_slot = roar_slot(eligible, outcome.roar_target[side])
     state = _where(dragged, _send_out(tables, state, target_side, drag_slot, effects=False), state)
     # subscript_no_target.s and subscript_missed.s unlock the attacker (a Rollout that
@@ -1089,7 +1131,9 @@ def _use_move(
         & (tables.move_effect[used] != EffectId.FUTURE_SIGHT)  # SYSCTL_IGNORE_IMMUNITIES
         & (chart == 0)
     )
-    move_failed = flinched | disabled | taunted | self_hit | full_para | immobilized | no_effect
+    move_failed = (
+        flinched | disabled | taunted | imprisoned | self_hit | full_para | immobilized | no_effect
+    )
     # A weather move that failed (effects.weather_fails, on the field before its script):
     # MOVE_STATUS_FAILED, subscript_missed.s, no AfterMoveEffects.
     weather_failed = (
@@ -1402,9 +1446,13 @@ def _use_move(
         "act_kind": jnp.where(
             can_act,
             ACT_MOVE,
-            jnp.where(taunted, ACT_TAUNTED, jnp.where(disabled, ACT_DISABLED, ACT_NONE)),
+            jnp.where(
+                taunted,
+                ACT_TAUNTED,
+                jnp.where(disabled, ACT_DISABLED, jnp.where(imprisoned, ACT_IMPRISONED, ACT_NONE)),
+            ),
         ),
-        "act_id": jnp.where(can_act | taunted | disabled, move, 0),
+        "act_id": jnp.where(can_act | taunted | disabled | imprisoned, move, 0),
         "shown": ready,
         # subscript_missed.s tests PROTECTED before MISSED (:18, :157): a miss into a
         # Protect shows "protected itself"; a failed Fake Out prints "But it failed!" (:58).
@@ -1779,7 +1827,7 @@ def _execute_actions(
     state = state._replace(trainer_items=jnp.where(paused, state.trainer_items, consumed))
     state = state._replace(pivot_battler=jnp.zeros_like(state.pivot_battler))
     read = _empty_events()
-    for name, field in (("protect_ok", "ts_protect_ok"), ("roosted", "ts_roosted")):
+    for name, field in (("protect_ok", "ts_protect_ok"), ("roosted", "roosting")):
         read[name] = jnp.where(paused, getattr(state, field).astype(_I32), 0)
     for k, name in enumerate(_TAKEN):
         read[name] = jnp.where(paused, state.ts_taken[:, k].astype(_I32), 0)
@@ -1917,7 +1965,6 @@ def _execute_actions(
         "ts_custap": custap & (jnp.arange(2) == order[1]) & (position == 0),
         "ts_pursued": pursued,
         "ts_protect_ok": read["protect_ok"],
-        "ts_roosted": read["roosted"],
         "ts_taken": jnp.stack([read[n] for n in _TAKEN], axis=1),
         "ts_dragged": read["dragged"],
         "ts_move_failed": read["move_failed"],
@@ -1938,6 +1985,9 @@ def _execute_actions(
         },
         # Read when the order was fixed, read again only at the next turn (the resumed half's).
         qc_roll=jnp.where(stopped, 0, state.qc_roll).astype(state.qc_roll.dtype),
+        roosting=jnp.where(stopped, roosting_now(state, read["roosted"]), 0).astype(
+            state.roosting.dtype
+        ),
     )
     return state, read, {**shown, "pursuit": fired.astype(_I32)}
 
@@ -1963,15 +2013,23 @@ def _leech_seed_check(tables: Tables, state: BattleState, side) -> BattleState:
     return _hp_change(_hp_change(state, side, mon, -drained), other, recipient, gained)
 
 
-def _aqua_ring_check(tables: Tables, state: BattleState, side) -> BattleState:
+def _aqua_ring_check(tables: Tables, state: BattleState, side, field="aqua_ring") -> BattleState:
     """A ringed ``side`` active Pokemon alive and below full HP heals
     ``BattleSystem_Divide(maxHP, 16)``, times ``(100 + 30) / 100`` with a Big Root
-    (``effects.big_root``; ``subscript_aqua_ring_heal.s``; Heal Block is unsupported)."""
+    (``effects.big_root``; ``subscript_aqua_ring_heal.s``; Heal Block is unsupported).
+    ``field`` ``"ingrain"``: ``MON_COND_CHECK_STATE_INGRAIN`` (bcp.c:1311-1326), the same heal
+    through subscript_ingrain_heal.s."""
     mon = state.active[side]
     hp, full = state.hp[side, mon].astype(_I32), state.max_hp[side, mon].astype(_I32)
-    on = (state.aqua_ring[side] != 0) & (hp > 0) & (hp != full)
+    on = (getattr(state, field)[side] != 0) & (hp > 0) & (hp != full)
     heal = jnp.where(on, big_root(tables, state, side, jnp.maximum(full // 16, 1)), 0)
     return _hp_change(state, side, mon, heal)
+
+
+def _ingrain_then_aqua_ring(tables: Tables, state: BattleState, side) -> BattleState:
+    """``MON_COND_CHECK_STATE_INGRAIN`` then ``_AQUA_RING`` (bcp.c:1311, :1332): two heals, so one
+    faint check serves both (the one between them finds nothing new)."""
+    return _aqua_ring_check(tables, _aqua_ring_check(tables, state, side, "ingrain"), side)
 
 
 def _status_damage(state: BattleState, side, status, damage) -> BattleState:
@@ -2208,8 +2266,9 @@ def _turn_end_ability(tables: Tables, state: BattleState, side, outcome: Outcome
 # The implemented checks of ``enum MonCondCheckState`` (battle_controller_player.c:1256),
 # in its order.
 END_OF_TURN_ORDER = (
-    # MON_COND_CHECK_STATE_AQUA_RING, battle_controller_player.c:1332
-    ("aqua_ring", _aqua_ring_check),
+    # MON_COND_CHECK_STATE_INGRAIN, battle_controller_player.c:1311, then
+    # MON_COND_CHECK_STATE_AQUA_RING, :1332 (``_ingrain_then_aqua_ring``)
+    ("ingrain_aqua_ring", _ingrain_then_aqua_ring),
     # MON_COND_CHECK_STATE_ABILITY, battle_controller_player.c:1355 (the only check that
     # reads the turn's ``Outcome``, see ``end_of_turn``)
     ("ability", _turn_end_ability),
@@ -2559,8 +2618,24 @@ def step_events(
     e = _turn_start_items(tables, e)
     # The turn's speedRand draw, kept for the next turn's readers (qc_kept).
     e = _keep_quick_claw(tables, e, outcome.quick_claw)
+    # turnFlags.roosting lives until BattleSystem_SetupNextTurn (battle_lib.c:2229-2231), after
+    # the faint replacements (bcp.c:1843-1856): kept while one is pending (``roosting_now``).
+    pending = jnp.any(needs_replacement(e) != 0)
+    e = e._replace(
+        roosting=jnp.where(pending, roosting_now(e, read["roosted"]), 0).astype(e.roosting.dtype)
+    )
     s = _where(halted, s, e)
     return _where(state.over != 0, state, s), events
+
+
+def roosting_now(state: BattleState, roosted) -> jnp.ndarray:
+    """``int8[2]``: ``turnFlags.roosting`` per battler from the turn's ``roosted`` events: a
+    battler with no HP left has none (``BattleSystem_CleanupFaintedMon`` clears its turn flags,
+    battle_lib.c:2189-2192). Per battler slot: a Pokemon Roar dragged in after its side's Roost
+    keeps it, as the decomp's ``turnFlags[battler]`` does."""
+    sides = jnp.arange(state.active.shape[0])
+    alive = state.hp[sides, state.active] > 0
+    return ((jnp.asarray(roosted) != 0) & alive).astype(jnp.int8)
 
 
 def step(tables: Tables, state: BattleState, actions, outcome: Outcome) -> BattleState:
@@ -2665,6 +2740,9 @@ def replace(tables: Tables, state: BattleState, side, slot) -> BattleState:
             out.exp_refused.dtype
         )
     )
+    # The turn's turnFlags.roosting ends with the last replacement (SetupNextTurn, bcp.c:1856).
+    pending = jnp.any(needs_replacement(out) != 0)
+    out = out._replace(roosting=jnp.where(pending, out.roosting, 0).astype(out.roosting.dtype))
     # The slot's speedRand stays; it is unread unless the newcomer (or, after an entry
     # faint, the next replacement) can be a Quick Claw holder (qc_kept).
     return _keep_quick_claw(tables, out, out.qc_roll)

@@ -220,6 +220,19 @@ class EffectId(IntEnum):
     # inside the turn (``BattleState.pivot_battler``; ``step``'s pause and resume).
     U_TURN = 69
     BATON_PASS = 70
+    # E2 batch 7 (rulings B7-n), the state the trainer AI reads. Ingrain
+    # (effect_script_0181.s): sets the user's MOVE_EFFECT_INGRAIN (``BattleState.ingrain``),
+    # failing if set; it heals at the turn end (bcp.c:1311-1326, subscript_ingrain_heal.s), traps
+    # (battle_lib.c:3256, :5523) and grounds (:2534-2536, :3100-3103) its user. Mean Look, Block,
+    # Spider Web (effect_script_0106.s, a direct CHECK_HP | TO_DEFENDER subscript_mean_look.s): the
+    # defender's VOLATILE_CONDITION_MEAN_LOOK and meanLookTarget (``mean_look``,
+    # ``mean_look_target``). Imprison (effect_script_0192.s, BtlCmd_TryImprison
+    # battle_script.c:6674-6727): the user's MOVE_EFFECT_IMPRISON, the foes' MOVE_EFFECT_IMPRISONED
+    # (``imprison``, ``imprisoned``); its moves are then invalid for the foes (battle_lib.c:
+    # 2287-2290, :3316-3338) and fail at their status check (bcp.c:2572-2583).
+    INGRAIN = 71
+    MEAN_LOOK = 72
+    IMPRISON = 73
 
 
 # ``EffectId.COUNTER``'s source (``move_param[m, 0]``).

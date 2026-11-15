@@ -78,6 +78,22 @@ Encodings:
   removal runs ``BattleMon_CopyToParty``, battle_lib.c:1819-1823; ``effects.forget_item``) and
   when it enters (``BattleSystem_UpdateAfterSwitch``, :2153; ``step._forget``). The AI reads it
   for the other side's battlers only (trainer_ai.c:1901-1934), so the opponent's is not kept.
+* E2 batch 7, the state the trainer AI reads (rulings B7-n). ``ingrain`` is the active battler's
+  ``MOVE_EFFECT_INGRAIN`` (moves.h:18), 0/1. ``mean_look`` is its ``VOLATILE_CONDITION_MEAN_LOOK``
+  (condition.h:58), 0/1, and ``mean_look_target`` its ``MoveEffectsData.meanLookTarget``
+  (battle_mon.h:26) as ``1 + battler`` of the battler that trapped it, 0 while ``mean_look`` is 0
+  (the decomp leaves a stale value nothing reads). Both are cleared when the trapper leaves by a
+  switch that is not a Baton Pass (battle_lib.c:2055-2061) or faints (:2168-2173).
+  ``imprison`` is ``MOVE_EFFECT_IMPRISON`` (moves.h:21) on Imprison's user, ``imprisoned``
+  ``MOVE_EFFECT_IMPRISONED`` (:38) on its foes, set whenever the user's Imprison script runs,
+  success or not (battle_script.c:6686-6690), and only cleared when that battler leaves. All five
+  are volatiles; Baton Pass keeps ``ingrain``, ``mean_look`` and ``mean_look_target``.
+  ``roosting`` is ``turnFlags.roosting`` (battle_context.h:64): a Roost that healed sets it for the
+  rest of the turn (subscript_roost.s:11-12); a faint clears it (battle_lib.c:2189-2192) and so
+  does ``BattleSystem_SetupNextTurn`` (:2229-2231), which runs after the faint replacements
+  (bcp.c:1843-1856). It is kept where it can still be read: at a pause at a party list and while
+  a replacement is pending (the AI's ``BattleAI_PostKOSwitchIn`` walks the type chart, whose
+  ``BasicTypeMulApplies`` reads it, battle_lib.c:2540); else 0.
 * ``trainer_item_count`` is ``aiContext.trainerItemCounts``: the bag's size at battle
   start, never decremented.
 * ``terrain`` is ``BattleSystem.terrain``: the battle terrain, a decomp ``TERRAIN_*`` id
@@ -204,6 +220,12 @@ class BattleState(NamedTuple):
     yawn: jnp.ndarray  # int8, MOVE_EFFECT_YAWN counter in moveEffectsMask, 0 = none
     lock_on: jnp.ndarray  # int8, MOVE_EFFECT_LOCK_ON counter in moveEffectsMask, 0 = none
     lock_on_target: jnp.ndarray  # int8, MoveEffectsData.lockOnTarget as 1 + battler, 0 = none
+    ingrain: jnp.ndarray  # int8, MOVE_EFFECT_INGRAIN in moveEffectsMask
+    mean_look: jnp.ndarray  # int8, VOLATILE_CONDITION_MEAN_LOOK
+    mean_look_target: jnp.ndarray  # int8, MoveEffectsData.meanLookTarget as 1 + battler, 0 = none
+    imprison: jnp.ndarray  # int8, MOVE_EFFECT_IMPRISON (the user of Imprison)
+    imprisoned: jnp.ndarray  # int8, MOVE_EFFECT_IMPRISONED (a foe of an Imprison user)
+    roosting: jnp.ndarray  # int8, turnFlags.roosting, kept only while it can be read
     # per side [2]
     spikes: jnp.ndarray  # int8, layers
     toxic_spikes: jnp.ndarray  # int8, layers
@@ -269,7 +291,6 @@ class BattleState(NamedTuple):
     ts_custap: jnp.ndarray  # int8[2], moveEffectsData.custapBerry from the turn order
     ts_pursued: jnp.ndarray  # int8, 1 + the battler whose action a Pursuit ended, 0 = none
     ts_protect_ok: jnp.ndarray  # int8[2], turnFlags.protecting
-    ts_roosted: jnp.ndarray  # int8[2], turnFlags.roosting
     ts_taken: jnp.ndarray  # int16[2,6], turnFlags damage taken and attackers (step._use_move)
     ts_dragged: jnp.ndarray  # int8[2], 1 + the slot a Roar dragged in this turn
     ts_move_failed: jnp.ndarray  # int8[2], moveFailFlags (the turn end's Uproar check)
@@ -366,13 +387,19 @@ VOLATILE_FIELDS = (
     "infatuated",
     "destiny_bond",
     "uproar",
+    "ingrain",
+    "mean_look",
+    "mean_look_target",
+    "imprison",
+    "imprisoned",
 )
 # Baton Pass keeps these of ``VOLATILE_FIELDS`` (and the stat stages): BattleSystem_UpdateAfterSwitch
 # keeps statusVolatile & VOLATILE_CONDITION_BATON_PASSED (battle_lib.c:2078; condition.h:72-76:
-# confusion; Focus Energy, Mean Look, Curse and Substitute's bit come from unsupported moves),
+# confusion, Mean Look; Focus Energy, Curse and Substitute's bit come from unsupported moves),
 # moveEffectsMask & MOVE_EFFECT_BATON_PASSED (:2079; moves.h:46-48: the Leech Seed recipient, Mud
-# and Water Sport, Aqua Ring; the rest from unsupported moves) and the substitute HP
-# (:2107); BattleSystem_InitBattleMon keeps the stat stages (:97-101). Ruling B6-3.
+# and Water Sport, Aqua Ring, Ingrain; the rest from unsupported moves), the substitute HP and the
+# meanLookTarget (:2107, :2111); BattleSystem_InitBattleMon keeps the stat stages (:97-101).
+# Rulings B6-3, B7-n.
 BATON_PASSED_FIELDS = (
     "confusion",
     "leech_seed",
@@ -380,6 +407,9 @@ BATON_PASSED_FIELDS = (
     "water_sport",
     "mud_sport",
     "aqua_ring",
+    "ingrain",
+    "mean_look",
+    "mean_look_target",
 )
 
 
@@ -441,6 +471,12 @@ LAYOUT: dict[str, tuple[tuple[int, ...], type]] = {
     "yawn": (_SIDE, np.int8),
     "lock_on": (_SIDE, np.int8),
     "lock_on_target": (_SIDE, np.int8),
+    "ingrain": (_SIDE, np.int8),
+    "mean_look": (_SIDE, np.int8),
+    "mean_look_target": (_SIDE, np.int8),
+    "imprison": (_SIDE, np.int8),
+    "imprisoned": (_SIDE, np.int8),
+    "roosting": (_SIDE, np.int8),
     "spikes": (_SIDE, np.int8),
     "toxic_spikes": (_SIDE, np.int8),
     "stealth_rock": (_SIDE, np.int8),
@@ -500,7 +536,6 @@ LAYOUT: dict[str, tuple[tuple[int, ...], type]] = {
     "ts_custap": (_SIDE, np.int8),
     "ts_pursued": (_FIELD, np.int8),
     "ts_protect_ok": (_SIDE, np.int8),
-    "ts_roosted": (_SIDE, np.int8),
     "ts_taken": ((SIDES, 6), np.int16),
     "ts_dragged": (_SIDE, np.int8),
     "ts_move_failed": (_SIDE, np.int8),

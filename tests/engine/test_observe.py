@@ -305,6 +305,12 @@ def visible_cases(tables, names):
         # Mud Sport is per battler: one side's sport differs from the other's.
         "mud sport": projected("mud_sport", lambda a: set_field(a, "mud_sport", 1, 1)),
         "aqua ring": projected("aqua_ring", lambda a: set_field(a, "aqua_ring", 1, 1)),
+        # E2 batch 7: "planted its roots!", "can no longer escape!", "sealed the opponent's
+        # move(s)!", and a Roost that healed (kept at a pause or a pending replacement).
+        "ingrain": projected("ingrain", lambda a: set_field(a, "ingrain", 1, 1)),
+        "mean look": projected("mean_look", lambda a: set_field(a, "mean_look", 0, 1)),
+        "imprison": projected("imprison", lambda a: set_field(a, "imprison", 1, 1)),
+        "roosting": projected("roosting", lambda a: set_field(a, "roosting", 0, 1)),
         "stat stage": (
             "stages",
             leer,

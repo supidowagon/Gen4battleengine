@@ -954,6 +954,41 @@ def _draw_future_sight(draw, tables: Tables, a: dict, side: int, active: int, na
         a["future_sight"][side] = 1
 
 
+BATCH7_MOVES = ("Ingrain", "Mean Look", "Block", "Spider Web", "Imprison", "Roar", "Roost")
+
+
+def _draw_batch7(draw, tables: Tables, a: dict, side: int, active: int, names: Names) -> None:
+    """E2 batch 7: maybe (1 in 3) give the active Pokemon one of ``BATCH7_MOVES`` (full PP), an
+    Imprison user mostly sharing a move with the foe (one of the foe's moves copied into another
+    slot, so ``BtlCmd_TryImprison`` can succeed); maybe the side's battler ingrained (1 in 4),
+    trapped by the foe's Mean Look (1 in 4, ``mean_look_target`` the foe's battler), imprisoning
+    (1 in 6) or imprisoned (1 in 6). The other draws give Ingrain beside other mask bits (Aqua
+    Ring, the sports, Leech Seed) or alone, which Roar's anchoring tells apart."""
+    rnd = draw(st.randoms(use_true_random=False))
+    foe = 1 - side
+    if draw(st.integers(0, 2)) == 0:
+        name = rnd.choice(BATCH7_MOVES)
+        free = [k for k in range(4) if a["moves"][side, active, k] != a["locked_move"][side]]
+        if free:
+            k = rnd.choice(free)
+            move = names.move(name)
+            a["moves"][side, active, k] = move
+            a["pp"][side, active, k] = int(tables.move_pp[move])
+            foe_moves = [int(m) for m in a["moves"][foe, a["active"][foe]] if m]
+            others = [j for j in free if j != k]
+            if name == "Imprison" and foe_moves and others and rnd.random() < 0.8:
+                shared = rnd.choice(foe_moves)
+                j = rnd.choice(others)
+                a["moves"][side, active, j] = shared
+                a["pp"][side, active, j] = int(tables.move_pp[shared])
+    a["ingrain"][side] = int(draw(st.integers(0, 3)) == 0)
+    if draw(st.integers(0, 3)) == 0:
+        a["mean_look"][side] = 1
+        a["mean_look_target"][side] = 1 + foe
+    a["imprison"][side] = int(draw(st.integers(0, 5)) == 0)
+    a["imprisoned"][side] = int(draw(st.integers(0, 5)) == 0)
+
+
 def _draw_choice_lock(draw, a: dict, side: int, active: int) -> None:
     """``choice_lock``: none or one of the active Pokemon's moves, whatever its item (a lock
     without a Choice item is what a lost item would leave; ``UpdateMoveBuffers`` clears it)."""
@@ -1058,6 +1093,7 @@ def supported_state(draw, tables: Tables, names: Names, invokers: bool = True) -
         _draw_uproar(draw, tables, a, side, active, names)
         _draw_future_sight(draw, tables, a, side, active, names)
         _draw_pivot(draw, tables, a, side, active, names)
+        _draw_batch7(draw, tables, a, side, active, names)
         _draw_choice_lock(draw, a, side, active)
     # No battler on the field sleeps at a turn start during an uproar (B5-7: the turn end woke
     # it): the other side's draws above may have put one to sleep after the uproar was drawn.

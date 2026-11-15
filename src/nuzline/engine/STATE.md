@@ -52,16 +52,23 @@ three structs has a row.
   per battler, set by subscript_destiny_bond.s:9, cleared at the holder's next
   `CHECK_STATUS_START`, bcp.c:2425, and with the volatiles), the Uproar count ->
   `uproar` (E2 batch 5, per battler: `Random 3, 3` turns from subscript_uproar.s:6-8, counted
-  down by the end-of-turn check, bcp.c:1505-1541, cleared with the volatiles). The
-  other bits (Thrash, Focus Energy, Transform, Rage, Substitute
-  flag, Mean Look, Nightmare, Curse, Torment) are later (M6); the Substitute flag is implied by `substitute_hp > 0`.
+  down by the end-of-turn check, bcp.c:1505-1541, cleared with the volatiles), Mean Look ->
+  `mean_look` (E2 batch 7, per battler, with `MoveEffectsData.meanLookTarget` ->
+  `mean_look_target` as `1 + battler`, 0 while `mean_look` is 0: subscript_mean_look.s:9-10;
+  cleared with the volatiles, and when the trapper leaves by a switch that is not a Baton Pass,
+  battle_lib.c:2055-2061, or faints, :2170-2172; Baton Pass keeps both, :2078, :2111), Curse ->
+  `curse` (below). The other bits (Thrash, Focus Energy, Transform, Rage, Substitute flag,
+  Nightmare, Torment) are later (M6); the Substitute flag is implied by `substitute_hp > 0`.
 - **moveEffectsMask** bits mapped: Leech Seed -> `leech_seed`, Water Sport ->
   `water_sport`, Mud Sport -> `mud_sport`, Aqua Ring -> `aqua_ring` (per battler, cleared on switch-out; the
-  Electric power halving reads every active battler, `battle_lib.c:6812`). The rest
-  (Perish Song, semi-invulnerable turns, Minimize,
-  Charge, Ingrain, Imprison, Grudge, Gastro Acid, Miracle
-  Eye, Power Trick, Heal Block, Embargo, Magnet Rise, Lock-On) are
-  later (M6).
+  Electric power halving reads every active battler, `battle_lib.c:6812`), Ingrain -> `ingrain`,
+  Imprison -> `imprison` (its user) and Imprisoned -> `imprisoned` (its foes) (E2 batch 7, per
+  battler, cleared with the volatiles; Baton Pass keeps Ingrain only, moves.h:46-48), Perish
+  Song, Yawn and Lock-On (below). Camouflage's bit is read off `types` (`effects.camouflaged`).
+  Roar's Ingrain test compares the whole mask (`effects.ingrain_anchors`, the kept bits in
+  `effects.MOVE_EFFECT_MASK_FIELDS`). The rest (semi-invulnerable turns, Minimize, Charge,
+  Grudge, Gastro Acid, Miracle Eye, Power Trick, Heal Block, Embargo, Magnet Rise) are later
+  (M6).
 - **fieldConditionsMask**: the weather bits (temporary vs. permanent rain, sand,
   sun, hail, plus deep fog) -> `weather` with `weather_timer == 0` meaning
   permanent; Trick Room turns -> `trick_room`; Gravity turns -> `gravity`. The
@@ -292,7 +299,10 @@ three structs has a row.
   `BattleContext` values a resumed turn reads: `turnOrderCounter`, `battlerActionOrder`, the
   command-selection picks (`ts_move`, `ts_struggling`, `ts_locked`, `ts_item`), the per-battler
   `moveEffectsData.custapBerry` (`ts_custap`), the per-battler `turnFlags` later actors read
-  (`ts_protect_ok`, `ts_roosted`, `ts_taken`), the per-battler `moveFailFlags`
+  (`ts_protect_ok`, `ts_taken`; `turnFlags.roosting` is the public `roosting`, kept at a pause
+  and while a faint replacement is pending, `engine.state`; the other turn flags are reset every
+  turn and `step` resolves a whole turn: `protecting` is the first actor's `protect_ok` event,
+  read by the second actor in `step._execute_actions`), the per-battler `moveFailFlags`
   (`ts_move_failed`), the paused action's `moveCur` and its defender's damage taken (`ts_used`,
   `ts_damaged`, `ts_dealt`), the per-side bitmask of the faints handled (`ts_alive`), `powerMul`
   at the list (`ts_pick_mul`) and the search's turn-start reads (`ts_power_mul`,
@@ -351,7 +361,7 @@ three structs has a row.
 | `BattleMon.exp` | `exp` | mapped |
 | `BattleMon.personality` | — | not needed because its battle uses (nature, ability slot, gender) are resolved into `PokemonSpec` before `make_state` |
 | `BattleMon.status` | `status`, `status_counter` | mapped |
-| `BattleMon.statusVolatile` | `confusion`, `flinched`, `trapped`, `recharge`, `foresight`, `bide_turns`, `curled`, `locked_move`, `infatuated`, `destiny_bond`, `uproar`, `curse` | mapped |
+| `BattleMon.statusVolatile` | `confusion`, `flinched`, `trapped`, `recharge`, `foresight`, `bide_turns`, `curled`, `locked_move`, `infatuated`, `destiny_bond`, `uproar`, `curse`, `mean_look` | mapped |
 | `BattleMon.OTId` | — | not needed because only obedience and the traded-Pokemon exp bonus read it; the tool assumes an obedient party and resolves the exp bonus into `exp_boost` before `make_state` |
 | `BattleMon.heldItem` | `item` | mapped |
 | `BattleMon.padding007A` | — | not needed because it is padding |
@@ -360,7 +370,7 @@ three structs has a row.
 | `BattleMon.gender` | `gender` | mapped |
 | `BattleMon.OTGender` | — | not needed because it is cosmetic (names, messages, sprites, animation) |
 | `BattleMon.capturedBall` | — | not needed because it is cosmetic (names, messages, sprites, animation) |
-| `BattleMon.moveEffectsMask` | `leech_seed`, `water_sport`, `mud_sport`, `aqua_ring`, `perish_song`, `yawn`, `lock_on` | mapped |
+| `BattleMon.moveEffectsMask` | `leech_seed`, `water_sport`, `mud_sport`, `aqua_ring`, `perish_song`, `yawn`, `lock_on`, `ingrain`, `imprison`, `imprisoned` | mapped |
 | `BattleMon.moveEffectsTemp` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
 | `BattleMon.moveEffectsData` | `taunt`, `protect_count`, `rollout_count`, `recharge`, `substitute_hp`, `trap_move`, `choice_lock` | mapped |
 
@@ -384,7 +394,7 @@ three structs has a row.
 | `MoveEffectsData.lockOnTarget` | `lock_on_target` | mapped |
 | `MoveEffectsData.mimickedMoveSlot` | — | later (M6) |
 | `MoveEffectsData.bindTarget` | — | not needed because in singles the binder is always the opposing active Pokemon |
-| `MoveEffectsData.meanLookTarget` | — | later (M6) |
+| `MoveEffectsData.meanLookTarget` | `mean_look_target` | mapped |
 | `MoveEffectsData.lastResortCount` | — | later (M6) |
 | `MoveEffectsData.magnetRiseTurns` | — | later (M6) |
 | `MoveEffectsData.healBlockTurns` | — | later (M6) |
@@ -520,7 +530,7 @@ three structs has a row.
 | `BattleContext.fieldConditions` | `weather_timer`, `future_timer`, `future_damage`, `wish_timer` | mapped |
 | `BattleContext.sideConditionsMask` | `stealth_rock`, `tailwind`, `lucky_chant`, `future_sight` | mapped |
 | `BattleContext.sideConditions` | `reflect`, `light_screen`, `mist`, `safeguard`, `spikes`, `toxic_spikes` | mapped |
-| `BattleContext.turnFlags` | — | not needed because it is reset every turn and `step` resolves a whole turn (`protecting`: the first actor's `protect_ok` event, read by the second actor in `step._execute_actions`; `roosting`: the first actor's `roosted` event, E2 batch 4) |
+| `BattleContext.turnFlags` | `roosting` | mapped |
 | `BattleContext.selfTurnFlags` | — | not needed because it is reset at every action's end (`BattleContext_Init`, bcp.c:3998) and `step` resolves a whole action; `focusItemActivated` and `SELF_TURN_FLAG_PLUCK_BERRY` live in `_use_move`'s hit loop (`effects.MoveHit`) |
 | `BattleContext.moveFailFlags` | — | not needed because it is reset every turn and `step` resolves a whole turn (its only reader, the Uproar check, reads the turn's `move_failed` event) |
 | `BattleContext.aiContext` | `ai_seen_moves`, `ai_item_known`, `ai_ability_known`, `trainer_items`, `trainer_item_count` | mapped |

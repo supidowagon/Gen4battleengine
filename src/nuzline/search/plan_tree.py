@@ -41,6 +41,7 @@ from nuzline.engine.ids import Status
 from nuzline.engine.levelup import GIVE_UP
 from nuzline.engine.observe import (
     ACT_DISABLED,
+    ACT_IMPRISONED,
     ACT_ITEM,
     ACT_MOVE,
     ACT_SWITCH,
@@ -143,6 +144,8 @@ def _side_text(f: dict, names: Names, side: int, who: str, trainer: str) -> str:
         head = f"{who} can't use {names.move_names[act]} after the taunt"
     elif kind == ACT_DISABLED:
         head = f"{who}'s {names.move_names[act]} is disabled"
+    elif kind == ACT_IMPRISONED:
+        head = f"{who} can't use the sealed {names.move_names[act]}"
     elif kind == ACT_SWITCH:
         slot_name = _species(names, f, side, act)
         head = f"{trainer} sent out {slot_name}" if side else f"you switched to {slot_name}"
@@ -259,6 +262,10 @@ _COND_TEXT = {
     "bide_turns": "storing energy",
     "mud_sport": "Mud Sport",
     "aqua_ring": "Aqua Ring",
+    "ingrain": "rooted",
+    "mean_look": "unable to escape",
+    "imprison": "imprisoning",
+    "roosting": "roosting",
     "spikes": "Spikes",
     "toxic_spikes": "Toxic Spikes",
 }

@@ -84,6 +84,12 @@ class RefSide:
     yawn: int
     lock_on: int
     lock_on_target: int
+    ingrain: int  # MOVE_EFFECT_INGRAIN
+    mean_look: int  # VOLATILE_CONDITION_MEAN_LOOK
+    mean_look_target: int  # meanLookTarget as 1 + battler, 0 = none
+    imprison: int  # MOVE_EFFECT_IMPRISON
+    imprisoned: int  # MOVE_EFFECT_IMPRISONED
+    roosting: int  # turnFlags.roosting while it can be read (engine.state docstring)
     spikes: int
     toxic_spikes: int
     stealth_rock: int
@@ -148,7 +154,6 @@ class RefState:
     ts_custap: list[int]
     ts_pursued: int
     ts_protect_ok: list[int]
-    ts_roosted: list[int]
     ts_taken: list[list[int]]
     ts_dragged: list[int]
     ts_move_failed: list[int]

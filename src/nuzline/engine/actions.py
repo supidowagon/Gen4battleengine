@@ -19,14 +19,15 @@ checks M1 has state for: an empty slot (``CHECK_INVALID_NO_MOVE``), no PP
 cannot pick a move whose power is 0) and the Choice lock (``CHECK_INVALID_CHOICE_ITEM``,
 :2307-2315: a holder of a Choice item whose ``choice_lock`` is a move it knows can pick
 only that move; a lock it does not know is cleared there, which the engine reads as no
-lock). Torment, Imprison, Gravity, Heal Block and Encore come with their mechanics. The
+lock) and Imprison (``CHECK_INVALID_IMPRISONED``, :2287-2290: ``move_imprisoned``). Torment,
+Gravity, Heal Block and Encore come with their mechanics. The
 trainer AI scores the same mask (``TrainerAI_Init``, trainer_ai.c:234,
 ``CHECK_INVALID_ALL``). When every slot is invalid the decomp sets ``struggling`` instead
 of letting the player pick a move (battle_controller_player.c:433); here action 0 stays legal and means Struggle
 (``order.selected_move`` makes the same call from ``usable_moves``).
 
 Switches are legal to a non-active, non-empty, non-fainted slot, and never while the
-active Pokemon is trapped (``trapped > 0``, Bind and friends).
+active Pokemon is trapped (``trapped``: Bind, Mean Look, Ingrain).
 
 A battler locked into a move (``locked_move``: Bide, Rollout, Ice Ball, an uproar) picks no
 command (``Battler_CanPickCommand`` is FALSE, battle_controller_player.c:335): its only action
@@ -71,6 +72,20 @@ def choice_locked(tables: Tables, state: BattleState, side) -> jnp.ndarray:
     return held & (lock != 0) & jnp.any(state.moves[side, mon] == lock)
 
 
+def move_imprisoned(state: BattleState, side, move) -> jnp.ndarray:
+    """``bool`` (the shape of ``move``): ``Move_Imprisoned`` (battle_lib.c:3316-3338): a battler
+    of the other side has ``MOVE_EFFECT_IMPRISON`` and knows ``move`` (the loop over battlers,
+    doubles convention 4; battler b is on side b in singles)."""
+    move = jnp.asarray(move, jnp.int32)
+    out = jnp.zeros(move.shape, bool)
+    for battler in range(state.active.shape[0]):
+        known = state.moves[battler, state.active[battler]].astype(jnp.int32)
+        holds = jnp.any(move[..., None] == known, axis=-1)
+        sealing = (jnp.asarray(side) != battler) & (state.imprison[battler] != 0)
+        out = out | (sealing & holds & (move != 0))
+    return out
+
+
 def usable_moves(tables: Tables, state: BattleState, side) -> jnp.ndarray:
     """``bool[4]``: the active Pokemon's move slots that pass the checks above (a
     move, PP left, not the disabled move, not power 0 while taunted, the Choice-locked move
@@ -82,6 +97,7 @@ def usable_moves(tables: Tables, state: BattleState, side) -> jnp.ndarray:
     taunted = state.taunt[side] > 0
     usable = usable & ~(taunted & (tables.move_power[moves] == 0))
     usable = usable & (~choice_locked(tables, state, side) | (moves == state.choice_lock[side]))
+    usable = usable & ~move_imprisoned(state, side, moves)  # CHECK_INVALID_IMPRISONED, :2287
     lock = locked_slot(state, side)
     return jnp.where(lock >= 0, jnp.arange(MOVE_ACTIONS) == lock, usable)
 
@@ -93,12 +109,20 @@ def legal_replacements(state: BattleState, side) -> jnp.ndarray:
     return (slots != state.active[side]) & (state.species[side] > 0) & (state.hp[side] > 0)
 
 
+def trapped(state: BattleState, side) -> jnp.ndarray:
+    """``bool``: ``Battler_IsTrapped`` (battle_lib.c:5514-5531), which the party menu reads
+    (battle_controller_player.c:572): ``VOLATILE_CONDITION_TRAPPED`` (the Bind of ``trapped`` and
+    ``mean_look``, condition.h:77-78) or ``MOVE_EFFECT_INGRAIN``. Shed Shell, Shadow Tag and Magnet
+    Pull are unsupported."""
+    return (state.trapped[side] != 0) | (state.mean_look[side] != 0) | (state.ingrain[side] != 0)
+
+
 def legal_actions(tables: Tables, state: BattleState, side) -> jnp.ndarray:
     """``bool[NUM_ACTIONS]``: the actions ``side`` may choose this turn."""
     usable = usable_moves(tables, state, side)
     struggle = ~jnp.any(usable)
     usable = usable.at[0].set(usable[0] | struggle)
-    switches = legal_replacements(state, side) & (state.trapped[side] == 0)
+    switches = legal_replacements(state, side) & ~trapped(state, side)
     switches = switches & (locked_slot(state, side) < 0)
     return jnp.concatenate([usable, switches])
 

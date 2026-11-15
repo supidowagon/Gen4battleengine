@@ -846,6 +846,8 @@ def primary_effect_fails(tables, state: BattleState, side, target_side, move) ->
         | ((effect == _E.TAILWIND) & (state.tailwind[side] != 0))
         | ((effect == _E.SPIKES) & (state.spikes[target_side] >= SPIKES_MAX))
         | ((effect == _E.TOXIC_SPIKES) & (state.toxic_spikes[target_side] >= TOXIC_SPIKES_MAX))
+        # subscript_mean_look.s:7-8, :48: MOVE_STATUS_FAILED.
+        | ((effect == _E.MEAN_LOOK) & mean_look_fails(state, target_side))
     )
 
 
@@ -918,6 +920,99 @@ def _secondary_confuse(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
 def _aqua_ring(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     cond = (h.effect == _E.AQUA_RING) & h.landed & (state.aqua_ring[h.side] == 0)
     return _set(state, "aqua_ring", h.side, 1, cond)
+
+
+def _ingrain(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    """Ingrain (effect_script_0181.s:5-6): the user's ``MOVE_EFFECT_INGRAIN``. Its script fails a
+    user that has it already (:5, :19-20: MOVE_STATUS_FAILED, ``step._use_move``'s ``failed``)."""
+    cond = (h.effect == _E.INGRAIN) & h.landed & (state.ingrain[h.side] == 0)
+    return _set(state, "ingrain", h.side, 1, cond)
+
+
+def mean_look_fails(state: BattleState, target_side) -> jnp.ndarray:
+    """``bool``: subscript_mean_look.s:7-8 fails (MOVE_STATUS_FAILED, :48) on a defender already
+    trapped by Mean Look or behind a substitute (``CheckSubstitute``)."""
+    return (state.mean_look[target_side] != 0) | (state.substitute_hp[target_side] != 0)
+
+
+def _mean_look(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    """Mean Look, Block, Spider Web (effect_script_0106.s: a direct ``CHECK_HP | TO_DEFENDER``
+    subscript_mean_look.s, run for a defender with HP, battle_lib.c:1491-1504, on a move that
+    connected: accuracy 0, so only Protect stops it): the defender's
+    ``VOLATILE_CONDITION_MEAN_LOOK`` and its ``meanLookTarget``, the attacker (:9-10; the script
+    ORs the attacker's battler into the 2-bit field, which in singles always holds the one foe
+    battler, ruling B7-n) as ``1 + battler``. A failure (``mean_look_fails``) skips
+    AfterMoveEffects (``primary_effect_fails``)."""
+    cond = (
+        (h.effect == _E.MEAN_LOOK)
+        & h.landed
+        & _alive(state, h.target_side, h.target)
+        & ~mean_look_fails(state, h.target_side)
+    )
+    state = _set(state, "mean_look", h.target_side, 1, cond)
+    return _set(state, "mean_look_target", h.target_side, 1 + jnp.asarray(h.side, _I32), cond)
+
+
+def _imprison(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    """Imprison (effect_script_0192.s, ``BtlCmd_TryImprison`` battle_script.c:6674-6727): the
+    user's ``MOVE_EFFECT_IMPRISON``. The script fails (MOVE_STATUS_FAILED, :10) a user that has it
+    or that shares no move with a foe (``imprison_fails``, ``step._use_move``'s ``failed``); the
+    foes' ``MOVE_EFFECT_IMPRISONED`` is set before either test, whenever the script runs
+    (``step._use_move``)."""
+    cond = (h.effect == _E.IMPRISON) & h.landed & (state.imprison[h.side] == 0)
+    return _set(state, "imprison", h.side, 1, cond)
+
+
+def imprison_fails(state: BattleState, side) -> jnp.ndarray:
+    """``bool``: ``BtlCmd_TryImprison`` jumps to failure (battle_script.c:6692-6693, :6721-6722):
+    ``side``'s battler already has ``MOVE_EFFECT_IMPRISON``, or none of its moves is a move of a
+    battler of the other side (the loop over battlers, :6697-6716: their ``battleMons`` moves,
+    whatever their HP; doubles convention 4, battler b is on side b in singles)."""
+    own = state.moves[side, state.active[side]].astype(_I32)
+    shared = jnp.bool_(False)
+    for battler in range(state.active.shape[0]):
+        theirs = state.moves[battler, state.active[battler]].astype(_I32)
+        match = (own[:, None] == theirs[None, :]) & (own[:, None] != 0) & (theirs[None, :] != 0)
+        shared = shared | ((jnp.asarray(side) != battler) & jnp.any(match))
+    return (state.imprison[side] != 0) | ~shared
+
+
+def camouflaged(tables: Tables, state: BattleState, side) -> jnp.ndarray:
+    """``bool``: ``side``'s active battler has ``MOVE_EFFECT_CAMOUFLAGE`` (effect_script_0213.s:6).
+    ``BtlCmd_TryCamouflage`` fails a battler that has the terrain's type already, so a Camouflage
+    that ran left both types on a type the personal row lacks, and nothing else writes ``types``:
+    the bit is set exactly when the types differ from the personal row's."""
+    mon = state.active[side]
+    row = tables.species_form_row[state.species[side, mon], state.form[side, mon]]
+    return jnp.any(state.types[side, mon] != tables.species_types[row].astype(state.types.dtype))
+
+
+# The moveEffectsMask bits (moves.h:7-36) the engine keeps, by field, besides Ingrain.
+MOVE_EFFECT_MASK_FIELDS = (
+    "leech_seed",
+    "lock_on",
+    "perish_song",
+    "yawn",
+    "imprison",
+    "imprisoned",
+    "mud_sport",
+    "water_sport",
+    "aqua_ring",
+)
+
+
+def ingrain_anchors(tables: Tables, state: BattleState, side) -> jnp.ndarray:
+    """``bool``: subscript_force_target_to_switch_or_flee.s:7 finds the defender's
+    ``moveEffectsMask`` equal (``OPCODE_EQU``) to ``MOVE_EFFECT_INGRAIN``: ``side``'s battler is
+    ingrained and has no other bit of the mask: none of ``MOVE_EFFECT_MASK_FIELDS`` (the Leech
+    Seed bits sit on the seeded battler, subscript_leech_seed_start.s:13-14) and no Camouflage
+    (``camouflaged``). The other bits come from unsupported moves (Fly, Dig, Dive, Shadow Force,
+    Minimize, Charge, Grudge, Gastro Acid, Miracle Eye, Power Trick, Heal Block, Embargo, Magnet
+    Rise); each joins the tuple with its move."""
+    other = camouflaged(tables, state, side)
+    for name in MOVE_EFFECT_MASK_FIELDS:
+        other = other | (getattr(state, name)[side] != 0)
+    return (state.ingrain[side] != 0) & ~other
 
 
 def _mud_sport(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
@@ -1469,7 +1564,9 @@ def forget_item(state: BattleState, side, mon, cond) -> BattleState:
     (``reveal_item``)."""
     on = jnp.asarray(cond) & (jnp.asarray(side) == 0)
     known = state.ai_item_known
-    return state._replace(ai_item_known=known.at[mon].set(jnp.where(on, 0, known[mon]).astype(known.dtype)))
+    return state._replace(
+        ai_item_known=known.at[mon].set(jnp.where(on, 0, known[mon]).astype(known.dtype))
+    )
 
 
 def apply_move_effect(
@@ -1703,6 +1800,9 @@ def play_hit(
         _water_sport,
         _mud_sport,
         _aqua_ring,
+        _ingrain,
+        _mean_look,
+        _imprison,
         _screen,
         _brick_break,
         _foresight,

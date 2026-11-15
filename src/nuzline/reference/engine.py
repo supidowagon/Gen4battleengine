@@ -272,6 +272,7 @@ def _invoked_move(tables, s: RefState, side: int, move: int, call: int) -> int:
             and m != sd.disabled_move
             and not (sd.taunt > 0 and _t(tables, "move_power", m) == 0)
             and not (locked and m != lock)
+            and not _move_imprisoned(s, side, m)
         ]
         return allowed[call % len(allowed)] if allowed else 0
     if effect == EffectId.METRONOME:
@@ -318,10 +319,12 @@ def _levitated(tables, s: RefState, attacker: int, defender: int, move_type: int
     return move_type == Type.GROUND and _ignorable(s, attacker, defender) == AbilityId.LEVITATE
 
 
-def _identified(s: RefState, attacker: int, defender: int) -> bool:
-    """``ApplyTypeChart`` (lib.c:2611-2615) skips the Ghost immunities for Foresight or the
-    attacker's Scrappy."""
-    return bool(s.sides[defender].foresight) or _active(s, attacker).ability == AbilityId.SCRAPPY
+def _identified(s: RefState, attacker: int, defender: int) -> int:
+    """``ApplyTypeChart``'s walk flags (``_chart_rows``): 1 when it skips the Ghost immunities
+    (lib.c:2611-2615) for Foresight or the attacker's Scrappy, 2 when ``BasicTypeMulApplies``
+    skips an immune Flying row for an ingrained defender (lib.c:2534-2537)."""
+    seen = bool(s.sides[defender].foresight) or _active(s, attacker).ability == AbilityId.SCRAPPY
+    return int(seen) | (2 if s.sides[defender].ingrain else 0)
 
 
 def _truant_loafs(s: RefState, side: int) -> bool:
@@ -465,7 +468,11 @@ def _ignorable(s: RefState, attacker: int, defender: int) -> int:
     Mold Breaker hides it."""
     if _active(s, attacker).ability == AbilityId.MOLD_BREAKER:
         return AbilityId.NONE
-    return _active(s, defender).ability
+    ability = _active(s, defender).ability
+    # Battler_Ability (lib.c:3100-3103): an ingrained battler's Levitate is ABILITY_NONE.
+    if s.sides[defender].ingrain and ability == AbilityId.LEVITATE:
+        return AbilityId.NONE
+    return ability
 
 
 def _chart_rows(tables, move_type: int, identified: bool = False) -> list[tuple[int, int]]:
@@ -473,10 +480,14 @@ def _chart_rows(tables, move_type: int, identified: bool = False) -> list[tuple[
     table order, as (defending type, multiplier in tenths). ``identified`` (Foresight)
     drops the rows after the 0xFE separator (lib.c:2615)."""
     order = tables.type_chart_order[move_type]
+    flags = int(identified)
     listed = [
         (int(order[d]), d)
         for d in range(len(order))
-        if int(order[d]) >= 0 and not (identified and tables.type_chart_foresight[move_type, d])
+        if int(order[d]) >= 0
+        and not (flags & 1 and tables.type_chart_foresight[move_type, d])
+        # BasicTypeMulApplies (lib.c:2534-2537): an ingrained defender skips the immune Flying row.
+        and not (flags & 2 and d == Type.FLYING and _t(tables, "type_chart", move_type, d) == 0)
     ]
     return [(d, _t(tables, "type_chart", move_type, d)) for _, d in sorted(listed)]
 
@@ -944,7 +955,10 @@ def _cleanup_fainted(turn: _Turn, s: RefState, side: int) -> None:
 
 # What Baton Pass keeps (BattleSystem_UpdateAfterSwitch, lib.c:2078-2079, :2107; condition.h:72,
 # moves.h:46-48), with the stat stages (InitBattleMon, lib.c:97-101).
-BATON_PASSED = ("confusion", "leech_seed", "substitute_hp", "water_sport", "mud_sport", "aqua_ring")
+BATON_PASSED = (
+    "confusion", "leech_seed", "substitute_hp", "water_sport", "mud_sport", "aqua_ring",
+    "ingrain", "mean_look", "mean_look_target",
+)  # fmt: skip
 
 
 def _reset_battler(sd: RefSide, baton: bool = False) -> None:
@@ -981,6 +995,11 @@ def _reset_battler(sd: RefSide, baton: bool = False) -> None:
         "infatuated",
         "destiny_bond",
         "uproar",
+        "ingrain",
+        "mean_look",
+        "mean_look_target",
+        "imprison",
+        "imprisoned",
     ):
         if not (baton and name in BATON_PASSED):
             setattr(sd, name, 0)
@@ -1001,11 +1020,17 @@ def _release_bind(sd: RefSide) -> None:
     sd.trap_move = 0
 
 
-def _source_leaves(s: RefState, side: int) -> None:
+def _source_leaves(s: RefState, side: int, baton: bool = False) -> None:
     """``side``'s battler leaves (UpdateAfterSwitch lib.c:2088-2098, CleanupFaintedMon
-    :2168-2186): the Bind it put on the foe and the foe's ATTRACT bit sourced from it end."""
+    :2168-2186): the Bind it put on the foe and the foe's ATTRACT bit sourced from it end, and,
+    unless it left by Baton Pass (:2055), the Mean Look of every battler it trapped
+    (:2056-2061, :2170-2172)."""
     _release_bind(s.sides[1 - side])
     s.sides[1 - side].infatuated = 0
+    if not baton:
+        for sd in s.sides:
+            if sd.mean_look and sd.mean_look_target == 1 + side:
+                sd.mean_look = sd.mean_look_target = 0
 
 
 def _faint_check(turn: _Turn, s: RefState, decide: bool = True) -> None:
@@ -1725,7 +1750,7 @@ def _enter(turn: _Turn, s: RefState, side: int, slot: int, baton: bool = False) 
         s.ai_seen_moves[slot] = [0] * len(s.ai_seen_moves[slot])
         s.ai_ability_known[slot] = 0
         s.ai_item_known[slot] = 0
-    _source_leaves(s, side)
+    _source_leaves(s, side, baton)
 
 
 def _send_out_exp(s: RefState, side: int) -> None:
@@ -2086,6 +2111,17 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
     elif effect == EffectId.AQUA_RING and landed and not s.sides[side].aqua_ring:
         # effect_script_0251.s: fails when the user already has it.
         s.sides[side].aqua_ring = 1
+    elif effect == EffectId.INGRAIN and landed and not s.sides[side].ingrain:
+        s.sides[side].ingrain = 1  # effect_script_0181.s:6
+    elif effect == EffectId.IMPRISON and landed and not s.sides[side].imprison:
+        s.sides[side].imprison = 1  # BtlCmd_TryImprison (script.c:6724)
+    elif effect == EffectId.MEAN_LOOK and landed:
+        # subscript_mean_look.s (CHECK_HP | TO_DEFENDER): a living defender not trapped by it
+        # and without a substitute; meanLookTarget gets the attacker (:9-10).
+        foe_sd = s.sides[target]
+        if _active(s, target).hp and not foe_sd.mean_look and not foe_sd.substitute_hp:
+            foe_sd.mean_look = 1
+            foe_sd.mean_look_target = 1 + side
     elif effect in (EffectId.LIGHT_SCREEN, EffectId.REFLECT) and landed:
         # BtlCmd_TryLightScreen / TryReflect (script.c:4214, :4257): fail when already up,
         # else NUM_SCREEN_TURNS, plus the user's Light Clay param (script.c:4229, :4272).
@@ -2591,6 +2627,11 @@ def _status_disrupted(turn: _Turn, s: RefState, side: int, move: int) -> int:
         turn.move_failed[side] = True
         _unlock(sd)  # subscript_move_fail_taunted.s
         return DISRUPTED
+    # CHECK_STATUS_STATE_IMPRISON (bcp.c:2572-2583): a foe with Imprison knows moveCur.
+    if _move_imprisoned(s, side, move):
+        turn.move_failed[side] = True
+        _unlock(sd)  # subscript_move_is_imprisoned.s
+        return DISRUPTED
     # CHECK_STATUS_STATE_CONFUSION (bcp.c:2614): the counter drops; while it stays
     # above 0, RandNext() & 1 makes the battler hurt itself (CALC_SELF_HIT, a Normal
     # physical hit on itself with no side or field conditions, then the variance).
@@ -2854,6 +2895,16 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
     if effect == EffectId.FAKE_OUT and s.sides[side].fake_out_turn != s.turn:
         _unlock(s.sides[side])  # subscript_missed.s
         return record
+    # Imprison (effect_script_0192.s): BtlCmd_TryImprison sets the foes' MOVE_EFFECT_IMPRISONED
+    # first (script.c:6686-6690), whatever follows.
+    if effect == EffectId.IMPRISON:
+        s.sides[1 - side].imprisoned = 1
+    # The scripts that fail a user that has their effect already (MOVE_STATUS_FAILED, as Fake
+    # Out's): Ingrain (effect_script_0181.s:5), Aqua Ring (_0251.s:5), Mud Sport (_0201.s:5),
+    # Water Sport (_0210.s:5); Imprison also without a move shared with a foe (script.c:6692-6722).
+    if _script_fails(s, side, effect):
+        _unlock(s.sides[side])  # subscript_missed.s
+        return record
     # Snore (effect_script_0092.s:5): MOVE_STATUS_FAILED unless the user is asleep.
     if counter:
         # BtlCmd_Counter / MirrorCoat / TryMetalBurst (script.c:4615-4705, :7153-7184): the
@@ -2999,6 +3050,11 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
         # Roost at full HP (subscript_recover_hp.s), Tailwind up, full Spikes / Toxic Spikes.
         full = full or (effect == EffectId.ROOST and user.hp == user.max_hp)
         full = full or (effect == EffectId.TAILWIND and s.sides[side].tailwind != 0)
+        # subscript_mean_look.s:7-8, :48: a trapped or substituted defender (MOVE_STATUS_FAILED).
+        foe_sd = s.sides[1 - side]
+        full = full or (
+            effect == EffectId.MEAN_LOOK and bool(foe_sd.mean_look or foe_sd.substitute_hp)
+        )
         full = full or (effect == EffectId.SPIKES and s.sides[1 - side].spikes >= SPIKES_MAX)
         full = full or (
             effect == EffectId.TOXIC_SPIKES and s.sides[1 - side].toxic_spikes >= TOXIC_SPIKES_MAX
@@ -3050,9 +3106,10 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
 
 def _roar(turn: _Turn, s: RefState, side: int) -> bool:
     """``subscript_force_target_to_switch_or_flee.s`` for ``side``'s Roar on the foe; returns
-    whether it dragged a Pokemon in. Its semi-invulnerable, Suction Cups and Ingrain tests
-    (:5-7) and Soundproof (lib.c:3523-3530) cannot be met: no supported move or ability sets
-    them. ``BtlCmd_TryWhirlwind`` (script.c:5241-5320), trainer battle, singles: count the
+    whether it dragged a Pokemon in. Its semi-invulnerable and Suction Cups tests (:5-6) and
+    Soundproof (lib.c:3523-3530) cannot be met: no supported move or ability sets them. Ingrain
+    (:7) anchors a defender whose moveEffectsMask is exactly MOVE_EFFECT_INGRAIN
+    (``_ingrain_anchors``). ``BtlCmd_TryWhirlwind`` (script.c:5241-5320), trainer battle, singles: count the
     foe party's slots with a species, not an egg and HP left (:5285-5296); one or none ->
     fail with no draw (:5299-5300). ``BattleSystem_CanWhirlwind`` (lib.c:3072-3086): a user
     of at least the target's level passes, else ``(((RandNext() & 0xFF) * (La + Ld)) >> 8) + 1
@@ -3065,6 +3122,8 @@ def _roar(turn: _Turn, s: RefState, side: int) -> bool:
     o = turn.outcome
     foe = 1 - side
     sd = s.sides[foe]
+    if _ingrain_anchors(turn.tables, s, foe):
+        return False  # :86-90: "anchored itself with its roots!", MOVE_STATUS_NO_MORE_WORK
     eligible = [i for i, m in enumerate(sd.party) if m.species and m.hp and i != sd.active]
     if not eligible:
         return False
@@ -3293,6 +3352,7 @@ def _end_of_turn(turn: _Turn, s: RefState, order: list[int]) -> None:
     is followed by the faint check, and nothing runs once the battle is over."""
     for battler in order:
         for check in (
+            _ingrain_check,  # MON_COND_CHECK_STATE_INGRAIN, bcp.c:1311
             _aqua_ring_check,  # MON_COND_CHECK_STATE_AQUA_RING, bcp.c:1332
             _turn_end_ability,  # MON_COND_CHECK_STATE_ABILITY, bcp.c:1355
             _held_item_hp,  # MON_COND_CHECK_STATE_USE_ITEM, bcp.c:1362
@@ -3363,6 +3423,15 @@ def _future_sight(turn: _Turn, s: RefState, order: list[int]) -> None:
         _faint_check(turn, s, decide=False)
     _faint_check(turn, s)
     _pay_exp(turn, s)
+
+
+def _ingrain_check(turn: _Turn, s: RefState, side: int) -> None:
+    """``MON_COND_CHECK_STATE_INGRAIN`` (bcp.c:1311-1326): an ingrained battler below full HP and
+    alive heals ``Divide(maxHP, 16)`` (``subscript_ingrain_heal.s``, Big Root applied). Heal
+    Block is unsupported."""
+    mon = _active(s, side)
+    if s.sides[side].ingrain and mon.hp and mon.hp != mon.max_hp:
+        _gain_hp(s, side, _big_root(turn, s, side, _divide(mon.max_hp, 16)))
 
 
 def _aqua_ring_check(turn: _Turn, s: RefState, side: int) -> None:
@@ -3490,8 +3559,47 @@ def _usable(tables, s: RefState, side: int) -> list[bool]:
         and m != disabled
         and not (taunted and _t(tables, "move_power", m) == 0)
         and not (choice_locked and m != choice)
+        and not _move_imprisoned(s, side, m)  # CHECK_INVALID_IMPRISONED (lib.c:2287)
         for m, pp in zip(mon.moves, mon.pp)
     ]
+
+
+def _move_imprisoned(s: RefState, side: int, move: int) -> bool:
+    """``Move_Imprisoned`` (lib.c:3316-3338): a battler of the other side has
+    ``MOVE_EFFECT_IMPRISON`` and knows ``move``."""
+    return any(
+        b != side and s.sides[b].imprison and move and move in _active(s, b).moves for b in (0, 1)
+    )
+
+
+def _script_fails(s: RefState, side: int, effect: int) -> bool:
+    """A user-effect script's MOVE_STATUS_FAILED (``_use_move``)."""
+    sd = s.sides[side]
+    if effect == EffectId.IMPRISON:
+        own = [m for m in _active(s, side).moves if m]
+        shared = any(m in _active(s, b).moves for b in (0, 1) if b != side for m in own)
+        return bool(sd.imprison) or not shared
+    flags = {
+        EffectId.INGRAIN: sd.ingrain,
+        EffectId.AQUA_RING: sd.aqua_ring,
+        EffectId.MUD_SPORT: sd.mud_sport,
+        EffectId.WATER_SPORT: sd.water_sport,
+    }
+    return bool(flags.get(effect, 0))
+
+
+def _ingrain_anchors(tables, s: RefState, side: int) -> bool:
+    """subscript_force_target_to_switch_or_flee.s:7: the defender's ``moveEffectsMask`` is
+    exactly ``MOVE_EFFECT_INGRAIN`` (``OPCODE_EQU``): ingrained, no other kept bit, no Camouflage
+    (its types are the personal row's)."""
+    sd, mon = s.sides[side], _active(s, side)
+    others = (
+        sd.leech_seed, sd.lock_on, sd.perish_song, sd.yawn, sd.imprison, sd.imprisoned,
+        sd.mud_sport, sd.water_sport, sd.aqua_ring,
+    )  # fmt: skip
+    row = _t(tables, "species_form_row", mon.species, mon.form)
+    party = [_t(tables, "species_types", row, i) for i in range(len(mon.types))]
+    return bool(sd.ingrain) and not any(others) and list(mon.types) == party
 
 
 def _locked_slot(s: RefState, side: int) -> int:
@@ -3725,7 +3833,20 @@ def _end_turn(turn: _Turn, s: RefState) -> RefState:
             _held_item(turn, s, side)
     # The turn's speedRand (bcp.c:853-857), kept only while it can be read (_qc_kept).
     _keep_qc(tables, s, list(outcome.quick_claw))
+    # turnFlags.roosting until SetupNextTurn (lib.c:2229-2231), after the replacements.
+    _set_roosting(s, _roosting(s, turn) if waiting and not s.over else [0, 0])
     return s
+
+
+def _set_roosting(s: RefState, flags: list[int]) -> None:
+    for sd, flag in zip(s.sides, flags, strict=True):
+        sd.roosting = flag
+
+
+def _roosting(s: RefState, turn: _Turn) -> list[int]:
+    """The turn's ``turnFlags.roosting`` per battler; a fainted battler's are cleared
+    (CleanupFaintedMon, lib.c:2189-2192)."""
+    return [int(turn.roosting[k] and _active(s, k).hp > 0) for k in (0, 1)]
 
 
 def _write_scratch(turn: _Turn, s: RefState) -> None:
@@ -3745,7 +3866,7 @@ def _write_scratch(turn: _Turn, s: RefState) -> None:
     s.ts_custap = [int(f) for f in turn.custap]
     s.ts_pursued = turn.pursued
     s.ts_protect_ok = [int(f) for f in turn.protecting]
-    s.ts_roosted = [int(f) for f in turn.roosting]
+    _set_roosting(s, _roosting(s, turn))
     s.ts_taken = [list(row) for row in turn.taken]
     s.ts_dragged = list(turn.dragged)
     s.ts_move_failed = [int(f) for f in turn.move_failed]
@@ -3767,7 +3888,7 @@ def _write_scratch(turn: _Turn, s: RefState) -> None:
 _SCRATCH_ZERO = {
     "pivot_battler": 0, "ts_cursor": 0, "ts_acted": [0, 0], "ts_order": [0, 0], "ts_actions": [0, 0],
     "ts_move": [0, 0], "ts_struggling": [0, 0], "ts_locked": [0, 0], "ts_item": [0, 0],
-    "ts_custap": [0, 0], "ts_pursued": 0, "ts_protect_ok": [0, 0], "ts_roosted": [0, 0],
+    "ts_custap": [0, 0], "ts_pursued": 0, "ts_protect_ok": [0, 0],
     "ts_taken": [[0] * 6, [0] * 6], "ts_dragged": [0, 0], "ts_move_failed": [0, 0],
     "ts_used": 0, "ts_damaged": 0, "ts_dealt": 0, "ts_alive": [0, 0], "ts_power_mul": 0,
     "ts_switched": [0, 0], "ts_pick_mul": 0,
@@ -3792,7 +3913,7 @@ def _resume(tables, s: RefState, actions: tuple[int, int], outcome) -> RefState:
     turn.custap = [bool(f) for f in s.ts_custap]
     turn.pursued = s.ts_pursued
     turn.protecting = [bool(f) for f in s.ts_protect_ok]
-    turn.roosting = [bool(f) for f in s.ts_roosted]
+    turn.roosting = [bool(sd.roosting) for sd in s.sides]
     turn.taken = [list(row) for row in s.ts_taken]
     turn.dragged = list(s.ts_dragged)
     turn.move_failed = [bool(f) for f in s.ts_move_failed]
@@ -3915,4 +4036,11 @@ def ref_replace(tables, state: RefState, side: int, slot: int) -> RefState:
     if not s.over:
         _switch_in_effects(turn, s, side)
     _keep_qc(tables, s, _qc_rolls(s))  # the slot's speedRand stays while it can be read
+    # The turn's roosting flags end with the last replacement (SetupNextTurn, bcp.c:1856).
+    if s.over or not any(
+        sd.party[sd.active].hp == 0
+        and any(m.species and m.hp for i, m in enumerate(sd.party) if i != sd.active)
+        for sd in s.sides
+    ):
+        _set_roosting(s, [0, 0])
     return s

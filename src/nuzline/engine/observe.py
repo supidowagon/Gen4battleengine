@@ -26,8 +26,9 @@ Events, per side (``[side]``; 0 = player):
   id, Struggle's when struggling; the PP delta of critic.md B.2 names the same slot), a
   switch (``ACT_SWITCH``, the party slot), a bag item (``ACT_ITEM``, its item id), a
   move refused by Taunt (``ACT_TAUNTED``, the move: "can't use MOVE after the taunt",
-  step.py:352-353), or by Disable (``ACT_DISABLED``, the move: "MOVE is disabled!",
-  ``subscript_move_is_disabled.s``; no PP spent). A move that never ran (the battler fainted first, slept, froze,
+  step.py:352-353), by Disable (``ACT_DISABLED``, the move: "MOVE is disabled!",
+  ``subscript_move_is_disabled.s``; no PP spent), or by a foe's Imprison (``ACT_IMPRISONED``, the
+  move: "can't use the sealed MOVE!", ``subscript_move_is_imprisoned.s``; no PP spent). A move that never ran (the battler fainted first, slept, froze,
   flinched, was fully paralyzed or hurt itself) is not shown (``ACT_NONE``, id 0).
 * ``order``: the side that acted first when both showed a message at their turn
   (``action_order``, order.py:67-85), else -1; ``pursuit``: Pursuit hit the switching
@@ -121,6 +122,7 @@ from nuzline.engine.outcome import MAX_HITS, Outcome
 from nuzline.engine.state import MOVES, SIDES, SLOTS, BattleState
 from nuzline.engine.step import (
     ACT_DISABLED,
+    ACT_IMPRISONED,
     ACT_ITEM,
     ACT_MOVE,
     ACT_NONE,
@@ -133,6 +135,7 @@ from nuzline.engine.step import (
 
 __all__ = [
     "ACT_DISABLED",
+    "ACT_IMPRISONED",
     "ACT_ITEM",
     "ACT_MOVE",
     "ACT_NONE",
@@ -176,6 +179,14 @@ _NONZERO_SIDE = (
     "uproar",
     # "{0} foresaw an attack!" (subscript_future_sight_start.s) until the hit's message.
     "future_timer",
+    # E2 batch 7: "{0} planted its roots!" (effect_script_0181.s:8), "{0} can no longer escape!"
+    # (subscript_mean_look.s:12), "{0} sealed the opponent's move(s)!" (effect_script_0192.s:7),
+    # and a Roost that healed this turn ("regained health", subscript_recover_hp.s; the flag is
+    # kept only at a pause or a pending replacement).
+    "ingrain",
+    "mean_look",
+    "imprison",
+    "roosting",
 )
 _NONZERO_FIELD = ("trick_room", "gravity")
 
