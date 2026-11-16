@@ -738,7 +738,13 @@ def test_slot_reads_fit_every_transcribed_effect(kaizo_tables, kaizo_roark_party
     from nuzline.ai.read_bounds import READ_BOUND_BITS, READ_BOUNDS
 
     t = kaizo_tables
-    every = sum(1 << b for b in KAIZO_FLAG_BITS)
+    # Every transcribed flag, in two sets: all of them at once bound ACC_DOWN's fight at 17
+    # reads (Expert_StatusAccuracyDown's 7, E1 prep batch P1), past WIDTH_CAP (E1 Ruling R6),
+    # a set no Kaizo trainer has (the widest real fights, Jason 82 and Danny 725, bound at 14).
+    # BASIC..PRIORITIZE_EXTREMES (0x3F), then BASIC and EXPERT with BATON_PASS, CHECK_HP and
+    # WEATHER (0x345): at most 13 and 14 reads for every effect.
+    pieces = (0x3F, 0x345)
+    assert sum(1 << b for b in KAIZO_FLAG_BITS) == 0x3F | 0x345
     effect = np.asarray(t.move_ai_effect)
     first = {}
     for move in _move_pool(t, KAIZO_ALL):
@@ -754,41 +760,49 @@ def test_slot_reads_fit_every_transcribed_effect(kaizo_tables, kaizo_roark_party
     sample = sorted(first, key=lambda e: (-walked(e), e))[:8]
     sample = [*sample, *([7] if 7 not in sample else [])]  # HALVE_DEFENSE: Selfdestruct
     sample = [*sample, *([225] if 225 not in sample else [])]  # Tailwind: a FASTER tie
-    assert len(READ_BOUND_BITS) == 8
+    assert len(READ_BOUND_BITS) == len(KAIZO_FLAG_BITS)
     rng = np.random.default_rng(11)
     species = _two_ability_species(t)
-    for e in sample:
-        moves = [first[e], ACCELEROCK, HEADBUTT, 0]
-        states = []
-        for _ in range(4):
-            s = _kaizo_state(t, kaizo_roark_party, moves)
-            s = _with_player(t, s, int(rng.choice(species)), int(rng.integers(2)))
-            s = s._replace(ai_ability_known=s.ai_ability_known.at[0].set(int(rng.integers(4) == 0)))
-            if rng.integers(2):
+    for every in pieces:
+        for e in sample:
+            moves = [first[e], ACCELEROCK, HEADBUTT, 0]
+            states = []
+            for _ in range(4):
+                s = _kaizo_state(t, kaizo_roark_party, moves)
+                s = _with_player(t, s, int(rng.choice(species)), int(rng.integers(2)))
                 s = s._replace(
-                    types=s.types.at[0, 0].set(jnp.asarray(rng.integers(0, 17, 2), s.types.dtype))
+                    ai_ability_known=s.ai_ability_known.at[0].set(int(rng.integers(4) == 0))
                 )
-            hp = int(rng.integers(20, 400))
-            s = s._replace(
-                hp=s.hp.at[0, 0].set(int(rng.integers(1, hp + 1))), max_hp=s.max_hp.at[0, 0].set(hp)
+                if rng.integers(2):
+                    s = s._replace(
+                        types=s.types.at[0, 0].set(
+                            jnp.asarray(rng.integers(0, 17, 2), s.types.dtype)
+                        )
+                    )
+                hp = int(rng.integers(20, 400))
+                s = s._replace(
+                    hp=s.hp.at[0, 0].set(int(rng.integers(1, hp + 1))),
+                    max_hp=s.max_hp.at[0, 0].set(hp),
+                )
+                s = s._replace(hp=s.hp.at[1, 0].set(int(rng.integers(1, int(s.max_hp[1, 0]) + 1))))
+                stages = s.stages.at[0, Stat.DEF].set(int(rng.integers(-6, 7)))
+                stages = stages.at[0, Stat.EVA].set(int(rng.integers(0, 7)))
+                s = s._replace(stages=stages.at[1, Stat.DEF].set(int(rng.integers(-6, 7))))
+                if rng.integers(2):  # equal speed: the tie is drawn
+                    s = _equal_speed(s)
+                states.append(s._replace(turn=jnp.asarray(int(rng.integers(2)), s.turn.dtype)))
+            batch = jax.tree.map(lambda *xs: jnp.stack(xs), *states)
+            party = np.asarray(states[0].moves[1]).ravel()
+            layout = fight_layout(t, every, party)
+            reads, _, _ = policy._loose_reads(t, batch, layout)
+            _, lo = policy._loose_batch(
+                t, batch, jnp.asarray(policy._loose_patterns(reads)), layout
             )
-            s = s._replace(hp=s.hp.at[1, 0].set(int(rng.integers(1, int(s.max_hp[1, 0]) + 1))))
-            stages = s.stages.at[0, Stat.DEF].set(int(rng.integers(-6, 7)))
-            stages = stages.at[0, Stat.EVA].set(int(rng.integers(0, 7)))
-            s = s._replace(stages=stages.at[1, Stat.DEF].set(int(rng.integers(-6, 7))))
-            if rng.integers(2):  # equal speed: the tie is drawn
-                s = _equal_speed(s)
-            states.append(s._replace(turn=jnp.asarray(int(rng.integers(2)), s.turn.dtype)))
-        batch = jax.tree.map(lambda *xs: jnp.stack(xs), *states)
-        party = np.asarray(states[0].moves[1]).ravel()
-        layout = fight_layout(t, every, party)
-        reads, _, _ = policy._loose_reads(t, batch, layout)
-        _, lo = policy._loose_batch(t, batch, jnp.asarray(policy._loose_patterns(reads)), layout)
-        counted = np.asarray(lo.live) & (np.asarray(lo.kind) != ReadKind.SPEED_TIE)
-        longest = int(counted[:, :, 0].sum(axis=2).max())
-        bound = fight_slot_reads(move_read_rows(t, party), every)
-        assert longest <= bound, (e, longest, bound)
-        jax.clear_caches()
+            counted = np.asarray(lo.live) & (np.asarray(lo.kind) != ReadKind.SPEED_TIE)
+            longest = int(counted[:, :, 0].sum(axis=2).max())
+            bound = fight_slot_reads(move_read_rows(t, party), every)
+            assert longest <= bound, (e, longest, bound)
+            jax.clear_caches()
     # Roark's bound by hand: Selfdestruct, a guessed two-ability player, evasion +4 (decomp
     # stage 10, script.s:1857), Bonsly at 10 % HP.
     assert fight_slot_reads(move_read_rows(t, t.ai_moves), KAIZO.flags) == KAIZO.slot_reads == 7
