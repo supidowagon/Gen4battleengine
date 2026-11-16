@@ -463,3 +463,33 @@ names the decomp sites, what the engine does, and where. E2's rulings are in
 - Doubles-ready cleanup (review item 5): `damage.wonder_guarded` and `switching.wonder_guard_bit`
   take the defender from their callers (`step._use_move` passes `target_side`, `_pursuit_hit`
   the switcher, whose HP `before_hp` now reads too).
+
+## Roark close batch
+
+- G-35 Battle terrain is fight data from the ROM (`Trainer.terrain`, `tools/terrain.py`): the
+  player's tile under the battle's map header, `CalcTerrain` (field_battle_data_transfer.c:
+  467-505) from `SetBackgroundAndTerrain` (:496-505), narrowed per trainer to the tiles its
+  battle can start on (`narrowed_terrains`, E2 batch 4, d4e3d99: sight tiles,
+  trainer_encounter.c:165-343; talk tiles, unk_0203C954.c:62-97; a coord event's rectangle,
+  :208-225). The Roark split's terrain refusals came from Kaizo intermediates built before that
+  narrowing; re-extracted from the ROM (`tools.extract_rom --game kaizo`, `tools.build_tables
+  --game kaizo`; only `terrain` / `terrains` change, 136 / 185 rows), Barry #2 (247-249) is
+  TERRAIN_PLAIN (Route203_CoordEvent_Rival's 1x4 rectangle at x 196, z 757, no player movement
+  before StartTrainerBattle), Lass Kaitlin (323) TERRAIN_GRASS and Camper Zackary (377)
+  TERRAIN_MOUNTAIN. Secret Power (`BtlCmd_GetTerrainSecondaryEffect`, battle_script.c:8063-8075),
+  Nature Power and Camouflage were already built on a known terrain (K3b2 Tasks 9-10, E2 batch
+  4), so these fights no longer refuse. Tests: `tests/engine/test_e1_roark_close.py`.
+- G-36 Clowns Ronald (252) and Moe (254) stay mixed (TERRAIN_PLAIN, TERRAIN_GRASS,
+  TERRAIN_BUILDING); they read the terrain only through Metronome's calls. ROM: the join places
+  them on Jubilife City (header 3; whole-header terrain {BUILDING}) and Route 202 (header 343;
+  {PLAIN, GRASS}), because Kaizo's Route 202 script file (scr_seq member 428, used by that
+  header alone) carries their battle entries 14 and 15 (whole-file walk, maps.join_trainer_maps)
+  though no Route 202 event runs them. A battle with them under header 343 would need their
+  Jubilife objects, which `sub_0206184C` deletes on the zone change (map_object.c:171-198:
+  no matching local id in Route 202's list, not persistent). The narrowing cannot drop header
+  343 by its rules: its C-startable entry 4 (C_STARTED_SCRIPTS: the start menu's retire,
+  start_menu.c:1443-1460) starts a StartTagBattle whose partner operand is a variable
+  (scrcmd_trainer.c:146-161: the first operand is the partner), so it matches every trainer.
+  Calc repo: no location or terrain field. Sheet: both under "Jubilife City" (Roark Split:37).
+  Not guessed; resolving it needs the narrowing to read a battle command's partner operand as
+  the partner and to drop entries a header cannot run.
