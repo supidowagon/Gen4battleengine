@@ -747,6 +747,33 @@ def _basic_check_attacker_asleep(ctx: AiContext, mask) -> AiContext:
     return c.pop_or_end(_score(ctx, t, -8))
 
 
+def _basic_check_cannot_encore(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckCannotEncore`` (script.s:655-658): the player already encored
+    (``IfBattlerUnderEffect CHECK_ENCORE``: its encoredTurns), -8 (E2 batch 11, B11-4)."""
+    ctx = _at(ctx, mask)
+    ctx, t = _split(c.if_battler_under_effect(ctx, _D, c.CHECK_ENCORE))
+    return c.pop_or_end(_score(ctx, t, -8))
+
+
+def _expert_encore(ctx: AiContext, mask) -> AiContext:
+    """``Expert_Encore`` (script.s:3177-3200; E2 batch 11, B11-4): the player disabled (its
+    disabledTurns, :3185) goes to the +3 roll; else slower than the player (:3186) -2; else the
+    effect of the player's last move (movePrevByBattler, :3187-3188) not in
+    ``commands.ENCORE_ENCOURAGED_EFFECTS`` (:3189) -2; else the +3 roll: +3 unless the 30 roll
+    (:3192) jumps to the end."""
+    ctx = _at(ctx, mask)
+    ctx, roll = _split(c.if_battler_under_effect(ctx, _D, c.CHECK_DISABLE))
+    ctx, slower = _split(c.if_speed_compare_equal_to(ctx, COMPARE_SPEED_SLOWER))
+    ctx = c.load_effect_of_loaded_move(c.load_battler_previous_move(ctx, _D))
+    ctx, other = _split(c.if_loaded_not_in_table(ctx, c.ENCORE_ENCOURAGED_EFFECTS))
+    # Expert_Encore_TryScorePlus3 (:3191): the fall-through and the disabled jump.
+    ctx, end = _split(c.if_random_less_than(_at(ctx, roll | ctx.live), 30, 3192))
+    ctx, went = _split(c.go_to(c.add_to_move_score(ctx, 3)))  # GoTo Expert_Encore_End (:3194)
+    # Expert_Encore_ScoreMinus2 (:3196-3197), falling into Expert_Encore_End (:3199).
+    ctx = c.add_to_move_score(_at(ctx, slower | other), -2)
+    return c.pop_or_end(_at(ctx, end | went | ctx.live))
+
+
 def _basic_check_first_turn(ctx: AiContext, mask) -> AiContext:
     """``Basic_CheckFirstTurnInBattle`` (script.s:829-833): not the attacker's first turn in
     battle, -10."""
@@ -2235,6 +2262,7 @@ _BASIC_LABELS = (
     (BattleEffect.LEVEL_DAMAGE_FLAT, _basic_check_non_standard_damage),  # :185
     (BattleEffect.RANDOM_DAMAGE_1_TO_150_LEVEL, _basic_check_non_standard_damage),  # :186
     (BattleEffect.COUNTER, _basic_check_non_standard_damage),  # :187
+    (BattleEffect.ENCORE, _basic_check_cannot_encore),  # :188
     (BattleEffect.DAMAGE_WHILE_ASLEEP, _basic_check_attacker_asleep),  # :189
     (BattleEffect.USE_RANDOM_LEARNED_MOVE_SLEEP, _basic_check_attacker_asleep),  # :191
     (BattleEffect.INCREASE_POWER_WITH_LESS_HP, _basic_check_non_standard_damage),  # :192
@@ -2310,6 +2338,7 @@ _EXPERT_LABELS = (
     (BattleEffect.SET_SUBSTITUTE, _expert_substitute),  # :1684
     (BattleEffect.STATUS_LEECH_SEED, _expert_toxic_leech_seed),  # :1686
     (BattleEffect.COUNTER, _expert_counter),  # :1688
+    (BattleEffect.ENCORE, _expert_encore),  # :1689
     (BattleEffect.AVERAGE_HP, _expert_pain_split),  # :1690
     (BattleEffect.DAMAGE_WHILE_ASLEEP, _expert_nightmare),  # :1691
     (BattleEffect.USE_RANDOM_LEARNED_MOVE_SLEEP, _expert_sleep_talk),  # :1693

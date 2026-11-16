@@ -116,51 +116,61 @@ def test_reachable_learn_moves_reads_the_form_row_levels(tables, names):
     assert names.move("Double Team") in reachable_learn_moves(tables, young, roark_party(names))
 
 
-def _gap(names):
-    """Starly's moves with its last slot empty: a level-up move goes there unasked."""
-    return (names.move("Tackle"), names.move("Growl"), names.move("Quick Attack"), 0)
+BUDEW_SLOT = 5  # tests/fixtures/sample_party.toml
 
 
-@pytest.fixture
-def endeavor_unsupported(monkeypatch):
-    """These tests need an unsupported move Starly learns at L17: Endeavor was one until E2
-    batch 10 (B10-5) modelled it, so the registry entry is turned off for them."""
-    monkeypatch.setitem(IMPLEMENTED_EFFECTS, EffectId.ENDEAVOR, Support.NONE)
+def _budew(tables, names, below=0, moves=None):
+    """The sample party with its Budew at level 15, ``GEODUDE_BOUND + below`` exp short of
+    level 16, where its vanilla learnset has Worry Seed, a move effect the engine does not
+    model (``EffectId.UNSUPPORTED``); ``moves`` replaces its moveset."""
+    party = list(sample_party(names))
+    budew = party[BUDEW_SLOT]
+    rate = int(np.asarray(tables.species_exp_rate)[budew.species])
+    l16 = int(np.asarray(tables.exp_table)[rate, 16])
+    changes = {"level": 15, "exp": l16 - GEODUDE_BOUND - below}
+    if moves is not None:
+        changes["moves"] = moves
+    party[BUDEW_SLOT] = replace(budew, **changes)
+    return party
 
 
-def test_a_learnable_unsupported_move_is_refused(tables, names, endeavor_unsupported):
-    """Endeavor (UNSUPPORTED here) is reached only through the level-up in battle, and with an
+def _budew_gap(names):
+    """Budew's moves with its last slot empty: a level-up move goes there unasked."""
+    return (names.move("Absorb"), names.move("Growth"), names.move("Stun Spore"), 0)
+
+
+def test_worry_seed_is_unsupported(tables, names):
+    """The refusal tests below rest on Worry Seed's effect being one the engine does not model."""
+    effect = EffectId(int(np.asarray(tables.move_effect)[names.move("Worry Seed")]))
+    assert IMPLEMENTED_EFFECTS.get(effect, Support.NONE) == Support.NONE
+
+
+def test_a_learnable_unsupported_move_is_refused(tables, names):
+    """Worry Seed (unsupported) is reached only through the level-up in battle, and with an
     empty slot it is learned without a prompt (pokemon.c:3852-3873, ruling D10)."""
     geodude = _geodude(names)
-    assert names.move("Endeavor") not in sample_party(names)[STARLY_SLOT].moves
-    line = "Player STARLY (slot 3): Endeavor (level-up in battle move effect UNSUPPORTED)"
-    gap = _gap(names)
-    near = _starly(names, exp=L17 - GEODUDE_BOUND, moves=gap)
+    worry = names.move("Worry Seed")
+    assert worry not in sample_party(names)[BUDEW_SLOT].moves
+    line = "Player BUDEW (slot 5): Worry Seed (level-up in battle move effect UNSUPPORTED)"
+    near = _budew(tables, names, moves=_budew_gap(names))
     assert line in _missing(tables, names, near, geodude)
-    assert forced_learn_moves(tables, near[STARLY_SLOT], geodude) == [names.move("Endeavor")]
-    far = _starly(names, exp=L17 - GEODUDE_BOUND - 1, moves=gap)
+    assert forced_learn_moves(tables, near[BUDEW_SLOT], geodude) == [worry]
+    far = _budew(tables, names, below=1, moves=_budew_gap(names))
     assert _missing(tables, names, far, geodude) == []
 
 
-def test_a_prompt_only_unsupported_learnable_is_masked_not_refused(
-    tables, names, endeavor_unsupported
-):
+def test_a_prompt_only_unsupported_learnable_is_masked_not_refused(tables, names):
     """Ruling D10 (the user's Kaizo Roark fight: Luvdisc, Lucky Chant at L17, four moves):
-    with every slot full Endeavor is only a prompt (battle_script.c:10016-10018), which the
-    learn options mask (``levelup.learn_options``) and the player can give up, so the fight
-    stays covered. Endeavor's effect is set UNSUPPORTED in these tables (B10-5 modelled it; the
-    learn options mask by the table's effect, ``coverage.learn_masked``)."""
-    endeavor = names.move("Endeavor")
-    tables = tables._replace(
-        move_effect=jnp.asarray(tables.move_effect).at[endeavor].set(int(EffectId.UNSUPPORTED))
-    )
+    with every slot full Worry Seed is only a prompt (battle_script.c:10016-10018), which the
+    learn options mask (``levelup.learn_options``, by the table's effect:
+    ``coverage.learn_masked``) and the player can give up, so the fight stays covered."""
     geodude = _geodude(names)
-    full = _starly(names, exp=L17 - GEODUDE_BOUND)
-    starly = full[STARLY_SLOT]
-    assert all(starly.moves)
-    assert reachable_learn_moves(tables, starly, geodude) == [endeavor]
-    assert forced_learn_moves(tables, starly, geodude) == []
-    assert learnable_moves(tables, starly, geodude) == []
+    full = _budew(tables, names)
+    budew = full[BUDEW_SLOT]
+    assert all(budew.moves)
+    assert reachable_learn_moves(tables, budew, geodude) == [names.move("Worry Seed")]
+    assert forced_learn_moves(tables, budew, geodude) == []
+    assert learnable_moves(tables, budew, geodude) == []
     assert _missing(tables, names, full, geodude) == []
 
 
@@ -213,21 +223,33 @@ def test_the_effect_ids_are_the_decomp_moves(tables, names):
 
 
 @pytest.mark.parametrize("game", ["tables", "kaizo_tables"])
-def test_the_exp_sensitive_moves_are_unsupported(request, game):
-    """Every move of §4.2, §4.4 and §4.5 is an UNSUPPORTED effect in both games but Knock Off
-    (188, E2 batch 10, B10-6), so a Pokemon that knows one is refused on that line already; the
-    exp lines are the guard for an implemented one (Knock Off's: exp_refusals' §4.2 line, its own
-    test below)."""
+def test_every_exp_sensitive_move_meets_its_exp_line(request, game, names):
+    """Every move of §4.2, §4.4 and §4.5, in both games and whatever its engine support, meets
+    its family's ``exp_refusals`` line: an item-moving move with an exp-item holder (§4.2), a
+    friendship-power move with a nonzero egg location that can level (§4.4), a reload move the
+    Pokemon could use while it can level (§4.5). So implementing one of these moves keeps its
+    payout exact by refusal, not by its being unsupported."""
+    from nuzline.engine.coverage import exp_refusals
+
     tables = request.getfixturevalue(game)
-    effect, ai_effect = np.asarray(tables.move_effect), np.asarray(tables.move_ai_effect)
-    eids = (
-        *(e for e in ITEM_MOVING_EFFECTS if e != 188),
-        *FRIENDSHIP_POWER_EFFECTS,
-        *RELOAD_STATE_EFFECTS,
+    ai_effect = np.asarray(tables.move_ai_effect)
+    base = sample_party(names)[STARLY_SLOT]
+    holder = replace(base, item=names.item("Lucky Egg"))
+    egg = replace(base, egg_location=7)
+    families = (
+        (ITEM_MOVING_EFFECTS, holder, False, "can move held items in battle"),
+        (FRIENDSHIP_POWER_EFFECTS, egg, True, "friendship per level-up"),
+        (RELOAD_STATE_EFFECTS, base, True, "a level-up reloads the battler"),
     )
-    for move in np.flatnonzero(np.isin(ai_effect, eids)):
-        engine = EffectId(int(effect[move]))
-        assert IMPLEMENTED_EFFECTS.get(engine, Support.NONE) == Support.NONE, int(move)
+    met = 0
+    for eids, spec, levels, phrase in families:
+        # Kaizo gives no move a friendship-power effect: that family is empty there.
+        moves = np.flatnonzero(np.isin(ai_effect, eids))
+        met += len(moves)
+        for move in moves.tolist():
+            lines = exp_refusals(tables, names, spec, [move], [move], levels)
+            assert any(phrase in line for line in lines), (int(move), lines)
+    assert met
 
 
 def test_an_unresolved_exp_boost_is_refused_below_level_100(tables, names):
@@ -323,12 +345,12 @@ def test_out_of_scope_formats_are_refused(tables, names):
         assert any("(battle format UNSUPPORTED)" in line for line in missing), fmt
 
 
-def test_kaizo_names_keep_the_learnable_scan(tables, vanilla_manifest, names, endeavor_unsupported):
+def test_kaizo_names_keep_the_learnable_scan(tables, vanilla_manifest, names):
     """The scan runs on the tables, whatever the game's names (no game gate)."""
     kaizo = Names({**vanilla_manifest, "game": KAIZO, "unclassified_rom_changes": 0})
-    near = _starly(names, exp=L17 - GEODUDE_BOUND, moves=_gap(names))
+    near = _budew(tables, names, moves=_budew_gap(names))
     missing = _missing(tables, kaizo, near, _geodude(names))
-    assert any("Endeavor (level-up in battle move effect UNSUPPORTED)" in m for m in missing)
+    assert any("Worry Seed (level-up in battle move effect UNSUPPORTED)" in m for m in missing)
 
 
 def test_make_state_takes_the_new_spec_fields(tables, names):

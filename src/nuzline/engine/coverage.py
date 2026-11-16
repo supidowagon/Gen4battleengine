@@ -196,12 +196,6 @@ class Support(IntEnum):
 IMPLEMENTED_EFFECTS: dict[EffectId, Support] = {
     e: Support.EXACT for e in EffectId if e != EffectId.UNSUPPORTED
 }
-# Encore (B10-9): the engines are exact, but its same-turn takeover (FightCommand, bcp.c:1866-1873)
-# is not yet in the outcome laws nor the sampler, so it is refused for both sides (and Metronome,
-# which can call it) until the takeover task (E2 batch 11, ledger "a chosen move replaced
-# mid-turn") lands.
-IMPLEMENTED_EFFECTS[EffectId.ENCORE] = Support.NONE
-ENCORE_REFUSAL = "Encore: its same-turn takeover is not in the laws yet (E2 batch 11)"
 IMPLEMENTED_ABILITIES: dict[AbilityId, Support] = {
     a: Support.EXACT for a in AbilityId if a != AbilityId.UNSUPPORTED
 }
@@ -405,8 +399,6 @@ def move_effect_line(
     name = names.move_names[move]
     effect = EffectId(int(np.asarray(tables.move_effect)[move]))
     support = IMPLEMENTED_EFFECTS.get(effect, Support.NONE)
-    if effect == EffectId.ENCORE:
-        name = f"{name} ({ENCORE_REFUSAL})"
     if effect == EffectId.METRONOME and support != Support.NONE:
         flags = np.asarray(tables.move_flags)
         calls = [

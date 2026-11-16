@@ -3533,3 +3533,73 @@ def test_charge_turn_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_p
         layout = layout_for(t, flags, s2)
         assert policy.ai_refusals(t, s2, n, layout) == []
         _assert_exact_equals_loose(t, s2, layout)
+
+
+# --- E2 batch 11 (B11-4): Encore -------------------------------------------------------------
+
+
+def test_encore_encouraged_effects_are_the_decomps():
+    """``commands.ENCORE_ENCOURAGED_EFFECTS`` is Expert_Encore_EncouragedMoveEffects
+    (script.s:3202-3285) entry by entry, through generated/move_battle_effects.txt."""
+    script, ids = (
+        DECOMP / "src/battle/trainer_ai/script.s",
+        DECOMP / "generated/move_battle_effects.txt",
+    )
+    if not script.exists() or not ids.exists():
+        pytest.skip("decomp not present")
+    names = ids.read_text(encoding="utf-8").split()
+    lines = script.read_text(encoding="utf-8").splitlines()
+    assert lines[3201] == "Expert_Encore_EncouragedMoveEffects:"
+    entries = []
+    for line in lines[3202:]:
+        name = line.split()[1]
+        if name == "TABLE_END":
+            break
+        entries.append(names.index(name))
+    assert tuple(entries) == c.ENCORE_ENCOURAGED_EFFECTS
+
+
+@pytest.mark.parametrize(("turns", "basic"), [(0, 0), (3, -8)])
+def test_basic_cannot_encore(kaizo_tables, kaizo_names, kaizo_roark_party, turns, basic):
+    """Basic_CheckCannotEncore (script.s:655-658): IfBattlerUnderEffect CHECK_ENCORE reads the
+    player's encoredTurns (trainer_ai.c:1839-1843), -8."""
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Encore", "Accelerock", "", ""))
+    s = s._replace(encore_turns=s.encore_turns.at[0].set(turns))
+    assert _delta(t, s, 0x2, 0x3)[0] == basic
+
+
+@pytest.mark.parametrize(
+    ("case", "jumps", "expected"),
+    [
+        # Expert_Encore (script.s:3177-3200)
+        ("disabled", (), 3),  # :3185 -> TryScorePlus3: +3 unless :3192 jumps
+        ("disabled", (3192,), 0),
+        ("slower", (), -2),  # :3186
+        ("plain hit", (), -2),  # the player's last move a HIT: not in the table (:3189)
+        ("swords dance", (), 3),  # ATK_UP_2 is in the table
+        ("swords dance", (3192,), 0),
+    ],
+)
+def test_expert_encore(kaizo_tables, kaizo_names, kaizo_roark_party, case, jumps, expected):
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Encore", "Accelerock", "", ""))
+    s = _speeds(s, player=500, opp=1) if case == "slower" else _speeds(s, player=1, opp=500)
+    last = "Swords Dance" if case == "swords dance" else "Tackle"
+    s = s._replace(last_move=s.last_move.at[0].set(n.move_names.index(last)))
+    if case == "disabled":
+        # Disabled goes to the roll before the speed test: slower here.
+        s = _speeds(s, player=500, opp=1)._replace(disable_turns=s.disable_turns.at[0].set(2))
+    assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expected
+
+
+@pytest.mark.parametrize("flags", SWEEP_FLAGS)
+def test_batch11_encore_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, flags):
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Encore", "Accelerock", "", ""))
+    for disabled, faster in ((0, True), (2, False), (0, False)):
+        s2 = s._replace(disable_turns=s.disable_turns.at[0].set(disabled))
+        s2 = _speeds(s2, player=1, opp=500) if faster else _speeds(s2, player=500, opp=1)
+        layout = layout_for(t, flags, s2)
+        assert policy.ai_refusals(t, s2, n, layout) == []
+        _assert_exact_equals_loose(t, s2, layout)
