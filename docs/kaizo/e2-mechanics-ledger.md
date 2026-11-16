@@ -22,6 +22,16 @@ Closed batches, designs and retired RESUME bullets: e2-mechanics-ledger-archive.
   Psych Up / Captivate before TryMove). Checks under 4 GB passed (test_batch12 27, kaizo_policy
   batch12 46 + healing 26, exact==loose all but one, guards 69, diff seed 33 ok 300). OWED:
   kaizo_policy test_batch12_stat_family_exact_equals_loose[23] (>4 GB), test_cli, the review.
+- **Batch 12 review (approve-with-changes) fixed** (1bf6c6c + next): crit decided at hit time
+  (B12-19), Acupressure acts on the resolved defender (B12-20); Psych Up / Captivate into a
+  fainted target needs no change (B12-21). Checks: test_batch12 28, outcome, damage_classes 46,
+  damage 28, k3b_items 22, guards 69, decomp-law marginals, diff seed 34 ok. OWED (>4 GB on a cold
+  compile cache, HEAD too): test_fangs, test_protect, test_present, test_self_destruct,
+  test_observe, test_small_moves, test_power_moves, parts of test_enumerate (~70 tests).
+  Owed code: Trick / Thief / Skill Swap / Worry Seed join outcome.CRIT_ODDS_EFFECTS when they
+  land; the effect-based check ignores a Metronome-called Haze / Knock Off.
+- **Mist joins batch 12** (manager 2026-11-16: E1's bag-item model needs it): the move + the
+  stat-drop block with its decomp readers. Focus Energy (E1 also needs it) is B12-4.
 - **Main = 2c2caea** (batch 10 merged as e022644: 042b1ab + main 8c22d37 + merge fixes c1728c9
   / 36bdc8f / c1f54cb / b5e4665 Yawn + the 6 stale tests its fast tier found 4cef8f2 / 4d165d8 /
   e022644). Main merged into this branch at 453e283. Never push.
@@ -1557,3 +1567,16 @@ Rules left out because another mechanic is missing; each closes with the mechani
 - B12-18 Healing AI: Expert_Rest / HealBell / Synthesis / Refresh / PsychoShift at script.s
   :1655/:1696/:1707/:1745/:1777; Wish (179) has no Basic or Expert entry. New commands:
   IfLoadedLessThan (trainer_ai.c:762), DiffStatStages (:2259), IfPartyMemberStatus (:1348).
+- B12-19 Crit odds are read at the hit: BattleSystem_CalcCriticalMulti reads item, species,
+  statusVolatile and ability then (battle_lib.c:7105-7123) and rolls RandNext() %
+  sCriticalStageRates[stage] (:7132); Haze clears Focus Energy mid-turn (battle_script.c:3544).
+  Outcome.crit holds v, crit iff (v-1) % odds_at_hit == 0; one draw in [0, 48) when the odds can
+  move in the turn (outcome.CRIT_ODDS_EFFECTS), else the old draw.
+- B12-20 Acupressure (RANGE_USER_OR_ALLY) acts on the resolved defender: the chosen target in
+  doubles, the attacker in singles (battle_lib.c:1676-1684); effects.defender_side.
+- B12-21 A single-target move whose target fainted earlier in the turn never loads its effect
+  script: the defender resolves to BATTLER_NONE (battle_lib.c:1612-1631, :1713-1727, :4194) and
+  BEFORE_MOVE_STATE_CHECK_TARGET_EXISTS (bcp.c:3189-3191) returns before the load at :3211.
+- B12-22 Psycho Shift onto a Synchronize target: the user is cured at
+  subscript_give_target_own_status.s:28-30, then Synchronize (AfterMoveEffects, bcp.c:3665-3669;
+  battle_lib.c:4498-4522) passes the poison / burn / paralysis back. Owed with Synchronize (E1).
