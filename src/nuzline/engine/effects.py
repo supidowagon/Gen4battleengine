@@ -998,15 +998,21 @@ def _haze(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     return state._replace(stages=stages, focus_energy=focus)
 
 
+def copy_stat_stages(state: BattleState, side, target_side, cond) -> BattleState:
+    """BtlCmd_CopyStatStages (battle_script.c:6042-6053) where ``cond``: every stage of
+    ``target_side``'s battler onto ``side``'s, and its Focus Energy ORed into ``side``'s (:6050);
+    no failure check, B12-6."""
+    copied = jnp.where(cond, state.stages[target_side], state.stages[side])
+    state = state._replace(stages=state.stages.at[side].set(copied))
+    focus = state.focus_energy[side] | state.focus_energy[target_side]
+    return _set(state, "focus_energy", side, focus, cond)
+
+
 def _psych_up(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
-    """Psych Up (effect_script_0143.s): BtlCmd_CopyStatStages (battle_script.c:6042-6053) copies
-    every stage of the defender onto the attacker and ORs the defender's Focus Energy into the
-    attacker's; no failure check, B12-6."""
-    cond = (h.effect == _E.PSYCH_UP) & h.landed
-    copied = jnp.where(cond, state.stages[h.target_side], state.stages[h.side])
-    state = state._replace(stages=state.stages.at[h.side].set(copied))
-    focus = state.focus_energy[h.side] | state.focus_energy[h.target_side]
-    return _set(state, "focus_energy", h.side, focus, cond)
+    """Psych Up (effect_script_0143.s:5): ``copy_stat_stages``. The command runs in the effect
+    script, before TryMove (bcp.c:3211-3213), so a semi-invulnerable miss copies too
+    (``step._use_move``); this is the path of a move that connected, B12-6."""
+    return copy_stat_stages(state, h.side, h.target_side, (h.effect == _E.PSYCH_UP) & h.landed)
 
 
 def _stage_swap(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
@@ -1041,7 +1047,8 @@ def captivate_fails(tables, state: BattleState, side, target_side) -> tuple:
 def _captivate(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     """Captivate (effect_script_0265.s): unless ``captivate_fails``, a direct TO_DEFENDER
     ``move_param[m, 0]`` change of ``move_param[m, 1]`` (Sp. Atk -2, :10) through
-    ``_foe_stage``; a blocking Oblivious is tagged, B12-8."""
+    ``_foe_stage``; a blocking Oblivious is tagged (on a move that did not connect too: the
+    effect script runs before TryMove, bcp.c:3211-3213, ``step._use_move``), B12-8."""
     run = (h.effect == _E.CAPTIVATE) & h.landed & _alive(state, h.target_side, h.target)
     fails, by_ability = captivate_fails(tables, state, h.side, h.target_side)
     state = know_ability(state, h.target_side, h.target, run & by_ability)

@@ -648,9 +648,11 @@ def _player_second(
 
 
 def _battle_stat(s: RefState, side: int, stat: int) -> int:
-    """The active battler's BattleMon Attack / Defense: its party stat, the other one under
-    MOVE_EFFECT_POWER_TRICK (subscript_user_swap_atk_and_def.s:6-9; lib.c:2137-2141), B12-10."""
-    if s.sides[side].power_trick and stat in (Stat.ATK, Stat.DEF):
+    """The active battler's BattleMon Attack / Defense: its party stat, the other one while its
+    swap is on: MOVE_EFFECT_POWER_TRICK (subscript_user_swap_atk_and_def.s:6-9; lib.c:2137-2141)
+    unless a level-up's reload undid it (lib.c:169-174), B12-10."""
+    sd = s.sides[side]
+    if bool(sd.power_trick) != bool(sd.power_trick_desync) and stat in (Stat.ATK, Stat.DEF):
         stat = Stat.DEF if stat == Stat.ATK else Stat.ATK
     return _active(s, side).stats[stat - 1]
 
@@ -1117,6 +1119,7 @@ def _reset_battler(sd: RefSide, baton: bool = False) -> None:
         "semi_invulnerable",  # MOVE_EFFECT_SEMI_INVULNERABLE (B10-12)
         "focus_energy",  # VOLATILE_CONDITION_FOCUS_ENERGY (B12-4)
         "power_trick",  # MOVE_EFFECT_POWER_TRICK (B12-10)
+        "power_trick_desync",  # a Baton Pass newcomer is swapped by the bit (lib.c:2137-2141)
     ):
         if not (baton and name in BATON_PASSED):
             setattr(sd, name, 0)
@@ -1306,6 +1309,10 @@ def _grant_exp(tables, s: RefState, fainted: int, pending: bool, selected: int) 
                 # are one object).
                 _level_up_friendship(tables, mon, s.friend_bonus[slot])
                 _calc_stats(tables, mon)
+                if slot == s.sides[0].active:
+                    # ReloadPokemon's Attack / Defense come unswapped; the Power Trick bit stays
+                    # (lib.c:169-174), B12-10.
+                    s.sides[0].power_trick_desync = s.sides[0].power_trick
                 # The level's learnset scan (:9879-9883) is deferred to the learn resolve:
                 # the first pending level is marked (design §3.2).
                 if s.learn_level[slot] == 0:
@@ -3579,6 +3586,19 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
             and 1 - side == 0
             and _active(s, 0).hp
             and _yawn_blocks(tables, s, side, 0)[1]
+        ):
+            s.ai_ability_known[s.sides[0].active] = 1
+        # The effect script ran before TryMove (bcp.c:3211-3213): Psych Up's CopyStatStages
+        # (effect_script_0143.s:5) on a semi-invulnerable miss, B12-6; Captivate's
+        # CheckIgnorableAbility (effect_script_0265.s:5) tags a blocking Oblivious, B12-8.
+        if effect == EffectId.PSYCH_UP and semi_miss:
+            s.sides[side].stages = list(s.sides[1 - side].stages)
+            s.sides[side].focus_energy |= s.sides[1 - side].focus_energy
+        if (
+            effect == EffectId.CAPTIVATE
+            and 1 - side == 0
+            and _active(s, 0).hp
+            and _captivate_fails(tables, s, side, 0)[1]
         ):
             s.ai_ability_known[s.sides[0].active] = 1
         _unlock(s.sides[side])  # subscript_missed.s

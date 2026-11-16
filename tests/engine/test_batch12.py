@@ -176,6 +176,21 @@ def test_power_swap_and_guard_swap_exchange_their_stages(tables, names):
     assert (_st(out, 1, "DEF"), _st(out, 1, "SPD")) == (-2, 1)
 
 
+def test_psych_up_copies_on_a_semi_invulnerable_miss(tables, names):
+    """CopyStatStages runs in the effect script (effect_script_0143.s:5), before TryMove's
+    CheckMoveHitOverrides (bcp.c:3211-3213, :3264): Psych Up into a foe mid-Fly misses
+    (MOVE_STATUS_SEMI_INVULNERABLE, :3034-3040) and still copies."""
+    from nuzline.engine.ids import SemiKind
+
+    s = _state(tables, names, ("Pikachu", "Psych Up"), ("Pidgey", "Fly"))
+    up = _stages(s, 1, ATK=2, EVA=-1)._replace(
+        semi_invulnerable=s.semi_invulnerable.at[1].set(SemiKind.AIRBORNE),
+        locked_move=s.locked_move.at[1].set(names.move("Fly")),
+    )
+    out = assert_matches_reference(tables, up, (0, 0), O)
+    assert (_st(out, 0, "ATK"), _st(out, 0, "EVA")) == (2, -1)
+
+
 # --- B12-8: Captivate -----------------------------------------------------------------------
 
 
@@ -191,6 +206,21 @@ def test_captivate_needs_the_opposite_gender(tables, names):
     for mine, theirs in ((0, 0), (1, 1), (2, 1), (0, 2)):
         out = assert_matches_reference(tables, _gendered(s, mine, theirs), (0, 0), O)
         assert _st(out, 1, "SPA") == 0, (mine, theirs)
+
+
+def test_captivate_tags_oblivious_before_the_accuracy_roll(tables, names):
+    """effect_script_0265.s:5, :48-53: CheckIgnorableAbility runs in the effect script, before
+    TryMove (bcp.c:3211-3213): the AI learns the player's Oblivious on a hit and on a miss
+    alike."""
+    s = make_state(
+        tables, [_mon(names, "Slowpoke", ["Tackle"], 40)], [_mon(names, "Pikachu", ["Captivate"], 40)]
+    )
+    s = _gendered(s, 0, 1)
+    for hit in (1, 0):  # outcome.hit's class 0 misses (outcome.py)
+        o = O._replace(hit=O.hit.at[1, 0].set(hit))
+        out = assert_matches_reference(tables, s, (0, 0), o)
+        assert int(out.ai_ability_known[0]) == 1, hit
+        assert _st(out, 0, "SPA") == 0
 
 
 # --- B12-9: Acupressure ---------------------------------------------------------------------
@@ -258,6 +288,27 @@ def test_power_trick_toggles_and_swaps_attack_with_defense(tables, names):
     assert int(back.power_trick[0]) == 0
 
 
+def test_a_level_up_reloads_the_unswapped_attack_and_defense(tables, names):
+    """BattleSystem_ReloadPokemon (battle_lib.c:169-174) on the active battler's level-up
+    (battle_script.c:9860-9865) reloads Attack and Defense from the party and keeps
+    MOVE_EFFECT_POWER_TRICK: the swap is off with the bit still set (``power_trick_desync``);
+    the next Power Trick clears the bit and swaps again."""
+    from nuzline.engine.damage import battle_stats
+
+    s = _state(tables, names, ("Shuckle", "Tackle", "Power Trick"), ("Bidoof", "Growl"))
+    rate = int(tables.species_exp_rate[int(s.species[0, 0])])
+    s = s._replace(
+        power_trick=s.power_trick.at[0].set(1),
+        hp=s.hp.at[1, 0].set(1),
+        exp=s.exp.at[0].set(int(tables.exp_table[rate, 41]) - 1),
+    )
+    assert int(battle_stats(s, 0, 0)[Stat.ATK - 1]) == int(s.stats[0, 0, Stat.DEF - 1])
+    out = assert_matches_reference(tables, s, (0, 0), O)
+    assert int(out.level[0, 0]) == 41
+    assert int(out.power_trick[0]) == 1 and int(out.power_trick_desync[0]) == 1
+    assert int(battle_stats(out, 0, 0)[Stat.ATK - 1]) == int(out.stats[0, 0, Stat.ATK - 1])
+
+
 # --- B12-12: Rest -------------------------------------------------------------------------
 
 
@@ -284,10 +335,12 @@ def test_rest_fails_at_full_hp_and_with_insomnia(tables, names):
     s = _state(tables, names, ("Snorlax", "Rest"), ("Bidoof", "Growl"))
     out = assert_matches_reference(tables, s, (0, 0), O)
     assert int(out.status[0, 0]) == Status.NONE
-    hurt = _hurt(s, 0, 20)
-    sleepless = hurt._replace(ability=hurt.ability.at[0, 0].set(AbilityId.INSOMNIA))
-    out = assert_matches_reference(tables, sleepless, (0, 0), O)
-    assert int(out.status[0, 0]) == Status.NONE and int(out.hp[0, 0]) == 20
+    # Battler_Ability reads the species' decomp ability (damage.decomp_abilities): Hoothoot's
+    # slot 0 is Insomnia, Mankey's Vital Spirit (:8).
+    for species in ("Hoothoot", "Mankey"):
+        sleepless = _hurt(_state(tables, names, (species, "Rest"), ("Bidoof", "Growl")), 0, 20)
+        out = assert_matches_reference(tables, sleepless, (0, 0), O)
+        assert int(out.status[0, 0]) == Status.NONE and int(out.hp[0, 0]) == 20
 
 
 # --- B12-13: Morning Sun / Synthesis / Moonlight ------------------------------------------

@@ -126,7 +126,12 @@ Encodings:
   (subscript_user_swap_atk_and_def.s:5); while it is set the BattleMon Attack and Defense are
   the party's swapped (:6-9, and battle_lib.c:2137-2141 for a Baton Pass newcomer), which
   ``damage.battle_stats`` reads. Both are volatiles Baton Pass keeps (condition.h:72,
-  moves.h:47).
+  moves.h:47). ``power_trick_desync`` (0/1) is whether the BattleMon's Attack / Defense swap
+  disagrees with that bit: BattleSystem_ReloadPokemon (battle_lib.c:169-174) reloads them
+  unswapped from the party on a level-up of the active battler (battle_script.c:9860-9865,
+  :10022-10027, :10173-10177) and leaves the bit, so the swap is ``power_trick XOR
+  power_trick_desync``; Power Trick toggles both (unchanged), any switch clears it (a Baton Pass
+  newcomer is swapped by the bit alone, battle_lib.c:2137-2141), B12-10.
 * ``trainer_item_count`` is ``aiContext.trainerItemCounts``: the bag's size at battle
   start, never decremented.
 * ``terrain`` is ``BattleSystem.terrain``: the battle terrain, a decomp ``TERRAIN_*`` id
@@ -269,7 +274,8 @@ class BattleState(NamedTuple):
     minimized: jnp.ndarray  # int8, MOVE_EFFECT_MINIMIZE in moveEffectsMask
     semi_invulnerable: jnp.ndarray  # int8, ids.SemiKind: MOVE_EFFECT_SEMI_INVULNERABLE's bit
     focus_energy: jnp.ndarray  # int8, VOLATILE_CONDITION_FOCUS_ENERGY (B12-4)
-    power_trick: jnp.ndarray  # int8, MOVE_EFFECT_POWER_TRICK: Attack and Defense swapped (B12-10)
+    power_trick: jnp.ndarray  # int8, MOVE_EFFECT_POWER_TRICK (B12-10)
+    power_trick_desync: jnp.ndarray  # int8, the Attack / Defense swap XOR power_trick (B12-10)
     # per side [2]
     spikes: jnp.ndarray  # int8, layers
     toxic_spikes: jnp.ndarray  # int8, layers
@@ -451,6 +457,7 @@ VOLATILE_FIELDS = (
     "semi_invulnerable",
     "focus_energy",
     "power_trick",
+    "power_trick_desync",
 )
 # Baton Pass keeps these of ``VOLATILE_FIELDS`` (and the stat stages): BattleSystem_UpdateAfterSwitch
 # keeps statusVolatile & VOLATILE_CONDITION_BATON_PASSED (battle_lib.c:2078; condition.h:72-76:
@@ -553,6 +560,7 @@ LAYOUT: dict[str, tuple[tuple[int, ...], type]] = {
     "semi_invulnerable": (_SIDE, np.int8),
     "focus_energy": (_SIDE, np.int8),
     "power_trick": (_SIDE, np.int8),
+    "power_trick_desync": (_SIDE, np.int8),
     "spikes": (_SIDE, np.int8),
     "toxic_spikes": (_SIDE, np.int8),
     "stealth_rock": (_SIDE, np.int8),

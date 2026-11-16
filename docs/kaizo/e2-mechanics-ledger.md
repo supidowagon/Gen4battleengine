@@ -15,8 +15,13 @@ Closed batches, designs and retired RESUME bullets: e2-mechanics-ledger-archive.
   When E1 merges into main: merge main, rebuild vanilla + Kaizo tables, scan for duplicate
   names/enum members/table rows, run the unsupported-asserting tests, then ONE fast tier
   (-m "not slow" --durations=40) under the lock, send tip + F list to the manager.
-- **Stale unsupported tests:** being made to pick their example from the coverage table at run
-  time (or deleted when they only matter while coverage is partial).
+- **Stale unsupported tests: done** (e60f40e): each makes its own example unsupported
+  (tests/engine/helpers.unmodelled, conftest metronome_refused). Ability / item / trainer-item
+  examples (Leaf Guard, Levitate, Iron Ball, Full Restore, ...) are E1's area, left.
+- **Batch 12 code done** (rulings B12-1..18; review WIP fixes: Power Trick desync on level-up,
+  Psych Up / Captivate before TryMove). Checks under 4 GB passed (test_batch12 27, kaizo_policy
+  batch12 46 + healing 26, exact==loose all but one, guards 69, diff seed 33 ok 300). OWED:
+  kaizo_policy test_batch12_stat_family_exact_equals_loose[23] (>4 GB), test_cli, the review.
 - **Main = 2c2caea** (batch 10 merged as e022644: 042b1ab + main 8c22d37 + merge fixes c1728c9
   / 36bdc8f / c1f54cb / b5e4665 Yawn + the 6 stale tests its fast tier found 4cef8f2 / 4d165d8 /
   e022644). Main merged into this branch at 453e283. Never push.
@@ -1511,3 +1516,44 @@ Rules left out because another mechanic is missing; each closes with the mechani
   byte-equal. Expert_Encore_EncouragedMoveEffects (script.s:3202-3285) is found once in each ROM,
   at 0x022292D8, as `commands.ENCORE_ENCOURAGED_EFFECTS` (82 entries) then TABLE_END. Script
   (not kept): _scratch encore_rom.py, `uv run --group rom`.
+- B12-1 Calm Mind (211) and Cosmic Power / Defend Order (206) run DRAGON_DANCE-style two-stat
+  raises: the first +1, then the second (subscript_user_*_up_1_stage.s:5-6, :13-16).
+- B12-2 Flatter is subscript_flatter.s: Swagger's script with Sp. Atk +1 (:5-16).
+- B12-3 Tickle (subscript_target_atk_and_def_down_1_stage.s): NO_MORE_WORK only with both stats
+  at -6 (:5-6, :24-33); FAILED on a miss (:9).
+- B12-4 Focus Energy: +2 crit stages (battle_lib.c:7123), Baton Pass keeps it (condition.h:72),
+  fails when already set (effect_script_0047.s:5).
+- B12-5 Haze resets every battler's stages and Focus Energy (battle_script.c:3534-3549).
+- B12-6 Psych Up copies the stages and ORs Focus Energy (battle_script.c:6042-6053); the copy
+  runs before TryMove, so a semi-invulnerable miss still copies (bcp.c:3211-3213, :3034-3040).
+- B12-7 Power Swap / Guard Swap need a hit (indirect ON_HIT); no failure check.
+- B12-8 Captivate (effect_script_0265.s:5-9): Oblivious, then genderless, then same gender, each
+  NO_MORE_WORK; Oblivious is tagged even on a miss or Protect (:48-53, before TryMove).
+- B12-9 Acupressure draws RandNext() % validStats over the stats below +6 in BATTLE_STAT order
+  (Atk, Def, Spe, SpA, SpD, Acc, Eva) (battle_script.c:8943-8950); fails behind the user's own
+  substitute (effect_script_0226.s:5).
+- B12-10 Power Trick XORs the bit and swaps (subscript_user_swap_atk_and_def.s:5-9); Baton Pass
+  keeps the bit (moves.h:47); a level-up reload undoes the swap but keeps the bit
+  (battle_lib.c:169-174; battle_script.c:9860-9865, :10022-10027, :10173-10177): field
+  `power_trick_desync`, swap = bit XOR desync, cleared on any switch (battle_lib.c:2137-2141).
+  Shaymin / Giratina form reloads (battle_lib.c:6439) would undo it too: no in-battle form
+  change is modelled yet.
+- B12-11 Stat-family AI: Basic labels script.s:151/162/217/230/246/247/260/268/272/273/283;
+  Expert :1648/1713/1727/1751/1752/1769/1781/1786/1787/1804.
+- B12-12 Rest (subscript_rest.s): fails on its own Insomnia / Vital Spirit (tagged, :7-8), asleep
+  (:9), an uproar unless Soundproof (:10-11), full HP (:14-15); else sleep count 3 (:32), full heal.
+- B12-13 Morning Sun / Synthesis / Moonlight: maxHP/2 with no weather or Cloud Nine / Air Lock,
+  Divide(maxHP*20, 30) in sun, else Divide(maxHP, 4) (battle_script.c:5966-5979; common.h:65-70).
+- B12-14 Wish fails if the user's battler already has wishTurns, else sets 2
+  (battle_script.c:6373-6385); heals Divide(maxHP of whoever is then on the field, 2), nothing at
+  full HP (bcp.c:1085-1111; subscript_wish_heal.s).
+- B12-15 Heal Bell spares a Soundproof user (battle_script.c:5038-5043) and a Soundproof party
+  member unless the user has Mold Breaker (battle_io_command.c:645-653); Aromatherapy spares none.
+- B12-16 Refresh cures poison / toxic / burn / paralysis (FACADE_BOOST), else FAILED
+  (subscript_recover_psn_prz_brn.s).
+- B12-17 Psycho Shift (battle_script.c:7542-7553; subscript_give_target_own_status.s:5-30): fails
+  on a statused or substituted target or a status-free user; passes the status as a direct
+  effect, cures the user only if the target ends up statused.
+- B12-18 Healing AI: Expert_Rest / HealBell / Synthesis / Refresh / PsychoShift at script.s
+  :1655/:1696/:1707/:1745/:1777; Wish (179) has no Basic or Expert entry. New commands:
+  IfLoadedLessThan (trainer_ai.c:762), DiffStatStages (:2259), IfPartyMemberStatus (:1348).

@@ -133,6 +133,8 @@ from nuzline.engine.effects import (
     play_hit,
     primary_effect_fails,
     psycho_shift_fails,
+    copy_stat_stages,
+    captivate_fails,
     protect_blocks,
     recovers_at_full_hp,
     resist_berry,
@@ -1173,6 +1175,24 @@ def _use_move(
     )
     state = know_ability(state, target_side, target, yawn_shown)
     connected = can_act & has_target & hit & ~failed & ~blocked & ~charging
+    # The effect script runs before TryMove's accuracy roll and CheckMoveHitOverrides (bcp.c:
+    # 3211-3213, then :3256, :3264), so its own commands act on a move that then misses. Psych
+    # Up's CopyStatStages (effect_script_0143.s:5) copies on a semi-invulnerable miss (accuracy 0
+    # and no MOVE_FLAG_CAN_PROTECT, res/moves/psych_up/data.json, leave it no other miss), B12-6;
+    # Captivate's CheckIgnorableAbility (effect_script_0265.s:5) tags a blocking Oblivious on a
+    # miss or a Protect too (:48-53), B12-8. The paths of a move that connected are
+    # effects._psych_up and effects._captivate.
+    scripted = can_act & has_target & ~failed & ~charging & ~connected
+    state = copy_stat_stages(
+        state, side, target_side, scripted & semi_miss & (effect_used == EffectId.PSYCH_UP)
+    )
+    captivate_shown = (
+        scripted
+        & (effect_used == EffectId.CAPTIVATE)
+        & (state.hp[target_side, target] > 0)
+        & captivate_fails(tables, state, side, target_side)[1]
+    )
+    state = know_ability(state, target_side, target, captivate_shown)
     # Protect / Detect (effect_script_0111.s, a direct TO_ATTACKER effect: the user has HP)
     # -> subscript_protect.s -> BtlCmd_TryProtection (battle_script.c:5149-5190). The
     # chain reset of :5154-5158 is folded into protect_count (below), so its value here is

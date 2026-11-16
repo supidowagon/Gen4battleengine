@@ -100,6 +100,10 @@ AI_EFFECT_DEFENDER_HP_CHECKS: dict[int, tuple[tuple[str, int], ...]] = {
     23: (("less", 40),),
     108: (("less", 40),),
     188: (("less", 30),),
+    # E2 batch 12 (B12-18): Expert_Refresh (HEAL_STATUS, 193) tests the player below 50 %
+    # (script.s:4646), Expert_PsychoShift (TRANSFER_STATUS, 234) below 30 % (:5302).
+    193: (("less", 50),),
+    234: (("less", 30),),
 }
 
 # Every function in ``src/nuzline/ai/*.py`` that indexes an ``hp`` array at the Task 4 commit,
@@ -112,6 +116,9 @@ AI_HP_READERS: dict[str, str] = {
     # IfPartyMemberDealsMoreDamage (E1 batch 15) reads only the AI side's HP, its living
     # party members (trainer_ai.c:2147-2150)
     "if_party_member_deals_more_damage": "opponent",
+    # IfPartyMemberStatus (E2 batch 12, Expert_HealBell) reads HP != 0 of the battler's own
+    # party (trainer_ai.c:1370-1371), the AI's (AI_BATTLER_ATTACKER, script.s:3402)
+    "if_party_member_status": "opponent",
     "_use_item": "opponent",
     "_post_ko": "opponent",
     "_layout": "opponent",

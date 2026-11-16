@@ -75,7 +75,8 @@ three structs has a row.
   Power Trick -> `power_trick` (E2 batch 12, B12-10: per battler, toggled by
   subscript_user_swap_atk_and_def.s:5; the BattleMon Attack and Defense it swaps are read
   through `damage.battle_stats`; Baton Pass keeps it, moves.h:47, and swaps the newcomer's,
-  battle_lib.c:2137-2141). The rest (Charge, Grudge, Gastro Acid, Miracle Eye, Heal Block,
+  battle_lib.c:2137-2141); a level-up's BattleSystem_ReloadPokemon, battle_lib.c:169-174, undoes
+  the swap and keeps the bit: `power_trick_desync`). The rest (Charge, Grudge, Gastro Acid, Miracle Eye, Heal Block,
   Embargo, Magnet Rise) are later (M6).
 - **fieldConditionsMask**: the weather bits (temporary vs. permanent rain, sand,
   sun, hail, plus deep fog) -> `weather` with `weather_timer == 0` meaning
@@ -328,8 +329,8 @@ three structs has a row.
 | Struct.field | pytree field | status |
 |---|---|---|
 | `BattleMon.species` | `species` | mapped |
-| `BattleMon.attack` | `stats` | mapped |
-| `BattleMon.defense` | `stats` | mapped |
+| `BattleMon.attack` | `stats`, `power_trick`, `power_trick_desync` | mapped |
+| `BattleMon.defense` | `stats`, `power_trick`, `power_trick_desync` | mapped |
 | `BattleMon.speed` | `stats` | mapped |
 | `BattleMon.spAttack` | `stats` | mapped |
 | `BattleMon.spDefense` | `stats` | mapped |
@@ -382,7 +383,7 @@ three structs has a row.
 | `BattleMon.gender` | `gender` | mapped |
 | `BattleMon.OTGender` | — | not needed because it is cosmetic (names, messages, sprites, animation) |
 | `BattleMon.capturedBall` | — | not needed because it is cosmetic (names, messages, sprites, animation) |
-| `BattleMon.moveEffectsMask` | `leech_seed`, `water_sport`, `mud_sport`, `aqua_ring`, `perish_song`, `yawn`, `lock_on`, `ingrain`, `imprison`, `imprisoned`, `minimized`, `semi_invulnerable`, `power_trick` | mapped |
+| `BattleMon.moveEffectsMask` | `leech_seed`, `water_sport`, `mud_sport`, `aqua_ring`, `perish_song`, `yawn`, `lock_on`, `ingrain`, `imprison`, `imprisoned`, `minimized`, `semi_invulnerable`, `power_trick`, `power_trick_desync` | mapped |
 | `BattleMon.moveEffectsTemp` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
 | `BattleMon.moveEffectsData` | `taunt`, `protect_count`, `rollout_count`, `recharge`, `substitute_hp`, `trap_move`, `choice_lock` | mapped |
 

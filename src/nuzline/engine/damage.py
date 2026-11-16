@@ -155,11 +155,13 @@ def decomp_abilities(tables: Tables, state: BattleState) -> jnp.ndarray:
 
 def battle_stats(state: BattleState, side, slot) -> jnp.ndarray:
     """``int32[5]``: the BattleMon Attack, Defense, Sp. Atk, Sp. Def and Speed of ``side``'s party
-    ``slot``: its stats, Attack and Defense swapped while it is the active battler with
-    MOVE_EFFECT_POWER_TRICK (subscript_user_swap_atk_and_def.s:6-9; battle_lib.c:2137-2141 for a
-    Baton Pass newcomer), B12-10."""
+    ``slot``: its stats, Attack and Defense swapped while it is the active battler and its swap
+    is on: MOVE_EFFECT_POWER_TRICK (subscript_user_swap_atk_and_def.s:6-9; battle_lib.c:2137-2141
+    for a Baton Pass newcomer) unless a level-up's reload undid it (``power_trick_desync``,
+    battle_lib.c:169-174), B12-10."""
     stats = _i32(state.stats[side, slot])
-    swapped = (state.power_trick[side] != 0) & (state.active[side] == slot)
+    on = (state.power_trick[side] != 0) != (state.power_trick_desync[side] != 0)
+    swapped = on & (state.active[side] == slot)
     trick = stats.at[Stat.ATK - 1].set(stats[Stat.DEF - 1]).at[Stat.DEF - 1].set(stats[Stat.ATK - 1])
     return jnp.where(swapped, trick, stats)
 
