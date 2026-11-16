@@ -49,6 +49,7 @@ from nuzline.engine.actions import (
 )
 from nuzline.engine.damage import apply_stage, simple_stage, weather_suppressed
 from nuzline.engine.ids import (
+    CANNOT_ENCORE_MOVES,
     INVOKER_MOVES,
     METRONOME_DRAW,
     METRONOME_HEAVY,
@@ -265,6 +266,112 @@ def invoked_move(tables: Tables, state: BattleState, side, move, call, move_prev
     ).astype(_I32)
 
 
+def encore_slot_of(tables: Tables, state: BattleState, target_side) -> tuple:
+    """``(fails, slot)``: BtlCmd_TryEncore (battle_script.c:4725-4748) on ``target_side``'s
+    battler: the slot of its movePrevByBattler (``last_move``; Battler_SlotForMove), and the
+    failure (MOVE_STATUS_FAILED): it is encored already, its last move is none, not in its slots,
+    one Move_CanBeEncored refuses (the battle effect of a ``CANNOT_ENCORE_MOVES`` move,
+    battle_lib.c:7221-7231) or out of PP."""
+    mon = state.active[target_side]
+    last = state.last_move[target_side].astype(_I32)
+    moves = state.moves[target_side, mon].astype(_I32)
+    held = (moves == last) & (last != 0)
+    slot = jnp.argmax(held).astype(_I32)
+    banned = tables.move_ai_effect[jnp.asarray(CANNOT_ENCORE_MOVES, _I32)]
+    refused = jnp.any(tables.move_ai_effect[last] == banned)
+    fails = (
+        (state.encore_move[target_side] != 0)
+        | (last == 0)
+        | ~jnp.any(held)
+        | refused
+        | (state.pp[target_side, mon, slot] == 0)
+    )
+    return fails, slot
+
+
+def disabled_state(state: BattleState, sides) -> BattleState:
+    """``state`` with ``disabled_move = last_move`` on ``sides`` (``bool[2]``): the only set
+    change of Sleep Talk a turn can make. BtlCmd_TryDisable (battle_script.c:4586-4594) disables
+    the defender's movePrevByBattler, only while it has PP and nothing is disabled yet; a Sleep
+    Talk user that moves second has not moved this turn, so the move is its turn-start
+    ``last_move``."""
+    value = jnp.where(sides, state.last_move, state.disabled_move)
+    return state._replace(disabled_move=value.astype(state.disabled_move.dtype))
+
+
+def sealed_state(state: BattleState, sides) -> BattleState:
+    """``state`` with ``MOVE_EFFECT_IMPRISON`` on every battler of the other side of ``sides``
+    (``bool[2]``): a faster foe's Imprison this turn (``BtlCmd_TryImprison``, battle_script.c:
+    6724), which then seals its moves for the Sleep Talk user (battle_script.c:4927; battle
+    b on side b in singles)."""
+    foe_of = jnp.asarray(sides)[::-1]
+    value = jnp.where(foe_of, 1, state.imprison)
+    return state._replace(imprison=value.astype(state.imprison.dtype))
+
+
+def encored_state(tables: Tables, state: BattleState, sides) -> BattleState:
+    """``state`` with each battler of ``sides`` (``bool[2]``) encored into its last move
+    (encoredMove = movePrevByBattler, encoredMoveSlot its slot: BtlCmd_TryEncore, battle_script.c:
+    4740-4741), the hypothetical state of a takeover variant (``takeover_possible``; ruling B11-1).
+    The count is left as it is: nothing before the turn's end reads it."""
+    sides = jnp.asarray(sides, bool)
+    slots = jnp.stack([encore_slot_of(tables, state, side)[1] for side in (0, 1)])
+    move = jnp.where(sides, state.last_move, state.encore_move).astype(state.encore_move.dtype)
+    slot = jnp.where(sides, slots, state.encore_slot).astype(state.encore_slot.dtype)
+    return state._replace(encore_move=move, encore_slot=slot)
+
+
+def can_call_encore(tables: Tables, state: BattleState, side, move) -> jnp.ndarray:
+    """``bool``: ``side``'s move ``move`` can run Encore before its foe's action (ruling B11-1):
+    Encore itself, or an invoker whose call can be Encore: Sleep Talk when the user knows it
+    (BtlCmd_TrySleepTalk draws its own slots, battle_script.c:4907-4937), Metronome when it is a
+    candidate (``metronome_candidates``: not NO_METRONOME, not a move the user knows), Assist when
+    a listed mate's move is (``assist_candidates``), Copycat when the battle's movePrev is Encore
+    (``copycat_call``: its foe's move of this turn comes after the foe's action, too late to
+    replace it). Over-approximate (Sleep Talk's sleep and set are the turn's)."""
+    move = jnp.asarray(move, _I32)
+    effect = tables.move_effect
+    kind = call_kind(tables, move)
+    own = state.moves[side, state.active[side]].astype(_I32)
+    talk = jnp.any((own != 0) & (effect[own] == EffectId.ENCORE))
+    ids = jnp.arange(effect.shape[0], dtype=_I32)
+    metronome = jnp.any(
+        metronome_candidates(tables, state, side) & (effect[ids] == EffectId.ENCORE)
+    )
+    listed, valid = assist_candidates(tables, state, side)
+    assist = jnp.any(valid & (effect[listed] == EffectId.ENCORE))
+    copycat = effect[copycat_call(tables, state.move_prev)] == EffectId.ENCORE
+    return (
+        (effect[move] == EffectId.ENCORE)
+        | ((kind == CALL_SLEEP_TALK) & talk)
+        | ((kind == CALL_METRONOME) & metronome)
+        | ((kind == CALL_ASSIST) & assist)
+        | ((kind == CALL_COPYCAT) & copycat)
+    )
+
+
+def takeover_possible(tables: Tables, state: BattleState, actions) -> jnp.ndarray:
+    """``bool[2]``: a foe's Encore can replace the side's chosen move this turn (ruling B11-1).
+    BattleControllerPlayer_FightCommand (bcp.c:1866-1873) runs an encored battler's encored move,
+    after Struggle, whatever it chose; an Encore landing before its action this turn (a faster
+    foe's: BtlCmd_TryEncore, battle_script.c:4725-4748) therefore replaces it. Possible when the
+    side uses a move without Struggling, is not encored at the turn start, ``encore_slot_of``
+    would not fail it (its last move held, encorable, with PP), that move differs from the chosen
+    one, and its foe uses Encore or an invoker that can call it (``can_call_encore``). Sound, not
+    tight: the call laws drop the rows where it did not happen (``enumerate.call_consistent``)."""
+    actions = jnp.asarray(actions, _I32)
+    live = state.over == 0
+    uses_move = live & ~is_switch(actions) & ~is_item(actions)
+    picked = [selected_move(tables, state, side, actions[side]) for side in (0, 1)]
+    chosen = jnp.stack([p[0] for p in picked])
+    struggling = jnp.stack([p[1] for p in picked])
+    fails = jnp.stack([encore_slot_of(tables, state, side)[0] for side in (0, 1)])
+    foe_can = uses_move[::-1] & jnp.stack(
+        [can_call_encore(tables, state, 1 - side, chosen[1 - side]) for side in (0, 1)]
+    )
+    return uses_move & ~struggling & ~fails & (state.last_move.astype(_I32) != chosen) & foe_can
+
+
 def move_effects(tables: Tables, state: BattleState, move) -> tuple[jnp.ndarray, jnp.ndarray]:
     """``(effect, param)``: ``tables.move_effect[move]`` and ``tables.move_param[move]`` (``int32``,
     ``int32[..., 3]``), with Secret Power's resolved to the terrain's secondary effect
@@ -301,19 +408,31 @@ def used_move(
     return jnp.where(invoked == 0, chosen, called_move(tables, state, invoked)).astype(_I32)
 
 
-def used_moves(tables: Tables, state: BattleState, actions, call, after_foe) -> jnp.ndarray:
+def used_moves(
+    tables: Tables, state: BattleState, actions, call, after_foe, chosen=None
+) -> jnp.ndarray:
     """``int32[2]``: ``used_move`` of each side with ``call`` (``Outcome.call``) and Copycat's
     movePrev as the order leaves it: ``after_foe[side]`` (the foe used a move before the side's
     action) makes it the foe's chosen move (moveTemp, UpdateMoveBuffers bcp.c:3936-3942; a foe
     whose attack message did not show leaves MOVE_NONE and Copycat fails, reading nothing),
-    else the turn-start ``state.move_prev``."""
+    else the turn-start ``state.move_prev``. ``chosen`` (``int32[2]``, default each action's
+    ``selected_move``) overrides the moveTemp of each side: a takeover variant's encored move
+    (ruling B11-1), with ``state`` its ``encored_state``."""
     actions = jnp.asarray(actions, _I32)
-    chosen = [selected_move(tables, state, side, actions[side])[0] for side in (0, 1)]
+    if chosen is None:
+        chosen = jnp.stack(
+            [selected_move(tables, state, side, actions[side])[0] for side in (0, 1)]
+        )
+    chosen = jnp.asarray(chosen, _I32)
     after_foe = jnp.asarray(after_foe, bool)
+    call = jnp.asarray(call, _I32)
     out = []
     for side in (0, 1):
         prev = jnp.where(after_foe[side], chosen[1 - side], state.move_prev.astype(_I32))
-        out.append(used_move(tables, state, side, actions[side], call, prev))
+        invoked = invoked_move(tables, state, side, chosen[side], call[side], prev)
+        out.append(
+            jnp.where(invoked == 0, chosen[side], called_move(tables, state, invoked)).astype(_I32)
+        )
     return jnp.stack(out)
 
 
@@ -414,10 +533,13 @@ def claw_flags(tables: Tables, state: BattleState, actions) -> jnp.ndarray:
     activated Quick Claw (battle_lib.c:1283, :1349; ``quick_claw_active`` on the turn's
     ``qc_roll``). The holder's own BEFORE_MOVE_STATE_QUICK_CLAW clears it
     (subscript_check_quick_claw.s:22-23), so it stands until the holder's move starts; only
-    Knock Off reads it (subscript_knock_off.s:8), B10-6."""
+    Knock Off reads it (subscript_knock_off.s:8), B10-6. The sort compares every pair of
+    battlers whose commands are both FIGHT (bcp.c:766-778), so a FIGHT battler is compared when
+    any other battler fights (doubles design section 5 rule 4)."""
     actions = jnp.asarray(actions, _I32)
     fight = ~is_switch(actions) & ~is_item(actions)
-    return quick_claw_active(tables, state, state.qc_roll) & fight[0] & fight[1]
+    others = jnp.sum(fight.astype(_I32)) - fight.astype(_I32)
+    return quick_claw_active(tables, state, state.qc_roll) & fight & (others > 0)
 
 
 def quick_claw_active(tables: Tables, state: BattleState, qc) -> jnp.ndarray:

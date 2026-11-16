@@ -182,11 +182,11 @@ def test_call_laws_and_variants(tables, names):
     ).with_status(0, 0, Status.SLEEP, 3)
     variants = call_variants(call_laws(t, s, jnp.zeros(2, jnp.int32)))
     talk = Counter()
-    for call, num, den in variants:
-        talk[int(call[0])] += Fraction(num, den)
+    for v in variants:
+        talk[int(v.call[0])] += Fraction(v.num, v.den)
     # Slots Tackle, Ember, Ember: Tackle 1/3 (value 0), Ember 2/3 (value 1).
     assert talk == {0: Fraction(1, 3), 1: Fraction(2, 3)}
-    assert math.isclose(sum(num / den for _, num, den in variants), 1.0)
+    assert math.isclose(sum(v.num / v.den for v in variants), 1.0)
     assert len(variants) == 2 * len(metronome_calls(t, _mon(n, "Clefairy", ["Metronome"])))
 
 

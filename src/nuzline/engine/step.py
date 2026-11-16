@@ -140,6 +140,7 @@ from nuzline.engine.effects import (
     self_defender,
     shell_bell_heal,
     sticky_barb_transfer,
+    targets_foe_side,
     targets_user,
     thaw_target,
     unlock_move,
@@ -183,7 +184,6 @@ from nuzline.engine.ids import (
     EffectId,
     ItemId,
     MoveFlag,
-    MoveTarget,
     SemiKind,
     Stat,
     Status,
@@ -603,6 +603,7 @@ def _empty_events() -> dict:
             "move_failed",
             "disabled_at_move",
             "sealed_at_move",
+            "encored_at_move",
             *EVENT_FLAGS,
         )
     }
@@ -720,13 +721,15 @@ def _use_move(
     # Likewise a battler of the other side imprisoning (the Sleep Talk set's other change within
     # the turn, ruling B7-13).
     sealed_at_move = ready & imprisoning_foe(state, side)
+    # The encored move replaced the chosen one when the action started (FightCommand above): the
+    # event the takeover variants split on (enumerate.call_consistent, ruling B11-1).
+    encored_at_move = ready & encored_now & (state.encore_move[side] != jnp.asarray(choice[0]))
     # BattleControllerPlayer_FightCommand (battle_controller_player.c:1900) fixes the
     # defender before the status checks: the foe when it is alive (any HP for
     # RANGE_OPPONENT_SIDE: BattleSystem_RandomOpponent), the user for a self-defender range
     # and a non-Ghost Curse (effects.self_defender).
-    move_range = tables.move_target[move]
     foe_defender = ~self_defender(tables, move, ghost_user(state, side)) & (
-        (state.hp[target_side, target] > 0) | (move_range == MoveTarget.RANGE_OPPONENT_SIDE)
+        (state.hp[target_side, target] > 0) | targets_foe_side(tables, move)
     )
     custap = jnp.asarray(custap, bool)
     # BEFORE_MOVE_STATE_QUICK_CLAW (bcp.c:3140-3143), before the status checks:
@@ -1121,7 +1124,7 @@ def _use_move(
         & aims_foe
         & (foe_semi != 0)
         & ~hits_semi(tables, used, foe_semi)
-        & (tables.move_target[used] != MoveTarget.RANGE_OPPONENT_SIDE)
+        & ~targets_foe_side(tables, used)
         & ~bypass
     )
     hit = hit & ~semi_miss
@@ -1716,7 +1719,9 @@ def _use_move(
         # reads its range (``_future_sight``, B10-14). A tail mode's is the paused action's
         # (``ts_used``).
         "move_cur": jnp.where(
-            head_on, jnp.where(can_act & (nature_power | (invoker & ~call_failed)), used, move), used_t
+            head_on,
+            jnp.where(can_act & (nature_power | (invoker & ~call_failed)), used, move),
+            used_t,
         ),
         "crit": crits,
         "full_para": full_para,
@@ -1733,6 +1738,7 @@ def _use_move(
         "move_failed": move_failed,
         "disabled_at_move": disabled_at_move,
         "sealed_at_move": sealed_at_move,
+        "encored_at_move": encored_at_move,
     }
     foe = {
         "contact_ability": contact,
@@ -2173,7 +2179,7 @@ def _execute_actions(
         ran = ran & ~skip
         # B10-6: the player's FIGHT attempt or an HP update clears a knocked item's record.
         fight = ~is_switch(acts[side]) & ~is_item(acts[side])
-        acted = _stale_known_item(state, acted, (side == 0) & ran & fight)
+        acted = _stale_known_item(state, acted, (jnp.arange(2) == side) & ran & fight)
         # The events of an action are its start's (a U-turn's head) or its resume's; the pass
         # after the Pursuit adds none of its own.
         keep = ~skip & ~ap
@@ -2478,12 +2484,17 @@ def _stale_known_item(before: BattleState, after: BattleState, fought) -> Battle
     (the mask stops the Sticky Barb, and Thief / Trick are unsupported), so clearing at the end of
     the segment (an action, the end of the turn) in which such an event came is exact for the
     AI, which reads the record only at its next choice. ``before``: the segment's start; the slot
-    must have been knocked off by then (the knock-off's own hit updates the HP first). ``fought``:
-    the player's battler made a FIGHT attempt in the segment."""
-    mon = before.active[0]
-    stale = (before.knocked_off[0, mon] != 0) & (after.item[0, mon] == 0)
-    event = (after.hp[0, mon] != before.hp[0, mon]) | jnp.asarray(fought, bool)
-    return forget_item(after, 0, mon, stale & event)
+    must have been knocked off by then (the knock-off's own hit updates the HP first). ``fought``
+    (``bool[2]``): each battler made a FIGHT attempt in the segment. Every battler is checked
+    (doubles design section 5 rule 4); ``forget_item`` keeps the record of the player's only (the
+    AI's own items are not in it)."""
+    fought = jnp.broadcast_to(jnp.asarray(fought, bool), (2,))
+    for side in (0, 1):
+        mon = before.active[side]
+        stale = (before.knocked_off[side, mon] != 0) & (after.item[side, mon] == 0)
+        event = (after.hp[side, mon] != before.hp[side, mon]) | fought[side]
+        after = forget_item(after, side, mon, stale & event)
+    return after
 
 
 def _encore_check(state: BattleState, side) -> BattleState:
@@ -2905,7 +2916,7 @@ def _future_sight(
     missed, shielded, endured = jnp.bool_(False), jnp.bool_(False), jnp.bool_(False)
     semi = jnp.bool_(False)
     protecting = jnp.asarray(protecting)
-    semi_tested = tables.move_target[jnp.asarray(move_cur, _I32)] != MoveTarget.RANGE_OPPONENT_SIDE
+    semi_tested = ~targets_foe_side(tables, jnp.asarray(move_cur, _I32))
     mid = state
     for position in (0, 1):
         d = sides[position]
