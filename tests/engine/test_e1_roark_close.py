@@ -1,6 +1,7 @@
 """E1 Roark close batch (rulings G-35 onward, docs/kaizo/e1-mechanics-ledger.md): hand cases.
 
-Family 1: the battle terrain of the Roark split's fights whose moves read it (G-35, G-36).
+Family 1: the battle terrain of the Roark split's fights whose moves read it (G-35, G-36), and
+the clowns' (G-38).
 Family 2: AI_FLAG_HARRASSMENT (G-37).
 """
 
@@ -39,6 +40,18 @@ def test_roark_split_terrain_readers_have_their_narrowed_terrain(
     effects = {int(kaizo_tables.move_ai_effect[m]) for m in moves}
     assert effects & set(TERRAIN_EFFECTS)  # Secret Power reads it (coverage.TERRAIN_EFFECTS)
     assert terrain_refusal(kaizo_tables, kaizo_names, t, moves) is None
+
+
+@pytest.mark.parametrize("tid", [252, 254])
+def test_clowns_fight_on_jubilife_buildings(kaizo_trainers, tid):
+    """G-38 (closing G-36): Clowns Ronald (252) and Moe (254) are fought only in Jubilife City.
+    Route 202's script file carries their battles as entries no Route 202 event runs, and its
+    C-started tag battle's variable partner operand names a partner, not them
+    (scrcmd_trainer.c:146-161), so tools/terrain.py drops Route 202 and the data gives
+    TERRAIN_BUILDING (rebuilt with tools.extract_rom / tools.build_tables --game kaizo)."""
+    t = next(x for x in kaizo_trainers if x.id == tid)
+    building = TERRAIN_NAMES.index("TERRAIN_BUILDING")
+    assert t.terrain == building and t.terrains == (building,)
 
 
 # --- Family 2: AI_FLAG_HARRASSMENT (G-37) ----------------------------------------------------

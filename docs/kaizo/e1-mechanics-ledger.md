@@ -506,3 +506,28 @@ names the decomp sites, what the engine does, and where. E2's rulings are in
   multi battles (201-203, 395, 435-436, 461-462; Cheryl 608 is a partner row), so they stay
   refused by format, and 201, 395 and 608 also by TAG_STRATEGY. Tests:
   `tests/engine/test_e1_roark_close.py`; docs/ai/kaizo_roark.md 5.24.
+- G-38 Clowns Ronald (252) and Moe (254) are TERRAIN_BUILDING (closes G-36). `tools/terrain.py`
+  `narrowed_terrains` reads two more rules. (1) A battle command's partner operand is the
+  partner: `ScrCmd_StartTagBattle` reads partnerTrainer, then the two enemies
+  (scrcmd_trainer.c:146-161; `StartTrainerBattle` :123-144 and `StartFirstBattle`, scrcmd.c:
+  4038-4048, read enemies only). A variable partner operand resolves to the constants its paths
+  assign (`partner_operands`, as the trainer -> map join resolves operands,
+  `maps.script_battles`); one no constant reaches on some path is `UNKNOWN_PARTNER`, which
+  matches only a trainer some script makes a partner (`ScriptFacts.partners`), not every
+  trainer. (2) A script entry the header cannot run starts no battle there: a header runs its
+  bg, object and coord events' and init scripts' local ids, the C-started ids
+  (`C_STARTED_SCRIPTS`, tools/rom/readers/maps.py:1158-1166) and, when its file can start an entry by id, any
+  entry; when every entry naming the trainer is one it cannot run and no object of the header
+  is the trainer, the header gives it no terrain. Route 202 (header 343, scr_seq 428) carries
+  the clowns' battles as entries 14 and 15, which no Route 202 event runs, and its C-started
+  entry 4 is `StartTagBattle VAR_0x8004, 414, 415` (VAR_0x8004 set to 613-615 on its paths), so
+  Route 202 drops out and Jubilife City's whole header (header 3, whose objects run the
+  entries) gives BUILDING. Kaizo intermediates and tables rebuilt in the worktree
+  (`tools.extract_rom --game kaizo`, `tools.build_tables --game kaizo`; local data, only
+  `terrain`/`terrains` change, 25 rows). Every change shrinks a set: fights Youngster Tristan
+  (1) and Bug Catcher Logan (2) PLAIN (Roark split), Leader Byron (250) BUILDING, the clowns
+  BUILDING, Fisherman Andrew (22) {PLAIN, WATER} and Marley (610) {GRASS, MOUNTAIN, CAVE}
+  narrower but still mixed; 658 and 765-767 resolve to PLAIN; 16 rows in no split (255, 487,
+  494-503, 921-927) are now placed nowhere (`[]`). No row's set grew. Vanilla: unchanged
+  (tests/tools/rom/test_terrain_narrowing.py). Tests: that file and
+  `tests/engine/test_e1_roark_close.py`.
