@@ -3,6 +3,7 @@ docs/kaizo/e2-mechanics-ledger.md), in both engines: Immunity and Leaf Guard aga
 (unsupported abilities, so the generator never draws them; the hazard reads their decomp ids),
 Destiny Bond taken down by Pursuit's switch hit, and Sturdy against an OHKO move."""
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 
@@ -32,9 +33,15 @@ def _mon(names, species: str, moves, level=30, slot=0) -> PokemonSpec:
     )
 
 
+# One compiled step for the module (every state here has the same shapes). Called eagerly,
+# step compiled each of its conditionals and loops as programs of their own: 7.9-9.3 GB
+# for the six steps of the Toxic Spikes test in the fast tier.
+_step = jax.jit(step)
+
+
 def _both(tables, state, actions, outcome=None):
     outcome = outcome if outcome is not None else empty_outcome()
-    jax_out = step(tables, state, jnp.asarray(actions, jnp.int32), outcome)
+    jax_out = _step(tables, state, jnp.asarray(actions, jnp.int32), outcome)
     ref = from_ref(ref_step(to_numpy(tables), to_ref(state), actions, outcome_to_py(outcome)))
     for name, a, b in zip(jax_out._fields, jax_out, ref, strict=True):
         np.testing.assert_array_equal(np.asarray(a), np.asarray(b), err_msg=name)

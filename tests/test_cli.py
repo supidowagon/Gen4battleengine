@@ -631,8 +631,10 @@ def test_cli_rank_deaths_and_protect(capsys):
 
 
 def test_cli_rank_default_budget_keeps_the_header(capsys):
+    # The playout program of the test above (same party, --n and --devices; the budget is a
+    # state value): a second rank program on top of it passed 9 GB in the fast tier.
     assert (
-        main(["rank", "--party", SAMPLE, "--trainer", "roark", "--n", "20", "--devices", "1"]) == 0
+        main(["rank", "--party", SAMPLE, "--trainer", "roark", "--n", "50", "--devices", "1"]) == 0
     )
     out = capsys.readouterr().out
     assert "P(win, 0 faints) [95% CI]" in out and "protected:" not in out
